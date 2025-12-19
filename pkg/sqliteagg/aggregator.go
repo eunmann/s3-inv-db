@@ -39,6 +39,26 @@ func DefaultConfig(dbPath string) Config {
 	}
 }
 
+// Validate checks configuration values and returns an error for invalid settings.
+func (c *Config) Validate() error {
+	if c.DBPath == "" {
+		return fmt.Errorf("DBPath is required")
+	}
+	switch c.Synchronous {
+	case "", "OFF", "NORMAL", "FULL":
+		// Valid values
+	default:
+		return fmt.Errorf("invalid Synchronous value %q: must be OFF, NORMAL, or FULL", c.Synchronous)
+	}
+	if c.MmapSize < 0 {
+		return fmt.Errorf("MmapSize must be non-negative, got %d", c.MmapSize)
+	}
+	if c.CacheSizeKB < 0 {
+		return fmt.Errorf("CacheSizeKB must be non-negative, got %d", c.CacheSizeKB)
+	}
+	return nil
+}
+
 // prefixDelta accumulates count and byte deltas for a single prefix.
 type prefixDelta struct {
 	depth      int
@@ -75,6 +95,10 @@ type Aggregator struct {
 	// In-memory delta accumulation (reduces SQLite calls by ~10x)
 	pendingDeltas map[string]*prefixDelta
 
+	// Reusable buffers for flush operations (avoids allocation per flush)
+	batchArgs  []interface{}
+	singleArgs []interface{}
+
 	// writeMu serializes write transactions for parallel streaming.
 	// Multiple goroutines can read (ChunkDone), but writes are serialized.
 	writeMu sync.Mutex
@@ -92,6 +116,10 @@ type PrefixRow struct {
 
 // Open creates or opens a SQLite database for aggregation.
 func Open(cfg Config) (*Aggregator, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+
 	log := logging.WithPhase("sqlite_open")
 
 	db, err := sql.Open("sqlite3", cfg.DBPath+"?_journal_mode=WAL")
@@ -245,6 +273,10 @@ func (a *Aggregator) BeginChunk() error {
 	// Calculate columns per row for arg slicing
 	a.colsPerRow = 4 + int(tiers.NumTiers)*2
 
+	// Initialize reusable buffers for flush operations
+	a.batchArgs = make([]interface{}, MultiRowBatchSize*a.colsPerRow)
+	a.singleArgs = make([]interface{}, a.colsPerRow)
+
 	// Prepare mark done statement
 	a.markDoneStmt, err = tx.Prepare("INSERT INTO chunks_done (chunk_id, processed_at) VALUES (?, ?)")
 	if err != nil {
@@ -350,17 +382,13 @@ func (a *Aggregator) flushPendingDeltas() error {
 		return nil
 	}
 
-	// Pre-allocate args slice for full batch
-	batchArgs := make([]interface{}, MultiRowBatchSize*a.colsPerRow)
-	singleArgs := make([]interface{}, a.colsPerRow)
-
 	// Collect prefixes into a slice for batching
 	prefixes := make([]string, 0, len(a.pendingDeltas))
 	for prefix := range a.pendingDeltas {
 		prefixes = append(prefixes, prefix)
 	}
 
-	// Process full batches
+	// Process full batches using reusable batchArgs buffer
 	for i := 0; i+MultiRowBatchSize <= len(prefixes); i += MultiRowBatchSize {
 		// Fill batch args
 		for j := 0; j < MultiRowBatchSize; j++ {
@@ -368,40 +396,40 @@ func (a *Aggregator) flushPendingDeltas() error {
 			delta := a.pendingDeltas[prefix]
 			offset := j * a.colsPerRow
 
-			batchArgs[offset] = prefix
-			batchArgs[offset+1] = delta.depth
-			batchArgs[offset+2] = delta.totalCount
-			batchArgs[offset+3] = delta.totalBytes
+			a.batchArgs[offset] = prefix
+			a.batchArgs[offset+1] = delta.depth
+			a.batchArgs[offset+2] = delta.totalCount
+			a.batchArgs[offset+3] = delta.totalBytes
 
 			for k := range tiers.NumTiers {
-				batchArgs[offset+4+int(k)*2] = delta.tierCounts[k]
-				batchArgs[offset+4+int(k)*2+1] = delta.tierBytes[k]
+				a.batchArgs[offset+4+int(k)*2] = delta.tierCounts[k]
+				a.batchArgs[offset+4+int(k)*2+1] = delta.tierBytes[k]
 			}
 		}
 
-		if _, err := a.multiRowStmt.Exec(batchArgs...); err != nil {
+		if _, err := a.multiRowStmt.Exec(a.batchArgs...); err != nil {
 			return fmt.Errorf("multi-row upsert batch at %d: %w", i, err)
 		}
 	}
 
-	// Process remainder with single-row upserts
+	// Process remainder with single-row upserts using reusable singleArgs buffer
 	remainder := len(prefixes) % MultiRowBatchSize
 	if remainder > 0 {
 		startIdx := len(prefixes) - remainder
 		for _, prefix := range prefixes[startIdx:] {
 			delta := a.pendingDeltas[prefix]
 
-			singleArgs[0] = prefix
-			singleArgs[1] = delta.depth
-			singleArgs[2] = delta.totalCount
-			singleArgs[3] = delta.totalBytes
+			a.singleArgs[0] = prefix
+			a.singleArgs[1] = delta.depth
+			a.singleArgs[2] = delta.totalCount
+			a.singleArgs[3] = delta.totalBytes
 
 			for k := range tiers.NumTiers {
-				singleArgs[4+int(k)*2] = delta.tierCounts[k]
-				singleArgs[4+int(k)*2+1] = delta.tierBytes[k]
+				a.singleArgs[4+int(k)*2] = delta.tierCounts[k]
+				a.singleArgs[4+int(k)*2+1] = delta.tierBytes[k]
 			}
 
-			if _, err := a.upsertStmt.Exec(singleArgs...); err != nil {
+			if _, err := a.upsertStmt.Exec(a.singleArgs...); err != nil {
 				return fmt.Errorf("upsert prefix %q: %w", prefix, err)
 			}
 		}
@@ -416,12 +444,14 @@ func (a *Aggregator) flushPendingDeltas() error {
 // extractPrefixes returns all directory prefixes for a key.
 // For "a/b/c.txt", returns ["a/", "a/b/"]
 // For "a/b/c/", returns ["a/", "a/b/", "a/b/c/"]
+//
+// Note: This is used by pipeline.go and tests. The hot path in AddObject
+// uses an inline version to avoid slice allocation per object.
 func extractPrefixes(key string) []string {
 	var prefixes []string
 	for i := 0; i < len(key); i++ {
 		if key[i] == '/' {
-			prefix := key[:i+1]
-			prefixes = append(prefixes, prefix)
+			prefixes = append(prefixes, key[:i+1])
 		}
 	}
 	return prefixes
@@ -575,9 +605,10 @@ func (a *Aggregator) IteratePrefixes() (*PrefixIterator, error) {
 
 // PrefixIterator iterates over prefix rows in lexicographic order.
 type PrefixIterator struct {
-	rows    *sql.Rows
-	current PrefixRow
-	err     error
+	rows     *sql.Rows
+	current  PrefixRow
+	err      error
+	scanDest []interface{} // Reused across rows to avoid allocation
 }
 
 // Next advances to the next row. Returns false when done.
@@ -591,14 +622,20 @@ func (it *PrefixIterator) Next() bool {
 		return false
 	}
 
-	// Build scan destinations
-	scanDest := make([]interface{}, 0, 4+int(tiers.NumTiers)*2)
-	scanDest = append(scanDest, &it.current.Prefix, &it.current.Depth, &it.current.TotalCount, &it.current.TotalBytes)
-	for i := range tiers.NumTiers {
-		scanDest = append(scanDest, &it.current.TierCounts[i], &it.current.TierBytes[i])
+	// Initialize scan destinations once (lazy init to avoid allocation if iterator never used)
+	if it.scanDest == nil {
+		it.scanDest = make([]interface{}, 4+int(tiers.NumTiers)*2)
+		it.scanDest[0] = &it.current.Prefix
+		it.scanDest[1] = &it.current.Depth
+		it.scanDest[2] = &it.current.TotalCount
+		it.scanDest[3] = &it.current.TotalBytes
+		for i := range tiers.NumTiers {
+			it.scanDest[4+int(i)*2] = &it.current.TierCounts[i]
+			it.scanDest[4+int(i)*2+1] = &it.current.TierBytes[i]
+		}
 	}
 
-	if err := it.rows.Scan(scanDest...); err != nil {
+	if err := it.rows.Scan(it.scanDest...); err != nil {
 		it.err = fmt.Errorf("scan prefix row: %w", err)
 		return false
 	}

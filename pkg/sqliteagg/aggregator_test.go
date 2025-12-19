@@ -834,3 +834,63 @@ func TestAllTiers(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr bool
+	}{
+		{
+			name:    "valid default config",
+			cfg:     DefaultConfig("/tmp/test.db"),
+			wantErr: false,
+		},
+		{
+			name:    "empty db path",
+			cfg:     Config{},
+			wantErr: true,
+		},
+		{
+			name: "invalid synchronous",
+			cfg: Config{
+				DBPath:      "/tmp/test.db",
+				Synchronous: "INVALID",
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative mmap size",
+			cfg: Config{
+				DBPath:   "/tmp/test.db",
+				MmapSize: -1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative cache size",
+			cfg: Config{
+				DBPath:      "/tmp/test.db",
+				CacheSizeKB: -1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty synchronous uses default",
+			cfg: Config{
+				DBPath:      "/tmp/test.db",
+				Synchronous: "",
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

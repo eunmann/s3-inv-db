@@ -195,6 +195,56 @@ go tool pprof -top mem.out
 S3INV_LONG_BENCH=1 go test -bench='Scaling|Threshold|MultiRowBatch' -benchtime=1x ./pkg/...
 ```
 
+## Phase: Pitfall Cleanup
+
+### Optimizations Applied
+
+1. **Reuse flush buffers across flushes**
+   - `batchArgs` and `singleArgs` slices are now allocated once in `BeginChunk()`
+   - Reused across all `flushPendingDeltas()` calls in the transaction
+   - Impact: Negligible (saves ~12 allocations per 100k objects)
+
+2. **Reuse PrefixIterator scanDest slice**
+   - `scanDest` slice for row scanning is now lazy-initialized once per iterator
+   - Previously allocated on every `Next()` call
+   - Impact: Reduces allocations during prefix iteration by 1 per row
+
+3. **Inline prefix extraction in hot path**
+   - `AddObject()` uses inline loop instead of calling `extractPrefixes()`
+   - Avoids slice allocation per object
+   - `extractPrefixes()` retained for pipeline.go and tests where allocation is acceptable
+
+### Common Pitfalls Avoided
+
+- **Per-row SQLite statements**: Everything is batched (256 rows per exec)
+- **Per-flush buffer allocation**: Reuse `batchArgs`/`singleArgs` across flushes
+- **Per-row scan allocation**: Reuse `scanDest` in PrefixIterator
+- **Logging in hot loops**: No logging in `AddObject()` or `accumulateDelta()`
+- **Interface boxing in hot paths**: Concrete types used throughout aggregation
+
+### Ideas Evaluated but Not Implemented
+
+1. **String interning for common prefixes**
+   - Evaluated: Would reduce memory for repeated prefixes like "data/", "logs/"
+   - Rejected: The map key already interns strings implicitly; explicit interning
+     adds complexity for marginal gain. Profile shows delta map is only 11% of memory.
+
+2. **sync.Pool for prefix slices**
+   - Evaluated: Could reduce allocation in `extractPrefixes()`
+   - Rejected: Hot path uses inline extraction. Non-hot paths don't benefit enough.
+
+3. **Optimizing tiers.FromS3() string operations**
+   - Evaluated: `strings.ToUpper`/`TrimSpace` allocate on every call
+   - Rejected: Only called when tier tracking enabled, and most S3 inventory
+     data is already uppercase/trimmed so no allocation actually occurs.
+
+### Software Improvements
+
+1. **Config.Validate()**
+   - Added validation for `DBPath`, `Synchronous`, `MmapSize`, `CacheSizeKB`
+   - Called in `Open()` to fail fast on invalid configuration
+   - Comprehensive tests for validation edge cases
+
 ## Benchmark Design Notes
 
 - **sqliteagg/bench_test.go**: Aggregation benchmarks with tier distributions and threshold sweeps
