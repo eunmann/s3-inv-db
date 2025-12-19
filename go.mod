@@ -30,5 +30,6 @@ require (
 	github.com/aws/smithy-go v1.24.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.19 // indirect
+	github.com/mattn/go-sqlite3 v1.14.32 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 )

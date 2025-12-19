@@ -1,0 +1,453 @@
+// Package sqliteagg provides SQLite-based streaming aggregation for S3 inventory prefixes.
+package sqliteagg
+
+import (
+	"database/sql"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/eunmann/s3-inv-db/pkg/logging"
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
+	_ "github.com/mattn/go-sqlite3"
+)
+
+// Config holds configuration for the SQLite aggregator.
+type Config struct {
+	// DBPath is the path to the SQLite database file.
+	DBPath string
+	// Synchronous sets the SQLite synchronous pragma.
+	// "NORMAL" is the default (good balance of safety and speed).
+	// "OFF" for maximum speed (unsafe on crash).
+	// "FULL" for maximum safety.
+	Synchronous string
+	// MmapSize is the mmap size in bytes (default 256MB).
+	MmapSize int64
+	// CacheSizeKB is the cache size in KB (default 256MB).
+	CacheSizeKB int
+}
+
+// DefaultConfig returns a default configuration tuned for performance.
+func DefaultConfig(dbPath string) Config {
+	return Config{
+		DBPath:      dbPath,
+		Synchronous: "NORMAL",
+		MmapSize:    268435456, // 256MB
+		CacheSizeKB: 262144,    // 256MB
+	}
+}
+
+// Aggregator aggregates S3 inventory prefixes into a SQLite database.
+type Aggregator struct {
+	db          *sql.DB
+	cfg         Config
+	tierMapping *tiers.Mapping
+
+	// Prepared statements (created per-transaction)
+	upsertStmt   *sql.Stmt
+	markDoneStmt *sql.Stmt
+
+	// Current transaction
+	tx *sql.Tx
+}
+
+// PrefixRow represents a row from the prefix_stats table.
+type PrefixRow struct {
+	Prefix     string
+	Depth      int
+	TotalCount uint64
+	TotalBytes uint64
+	TierCounts [tiers.NumTiers]uint64
+	TierBytes  [tiers.NumTiers]uint64
+}
+
+// Open creates or opens a SQLite database for aggregation.
+func Open(cfg Config) (*Aggregator, error) {
+	log := logging.WithPhase("sqlite_open")
+
+	db, err := sql.Open("sqlite3", cfg.DBPath+"?_journal_mode=WAL")
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite database: %w", err)
+	}
+
+	// Apply PRAGMA settings for performance
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL",
+		fmt.Sprintf("PRAGMA synchronous=%s", cfg.Synchronous),
+		"PRAGMA temp_store=MEMORY",
+		fmt.Sprintf("PRAGMA mmap_size=%d", cfg.MmapSize),
+		"PRAGMA page_size=32768",
+		fmt.Sprintf("PRAGMA cache_size=-%d", cfg.CacheSizeKB),
+	}
+
+	for _, pragma := range pragmas {
+		if _, err := db.Exec(pragma); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("execute pragma %q: %w", pragma, err)
+		}
+	}
+
+	// Create schema
+	if err := createSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create schema: %w", err)
+	}
+
+	log.Info().
+		Str("db_path", cfg.DBPath).
+		Str("synchronous", cfg.Synchronous).
+		Msg("opened SQLite aggregator")
+
+	return &Aggregator{
+		db:          db,
+		cfg:         cfg,
+		tierMapping: tiers.NewMapping(),
+	}, nil
+}
+
+func createSchema(db *sql.DB) error {
+	// Build prefix_stats table with tier columns
+	var tierCols strings.Builder
+	for i := 0; i < int(tiers.NumTiers); i++ {
+		tierCols.WriteString(fmt.Sprintf(",\n    t%d_count INTEGER NOT NULL DEFAULT 0", i))
+		tierCols.WriteString(fmt.Sprintf(",\n    t%d_bytes INTEGER NOT NULL DEFAULT 0", i))
+	}
+
+	createPrefixStats := fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS prefix_stats (
+			prefix TEXT PRIMARY KEY,
+			depth INTEGER NOT NULL,
+			total_count INTEGER NOT NULL DEFAULT 0,
+			total_bytes INTEGER NOT NULL DEFAULT 0%s
+		)
+	`, tierCols.String())
+
+	createChunksDone := `
+		CREATE TABLE IF NOT EXISTS chunks_done (
+			chunk_id TEXT PRIMARY KEY,
+			processed_at TEXT NOT NULL
+		)
+	`
+
+	if _, err := db.Exec(createPrefixStats); err != nil {
+		return fmt.Errorf("create prefix_stats table: %w", err)
+	}
+
+	if _, err := db.Exec(createChunksDone); err != nil {
+		return fmt.Errorf("create chunks_done table: %w", err)
+	}
+
+	return nil
+}
+
+// Close closes the database connection.
+func (a *Aggregator) Close() error {
+	if a.tx != nil {
+		a.tx.Rollback()
+	}
+	return a.db.Close()
+}
+
+// ChunkDone returns true if the chunk has already been processed.
+func (a *Aggregator) ChunkDone(chunkID string) (bool, error) {
+	var exists int
+	err := a.db.QueryRow("SELECT 1 FROM chunks_done WHERE chunk_id = ?", chunkID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check chunk done: %w", err)
+	}
+	return true, nil
+}
+
+// BeginChunk starts a new transaction for processing a chunk.
+func (a *Aggregator) BeginChunk() error {
+	if a.tx != nil {
+		return fmt.Errorf("transaction already in progress")
+	}
+
+	tx, err := a.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	a.tx = tx
+
+	// Prepare upsert statement for prefix_stats
+	upsertSQL := buildUpsertSQL()
+	a.upsertStmt, err = tx.Prepare(upsertSQL)
+	if err != nil {
+		tx.Rollback()
+		a.tx = nil
+		return fmt.Errorf("prepare upsert statement: %w", err)
+	}
+
+	// Prepare mark done statement
+	a.markDoneStmt, err = tx.Prepare("INSERT INTO chunks_done (chunk_id, processed_at) VALUES (?, ?)")
+	if err != nil {
+		a.upsertStmt.Close()
+		tx.Rollback()
+		a.tx = nil
+		return fmt.Errorf("prepare mark done statement: %w", err)
+	}
+
+	return nil
+}
+
+func buildUpsertSQL() string {
+	// Build column list
+	cols := []string{"prefix", "depth", "total_count", "total_bytes"}
+	placeholders := []string{"?", "?", "?", "?"}
+	updates := []string{
+		"total_count = total_count + excluded.total_count",
+		"total_bytes = total_bytes + excluded.total_bytes",
+	}
+
+	for i := 0; i < int(tiers.NumTiers); i++ {
+		cols = append(cols, fmt.Sprintf("t%d_count", i), fmt.Sprintf("t%d_bytes", i))
+		placeholders = append(placeholders, "?", "?")
+		updates = append(updates,
+			fmt.Sprintf("t%d_count = t%d_count + excluded.t%d_count", i, i, i),
+			fmt.Sprintf("t%d_bytes = t%d_bytes + excluded.t%d_bytes", i, i, i),
+		)
+	}
+
+	return fmt.Sprintf(`
+		INSERT INTO prefix_stats (%s)
+		VALUES (%s)
+		ON CONFLICT(prefix) DO UPDATE SET %s
+	`, strings.Join(cols, ", "), strings.Join(placeholders, ", "), strings.Join(updates, ", "))
+}
+
+// AddObject adds an object's stats to all its prefix ancestors.
+// This should be called for each object in the inventory.
+func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) error {
+	if a.tx == nil {
+		return fmt.Errorf("no transaction in progress")
+	}
+
+	// Extract all prefix ancestors
+	prefixes := extractPrefixes(key)
+
+	// Add the root prefix (empty string)
+	if err := a.addPrefix("", 0, size, tierID); err != nil {
+		return err
+	}
+
+	// Add each directory prefix
+	for i, prefix := range prefixes {
+		depth := i + 1
+		if err := a.addPrefix(prefix, depth, size, tierID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (a *Aggregator) addPrefix(prefix string, depth int, size uint64, tierID tiers.ID) error {
+	// Build arguments: prefix, depth, total_count, total_bytes, t0_count, t0_bytes, ...
+	args := make([]interface{}, 0, 4+int(tiers.NumTiers)*2)
+	args = append(args, prefix, depth, 1, size)
+
+	for i := 0; i < int(tiers.NumTiers); i++ {
+		if tiers.ID(i) == tierID {
+			args = append(args, 1, size)
+		} else {
+			args = append(args, 0, 0)
+		}
+	}
+
+	_, err := a.upsertStmt.Exec(args...)
+	if err != nil {
+		return fmt.Errorf("upsert prefix %q: %w", prefix, err)
+	}
+	return nil
+}
+
+// extractPrefixes returns all directory prefixes for a key.
+// For "a/b/c.txt", returns ["a/", "a/b/"]
+// For "a/b/c/", returns ["a/", "a/b/", "a/b/c/"]
+func extractPrefixes(key string) []string {
+	var prefixes []string
+	for i := 0; i < len(key); i++ {
+		if key[i] == '/' {
+			prefix := key[:i+1]
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	return prefixes
+}
+
+// MarkChunkDone marks a chunk as processed within the current transaction.
+func (a *Aggregator) MarkChunkDone(chunkID string) error {
+	if a.tx == nil {
+		return fmt.Errorf("no transaction in progress")
+	}
+
+	_, err := a.markDoneStmt.Exec(chunkID, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return fmt.Errorf("mark chunk done: %w", err)
+	}
+	return nil
+}
+
+// Commit commits the current transaction.
+func (a *Aggregator) Commit() error {
+	if a.tx == nil {
+		return fmt.Errorf("no transaction in progress")
+	}
+
+	if a.upsertStmt != nil {
+		a.upsertStmt.Close()
+		a.upsertStmt = nil
+	}
+	if a.markDoneStmt != nil {
+		a.markDoneStmt.Close()
+		a.markDoneStmt = nil
+	}
+
+	err := a.tx.Commit()
+	a.tx = nil
+	if err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
+}
+
+// Rollback rolls back the current transaction.
+func (a *Aggregator) Rollback() error {
+	if a.tx == nil {
+		return nil
+	}
+
+	if a.upsertStmt != nil {
+		a.upsertStmt.Close()
+		a.upsertStmt = nil
+	}
+	if a.markDoneStmt != nil {
+		a.markDoneStmt.Close()
+		a.markDoneStmt = nil
+	}
+
+	err := a.tx.Rollback()
+	a.tx = nil
+	return err
+}
+
+// PrefixCount returns the total number of prefixes in the database.
+func (a *Aggregator) PrefixCount() (uint64, error) {
+	var count uint64
+	err := a.db.QueryRow("SELECT COUNT(*) FROM prefix_stats").Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count prefixes: %w", err)
+	}
+	return count, nil
+}
+
+// ChunkCount returns the number of processed chunks.
+func (a *Aggregator) ChunkCount() (int, error) {
+	var count int
+	err := a.db.QueryRow("SELECT COUNT(*) FROM chunks_done").Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count chunks: %w", err)
+	}
+	return count, nil
+}
+
+// MaxDepth returns the maximum depth in the prefix stats.
+func (a *Aggregator) MaxDepth() (uint32, error) {
+	var maxDepth sql.NullInt64
+	err := a.db.QueryRow("SELECT MAX(depth) FROM prefix_stats").Scan(&maxDepth)
+	if err != nil {
+		return 0, fmt.Errorf("get max depth: %w", err)
+	}
+	if !maxDepth.Valid {
+		return 0, nil
+	}
+	return uint32(maxDepth.Int64), nil
+}
+
+// PresentTiers returns the list of tiers that have data.
+func (a *Aggregator) PresentTiers() ([]tiers.ID, error) {
+	var present []tiers.ID
+
+	for i := 0; i < int(tiers.NumTiers); i++ {
+		var count int64
+		query := fmt.Sprintf("SELECT SUM(t%d_count) FROM prefix_stats WHERE depth = 0", i)
+		err := a.db.QueryRow(query).Scan(&count)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, fmt.Errorf("check tier %d: %w", i, err)
+		}
+		if count > 0 {
+			present = append(present, tiers.ID(i))
+		}
+	}
+
+	return present, nil
+}
+
+// IteratePrefixes returns an iterator over all prefixes in lexicographic order.
+func (a *Aggregator) IteratePrefixes() (*PrefixIterator, error) {
+	// Build SELECT statement with all tier columns
+	cols := []string{"prefix", "depth", "total_count", "total_bytes"}
+	for i := 0; i < int(tiers.NumTiers); i++ {
+		cols = append(cols, fmt.Sprintf("t%d_count", i), fmt.Sprintf("t%d_bytes", i))
+	}
+
+	query := fmt.Sprintf("SELECT %s FROM prefix_stats ORDER BY prefix", strings.Join(cols, ", "))
+	rows, err := a.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("query prefixes: %w", err)
+	}
+
+	return &PrefixIterator{rows: rows}, nil
+}
+
+// PrefixIterator iterates over prefix rows in lexicographic order.
+type PrefixIterator struct {
+	rows    *sql.Rows
+	current PrefixRow
+	err     error
+}
+
+// Next advances to the next row. Returns false when done.
+func (it *PrefixIterator) Next() bool {
+	if it.err != nil {
+		return false
+	}
+
+	if !it.rows.Next() {
+		it.err = it.rows.Err()
+		return false
+	}
+
+	// Build scan destinations
+	scanDest := make([]interface{}, 0, 4+int(tiers.NumTiers)*2)
+	scanDest = append(scanDest, &it.current.Prefix, &it.current.Depth, &it.current.TotalCount, &it.current.TotalBytes)
+	for i := 0; i < int(tiers.NumTiers); i++ {
+		scanDest = append(scanDest, &it.current.TierCounts[i], &it.current.TierBytes[i])
+	}
+
+	if err := it.rows.Scan(scanDest...); err != nil {
+		it.err = fmt.Errorf("scan prefix row: %w", err)
+		return false
+	}
+
+	return true
+}
+
+// Row returns the current row.
+func (it *PrefixIterator) Row() PrefixRow {
+	return it.current
+}
+
+// Err returns any error encountered during iteration.
+func (it *PrefixIterator) Err() error {
+	return it.err
+}
+
+// Close closes the iterator.
+func (it *PrefixIterator) Close() error {
+	return it.rows.Close()
+}
