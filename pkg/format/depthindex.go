@@ -255,14 +255,11 @@ func (d *DepthIndex) binarySearchUpper(start, end, target uint64) uint64 {
 
 // DepthIterator iterates over positions at a specific depth within a subtree.
 type DepthIterator struct {
-	index        *DepthIndex
-	depth        uint32
-	subtreeStart uint64
-	subtreeEnd   uint64
-	start        uint64 // slice start in positions array
-	end          uint64 // slice end in positions array
-	current      uint64 // current index in positions array
-	pos          uint64 // current position value
+	index   *DepthIndex
+	start   uint64 // slice start in positions array
+	end     uint64 // slice end in positions array
+	current uint64 // current index in positions array
+	pos     uint64 // current position value
 }
 
 // NewDepthIterator creates an iterator for a subtree at a specific depth.
@@ -286,13 +283,10 @@ func (d *DepthIndex) NewDepthIterator(depth uint32, subtreeStart, subtreeEnd uin
 	hi := d.binarySearchUpper(lo, sliceEnd, subtreeEnd)
 
 	return &DepthIterator{
-		index:        d,
-		depth:        depth,
-		subtreeStart: subtreeStart,
-		subtreeEnd:   subtreeEnd,
-		start:        lo,
-		end:          hi,
-		current:      lo,
+		index:   d,
+		start:   lo,
+		end:     hi,
+		current: lo,
 	}, nil
 }
 

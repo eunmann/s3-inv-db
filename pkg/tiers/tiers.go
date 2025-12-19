@@ -73,15 +73,8 @@ func NewMapping() *Mapping {
 		m.indexByS3Name[strings.ToUpper(t.Name)] = t.ID
 	}
 
-	// Add S3 storage class name mappings
-	m.indexByS3Name["STANDARD"] = Standard
-	m.indexByS3Name["STANDARD_IA"] = StandardIA
-	m.indexByS3Name["ONEZONE_IA"] = OneZoneIA
-	m.indexByS3Name["GLACIER_IR"] = GlacierIR
-	m.indexByS3Name["GLACIER"] = GlacierFR
-	m.indexByS3Name["DEEP_ARCHIVE"] = DeepArchive
-	m.indexByS3Name["REDUCED_REDUNDANCY"] = ReducedRedundancy
-	m.indexByS3Name["INTELLIGENT_TIERING"] = ITFrequent // Default for IT without access tier
+	// Add INTELLIGENT_TIERING as alias for ITFrequent (default when no access tier specified)
+	m.indexByS3Name["INTELLIGENT_TIERING"] = ITFrequent
 
 	return m
 }

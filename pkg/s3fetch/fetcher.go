@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"golang.org/x/sync/errgroup"
@@ -147,10 +146,6 @@ func (f *Fetcher) Cleanup() error {
 
 // sanitizeFilename converts an S3 key to a safe local filename.
 func sanitizeFilename(key string) string {
-	// Use the last component of the path
-	base := filepath.Base(key)
-	// Replace any remaining problematic characters
-	base = strings.ReplaceAll(base, "/", "_")
-	base = strings.ReplaceAll(base, "\\", "_")
-	return base
+	// filepath.Base extracts the final path component, removing all directory separators
+	return filepath.Base(key)
 }

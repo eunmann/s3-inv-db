@@ -252,88 +252,68 @@ func buildIndex(ctx context.Context, cfg Config, inventoryFiles []string, openFi
 }
 
 func writeColumnarArrays(outDir string, result *triebuild.Result) error {
-
-	// subtree_end
-	subtreeEndPath := filepath.Join(outDir, "subtree_end.u64")
-	subtreeWriter, err := format.NewArrayWriter(subtreeEndPath, 8)
-	if err != nil {
-		return err
+	// Write u64 arrays
+	u64Arrays := []struct {
+		name   string
+		getter func(triebuild.Node) uint64
+	}{
+		{"subtree_end.u64", func(n triebuild.Node) uint64 { return n.SubtreeEnd }},
+		{"object_count.u64", func(n triebuild.Node) uint64 { return n.ObjectCount }},
+		{"total_bytes.u64", func(n triebuild.Node) uint64 { return n.TotalBytes }},
 	}
-	for _, node := range result.Nodes {
-		if err := subtreeWriter.WriteU64(node.SubtreeEnd); err != nil {
-			subtreeWriter.Close()
+
+	for _, arr := range u64Arrays {
+		if err := writeU64Array(outDir, arr.name, result.Nodes, arr.getter); err != nil {
 			return err
 		}
 	}
-	if err := subtreeWriter.Close(); err != nil {
-		return err
+
+	// Write u32 arrays
+	u32Arrays := []struct {
+		name   string
+		getter func(triebuild.Node) uint32
+	}{
+		{"depth.u32", func(n triebuild.Node) uint32 { return n.Depth }},
+		{"max_depth_in_subtree.u32", func(n triebuild.Node) uint32 { return n.MaxDepthInSubtree }},
 	}
 
-	// depth
-	depthPath := filepath.Join(outDir, "depth.u32")
-	depthWriter, err := format.NewArrayWriter(depthPath, 4)
-	if err != nil {
-		return err
-	}
-	for _, node := range result.Nodes {
-		if err := depthWriter.WriteU32(node.Depth); err != nil {
-			depthWriter.Close()
+	for _, arr := range u32Arrays {
+		if err := writeU32Array(outDir, arr.name, result.Nodes, arr.getter); err != nil {
 			return err
 		}
-	}
-	if err := depthWriter.Close(); err != nil {
-		return err
-	}
-
-	// object_count
-	countPath := filepath.Join(outDir, "object_count.u64")
-	countWriter, err := format.NewArrayWriter(countPath, 8)
-	if err != nil {
-		return err
-	}
-	for _, node := range result.Nodes {
-		if err := countWriter.WriteU64(node.ObjectCount); err != nil {
-			countWriter.Close()
-			return err
-		}
-	}
-	if err := countWriter.Close(); err != nil {
-		return err
-	}
-
-	// total_bytes
-	bytesPath := filepath.Join(outDir, "total_bytes.u64")
-	bytesWriter, err := format.NewArrayWriter(bytesPath, 8)
-	if err != nil {
-		return err
-	}
-	for _, node := range result.Nodes {
-		if err := bytesWriter.WriteU64(node.TotalBytes); err != nil {
-			bytesWriter.Close()
-			return err
-		}
-	}
-	if err := bytesWriter.Close(); err != nil {
-		return err
-	}
-
-	// max_depth_in_subtree
-	maxDepthPath := filepath.Join(outDir, "max_depth_in_subtree.u32")
-	maxDepthWriter, err := format.NewArrayWriter(maxDepthPath, 4)
-	if err != nil {
-		return err
-	}
-	for _, node := range result.Nodes {
-		if err := maxDepthWriter.WriteU32(node.MaxDepthInSubtree); err != nil {
-			maxDepthWriter.Close()
-			return err
-		}
-	}
-	if err := maxDepthWriter.Close(); err != nil {
-		return err
 	}
 
 	return nil
+}
+
+func writeU64Array(outDir, name string, nodes []triebuild.Node, getter func(triebuild.Node) uint64) error {
+	path := filepath.Join(outDir, name)
+	writer, err := format.NewArrayWriter(path, 8)
+	if err != nil {
+		return err
+	}
+	for _, node := range nodes {
+		if err := writer.WriteU64(getter(node)); err != nil {
+			writer.Close()
+			return err
+		}
+	}
+	return writer.Close()
+}
+
+func writeU32Array(outDir, name string, nodes []triebuild.Node, getter func(triebuild.Node) uint32) error {
+	path := filepath.Join(outDir, name)
+	writer, err := format.NewArrayWriter(path, 4)
+	if err != nil {
+		return err
+	}
+	for _, node := range nodes {
+		if err := writer.WriteU32(getter(node)); err != nil {
+			writer.Close()
+			return err
+		}
+	}
+	return writer.Close()
 }
 
 func writeDepthIndex(outDir string, result *triebuild.Result) error {

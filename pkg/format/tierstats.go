@@ -230,19 +230,25 @@ func (r *TierStatsReader) Close() error {
 		return nil
 	}
 
+	var firstErr error
+
 	for _, reader := range r.bytesArrays {
 		if reader != nil {
-			reader.Close()
+			if err := reader.Close(); err != nil && firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 	for _, reader := range r.countsArrays {
 		if reader != nil {
-			reader.Close()
+			if err := reader.Close(); err != nil && firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 
 	r.bytesArrays = nil
 	r.countsArrays = nil
 
-	return nil
+	return firstErr
 }

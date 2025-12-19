@@ -295,7 +295,6 @@ type Iterator interface {
 // depthIteratorWrapper wraps format.DepthIterator to implement Iterator.
 type depthIteratorWrapper struct {
 	it    *format.DepthIterator
-	idx   *Index
 	depth uint32
 }
 
@@ -331,7 +330,7 @@ func (idx *Index) NewDescendantIterator(prefixPos uint64, relDepth int) (Iterato
 		return nil, err
 	}
 
-	return &depthIteratorWrapper{it: it, idx: idx, depth: targetDepth}, nil
+	return &depthIteratorWrapper{it: it, depth: targetDepth}, nil
 }
 
 type emptyIterator struct{}
