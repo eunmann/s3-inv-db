@@ -12,7 +12,6 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/indexbuild"
 	"github.com/eunmann/s3-inv-db/pkg/sqliteagg"
-	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 /*
@@ -42,14 +41,8 @@ Benchmark Categories for Index Reading:
    - 50% single-prefix stats, 30% depth-1 queries, 20% deeper queries
 */
 
-// Seed for reproducible random access patterns
-const benchSeed = 42
-
-// Tree shapes and sizes for benchmarking
-var (
-	benchShapes = []string{"deep_narrow", "wide_shallow", "balanced", "s3_realistic", "wide_single_level"}
-	benchSizes  = []int{1000, 10000, 100000}
-)
+// Use shared constants from benchutil for consistency across packages.
+// benchutil.BenchmarkSeed, benchutil.TreeShapes, benchutil.BenchmarkSizes
 
 // benchIndex holds a pre-built index for benchmarking
 type benchIndex struct {
@@ -62,41 +55,19 @@ type benchIndex struct {
 func setupBenchIndex(b *testing.B, keys []string) *benchIndex {
 	b.Helper()
 
-	tmpDir := b.TempDir()
+	// Setup SQLite aggregator from keys
+	setup := setupSQLiteFromKeys(b, keys)
+	setup.Close() // Close aggregator, keep DB file
+
+	tmpDir := filepath.Dir(setup.DBPath)
 	outDir := filepath.Join(tmpDir, "index")
-	dbPath := filepath.Join(tmpDir, "prefix-agg.db")
 
-	cfg := sqliteagg.DefaultConfig(dbPath)
-	cfg.Synchronous = "OFF" // Faster for benchmarks
-	agg, err := sqliteagg.Open(cfg)
-	if err != nil {
-		b.Fatalf("Open SQLite failed: %v", err)
-	}
-
-	if err := agg.BeginChunk(); err != nil {
-		b.Fatalf("BeginChunk failed: %v", err)
-	}
-
-	for i, key := range keys {
-		size := uint64((i%1000 + 1) * 100)
-		if err := agg.AddObject(key, size, tiers.Standard); err != nil {
-			b.Fatalf("AddObject failed: %v", err)
-		}
-	}
-
-	if err := agg.MarkChunkDone("bench-chunk"); err != nil {
-		b.Fatalf("MarkChunkDone failed: %v", err)
-	}
-	if err := agg.Commit(); err != nil {
-		b.Fatalf("Commit failed: %v", err)
-	}
-	if err := agg.Close(); err != nil {
-		b.Fatalf("Close failed: %v", err)
-	}
+	cfg := sqliteagg.DefaultConfig(setup.DBPath)
+	cfg.Synchronous = "OFF"
 
 	buildCfg := indexbuild.SQLiteConfig{
 		OutDir:    outDir,
-		DBPath:    dbPath,
+		DBPath:    setup.DBPath,
 		SQLiteCfg: cfg,
 	}
 
@@ -104,7 +75,7 @@ func setupBenchIndex(b *testing.B, keys []string) *benchIndex {
 		b.Fatalf("Build failed: %v", err)
 	}
 
-	os.Remove(dbPath)
+	os.Remove(setup.DBPath)
 
 	idx, err := Open(outDir)
 	if err != nil {
@@ -131,43 +102,19 @@ func setupBenchIndex(b *testing.B, keys []string) *benchIndex {
 func setupBenchIndexWithTiers(b *testing.B, numObjects int) *benchIndex {
 	b.Helper()
 
-	tmpDir := b.TempDir()
+	// Setup SQLite aggregator with realistic tier distribution
+	setup := setupSQLiteAggregator(b, numObjects)
+	setup.Close() // Close aggregator, keep DB file
+
+	tmpDir := filepath.Dir(setup.DBPath)
 	outDir := filepath.Join(tmpDir, "index")
-	dbPath := filepath.Join(tmpDir, "prefix-agg.db")
 
-	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(numObjects))
-	objects := gen.Generate()
-
-	cfg := sqliteagg.DefaultConfig(dbPath)
+	cfg := sqliteagg.DefaultConfig(setup.DBPath)
 	cfg.Synchronous = "OFF"
-	agg, err := sqliteagg.Open(cfg)
-	if err != nil {
-		b.Fatalf("Open SQLite failed: %v", err)
-	}
-
-	if err := agg.BeginChunk(); err != nil {
-		b.Fatalf("BeginChunk failed: %v", err)
-	}
-
-	for _, obj := range objects {
-		if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
-			b.Fatalf("AddObject failed: %v", err)
-		}
-	}
-
-	if err := agg.MarkChunkDone("bench-chunk"); err != nil {
-		b.Fatalf("MarkChunkDone failed: %v", err)
-	}
-	if err := agg.Commit(); err != nil {
-		b.Fatalf("Commit failed: %v", err)
-	}
-	if err := agg.Close(); err != nil {
-		b.Fatalf("Close failed: %v", err)
-	}
 
 	buildCfg := indexbuild.SQLiteConfig{
 		OutDir:    outDir,
-		DBPath:    dbPath,
+		DBPath:    setup.DBPath,
 		SQLiteCfg: cfg,
 	}
 
@@ -175,7 +122,7 @@ func setupBenchIndexWithTiers(b *testing.B, numObjects int) *benchIndex {
 		b.Fatalf("Build failed: %v", err)
 	}
 
-	os.Remove(dbPath)
+	os.Remove(setup.DBPath)
 
 	idx, err := Open(outDir)
 	if err != nil {
@@ -288,8 +235,8 @@ func BenchmarkIndexOpen(b *testing.B) {
 
 // BenchmarkLookup benchmarks prefix lookup performance.
 func BenchmarkLookup(b *testing.B) {
-	for _, shape := range benchShapes {
-		for _, size := range benchSizes {
+	for _, shape := range benchutil.TreeShapes {
+		for _, size := range benchutil.BenchmarkSizes {
 			name := fmt.Sprintf("%s/size=%d", shape, size)
 
 			b.Run(name+"/sequential", func(b *testing.B) {
@@ -309,7 +256,7 @@ func BenchmarkLookup(b *testing.B) {
 				bi := setupBenchIndex(b, keys)
 				defer bi.Close()
 
-				rng := rand.New(rand.NewSource(benchSeed))
+				rng := rand.New(rand.NewSource(benchutil.BenchmarkSeed))
 				randomIndices := make([]int, b.N)
 				for i := range randomIndices {
 					randomIndices[i] = rng.Intn(len(bi.prefixes))
@@ -327,8 +274,8 @@ func BenchmarkLookup(b *testing.B) {
 
 // BenchmarkStats benchmarks stats retrieval after lookup.
 func BenchmarkStats(b *testing.B) {
-	for _, shape := range benchShapes {
-		for _, size := range benchSizes {
+	for _, shape := range benchutil.TreeShapes {
+		for _, size := range benchutil.BenchmarkSizes {
 			name := fmt.Sprintf("%s/size=%d", shape, size)
 
 			b.Run(name+"/sequential", func(b *testing.B) {
@@ -348,7 +295,7 @@ func BenchmarkStats(b *testing.B) {
 				bi := setupBenchIndex(b, keys)
 				defer bi.Close()
 
-				rng := rand.New(rand.NewSource(benchSeed))
+				rng := rand.New(rand.NewSource(benchutil.BenchmarkSeed))
 				randomIndices := make([]int, b.N)
 				for i := range randomIndices {
 					randomIndices[i] = rng.Intn(len(bi.prefixes))
@@ -392,7 +339,7 @@ func BenchmarkTierBreakdown(b *testing.B) {
 				b.Skip("index has no tier data")
 			}
 
-			rng := rand.New(rand.NewSource(benchSeed))
+			rng := rand.New(rand.NewSource(benchutil.BenchmarkSeed))
 			randomPos := make([]uint64, b.N)
 			for i := range randomPos {
 				randomPos[i] = uint64(rng.Intn(len(bi.prefixes)))
@@ -425,8 +372,8 @@ func BenchmarkTierBreakdown(b *testing.B) {
 func BenchmarkDescendantsAtDepth(b *testing.B) {
 	depths := []int{1, 2, 3, 5}
 
-	for _, shape := range benchShapes {
-		for _, size := range benchSizes {
+	for _, shape := range benchutil.TreeShapes {
+		for _, size := range benchutil.BenchmarkSizes {
 			keys := benchutil.GenerateKeys(size, shape)
 			bi := setupBenchIndex(b, keys)
 
@@ -508,8 +455,8 @@ func BenchmarkDescendantsSubtree(b *testing.B) {
 
 // BenchmarkIterator benchmarks the iterator interface.
 func BenchmarkIterator(b *testing.B) {
-	for _, shape := range benchShapes {
-		for _, size := range benchSizes {
+	for _, shape := range benchutil.TreeShapes {
+		for _, size := range benchutil.BenchmarkSizes {
 			keys := benchutil.GenerateKeys(size, shape)
 			bi := setupBenchIndex(b, keys)
 
@@ -538,7 +485,7 @@ func BenchmarkIterator(b *testing.B) {
 
 // BenchmarkMixedWorkload simulates realistic mixed query patterns.
 func BenchmarkMixedWorkload(b *testing.B) {
-	for _, shape := range benchShapes {
+	for _, shape := range benchutil.TreeShapes {
 		size := 10000
 		keys := benchutil.GenerateKeys(size, shape)
 		bi := setupBenchIndex(b, keys)
@@ -546,7 +493,7 @@ func BenchmarkMixedWorkload(b *testing.B) {
 		name := fmt.Sprintf("%s/mixed", shape)
 
 		b.Run(name, func(b *testing.B) {
-			rng := rand.New(rand.NewSource(benchSeed))
+			rng := rand.New(rand.NewSource(benchutil.BenchmarkSeed))
 			rootPos, _ := bi.idx.Lookup("")
 
 			b.ResetTimer()
@@ -582,7 +529,7 @@ func BenchmarkMixedWorkloadWithTiers(b *testing.B) {
 		b.Skip("index has no tier data")
 	}
 
-	rng := rand.New(rand.NewSource(benchSeed))
+	rng := rand.New(rand.NewSource(benchutil.BenchmarkSeed))
 	rootPos, _ := bi.idx.Lookup("")
 
 	b.ResetTimer()
@@ -613,7 +560,7 @@ func BenchmarkPrefixHeavy(b *testing.B) {
 	bi := setupBenchIndexWithTiers(b, 100000)
 	defer bi.Close()
 
-	rng := rand.New(rand.NewSource(benchSeed))
+	rng := rand.New(rand.NewSource(benchutil.BenchmarkSeed))
 
 	// Pre-generate random indices
 	randomIndices := make([]int, b.N)
@@ -633,13 +580,9 @@ func BenchmarkPrefixHeavy(b *testing.B) {
 
 // BenchmarkIndexOpen_Scaling runs larger scale load tests (gated).
 func BenchmarkIndexOpen_Scaling(b *testing.B) {
-	if os.Getenv("S3INV_LONG_BENCH") == "" {
-		b.Skip("set S3INV_LONG_BENCH=1 to run scaling benchmark")
-	}
+	benchutil.SkipIfNoLongBench(b)
 
-	sizes := []int{10000, 50000, 100000, 250000}
-
-	for _, size := range sizes {
+	for _, size := range benchutil.ScalingSizes {
 		b.Run(fmt.Sprintf("objects=%d", size), func(b *testing.B) {
 			bi := setupBenchIndexWithTiers(b, size)
 			bi.Close()
