@@ -94,8 +94,8 @@ func BuildFromS3(ctx context.Context, cfg S3Config) error {
 type SchemaConfig struct {
 	KeyCol        int
 	SizeCol       int
-	StorageCol    int  // -1 if not available
-	AccessTierCol int  // -1 if not available
+	StorageCol    int // -1 if not available
+	AccessTierCol int // -1 if not available
 }
 
 // BuildWithSchema constructs an index from inventory files using pre-known column indices.

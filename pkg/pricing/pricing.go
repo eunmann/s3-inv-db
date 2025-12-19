@@ -119,12 +119,15 @@ func ComputeMonthlyCost(breakdown []format.TierBreakdown, pt PriceTable) CostRes
 // FormatCost formats a cost in microdollars as a human-readable string.
 func FormatCost(microdollars uint64) string {
 	dollars := float64(microdollars) / 1_000_000
-	if dollars < 0.01 {
+
+	switch {
+	case dollars < 0.01:
 		return fmt.Sprintf("$%.6f", dollars)
-	} else if dollars < 1 {
+	case dollars < 1:
 		return fmt.Sprintf("$%.4f", dollars)
-	} else if dollars < 100 {
+	case dollars < 100:
 		return fmt.Sprintf("$%.2f", dollars)
+	default:
+		return fmt.Sprintf("$%.0f", dollars)
 	}
-	return fmt.Sprintf("$%.0f", dollars)
 }
