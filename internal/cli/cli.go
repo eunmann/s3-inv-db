@@ -120,9 +120,10 @@ func runBuild(args []string) error {
 
 	// Build index from SQLite
 	buildCfg := indexbuild.SQLiteConfig{
-		OutDir:    *outDir,
-		DBPath:    *dbPath,
-		SQLiteCfg: sqliteCfg,
+		OutDir:       *outDir,
+		DBPath:       *dbPath,
+		SQLiteCfg:    sqliteCfg,
+		BuildOptions: buildOpts,
 	}
 
 	if err := indexbuild.BuildFromSQLite(buildCfg); err != nil {

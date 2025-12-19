@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -21,11 +22,14 @@ type SQLiteConfig struct {
 	DBPath string
 	// SQLiteCfg is the SQLite configuration.
 	SQLiteCfg sqliteagg.Config
+	// BuildOptions controls concurrency and performance settings.
+	BuildOptions sqliteagg.BuildOptions
 }
 
 // BuildFromSQLite builds an index from a pre-populated SQLite prefix aggregation database.
 // The database must have been populated using sqliteagg.StreamFromS3 or equivalent.
 func BuildFromSQLite(cfg SQLiteConfig) error {
+	cfg.BuildOptions.Validate()
 	log := logging.L()
 
 	if cfg.OutDir == "" {
@@ -74,29 +78,12 @@ func BuildFromSQLite(cfg SQLiteConfig) error {
 		}
 	}()
 
-	// Write columnar arrays
-	if err := writeColumnarArrays(tmpOutDir, result); err != nil {
-		return fmt.Errorf("write columnar arrays: %w", err)
+	// Write all index files in parallel
+	if err := writeIndexFilesParallel(tmpOutDir, result, cfg.BuildOptions.FileWriteConcurrency); err != nil {
+		return err
 	}
 
-	// Write tier stats (if tracking enabled)
-	if result.TrackTiers {
-		if err := writeTierStats(tmpOutDir, result); err != nil {
-			return fmt.Errorf("write tier stats: %w", err)
-		}
-	}
-
-	// Build depth index
-	if err := writeDepthIndex(tmpOutDir, result); err != nil {
-		return fmt.Errorf("write depth index: %w", err)
-	}
-
-	// Build MPHF
-	if err := writeMPHF(tmpOutDir, result); err != nil {
-		return fmt.Errorf("write MPHF: %w", err)
-	}
-
-	// Write manifest with checksums
+	// Write manifest with checksums (must be after all files are written)
 	if err := format.WriteManifest(tmpOutDir, uint64(len(result.Nodes)), result.MaxDepth); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
@@ -127,53 +114,99 @@ func BuildFromSQLite(cfg SQLiteConfig) error {
 	return nil
 }
 
-func writeColumnarArrays(outDir string, result *triebuild.Result) error {
+// writeTask represents a file writing task.
+type writeTask struct {
+	name string
+	fn   func() error
+}
+
+// writeIndexFilesParallel writes all index files using a worker pool.
+func writeIndexFilesParallel(outDir string, result *triebuild.Result, concurrency int) error {
+	if concurrency <= 0 {
+		concurrency = 4
+	}
+
 	log := logging.WithPhase("write_index")
 	start := time.Now()
 
 	log.Info().
 		Str("output_dir", outDir).
 		Int("node_count", len(result.Nodes)).
-		Uint32("max_depth", result.MaxDepth).
-		Msg("writing columnar arrays")
+		Int("concurrency", concurrency).
+		Msg("writing index files in parallel")
 
-	// Write u64 arrays
-	u64Arrays := []struct {
-		name   string
-		getter func(triebuild.Node) uint64
-	}{
-		{"subtree_end.u64", func(n triebuild.Node) uint64 { return n.SubtreeEnd }},
-		{"object_count.u64", func(n triebuild.Node) uint64 { return n.ObjectCount }},
-		{"total_bytes.u64", func(n triebuild.Node) uint64 { return n.TotalBytes }},
+	// Create tasks for all file writes
+	tasks := []writeTask{
+		// Columnar arrays
+		{"subtree_end.u64", func() error {
+			return writeU64Array(outDir, "subtree_end.u64", result.Nodes, func(n triebuild.Node) uint64 { return n.SubtreeEnd })
+		}},
+		{"object_count.u64", func() error {
+			return writeU64Array(outDir, "object_count.u64", result.Nodes, func(n triebuild.Node) uint64 { return n.ObjectCount })
+		}},
+		{"total_bytes.u64", func() error {
+			return writeU64Array(outDir, "total_bytes.u64", result.Nodes, func(n triebuild.Node) uint64 { return n.TotalBytes })
+		}},
+		{"depth.u32", func() error {
+			return writeU32Array(outDir, "depth.u32", result.Nodes, func(n triebuild.Node) uint32 { return n.Depth })
+		}},
+		{"max_depth_in_subtree.u32", func() error {
+			return writeU32Array(outDir, "max_depth_in_subtree.u32", result.Nodes, func(n triebuild.Node) uint32 { return n.MaxDepthInSubtree })
+		}},
+		// Depth index
+		{"depth_index", func() error { return writeDepthIndex(outDir, result) }},
+		// MPHF
+		{"mphf", func() error { return writeMPHF(outDir, result) }},
 	}
 
-	for _, arr := range u64Arrays {
-		if err := writeU64Array(outDir, arr.name, result.Nodes, arr.getter); err != nil {
-			return fmt.Errorf("write %s: %w", arr.name, err)
-		}
-		log.Debug().Str("file", arr.name).Msg("wrote array file")
+	// Add tier stats if tracking enabled
+	if result.TrackTiers && len(result.PresentTiers) > 0 {
+		tasks = append(tasks, writeTask{"tier_stats", func() error { return writeTierStats(outDir, result) }})
 	}
 
-	// Write u32 arrays
-	u32Arrays := []struct {
-		name   string
-		getter func(triebuild.Node) uint32
-	}{
-		{"depth.u32", func(n triebuild.Node) uint32 { return n.Depth }},
-		{"max_depth_in_subtree.u32", func(n triebuild.Node) uint32 { return n.MaxDepthInSubtree }},
+	// Create task channel
+	taskCh := make(chan writeTask, len(tasks))
+	for _, t := range tasks {
+		taskCh <- t
+	}
+	close(taskCh)
+
+	// Error collection
+	var (
+		errMu    sync.Mutex
+		firstErr error
+	)
+
+	// Start workers
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for task := range taskCh {
+				if err := task.fn(); err != nil {
+					errMu.Lock()
+					if firstErr == nil {
+						firstErr = fmt.Errorf("%s: %w", task.name, err)
+					}
+					errMu.Unlock()
+					return
+				}
+				log.Debug().Str("file", task.name).Msg("wrote file")
+			}
+		}()
 	}
 
-	for _, arr := range u32Arrays {
-		if err := writeU32Array(outDir, arr.name, result.Nodes, arr.getter); err != nil {
-			return fmt.Errorf("write %s: %w", arr.name, err)
-		}
-		log.Debug().Str("file", arr.name).Msg("wrote array file")
+	wg.Wait()
+
+	if firstErr != nil {
+		return firstErr
 	}
 
 	log.Info().
-		Int("files_written", len(u64Arrays)+len(u32Arrays)).
+		Int("files_written", len(tasks)).
 		Dur("elapsed", time.Since(start)).
-		Msg("columnar arrays written")
+		Msg("index files written")
 
 	return nil
 }
