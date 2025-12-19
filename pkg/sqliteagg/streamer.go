@@ -24,6 +24,9 @@ type StreamConfig struct {
 	DBPath string
 	// SQLiteConfig is the SQLite configuration.
 	SQLiteConfig Config
+	// BuildOptions controls concurrency and performance settings.
+	// If nil or zero-valued, defaults will be used.
+	BuildOptions BuildOptions
 }
 
 // StreamResult contains the results of streaming aggregation.

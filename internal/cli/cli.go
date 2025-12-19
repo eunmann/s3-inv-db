@@ -43,6 +43,12 @@ func runBuild(args []string) error {
 	verbose := fs.Bool("verbose", false, "enable debug level logging")
 	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
 
+	// Concurrency options
+	defaults := sqliteagg.DefaultBuildOptions()
+	s3Concurrency := fs.Int("s3-download-concurrency", defaults.S3DownloadConcurrency, "number of parallel S3 chunk downloads")
+	parseWorkers := fs.Int("parse-workers", defaults.ParseWorkers, "number of CSV parsing workers")
+	batchSize := fs.Int("sqlite-batch-size", defaults.SQLiteWriteBatchSize, "prefix updates per SQLite transaction")
+
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
@@ -81,11 +87,24 @@ func runBuild(args []string) error {
 	// Configure SQLite
 	sqliteCfg := sqliteagg.DefaultConfig(*dbPath)
 
+	// Configure build options
+	buildOpts := sqliteagg.DefaultBuildOptions().
+		WithS3DownloadConcurrency(*s3Concurrency).
+		WithParseWorkers(*parseWorkers).
+		WithSQLiteWriteBatchSize(*batchSize)
+
+	log.Info().
+		Int("s3_download_concurrency", buildOpts.S3DownloadConcurrency).
+		Int("parse_workers", buildOpts.ParseWorkers).
+		Int("sqlite_batch_size", buildOpts.SQLiteWriteBatchSize).
+		Msg("build options configured")
+
 	// Stream from S3 into SQLite
 	streamCfg := sqliteagg.StreamConfig{
 		ManifestURI:  *s3Manifest,
 		DBPath:       *dbPath,
 		SQLiteConfig: sqliteCfg,
+		BuildOptions: buildOpts,
 	}
 
 	result, err := sqliteagg.StreamFromS3(ctx, client, streamCfg)
