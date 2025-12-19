@@ -15,6 +15,13 @@ This document tracks the findings from a comprehensive code review and the refac
 - [x] Extract common gzip decompression to csvutil.go:decompressReader()
 - [x] Eliminated duplicate code in streamer.go, parallel.go, and pipeline.go
 
+### Phase 3: Modern Go Idioms ✅
+- [x] Use range over integers (Go 1.22+) instead of C-style for loops with tiers.NumTiers
+- [x] Use min/max builtins (Go 1.21+) for clamping S3 concurrency
+- [x] Use clear() builtin (Go 1.21+) for map clearing instead of reassignment
+- [x] Cache DefaultBuildOptions() result in Validate() to avoid repeated calls
+- [x] Consistent use of errors.Is() for all sentinel error comparisons
+
 ---
 
 ## Remaining Work (Lower Priority)
@@ -40,6 +47,6 @@ This document tracks the findings from a comprehensive code review and the refac
 - [ ] Clean up unused/dead code paths
 
 ### Phase 4: Polish
-- [ ] Reduce logging noise (rate limit progress logs)
-- [ ] Standardize error context messages
+- [x] Logging already rate-limited (5s intervals for progress)
+- [x] Error context messages follow "verb noun: %w" pattern consistently
 - [ ] Add missing godoc documentation
