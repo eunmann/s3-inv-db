@@ -45,7 +45,15 @@ type StreamResult struct {
 
 // StreamFromS3 streams inventory chunks directly from S3 into the SQLite aggregator.
 // This function is resumable - it will skip chunks that have already been processed.
+// When S3DownloadConcurrency > 1, it uses parallel streaming for better throughput.
 func StreamFromS3(ctx context.Context, client *s3fetch.Client, cfg StreamConfig) (*StreamResult, error) {
+	cfg.BuildOptions.Validate()
+
+	// Use parallel streaming when concurrency > 1
+	if cfg.BuildOptions.S3DownloadConcurrency > 1 {
+		return StreamFromS3Parallel(ctx, client, cfg)
+	}
+
 	log := logging.WithPhase("stream_aggregate")
 
 	// Parse manifest URI

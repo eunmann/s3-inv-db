@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
@@ -49,6 +50,10 @@ type Aggregator struct {
 
 	// Current transaction
 	tx *sql.Tx
+
+	// writeMu serializes write transactions for parallel streaming.
+	// Multiple goroutines can read (ChunkDone), but writes are serialized.
+	writeMu sync.Mutex
 }
 
 // PrefixRow represents a row from the prefix_stats table.
