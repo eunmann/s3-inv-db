@@ -3,6 +3,7 @@ package sqliteagg
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -170,7 +171,7 @@ func (a *Aggregator) Close() error {
 func (a *Aggregator) ChunkDone(chunkID string) (bool, error) {
 	var exists int
 	err := a.db.QueryRow("SELECT 1 FROM chunks_done WHERE chunk_id = ?", chunkID).Scan(&exists)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
