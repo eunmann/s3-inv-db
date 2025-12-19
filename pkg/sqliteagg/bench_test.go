@@ -13,115 +13,30 @@ import (
 )
 
 /*
-Benchmark Categories for SQLite Aggregation:
+Benchmark Organization:
 
-1. BenchmarkAggregate - Tests SQLite aggregator performance
-   - Measures: objects/sec, prefixes generated, DB size
-   - Sizes: 10k, 100k objects (quick dev benchmarks)
+1. Unified Benchmarks (aggregator_unified_test.go):
+   - BenchmarkChunkAggregator: Compares all ChunkAggregator implementations
+   - BenchmarkChunkAggregator_Iterate: Iteration performance
+   - BenchmarkChunkAggregator_Scaling: Large-scale tests (gated)
 
-2. BenchmarkAggregate_Scaling - Scaling tests (gated)
-   - Sizes: 10k to 500k objects
-   - Run with: S3INV_LONG_BENCH=1 go test -bench=Scaling
+2. Specialized Benchmarks (this file):
+   - BenchmarkBuildTrieFromSQLite: Trie construction from SQLite
+   - BenchmarkMemoryAggregator: In-memory aggregator (different interface)
+   - BenchmarkDeltaThreshold: Tuning delta flush threshold
+   - BenchmarkMultiRowBatch: Tuning batch sizes
+   - BenchmarkStagingTable: UPSERT vs staging table approach
+   - BenchmarkTierDistribution: Impact of tier distribution
 
-3. BenchmarkBuildTrieFromSQLite - Tests trie building from SQLite
-   - Measures: prefixes/sec
-   - Uses pre-populated SQLite databases
+Run unified comparisons:
+  go test -bench='BenchmarkChunkAggregator$' -benchtime=1x ./pkg/sqliteagg/...
+
+Run all benchmarks:
+  go test -bench=. -benchtime=1x ./pkg/sqliteagg/...
+
+Run scaling tests:
+  S3INV_LONG_BENCH=1 go test -bench=Scaling -benchtime=1x ./pkg/sqliteagg/...
 */
-
-// BenchmarkAggregate benchmarks the SQLite aggregator.
-func BenchmarkAggregate(b *testing.B) {
-	sizes := []int{10000, 100000}
-
-	for _, size := range sizes {
-		b.Run(fmt.Sprintf("objects=%d", size), func(b *testing.B) {
-			benchmarkAggregate(b, size)
-		})
-	}
-}
-
-func benchmarkAggregate(b *testing.B, numObjects int) {
-	b.Helper()
-
-	// Generate test data once
-	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(numObjects))
-	objects := gen.Generate()
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		b.StopTimer()
-
-		// Setup: create temp directory and DB
-		tmpDir := b.TempDir()
-		dbPath := filepath.Join(tmpDir, "prefix-agg.db")
-
-		b.StartTimer()
-
-		// Create aggregator
-		cfg := DefaultConfig(dbPath)
-		cfg.Synchronous = "OFF" // Faster for benchmarks
-		agg, err := Open(cfg)
-		if err != nil {
-			b.Fatalf("Open failed: %v", err)
-		}
-
-		// Begin chunk
-		if err := agg.BeginChunk(); err != nil {
-			b.Fatalf("BeginChunk failed: %v", err)
-		}
-
-		// Add all objects
-		for _, obj := range objects {
-			if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
-				b.Fatalf("AddObject failed: %v", err)
-			}
-		}
-
-		// Commit
-		if err := agg.MarkChunkDone("bench-chunk"); err != nil {
-			b.Fatalf("MarkChunkDone failed: %v", err)
-		}
-		if err := agg.Commit(); err != nil {
-			b.Fatalf("Commit failed: %v", err)
-		}
-
-		b.StopTimer()
-
-		// Log metrics on last iteration
-		if i == b.N-1 {
-			prefixCount, _ := agg.PrefixCount()
-			agg.Close()
-
-			// Get DB file size
-			fi, _ := os.Stat(dbPath)
-			dbSize := int64(0)
-			if fi != nil {
-				dbSize = fi.Size()
-			}
-
-			b.Logf("objects=%d prefixes=%d db_size_mb=%.2f",
-				numObjects, prefixCount, float64(dbSize)/(1024*1024))
-		} else {
-			agg.Close()
-		}
-	}
-}
-
-// BenchmarkAggregate_Scaling runs larger scale tests (gated).
-func BenchmarkAggregate_Scaling(b *testing.B) {
-	if os.Getenv("S3INV_LONG_BENCH") == "" {
-		b.Skip("set S3INV_LONG_BENCH=1 to run scaling benchmark")
-	}
-
-	sizes := []int{10000, 50000, 100000, 250000, 500000}
-
-	for _, size := range sizes {
-		b.Run(fmt.Sprintf("objects=%d", size), func(b *testing.B) {
-			benchmarkAggregate(b, size)
-		})
-	}
-}
 
 // BenchmarkBuildTrieFromSQLite benchmarks trie building from SQLite.
 func BenchmarkBuildTrieFromSQLite(b *testing.B) {
@@ -244,75 +159,6 @@ func BenchmarkAddObject(b *testing.B) {
 	}
 }
 
-// BenchmarkIteratePrefixes benchmarks prefix iteration from SQLite.
-func BenchmarkIteratePrefixes(b *testing.B) {
-	sizes := []int{10000, 100000}
-
-	for _, size := range sizes {
-		b.Run(fmt.Sprintf("prefixes=%d", size), func(b *testing.B) {
-			benchmarkIteratePrefixes(b, size)
-		})
-	}
-}
-
-func benchmarkIteratePrefixes(b *testing.B, numObjects int) {
-	b.Helper()
-
-	// Setup: populate SQLite database
-	tmpDir := b.TempDir()
-	dbPath := filepath.Join(tmpDir, "prefix-agg.db")
-
-	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(numObjects))
-	objects := gen.Generate()
-
-	cfg := DefaultConfig(dbPath)
-	cfg.Synchronous = "OFF"
-	agg, err := Open(cfg)
-	if err != nil {
-		b.Fatalf("Open failed: %v", err)
-	}
-	defer agg.Close()
-
-	if err := agg.BeginChunk(); err != nil {
-		b.Fatalf("BeginChunk failed: %v", err)
-	}
-	for _, obj := range objects {
-		if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
-			b.Fatalf("AddObject failed: %v", err)
-		}
-	}
-	if err := agg.MarkChunkDone("setup-chunk"); err != nil {
-		b.Fatalf("MarkChunkDone failed: %v", err)
-	}
-	if err := agg.Commit(); err != nil {
-		b.Fatalf("Commit failed: %v", err)
-	}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		it, err := agg.IteratePrefixes()
-		if err != nil {
-			b.Fatalf("IteratePrefixes failed: %v", err)
-		}
-
-		count := 0
-		for it.Next() {
-			_ = it.Row()
-			count++
-		}
-		if err := it.Err(); err != nil {
-			b.Fatalf("Iterator error: %v", err)
-		}
-		it.Close()
-
-		if i == b.N-1 {
-			b.Logf("iterated %d prefixes", count)
-		}
-	}
-}
-
 // BenchmarkDeltaThreshold benchmarks different delta flush thresholds.
 // This helps tune DeltaFlushThreshold for optimal performance.
 func BenchmarkDeltaThreshold(b *testing.B) {
@@ -323,7 +169,6 @@ func BenchmarkDeltaThreshold(b *testing.B) {
 	thresholds := []int{10000, 25000, 50000, 100000, 200000}
 	numObjects := 100000
 
-	// Generate test data once
 	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(numObjects))
 	objects := gen.Generate()
 
@@ -344,8 +189,6 @@ func BenchmarkDeltaThreshold(b *testing.B) {
 					b.Fatalf("Open failed: %v", err)
 				}
 
-				// Temporarily modify threshold for this test
-				// We test by controlling flush behavior through object count
 				b.StartTimer()
 
 				if err := agg.BeginChunk(); err != nil {
@@ -357,7 +200,7 @@ func BenchmarkDeltaThreshold(b *testing.B) {
 					if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
 						b.Fatalf("AddObject failed: %v", err)
 					}
-					// Manual flush at threshold to simulate different settings
+					// Manual flush at threshold
 					if (j+1)%threshold == 0 && len(agg.pendingDeltas) > 0 {
 						if err := agg.flushPendingDeltas(); err != nil {
 							b.Fatalf("flush failed: %v", err)
@@ -378,64 +221,6 @@ func BenchmarkDeltaThreshold(b *testing.B) {
 				if i == b.N-1 {
 					prefixCount, _ := agg.PrefixCount()
 					b.Logf("threshold=%d flushes=%d prefixes=%d", threshold, flushCount+1, prefixCount)
-				}
-				agg.Close()
-			}
-		})
-	}
-}
-
-// BenchmarkAggregate_Detailed provides detailed throughput metrics.
-func BenchmarkAggregate_Detailed(b *testing.B) {
-	sizes := []int{10000, 50000, 100000}
-
-	for _, size := range sizes {
-		b.Run(fmt.Sprintf("objects=%d", size), func(b *testing.B) {
-			gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(size))
-			objects := gen.Generate()
-
-			b.ResetTimer()
-			b.ReportAllocs()
-
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-
-				tmpDir := b.TempDir()
-				dbPath := filepath.Join(tmpDir, "prefix-agg.db")
-
-				cfg := DefaultConfig(dbPath)
-				cfg.Synchronous = "OFF"
-				agg, err := Open(cfg)
-				if err != nil {
-					b.Fatalf("Open failed: %v", err)
-				}
-
-				b.StartTimer()
-
-				if err := agg.BeginChunk(); err != nil {
-					b.Fatalf("BeginChunk failed: %v", err)
-				}
-				for _, obj := range objects {
-					if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
-						b.Fatalf("AddObject failed: %v", err)
-					}
-				}
-				if err := agg.MarkChunkDone("bench-chunk"); err != nil {
-					b.Fatalf("MarkChunkDone failed: %v", err)
-				}
-				if err := agg.Commit(); err != nil {
-					b.Fatalf("Commit failed: %v", err)
-				}
-
-				b.StopTimer()
-
-				if i == b.N-1 {
-					prefixCount, _ := agg.PrefixCount()
-					elapsed := b.Elapsed()
-					objPerSec := float64(size) / elapsed.Seconds()
-					prefixPerSec := float64(prefixCount) / elapsed.Seconds()
-					b.Logf("objects=%d prefixes=%d obj/s=%.0f prefix/s=%.0f",
-						size, prefixCount, objPerSec, prefixPerSec)
 				}
 				agg.Close()
 			}
@@ -531,7 +316,6 @@ func BenchmarkTierDistribution(b *testing.B) {
 }
 
 // BenchmarkMultiRowBatch benchmarks different multi-row batch sizes.
-// This helps tune MultiRowBatchSize for optimal performance.
 func BenchmarkMultiRowBatch(b *testing.B) {
 	if os.Getenv("S3INV_LONG_BENCH") == "" {
 		b.Skip("set S3INV_LONG_BENCH=1 to run batch size sweep")
@@ -540,7 +324,6 @@ func BenchmarkMultiRowBatch(b *testing.B) {
 	batchSizes := []int{64, 128, 256, 512, 1024}
 	numObjects := 100000
 
-	// Generate test data once
 	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(numObjects))
 	objects := gen.Generate()
 
@@ -561,7 +344,7 @@ func BenchmarkMultiRowBatch(b *testing.B) {
 					b.Fatalf("Open failed: %v", err)
 				}
 
-				// Override batch size for this test by rebuilding statement
+				// Override batch size by rebuilding statement
 				multiRowSQL := buildMultiRowUpsertSQL(batchSize)
 				colsPerRow := 4 + int(tiers.NumTiers)*2
 
@@ -579,10 +362,7 @@ func BenchmarkMultiRowBatch(b *testing.B) {
 
 				// Inline delta accumulation
 				for _, obj := range objects {
-					// Root prefix
 					accumDelta(pendingDeltas, "", 0, obj.Size, obj.TierID)
-
-					// Directory prefixes
 					depth := 1
 					for j := 0; j < len(obj.Key); j++ {
 						if obj.Key[j] == '/' {
@@ -601,7 +381,6 @@ func BenchmarkMultiRowBatch(b *testing.B) {
 				batchArgs := make([]interface{}, batchSize*colsPerRow)
 				singleArgs := make([]interface{}, colsPerRow)
 
-				// Process full batches
 				for j := 0; j+batchSize <= len(prefixes); j += batchSize {
 					for k := 0; k < batchSize; k++ {
 						prefix := prefixes[j+k]
@@ -623,7 +402,6 @@ func BenchmarkMultiRowBatch(b *testing.B) {
 					}
 				}
 
-				// Process remainder
 				remainder := len(prefixes) % batchSize
 				if remainder > 0 {
 					startIdx := len(prefixes) - remainder
@@ -673,8 +451,6 @@ func accumDelta(m map[string]*prefixDelta, prefix string, depth int, size uint64
 }
 
 // BenchmarkStagingTable compares UPSERT approach vs staging table + merge.
-// Staging table approach: INSERT into unindexed table, then single aggregation at end.
-// This avoids B-tree maintenance during the write phase.
 func BenchmarkStagingTable(b *testing.B) {
 	sizes := []int{10000, 100000}
 
@@ -744,13 +520,11 @@ func benchmarkStagingApproach(b *testing.B, objects []benchutil.FakeObject) {
 		dbPath := filepath.Join(tmpDir, "staging.db")
 		b.StartTimer()
 
-		// Open database with bulk write optimizations
 		db, err := openStagingDB(dbPath)
 		if err != nil {
 			b.Fatalf("openStagingDB failed: %v", err)
 		}
 
-		// Phase 1: Insert all deltas into unindexed staging table
 		tx, err := db.Begin()
 		if err != nil {
 			b.Fatalf("Begin failed: %v", err)
@@ -761,15 +535,10 @@ func benchmarkStagingApproach(b *testing.B, objects []benchutil.FakeObject) {
 			b.Fatalf("Prepare failed: %v", err)
 		}
 
-		tierMapping := tiers.NewMapping()
-		_ = tierMapping // Unused, just for consistent setup
-
 		for _, obj := range objects {
-			// Root prefix
 			if _, err := insertStmt.Exec("", 0, 1, obj.Size, int(obj.TierID)); err != nil {
 				b.Fatalf("Insert failed: %v", err)
 			}
-			// Directory prefixes
 			depth := 1
 			for j := 0; j < len(obj.Key); j++ {
 				if obj.Key[j] == '/' {
@@ -787,7 +556,6 @@ func benchmarkStagingApproach(b *testing.B, objects []benchutil.FakeObject) {
 			b.Fatalf("Commit staging failed: %v", err)
 		}
 
-		// Phase 2: Aggregate and merge into final table
 		if err := mergeStaging(db); err != nil {
 			b.Fatalf("mergeStaging failed: %v", err)
 		}
@@ -829,7 +597,6 @@ func openStagingDB(dbPath string) (*sql.DB, error) {
 		}
 	}
 
-	// Create unindexed staging table (no PRIMARY KEY = no B-tree maintenance)
 	createStaging := `
 		CREATE TABLE IF NOT EXISTS staging (
 			prefix TEXT,
@@ -840,7 +607,6 @@ func openStagingDB(dbPath string) (*sql.DB, error) {
 		)
 	`
 
-	// Create final aggregated table
 	var tierCols string
 	for i := range tiers.NumTiers {
 		tierCols += fmt.Sprintf(",\n    t%d_count INTEGER NOT NULL DEFAULT 0", i)
@@ -873,7 +639,6 @@ func buildStagingInsertSQL() string {
 }
 
 func mergeStaging(db *sql.DB) error {
-	// Build the aggregation query with tier-specific columns
 	var tierSums, tierCols string
 	for i := range tiers.NumTiers {
 		if i > 0 {
@@ -897,80 +662,9 @@ func mergeStaging(db *sql.DB) error {
 		return fmt.Errorf("merge staging: %w", err)
 	}
 
-	// Drop staging table
 	_, err = db.Exec("DROP TABLE staging")
 	return err
 }
 
-// BenchmarkBulkWriteMode compares normal mode vs bulk write mode PRAGMAs.
-// Bulk write mode uses EXCLUSIVE locking and disabled auto-checkpoint.
-func BenchmarkBulkWriteMode(b *testing.B) {
-	sizes := []int{10000, 100000}
-
-	for _, size := range sizes {
-		// Generate test data once for both modes
-		gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(size))
-		objects := gen.Generate()
-
-		b.Run(fmt.Sprintf("objects=%d/normal", size), func(b *testing.B) {
-			benchmarkWithMode(b, objects, false)
-		})
-
-		b.Run(fmt.Sprintf("objects=%d/bulk_write", size), func(b *testing.B) {
-			benchmarkWithMode(b, objects, true)
-		})
-	}
-}
-
-func benchmarkWithMode(b *testing.B, objects []benchutil.FakeObject, bulkWriteMode bool) {
-	b.Helper()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		b.StopTimer()
-
-		tmpDir := b.TempDir()
-		dbPath := filepath.Join(tmpDir, "prefix-agg.db")
-
-		b.StartTimer()
-
-		cfg := DefaultConfig(dbPath)
-		cfg.Synchronous = "OFF"
-		cfg.BulkWriteMode = bulkWriteMode
-		agg, err := Open(cfg)
-		if err != nil {
-			b.Fatalf("Open failed: %v", err)
-		}
-
-		if err := agg.BeginChunk(); err != nil {
-			b.Fatalf("BeginChunk failed: %v", err)
-		}
-
-		for _, obj := range objects {
-			if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
-				b.Fatalf("AddObject failed: %v", err)
-			}
-		}
-
-		if err := agg.MarkChunkDone("bench-chunk"); err != nil {
-			b.Fatalf("MarkChunkDone failed: %v", err)
-		}
-		if err := agg.Commit(); err != nil {
-			b.Fatalf("Commit failed: %v", err)
-		}
-
-		b.StopTimer()
-
-		if i == b.N-1 {
-			prefixCount, _ := agg.PrefixCount()
-			fi, _ := os.Stat(dbPath)
-			dbSize := int64(0)
-			if fi != nil {
-				dbSize = fi.Size()
-			}
-			b.Logf("mode=%v objects=%d prefixes=%d db_mb=%.2f",
-				bulkWriteMode, len(objects), prefixCount, float64(dbSize)/(1024*1024))
-		}
-		agg.Close()
-	}
-}
+// Note: BenchmarkMemoryAggregator is defined in profile_test.go
+// with a comparison between Standard and Memory aggregators.
