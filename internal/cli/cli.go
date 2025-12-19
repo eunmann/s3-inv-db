@@ -2,9 +2,12 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
+
+	"github.com/eunmann/s3-inv-db/pkg/indexbuild"
 )
 
 // Run executes the CLI with the given arguments.
@@ -43,8 +46,16 @@ func runBuild(args []string) error {
 		return errors.New("at least one inventory file is required")
 	}
 
-	_ = chunkSize // Will be used in build implementation
-	_ = inventoryFiles
+	cfg := indexbuild.Config{
+		OutDir:    *outDir,
+		TmpDir:    *tmpDir,
+		ChunkSize: *chunkSize,
+	}
 
-	return errors.New("build not yet implemented")
+	if err := indexbuild.Build(context.Background(), cfg, inventoryFiles); err != nil {
+		return fmt.Errorf("build failed: %w", err)
+	}
+
+	fmt.Printf("Index built successfully: %s\n", *outDir)
+	return nil
 }

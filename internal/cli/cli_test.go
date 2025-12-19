@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -52,5 +54,38 @@ func TestBuildMissingFiles(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "inventory file") {
 		t.Errorf("expected 'inventory file' error, got: %v", err)
+	}
+}
+
+func TestBuildSucceeds(t *testing.T) {
+	tmpDir := t.TempDir()
+	outDir := filepath.Join(tmpDir, "index")
+	sortDir := filepath.Join(tmpDir, "sort")
+	os.MkdirAll(sortDir, 0755)
+
+	// Create test inventory
+	invPath := filepath.Join(tmpDir, "test.csv")
+	csv := `Key,Size
+a/file.txt,100
+b/file.txt,200
+`
+	if err := os.WriteFile(invPath, []byte(csv), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	err := Run([]string{"build", "--out", outDir, "--tmp", sortDir, invPath})
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	// Check output directory exists
+	if _, err := os.Stat(outDir); err != nil {
+		t.Errorf("Output directory not created: %v", err)
+	}
+
+	// Check manifest exists
+	manifestPath := filepath.Join(outDir, "manifest.json")
+	if _, err := os.Stat(manifestPath); err != nil {
+		t.Errorf("Manifest not created: %v", err)
 	}
 }
