@@ -47,11 +47,8 @@ func (m *Manifest) validate() error {
 	if len(m.Files) == 0 {
 		return fmt.Errorf("manifest has no files")
 	}
-	if m.FileFormat != "CSV" && m.FileFormat != "ORC" && m.FileFormat != "Parquet" {
-		return fmt.Errorf("unsupported file format: %s (only CSV is supported)", m.FileFormat)
-	}
 	if m.FileFormat != "CSV" {
-		return fmt.Errorf("only CSV format is currently supported, got: %s", m.FileFormat)
+		return fmt.Errorf("unsupported file format: %s (only CSV is currently supported)", m.FileFormat)
 	}
 	return nil
 }

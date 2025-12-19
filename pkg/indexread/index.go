@@ -209,6 +209,9 @@ func (idx *Index) DescendantsAtDepth(prefixPos uint64, relDepth int) ([]uint64, 
 	if prefixPos >= idx.count {
 		return nil, nil
 	}
+	if relDepth < 0 {
+		return nil, nil
+	}
 
 	baseDepth := idx.Depth(prefixPos)
 	targetDepth := baseDepth + uint32(relDepth)
@@ -227,6 +230,9 @@ func (idx *Index) DescendantsAtDepth(prefixPos uint64, relDepth int) ([]uint64, 
 // relative depth, grouped by depth then alphabetical.
 func (idx *Index) DescendantsUpToDepth(prefixPos uint64, maxRelDepth int) ([][]uint64, error) {
 	if prefixPos >= idx.count {
+		return nil, nil
+	}
+	if maxRelDepth < 0 {
 		return nil, nil
 	}
 
@@ -308,6 +314,9 @@ func (w *depthIteratorWrapper) Depth() uint32 {
 // NewDescendantIterator returns an iterator over descendants at a specific depth.
 func (idx *Index) NewDescendantIterator(prefixPos uint64, relDepth int) (Iterator, error) {
 	if prefixPos >= idx.count {
+		return &emptyIterator{}, nil
+	}
+	if relDepth < 0 {
 		return &emptyIterator{}, nil
 	}
 

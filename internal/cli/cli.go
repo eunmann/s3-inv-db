@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/eunmann/s3-inv-db/pkg/indexbuild"
@@ -177,8 +178,14 @@ func runQuery(args []string) error {
 					fmt.Println("\nEstimated monthly cost:")
 					fmt.Printf("  Total: %s/month\n", pricing.FormatCost(cost.TotalMicrodollars))
 					if *showTiers {
-						for tier, microdollars := range cost.PerTierMicrodollars {
-							fmt.Printf("  %s: %s/month\n", tier, pricing.FormatCost(microdollars))
+						// Sort tier names for deterministic output
+						tierNames := make([]string, 0, len(cost.PerTierMicrodollars))
+						for tier := range cost.PerTierMicrodollars {
+							tierNames = append(tierNames, tier)
+						}
+						sort.Strings(tierNames)
+						for _, tier := range tierNames {
+							fmt.Printf("  %s: %s/month\n", tier, pricing.FormatCost(cost.PerTierMicrodollars[tier]))
 						}
 					}
 				}

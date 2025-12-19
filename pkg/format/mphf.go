@@ -140,7 +140,26 @@ func (b *MPHFBuilder) writeEmpty(outDir string) error {
 	if err != nil {
 		return err
 	}
-	return fpWriter.Close()
+	if err := fpWriter.Close(); err != nil {
+		return err
+	}
+
+	// Create empty position array
+	posPath := filepath.Join(outDir, "mph_pos.u64")
+	posWriter, err := NewArrayWriter(posPath, 8)
+	if err != nil {
+		return err
+	}
+	if err := posWriter.Close(); err != nil {
+		return err
+	}
+
+	// Create empty prefix blob files
+	if err := WritePrefixBlob(outDir, nil); err != nil {
+		return fmt.Errorf("write empty prefix blob: %w", err)
+	}
+
+	return nil
 }
 
 // Count returns the number of prefixes added.

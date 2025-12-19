@@ -528,3 +528,118 @@ func TestCompareWithStdSort(t *testing.T) {
 		}
 	}
 }
+
+func TestTierDataPreservation(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{MaxRecordsPerChunk: 2, TmpDir: dir} // Small chunks to force multiple run files
+	s := NewSorter(cfg)
+
+	// Records with different tier IDs
+	records := []inventory.Record{
+		{Key: "c/file.txt", Size: 300, TierID: 5},  // DeepArchive
+		{Key: "a/file.txt", Size: 100, TierID: 1},  // StandardIA
+		{Key: "b/file.txt", Size: 200, TierID: 7},  // ITFrequent
+		{Key: "d/file.txt", Size: 400, TierID: 10}, // ITArchive
+	}
+
+	if err := s.AddRecords(context.Background(), newMockReader(records)); err != nil {
+		t.Fatalf("AddRecords failed: %v", err)
+	}
+
+	it, err := s.Merge(context.Background())
+	if err != nil {
+		t.Fatalf("Merge failed: %v", err)
+	}
+	defer it.Close()
+	defer s.Cleanup()
+
+	// Build map of expected tier IDs by key
+	expectedTiers := make(map[string]uint8)
+	for _, r := range records {
+		expectedTiers[r.Key] = uint8(r.TierID)
+	}
+
+	var result []inventory.Record
+	for it.Next() {
+		result = append(result, it.Record())
+	}
+	if it.Err() != nil {
+		t.Fatalf("iteration error: %v", it.Err())
+	}
+
+	if len(result) != len(records) {
+		t.Fatalf("got %d records, want %d", len(result), len(records))
+	}
+
+	// Verify tier IDs are preserved
+	for _, r := range result {
+		expectedTierID := expectedTiers[r.Key]
+		if uint8(r.TierID) != expectedTierID {
+			t.Errorf("TierID mismatch for %s: got %d, want %d", r.Key, r.TierID, expectedTierID)
+		}
+	}
+}
+
+func TestTierDataPreservationAcrossChunks(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{MaxRecordsPerChunk: 3, TmpDir: dir}
+	s := NewSorter(cfg)
+
+	// 10 records with varying tier IDs across multiple chunks
+	records := []inventory.Record{
+		{Key: "j/file.txt", Size: 10, TierID: 0},
+		{Key: "e/file.txt", Size: 5, TierID: 1},
+		{Key: "a/file.txt", Size: 1, TierID: 2},
+		{Key: "f/file.txt", Size: 6, TierID: 3},
+		{Key: "b/file.txt", Size: 2, TierID: 4},
+		{Key: "g/file.txt", Size: 7, TierID: 5},
+		{Key: "c/file.txt", Size: 3, TierID: 6},
+		{Key: "h/file.txt", Size: 8, TierID: 7},
+		{Key: "d/file.txt", Size: 4, TierID: 8},
+		{Key: "i/file.txt", Size: 9, TierID: 9},
+	}
+
+	if err := s.AddRecords(context.Background(), newMockReader(records)); err != nil {
+		t.Fatalf("AddRecords failed: %v", err)
+	}
+
+	it, err := s.Merge(context.Background())
+	if err != nil {
+		t.Fatalf("Merge failed: %v", err)
+	}
+	defer it.Close()
+	defer s.Cleanup()
+
+	// Build map of expected tier IDs by key
+	expectedTiers := make(map[string]uint8)
+	for _, r := range records {
+		expectedTiers[r.Key] = uint8(r.TierID)
+	}
+
+	var result []inventory.Record
+	for it.Next() {
+		result = append(result, it.Record())
+	}
+	if it.Err() != nil {
+		t.Fatalf("iteration error: %v", it.Err())
+	}
+
+	if len(result) != len(records) {
+		t.Fatalf("got %d records, want %d", len(result), len(records))
+	}
+
+	// Verify sorted order
+	for i := 1; i < len(result); i++ {
+		if result[i].Key < result[i-1].Key {
+			t.Errorf("records not sorted: %s < %s", result[i].Key, result[i-1].Key)
+		}
+	}
+
+	// Verify tier IDs are preserved after sorting
+	for _, r := range result {
+		expectedTierID := expectedTiers[r.Key]
+		if uint8(r.TierID) != expectedTierID {
+			t.Errorf("TierID mismatch for %s: got %d, want %d", r.Key, r.TierID, expectedTierID)
+		}
+	}
+}

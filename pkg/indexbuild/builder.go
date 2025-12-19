@@ -101,130 +101,33 @@ type SchemaConfig struct {
 // BuildWithSchema constructs an index from inventory files using pre-known column indices.
 // This is used for AWS S3 inventory files which have no header row.
 func BuildWithSchema(ctx context.Context, cfg Config, inventoryFiles []string, schema SchemaConfig) error {
-	if cfg.OutDir == "" {
-		return fmt.Errorf("output directory required")
-	}
-	if cfg.TmpDir == "" {
-		return fmt.Errorf("temp directory required")
-	}
-	if cfg.ChunkSize <= 0 {
-		cfg.ChunkSize = 1_000_000
-	}
-
-	// Create temp output directory
-	tmpOutDir := cfg.OutDir + ".tmp"
-	if err := os.MkdirAll(tmpOutDir, 0755); err != nil {
-		return fmt.Errorf("create temp output dir: %w", err)
-	}
-	defer os.RemoveAll(tmpOutDir)
-
-	// Step 1: External sort all inventory files
-	sorter := extsort.NewSorter(extsort.Config{
-		MaxRecordsPerChunk: cfg.ChunkSize,
-		TmpDir:             cfg.TmpDir,
-	})
-	defer sorter.Cleanup()
-
-	for _, path := range inventoryFiles {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
+	openFunc := func(path string, trackTiers bool) (inventory.Reader, error) {
 		opts := inventory.SchemaOptions{
 			KeyCol:        schema.KeyCol,
 			SizeCol:       schema.SizeCol,
 			StorageCol:    schema.StorageCol,
 			AccessTierCol: schema.AccessTierCol,
-			TrackTiers:    cfg.TrackTiers,
+			TrackTiers:    trackTiers,
 		}
-		reader, err := inventory.OpenFileWithSchemaOptions(path, opts)
-		if err != nil {
-			return fmt.Errorf("open inventory file %s: %w", path, err)
-		}
-
-		if err := sorter.AddRecords(ctx, reader); err != nil {
-			reader.Close()
-			return fmt.Errorf("process inventory file %s: %w", path, err)
-		}
-
-		reader.Close()
+		return inventory.OpenFileWithSchemaOptions(path, opts)
 	}
-
-	// Step 2: Merge and build trie
-	iter, err := sorter.Merge(ctx)
-	if err != nil {
-		return fmt.Errorf("merge sorted runs: %w", err)
-	}
-	defer iter.Close()
-
-	var builder *triebuild.Builder
-	if cfg.TrackTiers {
-		builder = triebuild.NewWithTiers()
-	} else {
-		builder = triebuild.New()
-	}
-	trieResult, err := builder.Build(iter)
-	if err != nil {
-		return fmt.Errorf("build trie: %w", err)
-	}
-
-	if len(trieResult.Nodes) == 0 {
-		return fmt.Errorf("no nodes built from inventory")
-	}
-
-	// Step 3: Write columnar arrays
-	if err := writeColumnarArrays(tmpOutDir, trieResult); err != nil {
-		return fmt.Errorf("write columnar arrays: %w", err)
-	}
-
-	// Step 4: Write tier stats (if tracking enabled)
-	if cfg.TrackTiers {
-		tierWriter, err := format.NewTierStatsWriter(tmpOutDir)
-		if err != nil {
-			return fmt.Errorf("create tier stats writer: %w", err)
-		}
-		if err := tierWriter.Write(trieResult); err != nil {
-			return fmt.Errorf("write tier stats: %w", err)
-		}
-	}
-
-	// Step 5: Build depth index
-	if err := writeDepthIndex(tmpOutDir, trieResult); err != nil {
-		return fmt.Errorf("write depth index: %w", err)
-	}
-
-	// Step 6: Build MPHF
-	if err := writeMPHF(tmpOutDir, trieResult); err != nil {
-		return fmt.Errorf("write MPHF: %w", err)
-	}
-
-	// Step 7: Write manifest with checksums
-	if err := format.WriteManifest(tmpOutDir, uint64(len(trieResult.Nodes)), trieResult.MaxDepth); err != nil {
-		return fmt.Errorf("write manifest: %w", err)
-	}
-
-	// Step 8: Sync directory to ensure all files are persisted
-	if err := format.SyncDir(tmpOutDir); err != nil {
-		return fmt.Errorf("sync output dir: %w", err)
-	}
-
-	// Step 9: Atomic move to final location
-	if err := os.RemoveAll(cfg.OutDir); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove old output dir: %w", err)
-	}
-	if err := os.Rename(tmpOutDir, cfg.OutDir); err != nil {
-		return fmt.Errorf("rename output dir: %w", err)
-	}
-
-	// Final sync of parent directory to persist the rename
-	parentDir := filepath.Dir(cfg.OutDir)
-	_ = format.SyncDir(parentDir)
-
-	return nil
+	return buildIndex(ctx, cfg, inventoryFiles, openFunc)
 }
 
 // Build constructs an index from the given inventory files.
 func Build(ctx context.Context, cfg Config, inventoryFiles []string) error {
+	openFunc := func(path string, trackTiers bool) (inventory.Reader, error) {
+		opts := inventory.OpenOptions{TrackTiers: trackTiers}
+		return inventory.OpenFileWithOptions(path, opts)
+	}
+	return buildIndex(ctx, cfg, inventoryFiles, openFunc)
+}
+
+// inventoryOpener is a function that opens an inventory file.
+type inventoryOpener func(path string, trackTiers bool) (inventory.Reader, error)
+
+// buildIndex is the shared implementation for Build and BuildWithSchema.
+func buildIndex(ctx context.Context, cfg Config, inventoryFiles []string, openFile inventoryOpener) error {
 	if cfg.OutDir == "" {
 		return fmt.Errorf("output directory required")
 	}
@@ -240,7 +143,14 @@ func Build(ctx context.Context, cfg Config, inventoryFiles []string) error {
 	if err := os.MkdirAll(tmpOutDir, 0755); err != nil {
 		return fmt.Errorf("create temp output dir: %w", err)
 	}
-	defer os.RemoveAll(tmpOutDir)
+
+	// Track whether we successfully renamed - only cleanup on failure
+	renamed := false
+	defer func() {
+		if !renamed {
+			os.RemoveAll(tmpOutDir)
+		}
+	}()
 
 	// Step 1: External sort all inventory files
 	sorter := extsort.NewSorter(extsort.Config{
@@ -254,8 +164,7 @@ func Build(ctx context.Context, cfg Config, inventoryFiles []string) error {
 			return ctx.Err()
 		}
 
-		opts := inventory.OpenOptions{TrackTiers: cfg.TrackTiers}
-		reader, err := inventory.OpenFileWithOptions(path, opts)
+		reader, err := openFile(path, cfg.TrackTiers)
 		if err != nil {
 			return fmt.Errorf("open inventory file %s: %w", path, err)
 		}
@@ -333,17 +242,16 @@ func Build(ctx context.Context, cfg Config, inventoryFiles []string) error {
 	if err := os.Rename(tmpOutDir, cfg.OutDir); err != nil {
 		return fmt.Errorf("rename output dir: %w", err)
 	}
+	renamed = true
 
-	// Final sync of parent directory to persist the rename
+	// Best-effort sync of parent directory to persist the rename
 	parentDir := filepath.Dir(cfg.OutDir)
-	_ = format.SyncDir(parentDir) // Best-effort durability, non-fatal if it fails
+	_ = format.SyncDir(parentDir)
 
 	return nil
 }
 
 func writeColumnarArrays(outDir string, result *triebuild.Result) error {
-	n := len(result.Nodes)
-	use64 := n > 1<<32
 
 	// subtree_end
 	subtreeEndPath := filepath.Join(outDir, "subtree_end.u64")
@@ -425,7 +333,6 @@ func writeColumnarArrays(outDir string, result *triebuild.Result) error {
 		return err
 	}
 
-	_ = use64 // For future optimization
 	return nil
 }
 

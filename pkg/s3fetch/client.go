@@ -70,13 +70,18 @@ func (c *Client) DownloadFile(ctx context.Context, bucket, key, destPath string)
 	if err != nil {
 		return fmt.Errorf("create file %s: %w", destPath, err)
 	}
-	defer f.Close()
 
 	if _, err := io.Copy(f, resp.Body); err != nil {
+		f.Close()
 		return fmt.Errorf("write file %s: %w", destPath, err)
 	}
 
-	return f.Sync()
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("sync file %s: %w", destPath, err)
+	}
+
+	return f.Close()
 }
 
 // StreamObject returns a reader for an S3 object.

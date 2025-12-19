@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/eunmann/s3-inv-db/pkg/inventory"
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 // Config holds configuration for external sorting.
@@ -112,8 +113,8 @@ func (s *Sorter) flushChunk(chunk []inventory.Record) error {
 
 	w := bufio.NewWriter(f)
 	for _, rec := range chunk {
-		// Format: key\tsize\n
-		if _, err := fmt.Fprintf(w, "%s\t%d\n", rec.Key, rec.Size); err != nil {
+		// Format: key\tsize\ttierID\n
+		if _, err := fmt.Fprintf(w, "%s\t%d\t%d\n", rec.Key, rec.Size, rec.TierID); err != nil {
 			f.Close()
 			os.Remove(runPath)
 			return fmt.Errorf("write record: %w", err)
@@ -209,8 +210,8 @@ func (r *runReader) advance() {
 	}
 
 	line := r.scanner.Text()
-	parts := strings.SplitN(line, "\t", 2)
-	if len(parts) != 2 {
+	parts := strings.SplitN(line, "\t", 3)
+	if len(parts) < 2 {
 		r.err = fmt.Errorf("malformed run line: %q", line)
 		r.hasNext = false
 		return
@@ -223,7 +224,20 @@ func (r *runReader) advance() {
 		return
 	}
 
-	r.current = inventory.Record{Key: parts[0], Size: size}
+	rec := inventory.Record{Key: parts[0], Size: size}
+
+	// Parse tier ID if present (for backwards compatibility with old run files)
+	if len(parts) >= 3 && parts[2] != "" {
+		tierID, err := strconv.ParseUint(parts[2], 10, 8)
+		if err != nil {
+			r.err = fmt.Errorf("invalid tierID in run line: %w", err)
+			r.hasNext = false
+			return
+		}
+		rec.TierID = tiers.ID(tierID)
+	}
+
+	r.current = rec
 	r.hasNext = true
 }
 

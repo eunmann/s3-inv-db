@@ -139,20 +139,14 @@ func (b *Builder) processKey(key string, size uint64, tierID tiers.ID) error {
 // For "a/b/c/", returns ["a/", "a/b/", "a/b/c/"]
 func extractPrefixes(key string) []string {
 	var prefixes []string
-	start := 0
 
 	for i := 0; i < len(key); i++ {
 		if key[i] == '/' {
 			prefix := key[:i+1]
 			prefixes = append(prefixes, prefix)
-			start = i + 1
 		}
 	}
 
-	// Handle keys that end with / (folder markers)
-	// The last component is already included
-
-	_ = start
 	return prefixes
 }
 

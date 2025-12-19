@@ -193,17 +193,21 @@ func ComputeMonthlyCost(breakdown []format.TierBreakdown, pt PriceTable) CostRes
 		// Intelligent-Tiering monitoring cost
 		var monitoringCost uint64
 		if TiersWithMonitoringCost[tb.TierName] && pt.MonitoringPer1000Objects > 0 {
-			// Only objects >= 128KB incur monitoring fees
-			// Estimate: if average size >= 128KB, all objects are monitored
-			// Otherwise, estimate fraction of objects that are >= 128KB
+			// Only objects >= 128KB incur monitoring fees.
+			// Since we only have aggregate data (total bytes / object count), we estimate
+			// the number of objects >= 128KB using the average object size as a proxy.
+			//
+			// Estimation methodology:
+			// - If avgSize >= 128KB: assume all objects qualify for monitoring
+			// - If avgSize < 128KB: assume 50% of objects qualify (conservative estimate)
+			//
+			// This is a simplification because the actual object size distribution matters.
+			// For accurate billing, individual object sizes would need to be tracked.
 			var monitoredObjects uint64
 			if avgObjectSize >= minObjectSizeBytes {
 				monitoredObjects = tb.ObjectCount
 			} else if avgObjectSize > 0 {
-				// Rough estimate: assume uniform distribution
-				// fraction >= 128KB = 1 - (128KB / (2 * avgSize))
-				// This is a simplification; actual distribution matters
-				monitoredObjects = tb.ObjectCount / 2 // Conservative estimate
+				monitoredObjects = tb.ObjectCount / 2
 			}
 			if monitoredObjects > 0 {
 				monitoringCost = uint64(float64(monitoredObjects) / 1000.0 * pt.MonitoringPer1000Objects * 1_000_000)
