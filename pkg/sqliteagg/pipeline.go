@@ -76,7 +76,8 @@ type Pipeline struct {
 	chunksSkipped    atomic.Int64
 	prefixesWritten  atomic.Int64
 
-	// Error tracking
+	// Error tracking (hasErr provides race-free early termination check)
+	hasErr       atomic.Bool
 	firstErr     error
 	firstErrOnce sync.Once
 }
@@ -261,7 +262,7 @@ func (p *Pipeline) Run(ctx context.Context) (*StreamResult, error) {
 	}
 	event.Msg("pipelined streaming aggregation complete")
 
-	if p.firstErr != nil && ctx.Err() == nil {
+	if p.hasErr.Load() && ctx.Err() == nil {
 		return nil, p.firstErr
 	}
 
@@ -277,6 +278,7 @@ func (p *Pipeline) Run(ctx context.Context) (*StreamResult, error) {
 func (p *Pipeline) setError(err error) {
 	p.firstErrOnce.Do(func() {
 		p.firstErr = err
+		p.hasErr.Store(true)
 		p.log.Error().Err(err).Msg("pipeline error")
 	})
 }
@@ -286,7 +288,7 @@ func (p *Pipeline) downloadWorker(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if p.firstErr != nil {
+		if p.hasErr.Load() {
 			return
 		}
 
@@ -391,7 +393,7 @@ func (p *Pipeline) parseWorker(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if p.firstErr != nil {
+		if p.hasErr.Load() {
 			return
 		}
 
