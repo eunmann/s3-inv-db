@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -378,6 +379,7 @@ func (a *Aggregator) accumulateDelta(prefix string, depth int, size uint64, tier
 }
 
 // flushPendingDeltas writes accumulated deltas to SQLite using multi-row batching.
+// Prefixes are sorted before writing to improve B-tree locality and reduce page churn.
 func (a *Aggregator) flushPendingDeltas() error {
 	if len(a.pendingDeltas) == 0 {
 		return nil
@@ -388,6 +390,10 @@ func (a *Aggregator) flushPendingDeltas() error {
 	for prefix := range a.pendingDeltas {
 		prefixes = append(prefixes, prefix)
 	}
+
+	// Sort prefixes to improve B-tree locality during UPSERT.
+	// Sequential writes to the B-tree index reduce page splits and cache misses.
+	slices.Sort(prefixes)
 
 	// Process full batches using reusable batchArgs buffer
 	for i := 0; i+MultiRowBatchSize <= len(prefixes); i += MultiRowBatchSize {
