@@ -52,6 +52,11 @@ type prefixDelta struct {
 // This balances memory usage vs SQLite call frequency.
 const DeltaFlushThreshold = 50000
 
+// MultiRowBatchSize is the number of rows per multi-row UPSERT statement.
+// Larger batches reduce SQLite exec calls but increase SQL parsing overhead.
+// Tuned via BenchmarkMultiRowBatch for optimal performance.
+const MultiRowBatchSize = 256
+
 // Aggregator aggregates S3 inventory prefixes into a SQLite database.
 type Aggregator struct {
 	db          *sql.DB
@@ -59,8 +64,10 @@ type Aggregator struct {
 	tierMapping *tiers.Mapping
 
 	// Prepared statements (created per-transaction)
-	upsertStmt   *sql.Stmt
-	markDoneStmt *sql.Stmt
+	upsertStmt      *sql.Stmt // Single-row upsert (for remainder)
+	multiRowStmt    *sql.Stmt // Multi-row upsert (batch of MultiRowBatchSize)
+	markDoneStmt    *sql.Stmt
+	colsPerRow      int // Number of columns per row in upsert
 
 	// Current transaction
 	tx *sql.Tx
@@ -176,6 +183,10 @@ func (a *Aggregator) Close() error {
 		_ = a.upsertStmt.Close()
 		a.upsertStmt = nil
 	}
+	if a.multiRowStmt != nil {
+		_ = a.multiRowStmt.Close()
+		a.multiRowStmt = nil
+	}
 	if a.markDoneStmt != nil {
 		_ = a.markDoneStmt.Close()
 		a.markDoneStmt = nil
@@ -212,7 +223,7 @@ func (a *Aggregator) BeginChunk() error {
 	// Pre-size map to reduce growth overhead (typical ratio: ~2.5 prefixes per object)
 	a.pendingDeltas = make(map[string]*prefixDelta, DeltaFlushThreshold)
 
-	// Prepare upsert statement for prefix_stats
+	// Prepare single-row upsert statement for prefix_stats (used for remainder)
 	upsertSQL := buildUpsertSQL()
 	a.upsertStmt, err = tx.Prepare(upsertSQL)
 	if err != nil {
@@ -221,10 +232,24 @@ func (a *Aggregator) BeginChunk() error {
 		return fmt.Errorf("prepare upsert statement: %w", err)
 	}
 
+	// Prepare multi-row upsert statement for batched inserts
+	multiRowSQL := buildMultiRowUpsertSQL(MultiRowBatchSize)
+	a.multiRowStmt, err = tx.Prepare(multiRowSQL)
+	if err != nil {
+		a.upsertStmt.Close()
+		tx.Rollback()
+		a.tx = nil
+		return fmt.Errorf("prepare multi-row upsert statement: %w", err)
+	}
+
+	// Calculate columns per row for arg slicing
+	a.colsPerRow = 4 + int(tiers.NumTiers)*2
+
 	// Prepare mark done statement
 	a.markDoneStmt, err = tx.Prepare("INSERT INTO chunks_done (chunk_id, processed_at) VALUES (?, ?)")
 	if err != nil {
 		a.upsertStmt.Close()
+		a.multiRowStmt.Close()
 		tx.Rollback()
 		a.tx = nil
 		return fmt.Errorf("prepare mark done statement: %w", err)
@@ -233,10 +258,15 @@ func (a *Aggregator) BeginChunk() error {
 	return nil
 }
 
+// buildUpsertSQL builds a single-row upsert statement.
 func buildUpsertSQL() string {
+	return buildMultiRowUpsertSQL(1)
+}
+
+// buildMultiRowUpsertSQL builds a multi-row upsert statement for n rows.
+func buildMultiRowUpsertSQL(n int) string {
 	// Build column list
 	cols := []string{"prefix", "depth", "total_count", "total_bytes"}
-	placeholders := []string{"?", "?", "?", "?"}
 	updates := []string{
 		"total_count = total_count + excluded.total_count",
 		"total_bytes = total_bytes + excluded.total_bytes",
@@ -244,18 +274,30 @@ func buildUpsertSQL() string {
 
 	for i := range tiers.NumTiers {
 		cols = append(cols, fmt.Sprintf("t%d_count", i), fmt.Sprintf("t%d_bytes", i))
-		placeholders = append(placeholders, "?", "?")
 		updates = append(updates,
 			fmt.Sprintf("t%d_count = t%d_count + excluded.t%d_count", i, i, i),
 			fmt.Sprintf("t%d_bytes = t%d_bytes + excluded.t%d_bytes", i, i, i),
 		)
 	}
 
+	// Build placeholder for one row
+	oneRowPlaceholders := make([]string, len(cols))
+	for i := range oneRowPlaceholders {
+		oneRowPlaceholders[i] = "?"
+	}
+	oneRow := "(" + strings.Join(oneRowPlaceholders, ", ") + ")"
+
+	// Build VALUES clause with n rows
+	rows := make([]string, n)
+	for i := range rows {
+		rows[i] = oneRow
+	}
+
 	return fmt.Sprintf(`
 		INSERT INTO prefix_stats (%s)
-		VALUES (%s)
+		VALUES %s
 		ON CONFLICT(prefix) DO UPDATE SET %s
-	`, strings.Join(cols, ", "), strings.Join(placeholders, ", "), strings.Join(updates, ", "))
+	`, strings.Join(cols, ", "), strings.Join(rows, ", "), strings.Join(updates, ", "))
 }
 
 // AddObject adds an object's stats to all its prefix ancestors.
@@ -302,28 +344,66 @@ func (a *Aggregator) accumulateDelta(prefix string, depth int, size uint64, tier
 	delta.tierBytes[tierID] += size
 }
 
-// flushPendingDeltas writes accumulated deltas to SQLite.
+// flushPendingDeltas writes accumulated deltas to SQLite using multi-row batching.
 func (a *Aggregator) flushPendingDeltas() error {
 	if len(a.pendingDeltas) == 0 {
 		return nil
 	}
 
-	// Pre-allocate args slice (reused for each prefix)
-	args := make([]interface{}, 4+int(tiers.NumTiers)*2)
+	// Pre-allocate args slice for full batch
+	batchArgs := make([]interface{}, MultiRowBatchSize*a.colsPerRow)
+	singleArgs := make([]interface{}, a.colsPerRow)
 
-	for prefix, delta := range a.pendingDeltas {
-		args[0] = prefix
-		args[1] = delta.depth
-		args[2] = delta.totalCount
-		args[3] = delta.totalBytes
+	// Collect prefixes into a slice for batching
+	prefixes := make([]string, 0, len(a.pendingDeltas))
+	for prefix := range a.pendingDeltas {
+		prefixes = append(prefixes, prefix)
+	}
 
-		for i := range tiers.NumTiers {
-			args[4+i*2] = delta.tierCounts[i]
-			args[4+i*2+1] = delta.tierBytes[i]
+	// Process full batches
+	for i := 0; i+MultiRowBatchSize <= len(prefixes); i += MultiRowBatchSize {
+		// Fill batch args
+		for j := 0; j < MultiRowBatchSize; j++ {
+			prefix := prefixes[i+j]
+			delta := a.pendingDeltas[prefix]
+			offset := j * a.colsPerRow
+
+			batchArgs[offset] = prefix
+			batchArgs[offset+1] = delta.depth
+			batchArgs[offset+2] = delta.totalCount
+			batchArgs[offset+3] = delta.totalBytes
+
+			for k := range tiers.NumTiers {
+				batchArgs[offset+4+int(k)*2] = delta.tierCounts[k]
+				batchArgs[offset+4+int(k)*2+1] = delta.tierBytes[k]
+			}
 		}
 
-		if _, err := a.upsertStmt.Exec(args...); err != nil {
-			return fmt.Errorf("upsert prefix %q: %w", prefix, err)
+		if _, err := a.multiRowStmt.Exec(batchArgs...); err != nil {
+			return fmt.Errorf("multi-row upsert batch at %d: %w", i, err)
+		}
+	}
+
+	// Process remainder with single-row upserts
+	remainder := len(prefixes) % MultiRowBatchSize
+	if remainder > 0 {
+		startIdx := len(prefixes) - remainder
+		for _, prefix := range prefixes[startIdx:] {
+			delta := a.pendingDeltas[prefix]
+
+			singleArgs[0] = prefix
+			singleArgs[1] = delta.depth
+			singleArgs[2] = delta.totalCount
+			singleArgs[3] = delta.totalBytes
+
+			for k := range tiers.NumTiers {
+				singleArgs[4+int(k)*2] = delta.tierCounts[k]
+				singleArgs[4+int(k)*2+1] = delta.tierBytes[k]
+			}
+
+			if _, err := a.upsertStmt.Exec(singleArgs...); err != nil {
+				return fmt.Errorf("upsert prefix %q: %w", prefix, err)
+			}
 		}
 	}
 
@@ -378,6 +458,10 @@ func (a *Aggregator) Commit() error {
 		_ = a.upsertStmt.Close()
 		a.upsertStmt = nil
 	}
+	if a.multiRowStmt != nil {
+		_ = a.multiRowStmt.Close()
+		a.multiRowStmt = nil
+	}
 	if a.markDoneStmt != nil {
 		_ = a.markDoneStmt.Close()
 		a.markDoneStmt = nil
@@ -405,6 +489,10 @@ func (a *Aggregator) Rollback() error {
 	if a.upsertStmt != nil {
 		_ = a.upsertStmt.Close()
 		a.upsertStmt = nil
+	}
+	if a.multiRowStmt != nil {
+		_ = a.multiRowStmt.Close()
+		a.multiRowStmt = nil
 	}
 	if a.markDoneStmt != nil {
 		_ = a.markDoneStmt.Close()

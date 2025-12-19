@@ -527,3 +527,145 @@ func BenchmarkTierDistribution(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkMultiRowBatch benchmarks different multi-row batch sizes.
+// This helps tune MultiRowBatchSize for optimal performance.
+func BenchmarkMultiRowBatch(b *testing.B) {
+	if os.Getenv("S3INV_LONG_BENCH") == "" {
+		b.Skip("set S3INV_LONG_BENCH=1 to run batch size sweep")
+	}
+
+	batchSizes := []int{64, 128, 256, 512, 1024}
+	numObjects := 100000
+
+	// Generate test data once
+	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(numObjects))
+	objects := gen.Generate()
+
+	for _, batchSize := range batchSizes {
+		b.Run(fmt.Sprintf("batch=%d", batchSize), func(b *testing.B) {
+			b.ReportAllocs()
+
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+
+				tmpDir := b.TempDir()
+				dbPath := filepath.Join(tmpDir, "prefix-agg.db")
+
+				cfg := DefaultConfig(dbPath)
+				cfg.Synchronous = "OFF"
+				agg, err := Open(cfg)
+				if err != nil {
+					b.Fatalf("Open failed: %v", err)
+				}
+
+				// Override batch size for this test by rebuilding statement
+				multiRowSQL := buildMultiRowUpsertSQL(batchSize)
+				colsPerRow := 4 + int(tiers.NumTiers)*2
+
+				b.StartTimer()
+
+				tx, err := agg.db.Begin()
+				if err != nil {
+					b.Fatalf("Begin failed: %v", err)
+				}
+
+				singleStmt, _ := tx.Prepare(buildUpsertSQL())
+				multiStmt, _ := tx.Prepare(multiRowSQL)
+
+				pendingDeltas := make(map[string]*prefixDelta, DeltaFlushThreshold)
+
+				// Inline delta accumulation
+				for _, obj := range objects {
+					// Root prefix
+					accumDelta(pendingDeltas, "", 0, obj.Size, obj.TierID)
+
+					// Directory prefixes
+					depth := 1
+					for j := 0; j < len(obj.Key); j++ {
+						if obj.Key[j] == '/' {
+							accumDelta(pendingDeltas, obj.Key[:j+1], depth, obj.Size, obj.TierID)
+							depth++
+						}
+					}
+				}
+
+				// Flush with custom batch size
+				prefixes := make([]string, 0, len(pendingDeltas))
+				for prefix := range pendingDeltas {
+					prefixes = append(prefixes, prefix)
+				}
+
+				batchArgs := make([]interface{}, batchSize*colsPerRow)
+				singleArgs := make([]interface{}, colsPerRow)
+
+				// Process full batches
+				for j := 0; j+batchSize <= len(prefixes); j += batchSize {
+					for k := 0; k < batchSize; k++ {
+						prefix := prefixes[j+k]
+						delta := pendingDeltas[prefix]
+						offset := k * colsPerRow
+
+						batchArgs[offset] = prefix
+						batchArgs[offset+1] = delta.depth
+						batchArgs[offset+2] = delta.totalCount
+						batchArgs[offset+3] = delta.totalBytes
+
+						for t := range tiers.NumTiers {
+							batchArgs[offset+4+int(t)*2] = delta.tierCounts[t]
+							batchArgs[offset+4+int(t)*2+1] = delta.tierBytes[t]
+						}
+					}
+					if _, err := multiStmt.Exec(batchArgs...); err != nil {
+						b.Fatalf("multi-row exec failed: %v", err)
+					}
+				}
+
+				// Process remainder
+				remainder := len(prefixes) % batchSize
+				if remainder > 0 {
+					startIdx := len(prefixes) - remainder
+					for _, prefix := range prefixes[startIdx:] {
+						delta := pendingDeltas[prefix]
+						singleArgs[0] = prefix
+						singleArgs[1] = delta.depth
+						singleArgs[2] = delta.totalCount
+						singleArgs[3] = delta.totalBytes
+						for t := range tiers.NumTiers {
+							singleArgs[4+int(t)*2] = delta.tierCounts[t]
+							singleArgs[4+int(t)*2+1] = delta.tierBytes[t]
+						}
+						if _, err := singleStmt.Exec(singleArgs...); err != nil {
+							b.Fatalf("single-row exec failed: %v", err)
+						}
+					}
+				}
+
+				singleStmt.Close()
+				multiStmt.Close()
+				tx.Commit()
+
+				b.StopTimer()
+
+				if i == b.N-1 {
+					prefixCount, _ := agg.PrefixCount()
+					b.Logf("batch=%d prefixes=%d", batchSize, prefixCount)
+				}
+				agg.Close()
+			}
+		})
+	}
+}
+
+// accumDelta is a helper for batch size benchmarks.
+func accumDelta(m map[string]*prefixDelta, prefix string, depth int, size uint64, tierID tiers.ID) {
+	delta, ok := m[prefix]
+	if !ok {
+		delta = &prefixDelta{depth: depth}
+		m[prefix] = delta
+	}
+	delta.totalCount++
+	delta.totalBytes += size
+	delta.tierCounts[tierID]++
+	delta.tierBytes[tierID] += size
+}
