@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -221,14 +222,23 @@ func (ps *ParallelStreamer) Stream(ctx context.Context) (*StreamResult, error) {
 	}
 
 	elapsed := time.Since(startTime)
+	bytesProcessed := ps.bytesProcessed.Load()
+	objectsProcessed := ps.objectsProcessed.Load()
 
-	ps.log.Info().
+	event := ps.log.Info().
 		Int64("chunks_processed", ps.chunksProcessed.Load()).
 		Int64("chunks_skipped", ps.chunksSkipped.Load()).
-		Int64("objects_processed", ps.objectsProcessed.Load()).
-		Int64("bytes_processed", ps.bytesProcessed.Load()).
-		Dur("elapsed", elapsed).
-		Msg("parallel streaming aggregation complete")
+		Int64("objects_processed", objectsProcessed).
+		Int64("bytes_processed", bytesProcessed).
+		Dur("elapsed", elapsed)
+	if logging.IsPrettyMode() {
+		event = event.
+			Str("objects_h", humanfmt.Count(objectsProcessed)).
+			Str("bytes_h", humanfmt.Bytes(bytesProcessed)).
+			Str("elapsed_h", humanfmt.Duration(elapsed)).
+			Str("throughput_h", humanfmt.Throughput(bytesProcessed, elapsed))
+	}
+	event.Msg("parallel streaming aggregation complete")
 
 	if firstErr != nil && ctx.Err() == nil {
 		return nil, firstErr

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -140,14 +141,22 @@ func StreamFromS3(ctx context.Context, client *s3fetch.Client, cfg StreamConfig)
 
 		// Log progress every 5 seconds or every chunk
 		if time.Since(lastLogTime) >= 5*time.Second {
-			log.Info().
+			elapsed := time.Since(startTime)
+			event := log.Info().
 				Int("chunks_done", result.ChunksProcessed+result.ChunksSkipped).
 				Int("chunks_total", result.TotalChunks).
 				Int("chunks_skipped", result.ChunksSkipped).
 				Int64("objects_processed", result.ObjectsProcessed).
 				Int64("bytes_processed", result.BytesProcessed).
-				Dur("elapsed", time.Since(startTime)).
-				Msg("aggregation progress")
+				Dur("elapsed", elapsed)
+			if logging.IsPrettyMode() {
+				event = event.
+					Str("objects_h", humanfmt.Count(result.ObjectsProcessed)).
+					Str("bytes_h", humanfmt.Bytes(result.BytesProcessed)).
+					Str("elapsed_h", humanfmt.Duration(elapsed)).
+					Str("throughput_h", humanfmt.Throughput(result.BytesProcessed, elapsed))
+			}
+			event.Msg("aggregation progress")
 			lastLogTime = time.Now()
 		}
 
@@ -158,13 +167,21 @@ func StreamFromS3(ctx context.Context, client *s3fetch.Client, cfg StreamConfig)
 			Msg("processed chunk")
 	}
 
-	log.Info().
+	elapsed := time.Since(startTime)
+	event := log.Info().
 		Int("chunks_processed", result.ChunksProcessed).
 		Int("chunks_skipped", result.ChunksSkipped).
 		Int64("objects_processed", result.ObjectsProcessed).
 		Int64("bytes_processed", result.BytesProcessed).
-		Dur("elapsed", time.Since(startTime)).
-		Msg("streaming aggregation complete")
+		Dur("elapsed", elapsed)
+	if logging.IsPrettyMode() {
+		event = event.
+			Str("objects_h", humanfmt.Count(result.ObjectsProcessed)).
+			Str("bytes_h", humanfmt.Bytes(result.BytesProcessed)).
+			Str("elapsed_h", humanfmt.Duration(elapsed)).
+			Str("throughput_h", humanfmt.Throughput(result.BytesProcessed, elapsed))
+	}
+	event.Msg("streaming aggregation complete")
 
 	return result, nil
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
+	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/sqliteagg"
 	"github.com/eunmann/s3-inv-db/pkg/triebuild"
@@ -203,10 +204,14 @@ func writeIndexFilesParallel(outDir string, result *triebuild.Result, concurrenc
 		return firstErr
 	}
 
-	log.Info().
+	elapsed := time.Since(start)
+	event := log.Info().
 		Int("files_written", len(tasks)).
-		Dur("elapsed", time.Since(start)).
-		Msg("index files written")
+		Dur("elapsed", elapsed)
+	if logging.IsPrettyMode() {
+		event = event.Str("elapsed_h", humanfmt.Duration(elapsed))
+	}
+	event.Msg("index files written")
 
 	return nil
 }
@@ -263,7 +268,12 @@ func writeDepthIndex(outDir string, result *triebuild.Result) error {
 		return fmt.Errorf("build depth index: %w", err)
 	}
 
-	log.Info().Dur("elapsed", time.Since(start)).Msg("depth index complete")
+	elapsed := time.Since(start)
+	event := log.Info().Dur("elapsed", elapsed)
+	if logging.IsPrettyMode() {
+		event = event.Str("elapsed_h", humanfmt.Duration(elapsed))
+	}
+	event.Msg("depth index complete")
 	return nil
 }
 
@@ -283,10 +293,16 @@ func writeMPHF(outDir string, result *triebuild.Result) error {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
 
-	log.Info().
+	elapsed := time.Since(start)
+	event := log.Info().
 		Int("key_count", builder.Count()).
-		Dur("elapsed", time.Since(start)).
-		Msg("MPHF build complete")
+		Dur("elapsed", elapsed)
+	if logging.IsPrettyMode() {
+		event = event.
+			Str("key_count_h", humanfmt.Count(int64(builder.Count()))).
+			Str("elapsed_h", humanfmt.Duration(elapsed))
+	}
+	event.Msg("MPHF build complete")
 	return nil
 }
 
@@ -311,10 +327,14 @@ func writeTierStats(outDir string, result *triebuild.Result) error {
 		return err
 	}
 
-	log.Info().
+	elapsed := time.Since(start)
+	event := log.Info().
 		Int("tiers_written", len(result.PresentTiers)).
-		Dur("elapsed", time.Since(start)).
-		Msg("tier statistics complete")
+		Dur("elapsed", elapsed)
+	if logging.IsPrettyMode() {
+		event = event.Str("elapsed_h", humanfmt.Duration(elapsed))
+	}
+	event.Msg("tier statistics complete")
 
 	return nil
 }

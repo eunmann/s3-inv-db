@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -239,15 +240,26 @@ func (p *Pipeline) Run(ctx context.Context) (*StreamResult, error) {
 	<-writerDone
 
 	elapsed := time.Since(startTime)
+	bytesProcessed := p.bytesProcessed.Load()
+	objectsProcessed := p.objectsProcessed.Load()
+	prefixesWritten := p.prefixesWritten.Load()
 
-	p.log.Info().
+	event := p.log.Info().
 		Int64("chunks_processed", p.chunksProcessed.Load()).
 		Int64("chunks_skipped", p.chunksSkipped.Load()).
-		Int64("objects_processed", p.objectsProcessed.Load()).
-		Int64("bytes_processed", p.bytesProcessed.Load()).
-		Int64("prefixes_written", p.prefixesWritten.Load()).
-		Dur("elapsed", elapsed).
-		Msg("pipelined streaming aggregation complete")
+		Int64("objects_processed", objectsProcessed).
+		Int64("bytes_processed", bytesProcessed).
+		Int64("prefixes_written", prefixesWritten).
+		Dur("elapsed", elapsed)
+	if logging.IsPrettyMode() {
+		event = event.
+			Str("objects_h", humanfmt.Count(objectsProcessed)).
+			Str("bytes_h", humanfmt.Bytes(bytesProcessed)).
+			Str("prefixes_h", humanfmt.Count(prefixesWritten)).
+			Str("elapsed_h", humanfmt.Duration(elapsed)).
+			Str("throughput_h", humanfmt.Throughput(bytesProcessed, elapsed))
+	}
+	event.Msg("pipelined streaming aggregation complete")
 
 	if p.firstErr != nil && ctx.Err() == nil {
 		return nil, p.firstErr

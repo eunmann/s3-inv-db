@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/triebuild"
 )
@@ -72,12 +73,19 @@ func BuildTrieFromSQLite(agg *Aggregator) (*triebuild.Result, error) {
 	result.TrackTiers = len(presentTiers) > 0
 	result.PresentTiers = presentTiers
 
-	log.Info().
-		Int("total_nodes", len(result.Nodes)).
+	elapsed := time.Since(startTime)
+	nodeCount := int64(len(result.Nodes))
+	event := log.Info().
+		Int("total_nodes", int(nodeCount)).
 		Uint32("max_depth", result.MaxDepth).
 		Int("present_tiers", len(result.PresentTiers)).
-		Dur("elapsed", time.Since(startTime)).
-		Msg("trie build complete")
+		Dur("elapsed", elapsed)
+	if logging.IsPrettyMode() {
+		event = event.
+			Str("total_nodes_h", humanfmt.Count(nodeCount)).
+			Str("elapsed_h", humanfmt.Duration(elapsed))
+	}
+	event.Msg("trie build complete")
 
 	return result, nil
 }
