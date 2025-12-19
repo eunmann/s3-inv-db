@@ -146,9 +146,22 @@ func createSchema(db *sql.DB) error {
 }
 
 // Close closes the database connection.
+// If a transaction is in progress, it is rolled back.
 func (a *Aggregator) Close() error {
 	if a.tx != nil {
-		a.tx.Rollback()
+		// Rollback error is intentionally ignored during Close.
+		// The transaction will be aborted when the connection closes anyway.
+		_ = a.tx.Rollback()
+		a.tx = nil
+	}
+	// Close any open prepared statements
+	if a.upsertStmt != nil {
+		_ = a.upsertStmt.Close()
+		a.upsertStmt = nil
+	}
+	if a.markDoneStmt != nil {
+		_ = a.markDoneStmt.Close()
+		a.markDoneStmt = nil
 	}
 	return a.db.Close()
 }
@@ -303,12 +316,13 @@ func (a *Aggregator) Commit() error {
 		return fmt.Errorf("no transaction in progress")
 	}
 
+	// Close prepared statements (errors intentionally ignored - best effort cleanup)
 	if a.upsertStmt != nil {
-		a.upsertStmt.Close()
+		_ = a.upsertStmt.Close()
 		a.upsertStmt = nil
 	}
 	if a.markDoneStmt != nil {
-		a.markDoneStmt.Close()
+		_ = a.markDoneStmt.Close()
 		a.markDoneStmt = nil
 	}
 
@@ -326,12 +340,13 @@ func (a *Aggregator) Rollback() error {
 		return nil
 	}
 
+	// Close prepared statements (errors intentionally ignored - best effort cleanup)
 	if a.upsertStmt != nil {
-		a.upsertStmt.Close()
+		_ = a.upsertStmt.Close()
 		a.upsertStmt = nil
 	}
 	if a.markDoneStmt != nil {
-		a.markDoneStmt.Close()
+		_ = a.markDoneStmt.Close()
 		a.markDoneStmt = nil
 	}
 
