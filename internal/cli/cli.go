@@ -41,7 +41,7 @@ func runBuild(args []string) error {
 	keepDownloads := fs.Bool("keep-downloads", false, "keep downloaded inventory files after building")
 
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse flags: %w", err)
 	}
 
 	if *outDir == "" {
@@ -122,7 +122,7 @@ func runQuery(args []string) error {
 	priceTablePath := fs.String("price-table", "", "path to price table JSON (default: US East 1 prices)")
 
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse flags: %w", err)
 	}
 
 	if *indexDir == "" {

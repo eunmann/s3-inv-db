@@ -68,10 +68,10 @@ func (w *TierStatsWriter) Write(result *triebuild.Result) error {
 func (w *TierStatsWriter) writeTierArray(path string, nodes []triebuild.Node, tierID tiers.ID, isBytes bool) error {
 	writer, err := NewArrayWriter(path, 8)
 	if err != nil {
-		return err
+		return fmt.Errorf("create array writer: %w", err)
 	}
 
-	for _, node := range nodes {
+	for i, node := range nodes {
 		var val uint64
 		if isBytes {
 			val = node.TierBytes[tierID]
@@ -80,11 +80,14 @@ func (w *TierStatsWriter) writeTierArray(path string, nodes []triebuild.Node, ti
 		}
 		if err := writer.WriteU64(val); err != nil {
 			writer.Close()
-			return err
+			return fmt.Errorf("write value at node %d: %w", i, err)
 		}
 	}
 
-	return writer.Close()
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close array writer: %w", err)
+	}
+	return nil
 }
 
 // PresentTiers returns the tiers that were written.
@@ -105,7 +108,7 @@ type TierStatsReader struct {
 func OpenTierStats(indexDir string) (*TierStatsReader, error) {
 	manifest, err := tiers.ReadManifest(indexDir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read tier manifest: %w", err)
 	}
 	if manifest == nil || len(manifest.Tiers) == 0 {
 		return nil, nil // No tier data

@@ -74,7 +74,7 @@ type ArrayReader struct {
 func OpenArray(path string) (*ArrayReader, error) {
 	mmap, err := OpenMmap(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("mmap file: %w", err)
 	}
 
 	if mmap.Size() < int64(HeaderSize) {
@@ -85,7 +85,7 @@ func OpenArray(path string) (*ArrayReader, error) {
 	header, err := DecodeHeader(mmap.Data()[:HeaderSize])
 	if err != nil {
 		mmap.Close()
-		return nil, err
+		return nil, fmt.Errorf("decode header: %w", err)
 	}
 
 	if header.Magic != MagicNumber {
@@ -228,12 +228,12 @@ func (r *BlobReader) Get(idx uint64) (string, error) {
 
 	start, err := r.offsetsMmap.GetU64(idx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("get start offset: %w", err)
 	}
 
 	end, err := r.offsetsMmap.GetU64(idx + 1)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("get end offset: %w", err)
 	}
 
 	if end > uint64(r.blobMmap.Size()) || start > end {

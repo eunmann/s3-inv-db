@@ -53,7 +53,7 @@ func (w *ArrayWriter) WriteU32(val uint32) error {
 	var buf [4]byte
 	binary.LittleEndian.PutUint32(buf[:], val)
 	if _, err := w.writer.Write(buf[:]); err != nil {
-		return err
+		return fmt.Errorf("write u32: %w", err)
 	}
 	w.count++
 	return nil
@@ -67,7 +67,7 @@ func (w *ArrayWriter) WriteU64(val uint64) error {
 	var buf [8]byte
 	binary.LittleEndian.PutUint64(buf[:], val)
 	if _, err := w.writer.Write(buf[:]); err != nil {
-		return err
+		return fmt.Errorf("write u64: %w", err)
 	}
 	w.count++
 	return nil
@@ -81,7 +81,7 @@ func (w *ArrayWriter) WriteU16(val uint16) error {
 	var buf [2]byte
 	binary.LittleEndian.PutUint16(buf[:], val)
 	if _, err := w.writer.Write(buf[:]); err != nil {
-		return err
+		return fmt.Errorf("write u16: %w", err)
 	}
 	w.count++
 	return nil
@@ -111,7 +111,10 @@ func (w *ArrayWriter) Close() error {
 		return fmt.Errorf("update header: %w", err)
 	}
 
-	return w.file.Close()
+	if err := w.file.Close(); err != nil {
+		return fmt.Errorf("close file: %w", err)
+	}
+	return nil
 }
 
 // Count returns the number of elements written.
@@ -187,7 +190,10 @@ func (w *BlobWriter) Close() error {
 		return fmt.Errorf("close blob: %w", err)
 	}
 
-	return w.offsets.Close()
+	if err := w.offsets.Close(); err != nil {
+		return fmt.Errorf("close offsets: %w", err)
+	}
+	return nil
 }
 
 // Count returns the number of strings written.

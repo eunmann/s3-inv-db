@@ -190,7 +190,11 @@ func (idx *Index) MaxDepthInSubtree(pos uint64) uint32 {
 
 // PrefixString returns the prefix string for the node at pos.
 func (idx *Index) PrefixString(pos uint64) (string, error) {
-	return idx.mphf.GetPrefix(pos)
+	s, err := idx.mphf.GetPrefix(pos)
+	if err != nil {
+		return "", fmt.Errorf("get prefix for pos %d: %w", pos, err)
+	}
+	return s, nil
 }
 
 // Count returns the total number of prefix nodes.
@@ -223,7 +227,11 @@ func (idx *Index) DescendantsAtDepth(prefixPos uint64, relDepth int) ([]uint64, 
 	subtreeStart := prefixPos
 	subtreeEnd := idx.SubtreeEnd(prefixPos)
 
-	return idx.depthIndex.GetPositionsInSubtree(targetDepth, subtreeStart, subtreeEnd)
+	positions, err := idx.depthIndex.GetPositionsInSubtree(targetDepth, subtreeStart, subtreeEnd)
+	if err != nil {
+		return nil, fmt.Errorf("get positions at depth %d: %w", targetDepth, err)
+	}
+	return positions, nil
 }
 
 // DescendantsUpToDepth returns positions of descendants up to the given
@@ -246,7 +254,7 @@ func (idx *Index) DescendantsUpToDepth(prefixPos uint64, maxRelDepth int) ([][]u
 	for d := baseDepth + 1; d <= baseDepth+uint32(maxRelDepth) && d <= maxSubtreeDepth; d++ {
 		positions, err := idx.depthIndex.GetPositionsInSubtree(d, subtreeStart, subtreeEnd)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("get positions at depth %d: %w", d, err)
 		}
 		result = append(result, positions)
 	}
@@ -264,7 +272,7 @@ type Filter struct {
 func (idx *Index) DescendantsAtDepthFiltered(prefixPos uint64, relDepth int, filter Filter) ([]uint64, error) {
 	positions, err := idx.DescendantsAtDepth(prefixPos, relDepth)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get descendants at depth %d: %w", relDepth, err)
 	}
 
 	if filter.MinCount == 0 && filter.MinBytes == 0 {
@@ -327,7 +335,7 @@ func (idx *Index) NewDescendantIterator(prefixPos uint64, relDepth int) (Iterato
 
 	it, err := idx.depthIndex.NewDepthIterator(targetDepth, subtreeStart, subtreeEnd)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create depth iterator at depth %d: %w", targetDepth, err)
 	}
 
 	return &depthIteratorWrapper{it: it, depth: targetDepth}, nil

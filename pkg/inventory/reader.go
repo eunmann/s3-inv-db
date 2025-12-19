@@ -247,7 +247,10 @@ func (r *CSVReader) Read() (Record, error) {
 	for {
 		fields, err := r.csvReader.Read()
 		if err != nil {
-			return Record{}, err
+			if errors.Is(err, io.EOF) {
+				return Record{}, err
+			}
+			return Record{}, fmt.Errorf("read CSV row: %w", err)
 		}
 
 		// Skip rows with insufficient columns

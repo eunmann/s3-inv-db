@@ -79,7 +79,7 @@ func (s *Sorter) AddRecords(ctx context.Context, reader inventory.Reader) error 
 
 		if len(chunk) >= s.cfg.MaxRecordsPerChunk {
 			if err := s.flushChunk(chunk); err != nil {
-				return err
+				return fmt.Errorf("flush chunk: %w", err)
 			}
 			chunk = chunk[:0]
 		}
@@ -88,7 +88,7 @@ func (s *Sorter) AddRecords(ctx context.Context, reader inventory.Reader) error 
 	// Flush remaining records
 	if len(chunk) > 0 {
 		if err := s.flushChunk(chunk); err != nil {
-			return err
+			return fmt.Errorf("flush final chunk: %w", err)
 		}
 	}
 
@@ -183,7 +183,7 @@ type runReader struct {
 func newRunReader(path string) (*runReader, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open file: %w", err)
 	}
 
 	scanner := bufio.NewScanner(f)

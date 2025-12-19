@@ -2,6 +2,8 @@
 package triebuild
 
 import (
+	"fmt"
+
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -67,12 +69,12 @@ func (b *Builder) Build(iter extsort.Iterator) (*Result, error) {
 	for iter.Next() {
 		rec := iter.Record()
 		if err := b.processKey(rec.Key, rec.Size, rec.TierID); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("process key %q: %w", rec.Key, err)
 		}
 	}
 
 	if err := iter.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterator error: %w", err)
 	}
 
 	// Close all remaining nodes
@@ -322,7 +324,7 @@ func BuildFromKeysWithTiers(keys []string, sizes []uint64, tierIDs []tiers.ID) (
 			tierID = tierIDs[i]
 		}
 		if err := b.processKey(key, size, tierID); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("process key %q: %w", key, err)
 		}
 	}
 

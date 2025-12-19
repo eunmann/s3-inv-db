@@ -34,7 +34,7 @@ func ParseManifest(r io.Reader) (*Manifest, error) {
 	}
 
 	if err := m.validate(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("validate manifest: %w", err)
 	}
 
 	return &m, nil

@@ -264,7 +264,7 @@ func writeColumnarArrays(outDir string, result *triebuild.Result) error {
 
 	for _, arr := range u64Arrays {
 		if err := writeU64Array(outDir, arr.name, result.Nodes, arr.getter); err != nil {
-			return err
+			return fmt.Errorf("write %s: %w", arr.name, err)
 		}
 	}
 
@@ -279,7 +279,7 @@ func writeColumnarArrays(outDir string, result *triebuild.Result) error {
 
 	for _, arr := range u32Arrays {
 		if err := writeU32Array(outDir, arr.name, result.Nodes, arr.getter); err != nil {
-			return err
+			return fmt.Errorf("write %s: %w", arr.name, err)
 		}
 	}
 
@@ -290,30 +290,36 @@ func writeU64Array(outDir, name string, nodes []triebuild.Node, getter func(trie
 	path := filepath.Join(outDir, name)
 	writer, err := format.NewArrayWriter(path, 8)
 	if err != nil {
-		return err
+		return fmt.Errorf("create writer: %w", err)
 	}
-	for _, node := range nodes {
+	for i, node := range nodes {
 		if err := writer.WriteU64(getter(node)); err != nil {
 			writer.Close()
-			return err
+			return fmt.Errorf("write node %d: %w", i, err)
 		}
 	}
-	return writer.Close()
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close writer: %w", err)
+	}
+	return nil
 }
 
 func writeU32Array(outDir, name string, nodes []triebuild.Node, getter func(triebuild.Node) uint32) error {
 	path := filepath.Join(outDir, name)
 	writer, err := format.NewArrayWriter(path, 4)
 	if err != nil {
-		return err
+		return fmt.Errorf("create writer: %w", err)
 	}
-	for _, node := range nodes {
+	for i, node := range nodes {
 		if err := writer.WriteU32(getter(node)); err != nil {
 			writer.Close()
-			return err
+			return fmt.Errorf("write node %d: %w", i, err)
 		}
 	}
-	return writer.Close()
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close writer: %w", err)
+	}
+	return nil
 }
 
 func writeDepthIndex(outDir string, result *triebuild.Result) error {
@@ -323,7 +329,10 @@ func writeDepthIndex(outDir string, result *triebuild.Result) error {
 		builder.Add(node.Pos, node.Depth)
 	}
 
-	return builder.Build(outDir)
+	if err := builder.Build(outDir); err != nil {
+		return fmt.Errorf("build depth index: %w", err)
+	}
+	return nil
 }
 
 func writeMPHF(outDir string, result *triebuild.Result) error {
@@ -333,5 +342,8 @@ func writeMPHF(outDir string, result *triebuild.Result) error {
 		builder.Add(node.Prefix, node.Pos)
 	}
 
-	return builder.Build(outDir)
+	if err := builder.Build(outDir); err != nil {
+		return fmt.Errorf("build MPHF: %w", err)
+	}
+	return nil
 }

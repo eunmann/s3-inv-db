@@ -72,11 +72,11 @@ func (f *Fetcher) Fetch(ctx context.Context) (*FetchResult, error) {
 	// Get column indices
 	keyCol, err := manifest.KeyColumnIndex()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get key column index: %w", err)
 	}
 	sizeCol, err := manifest.SizeColumnIndex()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get size column index: %w", err)
 	}
 
 	// Create download directory
@@ -91,7 +91,7 @@ func (f *Fetcher) Fetch(ctx context.Context) (*FetchResult, error) {
 	// Download all inventory files concurrently
 	localFiles, err := f.downloadFiles(ctx, manifest)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("download inventory files: %w", err)
 	}
 
 	return &FetchResult{
@@ -130,7 +130,7 @@ func (f *Fetcher) downloadFiles(ctx context.Context, manifest *Manifest) ([]stri
 	}
 
 	if err := g.Wait(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("wait for downloads: %w", err)
 	}
 
 	return localFiles, nil

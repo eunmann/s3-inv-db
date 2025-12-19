@@ -138,20 +138,20 @@ func (b *MPHFBuilder) writeEmpty(outDir string) error {
 	fpPath := filepath.Join(outDir, "mph_fp.u64")
 	fpWriter, err := NewArrayWriter(fpPath, 8)
 	if err != nil {
-		return err
+		return fmt.Errorf("create empty fingerprint writer: %w", err)
 	}
 	if err := fpWriter.Close(); err != nil {
-		return err
+		return fmt.Errorf("close empty fingerprint writer: %w", err)
 	}
 
 	// Create empty position array
 	posPath := filepath.Join(outDir, "mph_pos.u64")
 	posWriter, err := NewArrayWriter(posPath, 8)
 	if err != nil {
-		return err
+		return fmt.Errorf("create empty position writer: %w", err)
 	}
 	if err := posWriter.Close(); err != nil {
-		return err
+		return fmt.Errorf("close empty position writer: %w", err)
 	}
 
 	// Create empty prefix blob files
@@ -319,7 +319,11 @@ func (m *MPHF) GetPrefix(pos uint64) (string, error) {
 	if m.prefixBlob == nil {
 		return "", fmt.Errorf("prefix blob not loaded")
 	}
-	return m.prefixBlob.Get(pos)
+	s, err := m.prefixBlob.Get(pos)
+	if err != nil {
+		return "", fmt.Errorf("get prefix at pos %d: %w", pos, err)
+	}
+	return s, nil
 }
 
 // Count returns the number of entries in the MPHF.
@@ -373,15 +377,18 @@ func WritePrefixBlob(outDir string, prefixes []string) error {
 
 	writer, err := NewBlobWriter(blobPath, offsetsPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("create blob writer: %w", err)
 	}
 
-	for _, p := range prefixes {
+	for i, p := range prefixes {
 		if err := writer.WriteString(p); err != nil {
 			writer.Close()
-			return err
+			return fmt.Errorf("write prefix %d: %w", i, err)
 		}
 	}
 
-	return writer.Close()
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close blob writer: %w", err)
+	}
+	return nil
 }

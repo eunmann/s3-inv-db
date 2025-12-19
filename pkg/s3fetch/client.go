@@ -47,7 +47,11 @@ func (c *Client) FetchManifest(ctx context.Context, bucket, key string) (*Manife
 	}
 	defer resp.Body.Close()
 
-	return ParseManifest(resp.Body)
+	manifest, err := ParseManifest(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("parse manifest from s3://%s/%s: %w", bucket, key, err)
+	}
+	return manifest, nil
 }
 
 // DownloadFile downloads an S3 object to a local file.
@@ -81,7 +85,10 @@ func (c *Client) DownloadFile(ctx context.Context, bucket, key, destPath string)
 		return fmt.Errorf("sync file %s: %w", destPath, err)
 	}
 
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close file %s: %w", destPath, err)
+	}
+	return nil
 }
 
 // StreamObject returns a reader for an S3 object.

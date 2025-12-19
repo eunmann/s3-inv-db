@@ -158,12 +158,12 @@ func (d *DepthIndex) GetPositionsAtDepth(depth uint32) ([]uint64, error) {
 
 	start, err := d.offsets.GetU64(uint64(depth))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get start offset for depth %d: %w", depth, err)
 	}
 
 	end, err := d.offsets.GetU64(uint64(depth + 1))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get end offset for depth %d: %w", depth, err)
 	}
 
 	count := end - start
@@ -175,7 +175,7 @@ func (d *DepthIndex) GetPositionsAtDepth(depth uint32) ([]uint64, error) {
 	for i := uint64(0); i < count; i++ {
 		pos, err := d.positions.GetU64(start + i)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("get position at index %d: %w", start+i, err)
 		}
 		positions[i] = pos
 	}
@@ -192,12 +192,12 @@ func (d *DepthIndex) GetPositionsInSubtree(depth uint32, subtreeStart, subtreeEn
 
 	start, err := d.offsets.GetU64(uint64(depth))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get start offset for depth %d: %w", depth, err)
 	}
 
 	end, err := d.offsets.GetU64(uint64(depth + 1))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get end offset for depth %d: %w", depth, err)
 	}
 
 	if start >= end {
@@ -270,12 +270,12 @@ func (d *DepthIndex) NewDepthIterator(depth uint32, subtreeStart, subtreeEnd uin
 
 	sliceStart, err := d.offsets.GetU64(uint64(depth))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get start offset for depth %d: %w", depth, err)
 	}
 
 	sliceEnd, err := d.offsets.GetU64(uint64(depth + 1))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get end offset for depth %d: %w", depth, err)
 	}
 
 	// Binary search for bounds

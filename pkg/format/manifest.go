@@ -141,13 +141,13 @@ func VerifyManifest(dir string, manifest *Manifest) error {
 func checksumFile(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("open file: %w", err)
 	}
 	defer f.Close()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return "", err
+		return "", fmt.Errorf("read file: %w", err)
 	}
 
 	return hex.EncodeToString(h.Sum(nil)), nil
@@ -157,29 +157,35 @@ func checksumFile(path string) (string, error) {
 func writeFileSync(path string, data []byte) error {
 	f, err := os.Create(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("create file: %w", err)
 	}
 
 	if _, err := f.Write(data); err != nil {
 		f.Close()
-		return err
+		return fmt.Errorf("write file: %w", err)
 	}
 
 	if err := f.Sync(); err != nil {
 		f.Close()
-		return err
+		return fmt.Errorf("sync file: %w", err)
 	}
 
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close file: %w", err)
+	}
+	return nil
 }
 
 // SyncDir fsyncs a directory to ensure entries are persisted.
 func SyncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
-		return err
+		return fmt.Errorf("open directory: %w", err)
 	}
 	defer d.Close()
 
-	return d.Sync()
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("sync directory: %w", err)
+	}
+	return nil
 }
