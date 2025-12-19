@@ -50,7 +50,7 @@ func TestFromS3_IntelligentTiering(t *testing.T) {
 		{"ARCHIVE", ITArchive},
 		{"DEEP_ARCHIVE_ACCESS", ITDeepArchive},
 		{"DEEP_ARCHIVE", ITDeepArchive},
-		{"", ITFrequent},       // Missing defaults to Frequent
+		{"", ITFrequent},        // Missing defaults to Frequent
 		{"UNKNOWN", ITFrequent}, // Unknown defaults to Frequent
 	}
 

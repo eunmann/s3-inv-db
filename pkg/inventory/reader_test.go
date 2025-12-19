@@ -431,3 +431,126 @@ func TestOpenFileWithSchema_CSVGZ(t *testing.T) {
 		t.Errorf("got %+v, want {Key:a/b.txt Size:100}", rec)
 	}
 }
+
+func TestOpenFileWithOptions_TrackTiers(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "test.csv")
+
+	content := "Key,Size,StorageClass,IntelligentTieringAccessTier\n" +
+		"file1.txt,100,STANDARD,\n" +
+		"file2.txt,200,GLACIER,\n" +
+		"file3.txt,300,INTELLIGENT_TIERING,FREQUENT_ACCESS\n" +
+		"file4.txt,400,INTELLIGENT_TIERING,ARCHIVE_ACCESS\n"
+
+	if err := os.WriteFile(csvPath, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	r, err := OpenFileWithOptions(csvPath, OpenOptions{TrackTiers: true})
+	if err != nil {
+		t.Fatalf("OpenFileWithOptions failed: %v", err)
+	}
+	defer r.Close()
+
+	// file1.txt - STANDARD
+	rec, err := r.Read()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if rec.Key != "file1.txt" || rec.TierID != 0 { // Standard = 0
+		t.Errorf("file1: got TierID=%d, want 0 (Standard)", rec.TierID)
+	}
+
+	// file2.txt - GLACIER
+	rec, err = r.Read()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if rec.Key != "file2.txt" || rec.TierID != 4 { // GlacierFR = 4
+		t.Errorf("file2: got TierID=%d, want 4 (GlacierFR)", rec.TierID)
+	}
+
+	// file3.txt - IT FREQUENT
+	rec, err = r.Read()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if rec.Key != "file3.txt" || rec.TierID != 7 { // ITFrequent = 7
+		t.Errorf("file3: got TierID=%d, want 7 (ITFrequent)", rec.TierID)
+	}
+
+	// file4.txt - IT ARCHIVE
+	rec, err = r.Read()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if rec.Key != "file4.txt" || rec.TierID != 10 { // ITArchive = 10
+		t.Errorf("file4: got TierID=%d, want 10 (ITArchive)", rec.TierID)
+	}
+}
+
+func TestOpenFileWithOptions_NoTrackTiers(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "test.csv")
+
+	content := "Key,Size,StorageClass\nfile1.txt,100,GLACIER\n"
+	if err := os.WriteFile(csvPath, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	// Without TrackTiers, TierID should be 0 (default)
+	r, err := OpenFileWithOptions(csvPath, OpenOptions{TrackTiers: false})
+	if err != nil {
+		t.Fatalf("OpenFileWithOptions failed: %v", err)
+	}
+	defer r.Close()
+
+	rec, err := r.Read()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if rec.TierID != 0 {
+		t.Errorf("without tracking, got TierID=%d, want 0", rec.TierID)
+	}
+}
+
+func TestOpenFileWithSchemaOptions_TrackTiers(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "test.csv")
+
+	// Headerless CSV with columns: Bucket, Key, Size, StorageClass, ITAccessTier
+	content := "my-bucket,file1.txt,100,STANDARD_IA,\nmy-bucket,file2.txt,200,INTELLIGENT_TIERING,INFREQUENT_ACCESS\n"
+	if err := os.WriteFile(csvPath, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	r, err := OpenFileWithSchemaOptions(csvPath, SchemaOptions{
+		KeyCol:        1,
+		SizeCol:       2,
+		StorageCol:    3,
+		AccessTierCol: 4,
+		TrackTiers:    true,
+	})
+	if err != nil {
+		t.Fatalf("OpenFileWithSchemaOptions failed: %v", err)
+	}
+	defer r.Close()
+
+	// file1.txt - STANDARD_IA
+	rec, err := r.Read()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if rec.TierID != 1 { // StandardIA = 1
+		t.Errorf("file1: got TierID=%d, want 1 (StandardIA)", rec.TierID)
+	}
+
+	// file2.txt - IT INFREQUENT
+	rec, err = r.Read()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if rec.TierID != 8 { // ITInfrequent = 8
+		t.Errorf("file2: got TierID=%d, want 8 (ITInfrequent)", rec.TierID)
+	}
+}
