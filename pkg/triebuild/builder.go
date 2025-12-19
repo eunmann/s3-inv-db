@@ -3,6 +3,7 @@ package triebuild
 
 import (
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 // Node represents a prefix node in the trie.
@@ -14,12 +15,16 @@ type Node struct {
 	ObjectCount       uint64
 	TotalBytes        uint64
 	MaxDepthInSubtree uint32
+	TierBytes         [tiers.NumTiers]uint64 // Per-tier byte counts (only if tracking enabled)
+	TierCounts        [tiers.NumTiers]uint64 // Per-tier object counts (only if tracking enabled)
 }
 
 // Result holds the complete trie build output.
 type Result struct {
-	Nodes    []Node
-	MaxDepth uint32
+	Nodes        []Node
+	MaxDepth     uint32
+	TrackTiers   bool       // Whether tier data was tracked
+	PresentTiers []tiers.ID // Tiers that have data (only if tracking)
 }
 
 // stackNode is an in-progress node on the build stack.
@@ -30,19 +35,28 @@ type stackNode struct {
 	objectCount       uint64
 	totalBytes        uint64
 	maxDepthInSubtree uint32
+	tierBytes         [tiers.NumTiers]uint64
+	tierCounts        [tiers.NumTiers]uint64
 }
 
 // Builder constructs a trie from a sorted stream of keys.
 type Builder struct {
-	stack    []stackNode
-	nodes    []Node
-	posCount uint64
-	maxDepth uint32
+	stack       []stackNode
+	nodes       []Node
+	posCount    uint64
+	maxDepth    uint32
+	trackTiers  bool
+	tierPresent [tiers.NumTiers]bool // Track which tiers have data
 }
 
 // New creates a new trie builder.
 func New() *Builder {
 	return &Builder{}
+}
+
+// NewWithTiers creates a new trie builder with tier tracking enabled.
+func NewWithTiers() *Builder {
+	return &Builder{trackTiers: true}
 }
 
 // Build processes a sorted iterator and returns the trie structure.
@@ -52,7 +66,7 @@ func (b *Builder) Build(iter extsort.Iterator) (*Result, error) {
 
 	for iter.Next() {
 		rec := iter.Record()
-		if err := b.processKey(rec.Key, rec.Size); err != nil {
+		if err := b.processKey(rec.Key, rec.Size, rec.TierID); err != nil {
 			return nil, err
 		}
 	}
@@ -64,16 +78,28 @@ func (b *Builder) Build(iter extsort.Iterator) (*Result, error) {
 	// Close all remaining nodes
 	b.closeAll()
 
+	// Collect present tiers
+	var presentTiers []tiers.ID
+	if b.trackTiers {
+		for i := tiers.ID(0); i < tiers.NumTiers; i++ {
+			if b.tierPresent[i] {
+				presentTiers = append(presentTiers, i)
+			}
+		}
+	}
+
 	return &Result{
-		Nodes:    b.nodes,
-		MaxDepth: b.maxDepth,
+		Nodes:        b.nodes,
+		MaxDepth:     b.maxDepth,
+		TrackTiers:   b.trackTiers,
+		PresentTiers: presentTiers,
 	}, nil
 }
 
 // processKey handles a single object key.
 //
 //nolint:unparam // error return kept for API consistency and future extensibility
-func (b *Builder) processKey(key string, size uint64) error {
+func (b *Builder) processKey(key string, size uint64, tierID tiers.ID) error {
 	// Extract prefix chain for this key
 	prefixes := extractPrefixes(key)
 
@@ -92,6 +118,17 @@ func (b *Builder) processKey(key string, size uint64) error {
 	for i := range b.stack {
 		b.stack[i].objectCount++
 		b.stack[i].totalBytes += size
+
+		// Track tier-specific stats if enabled
+		if b.trackTiers {
+			b.stack[i].tierBytes[tierID] += size
+			b.stack[i].tierCounts[tierID]++
+		}
+	}
+
+	// Mark tier as present
+	if b.trackTiers {
+		b.tierPresent[tierID] = true
 	}
 
 	return nil
@@ -164,6 +201,8 @@ func (b *Builder) closeTopNode() {
 		ObjectCount:       top.objectCount,
 		TotalBytes:        top.totalBytes,
 		MaxDepthInSubtree: top.maxDepthInSubtree,
+		TierBytes:         top.tierBytes,
+		TierCounts:        top.tierCounts,
 	}
 
 	// Store node at its position
@@ -264,7 +303,17 @@ func (r *Result) VerifyDepthOrder() bool {
 // BuildFromKeys is a convenience function that builds a trie from
 // a slice of keys (for testing).
 func BuildFromKeys(keys []string, sizes []uint64) (*Result, error) {
-	b := New()
+	return BuildFromKeysWithTiers(keys, sizes, nil)
+}
+
+// BuildFromKeysWithTiers builds a trie with tier tracking.
+func BuildFromKeysWithTiers(keys []string, sizes []uint64, tierIDs []tiers.ID) (*Result, error) {
+	var b *Builder
+	if tierIDs != nil {
+		b = NewWithTiers()
+	} else {
+		b = New()
+	}
 
 	// Initialize root
 	b.openNode("", 0)
@@ -274,16 +323,32 @@ func BuildFromKeys(keys []string, sizes []uint64) (*Result, error) {
 		if i < len(sizes) {
 			size = sizes[i]
 		}
-		if err := b.processKey(key, size); err != nil {
+		tierID := tiers.Standard
+		if tierIDs != nil && i < len(tierIDs) {
+			tierID = tierIDs[i]
+		}
+		if err := b.processKey(key, size, tierID); err != nil {
 			return nil, err
 		}
 	}
 
 	b.closeAll()
 
+	// Collect present tiers
+	var presentTiers []tiers.ID
+	if b.trackTiers {
+		for i := tiers.ID(0); i < tiers.NumTiers; i++ {
+			if b.tierPresent[i] {
+				presentTiers = append(presentTiers, i)
+			}
+		}
+	}
+
 	return &Result{
-		Nodes:    b.nodes,
-		MaxDepth: b.maxDepth,
+		Nodes:        b.nodes,
+		MaxDepth:     b.maxDepth,
+		TrackTiers:   b.trackTiers,
+		PresentTiers: presentTiers,
 	}, nil
 }
 
