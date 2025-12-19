@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
-	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/sqliteagg"
 	"github.com/eunmann/s3-inv-db/pkg/triebuild"
@@ -32,6 +31,7 @@ type SQLiteConfig struct {
 func BuildFromSQLite(cfg SQLiteConfig) error {
 	cfg.BuildOptions.Validate()
 	log := logging.L()
+	buildStart := time.Now()
 
 	if cfg.OutDir == "" {
 		return fmt.Errorf("output directory required")
@@ -107,10 +107,10 @@ func BuildFromSQLite(cfg SQLiteConfig) error {
 	parentDir := filepath.Dir(cfg.OutDir)
 	_ = format.SyncDir(parentDir)
 
-	log.Info().
+	logging.PhaseComplete(log.With().Str("phase", "build_index").Logger(), "build_index", time.Since(buildStart)).
 		Str("output_dir", cfg.OutDir).
 		Int("node_count", len(result.Nodes)).
-		Msg("index build from SQLite complete")
+		Log("index build from SQLite complete")
 
 	return nil
 }
@@ -118,7 +118,7 @@ func BuildFromSQLite(cfg SQLiteConfig) error {
 // writeTask represents a file writing task.
 type writeTask struct {
 	name string
-	fn   func() error
+	fn   func() (int64, error) // returns bytes written
 }
 
 // writeIndexFilesParallel writes all index files using a worker pool.
@@ -139,30 +139,30 @@ func writeIndexFilesParallel(outDir string, result *triebuild.Result, concurrenc
 	// Create tasks for all file writes
 	tasks := []writeTask{
 		// Columnar arrays
-		{"subtree_end.u64", func() error {
+		{"subtree_end.u64", func() (int64, error) {
 			return writeU64Array(outDir, "subtree_end.u64", result.Nodes, func(n triebuild.Node) uint64 { return n.SubtreeEnd })
 		}},
-		{"object_count.u64", func() error {
+		{"object_count.u64", func() (int64, error) {
 			return writeU64Array(outDir, "object_count.u64", result.Nodes, func(n triebuild.Node) uint64 { return n.ObjectCount })
 		}},
-		{"total_bytes.u64", func() error {
+		{"total_bytes.u64", func() (int64, error) {
 			return writeU64Array(outDir, "total_bytes.u64", result.Nodes, func(n triebuild.Node) uint64 { return n.TotalBytes })
 		}},
-		{"depth.u32", func() error {
+		{"depth.u32", func() (int64, error) {
 			return writeU32Array(outDir, "depth.u32", result.Nodes, func(n triebuild.Node) uint32 { return n.Depth })
 		}},
-		{"max_depth_in_subtree.u32", func() error {
+		{"max_depth_in_subtree.u32", func() (int64, error) {
 			return writeU32Array(outDir, "max_depth_in_subtree.u32", result.Nodes, func(n triebuild.Node) uint32 { return n.MaxDepthInSubtree })
 		}},
 		// Depth index
-		{"depth_index", func() error { return writeDepthIndex(outDir, result) }},
+		{"depth_index", func() (int64, error) { return writeDepthIndex(outDir, result) }},
 		// MPHF
-		{"mphf", func() error { return writeMPHF(outDir, result) }},
+		{"mphf", func() (int64, error) { return writeMPHF(outDir, result) }},
 	}
 
 	// Add tier stats if tracking enabled
 	if result.TrackTiers && len(result.PresentTiers) > 0 {
-		tasks = append(tasks, writeTask{"tier_stats", func() error { return writeTierStats(outDir, result) }})
+		tasks = append(tasks, writeTask{"tier_stats", func() (int64, error) { return writeTierStats(outDir, result) }})
 	}
 
 	// Create task channel
@@ -178,6 +178,10 @@ func writeIndexFilesParallel(outDir string, result *triebuild.Result, concurrenc
 		firstErr error
 	)
 
+	// Track total bytes written
+	var totalBytes int64
+	var bytesMu sync.Mutex
+
 	// Start workers
 	var wg sync.WaitGroup
 	for i := 0; i < concurrency; i++ {
@@ -185,7 +189,9 @@ func writeIndexFilesParallel(outDir string, result *triebuild.Result, concurrenc
 		go func() {
 			defer wg.Done()
 			for task := range taskCh {
-				if err := task.fn(); err != nil {
+				taskStart := time.Now()
+				bytesWritten, err := task.fn()
+				if err != nil {
 					errMu.Lock()
 					if firstErr == nil {
 						firstErr = fmt.Errorf("%s: %w", task.name, err)
@@ -193,7 +199,18 @@ func writeIndexFilesParallel(outDir string, result *triebuild.Result, concurrenc
 					errMu.Unlock()
 					return
 				}
-				log.Debug().Str("file", task.name).Msg("wrote file")
+
+				// Log file creation
+				taskDuration := time.Since(taskStart)
+				logging.FileCreated(log, "write_index", taskDuration).
+					Str("file", task.name).
+					Bytes("bytes", bytesWritten).
+					Throughput(bytesWritten).
+					Log("index file written")
+
+				bytesMu.Lock()
+				totalBytes += bytesWritten
+				bytesMu.Unlock()
 			}
 		}()
 	}
@@ -205,59 +222,56 @@ func writeIndexFilesParallel(outDir string, result *triebuild.Result, concurrenc
 	}
 
 	elapsed := time.Since(start)
-	event := log.Info().
+	logging.PhaseComplete(log, "write_index", elapsed).
 		Int("files_written", len(tasks)).
-		Dur("elapsed", elapsed)
-	if logging.IsPrettyMode() {
-		event = event.Str("elapsed_h", humanfmt.Duration(elapsed))
-	}
-	event.Msg("index files written")
+		Bytes("total_bytes", totalBytes).
+		Throughput(totalBytes).
+		Log("index files written")
 
 	return nil
 }
 
-func writeU64Array(outDir, name string, nodes []triebuild.Node, getter func(triebuild.Node) uint64) error {
+func writeU64Array(outDir, name string, nodes []triebuild.Node, getter func(triebuild.Node) uint64) (int64, error) {
 	path := filepath.Join(outDir, name)
 	writer, err := format.NewArrayWriter(path, 8)
 	if err != nil {
-		return fmt.Errorf("create writer: %w", err)
+		return 0, fmt.Errorf("create writer: %w", err)
 	}
 	for i, node := range nodes {
 		if err := writer.WriteU64(getter(node)); err != nil {
 			writer.Close()
-			return fmt.Errorf("write node %d: %w", i, err)
+			return 0, fmt.Errorf("write node %d: %w", i, err)
 		}
 	}
 	if err := writer.Close(); err != nil {
-		return fmt.Errorf("close writer: %w", err)
+		return 0, fmt.Errorf("close writer: %w", err)
 	}
-	return nil
+	// Calculate bytes written: header (16 bytes) + data (8 bytes per node)
+	bytesWritten := int64(16 + len(nodes)*8)
+	return bytesWritten, nil
 }
 
-func writeU32Array(outDir, name string, nodes []triebuild.Node, getter func(triebuild.Node) uint32) error {
+func writeU32Array(outDir, name string, nodes []triebuild.Node, getter func(triebuild.Node) uint32) (int64, error) {
 	path := filepath.Join(outDir, name)
 	writer, err := format.NewArrayWriter(path, 4)
 	if err != nil {
-		return fmt.Errorf("create writer: %w", err)
+		return 0, fmt.Errorf("create writer: %w", err)
 	}
 	for i, node := range nodes {
 		if err := writer.WriteU32(getter(node)); err != nil {
 			writer.Close()
-			return fmt.Errorf("write node %d: %w", i, err)
+			return 0, fmt.Errorf("write node %d: %w", i, err)
 		}
 	}
 	if err := writer.Close(); err != nil {
-		return fmt.Errorf("close writer: %w", err)
+		return 0, fmt.Errorf("close writer: %w", err)
 	}
-	return nil
+	// Calculate bytes written: header (16 bytes) + data (4 bytes per node)
+	bytesWritten := int64(16 + len(nodes)*4)
+	return bytesWritten, nil
 }
 
-func writeDepthIndex(outDir string, result *triebuild.Result) error {
-	log := logging.WithPhase("write_index")
-	start := time.Now()
-
-	log.Info().Int("node_count", len(result.Nodes)).Msg("building depth index")
-
+func writeDepthIndex(outDir string, result *triebuild.Result) (int64, error) {
 	builder := format.NewDepthIndexBuilder()
 
 	for _, node := range result.Nodes {
@@ -265,24 +279,15 @@ func writeDepthIndex(outDir string, result *triebuild.Result) error {
 	}
 
 	if err := builder.Build(outDir); err != nil {
-		return fmt.Errorf("build depth index: %w", err)
+		return 0, fmt.Errorf("build depth index: %w", err)
 	}
 
-	elapsed := time.Since(start)
-	event := log.Info().Dur("elapsed", elapsed)
-	if logging.IsPrettyMode() {
-		event = event.Str("elapsed_h", humanfmt.Duration(elapsed))
-	}
-	event.Msg("depth index complete")
-	return nil
+	// Estimate bytes: header + depth entries
+	bytesWritten := int64(16 + len(result.Nodes)*4)
+	return bytesWritten, nil
 }
 
-func writeMPHF(outDir string, result *triebuild.Result) error {
-	log := logging.WithPhase("build_mphf")
-	start := time.Now()
-
-	log.Info().Int("key_count", len(result.Nodes)).Msg("building MPHF")
-
+func writeMPHF(outDir string, result *triebuild.Result) (int64, error) {
 	builder := format.NewMPHFBuilder()
 
 	for _, node := range result.Nodes {
@@ -290,53 +295,49 @@ func writeMPHF(outDir string, result *triebuild.Result) error {
 	}
 
 	if err := builder.Build(outDir); err != nil {
-		return fmt.Errorf("build MPHF: %w", err)
+		return 0, fmt.Errorf("build MPHF: %w", err)
 	}
 
-	elapsed := time.Since(start)
-	event := log.Info().
-		Int("key_count", builder.Count()).
-		Dur("elapsed", elapsed)
-	if logging.IsPrettyMode() {
-		event = event.
-			Str("key_count_h", humanfmt.Count(int64(builder.Count()))).
-			Str("elapsed_h", humanfmt.Duration(elapsed))
-	}
-	event.Msg("MPHF build complete")
-	return nil
+	// Get file size for bytes written
+	bytesWritten, _ := getFileSize(filepath.Join(outDir, "mphf.bin"))
+	// Also add keys file size
+	keysSize, _ := getFileSize(filepath.Join(outDir, "mphf_keys.bin"))
+	bytesWritten += keysSize
+
+	return bytesWritten, nil
 }
 
-func writeTierStats(outDir string, result *triebuild.Result) error {
-	log := logging.WithPhase("tiers_build")
-	start := time.Now()
-
+func writeTierStats(outDir string, result *triebuild.Result) (int64, error) {
 	if !result.TrackTiers || len(result.PresentTiers) == 0 {
-		log.Info().Msg("no tier data to write")
-		return nil
+		return 0, nil
 	}
-
-	log.Info().
-		Int("tier_count", len(result.PresentTiers)).
-		Msg("writing tier statistics")
 
 	tierWriter, err := format.NewTierStatsWriter(outDir)
 	if err != nil {
-		return fmt.Errorf("create tier stats writer: %w", err)
+		return 0, fmt.Errorf("create tier stats writer: %w", err)
 	}
 	if err := tierWriter.Write(result); err != nil {
-		return err
+		return 0, err
 	}
 
-	elapsed := time.Since(start)
-	event := log.Info().
-		Int("tiers_written", len(result.PresentTiers)).
-		Dur("elapsed", elapsed)
-	if logging.IsPrettyMode() {
-		event = event.Str("elapsed_h", humanfmt.Duration(elapsed))
+	// Sum up all tier stats file sizes
+	var bytesWritten int64
+	for _, tier := range result.PresentTiers {
+		countSize, _ := getFileSize(filepath.Join(outDir, fmt.Sprintf("tier_%d_count.u64", tier)))
+		bytesSize, _ := getFileSize(filepath.Join(outDir, fmt.Sprintf("tier_%d_bytes.u64", tier)))
+		bytesWritten += countSize + bytesSize
 	}
-	event.Msg("tier statistics complete")
 
-	return nil
+	return bytesWritten, nil
+}
+
+// getFileSize returns the size of a file in bytes.
+func getFileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
 }
 
 // indexValid checks if a complete index exists and is valid by reading the manifest
