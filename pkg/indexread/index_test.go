@@ -8,6 +8,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/indexbuild"
 )
 
@@ -513,6 +514,71 @@ func TestLargeDataset(t *testing.T) {
 // Helper to generate unique prefix strings
 func prefixFromInt(i int) string {
 	return string('a'+byte(i%26)) + string('a'+byte(i/26%26)) + "/"
+}
+
+func TestManifestCreatedAndVerifiable(t *testing.T) {
+	tmpDir := t.TempDir()
+	outDir := filepath.Join(tmpDir, "index")
+	sortDir := filepath.Join(tmpDir, "sort")
+	os.MkdirAll(sortDir, 0755)
+
+	csv := `Key,Size
+a/file.txt,100
+b/file.txt,200
+`
+	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
+
+	cfg := indexbuild.Config{
+		OutDir:    outDir,
+		TmpDir:    sortDir,
+		ChunkSize: 100,
+	}
+
+	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	// Check manifest exists
+	manifestPath := filepath.Join(outDir, "manifest.json")
+	if _, err := os.Stat(manifestPath); err != nil {
+		t.Fatalf("manifest.json not found: %v", err)
+	}
+
+	// Read manifest
+	manifest, err := format.ReadManifest(outDir)
+	if err != nil {
+		t.Fatalf("ReadManifest failed: %v", err)
+	}
+
+	// Verify manifest metadata
+	if manifest.Version != format.ManifestVersion {
+		t.Errorf("Version = %d, want %d", manifest.Version, format.ManifestVersion)
+	}
+	if manifest.NodeCount != 3 { // root, a/, b/
+		t.Errorf("NodeCount = %d, want 3", manifest.NodeCount)
+	}
+	if manifest.MaxDepth != 1 {
+		t.Errorf("MaxDepth = %d, want 1", manifest.MaxDepth)
+	}
+
+	// Verify all files have checksums
+	expectedFiles := []string{
+		"subtree_end.u64",
+		"depth.u32",
+		"object_count.u64",
+		"total_bytes.u64",
+		"mph.bin",
+	}
+	for _, name := range expectedFiles {
+		if _, ok := manifest.Files[name]; !ok {
+			t.Errorf("File %q not in manifest", name)
+		}
+	}
+
+	// Verify manifest (checksums match)
+	if err := format.VerifyManifest(outDir, manifest); err != nil {
+		t.Errorf("VerifyManifest failed: %v", err)
+	}
 }
 
 func TestAlphabeticalOrdering(t *testing.T) {

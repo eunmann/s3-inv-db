@@ -106,12 +106,29 @@ func Build(ctx context.Context, cfg Config, inventoryFiles []string) error {
 		return fmt.Errorf("write MPHF: %w", err)
 	}
 
-	// Step 6: Atomic move to final location
+	// Step 6: Write manifest with checksums
+	if err := format.WriteManifest(tmpOutDir, uint64(len(result.Nodes)), result.MaxDepth); err != nil {
+		return fmt.Errorf("write manifest: %w", err)
+	}
+
+	// Step 7: Sync directory to ensure all files are persisted
+	if err := format.SyncDir(tmpOutDir); err != nil {
+		return fmt.Errorf("sync output dir: %w", err)
+	}
+
+	// Step 8: Atomic move to final location
 	if err := os.RemoveAll(cfg.OutDir); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove old output dir: %w", err)
 	}
 	if err := os.Rename(tmpOutDir, cfg.OutDir); err != nil {
 		return fmt.Errorf("rename output dir: %w", err)
+	}
+
+	// Final sync of parent directory to persist the rename
+	parentDir := filepath.Dir(cfg.OutDir)
+	if err := format.SyncDir(parentDir); err != nil {
+		// Non-fatal: rename completed, just couldn't sync parent
+		// This is best-effort durability
 	}
 
 	return nil
