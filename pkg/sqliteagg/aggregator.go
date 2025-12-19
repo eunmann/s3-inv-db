@@ -39,6 +39,19 @@ func DefaultConfig(dbPath string) Config {
 	}
 }
 
+// prefixDelta accumulates count and byte deltas for a single prefix.
+type prefixDelta struct {
+	depth      int
+	totalCount uint64
+	totalBytes uint64
+	tierCounts [tiers.NumTiers]uint64
+	tierBytes  [tiers.NumTiers]uint64
+}
+
+// DeltaFlushThreshold is the number of pending deltas before automatic flush.
+// This balances memory usage vs SQLite call frequency.
+const DeltaFlushThreshold = 50000
+
 // Aggregator aggregates S3 inventory prefixes into a SQLite database.
 type Aggregator struct {
 	db          *sql.DB
@@ -51,6 +64,9 @@ type Aggregator struct {
 
 	// Current transaction
 	tx *sql.Tx
+
+	// In-memory delta accumulation (reduces SQLite calls by ~10x)
+	pendingDeltas map[string]*prefixDelta
 
 	// writeMu serializes write transactions for parallel streaming.
 	// Multiple goroutines can read (ChunkDone), but writes are serialized.
@@ -192,6 +208,9 @@ func (a *Aggregator) BeginChunk() error {
 	}
 	a.tx = tx
 
+	// Initialize in-memory delta accumulation
+	a.pendingDeltas = make(map[string]*prefixDelta)
+
 	// Prepare upsert statement for prefix_stats
 	upsertSQL := buildUpsertSQL()
 	a.upsertStmt, err = tx.Prepare(upsertSQL)
@@ -240,23 +259,28 @@ func buildUpsertSQL() string {
 
 // AddObject adds an object's stats to all its prefix ancestors.
 // This should be called for each object in the inventory.
+// Deltas are accumulated in memory and flushed to SQLite when threshold is exceeded.
 func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) error {
 	if a.tx == nil {
 		return fmt.Errorf("no transaction in progress")
 	}
 
-	// Extract all prefix ancestors
-	prefixes := extractPrefixes(key)
+	// Accumulate root prefix (empty string)
+	a.accumulateDelta("", 0, size, tierID)
 
-	// Add the root prefix (empty string)
-	if err := a.addPrefix("", 0, size, tierID); err != nil {
-		return err
+	// Accumulate each directory prefix
+	depth := 1
+	for i := 0; i < len(key); i++ {
+		if key[i] == '/' {
+			prefix := key[:i+1]
+			a.accumulateDelta(prefix, depth, size, tierID)
+			depth++
+		}
 	}
 
-	// Add each directory prefix
-	for i, prefix := range prefixes {
-		depth := i + 1
-		if err := a.addPrefix(prefix, depth, size, tierID); err != nil {
+	// Flush if we've accumulated too many unique prefixes
+	if len(a.pendingDeltas) >= DeltaFlushThreshold {
+		if err := a.flushPendingDeltas(); err != nil {
 			return err
 		}
 	}
@@ -264,23 +288,46 @@ func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) error {
 	return nil
 }
 
-func (a *Aggregator) addPrefix(prefix string, depth int, size uint64, tierID tiers.ID) error {
-	// Build arguments: prefix, depth, total_count, total_bytes, t0_count, t0_bytes, ...
-	args := make([]interface{}, 0, 4+int(tiers.NumTiers)*2)
-	args = append(args, prefix, depth, 1, size)
+// accumulateDelta adds a delta to the in-memory accumulator.
+func (a *Aggregator) accumulateDelta(prefix string, depth int, size uint64, tierID tiers.ID) {
+	delta, ok := a.pendingDeltas[prefix]
+	if !ok {
+		delta = &prefixDelta{depth: depth}
+		a.pendingDeltas[prefix] = delta
+	}
+	delta.totalCount++
+	delta.totalBytes += size
+	delta.tierCounts[tierID]++
+	delta.tierBytes[tierID] += size
+}
 
-	for i := range tiers.NumTiers {
-		if i == tierID {
-			args = append(args, 1, size)
-		} else {
-			args = append(args, 0, 0)
+// flushPendingDeltas writes accumulated deltas to SQLite.
+func (a *Aggregator) flushPendingDeltas() error {
+	if len(a.pendingDeltas) == 0 {
+		return nil
+	}
+
+	// Pre-allocate args slice (reused for each prefix)
+	args := make([]interface{}, 4+int(tiers.NumTiers)*2)
+
+	for prefix, delta := range a.pendingDeltas {
+		args[0] = prefix
+		args[1] = delta.depth
+		args[2] = delta.totalCount
+		args[3] = delta.totalBytes
+
+		for i := range tiers.NumTiers {
+			args[4+i*2] = delta.tierCounts[i]
+			args[4+i*2+1] = delta.tierBytes[i]
+		}
+
+		if _, err := a.upsertStmt.Exec(args...); err != nil {
+			return fmt.Errorf("upsert prefix %q: %w", prefix, err)
 		}
 	}
 
-	_, err := a.upsertStmt.Exec(args...)
-	if err != nil {
-		return fmt.Errorf("upsert prefix %q: %w", prefix, err)
-	}
+	// Clear the map by creating a new one (faster than deleting keys)
+	a.pendingDeltas = make(map[string]*prefixDelta)
 	return nil
 }
 
@@ -312,10 +359,17 @@ func (a *Aggregator) MarkChunkDone(chunkID string) error {
 }
 
 // Commit commits the current transaction.
+// Flushes any remaining pending deltas before committing.
 func (a *Aggregator) Commit() error {
 	if a.tx == nil {
 		return fmt.Errorf("no transaction in progress")
 	}
+
+	// Flush any remaining pending deltas
+	if err := a.flushPendingDeltas(); err != nil {
+		return fmt.Errorf("flush pending deltas: %w", err)
+	}
+	a.pendingDeltas = nil
 
 	// Close prepared statements (errors intentionally ignored - best effort cleanup)
 	if a.upsertStmt != nil {
@@ -336,10 +390,14 @@ func (a *Aggregator) Commit() error {
 }
 
 // Rollback rolls back the current transaction.
+// Discards any pending in-memory deltas.
 func (a *Aggregator) Rollback() error {
 	if a.tx == nil {
 		return nil
 	}
+
+	// Discard pending deltas
+	a.pendingDeltas = nil
 
 	// Close prepared statements (errors intentionally ignored - best effort cleanup)
 	if a.upsertStmt != nil {
