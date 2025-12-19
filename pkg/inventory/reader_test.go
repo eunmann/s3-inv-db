@@ -360,3 +360,74 @@ func TestClose_NilClosers(t *testing.T) {
 		t.Errorf("Close on empty reader failed: %v", err)
 	}
 }
+
+func TestOpenFileWithSchema(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "test.csv")
+
+	// AWS S3 inventory CSV files have no header
+	content := "my-bucket,a/b/c.txt,1024,2024-01-01\nmy-bucket,d/e.txt,2048,2024-01-02\n"
+	if err := os.WriteFile(csvPath, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	// Key is column 1, Size is column 2
+	r, err := OpenFileWithSchema(csvPath, 1, 2)
+	if err != nil {
+		t.Fatalf("OpenFileWithSchema failed: %v", err)
+	}
+	defer r.Close()
+
+	rec, err := r.Read()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if rec.Key != "a/b/c.txt" || rec.Size != 1024 {
+		t.Errorf("got %+v, want {Key:a/b/c.txt Size:1024}", rec)
+	}
+
+	rec, err = r.Read()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if rec.Key != "d/e.txt" || rec.Size != 2048 {
+		t.Errorf("got %+v, want {Key:d/e.txt Size:2048}", rec)
+	}
+
+	_, err = r.Read()
+	if !errors.Is(err, io.EOF) {
+		t.Errorf("expected EOF, got %v", err)
+	}
+}
+
+func TestOpenFileWithSchema_CSVGZ(t *testing.T) {
+	dir := t.TempDir()
+	gzPath := filepath.Join(dir, "test.csv.gz")
+
+	// AWS S3 inventory CSV files have no header
+	content := "my-bucket,a/b.txt,100\nmy-bucket,c/d.txt,200\n"
+
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	_, _ = gzw.Write([]byte(content))
+	gzw.Close()
+
+	if err := os.WriteFile(gzPath, buf.Bytes(), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	// Key is column 1, Size is column 2
+	r, err := OpenFileWithSchema(gzPath, 1, 2)
+	if err != nil {
+		t.Fatalf("OpenFileWithSchema failed: %v", err)
+	}
+	defer r.Close()
+
+	rec, err := r.Read()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if rec.Key != "a/b.txt" || rec.Size != 100 {
+		t.Errorf("got %+v, want {Key:a/b.txt Size:100}", rec)
+	}
+}

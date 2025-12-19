@@ -128,6 +128,43 @@ func NewReader(r io.Reader, keyCol, sizeCol int) *CSVReader {
 	}
 }
 
+// OpenFileWithSchema opens a CSV or CSV.GZ file using pre-known column indices.
+// This is used for AWS S3 inventory files which have no header row.
+func OpenFileWithSchema(path string, keyCol, sizeCol int) (*CSVReader, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open inventory file: %w", err)
+	}
+
+	var reader io.Reader = bufio.NewReader(f)
+	var closers []io.Closer
+	closers = append(closers, f)
+
+	// Check for gzip compression by extension
+	if strings.HasSuffix(strings.ToLower(path), ".gz") {
+		gzr, err := gzip.NewReader(reader)
+		if err != nil {
+			f.Close()
+			return nil, fmt.Errorf("create gzip reader: %w", err)
+		}
+		closers = append(closers, gzr)
+		reader = gzr
+	}
+
+	csvr := csv.NewReader(reader)
+	csvr.ReuseRecord = true
+	csvr.FieldsPerRecord = -1
+	csvr.LazyQuotes = true
+
+	return &CSVReader{
+		file:      f,
+		csvReader: csvr,
+		keyCol:    keyCol,
+		sizeCol:   sizeCol,
+		closers:   closers,
+	}, nil
+}
+
 // Read reads the next record. Returns io.EOF when done.
 func (r *CSVReader) Read() (Record, error) {
 	for {
