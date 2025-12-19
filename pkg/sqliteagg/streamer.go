@@ -105,12 +105,15 @@ func StreamFromS3(ctx context.Context, client *s3fetch.Client, cfg StreamConfig)
 	startTime := time.Now()
 	lastLogTime := time.Now()
 
+	// Create progress tracker for ETA calculation
+	progress := logging.NewProgressTracker("aggregate", int64(result.TotalChunks), log)
+
 	log.Info().
 		Int("total_chunks", result.TotalChunks).
 		Str("source_bucket", manifest.SourceBucket).
 		Msg("processing inventory chunks")
 
-	for i, file := range manifest.Files {
+	for _, file := range manifest.Files {
 		if ctx.Err() != nil {
 			return result, ctx.Err()
 		}
@@ -124,6 +127,7 @@ func StreamFromS3(ctx context.Context, client *s3fetch.Client, cfg StreamConfig)
 		}
 		if done {
 			result.ChunksSkipped++
+			progress.RecordSkip()
 			continue
 		}
 
@@ -136,17 +140,35 @@ func StreamFromS3(ctx context.Context, client *s3fetch.Client, cfg StreamConfig)
 		result.ChunksProcessed++
 		result.ObjectsProcessed += chunkResult.objects
 		result.BytesProcessed += chunkResult.bytes
+		progress.RecordCompletion(chunkResult.duration)
 
-		// Log progress every 5 seconds or every chunk
+		// Log chunk completion
+		logging.ChunkComplete(log, "aggregate", chunkResult.duration).
+			Str("chunk_id", chunkID).
+			Count("objects", chunkResult.objects).
+			Bytes("bytes", chunkResult.bytes).
+			ProgressFromTracker(progress).
+			Throughput(chunkResult.bytes).
+			Log("chunk processed")
+
+		// Log overall progress every 5 seconds
 		if time.Since(lastLogTime) >= 5*time.Second {
 			elapsed := time.Since(startTime)
 			event := log.Info().
+				Str("event", "progress").
 				Int("chunks_done", result.ChunksProcessed+result.ChunksSkipped).
 				Int("chunks_total", result.TotalChunks).
 				Int("chunks_skipped", result.ChunksSkipped).
 				Int64("objects_processed", result.ObjectsProcessed).
 				Int64("bytes_processed", result.BytesProcessed).
+				Float64("progress_pct", progress.ProgressPct()).
 				Dur("elapsed", elapsed)
+			if eta := progress.ETA(); eta > 0 {
+				event = event.Dur("eta", eta)
+				if logging.IsPrettyMode() {
+					event = event.Str("eta_h", humanfmt.Duration(eta))
+				}
+			}
 			if logging.IsPrettyMode() {
 				event = event.
 					Str("objects_h", humanfmt.Count(result.ObjectsProcessed)).
@@ -157,36 +179,24 @@ func StreamFromS3(ctx context.Context, client *s3fetch.Client, cfg StreamConfig)
 			event.Msg("aggregation progress")
 			lastLogTime = time.Now()
 		}
-
-		log.Debug().
-			Str("chunk", file.Key).
-			Int("chunk_index", i+1).
-			Int64("objects", chunkResult.objects).
-			Msg("processed chunk")
 	}
 
 	elapsed := time.Since(startTime)
-	event := log.Info().
+	logging.PhaseComplete(log, "aggregate", elapsed).
 		Int("chunks_processed", result.ChunksProcessed).
 		Int("chunks_skipped", result.ChunksSkipped).
-		Int64("objects_processed", result.ObjectsProcessed).
-		Int64("bytes_processed", result.BytesProcessed).
-		Dur("elapsed", elapsed)
-	if logging.IsPrettyMode() {
-		event = event.
-			Str("objects_h", humanfmt.Count(result.ObjectsProcessed)).
-			Str("bytes_h", humanfmt.Bytes(result.BytesProcessed)).
-			Str("elapsed_h", humanfmt.Duration(elapsed)).
-			Str("throughput_h", humanfmt.Throughput(result.BytesProcessed, elapsed))
-	}
-	event.Msg("streaming aggregation complete")
+		Count("objects_processed", result.ObjectsProcessed).
+		Bytes("bytes_processed", result.BytesProcessed).
+		Throughput(result.BytesProcessed).
+		Log("streaming aggregation complete")
 
 	return result, nil
 }
 
 type chunkResult struct {
-	objects int64
-	bytes   int64
+	objects  int64
+	bytes    int64
+	duration time.Duration
 }
 
 func processChunk(
@@ -196,6 +206,8 @@ func processChunk(
 	bucket, key string,
 	keyCol, sizeCol, storageCol, accessTierCol int,
 ) (*chunkResult, error) {
+	chunkStart := time.Now()
+
 	// Stream the chunk from S3
 	body, err := client.StreamObject(ctx, bucket, key)
 	if err != nil {
@@ -286,6 +298,7 @@ func processChunk(
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 
+	result.duration = time.Since(chunkStart)
 	return result, nil
 }
 

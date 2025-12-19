@@ -73,6 +73,8 @@ type Pipeline struct {
 	chunksProcessed  atomic.Int64
 	chunksSkipped    atomic.Int64
 	prefixesWritten  atomic.Int64
+	batchesWritten   atomic.Int64
+	totalChunks      int64
 
 	// Error tracking (hasErr provides race-free early termination check)
 	hasErr       atomic.Bool
@@ -149,6 +151,7 @@ func (p *Pipeline) Run(ctx context.Context) (*StreamResult, error) {
 	}
 
 	totalChunks := len(manifest.Files)
+	p.totalChunks = int64(totalChunks)
 	p.log.Info().
 		Int("total_chunks", totalChunks).
 		Str("source_bucket", manifest.SourceBucket).
@@ -243,22 +246,15 @@ func (p *Pipeline) Run(ctx context.Context) (*StreamResult, error) {
 	objectsProcessed := p.objectsProcessed.Load()
 	prefixesWritten := p.prefixesWritten.Load()
 
-	event := p.log.Info().
+	logging.PhaseComplete(p.log, "pipeline", elapsed).
 		Int64("chunks_processed", p.chunksProcessed.Load()).
 		Int64("chunks_skipped", p.chunksSkipped.Load()).
-		Int64("objects_processed", objectsProcessed).
-		Int64("bytes_processed", bytesProcessed).
-		Int64("prefixes_written", prefixesWritten).
-		Dur("elapsed", elapsed)
-	if logging.IsPrettyMode() {
-		event = event.
-			Str("objects_h", humanfmt.Count(objectsProcessed)).
-			Str("bytes_h", humanfmt.Bytes(bytesProcessed)).
-			Str("prefixes_h", humanfmt.Count(prefixesWritten)).
-			Str("elapsed_h", humanfmt.Duration(elapsed)).
-			Str("throughput_h", humanfmt.Throughput(bytesProcessed, elapsed))
-	}
-	event.Msg("pipelined streaming aggregation complete")
+		Count("objects_processed", objectsProcessed).
+		Bytes("bytes_processed", bytesProcessed).
+		Count("prefixes_written", prefixesWritten).
+		Int64("batches_written", p.batchesWritten.Load()).
+		Throughput(bytesProcessed).
+		Log("pipelined streaming aggregation complete")
 
 	if p.hasErr.Load() && ctx.Err() == nil {
 		return nil, p.firstErr
@@ -436,11 +432,14 @@ func (p *Pipeline) parseWorker(ctx context.Context) {
 func (p *Pipeline) writerWorker(ctx context.Context) {
 	batch := make(map[string]*AggStats)
 	batchSize := 0
+	batchBytes := int64(0)
+	batchStart := time.Now()
 	pendingChunks := make(map[string]int) // chunkID -> pending end markers
 	chunkEnds := make(map[string]bool)    // chunks that have received end marker
 	timeout := time.Duration(p.opts.SQLiteWriteBatchTimeoutMs) * time.Millisecond
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	lastProgressLog := time.Now()
 
 	flushBatch := func() error {
 		if len(batch) == 0 {
@@ -455,22 +454,76 @@ func (p *Pipeline) writerWorker(ctx context.Context) {
 			}
 		}
 
+		batchDuration := time.Since(batchStart)
 		if err := p.writeBatch(batch, chunksToMark); err != nil {
 			return err
 		}
 
-		// Clear completed chunks
+		// Clear completed chunks and log chunk completions
 		for _, chunkID := range chunksToMark {
 			delete(pendingChunks, chunkID)
 			delete(chunkEnds, chunkID)
 			p.chunksProcessed.Add(1)
+
+			// Log chunk completion
+			chunksProcessed := p.chunksProcessed.Load()
+			chunksSkipped := p.chunksSkipped.Load()
+			total := p.totalChunks
+			pct := float64(chunksProcessed+chunksSkipped) * 100.0 / float64(total)
+
+			logging.ChunkComplete(p.log, "pipeline", batchDuration).
+				Str("chunk_id", chunkID).
+				Float64("progress_pct", pct).
+				Int64("chunks_done", chunksProcessed+chunksSkipped).
+				Int64("chunks_total", total).
+				Log("chunk committed to SQLite")
 		}
 
-		p.prefixesWritten.Add(int64(len(batch)))
+		prefixCount := int64(len(batch))
+		p.prefixesWritten.Add(prefixCount)
+		p.batchesWritten.Add(1)
+
+		// Log batch completion
+		logging.BatchComplete(p.log, "pipeline", batchDuration).
+			Count("prefixes", prefixCount).
+			Bytes("bytes", batchBytes).
+			Int("chunks_marked", len(chunksToMark)).
+			Int64("batch_num", p.batchesWritten.Load()).
+			Throughput(batchBytes).
+			Log("batch written to SQLite")
+
+		// Log overall progress periodically
+		if time.Since(lastProgressLog) >= 5*time.Second {
+			chunksProcessed := p.chunksProcessed.Load()
+			chunksSkipped := p.chunksSkipped.Load()
+			objectsProcessed := p.objectsProcessed.Load()
+			bytesProcessed := p.bytesProcessed.Load()
+			total := p.totalChunks
+			pct := float64(chunksProcessed+chunksSkipped) * 100.0 / float64(total)
+
+			event := p.log.Info().
+				Str("event", "progress").
+				Int64("chunks_done", chunksProcessed+chunksSkipped).
+				Int64("chunks_total", total).
+				Float64("progress_pct", pct).
+				Int64("objects_processed", objectsProcessed).
+				Int64("bytes_processed", bytesProcessed).
+				Int64("prefixes_written", p.prefixesWritten.Load()).
+				Int64("batches_written", p.batchesWritten.Load())
+			if logging.IsPrettyMode() {
+				event = event.
+					Str("objects_h", humanfmt.Count(objectsProcessed)).
+					Str("bytes_h", humanfmt.Bytes(bytesProcessed))
+			}
+			event.Msg("pipeline progress")
+			lastProgressLog = time.Now()
+		}
 
 		// Clear batch
 		clear(batch)
 		batchSize = 0
+		batchBytes = 0
+		batchStart = time.Now()
 
 		return nil
 	}
@@ -510,6 +563,7 @@ func (p *Pipeline) writerWorker(ctx context.Context) {
 			stats.TierCounts[delta.TierID]++
 			stats.TierBytes[delta.TierID] += int64(delta.Size)
 			batchSize++
+			batchBytes += int64(delta.Size)
 
 			// Flush if batch is full
 			if batchSize >= p.opts.SQLiteWriteBatchSize {

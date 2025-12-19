@@ -42,10 +42,11 @@ type PrefixDelta struct {
 
 // ChunkResult contains metrics for a processed chunk.
 type ChunkResult struct {
-	ChunkID string
-	Objects int64
-	Bytes   int64
-	Err     error
+	ChunkID  string
+	Objects  int64
+	Bytes    int64
+	Duration time.Duration
+	Err      error
 }
 
 // ParallelStreamer handles parallel streaming aggregation from S3.
@@ -69,6 +70,7 @@ type ParallelStreamer struct {
 	bytesProcessed   atomic.Int64
 	chunksProcessed  atomic.Int64
 	chunksSkipped    atomic.Int64
+	totalChunks      int64
 }
 
 // NewParallelStreamer creates a new parallel streamer.
@@ -137,12 +139,14 @@ func (ps *ParallelStreamer) Stream(ctx context.Context) (*StreamResult, error) {
 	}
 
 	totalChunks := len(manifest.Files)
+	ps.totalChunks = int64(totalChunks)
 	ps.log.Info().
 		Int("total_chunks", totalChunks).
 		Str("source_bucket", manifest.SourceBucket).
 		Msg("processing inventory chunks")
 
 	startTime := time.Now()
+	lastProgressLog := time.Now()
 
 	// Create chunk channel
 	chunksCh := make(chan ChunkTask, ps.opts.S3DownloadConcurrency*2)
@@ -212,31 +216,59 @@ func (ps *ParallelStreamer) Stream(ctx context.Context) (*StreamResult, error) {
 		ps.objectsProcessed.Add(result.Objects)
 		ps.bytesProcessed.Add(result.Bytes)
 
-		ps.log.Debug().
-			Str("chunk", result.ChunkID).
-			Int64("objects", result.Objects).
-			Int64("bytes", result.Bytes).
-			Msg("chunk processed")
+		// Log chunk completion
+		chunksProcessed := ps.chunksProcessed.Load()
+		chunksSkipped := ps.chunksSkipped.Load()
+		done := chunksProcessed + chunksSkipped
+		pct := float64(done) * 100.0 / float64(ps.totalChunks)
+
+		logging.ChunkComplete(ps.log, "parallel_stream", result.Duration).
+			Str("chunk_id", result.ChunkID).
+			Count("objects", result.Objects).
+			Bytes("bytes", result.Bytes).
+			Float64("progress_pct", pct).
+			Int64("chunks_done", done).
+			Int64("chunks_total", ps.totalChunks).
+			Throughput(result.Bytes).
+			Log("chunk processed")
+
+		// Log overall progress every 5 seconds
+		if time.Since(lastProgressLog) >= 5*time.Second {
+			elapsed := time.Since(startTime)
+			objectsProcessed := ps.objectsProcessed.Load()
+			bytesProcessed := ps.bytesProcessed.Load()
+
+			event := ps.log.Info().
+				Str("event", "progress").
+				Int64("chunks_done", done).
+				Int64("chunks_total", ps.totalChunks).
+				Float64("progress_pct", pct).
+				Int64("objects_processed", objectsProcessed).
+				Int64("bytes_processed", bytesProcessed).
+				Dur("elapsed", elapsed)
+			if logging.IsPrettyMode() {
+				event = event.
+					Str("objects_h", humanfmt.Count(objectsProcessed)).
+					Str("bytes_h", humanfmt.Bytes(bytesProcessed)).
+					Str("elapsed_h", humanfmt.Duration(elapsed)).
+					Str("throughput_h", humanfmt.Throughput(bytesProcessed, elapsed))
+			}
+			event.Msg("parallel streaming progress")
+			lastProgressLog = time.Now()
+		}
 	}
 
 	elapsed := time.Since(startTime)
 	bytesProcessed := ps.bytesProcessed.Load()
 	objectsProcessed := ps.objectsProcessed.Load()
 
-	event := ps.log.Info().
+	logging.PhaseComplete(ps.log, "parallel_stream", elapsed).
 		Int64("chunks_processed", ps.chunksProcessed.Load()).
 		Int64("chunks_skipped", ps.chunksSkipped.Load()).
-		Int64("objects_processed", objectsProcessed).
-		Int64("bytes_processed", bytesProcessed).
-		Dur("elapsed", elapsed)
-	if logging.IsPrettyMode() {
-		event = event.
-			Str("objects_h", humanfmt.Count(objectsProcessed)).
-			Str("bytes_h", humanfmt.Bytes(bytesProcessed)).
-			Str("elapsed_h", humanfmt.Duration(elapsed)).
-			Str("throughput_h", humanfmt.Throughput(bytesProcessed, elapsed))
-	}
-	event.Msg("parallel streaming aggregation complete")
+		Count("objects_processed", objectsProcessed).
+		Bytes("bytes_processed", bytesProcessed).
+		Throughput(bytesProcessed).
+		Log("parallel streaming aggregation complete")
 
 	if firstErr != nil && ctx.Err() == nil {
 		return nil, firstErr
@@ -267,6 +299,7 @@ func (ps *ParallelStreamer) downloadWorker(ctx context.Context, chunks <-chan Ch
 }
 
 func (ps *ParallelStreamer) processChunk(ctx context.Context, chunk ChunkTask) ChunkResult {
+	chunkStart := time.Now()
 	result := ChunkResult{ChunkID: chunk.ChunkID}
 
 	// Stream the chunk from S3
@@ -350,6 +383,7 @@ func (ps *ParallelStreamer) processChunk(ctx context.Context, chunk ChunkTask) C
 		return result
 	}
 
+	result.Duration = time.Since(chunkStart)
 	return result
 }
 
