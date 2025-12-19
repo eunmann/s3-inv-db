@@ -341,6 +341,251 @@ func TestFetcherCleanupKeepFiles(t *testing.T) {
 	}
 }
 
+func TestParseBucketIdentifier(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantBucket string
+		wantErr    bool
+	}{
+		{
+			name:       "plain bucket name",
+			input:      "my-bucket",
+			wantBucket: "my-bucket",
+		},
+		{
+			name:       "plain bucket name with dots",
+			input:      "my.bucket.name",
+			wantBucket: "my.bucket.name",
+		},
+		{
+			name:       "plain bucket name with numbers",
+			input:      "bucket-123",
+			wantBucket: "bucket-123",
+		},
+		{
+			name:       "s3 bucket ARN standard",
+			input:      "arn:aws:s3:::my-bucket",
+			wantBucket: "my-bucket",
+		},
+		{
+			name:       "s3 bucket ARN with dashes",
+			input:      "arn:aws:s3:::txg-s3-inventories",
+			wantBucket: "txg-s3-inventories",
+		},
+		{
+			name:       "s3 bucket ARN aws-cn partition",
+			input:      "arn:aws-cn:s3:::my-china-bucket",
+			wantBucket: "my-china-bucket",
+		},
+		{
+			name:       "s3 bucket ARN aws-us-gov partition",
+			input:      "arn:aws-us-gov:s3:::my-gov-bucket",
+			wantBucket: "my-gov-bucket",
+		},
+		{
+			name:    "empty string",
+			input:   "",
+			wantErr: true,
+		},
+		{
+			name:    "s3 URI instead of bucket name",
+			input:   "s3://my-bucket/key",
+			wantErr: true,
+		},
+		{
+			name:    "https URI instead of bucket name",
+			input:   "https://my-bucket.s3.amazonaws.com",
+			wantErr: true,
+		},
+		{
+			name:    "invalid ARN too few parts",
+			input:   "arn:aws:s3",
+			wantErr: true,
+		},
+		{
+			name:    "non-s3 ARN",
+			input:   "arn:aws:ec2:us-east-1:123456789012:instance/i-1234567890abcdef0",
+			wantErr: true,
+		},
+		{
+			name:    "ARN with empty bucket name",
+			input:   "arn:aws:s3:::",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bucket, err := ParseBucketIdentifier(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if bucket != tt.wantBucket {
+				t.Errorf("bucket = %q, want %q", bucket, tt.wantBucket)
+			}
+		})
+	}
+}
+
+func TestParseBucketIdentifier_RealWorldManifest(t *testing.T) {
+	// Test case that matches the actual error from the user's manifest
+	// The destinationBucket field in their manifest was "arn:aws:s3:::txg-s3-inventories"
+	bucket, err := ParseBucketIdentifier("arn:aws:s3:::txg-s3-inventories")
+	if err != nil {
+		t.Fatalf("failed to parse real-world ARN: %v", err)
+	}
+	if bucket != "txg-s3-inventories" {
+		t.Errorf("bucket = %q, want %q", bucket, "txg-s3-inventories")
+	}
+}
+
+func TestManifest_GetDestinationBucketName(t *testing.T) {
+	tests := []struct {
+		name       string
+		destBucket string
+		wantBucket string
+		wantErr    bool
+	}{
+		{
+			name:       "plain bucket name",
+			destBucket: "inventory-bucket",
+			wantBucket: "inventory-bucket",
+		},
+		{
+			name:       "ARN format",
+			destBucket: "arn:aws:s3:::inventory-bucket",
+			wantBucket: "inventory-bucket",
+		},
+		{
+			name:       "real world ARN from error report",
+			destBucket: "arn:aws:s3:::txg-s3-inventories",
+			wantBucket: "txg-s3-inventories",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Manifest{DestinationBucket: tt.destBucket}
+			bucket, err := m.GetDestinationBucketName()
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if bucket != tt.wantBucket {
+				t.Errorf("bucket = %q, want %q", bucket, tt.wantBucket)
+			}
+		})
+	}
+}
+
+// TestManifestIntegration_ARNvsBucketName tests the full flow of parsing a manifest
+// with both ARN and plain bucket name formats.
+func TestManifestIntegration_ARNvsBucketName(t *testing.T) {
+	// This matches the real-world AWS S3 Inventory manifest structure
+	// Case 1: destinationBucket is an ARN (the bug case)
+	manifestWithARN := `{
+		"sourceBucket": "10x-rapture-prod",
+		"destinationBucket": "arn:aws:s3:::txg-s3-inventories",
+		"version": "2016-11-30",
+		"creationTimestamp": "1721876400000",
+		"fileFormat": "CSV",
+		"fileSchema": "Bucket, Key, Size, LastModifiedDate, ETag, StorageClass",
+		"files": [
+			{"key": "10x-rapture-prod/rapture-prod-weekly-inventory/data/2d9ba0b6-fb57-4e28-9315-70e4317a12b2.csv.gz", "size": 12345678, "MD5checksum": "abc123def456"}
+		]
+	}`
+
+	// Case 2: destinationBucket is a plain bucket name (no bug)
+	manifestWithPlainName := `{
+		"sourceBucket": "10x-rapture-prod",
+		"destinationBucket": "txg-s3-inventories",
+		"version": "2016-11-30",
+		"creationTimestamp": "1721876400000",
+		"fileFormat": "CSV",
+		"fileSchema": "Bucket, Key, Size, LastModifiedDate, ETag, StorageClass",
+		"files": [
+			{"key": "10x-rapture-prod/rapture-prod-weekly-inventory/data/2d9ba0b6-fb57-4e28-9315-70e4317a12b2.csv.gz", "size": 12345678, "MD5checksum": "abc123def456"}
+		]
+	}`
+
+	tests := []struct {
+		name         string
+		manifestJSON string
+		wantBucket   string
+		wantKey      string
+	}{
+		{
+			name:         "ARN destination bucket",
+			manifestJSON: manifestWithARN,
+			wantBucket:   "txg-s3-inventories",
+			wantKey:      "10x-rapture-prod/rapture-prod-weekly-inventory/data/2d9ba0b6-fb57-4e28-9315-70e4317a12b2.csv.gz",
+		},
+		{
+			name:         "plain bucket name destination",
+			manifestJSON: manifestWithPlainName,
+			wantBucket:   "txg-s3-inventories",
+			wantKey:      "10x-rapture-prod/rapture-prod-weekly-inventory/data/2d9ba0b6-fb57-4e28-9315-70e4317a12b2.csv.gz",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manifest, err := ParseManifest(strings.NewReader(tt.manifestJSON))
+			if err != nil {
+				t.Fatalf("failed to parse manifest: %v", err)
+			}
+
+			// Verify we can get the normalized bucket name
+			bucketName, err := manifest.GetDestinationBucketName()
+			if err != nil {
+				t.Fatalf("failed to get destination bucket name: %v", err)
+			}
+
+			if bucketName != tt.wantBucket {
+				t.Errorf("bucket = %q, want %q", bucketName, tt.wantBucket)
+			}
+
+			// Verify we have the correct file key
+			if len(manifest.Files) != 1 {
+				t.Fatalf("expected 1 file, got %d", len(manifest.Files))
+			}
+			if manifest.Files[0].Key != tt.wantKey {
+				t.Errorf("file key = %q, want %q", manifest.Files[0].Key, tt.wantKey)
+			}
+
+			// This is the critical assertion: the bucket name we would use for S3 API calls
+			// should NEVER be an ARN or look like "arn:aws:s3:::bucket"
+			if strings.HasPrefix(bucketName, "arn:") {
+				t.Errorf("bucket name should be normalized, but got ARN: %q", bucketName)
+			}
+
+			// And we should never construct URLs like "s3://arn:aws:s3:::bucket/key"
+			constructedURL := "s3://" + bucketName + "/" + manifest.Files[0].Key
+			if strings.Contains(constructedURL, "arn:aws:s3") {
+				t.Errorf("constructed URL should not contain ARN, but got: %q", constructedURL)
+			}
+
+			// The correct URL format
+			expectedURL := "s3://txg-s3-inventories/10x-rapture-prod/rapture-prod-weekly-inventory/data/2d9ba0b6-fb57-4e28-9315-70e4317a12b2.csv.gz"
+			if constructedURL != expectedURL {
+				t.Errorf("URL = %q, want %q", constructedURL, expectedURL)
+			}
+		})
+	}
+}
+
 func TestFetcherCleanupRemovesFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 	testDir := tmpDir + "/downloads"

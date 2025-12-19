@@ -105,6 +105,12 @@ func (f *Fetcher) Fetch(ctx context.Context) (*FetchResult, error) {
 }
 
 func (f *Fetcher) downloadFiles(ctx context.Context, manifest *Manifest) ([]string, error) {
+	// Parse the destination bucket - it may be a plain bucket name or an ARN
+	bucketName, err := manifest.GetDestinationBucketName()
+	if err != nil {
+		return nil, fmt.Errorf("parse destination bucket %q: %w", manifest.DestinationBucket, err)
+	}
+
 	localFiles := make([]string, len(manifest.Files))
 	var mu sync.Mutex
 
@@ -116,8 +122,8 @@ func (f *Fetcher) downloadFiles(ctx context.Context, manifest *Manifest) ([]stri
 			// Generate local filename
 			localPath := filepath.Join(f.cfg.DownloadDir, sanitizeFilename(file.Key))
 
-			// Download file
-			if err := f.client.DownloadFile(ctx, manifest.DestinationBucket, file.Key, localPath); err != nil {
+			// Download file using the normalized bucket name
+			if err := f.client.DownloadFile(ctx, bucketName, file.Key, localPath); err != nil {
 				return fmt.Errorf("download %s: %w", file.Key, err)
 			}
 
