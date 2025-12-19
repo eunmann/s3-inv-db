@@ -65,11 +65,12 @@ type ParallelStreamer struct {
 	accessTierCol int
 	destBucket    string
 
-	// Metrics
+	// Progress tracker for chunk completion (updated only after commit)
+	progress *logging.ProgressTracker
+
+	// Metrics (only updated AFTER commit)
 	objectsProcessed atomic.Int64
 	bytesProcessed   atomic.Int64
-	chunksProcessed  atomic.Int64
-	chunksSkipped    atomic.Int64
 	totalChunks      int64
 }
 
@@ -140,6 +141,10 @@ func (ps *ParallelStreamer) Stream(ctx context.Context) (*StreamResult, error) {
 
 	totalChunks := len(manifest.Files)
 	ps.totalChunks = int64(totalChunks)
+
+	// Initialize progress tracker
+	ps.progress = logging.NewProgressTracker("parallel_stream", int64(totalChunks), ps.log)
+
 	ps.log.Info().
 		Int("total_chunks", totalChunks).
 		Str("source_bucket", manifest.SourceBucket).
@@ -169,7 +174,7 @@ func (ps *ParallelStreamer) Stream(ctx context.Context) (*StreamResult, error) {
 				continue
 			}
 			if done {
-				ps.chunksSkipped.Add(1)
+				ps.progress.RecordSkip()
 				continue
 			}
 
@@ -212,40 +217,39 @@ func (ps *ParallelStreamer) Stream(ctx context.Context) (*StreamResult, error) {
 			continue
 		}
 
-		ps.chunksProcessed.Add(1)
+		// Update metrics AFTER successful commit
 		ps.objectsProcessed.Add(result.Objects)
 		ps.bytesProcessed.Add(result.Bytes)
+		ps.progress.RecordCompletion(result.Duration)
 
-		// Log chunk completion
-		chunksProcessed := ps.chunksProcessed.Load()
-		chunksSkipped := ps.chunksSkipped.Load()
-		done := chunksProcessed + chunksSkipped
-		pct := float64(done) * 100.0 / float64(ps.totalChunks)
-
+		// Log chunk completion with accurate progress from tracker
 		logging.ChunkComplete(ps.log, "parallel_stream", result.Duration).
 			Str("chunk_id", result.ChunkID).
 			Count("objects", result.Objects).
 			Bytes("bytes", result.Bytes).
-			Float64("progress_pct", pct).
-			Int64("chunks_done", done).
-			Int64("chunks_total", ps.totalChunks).
+			ProgressFromTracker(ps.progress).
 			Throughput(result.Bytes).
-			Log("chunk processed")
+			Log("chunk committed to SQLite")
 
 		// Log overall progress every 5 seconds
 		if time.Since(lastProgressLog) >= 5*time.Second {
-			elapsed := time.Since(startTime)
+			elapsed := ps.progress.Elapsed()
 			objectsProcessed := ps.objectsProcessed.Load()
 			bytesProcessed := ps.bytesProcessed.Load()
 
 			event := ps.log.Info().
 				Str("event", "progress").
-				Int64("chunks_done", done).
-				Int64("chunks_total", ps.totalChunks).
-				Float64("progress_pct", pct).
+				Str("phase", "parallel_stream").
+				Float64("progress_pct", ps.progress.ProgressPct()).
 				Int64("objects_processed", objectsProcessed).
 				Int64("bytes_processed", bytesProcessed).
 				Dur("elapsed", elapsed)
+			if eta := ps.progress.ETA(); eta > 0 {
+				event = event.Dur("eta", eta)
+				if logging.IsPrettyMode() {
+					event = event.Str("eta_h", humanfmt.Duration(eta))
+				}
+			}
 			if logging.IsPrettyMode() {
 				event = event.
 					Str("objects_h", humanfmt.Count(objectsProcessed)).
@@ -261,10 +265,11 @@ func (ps *ParallelStreamer) Stream(ctx context.Context) (*StreamResult, error) {
 	elapsed := time.Since(startTime)
 	bytesProcessed := ps.bytesProcessed.Load()
 	objectsProcessed := ps.objectsProcessed.Load()
+	chunksCompleted, chunksSkipped, _ := ps.progress.Progress()
 
 	logging.PhaseComplete(ps.log, "parallel_stream", elapsed).
-		Int64("chunks_processed", ps.chunksProcessed.Load()).
-		Int64("chunks_skipped", ps.chunksSkipped.Load()).
+		Int64("chunks_processed", chunksCompleted).
+		Int64("chunks_skipped", chunksSkipped).
 		Count("objects_processed", objectsProcessed).
 		Bytes("bytes_processed", bytesProcessed).
 		Throughput(bytesProcessed).
@@ -275,11 +280,11 @@ func (ps *ParallelStreamer) Stream(ctx context.Context) (*StreamResult, error) {
 	}
 
 	return &StreamResult{
-		ChunksProcessed:  int(ps.chunksProcessed.Load()),
-		ChunksSkipped:    int(ps.chunksSkipped.Load()),
+		ChunksProcessed:  int(chunksCompleted),
+		ChunksSkipped:    int(chunksSkipped),
 		TotalChunks:      totalChunks,
-		ObjectsProcessed: ps.objectsProcessed.Load(),
-		BytesProcessed:   ps.bytesProcessed.Load(),
+		ObjectsProcessed: objectsProcessed,
+		BytesProcessed:   bytesProcessed,
 	}, nil
 }
 
@@ -288,6 +293,9 @@ func (ps *ParallelStreamer) downloadWorker(ctx context.Context, chunks <-chan Ch
 		if ctx.Err() != nil {
 			return
 		}
+
+		// Log chunk started
+		logging.ChunkStarted(ps.log, "parallel_stream", chunk.ChunkID, ps.progress.Completed(), ps.totalChunks)
 
 		result := ps.processChunk(ctx, chunk)
 		select {

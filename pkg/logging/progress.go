@@ -108,6 +108,16 @@ func (pt *ProgressTracker) Remaining() int64 {
 	return pt.total - pt.completed.Load() - pt.skipped.Load()
 }
 
+// Completed returns only the completed count (not skipped).
+func (pt *ProgressTracker) Completed() int64 {
+	return pt.completed.Load()
+}
+
+// Total returns the total count.
+func (pt *ProgressTracker) Total() int64 {
+	return pt.total
+}
+
 // CompletionEvent helps build consistent completion log events.
 type CompletionEvent struct {
 	log     zerolog.Logger
@@ -292,4 +302,15 @@ func BatchComplete(log zerolog.Logger, phase string, elapsed time.Duration) *Com
 // FileCreated logs a file creation completion event.
 func FileCreated(log zerolog.Logger, phase string, elapsed time.Duration) *CompletionEvent {
 	return NewCompletionEvent(log, "file_created", phase, elapsed)
+}
+
+// ChunkStarted logs a chunk start event (no duration, no progress_pct).
+func ChunkStarted(log zerolog.Logger, phase string, chunkID string, chunksComplete, chunksTotal int64) {
+	log.Info().
+		Str("event", "chunk_started").
+		Str("phase", phase).
+		Str("chunk_id", chunkID).
+		Int64("chunks_complete", chunksComplete).
+		Int64("chunks_total", chunksTotal).
+		Msg("chunk started")
 }

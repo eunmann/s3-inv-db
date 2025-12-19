@@ -131,6 +131,9 @@ func StreamFromS3(ctx context.Context, client *s3fetch.Client, cfg StreamConfig)
 			continue
 		}
 
+		// Log chunk started
+		logging.ChunkStarted(log, "aggregate", chunkID, progress.Completed(), int64(result.TotalChunks))
+
 		// Process chunk
 		chunkResult, err := processChunk(ctx, client, agg, destBucket, file.Key, keyCol, sizeCol, storageCol, accessTierCol)
 		if err != nil {

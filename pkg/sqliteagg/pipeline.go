@@ -67,19 +67,30 @@ type Pipeline struct {
 	rowsCh   chan ParsedRow
 	deltasCh chan AggDelta
 
-	// Metrics
+	// Metrics (only updated AFTER commit)
 	objectsProcessed atomic.Int64
 	bytesProcessed   atomic.Int64
-	chunksProcessed  atomic.Int64
-	chunksSkipped    atomic.Int64
 	prefixesWritten  atomic.Int64
 	batchesWritten   atomic.Int64
 	totalChunks      int64
+
+	// Progress tracker for chunk completion (updated only after commit)
+	progress *logging.ProgressTracker
+
+	// Per-chunk tracking
+	chunkStartTimes sync.Map // chunkID -> time.Time
+	chunkMetrics    sync.Map // chunkID -> *chunkMetrics
 
 	// Error tracking (hasErr provides race-free early termination check)
 	hasErr       atomic.Bool
 	firstErr     error
 	firstErrOnce sync.Once
+}
+
+// chunkMetrics tracks metrics for a single chunk (accumulated during processing).
+type chunkMetrics struct {
+	objects int64
+	bytes   int64
 }
 
 // NewPipeline creates a new aggregation pipeline.
@@ -152,6 +163,10 @@ func (p *Pipeline) Run(ctx context.Context) (*StreamResult, error) {
 
 	totalChunks := len(manifest.Files)
 	p.totalChunks = int64(totalChunks)
+
+	// Initialize progress tracker
+	p.progress = logging.NewProgressTracker("pipeline", int64(totalChunks), p.log)
+
 	p.log.Info().
 		Int("total_chunks", totalChunks).
 		Str("source_bucket", manifest.SourceBucket).
@@ -185,7 +200,7 @@ func (p *Pipeline) Run(ctx context.Context) (*StreamResult, error) {
 				return
 			}
 			if done {
-				p.chunksSkipped.Add(1)
+				p.progress.RecordSkip()
 				continue
 			}
 
@@ -245,10 +260,11 @@ func (p *Pipeline) Run(ctx context.Context) (*StreamResult, error) {
 	bytesProcessed := p.bytesProcessed.Load()
 	objectsProcessed := p.objectsProcessed.Load()
 	prefixesWritten := p.prefixesWritten.Load()
+	chunksCompleted, chunksSkipped, _ := p.progress.Progress()
 
 	logging.PhaseComplete(p.log, "pipeline", elapsed).
-		Int64("chunks_processed", p.chunksProcessed.Load()).
-		Int64("chunks_skipped", p.chunksSkipped.Load()).
+		Int64("chunks_processed", chunksCompleted).
+		Int64("chunks_skipped", chunksSkipped).
 		Count("objects_processed", objectsProcessed).
 		Bytes("bytes_processed", bytesProcessed).
 		Count("prefixes_written", prefixesWritten).
@@ -261,11 +277,11 @@ func (p *Pipeline) Run(ctx context.Context) (*StreamResult, error) {
 	}
 
 	return &StreamResult{
-		ChunksProcessed:  int(p.chunksProcessed.Load()),
-		ChunksSkipped:    int(p.chunksSkipped.Load()),
+		ChunksProcessed:  int(chunksCompleted),
+		ChunksSkipped:    int(chunksSkipped),
 		TotalChunks:      totalChunks,
-		ObjectsProcessed: p.objectsProcessed.Load(),
-		BytesProcessed:   p.bytesProcessed.Load(),
+		ObjectsProcessed: objectsProcessed,
+		BytesProcessed:   bytesProcessed,
 	}, nil
 }
 
@@ -285,6 +301,12 @@ func (p *Pipeline) downloadWorker(ctx context.Context) {
 		if p.hasErr.Load() {
 			return
 		}
+
+		// Log chunk started and record start time
+		chunksComplete := p.progress.Completed()
+		logging.ChunkStarted(p.log, "pipeline", chunk.ChunkID, chunksComplete, p.totalChunks)
+		p.chunkStartTimes.Store(chunk.ChunkID, time.Now())
+		p.chunkMetrics.Store(chunk.ChunkID, &chunkMetrics{})
 
 		if err := p.streamChunk(ctx, chunk); err != nil {
 			p.setError(fmt.Errorf("stream chunk %s: %w", chunk.ChunkID, err))
@@ -360,8 +382,12 @@ func (p *Pipeline) streamChunk(ctx context.Context, chunk ChunkTask) error {
 			Size:    size,
 			TierID:  tierID,
 		}:
-			p.objectsProcessed.Add(1)
-			p.bytesProcessed.Add(int64(size))
+			// Accumulate per-chunk metrics (will be moved to totals on commit)
+			if m, ok := p.chunkMetrics.Load(chunk.ChunkID); ok {
+				metrics := m.(*chunkMetrics)
+				metrics.objects++
+				metrics.bytes += int64(size)
+			}
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -459,23 +485,37 @@ func (p *Pipeline) writerWorker(ctx context.Context) {
 			return err
 		}
 
-		// Clear completed chunks and log chunk completions
+		// Process completed chunks: update metrics, record completion, log
 		for _, chunkID := range chunksToMark {
 			delete(pendingChunks, chunkID)
 			delete(chunkEnds, chunkID)
-			p.chunksProcessed.Add(1)
 
-			// Log chunk completion
-			chunksProcessed := p.chunksProcessed.Load()
-			chunksSkipped := p.chunksSkipped.Load()
-			total := p.totalChunks
-			pct := float64(chunksProcessed+chunksSkipped) * 100.0 / float64(total)
+			// Get chunk start time for accurate duration
+			var chunkDuration time.Duration
+			if startVal, ok := p.chunkStartTimes.LoadAndDelete(chunkID); ok {
+				chunkDuration = time.Since(startVal.(time.Time))
+			}
 
-			logging.ChunkComplete(p.log, "pipeline", batchDuration).
+			// Get and clear chunk metrics, add to totals
+			var objects, bytes int64
+			if metricsVal, ok := p.chunkMetrics.LoadAndDelete(chunkID); ok {
+				m := metricsVal.(*chunkMetrics)
+				objects = m.objects
+				bytes = m.bytes
+				p.objectsProcessed.Add(objects)
+				p.bytesProcessed.Add(bytes)
+			}
+
+			// Record completion in progress tracker (updates chunks_complete)
+			p.progress.RecordCompletion(chunkDuration)
+
+			// Log chunk completion with accurate metrics
+			logging.ChunkComplete(p.log, "pipeline", chunkDuration).
 				Str("chunk_id", chunkID).
-				Float64("progress_pct", pct).
-				Int64("chunks_done", chunksProcessed+chunksSkipped).
-				Int64("chunks_total", total).
+				Count("objects", objects).
+				Bytes("bytes", bytes).
+				ProgressFromTracker(p.progress).
+				Throughput(bytes).
 				Log("chunk committed to SQLite")
 		}
 
@@ -483,37 +523,41 @@ func (p *Pipeline) writerWorker(ctx context.Context) {
 		p.prefixesWritten.Add(prefixCount)
 		p.batchesWritten.Add(1)
 
-		// Log batch completion
+		// Log batch completion at DEBUG level (not user-facing progress)
 		logging.BatchComplete(p.log, "pipeline", batchDuration).
 			Count("prefixes", prefixCount).
 			Bytes("bytes", batchBytes).
 			Int("chunks_marked", len(chunksToMark)).
 			Int64("batch_num", p.batchesWritten.Load()).
 			Throughput(batchBytes).
-			Log("batch written to SQLite")
+			LogDebug("batch written to SQLite")
 
-		// Log overall progress periodically
-		if time.Since(lastProgressLog) >= 5*time.Second {
-			chunksProcessed := p.chunksProcessed.Load()
-			chunksSkipped := p.chunksSkipped.Load()
+		// Log overall progress periodically (only when chunks complete)
+		if len(chunksToMark) > 0 && time.Since(lastProgressLog) >= 5*time.Second {
 			objectsProcessed := p.objectsProcessed.Load()
 			bytesProcessed := p.bytesProcessed.Load()
-			total := p.totalChunks
-			pct := float64(chunksProcessed+chunksSkipped) * 100.0 / float64(total)
+			elapsed := p.progress.Elapsed()
 
 			event := p.log.Info().
 				Str("event", "progress").
-				Int64("chunks_done", chunksProcessed+chunksSkipped).
-				Int64("chunks_total", total).
-				Float64("progress_pct", pct).
+				Str("phase", "pipeline").
+				Float64("progress_pct", p.progress.ProgressPct()).
 				Int64("objects_processed", objectsProcessed).
 				Int64("bytes_processed", bytesProcessed).
 				Int64("prefixes_written", p.prefixesWritten.Load()).
-				Int64("batches_written", p.batchesWritten.Load())
+				Dur("elapsed", elapsed)
+			if eta := p.progress.ETA(); eta > 0 {
+				event = event.Dur("eta", eta)
+				if logging.IsPrettyMode() {
+					event = event.Str("eta_h", humanfmt.Duration(eta))
+				}
+			}
 			if logging.IsPrettyMode() {
 				event = event.
 					Str("objects_h", humanfmt.Count(objectsProcessed)).
-					Str("bytes_h", humanfmt.Bytes(bytesProcessed))
+					Str("bytes_h", humanfmt.Bytes(bytesProcessed)).
+					Str("elapsed_h", humanfmt.Duration(elapsed)).
+					Str("throughput_h", humanfmt.Throughput(bytesProcessed, elapsed))
 			}
 			event.Msg("pipeline progress")
 			lastProgressLog = time.Now()

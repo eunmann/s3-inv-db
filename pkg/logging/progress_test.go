@@ -283,3 +283,172 @@ func TestCompletionEvent_LogDebug(t *testing.T) {
 		t.Errorf("expected debug level, got: %s", output)
 	}
 }
+
+func TestChunkStarted(t *testing.T) {
+	var buf bytes.Buffer
+	log := zerolog.New(&buf)
+	SetPrettyMode(false)
+
+	ChunkStarted(log, "aggregate", "chunk-001", 5, 100)
+
+	output := buf.String()
+
+	// Check required fields
+	if !strings.Contains(output, `"event":"chunk_started"`) {
+		t.Errorf("expected event field, got: %s", output)
+	}
+	if !strings.Contains(output, `"phase":"aggregate"`) {
+		t.Errorf("expected phase field, got: %s", output)
+	}
+	if !strings.Contains(output, `"chunk_id":"chunk-001"`) {
+		t.Errorf("expected chunk_id field, got: %s", output)
+	}
+	if !strings.Contains(output, `"chunks_complete":5`) {
+		t.Errorf("expected chunks_complete field, got: %s", output)
+	}
+	if !strings.Contains(output, `"chunks_total":100`) {
+		t.Errorf("expected chunks_total field, got: %s", output)
+	}
+	// chunk_started should NOT have progress_pct
+	if strings.Contains(output, `"progress_pct"`) {
+		t.Errorf("chunk_started should not have progress_pct, got: %s", output)
+	}
+}
+
+func TestProgressTracker_MultipleChunks(t *testing.T) {
+	var buf bytes.Buffer
+	log := zerolog.New(&buf)
+
+	pt := NewProgressTracker("test_phase", 10, log)
+
+	// Simulate processing multiple chunks
+	// Skip 2 chunks (already done)
+	pt.RecordSkip()
+	pt.RecordSkip()
+
+	// Process 3 chunks
+	pt.RecordCompletion(100 * time.Millisecond)
+	pt.RecordCompletion(120 * time.Millisecond)
+	pt.RecordCompletion(80 * time.Millisecond)
+
+	// Verify progress computation
+	completed, skipped, total := pt.Progress()
+	if completed != 3 {
+		t.Errorf("expected completed=3, got %d", completed)
+	}
+	if skipped != 2 {
+		t.Errorf("expected skipped=2, got %d", skipped)
+	}
+	if total != 10 {
+		t.Errorf("expected total=10, got %d", total)
+	}
+
+	// Progress should be (3 completed + 2 skipped) / 10 = 50%
+	pct := pt.ProgressPct()
+	if pct != 50.0 {
+		t.Errorf("expected progress 50%%, got %.1f%%", pct)
+	}
+
+	// Remaining should be 5
+	remaining := pt.Remaining()
+	if remaining != 5 {
+		t.Errorf("expected remaining=5, got %d", remaining)
+	}
+
+	// Completed() should return just the completed count
+	if pt.Completed() != 3 {
+		t.Errorf("expected Completed()=3, got %d", pt.Completed())
+	}
+
+	// Total() should return the total
+	if pt.Total() != 10 {
+		t.Errorf("expected Total()=10, got %d", pt.Total())
+	}
+}
+
+func TestProgressTracker_ChunkCompletedAfterCommit(t *testing.T) {
+	// This test verifies the pattern: only call RecordCompletion after commit
+	var buf bytes.Buffer
+	log := zerolog.New(&buf)
+	SetPrettyMode(false)
+
+	pt := NewProgressTracker("aggregate", 3, log)
+
+	// Simulate chunk 1: started -> processing -> committed
+	// (chunk_started is logged separately, not via ProgressTracker)
+	time.Sleep(10 * time.Millisecond) // simulate work
+	pt.RecordCompletion(10 * time.Millisecond)
+
+	// After first chunk: 1/3 = 33.33%
+	pct := pt.ProgressPct()
+	if pct < 33.0 || pct > 34.0 {
+		t.Errorf("expected ~33%% after 1 chunk, got %.2f%%", pct)
+	}
+
+	// Simulate chunk 2
+	time.Sleep(10 * time.Millisecond)
+	pt.RecordCompletion(10 * time.Millisecond)
+
+	// After second chunk: 2/3 = 66.67%
+	pct = pt.ProgressPct()
+	if pct < 66.0 || pct > 67.0 {
+		t.Errorf("expected ~67%% after 2 chunks, got %.2f%%", pct)
+	}
+
+	// Simulate chunk 3
+	time.Sleep(10 * time.Millisecond)
+	pt.RecordCompletion(10 * time.Millisecond)
+
+	// After third chunk: 3/3 = 100%
+	pct = pt.ProgressPct()
+	if pct != 100.0 {
+		t.Errorf("expected 100%% after all chunks, got %.2f%%", pct)
+	}
+}
+
+func TestCompletionEvent_OnlyAfterCommit(t *testing.T) {
+	// Verify that chunk_completed logs include correct fields
+	var buf bytes.Buffer
+	log := zerolog.New(&buf)
+	SetPrettyMode(false)
+
+	pt := NewProgressTracker("aggregate", 10, log)
+	pt.RecordCompletion(500 * time.Millisecond)
+
+	// Create chunk_completed event with tracker data
+	ce := ChunkComplete(log, "aggregate", 500*time.Millisecond)
+	ce.Str("chunk_id", "test-chunk").
+		Count("objects", 50000).
+		Bytes("bytes", 1073741824).
+		ProgressFromTracker(pt).
+		Throughput(1073741824).
+		Log("chunk committed to SQLite")
+
+	output := buf.String()
+
+	// Required fields for chunk_completed
+	if !strings.Contains(output, `"event":"chunk_completed"`) {
+		t.Errorf("expected event=chunk_completed, got: %s", output)
+	}
+	if !strings.Contains(output, `"chunk_id":"test-chunk"`) {
+		t.Errorf("expected chunk_id, got: %s", output)
+	}
+	if !strings.Contains(output, `"objects":50000`) {
+		t.Errorf("expected objects, got: %s", output)
+	}
+	if !strings.Contains(output, `"bytes":1073741824`) {
+		t.Errorf("expected bytes, got: %s", output)
+	}
+	if !strings.Contains(output, `"completed":1`) {
+		t.Errorf("expected completed=1, got: %s", output)
+	}
+	if !strings.Contains(output, `"total":10`) {
+		t.Errorf("expected total=10, got: %s", output)
+	}
+	if !strings.Contains(output, `"progress_pct":10`) {
+		t.Errorf("expected progress_pct=10, got: %s", output)
+	}
+	if !strings.Contains(output, `"duration_ms":500`) {
+		t.Errorf("expected duration_ms, got: %s", output)
+	}
+}
