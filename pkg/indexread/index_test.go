@@ -581,6 +581,237 @@ b/file.txt,200
 	}
 }
 
+func TestIndexCountAndMaxDepth(t *testing.T) {
+	tmpDir := t.TempDir()
+	outDir := filepath.Join(tmpDir, "index")
+	sortDir := filepath.Join(tmpDir, "sort")
+	os.MkdirAll(sortDir, 0755)
+
+	csv := `Key,Size
+a/b/c/file.txt,100
+x/y/file.txt,200
+`
+	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
+
+	cfg := indexbuild.Config{
+		OutDir:    outDir,
+		TmpDir:    sortDir,
+		ChunkSize: 100,
+	}
+
+	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	idx, err := Open(outDir)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer idx.Close()
+
+	// Count should be 6: "", "a/", "a/b/", "a/b/c/", "x/", "x/y/"
+	if idx.Count() != 6 {
+		t.Errorf("Count() = %d, want 6", idx.Count())
+	}
+
+	// MaxDepth should be 3 (a/b/c/)
+	if idx.MaxDepth() != 3 {
+		t.Errorf("MaxDepth() = %d, want 3", idx.MaxDepth())
+	}
+}
+
+func TestEmptyIterator(t *testing.T) {
+	tmpDir := t.TempDir()
+	outDir := filepath.Join(tmpDir, "index")
+	sortDir := filepath.Join(tmpDir, "sort")
+	os.MkdirAll(sortDir, 0755)
+
+	csv := `Key,Size
+a/file.txt,100
+`
+	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
+
+	cfg := indexbuild.Config{
+		OutDir:    outDir,
+		TmpDir:    sortDir,
+		ChunkSize: 100,
+	}
+
+	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	idx, err := Open(outDir)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer idx.Close()
+
+	// Query for descendants at depth 5 (doesn't exist)
+	rootPos, _ := idx.Lookup("")
+	it, err := idx.NewDescendantIterator(rootPos, 5)
+	if err != nil {
+		t.Fatalf("NewDescendantIterator failed: %v", err)
+	}
+
+	// Should return no results
+	count := 0
+	for it.Next() {
+		count++
+	}
+	if count != 0 {
+		t.Errorf("Expected 0 results at depth 5, got %d", count)
+	}
+
+	// Test iterator on invalid position
+	it2, err := idx.NewDescendantIterator(999999, 1)
+	if err != nil {
+		t.Fatalf("NewDescendantIterator failed: %v", err)
+	}
+	if it2.Next() {
+		t.Error("Expected empty iterator for invalid position")
+	}
+}
+
+func TestIteratorDepthMethod(t *testing.T) {
+	tmpDir := t.TempDir()
+	outDir := filepath.Join(tmpDir, "index")
+	sortDir := filepath.Join(tmpDir, "sort")
+	os.MkdirAll(sortDir, 0755)
+
+	csv := `Key,Size
+a/b/file.txt,100
+`
+	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
+
+	cfg := indexbuild.Config{
+		OutDir:    outDir,
+		TmpDir:    sortDir,
+		ChunkSize: 100,
+	}
+
+	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	idx, err := Open(outDir)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer idx.Close()
+
+	rootPos, _ := idx.Lookup("")
+	it, err := idx.NewDescendantIterator(rootPos, 2)
+	if err != nil {
+		t.Fatalf("NewDescendantIterator failed: %v", err)
+	}
+
+	if it.Next() {
+		// Depth should be 2 (root depth 0 + relative depth 2)
+		if it.Depth() != 2 {
+			t.Errorf("Depth() = %d, want 2", it.Depth())
+		}
+	}
+}
+
+func TestSingleNodeTrie(t *testing.T) {
+	tmpDir := t.TempDir()
+	outDir := filepath.Join(tmpDir, "index")
+	sortDir := filepath.Join(tmpDir, "sort")
+	os.MkdirAll(sortDir, 0755)
+
+	// Single file at root level (no prefix directories)
+	csv := `Key,Size
+file.txt,100
+`
+	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
+
+	cfg := indexbuild.Config{
+		OutDir:    outDir,
+		TmpDir:    sortDir,
+		ChunkSize: 100,
+	}
+
+	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	idx, err := Open(outDir)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer idx.Close()
+
+	// Only root node should exist
+	if idx.Count() != 1 {
+		t.Errorf("Count() = %d, want 1", idx.Count())
+	}
+
+	stats, ok := idx.StatsForPrefix("")
+	if !ok {
+		t.Fatal("root lookup failed")
+	}
+	if stats.ObjectCount != 1 {
+		t.Errorf("root count = %d, want 1", stats.ObjectCount)
+	}
+	if stats.TotalBytes != 100 {
+		t.Errorf("root bytes = %d, want 100", stats.TotalBytes)
+	}
+}
+
+func TestDeepPaths(t *testing.T) {
+	tmpDir := t.TempDir()
+	outDir := filepath.Join(tmpDir, "index")
+	sortDir := filepath.Join(tmpDir, "sort")
+	os.MkdirAll(sortDir, 0755)
+
+	// Very deep path
+	csv := `Key,Size
+a/b/c/d/e/f/g/h/i/j/file.txt,100
+`
+	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
+
+	cfg := indexbuild.Config{
+		OutDir:    outDir,
+		TmpDir:    sortDir,
+		ChunkSize: 100,
+	}
+
+	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	idx, err := Open(outDir)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer idx.Close()
+
+	// MaxDepth should be 10
+	if idx.MaxDepth() != 10 {
+		t.Errorf("MaxDepth() = %d, want 10", idx.MaxDepth())
+	}
+
+	// Check deepest prefix exists
+	stats, ok := idx.StatsForPrefix("a/b/c/d/e/f/g/h/i/j/")
+	if !ok {
+		t.Fatal("deep prefix lookup failed")
+	}
+	if stats.ObjectCount != 1 {
+		t.Errorf("deep prefix count = %d, want 1", stats.ObjectCount)
+	}
+
+	// Query descendants at depth 5 from root
+	rootPos, _ := idx.Lookup("")
+	desc, err := idx.DescendantsAtDepth(rootPos, 5)
+	if err != nil {
+		t.Fatalf("DescendantsAtDepth failed: %v", err)
+	}
+	if len(desc) != 1 {
+		t.Errorf("got %d descendants at depth 5, want 1", len(desc))
+	}
+}
+
 func TestAlphabeticalOrdering(t *testing.T) {
 	tmpDir := t.TempDir()
 	outDir := filepath.Join(tmpDir, "index")

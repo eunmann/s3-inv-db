@@ -1,7 +1,6 @@
 package format
 
 import (
-	"encoding/binary"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -368,30 +367,3 @@ func WritePrefixBlob(outDir string, prefixes []string) error {
 	return writer.Close()
 }
 
-// MPHFHeader is a small header for the MPHF binary file (for future use).
-type MPHFHeader struct {
-	Magic   uint32
-	Version uint32
-	Count   uint64
-}
-
-const mphfHeaderSize = 16
-
-func encodeMPHFHeader(h MPHFHeader) []byte {
-	buf := make([]byte, mphfHeaderSize)
-	binary.LittleEndian.PutUint32(buf[0:4], h.Magic)
-	binary.LittleEndian.PutUint32(buf[4:8], h.Version)
-	binary.LittleEndian.PutUint64(buf[8:16], h.Count)
-	return buf
-}
-
-func decodeMPHFHeader(buf []byte) (MPHFHeader, error) {
-	if len(buf) < mphfHeaderSize {
-		return MPHFHeader{}, ErrInvalidHeader
-	}
-	return MPHFHeader{
-		Magic:   binary.LittleEndian.Uint32(buf[0:4]),
-		Version: binary.LittleEndian.Uint32(buf[4:8]),
-		Count:   binary.LittleEndian.Uint64(buf[8:16]),
-	}, nil
-}

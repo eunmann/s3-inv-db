@@ -2,8 +2,6 @@
 package triebuild
 
 import (
-	"strings"
-
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 )
 
@@ -313,13 +311,3 @@ func (r *Result) GetDescendants(pos uint64) []Node {
 	return descendants
 }
 
-// CountPrefix counts how many prefix strings start with the given prefix.
-func countPrefix(prefixes []string, prefix string) int {
-	count := 0
-	for _, p := range prefixes {
-		if strings.HasPrefix(p, prefix) {
-			count++
-		}
-	}
-	return count
-}
