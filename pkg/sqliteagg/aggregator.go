@@ -32,15 +32,28 @@ type Config struct {
 	//   - wal_autocheckpoint=0 (disable auto-checkpoint, manual at close)
 	// This improves write throughput significantly but prevents concurrent readers.
 	BulkWriteMode bool
+
+	// MaxPrefixesPerChunk is a safety limit for per-chunk aggregation.
+	// The aggregator accumulates entire chunks in memory before flushing to
+	// SQLite. If the number of unique prefixes exceeds this limit, an early
+	// flush is triggered to prevent OOM. Set to 0 for no limit (use with caution).
+	// Default: 2,000,000 (sufficient for most S3 inventories, ~300MB memory).
+	MaxPrefixesPerChunk int
 }
 
+// DefaultMaxPrefixesPerChunk is the default safety limit for per-chunk aggregation.
+// At ~150 bytes per prefix, 2M prefixes uses ~300MB of memory.
+const DefaultMaxPrefixesPerChunk = 2_000_000
+
 // DefaultConfig returns a default configuration tuned for performance.
+// Uses per-chunk aggregation by default for maximum throughput.
 func DefaultConfig(dbPath string) Config {
 	return Config{
-		DBPath:      dbPath,
-		Synchronous: "NORMAL",
-		MmapSize:    268435456, // 256MB
-		CacheSizeKB: 262144,    // 256MB
+		DBPath:              dbPath,
+		Synchronous:         "NORMAL",
+		MmapSize:            268435456, // 256MB
+		CacheSizeKB:         262144,    // 256MB
+		MaxPrefixesPerChunk: DefaultMaxPrefixesPerChunk,
 	}
 }
 
@@ -73,14 +86,10 @@ type prefixDelta struct {
 	tierBytes  [tiers.NumTiers]uint64
 }
 
-// DeltaFlushThreshold is the number of pending deltas before automatic flush.
-// This balances memory usage vs SQLite call frequency.
-const DeltaFlushThreshold = 50000
-
 // MultiRowBatchSize is the number of rows per multi-row UPSERT statement.
 // Larger batches reduce SQLite exec calls but increase SQL parsing overhead.
-// Tuned via BenchmarkMultiRowBatch for optimal performance.
-const MultiRowBatchSize = 256
+// 512 is a good balance for per-chunk flushes with 100k+ prefixes.
+const MultiRowBatchSize = 512
 
 // Aggregator aggregates S3 inventory prefixes into a SQLite database.
 type Aggregator struct {
@@ -242,9 +251,14 @@ func (a *Aggregator) BeginChunk() error {
 	}
 	a.tx = tx
 
-	// Initialize in-memory delta accumulation
-	// Pre-size map to reduce growth overhead (typical ratio: ~2.5 prefixes per object)
-	a.pendingDeltas = make(map[string]*prefixDelta, DeltaFlushThreshold)
+	// Initialize in-memory delta accumulation with large initial capacity.
+	// Per-chunk aggregation: typical S3 inventory chunks have 100k-1M objects
+	// with ~200k-500k unique prefixes.
+	mapCapacity := 500_000
+	if a.cfg.MaxPrefixesPerChunk > 0 && a.cfg.MaxPrefixesPerChunk < mapCapacity {
+		mapCapacity = a.cfg.MaxPrefixesPerChunk
+	}
+	a.pendingDeltas = make(map[string]*prefixDelta, mapCapacity)
 
 	// Prepare single-row upsert statement for prefix_stats (used for remainder)
 	upsertSQL := buildUpsertSQL()
@@ -319,7 +333,9 @@ func buildMultiRowUpsertSQL(n int) string {
 
 // AddObject adds an object's stats to all its prefix ancestors.
 // This should be called for each object in the inventory.
-// Deltas are accumulated in memory and flushed to SQLite when threshold is exceeded.
+// Deltas are accumulated in memory for the entire chunk and flushed at Commit().
+// If MaxPrefixesPerChunk is set and exceeded, an early flush is triggered as a
+// safety measure to prevent OOM.
 func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) error {
 	if a.tx == nil {
 		return fmt.Errorf("no transaction in progress")
@@ -338,8 +354,8 @@ func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) error {
 		}
 	}
 
-	// Flush if we've accumulated too many unique prefixes
-	if len(a.pendingDeltas) >= DeltaFlushThreshold {
+	// Safety limit: flush if we've exceeded max prefixes to prevent OOM
+	if a.cfg.MaxPrefixesPerChunk > 0 && len(a.pendingDeltas) >= a.cfg.MaxPrefixesPerChunk {
 		if err := a.flushPendingDeltas(); err != nil {
 			return err
 		}
@@ -421,8 +437,12 @@ func (a *Aggregator) flushPendingDeltas() error {
 	}
 
 	// Clear the map by creating a new one (faster than deleting keys)
-	// Pre-size based on previous batch size
-	a.pendingDeltas = make(map[string]*prefixDelta, DeltaFlushThreshold)
+	// Pre-size to half the previous size (likely to see similar patterns)
+	newCapacity := len(prefixes) / 2
+	if newCapacity < 10000 {
+		newCapacity = 10000
+	}
+	a.pendingDeltas = make(map[string]*prefixDelta, newCapacity)
 	return nil
 }
 

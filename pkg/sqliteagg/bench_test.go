@@ -154,7 +154,7 @@ func BenchmarkAddObject(b *testing.B) {
 }
 
 // BenchmarkDeltaThreshold benchmarks different delta flush thresholds.
-// This helps tune DeltaFlushThreshold for optimal performance.
+// This helps tune the threshold for optimal performance (now mainly for reference).
 func BenchmarkDeltaThreshold(b *testing.B) {
 	if os.Getenv("S3INV_LONG_BENCH") == "" {
 		b.Skip("set S3INV_LONG_BENCH=1 to run threshold sweep")
@@ -346,7 +346,7 @@ func BenchmarkMultiRowBatch(b *testing.B) {
 				singleStmt, _ := tx.Prepare(buildUpsertSQL())
 				multiStmt, _ := tx.Prepare(multiRowSQL)
 
-				pendingDeltas := make(map[string]*prefixDelta, DeltaFlushThreshold)
+				pendingDeltas := make(map[string]*prefixDelta, 50000)
 
 				// Inline delta accumulation
 				for _, obj := range objects {
