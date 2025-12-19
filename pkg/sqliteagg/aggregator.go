@@ -373,13 +373,13 @@ func (a *Aggregator) PresentTiers() ([]tiers.ID, error) {
 	var present []tiers.ID
 
 	for i := 0; i < int(tiers.NumTiers); i++ {
-		var count int64
+		var count sql.NullInt64
 		query := fmt.Sprintf("SELECT SUM(t%d_count) FROM prefix_stats WHERE depth = 0", i)
 		err := a.db.QueryRow(query).Scan(&count)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, fmt.Errorf("check tier %d: %w", i, err)
 		}
-		if count > 0 {
+		if count.Valid && count.Int64 > 0 {
 			present = append(present, tiers.ID(i))
 		}
 	}

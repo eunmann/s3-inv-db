@@ -14,6 +14,7 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
+	"github.com/eunmann/s3-inv-db/pkg/sqliteagg"
 	"github.com/eunmann/s3-inv-db/pkg/triebuild"
 )
 
@@ -46,6 +47,120 @@ type S3Config struct {
 	DownloadConcurrency int
 	// KeepDownloads if true, don't delete downloaded files after building.
 	KeepDownloads bool
+}
+
+// SQLiteConfig holds configuration for building from a SQLite aggregator.
+type SQLiteConfig struct {
+	// OutDir is the output directory for index files.
+	OutDir string
+	// DBPath is the path to the SQLite prefix aggregation database.
+	DBPath string
+	// SQLiteCfg is the SQLite configuration.
+	SQLiteCfg sqliteagg.Config
+}
+
+// BuildFromSQLite builds an index from a pre-populated SQLite prefix aggregation database.
+// The database must have been populated using sqliteagg.StreamFromS3 or equivalent.
+func BuildFromSQLite(cfg SQLiteConfig) error {
+	log := logging.L()
+
+	if cfg.OutDir == "" {
+		return fmt.Errorf("output directory required")
+	}
+	if cfg.DBPath == "" {
+		return fmt.Errorf("database path required")
+	}
+
+	// Check if output directory already has a valid index (resume support)
+	if indexValid(cfg.OutDir) {
+		log.Info().
+			Str("output_dir", cfg.OutDir).
+			Msg("resumed from completed build - index already valid")
+		return nil
+	}
+
+	// Open SQLite aggregator
+	agg, err := sqliteagg.Open(cfg.SQLiteCfg)
+	if err != nil {
+		return fmt.Errorf("open SQLite aggregator: %w", err)
+	}
+	defer agg.Close()
+
+	// Build trie from SQLite
+	result, err := sqliteagg.BuildTrieFromSQLite(agg)
+	if err != nil {
+		return fmt.Errorf("build trie from SQLite: %w", err)
+	}
+
+	if len(result.Nodes) == 0 {
+		return fmt.Errorf("no nodes built from SQLite database")
+	}
+
+	// Create temp output directory
+	tmpOutDir := cfg.OutDir + ".tmp"
+	if err := os.MkdirAll(tmpOutDir, 0755); err != nil {
+		return fmt.Errorf("create temp output dir: %w", err)
+	}
+
+	// Track whether we successfully renamed - only cleanup on failure
+	renamed := false
+	defer func() {
+		if !renamed {
+			os.RemoveAll(tmpOutDir)
+		}
+	}()
+
+	// Write columnar arrays
+	if err := writeColumnarArrays(tmpOutDir, result); err != nil {
+		return fmt.Errorf("write columnar arrays: %w", err)
+	}
+
+	// Write tier stats (if tracking enabled)
+	if result.TrackTiers {
+		if err := writeTierStats(tmpOutDir, result); err != nil {
+			return fmt.Errorf("write tier stats: %w", err)
+		}
+	}
+
+	// Build depth index
+	if err := writeDepthIndex(tmpOutDir, result); err != nil {
+		return fmt.Errorf("write depth index: %w", err)
+	}
+
+	// Build MPHF
+	if err := writeMPHF(tmpOutDir, result); err != nil {
+		return fmt.Errorf("write MPHF: %w", err)
+	}
+
+	// Write manifest with checksums
+	if err := format.WriteManifest(tmpOutDir, uint64(len(result.Nodes)), result.MaxDepth); err != nil {
+		return fmt.Errorf("write manifest: %w", err)
+	}
+
+	// Sync directory to ensure all files are persisted
+	if err := format.SyncDir(tmpOutDir); err != nil {
+		return fmt.Errorf("sync output dir: %w", err)
+	}
+
+	// Atomic move to final location
+	if err := os.RemoveAll(cfg.OutDir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove old output dir: %w", err)
+	}
+	if err := os.Rename(tmpOutDir, cfg.OutDir); err != nil {
+		return fmt.Errorf("rename output dir: %w", err)
+	}
+	renamed = true
+
+	// Best-effort sync of parent directory to persist the rename
+	parentDir := filepath.Dir(cfg.OutDir)
+	_ = format.SyncDir(parentDir)
+
+	log.Info().
+		Str("output_dir", cfg.OutDir).
+		Int("node_count", len(result.Nodes)).
+		Msg("index build from SQLite complete")
+
+	return nil
 }
 
 // BuildFromS3 fetches inventory files from S3 and builds an index.
