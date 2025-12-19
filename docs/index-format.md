@@ -6,66 +6,72 @@ This document describes the on-disk format of s3-inv-db indexes.
 
 ```
 index/
-├── manifest.json           # Index metadata and checksums
-├── prefixes.blob           # Prefix string data
-├── prefixes.offsets        # Offset table for prefix lookup
-├── mphf.bin                # Minimal perfect hash function
-├── subtree_end.u64         # Subtree end positions
-├── depth.u32               # Node depths
-├── object_count.u64        # Object counts per prefix
-├── total_bytes.u64         # Byte totals per prefix
+├── manifest.json            # Index metadata and checksums
+├── subtree_end.u64          # Subtree end positions
+├── depth.u32                # Node depths
+├── object_count.u64         # Object counts per prefix
+├── total_bytes.u64          # Byte totals per prefix
 ├── max_depth_in_subtree.u32 # Maximum depth in each subtree
-└── depth_index/            # Depth-based posting lists
-    ├── depth_1.bin
-    ├── depth_2.bin
+├── depth_offsets.u64        # Depth index: offsets into positions array
+├── depth_positions.u64      # Depth index: sorted positions by depth
+├── mph.bin                  # Minimal perfect hash function
+├── mph_fp.u64               # MPHF fingerprints for verification
+├── mph_pos.u64              # MPHF hash position to preorder position
+├── prefix_blob.bin          # Concatenated prefix strings
+├── prefix_offsets.u64       # Offsets into prefix blob
+├── tiers.json               # Tier manifest (if tier tracking enabled)
+└── tier_stats/              # Per-tier statistics (if tier tracking enabled)
+    ├── tier_0_bytes.u64
+    ├── tier_0_counts.u64
     └── ...
 ```
 
 ## Manifest (`manifest.json`)
 
-The manifest contains index metadata and checksums for integrity verification.
+The manifest contains index metadata and SHA-256 checksums for integrity verification.
 
 ```json
 {
   "version": 1,
+  "created_at": "2024-01-15T10:30:00Z",
   "node_count": 1234567,
   "max_depth": 15,
   "files": {
     "subtree_end.u64": {
       "size": 9876536,
-      "xxhash64": "a1b2c3d4e5f67890"
-    },
-    "depth.u32": {
-      "size": 4938268,
-      "xxhash64": "b2c3d4e5f6789012"
+      "checksum": "a1b2c3d4..."
     }
-    // ... other files
   }
 }
 ```
 
 **Fields:**
 - `version`: Format version (currently 1)
+- `created_at`: Build timestamp
 - `node_count`: Total number of prefix nodes
 - `max_depth`: Maximum depth in the trie
-- `files`: Map of filename to size and xxHash64 checksum
+- `files`: Map of filename to size and SHA-256 checksum
 
-## Columnar Arrays
+## Columnar Array Format
 
-Each array file contains raw binary data with no headers. Values are stored in little-endian byte order.
+All columnar array files share a common header format:
+
+```
+┌──────────────────────────────────────────────┐
+│ Magic (4 bytes) │ Version (4 bytes) │        │
+│ Count (8 bytes) │ Width (4 bytes)   │ Data   │
+└──────────────────────────────────────────────┘
+```
+
+- **Magic**: `0x53334944` ("S3ID")
+- **Version**: Format version (1)
+- **Count**: Number of elements
+- **Width**: Element size in bytes (4, 8, etc.)
+- **Data**: Raw values in little-endian byte order
 
 ### `subtree_end.u64`
 
-Array of 64-bit unsigned integers. For node at position `i`, `subtree_end[i]` is the position of the last descendant in its subtree.
-
-```
-Position:    0    1    2    3    4    5
-Value:       5    2    2    5    5    5
-             │    │    │    │    │    │
-             │    │    │    └────┴────┴── Leaf nodes (point to self)
-             │    └────┴── Subtree ends at position 2
-             └── Root's subtree ends at position 5
-```
+For node at position `i`, `subtree_end[i]` is the position of the last descendant.
 
 **Usage:** To check if position `j` is a descendant of position `i`:
 ```go
@@ -74,134 +80,115 @@ isDescendant := j > i && j <= subtreeEnd[i]
 
 ### `depth.u32`
 
-Array of 32-bit unsigned integers. `depth[i]` is the depth of node at position `i`, where depth = number of "/" characters in the prefix.
+Node depth = number of "/" characters in the prefix.
 
-```
-Prefix          Depth
-(root)          0
-data/           1
-data/2024/      2
-data/2024/01/   3
-```
+### `object_count.u64` / `total_bytes.u64`
 
-### `object_count.u64`
-
-Array of 64-bit unsigned integers. `object_count[i]` is the total number of objects under the prefix at position `i`, including all descendants.
-
-### `total_bytes.u64`
-
-Array of 64-bit unsigned integers. `total_bytes[i]` is the sum of all object sizes under the prefix at position `i`.
+Aggregated counts including all descendants in the subtree.
 
 ### `max_depth_in_subtree.u32`
 
-Array of 32-bit unsigned integers. `max_depth_in_subtree[i]` is the maximum depth of any descendant in the subtree rooted at position `i`. Used to short-circuit depth queries.
-
-## Prefix Dictionary
-
-### `prefixes.blob`
-
-Concatenated prefix strings with length prefixes:
-
-```
-┌────────────────────────────────────────────────┐
-│ len₀ │ prefix₀ │ len₁ │ prefix₁ │ len₂ │ ... │
-└────────────────────────────────────────────────┘
-```
-
-Each entry:
-- 4 bytes: Length of prefix string (little-endian uint32)
-- N bytes: UTF-8 prefix string (no null terminator)
-
-### `prefixes.offsets`
-
-Array of 64-bit offsets into `prefixes.blob`:
-
-```
-┌──────────────────────────────────────┐
-│ offset₀ │ offset₁ │ offset₂ │ ... │
-└──────────────────────────────────────┘
-```
-
-To read prefix at position `i`:
-1. Read `offset = offsets[i]`
-2. Seek to `offset` in blob
-3. Read 4-byte length, then read that many bytes
-
-### `mphf.bin`
-
-Binary serialization of a BBHash minimal perfect hash function. Maps prefix strings to positions in O(1) time.
-
-**Lookup algorithm:**
-1. Compute `hash = MPHF(prefix)`
-2. Read prefix at position `hash`
-3. If prefix matches, return `hash`; otherwise, prefix doesn't exist
-
-The MPHF guarantees no collisions for keys that exist in the index. For non-existent keys, the verification step catches false positives.
+Maximum depth of any descendant. Used to short-circuit depth queries.
 
 ## Depth Index
 
-The `depth_index/` directory contains posting lists for each depth level.
+The depth index enables efficient queries like "all prefixes at depth N".
 
-### `depth_N.bin`
+### `depth_offsets.u64`
 
-Sorted array of positions at depth N:
+Array of offsets into `depth_positions.u64`, one per depth level plus a sentinel.
 
 ```
-┌─────────────────────────────────────────────┐
-│ count │ pos₀ │ pos₁ │ pos₂ │ ... │ posₙ₋₁ │
-└─────────────────────────────────────────────┘
+depth_offsets[d] = start index of depth d in positions array
+depth_offsets[d+1] = end index (exclusive)
 ```
 
-- 8 bytes: Count of positions (little-endian uint64)
-- N × 8 bytes: Sorted position array (little-endian uint64)
+### `depth_positions.u64`
+
+Sorted array of all positions, grouped by depth. Within each depth level,
+positions are sorted ascending (which corresponds to alphabetical prefix order).
 
 **Binary search usage:**
-To find descendants of position `P` at relative depth `D`:
-1. Load posting list for depth `depth[P] + D`
-2. Binary search for positions in range `[P+1, subtreeEnd[P]]`
+```go
+// Find positions at depth d in subtree [start, end]
+startIdx := depth_offsets[d]
+endIdx := depth_offsets[d+1]
+positions := depth_positions[startIdx:endIdx]
+// Binary search for positions in range
+```
 
-## Byte Order
+## MPHF (Minimal Perfect Hash Function)
 
-All multi-byte integers are stored in **little-endian** byte order for efficient access on x86/x64 architectures.
+### `mph.bin`
 
-## Memory Mapping
+Serialized BBHash minimal perfect hash function. Maps prefix strings to
+consecutive integers [0, N) with no collisions for keys in the index.
 
-All files are designed for memory-mapped access:
-- Fixed-size records enable direct indexing
-- Page-aligned access patterns
-- No parsing or deserialization required
+### `mph_fp.u64`
 
-## Checksums
+Fingerprints (FNV-1a hashes) of each prefix, indexed by MPHF output position.
+Used to verify lookups and reject non-existent prefixes.
 
-All data files are checksummed with xxHash64 for integrity verification:
-- Checksums computed during build
-- Verified on index open (configurable)
-- Detects corruption or incomplete writes
+### `mph_pos.u64`
 
-## Versioning
+Maps MPHF output position to preorder trie position. Needed because MPHF
+assigns arbitrary positions, but we need the actual trie position.
 
-The format version in manifest.json enables future evolution:
-- Version 1: Current format (documented here)
-- Future versions may add fields or files
-- Readers should reject unknown versions
+**Lookup algorithm:**
+1. `h = MPHF(prefix)` - get hash position
+2. `fp = FNV1a(prefix)` - compute fingerprint
+3. If `mph_fp[h] != fp` → prefix not found
+4. `pos = mph_pos[h]` - get preorder position
+5. Return `pos`
+
+## Prefix Strings
+
+### `prefix_blob.bin`
+
+Concatenated UTF-8 prefix strings with no delimiters:
+```
+"a/"  "a/b/"  "a/b/c/"  "data/"  ...
+```
+
+### `prefix_offsets.u64`
+
+Array of N+1 offsets. Prefix at position `i` spans bytes `[offsets[i], offsets[i+1])`.
+
+## Tier Statistics (Optional)
+
+Created when building with `--track-tiers`.
+
+### `tiers.json`
+
+Lists which tiers are present in the index:
+```json
+{
+  "tiers": [0, 1, 5],
+  "names": ["STANDARD", "STANDARD_IA", "GLACIER"]
+}
+```
+
+### `tier_stats/tier_N_bytes.u64`
+
+Per-node byte count for tier N. Only created for tiers with data.
+
+### `tier_stats/tier_N_counts.u64`
+
+Per-node object count for tier N.
 
 ## Size Estimates
 
 For an index with N prefixes:
 
-| File | Size |
-|------|------|
-| subtree_end.u64 | 8N bytes |
-| depth.u32 | 4N bytes |
-| object_count.u64 | 8N bytes |
-| total_bytes.u64 | 8N bytes |
-| max_depth_in_subtree.u32 | 4N bytes |
-| mphf.bin | ~0.3N bytes |
-| prefixes.blob | ~40N bytes (avg prefix length) |
-| prefixes.offsets | 8N bytes |
-| depth_index/ | ~8N bytes total |
+| Component | Size |
+|-----------|------|
+| Core arrays (5 files) | ~32N bytes |
+| Depth index | ~16N bytes |
+| MPHF + mappings | ~18N bytes |
+| Prefix strings | ~50N bytes (varies) |
+| Tier stats (optional) | ~16N bytes per tier |
 
-**Total:** Approximately 80-90 bytes per prefix.
+**Total (without tiers):** ~120 bytes per prefix
+**Total (with tiers):** ~120 + 16T bytes per prefix (T = number of tiers)
 
-For 1 million prefixes: ~80-90 MB
-For 100 million prefixes: ~8-9 GB
+For 1 million prefixes: ~120 MB (without tiers)

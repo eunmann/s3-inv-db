@@ -45,6 +45,7 @@ s3inv-index build \
   --out ./my-index \
   --tmp ./tmp \
   --chunk-size 1000000 \
+  --track-tiers \
   inventory-part1.csv.gz inventory-part2.csv.gz
 ```
 
@@ -52,6 +53,7 @@ s3inv-index build \
 - `--out`: Output directory for index files (required)
 - `--tmp`: Temporary directory for sort operations (required)
 - `--chunk-size`: Records per sort chunk (default: 1,000,000)
+- `--track-tiers`: Enable per-tier byte and count tracking
 
 ### Building from S3 Inventory
 
@@ -84,9 +86,10 @@ S3 access uses the standard AWS credential chain:
 import "github.com/eunmann/s3-inv-db/pkg/indexbuild"
 
 cfg := indexbuild.Config{
-    OutDir:    "./my-index",
-    TmpDir:    "./tmp",
-    ChunkSize: 1_000_000,
+    OutDir:     "./my-index",
+    TmpDir:     "./tmp",
+    ChunkSize:  1_000_000,
+    TrackTiers: true,  // Enable tier tracking
 }
 
 err := indexbuild.Build(ctx, cfg, []string{
@@ -122,13 +125,20 @@ For CSV files without headers or non-standard column order:
 import "github.com/eunmann/s3-inv-db/pkg/indexbuild"
 
 cfg := indexbuild.Config{
-    OutDir:    "./my-index",
-    TmpDir:    "./tmp",
-    ChunkSize: 1_000_000,
+    OutDir:     "./my-index",
+    TmpDir:     "./tmp",
+    ChunkSize:  1_000_000,
+    TrackTiers: true,
 }
 
-// keyCol=1 means Key is second column, sizeCol=2 means Size is third
-err := indexbuild.BuildWithSchema(ctx, cfg, files, 1, 2)
+schema := indexbuild.SchemaConfig{
+    KeyCol:        1,  // Key is second column (0-indexed)
+    SizeCol:       2,  // Size is third column
+    StorageCol:    3,  // StorageClass column (-1 if absent)
+    AccessTierCol: -1, // IntelligentTieringAccessTier (-1 if absent)
+}
+
+err := indexbuild.BuildWithSchema(ctx, cfg, files, schema)
 ```
 
 ## Build Pipeline Details

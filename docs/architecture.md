@@ -52,8 +52,9 @@ type Reader interface {
 }
 
 type Record struct {
-    Key  string
-    Size uint64
+    Key    string
+    Size   uint64
+    TierID tiers.ID  // Storage tier (when tracking enabled)
 }
 ```
 
@@ -100,6 +101,8 @@ Trie:
 - `ObjectCount`: Total objects under this prefix
 - `TotalBytes`: Total bytes under this prefix
 - `MaxDepthInSubtree`: Deepest descendant's depth
+- `TierBytes[N]`: Per-tier byte counts (when tier tracking enabled)
+- `TierCounts[N]`: Per-tier object counts (when tier tracking enabled)
 
 ### 4. Index Format (`pkg/format`)
 

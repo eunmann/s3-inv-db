@@ -118,23 +118,23 @@ for depth, positions := range depthLevels {
 
 ### Filtered Descendants
 
-Apply custom filters while querying:
+Apply filters while querying:
 
 ```go
-// Get prefixes with more than 1000 objects
-filter := func(pos uint64) bool {
-    stats := idx.Stats(pos)
-    return stats.ObjectCount > 1000
+pos, _ := idx.Lookup("data/")
+
+// Filter by object count and byte thresholds
+filter := indexread.Filter{
+    MinCount: 1000,   // At least 1000 objects
+    MinBytes: 1 << 30, // At least 1 GB
 }
 
-pos, _ := idx.Lookup("data/")
 filtered, err := idx.DescendantsAtDepthFiltered(pos, 1, filter)
 ```
 
-**Use cases:**
-- Filter by object count threshold
-- Filter by total bytes
-- Filter by prefix pattern (via PrefixString)
+**Filter fields:**
+- `MinCount`: Minimum object count threshold
+- `MinBytes`: Minimum total bytes threshold
 
 ## Iterator Interface
 
@@ -323,6 +323,64 @@ if err != nil {
     // Depth 100 doesn't exist in this index
     fmt.Printf("Error: %v\n", err)
 }
+```
+
+## Tier Queries
+
+If the index was built with `--track-tiers`, you can query per-tier statistics.
+
+### Check for Tier Data
+
+```go
+if idx.HasTierData() {
+    // Tier queries are available
+}
+```
+
+### Get Tier Breakdown
+
+```go
+pos, _ := idx.Lookup("data/2024/")
+breakdown := idx.TierBreakdown(pos)
+
+for _, tb := range breakdown {
+    fmt.Printf("%s: %d objects, %d bytes\n",
+        tb.TierName, tb.ObjectCount, tb.Bytes)
+}
+```
+
+The `TierBreakdown` struct contains:
+- `TierID`: Internal tier identifier
+- `TierName`: Human-readable name (e.g., "STANDARD", "GLACIER")
+- `ObjectCount`: Objects in this tier under the prefix
+- `Bytes`: Total bytes in this tier
+
+### Cost Estimation
+
+```go
+import "github.com/eunmann/s3-inv-db/pkg/pricing"
+
+breakdown := idx.TierBreakdown(pos)
+prices := pricing.DefaultUSEast1Prices()
+cost := pricing.ComputeMonthlyCost(breakdown, prices)
+
+fmt.Printf("Estimated monthly cost: %s\n", pricing.FormatCost(cost.TotalMicrodollars))
+```
+
+## CLI Query
+
+```bash
+# Basic query
+s3inv-index query --index ./my-index --prefix "data/2024/"
+
+# With tier breakdown
+s3inv-index query --index ./my-index --prefix "data/2024/" --show-tiers
+
+# With cost estimation
+s3inv-index query --index ./my-index --prefix "data/2024/" --estimate-cost
+
+# Custom price table
+s3inv-index query --index ./my-index --prefix "data/" --estimate-cost --price-table ./prices.json
 ```
 
 ## Best Practices
