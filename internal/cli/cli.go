@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"sort"
 
 	"github.com/eunmann/s3-inv-db/pkg/indexbuild"
@@ -42,13 +43,6 @@ func runBuild(args []string) error {
 	dbPath := fs.String("db", "", "path to SQLite database for aggregation (default: <out>.db)")
 	verbose := fs.Bool("verbose", false, "enable debug level logging")
 	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
-	fast := fs.Bool("fast", false, "use in-memory aggregation for ~50% faster builds (not resumable)")
-
-	// Concurrency options
-	defaults := sqliteagg.DefaultBuildOptions()
-	s3Concurrency := fs.Int("s3-download-concurrency", defaults.S3DownloadConcurrency, "number of parallel S3 chunk downloads")
-	parseWorkers := fs.Int("parse-workers", defaults.ParseWorkers, "number of CSV parsing workers")
-	batchSize := fs.Int("sqlite-batch-size", defaults.SQLiteWriteBatchSize, "prefix updates per SQLite transaction")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -85,60 +79,33 @@ func runBuild(args []string) error {
 		return fmt.Errorf("create S3 client: %w", err)
 	}
 
-	// Configure SQLite
-	sqliteCfg := sqliteagg.DefaultConfig(*dbPath)
+	// Remove any existing database to ensure clean build
+	if err := os.Remove(*dbPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove existing database: %w", err)
+	}
 
-	// Configure build options
-	buildOpts := sqliteagg.DefaultBuildOptions().
-		WithS3DownloadConcurrency(*s3Concurrency).
-		WithParseWorkers(*parseWorkers).
-		WithSQLiteWriteBatchSize(*batchSize)
-
-	log.Info().
-		Int("s3_download_concurrency", buildOpts.S3DownloadConcurrency).
-		Int("parse_workers", buildOpts.ParseWorkers).
-		Int("sqlite_batch_size", buildOpts.SQLiteWriteBatchSize).
-		Msg("build options configured")
-
-	// Stream from S3 into SQLite
-	var result *sqliteagg.StreamResult
-	if *fast {
-		// Fast mode: use in-memory aggregation (not resumable)
-		memCfg := sqliteagg.MemoryStreamConfig{
-			ManifestURI:  *s3Manifest,
-			DBPath:       *dbPath,
-			MemoryConfig: sqliteagg.DefaultMemoryAggregatorConfig(*dbPath),
-		}
-		result, err = sqliteagg.StreamFromS3Memory(ctx, client, memCfg)
-		if err != nil {
-			return fmt.Errorf("stream from S3 (fast): %w", err)
-		}
-	} else {
-		// Standard mode: resumable streaming
-		streamCfg := sqliteagg.StreamConfig{
-			ManifestURI:  *s3Manifest,
-			DBPath:       *dbPath,
-			SQLiteConfig: sqliteCfg,
-			BuildOptions: buildOpts,
-		}
-		result, err = sqliteagg.StreamFromS3(ctx, client, streamCfg)
-		if err != nil {
-			return fmt.Errorf("stream from S3: %w", err)
-		}
+	// Stream from S3 using fast in-memory aggregation
+	memCfg := sqliteagg.MemoryStreamConfig{
+		ManifestURI:  *s3Manifest,
+		DBPath:       *dbPath,
+		MemoryConfig: sqliteagg.DefaultMemoryAggregatorConfig(*dbPath),
+	}
+	result, err := sqliteagg.StreamFromS3Memory(ctx, client, memCfg)
+	if err != nil {
+		return fmt.Errorf("stream from S3: %w", err)
 	}
 
 	log.Info().
 		Int("chunks_processed", result.ChunksProcessed).
-		Int("chunks_skipped", result.ChunksSkipped).
 		Int64("objects_processed", result.ObjectsProcessed).
 		Msg("streaming aggregation complete")
 
 	// Build index from SQLite
+	sqliteCfg := sqliteagg.DefaultConfig(*dbPath)
 	buildCfg := indexbuild.SQLiteConfig{
-		OutDir:       *outDir,
-		DBPath:       *dbPath,
-		SQLiteCfg:    sqliteCfg,
-		BuildOptions: buildOpts,
+		OutDir:    *outDir,
+		DBPath:    *dbPath,
+		SQLiteCfg: sqliteCfg,
 	}
 
 	if err := indexbuild.BuildFromSQLite(buildCfg); err != nil {

@@ -15,7 +15,6 @@ func TestChunkAggregator(t *testing.T) {
 		fn   func(t *testing.T, factory ChunkAggregatorFactory)
 	}{
 		{"Basic", testChunkAggregatorBasic},
-		{"ChunkTracking", testChunkAggregatorChunkTracking},
 		{"Rollback", testChunkAggregatorRollback},
 		{"Iterate", testChunkAggregatorIterate},
 		{"Aggregation", testChunkAggregatorAggregation},

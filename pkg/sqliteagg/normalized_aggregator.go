@@ -152,17 +152,6 @@ func NewNormalizedAggregator(cfg NormalizedConfig) (*NormalizedAggregator, error
 		return nil, fmt.Errorf("create prefix_stats: %w", err)
 	}
 
-	// chunks_done for resumability
-	if _, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS chunks_done (
-			chunk_id TEXT PRIMARY KEY,
-			processed_at TEXT NOT NULL
-		)
-	`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("create chunks_done: %w", err)
-	}
-
 	// Calculate batch size based on max variables
 	colsPerRow := 4 + int(tiers.NumTiers)*2
 	batchSize := maxSQLiteVariables / colsPerRow
@@ -481,22 +470,6 @@ func (a *NormalizedAggregator) bulkInsertStats() error {
 	return nil
 }
 
-// MarkChunkDone marks a chunk as processed.
-func (a *NormalizedAggregator) MarkChunkDone(chunkID string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.tx == nil {
-		return fmt.Errorf("no transaction in progress")
-	}
-
-	_, err := a.tx.Exec(
-		"INSERT INTO chunks_done (chunk_id, processed_at) VALUES (?, ?)",
-		chunkID, time.Now().UTC().Format(time.RFC3339),
-	)
-	return err
-}
-
 // Commit commits the transaction and merges staging data.
 func (a *NormalizedAggregator) Commit() error {
 	a.mu.Lock()
@@ -604,16 +577,6 @@ func (a *NormalizedAggregator) Rollback() error {
 	err := a.tx.Rollback()
 	a.tx = nil
 	return err
-}
-
-// ChunkDone checks if a chunk has been processed.
-func (a *NormalizedAggregator) ChunkDone(chunkID string) (bool, error) {
-	var exists int
-	err := a.db.QueryRow("SELECT 1 FROM chunks_done WHERE chunk_id = ?", chunkID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	return err == nil, err
 }
 
 // Finalize creates indexes and performs WAL checkpoint.

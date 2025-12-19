@@ -145,14 +145,10 @@ agg.BeginChunk()
 for record := range records {
     agg.AddObject(record.Key, record.Size, record.TierID)
 }
-agg.MarkChunkDone(chunkID)
 agg.Commit()
 ```
 
-**Resume support:**
-- Each chunk is tracked in `chunks_done` table
-- On restart, completed chunks are skipped
-- Partial chunks are rolled back
+**Note:** Builds are one-shot operations. If a build fails or is interrupted, delete the output directory and database, then restart from scratch.
 
 ### 3. Trie Construction
 
@@ -206,29 +202,17 @@ The build uses atomic operations for crash safety:
 
 If the build crashes, no partial index is left behind.
 
-## Resume Support
+## One-Shot Builds
 
-The build pipeline supports resuming from interruptions:
+The build pipeline is optimized for maximum throughput as a one-shot operation:
+- No checkpoint/resume overhead
+- In-memory aggregation with final flush to SQLite
+- Always rebuilds from scratch for simplicity and speed
 
-### Chunk-level Resume (SQLite Aggregation)
-
-Each inventory file (chunk) is tracked in the `chunks_done` table:
-
-```sql
-SELECT chunk_id FROM chunks_done;
-```
-
-When restarting:
-- Completed chunks are skipped
-- The current incomplete chunk is rolled back
-- Processing continues from where it left off
-
-### Index-level Resume
-
-If the index already exists and is valid:
-- The manifest is read and checksums verified
-- If all files match, the build is skipped entirely
-- Log message: "resumed from completed build - index already valid"
+If a build fails or is interrupted:
+1. Delete the output directory
+2. Delete the SQLite database file
+3. Restart the build
 
 ## Performance
 
@@ -291,9 +275,9 @@ Error: `column "Key" not found in schema`
 
 Check that your inventory includes the required columns (Key, Size) in the manifest's fileSchema.
 
-### Resume Not Working
+### Build Failed
 
-If chunks keep being reprocessed:
-- Check that `--db` points to the same database file
-- Verify the SQLite database wasn't deleted
-- Check logs for "skipping already processed chunk" messages
+If a build fails:
+1. Delete the output directory and any `.tmp` directory
+2. Delete the SQLite database file (default: `<output>.db`)
+3. Restart the build from scratch

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -91,10 +90,9 @@ type Aggregator struct {
 	bulkWriteMode bool // True if BulkWriteMode was enabled (need checkpoint on close)
 
 	// Prepared statements (created per-transaction)
-	upsertStmt      *sql.Stmt // Single-row upsert (for remainder)
-	multiRowStmt    *sql.Stmt // Multi-row upsert (batch of MultiRowBatchSize)
-	markDoneStmt    *sql.Stmt
-	colsPerRow      int // Number of columns per row in upsert
+	upsertStmt   *sql.Stmt // Single-row upsert (for remainder)
+	multiRowStmt *sql.Stmt // Multi-row upsert (batch of MultiRowBatchSize)
+	colsPerRow   int       // Number of columns per row in upsert
 
 	// Current transaction
 	tx *sql.Tx
@@ -107,7 +105,6 @@ type Aggregator struct {
 	singleArgs []interface{}
 
 	// writeMu serializes write transactions for parallel streaming.
-	// Multiple goroutines can read (ChunkDone), but writes are serialized.
 	writeMu sync.Mutex
 }
 
@@ -198,19 +195,8 @@ func createSchema(db *sql.DB) error {
 		)
 	`, tierCols.String())
 
-	createChunksDone := `
-		CREATE TABLE IF NOT EXISTS chunks_done (
-			chunk_id TEXT PRIMARY KEY,
-			processed_at TEXT NOT NULL
-		)
-	`
-
 	if _, err := db.Exec(createPrefixStats); err != nil {
 		return fmt.Errorf("create prefix_stats table: %w", err)
-	}
-
-	if _, err := db.Exec(createChunksDone); err != nil {
-		return fmt.Errorf("create chunks_done table: %w", err)
 	}
 
 	return nil
@@ -235,10 +221,6 @@ func (a *Aggregator) Close() error {
 		_ = a.multiRowStmt.Close()
 		a.multiRowStmt = nil
 	}
-	if a.markDoneStmt != nil {
-		_ = a.markDoneStmt.Close()
-		a.markDoneStmt = nil
-	}
 
 	// In bulk write mode, run checkpoint before closing to consolidate WAL
 	if a.bulkWriteMode {
@@ -246,19 +228,6 @@ func (a *Aggregator) Close() error {
 	}
 
 	return a.db.Close()
-}
-
-// ChunkDone returns true if the chunk has already been processed.
-func (a *Aggregator) ChunkDone(chunkID string) (bool, error) {
-	var exists int
-	err := a.db.QueryRow("SELECT 1 FROM chunks_done WHERE chunk_id = ?", chunkID).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("check chunk done: %w", err)
-	}
-	return true, nil
 }
 
 // BeginChunk starts a new transaction for processing a chunk.
@@ -302,16 +271,6 @@ func (a *Aggregator) BeginChunk() error {
 	// Initialize reusable buffers for flush operations
 	a.batchArgs = make([]interface{}, MultiRowBatchSize*a.colsPerRow)
 	a.singleArgs = make([]interface{}, a.colsPerRow)
-
-	// Prepare mark done statement
-	a.markDoneStmt, err = tx.Prepare("INSERT INTO chunks_done (chunk_id, processed_at) VALUES (?, ?)")
-	if err != nil {
-		a.upsertStmt.Close()
-		a.multiRowStmt.Close()
-		tx.Rollback()
-		a.tx = nil
-		return fmt.Errorf("prepare mark done statement: %w", err)
-	}
 
 	return nil
 }
@@ -483,19 +442,6 @@ func extractPrefixes(key string) []string {
 	return prefixes
 }
 
-// MarkChunkDone marks a chunk as processed within the current transaction.
-func (a *Aggregator) MarkChunkDone(chunkID string) error {
-	if a.tx == nil {
-		return fmt.Errorf("no transaction in progress")
-	}
-
-	_, err := a.markDoneStmt.Exec(chunkID, time.Now().UTC().Format(time.RFC3339))
-	if err != nil {
-		return fmt.Errorf("mark chunk done: %w", err)
-	}
-	return nil
-}
-
 // Commit commits the current transaction.
 // Flushes any remaining pending deltas before committing.
 func (a *Aggregator) Commit() error {
@@ -517,10 +463,6 @@ func (a *Aggregator) Commit() error {
 	if a.multiRowStmt != nil {
 		_ = a.multiRowStmt.Close()
 		a.multiRowStmt = nil
-	}
-	if a.markDoneStmt != nil {
-		_ = a.markDoneStmt.Close()
-		a.markDoneStmt = nil
 	}
 
 	err := a.tx.Commit()
@@ -550,10 +492,6 @@ func (a *Aggregator) Rollback() error {
 		_ = a.multiRowStmt.Close()
 		a.multiRowStmt = nil
 	}
-	if a.markDoneStmt != nil {
-		_ = a.markDoneStmt.Close()
-		a.markDoneStmt = nil
-	}
 
 	err := a.tx.Rollback()
 	a.tx = nil
@@ -566,16 +504,6 @@ func (a *Aggregator) PrefixCount() (uint64, error) {
 	err := a.db.QueryRow("SELECT COUNT(*) FROM prefix_stats").Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count prefixes: %w", err)
-	}
-	return count, nil
-}
-
-// ChunkCount returns the number of processed chunks.
-func (a *Aggregator) ChunkCount() (int, error) {
-	var count int
-	err := a.db.QueryRow("SELECT COUNT(*) FROM chunks_done").Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("count chunks: %w", err)
 	}
 	return count, nil
 }

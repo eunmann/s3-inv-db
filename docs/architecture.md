@@ -57,14 +57,14 @@ func (c *Client) StreamObject(ctx, bucket, key string) (io.ReadCloser, error)
 
 Aggregates prefix statistics in a SQLite database during streaming:
 - Groups by prefix, computing count and bytes per prefix
-- Per-chunk resume support via `chunks_done` table
+- In-memory aggregation for maximum throughput
 - Efficient upsert operations with proper indexing
 
 **Why SQLite streaming instead of external sort?**
 - **No disk copies**: Data flows directly from S3 into aggregation
-- **Resume support**: Can restart from last completed chunk
-- **Lower memory**: Only holds one chunk in memory at a time
+- **Lower memory**: In-memory aggregation with final flush to SQLite
 - **Simpler**: No k-way merge, no temporary files to manage
+- **Maximum throughput**: No checkpoint/resume overhead
 
 **Schema:**
 ```sql
@@ -76,10 +76,6 @@ CREATE TABLE prefix_stats (
     -- Per-tier columns when tier tracking enabled
     tier_0_count INTEGER, tier_0_bytes INTEGER,
     ...
-);
-
-CREATE TABLE chunks_done (
-    chunk_id TEXT PRIMARY KEY
 );
 ```
 
@@ -164,8 +160,8 @@ type Index struct {
    └── inventory.Reader parses CSV records
 
 2. Aggregate in SQLite
-   └── sqliteagg.Aggregator upserts prefix stats
-   └── Per-chunk resume via chunks_done table
+   └── sqliteagg.MemoryAggregator aggregates in memory
+   └── Final flush to SQLite for persistence
 
 3. Build trie
    └── sqliteagg.BuildTrieFromSQLite reads sorted prefixes
@@ -223,7 +219,7 @@ type Index struct {
 
 ### Why SQLite for aggregation?
 - **Streaming**: No need to hold entire dataset in memory
-- **Resume**: Can restart from interrupted builds
+- **Persistent**: Index can be built from stored aggregation
 - **Efficient**: Proper indexing for upsert operations
 - **Simple**: No custom external sort implementation
 

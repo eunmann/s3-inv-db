@@ -30,20 +30,18 @@ type StreamConfig struct {
 
 // StreamResult contains the results of streaming aggregation.
 type StreamResult struct {
-	// ChunksProcessed is the number of chunks processed in this run.
+	// ChunksProcessed is the number of chunks processed.
 	ChunksProcessed int
-	// ChunksSkipped is the number of chunks skipped (already done).
-	ChunksSkipped int
 	// TotalChunks is the total number of chunks in the manifest.
 	TotalChunks int
-	// ObjectsProcessed is the total objects processed in this run.
+	// ObjectsProcessed is the total objects processed.
 	ObjectsProcessed int64
-	// BytesProcessed is the total bytes processed in this run.
+	// BytesProcessed is the total bytes processed.
 	BytesProcessed int64
 }
 
 // StreamFromS3 streams inventory chunks directly from S3 into the SQLite aggregator.
-// This function is resumable - it will skip chunks that have already been processed.
+// This is a one-shot build - if it fails, it should be rerun from scratch.
 // When S3DownloadConcurrency > 1, it uses pipelined streaming for better throughput.
 func StreamFromS3(ctx context.Context, client *s3fetch.Client, cfg StreamConfig) (*StreamResult, error) {
 	cfg.BuildOptions.Validate()
@@ -120,17 +118,6 @@ func StreamFromS3(ctx context.Context, client *s3fetch.Client, cfg StreamConfig)
 
 		chunkID := file.Key
 
-		// Check if chunk already processed
-		done, err := agg.ChunkDone(chunkID)
-		if err != nil {
-			return result, fmt.Errorf("check chunk done: %w", err)
-		}
-		if done {
-			result.ChunksSkipped++
-			progress.RecordSkip()
-			continue
-		}
-
 		// Log chunk started
 		logging.ChunkStarted(log, "aggregate", chunkID, progress.Completed(), int64(result.TotalChunks))
 
@@ -159,9 +146,8 @@ func StreamFromS3(ctx context.Context, client *s3fetch.Client, cfg StreamConfig)
 			elapsed := time.Since(startTime)
 			event := log.Info().
 				Str("event", "progress").
-				Int("chunks_done", result.ChunksProcessed+result.ChunksSkipped).
+				Int("chunks_done", result.ChunksProcessed).
 				Int("chunks_total", result.TotalChunks).
-				Int("chunks_skipped", result.ChunksSkipped).
 				Int64("objects_processed", result.ObjectsProcessed).
 				Int64("bytes_processed", result.BytesProcessed).
 				Float64("progress_pct", progress.ProgressPct()).
@@ -187,7 +173,6 @@ func StreamFromS3(ctx context.Context, client *s3fetch.Client, cfg StreamConfig)
 	elapsed := time.Since(startTime)
 	logging.PhaseComplete(log, "aggregate", elapsed).
 		Int("chunks_processed", result.ChunksProcessed).
-		Int("chunks_skipped", result.ChunksSkipped).
 		Count("objects_processed", result.ObjectsProcessed).
 		Bytes("bytes_processed", result.BytesProcessed).
 		Throughput(result.BytesProcessed).
@@ -291,12 +276,6 @@ func processChunk(
 		result.bytes += int64(size)
 	}
 
-	// Mark chunk as done and commit
-	if err := agg.MarkChunkDone(key); err != nil {
-		agg.Rollback()
-		return nil, fmt.Errorf("mark chunk done: %w", err)
-	}
-
 	if err := agg.Commit(); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
@@ -319,11 +298,8 @@ type MemoryStreamConfig struct {
 }
 
 // StreamFromS3Memory streams inventory chunks from S3 using in-memory aggregation.
-// This is faster than the standard StreamFromS3 but is NOT resumable - if the process
-// crashes, all progress is lost.
-//
-// Use this for one-shot builds when you have sufficient memory and don't need resumability.
-// For resumable builds, use StreamFromS3 instead.
+// This is faster than the standard StreamFromS3 for one-shot builds.
+// All data is accumulated in memory, then written to SQLite at the end.
 func StreamFromS3Memory(ctx context.Context, client *s3fetch.Client, cfg MemoryStreamConfig) (*StreamResult, error) {
 	log := logging.WithPhase("stream_memory")
 
@@ -336,7 +312,7 @@ func StreamFromS3Memory(ctx context.Context, client *s3fetch.Client, cfg MemoryS
 	log.Info().
 		Str("manifest_uri", cfg.ManifestURI).
 		Str("db_path", cfg.DBPath).
-		Msg("starting in-memory streaming aggregation (not resumable)")
+		Msg("starting in-memory streaming aggregation")
 
 	// Fetch manifest
 	manifest, err := client.FetchManifest(ctx, bucket, key)
@@ -544,30 +520,3 @@ func StreamFromS3Memory(ctx context.Context, client *s3fetch.Client, cfg MemoryS
 	return result, nil
 }
 
-// AllChunksProcessed returns true if all chunks in the manifest have been processed.
-func AllChunksProcessed(ctx context.Context, client *s3fetch.Client, manifestURI string, agg *Aggregator) (bool, error) {
-	// Parse manifest URI
-	bucket, key, err := s3fetch.ParseS3URI(manifestURI)
-	if err != nil {
-		return false, fmt.Errorf("parse manifest URI: %w", err)
-	}
-
-	// Fetch manifest
-	manifest, err := client.FetchManifest(ctx, bucket, key)
-	if err != nil {
-		return false, fmt.Errorf("fetch manifest: %w", err)
-	}
-
-	// Check each chunk
-	for _, file := range manifest.Files {
-		done, err := agg.ChunkDone(file.Key)
-		if err != nil {
-			return false, fmt.Errorf("check chunk %s: %w", file.Key, err)
-		}
-		if !done {
-			return false, nil
-		}
-	}
-
-	return true, nil
-}

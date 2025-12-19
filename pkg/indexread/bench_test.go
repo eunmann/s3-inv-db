@@ -187,9 +187,6 @@ func setupFixtureIndex(b *testing.B) string {
 				b.Fatalf("AddObject failed: %v", err)
 			}
 		}
-		if err := agg.MarkChunkDone("fixture-chunk"); err != nil {
-			b.Fatalf("MarkChunkDone failed: %v", err)
-		}
 		if err := agg.Commit(); err != nil {
 			b.Fatalf("Commit failed: %v", err)
 		}

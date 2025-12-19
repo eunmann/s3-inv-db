@@ -73,9 +73,6 @@ func TestBuildFromSQLiteSimple(t *testing.T) {
 		}
 	}
 
-	if err := agg.MarkChunkDone("chunk1"); err != nil {
-		t.Fatalf("MarkChunkDone failed: %v", err)
-	}
 	if err := agg.Commit(); err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
@@ -120,67 +117,6 @@ func TestBuildFromSQLiteSimple(t *testing.T) {
 	tierStatsDir := filepath.Join(outDir, "tier_stats")
 	if _, err := os.Stat(tierStatsDir); err != nil {
 		t.Errorf("tier_stats directory not created: %v", err)
-	}
-}
-
-func TestBuildFromSQLiteResume(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	dbPath := filepath.Join(tmpDir, "prefix-agg.db")
-
-	// Create and populate SQLite database
-	sqliteCfg := sqliteagg.DefaultConfig(dbPath)
-	agg, err := sqliteagg.Open(sqliteCfg)
-	if err != nil {
-		t.Fatalf("Open SQLite failed: %v", err)
-	}
-
-	if err := agg.BeginChunk(); err != nil {
-		t.Fatalf("BeginChunk failed: %v", err)
-	}
-	if err := agg.AddObject("a/file1.txt", 100, tiers.Standard); err != nil {
-		t.Fatalf("AddObject failed: %v", err)
-	}
-	if err := agg.Commit(); err != nil {
-		t.Fatalf("Commit failed: %v", err)
-	}
-	if err := agg.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
-
-	cfg := SQLiteConfig{
-		OutDir:    outDir,
-		DBPath:    dbPath,
-		SQLiteCfg: sqliteCfg,
-	}
-
-	// First build
-	if err := BuildFromSQLite(cfg); err != nil {
-		t.Fatalf("First BuildFromSQLite failed: %v", err)
-	}
-
-	// Get modification time of manifest
-	manifestPath := filepath.Join(outDir, "manifest.json")
-	info1, err := os.Stat(manifestPath)
-	if err != nil {
-		t.Fatalf("stat manifest: %v", err)
-	}
-	modTime1 := info1.ModTime()
-
-	// Second build should skip (resume from completed build)
-	if err := BuildFromSQLite(cfg); err != nil {
-		t.Fatalf("Second BuildFromSQLite failed: %v", err)
-	}
-
-	// Manifest should NOT be modified (build was skipped)
-	info2, err := os.Stat(manifestPath)
-	if err != nil {
-		t.Fatalf("stat manifest after second build: %v", err)
-	}
-	modTime2 := info2.ModTime()
-
-	if !modTime1.Equal(modTime2) {
-		t.Errorf("manifest was modified during resume - expected skip")
 	}
 }
 

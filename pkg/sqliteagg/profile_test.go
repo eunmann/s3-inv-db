@@ -79,9 +79,6 @@ func profileCurrentUpsert(t *testing.T, objects []benchutil.FakeObject) {
 	addDuration := time.Since(addStart)
 
 	commitStart := time.Now()
-	if err := agg.MarkChunkDone("test-chunk"); err != nil {
-		t.Fatalf("MarkChunkDone failed: %v", err)
-	}
 	if err := agg.Commit(); err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
@@ -479,7 +476,6 @@ func BenchmarkMemoryAggregator(b *testing.B) {
 				for _, obj := range objects {
 					agg.AddObject(obj.Key, obj.Size, obj.TierID)
 				}
-				agg.MarkChunkDone("bench")
 				agg.Commit()
 
 				b.StopTimer()

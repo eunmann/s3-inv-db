@@ -167,17 +167,6 @@ func (ps *ParallelStreamer) Stream(ctx context.Context) (*StreamResult, error) {
 				return
 			}
 
-			// Check if chunk already processed
-			done, err := ps.agg.ChunkDone(file.Key)
-			if err != nil {
-				ps.log.Error().Err(err).Str("chunk", file.Key).Msg("failed to check chunk status")
-				continue
-			}
-			if done {
-				ps.progress.RecordSkip()
-				continue
-			}
-
 			select {
 			case chunksCh <- ChunkTask{
 				ChunkID: file.Key,
@@ -265,11 +254,10 @@ func (ps *ParallelStreamer) Stream(ctx context.Context) (*StreamResult, error) {
 	elapsed := time.Since(startTime)
 	bytesProcessed := ps.bytesProcessed.Load()
 	objectsProcessed := ps.objectsProcessed.Load()
-	chunksCompleted, chunksSkipped, _ := ps.progress.Progress()
+	chunksCompleted, _, _ := ps.progress.Progress()
 
 	logging.PhaseComplete(ps.log, "parallel_stream", elapsed).
 		Int64("chunks_processed", chunksCompleted).
-		Int64("chunks_skipped", chunksSkipped).
 		Count("objects_processed", objectsProcessed).
 		Bytes("bytes_processed", bytesProcessed).
 		Throughput(bytesProcessed).
@@ -281,7 +269,6 @@ func (ps *ParallelStreamer) Stream(ctx context.Context) (*StreamResult, error) {
 
 	return &StreamResult{
 		ChunksProcessed:  int(chunksCompleted),
-		ChunksSkipped:    int(chunksSkipped),
 		TotalChunks:      totalChunks,
 		ObjectsProcessed: objectsProcessed,
 		BytesProcessed:   bytesProcessed,
@@ -415,12 +402,6 @@ func (ps *ParallelStreamer) writeChunkToSQLite(chunkID string, rows []RowData) e
 		}
 	}
 
-	// Mark chunk as done
-	if err := ps.agg.MarkChunkDone(chunkID); err != nil {
-		ps.agg.Rollback()
-		return fmt.Errorf("mark chunk done: %w", err)
-	}
-
 	// Commit
 	if err := ps.agg.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
@@ -430,7 +411,7 @@ func (ps *ParallelStreamer) writeChunkToSQLite(chunkID string, rows []RowData) e
 }
 
 // StreamFromS3Parallel streams inventory chunks in parallel from S3 into the SQLite aggregator.
-// This function is resumable - it will skip chunks that have already been processed.
+// This is a one-shot build - if it fails, it should be rerun from scratch.
 func StreamFromS3Parallel(ctx context.Context, client *s3fetch.Client, cfg StreamConfig) (*StreamResult, error) {
 	ps, err := NewParallelStreamer(client, cfg)
 	if err != nil {

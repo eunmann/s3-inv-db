@@ -47,9 +47,6 @@ func buildIndexFromKeysWithSizes(t *testing.T, outDir string, keys []string, siz
 		}
 	}
 
-	if err := agg.MarkChunkDone("test-chunk"); err != nil {
-		return fmt.Errorf("mark chunk done: %w", err)
-	}
 	if err := agg.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
@@ -170,9 +167,6 @@ func buildIndexWithTiers(t *testing.T, outDir string, objects []testObject) erro
 		}
 	}
 
-	if err := agg.MarkChunkDone("test-chunk"); err != nil {
-		return fmt.Errorf("mark chunk done: %w", err)
-	}
 	if err := agg.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}

@@ -51,10 +51,6 @@ func setupSQLiteAggregator(tb testing.TB, numObjects int) *SQLiteSetup {
 		}
 	}
 
-	if err := agg.MarkChunkDone("setup-chunk"); err != nil {
-		agg.Close()
-		tb.Fatalf("MarkChunkDone failed: %v", err)
-	}
 	if err := agg.Commit(); err != nil {
 		agg.Close()
 		tb.Fatalf("Commit failed: %v", err)
@@ -98,10 +94,6 @@ func setupSQLiteFromKeys(tb testing.TB, keys []string) *SQLiteSetup {
 		}
 	}
 
-	if err := agg.MarkChunkDone("setup-chunk"); err != nil {
-		agg.Close()
-		tb.Fatalf("MarkChunkDone failed: %v", err)
-	}
 	if err := agg.Commit(); err != nil {
 		agg.Close()
 		tb.Fatalf("Commit failed: %v", err)

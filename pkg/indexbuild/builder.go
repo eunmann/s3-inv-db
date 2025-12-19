@@ -28,6 +28,7 @@ type SQLiteConfig struct {
 
 // BuildFromSQLite builds an index from a pre-populated SQLite prefix aggregation database.
 // The database must have been populated using sqliteagg.StreamFromS3 or equivalent.
+// This always rebuilds from scratch - any existing output directory is replaced.
 func BuildFromSQLite(cfg SQLiteConfig) error {
 	cfg.BuildOptions.Validate()
 	log := logging.L()
@@ -40,12 +41,9 @@ func BuildFromSQLite(cfg SQLiteConfig) error {
 		return fmt.Errorf("database path required")
 	}
 
-	// Check if output directory already has a valid index (resume support)
-	if indexValid(cfg.OutDir) {
-		log.Info().
-			Str("output_dir", cfg.OutDir).
-			Msg("resumed from completed build - index already valid")
-		return nil
+	// Remove any existing output directory to ensure clean build
+	if err := os.RemoveAll(cfg.OutDir); err != nil {
+		return fmt.Errorf("remove existing output dir: %w", err)
 	}
 
 	// Open SQLite aggregator
@@ -340,17 +338,3 @@ func getFileSize(path string) (int64, error) {
 	return info.Size(), nil
 }
 
-// indexValid checks if a complete index exists and is valid by reading the manifest
-// and verifying all files match their checksums.
-func indexValid(outDir string) bool {
-	manifest, err := format.ReadManifest(outDir)
-	if err != nil {
-		return false
-	}
-
-	if err := format.VerifyManifest(outDir, manifest); err != nil {
-		return false
-	}
-
-	return true
-}

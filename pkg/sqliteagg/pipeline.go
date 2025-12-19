@@ -193,17 +193,6 @@ func (p *Pipeline) Run(ctx context.Context) (*StreamResult, error) {
 				return
 			}
 
-			// Check if chunk already processed
-			done, err := p.agg.ChunkDone(file.Key)
-			if err != nil {
-				p.setError(fmt.Errorf("check chunk %s: %w", file.Key, err))
-				return
-			}
-			if done {
-				p.progress.RecordSkip()
-				continue
-			}
-
 			select {
 			case chunksCh <- ChunkTask{
 				ChunkID: file.Key,
@@ -260,11 +249,10 @@ func (p *Pipeline) Run(ctx context.Context) (*StreamResult, error) {
 	bytesProcessed := p.bytesProcessed.Load()
 	objectsProcessed := p.objectsProcessed.Load()
 	prefixesWritten := p.prefixesWritten.Load()
-	chunksCompleted, chunksSkipped, _ := p.progress.Progress()
+	chunksCompleted, _, _ := p.progress.Progress()
 
 	logging.PhaseComplete(p.log, "pipeline", elapsed).
 		Int64("chunks_processed", chunksCompleted).
-		Int64("chunks_skipped", chunksSkipped).
 		Count("objects_processed", objectsProcessed).
 		Bytes("bytes_processed", bytesProcessed).
 		Count("prefixes_written", prefixesWritten).
@@ -278,7 +266,6 @@ func (p *Pipeline) Run(ctx context.Context) (*StreamResult, error) {
 
 	return &StreamResult{
 		ChunksProcessed:  int(chunksCompleted),
-		ChunksSkipped:    int(chunksSkipped),
 		TotalChunks:      totalChunks,
 		ObjectsProcessed: objectsProcessed,
 		BytesProcessed:   bytesProcessed,
@@ -472,21 +459,21 @@ func (p *Pipeline) writerWorker(ctx context.Context) {
 			return nil
 		}
 
-		// Determine which chunks to mark as done
-		chunksToMark := make([]string, 0)
+		// Determine which chunks are complete
+		completedChunks := make([]string, 0)
 		for chunkID, ends := range pendingChunks {
 			if ends <= 0 && chunkEnds[chunkID] {
-				chunksToMark = append(chunksToMark, chunkID)
+				completedChunks = append(completedChunks, chunkID)
 			}
 		}
 
 		batchDuration := time.Since(batchStart)
-		if err := p.writeBatch(batch, chunksToMark); err != nil {
+		if err := p.writeBatch(batch); err != nil {
 			return err
 		}
 
 		// Process completed chunks: update metrics, record completion, log
-		for _, chunkID := range chunksToMark {
+		for _, chunkID := range completedChunks {
 			delete(pendingChunks, chunkID)
 			delete(chunkEnds, chunkID)
 
@@ -527,13 +514,13 @@ func (p *Pipeline) writerWorker(ctx context.Context) {
 		logging.BatchComplete(p.log, "pipeline", batchDuration).
 			Count("prefixes", prefixCount).
 			Bytes("bytes", batchBytes).
-			Int("chunks_marked", len(chunksToMark)).
+			Int("chunks_completed", len(completedChunks)).
 			Int64("batch_num", p.batchesWritten.Load()).
 			Throughput(batchBytes).
 			LogDebug("batch written to SQLite")
 
 		// Log overall progress periodically (only when chunks complete)
-		if len(chunksToMark) > 0 && time.Since(lastProgressLog) >= 5*time.Second {
+		if len(completedChunks) > 0 && time.Since(lastProgressLog) >= 5*time.Second {
 			objectsProcessed := p.objectsProcessed.Load()
 			bytesProcessed := p.bytesProcessed.Load()
 			elapsed := p.progress.Elapsed()
@@ -630,8 +617,8 @@ func (p *Pipeline) writerWorker(ctx context.Context) {
 	}
 }
 
-func (p *Pipeline) writeBatch(batch map[string]*AggStats, chunksToMark []string) error {
-	if len(batch) == 0 && len(chunksToMark) == 0 {
+func (p *Pipeline) writeBatch(batch map[string]*AggStats) error {
+	if len(batch) == 0 {
 		return nil
 	}
 
@@ -696,14 +683,6 @@ func (p *Pipeline) writeBatch(batch map[string]*AggStats, chunksToMark []string)
 				p.agg.Rollback()
 				return fmt.Errorf("upsert prefix %q: %w", prefix, err)
 			}
-		}
-	}
-
-	// Mark chunks as done
-	for _, chunkID := range chunksToMark {
-		if err := p.agg.MarkChunkDone(chunkID); err != nil {
-			p.agg.Rollback()
-			return fmt.Errorf("mark chunk done %s: %w", chunkID, err)
 		}
 	}
 

@@ -74,9 +74,6 @@ func benchmarkBuildTrieFromSQLite(b *testing.B, numObjects int) {
 			b.Fatalf("AddObject failed: %v", err)
 		}
 	}
-	if err := agg.MarkChunkDone("setup-chunk"); err != nil {
-		b.Fatalf("MarkChunkDone failed: %v", err)
-	}
 	if err := agg.Commit(); err != nil {
 		b.Fatalf("Commit failed: %v", err)
 	}
@@ -151,9 +148,6 @@ func BenchmarkAddObject(b *testing.B) {
 
 	b.StopTimer()
 
-	if err := agg.MarkChunkDone("bench-chunk"); err != nil {
-		b.Fatalf("MarkChunkDone failed: %v", err)
-	}
 	if err := agg.Commit(); err != nil {
 		b.Fatalf("Commit failed: %v", err)
 	}
@@ -209,9 +203,6 @@ func BenchmarkDeltaThreshold(b *testing.B) {
 					}
 				}
 
-				if err := agg.MarkChunkDone("bench-chunk"); err != nil {
-					b.Fatalf("MarkChunkDone failed: %v", err)
-				}
 				if err := agg.Commit(); err != nil {
 					b.Fatalf("Commit failed: %v", err)
 				}
@@ -300,9 +291,6 @@ func BenchmarkTierDistribution(b *testing.B) {
 					if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
 						b.Fatalf("AddObject failed: %v", err)
 					}
-				}
-				if err := agg.MarkChunkDone("bench-chunk"); err != nil {
-					b.Fatalf("MarkChunkDone failed: %v", err)
 				}
 				if err := agg.Commit(); err != nil {
 					b.Fatalf("Commit failed: %v", err)
@@ -493,9 +481,6 @@ func benchmarkUpsertApproach(b *testing.B, objects []benchutil.FakeObject) {
 			if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
 				b.Fatalf("AddObject failed: %v", err)
 			}
-		}
-		if err := agg.MarkChunkDone("bench-chunk"); err != nil {
-			b.Fatalf("MarkChunkDone failed: %v", err)
 		}
 		if err := agg.Commit(); err != nil {
 			b.Fatalf("Commit failed: %v", err)

@@ -94,10 +94,7 @@ func testChunkAggregatorBasic(t *testing.T, factory ChunkAggregatorFactory) {
 		}
 	}
 
-	// Mark done and commit
-	if err := agg.MarkChunkDone("chunk1"); err != nil {
-		t.Fatalf("MarkChunkDone: %v", err)
-	}
+	// Commit
 	if err := agg.Commit(); err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
@@ -121,43 +118,6 @@ func testChunkAggregatorBasic(t *testing.T, factory ChunkAggregatorFactory) {
 	}
 }
 
-// testChunkAggregatorChunkTracking tests chunk tracking.
-func testChunkAggregatorChunkTracking(t *testing.T, factory ChunkAggregatorFactory) {
-	t.Helper()
-
-	agg := factory(t)
-	defer agg.Close()
-
-	// Check chunk that doesn't exist
-	done, err := agg.ChunkDone("chunk1")
-	if err != nil {
-		t.Fatalf("ChunkDone: %v", err)
-	}
-	if done {
-		t.Error("ChunkDone returned true for non-existent chunk")
-	}
-
-	// Begin and mark chunk as done
-	if err := agg.BeginChunk(); err != nil {
-		t.Fatalf("BeginChunk: %v", err)
-	}
-	if err := agg.MarkChunkDone("chunk1"); err != nil {
-		t.Fatalf("MarkChunkDone: %v", err)
-	}
-	if err := agg.Commit(); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
-
-	// Check chunk exists now
-	done, err = agg.ChunkDone("chunk1")
-	if err != nil {
-		t.Fatalf("ChunkDone: %v", err)
-	}
-	if !done {
-		t.Error("ChunkDone returned false for processed chunk")
-	}
-}
-
 // testChunkAggregatorRollback tests rollback behavior.
 func testChunkAggregatorRollback(t *testing.T, factory ChunkAggregatorFactory) {
 	t.Helper()
@@ -165,27 +125,15 @@ func testChunkAggregatorRollback(t *testing.T, factory ChunkAggregatorFactory) {
 	agg := factory(t)
 	defer agg.Close()
 
-	// Begin, mark chunk, but rollback
+	// Begin, add data, but rollback
 	if err := agg.BeginChunk(); err != nil {
 		t.Fatalf("BeginChunk: %v", err)
-	}
-	if err := agg.MarkChunkDone("chunk1"); err != nil {
-		t.Fatalf("MarkChunkDone: %v", err)
 	}
 	if err := agg.AddObject("a/file.txt", 100, tiers.Standard); err != nil {
 		t.Fatalf("AddObject: %v", err)
 	}
 	if err := agg.Rollback(); err != nil {
 		t.Fatalf("Rollback: %v", err)
-	}
-
-	// Check chunk should NOT exist after rollback
-	done, err := agg.ChunkDone("chunk1")
-	if err != nil {
-		t.Fatalf("ChunkDone: %v", err)
-	}
-	if done {
-		t.Error("ChunkDone returned true after rollback")
 	}
 
 	// Verify no prefixes were added
@@ -370,9 +318,6 @@ func testChunkAggregatorMultiChunk(t *testing.T, factory ChunkAggregatorFactory)
 	if err := agg.AddObject("a/file2.txt", 200, tiers.Standard); err != nil {
 		t.Fatalf("AddObject: %v", err)
 	}
-	if err := agg.MarkChunkDone("chunk1"); err != nil {
-		t.Fatalf("MarkChunkDone: %v", err)
-	}
 	if err := agg.Commit(); err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
@@ -386,9 +331,6 @@ func testChunkAggregatorMultiChunk(t *testing.T, factory ChunkAggregatorFactory)
 	}
 	if err := agg.AddObject("b/file1.txt", 400, tiers.Standard); err != nil {
 		t.Fatalf("AddObject: %v", err)
-	}
-	if err := agg.MarkChunkDone("chunk2"); err != nil {
-		t.Fatalf("MarkChunkDone: %v", err)
 	}
 	if err := agg.Commit(); err != nil {
 		t.Fatalf("Commit: %v", err)
@@ -638,9 +580,6 @@ func benchmarkAggregatorIngest(b *testing.B, factory BenchmarkAggregatorFactory,
 			if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
 				b.Fatalf("AddObject: %v", err)
 			}
-		}
-		if err := agg.MarkChunkDone("bench-chunk"); err != nil {
-			b.Fatalf("MarkChunkDone: %v", err)
 		}
 		if err := agg.Commit(); err != nil {
 			b.Fatalf("Commit: %v", err)

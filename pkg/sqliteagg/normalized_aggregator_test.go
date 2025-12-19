@@ -42,11 +42,6 @@ func TestNormalizedAggregator_Basic(t *testing.T) {
 		}
 	}
 
-	// Mark chunk done
-	if err := agg.MarkChunkDone("chunk-1"); err != nil {
-		t.Fatalf("MarkChunkDone: %v", err)
-	}
-
 	// Commit
 	if err := agg.Commit(); err != nil {
 		t.Fatalf("Commit: %v", err)
@@ -74,23 +69,6 @@ func TestNormalizedAggregator_Basic(t *testing.T) {
 	}
 	if maxDepth != 3 { // data/2024/01/ and data/2024/02/ are depth 3
 		t.Errorf("MaxDepth = %d, want 3", maxDepth)
-	}
-
-	// Verify chunk is marked done
-	done, err := agg.ChunkDone("chunk-1")
-	if err != nil {
-		t.Fatalf("ChunkDone: %v", err)
-	}
-	if !done {
-		t.Error("chunk-1 should be marked as done")
-	}
-
-	done, err = agg.ChunkDone("chunk-2")
-	if err != nil {
-		t.Fatalf("ChunkDone: %v", err)
-	}
-	if done {
-		t.Error("chunk-2 should not be marked as done")
 	}
 }
 
@@ -203,9 +181,6 @@ func TestNormalizedAggregator_MultiChunk(t *testing.T) {
 	if err := agg.AddObject("data/file1.txt", 100, tiers.Standard); err != nil {
 		t.Fatalf("AddObject: %v", err)
 	}
-	if err := agg.MarkChunkDone("chunk-1"); err != nil {
-		t.Fatalf("MarkChunkDone: %v", err)
-	}
 	if err := agg.Commit(); err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
@@ -216,9 +191,6 @@ func TestNormalizedAggregator_MultiChunk(t *testing.T) {
 	}
 	if err := agg.AddObject("data/file2.txt", 200, tiers.StandardIA); err != nil {
 		t.Fatalf("AddObject: %v", err)
-	}
-	if err := agg.MarkChunkDone("chunk-2"); err != nil {
-		t.Fatalf("MarkChunkDone: %v", err)
 	}
 	if err := agg.Commit(); err != nil {
 		t.Fatalf("Commit: %v", err)
@@ -271,9 +243,6 @@ func TestNormalizedAggregator_Rollback(t *testing.T) {
 	}
 	if err := agg.AddObject("data/file1.txt", 100, tiers.Standard); err != nil {
 		t.Fatalf("AddObject: %v", err)
-	}
-	if err := agg.MarkChunkDone("chunk-1"); err != nil {
-		t.Fatalf("MarkChunkDone: %v", err)
 	}
 	if err := agg.Commit(); err != nil {
 		t.Fatalf("Commit: %v", err)

@@ -16,8 +16,7 @@ Shared tests (aggregator_unified_test.go):
 
 Aggregator-specific tests (this file):
   - TestOpenClose: Database lifecycle (Open/Close)
-  - TestResumeAcrossSessions: Cross-session persistence
-  - TestIdempotentChunkProcessing: Idempotent chunk handling
+  - TestDataPersistence: Cross-session data persistence
   - TestExtractPrefixes: Unit test for prefix extraction
   - TestConfigValidate: Configuration validation
 */
@@ -41,7 +40,7 @@ func TestOpenClose(t *testing.T) {
 	}
 }
 
-func TestResumeAcrossSessions(t *testing.T) {
+func TestDataPersistence(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
@@ -58,9 +57,6 @@ func TestResumeAcrossSessions(t *testing.T) {
 		if err := agg.AddObject("a/file1.txt", 100, tiers.Standard); err != nil {
 			t.Fatalf("AddObject failed: %v", err)
 		}
-		if err := agg.MarkChunkDone("chunk1"); err != nil {
-			t.Fatalf("MarkChunkDone failed: %v", err)
-		}
 		if err := agg.Commit(); err != nil {
 			t.Fatalf("Commit failed: %v", err)
 		}
@@ -69,22 +65,13 @@ func TestResumeAcrossSessions(t *testing.T) {
 		}
 	}
 
-	// Second session: verify data persisted and add more
+	// Second session: verify data persisted
 	{
 		agg, err := Open(DefaultConfig(dbPath))
 		if err != nil {
 			t.Fatalf("Open (second) failed: %v", err)
 		}
 		defer agg.Close()
-
-		// Verify chunk1 is done
-		done, err := agg.ChunkDone("chunk1")
-		if err != nil {
-			t.Fatalf("ChunkDone failed: %v", err)
-		}
-		if !done {
-			t.Error("chunk1 should be done after reopening")
-		}
 
 		// Verify prefix data persisted
 		count, err := agg.PrefixCount()
@@ -101,9 +88,6 @@ func TestResumeAcrossSessions(t *testing.T) {
 		}
 		if err := agg.AddObject("b/file2.txt", 200, tiers.Standard); err != nil {
 			t.Fatalf("AddObject failed: %v", err)
-		}
-		if err := agg.MarkChunkDone("chunk2"); err != nil {
-			t.Fatalf("MarkChunkDone failed: %v", err)
 		}
 		if err := agg.Commit(); err != nil {
 			t.Fatalf("Commit failed: %v", err)
@@ -143,117 +127,6 @@ func TestExtractPrefixes(t *testing.T) {
 			if got[i] != tt.expected[i] {
 				t.Errorf("extractPrefixes(%q)[%d] = %q, want %q", tt.key, i, got[i], tt.expected[i])
 			}
-		}
-	}
-}
-
-// TestIdempotentChunkProcessing verifies that attempting to re-process
-// an already-done chunk does not modify stats.
-func TestIdempotentChunkProcessing(t *testing.T) {
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.db")
-
-	// First session: process chunk1
-	{
-		agg, err := Open(DefaultConfig(dbPath))
-		if err != nil {
-			t.Fatalf("Open failed: %v", err)
-		}
-
-		if err := agg.BeginChunk(); err != nil {
-			t.Fatalf("BeginChunk failed: %v", err)
-		}
-		if err := agg.AddObject("a/file1.txt", 100, tiers.Standard); err != nil {
-			t.Fatalf("AddObject failed: %v", err)
-		}
-		if err := agg.MarkChunkDone("chunk1"); err != nil {
-			t.Fatalf("MarkChunkDone failed: %v", err)
-		}
-		if err := agg.Commit(); err != nil {
-			t.Fatalf("Commit failed: %v", err)
-		}
-		if err := agg.Close(); err != nil {
-			t.Fatalf("Close failed: %v", err)
-		}
-	}
-
-	// Second session: verify chunk1 is done and stats unchanged if we skip it
-	{
-		agg, err := Open(DefaultConfig(dbPath))
-		if err != nil {
-			t.Fatalf("Open failed: %v", err)
-		}
-		defer agg.Close()
-
-		// Check if chunk1 is already done (simulating resume logic)
-		done, err := agg.ChunkDone("chunk1")
-		if err != nil {
-			t.Fatalf("ChunkDone failed: %v", err)
-		}
-		if !done {
-			t.Fatal("chunk1 should be marked as done")
-		}
-
-		// Get stats before any re-processing attempt
-		iter, err := agg.IteratePrefixes()
-		if err != nil {
-			t.Fatalf("IteratePrefixes failed: %v", err)
-		}
-
-		var rootBefore PrefixRow
-		for iter.Next() {
-			row := iter.Row()
-			if row.Prefix == "" {
-				rootBefore = row
-				break
-			}
-		}
-		iter.Close()
-
-		// Verify count and bytes are correct (1 object, 100 bytes)
-		if rootBefore.TotalCount != 1 {
-			t.Errorf("root TotalCount = %d, want 1", rootBefore.TotalCount)
-		}
-		if rootBefore.TotalBytes != 100 {
-			t.Errorf("root TotalBytes = %d, want 100", rootBefore.TotalBytes)
-		}
-
-		// Process a new chunk (chunk2)
-		if err := agg.BeginChunk(); err != nil {
-			t.Fatalf("BeginChunk failed: %v", err)
-		}
-		if err := agg.AddObject("b/file1.txt", 200, tiers.Standard); err != nil {
-			t.Fatalf("AddObject failed: %v", err)
-		}
-		if err := agg.MarkChunkDone("chunk2"); err != nil {
-			t.Fatalf("MarkChunkDone failed: %v", err)
-		}
-		if err := agg.Commit(); err != nil {
-			t.Fatalf("Commit failed: %v", err)
-		}
-
-		// Verify final stats
-		iter2, err := agg.IteratePrefixes()
-		if err != nil {
-			t.Fatalf("IteratePrefixes failed: %v", err)
-		}
-		defer iter2.Close()
-
-		var rootAfter PrefixRow
-		for iter2.Next() {
-			row := iter2.Row()
-			if row.Prefix == "" {
-				rootAfter = row
-				break
-			}
-		}
-
-		// Should have 2 objects, 300 bytes total (not 3 objects if chunk1 was re-processed)
-		if rootAfter.TotalCount != 2 {
-			t.Errorf("root TotalCount after = %d, want 2", rootAfter.TotalCount)
-		}
-		if rootAfter.TotalBytes != 300 {
-			t.Errorf("root TotalBytes after = %d, want 300", rootAfter.TotalBytes)
 		}
 	}
 }

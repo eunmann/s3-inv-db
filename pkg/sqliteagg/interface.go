@@ -5,6 +5,10 @@ import "github.com/eunmann/s3-inv-db/pkg/tiers"
 
 // ChunkAggregator defines the interface for transaction-based aggregators.
 // Both Aggregator and NormalizedAggregator implement this interface.
+//
+// Note: Resume support has been removed. All builds are one-shot operations
+// optimized for maximum throughput. If a build fails, it should be rerun
+// from scratch.
 type ChunkAggregator interface {
 	// Transaction management
 	BeginChunk() error
@@ -13,10 +17,6 @@ type ChunkAggregator interface {
 
 	// Data ingestion
 	AddObject(key string, size uint64, tierID tiers.ID) error
-
-	// Chunk tracking for resumability
-	MarkChunkDone(chunkID string) error
-	ChunkDone(chunkID string) (bool, error)
 
 	// Query operations
 	IteratePrefixes() (*PrefixIterator, error)
