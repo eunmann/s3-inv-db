@@ -114,7 +114,7 @@ func Open(cfg Config) (*Aggregator, error) {
 func createSchema(db *sql.DB) error {
 	// Build prefix_stats table with tier columns
 	var tierCols strings.Builder
-	for i := 0; i < int(tiers.NumTiers); i++ {
+	for i := range tiers.NumTiers {
 		tierCols.WriteString(fmt.Sprintf(",\n    t%d_count INTEGER NOT NULL DEFAULT 0", i))
 		tierCols.WriteString(fmt.Sprintf(",\n    t%d_bytes INTEGER NOT NULL DEFAULT 0", i))
 	}
@@ -222,7 +222,7 @@ func buildUpsertSQL() string {
 		"total_bytes = total_bytes + excluded.total_bytes",
 	}
 
-	for i := 0; i < int(tiers.NumTiers); i++ {
+	for i := range tiers.NumTiers {
 		cols = append(cols, fmt.Sprintf("t%d_count", i), fmt.Sprintf("t%d_bytes", i))
 		placeholders = append(placeholders, "?", "?")
 		updates = append(updates,
@@ -269,8 +269,8 @@ func (a *Aggregator) addPrefix(prefix string, depth int, size uint64, tierID tie
 	args := make([]interface{}, 0, 4+int(tiers.NumTiers)*2)
 	args = append(args, prefix, depth, 1, size)
 
-	for i := 0; i < int(tiers.NumTiers); i++ {
-		if tiers.ID(i) == tierID {
+	for i := range tiers.NumTiers {
+		if i == tierID {
 			args = append(args, 1, size)
 		} else {
 			args = append(args, 0, 0)
@@ -393,15 +393,15 @@ func (a *Aggregator) MaxDepth() (uint32, error) {
 func (a *Aggregator) PresentTiers() ([]tiers.ID, error) {
 	var present []tiers.ID
 
-	for i := 0; i < int(tiers.NumTiers); i++ {
+	for i := range tiers.NumTiers {
 		var count sql.NullInt64
 		query := fmt.Sprintf("SELECT SUM(t%d_count) FROM prefix_stats WHERE depth = 0", i)
 		err := a.db.QueryRow(query).Scan(&count)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("check tier %d: %w", i, err)
 		}
 		if count.Valid && count.Int64 > 0 {
-			present = append(present, tiers.ID(i))
+			present = append(present, i)
 		}
 	}
 
@@ -412,7 +412,7 @@ func (a *Aggregator) PresentTiers() ([]tiers.ID, error) {
 func (a *Aggregator) IteratePrefixes() (*PrefixIterator, error) {
 	// Build SELECT statement with all tier columns
 	cols := []string{"prefix", "depth", "total_count", "total_bytes"}
-	for i := 0; i < int(tiers.NumTiers); i++ {
+	for i := range tiers.NumTiers {
 		cols = append(cols, fmt.Sprintf("t%d_count", i), fmt.Sprintf("t%d_bytes", i))
 	}
 
@@ -446,7 +446,7 @@ func (it *PrefixIterator) Next() bool {
 	// Build scan destinations
 	scanDest := make([]interface{}, 0, 4+int(tiers.NumTiers)*2)
 	scanDest = append(scanDest, &it.current.Prefix, &it.current.Depth, &it.current.TotalCount, &it.current.TotalBytes)
-	for i := 0; i < int(tiers.NumTiers); i++ {
+	for i := range tiers.NumTiers {
 		scanDest = append(scanDest, &it.current.TierCounts[i], &it.current.TierBytes[i])
 	}
 

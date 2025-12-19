@@ -39,16 +39,9 @@ type BuildOptions struct {
 // DefaultBuildOptions returns sensible default build options.
 func DefaultBuildOptions() BuildOptions {
 	numCPU := runtime.NumCPU()
-	s3Concurrency := numCPU
-	if s3Concurrency > 16 {
-		s3Concurrency = 16
-	}
-	if s3Concurrency < 4 {
-		s3Concurrency = 4
-	}
 
 	return BuildOptions{
-		S3DownloadConcurrency:     s3Concurrency,
+		S3DownloadConcurrency:     max(min(numCPU, 16), 4),
 		ParseWorkers:              numCPU,
 		SQLiteWriteBatchSize:      50000,
 		SQLiteWriteBatchTimeoutMs: 200,
@@ -60,26 +53,27 @@ func DefaultBuildOptions() BuildOptions {
 
 // Validate checks that all options are within valid ranges and sets defaults for zero values.
 func (o *BuildOptions) Validate() {
+	defaults := DefaultBuildOptions()
 	if o.S3DownloadConcurrency <= 0 {
-		o.S3DownloadConcurrency = DefaultBuildOptions().S3DownloadConcurrency
+		o.S3DownloadConcurrency = defaults.S3DownloadConcurrency
 	}
 	if o.ParseWorkers <= 0 {
-		o.ParseWorkers = DefaultBuildOptions().ParseWorkers
+		o.ParseWorkers = defaults.ParseWorkers
 	}
 	if o.SQLiteWriteBatchSize <= 0 {
-		o.SQLiteWriteBatchSize = DefaultBuildOptions().SQLiteWriteBatchSize
+		o.SQLiteWriteBatchSize = defaults.SQLiteWriteBatchSize
 	}
 	if o.SQLiteWriteBatchTimeoutMs <= 0 {
-		o.SQLiteWriteBatchTimeoutMs = DefaultBuildOptions().SQLiteWriteBatchTimeoutMs
+		o.SQLiteWriteBatchTimeoutMs = defaults.SQLiteWriteBatchTimeoutMs
 	}
 	if o.RowChannelBuffer <= 0 {
-		o.RowChannelBuffer = DefaultBuildOptions().RowChannelBuffer
+		o.RowChannelBuffer = defaults.RowChannelBuffer
 	}
 	if o.DeltaChannelBuffer <= 0 {
-		o.DeltaChannelBuffer = DefaultBuildOptions().DeltaChannelBuffer
+		o.DeltaChannelBuffer = defaults.DeltaChannelBuffer
 	}
 	if o.FileWriteConcurrency <= 0 {
-		o.FileWriteConcurrency = DefaultBuildOptions().FileWriteConcurrency
+		o.FileWriteConcurrency = defaults.FileWriteConcurrency
 	}
 }
 

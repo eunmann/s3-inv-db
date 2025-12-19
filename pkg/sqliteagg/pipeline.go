@@ -469,7 +469,7 @@ func (p *Pipeline) writerWorker(ctx context.Context) {
 		p.prefixesWritten.Add(int64(len(batch)))
 
 		// Clear batch
-		batch = make(map[string]*AggStats)
+		clear(batch)
 		batchSize = 0
 
 		return nil
@@ -551,7 +551,7 @@ func (p *Pipeline) writeBatch(batch map[string]*AggStats, chunksToMark []string)
 		args := make([]interface{}, 0, 4+int(tiers.NumTiers)*2)
 		args = append(args, prefix, stats.Depth, stats.TotalCount, stats.TotalBytes)
 
-		for i := 0; i < int(tiers.NumTiers); i++ {
+		for i := range tiers.NumTiers {
 			args = append(args, stats.TierCounts[i], stats.TierBytes[i])
 		}
 
