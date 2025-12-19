@@ -5,161 +5,50 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"strings"
+	"sync"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/pkg/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/indexbuild"
 	"github.com/eunmann/s3-inv-db/pkg/sqliteagg"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
+/*
+Benchmark Categories for Index Reading:
+
+1. BenchmarkIndexOpen - Tests index loading from disk
+   - Measures: time to mmap files and setup in-memory structures
+   - Critical for cold-start performance
+
+2. BenchmarkLookup - Tests single-prefix lookups (MPHF + verify)
+   - Measures: ns/op for prefix→position resolution
+   - Tests sequential vs random access patterns
+
+3. BenchmarkStats - Tests stats retrieval (lookup + array access)
+   - Measures: ns/op for full prefix→stats path
+
+4. BenchmarkTierBreakdown - Tests per-tier statistics retrieval
+   - Measures: ns/op for tier data reads
+
+5. BenchmarkDescendantsAtDepth - Tests depth-limited queries
+   - Measures: performance of depth index binary search + iteration
+
+6. BenchmarkIterator - Tests iterator interface
+   - Measures: per-element iteration cost
+
+7. BenchmarkMixedWorkload - Simulates realistic query mix
+   - 50% single-prefix stats, 30% depth-1 queries, 20% deeper queries
+*/
+
 // Seed for reproducible random access patterns
 const benchSeed = 42
 
-// Tree shapes for benchmarking
-type treeShape struct {
-	name        string
-	description string
-	generate    func(size int) []string // generates inventory keys
-}
-
-var treeShapes = []treeShape{
-	{
-		name:        "deep_narrow",
-		description: "Deep paths with few branches (e.g., a/b/c/d/e/...)",
-		generate:    generateDeepNarrow,
-	},
-	{
-		name:        "wide_shallow",
-		description: "Many top-level prefixes with shallow depth",
-		generate:    generateWideShallow,
-	},
-	{
-		name:        "balanced",
-		description: "Balanced tree with moderate depth and width",
-		generate:    generateBalanced,
-	},
-	{
-		name:        "s3_realistic",
-		description: "Realistic S3 structure (dates, IDs, file types)",
-		generate:    generateS3Realistic,
-	},
-	{
-		name:        "wide_single_level",
-		description: "Many children under single prefix (tests millions of siblings)",
-		generate:    generateWideSingleLevel,
-	},
-}
-
-// Tree sizes for benchmarking
-var treeSizes = []int{1000, 10000, 100000}
-
-// generateDeepNarrow creates keys with deep paths but few branches
-func generateDeepNarrow(size int) []string {
-	keys := make([]string, size)
-	depth := 20
-	numBranches := 26
-	filesPerLeaf := size / numBranches
-	if filesPerLeaf < 1 {
-		filesPerLeaf = 1
-	}
-
-	idx := 0
-	for branch := 0; idx < size && branch < numBranches; branch++ {
-		var path strings.Builder
-		for d := 0; d < depth; d++ {
-			path.WriteString(fmt.Sprintf("%c/", 'a'+byte(branch)))
-		}
-		prefix := path.String()
-
-		for f := 0; idx < size && f < filesPerLeaf; f++ {
-			keys[idx] = fmt.Sprintf("%sfile%d.txt", prefix, f)
-			idx++
-		}
-	}
-	return keys[:idx]
-}
-
-// generateWideShallow creates keys with many top-level prefixes
-func generateWideShallow(size int) []string {
-	keys := make([]string, size)
-	filesPerPrefix := 5
-	numPrefixes := size / filesPerPrefix
-	if numPrefixes < 1 {
-		numPrefixes = 1
-	}
-
-	idx := 0
-	for p := 0; idx < size && p < numPrefixes; p++ {
-		prefix := fmt.Sprintf("prefix%05d/", p)
-		for f := 0; idx < size && f < filesPerPrefix; f++ {
-			keys[idx] = fmt.Sprintf("%sfile%d.txt", prefix, f)
-			idx++
-		}
-	}
-	return keys[:idx]
-}
-
-// generateBalanced creates a balanced tree structure
-func generateBalanced(size int) []string {
-	keys := make([]string, size)
-	branchFactor := 26
-	depth := 3
-
-	idx := 0
-	var generate func(prefix string, level int)
-	generate = func(prefix string, level int) {
-		if idx >= size {
-			return
-		}
-		if level >= depth {
-			for f := 0; f < 5 && idx < size; f++ {
-				keys[idx] = fmt.Sprintf("%sfile%d.txt", prefix, f)
-				idx++
-			}
-			return
-		}
-		for c := 0; c < branchFactor && idx < size; c++ {
-			newPrefix := fmt.Sprintf("%s%c/", prefix, 'a'+byte(c))
-			generate(newPrefix, level+1)
-		}
-	}
-	generate("", 0)
-	return keys[:idx]
-}
-
-// generateS3Realistic creates realistic S3-like paths
-func generateS3Realistic(size int) []string {
-	keys := make([]string, size)
-	rng := rand.New(rand.NewSource(benchSeed))
-
-	prefixes := []string{"data", "logs", "backups", "exports", "uploads"}
-	years := []string{"2022", "2023", "2024"}
-	months := []string{"01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"}
-	extensions := []string{".json", ".csv", ".parquet", ".txt", ".gz"}
-
-	for i := 0; i < size; i++ {
-		prefix := prefixes[rng.Intn(len(prefixes))]
-		year := years[rng.Intn(len(years))]
-		month := months[rng.Intn(len(months))]
-		day := fmt.Sprintf("%02d", rng.Intn(28)+1)
-		userID := fmt.Sprintf("user%05d", rng.Intn(1000))
-		fileID := fmt.Sprintf("file_%08x", rng.Uint32())
-		ext := extensions[rng.Intn(len(extensions))]
-
-		keys[i] = fmt.Sprintf("%s/%s/%s/%s/%s/%s%s", prefix, year, month, day, userID, fileID, ext)
-	}
-	return keys
-}
-
-// generateWideSingleLevel creates many prefixes under a single parent
-func generateWideSingleLevel(size int) []string {
-	keys := make([]string, size)
-	for i := 0; i < size; i++ {
-		keys[i] = fmt.Sprintf("root/child%07d/file.txt", i)
-	}
-	return keys
-}
+// Tree shapes and sizes for benchmarking
+var (
+	benchShapes = []string{"deep_narrow", "wide_shallow", "balanced", "s3_realistic", "wide_single_level"}
+	benchSizes  = []int{1000, 10000, 100000}
+)
 
 // benchIndex holds a pre-built index for benchmarking
 type benchIndex struct {
@@ -168,7 +57,7 @@ type benchIndex struct {
 	dir      string
 }
 
-// setupBenchIndex creates an index for benchmarking using SQLite
+// setupBenchIndex creates an index for benchmarking using SQLite.
 func setupBenchIndex(b *testing.B, keys []string) *benchIndex {
 	b.Helper()
 
@@ -176,8 +65,8 @@ func setupBenchIndex(b *testing.B, keys []string) *benchIndex {
 	outDir := filepath.Join(tmpDir, "index")
 	dbPath := filepath.Join(tmpDir, "prefix-agg.db")
 
-	// Create and populate SQLite database
 	cfg := sqliteagg.DefaultConfig(dbPath)
+	cfg.Synchronous = "OFF" // Faster for benchmarks
 	agg, err := sqliteagg.Open(cfg)
 	if err != nil {
 		b.Fatalf("Open SQLite failed: %v", err)
@@ -204,7 +93,6 @@ func setupBenchIndex(b *testing.B, keys []string) *benchIndex {
 		b.Fatalf("Close failed: %v", err)
 	}
 
-	// Build index
 	buildCfg := indexbuild.SQLiteConfig{
 		OutDir:    outDir,
 		DBPath:    dbPath,
@@ -215,16 +103,84 @@ func setupBenchIndex(b *testing.B, keys []string) *benchIndex {
 		b.Fatalf("Build failed: %v", err)
 	}
 
-	// Clean up SQLite DB
 	os.Remove(dbPath)
 
-	// Open index
 	idx, err := Open(outDir)
 	if err != nil {
 		b.Fatalf("Open failed: %v", err)
 	}
 
-	// Collect all prefixes for random access benchmarks
+	prefixes := make([]string, 0, idx.Count())
+	for i := uint64(0); i < idx.Count(); i++ {
+		p, err := idx.PrefixString(i)
+		if err != nil {
+			b.Fatalf("PrefixString failed: %v", err)
+		}
+		prefixes = append(prefixes, p)
+	}
+
+	return &benchIndex{
+		idx:      idx,
+		prefixes: prefixes,
+		dir:      outDir,
+	}
+}
+
+// setupBenchIndexWithTiers creates an index with mixed tier data.
+func setupBenchIndexWithTiers(b *testing.B, numObjects int) *benchIndex {
+	b.Helper()
+
+	tmpDir := b.TempDir()
+	outDir := filepath.Join(tmpDir, "index")
+	dbPath := filepath.Join(tmpDir, "prefix-agg.db")
+
+	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(numObjects))
+	objects := gen.Generate()
+
+	cfg := sqliteagg.DefaultConfig(dbPath)
+	cfg.Synchronous = "OFF"
+	agg, err := sqliteagg.Open(cfg)
+	if err != nil {
+		b.Fatalf("Open SQLite failed: %v", err)
+	}
+
+	if err := agg.BeginChunk(); err != nil {
+		b.Fatalf("BeginChunk failed: %v", err)
+	}
+
+	for _, obj := range objects {
+		if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
+			b.Fatalf("AddObject failed: %v", err)
+		}
+	}
+
+	if err := agg.MarkChunkDone("bench-chunk"); err != nil {
+		b.Fatalf("MarkChunkDone failed: %v", err)
+	}
+	if err := agg.Commit(); err != nil {
+		b.Fatalf("Commit failed: %v", err)
+	}
+	if err := agg.Close(); err != nil {
+		b.Fatalf("Close failed: %v", err)
+	}
+
+	buildCfg := indexbuild.SQLiteConfig{
+		OutDir:    outDir,
+		DBPath:    dbPath,
+		SQLiteCfg: cfg,
+	}
+
+	if err := indexbuild.BuildFromSQLite(buildCfg); err != nil {
+		b.Fatalf("Build failed: %v", err)
+	}
+
+	os.Remove(dbPath)
+
+	idx, err := Open(outDir)
+	if err != nil {
+		b.Fatalf("Open failed: %v", err)
+	}
+
 	prefixes := make([]string, 0, idx.Count())
 	for i := uint64(0); i < idx.Count(); i++ {
 		p, err := idx.PrefixString(i)
@@ -247,13 +203,96 @@ func (bi *benchIndex) Close() {
 	}
 }
 
-// BenchmarkLookup benchmarks prefix lookup performance
+// Shared fixture for index load benchmarks
+var (
+	fixtureOnce sync.Once
+	fixtureDir  string
+)
+
+func setupFixtureIndex(b *testing.B) string {
+	b.Helper()
+
+	fixtureOnce.Do(func() {
+		tmpDir, err := os.MkdirTemp("", "bench-fixture-*")
+		if err != nil {
+			b.Fatalf("MkdirTemp failed: %v", err)
+		}
+
+		outDir := filepath.Join(tmpDir, "index")
+		dbPath := filepath.Join(tmpDir, "prefix-agg.db")
+
+		gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(50000))
+		objects := gen.Generate()
+
+		cfg := sqliteagg.DefaultConfig(dbPath)
+		cfg.Synchronous = "OFF"
+		agg, err := sqliteagg.Open(cfg)
+		if err != nil {
+			b.Fatalf("Open SQLite failed: %v", err)
+		}
+
+		if err := agg.BeginChunk(); err != nil {
+			b.Fatalf("BeginChunk failed: %v", err)
+		}
+		for _, obj := range objects {
+			if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
+				b.Fatalf("AddObject failed: %v", err)
+			}
+		}
+		if err := agg.MarkChunkDone("fixture-chunk"); err != nil {
+			b.Fatalf("MarkChunkDone failed: %v", err)
+		}
+		if err := agg.Commit(); err != nil {
+			b.Fatalf("Commit failed: %v", err)
+		}
+		agg.Close()
+
+		buildCfg := indexbuild.SQLiteConfig{
+			OutDir:    outDir,
+			DBPath:    dbPath,
+			SQLiteCfg: cfg,
+		}
+		if err := indexbuild.BuildFromSQLite(buildCfg); err != nil {
+			b.Fatalf("Build failed: %v", err)
+		}
+
+		os.Remove(dbPath)
+		fixtureDir = outDir
+	})
+
+	return fixtureDir
+}
+
+// BenchmarkIndexOpen benchmarks the cost of opening an index from disk.
+func BenchmarkIndexOpen(b *testing.B) {
+	dir := setupFixtureIndex(b)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		idx, err := Open(dir)
+		if err != nil {
+			b.Fatalf("Open failed: %v", err)
+		}
+
+		if i == b.N-1 {
+			b.Logf("count=%d max_depth=%d has_tiers=%v",
+				idx.Count(), idx.MaxDepth(), idx.HasTierData())
+		}
+
+		idx.Close()
+	}
+}
+
+// BenchmarkLookup benchmarks prefix lookup performance.
 func BenchmarkLookup(b *testing.B) {
-	for _, shape := range treeShapes {
-		for _, size := range treeSizes {
-			name := fmt.Sprintf("%s/size=%d", shape.name, size)
+	for _, shape := range benchShapes {
+		for _, size := range benchSizes {
+			name := fmt.Sprintf("%s/size=%d", shape, size)
+
 			b.Run(name+"/sequential", func(b *testing.B) {
-				keys := shape.generate(size)
+				keys := benchutil.GenerateKeys(size, shape)
 				bi := setupBenchIndex(b, keys)
 				defer bi.Close()
 
@@ -265,7 +304,7 @@ func BenchmarkLookup(b *testing.B) {
 			})
 
 			b.Run(name+"/random", func(b *testing.B) {
-				keys := shape.generate(size)
+				keys := benchutil.GenerateKeys(size, shape)
 				bi := setupBenchIndex(b, keys)
 				defer bi.Close()
 
@@ -285,14 +324,14 @@ func BenchmarkLookup(b *testing.B) {
 	}
 }
 
-// BenchmarkStats benchmarks stats retrieval after lookup
+// BenchmarkStats benchmarks stats retrieval after lookup.
 func BenchmarkStats(b *testing.B) {
-	for _, shape := range treeShapes {
-		for _, size := range treeSizes {
-			name := fmt.Sprintf("%s/size=%d", shape.name, size)
+	for _, shape := range benchShapes {
+		for _, size := range benchSizes {
+			name := fmt.Sprintf("%s/size=%d", shape, size)
 
 			b.Run(name+"/sequential", func(b *testing.B) {
-				keys := shape.generate(size)
+				keys := benchutil.GenerateKeys(size, shape)
 				bi := setupBenchIndex(b, keys)
 				defer bi.Close()
 
@@ -304,7 +343,7 @@ func BenchmarkStats(b *testing.B) {
 			})
 
 			b.Run(name+"/random", func(b *testing.B) {
-				keys := shape.generate(size)
+				keys := benchutil.GenerateKeys(size, shape)
 				bi := setupBenchIndex(b, keys)
 				defer bi.Close()
 
@@ -324,13 +363,70 @@ func BenchmarkStats(b *testing.B) {
 	}
 }
 
-// BenchmarkDescendantsAtDepth benchmarks depth-based queries
+// BenchmarkTierBreakdown benchmarks per-tier statistics retrieval.
+func BenchmarkTierBreakdown(b *testing.B) {
+	sizes := []int{10000, 50000}
+
+	for _, size := range sizes {
+		b.Run(fmt.Sprintf("objects=%d/sequential", size), func(b *testing.B) {
+			bi := setupBenchIndexWithTiers(b, size)
+			defer bi.Close()
+
+			if !bi.idx.HasTierData() {
+				b.Skip("index has no tier data")
+			}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				pos := uint64(i % len(bi.prefixes))
+				_ = bi.idx.TierBreakdown(pos)
+			}
+		})
+
+		b.Run(fmt.Sprintf("objects=%d/random", size), func(b *testing.B) {
+			bi := setupBenchIndexWithTiers(b, size)
+			defer bi.Close()
+
+			if !bi.idx.HasTierData() {
+				b.Skip("index has no tier data")
+			}
+
+			rng := rand.New(rand.NewSource(benchSeed))
+			randomPos := make([]uint64, b.N)
+			for i := range randomPos {
+				randomPos[i] = uint64(rng.Intn(len(bi.prefixes)))
+			}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = bi.idx.TierBreakdown(randomPos[i])
+			}
+		})
+
+		b.Run(fmt.Sprintf("objects=%d/all_tiers", size), func(b *testing.B) {
+			bi := setupBenchIndexWithTiers(b, size)
+			defer bi.Close()
+
+			if !bi.idx.HasTierData() {
+				b.Skip("index has no tier data")
+			}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				pos := uint64(i % len(bi.prefixes))
+				_ = bi.idx.TierBreakdownAll(pos)
+			}
+		})
+	}
+}
+
+// BenchmarkDescendantsAtDepth benchmarks depth-based queries.
 func BenchmarkDescendantsAtDepth(b *testing.B) {
 	depths := []int{1, 2, 3, 5}
 
-	for _, shape := range treeShapes {
-		for _, size := range treeSizes {
-			keys := shape.generate(size)
+	for _, shape := range benchShapes {
+		for _, size := range benchSizes {
+			keys := benchutil.GenerateKeys(size, shape)
 			bi := setupBenchIndex(b, keys)
 
 			for _, depth := range depths {
@@ -338,7 +434,7 @@ func BenchmarkDescendantsAtDepth(b *testing.B) {
 					continue
 				}
 
-				name := fmt.Sprintf("%s/size=%d/depth=%d", shape.name, size, depth)
+				name := fmt.Sprintf("%s/size=%d/depth=%d", shape, size, depth)
 
 				b.Run(name+"/from_root", func(b *testing.B) {
 					rootPos, _ := bi.idx.Lookup("")
@@ -354,14 +450,69 @@ func BenchmarkDescendantsAtDepth(b *testing.B) {
 	}
 }
 
-// BenchmarkIterator benchmarks the iterator interface
+// BenchmarkDescendantsSubtree benchmarks descendants queries on different subtree sizes.
+func BenchmarkDescendantsSubtree(b *testing.B) {
+	size := 50000
+	keys := benchutil.GenerateKeys(size, "s3_realistic")
+	bi := setupBenchIndex(b, keys)
+	defer bi.Close()
+
+	// Find prefixes with different subtree sizes
+	var smallSubtreePrefix, largeSubtreePrefix string
+	var smallCount, largeCount int
+
+	for _, p := range bi.prefixes {
+		pos, ok := bi.idx.Lookup(p)
+		if !ok {
+			continue
+		}
+		subtreeSize := bi.idx.SubtreeEnd(pos) - pos
+		if subtreeSize > 5 && subtreeSize < 50 && smallSubtreePrefix == "" {
+			smallSubtreePrefix = p
+			smallCount = int(subtreeSize)
+		}
+		if subtreeSize > 500 && largeSubtreePrefix == "" {
+			largeSubtreePrefix = p
+			largeCount = int(subtreeSize)
+		}
+		if smallSubtreePrefix != "" && largeSubtreePrefix != "" {
+			break
+		}
+	}
+
+	b.Run("small_subtree", func(b *testing.B) {
+		if smallSubtreePrefix == "" {
+			b.Skip("no suitable small subtree found")
+		}
+		pos, _ := bi.idx.Lookup(smallSubtreePrefix)
+		b.Logf("prefix=%q subtree_size=%d", smallSubtreePrefix, smallCount)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, _ = bi.idx.DescendantsAtDepth(pos, 1)
+		}
+	})
+
+	b.Run("large_subtree", func(b *testing.B) {
+		if largeSubtreePrefix == "" {
+			b.Skip("no suitable large subtree found")
+		}
+		pos, _ := bi.idx.Lookup(largeSubtreePrefix)
+		b.Logf("prefix=%q subtree_size=%d", largeSubtreePrefix, largeCount)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, _ = bi.idx.DescendantsAtDepth(pos, 1)
+		}
+	})
+}
+
+// BenchmarkIterator benchmarks the iterator interface.
 func BenchmarkIterator(b *testing.B) {
-	for _, shape := range treeShapes {
-		for _, size := range treeSizes {
-			keys := shape.generate(size)
+	for _, shape := range benchShapes {
+		for _, size := range benchSizes {
+			keys := benchutil.GenerateKeys(size, shape)
 			bi := setupBenchIndex(b, keys)
 
-			name := fmt.Sprintf("%s/size=%d", shape.name, size)
+			name := fmt.Sprintf("%s/size=%d", shape, size)
 
 			b.Run(name+"/depth1_iterate_all", func(b *testing.B) {
 				rootPos, _ := bi.idx.Lookup("")
@@ -384,14 +535,14 @@ func BenchmarkIterator(b *testing.B) {
 	}
 }
 
-// BenchmarkMixedWorkload simulates realistic mixed query patterns
+// BenchmarkMixedWorkload simulates realistic mixed query patterns.
 func BenchmarkMixedWorkload(b *testing.B) {
-	for _, shape := range treeShapes {
+	for _, shape := range benchShapes {
 		size := 10000
-		keys := shape.generate(size)
+		keys := benchutil.GenerateKeys(size, shape)
 		bi := setupBenchIndex(b, keys)
 
-		name := fmt.Sprintf("%s/mixed", shape.name)
+		name := fmt.Sprintf("%s/mixed", shape)
 
 		b.Run(name, func(b *testing.B) {
 			rng := rand.New(rand.NewSource(benchSeed))
@@ -418,5 +569,88 @@ func BenchmarkMixedWorkload(b *testing.B) {
 		})
 
 		bi.Close()
+	}
+}
+
+// BenchmarkMixedWorkloadWithTiers includes tier breakdown queries.
+func BenchmarkMixedWorkloadWithTiers(b *testing.B) {
+	bi := setupBenchIndexWithTiers(b, 50000)
+	defer bi.Close()
+
+	if !bi.idx.HasTierData() {
+		b.Skip("index has no tier data")
+	}
+
+	rng := rand.New(rand.NewSource(benchSeed))
+	rootPos, _ := bi.idx.Lookup("")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		op := rng.Intn(100)
+		switch {
+		case op < 40:
+			prefix := bi.prefixes[rng.Intn(len(bi.prefixes))]
+			_, _ = bi.idx.StatsForPrefix(prefix)
+		case op < 55:
+			pos := uint64(rng.Intn(len(bi.prefixes)))
+			_ = bi.idx.TierBreakdown(pos)
+		case op < 75:
+			_, _ = bi.idx.DescendantsAtDepth(rootPos, 1)
+		case op < 90:
+			_, _ = bi.idx.DescendantsAtDepth(rootPos, 2)
+		default:
+			depth := rng.Intn(3) + 3
+			if uint32(depth) <= bi.idx.MaxDepth() {
+				_, _ = bi.idx.DescendantsAtDepth(rootPos, depth)
+			}
+		}
+	}
+}
+
+// BenchmarkPrefixHeavy benchmarks many back-to-back prefix queries.
+func BenchmarkPrefixHeavy(b *testing.B) {
+	bi := setupBenchIndexWithTiers(b, 100000)
+	defer bi.Close()
+
+	rng := rand.New(rand.NewSource(benchSeed))
+
+	// Pre-generate random indices
+	randomIndices := make([]int, b.N)
+	for i := range randomIndices {
+		randomIndices[i] = rng.Intn(len(bi.prefixes))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		prefix := bi.prefixes[randomIndices[i]]
+		pos, ok := bi.idx.Lookup(prefix)
+		if ok {
+			_ = bi.idx.Stats(pos)
+		}
+	}
+}
+
+// BenchmarkIndexOpen_Scaling runs larger scale load tests (gated).
+func BenchmarkIndexOpen_Scaling(b *testing.B) {
+	if os.Getenv("S3INV_LONG_BENCH") == "" {
+		b.Skip("set S3INV_LONG_BENCH=1 to run scaling benchmark")
+	}
+
+	sizes := []int{10000, 50000, 100000, 250000}
+
+	for _, size := range sizes {
+		b.Run(fmt.Sprintf("objects=%d", size), func(b *testing.B) {
+			bi := setupBenchIndexWithTiers(b, size)
+			bi.Close()
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				idx, err := Open(bi.dir)
+				if err != nil {
+					b.Fatalf("Open failed: %v", err)
+				}
+				idx.Close()
+			}
+		})
 	}
 }
