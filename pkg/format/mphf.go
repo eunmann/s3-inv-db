@@ -12,7 +12,8 @@ import (
 
 // MPHFBuilder builds a minimal perfect hash function for prefix strings.
 type MPHFBuilder struct {
-	prefixes []string
+	prefixes    []string
+	preorderPos []uint64 // original preorder positions
 }
 
 // NewMPHFBuilder creates a new MPHF builder.
@@ -20,9 +21,10 @@ func NewMPHFBuilder() *MPHFBuilder {
 	return &MPHFBuilder{}
 }
 
-// Add adds a prefix at the given position.
-func (b *MPHFBuilder) Add(prefix string) {
+// Add adds a prefix at the given preorder position.
+func (b *MPHFBuilder) Add(prefix string, pos uint64) {
 	b.prefixes = append(b.prefixes, prefix)
+	b.preorderPos = append(b.preorderPos, pos)
 }
 
 // Build constructs the MPHF and writes it to the output directory.
@@ -68,16 +70,18 @@ func (b *MPHFBuilder) Build(outDir string) error {
 	// where element[mphfPos] = data for prefix that maps to mphfPos
 	orderedPrefixes := make([]string, len(b.prefixes))
 	fingerprints := make([]uint64, len(b.prefixes))
+	preorderPositions := make([]uint64, len(b.prefixes))
 
-	for _, prefix := range b.prefixes {
+	for i, prefix := range b.prefixes {
 		keyHash := hashString(prefix)
 		hashVal := mph.Find(keyHash)
 		if hashVal == 0 {
 			return fmt.Errorf("MPHF lookup failed for %q", prefix)
 		}
-		pos := hashVal - 1 // Convert to 0-indexed
-		fingerprints[pos] = computeFingerprint(prefix)
-		orderedPrefixes[pos] = prefix
+		hashPos := hashVal - 1 // Convert to 0-indexed
+		fingerprints[hashPos] = computeFingerprint(prefix)
+		orderedPrefixes[hashPos] = prefix
+		preorderPositions[hashPos] = b.preorderPos[i]
 	}
 
 	// Write fingerprints
@@ -98,8 +102,26 @@ func (b *MPHFBuilder) Build(outDir string) error {
 		return fmt.Errorf("close fingerprint writer: %w", err)
 	}
 
-	// Write prefix blob in MPHF order
-	if err := WritePrefixBlob(outDir, orderedPrefixes); err != nil {
+	// Write preorder positions
+	posPath := filepath.Join(outDir, "mph_pos.u64")
+	posWriter, err := NewArrayWriter(posPath, 8)
+	if err != nil {
+		return fmt.Errorf("create position writer: %w", err)
+	}
+
+	for _, p := range preorderPositions {
+		if err := posWriter.WriteU64(p); err != nil {
+			posWriter.Close()
+			return fmt.Errorf("write preorder position: %w", err)
+		}
+	}
+
+	if err := posWriter.Close(); err != nil {
+		return fmt.Errorf("close position writer: %w", err)
+	}
+
+	// Write prefix blob in preorder order (for GetPrefix by preorder position)
+	if err := WritePrefixBlob(outDir, b.prefixes); err != nil {
 		return fmt.Errorf("write prefix blob: %w", err)
 	}
 
@@ -131,6 +153,7 @@ func (b *MPHFBuilder) Count() int {
 type MPHF struct {
 	mph          *bbhash.BBHash2
 	fingerprints *ArrayReader
+	preorderPos  *ArrayReader // maps hash position -> preorder position
 	prefixBlob   *BlobReader
 	count        uint64
 }
@@ -139,6 +162,7 @@ type MPHF struct {
 func OpenMPHF(outDir string) (*MPHF, error) {
 	mphPath := filepath.Join(outDir, "mph.bin")
 	fpPath := filepath.Join(outDir, "mph_fp.u64")
+	posPath := filepath.Join(outDir, "mph_pos.u64")
 
 	// Check if empty
 	info, err := os.Stat(mphPath)
@@ -168,6 +192,13 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 		return nil, fmt.Errorf("open fingerprints: %w", err)
 	}
 
+	// Load preorder positions
+	preorderPos, err := OpenArray(posPath)
+	if err != nil {
+		fingerprints.Close()
+		return nil, fmt.Errorf("open preorder positions: %w", err)
+	}
+
 	// Optionally load prefix blob (for reverse lookup)
 	blobPath := filepath.Join(outDir, "prefix_blob.bin")
 	offsetsPath := filepath.Join(outDir, "prefix_offsets.u64")
@@ -177,6 +208,7 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 		prefixBlob, err = OpenBlob(blobPath, offsetsPath)
 		if err != nil {
 			fingerprints.Close()
+			preorderPos.Close()
 			return nil, fmt.Errorf("open prefix blob: %w", err)
 		}
 	}
@@ -184,6 +216,7 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 	return &MPHF{
 		mph:          mph,
 		fingerprints: fingerprints,
+		preorderPos:  preorderPos,
 		prefixBlob:   prefixBlob,
 		count:        fingerprints.Count(),
 	}, nil
@@ -199,6 +232,12 @@ func (m *MPHF) Close() error {
 		}
 	}
 
+	if m.preorderPos != nil {
+		if err := m.preorderPos.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
 	if m.prefixBlob != nil {
 		if err := m.prefixBlob.Close(); err != nil && firstErr == nil {
 			firstErr = err
@@ -208,7 +247,7 @@ func (m *MPHF) Close() error {
 	return firstErr
 }
 
-// Lookup returns the position for a prefix, or ok=false if not found.
+// Lookup returns the preorder position for a prefix, or ok=false if not found.
 func (m *MPHF) Lookup(prefix string) (pos uint64, ok bool) {
 	if m.count == 0 || m.mph == nil {
 		return 0, false
@@ -220,21 +259,22 @@ func (m *MPHF) Lookup(prefix string) (pos uint64, ok bool) {
 		return 0, false
 	}
 
-	pos = hashVal - 1 // Convert to 0-indexed
+	hashPos := hashVal - 1 // Convert to 0-indexed
 
-	if pos >= m.count {
+	if hashPos >= m.count {
 		return 0, false
 	}
 
 	// Verify with fingerprint
-	storedFP := m.fingerprints.UnsafeGetU64(pos)
+	storedFP := m.fingerprints.UnsafeGetU64(hashPos)
 	computedFP := computeFingerprint(prefix)
 
 	if storedFP != computedFP {
 		return 0, false
 	}
 
-	return pos, true
+	// Return the preorder position, not the hash position
+	return m.preorderPos.UnsafeGetU64(hashPos), true
 }
 
 // LookupWithVerify returns the position and optionally verifies against

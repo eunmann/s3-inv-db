@@ -33,11 +33,11 @@ func TestMPHFBuilderSimple(t *testing.T) {
 	b := NewMPHFBuilder()
 
 	prefixes := []string{"", "a/", "a/b/", "b/", "c/"}
-	for _, p := range prefixes {
-		b.Add(p)
+	for i, p := range prefixes {
+		b.Add(p, uint64(i))
 	}
 
-	// Build now writes the prefix blob in MPHF order
+	// Build writes the prefix blob in preorder
 	if err := b.Build(dir); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
@@ -81,8 +81,8 @@ func TestMPHFLookupWithVerify(t *testing.T) {
 	b := NewMPHFBuilder()
 
 	prefixes := []string{"", "x/", "y/", "z/"}
-	for _, p := range prefixes {
-		b.Add(p)
+	for i, p := range prefixes {
+		b.Add(p, uint64(i))
 	}
 
 	if err := b.Build(dir); err != nil {
@@ -116,8 +116,8 @@ func TestMPHFVerify(t *testing.T) {
 	b := NewMPHFBuilder()
 
 	prefixes := []string{"", "foo/", "bar/", "baz/"}
-	for _, p := range prefixes {
-		b.Add(p)
+	for i, p := range prefixes {
+		b.Add(p, uint64(i))
 	}
 
 	if err := b.Build(dir); err != nil {
@@ -145,8 +145,8 @@ func TestMPHFLarge(t *testing.T) {
 		prefixes[i] = prefixFromInt(i)
 	}
 
-	for _, p := range prefixes {
-		b.Add(p)
+	for i, p := range prefixes {
+		b.Add(p, uint64(i))
 	}
 
 	if err := b.Build(dir); err != nil {
@@ -184,8 +184,8 @@ func TestMPHFNoFalsePositives(t *testing.T) {
 	b := NewMPHFBuilder()
 
 	prefixes := []string{"alpha/", "beta/", "gamma/"}
-	for _, p := range prefixes {
-		b.Add(p)
+	for i, p := range prefixes {
+		b.Add(p, uint64(i))
 	}
 
 	if err := b.Build(dir); err != nil {
@@ -221,8 +221,8 @@ func TestMPHFUnicode(t *testing.T) {
 	b := NewMPHFBuilder()
 
 	prefixes := []string{"", "日本語/", "한국어/", "emoji/🎉/"}
-	for _, p := range prefixes {
-		b.Add(p)
+	for i, p := range prefixes {
+		b.Add(p, uint64(i))
 	}
 
 	if err := b.Build(dir); err != nil {
@@ -285,7 +285,7 @@ func BenchmarkMPHFLookup(b *testing.B) {
 	prefixes := make([]string, 10000)
 	for i := 0; i < 10000; i++ {
 		prefixes[i] = prefixFromInt(i)
-		builder.Add(prefixes[i])
+		builder.Add(prefixes[i], uint64(i))
 	}
 
 	if err := builder.Build(dir); err != nil {
