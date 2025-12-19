@@ -17,6 +17,7 @@ type Index struct {
 	maxDepthInSubtree *format.ArrayReader
 	depthIndex        *format.DepthIndex
 	mphf              *format.MPHF
+	tierStats         *format.TierStatsReader
 	count             uint64
 	maxDepth          uint32
 }
@@ -70,6 +71,14 @@ func Open(dir string) (*Index, error) {
 		return nil, fmt.Errorf("open MPHF: %w", err)
 	}
 
+	// Open tier stats (optional - may not exist)
+	idx.tierStats, err = format.OpenTierStats(dir)
+	if err != nil {
+		idx.Close()
+		return nil, fmt.Errorf("open tier stats: %w", err)
+	}
+	// tierStats may be nil if no tier data exists, which is fine
+
 	idx.count = idx.subtreeEnd.Count()
 	idx.maxDepth = idx.depthIndex.MaxDepth()
 
@@ -112,6 +121,11 @@ func (idx *Index) Close() error {
 	}
 	if idx.mphf != nil {
 		if err := idx.mphf.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if idx.tierStats != nil {
+		if err := idx.tierStats.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -316,3 +330,53 @@ type emptyIterator struct{}
 func (e *emptyIterator) Next() bool    { return false }
 func (e *emptyIterator) Pos() uint64   { return 0 }
 func (e *emptyIterator) Depth() uint32 { return 0 }
+
+// TierBreakdown is an alias for format.TierBreakdown.
+type TierBreakdown = format.TierBreakdown
+
+// HasTierData returns whether the index has tier statistics.
+func (idx *Index) HasTierData() bool {
+	return idx.tierStats != nil && idx.tierStats.HasTierData()
+}
+
+// TierBreakdown returns the per-tier statistics for the node at pos.
+// Returns nil if no tier data is available.
+func (idx *Index) TierBreakdown(pos uint64) []TierBreakdown {
+	if idx.tierStats == nil {
+		return nil
+	}
+	return idx.tierStats.GetBreakdown(pos)
+}
+
+// TierBreakdownAll returns the per-tier statistics for all present tiers (including zeros).
+// Returns nil if no tier data is available.
+func (idx *Index) TierBreakdownAll(pos uint64) []TierBreakdown {
+	if idx.tierStats == nil {
+		return nil
+	}
+	return idx.tierStats.GetBreakdownAll(pos)
+}
+
+// TierBreakdownForPrefix returns the per-tier statistics for a prefix string.
+// Returns nil if the prefix is not found or no tier data is available.
+func (idx *Index) TierBreakdownForPrefix(prefix string) []TierBreakdown {
+	pos, ok := idx.Lookup(prefix)
+	if !ok {
+		return nil
+	}
+	return idx.TierBreakdown(pos)
+}
+
+// TierBreakdownMap returns the per-tier statistics as a map keyed by tier name.
+// Returns nil if no tier data is available.
+func (idx *Index) TierBreakdownMap(pos uint64) map[string]TierBreakdown {
+	breakdown := idx.TierBreakdown(pos)
+	if breakdown == nil {
+		return nil
+	}
+	result := make(map[string]TierBreakdown, len(breakdown))
+	for _, tb := range breakdown {
+		result[tb.TierName] = tb
+	}
+	return result
+}
