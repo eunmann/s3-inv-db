@@ -245,6 +245,59 @@ S3INV_LONG_BENCH=1 go test -bench='Scaling|Threshold|MultiRowBatch' -benchtime=1
    - Called in `Open()` to fail fast on invalid configuration
    - Comprehensive tests for validation edge cases
 
+## Phase: Bulk Write Investigation
+
+### Investigation Findings
+
+Investigated SQLite configuration for heavy write workloads (14B+ objects).
+
+#### 1. Missing PRAGMAs for Bulk Writes
+
+**Added `BulkWriteMode` flag** that enables:
+- `PRAGMA locking_mode=EXCLUSIVE` - Hold lock for entire session
+- `PRAGMA wal_autocheckpoint=0` - Disable auto-checkpoint during writes
+- Manual checkpoint on close with `PRAGMA wal_checkpoint(TRUNCATE)`
+
+**Benchmark Result:** ~2% improvement with `synchronous=OFF` (marginal because there's no fsync overhead). Impact may be larger with `synchronous=NORMAL` in production.
+
+#### 2. Pipeline Multi-Row Batching Bug (FIXED)
+
+**Critical Bug Found:** `pipeline.go:writeBatch()` was using single-row UPSERT instead of multi-row batching. This bypassed the 256-row batching optimization for the pipelined streaming path.
+
+**Fix:** Rewrote `writeBatch()` to use `multiRowStmt` for batches of 256 rows, with single-row fallback for remainders. Uses aggregator's reusable `batchArgs` and `singleArgs` buffers.
+
+#### 3. Staging Table Approach (Evaluated, Not Adopted)
+
+Tested alternative approach: INSERT into unindexed staging table, then aggregate with single `INSERT...SELECT...GROUP BY` at end.
+
+**Result:** Staging approach was **~15% slower** than UPSERT + delta accumulation because:
+- Staging inserts every (prefix, delta) tuple individually (~267k inserts for 100k objects)
+- UPSERT with delta accumulation only flushes unique prefixes per batch (much fewer rows)
+
+The current in-memory delta accumulation is already an effective optimization.
+
+#### 4. Schema Analysis
+
+Current schema uses `prefix TEXT PRIMARY KEY`:
+- Pros: Simple, natural ordering for iteration
+- Cons: Variable-length text keys mean expensive B-tree operations
+
+**Potential future optimization:** Integer prefix ID with separate prefix→ID lookup. Not implemented due to complexity and unclear benefit vs CGO overhead.
+
+### Remaining Bottleneck: CGO Overhead
+
+CPU profile shows 47% of time in `runtime.cgocall` (SQLite CGO boundary). This is fundamental to go-sqlite3 and cannot be optimized without:
+- Direct SQLite C bindings (major rewrite)
+- Alternative pure-Go database (loses SQLite reliability)
+
+### Bulk Write Mode Usage
+
+```go
+cfg := sqliteagg.DefaultConfig(dbPath)
+cfg.BulkWriteMode = true  // Enable for build workflows
+agg, err := sqliteagg.Open(cfg)
+```
+
 ## Benchmark Design Notes
 
 - **sqliteagg/bench_test.go**: Aggregation benchmarks with tier distributions and threshold sweeps

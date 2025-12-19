@@ -1,6 +1,7 @@
 package sqliteagg
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/pkg/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 /*
@@ -668,4 +670,307 @@ func accumDelta(m map[string]*prefixDelta, prefix string, depth int, size uint64
 	delta.totalBytes += size
 	delta.tierCounts[tierID]++
 	delta.tierBytes[tierID] += size
+}
+
+// BenchmarkStagingTable compares UPSERT approach vs staging table + merge.
+// Staging table approach: INSERT into unindexed table, then single aggregation at end.
+// This avoids B-tree maintenance during the write phase.
+func BenchmarkStagingTable(b *testing.B) {
+	sizes := []int{10000, 100000}
+
+	for _, size := range sizes {
+		gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(size))
+		objects := gen.Generate()
+
+		b.Run(fmt.Sprintf("objects=%d/upsert", size), func(b *testing.B) {
+			benchmarkUpsertApproach(b, objects)
+		})
+
+		b.Run(fmt.Sprintf("objects=%d/staging", size), func(b *testing.B) {
+			benchmarkStagingApproach(b, objects)
+		})
+	}
+}
+
+func benchmarkUpsertApproach(b *testing.B, objects []benchutil.FakeObject) {
+	b.Helper()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		tmpDir := b.TempDir()
+		dbPath := filepath.Join(tmpDir, "prefix-agg.db")
+		b.StartTimer()
+
+		cfg := DefaultConfig(dbPath)
+		cfg.Synchronous = "OFF"
+		cfg.BulkWriteMode = true
+		agg, err := Open(cfg)
+		if err != nil {
+			b.Fatalf("Open failed: %v", err)
+		}
+
+		if err := agg.BeginChunk(); err != nil {
+			b.Fatalf("BeginChunk failed: %v", err)
+		}
+		for _, obj := range objects {
+			if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
+				b.Fatalf("AddObject failed: %v", err)
+			}
+		}
+		if err := agg.MarkChunkDone("bench-chunk"); err != nil {
+			b.Fatalf("MarkChunkDone failed: %v", err)
+		}
+		if err := agg.Commit(); err != nil {
+			b.Fatalf("Commit failed: %v", err)
+		}
+
+		b.StopTimer()
+		if i == b.N-1 {
+			prefixCount, _ := agg.PrefixCount()
+			b.Logf("upsert: objects=%d prefixes=%d", len(objects), prefixCount)
+		}
+		agg.Close()
+	}
+}
+
+func benchmarkStagingApproach(b *testing.B, objects []benchutil.FakeObject) {
+	b.Helper()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		tmpDir := b.TempDir()
+		dbPath := filepath.Join(tmpDir, "staging.db")
+		b.StartTimer()
+
+		// Open database with bulk write optimizations
+		db, err := openStagingDB(dbPath)
+		if err != nil {
+			b.Fatalf("openStagingDB failed: %v", err)
+		}
+
+		// Phase 1: Insert all deltas into unindexed staging table
+		tx, err := db.Begin()
+		if err != nil {
+			b.Fatalf("Begin failed: %v", err)
+		}
+
+		insertStmt, err := tx.Prepare(buildStagingInsertSQL())
+		if err != nil {
+			b.Fatalf("Prepare failed: %v", err)
+		}
+
+		tierMapping := tiers.NewMapping()
+		_ = tierMapping // Unused, just for consistent setup
+
+		for _, obj := range objects {
+			// Root prefix
+			if _, err := insertStmt.Exec("", 0, 1, obj.Size, int(obj.TierID)); err != nil {
+				b.Fatalf("Insert failed: %v", err)
+			}
+			// Directory prefixes
+			depth := 1
+			for j := 0; j < len(obj.Key); j++ {
+				if obj.Key[j] == '/' {
+					prefix := obj.Key[:j+1]
+					if _, err := insertStmt.Exec(prefix, depth, 1, obj.Size, int(obj.TierID)); err != nil {
+						b.Fatalf("Insert failed: %v", err)
+					}
+					depth++
+				}
+			}
+		}
+
+		insertStmt.Close()
+		if err := tx.Commit(); err != nil {
+			b.Fatalf("Commit staging failed: %v", err)
+		}
+
+		// Phase 2: Aggregate and merge into final table
+		if err := mergeStaging(db); err != nil {
+			b.Fatalf("mergeStaging failed: %v", err)
+		}
+
+		b.StopTimer()
+
+		if i == b.N-1 {
+			var prefixCount int
+			db.QueryRow("SELECT COUNT(*) FROM prefix_stats").Scan(&prefixCount)
+			b.Logf("staging: objects=%d prefixes=%d", len(objects), prefixCount)
+		}
+
+		db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+		db.Close()
+	}
+}
+
+func openStagingDB(dbPath string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL")
+	if err != nil {
+		return nil, err
+	}
+
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA synchronous=OFF",
+		"PRAGMA temp_store=MEMORY",
+		"PRAGMA mmap_size=268435456",
+		"PRAGMA page_size=32768",
+		"PRAGMA cache_size=-262144",
+		"PRAGMA locking_mode=EXCLUSIVE",
+		"PRAGMA wal_autocheckpoint=0",
+	}
+
+	for _, pragma := range pragmas {
+		if _, err := db.Exec(pragma); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+
+	// Create unindexed staging table (no PRIMARY KEY = no B-tree maintenance)
+	createStaging := `
+		CREATE TABLE IF NOT EXISTS staging (
+			prefix TEXT,
+			depth INTEGER,
+			count INTEGER,
+			bytes INTEGER,
+			tier_id INTEGER
+		)
+	`
+
+	// Create final aggregated table
+	var tierCols string
+	for i := range tiers.NumTiers {
+		tierCols += fmt.Sprintf(",\n    t%d_count INTEGER NOT NULL DEFAULT 0", i)
+		tierCols += fmt.Sprintf(",\n    t%d_bytes INTEGER NOT NULL DEFAULT 0", i)
+	}
+
+	createPrefixStats := fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS prefix_stats (
+			prefix TEXT PRIMARY KEY,
+			depth INTEGER NOT NULL,
+			total_count INTEGER NOT NULL DEFAULT 0,
+			total_bytes INTEGER NOT NULL DEFAULT 0%s
+		)
+	`, tierCols)
+
+	if _, err := db.Exec(createStaging); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(createPrefixStats); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	return db, nil
+}
+
+func buildStagingInsertSQL() string {
+	return "INSERT INTO staging (prefix, depth, count, bytes, tier_id) VALUES (?, ?, ?, ?, ?)"
+}
+
+func mergeStaging(db *sql.DB) error {
+	// Build the aggregation query with tier-specific columns
+	var tierSums, tierCols string
+	for i := range tiers.NumTiers {
+		if i > 0 {
+			tierSums += ", "
+			tierCols += ", "
+		}
+		tierSums += fmt.Sprintf("SUM(CASE WHEN tier_id = %d THEN count ELSE 0 END)", i)
+		tierSums += fmt.Sprintf(", SUM(CASE WHEN tier_id = %d THEN bytes ELSE 0 END)", i)
+		tierCols += fmt.Sprintf("t%d_count, t%d_bytes", i, i)
+	}
+
+	mergeSQL := fmt.Sprintf(`
+		INSERT INTO prefix_stats (prefix, depth, total_count, total_bytes, %s)
+		SELECT prefix, MAX(depth), SUM(count), SUM(bytes), %s
+		FROM staging
+		GROUP BY prefix
+	`, tierCols, tierSums)
+
+	_, err := db.Exec(mergeSQL)
+	if err != nil {
+		return fmt.Errorf("merge staging: %w", err)
+	}
+
+	// Drop staging table
+	_, err = db.Exec("DROP TABLE staging")
+	return err
+}
+
+// BenchmarkBulkWriteMode compares normal mode vs bulk write mode PRAGMAs.
+// Bulk write mode uses EXCLUSIVE locking and disabled auto-checkpoint.
+func BenchmarkBulkWriteMode(b *testing.B) {
+	sizes := []int{10000, 100000}
+
+	for _, size := range sizes {
+		// Generate test data once for both modes
+		gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(size))
+		objects := gen.Generate()
+
+		b.Run(fmt.Sprintf("objects=%d/normal", size), func(b *testing.B) {
+			benchmarkWithMode(b, objects, false)
+		})
+
+		b.Run(fmt.Sprintf("objects=%d/bulk_write", size), func(b *testing.B) {
+			benchmarkWithMode(b, objects, true)
+		})
+	}
+}
+
+func benchmarkWithMode(b *testing.B, objects []benchutil.FakeObject, bulkWriteMode bool) {
+	b.Helper()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+
+		tmpDir := b.TempDir()
+		dbPath := filepath.Join(tmpDir, "prefix-agg.db")
+
+		b.StartTimer()
+
+		cfg := DefaultConfig(dbPath)
+		cfg.Synchronous = "OFF"
+		cfg.BulkWriteMode = bulkWriteMode
+		agg, err := Open(cfg)
+		if err != nil {
+			b.Fatalf("Open failed: %v", err)
+		}
+
+		if err := agg.BeginChunk(); err != nil {
+			b.Fatalf("BeginChunk failed: %v", err)
+		}
+
+		for _, obj := range objects {
+			if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
+				b.Fatalf("AddObject failed: %v", err)
+			}
+		}
+
+		if err := agg.MarkChunkDone("bench-chunk"); err != nil {
+			b.Fatalf("MarkChunkDone failed: %v", err)
+		}
+		if err := agg.Commit(); err != nil {
+			b.Fatalf("Commit failed: %v", err)
+		}
+
+		b.StopTimer()
+
+		if i == b.N-1 {
+			prefixCount, _ := agg.PrefixCount()
+			fi, _ := os.Stat(dbPath)
+			dbSize := int64(0)
+			if fi != nil {
+				dbSize = fi.Size()
+			}
+			b.Logf("mode=%v objects=%d prefixes=%d db_mb=%.2f",
+				bulkWriteMode, len(objects), prefixCount, float64(dbSize)/(1024*1024))
+		}
+		agg.Close()
+	}
 }

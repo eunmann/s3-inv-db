@@ -27,6 +27,12 @@ type Config struct {
 	MmapSize int64
 	// CacheSizeKB is the cache size in KB (default 256MB).
 	CacheSizeKB int
+	// BulkWriteMode enables optimizations for bulk write workloads.
+	// When true:
+	//   - locking_mode=EXCLUSIVE (hold lock for entire session)
+	//   - wal_autocheckpoint=0 (disable auto-checkpoint, manual at close)
+	// This improves write throughput significantly but prevents concurrent readers.
+	BulkWriteMode bool
 }
 
 // DefaultConfig returns a default configuration tuned for performance.
@@ -79,9 +85,10 @@ const MultiRowBatchSize = 256
 
 // Aggregator aggregates S3 inventory prefixes into a SQLite database.
 type Aggregator struct {
-	db          *sql.DB
-	cfg         Config
-	tierMapping *tiers.Mapping
+	db            *sql.DB
+	cfg           Config
+	tierMapping   *tiers.Mapping
+	bulkWriteMode bool // True if BulkWriteMode was enabled (need checkpoint on close)
 
 	// Prepared statements (created per-transaction)
 	upsertStmt      *sql.Stmt // Single-row upsert (for remainder)
@@ -137,6 +144,14 @@ func Open(cfg Config) (*Aggregator, error) {
 		fmt.Sprintf("PRAGMA cache_size=-%d", cfg.CacheSizeKB),
 	}
 
+	// Bulk write mode: hold exclusive lock and disable auto-checkpoint
+	if cfg.BulkWriteMode {
+		pragmas = append(pragmas,
+			"PRAGMA locking_mode=EXCLUSIVE",
+			"PRAGMA wal_autocheckpoint=0",
+		)
+	}
+
 	for _, pragma := range pragmas {
 		if _, err := db.Exec(pragma); err != nil {
 			db.Close()
@@ -153,12 +168,14 @@ func Open(cfg Config) (*Aggregator, error) {
 	log.Info().
 		Str("db_path", cfg.DBPath).
 		Str("synchronous", cfg.Synchronous).
+		Bool("bulk_write_mode", cfg.BulkWriteMode).
 		Msg("opened SQLite aggregator")
 
 	return &Aggregator{
-		db:          db,
-		cfg:         cfg,
-		tierMapping: tiers.NewMapping(),
+		db:            db,
+		cfg:           cfg,
+		tierMapping:   tiers.NewMapping(),
+		bulkWriteMode: cfg.BulkWriteMode,
 	}, nil
 }
 
@@ -199,6 +216,7 @@ func createSchema(db *sql.DB) error {
 
 // Close closes the database connection.
 // If a transaction is in progress, it is rolled back.
+// In bulk write mode, performs a WAL checkpoint before closing.
 func (a *Aggregator) Close() error {
 	if a.tx != nil {
 		// Rollback error is intentionally ignored during Close.
@@ -219,6 +237,12 @@ func (a *Aggregator) Close() error {
 		_ = a.markDoneStmt.Close()
 		a.markDoneStmt = nil
 	}
+
+	// In bulk write mode, run checkpoint before closing to consolidate WAL
+	if a.bulkWriteMode {
+		_, _ = a.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	}
+
 	return a.db.Close()
 }
 

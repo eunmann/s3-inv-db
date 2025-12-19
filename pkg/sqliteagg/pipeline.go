@@ -643,20 +643,59 @@ func (p *Pipeline) writeBatch(batch map[string]*AggStats, chunksToMark []string)
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 
-	// Build batch upsert
-	for prefix, stats := range batch {
-		// Build arguments
-		args := make([]interface{}, 0, 4+int(tiers.NumTiers)*2)
-		args = append(args, prefix, stats.Depth, stats.TotalCount, stats.TotalBytes)
+	// Collect prefixes into a slice for batching
+	prefixes := make([]string, 0, len(batch))
+	for prefix := range batch {
+		prefixes = append(prefixes, prefix)
+	}
 
-		for i := range tiers.NumTiers {
-			args = append(args, stats.TierCounts[i], stats.TierBytes[i])
+	// Process full batches using multi-row upsert (256 rows per exec)
+	colsPerRow := p.agg.colsPerRow
+	for i := 0; i+MultiRowBatchSize <= len(prefixes); i += MultiRowBatchSize {
+		// Fill batch args using aggregator's reusable buffer
+		for j := 0; j < MultiRowBatchSize; j++ {
+			prefix := prefixes[i+j]
+			stats := batch[prefix]
+			offset := j * colsPerRow
+
+			p.agg.batchArgs[offset] = prefix
+			p.agg.batchArgs[offset+1] = stats.Depth
+			p.agg.batchArgs[offset+2] = stats.TotalCount
+			p.agg.batchArgs[offset+3] = stats.TotalBytes
+
+			for k := range tiers.NumTiers {
+				p.agg.batchArgs[offset+4+int(k)*2] = stats.TierCounts[k]
+				p.agg.batchArgs[offset+4+int(k)*2+1] = stats.TierBytes[k]
+			}
 		}
 
-		_, err := p.agg.upsertStmt.Exec(args...)
-		if err != nil {
+		if _, err := p.agg.multiRowStmt.Exec(p.agg.batchArgs...); err != nil {
 			p.agg.Rollback()
-			return fmt.Errorf("upsert prefix %q: %w", prefix, err)
+			return fmt.Errorf("multi-row upsert batch at %d: %w", i, err)
+		}
+	}
+
+	// Process remainder with single-row upserts
+	remainder := len(prefixes) % MultiRowBatchSize
+	if remainder > 0 {
+		startIdx := len(prefixes) - remainder
+		for _, prefix := range prefixes[startIdx:] {
+			stats := batch[prefix]
+
+			p.agg.singleArgs[0] = prefix
+			p.agg.singleArgs[1] = stats.Depth
+			p.agg.singleArgs[2] = stats.TotalCount
+			p.agg.singleArgs[3] = stats.TotalBytes
+
+			for k := range tiers.NumTiers {
+				p.agg.singleArgs[4+int(k)*2] = stats.TierCounts[k]
+				p.agg.singleArgs[4+int(k)*2+1] = stats.TierBytes[k]
+			}
+
+			if _, err := p.agg.upsertStmt.Exec(p.agg.singleArgs...); err != nil {
+				p.agg.Rollback()
+				return fmt.Errorf("upsert prefix %q: %w", prefix, err)
+			}
 		}
 	}
 
