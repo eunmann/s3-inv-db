@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/pkg/fileutil"
 	"github.com/eunmann/s3-inv-db/pkg/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -59,6 +60,12 @@ type Sorter struct {
 // NewSorter creates a new external sorter.
 func NewSorter(cfg Config) *Sorter {
 	log := logging.WithPhase("sort_runs")
+
+	// Clean up any stale .tmp files from previous interrupted runs
+	if err := fileutil.CleanupTmpFiles(cfg.TmpDir); err != nil {
+		log.Warn().Err(err).Msg("failed to cleanup tmp files")
+	}
+
 	log.Debug().
 		Int("max_records_per_chunk", cfg.MaxRecordsPerChunk).
 		Str("tmp_dir", cfg.TmpDir).
@@ -113,7 +120,7 @@ func (s *Sorter) AddRecords(ctx context.Context, reader inventory.Reader) error 
 	return nil
 }
 
-// flushChunk sorts a chunk and writes it as a run file.
+// flushChunk sorts a chunk and writes it as a run file using tmp+mv for atomicity.
 func (s *Sorter) flushChunk(chunk []inventory.Record) error {
 	log := logging.WithPhase("sort_runs")
 	runStart := time.Now()
@@ -123,14 +130,16 @@ func (s *Sorter) flushChunk(chunk []inventory.Record) error {
 		return chunk[i].Key < chunk[j].Key
 	})
 
-	// Write run file
+	// Generate paths
 	runPath := filepath.Join(s.cfg.TmpDir, fmt.Sprintf("run_%06d.tsv", s.runNum))
+	tmpPath := runPath + ".tmp"
 	runIndex := s.runNum
 	s.runNum++
 
-	f, err := os.Create(runPath)
+	// Write to temp file first
+	f, err := os.Create(tmpPath)
 	if err != nil {
-		return fmt.Errorf("create run file: %w", err)
+		return fmt.Errorf("create temp run file: %w", err)
 	}
 
 	w := bufio.NewWriter(f)
@@ -138,20 +147,32 @@ func (s *Sorter) flushChunk(chunk []inventory.Record) error {
 		// Format: key\tsize\ttierID\n
 		if _, err := fmt.Fprintf(w, "%s\t%d\t%d\n", rec.Key, rec.Size, rec.TierID); err != nil {
 			f.Close()
-			os.Remove(runPath)
+			os.Remove(tmpPath)
 			return fmt.Errorf("write record: %w", err)
 		}
 	}
 
 	if err := w.Flush(); err != nil {
 		f.Close()
-		os.Remove(runPath)
+		os.Remove(tmpPath)
 		return fmt.Errorf("flush run file: %w", err)
 	}
 
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("sync run file: %w", err)
+	}
+
 	if err := f.Close(); err != nil {
-		os.Remove(runPath)
+		os.Remove(tmpPath)
 		return fmt.Errorf("close run file: %w", err)
+	}
+
+	// Atomic rename to final path
+	if err := os.Rename(tmpPath, runPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename run file: %w", err)
 	}
 
 	s.runFiles = append(s.runFiles, runPath)

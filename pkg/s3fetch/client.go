@@ -54,7 +54,7 @@ func (c *Client) FetchManifest(ctx context.Context, bucket, key string) (*Manife
 	return manifest, nil
 }
 
-// DownloadFile downloads an S3 object to a local file.
+// DownloadFile downloads an S3 object to a local file using tmp+mv for atomicity.
 func (c *Client) DownloadFile(ctx context.Context, bucket, key, destPath string) error {
 	resp, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
@@ -66,28 +66,41 @@ func (c *Client) DownloadFile(ctx context.Context, bucket, key, destPath string)
 	defer resp.Body.Close()
 
 	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+	destDir := filepath.Dir(destPath)
+	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
 
-	f, err := os.Create(destPath)
+	// Write to temp file first
+	tmpPath := destPath + ".tmp"
+	f, err := os.Create(tmpPath)
 	if err != nil {
-		return fmt.Errorf("create file %s: %w", destPath, err)
+		return fmt.Errorf("create temp file %s: %w", tmpPath, err)
 	}
 
 	if _, err := io.Copy(f, resp.Body); err != nil {
 		f.Close()
-		return fmt.Errorf("write file %s: %w", destPath, err)
+		os.Remove(tmpPath)
+		return fmt.Errorf("write file %s: %w", tmpPath, err)
 	}
 
 	if err := f.Sync(); err != nil {
 		f.Close()
-		return fmt.Errorf("sync file %s: %w", destPath, err)
+		os.Remove(tmpPath)
+		return fmt.Errorf("sync file %s: %w", tmpPath, err)
 	}
 
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("close file %s: %w", destPath, err)
+		os.Remove(tmpPath)
+		return fmt.Errorf("close file %s: %w", tmpPath, err)
 	}
+
+	// Atomic rename to final destination
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename %s to %s: %w", tmpPath, destPath, err)
+	}
+
 	return nil
 }
 

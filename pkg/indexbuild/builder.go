@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/fileutil"
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
@@ -140,6 +141,19 @@ func buildIndex(ctx context.Context, cfg Config, inventoryFiles []string, openFi
 	}
 	if cfg.ChunkSize <= 0 {
 		cfg.ChunkSize = 1_000_000
+	}
+
+	// Check if output directory already has a valid index (resume support)
+	if indexValid(cfg.OutDir) {
+		log.Info().
+			Str("output_dir", cfg.OutDir).
+			Msg("resumed from completed build - index already valid")
+		return nil
+	}
+
+	// Clean up any stale temp files
+	if err := fileutil.CleanupTmpFiles(cfg.TmpDir); err != nil {
+		log.Warn().Err(err).Msg("failed to cleanup tmp files")
 	}
 
 	// Create temp output directory
@@ -421,4 +435,19 @@ func writeTierStats(outDir string, result *triebuild.Result) error {
 		Msg("tier statistics complete")
 
 	return nil
+}
+
+// indexValid checks if a complete index exists and is valid by reading the manifest
+// and verifying all files match their checksums.
+func indexValid(outDir string) bool {
+	manifest, err := format.ReadManifest(outDir)
+	if err != nil {
+		return false
+	}
+
+	if err := format.VerifyManifest(outDir, manifest); err != nil {
+		return false
+	}
+
+	return true
 }

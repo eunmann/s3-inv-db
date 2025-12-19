@@ -394,3 +394,113 @@ a/file1.txt,100
 		t.Error("temp output dir should be cleaned up")
 	}
 }
+
+func TestBuildResume(t *testing.T) {
+	tmpDir := t.TempDir()
+	outDir := filepath.Join(tmpDir, "index")
+	sortDir := filepath.Join(tmpDir, "sort")
+	if err := os.MkdirAll(sortDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	csv := `Key,Size
+a/file1.txt,100
+b/file2.txt,200
+`
+	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
+
+	cfg := Config{
+		OutDir:    outDir,
+		TmpDir:    sortDir,
+		ChunkSize: 100,
+	}
+
+	// First build should succeed
+	err := Build(context.Background(), cfg, []string{invPath})
+	if err != nil {
+		t.Fatalf("First build failed: %v", err)
+	}
+
+	// Get modification time of manifest
+	manifestPath := filepath.Join(outDir, "manifest.json")
+	info1, err := os.Stat(manifestPath)
+	if err != nil {
+		t.Fatalf("stat manifest: %v", err)
+	}
+	modTime1 := info1.ModTime()
+
+	// Second build should skip (resume from completed build)
+	err = Build(context.Background(), cfg, []string{invPath})
+	if err != nil {
+		t.Fatalf("Second build failed: %v", err)
+	}
+
+	// Manifest should NOT be modified (build was skipped)
+	info2, err := os.Stat(manifestPath)
+	if err != nil {
+		t.Fatalf("stat manifest after second build: %v", err)
+	}
+	modTime2 := info2.ModTime()
+
+	if !modTime1.Equal(modTime2) {
+		t.Errorf("manifest was modified during resume - expected skip")
+	}
+}
+
+func TestBuildResumeAfterCorruption(t *testing.T) {
+	tmpDir := t.TempDir()
+	outDir := filepath.Join(tmpDir, "index")
+	sortDir := filepath.Join(tmpDir, "sort")
+	if err := os.MkdirAll(sortDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	csv := `Key,Size
+a/file1.txt,100
+b/file2.txt,200
+`
+	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
+
+	cfg := Config{
+		OutDir:    outDir,
+		TmpDir:    sortDir,
+		ChunkSize: 100,
+	}
+
+	// First build should succeed
+	err := Build(context.Background(), cfg, []string{invPath})
+	if err != nil {
+		t.Fatalf("First build failed: %v", err)
+	}
+
+	// Corrupt a file
+	subtreeEndPath := filepath.Join(outDir, "subtree_end.u64")
+	if err := os.Truncate(subtreeEndPath, 10); err != nil {
+		t.Fatalf("truncate file: %v", err)
+	}
+
+	// Get modification time of manifest
+	manifestPath := filepath.Join(outDir, "manifest.json")
+	info1, err := os.Stat(manifestPath)
+	if err != nil {
+		t.Fatalf("stat manifest: %v", err)
+	}
+	modTime1 := info1.ModTime()
+
+	// Second build should rebuild (validation fails due to corruption)
+	err = Build(context.Background(), cfg, []string{invPath})
+	if err != nil {
+		t.Fatalf("Second build failed: %v", err)
+	}
+
+	// Manifest should be modified (build was not skipped)
+	info2, err := os.Stat(manifestPath)
+	if err != nil {
+		t.Fatalf("stat manifest after second build: %v", err)
+	}
+	modTime2 := info2.ModTime()
+
+	if modTime1.Equal(modTime2) {
+		t.Errorf("manifest was NOT modified - expected rebuild after corruption")
+	}
+}

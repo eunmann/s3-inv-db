@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/pkg/fileutil"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"golang.org/x/sync/errgroup"
 )
@@ -140,6 +141,11 @@ func (f *Fetcher) downloadFiles(ctx context.Context, manifest *Manifest) ([]stri
 		totalExpectedBytes += f.Size
 	}
 
+	// Clean up any stale .tmp files from previous interrupted downloads
+	if err := fileutil.CleanupTmpFiles(f.cfg.DownloadDir); err != nil {
+		log.Warn().Err(err).Msg("failed to cleanup tmp files")
+	}
+
 	log.Info().
 		Int("file_count", totalFiles).
 		Int64("total_bytes", totalExpectedBytes).
@@ -149,6 +155,7 @@ func (f *Fetcher) downloadFiles(ctx context.Context, manifest *Manifest) ([]stri
 
 	downloadStart := time.Now()
 	var filesDownloaded atomic.Int64
+	var filesSkipped atomic.Int64
 	var bytesDownloaded atomic.Int64
 
 	localFiles := make([]string, len(manifest.Files))
@@ -163,9 +170,11 @@ func (f *Fetcher) downloadFiles(ctx context.Context, manifest *Manifest) ([]stri
 			select {
 			case <-ticker.C:
 				files := filesDownloaded.Load()
+				skipped := filesSkipped.Load()
 				bytes := bytesDownloaded.Load()
 				log.Info().
 					Int64("files_downloaded", files).
+					Int64("files_skipped", skipped).
 					Int("files_total", totalFiles).
 					Int64("bytes_downloaded", bytes).
 					Int64("bytes_total", totalExpectedBytes).
@@ -185,6 +194,19 @@ func (f *Fetcher) downloadFiles(ctx context.Context, manifest *Manifest) ([]stri
 		g.Go(func() error {
 			// Generate local filename
 			localPath := filepath.Join(f.cfg.DownloadDir, sanitizeFilename(file.Key))
+
+			// Skip if file already exists and is non-empty (resume support)
+			if fileutil.IsNonEmpty(localPath) {
+				filesSkipped.Add(1)
+				log.Debug().
+					Str("key", file.Key).
+					Msg("skipping already downloaded file")
+
+				mu.Lock()
+				localFiles[i] = localPath
+				mu.Unlock()
+				return nil
+			}
 
 			// Download file using the normalized bucket name
 			if err := f.client.DownloadFile(ctx, bucketName, file.Key, localPath); err != nil {
@@ -221,6 +243,7 @@ func (f *Fetcher) downloadFiles(ctx context.Context, manifest *Manifest) ([]stri
 
 	log.Info().
 		Int64("files_downloaded", filesDownloaded.Load()).
+		Int64("files_skipped", filesSkipped.Load()).
 		Int64("bytes_downloaded", bytesDownloaded.Load()).
 		Dur("elapsed", time.Since(downloadStart)).
 		Msg("inventory download complete")
