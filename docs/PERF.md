@@ -6,15 +6,17 @@ Benchmark results and optimization findings for s3-inv-db.
 
 **Hardware:** AMD Ryzen 9 5950X 16-Core, Linux
 
-### SQLite Aggregation (per-chunk aggregation + multi-row UPSERT)
+### SQLite Aggregation (per-chunk + sorted flush + multi-row UPSERT)
 
 | Objects | Prefixes | Time | Memory | Allocations | Throughput |
 |---------|----------|------|--------|-------------|------------|
-| 10,000 | 30k | 145ms | 93MB | 215k | 69k obj/s |
-| 100,000 | 267k | 1.36s | 599MB | 1.89M | 73.6k obj/s |
-| 500,000 | 1.2M | 7.46s | 2.7GB | 8.7M | 67k obj/s |
+| 10,000 | 30k | 115ms | 93MB | 215k | 87k obj/s |
+| 100,000 | 267k | **1.08s** | 599MB | 1.89M | **93k obj/s** |
+| 500,000 | 1.2M | ~5.8s | 2.7GB | 8.7M | ~86k obj/s |
 
 **Data shape:** s3_realistic (typical S3 inventory prefix distribution)
+
+**Key optimization:** Sorted prefix flush gives 27% throughput improvement.
 
 ### Previous Performance (50k threshold-based flush)
 
@@ -177,6 +179,78 @@ INSERT statement. This reduces SQLite exec calls and parameter binding overhead.
 - Both statements prepared once per transaction
 
 **Impact:** ~7% faster, ~5% less memory, ~46% fewer allocations
+
+### 5. Sorted Prefix Flush
+
+**Location:** `pkg/sqliteagg/aggregator.go`, `pkg/sqliteagg/memory_aggregator.go`
+
+Sort prefixes lexicographically before flushing to SQLite. Sequential writes to
+the B-tree index reduce page splits and cache misses.
+
+**Implementation:** Single call to `slices.Sort(prefixes)` before batch processing.
+
+**Performance comparison (100k objects, 267k prefixes):**
+
+| Strategy | Time | Throughput | Improvement |
+|----------|------|------------|-------------|
+| Unsorted UPSERT | 1.35s | 73k obj/s | baseline |
+| **Sorted UPSERT** | **1.08s** | **93k obj/s** | **+27%** |
+| MemoryAggregator (unsorted) | 1.19s | 84k obj/s | +14% |
+| MemoryAggregator (sorted) | 1.10s | 91k obj/s | +25% |
+
+**Key insight:** Sorted UPSERT is now faster than MemoryAggregator with deferred
+indexing! The B-tree locality gains from sorted writes are more impactful than
+avoiding index maintenance during inserts.
+
+## Insert Optimization Exploration
+
+Systematic comparison of different SQLite insertion strategies.
+
+### Strategies Evaluated
+
+| Strategy | Time (100k) | Throughput | Code Complexity | Verdict |
+|----------|-------------|------------|-----------------|---------|
+| Baseline (unsorted UPSERT) | 1.35s | 73k obj/s | baseline | reference |
+| **Sorted UPSERT** | **1.08s** | **93k obj/s** | +1 line | **WINNER** |
+| MemoryAggregator (sorted) | 1.10s | 91k obj/s | separate impl | close second |
+| Temp table + GROUP BY | 1.80s | 56k obj/s | +500 lines | rejected |
+
+### Temp Table Strategy (Branch A)
+
+Idea: INSERT into unindexed temp table, then aggregate with GROUP BY and merge.
+
+**Result:** 33% SLOWER than baseline. The GROUP BY aggregation adds overhead
+without avoiding B-tree maintenance costs. The standard aggregator's in-memory
+delta accumulation is already more efficient than SQLite's GROUP BY.
+
+### Sorted Flush Strategy (Branch B) - WINNER
+
+Idea: Sort prefixes before writing to improve B-tree locality.
+
+**Result:** 27% FASTER than baseline with a single line change. Sequential
+writes to the B-tree index dramatically reduce page splits and cache misses.
+
+### Sorted + Deferred Index (Branch C)
+
+Idea: Combine sorted writes with MemoryAggregator's deferred indexing.
+
+**Result:** 25% faster than unsorted MemoryAggregator, but slightly slower than
+sorted UPSERT. The sorting benefit is partially offset by the deferred indexing
+benefit being reduced (sorted data is faster to index anyway).
+
+### Conclusions
+
+1. **Sorted writes are the biggest win** - a single `slices.Sort()` call gives
+   27% throughput improvement.
+
+2. **Deferred indexing is less impactful with sorted data** - when data is already
+   sorted, index creation is fast regardless of when it happens.
+
+3. **Temp table aggregation is counterproductive** - SQLite's GROUP BY is less
+   efficient than in-memory Go map aggregation.
+
+4. **Standard aggregator with sorted flush is now fastest** - beats even
+   MemoryAggregator while maintaining per-chunk transaction semantics.
 
 ## Remaining Bottlenecks
 

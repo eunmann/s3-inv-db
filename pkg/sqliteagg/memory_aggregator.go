@@ -4,6 +4,7 @@ package sqliteagg
 import (
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -214,6 +215,15 @@ func (m *MemoryAggregator) Finalize() error {
 			stats  *PrefixStats
 		}{p, s})
 	}
+
+	// Sort entries by prefix for improved B-tree locality.
+	// Sequential writes reduce page splits and cache misses.
+	slices.SortFunc(entries, func(a, b struct {
+		prefix string
+		stats  *PrefixStats
+	}) int {
+		return strings.Compare(a.prefix, b.prefix)
+	})
 
 	// Reusable args slices
 	batchArgs := make([]interface{}, batchSize*colsPerRow)
