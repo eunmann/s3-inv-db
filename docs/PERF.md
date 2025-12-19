@@ -357,6 +357,31 @@ This is a significant improvement but still far from "a few hours." Further inve
 | One-shot build, ample memory | `MemoryAggregator` |
 | Need resumability | Standard `Aggregator` with `BulkWriteMode` |
 | Concurrent readers during build | Standard `Aggregator` (no EXCLUSIVE lock) |
+| Memory-constrained + resumable | `NormalizedAggregator` |
+
+### NormalizedAggregator (Memory-Constrained)
+
+The `NormalizedAggregator` uses INTEGER PRIMARY KEY instead of TEXT for stats,
+with staging tables that spill to disk when memory limits are reached.
+
+**Benchmark Results (100k objects):**
+| Aggregator | Throughput | Notes |
+|------------|------------|-------|
+| MemoryAggregator | 81.4k obj/s | Fastest, in-memory |
+| Standard | 63.3k obj/s | UPSERT + delta batching |
+| NormalizedAggregator | 50.4k obj/s | Staging overhead |
+
+The NormalizedAggregator is ~21% slower than standard due to staging table overhead,
+but provides value when:
+- Memory is limited (configurable `MemoryLimitMB`)
+- Need resumability across crashes (staging persists to SQLite)
+- Processing extremely large datasets that exceed available RAM
+
+```go
+cfg := sqliteagg.DefaultNormalizedConfig(dbPath)
+cfg.MemoryLimitMB = 512  // Limit memory usage
+agg, err := sqliteagg.NewNormalizedAggregator(cfg)
+```
 
 ### Bulk Write Mode Usage
 

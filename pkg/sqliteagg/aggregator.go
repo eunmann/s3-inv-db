@@ -135,20 +135,22 @@ func Open(cfg Config) (*Aggregator, error) {
 	}
 
 	// Apply PRAGMA settings for performance
+	// Order matters: page_size must be set before any tables are created
 	pragmas := []string{
-		"PRAGMA journal_mode=WAL",
-		fmt.Sprintf("PRAGMA synchronous=%s", cfg.Synchronous),
-		"PRAGMA temp_store=MEMORY",
-		fmt.Sprintf("PRAGMA mmap_size=%d", cfg.MmapSize),
-		"PRAGMA page_size=32768",
-		fmt.Sprintf("PRAGMA cache_size=-%d", cfg.CacheSizeKB),
+		"PRAGMA page_size=32768",                               // Must be first, before tables
+		"PRAGMA journal_mode=WAL",                              // Write-ahead logging for concurrency
+		fmt.Sprintf("PRAGMA synchronous=%s", cfg.Synchronous),  // NORMAL is good balance
+		"PRAGMA temp_store=MEMORY",                             // Temp tables in RAM
+		fmt.Sprintf("PRAGMA mmap_size=%d", cfg.MmapSize),       // Memory-mapped I/O
+		fmt.Sprintf("PRAGMA cache_size=-%d", cfg.CacheSizeKB),  // Page cache size
+		"PRAGMA busy_timeout=10000",                            // 10s timeout to avoid SQLITE_BUSY
 	}
 
-	// Bulk write mode: hold exclusive lock and disable auto-checkpoint
+	// Bulk write mode: optimizations for heavy write workloads
 	if cfg.BulkWriteMode {
 		pragmas = append(pragmas,
-			"PRAGMA locking_mode=EXCLUSIVE",
-			"PRAGMA wal_autocheckpoint=0",
+			"PRAGMA locking_mode=EXCLUSIVE",  // Hold lock for entire session
+			"PRAGMA wal_autocheckpoint=0",    // Manual checkpoints only
 		)
 	}
 
