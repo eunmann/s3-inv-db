@@ -9,6 +9,11 @@ import (
 )
 
 // Index provides low-latency access to an S3 inventory index via mmap.
+//
+// Thread Safety: Index is safe for concurrent read access from multiple
+// goroutines. All read methods (Lookup, Stats, TierBreakdown, etc.) can be
+// called concurrently. Close should only be called once, after all read
+// operations have completed.
 type Index struct {
 	subtreeEnd        *format.ArrayReader
 	depth             *format.ArrayReader
@@ -145,6 +150,8 @@ func (idx *Index) Lookup(prefix string) (pos uint64, ok bool) {
 }
 
 // Stats returns the object count and total bytes for the node at pos.
+// Returns zero-valued Stats if pos is out of bounds. Use StatsForPrefix
+// if you need to distinguish between "not found" and "found with zero stats".
 func (idx *Index) Stats(pos uint64) Stats {
 	if pos >= idx.count {
 		return Stats{}
@@ -209,6 +216,13 @@ func (idx *Index) MaxDepth() uint32 {
 
 // DescendantsAtDepth returns positions of descendants at exactly the given
 // relative depth, in alphabetical order.
+//
+// Returns (nil, nil) for invalid inputs:
+//   - prefixPos >= Count() (out of bounds)
+//   - relDepth < 0 (negative depth)
+//   - targetDepth > MaxDepth() (no nodes exist at that depth)
+//
+// An empty slice indicates no descendants at that depth (valid but empty result).
 func (idx *Index) DescendantsAtDepth(prefixPos uint64, relDepth int) ([]uint64, error) {
 	if prefixPos >= idx.count {
 		return nil, nil
@@ -236,6 +250,12 @@ func (idx *Index) DescendantsAtDepth(prefixPos uint64, relDepth int) ([]uint64, 
 
 // DescendantsUpToDepth returns positions of descendants up to the given
 // relative depth, grouped by depth then alphabetical.
+//
+// Returns (nil, nil) for invalid inputs:
+//   - prefixPos >= Count() (out of bounds)
+//   - maxRelDepth < 0 (negative depth)
+//
+// An empty slice indicates no descendants up to that depth (valid but empty result).
 func (idx *Index) DescendantsUpToDepth(prefixPos uint64, maxRelDepth int) ([][]uint64, error) {
 	if prefixPos >= idx.count {
 		return nil, nil
@@ -356,7 +376,11 @@ func (idx *Index) HasTierData() bool {
 }
 
 // TierBreakdown returns the per-tier statistics for the node at pos.
-// Returns nil if no tier data is available.
+// Returns nil if:
+//   - No tier data was collected during index build (check HasTierData first)
+//   - The pos is out of bounds
+//
+// Use HasTierData to distinguish "no tier data in index" from "empty breakdown".
 func (idx *Index) TierBreakdown(pos uint64) []TierBreakdown {
 	if idx.tierStats == nil {
 		return nil
@@ -365,7 +389,8 @@ func (idx *Index) TierBreakdown(pos uint64) []TierBreakdown {
 }
 
 // TierBreakdownAll returns the per-tier statistics for all present tiers (including zeros).
-// Returns nil if no tier data is available.
+// Returns nil if no tier data was collected during index build.
+// Use HasTierData to check if tier data is available.
 func (idx *Index) TierBreakdownAll(pos uint64) []TierBreakdown {
 	if idx.tierStats == nil {
 		return nil
@@ -374,7 +399,11 @@ func (idx *Index) TierBreakdownAll(pos uint64) []TierBreakdown {
 }
 
 // TierBreakdownForPrefix returns the per-tier statistics for a prefix string.
-// Returns nil if the prefix is not found or no tier data is available.
+// Returns nil if:
+//   - The prefix is not found in the index
+//   - No tier data was collected during index build
+//
+// Use Lookup to check if a prefix exists, and HasTierData to check for tier data.
 func (idx *Index) TierBreakdownForPrefix(prefix string) []TierBreakdown {
 	pos, ok := idx.Lookup(prefix)
 	if !ok {
@@ -384,7 +413,8 @@ func (idx *Index) TierBreakdownForPrefix(prefix string) []TierBreakdown {
 }
 
 // TierBreakdownMap returns the per-tier statistics as a map keyed by tier name.
-// Returns nil if no tier data is available.
+// Returns nil if no tier data was collected during index build.
+// Use HasTierData to check if tier data is available.
 func (idx *Index) TierBreakdownMap(pos uint64) map[string]TierBreakdown {
 	breakdown := idx.TierBreakdown(pos)
 	if breakdown == nil {

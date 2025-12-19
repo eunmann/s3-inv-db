@@ -42,6 +42,9 @@ type stackNode struct {
 }
 
 // Builder constructs a trie from a sorted stream of keys.
+//
+// Thread Safety: Builder is NOT safe for concurrent use. A single Builder
+// instance should only be used from one goroutine at a time.
 type Builder struct {
 	stack       []stackNode
 	nodes       []Node

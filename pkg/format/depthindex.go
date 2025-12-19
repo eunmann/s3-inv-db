@@ -100,6 +100,10 @@ func (b *DepthIndexBuilder) MaxDepth() uint32 {
 }
 
 // DepthIndex provides read access to depth posting lists.
+//
+// Thread Safety: DepthIndex is safe for concurrent read access from multiple
+// goroutines. All read methods can be called concurrently. Close should only
+// be called once, after all read operations have completed.
 type DepthIndex struct {
 	offsets   *ArrayReader
 	positions *ArrayReader

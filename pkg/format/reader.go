@@ -64,6 +64,10 @@ func (m *MmapFile) Size() int64 {
 }
 
 // ArrayReader provides read access to a columnar array via mmap.
+//
+// Thread Safety: ArrayReader is safe for concurrent read access from multiple
+// goroutines. All read methods can be called concurrently. Close should only
+// be called once, after all read operations have completed.
 type ArrayReader struct {
 	mmap   *MmapFile
 	header Header
@@ -162,22 +166,41 @@ func (r *ArrayReader) GetU16(idx uint64) (uint16, error) {
 	return binary.LittleEndian.Uint16(r.data[offset:]), nil
 }
 
-// UnsafeGetU32 returns the value without bounds checking (for performance).
+// UnsafeGetU32 returns the value without bounds checking.
+//
+// WARNING: This method performs NO bounds checking for performance.
+// Passing an idx >= Count() will cause undefined behavior (likely a panic
+// or memory corruption). Only use this in hot paths where the caller has
+// already validated the index. For safe access, use GetU32 instead.
 func (r *ArrayReader) UnsafeGetU32(idx uint64) uint32 {
 	return binary.LittleEndian.Uint32(r.data[idx*4:])
 }
 
 // UnsafeGetU64 returns the value without bounds checking.
+//
+// WARNING: This method performs NO bounds checking for performance.
+// Passing an idx >= Count() will cause undefined behavior (likely a panic
+// or memory corruption). Only use this in hot paths where the caller has
+// already validated the index. For safe access, use GetU64 instead.
 func (r *ArrayReader) UnsafeGetU64(idx uint64) uint64 {
 	return binary.LittleEndian.Uint64(r.data[idx*8:])
 }
 
 // UnsafeGetU16 returns the value without bounds checking.
+//
+// WARNING: This method performs NO bounds checking for performance.
+// Passing an idx >= Count() will cause undefined behavior (likely a panic
+// or memory corruption). Only use this in hot paths where the caller has
+// already validated the index. For safe access, use GetU16 instead.
 func (r *ArrayReader) UnsafeGetU16(idx uint64) uint16 {
 	return binary.LittleEndian.Uint16(r.data[idx*2:])
 }
 
 // BlobReader provides read access to prefix strings via mmap.
+//
+// Thread Safety: BlobReader is safe for concurrent read access from multiple
+// goroutines. All read methods can be called concurrently. Close should only
+// be called once, after all read operations have completed.
 type BlobReader struct {
 	blobMmap    *MmapFile
 	offsetsMmap *ArrayReader
@@ -243,7 +266,12 @@ func (r *BlobReader) Get(idx uint64) (string, error) {
 	return string(r.blobMmap.Data()[start:end]), nil
 }
 
-// UnsafeGet returns the string without full bounds checking.
+// UnsafeGet returns the string without bounds checking.
+//
+// WARNING: This method performs NO bounds checking for performance.
+// Passing an idx >= Count() will cause undefined behavior (likely a panic
+// or memory corruption). Only use this in hot paths where the caller has
+// already validated the index. For safe access, use Get instead.
 func (r *BlobReader) UnsafeGet(idx uint64) string {
 	start := r.offsetsMmap.UnsafeGetU64(idx)
 	end := r.offsetsMmap.UnsafeGetU64(idx + 1)

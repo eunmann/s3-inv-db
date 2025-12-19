@@ -168,6 +168,10 @@ func (b *MPHFBuilder) Count() int {
 }
 
 // MPHF provides read access to the minimal perfect hash function.
+//
+// Thread Safety: MPHF is safe for concurrent read access from multiple
+// goroutines. All read methods can be called concurrently. Close should only
+// be called once, after all read operations have completed.
 type MPHF struct {
 	mph          *bbhash.BBHash2
 	fingerprints *ArrayReader

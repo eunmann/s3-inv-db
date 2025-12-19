@@ -16,6 +16,11 @@ import (
 )
 
 // Record represents a single object from the inventory.
+//
+// Note on Size: If the size field cannot be parsed (empty or malformed),
+// Size will be 0. This matches the behavior of AWS S3 inventory which may
+// have empty size fields for certain object types. Callers should be aware
+// that Size=0 may indicate either a zero-byte object or an unparseable size.
 type Record struct {
 	Key    string
 	Size   uint64
