@@ -20,14 +20,9 @@ type TierStatsWriter struct {
 
 // NewTierStatsWriter creates a writer for tier statistics.
 func NewTierStatsWriter(outDir string) (*TierStatsWriter, error) {
-	tierDir := filepath.Join(outDir, tierStatsDir)
-	if err := os.MkdirAll(tierDir, 0755); err != nil {
-		return nil, fmt.Errorf("create tier_stats dir: %w", err)
-	}
-
 	return &TierStatsWriter{
 		outDir:  outDir,
-		tierDir: tierDir,
+		tierDir: filepath.Join(outDir, tierStatsDir),
 	}, nil
 }
 
@@ -35,6 +30,11 @@ func NewTierStatsWriter(outDir string) (*TierStatsWriter, error) {
 func (w *TierStatsWriter) Write(result *triebuild.Result) error {
 	if !result.TrackTiers || len(result.PresentTiers) == 0 {
 		return nil // No tier data to write
+	}
+
+	// Create tier_stats directory only when there's data to write
+	if err := os.MkdirAll(w.tierDir, 0755); err != nil {
+		return fmt.Errorf("create tier_stats dir: %w", err)
 	}
 
 	mapping := tiers.NewMapping()
