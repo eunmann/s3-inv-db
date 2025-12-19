@@ -6,7 +6,9 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.6
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.94.0
+	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/relab/bbhash v0.0.0-20250331135148-7358f69256fb
+	github.com/rs/zerolog v1.34.0
 	golang.org/x/sync v0.12.0
 	golang.org/x/sys v0.39.0
 )
@@ -30,6 +32,4 @@ require (
 	github.com/aws/smithy-go v1.24.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.19 // indirect
-	github.com/mattn/go-sqlite3 v1.14.32 // indirect
-	github.com/rs/zerolog v1.34.0 // indirect
 )
