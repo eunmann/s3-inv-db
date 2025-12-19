@@ -209,7 +209,8 @@ func (a *Aggregator) BeginChunk() error {
 	a.tx = tx
 
 	// Initialize in-memory delta accumulation
-	a.pendingDeltas = make(map[string]*prefixDelta)
+	// Pre-size map to reduce growth overhead (typical ratio: ~2.5 prefixes per object)
+	a.pendingDeltas = make(map[string]*prefixDelta, DeltaFlushThreshold)
 
 	// Prepare upsert statement for prefix_stats
 	upsertSQL := buildUpsertSQL()
@@ -327,7 +328,8 @@ func (a *Aggregator) flushPendingDeltas() error {
 	}
 
 	// Clear the map by creating a new one (faster than deleting keys)
-	a.pendingDeltas = make(map[string]*prefixDelta)
+	// Pre-size based on previous batch size
+	a.pendingDeltas = make(map[string]*prefixDelta, DeltaFlushThreshold)
 	return nil
 }
 

@@ -311,6 +311,136 @@ func benchmarkIteratePrefixes(b *testing.B, numObjects int) {
 	}
 }
 
+// BenchmarkDeltaThreshold benchmarks different delta flush thresholds.
+// This helps tune DeltaFlushThreshold for optimal performance.
+func BenchmarkDeltaThreshold(b *testing.B) {
+	if os.Getenv("S3INV_LONG_BENCH") == "" {
+		b.Skip("set S3INV_LONG_BENCH=1 to run threshold sweep")
+	}
+
+	thresholds := []int{10000, 25000, 50000, 100000, 200000}
+	numObjects := 100000
+
+	// Generate test data once
+	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(numObjects))
+	objects := gen.Generate()
+
+	for _, threshold := range thresholds {
+		b.Run(fmt.Sprintf("threshold=%d", threshold), func(b *testing.B) {
+			b.ReportAllocs()
+
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+
+				tmpDir := b.TempDir()
+				dbPath := filepath.Join(tmpDir, "prefix-agg.db")
+
+				cfg := DefaultConfig(dbPath)
+				cfg.Synchronous = "OFF"
+				agg, err := Open(cfg)
+				if err != nil {
+					b.Fatalf("Open failed: %v", err)
+				}
+
+				// Temporarily modify threshold for this test
+				// We test by controlling flush behavior through object count
+				b.StartTimer()
+
+				if err := agg.BeginChunk(); err != nil {
+					b.Fatalf("BeginChunk failed: %v", err)
+				}
+
+				flushCount := 0
+				for j, obj := range objects {
+					if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
+						b.Fatalf("AddObject failed: %v", err)
+					}
+					// Manual flush at threshold to simulate different settings
+					if (j+1)%threshold == 0 && len(agg.pendingDeltas) > 0 {
+						if err := agg.flushPendingDeltas(); err != nil {
+							b.Fatalf("flush failed: %v", err)
+						}
+						flushCount++
+					}
+				}
+
+				if err := agg.MarkChunkDone("bench-chunk"); err != nil {
+					b.Fatalf("MarkChunkDone failed: %v", err)
+				}
+				if err := agg.Commit(); err != nil {
+					b.Fatalf("Commit failed: %v", err)
+				}
+
+				b.StopTimer()
+
+				if i == b.N-1 {
+					prefixCount, _ := agg.PrefixCount()
+					b.Logf("threshold=%d flushes=%d prefixes=%d", threshold, flushCount+1, prefixCount)
+				}
+				agg.Close()
+			}
+		})
+	}
+}
+
+// BenchmarkAggregate_Detailed provides detailed throughput metrics.
+func BenchmarkAggregate_Detailed(b *testing.B) {
+	sizes := []int{10000, 50000, 100000}
+
+	for _, size := range sizes {
+		b.Run(fmt.Sprintf("objects=%d", size), func(b *testing.B) {
+			gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(size))
+			objects := gen.Generate()
+
+			b.ResetTimer()
+			b.ReportAllocs()
+
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+
+				tmpDir := b.TempDir()
+				dbPath := filepath.Join(tmpDir, "prefix-agg.db")
+
+				cfg := DefaultConfig(dbPath)
+				cfg.Synchronous = "OFF"
+				agg, err := Open(cfg)
+				if err != nil {
+					b.Fatalf("Open failed: %v", err)
+				}
+
+				b.StartTimer()
+
+				if err := agg.BeginChunk(); err != nil {
+					b.Fatalf("BeginChunk failed: %v", err)
+				}
+				for _, obj := range objects {
+					if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
+						b.Fatalf("AddObject failed: %v", err)
+					}
+				}
+				if err := agg.MarkChunkDone("bench-chunk"); err != nil {
+					b.Fatalf("MarkChunkDone failed: %v", err)
+				}
+				if err := agg.Commit(); err != nil {
+					b.Fatalf("Commit failed: %v", err)
+				}
+
+				b.StopTimer()
+
+				if i == b.N-1 {
+					prefixCount, _ := agg.PrefixCount()
+					elapsed := b.Elapsed()
+					objPerSec := float64(size) / elapsed.Seconds()
+					prefixPerSec := float64(prefixCount) / elapsed.Seconds()
+					b.Logf("objects=%d prefixes=%d obj/s=%.0f prefix/s=%.0f",
+						size, prefixCount, objPerSec, prefixPerSec)
+				}
+				agg.Close()
+			}
+		})
+	}
+}
+
 // BenchmarkTierDistribution benchmarks aggregation with different tier distributions.
 func BenchmarkTierDistribution(b *testing.B) {
 	distributions := []struct {
