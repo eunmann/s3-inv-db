@@ -10,6 +10,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/pkg/indexbuild"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
+	"github.com/eunmann/s3-inv-db/pkg/pricing"
 )
 
 // Run executes the CLI with the given arguments.
@@ -116,6 +117,8 @@ func runQuery(args []string) error {
 	indexDir := fs.String("index", "", "index directory to query")
 	prefix := fs.String("prefix", "", "prefix to query")
 	showTiers := fs.Bool("show-tiers", false, "show per-tier breakdown")
+	estimateCost := fs.Bool("estimate-cost", false, "estimate monthly storage cost")
+	priceTablePath := fs.String("price-table", "", "path to price table JSON (default: US East 1 prices)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -144,7 +147,7 @@ func runQuery(args []string) error {
 	fmt.Printf("Objects: %d\n", stats.ObjectCount)
 	fmt.Printf("Bytes: %d\n", stats.TotalBytes)
 
-	if *showTiers {
+	if *showTiers || *estimateCost {
 		if !idx.HasTierData() {
 			fmt.Println("\nNo tier data available (index was built without --track-tiers)")
 		} else {
@@ -152,9 +155,32 @@ func runQuery(args []string) error {
 			if len(breakdown) == 0 {
 				fmt.Println("\nNo tier data at this prefix")
 			} else {
-				fmt.Println("\nTier breakdown:")
-				for _, tb := range breakdown {
-					fmt.Printf("  %s: %d objects, %d bytes\n", tb.TierName, tb.ObjectCount, tb.Bytes)
+				if *showTiers {
+					fmt.Println("\nTier breakdown:")
+					for _, tb := range breakdown {
+						fmt.Printf("  %s: %d objects, %d bytes\n", tb.TierName, tb.ObjectCount, tb.Bytes)
+					}
+				}
+
+				if *estimateCost {
+					var pt pricing.PriceTable
+					if *priceTablePath != "" {
+						pt, err = pricing.LoadPriceTable(*priceTablePath)
+						if err != nil {
+							return fmt.Errorf("load price table: %w", err)
+						}
+					} else {
+						pt = pricing.DefaultUSEast1Prices()
+					}
+
+					cost := pricing.ComputeMonthlyCost(breakdown, pt)
+					fmt.Println("\nEstimated monthly cost:")
+					fmt.Printf("  Total: %s/month\n", pricing.FormatCost(cost.TotalMicrodollars))
+					if *showTiers {
+						for tier, microdollars := range cost.PerTierMicrodollars {
+							fmt.Printf("  %s: %s/month\n", tier, pricing.FormatCost(microdollars))
+						}
+					}
 				}
 			}
 		}
