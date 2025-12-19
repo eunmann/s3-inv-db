@@ -1,2 +1,6 @@
+github.com/relab/bbhash v0.0.0-20250331135148-7358f69256fb h1:WXiifAebmVXHDb+m9xVDlPnul2BbSYCV911PuCPN/q8=
+github.com/relab/bbhash v0.0.0-20250331135148-7358f69256fb/go.mod h1:RZkiCh6jFfF8hfdA86ORy/ZJd+BQXaJWeNmarh8lJGs=
+golang.org/x/sync v0.12.0 h1:MHc5BpPuC30uJk597Ri8TV3CNZcTLu6B6z4lJy+g6Jw=
+golang.org/x/sync v0.12.0/go.mod h1:1dzgHSNfp02xaA81J2MS99Qcpr2w7fw1gpm99rleRqA=
 golang.org/x/sys v0.39.0 h1:CvCKL8MeisomCi6qNZ+wbb0DN9E5AATixKsvNtMoMFk=
 golang.org/x/sys v0.39.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=
