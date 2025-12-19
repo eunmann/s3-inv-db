@@ -1,9 +1,7 @@
 package sqliteagg
 
 import (
-	"compress/gzip"
 	"context"
-	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
@@ -307,22 +305,17 @@ func (p *Pipeline) streamChunk(ctx context.Context, chunk ChunkTask) error {
 	}
 	defer body.Close()
 
-	// Decompress gzip
-	var reader io.Reader = body
-	if strings.HasSuffix(strings.ToLower(chunk.Key), ".gz") {
-		gzr, err := gzip.NewReader(body)
-		if err != nil {
-			return fmt.Errorf("create gzip reader: %w", err)
-		}
-		defer gzr.Close()
-		reader = gzr
+	// Decompress if needed
+	reader, closeGzip, err := decompressReader(body, chunk.Key)
+	if err != nil {
+		return err
+	}
+	if closeGzip != nil {
+		defer closeGzip()
 	}
 
 	// Create CSV reader
-	csvr := csv.NewReader(reader)
-	csvr.ReuseRecord = true
-	csvr.FieldsPerRecord = -1
-	csvr.LazyQuotes = true
+	csvr := newInventoryReader(reader)
 
 	// Parse and send rows
 	for {
