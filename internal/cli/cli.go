@@ -11,6 +11,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/pkg/indexbuild"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
+	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 )
 
@@ -20,13 +21,17 @@ func Run(args []string) error {
 		return errors.New("usage: s3inv-index <command> [options]\ncommands: build, query")
 	}
 
-	switch args[0] {
+	// Check for global flags before the command
+	cmd := args[0]
+	cmdArgs := args[1:]
+
+	switch cmd {
 	case "build":
-		return runBuild(args[1:])
+		return runBuild(cmdArgs)
 	case "query":
-		return runQuery(args[1:])
+		return runQuery(cmdArgs)
 	default:
-		return fmt.Errorf("unknown command: %s", args[0])
+		return fmt.Errorf("unknown command: %s", cmd)
 	}
 }
 
@@ -39,10 +44,16 @@ func runBuild(args []string) error {
 	s3Manifest := fs.String("s3-manifest", "", "S3 URI to inventory manifest.json (s3://bucket/path/manifest.json)")
 	downloadConcurrency := fs.Int("download-concurrency", 4, "number of parallel S3 downloads")
 	keepDownloads := fs.Bool("keep-downloads", false, "keep downloaded inventory files after building")
+	verbose := fs.Bool("verbose", false, "enable debug level logging")
+	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
+
+	// Initialize logging based on flags
+	logging.Init(*verbose, *prettyLogs)
+	log := logging.L()
 
 	if *outDir == "" {
 		return errors.New("--out is required")
@@ -80,15 +91,23 @@ func runBuild(args []string) error {
 		return fmt.Errorf("build failed: %w", err)
 	}
 
-	fmt.Printf("Index built successfully: %s\n", *outDir)
-	if *trackTiers {
-		fmt.Println("Tier statistics enabled.")
-	}
+	log.Info().
+		Str("phase", "build_complete").
+		Str("output_dir", *outDir).
+		Bool("track_tiers", *trackTiers).
+		Msg("index built successfully")
 	return nil
 }
 
 func runBuildFromS3(outDir, tmpDir string, chunkSize int, trackTiers bool, manifestURI string, concurrency int, keepDownloads bool) error {
-	fmt.Printf("Fetching inventory from S3: %s\n", manifestURI)
+	log := logging.L()
+	log.Info().
+		Str("phase", "build_start").
+		Str("s3_manifest", manifestURI).
+		Str("output_dir", outDir).
+		Int("concurrency", concurrency).
+		Bool("track_tiers", trackTiers).
+		Msg("starting S3 inventory build")
 
 	cfg := indexbuild.S3Config{
 		Config: indexbuild.Config{
@@ -106,10 +125,11 @@ func runBuildFromS3(outDir, tmpDir string, chunkSize int, trackTiers bool, manif
 		return fmt.Errorf("build from S3 failed: %w", err)
 	}
 
-	fmt.Printf("Index built successfully: %s\n", outDir)
-	if trackTiers {
-		fmt.Println("Tier statistics enabled.")
-	}
+	log.Info().
+		Str("phase", "build_complete").
+		Str("output_dir", outDir).
+		Bool("track_tiers", trackTiers).
+		Msg("index built successfully")
 	return nil
 }
 
@@ -120,10 +140,16 @@ func runQuery(args []string) error {
 	showTiers := fs.Bool("show-tiers", false, "show per-tier breakdown")
 	estimateCost := fs.Bool("estimate-cost", false, "estimate monthly storage cost")
 	priceTablePath := fs.String("price-table", "", "path to price table JSON (default: US East 1 prices)")
+	verbose := fs.Bool("verbose", false, "enable debug level logging")
+	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
+
+	// Initialize logging based on flags
+	logging.Init(*verbose, *prettyLogs)
+	log := logging.L()
 
 	if *indexDir == "" {
 		return errors.New("--index is required")
@@ -131,6 +157,8 @@ func runQuery(args []string) error {
 	if *prefix == "" {
 		return errors.New("--prefix is required")
 	}
+
+	log.Debug().Str("index_dir", *indexDir).Str("prefix", *prefix).Msg("opening index")
 
 	idx, err := indexread.Open(*indexDir)
 	if err != nil {
@@ -144,6 +172,7 @@ func runQuery(args []string) error {
 	}
 
 	stats := idx.Stats(pos)
+	// Query results go to stdout as formatted output (not logs)
 	fmt.Printf("Prefix: %s\n", *prefix)
 	fmt.Printf("Objects: %d\n", stats.ObjectCount)
 	fmt.Printf("Bytes: %d\n", stats.TotalBytes)

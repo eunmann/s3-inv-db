@@ -2,15 +2,15 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/eunmann/s3-inv-db/internal/cli"
+	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
 
 func main() {
 	if err := cli.Run(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		logging.L().Error().Err(err).Msg("command failed")
 		os.Exit(1)
 	}
 }

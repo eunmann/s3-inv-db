@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/inventory"
+	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/triebuild"
 )
@@ -128,6 +130,8 @@ type inventoryOpener func(path string, trackTiers bool) (inventory.Reader, error
 
 // buildIndex is the shared implementation for Build and BuildWithSchema.
 func buildIndex(ctx context.Context, cfg Config, inventoryFiles []string, openFile inventoryOpener) error {
+	log := logging.L()
+
 	if cfg.OutDir == "" {
 		return fmt.Errorf("output directory required")
 	}
@@ -153,16 +157,29 @@ func buildIndex(ctx context.Context, cfg Config, inventoryFiles []string, openFi
 	}()
 
 	// Step 1: External sort all inventory files
+	log.Info().
+		Str("phase", "sort_runs").
+		Int("inventory_files", len(inventoryFiles)).
+		Int("chunk_size", cfg.ChunkSize).
+		Msg("starting external sort")
+
 	sorter := extsort.NewSorter(extsort.Config{
 		MaxRecordsPerChunk: cfg.ChunkSize,
 		TmpDir:             cfg.TmpDir,
 	})
 	defer sorter.Cleanup()
 
-	for _, path := range inventoryFiles {
+	for i, path := range inventoryFiles {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+
+		log.Debug().
+			Str("phase", "sort_runs").
+			Str("file", path).
+			Int("file_index", i+1).
+			Int("total_files", len(inventoryFiles)).
+			Msg("processing inventory file")
 
 		reader, err := openFile(path, cfg.TrackTiers)
 		if err != nil {
@@ -206,11 +223,7 @@ func buildIndex(ctx context.Context, cfg Config, inventoryFiles []string, openFi
 
 	// Step 4: Write tier stats (if tracking enabled)
 	if cfg.TrackTiers {
-		tierWriter, err := format.NewTierStatsWriter(tmpOutDir)
-		if err != nil {
-			return fmt.Errorf("create tier stats writer: %w", err)
-		}
-		if err := tierWriter.Write(result); err != nil {
+		if err := writeTierStats(tmpOutDir, result); err != nil {
 			return fmt.Errorf("write tier stats: %w", err)
 		}
 	}
@@ -252,6 +265,15 @@ func buildIndex(ctx context.Context, cfg Config, inventoryFiles []string, openFi
 }
 
 func writeColumnarArrays(outDir string, result *triebuild.Result) error {
+	log := logging.WithPhase("write_index")
+	start := time.Now()
+
+	log.Info().
+		Str("output_dir", outDir).
+		Int("node_count", len(result.Nodes)).
+		Uint32("max_depth", result.MaxDepth).
+		Msg("writing columnar arrays")
+
 	// Write u64 arrays
 	u64Arrays := []struct {
 		name   string
@@ -266,6 +288,7 @@ func writeColumnarArrays(outDir string, result *triebuild.Result) error {
 		if err := writeU64Array(outDir, arr.name, result.Nodes, arr.getter); err != nil {
 			return fmt.Errorf("write %s: %w", arr.name, err)
 		}
+		log.Debug().Str("file", arr.name).Msg("wrote array file")
 	}
 
 	// Write u32 arrays
@@ -281,7 +304,13 @@ func writeColumnarArrays(outDir string, result *triebuild.Result) error {
 		if err := writeU32Array(outDir, arr.name, result.Nodes, arr.getter); err != nil {
 			return fmt.Errorf("write %s: %w", arr.name, err)
 		}
+		log.Debug().Str("file", arr.name).Msg("wrote array file")
 	}
+
+	log.Info().
+		Int("files_written", len(u64Arrays)+len(u32Arrays)).
+		Dur("elapsed", time.Since(start)).
+		Msg("columnar arrays written")
 
 	return nil
 }
@@ -323,6 +352,11 @@ func writeU32Array(outDir, name string, nodes []triebuild.Node, getter func(trie
 }
 
 func writeDepthIndex(outDir string, result *triebuild.Result) error {
+	log := logging.WithPhase("write_index")
+	start := time.Now()
+
+	log.Info().Int("node_count", len(result.Nodes)).Msg("building depth index")
+
 	builder := format.NewDepthIndexBuilder()
 
 	for _, node := range result.Nodes {
@@ -332,10 +366,17 @@ func writeDepthIndex(outDir string, result *triebuild.Result) error {
 	if err := builder.Build(outDir); err != nil {
 		return fmt.Errorf("build depth index: %w", err)
 	}
+
+	log.Info().Dur("elapsed", time.Since(start)).Msg("depth index complete")
 	return nil
 }
 
 func writeMPHF(outDir string, result *triebuild.Result) error {
+	log := logging.WithPhase("build_mphf")
+	start := time.Now()
+
+	log.Info().Int("key_count", len(result.Nodes)).Msg("building MPHF")
+
 	builder := format.NewMPHFBuilder()
 
 	for _, node := range result.Nodes {
@@ -345,5 +386,39 @@ func writeMPHF(outDir string, result *triebuild.Result) error {
 	if err := builder.Build(outDir); err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
+
+	log.Info().
+		Int("key_count", builder.Count()).
+		Dur("elapsed", time.Since(start)).
+		Msg("MPHF build complete")
+	return nil
+}
+
+func writeTierStats(outDir string, result *triebuild.Result) error {
+	log := logging.WithPhase("tiers_build")
+	start := time.Now()
+
+	if !result.TrackTiers || len(result.PresentTiers) == 0 {
+		log.Info().Msg("no tier data to write")
+		return nil
+	}
+
+	log.Info().
+		Int("tier_count", len(result.PresentTiers)).
+		Msg("writing tier statistics")
+
+	tierWriter, err := format.NewTierStatsWriter(outDir)
+	if err != nil {
+		return fmt.Errorf("create tier stats writer: %w", err)
+	}
+	if err := tierWriter.Write(result); err != nil {
+		return err
+	}
+
+	log.Info().
+		Int("tiers_written", len(result.PresentTiers)).
+		Dur("elapsed", time.Since(start)).
+		Msg("tier statistics complete")
+
 	return nil
 }

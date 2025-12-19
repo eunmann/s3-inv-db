@@ -13,8 +13,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/inventory"
+	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
@@ -48,19 +50,27 @@ type Iterator interface {
 
 // Sorter performs external merge sort on inventory records.
 type Sorter struct {
-	cfg      Config
-	runFiles []string
-	runNum   int
+	cfg          Config
+	runFiles     []string
+	runNum       int
+	totalRecords int64
 }
 
 // NewSorter creates a new external sorter.
 func NewSorter(cfg Config) *Sorter {
+	log := logging.WithPhase("sort_runs")
+	log.Debug().
+		Int("max_records_per_chunk", cfg.MaxRecordsPerChunk).
+		Str("tmp_dir", cfg.TmpDir).
+		Msg("created external sorter")
 	return &Sorter{cfg: cfg}
 }
 
 // AddRecords adds records from an inventory reader, creating sorted run files.
 func (s *Sorter) AddRecords(ctx context.Context, reader inventory.Reader) error {
+	log := logging.WithPhase("sort_runs")
 	chunk := make([]inventory.Record, 0, s.cfg.MaxRecordsPerChunk)
+	recordsInFile := int64(0)
 
 	for {
 		if ctx.Err() != nil {
@@ -76,6 +86,7 @@ func (s *Sorter) AddRecords(ctx context.Context, reader inventory.Reader) error 
 		}
 
 		chunk = append(chunk, rec)
+		recordsInFile++
 
 		if len(chunk) >= s.cfg.MaxRecordsPerChunk {
 			if err := s.flushChunk(chunk); err != nil {
@@ -92,11 +103,21 @@ func (s *Sorter) AddRecords(ctx context.Context, reader inventory.Reader) error 
 		}
 	}
 
+	s.totalRecords += recordsInFile
+	log.Debug().
+		Int64("records_in_file", recordsInFile).
+		Int64("total_records", s.totalRecords).
+		Int("runs_created", len(s.runFiles)).
+		Msg("processed inventory file")
+
 	return nil
 }
 
 // flushChunk sorts a chunk and writes it as a run file.
 func (s *Sorter) flushChunk(chunk []inventory.Record) error {
+	log := logging.WithPhase("sort_runs")
+	runStart := time.Now()
+
 	// Sort by key
 	sort.Slice(chunk, func(i, j int) bool {
 		return chunk[i].Key < chunk[j].Key
@@ -104,6 +125,7 @@ func (s *Sorter) flushChunk(chunk []inventory.Record) error {
 
 	// Write run file
 	runPath := filepath.Join(s.cfg.TmpDir, fmt.Sprintf("run_%06d.tsv", s.runNum))
+	runIndex := s.runNum
 	s.runNum++
 
 	f, err := os.Create(runPath)
@@ -133,14 +155,29 @@ func (s *Sorter) flushChunk(chunk []inventory.Record) error {
 	}
 
 	s.runFiles = append(s.runFiles, runPath)
+
+	log.Info().
+		Int("run_index", runIndex).
+		Int("records_in_run", len(chunk)).
+		Dur("elapsed", time.Since(runStart)).
+		Msg("created sort run")
+
 	return nil
 }
 
 // Merge returns an iterator over all records in sorted order.
 func (s *Sorter) Merge(ctx context.Context) (Iterator, error) {
+	log := logging.WithPhase("merge_runs")
+
 	if len(s.runFiles) == 0 {
+		log.Info().Msg("no runs to merge")
 		return &emptyIterator{}, nil
 	}
+
+	log.Info().
+		Int("run_count", len(s.runFiles)).
+		Int64("estimated_records", s.totalRecords).
+		Msg("starting k-way merge")
 
 	// Open all run files
 	readers := make([]*runReader, 0, len(s.runFiles))
@@ -151,12 +188,13 @@ func (s *Sorter) Merge(ctx context.Context) (Iterator, error) {
 			for _, r := range readers {
 				r.Close()
 			}
+			log.Error().Err(err).Str("path", path).Msg("failed to open run file")
 			return nil, fmt.Errorf("open run file %s: %w", path, err)
 		}
 		readers = append(readers, rr)
 	}
 
-	return newMergeIterator(ctx, readers), nil
+	return newMergeIterator(ctx, readers, s.totalRecords), nil
 }
 
 // Cleanup removes all temporary run files.
@@ -259,14 +297,18 @@ func (r *runReader) Close() error {
 
 // mergeIterator performs k-way merge using a min-heap.
 type mergeIterator struct {
-	ctx     context.Context
-	readers []*runReader
-	h       *mergeHeap
-	current inventory.Record
-	err     error
+	ctx              context.Context
+	readers          []*runReader
+	h                *mergeHeap
+	current          inventory.Record
+	err              error
+	recordsMerged    int64
+	estimatedRecords int64
+	startTime        time.Time
+	lastLogTime      time.Time
 }
 
-func newMergeIterator(ctx context.Context, readers []*runReader) *mergeIterator {
+func newMergeIterator(ctx context.Context, readers []*runReader, estimatedRecords int64) *mergeIterator {
 	h := &mergeHeap{}
 	heap.Init(h)
 
@@ -278,9 +320,12 @@ func newMergeIterator(ctx context.Context, readers []*runReader) *mergeIterator 
 	}
 
 	return &mergeIterator{
-		ctx:     ctx,
-		readers: readers,
-		h:       h,
+		ctx:              ctx,
+		readers:          readers,
+		h:                h,
+		estimatedRecords: estimatedRecords,
+		startTime:        time.Now(),
+		lastLogTime:      time.Now(),
 	}
 }
 
@@ -301,6 +346,18 @@ func (m *mergeIterator) Next() bool {
 	// Pop smallest
 	item := heap.Pop(m.h).(*heapItem)
 	m.current = item.record
+	m.recordsMerged++
+
+	// Log progress every 5 seconds
+	if time.Since(m.lastLogTime) >= 5*time.Second {
+		log := logging.WithPhase("merge_runs")
+		log.Info().
+			Int64("records_merged", m.recordsMerged).
+			Int64("estimated_total", m.estimatedRecords).
+			Dur("elapsed", time.Since(m.startTime)).
+			Msg("merge progress")
+		m.lastLogTime = time.Now()
+	}
 
 	// Advance the reader that provided this item
 	r := m.readers[item.readerIdx]
@@ -325,6 +382,12 @@ func (m *mergeIterator) Err() error {
 }
 
 func (m *mergeIterator) Close() error {
+	log := logging.WithPhase("merge_runs")
+	log.Info().
+		Int64("records_merged", m.recordsMerged).
+		Dur("elapsed", time.Since(m.startTime)).
+		Msg("merge complete")
+
 	var firstErr error
 	for _, r := range m.readers {
 		if err := r.Close(); err != nil && firstErr == nil {

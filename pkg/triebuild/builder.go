@@ -3,8 +3,10 @@ package triebuild
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
@@ -46,26 +48,40 @@ type stackNode struct {
 // Thread Safety: Builder is NOT safe for concurrent use. A single Builder
 // instance should only be used from one goroutine at a time.
 type Builder struct {
-	stack       []stackNode
-	nodes       []Node
-	posCount    uint64
-	maxDepth    uint32
-	trackTiers  bool
-	tierPresent [tiers.NumTiers]bool // Track which tiers have data
+	stack            []stackNode
+	nodes            []Node
+	posCount         uint64
+	maxDepth         uint32
+	trackTiers       bool
+	tierPresent      [tiers.NumTiers]bool // Track which tiers have data
+	objectsProcessed uint64
+	bytesProcessed   uint64
+	lastLogTime      time.Time
+	startTime        time.Time
 }
 
 // New creates a new trie builder.
 func New() *Builder {
-	return &Builder{}
+	return &Builder{
+		startTime:   time.Now(),
+		lastLogTime: time.Now(),
+	}
 }
 
 // NewWithTiers creates a new trie builder with tier tracking enabled.
 func NewWithTiers() *Builder {
-	return &Builder{trackTiers: true}
+	return &Builder{
+		trackTiers:  true,
+		startTime:   time.Now(),
+		lastLogTime: time.Now(),
+	}
 }
 
 // Build processes a sorted iterator and returns the trie structure.
 func (b *Builder) Build(iter extsort.Iterator) (*Result, error) {
+	log := logging.WithPhase("build_trie")
+	log.Info().Bool("track_tiers", b.trackTiers).Msg("starting trie build")
+
 	// Initialize root node
 	b.openNode("", 0)
 
@@ -73,6 +89,21 @@ func (b *Builder) Build(iter extsort.Iterator) (*Result, error) {
 		rec := iter.Record()
 		if err := b.processKey(rec.Key, rec.Size, rec.TierID); err != nil {
 			return nil, fmt.Errorf("process key %q: %w", rec.Key, err)
+		}
+
+		b.objectsProcessed++
+		b.bytesProcessed += rec.Size
+
+		// Log progress every 5 seconds
+		if time.Since(b.lastLogTime) >= 5*time.Second {
+			log.Info().
+				Uint64("objects_processed", b.objectsProcessed).
+				Uint64("bytes_processed", b.bytesProcessed).
+				Uint64("prefix_nodes", b.posCount).
+				Uint32("max_depth", b.maxDepth).
+				Dur("elapsed", time.Since(b.startTime)).
+				Msg("trie build progress")
+			b.lastLogTime = time.Now()
 		}
 	}
 
@@ -92,6 +123,15 @@ func (b *Builder) Build(iter extsort.Iterator) (*Result, error) {
 			}
 		}
 	}
+
+	log.Info().
+		Uint64("total_objects", b.objectsProcessed).
+		Uint64("total_bytes", b.bytesProcessed).
+		Int("total_nodes", len(b.nodes)).
+		Uint32("max_depth", b.maxDepth).
+		Int("present_tiers", len(presentTiers)).
+		Dur("elapsed", time.Since(b.startTime)).
+		Msg("trie build complete")
 
 	return &Result{
 		Nodes:        b.nodes,
