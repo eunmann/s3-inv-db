@@ -30,7 +30,6 @@ type Reader interface {
 // CSVReader reads S3 inventory records from a CSV or CSV.GZ file.
 type CSVReader struct {
 	file      *os.File
-	gzReader  *gzip.Reader
 	csvReader *csv.Reader
 	keyCol    int
 	sizeCol   int

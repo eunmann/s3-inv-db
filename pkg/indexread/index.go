@@ -313,6 +313,6 @@ func (idx *Index) NewDescendantIterator(prefixPos uint64, relDepth int) (Iterato
 
 type emptyIterator struct{}
 
-func (e *emptyIterator) Next() bool  { return false }
-func (e *emptyIterator) Pos() uint64 { return 0 }
+func (e *emptyIterator) Next() bool    { return false }
+func (e *emptyIterator) Pos() uint64   { return 0 }
 func (e *emptyIterator) Depth() uint32 { return 0 }

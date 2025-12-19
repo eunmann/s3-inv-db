@@ -263,7 +263,6 @@ type DepthIterator struct {
 	end          uint64 // slice end in positions array
 	current      uint64 // current index in positions array
 	pos          uint64 // current position value
-	started      bool
 }
 
 // NewDepthIterator creates an iterator for a subtree at a specific depth.

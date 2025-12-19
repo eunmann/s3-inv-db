@@ -2,6 +2,7 @@ package extsort
 
 import (
 	"context"
+	"errors"
 	"io"
 	"math/rand"
 	"sort"
@@ -299,7 +300,7 @@ func TestContextCancellationDuringMerge(t *testing.T) {
 	for it.Next() {
 		// Keep iterating until cancellation is detected
 	}
-	if it.Err() != context.Canceled {
+	if !errors.Is(it.Err(), context.Canceled) {
 		t.Errorf("expected context.Canceled, got %v", it.Err())
 	}
 }

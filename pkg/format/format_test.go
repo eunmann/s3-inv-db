@@ -1,6 +1,7 @@
 package format
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -40,7 +41,7 @@ func TestHeaderRoundTrip(t *testing.T) {
 
 func TestDecodeHeaderTooShort(t *testing.T) {
 	_, err := DecodeHeader(make([]byte, HeaderSize-1))
-	if err != ErrInvalidHeader {
+	if !errors.Is(err, ErrInvalidHeader) {
 		t.Errorf("DecodeHeader(short) = %v, want ErrInvalidHeader", err)
 	}
 }
@@ -180,7 +181,7 @@ func TestArrayReaderBoundsCheck(t *testing.T) {
 	defer r.Close()
 
 	_, err = r.GetU64(2)
-	if err != ErrBoundsCheck {
+	if !errors.Is(err, ErrBoundsCheck) {
 		t.Errorf("GetU64(out of bounds) = %v, want ErrBoundsCheck", err)
 	}
 }
@@ -290,7 +291,7 @@ func TestBlobReaderBoundsCheck(t *testing.T) {
 	defer r.Close()
 
 	_, err = r.Get(1)
-	if err != ErrBoundsCheck {
+	if !errors.Is(err, ErrBoundsCheck) {
 		t.Errorf("Get(out of bounds) = %v, want ErrBoundsCheck", err)
 	}
 }
@@ -311,7 +312,7 @@ func TestOpenArrayBadMagic(t *testing.T) {
 	}
 
 	_, err := OpenArray(path)
-	if err != ErrMagicMismatch {
+	if !errors.Is(err, ErrMagicMismatch) {
 		t.Errorf("OpenArray(bad magic) = %v, want ErrMagicMismatch", err)
 	}
 }
@@ -331,7 +332,7 @@ func TestOpenArrayBadVersion(t *testing.T) {
 	}
 
 	_, err := OpenArray(path)
-	if err != ErrVersionMismatch {
+	if !errors.Is(err, ErrVersionMismatch) {
 		t.Errorf("OpenArray(bad version) = %v, want ErrVersionMismatch", err)
 	}
 }

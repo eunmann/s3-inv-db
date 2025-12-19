@@ -121,11 +121,10 @@ func (w *ArrayWriter) Count() uint64 {
 
 // BlobWriter writes a prefix blob with offsets.
 type BlobWriter struct {
-	blobFile    *os.File
-	offsetsFile *os.File
-	blobWriter  *bufio.Writer
-	offsets     *ArrayWriter
-	offset      uint64
+	blobFile   *os.File
+	blobWriter *bufio.Writer
+	offsets    *ArrayWriter
+	offset     uint64
 }
 
 // NewBlobWriter creates a writer for prefix strings.
@@ -143,10 +142,10 @@ func NewBlobWriter(blobPath, offsetsPath string) (*BlobWriter, error) {
 	}
 
 	return &BlobWriter{
-		blobFile:    blobFile,
-		blobWriter:  bufio.NewWriter(blobFile),
-		offsets:     offsets,
-		offset:      0,
+		blobFile:   blobFile,
+		blobWriter: bufio.NewWriter(blobFile),
+		offsets:    offsets,
+		offset:     0,
 	}, nil
 }
 

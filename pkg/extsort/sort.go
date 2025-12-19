@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"container/heap"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -66,7 +67,7 @@ func (s *Sorter) AddRecords(ctx context.Context, reader inventory.Reader) error 
 		}
 
 		rec, err := reader.Read()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -248,7 +249,6 @@ type mergeIterator struct {
 	readers []*runReader
 	h       *mergeHeap
 	current inventory.Record
-	started bool
 	err     error
 }
 
@@ -349,7 +349,7 @@ func (h *mergeHeap) Pop() any {
 // emptyIterator returns no records.
 type emptyIterator struct{}
 
-func (e *emptyIterator) Next() bool              { return false }
+func (e *emptyIterator) Next() bool               { return false }
 func (e *emptyIterator) Record() inventory.Record { return inventory.Record{} }
-func (e *emptyIterator) Err() error              { return nil }
-func (e *emptyIterator) Close() error            { return nil }
+func (e *emptyIterator) Err() error               { return nil }
+func (e *emptyIterator) Close() error             { return nil }

@@ -366,4 +366,3 @@ func WritePrefixBlob(outDir string, prefixes []string) error {
 
 	return writer.Close()
 }
-

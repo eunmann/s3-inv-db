@@ -126,10 +126,7 @@ func Build(ctx context.Context, cfg Config, inventoryFiles []string) error {
 
 	// Final sync of parent directory to persist the rename
 	parentDir := filepath.Dir(cfg.OutDir)
-	if err := format.SyncDir(parentDir); err != nil {
-		// Non-fatal: rename completed, just couldn't sync parent
-		// This is best-effort durability
-	}
+	_ = format.SyncDir(parentDir) // Best-effort durability, non-fatal if it fails
 
 	return nil
 }

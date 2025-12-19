@@ -34,10 +34,10 @@ type stackNode struct {
 
 // Builder constructs a trie from a sorted stream of keys.
 type Builder struct {
-	stack     []stackNode
-	nodes     []Node
-	posCount  uint64
-	maxDepth  uint32
+	stack    []stackNode
+	nodes    []Node
+	posCount uint64
+	maxDepth uint32
 }
 
 // New creates a new trie builder.
@@ -71,6 +71,8 @@ func (b *Builder) Build(iter extsort.Iterator) (*Result, error) {
 }
 
 // processKey handles a single object key.
+//
+//nolint:unparam // error return kept for API consistency and future extensibility
 func (b *Builder) processKey(key string, size uint64) error {
 	// Extract prefix chain for this key
 	prefixes := extractPrefixes(key)
@@ -310,4 +312,3 @@ func (r *Result) GetDescendants(pos uint64) []Node {
 
 	return descendants
 }
-

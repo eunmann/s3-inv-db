@@ -1,0 +1,39 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - gocritic
+    - misspell
+    - unconvert
+    - unparam
+    - nilerr
+    - bodyclose
+    - errname
+    - errorlint
+    - copyloopvar
+  disable:
+    - errcheck  # Too noisy for cleanup code, manually reviewed
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  exclude-dirs:
+    - vendor
+  max-issues-per-linter: 50
+  max-same-issues: 10
+
+run:
+  timeout: 5m
+  tests: true
+  go: "1.23"
+
+output:
+  formats:
+    colored-line-number: {}
+  print-issued-lines: true
+  print-linter-name: true
+  sort-results: true

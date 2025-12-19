@@ -3,6 +3,7 @@ package inventory
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -41,7 +42,7 @@ func TestNewReader(t *testing.T) {
 	}
 
 	_, err = r.Read()
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		t.Errorf("expected EOF, got %v", err)
 	}
 }
@@ -78,7 +79,7 @@ func TestOpenFile_CSV(t *testing.T) {
 	}
 
 	_, err = r.Read()
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		t.Errorf("expected EOF, got %v", err)
 	}
 }
@@ -131,7 +132,7 @@ func TestOpenFile_MissingKeyColumn(t *testing.T) {
 	}
 
 	_, err := OpenFile(csvPath)
-	if err != ErrNoKeyColumn {
+	if !errors.Is(err, ErrNoKeyColumn) {
 		t.Errorf("expected ErrNoKeyColumn, got %v", err)
 	}
 }
@@ -146,7 +147,7 @@ func TestOpenFile_MissingSizeColumn(t *testing.T) {
 	}
 
 	_, err := OpenFile(csvPath)
-	if err != ErrNoSizeColumn {
+	if !errors.Is(err, ErrNoSizeColumn) {
 		t.Errorf("expected ErrNoSizeColumn, got %v", err)
 	}
 }
