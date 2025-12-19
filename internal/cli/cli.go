@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -13,6 +14,8 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
+	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
+	"github.com/eunmann/s3-inv-db/pkg/sqliteagg"
 )
 
 // Run executes the CLI with the given arguments.
@@ -44,6 +47,8 @@ func runBuild(args []string) error {
 	s3Manifest := fs.String("s3-manifest", "", "S3 URI to inventory manifest.json (s3://bucket/path/manifest.json)")
 	downloadConcurrency := fs.Int("download-concurrency", 4, "number of parallel S3 downloads")
 	keepDownloads := fs.Bool("keep-downloads", false, "keep downloaded inventory files after building")
+	useSQLite := fs.Bool("use-sqlite", false, "use SQLite-based streaming aggregation (recommended for large inventories)")
+	dbPath := fs.String("db", "", "path to SQLite database for aggregation (default: <tmp>/prefix-agg.db)")
 	verbose := fs.Bool("verbose", false, "enable debug level logging")
 	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
 
@@ -62,7 +67,12 @@ func runBuild(args []string) error {
 		return errors.New("--tmp is required")
 	}
 
-	// Check if building from S3 manifest
+	// Use SQLite-based pipeline for S3 manifests when --use-sqlite is set
+	if *useSQLite && *s3Manifest != "" {
+		return runBuildFromS3WithSQLite(*outDir, *tmpDir, *s3Manifest, *dbPath)
+	}
+
+	// Check if building from S3 manifest (legacy path)
 	if *s3Manifest != "" {
 		return runBuildFromS3(*outDir, *tmpDir, *chunkSize, *trackTiers, *s3Manifest, *downloadConcurrency, *keepDownloads)
 	}
@@ -129,6 +139,67 @@ func runBuildFromS3(outDir, tmpDir string, chunkSize int, trackTiers bool, manif
 		Str("phase", "build_complete").
 		Str("output_dir", outDir).
 		Bool("track_tiers", trackTiers).
+		Msg("index built successfully")
+	return nil
+}
+
+func runBuildFromS3WithSQLite(outDir, tmpDir, manifestURI, dbPath string) error {
+	log := logging.L()
+	ctx := context.Background()
+
+	// Use default DB path if not specified
+	if dbPath == "" {
+		dbPath = filepath.Join(tmpDir, "prefix-agg.db")
+	}
+
+	log.Info().
+		Str("phase", "build_start").
+		Str("s3_manifest", manifestURI).
+		Str("output_dir", outDir).
+		Str("db_path", dbPath).
+		Msg("starting SQLite-based S3 inventory build")
+
+	// Create S3 client
+	client, err := s3fetch.NewClient(ctx)
+	if err != nil {
+		return fmt.Errorf("create S3 client: %w", err)
+	}
+
+	// Configure SQLite
+	sqliteCfg := sqliteagg.DefaultConfig(dbPath)
+
+	// Stream from S3 into SQLite
+	streamCfg := sqliteagg.StreamConfig{
+		ManifestURI:  manifestURI,
+		DBPath:       dbPath,
+		SQLiteConfig: sqliteCfg,
+	}
+
+	result, err := sqliteagg.StreamFromS3(ctx, client, streamCfg)
+	if err != nil {
+		return fmt.Errorf("stream from S3: %w", err)
+	}
+
+	log.Info().
+		Int("chunks_processed", result.ChunksProcessed).
+		Int("chunks_skipped", result.ChunksSkipped).
+		Int64("objects_processed", result.ObjectsProcessed).
+		Msg("streaming aggregation complete")
+
+	// Build index from SQLite
+	buildCfg := indexbuild.SQLiteConfig{
+		OutDir:    outDir,
+		DBPath:    dbPath,
+		SQLiteCfg: sqliteCfg,
+	}
+
+	if err := indexbuild.BuildFromSQLite(buildCfg); err != nil {
+		return fmt.Errorf("build index from SQLite: %w", err)
+	}
+
+	log.Info().
+		Str("phase", "build_complete").
+		Str("output_dir", outDir).
 		Msg("index built successfully")
 	return nil
 }
