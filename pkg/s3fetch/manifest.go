@@ -66,6 +66,26 @@ func (m *Manifest) SizeColumnIndex() (int, error) {
 	return m.columnIndex("Size")
 }
 
+// StorageClassColumnIndex returns the index of the StorageClass column in the schema.
+// Returns -1 if the column is not present.
+func (m *Manifest) StorageClassColumnIndex() int {
+	idx, err := m.columnIndex("StorageClass")
+	if err != nil {
+		return -1
+	}
+	return idx
+}
+
+// AccessTierColumnIndex returns the index of the IntelligentTieringAccessTier column.
+// Returns -1 if the column is not present.
+func (m *Manifest) AccessTierColumnIndex() int {
+	idx, err := m.columnIndex("IntelligentTieringAccessTier")
+	if err != nil {
+		return -1
+	}
+	return idx
+}
+
 func (m *Manifest) columnIndex(name string) (int, error) {
 	cols := strings.Split(m.FileSchema, ",")
 	for i, col := range cols {

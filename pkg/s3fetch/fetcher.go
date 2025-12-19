@@ -33,6 +33,10 @@ type FetchResult struct {
 	KeyColumn int
 	// SizeColumn is the index of the Size column.
 	SizeColumn int
+	// StorageClassColumn is the index of the StorageClass column (-1 if absent).
+	StorageClassColumn int
+	// AccessTierColumn is the index of the IntelligentTieringAccessTier column (-1 if absent).
+	AccessTierColumn int
 }
 
 // Fetcher downloads S3 inventory files.
@@ -81,6 +85,10 @@ func (f *Fetcher) Fetch(ctx context.Context) (*FetchResult, error) {
 		return nil, fmt.Errorf("create download dir: %w", err)
 	}
 
+	// Get optional tier column indices
+	storageCol := manifest.StorageClassColumnIndex()
+	accessTierCol := manifest.AccessTierColumnIndex()
+
 	// Download all inventory files concurrently
 	localFiles, err := f.downloadFiles(ctx, manifest)
 	if err != nil {
@@ -88,10 +96,12 @@ func (f *Fetcher) Fetch(ctx context.Context) (*FetchResult, error) {
 	}
 
 	return &FetchResult{
-		Manifest:   manifest,
-		LocalFiles: localFiles,
-		KeyColumn:  keyCol,
-		SizeColumn: sizeCol,
+		Manifest:           manifest,
+		LocalFiles:         localFiles,
+		KeyColumn:          keyCol,
+		SizeColumn:         sizeCol,
+		StorageClassColumn: storageCol,
+		AccessTierColumn:   accessTierCol,
 	}, nil
 }
 

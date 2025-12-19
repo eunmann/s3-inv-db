@@ -22,6 +22,8 @@ type Config struct {
 	TmpDir string
 	// ChunkSize is the maximum number of records per sort chunk.
 	ChunkSize int
+	// TrackTiers enables per-tier byte and count tracking.
+	TrackTiers bool
 }
 
 // DefaultConfig returns a default configuration.
@@ -79,12 +81,26 @@ func BuildFromS3(ctx context.Context, cfg S3Config) error {
 	}
 
 	// Build index using downloaded files with schema from manifest
-	return BuildWithSchema(ctx, cfg.Config, result.LocalFiles, result.KeyColumn, result.SizeColumn)
+	schema := SchemaConfig{
+		KeyCol:        result.KeyColumn,
+		SizeCol:       result.SizeColumn,
+		StorageCol:    result.StorageClassColumn,
+		AccessTierCol: result.AccessTierColumn,
+	}
+	return BuildWithSchema(ctx, cfg.Config, result.LocalFiles, schema)
+}
+
+// SchemaConfig holds column configuration for headerless inventory files.
+type SchemaConfig struct {
+	KeyCol        int
+	SizeCol       int
+	StorageCol    int  // -1 if not available
+	AccessTierCol int  // -1 if not available
 }
 
 // BuildWithSchema constructs an index from inventory files using pre-known column indices.
 // This is used for AWS S3 inventory files which have no header row.
-func BuildWithSchema(ctx context.Context, cfg Config, inventoryFiles []string, keyCol, sizeCol int) error {
+func BuildWithSchema(ctx context.Context, cfg Config, inventoryFiles []string, schema SchemaConfig) error {
 	if cfg.OutDir == "" {
 		return fmt.Errorf("output directory required")
 	}
@@ -114,7 +130,14 @@ func BuildWithSchema(ctx context.Context, cfg Config, inventoryFiles []string, k
 			return ctx.Err()
 		}
 
-		reader, err := inventory.OpenFileWithSchema(path, keyCol, sizeCol)
+		opts := inventory.SchemaOptions{
+			KeyCol:        schema.KeyCol,
+			SizeCol:       schema.SizeCol,
+			StorageCol:    schema.StorageCol,
+			AccessTierCol: schema.AccessTierCol,
+			TrackTiers:    cfg.TrackTiers,
+		}
+		reader, err := inventory.OpenFileWithSchemaOptions(path, opts)
 		if err != nil {
 			return fmt.Errorf("open inventory file %s: %w", path, err)
 		}
@@ -134,7 +157,12 @@ func BuildWithSchema(ctx context.Context, cfg Config, inventoryFiles []string, k
 	}
 	defer iter.Close()
 
-	builder := triebuild.New()
+	var builder *triebuild.Builder
+	if cfg.TrackTiers {
+		builder = triebuild.NewWithTiers()
+	} else {
+		builder = triebuild.New()
+	}
 	trieResult, err := builder.Build(iter)
 	if err != nil {
 		return fmt.Errorf("build trie: %w", err)
@@ -149,27 +177,38 @@ func BuildWithSchema(ctx context.Context, cfg Config, inventoryFiles []string, k
 		return fmt.Errorf("write columnar arrays: %w", err)
 	}
 
-	// Step 4: Build depth index
+	// Step 4: Write tier stats (if tracking enabled)
+	if cfg.TrackTiers {
+		tierWriter, err := format.NewTierStatsWriter(tmpOutDir)
+		if err != nil {
+			return fmt.Errorf("create tier stats writer: %w", err)
+		}
+		if err := tierWriter.Write(trieResult); err != nil {
+			return fmt.Errorf("write tier stats: %w", err)
+		}
+	}
+
+	// Step 5: Build depth index
 	if err := writeDepthIndex(tmpOutDir, trieResult); err != nil {
 		return fmt.Errorf("write depth index: %w", err)
 	}
 
-	// Step 5: Build MPHF
+	// Step 6: Build MPHF
 	if err := writeMPHF(tmpOutDir, trieResult); err != nil {
 		return fmt.Errorf("write MPHF: %w", err)
 	}
 
-	// Step 6: Write manifest with checksums
+	// Step 7: Write manifest with checksums
 	if err := format.WriteManifest(tmpOutDir, uint64(len(trieResult.Nodes)), trieResult.MaxDepth); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
 
-	// Step 7: Sync directory to ensure all files are persisted
+	// Step 8: Sync directory to ensure all files are persisted
 	if err := format.SyncDir(tmpOutDir); err != nil {
 		return fmt.Errorf("sync output dir: %w", err)
 	}
 
-	// Step 8: Atomic move to final location
+	// Step 9: Atomic move to final location
 	if err := os.RemoveAll(cfg.OutDir); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove old output dir: %w", err)
 	}
@@ -215,7 +254,8 @@ func Build(ctx context.Context, cfg Config, inventoryFiles []string) error {
 			return ctx.Err()
 		}
 
-		reader, err := inventory.OpenFile(path)
+		opts := inventory.OpenOptions{TrackTiers: cfg.TrackTiers}
+		reader, err := inventory.OpenFileWithOptions(path, opts)
 		if err != nil {
 			return fmt.Errorf("open inventory file %s: %w", path, err)
 		}
@@ -235,7 +275,12 @@ func Build(ctx context.Context, cfg Config, inventoryFiles []string) error {
 	}
 	defer iter.Close()
 
-	builder := triebuild.New()
+	var builder *triebuild.Builder
+	if cfg.TrackTiers {
+		builder = triebuild.NewWithTiers()
+	} else {
+		builder = triebuild.New()
+	}
 	result, err := builder.Build(iter)
 	if err != nil {
 		return fmt.Errorf("build trie: %w", err)
@@ -250,27 +295,38 @@ func Build(ctx context.Context, cfg Config, inventoryFiles []string) error {
 		return fmt.Errorf("write columnar arrays: %w", err)
 	}
 
-	// Step 4: Build depth index
+	// Step 4: Write tier stats (if tracking enabled)
+	if cfg.TrackTiers {
+		tierWriter, err := format.NewTierStatsWriter(tmpOutDir)
+		if err != nil {
+			return fmt.Errorf("create tier stats writer: %w", err)
+		}
+		if err := tierWriter.Write(result); err != nil {
+			return fmt.Errorf("write tier stats: %w", err)
+		}
+	}
+
+	// Step 5: Build depth index
 	if err := writeDepthIndex(tmpOutDir, result); err != nil {
 		return fmt.Errorf("write depth index: %w", err)
 	}
 
-	// Step 5: Build MPHF
+	// Step 6: Build MPHF
 	if err := writeMPHF(tmpOutDir, result); err != nil {
 		return fmt.Errorf("write MPHF: %w", err)
 	}
 
-	// Step 6: Write manifest with checksums
+	// Step 7: Write manifest with checksums
 	if err := format.WriteManifest(tmpOutDir, uint64(len(result.Nodes)), result.MaxDepth); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
 
-	// Step 7: Sync directory to ensure all files are persisted
+	// Step 8: Sync directory to ensure all files are persisted
 	if err := format.SyncDir(tmpOutDir); err != nil {
 		return fmt.Errorf("sync output dir: %w", err)
 	}
 
-	// Step 8: Atomic move to final location
+	// Step 9: Atomic move to final location
 	if err := os.RemoveAll(cfg.OutDir); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove old output dir: %w", err)
 	}
