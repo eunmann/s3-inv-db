@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -28,7 +26,7 @@ func TestRunUnknownCommand(t *testing.T) {
 }
 
 func TestBuildMissingOut(t *testing.T) {
-	err := Run([]string{"build", "--tmp", "/tmp"})
+	err := Run([]string{"build", "--s3-manifest", "s3://bucket/manifest.json"})
 	if err == nil {
 		t.Fatal("expected error with missing --out")
 	}
@@ -37,55 +35,32 @@ func TestBuildMissingOut(t *testing.T) {
 	}
 }
 
-func TestBuildMissingTmp(t *testing.T) {
+func TestBuildMissingS3Manifest(t *testing.T) {
 	err := Run([]string{"build", "--out", "/out"})
 	if err == nil {
-		t.Fatal("expected error with missing --tmp")
+		t.Fatal("expected error with missing --s3-manifest")
 	}
-	if !strings.Contains(err.Error(), "--tmp") {
-		t.Errorf("expected '--tmp' error, got: %v", err)
+	if !strings.Contains(err.Error(), "--s3-manifest") {
+		t.Errorf("expected '--s3-manifest' error, got: %v", err)
 	}
 }
 
-func TestBuildMissingFiles(t *testing.T) {
-	err := Run([]string{"build", "--out", "/out", "--tmp", "/tmp"})
+func TestQueryMissingIndex(t *testing.T) {
+	err := Run([]string{"query", "--prefix", "test/"})
 	if err == nil {
-		t.Fatal("expected error with no inventory files")
+		t.Fatal("expected error with missing --index")
 	}
-	if !strings.Contains(err.Error(), "inventory file") {
-		t.Errorf("expected 'inventory file' error, got: %v", err)
+	if !strings.Contains(err.Error(), "--index") {
+		t.Errorf("expected '--index' error, got: %v", err)
 	}
 }
 
-func TestBuildSucceeds(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
-
-	// Create test inventory
-	invPath := filepath.Join(tmpDir, "test.csv")
-	csv := `Key,Size
-a/file.txt,100
-b/file.txt,200
-`
-	if err := os.WriteFile(invPath, []byte(csv), 0644); err != nil {
-		t.Fatalf("WriteFile failed: %v", err)
+func TestQueryMissingPrefix(t *testing.T) {
+	err := Run([]string{"query", "--index", "/path/to/index"})
+	if err == nil {
+		t.Fatal("expected error with missing --prefix")
 	}
-
-	err := Run([]string{"build", "--out", outDir, "--tmp", sortDir, invPath})
-	if err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	// Check output directory exists
-	if _, err := os.Stat(outDir); err != nil {
-		t.Errorf("Output directory not created: %v", err)
-	}
-
-	// Check manifest exists
-	manifestPath := filepath.Join(outDir, "manifest.json")
-	if _, err := os.Stat(manifestPath); err != nil {
-		t.Errorf("Manifest not created: %v", err)
+	if !strings.Contains(err.Error(), "--prefix") {
+		t.Errorf("expected '--prefix' error, got: %v", err)
 	}
 }

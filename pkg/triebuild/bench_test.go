@@ -4,37 +4,9 @@ import (
 	"fmt"
 	"math/rand"
 	"testing"
-
-	"github.com/eunmann/s3-inv-db/pkg/inventory"
 )
 
 const benchSeed = 42
-
-// mockIterator implements extsort.Iterator for benchmarking
-type mockIterator struct {
-	records []inventory.Record
-	pos     int
-}
-
-func (m *mockIterator) Next() bool {
-	if m.pos >= len(m.records) {
-		return false
-	}
-	m.pos++
-	return true
-}
-
-func (m *mockIterator) Record() inventory.Record {
-	return m.records[m.pos-1]
-}
-
-func (m *mockIterator) Err() error {
-	return nil
-}
-
-func (m *mockIterator) Close() error {
-	return nil
-}
 
 // Tree shape generators
 func generateDeepNarrowKeys(size int) []string {
@@ -153,12 +125,12 @@ func sortKeys(keys []string) []string {
 	return sorted
 }
 
-func keysToIterator(keys []string) *mockIterator {
-	records := make([]inventory.Record, len(keys))
-	for i, key := range keys {
-		records[i] = inventory.Record{Key: key, Size: uint64((i%1000 + 1) * 100)}
+func keysToSizes(keys []string) []uint64 {
+	sizes := make([]uint64, len(keys))
+	for i := range keys {
+		sizes[i] = uint64((i%1000 + 1) * 100)
 	}
-	return &mockIterator{records: records}
+	return sizes
 }
 
 type treeShape struct {
@@ -184,13 +156,12 @@ func BenchmarkTrieBuild(b *testing.B) {
 
 			// Generate and sort keys once
 			keys := sortKeys(shape.generate(size))
+			sizes := keysToSizes(keys)
 
 			b.Run(name, func(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
-					builder := New()
-					iter := keysToIterator(keys)
-					_, err := builder.Build(iter)
+					_, err := BuildFromKeys(keys, sizes)
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -207,13 +178,12 @@ func BenchmarkTrieBuild_LargeScale(b *testing.B) {
 	// Single 1M test - representative of large scale behavior
 	size := 1000000
 	keys := sortKeys(generateS3RealisticKeys(size))
+	sizes := keysToSizes(keys)
 
 	b.Run("s3_realistic/size=1000000", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			builder := New()
-			iter := keysToIterator(keys)
-			_, err := builder.Build(iter)
+			_, err := BuildFromKeys(keys, sizes)
 			if err != nil {
 				b.Fatal(err)
 			}

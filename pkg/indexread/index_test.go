@@ -1,7 +1,6 @@
 package indexread
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,23 +8,10 @@ import (
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
-	"github.com/eunmann/s3-inv-db/pkg/indexbuild"
 )
 
-// createTestInventory creates a test CSV inventory file.
-func createTestInventory(t *testing.T, dir, name, content string) string {
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatalf("WriteFile failed: %v", err)
-	}
-	return path
-}
-
 func TestEndToEndSimple(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
+	outDir := setupTestIndex(t)
 
 	// Create test inventory
 	csv := `Key,Size
@@ -34,16 +20,7 @@ a/file2.txt,200
 b/file1.txt,300
 b/sub/file.txt,400
 `
-	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
-
-	// Build index
-	cfg := indexbuild.Config{
-		OutDir:    outDir,
-		TmpDir:    sortDir,
-		ChunkSize: 100,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
@@ -107,10 +84,7 @@ b/sub/file.txt,400
 }
 
 func TestDescendantsAtDepth(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
+	outDir := setupTestIndex(t)
 
 	csv := `Key,Size
 a/x/file.txt,100
@@ -118,15 +92,7 @@ a/y/file.txt,200
 a/z/file.txt,300
 b/m/file.txt,400
 `
-	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
-
-	cfg := indexbuild.Config{
-		OutDir:    outDir,
-		TmpDir:    sortDir,
-		ChunkSize: 100,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
@@ -197,25 +163,14 @@ b/m/file.txt,400
 }
 
 func TestDescendantsUpToDepth(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
+	outDir := setupTestIndex(t)
 
 	csv := `Key,Size
 a/b/c/file.txt,100
 a/b/d/file.txt,200
 a/e/file.txt,300
 `
-	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
-
-	cfg := indexbuild.Config{
-		OutDir:    outDir,
-		TmpDir:    sortDir,
-		ChunkSize: 100,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
@@ -255,10 +210,7 @@ a/e/file.txt,300
 }
 
 func TestFiltering(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
+	outDir := setupTestIndex(t)
 
 	csv := `Key,Size
 small/file.txt,10
@@ -268,15 +220,7 @@ large/file1.txt,500
 large/file2.txt,500
 large/file3.txt,500
 `
-	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
-
-	cfg := indexbuild.Config{
-		OutDir:    outDir,
-		TmpDir:    sortDir,
-		ChunkSize: 100,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
@@ -308,25 +252,14 @@ large/file3.txt,500
 }
 
 func TestIterator(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
+	outDir := setupTestIndex(t)
 
 	csv := `Key,Size
 a/file.txt,100
 b/file.txt,200
 c/file.txt,300
 `
-	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
-
-	cfg := indexbuild.Config{
-		OutDir:    outDir,
-		TmpDir:    sortDir,
-		ChunkSize: 100,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
@@ -353,75 +286,14 @@ c/file.txt,300
 	}
 }
 
-func TestMultipleInventoryFiles(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
-
-	csv1 := `Key,Size
-a/file1.txt,100
-c/file1.txt,300
-`
-	csv2 := `Key,Size
-b/file1.txt,200
-d/file1.txt,400
-`
-	invPath1 := createTestInventory(t, tmpDir, "inv1.csv", csv1)
-	invPath2 := createTestInventory(t, tmpDir, "inv2.csv", csv2)
-
-	cfg := indexbuild.Config{
-		OutDir:    outDir,
-		TmpDir:    sortDir,
-		ChunkSize: 100,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, []string{invPath1, invPath2}); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	idx, err := Open(outDir)
-	if err != nil {
-		t.Fatalf("Open failed: %v", err)
-	}
-	defer idx.Close()
-
-	// All 4 top-level prefixes should exist
-	for _, prefix := range []string{"a/", "b/", "c/", "d/"} {
-		_, ok := idx.StatsForPrefix(prefix)
-		if !ok {
-			t.Errorf("prefix %q not found", prefix)
-		}
-	}
-
-	rootStats, _ := idx.StatsForPrefix("")
-	if rootStats.ObjectCount != 4 {
-		t.Errorf("root count = %d, want 4", rootStats.ObjectCount)
-	}
-	if rootStats.TotalBytes != 1000 {
-		t.Errorf("root bytes = %d, want 1000", rootStats.TotalBytes)
-	}
-}
-
 func TestPrefixStringRetrieval(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
+	outDir := setupTestIndex(t)
 
 	csv := `Key,Size
 foo/bar/file.txt,100
 foo/baz/file.txt,200
 `
-	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
-
-	cfg := indexbuild.Config{
-		OutDir:    outDir,
-		TmpDir:    sortDir,
-		ChunkSize: 100,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
@@ -457,41 +329,18 @@ func TestLargeDataset(t *testing.T) {
 		t.Skip("skipping large dataset test in short mode")
 	}
 
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
+	outDir := setupTestIndex(t)
 
-	// Generate large inventory
-	var csvContent string
-	csvContent = "Key,Size\n"
-	expectedPrefixes := make(map[string]uint64)
-	expectedPrefixes[""] = 0
-
+	// Generate keys
+	var keys []string
 	for i := 0; i < 100; i++ {
 		for j := 0; j < 10; j++ {
 			key := prefixFromInt(i) + prefixFromInt(j) + "file.txt"
-			size := uint64(i*10 + j)
-			csvContent += key + "," + string('0'+byte(size%10)) + "\n"
-
-			// Track expected prefixes
-			p1 := prefixFromInt(i)
-			p2 := prefixFromInt(i) + prefixFromInt(j)
-			expectedPrefixes[p1]++
-			expectedPrefixes[p2]++
-			expectedPrefixes[""]++
+			keys = append(keys, key)
 		}
 	}
 
-	invPath := createTestInventory(t, tmpDir, "large.csv", csvContent)
-
-	cfg := indexbuild.Config{
-		OutDir:    outDir,
-		TmpDir:    sortDir,
-		ChunkSize: 200,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+	if err := buildIndexFromKeys(t, outDir, keys); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
@@ -517,24 +366,13 @@ func prefixFromInt(i int) string {
 }
 
 func TestManifestCreatedAndVerifiable(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
+	outDir := setupTestIndex(t)
 
 	csv := `Key,Size
 a/file.txt,100
 b/file.txt,200
 `
-	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
-
-	cfg := indexbuild.Config{
-		OutDir:    outDir,
-		TmpDir:    sortDir,
-		ChunkSize: 100,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
@@ -582,24 +420,13 @@ b/file.txt,200
 }
 
 func TestIndexCountAndMaxDepth(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
+	outDir := setupTestIndex(t)
 
 	csv := `Key,Size
 a/b/c/file.txt,100
 x/y/file.txt,200
 `
-	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
-
-	cfg := indexbuild.Config{
-		OutDir:    outDir,
-		TmpDir:    sortDir,
-		ChunkSize: 100,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
@@ -621,23 +448,12 @@ x/y/file.txt,200
 }
 
 func TestEmptyIterator(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
+	outDir := setupTestIndex(t)
 
 	csv := `Key,Size
 a/file.txt,100
 `
-	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
-
-	cfg := indexbuild.Config{
-		OutDir:    outDir,
-		TmpDir:    sortDir,
-		ChunkSize: 100,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
@@ -674,23 +490,12 @@ a/file.txt,100
 }
 
 func TestIteratorDepthMethod(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
+	outDir := setupTestIndex(t)
 
 	csv := `Key,Size
 a/b/file.txt,100
 `
-	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
-
-	cfg := indexbuild.Config{
-		OutDir:    outDir,
-		TmpDir:    sortDir,
-		ChunkSize: 100,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
@@ -715,24 +520,13 @@ a/b/file.txt,100
 }
 
 func TestSingleNodeTrie(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
+	outDir := setupTestIndex(t)
 
 	// Single file at root level (no prefix directories)
 	csv := `Key,Size
 file.txt,100
 `
-	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
-
-	cfg := indexbuild.Config{
-		OutDir:    outDir,
-		TmpDir:    sortDir,
-		ChunkSize: 100,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
@@ -760,24 +554,13 @@ file.txt,100
 }
 
 func TestDeepPaths(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
+	outDir := setupTestIndex(t)
 
 	// Very deep path
 	csv := `Key,Size
 a/b/c/d/e/f/g/h/i/j/file.txt,100
 `
-	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
-
-	cfg := indexbuild.Config{
-		OutDir:    outDir,
-		TmpDir:    sortDir,
-		ChunkSize: 100,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
@@ -813,10 +596,7 @@ a/b/c/d/e/f/g/h/i/j/file.txt,100
 }
 
 func TestAlphabeticalOrdering(t *testing.T) {
-	tmpDir := t.TempDir()
-	outDir := filepath.Join(tmpDir, "index")
-	sortDir := filepath.Join(tmpDir, "sort")
-	os.MkdirAll(sortDir, 0755)
+	outDir := setupTestIndex(t)
 
 	// Create inventory with specific ordering
 	csv := `Key,Size
@@ -825,15 +605,7 @@ apple/file.txt,200
 mango/file.txt,300
 banana/file.txt,400
 `
-	invPath := createTestInventory(t, tmpDir, "test.csv", csv)
-
-	cfg := indexbuild.Config{
-		OutDir:    outDir,
-		TmpDir:    sortDir,
-		ChunkSize: 100,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, []string{invPath}); err != nil {
+	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 

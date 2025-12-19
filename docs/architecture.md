@@ -6,79 +6,89 @@ This document describes the high-level architecture of s3-inv-db, explaining how
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        BUILD PIPELINE                            │
+│                        BUILD PIPELINE                           │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐  │
-│  │ Inventory│───►│ External │───►│  Trie    │───►│ Columnar │  │
-│  │  Reader  │    │   Sort   │    │ Builder  │    │  Writer  │  │
-│  └──────────┘    └──────────┘    └──────────┘    └──────────┘  │
-│       │               │               │               │         │
-│       ▼               ▼               ▼               ▼         │
-│   CSV/GZ files   Sorted runs    Prefix trie    Index files      │
-│                                                                  │
+│                                                                 │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐ │
+│  │   S3     │───►│  SQLite  │───►│  Trie    │───►│ Columnar │ │
+│  │ Streaming│    │Aggregator│    │ Builder  │    │  Writer  │ │
+│  └──────────┘    └──────────┘    └──────────┘    └──────────┘ │
+│       │               │               │               │        │
+│       ▼               ▼               ▼               ▼        │
+│  CSV.GZ streams   Prefix stats   Prefix trie    Index files    │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
-│                        QUERY ENGINE                              │
+│                        QUERY ENGINE                             │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐                   │
-│  │   MPHF   │───►│ Columnar │───►│  Depth   │                   │
-│  │  Lookup  │    │  Arrays  │    │  Index   │                   │
-│  └──────────┘    └──────────┘    └──────────┘                   │
-│       │               │               │                          │
-│       ▼               ▼               ▼                          │
-│   O(1) prefix    Stats lookup   Depth queries                    │
-│     lookup                                                       │
-│                                                                  │
+│                                                                 │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐                  │
+│  │   MPHF   │───►│ Columnar │───►│  Depth   │                  │
+│  │  Lookup  │    │  Arrays  │    │  Index   │                  │
+│  └──────────┘    └──────────┘    └──────────┘                  │
+│       │               │               │                         │
+│       ▼               ▼               ▼                         │
+│   O(1) prefix    Stats lookup   Depth queries                   │
+│     lookup                                                      │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Core Components
 
-### 1. Inventory Reader (`pkg/inventory`)
+### 1. S3 Streaming (`pkg/s3fetch`, `pkg/sqliteagg`)
 
-Parses AWS S3 Inventory CSV files, handling:
-- Gzip-compressed files (`.csv.gz`)
-- Header detection and column mapping
-- Headerless files with explicit schema (for AWS S3 inventory format)
+Streams S3 inventory files directly from S3:
+- Fetches inventory manifest.json
+- Streams each CSV.GZ file without downloading to disk
+- Decompresses and parses on-the-fly
 
 **Key interfaces:**
 ```go
-type Reader interface {
-    Read() (Record, error)
-    Close() error
+type Client struct {
+    // S3 operations
 }
 
-type Record struct {
-    Key    string
-    Size   uint64
-    TierID tiers.ID  // Storage tier (when tracking enabled)
-}
+func (c *Client) StreamObject(ctx, bucket, key string) (io.ReadCloser, error)
 ```
 
-### 2. External Sort (`pkg/extsort`)
+### 2. SQLite Aggregator (`pkg/sqliteagg`)
 
-Sorts inventory records by key using external merge sort:
-- Handles datasets larger than memory
-- Configurable chunk size (default: 1M records)
-- K-way merge with priority queue
+Aggregates prefix statistics in a SQLite database during streaming:
+- Groups by prefix, computing count and bytes per prefix
+- Per-chunk resume support via `chunks_done` table
+- Efficient upsert operations with proper indexing
 
-**Why external sort?**
-S3 inventories can contain billions of objects. External sort allows processing inventories of any size with bounded memory usage.
+**Why SQLite streaming instead of external sort?**
+- **No disk copies**: Data flows directly from S3 into aggregation
+- **Resume support**: Can restart from last completed chunk
+- **Lower memory**: Only holds one chunk in memory at a time
+- **Simpler**: No k-way merge, no temporary files to manage
 
-**Algorithm:**
-1. Read records in chunks, sort each chunk in memory
-2. Write sorted chunks to temporary files
-3. K-way merge all chunks using a min-heap
+**Schema:**
+```sql
+CREATE TABLE prefix_stats (
+    prefix TEXT PRIMARY KEY,
+    depth INTEGER,
+    total_count INTEGER,
+    total_bytes INTEGER,
+    -- Per-tier columns when tier tracking enabled
+    tier_0_count INTEGER, tier_0_bytes INTEGER,
+    ...
+);
 
-### 3. Trie Builder (`pkg/triebuild`)
+CREATE TABLE chunks_done (
+    chunk_id TEXT PRIMARY KEY
+);
+```
 
-Constructs a prefix trie from sorted keys in a single streaming pass:
+### 3. Trie Builder (`pkg/triebuild`, `pkg/sqliteagg`)
+
+Constructs a prefix trie from the pre-aggregated prefix stats:
 
 ```
-Keys: ["a/b/file1.txt", "a/b/file2.txt", "a/c/file.txt"]
+Prefixes: ["a/", "a/b/", "a/c/"]
 
 Trie:
   (root)
@@ -88,9 +98,9 @@ Trie:
 ```
 
 **Key properties:**
-- **Streaming**: Processes sorted input in O(n) time, O(max_depth) memory
+- **Pre-aggregated**: Stats already computed during streaming
+- **Sorted input**: SQLite provides ORDER BY prefix
 - **Pre-order positions**: Nodes assigned positions in DFS pre-order
-- **Aggregated stats**: Each node stores cumulative object count and bytes for its subtree
 - **Subtree ranges**: Each node knows the position range of all descendants
 
 **Data collected per node:**
@@ -149,15 +159,17 @@ type Index struct {
 ### Build Phase
 
 ```
-1. Read inventory files
+1. Stream from S3
+   └── s3fetch.Client streams inventory files
    └── inventory.Reader parses CSV records
 
-2. External sort
-   └── extsort.Sorter produces sorted iterator
+2. Aggregate in SQLite
+   └── sqliteagg.Aggregator upserts prefix stats
+   └── Per-chunk resume via chunks_done table
 
 3. Build trie
-   └── triebuild.Builder processes sorted keys
-   └── Computes aggregates and subtree ranges
+   └── sqliteagg.BuildTrieFromSQLite reads sorted prefixes
+   └── Computes subtree ranges from pre-aggregated stats
 
 4. Write index
    └── format.ArrayWriter writes columnar arrays
@@ -209,6 +221,12 @@ type Index struct {
 - **Avoids full scan**: Jump directly to relevant positions
 - **Composable**: Combine with subtree range for scoped queries
 
+### Why SQLite for aggregation?
+- **Streaming**: No need to hold entire dataset in memory
+- **Resume**: Can restart from interrupted builds
+- **Efficient**: Proper indexing for upsert operations
+- **Simple**: No custom external sort implementation
+
 ## Memory Usage
 
 At query time, the index uses memory-mapped files:
@@ -217,12 +235,12 @@ At query time, the index uses memory-mapped files:
 - **No deserialization**: Direct access to on-disk format
 
 Build-time memory is bounded by:
-- External sort chunk size (configurable)
-- Trie depth (typically <100 levels)
+- SQLite page cache (configurable)
+- Chunk processing buffer
 - MPHF construction (~8 bytes per key temporarily)
 
 ## Concurrency
 
 - **Read operations**: Fully thread-safe, lock-free
-- **Build operations**: Single-threaded (streaming)
-- **S3 downloads**: Concurrent with configurable parallelism
+- **Build operations**: Single-threaded streaming
+- **S3 streaming**: Sequential per-file (parallel across files not implemented)

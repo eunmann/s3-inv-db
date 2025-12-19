@@ -1,7 +1,6 @@
 package s3fetch
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -205,26 +204,6 @@ func TestParseS3URI(t *testing.T) {
 	}
 }
 
-func TestSanitizeFilename(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"simple.csv", "simple.csv"},
-		{"path/to/file.csv.gz", "file.csv.gz"},
-		{"inventory/bucket/2024/01/file.csv", "file.csv"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := sanitizeFilename(tt.input)
-			if got != tt.want {
-				t.Errorf("sanitizeFilename(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestManifestStorageClassColumnIndex(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -285,59 +264,6 @@ func TestManifestAccessTierColumnIndex(t *testing.T) {
 				t.Errorf("AccessTierColumnIndex() = %d, want %d", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestNewFetcherDefaults(t *testing.T) {
-	// NewFetcher should set default concurrency when 0 or negative
-	tests := []struct {
-		name        string
-		concurrency int
-		want        int
-	}{
-		{"zero uses default", 0, 4},
-		{"negative uses default", -1, 4},
-		{"positive preserved", 8, 8},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := FetchConfig{Concurrency: tt.concurrency}
-			f := NewFetcher(nil, cfg)
-			if f.cfg.Concurrency != tt.want {
-				t.Errorf("Concurrency = %d, want %d", f.cfg.Concurrency, tt.want)
-			}
-		})
-	}
-}
-
-func TestFetcherCleanupKeepFiles(t *testing.T) {
-	tmpDir := t.TempDir()
-	testDir := tmpDir + "/downloads"
-
-	// Create the directory
-	if err := os.MkdirAll(testDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a test file
-	if err := os.WriteFile(testDir+"/test.txt", []byte("test"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Cleanup with KeepFiles=true should not remove files
-	f := NewFetcher(nil, FetchConfig{
-		DownloadDir: testDir,
-		KeepFiles:   true,
-	})
-
-	if err := f.Cleanup(); err != nil {
-		t.Fatalf("Cleanup failed: %v", err)
-	}
-
-	// Directory should still exist
-	if _, err := os.Stat(testDir); os.IsNotExist(err) {
-		t.Error("Cleanup removed directory despite KeepFiles=true")
 	}
 }
 
@@ -583,35 +509,5 @@ func TestManifestIntegration_ARNvsBucketName(t *testing.T) {
 				t.Errorf("URL = %q, want %q", constructedURL, expectedURL)
 			}
 		})
-	}
-}
-
-func TestFetcherCleanupRemovesFiles(t *testing.T) {
-	tmpDir := t.TempDir()
-	testDir := tmpDir + "/downloads"
-
-	// Create the directory
-	if err := os.MkdirAll(testDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a test file
-	if err := os.WriteFile(testDir+"/test.txt", []byte("test"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Cleanup with KeepFiles=false should remove files
-	f := NewFetcher(nil, FetchConfig{
-		DownloadDir: testDir,
-		KeepFiles:   false,
-	})
-
-	if err := f.Cleanup(); err != nil {
-		t.Fatalf("Cleanup failed: %v", err)
-	}
-
-	// Directory should be removed
-	if _, err := os.Stat(testDir); !os.IsNotExist(err) {
-		t.Error("Cleanup did not remove directory")
 	}
 }

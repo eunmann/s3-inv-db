@@ -6,9 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/eunmann/s3-inv-db/pkg/indexbuild"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
@@ -24,7 +22,6 @@ func Run(args []string) error {
 		return errors.New("usage: s3inv-index <command> [options]\ncommands: build, query")
 	}
 
-	// Check for global flags before the command
 	cmd := args[0]
 	cmdArgs := args[1:]
 
@@ -41,14 +38,8 @@ func Run(args []string) error {
 func runBuild(args []string) error {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
 	outDir := fs.String("out", "", "output directory for index files")
-	tmpDir := fs.String("tmp", "", "temporary directory for sort runs")
-	chunkSize := fs.Int("chunk-size", 1_000_000, "max records per sort chunk")
-	trackTiers := fs.Bool("track-tiers", false, "enable per-tier byte and count tracking")
 	s3Manifest := fs.String("s3-manifest", "", "S3 URI to inventory manifest.json (s3://bucket/path/manifest.json)")
-	downloadConcurrency := fs.Int("download-concurrency", 4, "number of parallel S3 downloads")
-	keepDownloads := fs.Bool("keep-downloads", false, "keep downloaded inventory files after building")
-	useSQLite := fs.Bool("use-sqlite", false, "use SQLite-based streaming aggregation (recommended for large inventories)")
-	dbPath := fs.String("db", "", "path to SQLite database for aggregation (default: <tmp>/prefix-agg.db)")
+	dbPath := fs.String("db", "", "path to SQLite database for aggregation (default: <out>.db)")
 	verbose := fs.Bool("verbose", false, "enable debug level logging")
 	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
 
@@ -63,101 +54,23 @@ func runBuild(args []string) error {
 	if *outDir == "" {
 		return errors.New("--out is required")
 	}
-	if *tmpDir == "" {
-		return errors.New("--tmp is required")
+	if *s3Manifest == "" {
+		return errors.New("--s3-manifest is required")
 	}
 
-	// Use SQLite-based pipeline for S3 manifests when --use-sqlite is set
-	if *useSQLite && *s3Manifest != "" {
-		return runBuildFromS3WithSQLite(*outDir, *tmpDir, *s3Manifest, *dbPath)
-	}
-
-	// Check if building from S3 manifest (legacy path)
-	if *s3Manifest != "" {
-		return runBuildFromS3(*outDir, *tmpDir, *chunkSize, *trackTiers, *s3Manifest, *downloadConcurrency, *keepDownloads)
-	}
-
-	// Building from local files
-	inventoryFiles := fs.Args()
-	if len(inventoryFiles) == 0 {
-		return errors.New("at least one inventory file is required (or use --s3-manifest)")
-	}
-
-	// Check if any local file looks like an S3 URI
-	for _, f := range inventoryFiles {
-		if strings.HasPrefix(f, "s3://") {
-			return fmt.Errorf("S3 URIs should be passed via --s3-manifest, not as positional arguments: %s", f)
-		}
-	}
-
-	cfg := indexbuild.Config{
-		OutDir:     *outDir,
-		TmpDir:     *tmpDir,
-		ChunkSize:  *chunkSize,
-		TrackTiers: *trackTiers,
-	}
-
-	if err := indexbuild.Build(context.Background(), cfg, inventoryFiles); err != nil {
-		return fmt.Errorf("build failed: %w", err)
-	}
-
-	log.Info().
-		Str("phase", "build_complete").
-		Str("output_dir", *outDir).
-		Bool("track_tiers", *trackTiers).
-		Msg("index built successfully")
-	return nil
-}
-
-func runBuildFromS3(outDir, tmpDir string, chunkSize int, trackTiers bool, manifestURI string, concurrency int, keepDownloads bool) error {
-	log := logging.L()
-	log.Info().
-		Str("phase", "build_start").
-		Str("s3_manifest", manifestURI).
-		Str("output_dir", outDir).
-		Int("concurrency", concurrency).
-		Bool("track_tiers", trackTiers).
-		Msg("starting S3 inventory build")
-
-	cfg := indexbuild.S3Config{
-		Config: indexbuild.Config{
-			OutDir:     outDir,
-			TmpDir:     tmpDir,
-			ChunkSize:  chunkSize,
-			TrackTiers: trackTiers,
-		},
-		ManifestURI:         manifestURI,
-		DownloadConcurrency: concurrency,
-		KeepDownloads:       keepDownloads,
-	}
-
-	if err := indexbuild.BuildFromS3(context.Background(), cfg); err != nil {
-		return fmt.Errorf("build from S3 failed: %w", err)
-	}
-
-	log.Info().
-		Str("phase", "build_complete").
-		Str("output_dir", outDir).
-		Bool("track_tiers", trackTiers).
-		Msg("index built successfully")
-	return nil
-}
-
-func runBuildFromS3WithSQLite(outDir, tmpDir, manifestURI, dbPath string) error {
-	log := logging.L()
 	ctx := context.Background()
 
 	// Use default DB path if not specified
-	if dbPath == "" {
-		dbPath = filepath.Join(tmpDir, "prefix-agg.db")
+	if *dbPath == "" {
+		*dbPath = *outDir + ".db"
 	}
 
 	log.Info().
 		Str("phase", "build_start").
-		Str("s3_manifest", manifestURI).
-		Str("output_dir", outDir).
-		Str("db_path", dbPath).
-		Msg("starting SQLite-based S3 inventory build")
+		Str("s3_manifest", *s3Manifest).
+		Str("output_dir", *outDir).
+		Str("db_path", *dbPath).
+		Msg("starting S3 inventory build")
 
 	// Create S3 client
 	client, err := s3fetch.NewClient(ctx)
@@ -166,12 +79,12 @@ func runBuildFromS3WithSQLite(outDir, tmpDir, manifestURI, dbPath string) error 
 	}
 
 	// Configure SQLite
-	sqliteCfg := sqliteagg.DefaultConfig(dbPath)
+	sqliteCfg := sqliteagg.DefaultConfig(*dbPath)
 
 	// Stream from S3 into SQLite
 	streamCfg := sqliteagg.StreamConfig{
-		ManifestURI:  manifestURI,
-		DBPath:       dbPath,
+		ManifestURI:  *s3Manifest,
+		DBPath:       *dbPath,
 		SQLiteConfig: sqliteCfg,
 	}
 
@@ -188,8 +101,8 @@ func runBuildFromS3WithSQLite(outDir, tmpDir, manifestURI, dbPath string) error 
 
 	// Build index from SQLite
 	buildCfg := indexbuild.SQLiteConfig{
-		OutDir:    outDir,
-		DBPath:    dbPath,
+		OutDir:    *outDir,
+		DBPath:    *dbPath,
 		SQLiteCfg: sqliteCfg,
 	}
 
@@ -197,10 +110,23 @@ func runBuildFromS3WithSQLite(outDir, tmpDir, manifestURI, dbPath string) error 
 		return fmt.Errorf("build index from SQLite: %w", err)
 	}
 
-	log.Info().
-		Str("phase", "build_complete").
-		Str("output_dir", outDir).
-		Msg("index built successfully")
+	// Get the prefix count for final log
+	agg, err := sqliteagg.Open(sqliteCfg)
+	if err == nil {
+		prefixCount, _ := agg.PrefixCount()
+		agg.Close()
+		log.Info().
+			Str("phase", "build_complete").
+			Str("output_dir", *outDir).
+			Uint64("prefix_count", prefixCount).
+			Msg("index built successfully")
+	} else {
+		log.Info().
+			Str("phase", "build_complete").
+			Str("output_dir", *outDir).
+			Msg("index built successfully")
+	}
+
 	return nil
 }
 
@@ -250,7 +176,7 @@ func runQuery(args []string) error {
 
 	if *showTiers || *estimateCost {
 		if !idx.HasTierData() {
-			fmt.Println("\nNo tier data available (index was built without --track-tiers)")
+			fmt.Println("\nNo tier data available (index was built without tier tracking)")
 		} else {
 			breakdown := idx.TierBreakdown(pos)
 			if len(breakdown) == 0 {

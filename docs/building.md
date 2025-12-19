@@ -4,29 +4,13 @@ This document explains how to build s3-inv-db indexes from S3 inventory data.
 
 ## Overview
 
-The build process transforms S3 inventory CSV files into a compact, queryable index:
+The build process streams S3 inventory CSV files directly into a SQLite-based aggregator, then constructs a compact, queryable index:
 
 ```
-Inventory CSV files  →  External Sort  →  Trie Build  →  Index Files
+S3 Inventory Files  →  SQLite Aggregation  →  Trie Build  →  Index Files
 ```
 
-## Input Formats
-
-### Local CSV Files
-
-Standard CSV format with headers:
-
-```csv
-Bucket,Key,Size,LastModifiedDate
-my-bucket,data/file1.txt,1024,2024-01-15T10:30:00Z
-my-bucket,data/file2.txt,2048,2024-01-15T11:00:00Z
-```
-
-Required columns:
-- `Key`: Object key (path)
-- `Size`: Object size in bytes
-
-Optional columns are ignored.
+## Input Format
 
 ### AWS S3 Inventory Format
 
@@ -36,40 +20,28 @@ AWS S3 Inventory produces:
 
 The data files have **no header row**; column order is defined in the manifest's `fileSchema` field.
 
+**Supported columns:**
+- `Key`: Object key (required)
+- `Size`: Object size in bytes (required)
+- `StorageClass`: Storage tier (optional, enables tier tracking)
+- `IntelligentTieringAccessTier`: Access tier for Intelligent-Tiering (optional)
+
 ## CLI Usage
-
-### Building from Local Files
-
-```bash
-s3inv-index build \
-  --out ./my-index \
-  --tmp ./tmp \
-  --chunk-size 1000000 \
-  --track-tiers \
-  inventory-part1.csv.gz inventory-part2.csv.gz
-```
-
-**Options:**
-- `--out`: Output directory for index files (required)
-- `--tmp`: Temporary directory for sort operations (required)
-- `--chunk-size`: Records per sort chunk (default: 1,000,000)
-- `--track-tiers`: Enable per-tier byte and count tracking
 
 ### Building from S3 Inventory
 
 ```bash
 s3inv-index build \
   --s3-manifest s3://inventory-bucket/my-bucket/2024-01-15T00-00Z/manifest.json \
-  --out ./my-index \
-  --tmp ./tmp \
-  --download-concurrency 8 \
-  --keep-downloads
+  --out ./my-index
 ```
 
-**S3-specific options:**
-- `--s3-manifest`: S3 URI to manifest.json (triggers S3 mode)
-- `--download-concurrency`: Parallel downloads (default: 4)
-- `--keep-downloads`: Don't delete downloaded files after build
+**Options:**
+- `--out`: Output directory for index files (required)
+- `--s3-manifest`: S3 URI to manifest.json (required)
+- `--db`: Path to SQLite database (default: `<out>.db`)
+- `--verbose`: Enable debug level logging
+- `--pretty-logs`: Use human-friendly console output
 
 ### AWS Credentials
 
@@ -80,168 +52,148 @@ S3 access uses the standard AWS credential chain:
 
 ## Programmatic Usage
 
-### Build from Local Files
-
-```go
-import "github.com/eunmann/s3-inv-db/pkg/indexbuild"
-
-cfg := indexbuild.Config{
-    OutDir:     "./my-index",
-    TmpDir:     "./tmp",
-    ChunkSize:  1_000_000,
-    TrackTiers: true,  // Enable tier tracking
-}
-
-err := indexbuild.Build(ctx, cfg, []string{
-    "inventory-part1.csv.gz",
-    "inventory-part2.csv.gz",
-})
-```
-
 ### Build from S3 Inventory
 
 ```go
-import "github.com/eunmann/s3-inv-db/pkg/indexbuild"
+import (
+    "context"
 
-cfg := indexbuild.S3Config{
-    Config: indexbuild.Config{
-        OutDir:    "./my-index",
-        TmpDir:    "./tmp",
-        ChunkSize: 1_000_000,
-    },
-    ManifestURI:         "s3://inventory-bucket/path/manifest.json",
-    DownloadConcurrency: 8,
-    KeepDownloads:       false,
+    "github.com/eunmann/s3-inv-db/pkg/indexbuild"
+    "github.com/eunmann/s3-inv-db/pkg/s3fetch"
+    "github.com/eunmann/s3-inv-db/pkg/sqliteagg"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // Create S3 client
+    client, err := s3fetch.NewClient(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    dbPath := "./prefix-agg.db"
+    outDir := "./my-index"
+
+    // Configure SQLite
+    sqliteCfg := sqliteagg.DefaultConfig(dbPath)
+
+    // Stream from S3 into SQLite
+    streamCfg := sqliteagg.StreamConfig{
+        ManifestURI:  "s3://inventory-bucket/path/manifest.json",
+        DBPath:       dbPath,
+        SQLiteConfig: sqliteCfg,
+    }
+
+    result, err := sqliteagg.StreamFromS3(ctx, client, streamCfg)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    log.Printf("Processed %d chunks, %d objects",
+        result.ChunksProcessed, result.ObjectsProcessed)
+
+    // Build index from SQLite
+    buildCfg := indexbuild.SQLiteConfig{
+        OutDir:    outDir,
+        DBPath:    dbPath,
+        SQLiteCfg: sqliteCfg,
+    }
+
+    if err := indexbuild.BuildFromSQLite(buildCfg); err != nil {
+        log.Fatal(err)
+    }
 }
-
-err := indexbuild.BuildFromS3(ctx, cfg)
-```
-
-### Build with Custom Schema
-
-For CSV files without headers or non-standard column order:
-
-```go
-import "github.com/eunmann/s3-inv-db/pkg/indexbuild"
-
-cfg := indexbuild.Config{
-    OutDir:     "./my-index",
-    TmpDir:     "./tmp",
-    ChunkSize:  1_000_000,
-    TrackTiers: true,
-}
-
-schema := indexbuild.SchemaConfig{
-    KeyCol:        1,  // Key is second column (0-indexed)
-    SizeCol:       2,  // Size is third column
-    StorageCol:    3,  // StorageClass column (-1 if absent)
-    AccessTierCol: -1, // IntelligentTieringAccessTier (-1 if absent)
-}
-
-err := indexbuild.BuildWithSchema(ctx, cfg, files, schema)
 ```
 
 ## Build Pipeline Details
 
-### 1. Inventory Reading
+### 1. S3 Streaming
 
-The `pkg/inventory` package parses CSV files:
+The `pkg/s3fetch` package streams inventory files:
 
 ```go
-reader, err := inventory.OpenFile("inventory.csv.gz")
-for {
-    record, err := reader.Read()
-    if err == io.EOF {
-        break
-    }
-    // Process record.Key and record.Size
+client, _ := s3fetch.NewClient(ctx)
+
+// Fetch manifest
+bucket, key, _ := s3fetch.ParseS3URI(manifestURI)
+manifest, _ := client.FetchManifest(ctx, bucket, key)
+
+// Stream each inventory file
+for _, file := range manifest.Files {
+    reader, _ := client.StreamObject(ctx, destBucket, file.Key)
+    // Process reader...
+    reader.Close()
 }
 ```
 
 Features:
-- Automatic gzip detection (by `.gz` extension)
-- Case-insensitive header matching
-- Tolerant of malformed rows (skipped with warning)
+- No local disk copies required
+- Automatic gzip decompression
+- Manifest parsing with column detection
 
-### 2. External Sort
+### 2. SQLite Aggregation
 
-The `pkg/extsort` package sorts records larger than memory:
+The `pkg/sqliteagg` package aggregates prefix statistics:
 
 ```go
-sorter := extsort.NewSorter(extsort.Config{
-    MaxRecordsPerChunk: 1_000_000,
-    TmpDir:             "./tmp",
-})
+agg, _ := sqliteagg.Open(sqliteCfg)
+defer agg.Close()
 
-// Add records from multiple files
-for _, file := range files {
-    reader, _ := inventory.OpenFile(file)
-    sorter.AddRecords(ctx, reader)
+// Process a chunk
+agg.BeginChunk()
+for record := range records {
+    agg.AddObject(record.Key, record.Size, record.TierID)
 }
-
-// Get sorted iterator
-iter, _ := sorter.Merge(ctx)
-defer iter.Close()
-
-for iter.Next() {
-    record := iter.Record()
-    // Records are now sorted by Key
-}
+agg.MarkChunkDone(chunkID)
+agg.Commit()
 ```
 
-**How it works:**
-1. Reads records into memory chunks
-2. Sorts each chunk and writes to temp file
-3. K-way merge reads from all temp files
-
-**Tuning:**
-- Larger chunks = fewer temp files = faster merge
-- Smaller chunks = less memory usage
-- Default (1M) works well for most cases
+**Resume support:**
+- Each chunk is tracked in `chunks_done` table
+- On restart, completed chunks are skipped
+- Partial chunks are rolled back
 
 ### 3. Trie Construction
 
-The `pkg/triebuild` package builds the prefix trie:
+The `pkg/sqliteagg` package builds the trie from aggregated data:
 
 ```go
-builder := triebuild.New()
-result, err := builder.Build(sortedIterator)
+result, _ := sqliteagg.BuildTrieFromSQLite(agg)
 
 // result.Nodes contains all prefix nodes
 // result.MaxDepth is the deepest level
+// result.PresentTiers lists tiers with data
 ```
 
-**Streaming algorithm:**
-- Maintains a stack of "open" nodes
-- Closes nodes when moving to different prefix
-- Computes aggregates (count, bytes) on the fly
+**Streaming from SQLite:**
+- Prefixes ordered by `ORDER BY prefix`
+- Stats already aggregated (no re-computation)
+- Single pass through sorted data
 
 ### 4. Index Writing
 
-The `pkg/format` package writes columnar files:
+The `pkg/indexbuild` package writes the final index:
 
 ```go
-// Write arrays
-writer, _ := format.NewArrayWriter("depth.u32", 4)
-for _, node := range result.Nodes {
-    writer.WriteU32(node.Depth)
+cfg := indexbuild.SQLiteConfig{
+    OutDir:    "./my-index",
+    DBPath:    "./prefix-agg.db",
+    SQLiteCfg: sqliteCfg,
 }
-writer.Close()
 
-// Build MPHF
-mphfBuilder := format.NewMPHFBuilder()
-for _, node := range result.Nodes {
-    mphfBuilder.Add(node.Prefix, node.Pos)
-}
-mphfBuilder.Build(outDir)
-
-// Build depth index
-depthBuilder := format.NewDepthIndexBuilder()
-for _, node := range result.Nodes {
-    depthBuilder.Add(node.Pos, node.Depth)
-}
-depthBuilder.Build(outDir)
+err := indexbuild.BuildFromSQLite(cfg)
 ```
+
+**Output files:**
+- `subtree_end.u64`: Subtree ranges
+- `depth.u32`: Node depths
+- `object_count.u64`: Object counts
+- `total_bytes.u64`: Byte totals
+- `mph.bin`: Perfect hash function
+- `depth_index/`: Depth posting lists
+- `tier_stats/`: Per-tier statistics (if tiers present)
+- `manifest.json`: File checksums
 
 ### 5. Atomic Finalization
 
@@ -254,60 +206,94 @@ The build uses atomic operations for crash safety:
 
 If the build crashes, no partial index is left behind.
 
+## Resume Support
+
+The build pipeline supports resuming from interruptions:
+
+### Chunk-level Resume (SQLite Aggregation)
+
+Each inventory file (chunk) is tracked in the `chunks_done` table:
+
+```sql
+SELECT chunk_id FROM chunks_done;
+```
+
+When restarting:
+- Completed chunks are skipped
+- The current incomplete chunk is rolled back
+- Processing continues from where it left off
+
+### Index-level Resume
+
+If the index already exists and is valid:
+- The manifest is read and checksums verified
+- If all files match, the build is skipped entirely
+- Log message: "resumed from completed build - index already valid"
+
 ## Performance
 
 ### Build Time
 
-Approximate build times (Ryzen 9 5950X):
+Approximate build times (depends on S3 throughput and CPU):
 
 | Objects | Prefixes | Time |
 |---------|----------|------|
-| 100K | ~10K | ~1s |
-| 1M | ~100K | ~10s |
-| 10M | ~1M | ~2min |
-| 100M | ~10M | ~20min |
+| 1M | ~100K | ~1-2min |
+| 10M | ~1M | ~10-15min |
+| 100M | ~10M | ~1-2hr |
 
 ### Memory Usage
 
 Memory is bounded by:
-- Sort chunk size × record size (~100 bytes/record)
+- SQLite page cache (configurable, default 256MB)
+- Current chunk buffer (~100MB)
 - MPHF construction (~8 bytes/key, temporary)
 
-With default 1M chunk size: ~100-200 MB peak
+Typical peak: ~500MB for large inventories.
 
 ### Disk Usage
 
-Temporary space needed:
-- Sort runs: ~100 bytes per record
-- For 100M records: ~10 GB temp space
+SQLite database: ~100 bytes per unique prefix
+Final index: ~80 bytes per unique prefix
 
-Final index size: ~80 bytes per unique prefix.
+For 10M unique prefixes:
+- SQLite DB: ~1GB
+- Final index: ~800MB
 
 ## Troubleshooting
 
+### S3 Access Denied
+
+Ensure your AWS credentials have:
+- `s3:GetObject` on the inventory bucket
+- Access to the manifest.json and all data files
+
 ### Out of Memory
 
-Reduce chunk size:
-```bash
-s3inv-index build --chunk-size 100000 ...
-```
-
-### Slow S3 Downloads
-
-Increase parallelism:
-```bash
-s3inv-index build --download-concurrency 16 ...
+SQLite cache can be reduced:
+```go
+cfg := sqliteagg.Config{
+    DBPath:      dbPath,
+    CacheSizeKB: 65536,  // 64MB instead of default 256MB
+}
 ```
 
 ### Disk Space
 
-Ensure temp directory has sufficient space:
-- Rule of thumb: 2× the compressed inventory size
+Ensure you have space for:
+- SQLite database (~100 bytes per prefix)
+- Final index (~80 bytes per prefix)
+- WAL file (up to database size during build)
 
 ### Missing Columns
 
-Error: `CSV header missing 'Key' column`
+Error: `column "Key" not found in schema`
 
-Check that your CSV has the required columns with standard names (`Key`, `Size`).
+Check that your inventory includes the required columns (Key, Size) in the manifest's fileSchema.
 
-For non-standard formats, use the programmatic API with `BuildWithSchema()`.
+### Resume Not Working
+
+If chunks keep being reprocessed:
+- Check that `--db` points to the same database file
+- Verify the SQLite database wasn't deleted
+- Check logs for "skipping already processed chunk" messages

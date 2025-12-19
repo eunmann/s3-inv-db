@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -52,56 +50,6 @@ func (c *Client) FetchManifest(ctx context.Context, bucket, key string) (*Manife
 		return nil, fmt.Errorf("parse manifest from s3://%s/%s: %w", bucket, key, err)
 	}
 	return manifest, nil
-}
-
-// DownloadFile downloads an S3 object to a local file using tmp+mv for atomicity.
-func (c *Client) DownloadFile(ctx context.Context, bucket, key, destPath string) error {
-	resp, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-	})
-	if err != nil {
-		return fmt.Errorf("get object s3://%s/%s: %w", bucket, key, err)
-	}
-	defer resp.Body.Close()
-
-	// Ensure parent directory exists
-	destDir := filepath.Dir(destPath)
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("create directory: %w", err)
-	}
-
-	// Write to temp file first
-	tmpPath := destPath + ".tmp"
-	f, err := os.Create(tmpPath)
-	if err != nil {
-		return fmt.Errorf("create temp file %s: %w", tmpPath, err)
-	}
-
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("write file %s: %w", tmpPath, err)
-	}
-
-	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("sync file %s: %w", tmpPath, err)
-	}
-
-	if err := f.Close(); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("close file %s: %w", tmpPath, err)
-	}
-
-	// Atomic rename to final destination
-	if err := os.Rename(tmpPath, destPath); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("rename %s to %s: %w", tmpPath, destPath, err)
-	}
-
-	return nil
 }
 
 // StreamObject returns a reader for an S3 object.
