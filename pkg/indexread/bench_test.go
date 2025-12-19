@@ -43,23 +43,32 @@ var treeShapes = []treeShape{
 		description: "Realistic S3 structure (dates, IDs, file types)",
 		generate:    generateS3Realistic,
 	},
+	{
+		name:        "wide_single_level",
+		description: "Many children under single prefix (tests millions of siblings)",
+		generate:    generateWideSingleLevel,
+	},
 }
 
 // Tree sizes for benchmarking
-var treeSizes = []int{1000, 10000, 100000}
+var treeSizes = []int{1000, 10000, 100000, 1000000}
+
+// Large tree sizes for specific benchmarks
+var largeTreeSizes = []int{1000000, 5000000}
 
 // generateDeepNarrow creates keys with deep paths but few branches
 // Shape: a/b/c/.../file1.txt, a/b/c/.../file2.txt, etc.
 func generateDeepNarrow(size int) []string {
 	keys := make([]string, size)
-	depth := 20 // Very deep paths
-	filesPerLeaf := size / 10
+	depth := 20       // Very deep paths
+	numBranches := 26 // a-z
+	filesPerLeaf := size / numBranches
 	if filesPerLeaf < 1 {
 		filesPerLeaf = 1
 	}
 
 	idx := 0
-	for branch := 0; idx < size && branch < 10; branch++ {
+	for branch := 0; idx < size && branch < numBranches; branch++ {
 		// Build deep path
 		var path strings.Builder
 		for d := 0; d < depth; d++ {
@@ -148,6 +157,18 @@ func generateS3Realistic(size int) []string {
 		ext := extensions[rng.Intn(len(extensions))]
 
 		keys[i] = fmt.Sprintf("%s/%s/%s/%s/%s/%s%s", prefix, year, month, day, userID, fileID, ext)
+	}
+	return keys
+}
+
+// generateWideSingleLevel creates many prefixes under a single parent
+// Shape: root/child000001/, root/child000002/, ..., root/childN/
+// This tests querying millions of children at depth 1
+func generateWideSingleLevel(size int) []string {
+	keys := make([]string, size)
+	for i := 0; i < size; i++ {
+		// Each key is a unique child prefix with a file
+		keys[i] = fmt.Sprintf("root/child%07d/file.txt", i)
 	}
 	return keys
 }
@@ -491,5 +512,136 @@ func BenchmarkPrefixRetrieval(b *testing.B) {
 
 			bi.Close()
 		}
+	}
+}
+
+// BenchmarkMillionsOfChildren benchmarks querying prefixes with millions of children
+func BenchmarkMillionsOfChildren(b *testing.B) {
+	for _, size := range largeTreeSizes {
+		name := fmt.Sprintf("size=%d", size)
+
+		b.Run(name+"/build", func(b *testing.B) {
+			// Benchmark just the index building for large trees
+			for i := 0; i < b.N; i++ {
+				keys := generateWideSingleLevel(size)
+				bi := setupBenchIndex(b, keys)
+				bi.Close()
+			}
+		})
+
+		// Setup once for query benchmarks
+		keys := generateWideSingleLevel(size)
+		bi := setupBenchIndex(b, keys)
+
+		b.Run(name+"/descendants_depth1", func(b *testing.B) {
+			// Query all children at depth 1 from root
+			rootPos, _ := bi.idx.Lookup("root/")
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				descendants, _ := bi.idx.DescendantsAtDepth(rootPos, 1)
+				_ = len(descendants)
+			}
+		})
+
+		b.Run(name+"/iterator_depth1", func(b *testing.B) {
+			// Iterate through all children at depth 1
+			rootPos, _ := bi.idx.Lookup("root/")
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				it, err := bi.idx.NewDescendantIterator(rootPos, 1)
+				if err != nil {
+					b.Fatal(err)
+				}
+				count := 0
+				for it.Next() {
+					count++
+					_ = it.Pos()
+				}
+			}
+		})
+
+		b.Run(name+"/iterator_depth1_with_stats", func(b *testing.B) {
+			// Iterate and fetch stats for each child
+			rootPos, _ := bi.idx.Lookup("root/")
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				it, err := bi.idx.NewDescendantIterator(rootPos, 1)
+				if err != nil {
+					b.Fatal(err)
+				}
+				for it.Next() {
+					pos := it.Pos()
+					stats := bi.idx.Stats(pos)
+					_ = stats.ObjectCount
+					_ = stats.TotalBytes
+				}
+			}
+		})
+
+		b.Run(name+"/random_child_lookup", func(b *testing.B) {
+			// Random lookups of children
+			rng := rand.New(rand.NewSource(benchSeed))
+			prefixes := make([]string, b.N)
+			for i := range prefixes {
+				childIdx := rng.Intn(size)
+				prefixes[i] = fmt.Sprintf("root/child%07d/", childIdx)
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, _ = bi.idx.Lookup(prefixes[i])
+			}
+		})
+
+		bi.Close()
+	}
+}
+
+// BenchmarkLargeTreeOperations benchmarks operations on million+ node trees
+func BenchmarkLargeTreeOperations(b *testing.B) {
+	for _, size := range largeTreeSizes {
+		keys := generateS3Realistic(size)
+		bi := setupBenchIndex(b, keys)
+
+		name := fmt.Sprintf("s3_realistic/size=%d", size)
+
+		b.Run(name+"/lookup_random", func(b *testing.B) {
+			rng := rand.New(rand.NewSource(benchSeed))
+			indices := make([]int, b.N)
+			for i := range indices {
+				indices[i] = rng.Intn(len(bi.prefixes))
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				prefix := bi.prefixes[indices[i]]
+				_, _ = bi.idx.Lookup(prefix)
+			}
+		})
+
+		b.Run(name+"/stats_random", func(b *testing.B) {
+			rng := rand.New(rand.NewSource(benchSeed))
+			indices := make([]int, b.N)
+			for i := range indices {
+				indices[i] = rng.Intn(len(bi.prefixes))
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				prefix := bi.prefixes[indices[i]]
+				_, _ = bi.idx.StatsForPrefix(prefix)
+			}
+		})
+
+		b.Run(name+"/prefix_string_random", func(b *testing.B) {
+			rng := rand.New(rand.NewSource(benchSeed))
+			positions := make([]uint64, b.N)
+			for i := range positions {
+				positions[i] = uint64(rng.Intn(len(bi.prefixes)))
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, _ = bi.idx.PrefixString(positions[i])
+			}
+		})
+
+		bi.Close()
 	}
 }
