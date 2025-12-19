@@ -284,11 +284,79 @@ Current schema uses `prefix TEXT PRIMARY KEY`:
 
 **Potential future optimization:** Integer prefix ID with separate prefix→ID lookup. Not implemented due to complexity and unclear benefit vs CGO overhead.
 
-### Remaining Bottleneck: CGO Overhead
+## Phase: Profile-Guided Schema Optimization
 
-CPU profile shows 47% of time in `runtime.cgocall` (SQLite CGO boundary). This is fundamental to go-sqlite3 and cannot be optimized without:
-- Direct SQLite C bindings (major rewrite)
-- Alternative pure-Go database (loses SQLite reliability)
+### Investigation Summary
+
+Challenged previous assumption that "CGO overhead is the bottleneck." Performed systematic comparison of different SQLite write strategies with 100k-500k objects.
+
+### Strategy Comparison (500k objects, 1.2M prefixes)
+
+| Strategy | Time | obj/s | vs Baseline |
+|----------|------|-------|-------------|
+| Current UPSERT (TEXT PK) | 8.8s | 56,607 | baseline |
+| Staging + Aggregate | 10.4s | 47,900 | -15% slower |
+| Prefix ID Normalized | 13.9s | 35,992 | -36% slower |
+| Full Memory + Deferred Index | 6.6s | 76,070 | **+34% faster** |
+| **MemoryAggregator** | **6.0s** | **82,600** | **+46% faster** |
+
+### Key Finding: Deferred Indexing
+
+The biggest win comes from **not maintaining the B-tree index during writes**:
+1. Create table without PRIMARY KEY
+2. Bulk INSERT all data (no UPSERT, no conflict resolution)
+3. Create index AFTER all inserts complete
+
+This eliminates B-tree maintenance overhead during the heavy write phase.
+
+### New: MemoryAggregator
+
+Added `MemoryAggregator` for one-shot build workflows:
+
+```go
+cfg := sqliteagg.DefaultMemoryAggregatorConfig(dbPath)
+agg := sqliteagg.NewMemoryAggregator(cfg)
+
+for _, obj := range objects {
+    agg.AddObject(obj.Key, obj.Size, obj.TierID)
+}
+agg.Finalize()  // Writes to SQLite with deferred indexing
+```
+
+**Advantages:**
+- No SQLite I/O during accumulation (all in-memory)
+- Single bulk write at end (no UPSERT overhead)
+- Deferred index creation (no B-tree maintenance during writes)
+- Multi-row INSERT batching (1000 rows/exec)
+
+**Limitations:**
+- Not resumable (all data lost on crash)
+- Memory usage: ~150 bytes × unique prefix count
+
+### Performance Comparison
+
+| Objects | Standard (UPSERT) | MemoryAggregator | Speedup |
+|---------|-------------------|------------------|---------|
+| 100k | 1.62s (61.7k/s) | 1.34s (74.6k/s) | 1.21x |
+| 500k | 9.45s (52.9k/s) | 6.05s (82.6k/s) | **1.56x** |
+
+The **MemoryAggregator is 56% faster** at scale (500k objects).
+
+### Projected Performance at Scale
+
+For 14 billion objects (assuming prefix ratio holds):
+- Standard Aggregator: ~73 hours
+- MemoryAggregator: ~47 hours
+
+This is a significant improvement but still far from "a few hours." Further investigation needed to understand what the fast implementation does differently.
+
+### When to Use Each Approach
+
+| Use Case | Recommended |
+|----------|-------------|
+| One-shot build, ample memory | `MemoryAggregator` |
+| Need resumability | Standard `Aggregator` with `BulkWriteMode` |
+| Concurrent readers during build | Standard `Aggregator` (no EXCLUSIVE lock) |
 
 ### Bulk Write Mode Usage
 
