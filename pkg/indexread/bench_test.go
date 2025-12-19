@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/benchutil"
@@ -653,4 +654,226 @@ func BenchmarkIndexOpen_Scaling(b *testing.B) {
 			}
 		})
 	}
+}
+
+// =============================================================================
+// Concurrent Query Benchmarks
+// =============================================================================
+// These benchmarks test query performance under concurrent load using
+// b.RunParallel. This simulates multi-goroutine access patterns.
+
+// BenchmarkConcurrentLookup tests concurrent prefix lookup performance.
+func BenchmarkConcurrentLookup(b *testing.B) {
+	bi := setupBenchIndexWithTiers(b, 50000)
+	defer bi.Close()
+
+	prefixCount := len(bi.prefixes)
+
+	b.Run("parallel_random", func(b *testing.B) {
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			rng := rand.New(rand.NewSource(rand.Int63()))
+			for pb.Next() {
+				idx := rng.Intn(prefixCount)
+				_, _ = bi.idx.Lookup(bi.prefixes[idx])
+			}
+		})
+	})
+
+	b.Run("parallel_sequential", func(b *testing.B) {
+		var counter uint64
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				// Use atomic add to get unique sequential indices
+				i := int(atomic.AddUint64(&counter, 1) % uint64(prefixCount))
+				_, _ = bi.idx.Lookup(bi.prefixes[i])
+			}
+		})
+	})
+}
+
+// BenchmarkConcurrentStats tests concurrent stats retrieval performance.
+func BenchmarkConcurrentStats(b *testing.B) {
+	bi := setupBenchIndexWithTiers(b, 50000)
+	defer bi.Close()
+
+	prefixCount := len(bi.prefixes)
+
+	b.Run("parallel_random", func(b *testing.B) {
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			rng := rand.New(rand.NewSource(rand.Int63()))
+			for pb.Next() {
+				idx := rng.Intn(prefixCount)
+				_, _ = bi.idx.StatsForPrefix(bi.prefixes[idx])
+			}
+		})
+	})
+
+	b.Run("parallel_sequential", func(b *testing.B) {
+		var counter uint64
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				i := int(atomic.AddUint64(&counter, 1) % uint64(prefixCount))
+				_, _ = bi.idx.StatsForPrefix(bi.prefixes[i])
+			}
+		})
+	})
+}
+
+// BenchmarkConcurrentTierBreakdown tests concurrent tier data retrieval.
+func BenchmarkConcurrentTierBreakdown(b *testing.B) {
+	bi := setupBenchIndexWithTiers(b, 50000)
+	defer bi.Close()
+
+	if !bi.idx.HasTierData() {
+		b.Skip("index has no tier data")
+	}
+
+	prefixCount := uint64(len(bi.prefixes))
+
+	b.Run("parallel_random", func(b *testing.B) {
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			rng := rand.New(rand.NewSource(rand.Int63()))
+			for pb.Next() {
+				pos := uint64(rng.Int63()) % prefixCount
+				_ = bi.idx.TierBreakdown(pos)
+			}
+		})
+	})
+
+	b.Run("parallel_all_tiers", func(b *testing.B) {
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			rng := rand.New(rand.NewSource(rand.Int63()))
+			for pb.Next() {
+				pos := uint64(rng.Int63()) % prefixCount
+				_ = bi.idx.TierBreakdownAll(pos)
+			}
+		})
+	})
+}
+
+// BenchmarkConcurrentDescendants tests concurrent depth-based queries.
+func BenchmarkConcurrentDescendants(b *testing.B) {
+	bi := setupBenchIndexWithTiers(b, 50000)
+	defer bi.Close()
+
+	rootPos, _ := bi.idx.Lookup("")
+	prefixCount := len(bi.prefixes)
+
+	b.Run("parallel_depth1_root", func(b *testing.B) {
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				_, _ = bi.idx.DescendantsAtDepth(rootPos, 1)
+			}
+		})
+	})
+
+	b.Run("parallel_depth2_root", func(b *testing.B) {
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				_, _ = bi.idx.DescendantsAtDepth(rootPos, 2)
+			}
+		})
+	})
+
+	b.Run("parallel_random_prefix", func(b *testing.B) {
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			rng := rand.New(rand.NewSource(rand.Int63()))
+			for pb.Next() {
+				idx := rng.Intn(prefixCount)
+				pos, ok := bi.idx.Lookup(bi.prefixes[idx])
+				if ok {
+					_, _ = bi.idx.DescendantsAtDepth(pos, 1)
+				}
+			}
+		})
+	})
+}
+
+// BenchmarkConcurrentMixedWorkload simulates concurrent realistic query patterns.
+func BenchmarkConcurrentMixedWorkload(b *testing.B) {
+	bi := setupBenchIndexWithTiers(b, 50000)
+	defer bi.Close()
+
+	hasTiers := bi.idx.HasTierData()
+	rootPos, _ := bi.idx.Lookup("")
+	prefixCount := len(bi.prefixes)
+	maxDepth := bi.idx.MaxDepth()
+
+	b.Run("parallel_mixed", func(b *testing.B) {
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			rng := rand.New(rand.NewSource(rand.Int63()))
+			for pb.Next() {
+				op := rng.Intn(100)
+				switch {
+				case op < 35:
+					// Stats lookup (35%)
+					prefix := bi.prefixes[rng.Intn(prefixCount)]
+					_, _ = bi.idx.StatsForPrefix(prefix)
+				case op < 50 && hasTiers:
+					// Tier breakdown (15%)
+					pos := uint64(rng.Intn(prefixCount))
+					_ = bi.idx.TierBreakdown(pos)
+				case op < 70:
+					// Depth-1 descendants (20%)
+					_, _ = bi.idx.DescendantsAtDepth(rootPos, 1)
+				case op < 85:
+					// Depth-2 descendants (15%)
+					_, _ = bi.idx.DescendantsAtDepth(rootPos, 2)
+				default:
+					// Deeper descendants (15%)
+					depth := rng.Intn(3) + 3
+					if uint32(depth) <= maxDepth {
+						_, _ = bi.idx.DescendantsAtDepth(rootPos, depth)
+					}
+				}
+			}
+		})
+	})
+}
+
+// BenchmarkConcurrentContention tests high-contention scenarios.
+func BenchmarkConcurrentContention(b *testing.B) {
+	bi := setupBenchIndexWithTiers(b, 50000)
+	defer bi.Close()
+
+	// Find a prefix that all goroutines will query (hot spot)
+	hotPrefix := bi.prefixes[0]
+	hotPos, _ := bi.idx.Lookup(hotPrefix)
+
+	b.Run("parallel_same_prefix", func(b *testing.B) {
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				_, _ = bi.idx.Lookup(hotPrefix)
+			}
+		})
+	})
+
+	b.Run("parallel_same_stats", func(b *testing.B) {
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				_ = bi.idx.Stats(hotPos)
+			}
+		})
+	})
+
+	b.Run("parallel_same_descendants", func(b *testing.B) {
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				_, _ = bi.idx.DescendantsAtDepth(hotPos, 1)
+			}
+		})
+	})
 }
