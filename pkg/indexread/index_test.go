@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 func TestEndToEndSimple(t *testing.T) {
@@ -639,4 +640,152 @@ banana/file.txt,400
 	if !reflect.DeepEqual(names, sortedNames) {
 		t.Error("names not in alphabetical order")
 	}
+}
+
+func TestTierBreakdown(t *testing.T) {
+	outDir := setupTestIndex(t)
+
+	// Create objects with different storage tiers
+	objects := []testObject{
+		{"standard/file1.txt", 100, tiers.Standard},
+		{"standard/file2.txt", 200, tiers.Standard},
+		{"glacier/file1.txt", 500, tiers.GlacierFR},
+		{"glacier/file2.txt", 500, tiers.GlacierFR},
+		{"mixed/standard.txt", 100, tiers.Standard},
+		{"mixed/glacier.txt", 400, tiers.GlacierFR},
+		{"mixed/deep.txt", 200, tiers.DeepArchive},
+	}
+
+	if err := buildIndexWithTiers(t, outDir, objects); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	idx, err := Open(outDir)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer idx.Close()
+
+	// Check tier data is available
+	if !idx.HasTierData() {
+		t.Fatal("HasTierData() returned false, expected true")
+	}
+
+	// Test root tier breakdown - should have all tiers
+	rootBreakdown := idx.TierBreakdownForPrefix("")
+	if len(rootBreakdown) == 0 {
+		t.Fatal("root tier breakdown is empty")
+	}
+
+	// Find Standard tier in root breakdown
+	var standardFound bool
+	var standardBytes, standardCount uint64
+	for _, tb := range rootBreakdown {
+		if tb.TierID == tiers.Standard {
+			standardFound = true
+			standardBytes = tb.Bytes
+			standardCount = tb.ObjectCount
+		}
+	}
+	if !standardFound {
+		t.Error("Standard tier not found in root breakdown")
+	}
+	if standardCount != 3 {
+		t.Errorf("Standard count = %d, want 3", standardCount)
+	}
+	if standardBytes != 400 { // 100 + 200 + 100
+		t.Errorf("Standard bytes = %d, want 400", standardBytes)
+	}
+
+	// Test prefix-specific breakdown
+	glacierBreakdown := idx.TierBreakdownForPrefix("glacier/")
+	if len(glacierBreakdown) == 0 {
+		t.Fatal("glacier/ tier breakdown is empty")
+	}
+
+	// All should be Glacier Flexible Retrieval
+	for _, tb := range glacierBreakdown {
+		if tb.TierID != tiers.GlacierFR {
+			continue
+		}
+		if tb.ObjectCount != 2 {
+			t.Errorf("glacier/ GlacierFR count = %d, want 2", tb.ObjectCount)
+		}
+		if tb.Bytes != 1000 {
+			t.Errorf("glacier/ GlacierFR bytes = %d, want 1000", tb.Bytes)
+		}
+	}
+
+	// Test mixed prefix breakdown
+	mixedBreakdown := idx.TierBreakdownForPrefix("mixed/")
+	if len(mixedBreakdown) < 3 {
+		t.Errorf("mixed/ tier breakdown has %d entries, want at least 3", len(mixedBreakdown))
+	}
+}
+
+func TestTierBreakdownMap(t *testing.T) {
+	outDir := setupTestIndex(t)
+
+	objects := []testObject{
+		{"a/standard.txt", 100, tiers.Standard},
+		{"a/ia.txt", 200, tiers.StandardIA},
+		{"a/glacier.txt", 300, tiers.GlacierFR},
+	}
+
+	if err := buildIndexWithTiers(t, outDir, objects); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	idx, err := Open(outDir)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer idx.Close()
+
+	// Get breakdown as map
+	aPos, ok := idx.Lookup("a/")
+	if !ok {
+		t.Fatal("a/ lookup failed")
+	}
+
+	breakdown := idx.TierBreakdownMap(aPos)
+	if len(breakdown) != 3 {
+		t.Errorf("breakdown map has %d entries, want 3", len(breakdown))
+	}
+
+	// Check Standard tier
+	if std, ok := breakdown["STANDARD"]; ok {
+		if std.ObjectCount != 1 {
+			t.Errorf("Standard count = %d, want 1", std.ObjectCount)
+		}
+		if std.Bytes != 100 {
+			t.Errorf("Standard bytes = %d, want 100", std.Bytes)
+		}
+	} else {
+		t.Error("STANDARD tier not found in breakdown map")
+	}
+}
+
+func TestNoTierData(t *testing.T) {
+	outDir := setupTestIndex(t)
+
+	// Build index without using buildIndexWithTiers (uses Standard tier only)
+	csv := `Key,Size
+a/file.txt,100
+`
+	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	idx, err := Open(outDir)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer idx.Close()
+
+	// When only one tier (Standard) is used, tier tracking may be disabled
+	// This is implementation-dependent, so we just verify no panic
+	breakdown := idx.TierBreakdownForPrefix("")
+	// With a single tier, breakdown may be empty or contain just Standard
+	_ = breakdown
 }

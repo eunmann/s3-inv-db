@@ -138,3 +138,54 @@ func setupTestIndex(t *testing.T) string {
 	tmpDir := t.TempDir()
 	return filepath.Join(tmpDir, "index")
 }
+
+// testObject represents a single object for test index building.
+type testObject struct {
+	Key    string
+	Size   uint64
+	TierID tiers.ID
+}
+
+// buildIndexWithTiers creates an index from objects with tier data.
+func buildIndexWithTiers(t *testing.T, outDir string, objects []testObject) error {
+	t.Helper()
+
+	dbPath := outDir + ".db"
+	cfg := sqliteagg.DefaultConfig(dbPath)
+
+	agg, err := sqliteagg.Open(cfg)
+	if err != nil {
+		return fmt.Errorf("open SQLite: %w", err)
+	}
+	defer agg.Close()
+	defer os.Remove(dbPath)
+
+	if err := agg.BeginChunk(); err != nil {
+		return fmt.Errorf("begin chunk: %w", err)
+	}
+
+	for _, obj := range objects {
+		if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
+			return fmt.Errorf("add object %q: %w", obj.Key, err)
+		}
+	}
+
+	if err := agg.MarkChunkDone("test-chunk"); err != nil {
+		return fmt.Errorf("mark chunk done: %w", err)
+	}
+	if err := agg.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	buildCfg := indexbuild.SQLiteConfig{
+		OutDir:    outDir,
+		DBPath:    dbPath,
+		SQLiteCfg: cfg,
+	}
+
+	if err := indexbuild.BuildFromSQLite(buildCfg); err != nil {
+		return fmt.Errorf("build index: %w", err)
+	}
+
+	return nil
+}
