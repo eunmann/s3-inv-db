@@ -62,7 +62,6 @@ func NewRunFileWriter(path string, bufferSize int) (*RunFileWriter, error) {
 		buf:    make([]byte, 1024), // initial buffer
 	}
 
-	// Write placeholder header (will be updated on close)
 	header := make([]byte, runFileHeader)
 	binary.LittleEndian.PutUint32(header[0:4], runFileMagic)
 	binary.LittleEndian.PutUint32(header[4:8], runFileVersion)
@@ -79,43 +78,34 @@ func NewRunFileWriter(path string, bufferSize int) (*RunFileWriter, error) {
 
 // Write writes a single PrefixRow to the run file.
 func (w *RunFileWriter) Write(row *PrefixRow) error {
-	// Calculate required size
 	prefixLen := len(row.Prefix)
 	recordSize := 4 + prefixLen + 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
 
-	// Grow buffer if needed
 	if len(w.buf) < recordSize {
 		w.buf = make([]byte, recordSize*2)
 	}
 
-	// Encode the record
 	offset := 0
 
-	// Prefix length and string
 	binary.LittleEndian.PutUint32(w.buf[offset:], uint32(prefixLen))
 	offset += 4
 	copy(w.buf[offset:], row.Prefix)
 	offset += prefixLen
 
-	// Depth
 	binary.LittleEndian.PutUint16(w.buf[offset:], row.Depth)
 	offset += 2
 
-	// Count
 	binary.LittleEndian.PutUint64(w.buf[offset:], row.Count)
 	offset += 8
 
-	// TotalBytes
 	binary.LittleEndian.PutUint64(w.buf[offset:], row.TotalBytes)
 	offset += 8
 
-	// TierCounts
 	for i := range MaxTiers {
 		binary.LittleEndian.PutUint64(w.buf[offset:], row.TierCounts[i])
 		offset += 8
 	}
 
-	// TierBytes
 	for i := range MaxTiers {
 		binary.LittleEndian.PutUint64(w.buf[offset:], row.TierBytes[i])
 		offset += 8
@@ -141,7 +131,6 @@ func (w *RunFileWriter) WriteAll(rows []*PrefixRow) error {
 
 // WriteSorted sorts the rows by prefix and writes them to the run file.
 func (w *RunFileWriter) WriteSorted(rows []*PrefixRow) error {
-	// Sort by prefix (lexicographic order)
 	slices.SortFunc(rows, func(a, b *PrefixRow) int {
 		return strings.Compare(a.Prefix, b.Prefix)
 	})
@@ -170,7 +159,6 @@ func (w *RunFileWriter) Close() error {
 		return fmt.Errorf("flush: %w", err)
 	}
 
-	// Seek back and update header with correct count
 	if _, err := w.file.Seek(8, 0); err != nil {
 		w.file.Close()
 		return fmt.Errorf("seek: %w", err)
@@ -215,7 +203,6 @@ func OpenRunFile(path string, bufferSize int) (*RunFileReader, error) {
 		buf:    make([]byte, 1024),
 	}
 
-	// Read and validate header
 	header := make([]byte, runFileHeader)
 	if _, err := io.ReadFull(r.reader, header); err != nil {
 		f.Close()
@@ -246,23 +233,19 @@ func (r *RunFileReader) Read() (*PrefixRow, error) {
 		return nil, io.EOF
 	}
 
-	// Read prefix length
 	var lenBuf [4]byte
 	if _, err := io.ReadFull(r.reader, lenBuf[:]); err != nil {
 		return nil, fmt.Errorf("read prefix length: %w", err)
 	}
 	prefixLen := int(binary.LittleEndian.Uint32(lenBuf[:]))
 
-	// Calculate remaining record size after prefix
-	fixedSize := 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8 // 210 bytes
+	fixedSize := 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
 	recordSize := prefixLen + fixedSize
 
-	// Grow buffer if needed
 	if len(r.buf) < recordSize {
 		r.buf = make([]byte, recordSize*2)
 	}
 
-	// Read the rest of the record
 	if _, err := io.ReadFull(r.reader, r.buf[:recordSize]); err != nil {
 		return nil, fmt.Errorf("read record: %w", err)
 	}
@@ -270,29 +253,23 @@ func (r *RunFileReader) Read() (*PrefixRow, error) {
 	row := &PrefixRow{}
 	offset := 0
 
-	// Prefix
 	row.Prefix = string(r.buf[offset : offset+prefixLen])
 	offset += prefixLen
 
-	// Depth
 	row.Depth = binary.LittleEndian.Uint16(r.buf[offset:])
 	offset += 2
 
-	// Count
 	row.Count = binary.LittleEndian.Uint64(r.buf[offset:])
 	offset += 8
 
-	// TotalBytes
 	row.TotalBytes = binary.LittleEndian.Uint64(r.buf[offset:])
 	offset += 8
 
-	// TierCounts
 	for i := range MaxTiers {
 		row.TierCounts[i] = binary.LittleEndian.Uint64(r.buf[offset:])
 		offset += 8
 	}
 
-	// TierBytes
 	for i := range MaxTiers {
 		row.TierBytes[i] = binary.LittleEndian.Uint64(r.buf[offset:])
 		offset += 8

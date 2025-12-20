@@ -58,14 +58,12 @@ func NewParquetInventoryReader(r io.ReaderAt, size int64, cfg ParquetReaderConfi
 // NewParquetInventoryReaderFromStream creates a Parquet inventory reader from a stream.
 // Since Parquet requires random access, this buffers the entire stream to a temp file.
 func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (InventoryReader, error) {
-	// Parquet requires random access, so we need to buffer to a temp file
 	tempFile, err := os.CreateTemp("", "parquet-inventory-*.parquet")
 	if err != nil {
 		r.Close()
 		return nil, fmt.Errorf("create temp file: %w", err)
 	}
 
-	// Copy stream to temp file
 	written, err := io.Copy(tempFile, r)
 	r.Close()
 	if err != nil {
@@ -74,14 +72,12 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 		return nil, fmt.Errorf("buffer parquet data: %w", err)
 	}
 
-	// Seek back to beginning
 	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
 		return nil, fmt.Errorf("seek temp file: %w", err)
 	}
 
-	// Open as parquet file
 	file, err := parquet.OpenFile(tempFile, written)
 	if err != nil {
 		tempFile.Close()
@@ -89,7 +85,6 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 		return nil, fmt.Errorf("open parquet file: %w", err)
 	}
 
-	// Detect column indices from schema
 	cfg, err := detectParquetSchema(file.Schema())
 	if err != nil {
 		tempFile.Close()
@@ -102,14 +97,12 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 
 // NewParquetInventoryReaderWithConfig creates a Parquet reader with explicit config.
 func NewParquetInventoryReaderWithConfig(r io.ReadCloser, size int64, cfg ParquetReaderConfig) (InventoryReader, error) {
-	// Parquet requires random access, so we need to buffer to a temp file
 	tempFile, err := os.CreateTemp("", "parquet-inventory-*.parquet")
 	if err != nil {
 		r.Close()
 		return nil, fmt.Errorf("create temp file: %w", err)
 	}
 
-	// Copy stream to temp file
 	written, err := io.Copy(tempFile, r)
 	r.Close()
 	if err != nil {
@@ -118,14 +111,12 @@ func NewParquetInventoryReaderWithConfig(r io.ReadCloser, size int64, cfg Parque
 		return nil, fmt.Errorf("buffer parquet data: %w", err)
 	}
 
-	// Seek back to beginning
 	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
 		return nil, fmt.Errorf("seek temp file: %w", err)
 	}
 
-	// Open as parquet file
 	file, err := parquet.OpenFile(tempFile, written)
 	if err != nil {
 		tempFile.Close()
@@ -193,30 +184,26 @@ func newParquetReader(file *parquet.File, tempFile *os.File, cfg ParquetReaderCo
 // Next returns the next inventory row.
 func (r *parquetInventoryReader) Next() (InventoryRow, error) {
 	for {
-		// Check if we have buffered rows
 		if r.bufIdx < r.bufLen {
 			row := r.rowBuf[r.bufIdx]
 			r.bufIdx++
 			return r.rowToInventoryRow(row), nil
 		}
 
-		// Need to read more rows
 		if r.currentRows != nil {
 			n, err := r.currentRows.ReadRows(r.rowBuf)
 			if n > 0 {
 				r.bufIdx = 0
 				r.bufLen = n
-				continue // Process buffered rows
+				continue
 			}
 			if err != nil && !errors.Is(err, io.EOF) {
 				return InventoryRow{}, fmt.Errorf("read parquet rows: %w", err)
 			}
-			// Current row group exhausted
 			r.currentRows.Close()
 			r.currentRows = nil
 		}
 
-		// Move to next row group
 		r.currentRGIdx++
 		if r.currentRGIdx >= len(r.rowGroups) {
 			return InventoryRow{}, io.EOF
@@ -261,7 +248,6 @@ func (r *parquetInventoryReader) Close() error {
 		r.currentRows.Close()
 	}
 
-	// Clean up temp file if we created one
 	if r.tempFile != nil {
 		name := r.tempFile.Name()
 		r.tempFile.Close()

@@ -63,7 +63,6 @@ func NewMergeIterator(paths []string, bufferSize int) (*MergeIterator, error) {
 	for _, path := range paths {
 		r, err := OpenRunFile(path, bufferSize)
 		if err != nil {
-			// Close any already opened readers
 			for _, opened := range readers {
 				opened.Close()
 			}
@@ -83,7 +82,6 @@ func NewMergeIteratorFromReaders(readers []*RunFileReader) (*MergeIterator, erro
 		heap:    &mergeHeap{items: make([]mergeItem, 0, len(readers))},
 	}
 
-	// Initialize heap with first row from each reader
 	for i, r := range readers {
 		row, err := r.Read()
 		if errors.Is(err, io.EOF) {
@@ -112,7 +110,6 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 		return nil, io.EOF
 	}
 
-	// Pop the smallest item
 	itemAny := heap.Pop(m.heap)
 	item, ok := itemAny.(mergeItem)
 	if !ok {
@@ -120,13 +117,11 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 	}
 	result := item.row
 
-	// Read next row from the same reader and push to heap
 	if err := m.advanceReader(item.readerIdx); err != nil && !errors.Is(err, io.EOF) {
 		m.err = err
 		return nil, err
 	}
 
-	// Merge any duplicates (same prefix from other readers)
 	for m.heap.Len() > 0 && m.heap.items[0].row.Prefix == result.Prefix {
 		dupAny := heap.Pop(m.heap)
 		dup, ok := dupAny.(mergeItem)
@@ -135,7 +130,6 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 		}
 		result.Merge(dup.row)
 
-		// Advance that reader too
 		if err := m.advanceReader(dup.readerIdx); err != nil && !errors.Is(err, io.EOF) {
 			m.err = err
 			return nil, err

@@ -71,8 +71,8 @@ type CSVReaderConfig struct {
 func NewCSVInventoryReader(r io.Reader, cfg CSVReaderConfig) InventoryReader {
 	csvr := csv.NewReader(r)
 	csvr.ReuseRecord = true
-	csvr.FieldsPerRecord = -1 // Variable field count
-	csvr.LazyQuotes = true    // Handle malformed quotes
+	csvr.FieldsPerRecord = -1
+	csvr.LazyQuotes = true
 
 	return &csvInventoryReader{
 		csvReader:     csvr,
@@ -89,7 +89,6 @@ func NewCSVInventoryReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderC
 	var reader io.Reader = r
 	closers := []io.Closer{r}
 
-	// Handle gzip compression
 	if strings.HasSuffix(strings.ToLower(key), ".gz") {
 		gzr, err := gzip.NewReader(r)
 		if err != nil {
@@ -126,13 +125,11 @@ func (r *csvInventoryReader) Next() (InventoryRow, error) {
 			return InventoryRow{}, fmt.Errorf("read CSV row: %w", err)
 		}
 
-		// Skip rows with insufficient columns
 		if len(fields) <= r.keyCol || len(fields) <= r.sizeCol {
 			continue
 		}
 
 		key := fields[r.keyCol]
-		// Skip empty keys
 		if key == "" {
 			continue
 		}
@@ -149,12 +146,9 @@ func (r *csvInventoryReader) Next() (InventoryRow, error) {
 			Size: size,
 		}
 
-		// Extract storage class if available
 		if r.storageCol >= 0 && len(fields) > r.storageCol {
 			row.StorageClass = fields[r.storageCol]
 		}
-
-		// Extract access tier if available
 		if r.accessTierCol >= 0 && len(fields) > r.accessTierCol {
 			row.AccessTier = fields[r.accessTierCol]
 		}
