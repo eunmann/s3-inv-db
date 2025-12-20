@@ -14,8 +14,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/eunmann/s3-inv-db/pkg/sysmem"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
-	"golang.org/x/sys/unix"
 )
 
 // MaxTiers is the maximum number of storage tiers supported.
@@ -189,7 +189,7 @@ type Config struct {
 }
 
 // DefaultConfig returns a Config with sensible defaults based on the current machine.
-// Concurrency is scaled with CPU count, and memory threshold is scaled with available RAM.
+// Concurrency is scaled with CPU count, and memory threshold is scaled with total system RAM.
 func DefaultConfig() Config {
 	numCPU := runtime.NumCPU()
 
@@ -201,15 +201,19 @@ func DefaultConfig() Config {
 		concurrency = 16
 	}
 
-	// Memory threshold: use ~25% of available RAM, clamped to [128MB, 1GB]
-	memThreshold := int64(256 * 1024 * 1024) // Default 256MB
-	if mem := getAvailableMemory(); mem > 0 {
-		memThreshold = mem / 4 // 25% of available memory
-		if memThreshold < 128*1024*1024 {
-			memThreshold = 128 * 1024 * 1024 // Min 128MB
-		} else if memThreshold > 1024*1024*1024 {
-			memThreshold = 1024 * 1024 * 1024 // Max 1GB
-		}
+	// Memory threshold: use ~25% of total RAM, clamped to [128MB, 1GB]
+	// This is conservative to avoid OOM on systems with limited memory.
+	memResult := sysmem.Total()
+	memThreshold := int64(memResult.TotalBytes) / 4 // 25% of total memory
+
+	// Clamp to reasonable bounds
+	const minThreshold = 128 * 1024 * 1024  // 128MB minimum
+	const maxThreshold = 1024 * 1024 * 1024 // 1GB maximum
+
+	if memThreshold < minThreshold {
+		memThreshold = minThreshold
+	} else if memThreshold > maxThreshold {
+		memThreshold = maxThreshold
 	}
 
 	return Config{
@@ -221,15 +225,4 @@ func DefaultConfig() Config {
 		IndexWriteConcurrency: concurrency,
 		MaxDepth:              0, // unlimited
 	}
-}
-
-// getAvailableMemory returns the available system memory in bytes.
-// Returns 0 if the value cannot be determined.
-func getAvailableMemory() int64 {
-	var info unix.Sysinfo_t
-	if err := unix.Sysinfo(&info); err != nil {
-		return 0
-	}
-	// Use free RAM + buffers (which can be freed if needed)
-	return int64(info.Freeram+info.Bufferram) * int64(info.Unit)
 }
