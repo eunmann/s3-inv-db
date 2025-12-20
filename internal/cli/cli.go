@@ -6,7 +6,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
+	"os/signal"
 	"sort"
+	"syscall"
 
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
@@ -64,8 +67,11 @@ func runBuild(args []string) error {
 
 // runBuildExtSort runs the build using the external sort backend (pure Go, no CGO).
 func runBuildExtSort(outDir, s3Manifest string, workers, memoryMB, maxDepth int) error {
-	ctx := context.Background()
 	log := logging.L()
+
+	// Create a context that responds to OS signals (SIGINT, SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	client, err := s3fetch.NewClient(ctx)
 	if err != nil {
@@ -98,6 +104,11 @@ func runBuildExtSort(outDir, s3Manifest string, workers, memoryMB, maxDepth int)
 
 	_, err = pipeline.Run(ctx, s3Manifest, outDir)
 	if err != nil {
+		// Check if this was a cancellation
+		if errors.Is(err, context.Canceled) {
+			log.Warn().Msg("build cancelled by user")
+			return fmt.Errorf("build cancelled: %w", err)
+		}
 		return fmt.Errorf("run pipeline: %w", err)
 	}
 
