@@ -13,7 +13,6 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
-	"github.com/rs/zerolog"
 )
 
 // Run executes the CLI with the given arguments.
@@ -47,7 +46,6 @@ func runBuild(args []string) error {
 	}
 
 	logging.Init(*verbose, *prettyLogs)
-	log := logging.L()
 
 	if *outDir == "" {
 		return errors.New("--out is required")
@@ -56,18 +54,12 @@ func runBuild(args []string) error {
 		return errors.New("--s3-manifest is required")
 	}
 
-	return runBuildExtSort(log, *outDir, *s3Manifest)
+	return runBuildExtSort(*outDir, *s3Manifest)
 }
 
 // runBuildExtSort runs the build using the external sort backend (pure Go, no CGO).
-func runBuildExtSort(log *zerolog.Logger, outDir, s3Manifest string) error {
+func runBuildExtSort(outDir, s3Manifest string) error {
 	ctx := context.Background()
-
-	log.Info().
-		Str("phase", "build_start").
-		Str("s3_manifest", s3Manifest).
-		Str("output_dir", outDir).
-		Msg("starting S3 inventory build")
 
 	client, err := s3fetch.NewClient(ctx)
 	if err != nil {
@@ -77,20 +69,10 @@ func runBuildExtSort(log *zerolog.Logger, outDir, s3Manifest string) error {
 	config := extsort.DefaultConfig()
 	pipeline := extsort.NewPipeline(config, client)
 
-	result, err := pipeline.Run(ctx, s3Manifest, outDir)
+	_, err = pipeline.Run(ctx, s3Manifest, outDir)
 	if err != nil {
 		return fmt.Errorf("run pipeline: %w", err)
 	}
-
-	log.Info().
-		Str("phase", "build_complete").
-		Str("output_dir", outDir).
-		Uint64("prefix_count", result.PrefixCount).
-		Uint32("max_depth", result.MaxDepth).
-		Int("run_files_created", result.RunFilesCreated).
-		Int64("objects_processed", result.ObjectsProcessed).
-		Dur("duration", result.Duration).
-		Msg("index built successfully")
 
 	return nil
 }

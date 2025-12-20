@@ -84,35 +84,44 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 	log.Info().
 		Str("manifest_uri", manifestURI).
-		Str("temp_dir", tempDir).
 		Int64("memory_threshold_mb", p.config.MemoryThreshold/(1024*1024)).
-		Msg("starting external sort pipeline")
+		Msg("pipeline starting")
 
+	ingestStart := time.Now()
 	if err := p.runIngestPhase(ctx, manifestURI); err != nil {
 		return nil, fmt.Errorf("ingest phase: %w", err)
 	}
+	ingestDuration := time.Since(ingestStart)
 
 	log.Info().
 		Int("run_files", len(p.runFiles)).
-		Int64("objects_processed", p.objectsProcessed).
+		Int64("objects", p.objectsProcessed).
 		Int64("flushes", p.flushCount).
+		Dur("duration_ms", ingestDuration).
 		Msg("ingest phase complete")
 
+	mergeStart := time.Now()
 	prefixCount, maxDepth, err := p.runMergeBuildPhase(ctx, outDir)
 	if err != nil {
 		return nil, fmt.Errorf("merge/build phase: %w", err)
 	}
+	mergeDuration := time.Since(mergeStart)
+
+	log.Info().
+		Uint64("prefixes", prefixCount).
+		Uint32("max_depth", maxDepth).
+		Dur("duration_ms", mergeDuration).
+		Msg("merge phase complete")
 
 	p.cleanup()
 	success = true
 
 	duration := time.Since(p.startTime)
 	log.Info().
-		Dur("duration", duration).
-		Int64("objects_processed", p.objectsProcessed).
-		Uint64("prefix_count", prefixCount).
-		Uint32("max_depth", maxDepth).
-		Msg("external sort pipeline complete")
+		Dur("total_duration_ms", duration).
+		Int64("objects", p.objectsProcessed).
+		Uint64("prefixes", prefixCount).
+		Msg("pipeline complete")
 
 	return &Result{
 		ChunksProcessed:  int(p.chunksProcessed),
@@ -145,8 +154,9 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 	}
 	log.Info().
 		Str("format", formatStr).
-		Int("files", len(manifest.Files)).
-		Msg("detected inventory format")
+		Int("chunks", len(manifest.Files)).
+		Msg("inventory manifest loaded")
+
 	keyCol, err := manifest.KeyColumnIndex()
 	if err != nil {
 		return fmt.Errorf("get key column: %w", err)
@@ -166,6 +176,9 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 	agg := NewAggregator(100000, p.config.MaxDepth)
 	tierMapping := tiers.NewMapping()
 
+	totalChunks := len(manifest.Files)
+	progressInterval := max(totalChunks/10, 1) // Log every ~10%
+
 	for i, file := range manifest.Files {
 		select {
 		case <-ctx.Done():
@@ -173,13 +186,7 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 		default:
 		}
 
-		log.Debug().
-			Int("chunk", i+1).
-			Int("total_chunks", len(manifest.Files)).
-			Str("key", file.Key).
-			Str("format", formatStr).
-			Msg("processing inventory chunk")
-
+		chunkStart := time.Now()
 		chunkCfg := chunkConfig{
 			format:        format,
 			keyCol:        keyCol,
@@ -194,6 +201,30 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 		}
 
 		atomic.AddInt64(&p.chunksProcessed, 1)
+		chunkNum := int(p.chunksProcessed)
+
+		// Log progress at intervals
+		if chunkNum%progressInterval == 0 || chunkNum == totalChunks {
+			elapsed := time.Since(p.startTime)
+			avgPerChunk := elapsed / time.Duration(chunkNum)
+			remaining := time.Duration(totalChunks-chunkNum) * avgPerChunk
+			pct := float64(chunkNum) * 100.0 / float64(totalChunks)
+
+			log.Info().
+				Int("chunk", chunkNum).
+				Int("total", totalChunks).
+				Float64("progress_pct", pct).
+				Int64("objects", atomic.LoadInt64(&p.objectsProcessed)).
+				Dur("eta_ms", remaining).
+				Msg("ingest progress")
+		} else {
+			// Debug log for each chunk
+			log.Debug().
+				Int("chunk", chunkNum).
+				Int("total", totalChunks).
+				Dur("chunk_ms", time.Since(chunkStart)).
+				Msg("chunk processed")
+		}
 
 		if agg.EstimatedMemoryUsage() >= p.config.MemoryThreshold {
 			if err := p.flushAggregator(agg); err != nil {
@@ -310,11 +341,11 @@ func (p *Pipeline) flushAggregator(agg *Aggregator) error {
 	p.runFiles = append(p.runFiles, runPath)
 	p.flushCount++
 
-	log.Debug().
-		Str("path", runPath).
-		Int("prefix_count", len(rows)).
-		Dur("duration", time.Since(start)).
-		Msg("flushed run file")
+	log.Info().
+		Int("run_index", p.runCount-1).
+		Int("prefixes", len(rows)).
+		Dur("duration_ms", time.Since(start)).
+		Msg("run file written")
 
 	return nil
 }
@@ -324,6 +355,7 @@ func (p *Pipeline) runMergeBuildPhase(_ context.Context, outDir string) (uint64,
 	log := logging.L()
 
 	if len(p.runFiles) == 0 {
+		log.Info().Msg("no run files to merge, creating empty index")
 		builder, err := NewIndexBuilder(outDir)
 		if err != nil {
 			return 0, 0, fmt.Errorf("create index builder: %w", err)
@@ -336,7 +368,7 @@ func (p *Pipeline) runMergeBuildPhase(_ context.Context, outDir string) (uint64,
 
 	log.Info().
 		Int("run_files", len(p.runFiles)).
-		Msg("starting merge phase")
+		Msg("merge phase starting")
 
 	merger, err := NewMergeIterator(p.runFiles, p.config.RunFileBufferSize)
 	if err != nil {
