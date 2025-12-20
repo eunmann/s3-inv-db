@@ -185,15 +185,11 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	}
 
 	// Write tier stats (lazy create writers)
-	if err := b.writeTierStats(row); err != nil {
-		return err
-	}
-
-	return nil
+	return b.writeTierStats(row)
 }
 
 // findCommonAncestorDepth finds the depth of the deepest common ancestor.
-func (b *IndexBuilder) findCommonAncestorDepth(prefix string, depth int) int {
+func (b *IndexBuilder) findCommonAncestorDepth(prefix string, _ int) int {
 	commonDepth := 0
 
 	for i := range len(b.stack) {
@@ -279,7 +275,7 @@ func (b *IndexBuilder) writeTierStats(row *PrefixRow) error {
 }
 
 // createTierWriter creates writers for a tier and backfills zeros for previous positions.
-func (b *IndexBuilder) createTierWriter(tierID tiers.ID, row *PrefixRow) error {
+func (b *IndexBuilder) createTierWriter(tierID tiers.ID, _ *PrefixRow) error {
 	// Create tier_stats directory if needed
 	tierDir := filepath.Join(b.outDir, "tier_stats")
 	if err := os.MkdirAll(tierDir, 0o755); err != nil {

@@ -71,12 +71,12 @@ func (w *TierStatsWriter) writeTierArray(path string, nodes []triebuild.Node, ti
 		return fmt.Errorf("create array writer: %w", err)
 	}
 
-	for i, node := range nodes {
+	for i := range nodes {
 		var val uint64
 		if isBytes {
-			val = node.TierBytes[tierID]
+			val = nodes[i].TierBytes[tierID]
 		} else {
-			val = node.TierCounts[tierID]
+			val = nodes[i].TierCounts[tierID]
 		}
 		if err := writer.WriteU64(val); err != nil {
 			writer.Close()

@@ -347,7 +347,7 @@ func (p *Pipeline) flushAggregator(agg *Aggregator) error {
 }
 
 // runMergeBuildPhase merges run files and builds the index.
-func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (uint64, uint32, error) {
+func (p *Pipeline) runMergeBuildPhase(_ context.Context, outDir string) (uint64, uint32, error) {
 	log := logging.L()
 
 	if len(p.runFiles) == 0 {

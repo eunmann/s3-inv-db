@@ -550,7 +550,7 @@ func TestOpenFileWithSchemaOptions_TrackTiers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
-	if rec.TierID != 8 { // ITInfrequent = 8
+	if rec.TierID != 8 { // Expected ITInfrequent tier
 		t.Errorf("file2: got TierID=%d, want 8 (ITInfrequent)", rec.TierID)
 	}
 }

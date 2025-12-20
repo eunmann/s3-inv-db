@@ -1,5 +1,4 @@
 // Package inventory provides readers for AWS S3 Inventory files.
-
 package inventory
 
 import (
