@@ -37,7 +37,11 @@ func (h *mergeHeap) Swap(i, j int) {
 }
 
 func (h *mergeHeap) Push(x interface{}) {
-	h.items = append(h.items, x.(mergeItem))
+	item, ok := x.(mergeItem)
+	if !ok {
+		panic("heap Push received unexpected type")
+	}
+	h.items = append(h.items, item)
 }
 
 func (h *mergeHeap) Pop() interface{} {
@@ -109,7 +113,11 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 	}
 
 	// Pop the smallest item
-	item := heap.Pop(m.heap).(mergeItem)
+	itemAny := heap.Pop(m.heap)
+	item, ok := itemAny.(mergeItem)
+	if !ok {
+		panic("heap Pop returned unexpected type")
+	}
 	result := item.row
 
 	// Read next row from the same reader and push to heap
@@ -120,7 +128,11 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 
 	// Merge any duplicates (same prefix from other readers)
 	for m.heap.Len() > 0 && m.heap.items[0].row.Prefix == result.Prefix {
-		dup := heap.Pop(m.heap).(mergeItem)
+		dupAny := heap.Pop(m.heap)
+		dup, ok := dupAny.(mergeItem)
+		if !ok {
+			panic("heap Pop returned unexpected type")
+		}
 		result.Merge(dup.row)
 
 		// Advance that reader too

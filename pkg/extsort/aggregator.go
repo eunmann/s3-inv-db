@@ -75,7 +75,11 @@ func (a *Aggregator) accumulate(prefix string, depth uint16, size uint64, tierID
 	stats, ok := a.prefixes[prefix]
 	if !ok {
 		// Get from pool or allocate new
-		stats = a.statsPool.Get().(*PrefixStats)
+		poolObj := a.statsPool.Get()
+		stats, ok = poolObj.(*PrefixStats)
+		if !ok {
+			panic("statsPool contained unexpected type")
+		}
 		stats.Depth = depth
 		a.prefixes[prefix] = stats
 	}
