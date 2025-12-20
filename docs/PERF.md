@@ -335,6 +335,111 @@ Further strategies add complexity without measurable benefit. The fundamental
 bottleneck is CGO overhead for SQLite operations, which cannot be reduced
 without switching to a different database or using direct C bindings.
 
+## Insert Optimization Exploration — Round 3
+
+Comprehensive schema exploration to validate that CGO overhead is truly the bottleneck.
+
+### Hypothesis Tested
+
+Other codebases using the same go-sqlite3 driver ingest similar S3 inventories in
+a few hours, not tens of hours. This suggests there may be schema or aggregation
+strategies we haven't explored.
+
+### Strategies Evaluated
+
+All strategies tested with consistent methodology (100k and 500k objects):
+
+| Strategy | 100k obj/s | 500k obj/s | Notes |
+|----------|------------|------------|-------|
+| **Current UPSERT (sorted)** | **85,557** | **90,632** | **WINNER** |
+| Full Memory Aggregate | 69,948 | 73,256 | Deferred index |
+| Staging Aggregator | 56,572 | 62,611 | Heap + GROUP BY |
+| Staging Aggregate | 45,777 | 47,403 | Per-tier rows |
+| Prefix ID Normalized | 33,949 | 34,185 | INTEGER PK |
+
+### Strategy Details
+
+#### Option 1: Staging Heap + Final GROUP BY (staging_aggregator)
+
+**Hypothesis:** Inserting into an unindexed heap table, then using GROUP BY for
+final aggregation, might avoid B-tree maintenance overhead.
+
+**Implementation:**
+1. Create staging table WITHOUT any index or primary key
+2. In-memory aggregation per chunk (same as current)
+3. Bulk INSERT aggregated rows to staging (pure append, no B-tree)
+4. Final `CREATE TABLE prefix_stats AS SELECT ... GROUP BY` aggregation
+5. Create index AFTER all data loaded
+
+**Results:**
+- 100k: 56,572 obj/s (34% slower than baseline)
+- 500k: 62,611 obj/s (31% slower than baseline)
+
+**Why slower:** GROUP BY step takes 583ms-2.6s even though staging data is
+already aggregated (no duplicates within a chunk). The overhead of copying
+data between tables plus GROUP BY execution exceeds the B-tree maintenance
+cost of direct UPSERT.
+
+#### Option 2: Prefix Dictionary + ID-Based Staging
+
+**Hypothesis:** INTEGER PRIMARY KEY is faster for B-tree operations than TEXT.
+
+**Implementation:**
+1. Insert all prefix strings, get sequential IDs
+2. UPSERT stats using INTEGER key instead of TEXT
+
+**Results:**
+- 100k: 33,949 obj/s (60% slower than baseline)
+- 500k: 34,185 obj/s (62% slower than baseline)
+
+**Why slower:** The overhead of managing prefix→ID mapping and two tables
+far exceeds any benefit from INTEGER vs TEXT B-tree operations.
+
+#### Option 3: Full Memory Aggregate (fewer SQLite operations)
+
+**Hypothesis:** Accumulating more data in memory before any SQLite write
+reduces total I/O overhead.
+
+**Implementation:**
+1. Full in-memory aggregation (no SQLite during accumulation)
+2. Single bulk INSERT at end (no UPSERT, no index)
+3. Create index after all inserts
+
+**Results:**
+- 100k: 69,948 obj/s (18% slower than baseline)
+- 500k: 73,256 obj/s (19% slower than baseline)
+
+**Why slower:** Despite eliminating UPSERT and deferring index creation,
+the bulk INSERT + index build is still slower than sorted UPSERT. The sorted
+write pattern gives excellent B-tree locality, making inline index maintenance
+very efficient.
+
+### Round 3 Conclusions
+
+1. **Current sorted UPSERT is optimal.** All alternative approaches are slower.
+
+2. **Sorted writes are the key optimization.** B-tree locality from sorted
+   writes makes inline index maintenance faster than deferred index creation.
+
+3. **GROUP BY is expensive.** Even with pre-aggregated data, GROUP BY adds
+   significant overhead compared to in-memory Go map aggregation.
+
+4. **Two-table schemas add overhead.** The complexity of managing prefix IDs
+   or staging tables exceeds any theoretical benefit.
+
+5. **CGO overhead IS the real bottleneck.** There are no remaining schema-level
+   optimizations that would significantly improve throughput. Further gains
+   would require:
+   - Direct SQLite C bindings (bypassing database/sql)
+   - Alternative database (losing SQLite portability)
+   - Parallel processing with sharded writes
+
+### Code Location
+
+The StagingAggregator experiment is preserved on the `feat/schema-staging-heap`
+branch for reference. Not merged to main as it is slower than the current
+implementation.
+
 ## Remaining Bottlenecks
 
 ### SQLite CGO Overhead (47% of CPU time)
