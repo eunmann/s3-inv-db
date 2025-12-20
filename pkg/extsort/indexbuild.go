@@ -304,7 +304,7 @@ func (b *IndexBuilder) createTierWriter(tierID tiers.ID, _ *PrefixRow) error {
 	b.tierBytesWriters[tierID] = bytesW
 
 	// Backfill zeros for all previous positions
-	for range uint64(b.posCount - 1) {
+	for range b.posCount - 1 {
 		if err := countW.WriteU64(0); err != nil {
 			return fmt.Errorf("backfill tier %s count: %w", info.Name, err)
 		}

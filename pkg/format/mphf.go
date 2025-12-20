@@ -358,7 +358,7 @@ func VerifyMPHF(m *MPHF) error {
 		return errors.New("prefix blob not loaded")
 	}
 
-	for i := range uint64(m.count) {
+	for i := range m.count {
 		prefix, err := m.prefixBlob.Get(i)
 		if err != nil {
 			return fmt.Errorf("get prefix %d: %w", i, err)

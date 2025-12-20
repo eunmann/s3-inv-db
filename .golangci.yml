@@ -40,7 +40,6 @@ linters:
     # API / interface hygiene
     - inamedparam
     - interfacebloat
-    - ireturn
     - predeclared
 
     # Style, readability, and structure
@@ -93,6 +92,9 @@ linters:
     - paralleltest    # Not all tests should run in parallel
     - varnamelen      # Variable name length is very context dependent
     - wsl             # Too opinionated about whitespace
+    # Design choices that shouldn't be flagged
+    - ireturn         # Returning interfaces is intentional for API design
+    - nilnil          # Returning nil,nil is sometimes correct
 
   settings:
     cyclop:
