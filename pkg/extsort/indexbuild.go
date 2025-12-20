@@ -20,11 +20,9 @@ type IndexBuilder struct {
 	outDir string
 
 	// Writers for columnar arrays
-	subtreeEndW        *format.ArrayWriter
-	objectCountW       *format.ArrayWriter
-	totalBytesW        *format.ArrayWriter
-	depthW             *format.ArrayWriter
-	maxDepthInSubtreeW *format.ArrayWriter
+	objectCountW *format.ArrayWriter
+	totalBytesW  *format.ArrayWriter
+	depthW       *format.ArrayWriter
 
 	// Tier stats writers (one pair per present tier)
 	tierCountWriters map[tiers.ID]*format.ArrayWriter

@@ -11,7 +11,6 @@ import (
 type MergeIterator struct {
 	readers []*RunFileReader
 	heap    *mergeHeap
-	current *PrefixRow // current merged result
 	err     error
 }
 
