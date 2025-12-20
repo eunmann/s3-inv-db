@@ -91,6 +91,9 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 	ingestStart := time.Now()
 	if err := p.runIngestPhase(ctx, manifestURI); err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Warn().Msg("pipeline cancelled during ingest phase")
+		}
 		return nil, fmt.Errorf("ingest phase: %w", err)
 	}
 	ingestDuration := time.Since(ingestStart)
@@ -105,6 +108,9 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	mergeStart := time.Now()
 	prefixCount, maxDepth, err := p.runMergeBuildPhase(ctx, outDir)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Warn().Msg("pipeline cancelled during merge phase")
+		}
 		return nil, fmt.Errorf("merge/build phase: %w", err)
 	}
 	mergeDuration := time.Since(mergeStart)
@@ -276,6 +282,20 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 	var firstErr error
 
 	for batch := range results {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			if firstErr == nil {
+				firstErr = ctx.Err()
+			}
+			cancel()
+			// Drain remaining results to allow workers to exit
+			for range results {
+			}
+			return firstErr
+		default:
+		}
+
 		if batch.err != nil {
 			if firstErr == nil {
 				firstErr = batch.err
@@ -462,8 +482,15 @@ func (p *Pipeline) flushAggregator(agg *Aggregator) error {
 }
 
 // runMergeBuildPhase merges run files and builds the index.
-func (p *Pipeline) runMergeBuildPhase(_ context.Context, outDir string) (uint64, uint32, error) {
+func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (uint64, uint32, error) {
 	log := logging.L()
+
+	// Check for cancellation before starting
+	select {
+	case <-ctx.Done():
+		return 0, 0, ctx.Err()
+	default:
+	}
 
 	if len(p.runFiles) == 0 {
 		log.Info().Msg("no run files to merge, creating empty index")
@@ -493,7 +520,8 @@ func (p *Pipeline) runMergeBuildPhase(_ context.Context, outDir string) (uint64,
 		return 0, 0, fmt.Errorf("create index builder: %w", err)
 	}
 
-	if err := builder.AddAll(merger); err != nil {
+	if err := builder.AddAllWithContext(ctx, merger); err != nil {
+		builder.cleanup()
 		return 0, 0, fmt.Errorf("build index: %w", err)
 	}
 

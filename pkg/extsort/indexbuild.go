@@ -1,6 +1,7 @@
 package extsort
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -276,7 +277,26 @@ func (b *IndexBuilder) createTierWriter(tierID tiers.ID, _ *PrefixRow) error {
 
 // AddAll processes all PrefixRows from an iterator.
 func (b *IndexBuilder) AddAll(iter *MergeIterator) error {
+	return b.AddAllWithContext(context.Background(), iter)
+}
+
+// AddAllWithContext processes all PrefixRows from an iterator with context support.
+// It periodically checks for context cancellation to allow graceful shutdown.
+func (b *IndexBuilder) AddAllWithContext(ctx context.Context, iter *MergeIterator) error {
+	const checkInterval = 1000 // Check context every N rows
+	count := 0
+
 	for {
+		// Periodic context check to avoid blocking forever
+		if count%checkInterval == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
+		count++
+
 		row, err := iter.Next()
 		if errors.Is(err, io.EOF) {
 			break
