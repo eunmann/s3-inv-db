@@ -6,16 +6,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"os"
 	"sort"
 
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
-	"github.com/eunmann/s3-inv-db/pkg/indexbuild"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
-	"github.com/eunmann/s3-inv-db/pkg/sqliteagg"
 	"github.com/rs/zerolog"
 )
 
@@ -42,8 +39,6 @@ func runBuild(args []string) error {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
 	outDir := fs.String("out", "", "output directory for index files")
 	s3Manifest := fs.String("s3-manifest", "", "S3 URI to inventory manifest.json (s3://bucket/path/manifest.json)")
-	dbPath := fs.String("db", "", "path to SQLite database for aggregation (default: <out>.db)")
-	backend := fs.String("backend", "sqlite", "build backend: 'sqlite' (default, uses CGO) or 'extsort' (pure Go, external sort)")
 	verbose := fs.Bool("verbose", false, "enable debug level logging")
 	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
 
@@ -62,91 +57,7 @@ func runBuild(args []string) error {
 		return errors.New("--s3-manifest is required")
 	}
 
-	// Dispatch to appropriate backend
-	switch *backend {
-	case "sqlite":
-		return runBuildSQLite(log, *outDir, *s3Manifest, *dbPath)
-	case "extsort":
-		return runBuildExtSort(log, *outDir, *s3Manifest)
-	default:
-		return fmt.Errorf("unknown backend: %s (use 'sqlite' or 'extsort')", *backend)
-	}
-}
-
-// runBuildSQLite runs the build using the SQLite-based backend (original implementation).
-func runBuildSQLite(log *zerolog.Logger, outDir, s3Manifest, dbPath string) error {
-	ctx := context.Background()
-
-	// Use default DB path if not specified
-	if dbPath == "" {
-		dbPath = outDir + ".db"
-	}
-
-	log.Info().
-		Str("phase", "build_start").
-		Str("backend", "sqlite").
-		Str("s3_manifest", s3Manifest).
-		Str("output_dir", outDir).
-		Str("db_path", dbPath).
-		Msg("starting S3 inventory build")
-
-	// Create S3 client
-	client, err := s3fetch.NewClient(ctx)
-	if err != nil {
-		return fmt.Errorf("create S3 client: %w", err)
-	}
-
-	// Remove any existing database to ensure clean build
-	if err := os.Remove(dbPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove existing database: %w", err)
-	}
-
-	// Stream from S3 using fast in-memory aggregation
-	memCfg := sqliteagg.MemoryStreamConfig{
-		ManifestURI:  s3Manifest,
-		DBPath:       dbPath,
-		MemoryConfig: sqliteagg.DefaultMemoryAggregatorConfig(dbPath),
-	}
-	result, err := sqliteagg.StreamFromS3Memory(ctx, client, memCfg)
-	if err != nil {
-		return fmt.Errorf("stream from S3: %w", err)
-	}
-
-	log.Info().
-		Int("chunks_processed", result.ChunksProcessed).
-		Int64("objects_processed", result.ObjectsProcessed).
-		Msg("streaming aggregation complete")
-
-	// Build index from SQLite
-	sqliteCfg := sqliteagg.DefaultConfig(dbPath)
-	buildCfg := indexbuild.SQLiteConfig{
-		OutDir:    outDir,
-		DBPath:    dbPath,
-		SQLiteCfg: sqliteCfg,
-	}
-
-	if err := indexbuild.BuildFromSQLite(buildCfg); err != nil {
-		return fmt.Errorf("build index from SQLite: %w", err)
-	}
-
-	// Get the prefix count for final log
-	agg, err := sqliteagg.Open(sqliteCfg)
-	if err == nil {
-		prefixCount, _ := agg.PrefixCount()
-		agg.Close()
-		log.Info().
-			Str("phase", "build_complete").
-			Str("output_dir", outDir).
-			Uint64("prefix_count", prefixCount).
-			Msg("index built successfully")
-	} else {
-		log.Info().
-			Str("phase", "build_complete").
-			Str("output_dir", outDir).
-			Msg("index built successfully")
-	}
-
-	return nil
+	return runBuildExtSort(log, *outDir, *s3Manifest)
 }
 
 // runBuildExtSort runs the build using the external sort backend (pure Go, no CGO).
@@ -155,10 +66,9 @@ func runBuildExtSort(log *zerolog.Logger, outDir, s3Manifest string) error {
 
 	log.Info().
 		Str("phase", "build_start").
-		Str("backend", "extsort").
 		Str("s3_manifest", s3Manifest).
 		Str("output_dir", outDir).
-		Msg("starting S3 inventory build with external sort backend")
+		Msg("starting S3 inventory build")
 
 	// Create S3 client
 	client, err := s3fetch.NewClient(ctx)
@@ -183,7 +93,7 @@ func runBuildExtSort(log *zerolog.Logger, outDir, s3Manifest string) error {
 		Int("run_files_created", result.RunFilesCreated).
 		Int64("objects_processed", result.ObjectsProcessed).
 		Dur("duration", result.Duration).
-		Msg("index built successfully with external sort backend")
+		Msg("index built successfully")
 
 	return nil
 }

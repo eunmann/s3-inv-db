@@ -3,15 +3,13 @@ package indexread
 import (
 	"fmt"
 	"math/rand"
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/benchutil"
-	"github.com/eunmann/s3-inv-db/pkg/indexbuild"
-	"github.com/eunmann/s3-inv-db/pkg/sqliteagg"
+	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 /*
@@ -51,33 +49,13 @@ type benchIndex struct {
 	dir      string
 }
 
-// setupBenchIndex creates an index for benchmarking using SQLite.
+// setupBenchIndex creates an index for benchmarking using extsort.
 func setupBenchIndex(b *testing.B, keys []string) *benchIndex {
 	b.Helper()
 
-	// Setup SQLite aggregator from keys
-	setup := setupSQLiteFromKeys(b, keys)
-	setup.Close() // Close aggregator, keep DB file
+	setup := setupIndexFromKeys(b, keys)
 
-	tmpDir := filepath.Dir(setup.DBPath)
-	outDir := filepath.Join(tmpDir, "index")
-
-	cfg := sqliteagg.DefaultConfig(setup.DBPath)
-	cfg.Synchronous = "OFF"
-
-	buildCfg := indexbuild.SQLiteConfig{
-		OutDir:    outDir,
-		DBPath:    setup.DBPath,
-		SQLiteCfg: cfg,
-	}
-
-	if err := indexbuild.BuildFromSQLite(buildCfg); err != nil {
-		b.Fatalf("Build failed: %v", err)
-	}
-
-	os.Remove(setup.DBPath)
-
-	idx, err := Open(outDir)
+	idx, err := Open(setup.IndexDir)
 	if err != nil {
 		b.Fatalf("Open failed: %v", err)
 	}
@@ -94,7 +72,7 @@ func setupBenchIndex(b *testing.B, keys []string) *benchIndex {
 	return &benchIndex{
 		idx:      idx,
 		prefixes: prefixes,
-		dir:      outDir,
+		dir:      setup.IndexDir,
 	}
 }
 
@@ -102,29 +80,9 @@ func setupBenchIndex(b *testing.B, keys []string) *benchIndex {
 func setupBenchIndexWithTiers(b *testing.B, numObjects int) *benchIndex {
 	b.Helper()
 
-	// Setup SQLite aggregator with realistic tier distribution
-	setup := setupSQLiteAggregator(b, numObjects)
-	setup.Close() // Close aggregator, keep DB file
+	setup := setupIndex(b, numObjects)
 
-	tmpDir := filepath.Dir(setup.DBPath)
-	outDir := filepath.Join(tmpDir, "index")
-
-	cfg := sqliteagg.DefaultConfig(setup.DBPath)
-	cfg.Synchronous = "OFF"
-
-	buildCfg := indexbuild.SQLiteConfig{
-		OutDir:    outDir,
-		DBPath:    setup.DBPath,
-		SQLiteCfg: cfg,
-	}
-
-	if err := indexbuild.BuildFromSQLite(buildCfg); err != nil {
-		b.Fatalf("Build failed: %v", err)
-	}
-
-	os.Remove(setup.DBPath)
-
-	idx, err := Open(outDir)
+	idx, err := Open(setup.IndexDir)
 	if err != nil {
 		b.Fatalf("Open failed: %v", err)
 	}
@@ -141,7 +99,7 @@ func setupBenchIndexWithTiers(b *testing.B, numObjects int) *benchIndex {
 	return &benchIndex{
 		idx:      idx,
 		prefixes: prefixes,
-		dir:      outDir,
+		dir:      setup.IndexDir,
 	}
 }
 
@@ -161,40 +119,37 @@ func setupFixtureIndex(b *testing.B) string {
 	b.Helper()
 
 	fixtureOnce.Do(func() {
-		tmpDir, err := os.MkdirTemp("", "bench-fixture-*")
-		if err != nil {
-			b.Fatalf("MkdirTemp failed: %v", err)
-		}
+		tmpDir := b.TempDir()
 
-		outDir := filepath.Join(tmpDir, "index")
-		dbPath := filepath.Join(tmpDir, "prefix-agg.db")
+		// Use extsort aggregator
+		agg := extsort.NewAggregator(50000, 0)
 
 		gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(50000))
 		objects := gen.Generate()
 
-		// Use MemoryAggregator to create the database
-		memAgg := sqliteagg.NewMemoryAggregator(sqliteagg.DefaultMemoryAggregatorConfig(dbPath))
 		for _, obj := range objects {
-			memAgg.AddObject(obj.Key, obj.Size, obj.TierID)
+			agg.AddObject(obj.Key, obj.Size, obj.TierID)
 		}
-		if err := memAgg.Finalize(); err != nil {
+
+		rows := agg.Drain()
+		extsort.SortPrefixRows(rows)
+
+		builder, err := extsort.NewIndexBuilder(tmpDir)
+		if err != nil {
+			b.Fatalf("NewIndexBuilder failed: %v", err)
+		}
+
+		for _, row := range rows {
+			if err := builder.Add(row); err != nil {
+				b.Fatalf("Add failed: %v", err)
+			}
+		}
+
+		if err := builder.Finalize(); err != nil {
 			b.Fatalf("Finalize failed: %v", err)
 		}
 
-		cfg := sqliteagg.DefaultConfig(dbPath)
-		cfg.Synchronous = "OFF"
-
-		buildCfg := indexbuild.SQLiteConfig{
-			OutDir:    outDir,
-			DBPath:    dbPath,
-			SQLiteCfg: cfg,
-		}
-		if err := indexbuild.BuildFromSQLite(buildCfg); err != nil {
-			b.Fatalf("Build failed: %v", err)
-		}
-
-		os.Remove(dbPath)
-		fixtureDir = outDir
+		fixtureDir = tmpDir
 	})
 
 	return fixtureDir
@@ -809,3 +764,6 @@ func BenchmarkConcurrentContention(b *testing.B) {
 		})
 	})
 }
+
+// Dummy variable to prevent unused import warning
+var _ = tiers.Standard

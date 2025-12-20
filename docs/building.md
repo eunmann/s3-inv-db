@@ -4,11 +4,13 @@ This document explains how to build s3-inv-db indexes from S3 inventory data.
 
 ## Overview
 
-The build process streams S3 inventory CSV files directly into a SQLite-based aggregator, then constructs a compact, queryable index:
+The build process streams S3 inventory CSV files through a pure-Go external sort pipeline to construct a compact, queryable index:
 
 ```
-S3 Inventory Files  →  SQLite Aggregation  →  Trie Build  →  Index Files
+S3 Inventory Files  →  Streaming Aggregation  →  External Sort  →  Index Files
 ```
+
+The pipeline is fully streaming with bounded memory usage, and requires no CGO dependencies.
 
 ## Input Format
 
@@ -39,7 +41,6 @@ s3inv-index build \
 **Options:**
 - `--out`: Output directory for index files (required)
 - `--s3-manifest`: S3 URI to manifest.json (required)
-- `--db`: Path to SQLite database (default: `<out>.db`)
 - `--verbose`: Enable debug level logging
 - `--pretty-logs`: Use human-friendly console output
 
@@ -58,9 +59,8 @@ S3 access uses the standard AWS credential chain:
 import (
     "context"
 
-    "github.com/eunmann/s3-inv-db/pkg/indexbuild"
+    "github.com/eunmann/s3-inv-db/pkg/extsort"
     "github.com/eunmann/s3-inv-db/pkg/s3fetch"
-    "github.com/eunmann/s3-inv-db/pkg/sqliteagg"
 )
 
 func main() {
@@ -72,37 +72,20 @@ func main() {
         log.Fatal(err)
     }
 
-    dbPath := "./prefix-agg.db"
     outDir := "./my-index"
+    manifestURI := "s3://inventory-bucket/path/manifest.json"
 
-    // Configure SQLite
-    sqliteCfg := sqliteagg.DefaultConfig(dbPath)
+    // Create and run the pipeline
+    config := extsort.DefaultConfig()
+    pipeline := extsort.NewPipeline(config, client)
 
-    // Stream from S3 into SQLite
-    streamCfg := sqliteagg.StreamConfig{
-        ManifestURI:  "s3://inventory-bucket/path/manifest.json",
-        DBPath:       dbPath,
-        SQLiteConfig: sqliteCfg,
-    }
-
-    result, err := sqliteagg.StreamFromS3(ctx, client, streamCfg)
+    result, err := pipeline.Run(ctx, manifestURI, outDir)
     if err != nil {
         log.Fatal(err)
     }
 
-    log.Printf("Processed %d chunks, %d objects",
-        result.ChunksProcessed, result.ObjectsProcessed)
-
-    // Build index from SQLite
-    buildCfg := indexbuild.SQLiteConfig{
-        OutDir:    outDir,
-        DBPath:    dbPath,
-        SQLiteCfg: sqliteCfg,
-    }
-
-    if err := indexbuild.BuildFromSQLite(buildCfg); err != nil {
-        log.Fatal(err)
-    }
+    log.Printf("Built index with %d prefixes in %v",
+        result.PrefixCount, result.Duration)
 }
 ```
 
@@ -132,53 +115,44 @@ Features:
 - Automatic gzip decompression
 - Manifest parsing with column detection
 
-### 2. SQLite Aggregation
+### 2. Streaming Aggregation
 
-The `pkg/sqliteagg` package aggregates prefix statistics:
+The `pkg/extsort` package aggregates prefix statistics in bounded memory:
 
 ```go
-agg, _ := sqliteagg.Open(sqliteCfg)
-defer agg.Close()
+agg := extsort.NewAggregator(expectedObjects, maxDepth)
 
-// Process a chunk
-agg.BeginChunk()
 for record := range records {
     agg.AddObject(record.Key, record.Size, record.TierID)
 }
-agg.Commit()
+
+rows := agg.Drain()
 ```
 
-**Note:** Builds are one-shot operations. If a build fails or is interrupted, delete the output directory and database, then restart from scratch.
+When memory threshold is reached, sorted runs are flushed to temporary files.
 
-### 3. Trie Construction
+### 3. External Merge Sort
 
-The `pkg/sqliteagg` package builds the trie from aggregated data:
-
-```go
-result, _ := sqliteagg.BuildTrieFromSQLite(agg)
-
-// result.Nodes contains all prefix nodes
-// result.MaxDepth is the deepest level
-// result.PresentTiers lists tiers with data
-```
-
-**Streaming from SQLite:**
-- Prefixes ordered by `ORDER BY prefix`
-- Stats already aggregated (no re-computation)
-- Single pass through sorted data
-
-### 4. Index Writing
-
-The `pkg/indexbuild` package writes the final index:
+Run files are merged using k-way merge to produce globally sorted output:
 
 ```go
-cfg := indexbuild.SQLiteConfig{
-    OutDir:    "./my-index",
-    DBPath:    "./prefix-agg.db",
-    SQLiteCfg: sqliteCfg,
+merger := extsort.NewMerger(runFiles)
+for merger.Next() {
+    row := merger.Row()
+    // Process sorted, deduplicated row
 }
+```
 
-err := indexbuild.BuildFromSQLite(cfg)
+### 4. Index Construction
+
+The streaming index builder constructs the final index in a single pass:
+
+```go
+builder, _ := extsort.NewIndexBuilder(outDir)
+for _, row := range sortedRows {
+    builder.Add(row)
+}
+builder.Finalize()
 ```
 
 **Output files:**
@@ -186,9 +160,10 @@ err := indexbuild.BuildFromSQLite(cfg)
 - `depth.u32`: Node depths
 - `object_count.u64`: Object counts
 - `total_bytes.u64`: Byte totals
-- `mph.bin`: Perfect hash function
+- `mphf.bin`: Perfect hash function
+- `mphf_keys.bin`: Prefix keys for verification
 - `depth_index/`: Depth posting lists
-- `tier_stats/`: Per-tier statistics (if tiers present)
+- `tier_*_count.u64`, `tier_*_bytes.u64`: Per-tier statistics (if tiers present)
 - `manifest.json`: File checksums
 
 ### 5. Atomic Finalization
@@ -206,12 +181,12 @@ If the build crashes, no partial index is left behind.
 
 The build pipeline is optimized for maximum throughput as a one-shot operation:
 - No checkpoint/resume overhead
-- In-memory aggregation with final flush to SQLite
+- Streaming aggregation with bounded memory
 - Always rebuilds from scratch for simplicity and speed
 
 If a build fails or is interrupted:
 1. Delete the output directory
-2. Delete the SQLite database file
+2. Delete any temporary run files
 3. Restart the build
 
 ## Performance
@@ -222,27 +197,43 @@ Approximate build times (depends on S3 throughput and CPU):
 
 | Objects | Prefixes | Time |
 |---------|----------|------|
-| 1M | ~100K | ~1-2min |
-| 10M | ~1M | ~10-15min |
-| 100M | ~10M | ~1-2hr |
+| 1M | ~100K | ~30s-1min |
+| 10M | ~1M | ~5-10min |
+| 100M | ~10M | ~1hr |
 
 ### Memory Usage
 
 Memory is bounded by:
-- SQLite page cache (configurable, default 256MB)
-- Current chunk buffer (~100MB)
+- In-memory aggregator buffer (configurable, default 256MB)
+- Run file buffers (~4MB per run)
 - MPHF construction (~8 bytes/key, temporary)
 
-Typical peak: ~500MB for large inventories.
+Typical peak: ~400MB for large inventories.
 
 ### Disk Usage
 
-SQLite database: ~100 bytes per unique prefix
+Temporary run files: ~100 bytes per unique prefix (cleaned up after merge)
 Final index: ~80 bytes per unique prefix
 
 For 10M unique prefixes:
-- SQLite DB: ~1GB
+- Temporary files: ~1GB (during build)
 - Final index: ~800MB
+
+## Configuration
+
+The pipeline can be configured via `extsort.Config`:
+
+```go
+config := extsort.Config{
+    TempDir:               "/tmp",
+    MemoryThreshold:       256 * 1024 * 1024, // 256MB
+    RunFileBufferSize:     4 * 1024 * 1024,   // 4MB
+    S3DownloadConcurrency: 4,
+    ParseConcurrency:      4,
+    IndexWriteConcurrency: 4,
+    MaxDepth:              0, // 0 = unlimited
+}
+```
 
 ## Troubleshooting
 
@@ -254,20 +245,18 @@ Ensure your AWS credentials have:
 
 ### Out of Memory
 
-SQLite cache can be reduced:
+Reduce the memory threshold:
 ```go
-cfg := sqliteagg.Config{
-    DBPath:      dbPath,
-    CacheSizeKB: 65536,  // 64MB instead of default 256MB
+config := extsort.Config{
+    MemoryThreshold: 128 * 1024 * 1024, // 128MB instead of 256MB
 }
 ```
 
 ### Disk Space
 
 Ensure you have space for:
-- SQLite database (~100 bytes per prefix)
+- Temporary run files (~100 bytes per prefix during build)
 - Final index (~80 bytes per prefix)
-- WAL file (up to database size during build)
 
 ### Missing Columns
 
@@ -279,5 +268,5 @@ Check that your inventory includes the required columns (Key, Size) in the manif
 
 If a build fails:
 1. Delete the output directory and any `.tmp` directory
-2. Delete the SQLite database file (default: `<output>.db`)
+2. Delete temporary run files (usually in system temp dir)
 3. Restart the build from scratch

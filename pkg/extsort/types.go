@@ -10,6 +10,9 @@
 package extsort
 
 import (
+	"slices"
+	"strings"
+
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
@@ -85,6 +88,14 @@ func (r *PrefixRow) Clone() *PrefixRow {
 	copy(clone.TierCounts[:], r.TierCounts[:])
 	copy(clone.TierBytes[:], r.TierBytes[:])
 	return clone
+}
+
+// SortPrefixRows sorts a slice of PrefixRows by prefix in lexicographic order.
+// This is used to prepare rows for the streaming index builder.
+func SortPrefixRows(rows []*PrefixRow) {
+	slices.SortFunc(rows, func(a, b *PrefixRow) int {
+		return strings.Compare(a.Prefix, b.Prefix)
+	})
 }
 
 // PrefixStats holds aggregated statistics for a single prefix during the

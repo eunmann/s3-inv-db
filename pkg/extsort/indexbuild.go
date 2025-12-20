@@ -249,8 +249,12 @@ func (b *IndexBuilder) closeTopNode() error {
 // writeTierStats writes tier statistics for a row.
 func (b *IndexBuilder) writeTierStats(row *PrefixRow) error {
 	for tierID := tiers.ID(0); tierID < tiers.NumTiers; tierID++ {
-		if !b.presentTiers[tierID] {
-			// This tier has no data yet, check if this row has data for it
+		// Check if we need to create a writer for this tier
+		_, hasCountWriter := b.tierCountWriters[tierID]
+		_, hasBytesWriter := b.tierBytesWriters[tierID]
+
+		if !hasCountWriter || !hasBytesWriter {
+			// No writers yet - check if this row has data for this tier
 			if row.TierCounts[tierID] == 0 && row.TierBytes[tierID] == 0 {
 				continue
 			}
@@ -277,30 +281,40 @@ func (b *IndexBuilder) writeTierStats(row *PrefixRow) error {
 
 // createTierWriter creates writers for a tier and backfills zeros for previous positions.
 func (b *IndexBuilder) createTierWriter(tierID tiers.ID, row *PrefixRow) error {
-	// Create count writer
-	countPath := filepath.Join(b.outDir, fmt.Sprintf("tier_%d_count.u64", tierID))
+	// Create tier_stats directory if needed
+	tierDir := filepath.Join(b.outDir, "tier_stats")
+	if err := os.MkdirAll(tierDir, 0755); err != nil {
+		return fmt.Errorf("create tier_stats dir: %w", err)
+	}
+
+	// Get tier info for file naming
+	mapping := tiers.NewMapping()
+	info := mapping.ByID(tierID)
+
+	// Create count writer using tier name
+	countPath := filepath.Join(tierDir, info.FilePrefix+"_count.u64")
 	countW, err := format.NewArrayWriter(countPath, 8)
 	if err != nil {
-		return fmt.Errorf("create tier %d count writer: %w", tierID, err)
+		return fmt.Errorf("create tier %s count writer: %w", info.Name, err)
 	}
 	b.tierCountWriters[tierID] = countW
 
-	// Create bytes writer
-	bytesPath := filepath.Join(b.outDir, fmt.Sprintf("tier_%d_bytes.u64", tierID))
+	// Create bytes writer using tier name
+	bytesPath := filepath.Join(tierDir, info.FilePrefix+"_bytes.u64")
 	bytesW, err := format.NewArrayWriter(bytesPath, 8)
 	if err != nil {
 		countW.Close()
-		return fmt.Errorf("create tier %d bytes writer: %w", tierID, err)
+		return fmt.Errorf("create tier %s bytes writer: %w", info.Name, err)
 	}
 	b.tierBytesWriters[tierID] = bytesW
 
 	// Backfill zeros for all previous positions
 	for i := uint64(0); i < b.posCount-1; i++ {
 		if err := countW.WriteU64(0); err != nil {
-			return fmt.Errorf("backfill tier %d count: %w", tierID, err)
+			return fmt.Errorf("backfill tier %s count: %w", info.Name, err)
 		}
 		if err := bytesW.WriteU64(0); err != nil {
-			return fmt.Errorf("backfill tier %d bytes: %w", tierID, err)
+			return fmt.Errorf("backfill tier %s bytes: %w", info.Name, err)
 		}
 	}
 
@@ -397,6 +411,17 @@ func (b *IndexBuilder) Finalize() error {
 	// Build MPHF
 	if err := b.mphfBuilder.Build(b.outDir); err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
+	}
+
+	// Write tier manifest if we have tier data
+	if len(b.presentTiers) > 0 {
+		presentTierList := make([]tiers.ID, 0, len(b.presentTiers))
+		for tierID := range b.presentTiers {
+			presentTierList = append(presentTierList, tierID)
+		}
+		if err := tiers.WriteManifest(b.outDir, presentTierList); err != nil {
+			return fmt.Errorf("write tier manifest: %w", err)
+		}
 	}
 
 	// Write manifest

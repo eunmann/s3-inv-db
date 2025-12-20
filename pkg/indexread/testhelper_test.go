@@ -2,12 +2,10 @@ package indexread
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/eunmann/s3-inv-db/pkg/indexbuild"
-	"github.com/eunmann/s3-inv-db/pkg/sqliteagg"
+	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
@@ -23,33 +21,37 @@ func buildIndexFromKeys(t *testing.T, outDir string, keys []string) error {
 func buildIndexFromKeysWithSizes(t *testing.T, outDir string, keys []string, sizes []uint64) error {
 	t.Helper()
 
-	dbPath := outDir + ".db"
-	defer os.Remove(dbPath)
-
-	// Use MemoryAggregator to create the database
-	memAgg := sqliteagg.NewMemoryAggregator(sqliteagg.DefaultMemoryAggregatorConfig(dbPath))
+	// Use extsort aggregator to build index
+	agg := extsort.NewAggregator(len(keys), 0)
 
 	for i, key := range keys {
 		size := uint64((i%1000 + 1) * 100) // Default size varies by index
 		if sizes != nil && i < len(sizes) {
 			size = sizes[i]
 		}
-		memAgg.AddObject(key, size, tiers.Standard)
+		agg.AddObject(key, size, tiers.Standard)
 	}
 
-	if err := memAgg.Finalize(); err != nil {
+	// Drain to rows and sort
+	rows := agg.Drain()
+
+	// Build index using streaming builder
+	builder, err := extsort.NewIndexBuilder(outDir)
+	if err != nil {
+		return fmt.Errorf("create index builder: %w", err)
+	}
+
+	// Sort rows by prefix for proper preorder
+	extsort.SortPrefixRows(rows)
+
+	for _, row := range rows {
+		if err := builder.Add(row); err != nil {
+			return fmt.Errorf("add row: %w", err)
+		}
+	}
+
+	if err := builder.Finalize(); err != nil {
 		return fmt.Errorf("finalize: %w", err)
-	}
-
-	cfg := sqliteagg.DefaultConfig(dbPath)
-	buildCfg := indexbuild.SQLiteConfig{
-		OutDir:    outDir,
-		DBPath:    dbPath,
-		SQLiteCfg: cfg,
-	}
-
-	if err := indexbuild.BuildFromSQLite(buildCfg); err != nil {
-		return fmt.Errorf("build index: %w", err)
 	}
 
 	return nil
@@ -138,29 +140,33 @@ type testObject struct {
 func buildIndexWithTiers(t *testing.T, outDir string, objects []testObject) error {
 	t.Helper()
 
-	dbPath := outDir + ".db"
-	defer os.Remove(dbPath)
-
-	// Use MemoryAggregator to create the database
-	memAgg := sqliteagg.NewMemoryAggregator(sqliteagg.DefaultMemoryAggregatorConfig(dbPath))
+	// Use extsort aggregator to build index
+	agg := extsort.NewAggregator(len(objects), 0)
 
 	for _, obj := range objects {
-		memAgg.AddObject(obj.Key, obj.Size, obj.TierID)
+		agg.AddObject(obj.Key, obj.Size, obj.TierID)
 	}
 
-	if err := memAgg.Finalize(); err != nil {
+	// Drain to rows and sort
+	rows := agg.Drain()
+
+	// Build index using streaming builder
+	builder, err := extsort.NewIndexBuilder(outDir)
+	if err != nil {
+		return fmt.Errorf("create index builder: %w", err)
+	}
+
+	// Sort rows by prefix for proper preorder
+	extsort.SortPrefixRows(rows)
+
+	for _, row := range rows {
+		if err := builder.Add(row); err != nil {
+			return fmt.Errorf("add row: %w", err)
+		}
+	}
+
+	if err := builder.Finalize(); err != nil {
 		return fmt.Errorf("finalize: %w", err)
-	}
-
-	cfg := sqliteagg.DefaultConfig(dbPath)
-	buildCfg := indexbuild.SQLiteConfig{
-		OutDir:    outDir,
-		DBPath:    dbPath,
-		SQLiteCfg: cfg,
-	}
-
-	if err := indexbuild.BuildFromSQLite(buildCfg); err != nil {
-		return fmt.Errorf("build index: %w", err)
 	}
 
 	return nil
