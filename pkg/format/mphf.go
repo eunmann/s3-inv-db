@@ -72,7 +72,8 @@ func (b *MPHFBuilder) Build(outDir string) error {
 	preorderPositions := make([]uint64, len(b.prefixes))
 
 	for i, prefix := range b.prefixes {
-		keyHash := hashString(prefix)
+		// Reuse the hash we already computed for BBHash construction
+		keyHash := keys[i]
 		hashVal := mph.Find(keyHash)
 		if hashVal == 0 {
 			return fmt.Errorf("MPHF lookup failed for %q", prefix)
