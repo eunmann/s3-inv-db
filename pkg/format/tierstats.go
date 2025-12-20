@@ -33,7 +33,7 @@ func (w *TierStatsWriter) Write(result *triebuild.Result) error {
 	}
 
 	// Create tier_stats directory only when there's data to write
-	if err := os.MkdirAll(w.tierDir, 0755); err != nil {
+	if err := os.MkdirAll(w.tierDir, 0o755); err != nil {
 		return fmt.Errorf("create tier_stats dir: %w", err)
 	}
 

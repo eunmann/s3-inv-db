@@ -244,7 +244,7 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 	for _, r := range testRows {
 		fmt.Fprintf(&csvBuf, "%s,%d,%s,\n", r.Key, r.Size, r.StorageClass)
 	}
-	if err := os.WriteFile(csvPath, csvBuf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(csvPath, csvBuf.Bytes(), 0o644); err != nil {
 		t.Fatalf("WriteFile CSV failed: %v", err)
 	}
 

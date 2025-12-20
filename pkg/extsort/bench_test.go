@@ -62,7 +62,7 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 		tmpDir := b.TempDir()
 		outDir := filepath.Join(tmpDir, "index")
 		runDir := filepath.Join(tmpDir, "runs")
-		os.MkdirAll(runDir, 0755)
+		os.MkdirAll(runDir, 0o755)
 
 		// Generate synthetic data
 		gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(numObjects))

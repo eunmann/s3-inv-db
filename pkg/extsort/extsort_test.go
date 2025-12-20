@@ -496,5 +496,5 @@ func BenchmarkRunFile(b *testing.B) {
 
 func init() {
 	// Ensure test temp dirs are cleaned up
-	os.MkdirAll(os.TempDir(), 0755)
+	os.MkdirAll(os.TempDir(), 0o755)
 }

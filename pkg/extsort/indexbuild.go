@@ -66,7 +66,7 @@ type stackEntry struct {
 
 // NewIndexBuilder creates a streaming index builder.
 func NewIndexBuilder(outDir string) (*IndexBuilder, error) {
-	if err := os.MkdirAll(outDir, 0755); err != nil {
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
 
@@ -282,7 +282,7 @@ func (b *IndexBuilder) writeTierStats(row *PrefixRow) error {
 func (b *IndexBuilder) createTierWriter(tierID tiers.ID, row *PrefixRow) error {
 	// Create tier_stats directory if needed
 	tierDir := filepath.Join(b.outDir, "tier_stats")
-	if err := os.MkdirAll(tierDir, 0755); err != nil {
+	if err := os.MkdirAll(tierDir, 0o755); err != nil {
 		return fmt.Errorf("create tier_stats dir: %w", err)
 	}
 

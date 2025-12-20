@@ -432,7 +432,7 @@ func TestLoadPriceTable_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "invalid.json")
 
-	if err := os.WriteFile(path, []byte("not valid json"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("not valid json"), 0o644); err != nil {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 

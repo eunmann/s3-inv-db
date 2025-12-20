@@ -253,15 +253,16 @@ func (b *Builder) closeAll() {
 // PrefixStrings returns all prefix strings from the result in position order.
 func (r *Result) PrefixStrings() []string {
 	prefixes := make([]string, len(r.Nodes))
-	for i, n := range r.Nodes {
-		prefixes[i] = n.Prefix
+	for i := range r.Nodes {
+		prefixes[i] = r.Nodes[i].Prefix
 	}
 	return prefixes
 }
 
 // VerifySubtreeRanges validates that subtree ranges are correct.
 func (r *Result) VerifySubtreeRanges() bool {
-	for i, node := range r.Nodes {
+	for i := range r.Nodes {
+		node := &r.Nodes[i]
 		pos := uint64(i)
 		if node.Pos != pos {
 			return false
@@ -339,9 +340,9 @@ func BuildFromKeysWithTiers(keys []string, sizes []uint64, tierIDs []tiers.ID) (
 
 // GetNodeByPrefix finds a node by its prefix string.
 func (r *Result) GetNodeByPrefix(prefix string) (Node, bool) {
-	for _, n := range r.Nodes {
-		if n.Prefix == prefix {
-			return n, true
+	for i := range r.Nodes {
+		if r.Nodes[i].Prefix == prefix {
+			return r.Nodes[i], true
 		}
 	}
 	return Node{}, false

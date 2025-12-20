@@ -96,7 +96,7 @@ func splitLines(s string) []string {
 	for i := range len(s) {
 		if s[i] == '\n' {
 			line := s[start:i]
-			if len(line) > 0 && line[len(line)-1] == '\r' {
+			if line != "" && line[len(line)-1] == '\r' {
 				line = line[:len(line)-1]
 			}
 			lines = append(lines, line)

@@ -18,7 +18,7 @@ func TestWriteAndReadManifest(t *testing.T) {
 
 	for name, data := range testFiles {
 		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, data, 0644); err != nil {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
 			t.Fatalf("WriteFile failed: %v", err)
 		}
 	}
@@ -67,7 +67,7 @@ func TestVerifyManifest(t *testing.T) {
 	// Create test files
 	path := filepath.Join(dir, "subtree_end.u64")
 	data := []byte("test data for verification")
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -88,7 +88,7 @@ func TestVerifyManifest(t *testing.T) {
 	}
 
 	// Corrupt the file
-	if err := os.WriteFile(path, []byte("corrupted data"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("corrupted data"), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -104,7 +104,7 @@ func TestChecksumFile(t *testing.T) {
 
 	// Write known data
 	data := []byte("hello world")
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -124,7 +124,7 @@ func TestChecksumFile(t *testing.T) {
 	}
 
 	// Different data should give different checksum
-	if err := os.WriteFile(path, []byte("different"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("different"), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -163,7 +163,7 @@ func TestSyncDir(t *testing.T) {
 
 	// Create a file in the directory
 	path := filepath.Join(dir, "test.bin")
-	if err := os.WriteFile(path, []byte("data"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 

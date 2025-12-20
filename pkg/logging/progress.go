@@ -305,7 +305,7 @@ func FileCreated(log zerolog.Logger, phase string, elapsed time.Duration) *Compl
 }
 
 // ChunkStarted logs a chunk start event (no duration, no progress_pct).
-func ChunkStarted(log zerolog.Logger, phase string, chunkID string, chunksComplete, chunksTotal int64) {
+func ChunkStarted(log zerolog.Logger, phase, chunkID string, chunksComplete, chunksTotal int64) {
 	log.Info().
 		Str("event", "chunk_started").
 		Str("phase", phase).

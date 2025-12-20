@@ -132,7 +132,7 @@ func (b *MPHFBuilder) Build(outDir string) error {
 func (b *MPHFBuilder) writeEmpty(outDir string) error {
 	// Create empty mph file
 	mphPath := filepath.Join(outDir, "mph.bin")
-	if err := os.WriteFile(mphPath, nil, 0644); err != nil {
+	if err := os.WriteFile(mphPath, nil, 0o644); err != nil {
 		return fmt.Errorf("write empty mph: %w", err)
 	}
 

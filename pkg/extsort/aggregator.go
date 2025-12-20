@@ -30,7 +30,7 @@ type Aggregator struct {
 
 // NewAggregator creates a new prefix aggregator with the given initial capacity.
 // Use maxDepth=0 for unlimited depth.
-func NewAggregator(initialCapacity int, maxDepth int) *Aggregator {
+func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 	if initialCapacity <= 0 {
 		initialCapacity = 100000
 	}

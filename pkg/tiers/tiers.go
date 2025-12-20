@@ -143,7 +143,7 @@ func WriteManifest(dir string, presentTiers []ID) error {
 	}
 
 	path := filepath.Join(dir, "tiers.json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return fmt.Errorf("write tier manifest: %w", err)
 	}
 
