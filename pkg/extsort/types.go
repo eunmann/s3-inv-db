@@ -1,7 +1,7 @@
 // Package extsort provides a pure-Go external sort backend for building S3 inventory indexes.
 //
 // The package implements a chunked prefix aggregation pipeline with external merge sort:
-//  1. Stream S3 inventory CSV rows and aggregate per-prefix statistics in bounded memory.
+//  1. Stream S3 inventory rows (CSV or Parquet) and aggregate per-prefix statistics in bounded memory.
 //  2. When memory threshold is reached, sort and flush to temporary run files.
 //  3. K-way merge all run files to produce a globally sorted, aggregated stream.
 //  4. Build the final index (columnar arrays + MPHF) in a single streaming pass.
