@@ -58,9 +58,12 @@ func (m *Manifest) validate() error {
 		return fmt.Errorf("manifest has no files")
 	}
 	// Validate format - accept CSV, Parquet, or detect from file extensions
-	format := m.DetectFormat()
-	if format != InventoryFormatCSV && format != InventoryFormatParquet {
-		return fmt.Errorf("unsupported file format: %s (supported: CSV, Parquet)", m.FileFormat)
+	// If there's an explicit format declaration, it must be CSV or Parquet
+	if m.FileFormat != "" {
+		upper := strings.ToUpper(m.FileFormat)
+		if upper != "CSV" && upper != "PARQUET" {
+			return fmt.Errorf("unsupported file format: %s (supported: CSV, Parquet)", m.FileFormat)
+		}
 	}
 	return nil
 }

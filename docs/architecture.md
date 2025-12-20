@@ -41,7 +41,8 @@ This document describes the high-level architecture of s3-inv-db, explaining how
 
 Streams S3 inventory files directly from S3:
 - Fetches inventory manifest.json
-- Streams each CSV.GZ file without downloading to disk
+- Auto-detects format (CSV or Parquet) from manifest
+- Streams each inventory file without downloading to disk
 - Decompresses and parses on-the-fly
 
 **Key interfaces:**
@@ -138,7 +139,7 @@ type Index struct {
 ```
 1. Stream from S3
    └── s3fetch.Client streams inventory files
-   └── inventory.Reader parses CSV records
+   └── inventory.InventoryReader parses records (CSV or Parquet)
 
 2. Aggregate in memory
    └── extsort.Aggregator accumulates prefix stats

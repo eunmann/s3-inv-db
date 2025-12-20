@@ -1,19 +1,15 @@
 package extsort
 
 import (
-	"compress/gzip"
 	"context"
-	"encoding/csv"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/pkg/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -148,7 +144,18 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 		return fmt.Errorf("fetch manifest: %w", err)
 	}
 
-	// Get column indices
+	// Detect inventory format
+	format := manifest.DetectFormat()
+	formatStr := "CSV"
+	if format == s3fetch.InventoryFormatParquet {
+		formatStr = "Parquet"
+	}
+	log.Info().
+		Str("format", formatStr).
+		Int("files", len(manifest.Files)).
+		Msg("detected inventory format")
+
+	// Get column indices (used for CSV, Parquet auto-detects from schema)
 	keyCol, err := manifest.KeyColumnIndex()
 	if err != nil {
 		return fmt.Errorf("get key column: %w", err)
@@ -182,15 +189,18 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 			Int("chunk", i+1).
 			Int("total_chunks", len(manifest.Files)).
 			Str("key", file.Key).
+			Str("format", formatStr).
 			Msg("processing inventory chunk")
 
 		// Stream chunk and aggregate
 		chunkCfg := chunkConfig{
+			format:        format,
 			keyCol:        keyCol,
 			sizeCol:       sizeCol,
 			storageCol:    storageCol,
 			accessTierCol: accessTierCol,
 			tierMapping:   tierMapping,
+			fileSize:      file.Size,
 		}
 		if err := p.processChunk(ctx, destBucket, file.Key, agg, chunkCfg); err != nil {
 			return fmt.Errorf("process chunk %d: %w", i, err)
@@ -218,35 +228,47 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 
 // chunkConfig holds configuration for processing a chunk.
 type chunkConfig struct {
+	format        s3fetch.InventoryFormat
 	keyCol        int
 	sizeCol       int
 	storageCol    int
 	accessTierCol int
 	tierMapping   *tiers.Mapping
+	fileSize      int64 // Size of the file (used for Parquet)
 }
 
-// processChunk processes a single inventory CSV chunk.
+// processChunk processes a single inventory chunk (CSV or Parquet).
 func (p *Pipeline) processChunk(ctx context.Context, bucket, key string, agg *Aggregator, cfg chunkConfig) error {
 	// Stream object from S3
 	body, err := p.s3Client.StreamObject(ctx, bucket, key)
 	if err != nil {
 		return fmt.Errorf("stream object: %w", err)
 	}
-	defer body.Close()
 
-	// Decompress if needed
-	reader, closeGzip, err := decompressReader(body, key)
-	if err != nil {
-		return fmt.Errorf("decompress: %w", err)
+	// Create appropriate reader based on format
+	var reader inventory.InventoryReader
+	if cfg.format == s3fetch.InventoryFormatParquet {
+		// Parquet format
+		reader, err = inventory.NewParquetInventoryReaderFromStream(body, cfg.fileSize)
+		if err != nil {
+			return fmt.Errorf("create parquet reader: %w", err)
+		}
+	} else {
+		// CSV format (default)
+		csvCfg := inventory.CSVReaderConfig{
+			KeyCol:        cfg.keyCol,
+			SizeCol:       cfg.sizeCol,
+			StorageCol:    cfg.storageCol,
+			AccessTierCol: cfg.accessTierCol,
+		}
+		reader, err = inventory.NewCSVInventoryReaderFromStream(body, key, csvCfg)
+		if err != nil {
+			return fmt.Errorf("create csv reader: %w", err)
+		}
 	}
-	if closeGzip != nil {
-		defer closeGzip()
-	}
+	defer reader.Close()
 
-	// Create CSV reader
-	csvr := newInventoryReader(reader)
-
-	// Process each row
+	// Process each row using the unified interface
 	for {
 		select {
 		case <-ctx.Done():
@@ -254,70 +276,29 @@ func (p *Pipeline) processChunk(ctx context.Context, bucket, key string, agg *Ag
 		default:
 		}
 
-		fields, err := csvr.Read()
-		if errors.Is(err, io.EOF) {
+		row, err := reader.Next()
+		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("read CSV row: %w", err)
+			return fmt.Errorf("read inventory row: %w", err)
 		}
 
-		// Skip rows with insufficient columns
-		if len(fields) <= cfg.keyCol || len(fields) <= cfg.sizeCol {
+		if row.Key == "" {
 			continue
 		}
 
-		objKey := fields[cfg.keyCol]
-		if objKey == "" {
-			continue
-		}
-
-		sizeStr := strings.TrimSpace(fields[cfg.sizeCol])
-		size, err := strconv.ParseUint(sizeStr, 10, 64)
-		if err != nil {
-			size = 0
-		}
-
-		// Determine tier
-		var storageClass, accessTier string
-		if cfg.storageCol >= 0 && len(fields) > cfg.storageCol {
-			storageClass = fields[cfg.storageCol]
-		}
-		if cfg.accessTierCol >= 0 && len(fields) > cfg.accessTierCol {
-			accessTier = fields[cfg.accessTierCol]
-		}
-		tierID := cfg.tierMapping.FromS3(storageClass, accessTier)
+		// Convert storage class to tier ID
+		tierID := cfg.tierMapping.FromS3(row.StorageClass, row.AccessTier)
 
 		// Add to aggregator
-		agg.AddObject(objKey, size, tierID)
+		agg.AddObject(row.Key, row.Size, tierID)
 
 		atomic.AddInt64(&p.objectsProcessed, 1)
-		atomic.AddInt64(&p.bytesProcessed, int64(size))
+		atomic.AddInt64(&p.bytesProcessed, int64(row.Size))
 	}
 
 	return nil
-}
-
-// newInventoryReader creates a csv.Reader configured for S3 inventory files.
-func newInventoryReader(r io.Reader) *csv.Reader {
-	csvr := csv.NewReader(r)
-	csvr.ReuseRecord = true
-	csvr.FieldsPerRecord = -1
-	csvr.LazyQuotes = true
-	return csvr
-}
-
-// decompressReader wraps a reader with gzip decompression if the key ends in .gz.
-func decompressReader(r io.Reader, key string) (io.Reader, func() error, error) {
-	if !strings.HasSuffix(strings.ToLower(key), ".gz") {
-		return r, nil, nil
-	}
-
-	gzr, err := gzip.NewReader(r)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create gzip reader: %w", err)
-	}
-	return gzr, gzr.Close, nil
 }
 
 // flushAggregator drains the aggregator to a sorted run file.

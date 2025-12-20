@@ -59,14 +59,15 @@ func TestParseManifest(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "unsupported format Parquet",
+			name: "valid parquet format",
 			json: `{
 				"destinationBucket": "inventory-bucket",
 				"fileFormat": "Parquet",
 				"fileSchema": "Key, Size",
 				"files": [{"key": "file.parquet", "size": 100}]
 			}`,
-			wantErr: true,
+			wantErr:   false,
+			wantFiles: 1,
 		},
 	}
 
@@ -411,6 +412,92 @@ func TestManifest_GetDestinationBucketName(t *testing.T) {
 			}
 			if bucket != tt.wantBucket {
 				t.Errorf("bucket = %q, want %q", bucket, tt.wantBucket)
+			}
+		})
+	}
+}
+
+func TestManifestDetectFormat(t *testing.T) {
+	tests := []struct {
+		name       string
+		fileFormat string
+		fileKey    string
+		wantFormat InventoryFormat
+		wantIsCSV  bool
+	}{
+		{
+			name:       "explicit CSV format",
+			fileFormat: "CSV",
+			fileKey:    "file.csv.gz",
+			wantFormat: InventoryFormatCSV,
+			wantIsCSV:  true,
+		},
+		{
+			name:       "explicit Parquet format",
+			fileFormat: "Parquet",
+			fileKey:    "file.parquet",
+			wantFormat: InventoryFormatParquet,
+			wantIsCSV:  false,
+		},
+		{
+			name:       "explicit PARQUET format uppercase",
+			fileFormat: "PARQUET",
+			fileKey:    "file.parquet",
+			wantFormat: InventoryFormatParquet,
+			wantIsCSV:  false,
+		},
+		{
+			name:       "detect from .parquet extension",
+			fileFormat: "",
+			fileKey:    "inventory/data/file.parquet",
+			wantFormat: InventoryFormatParquet,
+			wantIsCSV:  false,
+		},
+		{
+			name:       "detect from .csv.gz extension",
+			fileFormat: "",
+			fileKey:    "inventory/data/file.csv.gz",
+			wantFormat: InventoryFormatCSV,
+			wantIsCSV:  true,
+		},
+		{
+			name:       "detect from .csv extension",
+			fileFormat: "",
+			fileKey:    "file.csv",
+			wantFormat: InventoryFormatCSV,
+			wantIsCSV:  true,
+		},
+		{
+			name:       "default to CSV when unknown",
+			fileFormat: "",
+			fileKey:    "file.unknown",
+			wantFormat: InventoryFormatCSV,
+			wantIsCSV:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Manifest{
+				DestinationBucket: "bucket",
+				FileFormat:        tt.fileFormat,
+				FileSchema:        "Key, Size",
+				Files:             []ManifestFile{{Key: tt.fileKey, Size: 100}},
+			}
+
+			gotFormat := m.DetectFormat()
+			if gotFormat != tt.wantFormat {
+				t.Errorf("DetectFormat() = %v, want %v", gotFormat, tt.wantFormat)
+			}
+
+			gotIsCSV := m.IsCSV()
+			if gotIsCSV != tt.wantIsCSV {
+				t.Errorf("IsCSV() = %v, want %v", gotIsCSV, tt.wantIsCSV)
+			}
+
+			gotIsParquet := m.IsParquet()
+			if gotIsParquet != !tt.wantIsCSV {
+				t.Errorf("IsParquet() = %v, want %v", gotIsParquet, !tt.wantIsCSV)
 			}
 		})
 	}
