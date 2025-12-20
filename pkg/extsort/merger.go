@@ -2,6 +2,7 @@ package extsort
 
 import (
 	"container/heap"
+	"errors"
 	"io"
 )
 
@@ -81,7 +82,7 @@ func NewMergeIteratorFromReaders(readers []*RunFileReader) (*MergeIterator, erro
 	// Initialize heap with first row from each reader
 	for i, r := range readers {
 		row, err := r.Read()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			continue // empty reader
 		}
 		if err != nil {
@@ -112,7 +113,7 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 	result := item.row
 
 	// Read next row from the same reader and push to heap
-	if err := m.advanceReader(item.readerIdx); err != nil && err != io.EOF {
+	if err := m.advanceReader(item.readerIdx); err != nil && !errors.Is(err, io.EOF) {
 		m.err = err
 		return nil, err
 	}
@@ -123,7 +124,7 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 		result.Merge(dup.row)
 
 		// Advance that reader too
-		if err := m.advanceReader(dup.readerIdx); err != nil && err != io.EOF {
+		if err := m.advanceReader(dup.readerIdx); err != nil && !errors.Is(err, io.EOF) {
 			m.err = err
 			return nil, err
 		}

@@ -1,6 +1,7 @@
 package extsort
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -140,7 +141,7 @@ func TestRunFile(t *testing.T) {
 
 		// EOF
 		_, err = reader.Read()
-		if err != io.EOF {
+		if !errors.Is(err, io.EOF) {
 			t.Errorf("expected EOF, got %v", err)
 		}
 	})

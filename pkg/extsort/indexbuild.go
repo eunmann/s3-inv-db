@@ -1,6 +1,7 @@
 package extsort
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -323,7 +324,7 @@ func (b *IndexBuilder) createTierWriter(tierID tiers.ID, row *PrefixRow) error {
 func (b *IndexBuilder) AddAll(iter *MergeIterator) error {
 	for {
 		row, err := iter.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

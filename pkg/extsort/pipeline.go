@@ -2,6 +2,7 @@ package extsort
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -277,7 +278,7 @@ func (p *Pipeline) processChunk(ctx context.Context, bucket, key string, agg *Ag
 		}
 
 		row, err := reader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
