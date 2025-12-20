@@ -616,11 +616,31 @@ func (a *Aggregator) PresentTiers() ([]tiers.ID, error) {
 }
 
 // IteratePrefixes returns an iterator over all prefixes in lexicographic order.
+// This fetches all 28 columns including all tier data.
 func (a *Aggregator) IteratePrefixes() (*PrefixIterator, error) {
-	// Build SELECT statement with all tier columns
+	return a.IteratePrefixesForTiers(nil) // nil means all tiers
+}
+
+// IteratePrefixesForTiers returns an iterator that only fetches specified tier columns.
+// This reduces CGO overhead by fetching fewer columns from SQLite.
+//
+// If presentTiers is nil, ALL tier columns are fetched (backward compatibility).
+// If presentTiers is empty slice, only base columns are fetched (~86% fewer CGO calls).
+// If presentTiers contains specific tiers, only those tier columns are fetched.
+func (a *Aggregator) IteratePrefixesForTiers(presentTiers []tiers.ID) (*PrefixIterator, error) {
+	// Build SELECT statement with only needed columns
 	cols := []string{"prefix", "depth", "total_count", "total_bytes"}
-	for i := range tiers.NumTiers {
-		cols = append(cols, fmt.Sprintf("t%d_count", i), fmt.Sprintf("t%d_bytes", i))
+
+	if presentTiers == nil {
+		// nil means fetch all tiers (backward compatibility)
+		for i := tiers.ID(0); i < tiers.NumTiers; i++ {
+			cols = append(cols, fmt.Sprintf("t%d_count", i), fmt.Sprintf("t%d_bytes", i))
+		}
+	} else {
+		// Only add specified tier columns
+		for _, t := range presentTiers {
+			cols = append(cols, fmt.Sprintf("t%d_count", t), fmt.Sprintf("t%d_bytes", t))
+		}
 	}
 
 	query := fmt.Sprintf("SELECT %s FROM prefix_stats ORDER BY prefix", strings.Join(cols, ", "))
@@ -629,15 +649,19 @@ func (a *Aggregator) IteratePrefixes() (*PrefixIterator, error) {
 		return nil, fmt.Errorf("query prefixes: %w", err)
 	}
 
-	return &PrefixIterator{rows: rows}, nil
+	return &PrefixIterator{
+		rows:         rows,
+		presentTiers: presentTiers,
+	}, nil
 }
 
 // PrefixIterator iterates over prefix rows in lexicographic order.
 type PrefixIterator struct {
-	rows     *sql.Rows
-	current  PrefixRow
-	err      error
-	scanDest []interface{} // Reused across rows to avoid allocation
+	rows         *sql.Rows
+	current      PrefixRow
+	err          error
+	scanDest     []interface{} // Reused across rows to avoid allocation
+	presentTiers []tiers.ID    // Which tier columns were fetched (nil = all)
 }
 
 // Next advances to the next row. Returns false when done.
@@ -653,6 +677,27 @@ func (it *PrefixIterator) Next() bool {
 
 	// Initialize scan destinations once (lazy init to avoid allocation if iterator never used)
 	if it.scanDest == nil {
+		it.initScanDest()
+	}
+
+	// Clear tier data to ensure non-present tiers are zero
+	if it.presentTiers != nil {
+		it.current.TierCounts = [tiers.NumTiers]uint64{}
+		it.current.TierBytes = [tiers.NumTiers]uint64{}
+	}
+
+	if err := it.rows.Scan(it.scanDest...); err != nil {
+		it.err = fmt.Errorf("scan prefix row: %w", err)
+		return false
+	}
+
+	return true
+}
+
+// initScanDest initializes scan destinations based on which columns were fetched.
+func (it *PrefixIterator) initScanDest() {
+	if it.presentTiers == nil {
+		// nil means all tier columns were fetched (backward compatibility)
 		it.scanDest = make([]interface{}, 4+int(tiers.NumTiers)*2)
 		it.scanDest[0] = &it.current.Prefix
 		it.scanDest[1] = &it.current.Depth
@@ -662,14 +707,18 @@ func (it *PrefixIterator) Next() bool {
 			it.scanDest[4+int(i)*2] = &it.current.TierCounts[i]
 			it.scanDest[4+int(i)*2+1] = &it.current.TierBytes[i]
 		}
+	} else {
+		// Only specified tier columns were fetched (or empty slice for no tiers)
+		it.scanDest = make([]interface{}, 4+len(it.presentTiers)*2)
+		it.scanDest[0] = &it.current.Prefix
+		it.scanDest[1] = &it.current.Depth
+		it.scanDest[2] = &it.current.TotalCount
+		it.scanDest[3] = &it.current.TotalBytes
+		for idx, tierID := range it.presentTiers {
+			it.scanDest[4+idx*2] = &it.current.TierCounts[tierID]
+			it.scanDest[4+idx*2+1] = &it.current.TierBytes[tierID]
+		}
 	}
-
-	if err := it.rows.Scan(it.scanDest...); err != nil {
-		it.err = fmt.Errorf("scan prefix row: %w", err)
-		return false
-	}
-
-	return true
 }
 
 // Row returns the current row.

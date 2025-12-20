@@ -35,7 +35,11 @@ func BuildTrieFromSQLite(agg *Aggregator) (*triebuild.Result, error) {
 		Int("present_tiers", len(presentTiers)).
 		Msg("building trie from SQLite")
 
-	iter, err := agg.IteratePrefixes()
+	// Use narrow iterator that only fetches present tier columns.
+	// This reduces CGO overhead by fetching fewer columns from SQLite.
+	// With 5 present tiers: 14 columns instead of 28 (50% reduction).
+	// With 0 present tiers: 4 columns instead of 28 (86% reduction).
+	iter, err := agg.IteratePrefixesForTiers(presentTiers)
 	if err != nil {
 		return nil, fmt.Errorf("iterate prefixes: %w", err)
 	}
