@@ -58,13 +58,18 @@ S3 access uses the standard AWS credential chain:
 ```go
 import (
     "context"
+    "os"
+    "os/signal"
+    "syscall"
 
     "github.com/eunmann/s3-inv-db/pkg/extsort"
     "github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
 
 func main() {
-    ctx := context.Background()
+    // Create a context that cancels on SIGINT/SIGTERM
+    ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+    defer stop()
 
     // Create S3 client
     client, err := s3fetch.NewClient(ctx)
