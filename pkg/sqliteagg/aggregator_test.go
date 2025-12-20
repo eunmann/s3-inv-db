@@ -11,8 +11,8 @@ import (
 /*
 Test Organization:
 
-Shared tests (aggregator_unified_test.go):
-  - TestChunkAggregator runs all shared tests on Standard and Normalized implementations
+Shared tests (aggregator_shared_test.go):
+  - TestChunkAggregator runs all shared tests on Standard implementation
 
 Aggregator-specific tests (this file):
   - TestOpenClose: Database lifecycle (Open/Close)

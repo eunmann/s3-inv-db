@@ -29,7 +29,4 @@ type ChunkAggregator interface {
 }
 
 // Verify interface compliance at compile time.
-var (
-	_ ChunkAggregator = (*Aggregator)(nil)
-	_ ChunkAggregator = (*NormalizedAggregator)(nil)
-)
+var _ ChunkAggregator = (*Aggregator)(nil)

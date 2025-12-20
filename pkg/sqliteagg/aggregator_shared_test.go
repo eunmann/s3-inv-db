@@ -38,20 +38,6 @@ func aggregatorImplementations() []struct {
 				return agg
 			},
 		},
-		{
-			name: "Normalized",
-			factory: func(tb testing.TB) ChunkAggregator {
-				tb.Helper()
-				dbPath := filepath.Join(tb.TempDir(), "test.db")
-				cfg := DefaultNormalizedConfig(dbPath)
-				cfg.Synchronous = "OFF"
-				agg, err := NewNormalizedAggregator(cfg)
-				if err != nil {
-					tb.Fatalf("NewNormalizedAggregator failed: %v", err)
-				}
-				return agg
-			},
-		},
 	}
 }
 
@@ -541,19 +527,6 @@ func benchmarkAggregatorFactories() []struct {
 				agg, err := Open(cfg)
 				if err != nil {
 					b.Fatalf("Open: %v", err)
-				}
-				return agg
-			},
-		},
-		{
-			name: "Normalized",
-			factory: func(b *testing.B, dbPath string) ChunkAggregator {
-				b.Helper()
-				cfg := DefaultNormalizedConfig(dbPath)
-				cfg.Synchronous = "OFF"
-				agg, err := NewNormalizedAggregator(cfg)
-				if err != nil {
-					b.Fatalf("NewNormalizedAggregator: %v", err)
 				}
 				return agg
 			},
