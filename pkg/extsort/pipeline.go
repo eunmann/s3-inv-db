@@ -48,9 +48,9 @@ type Result struct {
 
 // NewPipeline creates a new external sort pipeline.
 func NewPipeline(config Config, s3Client *s3fetch.Client) *Pipeline {
-	if config.MemoryThreshold <= 0 {
-		config.MemoryThreshold = 256 * 1024 * 1024 // 256MB default
-	}
+	// Ensure memory budget is set
+	config.EnsureBudget()
+
 	if config.RunFileBufferSize <= 0 {
 		config.RunFileBufferSize = 4 * 1024 * 1024 // 4MB default
 	}
@@ -84,9 +84,16 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		}
 	}()
 
+	// Log memory budget breakdown
+	p.config.EnsureBudget()
+	aggThreshold := p.config.AggregatorMemoryThreshold()
 	log.Info().
 		Str("manifest_uri", manifestURI).
-		Int64("memory_threshold_mb", p.config.MemoryThreshold/(1024*1024)).
+		Uint64("total_budget_mb", p.config.MemoryBudget.Total()/(1024*1024)).
+		Int64("aggregator_budget_mb", aggThreshold/(1024*1024)).
+		Int64("run_buffer_budget_mb", p.config.RunBufferBudget()/(1024*1024)).
+		Int64("merge_budget_mb", p.config.MergeBudget()/(1024*1024)).
+		Int64("index_budget_mb", p.config.IndexBuildBudget()/(1024*1024)).
 		Msg("pipeline starting")
 
 	ingestStart := time.Now()
@@ -198,6 +205,30 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 	numWorkers := p.config.S3DownloadConcurrency
 	if numWorkers <= 0 {
 		numWorkers = runtime.NumCPU()
+	}
+
+	// Coordinate workers with memory budget
+	// Each worker can have ~4MB in-flight (batch of ~100K objects * ~40 bytes each)
+	// Channel buffer is numWorkers * 2, so max in-flight = numWorkers * 8MB
+	const bytesPerWorkerInFlight = 8 * 1024 * 1024 // 8MB per worker
+	p.config.EnsureBudget()
+	headroom := p.config.MemoryBudget.Total() - p.config.MemoryBudget.AggregatorBudget() -
+		p.config.MemoryBudget.RunBufferBudget() - p.config.MemoryBudget.MergeBudget() -
+		p.config.MemoryBudget.IndexBuildBudget()
+
+	maxWorkersFromBudget := int(headroom / bytesPerWorkerInFlight)
+	if maxWorkersFromBudget < 2 {
+		maxWorkersFromBudget = 2 // minimum 2 workers
+	}
+
+	originalWorkers := numWorkers
+	if numWorkers > maxWorkersFromBudget {
+		numWorkers = maxWorkersFromBudget
+		log.Warn().
+			Int("requested_workers", originalWorkers).
+			Int("max_from_budget", maxWorkersFromBudget).
+			Int64("headroom_mb", int64(headroom)/(1024*1024)).
+			Msg("reducing worker count to fit memory budget")
 	}
 
 	log.Info().
@@ -331,7 +362,7 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 		}
 
 		// Flush if memory threshold exceeded
-		if agg.EstimatedMemoryUsage() >= p.config.MemoryThreshold {
+		if agg.EstimatedMemoryUsage() >= p.config.AggregatorMemoryThreshold() {
 			if err := p.flushAggregator(agg); err != nil {
 				return fmt.Errorf("flush aggregator: %w", err)
 			}
@@ -453,7 +484,19 @@ func (p *Pipeline) flushAggregator(agg *Aggregator) error {
 	runPath := filepath.Join(p.tempDir, fmt.Sprintf("run_%04d.bin", p.runCount))
 	p.runCount++
 
-	writer, err := NewRunFileWriter(runPath, p.config.RunFileBufferSize)
+	// Calculate buffer size from run buffer budget
+	// During ingest, we write one run file at a time, so use full run buffer budget
+	// Clamp to reasonable range: [64KB, 16MB]
+	bufferSize := p.config.RunBufferBudget()
+	const minBuffer = 64 * 1024
+	const maxBuffer = 16 * 1024 * 1024
+	if bufferSize < minBuffer {
+		bufferSize = minBuffer
+	} else if bufferSize > maxBuffer {
+		bufferSize = maxBuffer
+	}
+
+	writer, err := NewRunFileWriter(runPath, int(bufferSize))
 	if err != nil {
 		return fmt.Errorf("create run file: %w", err)
 	}
@@ -472,9 +515,13 @@ func (p *Pipeline) flushAggregator(agg *Aggregator) error {
 	p.runFiles = append(p.runFiles, runPath)
 	p.flushCount++
 
+	// Log flush with memory stats
+	aggMemory := int64(len(rows)) * 288 // Estimated bytes used before flush
 	log.Info().
 		Int("run_index", p.runCount-1).
 		Int("prefixes", len(rows)).
+		Int64("aggregator_memory_mb", aggMemory/(1024*1024)).
+		Int64("buffer_size_kb", bufferSize/1024).
 		Dur("duration_ms", time.Since(start)).
 		Msg("run file written")
 
@@ -504,15 +551,37 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (uint6
 		return 0, 0, nil
 	}
 
+	// Calculate per-reader buffer size for k-way merge
+	// Divide merge budget by number of run files, clamp to reasonable range
+	numRunFiles := len(p.runFiles)
+	perReaderBuffer := p.config.MergeBudget() / int64(numRunFiles)
+	const minBuffer = 64 * 1024
+	const maxBuffer = 8 * 1024 * 1024
+	if perReaderBuffer < minBuffer {
+		perReaderBuffer = minBuffer
+	} else if perReaderBuffer > maxBuffer {
+		perReaderBuffer = maxBuffer
+	}
+
 	log.Info().
-		Int("run_files", len(p.runFiles)).
+		Int("run_files", numRunFiles).
+		Int64("per_reader_buffer_kb", perReaderBuffer/1024).
 		Msg("merge phase starting")
 
-	merger, err := NewMergeIterator(p.runFiles, p.config.RunFileBufferSize)
+	merger, err := NewMergeIterator(p.runFiles, int(perReaderBuffer))
 	if err != nil {
 		return 0, 0, fmt.Errorf("create merge iterator: %w", err)
 	}
 	defer func() { _ = merger.RemoveAll() }()
+
+	// Index build budget provides guidance for the streaming phase
+	// Memory grows ~75 bytes per prefix during build
+	indexBudget := p.config.IndexBuildBudget()
+	estimatedMaxPrefixes := indexBudget / 75
+	log.Debug().
+		Int64("index_budget_mb", indexBudget/(1024*1024)).
+		Int64("estimated_max_prefixes", estimatedMaxPrefixes).
+		Msg("index build budget")
 
 	builder, err := NewIndexBuilder(outDir)
 	if err != nil {
