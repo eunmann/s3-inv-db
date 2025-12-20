@@ -371,7 +371,7 @@ func (p *Pipeline) runMergeBuildPhase(_ context.Context, outDir string) (uint64,
 	if err != nil {
 		return 0, 0, fmt.Errorf("create merge iterator: %w", err)
 	}
-	defer merger.RemoveAll() // Clean up run files after merge
+	defer func() { _ = merger.RemoveAll() }() // Clean up run files after merge
 
 	// Create index builder
 	builder, err := NewIndexBuilder(outDir)

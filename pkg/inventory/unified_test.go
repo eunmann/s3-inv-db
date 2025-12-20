@@ -282,7 +282,7 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 	defer parquetReader.Close()
 
 	// Compare outputs
-	for i := range len(testRows) {
+	for i := range testRows {
 		csvRow, csvErr := csvReader.Next()
 		parquetRow, parquetErr := parquetReader.Next()
 
