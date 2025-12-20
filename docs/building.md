@@ -4,7 +4,7 @@ This document explains how to build s3-inv-db indexes from S3 inventory data.
 
 ## Overview
 
-The build process streams S3 inventory CSV files through a pure-Go external sort pipeline to construct a compact, queryable index:
+The build process streams S3 inventory files (CSV or Parquet) through a pure-Go external sort pipeline to construct a compact, queryable index:
 
 ```
 S3 Inventory Files  →  Streaming Aggregation  →  External Sort  →  Index Files
@@ -18,9 +18,9 @@ The pipeline is fully streaming with bounded memory usage, and requires no CGO d
 
 AWS S3 Inventory produces:
 1. A `manifest.json` describing the inventory
-2. Multiple data files (CSV or CSV.GZ)
+2. Multiple data files (CSV, CSV.GZ, or Parquet)
 
-The data files have **no header row**; column order is defined in the manifest's `fileSchema` field.
+CSV files have **no header row**; column order is defined in the manifest's `fileSchema` field. Parquet files have embedded schema that is auto-detected.
 
 **Supported columns:**
 - `Key`: Object key (required)

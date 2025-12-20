@@ -15,7 +15,7 @@ This document describes the high-level architecture of s3-inv-db, explaining how
 │  └──────────┘    └──────────┘    └──────────┘    └──────────┘ │
 │       │               │               │               │        │
 │       ▼               ▼               ▼               ▼        │
-│  CSV.GZ streams   Run files      Sorted stream   Index files   │
+│  Inventory data   Run files      Sorted stream   Index files   │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 
@@ -59,7 +59,7 @@ func (c *Client) StreamObject(ctx, bucket, key string) (io.ReadCloser, error)
 The build pipeline uses a streaming external sort approach with bounded memory:
 
 **Stage A: Streaming Ingest + Chunked Aggregation**
-- Streams CSV chunks from S3 in parallel
+- Streams inventory files (CSV or Parquet) from S3
 - Aggregates prefix statistics in memory using `Aggregator`
 - Uses fixed-size `[MaxTiers]uint64` arrays instead of maps for tier data
 - Flushes to sorted run files when memory threshold is exceeded
