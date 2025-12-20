@@ -106,11 +106,13 @@ Tested different batch sizes for multi-row UPSERT (100k objects):
 | 64 | 1.46s | 624MB | 1.91M |
 | 128 | 1.41s | 607MB | 1.90M |
 | 256 | 1.39s | 590MB | 1.89M |
-| **512** | 1.36s | 590MB | 1.89M |
+| 512 | 1.36s | 590MB | 1.89M |
 | 1024 | 1.44s | 590MB | 1.89M |
+| **1170** | **1.18s** | 590MB | 1.89M |
 
-**Current default:** 512 rows per statement. Optimal for large delta map flushes.
-Smaller batches increase exec call overhead; larger batches increase SQL parsing overhead.
+**Current default:** 1170 rows per statement (100% of SQLite variable limit).
+Computed as `SQLiteMaxVariables / ColsPerRow` = 32,766 / 28 = 1170 rows.
+Uses 32,760 bound parameters per exec, maximizing throughput.
 
 ## Implemented Optimizations
 
@@ -251,6 +253,87 @@ benefit being reduced (sorted data is faster to index anyway).
 
 4. **Standard aggregator with sorted flush is now fastest** - beats even
    MemoryAggregator while maintaining per-chunk transaction semantics.
+
+## Insert Optimization Exploration — Round 2
+
+Follow-up exploration testing additional strategies and maximizing SQLite variable usage.
+
+### Max Variable Batching (Merged to Main)
+
+Updated batch sizing to use 100% of SQLite's SQLITE_MAX_VARIABLE_NUMBER (32,766).
+
+**Constants:**
+```go
+const (
+    SQLiteMaxVariables = 32766
+    ColsPerRow = 4 + int(tiers.NumTiers)*2  // 28 columns
+    MaxRowsPerBatch = SQLiteMaxVariables / ColsPerRow  // 1170 rows
+)
+```
+
+**Before → After:**
+| Aggregator | Batch Size | Variables Used |
+|------------|------------|----------------|
+| Standard | 512 → **1170** | 14,336 → **32,760** |
+| MemoryAggregator | 1000 → **1170** | 28,000 → **32,760** |
+
+**Result:** ~5% throughput improvement from larger batches.
+
+### Strategy A: Temp Table Without GROUP BY
+
+**Branch:** `feat/temp-table-no-group`
+
+**Hypothesis:** Inserting pre-aggregated rows into unindexed temp table, then
+merging with INSERT...SELECT might be faster than direct UPSERT.
+
+**Implementation:**
+1. Create unindexed `TEMP TABLE temp_deltas`
+2. Batch INSERT sorted, pre-aggregated rows (no GROUP BY needed)
+3. Single `INSERT INTO prefix_stats SELECT ... FROM temp_deltas`
+4. Drop temp table
+
+**Results:**
+| Objects | Temp Table | Baseline | Difference |
+|---------|------------|----------|------------|
+| 100k | 77k obj/s | 81k obj/s | **-5.5%** |
+| 500k | 81k obj/s | 86k obj/s | **-5.6%** |
+
+**Verdict:** REJECTED — Two-step write adds overhead without reducing B-tree work.
+
+### Strategy B: Sorted + Prefix-ID Normalization (Optimized)
+
+**Branch:** `feat/sorted-prefix-id-normalized`
+
+**Hypothesis:** INTEGER PRIMARY KEY might be faster than TEXT for B-tree operations.
+
+**Implementation (optimized from Round 1):**
+1. Batch INSERT prefixes into `prefix_strings` (32,766 rows per batch)
+2. Assign sequential IDs from sorted insert order (no SELECT needed)
+3. Create index on `prefix_strings(prefix)` after inserts
+4. Batch UPSERT stats with INTEGER key (1,170 rows per batch)
+
+**Results:**
+| Objects | Prefix-ID | Baseline | Difference |
+|---------|-----------|----------|------------|
+| 100k | ~83k obj/s | 83k obj/s | ~0% |
+| 500k | 85k obj/s | 89k obj/s | **-4.6%** |
+
+**Verdict:** REJECTED — The overhead of managing two tables and extra index creation
+outweighs any benefit from INTEGER vs TEXT B-tree operations.
+
+### Round 2 Summary
+
+| Strategy | 100k obj/s | 500k obj/s | Status |
+|----------|------------|------------|--------|
+| **S0: Sorted Baseline** | **~85k** | **~89k** | **CURRENT MAIN** |
+| Max Variable Batching | merged | merged | +5% (merged) |
+| A: Temp Table No GROUP | 77k | 81k | rejected (-5%) |
+| B: Prefix-ID Normalized | 83k | 85k | rejected (-5%) |
+
+**Conclusion:** The sorted baseline with max variable batching remains optimal.
+Further strategies add complexity without measurable benefit. The fundamental
+bottleneck is CGO overhead for SQLite operations, which cannot be reduced
+without switching to a different database or using direct C bindings.
 
 ## Remaining Bottlenecks
 
