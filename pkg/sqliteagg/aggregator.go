@@ -87,10 +87,26 @@ type prefixDelta struct {
 	tierBytes  [tiers.NumTiers]uint64
 }
 
-// MultiRowBatchSize is the number of rows per multi-row UPSERT statement.
-// Larger batches reduce SQLite exec calls but increase SQL parsing overhead.
-// 512 is a good balance for per-chunk flushes with 100k+ prefixes.
-const MultiRowBatchSize = 512
+// SQLite parameter limit and optimal batch sizing.
+// SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 32,766 (since SQLite 3.32.0).
+// We use 100% of max for maximum throughput.
+const (
+	// SQLiteMaxVariables is the maximum number of bound parameters per statement.
+	SQLiteMaxVariables = 32766
+
+	// ColsPerRow is the number of columns in prefix_stats table.
+	// 4 base columns + 2 columns per tier (count + bytes).
+	ColsPerRow = 4 + int(tiers.NumTiers)*2
+
+	// MaxRowsPerBatch is the maximum rows per batched statement.
+	// Computed as SQLiteMaxVariables / ColsPerRow (100% utilization).
+	// At 28 columns, this yields 1170 rows using 32,760 variables.
+	MaxRowsPerBatch = SQLiteMaxVariables / ColsPerRow
+
+	// MultiRowBatchSize is the number of rows per multi-row UPSERT statement.
+	// Uses MaxRowsPerBatch for optimal throughput while staying under limits.
+	MultiRowBatchSize = MaxRowsPerBatch
+)
 
 // Aggregator aggregates S3 inventory prefixes into a SQLite database.
 type Aggregator struct {
@@ -280,8 +296,8 @@ func (a *Aggregator) BeginChunk() error {
 		return fmt.Errorf("prepare multi-row upsert statement: %w", err)
 	}
 
-	// Calculate columns per row for arg slicing
-	a.colsPerRow = 4 + int(tiers.NumTiers)*2
+	// Use shared constant for columns per row
+	a.colsPerRow = ColsPerRow
 
 	// Initialize reusable buffers for flush operations
 	a.batchArgs = make([]interface{}, MultiRowBatchSize*a.colsPerRow)

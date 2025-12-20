@@ -31,7 +31,7 @@ func DefaultMemoryAggregatorConfig(dbPath string) MemoryAggregatorConfig {
 	return MemoryAggregatorConfig{
 		DBPath:            dbPath,
 		InitialCapacity:   1_000_000,
-		MultiRowBatchSize: 1000,
+		MultiRowBatchSize: MaxRowsPerBatch, // Use optimal batch size from shared constants
 	}
 }
 
@@ -172,8 +172,8 @@ func (m *MemoryAggregator) Finalize() error {
 		return fmt.Errorf("create table: %w", err)
 	}
 
-	// Build multi-row INSERT statement
-	colsPerRow := 4 + int(tiers.NumTiers)*2
+	// Build multi-row INSERT statement using shared constants
+	colsPerRow := ColsPerRow
 	batchSize := m.cfg.MultiRowBatchSize
 
 	oneRow := "(?" + strings.Repeat(", ?", colsPerRow-1) + ")"
