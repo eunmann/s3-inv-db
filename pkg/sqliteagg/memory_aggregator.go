@@ -153,19 +153,21 @@ func (m *MemoryAggregator) Finalize() error {
 		}
 	}
 
-	// Create table WITHOUT PRIMARY KEY (faster inserts, no B-tree maintenance)
+	// Create table with WITHOUT ROWID for efficient primary key storage.
+	// Since we insert prefixes in sorted order, this is efficient and avoids
+	// the extra rowid B-tree overhead. The prefix column is the natural primary key.
 	var tierCols strings.Builder
 	for i := range tiers.NumTiers {
-		tierCols.WriteString(fmt.Sprintf(", t%d_count INTEGER, t%d_bytes INTEGER", i, i))
+		tierCols.WriteString(fmt.Sprintf(", t%d_count INTEGER NOT NULL, t%d_bytes INTEGER NOT NULL", i, i))
 	}
 
 	createSQL := fmt.Sprintf(`
 		CREATE TABLE prefix_stats (
-			prefix TEXT,
-			depth INTEGER,
-			total_count INTEGER,
-			total_bytes INTEGER%s
-		)
+			prefix TEXT NOT NULL PRIMARY KEY,
+			depth INTEGER NOT NULL,
+			total_count INTEGER NOT NULL,
+			total_bytes INTEGER NOT NULL%s
+		) WITHOUT ROWID
 	`, tierCols.String())
 
 	if _, err := db.Exec(createSQL); err != nil {
@@ -281,12 +283,9 @@ func (m *MemoryAggregator) Finalize() error {
 	}
 	insertDuration := time.Since(insertStart)
 
-	// Create index AFTER all inserts (much faster than maintaining during writes)
-	indexStart := time.Now()
-	if _, err := db.Exec("CREATE UNIQUE INDEX idx_prefix ON prefix_stats(prefix)"); err != nil {
-		return fmt.Errorf("create index: %w", err)
-	}
-	indexDuration := time.Since(indexStart)
+	// No separate index needed - WITHOUT ROWID table with PRIMARY KEY provides
+	// the index as the clustered table structure itself.
+	indexDuration := time.Duration(0)
 
 	// Checkpoint WAL to main database file
 	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {

@@ -205,7 +205,10 @@ func Open(cfg Config) (*Aggregator, error) {
 }
 
 func createSchema(db *sql.DB) error {
-	// Build prefix_stats table with tier columns
+	// Build prefix_stats table with tier columns.
+	// Use WITHOUT ROWID for efficient primary key storage - the table is stored
+	// as a single B-tree keyed by prefix, avoiding the extra rowid B-tree and
+	// indirection. Sequential ORDER BY prefix scans become a straight B-tree walk.
 	var tierCols strings.Builder
 	for i := range tiers.NumTiers {
 		tierCols.WriteString(fmt.Sprintf(",\n    t%d_count INTEGER NOT NULL DEFAULT 0", i))
@@ -214,11 +217,11 @@ func createSchema(db *sql.DB) error {
 
 	createPrefixStats := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS prefix_stats (
-			prefix TEXT PRIMARY KEY,
+			prefix TEXT NOT NULL PRIMARY KEY,
 			depth INTEGER NOT NULL,
 			total_count INTEGER NOT NULL DEFAULT 0,
 			total_bytes INTEGER NOT NULL DEFAULT 0%s
-		)
+		) WITHOUT ROWID
 	`, tierCols.String())
 
 	if _, err := db.Exec(createPrefixStats); err != nil {
