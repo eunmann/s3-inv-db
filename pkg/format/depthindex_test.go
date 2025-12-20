@@ -244,8 +244,8 @@ func TestDepthIndexLarge(t *testing.T) {
 	b := NewDepthIndexBuilder()
 
 	// Create 10 levels with varying positions
-	for d := uint32(0); d < 10; d++ {
-		for p := uint64(0); p < 100; p++ {
+	for d := range uint32(10) {
+		for p := range uint64(100) {
 			pos := uint64(d)*100 + p
 			b.Add(pos, d)
 		}
@@ -266,7 +266,7 @@ func TestDepthIndexLarge(t *testing.T) {
 	}
 
 	// Verify each depth has 100 positions
-	for d := uint32(0); d < 10; d++ {
+	for d := range uint32(10) {
 		positions, err := idx.GetPositionsAtDepth(d)
 		if err != nil {
 			t.Fatalf("GetPositionsAtDepth(%d) failed: %v", d, err)
@@ -341,7 +341,7 @@ func TestDepthIteratorCount(t *testing.T) {
 	dir := t.TempDir()
 	b := NewDepthIndexBuilder()
 
-	for p := uint64(0); p < 10; p++ {
+	for p := range uint64(10) {
 		b.Add(p, 1)
 	}
 

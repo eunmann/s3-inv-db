@@ -33,7 +33,7 @@ func (w *TierStatsWriter) Write(result *triebuild.Result) error {
 	}
 
 	// Create tier_stats directory only when there's data to write
-	if err := os.MkdirAll(w.tierDir, 0755); err != nil {
+	if err := os.MkdirAll(w.tierDir, 0o755); err != nil {
 		return fmt.Errorf("create tier_stats dir: %w", err)
 	}
 
@@ -71,12 +71,12 @@ func (w *TierStatsWriter) writeTierArray(path string, nodes []triebuild.Node, ti
 		return fmt.Errorf("create array writer: %w", err)
 	}
 
-	for i, node := range nodes {
+	for i := range nodes {
 		var val uint64
 		if isBytes {
-			val = node.TierBytes[tierID]
+			val = nodes[i].TierBytes[tierID]
 		} else {
-			val = node.TierCounts[tierID]
+			val = nodes[i].TierCounts[tierID]
 		}
 		if err := writer.WriteU64(val); err != nil {
 			writer.Close()

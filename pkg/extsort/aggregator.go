@@ -12,25 +12,16 @@ import (
 // The aggregator is NOT safe for concurrent use. For concurrent access,
 // use multiple aggregators or external synchronization.
 type Aggregator struct {
-	// prefixes maps prefix strings to their aggregated statistics.
-	prefixes map[string]*PrefixStats
-
-	// statsPool is a pool of PrefixStats structs to reduce allocations.
-	statsPool sync.Pool
-
-	// maxDepth limits the maximum prefix depth to track (0 = unlimited).
-	maxDepth int
-
-	// objectCount tracks the total number of objects processed.
-	objectCount int64
-
-	// bytesProcessed tracks the total bytes processed.
+	prefixes       map[string]*PrefixStats
+	statsPool      sync.Pool
+	maxDepth       int
+	objectCount    int64
 	bytesProcessed int64
 }
 
 // NewAggregator creates a new prefix aggregator with the given initial capacity.
 // Use maxDepth=0 for unlimited depth.
-func NewAggregator(initialCapacity int, maxDepth int) *Aggregator {
+func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 	if initialCapacity <= 0 {
 		initialCapacity = 100000
 	}
@@ -51,18 +42,14 @@ func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 	a.objectCount++
 	a.bytesProcessed += int64(size)
 
-	// Add to root prefix (empty string represents the root)
 	a.accumulate("", 0, size, tierID)
 
-	// Extract and accumulate all directory prefixes
 	depth := uint16(1)
-	for i := 0; i < len(key); i++ {
+	for i := range len(key) {
 		if key[i] == '/' {
-			// Check depth limit
 			if a.maxDepth > 0 && int(depth) > a.maxDepth {
 				break
 			}
-			// Include the trailing slash in the prefix
 			prefix := key[:i+1]
 			a.accumulate(prefix, depth, size, tierID)
 			depth++
@@ -74,8 +61,11 @@ func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 func (a *Aggregator) accumulate(prefix string, depth uint16, size uint64, tierID tiers.ID) {
 	stats, ok := a.prefixes[prefix]
 	if !ok {
-		// Get from pool or allocate new
-		stats = a.statsPool.Get().(*PrefixStats)
+		poolObj := a.statsPool.Get()
+		stats, ok = poolObj.(*PrefixStats)
+		if !ok {
+			panic("statsPool contained unexpected type")
+		}
 		stats.Depth = depth
 		a.prefixes[prefix] = stats
 	}
@@ -120,23 +110,18 @@ func (a *Aggregator) Drain() []*PrefixRow {
 		return nil
 	}
 
-	// Collect all prefixes into a slice
 	rows := make([]*PrefixRow, 0, len(a.prefixes))
 	for prefix, stats := range a.prefixes {
 		row := stats.ToPrefixRow(prefix)
 		rows = append(rows, row)
-
-		// Return stats to pool
 		stats.Reset()
 		a.statsPool.Put(stats)
 	}
 
-	// Clear the map (reuse the underlying memory)
 	for k := range a.prefixes {
 		delete(a.prefixes, k)
 	}
 
-	// Reset counters
 	a.objectCount = 0
 	a.bytesProcessed = 0
 

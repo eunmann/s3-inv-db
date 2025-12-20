@@ -2,6 +2,7 @@ package extsort
 
 import (
 	"container/heap"
+	"errors"
 	"io"
 )
 
@@ -11,7 +12,6 @@ import (
 type MergeIterator struct {
 	readers []*RunFileReader
 	heap    *mergeHeap
-	current *PrefixRow // current merged result
 	err     error
 }
 
@@ -37,7 +37,11 @@ func (h *mergeHeap) Swap(i, j int) {
 }
 
 func (h *mergeHeap) Push(x interface{}) {
-	h.items = append(h.items, x.(mergeItem))
+	item, ok := x.(mergeItem)
+	if !ok {
+		panic("heap Push received unexpected type")
+	}
+	h.items = append(h.items, item)
 }
 
 func (h *mergeHeap) Pop() interface{} {
@@ -59,7 +63,6 @@ func NewMergeIterator(paths []string, bufferSize int) (*MergeIterator, error) {
 	for _, path := range paths {
 		r, err := OpenRunFile(path, bufferSize)
 		if err != nil {
-			// Close any already opened readers
 			for _, opened := range readers {
 				opened.Close()
 			}
@@ -79,10 +82,9 @@ func NewMergeIteratorFromReaders(readers []*RunFileReader) (*MergeIterator, erro
 		heap:    &mergeHeap{items: make([]mergeItem, 0, len(readers))},
 	}
 
-	// Initialize heap with first row from each reader
 	for i, r := range readers {
 		row, err := r.Read()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			continue // empty reader
 		}
 		if err != nil {
@@ -108,23 +110,27 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 		return nil, io.EOF
 	}
 
-	// Pop the smallest item
-	item := heap.Pop(m.heap).(mergeItem)
+	itemAny := heap.Pop(m.heap)
+	item, ok := itemAny.(mergeItem)
+	if !ok {
+		panic("heap Pop returned unexpected type")
+	}
 	result := item.row
 
-	// Read next row from the same reader and push to heap
-	if err := m.advanceReader(item.readerIdx); err != nil && err != io.EOF {
+	if err := m.advanceReader(item.readerIdx); err != nil && !errors.Is(err, io.EOF) {
 		m.err = err
 		return nil, err
 	}
 
-	// Merge any duplicates (same prefix from other readers)
 	for m.heap.Len() > 0 && m.heap.items[0].row.Prefix == result.Prefix {
-		dup := heap.Pop(m.heap).(mergeItem)
+		dupAny := heap.Pop(m.heap)
+		dup, ok := dupAny.(mergeItem)
+		if !ok {
+			panic("heap Pop returned unexpected type")
+		}
 		result.Merge(dup.row)
 
-		// Advance that reader too
-		if err := m.advanceReader(dup.readerIdx); err != nil && err != io.EOF {
+		if err := m.advanceReader(dup.readerIdx); err != nil && !errors.Is(err, io.EOF) {
 			m.err = err
 			return nil, err
 		}

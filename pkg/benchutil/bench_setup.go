@@ -9,6 +9,7 @@ import (
 // SkipIfNoLongBench skips the benchmark if S3INV_LONG_BENCH is not set.
 // Use this to gate long-running benchmarks that shouldn't run by default.
 func SkipIfNoLongBench(b *testing.B) {
+	b.Helper()
 	if os.Getenv("S3INV_LONG_BENCH") == "" {
 		b.Skip("set S3INV_LONG_BENCH=1 to run scaling benchmark")
 	}

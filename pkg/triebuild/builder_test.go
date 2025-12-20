@@ -344,7 +344,7 @@ func TestBuildFromKeys_LongPath(t *testing.T) {
 	// Create a very deep path
 	var keys []string
 	path := ""
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		path += "dir/"
 	}
 	path += "file.txt"
@@ -474,7 +474,7 @@ func TestBuildFromKeys_AlphabeticalOrder(t *testing.T) {
 	}
 }
 
-// Helper function
+// Helper function.
 func countSlashes(s string) int {
 	count := 0
 	for _, c := range s {

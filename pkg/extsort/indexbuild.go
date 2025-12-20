@@ -1,6 +1,7 @@
 package extsort
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,39 +20,22 @@ import (
 type IndexBuilder struct {
 	outDir string
 
-	// Writers for columnar arrays
-	subtreeEndW        *format.ArrayWriter
-	objectCountW       *format.ArrayWriter
-	totalBytesW        *format.ArrayWriter
-	depthW             *format.ArrayWriter
-	maxDepthInSubtreeW *format.ArrayWriter
+	objectCountW *format.ArrayWriter
+	totalBytesW  *format.ArrayWriter
+	depthW       *format.ArrayWriter
 
-	// Tier stats writers (one pair per present tier)
 	tierCountWriters map[tiers.ID]*format.ArrayWriter
 	tierBytesWriters map[tiers.ID]*format.ArrayWriter
 
-	// MPHF builder (collects all prefixes, built at end)
-	mphfBuilder *format.MPHFBuilder
-
-	// Depth index builder
+	mphfBuilder       *format.MPHFBuilder
 	depthIndexBuilder *format.DepthIndexBuilder
 
-	// Stack for computing subtree ranges
-	stack []stackEntry
-
-	// Current position counter
+	stack    []stackEntry
 	posCount uint64
-
-	// Track max depth
 	maxDepth uint32
 
-	// Track which tiers have data
-	presentTiers map[tiers.ID]bool
-
-	// Buffered subtree_end values (written at end after finalization)
-	subtreeEnds []uint64
-
-	// Buffered max_depth_in_subtree values
+	presentTiers       map[tiers.ID]bool
+	subtreeEnds        []uint64
 	maxDepthInSubtrees []uint32
 
 	closed bool
@@ -67,7 +51,7 @@ type stackEntry struct {
 
 // NewIndexBuilder creates a streaming index builder.
 func NewIndexBuilder(outDir string) (*IndexBuilder, error) {
-	if err := os.MkdirAll(outDir, 0755); err != nil {
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
 
@@ -85,7 +69,6 @@ func NewIndexBuilder(outDir string) (*IndexBuilder, error) {
 
 	var err error
 
-	// Open columnar array writers
 	b.objectCountW, err = format.NewArrayWriter(filepath.Join(outDir, "object_count.u64"), 8)
 	if err != nil {
 		return nil, fmt.Errorf("create object_count writer: %w", err)
@@ -132,19 +115,14 @@ func (b *IndexBuilder) cleanup() {
 // Add processes a single PrefixRow from the sorted stream.
 // Prefixes must be added in lexicographic (sorted) order.
 func (b *IndexBuilder) Add(row *PrefixRow) error {
-	// Find the common ancestor with the current stack
 	commonDepth := b.findCommonAncestorDepth(row.Prefix, int(row.Depth))
-
-	// Close nodes above common ancestor
 	if err := b.closeNodesAbove(commonDepth); err != nil {
 		return err
 	}
 
-	// Assign position
 	pos := b.posCount
 	b.posCount++
 
-	// Push new node onto stack
 	b.stack = append(b.stack, stackEntry{
 		prefix:            row.Prefix,
 		pos:               pos,
@@ -152,18 +130,13 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 		maxDepthInSubtree: uint32(row.Depth),
 	})
 
-	// Track max depth
 	if uint32(row.Depth) > b.maxDepth {
 		b.maxDepth = uint32(row.Depth)
 	}
 
-	// Add to depth index builder
 	b.depthIndexBuilder.Add(pos, uint32(row.Depth))
-
-	// Add to MPHF builder
 	b.mphfBuilder.Add(row.Prefix, pos)
 
-	// Write stats to columnar arrays
 	if err := b.objectCountW.WriteU64(row.Count); err != nil {
 		return fmt.Errorf("write object_count: %w", err)
 	}
@@ -174,30 +147,23 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 		return fmt.Errorf("write depth: %w", err)
 	}
 
-	// Reserve space for subtreeEnd and maxDepthInSubtree (filled during finalize)
 	b.subtreeEnds = append(b.subtreeEnds, 0)
 	b.maxDepthInSubtrees = append(b.maxDepthInSubtrees, 0)
 
-	// Track tier data
 	for tierID := tiers.ID(0); tierID < tiers.NumTiers; tierID++ {
 		if row.TierCounts[tierID] > 0 || row.TierBytes[tierID] > 0 {
 			b.presentTiers[tierID] = true
 		}
 	}
 
-	// Write tier stats (lazy create writers)
-	if err := b.writeTierStats(row); err != nil {
-		return err
-	}
-
-	return nil
+	return b.writeTierStats(row)
 }
 
 // findCommonAncestorDepth finds the depth of the deepest common ancestor.
-func (b *IndexBuilder) findCommonAncestorDepth(prefix string, depth int) int {
+func (b *IndexBuilder) findCommonAncestorDepth(prefix string, _ int) int {
 	commonDepth := 0
 
-	for i := 0; i < len(b.stack); i++ {
+	for i := range len(b.stack) {
 		entry := &b.stack[i]
 		// Check if stack entry is a prefix of the new prefix
 		if len(entry.prefix) <= len(prefix) && prefix[:len(entry.prefix)] == entry.prefix {
@@ -229,14 +195,10 @@ func (b *IndexBuilder) closeTopNode() error {
 	top := b.stack[len(b.stack)-1]
 	b.stack = b.stack[:len(b.stack)-1]
 
-	// subtree_end is the last assigned pos (posCount - 1)
 	subtreeEnd := b.posCount - 1
-
-	// Store subtree_end and maxDepthInSubtree
 	b.subtreeEnds[top.pos] = subtreeEnd
 	b.maxDepthInSubtrees[top.pos] = top.maxDepthInSubtree
 
-	// Propagate max depth to parent
 	if len(b.stack) > 0 {
 		if top.maxDepthInSubtree > b.stack[len(b.stack)-1].maxDepthInSubtree {
 			b.stack[len(b.stack)-1].maxDepthInSubtree = top.maxDepthInSubtree
@@ -249,22 +211,18 @@ func (b *IndexBuilder) closeTopNode() error {
 // writeTierStats writes tier statistics for a row.
 func (b *IndexBuilder) writeTierStats(row *PrefixRow) error {
 	for tierID := tiers.ID(0); tierID < tiers.NumTiers; tierID++ {
-		// Check if we need to create a writer for this tier
 		_, hasCountWriter := b.tierCountWriters[tierID]
 		_, hasBytesWriter := b.tierBytesWriters[tierID]
 
 		if !hasCountWriter || !hasBytesWriter {
-			// No writers yet - check if this row has data for this tier
 			if row.TierCounts[tierID] == 0 && row.TierBytes[tierID] == 0 {
 				continue
 			}
-			// First data for this tier - need to create writers and backfill zeros
 			if err := b.createTierWriter(tierID, row); err != nil {
 				return err
 			}
 		}
 
-		// Write tier data if writer exists
 		if countW, ok := b.tierCountWriters[tierID]; ok {
 			if err := countW.WriteU64(row.TierCounts[tierID]); err != nil {
 				return fmt.Errorf("write tier %d count: %w", tierID, err)
@@ -280,18 +238,15 @@ func (b *IndexBuilder) writeTierStats(row *PrefixRow) error {
 }
 
 // createTierWriter creates writers for a tier and backfills zeros for previous positions.
-func (b *IndexBuilder) createTierWriter(tierID tiers.ID, row *PrefixRow) error {
-	// Create tier_stats directory if needed
+func (b *IndexBuilder) createTierWriter(tierID tiers.ID, _ *PrefixRow) error {
 	tierDir := filepath.Join(b.outDir, "tier_stats")
-	if err := os.MkdirAll(tierDir, 0755); err != nil {
+	if err := os.MkdirAll(tierDir, 0o755); err != nil {
 		return fmt.Errorf("create tier_stats dir: %w", err)
 	}
 
-	// Get tier info for file naming
 	mapping := tiers.NewMapping()
 	info := mapping.ByID(tierID)
 
-	// Create count writer using tier name
 	countPath := filepath.Join(tierDir, info.FilePrefix+"_count.u64")
 	countW, err := format.NewArrayWriter(countPath, 8)
 	if err != nil {
@@ -299,7 +254,6 @@ func (b *IndexBuilder) createTierWriter(tierID tiers.ID, row *PrefixRow) error {
 	}
 	b.tierCountWriters[tierID] = countW
 
-	// Create bytes writer using tier name
 	bytesPath := filepath.Join(tierDir, info.FilePrefix+"_bytes.u64")
 	bytesW, err := format.NewArrayWriter(bytesPath, 8)
 	if err != nil {
@@ -308,8 +262,7 @@ func (b *IndexBuilder) createTierWriter(tierID tiers.ID, row *PrefixRow) error {
 	}
 	b.tierBytesWriters[tierID] = bytesW
 
-	// Backfill zeros for all previous positions
-	for i := uint64(0); i < b.posCount-1; i++ {
+	for range b.posCount - 1 {
 		if err := countW.WriteU64(0); err != nil {
 			return fmt.Errorf("backfill tier %s count: %w", info.Name, err)
 		}
@@ -325,7 +278,7 @@ func (b *IndexBuilder) createTierWriter(tierID tiers.ID, row *PrefixRow) error {
 func (b *IndexBuilder) AddAll(iter *MergeIterator) error {
 	for {
 		row, err := iter.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -345,12 +298,10 @@ func (b *IndexBuilder) Finalize() error {
 	}
 	b.closed = true
 
-	// Close all remaining nodes on stack
 	if err := b.closeNodesAbove(0); err != nil {
 		return fmt.Errorf("close remaining nodes: %w", err)
 	}
 
-	// Close columnar array writers for stats
 	if err := b.objectCountW.Close(); err != nil {
 		return fmt.Errorf("close object_count: %w", err)
 	}
@@ -361,7 +312,6 @@ func (b *IndexBuilder) Finalize() error {
 		return fmt.Errorf("close depth: %w", err)
 	}
 
-	// Close tier writers
 	for tierID, w := range b.tierCountWriters {
 		if err := w.Close(); err != nil {
 			return fmt.Errorf("close tier %d count: %w", tierID, err)
@@ -373,7 +323,6 @@ func (b *IndexBuilder) Finalize() error {
 		}
 	}
 
-	// Write subtree_end array
 	subtreeEndW, err := format.NewArrayWriter(filepath.Join(b.outDir, "subtree_end.u64"), 8)
 	if err != nil {
 		return fmt.Errorf("create subtree_end writer: %w", err)
@@ -388,7 +337,6 @@ func (b *IndexBuilder) Finalize() error {
 		return fmt.Errorf("close subtree_end: %w", err)
 	}
 
-	// Write max_depth_in_subtree array
 	maxDepthW, err := format.NewArrayWriter(filepath.Join(b.outDir, "max_depth_in_subtree.u32"), 4)
 	if err != nil {
 		return fmt.Errorf("create max_depth_in_subtree writer: %w", err)
@@ -403,17 +351,14 @@ func (b *IndexBuilder) Finalize() error {
 		return fmt.Errorf("close max_depth_in_subtree: %w", err)
 	}
 
-	// Build depth index
 	if err := b.depthIndexBuilder.Build(b.outDir); err != nil {
 		return fmt.Errorf("build depth index: %w", err)
 	}
 
-	// Build MPHF
 	if err := b.mphfBuilder.Build(b.outDir); err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
 
-	// Write tier manifest if we have tier data
 	if len(b.presentTiers) > 0 {
 		presentTierList := make([]tiers.ID, 0, len(b.presentTiers))
 		for tierID := range b.presentTiers {
@@ -424,12 +369,10 @@ func (b *IndexBuilder) Finalize() error {
 		}
 	}
 
-	// Write manifest
 	if err := format.WriteManifest(b.outDir, b.posCount, b.maxDepth); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
 
-	// Sync directory
 	if err := format.SyncDir(b.outDir); err != nil {
 		return fmt.Errorf("sync dir: %w", err)
 	}

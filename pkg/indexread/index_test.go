@@ -334,8 +334,8 @@ func TestLargeDataset(t *testing.T) {
 
 	// Generate keys
 	var keys []string
-	for i := 0; i < 100; i++ {
-		for j := 0; j < 10; j++ {
+	for i := range 100 {
+		for j := range 10 {
 			key := prefixFromInt(i) + prefixFromInt(j) + "file.txt"
 			keys = append(keys, key)
 		}
@@ -361,7 +361,7 @@ func TestLargeDataset(t *testing.T) {
 	}
 }
 
-// Helper to generate unique prefix strings
+// Helper to generate unique prefix strings.
 func prefixFromInt(i int) string {
 	return string('a'+byte(i%26)) + string('a'+byte(i/26%26)) + "/"
 }

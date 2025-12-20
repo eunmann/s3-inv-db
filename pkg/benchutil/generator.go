@@ -4,6 +4,7 @@ package benchutil
 import (
 	"fmt"
 	"math/rand"
+	"strconv"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -86,7 +87,7 @@ func NewGenerator(cfg GeneratorConfig) *Generator {
 func (g *Generator) Generate() []FakeObject {
 	objects := make([]FakeObject, g.cfg.NumObjects)
 
-	for i := 0; i < g.cfg.NumObjects; i++ {
+	for i := range g.cfg.NumObjects {
 		objects[i] = g.generateObject()
 	}
 
@@ -99,7 +100,7 @@ func (g *Generator) GenerateChannel() <-chan FakeObject {
 
 	go func() {
 		defer close(ch)
-		for i := 0; i < g.cfg.NumObjects; i++ {
+		for range g.cfg.NumObjects {
 			ch <- g.generateObject()
 		}
 	}()
@@ -121,7 +122,7 @@ func (g *Generator) generateKey() string {
 
 	// Build path
 	path := ""
-	for d := 0; d < depth; d++ {
+	for range depth {
 		segment := g.generateSegment()
 		path += segment + "/"
 	}
@@ -138,7 +139,7 @@ func (g *Generator) generateSegment() string {
 	switch segmentType {
 	case 0: // Date-like: 2024, 01, 15
 		formats := []string{
-			fmt.Sprintf("%d", 2020+g.rng.Intn(5)),    // year
+			strconv.Itoa(2020 + g.rng.Intn(5)),       // year
 			fmt.Sprintf("%02d", 1+g.rng.Intn(12)),    // month
 			fmt.Sprintf("%02d", 1+g.rng.Intn(28)),    // day
 			fmt.Sprintf("hour=%02d", g.rng.Intn(24)), // hour partition
@@ -243,7 +244,7 @@ func generateDeepNarrowKeys(size int) []string {
 	idx := 0
 	for branch := 0; idx < size && branch < numBranches; branch++ {
 		prefix := ""
-		for d := 0; d < depth; d++ {
+		for range depth {
 			prefix += fmt.Sprintf("%c/", 'a'+byte(branch))
 		}
 		for f := 0; idx < size && f < filesPerLeaf; f++ {
@@ -308,7 +309,7 @@ func generateS3RealisticKeys(size int) []string {
 	months := []string{"01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"}
 	extensions := []string{".json", ".csv", ".parquet", ".txt", ".gz"}
 
-	for i := 0; i < size; i++ {
+	for i := range size {
 		prefix := prefixes[rng.Intn(len(prefixes))]
 		year := years[rng.Intn(len(years))]
 		month := months[rng.Intn(len(months))]
@@ -324,7 +325,7 @@ func generateS3RealisticKeys(size int) []string {
 
 func generateWideSingleLevelKeys(size int) []string {
 	keys := make([]string, size)
-	for i := 0; i < size; i++ {
+	for i := range size {
 		keys[i] = fmt.Sprintf("root/child%07d/file.txt", i)
 	}
 	return keys

@@ -78,7 +78,6 @@ func OpenFileWithOptions(path string, opts OpenOptions) (*CSVReader, error) {
 	closers := make([]io.Closer, 0, 2)
 	closers = append(closers, f)
 
-	// Check for gzip compression by extension or magic bytes
 	if strings.HasSuffix(strings.ToLower(path), ".gz") {
 		gzr, err := gzip.NewReader(reader)
 		if err != nil {
@@ -91,10 +90,9 @@ func OpenFileWithOptions(path string, opts OpenOptions) (*CSVReader, error) {
 
 	csvr := csv.NewReader(reader)
 	csvr.ReuseRecord = true
-	csvr.FieldsPerRecord = -1 // Variable field count
-	csvr.LazyQuotes = true    // Handle malformed quotes
+	csvr.FieldsPerRecord = -1
+	csvr.LazyQuotes = true
 
-	// Read header and find column indices
 	header, err := csvr.Read()
 	if err != nil {
 		for _, c := range closers {
@@ -215,7 +213,6 @@ func OpenFileWithSchemaOptions(path string, opts SchemaOptions) (*CSVReader, err
 	closers := make([]io.Closer, 0, 2)
 	closers = append(closers, f)
 
-	// Check for gzip compression by extension
 	if strings.HasSuffix(strings.ToLower(path), ".gz") {
 		gzr, err := gzip.NewReader(reader)
 		if err != nil {

@@ -56,13 +56,13 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 	b.Helper()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		b.StopTimer()
 
 		tmpDir := b.TempDir()
 		outDir := filepath.Join(tmpDir, "index")
 		runDir := filepath.Join(tmpDir, "runs")
-		os.MkdirAll(runDir, 0755)
+		os.MkdirAll(runDir, 0o755)
 
 		// Generate synthetic data
 		gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(numObjects))
@@ -195,7 +195,7 @@ func BenchmarkExtsortPhases(b *testing.B) {
 
 	b.Run("aggregation", func(b *testing.B) {
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			agg := NewAggregator(100000, 0)
 			for _, obj := range objects {
 				agg.AddObject(obj.Key, obj.Size, obj.TierID)
@@ -206,7 +206,7 @@ func BenchmarkExtsortPhases(b *testing.B) {
 
 	b.Run("sort_and_write_run", func(b *testing.B) {
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			b.StopTimer()
 			// Pre-aggregate
 			agg := NewAggregator(100000, 0)
@@ -241,7 +241,7 @@ func BenchmarkExtsortPhases(b *testing.B) {
 		writer.Close()
 
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			merger, _ := NewMergeIterator([]string{runPath}, 4*1024*1024)
 			for {
 				_, err := merger.Next()
@@ -269,7 +269,7 @@ func BenchmarkExtsortPhases(b *testing.B) {
 		writer.Close()
 
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for i := range b.N {
 			b.StopTimer()
 			outDir := filepath.Join(tmpDir, fmt.Sprintf("index-%d", i))
 			b.StartTimer()

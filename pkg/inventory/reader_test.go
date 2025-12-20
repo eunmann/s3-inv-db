@@ -52,7 +52,7 @@ func TestOpenFile_CSV(t *testing.T) {
 	csvPath := filepath.Join(dir, "test.csv")
 
 	content := "Bucket,Key,Size,LastModified\nmy-bucket,a/b/c.txt,1024,2024-01-01\nmy-bucket,d/e.txt,2048,2024-01-02\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -95,7 +95,7 @@ func TestOpenFile_CSVGZ(t *testing.T) {
 	_, _ = gzw.Write([]byte(content))
 	gzw.Close()
 
-	if err := os.WriteFile(gzPath, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(gzPath, buf.Bytes(), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -127,7 +127,7 @@ func TestOpenFile_MissingKeyColumn(t *testing.T) {
 	csvPath := filepath.Join(dir, "test.csv")
 
 	content := "Bucket,Size\nmy-bucket,1024\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -142,7 +142,7 @@ func TestOpenFile_MissingSizeColumn(t *testing.T) {
 	csvPath := filepath.Join(dir, "test.csv")
 
 	content := "Bucket,Key\nmy-bucket,a/b.txt\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -157,7 +157,7 @@ func TestOpenFile_CaseInsensitiveHeaders(t *testing.T) {
 	csvPath := filepath.Join(dir, "test.csv")
 
 	content := "BUCKET,KEY,SIZE\nmy-bucket,test.txt,512\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -181,7 +181,7 @@ func TestOpenFile_WhitespaceInHeaders(t *testing.T) {
 	csvPath := filepath.Join(dir, "test.csv")
 
 	content := "  Key  ,  Size  \ntest.txt,256\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -343,7 +343,7 @@ func TestOpenFile_InvalidGzip(t *testing.T) {
 	gzPath := filepath.Join(dir, "invalid.csv.gz")
 
 	// Write non-gzip content with .gz extension
-	if err := os.WriteFile(gzPath, []byte("not gzip content"), 0644); err != nil {
+	if err := os.WriteFile(gzPath, []byte("not gzip content"), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -367,7 +367,7 @@ func TestOpenFileWithSchema(t *testing.T) {
 
 	// AWS S3 inventory CSV files have no header
 	content := "my-bucket,a/b/c.txt,1024,2024-01-01\nmy-bucket,d/e.txt,2048,2024-01-02\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -412,7 +412,7 @@ func TestOpenFileWithSchema_CSVGZ(t *testing.T) {
 	_, _ = gzw.Write([]byte(content))
 	gzw.Close()
 
-	if err := os.WriteFile(gzPath, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(gzPath, buf.Bytes(), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -442,7 +442,7 @@ func TestOpenFileWithOptions_TrackTiers(t *testing.T) {
 		"file3.txt,300,INTELLIGENT_TIERING,FREQUENT_ACCESS\n" +
 		"file4.txt,400,INTELLIGENT_TIERING,ARCHIVE_ACCESS\n"
 
-	if err := os.WriteFile(csvPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -475,7 +475,7 @@ func TestOpenFileWithOptions_TrackTiers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
-	if rec.Key != "file3.txt" || rec.TierID != 7 { // ITFrequent = 7
+	if rec.Key != "file3.txt" || rec.TierID != 7 { // Expected ITFrequent tier
 		t.Errorf("file3: got TierID=%d, want 7 (ITFrequent)", rec.TierID)
 	}
 
@@ -484,7 +484,7 @@ func TestOpenFileWithOptions_TrackTiers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
-	if rec.Key != "file4.txt" || rec.TierID != 10 { // ITArchive = 10
+	if rec.Key != "file4.txt" || rec.TierID != 10 { // Expected ITArchive tier
 		t.Errorf("file4: got TierID=%d, want 10 (ITArchive)", rec.TierID)
 	}
 }
@@ -494,7 +494,7 @@ func TestOpenFileWithOptions_NoTrackTiers(t *testing.T) {
 	csvPath := filepath.Join(dir, "test.csv")
 
 	content := "Key,Size,StorageClass\nfile1.txt,100,GLACIER\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -520,7 +520,7 @@ func TestOpenFileWithSchemaOptions_TrackTiers(t *testing.T) {
 
 	// Headerless CSV with columns: Bucket, Key, Size, StorageClass, ITAccessTier
 	content := "my-bucket,file1.txt,100,STANDARD_IA,\nmy-bucket,file2.txt,200,INTELLIGENT_TIERING,INFREQUENT_ACCESS\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -541,7 +541,7 @@ func TestOpenFileWithSchemaOptions_TrackTiers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
-	if rec.TierID != 1 { // StandardIA = 1
+	if rec.TierID != 1 { // Expected StandardIA tier
 		t.Errorf("file1: got TierID=%d, want 1 (StandardIA)", rec.TierID)
 	}
 
@@ -550,7 +550,7 @@ func TestOpenFileWithSchemaOptions_TrackTiers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
-	if rec.TierID != 8 { // ITInfrequent = 8
+	if rec.TierID != 8 { // Expected ITInfrequent tier
 		t.Errorf("file2: got TierID=%d, want 8 (ITInfrequent)", rec.TierID)
 	}
 }

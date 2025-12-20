@@ -32,7 +32,6 @@ func Open(dir string) (*Index, error) {
 	var idx Index
 	var err error
 
-	// Open columnar arrays
 	idx.subtreeEnd, err = format.OpenArray(filepath.Join(dir, "subtree_end.u64"))
 	if err != nil {
 		return nil, fmt.Errorf("open subtree_end: %w", err)
@@ -62,27 +61,23 @@ func Open(dir string) (*Index, error) {
 		return nil, fmt.Errorf("open max_depth_in_subtree: %w", err)
 	}
 
-	// Open depth index
 	idx.depthIndex, err = format.OpenDepthIndex(dir)
 	if err != nil {
 		idx.Close()
 		return nil, fmt.Errorf("open depth index: %w", err)
 	}
 
-	// Open MPHF
 	idx.mphf, err = format.OpenMPHF(dir)
 	if err != nil {
 		idx.Close()
 		return nil, fmt.Errorf("open MPHF: %w", err)
 	}
 
-	// Open tier stats (optional - may not exist)
 	idx.tierStats, err = format.OpenTierStats(dir)
 	if err != nil {
 		idx.Close()
 		return nil, fmt.Errorf("open tier stats: %w", err)
 	}
-	// tierStats may be nil if no tier data exists, which is fine
 
 	idx.count = idx.subtreeEnd.Count()
 	idx.maxDepth = idx.depthIndex.MaxDepth()

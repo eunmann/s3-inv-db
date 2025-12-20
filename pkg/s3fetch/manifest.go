@@ -3,6 +3,7 @@ package s3fetch
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -52,10 +53,10 @@ func ParseManifest(r io.Reader) (*Manifest, error) {
 
 func (m *Manifest) validate() error {
 	if m.DestinationBucket == "" {
-		return fmt.Errorf("manifest missing destinationBucket")
+		return errors.New("manifest missing destinationBucket")
 	}
 	if len(m.Files) == 0 {
-		return fmt.Errorf("manifest has no files")
+		return errors.New("manifest has no files")
 	}
 	// Validate format - accept CSV, Parquet, or detect from file extensions
 	// If there's an explicit format declaration, it must be CSV or Parquet
@@ -163,7 +164,7 @@ func (m *Manifest) columnIndex(name string) (int, error) {
 // Returns the bucket name suitable for use with S3 API calls.
 func ParseBucketIdentifier(bucketOrARN string) (string, error) {
 	if bucketOrARN == "" {
-		return "", fmt.Errorf("empty bucket identifier")
+		return "", errors.New("empty bucket identifier")
 	}
 
 	// Check if it's an ARN
@@ -227,13 +228,13 @@ func parseBucketARN(arn string) (string, error) {
 // ParseS3URI parses an S3 URI (s3://bucket/key) into bucket and key components.
 func ParseS3URI(uri string) (bucket, key string, err error) {
 	if !strings.HasPrefix(uri, "s3://") {
-		return "", "", fmt.Errorf("invalid S3 URI: must start with s3://")
+		return "", "", errors.New("invalid S3 URI: must start with s3://")
 	}
 
 	path := strings.TrimPrefix(uri, "s3://")
 	parts := strings.SplitN(path, "/", 2)
 	if len(parts) < 1 || parts[0] == "" {
-		return "", "", fmt.Errorf("invalid S3 URI: missing bucket name")
+		return "", "", errors.New("invalid S3 URI: missing bucket name")
 	}
 
 	bucket = parts[0]

@@ -1,6 +1,7 @@
 package extsort
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -122,7 +123,7 @@ func TestRunFile(t *testing.T) {
 		}
 
 		// Read all rows
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			row, err := reader.Read()
 			if err != nil {
 				t.Fatalf("read row %d: %v", i, err)
@@ -140,7 +141,7 @@ func TestRunFile(t *testing.T) {
 
 		// EOF
 		_, err = reader.Read()
-		if err != io.EOF {
+		if !errors.Is(err, io.EOF) {
 			t.Errorf("expected EOF, got %v", err)
 		}
 	})
@@ -222,10 +223,10 @@ func TestMerger(t *testing.T) {
 			count  uint64
 			bytes  uint64
 		}{
-			{"", 12, 1200},           // merged
-			{"alpha/", 2, 200},       // from run1 only
-			{"beta/", 4, 400},        // from run2 only
-			{"gamma/", 8, 800},       // merged
+			{"", 12, 1200},     // merged
+			{"alpha/", 2, 200}, // from run1 only
+			{"beta/", 4, 400},  // from run2 only
+			{"gamma/", 8, 800}, // merged
 		}
 
 		for i, exp := range expected {
@@ -246,7 +247,7 @@ func TestMerger(t *testing.T) {
 
 		// EOF
 		_, err = merger.Next()
-		if err != io.EOF {
+		if !errors.Is(err, io.EOF) {
 			t.Errorf("expected EOF, got %v", err)
 		}
 	})
@@ -433,7 +434,7 @@ func BenchmarkAggregator(b *testing.B) {
 		key := "data/2024/01/02/03/file.txt"
 
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			agg.AddObject(key, 1000, tiers.Standard)
 		}
 	})
@@ -456,9 +457,9 @@ func BenchmarkRunFile(b *testing.B) {
 		row.TierBytes[tiers.GlacierFR] = 20000
 
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			writer, _ := NewRunFileWriter(path, 0)
-			for j := 0; j < 1000; j++ {
+			for range 1000 {
 				writer.Write(row)
 			}
 			writer.Close()
@@ -474,17 +475,17 @@ func BenchmarkRunFile(b *testing.B) {
 			TotalBytes: 100000,
 		}
 		writer, _ := NewRunFileWriter(path, 0)
-		for j := 0; j < 1000; j++ {
+		for range 1000 {
 			writer.Write(row)
 		}
 		writer.Close()
 
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			reader, _ := OpenRunFile(path, 0)
 			for {
 				_, err := reader.Read()
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					break
 				}
 			}
@@ -495,5 +496,5 @@ func BenchmarkRunFile(b *testing.B) {
 
 func init() {
 	// Ensure test temp dirs are cleaned up
-	os.MkdirAll(os.TempDir(), 0755)
+	os.MkdirAll(os.TempDir(), 0o755)
 }

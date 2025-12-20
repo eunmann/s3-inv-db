@@ -16,9 +16,7 @@ const (
 	// Minimum billable object size for Standard-IA, One Zone-IA, and Glacier Instant Retrieval.
 	minObjectSizeBytes = 128 * bytesPerKB
 
-	// Glacier metadata overhead per object:
-	// - 32KB charged at the Glacier tier rate
-	// - 8KB charged at S3 Standard rate
+	// - 8KB charged at S3 Standard rate.
 	glacierMetadataOverheadBytes = 32 * bytesPerKB
 	glacierIndexOverheadBytes    = 8 * bytesPerKB
 )
@@ -116,7 +114,7 @@ func SavePriceTable(path string, pt PriceTable) error {
 		return fmt.Errorf("marshal price table: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return fmt.Errorf("write price table: %w", err)
 	}
 

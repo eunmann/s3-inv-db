@@ -34,7 +34,7 @@ func BenchmarkTrieBuild(b *testing.B) {
 
 			b.Run(name, func(b *testing.B) {
 				b.ReportAllocs()
-				for i := 0; i < b.N; i++ {
+				for range b.N {
 					_, err := BuildFromKeys(keys, sizes)
 					if err != nil {
 						b.Fatal(err)
@@ -56,7 +56,7 @@ func BenchmarkTrieBuild_LargeScale(b *testing.B) {
 
 	b.Run("s3_realistic/size=1000000", func(b *testing.B) {
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for i := range b.N {
 			result, err := BuildFromKeys(keys, sizes)
 			if err != nil {
 				b.Fatal(err)
@@ -81,7 +81,7 @@ func BenchmarkExtractPrefixes(b *testing.B) {
 
 	for _, k := range keys {
 		b.Run(k.name, func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				_ = extractPrefixes(k.key)
 			}
 		})
@@ -100,7 +100,7 @@ func BenchmarkTrieBuild_Scaling(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
 
-			for i := 0; i < b.N; i++ {
+			for i := range b.N {
 				result, err := BuildFromKeys(keys, sizes)
 				if err != nil {
 					b.Fatal(err)

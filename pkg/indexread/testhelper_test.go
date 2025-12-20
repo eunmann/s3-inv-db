@@ -1,6 +1,7 @@
 package indexread
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -65,7 +66,7 @@ func buildIndexFromCSV(t *testing.T, outDir, csv string) error {
 	// Parse CSV
 	lines := splitLines(csv)
 	if len(lines) < 2 {
-		return fmt.Errorf("CSV must have at least header and one data row")
+		return errors.New("CSV must have at least header and one data row")
 	}
 
 	// Skip header
@@ -92,10 +93,10 @@ func buildIndexFromCSV(t *testing.T, outDir, csv string) error {
 func splitLines(s string) []string {
 	var lines []string
 	start := 0
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] == '\n' {
 			line := s[start:i]
-			if len(line) > 0 && line[len(line)-1] == '\r' {
+			if line != "" && line[len(line)-1] == '\r' {
 				line = line[:len(line)-1]
 			}
 			lines = append(lines, line)
@@ -112,7 +113,7 @@ func splitLines(s string) []string {
 func splitCSVLine(line string) []string {
 	var parts []string
 	start := 0
-	for i := 0; i < len(line); i++ {
+	for i := range len(line) {
 		if line[i] == ',' {
 			parts = append(parts, line[start:i])
 			start = i + 1

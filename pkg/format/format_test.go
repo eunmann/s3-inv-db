@@ -307,7 +307,7 @@ func TestOpenArrayBadMagic(t *testing.T) {
 		Count:   0,
 		Width:   8,
 	})
-	if err := os.WriteFile(path, header, 0644); err != nil {
+	if err := os.WriteFile(path, header, 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -327,7 +327,7 @@ func TestOpenArrayBadVersion(t *testing.T) {
 		Count:   0,
 		Width:   8,
 	})
-	if err := os.WriteFile(path, header, 0644); err != nil {
+	if err := os.WriteFile(path, header, 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -348,7 +348,7 @@ func TestOpenArrayFileTooSmall(t *testing.T) {
 		Count:   10,
 		Width:   8,
 	})
-	if err := os.WriteFile(path, header, 0644); err != nil {
+	if err := os.WriteFile(path, header, 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -362,7 +362,7 @@ func TestMmapEmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.bin")
 
-	if err := os.WriteFile(path, nil, 0644); err != nil {
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -420,7 +420,7 @@ func TestLargeArray(t *testing.T) {
 		t.Fatalf("NewArrayWriter failed: %v", err)
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if err := w.WriteU64(uint64(i * 100)); err != nil {
 			t.Fatalf("WriteU64 failed: %v", err)
 		}

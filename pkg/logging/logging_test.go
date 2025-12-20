@@ -8,7 +8,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-func TestInit_DoesNotPanic(t *testing.T) {
+func TestInit_DoesNotPanic(_ *testing.T) {
 	// Test JSON mode (default)
 	Init(false, false)
 	log := L()

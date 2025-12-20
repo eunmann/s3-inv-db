@@ -25,7 +25,7 @@ func init() {
 // Init configures the global logger.
 // If debug is true, sets log level to Debug.
 // If human is true, uses a human-friendly console writer and enables pretty mode.
-func Init(debug bool, human bool) {
+func Init(debug, human bool) {
 	level := zerolog.InfoLevel
 	if debug {
 		level = zerolog.DebugLevel

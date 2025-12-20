@@ -46,7 +46,6 @@ func runBuild(args []string) error {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	// Initialize logging based on flags
 	logging.Init(*verbose, *prettyLogs)
 	log := logging.L()
 
@@ -70,13 +69,11 @@ func runBuildExtSort(log *zerolog.Logger, outDir, s3Manifest string) error {
 		Str("output_dir", outDir).
 		Msg("starting S3 inventory build")
 
-	// Create S3 client
 	client, err := s3fetch.NewClient(ctx)
 	if err != nil {
 		return fmt.Errorf("create S3 client: %w", err)
 	}
 
-	// Create and run pipeline
 	config := extsort.DefaultConfig()
 	pipeline := extsort.NewPipeline(config, client)
 
@@ -112,7 +109,6 @@ func runQuery(args []string) error {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	// Initialize logging based on flags
 	logging.Init(*verbose, *prettyLogs)
 	log := logging.L()
 

@@ -2,6 +2,7 @@ package extsort
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -64,7 +65,6 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	p.startTime = time.Now()
 	log := logging.L()
 
-	// Create temp directory for run files
 	tempDir := p.config.TempDir
 	if tempDir == "" {
 		var err error
@@ -75,7 +75,6 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	}
 	p.tempDir = tempDir
 
-	// Ensure cleanup on failure
 	success := false
 	defer func() {
 		if !success {
@@ -89,7 +88,6 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Int64("memory_threshold_mb", p.config.MemoryThreshold/(1024*1024)).
 		Msg("starting external sort pipeline")
 
-	// Stage A+B: Stream, aggregate, and spill to run files
 	if err := p.runIngestPhase(ctx, manifestURI); err != nil {
 		return nil, fmt.Errorf("ingest phase: %w", err)
 	}
@@ -100,13 +98,11 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Int64("flushes", p.flushCount).
 		Msg("ingest phase complete")
 
-	// Stage C+D: Merge run files and build index
 	prefixCount, maxDepth, err := p.runMergeBuildPhase(ctx, outDir)
 	if err != nil {
 		return nil, fmt.Errorf("merge/build phase: %w", err)
 	}
 
-	// Cleanup temp files
 	p.cleanup()
 	success = true
 
@@ -132,19 +128,16 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error {
 	log := logging.L()
 
-	// Parse manifest URI
 	bucket, key, err := s3fetch.ParseS3URI(manifestURI)
 	if err != nil {
 		return fmt.Errorf("parse manifest URI: %w", err)
 	}
 
-	// Fetch manifest
 	manifest, err := p.s3Client.FetchManifest(ctx, bucket, key)
 	if err != nil {
 		return fmt.Errorf("fetch manifest: %w", err)
 	}
 
-	// Detect inventory format
 	format := manifest.DetectFormat()
 	formatStr := "CSV"
 	if format == s3fetch.InventoryFormatParquet {
@@ -154,8 +147,6 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 		Str("format", formatStr).
 		Int("files", len(manifest.Files)).
 		Msg("detected inventory format")
-
-	// Get column indices (used for CSV, Parquet auto-detects from schema)
 	keyCol, err := manifest.KeyColumnIndex()
 	if err != nil {
 		return fmt.Errorf("get key column: %w", err)
@@ -167,17 +158,14 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 	storageCol := manifest.StorageClassColumnIndex()
 	accessTierCol := manifest.AccessTierColumnIndex()
 
-	// Get destination bucket name
 	destBucket, err := manifest.GetDestinationBucketName()
 	if err != nil {
 		return fmt.Errorf("get destination bucket: %w", err)
 	}
 
-	// Create aggregator
 	agg := NewAggregator(100000, p.config.MaxDepth)
 	tierMapping := tiers.NewMapping()
 
-	// Process each chunk
 	for i, file := range manifest.Files {
 		select {
 		case <-ctx.Done():
@@ -192,7 +180,6 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 			Str("format", formatStr).
 			Msg("processing inventory chunk")
 
-		// Stream chunk and aggregate
 		chunkCfg := chunkConfig{
 			format:        format,
 			keyCol:        keyCol,
@@ -208,7 +195,6 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 
 		atomic.AddInt64(&p.chunksProcessed, 1)
 
-		// Check memory threshold and flush if needed
 		if agg.EstimatedMemoryUsage() >= p.config.MemoryThreshold {
 			if err := p.flushAggregator(agg); err != nil {
 				return fmt.Errorf("flush aggregator: %w", err)
@@ -216,7 +202,6 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 		}
 	}
 
-	// Flush any remaining data
 	if agg.PrefixCount() > 0 {
 		if err := p.flushAggregator(agg); err != nil {
 			return fmt.Errorf("final flush: %w", err)
@@ -239,22 +224,18 @@ type chunkConfig struct {
 
 // processChunk processes a single inventory chunk (CSV or Parquet).
 func (p *Pipeline) processChunk(ctx context.Context, bucket, key string, agg *Aggregator, cfg chunkConfig) error {
-	// Stream object from S3
 	body, err := p.s3Client.StreamObject(ctx, bucket, key)
 	if err != nil {
 		return fmt.Errorf("stream object: %w", err)
 	}
 
-	// Create appropriate reader based on format
 	var reader inventory.InventoryReader
 	if cfg.format == s3fetch.InventoryFormatParquet {
-		// Parquet format
 		reader, err = inventory.NewParquetInventoryReaderFromStream(body, cfg.fileSize)
 		if err != nil {
 			return fmt.Errorf("create parquet reader: %w", err)
 		}
 	} else {
-		// CSV format (default)
 		csvCfg := inventory.CSVReaderConfig{
 			KeyCol:        cfg.keyCol,
 			SizeCol:       cfg.sizeCol,
@@ -268,7 +249,6 @@ func (p *Pipeline) processChunk(ctx context.Context, bucket, key string, agg *Ag
 	}
 	defer reader.Close()
 
-	// Process each row using the unified interface
 	for {
 		select {
 		case <-ctx.Done():
@@ -277,7 +257,7 @@ func (p *Pipeline) processChunk(ctx context.Context, bucket, key string, agg *Ag
 		}
 
 		row, err := reader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -288,10 +268,7 @@ func (p *Pipeline) processChunk(ctx context.Context, bucket, key string, agg *Ag
 			continue
 		}
 
-		// Convert storage class to tier ID
 		tierID := cfg.tierMapping.FromS3(row.StorageClass, row.AccessTier)
-
-		// Add to aggregator
 		agg.AddObject(row.Key, row.Size, tierID)
 
 		atomic.AddInt64(&p.objectsProcessed, 1)
@@ -306,13 +283,11 @@ func (p *Pipeline) flushAggregator(agg *Aggregator) error {
 	log := logging.L()
 	start := time.Now()
 
-	// Drain to slice
 	rows := agg.Drain()
 	if len(rows) == 0 {
 		return nil
 	}
 
-	// Create run file
 	runPath := filepath.Join(p.tempDir, fmt.Sprintf("run_%04d.bin", p.runCount))
 	p.runCount++
 
@@ -321,7 +296,6 @@ func (p *Pipeline) flushAggregator(agg *Aggregator) error {
 		return fmt.Errorf("create run file: %w", err)
 	}
 
-	// Sort and write
 	if err := writer.WriteSorted(rows); err != nil {
 		writer.Close()
 		os.Remove(runPath)
@@ -346,11 +320,10 @@ func (p *Pipeline) flushAggregator(agg *Aggregator) error {
 }
 
 // runMergeBuildPhase merges run files and builds the index.
-func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (uint64, uint32, error) {
+func (p *Pipeline) runMergeBuildPhase(_ context.Context, outDir string) (uint64, uint32, error) {
 	log := logging.L()
 
 	if len(p.runFiles) == 0 {
-		// No data - create empty index
 		builder, err := NewIndexBuilder(outDir)
 		if err != nil {
 			return 0, 0, fmt.Errorf("create index builder: %w", err)
@@ -365,26 +338,22 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (uint6
 		Int("run_files", len(p.runFiles)).
 		Msg("starting merge phase")
 
-	// Create merge iterator
 	merger, err := NewMergeIterator(p.runFiles, p.config.RunFileBufferSize)
 	if err != nil {
 		return 0, 0, fmt.Errorf("create merge iterator: %w", err)
 	}
-	defer merger.RemoveAll() // Clean up run files after merge
+	defer func() { _ = merger.RemoveAll() }()
 
-	// Create index builder
 	builder, err := NewIndexBuilder(outDir)
 	if err != nil {
 		merger.Close()
 		return 0, 0, fmt.Errorf("create index builder: %w", err)
 	}
 
-	// Stream merged data to index builder
 	if err := builder.AddAll(merger); err != nil {
 		return 0, 0, fmt.Errorf("build index: %w", err)
 	}
 
-	// Finalize index
 	if err := builder.Finalize(); err != nil {
 		return 0, 0, fmt.Errorf("finalize index: %w", err)
 	}

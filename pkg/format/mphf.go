@@ -1,6 +1,7 @@
 package format
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -131,7 +132,7 @@ func (b *MPHFBuilder) Build(outDir string) error {
 func (b *MPHFBuilder) writeEmpty(outDir string) error {
 	// Create empty mph file
 	mphPath := filepath.Join(outDir, "mph.bin")
-	if err := os.WriteFile(mphPath, nil, 0644); err != nil {
+	if err := os.WriteFile(mphPath, nil, 0o644); err != nil {
 		return fmt.Errorf("write empty mph: %w", err)
 	}
 
@@ -322,7 +323,7 @@ func (m *MPHF) LookupWithVerify(prefix string) (pos uint64, ok bool) {
 // Requires prefix blob to be loaded.
 func (m *MPHF) GetPrefix(pos uint64) (string, error) {
 	if m.prefixBlob == nil {
-		return "", fmt.Errorf("prefix blob not loaded")
+		return "", errors.New("prefix blob not loaded")
 	}
 	s, err := m.prefixBlob.Get(pos)
 	if err != nil {
@@ -354,10 +355,10 @@ func computeFingerprint(s string) uint64 {
 // VerifyMPHF checks that all prefixes in the blob can be looked up correctly.
 func VerifyMPHF(m *MPHF) error {
 	if m.prefixBlob == nil {
-		return fmt.Errorf("prefix blob not loaded")
+		return errors.New("prefix blob not loaded")
 	}
 
-	for i := uint64(0); i < m.count; i++ {
+	for i := range m.count {
 		prefix, err := m.prefixBlob.Get(i)
 		if err != nil {
 			return fmt.Errorf("get prefix %d: %w", i, err)
