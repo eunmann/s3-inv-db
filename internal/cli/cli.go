@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/indexbuild"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
@@ -150,6 +151,8 @@ func runBuildSQLite(log *zerolog.Logger, outDir, s3Manifest, dbPath string) erro
 
 // runBuildExtSort runs the build using the external sort backend (pure Go, no CGO).
 func runBuildExtSort(log *zerolog.Logger, outDir, s3Manifest string) error {
+	ctx := context.Background()
+
 	log.Info().
 		Str("phase", "build_start").
 		Str("backend", "extsort").
@@ -157,8 +160,32 @@ func runBuildExtSort(log *zerolog.Logger, outDir, s3Manifest string) error {
 		Str("output_dir", outDir).
 		Msg("starting S3 inventory build with external sort backend")
 
-	// TODO: Implement external sort backend
-	return errors.New("extsort backend not yet implemented")
+	// Create S3 client
+	client, err := s3fetch.NewClient(ctx)
+	if err != nil {
+		return fmt.Errorf("create S3 client: %w", err)
+	}
+
+	// Create and run pipeline
+	config := extsort.DefaultConfig()
+	pipeline := extsort.NewPipeline(config, client)
+
+	result, err := pipeline.Run(ctx, s3Manifest, outDir)
+	if err != nil {
+		return fmt.Errorf("run pipeline: %w", err)
+	}
+
+	log.Info().
+		Str("phase", "build_complete").
+		Str("output_dir", outDir).
+		Uint64("prefix_count", result.PrefixCount).
+		Uint32("max_depth", result.MaxDepth).
+		Int("run_files_created", result.RunFilesCreated).
+		Int64("objects_processed", result.ObjectsProcessed).
+		Dur("duration", result.Duration).
+		Msg("index built successfully with external sort backend")
+
+	return nil
 }
 
 func runQuery(args []string) error {
