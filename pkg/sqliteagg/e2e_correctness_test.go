@@ -112,17 +112,27 @@ func TestMemoryAggregator_PrefixStats(t *testing.T) {
 				t.Errorf("TotalBytes = %d, want %d", stats.TotalBytes, exp.bytes)
 			}
 
-			// Validate tier counts
+			// Validate tier counts (sparse tier map)
 			for tierID, wantCount := range exp.tierCounts {
-				if stats.TierCounts[tierID] != wantCount {
-					t.Errorf("TierCounts[%d] = %d, want %d", tierID, stats.TierCounts[tierID], wantCount)
+				tierStats, ok := stats.Tiers[tierID]
+				gotCount := uint64(0)
+				if ok {
+					gotCount = tierStats.Count
+				}
+				if gotCount != wantCount {
+					t.Errorf("TierCounts[%d] = %d, want %d", tierID, gotCount, wantCount)
 				}
 			}
 
-			// Validate tier bytes
+			// Validate tier bytes (sparse tier map)
 			for tierID, wantBytes := range exp.tierBytes {
-				if stats.TierBytes[tierID] != wantBytes {
-					t.Errorf("TierBytes[%d] = %d, want %d", tierID, stats.TierBytes[tierID], wantBytes)
+				tierStats, ok := stats.Tiers[tierID]
+				gotBytes := uint64(0)
+				if ok {
+					gotBytes = tierStats.Bytes
+				}
+				if gotBytes != wantBytes {
+					t.Errorf("TierBytes[%d] = %d, want %d", tierID, gotBytes, wantBytes)
 				}
 			}
 		})

@@ -15,7 +15,8 @@ type DepthIndexBuilder struct {
 // NewDepthIndexBuilder creates a new depth index builder.
 func NewDepthIndexBuilder() *DepthIndexBuilder {
 	return &DepthIndexBuilder{
-		buckets: make(map[uint32][]uint64),
+		// Pre-allocate for typical max depth (16 levels)
+		buckets: make(map[uint32][]uint64, 16),
 	}
 }
 

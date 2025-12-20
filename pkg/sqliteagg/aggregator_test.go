@@ -4,21 +4,18 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 /*
 Test Organization:
 
-Shared tests (aggregator_shared_test.go):
-  - TestChunkAggregator runs all shared tests on Standard implementation
-
 Aggregator-specific tests (this file):
   - TestOpenClose: Database lifecycle (Open/Close)
-  - TestDataPersistence: Cross-session data persistence
   - TestExtractPrefixes: Unit test for prefix extraction
   - TestConfigValidate: Configuration validation
+
+For end-to-end tests that write and read data, see e2e_correctness_test.go
+which uses MemoryAggregator.
 */
 
 func TestOpenClose(t *testing.T) {
@@ -37,70 +34,6 @@ func TestOpenClose(t *testing.T) {
 	// Verify the database file was created
 	if _, err := os.Stat(dbPath); err != nil {
 		t.Errorf("database file not created: %v", err)
-	}
-}
-
-func TestDataPersistence(t *testing.T) {
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.db")
-
-	// First session: add some data
-	{
-		agg, err := Open(DefaultConfig(dbPath))
-		if err != nil {
-			t.Fatalf("Open failed: %v", err)
-		}
-
-		if err := agg.BeginChunk(); err != nil {
-			t.Fatalf("BeginChunk failed: %v", err)
-		}
-		if err := agg.AddObject("a/file1.txt", 100, tiers.Standard); err != nil {
-			t.Fatalf("AddObject failed: %v", err)
-		}
-		if err := agg.Commit(); err != nil {
-			t.Fatalf("Commit failed: %v", err)
-		}
-		if err := agg.Close(); err != nil {
-			t.Fatalf("Close failed: %v", err)
-		}
-	}
-
-	// Second session: verify data persisted
-	{
-		agg, err := Open(DefaultConfig(dbPath))
-		if err != nil {
-			t.Fatalf("Open (second) failed: %v", err)
-		}
-		defer agg.Close()
-
-		// Verify prefix data persisted
-		count, err := agg.PrefixCount()
-		if err != nil {
-			t.Fatalf("PrefixCount failed: %v", err)
-		}
-		if count != 2 { // "" and "a/"
-			t.Errorf("PrefixCount = %d, want 2", count)
-		}
-
-		// Add more data
-		if err := agg.BeginChunk(); err != nil {
-			t.Fatalf("BeginChunk failed: %v", err)
-		}
-		if err := agg.AddObject("b/file2.txt", 200, tiers.Standard); err != nil {
-			t.Fatalf("AddObject failed: %v", err)
-		}
-		if err := agg.Commit(); err != nil {
-			t.Fatalf("Commit failed: %v", err)
-		}
-
-		// Verify combined data
-		count, err = agg.PrefixCount()
-		if err != nil {
-			t.Fatalf("PrefixCount failed: %v", err)
-		}
-		if count != 3 { // "", "a/", "b/"
-			t.Errorf("PrefixCount = %d, want 3", count)
-		}
 	}
 }
 

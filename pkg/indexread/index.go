@@ -269,7 +269,12 @@ func (idx *Index) DescendantsUpToDepth(prefixPos uint64, maxRelDepth int) ([][]u
 	subtreeStart := prefixPos
 	subtreeEnd := idx.SubtreeEnd(prefixPos)
 
-	var result [][]uint64
+	// Pre-allocate result slice with exact capacity
+	depthLevels := min(int(maxSubtreeDepth-baseDepth), maxRelDepth)
+	if depthLevels <= 0 {
+		return nil, nil
+	}
+	result := make([][]uint64, 0, depthLevels)
 
 	for d := baseDepth + 1; d <= baseDepth+uint32(maxRelDepth) && d <= maxSubtreeDepth; d++ {
 		positions, err := idx.depthIndex.GetPositionsInSubtree(d, subtreeStart, subtreeEnd)
@@ -299,7 +304,8 @@ func (idx *Index) DescendantsAtDepthFiltered(prefixPos uint64, relDepth int, fil
 		return positions, nil
 	}
 
-	var filtered []uint64
+	// Pre-allocate with input length (worst case: all positions pass filter)
+	filtered := make([]uint64, 0, len(positions))
 	for _, pos := range positions {
 		stats := idx.Stats(pos)
 		if stats.ObjectCount >= filter.MinCount && stats.TotalBytes >= filter.MinBytes {

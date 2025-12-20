@@ -172,25 +172,17 @@ func setupFixtureIndex(b *testing.B) string {
 		gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(50000))
 		objects := gen.Generate()
 
-		cfg := sqliteagg.DefaultConfig(dbPath)
-		cfg.Synchronous = "OFF"
-		agg, err := sqliteagg.Open(cfg)
-		if err != nil {
-			b.Fatalf("Open SQLite failed: %v", err)
+		// Use MemoryAggregator to create the database
+		memAgg := sqliteagg.NewMemoryAggregator(sqliteagg.DefaultMemoryAggregatorConfig(dbPath))
+		for _, obj := range objects {
+			memAgg.AddObject(obj.Key, obj.Size, obj.TierID)
+		}
+		if err := memAgg.Finalize(); err != nil {
+			b.Fatalf("Finalize failed: %v", err)
 		}
 
-		if err := agg.BeginChunk(); err != nil {
-			b.Fatalf("BeginChunk failed: %v", err)
-		}
-		for _, obj := range objects {
-			if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
-				b.Fatalf("AddObject failed: %v", err)
-			}
-		}
-		if err := agg.Commit(); err != nil {
-			b.Fatalf("Commit failed: %v", err)
-		}
-		agg.Close()
+		cfg := sqliteagg.DefaultConfig(dbPath)
+		cfg.Synchronous = "OFF"
 
 		buildCfg := indexbuild.SQLiteConfig{
 			OutDir:    outDir,

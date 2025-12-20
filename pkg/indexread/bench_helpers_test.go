@@ -27,33 +27,24 @@ func setupSQLiteAggregator(tb testing.TB, numObjects int) *sqliteSetup {
 	tmpDir := tb.TempDir()
 	dbPath := filepath.Join(tmpDir, "prefix-agg.db")
 
-	cfg := sqliteagg.DefaultConfig(dbPath)
-	cfg.Synchronous = "OFF"
-	cfg.BulkWriteMode = true
-
-	agg, err := sqliteagg.Open(cfg)
-	if err != nil {
-		tb.Fatalf("Open SQLite failed: %v", err)
-	}
+	// Use MemoryAggregator to create the database
+	memAgg := sqliteagg.NewMemoryAggregator(sqliteagg.DefaultMemoryAggregatorConfig(dbPath))
 
 	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(numObjects))
 	objects := gen.Generate()
 
-	if err := agg.BeginChunk(); err != nil {
-		agg.Close()
-		tb.Fatalf("BeginChunk failed: %v", err)
-	}
-
 	for _, obj := range objects {
-		if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
-			agg.Close()
-			tb.Fatalf("AddObject failed: %v", err)
-		}
+		memAgg.AddObject(obj.Key, obj.Size, obj.TierID)
 	}
 
-	if err := agg.Commit(); err != nil {
-		agg.Close()
-		tb.Fatalf("Commit failed: %v", err)
+	if err := memAgg.Finalize(); err != nil {
+		tb.Fatalf("Finalize failed: %v", err)
+	}
+
+	// Open for reading
+	agg, err := sqliteagg.Open(sqliteagg.DefaultConfig(dbPath))
+	if err != nil {
+		tb.Fatalf("Open SQLite failed: %v", err)
 	}
 
 	prefixCount, _ := agg.PrefixCount()
@@ -72,31 +63,22 @@ func setupSQLiteFromKeys(tb testing.TB, keys []string) *sqliteSetup {
 	tmpDir := tb.TempDir()
 	dbPath := filepath.Join(tmpDir, "prefix-agg.db")
 
-	cfg := sqliteagg.DefaultConfig(dbPath)
-	cfg.Synchronous = "OFF"
-	cfg.BulkWriteMode = true
-
-	agg, err := sqliteagg.Open(cfg)
-	if err != nil {
-		tb.Fatalf("Open SQLite failed: %v", err)
-	}
-
-	if err := agg.BeginChunk(); err != nil {
-		agg.Close()
-		tb.Fatalf("BeginChunk failed: %v", err)
-	}
+	// Use MemoryAggregator to create the database
+	memAgg := sqliteagg.NewMemoryAggregator(sqliteagg.DefaultMemoryAggregatorConfig(dbPath))
 
 	for i, key := range keys {
 		size := uint64((i%1000 + 1) * 100)
-		if err := agg.AddObject(key, size, 0); err != nil {
-			agg.Close()
-			tb.Fatalf("AddObject failed: %v", err)
-		}
+		memAgg.AddObject(key, size, 0)
 	}
 
-	if err := agg.Commit(); err != nil {
-		agg.Close()
-		tb.Fatalf("Commit failed: %v", err)
+	if err := memAgg.Finalize(); err != nil {
+		tb.Fatalf("Finalize failed: %v", err)
+	}
+
+	// Open for reading
+	agg, err := sqliteagg.Open(sqliteagg.DefaultConfig(dbPath))
+	if err != nil {
+		tb.Fatalf("Open SQLite failed: %v", err)
 	}
 
 	prefixCount, _ := agg.PrefixCount()

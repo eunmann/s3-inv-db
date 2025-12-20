@@ -24,33 +24,24 @@ func buildIndexFromKeysWithSizes(t *testing.T, outDir string, keys []string, siz
 	t.Helper()
 
 	dbPath := outDir + ".db"
-	cfg := sqliteagg.DefaultConfig(dbPath)
-
-	agg, err := sqliteagg.Open(cfg)
-	if err != nil {
-		return fmt.Errorf("open SQLite: %w", err)
-	}
-	defer agg.Close()
 	defer os.Remove(dbPath)
 
-	if err := agg.BeginChunk(); err != nil {
-		return fmt.Errorf("begin chunk: %w", err)
-	}
+	// Use MemoryAggregator to create the database
+	memAgg := sqliteagg.NewMemoryAggregator(sqliteagg.DefaultMemoryAggregatorConfig(dbPath))
 
 	for i, key := range keys {
 		size := uint64((i%1000 + 1) * 100) // Default size varies by index
 		if sizes != nil && i < len(sizes) {
 			size = sizes[i]
 		}
-		if err := agg.AddObject(key, size, tiers.Standard); err != nil {
-			return fmt.Errorf("add object %q: %w", key, err)
-		}
+		memAgg.AddObject(key, size, tiers.Standard)
 	}
 
-	if err := agg.Commit(); err != nil {
-		return fmt.Errorf("commit: %w", err)
+	if err := memAgg.Finalize(); err != nil {
+		return fmt.Errorf("finalize: %w", err)
 	}
 
+	cfg := sqliteagg.DefaultConfig(dbPath)
 	buildCfg := indexbuild.SQLiteConfig{
 		OutDir:    outDir,
 		DBPath:    dbPath,
@@ -148,29 +139,20 @@ func buildIndexWithTiers(t *testing.T, outDir string, objects []testObject) erro
 	t.Helper()
 
 	dbPath := outDir + ".db"
-	cfg := sqliteagg.DefaultConfig(dbPath)
-
-	agg, err := sqliteagg.Open(cfg)
-	if err != nil {
-		return fmt.Errorf("open SQLite: %w", err)
-	}
-	defer agg.Close()
 	defer os.Remove(dbPath)
 
-	if err := agg.BeginChunk(); err != nil {
-		return fmt.Errorf("begin chunk: %w", err)
-	}
+	// Use MemoryAggregator to create the database
+	memAgg := sqliteagg.NewMemoryAggregator(sqliteagg.DefaultMemoryAggregatorConfig(dbPath))
 
 	for _, obj := range objects {
-		if err := agg.AddObject(obj.Key, obj.Size, obj.TierID); err != nil {
-			return fmt.Errorf("add object %q: %w", obj.Key, err)
-		}
+		memAgg.AddObject(obj.Key, obj.Size, obj.TierID)
 	}
 
-	if err := agg.Commit(); err != nil {
-		return fmt.Errorf("commit: %w", err)
+	if err := memAgg.Finalize(); err != nil {
+		return fmt.Errorf("finalize: %w", err)
 	}
 
+	cfg := sqliteagg.DefaultConfig(dbPath)
 	buildCfg := indexbuild.SQLiteConfig{
 		OutDir:    outDir,
 		DBPath:    dbPath,

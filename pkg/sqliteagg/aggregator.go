@@ -3,11 +3,7 @@ package sqliteagg
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
-	"slices"
-	"strings"
-	"sync"
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -98,63 +94,28 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// prefixDelta accumulates count and byte deltas for a single prefix.
-type prefixDelta struct {
-	depth      int
-	totalCount uint64
-	totalBytes uint64
-	tierCounts [tiers.NumTiers]uint64
-	tierBytes  [tiers.NumTiers]uint64
-}
-
 // SQLite parameter limit and optimal batch sizing.
 // SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 32,766 (since SQLite 3.32.0).
-// We use 100% of max for maximum throughput.
 const (
 	// SQLiteMaxVariables is the maximum number of bound parameters per statement.
 	SQLiteMaxVariables = 32766
 
-	// ColsPerRow is the number of columns in prefix_stats table.
-	// 4 base columns + 2 columns per tier (count + bytes).
-	ColsPerRow = 4 + int(tiers.NumTiers)*2
-
-	// MaxRowsPerBatch is the maximum rows per batched statement.
-	// Computed as SQLiteMaxVariables / ColsPerRow (100% utilization).
-	// At 28 columns, this yields 1170 rows using 32,760 variables.
-	MaxRowsPerBatch = SQLiteMaxVariables / ColsPerRow
-
-	// MultiRowBatchSize is the number of rows per multi-row UPSERT statement.
-	// Uses MaxRowsPerBatch for optimal throughput while staying under limits.
-	MultiRowBatchSize = MaxRowsPerBatch
+	// MaxRowsPerBatch is the maximum rows per batched INSERT statement.
+	// With sparse schema, both tables have 4 columns per row.
+	// 32766 / 4 = 8191 rows per batch.
+	MaxRowsPerBatch = SQLiteMaxVariables / 4
 )
 
-// Aggregator aggregates S3 inventory prefixes into a SQLite database.
+// Aggregator provides read-only access to a SQLite prefix stats database.
+// For writing, use MemoryAggregator which creates the database.
 type Aggregator struct {
-	db            *sql.DB
-	cfg           Config
-	tierMapping   *tiers.Mapping
-	bulkWriteMode bool // True if BulkWriteMode was enabled (need checkpoint on close)
-
-	// Prepared statements (created per-transaction)
-	upsertStmt   *sql.Stmt // Single-row upsert (for remainder)
-	multiRowStmt *sql.Stmt // Multi-row upsert (batch of MultiRowBatchSize)
-	colsPerRow   int       // Number of columns per row in upsert
-
-	// Current transaction
-	tx *sql.Tx
-
-	// In-memory delta accumulation (reduces SQLite calls by ~10x)
-	pendingDeltas map[string]*prefixDelta
-
-	// Reusable buffers for flush operations (avoids allocation per flush)
-	batchArgs  []interface{}
-	singleArgs []interface{}
-
-	// writeMu serializes write transactions for parallel streaming.
-	writeMu sync.Mutex
+	db  *sql.DB
+	cfg Config
 }
 
 // PrefixRow represents a row from the prefix_stats table.
+// This struct is designed for efficient scanning with concrete types only.
+// All fields use exact types matching SQLite storage (TEXT→string, INTEGER→int/uint64).
 type PrefixRow struct {
 	Prefix     string
 	Depth      int
@@ -162,6 +123,29 @@ type PrefixRow struct {
 	TotalBytes uint64
 	TierCounts [tiers.NumTiers]uint64
 	TierBytes  [tiers.NumTiers]uint64
+}
+
+// scanPrefixBaseStats scans the 4 base columns into a PrefixRow.
+// Uses concrete type pointers only - no interface{} or reflection.
+// Query must be: SELECT prefix, depth, total_count, total_bytes FROM prefix_stats
+func scanPrefixBaseStats(rows *sql.Rows, r *PrefixRow) error {
+	return rows.Scan(&r.Prefix, &r.Depth, &r.TotalCount, &r.TotalBytes)
+}
+
+// TierRow represents a row from the prefix_tier_stats table.
+// Designed for efficient concrete-type scanning.
+type TierRow struct {
+	Prefix    string
+	TierCode  int
+	TierCount uint64
+	TierBytes uint64
+}
+
+// scanTierRow scans the 4 tier columns into a TierRow.
+// Uses concrete type pointers only - no interface{} or reflection.
+// Query must be: SELECT prefix, tier_code, tier_count, tier_bytes FROM prefix_tier_stats
+func scanTierRow(rows *sql.Rows, r *TierRow) error {
+	return rows.Scan(&r.Prefix, &r.TierCode, &r.TierCount, &r.TierBytes)
 }
 
 // Open creates or opens a SQLite database for aggregation.
@@ -227,350 +211,59 @@ func Open(cfg Config) (*Aggregator, error) {
 		Msg("opened SQLite aggregator")
 
 	return &Aggregator{
-		db:            db,
-		cfg:           cfg,
-		tierMapping:   tiers.NewMapping(),
-		bulkWriteMode: cfg.BulkWriteMode,
+		db:  db,
+		cfg: cfg,
 	}, nil
 }
 
 func createSchema(db *sql.DB) error {
-	// Build prefix_stats table with tier columns.
-	// Use WITHOUT ROWID for efficient primary key storage - the table is stored
-	// as a single B-tree keyed by prefix, avoiding the extra rowid B-tree and
-	// indirection. Sequential ORDER BY prefix scans become a straight B-tree walk.
-	var tierCols strings.Builder
-	for i := range tiers.NumTiers {
-		tierCols.WriteString(fmt.Sprintf(",\n    t%d_count INTEGER NOT NULL DEFAULT 0", i))
-		tierCols.WriteString(fmt.Sprintf(",\n    t%d_bytes INTEGER NOT NULL DEFAULT 0", i))
-	}
-
-	createPrefixStats := fmt.Sprintf(`
+	// Create sparse tier schema:
+	// - prefix_stats: base stats only (4 columns)
+	// - prefix_tier_stats: tier-specific stats, only for tiers with data
+	//
+	// Both tables use WITHOUT ROWID for efficient clustered index storage.
+	// Sequential ORDER BY prefix scans become straight B-tree walks.
+	createSQL := `
 		CREATE TABLE IF NOT EXISTS prefix_stats (
 			prefix TEXT NOT NULL PRIMARY KEY,
 			depth INTEGER NOT NULL,
 			total_count INTEGER NOT NULL DEFAULT 0,
-			total_bytes INTEGER NOT NULL DEFAULT 0%s
-		) WITHOUT ROWID
-	`, tierCols.String())
+			total_bytes INTEGER NOT NULL DEFAULT 0
+		) WITHOUT ROWID;
 
-	if _, err := db.Exec(createPrefixStats); err != nil {
-		return fmt.Errorf("create prefix_stats table: %w", err)
+		CREATE TABLE IF NOT EXISTS prefix_tier_stats (
+			prefix TEXT NOT NULL,
+			tier_code INTEGER NOT NULL,
+			tier_count INTEGER NOT NULL DEFAULT 0,
+			tier_bytes INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (prefix, tier_code)
+		) WITHOUT ROWID;
+	`
+
+	if _, err := db.Exec(createSQL); err != nil {
+		return fmt.Errorf("create tables: %w", err)
 	}
 
 	return nil
 }
 
 // Close closes the database connection.
-// If a transaction is in progress, it is rolled back.
-// In bulk write mode, performs a WAL checkpoint before closing.
 func (a *Aggregator) Close() error {
-	if a.tx != nil {
-		// Rollback error is intentionally ignored during Close.
-		// The transaction will be aborted when the connection closes anyway.
-		_ = a.tx.Rollback()
-		a.tx = nil
-	}
-	// Close any open prepared statements
-	if a.upsertStmt != nil {
-		_ = a.upsertStmt.Close()
-		a.upsertStmt = nil
-	}
-	if a.multiRowStmt != nil {
-		_ = a.multiRowStmt.Close()
-		a.multiRowStmt = nil
-	}
-
-	// In bulk write mode, run checkpoint before closing to consolidate WAL
-	if a.bulkWriteMode {
-		_, _ = a.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
-	}
-
 	return a.db.Close()
-}
-
-// BeginChunk starts a new transaction for processing a chunk.
-func (a *Aggregator) BeginChunk() error {
-	if a.tx != nil {
-		return fmt.Errorf("transaction already in progress")
-	}
-
-	tx, err := a.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	a.tx = tx
-
-	// Initialize in-memory delta accumulation with large initial capacity.
-	// Per-chunk aggregation: typical S3 inventory chunks have 100k-1M objects
-	// with ~200k-500k unique prefixes.
-	mapCapacity := 500_000
-	if a.cfg.MaxPrefixesPerChunk > 0 && a.cfg.MaxPrefixesPerChunk < mapCapacity {
-		mapCapacity = a.cfg.MaxPrefixesPerChunk
-	}
-	a.pendingDeltas = make(map[string]*prefixDelta, mapCapacity)
-
-	// Prepare single-row upsert statement for prefix_stats (used for remainder)
-	upsertSQL := buildUpsertSQL()
-	a.upsertStmt, err = tx.Prepare(upsertSQL)
-	if err != nil {
-		tx.Rollback()
-		a.tx = nil
-		return fmt.Errorf("prepare upsert statement: %w", err)
-	}
-
-	// Prepare multi-row upsert statement for batched inserts
-	multiRowSQL := buildMultiRowUpsertSQL(MultiRowBatchSize)
-	a.multiRowStmt, err = tx.Prepare(multiRowSQL)
-	if err != nil {
-		a.upsertStmt.Close()
-		tx.Rollback()
-		a.tx = nil
-		return fmt.Errorf("prepare multi-row upsert statement: %w", err)
-	}
-
-	// Use shared constant for columns per row
-	a.colsPerRow = ColsPerRow
-
-	// Initialize reusable buffers for flush operations
-	a.batchArgs = make([]interface{}, MultiRowBatchSize*a.colsPerRow)
-	a.singleArgs = make([]interface{}, a.colsPerRow)
-
-	return nil
-}
-
-// buildUpsertSQL builds a single-row upsert statement.
-func buildUpsertSQL() string {
-	return buildMultiRowUpsertSQL(1)
-}
-
-// buildMultiRowUpsertSQL builds a multi-row upsert statement for n rows.
-func buildMultiRowUpsertSQL(n int) string {
-	// Build column list
-	cols := []string{"prefix", "depth", "total_count", "total_bytes"}
-	updates := []string{
-		"total_count = total_count + excluded.total_count",
-		"total_bytes = total_bytes + excluded.total_bytes",
-	}
-
-	for i := range tiers.NumTiers {
-		cols = append(cols, fmt.Sprintf("t%d_count", i), fmt.Sprintf("t%d_bytes", i))
-		updates = append(updates,
-			fmt.Sprintf("t%d_count = t%d_count + excluded.t%d_count", i, i, i),
-			fmt.Sprintf("t%d_bytes = t%d_bytes + excluded.t%d_bytes", i, i, i),
-		)
-	}
-
-	// Build placeholder for one row
-	oneRowPlaceholders := make([]string, len(cols))
-	for i := range oneRowPlaceholders {
-		oneRowPlaceholders[i] = "?"
-	}
-	oneRow := "(" + strings.Join(oneRowPlaceholders, ", ") + ")"
-
-	// Build VALUES clause with n rows
-	rows := make([]string, n)
-	for i := range rows {
-		rows[i] = oneRow
-	}
-
-	return fmt.Sprintf(`
-		INSERT INTO prefix_stats (%s)
-		VALUES %s
-		ON CONFLICT(prefix) DO UPDATE SET %s
-	`, strings.Join(cols, ", "), strings.Join(rows, ", "), strings.Join(updates, ", "))
-}
-
-// AddObject adds an object's stats to all its prefix ancestors.
-// This should be called for each object in the inventory.
-// Deltas are accumulated in memory for the entire chunk and flushed at Commit().
-// If MaxPrefixesPerChunk is set and exceeded, an early flush is triggered as a
-// safety measure to prevent OOM.
-func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) error {
-	if a.tx == nil {
-		return fmt.Errorf("no transaction in progress")
-	}
-
-	// Accumulate root prefix (empty string)
-	a.accumulateDelta("", 0, size, tierID)
-
-	// Accumulate each directory prefix
-	depth := 1
-	for i := 0; i < len(key); i++ {
-		if key[i] == '/' {
-			prefix := key[:i+1]
-			a.accumulateDelta(prefix, depth, size, tierID)
-			depth++
-		}
-	}
-
-	// Safety limit: flush if we've exceeded max prefixes to prevent OOM
-	if a.cfg.MaxPrefixesPerChunk > 0 && len(a.pendingDeltas) >= a.cfg.MaxPrefixesPerChunk {
-		if err := a.flushPendingDeltas(); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// accumulateDelta adds a delta to the in-memory accumulator.
-func (a *Aggregator) accumulateDelta(prefix string, depth int, size uint64, tierID tiers.ID) {
-	delta, ok := a.pendingDeltas[prefix]
-	if !ok {
-		delta = &prefixDelta{depth: depth}
-		a.pendingDeltas[prefix] = delta
-	}
-	delta.totalCount++
-	delta.totalBytes += size
-	delta.tierCounts[tierID]++
-	delta.tierBytes[tierID] += size
-}
-
-// flushPendingDeltas writes accumulated deltas to SQLite using multi-row batching.
-// Prefixes are sorted before writing to improve B-tree locality and reduce page churn.
-func (a *Aggregator) flushPendingDeltas() error {
-	if len(a.pendingDeltas) == 0 {
-		return nil
-	}
-
-	// Collect prefixes into a slice for batching
-	prefixes := make([]string, 0, len(a.pendingDeltas))
-	for prefix := range a.pendingDeltas {
-		prefixes = append(prefixes, prefix)
-	}
-
-	// Sort prefixes to improve B-tree locality during UPSERT.
-	// Sequential writes to the B-tree index reduce page splits and cache misses.
-	slices.Sort(prefixes)
-
-	// Process full batches using reusable batchArgs buffer
-	for i := 0; i+MultiRowBatchSize <= len(prefixes); i += MultiRowBatchSize {
-		// Fill batch args
-		for j := 0; j < MultiRowBatchSize; j++ {
-			prefix := prefixes[i+j]
-			delta := a.pendingDeltas[prefix]
-			offset := j * a.colsPerRow
-
-			a.batchArgs[offset] = prefix
-			a.batchArgs[offset+1] = delta.depth
-			a.batchArgs[offset+2] = delta.totalCount
-			a.batchArgs[offset+3] = delta.totalBytes
-
-			for k := range tiers.NumTiers {
-				a.batchArgs[offset+4+int(k)*2] = delta.tierCounts[k]
-				a.batchArgs[offset+4+int(k)*2+1] = delta.tierBytes[k]
-			}
-		}
-
-		if _, err := a.multiRowStmt.Exec(a.batchArgs...); err != nil {
-			return fmt.Errorf("multi-row upsert batch at %d: %w", i, err)
-		}
-	}
-
-	// Process remainder with single-row upserts using reusable singleArgs buffer
-	remainder := len(prefixes) % MultiRowBatchSize
-	if remainder > 0 {
-		startIdx := len(prefixes) - remainder
-		for _, prefix := range prefixes[startIdx:] {
-			delta := a.pendingDeltas[prefix]
-
-			a.singleArgs[0] = prefix
-			a.singleArgs[1] = delta.depth
-			a.singleArgs[2] = delta.totalCount
-			a.singleArgs[3] = delta.totalBytes
-
-			for k := range tiers.NumTiers {
-				a.singleArgs[4+int(k)*2] = delta.tierCounts[k]
-				a.singleArgs[4+int(k)*2+1] = delta.tierBytes[k]
-			}
-
-			if _, err := a.upsertStmt.Exec(a.singleArgs...); err != nil {
-				return fmt.Errorf("upsert prefix %q: %w", prefix, err)
-			}
-		}
-	}
-
-	// Clear the map by creating a new one (faster than deleting keys)
-	// Pre-size to half the previous size (likely to see similar patterns)
-	newCapacity := len(prefixes) / 2
-	if newCapacity < 10000 {
-		newCapacity = 10000
-	}
-	a.pendingDeltas = make(map[string]*prefixDelta, newCapacity)
-	return nil
 }
 
 // extractPrefixes returns all directory prefixes for a key.
 // For "a/b/c.txt", returns ["a/", "a/b/"]
 // For "a/b/c/", returns ["a/", "a/b/", "a/b/c/"]
-//
-// Note: This is used by pipeline.go and tests. The hot path in AddObject
-// uses an inline version to avoid slice allocation per object.
 func extractPrefixes(key string) []string {
-	var prefixes []string
+	// Pre-allocate with capacity 8 - S3 keys rarely have >8 path components
+	prefixes := make([]string, 0, 8)
 	for i := 0; i < len(key); i++ {
 		if key[i] == '/' {
 			prefixes = append(prefixes, key[:i+1])
 		}
 	}
 	return prefixes
-}
-
-// Commit commits the current transaction.
-// Flushes any remaining pending deltas before committing.
-func (a *Aggregator) Commit() error {
-	if a.tx == nil {
-		return fmt.Errorf("no transaction in progress")
-	}
-
-	// Flush any remaining pending deltas
-	if err := a.flushPendingDeltas(); err != nil {
-		return fmt.Errorf("flush pending deltas: %w", err)
-	}
-	a.pendingDeltas = nil
-
-	// Close prepared statements (errors intentionally ignored - best effort cleanup)
-	if a.upsertStmt != nil {
-		_ = a.upsertStmt.Close()
-		a.upsertStmt = nil
-	}
-	if a.multiRowStmt != nil {
-		_ = a.multiRowStmt.Close()
-		a.multiRowStmt = nil
-	}
-
-	err := a.tx.Commit()
-	a.tx = nil
-	if err != nil {
-		return fmt.Errorf("commit transaction: %w", err)
-	}
-	return nil
-}
-
-// Rollback rolls back the current transaction.
-// Discards any pending in-memory deltas.
-func (a *Aggregator) Rollback() error {
-	if a.tx == nil {
-		return nil
-	}
-
-	// Discard pending deltas
-	a.pendingDeltas = nil
-
-	// Close prepared statements (errors intentionally ignored - best effort cleanup)
-	if a.upsertStmt != nil {
-		_ = a.upsertStmt.Close()
-		a.upsertStmt = nil
-	}
-	if a.multiRowStmt != nil {
-		_ = a.multiRowStmt.Close()
-		a.multiRowStmt = nil
-	}
-
-	err := a.tx.Rollback()
-	a.tx = nil
-	return err
 }
 
 // PrefixCount returns the total number of prefixes in the database.
@@ -596,72 +289,106 @@ func (a *Aggregator) MaxDepth() (uint32, error) {
 	return uint32(maxDepth.Int64), nil
 }
 
-// PresentTiers returns the list of tiers that have data.
+// PresentTiers returns the list of tier IDs that have data in the database.
+// Uses the sparse prefix_tier_stats table for efficient lookup.
 func (a *Aggregator) PresentTiers() ([]tiers.ID, error) {
-	var present []tiers.ID
+	query := "SELECT DISTINCT tier_code FROM prefix_tier_stats ORDER BY tier_code"
+	rows, err := a.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("query tiers: %w", err)
+	}
+	defer rows.Close()
 
-	for i := range tiers.NumTiers {
-		var count sql.NullInt64
-		query := fmt.Sprintf("SELECT SUM(t%d_count) FROM prefix_stats WHERE depth = 0", i)
-		err := a.db.QueryRow(query).Scan(&count)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("check tier %d: %w", i, err)
+	// Pre-allocate with capacity for all tiers (at most tiers.NumTiers)
+	present := make([]tiers.ID, 0, tiers.NumTiers)
+	for rows.Next() {
+		var tierCode int
+		if err := rows.Scan(&tierCode); err != nil {
+			return nil, fmt.Errorf("scan tier: %w", err)
 		}
-		if count.Valid && count.Int64 > 0 {
-			present = append(present, i)
-		}
+		present = append(present, tiers.ID(tierCode))
 	}
 
-	return present, nil
+	return present, rows.Err()
 }
 
 // IteratePrefixes returns an iterator over all prefixes in lexicographic order.
-// This fetches all 28 columns including all tier data.
+// This fetches base stats and loads tier data for present tiers.
 func (a *Aggregator) IteratePrefixes() (*PrefixIterator, error) {
-	return a.IteratePrefixesForTiers(nil) // nil means all tiers
+	return a.IteratePrefixesForTiers(nil) // nil means load all present tiers
 }
 
-// IteratePrefixesForTiers returns an iterator that only fetches specified tier columns.
-// This reduces CGO overhead by fetching fewer columns from SQLite.
+// IteratePrefixesForTiers returns an iterator that fetches prefixes and their tier data.
+// Uses the sparse schema with two tables:
+// - prefix_stats: base stats (4 columns)
+// - prefix_tier_stats: tier-specific stats
 //
-// If presentTiers is nil, ALL tier columns are fetched (backward compatibility).
-// If presentTiers is empty slice, only base columns are fetched (~86% fewer CGO calls).
-// If presentTiers contains specific tiers, only those tier columns are fetched.
+// If presentTiers is nil, tier data is loaded for all tiers with data.
+// If presentTiers is empty slice, no tier data is loaded.
+// If presentTiers contains specific tiers, only those tiers are loaded.
 func (a *Aggregator) IteratePrefixesForTiers(presentTiers []tiers.ID) (*PrefixIterator, error) {
-	// Build SELECT statement with only needed columns
-	cols := []string{"prefix", "depth", "total_count", "total_bytes"}
-
+	// If nil, discover present tiers
 	if presentTiers == nil {
-		// nil means fetch all tiers (backward compatibility)
-		for i := tiers.ID(0); i < tiers.NumTiers; i++ {
-			cols = append(cols, fmt.Sprintf("t%d_count", i), fmt.Sprintf("t%d_bytes", i))
-		}
-	} else {
-		// Only add specified tier columns
-		for _, t := range presentTiers {
-			cols = append(cols, fmt.Sprintf("t%d_count", t), fmt.Sprintf("t%d_bytes", t))
+		var err error
+		presentTiers, err = a.PresentTiers()
+		if err != nil {
+			return nil, fmt.Errorf("get present tiers: %w", err)
 		}
 	}
 
-	query := fmt.Sprintf("SELECT %s FROM prefix_stats ORDER BY prefix", strings.Join(cols, ", "))
-	rows, err := a.db.Query(query)
+	// Load tier data into map for efficient lookup
+	tierData := make(map[string][tiers.NumTiers]struct {
+		Count uint64
+		Bytes uint64
+	})
+
+	if len(presentTiers) > 0 {
+		query := "SELECT prefix, tier_code, tier_count, tier_bytes FROM prefix_tier_stats ORDER BY prefix, tier_code"
+		rows, err := a.db.Query(query)
+		if err != nil {
+			return nil, fmt.Errorf("query tier stats: %w", err)
+		}
+		defer rows.Close()
+
+		// Reuse single TierRow struct - no allocations per row
+		var tr TierRow
+		for rows.Next() {
+			// Use type-safe scan helper - concrete types only, no interface{}
+			if err := scanTierRow(rows, &tr); err != nil {
+				return nil, fmt.Errorf("scan tier row: %w", err)
+			}
+			entry := tierData[tr.Prefix]
+			entry[tr.TierCode].Count = tr.TierCount
+			entry[tr.TierCode].Bytes = tr.TierBytes
+			tierData[tr.Prefix] = entry
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate tier stats: %w", err)
+		}
+	}
+
+	// Open prefix stats query
+	query := "SELECT prefix, depth, total_count, total_bytes FROM prefix_stats ORDER BY prefix"
+	prefixRows, err := a.db.Query(query)
 	if err != nil {
-		return nil, fmt.Errorf("query prefixes: %w", err)
+		return nil, fmt.Errorf("query prefix stats: %w", err)
 	}
 
 	return &PrefixIterator{
-		rows:         rows,
+		rows:         prefixRows,
+		tierData:     tierData,
 		presentTiers: presentTiers,
 	}, nil
 }
 
 // PrefixIterator iterates over prefix rows in lexicographic order.
+// Combines base stats from prefix_stats with tier data from prefix_tier_stats.
 type PrefixIterator struct {
 	rows         *sql.Rows
 	current      PrefixRow
 	err          error
-	scanDest     []interface{} // Reused across rows to avoid allocation
-	presentTiers []tiers.ID    // Which tier columns were fetched (nil = all)
+	tierData     map[string][tiers.NumTiers]struct{ Count, Bytes uint64 }
+	presentTiers []tiers.ID
 }
 
 // Next advances to the next row. Returns false when done.
@@ -675,55 +402,38 @@ func (it *PrefixIterator) Next() bool {
 		return false
 	}
 
-	// Initialize scan destinations once (lazy init to avoid allocation if iterator never used)
-	if it.scanDest == nil {
-		it.initScanDest()
-	}
-
-	// Clear tier data to ensure non-present tiers are zero
-	if it.presentTiers != nil {
-		it.current.TierCounts = [tiers.NumTiers]uint64{}
-		it.current.TierBytes = [tiers.NumTiers]uint64{}
-	}
-
-	if err := it.rows.Scan(it.scanDest...); err != nil {
+	// Use type-safe scan helper - concrete types only, no interface{}
+	// Scans 4 columns: prefix, depth, total_count, total_bytes
+	if err := scanPrefixBaseStats(it.rows, &it.current); err != nil {
 		it.err = fmt.Errorf("scan prefix row: %w", err)
 		return false
+	}
+
+	// Clear and populate tier data from pre-loaded map
+	it.current.TierCounts = [tiers.NumTiers]uint64{}
+	it.current.TierBytes = [tiers.NumTiers]uint64{}
+
+	if entry, ok := it.tierData[it.current.Prefix]; ok {
+		for i := range tiers.NumTiers {
+			it.current.TierCounts[i] = entry[i].Count
+			it.current.TierBytes[i] = entry[i].Bytes
+		}
 	}
 
 	return true
 }
 
-// initScanDest initializes scan destinations based on which columns were fetched.
-func (it *PrefixIterator) initScanDest() {
-	if it.presentTiers == nil {
-		// nil means all tier columns were fetched (backward compatibility)
-		it.scanDest = make([]interface{}, 4+int(tiers.NumTiers)*2)
-		it.scanDest[0] = &it.current.Prefix
-		it.scanDest[1] = &it.current.Depth
-		it.scanDest[2] = &it.current.TotalCount
-		it.scanDest[3] = &it.current.TotalBytes
-		for i := range tiers.NumTiers {
-			it.scanDest[4+int(i)*2] = &it.current.TierCounts[i]
-			it.scanDest[4+int(i)*2+1] = &it.current.TierBytes[i]
-		}
-	} else {
-		// Only specified tier columns were fetched (or empty slice for no tiers)
-		it.scanDest = make([]interface{}, 4+len(it.presentTiers)*2)
-		it.scanDest[0] = &it.current.Prefix
-		it.scanDest[1] = &it.current.Depth
-		it.scanDest[2] = &it.current.TotalCount
-		it.scanDest[3] = &it.current.TotalBytes
-		for idx, tierID := range it.presentTiers {
-			it.scanDest[4+idx*2] = &it.current.TierCounts[tierID]
-			it.scanDest[4+idx*2+1] = &it.current.TierBytes[tierID]
-		}
-	}
-}
-
-// Row returns the current row.
+// Row returns a copy of the current row.
+// Use RowPtr() to avoid the 256-byte copy if you only need to read values.
 func (it *PrefixIterator) Row() PrefixRow {
 	return it.current
+}
+
+// RowPtr returns a pointer to the current row (reused across iterations).
+// This avoids copying the 256-byte PrefixRow struct on each iteration.
+// WARNING: The returned pointer is only valid until the next call to Next().
+func (it *PrefixIterator) RowPtr() *PrefixRow {
+	return &it.current
 }
 
 // Err returns any error encountered during iteration.

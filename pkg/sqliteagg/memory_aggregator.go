@@ -35,13 +35,19 @@ func DefaultMemoryAggregatorConfig(dbPath string) MemoryAggregatorConfig {
 	}
 }
 
+// TierStats holds count and bytes for a single tier.
+type TierStats struct {
+	Count uint64
+	Bytes uint64
+}
+
 // PrefixStats holds aggregated stats for a single prefix.
+// Tier data is stored sparsely - only tiers with actual data are populated.
 type PrefixStats struct {
 	Depth      int
 	TotalCount uint64
 	TotalBytes uint64
-	TierCounts [tiers.NumTiers]uint64
-	TierBytes  [tiers.NumTiers]uint64
+	Tiers      map[tiers.ID]*TierStats // sparse - only populated for present tiers
 }
 
 // MemoryAggregator aggregates S3 inventory prefixes entirely in memory,
@@ -97,13 +103,23 @@ func (m *MemoryAggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 func (m *MemoryAggregator) accumulate(prefix string, depth int, size uint64, tierID tiers.ID) {
 	stats, ok := m.prefixes[prefix]
 	if !ok {
-		stats = &PrefixStats{Depth: depth}
+		stats = &PrefixStats{
+			Depth: depth,
+			Tiers: make(map[tiers.ID]*TierStats, 2), // small initial capacity
+		}
 		m.prefixes[prefix] = stats
 	}
 	stats.TotalCount++
 	stats.TotalBytes += size
-	stats.TierCounts[tierID]++
-	stats.TierBytes[tierID] += size
+
+	// Sparse tier accumulation - only create entry if tier is used
+	tierStats, ok := stats.Tiers[tierID]
+	if !ok {
+		tierStats = &TierStats{}
+		stats.Tiers[tierID] = tierStats
+	}
+	tierStats.Count++
+	tierStats.Bytes += size
 }
 
 // PrefixCount returns the current number of unique prefixes.
@@ -120,6 +136,10 @@ func (m *MemoryAggregator) MemoryUsageEstimate() int64 {
 
 // Finalize writes all accumulated data to SQLite and creates indexes.
 // This is the only SQLite I/O performed by this aggregator.
+//
+// Uses sparse tier schema:
+// - prefix_stats: one row per prefix with base stats (4 columns)
+// - prefix_tier_stats: one row per (prefix, tier) pair, only for present tiers
 func (m *MemoryAggregator) Finalize() error {
 	start := time.Now()
 	prefixCount := len(m.prefixes)
@@ -153,60 +173,30 @@ func (m *MemoryAggregator) Finalize() error {
 		}
 	}
 
-	// Create table with WITHOUT ROWID for efficient primary key storage.
-	// Since we insert prefixes in sorted order, this is efficient and avoids
-	// the extra rowid B-tree overhead. The prefix column is the natural primary key.
-	var tierCols strings.Builder
-	for i := range tiers.NumTiers {
-		tierCols.WriteString(fmt.Sprintf(", t%d_count INTEGER NOT NULL, t%d_bytes INTEGER NOT NULL", i, i))
-	}
-
-	createSQL := fmt.Sprintf(`
+	// Create sparse schema:
+	// - prefix_stats: base stats only (4 columns) - minimal CGO overhead per row
+	// - prefix_tier_stats: tier-specific stats, only for tiers with data
+	createSQL := `
 		CREATE TABLE prefix_stats (
 			prefix TEXT NOT NULL PRIMARY KEY,
 			depth INTEGER NOT NULL,
 			total_count INTEGER NOT NULL,
-			total_bytes INTEGER NOT NULL%s
-		) WITHOUT ROWID
-	`, tierCols.String())
+			total_bytes INTEGER NOT NULL
+		) WITHOUT ROWID;
 
+		CREATE TABLE prefix_tier_stats (
+			prefix TEXT NOT NULL,
+			tier_code INTEGER NOT NULL,
+			tier_count INTEGER NOT NULL,
+			tier_bytes INTEGER NOT NULL,
+			PRIMARY KEY (prefix, tier_code)
+		) WITHOUT ROWID;
+	`
 	if _, err := db.Exec(createSQL); err != nil {
-		return fmt.Errorf("create table: %w", err)
+		return fmt.Errorf("create tables: %w", err)
 	}
 
-	// Build multi-row INSERT statement using shared constants
-	colsPerRow := ColsPerRow
-	batchSize := m.cfg.MultiRowBatchSize
-
-	oneRow := "(?" + strings.Repeat(", ?", colsPerRow-1) + ")"
-	batchRows := make([]string, batchSize)
-	for i := range batchRows {
-		batchRows[i] = oneRow
-	}
-	multiSQL := "INSERT INTO prefix_stats VALUES " + strings.Join(batchRows, ", ")
-	singleSQL := "INSERT INTO prefix_stats VALUES " + oneRow
-
-	// Bulk INSERT in single transaction
-	insertStart := time.Now()
-	tx, err := db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-
-	multiStmt, err := tx.Prepare(multiSQL)
-	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("prepare multi-row: %w", err)
-	}
-
-	singleStmt, err := tx.Prepare(singleSQL)
-	if err != nil {
-		multiStmt.Close()
-		tx.Rollback()
-		return fmt.Errorf("prepare single-row: %w", err)
-	}
-
-	// Collect prefixes into slice for batching
+	// Collect and sort prefixes for improved B-tree locality
 	entries := make([]struct {
 		prefix string
 		stats  *PrefixStats
@@ -218,8 +208,6 @@ func (m *MemoryAggregator) Finalize() error {
 		}{p, s})
 	}
 
-	// Sort entries by prefix for improved B-tree locality.
-	// Sequential writes reduce page splits and cache misses.
 	slices.SortFunc(entries, func(a, b struct {
 		prefix string
 		stats  *PrefixStats
@@ -227,65 +215,36 @@ func (m *MemoryAggregator) Finalize() error {
 		return strings.Compare(a.prefix, b.prefix)
 	})
 
-	// Reusable args slices
-	batchArgs := make([]interface{}, batchSize*colsPerRow)
-	singleArgs := make([]interface{}, colsPerRow)
-
-	// Process full batches
-	for i := 0; i+batchSize <= len(entries); i += batchSize {
-		for j := 0; j < batchSize; j++ {
-			e := entries[i+j]
-			offset := j * colsPerRow
-			batchArgs[offset] = e.prefix
-			batchArgs[offset+1] = e.stats.Depth
-			batchArgs[offset+2] = e.stats.TotalCount
-			batchArgs[offset+3] = e.stats.TotalBytes
-			for k := range tiers.NumTiers {
-				batchArgs[offset+4+int(k)*2] = e.stats.TierCounts[k]
-				batchArgs[offset+4+int(k)*2+1] = e.stats.TierBytes[k]
-			}
-		}
-		if _, err := multiStmt.Exec(batchArgs...); err != nil {
-			multiStmt.Close()
-			singleStmt.Close()
-			tx.Rollback()
-			return fmt.Errorf("multi-row insert at %d: %w", i, err)
-		}
+	// Bulk INSERT in single transaction
+	insertStart := time.Now()
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
 	}
 
-	// Process remainder
-	remainder := len(entries) % batchSize
-	if remainder > 0 {
-		startIdx := len(entries) - remainder
-		for _, e := range entries[startIdx:] {
-			singleArgs[0] = e.prefix
-			singleArgs[1] = e.stats.Depth
-			singleArgs[2] = e.stats.TotalCount
-			singleArgs[3] = e.stats.TotalBytes
-			for k := range tiers.NumTiers {
-				singleArgs[4+int(k)*2] = e.stats.TierCounts[k]
-				singleArgs[4+int(k)*2+1] = e.stats.TierBytes[k]
-			}
-			if _, err := singleStmt.Exec(singleArgs...); err != nil {
-				multiStmt.Close()
-				singleStmt.Close()
-				tx.Rollback()
-				return fmt.Errorf("single-row insert: %w", err)
-			}
-		}
+	// Insert prefix_stats (4 columns per row)
+	const prefixCols = 4
+	prefixBatchSize := SQLiteMaxVariables / prefixCols // ~8000 rows per batch
+
+	if err := m.insertPrefixStats(tx, entries, prefixBatchSize); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("insert prefix_stats: %w", err)
 	}
 
-	multiStmt.Close()
-	singleStmt.Close()
+	// Insert prefix_tier_stats (4 columns per row: prefix, tier_code, tier_count, tier_bytes)
+	const tierCols = 4
+	tierBatchSize := SQLiteMaxVariables / tierCols // ~8000 rows per batch
+
+	tierRowCount, err := m.insertTierStats(tx, entries, tierBatchSize)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("insert prefix_tier_stats: %w", err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
 	insertDuration := time.Since(insertStart)
-
-	// No separate index needed - WITHOUT ROWID table with PRIMARY KEY provides
-	// the index as the clustered table structure itself.
-	indexDuration := time.Duration(0)
 
 	// Checkpoint WAL to main database file
 	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
@@ -296,13 +255,167 @@ func (m *MemoryAggregator) Finalize() error {
 
 	m.log.Info().
 		Int("prefix_count", prefixCount).
+		Int("tier_row_count", tierRowCount).
 		Dur("insert_duration", insertDuration).
-		Dur("index_duration", indexDuration).
 		Dur("total_duration", totalDuration).
 		Float64("rows_per_sec", float64(prefixCount)/insertDuration.Seconds()).
 		Msg("finalized to SQLite")
 
 	return nil
+}
+
+// insertPrefixStats inserts base prefix stats using batched INSERT statements.
+func (m *MemoryAggregator) insertPrefixStats(tx *sql.Tx, entries []struct {
+	prefix string
+	stats  *PrefixStats
+}, batchSize int) error {
+	const colsPerRow = 4
+	oneRow := "(?, ?, ?, ?)"
+
+	// Build batch INSERT statement
+	batchRows := make([]string, batchSize)
+	for i := range batchRows {
+		batchRows[i] = oneRow
+	}
+	multiSQL := "INSERT INTO prefix_stats VALUES " + strings.Join(batchRows, ", ")
+	singleSQL := "INSERT INTO prefix_stats VALUES " + oneRow
+
+	multiStmt, err := tx.Prepare(multiSQL)
+	if err != nil {
+		return fmt.Errorf("prepare multi-row: %w", err)
+	}
+	defer multiStmt.Close()
+
+	singleStmt, err := tx.Prepare(singleSQL)
+	if err != nil {
+		return fmt.Errorf("prepare single-row: %w", err)
+	}
+	defer singleStmt.Close()
+
+	batchArgs := make([]interface{}, batchSize*colsPerRow)
+
+	// Process full batches
+	for i := 0; i+batchSize <= len(entries); i += batchSize {
+		for j := 0; j < batchSize; j++ {
+			e := entries[i+j]
+			offset := j * colsPerRow
+			batchArgs[offset] = e.prefix
+			batchArgs[offset+1] = e.stats.Depth
+			batchArgs[offset+2] = e.stats.TotalCount
+			batchArgs[offset+3] = e.stats.TotalBytes
+		}
+		if _, err := multiStmt.Exec(batchArgs...); err != nil {
+			return fmt.Errorf("batch insert at %d: %w", i, err)
+		}
+	}
+
+	// Process remainder
+	remainder := len(entries) % batchSize
+	if remainder > 0 {
+		startIdx := len(entries) - remainder
+		for _, e := range entries[startIdx:] {
+			if _, err := singleStmt.Exec(e.prefix, e.stats.Depth, e.stats.TotalCount, e.stats.TotalBytes); err != nil {
+				return fmt.Errorf("single insert: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// insertTierStats inserts tier stats using batched INSERT statements.
+// Returns the number of tier rows inserted.
+func (m *MemoryAggregator) insertTierStats(tx *sql.Tx, entries []struct {
+	prefix string
+	stats  *PrefixStats
+}, batchSize int) (int, error) {
+	const colsPerRow = 4
+	oneRow := "(?, ?, ?, ?)"
+
+	// Build batch INSERT statement
+	batchRows := make([]string, batchSize)
+	for i := range batchRows {
+		batchRows[i] = oneRow
+	}
+	multiSQL := "INSERT INTO prefix_tier_stats VALUES " + strings.Join(batchRows, ", ")
+	singleSQL := "INSERT INTO prefix_tier_stats VALUES " + oneRow
+
+	multiStmt, err := tx.Prepare(multiSQL)
+	if err != nil {
+		return 0, fmt.Errorf("prepare multi-row: %w", err)
+	}
+	defer multiStmt.Close()
+
+	singleStmt, err := tx.Prepare(singleSQL)
+	if err != nil {
+		return 0, fmt.Errorf("prepare single-row: %w", err)
+	}
+	defer singleStmt.Close()
+
+	batchArgs := make([]interface{}, batchSize*colsPerRow)
+
+	// Collect all tier rows in sorted order (prefix, tier_code)
+	type tierRow struct {
+		prefix   string
+		tierCode tiers.ID
+		count    uint64
+		bytes    uint64
+	}
+
+	// Count total tier rows for pre-allocation
+	totalTierRows := 0
+	for _, e := range entries {
+		totalTierRows += len(e.stats.Tiers)
+	}
+
+	tierRows := make([]tierRow, 0, totalTierRows)
+	for _, e := range entries {
+		// Collect tiers for this prefix in tier_code order
+		for tierCode, ts := range e.stats.Tiers {
+			tierRows = append(tierRows, tierRow{
+				prefix:   e.prefix,
+				tierCode: tierCode,
+				count:    ts.Count,
+				bytes:    ts.Bytes,
+			})
+		}
+	}
+
+	// Sort by (prefix, tier_code) for optimal B-tree insertion
+	slices.SortFunc(tierRows, func(a, b tierRow) int {
+		if cmp := strings.Compare(a.prefix, b.prefix); cmp != 0 {
+			return cmp
+		}
+		return int(a.tierCode) - int(b.tierCode)
+	})
+
+	// Process full batches
+	for i := 0; i+batchSize <= len(tierRows); i += batchSize {
+		for j := 0; j < batchSize; j++ {
+			tr := tierRows[i+j]
+			offset := j * colsPerRow
+			batchArgs[offset] = tr.prefix
+			batchArgs[offset+1] = int(tr.tierCode)
+			batchArgs[offset+2] = tr.count
+			batchArgs[offset+3] = tr.bytes
+		}
+		if _, err := multiStmt.Exec(batchArgs...); err != nil {
+			return 0, fmt.Errorf("batch insert at %d: %w", i, err)
+		}
+	}
+
+	// Process remainder
+	remainder := len(tierRows) % batchSize
+	if remainder > 0 {
+		startIdx := len(tierRows) - remainder
+		for _, tr := range tierRows[startIdx:] {
+			if _, err := singleStmt.Exec(tr.prefix, int(tr.tierCode), tr.count, tr.bytes); err != nil {
+				return 0, fmt.Errorf("single insert: %w", err)
+			}
+		}
+	}
+
+	return len(tierRows), nil
 }
 
 // Clear releases memory by clearing the prefix map.

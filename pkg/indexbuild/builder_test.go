@@ -45,18 +45,7 @@ func TestBuildFromSQLiteSimple(t *testing.T) {
 	outDir := filepath.Join(tmpDir, "index")
 	dbPath := filepath.Join(tmpDir, "prefix-agg.db")
 
-	// Create and populate SQLite database
-	sqliteCfg := sqliteagg.DefaultConfig(dbPath)
-	agg, err := sqliteagg.Open(sqliteCfg)
-	if err != nil {
-		t.Fatalf("Open SQLite failed: %v", err)
-	}
-
-	// Add test objects
-	if err := agg.BeginChunk(); err != nil {
-		t.Fatalf("BeginChunk failed: %v", err)
-	}
-
+	// Create and populate SQLite database using MemoryAggregator
 	testObjects := []struct {
 		key    string
 		size   uint64
@@ -67,18 +56,15 @@ func TestBuildFromSQLiteSimple(t *testing.T) {
 		{"b/file3.txt", 300, tiers.GlacierFR},
 	}
 
+	memAgg := sqliteagg.NewMemoryAggregator(sqliteagg.DefaultMemoryAggregatorConfig(dbPath))
 	for _, obj := range testObjects {
-		if err := agg.AddObject(obj.key, obj.size, obj.tierID); err != nil {
-			t.Fatalf("AddObject(%s) failed: %v", obj.key, err)
-		}
+		memAgg.AddObject(obj.key, obj.size, obj.tierID)
+	}
+	if err := memAgg.Finalize(); err != nil {
+		t.Fatalf("Finalize failed: %v", err)
 	}
 
-	if err := agg.Commit(); err != nil {
-		t.Fatalf("Commit failed: %v", err)
-	}
-	if err := agg.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
+	sqliteCfg := sqliteagg.DefaultConfig(dbPath)
 
 	// Build index from SQLite
 	cfg := SQLiteConfig{
@@ -125,15 +111,13 @@ func TestBuildFromSQLiteEmpty(t *testing.T) {
 	outDir := filepath.Join(tmpDir, "index")
 	dbPath := filepath.Join(tmpDir, "prefix-agg.db")
 
-	// Create empty SQLite database
+	// Create empty SQLite database using MemoryAggregator
+	memAgg := sqliteagg.NewMemoryAggregator(sqliteagg.DefaultMemoryAggregatorConfig(dbPath))
+	if err := memAgg.Finalize(); err != nil {
+		t.Fatalf("Finalize failed: %v", err)
+	}
+
 	sqliteCfg := sqliteagg.DefaultConfig(dbPath)
-	agg, err := sqliteagg.Open(sqliteCfg)
-	if err != nil {
-		t.Fatalf("Open SQLite failed: %v", err)
-	}
-	if err := agg.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
 
 	cfg := SQLiteConfig{
 		OutDir:    outDir,
@@ -142,7 +126,7 @@ func TestBuildFromSQLiteEmpty(t *testing.T) {
 	}
 
 	// Build should fail with empty database
-	err = BuildFromSQLite(cfg)
+	err := BuildFromSQLite(cfg)
 	if err == nil {
 		t.Fatal("expected error for empty database")
 	}

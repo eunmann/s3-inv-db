@@ -33,24 +33,32 @@ index creation. This is the default path used by `s3inv-index build`.
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### SQLite Schema
+### SQLite Schema (Sparse Tier Storage)
 
 ```sql
+-- Base stats: 4 columns per prefix (minimal CGO overhead)
 CREATE TABLE prefix_stats (
-    prefix TEXT PRIMARY KEY,
+    prefix TEXT NOT NULL PRIMARY KEY,
     depth INTEGER NOT NULL,
     total_count INTEGER NOT NULL DEFAULT 0,
-    total_bytes INTEGER NOT NULL DEFAULT 0,
-    t0_count INTEGER NOT NULL DEFAULT 0,  -- Per-tier stats
-    t0_bytes INTEGER NOT NULL DEFAULT 0,
-    ...  -- t1 through t11 for all storage tiers
-);
+    total_bytes INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;
+
+-- Tier stats: only rows for tiers with actual data
+CREATE TABLE prefix_tier_stats (
+    prefix TEXT NOT NULL,
+    tier_code INTEGER NOT NULL,
+    tier_count INTEGER NOT NULL DEFAULT 0,
+    tier_bytes INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (prefix, tier_code)
+) WITHOUT ROWID;
 ```
 
 **Why this schema:**
+- `WITHOUT ROWID` enables clustered index storage for efficient ORDER BY scans
 - `TEXT PRIMARY KEY` provides natural lexicographic ordering for trie building
-- All stats in one table eliminates JOINs during iteration
-- Per-tier columns enable tier-specific analysis without separate queries
+- Sparse tier storage: only store tiers with data (vs 28 columns for all tiers)
+- 4 columns per row minimizes CGO overhead per scan
 
 ### SQLite PRAGMAs (Bulk Write Mode)
 
@@ -71,9 +79,8 @@ pragmas := []string{
 
 ```go
 const (
-    SQLiteMaxVariables = 32766               // SQLite's SQLITE_MAX_VARIABLE_NUMBER
-    ColsPerRow = 4 + int(tiers.NumTiers)*2   // 28 columns (4 base + 12 tiers × 2)
-    MaxRowsPerBatch = SQLiteMaxVariables / ColsPerRow  // 1170 rows per INSERT
+    SQLiteMaxVariables = 32766                      // SQLite's SQLITE_MAX_VARIABLE_NUMBER
+    MaxRowsPerBatch = SQLiteMaxVariables / 4        // 8191 rows per INSERT (4 cols per row)
 )
 ```
 
@@ -81,6 +88,74 @@ const (
 - Sequential B-tree index updates reduce page splits
 - Cache locality improves as adjacent prefixes hit same pages
 - Sorted UPSERT is 27% faster than random order
+
+### Concrete-Type SQLite Scan Optimization
+
+The SQLite read path uses concrete Go types exclusively - no `interface{}` or `any`
+in hot loops. This eliminates reflection overhead and enables the compiler to optimize.
+
+```go
+// Type-safe scan helpers - concrete types only
+func scanPrefixBaseStats(rows *sql.Rows, r *PrefixRow) error {
+    return rows.Scan(&r.Prefix, &r.Depth, &r.TotalCount, &r.TotalBytes)
+}
+
+func scanTierRow(rows *sql.Rows, r *TierRow) error {
+    return rows.Scan(&r.Prefix, &r.TierCode, &r.TierCount, &r.TierBytes)
+}
+```
+
+**Key optimizations:**
+1. **Narrow projections:** Only 4 columns per query (vs 28 in wide schema)
+2. **Concrete struct scanning:** Direct field pointers, no reflection
+3. **Struct reuse:** Same `PrefixRow`/`TierRow` reused across iterations
+4. **RowPtr() API:** Returns pointer to avoid 256-byte struct copy
+
+**Benchmark Results (50k objects → 139k prefixes):**
+
+| Mode | Time | Allocations | Notes |
+|------|------|-------------|-------|
+| With tier data | 398ms | 59MB / 1.28M allocs | Tier map pre-loading |
+| Without tier data | 154ms | 9MB / 551k allocs | 2.6x faster |
+
+**Key insight:** Tier data pre-loading (building the map) dominates scan time.
+When tier data isn't needed, iteration is 2.6x faster with 6.5x less memory.
+
+Run SQLite scan benchmarks:
+```bash
+go test -bench=BenchmarkSQLiteScan -benchmem ./pkg/sqliteagg/...
+```
+
+### Slice/Map Capacity Optimization
+
+All hot path allocations use pre-calculated or tuned initial capacities to minimize
+re-allocations and reduce GC pressure.
+
+**Key optimizations:**
+
+| Location | Before | After | Impact |
+|----------|--------|-------|--------|
+| `extractPrefixes()` | `var []string` | `make([]string, 0, slashCount)` | Exact capacity, 0 allocs for flat keys |
+| `PresentTiers()` | `var []tiers.ID` | `make([]tiers.ID, 0, tiers.NumTiers)` | Max 8 tiers, no reallocs |
+| `Builder.stack` | nil | `make([]stackNode, 0, 16)` | Typical max depth |
+| `Builder.nodes` | nil | `make([]Node, 0, 64)` | Initial capacity, grows 2x |
+| `DepthIndexBuilder.buckets` | `make(map)` | `make(map, 16)` | Typical depth count |
+| `GetDescendants()` | `var []Node` | `make([]Node, 0, subtreeSize)` | Exact capacity |
+| `DescendantsUpToDepth()` | `var [][]uint64` | `make([][]uint64, 0, depthLevels)` | Exact capacity |
+| `DescendantsAtDepthFiltered()` | `var []uint64` | `make([]uint64, 0, len(input))` | Worst-case capacity |
+
+**Benchmark results for `extractPrefixes` (per call):**
+
+| Key Type | Time | Allocations |
+|----------|------|-------------|
+| Shallow (no slashes) | 15ns | 0 B/op, 0 allocs |
+| Medium (2 levels) | 73ns | 80 B/op, 1 alloc |
+| Deep (5+ levels) | 109ns | 240 B/op, 1 alloc |
+
+Run triebuild benchmarks:
+```bash
+go test -bench=BenchmarkExtractPrefixes -benchmem ./pkg/triebuild/...
+```
 
 ### End-to-End Performance (500k objects → 1.2M prefixes)
 

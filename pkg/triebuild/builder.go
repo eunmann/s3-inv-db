@@ -55,13 +55,22 @@ type Builder struct {
 
 // New creates a new trie builder.
 func New() *Builder {
-	return &Builder{}
+	return &Builder{
+		// Pre-allocate stack with capacity for typical max depth (16 levels)
+		stack: make([]stackNode, 0, 16),
+		// Initial nodes capacity - will grow as needed via storeNode
+		nodes: make([]Node, 0, 64),
+	}
 }
 
 // NewWithTiers creates a new trie builder with tier tracking enabled.
 func NewWithTiers() *Builder {
 	return &Builder{
 		trackTiers: true,
+		// Pre-allocate stack with capacity for typical max depth (16 levels)
+		stack: make([]stackNode, 0, 16),
+		// Initial nodes capacity - will grow as needed via storeNode
+		nodes: make([]Node, 0, 64),
 	}
 }
 
@@ -106,9 +115,22 @@ func (b *Builder) processKey(key string, size uint64, tierID tiers.ID) error {
 // extractPrefixes returns all directory prefixes for a key.
 // For "a/b/c.txt", returns ["a/", "a/b/"]
 // For "a/b/c/", returns ["a/", "a/b/", "a/b/c/"]
+// Returns nil if the key has no directory prefixes.
 func extractPrefixes(key string) []string {
-	var prefixes []string
+	// Count slashes first to determine capacity and avoid allocation for non-nested keys
+	slashCount := 0
+	for i := 0; i < len(key); i++ {
+		if key[i] == '/' {
+			slashCount++
+		}
+	}
 
+	if slashCount == 0 {
+		return nil // No prefixes
+	}
+
+	// Pre-allocate exact capacity based on slash count
+	prefixes := make([]string, 0, slashCount)
 	for i := 0; i < len(key); i++ {
 		if key[i] == '/' {
 			prefix := key[:i+1]
@@ -297,8 +319,8 @@ func BuildFromKeysWithTiers(keys []string, sizes []uint64, tierIDs []tiers.ID) (
 
 	b.closeAll()
 
-	// Collect present tiers
-	var presentTiers []tiers.ID
+	// Collect present tiers - pre-allocate with capacity for all tiers
+	presentTiers := make([]tiers.ID, 0, tiers.NumTiers)
 	if b.trackTiers {
 		for i := tiers.ID(0); i < tiers.NumTiers; i++ {
 			if b.tierPresent[i] {
@@ -332,7 +354,12 @@ func (r *Result) GetDescendants(pos uint64) []Node {
 	}
 
 	node := r.Nodes[pos]
-	var descendants []Node
+	// Pre-allocate exact size based on subtree range
+	descendantCount := int(node.SubtreeEnd - pos)
+	if descendantCount <= 0 {
+		return nil
+	}
+	descendants := make([]Node, 0, descendantCount)
 
 	for i := pos + 1; i <= node.SubtreeEnd; i++ {
 		descendants = append(descendants, r.Nodes[i])

@@ -74,7 +74,8 @@ func OpenFileWithOptions(path string, opts OpenOptions) (*CSVReader, error) {
 	}
 
 	var reader io.Reader = bufio.NewReader(f)
-	var closers []io.Closer
+	// Pre-allocate for file + optional gzip reader
+	closers := make([]io.Closer, 0, 2)
 	closers = append(closers, f)
 
 	// Check for gzip compression by extension or magic bytes
@@ -210,7 +211,8 @@ func OpenFileWithSchemaOptions(path string, opts SchemaOptions) (*CSVReader, err
 	}
 
 	var reader io.Reader = bufio.NewReader(f)
-	var closers []io.Closer
+	// Pre-allocate for file + optional gzip reader
+	closers := make([]io.Closer, 0, 2)
 	closers = append(closers, f)
 
 	// Check for gzip compression by extension

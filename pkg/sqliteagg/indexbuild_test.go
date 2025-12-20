@@ -11,11 +11,8 @@ func TestBuildTrieFromSQLite(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	agg, err := Open(DefaultConfig(dbPath))
-	if err != nil {
-		t.Fatalf("Open failed: %v", err)
-	}
-	defer agg.Close()
+	// Use MemoryAggregator to create the database
+	memAgg := NewMemoryAggregator(DefaultMemoryAggregatorConfig(dbPath))
 
 	// Add objects to create a hierarchy:
 	// ""
@@ -26,10 +23,6 @@ func TestBuildTrieFromSQLite(t *testing.T) {
 	// │   └── file2.txt (200 bytes)
 	// └── c/
 	//     └── file4.txt (400 bytes)
-
-	if err := agg.BeginChunk(); err != nil {
-		t.Fatalf("BeginChunk failed: %v", err)
-	}
 
 	testObjects := []struct {
 		key    string
@@ -43,14 +36,19 @@ func TestBuildTrieFromSQLite(t *testing.T) {
 	}
 
 	for _, obj := range testObjects {
-		if err := agg.AddObject(obj.key, obj.size, obj.tierID); err != nil {
-			t.Fatalf("AddObject(%s) failed: %v", obj.key, err)
-		}
+		memAgg.AddObject(obj.key, obj.size, obj.tierID)
 	}
 
-	if err := agg.Commit(); err != nil {
-		t.Fatalf("Commit failed: %v", err)
+	if err := memAgg.Finalize(); err != nil {
+		t.Fatalf("Finalize failed: %v", err)
 	}
+
+	// Open for reading
+	agg, err := Open(DefaultConfig(dbPath))
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer agg.Close()
 
 	// Build trie from SQLite
 	result, err := BuildTrieFromSQLite(agg)
@@ -132,6 +130,12 @@ func TestBuildTrieFromSQLiteEmpty(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
+	// Create empty database using MemoryAggregator
+	memAgg := NewMemoryAggregator(DefaultMemoryAggregatorConfig(dbPath))
+	if err := memAgg.Finalize(); err != nil {
+		t.Fatalf("Finalize failed: %v", err)
+	}
+
 	agg, err := Open(DefaultConfig(dbPath))
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
@@ -177,17 +181,10 @@ func TestTrieNodeOrder(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	agg, err := Open(DefaultConfig(dbPath))
-	if err != nil {
-		t.Fatalf("Open failed: %v", err)
-	}
-	defer agg.Close()
+	// Use MemoryAggregator to create the database
+	memAgg := NewMemoryAggregator(DefaultMemoryAggregatorConfig(dbPath))
 
 	// Add objects in a way that tests the lexicographic ordering
-	if err := agg.BeginChunk(); err != nil {
-		t.Fatalf("BeginChunk failed: %v", err)
-	}
-
 	testObjects := []string{
 		"z/file.txt",
 		"a/file.txt",
@@ -196,14 +193,18 @@ func TestTrieNodeOrder(t *testing.T) {
 	}
 
 	for _, key := range testObjects {
-		if err := agg.AddObject(key, 100, tiers.Standard); err != nil {
-			t.Fatalf("AddObject(%s) failed: %v", key, err)
-		}
+		memAgg.AddObject(key, 100, tiers.Standard)
 	}
 
-	if err := agg.Commit(); err != nil {
-		t.Fatalf("Commit failed: %v", err)
+	if err := memAgg.Finalize(); err != nil {
+		t.Fatalf("Finalize failed: %v", err)
 	}
+
+	agg, err := Open(DefaultConfig(dbPath))
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer agg.Close()
 
 	result, err := BuildTrieFromSQLite(agg)
 	if err != nil {

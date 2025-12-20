@@ -51,9 +51,10 @@ func BuildTrieFromSQLite(agg *Aggregator) (*triebuild.Result, error) {
 	processedCount := uint64(0)
 
 	for iter.Next() {
-		row := iter.Row()
+		// Use RowPtr to avoid 256-byte struct copy on each iteration
+		row := iter.RowPtr()
 
-		builder.addPrefix(row)
+		builder.addPrefix(*row)
 
 		processedCount++
 
