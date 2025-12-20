@@ -10,12 +10,12 @@ This document describes the high-level architecture of s3-inv-db, explaining how
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐ │
-│  │   S3     │───►│  SQLite  │───►│  Trie    │───►│ Columnar │ │
-│  │ Streaming│    │Aggregator│    │ Builder  │    │  Writer  │ │
+│  │   S3     │───►│ In-Memory│───►│ External │───►│ Streaming│ │
+│  │ Streaming│    │Aggregator│    │  Merge   │    │  Builder │ │
 │  └──────────┘    └──────────┘    └──────────┘    └──────────┘ │
 │       │               │               │               │        │
 │       ▼               ▼               ▼               ▼        │
-│  CSV.GZ streams   Prefix stats   Prefix trie    Index files    │
+│  CSV.GZ streams   Run files      Sorted stream   Index files   │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 
@@ -37,7 +37,7 @@ This document describes the high-level architecture of s3-inv-db, explaining how
 
 ## Core Components
 
-### 1. S3 Streaming (`pkg/s3fetch`, `pkg/sqliteagg`)
+### 1. S3 Streaming (`pkg/s3fetch`)
 
 Streams S3 inventory files directly from S3:
 - Fetches inventory manifest.json
@@ -53,64 +53,38 @@ type Client struct {
 func (c *Client) StreamObject(ctx, bucket, key string) (io.ReadCloser, error)
 ```
 
-### 2. SQLite Aggregator (`pkg/sqliteagg`)
+### 2. External Sort Pipeline (`pkg/extsort`)
 
-Aggregates prefix statistics in a SQLite database during streaming:
-- Groups by prefix, computing count and bytes per prefix
-- In-memory aggregation for maximum throughput
-- Efficient upsert operations with proper indexing
+The build pipeline uses a streaming external sort approach with bounded memory:
 
-**Why SQLite streaming instead of external sort?**
-- **No disk copies**: Data flows directly from S3 into aggregation
-- **Lower memory**: In-memory aggregation with final flush to SQLite
-- **Simpler**: No k-way merge, no temporary files to manage
-- **Maximum throughput**: No checkpoint/resume overhead
+**Stage A: Streaming Ingest + Chunked Aggregation**
+- Streams CSV chunks from S3 in parallel
+- Aggregates prefix statistics in memory using `Aggregator`
+- Uses fixed-size `[MaxTiers]uint64` arrays instead of maps for tier data
+- Flushes to sorted run files when memory threshold is exceeded
 
-**Schema:**
-```sql
-CREATE TABLE prefix_stats (
-    prefix TEXT PRIMARY KEY,
-    depth INTEGER,
-    total_count INTEGER,
-    total_bytes INTEGER,
-    -- Per-tier columns when tier tracking enabled
-    tier_0_count INTEGER, tier_0_bytes INTEGER,
-    ...
-);
-```
+**Stage B: Sort and Run File Spilling**
+- When memory threshold is reached, aggregator drains to sorted run file
+- Run files are sorted by prefix (lexicographic order) before writing
+- Binary format: length-prefixed records with tier arrays
 
-### 3. Trie Builder (`pkg/triebuild`, `pkg/sqliteagg`)
+**Stage C: K-Way Merge**
+- Heap-based merge of all run files
+- Produces globally sorted stream of unique prefixes
+- Duplicates from different runs are merged (stats summed)
 
-Constructs a prefix trie from the pre-aggregated prefix stats:
-
-```
-Prefixes: ["a/", "a/b/", "a/c/"]
-
-Trie:
-  (root)
-    └── a/
-        ├── a/b/
-        └── a/c/
-```
+**Stage D: Streaming Index Build**
+- Single-pass construction of columnar arrays
+- Computes subtree ranges on-the-fly using depth stack
+- Writes MPHF, depth index, and tier stats
 
 **Key properties:**
-- **Pre-aggregated**: Stats already computed during streaming
-- **Sorted input**: SQLite provides ORDER BY prefix
-- **Pre-order positions**: Nodes assigned positions in DFS pre-order
-- **Subtree ranges**: Each node knows the position range of all descendants
+- **Pure Go**: No CGO dependencies, cross-compiles easily
+- **Bounded memory**: Configurable threshold (~256MB default)
+- **Streaming**: No need to hold entire dataset in memory
+- **Dynamic scaling**: Concurrency scales with CPU count
 
-**Data collected per node:**
-- `Prefix`: The full prefix string (e.g., "data/2024/01/")
-- `Pos`: Pre-order position in the trie
-- `Depth`: Number of "/" characters in prefix
-- `SubtreeEnd`: Last descendant's position (enables range queries)
-- `ObjectCount`: Total objects under this prefix
-- `TotalBytes`: Total bytes under this prefix
-- `MaxDepthInSubtree`: Deepest descendant's depth
-- `TierBytes[N]`: Per-tier byte counts (when tier tracking enabled)
-- `TierCounts[N]`: Per-tier object counts (when tier tracking enabled)
-
-### 4. Index Format (`pkg/format`)
+### 3. Index Format (`pkg/format`)
 
 Writes the trie to disk in a columnar, memory-mapped format:
 
@@ -129,7 +103,11 @@ Writes the trie to disk in a columnar, memory-mapped format:
 - Posting lists of positions at each depth level
 - Enables efficient depth-based queries
 
-### 5. Index Reader (`pkg/indexread`)
+**Tier statistics** (optional):
+- Per-tier count and byte arrays in `tier_stats/` directory
+- Only created for tiers with data
+
+### 4. Index Reader (`pkg/indexread`)
 
 Provides the query API over memory-mapped index files:
 
@@ -147,6 +125,9 @@ type Index struct {
 
     // Depth posting lists
     depthIndex *DepthIndex
+
+    // Tier statistics
+    tierStats *TierStatsReader
 }
 ```
 
@@ -159,20 +140,23 @@ type Index struct {
    └── s3fetch.Client streams inventory files
    └── inventory.Reader parses CSV records
 
-2. Aggregate in SQLite
-   └── sqliteagg.MemoryAggregator aggregates in memory
-   └── Final flush to SQLite for persistence
+2. Aggregate in memory
+   └── extsort.Aggregator accumulates prefix stats
+   └── sync.Pool for PrefixStats to reduce allocations
+   └── Flush to run files when memory threshold reached
 
-3. Build trie
-   └── sqliteagg.BuildTrieFromSQLite reads sorted prefixes
-   └── Computes subtree ranges from pre-aggregated stats
+3. K-way merge
+   └── extsort.MergeIterator heap-merges run files
+   └── Yields globally sorted, deduplicated stream
 
-4. Write index
-   └── format.ArrayWriter writes columnar arrays
-   └── format.MPHFBuilder creates hash function
-   └── format.DepthIndexBuilder creates depth lists
+4. Build index
+   └── extsort.IndexBuilder processes sorted stream
+   └── Computes subtree ranges via depth stack
+   └── Writes columnar arrays in single pass
 
 5. Finalize
+   └── Build MPHF from all prefixes
+   └── Write depth index posting lists
    └── Write manifest with checksums
    └── Atomic rename to final location
 ```
@@ -217,11 +201,11 @@ type Index struct {
 - **Avoids full scan**: Jump directly to relevant positions
 - **Composable**: Combine with subtree range for scoped queries
 
-### Why SQLite for aggregation?
-- **Streaming**: No need to hold entire dataset in memory
-- **Persistent**: Index can be built from stored aggregation
-- **Efficient**: Proper indexing for upsert operations
-- **Simple**: No custom external sort implementation
+### Why external sort instead of SQLite?
+- **Pure Go**: No CGO, simpler deployment and cross-compilation
+- **Bounded memory**: Configurable memory threshold
+- **Performance**: 3x faster than SQLite for large inventories
+- **Streaming**: Process arbitrarily large datasets
 
 ## Memory Usage
 
@@ -231,12 +215,12 @@ At query time, the index uses memory-mapped files:
 - **No deserialization**: Direct access to on-disk format
 
 Build-time memory is bounded by:
-- SQLite page cache (configurable)
-- Chunk processing buffer
+- In-memory aggregator buffer (configurable, default ~256MB)
+- Run file I/O buffers (~4MB per file)
 - MPHF construction (~8 bytes per key temporarily)
 
 ## Concurrency
 
 - **Read operations**: Fully thread-safe, lock-free
-- **Build operations**: Single-threaded streaming
-- **S3 streaming**: Sequential per-file (parallel across files not implemented)
+- **Build operations**: Concurrent S3 download and CSV parsing
+- **Dynamic scaling**: Concurrency scales with `runtime.NumCPU()`
