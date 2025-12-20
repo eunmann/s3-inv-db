@@ -10,10 +10,12 @@
 package extsort
 
 import (
+	"runtime"
 	"slices"
 	"strings"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
+	"golang.org/x/sys/unix"
 )
 
 // MaxTiers is the maximum number of storage tiers supported.
@@ -186,15 +188,48 @@ type Config struct {
 	MaxDepth int
 }
 
-// DefaultConfig returns a Config with sensible defaults for a 16GB machine.
+// DefaultConfig returns a Config with sensible defaults based on the current machine.
+// Concurrency is scaled with CPU count, and memory threshold is scaled with available RAM.
 func DefaultConfig() Config {
+	numCPU := runtime.NumCPU()
+
+	// Scale concurrency with CPU count, with reasonable bounds
+	concurrency := numCPU
+	if concurrency < 2 {
+		concurrency = 2
+	} else if concurrency > 16 {
+		concurrency = 16
+	}
+
+	// Memory threshold: use ~25% of available RAM, clamped to [128MB, 1GB]
+	memThreshold := int64(256 * 1024 * 1024) // Default 256MB
+	if mem := getAvailableMemory(); mem > 0 {
+		memThreshold = mem / 4 // 25% of available memory
+		if memThreshold < 128*1024*1024 {
+			memThreshold = 128 * 1024 * 1024 // Min 128MB
+		} else if memThreshold > 1024*1024*1024 {
+			memThreshold = 1024 * 1024 * 1024 // Max 1GB
+		}
+	}
+
 	return Config{
 		TempDir:               "",
-		MemoryThreshold:       256 * 1024 * 1024, // 256MB
-		RunFileBufferSize:     4 * 1024 * 1024,   // 4MB
-		S3DownloadConcurrency: 4,
-		ParseConcurrency:      4,
-		IndexWriteConcurrency: 4,
+		MemoryThreshold:       memThreshold,
+		RunFileBufferSize:     4 * 1024 * 1024, // 4MB
+		S3DownloadConcurrency: concurrency,
+		ParseConcurrency:      concurrency,
+		IndexWriteConcurrency: concurrency,
 		MaxDepth:              0, // unlimited
 	}
+}
+
+// getAvailableMemory returns the available system memory in bytes.
+// Returns 0 if the value cannot be determined.
+func getAvailableMemory() int64 {
+	var info unix.Sysinfo_t
+	if err := unix.Sysinfo(&info); err != nil {
+		return 0
+	}
+	// Use free RAM + buffers (which can be freed if needed)
+	return int64(info.Freeram+info.Bufferram) * int64(info.Unit)
 }
