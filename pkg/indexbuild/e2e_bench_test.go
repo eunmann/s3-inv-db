@@ -128,8 +128,8 @@ func benchmarkEndToEnd(b *testing.B, numObjects int) {
 		// Phase 3: Build Trie from SQLite
 		phase3Start := time.Now()
 
-		readCfg := sqliteagg.DefaultConfig(dbPath)
-		readCfg.Synchronous = "OFF"
+		// Use read-optimized config with larger mmap and cache
+		readCfg := sqliteagg.ReadOptimizedConfig(dbPath)
 		readAgg, err := sqliteagg.Open(readCfg)
 		if err != nil {
 			b.Fatalf("Open for read failed: %v", err)
@@ -152,7 +152,7 @@ func benchmarkEndToEnd(b *testing.B, numObjects int) {
 		buildCfg := SQLiteConfig{
 			OutDir:    outDir,
 			DBPath:    dbPath,
-			SQLiteCfg: readCfg,
+			SQLiteCfg: readCfg, // ReadOptimizedConfig is used internally by BuildFromSQLite
 		}
 
 		if err := BuildFromSQLite(buildCfg); err != nil {
@@ -278,8 +278,8 @@ func BenchmarkEndToEnd_PhaseBreakdown(b *testing.B) {
 		b.ResetTimer()
 
 		for i := 0; i < b.N; i++ {
-			readCfg := sqliteagg.DefaultConfig(dbPath)
-			readCfg.Synchronous = "OFF"
+			// Use read-optimized config with larger mmap and cache
+			readCfg := sqliteagg.ReadOptimizedConfig(dbPath)
 			readAgg, err := sqliteagg.Open(readCfg)
 			if err != nil {
 				b.Fatalf("Open failed: %v", err)
@@ -306,8 +306,8 @@ func BenchmarkEndToEnd_PhaseBreakdown(b *testing.B) {
 			b.Fatalf("Finalize failed: %v", err)
 		}
 
-		readCfg := sqliteagg.DefaultConfig(dbPath)
-		readCfg.Synchronous = "OFF"
+		// Use read-optimized config (BuildFromSQLite uses it internally anyway)
+		readCfg := sqliteagg.ReadOptimizedConfig(dbPath)
 
 		b.ReportAllocs()
 		b.ResetTimer()

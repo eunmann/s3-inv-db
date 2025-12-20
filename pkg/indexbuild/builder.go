@@ -46,8 +46,10 @@ func BuildFromSQLite(cfg SQLiteConfig) error {
 		return fmt.Errorf("remove existing output dir: %w", err)
 	}
 
-	// Open SQLite aggregator
-	agg, err := sqliteagg.Open(cfg.SQLiteCfg)
+	// Open SQLite aggregator with read-optimized settings.
+	// Use larger mmap and cache for better sequential scan performance.
+	readCfg := sqliteagg.ReadOptimizedConfig(cfg.DBPath)
+	agg, err := sqliteagg.Open(readCfg)
 	if err != nil {
 		return fmt.Errorf("open SQLite aggregator: %w", err)
 	}

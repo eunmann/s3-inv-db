@@ -34,6 +34,13 @@ type Config struct {
 	// This improves write throughput significantly but prevents concurrent readers.
 	BulkWriteMode bool
 
+	// ReadOnlyMode enables optimizations for read-only access.
+	// When true:
+	//   - Uses query_only mode (prevents accidental writes)
+	//   - Uses more aggressive mmap and cache settings
+	//   - Suitable for building indexes from pre-populated databases
+	ReadOnlyMode bool
+
 	// MaxPrefixesPerChunk is a safety limit for per-chunk aggregation.
 	// The aggregator accumulates entire chunks in memory before flushing to
 	// SQLite. If the number of unique prefixes exceeds this limit, an early
@@ -55,6 +62,19 @@ func DefaultConfig(dbPath string) Config {
 		MmapSize:            268435456, // 256MB
 		CacheSizeKB:         262144,    // 256MB
 		MaxPrefixesPerChunk: DefaultMaxPrefixesPerChunk,
+	}
+}
+
+// ReadOptimizedConfig returns a configuration optimized for read-only access.
+// Uses larger mmap and cache sizes for better sequential scan performance.
+// Ideal for building indexes from pre-populated databases.
+func ReadOptimizedConfig(dbPath string) Config {
+	return Config{
+		DBPath:       dbPath,
+		Synchronous:  "OFF",
+		MmapSize:     2147483648, // 2GB - aggressive mmap for read workloads
+		CacheSizeKB:  524288,     // 512MB page cache
+		ReadOnlyMode: true,
 	}
 }
 
@@ -177,6 +197,13 @@ func Open(cfg Config) (*Aggregator, error) {
 		)
 	}
 
+	// Read-only mode: optimizations for read-only access (index building)
+	if cfg.ReadOnlyMode {
+		pragmas = append(pragmas,
+			"PRAGMA query_only=ON", // Prevent accidental writes
+		)
+	}
+
 	for _, pragma := range pragmas {
 		if _, err := db.Exec(pragma); err != nil {
 			db.Close()
@@ -184,16 +211,19 @@ func Open(cfg Config) (*Aggregator, error) {
 		}
 	}
 
-	// Create schema
-	if err := createSchema(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("create schema: %w", err)
+	// Create schema only for write mode
+	if !cfg.ReadOnlyMode {
+		if err := createSchema(db); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("create schema: %w", err)
+		}
 	}
 
 	log.Info().
 		Str("db_path", cfg.DBPath).
 		Str("synchronous", cfg.Synchronous).
 		Bool("bulk_write_mode", cfg.BulkWriteMode).
+		Bool("read_only_mode", cfg.ReadOnlyMode).
 		Msg("opened SQLite aggregator")
 
 	return &Aggregator{
