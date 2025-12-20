@@ -3,37 +3,216 @@ version: "2"
 linters:
   default: standard
   enable:
-    - gocritic
-    - misspell
-    - unconvert
-    - unparam
-    - nilerr
-    - bodyclose
-    - errname
+    # Core correctness & bugs
+    - errcheck
+    - errchkjson
     - errorlint
+    - govet
+    - ineffassign
+    - nilerr
+    - nilnil
+    - rowserrcheck
+    - sqlclosecheck
+    - staticcheck
+    - unused
+
+    # Concurrency, context & resource handling
+    - bodyclose
+    - containedctx
+    - contextcheck
+    - noctx
+    - spancheck
+    - thelper
+    - tparallel
+
+    # Performance & modern idioms
+    - intrange
+    - makezero
+    - perfsprint
+    - prealloc
+    - unconvert
+    - usestdlibvars
+
+    # Error handling discipline
+    - forcetypeassert
+    - wrapcheck
+
+    # API / interface hygiene
+    - inamedparam
+    - interfacebloat
+    - ireturn
+    - predeclared
+
+    # Style, readability, and structure
+    - cyclop
+    - decorder
+    - funlen
+    - gocognit
+    - gocritic
+    - gocyclo
+    - maintidx
+    - nestif
+    - revive
+    - whitespace
+
+    # Imports, modules & dependencies
+    - depguard
+    - gomoddirectives
+    - gomodguard
+    - importas
+    - reassign
+
+    # Documentation & comments
+    - dupword
+    - godot
+    - godox
+    - goheader
+    - misspell
+    - nolintlint
+
+    # Logging & observability
+    - loggercheck
+    - sloglint
+    - zerologlint
+
+    # Testing & frameworks
+    - testableexamples
+    - testifylint
+
+    # Other useful
     - copyloopvar
+    - errname
+    - unparam
+
   disable:
-    - errcheck  # Too noisy for cleanup code, manually reviewed
+    # Framework-specific linters not used in this project
+    - ginkgolinter    # Ginkgo/Gomega-specific
+    - promlinter      # Prometheus metrics naming
+    # Overly opinionated/noisy linters
+    - funcorder       # Method ordering is a style preference
+    - paralleltest    # Not all tests should run in parallel
+    - varnamelen      # Variable name length is very context dependent
+    - wsl             # Too opinionated about whitespace
+
+  settings:
+    cyclop:
+      max-complexity: 25
+      package-average: 15.0
+
+    funlen:
+      lines: 120
+      statements: 80
+      ignore-comments: true
+
+    gocognit:
+      min-complexity: 30
+
+    gocyclo:
+      min-complexity: 20
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        - hugeParam
+
+    godot:
+      scope: declarations
+      capital: true
+
+    maintidx:
+      under: 20
+
+    nestif:
+      min-complexity: 6
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: if-return
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: redefines-builtin-id
+
+    depguard:
+      rules:
+        main:
+          list-mode: lax
+          deny:
+            - pkg: "io/ioutil"
+              desc: "Use io and os packages instead"
+            - pkg: "github.com/pkg/errors"
+              desc: "Use standard library errors package with fmt.Errorf"
+
+    ireturn:
+      allow:
+        - anon
+        - error
+        - empty
+        - stdlib
+        - io.Reader
+        - io.Writer
+        - io.ReadCloser
+        - io.WriteCloser
+        - io.ReadWriter
+        - io.ReaderAt
+        - io.Closer
+        - context.Context
+
+    testifylint:
+      enable-all: true
+
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+    rules:
+      # Allow unused parameters in test helper functions
+      - path: _test\.go
+        linters:
+          - unparam
+          - funlen
+          - gocognit
+          - cyclop
+          - maintidx
+      # Allow context.TODO in tests
+      - path: _test\.go
+        text: "context.TODO"
+      # Allow dot imports in tests for testify
+      - path: _test\.go
+        linters:
+          - revive
+        text: "dot-imports"
 
 formatters:
   enable:
+    - gci
     - gofmt
     - goimports
-
-issues:
-  exclude-dirs:
-    - vendor
-  max-issues-per-linter: 50
-  max-same-issues: 10
 
 run:
   timeout: 5m
   tests: true
   go: "1.23"
-
-output:
-  formats:
-    colored-line-number: {}
-  print-issued-lines: true
-  print-linter-name: true
-  sort-results: true
