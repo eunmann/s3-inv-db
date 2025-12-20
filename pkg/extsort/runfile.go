@@ -36,12 +36,12 @@ const (
 
 // RunFileWriter writes sorted PrefixRows to a temporary run file.
 type RunFileWriter struct {
-	file     *os.File
-	writer   *bufio.Writer
-	count    uint64
-	path     string
-	buf      []byte // reusable buffer for encoding
-	closed   bool
+	file   *os.File
+	writer *bufio.Writer
+	count  uint64
+	path   string
+	buf    []byte // reusable buffer for encoding
+	closed bool
 }
 
 // NewRunFileWriter creates a new run file writer at the given path.
@@ -110,13 +110,13 @@ func (w *RunFileWriter) Write(row *PrefixRow) error {
 	offset += 8
 
 	// TierCounts
-	for i := 0; i < MaxTiers; i++ {
+	for i := range MaxTiers {
 		binary.LittleEndian.PutUint64(w.buf[offset:], row.TierCounts[i])
 		offset += 8
 	}
 
 	// TierBytes
-	for i := 0; i < MaxTiers; i++ {
+	for i := range MaxTiers {
 		binary.LittleEndian.PutUint64(w.buf[offset:], row.TierBytes[i])
 		offset += 8
 	}
@@ -287,13 +287,13 @@ func (r *RunFileReader) Read() (*PrefixRow, error) {
 	offset += 8
 
 	// TierCounts
-	for i := 0; i < MaxTiers; i++ {
+	for i := range MaxTiers {
 		row.TierCounts[i] = binary.LittleEndian.Uint64(r.buf[offset:])
 		offset += 8
 	}
 
 	// TierBytes
-	for i := 0; i < MaxTiers; i++ {
+	for i := range MaxTiers {
 		row.TierBytes[i] = binary.LittleEndian.Uint64(r.buf[offset:])
 		offset += 8
 	}

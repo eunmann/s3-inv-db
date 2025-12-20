@@ -42,7 +42,7 @@ Benchmark Categories for Index Reading:
 // Use shared constants from benchutil for consistency across packages.
 // benchutil.BenchmarkSeed, benchutil.TreeShapes, benchutil.BenchmarkSizes
 
-// benchIndex holds a pre-built index for benchmarking
+// benchIndex holds a pre-built index for benchmarking.
 type benchIndex struct {
 	idx      *Index
 	prefixes []string
@@ -109,7 +109,7 @@ func (bi *benchIndex) Close() {
 	}
 }
 
-// Shared fixture for index load benchmarks
+// Shared fixture for index load benchmarks.
 var (
 	fixtureOnce sync.Once
 	fixtureDir  string
@@ -162,7 +162,7 @@ func BenchmarkIndexOpen(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		idx, err := Open(dir)
 		if err != nil {
 			b.Fatalf("Open failed: %v", err)
@@ -189,7 +189,7 @@ func BenchmarkLookup(b *testing.B) {
 				defer bi.Close()
 
 				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
+				for i := range b.N {
 					prefix := bi.prefixes[i%len(bi.prefixes)]
 					_, _ = bi.idx.Lookup(prefix)
 				}
@@ -207,7 +207,7 @@ func BenchmarkLookup(b *testing.B) {
 				}
 
 				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
+				for i := range b.N {
 					prefix := bi.prefixes[randomIndices[i]]
 					_, _ = bi.idx.Lookup(prefix)
 				}
@@ -228,7 +228,7 @@ func BenchmarkStats(b *testing.B) {
 				defer bi.Close()
 
 				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
+				for i := range b.N {
 					prefix := bi.prefixes[i%len(bi.prefixes)]
 					_, _ = bi.idx.StatsForPrefix(prefix)
 				}
@@ -246,7 +246,7 @@ func BenchmarkStats(b *testing.B) {
 				}
 
 				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
+				for i := range b.N {
 					prefix := bi.prefixes[randomIndices[i]]
 					_, _ = bi.idx.StatsForPrefix(prefix)
 				}
@@ -269,7 +269,7 @@ func BenchmarkTierBreakdown(b *testing.B) {
 			}
 
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for i := range b.N {
 				pos := uint64(i % len(bi.prefixes))
 				_ = bi.idx.TierBreakdown(pos)
 			}
@@ -290,7 +290,7 @@ func BenchmarkTierBreakdown(b *testing.B) {
 			}
 
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for i := range b.N {
 				_ = bi.idx.TierBreakdown(randomPos[i])
 			}
 		})
@@ -304,7 +304,7 @@ func BenchmarkTierBreakdown(b *testing.B) {
 			}
 
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for i := range b.N {
 				pos := uint64(i % len(bi.prefixes))
 				_ = bi.idx.TierBreakdownAll(pos)
 			}
@@ -331,7 +331,7 @@ func BenchmarkDescendantsAtDepth(b *testing.B) {
 				b.Run(name+"/from_root", func(b *testing.B) {
 					rootPos, _ := bi.idx.Lookup("")
 					b.ResetTimer()
-					for i := 0; i < b.N; i++ {
+					for range b.N {
 						_, _ = bi.idx.DescendantsAtDepth(rootPos, depth)
 					}
 				})
@@ -379,7 +379,7 @@ func BenchmarkDescendantsSubtree(b *testing.B) {
 		pos, _ := bi.idx.Lookup(smallSubtreePrefix)
 		b.Logf("prefix=%q subtree_size=%d", smallSubtreePrefix, smallCount)
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			_, _ = bi.idx.DescendantsAtDepth(pos, 1)
 		}
 	})
@@ -391,7 +391,7 @@ func BenchmarkDescendantsSubtree(b *testing.B) {
 		pos, _ := bi.idx.Lookup(largeSubtreePrefix)
 		b.Logf("prefix=%q subtree_size=%d", largeSubtreePrefix, largeCount)
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			_, _ = bi.idx.DescendantsAtDepth(pos, 1)
 		}
 	})
@@ -409,7 +409,7 @@ func BenchmarkIterator(b *testing.B) {
 			b.Run(name+"/depth1_iterate_all", func(b *testing.B) {
 				rootPos, _ := bi.idx.Lookup("")
 				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
+				for range b.N {
 					it, err := bi.idx.NewDescendantIterator(rootPos, 1)
 					if err != nil {
 						b.Fatal(err)
@@ -434,14 +434,14 @@ func BenchmarkMixedWorkload(b *testing.B) {
 		keys := benchutil.GenerateKeys(size, shape)
 		bi := setupBenchIndex(b, keys)
 
-		name := fmt.Sprintf("%s/mixed", shape)
+		name := shape + "/mixed"
 
 		b.Run(name, func(b *testing.B) {
 			rng := rand.New(rand.NewSource(benchutil.BenchmarkSeed))
 			rootPos, _ := bi.idx.Lookup("")
 
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				op := rng.Intn(100)
 				switch {
 				case op < 50:
@@ -477,7 +477,7 @@ func BenchmarkMixedWorkloadWithTiers(b *testing.B) {
 	rootPos, _ := bi.idx.Lookup("")
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		op := rng.Intn(100)
 		switch {
 		case op < 40:
@@ -513,7 +513,7 @@ func BenchmarkPrefixHeavy(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		prefix := bi.prefixes[randomIndices[i]]
 		pos, ok := bi.idx.Lookup(prefix)
 		if ok {
@@ -532,7 +532,7 @@ func BenchmarkIndexOpen_Scaling(b *testing.B) {
 			bi.Close()
 
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				idx, err := Open(bi.dir)
 				if err != nil {
 					b.Fatalf("Open failed: %v", err)
@@ -765,5 +765,5 @@ func BenchmarkConcurrentContention(b *testing.B) {
 	})
 }
 
-// Dummy variable to prevent unused import warning
+// Dummy variable to prevent unused import warning.
 var _ = tiers.Standard

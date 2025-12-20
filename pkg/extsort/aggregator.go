@@ -56,7 +56,7 @@ func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 
 	// Extract and accumulate all directory prefixes
 	depth := uint16(1)
-	for i := 0; i < len(key); i++ {
+	for i := range len(key) {
 		if key[i] == '/' {
 			// Check depth limit
 			if a.maxDepth > 0 && int(depth) > a.maxDepth {

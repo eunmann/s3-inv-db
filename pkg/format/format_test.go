@@ -420,7 +420,7 @@ func TestLargeArray(t *testing.T) {
 		t.Fatalf("NewArrayWriter failed: %v", err)
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if err := w.WriteU64(uint64(i * 100)); err != nil {
 			t.Fatalf("WriteU64 failed: %v", err)
 		}

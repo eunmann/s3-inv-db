@@ -119,7 +119,7 @@ func (b *Builder) processKey(key string, size uint64, tierID tiers.ID) error {
 func extractPrefixes(key string) []string {
 	// Count slashes first to determine capacity and avoid allocation for non-nested keys
 	slashCount := 0
-	for i := 0; i < len(key); i++ {
+	for i := range len(key) {
 		if key[i] == '/' {
 			slashCount++
 		}
@@ -131,7 +131,7 @@ func extractPrefixes(key string) []string {
 
 	// Pre-allocate exact capacity based on slash count
 	prefixes := make([]string, 0, slashCount)
-	for i := 0; i < len(key); i++ {
+	for i := range len(key) {
 		if key[i] == '/' {
 			prefix := key[:i+1]
 			prefixes = append(prefixes, prefix)

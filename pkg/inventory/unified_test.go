@@ -282,11 +282,11 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 	defer parquetReader.Close()
 
 	// Compare outputs
-	for i := 0; i < len(testRows); i++ {
+	for i := range len(testRows) {
 		csvRow, csvErr := csvReader.Next()
 		parquetRow, parquetErr := parquetReader.Next()
 
-		if csvErr != parquetErr {
+		if !errors.Is(csvErr, parquetErr) {
 			t.Errorf("row %d: CSV err=%v, Parquet err=%v", i, csvErr, parquetErr)
 			continue
 		}
@@ -341,7 +341,7 @@ func TestParquetInventoryReader_LargeRowGroups(t *testing.T) {
 	// Create many rows to test row group handling
 	numRows := 5000
 	rows := make([]S3InventoryRecord, numRows)
-	for i := 0; i < numRows; i++ {
+	for i := range numRows {
 		rows[i] = S3InventoryRecord{
 			Key:          "file" + string(rune('0'+i%10)) + ".txt",
 			Size:         int64(i * 100),
@@ -389,7 +389,7 @@ func BenchmarkCSVInventoryReader(b *testing.B) {
 	// Generate CSV data
 	numRows := 10000
 	var buf bytes.Buffer
-	for i := 0; i < numRows; i++ {
+	for i := range numRows {
 		fmt.Fprintf(&buf, "data/folder%d/subfolder/file%d.txt,%d,STANDARD,\n", i%100, i, i*1000)
 	}
 	csvData := buf.Bytes()
@@ -397,7 +397,7 @@ func BenchmarkCSVInventoryReader(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		reader := NewCSVInventoryReader(bytes.NewReader(csvData), CSVReaderConfig{
 			KeyCol: 0, SizeCol: 1, StorageCol: 2, AccessTierCol: 3,
 		})
@@ -405,7 +405,7 @@ func BenchmarkCSVInventoryReader(b *testing.B) {
 		count := 0
 		for {
 			_, err := reader.Next()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {
@@ -428,7 +428,7 @@ func BenchmarkParquetInventoryReader(b *testing.B) {
 
 	numRows := 10000
 	rows := make([]S3InventoryRecord, numRows)
-	for i := 0; i < numRows; i++ {
+	for i := range numRows {
 		rows[i] = S3InventoryRecord{
 			Key:          fmt.Sprintf("data/folder%d/subfolder/file%d.txt", i%100, i),
 			Size:         int64(i * 1000),
@@ -449,7 +449,7 @@ func BenchmarkParquetInventoryReader(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		reader, err := NewParquetInventoryReaderFromStream(
 			io.NopCloser(bytes.NewReader(content)),
 			int64(len(content)),
@@ -461,7 +461,7 @@ func BenchmarkParquetInventoryReader(b *testing.B) {
 		count := 0
 		for {
 			_, err := reader.Next()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {

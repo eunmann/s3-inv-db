@@ -177,7 +177,7 @@ func (d *DepthIndex) GetPositionsAtDepth(depth uint32) ([]uint64, error) {
 	}
 
 	positions := make([]uint64, count)
-	for i := uint64(0); i < count; i++ {
+	for i := range count {
 		pos, err := d.positions.GetU64(start + i)
 		if err != nil {
 			return nil, fmt.Errorf("get position at index %d: %w", start+i, err)
@@ -221,7 +221,7 @@ func (d *DepthIndex) GetPositionsInSubtree(depth uint32, subtreeStart, subtreeEn
 	}
 
 	positions := make([]uint64, count)
-	for i := uint64(0); i < count; i++ {
+	for i := range count {
 		positions[i] = d.positions.UnsafeGetU64(lo + i)
 	}
 

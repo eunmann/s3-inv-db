@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -20,12 +21,12 @@ type parquetInventoryReader struct {
 	accessTierCol int // -1 if not available
 
 	// Row group iteration state
-	rowGroups     []parquet.RowGroup
-	currentRGIdx  int
-	currentRows   parquet.Rows
-	rowBuf        []parquet.Row
-	bufIdx        int
-	bufLen        int
+	rowGroups    []parquet.RowGroup
+	currentRGIdx int
+	currentRows  parquet.Rows
+	rowBuf       []parquet.Row
+	bufIdx       int
+	bufLen       int
 }
 
 // ParquetReaderConfig configures the Parquet reader.
@@ -160,10 +161,10 @@ func detectParquetSchema(schema *parquet.Schema) (ParquetReaderConfig, error) {
 	}
 
 	if cfg.KeyCol < 0 {
-		return cfg, fmt.Errorf("parquet schema missing 'key' column")
+		return cfg, errors.New("parquet schema missing 'key' column")
 	}
 	if cfg.SizeCol < 0 {
-		return cfg, fmt.Errorf("parquet schema missing 'size' column")
+		return cfg, errors.New("parquet schema missing 'size' column")
 	}
 
 	return cfg, nil
@@ -207,7 +208,7 @@ func (r *parquetInventoryReader) Next() (InventoryRow, error) {
 				r.bufLen = n
 				continue // Process buffered rows
 			}
-			if err != nil && err != io.EOF {
+			if err != nil && !errors.Is(err, io.EOF) {
 				return InventoryRow{}, fmt.Errorf("read parquet rows: %w", err)
 			}
 			// Current row group exhausted

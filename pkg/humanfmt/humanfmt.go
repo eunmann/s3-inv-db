@@ -3,10 +3,11 @@ package humanfmt
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 )
 
-// Binary (IEC) units for bytes
+// Binary (IEC) units for bytes.
 const (
 	KiB = 1024
 	MiB = 1024 * KiB
@@ -40,8 +41,7 @@ func BytesUint64(b uint64) string {
 	return Bytes(int64(b))
 }
 
-// Duration formats a time.Duration in a concise human-readable format.
-// Examples: "1.23s", "45.6ms", "789µs", "1m30s", "2h15m"
+// Examples: "1.23s", "45.6ms", "789µs", "1m30s", "2h15m".
 func Duration(d time.Duration) string {
 	if d < 0 {
 		return d.String()
@@ -101,11 +101,10 @@ func ThroughputUint64(bytes uint64, d time.Duration) string {
 	return Throughput(int64(bytes), d)
 }
 
-// Count formats a count with SI suffixes (K, M, B).
-// Examples: "1.23M", "456K", "789"
+// Examples: "1.23M", "456K", "789".
 func Count(n int64) string {
 	if n < 0 {
-		return fmt.Sprintf("%d", n)
+		return strconv.FormatInt(n, 10)
 	}
 
 	const (
@@ -122,7 +121,7 @@ func Count(n int64) string {
 	case n >= thousand:
 		return fmt.Sprintf("%.2fK", float64(n)/thousand)
 	default:
-		return fmt.Sprintf("%d", n)
+		return strconv.FormatInt(n, 10)
 	}
 }
 

@@ -16,9 +16,7 @@ const (
 	// Minimum billable object size for Standard-IA, One Zone-IA, and Glacier Instant Retrieval.
 	minObjectSizeBytes = 128 * bytesPerKB
 
-	// Glacier metadata overhead per object:
-	// - 32KB charged at the Glacier tier rate
-	// - 8KB charged at S3 Standard rate
+	// - 8KB charged at S3 Standard rate.
 	glacierMetadataOverheadBytes = 32 * bytesPerKB
 	glacierIndexOverheadBytes    = 8 * bytesPerKB
 )

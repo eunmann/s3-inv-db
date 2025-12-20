@@ -1,6 +1,7 @@
 package format
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -152,7 +153,7 @@ func TestWriteFileSync(t *testing.T) {
 		t.Fatalf("ReadFile failed: %v", err)
 	}
 
-	if string(read) != string(data) {
+	if !bytes.Equal(read, data) {
 		t.Errorf("read = %q, want %q", read, data)
 	}
 }

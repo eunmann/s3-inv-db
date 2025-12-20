@@ -115,7 +115,7 @@ func TestCount(t *testing.T) {
 func BenchmarkBytes(b *testing.B) {
 	sizes := []int64{100, 1024, 1048576, 1073741824}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		_ = Bytes(sizes[i%len(sizes)])
 	}
 }
@@ -128,14 +128,14 @@ func BenchmarkDuration(b *testing.B) {
 		90 * time.Second,
 	}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		_ = Duration(durations[i%len(durations)])
 	}
 }
 
 func BenchmarkThroughput(b *testing.B) {
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_ = Throughput(104857600, time.Second)
 	}
 }

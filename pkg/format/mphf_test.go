@@ -141,7 +141,7 @@ func TestMPHFLarge(t *testing.T) {
 
 	// Create 1000 unique prefixes
 	prefixes := make([]string, 1000)
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		prefixes[i] = prefixFromInt(i)
 	}
 
@@ -169,7 +169,7 @@ func TestMPHFLarge(t *testing.T) {
 	}
 
 	// Test some random lookups
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		p := prefixFromInt(i * 10)
 		pos, ok := m.Lookup(p)
 		if !ok {
@@ -263,7 +263,7 @@ func TestComputeFingerprint(t *testing.T) {
 	}
 }
 
-// Helper function to create unique prefix strings
+// Helper function to create unique prefix strings.
 func prefixFromInt(i int) string {
 	// Create a path like "a/b/c/" based on integer
 	result := ""
@@ -283,7 +283,7 @@ func BenchmarkMPHFLookup(b *testing.B) {
 	builder := NewMPHFBuilder()
 
 	prefixes := make([]string, 10000)
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		prefixes[i] = prefixFromInt(i)
 		builder.Add(prefixes[i], uint64(i))
 	}
@@ -299,7 +299,7 @@ func BenchmarkMPHFLookup(b *testing.B) {
 	defer m.Close()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		p := prefixes[i%len(prefixes)]
 		_, _ = m.Lookup(p)
 	}

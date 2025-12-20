@@ -196,7 +196,7 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 func (b *IndexBuilder) findCommonAncestorDepth(prefix string, depth int) int {
 	commonDepth := 0
 
-	for i := 0; i < len(b.stack); i++ {
+	for i := range len(b.stack) {
 		entry := &b.stack[i]
 		// Check if stack entry is a prefix of the new prefix
 		if len(entry.prefix) <= len(prefix) && prefix[:len(entry.prefix)] == entry.prefix {
@@ -308,7 +308,7 @@ func (b *IndexBuilder) createTierWriter(tierID tiers.ID, row *PrefixRow) error {
 	b.tierBytesWriters[tierID] = bytesW
 
 	// Backfill zeros for all previous positions
-	for i := uint64(0); i < b.posCount-1; i++ {
+	for range uint64(b.posCount - 1) {
 		if err := countW.WriteU64(0); err != nil {
 			return fmt.Errorf("backfill tier %s count: %w", info.Name, err)
 		}
