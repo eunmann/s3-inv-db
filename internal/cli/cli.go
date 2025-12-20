@@ -41,6 +41,11 @@ func runBuild(args []string) error {
 	verbose := fs.Bool("verbose", false, "enable debug level logging")
 	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
 
+	// Concurrency tuning
+	workers := fs.Int("workers", 0, "number of concurrent S3 download/parse workers (default: CPU count)")
+	memoryMB := fs.Int("memory-mb", 0, "memory threshold for aggregator in MB (default: 25% of RAM, max 1GB)")
+	maxDepth := fs.Int("max-depth", 0, "maximum prefix depth to track (0 = unlimited)")
+
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
@@ -54,12 +59,13 @@ func runBuild(args []string) error {
 		return errors.New("--s3-manifest is required")
 	}
 
-	return runBuildExtSort(*outDir, *s3Manifest)
+	return runBuildExtSort(*outDir, *s3Manifest, *workers, *memoryMB, *maxDepth)
 }
 
 // runBuildExtSort runs the build using the external sort backend (pure Go, no CGO).
-func runBuildExtSort(outDir, s3Manifest string) error {
+func runBuildExtSort(outDir, s3Manifest string, workers, memoryMB, maxDepth int) error {
 	ctx := context.Background()
+	log := logging.L()
 
 	client, err := s3fetch.NewClient(ctx)
 	if err != nil {
@@ -67,6 +73,27 @@ func runBuildExtSort(outDir, s3Manifest string) error {
 	}
 
 	config := extsort.DefaultConfig()
+
+	// Apply CLI overrides
+	if workers > 0 {
+		config.S3DownloadConcurrency = workers
+		config.ParseConcurrency = workers
+		config.IndexWriteConcurrency = workers
+	}
+	if memoryMB > 0 {
+		config.MemoryThreshold = int64(memoryMB) * 1024 * 1024
+	}
+	if maxDepth > 0 {
+		config.MaxDepth = maxDepth
+	}
+
+	// Log concurrency settings
+	log.Info().
+		Int("workers", config.S3DownloadConcurrency).
+		Int64("memory_threshold_mb", config.MemoryThreshold/(1024*1024)).
+		Int("max_depth", config.MaxDepth).
+		Msg("pipeline configuration")
+
 	pipeline := extsort.NewPipeline(config, client)
 
 	_, err = pipeline.Run(ctx, s3Manifest, outDir)

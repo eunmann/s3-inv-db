@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -133,7 +135,41 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	}, nil
 }
 
+// chunkConfig holds configuration for processing a chunk.
+type chunkConfig struct {
+	format        s3fetch.InventoryFormat
+	keyCol        int
+	sizeCol       int
+	storageCol    int
+	accessTierCol int
+	tierMapping   *tiers.Mapping
+	fileSize      int64 // Size of the file (used for Parquet)
+}
+
+// chunkJob represents a chunk to be processed by a worker.
+type chunkJob struct {
+	index  int
+	bucket string
+	key    string
+	config chunkConfig
+}
+
+// objectBatch holds a batch of objects to be aggregated.
+// Using batches reduces channel overhead compared to sending individual objects.
+type objectBatch struct {
+	objects []objectRecord
+	err     error
+}
+
+// objectRecord holds a single object's data for aggregation.
+type objectRecord struct {
+	key    string
+	size   uint64
+	tierID tiers.ID
+}
+
 // runIngestPhase streams S3 inventory and creates sorted run files.
+// It uses concurrent workers to download and parse chunks in parallel.
 func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error {
 	log := logging.L()
 
@@ -152,9 +188,16 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 	if format == s3fetch.InventoryFormatParquet {
 		formatStr = "Parquet"
 	}
+
+	numWorkers := p.config.S3DownloadConcurrency
+	if numWorkers <= 0 {
+		numWorkers = runtime.NumCPU()
+	}
+
 	log.Info().
 		Str("format", formatStr).
 		Int("chunks", len(manifest.Files)).
+		Int("workers", numWorkers).
 		Msg("inventory manifest loaded")
 
 	keyCol, err := manifest.KeyColumnIndex()
@@ -173,35 +216,83 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 		return fmt.Errorf("get destination bucket: %w", err)
 	}
 
-	agg := NewAggregator(100000, p.config.MaxDepth)
 	tierMapping := tiers.NewMapping()
-
 	totalChunks := len(manifest.Files)
-	progressInterval := max(totalChunks/10, 1) // Log every ~10%
 
-	for i, file := range manifest.Files {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+	// Create job channel - buffer enough to keep workers busy
+	jobs := make(chan chunkJob, numWorkers*2)
+
+	// Create result channel - one batch per chunk max, plus some buffer
+	results := make(chan objectBatch, numWorkers*2)
+
+	// Context for cancellation on error
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Start workers
+	var wg sync.WaitGroup
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.chunkWorker(ctx, jobs, results)
+		}()
+	}
+
+	// Start job sender in background
+	go func() {
+		defer close(jobs)
+		for i, file := range manifest.Files {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- chunkJob{
+				index:  i,
+				bucket: destBucket,
+				key:    file.Key,
+				config: chunkConfig{
+					format:        format,
+					keyCol:        keyCol,
+					sizeCol:       sizeCol,
+					storageCol:    storageCol,
+					accessTierCol: accessTierCol,
+					tierMapping:   tierMapping,
+					fileSize:      file.Size,
+				},
+			}:
+			}
+		}
+	}()
+
+	// Close results channel when all workers done
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Aggregation loop - runs in main goroutine
+	agg := NewAggregator(100000, p.config.MaxDepth)
+	progressInterval := max(totalChunks/10, 1)
+	var firstErr error
+
+	for batch := range results {
+		if batch.err != nil {
+			if firstErr == nil {
+				firstErr = batch.err
+				cancel() // Signal workers to stop
+			}
+			continue
 		}
 
-		chunkStart := time.Now()
-		chunkCfg := chunkConfig{
-			format:        format,
-			keyCol:        keyCol,
-			sizeCol:       sizeCol,
-			storageCol:    storageCol,
-			accessTierCol: accessTierCol,
-			tierMapping:   tierMapping,
-			fileSize:      file.Size,
-		}
-		if err := p.processChunk(ctx, destBucket, file.Key, agg, chunkCfg); err != nil {
-			return fmt.Errorf("process chunk %d: %w", i, err)
+		// Aggregate all objects in this batch
+		for _, obj := range batch.objects {
+			agg.AddObject(obj.key, obj.size, obj.tierID)
+			atomic.AddInt64(&p.objectsProcessed, 1)
+			atomic.AddInt64(&p.bytesProcessed, int64(obj.size))
 		}
 
 		atomic.AddInt64(&p.chunksProcessed, 1)
-		chunkNum := int(p.chunksProcessed)
+		chunkNum := int(atomic.LoadInt64(&p.chunksProcessed))
 
 		// Log progress at intervals
 		if chunkNum%progressInterval == 0 || chunkNum == totalChunks {
@@ -217,15 +308,9 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 				Int64("objects", atomic.LoadInt64(&p.objectsProcessed)).
 				Dur("eta_ms", remaining).
 				Msg("ingest progress")
-		} else {
-			// Debug log for each chunk
-			log.Debug().
-				Int("chunk", chunkNum).
-				Int("total", totalChunks).
-				Dur("chunk_ms", time.Since(chunkStart)).
-				Msg("chunk processed")
 		}
 
+		// Flush if memory threshold exceeded
 		if agg.EstimatedMemoryUsage() >= p.config.MemoryThreshold {
 			if err := p.flushAggregator(agg); err != nil {
 				return fmt.Errorf("flush aggregator: %w", err)
@@ -233,6 +318,11 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 		}
 	}
 
+	if firstErr != nil {
+		return fmt.Errorf("process chunk: %w", firstErr)
+	}
+
+	// Final flush
 	if agg.PrefixCount() > 0 {
 		if err := p.flushAggregator(agg); err != nil {
 			return fmt.Errorf("final flush: %w", err)
@@ -242,29 +332,47 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 	return nil
 }
 
-// chunkConfig holds configuration for processing a chunk.
-type chunkConfig struct {
-	format        s3fetch.InventoryFormat
-	keyCol        int
-	sizeCol       int
-	storageCol    int
-	accessTierCol int
-	tierMapping   *tiers.Mapping
-	fileSize      int64 // Size of the file (used for Parquet)
+// chunkWorker processes chunks from the jobs channel and sends results to the results channel.
+func (p *Pipeline) chunkWorker(ctx context.Context, jobs <-chan chunkJob, results chan<- objectBatch) {
+	// Pre-allocate batch buffer (typical chunk has 100k-1M objects)
+	const batchCapacity = 100000
+
+	for job := range jobs {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		objects, err := p.processChunkToBatch(ctx, job.bucket, job.key, job.config, batchCapacity)
+		if err != nil {
+			select {
+			case results <- objectBatch{err: fmt.Errorf("chunk %d: %w", job.index, err)}:
+			case <-ctx.Done():
+			}
+			continue
+		}
+
+		select {
+		case results <- objectBatch{objects: objects}:
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
-// processChunk processes a single inventory chunk (CSV or Parquet).
-func (p *Pipeline) processChunk(ctx context.Context, bucket, key string, agg *Aggregator, cfg chunkConfig) error {
+// processChunkToBatch downloads and parses a chunk, returning all objects as a batch.
+func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, cfg chunkConfig, capacityHint int) ([]objectRecord, error) {
 	body, err := p.s3Client.StreamObject(ctx, bucket, key)
 	if err != nil {
-		return fmt.Errorf("stream object: %w", err)
+		return nil, fmt.Errorf("stream object: %w", err)
 	}
 
 	var reader inventory.InventoryReader
 	if cfg.format == s3fetch.InventoryFormatParquet {
 		reader, err = inventory.NewParquetInventoryReaderFromStream(body, cfg.fileSize)
 		if err != nil {
-			return fmt.Errorf("create parquet reader: %w", err)
+			return nil, fmt.Errorf("create parquet reader: %w", err)
 		}
 	} else {
 		csvCfg := inventory.CSVReaderConfig{
@@ -275,15 +383,17 @@ func (p *Pipeline) processChunk(ctx context.Context, bucket, key string, agg *Ag
 		}
 		reader, err = inventory.NewCSVInventoryReaderFromStream(body, key, csvCfg)
 		if err != nil {
-			return fmt.Errorf("create csv reader: %w", err)
+			return nil, fmt.Errorf("create csv reader: %w", err)
 		}
 	}
 	defer reader.Close()
 
+	objects := make([]objectRecord, 0, capacityHint)
+
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		default:
 		}
 
@@ -292,7 +402,7 @@ func (p *Pipeline) processChunk(ctx context.Context, bucket, key string, agg *Ag
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("read inventory row: %w", err)
+			return nil, fmt.Errorf("read inventory row: %w", err)
 		}
 
 		if row.Key == "" {
@@ -300,13 +410,14 @@ func (p *Pipeline) processChunk(ctx context.Context, bucket, key string, agg *Ag
 		}
 
 		tierID := cfg.tierMapping.FromS3(row.StorageClass, row.AccessTier)
-		agg.AddObject(row.Key, row.Size, tierID)
-
-		atomic.AddInt64(&p.objectsProcessed, 1)
-		atomic.AddInt64(&p.bytesProcessed, int64(row.Size))
+		objects = append(objects, objectRecord{
+			key:    row.Key,
+			size:   row.Size,
+			tierID: tierID,
+		})
 	}
 
-	return nil
+	return objects, nil
 }
 
 // flushAggregator drains the aggregator to a sorted run file.
