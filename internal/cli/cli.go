@@ -15,6 +15,7 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/sqliteagg"
+	"github.com/rs/zerolog"
 )
 
 // Run executes the CLI with the given arguments.
@@ -41,6 +42,7 @@ func runBuild(args []string) error {
 	outDir := fs.String("out", "", "output directory for index files")
 	s3Manifest := fs.String("s3-manifest", "", "S3 URI to inventory manifest.json (s3://bucket/path/manifest.json)")
 	dbPath := fs.String("db", "", "path to SQLite database for aggregation (default: <out>.db)")
+	backend := fs.String("backend", "sqlite", "build backend: 'sqlite' (default, uses CGO) or 'extsort' (pure Go, external sort)")
 	verbose := fs.Bool("verbose", false, "enable debug level logging")
 	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
 
@@ -59,18 +61,32 @@ func runBuild(args []string) error {
 		return errors.New("--s3-manifest is required")
 	}
 
+	// Dispatch to appropriate backend
+	switch *backend {
+	case "sqlite":
+		return runBuildSQLite(log, *outDir, *s3Manifest, *dbPath)
+	case "extsort":
+		return runBuildExtSort(log, *outDir, *s3Manifest)
+	default:
+		return fmt.Errorf("unknown backend: %s (use 'sqlite' or 'extsort')", *backend)
+	}
+}
+
+// runBuildSQLite runs the build using the SQLite-based backend (original implementation).
+func runBuildSQLite(log *zerolog.Logger, outDir, s3Manifest, dbPath string) error {
 	ctx := context.Background()
 
 	// Use default DB path if not specified
-	if *dbPath == "" {
-		*dbPath = *outDir + ".db"
+	if dbPath == "" {
+		dbPath = outDir + ".db"
 	}
 
 	log.Info().
 		Str("phase", "build_start").
-		Str("s3_manifest", *s3Manifest).
-		Str("output_dir", *outDir).
-		Str("db_path", *dbPath).
+		Str("backend", "sqlite").
+		Str("s3_manifest", s3Manifest).
+		Str("output_dir", outDir).
+		Str("db_path", dbPath).
 		Msg("starting S3 inventory build")
 
 	// Create S3 client
@@ -80,15 +96,15 @@ func runBuild(args []string) error {
 	}
 
 	// Remove any existing database to ensure clean build
-	if err := os.Remove(*dbPath); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(dbPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove existing database: %w", err)
 	}
 
 	// Stream from S3 using fast in-memory aggregation
 	memCfg := sqliteagg.MemoryStreamConfig{
-		ManifestURI:  *s3Manifest,
-		DBPath:       *dbPath,
-		MemoryConfig: sqliteagg.DefaultMemoryAggregatorConfig(*dbPath),
+		ManifestURI:  s3Manifest,
+		DBPath:       dbPath,
+		MemoryConfig: sqliteagg.DefaultMemoryAggregatorConfig(dbPath),
 	}
 	result, err := sqliteagg.StreamFromS3Memory(ctx, client, memCfg)
 	if err != nil {
@@ -101,10 +117,10 @@ func runBuild(args []string) error {
 		Msg("streaming aggregation complete")
 
 	// Build index from SQLite
-	sqliteCfg := sqliteagg.DefaultConfig(*dbPath)
+	sqliteCfg := sqliteagg.DefaultConfig(dbPath)
 	buildCfg := indexbuild.SQLiteConfig{
-		OutDir:    *outDir,
-		DBPath:    *dbPath,
+		OutDir:    outDir,
+		DBPath:    dbPath,
 		SQLiteCfg: sqliteCfg,
 	}
 
@@ -119,17 +135,30 @@ func runBuild(args []string) error {
 		agg.Close()
 		log.Info().
 			Str("phase", "build_complete").
-			Str("output_dir", *outDir).
+			Str("output_dir", outDir).
 			Uint64("prefix_count", prefixCount).
 			Msg("index built successfully")
 	} else {
 		log.Info().
 			Str("phase", "build_complete").
-			Str("output_dir", *outDir).
+			Str("output_dir", outDir).
 			Msg("index built successfully")
 	}
 
 	return nil
+}
+
+// runBuildExtSort runs the build using the external sort backend (pure Go, no CGO).
+func runBuildExtSort(log *zerolog.Logger, outDir, s3Manifest string) error {
+	log.Info().
+		Str("phase", "build_start").
+		Str("backend", "extsort").
+		Str("s3_manifest", s3Manifest).
+		Str("output_dir", outDir).
+		Msg("starting S3 inventory build with external sort backend")
+
+	// TODO: Implement external sort backend
+	return errors.New("extsort backend not yet implemented")
 }
 
 func runQuery(args []string) error {
