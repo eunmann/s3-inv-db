@@ -4,6 +4,7 @@ package sqliteagg
 import (
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -13,10 +14,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog"
 )
-
-// SQLite max variable number (default is 999, but modern SQLite allows 32766)
-// We'll use a conservative 10000 to ensure compatibility
-const maxSQLiteVariables = 10000
 
 // NormalizedConfig holds configuration for the normalized aggregator.
 type NormalizedConfig struct {
@@ -152,12 +149,9 @@ func NewNormalizedAggregator(cfg NormalizedConfig) (*NormalizedAggregator, error
 		return nil, fmt.Errorf("create prefix_stats: %w", err)
 	}
 
-	// Calculate batch size based on max variables
-	colsPerRow := 4 + int(tiers.NumTiers)*2
-	batchSize := maxSQLiteVariables / colsPerRow
-	if batchSize > 10000 {
-		batchSize = 10000 // Cap at 10k rows for sanity
-	}
+	// Calculate batch size based on max variables using shared constants
+	colsPerRow := ColsPerRow
+	batchSize := MaxRowsPerBatch
 
 	log.Info().
 		Str("db_path", cfg.DBPath).
@@ -337,10 +331,8 @@ func (a *NormalizedAggregator) flushToStaging() error {
 
 func (a *NormalizedAggregator) bulkInsertPrefixes() error {
 	// Build multi-row INSERT for prefixes (2 columns: id, prefix)
-	batchSize := maxSQLiteVariables / 2
-	if batchSize > 10000 {
-		batchSize = 10000
-	}
+	// Use max variables for prefix table (2 columns per row)
+	batchSize := SQLiteMaxVariables / 2
 
 	oneRow := "(?, ?)"
 	rows := make([]string, batchSize)
@@ -373,6 +365,14 @@ func (a *NormalizedAggregator) bulkInsertPrefixes() error {
 			prefix string
 		}{id, prefix})
 	}
+
+	// Sort by prefix for B-tree locality
+	slices.SortFunc(entries, func(a, b struct {
+		id     int64
+		prefix string
+	}) int {
+		return strings.Compare(a.prefix, b.prefix)
+	})
 
 	// Process full batches
 	args := make([]interface{}, batchSize*2)
@@ -427,6 +427,17 @@ func (a *NormalizedAggregator) bulkInsertStats() error {
 	for _, s := range a.stats {
 		entries = append(entries, s)
 	}
+
+	// Sort by prefix_id for B-tree locality
+	slices.SortFunc(entries, func(a, b *normalizedStats) int {
+		if a.prefixID < b.prefixID {
+			return -1
+		}
+		if a.prefixID > b.prefixID {
+			return 1
+		}
+		return 0
+	})
 
 	// Process full batches
 	args := make([]interface{}, a.batchSize*a.colsPerRow)

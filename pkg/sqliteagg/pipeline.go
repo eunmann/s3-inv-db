@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -636,7 +637,11 @@ func (p *Pipeline) writeBatch(batch map[string]*AggStats) error {
 		prefixes = append(prefixes, prefix)
 	}
 
-	// Process full batches using multi-row upsert (256 rows per exec)
+	// Sort prefixes to improve B-tree locality during UPSERT.
+	// Sequential writes reduce page splits and cache misses.
+	slices.Sort(prefixes)
+
+	// Process full batches using multi-row upsert
 	colsPerRow := p.agg.colsPerRow
 	for i := 0; i+MultiRowBatchSize <= len(prefixes); i += MultiRowBatchSize {
 		// Fill batch args using aggregator's reusable buffer
