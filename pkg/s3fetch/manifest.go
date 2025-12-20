@@ -8,6 +8,16 @@ import (
 	"strings"
 )
 
+// InventoryFormat represents the format of S3 inventory files.
+type InventoryFormat int
+
+const (
+	// InventoryFormatCSV indicates CSV-formatted inventory files.
+	InventoryFormatCSV InventoryFormat = iota
+	// InventoryFormatParquet indicates Parquet-formatted inventory files.
+	InventoryFormatParquet
+)
+
 // Manifest represents an AWS S3 Inventory manifest.json file.
 type Manifest struct {
 	SourceBucket      string         `json:"sourceBucket"`
@@ -47,10 +57,50 @@ func (m *Manifest) validate() error {
 	if len(m.Files) == 0 {
 		return fmt.Errorf("manifest has no files")
 	}
-	if m.FileFormat != "CSV" {
-		return fmt.Errorf("unsupported file format: %s (only CSV is currently supported)", m.FileFormat)
+	// Validate format - accept CSV, Parquet, or detect from file extensions
+	format := m.DetectFormat()
+	if format != InventoryFormatCSV && format != InventoryFormatParquet {
+		return fmt.Errorf("unsupported file format: %s (supported: CSV, Parquet)", m.FileFormat)
 	}
 	return nil
+}
+
+// DetectFormat determines the inventory format based on the manifest's fileFormat
+// field and file extensions. Priority:
+//  1. Explicit fileFormat field ("CSV" or "Parquet")
+//  2. File extension detection (.parquet, .csv, .csv.gz)
+func (m *Manifest) DetectFormat() InventoryFormat {
+	// Check explicit format declaration
+	switch strings.ToUpper(m.FileFormat) {
+	case "CSV":
+		return InventoryFormatCSV
+	case "PARQUET":
+		return InventoryFormatParquet
+	}
+
+	// Fall back to file extension detection
+	if len(m.Files) > 0 {
+		key := strings.ToLower(m.Files[0].Key)
+		if strings.HasSuffix(key, ".parquet") {
+			return InventoryFormatParquet
+		}
+		if strings.HasSuffix(key, ".csv") || strings.HasSuffix(key, ".csv.gz") {
+			return InventoryFormatCSV
+		}
+	}
+
+	// Default to CSV for backwards compatibility
+	return InventoryFormatCSV
+}
+
+// IsParquet returns true if the inventory format is Parquet.
+func (m *Manifest) IsParquet() bool {
+	return m.DetectFormat() == InventoryFormatParquet
+}
+
+// IsCSV returns true if the inventory format is CSV.
+func (m *Manifest) IsCSV() bool {
+	return m.DetectFormat() == InventoryFormatCSV
 }
 
 // GetDestinationBucketName returns the normalized bucket name from the DestinationBucket field.
