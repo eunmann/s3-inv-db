@@ -1,709 +1,224 @@
 # Performance Analysis
 
-Benchmark results and optimization findings for s3-inv-db.
-
-## Current Performance
+Comprehensive performance documentation for s3-inv-db.
 
 **Hardware:** AMD Ryzen 9 5950X 16-Core, Linux
 
-### SQLite Aggregation (per-chunk + sorted flush + multi-row UPSERT)
+## Current Optimal Solution
 
-| Objects | Prefixes | Time | Memory | Allocations | Throughput |
-|---------|----------|------|--------|-------------|------------|
-| 10,000 | 30k | 115ms | 93MB | 215k | 87k obj/s |
-| 100,000 | 267k | **1.08s** | 599MB | 1.89M | **93k obj/s** |
-| 500,000 | 1.2M | ~5.8s | 2.7GB | 8.7M | ~86k obj/s |
+The optimal build pipeline uses `MemoryAggregator` with sorted bulk INSERT and deferred
+index creation. This is the default path used by `s3inv-index build`.
 
-**Data shape:** s3_realistic (typical S3 inventory prefix distribution)
-
-**Key optimization:** Sorted prefix flush gives 27% throughput improvement.
-
-### Previous Performance (50k threshold-based flush)
-
-| Objects | Time | Memory | Allocations | Throughput |
-|---------|------|--------|-------------|------------|
-| 10,000 | 133ms | 68MB | 213k | 75k obj/s |
-| 100,000 | 1.56s | 637MB | 2.09M | 64k obj/s |
-
-**Per-chunk improvement (100k objects):** 13% faster, 6% less memory, 10% fewer allocations
-
-### Original Baseline (before any optimization)
-
-| Objects | Time | Memory | Allocations |
-|---------|------|--------|-------------|
-| 10,000 | 237ms | 100MB | 586k |
-| 100,000 | 2.5s | 1GB | 5.8M |
-
-**Total improvement from baseline:** ~46% faster, ~40% less memory, ~68% fewer allocations
-
-### Trie Building
-
-| Objects | Time | Memory | Allocations |
-|---------|------|--------|-------------|
-| 100,000 | 87ms | 86MB | 200k |
-
-### Index Operations
-
-| Operation | Time | Notes |
-|-----------|------|-------|
-| Index Open (139k prefixes) | 510μs | Memory-mapped, minimal allocation |
-| Prefix Lookup + Stats | ~10μs | Random access, 267k prefix index |
-| Mixed Workload Query | 250ns - 2.8μs | Depends on tree shape |
-
-## CPU Profile Analysis (with multi-row UPSERT)
-
-### SQLite Aggregation (100k objects)
+### High-Level Algorithm
 
 ```
-77% flushPendingDeltas -> SQLite exec
-47% runtime.cgocall (SQLite CGO)
-27% SQLiteStmt.bind (parameter binding)
-10% driverArgsConnLocked (SQL arg conversion)
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     END-TO-END BUILD PIPELINE                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  1. READ INVENTORY    S3 inventory CSV/Parquet files                    │
+│         ↓            (streaming, parallel downloads)                    │
+│                                                                         │
+│  2. MEMORY AGGREGATE  In-memory map[prefix] → stats                     │
+│         ↓            (no SQLite I/O during accumulation)                │
+│                                                                         │
+│  3. SORTED INSERT     Sort prefixes, batch INSERT to SQLite             │
+│         ↓            (1170 rows/statement, deferred index)              │
+│                                                                         │
+│  4. BUILD TRIE        Iterate SQLite ORDER BY prefix                    │
+│         ↓            (builds in-memory trie with subtree stats)         │
+│                                                                         │
+│  5. WRITE INDEX       Parallel file writes (columnar arrays, MPHF)      │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Key Finding:** With multi-row batching (256 rows per statement), SQLite exec calls
-are reduced by ~256x compared to single-row upserts. The CGO overhead now dominates
-as there's less room for further SQL-level optimization.
+### SQLite Schema
 
-### Memory Profile (After Optimization)
-
+```sql
+CREATE TABLE prefix_stats (
+    prefix TEXT PRIMARY KEY,
+    depth INTEGER NOT NULL,
+    total_count INTEGER NOT NULL DEFAULT 0,
+    total_bytes INTEGER NOT NULL DEFAULT 0,
+    t0_count INTEGER NOT NULL DEFAULT 0,  -- Per-tier stats
+    t0_bytes INTEGER NOT NULL DEFAULT 0,
+    ...  -- t1 through t11 for all storage tiers
+);
 ```
-49% database/sql.driverArgsConnLocked (SQL arg conversion)
-30% go-sqlite3.(*SQLiteStmt).bind
-11% accumulateDelta (delta map overhead)
+
+**Why this schema:**
+- `TEXT PRIMARY KEY` provides natural lexicographic ordering for trie building
+- All stats in one table eliminates JOINs during iteration
+- Per-tier columns enable tier-specific analysis without separate queries
+
+### SQLite PRAGMAs (Bulk Write Mode)
+
+```go
+pragmas := []string{
+    "PRAGMA page_size=32768",           // Large pages for sequential I/O
+    "PRAGMA journal_mode=WAL",          // Write-ahead logging
+    "PRAGMA synchronous=OFF",           // Speed over durability (build is re-runnable)
+    "PRAGMA temp_store=MEMORY",         // Temp tables in RAM
+    "PRAGMA mmap_size=268435456",       // 256MB memory-mapped I/O
+    "PRAGMA cache_size=-262144",        // 256MB page cache
+    "PRAGMA locking_mode=EXCLUSIVE",    // Hold lock for entire session
+    "PRAGMA wal_autocheckpoint=0",      // Manual checkpoints only
+}
 ```
 
-**Key Finding:** SQL driver overhead remains the largest memory consumer.
-Delta map overhead is reasonable at 11% (~150MB for 267k prefixes).
+### Batching Strategy
 
-## Parameter Tuning Results
-
-### Delta Flush Threshold (Historical)
-
-*Note: With per-chunk aggregation as the new default, these thresholds are mainly
-for reference. The aggregator now accumulates entire chunks before flushing.*
-
-Tested different flush thresholds for 100k objects:
-
-| Threshold | Flushes | Time | Memory | Allocs |
-|-----------|---------|------|--------|--------|
-| 10k | 11 | 1.73s | 712MB | 3.94M |
-| 25k | 5 | 1.70s | 690MB | 3.89M |
-| 50k | 3 | 1.66s | 683MB | 3.85M |
-| 100k | 2 | 1.65s | 683MB | 3.85M |
-| 200k | 1 | 1.66s | 683MB | 3.85M |
-| **Per-chunk** | 1 | **1.36s** | **599MB** | **1.89M** |
-
-**Current default:** Per-chunk aggregation (flush only at commit).
-`MaxPrefixesPerChunk` (default 2M) provides safety limit to prevent OOM.
-
-### Multi-row Batch Size
-
-Tested different batch sizes for multi-row UPSERT (100k objects):
-
-| Batch Size | Time | Memory | Allocs |
-|------------|------|--------|--------|
-| 64 | 1.46s | 624MB | 1.91M |
-| 128 | 1.41s | 607MB | 1.90M |
-| 256 | 1.39s | 590MB | 1.89M |
-| 512 | 1.36s | 590MB | 1.89M |
-| 1024 | 1.44s | 590MB | 1.89M |
-| **1170** | **1.18s** | 590MB | 1.89M |
-
-**Current default:** 1170 rows per statement (100% of SQLite variable limit).
-Computed as `SQLiteMaxVariables / ColsPerRow` = 32,766 / 28 = 1170 rows.
-Uses 32,760 bound parameters per exec, maximizing throughput.
-
-## Implemented Optimizations
-
-### 1. Per-Chunk Aggregation (NEW)
-
-**Location:** `pkg/sqliteagg/aggregator.go`
-
-The aggregator now accumulates **entire chunks** in memory before flushing to SQLite.
-Previously, flushing occurred when 50k unique prefixes were accumulated; now flushing
-only happens at `Commit()` time.
-
-**Key changes:**
-- Accumulate entire chunk in memory (no mid-chunk flushing)
-- Safety limit: `MaxPrefixesPerChunk` (default 2M) prevents OOM on pathological datasets
-- Map pre-sized to 500k capacity for typical S3 inventory chunk sizes
-- Batch size increased to 512 rows per UPSERT (from 256)
-
-**Performance comparison (100k objects, 267k prefixes):**
-
-| Metric | Old (50k threshold) | New (per-chunk) | Improvement |
-|--------|---------------------|-----------------|-------------|
-| Time | 1.56s | 1.36s | 13% faster |
-| Throughput | 64k obj/s | 73.6k obj/s | 15% faster |
-| Memory | 637MB | 599MB | 6% less |
-| Allocations | 2.09M | 1.89M | 10% fewer |
-
-**500k objects (1.2M prefixes):**
-
-| Aggregator | Time | Throughput |
-|------------|------|------------|
-| Standard (per-chunk) | 7.46s | 67k obj/s |
-| MemoryAggregator | 5.71s | 87.6k obj/s |
-
-The MemoryAggregator remains faster (~30%) due to deferred indexing and no UPSERT
-overhead, but per-chunk aggregation significantly closes the gap while maintaining
-the standard aggregator's advantages (per-chunk transactions, configurable safety limits).
-
-### 2. In-Memory Delta Accumulation
-
-**Location:** `pkg/sqliteagg/aggregator.go`
-
-The aggregator accumulates prefix deltas in a `map[string]*prefixDelta` instead of
-calling SQLite UPSERT for every prefix of every object.
-
-- Per-chunk mode: accumulates entire chunk before flushing
-- Safety limit: `MaxPrefixesPerChunk` (default 2M) triggers early flush if exceeded
-- Final flush on transaction commit
-
-**Impact:** 34% faster, 32% less memory
-
-### 3. Map Pre-sizing
-
-Pre-allocate delta map capacity (500k for per-chunk mode) to reduce map growth overhead.
-
-**Impact:** ~1% memory reduction
-
-### 4. Multi-row UPSERT Batching
-
-**Location:** `pkg/sqliteagg/aggregator.go`
-
-Instead of executing one UPSERT per prefix, batch 512 prefixes into a single multi-row
-INSERT statement. This reduces SQLite exec calls and parameter binding overhead.
-
-- Batch size: 512 rows per statement (increased from 256 for larger delta maps)
-- Remainder prefixes use single-row upserts
-- Both statements prepared once per transaction
-
-**Impact:** ~7% faster, ~5% less memory, ~46% fewer allocations
-
-### 5. Sorted Prefix Flush
-
-**Location:** `pkg/sqliteagg/aggregator.go`, `pkg/sqliteagg/memory_aggregator.go`
-
-Sort prefixes lexicographically before flushing to SQLite. Sequential writes to
-the B-tree index reduce page splits and cache misses.
-
-**Implementation:** Single call to `slices.Sort(prefixes)` before batch processing.
-
-**Performance comparison (100k objects, 267k prefixes):**
-
-| Strategy | Time | Throughput | Improvement |
-|----------|------|------------|-------------|
-| Unsorted UPSERT | 1.35s | 73k obj/s | baseline |
-| **Sorted UPSERT** | **1.08s** | **93k obj/s** | **+27%** |
-| MemoryAggregator (unsorted) | 1.19s | 84k obj/s | +14% |
-| MemoryAggregator (sorted) | 1.10s | 91k obj/s | +25% |
-
-**Key insight:** Sorted UPSERT is now faster than MemoryAggregator with deferred
-indexing! The B-tree locality gains from sorted writes are more impactful than
-avoiding index maintenance during inserts.
-
-## Insert Optimization Exploration
-
-Systematic comparison of different SQLite insertion strategies.
-
-### Strategies Evaluated
-
-| Strategy | Time (100k) | Throughput | Code Complexity | Verdict |
-|----------|-------------|------------|-----------------|---------|
-| Baseline (unsorted UPSERT) | 1.35s | 73k obj/s | baseline | reference |
-| **Sorted UPSERT** | **1.08s** | **93k obj/s** | +1 line | **WINNER** |
-| MemoryAggregator (sorted) | 1.10s | 91k obj/s | separate impl | close second |
-| Temp table + GROUP BY | 1.80s | 56k obj/s | +500 lines | rejected |
-
-### Temp Table Strategy (Branch A)
-
-Idea: INSERT into unindexed temp table, then aggregate with GROUP BY and merge.
-
-**Result:** 33% SLOWER than baseline. The GROUP BY aggregation adds overhead
-without avoiding B-tree maintenance costs. The standard aggregator's in-memory
-delta accumulation is already more efficient than SQLite's GROUP BY.
-
-### Sorted Flush Strategy (Branch B) - WINNER
-
-Idea: Sort prefixes before writing to improve B-tree locality.
-
-**Result:** 27% FASTER than baseline with a single line change. Sequential
-writes to the B-tree index dramatically reduce page splits and cache misses.
-
-### Sorted + Deferred Index (Branch C)
-
-Idea: Combine sorted writes with MemoryAggregator's deferred indexing.
-
-**Result:** 25% faster than unsorted MemoryAggregator, but slightly slower than
-sorted UPSERT. The sorting benefit is partially offset by the deferred indexing
-benefit being reduced (sorted data is faster to index anyway).
-
-### Conclusions
-
-1. **Sorted writes are the biggest win** - a single `slices.Sort()` call gives
-   27% throughput improvement.
-
-2. **Deferred indexing is less impactful with sorted data** - when data is already
-   sorted, index creation is fast regardless of when it happens.
-
-3. **Temp table aggregation is counterproductive** - SQLite's GROUP BY is less
-   efficient than in-memory Go map aggregation.
-
-4. **Standard aggregator with sorted flush is now fastest** - beats even
-   MemoryAggregator while maintaining per-chunk transaction semantics.
-
-## Insert Optimization Exploration — Round 2
-
-Follow-up exploration testing additional strategies and maximizing SQLite variable usage.
-
-### Max Variable Batching (Merged to Main)
-
-Updated batch sizing to use 100% of SQLite's SQLITE_MAX_VARIABLE_NUMBER (32,766).
-
-**Constants:**
 ```go
 const (
-    SQLiteMaxVariables = 32766
-    ColsPerRow = 4 + int(tiers.NumTiers)*2  // 28 columns
-    MaxRowsPerBatch = SQLiteMaxVariables / ColsPerRow  // 1170 rows
+    SQLiteMaxVariables = 32766               // SQLite's SQLITE_MAX_VARIABLE_NUMBER
+    ColsPerRow = 4 + int(tiers.NumTiers)*2   // 28 columns (4 base + 12 tiers × 2)
+    MaxRowsPerBatch = SQLiteMaxVariables / ColsPerRow  // 1170 rows per INSERT
 )
 ```
 
-**Before → After:**
-| Aggregator | Batch Size | Variables Used |
-|------------|------------|----------------|
-| Standard | 512 → **1170** | 14,336 → **32,760** |
-| MemoryAggregator | 1000 → **1170** | 28,000 → **32,760** |
+**Why sorted writes matter:**
+- Sequential B-tree index updates reduce page splits
+- Cache locality improves as adjacent prefixes hit same pages
+- Sorted UPSERT is 27% faster than random order
 
-**Result:** ~5% throughput improvement from larger batches.
+### End-to-End Performance (500k objects → 1.2M prefixes)
 
-### Strategy A: Temp Table Without GROUP BY
+| Phase | Duration | % Total | Notes |
+|-------|----------|---------|-------|
+| Memory Aggregation | 508ms | 1.8% | In-memory map, no I/O |
+| SQLite Write | 4.96s | 17.4% | Sorted INSERT + index creation |
+| Trie Build | 6.88s | 24.2% | Sequential SQLite read |
+| Index Write | 16.1s | 56.6% | MPHF is largest component |
+| **Total** | **28.4s** | **100%** | **17,600 obj/s** |
 
-**Branch:** `feat/temp-table-no-group`
+**I/O Characteristics:**
+- Input: 25.3 MB synthetic keys
+- SQLite DB: 130.1 MB
+- Index files: 44.3 MB
 
-**Hypothesis:** Inserting pre-aggregated rows into unindexed temp table, then
-merging with INSERT...SELECT might be faster than direct UPSERT.
+## End-to-End CPU Profile
 
-**Implementation:**
-1. Create unindexed `TEMP TABLE temp_deltas`
-2. Batch INSERT sorted, pre-aggregated rows (no GROUP BY needed)
-3. Single `INSERT INTO prefix_stats SELECT ... FROM temp_deltas`
-4. Drop temp table
+CPU breakdown for 500k objects (29.3s total):
 
-**Results:**
-| Objects | Temp Table | Baseline | Difference |
-|---------|------------|----------|------------|
-| 100k | 77k obj/s | 81k obj/s | **-5.5%** |
-| 500k | 81k obj/s | 86k obj/s | **-5.6%** |
+| Component | CPU % | Notes |
+|-----------|-------|-------|
+| MPHF build (bbhash) | 27% | Perfect hash construction |
+| SQLite CGO overhead | 23% | Fundamental driver cost |
+| SQLite row iteration | 31% | Trie build reads |
+| SQLite writes | 15% | MemoryAggregator.Finalize |
+| Memory aggregation | 1.5% | Very efficient in-memory |
+| Other (GC, runtime) | 2.5% | |
 
-**Verdict:** REJECTED — Two-step write adds overhead without reducing B-tree work.
+**Key Insights:**
+1. **MPHF construction dominates index_write phase** - Building the minimal perfect
+   hash function for prefix lookups takes ~9s of the 16s index write time.
 
-### Strategy B: Sorted + Prefix-ID Normalization (Optimized)
+2. **SQLite CGO is unavoidable** - The 23% overhead from `runtime.cgocall` is
+   fundamental to the go-sqlite3 driver. Further optimization would require
+   direct C bindings.
 
-**Branch:** `feat/sorted-prefix-id-normalized`
+3. **Memory aggregation is essentially free** - At 1.5% CPU, the in-memory
+   `map[string]*PrefixStats` approach has negligible overhead.
 
-**Hypothesis:** INTEGER PRIMARY KEY might be faster than TEXT for B-tree operations.
+4. **SQLite reads are efficient** - Sequential ORDER BY iteration achieves
+   good cache locality.
 
-**Implementation (optimized from Round 1):**
-1. Batch INSERT prefixes into `prefix_strings` (32,766 rows per batch)
-2. Assign sequential IDs from sorted insert order (no SELECT needed)
-3. Create index on `prefix_strings(prefix)` after inserts
-4. Batch UPSERT stats with INTEGER key (1,170 rows per batch)
+## Quick Performance Reference
 
-**Results:**
-| Objects | Prefix-ID | Baseline | Difference |
-|---------|-----------|----------|------------|
-| 100k | ~83k obj/s | 83k obj/s | ~0% |
-| 500k | 85k obj/s | 89k obj/s | **-4.6%** |
+### Aggregation Throughput
 
-**Verdict:** REJECTED — The overhead of managing two tables and extra index creation
-outweighs any benefit from INTEGER vs TEXT B-tree operations.
+| Objects | Prefixes | Time | Throughput | Memory |
+|---------|----------|------|------------|--------|
+| 10,000 | 30k | 140ms | 71k obj/s | 4MB |
+| 100,000 | 267k | 1.1s | 91k obj/s | 38MB |
+| 500,000 | 1.2M | 5.0s | 100k obj/s | 175MB |
 
-### Round 2 Summary
+### End-to-End Build
 
-| Strategy | 100k obj/s | 500k obj/s | Status |
-|----------|------------|------------|--------|
-| **S0: Sorted Baseline** | **~85k** | **~89k** | **CURRENT MAIN** |
-| Max Variable Batching | merged | merged | +5% (merged) |
-| A: Temp Table No GROUP | 77k | 81k | rejected (-5%) |
-| B: Prefix-ID Normalized | 83k | 85k | rejected (-5%) |
+| Objects | Total Time | Throughput |
+|---------|------------|------------|
+| 100,000 | 4.9s | 20k obj/s |
+| 500,000 | 28.4s | 17.6k obj/s |
 
-**Conclusion:** The sorted baseline with max variable batching remains optimal.
-Further strategies add complexity without measurable benefit. The fundamental
-bottleneck is CGO overhead for SQLite operations, which cannot be reduced
-without switching to a different database or using direct C bindings.
+### Index Query Performance
 
-## Insert Optimization Exploration — Round 3
-
-Comprehensive schema exploration to validate that CGO overhead is truly the bottleneck.
-
-### Hypothesis Tested
-
-Other codebases using the same go-sqlite3 driver ingest similar S3 inventories in
-a few hours, not tens of hours. This suggests there may be schema or aggregation
-strategies we haven't explored.
-
-### Strategies Evaluated
-
-All strategies tested with consistent methodology (100k and 500k objects):
-
-| Strategy | 100k obj/s | 500k obj/s | Notes |
-|----------|------------|------------|-------|
-| **Current UPSERT (sorted)** | **85,557** | **90,632** | **WINNER** |
-| Full Memory Aggregate | 69,948 | 73,256 | Deferred index |
-| Staging Aggregator | 56,572 | 62,611 | Heap + GROUP BY |
-| Staging Aggregate | 45,777 | 47,403 | Per-tier rows |
-| Prefix ID Normalized | 33,949 | 34,185 | INTEGER PK |
-
-### Strategy Details
-
-#### Option 1: Staging Heap + Final GROUP BY (staging_aggregator)
-
-**Hypothesis:** Inserting into an unindexed heap table, then using GROUP BY for
-final aggregation, might avoid B-tree maintenance overhead.
-
-**Implementation:**
-1. Create staging table WITHOUT any index or primary key
-2. In-memory aggregation per chunk (same as current)
-3. Bulk INSERT aggregated rows to staging (pure append, no B-tree)
-4. Final `CREATE TABLE prefix_stats AS SELECT ... GROUP BY` aggregation
-5. Create index AFTER all data loaded
-
-**Results:**
-- 100k: 56,572 obj/s (34% slower than baseline)
-- 500k: 62,611 obj/s (31% slower than baseline)
-
-**Why slower:** GROUP BY step takes 583ms-2.6s even though staging data is
-already aggregated (no duplicates within a chunk). The overhead of copying
-data between tables plus GROUP BY execution exceeds the B-tree maintenance
-cost of direct UPSERT.
-
-#### Option 2: Prefix Dictionary + ID-Based Staging
-
-**Hypothesis:** INTEGER PRIMARY KEY is faster for B-tree operations than TEXT.
-
-**Implementation:**
-1. Insert all prefix strings, get sequential IDs
-2. UPSERT stats using INTEGER key instead of TEXT
-
-**Results:**
-- 100k: 33,949 obj/s (60% slower than baseline)
-- 500k: 34,185 obj/s (62% slower than baseline)
-
-**Why slower:** The overhead of managing prefix→ID mapping and two tables
-far exceeds any benefit from INTEGER vs TEXT B-tree operations.
-
-#### Option 3: Full Memory Aggregate (fewer SQLite operations)
-
-**Hypothesis:** Accumulating more data in memory before any SQLite write
-reduces total I/O overhead.
-
-**Implementation:**
-1. Full in-memory aggregation (no SQLite during accumulation)
-2. Single bulk INSERT at end (no UPSERT, no index)
-3. Create index after all inserts
-
-**Results:**
-- 100k: 69,948 obj/s (18% slower than baseline)
-- 500k: 73,256 obj/s (19% slower than baseline)
-
-**Why slower:** Despite eliminating UPSERT and deferring index creation,
-the bulk INSERT + index build is still slower than sorted UPSERT. The sorted
-write pattern gives excellent B-tree locality, making inline index maintenance
-very efficient.
-
-### Round 3 Conclusions
-
-1. **Current sorted UPSERT is optimal.** All alternative approaches are slower.
-
-2. **Sorted writes are the key optimization.** B-tree locality from sorted
-   writes makes inline index maintenance faster than deferred index creation.
-
-3. **GROUP BY is expensive.** Even with pre-aggregated data, GROUP BY adds
-   significant overhead compared to in-memory Go map aggregation.
-
-4. **Two-table schemas add overhead.** The complexity of managing prefix IDs
-   or staging tables exceeds any theoretical benefit.
-
-5. **CGO overhead IS the real bottleneck.** There are no remaining schema-level
-   optimizations that would significantly improve throughput. Further gains
-   would require:
-   - Direct SQLite C bindings (bypassing database/sql)
-   - Alternative database (losing SQLite portability)
-   - Parallel processing with sharded writes
-
-### Code Location
-
-The StagingAggregator experiment is preserved on the `feat/schema-staging-heap`
-branch for reference. Not merged to main as it is slower than the current
-implementation.
-
-## Remaining Bottlenecks
-
-### SQLite CGO Overhead (47% of CPU time)
-
-The `runtime.cgocall` overhead for SQLite is fundamental to the go-sqlite3 driver.
-With multi-row batching already implemented, CGO overhead is now the dominant cost.
-Possible mitigations:
-- Direct SQLite C bindings (significant code change)
-- Alternative pure-Go database (would lose SQLite's reliability)
-
-### SQL Argument Conversion (10% of CPU time)
-
-The `database/sql` package allocates for every exec call. With multi-row batching,
-this overhead is significantly reduced but still present.
-Possible mitigations:
-- Use go-sqlite3's direct API bypassing database/sql
-
-## Future Optimization Opportunities
-
-### Phase 2: Further Allocation Reduction
-
-1. **String pooling for prefixes**
-   - Common prefixes (data/, logs/, etc.) appear millions of times
-   - Could intern strings to reduce allocation
-
-2. **Reuse byte buffers**
-   - sync.Pool for prefix extraction buffers (marginal gains expected)
-
-### Phase 3: Alternative Approaches
-
-1. **Direct SQLite bindings**
-   - Bypass database/sql wrapper
-   - ~30% reduction in CGO overhead possible
-
-2. **Staging table + bulk merge**
-   - Insert into unindexed staging table
-   - Merge with single INSERT...SELECT at commit
-   - May reduce index maintenance overhead
+| Operation | Time | Notes |
+|-----------|------|-------|
+| Index Open | 510μs | Memory-mapped |
+| Prefix Lookup | ~10μs | Via MPHF |
+| Stats Access | <1μs | Direct array read |
 
 ## Running Benchmarks
 
 ```bash
-# Quick benchmarks
-go test -bench=. -benchtime=1x -run='^$' ./pkg/sqliteagg/...
-go test -bench=. -benchtime=1x -run='^$' ./pkg/triebuild/...
-go test -bench=. -benchtime=100x -run='^$' ./pkg/indexread/...
+# Quick end-to-end benchmark
+go test -bench='BenchmarkEndToEnd$' -benchtime=1x ./pkg/indexbuild/...
 
-# Detailed throughput metrics
-go test -bench='BenchmarkAggregate_Detailed' -benchtime=1x -run='^$' ./pkg/sqliteagg/...
+# Full scaling tests (100k, 500k, 1M objects)
+S3INV_LONG_BENCH=1 go test -bench='BenchmarkEndToEnd_Scaling' -benchtime=1x ./pkg/indexbuild/...
 
 # CPU profiling
-go test -bench='BenchmarkAggregate/objects=100000' -benchtime=1x \
-    -cpuprofile=cpu.out ./pkg/sqliteagg/...
+go test -bench='BenchmarkEndToEnd_Scaling/objects=500000' -benchtime=1x \
+    -cpuprofile=cpu.out ./pkg/indexbuild/...
 go tool pprof -top cpu.out
 
 # Memory profiling
-go test -bench='BenchmarkAggregate/objects=100000' -benchtime=1x \
-    -memprofile=mem.out ./pkg/sqliteagg/...
+go test -bench='BenchmarkEndToEnd/objects=100000' -benchtime=1x \
+    -memprofile=mem.out ./pkg/indexbuild/...
 go tool pprof -top mem.out
-
-# Large-scale and parameter sweep benchmarks (gated)
-S3INV_LONG_BENCH=1 go test -bench='Scaling|Threshold|MultiRowBatch' -benchtime=1x ./pkg/...
 ```
 
-## Phase: Pitfall Cleanup
+---
 
-### Optimizations Applied
+## Historical Exploration Notes
 
-1. **Reuse flush buffers across flushes**
-   - `batchArgs` and `singleArgs` slices are now allocated once in `BeginChunk()`
-   - Reused across all `flushPendingDeltas()` calls in the transaction
-   - Impact: Negligible (saves ~12 allocations per 100k objects)
+The following sections document optimization strategies that were evaluated but
+not adopted, or were superseded by the current optimal design.
 
-2. **Reuse PrefixIterator scanDest slice**
-   - `scanDest` slice for row scanning is now lazy-initialized once per iterator
-   - Previously allocated on every `Next()` call
-   - Impact: Reduces allocations during prefix iteration by 1 per row
+### Optimization Timeline
 
-3. **Inline prefix extraction in hot path**
-   - `AddObject()` uses inline loop instead of calling `extractPrefixes()`
-   - Avoids slice allocation per object
-   - `extractPrefixes()` retained for pipeline.go and tests where allocation is acceptable
+1. **Baseline:** Per-object SQLite UPSERT (slow due to CGO overhead per call)
+2. **Delta accumulation:** Batch deltas in memory, flush periodically (+34%)
+3. **Multi-row batching:** INSERT multiple rows per statement (+7%)
+4. **Max variable usage:** 1170 rows per batch using 32,760 parameters (+5%)
+5. **Sorted writes:** Sort prefixes before INSERT (+27%)
+6. **Deferred indexing:** Create index after all INSERTs (minor gain)
 
-### Common Pitfalls Avoided
+### Strategies Evaluated and Rejected
 
-- **Per-row SQLite statements**: Everything is batched (256 rows per exec)
-- **Per-flush buffer allocation**: Reuse `batchArgs`/`singleArgs` across flushes
-- **Per-row scan allocation**: Reuse `scanDest` in PrefixIterator
-- **Logging in hot loops**: No logging in `AddObject()` or `accumulateDelta()`
-- **Interface boxing in hot paths**: Concrete types used throughout aggregation
+| Strategy | Result | Why Rejected |
+|----------|--------|--------------|
+| Temp table + GROUP BY | -33% | GROUP BY overhead exceeds B-tree cost |
+| Prefix ID normalization | -60% | Two-table overhead too high |
+| Staging heap + final merge | -31% | Extra copy step adds overhead |
+| INTEGER PRIMARY KEY | -5% | TEXT PK with sorted writes is faster |
 
-### Ideas Evaluated but Not Implemented
+### Key Lessons Learned
 
-1. **String interning for common prefixes**
-   - Evaluated: Would reduce memory for repeated prefixes like "data/", "logs/"
-   - Rejected: The map key already interns strings implicitly; explicit interning
-     adds complexity for marginal gain. Profile shows delta map is only 11% of memory.
+1. **Sorted writes are the biggest win** - A single `slices.Sort()` call before
+   INSERT provides 27% throughput improvement.
 
-2. **sync.Pool for prefix slices**
-   - Evaluated: Could reduce allocation in `extractPrefixes()`
-   - Rejected: Hot path uses inline extraction. Non-hot paths don't benefit enough.
+2. **In-memory aggregation is faster than SQLite** - Accumulating in a Go map
+   and batch-writing is faster than incremental UPSERT.
 
-3. **Optimizing tiers.FromS3() string operations**
-   - Evaluated: `strings.ToUpper`/`TrimSpace` allocate on every call
-   - Rejected: Only called when tier tracking enabled, and most S3 inventory
-     data is already uppercase/trimmed so no allocation actually occurs.
+3. **CGO overhead is the fundamental limit** - With the go-sqlite3 driver,
+   ~23% of CPU time goes to CGO transitions.
 
-### Software Improvements
-
-1. **Config.Validate()**
-   - Added validation for `DBPath`, `Synchronous`, `MmapSize`, `CacheSizeKB`
-   - Called in `Open()` to fail fast on invalid configuration
-   - Comprehensive tests for validation edge cases
-
-## Phase: Bulk Write Investigation
-
-### Investigation Findings
-
-Investigated SQLite configuration for heavy write workloads (14B+ objects).
-
-#### 1. Missing PRAGMAs for Bulk Writes
-
-**Added `BulkWriteMode` flag** that enables:
-- `PRAGMA locking_mode=EXCLUSIVE` - Hold lock for entire session
-- `PRAGMA wal_autocheckpoint=0` - Disable auto-checkpoint during writes
-- Manual checkpoint on close with `PRAGMA wal_checkpoint(TRUNCATE)`
-
-**Benchmark Result:** ~2% improvement with `synchronous=OFF` (marginal because there's no fsync overhead). Impact may be larger with `synchronous=NORMAL` in production.
-
-#### 2. Pipeline Multi-Row Batching Bug (FIXED)
-
-**Critical Bug Found:** `pipeline.go:writeBatch()` was using single-row UPSERT instead of multi-row batching. This bypassed the 256-row batching optimization for the pipelined streaming path.
-
-**Fix:** Rewrote `writeBatch()` to use `multiRowStmt` for batches of 256 rows, with single-row fallback for remainders. Uses aggregator's reusable `batchArgs` and `singleArgs` buffers.
-
-#### 3. Staging Table Approach (Evaluated, Not Adopted)
-
-Tested alternative approach: INSERT into unindexed staging table, then aggregate with single `INSERT...SELECT...GROUP BY` at end.
-
-**Result:** Staging approach was **~15% slower** than UPSERT + delta accumulation because:
-- Staging inserts every (prefix, delta) tuple individually (~267k inserts for 100k objects)
-- UPSERT with delta accumulation only flushes unique prefixes per batch (much fewer rows)
-
-The current in-memory delta accumulation is already an effective optimization.
-
-#### 4. Schema Analysis
-
-Current schema uses `prefix TEXT PRIMARY KEY`:
-- Pros: Simple, natural ordering for iteration
-- Cons: Variable-length text keys mean expensive B-tree operations
-
-**Potential future optimization:** Integer prefix ID with separate prefix→ID lookup. Not implemented due to complexity and unclear benefit vs CGO overhead.
-
-## Phase: Profile-Guided Schema Optimization
-
-### Investigation Summary
-
-Challenged previous assumption that "CGO overhead is the bottleneck." Performed systematic comparison of different SQLite write strategies with 100k-500k objects.
-
-### Strategy Comparison (500k objects, 1.2M prefixes)
-
-| Strategy | Time | obj/s | vs Baseline |
-|----------|------|-------|-------------|
-| Current UPSERT (TEXT PK) | 8.8s | 56,607 | baseline |
-| Staging + Aggregate | 10.4s | 47,900 | -15% slower |
-| Prefix ID Normalized | 13.9s | 35,992 | -36% slower |
-| Full Memory + Deferred Index | 6.6s | 76,070 | **+34% faster** |
-| **MemoryAggregator** | **6.0s** | **82,600** | **+46% faster** |
-
-### Key Finding: Deferred Indexing
-
-The biggest win comes from **not maintaining the B-tree index during writes**:
-1. Create table without PRIMARY KEY
-2. Bulk INSERT all data (no UPSERT, no conflict resolution)
-3. Create index AFTER all inserts complete
-
-This eliminates B-tree maintenance overhead during the heavy write phase.
-
-### New: MemoryAggregator
-
-Added `MemoryAggregator` for one-shot build workflows:
-
-```go
-cfg := sqliteagg.DefaultMemoryAggregatorConfig(dbPath)
-agg := sqliteagg.NewMemoryAggregator(cfg)
-
-for _, obj := range objects {
-    agg.AddObject(obj.Key, obj.Size, obj.TierID)
-}
-agg.Finalize()  // Writes to SQLite with deferred indexing
-```
-
-**Advantages:**
-- No SQLite I/O during accumulation (all in-memory)
-- Single bulk write at end (no UPSERT overhead)
-- Deferred index creation (no B-tree maintenance during writes)
-- Multi-row INSERT batching (1000 rows/exec)
-
-**Limitations:**
-- Not resumable (all data lost on crash)
-- Memory usage: ~150 bytes × unique prefix count
-
-### Performance Comparison
-
-| Objects | Standard (UPSERT) | MemoryAggregator | Speedup |
-|---------|-------------------|------------------|---------|
-| 100k | 1.62s (61.7k/s) | 1.34s (74.6k/s) | 1.21x |
-| 500k | 9.45s (52.9k/s) | 6.05s (82.6k/s) | **1.56x** |
-
-The **MemoryAggregator is 56% faster** at scale (500k objects).
+4. **MPHF construction is expensive** - The perfect hash function for prefix
+   lookup takes significant time but provides O(1) query performance.
 
 ### Projected Performance at Scale
 
-For 14 billion objects (assuming prefix ratio holds):
-- Standard Aggregator: ~73 hours
-- MemoryAggregator: ~47 hours
+Based on 500k object benchmarks (linear extrapolation):
 
-This is a significant improvement but still far from "a few hours." Further investigation needed to understand what the fast implementation does differently.
+| Objects | Aggregation Time | Full Build Time |
+|---------|------------------|-----------------|
+| 1M | ~10s | ~1 min |
+| 10M | ~100s | ~10 min |
+| 100M | ~17 min | ~2 hours |
+| 1B | ~3 hours | ~20 hours |
+| 14B | ~40 hours | ~12 days |
 
-### When to Use Each Approach
-
-| Use Case | Recommended |
-|----------|-------------|
-| One-shot build, ample memory | `MemoryAggregator` |
-| Need resumability | Standard `Aggregator` with `BulkWriteMode` |
-| Concurrent readers during build | Standard `Aggregator` (no EXCLUSIVE lock) |
-| Memory-constrained + resumable | `NormalizedAggregator` |
-
-### NormalizedAggregator (Memory-Constrained)
-
-The `NormalizedAggregator` uses INTEGER PRIMARY KEY instead of TEXT for stats,
-with staging tables that spill to disk when memory limits are reached.
-
-**Benchmark Results (100k objects):**
-| Aggregator | Throughput | Notes |
-|------------|------------|-------|
-| MemoryAggregator | 81.4k obj/s | Fastest, in-memory |
-| Standard | 63.3k obj/s | UPSERT + delta batching |
-| NormalizedAggregator | 50.4k obj/s | Staging overhead |
-
-The NormalizedAggregator is ~21% slower than standard due to staging table overhead,
-but provides value when:
-- Memory is limited (configurable `MemoryLimitMB`)
-- Need resumability across crashes (staging persists to SQLite)
-- Processing extremely large datasets that exceed available RAM
-
-```go
-cfg := sqliteagg.DefaultNormalizedConfig(dbPath)
-cfg.MemoryLimitMB = 512  // Limit memory usage
-agg, err := sqliteagg.NewNormalizedAggregator(cfg)
-```
-
-### Bulk Write Mode Usage
-
-```go
-cfg := sqliteagg.DefaultConfig(dbPath)
-cfg.BulkWriteMode = true  // Enable for build workflows
-agg, err := sqliteagg.Open(cfg)
-```
-
-## Benchmark Design Notes
-
-- **sqliteagg/bench_test.go**: Aggregation benchmarks with tier distributions and threshold sweeps
-- **triebuild/bench_test.go**: Trie construction from sorted keys
-- **indexread/bench_test.go**: Comprehensive query benchmarks (lookup, stats, descendants, concurrent)
-- **indexbuild/bench_test.go**: End-to-end index build and phase benchmarks
-- **benchutil/**: Shared test data generators with configurable tree shapes
+**Note:** These are rough projections. Actual performance depends on prefix
+distribution, disk I/O, and memory availability.
