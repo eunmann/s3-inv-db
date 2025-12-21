@@ -166,14 +166,16 @@ type Config struct {
 
 	// MemoryThreshold is the approximate memory limit (in bytes) for the
 	// in-memory prefix aggregator before flushing to a run file.
-	// DEPRECATED: Use MemoryBudget instead. This field is kept for backward
+	//
+	// Deprecated: Use MemoryBudget instead. This field is kept for backward
 	// compatibility but is ignored when MemoryBudget is set.
 	MemoryThreshold int64
 
 	// RunFileBufferSize is the buffer size for reading/writing run files.
-	// DEPRECATED: Buffer sizes are now calculated from MemoryBudget.
-	// This field is kept for backward compatibility.
 	// Default: 4MB.
+	//
+	// Deprecated: Buffer sizes are now calculated from MemoryBudget.
+	// This field is kept for backward compatibility.
 	RunFileBufferSize int
 
 	// S3DownloadConcurrency is the number of concurrent S3 chunk downloads.

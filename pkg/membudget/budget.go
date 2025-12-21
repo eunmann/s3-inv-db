@@ -6,6 +6,7 @@
 package membudget
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -38,7 +39,7 @@ const (
 //
 // Budget is safe for concurrent use.
 type Budget struct {
-	total  uint64       // Total allowed bytes
+	total  uint64 // Total allowed bytes
 	inUse  atomic.Uint64
 	source BudgetSource
 
@@ -271,10 +272,10 @@ func (b *Budget) IndexBuildBudget() uint64 {
 }
 
 // ParseHumanSize parses a human-readable size string (e.g., "4GiB", "512MB").
-// Supported suffixes: B, KB, KiB, MB, MiB, GB, GiB, TB, TiB
+// Supported suffixes: B, KB, KiB, MB, MiB, GB, GiB, TB, TiB.
 func ParseHumanSize(s string) (uint64, error) {
 	if s == "" {
-		return 0, fmt.Errorf("empty size string")
+		return 0, errors.New("empty size string")
 	}
 
 	// Find where the number ends
@@ -295,10 +296,10 @@ func ParseHumanSize(s string) (uint64, error) {
 		return 0, fmt.Errorf("invalid number: %s", numStr)
 	}
 
-	var multiplier float64 = 1
+	var multiplier float64
 	switch suffix {
 	case "", "B":
-		multiplier = 1
+		multiplier = 1.0
 	case "KB":
 		multiplier = 1000
 	case "KiB", "K":

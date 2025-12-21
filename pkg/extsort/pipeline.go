@@ -290,7 +290,7 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 
 	// Start workers
 	var wg sync.WaitGroup
-	for w := 0; w < numWorkers; w++ {
+	for range numWorkers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

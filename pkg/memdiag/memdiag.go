@@ -273,7 +273,7 @@ func (t *Tracker) logLoop() {
 	}
 }
 
-// Global tracker for convenience
+// Global tracker for convenience.
 var globalTracker *Tracker
 var globalOnce sync.Once
 

@@ -33,9 +33,9 @@ type StreamingMPHFBuilder struct {
 	tempPath   string
 
 	// Stats
-	count       uint64
-	totalBytes  uint64
-	bufferSize  int
+	count      uint64
+	totalBytes uint64
+	bufferSize int
 }
 
 // NewStreamingMPHFBuilder creates a new streaming MPHF builder.
@@ -159,7 +159,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	var lenBuf [4]byte
 	currentOffset := uint64(0)
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		// Read prefix length
 		if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
 			return fmt.Errorf("read prefix length at %d: %w", i, err)
@@ -207,7 +207,6 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	if err := fpWriter.Close(); err != nil {
 		return fmt.Errorf("close fingerprint writer: %w", err)
 	}
-	fingerprints = nil // Free
 
 	// Write preorder positions
 	posPath := filepath.Join(outDir, "mph_pos.u64")
@@ -224,7 +223,6 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	if err := posWriter.Close(); err != nil {
 		return fmt.Errorf("close position writer: %w", err)
 	}
-	preorderPositions = nil // Free
 
 	// Now write prefix blob in MPHF-ordered sequence
 	// We need to re-read prefixes in hash order
@@ -257,7 +255,7 @@ func (b *StreamingMPHFBuilder) writePrefixBlobOrdered(outDir string, mph *bbhash
 	var lenBuf [4]byte
 	n := int(b.count)
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		// Read prefix length
 		if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
 			writer.Close()

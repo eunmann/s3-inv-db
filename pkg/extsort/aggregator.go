@@ -93,7 +93,7 @@ func (a *Aggregator) BytesProcessed() int64 {
 // EstimatedMemoryUsage returns an approximate memory usage in bytes.
 // This is a rough estimate based on prefix count and average prefix length.
 //
-// DEPRECATED: This estimate is inaccurate. Use ShouldFlush() with actual
+// Deprecated: This estimate is inaccurate. Use ShouldFlush() with actual
 // heap measurements instead.
 func (a *Aggregator) EstimatedMemoryUsage() int64 {
 	// Estimate per-prefix overhead:

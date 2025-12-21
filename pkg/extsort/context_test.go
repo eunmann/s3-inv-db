@@ -120,7 +120,7 @@ func TestAggregationContextCancellation(t *testing.T) {
 
 	// Send a few batches
 	go func() {
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			results <- objectBatch{objects: []objectRecord{
 				{key: "test/obj", size: 100, tierID: 0},
 			}}

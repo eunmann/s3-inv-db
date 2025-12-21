@@ -25,7 +25,7 @@ func TestAggregatorMemoryBounded(t *testing.T) {
 	const flushThresholdMB = 100
 
 	var flushCount int
-	for i := 0; i < numObjects; i++ {
+	for i := range numObjects {
 		// Generate key with some depth variety
 		key := fmt.Sprintf("bucket/year=2024/month=%02d/day=%02d/hour=%02d/file_%d.csv",
 			i%12+1, i%28+1, i%24, i)
@@ -77,7 +77,7 @@ func TestIndexBuilderMemoryBounded(t *testing.T) {
 
 	// Add many unique prefixes (sorted order required by builder)
 	const numPrefixes = 10000
-	for i := 0; i < numPrefixes; i++ {
+	for i := range numPrefixes {
 		// Create unique sorted prefixes
 		prefix := fmt.Sprintf("data/%05d/", i)
 		row := &PrefixRow{
@@ -196,11 +196,11 @@ func TestShouldFlush(t *testing.T) {
 func BenchmarkAggregatorMemory(b *testing.B) {
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		agg := NewAggregator(0, 0)
 
 		// Add 10K objects
-		for j := 0; j < 10000; j++ {
+		for j := range 10000 {
 			key := fmt.Sprintf("bucket/path/%d/file.txt", j%100)
 			agg.AddObject(key, 1024, tiers.Standard)
 		}

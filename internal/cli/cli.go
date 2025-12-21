@@ -131,12 +131,10 @@ func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudget
 }
 
 // determineMemoryBudget determines the memory budget from CLI flag, environment variable,
-// or system RAM detection.
-//
-// Priority order:
-// 1. CLI flag (--mem-budget) if provided
-// 2. Environment variable (S3INV_MEM_BUDGET) if set
-// 3. 50% of detected system RAM
+// or auto-detection in this order of priority:
+//  1. CLI flag --mem-budget
+//  2. Environment variable S3INV_MEM_BUDGET
+//  3. 50% of detected system RAM.
 func determineMemoryBudget(cliValue string) (*membudget.Budget, error) {
 	// Check CLI flag first
 	if cliValue != "" {
