@@ -312,7 +312,7 @@ func (b *IndexBuilder) AddAllWithContext(ctx context.Context, iter *MergeIterato
 		if count%checkInterval == 0 {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return fmt.Errorf("index build cancelled: %w", ctx.Err())
 			default:
 			}
 		}
@@ -333,6 +333,8 @@ func (b *IndexBuilder) AddAllWithContext(ctx context.Context, iter *MergeIterato
 }
 
 // Finalize closes all remaining stack nodes and writes final files.
+//
+//nolint:gocyclo // Sequential file finalization with error handling
 func (b *IndexBuilder) Finalize() error {
 	if b.closed {
 		return nil

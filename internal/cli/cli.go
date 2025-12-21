@@ -131,12 +131,10 @@ func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudget
 }
 
 // determineMemoryBudget determines the memory budget from CLI flag, environment variable,
-// or system RAM detection.
-//
-// Priority order:
-// 1. CLI flag (--mem-budget) if provided
-// 2. Environment variable (S3INV_MEM_BUDGET) if set
-// 3. 50% of detected system RAM
+// or auto-detection in this order of priority:
+//  1. CLI flag --mem-budget
+//  2. Environment variable S3INV_MEM_BUDGET
+//  3. 50% of detected system RAM.
 func determineMemoryBudget(cliValue string) (*membudget.Budget, error) {
 	// Check CLI flag first
 	if cliValue != "" {
@@ -166,6 +164,7 @@ func determineMemoryBudget(cliValue string) (*membudget.Budget, error) {
 	return membudget.NewFromSystemRAM(), nil
 }
 
+//nolint:gocognit // CLI command parsing inherently has many branches
 func runQuery(args []string) error {
 	fs := flag.NewFlagSet("query", flag.ContinueOnError)
 	indexDir := fs.String("index", "", "index directory to query")
@@ -209,7 +208,7 @@ func runQuery(args []string) error {
 	fmt.Printf("Objects: %d\n", stats.ObjectCount)
 	fmt.Printf("Bytes: %d\n", stats.TotalBytes)
 
-	if *showTiers || *estimateCost {
+	if *showTiers || *estimateCost { //nolint:nestif // deeply nested output formatting
 		if !idx.HasTierData() {
 			fmt.Println("\nNo tier data available (index was built without tier tracking)")
 		} else {

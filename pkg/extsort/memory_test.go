@@ -25,7 +25,7 @@ func TestAggregatorMemoryBounded(t *testing.T) {
 	const flushThresholdMB = 100
 
 	var flushCount int
-	for i := 0; i < numObjects; i++ {
+	for i := range numObjects {
 		// Generate key with some depth variety
 		key := fmt.Sprintf("bucket/year=2024/month=%02d/day=%02d/hour=%02d/file_%d.csv",
 			i%12+1, i%28+1, i%24, i)
@@ -77,7 +77,7 @@ func TestIndexBuilderMemoryBounded(t *testing.T) {
 
 	// Add many unique prefixes (sorted order required by builder)
 	const numPrefixes = 10000
-	for i := 0; i < numPrefixes; i++ {
+	for i := range numPrefixes {
 		// Create unique sorted prefixes
 		prefix := fmt.Sprintf("data/%05d/", i)
 		row := &PrefixRow{
@@ -135,7 +135,7 @@ func TestPrefixStatsMemoryLayout(t *testing.T) {
 	// Total: 2 + 8 + 8 + 96 + 96 = 210 bytes (but alignment may add padding)
 
 	stats := PrefixStats{}
-	size := int(unsafe_Sizeof(stats))
+	size := prefixStatsSize(stats)
 
 	t.Logf("PrefixStats size: %d bytes", size)
 
@@ -145,17 +145,12 @@ func TestPrefixStatsMemoryLayout(t *testing.T) {
 	}
 }
 
-// unsafe_Sizeof returns the size of a value in bytes.
-// We use a simple implementation to avoid importing unsafe in tests.
-func unsafe_Sizeof(v interface{}) uintptr {
-	switch v.(type) {
-	case PrefixStats:
-		// Known size from struct definition
-		// 2 + 6(pad) + 8 + 8 + 96 + 96 = 216 bytes
-		return 216
-	default:
-		return 0
-	}
+// prefixStatsSize returns the known size of PrefixStats in bytes.
+// This avoids importing unsafe in tests while documenting the expected size.
+func prefixStatsSize(_ PrefixStats) int {
+	// Known size from struct definition:
+	// 2 (Depth) + 6 (padding) + 8 (Count) + 8 (TotalBytes) + 96 (TierCounts) + 96 (TierBytes) = 216 bytes
+	return 216
 }
 
 // TestHeapAllocBytes verifies that HeapAllocBytes returns sensible values.
@@ -196,11 +191,11 @@ func TestShouldFlush(t *testing.T) {
 func BenchmarkAggregatorMemory(b *testing.B) {
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		agg := NewAggregator(0, 0)
 
 		// Add 10K objects
-		for j := 0; j < 10000; j++ {
+		for j := range 10000 {
 			key := fmt.Sprintf("bucket/path/%d/file.txt", j%100)
 			agg.AddObject(key, 1024, tiers.Standard)
 		}

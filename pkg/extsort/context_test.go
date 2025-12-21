@@ -120,7 +120,7 @@ func TestAggregationContextCancellation(t *testing.T) {
 
 	// Send a few batches
 	go func() {
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			results <- objectBatch{objects: []objectRecord{
 				{key: "test/obj", size: 100, tierID: 0},
 			}}
@@ -131,19 +131,19 @@ func TestAggregationContextCancellation(t *testing.T) {
 	// Run aggregation loop (similar to pipeline code)
 	agg := NewAggregator(100, 0)
 	var cancelled bool
+outerLoop:
 	for batch := range results {
 		// Check for context cancellation (same pattern as pipeline)
 		select {
 		case <-ctx.Done():
 			cancelled = true
-			// Drain remaining
+			// Drain remaining channel items
 			for range results {
+				// Intentionally empty: just consuming remaining items
+				continue
 			}
-			break
+			break outerLoop
 		default:
-		}
-		if cancelled {
-			break
 		}
 		for _, obj := range batch.objects {
 			agg.AddObject(obj.key, obj.size, obj.tierID)

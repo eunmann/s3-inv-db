@@ -60,8 +60,9 @@ func setupBenchIndex(b *testing.B, keys []string) *benchIndex {
 		b.Fatalf("Open failed: %v", err)
 	}
 
-	prefixes := make([]string, 0, idx.Count())
-	for i := uint64(0); i < idx.Count(); i++ {
+	count := idx.Count()
+	prefixes := make([]string, 0, count)
+	for i := range count {
 		p, err := idx.PrefixString(i)
 		if err != nil {
 			b.Fatalf("PrefixString failed: %v", err)
@@ -87,8 +88,9 @@ func setupBenchIndexWithTiers(b *testing.B, numObjects int) *benchIndex {
 		b.Fatalf("Open failed: %v", err)
 	}
 
-	prefixes := make([]string, 0, idx.Count())
-	for i := uint64(0); i < idx.Count(); i++ {
+	count := idx.Count()
+	prefixes := make([]string, 0, count)
+	for i := range count {
 		p, err := idx.PrefixString(i)
 		if err != nil {
 			b.Fatalf("PrefixString failed: %v", err)

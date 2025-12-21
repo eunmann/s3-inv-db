@@ -7,7 +7,7 @@ package memdiag
 import (
 	"fmt"
 	"net/http"
-	_ "net/http/pprof"
+	_ "net/http/pprof" // Registers pprof handlers on DefaultServeMux
 	"os"
 	"runtime"
 	"sync"
@@ -273,7 +273,7 @@ func (t *Tracker) logLoop() {
 	}
 }
 
-// Global tracker for convenience
+// Global tracker for convenience.
 var globalTracker *Tracker
 var globalOnce sync.Once
 

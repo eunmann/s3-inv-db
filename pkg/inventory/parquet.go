@@ -57,6 +57,7 @@ func NewParquetInventoryReader(r io.ReaderAt, size int64, cfg ParquetReaderConfi
 
 // NewParquetInventoryReaderFromStream creates a Parquet inventory reader from a stream.
 // Since Parquet requires random access, this buffers the entire stream to a temp file.
+// The size parameter is used for validation (if non-zero) but the full stream is read regardless.
 func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (InventoryReader, error) {
 	tempFile, err := os.CreateTemp("", "parquet-inventory-*.parquet")
 	if err != nil {
@@ -70,6 +71,13 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 		tempFile.Close()
 		os.Remove(tempFile.Name())
 		return nil, fmt.Errorf("buffer parquet data: %w", err)
+	}
+
+	// Validate size if provided
+	if size > 0 && written != size {
+		tempFile.Close()
+		os.Remove(tempFile.Name())
+		return nil, fmt.Errorf("size mismatch: expected %d, got %d", size, written)
 	}
 
 	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
@@ -96,6 +104,7 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 }
 
 // NewParquetInventoryReaderWithConfig creates a Parquet reader with explicit config.
+// The size parameter is used for validation (if non-zero) but the full stream is read regardless.
 func NewParquetInventoryReaderWithConfig(r io.ReadCloser, size int64, cfg ParquetReaderConfig) (InventoryReader, error) {
 	tempFile, err := os.CreateTemp("", "parquet-inventory-*.parquet")
 	if err != nil {
@@ -109,6 +118,13 @@ func NewParquetInventoryReaderWithConfig(r io.ReadCloser, size int64, cfg Parque
 		tempFile.Close()
 		os.Remove(tempFile.Name())
 		return nil, fmt.Errorf("buffer parquet data: %w", err)
+	}
+
+	// Validate size if provided
+	if size > 0 && written != size {
+		tempFile.Close()
+		os.Remove(tempFile.Name())
+		return nil, fmt.Errorf("size mismatch: expected %d, got %d", size, written)
 	}
 
 	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
@@ -162,6 +178,8 @@ func detectParquetSchema(schema *parquet.Schema) (ParquetReaderConfig, error) {
 }
 
 // newParquetReader creates a parquetInventoryReader from an open file.
+//
+//nolint:unparam // error return kept for future validation and interface consistency
 func newParquetReader(file *parquet.File, tempFile *os.File, cfg ParquetReaderConfig) (*parquetInventoryReader, error) {
 	rowGroups := file.RowGroups()
 
