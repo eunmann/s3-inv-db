@@ -11,8 +11,6 @@ import (
 	"sort"
 	"syscall"
 
-	"github.com/rs/zerolog"
-
 	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
@@ -21,6 +19,7 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/sysmem"
+	"github.com/rs/zerolog"
 )
 
 // Run executes the CLI with the given arguments.

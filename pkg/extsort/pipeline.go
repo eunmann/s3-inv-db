@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/inventory"
-	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/memdiag"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -71,7 +71,7 @@ func NewPipeline(config Config, s3Client *s3fetch.Client) *Pipeline {
 // Run executes the full pipeline.
 func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result, error) {
 	p.startTime = time.Now()
-	log := logging.L()
+	log := logctx.FromContext(ctx)
 
 	// Start memory diagnostics
 	p.memTracker.Start()
@@ -215,7 +215,7 @@ type objectRecord struct {
 //
 //nolint:gocognit,gocyclo,cyclop,funlen,maintidx // Complex pipeline coordination logic
 func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error {
-	log := logging.L()
+	log := logctx.FromContext(ctx)
 
 	bucket, key, err := s3fetch.ParseS3URI(manifestURI)
 	if err != nil {
@@ -402,7 +402,7 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 		heapThreshold := p.config.MemoryBudget.Total()
 		if ShouldFlush(heapThreshold) {
 			p.memTracker.LogNow("pre_flush")
-			if err := p.flushAggregator(agg); err != nil {
+			if err := p.flushAggregator(ctx, agg); err != nil {
 				return fmt.Errorf("flush aggregator: %w", err)
 			}
 			// Force GC after flush to release memory promptly
@@ -417,7 +417,7 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 
 	// Final flush
 	if agg.PrefixCount() > 0 {
-		if err := p.flushAggregator(agg); err != nil {
+		if err := p.flushAggregator(ctx, agg); err != nil {
 			return fmt.Errorf("final flush: %w", err)
 		}
 	}
@@ -467,7 +467,7 @@ type chunkTiming struct {
 // processChunkToBatch downloads and parses a chunk, returning all objects as a batch.
 func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, cfg chunkConfig, capacityHint int) ([]objectRecord, *chunkTiming, error) {
 	timing := &chunkTiming{}
-	log := logging.L()
+	log := logctx.FromContext(ctx)
 
 	// Download phase
 	downloadStart := time.Now()
@@ -543,8 +543,8 @@ func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, 
 }
 
 // flushAggregator drains the aggregator to a sorted run file.
-func (p *Pipeline) flushAggregator(agg *Aggregator) error {
-	log := logging.L()
+func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
+	log := logctx.FromContext(ctx)
 	start := time.Now()
 
 	rows := agg.Drain()
@@ -604,7 +604,7 @@ func (p *Pipeline) flushAggregator(agg *Aggregator) error {
 
 // runMergeBuildPhase merges run files and builds the index.
 func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefixCount uint64, maxDepth uint32, err error) {
-	log := logging.L()
+	log := logctx.FromContext(ctx)
 
 	// Check for cancellation before starting
 	select {
