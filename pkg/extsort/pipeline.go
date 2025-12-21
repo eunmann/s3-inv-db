@@ -122,10 +122,10 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	p.memTracker.LogNow("post_ingest_gc")
 
 	log.Info().
-		Int("run_files", len(p.runFiles)).
+		Int("run_files_count", len(p.runFiles)).
 		Str("objects", humanfmt.Count(p.objectsProcessed)).
-		Int64("objects_raw", p.objectsProcessed).
-		Int64("flushes", p.flushCount).
+		Int64("objects_count", p.objectsProcessed).
+		Int64("flushes_count", p.flushCount).
 		Str("duration", humanfmt.Duration(ingestDuration)).
 		Dur("duration_ms", ingestDuration).
 		Msg("ingest phase complete")
@@ -147,7 +147,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 	log.Info().
 		Str("prefixes", humanfmt.CountUint64(prefixCount)).
-		Uint64("prefixes_raw", prefixCount).
+		Uint64("prefixes_count", prefixCount).
 		Uint32("max_depth", maxDepth).
 		Str("duration", humanfmt.Duration(mergeDuration)).
 		Dur("duration_ms", mergeDuration).
@@ -161,9 +161,9 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Str("total_duration", humanfmt.Duration(duration)).
 		Dur("total_duration_ms", duration).
 		Str("objects", humanfmt.Count(p.objectsProcessed)).
-		Int64("objects_raw", p.objectsProcessed).
+		Int64("objects_count", p.objectsProcessed).
 		Str("prefixes", humanfmt.CountUint64(prefixCount)).
-		Uint64("prefixes_raw", prefixCount).
+		Uint64("prefixes_count", prefixCount).
 		Str("throughput", humanfmt.Count(int64(float64(p.objectsProcessed)/duration.Seconds()))+"/s").
 		Msg("pipeline complete")
 
@@ -264,8 +264,8 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 
 	log.Info().
 		Str("format", formatStr).
-		Int("chunks", len(manifest.Files)).
-		Int("workers", numWorkers).
+		Int("chunks_count", len(manifest.Files)).
+		Int("workers_count", numWorkers).
 		Msg("inventory manifest loaded")
 
 	keyCol, err := manifest.KeyColumnIndex()
@@ -389,10 +389,10 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 			pct := float64(chunkNum) * 100.0 / float64(totalChunks)
 
 			log.Info().
-				Int("chunk", chunkNum).
-				Int("total", totalChunks).
+				Int("chunk_num", chunkNum).
+				Int("chunks_total", totalChunks).
 				Float64("progress_pct", pct).
-				Int64("objects", atomic.LoadInt64(&p.objectsProcessed)).
+				Int64("objects_count", atomic.LoadInt64(&p.objectsProcessed)).
 				Dur("eta_ms", remaining).
 				Msg("ingest progress")
 		}
@@ -533,8 +533,8 @@ func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, 
 
 	// Log chunk timing at debug level
 	log.Debug().
-		Str("chunk", key).
-		Int("objects", timing.objectCount).
+		Str("chunk_key", key).
+		Int("objects_count", timing.objectCount).
 		Dur("download_ms", timing.downloadDuration).
 		Dur("parse_ms", timing.parseDuration).
 		Msg("chunk processed")
@@ -592,7 +592,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 	log.Info().
 		Int("run_index", p.runCount-1).
 		Str("prefixes", humanfmt.Count(int64(len(rows)))).
-		Int("prefixes_raw", len(rows)).
+		Int("prefixes_count", len(rows)).
 		Str("aggregator_memory", humanfmt.Bytes(aggMemory)).
 		Str("buffer_size", humanfmt.Bytes(bufferSize)).
 		Str("duration", humanfmt.Duration(flushDuration)).
@@ -638,7 +638,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 	}
 
 	log.Info().
-		Int("run_files", numRunFiles).
+		Int("run_files_count", numRunFiles).
 		Int64("per_reader_buffer_kb", perReaderBuffer/1024).
 		Msg("merge phase starting")
 
