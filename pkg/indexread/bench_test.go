@@ -134,7 +134,7 @@ func setupFixtureIndex(b *testing.B) string {
 		rows := agg.Drain()
 		extsort.SortPrefixRows(rows)
 
-		builder, err := extsort.NewIndexBuilder(tmpDir)
+		builder, err := extsort.NewIndexBuilder(tmpDir, "")
 		if err != nil {
 			b.Fatalf("NewIndexBuilder failed: %v", err)
 		}

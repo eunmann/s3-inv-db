@@ -18,7 +18,7 @@ func TestIndexBuilderContextCancellation(t *testing.T) {
 		cancel() // Cancel immediately
 
 		dir := t.TempDir()
-		builder, err := NewIndexBuilder(dir)
+		builder, err := NewIndexBuilder(dir, "")
 		if err != nil {
 			t.Fatalf("NewIndexBuilder: %v", err)
 		}
@@ -96,7 +96,7 @@ func TestIndexBuilderContextCancellation(t *testing.T) {
 		defer iter.Close()
 
 		outDir := filepath.Join(dir, "out")
-		builder, err := NewIndexBuilder(outDir)
+		builder, err := NewIndexBuilder(outDir, "")
 		if err != nil {
 			t.Fatalf("NewIndexBuilder: %v", err)
 		}

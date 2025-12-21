@@ -37,7 +37,7 @@ func setupIndex(tb testing.TB, numObjects int) *indexSetup {
 	extsort.SortPrefixRows(rows)
 
 	// Build index
-	builder, err := extsort.NewIndexBuilder(indexDir)
+	builder, err := extsort.NewIndexBuilder(indexDir, "")
 	if err != nil {
 		tb.Fatalf("NewIndexBuilder failed: %v", err)
 	}
@@ -78,7 +78,7 @@ func setupIndexFromKeys(tb testing.TB, keys []string) *indexSetup {
 	extsort.SortPrefixRows(rows)
 
 	// Build index
-	builder, err := extsort.NewIndexBuilder(indexDir)
+	builder, err := extsort.NewIndexBuilder(indexDir, "")
 	if err != nil {
 		tb.Fatalf("NewIndexBuilder failed: %v", err)
 	}

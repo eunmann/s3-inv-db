@@ -18,8 +18,13 @@ import (
 //
 // The builder uses a depth stack to track ancestors and close subtrees as
 // prefixes are processed in sorted (preorder) order.
+//
+// Memory usage is bounded: prefix strings are written to disk during construction
+// (via StreamingMPHFBuilder). Subtree arrays remain in memory (~12 bytes per prefix)
+// which is much smaller than storing all prefix strings (~50+ bytes each).
 type IndexBuilder struct {
-	outDir string
+	outDir  string
+	tempDir string
 
 	objectCountW *format.ArrayWriter
 	totalBytesW  *format.ArrayWriter
@@ -28,7 +33,7 @@ type IndexBuilder struct {
 	tierCountWriters map[tiers.ID]*format.ArrayWriter
 	tierBytesWriters map[tiers.ID]*format.ArrayWriter
 
-	mphfBuilder       *format.MPHFBuilder
+	mphfBuilder       *format.StreamingMPHFBuilder
 	depthIndexBuilder *format.DepthIndexBuilder
 
 	stack    []stackEntry
@@ -36,8 +41,8 @@ type IndexBuilder struct {
 	maxDepth uint32
 
 	presentTiers       map[tiers.ID]bool
-	subtreeEnds        []uint64
-	maxDepthInSubtrees []uint32
+	subtreeEnds        []uint64 // 8 bytes per prefix
+	maxDepthInSubtrees []uint32 // 4 bytes per prefix
 
 	closed bool
 }
@@ -51,14 +56,26 @@ type stackEntry struct {
 }
 
 // NewIndexBuilder creates a streaming index builder.
-func NewIndexBuilder(outDir string) (*IndexBuilder, error) {
+// The tempDir is used for temporary storage during construction (for MPHF builder).
+// If tempDir is empty, os.TempDir() is used.
+func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
 
+	if tempDir == "" {
+		tempDir = os.TempDir()
+	}
+
+	mphfBuilder, err := format.NewStreamingMPHFBuilder(tempDir)
+	if err != nil {
+		return nil, fmt.Errorf("create MPHF builder: %w", err)
+	}
+
 	b := &IndexBuilder{
 		outDir:             outDir,
-		mphfBuilder:        format.NewMPHFBuilder(),
+		tempDir:            tempDir,
+		mphfBuilder:        mphfBuilder,
 		depthIndexBuilder:  format.NewDepthIndexBuilder(),
 		stack:              make([]stackEntry, 0, 32),
 		presentTiers:       make(map[tiers.ID]bool),
@@ -68,10 +85,9 @@ func NewIndexBuilder(outDir string) (*IndexBuilder, error) {
 		tierBytesWriters:   make(map[tiers.ID]*format.ArrayWriter),
 	}
 
-	var err error
-
 	b.objectCountW, err = format.NewArrayWriter(filepath.Join(outDir, "object_count.u64"), 8)
 	if err != nil {
+		b.cleanup()
 		return nil, fmt.Errorf("create object_count writer: %w", err)
 	}
 
@@ -87,8 +103,8 @@ func NewIndexBuilder(outDir string) (*IndexBuilder, error) {
 		return nil, fmt.Errorf("create depth writer: %w", err)
 	}
 
-	// subtreeEnd and maxDepthInSubtree are written at the end (need finalization)
-	// We'll create their writers during Finalize()
+	// subtreeEnd and maxDepthInSubtree are accumulated in memory and written at Finalize()
+	// because they can only be computed when nodes close (which happens out of order).
 
 	return b, nil
 }
@@ -103,6 +119,9 @@ func (b *IndexBuilder) cleanup() {
 	}
 	if b.depthW != nil {
 		b.depthW.Close()
+	}
+	if b.mphfBuilder != nil {
+		b.mphfBuilder.Close()
 	}
 	for _, w := range b.tierCountWriters {
 		w.Close()
@@ -136,7 +155,9 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	}
 
 	b.depthIndexBuilder.Add(pos, uint32(row.Depth))
-	b.mphfBuilder.Add(row.Prefix, pos)
+	if err := b.mphfBuilder.Add(row.Prefix, pos); err != nil {
+		return fmt.Errorf("add to MPHF builder: %w", err)
+	}
 
 	if err := b.objectCountW.WriteU64(row.Count); err != nil {
 		return fmt.Errorf("write object_count: %w", err)
@@ -378,6 +399,8 @@ func (b *IndexBuilder) Finalize() error {
 	if err := b.mphfBuilder.Build(b.outDir); err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
+	// Clean up temporary files from streaming MPHF builder
+	b.mphfBuilder.Close()
 
 	if len(b.presentTiers) > 0 {
 		presentTierList := make([]tiers.ID, 0, len(b.presentTiers))

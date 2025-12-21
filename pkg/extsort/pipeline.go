@@ -567,7 +567,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (uint6
 
 	if len(p.runFiles) == 0 {
 		log.Info().Msg("no run files to merge, creating empty index")
-		builder, err := NewIndexBuilder(outDir)
+		builder, err := NewIndexBuilder(outDir, p.config.TempDir)
 		if err != nil {
 			return 0, 0, fmt.Errorf("create index builder: %w", err)
 		}
@@ -609,7 +609,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (uint6
 		Int64("estimated_max_prefixes", estimatedMaxPrefixes).
 		Msg("index build budget")
 
-	builder, err := NewIndexBuilder(outDir)
+	builder, err := NewIndexBuilder(outDir, p.config.TempDir)
 	if err != nil {
 		merger.Close()
 		return 0, 0, fmt.Errorf("create index builder: %w", err)

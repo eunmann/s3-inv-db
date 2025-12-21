@@ -153,7 +153,7 @@ for merger.Next() {
 The streaming index builder constructs the final index in a single pass:
 
 ```go
-builder, _ := extsort.NewIndexBuilder(outDir)
+builder, _ := extsort.NewIndexBuilder(outDir, tempDir)
 for _, row := range sortedRows {
     builder.Add(row)
 }
