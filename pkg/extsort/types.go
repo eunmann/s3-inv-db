@@ -270,7 +270,7 @@ func DefaultConfig() Config {
 		IndexWriteConcurrency:     concurrency,
 		MaxDepth:                  0, // unlimited
 		NumMergeWorkers:           mergeWorkers,
-		MaxMergeFanIn:             8,
+		MaxMergeFanIn:             16, // Higher fan-in reduces merge rounds
 		UseCompressedRuns:         true,
 	}
 }

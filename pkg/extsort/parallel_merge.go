@@ -57,7 +57,7 @@ func DefaultParallelMergeConfig() ParallelMergeConfig {
 
 	return ParallelMergeConfig{
 		NumWorkers:       workers,
-		MaxFanIn:         8,
+		MaxFanIn:         16,              // Higher fan-in reduces merge rounds, each reader uses ~1MB
 		BufferSize:       1 * 1024 * 1024, // 1MB
 		UseCompression:   true,
 		CompressionLevel: CompressionFastest,
