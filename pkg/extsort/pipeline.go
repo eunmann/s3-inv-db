@@ -14,6 +14,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/pkg/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
+	"github.com/eunmann/s3-inv-db/pkg/memdiag"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -34,6 +35,9 @@ type Pipeline struct {
 	objectsProcessed int64
 	bytesProcessed   int64
 	flushCount       int64
+
+	// Memory diagnostics
+	memTracker *memdiag.Tracker
 }
 
 // Result holds the pipeline execution result.
@@ -56,9 +60,10 @@ func NewPipeline(config Config, s3Client *s3fetch.Client) *Pipeline {
 	}
 
 	return &Pipeline{
-		config:   config,
-		s3Client: s3Client,
-		runFiles: make([]string, 0, 16),
+		config:     config,
+		s3Client:   s3Client,
+		runFiles:   make([]string, 0, 16),
+		memTracker: memdiag.NewTracker(memdiag.DefaultConfig()),
 	}
 }
 
@@ -66,6 +71,11 @@ func NewPipeline(config Config, s3Client *s3fetch.Client) *Pipeline {
 func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result, error) {
 	p.startTime = time.Now()
 	log := logging.L()
+
+	// Start memory diagnostics
+	p.memTracker.Start()
+	defer p.memTracker.Stop()
+	p.memTracker.SetPhase("init")
 
 	tempDir := p.config.TempDir
 	if tempDir == "" {
@@ -96,6 +106,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Int64("index_budget_mb", p.config.IndexBuildBudget()/(1024*1024)).
 		Msg("pipeline starting")
 
+	p.memTracker.SetPhase("ingest")
 	ingestStart := time.Now()
 	if err := p.runIngestPhase(ctx, manifestURI); err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -105,6 +116,10 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	}
 	ingestDuration := time.Since(ingestStart)
 
+	// Force GC after ingest to release aggregator memory
+	runtime.GC()
+	p.memTracker.LogNow("post_ingest_gc")
+
 	log.Info().
 		Int("run_files", len(p.runFiles)).
 		Int64("objects", p.objectsProcessed).
@@ -112,6 +127,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Dur("duration_ms", ingestDuration).
 		Msg("ingest phase complete")
 
+	p.memTracker.SetPhase("merge")
 	mergeStart := time.Now()
 	prefixCount, maxDepth, err := p.runMergeBuildPhase(ctx, outDir)
 	if err != nil {
@@ -121,6 +137,10 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		return nil, fmt.Errorf("merge/build phase: %w", err)
 	}
 	mergeDuration := time.Since(mergeStart)
+
+	// Force GC after merge
+	runtime.GC()
+	p.memTracker.LogNow("post_merge_gc")
 
 	log.Info().
 		Uint64("prefixes", prefixCount).
