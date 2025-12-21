@@ -344,11 +344,27 @@ func hashString(s string) uint64 {
 	return h.Sum64()
 }
 
+// hashBytes computes a uint64 hash for bytes to use as MPHF key.
+// This avoids the string allocation in hashString.
+func hashBytes(b []byte) uint64 {
+	h := fnv.New64a()
+	h.Write(b)
+	return h.Sum64()
+}
+
 // computeFingerprint computes a fingerprint for verification.
 // Uses a different hash function to reduce collision probability.
 func computeFingerprint(s string) uint64 {
 	h := fnv.New64()
 	h.Write([]byte(s))
+	return h.Sum64()
+}
+
+// computeFingerprintBytes computes a fingerprint from bytes.
+// This avoids the string allocation in computeFingerprint.
+func computeFingerprintBytes(b []byte) uint64 {
+	h := fnv.New64()
+	h.Write(b)
 	return h.Sum64()
 }
 

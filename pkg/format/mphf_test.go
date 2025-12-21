@@ -304,3 +304,70 @@ func BenchmarkMPHFLookup(b *testing.B) {
 		_, _ = m.Lookup(p)
 	}
 }
+
+// BenchmarkStreamingMPHFBuild benchmarks the streaming MPHF builder's Build phase
+// which includes fingerprint computation and file writing.
+func BenchmarkStreamingMPHFBuild(b *testing.B) {
+	// Generate test prefixes (similar to realistic S3 paths)
+	const numPrefixes = 100000
+	prefixes := make([]string, numPrefixes)
+	for i := range numPrefixes {
+		prefixes[i] = prefixFromInt(i)
+	}
+
+	b.ResetTimer()
+	for range b.N {
+		dir := b.TempDir()
+		builder, err := NewStreamingMPHFBuilder(dir)
+		if err != nil {
+			b.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
+		}
+
+		// Add all prefixes
+		for i, p := range prefixes {
+			if err := builder.Add(p, uint64(i)); err != nil {
+				builder.Close()
+				b.Fatalf("Add failed: %v", err)
+			}
+		}
+
+		// Build (includes fingerprint computation)
+		if err := builder.Build(dir); err != nil {
+			builder.Close()
+			b.Fatalf("Build failed: %v", err)
+		}
+		builder.Close()
+	}
+}
+
+// BenchmarkStreamingMPHFBuild500K benchmarks with 500K prefixes for more realistic timing.
+func BenchmarkStreamingMPHFBuild500K(b *testing.B) {
+	// Generate test prefixes
+	const numPrefixes = 500000
+	prefixes := make([]string, numPrefixes)
+	for i := range numPrefixes {
+		prefixes[i] = prefixFromInt(i)
+	}
+
+	b.ResetTimer()
+	for range b.N {
+		dir := b.TempDir()
+		builder, err := NewStreamingMPHFBuilder(dir)
+		if err != nil {
+			b.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
+		}
+
+		for i, p := range prefixes {
+			if err := builder.Add(p, uint64(i)); err != nil {
+				builder.Close()
+				b.Fatalf("Add failed: %v", err)
+			}
+		}
+
+		if err := builder.Build(dir); err != nil {
+			builder.Close()
+			b.Fatalf("Build failed: %v", err)
+		}
+		builder.Close()
+	}
+}

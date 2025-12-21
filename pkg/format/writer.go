@@ -169,6 +169,24 @@ func (w *BlobWriter) WriteString(s string) error {
 	return nil
 }
 
+// WriteBytes writes prefix bytes and records its offset.
+// This avoids the string conversion overhead of WriteString.
+func (w *BlobWriter) WriteBytes(b []byte) error {
+	// Write offset first
+	if err := w.offsets.WriteU64(w.offset); err != nil {
+		return fmt.Errorf("write offset: %w", err)
+	}
+
+	// Write bytes
+	n, err := w.blobWriter.Write(b)
+	if err != nil {
+		return fmt.Errorf("write bytes: %w", err)
+	}
+	w.offset += uint64(n)
+
+	return nil
+}
+
 // Close finalizes both files, writing a sentinel offset.
 func (w *BlobWriter) Close() error {
 	// Write sentinel offset (points past end)
