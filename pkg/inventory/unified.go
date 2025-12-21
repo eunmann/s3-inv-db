@@ -2,13 +2,14 @@
 package inventory
 
 import (
-	"compress/gzip"
 	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
+
+	"github.com/klauspost/pgzip"
 )
 
 // InventoryRow represents a single object from an S3 inventory file.
@@ -94,7 +95,9 @@ func NewCSVInventoryReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderC
 	closers := []io.Closer{r}
 
 	if strings.HasSuffix(strings.ToLower(key), ".gz") {
-		gzr, err := gzip.NewReader(r)
+		// Use parallel gzip for faster decompression on multi-core systems.
+		// pgzip automatically uses multiple goroutines for decompression.
+		gzr, err := pgzip.NewReader(r)
 		if err != nil {
 			r.Close()
 			return nil, fmt.Errorf("create gzip reader: %w", err)
