@@ -277,9 +277,15 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 	}
 
 	// Coordinate workers with memory budget
-	// Each worker can have ~4MB in-flight (batch of ~100K objects * ~40 bytes each)
-	// Channel buffer is numWorkers * 2, so max in-flight = numWorkers * 8MB
-	const bytesPerWorkerInFlight = 8 * 1024 * 1024 // 8MB per worker
+	// Each worker uses memory for:
+	// 1. S3 Download Manager buffers: PartSize * PartConcurrency (default: 16MB * 8 = 128MB)
+	// 2. Parsed object batch: ~50MB typical (1M objects * 50 bytes each)
+	// We calculate based on actual config values for accurate accounting.
+	dlConfig := p.config.S3DownloaderConfig()
+	downloadBufferPerWorker := uint64(dlConfig.PartSize) * uint64(dlConfig.Concurrency)
+	const parsedBatchOverhead uint64 = 64 * 1024 * 1024 // 64MB for parsed objects per worker
+	bytesPerWorkerInFlight := downloadBufferPerWorker + parsedBatchOverhead
+
 	p.config.EnsureBudget()
 	headroom := p.config.MemoryBudget.Total() - p.config.MemoryBudget.AggregatorBudget() -
 		p.config.MemoryBudget.RunBufferBudget() - p.config.MemoryBudget.MergeBudget() -
@@ -296,7 +302,8 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 		log.Warn().
 			Int("requested_workers", originalWorkers).
 			Int("max_from_budget", maxWorkersFromBudget).
-			Int64("headroom_mb", int64(headroom)/(1024*1024)).
+			Uint64("headroom_mb", headroom/(1024*1024)).
+			Uint64("per_worker_mb", bytesPerWorkerInFlight/(1024*1024)).
 			Msg("reducing worker count to fit memory budget")
 	}
 
