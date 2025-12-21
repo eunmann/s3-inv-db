@@ -59,6 +59,14 @@ type stackEntry struct {
 // The tempDir is used for temporary storage during construction (for MPHF builder).
 // If tempDir is empty, os.TempDir() is used.
 func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
+	return NewIndexBuilderWithCapacity(outDir, tempDir, 0)
+}
+
+// NewIndexBuilderWithCapacity creates a streaming index builder with a capacity hint.
+// The capacityHint is used to pre-size internal arrays, reducing allocations when
+// the approximate number of prefixes is known (e.g., from a run file header).
+// If capacityHint is 0, a small default capacity is used.
+func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*IndexBuilder, error) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
@@ -72,6 +80,12 @@ func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
 		return nil, fmt.Errorf("create MPHF builder: %w", err)
 	}
 
+	// Use capacity hint for arrays, with a minimum of 1024
+	arrayCap := uint64(1024)
+	if capacityHint > arrayCap {
+		arrayCap = capacityHint
+	}
+
 	b := &IndexBuilder{
 		outDir:             outDir,
 		tempDir:            tempDir,
@@ -79,8 +93,8 @@ func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
 		depthIndexBuilder:  format.NewDepthIndexBuilder(),
 		stack:              make([]stackEntry, 0, 32),
 		presentTiers:       make(map[tiers.ID]bool),
-		subtreeEnds:        make([]uint64, 0, 1024),
-		maxDepthInSubtrees: make([]uint32, 0, 1024),
+		subtreeEnds:        make([]uint64, 0, arrayCap),
+		maxDepthInSubtrees: make([]uint32, 0, arrayCap),
 		tierCountWriters:   make(map[tiers.ID]*format.ArrayWriter),
 		tierBytesWriters:   make(map[tiers.ID]*format.ArrayWriter),
 	}

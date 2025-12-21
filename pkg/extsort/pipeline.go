@@ -210,6 +210,44 @@ type objectRecord struct {
 	tierID tiers.ID
 }
 
+// estimateObjectCount estimates the number of objects in an inventory file
+// based on its compressed size and format. This helps pre-size buffers to
+// avoid repeated slice growth during parsing.
+func estimateObjectCount(fileSize int64, format s3fetch.InventoryFormat) int {
+	const (
+		minCapacity = 10000 // Minimum capacity to avoid tiny allocations
+
+		// CSV inventory: each row is ~100-200 bytes uncompressed.
+		// S3 inventory CSVs are gzip-compressed with ~8x ratio.
+		// Estimate: fileSize * 8 (decompress) / 150 (avg row size)
+		csvBytesPerRecord = 150 / 8 // ~18 bytes compressed per record
+
+		// Parquet inventory: very compact columnar format.
+		// Empirically ~40-60 bytes per record including overhead.
+		parquetBytesPerRecord = 50
+	)
+
+	if fileSize <= 0 {
+		return minCapacity
+	}
+
+	var estimate int64
+	if format == s3fetch.InventoryFormatParquet {
+		estimate = fileSize / parquetBytesPerRecord
+	} else {
+		estimate = fileSize / csvBytesPerRecord
+	}
+
+	// Clamp to reasonable range
+	if estimate < int64(minCapacity) {
+		return minCapacity
+	}
+	if estimate > 10_000_000 { // Cap at 10M to prevent excessive preallocation
+		return 10_000_000
+	}
+	return int(estimate)
+}
+
 // runIngestPhase streams S3 inventory and creates sorted run files.
 // It uses concurrent workers to download and parse chunks in parallel.
 //
@@ -398,8 +436,9 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 		}
 
 		// Flush if memory threshold exceeded
-		// Use actual heap measurement instead of estimate for accuracy
-		heapThreshold := p.config.MemoryBudget.Total()
+		// Use aggregator budget (50% of total) instead of full budget
+		// This ensures aggregator memory stays within its allocated fraction
+		heapThreshold := p.config.MemoryBudget.AggregatorBudget()
 		if ShouldFlush(heapThreshold) {
 			p.memTracker.LogNow("pre_flush")
 			if err := p.flushAggregator(ctx, agg); err != nil {
@@ -427,11 +466,6 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 
 // chunkWorker processes chunks from the jobs channel and sends results to the results channel.
 func (p *Pipeline) chunkWorker(ctx context.Context, jobs <-chan chunkJob, results chan<- objectBatch) {
-	// Initial capacity for batch buffer - we start small and let it grow.
-	// Chunks can have 100K-1M objects, but starting smaller reduces memory
-	// spikes when processing small chunks.
-	const batchCapacity = 10000
-
 	for job := range jobs {
 		select {
 		case <-ctx.Done():
@@ -439,7 +473,13 @@ func (p *Pipeline) chunkWorker(ctx context.Context, jobs <-chan chunkJob, result
 		default:
 		}
 
-		objects, _, err := p.processChunkToBatch(ctx, job.bucket, job.key, job.config, batchCapacity)
+		// Estimate capacity from file size to reduce slice growth allocations.
+		// For compressed CSV: assume ~8x compression, ~100 bytes/record uncompressed.
+		// For Parquet: ~50 bytes/record (column-compressed).
+		// Minimum 10K to avoid tiny initial allocations.
+		capacityHint := estimateObjectCount(job.config.fileSize, job.config.format)
+
+		objects, _, err := p.processChunkToBatch(ctx, job.bucket, job.key, job.config, capacityHint)
 		if err != nil {
 			select {
 			case results <- objectBatch{err: fmt.Errorf("chunk %d: %w", job.index, err)}:
@@ -741,16 +781,13 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 	// Create iterator adapter for index builder
 	mergeIter := &singleRunIterator{reader: reader}
 
-	// Index build budget provides guidance for the streaming phase
-	// Memory grows ~75 bytes per prefix during build
-	indexBudget := p.config.IndexBuildBudget()
-	estimatedMaxPrefixes := indexBudget / 75
+	// Use prefix count from run file header to pre-size index builder arrays
+	prefixCount = reader.Count()
 	log.Debug().
-		Int64("index_budget_mb", indexBudget/(1024*1024)).
-		Int64("estimated_max_prefixes", estimatedMaxPrefixes).
-		Msg("index build budget")
+		Uint64("prefix_count", prefixCount).
+		Msg("index build starting")
 
-	builder, err := NewIndexBuilder(outDir, p.config.TempDir)
+	builder, err := NewIndexBuilderWithCapacity(outDir, p.config.TempDir, prefixCount)
 	if err != nil {
 		reader.Close()
 		return 0, 0, fmt.Errorf("create index builder: %w", err)
