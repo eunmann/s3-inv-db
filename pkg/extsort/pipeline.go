@@ -511,6 +511,61 @@ type chunkTiming struct {
 	totalBytes       int64
 }
 
+// sizedReaderAt is an interface for readers that support both ReaderAt and Size.
+// This is implemented by tempFileReader from the S3 downloader.
+type sizedReaderAt interface {
+	io.ReaderAt
+	Size() (int64, error)
+}
+
+// createInventoryReader creates an appropriate inventory reader based on format.
+// For Parquet files, it optimizes by using ReaderAt directly when available
+// (from the S3 downloader's temp file), avoiding a second temp file copy.
+func createInventoryReader(body io.ReadCloser, key string, cfg chunkConfig) (inventory.InventoryReader, error) {
+	if cfg.format == s3fetch.InventoryFormatParquet {
+		return createParquetReader(body, cfg.fileSize)
+	}
+	return createCSVReader(body, key, cfg)
+}
+
+// createParquetReader creates a Parquet inventory reader.
+// It optimizes by using ReaderAt directly when available to avoid a second temp file.
+func createParquetReader(body io.ReadCloser, fileSize int64) (inventory.InventoryReader, error) {
+	// Optimization: if the body supports ReaderAt (e.g., tempFileReader from S3 downloader),
+	// use it directly to avoid copying to a second temp file.
+	if ra, ok := body.(sizedReaderAt); ok {
+		size, err := ra.Size()
+		if err == nil {
+			reader, err := inventory.NewParquetInventoryReaderFromReaderAt(ra, size)
+			if err != nil {
+				return nil, fmt.Errorf("create parquet reader from readerAt: %w", err)
+			}
+			return reader, nil
+		}
+	}
+	// Fallback to stream-based reader if ReaderAt not available or Size() failed
+	reader, err := inventory.NewParquetInventoryReaderFromStream(body, fileSize)
+	if err != nil {
+		return nil, fmt.Errorf("create parquet reader from stream: %w", err)
+	}
+	return reader, nil
+}
+
+// createCSVReader creates a CSV inventory reader.
+func createCSVReader(body io.ReadCloser, key string, cfg chunkConfig) (inventory.InventoryReader, error) {
+	csvCfg := inventory.CSVReaderConfig{
+		KeyCol:        cfg.keyCol,
+		SizeCol:       cfg.sizeCol,
+		StorageCol:    cfg.storageCol,
+		AccessTierCol: cfg.accessTierCol,
+	}
+	reader, err := inventory.NewCSVInventoryReaderFromStream(body, key, csvCfg)
+	if err != nil {
+		return nil, fmt.Errorf("create csv reader: %w", err)
+	}
+	return reader, nil
+}
+
 // processChunkToBatch downloads and parses a chunk, returning all objects as a batch.
 // Uses the S3 Download Manager for parallel range downloads to maximize throughput.
 func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, cfg chunkConfig, capacityHint int) ([]objectRecord, *chunkTiming, error) {
@@ -535,23 +590,9 @@ func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, 
 
 	// Create reader (parse header/schema)
 	parseStart := time.Now()
-	var reader inventory.InventoryReader
-	if cfg.format == s3fetch.InventoryFormatParquet {
-		reader, err = inventory.NewParquetInventoryReaderFromStream(body, cfg.fileSize)
-		if err != nil {
-			return nil, nil, fmt.Errorf("create parquet reader: %w", err)
-		}
-	} else {
-		csvCfg := inventory.CSVReaderConfig{
-			KeyCol:        cfg.keyCol,
-			SizeCol:       cfg.sizeCol,
-			StorageCol:    cfg.storageCol,
-			AccessTierCol: cfg.accessTierCol,
-		}
-		reader, err = inventory.NewCSVInventoryReaderFromStream(body, key, csvCfg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("create csv reader: %w", err)
-		}
+	reader, err := createInventoryReader(body, key, cfg)
+	if err != nil {
+		return nil, nil, err
 	}
 	defer reader.Close()
 
