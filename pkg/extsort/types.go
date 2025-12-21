@@ -14,7 +14,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/eunmann/s3-inv-db/pkg/sysmem"
+	"github.com/eunmann/s3-inv-db/pkg/membudget"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
@@ -160,13 +160,19 @@ type Config struct {
 	// If empty, os.TempDir() is used.
 	TempDir string
 
+	// MemoryBudget is the central memory budget manager for the pipeline.
+	// If nil, a default budget based on system RAM is created.
+	MemoryBudget *membudget.Budget
+
 	// MemoryThreshold is the approximate memory limit (in bytes) for the
 	// in-memory prefix aggregator before flushing to a run file.
-	// Default: 256MB.
+	// DEPRECATED: Use MemoryBudget instead. This field is kept for backward
+	// compatibility but is ignored when MemoryBudget is set.
 	MemoryThreshold int64
 
 	// RunFileBufferSize is the buffer size for reading/writing run files.
-	// Larger buffers improve sequential I/O throughput.
+	// DEPRECATED: Buffer sizes are now calculated from MemoryBudget.
+	// This field is kept for backward compatibility.
 	// Default: 4MB.
 	RunFileBufferSize int
 
@@ -189,7 +195,7 @@ type Config struct {
 }
 
 // DefaultConfig returns a Config with sensible defaults based on the current machine.
-// Concurrency is scaled with CPU count, and memory threshold is scaled with total system RAM.
+// Concurrency is scaled with CPU count, and memory budget is set to 50% of system RAM.
 func DefaultConfig() Config {
 	numCPU := runtime.NumCPU()
 
@@ -201,28 +207,46 @@ func DefaultConfig() Config {
 		concurrency = 16
 	}
 
-	// Memory threshold: use ~25% of total RAM, clamped to [128MB, 1GB]
-	// This is conservative to avoid OOM on systems with limited memory.
-	memResult := sysmem.Total()
-	memThreshold := int64(memResult.TotalBytes) / 4 // 25% of total memory
-
-	// Clamp to reasonable bounds
-	const minThreshold = 128 * 1024 * 1024  // 128MB minimum
-	const maxThreshold = 1024 * 1024 * 1024 // 1GB maximum
-
-	if memThreshold < minThreshold {
-		memThreshold = minThreshold
-	} else if memThreshold > maxThreshold {
-		memThreshold = maxThreshold
-	}
-
 	return Config{
 		TempDir:               "",
-		MemoryThreshold:       memThreshold,
+		MemoryBudget:          membudget.NewFromSystemRAM(),
 		RunFileBufferSize:     4 * 1024 * 1024, // 4MB
 		S3DownloadConcurrency: concurrency,
 		ParseConcurrency:      concurrency,
 		IndexWriteConcurrency: concurrency,
 		MaxDepth:              0, // unlimited
 	}
+}
+
+// EnsureBudget ensures that Config has a valid MemoryBudget.
+// If MemoryBudget is nil, it creates one from system RAM.
+func (c *Config) EnsureBudget() {
+	if c.MemoryBudget == nil {
+		c.MemoryBudget = membudget.NewFromSystemRAM()
+	}
+}
+
+// AggregatorMemoryThreshold returns the memory threshold for the aggregator.
+// This is the budget's aggregator allocation (50% of total budget).
+func (c *Config) AggregatorMemoryThreshold() int64 {
+	c.EnsureBudget()
+	return int64(c.MemoryBudget.AggregatorBudget())
+}
+
+// RunBufferBudget returns the total budget for run file buffers.
+func (c *Config) RunBufferBudget() int64 {
+	c.EnsureBudget()
+	return int64(c.MemoryBudget.RunBufferBudget())
+}
+
+// MergeBudget returns the total budget for merge phase operations.
+func (c *Config) MergeBudget() int64 {
+	c.EnsureBudget()
+	return int64(c.MemoryBudget.MergeBudget())
+}
+
+// IndexBuildBudget returns the total budget for index building.
+func (c *Config) IndexBuildBudget() int64 {
+	c.EnsureBudget()
+	return int64(c.MemoryBudget.IndexBuildBudget())
 }

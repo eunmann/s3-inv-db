@@ -14,8 +14,10 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
+	"github.com/eunmann/s3-inv-db/pkg/membudget"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
+	"github.com/eunmann/s3-inv-db/pkg/sysmem"
 )
 
 // Run executes the CLI with the given arguments.
@@ -46,8 +48,10 @@ func runBuild(args []string) error {
 
 	// Concurrency tuning
 	workers := fs.Int("workers", 0, "number of concurrent S3 download/parse workers (default: CPU count)")
-	memoryMB := fs.Int("memory-mb", 0, "memory threshold for aggregator in MB (default: 25% of RAM, max 1GB)")
 	maxDepth := fs.Int("max-depth", 0, "maximum prefix depth to track (0 = unlimited)")
+
+	// Memory budget
+	memBudgetStr := fs.String("mem-budget", "", "total memory budget (e.g., 4GiB, 8GB). Default: 50% of RAM")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -62,16 +66,30 @@ func runBuild(args []string) error {
 		return errors.New("--s3-manifest is required")
 	}
 
-	return runBuildExtSort(*outDir, *s3Manifest, *workers, *memoryMB, *maxDepth)
+	return runBuildExtSort(*outDir, *s3Manifest, *workers, *maxDepth, *memBudgetStr)
 }
 
 // runBuildExtSort runs the build using the external sort backend (pure Go, no CGO).
-func runBuildExtSort(outDir, s3Manifest string, workers, memoryMB, maxDepth int) error {
+func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudgetStr string) error {
 	log := logging.L()
 
 	// Create a context that responds to OS signals (SIGINT, SIGTERM)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Determine memory budget
+	budget, err := determineMemoryBudget(memBudgetStr)
+	if err != nil {
+		return fmt.Errorf("invalid memory budget: %w", err)
+	}
+
+	// Log memory budget at startup
+	ramResult := sysmem.Total()
+	log.Info().
+		Str("total_ram", membudget.FormatBytes(ramResult.TotalBytes)).
+		Str("mem_budget", membudget.FormatBytes(budget.Total())).
+		Str("mem_budget_source", string(budget.Source())).
+		Msg("memory budget configured")
 
 	client, err := s3fetch.NewClient(ctx)
 	if err != nil {
@@ -79,15 +97,13 @@ func runBuildExtSort(outDir, s3Manifest string, workers, memoryMB, maxDepth int)
 	}
 
 	config := extsort.DefaultConfig()
+	config.MemoryBudget = budget
 
 	// Apply CLI overrides
 	if workers > 0 {
 		config.S3DownloadConcurrency = workers
 		config.ParseConcurrency = workers
 		config.IndexWriteConcurrency = workers
-	}
-	if memoryMB > 0 {
-		config.MemoryThreshold = int64(memoryMB) * 1024 * 1024
 	}
 	if maxDepth > 0 {
 		config.MaxDepth = maxDepth
@@ -96,7 +112,6 @@ func runBuildExtSort(outDir, s3Manifest string, workers, memoryMB, maxDepth int)
 	// Log concurrency settings
 	log.Info().
 		Int("workers", config.S3DownloadConcurrency).
-		Int64("memory_threshold_mb", config.MemoryThreshold/(1024*1024)).
 		Int("max_depth", config.MaxDepth).
 		Msg("pipeline configuration")
 
@@ -113,6 +128,42 @@ func runBuildExtSort(outDir, s3Manifest string, workers, memoryMB, maxDepth int)
 	}
 
 	return nil
+}
+
+// determineMemoryBudget determines the memory budget from CLI flag, environment variable,
+// or system RAM detection.
+//
+// Priority order:
+// 1. CLI flag (--mem-budget) if provided
+// 2. Environment variable (S3INV_MEM_BUDGET) if set
+// 3. 50% of detected system RAM
+func determineMemoryBudget(cliValue string) (*membudget.Budget, error) {
+	// Check CLI flag first
+	if cliValue != "" {
+		bytes, err := membudget.ParseHumanSize(cliValue)
+		if err != nil {
+			return nil, fmt.Errorf("parse --mem-budget: %w", err)
+		}
+		return membudget.New(membudget.Config{
+			TotalBytes: bytes,
+			Source:     membudget.BudgetSourceCLI,
+		}), nil
+	}
+
+	// Check environment variable
+	if envValue := os.Getenv("S3INV_MEM_BUDGET"); envValue != "" {
+		bytes, err := membudget.ParseHumanSize(envValue)
+		if err != nil {
+			return nil, fmt.Errorf("parse S3INV_MEM_BUDGET=%q: %w", envValue, err)
+		}
+		return membudget.New(membudget.Config{
+			TotalBytes: bytes,
+			Source:     membudget.BudgetSourceEnv,
+		}), nil
+	}
+
+	// Fall back to 50% of system RAM
+	return membudget.NewFromSystemRAM(), nil
 }
 
 func runQuery(args []string) error {
