@@ -454,6 +454,7 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 
 // writeArraysParallel writes fingerprints and positions arrays in parallel.
 // Since these are independent files, parallel writes can utilize disk bandwidth better.
+// Uses WriteU64Batch for efficient bulk writes.
 func writeArraysParallel(outDir string, fingerprints, positions []uint64) error {
 	var wg sync.WaitGroup
 	var fpErr, posErr error
@@ -469,12 +470,10 @@ func writeArraysParallel(outDir string, fingerprints, positions []uint64) error 
 			fpErr = fmt.Errorf("create fingerprint writer: %w", err)
 			return
 		}
-		for _, fp := range fingerprints {
-			if err := fpWriter.WriteU64(fp); err != nil {
-				fpWriter.Close()
-				fpErr = fmt.Errorf("write fingerprint: %w", err)
-				return
-			}
+		if err := fpWriter.WriteU64Batch(fingerprints); err != nil {
+			fpWriter.Close()
+			fpErr = fmt.Errorf("write fingerprints: %w", err)
+			return
 		}
 		if err := fpWriter.Close(); err != nil {
 			fpErr = fmt.Errorf("close fingerprint writer: %w", err)
@@ -490,12 +489,10 @@ func writeArraysParallel(outDir string, fingerprints, positions []uint64) error 
 			posErr = fmt.Errorf("create position writer: %w", err)
 			return
 		}
-		for _, p := range positions {
-			if err := posWriter.WriteU64(p); err != nil {
-				posWriter.Close()
-				posErr = fmt.Errorf("write preorder position: %w", err)
-				return
-			}
+		if err := posWriter.WriteU64Batch(positions); err != nil {
+			posWriter.Close()
+			posErr = fmt.Errorf("write positions: %w", err)
+			return
 		}
 		if err := posWriter.Close(); err != nil {
 			posErr = fmt.Errorf("close position writer: %w", err)
