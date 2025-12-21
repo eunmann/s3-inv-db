@@ -190,6 +190,16 @@ type Config struct {
 	// Default: 4.
 	S3DownloadConcurrency int
 
+	// S3DownloadPartConcurrency is the number of concurrent parts for each S3 download.
+	// Used by the S3 Download Manager for parallel range downloads within a single object.
+	// Default: max(4, NumCPU).
+	S3DownloadPartConcurrency int
+
+	// S3DownloadPartSize is the size of each part for parallel S3 downloads.
+	// Larger values may improve throughput but use more memory.
+	// Default: 16MB.
+	S3DownloadPartSize int64
+
 	// ParseConcurrency is the number of concurrent CSV parsing goroutines.
 	// Default: 4.
 	ParseConcurrency int
@@ -231,6 +241,15 @@ func DefaultConfig() Config {
 		concurrency = 16
 	}
 
+	// Part concurrency for parallel range downloads within a single object
+	partConcurrency := numCPU
+	if partConcurrency < 4 {
+		partConcurrency = 4
+	}
+	if partConcurrency > 16 {
+		partConcurrency = 16
+	}
+
 	// Merge workers scale with CPU but cap lower to avoid memory pressure
 	mergeWorkers := numCPU / 2
 	if mergeWorkers < 1 {
@@ -241,16 +260,18 @@ func DefaultConfig() Config {
 	}
 
 	return Config{
-		TempDir:               "",
-		MemoryBudget:          membudget.NewFromSystemRAM(),
-		RunFileBufferSize:     4 * 1024 * 1024, // 4MB
-		S3DownloadConcurrency: concurrency,
-		ParseConcurrency:      concurrency,
-		IndexWriteConcurrency: concurrency,
-		MaxDepth:              0, // unlimited
-		NumMergeWorkers:       mergeWorkers,
-		MaxMergeFanIn:         8,
-		UseCompressedRuns:     true,
+		TempDir:                   "",
+		MemoryBudget:              membudget.NewFromSystemRAM(),
+		RunFileBufferSize:         4 * 1024 * 1024, // 4MB
+		S3DownloadConcurrency:     concurrency,
+		S3DownloadPartConcurrency: partConcurrency,
+		S3DownloadPartSize:        16 * 1024 * 1024, // 16MB
+		ParseConcurrency:          concurrency,
+		IndexWriteConcurrency:     concurrency,
+		MaxDepth:                  0, // unlimited
+		NumMergeWorkers:           mergeWorkers,
+		MaxMergeFanIn:             8,
+		UseCompressedRuns:         true,
 	}
 }
 
@@ -285,4 +306,34 @@ func (c *Config) MergeBudget() int64 {
 func (c *Config) IndexBuildBudget() int64 {
 	c.EnsureBudget()
 	return int64(c.MemoryBudget.IndexBuildBudget())
+}
+
+// S3DownloaderConfig returns the S3 downloader configuration derived from this Config.
+// Use this when creating an S3 client to ensure consistent configuration.
+func (c *Config) S3DownloaderConfig() S3DownloaderConfig {
+	cfg := S3DownloaderConfig{
+		TempDir: c.TempDir,
+	}
+
+	if c.S3DownloadPartConcurrency > 0 {
+		cfg.Concurrency = c.S3DownloadPartConcurrency
+	} else {
+		cfg.Concurrency = DefaultConfig().S3DownloadPartConcurrency
+	}
+
+	if c.S3DownloadPartSize > 0 {
+		cfg.PartSize = c.S3DownloadPartSize
+	} else {
+		cfg.PartSize = DefaultConfig().S3DownloadPartSize
+	}
+
+	return cfg
+}
+
+// S3DownloaderConfig mirrors s3fetch.DownloaderConfig to avoid import cycles.
+// This is used to configure the S3 client with the pipeline's settings.
+type S3DownloaderConfig struct {
+	Concurrency int
+	PartSize    int64
+	TempDir     string
 }

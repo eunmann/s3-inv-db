@@ -465,17 +465,26 @@ type chunkTiming struct {
 }
 
 // processChunkToBatch downloads and parses a chunk, returning all objects as a batch.
+// Uses the S3 Download Manager for parallel range downloads to maximize throughput.
 func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, cfg chunkConfig, capacityHint int) ([]objectRecord, *chunkTiming, error) {
 	timing := &chunkTiming{}
 	log := logctx.FromContext(ctx)
 
-	// Download phase
-	downloadStart := time.Now()
-	body, err := p.s3Client.StreamObject(ctx, bucket, key)
+	// Download phase using S3 Download Manager (parallel range downloads)
+	body, dlResult, err := p.s3Client.DownloadObject(ctx, bucket, key)
 	if err != nil {
-		return nil, nil, fmt.Errorf("stream object: %w", err)
+		return nil, nil, fmt.Errorf("download object: %w", err)
 	}
-	timing.downloadDuration = time.Since(downloadStart)
+	timing.downloadDuration = dlResult.Duration
+
+	// Log download details
+	log.Debug().
+		Str("chunk_key", key).
+		Str("bytes_downloaded", humanfmt.Bytes(dlResult.BytesDownloaded)).
+		Str("download_duration", humanfmt.Duration(dlResult.Duration)).
+		Int("concurrency", dlResult.Concurrency).
+		Str("part_size", humanfmt.Bytes(dlResult.PartSize)).
+		Msg("chunk downloaded")
 
 	// Create reader (parse header/schema)
 	parseStart := time.Now()
