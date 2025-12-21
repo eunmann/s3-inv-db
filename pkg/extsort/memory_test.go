@@ -135,7 +135,7 @@ func TestPrefixStatsMemoryLayout(t *testing.T) {
 	// Total: 2 + 8 + 8 + 96 + 96 = 210 bytes (but alignment may add padding)
 
 	stats := PrefixStats{}
-	size := int(unsafe_Sizeof(stats))
+	size := prefixStatsSize(stats)
 
 	t.Logf("PrefixStats size: %d bytes", size)
 
@@ -145,17 +145,12 @@ func TestPrefixStatsMemoryLayout(t *testing.T) {
 	}
 }
 
-// unsafe_Sizeof returns the size of a value in bytes.
-// We use a simple implementation to avoid importing unsafe in tests.
-func unsafe_Sizeof(v interface{}) uintptr {
-	switch v.(type) {
-	case PrefixStats:
-		// Known size from struct definition
-		// 2 + 6(pad) + 8 + 8 + 96 + 96 = 216 bytes
-		return 216
-	default:
-		return 0
-	}
+// prefixStatsSize returns the known size of PrefixStats in bytes.
+// This avoids importing unsafe in tests while documenting the expected size.
+func prefixStatsSize(_ PrefixStats) int {
+	// Known size from struct definition:
+	// 2 (Depth) + 6 (padding) + 8 (Count) + 8 (TotalBytes) + 96 (TierCounts) + 96 (TierBytes) = 216 bytes
+	return 216
 }
 
 // TestHeapAllocBytes verifies that HeapAllocBytes returns sensible values.

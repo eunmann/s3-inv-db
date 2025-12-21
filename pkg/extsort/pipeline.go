@@ -345,6 +345,8 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 			cancel()
 			// Drain remaining results to allow workers to exit
 			for range results {
+				// Intentionally empty: just consuming remaining items
+				continue
 			}
 			return firstErr
 		default:

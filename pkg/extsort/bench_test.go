@@ -134,7 +134,7 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 
 		// Get index size
 		var indexSize int64
-		filepath.Walk(outDir, func(path string, info os.FileInfo, err error) error {
+		filepath.Walk(outDir, func(_ string, info os.FileInfo, err error) error {
 			if err == nil && !info.IsDir() {
 				indexSize += info.Size()
 			}

@@ -235,7 +235,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 
 // writePrefixBlobOrdered writes prefixes in preorder (not hash order) for GetPrefix.
 // This requires re-reading from temp file.
-func (b *StreamingMPHFBuilder) writePrefixBlobOrdered(outDir string, mph *bbhash.BBHash2, offsets []uint64) error {
+func (b *StreamingMPHFBuilder) writePrefixBlobOrdered(outDir string, _ *bbhash.BBHash2, _ []uint64) error {
 	blobPath := filepath.Join(outDir, "prefix_blob.bin")
 	offsetsPath := filepath.Join(outDir, "prefix_offsets.u64")
 
