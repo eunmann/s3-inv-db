@@ -7,8 +7,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/format"
+	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
@@ -319,7 +322,13 @@ func (b *IndexBuilder) AddAll(iter RowIterator) error {
 // It periodically checks for context cancellation to allow graceful shutdown.
 func (b *IndexBuilder) AddAllWithContext(ctx context.Context, iter RowIterator) error {
 	const checkInterval = 1000 // Check context every N rows
+	const logInterval = 100000 // Log progress every N rows
+	log := logctx.FromContext(ctx)
 	count := 0
+	startTime := time.Now()
+	lastLogTime := startTime
+
+	log.Debug().Msg("index builder: starting AddAllWithContext")
 
 	for {
 		// Periodic context check to avoid blocking forever
@@ -329,6 +338,18 @@ func (b *IndexBuilder) AddAllWithContext(ctx context.Context, iter RowIterator) 
 				return fmt.Errorf("index build cancelled: %w", ctx.Err())
 			default:
 			}
+		}
+
+		// Periodic progress logging
+		if count > 0 && count%logInterval == 0 {
+			elapsed := time.Since(lastLogTime)
+			rate := float64(logInterval) / elapsed.Seconds()
+			log.Debug().
+				Int("prefixes_processed", count).
+				Str("elapsed", humanfmt.Duration(time.Since(startTime))).
+				Int("rate_per_sec", int(rate)).
+				Msg("index builder: progress")
+			lastLogTime = time.Now()
 		}
 		count++
 
@@ -343,21 +364,39 @@ func (b *IndexBuilder) AddAllWithContext(ctx context.Context, iter RowIterator) 
 			return fmt.Errorf("add row: %w", err)
 		}
 	}
+
+	log.Debug().
+		Int("total_prefixes", count).
+		Str("duration", humanfmt.Duration(time.Since(startTime))).
+		Msg("index builder: AddAllWithContext complete")
+
 	return nil
 }
 
 // Finalize closes all remaining stack nodes and writes final files.
+func (b *IndexBuilder) Finalize() error {
+	return b.FinalizeWithContext(context.Background())
+}
+
+// FinalizeWithContext closes all remaining stack nodes and writes final files with logging.
 //
 //nolint:gocyclo // Sequential file finalization with error handling
-func (b *IndexBuilder) Finalize() error {
+func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	if b.closed {
 		return nil
 	}
 	b.closed = true
 
+	log := logctx.FromContext(ctx)
+	startTime := time.Now()
+
+	log.Debug().Msg("index builder: starting Finalize")
+
 	if err := b.closeNodesAbove(0); err != nil {
 		return fmt.Errorf("close remaining nodes: %w", err)
 	}
+
+	log.Debug().Msg("index builder: closing streaming writers")
 
 	if err := b.objectCountW.Close(); err != nil {
 		return fmt.Errorf("close object_count: %w", err)
@@ -380,6 +419,10 @@ func (b *IndexBuilder) Finalize() error {
 		}
 	}
 
+	log.Debug().
+		Int("prefix_count", len(b.subtreeEnds)).
+		Msg("index builder: writing subtree_end array")
+
 	subtreeEndW, err := format.NewArrayWriter(filepath.Join(b.outDir, "subtree_end.u64"), 8)
 	if err != nil {
 		return fmt.Errorf("create subtree_end writer: %w", err)
@@ -393,6 +436,8 @@ func (b *IndexBuilder) Finalize() error {
 	if err := subtreeEndW.Close(); err != nil {
 		return fmt.Errorf("close subtree_end: %w", err)
 	}
+
+	log.Debug().Msg("index builder: writing max_depth_in_subtree array")
 
 	maxDepthW, err := format.NewArrayWriter(filepath.Join(b.outDir, "max_depth_in_subtree.u32"), 4)
 	if err != nil {
@@ -408,15 +453,26 @@ func (b *IndexBuilder) Finalize() error {
 		return fmt.Errorf("close max_depth_in_subtree: %w", err)
 	}
 
+	log.Debug().Msg("index builder: building depth index")
+
 	if err := b.depthIndexBuilder.Build(b.outDir); err != nil {
 		return fmt.Errorf("build depth index: %w", err)
 	}
 
+	log.Debug().
+		Uint64("prefix_count", b.mphfBuilder.Count()).
+		Msg("index builder: building MPHF (this may take a while for large datasets)")
+
+	mphfStart := time.Now()
 	if err := b.mphfBuilder.Build(b.outDir); err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
 	// Clean up temporary files from streaming MPHF builder
 	b.mphfBuilder.Close()
+
+	log.Debug().
+		Str("mphf_duration", humanfmt.Duration(time.Since(mphfStart))).
+		Msg("index builder: MPHF build complete")
 
 	if len(b.presentTiers) > 0 {
 		presentTierList := make([]tiers.ID, 0, len(b.presentTiers))
@@ -428,13 +484,21 @@ func (b *IndexBuilder) Finalize() error {
 		}
 	}
 
+	log.Debug().Msg("index builder: writing manifest")
+
 	if err := format.WriteManifest(b.outDir, b.posCount, b.maxDepth); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
 
+	log.Debug().Msg("index builder: syncing directory")
+
 	if err := format.SyncDir(b.outDir); err != nil {
 		return fmt.Errorf("sync dir: %w", err)
 	}
+
+	log.Debug().
+		Str("total_duration", humanfmt.Duration(time.Since(startTime))).
+		Msg("index builder: Finalize complete")
 
 	return nil
 }

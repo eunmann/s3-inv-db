@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
+	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/relab/bbhash"
 )
 
@@ -104,9 +106,12 @@ func (b *StreamingMPHFBuilder) Close() error {
 // Build constructs the MPHF and writes it to the output directory.
 // Memory usage during Build is bounded by buffer sizes, not by prefix count.
 //
-//nolint:gocyclo // Multi-step MPHF construction with I/O error handling
+//nolint:gocyclo,funlen // Multi-step MPHF construction with I/O error handling and debug logging
 func (b *StreamingMPHFBuilder) Build(outDir string) error {
+	log := logging.L()
+
 	if b.count == 0 {
+		log.Debug().Msg("MPHF: writing empty (zero prefixes)")
 		return b.writeEmpty(outDir)
 	}
 
@@ -116,10 +121,20 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	}
 
 	// Build MPHF with gamma=2.0 (good space/time tradeoff)
+	log.Debug().
+		Uint64("hash_count", b.count).
+		Msg("MPHF: calling bbhash.New (CPU-intensive)")
+
+	bbhashStart := time.Now()
 	mph, err := bbhash.New(b.hashes, bbhash.Gamma(2.0))
 	if err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
+	bbhashDuration := time.Since(bbhashStart)
+
+	log.Debug().
+		Dur("bbhash_ms", bbhashDuration).
+		Msg("MPHF: bbhash.New complete")
 
 	// Free hashes now that MPHF is built
 	b.hashes = nil
@@ -145,6 +160,8 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	}
 	mphFile.Close()
 
+	log.Debug().Msg("MPHF: allocating fingerprint and position arrays")
+
 	// Create output arrays - preallocate at correct size
 	n := int(b.count)
 	fingerprints := make([]uint64, n)
@@ -156,6 +173,9 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		return fmt.Errorf("seek temp file: %w", err)
 	}
 	reader := bufio.NewReaderSize(b.tempFile, b.bufferSize)
+
+	log.Debug().Msg("MPHF: computing fingerprints and positions")
+	fingerprintStart := time.Now()
 
 	// Stream through prefixes, compute fingerprints and positions
 	var lenBuf [4]byte
@@ -191,8 +211,14 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		currentOffset += uint64(4 + prefixLen) // Length prefix + string
 	}
 
+	log.Debug().
+		Dur("fingerprint_ms", time.Since(fingerprintStart)).
+		Msg("MPHF: fingerprints computed")
+
 	// Free preorderPos now
 	b.preorderPos = nil
+
+	log.Debug().Msg("MPHF: writing fingerprints")
 
 	// Write fingerprints
 	fpPath := filepath.Join(outDir, "mph_fp.u64")
@@ -210,6 +236,8 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		return fmt.Errorf("close fingerprint writer: %w", err)
 	}
 
+	log.Debug().Msg("MPHF: writing preorder positions")
+
 	// Write preorder positions
 	posPath := filepath.Join(outDir, "mph_pos.u64")
 	posWriter, err := NewArrayWriter(posPath, 8)
@@ -226,11 +254,15 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		return fmt.Errorf("close position writer: %w", err)
 	}
 
+	log.Debug().Msg("MPHF: writing prefix blob")
+
 	// Now write prefix blob in MPHF-ordered sequence
 	// We need to re-read prefixes in hash order
 	if err := b.writePrefixBlobOrdered(outDir, mph, orderedPrefixOffsets); err != nil {
 		return fmt.Errorf("write prefix blob: %w", err)
 	}
+
+	log.Debug().Msg("MPHF: build complete")
 
 	return nil
 }

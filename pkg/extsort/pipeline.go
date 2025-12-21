@@ -691,7 +691,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 		if err != nil {
 			return 0, 0, fmt.Errorf("create index builder: %w", err)
 		}
-		if err := builder.Finalize(); err != nil {
+		if err := builder.FinalizeWithContext(ctx); err != nil {
 			return 0, 0, fmt.Errorf("finalize empty index: %w", err)
 		}
 		return 0, 0, nil
@@ -798,7 +798,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 		return 0, 0, fmt.Errorf("build index: %w", err)
 	}
 
-	if err := builder.Finalize(); err != nil {
+	if err := builder.FinalizeWithContext(ctx); err != nil {
 		return 0, 0, fmt.Errorf("finalize index: %w", err)
 	}
 
