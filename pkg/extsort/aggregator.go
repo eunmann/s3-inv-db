@@ -24,7 +24,9 @@ type Aggregator struct {
 // Use maxDepth=0 for unlimited depth.
 func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 	if initialCapacity <= 0 {
-		initialCapacity = 100000
+		// Default to 10K - small enough to start but grows as needed
+		// Each prefix entry uses ~300 bytes (map overhead + PrefixStats)
+		initialCapacity = 10000
 	}
 	return &Aggregator{
 		prefixes: make(map[string]*PrefixStats, initialCapacity),

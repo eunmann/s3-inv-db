@@ -276,11 +276,13 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 	tierMapping := tiers.NewMapping()
 	totalChunks := len(manifest.Files)
 
-	// Create job channel - buffer enough to keep workers busy
-	jobs := make(chan chunkJob, numWorkers*2)
+	// Create job channel - minimal buffer to avoid queuing too many chunks
+	// Each chunk downloads ~10-100MB, so we don't want many waiting
+	jobs := make(chan chunkJob, numWorkers)
 
-	// Create result channel - one batch per chunk max, plus some buffer
-	results := make(chan objectBatch, numWorkers*2)
+	// Create result channel - minimal buffer to limit memory for batches
+	// Each batch holds all objects from a chunk, which can be 50-200MB
+	results := make(chan objectBatch, 2)
 
 	// Context for cancellation on error
 	ctx, cancel := context.WithCancel(ctx)
@@ -328,7 +330,8 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 	}()
 
 	// Aggregation loop - runs in main goroutine
-	agg := NewAggregator(100000, p.config.MaxDepth)
+	// Initial capacity of 10K prefixes (~3MB at ~300 bytes/prefix) - map will grow as needed
+	agg := NewAggregator(10000, p.config.MaxDepth)
 	progressInterval := max(totalChunks/10, 1)
 	var firstErr error
 
@@ -411,8 +414,10 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 
 // chunkWorker processes chunks from the jobs channel and sends results to the results channel.
 func (p *Pipeline) chunkWorker(ctx context.Context, jobs <-chan chunkJob, results chan<- objectBatch) {
-	// Pre-allocate batch buffer (typical chunk has 100k-1M objects)
-	const batchCapacity = 100000
+	// Initial capacity for batch buffer - we start small and let it grow.
+	// Chunks can have 100K-1M objects, but starting smaller reduces memory
+	// spikes when processing small chunks.
+	const batchCapacity = 10000
 
 	for job := range jobs {
 		select {
