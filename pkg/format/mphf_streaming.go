@@ -308,8 +308,8 @@ func (b *StreamingMPHFBuilder) computeFingerprintsParallel(
 	currentOffset := uint64(0)
 	processed := 0
 
-	// Buffer for reading prefixes - grows as needed, reused across chunks
-	prefixBuf := make([]byte, 0, 256)
+	// Estimate average prefix length for buffer sizing (paths are typically 20-40 bytes)
+	const estimatedAvgPrefixLen = 24
 
 	for processed < n {
 		// Determine chunk size for this iteration
@@ -319,8 +319,9 @@ func (b *StreamingMPHFBuilder) computeFingerprintsParallel(
 			thisChunk = remaining
 		}
 
-		// Read chunk of prefixes
-		// We need to copy the prefix data since we'll reuse the buffer
+		// Pre-allocate a single contiguous buffer for all prefixes in this chunk.
+		// This eliminates per-prefix allocations - we'll use slices into this buffer.
+		chunkBuffer := make([]byte, 0, thisChunk*estimatedAvgPrefixLen)
 		items := make([]prefixChunkItem, 0, thisChunk)
 
 		for range thisChunk {
@@ -332,26 +333,28 @@ func (b *StreamingMPHFBuilder) computeFingerprintsParallel(
 			}
 			prefixLen := binary.LittleEndian.Uint32(lenBuf[:])
 
-			// Grow buffer if needed
-			if cap(prefixBuf) < int(prefixLen) {
-				prefixBuf = make([]byte, prefixLen)
+			// Ensure buffer has capacity for this prefix
+			start := len(chunkBuffer)
+			if cap(chunkBuffer)-start < int(prefixLen) {
+				// Need to grow - double capacity plus this prefix
+				newCap := cap(chunkBuffer)*2 + int(prefixLen)
+				newBuf := make([]byte, start, newCap)
+				copy(newBuf, chunkBuffer)
+				chunkBuffer = newBuf
 			}
-			prefixBuf = prefixBuf[:prefixLen]
 
-			// Read prefix
-			if _, err := io.ReadFull(reader, prefixBuf); err != nil {
+			// Extend buffer and read prefix directly into it
+			chunkBuffer = chunkBuffer[:start+int(prefixLen)]
+			if _, err := io.ReadFull(reader, chunkBuffer[start:]); err != nil {
 				close(workChan)
 				wg.Wait()
 				return fmt.Errorf("read prefix at %d: %w", processed, err)
 			}
 
-			// Copy prefix data for the worker (since we reuse prefixBuf)
-			prefixCopy := make([]byte, prefixLen)
-			copy(prefixCopy, prefixBuf)
-
+			// Create item with slice into the contiguous buffer (no allocation)
 			items = append(items, prefixChunkItem{
 				index:       processed,
-				prefixBytes: prefixCopy,
+				prefixBytes: chunkBuffer[start : start+int(prefixLen)],
 				offset:      currentOffset,
 			})
 
