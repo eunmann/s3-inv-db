@@ -164,6 +164,7 @@ func determineMemoryBudget(cliValue string) (*membudget.Budget, error) {
 	return membudget.NewFromSystemRAM(), nil
 }
 
+//nolint:gocognit // CLI command parsing inherently has many branches
 func runQuery(args []string) error {
 	fs := flag.NewFlagSet("query", flag.ContinueOnError)
 	indexDir := fs.String("index", "", "index directory to query")
@@ -207,7 +208,7 @@ func runQuery(args []string) error {
 	fmt.Printf("Objects: %d\n", stats.ObjectCount)
 	fmt.Printf("Bytes: %d\n", stats.TotalBytes)
 
-	if *showTiers || *estimateCost {
+	if *showTiers || *estimateCost { //nolint:nestif // deeply nested output formatting
 		if !idx.HasTierData() {
 			fmt.Println("\nNo tier data available (index was built without tier tracking)")
 		} else {

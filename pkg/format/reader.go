@@ -50,7 +50,10 @@ func (m *MmapFile) Close() error {
 	if m.data == nil {
 		return nil
 	}
-	return unix.Munmap(m.data)
+	if err := unix.Munmap(m.data); err != nil {
+		return fmt.Errorf("munmap: %w", err)
+	}
+	return nil
 }
 
 // Data returns the raw memory-mapped bytes.

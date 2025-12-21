@@ -7,14 +7,12 @@ package memdiag
 import (
 	"fmt"
 	"net/http"
+	_ "net/http/pprof" // Registers pprof handlers on DefaultServeMux
 	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	// Registers pprof handlers on DefaultServeMux for the pprof HTTP server.
-	_ "net/http/pprof"
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 )

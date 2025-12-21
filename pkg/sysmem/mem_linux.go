@@ -11,5 +11,5 @@ func totalSystemMemory() (uint64, bool) {
 		return 0, false
 	}
 	// Total RAM in bytes = Totalram * Unit
-	return uint64(info.Totalram) * uint64(info.Unit), true
+	return info.Totalram * uint64(info.Unit), true
 }

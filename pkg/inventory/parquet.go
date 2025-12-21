@@ -178,6 +178,8 @@ func detectParquetSchema(schema *parquet.Schema) (ParquetReaderConfig, error) {
 }
 
 // newParquetReader creates a parquetInventoryReader from an open file.
+//
+//nolint:unparam // error return kept for future validation and interface consistency
 func newParquetReader(file *parquet.File, tempFile *os.File, cfg ParquetReaderConfig) (*parquetInventoryReader, error) {
 	rowGroups := file.RowGroups()
 

@@ -70,8 +70,9 @@ func buildIndexFromCSV(t *testing.T, outDir, csv string) error {
 	}
 
 	// Skip header
-	var keys []string
-	var sizes []uint64
+	dataLines := len(lines) - 1
+	keys := make([]string, 0, dataLines)
+	sizes := make([]uint64, 0, dataLines)
 	for _, line := range lines[1:] {
 		if line == "" {
 			continue

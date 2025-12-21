@@ -86,6 +86,8 @@ func Open(dir string) (*Index, error) {
 }
 
 // Close releases all resources.
+//
+//nolint:gocognit,gocyclo // Sequential resource cleanup with error aggregation
 func (idx *Index) Close() error {
 	var firstErr error
 

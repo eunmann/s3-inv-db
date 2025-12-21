@@ -13,6 +13,8 @@ import (
 
 // InventoryRow represents a single object from an S3 inventory file.
 // This is the unified representation used by both CSV and Parquet readers.
+//
+//nolint:revive // InventoryRow is the canonical name used externally
 type InventoryRow struct {
 	// Key is the S3 object key.
 	Key string
@@ -31,6 +33,8 @@ type InventoryRow struct {
 
 // InventoryReader is the unified interface for reading S3 inventory files.
 // Implementations exist for both CSV and Parquet formats.
+//
+//nolint:revive // InventoryReader is the canonical name used externally
 type InventoryReader interface {
 	// Next returns the next inventory row.
 	// Returns io.EOF when all rows have been read.

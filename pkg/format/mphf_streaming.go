@@ -103,6 +103,8 @@ func (b *StreamingMPHFBuilder) Close() error {
 
 // Build constructs the MPHF and writes it to the output directory.
 // Memory usage during Build is bounded by buffer sizes, not by prefix count.
+//
+//nolint:gocyclo // Multi-step MPHF construction with I/O error handling
 func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	if b.count == 0 {
 		return b.writeEmpty(outDir)

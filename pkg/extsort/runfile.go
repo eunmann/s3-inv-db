@@ -171,7 +171,10 @@ func (w *RunFileWriter) Close() error {
 		return fmt.Errorf("update header: %w", err)
 	}
 
-	return w.file.Close()
+	if err := w.file.Close(); err != nil {
+		return fmt.Errorf("close run file: %w", err)
+	}
+	return nil
 }
 
 // RunFileReader reads PrefixRows from a run file.
@@ -300,7 +303,10 @@ func (r *RunFileReader) Close() error {
 		return nil
 	}
 	r.closed = true
-	return r.file.Close()
+	if err := r.file.Close(); err != nil {
+		return fmt.Errorf("close run file: %w", err)
+	}
+	return nil
 }
 
 // Remove closes and removes the run file.
@@ -308,5 +314,8 @@ func (r *RunFileReader) Remove() error {
 	if err := r.Close(); err != nil {
 		return err
 	}
-	return os.Remove(r.path)
+	if err := os.Remove(r.path); err != nil {
+		return fmt.Errorf("remove run file: %w", err)
+	}
+	return nil
 }

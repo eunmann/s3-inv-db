@@ -254,7 +254,7 @@ type CostBreakdown struct {
 
 // ComputeDetailedBreakdown returns detailed cost information per tier.
 func ComputeDetailedBreakdown(breakdown []format.TierBreakdown, pt PriceTable) []CostBreakdown {
-	var results []CostBreakdown
+	results := make([]CostBreakdown, 0, len(breakdown))
 
 	for _, tb := range breakdown {
 		price, ok := pt.PerGBMonth[tb.TierName]

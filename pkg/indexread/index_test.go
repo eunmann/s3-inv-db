@@ -119,7 +119,7 @@ b/m/file.txt,400
 	}
 
 	// Verify alphabetical order
-	var names1 []string
+	names1 := make([]string, 0, len(desc1))
 	for _, pos := range desc1 {
 		name, _ := idx.PrefixString(pos)
 		names1 = append(names1, name)
@@ -152,7 +152,7 @@ b/m/file.txt,400
 		t.Errorf("a/ has %d descendants at depth 1, want 3", len(aDesc))
 	}
 
-	var aNames []string
+	aNames := make([]string, 0, len(aDesc))
 	for _, pos := range aDesc {
 		name, _ := idx.PrefixString(pos)
 		aNames = append(aNames, name)
@@ -622,7 +622,7 @@ banana/file.txt,400
 		t.Fatalf("DescendantsAtDepth failed: %v", err)
 	}
 
-	var names []string
+	names := make([]string, 0, len(desc))
 	for _, pos := range desc {
 		name, _ := idx.PrefixString(pos)
 		names = append(names, name)

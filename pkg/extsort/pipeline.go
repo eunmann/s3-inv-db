@@ -203,6 +203,8 @@ type objectRecord struct {
 
 // runIngestPhase streams S3 inventory and creates sorted run files.
 // It uses concurrent workers to download and parse chunks in parallel.
+//
+//nolint:gocognit,gocyclo,cyclop,funlen,maintidx // Complex pipeline coordination logic
 func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error {
 	log := logging.L()
 
@@ -340,7 +342,7 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 		select {
 		case <-ctx.Done():
 			if firstErr == nil {
-				firstErr = ctx.Err()
+				firstErr = fmt.Errorf("context cancelled: %w", ctx.Err())
 			}
 			cancel()
 			// Drain remaining results to allow workers to exit
@@ -477,7 +479,7 @@ func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, 
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, fmt.Errorf("chunk processing cancelled: %w", ctx.Err())
 		default:
 		}
 
@@ -562,13 +564,13 @@ func (p *Pipeline) flushAggregator(agg *Aggregator) error {
 }
 
 // runMergeBuildPhase merges run files and builds the index.
-func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (uint64, uint32, error) {
+func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefixCount uint64, maxDepth uint32, err error) {
 	log := logging.L()
 
 	// Check for cancellation before starting
 	select {
 	case <-ctx.Done():
-		return 0, 0, ctx.Err()
+		return 0, 0, fmt.Errorf("merge phase cancelled: %w", ctx.Err())
 	default:
 	}
 
