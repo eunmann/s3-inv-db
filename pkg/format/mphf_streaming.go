@@ -190,40 +190,11 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	// Free preorderPos now
 	b.preorderPos = nil
 
-	log.Debug().Msg("MPHF: writing fingerprints")
+	log.Debug().Msg("MPHF: writing fingerprints and positions (parallel)")
 
-	// Write fingerprints
-	fpPath := filepath.Join(outDir, "mph_fp.u64")
-	fpWriter, err := NewArrayWriter(fpPath, 8)
-	if err != nil {
-		return fmt.Errorf("create fingerprint writer: %w", err)
-	}
-	for _, fp := range fingerprints {
-		if err := fpWriter.WriteU64(fp); err != nil {
-			fpWriter.Close()
-			return fmt.Errorf("write fingerprint: %w", err)
-		}
-	}
-	if err := fpWriter.Close(); err != nil {
-		return fmt.Errorf("close fingerprint writer: %w", err)
-	}
-
-	log.Debug().Msg("MPHF: writing preorder positions")
-
-	// Write preorder positions
-	posPath := filepath.Join(outDir, "mph_pos.u64")
-	posWriter, err := NewArrayWriter(posPath, 8)
-	if err != nil {
-		return fmt.Errorf("create position writer: %w", err)
-	}
-	for _, p := range preorderPositions {
-		if err := posWriter.WriteU64(p); err != nil {
-			posWriter.Close()
-			return fmt.Errorf("write preorder position: %w", err)
-		}
-	}
-	if err := posWriter.Close(); err != nil {
-		return fmt.Errorf("close position writer: %w", err)
+	// Write fingerprints and positions in parallel since they are independent files
+	if err := writeArraysParallel(outDir, fingerprints, preorderPositions); err != nil {
+		return err
 	}
 
 	log.Debug().Msg("MPHF: writing prefix blob")
@@ -479,4 +450,62 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 		return fmt.Errorf("create empty blob writer: %w", err)
 	}
 	return writer.Close()
+}
+
+// writeArraysParallel writes fingerprints and positions arrays in parallel.
+// Since these are independent files, parallel writes can utilize disk bandwidth better.
+func writeArraysParallel(outDir string, fingerprints, positions []uint64) error {
+	var wg sync.WaitGroup
+	var fpErr, posErr error
+
+	wg.Add(2)
+
+	// Write fingerprints
+	go func() {
+		defer wg.Done()
+		fpPath := filepath.Join(outDir, "mph_fp.u64")
+		fpWriter, err := NewArrayWriter(fpPath, 8)
+		if err != nil {
+			fpErr = fmt.Errorf("create fingerprint writer: %w", err)
+			return
+		}
+		for _, fp := range fingerprints {
+			if err := fpWriter.WriteU64(fp); err != nil {
+				fpWriter.Close()
+				fpErr = fmt.Errorf("write fingerprint: %w", err)
+				return
+			}
+		}
+		if err := fpWriter.Close(); err != nil {
+			fpErr = fmt.Errorf("close fingerprint writer: %w", err)
+		}
+	}()
+
+	// Write positions
+	go func() {
+		defer wg.Done()
+		posPath := filepath.Join(outDir, "mph_pos.u64")
+		posWriter, err := NewArrayWriter(posPath, 8)
+		if err != nil {
+			posErr = fmt.Errorf("create position writer: %w", err)
+			return
+		}
+		for _, p := range positions {
+			if err := posWriter.WriteU64(p); err != nil {
+				posWriter.Close()
+				posErr = fmt.Errorf("write preorder position: %w", err)
+				return
+			}
+		}
+		if err := posWriter.Close(); err != nil {
+			posErr = fmt.Errorf("close position writer: %w", err)
+		}
+	}()
+
+	wg.Wait()
+
+	if fpErr != nil {
+		return fpErr
+	}
+	return posErr
 }
