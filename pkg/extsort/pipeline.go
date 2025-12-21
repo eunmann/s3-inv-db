@@ -382,10 +382,16 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 		}
 
 		// Flush if memory threshold exceeded
-		if agg.EstimatedMemoryUsage() >= p.config.AggregatorMemoryThreshold() {
+		// Use actual heap measurement instead of estimate for accuracy
+		heapThreshold := p.config.MemoryBudget.Total()
+		if ShouldFlush(heapThreshold) {
+			p.memTracker.LogNow("pre_flush")
 			if err := p.flushAggregator(agg); err != nil {
 				return fmt.Errorf("flush aggregator: %w", err)
 			}
+			// Force GC after flush to release memory promptly
+			runtime.GC()
+			p.memTracker.LogNow("post_flush_gc")
 		}
 	}
 

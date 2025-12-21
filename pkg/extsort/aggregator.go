@@ -1,6 +1,7 @@
 package extsort
 
 import (
+	"runtime"
 	"sync"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -89,14 +90,41 @@ func (a *Aggregator) BytesProcessed() int64 {
 
 // EstimatedMemoryUsage returns an approximate memory usage in bytes.
 // This is a rough estimate based on prefix count and average prefix length.
+//
+// DEPRECATED: This estimate is inaccurate. Use ShouldFlush() with actual
+// heap measurements instead.
 func (a *Aggregator) EstimatedMemoryUsage() int64 {
 	// Estimate per-prefix overhead:
 	// - Map entry: ~48 bytes (key pointer, value pointer, hash bucket)
 	// - Average prefix string: ~30 bytes
 	// - PrefixStats: ~(2 + 8 + 8 + 12*8 + 12*8) = ~210 bytes
 	// Total: ~288 bytes per prefix
+	//
+	// NOTE: This estimate is often 2-3x lower than actual usage due to:
+	// - Go map overhead being higher
+	// - String allocations being larger
+	// - Memory fragmentation
 	const bytesPerPrefix = 288
 	return int64(len(a.prefixes)) * bytesPerPrefix
+}
+
+// HeapAllocBytes returns the current heap allocation from runtime.
+// This provides ground-truth memory usage for making flush decisions.
+func HeapAllocBytes() uint64 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.HeapAlloc
+}
+
+// ShouldFlush returns true if the aggregator should flush based on
+// actual heap usage approaching the given threshold.
+//
+// The threshold should be the maximum heap size allowed. We flush
+// when heap usage exceeds 80% of threshold to leave headroom.
+func ShouldFlush(heapThreshold uint64) bool {
+	current := HeapAllocBytes()
+	// Flush at 80% of threshold to leave headroom for flush operations
+	return current > (heapThreshold * 80 / 100)
 }
 
 // Drain extracts all prefixes from the aggregator and returns them as PrefixRows.
