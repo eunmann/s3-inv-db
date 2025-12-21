@@ -55,6 +55,23 @@ func NewParquetInventoryReader(r io.ReaderAt, size int64, cfg ParquetReaderConfi
 	return newParquetReader(file, nil, cfg)
 }
 
+// NewParquetInventoryReaderFromReaderAt creates a Parquet inventory reader from an io.ReaderAt.
+// This auto-detects the schema from the Parquet file and is more efficient than
+// NewParquetInventoryReaderFromStream when you already have a ReaderAt (e.g., from temp file).
+func NewParquetInventoryReaderFromReaderAt(r io.ReaderAt, size int64) (InventoryReader, error) {
+	file, err := parquet.OpenFile(r, size)
+	if err != nil {
+		return nil, fmt.Errorf("open parquet file: %w", err)
+	}
+
+	cfg, err := detectParquetSchema(file.Schema())
+	if err != nil {
+		return nil, err
+	}
+
+	return newParquetReader(file, nil, cfg)
+}
+
 // NewParquetInventoryReaderFromStream creates a Parquet inventory reader from a stream.
 // Since Parquet requires random access, this buffers the entire stream to a temp file.
 // The size parameter is used for validation (if non-zero) but the full stream is read regardless.
