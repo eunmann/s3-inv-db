@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/memdiag"
@@ -94,16 +95,16 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		}
 	}()
 
-	// Log memory budget breakdown
+	// Log memory budget breakdown with human-readable formatting
 	p.config.EnsureBudget()
 	aggThreshold := p.config.AggregatorMemoryThreshold()
 	log.Info().
 		Str("manifest_uri", manifestURI).
-		Uint64("total_budget_mb", p.config.MemoryBudget.Total()/(1024*1024)).
-		Int64("aggregator_budget_mb", aggThreshold/(1024*1024)).
-		Int64("run_buffer_budget_mb", p.config.RunBufferBudget()/(1024*1024)).
-		Int64("merge_budget_mb", p.config.MergeBudget()/(1024*1024)).
-		Int64("index_budget_mb", p.config.IndexBuildBudget()/(1024*1024)).
+		Str("total_budget", humanfmt.BytesUint64(p.config.MemoryBudget.Total())).
+		Str("aggregator_budget", humanfmt.Bytes(aggThreshold)).
+		Str("run_buffer_budget", humanfmt.Bytes(p.config.RunBufferBudget())).
+		Str("merge_budget", humanfmt.Bytes(p.config.MergeBudget())).
+		Str("index_budget", humanfmt.Bytes(p.config.IndexBuildBudget())).
 		Msg("pipeline starting")
 
 	p.memTracker.SetPhase("ingest")
@@ -122,8 +123,10 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 	log.Info().
 		Int("run_files", len(p.runFiles)).
-		Int64("objects", p.objectsProcessed).
+		Str("objects", humanfmt.Count(p.objectsProcessed)).
+		Int64("objects_raw", p.objectsProcessed).
 		Int64("flushes", p.flushCount).
+		Str("duration", humanfmt.Duration(ingestDuration)).
 		Dur("duration_ms", ingestDuration).
 		Msg("ingest phase complete")
 
@@ -143,8 +146,10 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	p.memTracker.LogNow("post_merge_gc")
 
 	log.Info().
-		Uint64("prefixes", prefixCount).
+		Str("prefixes", humanfmt.CountUint64(prefixCount)).
+		Uint64("prefixes_raw", prefixCount).
 		Uint32("max_depth", maxDepth).
+		Str("duration", humanfmt.Duration(mergeDuration)).
 		Dur("duration_ms", mergeDuration).
 		Msg("merge phase complete")
 
@@ -153,9 +158,13 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 	duration := time.Since(p.startTime)
 	log.Info().
+		Str("total_duration", humanfmt.Duration(duration)).
 		Dur("total_duration_ms", duration).
-		Int64("objects", p.objectsProcessed).
-		Uint64("prefixes", prefixCount).
+		Str("objects", humanfmt.Count(p.objectsProcessed)).
+		Int64("objects_raw", p.objectsProcessed).
+		Str("prefixes", humanfmt.CountUint64(prefixCount)).
+		Uint64("prefixes_raw", prefixCount).
+		Str("throughput", humanfmt.Count(int64(float64(p.objectsProcessed)/duration.Seconds()))+"/s").
 		Msg("pipeline complete")
 
 	return &Result{
@@ -430,7 +439,7 @@ func (p *Pipeline) chunkWorker(ctx context.Context, jobs <-chan chunkJob, result
 		default:
 		}
 
-		objects, err := p.processChunkToBatch(ctx, job.bucket, job.key, job.config, batchCapacity)
+		objects, _, err := p.processChunkToBatch(ctx, job.bucket, job.key, job.config, batchCapacity)
 		if err != nil {
 			select {
 			case results <- objectBatch{err: fmt.Errorf("chunk %d: %w", job.index, err)}:
@@ -447,18 +456,34 @@ func (p *Pipeline) chunkWorker(ctx context.Context, jobs <-chan chunkJob, result
 	}
 }
 
+// chunkTiming holds timing information for chunk processing.
+type chunkTiming struct {
+	downloadDuration time.Duration
+	parseDuration    time.Duration
+	objectCount      int
+	totalBytes       int64
+}
+
 // processChunkToBatch downloads and parses a chunk, returning all objects as a batch.
-func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, cfg chunkConfig, capacityHint int) ([]objectRecord, error) {
+func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, cfg chunkConfig, capacityHint int) ([]objectRecord, *chunkTiming, error) {
+	timing := &chunkTiming{}
+	log := logging.L()
+
+	// Download phase
+	downloadStart := time.Now()
 	body, err := p.s3Client.StreamObject(ctx, bucket, key)
 	if err != nil {
-		return nil, fmt.Errorf("stream object: %w", err)
+		return nil, nil, fmt.Errorf("stream object: %w", err)
 	}
+	timing.downloadDuration = time.Since(downloadStart)
 
+	// Create reader (parse header/schema)
+	parseStart := time.Now()
 	var reader inventory.InventoryReader
 	if cfg.format == s3fetch.InventoryFormatParquet {
 		reader, err = inventory.NewParquetInventoryReaderFromStream(body, cfg.fileSize)
 		if err != nil {
-			return nil, fmt.Errorf("create parquet reader: %w", err)
+			return nil, nil, fmt.Errorf("create parquet reader: %w", err)
 		}
 	} else {
 		csvCfg := inventory.CSVReaderConfig{
@@ -469,7 +494,7 @@ func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, 
 		}
 		reader, err = inventory.NewCSVInventoryReaderFromStream(body, key, csvCfg)
 		if err != nil {
-			return nil, fmt.Errorf("create csv reader: %w", err)
+			return nil, nil, fmt.Errorf("create csv reader: %w", err)
 		}
 	}
 	defer reader.Close()
@@ -479,7 +504,7 @@ func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, 
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("chunk processing cancelled: %w", ctx.Err())
+			return nil, nil, fmt.Errorf("chunk processing cancelled: %w", ctx.Err())
 		default:
 		}
 
@@ -488,7 +513,7 @@ func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, 
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("read inventory row: %w", err)
+			return nil, nil, fmt.Errorf("read inventory row: %w", err)
 		}
 
 		if row.Key == "" {
@@ -501,9 +526,20 @@ func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, 
 			size:   row.Size,
 			tierID: tierID,
 		})
+		timing.totalBytes += int64(row.Size)
 	}
+	timing.parseDuration = time.Since(parseStart)
+	timing.objectCount = len(objects)
 
-	return objects, nil
+	// Log chunk timing at debug level
+	log.Debug().
+		Str("chunk", key).
+		Int("objects", timing.objectCount).
+		Dur("download_ms", timing.downloadDuration).
+		Dur("parse_ms", timing.parseDuration).
+		Msg("chunk processed")
+
+	return objects, timing, nil
 }
 
 // flushAggregator drains the aggregator to a sorted run file.
@@ -552,12 +588,15 @@ func (p *Pipeline) flushAggregator(agg *Aggregator) error {
 
 	// Log flush with memory stats
 	aggMemory := int64(len(rows)) * 288 // Estimated bytes used before flush
+	flushDuration := time.Since(start)
 	log.Info().
 		Int("run_index", p.runCount-1).
-		Int("prefixes", len(rows)).
-		Int64("aggregator_memory_mb", aggMemory/(1024*1024)).
-		Int64("buffer_size_kb", bufferSize/1024).
-		Dur("duration_ms", time.Since(start)).
+		Str("prefixes", humanfmt.Count(int64(len(rows)))).
+		Int("prefixes_raw", len(rows)).
+		Str("aggregator_memory", humanfmt.Bytes(aggMemory)).
+		Str("buffer_size", humanfmt.Bytes(bufferSize)).
+		Str("duration", humanfmt.Duration(flushDuration)).
+		Dur("duration_ms", flushDuration).
 		Msg("run file written")
 
 	return nil
