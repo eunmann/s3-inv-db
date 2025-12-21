@@ -11,6 +11,9 @@ import (
 	"sort"
 	"syscall"
 
+	"github.com/rs/zerolog"
+
+	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
@@ -57,7 +60,10 @@ func runBuild(args []string) error {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	logging.Init(*verbose, *prettyLogs)
+	// Initialize logging with context-based logger
+	baseLogger := logctx.NewConfiguredLogger(*verbose, *prettyLogs)
+	logctx.SetDefaultLogger(baseLogger)
+	logging.Init(*verbose, *prettyLogs) // Keep legacy logging for existing code
 
 	if *outDir == "" {
 		return errors.New("--out is required")
@@ -66,16 +72,18 @@ func runBuild(args []string) error {
 		return errors.New("--s3-manifest is required")
 	}
 
-	return runBuildExtSort(*outDir, *s3Manifest, *workers, *maxDepth, *memBudgetStr)
+	return runBuildExtSort(*outDir, *s3Manifest, *workers, *maxDepth, *memBudgetStr, baseLogger)
 }
 
 // runBuildExtSort runs the build using the external sort backend (pure Go, no CGO).
-func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudgetStr string) error {
-	log := logging.L()
-
+func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudgetStr string, baseLogger zerolog.Logger) error {
 	// Create a context that responds to OS signals (SIGINT, SIGTERM)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Inject the logger into context for pipeline functions
+	ctx = logctx.WithLogger(ctx, baseLogger)
+	log := logctx.FromContext(ctx)
 
 	// Determine memory budget
 	budget, err := determineMemoryBudget(memBudgetStr)
