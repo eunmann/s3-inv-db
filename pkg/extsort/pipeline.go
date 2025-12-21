@@ -552,7 +552,12 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 		return nil
 	}
 
-	runPath := filepath.Join(p.tempDir, fmt.Sprintf("run_%04d.bin", p.runCount))
+	// Use compressed runs if configured (default: true)
+	ext := ".bin"
+	if p.config.UseCompressedRuns {
+		ext = ".crun"
+	}
+	runPath := filepath.Join(p.tempDir, fmt.Sprintf("run_%04d%s", p.runCount, ext))
 	p.runCount++
 
 	// Calculate buffer size from run buffer budget
@@ -567,20 +572,37 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 		bufferSize = maxBuffer
 	}
 
-	writer, err := NewRunFileWriter(runPath, int(bufferSize))
-	if err != nil {
-		return fmt.Errorf("create run file: %w", err)
+	var writeErr error
+	if p.config.UseCompressedRuns {
+		writer, err := NewCompressedRunWriter(runPath, CompressedRunWriterOptions{
+			BufferSize:       int(bufferSize),
+			CompressionLevel: CompressionFastest, // Optimize for write speed during ingest
+		})
+		if err != nil {
+			return fmt.Errorf("create compressed run file: %w", err)
+		}
+		if err := writer.WriteSorted(rows); err != nil {
+			writer.Close()
+			os.Remove(runPath)
+			return fmt.Errorf("write sorted: %w", err)
+		}
+		writeErr = writer.Close()
+	} else {
+		writer, err := NewRunFileWriter(runPath, int(bufferSize))
+		if err != nil {
+			return fmt.Errorf("create run file: %w", err)
+		}
+		if err := writer.WriteSorted(rows); err != nil {
+			writer.Close()
+			os.Remove(runPath)
+			return fmt.Errorf("write sorted: %w", err)
+		}
+		writeErr = writer.Close()
 	}
 
-	if err := writer.WriteSorted(rows); err != nil {
-		writer.Close()
+	if writeErr != nil {
 		os.Remove(runPath)
-		return fmt.Errorf("write sorted: %w", err)
-	}
-
-	if err := writer.Close(); err != nil {
-		os.Remove(runPath)
-		return fmt.Errorf("close run file: %w", err)
+		return fmt.Errorf("close run file: %w", writeErr)
 	}
 
 	p.runFiles = append(p.runFiles, runPath)
@@ -595,6 +617,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 		Int("prefixes_count", len(rows)).
 		Str("aggregator_memory", humanfmt.Bytes(aggMemory)).
 		Str("buffer_size", humanfmt.Bytes(bufferSize)).
+		Bool("compressed", p.config.UseCompressedRuns).
 		Str("duration", humanfmt.Duration(flushDuration)).
 		Dur("duration_ms", flushDuration).
 		Msg("run file written")
@@ -625,8 +648,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 		return 0, 0, nil
 	}
 
-	// Calculate per-reader buffer size for k-way merge
-	// Divide merge budget by number of run files, clamp to reasonable range
+	// Calculate per-reader buffer size for merge
 	numRunFiles := len(p.runFiles)
 	perReaderBuffer := p.config.MergeBudget() / int64(numRunFiles)
 	const minBuffer = 64 * 1024
@@ -637,16 +659,78 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 		perReaderBuffer = maxBuffer
 	}
 
+	// Use parallel merge for multiple run files
+	numWorkers := p.config.NumMergeWorkers
+	if numWorkers <= 0 {
+		numWorkers = 1
+	}
+	maxFanIn := p.config.MaxMergeFanIn
+	if maxFanIn <= 1 {
+		maxFanIn = 8
+	}
+
 	log.Info().
 		Int("run_files_count", numRunFiles).
+		Int("merge_workers_count", numWorkers).
+		Int("max_fan_in", maxFanIn).
 		Int64("per_reader_buffer_kb", perReaderBuffer/1024).
+		Bool("compressed", p.config.UseCompressedRuns).
 		Msg("merge phase starting")
 
-	merger, err := NewMergeIterator(p.runFiles, int(perReaderBuffer))
-	if err != nil {
-		return 0, 0, fmt.Errorf("create merge iterator: %w", err)
+	// Use parallel merger if we have multiple run files
+	var finalRunPath string
+	var cleanupIntermediates func()
+
+	if numRunFiles > 1 {
+		parallelMerger := NewParallelMerger(ParallelMergeConfig{
+			NumWorkers:       numWorkers,
+			MaxFanIn:         maxFanIn,
+			BufferSize:       int(perReaderBuffer),
+			TempDir:          p.tempDir,
+			UseCompression:   p.config.UseCompressedRuns,
+			CompressionLevel: CompressionFastest,
+		})
+
+		var mergeErr error
+		finalRunPath, mergeErr = parallelMerger.MergeAll(ctx, p.runFiles)
+		if mergeErr != nil {
+			return 0, 0, fmt.Errorf("parallel merge: %w", mergeErr)
+		}
+
+		rounds, totalTime, bytesWritten := parallelMerger.Statistics()
+		log.Info().
+			Int("merge_rounds", rounds).
+			Str("merge_duration", humanfmt.Duration(totalTime)).
+			Str("bytes_written", humanfmt.Bytes(bytesWritten)).
+			Msg("parallel merge complete")
+
+		cleanupIntermediates = func() {
+			_ = parallelMerger.CleanupIntermediateFiles()
+			// Remove original run files
+			for _, path := range p.runFiles {
+				os.Remove(path)
+			}
+			// Remove final merged file
+			os.Remove(finalRunPath)
+		}
+	} else {
+		// Single run file, no merge needed
+		finalRunPath = p.runFiles[0]
+		cleanupIntermediates = func() {
+			os.Remove(finalRunPath)
+		}
 	}
-	defer func() { _ = merger.RemoveAll() }()
+
+	defer cleanupIntermediates()
+
+	// Open final merged run for index building
+	reader, err := OpenRunFileAuto(finalRunPath, int(perReaderBuffer))
+	if err != nil {
+		return 0, 0, fmt.Errorf("open merged run: %w", err)
+	}
+
+	// Create iterator adapter for index builder
+	mergeIter := &singleRunIterator{reader: reader}
 
 	// Index build budget provides guidance for the streaming phase
 	// Memory grows ~75 bytes per prefix during build
@@ -659,11 +743,11 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 
 	builder, err := NewIndexBuilder(outDir, p.config.TempDir)
 	if err != nil {
-		merger.Close()
+		reader.Close()
 		return 0, 0, fmt.Errorf("create index builder: %w", err)
 	}
 
-	if err := builder.AddAllWithContext(ctx, merger); err != nil {
+	if err := builder.AddAllWithContext(ctx, mergeIter); err != nil {
 		builder.cleanup()
 		return 0, 0, fmt.Errorf("build index: %w", err)
 	}
@@ -673,6 +757,40 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 	}
 
 	return builder.Count(), builder.MaxDepth(), nil
+}
+
+// singleRunIterator wraps a RunReader to implement the iterator interface expected by IndexBuilder.
+type singleRunIterator struct {
+	reader RunReader
+}
+
+func (s *singleRunIterator) Next() (*PrefixRow, error) {
+	row, err := s.reader.Read()
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, io.EOF
+		}
+		return nil, fmt.Errorf("read from run: %w", err)
+	}
+	return row, nil
+}
+
+func (s *singleRunIterator) Remaining() uint64 {
+	return s.reader.Count() - s.reader.ReadCount()
+}
+
+func (s *singleRunIterator) Close() error {
+	if err := s.reader.Close(); err != nil {
+		return fmt.Errorf("close run reader: %w", err)
+	}
+	return nil
+}
+
+func (s *singleRunIterator) RemoveAll() error {
+	if err := s.reader.Remove(); err != nil {
+		return fmt.Errorf("remove run file: %w", err)
+	}
+	return nil
 }
 
 // cleanup removes temporary files.

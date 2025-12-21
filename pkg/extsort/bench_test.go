@@ -1,6 +1,7 @@
 package extsort
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -294,4 +295,220 @@ func formatBytes(b int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
+// BenchmarkCompressedVsUncompressed compares run file write performance.
+func BenchmarkCompressedVsUncompressed(b *testing.B) {
+	numObjects := 50000
+
+	// Generate data once
+	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(numObjects))
+	objects := gen.Generate()
+
+	// Pre-aggregate rows
+	agg := NewAggregator(100000, 0)
+	for _, obj := range objects {
+		agg.AddObject(obj.Key, obj.Size, obj.TierID)
+	}
+	rows := agg.Drain()
+	SortPrefixRows(rows)
+
+	b.Run("uncompressed_write", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			tmpDir := b.TempDir()
+			path := filepath.Join(tmpDir, "run.bin")
+			writer, _ := NewRunFileWriter(path, 4*1024*1024)
+			writer.WriteAll(rows)
+			writer.Close()
+		}
+	})
+
+	b.Run("compressed_fastest", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			tmpDir := b.TempDir()
+			path := filepath.Join(tmpDir, "run.crun")
+			writer, _ := NewCompressedRunWriter(path, CompressedRunWriterOptions{
+				BufferSize:       4 * 1024 * 1024,
+				CompressionLevel: CompressionFastest,
+			})
+			writer.WriteAll(rows)
+			writer.Close()
+		}
+	})
+
+	b.Run("compressed_default", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			tmpDir := b.TempDir()
+			path := filepath.Join(tmpDir, "run.crun")
+			writer, _ := NewCompressedRunWriter(path, CompressedRunWriterOptions{
+				BufferSize:       4 * 1024 * 1024,
+				CompressionLevel: CompressionDefault,
+			})
+			writer.WriteAll(rows)
+			writer.Close()
+		}
+	})
+
+	// Report sizes after benchmarks
+	b.Run("size_comparison", func(b *testing.B) {
+		tmpDir := b.TempDir()
+
+		uncompPath := filepath.Join(tmpDir, "run.bin")
+		compPath := filepath.Join(tmpDir, "run.crun")
+
+		uWriter, _ := NewRunFileWriter(uncompPath, 0)
+		uWriter.WriteAll(rows)
+		uWriter.Close()
+
+		cWriter, _ := NewCompressedRunWriter(compPath, CompressedRunWriterOptions{})
+		cWriter.WriteAll(rows)
+		cWriter.Close()
+
+		uInfo, _ := os.Stat(uncompPath)
+		cInfo, _ := os.Stat(compPath)
+
+		b.Logf("Prefixes: %d", len(rows))
+		b.Logf("Uncompressed: %s", formatBytes(uInfo.Size()))
+		b.Logf("Compressed:   %s", formatBytes(cInfo.Size()))
+		b.Logf("Ratio:        %.1fx", float64(uInfo.Size())/float64(cInfo.Size()))
+	})
+}
+
+// BenchmarkParallelMerge compares merge strategies and worker counts.
+func BenchmarkParallelMerge(b *testing.B) {
+	benchutil.SkipIfNoLongBench(b)
+
+	numFiles := 8
+	prefixesPerFile := 5000
+
+	// Create test run files once
+	setupFiles := func(dir string) []string {
+		var paths []string
+		for i := range numFiles {
+			var rows []*PrefixRow
+			for j := range prefixesPerFile {
+				rows = append(rows, &PrefixRow{
+					Prefix:     fmt.Sprintf("bucket/data/year=2024/month=%02d/day=%02d/file_%08d.parquet", i%12+1, j%28+1, i*prefixesPerFile+j),
+					Depth:      6,
+					Count:      uint64(j + 1),
+					TotalBytes: uint64((j + 1) * 1024),
+				})
+			}
+			SortPrefixRows(rows)
+
+			path := filepath.Join(dir, fmt.Sprintf("run_%02d.crun", i))
+			writer, _ := NewCompressedRunWriter(path, CompressedRunWriterOptions{
+				CompressionLevel: CompressionFastest,
+			})
+			writer.WriteAll(rows)
+			writer.Close()
+			paths = append(paths, path)
+		}
+		return paths
+	}
+
+	for _, workers := range []int{1, 2, 4, 8} {
+		b.Run(fmt.Sprintf("workers=%d", workers), func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				b.StopTimer()
+				tmpDir := b.TempDir()
+				paths := setupFiles(tmpDir)
+				b.StartTimer()
+
+				merger := NewParallelMerger(ParallelMergeConfig{
+					NumWorkers:     workers,
+					MaxFanIn:       4,
+					TempDir:        tmpDir,
+					UseCompression: true,
+				})
+				outPath, _ := merger.MergeAll(context.Background(), paths)
+				os.Remove(outPath)
+				merger.CleanupIntermediateFiles()
+			}
+		})
+	}
+
+	// Compare fan-in settings
+	for _, fanIn := range []int{2, 4, 8} {
+		b.Run(fmt.Sprintf("fanIn=%d", fanIn), func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				b.StopTimer()
+				tmpDir := b.TempDir()
+				paths := setupFiles(tmpDir)
+				b.StartTimer()
+
+				merger := NewParallelMerger(ParallelMergeConfig{
+					NumWorkers:     4,
+					MaxFanIn:       fanIn,
+					TempDir:        tmpDir,
+					UseCompression: true,
+				})
+				outPath, _ := merger.MergeAll(context.Background(), paths)
+				os.Remove(outPath)
+				merger.CleanupIntermediateFiles()
+			}
+		})
+	}
+}
+
+// BenchmarkReadPerformance compares read speed between compressed and uncompressed.
+func BenchmarkReadPerformance(b *testing.B) {
+	numObjects := 50000
+
+	// Generate data once
+	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(numObjects))
+	objects := gen.Generate()
+
+	agg := NewAggregator(100000, 0)
+	for _, obj := range objects {
+		agg.AddObject(obj.Key, obj.Size, obj.TierID)
+	}
+	rows := agg.Drain()
+	SortPrefixRows(rows)
+
+	tmpDir := b.TempDir()
+	uncompPath := filepath.Join(tmpDir, "run.bin")
+	compPath := filepath.Join(tmpDir, "run.crun")
+
+	// Write both formats
+	uWriter, _ := NewRunFileWriter(uncompPath, 0)
+	uWriter.WriteAll(rows)
+	uWriter.Close()
+
+	cWriter, _ := NewCompressedRunWriter(compPath, CompressedRunWriterOptions{})
+	cWriter.WriteAll(rows)
+	cWriter.Close()
+
+	b.Run("uncompressed_read", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			reader, _ := OpenRunFile(uncompPath, 4*1024*1024)
+			for {
+				_, err := reader.Read()
+				if err != nil {
+					break
+				}
+			}
+			reader.Close()
+		}
+	})
+
+	b.Run("compressed_read", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			reader, _ := OpenCompressedRunFile(compPath, 4*1024*1024)
+			for {
+				_, err := reader.Read()
+				if err != nil {
+					break
+				}
+			}
+			reader.Close()
+		}
+	})
 }

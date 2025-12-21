@@ -22,6 +22,14 @@ import (
 // This matches tiers.NumTiers and is used for fixed-size arrays to avoid map allocations.
 const MaxTiers = int(tiers.NumTiers)
 
+// RowIterator provides sequential access to sorted PrefixRows.
+// This interface is implemented by both MergeIterator and singleRunIterator.
+type RowIterator interface {
+	// Next returns the next PrefixRow in sorted order.
+	// Returns io.EOF when all rows have been consumed.
+	Next() (*PrefixRow, error)
+}
+
 // PrefixRow represents a single prefix with its aggregated statistics.
 // This is the primary data type passed through the external sort pipeline.
 //
@@ -194,6 +202,20 @@ type Config struct {
 	// Prefixes deeper than this are not aggregated.
 	// Default: 0 (unlimited).
 	MaxDepth int
+
+	// NumMergeWorkers is the number of concurrent merge workers.
+	// Default: max(1, NumCPU/2).
+	NumMergeWorkers int
+
+	// MaxMergeFanIn is the maximum number of runs merged in a single worker.
+	// Higher values reduce merge rounds but increase memory per worker.
+	// Default: 8.
+	MaxMergeFanIn int
+
+	// UseCompressedRuns enables compression for intermediate run files.
+	// This significantly reduces disk I/O and storage at minimal CPU cost.
+	// Default: true.
+	UseCompressedRuns bool
 }
 
 // DefaultConfig returns a Config with sensible defaults based on the current machine.
@@ -209,6 +231,15 @@ func DefaultConfig() Config {
 		concurrency = 16
 	}
 
+	// Merge workers scale with CPU but cap lower to avoid memory pressure
+	mergeWorkers := numCPU / 2
+	if mergeWorkers < 1 {
+		mergeWorkers = 1
+	}
+	if mergeWorkers > 8 {
+		mergeWorkers = 8
+	}
+
 	return Config{
 		TempDir:               "",
 		MemoryBudget:          membudget.NewFromSystemRAM(),
@@ -217,6 +248,9 @@ func DefaultConfig() Config {
 		ParseConcurrency:      concurrency,
 		IndexWriteConcurrency: concurrency,
 		MaxDepth:              0, // unlimited
+		NumMergeWorkers:       mergeWorkers,
+		MaxMergeFanIn:         8,
+		UseCompressedRuns:     true,
 	}
 }
 

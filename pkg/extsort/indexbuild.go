@@ -297,13 +297,13 @@ func (b *IndexBuilder) createTierWriter(tierID tiers.ID, _ *PrefixRow) error {
 }
 
 // AddAll processes all PrefixRows from an iterator.
-func (b *IndexBuilder) AddAll(iter *MergeIterator) error {
+func (b *IndexBuilder) AddAll(iter RowIterator) error {
 	return b.AddAllWithContext(context.Background(), iter)
 }
 
 // AddAllWithContext processes all PrefixRows from an iterator with context support.
 // It periodically checks for context cancellation to allow graceful shutdown.
-func (b *IndexBuilder) AddAllWithContext(ctx context.Context, iter *MergeIterator) error {
+func (b *IndexBuilder) AddAllWithContext(ctx context.Context, iter RowIterator) error {
 	const checkInterval = 1000 // Check context every N rows
 	count := 0
 
