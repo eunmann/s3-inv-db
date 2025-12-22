@@ -21,14 +21,16 @@ import (
 // Memory usage:
 // - ~8 bytes per prefix for hash keys (unavoidable for bbhash)
 // - ~8 bytes per prefix for preorder positions
+// - ~8 bytes per prefix for pre-computed fingerprints (optimization)
 // - Temporary buffers for I/O
 //
 // This is much more memory efficient than MPHFBuilder which stores all
 // prefix strings in memory (~50+ bytes per prefix average).
 type StreamingMPHFBuilder struct {
-	// In-memory: only hashes and positions (16 bytes per prefix total)
-	hashes      []uint64
-	preorderPos []uint64
+	// In-memory: hashes, positions, and fingerprints (24 bytes per prefix total)
+	hashes       []uint64
+	preorderPos  []uint64
+	fingerprints []uint64 // Pre-computed during Add phase
 
 	// Temp file for prefix strings
 	tempFile   *os.File
@@ -51,27 +53,34 @@ func NewStreamingMPHFBuilder(tempDir string) (*StreamingMPHFBuilder, error) {
 	}
 
 	return &StreamingMPHFBuilder{
-		hashes:      make([]uint64, 0, 1024),
-		preorderPos: make([]uint64, 0, 1024),
-		tempFile:    tempFile,
-		tempWriter:  bufio.NewWriterSize(tempFile, 1024*1024), // 1MB buffer
-		tempPath:    tempFile.Name(),
-		bufferSize:  1024 * 1024,
+		hashes:       make([]uint64, 0, 1024),
+		preorderPos:  make([]uint64, 0, 1024),
+		fingerprints: make([]uint64, 0, 1024),
+		tempFile:     tempFile,
+		tempWriter:   bufio.NewWriterSize(tempFile, 1024*1024), // 1MB buffer
+		tempPath:     tempFile.Name(),
+		bufferSize:   1024 * 1024,
 	}, nil
 }
 
 // Add adds a prefix at the given preorder position.
-// The prefix is written to disk immediately; only the hash is kept in memory.
+// The prefix is written to disk immediately; only the hash and fingerprint are kept in memory.
 func (b *StreamingMPHFBuilder) Add(prefix string, pos uint64) error {
-	// Store hash in memory (8 bytes)
-	b.hashes = append(b.hashes, hashString(prefix))
+	// Convert to bytes once, reuse for all operations
+	prefixBytes := []byte(prefix)
+
+	// Store hash in memory (8 bytes) - used for BBHash construction
+	b.hashes = append(b.hashes, hashBytes(prefixBytes))
 
 	// Store position in memory (8 bytes)
 	b.preorderPos = append(b.preorderPos, pos)
 
+	// Pre-compute fingerprint now (8 bytes) - avoids recomputing later
+	// This is Option 4: compute fingerprint during Add phase
+	b.fingerprints = append(b.fingerprints, computeFingerprintBytes(prefixBytes))
+
 	// Write prefix to temp file with length prefix
 	// Format: [4-byte length][prefix bytes]
-	prefixBytes := []byte(prefix)
 	var lenBuf [4]byte
 	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(prefixBytes)))
 
@@ -106,6 +115,10 @@ func (b *StreamingMPHFBuilder) Close() error {
 
 // Build constructs the MPHF and writes it to the output directory.
 // Memory usage during Build is bounded by buffer sizes, not by prefix count.
+//
+// Optimization notes:
+//   - Option 2: Computes all hash positions in a tight loop for cache efficiency.
+//   - Option 4: Uses pre-computed fingerprints from Add phase (no recomputation).
 func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	log := logging.L()
 
@@ -135,11 +148,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		Dur("bbhash_ms", bbhashDuration).
 		Msg("MPHF: bbhash.New complete")
 
-	// Free hashes now that MPHF is built
-	b.hashes = nil
-	runtime.GC()
-
-	// Write MPHF
+	// Write MPHF to disk
 	mphPath := filepath.Join(outDir, "mph.bin")
 	mphFile, err := os.Create(mphPath)
 	if err != nil {
@@ -159,55 +168,117 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	}
 	mphFile.Close()
 
-	log.Debug().Msg("MPHF: allocating fingerprint and position arrays")
+	// Compute all hash positions in parallel (Option 2 optimization)
+	log.Debug().Msg("MPHF: computing hash positions (parallel)")
+	findStart := time.Now()
 
-	// Create output arrays - preallocate at correct size
 	n := int(b.count)
-	fingerprints := make([]uint64, n)
-	preorderPositions := make([]uint64, n)
-	orderedPrefixOffsets := make([]uint64, n) // For rebuilding prefix order
-
-	// Seek to start of temp file to re-read prefixes
-	if _, err := b.tempFile.Seek(0, 0); err != nil {
-		return fmt.Errorf("seek temp file: %w", err)
-	}
-	reader := bufio.NewReaderSize(b.tempFile, b.bufferSize)
-
-	log.Debug().Msg("MPHF: computing fingerprints and positions (parallel)")
-	fingerprintStart := time.Now()
-
-	// Parallel fingerprint computation using chunked processing
-	if err := b.computeFingerprintsParallel(
-		reader, mph, n, fingerprints, preorderPositions, orderedPrefixOffsets,
-	); err != nil {
+	hashPositions, err := b.computeHashPositionsParallel(mph, n)
+	if err != nil {
 		return err
 	}
 
 	log.Debug().
-		Dur("fingerprint_ms", time.Since(fingerprintStart)).
-		Msg("MPHF: fingerprints computed")
+		Dur("find_ms", time.Since(findStart)).
+		Msg("MPHF: hash positions computed")
 
-	// Free preorderPos now
+	// Free hashes now - we have all positions
+	b.hashes = nil
+
+	// =========================================================================
+	// OPTIMIZATION: Use pre-computed fingerprints (Option 4)
+	// =========================================================================
+	// Fingerprints were computed during Add() phase, so we just copy them
+	// to the output array at the correct positions. No recomputation needed.
+
+	log.Debug().Msg("MPHF: mapping fingerprints and positions to output arrays")
+	mapStart := time.Now()
+
+	outputFingerprints := make([]uint64, n)
+	outputPreorderPos := make([]uint64, n)
+
+	// Simple copy loop - no hash computation, no I/O
+	for i, hashPos := range hashPositions {
+		outputFingerprints[hashPos] = b.fingerprints[i]
+		outputPreorderPos[hashPos] = b.preorderPos[i]
+	}
+
+	log.Debug().
+		Dur("map_ms", time.Since(mapStart)).
+		Msg("MPHF: arrays mapped")
+
+	// Free source arrays
+	b.fingerprints = nil
 	b.preorderPos = nil
+	runtime.GC()
 
 	log.Debug().Msg("MPHF: writing fingerprints and positions (parallel)")
 
 	// Write fingerprints and positions in parallel since they are independent files
-	if err := writeArraysParallel(outDir, fingerprints, preorderPositions); err != nil {
+	if err := writeArraysParallel(outDir, outputFingerprints, outputPreorderPos); err != nil {
 		return err
 	}
 
 	log.Debug().Msg("MPHF: writing prefix blob")
 
-	// Now write prefix blob in MPHF-ordered sequence
-	// We need to re-read prefixes in hash order
-	if err := b.writePrefixBlobOrdered(outDir, mph, orderedPrefixOffsets); err != nil {
+	// Write prefix blob in preorder (original order)
+	if err := b.writePrefixBlobPreorder(outDir); err != nil {
 		return fmt.Errorf("write prefix blob: %w", err)
 	}
 
 	log.Debug().Msg("MPHF: build complete")
 
 	return nil
+}
+
+// computeHashPositionsParallel computes MPHF hash positions for all prefixes in parallel.
+// This is an optimization that avoids interleaving Find() calls with I/O and fingerprint
+// computation, keeping the BBHash bitvectors hot in cache across worker threads.
+func (b *StreamingMPHFBuilder) computeHashPositionsParallel(mph *bbhash.BBHash2, n int) ([]int, error) {
+	hashPositions := make([]int, n)
+
+	numWorkers := runtime.NumCPU()
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+
+	var findErr error
+	var findErrOnce sync.Once
+	var wg sync.WaitGroup
+
+	chunkSize := (n + numWorkers - 1) / numWorkers
+	for w := range numWorkers {
+		start := w * chunkSize
+		end := start + chunkSize
+		if end > n {
+			end = n
+		}
+		if start >= n {
+			break
+		}
+
+		wg.Add(1)
+		go func(start, end int) {
+			defer wg.Done()
+			for i := start; i < end; i++ {
+				hashVal := mph.Find(b.hashes[i])
+				if hashVal == 0 {
+					findErrOnce.Do(func() {
+						findErr = fmt.Errorf("MPHF lookup failed for prefix at index %d", i)
+					})
+					return
+				}
+				hashPositions[i] = int(hashVal - 1)
+			}
+		}(start, end)
+	}
+	wg.Wait()
+
+	if findErr != nil {
+		return nil, findErr
+	}
+
+	return hashPositions, nil
 }
 
 // prefixChunkItem holds data for one prefix during parallel processing.
@@ -360,9 +431,9 @@ func (b *StreamingMPHFBuilder) computeFingerprintsParallel(
 	return nil
 }
 
-// writePrefixBlobOrdered writes prefixes in preorder (not hash order) for GetPrefix.
-// This requires re-reading from temp file.
-func (b *StreamingMPHFBuilder) writePrefixBlobOrdered(outDir string, _ *bbhash.BBHash2, _ []uint64) error {
+// writePrefixBlobPreorder writes prefixes in preorder (original Add order) for GetPrefix.
+// This reads from the temp file in sequence.
+func (b *StreamingMPHFBuilder) writePrefixBlobPreorder(outDir string) error {
 	blobPath := filepath.Join(outDir, "prefix_blob.bin")
 	offsetsPath := filepath.Join(outDir, "prefix_offsets.u64")
 

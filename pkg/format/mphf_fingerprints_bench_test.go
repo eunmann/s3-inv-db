@@ -666,3 +666,205 @@ func BenchmarkBBHashScaling(b *testing.B) {
 		})
 	}
 }
+
+// ----------------------------------------------------------------------------
+// OPTIMIZATION COMPARISON BENCHMARKS
+// ----------------------------------------------------------------------------
+// These benchmarks compare the optimized build approach (Options 2+4) against
+// the baseline to measure the impact of:
+// - Option 2: Separating Find() into a tight loop for cache efficiency
+// - Option 4: Pre-computing fingerprints during Add phase
+
+// BenchmarkOptimizedBuild_1M benchmarks the new optimized Build path.
+func BenchmarkOptimizedBuild_1M(b *testing.B) {
+	benchmarkOptimizedBuild(b, 1_000_000)
+}
+
+// BenchmarkOptimizedBuild_500K benchmarks the optimized Build with 500K prefixes.
+func BenchmarkOptimizedBuild_500K(b *testing.B) {
+	benchmarkOptimizedBuild(b, 500_000)
+}
+
+func benchmarkOptimizedBuild(b *testing.B, n int) {
+	b.Helper()
+	prefixes := generateRealisticPrefixes(n)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for range b.N {
+		dir := b.TempDir()
+		builder, err := NewStreamingMPHFBuilder(dir)
+		if err != nil {
+			b.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
+		}
+
+		for i, p := range prefixes {
+			if err := builder.Add(p, uint64(i)); err != nil {
+				builder.Close()
+				b.Fatalf("Add failed: %v", err)
+			}
+		}
+
+		if err := builder.Build(dir); err != nil {
+			builder.Close()
+			b.Fatalf("Build failed: %v", err)
+		}
+		builder.Close()
+	}
+}
+
+// BenchmarkBuildPhaseBreakdown_AddPhase measures the Add phase cost.
+func BenchmarkBuildPhaseBreakdown_AddPhase(b *testing.B) {
+	const n = 500_000
+	prefixes := generateRealisticPrefixes(n)
+
+	b.ReportAllocs()
+	for range b.N {
+		dir := b.TempDir()
+		builder, err := NewStreamingMPHFBuilder(dir)
+		if err != nil {
+			b.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
+		}
+
+		for i, p := range prefixes {
+			if err := builder.Add(p, uint64(i)); err != nil {
+				builder.Close()
+				b.Fatalf("Add failed: %v", err)
+			}
+		}
+		builder.Close()
+	}
+}
+
+// BenchmarkBuildPhaseBreakdown_BBHash measures BBHash construction cost.
+func BenchmarkBuildPhaseBreakdown_BBHash(b *testing.B) {
+	const n = 500_000
+	prefixes := generateRealisticPrefixes(n)
+
+	// Setup: complete Add phase once
+	dir := b.TempDir()
+	builder, err := NewStreamingMPHFBuilder(dir)
+	if err != nil {
+		b.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
+	}
+
+	for i, p := range prefixes {
+		if err := builder.Add(p, uint64(i)); err != nil {
+			builder.Close()
+			b.Fatalf("Add failed: %v", err)
+		}
+	}
+	builder.tempWriter.Flush()
+
+	// Copy hashes for repeated use
+	hashes := make([]uint64, len(builder.hashes))
+	copy(hashes, builder.hashes)
+	builder.Close()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for range b.N {
+		_, err := bbhash.New(hashes, bbhash.Gamma(2.0))
+		if err != nil {
+			b.Fatalf("bbhash.New failed: %v", err)
+		}
+	}
+}
+
+// BenchmarkBuildPhaseBreakdown_Find measures the Find() tight loop cost.
+func BenchmarkBuildPhaseBreakdown_Find(b *testing.B) {
+	const n = 500_000
+	prefixes := generateRealisticPrefixes(n)
+
+	// Setup: complete Add phase and build MPHF once
+	dir := b.TempDir()
+	builder, err := NewStreamingMPHFBuilder(dir)
+	if err != nil {
+		b.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
+	}
+
+	for i, p := range prefixes {
+		if err := builder.Add(p, uint64(i)); err != nil {
+			builder.Close()
+			b.Fatalf("Add failed: %v", err)
+		}
+	}
+	builder.tempWriter.Flush()
+
+	// Copy hashes
+	hashes := make([]uint64, len(builder.hashes))
+	copy(hashes, builder.hashes)
+
+	mph, err := bbhash.New(hashes, bbhash.Gamma(2.0))
+	if err != nil {
+		b.Fatalf("bbhash.New failed: %v", err)
+	}
+	builder.Close()
+
+	hashPositions := make([]int, n)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for range b.N {
+		// Tight loop: just Find() calls
+		for i, h := range hashes {
+			hashVal := mph.Find(h)
+			hashPositions[i] = int(hashVal - 1)
+		}
+	}
+}
+
+// BenchmarkBuildPhaseBreakdown_ArrayMapping measures the array copy cost.
+func BenchmarkBuildPhaseBreakdown_ArrayMapping(b *testing.B) {
+	const n = 500_000
+	prefixes := generateRealisticPrefixes(n)
+
+	// Setup: pre-compute hash positions
+	dir := b.TempDir()
+	builder, err := NewStreamingMPHFBuilder(dir)
+	if err != nil {
+		b.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
+	}
+
+	for i, p := range prefixes {
+		if err := builder.Add(p, uint64(i)); err != nil {
+			builder.Close()
+			b.Fatalf("Add failed: %v", err)
+		}
+	}
+	builder.tempWriter.Flush()
+
+	mph, err := bbhash.New(builder.hashes, bbhash.Gamma(2.0))
+	if err != nil {
+		b.Fatalf("bbhash.New failed: %v", err)
+	}
+
+	hashPositions := make([]int, n)
+	for i, h := range builder.hashes {
+		hashPositions[i] = int(mph.Find(h) - 1)
+	}
+
+	// Keep copies of source data
+	fingerprints := make([]uint64, len(builder.fingerprints))
+	copy(fingerprints, builder.fingerprints)
+	preorderPos := make([]uint64, len(builder.preorderPos))
+	copy(preorderPos, builder.preorderPos)
+	builder.Close()
+
+	outputFP := make([]uint64, n)
+	outputPos := make([]uint64, n)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for range b.N {
+		// Simple copy loop
+		for i, hashPos := range hashPositions {
+			outputFP[hashPos] = fingerprints[i]
+			outputPos[hashPos] = preorderPos[i]
+		}
+	}
+}
