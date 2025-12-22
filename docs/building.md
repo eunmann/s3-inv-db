@@ -1,277 +1,118 @@
 # Building Indexes
 
-This document explains how to build s3-inv-db indexes from S3 inventory data.
+Transform S3 inventory files into a queryable index using a streaming external sort pipeline.
 
-## Overview
-
-The build process streams S3 inventory files (CSV or Parquet) through a pure-Go external sort pipeline to construct a compact, queryable index:
-
-```
-S3 Inventory Files  →  Streaming Aggregation  →  External Sort  →  Index Files
-```
-
-The pipeline is fully streaming with bounded memory usage, and requires no CGO dependencies.
-
-## Input Format
-
-### AWS S3 Inventory Format
+## Input
 
 AWS S3 Inventory produces:
 1. A `manifest.json` describing the inventory
 2. Multiple data files (CSV, CSV.GZ, or Parquet)
 
-CSV files have **no header row**; column order is defined in the manifest's `fileSchema` field. Parquet files have embedded schema that is auto-detected.
-
-**Supported columns:**
-- `Key`: Object key (required)
-- `Size`: Object size in bytes (required)
-- `StorageClass`: Storage tier (optional, enables tier tracking)
-- `IntelligentTieringAccessTier`: Access tier for Intelligent-Tiering (optional)
+**Required columns:** `Key`, `Size`
+**Optional columns:** `StorageClass` (enables automatic tier tracking)
 
 ## CLI Usage
 
-### Building from S3 Inventory
-
 ```bash
 s3inv-index build \
-  --s3-manifest s3://inventory-bucket/my-bucket/2024-01-15T00-00Z/manifest.json \
+  --s3-manifest s3://inventory-bucket/path/manifest.json \
   --out ./my-index
 ```
 
-**Options:**
-- `--out`: Output directory for index files (required)
-- `--s3-manifest`: S3 URI to manifest.json (required)
-- `--verbose`: Enable debug level logging
-- `--pretty-logs`: Use human-friendly console output
+| Flag | Description |
+|------|-------------|
+| `--out` | Output directory for index files (required) |
+| `--s3-manifest` | S3 URI to inventory manifest.json (required) |
+| `--mem-budget` | Memory budget (e.g., `4GiB`, `8GB`). Default: 50% of RAM |
+| `--workers` | Concurrent S3 download/parse workers. Default: CPU count |
+| `--max-depth` | Maximum prefix depth to track (0 = unlimited) |
+| `--verbose` | Enable debug logging |
+| `--pretty-logs` | Human-friendly console output |
 
 ### AWS Credentials
 
-S3 access uses the standard AWS credential chain:
+Uses standard AWS credential chain:
 1. Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
 2. Shared credentials file (`~/.aws/credentials`)
-3. IAM role (when running on EC2/ECS/Lambda)
+3. IAM role (EC2/ECS/Lambda)
+
+## Build Pipeline
+
+```
+S3 Inventory → Streaming Aggregation → External Sort → Index Files
+```
+
+**Stages:**
+
+1. **Stream from S3**: Fetch and parse inventory files without downloading to disk
+2. **Aggregate in memory**: Accumulate prefix statistics, flush to run files when threshold reached
+3. **K-way merge**: Heap-based merge producing globally sorted prefixes
+4. **Build index**: Single-pass construction of columnar arrays, MPHF, and depth index
+5. **Finalize**: Write manifest with checksums, atomic rename to final location
+
+## Output Files
+
+| File | Description |
+|------|-------------|
+| `manifest.json` | Metadata and SHA-256 checksums |
+| `subtree_end.u64` | Subtree end positions |
+| `depth.u32` | Node depths |
+| `object_count.u64` | Object counts per prefix |
+| `total_bytes.u64` | Byte totals per prefix |
+| `max_depth_in_subtree.u32` | Maximum depth in each subtree |
+| `depth_offsets.u64` | Depth index offsets |
+| `depth_positions.u64` | Positions sorted by depth |
+| `mph.bin` | BBHash MPHF |
+| `mph_fp.u64` | Fingerprints for verification |
+| `mph_pos.u64` | Hash position → preorder position mapping |
+| `prefix_blob.bin` | Concatenated prefix strings |
+| `prefix_offsets.u64` | Offsets into prefix blob |
+
+**Tier statistics (if StorageClass present):**
+- `tiers.json`: Tier manifest
+- `tier_stats/<tier>_bytes.u64`, `tier_stats/<tier>_count.u64`: Per-tier arrays
 
 ## Programmatic Usage
-
-### Build from S3 Inventory
 
 ```go
 import (
     "context"
-    "os"
-    "os/signal"
-    "syscall"
-
     "github.com/eunmann/s3-inv-db/pkg/extsort"
     "github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
 
-func main() {
-    // Create a context that cancels on SIGINT/SIGTERM
-    ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-    defer stop()
-
-    // Create S3 client
-    client, err := s3fetch.NewClient(ctx)
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    outDir := "./my-index"
-    manifestURI := "s3://inventory-bucket/path/manifest.json"
-
-    // Create and run the pipeline
-    config := extsort.DefaultConfig()
-    pipeline := extsort.NewPipeline(config, client)
-
-    result, err := pipeline.Run(ctx, manifestURI, outDir)
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    log.Printf("Built index with %d prefixes in %v",
-        result.PrefixCount, result.Duration)
-}
-```
-
-## Build Pipeline Details
-
-### 1. S3 Streaming
-
-The `pkg/s3fetch` package streams inventory files:
-
-```go
+ctx := context.Background()
 client, _ := s3fetch.NewClient(ctx)
 
-// Fetch manifest
-bucket, key, _ := s3fetch.ParseS3URI(manifestURI)
-manifest, _ := client.FetchManifest(ctx, bucket, key)
+config := extsort.DefaultConfig()
+pipeline := extsort.NewPipeline(config, client)
 
-// Stream each inventory file
-for _, file := range manifest.Files {
-    reader, _ := client.StreamObject(ctx, destBucket, file.Key)
-    // Process reader...
-    reader.Close()
-}
+result, err := pipeline.Run(ctx, "s3://bucket/manifest.json", "./my-index")
 ```
 
-Features:
-- No local disk copies required
-- Automatic gzip decompression
-- Manifest parsing with column detection
+## Resource Usage
 
-### 2. Streaming Aggregation
+**Memory**: Bounded by `--mem-budget`. Default is 50% of system RAM, allocated as:
+- 50% for in-memory aggregator
+- 25% for run file buffers
+- 25% for merge and index building
 
-The `pkg/extsort` package aggregates prefix statistics in bounded memory:
+**Disk**: Temporary run files (~100 bytes/prefix) are cleaned up after merge. Final index is ~120 bytes/prefix.
 
-```go
-agg := extsort.NewAggregator(expectedObjects, maxDepth)
+## Crash Safety
 
-for record := range records {
-    agg.AddObject(record.Key, record.Size, record.TierID)
-}
-
-rows := agg.Drain()
-```
-
-When memory threshold is reached, sorted runs are flushed to temporary files.
-
-### 3. External Merge Sort
-
-Run files are merged using k-way merge to produce globally sorted output:
-
-```go
-merger := extsort.NewMerger(runFiles)
-for merger.Next() {
-    row := merger.Row()
-    // Process sorted, deduplicated row
-}
-```
-
-### 4. Index Construction
-
-The streaming index builder constructs the final index in a single pass:
-
-```go
-builder, _ := extsort.NewIndexBuilder(outDir, tempDir)
-for _, row := range sortedRows {
-    builder.Add(row)
-}
-builder.Finalize()
-```
-
-**Output files:**
-- `subtree_end.u64`: Subtree ranges
-- `depth.u32`: Node depths
-- `object_count.u64`: Object counts
-- `total_bytes.u64`: Byte totals
-- `mphf.bin`: Perfect hash function
-- `mphf_keys.bin`: Prefix keys for verification
-- `depth_index/`: Depth posting lists
-- `tier_*_count.u64`, `tier_*_bytes.u64`: Per-tier statistics (if tiers present)
-- `manifest.json`: File checksums
-
-### 5. Atomic Finalization
-
-The build uses atomic operations for crash safety:
-
+Builds use atomic operations:
 1. Write all files to `output.tmp/`
-2. Sync all files to disk
+2. Sync to disk
 3. Write manifest with checksums
-4. Atomic rename `output.tmp/` → `output/`
+4. Atomic rename to final location
 
-If the build crashes, no partial index is left behind.
-
-## One-Shot Builds
-
-The build pipeline is optimized for maximum throughput as a one-shot operation:
-- No checkpoint/resume overhead
-- Streaming aggregation with bounded memory
-- Always rebuilds from scratch for simplicity and speed
-
-If a build fails or is interrupted:
-1. Delete the output directory
-2. Delete any temporary run files
-3. Restart the build
-
-## Performance
-
-### Build Time
-
-Approximate build times (depends on S3 throughput and CPU):
-
-| Objects | Prefixes | Time |
-|---------|----------|------|
-| 1M | ~100K | ~30s-1min |
-| 10M | ~1M | ~5-10min |
-| 100M | ~10M | ~1hr |
-
-### Memory Usage
-
-Memory is bounded by:
-- In-memory aggregator buffer (configurable, default 256MB)
-- Run file buffers (~4MB per run)
-- MPHF construction (~8 bytes/key, temporary)
-
-Typical peak: ~400MB for large inventories.
-
-### Disk Usage
-
-Temporary run files: ~100 bytes per unique prefix (cleaned up after merge)
-Final index: ~80 bytes per unique prefix
-
-For 10M unique prefixes:
-- Temporary files: ~1GB (during build)
-- Final index: ~800MB
-
-## Configuration
-
-The pipeline can be configured via `extsort.Config`:
-
-```go
-config := extsort.Config{
-    TempDir:               "/tmp",
-    MemoryThreshold:       256 * 1024 * 1024, // 256MB
-    RunFileBufferSize:     4 * 1024 * 1024,   // 4MB
-    S3DownloadConcurrency: 4,
-    ParseConcurrency:      4,
-    IndexWriteConcurrency: 4,
-    MaxDepth:              0, // 0 = unlimited
-}
-```
+If interrupted, delete output directory and restart.
 
 ## Troubleshooting
 
-### S3 Access Denied
-
-Ensure your AWS credentials have:
-- `s3:GetObject` on the inventory bucket
-- Access to the manifest.json and all data files
-
-### Out of Memory
-
-Reduce the memory threshold:
-```go
-config := extsort.Config{
-    MemoryThreshold: 128 * 1024 * 1024, // 128MB instead of 256MB
-}
-```
-
-### Disk Space
-
-Ensure you have space for:
-- Temporary run files (~100 bytes per prefix during build)
-- Final index (~80 bytes per prefix)
-
-### Missing Columns
-
-Error: `column "Key" not found in schema`
-
-Check that your inventory includes the required columns (Key, Size) in the manifest's fileSchema.
-
-### Build Failed
-
-If a build fails:
-1. Delete the output directory and any `.tmp` directory
-2. Delete temporary run files (usually in system temp dir)
-3. Restart the build from scratch
+| Error | Solution |
+|-------|----------|
+| S3 Access Denied | Ensure `s3:GetObject` permission on inventory bucket |
+| Out of Memory | Reduce `--mem-budget` |
+| Column not found | Check inventory includes `Key` and `Size` in manifest schema |

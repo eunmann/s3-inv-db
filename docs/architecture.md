@@ -1,227 +1,97 @@
-# Architecture Overview
+# Architecture
 
-This document describes the high-level architecture of s3-inv-db, explaining how the system transforms S3 inventory CSV files into a queryable index.
+s3-inv-db transforms S3 inventory data into a compact, queryable index using streaming aggregation and external sort.
 
 ## System Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        BUILD PIPELINE                           │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐ │
-│  │   S3     │───►│ In-Memory│───►│ External │───►│ Streaming│ │
-│  │ Streaming│    │Aggregator│    │  Merge   │    │  Builder │ │
-│  └──────────┘    └──────────┘    └──────────┘    └──────────┘ │
-│       │               │               │               │        │
-│       ▼               ▼               ▼               ▼        │
-│  Inventory data   Run files      Sorted stream   Index files   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+BUILD PIPELINE
+┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
+│   S3     │───►│ In-Memory│───►│ External │───►│ Streaming│
+│ Streaming│    │Aggregator│    │  Merge   │    │  Builder │
+└──────────┘    └──────────┘    └──────────┘    └──────────┘
+      │               │               │               │
+      ▼               ▼               ▼               ▼
+ Inventory data   Run files      Sorted stream   Index files
 
-┌─────────────────────────────────────────────────────────────────┐
-│                        QUERY ENGINE                             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐                  │
-│  │   MPHF   │───►│ Columnar │───►│  Depth   │                  │
-│  │  Lookup  │    │  Arrays  │    │  Index   │                  │
-│  └──────────┘    └──────────┘    └──────────┘                  │
-│       │               │               │                         │
-│       ▼               ▼               ▼                         │
-│   O(1) prefix    Stats lookup   Depth queries                   │
-│     lookup                                                      │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+QUERY ENGINE
+┌──────────┐    ┌──────────┐    ┌──────────┐
+│   MPHF   │───►│ Columnar │───►│  Depth   │
+│  Lookup  │    │  Arrays  │    │  Index   │
+└──────────┘    └──────────┘    └──────────┘
+      │               │               │
+      ▼               ▼               ▼
+  O(1) prefix    Stats lookup   Depth queries
+    lookup
 ```
 
-## Core Components
+## Packages
 
-### 1. S3 Streaming (`pkg/s3fetch`)
+| Package | Purpose |
+|---------|---------|
+| `pkg/s3fetch` | Stream S3 inventory files, parse manifest |
+| `pkg/inventory` | Parse CSV/Parquet records |
+| `pkg/extsort` | External sort pipeline, aggregation, index building |
+| `pkg/format` | Columnar array format, MPHF, depth index |
+| `pkg/indexread` | Query API over memory-mapped files |
+| `pkg/pricing` | Storage cost estimation |
+| `pkg/membudget` | Memory budget management |
 
-Streams S3 inventory files directly from S3:
-- Fetches inventory manifest.json
-- Auto-detects format (CSV or Parquet) from manifest
-- Streams each inventory file without downloading to disk
-- Decompresses and parses on-the-fly
+## Build Pipeline
 
-**Key interfaces:**
-```go
-type Client struct {
-    // S3 operations
-}
+**Stage 1: Stream & Aggregate** (`pkg/s3fetch`, `pkg/extsort`)
+- Stream inventory files from S3
+- Aggregate prefix statistics in bounded memory
+- Flush to sorted run files when threshold reached
 
-func (c *Client) StreamObject(ctx, bucket, key string) (io.ReadCloser, error)
-```
-
-### 2. External Sort Pipeline (`pkg/extsort`)
-
-The build pipeline uses a streaming external sort approach with bounded memory:
-
-**Stage A: Streaming Ingest + Chunked Aggregation**
-- Streams inventory files (CSV or Parquet) from S3
-- Aggregates prefix statistics in memory using `Aggregator`
-- Uses fixed-size `[MaxTiers]uint64` arrays instead of maps for tier data
-- Flushes to sorted run files when memory threshold is exceeded
-
-**Stage B: Sort and Run File Spilling**
-- When memory threshold is reached, aggregator drains to sorted run file
-- Run files are sorted by prefix (lexicographic order) before writing
-- Binary format: length-prefixed records with tier arrays
-
-**Stage C: K-Way Merge**
+**Stage 2: K-Way Merge** (`pkg/extsort`)
 - Heap-based merge of all run files
-- Produces globally sorted stream of unique prefixes
-- Duplicates from different runs are merged (stats summed)
+- Produce globally sorted, deduplicated prefixes
 
-**Stage D: Streaming Index Build**
+**Stage 3: Index Build** (`pkg/extsort`, `pkg/format`)
 - Single-pass construction of columnar arrays
-- Computes subtree ranges on-the-fly using depth stack
-- Writes MPHF, depth index, and tier stats
+- Compute subtree ranges via depth stack
+- Build MPHF, depth index, and tier stats
 
-**Key properties:**
-- **Pure Go**: No CGO dependencies, cross-compiles easily
-- **Bounded memory**: Configurable threshold (~256MB default)
-- **Streaming**: No need to hold entire dataset in memory
-- **Dynamic scaling**: Concurrency scales with CPU count
+## Index Format
 
-### 3. Index Format (`pkg/format`)
+**Columnar arrays** (one value per node):
+- `subtree_end.u64`, `depth.u32`, `object_count.u64`, `total_bytes.u64`, `max_depth_in_subtree.u32`
 
-Writes the trie to disk in a columnar, memory-mapped format:
+**MPHF** (prefix → position lookup):
+- BBHash (~2.5 bits/key), fingerprints (FNV-1), position mapping
 
-**Columnar arrays** (one value per node, indexed by position):
-- `subtree_end.u64`: Subtree end positions
-- `depth.u32`: Node depths
-- `object_count.u64`: Object counts
-- `total_bytes.u64`: Byte totals
-- `max_depth_in_subtree.u32`: Max subtree depths
+**Depth index** (efficient depth queries):
+- `depth_offsets.u64`, `depth_positions.u64`
 
-**MPHF dictionary**:
-- Minimal Perfect Hash Function for O(1) prefix→position lookup
-- Uses BBHash algorithm (~2.5 bits per key)
+**Prefix strings**:
+- `prefix_blob.bin`, `prefix_offsets.u64`
 
-**Depth index**:
-- Posting lists of positions at each depth level
-- Enables efficient depth-based queries
+## Design Rationale
 
-**Tier statistics** (optional):
-- Per-tier count and byte arrays in `tier_stats/` directory
-- Only created for tiers with data
+| Choice | Why |
+|--------|-----|
+| Columnar format | Cache-efficient, mmap-friendly, simple |
+| MPHF | ~2.5 bits/key vs ~10+ bytes for hash table |
+| Pre-order positions | Subtree ranges are contiguous; range check replaces tree traversal |
+| Depth index | Jump directly to positions at target depth |
+| External sort | Pure Go, bounded memory, streaming |
 
-### 4. Index Reader (`pkg/indexread`)
+## Memory Model
 
-Provides the query API over memory-mapped index files:
+**Build time**: Bounded by `--mem-budget` (default: 50% of system RAM)
+- Aggregator buffer (50% of budget)
+- Run file I/O buffers (25%)
+- Merge and index building (25%)
+- MPHF construction (~8 bytes/key, temporary)
 
-```go
-type Index struct {
-    // Memory-mapped arrays
-    subtreeEnd        []uint64
-    depth             []uint32
-    objectCount       []uint64
-    totalBytes        []uint64
-    maxDepthInSubtree []uint32
-
-    // MPHF for prefix lookup
-    mphf *bbhash.BBHash
-
-    // Depth posting lists
-    depthIndex *DepthIndex
-
-    // Tier statistics
-    tierStats *TierStatsReader
-}
-```
-
-## Data Flow
-
-### Build Phase
-
-```
-1. Stream from S3
-   └── s3fetch.Client streams inventory files
-   └── inventory.InventoryReader parses records (CSV or Parquet)
-
-2. Aggregate in memory
-   └── extsort.Aggregator accumulates prefix stats
-   └── sync.Pool for PrefixStats to reduce allocations
-   └── Flush to run files when memory threshold reached
-
-3. K-way merge
-   └── extsort.MergeIterator heap-merges run files
-   └── Yields globally sorted, deduplicated stream
-
-4. Build index
-   └── extsort.IndexBuilder processes sorted stream
-   └── Computes subtree ranges via depth stack
-   └── Writes columnar arrays in single pass
-
-5. Finalize
-   └── Build MPHF from all prefixes
-   └── Write depth index posting lists
-   └── Write manifest with checksums
-   └── Atomic rename to final location
-```
-
-### Query Phase
-
-```
-1. Lookup prefix
-   └── MPHF hash → candidate position
-   └── Verify prefix matches (handles collisions)
-
-2. Get stats
-   └── Direct array access by position
-
-3. Find descendants at depth
-   └── Depth index → positions at target depth
-   └── Filter by subtree range [pos, subtree_end]
-
-4. Iterate children
-   └── DescendantIterator yields matching positions
-```
-
-## Design Decisions
-
-### Why columnar format?
-- **Cache efficiency**: Queries touch minimal data
-- **mmap-friendly**: OS manages memory automatically
-- **Simple**: No complex B-tree or LSM structures
-
-### Why MPHF instead of hash table?
-- **Space efficient**: ~2.5 bits/key vs ~10+ bytes/key
-- **No collisions in position space**: Perfect hash to positions
-- **Fast**: Single hash computation for lookup
-
-### Why pre-order positions?
-- **Subtree ranges**: All descendants are contiguous
-- **Efficient queries**: Range check replaces tree traversal
-- **Simple iteration**: Just iterate positions in range
-
-### Why depth index?
-- **Common query pattern**: "Show me all folders at depth 2"
-- **Avoids full scan**: Jump directly to relevant positions
-- **Composable**: Combine with subtree range for scoped queries
-
-### Why external sort instead of SQLite?
-- **Pure Go**: No CGO, simpler deployment and cross-compilation
-- **Bounded memory**: Configurable memory threshold
-- **Performance**: 3x faster than SQLite for large inventories
-- **Streaming**: Process arbitrarily large datasets
-
-## Memory Usage
-
-At query time, the index uses memory-mapped files:
-- **Resident memory**: Only pages actually accessed
-- **Shared across processes**: Multiple readers share pages
-- **No deserialization**: Direct access to on-disk format
-
-Build-time memory is bounded by:
-- In-memory aggregator buffer (configurable, default ~256MB)
-- Run file I/O buffers (~4MB per file)
-- MPHF construction (~8 bytes per key temporarily)
+**Query time**: Memory-mapped files
+- Only accessed pages are resident
+- Multiple readers share OS page cache
+- No deserialization; direct access to on-disk format
 
 ## Concurrency
 
-- **Read operations**: Fully thread-safe, lock-free
-- **Build operations**: Concurrent S3 download and CSV parsing
-- **Dynamic scaling**: Concurrency scales with `runtime.NumCPU()`
+- **Read operations**: Thread-safe, lock-free
+- **Build operations**: Concurrent S3 download, parsing, merge workers
+- **Scaling**: Concurrency scales with `runtime.NumCPU()`

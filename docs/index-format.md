@@ -6,29 +6,29 @@ This document describes the on-disk format of s3-inv-db indexes.
 
 ```
 index/
-├── manifest.json            # Index metadata and checksums
+├── manifest.json            # Metadata and checksums
 ├── subtree_end.u64          # Subtree end positions
 ├── depth.u32                # Node depths
 ├── object_count.u64         # Object counts per prefix
 ├── total_bytes.u64          # Byte totals per prefix
 ├── max_depth_in_subtree.u32 # Maximum depth in each subtree
-├── depth_offsets.u64        # Depth index: offsets into positions array
-├── depth_positions.u64      # Depth index: sorted positions by depth
-├── mph.bin                  # Minimal perfect hash function
-├── mph_fp.u64               # MPHF fingerprints for verification
-├── mph_pos.u64              # MPHF hash position to preorder position
+├── depth_offsets.u64        # Depth index offsets
+├── depth_positions.u64      # Positions sorted by depth
+├── mph.bin                  # BBHash MPHF
+├── mph_fp.u64               # Fingerprints for verification
+├── mph_pos.u64              # Hash position → preorder position
 ├── prefix_blob.bin          # Concatenated prefix strings
 ├── prefix_offsets.u64       # Offsets into prefix blob
-├── tiers.json               # Tier manifest (if tier tracking enabled)
-└── tier_stats/              # Per-tier statistics (if tier tracking enabled)
-    ├── tier_0_bytes.u64
-    ├── tier_0_counts.u64
+├── tiers.json               # Tier manifest (if present)
+└── tier_stats/              # Per-tier statistics (if present)
+    ├── standard_bytes.u64
+    ├── standard_count.u64
     └── ...
 ```
 
-## Manifest (`manifest.json`)
+## Manifest
 
-The manifest contains index metadata and SHA-256 checksums for integrity verification.
+`manifest.json` contains index metadata and SHA-256 checksums:
 
 ```json
 {
@@ -45,122 +45,125 @@ The manifest contains index metadata and SHA-256 checksums for integrity verific
 }
 ```
 
-**Fields:**
-- `version`: Format version (currently 1)
-- `created_at`: Build timestamp
-- `node_count`: Total number of prefix nodes
-- `max_depth`: Maximum depth in the trie
-- `files`: Map of filename to size and SHA-256 checksum
-
 ## Columnar Array Format
 
-All columnar array files share a common header format:
+All `.u64` and `.u32` files share a common header:
 
 ```
-┌──────────────────────────────────────────────┐
-│ Magic (4 bytes) │ Version (4 bytes) │        │
-│ Count (8 bytes) │ Width (4 bytes)   │ Data   │
-└──────────────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│ Magic (4B)  │ Version (4B) │ Count (8B) │
+│ Width (4B)  │ Data...                   │
+└─────────────────────────────────────────┘
 ```
 
 - **Magic**: `0x53334944` ("S3ID")
 - **Version**: Format version (1)
 - **Count**: Number of elements
-- **Width**: Element size in bytes (4, 8, etc.)
-- **Data**: Raw values in little-endian byte order
+- **Width**: Element size in bytes (4 or 8)
+- **Data**: Little-endian values
 
-### `subtree_end.u64`
+### Core Arrays
 
-For node at position `i`, `subtree_end[i]` is the position of the last descendant.
+| File | Type | Description |
+|------|------|-------------|
+| `subtree_end.u64` | uint64 | Position of last descendant for node `i` |
+| `depth.u32` | uint32 | Depth (number of `/` in prefix) |
+| `object_count.u64` | uint64 | Total objects in subtree |
+| `total_bytes.u64` | uint64 | Total bytes in subtree |
+| `max_depth_in_subtree.u32` | uint32 | Max depth of any descendant |
 
-**Usage:** To check if position `j` is a descendant of position `i`:
-```go
-isDescendant := j > i && j <= subtreeEnd[i]
-```
-
-### `depth.u32`
-
-Node depth = number of "/" characters in the prefix.
-
-### `object_count.u64` / `total_bytes.u64`
-
-Aggregated counts including all descendants in the subtree.
-
-### `max_depth_in_subtree.u32`
-
-Maximum depth of any descendant. Used to short-circuit depth queries.
+**Subtree check**: Position `j` is a descendant of `i` if `j > i && j <= subtree_end[i]`.
 
 ## Depth Index
 
-The depth index enables efficient queries like "all prefixes at depth N".
+Enables queries like "all prefixes at depth N within subtree".
 
-### `depth_offsets.u64`
+### Files
 
-Array of offsets into `depth_positions.u64`, one per depth level plus a sentinel.
+- `depth_offsets.u64`: Array of `max_depth + 2` offsets into positions array
+- `depth_positions.u64`: All positions sorted by depth, then by position
 
-```
-depth_offsets[d] = start index of depth d in positions array
-depth_offsets[d+1] = end index (exclusive)
-```
+### Usage
 
-### `depth_positions.u64`
-
-Sorted array of all positions, grouped by depth. Within each depth level,
-positions are sorted ascending (which corresponds to alphabetical prefix order).
-
-**Binary search usage:**
 ```go
-// Find positions at depth d in subtree [start, end]
+// Positions at depth d
 startIdx := depth_offsets[d]
 endIdx := depth_offsets[d+1]
 positions := depth_positions[startIdx:endIdx]
-// Binary search for positions in range
+
+// Binary search to find positions in subtree range
 ```
 
 ## MPHF (Minimal Perfect Hash Function)
 
-### `mph.bin`
+Maps prefix strings to positions using [BBHash](https://github.com/relab/bbhash).
 
-Serialized BBHash minimal perfect hash function. Maps prefix strings to
-consecutive integers [0, N) with no collisions for keys in the index.
+### Files
 
-### `mph_fp.u64`
+| File | Description |
+|------|-------------|
+| `mph.bin` | Serialized BBHash (~2.5 bits/key) |
+| `mph_fp.u64` | Fingerprints indexed by hash position |
+| `mph_pos.u64` | Hash position → preorder position mapping |
 
-Fingerprints (FNV-1a hashes) of each prefix, indexed by MPHF output position.
-Used to verify lookups and reject non-existent prefixes.
+### Hash Functions
 
-### `mph_pos.u64`
+Two different FNV variants reduce collision probability:
 
-Maps MPHF output position to preorder trie position. Needed because MPHF
-assigns arbitrary positions, but we need the actual trie position.
+- **Key hash** (FNV-1a): Used for MPHF construction and lookup
+- **Fingerprint** (FNV-1): Used for verification
 
-**Lookup algorithm:**
-1. `h = MPHF(prefix)` - get hash position
-2. `fp = FNV1a(prefix)` - compute fingerprint
-3. If `mph_fp[h] != fp` → prefix not found
-4. `pos = mph_pos[h]` - get preorder position
-5. Return `pos`
+### Lookup Algorithm
+
+```go
+func Lookup(prefix string) (pos uint64, ok bool) {
+    // 1. Hash prefix for MPHF lookup (FNV-1a)
+    keyHash := fnv1a(prefix)
+
+    // 2. Get candidate position from MPHF
+    hashPos := mph.Find(keyHash) - 1  // BBHash returns 1-indexed
+
+    // 3. Verify with fingerprint (FNV-1)
+    if mph_fp[hashPos] != fnv1(prefix) {
+        return 0, false  // Not in index
+    }
+
+    // 4. Return preorder position
+    return mph_pos[hashPos], true
+}
+```
 
 ## Prefix Strings
 
-### `prefix_blob.bin`
+### Files
 
-Concatenated UTF-8 prefix strings with no delimiters:
+- `prefix_blob.bin`: Concatenated UTF-8 strings (no delimiters)
+- `prefix_offsets.u64`: N+1 offsets; prefix `i` spans `[offsets[i], offsets[i+1])`
+
+### Example
+
 ```
-"a/"  "a/b/"  "a/b/c/"  "data/"  ...
+prefix_blob.bin:  "a/a/b/a/b/c/data/"
+prefix_offsets:   [0, 2, 6, 12, 17]
+
+Position 0: bytes[0:2]   = "a/"
+Position 1: bytes[2:6]   = "a/b/"
+Position 2: bytes[6:12]  = "a/b/c/"
+Position 3: bytes[12:17] = "data/"
 ```
-
-### `prefix_offsets.u64`
-
-Array of N+1 offsets. Prefix at position `i` spans bytes `[offsets[i], offsets[i+1])`.
 
 ## Tier Statistics (Optional)
 
-Created when building with `--track-tiers`.
+Created automatically when inventory includes `StorageClass` column.
 
-### `tiers.json`
+### Files
 
-Lists which tiers are present in the index:
+- `tiers.json`: Tier manifest listing present tiers
+- `tier_stats/<tier>_bytes.u64`: Bytes per node for tier
+- `tier_stats/<tier>_count.u64`: Object count per node for tier
+
+### Tier Manifest
+
 ```json
 {
   "tiers": [0, 1, 5],
@@ -168,27 +171,24 @@ Lists which tiers are present in the index:
 }
 ```
 
-### `tier_stats/tier_N_bytes.u64`
-
-Per-node byte count for tier N. Only created for tiers with data.
-
-### `tier_stats/tier_N_counts.u64`
-
-Per-node object count for tier N.
+Tier IDs map to S3 storage classes. Only tiers with data are included.
 
 ## Size Estimates
 
-For an index with N prefixes:
+For N prefixes:
 
 | Component | Size |
 |-----------|------|
 | Core arrays (5 files) | ~32N bytes |
 | Depth index | ~16N bytes |
-| MPHF + mappings | ~18N bytes |
+| MPHF + fingerprints + positions | ~18N bytes |
 | Prefix strings | ~50N bytes (varies) |
 | Tier stats (optional) | ~16N bytes per tier |
 
-**Total (without tiers):** ~120 bytes per prefix
-**Total (with tiers):** ~120 + 16T bytes per prefix (T = number of tiers)
+**Typical total**: ~120 bytes per prefix (without tiers)
 
-For 1 million prefixes: ~120 MB (without tiers)
+| Prefix Count | Index Size |
+|-------------:|----------:|
+| 100,000 | ~12 MB |
+| 1,000,000 | ~120 MB |
+| 10,000,000 | ~1.2 GB |
