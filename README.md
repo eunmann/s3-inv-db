@@ -1,93 +1,118 @@
-# s3-inv-db
+# s3inv-index
 
-A high-performance index for querying AWS S3 Inventory data. Build once, query instantly.
+A high-performance indexer for S3 inventory reports. Builds a compact, memory-mapped index that enables O(1) prefix lookups and fast subtree aggregation queries.
 
 ## Features
 
-- **O(1) prefix lookups** using minimal perfect hash functions
-- **Instant aggregate statistics** (object count, total bytes) for any prefix
-- **Automatic storage tier tracking** with per-tier byte and object counts
-- **Cost estimation** by storage class (Standard, Glacier, etc.)
-- **Sub-millisecond query latency** via memory-mapped columnar format
+- **O(1) prefix lookups** using minimal perfect hashing (BBHash)
+- **Memory-mapped queries** with sub-millisecond latency
+- **Bounded memory builds** via external sort with configurable budget
+- **Per-tier storage statistics** for all 12 S3 storage classes
+- **Subtree aggregation** queries by depth with filtering
+- **Pure Go** implementation with no CGO dependencies
+
+## Installation
+
+```bash
+go install github.com/eunmann/s3-inv-db/cmd/s3inv-index@latest
+```
+
+Or build from source:
+
+```bash
+git clone https://github.com/eunmann/s3-inv-db.git
+cd s3-inv-db
+go build -o s3inv-index ./cmd/s3inv-index
+```
 
 ## Quick Start
 
-```bash
-# Install
-go install github.com/eunmann/s3-inv-db/cmd/s3inv-index@latest
+### Build an Index
 
-# Build index from S3 inventory
+```bash
 s3inv-index build \
-  --s3-manifest s3://inventory-bucket/path/manifest.json \
+  --s3-manifest s3://my-bucket/inventory/data/manifest.json \
   --out ./my-index
-
-# Query
-s3inv-index query --index ./my-index --prefix "data/2024/" --show-tiers --estimate-cost
 ```
 
-## CLI Reference
-
-### Build Command
+### Query the Index
 
 ```bash
-s3inv-index build [options]
+# Basic prefix lookup
+s3inv-index query --index ./my-index --prefix "data/2024/"
+
+# With tier breakdown and cost estimate
+s3inv-index query --index ./my-index --prefix "data/2024/" \
+  --show-tiers --estimate-cost
 ```
 
-| Flag | Description |
-|------|-------------|
-| `--out` | Output directory for index files (required) |
-| `--s3-manifest` | S3 URI to inventory manifest.json (required) |
-| `--mem-budget` | Memory budget (e.g., `4GiB`, `8GB`). Default: 50% of RAM |
-| `--workers` | Concurrent S3 download/parse workers. Default: CPU count |
-| `--max-depth` | Maximum prefix depth to track (0 = unlimited) |
-| `--verbose` | Enable debug logging |
-| `--pretty-logs` | Human-friendly console output |
+## Architecture
 
-### Query Command
+The index stores prefix statistics in a columnar format optimized for memory-mapped access:
 
-```bash
-s3inv-index query [options]
 ```
-
-| Flag | Description |
-|------|-------------|
-| `--index` | Index directory to query (required) |
-| `--prefix` | Prefix to query (required) |
-| `--show-tiers` | Show per-tier breakdown |
-| `--estimate-cost` | Estimate monthly storage cost |
-| `--price-table` | Path to custom price table JSON |
+my-index/
+├── manifest.json         # File checksums and metadata
+├── subtree_end.u64       # Preorder subtree ranges
+├── depth.u32             # Prefix depths
+├── object_count.u64      # Object counts per prefix
+├── total_bytes.u64       # Byte totals per prefix
+├── max_depth_in_subtree.u32
+├── depth_offsets.u64     # Depth index for range queries
+├── depth_positions.u64
+├── mph.bin               # BBHash MPHF
+├── mph_fp.u64            # Fingerprints for verification
+├── mph_pos.u64           # Position mapping
+├── prefix_blob.bin       # Concatenated prefix strings
+├── prefix_offsets.u64    # Offsets into prefix blob
+└── tier_stats/           # Per-tier statistics (optional)
+    ├── tier_0_count.u64
+    ├── tier_0_bytes.u64
+    └── ...
+```
 
 ## Library Usage
 
 ```go
-idx, _ := indexread.Open("./my-index")
+import "github.com/eunmann/s3-inv-db/pkg/indexread"
+
+idx, err := indexread.Open("./my-index")
+if err != nil {
+    log.Fatal(err)
+}
 defer idx.Close()
 
+// O(1) prefix lookup
 pos, ok := idx.Lookup("data/2024/")
-if ok {
-    stats := idx.Stats(pos)
-    fmt.Printf("Objects: %d, Bytes: %d\n", stats.ObjectCount, stats.TotalBytes)
+if !ok {
+    log.Fatal("prefix not found")
+}
 
-    // Tier breakdown (automatic if inventory includes StorageClass)
-    if idx.HasTierData() {
-        for _, tb := range idx.TierBreakdown(pos) {
-            fmt.Printf("  %s: %d bytes\n", tb.TierName, tb.Bytes)
-        }
+// Get statistics
+stats := idx.Stats(pos)
+fmt.Printf("Objects: %d, Bytes: %d\n", stats.ObjectCount, stats.TotalBytes)
+
+// Get tier breakdown
+if idx.HasTierData() {
+    for _, tb := range idx.TierBreakdown(pos) {
+        fmt.Printf("%s: %d objects\n", tb.TierName, tb.ObjectCount)
     }
 }
 ```
 
 ## Documentation
 
+- [Overview](docs/overview.md) - System design and data flow
 - [Index Format](docs/index-format.md) - On-disk format specification
-- [Building](docs/building.md) - Build pipeline details
-- [Querying](docs/querying.md) - Query API reference
-- [Architecture](docs/architecture.md) - System design overview
+- [CLI Reference](docs/cli.md) - Command-line interface
+- [Library API](docs/library-api.md) - Go package documentation
+- [Performance](docs/performance.md) - Benchmarks and tuning
 
 ## Requirements
 
-- Go 1.23+
-- AWS credentials (for S3 inventory access)
+- Go 1.21+
+- AWS credentials configured for S3 access (build only)
+- S3 inventory configured in CSV or Parquet format
 
 ## License
 
