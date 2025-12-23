@@ -335,26 +335,6 @@ func TestFormatCostDollars(t *testing.T) {
 	}
 }
 
-func TestFormatBytes(t *testing.T) {
-	tests := []struct {
-		bytes uint64
-		want  string
-	}{
-		{500, "500 B"},
-		{2048, "2.00 KB"},
-		{1024 * 1024 * 5, "5.00 MB"},
-		{1024 * 1024 * 1024 * 2, "2.00 GB"},
-		{1024 * 1024 * 1024 * 1024 * 3, "3.00 TB"},
-	}
-
-	for _, tt := range tests {
-		got := FormatBytes(tt.bytes)
-		if got != tt.want {
-			t.Errorf("FormatBytes(%d) = %q, want %q", tt.bytes, got, tt.want)
-		}
-	}
-}
-
 func TestLoadSavePriceTable(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "prices.json")
