@@ -13,6 +13,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/membudget"
@@ -93,8 +94,8 @@ func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudget
 	// Log memory budget at startup
 	ramResult := sysmem.Total()
 	log.Info().
-		Str("total_ram", membudget.FormatBytes(ramResult.TotalBytes)).
-		Str("mem_budget", membudget.FormatBytes(budget.Total())).
+		Str("total_ram", humanfmt.BytesUint64(ramResult.TotalBytes)).
+		Str("mem_budget", humanfmt.BytesUint64(budget.Total())).
 		Str("mem_budget_source", string(budget.Source())).
 		Msg("memory budget configured")
 

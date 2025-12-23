@@ -24,7 +24,7 @@ func TestNewFromSystemRAM(t *testing.T) {
 
 	// Should have a reasonable budget
 	if budget.Total() < 1024*1024*1024 { // At least 1GB
-		t.Logf("Budget is %d bytes (%s)", budget.Total(), FormatBytes(budget.Total()))
+		t.Logf("Budget is %d bytes", budget.Total())
 	}
 
 	// Source should be auto or default
@@ -69,28 +69,6 @@ func TestParseHumanSize(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("ParseHumanSize(%q) = %d, want %d", tt.input, got, tt.want)
 			}
-		}
-	}
-}
-
-func TestFormatBytes(t *testing.T) {
-	tests := []struct {
-		input uint64
-		want  string
-	}{
-		{0, "0 B"},
-		{512, "512 B"},
-		{1024, "1.00 KiB"},
-		{1536, "1.50 KiB"},
-		{1024 * 1024, "1.00 MiB"},
-		{1024 * 1024 * 1024, "1.00 GiB"},
-		{4 * 1024 * 1024 * 1024, "4.00 GiB"},
-	}
-
-	for _, tt := range tests {
-		got := FormatBytes(tt.input)
-		if got != tt.want {
-			t.Errorf("FormatBytes(%d) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
 }
