@@ -10,6 +10,9 @@
 package extsort
 
 import (
+	"encoding/binary"
+	"fmt"
+	"io"
 	"runtime"
 	"slices"
 	"strings"
@@ -98,6 +101,58 @@ func (r *PrefixRow) Clone() *PrefixRow {
 	copy(clone.TierCounts[:], r.TierCounts[:])
 	copy(clone.TierBytes[:], r.TierBytes[:])
 	return clone
+}
+
+// readPrefixRowRecord reads a single PrefixRow from a reader using the common binary format.
+// The buf pointer is used for temporary storage and may be resized if needed.
+// Returns io.EOF when the source is exhausted.
+func readPrefixRowRecord(reader io.Reader, buf *[]byte) (*PrefixRow, error) {
+	var lenBuf [4]byte
+	if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
+		if err == io.EOF {
+			return nil, io.EOF
+		}
+		return nil, fmt.Errorf("read prefix length: %w", err)
+	}
+	prefixLen := int(binary.LittleEndian.Uint32(lenBuf[:]))
+
+	fixedSize := 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
+	recordSize := prefixLen + fixedSize
+
+	if len(*buf) < recordSize {
+		*buf = make([]byte, recordSize*2)
+	}
+
+	if _, err := io.ReadFull(reader, (*buf)[:recordSize]); err != nil {
+		return nil, fmt.Errorf("read record: %w", err)
+	}
+
+	row := &PrefixRow{}
+	offset := 0
+
+	row.Prefix = string((*buf)[offset : offset+prefixLen])
+	offset += prefixLen
+
+	row.Depth = binary.LittleEndian.Uint16((*buf)[offset:])
+	offset += 2
+
+	row.Count = binary.LittleEndian.Uint64((*buf)[offset:])
+	offset += 8
+
+	row.TotalBytes = binary.LittleEndian.Uint64((*buf)[offset:])
+	offset += 8
+
+	for i := range MaxTiers {
+		row.TierCounts[i] = binary.LittleEndian.Uint64((*buf)[offset:])
+		offset += 8
+	}
+
+	for i := range MaxTiers {
+		row.TierBytes[i] = binary.LittleEndian.Uint64((*buf)[offset:])
+		offset += 8
+	}
+
+	return row, nil
 }
 
 // SortPrefixRows sorts a slice of PrefixRows by prefix in lexicographic order.

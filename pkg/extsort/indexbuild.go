@@ -379,8 +379,6 @@ func (b *IndexBuilder) Finalize() error {
 }
 
 // FinalizeWithContext closes all remaining stack nodes and writes final files with logging.
-//
-//nolint:gocyclo // Sequential file finalization with error handling
 func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	if b.closed {
 		return nil
@@ -398,6 +396,57 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 
 	log.Debug().Msg("index builder: closing streaming writers")
 
+	if err := b.closeStreamingWriters(); err != nil {
+		return err
+	}
+
+	log.Debug().
+		Int("prefix_count", len(b.subtreeEnds)).
+		Msg("index builder: writing subtree_end array")
+
+	if err := b.writeSubtreeArrays(); err != nil {
+		return err
+	}
+
+	log.Debug().Msg("index builder: building depth index")
+
+	if err := b.depthIndexBuilder.Build(b.outDir); err != nil {
+		return fmt.Errorf("build depth index: %w", err)
+	}
+
+	log.Debug().
+		Uint64("prefix_count", b.mphfBuilder.Count()).
+		Msg("index builder: building MPHF (this may take a while for large datasets)")
+
+	if err := b.buildMPHF(ctx); err != nil {
+		return err
+	}
+
+	if err := b.writeTierManifest(); err != nil {
+		return err
+	}
+
+	log.Debug().Msg("index builder: writing manifest")
+
+	if err := format.WriteManifest(b.outDir, b.posCount, b.maxDepth); err != nil {
+		return fmt.Errorf("write manifest: %w", err)
+	}
+
+	log.Debug().Msg("index builder: syncing directory")
+
+	if err := format.SyncDir(b.outDir); err != nil {
+		return fmt.Errorf("sync dir: %w", err)
+	}
+
+	log.Debug().
+		Str("total_duration", humanfmt.Duration(time.Since(startTime))).
+		Msg("index builder: Finalize complete")
+
+	return nil
+}
+
+// closeStreamingWriters closes all streaming array writers.
+func (b *IndexBuilder) closeStreamingWriters() error {
 	if err := b.objectCountW.Close(); err != nil {
 		return fmt.Errorf("close object_count: %w", err)
 	}
@@ -418,11 +467,11 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 			return fmt.Errorf("close tier %d bytes: %w", tierID, err)
 		}
 	}
+	return nil
+}
 
-	log.Debug().
-		Int("prefix_count", len(b.subtreeEnds)).
-		Msg("index builder: writing subtree_end array")
-
+// writeSubtreeArrays writes subtree_end and max_depth_in_subtree arrays.
+func (b *IndexBuilder) writeSubtreeArrays() error {
 	subtreeEndW, err := format.NewArrayWriter(filepath.Join(b.outDir, "subtree_end.u64"), 8)
 	if err != nil {
 		return fmt.Errorf("create subtree_end writer: %w", err)
@@ -437,8 +486,6 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 		return fmt.Errorf("close subtree_end: %w", err)
 	}
 
-	log.Debug().Msg("index builder: writing max_depth_in_subtree array")
-
 	maxDepthW, err := format.NewArrayWriter(filepath.Join(b.outDir, "max_depth_in_subtree.u32"), 4)
 	if err != nil {
 		return fmt.Errorf("create max_depth_in_subtree writer: %w", err)
@@ -452,54 +499,36 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	if err := maxDepthW.Close(); err != nil {
 		return fmt.Errorf("close max_depth_in_subtree: %w", err)
 	}
+	return nil
+}
 
-	log.Debug().Msg("index builder: building depth index")
-
-	if err := b.depthIndexBuilder.Build(b.outDir); err != nil {
-		return fmt.Errorf("build depth index: %w", err)
-	}
-
-	log.Debug().
-		Uint64("prefix_count", b.mphfBuilder.Count()).
-		Msg("index builder: building MPHF (this may take a while for large datasets)")
-
+// buildMPHF builds the MPHF and logs progress.
+func (b *IndexBuilder) buildMPHF(ctx context.Context) error {
+	log := logctx.FromContext(ctx)
 	mphfStart := time.Now()
 	if err := b.mphfBuilder.Build(b.outDir); err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
-	// Clean up temporary files from streaming MPHF builder
 	b.mphfBuilder.Close()
 
 	log.Debug().
 		Str("mphf_duration", humanfmt.Duration(time.Since(mphfStart))).
 		Msg("index builder: MPHF build complete")
+	return nil
+}
 
-	if len(b.presentTiers) > 0 {
-		presentTierList := make([]tiers.ID, 0, len(b.presentTiers))
-		for tierID := range b.presentTiers {
-			presentTierList = append(presentTierList, tierID)
-		}
-		if err := tiers.WriteManifest(b.outDir, presentTierList); err != nil {
-			return fmt.Errorf("write tier manifest: %w", err)
-		}
+// writeTierManifest writes the tier manifest if tiers are present.
+func (b *IndexBuilder) writeTierManifest() error {
+	if len(b.presentTiers) == 0 {
+		return nil
 	}
-
-	log.Debug().Msg("index builder: writing manifest")
-
-	if err := format.WriteManifest(b.outDir, b.posCount, b.maxDepth); err != nil {
-		return fmt.Errorf("write manifest: %w", err)
+	presentTierList := make([]tiers.ID, 0, len(b.presentTiers))
+	for tierID := range b.presentTiers {
+		presentTierList = append(presentTierList, tierID)
 	}
-
-	log.Debug().Msg("index builder: syncing directory")
-
-	if err := format.SyncDir(b.outDir); err != nil {
-		return fmt.Errorf("sync dir: %w", err)
+	if err := tiers.WriteManifest(b.outDir, presentTierList); err != nil {
+		return fmt.Errorf("write tier manifest: %w", err)
 	}
-
-	log.Debug().
-		Str("total_duration", humanfmt.Duration(time.Since(startTime))).
-		Msg("index builder: Finalize complete")
-
 	return nil
 }
 

@@ -28,7 +28,6 @@ func TestDefaultDownloaderConfig(t *testing.T) {
 	}
 }
 
-//nolint:gocyclo // Test with multiple subtests
 func TestTempFileReader(t *testing.T) {
 	// Create a temp file with test data
 	tmpDir := t.TempDir()

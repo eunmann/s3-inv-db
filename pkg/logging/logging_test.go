@@ -67,7 +67,6 @@ func TestLogEvent_PrettyMode(t *testing.T) {
 			SetLogger(zerolog.New(&buf))
 			SetPrettyMode(tt.prettyMode)
 
-			//nolint:zerologlint // Event() wrapper terminates with Msg()
 			Event(L().Info()).
 				Bytes("bytes", 1073741824).
 				Duration("elapsed", 1500*time.Millisecond).
@@ -89,7 +88,7 @@ func TestLogEvent_PrettyMode(t *testing.T) {
 			hasHumanCount := bytes.Contains(buf.Bytes(), []byte(`"count_h":"1.50M"`))
 			hasHumanElapsed := bytes.Contains(buf.Bytes(), []byte(`"elapsed_h":`))
 
-			if tt.wantHuman { //nolint:nestif // Test validation branches
+			if tt.wantHuman {
 				if !hasHumanBytes {
 					t.Errorf("expected human bytes field in pretty mode, got: %s", output)
 				}

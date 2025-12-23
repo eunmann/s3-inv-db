@@ -137,10 +137,9 @@ func BenchmarkBBHashNew_1M(b *testing.B) {
 // QUERY BENCHMARKS
 // ----------------------------------------------------------------------------
 
-// BenchmarkMPHFQuery_1M benchmarks lookup performance with 1M keys.
-// This is the primary benchmark for query performance analysis.
-func BenchmarkMPHFQuery_1M(b *testing.B) {
-	const numPrefixes = 1_000_000
+// benchmarkMPHFQuery is a helper for MPHF query benchmarks with random access pattern.
+func benchmarkMPHFQuery(b *testing.B, numPrefixes int) {
+	b.Helper()
 	prefixes := generateRealisticPrefixes(numPrefixes)
 
 	// Build the MPHF once
@@ -188,51 +187,15 @@ func BenchmarkMPHFQuery_1M(b *testing.B) {
 	}
 }
 
+// BenchmarkMPHFQuery_1M benchmarks lookup performance with 1M keys.
+// This is the primary benchmark for query performance analysis.
+func BenchmarkMPHFQuery_1M(b *testing.B) {
+	benchmarkMPHFQuery(b, 1_000_000)
+}
+
 // BenchmarkMPHFQuery_5M benchmarks lookup with 5M keys for larger bitvectors.
 func BenchmarkMPHFQuery_5M(b *testing.B) {
-	const numPrefixes = 5_000_000
-	prefixes := generateRealisticPrefixes(numPrefixes)
-
-	dir := b.TempDir()
-	builder, err := NewStreamingMPHFBuilder(dir)
-	if err != nil {
-		b.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
-	}
-
-	for i, p := range prefixes {
-		if err := builder.Add(p, uint64(i)); err != nil {
-			builder.Close()
-			b.Fatalf("Add failed: %v", err)
-		}
-	}
-
-	if err := builder.Build(dir); err != nil {
-		builder.Close()
-		b.Fatalf("Build failed: %v", err)
-	}
-	builder.Close()
-
-	m, err := OpenMPHF(dir)
-	if err != nil {
-		b.Fatalf("OpenMPHF failed: %v", err)
-	}
-	defer m.Close()
-
-	queryOrder := make([]int, numPrefixes)
-	for i := range queryOrder {
-		queryOrder[i] = i
-	}
-	rand.Shuffle(len(queryOrder), func(i, j int) {
-		queryOrder[i], queryOrder[j] = queryOrder[j], queryOrder[i]
-	})
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := range b.N {
-		idx := queryOrder[i%numPrefixes]
-		_, _ = m.Lookup(prefixes[idx])
-	}
+	benchmarkMPHFQuery(b, 5_000_000)
 }
 
 // BenchmarkMPHFQuerySequential_1M benchmarks sequential lookups (better cache).

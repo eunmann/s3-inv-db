@@ -85,54 +85,37 @@ func Open(dir string) (*Index, error) {
 	return &idx, nil
 }
 
-// Close releases all resources.
-//
-//nolint:gocognit,gocyclo // Sequential resource cleanup with error aggregation
-func (idx *Index) Close() error {
+// closer is an interface for types with a Close method.
+type closer interface {
+	Close() error
+}
+
+// closeAll closes multiple resources and returns the first error encountered.
+func closeAll(closers ...closer) error {
 	var firstErr error
-
-	if idx.subtreeEnd != nil {
-		if err := idx.subtreeEnd.Close(); err != nil && firstErr == nil {
+	for _, c := range closers {
+		if c == nil {
+			continue
+		}
+		if err := c.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
-	if idx.depth != nil {
-		if err := idx.depth.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	if idx.objectCount != nil {
-		if err := idx.objectCount.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	if idx.totalBytes != nil {
-		if err := idx.totalBytes.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	if idx.maxDepthInSubtree != nil {
-		if err := idx.maxDepthInSubtree.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	if idx.depthIndex != nil {
-		if err := idx.depthIndex.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	if idx.mphf != nil {
-		if err := idx.mphf.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	if idx.tierStats != nil {
-		if err := idx.tierStats.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-
 	return firstErr
+}
+
+// Close releases all resources.
+func (idx *Index) Close() error {
+	return closeAll(
+		idx.subtreeEnd,
+		idx.depth,
+		idx.objectCount,
+		idx.totalBytes,
+		idx.maxDepthInSubtree,
+		idx.depthIndex,
+		idx.mphf,
+		idx.tierStats,
+	)
 }
 
 // Stats holds aggregated statistics for a prefix.

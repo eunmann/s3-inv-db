@@ -111,6 +111,79 @@ func (bi *benchIndex) Close() {
 	}
 }
 
+// benchmarkIndexOp benchmarks an index operation with sequential and random access patterns.
+// The opFunc is called with a prefix and should perform the operation being benchmarked.
+func benchmarkIndexOp(b *testing.B, opFunc func(bi *benchIndex, prefix string)) {
+	b.Helper()
+	for _, shape := range benchutil.TreeShapes {
+		for _, size := range benchutil.BenchmarkSizes {
+			name := fmt.Sprintf("%s/size=%d", shape, size)
+
+			b.Run(name+"/sequential", func(b *testing.B) {
+				keys := benchutil.GenerateKeys(size, shape)
+				bi := setupBenchIndex(b, keys)
+				defer bi.Close()
+
+				b.ResetTimer()
+				for i := range b.N {
+					prefix := bi.prefixes[i%len(bi.prefixes)]
+					opFunc(bi, prefix)
+				}
+			})
+
+			b.Run(name+"/random", func(b *testing.B) {
+				keys := benchutil.GenerateKeys(size, shape)
+				bi := setupBenchIndex(b, keys)
+				defer bi.Close()
+
+				rng := rand.New(rand.NewSource(benchutil.BenchmarkSeed))
+				randomIndices := make([]int, b.N)
+				for i := range randomIndices {
+					randomIndices[i] = rng.Intn(len(bi.prefixes))
+				}
+
+				b.ResetTimer()
+				for i := range b.N {
+					prefix := bi.prefixes[randomIndices[i]]
+					opFunc(bi, prefix)
+				}
+			})
+		}
+	}
+}
+
+// benchmarkConcurrentOp benchmarks a concurrent index operation with random and sequential patterns.
+// The opFunc is called with a prefix and should perform the operation being benchmarked.
+func benchmarkConcurrentOp(b *testing.B, opFunc func(bi *benchIndex, prefix string)) {
+	b.Helper()
+	bi := setupBenchIndexWithTiers(b, 50000)
+	defer bi.Close()
+
+	prefixCount := len(bi.prefixes)
+
+	b.Run("parallel_random", func(b *testing.B) {
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			rng := rand.New(rand.NewSource(rand.Int63()))
+			for pb.Next() {
+				idx := rng.Intn(prefixCount)
+				opFunc(bi, bi.prefixes[idx])
+			}
+		})
+	})
+
+	b.Run("parallel_sequential", func(b *testing.B) {
+		var counter uint64
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				i := int(atomic.AddUint64(&counter, 1) % uint64(prefixCount))
+				opFunc(bi, bi.prefixes[i])
+			}
+		})
+	})
+}
+
 // Shared fixture for index load benchmarks.
 var (
 	fixtureOnce sync.Once
@@ -181,80 +254,16 @@ func BenchmarkIndexOpen(b *testing.B) {
 
 // BenchmarkLookup benchmarks prefix lookup performance.
 func BenchmarkLookup(b *testing.B) {
-	for _, shape := range benchutil.TreeShapes {
-		for _, size := range benchutil.BenchmarkSizes {
-			name := fmt.Sprintf("%s/size=%d", shape, size)
-
-			b.Run(name+"/sequential", func(b *testing.B) {
-				keys := benchutil.GenerateKeys(size, shape)
-				bi := setupBenchIndex(b, keys)
-				defer bi.Close()
-
-				b.ResetTimer()
-				for i := range b.N {
-					prefix := bi.prefixes[i%len(bi.prefixes)]
-					_, _ = bi.idx.Lookup(prefix)
-				}
-			})
-
-			b.Run(name+"/random", func(b *testing.B) {
-				keys := benchutil.GenerateKeys(size, shape)
-				bi := setupBenchIndex(b, keys)
-				defer bi.Close()
-
-				rng := rand.New(rand.NewSource(benchutil.BenchmarkSeed))
-				randomIndices := make([]int, b.N)
-				for i := range randomIndices {
-					randomIndices[i] = rng.Intn(len(bi.prefixes))
-				}
-
-				b.ResetTimer()
-				for i := range b.N {
-					prefix := bi.prefixes[randomIndices[i]]
-					_, _ = bi.idx.Lookup(prefix)
-				}
-			})
-		}
-	}
+	benchmarkIndexOp(b, func(bi *benchIndex, prefix string) {
+		_, _ = bi.idx.Lookup(prefix)
+	})
 }
 
 // BenchmarkStats benchmarks stats retrieval after lookup.
 func BenchmarkStats(b *testing.B) {
-	for _, shape := range benchutil.TreeShapes {
-		for _, size := range benchutil.BenchmarkSizes {
-			name := fmt.Sprintf("%s/size=%d", shape, size)
-
-			b.Run(name+"/sequential", func(b *testing.B) {
-				keys := benchutil.GenerateKeys(size, shape)
-				bi := setupBenchIndex(b, keys)
-				defer bi.Close()
-
-				b.ResetTimer()
-				for i := range b.N {
-					prefix := bi.prefixes[i%len(bi.prefixes)]
-					_, _ = bi.idx.StatsForPrefix(prefix)
-				}
-			})
-
-			b.Run(name+"/random", func(b *testing.B) {
-				keys := benchutil.GenerateKeys(size, shape)
-				bi := setupBenchIndex(b, keys)
-				defer bi.Close()
-
-				rng := rand.New(rand.NewSource(benchutil.BenchmarkSeed))
-				randomIndices := make([]int, b.N)
-				for i := range randomIndices {
-					randomIndices[i] = rng.Intn(len(bi.prefixes))
-				}
-
-				b.ResetTimer()
-				for i := range b.N {
-					prefix := bi.prefixes[randomIndices[i]]
-					_, _ = bi.idx.StatsForPrefix(prefix)
-				}
-			})
-		}
-	}
+	benchmarkIndexOp(b, func(bi *benchIndex, prefix string) {
+		_, _ = bi.idx.StatsForPrefix(prefix)
+	})
 }
 
 // BenchmarkTierBreakdown benchmarks per-tier statistics retrieval.
@@ -553,62 +562,15 @@ func BenchmarkIndexOpen_Scaling(b *testing.B) {
 
 // BenchmarkConcurrentLookup tests concurrent prefix lookup performance.
 func BenchmarkConcurrentLookup(b *testing.B) {
-	bi := setupBenchIndexWithTiers(b, 50000)
-	defer bi.Close()
-
-	prefixCount := len(bi.prefixes)
-
-	b.Run("parallel_random", func(b *testing.B) {
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			rng := rand.New(rand.NewSource(rand.Int63()))
-			for pb.Next() {
-				idx := rng.Intn(prefixCount)
-				_, _ = bi.idx.Lookup(bi.prefixes[idx])
-			}
-		})
-	})
-
-	b.Run("parallel_sequential", func(b *testing.B) {
-		var counter uint64
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			for pb.Next() {
-				// Use atomic add to get unique sequential indices
-				i := int(atomic.AddUint64(&counter, 1) % uint64(prefixCount))
-				_, _ = bi.idx.Lookup(bi.prefixes[i])
-			}
-		})
+	benchmarkConcurrentOp(b, func(bi *benchIndex, prefix string) {
+		_, _ = bi.idx.Lookup(prefix)
 	})
 }
 
 // BenchmarkConcurrentStats tests concurrent stats retrieval performance.
 func BenchmarkConcurrentStats(b *testing.B) {
-	bi := setupBenchIndexWithTiers(b, 50000)
-	defer bi.Close()
-
-	prefixCount := len(bi.prefixes)
-
-	b.Run("parallel_random", func(b *testing.B) {
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			rng := rand.New(rand.NewSource(rand.Int63()))
-			for pb.Next() {
-				idx := rng.Intn(prefixCount)
-				_, _ = bi.idx.StatsForPrefix(bi.prefixes[idx])
-			}
-		})
-	})
-
-	b.Run("parallel_sequential", func(b *testing.B) {
-		var counter uint64
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			for pb.Next() {
-				i := int(atomic.AddUint64(&counter, 1) % uint64(prefixCount))
-				_, _ = bi.idx.StatsForPrefix(bi.prefixes[i])
-			}
-		})
+	benchmarkConcurrentOp(b, func(bi *benchIndex, prefix string) {
+		_, _ = bi.idx.StatsForPrefix(prefix)
 	})
 }
 

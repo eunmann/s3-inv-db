@@ -53,6 +53,7 @@ linters:
     - nestif
     - revive
     - whitespace
+    - dupl
 
     # Imports, modules & dependencies
     - depguard
@@ -191,15 +192,21 @@ linters:
       - std-error-handling
       - common-false-positives
     rules:
-      # Allow unused parameters in test helper functions
+      # Reduced lint strictness for test files (complexity/nesting checks)
       - path: _test\.go
         linters:
           - unparam
           - funlen
           - gocognit
+          - gocyclo
           - cyclop
           - maintidx
+          - nestif
           - errcheck
+      # Event(L().Info()) pattern: linter can't track that Event wrapper dispatches the event
+      - path: pkg/logging/logging_test\.go
+        linters:
+          - zerologlint
       # Allow context.TODO in tests
       - path: _test\.go
         text: "context.TODO"
@@ -208,6 +215,11 @@ linters:
         linters:
           - revive
         text: "dot-imports"
+      # Allow InventoryReader name (canonical public API)
+      - path: pkg/inventory/unified\.go
+        linters:
+          - revive
+        text: "InventoryReader"
 
 formatters:
   enable:

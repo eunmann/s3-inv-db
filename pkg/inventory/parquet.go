@@ -52,7 +52,7 @@ func NewParquetInventoryReader(r io.ReaderAt, size int64, cfg ParquetReaderConfi
 		return nil, fmt.Errorf("open parquet file: %w", err)
 	}
 
-	return newParquetReader(file, nil, cfg)
+	return newParquetReader(file, nil, cfg), nil
 }
 
 // NewParquetInventoryReaderFromReaderAt creates a Parquet inventory reader from an io.ReaderAt.
@@ -69,7 +69,7 @@ func NewParquetInventoryReaderFromReaderAt(r io.ReaderAt, size int64) (Inventory
 		return nil, err
 	}
 
-	return newParquetReader(file, nil, cfg)
+	return newParquetReader(file, nil, cfg), nil
 }
 
 // NewParquetInventoryReaderFromStream creates a Parquet inventory reader from a stream.
@@ -117,7 +117,7 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 		return nil, err
 	}
 
-	return newParquetReader(file, tempFile, cfg)
+	return newParquetReader(file, tempFile, cfg), nil
 }
 
 // NewParquetInventoryReaderWithConfig creates a Parquet reader with explicit config.
@@ -157,7 +157,7 @@ func NewParquetInventoryReaderWithConfig(r io.ReadCloser, size int64, cfg Parque
 		return nil, fmt.Errorf("open parquet file: %w", err)
 	}
 
-	return newParquetReader(file, tempFile, cfg)
+	return newParquetReader(file, tempFile, cfg), nil
 }
 
 // detectParquetSchema detects column indices from the Parquet schema.
@@ -195,12 +195,10 @@ func detectParquetSchema(schema *parquet.Schema) (ParquetReaderConfig, error) {
 }
 
 // newParquetReader creates a parquetInventoryReader from an open file.
-//
-//nolint:unparam // error return kept for future validation and interface consistency
-func newParquetReader(file *parquet.File, tempFile *os.File, cfg ParquetReaderConfig) (*parquetInventoryReader, error) {
+func newParquetReader(file *parquet.File, tempFile *os.File, cfg ParquetReaderConfig) *parquetInventoryReader {
 	rowGroups := file.RowGroups()
 
-	r := &parquetInventoryReader{
+	return &parquetInventoryReader{
 		file:          file,
 		tempFile:      tempFile,
 		schema:        file.Schema(),
@@ -212,17 +210,15 @@ func newParquetReader(file *parquet.File, tempFile *os.File, cfg ParquetReaderCo
 		currentRGIdx:  -1,
 		rowBuf:        make([]parquet.Row, 1024), // Buffer 1024 rows at a time
 	}
-
-	return r, nil
 }
 
 // Next returns the next inventory row.
-func (r *parquetInventoryReader) Next() (InventoryRow, error) {
+func (r *parquetInventoryReader) Next() (Row, error) {
 	for {
 		if r.bufIdx < r.bufLen {
 			row := r.rowBuf[r.bufIdx]
 			r.bufIdx++
-			return r.rowToInventoryRow(row), nil
+			return r.rowToRow(row), nil
 		}
 
 		if r.currentRows != nil {
@@ -233,7 +229,7 @@ func (r *parquetInventoryReader) Next() (InventoryRow, error) {
 				continue
 			}
 			if err != nil && !errors.Is(err, io.EOF) {
-				return InventoryRow{}, fmt.Errorf("read parquet rows: %w", err)
+				return Row{}, fmt.Errorf("read parquet rows: %w", err)
 			}
 			r.currentRows.Close()
 			r.currentRows = nil
@@ -241,16 +237,16 @@ func (r *parquetInventoryReader) Next() (InventoryRow, error) {
 
 		r.currentRGIdx++
 		if r.currentRGIdx >= len(r.rowGroups) {
-			return InventoryRow{}, io.EOF
+			return Row{}, io.EOF
 		}
 
 		r.currentRows = r.rowGroups[r.currentRGIdx].Rows()
 	}
 }
 
-// rowToInventoryRow converts a parquet.Row to an InventoryRow.
-func (r *parquetInventoryReader) rowToInventoryRow(row parquet.Row) InventoryRow {
-	inv := InventoryRow{}
+// rowToRow converts a parquet.Row to an Row.
+func (r *parquetInventoryReader) rowToRow(row parquet.Row) Row {
+	inv := Row{}
 
 	for _, val := range row {
 		colIdx := val.Column()

@@ -18,6 +18,7 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/memdiag"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
+	"github.com/rs/zerolog"
 )
 
 // Pipeline orchestrates the external sort build process.
@@ -248,42 +249,99 @@ func estimateObjectCount(fileSize int64, format s3fetch.InventoryFormat) int {
 	return int(estimate)
 }
 
+// ingestConfig holds configuration for the ingest phase.
+type ingestConfig struct {
+	manifest      *s3fetch.Manifest
+	format        s3fetch.InventoryFormat
+	destBucket    string
+	keyCol        int
+	sizeCol       int
+	storageCol    int
+	accessTierCol int
+	numWorkers    int
+	tierMapping   *tiers.Mapping
+}
+
 // runIngestPhase streams S3 inventory and creates sorted run files.
 // It uses concurrent workers to download and parse chunks in parallel.
-//
-//nolint:gocognit,gocyclo,cyclop,funlen,maintidx // Complex pipeline coordination logic
 func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error {
+	log := logctx.FromContext(ctx)
+
+	cfg, err := p.setupIngestConfig(ctx, manifestURI)
+	if err != nil {
+		return err
+	}
+
+	log.Info().
+		Str("format", cfg.formatString()).
+		Int("chunks_count", len(cfg.manifest.Files)).
+		Int("workers_count", cfg.numWorkers).
+		Msg("inventory manifest loaded")
+
+	return p.runIngestLoop(ctx, cfg)
+}
+
+// setupIngestConfig parses the manifest and computes configuration.
+func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*ingestConfig, error) {
 	log := logctx.FromContext(ctx)
 
 	bucket, key, err := s3fetch.ParseS3URI(manifestURI)
 	if err != nil {
-		return fmt.Errorf("parse manifest URI: %w", err)
+		return nil, fmt.Errorf("parse manifest URI: %w", err)
 	}
 
 	manifest, err := p.s3Client.FetchManifest(ctx, bucket, key)
 	if err != nil {
-		return fmt.Errorf("fetch manifest: %w", err)
+		return nil, fmt.Errorf("fetch manifest: %w", err)
 	}
 
-	format := manifest.DetectFormat()
-	formatStr := "CSV"
-	if format == s3fetch.InventoryFormatParquet {
-		formatStr = "Parquet"
+	keyCol, err := manifest.KeyColumnIndex()
+	if err != nil {
+		return nil, fmt.Errorf("get key column: %w", err)
+	}
+	sizeCol, err := manifest.SizeColumnIndex()
+	if err != nil {
+		return nil, fmt.Errorf("get size column: %w", err)
 	}
 
+	destBucket, err := manifest.GetDestinationBucketName()
+	if err != nil {
+		return nil, fmt.Errorf("get destination bucket: %w", err)
+	}
+
+	numWorkers := p.computeWorkerCount(log)
+
+	return &ingestConfig{
+		manifest:      manifest,
+		format:        manifest.DetectFormat(),
+		destBucket:    destBucket,
+		keyCol:        keyCol,
+		sizeCol:       sizeCol,
+		storageCol:    manifest.StorageClassColumnIndex(),
+		accessTierCol: manifest.AccessTierColumnIndex(),
+		numWorkers:    numWorkers,
+		tierMapping:   tiers.NewMapping(),
+	}, nil
+}
+
+// formatString returns a human-readable format name.
+func (c *ingestConfig) formatString() string {
+	if c.format == s3fetch.InventoryFormatParquet {
+		return "Parquet"
+	}
+	return "CSV"
+}
+
+// computeWorkerCount calculates the number of workers based on memory budget.
+func (p *Pipeline) computeWorkerCount(log zerolog.Logger) int {
 	numWorkers := p.config.S3DownloadConcurrency
 	if numWorkers <= 0 {
 		numWorkers = runtime.NumCPU()
 	}
 
-	// Coordinate workers with memory budget
-	// Each worker uses memory for:
-	// 1. S3 Download Manager buffers: PartSize * PartConcurrency (default: 16MB * 8 = 128MB)
-	// 2. Parsed object batch: ~50MB typical (1M objects * 50 bytes each)
-	// We calculate based on actual config values for accurate accounting.
 	dlConfig := p.config.S3DownloaderConfig()
 	downloadBufferPerWorker := uint64(dlConfig.PartSize) * uint64(dlConfig.Concurrency)
-	const parsedBatchOverhead uint64 = 64 * 1024 * 1024 // 64MB for parsed objects per worker
+	const parsedBatchOverhead uint64 = 64 * 1024 * 1024
 	bytesPerWorkerInFlight := downloadBufferPerWorker + parsedBatchOverhead
 
 	p.config.EnsureBudget()
@@ -293,60 +351,35 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 
 	maxWorkersFromBudget := int(headroom / bytesPerWorkerInFlight)
 	if maxWorkersFromBudget < 2 {
-		maxWorkersFromBudget = 2 // minimum 2 workers
+		maxWorkersFromBudget = 2
 	}
 
-	originalWorkers := numWorkers
 	if numWorkers > maxWorkersFromBudget {
-		numWorkers = maxWorkersFromBudget
 		log.Warn().
-			Int("requested_workers", originalWorkers).
+			Int("requested_workers", numWorkers).
 			Int("max_from_budget", maxWorkersFromBudget).
 			Uint64("headroom_mb", headroom/(1024*1024)).
 			Uint64("per_worker_mb", bytesPerWorkerInFlight/(1024*1024)).
 			Msg("reducing worker count to fit memory budget")
+		numWorkers = maxWorkersFromBudget
 	}
+	return numWorkers
+}
 
-	log.Info().
-		Str("format", formatStr).
-		Int("chunks_count", len(manifest.Files)).
-		Int("workers_count", numWorkers).
-		Msg("inventory manifest loaded")
+// runIngestLoop runs the main ingest loop with worker coordination.
+func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
+	log := logctx.FromContext(ctx)
+	totalChunks := len(cfg.manifest.Files)
 
-	keyCol, err := manifest.KeyColumnIndex()
-	if err != nil {
-		return fmt.Errorf("get key column: %w", err)
-	}
-	sizeCol, err := manifest.SizeColumnIndex()
-	if err != nil {
-		return fmt.Errorf("get size column: %w", err)
-	}
-	storageCol := manifest.StorageClassColumnIndex()
-	accessTierCol := manifest.AccessTierColumnIndex()
-
-	destBucket, err := manifest.GetDestinationBucketName()
-	if err != nil {
-		return fmt.Errorf("get destination bucket: %w", err)
-	}
-
-	tierMapping := tiers.NewMapping()
-	totalChunks := len(manifest.Files)
-
-	// Create job channel - minimal buffer to avoid queuing too many chunks
-	// Each chunk downloads ~10-100MB, so we don't want many waiting
-	jobs := make(chan chunkJob, numWorkers)
-
-	// Create result channel - minimal buffer to limit memory for batches
-	// Each batch holds all objects from a chunk, which can be 50-200MB
+	jobs := make(chan chunkJob, cfg.numWorkers)
 	results := make(chan objectBatch, 2)
 
-	// Context for cancellation on error
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	// Start workers
 	var wg sync.WaitGroup
-	for range numWorkers {
+	for range cfg.numWorkers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -354,39 +387,51 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 		}()
 	}
 
-	// Start job sender in background
-	go func() {
-		defer close(jobs)
-		for i, file := range manifest.Files {
-			select {
-			case <-ctx.Done():
-				return
-			case jobs <- chunkJob{
-				index:  i,
-				bucket: destBucket,
-				key:    file.Key,
-				config: chunkConfig{
-					format:        format,
-					keyCol:        keyCol,
-					sizeCol:       sizeCol,
-					storageCol:    storageCol,
-					accessTierCol: accessTierCol,
-					tierMapping:   tierMapping,
-					fileSize:      file.Size,
-				},
-			}:
-			}
-		}
-	}()
+	// Start job sender
+	go p.sendIngestJobs(ctx, cfg, jobs)
 
-	// Close results channel when all workers done
+	// Close results when workers done
 	go func() {
 		wg.Wait()
 		close(results)
 	}()
 
-	// Aggregation loop - runs in main goroutine
-	// Initial capacity of 10K prefixes (~3MB at ~300 bytes/prefix) - map will grow as needed
+	return p.processIngestResults(ctx, log, results, cancel, totalChunks)
+}
+
+// sendIngestJobs sends chunk jobs to workers.
+func (p *Pipeline) sendIngestJobs(ctx context.Context, cfg *ingestConfig, jobs chan<- chunkJob) {
+	defer close(jobs)
+	for i, file := range cfg.manifest.Files {
+		select {
+		case <-ctx.Done():
+			return
+		case jobs <- chunkJob{
+			index:  i,
+			bucket: cfg.destBucket,
+			key:    file.Key,
+			config: chunkConfig{
+				format:        cfg.format,
+				keyCol:        cfg.keyCol,
+				sizeCol:       cfg.sizeCol,
+				storageCol:    cfg.storageCol,
+				accessTierCol: cfg.accessTierCol,
+				tierMapping:   cfg.tierMapping,
+				fileSize:      file.Size,
+			},
+		}:
+		}
+	}
+}
+
+// processIngestResults processes results from workers and aggregates data.
+func (p *Pipeline) processIngestResults(
+	ctx context.Context,
+	log zerolog.Logger,
+	results <-chan objectBatch,
+	cancel context.CancelFunc,
+	totalChunks int,
+) error {
 	agg := NewAggregator(10000, p.config.MaxDepth)
 	progressInterval := max(totalChunks/10, 1)
 	var firstErr error
@@ -399,61 +444,20 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 				firstErr = fmt.Errorf("context cancelled: %w", ctx.Err())
 			}
 			cancel()
-			// Drain remaining results to allow workers to exit
 			for range results {
-				// Intentionally empty: just consuming remaining items
 				continue
 			}
 			return firstErr
 		default:
 		}
 
-		if batch.err != nil {
-			if firstErr == nil {
-				firstErr = batch.err
-				cancel() // Signal workers to stop
-			}
-			continue
+		batchErr, flushErr := p.handleIngestBatch(ctx, log, agg, batch, totalChunks, progressInterval)
+		if batchErr != nil && firstErr == nil {
+			firstErr = batchErr
+			cancel()
 		}
-
-		// Aggregate all objects in this batch
-		for _, obj := range batch.objects {
-			agg.AddObject(obj.key, obj.size, obj.tierID)
-			atomic.AddInt64(&p.objectsProcessed, 1)
-			atomic.AddInt64(&p.bytesProcessed, int64(obj.size))
-		}
-
-		atomic.AddInt64(&p.chunksProcessed, 1)
-		chunkNum := int(atomic.LoadInt64(&p.chunksProcessed))
-
-		// Log progress at intervals
-		if chunkNum%progressInterval == 0 || chunkNum == totalChunks {
-			elapsed := time.Since(p.startTime)
-			avgPerChunk := elapsed / time.Duration(chunkNum)
-			remaining := time.Duration(totalChunks-chunkNum) * avgPerChunk
-			pct := float64(chunkNum) * 100.0 / float64(totalChunks)
-
-			log.Info().
-				Int("chunk_num", chunkNum).
-				Int("chunks_total", totalChunks).
-				Float64("progress_pct", pct).
-				Int64("objects_count", atomic.LoadInt64(&p.objectsProcessed)).
-				Dur("eta_ms", remaining).
-				Msg("ingest progress")
-		}
-
-		// Flush if memory threshold exceeded
-		// Use aggregator budget (50% of total) instead of full budget
-		// This ensures aggregator memory stays within its allocated fraction
-		heapThreshold := p.config.MemoryBudget.AggregatorBudget()
-		if ShouldFlush(heapThreshold) {
-			p.memTracker.LogNow("pre_flush")
-			if err := p.flushAggregator(ctx, agg); err != nil {
-				return fmt.Errorf("flush aggregator: %w", err)
-			}
-			// Force GC after flush to release memory promptly
-			runtime.GC()
-			p.memTracker.LogNow("post_flush_gc")
+		if flushErr != nil {
+			return flushErr
 		}
 	}
 
@@ -461,7 +465,6 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 		return fmt.Errorf("process chunk: %w", firstErr)
 	}
 
-	// Final flush
 	if agg.PrefixCount() > 0 {
 		if err := p.flushAggregator(ctx, agg); err != nil {
 			return fmt.Errorf("final flush: %w", err)
@@ -469,6 +472,63 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 	}
 
 	return nil
+}
+
+// handleIngestBatch processes a single batch of objects.
+// Returns (batchErr, flushErr) where batchErr is the batch's own error (if any),
+// and flushErr is set if flushing to disk failed.
+func (p *Pipeline) handleIngestBatch(
+	ctx context.Context,
+	log zerolog.Logger,
+	agg *Aggregator,
+	batch objectBatch,
+	totalChunks int,
+	progressInterval int,
+) (batchErr, flushErr error) {
+	if batch.err != nil {
+		return batch.err, nil
+	}
+
+	for _, obj := range batch.objects {
+		agg.AddObject(obj.key, obj.size, obj.tierID)
+		atomic.AddInt64(&p.objectsProcessed, 1)
+		atomic.AddInt64(&p.bytesProcessed, int64(obj.size))
+	}
+
+	atomic.AddInt64(&p.chunksProcessed, 1)
+	chunkNum := int(atomic.LoadInt64(&p.chunksProcessed))
+
+	if chunkNum%progressInterval == 0 || chunkNum == totalChunks {
+		p.logIngestProgress(log, chunkNum, totalChunks)
+	}
+
+	heapThreshold := p.config.MemoryBudget.AggregatorBudget()
+	if ShouldFlush(heapThreshold) {
+		p.memTracker.LogNow("pre_flush")
+		if err := p.flushAggregator(ctx, agg); err != nil {
+			return nil, fmt.Errorf("flush aggregator: %w", err)
+		}
+		runtime.GC()
+		p.memTracker.LogNow("post_flush_gc")
+	}
+
+	return nil, nil
+}
+
+// logIngestProgress logs progress information.
+func (p *Pipeline) logIngestProgress(log zerolog.Logger, chunkNum, totalChunks int) {
+	elapsed := time.Since(p.startTime)
+	avgPerChunk := elapsed / time.Duration(chunkNum)
+	remaining := time.Duration(totalChunks-chunkNum) * avgPerChunk
+	pct := float64(chunkNum) * 100.0 / float64(totalChunks)
+
+	log.Info().
+		Int("chunk_num", chunkNum).
+		Int("chunks_total", totalChunks).
+		Float64("progress_pct", pct).
+		Int64("objects_count", atomic.LoadInt64(&p.objectsProcessed)).
+		Dur("eta_ms", remaining).
+		Msg("ingest progress")
 }
 
 // chunkWorker processes chunks from the jobs channel and sends results to the results channel.

@@ -11,7 +11,6 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-//nolint:gocyclo // Test coverage over multiple scenarios requires high cyclomatic complexity
 func TestCompressedRunFile(t *testing.T) {
 	t.Run("write and read", func(t *testing.T) {
 		tmpDir := t.TempDir()

@@ -325,46 +325,9 @@ func (r *CompressedRunReader) Read() (*PrefixRow, error) {
 		return nil, io.EOF
 	}
 
-	var lenBuf [4]byte
-	if _, err := io.ReadFull(r.reader, lenBuf[:]); err != nil {
-		return nil, fmt.Errorf("read prefix length: %w", err)
-	}
-	prefixLen := int(binary.LittleEndian.Uint32(lenBuf[:]))
-
-	fixedSize := 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
-	recordSize := prefixLen + fixedSize
-
-	if len(r.buf) < recordSize {
-		r.buf = make([]byte, recordSize*2)
-	}
-
-	if _, err := io.ReadFull(r.reader, r.buf[:recordSize]); err != nil {
-		return nil, fmt.Errorf("read record: %w", err)
-	}
-
-	row := &PrefixRow{}
-	offset := 0
-
-	row.Prefix = string(r.buf[offset : offset+prefixLen])
-	offset += prefixLen
-
-	row.Depth = binary.LittleEndian.Uint16(r.buf[offset:])
-	offset += 2
-
-	row.Count = binary.LittleEndian.Uint64(r.buf[offset:])
-	offset += 8
-
-	row.TotalBytes = binary.LittleEndian.Uint64(r.buf[offset:])
-	offset += 8
-
-	for i := range MaxTiers {
-		row.TierCounts[i] = binary.LittleEndian.Uint64(r.buf[offset:])
-		offset += 8
-	}
-
-	for i := range MaxTiers {
-		row.TierBytes[i] = binary.LittleEndian.Uint64(r.buf[offset:])
-		offset += 8
+	row, err := readPrefixRowRecord(r.reader, &r.buf)
+	if err != nil {
+		return nil, err
 	}
 
 	r.read++

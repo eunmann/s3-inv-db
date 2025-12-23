@@ -252,7 +252,7 @@ func (r *CSVReader) Read() (Record, error) {
 		fields, err := r.csvReader.Read()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return Record{}, err //nolint:wrapcheck // io.EOF is intentional for iteration
+				return Record{}, io.EOF
 			}
 			return Record{}, fmt.Errorf("read CSV row: %w", err)
 		}

@@ -2,10 +2,8 @@ package format
 
 import (
 	"bufio"
-	"encoding/binary"
 	"fmt"
 	"hash/fnv"
-	"io"
 	"runtime"
 	"sync"
 	"testing"
@@ -300,11 +298,7 @@ func computeFingerprintsWithMode(
 	}
 
 	const chunkSize = 50000
-
-	type workItem struct {
-		items []prefixChunkItem
-	}
-	workChan := make(chan workItem, numWorkers*2)
+	workChan := make(chan []prefixChunkItem, numWorkers*2)
 	errChan := make(chan error, numWorkers)
 
 	var wg sync.WaitGroup
@@ -312,103 +306,16 @@ func computeFingerprintsWithMode(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for work := range workChan {
-				for _, item := range work.items {
-					keyHash := hashBytes(item.prefixBytes)
-					hashVal := mph.Find(keyHash)
-					if hashVal == 0 {
-						select {
-						case errChan <- fmt.Errorf("MPHF lookup failed for prefix at index %d", item.index):
-						default:
-						}
-						return
-					}
-					hashPos := int(hashVal - 1)
-
-					// Compute fingerprint based on mode
-					var fp uint64
-					switch mode {
-					case FingerprintFull:
-						fp = computeFingerprintBytes(item.prefixBytes)
-					case FingerprintNone:
-						fp = 0 // No fingerprint computation
-					case Fingerprint32Bit:
-						fp = computeFingerprintBytes(item.prefixBytes) & 0xFFFFFFFF
-					case FingerprintXOR:
-						fp = keyHash ^ uint64(hashPos)
-					case FingerprintZeroCopy:
-						fp = fnvZeroCopy(item.prefixBytes)
-					}
-
-					fingerprints[hashPos] = fp
-					preorderPositions[hashPos] = preorderPos[item.index]
-					orderedPrefixOffsets[hashPos] = item.offset
-				}
-			}
+			fingerprintModeWorker(workChan, errChan, mph, fingerprints, preorderPositions, orderedPrefixOffsets, preorderPos, mode)
 		}()
 	}
 
-	var lenBuf [4]byte
-	currentOffset := uint64(0)
-	processed := 0
-	const estimatedAvgPrefixLen = 24
-
-	for processed < n {
-		remaining := n - processed
-		thisChunk := chunkSize
-		if remaining < thisChunk {
-			thisChunk = remaining
-		}
-
-		chunkBuffer := make([]byte, 0, thisChunk*estimatedAvgPrefixLen)
-		items := make([]prefixChunkItem, 0, thisChunk)
-
-		for range thisChunk {
-			if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
-				close(workChan)
-				wg.Wait()
-				return fmt.Errorf("read prefix length at %d: %w", processed, err)
-			}
-			prefixLen := binary.LittleEndian.Uint32(lenBuf[:])
-
-			start := len(chunkBuffer)
-			if cap(chunkBuffer)-start < int(prefixLen) {
-				newCap := cap(chunkBuffer)*2 + int(prefixLen)
-				newBuf := make([]byte, start, newCap)
-				copy(newBuf, chunkBuffer)
-				chunkBuffer = newBuf
-			}
-
-			chunkBuffer = chunkBuffer[:start+int(prefixLen)]
-			if _, err := io.ReadFull(reader, chunkBuffer[start:]); err != nil {
-				close(workChan)
-				wg.Wait()
-				return fmt.Errorf("read prefix at %d: %w", processed, err)
-			}
-
-			items = append(items, prefixChunkItem{
-				index:       processed,
-				prefixBytes: chunkBuffer[start : start+int(prefixLen)],
-				offset:      currentOffset,
-			})
-
-			currentOffset += uint64(4 + prefixLen)
-			processed++
-		}
-
-		workChan <- workItem{items: items}
-
-		select {
-		case err := <-errChan:
-			close(workChan)
-			wg.Wait()
-			return err
-		default:
-		}
+	// Read and dispatch chunks using shared helper
+	chunkReader := newPrefixChunkReader(reader, n, chunkSize)
+	err := dispatchChunksForBench(chunkReader, workChan, errChan, &wg)
+	if err != nil {
+		return err
 	}
-
-	close(workChan)
-	wg.Wait()
 
 	select {
 	case err := <-errChan:
@@ -417,6 +324,83 @@ func computeFingerprintsWithMode(
 	}
 
 	return nil
+}
+
+// fingerprintModeWorker processes prefix chunks with a specific fingerprint mode.
+func fingerprintModeWorker(
+	workChan <-chan []prefixChunkItem,
+	errChan chan<- error,
+	mph *bbhash.BBHash2,
+	fingerprints []uint64,
+	preorderPositions []uint64,
+	orderedPrefixOffsets []uint64,
+	preorderPos []uint64,
+	mode FingerprintMode,
+) {
+	for items := range workChan {
+		for _, item := range items {
+			keyHash := hashBytes(item.prefixBytes)
+			hashVal := mph.Find(keyHash)
+			if hashVal == 0 {
+				select {
+				case errChan <- fmt.Errorf("MPHF lookup failed for prefix at index %d", item.index):
+				default:
+				}
+				return
+			}
+			hashPos := int(hashVal - 1)
+
+			// Compute fingerprint based on mode
+			var fp uint64
+			switch mode {
+			case FingerprintFull:
+				fp = computeFingerprintBytes(item.prefixBytes)
+			case FingerprintNone:
+				fp = 0 // No fingerprint computation
+			case Fingerprint32Bit:
+				fp = computeFingerprintBytes(item.prefixBytes) & 0xFFFFFFFF
+			case FingerprintXOR:
+				fp = keyHash ^ uint64(hashPos)
+			case FingerprintZeroCopy:
+				fp = fnvZeroCopy(item.prefixBytes)
+			}
+
+			fingerprints[hashPos] = fp
+			preorderPositions[hashPos] = preorderPos[item.index]
+			orderedPrefixOffsets[hashPos] = item.offset
+		}
+	}
+}
+
+// dispatchChunksForBench reads prefix chunks and sends them to workers.
+func dispatchChunksForBench(
+	chunkReader *prefixChunkReader,
+	workChan chan<- []prefixChunkItem,
+	errChan <-chan error,
+	wg *sync.WaitGroup,
+) error {
+	defer func() {
+		close(workChan)
+		wg.Wait()
+	}()
+
+	for {
+		items, err := chunkReader.ReadChunk()
+		if err != nil {
+			return err
+		}
+		if items == nil {
+			return nil
+		}
+
+		workChan <- items
+
+		select {
+		case err := <-errChan:
+			return err
+		default:
+		}
+	}
 }
 
 // fnvZeroCopy is a zero-allocation FNV-1 hash implementation.

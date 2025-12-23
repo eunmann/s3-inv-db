@@ -13,6 +13,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
@@ -172,7 +173,6 @@ func determineMemoryBudget(cliValue string) (*membudget.Budget, error) {
 	return membudget.NewFromSystemRAM(), nil
 }
 
-//nolint:gocognit // CLI command parsing inherently has many branches
 func runQuery(args []string) error {
 	fs := flag.NewFlagSet("query", flag.ContinueOnError)
 	indexDir := fs.String("index", "", "index directory to query")
@@ -216,50 +216,83 @@ func runQuery(args []string) error {
 	fmt.Printf("Objects: %d\n", stats.ObjectCount)
 	fmt.Printf("Bytes: %d\n", stats.TotalBytes)
 
-	if *showTiers || *estimateCost { //nolint:nestif // deeply nested output formatting
-		if !idx.HasTierData() {
-			fmt.Println("\nNo tier data available (index was built without tier tracking)")
-		} else {
-			breakdown := idx.TierBreakdown(pos)
-			if len(breakdown) == 0 {
-				fmt.Println("\nNo tier data at this prefix")
-			} else {
-				if *showTiers {
-					fmt.Println("\nTier breakdown:")
-					for _, tb := range breakdown {
-						fmt.Printf("  %s: %d objects, %d bytes\n", tb.TierName, tb.ObjectCount, tb.Bytes)
-					}
-				}
+	if !*showTiers && !*estimateCost {
+		return nil
+	}
 
-				if *estimateCost {
-					var pt pricing.PriceTable
-					if *priceTablePath != "" {
-						pt, err = pricing.LoadPriceTable(*priceTablePath)
-						if err != nil {
-							return fmt.Errorf("load price table: %w", err)
-						}
-					} else {
-						pt = pricing.DefaultUSEast1Prices()
-					}
+	return printTierAndCostInfo(idx, pos, *showTiers, *estimateCost, *priceTablePath)
+}
 
-					cost := pricing.ComputeMonthlyCost(breakdown, pt)
-					fmt.Println("\nEstimated monthly cost:")
-					fmt.Printf("  Total: %s/month\n", pricing.FormatCost(cost.TotalMicrodollars))
-					if *showTiers {
-						// Sort tier names for deterministic output
-						tierNames := make([]string, 0, len(cost.PerTierMicrodollars))
-						for tier := range cost.PerTierMicrodollars {
-							tierNames = append(tierNames, tier)
-						}
-						sort.Strings(tierNames)
-						for _, tier := range tierNames {
-							fmt.Printf("  %s: %s/month\n", tier, pricing.FormatCost(cost.PerTierMicrodollars[tier]))
-						}
-					}
-				}
-			}
-		}
+// printTierAndCostInfo handles tier breakdown and cost estimation output.
+func printTierAndCostInfo(idx *indexread.Index, pos uint64, showTiers, estimateCost bool, priceTablePath string) error {
+	if !idx.HasTierData() {
+		fmt.Println("\nNo tier data available (index was built without tier tracking)")
+		return nil
+	}
+
+	breakdown := idx.TierBreakdown(pos)
+	if len(breakdown) == 0 {
+		fmt.Println("\nNo tier data at this prefix")
+		return nil
+	}
+
+	if showTiers {
+		printTierBreakdown(breakdown)
+	}
+
+	if estimateCost {
+		return printCostEstimate(breakdown, showTiers, priceTablePath)
 	}
 
 	return nil
+}
+
+// printTierBreakdown outputs the tier breakdown to stdout.
+func printTierBreakdown(breakdown []format.TierBreakdown) {
+	fmt.Println("\nTier breakdown:")
+	for _, tb := range breakdown {
+		fmt.Printf("  %s: %d objects, %d bytes\n", tb.TierName, tb.ObjectCount, tb.Bytes)
+	}
+}
+
+// printCostEstimate outputs the cost estimation to stdout.
+func printCostEstimate(breakdown []format.TierBreakdown, showTiers bool, priceTablePath string) error {
+	pt, err := loadPriceTable(priceTablePath)
+	if err != nil {
+		return err
+	}
+
+	cost := pricing.ComputeMonthlyCost(breakdown, pt)
+	fmt.Println("\nEstimated monthly cost:")
+	fmt.Printf("  Total: %s/month\n", pricing.FormatCost(cost.TotalMicrodollars))
+
+	if showTiers {
+		printPerTierCosts(cost.PerTierMicrodollars)
+	}
+
+	return nil
+}
+
+// loadPriceTable loads a price table from a file or returns the default.
+func loadPriceTable(path string) (pricing.PriceTable, error) {
+	if path != "" {
+		pt, err := pricing.LoadPriceTable(path)
+		if err != nil {
+			return pricing.PriceTable{}, fmt.Errorf("load price table: %w", err)
+		}
+		return pt, nil
+	}
+	return pricing.DefaultUSEast1Prices(), nil
+}
+
+// printPerTierCosts outputs per-tier cost breakdown in sorted order.
+func printPerTierCosts(perTierMicrodollars map[string]uint64) {
+	tierNames := make([]string, 0, len(perTierMicrodollars))
+	for tier := range perTierMicrodollars {
+		tierNames = append(tierNames, tier)
+	}
+	sort.Strings(tierNames)
+	for _, tier := range tierNames {
+		fmt.Printf("  %s: %s/month\n", tier, pricing.FormatCost(perTierMicrodollars[tier]))
+	}
 }

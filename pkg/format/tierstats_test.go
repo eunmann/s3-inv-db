@@ -9,7 +9,6 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/triebuild"
 )
 
-//nolint:gocyclo // Test covers multiple tier scenarios
 func TestTierStatsWriteRead(t *testing.T) {
 	dir := t.TempDir()
 

@@ -12,11 +12,9 @@ import (
 	"github.com/klauspost/pgzip"
 )
 
-// InventoryRow represents a single object from an S3 inventory file.
+// Row represents a single object from an S3 inventory file.
 // This is the unified representation used by both CSV and Parquet readers.
-//
-//nolint:revive // InventoryRow is the canonical name used externally
-type InventoryRow struct {
+type Row struct {
 	// Key is the S3 object key.
 	Key string
 
@@ -34,12 +32,10 @@ type InventoryRow struct {
 
 // InventoryReader is the unified interface for reading S3 inventory files.
 // Implementations exist for both CSV and Parquet formats.
-//
-//nolint:revive // InventoryReader is the canonical name used externally
 type InventoryReader interface {
 	// Next returns the next inventory row.
 	// Returns io.EOF when all rows have been read.
-	Next() (InventoryRow, error)
+	Next() (Row, error)
 
 	// Close releases resources associated with the reader.
 	Close() error
@@ -122,14 +118,14 @@ func NewCSVInventoryReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderC
 }
 
 // Next returns the next inventory row.
-func (r *csvInventoryReader) Next() (InventoryRow, error) {
+func (r *csvInventoryReader) Next() (Row, error) {
 	for {
 		fields, err := r.csvReader.Read()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return InventoryRow{}, io.EOF
+				return Row{}, io.EOF
 			}
-			return InventoryRow{}, fmt.Errorf("read CSV row: %w", err)
+			return Row{}, fmt.Errorf("read CSV row: %w", err)
 		}
 
 		if len(fields) <= r.keyCol || len(fields) <= r.sizeCol {
@@ -148,7 +144,7 @@ func (r *csvInventoryReader) Next() (InventoryRow, error) {
 			size = 0
 		}
 
-		row := InventoryRow{
+		row := Row{
 			Key:  key,
 			Size: size,
 		}

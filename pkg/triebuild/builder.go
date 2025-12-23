@@ -2,8 +2,6 @@
 package triebuild
 
 import (
-	"fmt"
-
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
@@ -75,9 +73,7 @@ func NewWithTiers() *Builder {
 }
 
 // processKey handles a single object key.
-//
-//nolint:unparam // error return kept for API consistency and future extensibility
-func (b *Builder) processKey(key string, size uint64, tierID tiers.ID) error {
+func (b *Builder) processKey(key string, size uint64, tierID tiers.ID) {
 	// Extract prefix chain for this key
 	prefixes := extractPrefixes(key)
 
@@ -108,8 +104,6 @@ func (b *Builder) processKey(key string, size uint64, tierID tiers.ID) error {
 	if b.trackTiers {
 		b.tierPresent[tierID] = true
 	}
-
-	return nil
 }
 
 // extractPrefixes returns all directory prefixes for a key.
@@ -313,9 +307,7 @@ func BuildFromKeysWithTiers(keys []string, sizes []uint64, tierIDs []tiers.ID) (
 		if tierIDs != nil && i < len(tierIDs) {
 			tierID = tierIDs[i]
 		}
-		if err := b.processKey(key, size, tierID); err != nil {
-			return nil, fmt.Errorf("process key %q: %w", key, err)
-		}
+		b.processKey(key, size, tierID)
 	}
 
 	b.closeAll()

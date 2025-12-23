@@ -288,10 +288,82 @@ type prefixChunkItem struct {
 	offset      uint64 // Cumulative offset in temp file
 }
 
+// prefixChunkReader reads length-prefixed prefix data in chunks.
+type prefixChunkReader struct {
+	reader        io.Reader
+	n             int // Total number of prefixes to read
+	chunkSize     int
+	processed     int
+	currentOffset uint64
+	lenBuf        [4]byte
+}
+
+// newPrefixChunkReader creates a reader for chunked prefix data.
+func newPrefixChunkReader(reader io.Reader, n, chunkSize int) *prefixChunkReader {
+	return &prefixChunkReader{
+		reader:    reader,
+		n:         n,
+		chunkSize: chunkSize,
+	}
+}
+
+// ReadChunk reads the next chunk of prefixes. Returns nil when all prefixes are read.
+func (r *prefixChunkReader) ReadChunk() ([]prefixChunkItem, error) {
+	if r.processed >= r.n {
+		return nil, nil
+	}
+
+	// Determine chunk size for this iteration
+	remaining := r.n - r.processed
+	thisChunk := r.chunkSize
+	if remaining < thisChunk {
+		thisChunk = remaining
+	}
+
+	// Pre-allocate buffer for prefixes (estimate 24 bytes average)
+	const estimatedAvgPrefixLen = 24
+	chunkBuffer := make([]byte, 0, thisChunk*estimatedAvgPrefixLen)
+	items := make([]prefixChunkItem, 0, thisChunk)
+
+	for range thisChunk {
+		// Read prefix length
+		if _, err := io.ReadFull(r.reader, r.lenBuf[:]); err != nil {
+			return nil, fmt.Errorf("read prefix length at %d: %w", r.processed, err)
+		}
+		prefixLen := binary.LittleEndian.Uint32(r.lenBuf[:])
+
+		// Ensure buffer has capacity for this prefix
+		start := len(chunkBuffer)
+		if cap(chunkBuffer)-start < int(prefixLen) {
+			// Need to grow - double capacity plus this prefix
+			newCap := cap(chunkBuffer)*2 + int(prefixLen)
+			newBuf := make([]byte, start, newCap)
+			copy(newBuf, chunkBuffer)
+			chunkBuffer = newBuf
+		}
+
+		// Extend buffer and read prefix directly into it
+		chunkBuffer = chunkBuffer[:start+int(prefixLen)]
+		if _, err := io.ReadFull(r.reader, chunkBuffer[start:]); err != nil {
+			return nil, fmt.Errorf("read prefix at %d: %w", r.processed, err)
+		}
+
+		// Create item with slice into the contiguous buffer
+		items = append(items, prefixChunkItem{
+			index:       r.processed,
+			prefixBytes: chunkBuffer[start : start+int(prefixLen)],
+			offset:      r.currentOffset,
+		})
+
+		r.currentOffset += uint64(4 + prefixLen)
+		r.processed++
+	}
+
+	return items, nil
+}
+
 // computeFingerprintsParallel reads prefixes from the temp file and computes
 // fingerprints in parallel using a worker pool with chunked processing.
-//
-//nolint:gocognit // Parallel processing with chunked I/O requires complex control flow
 func (b *StreamingMPHFBuilder) computeFingerprintsParallel(
 	reader *bufio.Reader,
 	mph *bbhash.BBHash2,
@@ -300,20 +372,13 @@ func (b *StreamingMPHFBuilder) computeFingerprintsParallel(
 	preorderPositions []uint64,
 	orderedPrefixOffsets []uint64,
 ) error {
-	// Determine number of workers (use all available CPUs)
 	numWorkers := runtime.NumCPU()
 	if numWorkers < 1 {
 		numWorkers = 1
 	}
 
-	// Chunk size: process 50K prefixes per batch to balance memory vs parallelism
 	const chunkSize = 50000
-
-	// Channels for work distribution
-	type workItem struct {
-		items []prefixChunkItem
-	}
-	workChan := make(chan workItem, numWorkers*2)
+	workChan := make(chan []prefixChunkItem, numWorkers*2)
 	errChan := make(chan error, numWorkers)
 
 	// Start workers
@@ -322,104 +387,16 @@ func (b *StreamingMPHFBuilder) computeFingerprintsParallel(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for work := range workChan {
-				for _, item := range work.items {
-					// Compute hash for MPHF lookup
-					keyHash := hashBytes(item.prefixBytes)
-					hashVal := mph.Find(keyHash)
-					if hashVal == 0 {
-						select {
-						case errChan <- fmt.Errorf("MPHF lookup failed for prefix at index %d", item.index):
-						default:
-						}
-						return
-					}
-					hashPos := int(hashVal - 1)
-
-					// Store results (each hashPos is unique, so no race)
-					fingerprints[hashPos] = computeFingerprintBytes(item.prefixBytes)
-					preorderPositions[hashPos] = b.preorderPos[item.index]
-					orderedPrefixOffsets[hashPos] = item.offset
-				}
-			}
+			b.fingerprintWorker(workChan, errChan, mph, fingerprints, preorderPositions, orderedPrefixOffsets)
 		}()
 	}
 
-	// Read prefixes in chunks and send to workers
-	var lenBuf [4]byte
-	currentOffset := uint64(0)
-	processed := 0
-
-	// Estimate average prefix length for buffer sizing (paths are typically 20-40 bytes)
-	const estimatedAvgPrefixLen = 24
-
-	for processed < n {
-		// Determine chunk size for this iteration
-		remaining := n - processed
-		thisChunk := chunkSize
-		if remaining < thisChunk {
-			thisChunk = remaining
-		}
-
-		// Pre-allocate a single contiguous buffer for all prefixes in this chunk.
-		// This eliminates per-prefix allocations - we'll use slices into this buffer.
-		chunkBuffer := make([]byte, 0, thisChunk*estimatedAvgPrefixLen)
-		items := make([]prefixChunkItem, 0, thisChunk)
-
-		for range thisChunk {
-			// Read prefix length
-			if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
-				close(workChan)
-				wg.Wait()
-				return fmt.Errorf("read prefix length at %d: %w", processed, err)
-			}
-			prefixLen := binary.LittleEndian.Uint32(lenBuf[:])
-
-			// Ensure buffer has capacity for this prefix
-			start := len(chunkBuffer)
-			if cap(chunkBuffer)-start < int(prefixLen) {
-				// Need to grow - double capacity plus this prefix
-				newCap := cap(chunkBuffer)*2 + int(prefixLen)
-				newBuf := make([]byte, start, newCap)
-				copy(newBuf, chunkBuffer)
-				chunkBuffer = newBuf
-			}
-
-			// Extend buffer and read prefix directly into it
-			chunkBuffer = chunkBuffer[:start+int(prefixLen)]
-			if _, err := io.ReadFull(reader, chunkBuffer[start:]); err != nil {
-				close(workChan)
-				wg.Wait()
-				return fmt.Errorf("read prefix at %d: %w", processed, err)
-			}
-
-			// Create item with slice into the contiguous buffer (no allocation)
-			items = append(items, prefixChunkItem{
-				index:       processed,
-				prefixBytes: chunkBuffer[start : start+int(prefixLen)],
-				offset:      currentOffset,
-			})
-
-			currentOffset += uint64(4 + prefixLen)
-			processed++
-		}
-
-		// Send chunk to workers
-		workChan <- workItem{items: items}
-
-		// Check for worker errors
-		select {
-		case err := <-errChan:
-			close(workChan)
-			wg.Wait()
-			return err
-		default:
-		}
+	// Read and dispatch chunks
+	chunkReader := newPrefixChunkReader(reader, n, chunkSize)
+	err := b.dispatchChunks(chunkReader, workChan, errChan, &wg)
+	if err != nil {
+		return err
 	}
-
-	// Close work channel and wait for workers to finish
-	close(workChan)
-	wg.Wait()
 
 	// Check for any final errors
 	select {
@@ -429,6 +406,67 @@ func (b *StreamingMPHFBuilder) computeFingerprintsParallel(
 	}
 
 	return nil
+}
+
+// fingerprintWorker processes prefix chunks and computes fingerprints.
+func (b *StreamingMPHFBuilder) fingerprintWorker(
+	workChan <-chan []prefixChunkItem,
+	errChan chan<- error,
+	mph *bbhash.BBHash2,
+	fingerprints []uint64,
+	preorderPositions []uint64,
+	orderedPrefixOffsets []uint64,
+) {
+	for items := range workChan {
+		for _, item := range items {
+			keyHash := hashBytes(item.prefixBytes)
+			hashVal := mph.Find(keyHash)
+			if hashVal == 0 {
+				select {
+				case errChan <- fmt.Errorf("MPHF lookup failed for prefix at index %d", item.index):
+				default:
+				}
+				return
+			}
+			hashPos := int(hashVal - 1)
+
+			fingerprints[hashPos] = computeFingerprintBytes(item.prefixBytes)
+			preorderPositions[hashPos] = b.preorderPos[item.index]
+			orderedPrefixOffsets[hashPos] = item.offset
+		}
+	}
+}
+
+// dispatchChunks reads prefix chunks and sends them to workers.
+func (b *StreamingMPHFBuilder) dispatchChunks(
+	chunkReader *prefixChunkReader,
+	workChan chan<- []prefixChunkItem,
+	errChan <-chan error,
+	wg *sync.WaitGroup,
+) error {
+	defer func() {
+		close(workChan)
+		wg.Wait()
+	}()
+
+	for {
+		items, err := chunkReader.ReadChunk()
+		if err != nil {
+			return err
+		}
+		if items == nil {
+			return nil
+		}
+
+		workChan <- items
+
+		// Check for worker errors
+		select {
+		case err := <-errChan:
+			return err
+		default:
+		}
+	}
 }
 
 // writePrefixBlobPreorder writes prefixes in preorder (original Add order) for GetPrefix.
