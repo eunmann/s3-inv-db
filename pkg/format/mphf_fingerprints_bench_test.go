@@ -852,3 +852,41 @@ func BenchmarkBuildPhaseBreakdown_ArrayMapping(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkReverseMapPositions measures the ReverseMap-based position lookup.
+func BenchmarkReverseMapPositions(b *testing.B) {
+	const n = 500_000
+	prefixes := generateRealisticPrefixes(n)
+
+	// Setup: complete Add phase and build MPHF with ReverseMap once
+	dir := b.TempDir()
+	builder, err := NewStreamingMPHFBuilder(dir)
+	if err != nil {
+		b.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
+	}
+
+	for i, p := range prefixes {
+		if err := builder.Add(p, uint64(i)); err != nil {
+			builder.Close()
+			b.Fatalf("Add failed: %v", err)
+		}
+	}
+	builder.tempWriter.Flush()
+
+	mph, err := bbhash.New(builder.hashes, bbhash.Gamma(2.0), bbhash.WithReverseMap())
+	if err != nil {
+		b.Fatalf("bbhash.New failed: %v", err)
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for range b.N {
+		_, err := builder.computeHashPositionsReverseMap(mph, n)
+		if err != nil {
+			b.Fatalf("computeHashPositionsReverseMap failed: %v", err)
+		}
+	}
+
+	builder.Close()
+}
