@@ -5,6 +5,8 @@ import (
 	"hash/fnv"
 	"path/filepath"
 	"strings"
+
+	lru "github.com/hashicorp/golang-lru/v2"
 )
 
 // Segment compression file names.
@@ -14,6 +16,10 @@ const (
 	PrefixSegIDsFile     = "prefix_seg_ids.u32"
 	PrefixSegOffsetsFile = "prefix_seg_off.u64"
 )
+
+// DefaultSegmentCacheSize is the default LRU cache size for segment lookups.
+// This covers most hot segments while keeping memory usage bounded.
+const DefaultSegmentCacheSize = 10000
 
 // SegmentInterner interns unique path segments during index building.
 // It assigns a sequential uint32 ID to each unique segment string.
@@ -97,12 +103,19 @@ func hashSegment(s string) uint64 {
 }
 
 // SegmentDictionary provides runtime lookup of segment strings by ID.
+// It uses an LRU cache to speed up lookups for frequently accessed segments.
 type SegmentDictionary struct {
-	blob *BlobReader
+	blob  *BlobReader
+	cache *lru.Cache[uint32, string]
 }
 
 // OpenSegmentDictionary opens a segment dictionary from disk.
 func OpenSegmentDictionary(outDir string) (*SegmentDictionary, error) {
+	return OpenSegmentDictionaryWithCacheSize(outDir, DefaultSegmentCacheSize)
+}
+
+// OpenSegmentDictionaryWithCacheSize opens a segment dictionary with a custom cache size.
+func OpenSegmentDictionaryWithCacheSize(outDir string, cacheSize int) (*SegmentDictionary, error) {
 	blobPath := filepath.Join(outDir, SegmentsBlobFile)
 	offsetsPath := filepath.Join(outDir, SegmentsOffsetsFile)
 
@@ -111,17 +124,36 @@ func OpenSegmentDictionary(outDir string) (*SegmentDictionary, error) {
 		return nil, fmt.Errorf("open segment blob: %w", err)
 	}
 
-	return &SegmentDictionary{blob: blob}, nil
+	cache, err := lru.New[uint32, string](cacheSize)
+	if err != nil {
+		blob.Close()
+		return nil, fmt.Errorf("create segment cache: %w", err)
+	}
+
+	return &SegmentDictionary{blob: blob, cache: cache}, nil
 }
 
 // GetSegment returns the segment string for the given ID.
 func (sd *SegmentDictionary) GetSegment(id uint32) (string, error) {
-	return sd.blob.Get(uint64(id))
+	if seg, ok := sd.cache.Get(id); ok {
+		return seg, nil
+	}
+	seg, err := sd.blob.Get(uint64(id))
+	if err != nil {
+		return "", err
+	}
+	sd.cache.Add(id, seg)
+	return seg, nil
 }
 
 // UnsafeGetSegment returns the segment without bounds checking.
 func (sd *SegmentDictionary) UnsafeGetSegment(id uint32) string {
-	return sd.blob.UnsafeGet(uint64(id))
+	if seg, ok := sd.cache.Get(id); ok {
+		return seg
+	}
+	seg := sd.blob.UnsafeGet(uint64(id))
+	sd.cache.Add(id, seg)
+	return seg
 }
 
 // Count returns the number of segments in the dictionary.
@@ -285,8 +317,15 @@ func (r *SegmentedPrefixReader) GetPrefix(pos uint64) (string, error) {
 		return "", fmt.Errorf("get end offset: %w", err)
 	}
 
-	// Reconstruct prefix from segments
+	numSegs := int(end - start)
+	if numSegs == 0 {
+		return "", nil
+	}
+
+	// Pre-allocate builder: ~12 bytes avg per segment + slashes
 	var builder strings.Builder
+	builder.Grow(numSegs * 12)
+
 	for i := start; i < end; i++ {
 		segID, err := r.segIDs.GetU32(i)
 		if err != nil {
@@ -310,15 +349,21 @@ func (r *SegmentedPrefixReader) UnsafeGetPrefix(pos uint64) string {
 	start := r.offsets.UnsafeGetU64(pos)
 	end := r.offsets.UnsafeGetU64(pos + 1)
 
-	// Reconstruct prefix from segments
+	numSegs := int(end - start)
+	if numSegs == 0 {
+		return ""
+	}
+
+	// Pre-allocate builder: ~12 bytes avg per segment + slashes
 	var builder strings.Builder
+	builder.Grow(numSegs * 12)
+
 	for i := start; i < end; i++ {
-		segID := r.segIDs.UnsafeGetU32(i)
-		seg := r.dict.UnsafeGetSegment(segID)
 		if i > start {
 			builder.WriteByte('/')
 		}
-		builder.WriteString(seg)
+		segID := r.segIDs.UnsafeGetU32(i)
+		builder.WriteString(r.dict.UnsafeGetSegment(segID))
 	}
 
 	return builder.String()
