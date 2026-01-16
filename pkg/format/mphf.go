@@ -180,6 +180,10 @@ type MPHF struct {
 	preorderPos  *ArrayReader // maps hash position -> preorder position
 	prefixBlob   *BlobReader
 	count        uint64
+
+	// Segmented prefix reader (alternative to prefixBlob)
+	segmentedPrefixes *SegmentedPrefixReader
+	useSegments       bool
 }
 
 // OpenMPHF opens an MPHF from the given directory.
@@ -223,26 +227,46 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 		return nil, fmt.Errorf("open preorder positions: %w", err)
 	}
 
-	// Optionally load prefix blob (for reverse lookup)
-	blobPath := filepath.Join(outDir, "prefix_blob.bin")
-	offsetsPath := filepath.Join(outDir, "prefix_offsets.u64")
+	// Try to load prefix data (either segmented or raw blob)
+	// Prefer segmented encoding if files exist
+	segmentsPath := filepath.Join(outDir, SegmentsBlobFile)
 
 	var prefixBlob *BlobReader
-	if _, err := os.Stat(blobPath); err == nil {
-		prefixBlob, err = OpenBlob(blobPath, offsetsPath)
+	var segmentedPrefixes *SegmentedPrefixReader
+	useSegments := false
+
+	if _, err := os.Stat(segmentsPath); err == nil {
+		// Segmented prefix files exist - use them
+		segmentedPrefixes, err = OpenSegmentedPrefixReader(outDir)
 		if err != nil {
 			fingerprints.Close()
 			preorderPos.Close()
-			return nil, fmt.Errorf("open prefix blob: %w", err)
+			return nil, fmt.Errorf("open segmented prefixes: %w", err)
+		}
+		useSegments = true
+	} else {
+		// Fall back to raw blob
+		blobPath := filepath.Join(outDir, "prefix_blob.bin")
+		offsetsPath := filepath.Join(outDir, "prefix_offsets.u64")
+
+		if _, err := os.Stat(blobPath); err == nil {
+			prefixBlob, err = OpenBlob(blobPath, offsetsPath)
+			if err != nil {
+				fingerprints.Close()
+				preorderPos.Close()
+				return nil, fmt.Errorf("open prefix blob: %w", err)
+			}
 		}
 	}
 
 	return &MPHF{
-		mph:          mph,
-		fingerprints: fingerprints,
-		preorderPos:  preorderPos,
-		prefixBlob:   prefixBlob,
-		count:        fingerprints.Count(),
+		mph:               mph,
+		fingerprints:      fingerprints,
+		preorderPos:       preorderPos,
+		prefixBlob:        prefixBlob,
+		count:             fingerprints.Count(),
+		segmentedPrefixes: segmentedPrefixes,
+		useSegments:       useSegments,
 	}, nil
 }
 
@@ -264,6 +288,12 @@ func (m *MPHF) Close() error {
 
 	if m.prefixBlob != nil {
 		if err := m.prefixBlob.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	if m.segmentedPrefixes != nil {
+		if err := m.segmentedPrefixes.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -309,7 +339,13 @@ func (m *MPHF) LookupWithVerify(prefix string) (pos uint64, ok bool) {
 		return 0, false
 	}
 
-	if m.prefixBlob != nil {
+	// Verify against stored prefix (segmented or raw blob)
+	if m.useSegments && m.segmentedPrefixes != nil {
+		storedPrefix, err := m.segmentedPrefixes.GetPrefix(pos)
+		if err != nil || storedPrefix != prefix {
+			return 0, false
+		}
+	} else if m.prefixBlob != nil {
 		storedPrefix, err := m.prefixBlob.Get(pos)
 		if err != nil || storedPrefix != prefix {
 			return 0, false
@@ -320,8 +356,16 @@ func (m *MPHF) LookupWithVerify(prefix string) (pos uint64, ok bool) {
 }
 
 // GetPrefix returns the prefix string at the given position.
-// Requires prefix blob to be loaded.
+// Requires either prefix blob or segmented prefixes to be loaded.
 func (m *MPHF) GetPrefix(pos uint64) (string, error) {
+	if m.useSegments {
+		s, err := m.segmentedPrefixes.GetPrefix(pos)
+		if err != nil {
+			return "", fmt.Errorf("get segmented prefix at pos %d: %w", pos, err)
+		}
+		return s, nil
+	}
+
 	if m.prefixBlob == nil {
 		return "", errors.New("prefix blob not loaded")
 	}
@@ -368,14 +412,15 @@ func computeFingerprintBytes(b []byte) uint64 {
 	return h.Sum64()
 }
 
-// VerifyMPHF checks that all prefixes in the blob can be looked up correctly.
+// VerifyMPHF checks that all prefixes can be looked up correctly.
+// Works with both segmented and raw blob prefix storage.
 func VerifyMPHF(m *MPHF) error {
-	if m.prefixBlob == nil {
-		return errors.New("prefix blob not loaded")
+	if m.prefixBlob == nil && m.segmentedPrefixes == nil {
+		return errors.New("no prefix storage loaded")
 	}
 
 	for i := range m.count {
-		prefix, err := m.prefixBlob.Get(i)
+		prefix, err := m.GetPrefix(i)
 		if err != nil {
 			return fmt.Errorf("get prefix %d: %w", i, err)
 		}
