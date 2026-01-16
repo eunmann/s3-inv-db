@@ -135,9 +135,10 @@ func benchmarkMPHFLookupEncoding(b *testing.B, enc PrefixEncoding) {
 	}
 	defer m.Close()
 
+	numActual := len(prefixes)
 	b.ResetTimer()
 	for i := range b.N {
-		p := prefixes[i%numPrefixes]
+		p := prefixes[i%numActual]
 		_, _ = m.Lookup(p)
 	}
 }
@@ -234,10 +235,30 @@ func TestSizeComparison(t *testing.T) {
 		fileSize(t, segDir, PrefixSegIDsFile) +
 		fileSize(t, segDir, PrefixSegOffsetsFile)
 
+	// Calculate total directory sizes
+	rawTotalSize := totalDirSize(t, rawDir)
+	segTotalSize := totalDirSize(t, segDir)
+
+	t.Log("=== PREFIX-SPECIFIC STORAGE ===")
 	t.Logf("Raw prefix storage: %d bytes", rawPrefixSize)
 	t.Logf("Segmented prefix storage: %d bytes", segPrefixSize)
-	t.Logf("Compression ratio: %.2fx", float64(rawPrefixSize)/float64(segPrefixSize))
-	t.Logf("Space savings: %.1f%%", (1-float64(segPrefixSize)/float64(rawPrefixSize))*100)
+	t.Logf("Prefix compression ratio: %.2fx", float64(rawPrefixSize)/float64(segPrefixSize))
+	t.Logf("Prefix space savings: %.1f%%", (1-float64(segPrefixSize)/float64(rawPrefixSize))*100)
+
+	t.Log("")
+	t.Log("=== TOTAL STORAGE ===")
+	t.Logf("Raw total storage: %d bytes", rawTotalSize)
+	t.Logf("Segmented total storage: %d bytes", segTotalSize)
+	t.Logf("Total compression ratio: %.2fx", float64(rawTotalSize)/float64(segTotalSize))
+	t.Logf("Total space savings: %.1f%%", (1-float64(segTotalSize)/float64(rawTotalSize))*100)
+
+	t.Log("")
+	t.Log("=== FILE-BY-FILE BREAKDOWN (RAW) ===")
+	logDirContents(t, rawDir)
+
+	t.Log("")
+	t.Log("=== FILE-BY-FILE BREAKDOWN (SEGMENTED) ===")
+	logDirContents(t, segDir)
 
 	// Verify both produce correct lookups
 	rawM, err := OpenMPHF(rawDir)
@@ -278,4 +299,48 @@ func fileSize(t *testing.T, dir, name string) int64 {
 		t.Fatalf("stat %s: %v", path, err)
 	}
 	return info.Size()
+}
+
+// totalDirSize returns the total size of all files in a directory.
+func totalDirSize(t *testing.T, dir string) int64 {
+	t.Helper()
+
+	var total int64
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir %s: %v", dir, err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			t.Fatalf("Info %s: %v", entry.Name(), err)
+		}
+		total += info.Size()
+	}
+	return total
+}
+
+// logDirContents logs the size of each file in a directory.
+func logDirContents(t *testing.T, dir string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir %s: %v", dir, err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			t.Fatalf("Info %s: %v", entry.Name(), err)
+		}
+		t.Logf("  %s: %d bytes", entry.Name(), info.Size())
+	}
 }
