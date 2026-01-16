@@ -37,7 +37,7 @@ func buildIndexFromKeysWithSizes(t *testing.T, outDir string, keys []string, siz
 	rows := agg.Drain()
 
 	// Build index using streaming builder
-	builder, err := extsort.NewIndexBuilder(outDir, "")
+	builder, err := extsort.NewIndexBuilder(outDir, "", false)
 	if err != nil {
 		return fmt.Errorf("create index builder: %w", err)
 	}
@@ -153,7 +153,7 @@ func buildIndexWithTiers(t *testing.T, outDir string, objects []testObject) erro
 	rows := agg.Drain()
 
 	// Build index using streaming builder
-	builder, err := extsort.NewIndexBuilder(outDir, "")
+	builder, err := extsort.NewIndexBuilder(outDir, "", false)
 	if err != nil {
 		return fmt.Errorf("create index builder: %w", err)
 	}

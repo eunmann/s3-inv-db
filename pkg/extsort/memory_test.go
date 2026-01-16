@@ -70,7 +70,7 @@ func TestIndexBuilderMemoryBounded(t *testing.T) {
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 
-	builder, err := NewIndexBuilder(tmpDir, "")
+	builder, err := NewIndexBuilder(tmpDir, "", false)
 	if err != nil {
 		t.Fatalf("create builder: %v", err)
 	}
