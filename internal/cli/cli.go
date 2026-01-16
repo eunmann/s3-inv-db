@@ -57,6 +57,9 @@ func runBuild(args []string) error {
 	// Memory budget
 	memBudgetStr := fs.String("mem-budget", "", "total memory budget (e.g., 4GiB, 8GB). Default: 50% of RAM")
 
+	// Prefix encoding
+	segmentPrefixes := fs.Bool("segment-prefixes", false, "use segment dictionary compression for prefixes (reduces size when prefixes share path components)")
+
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
@@ -73,11 +76,11 @@ func runBuild(args []string) error {
 		return errors.New("--s3-manifest is required")
 	}
 
-	return runBuildExtSort(*outDir, *s3Manifest, *workers, *maxDepth, *memBudgetStr, baseLogger)
+	return runBuildExtSort(*outDir, *s3Manifest, *workers, *maxDepth, *memBudgetStr, *segmentPrefixes, baseLogger)
 }
 
 // runBuildExtSort runs the build using the external sort backend (pure Go, no CGO).
-func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudgetStr string, baseLogger zerolog.Logger) error {
+func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudgetStr string, segmentPrefixes bool, baseLogger zerolog.Logger) error {
 	// Create a context that responds to OS signals (SIGINT, SIGTERM)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -117,6 +120,7 @@ func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudget
 	if maxDepth > 0 {
 		config.MaxDepth = maxDepth
 	}
+	config.UseSegmentEncoding = segmentPrefixes
 
 	// Log concurrency settings
 	log.Info().

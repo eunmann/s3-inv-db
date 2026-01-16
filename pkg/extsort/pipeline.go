@@ -795,7 +795,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 
 	if len(p.runFiles) == 0 {
 		log.Info().Msg("no run files to merge, creating empty index")
-		builder, err := NewIndexBuilder(outDir, p.config.TempDir)
+		builder, err := NewIndexBuilder(outDir, p.config.TempDir, p.config.UseSegmentEncoding)
 		if err != nil {
 			return 0, 0, fmt.Errorf("create index builder: %w", err)
 		}
@@ -895,7 +895,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 		Uint64("prefix_count", prefixCount).
 		Msg("index build starting")
 
-	builder, err := NewIndexBuilderWithCapacity(outDir, p.config.TempDir, prefixCount)
+	builder, err := NewIndexBuilderWithCapacity(outDir, p.config.TempDir, prefixCount, p.config.UseSegmentEncoding)
 	if err != nil {
 		reader.Close()
 		return 0, 0, fmt.Errorf("create index builder: %w", err)
