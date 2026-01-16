@@ -51,8 +51,14 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		"mph.bin",
 		"mph_fp.u64",
 		"mph_pos.u64",
+		// Raw prefix blob (legacy encoding)
 		"prefix_blob.bin",
 		"prefix_offsets.u64",
+		// Segmented prefix encoding (new compression format)
+		SegmentsBlobFile,     // "segments.bin"
+		SegmentsOffsetsFile,  // "segments.off.u64"
+		PrefixSegIDsFile,     // "prefix_seg_ids.u32"
+		PrefixSegOffsetsFile, // "prefix_seg_off.u64"
 	}
 
 	for _, name := range expectedFiles {
