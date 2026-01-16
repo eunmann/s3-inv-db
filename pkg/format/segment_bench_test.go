@@ -20,8 +20,8 @@ func BenchmarkBuildSegmented(b *testing.B) {
 func benchmarkBuild(b *testing.B, enc PrefixEncoding) {
 	b.Helper()
 
-	const numPrefixes = 10000
-	prefixes := generateHierarchicalPrefixes(numPrefixes)
+	const numPrefixes = 100000
+	prefixes := generateDataLakePrefixes(numPrefixes)
 
 	b.ResetTimer()
 	for range b.N {
@@ -59,8 +59,8 @@ func BenchmarkGetPrefixSegmented(b *testing.B) {
 func benchmarkGetPrefix(b *testing.B, enc PrefixEncoding) {
 	b.Helper()
 
-	const numPrefixes = 10000
-	prefixes := generateHierarchicalPrefixes(numPrefixes)
+	const numPrefixes = 100000
+	prefixes := generateDataLakePrefixes(numPrefixes)
 
 	dir := b.TempDir()
 	builder, err := NewStreamingMPHFBuilder(dir, WithPrefixEncoding(enc))
@@ -87,9 +87,10 @@ func benchmarkGetPrefix(b *testing.B, enc PrefixEncoding) {
 	}
 	defer m.Close()
 
+	numActual := len(prefixes)
 	b.ResetTimer()
 	for i := range b.N {
-		pos := uint64(i % numPrefixes)
+		pos := uint64(i % numActual)
 		_, _ = m.GetPrefix(pos)
 	}
 }
@@ -107,8 +108,8 @@ func BenchmarkMPHFLookupSegmented(b *testing.B) {
 func benchmarkMPHFLookupEncoding(b *testing.B, enc PrefixEncoding) {
 	b.Helper()
 
-	const numPrefixes = 10000
-	prefixes := generateHierarchicalPrefixes(numPrefixes)
+	const numPrefixes = 100000
+	prefixes := generateDataLakePrefixes(numPrefixes)
 
 	dir := b.TempDir()
 	builder, err := NewStreamingMPHFBuilder(dir, WithPrefixEncoding(enc))
@@ -143,46 +144,126 @@ func benchmarkMPHFLookupEncoding(b *testing.B, enc PrefixEncoding) {
 	}
 }
 
-// generateHierarchicalPrefixes generates S3-like prefixes with shared path components.
-func generateHierarchicalPrefixes(n int) []string {
-	// Simulate realistic S3 paths like:
-	// bucket/year/month/day/hour/
-	buckets := []string{"data", "logs", "backups", "archive"}
-	years := []string{"2022", "2023", "2024", "2025"}
+// generateDataLakePrefixes generates realistic S3 prefixes with deep hierarchies.
+// Simulates a data lake with multiple tenants, projects, and time-partitioned data.
+// Paths can be up to 10 levels deep with realistic segment lengths.
+func generateDataLakePrefixes(n int) []string {
+	// Realistic S3 organizational structure:
+	// {org}/{team}/{project}/{environment}/{data_type}/{year}/{month}/{day}/{hour}/{batch}/
+
+	orgs := []string{
+		"acme-corp", "globex-industries", "initech-solutions",
+		"umbrella-analytics", "wayne-enterprises",
+	}
+	teams := []string{
+		"data-engineering", "machine-learning", "analytics",
+		"platform", "security", "research",
+	}
+	projects := []string{
+		"customer-insights", "fraud-detection", "recommendation-engine",
+		"user-behavior", "inventory-forecast", "pricing-optimization",
+		"churn-prediction", "sentiment-analysis",
+	}
+	environments := []string{"production", "staging", "development"}
+	dataTypes := []string{
+		"raw-events", "processed-data", "aggregations",
+		"model-outputs", "feature-store", "snapshots",
+	}
+	years := []string{"2023", "2024", "2025"}
 	months := []string{"01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"}
 
 	prefixes := make([]string, 0, n)
+	prefixes = append(prefixes, "") // root
 
-	// Add root
-	prefixes = append(prefixes, "")
-
-	// Generate hierarchical prefixes
-	for _, bucket := range buckets {
-		prefixes = append(prefixes, bucket+"/")
-		for _, year := range years {
-			prefixes = append(prefixes, bucket+"/"+year+"/")
-			for _, month := range months {
-				prefix := bucket + "/" + year + "/" + month + "/"
-				prefixes = append(prefixes, prefix)
-				// Add day-level prefixes
-				for day := 1; day <= 28 && len(prefixes) < n; day++ {
-					dayPrefix := fmt.Sprintf("%s%02d/", prefix, day)
-					prefixes = append(prefixes, dayPrefix)
-				}
-				if len(prefixes) >= n {
-					break
-				}
-			}
-			if len(prefixes) >= n {
-				break
-			}
-		}
+	// Generate hierarchical structure with realistic distribution
+	// More prefixes at deeper levels (leaf-heavy distribution)
+	for _, org := range orgs {
 		if len(prefixes) >= n {
 			break
 		}
+		orgPrefix := org + "/"
+		prefixes = append(prefixes, orgPrefix)
+
+		for _, team := range teams {
+			if len(prefixes) >= n {
+				break
+			}
+			teamPrefix := orgPrefix + team + "/"
+			prefixes = append(prefixes, teamPrefix)
+
+			for _, project := range projects {
+				if len(prefixes) >= n {
+					break
+				}
+				projectPrefix := teamPrefix + project + "/"
+				prefixes = append(prefixes, projectPrefix)
+
+				for _, env := range environments {
+					if len(prefixes) >= n {
+						break
+					}
+					envPrefix := projectPrefix + env + "/"
+					prefixes = append(prefixes, envPrefix)
+
+					for _, dataType := range dataTypes {
+						if len(prefixes) >= n {
+							break
+						}
+						dataPrefix := envPrefix + dataType + "/"
+						prefixes = append(prefixes, dataPrefix)
+
+						for _, year := range years {
+							if len(prefixes) >= n {
+								break
+							}
+							yearPrefix := dataPrefix + "year=" + year + "/"
+							prefixes = append(prefixes, yearPrefix)
+
+							for _, month := range months {
+								if len(prefixes) >= n {
+									break
+								}
+								monthPrefix := yearPrefix + "month=" + month + "/"
+								prefixes = append(prefixes, monthPrefix)
+
+								// Days 1-28 (leaf-heavy: most prefixes here)
+								for day := 1; day <= 28; day++ {
+									if len(prefixes) >= n {
+										break
+									}
+									dayPrefix := fmt.Sprintf("%sday=%02d/", monthPrefix, day)
+									prefixes = append(prefixes, dayPrefix)
+
+									// Hours 0-23 for some days (even more granular)
+									if day <= 7 { // First week has hourly partitions
+										for hour := range 24 {
+											if len(prefixes) >= n {
+												break
+											}
+											hourPrefix := fmt.Sprintf("%shour=%02d/", dayPrefix, hour)
+											prefixes = append(prefixes, hourPrefix)
+
+											// Some hours have batch directories
+											if hour%6 == 0 {
+												for batch := range 4 {
+													if len(prefixes) >= n {
+														break
+													}
+													batchPrefix := fmt.Sprintf("%sbatch=%d/", hourPrefix, batch)
+													prefixes = append(prefixes, batchPrefix)
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 
-	// Trim to exact size
 	if len(prefixes) > n {
 		prefixes = prefixes[:n]
 	}
@@ -193,8 +274,39 @@ func generateHierarchicalPrefixes(n int) []string {
 // TestSizeComparison compares file sizes between raw and segmented encoding.
 // Run with: go test -v -run TestSizeComparison.
 func TestSizeComparison(t *testing.T) {
-	const numPrefixes = 10000
-	prefixes := generateHierarchicalPrefixes(numPrefixes)
+	const numPrefixes = 100000
+	prefixes := generateDataLakePrefixes(numPrefixes)
+
+	t.Logf("Testing with %d prefixes", len(prefixes))
+
+	// Calculate prefix statistics
+	var totalLen, totalDepth int
+	var maxDepth int
+	uniqueSegments := make(map[string]struct{})
+	for _, p := range prefixes {
+		totalLen += len(p)
+		depth := countSlashes(p)
+		totalDepth += depth
+		if depth > maxDepth {
+			maxDepth = depth
+		}
+		// Extract segments
+		for _, seg := range splitSegments(p) {
+			uniqueSegments[seg] = struct{}{}
+		}
+	}
+
+	t.Log("")
+	t.Log("=== PREFIX STATISTICS ===")
+	t.Logf("Total prefixes: %d", len(prefixes))
+	t.Logf("Average prefix length: %.1f bytes", float64(totalLen)/float64(len(prefixes)))
+	t.Logf("Average depth: %.1f levels", float64(totalDepth)/float64(len(prefixes)))
+	t.Logf("Max depth: %d levels", maxDepth)
+	t.Logf("Unique segments: %d", len(uniqueSegments))
+	if len(prefixes) > 1 {
+		t.Logf("Sample shortest: %q", prefixes[1])
+		t.Logf("Sample longest:  %q", prefixes[len(prefixes)-1])
+	}
 
 	// Build with raw encoding
 	rawDir := t.TempDir()
@@ -343,4 +455,36 @@ func logDirContents(t *testing.T, dir string) {
 		}
 		t.Logf("  %s: %d bytes", entry.Name(), info.Size())
 	}
+}
+
+// countSlashes returns the number of '/' characters in a string.
+func countSlashes(s string) int {
+	count := 0
+	for _, c := range s {
+		if c == '/' {
+			count++
+		}
+	}
+	return count
+}
+
+// splitSegments splits a prefix path into its segments.
+func splitSegments(prefix string) []string {
+	if prefix == "" {
+		return nil
+	}
+	var segments []string
+	start := 0
+	for i, c := range prefix {
+		if c == '/' {
+			if i > start {
+				segments = append(segments, prefix[start:i])
+			}
+			start = i + 1
+		}
+	}
+	if start < len(prefix) {
+		segments = append(segments, prefix[start:])
+	}
+	return segments
 }
