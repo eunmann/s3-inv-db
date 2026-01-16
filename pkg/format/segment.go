@@ -5,9 +5,15 @@ import (
 	"hash/fnv"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	lru "github.com/hashicorp/golang-lru/v2"
 )
+
+// builderPool pools strings.Builder to reduce allocations in GetPrefix.
+var builderPool = sync.Pool{
+	New: func() any { return &strings.Builder{} },
+}
 
 // Segment compression file names.
 const (
@@ -166,6 +172,39 @@ func (sd *SegmentDictionary) Close() error {
 	return sd.blob.Close()
 }
 
+// PreloadedSegmentCache holds all segments in memory for fast lookups.
+// This eliminates LRU cache overhead by using direct slice indexing.
+type PreloadedSegmentCache struct {
+	segments []string // segment ID -> string (direct index lookup)
+}
+
+// PreloadSegments loads all segments into memory for fast lookups.
+// This is recommended when segment dictionaries are small relative to
+// prefix data (typical case: ~100-200 unique segments for 100K prefixes).
+func (sd *SegmentDictionary) PreloadSegments() (*PreloadedSegmentCache, error) {
+	count := sd.Count()
+	segments := make([]string, count)
+	for i := range count {
+		seg, err := sd.blob.Get(i)
+		if err != nil {
+			return nil, fmt.Errorf("preload segment %d: %w", i, err)
+		}
+		segments[i] = seg
+	}
+	return &PreloadedSegmentCache{segments: segments}, nil
+}
+
+// Get returns the segment string for the given ID.
+// Panics if id is out of range.
+func (c *PreloadedSegmentCache) Get(id uint32) string {
+	return c.segments[id]
+}
+
+// Count returns the number of segments in the cache.
+func (c *PreloadedSegmentCache) Count() int {
+	return len(c.segments)
+}
+
 // SegmentedPrefixWriter writes prefixes as sequences of segment IDs.
 type SegmentedPrefixWriter struct {
 	interner      *SegmentInterner
@@ -267,15 +306,24 @@ func (w *SegmentedPrefixWriter) PrefixCount() uint64 {
 // SegmentedPrefixReader reads prefixes from segmented encoding.
 type SegmentedPrefixReader struct {
 	dict    *SegmentDictionary
-	segIDs  *ArrayReader // prefix_seg_ids.u32
-	offsets *ArrayReader // prefix_seg_off.u64
+	cache   *PreloadedSegmentCache // preloaded segments for fast lookup
+	segIDs  *ArrayReader           // prefix_seg_ids.u32
+	offsets *ArrayReader           // prefix_seg_off.u64
 }
 
 // OpenSegmentedPrefixReader opens a segmented prefix reader from disk.
+// Segments are preloaded into memory for fast lookups.
 func OpenSegmentedPrefixReader(outDir string) (*SegmentedPrefixReader, error) {
 	dict, err := OpenSegmentDictionary(outDir)
 	if err != nil {
 		return nil, fmt.Errorf("open segment dictionary: %w", err)
+	}
+
+	// Preload all segments for fast lookups (eliminates LRU overhead)
+	cache, err := dict.PreloadSegments()
+	if err != nil {
+		dict.Close()
+		return nil, fmt.Errorf("preload segments: %w", err)
 	}
 
 	segIDsPath := filepath.Join(outDir, PrefixSegIDsFile)
@@ -295,6 +343,7 @@ func OpenSegmentedPrefixReader(outDir string) (*SegmentedPrefixReader, error) {
 
 	return &SegmentedPrefixReader{
 		dict:    dict,
+		cache:   cache,
 		segIDs:  segIDs,
 		offsets: offsets,
 	}, nil
@@ -322,26 +371,29 @@ func (r *SegmentedPrefixReader) GetPrefix(pos uint64) (string, error) {
 		return "", nil
 	}
 
-	// Pre-allocate builder: ~12 bytes avg per segment + slashes
-	var builder strings.Builder
-	builder.Grow(numSegs * 12)
+	// Use pooled builder to reduce allocations
+	builder, _ := builderPool.Get().(*strings.Builder)
+	if builder == nil {
+		builder = &strings.Builder{}
+	}
+	builder.Reset()
+	builder.Grow(numSegs * 12) // ~12 bytes avg per segment + slashes
 
 	for i := start; i < end; i++ {
 		segID, err := r.segIDs.GetU32(i)
 		if err != nil {
+			builderPool.Put(builder)
 			return "", fmt.Errorf("get segment ID at %d: %w", i, err)
-		}
-		seg, err := r.dict.GetSegment(segID)
-		if err != nil {
-			return "", fmt.Errorf("get segment %d: %w", segID, err)
 		}
 		if i > start {
 			builder.WriteByte('/')
 		}
-		builder.WriteString(seg)
+		builder.WriteString(r.cache.Get(segID))
 	}
 
-	return builder.String(), nil
+	result := builder.String()
+	builderPool.Put(builder)
+	return result, nil
 }
 
 // UnsafeGetPrefix reconstructs the prefix without bounds checking.
@@ -354,19 +406,25 @@ func (r *SegmentedPrefixReader) UnsafeGetPrefix(pos uint64) string {
 		return ""
 	}
 
-	// Pre-allocate builder: ~12 bytes avg per segment + slashes
-	var builder strings.Builder
-	builder.Grow(numSegs * 12)
+	// Use pooled builder to reduce allocations
+	builder, _ := builderPool.Get().(*strings.Builder)
+	if builder == nil {
+		builder = &strings.Builder{}
+	}
+	builder.Reset()
+	builder.Grow(numSegs * 12) // ~12 bytes avg per segment + slashes
 
 	for i := start; i < end; i++ {
 		if i > start {
 			builder.WriteByte('/')
 		}
 		segID := r.segIDs.UnsafeGetU32(i)
-		builder.WriteString(r.dict.UnsafeGetSegment(segID))
+		builder.WriteString(r.cache.Get(segID))
 	}
 
-	return builder.String()
+	result := builder.String()
+	builderPool.Put(builder)
+	return result
 }
 
 // Count returns the number of prefixes (N, not N+1).

@@ -537,3 +537,49 @@ func TestMPHFLookupWithVerifySegmented(t *testing.T) {
 		t.Error("LookupWithVerify(missing) should return false")
 	}
 }
+
+func TestPreloadedSegmentCache(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create segment dictionary
+	interner, err := NewSegmentInterner(dir)
+	if err != nil {
+		t.Fatalf("NewSegmentInterner failed: %v", err)
+	}
+
+	segments := []string{"", "data", "2024", "01", "bucket", "日本語"}
+	for _, seg := range segments {
+		if _, err := interner.Intern(seg); err != nil {
+			t.Fatalf("Intern(%q) failed: %v", seg, err)
+		}
+	}
+
+	if err := interner.Close(); err != nil {
+		t.Fatalf("interner.Close failed: %v", err)
+	}
+
+	// Open dictionary and preload
+	dict, err := OpenSegmentDictionary(dir)
+	if err != nil {
+		t.Fatalf("OpenSegmentDictionary failed: %v", err)
+	}
+	defer dict.Close()
+
+	cache, err := dict.PreloadSegments()
+	if err != nil {
+		t.Fatalf("PreloadSegments failed: %v", err)
+	}
+
+	// Verify cache count
+	if cache.Count() != len(segments) {
+		t.Errorf("cache.Count() = %d, want %d", cache.Count(), len(segments))
+	}
+
+	// Verify all segments can be retrieved
+	for i, expected := range segments {
+		got := cache.Get(uint32(i))
+		if got != expected {
+			t.Errorf("cache.Get(%d) = %q, want %q", i, got, expected)
+		}
+	}
+}
