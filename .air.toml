@@ -1,0 +1,23 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/s3inv-server ./cmd/s3inv-server"
+  bin = "./tmp/s3inv-server"
+  delay = 1000
+  exclude_dir = ["bin", "tmp", "vendor", ".git"]
+  exclude_regex = ["_test\\.go$"]
+  include_ext = ["go", "html", "tmpl"]
+  kill_delay = "2s"
+
+[log]
+  time = false
+
+[color]
+  main = "magenta"
+  watcher = "cyan"
+  build = "yellow"
+  runner = "green"
+
+[misc]
+  clean_on_exit = true
