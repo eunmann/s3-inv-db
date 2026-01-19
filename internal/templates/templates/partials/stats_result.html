@@ -1,0 +1,81 @@
+<div class="bg-white shadow overflow-hidden sm:rounded-lg">
+    <div class="px-4 py-5 sm:px-6">
+        <h3 class="text-lg leading-6 font-medium text-gray-900">Stats for: <code class="bg-gray-100 px-2 py-1 rounded">{{.Prefix}}</code></h3>
+    </div>
+    <div class="border-t border-gray-200 px-4 py-5 sm:p-0">
+        <dl class="sm:divide-y sm:divide-gray-200">
+            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt class="text-sm font-medium text-gray-500">Object Count</dt>
+                <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">{{.ObjectCountH}} <span class="text-gray-500">({{.ObjectCount}})</span></dd>
+            </div>
+            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt class="text-sm font-medium text-gray-500">Total Size</dt>
+                <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">{{.TotalBytesH}} <span class="text-gray-500">({{.TotalBytes}} bytes)</span></dd>
+            </div>
+            {{if .CostEstimate}}
+            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt class="text-sm font-medium text-gray-500">Estimated Monthly Cost</dt>
+                <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2 font-semibold">{{.CostEstimate.TotalFormatted}}/month</dd>
+            </div>
+            {{end}}
+        </dl>
+    </div>
+
+    {{if .TierBreakdown}}
+    <div class="border-t border-gray-200">
+        <div class="px-4 py-5 sm:px-6">
+            <h4 class="text-md font-medium text-gray-900">Storage Tier Breakdown</h4>
+        </div>
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tier</th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Objects</th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Size</th>
+                    {{if $.CostEstimate.PerTierFormatted}}
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Est. Cost</th>
+                    {{end}}
+                </tr>
+            </thead>
+            <tbody class="bg-white divide-y divide-gray-200">
+                {{range .TierBreakdown}}
+                <tr>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{.TierName}}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{.ObjectCountH}}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{.BytesH}}</td>
+                    {{if $.CostEstimate.PerTierFormatted}}
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{index $.CostEstimate.PerTierFormatted .TierName}}</td>
+                    {{end}}
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{end}}
+
+    {{if and .CostEstimate (or .CostEstimate.MonitoringMicrodollars .CostEstimate.MinObjectSizeMicrodollars .CostEstimate.GlacierOverheadMicrodollars)}}
+    <div class="border-t border-gray-200 px-4 py-5 sm:px-6">
+        <h4 class="text-md font-medium text-gray-900 mb-3">Additional Cost Details</h4>
+        <dl class="space-y-2 text-sm">
+            {{if .CostEstimate.MonitoringMicrodollars}}
+            <div class="flex justify-between">
+                <dt class="text-gray-500">Intelligent-Tiering Monitoring Fee</dt>
+                <dd class="text-gray-900">{{formatCost .CostEstimate.MonitoringMicrodollars}}</dd>
+            </div>
+            {{end}}
+            {{if .CostEstimate.MinObjectSizeMicrodollars}}
+            <div class="flex justify-between">
+                <dt class="text-gray-500">Min Object Size Penalty (128KB)</dt>
+                <dd class="text-gray-900">{{formatCost .CostEstimate.MinObjectSizeMicrodollars}}</dd>
+            </div>
+            {{end}}
+            {{if .CostEstimate.GlacierOverheadMicrodollars}}
+            <div class="flex justify-between">
+                <dt class="text-gray-500">Glacier Metadata Overhead</dt>
+                <dd class="text-gray-900">{{formatCost .CostEstimate.GlacierOverheadMicrodollars}}</dd>
+            </div>
+            {{end}}
+        </dl>
+    </div>
+    {{end}}
+</div>

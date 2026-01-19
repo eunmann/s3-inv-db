@@ -1,0 +1,69 @@
+{{template "layout" .}}
+
+{{define "content"}}
+<div class="px-4 py-6 sm:px-0">
+    <h1 class="text-2xl font-semibold text-gray-900 mb-6">Query Stats</h1>
+
+    <!-- Query Form -->
+    <div class="bg-white shadow sm:rounded-lg mb-6">
+        <div class="px-4 py-5 sm:p-6">
+            <form id="stats-form" class="space-y-4">
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                        <label for="inventory_id" class="block text-sm font-medium text-gray-700">Inventory</label>
+                        <select id="inventory_id" name="inventory_id" required class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md border">
+                            <option value="">Select an inventory...</option>
+                            {{range .Inventories}}
+                            <option value="{{.ID}}">{{.Name}} ({{formatCount .NodeCount}} nodes)</option>
+                            {{end}}
+                        </select>
+                        {{if not .Inventories}}
+                        <p class="mt-1 text-sm text-gray-500">No loaded inventories. <a href="/inventories" class="text-indigo-600 hover:text-indigo-500">Load one first</a>.</p>
+                        {{end}}
+                    </div>
+                    <div>
+                        <label for="prefix" class="block text-sm font-medium text-gray-700">Prefix</label>
+                        <input type="text" id="prefix" name="prefix" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="data/2024/">
+                    </div>
+                </div>
+
+                <div class="flex items-center space-x-6">
+                    <div class="flex items-center">
+                        <input id="show_tiers" name="show_tiers" type="checkbox" value="true" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                        <label for="show_tiers" class="ml-2 block text-sm text-gray-900">Show tier breakdown</label>
+                    </div>
+                    <div class="flex items-center">
+                        <input id="estimate_cost" name="estimate_cost" type="checkbox" value="true" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                        <label for="estimate_cost" class="ml-2 block text-sm text-gray-900">Estimate cost</label>
+                    </div>
+                </div>
+
+                <div class="flex justify-end">
+                    <button type="submit"
+                            hx-get="/partials/stats-result"
+                            hx-include="#stats-form"
+                            hx-target="#stats-result"
+                            hx-indicator="#loading"
+                            class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        Query
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Loading Indicator -->
+    <div id="loading" class="htmx-indicator text-center py-8">
+        <svg class="animate-spin h-8 w-8 text-indigo-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        <p class="mt-2 text-sm text-gray-500">Querying...</p>
+    </div>
+
+    <!-- Results -->
+    <div id="stats-result">
+        <!-- HTMX will load results here -->
+    </div>
+</div>
+{{end}}

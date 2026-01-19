@@ -1,0 +1,229 @@
+package inventory
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/eunmann/s3-inv-db/pkg/indexread"
+)
+
+// ErrNotFound is returned when an inventory is not found.
+var ErrNotFound = errors.New("inventory not found")
+
+// ErrAlreadyExists is returned when attempting to register an inventory that already exists.
+var ErrAlreadyExists = errors.New("inventory already exists")
+
+// ErrNotLoaded is returned when attempting to query an inventory that is not loaded.
+var ErrNotLoaded = errors.New("inventory not loaded")
+
+// ErrInvalidState is returned when attempting an invalid state transition.
+var ErrInvalidState = errors.New("invalid state for operation")
+
+// managedInventory wraps an inventory with its index.
+type managedInventory struct {
+	info  Info
+	index *indexread.Index
+}
+
+// Manager manages multiple inventories with thread-safe access.
+type Manager struct {
+	mu          sync.RWMutex
+	inventories map[string]*managedInventory
+}
+
+// NewManager creates a new inventory manager.
+func NewManager() *Manager {
+	return &Manager{
+		inventories: make(map[string]*managedInventory),
+	}
+}
+
+// Register adds a new inventory in pending state.
+func (m *Manager) Register(id, name, path string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.inventories[id]; exists {
+		return ErrAlreadyExists
+	}
+
+	m.inventories[id] = &managedInventory{
+		info: Info{
+			ID:    id,
+			Name:  name,
+			Path:  path,
+			State: StatePending,
+		},
+	}
+
+	return nil
+}
+
+// Load loads an inventory index from disk.
+func (m *Manager) Load(ctx context.Context, id string) error {
+	// First, transition to parsing state under lock
+	m.mu.Lock()
+	inv, exists := m.inventories[id]
+	if !exists {
+		m.mu.Unlock()
+		return ErrNotFound
+	}
+
+	if inv.info.State != StatePending && inv.info.State != StateUnloaded && inv.info.State != StateError {
+		m.mu.Unlock()
+		return fmt.Errorf("%w: cannot load from state %s", ErrInvalidState, inv.info.State)
+	}
+
+	inv.info.State = StateParsing
+	inv.info.Error = ""
+	path := inv.info.Path
+	m.mu.Unlock()
+
+	// Load the index outside the lock (can be slow)
+	idx, err := indexread.Open(path)
+
+	// Update state with result
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check if inventory still exists (could have been removed while loading)
+	inv, exists = m.inventories[id]
+	if !exists {
+		if idx != nil {
+			idx.Close()
+		}
+		return ErrNotFound
+	}
+
+	if err != nil {
+		inv.info.State = StateError
+		inv.info.Error = err.Error()
+		return fmt.Errorf("open index: %w", err)
+	}
+
+	// Check for context cancellation
+	if ctx.Err() != nil {
+		idx.Close()
+		inv.info.State = StateError
+		inv.info.Error = ctx.Err().Error()
+		return fmt.Errorf("load cancelled: %w", ctx.Err())
+	}
+
+	inv.index = idx
+	inv.info.State = StateLoaded
+	inv.info.NodeCount = idx.Count()
+	inv.info.MaxDepth = idx.MaxDepth()
+	inv.info.HasTierData = idx.HasTierData()
+	inv.info.LoadedAt = time.Now()
+
+	return nil
+}
+
+// Unload closes an inventory index and releases its resources.
+func (m *Manager) Unload(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	inv, exists := m.inventories[id]
+	if !exists {
+		return ErrNotFound
+	}
+
+	if inv.info.State != StateLoaded {
+		return fmt.Errorf("%w: cannot unload from state %s", ErrInvalidState, inv.info.State)
+	}
+
+	if inv.index != nil {
+		inv.index.Close()
+		inv.index = nil
+	}
+
+	inv.info.State = StateUnloaded
+	inv.info.NodeCount = 0
+	inv.info.MaxDepth = 0
+	inv.info.LoadedAt = time.Time{}
+
+	return nil
+}
+
+// Get returns info about an inventory.
+func (m *Manager) Get(id string) (Info, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	inv, exists := m.inventories[id]
+	if !exists {
+		return Info{}, false
+	}
+
+	return inv.info, true
+}
+
+// List returns info about all inventories.
+func (m *Manager) List() []Info {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]Info, 0, len(m.inventories))
+	for _, inv := range m.inventories {
+		result = append(result, inv.info)
+	}
+
+	return result
+}
+
+// GetIndex returns the loaded index for an inventory.
+func (m *Manager) GetIndex(id string) (*indexread.Index, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	inv, exists := m.inventories[id]
+	if !exists {
+		return nil, ErrNotFound
+	}
+
+	if inv.info.State != StateLoaded || inv.index == nil {
+		return nil, ErrNotLoaded
+	}
+
+	return inv.index, nil
+}
+
+// Remove removes an inventory from the manager.
+func (m *Manager) Remove(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	inv, exists := m.inventories[id]
+	if !exists {
+		return ErrNotFound
+	}
+
+	if inv.index != nil {
+		inv.index.Close()
+	}
+
+	delete(m.inventories, id)
+	return nil
+}
+
+// Close closes all loaded inventories and clears the manager.
+func (m *Manager) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var firstErr error
+	for _, inv := range m.inventories {
+		if inv.index != nil {
+			if err := inv.index.Close(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+
+	m.inventories = make(map[string]*managedInventory)
+	return firstErr
+}
