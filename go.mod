@@ -13,7 +13,9 @@ require (
 )
 
 require (
+	github.com/PuerkitoBio/goquery v1.11.0 // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
+	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.4 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.6 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.16 // indirect
@@ -41,6 +43,7 @@ require (
 	github.com/parquet-go/bitpack v1.0.0 // indirect
 	github.com/parquet-go/jsonlite v1.0.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
+	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sync v0.12.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 )
