@@ -1,0 +1,199 @@
+package seeder
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/eunmann/s3-inv-db/pkg/benchutil"
+	"github.com/eunmann/s3-inv-db/pkg/indexread"
+	"github.com/rs/zerolog"
+)
+
+func TestRun_GeneratesValidIndexes(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := Config{
+		OutputDir: tmpDir,
+		Count:     2,
+		Objects:   100,
+		Preset:    "small",
+		Seed:      42,
+		Logger:    zerolog.Nop(),
+	}
+
+	if err := Run(cfg); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	// Verify summary.json was created
+	summaryPath := filepath.Join(tmpDir, "summary.json")
+	summaryData, err := os.ReadFile(summaryPath)
+	if err != nil {
+		t.Fatalf("read summary.json: %v", err)
+	}
+
+	var summary Summary
+	if err := json.Unmarshal(summaryData, &summary); err != nil {
+		t.Fatalf("unmarshal summary: %v", err)
+	}
+
+	if len(summary.Inventories) != 2 {
+		t.Errorf("expected 2 inventories, got %d", len(summary.Inventories))
+	}
+
+	// Verify each index can be opened
+	for _, inv := range summary.Inventories {
+		idx, err := indexread.Open(inv.Path)
+		if err != nil {
+			t.Errorf("failed to open index %s: %v", inv.ID, err)
+			continue
+		}
+
+		if idx.Count() == 0 {
+			t.Errorf("index %s has no prefixes", inv.ID)
+		}
+
+		// Verify root prefix exists
+		pos, ok := idx.Lookup("")
+		if !ok {
+			t.Errorf("index %s missing root prefix", inv.ID)
+		} else {
+			stats := idx.Stats(pos)
+			if stats.ObjectCount == 0 {
+				t.Errorf("index %s root has no objects", inv.ID)
+			}
+		}
+
+		idx.Close()
+	}
+}
+
+func TestGetGeneratorConfig_Presets(t *testing.T) {
+	presets := []string{"small", "medium", "large", "realistic", "unknown"}
+
+	for _, preset := range presets {
+		t.Run(preset, func(t *testing.T) {
+			cfg := getGeneratorConfig(preset, 1000)
+
+			if cfg.NumObjects != 1000 {
+				t.Errorf("expected 1000 objects, got %d", cfg.NumObjects)
+			}
+
+			if cfg.PrefixFanout <= 0 {
+				t.Errorf("expected positive prefix fanout, got %d", cfg.PrefixFanout)
+			}
+
+			if cfg.MaxDepth <= 0 {
+				t.Errorf("expected positive max depth, got %d", cfg.MaxDepth)
+			}
+		})
+	}
+}
+
+func TestGenerateInventory_Deterministic(t *testing.T) {
+	tmpDir1 := t.TempDir()
+	tmpDir2 := t.TempDir()
+
+	cfg1 := Config{
+		OutputDir: tmpDir1,
+		Count:     1,
+		Objects:   50,
+		Preset:    "small",
+		Seed:      12345,
+		Logger:    zerolog.Nop(),
+	}
+
+	cfg2 := Config{
+		OutputDir: tmpDir2,
+		Count:     1,
+		Objects:   50,
+		Preset:    "small",
+		Seed:      12345,
+		Logger:    zerolog.Nop(),
+	}
+
+	info1, err := generateInventory(cfg1, 1, 12345)
+	if err != nil {
+		t.Fatalf("generate inventory 1: %v", err)
+	}
+
+	info2, err := generateInventory(cfg2, 1, 12345)
+	if err != nil {
+		t.Fatalf("generate inventory 2: %v", err)
+	}
+
+	if info1.Objects != info2.Objects {
+		t.Errorf("objects mismatch: %d vs %d", info1.Objects, info2.Objects)
+	}
+
+	if info1.Prefixes != info2.Prefixes {
+		t.Errorf("prefixes mismatch: %d vs %d", info1.Prefixes, info2.Prefixes)
+	}
+
+	// Open both and compare stats at root
+	idx1, err := indexread.Open(info1.Path)
+	if err != nil {
+		t.Fatalf("open index 1: %v", err)
+	}
+	defer idx1.Close()
+
+	idx2, err := indexread.Open(info2.Path)
+	if err != nil {
+		t.Fatalf("open index 2: %v", err)
+	}
+	defer idx2.Close()
+
+	pos1, _ := idx1.Lookup("")
+	pos2, _ := idx2.Lookup("")
+
+	stats1 := idx1.Stats(pos1)
+	stats2 := idx2.Stats(pos2)
+
+	if stats1.ObjectCount != stats2.ObjectCount {
+		t.Errorf("root object count mismatch: %d vs %d", stats1.ObjectCount, stats2.ObjectCount)
+	}
+
+	if stats1.TotalBytes != stats2.TotalBytes {
+		t.Errorf("root total bytes mismatch: %d vs %d", stats1.TotalBytes, stats2.TotalBytes)
+	}
+}
+
+func TestGetGeneratorConfig_PresetValues(t *testing.T) {
+	tests := []struct {
+		preset       string
+		wantFanout   int
+		wantMaxDepth int
+	}{
+		{"small", 5, 3},
+		{"medium", 10, 5},
+		{"large", 20, 8},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.preset, func(t *testing.T) {
+			cfg := getGeneratorConfig(tt.preset, 1000)
+
+			if cfg.PrefixFanout != tt.wantFanout {
+				t.Errorf("fanout: want %d, got %d", tt.wantFanout, cfg.PrefixFanout)
+			}
+
+			if cfg.MaxDepth != tt.wantMaxDepth {
+				t.Errorf("maxDepth: want %d, got %d", tt.wantMaxDepth, cfg.MaxDepth)
+			}
+		})
+	}
+
+	// Verify realistic uses S3RealisticConfig values
+	realistic := getGeneratorConfig("realistic", 1000)
+	expected := benchutil.S3RealisticConfig(1000)
+
+	if realistic.PrefixFanout != expected.PrefixFanout {
+		t.Errorf("realistic fanout: want %d, got %d", expected.PrefixFanout, realistic.PrefixFanout)
+	}
+
+	if realistic.MaxDepth != expected.MaxDepth {
+		t.Errorf("realistic maxDepth: want %d, got %d", expected.MaxDepth, realistic.MaxDepth)
+	}
+}

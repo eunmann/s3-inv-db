@@ -108,6 +108,63 @@ if idx.HasTierData() {
 - [Library API](docs/library-api.md) - Go package documentation
 - [Performance](docs/performance.md) - Benchmarks and tuning
 
+## Development: Seed Data
+
+For local development and testing, generate synthetic inventory indexes:
+
+```bash
+# Generate 3 inventories with 10K objects each (default)
+make seed
+
+# Custom generation
+./bin/s3inv-seeder --out ./seed-data --count 5 --objects 50000 --preset large
+
+# Clean up generated data
+make clean-seed
+```
+
+### Presets
+
+| Preset | Fanout | Max Depth | Description |
+|--------|--------|-----------|-------------|
+| small | 5 | 3 | Compact test data |
+| medium | 10 | 5 | Moderate complexity |
+| large | 20 | 8 | Deep, wide trees |
+| realistic | 15 | 7 | S3-like path patterns (default) |
+
+### Using Seed Data with Server
+
+1. Generate seed data: `make seed`
+2. Start the server: `./bin/s3inv-server --dev --verbose`
+3. Register an inventory:
+   ```bash
+   curl -X POST http://localhost:8080/api/inventories \
+     -H "Content-Type: application/json" \
+     -d '{"id":"inv-001","name":"Test Inventory","path":"./seed-data/inv-001"}'
+   ```
+4. Load the inventory:
+   ```bash
+   curl -X POST http://localhost:8080/api/inventories/inv-001/load
+   ```
+5. Query prefix stats:
+   ```bash
+   curl "http://localhost:8080/api/stats/inv-001?prefix=data/"
+   ```
+
+### Output Structure
+
+```
+seed-data/
+├── summary.json       # Registry of all generated inventories
+├── inv-001/           # First inventory index directory
+│   ├── subtree_end.u64
+│   ├── depth.u32
+│   ├── object_count.u64
+│   └── ... (all index files)
+├── inv-002/
+└── inv-003/
+```
+
 ## Requirements
 
 - Go 1.21+
