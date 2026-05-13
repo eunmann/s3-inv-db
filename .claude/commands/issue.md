@@ -102,7 +102,7 @@ Before creating the PR:
 
 1. `make lint` — zero warnings.
 2. `make test-race` — all green.
-3. If the change touched docker or `.air.toml`, smoke-test `make docker-dev` and/or `make docker-prod`.
+3. If the change touched docker or `.air.toml`, smoke-test `make dev` and/or `make docker-prod`.
 
 Do not proceed to the PR until these pass.
 

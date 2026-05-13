@@ -134,13 +134,16 @@ make clean-seed
 
 ### Using Seed Data with Server
 
+The dev server runs in Docker; there is no host-binary dev workflow.
+
 1. Generate seed data: `make seed`
-2. Start the server: `./bin/s3inv-server --dev --verbose`
-3. Register an inventory:
+2. Start the dev server: `make dev` (air-driven hot reload on `:8080`)
+3. Register an inventory (paths are evaluated inside the container, where
+   the repo is mounted at `/app`):
    ```bash
    curl -X POST http://localhost:8080/api/inventories \
      -H "Content-Type: application/json" \
-     -d '{"id":"inv-001","name":"Test Inventory","path":"./seed-data/inv-001"}'
+     -d '{"id":"inv-001","name":"Test Inventory","path":"/app/seed-data/inv-001"}'
    ```
 4. Load the inventory:
    ```bash
@@ -148,7 +151,7 @@ make clean-seed
    ```
 5. Query prefix stats:
    ```bash
-   curl "http://localhost:8080/api/stats/inv-001?prefix=data/"
+   curl "http://localhost:8080/api/stats?inventory_id=inv-001&prefix=data/"
    ```
 
 ### Output Structure
@@ -167,11 +170,13 @@ seed-data/
 
 ## Docker
 
-The `infra/` directory carries a compose stack with three profiles. All commands accept the `S3INV_DEV_PORT` / `S3INV_PROD_PORT` env vars to override the host ports.
+The dev server runs in Docker — there is no host-binary dev path. The
+`infra/` directory carries a compose stack with three profiles. Override
+host ports with `S3INV_DEV_PORT` / `S3INV_PROD_PORT`.
 
 | Profile | Make target | What it does |
 |---|---|---|
-| `dev` | `make docker-dev` | Source-mounted server with air hot-reload on `:8080` |
+| `dev` | `make dev` | Source-mounted server with air hot-reload on `:8080` |
 | `prod` | `make docker-prod` | Slim multi-stage image (~21 MB) on `:8081`; mounts `./seed-data` read-only at `/data` |
 | `seed` | `make docker-seed` | One-shot inventory generator; writes to `./seed-data` on the host |
 
@@ -180,8 +185,8 @@ The `infra/` directory carries a compose stack with three profiles. All commands
 make docker-seed
 make docker-prod
 
-# Or develop with hot reload
-make docker-dev
+# Develop with hot reload
+make dev
 
 # Stop and clean up volumes
 make docker-down

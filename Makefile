@@ -1,11 +1,8 @@
-.PHONY: all build server seeder test test-race lint lint-fix clean clean-seed dev seed \
-        docker-build docker-dev docker-prod docker-seed docker-down
+.PHONY: all build server seeder test test-race lint lint-fix clean clean-seed seed \
+        dev docker-build docker-prod docker-seed docker-down
 
 GOLANGCI_LINT_VERSION := v2.1.2
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-
-AIR_VERSION := v1.61.7
-AIR := go run github.com/air-verse/air@$(AIR_VERSION)
 
 COMPOSE := docker compose -f infra/docker-compose.yml
 
@@ -38,9 +35,6 @@ clean:
 clean-seed:
 	rm -rf seed-data/
 
-dev:
-	$(AIR)
-
 seed: seeder
 	./bin/s3inv-seeder --out ./seed-data --count 3 --objects 10000 --verbose --pretty-logs
 
@@ -50,8 +44,9 @@ seed: seeder
 docker-build:
 	$(COMPOSE) --profile dev --profile prod build
 
-# Hot-reload server (port 8080). Override with S3INV_DEV_PORT=...
-docker-dev:
+# Hot-reload server (port 8080). The only supported dev workflow — no host
+# binary path. Override port with S3INV_DEV_PORT=...
+dev:
 	$(COMPOSE) --profile dev up --build
 
 # Slim production image (port 8081). Override with S3INV_PROD_PORT=...
