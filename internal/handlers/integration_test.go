@@ -185,13 +185,14 @@ func TestGetDescendantsAPI_Filter(t *testing.T) {
 	}
 }
 
-func TestBrowseLevelPartial_Success(t *testing.T) {
+func TestBrowsePage_PartialSuccess(t *testing.T) {
 	h := buildLoadedTestHandlers(t)
 
-	url := "/partials/browse-level?inventory_id=loaded&prefix="
-	req := httptest.NewRequest(http.MethodGet, url, http.NoBody)
+	// HX-Request flips /browse into partial mode.
+	req := httptest.NewRequest(http.MethodGet, "/browse?inventory_id=loaded&prefix=", http.NoBody)
+	req.Header.Set("HX-Request", "true")
 	w := httptest.NewRecorder()
-	h.BrowseLevelPartial(w, req)
+	h.BrowsePage(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())

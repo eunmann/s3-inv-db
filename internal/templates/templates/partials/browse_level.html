@@ -4,10 +4,10 @@
         {{range $i, $c := .Breadcrumbs}}
             {{if $i}}<span class="mx-2 text-gray-300 dark:text-gray-600">/</span>{{end}}
             <button type="button"
-                hx-get="/partials/browse-level"
+                hx-get="/browse"
                 {{hxVals "inventory_id" $inv "prefix" $c.Prefix}}
                 hx-target="#browse-target"
-                hx-push-url="{{browseURL "inventory_id" $inv "prefix" $c.Prefix}}"
+                hx-push-url="true"
 
                 class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline {{if eq $i (sub (len $.Breadcrumbs) 1)}}font-semibold text-gray-900 dark:text-gray-100 cursor-default no-underline{{end}}"
                 {{if eq $i (sub (len $.Breadcrumbs) 1)}}disabled{{end}}>
@@ -83,10 +83,10 @@
             <div class="flex items-center gap-2 text-sm">
                 {{if .Pagination.PrevPage}}
                 <button type="button"
-                    hx-get="/partials/browse-level"
+                    hx-get="/browse"
                     {{hxVals "inventory_id" $inv "prefix" $.Prefix "sort" $.Sort "dir" $.Dir "page" .Pagination.PrevPage}}
                     hx-target="#browse-target"
-                    hx-push-url="{{browseURL "inventory_id" $inv "prefix" $.Prefix "sort" $.Sort "dir" $.Dir "page" .Pagination.PrevPage}}"
+                    hx-push-url="true"
                     class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">← Prev</button>
                 {{else}}
                 <span class="px-3 py-1 border border-gray-200 dark:border-gray-700 rounded text-gray-300 dark:text-gray-600 cursor-not-allowed">← Prev</span>
@@ -94,10 +94,10 @@
                 <span class="text-gray-500 dark:text-gray-400">Page {{.Pagination.Page}} of {{.Pagination.Pages}}</span>
                 {{if .Pagination.NextPage}}
                 <button type="button"
-                    hx-get="/partials/browse-level"
+                    hx-get="/browse"
                     {{hxVals "inventory_id" $inv "prefix" $.Prefix "sort" $.Sort "dir" $.Dir "page" .Pagination.NextPage}}
                     hx-target="#browse-target"
-                    hx-push-url="{{browseURL "inventory_id" $inv "prefix" $.Prefix "sort" $.Sort "dir" $.Dir "page" .Pagination.NextPage}}"
+                    hx-push-url="true"
                     class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">Next →</button>
                 {{else}}
                 <span class="px-3 py-1 border border-gray-200 dark:border-gray-700 rounded text-gray-300 dark:text-gray-600 cursor-not-allowed">Next →</span>
@@ -111,40 +111,40 @@
                 <tr>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
-                            hx-get="/partials/browse-level"
+                            hx-get="/browse"
                             {{hxVals "inventory_id" $inv "prefix" $.Prefix "sort" $segLink.Sort "dir" $segLink.Dir}}
                             hx-target="#browse-target"
-                            hx-push-url="{{browseURL "inventory_id" $inv "prefix" $.Prefix "sort" $segLink.Sort "dir" $segLink.Dir}}"
+                            hx-push-url="true"
                             class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
                             Segment {{$segLink.Indicator}}
                         </button>
                     </th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
-                            hx-get="/partials/browse-level"
+                            hx-get="/browse"
                             {{hxVals "inventory_id" $inv "prefix" $.Prefix "sort" $objLink.Sort "dir" $objLink.Dir}}
                             hx-target="#browse-target"
-                            hx-push-url="{{browseURL "inventory_id" $inv "prefix" $.Prefix "sort" $objLink.Sort "dir" $objLink.Dir}}"
+                            hx-push-url="true"
                             class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
                             Objects {{$objLink.Indicator}}
                         </button>
                     </th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
-                            hx-get="/partials/browse-level"
+                            hx-get="/browse"
                             {{hxVals "inventory_id" $inv "prefix" $.Prefix "sort" $sizeLink.Sort "dir" $sizeLink.Dir}}
                             hx-target="#browse-target"
-                            hx-push-url="{{browseURL "inventory_id" $inv "prefix" $.Prefix "sort" $sizeLink.Sort "dir" $sizeLink.Dir}}"
+                            hx-push-url="true"
                             class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
                             Size {{$sizeLink.Indicator}}
                         </button>
                     </th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
-                            hx-get="/partials/browse-level"
+                            hx-get="/browse"
                             {{hxVals "inventory_id" $inv "prefix" $.Prefix "sort" $costLink.Sort "dir" $costLink.Dir}}
                             hx-target="#browse-target"
-                            hx-push-url="{{browseURL "inventory_id" $inv "prefix" $.Prefix "sort" $costLink.Sort "dir" $costLink.Dir}}"
+                            hx-push-url="true"
                             class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
                             Est. Cost / mo {{$costLink.Indicator}}
                         </button>
@@ -159,10 +159,10 @@
                         {{if .HasChildren}}
                         <a
                             href="{{browseURL "inventory_id" $inv "prefix" .Prefix}}"
-                            hx-get="/partials/browse-level"
+                            hx-get="/browse"
                             {{hxVals "inventory_id" $inv "prefix" .Prefix}}
                             hx-target="#browse-target"
-                            hx-push-url="{{browseURL "inventory_id" $inv "prefix" .Prefix}}"
+                            hx-push-url="true"
                             class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline">
                             📁 {{.Segment}}/
                         </a>

@@ -58,8 +58,9 @@ func (s *Server) setupRoutes() {
 	})
 
 	// HTMX partials. Mutating partial routes return updated row HTML so
-	// the page never needs a JSON round-trip + reload.
-	r.Get("/partials/browse-level", s.handlers.BrowseLevelPartial)
+	// the page never needs a JSON round-trip + reload. The Browse page
+	// itself content-negotiates via the HX-Request header rather than
+	// living at a separate /partials/ URL.
 	r.Get("/partials/inventory-row/{id}", s.handlers.InventoryRowPartial)
 	r.Post("/partials/inventories/{id}/load", s.handlers.LoadInventoryRowPartial)
 	r.Post("/partials/inventories/{id}/unload", s.handlers.UnloadInventoryRowPartial)

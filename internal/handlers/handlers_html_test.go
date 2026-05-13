@@ -366,62 +366,64 @@ func TestInventoryRowPartial_NotFound(t *testing.T) {
 	}
 }
 
-// Browse-level Partial Tests
+// Browse-level partial tests. /browse content-negotiates on the
+// HX-Request header — these tests pin the htmx-partial path.
 
-func TestBrowseLevelPartial_MissingParams(t *testing.T) {
+func newHXRequest(method, target string) *http.Request {
+	req := httptest.NewRequest(method, target, http.NoBody)
+	req.Header.Set("HX-Request", "true")
+	return req
+}
+
+func TestBrowsePage_PartialRequiresInventoryID(t *testing.T) {
 	f := newTestFixture(t)
+	req := newHXRequest(http.MethodGet, "/browse?prefix=data/")
+	w := httptest.NewRecorder()
 
-	tests := []struct {
-		name  string
-		query string
-	}{
-		{"missing both", ""},
-		{"missing prefix", "inventory_id=test"},
-		{"missing inventory_id", "prefix=data/"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			url := "/partials/browse-level"
-			if tt.query != "" {
-				url += "?" + tt.query
-			}
-			req := httptest.NewRequest(http.MethodGet, url, http.NoBody)
-			w := httptest.NewRecorder()
-
-			f.h.BrowseLevelPartial(w, req)
-
-			if w.Code != http.StatusBadRequest {
-				t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
-			}
-		})
+	f.h.BrowsePage(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
 	}
 }
 
-func TestBrowseLevelPartial_InventoryNotFound(t *testing.T) {
+func TestBrowsePage_PartialInventoryNotFound(t *testing.T) {
 	f := newTestFixture(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/partials/browse-level?inventory_id=nonexistent&prefix=test/", http.NoBody)
+	req := newHXRequest(http.MethodGet, "/browse?inventory_id=nonexistent&prefix=test/")
 	w := httptest.NewRecorder()
 
-	f.h.BrowseLevelPartial(w, req)
-
+	f.h.BrowsePage(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
 	}
 }
 
-func TestBrowseLevelPartial_NotLoaded(t *testing.T) {
+func TestBrowsePage_PartialNotLoaded(t *testing.T) {
 	f := newTestFixture(t)
 	f.registerInventory(t, "inv1", "Test", "/path")
-
-	req := httptest.NewRequest(http.MethodGet, "/partials/browse-level?inventory_id=inv1&prefix=test/", http.NoBody)
+	req := newHXRequest(http.MethodGet, "/browse?inventory_id=inv1&prefix=test/")
 	w := httptest.NewRecorder()
 
-	f.h.BrowseLevelPartial(w, req)
-
+	f.h.BrowsePage(w, req)
 	if w.Code != http.StatusConflict {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusConflict)
+	}
+}
+
+func TestBrowsePage_FullPageWithoutHXRequest(t *testing.T) {
+	f := newTestFixture(t)
+	// A plain GET (no HX-Request header) must return the full page,
+	// not a bare partial — that's the whole point of content
+	// negotiation. We just check the response includes the layout
+	// shell (the <title> tag).
+	req := httptest.NewRequest(http.MethodGet, "/browse", http.NoBody)
+	w := httptest.NewRecorder()
+
+	f.h.BrowsePage(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if !strings.Contains(w.Body.String(), "<title>") {
+		t.Errorf("response missing <title> — looks like a partial, not the full page")
 	}
 }
 

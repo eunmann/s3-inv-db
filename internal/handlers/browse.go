@@ -44,11 +44,41 @@ type BrowseLevel struct {
 	NotFound      bool
 }
 
-// BrowsePage renders the explorer page shell, including the initial
-// browse level inline when the URL carries inventory_id + prefix. That
-// makes the page server-renderable (a fresh GET shows the full state
-// without a second AJAX round-trip).
+// BrowsePage serves both the full Browse page and the inner level
+// partial, content-negotiated via the HX-Request header. A plain GET
+// (browser nav, full reload, back/forward restore) returns the whole
+// page with the level inlined; an htmx GET returns just the level
+// partial that swaps into #browse-target.
+//
+// Single URL means htmx's natural request URL is the page URL, so
+// hx-push-url="true" pushes the right thing without server-side
+// HX-Push-Url headers, and a full reload of the pushed URL renders
+// the full page (not a stray partial).
 func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	inventoryID := q.Get("inventory_id")
+	prefix := q.Get("prefix")
+	sortBy, dir := inventory.NormalizeSort(q.Get("sort"), q.Get("dir"))
+	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
+
+	// HX-History-Restore-Request is sent when htmx is restoring a
+	// cached page on back/forward navigation; in that case we want the
+	// full layout, not a bare partial.
+	htmxPartial := r.Header.Get("HX-Request") == "true" &&
+		r.Header.Get("HX-History-Restore-Request") != "true"
+
+	if htmxPartial {
+		h.renderBrowseLevelPartial(w, r, inventoryID, prefix, sortBy, dir, page, pageSize)
+		return
+	}
+	h.renderBrowsePage(w, r, inventoryID, prefix, sortBy, dir, page, pageSize)
+}
+
+// renderBrowsePage emits the full page with the level inlined for
+// non-htmx requests (plain navigation, reload, history restore).
+func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request,
+	inventoryID, prefix, sortBy, dir string, page, pageSize int,
+) {
 	inventories := h.manager.List()
 	loaded := make([]inventory.Info, 0, len(inventories))
 	for i := range inventories {
@@ -56,20 +86,12 @@ func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 			loaded = append(loaded, inventories[i])
 		}
 	}
-
-	q := r.URL.Query()
-	inventoryID := q.Get("inventory_id")
-	prefix := q.Get("prefix")
-	sortBy, dir := inventory.NormalizeSort(q.Get("sort"), q.Get("dir"))
-	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
-
 	data := map[string]any{
 		"Title":       "Browse",
 		"Inventories": loaded,
 		"InventoryID": inventoryID,
 		"Prefix":      prefix,
 	}
-
 	if inventoryID != "" {
 		ctx := r.Context()
 		var level BrowseLevel
@@ -77,13 +99,12 @@ func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 			level = h.buildBrowseLevel(ctx, idx, inventoryID, prefix, sortBy, dir, page, pageSize)
 			return nil
 		})
-		// Either render or — for ErrNotLoaded/ErrNotFound — fall through
-		// to the empty placeholder; the user can pick a different inventory.
+		// On ErrNotLoaded / ErrNotFound, fall through to the empty
+		// placeholder — the user can pick a different inventory.
 		if err == nil {
 			data["InitialLevel"] = level
 		}
 	}
-
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.Render(w, "browse.html", data); err != nil {
 		zerolog.Ctx(r.Context()).Error().Err(err).Msg("failed to render browse page")
@@ -91,19 +112,16 @@ func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// BrowseLevelPartial returns one level of the explorer: stats for the
-// requested prefix + its immediate child prefixes + breadcrumbs.
-func (h *Handlers) BrowseLevelPartial(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	inventoryID := q.Get("inventory_id")
-	if inventoryID == "" || !q.Has("prefix") {
-		http.Error(w, "inventory_id and prefix are required", http.StatusBadRequest)
+// renderBrowseLevelPartial emits just the level partial for htmx
+// requests. An empty inventoryID is rejected with 400 — the partial
+// path has nothing to render without it.
+func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Request,
+	inventoryID, prefix, sortBy, dir string, page, pageSize int,
+) {
+	if inventoryID == "" {
+		http.Error(w, "inventory_id is required", http.StatusBadRequest)
 		return
 	}
-	prefix := q.Get("prefix")
-	sortBy, dir := inventory.NormalizeSort(q.Get("sort"), q.Get("dir"))
-	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
-
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
 	var level BrowseLevel
@@ -123,7 +141,6 @@ func (h *Handlers) BrowseLevelPartial(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.RenderPartial(w, "browse_level.html", level); err != nil {
 		logger.Error().Err(err).Msg("failed to render browse level")
