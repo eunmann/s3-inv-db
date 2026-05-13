@@ -85,12 +85,11 @@ func (s *Server) Run(ctx context.Context) error {
 			return fmt.Errorf("shutdown: %w", err)
 		}
 
-		// Close the inventory manager
 		if err := s.manager.Close(); err != nil {
 			s.config.Logger.Error().Err(err).Msg("failed to close inventory manager")
 		}
 
-		return fmt.Errorf("context cancelled: %w", ctx.Err())
+		return nil
 
 	case err := <-errChan:
 		return err
