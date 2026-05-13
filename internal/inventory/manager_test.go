@@ -213,12 +213,13 @@ func TestManagerConcurrent_LoadRemoveRace(t *testing.T) {
 		}()
 		wg.Wait()
 
-		// Cleanup: whichever order ran, the inventory should either be
-		// gone (Remove won) or in StateError (Load won and Open failed).
-		info, ok := m.Get(id)
-		if ok && info.State != StateError && info.State != StateParsing {
-			t.Fatalf("unexpected post-race state: %q", info.State)
+		// Remove always succeeds (the entry exists when it acquires the
+		// lock; Load never deletes), so the inventory must be gone once
+		// both goroutines have joined. If it's still present, Remove was
+		// somehow undone — that's a real bug.
+		if _, ok := m.Get(id); ok {
+			info, _ := m.Get(id)
+			t.Fatalf("inventory %q still present after race; state=%q", id, info.State)
 		}
-		_ = m.Remove(id)
 	}
 }
