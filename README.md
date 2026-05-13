@@ -1,4 +1,4 @@
-# s3inv-index
+# s3-inv-db
 
 A high-performance indexer for S3 inventory reports. Builds a compact, memory-mapped index that enables O(1) prefix lookups and fast subtree aggregation queries.
 
@@ -14,7 +14,7 @@ A high-performance indexer for S3 inventory reports. Builds a compact, memory-ma
 ## Installation
 
 ```bash
-go install github.com/eunmann/s3-inv-db/cmd/s3inv-index@latest
+go install github.com/eunmann/s3-inv-db/cmd/s3-inv-db@latest
 ```
 
 Or build from source:
@@ -22,7 +22,7 @@ Or build from source:
 ```bash
 git clone https://github.com/eunmann/s3-inv-db.git
 cd s3-inv-db
-go build -o s3inv-index ./cmd/s3inv-index
+go build -o s3-inv-db ./cmd/s3-inv-db
 ```
 
 ## Quick Start
@@ -30,7 +30,7 @@ go build -o s3inv-index ./cmd/s3inv-index
 ### Build an Index
 
 ```bash
-s3inv-index build \
+s3-inv-db build \
   --s3-manifest s3://my-bucket/inventory/data/manifest.json \
   --out ./my-index
 ```
@@ -39,10 +39,10 @@ s3inv-index build \
 
 ```bash
 # Basic prefix lookup
-s3inv-index query --index ./my-index --prefix "data/2024/"
+s3-inv-db query --index ./my-index --prefix "data/2024/"
 
 # With tier breakdown and cost estimate
-s3inv-index query --index ./my-index --prefix "data/2024/" \
+s3-inv-db query --index ./my-index --prefix "data/2024/" \
   --show-tiers --estimate-cost
 ```
 
@@ -117,7 +117,7 @@ For local development and testing, generate synthetic inventory indexes:
 make seed
 
 # Custom generation
-./bin/s3inv-seeder --out ./seed-data --count 5 --objects 50000 --preset large
+./bin/s3-inv-db-seeder --out ./seed-data --count 5 --objects 50000 --preset large
 
 # Clean up generated data
 make clean-seed

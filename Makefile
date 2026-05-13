@@ -9,13 +9,13 @@ COMPOSE := docker compose -f infra/docker-compose.yml
 all: build server
 
 build:
-	go build -o bin/s3inv-index ./cmd/s3inv-index
+	go build -o bin/s3-inv-db ./cmd/s3-inv-db
 
 server:
-	go build -o bin/s3inv-server ./cmd/s3inv-server
+	go build -o bin/s3-inv-db-server ./cmd/s3-inv-db-server
 
 seeder:
-	go build -o bin/s3inv-seeder ./cmd/seeder
+	go build -o bin/s3-inv-db-seeder ./cmd/s3-inv-db-seeder
 
 test:
 	go test ./...
@@ -36,7 +36,7 @@ clean-seed:
 	rm -rf seed-data/
 
 seed: seeder
-	./bin/s3inv-seeder --out ./seed-data --count 3 --objects 10000 --verbose --pretty-logs
+	./bin/s3-inv-db-seeder --out ./seed-data --count 3 --objects 10000 --verbose --pretty-logs
 
 # ----- docker compose ------------------------------------------------------
 

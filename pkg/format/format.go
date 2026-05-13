@@ -4,7 +4,7 @@ package format
 import "encoding/binary"
 
 const (
-	// MagicNumber identifies s3inv-index files.
+	// MagicNumber identifies s3-inv-db files.
 	MagicNumber uint32 = 0x53334944 // "S3ID"
 	// Version is the current format version.
 	Version uint32 = 1

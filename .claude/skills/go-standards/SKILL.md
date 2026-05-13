@@ -88,7 +88,7 @@ description: "Reference: Go code quality standards — control flow, error handl
 ## Architecture
 
 - Every package has a single, clear purpose. Dependency graph must be a DAG — no import cycles.
-- Keep `main` thin: parse config, wire dependencies, call `Run`. See `cmd/s3inv-server/main.go` for the pattern.
+- Keep `main` thin: parse config, wire dependencies, call `Run`. See `cmd/s3-inv-db-server/main.go` for the pattern.
 - Justify every external dependency. Prefer the standard library. Do not vendor a library for a single utility function.
 - Pin dependencies to exact versions. Review dependency updates before merging.
 

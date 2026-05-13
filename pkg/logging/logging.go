@@ -1,4 +1,4 @@
-// Package logging provides structured logging for s3inv-index using zerolog.
+// Package logging provides structured logging for s3-inv-db using zerolog.
 package logging
 
 import (

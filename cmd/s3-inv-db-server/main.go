@@ -1,4 +1,4 @@
-// Command s3inv-server starts an HTTP server for querying S3 inventory indexes.
+// Command s3-inv-db-server starts an HTTP server for querying S3 inventory indexes.
 package main
 
 import (

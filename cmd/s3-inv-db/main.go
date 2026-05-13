@@ -1,4 +1,4 @@
-// Command s3inv-index builds and queries S3 inventory indexes.
+// Command s3-inv-db builds and queries S3 inventory indexes.
 package main
 
 import (

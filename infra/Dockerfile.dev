@@ -1,4 +1,4 @@
-# Dev image for s3inv-server: Go toolchain + air for hot-reload.
+# Dev image for s3-inv-db-server: Go toolchain + air for hot-reload.
 # Source is volume-mounted at /app at runtime; this image only carries the
 # toolchain and pre-downloaded modules.
 

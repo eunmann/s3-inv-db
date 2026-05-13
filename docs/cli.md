@@ -3,7 +3,7 @@
 ## Commands
 
 ```
-s3inv-index <command> [options]
+s3-inv-db <command> [options]
 
 Commands:
   build    Build an index from S3 inventory
@@ -15,7 +15,7 @@ Commands:
 Build an index from an S3 inventory manifest.
 
 ```bash
-s3inv-index build [options]
+s3-inv-db build [options]
 ```
 
 ### Required Flags
@@ -39,14 +39,14 @@ s3inv-index build [options]
 
 Basic build:
 ```bash
-s3inv-index build \
+s3-inv-db build \
   --s3-manifest s3://my-bucket/inventory/data/manifest.json \
   --out ./my-index
 ```
 
 With memory constraint:
 ```bash
-s3inv-index build \
+s3-inv-db build \
   --s3-manifest s3://my-bucket/inventory/data/manifest.json \
   --out ./my-index \
   --mem-budget 4GiB
@@ -54,7 +54,7 @@ s3inv-index build \
 
 Limit prefix depth:
 ```bash
-s3inv-index build \
+s3-inv-db build \
   --s3-manifest s3://my-bucket/inventory/data/manifest.json \
   --out ./my-index \
   --max-depth 5
@@ -85,7 +85,7 @@ Required S3 permissions:
 Query an existing index for prefix statistics.
 
 ```bash
-s3inv-index query [options]
+s3-inv-db query [options]
 ```
 
 ### Required Flags
@@ -109,7 +109,7 @@ s3inv-index query [options]
 
 Basic query:
 ```bash
-s3inv-index query --index ./my-index --prefix "data/2024/"
+s3-inv-db query --index ./my-index --prefix "data/2024/"
 ```
 
 Output:
@@ -121,7 +121,7 @@ Bytes: 847293847561
 
 With tier breakdown:
 ```bash
-s3inv-index query --index ./my-index --prefix "data/2024/" --show-tiers
+s3-inv-db query --index ./my-index --prefix "data/2024/" --show-tiers
 ```
 
 Output:
@@ -137,7 +137,7 @@ Tier breakdown:
 
 With cost estimate:
 ```bash
-s3inv-index query --index ./my-index --prefix "data/2024/" \
+s3-inv-db query --index ./my-index --prefix "data/2024/" \
   --show-tiers --estimate-cost
 ```
 
@@ -172,7 +172,7 @@ Create a JSON file with per-tier prices in microdollars per byte per month:
 
 Then specify with `--price-table`:
 ```bash
-s3inv-index query --index ./my-index --prefix "data/" \
+s3-inv-db query --index ./my-index --prefix "data/" \
   --estimate-cost --price-table ./prices.json
 ```
 

@@ -1,6 +1,6 @@
 # Overview
 
-s3inv-index transforms S3 inventory reports into a compact index optimized for prefix-based queries.
+s3-inv-db transforms S3 inventory reports into a compact index optimized for prefix-based queries.
 
 ## Problem
 

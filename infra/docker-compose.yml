@@ -103,7 +103,7 @@ services:
     command:
       - go
       - run
-      - ./cmd/seeder
+      - ./cmd/s3-inv-db-seeder
       - --target=s3
       - --s3-bucket=s3-inv
       - --s3-prefix=inventory-data/

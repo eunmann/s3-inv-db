@@ -20,7 +20,7 @@ Orient yourself to the whole repo before narrowing:
 - Read `CLAUDE.md` and `README.md` for the project's stated conventions.
 - Scan `docs/` for design notes (overview, index format, library API, performance).
 - Survey top-level directories:
-  - `cmd/` — binaries (`s3inv-index`, `s3inv-server`, `seeder`)
+  - `cmd/` — binaries (`s3-inv-db`, `s3-inv-db-server`, `seeder`)
   - `internal/` — server-internal packages (`handlers`, `inventory`, `server`, `templates`, `seeder`, `cli`, `logctx`)
   - `pkg/` — public library packages (`indexread`, `extsort`, `triebuild`, `pricing`, `tiers`, `humanfmt`, `benchutil`, `s3fetch`, `format`, `inventory`, `membudget`, `memdiag`, `sysmem`, `logging`)
   - `infra/` — Dockerfiles and compose stack
@@ -32,11 +32,11 @@ The output is a mental map. Do not deep-dive yet.
 
 Exhaustively enumerate every subsystem, package, or feature potentially affected by the task. Err toward "relevant" — it is cheaper to rule out than to miss.
 
-- **Index pipeline:** `pkg/extsort` (external sort + aggregation), `pkg/triebuild` (preorder trie layout), `pkg/indexread` (mmap reader), `cmd/s3inv-index build`.
-- **Query surfaces:** `pkg/indexread` reads, `cmd/s3inv-index query`, `internal/handlers` (HTTP API + HTML), `internal/templates` (renderer + HTML pages/partials).
-- **Server runtime:** `cmd/s3inv-server`, `internal/server` (routes, middleware, lifecycle), `internal/handlers`, `internal/inventory` (Manager + state machine), `internal/templates`.
+- **Index pipeline:** `pkg/extsort` (external sort + aggregation), `pkg/triebuild` (preorder trie layout), `pkg/indexread` (mmap reader), `cmd/s3-inv-db build`.
+- **Query surfaces:** `pkg/indexread` reads, `cmd/s3-inv-db query`, `internal/handlers` (HTTP API + HTML), `internal/templates` (renderer + HTML pages/partials).
+- **Server runtime:** `cmd/s3-inv-db-server`, `internal/server` (routes, middleware, lifecycle), `internal/handlers`, `internal/inventory` (Manager + state machine), `internal/templates`.
 - **Tier / cost:** `pkg/tiers`, `pkg/pricing`. Cost calculation is consumed by both the CLI and the HTTP handlers.
-- **Synthetic data:** `pkg/benchutil`, `internal/seeder`, `cmd/seeder`. Tests use the seeder to build real indexes against `t.TempDir()`.
+- **Synthetic data:** `pkg/benchutil`, `internal/seeder`, `cmd/s3-inv-db-seeder`. Tests use the seeder to build real indexes against `t.TempDir()`.
 - **Cross-cutting:** `internal/logctx` (logger plumbing), `pkg/membudget` / `pkg/sysmem` / `pkg/memdiag` (memory budget enforcement), `pkg/humanfmt` / `pkg/format`.
 - **Tooling / infra:** `Makefile`, `.golangci.yml`, `.air.toml`, `infra/Dockerfile*`, `infra/docker-compose.yml`.
 

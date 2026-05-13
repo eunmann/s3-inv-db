@@ -1,4 +1,4 @@
-// Package cli implements the command-line interface for s3inv-index.
+// Package cli implements the command-line interface for s3-inv-db.
 package cli
 
 import (
@@ -27,7 +27,7 @@ import (
 // Run executes the CLI with the given arguments.
 func Run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: s3inv-index <command> [options]\ncommands: build, query")
+		return errors.New("usage: s3-inv-db <command> [options]\ncommands: build, query")
 	}
 
 	cmd := args[0]
