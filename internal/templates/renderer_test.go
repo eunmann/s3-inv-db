@@ -308,3 +308,27 @@ func TestBrowseURL_SkipsEmpty(t *testing.T) {
 		t.Errorf("URL %q missing inventory_id", got)
 	}
 }
+
+func TestHxValsAttr_HTMLSpecialCharsInValueAreSafe(t *testing.T) {
+	// json.Marshal in Go escapes <, >, & to JSON unicode escapes
+	// (<, >, &) by default. So no literal `&`, `<`, or
+	// `>` ever appears in the output, the surrounding single-quoted HTML
+	// attribute can't terminate prematurely, and there's no half-formed
+	// entity for browsers to interpret. Lock that contract in.
+	attr, err := hxValsAttr("k", `a&b<c>d`)
+	if err != nil {
+		t.Fatalf("hxValsAttr: %v", err)
+	}
+	got := string(attr)
+	for _, banned := range []string{"a&b", "<c", ">d"} {
+		if strings.Contains(got, banned) {
+			t.Errorf("attr %q contains literal %q — JSON HTML-safe escaping broken", got, banned)
+		}
+	}
+	// JSON unicode escapes (6 chars each: backslash + u + 4 hex digits).
+	for _, want := range []string{"\\u0026", "\\u003c", "\\u003e"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("attr %q missing JSON unicode escape %q", got, want)
+		}
+	}
+}

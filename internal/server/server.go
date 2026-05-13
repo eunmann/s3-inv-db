@@ -60,22 +60,12 @@ func New(cfg Config) (*Server, error) {
 		PriceTable: cfg.PriceTable,
 	}
 	if cfg.S3Source != "" {
-		s3Client, err := s3fetch.NewClient(context.Background())
+		disco, ldr, err := newDiscoveryWiring(cfg)
 		if err != nil {
-			return nil, fmt.Errorf("s3 client: %w", err)
-		}
-		disco, err := s3disco.NewFromS3URI(s3Client.Raw(), cfg.S3Source)
-		if err != nil {
-			return nil, fmt.Errorf("discovery from %q: %w", cfg.S3Source, err)
-		}
-		if cfg.CacheDir == "" {
-			return nil, errEmptyCacheDir
-		}
-		if err := os.MkdirAll(cfg.CacheDir, 0o755); err != nil {
-			return nil, fmt.Errorf("ensure cache dir %s: %w", cfg.CacheDir, err)
+			return nil, err
 		}
 		hcfg.Discoverer = disco
-		hcfg.Loader = loader.New(cfg.CacheDir, s3Client)
+		hcfg.Loader = ldr
 		hcfg.S3SourceURI = cfg.S3Source
 		cfg.Logger.Info().
 			Str("s3_source", cfg.S3Source).
@@ -99,6 +89,35 @@ func New(cfg Config) (*Server, error) {
 }
 
 var errEmptyCacheDir = errors.New("CacheDir is required when S3Source is set")
+
+// s3StartupTimeout caps how long s3fetch.NewClient may spend doing
+// region/STS probes during server startup. 30s is generous enough for
+// a real network round-trip and tight enough that a misconfigured
+// endpoint fails fast.
+const s3StartupTimeout = 30 * time.Second
+
+// newDiscoveryWiring constructs the S3 client, discoverer, and loader
+// for a server configured with --s3-source. Extracted from New so the
+// happy path stays readable and so the wiring is testable in isolation.
+func newDiscoveryWiring(cfg Config) (*s3disco.Discoverer, *loader.Loader, error) {
+	if cfg.CacheDir == "" {
+		return nil, nil, errEmptyCacheDir
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s3StartupTimeout)
+	defer cancel()
+	s3Client, err := s3fetch.NewClient(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("s3 client: %w", err)
+	}
+	disco, err := s3disco.NewFromS3URI(s3Client.Raw(), cfg.S3Source)
+	if err != nil {
+		return nil, nil, fmt.Errorf("discovery from %q: %w", cfg.S3Source, err)
+	}
+	if err := os.MkdirAll(cfg.CacheDir, 0o755); err != nil {
+		return nil, nil, fmt.Errorf("ensure cache dir %s: %w", cfg.CacheDir, err)
+	}
+	return disco, loader.New(cfg.CacheDir, s3Client), nil
+}
 
 // Run starts the HTTP server and blocks until the context is cancelled.
 func (s *Server) Run(ctx context.Context) error {

@@ -8,6 +8,7 @@
     <div class="bg-white shadow sm:rounded-lg mb-6">
         <div class="px-4 py-5 sm:p-6">
             <form id="browse-form" class="space-y-4"
+                  action="/browse" method="get"
                   hx-get="/partials/browse-level"
                   hx-target="#browse-target"
                   hx-push-url="true"
@@ -50,11 +51,12 @@
         {{end}}
     </div>
 
-    <div id="browse-loading" class="htmx-indicator text-center py-4">
-        <svg class="animate-spin h-6 w-6 text-indigo-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+    <div id="browse-loading" class="htmx-indicator text-center py-4" role="status">
+        <svg aria-hidden="true" class="animate-spin h-6 w-6 text-indigo-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
         </svg>
+        <span class="sr-only">Loading</span>
     </div>
 </div>
 {{end}}

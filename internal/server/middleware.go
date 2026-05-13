@@ -96,6 +96,22 @@ func isMutating(method string) bool {
 	return false
 }
 
+// requireDiscoveryMiddleware short-circuits routes that need a configured
+// discovery service. Returns 503 (text/plain) when discovery is disabled
+// so all /partials/discovered/* and /api/discovered endpoints respond
+// uniformly without each handler duplicating the check.
+func requireDiscoveryMiddleware(enabled func() bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !enabled() {
+				http.Error(w, "discovery not configured (start the server with --s3-source)", http.StatusServiceUnavailable)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // sameOriginMiddleware rejects mutating browser requests whose Origin (or,
 // fallback, Referer) does not match the request Host. This is the standard
 // CSRF defense: an attacker page making a cross-site POST would send its

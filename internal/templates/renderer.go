@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -219,90 +219,60 @@ func (r *Renderer) loadTemplates() error {
 
 // readFromEmbed loads template sources from the embedded FS.
 func (r *Renderer) readFromEmbed() (layoutSrc string, partials, pages map[string]string, err error) {
-	layoutContent, err := embeddedTemplates.ReadFile("templates/layout.html")
+	return readTemplates(embeddedTemplates)
+}
+
+// readFromDisk loads template sources from r.rootDir using os.DirFS so
+// the same fs.FS-shaped read logic handles both the embed and disk paths.
+func (r *Renderer) readFromDisk() (layoutSrc string, partials, pages map[string]string, err error) {
+	return readTemplates(os.DirFS(r.rootDir))
+}
+
+// readTemplates loads layout + partials + page sources from any fs.FS
+// rooted at the project layout (templates/, templates/partials/). One
+// function powers both production (embed.FS) and dev mode (os.DirFS).
+func readTemplates(src fs.FS) (layoutSrc string, partials, pages map[string]string, err error) {
+	layoutBytes, err := fs.ReadFile(src, "templates/layout.html")
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("read layout: %w", err)
 	}
-
-	partialEntries, err := embeddedTemplates.ReadDir("templates/partials")
+	partials, err = readDirFiles(src, "templates/partials", false)
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("read partials dir: %w", err)
+		return "", nil, nil, err
 	}
-	partialSrcs := make(map[string]string, len(partialEntries))
-	for _, entry := range partialEntries {
+	pages, err = readDirFiles(src, "templates", true)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	delete(pages, "layout.html")
+	return string(layoutBytes), partials, pages, nil
+}
+
+// Enumerates a directory and returns a map of either path→content
+// (full path key) or basename→content. The partials code path needs
+// full paths (used as the parsed template name); pages key by basename.
+func readDirFiles(src fs.FS, dir string, basenameKey bool) (map[string]string, error) {
+	entries, err := fs.ReadDir(src, dir)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", dir, err)
+	}
+	out := make(map[string]string, len(entries))
+	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		path := "templates/partials/" + entry.Name()
-		content, err := embeddedTemplates.ReadFile(path)
+		path := dir + "/" + entry.Name()
+		content, err := fs.ReadFile(src, path)
 		if err != nil {
-			return "", nil, nil, fmt.Errorf("read %s: %w", path, err)
+			return nil, fmt.Errorf("read %s: %w", path, err)
 		}
-		partialSrcs[path] = string(content)
-	}
-
-	entries, err := embeddedTemplates.ReadDir("templates")
-	if err != nil {
-		return "", nil, nil, fmt.Errorf("read templates dir: %w", err)
-	}
-	pageSrcs := make(map[string]string, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || entry.Name() == "layout.html" {
-			continue
+		key := path
+		if basenameKey {
+			key = entry.Name()
 		}
-		path := "templates/" + entry.Name()
-		content, err := embeddedTemplates.ReadFile(path)
-		if err != nil {
-			return "", nil, nil, fmt.Errorf("read %s: %w", path, err)
-		}
-		pageSrcs[entry.Name()] = string(content)
+		out[key] = string(content)
 	}
-
-	return string(layoutContent), partialSrcs, pageSrcs, nil
-}
-
-// readFromDisk loads template sources from r.rootDir.
-func (r *Renderer) readFromDisk() (layoutSrc string, partials, pages map[string]string, err error) {
-	layoutPath := filepath.Join(r.rootDir, "templates", "layout.html")
-	layoutContent, err := os.ReadFile(layoutPath)
-	if err != nil {
-		return "", nil, nil, fmt.Errorf("read layout: %w", err)
-	}
-
-	partialsGlob := filepath.Join(r.rootDir, "templates", "partials", "*.html")
-	partialFiles, err := filepath.Glob(partialsGlob)
-	if err != nil {
-		return "", nil, nil, fmt.Errorf("glob partials: %w", err)
-	}
-	partialSrcs := make(map[string]string, len(partialFiles))
-	for _, f := range partialFiles {
-		content, err := os.ReadFile(f)
-		if err != nil {
-			return "", nil, nil, fmt.Errorf("read %s: %w", f, err)
-		}
-		name := "templates/partials/" + filepath.Base(f)
-		partialSrcs[name] = string(content)
-	}
-
-	mainGlob := filepath.Join(r.rootDir, "templates", "*.html")
-	pageFiles, err := filepath.Glob(mainGlob)
-	if err != nil {
-		return "", nil, nil, fmt.Errorf("glob pages: %w", err)
-	}
-	pageSrcs := make(map[string]string, len(pageFiles))
-	for _, f := range pageFiles {
-		name := filepath.Base(f)
-		if name == "layout.html" {
-			continue
-		}
-		content, err := os.ReadFile(f)
-		if err != nil {
-			return "", nil, nil, fmt.Errorf("read %s: %w", f, err)
-		}
-		pageSrcs[name] = string(content)
-	}
-
-	return string(layoutContent), partialSrcs, pageSrcs, nil
+	return out, nil
 }
 
 // Render renders a full page template.

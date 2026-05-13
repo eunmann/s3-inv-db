@@ -22,7 +22,7 @@
     </td>
     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
         {{if .State.IsPending}}
-        <button
+        <button type="button"
             hx-post="/partials/inventories/{{.ID}}/load"
             hx-target="closest tr"
             hx-swap="outerHTML"
@@ -31,7 +31,7 @@
             Load
         </button>
         {{else if .State.IsLoaded}}
-        <button
+        <button type="button"
             hx-post="/partials/inventories/{{.ID}}/unload"
             hx-target="closest tr"
             hx-swap="outerHTML"
@@ -40,7 +40,7 @@
             Unload
         </button>
         {{else if or .State.IsUnloaded .State.IsError}}
-        <button
+        <button type="button"
             hx-post="/partials/inventories/{{.ID}}/load"
             hx-target="closest tr"
             hx-swap="outerHTML"
@@ -49,7 +49,7 @@
             Reload
         </button>
         {{end}}
-        <button
+        <button type="button"
             hx-delete="/partials/inventories/{{.ID}}"
             hx-target="closest tr"
             hx-swap="outerHTML"
@@ -57,6 +57,8 @@
             class="text-red-600 hover:text-red-900">
             Delete
         </button>
-        <span id="spinner-{{.ID}}" class="htmx-indicator text-xs text-gray-400">…</span>
+        <span id="spinner-{{.ID}}" class="htmx-indicator text-xs text-gray-400" role="status">
+            <span aria-hidden="true">…</span><span class="sr-only">Working</span>
+        </span>
     </td>
 </tr>

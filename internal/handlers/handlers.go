@@ -2,8 +2,6 @@ package handlers
 
 import (
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/loader"
-	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 )
@@ -23,13 +21,16 @@ type Handlers struct {
 	s3SourceURI string // for display in templates
 }
 
-// Config gathers all Handlers dependencies for NewWithConfig.
+// Config gathers all Handlers dependencies for NewWithConfig. Discoverer
+// and Loader take the narrow inventory.Discoverer / inventory.IndexBuilder
+// interfaces so tests can wire fakes without spinning up MinIO. Production
+// passes the concrete *s3disco.Discoverer and *loader.Loader pointers.
 type Config struct {
 	Manager     *inventory.Manager
 	Renderer    *templates.Renderer
 	PriceTable  pricing.PriceTable
-	Discoverer  *s3disco.Discoverer
-	Loader      *loader.Loader
+	Discoverer  inventory.Discoverer
+	Loader      inventory.IndexBuilder
 	S3SourceURI string
 }
 
@@ -42,22 +43,16 @@ func New(mgr *inventory.Manager, renderer *templates.Renderer, priceTable pricin
 	})
 }
 
+// DiscoveryEnabled reports whether the wired DiscoveryService is usable.
+// Exposed so the server can gate discovery-dependent routes via middleware
+// rather than each handler duplicating the check.
+func (h *Handlers) DiscoveryEnabled() bool { return h.discovery.Enabled() }
+
 // NewWithConfig creates a Handlers wired with optional S3 discovery + loader.
 func NewWithConfig(cfg Config) *Handlers {
-	// Convert typed-nil pointers to true nil interfaces so DiscoveryService.Enabled()
-	// reads correctly. (A typed-nil concrete pointer assigned to an interface
-	// parameter yields a non-nil interface, the classic Go pitfall.)
-	var disc inventory.Discoverer
-	if cfg.Discoverer != nil {
-		disc = cfg.Discoverer
-	}
-	var bld inventory.IndexBuilder
-	if cfg.Loader != nil {
-		bld = cfg.Loader
-	}
 	return &Handlers{
 		manager:     cfg.Manager,
-		discovery:   inventory.NewDiscoveryService(cfg.Manager, disc, bld),
+		discovery:   inventory.NewDiscoveryService(cfg.Manager, cfg.Discoverer, cfg.Loader),
 		renderer:    cfg.Renderer,
 		priceTable:  cfg.PriceTable,
 		s3SourceURI: cfg.S3SourceURI,

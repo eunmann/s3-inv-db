@@ -34,12 +34,6 @@ type MergedInventory struct {
 	HasTierData bool
 }
 
-// CompositeID surfaces the embedded s3disco.Inventory.CompositeID so
-// templates and JSON consumers don't need to know about the embedding.
-func (m MergedInventory) CompositeID() string {
-	return m.Inventory.CompositeID()
-}
-
 // DiscoveryService orchestrates the inventory use cases that span the
 // Manager (in-memory state), the Discoverer (S3 listing of available
 // inventories), and the IndexBuilder (on-disk index materialisation).
@@ -111,25 +105,24 @@ func (s *DiscoveryService) Find(ctx context.Context, src, id string) (s3disco.In
 // caller-side cancellation (HTTP request abort) doesn't poison the
 // inventory state — the Manager's post-build re-check handles server
 // shutdown via map-clearing.
-func (s *DiscoveryService) Load(ctx context.Context, disc s3disco.Inventory) (Info, error) {
+func (s *DiscoveryService) Load(ctx context.Context, disc s3disco.Inventory) error {
 	if !s.Enabled() {
-		return Info{}, ErrDiscoveryDisabled
+		return ErrDiscoveryDisabled
 	}
 	composite := disc.CompositeID()
 	manifestURI := fmt.Sprintf("s3://%s/%s", s.discoverer.Bucket(), disc.ManifestKey)
 	if err := s.manager.Register(composite, disc.SourceBucket+"/"+disc.InventoryID, manifestURI); err != nil &&
 		!errors.Is(err, ErrAlreadyExists) {
-		return Info{}, fmt.Errorf("register: %w", err)
+		return fmt.Errorf("register: %w", err)
 	}
 	loadCtx := context.WithoutCancel(ctx)
 	err := s.manager.LoadWith(loadCtx, composite, func(c context.Context, _ Info) (string, error) {
 		return s.builder.Build(c, disc.SourceBucket, disc.InventoryID, manifestURI)
 	})
 	if err != nil {
-		return Info{}, err
+		return err
 	}
-	info, _ := s.manager.Get(composite)
-	return info, nil
+	return nil
 }
 
 // Evict unloads the inventory, removes it from the Manager, and deletes

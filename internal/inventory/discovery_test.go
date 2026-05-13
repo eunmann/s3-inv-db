@@ -86,7 +86,7 @@ func TestDiscoveryService_FindWhenDisabledReturnsErr(t *testing.T) {
 
 func TestDiscoveryService_LoadWhenDisabledReturnsErr(t *testing.T) {
 	s := NewDiscoveryService(NewManager(), &fakeDiscoverer{}, nil)
-	_, err := s.Load(context.Background(), s3disco.Inventory{})
+	err := s.Load(context.Background(), s3disco.Inventory{})
 	if !errors.Is(err, ErrDiscoveryDisabled) {
 		t.Errorf("Load() error = %v, want ErrDiscoveryDisabled", err)
 	}

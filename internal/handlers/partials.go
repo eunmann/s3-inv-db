@@ -49,11 +49,9 @@ func (h *Handlers) DeleteInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 }
 
 // LoadDiscoveredRowPartial loads a discovered inventory and returns its row.
+// The route group gates this handler on discovery being configured, so the
+// service calls below cannot return ErrDiscoveryDisabled.
 func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Request) {
-	if !h.discovery.Enabled() {
-		http.Error(w, "discovery not configured", http.StatusServiceUnavailable)
-		return
-	}
 	src := chi.URLParam(r, "src")
 	id := chi.URLParam(r, "id")
 
@@ -68,7 +66,7 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "no completed runs for this inventory", http.StatusNotFound)
 		return
 	}
-	if _, err := h.discovery.Load(r.Context(), disc); err != nil {
+	if err := h.discovery.Load(r.Context(), disc); err != nil {
 		respondManagerErrorHTML(w, r, err, "load discovered inventory")
 		return
 	}

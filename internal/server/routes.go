@@ -26,6 +26,7 @@ func (s *Server) setupRoutes() {
 	// container orchestrators can tell the process is up.
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
@@ -46,9 +47,15 @@ func (s *Server) setupRoutes() {
 	r.Post("/partials/inventories/{id}/load", s.handlers.LoadInventoryRowPartial)
 	r.Post("/partials/inventories/{id}/unload", s.handlers.UnloadInventoryRowPartial)
 	r.Delete("/partials/inventories/{id}", s.handlers.DeleteInventoryRowPartial)
-	r.Post("/partials/discovered/{src}/{id}/load", s.handlers.LoadDiscoveredRowPartial)
-	r.Post("/partials/discovered/{src}/{id}/unload", s.handlers.UnloadDiscoveredRowPartial)
-	r.Delete("/partials/discovered/{src}/{id}", s.handlers.EvictDiscoveredRowPartial)
+	// Discovery-dependent partials. The group-scoped middleware
+	// short-circuits with 503 when --s3-source is not configured, so
+	// every route in here can assume Enabled() == true.
+	r.Group(func(r chi.Router) {
+		r.Use(requireDiscoveryMiddleware(s.handlers.DiscoveryEnabled))
+		r.Post("/partials/discovered/{src}/{id}/load", s.handlers.LoadDiscoveredRowPartial)
+		r.Post("/partials/discovered/{src}/{id}/unload", s.handlers.UnloadDiscoveredRowPartial)
+		r.Delete("/partials/discovered/{src}/{id}", s.handlers.EvictDiscoveredRowPartial)
+	})
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {

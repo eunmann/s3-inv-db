@@ -7,9 +7,15 @@
     <title>{{.Title}} - S3 Inventory</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <style>
+        .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+        .sr-only.focus\:not-sr-only:focus,
+        a.sr-only:focus { position: static; width: auto; height: auto; clip: auto; padding: .5rem 1rem; background:#fff; color:#1f2937; border:2px solid #4f46e5; }
+    </style>
 </head>
 <body class="bg-gray-100 min-h-screen" hx-boost="true">
-    <nav class="bg-white shadow-sm">
+    <a href="#main-content" class="sr-only focus:not-sr-only">Skip to main content</a>
+    <nav class="bg-white shadow-sm" aria-label="Primary">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex justify-between h-16">
                 <div class="flex">
@@ -32,7 +38,7 @@
         </div>
     </nav>
 
-    <main class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+    <main id="main-content" class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         {{template "content" .}}
     </main>
 
