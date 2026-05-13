@@ -83,7 +83,7 @@ func UploadInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S
 		return InventoryInfo{}, fmt.Errorf("encode csv.gz: %w", err)
 	}
 
-	stamp := runStamp.UTC().Format("2006-01-02T15-04Z")
+	stamp := runStamp.UTC().Format("2006-01-02T15-04-05Z")
 	dataKey := fmt.Sprintf("%s%s/%s/data/%s.csv.gz", s3cfg.Prefix, s3cfg.SrcBucket, invID, runStampUUID(runStamp, index))
 	manifestKey := fmt.Sprintf("%s%s/%s/%s/manifest.json", s3cfg.Prefix, s3cfg.SrcBucket, invID, stamp)
 	checksumKey := fmt.Sprintf("%s%s/%s/%s/manifest.checksum", s3cfg.Prefix, s3cfg.SrcBucket, invID, stamp)

@@ -62,6 +62,16 @@ func Run(cfg Config) error {
 		cfg.Target = TargetLocal
 	}
 
+	// Go 1.22+ `for range int` panics on negative values, and a zero
+	// count/objects is a silent no-op that's almost never what the user
+	// wants — reject both explicitly.
+	if cfg.Count <= 0 {
+		return fmt.Errorf("count must be > 0, got %d", cfg.Count)
+	}
+	if cfg.Objects <= 0 {
+		return fmt.Errorf("objects must be > 0, got %d", cfg.Objects)
+	}
+
 	logEv := cfg.Logger.Info().
 		Str("target", string(cfg.Target)).
 		Int("count", cfg.Count).
@@ -137,8 +147,9 @@ func runS3(cfg Config, startTime time.Time) error {
 	}
 
 	// Use one run timestamp for all inventories in this seeding so the
-	// folder names line up nicely in tooling.
-	runStamp := time.Now().UTC().Truncate(time.Minute)
+	// folder names line up nicely in tooling. Second-granularity so two
+	// runs in the same minute don't overwrite each other's manifests.
+	runStamp := time.Now().UTC().Truncate(time.Second)
 
 	for i := range cfg.Count {
 		invSeed := cfg.Seed + int64(i+1)*1000

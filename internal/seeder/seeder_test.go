@@ -237,3 +237,70 @@ func TestGetGeneratorConfig_PresetValues(t *testing.T) {
 		t.Errorf("realistic maxDepth: want %d, got %d", expected.MaxDepth, realistic.MaxDepth)
 	}
 }
+
+func TestRun_RejectsZeroAndNegativeCount(t *testing.T) {
+	for _, count := range []int{0, -1} {
+		t.Run(fmt.Sprintf("count=%d", count), func(t *testing.T) {
+			err := Run(Config{
+				OutputDir: t.TempDir(),
+				Count:     count,
+				Objects:   10,
+				Preset:    "small",
+				Logger:    zerolog.Nop(),
+			})
+			if err == nil {
+				t.Fatalf("expected error for count=%d, got nil", count)
+			}
+		})
+	}
+}
+
+func TestRun_RejectsZeroAndNegativeObjects(t *testing.T) {
+	for _, objects := range []int{0, -1} {
+		t.Run(fmt.Sprintf("objects=%d", objects), func(t *testing.T) {
+			err := Run(Config{
+				OutputDir: t.TempDir(),
+				Count:     1,
+				Objects:   objects,
+				Preset:    "small",
+				Logger:    zerolog.Nop(),
+			})
+			if err == nil {
+				t.Fatalf("expected error for objects=%d, got nil", objects)
+			}
+		})
+	}
+}
+
+func TestRun_DistinctInventoryHashAcrossAllPairs(t *testing.T) {
+	// Original test only checked adjacent pairs; this catches any
+	// coincidental periodicity in the seed math by comparing every pair.
+	tmpDir := t.TempDir()
+	if err := Run(Config{
+		OutputDir: tmpDir,
+		Count:     4,
+		Objects:   200,
+		Preset:    "small",
+		Seed:      0,
+		Logger:    zerolog.Nop(),
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	hashes := make([]string, 4)
+	for i := range hashes {
+		id := fmt.Sprintf("inv-%03d", i+1)
+		data, err := os.ReadFile(filepath.Join(tmpDir, id, "prefix_blob.bin"))
+		if err != nil {
+			t.Fatalf("read %s: %v", id, err)
+		}
+		h := sha256.Sum256(data)
+		hashes[i] = hex.EncodeToString(h[:])
+	}
+	for i := range hashes {
+		for j := i + 1; j < len(hashes); j++ {
+			if hashes[i] == hashes[j] {
+				t.Errorf("inv-%03d and inv-%03d collide", i+1, j+1)
+			}
+		}
+	}
+}
