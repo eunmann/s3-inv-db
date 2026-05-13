@@ -185,6 +185,29 @@ func TestGetDescendantsAPI_Filter(t *testing.T) {
 	}
 }
 
+// TestBrowsePage_FormReflectsURLParams pins the full-page response:
+// the form must show inventory_id selected and prefix populated. This
+// is the contract that hx-history="false" relies on — back/forward
+// re-fetches from the server, so the server has to be right.
+func TestBrowsePage_FormReflectsURLParams(t *testing.T) {
+	h := buildLoadedTestHandlers(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/browse?inventory_id=loaded&prefix=data/2024/", http.NoBody)
+	w := httptest.NewRecorder()
+	h.BrowsePage(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `<option value="loaded" selected>`) {
+		t.Errorf("inventory dropdown missing selected option for loaded: %s", body)
+	}
+	if !strings.Contains(body, `value="data/2024/"`) {
+		t.Errorf("prefix input missing value=\"data/2024/\": %s", body)
+	}
+}
+
 func TestBrowsePage_PartialSuccess(t *testing.T) {
 	h := buildLoadedTestHandlers(t)
 
