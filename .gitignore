@@ -29,3 +29,9 @@ Thumbs.db
 
 # Air hot reload
 tmp/
+
+# Claude Code per-user state (skills and commands are tracked)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+seed-data/
