@@ -34,9 +34,8 @@ func (s *Server) setupRoutes() {
 	r.Route("/api", func(r chi.Router) {
 		r.Use(jsonContentType)
 
-		// Inventory state (loaded/unloaded view). Get/Unload/Delete are
-		// still useful even with discovery; the legacy register-by-path
-		// POST endpoint stays for tests but is not surfaced in the UI.
+		// Inventory state (loaded/unloaded view). The POST endpoint is
+		// not surfaced in the UI; kept for tests and direct-path callers.
 		r.Get("/inventories", s.handlers.ListInventoriesAPI)
 		r.Post("/inventories", s.handlers.RegisterInventoryAPI)
 		r.Get("/inventories/{id}", s.handlers.GetInventoryAPI)

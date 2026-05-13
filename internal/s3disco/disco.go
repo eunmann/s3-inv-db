@@ -161,13 +161,11 @@ func (d *Discoverer) describeInventory(ctx context.Context, src, inv, invPrefix 
 	entry.LatestRun = latest
 	entry.ManifestKey = invPrefix + latest + "/manifest.json"
 
-	// Fetch + parse the manifest in-place using the same s3.Client we
-	// already have. Soft-fail on parse error so one broken manifest doesn't
-	// break the whole List call.
+	// Soft-fail on parse error so one broken manifest doesn't break List.
 	manifest, err := d.fetchManifest(ctx, entry.ManifestKey)
 	if err != nil {
 		entry.FileFormat = "unknown"
-		return entry, nil //nolint:nilerr // surface the entry; UI shows "unknown" so user can still try
+		return entry, nil //nolint:nilerr // surface a partial entry; List shouldn't fail for one broken manifest
 	}
 	entry.FileFormat = manifest.FileFormat
 	entry.FileCount = len(manifest.Files)

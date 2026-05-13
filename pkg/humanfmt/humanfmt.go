@@ -104,10 +104,9 @@ func ThroughputUint64(bytes uint64, d time.Duration) string {
 
 // Count renders an integer for human display.
 //
-//   - < 0          → plain decimal (with sign)
-//   - 0–999        → plain decimal with grouping commas (e.g. "999")
-//   - 1,000+       → "X.YK" / "X.YM" / "X.YB" with one decimal place,
-//     rounded half-away-from-zero (1.25 -> 1.3, not 1.2)
+//   - < 0     → plain decimal
+//   - 0–999   → plain decimal with grouping commas
+//   - 1,000+  → "X.YK" / "X.YM" / "X.YB", one decimal, half-away-from-zero
 //
 // Examples: "789", "1.2K", "12.5K", "1.0M", "2.5B".
 func Count(n int64) string {
@@ -135,8 +134,6 @@ func Count(n int64) string {
 }
 
 // formatWithCommas renders a non-negative int64 with thousands separators.
-// For three- or fewer-digit inputs (the only callers reach this through
-// Count, which routes ≥ 1,000 to K), it just returns the plain digits.
 func formatWithCommas(n int64) string {
 	s := strconv.FormatInt(n, 10)
 	if len(s) <= 3 {

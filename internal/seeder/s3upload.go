@@ -48,8 +48,8 @@ var (
 	errPrefixNotSlash = errors.New("s3 prefix must end with /")
 )
 
-// newS3Client builds an aws-sdk-go-v2 S3 client. When AWS_ENDPOINT_URL_S3 is
-// set (the MinIO case) we force path-style addressing.
+// newS3Client builds an aws-sdk-go-v2 S3 client. When AWS_ENDPOINT_URL_S3
+// is set (the MinIO case) it forces path-style addressing.
 func newS3Client(ctx context.Context) (*s3.Client, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
@@ -200,9 +200,7 @@ func md5Hex(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// runStampUUID derives a deterministic synthetic UUID per (run, index) so the
-// data filename is stable across reruns with the same inputs. Real S3 uses
-// random UUIDs; we don't need that here.
+// runStampUUID returns a deterministic synthetic UUID per (run, index).
 func runStampUUID(stamp time.Time, index int) string {
 	return fmt.Sprintf("%010x-%04x", stamp.Unix(), index)
 }

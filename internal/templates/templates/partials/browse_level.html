@@ -72,9 +72,38 @@
     {{$sizeLink := index .SortLinks "size"}}
     {{$costLink := index .SortLinks "cost"}}
     <div class="bg-white shadow sm:rounded-lg">
-        <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
-            <h3 class="text-md font-medium text-gray-900">Children</h3>
-            <p class="text-xs text-gray-500 mt-1">{{len .Children}} immediate child prefix{{if ne (len .Children) 1}}es{{end}} — click a column to sort</p>
+        <div class="px-4 py-5 sm:px-6 border-b border-gray-200 flex items-center justify-between gap-4 flex-wrap">
+            <div>
+                <h3 class="text-md font-medium text-gray-900">Children</h3>
+                <p class="text-xs text-gray-500 mt-1">
+                    {{if .TotalChildren}}Showing {{.Pagination.FirstRow}}–{{.Pagination.LastRow}} of {{.TotalChildren}} child prefix{{if ne .TotalChildren 1}}es{{end}}{{else}}No child prefixes — this is a leaf in the trie.{{end}}
+                </p>
+            </div>
+            {{if gt .Pagination.Pages 1}}
+            <div class="flex items-center gap-2 text-sm">
+                {{if .Pagination.PrevPage}}
+                <button
+                    hx-get="/partials/browse-level"
+                    hx-vals='{"inventory_id":"{{$inv}}","prefix":"{{$.Prefix}}","sort":"{{$.Sort}}","dir":"{{$.Dir}}","page":"{{.Pagination.PrevPage}}"}'
+                    hx-target="#browse-target"
+                    hx-push-url="/browse?inventory_id={{$inv}}&prefix={{$.Prefix}}&sort={{$.Sort}}&dir={{$.Dir}}&page={{.Pagination.PrevPage}}"
+                    class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50">← Prev</button>
+                {{else}}
+                <span class="px-3 py-1 border border-gray-200 rounded text-gray-300 cursor-not-allowed">← Prev</span>
+                {{end}}
+                <span class="text-gray-500">Page {{.Pagination.Page}} of {{.Pagination.Pages}}</span>
+                {{if .Pagination.NextPage}}
+                <button
+                    hx-get="/partials/browse-level"
+                    hx-vals='{"inventory_id":"{{$inv}}","prefix":"{{$.Prefix}}","sort":"{{$.Sort}}","dir":"{{$.Dir}}","page":"{{.Pagination.NextPage}}"}'
+                    hx-target="#browse-target"
+                    hx-push-url="/browse?inventory_id={{$inv}}&prefix={{$.Prefix}}&sort={{$.Sort}}&dir={{$.Dir}}&page={{.Pagination.NextPage}}"
+                    class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50">Next →</button>
+                {{else}}
+                <span class="px-3 py-1 border border-gray-200 rounded text-gray-300 cursor-not-allowed">Next →</span>
+                {{end}}
+            </div>
+            {{end}}
         </div>
         {{if .Children}}
         <table class="min-w-full divide-y divide-gray-200">
@@ -147,10 +176,6 @@
                 {{end}}
             </tbody>
         </table>
-        {{else}}
-        <div class="px-6 py-8 text-center text-sm text-gray-500">
-            No child prefixes — this is a leaf in the trie.
-        </div>
         {{end}}
     </div>
 

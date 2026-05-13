@@ -142,6 +142,59 @@ func TestBreadcrumbs(t *testing.T) {
 	}
 }
 
+func TestNormalizePage(t *testing.T) {
+	tests := []struct {
+		name     string
+		page, sz string
+		wantPage int
+		wantSize int
+	}{
+		{"defaults", "", "", 1, 100},
+		{"non-numeric page", "garbage", "", 1, 100},
+		{"zero page", "0", "", 1, 100},
+		{"explicit page 5", "5", "", 5, 100},
+		{"page_size override", "", "50", 1, 50},
+		{"page_size > max clamped", "", "9999", 1, 500},
+		{"negative size", "", "-3", 1, 100},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotP, gotS := normalizePage(tt.page, tt.sz)
+			if gotP != tt.wantPage || gotS != tt.wantSize {
+				t.Errorf("normalizePage(%q,%q) = (%d,%d), want (%d,%d)",
+					tt.page, tt.sz, gotP, gotS, tt.wantPage, tt.wantSize)
+			}
+		})
+	}
+}
+
+func TestPaginate(t *testing.T) {
+	tests := []struct {
+		name                                               string
+		total, page, size                                  int
+		wantPages, wantFirst, wantLast, wantPrev, wantNext int
+	}{
+		{"empty", 0, 1, 100, 0, 0, 0, 0, 0},
+		{"single full page", 50, 1, 100, 1, 1, 50, 0, 0},
+		{"two pages, page 1", 150, 1, 100, 2, 1, 100, 0, 2},
+		{"two pages, page 2", 150, 2, 100, 2, 101, 150, 1, 0},
+		{"page past end clamps to last", 250, 99, 100, 3, 201, 250, 2, 0},
+		{"odd boundary", 9261, 93, 100, 93, 9201, 9261, 92, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := paginate(tt.total, tt.page, tt.size)
+			if got.Pages != tt.wantPages || got.FirstRow != tt.wantFirst ||
+				got.LastRow != tt.wantLast || got.PrevPage != tt.wantPrev ||
+				got.NextPage != tt.wantNext {
+				t.Errorf("paginate(%d, %d, %d) = %+v, want pages=%d first=%d last=%d prev=%d next=%d",
+					tt.total, tt.page, tt.size, got,
+					tt.wantPages, tt.wantFirst, tt.wantLast, tt.wantPrev, tt.wantNext)
+			}
+		})
+	}
+}
+
 func TestSegmentOf(t *testing.T) {
 	tests := []struct {
 		parent, child, want string

@@ -11,10 +11,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// s3ClientOptions returns the s3.Options-functional-arg slice we apply to
-// every s3.NewFromConfig in this package. When AWS_ENDPOINT_URL_S3 is set we
-// force path-style addressing because MinIO and most non-AWS S3
-// implementations reject the SDK default (virtual-host style).
+// s3ClientOptions forces path-style addressing when AWS_ENDPOINT_URL_S3
+// is set. MinIO and most non-AWS S3 implementations reject the SDK
+// default (virtual-host style).
 func s3ClientOptions() []func(*s3.Options) {
 	if os.Getenv("AWS_ENDPOINT_URL_S3") == "" {
 		return nil

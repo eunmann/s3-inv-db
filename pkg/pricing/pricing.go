@@ -312,19 +312,16 @@ func ComputeDetailedBreakdown(breakdown []format.TierBreakdown, pt PriceTable) [
 	return results
 }
 
-// FormatCost formats a cost in microdollars for display in the UI.
+// FormatCost formats a cost in microdollars for display.
 //
-// Rules:
-//   - 0                           → "$0.00"
-//   - 0 < c < $0.01               → "<$0.01"   (a non-zero sub-penny)
-//   - $0.01 ≤ c < $1,000          → "$X.XX"    (ceiling to the next cent —
-//     we round up to be conservative about reported cost)
-//   - $1,000 ≤ c < $1,000,000     → "$X.YK"
-//   - $1,000,000 ≤ c < $1B        → "$X.YM"
-//   - c ≥ $1,000,000,000          → "$X.YB"
+//   - 0                       → "$0.00"
+//   - 0 < c < $0.01           → "<$0.01"
+//   - $0.01 ≤ c < $1,000      → "$X.XX" (ceiling to next cent)
+//   - $1,000 ≤ c < $1M        → "$X.YK"
+//   - $1M ≤ c < $1B           → "$X.YM"
+//   - c ≥ $1B                 → "$X.YB"
 //
-// K/M/B brackets use one decimal place and standard round-to-nearest.
-// They're for at-a-glance comparison, not exact accounting.
+// K/M/B suffixes use one decimal, round-half-away-from-zero.
 func FormatCost(microdollars uint64) string {
 	const (
 		microsPerCent   = uint64(10_000)
@@ -351,21 +348,17 @@ func FormatCost(microdollars uint64) string {
 		return fmt.Sprintf("$%.1fK", roundHalfAway(dollars/thousand, 1))
 	}
 
-	// $0.01 - $999.99: ceiling to the next cent so we never under-report.
 	cents := (microdollars + microsPerCent - 1) / microsPerCent
 	return fmt.Sprintf("$%d.%02d", cents/100, cents%100)
 }
 
-// roundHalfAway rounds x to the given decimal places, using round-half-away-
-// from-zero (so 1.25 -> 1.3, not 1.2). Go's %.Nf uses banker's rounding,
-// which surprises users when they mentally compute "round up at .5".
+// roundHalfAway rounds x to decimals decimal places, half-away-from-zero.
 func roundHalfAway(x float64, decimals int) float64 {
 	factor := math.Pow(10, float64(decimals))
 	return math.Round(x*factor) / factor
 }
 
-// FormatCostDollars formats a cost in dollars (float) by delegating to
-// FormatCost. Kept for callers that already have a float dollars value.
+// FormatCostDollars formats a cost in dollars via FormatCost.
 func FormatCostDollars(dollars float64) string {
 	if dollars <= 0 {
 		return "$0.00"

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
@@ -12,28 +13,24 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 )
 
-// Supported browse-level sort columns.
 const (
-	sortColSegment = "segment"
-	sortColObjects = "objects"
-	sortColSize    = "size"
-	sortColCost    = "cost"
-	sortDirAsc     = "asc"
-	sortDirDesc    = "desc"
+	sortColSegment  = "segment"
+	sortColObjects  = "objects"
+	sortColSize     = "size"
+	sortColCost     = "cost"
+	sortDirAsc      = "asc"
+	sortDirDesc     = "desc"
+	defaultPageSize = 100
+	maxPageSize     = 500
 )
 
-// BrowseCrumb is one segment of the breadcrumb trail rendered in the browse
-// partial. Prefix is the full prefix up to and including this segment, ready
-// to be passed back to /partials/browse-level as ?prefix=...
+// BrowseCrumb is one segment of the breadcrumb trail.
 type BrowseCrumb struct {
 	Label  string `json:"label"`
 	Prefix string `json:"prefix"`
 }
 
-// BrowseChild is one immediate-child prefix shown in the browse partial.
-// Segment is the bit after the parent prefix and before the trailing slash
-// — what the user sees in the list. Prefix is the full prefix the user
-// navigates into when they click.
+// BrowseChild is one immediate-child prefix shown in the explorer.
 type BrowseChild struct {
 	Segment                 string `json:"segment"`
 	Prefix                  string `json:"prefix"`
@@ -46,9 +43,8 @@ type BrowseChild struct {
 	HasChildren             bool   `json:"has_children"`
 }
 
-// BrowseSortLink carries the {sort, dir} pair the template should embed in
-// a column header click, plus an Indicator (↑/↓/"") to show the current
-// sort direction. Computed server-side so the template stays declarative.
+// BrowseSortLink carries the {sort, dir, indicator} bundle a column
+// header click should send and display.
 type BrowseSortLink struct {
 	Sort      string `json:"sort"`
 	Dir       string `json:"dir"`
@@ -68,10 +64,23 @@ type BrowseLevel struct {
 	CostEstimate  *CostEstimate             `json:"cost_estimate,omitempty"`
 	HasTierData   bool                      `json:"has_tier_data"`
 	Children      []BrowseChild             `json:"children"`
+	TotalChildren int                       `json:"total_children"`
 	Sort          string                    `json:"sort"`
 	Dir           string                    `json:"dir"`
 	SortLinks     map[string]BrowseSortLink `json:"sort_links"`
+	Pagination    BrowsePagination          `json:"pagination"`
 	NotFound      bool                      `json:"not_found,omitempty"`
+}
+
+// BrowsePagination describes the slice of children rendered for one page.
+type BrowsePagination struct {
+	Page     int `json:"page"`
+	PageSize int `json:"page_size"`
+	Pages    int `json:"pages"`
+	FirstRow int `json:"first_row"`
+	LastRow  int `json:"last_row"`
+	PrevPage int `json:"prev_page"`
+	NextPage int `json:"next_page"`
 }
 
 // BrowsePage renders the explorer page shell.
@@ -105,6 +114,7 @@ func (h *Handlers) BrowseLevelPartial(w http.ResponseWriter, r *http.Request) {
 	}
 	prefix := q.Get("prefix")
 	sortBy, dir := normalizeSort(q.Get("sort"), q.Get("dir"))
+	page, pageSize := normalizePage(q.Get("page"), q.Get("page_size"))
 
 	idx, err := h.manager.GetIndex(inventoryID)
 	if err != nil {
@@ -120,7 +130,7 @@ func (h *Handlers) BrowseLevelPartial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	level := h.buildBrowseLevel(idx, inventoryID, prefix, sortBy, dir)
+	level := h.buildBrowseLevel(idx, inventoryID, prefix, sortBy, dir, page, pageSize)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.RenderPartial(w, "browse_level.html", level); err != nil {
@@ -129,10 +139,24 @@ func (h *Handlers) BrowseLevelPartial(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// normalizeSort coerces user-supplied sort/dir params to known values.
-// Unknown column → segment. Unknown direction → the column's default
-// (asc for segment, desc for numeric columns — biggest first is the
-// usual ask for the latter).
+// normalizePage clamps page (≥1) and size (1..maxPageSize) from user input.
+func normalizePage(pageStr, sizeStr string) (page, size int) {
+	page = 1
+	if v, err := strconv.Atoi(pageStr); err == nil && v >= 1 {
+		page = v
+	}
+	size = defaultPageSize
+	if v, err := strconv.Atoi(sizeStr); err == nil && v >= 1 {
+		size = v
+	}
+	if size > maxPageSize {
+		size = maxPageSize
+	}
+	return page, size
+}
+
+// normalizeSort clamps sort/dir from user input to known values.
+// Unknown column → segment. Unknown direction → segment uses asc, others desc.
 func normalizeSort(sortBy, dir string) (col, direction string) {
 	switch sortBy {
 	case sortColObjects, sortColSize, sortColCost, sortColSegment:
@@ -153,12 +177,10 @@ func normalizeSort(sortBy, dir string) (col, direction string) {
 	return col, direction
 }
 
-// buildBrowseLevel computes the stats + children for a single prefix. When
-// the prefix doesn't exist in the trie we still return a valid level with
-// NotFound=true so the partial can render an inline "no such prefix"
-// message in the explorer; bouncing the user back to an HTTP error would
-// lose the rest of the page state.
-func (h *Handlers) buildBrowseLevel(idx *indexread.Index, inventoryID, prefix, sortBy, dir string) BrowseLevel {
+// buildBrowseLevel computes the stats + children for a single prefix.
+// Missing prefixes return NotFound=true so the partial can render an
+// inline message rather than failing the whole request.
+func (h *Handlers) buildBrowseLevel(idx *indexread.Index, inventoryID, prefix, sortBy, dir string, page, pageSize int) BrowseLevel {
 	level := BrowseLevel{
 		InventoryID: inventoryID,
 		Prefix:      prefix,
@@ -212,19 +234,29 @@ func (h *Handlers) buildBrowseLevel(idx *indexread.Index, inventoryID, prefix, s
 		}
 	}
 
-	level.Children = h.buildChildren(idx, pos, prefix)
-	sortChildren(level.Children, sortBy, dir)
+	all := h.buildChildren(idx, pos, prefix, sortBy == sortColCost)
+	sortChildren(all, sortBy, dir)
+	level.TotalChildren = len(all)
+	level.Pagination = paginate(len(all), page, pageSize)
+
+	from, to := level.Pagination.FirstRow, level.Pagination.LastRow
+	if from > 0 {
+		level.Children = all[from-1 : to]
+		if sortBy != sortColCost && idx.HasTierData() {
+			h.fillChildCosts(idx, level.Children)
+		}
+	}
 	return level
 }
 
-func (h *Handlers) buildChildren(idx *indexread.Index, pos uint64, prefix string) []BrowseChild {
+func (h *Handlers) buildChildren(idx *indexread.Index, pos uint64, prefix string, computeCost bool) []BrowseChild {
 	positions, err := idx.DescendantsAtDepthFiltered(pos, 1, indexread.Filter{})
 	if err != nil {
 		h.logger.Warn().Err(err).Msg("descendants at depth 1")
 		return nil
 	}
 	hasTier := idx.HasTierData()
-	out := make([]BrowseChild, 0, len(positions))
+	children := make([]BrowseChild, 0, len(positions))
 	for _, p := range positions {
 		fullPrefix, err := idx.PrefixString(p)
 		if err != nil {
@@ -240,22 +272,66 @@ func (h *Handlers) buildChildren(idx *indexread.Index, pos uint64, prefix string
 			TotalBytesH:  humanfmt.BytesUint64(stats.TotalBytes),
 			HasChildren:  idx.MaxDepthInSubtree(p) > idx.Depth(p),
 		}
-		if hasTier {
+		if hasTier && computeCost {
 			breakdown := idx.TierBreakdown(p)
 			cost := pricing.ComputeMonthlyCost(breakdown, h.priceTable)
 			child.MonthlyCostMicrodollars = cost.TotalMicrodollars
 			child.MonthlyCostFormatted = pricing.FormatCost(cost.TotalMicrodollars)
-		} else {
+		} else if !hasTier {
 			child.MonthlyCostFormatted = "—"
 		}
-		out = append(out, child)
+		children = append(children, child)
 	}
-	return out
+	return children
 }
 
-// sortChildren orders the children slice in place by (sortBy, dir). For
-// equal-key entries it falls back to segment-asc so the order is stable
-// regardless of how the index hands them to us.
+func (h *Handlers) fillChildCosts(idx *indexread.Index, visible []BrowseChild) {
+	for i := range visible {
+		p, ok := idx.Lookup(visible[i].Prefix)
+		if !ok {
+			continue
+		}
+		breakdown := idx.TierBreakdown(p)
+		cost := pricing.ComputeMonthlyCost(breakdown, h.priceTable)
+		visible[i].MonthlyCostMicrodollars = cost.TotalMicrodollars
+		visible[i].MonthlyCostFormatted = pricing.FormatCost(cost.TotalMicrodollars)
+	}
+}
+
+// paginate returns the 1-indexed window for page of total items at pageSize.
+func paginate(total, page, pageSize int) BrowsePagination {
+	if total == 0 || pageSize <= 0 {
+		return BrowsePagination{Page: 1, PageSize: pageSize}
+	}
+	pages := (total + pageSize - 1) / pageSize
+	if page > pages {
+		page = pages
+	}
+	if page < 1 {
+		page = 1
+	}
+	first := (page-1)*pageSize + 1
+	last := first + pageSize - 1
+	if last > total {
+		last = total
+	}
+	p := BrowsePagination{
+		Page:     page,
+		PageSize: pageSize,
+		Pages:    pages,
+		FirstRow: first,
+		LastRow:  last,
+	}
+	if page > 1 {
+		p.PrevPage = page - 1
+	}
+	if page < pages {
+		p.NextPage = page + 1
+	}
+	return p
+}
+
+// sortChildren orders children in place. Ties resolve by segment-asc.
 func sortChildren(children []BrowseChild, sortBy, dir string) {
 	less := func(i, j int) bool {
 		a, b := &children[i], &children[j]
@@ -286,10 +362,9 @@ func sortChildren(children []BrowseChild, sortBy, dir string) {
 	sort.SliceStable(children, less)
 }
 
-// sortLinks builds the per-column {sort, dir, indicator} bundle the
-// template embeds in each header's hx-vals. Clicking the active column
-// toggles direction; clicking a different column applies that column's
-// default direction (asc for segment, desc for numerics).
+// sortLinks builds the per-column {sort, dir, indicator} bundle for the
+// column headers. The active column toggles direction on click; other
+// columns get their default (asc for segment, desc for numerics).
 func sortLinks(currentSort, currentDir string) map[string]BrowseSortLink {
 	cols := []struct {
 		key        string
@@ -317,11 +392,7 @@ func sortLinks(currentSort, currentDir string) map[string]BrowseSortLink {
 	return links
 }
 
-// breadcrumbs returns Root + one Crumb per slash-separated segment of prefix.
-//
-//	""           -> [Root]
-//	"foo/"       -> [Root, foo]
-//	"foo/bar/"   -> [Root, foo, bar]
+// breadcrumbs returns Root + one Crumb per slash-separated segment.
 func breadcrumbs(prefix string) []BrowseCrumb {
 	crumbs := []BrowseCrumb{{Label: "Root", Prefix: ""}}
 	if prefix == "" {
@@ -337,9 +408,8 @@ func breadcrumbs(prefix string) []BrowseCrumb {
 	return crumbs
 }
 
-// segmentOf strips parent from child and the trailing slash, yielding the
-// display label for one child row. For root parent ("") the segment is the
-// child with its trailing slash trimmed.
+// segmentOf returns the child segment, with the parent prefix and
+// trailing slash trimmed.
 func segmentOf(parent, child string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(child, parent), "/")
 }

@@ -54,10 +54,8 @@
 </div>
 
 <script>
-// On page load, hydrate the form from URL params (so refresh / back / bookmarks
-// land on the same view) and kick off the initial fetch. We fire the request
-// via htmx.ajax with the full URL params so sort/dir survive a refresh — the
-// form itself only carries inventory_id and prefix.
+// Hydrate the form from URL params on load and trigger the initial fetch
+// via htmx.ajax with the full URL so sort/dir/page survive a refresh.
 window.addEventListener('DOMContentLoaded', () => {
     const params = new URLSearchParams(window.location.search);
     const invSel = document.getElementById('inventory_id');

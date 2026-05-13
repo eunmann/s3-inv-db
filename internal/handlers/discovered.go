@@ -76,9 +76,6 @@ func (h *Handlers) LoadDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Run build+open synchronously. The handler blocks until the index is
-	// ready or the build fails; that's acceptable for the sizes we expect
-	// in dev, and avoids a half-baked async-progress UI for now.
 	err = h.manager.LoadWith(r.Context(), composite, func(ctx context.Context, _ inventory.Info) (string, error) {
 		return h.loader.Build(ctx, src, id, manifestURI)
 	})
