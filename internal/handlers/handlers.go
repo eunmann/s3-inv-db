@@ -11,13 +11,16 @@ import (
 // Handlers contains all HTTP handlers and their dependencies. No logger
 // field — handlers retrieve the request-scoped logger via
 // logctx.FromContext(r.Context()), set by the server's contextLoggerMiddleware.
+//
+// Domain operations on discovered inventories (list+merge, load, evict)
+// go through `discovery` so the use-case logic lives in the inventory
+// package rather than at the HTTP boundary.
 type Handlers struct {
 	manager     *inventory.Manager
+	discovery   *inventory.DiscoveryService
 	renderer    *templates.Renderer
 	priceTable  pricing.PriceTable
-	discoverer  *s3disco.Discoverer // nil when --s3-source is not set
-	loader      *loader.Loader      // nil when --s3-source is not set
-	s3SourceURI string              // for display in templates
+	s3SourceURI string // for display in templates
 }
 
 // Config gathers all Handlers dependencies for NewWithConfig.
@@ -43,10 +46,9 @@ func New(mgr *inventory.Manager, renderer *templates.Renderer, priceTable pricin
 func NewWithConfig(cfg Config) *Handlers {
 	return &Handlers{
 		manager:     cfg.Manager,
+		discovery:   inventory.NewDiscoveryService(cfg.Manager, cfg.Discoverer, cfg.Loader),
 		renderer:    cfg.Renderer,
 		priceTable:  cfg.PriceTable,
-		discoverer:  cfg.Discoverer,
-		loader:      cfg.Loader,
 		s3SourceURI: cfg.S3SourceURI,
 	}
 }

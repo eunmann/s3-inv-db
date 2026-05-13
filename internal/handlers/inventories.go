@@ -151,11 +151,11 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 	data := map[string]interface{}{
 		"Title":        "Inventories",
 		"S3Source":     h.s3SourceURI,
-		"HasDiscovery": h.discoverer != nil,
+		"HasDiscovery": h.discovery.Enabled(),
 	}
 
-	if h.discoverer != nil {
-		views, err := h.discoverAndMerge(r.Context())
+	if h.discovery.Enabled() {
+		views, err := h.discovery.List(r.Context())
 		if err != nil {
 			logctx.FromContext(r.Context()).Error().Err(err).Msg("discover for inventories page")
 			data["DiscoveryError"] = "Failed to list discovered inventories. See server logs for details."

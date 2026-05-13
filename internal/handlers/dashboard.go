@@ -29,13 +29,13 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	data := DashboardData{
 		Title:        "Dashboard",
 		S3Source:     h.s3SourceURI,
-		HasDiscovery: h.discoverer != nil,
+		HasDiscovery: h.discovery.Enabled(),
 	}
 
 	logger := logctx.FromContext(r.Context())
 	var infos []inventory.Info
-	if h.discoverer != nil {
-		views, err := h.discoverAndMerge(r.Context())
+	if h.discovery.Enabled() {
+		views, err := h.discovery.List(r.Context())
 		if err != nil {
 			logger.Warn().Err(err).Msg("dashboard discovery failed; falling back to manager")
 		} else {
@@ -43,7 +43,7 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 			for i := range views {
 				v := &views[i]
 				infos = append(infos, inventory.Info{
-					ID:          v.CompositeID,
+					ID:          v.CompositeID(),
 					Name:        v.SourceBucket + " / " + v.InventoryID,
 					Path:        v.ManifestKey,
 					State:       v.State,

@@ -12,11 +12,11 @@ import (
 )
 
 // The htmx-facing /partials/* routes mutate state via the inventory
-// Manager and return the updated row's HTML directly so the client can
-// swap it into the DOM without a full page reload. This is the SSR side
-// of the equivalent JSON /api/* routes.
+// Manager or DiscoveryService and return the updated row's HTML directly
+// so the client can swap it into the DOM without a full page reload.
 
-// LoadInventoryRowPartial loads an inventory and returns its updated row.
+// LoadInventoryRowPartial loads a (non-discovered) inventory and returns
+// its updated row.
 func (h *Handlers) LoadInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := h.manager.Load(context.WithoutCancel(r.Context()), id); err != nil {
@@ -50,7 +50,7 @@ func (h *Handlers) DeleteInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 
 // LoadDiscoveredRowPartial loads a discovered inventory and returns its row.
 func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Request) {
-	if h.discoverer == nil || h.loader == nil {
+	if !h.discovery.Enabled() {
 		http.Error(w, "discovery not configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -58,7 +58,7 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	id := chi.URLParam(r, "id")
 
 	logger := logctx.FromContext(r.Context())
-	disc, err := h.discoverer.Find(r.Context(), src, id)
+	disc, err := h.discovery.Find(r.Context(), src, id)
 	if err != nil {
 		logger.Error().Err(err).Str("src", src).Str("id", id).Msg("find discovered inventory")
 		http.Error(w, "failed to find inventory", http.StatusBadGateway)
@@ -68,26 +68,12 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "no completed runs for this inventory", http.StatusNotFound)
 		return
 	}
-	composite := disc.CompositeID()
-	manifestURI := "s3://" + h.discoverer.Bucket() + "/" + disc.ManifestKey
-
-	if err := h.manager.Register(composite, src+"/"+id, manifestURI); err != nil && !errors.Is(err, inventory.ErrAlreadyExists) {
-		logger.Error().Err(err).Msg("register discovered inventory")
-		http.Error(w, "failed to register inventory", http.StatusInternalServerError)
-		return
-	}
-
-	loadCtx := context.WithoutCancel(r.Context())
-	err = h.manager.LoadWith(loadCtx, composite, func(ctx context.Context, _ inventory.Info) (string, error) {
-		return h.loader.Build(ctx, src, id, manifestURI)
-	})
-	if err != nil {
+	if _, err := h.discovery.Load(r.Context(), disc); err != nil {
 		respondManagerErrorHTML(w, r, err, "load discovered inventory")
 		return
 	}
-	// Reuse the disc we already fetched at the top of this handler so a
-	// transient post-load S3 hiccup doesn't surface a 502 that hides the
-	// successful load.
+	// Reuse the disc we already fetched so a transient post-load S3 hiccup
+	// doesn't surface a 502 that hides the successful load.
 	h.renderDiscoveredRowFrom(w, r, disc)
 }
 
@@ -108,22 +94,9 @@ func (h *Handlers) UnloadDiscoveredRowPartial(w http.ResponseWriter, r *http.Req
 func (h *Handlers) EvictDiscoveredRowPartial(w http.ResponseWriter, r *http.Request) {
 	src := chi.URLParam(r, "src")
 	id := chi.URLParam(r, "id")
-	composite := src + "/" + id
-
-	if err := h.manager.Unload(composite); err != nil &&
-		!errors.Is(err, inventory.ErrInvalidState) &&
-		!errors.Is(err, inventory.ErrNotFound) {
-		respondManagerErrorHTML(w, r, err, "unload inventory")
+	if err := h.discovery.Evict(r.Context(), src, id); err != nil {
+		respondManagerErrorHTML(w, r, err, "evict inventory")
 		return
-	}
-	if err := h.manager.Remove(composite); err != nil && !errors.Is(err, inventory.ErrNotFound) {
-		respondManagerErrorHTML(w, r, err, "remove inventory")
-		return
-	}
-	if h.loader != nil {
-		if err := h.loader.Evict(src, id); err != nil {
-			logctx.FromContext(r.Context()).Warn().Err(err).Str("composite", composite).Msg("evict cache")
-		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -148,7 +121,7 @@ func (h *Handlers) renderInventoryRow(w http.ResponseWriter, r *http.Request, id
 // manager state, and renders the discovered_row.html partial.
 func (h *Handlers) renderDiscoveredRow(w http.ResponseWriter, r *http.Request, src, id string) {
 	logger := logctx.FromContext(r.Context())
-	disc, err := h.discoverer.Find(r.Context(), src, id)
+	disc, err := h.discovery.Find(r.Context(), src, id)
 	if err != nil {
 		logger.Error().Err(err).Str("src", src).Str("id", id).Msg("find discovered inventory for row render")
 		http.Error(w, "failed to render row", http.StatusBadGateway)
@@ -162,11 +135,7 @@ func (h *Handlers) renderDiscoveredRow(w http.ResponseWriter, r *http.Request, s
 // trusted disc (e.g. just before a successful load) skip the second
 // S3 round-trip and avoid surfacing transient post-load errors.
 func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Request, disc s3disco.Inventory) {
-	view := DiscoveredView{
-		Inventory:   disc,
-		CompositeID: disc.CompositeID(),
-		State:       inventory.StatePending,
-	}
+	view := inventory.MergedInventory{Inventory: disc, State: inventory.StatePending}
 	if info, ok := h.manager.Get(disc.CompositeID()); ok {
 		view.State = info.State
 		view.Error = info.Error

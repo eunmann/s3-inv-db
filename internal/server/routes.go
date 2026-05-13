@@ -61,11 +61,9 @@ func (s *Server) setupRoutes() {
 		r.Post("/inventories/{id}/unload", s.handlers.UnloadInventoryAPI)
 		r.Delete("/inventories/{id}", s.handlers.DeleteInventoryAPI)
 
-		// Discovery — S3 is the source of truth for what can be loaded.
+		// Discovery — read-only listing. Mutating operations live on
+		// the /partials/discovered/* routes and return HTML directly.
 		r.Get("/discovered", s.handlers.ListDiscoveredAPI)
-		r.Post("/discovered/{src}/{id}/load", s.handlers.LoadDiscoveredAPI)
-		r.Post("/discovered/{src}/{id}/unload", s.handlers.UnloadDiscoveredAPI)
-		r.Delete("/discovered/{src}/{id}", s.handlers.EvictDiscoveredAPI)
 
 		// Stats queries
 		r.Get("/stats", s.handlers.GetStatsAPI)

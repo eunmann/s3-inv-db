@@ -44,19 +44,11 @@ func errMessage(err error) string {
 	return err.Error()
 }
 
-// respondManagerError emits a JSON error response (and a server-side
-// log line for 500-class failures). Used by /api/* handlers.
-func respondManagerError(w http.ResponseWriter, r *http.Request, err error, op string) {
-	status, msg := managerErrorStatus(err)
-	if status >= http.StatusInternalServerError {
-		logctx.FromContext(r.Context()).Error().Err(err).Str("op", op).Msg("manager error")
-	}
-	WriteJSONError(w, status, msg)
-}
-
 // respondManagerErrorHTML emits a text/plain (http.Error) response for
 // the same set of errors. Used by /partials/* handlers because htmx
-// surfaces non-2xx response bodies verbatim.
+// surfaces non-2xx response bodies verbatim. (The JSON counterpart
+// is unused now that the /api/discovered mutating routes are gone;
+// re-introduce it as `respondManagerError` if a JSON mutator returns.)
 func respondManagerErrorHTML(w http.ResponseWriter, r *http.Request, err error, op string) {
 	status, msg := managerErrorStatus(err)
 	if status >= http.StatusInternalServerError {
