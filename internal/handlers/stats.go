@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/eunmann/s3-inv-db/internal/logctx"
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
@@ -41,6 +42,32 @@ type CostEstimate struct {
 	MonitoringMicrodollars      uint64            `json:"monitoring_microdollars,omitempty"`
 	MinObjectSizeMicrodollars   uint64            `json:"min_object_size_microdollars,omitempty"`
 	GlacierOverheadMicrodollars uint64            `json:"glacier_overhead_microdollars,omitempty"`
+}
+
+// computeCostEstimate projects a tier breakdown through the price table
+// and into the HTTP-shaped CostEstimate (with formatted strings).
+// Returns nil when the breakdown is empty so callers can store the
+// result unconditionally — omitempty on the field handles the JSON.
+func (h *Handlers) computeCostEstimate(breakdown []format.TierBreakdown, includePerTier bool) *CostEstimate {
+	if len(breakdown) == 0 {
+		return nil
+	}
+	cost := pricing.ComputeMonthlyCost(breakdown, h.priceTable)
+	est := &CostEstimate{
+		TotalMicrodollars:           cost.TotalMicrodollars,
+		TotalFormatted:              pricing.FormatCost(cost.TotalMicrodollars),
+		MonitoringMicrodollars:      cost.MonitoringMicrodollars,
+		MinObjectSizeMicrodollars:   cost.MinObjectSizeMicrodollars,
+		GlacierOverheadMicrodollars: cost.GlacierOverheadMicrodollars,
+	}
+	if includePerTier && len(cost.PerTierMicrodollars) > 0 {
+		est.PerTierMicrodollars = cost.PerTierMicrodollars
+		est.PerTierFormatted = make(map[string]string, len(cost.PerTierMicrodollars))
+		for tier, microdollars := range cost.PerTierMicrodollars {
+			est.PerTierFormatted[tier] = pricing.FormatCost(microdollars)
+		}
+	}
+	return est
 }
 
 // DescendantInfo contains info about a descendant prefix.
@@ -222,35 +249,11 @@ func (h *Handlers) buildStatsResponse(idx *indexread.Index, prefix string, showT
 				BytesH:       humanfmt.BytesUint64(tb.Bytes),
 			})
 		}
-
-		if estimateCost && len(breakdown) > 0 {
-			cost := pricing.ComputeMonthlyCost(breakdown, h.priceTable)
-			resp.CostEstimate = &CostEstimate{
-				TotalMicrodollars:           cost.TotalMicrodollars,
-				TotalFormatted:              pricing.FormatCost(cost.TotalMicrodollars),
-				MonitoringMicrodollars:      cost.MonitoringMicrodollars,
-				MinObjectSizeMicrodollars:   cost.MinObjectSizeMicrodollars,
-				GlacierOverheadMicrodollars: cost.GlacierOverheadMicrodollars,
-			}
-
-			if len(cost.PerTierMicrodollars) > 0 {
-				resp.CostEstimate.PerTierMicrodollars = cost.PerTierMicrodollars
-				resp.CostEstimate.PerTierFormatted = make(map[string]string, len(cost.PerTierMicrodollars))
-				for tier, microdollars := range cost.PerTierMicrodollars {
-					resp.CostEstimate.PerTierFormatted[tier] = pricing.FormatCost(microdollars)
-				}
-			}
+		if estimateCost {
+			resp.CostEstimate = h.computeCostEstimate(breakdown, true)
 		}
-	} else if estimateCost && !showTiers {
-		// If cost estimation requested without tier breakdown
-		breakdown := idx.TierBreakdown(pos)
-		if len(breakdown) > 0 {
-			cost := pricing.ComputeMonthlyCost(breakdown, h.priceTable)
-			resp.CostEstimate = &CostEstimate{
-				TotalMicrodollars: cost.TotalMicrodollars,
-				TotalFormatted:    pricing.FormatCost(cost.TotalMicrodollars),
-			}
-		}
+	} else if estimateCost {
+		resp.CostEstimate = h.computeCostEstimate(idx.TierBreakdown(pos), false)
 	}
 
 	return resp, nil

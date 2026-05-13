@@ -252,23 +252,7 @@ func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, i
 				BytesH:       humanfmt.BytesUint64(tb.Bytes),
 			})
 		}
-		if len(breakdown) > 0 {
-			cost := pricing.ComputeMonthlyCost(breakdown, h.priceTable)
-			level.CostEstimate = &CostEstimate{
-				TotalMicrodollars:           cost.TotalMicrodollars,
-				TotalFormatted:              pricing.FormatCost(cost.TotalMicrodollars),
-				MonitoringMicrodollars:      cost.MonitoringMicrodollars,
-				MinObjectSizeMicrodollars:   cost.MinObjectSizeMicrodollars,
-				GlacierOverheadMicrodollars: cost.GlacierOverheadMicrodollars,
-			}
-			if len(cost.PerTierMicrodollars) > 0 {
-				level.CostEstimate.PerTierMicrodollars = cost.PerTierMicrodollars
-				level.CostEstimate.PerTierFormatted = make(map[string]string, len(cost.PerTierMicrodollars))
-				for tier, microdollars := range cost.PerTierMicrodollars {
-					level.CostEstimate.PerTierFormatted[tier] = pricing.FormatCost(microdollars)
-				}
-			}
-		}
+		level.CostEstimate = h.computeCostEstimate(breakdown, true)
 	}
 
 	all := h.buildChildren(ctx, idx, pos, prefix, sortBy == sortColCost)
