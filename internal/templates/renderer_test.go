@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
 func TestRenderer_Dashboard(t *testing.T) {
@@ -209,13 +211,9 @@ func TestRenderer_RepeatedRenders(t *testing.T) {
 		}
 	}
 
-	// Same for the partial path.
-	partialData := map[string]any{
-		"ID":    "x",
-		"Name":  "X",
-		"Path":  "/p",
-		"State": "pending",
-	}
+	// Same for the partial path. Use the real Info type so the
+	// template's .State.IsPending predicate resolves.
+	partialData := inventory.Info{ID: "x", Name: "X", Path: "/p", State: inventory.StatePending}
 	for i := range 2 {
 		var buf bytes.Buffer
 		if err := renderer.RenderPartial(&buf, "inventory_row.html", partialData); err != nil {
@@ -230,11 +228,11 @@ func TestRenderer_Partial(t *testing.T) {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
 
-	data := map[string]interface{}{
-		"ID":    "test-id",
-		"Name":  "Test Name",
-		"Path":  "/path/to/test",
-		"State": "pending",
+	data := inventory.Info{
+		ID:    "test-id",
+		Name:  "Test Name",
+		Path:  "/path/to/test",
+		State: inventory.StatePending,
 	}
 
 	var buf bytes.Buffer

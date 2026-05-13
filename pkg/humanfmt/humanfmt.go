@@ -37,9 +37,21 @@ func Bytes(b int64) string {
 	}
 }
 
-// BytesUint64 is like Bytes but for uint64.
+// BytesUint64 is like Bytes but for uint64. Computes natively rather
+// than casting through int64 so values above 2^63 don't underflow.
 func BytesUint64(b uint64) string {
-	return Bytes(int64(b))
+	switch {
+	case b >= TiB:
+		return fmt.Sprintf("%.2f TiB", float64(b)/TiB)
+	case b >= GiB:
+		return fmt.Sprintf("%.2f GiB", float64(b)/GiB)
+	case b >= MiB:
+		return fmt.Sprintf("%.2f MiB", float64(b)/MiB)
+	case b >= KiB:
+		return fmt.Sprintf("%.2f KiB", float64(b)/KiB)
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
 }
 
 // Examples: "1.23s", "45.6ms", "789µs", "1m30s", "2h15m".
@@ -147,7 +159,23 @@ func formatWithCommas(n int64) string {
 	return string(out)
 }
 
-// CountUint64 is like Count but for uint64.
+// CountUint64 is like Count but for uint64. Computes natively rather
+// than casting through int64 so values above 2^63 don't underflow.
 func CountUint64(n uint64) string {
-	return Count(int64(n))
+	const (
+		thousand = 1000.0
+		million  = 1000 * thousand
+		billion  = 1000 * million
+	)
+	f := float64(n)
+	switch {
+	case f >= billion:
+		return fmt.Sprintf("%.1fB", math.Round(f/billion*10)/10)
+	case f >= million:
+		return fmt.Sprintf("%.1fM", math.Round(f/million*10)/10)
+	case f >= thousand:
+		return fmt.Sprintf("%.1fK", math.Round(f/thousand*10)/10)
+	default:
+		return strconv.FormatUint(n, 10)
+	}
 }

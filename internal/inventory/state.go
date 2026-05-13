@@ -15,6 +15,21 @@ const (
 	StateUnloaded State = "unloaded"
 )
 
+// State predicates. Templates use these instead of stringly-typed
+// {{eq (printf "%s" .State) "loaded"}} comparisons so a state rename
+// becomes a refactor that compiler catches.
+func (s State) IsLoaded() bool   { return s == StateLoaded }
+func (s State) IsPending() bool  { return s == StatePending }
+func (s State) IsParsing() bool  { return s == StateParsing }
+func (s State) IsError() bool    { return s == StateError }
+func (s State) IsUnloaded() bool { return s == StateUnloaded }
+
+// CanLoad reports whether a Load is a legal next operation. Pending,
+// Unloaded, and Error inventories can all be (re)loaded.
+func (s State) CanLoad() bool {
+	return s == StatePending || s == StateUnloaded || s == StateError
+}
+
 // Info contains metadata about a managed inventory.
 type Info struct {
 	ID          string    `json:"id"`

@@ -1,6 +1,7 @@
 package humanfmt
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -160,5 +161,24 @@ func BenchmarkThroughput(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		_ = Throughput(104857600, time.Second)
+	}
+}
+
+func TestBytesUint64_OverflowAbove2_63(t *testing.T) {
+	// 9 EiB is above int64 max; the old int64-cast wrapper would have
+	// underflowed to a negative value and returned "-... B". The
+	// native uint64 implementation must surface a real TiB number.
+	const aboveMax = uint64(1) << 63
+	got := BytesUint64(aboveMax)
+	if !strings.HasSuffix(got, "TiB") {
+		t.Errorf("BytesUint64(2^63) = %q, want a TiB-suffix value", got)
+	}
+}
+
+func TestCountUint64_OverflowAbove2_63(t *testing.T) {
+	const aboveMax = uint64(1) << 63
+	got := CountUint64(aboveMax)
+	if !strings.HasSuffix(got, "B") {
+		t.Errorf("CountUint64(2^63) = %q, want a B-suffix value", got)
 	}
 }

@@ -19,17 +19,16 @@
         {{if .NodeCount}}{{formatCount .NodeCount}}{{else}}-{{end}}
     </td>
     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
-        {{$state := printf "%s" .State}}
-        {{if or (eq $state "pending") (eq $state "unloaded") (eq $state "error")}}
+        {{if .State.CanLoad}}
         <button
             hx-post="/partials/discovered/{{.SourceBucket}}/{{.InventoryID}}/load"
             hx-target="closest tr"
             hx-swap="outerHTML"
             hx-indicator="#spinner-{{.SourceBucket}}-{{.InventoryID}}"
             class="text-indigo-600 hover:text-indigo-900">
-            {{if eq $state "pending"}}Build &amp; Load{{else}}Reload{{end}}
+            {{if .State.IsPending}}Build &amp; Load{{else}}Reload{{end}}
         </button>
-        {{else if eq $state "loaded"}}
+        {{else if .State.IsLoaded}}
         <button
             hx-post="/partials/discovered/{{.SourceBucket}}/{{.InventoryID}}/unload"
             hx-target="closest tr"
