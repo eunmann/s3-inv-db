@@ -67,18 +67,59 @@
         {{end}}
     </div>
 
+    {{$segLink := index .SortLinks "segment"}}
+    {{$objLink := index .SortLinks "objects"}}
+    {{$sizeLink := index .SortLinks "size"}}
+    {{$costLink := index .SortLinks "cost"}}
     <div class="bg-white shadow sm:rounded-lg">
         <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
             <h3 class="text-md font-medium text-gray-900">Children</h3>
-            <p class="text-xs text-gray-500 mt-1">{{len .Children}} immediate child prefix{{if ne (len .Children) 1}}es{{end}}</p>
+            <p class="text-xs text-gray-500 mt-1">{{len .Children}} immediate child prefix{{if ne (len .Children) 1}}es{{end}} — click a column to sort</p>
         </div>
         {{if .Children}}
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
                 <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Segment</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Objects</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Size</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <button
+                            hx-get="/partials/browse-level"
+                            hx-vals='{"inventory_id":"{{$inv}}","prefix":"{{$.Prefix}}","sort":"{{$segLink.Sort}}","dir":"{{$segLink.Dir}}"}'
+                            hx-target="#browse-target"
+                            hx-push-url="/browse?inventory_id={{$inv}}&prefix={{$.Prefix}}&sort={{$segLink.Sort}}&dir={{$segLink.Dir}}"
+                            class="uppercase tracking-wider hover:text-gray-900">
+                            Segment {{$segLink.Indicator}}
+                        </button>
+                    </th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <button
+                            hx-get="/partials/browse-level"
+                            hx-vals='{"inventory_id":"{{$inv}}","prefix":"{{$.Prefix}}","sort":"{{$objLink.Sort}}","dir":"{{$objLink.Dir}}"}'
+                            hx-target="#browse-target"
+                            hx-push-url="/browse?inventory_id={{$inv}}&prefix={{$.Prefix}}&sort={{$objLink.Sort}}&dir={{$objLink.Dir}}"
+                            class="uppercase tracking-wider hover:text-gray-900">
+                            Objects {{$objLink.Indicator}}
+                        </button>
+                    </th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <button
+                            hx-get="/partials/browse-level"
+                            hx-vals='{"inventory_id":"{{$inv}}","prefix":"{{$.Prefix}}","sort":"{{$sizeLink.Sort}}","dir":"{{$sizeLink.Dir}}"}'
+                            hx-target="#browse-target"
+                            hx-push-url="/browse?inventory_id={{$inv}}&prefix={{$.Prefix}}&sort={{$sizeLink.Sort}}&dir={{$sizeLink.Dir}}"
+                            class="uppercase tracking-wider hover:text-gray-900">
+                            Size {{$sizeLink.Indicator}}
+                        </button>
+                    </th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <button
+                            hx-get="/partials/browse-level"
+                            hx-vals='{"inventory_id":"{{$inv}}","prefix":"{{$.Prefix}}","sort":"{{$costLink.Sort}}","dir":"{{$costLink.Dir}}"}'
+                            hx-target="#browse-target"
+                            hx-push-url="/browse?inventory_id={{$inv}}&prefix={{$.Prefix}}&sort={{$costLink.Sort}}&dir={{$costLink.Dir}}"
+                            class="uppercase tracking-wider hover:text-gray-900">
+                            Est. Cost / mo {{$costLink.Indicator}}
+                        </button>
+                    </th>
                     <th class="px-6 py-3"></th>
                 </tr>
             </thead>
@@ -90,7 +131,6 @@
                     hx-vals='{"inventory_id":"{{$inv}}","prefix":"{{.Prefix}}"}'
                     hx-target="#browse-target"
                     hx-push-url="/browse?inventory_id={{$inv}}&prefix={{.Prefix}}"
-                   
                     {{end}}>
                     <td class="px-6 py-3 whitespace-nowrap">
                         <span class="text-sm font-medium {{if .HasChildren}}text-indigo-600{{else}}text-gray-700{{end}}">
@@ -99,6 +139,7 @@
                     </td>
                     <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-500">{{.ObjectCountH}}</td>
                     <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-500">{{.TotalBytesH}}</td>
+                    <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-500">{{.MonthlyCostFormatted}}</td>
                     <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-400 text-right">
                         {{if .HasChildren}}→{{end}}
                     </td>

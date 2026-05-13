@@ -3,12 +3,23 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
+)
+
+// Supported browse-level sort columns.
+const (
+	sortColSegment = "segment"
+	sortColObjects = "objects"
+	sortColSize    = "size"
+	sortColCost    = "cost"
+	sortDirAsc     = "asc"
+	sortDirDesc    = "desc"
 )
 
 // BrowseCrumb is one segment of the breadcrumb trail rendered in the browse
@@ -24,28 +35,43 @@ type BrowseCrumb struct {
 // — what the user sees in the list. Prefix is the full prefix the user
 // navigates into when they click.
 type BrowseChild struct {
-	Segment      string `json:"segment"`
-	Prefix       string `json:"prefix"`
-	ObjectCount  uint64 `json:"object_count"`
-	ObjectCountH string `json:"object_count_human"`
-	TotalBytes   uint64 `json:"total_bytes"`
-	TotalBytesH  string `json:"total_bytes_human"`
-	HasChildren  bool   `json:"has_children"`
+	Segment                 string `json:"segment"`
+	Prefix                  string `json:"prefix"`
+	ObjectCount             uint64 `json:"object_count"`
+	ObjectCountH            string `json:"object_count_human"`
+	TotalBytes              uint64 `json:"total_bytes"`
+	TotalBytesH             string `json:"total_bytes_human"`
+	MonthlyCostMicrodollars uint64 `json:"monthly_cost_microdollars,omitempty"`
+	MonthlyCostFormatted    string `json:"monthly_cost_formatted,omitempty"`
+	HasChildren             bool   `json:"has_children"`
+}
+
+// BrowseSortLink carries the {sort, dir} pair the template should embed in
+// a column header click, plus an Indicator (↑/↓/"") to show the current
+// sort direction. Computed server-side so the template stays declarative.
+type BrowseSortLink struct {
+	Sort      string `json:"sort"`
+	Dir       string `json:"dir"`
+	Indicator string `json:"indicator"`
 }
 
 // BrowseLevel is the data the browse_level.html partial renders.
 type BrowseLevel struct {
-	InventoryID   string        `json:"inventory_id"`
-	Prefix        string        `json:"prefix"`
-	Breadcrumbs   []BrowseCrumb `json:"breadcrumbs"`
-	ObjectCount   uint64        `json:"object_count"`
-	ObjectCountH  string        `json:"object_count_human"`
-	TotalBytes    uint64        `json:"total_bytes"`
-	TotalBytesH   string        `json:"total_bytes_human"`
-	TierBreakdown []TierStats   `json:"tier_breakdown,omitempty"`
-	CostEstimate  *CostEstimate `json:"cost_estimate,omitempty"`
-	Children      []BrowseChild `json:"children"`
-	NotFound      bool          `json:"not_found,omitempty"`
+	InventoryID   string                    `json:"inventory_id"`
+	Prefix        string                    `json:"prefix"`
+	Breadcrumbs   []BrowseCrumb             `json:"breadcrumbs"`
+	ObjectCount   uint64                    `json:"object_count"`
+	ObjectCountH  string                    `json:"object_count_human"`
+	TotalBytes    uint64                    `json:"total_bytes"`
+	TotalBytesH   string                    `json:"total_bytes_human"`
+	TierBreakdown []TierStats               `json:"tier_breakdown,omitempty"`
+	CostEstimate  *CostEstimate             `json:"cost_estimate,omitempty"`
+	HasTierData   bool                      `json:"has_tier_data"`
+	Children      []BrowseChild             `json:"children"`
+	Sort          string                    `json:"sort"`
+	Dir           string                    `json:"dir"`
+	SortLinks     map[string]BrowseSortLink `json:"sort_links"`
+	NotFound      bool                      `json:"not_found,omitempty"`
 }
 
 // BrowsePage renders the explorer page shell.
@@ -78,6 +104,7 @@ func (h *Handlers) BrowseLevelPartial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prefix := q.Get("prefix")
+	sortBy, dir := normalizeSort(q.Get("sort"), q.Get("dir"))
 
 	idx, err := h.manager.GetIndex(inventoryID)
 	if err != nil {
@@ -93,7 +120,7 @@ func (h *Handlers) BrowseLevelPartial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	level := h.buildBrowseLevel(idx, inventoryID, prefix)
+	level := h.buildBrowseLevel(idx, inventoryID, prefix, sortBy, dir)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.RenderPartial(w, "browse_level.html", level); err != nil {
@@ -102,16 +129,44 @@ func (h *Handlers) BrowseLevelPartial(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// normalizeSort coerces user-supplied sort/dir params to known values.
+// Unknown column → segment. Unknown direction → the column's default
+// (asc for segment, desc for numeric columns — biggest first is the
+// usual ask for the latter).
+func normalizeSort(sortBy, dir string) (col, direction string) {
+	switch sortBy {
+	case sortColObjects, sortColSize, sortColCost, sortColSegment:
+		col = sortBy
+	default:
+		col = sortColSegment
+	}
+	switch dir {
+	case sortDirAsc, sortDirDesc:
+		direction = dir
+	default:
+		if col == sortColSegment {
+			direction = sortDirAsc
+		} else {
+			direction = sortDirDesc
+		}
+	}
+	return col, direction
+}
+
 // buildBrowseLevel computes the stats + children for a single prefix. When
 // the prefix doesn't exist in the trie we still return a valid level with
 // NotFound=true so the partial can render an inline "no such prefix"
 // message in the explorer; bouncing the user back to an HTTP error would
 // lose the rest of the page state.
-func (h *Handlers) buildBrowseLevel(idx *indexread.Index, inventoryID, prefix string) BrowseLevel {
+func (h *Handlers) buildBrowseLevel(idx *indexread.Index, inventoryID, prefix, sortBy, dir string) BrowseLevel {
 	level := BrowseLevel{
 		InventoryID: inventoryID,
 		Prefix:      prefix,
 		Breadcrumbs: breadcrumbs(prefix),
+		HasTierData: idx.HasTierData(),
+		Sort:        sortBy,
+		Dir:         dir,
+		SortLinks:   sortLinks(sortBy, dir),
 	}
 
 	pos, ok := idx.Lookup(prefix)
@@ -158,6 +213,7 @@ func (h *Handlers) buildBrowseLevel(idx *indexread.Index, inventoryID, prefix st
 	}
 
 	level.Children = h.buildChildren(idx, pos, prefix)
+	sortChildren(level.Children, sortBy, dir)
 	return level
 }
 
@@ -167,6 +223,7 @@ func (h *Handlers) buildChildren(idx *indexread.Index, pos uint64, prefix string
 		h.logger.Warn().Err(err).Msg("descendants at depth 1")
 		return nil
 	}
+	hasTier := idx.HasTierData()
 	out := make([]BrowseChild, 0, len(positions))
 	for _, p := range positions {
 		fullPrefix, err := idx.PrefixString(p)
@@ -174,7 +231,7 @@ func (h *Handlers) buildChildren(idx *indexread.Index, pos uint64, prefix string
 			continue
 		}
 		stats := idx.Stats(p)
-		out = append(out, BrowseChild{
+		child := BrowseChild{
 			Segment:      segmentOf(prefix, fullPrefix),
 			Prefix:       fullPrefix,
 			ObjectCount:  stats.ObjectCount,
@@ -182,9 +239,82 @@ func (h *Handlers) buildChildren(idx *indexread.Index, pos uint64, prefix string
 			TotalBytes:   stats.TotalBytes,
 			TotalBytesH:  humanfmt.BytesUint64(stats.TotalBytes),
 			HasChildren:  idx.MaxDepthInSubtree(p) > idx.Depth(p),
-		})
+		}
+		if hasTier {
+			breakdown := idx.TierBreakdown(p)
+			cost := pricing.ComputeMonthlyCost(breakdown, h.priceTable)
+			child.MonthlyCostMicrodollars = cost.TotalMicrodollars
+			child.MonthlyCostFormatted = pricing.FormatCost(cost.TotalMicrodollars)
+		} else {
+			child.MonthlyCostFormatted = "—"
+		}
+		out = append(out, child)
 	}
 	return out
+}
+
+// sortChildren orders the children slice in place by (sortBy, dir). For
+// equal-key entries it falls back to segment-asc so the order is stable
+// regardless of how the index hands them to us.
+func sortChildren(children []BrowseChild, sortBy, dir string) {
+	less := func(i, j int) bool {
+		a, b := &children[i], &children[j]
+		var primary bool
+		var equal bool
+		switch sortBy {
+		case sortColObjects:
+			primary = a.ObjectCount < b.ObjectCount
+			equal = a.ObjectCount == b.ObjectCount
+		case sortColSize:
+			primary = a.TotalBytes < b.TotalBytes
+			equal = a.TotalBytes == b.TotalBytes
+		case sortColCost:
+			primary = a.MonthlyCostMicrodollars < b.MonthlyCostMicrodollars
+			equal = a.MonthlyCostMicrodollars == b.MonthlyCostMicrodollars
+		default:
+			primary = a.Segment < b.Segment
+			equal = a.Segment == b.Segment
+		}
+		if equal {
+			return a.Segment < b.Segment
+		}
+		if dir == sortDirDesc {
+			return !primary
+		}
+		return primary
+	}
+	sort.SliceStable(children, less)
+}
+
+// sortLinks builds the per-column {sort, dir, indicator} bundle the
+// template embeds in each header's hx-vals. Clicking the active column
+// toggles direction; clicking a different column applies that column's
+// default direction (asc for segment, desc for numerics).
+func sortLinks(currentSort, currentDir string) map[string]BrowseSortLink {
+	cols := []struct {
+		key        string
+		defaultDir string
+	}{
+		{sortColSegment, sortDirAsc},
+		{sortColObjects, sortDirDesc},
+		{sortColSize, sortDirDesc},
+		{sortColCost, sortDirDesc},
+	}
+	links := make(map[string]BrowseSortLink, len(cols))
+	for _, c := range cols {
+		link := BrowseSortLink{Sort: c.key, Dir: c.defaultDir}
+		if c.key == currentSort {
+			if currentDir == sortDirAsc {
+				link.Dir = sortDirDesc
+				link.Indicator = "↑"
+			} else {
+				link.Dir = sortDirAsc
+				link.Indicator = "↓"
+			}
+		}
+		links[c.key] = link
+	}
+	return links
 }
 
 // breadcrumbs returns Root + one Crumb per slash-separated segment of prefix.

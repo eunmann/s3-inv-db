@@ -55,7 +55,9 @@
 
 <script>
 // On page load, hydrate the form from URL params (so refresh / back / bookmarks
-// land on the same view) and kick off the initial fetch.
+// land on the same view) and kick off the initial fetch. We fire the request
+// via htmx.ajax with the full URL params so sort/dir survive a refresh — the
+// form itself only carries inventory_id and prefix.
 window.addEventListener('DOMContentLoaded', () => {
     const params = new URLSearchParams(window.location.search);
     const invSel = document.getElementById('inventory_id');
@@ -67,7 +69,7 @@ window.addEventListener('DOMContentLoaded', () => {
         prefIn.value = params.get('prefix');
     }
     if (invSel.value) {
-        htmx.trigger('#browse-form', 'submit');
+        htmx.ajax('GET', '/partials/browse-level?' + params.toString(), '#browse-target');
     }
 });
 </script>
