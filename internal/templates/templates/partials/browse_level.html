@@ -2,14 +2,14 @@
 <div class="space-y-6">
     <nav class="flex items-center flex-wrap text-sm" aria-label="Breadcrumb">
         {{range $i, $c := .Breadcrumbs}}
-            {{if $i}}<span class="mx-2 text-gray-300">/</span>{{end}}
+            {{if $i}}<span class="mx-2 text-gray-300 dark:text-gray-600">/</span>{{end}}
             <button type="button"
                 hx-get="/partials/browse-level"
                 {{hxVals "inventory_id" $inv "prefix" $c.Prefix}}
                 hx-target="#browse-target"
                 hx-push-url="{{browseURL "inventory_id" $inv "prefix" $c.Prefix}}"
 
-                class="text-indigo-600 hover:text-indigo-800 hover:underline {{if eq $i (sub (len $.Breadcrumbs) 1)}}font-semibold text-gray-900 cursor-default no-underline{{end}}"
+                class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline {{if eq $i (sub (len $.Breadcrumbs) 1)}}font-semibold text-gray-900 dark:text-gray-100 cursor-default no-underline{{end}}"
                 {{if eq $i (sub (len $.Breadcrumbs) 1)}}disabled{{end}}>
                 {{$c.Label}}
             </button>
@@ -17,46 +17,46 @@
     </nav>
 
     {{if .NotFound}}
-    <div class="bg-yellow-50 border border-yellow-200 rounded-md p-4 text-sm text-yellow-800">
-        Prefix <code class="bg-yellow-100 px-1 py-0.5 rounded">{{.Prefix}}</code> doesn't exist in this inventory.
+    <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-900/50 rounded-md p-4 text-sm text-yellow-800 dark:text-yellow-300">
+        Prefix <code class="bg-yellow-100 dark:bg-yellow-900/50 px-1 py-0.5 rounded">{{.Prefix}}</code> doesn't exist in this inventory.
     </div>
     {{else}}
 
-    <div class="bg-white shadow sm:rounded-lg">
+    <div class="bg-white dark:bg-gray-800 shadow sm:rounded-lg">
         <div class="px-4 py-5 sm:px-6">
             <div class="flex items-baseline justify-between">
-                <h3 class="text-lg leading-6 font-medium text-gray-900">
-                    {{if .Prefix}}<code class="bg-gray-100 px-2 py-1 rounded">{{.Prefix}}</code>{{else}}Root{{end}}
+                <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">
+                    {{if .Prefix}}<code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-2 py-1 rounded">{{.Prefix}}</code>{{else}}Root{{end}}
                 </h3>
-                <div class="text-sm text-gray-500">{{.ObjectCountH}} objects · {{.TotalBytesH}}</div>
+                <div class="text-sm text-gray-500 dark:text-gray-400">{{.ObjectCountH}} objects · {{.TotalBytesH}}</div>
             </div>
         </div>
 
         {{if .TierBreakdown}}
-        <div class="border-t border-gray-200">
+        <div class="border-t border-gray-200 dark:border-gray-700">
             <details>
-                <summary class="px-4 py-3 sm:px-6 text-sm text-gray-700 cursor-pointer hover:bg-gray-50 select-none">
+                <summary class="px-4 py-3 sm:px-6 text-sm text-gray-700 dark:text-gray-200 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 select-none">
                     Storage tier breakdown{{if .CostEstimate}} · est. <span class="font-semibold">{{.CostEstimate.TotalFormatted}}/month</span>{{end}}
                 </summary>
-                <table class="min-w-full divide-y divide-gray-200 text-sm">
-                    <thead class="bg-gray-50">
+                <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+                    <thead class="bg-gray-50 dark:bg-gray-900/30">
                         <tr>
-                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tier</th>
-                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Objects</th>
-                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Size</th>
+                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Tier</th>
+                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Objects</th>
+                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Size</th>
                             {{if .CostEstimate.PerTierFormatted}}
-                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Est. Cost</th>
+                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Est. Cost</th>
                             {{end}}
                         </tr>
                     </thead>
-                    <tbody class="bg-white divide-y divide-gray-200">
+                    <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                         {{range .TierBreakdown}}
                         <tr>
-                            <td class="px-6 py-2 whitespace-nowrap text-gray-900 font-medium">{{.TierName}}</td>
-                            <td class="px-6 py-2 whitespace-nowrap text-gray-500">{{.ObjectCountH}}</td>
-                            <td class="px-6 py-2 whitespace-nowrap text-gray-500">{{.BytesH}}</td>
+                            <td class="px-6 py-2 whitespace-nowrap text-gray-900 dark:text-gray-100 font-medium">{{.TierName}}</td>
+                            <td class="px-6 py-2 whitespace-nowrap text-gray-500 dark:text-gray-400">{{.ObjectCountH}}</td>
+                            <td class="px-6 py-2 whitespace-nowrap text-gray-500 dark:text-gray-400">{{.BytesH}}</td>
                             {{if $.CostEstimate.PerTierFormatted}}
-                            <td class="px-6 py-2 whitespace-nowrap text-gray-500">{{index $.CostEstimate.PerTierFormatted .TierName}}</td>
+                            <td class="px-6 py-2 whitespace-nowrap text-gray-500 dark:text-gray-400">{{index $.CostEstimate.PerTierFormatted .TierName}}</td>
                             {{end}}
                         </tr>
                         {{end}}
@@ -71,11 +71,11 @@
     {{$objLink := index .SortLinks "objects"}}
     {{$sizeLink := index .SortLinks "size"}}
     {{$costLink := index .SortLinks "cost"}}
-    <div class="bg-white shadow sm:rounded-lg">
-        <div class="px-4 py-5 sm:px-6 border-b border-gray-200 flex items-center justify-between gap-4 flex-wrap">
+    <div class="bg-white dark:bg-gray-800 shadow sm:rounded-lg">
+        <div class="px-4 py-5 sm:px-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-4 flex-wrap">
             <div>
-                <h3 class="text-md font-medium text-gray-900">Children</h3>
-                <p class="text-xs text-gray-500 mt-1">
+                <h3 class="text-md font-medium text-gray-900 dark:text-gray-100">Children</h3>
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     {{if .TotalChildren}}Showing {{.Pagination.FirstRow}}–{{.Pagination.LastRow}} of {{.TotalChildren}} child prefix{{if ne .TotalChildren 1}}es{{end}}{{else}}No child prefixes — this is a leaf in the trie.{{end}}
                 </p>
             </div>
@@ -87,74 +87,74 @@
                     {{hxVals "inventory_id" $inv "prefix" $.Prefix "sort" $.Sort "dir" $.Dir "page" .Pagination.PrevPage}}
                     hx-target="#browse-target"
                     hx-push-url="{{browseURL "inventory_id" $inv "prefix" $.Prefix "sort" $.Sort "dir" $.Dir "page" .Pagination.PrevPage}}"
-                    class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50">← Prev</button>
+                    class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">← Prev</button>
                 {{else}}
-                <span class="px-3 py-1 border border-gray-200 rounded text-gray-300 cursor-not-allowed">← Prev</span>
+                <span class="px-3 py-1 border border-gray-200 dark:border-gray-700 rounded text-gray-300 dark:text-gray-600 cursor-not-allowed">← Prev</span>
                 {{end}}
-                <span class="text-gray-500">Page {{.Pagination.Page}} of {{.Pagination.Pages}}</span>
+                <span class="text-gray-500 dark:text-gray-400">Page {{.Pagination.Page}} of {{.Pagination.Pages}}</span>
                 {{if .Pagination.NextPage}}
                 <button type="button"
                     hx-get="/partials/browse-level"
                     {{hxVals "inventory_id" $inv "prefix" $.Prefix "sort" $.Sort "dir" $.Dir "page" .Pagination.NextPage}}
                     hx-target="#browse-target"
                     hx-push-url="{{browseURL "inventory_id" $inv "prefix" $.Prefix "sort" $.Sort "dir" $.Dir "page" .Pagination.NextPage}}"
-                    class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50">Next →</button>
+                    class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">Next →</button>
                 {{else}}
-                <span class="px-3 py-1 border border-gray-200 rounded text-gray-300 cursor-not-allowed">Next →</span>
+                <span class="px-3 py-1 border border-gray-200 dark:border-gray-700 rounded text-gray-300 dark:text-gray-600 cursor-not-allowed">Next →</span>
                 {{end}}
             </div>
             {{end}}
         </div>
         {{if .Children}}
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
+        <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <thead class="bg-gray-50 dark:bg-gray-900/30">
                 <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
                             hx-get="/partials/browse-level"
                             {{hxVals "inventory_id" $inv "prefix" $.Prefix "sort" $segLink.Sort "dir" $segLink.Dir}}
                             hx-target="#browse-target"
                             hx-push-url="{{browseURL "inventory_id" $inv "prefix" $.Prefix "sort" $segLink.Sort "dir" $segLink.Dir}}"
-                            class="uppercase tracking-wider hover:text-gray-900">
+                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
                             Segment {{$segLink.Indicator}}
                         </button>
                     </th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
                             hx-get="/partials/browse-level"
                             {{hxVals "inventory_id" $inv "prefix" $.Prefix "sort" $objLink.Sort "dir" $objLink.Dir}}
                             hx-target="#browse-target"
                             hx-push-url="{{browseURL "inventory_id" $inv "prefix" $.Prefix "sort" $objLink.Sort "dir" $objLink.Dir}}"
-                            class="uppercase tracking-wider hover:text-gray-900">
+                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
                             Objects {{$objLink.Indicator}}
                         </button>
                     </th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
                             hx-get="/partials/browse-level"
                             {{hxVals "inventory_id" $inv "prefix" $.Prefix "sort" $sizeLink.Sort "dir" $sizeLink.Dir}}
                             hx-target="#browse-target"
                             hx-push-url="{{browseURL "inventory_id" $inv "prefix" $.Prefix "sort" $sizeLink.Sort "dir" $sizeLink.Dir}}"
-                            class="uppercase tracking-wider hover:text-gray-900">
+                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
                             Size {{$sizeLink.Indicator}}
                         </button>
                     </th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
                             hx-get="/partials/browse-level"
                             {{hxVals "inventory_id" $inv "prefix" $.Prefix "sort" $costLink.Sort "dir" $costLink.Dir}}
                             hx-target="#browse-target"
                             hx-push-url="{{browseURL "inventory_id" $inv "prefix" $.Prefix "sort" $costLink.Sort "dir" $costLink.Dir}}"
-                            class="uppercase tracking-wider hover:text-gray-900">
+                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
                             Est. Cost / mo {{$costLink.Indicator}}
                         </button>
                     </th>
                     <th class="px-6 py-3"></th>
                 </tr>
             </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
+            <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                 {{range .Children}}
-                <tr class="{{if .HasChildren}}hover:bg-gray-50{{end}}">
+                <tr class="{{if .HasChildren}}hover:bg-gray-50 dark:hover:bg-gray-700{{end}}">
                     <td class="px-6 py-3 whitespace-nowrap">
                         {{if .HasChildren}}
                         <a
@@ -163,19 +163,19 @@
                             {{hxVals "inventory_id" $inv "prefix" .Prefix}}
                             hx-target="#browse-target"
                             hx-push-url="{{browseURL "inventory_id" $inv "prefix" .Prefix}}"
-                            class="text-sm font-medium text-indigo-600 hover:text-indigo-800 hover:underline">
+                            class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline">
                             📁 {{.Segment}}/
                         </a>
                         {{else}}
-                        <span class="text-sm font-medium text-gray-700">
+                        <span class="text-sm font-medium text-gray-700 dark:text-gray-200">
                             📄 {{.Segment}}
                         </span>
                         {{end}}
                     </td>
-                    <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-500">{{.ObjectCountH}}</td>
-                    <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-500">{{.TotalBytesH}}</td>
-                    <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-500">{{.MonthlyCostFormatted}}</td>
-                    <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-400 text-right" aria-hidden="true">
+                    <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{{.ObjectCountH}}</td>
+                    <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{{.TotalBytesH}}</td>
+                    <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{{.MonthlyCostFormatted}}</td>
+                    <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-400 dark:text-gray-500 text-right" aria-hidden="true">
                         {{if .HasChildren}}→{{end}}
                     </td>
                 </tr>

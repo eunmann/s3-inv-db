@@ -4,40 +4,40 @@
 <div class="px-4 py-6 sm:px-0">
     <div class="flex justify-between items-center mb-6">
         <div>
-            <h1 class="text-2xl font-semibold text-gray-900">Inventories</h1>
+            <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Inventories</h1>
             {{if .HasDiscovery}}
-            <p class="text-sm text-gray-500 mt-1">Discovered from <code class="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{{.S3Source}}</code></p>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Discovered from <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">{{.S3Source}}</code></p>
             {{else}}
-            <p class="text-sm text-gray-500 mt-1">No <code class="bg-gray-100 px-1.5 py-0.5 rounded text-xs">--s3-source</code> configured. Discovery is disabled.</p>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">No <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--s3-source</code> configured. Discovery is disabled.</p>
             {{end}}
         </div>
         {{if .HasDiscovery}}
-        <a href="/inventories" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md bg-white hover:bg-gray-50">
+        <a href="/inventories" class="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">
             Refresh
         </a>
         {{end}}
     </div>
 
     {{if .DiscoveryError}}
-    <div class="bg-red-50 border border-red-200 rounded-md p-4 mb-6">
-        <div class="text-sm text-red-800">Discovery error: {{.DiscoveryError}}</div>
+    <div class="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-900/50 rounded-md p-4 mb-6">
+        <div class="text-sm text-red-800 dark:text-red-300">Discovery error: {{.DiscoveryError}}</div>
     </div>
     {{end}}
 
-    <div class="bg-white shadow overflow-hidden sm:rounded-lg">
+    <div class="bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-lg">
         {{if .Discovered}}
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
+        <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <thead class="bg-gray-50 dark:bg-gray-900/30">
                 <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Source Bucket / Inventory ID</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Latest Run</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Format</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">State</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nodes</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Source Bucket / Inventory ID</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Latest Run</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Format</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">State</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Nodes</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
                 </tr>
             </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
+            <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                 {{range .Discovered}}
                     {{template "templates/partials/discovered_row.html" .}}
                 {{end}}
@@ -45,14 +45,14 @@
         </table>
         {{else}}
         <div class="text-center py-12">
-            <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg class="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
             </svg>
-            <h3 class="mt-2 text-sm font-medium text-gray-900">No inventories discovered</h3>
+            <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">No inventories discovered</h3>
             {{if .HasDiscovery}}
-            <p class="mt-1 text-sm text-gray-500">Upload an inventory layout to the S3 source, then refresh.</p>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Upload an inventory layout to the S3 source, then refresh.</p>
             {{else}}
-            <p class="mt-1 text-sm text-gray-500">Start the server with <code>--s3-source s3://bucket/prefix/</code> to enable discovery.</p>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Start the server with <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--s3-source s3://bucket/prefix/</code> to enable discovery.</p>
             {{end}}
         </div>
         {{end}}

@@ -2,10 +2,10 @@
 
 {{define "content"}}
 <div class="px-4 py-6 sm:px-0">
-    <h1 class="text-2xl font-semibold text-gray-900 mb-2">Browse</h1>
-    <p class="text-sm text-gray-500 mb-6">Click into a child prefix to drill down, or type a prefix to jump straight there.</p>
+    <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-2">Browse</h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">Click into a child prefix to drill down, or type a prefix to jump straight there.</p>
 
-    <div class="bg-white shadow sm:rounded-lg mb-6">
+    <div class="bg-white dark:bg-gray-800 shadow sm:rounded-lg mb-6">
         <div class="px-4 py-5 sm:p-6">
             <form id="browse-form" class="space-y-4"
                   action="/browse" method="get"
@@ -15,8 +15,8 @@
                   hx-trigger="submit, change from:#inventory_id">
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
                     <div>
-                        <label for="inventory_id" class="block text-sm font-medium text-gray-700">Inventory</label>
-                        <select id="inventory_id" name="inventory_id" required class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md border">
+                        <label for="inventory_id" class="block text-sm font-medium text-gray-700 dark:text-gray-200">Inventory</label>
+                        <select id="inventory_id" name="inventory_id" required class="mt-1 block w-full pl-3 pr-10 py-2 text-base bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
                             <option value="">Select a loaded inventory…</option>
                             {{$selected := .InventoryID}}
                             {{range .Inventories}}
@@ -24,14 +24,14 @@
                             {{end}}
                         </select>
                         {{if not .Inventories}}
-                        <p class="mt-1 text-sm text-gray-500">No loaded inventories. <a href="/inventories" class="text-indigo-600 hover:text-indigo-500">Discover and load one</a>.</p>
+                        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">No loaded inventories. <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300">Discover and load one</a>.</p>
                         {{end}}
                     </div>
                     <div class="sm:col-span-2">
-                        <label for="prefix" class="block text-sm font-medium text-gray-700">Prefix</label>
+                        <label for="prefix" class="block text-sm font-medium text-gray-700 dark:text-gray-200">Prefix</label>
                         <div class="mt-1 flex rounded-md shadow-sm">
-                            <input type="text" id="prefix" name="prefix" value="{{.Prefix}}" class="flex-1 block w-full border border-gray-300 rounded-l-md py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="empty = root, e.g. data/2024/">
-                            <button type="submit" class="inline-flex items-center px-4 py-2 border border-l-0 border-gray-300 rounded-r-md bg-gray-50 text-sm font-medium text-gray-700 hover:bg-gray-100">
+                            <input type="text" id="prefix" name="prefix" value="{{.Prefix}}" class="flex-1 block w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 rounded-l-md py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="empty = root, e.g. data/2024/">
+                            <button type="submit" class="inline-flex items-center px-4 py-2 border border-l-0 border-gray-300 dark:border-gray-600 rounded-r-md bg-gray-50 dark:bg-gray-700 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-600">
                                 Go
                             </button>
                         </div>
@@ -45,14 +45,14 @@
         {{if .InitialLevel}}
             {{template "templates/partials/browse_level.html" .InitialLevel}}
         {{else}}
-        <div class="text-center py-12 text-sm text-gray-500">
-            Pick an inventory to start browsing at the root, or type a prefix above and press <kbd class="border rounded px-1 text-xs">Enter</kbd>.
+        <div class="text-center py-12 text-sm text-gray-500 dark:text-gray-400">
+            Pick an inventory to start browsing at the root, or type a prefix above and press <kbd class="border border-gray-300 dark:border-gray-600 rounded px-1 text-xs bg-white dark:bg-gray-800">Enter</kbd>.
         </div>
         {{end}}
     </div>
 
     <div id="browse-loading" class="htmx-indicator text-center py-4" role="status">
-        <svg aria-hidden="true" class="animate-spin h-6 w-6 text-indigo-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+        <svg aria-hidden="true" class="animate-spin h-6 w-6 text-indigo-600 dark:text-indigo-400 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
         </svg>
