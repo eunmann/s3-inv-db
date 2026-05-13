@@ -160,3 +160,74 @@ func TestServerRun_ListenError(t *testing.T) {
 		t.Errorf("Manager.List() length = %d after ListenAndServe failure, want 0", got)
 	}
 }
+
+func TestSameOriginMiddleware_RejectsCrossOriginMutation(t *testing.T) {
+	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices()}
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// POST with cross-origin Referer must be rejected.
+	req := httptest.NewRequest(http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
+	req.Host = "localhost"
+	req.Header.Set("Origin", "http://attacker.example")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("cross-origin DELETE status = %d, want 403", w.Code)
+	}
+}
+
+func TestSameOriginMiddleware_AllowsSameOriginMutation(t *testing.T) {
+	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices()}
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
+	req.Host = "localhost"
+	req.Header.Set("Origin", "http://localhost")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	// Will 404 because the inventory doesn't exist; we just care that
+	// it got past the middleware (i.e., not 403).
+	if w.Code == http.StatusForbidden {
+		t.Errorf("same-origin DELETE was rejected as cross-origin")
+	}
+}
+
+func TestSameOriginMiddleware_AllowsNoOrigin(t *testing.T) {
+	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices()}
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// No Origin and no Referer — typical curl/script request, allowed.
+	req := httptest.NewRequest(http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
+	req.Host = "localhost"
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code == http.StatusForbidden {
+		t.Errorf("origin-less DELETE was rejected")
+	}
+}
+
+func TestSameOriginMiddleware_DoesNotBlockReads(t *testing.T) {
+	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices()}
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/api/inventories", http.NoBody)
+	req.Host = "localhost"
+	req.Header.Set("Origin", "http://attacker.example")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("cross-origin GET status = %d, want 200 (reads are public)", w.Code)
+	}
+}

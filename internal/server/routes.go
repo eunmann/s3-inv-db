@@ -13,12 +13,14 @@ func (s *Server) setupRoutes() {
 
 	// Global middleware. RequestID must come first so the context logger
 	// can pick it up; the access log runs last so it sees the final
-	// status code (Recoverer-handled panics included).
+	// status code (Recoverer-handled panics included). sameOriginMiddleware
+	// blocks cross-origin mutating browser requests (CSRF).
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(contextLoggerMiddleware(s.config.Logger))
 	r.Use(middleware.Recoverer)
 	r.Use(accessLogMiddleware())
+	r.Use(sameOriginMiddleware)
 
 	// Liveness probe — independent of S3 / discovery / inventory state so
 	// container orchestrators can tell the process is up.

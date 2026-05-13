@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/logctx"
@@ -70,6 +71,47 @@ func (rw *responseWriter) WriteHeader(code int) {
 func jsonContentType(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isMutating reports whether a method writes state. Read methods bypass
+// the auth + CSRF checks; writes are gated.
+func isMutating(method string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	}
+	return false
+}
+
+// sameOriginMiddleware rejects mutating browser requests whose Origin (or,
+// fallback, Referer) does not match the request Host. This is the standard
+// CSRF defense: an attacker page making a cross-site POST would send its
+// own origin, which won't match ours. Non-browser callers (curl, scripts)
+// typically send no Origin/Referer and are allowed through.
+func sameOriginMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isMutating(r.Method) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			origin = r.Header.Get("Referer")
+		}
+		if origin != "" {
+			u, err := url.Parse(origin)
+			if err != nil || u.Host != r.Host {
+				logctx.FromContext(r.Context()).Warn().
+					Str("origin", origin).
+					Str("host", r.Host).
+					Str("path", r.URL.Path).
+					Msg("rejecting cross-origin mutating request")
+				http.Error(w, "cross-origin request rejected", http.StatusForbidden)
+				return
+			}
+		}
 		next.ServeHTTP(w, r)
 	})
 }
