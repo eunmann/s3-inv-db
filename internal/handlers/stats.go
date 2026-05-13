@@ -320,7 +320,15 @@ func (h *Handlers) StatsResultPartial(w http.ResponseWriter, r *http.Request) {
 
 	idx, err := h.manager.GetIndex(inventoryID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		switch {
+		case errors.Is(err, inventory.ErrNotFound):
+			http.Error(w, "inventory not found", http.StatusNotFound)
+		case errors.Is(err, inventory.ErrNotLoaded):
+			http.Error(w, "inventory not loaded", http.StatusConflict)
+		default:
+			h.logger.Error().Err(err).Msg("failed to get index")
+			http.Error(w, "failed to get index", http.StatusInternalServerError)
+		}
 		return
 	}
 

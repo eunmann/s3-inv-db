@@ -490,8 +490,8 @@ func TestStatsResultPartial_InventoryNotFound(t *testing.T) {
 
 	f.h.StatsResultPartial(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
 	}
 }
 
@@ -504,9 +504,9 @@ func TestStatsResultPartial_NotLoaded(t *testing.T) {
 
 	f.h.StatsResultPartial(w, req)
 
-	// Should return error because inventory not loaded
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	// Should return 409 conflict because inventory not loaded.
+	if w.Code != http.StatusConflict {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusConflict)
 	}
 }
 
