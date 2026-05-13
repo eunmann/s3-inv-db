@@ -12,6 +12,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/internal/templates"
+	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/rs/zerolog"
 )
@@ -364,5 +365,81 @@ func TestLoadInventoryAPI_BadPath(t *testing.T) {
 	info, _ := mgr.Get("bad")
 	if info.State != inventory.StateError {
 		t.Errorf("state = %q, want %q", info.State, inventory.StateError)
+	}
+}
+
+// TestManagerWithIndex_NoUseAfterCloseUnderUnload runs many concurrent
+// WithIndex readers against a real mmap-backed index while a separate
+// goroutine repeatedly Unloads + Loads the same inventory. The point is
+// to exercise the per-inventory RWMutex protocol introduced to fix the
+// SIGBUS that GetIndex used to allow. With -race + concurrent reads
+// across the mmap window, any leftover use-after-close would surface as
+// either a SIGBUS, a race-detector report, or an Index returning bogus
+// data once it's been closed.
+func TestManagerWithIndex_NoUseAfterCloseUnderUnload(t *testing.T) {
+	tmp := t.TempDir()
+	if err := seeder.Run(seeder.Config{
+		OutputDir: tmp,
+		Count:     1,
+		Objects:   500,
+		Preset:    "small",
+		Seed:      42,
+		Logger:    zerolog.Nop(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	mgr := inventory.NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	const id = "racy"
+	indexPath := filepath.Join(tmp, "inv-001")
+	if err := mgr.Register(id, "Racy", indexPath); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if err := mgr.Load(context.Background(), id); err != nil {
+		t.Fatalf("initial load: %v", err)
+	}
+
+	const readers = 8
+	const iters = 50
+
+	done := make(chan struct{})
+	go func() {
+		// Flap the inventory state under the readers.
+		for range iters {
+			_ = mgr.Unload(id)
+			_ = mgr.Load(context.Background(), id)
+		}
+		close(done)
+	}()
+
+	errs := make(chan error, readers)
+	for range readers {
+		go func() {
+			var lastErr error
+			for range iters {
+				// WithIndex may legitimately return ErrNotLoaded during
+				// the brief Unloaded window — that's fine. The fatal
+				// case is reading from a closed mmap, which would
+				// SIGBUS or trigger the race detector.
+				_ = mgr.WithIndex(id, func(idx *indexread.Index) error {
+					// Touch a couple of methods so any unmapped read shows up.
+					_ = idx.Count()
+					if pos, ok := idx.Lookup(""); ok {
+						_ = idx.Stats(pos)
+					}
+					return nil
+				})
+			}
+			errs <- lastErr
+		}()
+	}
+
+	<-done
+	for range readers {
+		if err := <-errs; err != nil {
+			t.Errorf("reader: %v", err)
+		}
 	}
 }
