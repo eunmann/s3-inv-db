@@ -27,6 +27,8 @@ func run() error {
 	prettyLogs := flag.Bool("pretty-logs", false, "use human-friendly console output")
 	devMode := flag.Bool("dev", false, "development mode (reload templates on each request)")
 	priceTablePath := flag.String("price-table", "", "path to custom price table JSON (default: US East 1 prices)")
+	s3Source := flag.String("s3-source", envOr("S3INV_SOURCE", ""), "S3 URI to discover inventories under (e.g., s3://bucket/inventory-data/)")
+	cacheDir := flag.String("cache-dir", envOr("S3INV_CACHE_DIR", "/var/cache/s3inv"), "local directory for built indexes downloaded from S3")
 
 	flag.Parse()
 
@@ -51,6 +53,8 @@ func run() error {
 		Logger:     logger,
 		DevMode:    *devMode,
 		PriceTable: priceTable,
+		S3Source:   *s3Source,
+		CacheDir:   *cacheDir,
 	}
 
 	srv, err := server.New(cfg)
@@ -65,4 +69,11 @@ func run() error {
 		return fmt.Errorf("run server: %w", err)
 	}
 	return nil
+}
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }

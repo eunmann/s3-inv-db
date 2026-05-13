@@ -62,34 +62,55 @@ func (m *Manager) Register(id, name, path string) error {
 	return nil
 }
 
-// Load loads an inventory index from disk.
+// BuildFunc is the contract a Manager uses to materialise an on-disk index
+// before opening it. The returned path must be a directory acceptable to
+// indexread.Open. Implementations should be safe to call without holding
+// the Manager's lock — Load drops it during the build.
+type BuildFunc func(ctx context.Context, info Info) (indexDir string, err error)
+
+// openLocalPath is the default BuildFunc: it treats inv.Path as a local
+// directory and returns it unmodified.
+func openLocalPath(_ context.Context, info Info) (string, error) {
+	return info.Path, nil
+}
+
+// Load builds (if needed) and opens the inventory index, using the
+// default BuildFunc (interpret Path as a local directory). Suitable for
+// legacy callers; new code should use LoadWith.
 func (m *Manager) Load(ctx context.Context, id string) error {
-	// First, transition to parsing state under lock
+	return m.LoadWith(ctx, id, openLocalPath)
+}
+
+// LoadWith calls build outside the manager lock to materialise an on-disk
+// index, then opens it. State transitions are pending|unloaded|error → parsing
+// → loaded|error. Races against Remove or another Load are handled by
+// re-checking inventory presence after each lock re-acquire.
+func (m *Manager) LoadWith(ctx context.Context, id string, build BuildFunc) error {
 	m.mu.Lock()
 	inv, exists := m.inventories[id]
 	if !exists {
 		m.mu.Unlock()
 		return ErrNotFound
 	}
-
 	if inv.info.State != StatePending && inv.info.State != StateUnloaded && inv.info.State != StateError {
 		m.mu.Unlock()
 		return fmt.Errorf("%w: cannot load from state %s", ErrInvalidState, inv.info.State)
 	}
-
 	inv.info.State = StateParsing
 	inv.info.Error = ""
-	path := inv.info.Path
+	snapshot := inv.info
 	m.mu.Unlock()
 
-	// Load the index outside the lock (can be slow)
-	idx, err := indexread.Open(path)
+	// Materialise the on-disk index outside the lock (can take a while).
+	indexDir, buildErr := build(ctx, snapshot)
+	var idx *indexread.Index
+	var openErr error
+	if buildErr == nil {
+		idx, openErr = indexread.Open(indexDir)
+	}
 
-	// Update state with result
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	// Check if inventory still exists (could have been removed while loading)
 	inv, exists = m.inventories[id]
 	if !exists {
 		if idx != nil {
@@ -98,14 +119,16 @@ func (m *Manager) Load(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 
-	if err != nil {
+	switch {
+	case buildErr != nil:
 		inv.info.State = StateError
-		inv.info.Error = err.Error()
-		return fmt.Errorf("open index: %w", err)
-	}
-
-	// Check for context cancellation
-	if ctx.Err() != nil {
+		inv.info.Error = buildErr.Error()
+		return fmt.Errorf("build index: %w", buildErr)
+	case openErr != nil:
+		inv.info.State = StateError
+		inv.info.Error = openErr.Error()
+		return fmt.Errorf("open index: %w", openErr)
+	case ctx.Err() != nil:
 		idx.Close()
 		inv.info.State = StateError
 		inv.info.Error = ctx.Err().Error()
@@ -118,7 +141,6 @@ func (m *Manager) Load(ctx context.Context, id string) error {
 	inv.info.MaxDepth = idx.MaxDepth()
 	inv.info.HasTierData = idx.HasTierData()
 	inv.info.LoadedAt = time.Now()
-
 	return nil
 }
 

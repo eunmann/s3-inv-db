@@ -17,24 +17,52 @@ type DashboardData struct {
 	TotalNodes   uint64
 	TotalNodesH  string
 	HasTierData  bool
+	S3Source     string
+	HasDiscovery bool
 }
 
-// Dashboard renders the dashboard HTML page.
-func (h *Handlers) Dashboard(w http.ResponseWriter, _ *http.Request) {
-	inventories := h.manager.List()
-
+// Dashboard renders the dashboard HTML page. When discovery is configured
+// the counts and rows reflect S3-discovered inventories merged with their
+// current load state; otherwise they come from the Manager directly.
+func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	data := DashboardData{
-		Title:       "Dashboard",
-		Inventories: inventories,
-		TotalCount:  len(inventories),
+		Title:        "Dashboard",
+		S3Source:     h.s3SourceURI,
+		HasDiscovery: h.discoverer != nil,
 	}
 
-	for i := range inventories {
-		switch inventories[i].State {
+	var infos []inventory.Info
+	if h.discoverer != nil {
+		views, err := h.discoverAndMerge(r.Context())
+		if err != nil {
+			h.logger.Warn().Err(err).Msg("dashboard discovery failed; falling back to manager")
+		} else {
+			infos = make([]inventory.Info, 0, len(views))
+			for i := range views {
+				v := &views[i]
+				infos = append(infos, inventory.Info{
+					ID:          v.CompositeID,
+					Name:        v.SourceBucket + " / " + v.InventoryID,
+					Path:        v.ManifestKey,
+					State:       v.State,
+					NodeCount:   v.NodeCount,
+					HasTierData: v.HasTierData,
+				})
+			}
+		}
+	}
+	if infos == nil {
+		infos = h.manager.List()
+	}
+
+	data.Inventories = infos
+	data.TotalCount = len(infos)
+	for i := range infos {
+		switch infos[i].State {
 		case inventory.StateLoaded:
 			data.LoadedCount++
-			data.TotalNodes += inventories[i].NodeCount
-			if inventories[i].HasTierData {
+			data.TotalNodes += infos[i].NodeCount
+			if infos[i].HasTierData {
 				data.HasTierData = true
 			}
 		case inventory.StatePending:

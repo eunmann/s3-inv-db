@@ -2,6 +2,7 @@
 package seeder
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,9 +14,21 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// Target selects the seeder output sink.
+type Target string
+
+const (
+	// TargetLocal writes built indexes to a local directory.
+	TargetLocal Target = "local"
+	// TargetS3 uploads simulated S3 Inventory layouts (manifest + CSV.gz) to S3/MinIO.
+	TargetS3 Target = "s3"
+)
+
 // Config configures the seeder.
 type Config struct {
-	OutputDir string
+	Target    Target
+	OutputDir string // TargetLocal: where indexes are written
+	S3        S3Config
 	Count     int
 	Objects   int
 	Preset    string
@@ -39,23 +52,47 @@ type Summary struct {
 	Inventories []InventoryInfo `json:"inventories"`
 }
 
-// Run executes the seeder, generating all inventories.
+// Run executes the seeder, generating all inventories. Target selects
+// between writing pre-built indexes locally and uploading synthetic AWS S3
+// Inventory layouts (manifest + CSV.gz) to S3/MinIO.
 func Run(cfg Config) error {
 	startTime := time.Now()
 
-	cfg.Logger.Info().
-		Str("output_dir", cfg.OutputDir).
+	if cfg.Target == "" {
+		cfg.Target = TargetLocal
+	}
+
+	logEv := cfg.Logger.Info().
+		Str("target", string(cfg.Target)).
 		Int("count", cfg.Count).
 		Int("objects", cfg.Objects).
-		Str("preset", cfg.Preset).
-		Msg("starting seeder")
+		Str("preset", cfg.Preset)
+	switch cfg.Target {
+	case TargetLocal:
+		logEv = logEv.Str("output_dir", cfg.OutputDir)
+	case TargetS3:
+		logEv = logEv.Str("s3_bucket", cfg.S3.Bucket).Str("s3_prefix", cfg.S3.Prefix).Str("s3_src_bucket", cfg.S3.SrcBucket)
+	default:
+		return fmt.Errorf("unknown seeder target: %q", cfg.Target)
+	}
+	logEv.Msg("starting seeder")
 
+	switch cfg.Target {
+	case TargetLocal:
+		return runLocal(cfg, startTime)
+	case TargetS3:
+		return runS3(cfg, startTime)
+	default:
+		return fmt.Errorf("unknown seeder target: %q", cfg.Target)
+	}
+}
+
+func runLocal(cfg Config, startTime time.Time) error {
 	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
 
 	inventories := make([]InventoryInfo, 0, cfg.Count)
-
 	for i := range cfg.Count {
 		// Always offset per inventory so distinct inventories get distinct
 		// data, including when the user didn't pass --seed (cfg.Seed == 0).
@@ -82,6 +119,42 @@ func Run(cfg Config) error {
 
 	cfg.Logger.Info().
 		Int("total_inventories", len(inventories)).
+		Str("duration", time.Since(startTime).Round(time.Millisecond).String()).
+		Msg("seeding complete")
+
+	return nil
+}
+
+func runS3(cfg Config, startTime time.Time) error {
+	if err := cfg.S3.Validate(); err != nil {
+		return fmt.Errorf("invalid s3 config: %w", err)
+	}
+
+	ctx := context.Background()
+	client, err := newS3Client(ctx)
+	if err != nil {
+		return fmt.Errorf("s3 client: %w", err)
+	}
+
+	// Use one run timestamp for all inventories in this seeding so the
+	// folder names line up nicely in tooling.
+	runStamp := time.Now().UTC().Truncate(time.Minute)
+
+	for i := range cfg.Count {
+		invSeed := cfg.Seed + int64(i+1)*1000
+		info, err := UploadInventory(ctx, client, cfg, cfg.S3, i+1, invSeed, runStamp)
+		if err != nil {
+			return fmt.Errorf("upload inventory %d: %w", i+1, err)
+		}
+		cfg.Logger.Info().
+			Str("id", info.ID).
+			Str("manifest", info.Path).
+			Int("objects", info.Objects).
+			Msg("uploaded inventory")
+	}
+
+	cfg.Logger.Info().
+		Int("total_inventories", cfg.Count).
 		Str("duration", time.Since(startTime).Round(time.Millisecond).String()).
 		Msg("seeding complete")
 

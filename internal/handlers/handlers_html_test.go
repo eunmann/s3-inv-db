@@ -218,24 +218,13 @@ func TestInventoriesPage_EmptyState(t *testing.T) {
 	}
 
 	doc := parseHTML(t, w.Body.String())
-
-	// Verify heading
 	assertElementText(t, doc, "h1", "Inventories")
-
-	// Verify register button exists
-	assertElementExists(t, doc, "button")
-
-	// Verify empty state message
-	assertElementContainsText(t, doc, ".text-center h3", "No inventories")
-
-	// No table rows
+	assertElementContainsText(t, doc, ".text-center h3", "No inventories discovered")
 	assertElementCount(t, doc, "tbody tr", 0)
 }
 
-func TestInventoriesPage_WithInventories(t *testing.T) {
+func TestInventoriesPage_NoDiscoveryMessage(t *testing.T) {
 	f := newTestFixture(t)
-	f.registerInventory(t, "inv1", "Test Inventory", "/path/to/index")
-	f.registerInventory(t, "inv2", "Another Inventory", "/another/path")
 
 	req := httptest.NewRequest(http.MethodGet, "/inventories", http.NoBody)
 	w := httptest.NewRecorder()
@@ -245,68 +234,16 @@ func TestInventoriesPage_WithInventories(t *testing.T) {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	doc := parseHTML(t, w.Body.String())
-
-	// Verify heading
+	// Without --s3-source the page should tell the user discovery is
+	// disabled. The legacy register form is gone.
+	body := w.Body.String()
+	if !strings.Contains(body, "--s3-source") {
+		t.Errorf("expected page to mention --s3-source when discovery disabled; body=%s", body)
+	}
+	doc := parseHTML(t, body)
 	assertElementText(t, doc, "h1", "Inventories")
-
-	// Verify table exists with 2 rows
-	assertElementCount(t, doc, "tbody tr", 2)
-
-	// Verify form inputs exist
-	assertElementExists(t, doc, "input#id")
-	assertElementExists(t, doc, "input#name")
-	assertElementExists(t, doc, "input#path")
-}
-
-func TestInventoriesPage_FormStructure(t *testing.T) {
-	f := newTestFixture(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/inventories", http.NoBody)
-	w := httptest.NewRecorder()
-	f.h.InventoriesPage(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
-	}
-
-	doc := parseHTML(t, w.Body.String())
-
-	// Verify form fields
-	assertElementExists(t, doc, "input#id[required]")
-	assertElementExists(t, doc, "input#name[required]")
-	assertElementExists(t, doc, "input#path[required]")
-
-	// Verify labels
-	assertElementContainsText(t, doc, "label[for='id']", "ID")
-	assertElementContainsText(t, doc, "label[for='name']", "Name")
-	assertElementContainsText(t, doc, "label[for='path']", "Index Path")
-}
-
-func TestInventoriesPage_ActionButtons_PendingState(t *testing.T) {
-	f := newTestFixture(t)
-	f.registerInventory(t, "inv1", "Test Inventory", "/path")
-
-	req := httptest.NewRequest(http.MethodGet, "/inventories", http.NoBody)
-	w := httptest.NewRecorder()
-	f.h.InventoriesPage(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
-	}
-
-	doc := parseHTML(t, w.Body.String())
-
-	// Pending state should have Load button
-	row := doc.Find("tbody tr").First()
-	buttonText := row.Find("button").Text()
-	if !strings.Contains(buttonText, "Load") {
-		t.Errorf("pending state should have Load button, got buttons: %q", buttonText)
-	}
-
-	// Should have Delete button
-	if !strings.Contains(buttonText, "Delete") {
-		t.Errorf("should have Delete button, got buttons: %q", buttonText)
+	if doc.Find("input#id").Length() != 0 {
+		t.Error("legacy register form should not be present")
 	}
 }
 

@@ -131,13 +131,25 @@ func (h *Handlers) DeleteInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
-// InventoriesPage renders the inventories HTML page.
-func (h *Handlers) InventoriesPage(w http.ResponseWriter, _ *http.Request) {
-	inventories := h.manager.List()
-
+// InventoriesPage renders the inventories HTML page. When discovery is
+// configured the page shows S3-discovered inventories merged with the
+// current load state; otherwise it shows the Manager's local list.
+func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 	data := map[string]interface{}{
-		"Title":       "Inventories",
-		"Inventories": inventories,
+		"Title":        "Inventories",
+		"S3Source":     h.s3SourceURI,
+		"HasDiscovery": h.discoverer != nil,
+	}
+
+	if h.discoverer != nil {
+		views, err := h.discoverAndMerge(r.Context())
+		if err != nil {
+			h.logger.Error().Err(err).Msg("discover for inventories page")
+			data["DiscoveryError"] = err.Error()
+		}
+		data["Discovered"] = views
+	} else {
+		data["Inventories"] = h.manager.List()
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

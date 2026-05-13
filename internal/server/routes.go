@@ -28,13 +28,21 @@ func (s *Server) setupRoutes() {
 	r.Route("/api", func(r chi.Router) {
 		r.Use(jsonContentType)
 
-		// Inventory management
+		// Inventory state (loaded/unloaded view). Get/Unload/Delete are
+		// still useful even with discovery; the legacy register-by-path
+		// POST endpoint stays for tests but is not surfaced in the UI.
 		r.Get("/inventories", s.handlers.ListInventoriesAPI)
 		r.Post("/inventories", s.handlers.RegisterInventoryAPI)
 		r.Get("/inventories/{id}", s.handlers.GetInventoryAPI)
 		r.Post("/inventories/{id}/load", s.handlers.LoadInventoryAPI)
 		r.Post("/inventories/{id}/unload", s.handlers.UnloadInventoryAPI)
 		r.Delete("/inventories/{id}", s.handlers.DeleteInventoryAPI)
+
+		// Discovery — S3 is the source of truth for what can be loaded.
+		r.Get("/discovered", s.handlers.ListDiscoveredAPI)
+		r.Post("/discovered/{src}/{id}/load", s.handlers.LoadDiscoveredAPI)
+		r.Post("/discovered/{src}/{id}/unload", s.handlers.UnloadDiscoveredAPI)
+		r.Delete("/discovered/{src}/{id}", s.handlers.EvictDiscoveredAPI)
 
 		// Stats queries
 		r.Get("/stats", s.handlers.GetStatsAPI)

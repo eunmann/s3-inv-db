@@ -18,7 +18,11 @@ func main() {
 }
 
 func run() error {
-	out := flag.String("out", "./seed-data", "base output directory")
+	target := flag.String("target", "local", "output target: local | s3")
+	out := flag.String("out", "./seed-data", "base output directory (target=local)")
+	s3Bucket := flag.String("s3-bucket", "", "S3 destination bucket (target=s3)")
+	s3Prefix := flag.String("s3-prefix", "inventory-data/", "key prefix under bucket; must end with / (target=s3)")
+	s3SrcBucket := flag.String("s3-src-bucket", "synthetic-prod", "simulated source bucket name written into the manifest (target=s3)")
 	count := flag.Int("count", 3, "number of inventories to generate")
 	objects := flag.Int("objects", 10000, "objects per inventory")
 	preset := flag.String("preset", "realistic", "config preset (small/medium/large/realistic)")
@@ -31,12 +35,18 @@ func run() error {
 	logger := logctx.NewConfiguredLogger(*verbose, *prettyLogs)
 
 	cfg := seeder.Config{
+		Target:    seeder.Target(*target),
 		OutputDir: *out,
-		Count:     *count,
-		Objects:   *objects,
-		Preset:    *preset,
-		Seed:      *seed,
-		Logger:    logger,
+		S3: seeder.S3Config{
+			Bucket:    *s3Bucket,
+			Prefix:    *s3Prefix,
+			SrcBucket: *s3SrcBucket,
+		},
+		Count:   *count,
+		Objects: *objects,
+		Preset:  *preset,
+		Seed:    *seed,
+		Logger:  logger,
 	}
 
 	if err := seeder.Run(cfg); err != nil {

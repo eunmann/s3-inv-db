@@ -6,12 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/loader"
+	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
+	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
 )
@@ -22,6 +26,13 @@ type Config struct {
 	Logger     zerolog.Logger
 	DevMode    bool
 	PriceTable pricing.PriceTable
+	// S3Source is the s3:// URI under which inventories are discovered.
+	// When empty, the discovery API returns an empty list and the
+	// /api/discovered routes still work (just with nothing to show).
+	S3Source string
+	// CacheDir is the local directory where built indexes are written.
+	// Required when S3Source is set.
+	CacheDir string
 }
 
 // Server is the HTTP server.
@@ -43,7 +54,37 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("create renderer: %w", err)
 	}
 
-	h := handlers.New(mgr, renderer, cfg.PriceTable, cfg.Logger)
+	hcfg := handlers.Config{
+		Manager:    mgr,
+		Renderer:   renderer,
+		PriceTable: cfg.PriceTable,
+		Logger:     cfg.Logger,
+	}
+	if cfg.S3Source != "" {
+		s3Client, err := s3fetch.NewClient(context.Background())
+		if err != nil {
+			return nil, fmt.Errorf("s3 client: %w", err)
+		}
+		disco, err := s3disco.NewFromS3URI(s3Client.Raw(), cfg.S3Source)
+		if err != nil {
+			return nil, fmt.Errorf("discovery from %q: %w", cfg.S3Source, err)
+		}
+		if cfg.CacheDir == "" {
+			return nil, errEmptyCacheDir
+		}
+		if err := os.MkdirAll(cfg.CacheDir, 0o755); err != nil {
+			return nil, fmt.Errorf("ensure cache dir %s: %w", cfg.CacheDir, err)
+		}
+		hcfg.Discoverer = disco
+		hcfg.Loader = loader.New(cfg.CacheDir, s3Client)
+		hcfg.S3SourceURI = cfg.S3Source
+		cfg.Logger.Info().
+			Str("s3_source", cfg.S3Source).
+			Str("cache_dir", cfg.CacheDir).
+			Msg("discovery configured")
+	}
+
+	h := handlers.NewWithConfig(hcfg)
 
 	s := &Server{
 		config:   cfg,
@@ -57,6 +98,8 @@ func New(cfg Config) (*Server, error) {
 
 	return s, nil
 }
+
+var errEmptyCacheDir = errors.New("CacheDir is required when S3Source is set")
 
 // Run starts the HTTP server and blocks until the context is cancelled.
 func (s *Server) Run(ctx context.Context) error {
