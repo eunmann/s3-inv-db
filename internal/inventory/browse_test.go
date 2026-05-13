@@ -1,4 +1,4 @@
-package handlers
+package inventory
 
 import (
 	"testing"
@@ -24,7 +24,7 @@ func TestNormalizeSort(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotCol, gotDir := normalizeSort(tt.sort, tt.dir)
+			gotCol, gotDir := NormalizeSort(tt.sort, tt.dir)
 			if gotCol != tt.wantCol {
 				t.Errorf("col = %q, want %q", gotCol, tt.wantCol)
 			}
@@ -63,7 +63,7 @@ func TestSortChildren(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			children := mkInput()
-			sortChildren(children, tt.sortBy, tt.dir)
+			SortChildren(children, tt.sortBy, tt.dir)
 			got := make([]string, len(children))
 			for i, c := range children {
 				got[i] = c.Segment
@@ -83,7 +83,7 @@ func TestSortChildren_TieBreakOnSegment(t *testing.T) {
 		{Segment: "a", ObjectCount: 5},
 		{Segment: "b", ObjectCount: 5},
 	}
-	sortChildren(children, "objects", "desc")
+	SortChildren(children, "objects", "desc")
 	got := []string{children[0].Segment, children[1].Segment, children[2].Segment}
 	want := []string{"a", "b", "c"}
 	if diff := cmp.Diff(want, got); diff != "" {
@@ -94,7 +94,7 @@ func TestSortChildren_TieBreakOnSegment(t *testing.T) {
 func TestSortLinks_IndicatorsAndToggles(t *testing.T) {
 	// Currently sorted by objects desc: that column shows ↓, clicking it
 	// would flip to asc; other columns offer their defaults with no indicator.
-	got := sortLinks("objects", "desc")
+	got := SortLinks("objects", "desc")
 
 	want := map[string]BrowseSortLink{
 		"segment": {Sort: "segment", Dir: "asc", Indicator: ""},
@@ -103,14 +103,14 @@ func TestSortLinks_IndicatorsAndToggles(t *testing.T) {
 		"cost":    {Sort: "cost", Dir: "desc", Indicator: ""},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("sortLinks (-want +got):\n%s", diff)
+		t.Errorf("SortLinks (-want +got):\n%s", diff)
 	}
 }
 
 func TestSortLinks_AscArrowAndAscFlip(t *testing.T) {
 	// Currently sorted by segment asc: that column shows ↑, clicking it
 	// would flip to desc.
-	got := sortLinks("segment", "asc")
+	got := SortLinks("segment", "asc")
 	if got["segment"].Indicator != "↑" {
 		t.Errorf("segment indicator = %q, want ↑", got["segment"].Indicator)
 	}
@@ -134,9 +134,9 @@ func TestBreadcrumbs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
-			got := breadcrumbs(tt.in)
+			got := Breadcrumbs(tt.in)
 			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("breadcrumbs(%q) (-want +got):\n%s", tt.in, diff)
+				t.Errorf("Breadcrumbs(%q) (-want +got):\n%s", tt.in, diff)
 			}
 		})
 	}
@@ -159,9 +159,9 @@ func TestNormalizePage(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotP, gotS := normalizePage(tt.page, tt.sz)
+			gotP, gotS := NormalizePage(tt.page, tt.sz)
 			if gotP != tt.wantPage || gotS != tt.wantSize {
-				t.Errorf("normalizePage(%q,%q) = (%d,%d), want (%d,%d)",
+				t.Errorf("NormalizePage(%q,%q) = (%d,%d), want (%d,%d)",
 					tt.page, tt.sz, gotP, gotS, tt.wantPage, tt.wantSize)
 			}
 		})
@@ -183,11 +183,11 @@ func TestPaginate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := paginate(tt.total, tt.page, tt.size)
+			got := Paginate(tt.total, tt.page, tt.size)
 			if got.Pages != tt.wantPages || got.FirstRow != tt.wantFirst ||
 				got.LastRow != tt.wantLast || got.PrevPage != tt.wantPrev ||
 				got.NextPage != tt.wantNext {
-				t.Errorf("paginate(%d, %d, %d) = %+v, want pages=%d first=%d last=%d prev=%d next=%d",
+				t.Errorf("Paginate(%d, %d, %d) = %+v, want pages=%d first=%d last=%d prev=%d next=%d",
 					tt.total, tt.page, tt.size, got,
 					tt.wantPages, tt.wantFirst, tt.wantLast, tt.wantPrev, tt.wantNext)
 			}
@@ -205,8 +205,8 @@ func TestSegmentOf(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.parent+"->"+tt.child, func(t *testing.T) {
-			if got := segmentOf(tt.parent, tt.child); got != tt.want {
-				t.Errorf("segmentOf(%q,%q) = %q, want %q", tt.parent, tt.child, got, tt.want)
+			if got := SegmentOf(tt.parent, tt.child); got != tt.want {
+				t.Errorf("SegmentOf(%q,%q) = %q, want %q", tt.parent, tt.child, got, tt.want)
 			}
 		})
 	}
