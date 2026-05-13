@@ -74,7 +74,7 @@ services:
       minio-setup:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/api/inventories || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/healthz || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -88,7 +88,7 @@ services:
     ports:
       - "${S3INV_PROD_PORT:-8081}:8080"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/api/inventories || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/healthz || exit 1"]
       interval: 30s
       timeout: 3s
       retries: 3

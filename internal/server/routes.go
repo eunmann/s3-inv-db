@@ -17,6 +17,14 @@ func (s *Server) setupRoutes() {
 	r.Use(loggingMiddleware(s.config.Logger))
 	r.Use(middleware.Recoverer)
 
+	// Liveness probe — independent of S3 / discovery / inventory state so
+	// container orchestrators can tell the process is up.
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
 	// HTML pages
 	r.Get("/", s.handlers.Dashboard)
 	r.Get("/inventories", s.handlers.InventoriesPage)

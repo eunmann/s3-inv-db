@@ -28,7 +28,7 @@ WORKDIR /home/app
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget -q -O /dev/null http://localhost:8080/api/inventories || exit 1
+    CMD wget -q -O /dev/null http://localhost:8080/healthz || exit 1
 
 ENTRYPOINT ["/sbin/tini", "--", "s3inv-server"]
 CMD ["--addr", ":8080"]
