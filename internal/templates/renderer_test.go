@@ -158,6 +158,69 @@ func TestRenderer_DevModeReloadsFromDisk(t *testing.T) {
 	}
 }
 
+// TestRenderer_RepeatedRenders is a regression for "html/template: cannot
+// Clone after it has executed" — the renderer used to Clone a cached base
+// template on every request, which worked once and failed forever after.
+// Render each page (and a partial) twice and assert both calls succeed.
+func TestRenderer_RepeatedRenders(t *testing.T) {
+	renderer, err := New(false)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	type renderCase struct {
+		name string
+		data any
+	}
+	cases := []renderCase{
+		{"dashboard.html", map[string]any{
+			"Title":        "Dashboard",
+			"TotalCount":   0,
+			"LoadedCount":  0,
+			"PendingCount": 0,
+			"ErrorCount":   0,
+			"Inventories":  []any{},
+		}},
+		{"inventories.html", map[string]any{
+			"Title":       "Inventories",
+			"Inventories": []any{},
+		}},
+		{"stats.html", map[string]any{
+			"Title":       "Query Stats",
+			"Inventories": []any{},
+		}},
+	}
+
+	for _, c := range cases {
+		var first, second bytes.Buffer
+		if err := renderer.Render(&first, c.name, c.data); err != nil {
+			t.Errorf("Render(%s) first call: %v", c.name, err)
+			continue
+		}
+		if err := renderer.Render(&second, c.name, c.data); err != nil {
+			t.Errorf("Render(%s) second call: %v", c.name, err)
+			continue
+		}
+		if first.Len() == 0 || second.Len() == 0 {
+			t.Errorf("Render(%s) produced empty output", c.name)
+		}
+	}
+
+	// Same for the partial path.
+	partialData := map[string]any{
+		"ID":    "x",
+		"Name":  "X",
+		"Path":  "/p",
+		"State": "pending",
+	}
+	for i := range 2 {
+		var buf bytes.Buffer
+		if err := renderer.RenderPartial(&buf, "inventory_row.html", partialData); err != nil {
+			t.Errorf("RenderPartial call %d: %v", i, err)
+		}
+	}
+}
+
 func TestRenderer_Partial(t *testing.T) {
 	renderer, err := New(false)
 	if err != nil {

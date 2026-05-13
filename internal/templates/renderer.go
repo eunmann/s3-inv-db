@@ -18,12 +18,18 @@ import (
 var embeddedTemplates embed.FS
 
 // Renderer manages HTML template rendering.
+//
+// Each page template is fully resolved at load time (layout + every partial +
+// the page itself) and stored in its own *template.Template tree. RenderPartial
+// uses a separate partials-only tree. We never call Clone — html/template
+// forbids cloning a tree after it has been executed, which would break every
+// request after the first.
 type Renderer struct {
-	base    *template.Template // Base templates (layout + partials)
-	pages   map[string]string  // Page template content by name
-	devMode bool
-	rootDir string
-	funcMap template.FuncMap
+	pages    map[string]*template.Template
+	partials *template.Template
+	devMode  bool
+	rootDir  string
+	funcMap  template.FuncMap
 }
 
 // New creates a new template renderer.
@@ -40,7 +46,6 @@ func NewWithRootDir(devMode bool, rootDir string) (*Renderer, error) {
 	r := &Renderer{
 		devMode: devMode,
 		rootDir: rootDir,
-		pages:   make(map[string]string),
 		funcMap: FuncMap(),
 	}
 
@@ -106,32 +111,63 @@ func FuncMap() template.FuncMap {
 }
 
 func (r *Renderer) loadTemplates() error {
-	r.base = template.New("base").Funcs(r.funcMap)
-	r.pages = make(map[string]string)
-
+	var (
+		layoutSrc   string
+		partialSrcs map[string]string
+		pageSrcs    map[string]string
+		err         error
+	)
 	if r.devMode {
-		return r.loadFromDisk()
+		layoutSrc, partialSrcs, pageSrcs, err = r.readFromDisk()
+	} else {
+		layoutSrc, partialSrcs, pageSrcs, err = r.readFromEmbed()
+	}
+	if err != nil {
+		return err
 	}
 
-	return r.loadFromEmbed()
+	// Partials-only tree for RenderPartial.
+	partials := template.New("partials").Funcs(r.funcMap)
+	for name, src := range partialSrcs {
+		if _, err := partials.New(name).Parse(src); err != nil {
+			return fmt.Errorf("parse partial %s: %w", name, err)
+		}
+	}
+	r.partials = partials
+
+	// One fully-resolved tree per page: layout + every partial + the page.
+	r.pages = make(map[string]*template.Template, len(pageSrcs))
+	for pageName, pageSrc := range pageSrcs {
+		t := template.New(pageName).Funcs(r.funcMap)
+		if _, err := t.Parse(layoutSrc); err != nil {
+			return fmt.Errorf("parse layout for %s: %w", pageName, err)
+		}
+		for partialName, partialSrc := range partialSrcs {
+			if _, err := t.New(partialName).Parse(partialSrc); err != nil {
+				return fmt.Errorf("parse partial %s for page %s: %w", partialName, pageName, err)
+			}
+		}
+		if _, err := t.Parse(pageSrc); err != nil {
+			return fmt.Errorf("parse page %s: %w", pageName, err)
+		}
+		r.pages[pageName] = t
+	}
+
+	return nil
 }
 
-func (r *Renderer) loadFromEmbed() error {
-	// Load layout template into base
+// readFromEmbed loads template sources from the embedded FS.
+func (r *Renderer) readFromEmbed() (layoutSrc string, partials, pages map[string]string, err error) {
 	layoutContent, err := embeddedTemplates.ReadFile("templates/layout.html")
 	if err != nil {
-		return fmt.Errorf("read layout: %w", err)
-	}
-	if _, err := r.base.Parse(string(layoutContent)); err != nil {
-		return fmt.Errorf("parse layout: %w", err)
+		return "", nil, nil, fmt.Errorf("read layout: %w", err)
 	}
 
-	// Load partial templates into base
 	partialEntries, err := embeddedTemplates.ReadDir("templates/partials")
 	if err != nil {
-		return fmt.Errorf("read partials dir: %w", err)
+		return "", nil, nil, fmt.Errorf("read partials dir: %w", err)
 	}
-
+	partialSrcs := make(map[string]string, len(partialEntries))
 	for _, entry := range partialEntries {
 		if entry.IsDir() {
 			continue
@@ -139,20 +175,16 @@ func (r *Renderer) loadFromEmbed() error {
 		path := "templates/partials/" + entry.Name()
 		content, err := embeddedTemplates.ReadFile(path)
 		if err != nil {
-			return fmt.Errorf("read %s: %w", path, err)
+			return "", nil, nil, fmt.Errorf("read %s: %w", path, err)
 		}
-		_, err = r.base.New(path).Parse(string(content))
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
+		partialSrcs[path] = string(content)
 	}
 
-	// Load page templates into pages map (not base)
 	entries, err := embeddedTemplates.ReadDir("templates")
 	if err != nil {
-		return fmt.Errorf("read templates dir: %w", err)
+		return "", nil, nil, fmt.Errorf("read templates dir: %w", err)
 	}
-
+	pageSrcs := make(map[string]string, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || entry.Name() == "layout.html" {
 			continue
@@ -160,64 +192,56 @@ func (r *Renderer) loadFromEmbed() error {
 		path := "templates/" + entry.Name()
 		content, err := embeddedTemplates.ReadFile(path)
 		if err != nil {
-			return fmt.Errorf("read %s: %w", path, err)
+			return "", nil, nil, fmt.Errorf("read %s: %w", path, err)
 		}
-		r.pages[entry.Name()] = string(content)
+		pageSrcs[entry.Name()] = string(content)
 	}
 
-	return nil
+	return string(layoutContent), partialSrcs, pageSrcs, nil
 }
 
-func (r *Renderer) loadFromDisk() error {
-	// Load layout template into base
+// readFromDisk loads template sources from r.rootDir.
+func (r *Renderer) readFromDisk() (layoutSrc string, partials, pages map[string]string, err error) {
 	layoutPath := filepath.Join(r.rootDir, "templates", "layout.html")
 	layoutContent, err := os.ReadFile(layoutPath)
 	if err != nil {
-		return fmt.Errorf("read layout: %w", err)
-	}
-	if _, err := r.base.Parse(string(layoutContent)); err != nil {
-		return fmt.Errorf("parse layout: %w", err)
+		return "", nil, nil, fmt.Errorf("read layout: %w", err)
 	}
 
-	// Load partial templates into base
 	partialsGlob := filepath.Join(r.rootDir, "templates", "partials", "*.html")
-	files, err := filepath.Glob(partialsGlob)
+	partialFiles, err := filepath.Glob(partialsGlob)
 	if err != nil {
-		return fmt.Errorf("glob partial templates: %w", err)
+		return "", nil, nil, fmt.Errorf("glob partials: %w", err)
 	}
-
-	for _, f := range files {
+	partialSrcs := make(map[string]string, len(partialFiles))
+	for _, f := range partialFiles {
 		content, err := os.ReadFile(f)
 		if err != nil {
-			return fmt.Errorf("read %s: %w", f, err)
+			return "", nil, nil, fmt.Errorf("read %s: %w", f, err)
 		}
 		name := "templates/partials/" + filepath.Base(f)
-		_, err = r.base.New(name).Parse(string(content))
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", f, err)
-		}
+		partialSrcs[name] = string(content)
 	}
 
-	// Load page templates into pages map
 	mainGlob := filepath.Join(r.rootDir, "templates", "*.html")
-	files, err = filepath.Glob(mainGlob)
+	pageFiles, err := filepath.Glob(mainGlob)
 	if err != nil {
-		return fmt.Errorf("glob main templates: %w", err)
+		return "", nil, nil, fmt.Errorf("glob pages: %w", err)
 	}
-
-	for _, f := range files {
+	pageSrcs := make(map[string]string, len(pageFiles))
+	for _, f := range pageFiles {
 		name := filepath.Base(f)
 		if name == "layout.html" {
 			continue
 		}
 		content, err := os.ReadFile(f)
 		if err != nil {
-			return fmt.Errorf("read %s: %w", f, err)
+			return "", nil, nil, fmt.Errorf("read %s: %w", f, err)
 		}
-		r.pages[name] = string(content)
+		pageSrcs[name] = string(content)
 	}
 
-	return nil
+	return string(layoutContent), partialSrcs, pageSrcs, nil
 }
 
 // Render renders a full page template.
@@ -228,23 +252,12 @@ func (r *Renderer) Render(w io.Writer, name string, data interface{}) error {
 		}
 	}
 
-	pageContent, ok := r.pages[name]
+	t, ok := r.pages[name]
 	if !ok {
 		return fmt.Errorf("page template %s not found", name)
 	}
 
-	// Clone base templates and add page-specific content
-	tmpl, err := r.base.Clone()
-	if err != nil {
-		return fmt.Errorf("clone base template: %w", err)
-	}
-
-	if _, err := tmpl.Parse(pageContent); err != nil {
-		return fmt.Errorf("parse page template %s: %w", name, err)
-	}
-
-	// Execute the page template which calls layout
-	if err := tmpl.ExecuteTemplate(w, "layout", data); err != nil {
+	if err := t.ExecuteTemplate(w, "layout", data); err != nil {
 		return fmt.Errorf("execute template %s: %w", name, err)
 	}
 	return nil
@@ -258,7 +271,7 @@ func (r *Renderer) RenderPartial(w io.Writer, name string, data interface{}) err
 		}
 	}
 
-	if err := r.base.ExecuteTemplate(w, "templates/partials/"+name, data); err != nil {
+	if err := r.partials.ExecuteTemplate(w, "templates/partials/"+name, data); err != nil {
 		return fmt.Errorf("execute partial template %s: %w", name, err)
 	}
 	return nil
