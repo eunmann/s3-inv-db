@@ -52,8 +52,6 @@ func (s *Server) setupRoutes() {
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
-		r.Use(jsonContentType)
-
 		// Inventory state (loaded/unloaded view). The POST endpoint is
 		// not surfaced in the UI; kept for tests and direct-path callers.
 		r.Get("/inventories", s.handlers.ListInventoriesAPI)

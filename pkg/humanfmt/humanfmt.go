@@ -97,11 +97,6 @@ func Throughput(bytes int64, d time.Duration) string {
 	}
 }
 
-// ThroughputUint64 is like Throughput but for uint64.
-func ThroughputUint64(bytes uint64, d time.Duration) string {
-	return Throughput(int64(bytes), d)
-}
-
 // Count renders an integer for human display.
 //
 //   - < 0     → plain decimal

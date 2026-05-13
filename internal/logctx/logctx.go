@@ -87,25 +87,6 @@ func FromContext(ctx context.Context) *zerolog.Logger {
 	return &l
 }
 
-// WithField returns a new context with a logger that has the specified field added.
-// This is a convenience function that combines FromContext, With, and WithLogger.
-func WithField(ctx context.Context, key string, value interface{}) context.Context {
-	child := FromContext(ctx).With().Interface(key, value).Logger()
-	return WithLogger(ctx, child)
-}
-
-// WithStr returns a new context with a logger that has the specified string field added.
-func WithStr(ctx context.Context, key, value string) context.Context {
-	child := FromContext(ctx).With().Str(key, value).Logger()
-	return WithLogger(ctx, child)
-}
-
-// WithInt returns a new context with a logger that has the specified int field added.
-func WithInt(ctx context.Context, key string, value int) context.Context {
-	child := FromContext(ctx).With().Int(key, value).Logger()
-	return WithLogger(ctx, child)
-}
-
 // NewConfiguredLogger creates a new logger with the specified configuration.
 // If debug is true, sets log level to Debug.
 // If human is true, uses a human-friendly console writer.

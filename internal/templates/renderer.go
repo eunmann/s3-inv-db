@@ -63,10 +63,9 @@ func NewWithRootDir(devMode bool, rootDir string) (*Renderer, error) {
 // FuncMap returns the template function map.
 func FuncMap() template.FuncMap {
 	return template.FuncMap{
-		"formatBytes":       humanfmt.BytesUint64,
-		"formatCount":       humanfmt.CountUint64,
-		"formatCost":        pricing.FormatCost,
-		"formatCostDollars": pricing.FormatCostDollars,
+		"formatBytes": humanfmt.BytesUint64,
+		"formatCount": humanfmt.CountUint64,
+		"formatCost":  pricing.FormatCost,
 		"formatTime": func(t time.Time) string {
 			if t.IsZero() {
 				return "-"

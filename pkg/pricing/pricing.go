@@ -357,12 +357,3 @@ func roundHalfAway(x float64, decimals int) float64 {
 	factor := math.Pow(10, float64(decimals))
 	return math.Round(x*factor) / factor
 }
-
-// FormatCostDollars formats a cost in dollars via FormatCost.
-func FormatCostDollars(dollars float64) string {
-	if dollars <= 0 {
-		return "$0.00"
-	}
-	micros := uint64(dollars*1_000_000 + 0.5)
-	return FormatCost(micros)
-}

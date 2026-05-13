@@ -86,14 +86,6 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// jsonContentType sets Content-Type to application/json for API routes.
-func jsonContentType(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		next.ServeHTTP(w, r)
-	})
-}
-
 // isMutating reports whether a method writes state. Read methods bypass
 // the auth + CSRF checks; writes are gated.
 func isMutating(method string) bool {

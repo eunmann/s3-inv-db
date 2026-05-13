@@ -70,51 +70,6 @@ func TestWithLogger_NilContext(t *testing.T) {
 	}
 }
 
-func TestWithField(t *testing.T) {
-	var buf bytes.Buffer
-	baseLogger := zerolog.New(&buf)
-	ctx := WithLogger(context.Background(), baseLogger)
-
-	ctx = WithField(ctx, "key", "value")
-	logger := FromContext(ctx)
-	logger.Info().Msg("test")
-
-	output := buf.String()
-	if !strings.Contains(output, `"key":"value"`) {
-		t.Errorf("expected field in output, got: %s", output)
-	}
-}
-
-func TestWithStr(t *testing.T) {
-	var buf bytes.Buffer
-	baseLogger := zerolog.New(&buf)
-	ctx := WithLogger(context.Background(), baseLogger)
-
-	ctx = WithStr(ctx, "phase", "ingest")
-	logger := FromContext(ctx)
-	logger.Info().Msg("test")
-
-	output := buf.String()
-	if !strings.Contains(output, `"phase":"ingest"`) {
-		t.Errorf("expected phase field in output, got: %s", output)
-	}
-}
-
-func TestWithInt(t *testing.T) {
-	var buf bytes.Buffer
-	baseLogger := zerolog.New(&buf)
-	ctx := WithLogger(context.Background(), baseLogger)
-
-	ctx = WithInt(ctx, "chunk_index", 42)
-	logger := FromContext(ctx)
-	logger.Info().Msg("test")
-
-	output := buf.String()
-	if !strings.Contains(output, `"chunk_index":42`) {
-		t.Errorf("expected chunk_index field in output, got: %s", output)
-	}
-}
-
 func TestDefaultLogger(t *testing.T) {
 	logger := DefaultLogger()
 
@@ -163,8 +118,8 @@ func TestChainedContexts(t *testing.T) {
 	baseLogger := zerolog.New(&buf)
 
 	ctx := WithLogger(context.Background(), baseLogger)
-	ctx = WithStr(ctx, "phase", "ingest")
-	ctx = WithInt(ctx, "chunk_index", 5)
+	child := FromContext(ctx).With().Str("phase", "ingest").Int("chunk_index", 5).Logger()
+	ctx = WithLogger(ctx, child)
 
 	logger := FromContext(ctx)
 	logger.Info().Msg("test")

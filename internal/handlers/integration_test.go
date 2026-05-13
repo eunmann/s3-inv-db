@@ -58,21 +58,11 @@ func buildLoadedTestHandlers(t *testing.T) *Handlers {
 
 func decodeStatsResponse(t *testing.T, body []byte) *StatsResponse {
 	t.Helper()
-	var resp struct {
-		Success bool           `json:"success"`
-		Data    *StatsResponse `json:"data"`
-		Error   string         `json:"error"`
-	}
+	var resp StatsResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("decode: %v (body=%s)", err, body)
 	}
-	if !resp.Success {
-		t.Fatalf("success = false; error = %s", resp.Error)
-	}
-	if resp.Data == nil {
-		t.Fatal("data is nil")
-	}
-	return resp.Data
+	return &resp
 }
 
 // TestGetStatsAPI_Success_RootPrefix exercises the previously-broken
@@ -147,20 +137,14 @@ func TestGetDescendantsAPI_Success(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 
-	var resp struct {
-		Success bool             `json:"success"`
-		Data    []DescendantInfo `json:"data"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	var descendants []DescendantInfo
+	if err := json.NewDecoder(w.Body).Decode(&descendants); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !resp.Success {
-		t.Fatal("success = false")
-	}
-	if len(resp.Data) == 0 {
+	if len(descendants) == 0 {
 		t.Errorf("descendants empty, want >=1")
 	}
-	for _, d := range resp.Data {
+	for _, d := range descendants {
 		if d.Depth != 1 {
 			t.Errorf("descendant depth = %d, want 1", d.Depth)
 		}
@@ -190,13 +174,11 @@ func TestGetDescendantsAPI_Filter(t *testing.T) {
 		t.Fatalf("filtered status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 
-	var resp struct {
-		Data []DescendantInfo `json:"data"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	var descendants []DescendantInfo
+	if err := json.NewDecoder(w.Body).Decode(&descendants); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, d := range resp.Data {
+	for _, d := range descendants {
 		if d.ObjectCount < 2 {
 			t.Errorf("min_count=2 filter returned entry with %d objects", d.ObjectCount)
 		}

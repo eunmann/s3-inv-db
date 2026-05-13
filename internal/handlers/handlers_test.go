@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,15 +38,6 @@ func TestListInventoriesAPI_Empty(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
 	}
-
-	var resp APIResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-
-	if !resp.Success {
-		t.Error("success = false, want true")
-	}
 }
 
 func TestRegisterInventoryAPI(t *testing.T) {
@@ -59,16 +51,7 @@ func TestRegisterInventoryAPI(t *testing.T) {
 	h.RegisterInventoryAPI(w, req)
 
 	if w.Code != http.StatusCreated {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusCreated)
-	}
-
-	var resp APIResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-
-	if !resp.Success {
-		t.Errorf("success = false, want true; error = %s", resp.Error)
+		t.Errorf("status = %d, want %d, body = %s", w.Code, http.StatusCreated, w.Body.String())
 	}
 }
 
@@ -144,37 +127,16 @@ func TestGetInventoryAPI_NotFound(t *testing.T) {
 	}
 }
 
-func TestWantsJSON(t *testing.T) {
-	tests := []struct {
-		name   string
-		accept string
-		query  string
-		want   bool
-	}{
-		{"accept json", "application/json", "", true},
-		{"accept json with params", "application/json; charset=utf-8", "", true},
-		{"format query param", "", "format=json", true},
-		{"accept html", "text/html", "", false},
-		{"no header", "", "", false},
+// decodeErr decodes an {"error":"…"} JSON body and returns the message.
+func decodeErr(t *testing.T, body io.Reader) string {
+	t.Helper()
+	var e struct {
+		Error string `json:"error"`
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			url := "/test"
-			if tt.query != "" {
-				url += "?" + tt.query
-			}
-			req := httptest.NewRequest(http.MethodGet, url, http.NoBody)
-			if tt.accept != "" {
-				req.Header.Set("Accept", tt.accept)
-			}
-
-			got := WantsJSON(req)
-			if got != tt.want {
-				t.Errorf("WantsJSON() = %v, want %v", got, tt.want)
-			}
-		})
+	if err := json.NewDecoder(body).Decode(&e); err != nil {
+		t.Fatalf("decode error body: %v", err)
 	}
+	return e.Error
 }
 
 // Helper to set up chi URL param context.
@@ -316,12 +278,8 @@ func TestGetStatsAPI_MissingInventoryID(t *testing.T) {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
 	}
 
-	var resp APIResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !strings.Contains(resp.Error, "inventory_id") {
-		t.Errorf("error = %q, want mention of inventory_id", resp.Error)
+	if msg := decodeErr(t, w.Body); !strings.Contains(msg, "inventory_id") {
+		t.Errorf("error = %q, want mention of inventory_id", msg)
 	}
 }
 
@@ -336,13 +294,8 @@ func TestGetStatsAPI_MissingPrefix(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
 	}
-
-	var resp APIResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !strings.Contains(resp.Error, "prefix") {
-		t.Errorf("error = %q, want mention of prefix", resp.Error)
+	if msg := decodeErr(t, w.Body); !strings.Contains(msg, "prefix") {
+		t.Errorf("error = %q, want mention of prefix", msg)
 	}
 }
 
@@ -419,12 +372,8 @@ func TestGetStatsAPI_NotLoaded(t *testing.T) {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusConflict)
 	}
 
-	var resp APIResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !strings.Contains(resp.Error, "not loaded") {
-		t.Errorf("error = %q, want mention of not loaded", resp.Error)
+	if msg := decodeErr(t, w.Body); !strings.Contains(msg, "not loaded") {
+		t.Errorf("error = %q, want mention of not loaded", msg)
 	}
 }
 
@@ -529,12 +478,8 @@ func TestGetDescendantsAPI_InvalidMinCount(t *testing.T) {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
 	}
 
-	var resp APIResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !strings.Contains(resp.Error, "min_count") {
-		t.Errorf("error = %q, want mention of min_count", resp.Error)
+	if msg := decodeErr(t, w.Body); !strings.Contains(msg, "min_count") {
+		t.Errorf("error = %q, want mention of min_count", msg)
 	}
 }
 
@@ -551,13 +496,8 @@ func TestGetDescendantsAPI_InvalidMinBytes(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
 	}
-
-	var resp APIResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !strings.Contains(resp.Error, "min_bytes") {
-		t.Errorf("error = %q, want mention of min_bytes", resp.Error)
+	if msg := decodeErr(t, w.Body); !strings.Contains(msg, "min_bytes") {
+		t.Errorf("error = %q, want mention of min_bytes", msg)
 	}
 }
 

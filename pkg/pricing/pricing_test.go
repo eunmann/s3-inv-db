@@ -332,31 +332,6 @@ func TestFormatCost(t *testing.T) {
 	}
 }
 
-func TestFormatCostDollars(t *testing.T) {
-	tests := []struct {
-		name    string
-		dollars float64
-		want    string
-	}{
-		{"zero", 0, "$0.00"},
-		{"negative clamped", -1.0, "$0.00"},
-		{"sub-penny", 0.0001, "<$0.01"},
-		{"five cents", 0.05, "$0.05"},
-		{"$5.50", 5.50, "$5.50"},
-		{"$150 → $150.00", 150.0, "$150.00"},
-		{"$1500 → $1.5K", 1500.0, "$1.5K"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := FormatCostDollars(tt.dollars)
-			if got != tt.want {
-				t.Errorf("FormatCostDollars(%f) = %q, want %q", tt.dollars, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestLoadSavePriceTable(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "prices.json")
