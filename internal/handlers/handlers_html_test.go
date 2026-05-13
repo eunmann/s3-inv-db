@@ -441,6 +441,13 @@ func TestInventoryRowPartial_NotFound(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
 	}
+
+	// Partial routes must not return JSON; HTMX would swap the literal
+	// JSON body into the DOM.
+	ct := w.Header().Get("Content-Type")
+	if strings.Contains(ct, "application/json") {
+		t.Errorf("Content-Type = %q, must not be JSON for an HTML partial route", ct)
+	}
 }
 
 // Stats Result Partial Tests

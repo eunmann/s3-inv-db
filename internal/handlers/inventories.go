@@ -153,7 +153,9 @@ func (h *Handlers) InventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 
 	info, exists := h.manager.Get(id)
 	if !exists {
-		WriteJSONError(w, http.StatusNotFound, "inventory not found")
+		// HTMX swaps the response body into the DOM, so keep the partial
+		// route HTML-shaped (text/plain via http.Error) rather than JSON.
+		http.Error(w, "inventory not found", http.StatusNotFound)
 		return
 	}
 
