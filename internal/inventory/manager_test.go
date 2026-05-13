@@ -164,10 +164,10 @@ func TestManagerConcurrent_RegisterListRemove(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(workers)
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		go func(workerID int) {
 			defer wg.Done()
-			for i := 0; i < ops; i++ {
+			for i := range ops {
 				id := fmt.Sprintf("w%d-i%d", workerID, i)
 				_ = m.Register(id, "name", "/path")
 				_, _ = m.Get(id)
@@ -196,7 +196,7 @@ func TestManagerConcurrent_LoadRemoveRace(t *testing.T) {
 	// Use a bogus path so Open fails quickly — we're testing the
 	// state transitions, not a real index load.
 	const id = "racy"
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		if err := m.Register(id, "n", "/no/such/path"); err != nil {
 			t.Fatalf("register: %v", err)
 		}
