@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/memdiag"
@@ -72,7 +71,7 @@ func NewPipeline(config Config, s3Client *s3fetch.Client) *Pipeline {
 // Run executes the full pipeline.
 func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result, error) {
 	p.startTime = time.Now()
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 
 	// Start memory diagnostics
 	p.memTracker.Start()
@@ -265,7 +264,7 @@ type ingestConfig struct {
 // runIngestPhase streams S3 inventory and creates sorted run files.
 // It uses concurrent workers to download and parse chunks in parallel.
 func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error {
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 
 	cfg, err := p.setupIngestConfig(ctx, manifestURI)
 	if err != nil {
@@ -283,7 +282,7 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 
 // setupIngestConfig parses the manifest and computes configuration.
 func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*ingestConfig, error) {
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 
 	bucket, key, err := s3fetch.ParseS3URI(manifestURI)
 	if err != nil {
@@ -368,7 +367,7 @@ func (p *Pipeline) computeWorkerCount(log *zerolog.Logger) int {
 
 // runIngestLoop runs the main ingest loop with worker coordination.
 func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 	totalChunks := len(cfg.manifest.Files)
 
 	jobs := make(chan chunkJob, cfg.numWorkers)
@@ -630,7 +629,7 @@ func createCSVReader(body io.ReadCloser, key string, cfg chunkConfig) (inventory
 // Uses the S3 Download Manager for parallel range downloads to maximize throughput.
 func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, cfg chunkConfig, capacityHint int) ([]objectRecord, *chunkTiming, error) {
 	timing := &chunkTiming{}
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 
 	// Download phase using S3 Download Manager (parallel range downloads)
 	body, dlResult, err := p.s3Client.DownloadObject(ctx, bucket, key)
@@ -701,7 +700,7 @@ func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, 
 
 // flushAggregator drains the aggregator to a sorted run file.
 func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 	start := time.Now()
 
 	rows := agg.Drain()
@@ -784,7 +783,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 
 // runMergeBuildPhase merges run files and builds the index.
 func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefixCount uint64, maxDepth uint32, err error) {
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 
 	// Check for cancellation before starting
 	select {

@@ -283,18 +283,22 @@ func TestSameOriginMiddleware_ReadsBypassOriginCheck(t *testing.T) {
 	}
 }
 
-func TestAccessLogMiddleware_LogsAfterPanic(t *testing.T) {
-	// Wire a tiny chain: ctx logger → recoverer → access log → panic handler.
-	// Capture the logger output and confirm we logged the request with a
-	// 500-class status.
+func TestHlogChain_LogsAfterPanic(t *testing.T) {
+	// hlog.AccessHandler captures the panic-induced 500 because chi's
+	// Recoverer (registered earlier in the actual server chain) writes
+	// the 500 status through the access handler's instrumented writer.
 	var sink writeBuffer
 	logger := zerolog.New(&sink)
-	mw := accessLogMiddleware()
-	ctxMW := contextLoggerMiddleware(logger)
 
-	handler := ctxMW(middleware.Recoverer(mw(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+	chain := hlogChain(logger)
+	var handler http.Handler = http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		panic("boom")
-	}))))
+	})
+	handler = middleware.Recoverer(handler)
+	// Apply hlog chain in reverse order (innermost first).
+	for i := len(chain) - 1; i >= 0; i-- {
+		handler = chain[i](handler)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "http://localhost/", http.NoBody)
 	w := httptest.NewRecorder()

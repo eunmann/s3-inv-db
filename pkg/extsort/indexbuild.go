@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
+	"github.com/rs/zerolog"
 )
 
 // IndexBuilder builds index files directly from a sorted stream of PrefixRows.
@@ -329,7 +329,7 @@ func (b *IndexBuilder) AddAll(iter RowIterator) error {
 func (b *IndexBuilder) AddAllWithContext(ctx context.Context, iter RowIterator) error {
 	const checkInterval = 1000 // Check context every N rows
 	const logInterval = 100000 // Log progress every N rows
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 	count := 0
 	startTime := time.Now()
 	lastLogTime := startTime
@@ -391,7 +391,7 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	}
 	b.closed = true
 
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 	startTime := time.Now()
 
 	log.Debug().Msg("index builder: starting Finalize")
@@ -510,7 +510,7 @@ func (b *IndexBuilder) writeSubtreeArrays() error {
 
 // buildMPHF builds the MPHF and logs progress.
 func (b *IndexBuilder) buildMPHF(ctx context.Context) error {
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 	mphfStart := time.Now()
 	if err := b.mphfBuilder.Build(b.outDir); err != nil {
 		return fmt.Errorf("build MPHF: %w", err)

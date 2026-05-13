@@ -20,8 +20,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
+	"github.com/rs/zerolog"
 )
 
 // Inventory represents one discovered S3 Inventory configuration with its
@@ -67,7 +67,7 @@ func (i Inventory) CompositeID() string {
 }
 
 // Discoverer wraps an S3 client + bucket/prefix root and lists inventories.
-// Per-call logging uses logctx.FromContext(ctx) so the request-scoped
+// Per-call logging uses zerolog.Ctx(ctx) so the request-scoped
 // logger (with request_id) attaches automatically.
 type Discoverer struct {
 	client *s3.Client
@@ -116,7 +116,7 @@ func (d *Discoverer) List(ctx context.Context) ([]Inventory, error) {
 		return nil, fmt.Errorf("list source buckets: %w", err)
 	}
 
-	logger := logctx.FromContext(ctx)
+	logger := zerolog.Ctx(ctx)
 	var out []Inventory
 	for _, src := range srcBuckets {
 		srcName := trimPrefix(src, d.prefix)
@@ -183,7 +183,7 @@ func (d *Discoverer) describeInventory(ctx context.Context, src, inv, invPrefix 
 	// Soft-fail on parse error so one broken manifest doesn't break List.
 	manifest, err := d.fetchManifest(ctx, entry.ManifestKey)
 	if err != nil {
-		logctx.FromContext(ctx).Warn().Err(err).Str("src", src).Str("inv", inv).Str("key", entry.ManifestKey).Msg("fetch manifest")
+		zerolog.Ctx(ctx).Warn().Err(err).Str("src", src).Str("inv", inv).Str("key", entry.ManifestKey).Msg("fetch manifest")
 		entry.FileFormat = "unknown"
 		entry.Error = "failed to read manifest"
 		return entry, nil

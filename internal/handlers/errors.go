@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/logctx"
+	"github.com/rs/zerolog"
 )
 
 // errPrefixNotFound is returned by buildStatsResponse and other index
@@ -45,7 +45,7 @@ func managerErrorStatus(err error) (status int, msg string) {
 func respondManagerErrorHTML(w http.ResponseWriter, r *http.Request, err error, op string) {
 	status, msg := managerErrorStatus(err)
 	if status >= http.StatusInternalServerError {
-		logctx.FromContext(r.Context()).Error().Err(err).Str("op", op).Msg("manager error")
+		zerolog.Ctx(r.Context()).Error().Err(err).Str("op", op).Msg("manager error")
 	}
 	http.Error(w, msg, status)
 }

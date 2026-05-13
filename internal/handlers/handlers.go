@@ -8,7 +8,7 @@ import (
 
 // Handlers contains all HTTP handlers and their dependencies. No logger
 // field — handlers retrieve the request-scoped logger via
-// logctx.FromContext(r.Context()), set by the server's contextLoggerMiddleware.
+// zerolog.Ctx(r.Context()), set by the server's contextLoggerMiddleware.
 //
 // Domain operations on discovered inventories (list+merge, load, evict)
 // go through `discovery` so the use-case logic lives in the inventory

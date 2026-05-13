@@ -1,93 +1,61 @@
 package server
 
 import (
-	"context"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
-	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/hlog"
 )
 
-// contextLoggerMiddleware attaches a request-scoped logger to ctx so
-// downstream handlers and packages can pull it with logctx.FromContext.
-// Each request gets a child logger tagged with the chi request_id so
-// log lines and access logs correlate one-to-one.
-func contextLoggerMiddleware(base zerolog.Logger) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			reqID := middleware.GetReqID(r.Context())
-			reqLogger := base.With().Str("request_id", reqID).Logger()
-			ctx := logctx.WithLogger(r.Context(), reqLogger)
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
+// Wires the rs/zerolog/hlog middleware stack into a slice the route
+// setup can range over. The chain attaches the base logger to ctx,
+// copies the chi-issued request_id into the per-request logger, and
+// emits an access-log line for every request. Recoverer and RequestID
+// must run earlier in the chain so request_id is in ctx already.
+func hlogChain(base zerolog.Logger) []func(http.Handler) http.Handler {
+	return []func(http.Handler) http.Handler{
+		hlog.NewHandler(base),
+		// Pull chi's RequestID into the log context so every log line
+		// from a request carries the same request_id.
+		func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if id := middleware.GetReqID(r.Context()); id != "" {
+					hlog.FromRequest(r).UpdateContext(func(c zerolog.Context) zerolog.Context {
+						return c.Str("request_id", id)
+					})
+				}
+				next.ServeHTTP(w, r)
+			})
+		},
+		hlog.AccessHandler(func(r *http.Request, status, size int, dur time.Duration) {
+			logger := hlog.FromRequest(r)
+			fields := func(ev *zerolog.Event) *zerolog.Event {
+				return ev.
+					Str("method", r.Method).
+					Str("path", r.URL.Path).
+					Int("status", status).
+					Dur("duration", dur).
+					Int("size", size).
+					Str("remote_addr", r.RemoteAddr)
+			}
+			switch {
+			case status >= http.StatusInternalServerError:
+				fields(logger.Error()).Msg("http request")
+			case status >= http.StatusBadRequest:
+				fields(logger.Warn()).Msg("http request")
+			default:
+				fields(logger.Info()).Msg("http request")
+			}
+		}),
 	}
-}
-
-// accessLogMiddleware logs the completed request with status, duration,
-// remote addr, etc. The log call runs in a defer so panicking handlers
-// still produce an access log entry: Recoverer (registered earlier)
-// catches the panic and writes a 500, and our deferred log sees that
-// status because Recoverer wrote to the same wrapped writer.
-func accessLogMiddleware() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			start := time.Now()
-			wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
-			panicked := true
-			ctx := r.Context()
-			defer func() { writeAccessLog(ctx, r, wrapped.statusCode, time.Since(start), panicked) }()
-			next.ServeHTTP(wrapped, r)
-			panicked = false
-		})
-	}
-}
-
-// writeAccessLog emits one access-log line. Extracted so the defer in
-// accessLogMiddleware can hand ctx in directly (contextcheck), and so
-// the panic-bypass status synthesis lives in one place.
-func writeAccessLog(ctx context.Context, r *http.Request, status int, dur time.Duration, panicked bool) {
-	if panicked {
-		// Handler panicked: Recoverer (inner wrapper) writes 500 to the
-		// original writer, bypassing our wrapped responseWriter, so
-		// wrapped.statusCode never updates. Surface the real outcome.
-		status = http.StatusInternalServerError
-	}
-	logger := logctx.FromContext(ctx)
-	fields := func(ev *zerolog.Event) *zerolog.Event {
-		return ev.
-			Str("method", r.Method).
-			Str("path", r.URL.Path).
-			Int("status", status).
-			Dur("duration", dur).
-			Str("remote_addr", r.RemoteAddr)
-	}
-	switch {
-	case status >= http.StatusInternalServerError:
-		fields(logger.Error()).Msg("http request")
-	case status >= http.StatusBadRequest:
-		fields(logger.Warn()).Msg("http request")
-	default:
-		fields(logger.Info()).Msg("http request")
-	}
-}
-
-// responseWriter wraps http.ResponseWriter to capture status code.
-type responseWriter struct {
-	http.ResponseWriter
-	statusCode int
-}
-
-func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
 }
 
 // isMutating reports whether a method writes state. Read methods bypass
-// the auth + CSRF checks; writes are gated.
+// the CSRF check; writes are gated.
 func isMutating(method string) bool {
 	switch method {
 	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
@@ -98,8 +66,8 @@ func isMutating(method string) bool {
 
 // requireDiscoveryMiddleware short-circuits routes that need a configured
 // discovery service. Returns 503 (text/plain) when discovery is disabled
-// so all /partials/discovered/* and /api/discovered endpoints respond
-// uniformly without each handler duplicating the check.
+// so all /partials/discovered/* endpoints respond uniformly without each
+// handler duplicating the check.
 func requireDiscoveryMiddleware(enabled func() bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +105,7 @@ func sameOriginMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		if !sameOrigin(origin, r.Host) {
-			logctx.FromContext(r.Context()).Warn().
+			hlog.FromRequest(r).Warn().
 				Str("origin", origin).
 				Str("host", r.Host).
 				Str("path", r.URL.Path).

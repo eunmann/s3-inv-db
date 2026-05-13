@@ -26,12 +26,21 @@ func init() {
 // If debug is true, sets log level to Debug.
 // If human is true, uses a human-friendly console writer and enables pretty mode.
 func Init(debug, human bool) {
+	l := NewLogger(debug, human)
+	logger = &l
+	prettyMode.Store(human)
+}
+
+// NewLogger builds a configured zerolog.Logger for callers that prefer
+// passing a logger explicitly (e.g. main funcs, HTTP server). It also
+// sets zerolog's global level so package-level zerolog calls share the
+// same threshold.
+func NewLogger(debug, human bool) zerolog.Logger {
 	level := zerolog.InfoLevel
 	if debug {
 		level = zerolog.DebugLevel
 	}
 	zerolog.SetGlobalLevel(level)
-	prettyMode.Store(human)
 
 	var output zerolog.LevelWriter
 	if human {
@@ -43,9 +52,7 @@ func Init(debug, human bool) {
 	} else {
 		output = zerolog.LevelWriterAdapter{Writer: os.Stderr}
 	}
-
-	l := zerolog.New(output).With().Timestamp().Logger()
-	logger = &l
+	return zerolog.New(output).With().Timestamp().Logger()
 }
 
 // L returns the base logger.

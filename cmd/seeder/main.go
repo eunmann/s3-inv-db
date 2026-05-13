@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
+	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
 
 func main() {
@@ -32,7 +32,7 @@ func run() error {
 
 	flag.Parse()
 
-	logger := logctx.NewConfiguredLogger(*verbose, *prettyLogs)
+	logger := logging.NewLogger(*verbose, *prettyLogs)
 
 	cfg := seeder.Config{
 		Target:    seeder.Target(*target),

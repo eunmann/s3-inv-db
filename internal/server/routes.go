@@ -11,15 +11,17 @@ import (
 func (s *Server) setupRoutes() {
 	r := s.router
 
-	// Global middleware. RequestID must come first so the context logger
-	// can pick it up; the access log runs last so it sees the final
-	// status code (Recoverer-handled panics included). sameOriginMiddleware
+	// Global middleware. RequestID must come first so the request_id is
+	// in ctx before hlog reads it. hlog provides the request-scoped
+	// logger + access log; Recoverer goes BEFORE the access log so a
+	// recovered panic still results in an access-log line. sameOrigin
 	// blocks cross-origin mutating browser requests (CSRF).
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(contextLoggerMiddleware(s.config.Logger))
 	r.Use(middleware.Recoverer)
-	r.Use(accessLogMiddleware())
+	for _, mw := range hlogChain(s.config.Logger) {
+		r.Use(mw)
+	}
 	r.Use(sameOriginMiddleware)
 
 	// Liveness probe — independent of S3 / discovery / inventory state so

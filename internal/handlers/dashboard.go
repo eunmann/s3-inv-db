@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/logctx"
+	"github.com/rs/zerolog"
 )
 
 // DashboardData contains data for the dashboard page.
@@ -33,7 +33,7 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 		HasDiscovery: h.discovery.Enabled(),
 	}
 
-	logger := logctx.FromContext(r.Context())
+	logger := zerolog.Ctx(r.Context())
 	var infos []inventory.Info
 	if h.discovery.Enabled() {
 		views, err := h.discovery.List(r.Context())

@@ -11,7 +11,6 @@ import (
 	"sort"
 	"syscall"
 
-	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -22,6 +21,7 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/sysmem"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 // Run executes the CLI with the given arguments.
@@ -64,10 +64,13 @@ func runBuild(args []string) error {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	// Initialize logging with context-based logger
-	baseLogger := logctx.NewConfiguredLogger(*verbose, *prettyLogs)
-	logctx.SetDefaultLogger(baseLogger)
-	logging.Init(*verbose, *prettyLogs) // Keep legacy logging for existing code
+	// Initialize logging. NewLogger returns a configured zerolog.Logger;
+	// log.Logger sets the package-global default for any code that uses
+	// zerolog/log without a ctx; logging.Init keeps the legacy pkg/logging
+	// state machine in sync (operation tracking, pretty mode).
+	baseLogger := logging.NewLogger(*verbose, *prettyLogs)
+	log.Logger = baseLogger
+	logging.Init(*verbose, *prettyLogs)
 
 	if *outDir == "" {
 		return errors.New("--out is required")
@@ -85,9 +88,10 @@ func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudget
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Inject the logger into context for pipeline functions
-	ctx = logctx.WithLogger(ctx, baseLogger)
-	log := logctx.FromContext(ctx)
+	// Inject the logger into ctx for pipeline functions. zerolog's
+	// WithContext returns a new ctx; zerolog.Ctx(ctx) retrieves later.
+	ctx = baseLogger.WithContext(ctx)
+	logger := zerolog.Ctx(ctx)
 
 	// Determine memory budget
 	budget, err := determineMemoryBudget(memBudgetStr)
@@ -97,7 +101,7 @@ func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudget
 
 	// Log memory budget at startup
 	ramResult := sysmem.Total()
-	log.Info().
+	logger.Info().
 		Str("total_ram", humanfmt.BytesUint64(ramResult.TotalBytes)).
 		Str("mem_budget", humanfmt.BytesUint64(budget.Total())).
 		Str("mem_budget_source", string(budget.Source())).
@@ -123,7 +127,7 @@ func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudget
 	config.UseSegmentEncoding = segmentPrefixes
 
 	// Log concurrency settings
-	log.Info().
+	logger.Info().
 		Int("workers", config.S3DownloadConcurrency).
 		Int("max_depth", config.MaxDepth).
 		Msg("pipeline configuration")
@@ -134,7 +138,7 @@ func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudget
 	if err != nil {
 		// Check if this was a cancellation
 		if errors.Is(err, context.Canceled) {
-			log.Warn().Msg("build cancelled by user")
+			logger.Warn().Msg("build cancelled by user")
 			return fmt.Errorf("build cancelled: %w", err)
 		}
 		return fmt.Errorf("run pipeline: %w", err)
@@ -192,7 +196,7 @@ func runQuery(args []string) error {
 	}
 
 	logging.Init(*verbose, *prettyLogs)
-	log := logging.L()
+	logger := logging.L()
 
 	if *indexDir == "" {
 		return errors.New("--index is required")
@@ -201,7 +205,7 @@ func runQuery(args []string) error {
 		return errors.New("--prefix is required")
 	}
 
-	log.Debug().Str("index_dir", *indexDir).Str("prefix", *prefix).Msg("opening index")
+	logger.Debug().Str("index_dir", *indexDir).Str("prefix", *prefix).Msg("opening index")
 
 	idx, err := indexread.Open(*indexDir)
 	if err != nil {

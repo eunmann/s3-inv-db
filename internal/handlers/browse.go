@@ -6,9 +6,9 @@ import (
 	"net/http"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
+	"github.com/rs/zerolog"
 )
 
 // Type aliases re-exporting the domain browse types so templates and
@@ -86,7 +86,7 @@ func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.Render(w, "browse.html", data); err != nil {
-		logctx.FromContext(r.Context()).Error().Err(err).Msg("failed to render browse page")
+		zerolog.Ctx(r.Context()).Error().Err(err).Msg("failed to render browse page")
 		http.Error(w, "failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -105,7 +105,7 @@ func (h *Handlers) BrowseLevelPartial(w http.ResponseWriter, r *http.Request) {
 	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
 
 	ctx := r.Context()
-	logger := logctx.FromContext(ctx)
+	logger := zerolog.Ctx(ctx)
 	var level BrowseLevel
 	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
 		level = h.buildBrowseLevel(ctx, idx, inventoryID, prefix, sortBy, dir, page, pageSize)
@@ -191,7 +191,7 @@ func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, i
 func (h *Handlers) buildChildren(ctx context.Context, idx *indexread.Index, pos uint64, prefix string, computeCost bool) []BrowseChild {
 	positions, err := idx.DescendantsAtDepthFiltered(pos, 1, indexread.Filter{})
 	if err != nil {
-		logctx.FromContext(ctx).Warn().Err(err).Msg("descendants at depth 1")
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("descendants at depth 1")
 		return nil
 	}
 	hasTier := idx.HasTierData()

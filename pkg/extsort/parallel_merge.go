@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
+	"github.com/rs/zerolog"
 )
 
 // ParallelMergeConfig configures parallel merge operations.
@@ -129,7 +129,7 @@ func (m *ParallelMerger) MergeAll(ctx context.Context, inputPaths []string) (str
 		return inputPaths[0], nil
 	}
 
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 	startTime := time.Now()
 
 	currentPaths := inputPaths
@@ -286,7 +286,7 @@ func (m *ParallelMerger) mergeWorker(ctx context.Context, jobs <-chan mergeJob, 
 // executeMerge performs a single K-way merge of input files to output file.
 func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeResult {
 	startTime := time.Now()
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 
 	result := mergeResult{
 		outputPath: job.outputPath,

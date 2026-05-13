@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
+	"github.com/rs/zerolog"
 )
 
 // Discoverer is the subset of s3disco.Discoverer that DiscoveryService
@@ -140,7 +140,7 @@ func (s *DiscoveryService) Evict(ctx context.Context, src, id string) error {
 	}
 	if s.builder != nil {
 		if err := s.builder.Evict(src, id); err != nil {
-			logctx.FromContext(ctx).Warn().Err(err).Str("composite", composite).Msg("evict cache")
+			zerolog.Ctx(ctx).Warn().Err(err).Str("composite", composite).Msg("evict cache")
 		}
 	}
 	return nil

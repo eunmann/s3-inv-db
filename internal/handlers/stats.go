@@ -5,12 +5,12 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog"
 )
 
 // StatsResponse is the response for stats queries.
@@ -182,7 +182,7 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 		filter.MinBytes = v
 	}
 
-	logger := logctx.FromContext(r.Context())
+	logger := zerolog.Ctx(r.Context())
 	var descendants []DescendantInfo
 	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
 		pos, ok := idx.Lookup(prefix)

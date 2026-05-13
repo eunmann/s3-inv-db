@@ -9,9 +9,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/internal/server"
+	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
+	"github.com/rs/zerolog/log"
 )
 
 func main() {
@@ -25,15 +26,14 @@ func run() error {
 	addr := flag.String("addr", ":8080", "HTTP server address")
 	verbose := flag.Bool("verbose", false, "enable debug logging")
 	prettyLogs := flag.Bool("pretty-logs", false, "use human-friendly console output")
-	devMode := flag.Bool("dev", false, "development mode (reload templates on each request)")
 	priceTablePath := flag.String("price-table", "", "path to custom price table JSON (default: US East 1 prices)")
 	s3Source := flag.String("s3-source", envOr("S3INV_SOURCE", ""), "S3 URI to discover inventories under (e.g., s3://bucket/inventory-data/)")
 	cacheDir := flag.String("cache-dir", envOr("S3INV_CACHE_DIR", "/var/cache/s3inv"), "local directory for built indexes downloaded from S3")
 
 	flag.Parse()
 
-	logger := logctx.NewConfiguredLogger(*verbose, *prettyLogs)
-	logctx.SetDefaultLogger(logger)
+	logger := logging.NewLogger(*verbose, *prettyLogs)
+	log.Logger = logger // zerolog/log package-global for code paths without a ctx
 
 	// Load price table
 	var priceTable pricing.PriceTable
@@ -51,7 +51,6 @@ func run() error {
 	cfg := server.Config{
 		Addr:       *addr,
 		Logger:     logger,
-		DevMode:    *devMode,
 		PriceTable: priceTable,
 		S3Source:   *s3Source,
 		CacheDir:   *cacheDir,

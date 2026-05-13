@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/logctx"
+	"github.com/rs/zerolog"
 )
 
 // ListDiscoveredAPI lists inventories under the configured S3 source,
@@ -23,7 +23,7 @@ func (h *Handlers) ListDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 			WriteJSONError(w, http.StatusServiceUnavailable, "discovery not configured (start the server with --s3-source)")
 			return
 		}
-		logctx.FromContext(r.Context()).Error().Err(err).Msg("discover inventories")
+		zerolog.Ctx(r.Context()).Error().Err(err).Msg("discover inventories")
 		WriteJSONError(w, http.StatusBadGateway, "failed to discover inventories")
 		return
 	}

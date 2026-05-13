@@ -6,9 +6,9 @@ import (
 	"net/http"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog"
 )
 
 // The htmx-facing /partials/* routes mutate state via the inventory
@@ -55,7 +55,7 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	src := chi.URLParam(r, "src")
 	id := chi.URLParam(r, "id")
 
-	logger := logctx.FromContext(r.Context())
+	logger := zerolog.Ctx(r.Context())
 	disc, err := h.discovery.Find(r.Context(), src, id)
 	if err != nil {
 		logger.Error().Err(err).Str("src", src).Str("id", id).Msg("find discovered inventory")
@@ -110,7 +110,7 @@ func (h *Handlers) renderInventoryRow(w http.ResponseWriter, r *http.Request, id
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.RenderPartial(w, "inventory_row.html", info); err != nil {
-		logctx.FromContext(r.Context()).Error().Err(err).Msg("render inventory row")
+		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render inventory row")
 		http.Error(w, "failed to render row", http.StatusInternalServerError)
 	}
 }
@@ -118,7 +118,7 @@ func (h *Handlers) renderInventoryRow(w http.ResponseWriter, r *http.Request, id
 // renderDiscoveredRow re-fetches the discovery entry, merges in current
 // manager state, and renders the discovered_row.html partial.
 func (h *Handlers) renderDiscoveredRow(w http.ResponseWriter, r *http.Request, src, id string) {
-	logger := logctx.FromContext(r.Context())
+	logger := zerolog.Ctx(r.Context())
 	disc, err := h.discovery.Find(r.Context(), src, id)
 	if err != nil {
 		logger.Error().Err(err).Str("src", src).Str("id", id).Msg("find discovered inventory for row render")
@@ -142,7 +142,7 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.RenderPartial(w, "discovered_row.html", view); err != nil {
-		logctx.FromContext(r.Context()).Error().Err(err).Msg("render discovered row")
+		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render discovered row")
 		http.Error(w, "failed to render row", http.StatusInternalServerError)
 	}
 }

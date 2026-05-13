@@ -7,8 +7,8 @@ import (
 	"net/http"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog"
 )
 
 // RegisterInventoryRequest is the request body for registering a new inventory.
@@ -36,7 +36,7 @@ func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) 
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		logctx.FromContext(r.Context()).Debug().Err(err).Msg("invalid register body")
+		zerolog.Ctx(r.Context()).Debug().Err(err).Msg("invalid register body")
 		WriteJSONError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -59,7 +59,7 @@ func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) 
 			WriteJSONError(w, http.StatusConflict, "inventory already exists")
 			return
 		}
-		logctx.FromContext(r.Context()).Error().Err(err).Msg("failed to register inventory")
+		zerolog.Ctx(r.Context()).Error().Err(err).Msg("failed to register inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to register inventory")
 		return
 	}
@@ -98,7 +98,7 @@ func (h *Handlers) LoadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 			WriteJSONError(w, http.StatusConflict, err.Error())
 			return
 		}
-		logctx.FromContext(r.Context()).Error().Err(err).Str("id", id).Msg("failed to load inventory")
+		zerolog.Ctx(r.Context()).Error().Err(err).Str("id", id).Msg("failed to load inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to load inventory")
 		return
 	}
@@ -120,7 +120,7 @@ func (h *Handlers) UnloadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 			WriteJSONError(w, http.StatusConflict, err.Error())
 			return
 		}
-		logctx.FromContext(r.Context()).Error().Err(err).Str("id", id).Msg("failed to unload inventory")
+		zerolog.Ctx(r.Context()).Error().Err(err).Str("id", id).Msg("failed to unload inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to unload inventory")
 		return
 	}
@@ -138,7 +138,7 @@ func (h *Handlers) DeleteInventoryAPI(w http.ResponseWriter, r *http.Request) {
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
 			return
 		}
-		logctx.FromContext(r.Context()).Error().Err(err).Str("id", id).Msg("failed to delete inventory")
+		zerolog.Ctx(r.Context()).Error().Err(err).Str("id", id).Msg("failed to delete inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to delete inventory")
 		return
 	}
@@ -169,7 +169,7 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 	if data.HasDiscovery {
 		views, err := h.discovery.List(r.Context())
 		if err != nil {
-			logctx.FromContext(r.Context()).Error().Err(err).Msg("discover for inventories page")
+			zerolog.Ctx(r.Context()).Error().Err(err).Msg("discover for inventories page")
 			data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
 		}
 		data.Discovered = views
@@ -177,7 +177,7 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.Render(w, "inventories.html", data); err != nil {
-		logctx.FromContext(r.Context()).Error().Err(err).Msg("failed to render inventories page")
+		zerolog.Ctx(r.Context()).Error().Err(err).Msg("failed to render inventories page")
 		http.Error(w, "failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -196,7 +196,7 @@ func (h *Handlers) InventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.RenderPartial(w, "inventory_row.html", info); err != nil {
-		logctx.FromContext(r.Context()).Error().Err(err).Msg("failed to render inventory row")
+		zerolog.Ctx(r.Context()).Error().Err(err).Msg("failed to render inventory row")
 		http.Error(w, "failed to render partial", http.StatusInternalServerError)
 	}
 }
