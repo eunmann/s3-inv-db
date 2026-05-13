@@ -2,10 +2,14 @@
 package templates
 
 import (
+	"bytes"
 	"embed"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -110,7 +114,62 @@ func FuncMap() template.FuncMap {
 		"mul": func(a, b int) int {
 			return a * b
 		},
+		"hxVals":    hxValsAttr,
+		"browseURL": browseURL,
 	}
+}
+
+// hxValsAttr emits a full `hx-vals='…'` attribute with JSON-encoded
+// values. Each pair is key,value. Values that contain `"`, `\` or `'`
+// break the naïve `hx-vals='{"k":"{{.V}}"}'` pattern: html/template
+// HTML-escapes `"` to `&#34;` which the browser un-escapes back to a
+// raw `"` inside the JSON, corrupting the payload. JSON-marshaling here
+// produces the proper `\"` escape, and we additionally replace any `'`
+// with the HTML entity so the surrounding single quotes stay intact.
+func hxValsAttr(pairs ...any) (template.HTMLAttr, error) {
+	if len(pairs)%2 != 0 {
+		return "", errors.New("hxVals: expected key,value pairs")
+	}
+	m := make(map[string]any, len(pairs)/2)
+	for i := 0; i < len(pairs); i += 2 {
+		key, ok := pairs[i].(string)
+		if !ok {
+			return "", fmt.Errorf("hxVals: key at position %d is not a string", i)
+		}
+		m[key] = pairs[i+1]
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "", fmt.Errorf("hxVals: marshal: %w", err)
+	}
+	b = bytes.ReplaceAll(b, []byte("'"), []byte("&#39;"))
+	return template.HTMLAttr(`hx-vals='` + string(b) + `'`), nil
+}
+
+// Builds a percent-encoded /browse URL from key/value pairs. Required
+// because html/template only auto-encodes URL values inside a fixed set
+// of attributes (href, src, action, …) and `hx-push-url` is not one of
+// them, so a raw `{{.Prefix}}` interpolation lets `&`, `?`, `#`, or
+// spaces in a prefix break the URL.
+func browseURL(pairs ...any) (string, error) {
+	if len(pairs)%2 != 0 {
+		return "", errors.New("browseURL: expected key,value pairs")
+	}
+	u := url.URL{Path: "/browse"}
+	q := u.Query()
+	for i := 0; i < len(pairs); i += 2 {
+		key, ok := pairs[i].(string)
+		if !ok {
+			return "", fmt.Errorf("browseURL: key at position %d is not a string", i)
+		}
+		v := fmt.Sprint(pairs[i+1])
+		if v == "" {
+			continue
+		}
+		q.Set(key, v)
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
 func (r *Renderer) loadTemplates() error {

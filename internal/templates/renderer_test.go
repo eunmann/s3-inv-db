@@ -247,3 +247,66 @@ func TestRenderer_Partial(t *testing.T) {
 		t.Error("rendered partial doesn't contain inventory ID")
 	}
 }
+
+func TestHxValsAttr_QuotesInValueAreJSONEscaped(t *testing.T) {
+	// The whole point of hxVals: a value containing `"` must not break
+	// the JSON payload after html/template's attribute-context escaping.
+	attr, err := hxValsAttr("prefix", `a"b`)
+	if err != nil {
+		t.Fatalf("hxValsAttr: %v", err)
+	}
+	got := string(attr)
+	if !strings.Contains(got, `\"`) {
+		t.Errorf("attr %q does not contain JSON-escaped quote", got)
+	}
+	if !strings.HasPrefix(got, `hx-vals='`) || !strings.HasSuffix(got, `'`) {
+		t.Errorf("attr %q is not wrapped in single quotes", got)
+	}
+}
+
+func TestHxValsAttr_SingleQuoteInValueIsHTMLEscaped(t *testing.T) {
+	// A `'` in a value would otherwise terminate the single-quoted
+	// attribute. Must be replaced with the HTML entity.
+	attr, err := hxValsAttr("prefix", "it's")
+	if err != nil {
+		t.Fatalf("hxValsAttr: %v", err)
+	}
+	got := string(attr)
+	if !strings.Contains(got, "&#39;") {
+		t.Errorf("attr %q does not escape single quote", got)
+	}
+	// The outer single quotes of the attribute must remain.
+	if !strings.HasPrefix(got, `hx-vals='`) || !strings.HasSuffix(got, `'`) {
+		t.Errorf("attr %q broken outer single quotes", got)
+	}
+}
+
+func TestHxValsAttr_OddPairs(t *testing.T) {
+	if _, err := hxValsAttr("only-key"); err == nil {
+		t.Error("expected error on odd number of args")
+	}
+}
+
+func TestBrowseURL_EncodesSpecialChars(t *testing.T) {
+	got, err := browseURL("inventory_id", "inv-1", "prefix", "a&b c#d/")
+	if err != nil {
+		t.Fatalf("browseURL: %v", err)
+	}
+	// url.Values.Encode percent-encodes `&`, ` `, `#`, `/`. Verify each.
+	if !strings.Contains(got, "prefix=a%26b+c%23d%2F") {
+		t.Errorf("URL %q missing percent-encoded prefix", got)
+	}
+}
+
+func TestBrowseURL_SkipsEmpty(t *testing.T) {
+	got, err := browseURL("inventory_id", "inv-1", "prefix", "", "sort", "")
+	if err != nil {
+		t.Fatalf("browseURL: %v", err)
+	}
+	if strings.Contains(got, "prefix=") || strings.Contains(got, "sort=") {
+		t.Errorf("URL %q should not include empty params", got)
+	}
+	if !strings.Contains(got, "inventory_id=inv-1") {
+		t.Errorf("URL %q missing inventory_id", got)
+	}
+}
