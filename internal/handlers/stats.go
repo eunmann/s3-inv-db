@@ -1,12 +1,10 @@
 package handlers
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 
-	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
@@ -79,7 +77,8 @@ func (h *Handlers) GetStatsAPI(w http.ResponseWriter, r *http.Request) {
 		return berr
 	})
 	if err != nil {
-		writeStatsManagerError(w, err)
+		status, msg := managerErrorStatus(err)
+		WriteJSONError(w, status, msg)
 		return
 	}
 
@@ -106,30 +105,13 @@ func (h *Handlers) GetInventoryStatsAPI(w http.ResponseWriter, r *http.Request) 
 		return berr
 	})
 	if err != nil {
-		writeStatsManagerError(w, err)
+		status, msg := managerErrorStatus(err)
+		WriteJSONError(w, status, msg)
 		return
 	}
 
 	WriteJSON(w, http.StatusOK, resp)
 }
-
-// writeStatsManagerError maps Manager + buildStatsResponse errors to HTTP
-// status codes. ErrNotFound and the "prefix not found" sentinel both 404;
-// only ErrNotLoaded becomes 409.
-func writeStatsManagerError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, inventory.ErrNotFound):
-		WriteJSONError(w, http.StatusNotFound, "inventory not found")
-	case errors.Is(err, inventory.ErrNotLoaded):
-		WriteJSONError(w, http.StatusConflict, "inventory not loaded")
-	case errors.Is(err, errPrefixNotFound):
-		WriteJSONError(w, http.StatusNotFound, "prefix not found")
-	default:
-		WriteJSONError(w, http.StatusInternalServerError, "failed to get stats")
-	}
-}
-
-var errPrefixNotFound = errors.New("prefix not found")
 
 // GetDescendantsAPI returns descendants at a specific depth.
 func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
@@ -205,7 +187,8 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		writeStatsManagerError(w, err)
+		status, msg := managerErrorStatus(err)
+		WriteJSONError(w, status, msg)
 		return
 	}
 

@@ -20,7 +20,7 @@ import (
 func (h *Handlers) LoadInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := h.manager.Load(context.WithoutCancel(r.Context()), id); err != nil {
-		writePartialError(r.Context(), w, err, "load inventory")
+		respondManagerErrorHTML(w, r, err, "load inventory")
 		return
 	}
 	h.renderInventoryRow(w, r, id)
@@ -30,7 +30,7 @@ func (h *Handlers) LoadInventoryRowPartial(w http.ResponseWriter, r *http.Reques
 func (h *Handlers) UnloadInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := h.manager.Unload(id); err != nil {
-		writePartialError(r.Context(), w, err, "unload inventory")
+		respondManagerErrorHTML(w, r, err, "unload inventory")
 		return
 	}
 	h.renderInventoryRow(w, r, id)
@@ -41,7 +41,7 @@ func (h *Handlers) UnloadInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 func (h *Handlers) DeleteInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := h.manager.Remove(id); err != nil && !errors.Is(err, inventory.ErrNotFound) {
-		writePartialError(r.Context(), w, err, "delete inventory")
+		respondManagerErrorHTML(w, r, err, "delete inventory")
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -82,7 +82,7 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 		return h.loader.Build(ctx, src, id, manifestURI)
 	})
 	if err != nil {
-		writePartialError(r.Context(), w, err, "load discovered inventory")
+		respondManagerErrorHTML(w, r, err, "load discovered inventory")
 		return
 	}
 	// Reuse the disc we already fetched at the top of this handler so a
@@ -97,7 +97,7 @@ func (h *Handlers) UnloadDiscoveredRowPartial(w http.ResponseWriter, r *http.Req
 	id := chi.URLParam(r, "id")
 	composite := src + "/" + id
 	if err := h.manager.Unload(composite); err != nil {
-		writePartialError(r.Context(), w, err, "unload inventory")
+		respondManagerErrorHTML(w, r, err, "unload inventory")
 		return
 	}
 	h.renderDiscoveredRow(w, r, src, id)
@@ -113,11 +113,11 @@ func (h *Handlers) EvictDiscoveredRowPartial(w http.ResponseWriter, r *http.Requ
 	if err := h.manager.Unload(composite); err != nil &&
 		!errors.Is(err, inventory.ErrInvalidState) &&
 		!errors.Is(err, inventory.ErrNotFound) {
-		writePartialError(r.Context(), w, err, "unload inventory")
+		respondManagerErrorHTML(w, r, err, "unload inventory")
 		return
 	}
 	if err := h.manager.Remove(composite); err != nil && !errors.Is(err, inventory.ErrNotFound) {
-		writePartialError(r.Context(), w, err, "remove inventory")
+		respondManagerErrorHTML(w, r, err, "remove inventory")
 		return
 	}
 	if h.loader != nil {
@@ -177,20 +177,5 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 	if err := h.renderer.RenderPartial(w, "discovered_row.html", view); err != nil {
 		logctx.FromContext(r.Context()).Error().Err(err).Msg("render discovered row")
 		http.Error(w, "failed to render row", http.StatusInternalServerError)
-	}
-}
-
-// writePartialError maps manager/discovery errors to text/plain responses
-// that htmx can surface via hx-on:: handlers or just display as the swap
-// payload (status code drives htmx's response handlers).
-func writePartialError(ctx context.Context, w http.ResponseWriter, err error, op string) {
-	switch {
-	case errors.Is(err, inventory.ErrNotFound):
-		http.Error(w, "inventory not found", http.StatusNotFound)
-	case errors.Is(err, inventory.ErrInvalidState):
-		http.Error(w, err.Error(), http.StatusConflict)
-	default:
-		logctx.FromContext(ctx).Error().Err(err).Str("op", op).Msg("partial op failed")
-		http.Error(w, "operation failed", http.StatusInternalServerError)
 	}
 }

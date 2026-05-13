@@ -26,66 +26,73 @@ const (
 	maxPageSize     = 500
 )
 
+// Browse* types below are render-only structures consumed by the
+// browse_level.html template. They are not JSON-serialized — the browse
+// view is HTML-only — so no `json:"…"` tags.
+
 // BrowseCrumb is one segment of the breadcrumb trail.
 type BrowseCrumb struct {
-	Label  string `json:"label"`
-	Prefix string `json:"prefix"`
+	Label  string
+	Prefix string
 }
 
 // BrowseChild is one immediate-child prefix shown in the explorer.
 type BrowseChild struct {
-	Segment                 string `json:"segment"`
-	Prefix                  string `json:"prefix"`
-	ObjectCount             uint64 `json:"object_count"`
-	ObjectCountH            string `json:"object_count_human"`
-	TotalBytes              uint64 `json:"total_bytes"`
-	TotalBytesH             string `json:"total_bytes_human"`
-	MonthlyCostMicrodollars uint64 `json:"monthly_cost_microdollars,omitempty"`
-	MonthlyCostFormatted    string `json:"monthly_cost_formatted,omitempty"`
-	HasChildren             bool   `json:"has_children"`
+	Segment                 string
+	Prefix                  string
+	ObjectCount             uint64
+	ObjectCountH            string
+	TotalBytes              uint64
+	TotalBytesH             string
+	MonthlyCostMicrodollars uint64
+	MonthlyCostFormatted    string
+	HasChildren             bool
 }
 
 // BrowseSortLink carries the {sort, dir, indicator} bundle a column
 // header click should send and display.
 type BrowseSortLink struct {
-	Sort      string `json:"sort"`
-	Dir       string `json:"dir"`
-	Indicator string `json:"indicator"`
+	Sort      string
+	Dir       string
+	Indicator string
 }
 
 // BrowseLevel is the data the browse_level.html partial renders.
 type BrowseLevel struct {
-	InventoryID   string                    `json:"inventory_id"`
-	Prefix        string                    `json:"prefix"`
-	Breadcrumbs   []BrowseCrumb             `json:"breadcrumbs"`
-	ObjectCount   uint64                    `json:"object_count"`
-	ObjectCountH  string                    `json:"object_count_human"`
-	TotalBytes    uint64                    `json:"total_bytes"`
-	TotalBytesH   string                    `json:"total_bytes_human"`
-	TierBreakdown []TierStats               `json:"tier_breakdown,omitempty"`
-	CostEstimate  *CostEstimate             `json:"cost_estimate,omitempty"`
-	HasTierData   bool                      `json:"has_tier_data"`
-	Children      []BrowseChild             `json:"children"`
-	TotalChildren int                       `json:"total_children"`
-	Sort          string                    `json:"sort"`
-	Dir           string                    `json:"dir"`
-	SortLinks     map[string]BrowseSortLink `json:"sort_links"`
-	Pagination    BrowsePagination          `json:"pagination"`
-	NotFound      bool                      `json:"not_found,omitempty"`
+	InventoryID   string
+	Prefix        string
+	Breadcrumbs   []BrowseCrumb
+	ObjectCount   uint64
+	ObjectCountH  string
+	TotalBytes    uint64
+	TotalBytesH   string
+	TierBreakdown []TierStats
+	CostEstimate  *CostEstimate
+	HasTierData   bool
+	Children      []BrowseChild
+	TotalChildren int
+	Sort          string
+	Dir           string
+	SortLinks     map[string]BrowseSortLink
+	Pagination    BrowsePagination
+	NotFound      bool
 }
 
 // BrowsePagination describes the slice of children rendered for one page.
 type BrowsePagination struct {
-	Page     int `json:"page"`
-	PageSize int `json:"page_size"`
-	Pages    int `json:"pages"`
-	FirstRow int `json:"first_row"`
-	LastRow  int `json:"last_row"`
-	PrevPage int `json:"prev_page"`
-	NextPage int `json:"next_page"`
+	Page     int
+	PageSize int
+	Pages    int
+	FirstRow int
+	LastRow  int
+	PrevPage int
+	NextPage int
 }
 
-// BrowsePage renders the explorer page shell.
+// BrowsePage renders the explorer page shell, including the initial
+// browse level inline when the URL carries inventory_id + prefix. That
+// makes the page server-renderable (a fresh GET shows the full state
+// without a second AJAX round-trip).
 func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 	inventories := h.manager.List()
 	loaded := make([]inventory.Info, 0, len(inventories))
@@ -94,10 +101,34 @@ func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 			loaded = append(loaded, inventories[i])
 		}
 	}
+
+	q := r.URL.Query()
+	inventoryID := q.Get("inventory_id")
+	prefix := q.Get("prefix")
+	sortBy, dir := normalizeSort(q.Get("sort"), q.Get("dir"))
+	page, pageSize := normalizePage(q.Get("page"), q.Get("page_size"))
+
 	data := map[string]any{
 		"Title":       "Browse",
 		"Inventories": loaded,
+		"InventoryID": inventoryID,
+		"Prefix":      prefix,
 	}
+
+	if inventoryID != "" {
+		ctx := r.Context()
+		var level BrowseLevel
+		err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
+			level = h.buildBrowseLevel(ctx, idx, inventoryID, prefix, sortBy, dir, page, pageSize)
+			return nil
+		})
+		// Either render or — for ErrNotLoaded/ErrNotFound — fall through
+		// to the empty placeholder; the user can pick a different inventory.
+		if err == nil {
+			data["InitialLevel"] = level
+		}
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.Render(w, "browse.html", data); err != nil {
 		logctx.FromContext(r.Context()).Error().Err(err).Msg("failed to render browse page")

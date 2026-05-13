@@ -17,8 +17,9 @@
                         <label for="inventory_id" class="block text-sm font-medium text-gray-700">Inventory</label>
                         <select id="inventory_id" name="inventory_id" required class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md border">
                             <option value="">Select a loaded inventory…</option>
+                            {{$selected := .InventoryID}}
                             {{range .Inventories}}
-                            <option value="{{.ID}}">{{.Name}} ({{formatCount .NodeCount}} prefixes)</option>
+                            <option value="{{.ID}}"{{if eq .ID $selected}} selected{{end}}>{{.Name}} ({{formatCount .NodeCount}} prefixes)</option>
                             {{end}}
                         </select>
                         {{if not .Inventories}}
@@ -28,7 +29,7 @@
                     <div class="sm:col-span-2">
                         <label for="prefix" class="block text-sm font-medium text-gray-700">Prefix</label>
                         <div class="mt-1 flex rounded-md shadow-sm">
-                            <input type="text" id="prefix" name="prefix" value="" class="flex-1 block w-full border border-gray-300 rounded-l-md py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="empty = root, e.g. data/2024/">
+                            <input type="text" id="prefix" name="prefix" value="{{.Prefix}}" class="flex-1 block w-full border border-gray-300 rounded-l-md py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="empty = root, e.g. data/2024/">
                             <button type="submit" class="inline-flex items-center px-4 py-2 border border-l-0 border-gray-300 rounded-r-md bg-gray-50 text-sm font-medium text-gray-700 hover:bg-gray-100">
                                 Go
                             </button>
@@ -40,9 +41,13 @@
     </div>
 
     <div id="browse-target">
+        {{if .InitialLevel}}
+            {{template "templates/partials/browse_level.html" .InitialLevel}}
+        {{else}}
         <div class="text-center py-12 text-sm text-gray-500">
             Pick an inventory to start browsing at the root, or type a prefix above and press <kbd class="border rounded px-1 text-xs">Enter</kbd>.
         </div>
+        {{end}}
     </div>
 
     <div id="browse-loading" class="htmx-indicator text-center py-4">
@@ -52,23 +57,4 @@
         </svg>
     </div>
 </div>
-
-<script>
-// Hydrate the form from URL params on load and trigger the initial fetch
-// via htmx.ajax with the full URL so sort/dir/page survive a refresh.
-window.addEventListener('DOMContentLoaded', () => {
-    const params = new URLSearchParams(window.location.search);
-    const invSel = document.getElementById('inventory_id');
-    const prefIn = document.getElementById('prefix');
-    if (params.has('inventory_id')) {
-        invSel.value = params.get('inventory_id');
-    }
-    if (params.has('prefix')) {
-        prefIn.value = params.get('prefix');
-    }
-    if (invSel.value) {
-        htmx.ajax('GET', '/partials/browse-level?' + params.toString(), '#browse-target');
-    }
-});
-</script>
 {{end}}

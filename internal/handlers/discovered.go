@@ -112,7 +112,7 @@ func (h *Handlers) UnloadDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	composite := src + "/" + id
 	if err := h.manager.Unload(composite); err != nil {
-		writeManagerError(r.Context(), w, err, "unload")
+		respondManagerError(w, r, err, "unload")
 		return
 	}
 	info, _ := h.manager.Get(composite)
@@ -132,11 +132,11 @@ func (h *Handlers) EvictDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 	if err := h.manager.Unload(composite); err != nil &&
 		!errors.Is(err, inventory.ErrInvalidState) &&
 		!errors.Is(err, inventory.ErrNotFound) {
-		writeManagerError(r.Context(), w, err, "unload")
+		respondManagerError(w, r, err, "unload")
 		return
 	}
 	if err := h.manager.Remove(composite); err != nil && !errors.Is(err, inventory.ErrNotFound) {
-		writeManagerError(r.Context(), w, err, "remove")
+		respondManagerError(w, r, err, "remove")
 		return
 	}
 	if h.loader != nil {
@@ -170,16 +170,4 @@ func (h *Handlers) discoverAndMerge(ctx context.Context) ([]DiscoveredView, erro
 		views = append(views, v)
 	}
 	return views, nil
-}
-
-func writeManagerError(ctx context.Context, w http.ResponseWriter, err error, op string) {
-	switch {
-	case errors.Is(err, inventory.ErrNotFound):
-		WriteJSONError(w, http.StatusNotFound, "inventory not found")
-	case errors.Is(err, inventory.ErrInvalidState):
-		WriteJSONError(w, http.StatusConflict, err.Error())
-	default:
-		logctx.FromContext(ctx).Error().Err(err).Str("op", op).Msg("manager error")
-		WriteJSONError(w, http.StatusInternalServerError, "operation failed")
-	}
 }
