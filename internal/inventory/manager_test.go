@@ -3,6 +3,8 @@ package inventory
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -145,5 +147,78 @@ func TestManagerGetIndexNotFound(t *testing.T) {
 	_, err := m.GetIndex("nonexistent")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("GetIndex error = %v, want %v", err, ErrNotFound)
+	}
+}
+
+// TestManagerConcurrent_RegisterListRemove stress-tests concurrent
+// access to the Manager. With -race it asserts there is no data race
+// between Register, List, Get, GetIndex, Unload, and Remove. Load
+// itself isn't exercised here because it requires a real index on
+// disk — see internal/handlers integration tests for that.
+func TestManagerConcurrent_RegisterListRemove(t *testing.T) {
+	m := NewManager()
+	defer m.Close()
+
+	const workers = 16
+	const ops = 100
+
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for w := 0; w < workers; w++ {
+		go func(workerID int) {
+			defer wg.Done()
+			for i := 0; i < ops; i++ {
+				id := fmt.Sprintf("w%d-i%d", workerID, i)
+				_ = m.Register(id, "name", "/path")
+				_, _ = m.Get(id)
+				_ = m.List()
+				_, _ = m.GetIndex(id)
+				_ = m.Unload(id)
+				_ = m.Remove(id)
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	if len(m.List()) != 0 {
+		t.Errorf("after stress, List length = %d, want 0", len(m.List()))
+	}
+}
+
+// TestManagerConcurrent_LoadRemoveRace targets the specific window in
+// Manager.Load where the lock is released while indexread.Open runs.
+// A racing Remove during that window must not corrupt state and must
+// leave the loaded index closed.
+func TestManagerConcurrent_LoadRemoveRace(t *testing.T) {
+	m := NewManager()
+	defer m.Close()
+
+	// Use a bogus path so Open fails quickly — we're testing the
+	// state transitions, not a real index load.
+	const id = "racy"
+	for i := 0; i < 50; i++ {
+		if err := m.Register(id, "n", "/no/such/path"); err != nil {
+			t.Fatalf("register: %v", err)
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = m.Load(context.Background(), id)
+		}()
+		go func() {
+			defer wg.Done()
+			_ = m.Remove(id)
+		}()
+		wg.Wait()
+
+		// Cleanup: whichever order ran, the inventory should either be
+		// gone (Remove won) or in StateError (Load won and Open failed).
+		info, ok := m.Get(id)
+		if ok && info.State != StateError && info.State != StateParsing {
+			t.Fatalf("unexpected post-race state: %q", info.State)
+		}
+		_ = m.Remove(id)
 	}
 }
