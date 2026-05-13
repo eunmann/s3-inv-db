@@ -11,9 +11,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Type aliases re-exporting the domain browse types so templates and
-// existing handler code can continue to refer to handlers.BrowseLevel
-// while the underlying values live in the inventory package.
 type (
 	BrowseCrumb      = inventory.BrowseCrumb
 	BrowseChild      = inventory.BrowseChild
@@ -21,9 +18,8 @@ type (
 	BrowsePagination = inventory.BrowsePagination
 )
 
-// BrowseLevel is the data the browse_level.html partial renders.
-// It still lives in the HTTP layer because it composes TierStats and
-// CostEstimate (JSON-API types), which the domain shouldn't know about.
+// BrowseLevel is the data the browse_level.html partial renders. Lives
+// in the HTTP layer because it composes TierStats and CostEstimate.
 type BrowseLevel struct {
 	InventoryID   string
 	Prefix        string
@@ -44,16 +40,8 @@ type BrowseLevel struct {
 	NotFound      bool
 }
 
-// BrowsePage serves both the full Browse page and the inner level
-// partial, content-negotiated via the HX-Request header. A plain GET
-// (browser nav, full reload, back/forward restore) returns the whole
-// page with the level inlined; an htmx GET returns just the level
-// partial that swaps into #browse-target.
-//
-// Single URL means htmx's natural request URL is the page URL, so
-// hx-push-url="true" pushes the right thing without server-side
-// HX-Push-Url headers, and a full reload of the pushed URL renders
-// the full page (not a stray partial).
+// BrowsePage serves the full page and the inner level partial at the
+// same URL, dispatched via wantsHTMXPartial.
 func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	inventoryID := q.Get("inventory_id")
@@ -61,21 +49,13 @@ func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 	sortBy, dir := inventory.NormalizeSort(q.Get("sort"), q.Get("dir"))
 	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
 
-	// HX-History-Restore-Request is sent when htmx is restoring a
-	// cached page on back/forward navigation; in that case we want the
-	// full layout, not a bare partial.
-	htmxPartial := r.Header.Get("HX-Request") == "true" &&
-		r.Header.Get("HX-History-Restore-Request") != "true"
-
-	if htmxPartial {
+	if wantsHTMXPartial(r) {
 		h.renderBrowseLevelPartial(w, r, inventoryID, prefix, sortBy, dir, page, pageSize)
 		return
 	}
 	h.renderBrowsePage(w, r, inventoryID, prefix, sortBy, dir, page, pageSize)
 }
 
-// renderBrowsePage emits the full page with the level inlined for
-// non-htmx requests (plain navigation, reload, history restore).
 func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request,
 	inventoryID, prefix, sortBy, dir string, page, pageSize int,
 ) {
@@ -112,9 +92,6 @@ func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request,
 	}
 }
 
-// renderBrowseLevelPartial emits just the level partial for htmx
-// requests. An empty inventoryID is rejected with 400 — the partial
-// path has nothing to render without it.
 func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Request,
 	inventoryID, prefix, sortBy, dir string, page, pageSize int,
 ) {

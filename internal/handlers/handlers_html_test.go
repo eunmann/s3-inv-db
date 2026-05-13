@@ -427,6 +427,43 @@ func TestBrowsePage_FullPageWithoutHXRequest(t *testing.T) {
 	}
 }
 
+// TestBrowsePage_BoostedNavReturnsFullPage: hx-boost on <body> makes
+// nav clicks send HX-Request: true; those are still page navigations
+// and must get the full layout, not the partial branch's 400.
+func TestBrowsePage_BoostedNavReturnsFullPage(t *testing.T) {
+	f := newTestFixture(t)
+	req := httptest.NewRequest(http.MethodGet, "/browse", http.NoBody)
+	req.Header.Set("HX-Request", "true")
+	req.Header.Set("HX-Boosted", "true")
+	w := httptest.NewRecorder()
+
+	f.h.BrowsePage(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("boosted /browse without params: status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if !strings.Contains(w.Body.String(), "<title>") {
+		t.Error("boosted /browse: response missing <title>, looks like a partial swap was returned")
+	}
+}
+
+// TestBrowsePage_HistoryRestoreReturnsFullPage: HX-History-Restore-Request
+// from htmx back/forward must get the full layout, not a bare partial.
+func TestBrowsePage_HistoryRestoreReturnsFullPage(t *testing.T) {
+	f := newTestFixture(t)
+	req := httptest.NewRequest(http.MethodGet, "/browse", http.NoBody)
+	req.Header.Set("HX-Request", "true")
+	req.Header.Set("HX-History-Restore-Request", "true")
+	w := httptest.NewRecorder()
+
+	f.h.BrowsePage(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("history-restore /browse: status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if !strings.Contains(w.Body.String(), "<title>") {
+		t.Error("history-restore /browse: response missing <title>")
+	}
+}
+
 // State Badge Color Tests
 
 func TestStateBadgeColors(t *testing.T) {

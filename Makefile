@@ -21,6 +21,7 @@ CSS_INPUT  := internal/templates/styles/input.css
 CSS_OUTPUT := internal/templates/styles/tailwind.css
 CSS_CONFIG := tailwind.config.js
 TEMPLATES  := $(shell find internal/templates/templates -name '*.html' 2>/dev/null)
+HELPERS    := $(shell find internal/templates -maxdepth 1 -name '*.go' 2>/dev/null)
 
 all: css build server
 
@@ -29,7 +30,7 @@ all: css build server
 # (e.g. infra/Dockerfile) don't need to fetch the CLI.
 css: $(CSS_OUTPUT)
 
-$(CSS_OUTPUT): $(CSS_INPUT) $(CSS_CONFIG) $(TEMPLATES) | $(TAILWIND_BIN)
+$(CSS_OUTPUT): $(CSS_INPUT) $(CSS_CONFIG) $(TEMPLATES) $(HELPERS) | $(TAILWIND_BIN)
 	$(TAILWIND_BIN) -c $(CSS_CONFIG) -i $(CSS_INPUT) -o $(CSS_OUTPUT) --minify
 
 $(TAILWIND_BIN):

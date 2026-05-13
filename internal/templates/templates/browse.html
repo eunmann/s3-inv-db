@@ -61,11 +61,10 @@
 </div>
 
 <script>
-// After every htmx swap into #browse-target (clicking a child, a
-// breadcrumb, a sort header, the pager), re-sync the prefix input from
-// the URL so users can edit-from-current-position. The URL is the
-// single source of truth — no server-rendered string ends up in a JS
-// literal here, which avoids the html/template double-escape trap.
+// Keep the prefix input in sync with the URL after every htmx swap so
+// users can edit from their current position. Reading from
+// window.location avoids server-rendered JS literals (and the
+// double-escape bug they cause).
 document.body.addEventListener('htmx:afterSettle', function (event) {
     if (!event.target || event.target.id !== 'browse-target') return;
     var el = document.getElementById('prefix');
