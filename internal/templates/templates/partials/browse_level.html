@@ -190,9 +190,12 @@
 
 <script>
 // Keep the prefix input in sync with whichever level is currently shown,
-// so users can edit-from-here.
+// so users can edit-from-here. {{.Prefix}} inside a <script> tag is
+// emitted as a properly-quoted JS string literal by html/template's
+// JS-context escaping — no manual `printf "%q"` (that double-quotes,
+// turning "" into the literal 2-char string `""`).
 (function () {
     var el = document.getElementById('prefix');
-    if (el) el.value = {{.Prefix | printf "%q"}};
+    if (el) el.value = {{.Prefix}};
 })();
 </script>
