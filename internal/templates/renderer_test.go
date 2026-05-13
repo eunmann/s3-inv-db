@@ -2,6 +2,8 @@ package templates
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -93,6 +95,66 @@ func TestRenderer_PageNotFound(t *testing.T) {
 	err = renderer.Render(&buf, "nonexistent.html", nil)
 	if err == nil {
 		t.Error("expected error for nonexistent template")
+	}
+}
+
+// TestRenderer_DevModeReloadsFromDisk verifies that devMode picks up
+// edits to templates between renders. Without this, devMode silently
+// served stale embedded content if the disk path resolved wrong.
+func TestRenderer_DevModeReloadsFromDisk(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "templates", "partials"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	mustWrite := func(path, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, path), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	mustWrite("templates/layout.html",
+		`{{define "layout"}}<html><body>{{template "content" .}}</body></html>{{end}}`)
+	mustWrite("templates/page.html",
+		`{{template "layout" .}}{{define "content"}}<p>first</p>{{end}}`)
+	mustWrite("templates/partials/snippet.html",
+		`<span>partial-first</span>`)
+
+	renderer, err := NewWithRootDir(true, root)
+	if err != nil {
+		t.Fatalf("NewWithRootDir: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := renderer.Render(&buf, "page.html", map[string]any{"Title": "T"}); err != nil {
+		t.Fatalf("render page (initial): %v", err)
+	}
+	if !strings.Contains(buf.String(), "first") {
+		t.Fatalf("expected initial render to contain 'first', got: %s", buf.String())
+	}
+
+	// Edit the page template on disk; devMode should pick it up on the
+	// next Render call.
+	mustWrite("templates/page.html",
+		`{{template "layout" .}}{{define "content"}}<p>second</p>{{end}}`)
+	mustWrite("templates/partials/snippet.html",
+		`<span>partial-second</span>`)
+
+	buf.Reset()
+	if err := renderer.Render(&buf, "page.html", map[string]any{"Title": "T"}); err != nil {
+		t.Fatalf("render page (after edit): %v", err)
+	}
+	if !strings.Contains(buf.String(), "second") {
+		t.Errorf("devMode did not pick up edited page; got: %s", buf.String())
+	}
+
+	buf.Reset()
+	if err := renderer.RenderPartial(&buf, "snippet.html", nil); err != nil {
+		t.Fatalf("render partial: %v", err)
+	}
+	if !strings.Contains(buf.String(), "partial-second") {
+		t.Errorf("devMode did not pick up edited partial; got: %s", buf.String())
 	}
 }
 

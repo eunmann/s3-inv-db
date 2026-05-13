@@ -27,11 +27,19 @@ type Renderer struct {
 }
 
 // New creates a new template renderer.
-// If devMode is true, templates are reloaded from disk on each render for development.
+// If devMode is true, templates are reloaded from disk on each render for
+// development. The default rootDir is "internal/templates" relative to the
+// process working directory; use NewWithRootDir to override.
 func New(devMode bool) (*Renderer, error) {
+	return NewWithRootDir(devMode, "internal/templates")
+}
+
+// NewWithRootDir is like New but lets the caller pick the on-disk rootDir
+// used when devMode is true. Tests use this to point at a temp directory.
+func NewWithRootDir(devMode bool, rootDir string) (*Renderer, error) {
 	r := &Renderer{
 		devMode: devMode,
-		rootDir: "internal/templates",
+		rootDir: rootDir,
 		pages:   make(map[string]string),
 		funcMap: FuncMap(),
 	}
