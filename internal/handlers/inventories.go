@@ -22,11 +22,20 @@ func (h *Handlers) ListInventoriesAPI(w http.ResponseWriter, _ *http.Request) {
 	WriteJSON(w, http.StatusOK, inventories)
 }
 
+// maxRegisterBodyBytes caps the registration request body. Three short
+// strings (id, name, path) easily fit in 4 KiB; anything bigger is a
+// client mistake or an attempted resource exhaustion.
+const maxRegisterBodyBytes = 4 * 1024
+
 // RegisterInventoryAPI registers a new inventory.
 func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRegisterBodyBytes)
 	var req RegisterInventoryRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteJSONError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		h.logger.Debug().Err(err).Msg("invalid register body")
+		WriteJSONError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 
@@ -84,7 +93,7 @@ func (h *Handlers) LoadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.logger.Error().Err(err).Str("id", id).Msg("failed to load inventory")
-		WriteJSONError(w, http.StatusInternalServerError, "failed to load inventory: "+err.Error())
+		WriteJSONError(w, http.StatusInternalServerError, "failed to load inventory")
 		return
 	}
 
@@ -145,7 +154,7 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 		views, err := h.discoverAndMerge(r.Context())
 		if err != nil {
 			h.logger.Error().Err(err).Msg("discover for inventories page")
-			data["DiscoveryError"] = err.Error()
+			data["DiscoveryError"] = "Failed to list discovered inventories. See server logs for details."
 		}
 		data["Discovered"] = views
 	} else {

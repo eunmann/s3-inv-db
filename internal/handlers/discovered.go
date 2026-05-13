@@ -35,7 +35,7 @@ func (h *Handlers) ListDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 	views, err := h.discoverAndMerge(r.Context())
 	if err != nil {
 		h.logger.Error().Err(err).Msg("discover inventories")
-		WriteJSONError(w, http.StatusBadGateway, "discover inventories: "+err.Error())
+		WriteJSONError(w, http.StatusBadGateway, "failed to discover inventories")
 		return
 	}
 	WriteJSON(w, http.StatusOK, views)
@@ -58,7 +58,8 @@ func (h *Handlers) LoadDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 
 	disc, err := h.discoverer.Find(r.Context(), src, id)
 	if err != nil {
-		WriteJSONError(w, http.StatusBadGateway, "discover: "+err.Error())
+		h.logger.Error().Err(err).Str("src", src).Str("id", id).Msg("find discovered inventory")
+		WriteJSONError(w, http.StatusBadGateway, "failed to find inventory")
 		return
 	}
 	if disc.ManifestKey == "" {
@@ -72,7 +73,7 @@ func (h *Handlers) LoadDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 	// Idempotent register — ignore "already exists" so reloads work.
 	if err := h.manager.Register(composite, src+"/"+id, manifestURI); err != nil && !errors.Is(err, inventory.ErrAlreadyExists) {
 		h.logger.Error().Err(err).Msg("register discovered inventory")
-		WriteJSONError(w, http.StatusInternalServerError, "register: "+err.Error())
+		WriteJSONError(w, http.StatusInternalServerError, "failed to register inventory")
 		return
 	}
 
@@ -87,7 +88,7 @@ func (h *Handlers) LoadDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
 		default:
 			h.logger.Error().Err(err).Str("composite", composite).Msg("load discovered inventory")
-			WriteJSONError(w, http.StatusInternalServerError, "load: "+err.Error())
+			WriteJSONError(w, http.StatusInternalServerError, "failed to load inventory")
 		}
 		return
 	}
@@ -103,7 +104,7 @@ func (h *Handlers) UnloadDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	composite := src + "/" + id
 	if err := h.manager.Unload(composite); err != nil {
-		mapManagerError(w, err, "unload")
+		h.mapManagerError(w, err, "unload")
 		return
 	}
 	info, _ := h.manager.Get(composite)
@@ -123,11 +124,11 @@ func (h *Handlers) EvictDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 	if err := h.manager.Unload(composite); err != nil &&
 		!errors.Is(err, inventory.ErrInvalidState) &&
 		!errors.Is(err, inventory.ErrNotFound) {
-		mapManagerError(w, err, "unload")
+		h.mapManagerError(w, err, "unload")
 		return
 	}
 	if err := h.manager.Remove(composite); err != nil && !errors.Is(err, inventory.ErrNotFound) {
-		mapManagerError(w, err, "remove")
+		h.mapManagerError(w, err, "remove")
 		return
 	}
 	if h.loader != nil {
@@ -163,13 +164,14 @@ func (h *Handlers) discoverAndMerge(ctx context.Context) ([]DiscoveredView, erro
 	return views, nil
 }
 
-func mapManagerError(w http.ResponseWriter, err error, op string) {
+func (h *Handlers) mapManagerError(w http.ResponseWriter, err error, op string) {
 	switch {
 	case errors.Is(err, inventory.ErrNotFound):
 		WriteJSONError(w, http.StatusNotFound, "inventory not found")
 	case errors.Is(err, inventory.ErrInvalidState):
 		WriteJSONError(w, http.StatusConflict, err.Error())
 	default:
-		WriteJSONError(w, http.StatusInternalServerError, op+": "+err.Error())
+		h.logger.Error().Err(err).Str("op", op).Msg("manager error")
+		WriteJSONError(w, http.StatusInternalServerError, "operation failed")
 	}
 }
