@@ -446,23 +446,38 @@ func TestBrowsePage_BoostedNavReturnsFullPage(t *testing.T) {
 	}
 }
 
-// TestLayout_DisablesHTMXHistoryCache pins the layout's two history-cache
-// safeties: the htmx-config meta tag and hx-history="false" on body.
-// Both together guarantee back/forward goes through the server so form
-// state reflects the URL — outerHTML snapshots can't preserve user-
-// edited <input value> or <option selected>.
-func TestLayout_DisablesHTMXHistoryCache(t *testing.T) {
+// TestBrowsePage_FormIsPlainHTML pins the design choice: the inventory
+// form submits via full-page navigation, not htmx. The browser owns
+// back/forward history this way, which is the only reliable way to
+// keep <select> and <input> state in sync with the URL.
+func TestBrowsePage_FormIsPlainHTML(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/browse", http.NoBody)
 	w := httptest.NewRecorder()
-	f.h.Dashboard(w, req)
+	f.h.BrowsePage(w, req)
 
 	body := w.Body.String()
-	if !strings.Contains(body, `name="htmx-config"`) || !strings.Contains(body, `"historyCacheSize":0`) {
-		t.Error("layout missing <meta name=\"htmx-config\"> with historyCacheSize:0")
+	if !strings.Contains(body, `<form id="browse-form"`) {
+		t.Fatal("browse-form element missing")
 	}
-	if !strings.Contains(body, `hx-history="false"`) {
-		t.Error("layout body missing hx-history=\"false\"")
+	if !strings.Contains(body, `action="/browse"`) || !strings.Contains(body, `method="get"`) {
+		t.Error("browse-form must have action=\"/browse\" method=\"get\" for native browser navigation")
+	}
+	// Absence of form-level htmx is the design contract — otherwise
+	// the snapshot bug returns.
+	start := strings.Index(body, `<form id="browse-form"`)
+	if start < 0 {
+		t.Fatal("could not locate <form id=\"browse-form\">")
+	}
+	end := strings.Index(body[start:], ">")
+	if end < 0 {
+		t.Fatal("unterminated <form> tag")
+	}
+	formAttrs := body[start : start+end]
+	for _, hx := range []string{`hx-get`, `hx-post`, `hx-target`, `hx-push-url`} {
+		if strings.Contains(formAttrs, hx) {
+			t.Errorf("browse-form has %s — form must submit via plain HTML, not htmx", hx)
+		}
 	}
 }
 

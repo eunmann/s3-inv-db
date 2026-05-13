@@ -7,16 +7,14 @@
 
     <div class="bg-white dark:bg-gray-800 shadow sm:rounded-lg mb-6">
         <div class="px-4 py-5 sm:p-6">
-            <form id="browse-form" class="space-y-4"
-                  action="/browse" method="get"
-                  hx-get="/browse"
-                  hx-target="#browse-target"
-                  hx-push-url="true"
-                  hx-trigger="submit, change from:#inventory_id">
+            <!-- Plain HTML form — full nav so browser back/forward stays in sync with the URL. -->
+            <form id="browse-form" class="space-y-4" action="/browse" method="get">
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
                     <div>
                         <label for="inventory_id" class="block text-sm font-medium text-gray-700 dark:text-gray-200">Inventory</label>
-                        <select id="inventory_id" name="inventory_id" required class="mt-1 block w-full pl-3 pr-10 py-2 text-base bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
+                        <select id="inventory_id" name="inventory_id" required
+                                onchange="this.form.submit()"
+                                class="mt-1 block w-full pl-3 pr-10 py-2 text-base bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
                             <option value="">Select a loaded inventory…</option>
                             {{$selected := .InventoryID}}
                             {{range .Inventories}}
@@ -61,10 +59,8 @@
 </div>
 
 <script>
-// Keep the prefix input in sync with the URL after every htmx swap so
-// users can edit from their current position. Reading from
-// window.location avoids server-rendered JS literals (and the
-// double-escape bug they cause).
+// After in-page htmx swaps, the address bar updates but the prefix
+// input doesn't — sync it from the URL so the user can edit from here.
 document.body.addEventListener('htmx:afterSettle', function (event) {
     if (!event.target || event.target.id !== 'browse-target') return;
     var el = document.getElementById('prefix');
