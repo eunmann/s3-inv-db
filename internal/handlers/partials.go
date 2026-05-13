@@ -7,6 +7,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/logctx"
+	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -84,7 +85,10 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 		writePartialError(r.Context(), w, err, "load discovered inventory")
 		return
 	}
-	h.renderDiscoveredRow(w, r, src, id)
+	// Reuse the disc we already fetched at the top of this handler so a
+	// transient post-load S3 hiccup doesn't surface a 502 that hides the
+	// successful load.
+	h.renderDiscoveredRowFrom(w, r, disc)
 }
 
 // UnloadDiscoveredRowPartial unloads a discovered inventory and returns its row.
@@ -150,6 +154,14 @@ func (h *Handlers) renderDiscoveredRow(w http.ResponseWriter, r *http.Request, s
 		http.Error(w, "failed to render row", http.StatusBadGateway)
 		return
 	}
+	h.renderDiscoveredRowFrom(w, r, disc)
+}
+
+// renderDiscoveredRowFrom renders a discovered_row using a pre-fetched
+// disc value. Splitting this out lets callers that already have a
+// trusted disc (e.g. just before a successful load) skip the second
+// S3 round-trip and avoid surfacing transient post-load errors.
+func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Request, disc s3disco.Inventory) {
 	view := DiscoveredView{
 		Inventory:   disc,
 		CompositeID: disc.CompositeID(),
@@ -163,7 +175,7 @@ func (h *Handlers) renderDiscoveredRow(w http.ResponseWriter, r *http.Request, s
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.RenderPartial(w, "discovered_row.html", view); err != nil {
-		logger.Error().Err(err).Msg("render discovered row")
+		logctx.FromContext(r.Context()).Error().Err(err).Msg("render discovered row")
 		http.Error(w, "failed to render row", http.StatusInternalServerError)
 	}
 }
