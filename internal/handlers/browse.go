@@ -116,7 +116,11 @@ func (h *Handlers) BrowseLevelPartial(w http.ResponseWriter, r *http.Request) {
 	sortBy, dir := normalizeSort(q.Get("sort"), q.Get("dir"))
 	page, pageSize := normalizePage(q.Get("page"), q.Get("page_size"))
 
-	idx, err := h.manager.GetIndex(inventoryID)
+	var level BrowseLevel
+	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
+		level = h.buildBrowseLevel(idx, inventoryID, prefix, sortBy, dir, page, pageSize)
+		return nil
+	})
 	if err != nil {
 		switch {
 		case errors.Is(err, inventory.ErrNotFound):
@@ -129,8 +133,6 @@ func (h *Handlers) BrowseLevelPartial(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-
-	level := h.buildBrowseLevel(idx, inventoryID, prefix, sortBy, dir, page, pageSize)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.RenderPartial(w, "browse_level.html", level); err != nil {

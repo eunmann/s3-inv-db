@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
 
 func TestManagerRegister(t *testing.T) {
@@ -128,31 +130,31 @@ func TestManagerRemoveNotFound(t *testing.T) {
 	}
 }
 
-func TestManagerGetIndexNotLoaded(t *testing.T) {
+func TestManagerWithIndexNotLoaded(t *testing.T) {
 	m := NewManager()
 	defer m.Close()
 
 	_ = m.Register("test-id", "Test Inventory", "/path/to/index")
 
-	_, err := m.GetIndex("test-id")
+	err := m.WithIndex("test-id", func(*indexread.Index) error { return nil })
 	if !errors.Is(err, ErrNotLoaded) {
-		t.Errorf("GetIndex error = %v, want %v", err, ErrNotLoaded)
+		t.Errorf("WithIndex error = %v, want %v", err, ErrNotLoaded)
 	}
 }
 
-func TestManagerGetIndexNotFound(t *testing.T) {
+func TestManagerWithIndexNotFound(t *testing.T) {
 	m := NewManager()
 	defer m.Close()
 
-	_, err := m.GetIndex("nonexistent")
+	err := m.WithIndex("nonexistent", func(*indexread.Index) error { return nil })
 	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("GetIndex error = %v, want %v", err, ErrNotFound)
+		t.Errorf("WithIndex error = %v, want %v", err, ErrNotFound)
 	}
 }
 
 // TestManagerConcurrent_RegisterListRemove stress-tests concurrent
 // access to the Manager. With -race it asserts there is no data race
-// between Register, List, Get, GetIndex, Unload, and Remove. Load
+// between Register, List, Get, WithIndex, Unload, and Remove. Load
 // itself isn't exercised here because it requires a real index on
 // disk — see internal/handlers integration tests for that.
 func TestManagerConcurrent_RegisterListRemove(t *testing.T) {
@@ -172,7 +174,7 @@ func TestManagerConcurrent_RegisterListRemove(t *testing.T) {
 				_ = m.Register(id, "name", "/path")
 				_, _ = m.Get(id)
 				_ = m.List()
-				_, _ = m.GetIndex(id)
+				_ = m.WithIndex(id, func(*indexread.Index) error { return nil })
 				_ = m.Unload(id)
 				_ = m.Remove(id)
 			}

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -70,23 +71,14 @@ func (h *Handlers) GetStatsAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	prefix := q.Get("prefix")
 
-	idx, err := h.manager.GetIndex(inventoryID)
+	var resp *StatsResponse
+	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
+		var berr error
+		resp, berr = h.buildStatsResponse(idx, prefix, showTiers, estimateCost)
+		return berr
+	})
 	if err != nil {
-		if errors.Is(err, inventory.ErrNotFound) {
-			WriteJSONError(w, http.StatusNotFound, "inventory not found")
-			return
-		}
-		if errors.Is(err, inventory.ErrNotLoaded) {
-			WriteJSONError(w, http.StatusConflict, "inventory not loaded")
-			return
-		}
-		WriteJSONError(w, http.StatusInternalServerError, "failed to get index")
-		return
-	}
-
-	resp, err := h.buildStatsResponse(idx, prefix, showTiers, estimateCost)
-	if err != nil {
-		WriteJSONError(w, http.StatusNotFound, err.Error())
+		writeStatsManagerError(w, err)
 		return
 	}
 
@@ -106,28 +98,37 @@ func (h *Handlers) GetInventoryStatsAPI(w http.ResponseWriter, r *http.Request) 
 	}
 	prefix := q.Get("prefix")
 
-	idx, err := h.manager.GetIndex(inventoryID)
+	var resp *StatsResponse
+	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
+		var berr error
+		resp, berr = h.buildStatsResponse(idx, prefix, showTiers, estimateCost)
+		return berr
+	})
 	if err != nil {
-		if errors.Is(err, inventory.ErrNotFound) {
-			WriteJSONError(w, http.StatusNotFound, "inventory not found")
-			return
-		}
-		if errors.Is(err, inventory.ErrNotLoaded) {
-			WriteJSONError(w, http.StatusConflict, "inventory not loaded")
-			return
-		}
-		WriteJSONError(w, http.StatusInternalServerError, "failed to get index")
-		return
-	}
-
-	resp, err := h.buildStatsResponse(idx, prefix, showTiers, estimateCost)
-	if err != nil {
-		WriteJSONError(w, http.StatusNotFound, err.Error())
+		writeStatsManagerError(w, err)
 		return
 	}
 
 	WriteJSON(w, http.StatusOK, resp)
 }
+
+// writeStatsManagerError maps Manager + buildStatsResponse errors to HTTP
+// status codes. ErrNotFound and the "prefix not found" sentinel both 404;
+// only ErrNotLoaded becomes 409.
+func writeStatsManagerError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, inventory.ErrNotFound):
+		WriteJSONError(w, http.StatusNotFound, "inventory not found")
+	case errors.Is(err, inventory.ErrNotLoaded):
+		WriteJSONError(w, http.StatusConflict, "inventory not loaded")
+	case errors.Is(err, errPrefixNotFound):
+		WriteJSONError(w, http.StatusNotFound, "prefix not found")
+	default:
+		WriteJSONError(w, http.StatusInternalServerError, "failed to get stats")
+	}
+}
+
+var errPrefixNotFound = errors.New("prefix not found")
 
 // GetDescendantsAPI returns descendants at a specific depth.
 func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
@@ -171,50 +172,39 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 		filter.MinBytes = v
 	}
 
-	idx, err := h.manager.GetIndex(inventoryID)
+	var descendants []DescendantInfo
+	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
+		pos, ok := idx.Lookup(prefix)
+		if !ok {
+			return errPrefixNotFound
+		}
+		positions, perr := idx.DescendantsAtDepthFiltered(pos, depth, filter)
+		if perr != nil {
+			h.logger.Error().Err(perr).Msg("failed to get descendants")
+			return fmt.Errorf("descendants at depth: %w", perr)
+		}
+		descendants = make([]DescendantInfo, 0, len(positions))
+		for _, p := range positions {
+			prefixStr, pserr := idx.PrefixString(p)
+			if pserr != nil {
+				h.logger.Warn().Err(pserr).Uint64("pos", p).Msg("failed to get prefix string")
+				continue
+			}
+			stats := idx.Stats(p)
+			descendants = append(descendants, DescendantInfo{
+				Prefix:       prefixStr,
+				ObjectCount:  stats.ObjectCount,
+				ObjectCountH: humanfmt.CountUint64(stats.ObjectCount),
+				TotalBytes:   stats.TotalBytes,
+				TotalBytesH:  humanfmt.BytesUint64(stats.TotalBytes),
+				Depth:        idx.Depth(p),
+			})
+		}
+		return nil
+	})
 	if err != nil {
-		if errors.Is(err, inventory.ErrNotFound) {
-			WriteJSONError(w, http.StatusNotFound, "inventory not found")
-			return
-		}
-		if errors.Is(err, inventory.ErrNotLoaded) {
-			WriteJSONError(w, http.StatusConflict, "inventory not loaded")
-			return
-		}
-		WriteJSONError(w, http.StatusInternalServerError, "failed to get index")
+		writeStatsManagerError(w, err)
 		return
-	}
-
-	pos, ok := idx.Lookup(prefix)
-	if !ok {
-		WriteJSONError(w, http.StatusNotFound, "prefix not found")
-		return
-	}
-
-	positions, err := idx.DescendantsAtDepthFiltered(pos, depth, filter)
-	if err != nil {
-		h.logger.Error().Err(err).Msg("failed to get descendants")
-		WriteJSONError(w, http.StatusInternalServerError, "failed to get descendants")
-		return
-	}
-
-	descendants := make([]DescendantInfo, 0, len(positions))
-	for _, p := range positions {
-		prefixStr, err := idx.PrefixString(p)
-		if err != nil {
-			h.logger.Warn().Err(err).Uint64("pos", p).Msg("failed to get prefix string")
-			continue
-		}
-
-		stats := idx.Stats(p)
-		descendants = append(descendants, DescendantInfo{
-			Prefix:       prefixStr,
-			ObjectCount:  stats.ObjectCount,
-			ObjectCountH: humanfmt.CountUint64(stats.ObjectCount),
-			TotalBytes:   stats.TotalBytes,
-			TotalBytesH:  humanfmt.BytesUint64(stats.TotalBytes),
-			Depth:        idx.Depth(p),
-		})
 	}
 
 	WriteJSON(w, http.StatusOK, descendants)
@@ -223,7 +213,7 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) buildStatsResponse(idx *indexread.Index, prefix string, showTiers, estimateCost bool) (*StatsResponse, error) {
 	pos, ok := idx.Lookup(prefix)
 	if !ok {
-		return nil, errors.New("prefix not found")
+		return nil, errPrefixNotFound
 	}
 
 	stats := idx.Stats(pos)

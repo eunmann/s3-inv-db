@@ -22,8 +22,12 @@ var ErrNotLoaded = errors.New("inventory not loaded")
 // ErrInvalidState is returned when attempting an invalid state transition.
 var ErrInvalidState = errors.New("invalid state for operation")
 
-// managedInventory wraps an inventory with its index.
+// managedInventory wraps an inventory with its index. The per-inventory
+// mu protects the index pointer's lifecycle: readers (WithIndex) hold a
+// read lock for the duration of their fn so Unload/Remove/Close cannot
+// unmap the underlying mmap files mid-read.
 type managedInventory struct {
+	mu    sync.RWMutex
 	info  Info
 	index *indexread.Index
 }
@@ -135,6 +139,8 @@ func (m *Manager) LoadWith(ctx context.Context, id string, build BuildFunc) erro
 		return fmt.Errorf("load cancelled: %w", ctx.Err())
 	}
 
+	// inv.index assignment is safe under m.mu.Lock — no readers can be
+	// inside WithIndex on this inventory because state was StateParsing.
 	inv.index = idx
 	inv.info.State = StateLoaded
 	inv.info.NodeCount = idx.Count()
@@ -144,30 +150,33 @@ func (m *Manager) LoadWith(ctx context.Context, id string, build BuildFunc) erro
 	return nil
 }
 
-// Unload closes an inventory index and releases its resources.
+// Unload closes an inventory index and releases its resources. It blocks
+// until any in-flight WithIndex reader on this inventory has returned.
 func (m *Manager) Unload(id string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	inv, exists := m.inventories[id]
 	if !exists {
+		m.mu.Unlock()
 		return ErrNotFound
 	}
-
 	if inv.info.State != StateLoaded {
+		m.mu.Unlock()
 		return fmt.Errorf("%w: cannot unload from state %s", ErrInvalidState, inv.info.State)
 	}
-
-	if inv.index != nil {
-		inv.index.Close()
-		inv.index = nil
-	}
-
 	inv.info.State = StateUnloaded
 	inv.info.NodeCount = 0
 	inv.info.MaxDepth = 0
 	inv.info.LoadedAt = time.Time{}
+	m.mu.Unlock()
 
+	// Close the index outside the Manager lock so other inventories stay
+	// available; the per-inventory write lock drains in-flight readers.
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
+	if inv.index != nil {
+		inv.index.Close()
+		inv.index = nil
+	}
 	return nil
 }
 
@@ -197,55 +206,72 @@ func (m *Manager) List() []Info {
 	return result
 }
 
-// GetIndex returns the loaded index for an inventory.
-func (m *Manager) GetIndex(id string) (*indexread.Index, error) {
+// WithIndex borrows the loaded index for the duration of fn. The index
+// is guaranteed to remain open until fn returns; callers must not retain
+// the pointer or any slice/string derived from mmap-backed memory beyond
+// the call. Concurrent Unload/Remove/Close on the same inventory block
+// until fn returns.
+func (m *Manager) WithIndex(id string, fn func(*indexread.Index) error) error {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	inv, exists := m.inventories[id]
 	if !exists {
-		return nil, ErrNotFound
-	}
-
-	if inv.info.State != StateLoaded || inv.index == nil {
-		return nil, ErrNotLoaded
-	}
-
-	return inv.index, nil
-}
-
-// Remove removes an inventory from the manager.
-func (m *Manager) Remove(id string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	inv, exists := m.inventories[id]
-	if !exists {
+		m.mu.RUnlock()
 		return ErrNotFound
 	}
+	if inv.info.State != StateLoaded || inv.index == nil {
+		m.mu.RUnlock()
+		return ErrNotLoaded
+	}
+	idx := inv.index
+	// Acquire the per-inventory read lock before releasing m.mu so a
+	// concurrent Unload/Remove cannot slip in and close idx out from
+	// under us. Lock ordering: m.mu → inv.mu (never the reverse).
+	inv.mu.RLock()
+	m.mu.RUnlock()
+	defer inv.mu.RUnlock()
 
+	return fn(idx)
+}
+
+// Remove removes an inventory from the manager. It blocks until any
+// in-flight WithIndex reader on this inventory has returned.
+func (m *Manager) Remove(id string) error {
+	m.mu.Lock()
+	inv, exists := m.inventories[id]
+	if !exists {
+		m.mu.Unlock()
+		return ErrNotFound
+	}
+	delete(m.inventories, id)
+	m.mu.Unlock()
+
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
 	if inv.index != nil {
 		inv.index.Close()
+		inv.index = nil
 	}
-
-	delete(m.inventories, id)
 	return nil
 }
 
-// Close closes all loaded inventories and clears the manager.
+// Close closes all loaded inventories and clears the manager. It blocks
+// until any in-flight WithIndex readers have returned.
 func (m *Manager) Close() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	invs := m.inventories
+	m.inventories = make(map[string]*managedInventory)
+	m.mu.Unlock()
 
 	var firstErr error
-	for _, inv := range m.inventories {
+	for _, inv := range invs {
+		inv.mu.Lock()
 		if inv.index != nil {
 			if err := inv.index.Close(); err != nil && firstErr == nil {
 				firstErr = err
 			}
+			inv.index = nil
 		}
+		inv.mu.Unlock()
 	}
-
-	m.inventories = make(map[string]*managedInventory)
 	return firstErr
 }
