@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 
+	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -31,6 +32,20 @@ func (s *Server) setupRoutes() {
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+
+	// Compiled Tailwind CSS embedded into the binary. ETag lets the
+	// browser revalidate cheaply; the content is immutable for a given
+	// build, so a 1-day max-age + revalidate is fine.
+	r.Get("/static/tailwind.css", func(w http.ResponseWriter, r *http.Request) {
+		if match := r.Header.Get("If-None-Match"); match == templates.TailwindCSSETag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		w.Header().Set("ETag", templates.TailwindCSSETag)
+		w.Header().Set("Cache-Control", "public, max-age=86400, must-revalidate")
+		_, _ = w.Write(templates.TailwindCSS())
 	})
 
 	// HTML pages

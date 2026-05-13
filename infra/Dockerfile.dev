@@ -7,7 +7,9 @@ FROM golang:1.25-alpine
 # git: go modules over git, plus safe.directory tweak for volume-mounted source.
 # tini: clean PID 1 so Ctrl+C in `docker compose up` propagates to air.
 # wget: healthcheck.
-RUN apk add --no-cache git tini wget
+# make + curl: `make css` downloads the standalone tailwindcss binary
+# and runs it; air invokes `make css` on every rebuild.
+RUN apk add --no-cache git tini wget make curl
 
 WORKDIR /app
 

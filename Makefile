@@ -1,17 +1,47 @@
 .PHONY: all build server seeder test test-race lint lint-fix clean clean-seed seed \
-        dev docker-build docker-prod docker-seed docker-down
+        css dev docker-build docker-prod docker-seed docker-down
 
 GOLANGCI_LINT_VERSION := v2.1.2
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 COMPOSE := docker compose -f infra/docker-compose.yml
 
-all: build server
+# Tailwind CLI: use the standalone binary release so we don't pull in
+# Node.js for what's essentially a single tool. The binary is downloaded
+# on first use and cached under bin/. Detect OS/arch automatically.
+TAILWIND_VERSION := v3.4.17
+UNAME_S := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+UNAME_M := $(shell uname -m)
+TAILWIND_OS := $(if $(filter darwin,$(UNAME_S)),macos,linux)
+TAILWIND_ARCH := $(if $(filter arm64 aarch64,$(UNAME_M)),arm64,x64)
+TAILWIND_BIN := bin/tailwindcss-$(TAILWIND_VERSION)
+TAILWIND_URL := https://github.com/tailwindlabs/tailwindcss/releases/download/$(TAILWIND_VERSION)/tailwindcss-$(TAILWIND_OS)-$(TAILWIND_ARCH)
+
+CSS_INPUT  := internal/templates/styles/input.css
+CSS_OUTPUT := internal/templates/styles/tailwind.css
+CSS_CONFIG := tailwind.config.js
+TEMPLATES  := $(shell find internal/templates/templates -name '*.html' 2>/dev/null)
+
+all: css build server
+
+# Build Tailwind CSS from input.css + the project's templates. The
+# generated tailwind.css is checked into the repo so production builds
+# (e.g. infra/Dockerfile) don't need to fetch the CLI.
+css: $(CSS_OUTPUT)
+
+$(CSS_OUTPUT): $(CSS_INPUT) $(CSS_CONFIG) $(TEMPLATES) | $(TAILWIND_BIN)
+	$(TAILWIND_BIN) -c $(CSS_CONFIG) -i $(CSS_INPUT) -o $(CSS_OUTPUT) --minify
+
+$(TAILWIND_BIN):
+	@mkdir -p bin
+	curl -sSL -o $@.tmp "$(TAILWIND_URL)"
+	chmod +x $@.tmp
+	mv $@.tmp $@
 
 build:
 	go build -o bin/s3-inv-db ./cmd/s3-inv-db
 
-server:
+server: css
 	go build -o bin/s3-inv-db-server ./cmd/s3-inv-db-server
 
 seeder:

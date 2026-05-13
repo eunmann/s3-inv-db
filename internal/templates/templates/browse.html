@@ -59,4 +59,19 @@
         <span class="sr-only">Loading</span>
     </div>
 </div>
+
+<script>
+// After every htmx swap into #browse-target (clicking a child, a
+// breadcrumb, a sort header, the pager), re-sync the prefix input from
+// the URL so users can edit-from-current-position. The URL is the
+// single source of truth — no server-rendered string ends up in a JS
+// literal here, which avoids the html/template double-escape trap.
+document.body.addEventListener('htmx:afterSettle', function (event) {
+    if (!event.target || event.target.id !== 'browse-target') return;
+    var el = document.getElementById('prefix');
+    if (!el) return;
+    var params = new URLSearchParams(window.location.search);
+    el.value = params.get('prefix') || '';
+});
+</script>
 {{end}}
