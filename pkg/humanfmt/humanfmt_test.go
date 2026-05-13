@@ -90,24 +90,47 @@ func TestThroughput(t *testing.T) {
 
 func TestCount(t *testing.T) {
 	tests := []struct {
+		name  string
 		input int64
 		want  string
 	}{
-		{0, "0"},
-		{999, "999"},
-		{1000, "1.00K"},
-		{1500, "1.50K"},
-		{1000000, "1.00M"},
-		{1500000, "1.50M"},
-		{1000000000, "1.00B"},
-		{1500000000, "1.50B"},
-		{-100, "-100"},
+		{"zero", 0, "0"},
+		{"small", 42, "42"},
+		{"three digits", 999, "999"},
+		{"four digits → commas", 1234, "1.2K"}, // routed to K
+		{"exact thousand", 1000, "1.0K"},
+		{"round half away", 1250, "1.3K"},
+		{"1.5K", 1500, "1.5K"},
+		{"12.5K", 12_500, "12.5K"},
+		{"1M", 1_000_000, "1.0M"},
+		{"1.5M", 1_500_000, "1.5M"},
+		{"1B", 1_000_000_000, "1.0B"},
+		{"1.5B", 1_500_000_000, "1.5B"},
+		{"negative", -100, "-100"},
 	}
 
 	for _, tt := range tests {
-		got := Count(tt.input)
-		if got != tt.want {
-			t.Errorf("Count(%d) = %q, want %q", tt.input, got, tt.want)
+		t.Run(tt.name, func(t *testing.T) {
+			got := Count(tt.input)
+			if got != tt.want {
+				t.Errorf("Count(%d) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatWithCommas(t *testing.T) {
+	tests := []struct {
+		n    int64
+		want string
+	}{
+		{0, "0"},
+		{42, "42"},
+		{999, "999"},
+	}
+	for _, tt := range tests {
+		if got := formatWithCommas(tt.n); got != tt.want {
+			t.Errorf("formatWithCommas(%d) = %q, want %q", tt.n, got, tt.want)
 		}
 	}
 }

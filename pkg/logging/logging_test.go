@@ -85,7 +85,7 @@ func TestLogEvent_PrettyMode(t *testing.T) {
 
 			// Human fields depend on mode
 			hasHumanBytes := bytes.Contains(buf.Bytes(), []byte(`"bytes_h":"1.00 GiB"`))
-			hasHumanCount := bytes.Contains(buf.Bytes(), []byte(`"count_h":"1.50M"`))
+			hasHumanCount := bytes.Contains(buf.Bytes(), []byte(`"count_h":"1.5M"`))
 			hasHumanElapsed := bytes.Contains(buf.Bytes(), []byte(`"elapsed_h":`))
 
 			if tt.wantHuman {
@@ -188,7 +188,7 @@ func TestOperation_WithFields(t *testing.T) {
 	if !bytes.Contains(buf.Bytes(), []byte(`"items":1500000`)) {
 		t.Errorf("expected items field, got: %s", output)
 	}
-	if !bytes.Contains(buf.Bytes(), []byte(`"items_h":"1.50M"`)) {
+	if !bytes.Contains(buf.Bytes(), []byte(`"items_h":"1.5M"`)) {
 		t.Errorf("expected items_h field, got: %s", output)
 	}
 

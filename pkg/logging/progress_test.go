@@ -131,7 +131,7 @@ func TestCompletionEvent_BytesAndCounts(t *testing.T) {
 	if !strings.Contains(output, `"size_h":"1.00 GiB"`) {
 		t.Errorf("expected human size field, got: %s", output)
 	}
-	if !strings.Contains(output, `"items_h":"1.50M"`) {
+	if !strings.Contains(output, `"items_h":"1.5M"`) {
 		t.Errorf("expected human items field, got: %s", output)
 	}
 

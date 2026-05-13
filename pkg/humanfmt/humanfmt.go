@@ -3,6 +3,7 @@ package humanfmt
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 )
@@ -101,28 +102,57 @@ func ThroughputUint64(bytes uint64, d time.Duration) string {
 	return Throughput(int64(bytes), d)
 }
 
-// Examples: "1.23M", "456K", "789".
+// Count renders an integer for human display.
+//
+//   - < 0          → plain decimal (with sign)
+//   - 0–999        → plain decimal with grouping commas (e.g. "999")
+//   - 1,000+       → "X.YK" / "X.YM" / "X.YB" with one decimal place,
+//     rounded half-away-from-zero (1.25 -> 1.3, not 1.2)
+//
+// Examples: "789", "1.2K", "12.5K", "1.0M", "2.5B".
 func Count(n int64) string {
 	if n < 0 {
 		return strconv.FormatInt(n, 10)
 	}
 
 	const (
-		thousand = 1000
+		thousand = 1000.0
 		million  = 1000 * thousand
 		billion  = 1000 * million
 	)
 
+	f := float64(n)
 	switch {
-	case n >= billion:
-		return fmt.Sprintf("%.2fB", float64(n)/billion)
-	case n >= million:
-		return fmt.Sprintf("%.2fM", float64(n)/million)
-	case n >= thousand:
-		return fmt.Sprintf("%.2fK", float64(n)/thousand)
+	case f >= billion:
+		return fmt.Sprintf("%.1fB", math.Round(f/billion*10)/10)
+	case f >= million:
+		return fmt.Sprintf("%.1fM", math.Round(f/million*10)/10)
+	case f >= thousand:
+		return fmt.Sprintf("%.1fK", math.Round(f/thousand*10)/10)
 	default:
-		return strconv.FormatInt(n, 10)
+		return formatWithCommas(n)
 	}
+}
+
+// formatWithCommas renders a non-negative int64 with thousands separators.
+// For three- or fewer-digit inputs (the only callers reach this through
+// Count, which routes ≥ 1,000 to K), it just returns the plain digits.
+func formatWithCommas(n int64) string {
+	s := strconv.FormatInt(n, 10)
+	if len(s) <= 3 {
+		return s
+	}
+	first := len(s) % 3
+	if first == 0 {
+		first = 3
+	}
+	out := make([]byte, 0, len(s)+(len(s)-1)/3)
+	out = append(out, s[:first]...)
+	for i := first; i < len(s); i += 3 {
+		out = append(out, ',')
+		out = append(out, s[i:i+3]...)
+	}
+	return string(out)
 }
 
 // CountUint64 is like Count but for uint64.

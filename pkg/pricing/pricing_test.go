@@ -296,42 +296,64 @@ func TestPerTierDollars(t *testing.T) {
 
 func TestFormatCost(t *testing.T) {
 	tests := []struct {
+		name         string
 		microdollars uint64
 		want         string
 	}{
-		{0, "$0.000000"},
-		{100, "$0.000100"},
-		{10_000, "$0.0100"},
-		{100_000, "$0.1000"},
-		{1_000_000, "$1.00"},
-		{50_000_000, "$50.00"},
-		{100_000_000, "$100"},
+		{"zero", 0, "$0.00"},
+		{"sub-penny, just-above-zero", 1, "<$0.01"},
+		{"sub-penny, just-below-cent", 9_999, "<$0.01"},
+		{"exactly one cent", 10_000, "$0.01"},
+		{"between cents rounds up", 10_001, "$0.02"},
+		{"$0.99", 990_000, "$0.99"},
+		{"$0.999 rounds up to $1.00", 999_000, "$1.00"},
+		{"$1 even", 1_000_000, "$1.00"},
+		{"$5.50", 5_500_000, "$5.50"},
+		{"$50.12 even", 50_120_000, "$50.12"},
+		{"$50.121 rounds to $50.13", 50_121_000, "$50.13"},
+		{"$999.99", 999_990_000, "$999.99"},
+		{"$1,000 → $1.0K", 1_000_000_000, "$1.0K"},
+		{"$1,234 → $1.2K", 1_234_000_000, "$1.2K"},
+		{"$1,250 → $1.3K (round half up)", 1_250_000_000, "$1.3K"},
+		{"$12,500 → $12.5K", 12_500_000_000, "$12.5K"},
+		{"$999,999 → $1000.0K", 999_999_000_000, "$1000.0K"},
+		{"$1,000,000 → $1.0M", 1_000_000_000_000, "$1.0M"},
+		{"$1,500,000 → $1.5M", 1_500_000_000_000, "$1.5M"},
+		{"$1B → $1.0B", 1_000_000_000_000_000, "$1.0B"},
 	}
 
 	for _, tt := range tests {
-		got := FormatCost(tt.microdollars)
-		if got != tt.want {
-			t.Errorf("FormatCost(%d) = %q, want %q", tt.microdollars, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatCost(tt.microdollars)
+			if got != tt.want {
+				t.Errorf("FormatCost(%d) = %q, want %q", tt.microdollars, got, tt.want)
+			}
+		})
 	}
 }
 
 func TestFormatCostDollars(t *testing.T) {
 	tests := []struct {
+		name    string
 		dollars float64
 		want    string
 	}{
-		{0.0001, "$0.000100"},
-		{0.05, "$0.0500"},
-		{5.50, "$5.50"},
-		{150.0, "$150"},
+		{"zero", 0, "$0.00"},
+		{"negative clamped", -1.0, "$0.00"},
+		{"sub-penny", 0.0001, "<$0.01"},
+		{"five cents", 0.05, "$0.05"},
+		{"$5.50", 5.50, "$5.50"},
+		{"$150 → $150.00", 150.0, "$150.00"},
+		{"$1500 → $1.5K", 1500.0, "$1.5K"},
 	}
 
 	for _, tt := range tests {
-		got := FormatCostDollars(tt.dollars)
-		if got != tt.want {
-			t.Errorf("FormatCostDollars(%f) = %q, want %q", tt.dollars, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatCostDollars(tt.dollars)
+			if got != tt.want {
+				t.Errorf("FormatCostDollars(%f) = %q, want %q", tt.dollars, got, tt.want)
+			}
+		})
 	}
 }
 

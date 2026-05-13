@@ -4,6 +4,7 @@ package pricing
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -311,21 +312,64 @@ func ComputeDetailedBreakdown(breakdown []format.TierBreakdown, pt PriceTable) [
 	return results
 }
 
-// FormatCost formats a cost in microdollars as a human-readable string.
+// FormatCost formats a cost in microdollars for display in the UI.
+//
+// Rules:
+//   - 0                           → "$0.00"
+//   - 0 < c < $0.01               → "<$0.01"   (a non-zero sub-penny)
+//   - $0.01 ≤ c < $1,000          → "$X.XX"    (ceiling to the next cent —
+//     we round up to be conservative about reported cost)
+//   - $1,000 ≤ c < $1,000,000     → "$X.YK"
+//   - $1,000,000 ≤ c < $1B        → "$X.YM"
+//   - c ≥ $1,000,000,000          → "$X.YB"
+//
+// K/M/B brackets use one decimal place and standard round-to-nearest.
+// They're for at-a-glance comparison, not exact accounting.
 func FormatCost(microdollars uint64) string {
-	return FormatCostDollars(float64(microdollars) / 1_000_000)
+	const (
+		microsPerCent   = uint64(10_000)
+		microsPerDollar = uint64(1_000_000)
+		thousand        = 1_000.0
+		million         = 1_000_000.0
+		billion         = 1_000_000_000.0
+	)
+
+	if microdollars == 0 {
+		return "$0.00"
+	}
+	if microdollars < microsPerCent {
+		return "<$0.01"
+	}
+
+	dollars := float64(microdollars) / float64(microsPerDollar)
+	switch {
+	case dollars >= billion:
+		return fmt.Sprintf("$%.1fB", roundHalfAway(dollars/billion, 1))
+	case dollars >= million:
+		return fmt.Sprintf("$%.1fM", roundHalfAway(dollars/million, 1))
+	case dollars >= thousand:
+		return fmt.Sprintf("$%.1fK", roundHalfAway(dollars/thousand, 1))
+	}
+
+	// $0.01 - $999.99: ceiling to the next cent so we never under-report.
+	cents := (microdollars + microsPerCent - 1) / microsPerCent
+	return fmt.Sprintf("$%d.%02d", cents/100, cents%100)
 }
 
-// FormatCostDollars formats a cost in dollars as a human-readable string.
+// roundHalfAway rounds x to the given decimal places, using round-half-away-
+// from-zero (so 1.25 -> 1.3, not 1.2). Go's %.Nf uses banker's rounding,
+// which surprises users when they mentally compute "round up at .5".
+func roundHalfAway(x float64, decimals int) float64 {
+	factor := math.Pow(10, float64(decimals))
+	return math.Round(x*factor) / factor
+}
+
+// FormatCostDollars formats a cost in dollars (float) by delegating to
+// FormatCost. Kept for callers that already have a float dollars value.
 func FormatCostDollars(dollars float64) string {
-	switch {
-	case dollars < 0.01:
-		return fmt.Sprintf("$%.6f", dollars)
-	case dollars < 1:
-		return fmt.Sprintf("$%.4f", dollars)
-	case dollars < 100:
-		return fmt.Sprintf("$%.2f", dollars)
-	default:
-		return fmt.Sprintf("$%.0f", dollars)
+	if dollars <= 0 {
+		return "$0.00"
 	}
+	micros := uint64(dollars*1_000_000 + 0.5)
+	return FormatCost(micros)
 }
