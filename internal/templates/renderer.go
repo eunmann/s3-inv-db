@@ -11,7 +11,6 @@ import (
 	"io"
 	"io/fs"
 	"net/url"
-	"os"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -31,32 +30,19 @@ var embeddedTemplates embed.FS
 type Renderer struct {
 	pages    map[string]*template.Template
 	partials *template.Template
-	devMode  bool
-	rootDir  string
 	funcMap  template.FuncMap
 }
 
-// New creates a new template renderer.
-// If devMode is true, templates are reloaded from disk on each render for
-// development. The default rootDir is "internal/templates" relative to the
-// process working directory; use NewWithRootDir to override.
-func New(devMode bool) (*Renderer, error) {
-	return NewWithRootDir(devMode, "internal/templates")
-}
-
-// NewWithRootDir is like New but lets the caller pick the on-disk rootDir
-// used when devMode is true. Tests use this to point at a temp directory.
-func NewWithRootDir(devMode bool, rootDir string) (*Renderer, error) {
-	r := &Renderer{
-		devMode: devMode,
-		rootDir: rootDir,
-		funcMap: FuncMap(),
-	}
-
+// New creates a new template renderer with the embedded templates parsed.
+// HTML hot-reload during local development is handled by Air watching
+// templates/*.html files (per .air.toml) — Air rebuilds the binary on
+// HTML change, which re-runs the embed.FS load on startup. There's no
+// in-process devMode-reload path because there doesn't need to be.
+func New() (*Renderer, error) {
+	r := &Renderer{funcMap: FuncMap()}
 	if err := r.loadTemplates(); err != nil {
 		return nil, err
 	}
-
 	return r, nil
 }
 
@@ -172,17 +158,7 @@ func browseURL(pairs ...any) (string, error) {
 }
 
 func (r *Renderer) loadTemplates() error {
-	var (
-		layoutSrc   string
-		partialSrcs map[string]string
-		pageSrcs    map[string]string
-		err         error
-	)
-	if r.devMode {
-		layoutSrc, partialSrcs, pageSrcs, err = r.readFromDisk()
-	} else {
-		layoutSrc, partialSrcs, pageSrcs, err = r.readFromEmbed()
-	}
+	layoutSrc, partialSrcs, pageSrcs, err := readTemplates(embeddedTemplates)
 	if err != nil {
 		return err
 	}
@@ -217,20 +193,8 @@ func (r *Renderer) loadTemplates() error {
 	return nil
 }
 
-// readFromEmbed loads template sources from the embedded FS.
-func (r *Renderer) readFromEmbed() (layoutSrc string, partials, pages map[string]string, err error) {
-	return readTemplates(embeddedTemplates)
-}
-
-// readFromDisk loads template sources from r.rootDir using os.DirFS so
-// the same fs.FS-shaped read logic handles both the embed and disk paths.
-func (r *Renderer) readFromDisk() (layoutSrc string, partials, pages map[string]string, err error) {
-	return readTemplates(os.DirFS(r.rootDir))
-}
-
 // readTemplates loads layout + partials + page sources from any fs.FS
-// rooted at the project layout (templates/, templates/partials/). One
-// function powers both production (embed.FS) and dev mode (os.DirFS).
+// rooted at the project layout (templates/, templates/partials/).
 func readTemplates(src fs.FS) (layoutSrc string, partials, pages map[string]string, err error) {
 	layoutBytes, err := fs.ReadFile(src, "templates/layout.html")
 	if err != nil {
@@ -277,17 +241,10 @@ func readDirFiles(src fs.FS, dir string, basenameKey bool) (map[string]string, e
 
 // Render renders a full page template.
 func (r *Renderer) Render(w io.Writer, name string, data interface{}) error {
-	if r.devMode {
-		if err := r.loadTemplates(); err != nil {
-			return fmt.Errorf("reload templates: %w", err)
-		}
-	}
-
 	t, ok := r.pages[name]
 	if !ok {
 		return fmt.Errorf("page template %s not found", name)
 	}
-
 	if err := t.ExecuteTemplate(w, "layout", data); err != nil {
 		return fmt.Errorf("execute template %s: %w", name, err)
 	}
@@ -296,12 +253,6 @@ func (r *Renderer) Render(w io.Writer, name string, data interface{}) error {
 
 // RenderPartial renders a partial template without layout.
 func (r *Renderer) RenderPartial(w io.Writer, name string, data interface{}) error {
-	if r.devMode {
-		if err := r.loadTemplates(); err != nil {
-			return fmt.Errorf("reload templates: %w", err)
-		}
-	}
-
 	if err := r.partials.ExecuteTemplate(w, "templates/partials/"+name, data); err != nil {
 		return fmt.Errorf("execute partial template %s: %w", name, err)
 	}

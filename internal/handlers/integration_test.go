@@ -38,7 +38,7 @@ func buildLoadedTestHandlers(t *testing.T) *Handlers {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
 
-	renderer, err := templates.New(false)
+	renderer, err := templates.New()
 	if err != nil {
 		t.Fatalf("renderer: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
-	renderer, err := templates.New(false)
+	renderer, err := templates.New()
 	if err != nil {
 		t.Fatalf("renderer: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestLoadInventoryAPI_AlreadyLoaded(t *testing.T) {
 func TestLoadInventoryAPI_BadPath(t *testing.T) {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
-	renderer, err := templates.New(false)
+	renderer, err := templates.New()
 	if err != nil {
 		t.Fatalf("renderer: %v", err)
 	}

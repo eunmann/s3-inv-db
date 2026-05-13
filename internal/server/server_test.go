@@ -18,7 +18,6 @@ func TestNewServer(t *testing.T) {
 	cfg := Config{
 		Addr:       ":8080",
 		Logger:     zerolog.Nop(),
-		DevMode:    false,
 		PriceTable: pricing.DefaultUSEast1Prices(),
 	}
 
@@ -40,7 +39,6 @@ func TestServerAPIRoutes(t *testing.T) {
 	cfg := Config{
 		Addr:       ":8080",
 		Logger:     zerolog.Nop(),
-		DevMode:    false,
 		PriceTable: pricing.DefaultUSEast1Prices(),
 	}
 
@@ -79,7 +77,6 @@ func TestServerGracefulShutdown(t *testing.T) {
 	cfg := Config{
 		Addr:       addr,
 		Logger:     zerolog.Nop(),
-		DevMode:    false,
 		PriceTable: pricing.DefaultUSEast1Prices(),
 	}
 
@@ -131,7 +128,6 @@ func TestServerRun_ListenError(t *testing.T) {
 	cfg := Config{
 		Addr:       ln.Addr().String(),
 		Logger:     zerolog.Nop(),
-		DevMode:    false,
 		PriceTable: pricing.DefaultUSEast1Prices(),
 	}
 

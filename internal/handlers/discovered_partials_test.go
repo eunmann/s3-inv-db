@@ -52,7 +52,7 @@ func newDiscoveredHandlers(t *testing.T, disc inventory.Discoverer, ldr inventor
 	t.Helper()
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
-	renderer, err := templates.New(false)
+	renderer, err := templates.New()
 	if err != nil {
 		t.Fatalf("renderer: %v", err)
 	}

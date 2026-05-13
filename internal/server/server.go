@@ -24,7 +24,6 @@ import (
 type Config struct {
 	Addr       string
 	Logger     zerolog.Logger
-	DevMode    bool
 	PriceTable pricing.PriceTable
 	// S3Source is the s3:// URI under which inventories are discovered.
 	// When empty, the discovery API returns an empty list and the
@@ -49,7 +48,7 @@ type Server struct {
 func New(cfg Config) (*Server, error) {
 	mgr := inventory.NewManager()
 
-	renderer, err := templates.New(cfg.DevMode)
+	renderer, err := templates.New()
 	if err != nil {
 		return nil, fmt.Errorf("create renderer: %w", err)
 	}

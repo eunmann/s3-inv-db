@@ -19,7 +19,7 @@ func newTestHandlers(t *testing.T) *Handlers {
 	t.Helper()
 
 	mgr := inventory.NewManager()
-	renderer, err := templates.New(false)
+	renderer, err := templates.New()
 	if err != nil {
 		t.Fatalf("failed to create renderer: %v", err)
 	}

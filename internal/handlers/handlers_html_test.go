@@ -23,7 +23,7 @@ type testFixture struct {
 func newTestFixture(t *testing.T) *testFixture {
 	t.Helper()
 	mgr := inventory.NewManager()
-	renderer, err := templates.New(false)
+	renderer, err := templates.New()
 	if err != nil {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
