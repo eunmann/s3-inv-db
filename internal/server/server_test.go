@@ -5,10 +5,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
 )
 
@@ -231,3 +233,79 @@ func TestSameOriginMiddleware_DoesNotBlockReads(t *testing.T) {
 		t.Errorf("cross-origin GET status = %d, want 200 (reads are public)", w.Code)
 	}
 }
+
+func TestSameOrigin_RejectsSchemeless(t *testing.T) {
+	// url.Parse("//localhost") yields Host=localhost with no Scheme.
+	// Defense-in-depth: reject anything without a real http/https scheme.
+	for _, raw := range []string{"//localhost", "localhost", "null", "about:blank"} {
+		if sameOrigin(raw, "localhost") {
+			t.Errorf("sameOrigin(%q, localhost) = true, want false", raw)
+		}
+	}
+}
+
+func TestSameOrigin_CaseInsensitiveHost(t *testing.T) {
+	if !sameOrigin("http://LOCALHOST:8080", "localhost:8080") {
+		t.Error("case differences in host should still match")
+	}
+}
+
+func TestSameOrigin_PortMismatch(t *testing.T) {
+	if sameOrigin("http://localhost:8080", "localhost:9090") {
+		t.Error("port mismatch should not match")
+	}
+}
+
+func TestSameOrigin_HostInPath(t *testing.T) {
+	// An origin like "http://victim@evil.com" should resolve to evil.com.
+	if sameOrigin("http://localhost@evil.com", "localhost") {
+		t.Error("userinfo-encoded origin must not match victim host")
+	}
+}
+
+func TestSameOriginMiddleware_ReadsBypassOriginCheck(t *testing.T) {
+	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices()}
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// HEAD/OPTIONS aren't in our middleware's isMutating set; this
+	// pins the contract that only POST/PUT/PATCH/DELETE are blocked.
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
+		req := httptest.NewRequest(method, "http://localhost/healthz", http.NoBody)
+		req.Host = "localhost"
+		req.Header.Set("Origin", "http://attacker.example")
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code == http.StatusForbidden {
+			t.Errorf("method %s with cross-origin Origin was rejected", method)
+		}
+	}
+}
+
+func TestAccessLogMiddleware_LogsAfterPanic(t *testing.T) {
+	// Wire a tiny chain: ctx logger → recoverer → access log → panic handler.
+	// Capture the logger output and confirm we logged the request with a
+	// 500-class status.
+	var sink writeBuffer
+	logger := zerolog.New(&sink)
+	mw := accessLogMiddleware()
+	ctxMW := contextLoggerMiddleware(logger)
+
+	handler := ctxMW(middleware.Recoverer(mw(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		panic("boom")
+	}))))
+
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/", http.NoBody)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if !strings.Contains(sink.String(), `"status":500`) {
+		t.Errorf("access log missing status=500 for panicking handler; got %q", sink.String())
+	}
+}
+
+type writeBuffer struct{ b []byte }
+
+func (w *writeBuffer) Write(p []byte) (int, error) { w.b = append(w.b, p...); return len(p), nil }
+func (w *writeBuffer) String() string              { return string(w.b) }

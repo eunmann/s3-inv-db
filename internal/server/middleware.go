@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/logctx"
@@ -26,33 +28,50 @@ func contextLoggerMiddleware(base zerolog.Logger) func(http.Handler) http.Handle
 }
 
 // accessLogMiddleware logs the completed request with status, duration,
-// route pattern, etc. Must run AFTER contextLoggerMiddleware so it sees
-// the request_id-tagged logger.
+// remote addr, etc. The log call runs in a defer so panicking handlers
+// still produce an access log entry: Recoverer (registered earlier)
+// catches the panic and writes a 500, and our deferred log sees that
+// status because Recoverer wrote to the same wrapped writer.
 func accessLogMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 			wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+			panicked := true
+			ctx := r.Context()
+			defer func() { writeAccessLog(ctx, r, wrapped.statusCode, time.Since(start), panicked) }()
 			next.ServeHTTP(wrapped, r)
-
-			logger := logctx.FromContext(r.Context())
-			fields := func(ev *zerolog.Event) *zerolog.Event {
-				return ev.
-					Str("method", r.Method).
-					Str("path", r.URL.Path).
-					Int("status", wrapped.statusCode).
-					Dur("duration", time.Since(start)).
-					Str("remote_addr", r.RemoteAddr)
-			}
-			switch {
-			case wrapped.statusCode >= http.StatusInternalServerError:
-				fields(logger.Error()).Msg("http request")
-			case wrapped.statusCode >= http.StatusBadRequest:
-				fields(logger.Warn()).Msg("http request")
-			default:
-				fields(logger.Info()).Msg("http request")
-			}
+			panicked = false
 		})
+	}
+}
+
+// writeAccessLog emits one access-log line. Extracted so the defer in
+// accessLogMiddleware can hand ctx in directly (contextcheck), and so
+// the panic-bypass status synthesis lives in one place.
+func writeAccessLog(ctx context.Context, r *http.Request, status int, dur time.Duration, panicked bool) {
+	if panicked {
+		// Handler panicked: Recoverer (inner wrapper) writes 500 to the
+		// original writer, bypassing our wrapped responseWriter, so
+		// wrapped.statusCode never updates. Surface the real outcome.
+		status = http.StatusInternalServerError
+	}
+	logger := logctx.FromContext(ctx)
+	fields := func(ev *zerolog.Event) *zerolog.Event {
+		return ev.
+			Str("method", r.Method).
+			Str("path", r.URL.Path).
+			Int("status", status).
+			Dur("duration", dur).
+			Str("remote_addr", r.RemoteAddr)
+	}
+	switch {
+	case status >= http.StatusInternalServerError:
+		fields(logger.Error()).Msg("http request")
+	case status >= http.StatusBadRequest:
+		fields(logger.Warn()).Msg("http request")
+	default:
+		fields(logger.Info()).Msg("http request")
 	}
 }
 
@@ -90,6 +109,11 @@ func isMutating(method string) bool {
 // CSRF defense: an attacker page making a cross-site POST would send its
 // own origin, which won't match ours. Non-browser callers (curl, scripts)
 // typically send no Origin/Referer and are allowed through.
+//
+// Strictness: we require a real http/https scheme in the header — without
+// it, url.Parse accepts shapes like "//victim-host" that have a Host but
+// no Scheme, narrowing what would otherwise be a usable bypass surface.
+// Host comparison is case-insensitive per RFC 3986.
 func sameOriginMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !isMutating(r.Method) {
@@ -100,18 +124,36 @@ func sameOriginMiddleware(next http.Handler) http.Handler {
 		if origin == "" {
 			origin = r.Header.Get("Referer")
 		}
-		if origin != "" {
-			u, err := url.Parse(origin)
-			if err != nil || u.Host != r.Host {
-				logctx.FromContext(r.Context()).Warn().
-					Str("origin", origin).
-					Str("host", r.Host).
-					Str("path", r.URL.Path).
-					Msg("rejecting cross-origin mutating request")
-				http.Error(w, "cross-origin request rejected", http.StatusForbidden)
-				return
-			}
+		if origin == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !sameOrigin(origin, r.Host) {
+			logctx.FromContext(r.Context()).Warn().
+				Str("origin", origin).
+				Str("host", r.Host).
+				Str("path", r.URL.Path).
+				Msg("rejecting cross-origin mutating request")
+			http.Error(w, "cross-origin request rejected", http.StatusForbidden)
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// Returns true when origin's host matches host. The origin must be a
+// fully-qualified http(s) URL; anything else (including "null", scheme-
+// less values, empty Host) is rejected.
+func sameOrigin(origin, host string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	if u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, host)
 }
