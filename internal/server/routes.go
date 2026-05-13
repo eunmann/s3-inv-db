@@ -37,9 +37,16 @@ func (s *Server) setupRoutes() {
 		http.Redirect(w, r, "/browse", http.StatusMovedPermanently)
 	})
 
-	// HTMX partials
+	// HTMX partials. Mutating partial routes return updated row HTML so
+	// the page never needs a JSON round-trip + reload.
 	r.Get("/partials/browse-level", s.handlers.BrowseLevelPartial)
 	r.Get("/partials/inventory-row/{id}", s.handlers.InventoryRowPartial)
+	r.Post("/partials/inventories/{id}/load", s.handlers.LoadInventoryRowPartial)
+	r.Post("/partials/inventories/{id}/unload", s.handlers.UnloadInventoryRowPartial)
+	r.Delete("/partials/inventories/{id}", s.handlers.DeleteInventoryRowPartial)
+	r.Post("/partials/discovered/{src}/{id}/load", s.handlers.LoadDiscoveredRowPartial)
+	r.Post("/partials/discovered/{src}/{id}/unload", s.handlers.UnloadDiscoveredRowPartial)
+	r.Delete("/partials/discovered/{src}/{id}", s.handlers.EvictDiscoveredRowPartial)
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {

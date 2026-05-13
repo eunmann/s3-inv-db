@@ -560,3 +560,56 @@ func TestGetDescendantsAPI_InvalidMinBytes(t *testing.T) {
 		t.Errorf("error = %q, want mention of min_bytes", resp.Error)
 	}
 }
+
+func TestDeleteInventoryRowPartial_RemovesAndReturnsEmpty(t *testing.T) {
+	h := newTestHandlers(t)
+	registerInventory(t, h, "test", "Test", "/path")
+
+	req := httptest.NewRequest(http.MethodDelete, "/partials/inventories/test", http.NoBody)
+	req = withURLParam(req, "id", "test")
+	w := httptest.NewRecorder()
+
+	h.DeleteInventoryRowPartial(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if got := w.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Errorf("content-type = %q, want text/html", got)
+	}
+	if body := w.Body.String(); body != "" {
+		t.Errorf("body = %q, want empty", body)
+	}
+	if _, ok := h.manager.Get("test"); ok {
+		t.Error("inventory still present after partial delete")
+	}
+}
+
+func TestUnloadInventoryRowPartial_NotLoadedReturnsConflict(t *testing.T) {
+	h := newTestHandlers(t)
+	registerInventory(t, h, "test", "Test", "/path")
+
+	req := httptest.NewRequest(http.MethodPost, "/partials/inventories/test/unload", http.NoBody)
+	req = withURLParam(req, "id", "test")
+	w := httptest.NewRecorder()
+
+	h.UnloadInventoryRowPartial(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusConflict)
+	}
+}
+
+func TestLoadInventoryRowPartial_NotFound(t *testing.T) {
+	h := newTestHandlers(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/partials/inventories/missing/load", http.NoBody)
+	req = withURLParam(req, "id", "missing")
+	w := httptest.NewRecorder()
+
+	h.LoadInventoryRowPartial(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
