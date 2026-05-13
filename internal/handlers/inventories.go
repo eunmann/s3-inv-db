@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -83,7 +84,9 @@ func (h *Handlers) GetInventoryAPI(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) LoadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	if err := h.manager.Load(r.Context(), id); err != nil {
+	// See LoadDiscoveredAPI: build runs without HTTP-request cancellation.
+	loadCtx := context.WithoutCancel(r.Context())
+	if err := h.manager.Load(loadCtx, id); err != nil {
 		if errors.Is(err, inventory.ErrNotFound) {
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
 			return

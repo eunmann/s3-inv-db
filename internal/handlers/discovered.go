@@ -77,7 +77,13 @@ func (h *Handlers) LoadDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = h.manager.LoadWith(r.Context(), composite, func(ctx context.Context, _ inventory.Info) (string, error) {
+	// Decouple the build from the HTTP request lifetime: a user navigating
+	// away or htmx cancelling on its end shouldn't poison the inventory
+	// state with "context canceled". The build still terminates on server
+	// shutdown because Manager.Close empties the inventory map and the
+	// LoadWith post-build re-check then returns ErrNotFound.
+	loadCtx := context.WithoutCancel(r.Context())
+	err = h.manager.LoadWith(loadCtx, composite, func(ctx context.Context, _ inventory.Info) (string, error) {
 		return h.loader.Build(ctx, src, id, manifestURI)
 	})
 	if err != nil {
