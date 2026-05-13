@@ -85,7 +85,9 @@ func (h *Handlers) GetInventoryAPI(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) LoadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	// See LoadDiscoveredAPI: build runs without HTTP-request cancellation.
+	// Build runs under WithoutCancel so a navigate-away or htmx-side
+	// cancellation doesn't poison the inventory state with "context
+	// canceled". Server shutdown still terminates it via Manager.Close.
 	loadCtx := context.WithoutCancel(r.Context())
 	if err := h.manager.Load(loadCtx, id); err != nil {
 		if errors.Is(err, inventory.ErrNotFound) {
@@ -144,25 +146,33 @@ func (h *Handlers) DeleteInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
-// InventoriesPage renders the inventories HTML page. When discovery is
-// configured the page shows S3-discovered inventories merged with the
-// current load state; otherwise it shows the Manager's local list.
-func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
-	data := map[string]interface{}{
-		"Title":        "Inventories",
-		"S3Source":     h.s3SourceURI,
-		"HasDiscovery": h.discovery.Enabled(),
-	}
+// InventoriesData is the typed page data for inventories.html.
+type InventoriesData struct {
+	Title          string
+	S3Source       string
+	HasDiscovery   bool
+	DiscoveryError string
+	Discovered     []inventory.MergedInventory
+}
 
-	if h.discovery.Enabled() {
+// InventoriesPage renders the inventories HTML page. The page is
+// discovery-centric: when --s3-source is set, it lists S3-discovered
+// inventories merged with their live load state. When discovery is
+// disabled the page surfaces an empty state directing the operator to
+// the Dashboard (which shows the Manager's local list directly).
+func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
+	data := InventoriesData{
+		Title:        "Inventories",
+		S3Source:     h.s3SourceURI,
+		HasDiscovery: h.discovery.Enabled(),
+	}
+	if data.HasDiscovery {
 		views, err := h.discovery.List(r.Context())
 		if err != nil {
 			logctx.FromContext(r.Context()).Error().Err(err).Msg("discover for inventories page")
-			data["DiscoveryError"] = "Failed to list discovered inventories. See server logs for details."
+			data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
 		}
-		data["Discovered"] = views
-	} else {
-		data["Inventories"] = h.manager.List()
+		data.Discovered = views
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
