@@ -1,6 +1,9 @@
 # s3-inv-db
 
-A high-performance indexer for S3 inventory reports. Builds a compact, memory-mapped index that enables O(1) prefix lookups and fast subtree aggregation queries.
+A high-performance indexer + HTTP server for S3 inventory reports. Builds a
+compact, memory-mapped index that enables O(1) prefix lookups and fast
+subtree aggregation queries, and exposes the queries through both a JSON
+API and an HTMX-driven SSR web UI.
 
 ## Features
 
@@ -9,7 +12,21 @@ A high-performance indexer for S3 inventory reports. Builds a compact, memory-ma
 - **Bounded memory builds** via external sort with configurable budget
 - **Per-tier storage statistics** for all 12 S3 storage classes
 - **Subtree aggregation** queries by depth with filtering
+- **HTTP server with HTMX SSR UI** for browsing prefixes, loading
+  inventories, viewing per-prefix cost estimates
+- **S3 discovery** — server walks an `s3://bucket/inventory-prefix/`
+  source and surfaces every inventory + its latest run
 - **Pure Go** implementation with no CGO dependencies
+
+## Binaries
+
+The repo builds three binaries, all named for the project:
+
+| Binary | Source | Purpose |
+|---|---|---|
+| `s3-inv-db` | `cmd/s3-inv-db` | CLI for `build` / `query` operations on a single index |
+| `s3-inv-db-server` | `cmd/s3-inv-db-server` | HTTP server: discovery, load/unload, JSON API, HTML UI |
+| `s3-inv-db-seeder` | `cmd/s3-inv-db-seeder` | Synthetic-data generator for local dev + integration tests |
 
 ## Installation
 
@@ -17,15 +34,16 @@ A high-performance indexer for S3 inventory reports. Builds a compact, memory-ma
 go install github.com/eunmann/s3-inv-db/cmd/s3-inv-db@latest
 ```
 
-Or build from source:
+Or build all three from source:
 
 ```bash
 git clone https://github.com/eunmann/s3-inv-db.git
 cd s3-inv-db
-go build -o s3-inv-db ./cmd/s3-inv-db
+make all        # builds bin/s3-inv-db + bin/s3-inv-db-server
+make seeder     # builds bin/s3-inv-db-seeder
 ```
 
-## Quick Start
+## CLI Quick Start
 
 ### Build an Index
 
@@ -46,30 +64,52 @@ s3-inv-db query --index ./my-index --prefix "data/2024/" \
   --show-tiers --estimate-cost
 ```
 
-## Architecture
+## HTTP Server
 
-The index stores prefix statistics in a columnar format optimized for memory-mapped access:
+`s3-inv-db-server` exposes the same query surface as the CLI plus an
+SSR web UI driven by [HTMX](https://htmx.org/) — page actions
+(load/unload/evict an inventory, drill into a prefix) submit via
+`hx-post`/`hx-get` and the server returns HTML row/level partials that
+swap in place. No JSON-and-reload anti-patterns.
 
+### Run
+
+```bash
+# Standalone, listening on :8080, no discovery configured:
+s3-inv-db-server
+
+# With discovery — the server walks the s3:// source and shows every
+# inventory + its load state in the UI.
+s3-inv-db-server \
+  --addr :8080 \
+  --s3-source s3://my-bucket/inventory-data/ \
+  --cache-dir /var/cache/s3inv
 ```
-my-index/
-├── manifest.json         # File checksums and metadata
-├── subtree_end.u64       # Preorder subtree ranges
-├── depth.u32             # Prefix depths
-├── object_count.u64      # Object counts per prefix
-├── total_bytes.u64       # Byte totals per prefix
-├── max_depth_in_subtree.u32
-├── depth_offsets.u64     # Depth index for range queries
-├── depth_positions.u64
-├── mph.bin               # BBHash MPHF
-├── mph_fp.u64            # Fingerprints for verification
-├── mph_pos.u64           # Position mapping
-├── prefix_blob.bin       # Concatenated prefix strings
-├── prefix_offsets.u64    # Offsets into prefix blob
-└── tier_stats/           # Per-tier statistics (optional)
-    ├── tier_0_count.u64
-    ├── tier_0_bytes.u64
-    └── ...
-```
+
+### Routes
+
+| Route | Method | Returns | Notes |
+|---|---|---|---|
+| `/` | GET | HTML | Dashboard — counters + recent inventories |
+| `/inventories` | GET | HTML | Discovery list (when `--s3-source` is set) |
+| `/browse` | GET | HTML | Prefix explorer; URL params seed the initial render |
+| `/healthz` | GET | text/plain `ok` | Liveness probe (no auth, no S3) |
+| `/partials/browse-level` | GET | HTML | One level of the prefix tree (htmx target) |
+| `/partials/inventories/{id}/load` | POST | HTML row | Loads + returns updated row |
+| `/partials/inventories/{id}/unload` | POST | HTML row | Unloads + returns updated row |
+| `/partials/inventories/{id}` | DELETE | empty | Deletes (htmx outerHTML removes row) |
+| `/partials/discovered/{src}/{id}/load` | POST | HTML row | Build + load a discovered inventory |
+| `/partials/discovered/{src}/{id}/unload` | POST | HTML row | Unload |
+| `/partials/discovered/{src}/{id}` | DELETE | empty | Evict (unload + remove + delete cache) |
+| `/api/inventories` | GET, POST | JSON | List / register |
+| `/api/inventories/{id}` | GET, DELETE | JSON | Get / delete |
+| `/api/inventories/{id}/load`, `/unload` | POST | JSON | Load / unload |
+| `/api/inventories/{id}/stats`, `/descendants` | GET | JSON | Per-prefix stats / depth-walk |
+| `/api/discovered` | GET | JSON | List discovered inventories (when configured) |
+| `/api/stats` | GET | JSON | Stats for `?inventory_id=&prefix=` |
+
+Cross-origin mutating requests (POST/PUT/PATCH/DELETE) are rejected by
+a same-origin middleware; reads are public.
 
 ## Library Usage
 
@@ -100,6 +140,112 @@ if idx.HasTierData() {
 }
 ```
 
+## Local Development
+
+The dev workflow runs in Docker — no host-binary path. The
+`infra/docker-compose.yml` file carries three profiles: `dev`, `prod`,
+`seed`.
+
+```bash
+# Hot-reload server on :8080 with Air watching go + html files. Pulls in
+# MinIO + minio-setup so discovery works against a local S3.
+make dev
+
+# One-shot synthetic-data seeder. Uploads inventories to MinIO under
+# the dev stack, or writes them to ./seed-data when --target=local.
+make docker-seed
+
+# Production-style slim image on :8081.
+make docker-prod
+
+# Tear everything down.
+make docker-down
+```
+
+Air watches `*.go`, `*.html`, and `*.tmpl` (see `.air.toml`), so editing
+a template re-runs the binary and re-loads the embedded templates.
+There is no in-process devMode template reload.
+
+### Hand-driving the API against the dev stack
+
+After `make dev` boots:
+
+```bash
+# Generate synthetic inventories into MinIO
+make docker-seed
+
+# Browse discovered inventories
+curl -s http://localhost:8080/api/discovered | jq
+
+# Trigger a load via the partial route (returns HTML for the swapped row)
+curl -X POST \
+  -H "Origin: http://localhost:8080" \
+  http://localhost:8080/partials/discovered/synthetic-prod/inv-001/load
+```
+
+Open `http://localhost:8080` in a browser to use the HTMX UI instead.
+
+## Tests
+
+```bash
+make test       # unit + integration tests
+make test-race  # same with the race detector
+make lint       # golangci-lint v2
+```
+
+### MinIO-backed tests
+
+A handful of tests in `internal/s3disco` and `internal/seeder` exercise
+the real S3 client against MinIO. They skip when `AWS_ENDPOINT_URL_S3`
+is unset, so plain `go test ./...` runs cleanly without containers.
+To exercise them, run inside the dev stack:
+
+```bash
+docker compose -f infra/docker-compose.yml --profile dev run --rm server-dev \
+  go test ./internal/s3disco/... ./internal/seeder/...
+```
+
+## Architecture
+
+The repo is organised in three layers:
+
+- **HTTP layer** (`internal/server`, `internal/handlers`, `internal/templates`)
+  parses requests, calls domain methods, renders JSON or HTML.
+- **Domain layer** (`internal/inventory`, `internal/s3disco`, `internal/loader`)
+  owns the use cases: inventory state machine, discovery, register+build+load
+  orchestration. The HTTP layer never reaches past this boundary.
+- **Storage / index layer** (`pkg/indexread`, `pkg/format`, `pkg/extsort`,
+  `pkg/triebuild`) owns the mmap-backed on-disk format and the build
+  pipeline.
+
+Logging is **request-scoped via zerolog**: `hlog.NewHandler` attaches
+the base logger to ctx and `zerolog.Ctx(r.Context())` retrieves it
+inside handlers. No custom context-logger wrapper package — the
+upstream zerolog/hlog integration is the source of truth.
+
+### Index Format
+
+```
+my-index/
+├── manifest.json         # File checksums and metadata
+├── subtree_end.u64       # Preorder subtree ranges
+├── depth.u32             # Prefix depths
+├── object_count.u64      # Object counts per prefix
+├── total_bytes.u64       # Byte totals per prefix
+├── max_depth_in_subtree.u32
+├── depth_offsets.u64     # Depth index for range queries
+├── depth_positions.u64
+├── mph.bin               # BBHash MPHF
+├── mph_fp.u64            # Fingerprints for verification
+├── mph_pos.u64           # Position mapping
+├── prefix_blob.bin       # Concatenated prefix strings
+├── prefix_offsets.u64    # Offsets into prefix blob
+└── tier_stats/           # Per-tier statistics (optional)
+    ├── tier_0_count.u64
+    ├── tier_0_bytes.u64
+    └── ...
+```
+
 ## Documentation
 
 - [Overview](docs/overview.md) - System design and data flow
@@ -108,97 +254,38 @@ if idx.HasTierData() {
 - [Library API](docs/library-api.md) - Go package documentation
 - [Performance](docs/performance.md) - Benchmarks and tuning
 
-## Development: Seed Data
+## Synthetic Seed Data
 
-For local development and testing, generate synthetic inventory indexes:
+For local development and integration testing, generate synthetic
+inventory indexes with `s3-inv-db-seeder`:
 
 ```bash
-# Generate 3 inventories with 10K objects each (default)
+# Generate 3 inventories with 10K objects each, on disk
 make seed
 
-# Custom generation
+# Custom: 5 inventories, 50K objects, deeper trees
 ./bin/s3-inv-db-seeder --out ./seed-data --count 5 --objects 50000 --preset large
 
-# Clean up generated data
-make clean-seed
+# Upload to MinIO (or any S3 endpoint via AWS_ENDPOINT_URL_S3)
+./bin/s3-inv-db-seeder --target s3 --s3-bucket s3-inv --count 3
 ```
 
 ### Presets
 
 | Preset | Fanout | Max Depth | Description |
-|--------|--------|-----------|-------------|
+|---|---|---|---|
 | small | 5 | 3 | Compact test data |
 | medium | 10 | 5 | Moderate complexity |
 | large | 20 | 8 | Deep, wide trees |
 | realistic | 15 | 7 | S3-like path patterns (default) |
-
-### Using Seed Data with Server
-
-The dev server runs in Docker; there is no host-binary dev workflow.
-
-1. Generate seed data: `make seed`
-2. Start the dev server: `make dev` (air-driven hot reload on `:8080`)
-3. Register an inventory (paths are evaluated inside the container, where
-   the repo is mounted at `/app`):
-   ```bash
-   curl -X POST http://localhost:8080/api/inventories \
-     -H "Content-Type: application/json" \
-     -d '{"id":"inv-001","name":"Test Inventory","path":"/app/seed-data/inv-001"}'
-   ```
-4. Load the inventory:
-   ```bash
-   curl -X POST http://localhost:8080/api/inventories/inv-001/load
-   ```
-5. Query prefix stats:
-   ```bash
-   curl "http://localhost:8080/api/stats?inventory_id=inv-001&prefix=data/"
-   ```
-
-### Output Structure
-
-```
-seed-data/
-├── summary.json       # Registry of all generated inventories
-├── inv-001/           # First inventory index directory
-│   ├── subtree_end.u64
-│   ├── depth.u32
-│   ├── object_count.u64
-│   └── ... (all index files)
-├── inv-002/
-└── inv-003/
-```
-
-## Docker
-
-The dev server runs in Docker — there is no host-binary dev path. The
-`infra/` directory carries a compose stack with three profiles. Override
-host ports with `S3INV_DEV_PORT` / `S3INV_PROD_PORT`.
-
-| Profile | Make target | What it does |
-|---|---|---|
-| `dev` | `make dev` | Source-mounted server with air hot-reload on `:8080` |
-| `prod` | `make docker-prod` | Slim multi-stage image (~21 MB) on `:8081`; mounts `./seed-data` read-only at `/data` |
-| `seed` | `make docker-seed` | One-shot inventory generator; writes to `./seed-data` on the host |
-
-```bash
-# Generate seed data inside a container, then run the slim image against it
-make docker-seed
-make docker-prod
-
-# Develop with hot reload
-make dev
-
-# Stop and clean up volumes
-make docker-down
-```
-
-When running against the dev container, register inventories using the in-container path (`/app/seed-data/inv-001`); against the prod container, use `/data/inv-001`.
 
 ## Requirements
 
 - Go 1.25+
 - AWS credentials configured for S3 access (build only)
 - S3 inventory configured in CSV or Parquet format
+- Docker + docker compose for the dev/test stack (optional, but
+  recommended)
 
 ## License
 
