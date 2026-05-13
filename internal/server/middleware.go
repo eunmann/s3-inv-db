@@ -4,29 +4,53 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/logctx"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
 )
 
-// loggingMiddleware logs HTTP requests using zerolog.
-func loggingMiddleware(logger zerolog.Logger) func(http.Handler) http.Handler {
+// contextLoggerMiddleware attaches a request-scoped logger to ctx so
+// downstream handlers and packages can pull it with logctx.FromContext.
+// Each request gets a child logger tagged with the chi request_id so
+// log lines and access logs correlate one-to-one.
+func contextLoggerMiddleware(base zerolog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reqID := middleware.GetReqID(r.Context())
+			reqLogger := base.With().Str("request_id", reqID).Logger()
+			ctx := logctx.WithLogger(r.Context(), reqLogger)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// accessLogMiddleware logs the completed request with status, duration,
+// route pattern, etc. Must run AFTER contextLoggerMiddleware so it sees
+// the request_id-tagged logger.
+func accessLogMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
-
-			// Wrap response writer to capture status code
 			wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
-
 			next.ServeHTTP(wrapped, r)
 
-			duration := time.Since(start)
-
-			logger.Info().
-				Str("method", r.Method).
-				Str("path", r.URL.Path).
-				Int("status", wrapped.statusCode).
-				Dur("duration", duration).
-				Str("remote_addr", r.RemoteAddr).
-				Msg("http request")
+			logger := logctx.FromContext(r.Context())
+			fields := func(ev *zerolog.Event) *zerolog.Event {
+				return ev.
+					Str("method", r.Method).
+					Str("path", r.URL.Path).
+					Int("status", wrapped.statusCode).
+					Dur("duration", time.Since(start)).
+					Str("remote_addr", r.RemoteAddr)
+			}
+			switch {
+			case wrapped.statusCode >= http.StatusInternalServerError:
+				fields(logger.Error()).Msg("http request")
+			case wrapped.statusCode >= http.StatusBadRequest:
+				fields(logger.Warn()).Msg("http request")
+			default:
+				fields(logger.Info()).Msg("http request")
+			}
 		})
 	}
 }

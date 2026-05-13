@@ -70,34 +70,40 @@ func WithLogger(ctx context.Context, logger zerolog.Logger) context.Context {
 // FromContext extracts the logger from the context. If the context is nil
 // or does not contain a logger, returns the default logger.
 //
-// This function never returns a zero-value logger or panics.
-func FromContext(ctx context.Context) zerolog.Logger {
+// Returns a pointer so callers can chain pointer-receiver methods like
+// .Error().Err(err).Msg(…) directly without intermediate variables. The
+// pointer is not shared — each call returns a fresh allocation.
+//
+// This function never returns nil or panics.
+func FromContext(ctx context.Context) *zerolog.Logger {
 	if ctx == nil {
-		return DefaultLogger()
+		l := DefaultLogger()
+		return &l
 	}
 	if logger, ok := ctx.Value(loggerKey{}).(zerolog.Logger); ok {
-		return logger
+		return &logger
 	}
-	return DefaultLogger()
+	l := DefaultLogger()
+	return &l
 }
 
 // WithField returns a new context with a logger that has the specified field added.
 // This is a convenience function that combines FromContext, With, and WithLogger.
 func WithField(ctx context.Context, key string, value interface{}) context.Context {
-	logger := FromContext(ctx).With().Interface(key, value).Logger()
-	return WithLogger(ctx, logger)
+	child := FromContext(ctx).With().Interface(key, value).Logger()
+	return WithLogger(ctx, child)
 }
 
 // WithStr returns a new context with a logger that has the specified string field added.
 func WithStr(ctx context.Context, key, value string) context.Context {
-	logger := FromContext(ctx).With().Str(key, value).Logger()
-	return WithLogger(ctx, logger)
+	child := FromContext(ctx).With().Str(key, value).Logger()
+	return WithLogger(ctx, child)
 }
 
 // WithInt returns a new context with a logger that has the specified int field added.
 func WithInt(ctx context.Context, key string, value int) context.Context {
-	logger := FromContext(ctx).With().Int(key, value).Logger()
-	return WithLogger(ctx, logger)
+	child := FromContext(ctx).With().Int(key, value).Logger()
+	return WithLogger(ctx, child)
 }
 
 // NewConfiguredLogger creates a new logger with the specified configuration.

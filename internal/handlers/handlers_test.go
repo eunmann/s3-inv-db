@@ -12,7 +12,6 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5"
-	"github.com/rs/zerolog"
 )
 
 func newTestHandlers(t *testing.T) *Handlers {
@@ -24,7 +23,7 @@ func newTestHandlers(t *testing.T) *Handlers {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
 
-	return New(mgr, renderer, pricing.DefaultUSEast1Prices(), zerolog.Nop())
+	return New(mgr, renderer, pricing.DefaultUSEast1Prices())
 }
 
 func TestListInventoriesAPI_Empty(t *testing.T) {

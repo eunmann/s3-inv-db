@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -35,7 +36,7 @@ func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) 
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		h.logger.Debug().Err(err).Msg("invalid register body")
+		logctx.FromContext(r.Context()).Debug().Err(err).Msg("invalid register body")
 		WriteJSONError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -58,7 +59,7 @@ func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) 
 			WriteJSONError(w, http.StatusConflict, "inventory already exists")
 			return
 		}
-		h.logger.Error().Err(err).Msg("failed to register inventory")
+		logctx.FromContext(r.Context()).Error().Err(err).Msg("failed to register inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to register inventory")
 		return
 	}
@@ -95,7 +96,7 @@ func (h *Handlers) LoadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 			WriteJSONError(w, http.StatusConflict, err.Error())
 			return
 		}
-		h.logger.Error().Err(err).Str("id", id).Msg("failed to load inventory")
+		logctx.FromContext(r.Context()).Error().Err(err).Str("id", id).Msg("failed to load inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to load inventory")
 		return
 	}
@@ -117,7 +118,7 @@ func (h *Handlers) UnloadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 			WriteJSONError(w, http.StatusConflict, err.Error())
 			return
 		}
-		h.logger.Error().Err(err).Str("id", id).Msg("failed to unload inventory")
+		logctx.FromContext(r.Context()).Error().Err(err).Str("id", id).Msg("failed to unload inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to unload inventory")
 		return
 	}
@@ -135,7 +136,7 @@ func (h *Handlers) DeleteInventoryAPI(w http.ResponseWriter, r *http.Request) {
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
 			return
 		}
-		h.logger.Error().Err(err).Str("id", id).Msg("failed to delete inventory")
+		logctx.FromContext(r.Context()).Error().Err(err).Str("id", id).Msg("failed to delete inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to delete inventory")
 		return
 	}
@@ -156,7 +157,7 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 	if h.discoverer != nil {
 		views, err := h.discoverAndMerge(r.Context())
 		if err != nil {
-			h.logger.Error().Err(err).Msg("discover for inventories page")
+			logctx.FromContext(r.Context()).Error().Err(err).Msg("discover for inventories page")
 			data["DiscoveryError"] = "Failed to list discovered inventories. See server logs for details."
 		}
 		data["Discovered"] = views
@@ -166,7 +167,7 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.Render(w, "inventories.html", data); err != nil {
-		h.logger.Error().Err(err).Msg("failed to render inventories page")
+		logctx.FromContext(r.Context()).Error().Err(err).Msg("failed to render inventories page")
 		http.Error(w, "failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -185,7 +186,7 @@ func (h *Handlers) InventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.RenderPartial(w, "inventory_row.html", info); err != nil {
-		h.logger.Error().Err(err).Msg("failed to render inventory row")
+		logctx.FromContext(r.Context()).Error().Err(err).Msg("failed to render inventory row")
 		http.Error(w, "failed to render partial", http.StatusInternalServerError)
 	}
 }

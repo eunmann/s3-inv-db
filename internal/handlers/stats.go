@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
@@ -172,6 +173,7 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 		filter.MinBytes = v
 	}
 
+	logger := logctx.FromContext(r.Context())
 	var descendants []DescendantInfo
 	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
 		pos, ok := idx.Lookup(prefix)
@@ -180,14 +182,14 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		positions, perr := idx.DescendantsAtDepthFiltered(pos, depth, filter)
 		if perr != nil {
-			h.logger.Error().Err(perr).Msg("failed to get descendants")
+			logger.Error().Err(perr).Msg("failed to get descendants")
 			return fmt.Errorf("descendants at depth: %w", perr)
 		}
 		descendants = make([]DescendantInfo, 0, len(positions))
 		for _, p := range positions {
 			prefixStr, pserr := idx.PrefixString(p)
 			if pserr != nil {
-				h.logger.Warn().Err(pserr).Uint64("pos", p).Msg("failed to get prefix string")
+				logger.Warn().Err(pserr).Uint64("pos", p).Msg("failed to get prefix string")
 				continue
 			}
 			stats := idx.Stats(p)

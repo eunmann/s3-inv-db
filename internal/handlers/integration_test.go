@@ -42,7 +42,7 @@ func buildLoadedTestHandlers(t *testing.T) *Handlers {
 		t.Fatalf("renderer: %v", err)
 	}
 
-	h := New(mgr, renderer, pricing.DefaultUSEast1Prices(), zerolog.Nop())
+	h := New(mgr, renderer, pricing.DefaultUSEast1Prices())
 
 	indexPath := filepath.Join(tmp, "inv-001")
 	if err := mgr.Register("loaded", "Loaded", indexPath); err != nil {
@@ -255,7 +255,7 @@ func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderer: %v", err)
 	}
-	h := New(mgr, renderer, pricing.DefaultUSEast1Prices(), zerolog.Nop())
+	h := New(mgr, renderer, pricing.DefaultUSEast1Prices())
 
 	// Register via handler.
 	body := `{"id":"life","name":"Life","path":"` + indexPath + `"}`
@@ -346,7 +346,7 @@ func TestLoadInventoryAPI_BadPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderer: %v", err)
 	}
-	h := New(mgr, renderer, pricing.DefaultUSEast1Prices(), zerolog.Nop())
+	h := New(mgr, renderer, pricing.DefaultUSEast1Prices())
 
 	if err := mgr.Register("bad", "Bad", "/nonexistent/path/that/does/not/exist"); err != nil {
 		t.Fatalf("register: %v", err)

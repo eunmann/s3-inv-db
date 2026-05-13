@@ -11,11 +11,14 @@ import (
 func (s *Server) setupRoutes() {
 	r := s.router
 
-	// Global middleware
+	// Global middleware. RequestID must come first so the context logger
+	// can pick it up; the access log runs last so it sees the final
+	// status code (Recoverer-handled panics included).
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(loggingMiddleware(s.config.Logger))
+	r.Use(contextLoggerMiddleware(s.config.Logger))
 	r.Use(middleware.Recoverer)
+	r.Use(accessLogMiddleware())
 
 	// Liveness probe — independent of S3 / discovery / inventory state so
 	// container orchestrators can tell the process is up.

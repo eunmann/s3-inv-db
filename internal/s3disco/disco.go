@@ -20,8 +20,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
-	"github.com/rs/zerolog"
 )
 
 // Inventory represents one discovered S3 Inventory configuration with its
@@ -67,11 +67,12 @@ func (i Inventory) CompositeID() string {
 }
 
 // Discoverer wraps an S3 client + bucket/prefix root and lists inventories.
+// Per-call logging uses logctx.FromContext(ctx) so the request-scoped
+// logger (with request_id) attaches automatically.
 type Discoverer struct {
 	client *s3.Client
 	bucket string
 	prefix string // ends with "/" when non-empty
-	logger zerolog.Logger
 }
 
 // New constructs a Discoverer from an s3.Client and a parsed bucket/prefix.
@@ -80,14 +81,7 @@ func New(client *s3.Client, bucket, prefix string) *Discoverer {
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
-	return &Discoverer{client: client, bucket: bucket, prefix: prefix, logger: zerolog.Nop()}
-}
-
-// WithLogger returns d configured to use logger for per-inventory soft
-// failures (manifest parse errors, listing errors).
-func (d *Discoverer) WithLogger(logger zerolog.Logger) *Discoverer {
-	d.logger = logger
-	return d
+	return &Discoverer{client: client, bucket: bucket, prefix: prefix}
 }
 
 // runFolderRE matches the two timestamp folder shapes S3 Inventory uses
@@ -122,6 +116,7 @@ func (d *Discoverer) List(ctx context.Context) ([]Inventory, error) {
 		return nil, fmt.Errorf("list source buckets: %w", err)
 	}
 
+	logger := logctx.FromContext(ctx)
 	var out []Inventory
 	for _, src := range srcBuckets {
 		srcName := trimPrefix(src, d.prefix)
@@ -129,7 +124,7 @@ func (d *Discoverer) List(ctx context.Context) ([]Inventory, error) {
 		if err != nil {
 			// One unreadable src-bucket shouldn't take down the whole
 			// listing — surface a stub entry tagged with the error.
-			d.logger.Warn().Err(err).Str("src", srcName).Msg("list inventories under src")
+			logger.Warn().Err(err).Str("src", srcName).Msg("list inventories under src")
 			out = append(out, Inventory{SourceBucket: srcName, Error: "failed to list inventories under source bucket"})
 			continue
 		}
@@ -137,7 +132,7 @@ func (d *Discoverer) List(ctx context.Context) ([]Inventory, error) {
 			invName := trimPrefix(inv, src)
 			entry, err := d.describeInventory(ctx, srcName, invName, inv)
 			if err != nil {
-				d.logger.Warn().Err(err).Str("src", srcName).Str("inv", invName).Msg("describe inventory")
+				logger.Warn().Err(err).Str("src", srcName).Str("inv", invName).Msg("describe inventory")
 				entry = Inventory{SourceBucket: srcName, InventoryID: invName, Error: "failed to describe inventory"}
 			}
 			out = append(out, entry)
@@ -188,7 +183,7 @@ func (d *Discoverer) describeInventory(ctx context.Context, src, inv, invPrefix 
 	// Soft-fail on parse error so one broken manifest doesn't break List.
 	manifest, err := d.fetchManifest(ctx, entry.ManifestKey)
 	if err != nil {
-		d.logger.Warn().Err(err).Str("src", src).Str("inv", inv).Str("key", entry.ManifestKey).Msg("fetch manifest")
+		logctx.FromContext(ctx).Warn().Err(err).Str("src", src).Str("inv", inv).Str("key", entry.ManifestKey).Msg("fetch manifest")
 		entry.FileFormat = "unknown"
 		entry.Error = "failed to read manifest"
 		return entry, nil

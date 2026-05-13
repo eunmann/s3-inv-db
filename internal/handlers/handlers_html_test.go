@@ -12,7 +12,6 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5"
-	"github.com/rs/zerolog"
 )
 
 // testFixture provides a test environment for HTML handler tests.
@@ -28,7 +27,7 @@ func newTestFixture(t *testing.T) *testFixture {
 	if err != nil {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
-	h := New(mgr, renderer, pricing.DefaultUSEast1Prices(), zerolog.Nop())
+	h := New(mgr, renderer, pricing.DefaultUSEast1Prices())
 	return &testFixture{h: h, mgr: mgr}
 }
 

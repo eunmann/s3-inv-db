@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/go-chi/chi/v5"
 )
@@ -34,7 +35,7 @@ func (h *Handlers) ListDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 
 	views, err := h.discoverAndMerge(r.Context())
 	if err != nil {
-		h.logger.Error().Err(err).Msg("discover inventories")
+		logctx.FromContext(r.Context()).Error().Err(err).Msg("discover inventories")
 		WriteJSONError(w, http.StatusBadGateway, "failed to discover inventories")
 		return
 	}
@@ -56,9 +57,10 @@ func (h *Handlers) LoadDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logger := logctx.FromContext(r.Context())
 	disc, err := h.discoverer.Find(r.Context(), src, id)
 	if err != nil {
-		h.logger.Error().Err(err).Str("src", src).Str("id", id).Msg("find discovered inventory")
+		logger.Error().Err(err).Str("src", src).Str("id", id).Msg("find discovered inventory")
 		WriteJSONError(w, http.StatusBadGateway, "failed to find inventory")
 		return
 	}
@@ -72,7 +74,7 @@ func (h *Handlers) LoadDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 
 	// Idempotent register — ignore "already exists" so reloads work.
 	if err := h.manager.Register(composite, src+"/"+id, manifestURI); err != nil && !errors.Is(err, inventory.ErrAlreadyExists) {
-		h.logger.Error().Err(err).Msg("register discovered inventory")
+		logger.Error().Err(err).Msg("register discovered inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to register inventory")
 		return
 	}
@@ -93,7 +95,7 @@ func (h *Handlers) LoadDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, inventory.ErrNotFound):
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
 		default:
-			h.logger.Error().Err(err).Str("composite", composite).Msg("load discovered inventory")
+			logger.Error().Err(err).Str("composite", composite).Msg("load discovered inventory")
 			WriteJSONError(w, http.StatusInternalServerError, "failed to load inventory")
 		}
 		return
@@ -110,7 +112,7 @@ func (h *Handlers) UnloadDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	composite := src + "/" + id
 	if err := h.manager.Unload(composite); err != nil {
-		h.mapManagerError(w, err, "unload")
+		writeManagerError(r.Context(), w, err, "unload")
 		return
 	}
 	info, _ := h.manager.Get(composite)
@@ -130,16 +132,16 @@ func (h *Handlers) EvictDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 	if err := h.manager.Unload(composite); err != nil &&
 		!errors.Is(err, inventory.ErrInvalidState) &&
 		!errors.Is(err, inventory.ErrNotFound) {
-		h.mapManagerError(w, err, "unload")
+		writeManagerError(r.Context(), w, err, "unload")
 		return
 	}
 	if err := h.manager.Remove(composite); err != nil && !errors.Is(err, inventory.ErrNotFound) {
-		h.mapManagerError(w, err, "remove")
+		writeManagerError(r.Context(), w, err, "remove")
 		return
 	}
 	if h.loader != nil {
 		if err := h.loader.Evict(src, id); err != nil {
-			h.logger.Warn().Err(err).Str("composite", composite).Msg("evict cache")
+			logctx.FromContext(r.Context()).Warn().Err(err).Str("composite", composite).Msg("evict cache")
 		}
 	}
 	WriteJSON(w, http.StatusOK, map[string]string{"status": "evicted"})
@@ -170,14 +172,14 @@ func (h *Handlers) discoverAndMerge(ctx context.Context) ([]DiscoveredView, erro
 	return views, nil
 }
 
-func (h *Handlers) mapManagerError(w http.ResponseWriter, err error, op string) {
+func writeManagerError(ctx context.Context, w http.ResponseWriter, err error, op string) {
 	switch {
 	case errors.Is(err, inventory.ErrNotFound):
 		WriteJSONError(w, http.StatusNotFound, "inventory not found")
 	case errors.Is(err, inventory.ErrInvalidState):
 		WriteJSONError(w, http.StatusConflict, err.Error())
 	default:
-		h.logger.Error().Err(err).Str("op", op).Msg("manager error")
+		logctx.FromContext(ctx).Error().Err(err).Str("op", op).Msg("manager error")
 		WriteJSONError(w, http.StatusInternalServerError, "operation failed")
 	}
 }

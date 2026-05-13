@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"sort"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
@@ -84,7 +86,7 @@ type BrowsePagination struct {
 }
 
 // BrowsePage renders the explorer page shell.
-func (h *Handlers) BrowsePage(w http.ResponseWriter, _ *http.Request) {
+func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 	inventories := h.manager.List()
 	loaded := make([]inventory.Info, 0, len(inventories))
 	for i := range inventories {
@@ -98,7 +100,7 @@ func (h *Handlers) BrowsePage(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.Render(w, "browse.html", data); err != nil {
-		h.logger.Error().Err(err).Msg("failed to render browse page")
+		logctx.FromContext(r.Context()).Error().Err(err).Msg("failed to render browse page")
 		http.Error(w, "failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -116,9 +118,11 @@ func (h *Handlers) BrowseLevelPartial(w http.ResponseWriter, r *http.Request) {
 	sortBy, dir := normalizeSort(q.Get("sort"), q.Get("dir"))
 	page, pageSize := normalizePage(q.Get("page"), q.Get("page_size"))
 
+	ctx := r.Context()
+	logger := logctx.FromContext(ctx)
 	var level BrowseLevel
 	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
-		level = h.buildBrowseLevel(idx, inventoryID, prefix, sortBy, dir, page, pageSize)
+		level = h.buildBrowseLevel(ctx, idx, inventoryID, prefix, sortBy, dir, page, pageSize)
 		return nil
 	})
 	if err != nil {
@@ -128,7 +132,7 @@ func (h *Handlers) BrowseLevelPartial(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, inventory.ErrNotLoaded):
 			http.Error(w, "inventory not loaded — build & load it on the Inventories page first", http.StatusConflict)
 		default:
-			h.logger.Error().Err(err).Msg("get index")
+			logger.Error().Err(err).Msg("get index")
 			http.Error(w, "failed to get index", http.StatusInternalServerError)
 		}
 		return
@@ -136,7 +140,7 @@ func (h *Handlers) BrowseLevelPartial(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.RenderPartial(w, "browse_level.html", level); err != nil {
-		h.logger.Error().Err(err).Msg("failed to render browse level")
+		logger.Error().Err(err).Msg("failed to render browse level")
 		http.Error(w, "failed to render partial", http.StatusInternalServerError)
 	}
 }
@@ -182,7 +186,7 @@ func normalizeSort(sortBy, dir string) (col, direction string) {
 // buildBrowseLevel computes the stats + children for a single prefix.
 // Missing prefixes return NotFound=true so the partial can render an
 // inline message rather than failing the whole request.
-func (h *Handlers) buildBrowseLevel(idx *indexread.Index, inventoryID, prefix, sortBy, dir string, page, pageSize int) BrowseLevel {
+func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, inventoryID, prefix, sortBy, dir string, page, pageSize int) BrowseLevel {
 	level := BrowseLevel{
 		InventoryID: inventoryID,
 		Prefix:      prefix,
@@ -236,7 +240,7 @@ func (h *Handlers) buildBrowseLevel(idx *indexread.Index, inventoryID, prefix, s
 		}
 	}
 
-	all := h.buildChildren(idx, pos, prefix, sortBy == sortColCost)
+	all := h.buildChildren(ctx, idx, pos, prefix, sortBy == sortColCost)
 	sortChildren(all, sortBy, dir)
 	level.TotalChildren = len(all)
 	level.Pagination = paginate(len(all), page, pageSize)
@@ -251,10 +255,10 @@ func (h *Handlers) buildBrowseLevel(idx *indexread.Index, inventoryID, prefix, s
 	return level
 }
 
-func (h *Handlers) buildChildren(idx *indexread.Index, pos uint64, prefix string, computeCost bool) []BrowseChild {
+func (h *Handlers) buildChildren(ctx context.Context, idx *indexread.Index, pos uint64, prefix string, computeCost bool) []BrowseChild {
 	positions, err := idx.DescendantsAtDepthFiltered(pos, 1, indexread.Filter{})
 	if err != nil {
-		h.logger.Warn().Err(err).Msg("descendants at depth 1")
+		logctx.FromContext(ctx).Warn().Err(err).Msg("descendants at depth 1")
 		return nil
 	}
 	hasTier := idx.HasTierData()

@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/logctx"
 )
 
 // DashboardData contains data for the dashboard page.
@@ -31,11 +32,12 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 		HasDiscovery: h.discoverer != nil,
 	}
 
+	logger := logctx.FromContext(r.Context())
 	var infos []inventory.Info
 	if h.discoverer != nil {
 		views, err := h.discoverAndMerge(r.Context())
 		if err != nil {
-			h.logger.Warn().Err(err).Msg("dashboard discovery failed; falling back to manager")
+			logger.Warn().Err(err).Msg("dashboard discovery failed; falling back to manager")
 		} else {
 			infos = make([]inventory.Info, 0, len(views))
 			for i := range views {
@@ -74,7 +76,7 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.Render(w, "dashboard.html", data); err != nil {
-		h.logger.Error().Err(err).Msg("failed to render dashboard")
+		logger.Error().Err(err).Msg("failed to render dashboard")
 		http.Error(w, "failed to render page", http.StatusInternalServerError)
 	}
 }

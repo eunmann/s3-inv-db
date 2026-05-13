@@ -333,7 +333,7 @@ func (c *ingestConfig) formatString() string {
 }
 
 // computeWorkerCount calculates the number of workers based on memory budget.
-func (p *Pipeline) computeWorkerCount(log zerolog.Logger) int {
+func (p *Pipeline) computeWorkerCount(log *zerolog.Logger) int {
 	numWorkers := p.config.S3DownloadConcurrency
 	if numWorkers <= 0 {
 		numWorkers = runtime.NumCPU()
@@ -427,7 +427,7 @@ func (p *Pipeline) sendIngestJobs(ctx context.Context, cfg *ingestConfig, jobs c
 // processIngestResults processes results from workers and aggregates data.
 func (p *Pipeline) processIngestResults(
 	ctx context.Context,
-	log zerolog.Logger,
+	log *zerolog.Logger,
 	results <-chan objectBatch,
 	cancel context.CancelFunc,
 	totalChunks int,
@@ -479,7 +479,7 @@ func (p *Pipeline) processIngestResults(
 // and flushErr is set if flushing to disk failed.
 func (p *Pipeline) handleIngestBatch(
 	ctx context.Context,
-	log zerolog.Logger,
+	log *zerolog.Logger,
 	agg *Aggregator,
 	batch objectBatch,
 	totalChunks int,
@@ -516,7 +516,7 @@ func (p *Pipeline) handleIngestBatch(
 }
 
 // logIngestProgress logs progress information.
-func (p *Pipeline) logIngestProgress(log zerolog.Logger, chunkNum, totalChunks int) {
+func (p *Pipeline) logIngestProgress(log *zerolog.Logger, chunkNum, totalChunks int) {
 	elapsed := time.Since(p.startTime)
 	avgPerChunk := elapsed / time.Duration(chunkNum)
 	remaining := time.Duration(totalChunks-chunkNum) * avgPerChunk
