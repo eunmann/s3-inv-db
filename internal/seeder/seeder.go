@@ -57,10 +57,11 @@ func Run(cfg Config) error {
 	inventories := make([]InventoryInfo, 0, cfg.Count)
 
 	for i := range cfg.Count {
-		invSeed := cfg.Seed
-		if cfg.Seed != 0 {
-			invSeed = cfg.Seed + int64(i)*1000
-		}
+		// Always offset per inventory so distinct inventories get distinct
+		// data, including when the user didn't pass --seed (cfg.Seed == 0).
+		// Adding 1 keeps invSeed non-zero so the generator never falls back
+		// to its built-in default seed.
+		invSeed := cfg.Seed + int64(i+1)*1000
 
 		info, err := generateInventory(cfg, i+1, invSeed)
 		if err != nil {

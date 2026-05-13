@@ -1,7 +1,10 @@
 package seeder
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -67,6 +70,43 @@ func TestRun_GeneratesValidIndexes(t *testing.T) {
 		}
 
 		idx.Close()
+	}
+}
+
+func TestRun_DistinctInventoriesWithDefaultSeed(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := Config{
+		OutputDir: tmpDir,
+		Count:     3,
+		Objects:   200,
+		Preset:    "small",
+		Seed:      0, // default — must still produce distinct inventories
+		Logger:    zerolog.Nop(),
+	}
+
+	if err := Run(cfg); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	// Compare the raw index payloads — distinct seeds yield distinct trees.
+	hashes := make(map[string]string, 3)
+	for i := 1; i <= 3; i++ {
+		id := fmt.Sprintf("inv-%03d", i)
+		blobPath := filepath.Join(tmpDir, id, "prefix_blob.bin")
+		data, err := os.ReadFile(blobPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", blobPath, err)
+		}
+		h := sha256.Sum256(data)
+		hashes[id] = hex.EncodeToString(h[:])
+	}
+
+	if hashes["inv-001"] == hashes["inv-002"] {
+		t.Errorf("inv-001 and inv-002 produced identical index blobs (seed offset not applied)")
+	}
+	if hashes["inv-002"] == hashes["inv-003"] {
+		t.Errorf("inv-002 and inv-003 produced identical index blobs")
 	}
 }
 
