@@ -55,19 +55,20 @@ type DescendantInfo struct {
 
 // GetStatsAPI returns stats for a prefix.
 func (h *Handlers) GetStatsAPI(w http.ResponseWriter, r *http.Request) {
-	inventoryID := r.URL.Query().Get("inventory_id")
-	prefix := r.URL.Query().Get("prefix")
-	showTiers := r.URL.Query().Get("show_tiers") == "true"
-	estimateCost := r.URL.Query().Get("estimate_cost") == "true"
+	q := r.URL.Query()
+	inventoryID := q.Get("inventory_id")
+	showTiers := q.Get("show_tiers") == "true"
+	estimateCost := q.Get("estimate_cost") == "true"
 
 	if inventoryID == "" {
 		WriteJSONError(w, http.StatusBadRequest, "inventory_id is required")
 		return
 	}
-	if prefix == "" {
+	if !q.Has("prefix") {
 		WriteJSONError(w, http.StatusBadRequest, "prefix is required")
 		return
 	}
+	prefix := q.Get("prefix")
 
 	idx, err := h.manager.GetIndex(inventoryID)
 	if err != nil {
@@ -95,14 +96,15 @@ func (h *Handlers) GetStatsAPI(w http.ResponseWriter, r *http.Request) {
 // GetInventoryStatsAPI returns stats for a prefix within a specific inventory.
 func (h *Handlers) GetInventoryStatsAPI(w http.ResponseWriter, r *http.Request) {
 	inventoryID := chi.URLParam(r, "id")
-	prefix := r.URL.Query().Get("prefix")
-	showTiers := r.URL.Query().Get("show_tiers") == "true"
-	estimateCost := r.URL.Query().Get("estimate_cost") == "true"
+	q := r.URL.Query()
+	showTiers := q.Get("show_tiers") == "true"
+	estimateCost := q.Get("estimate_cost") == "true"
 
-	if prefix == "" {
+	if !q.Has("prefix") {
 		WriteJSONError(w, http.StatusBadRequest, "prefix query parameter is required")
 		return
 	}
+	prefix := q.Get("prefix")
 
 	idx, err := h.manager.GetIndex(inventoryID)
 	if err != nil {
@@ -130,15 +132,16 @@ func (h *Handlers) GetInventoryStatsAPI(w http.ResponseWriter, r *http.Request) 
 // GetDescendantsAPI returns descendants at a specific depth.
 func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 	inventoryID := chi.URLParam(r, "id")
-	prefix := r.URL.Query().Get("prefix")
-	depthStr := r.URL.Query().Get("depth")
-	minCountStr := r.URL.Query().Get("min_count")
-	minBytesStr := r.URL.Query().Get("min_bytes")
+	q := r.URL.Query()
+	depthStr := q.Get("depth")
+	minCountStr := q.Get("min_count")
+	minBytesStr := q.Get("min_bytes")
 
-	if prefix == "" {
+	if !q.Has("prefix") {
 		WriteJSONError(w, http.StatusBadRequest, "prefix query parameter is required")
 		return
 	}
+	prefix := q.Get("prefix")
 
 	depth := 1
 	if depthStr != "" {
@@ -304,15 +307,16 @@ func (h *Handlers) StatsPage(w http.ResponseWriter, _ *http.Request) {
 
 // StatsResultPartial renders a stats result partial for HTMX.
 func (h *Handlers) StatsResultPartial(w http.ResponseWriter, r *http.Request) {
-	inventoryID := r.URL.Query().Get("inventory_id")
-	prefix := r.URL.Query().Get("prefix")
-	showTiers := r.URL.Query().Get("show_tiers") == "true"
-	estimateCost := r.URL.Query().Get("estimate_cost") == "true"
+	q := r.URL.Query()
+	inventoryID := q.Get("inventory_id")
+	showTiers := q.Get("show_tiers") == "true"
+	estimateCost := q.Get("estimate_cost") == "true"
 
-	if inventoryID == "" || prefix == "" {
+	if inventoryID == "" || !q.Has("prefix") {
 		http.Error(w, "inventory_id and prefix are required", http.StatusBadRequest)
 		return
 	}
+	prefix := q.Get("prefix")
 
 	idx, err := h.manager.GetIndex(inventoryID)
 	if err != nil {

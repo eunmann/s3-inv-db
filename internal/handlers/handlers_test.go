@@ -347,6 +347,53 @@ func TestGetStatsAPI_MissingPrefix(t *testing.T) {
 	}
 }
 
+// TestGetStatsAPI_EmptyPrefixAccepted verifies that an explicitly empty
+// prefix is not rejected at the parameter-validation step. The handler
+// still surfaces inventory-not-found (or not-loaded), but it must not
+// 400 the request — an empty prefix is the root of the trie.
+func TestGetStatsAPI_EmptyPrefixAccepted(t *testing.T) {
+	h := newTestHandlers(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stats?inventory_id=nope&prefix=", http.NoBody)
+	w := httptest.NewRecorder()
+
+	h.GetStatsAPI(w, req)
+
+	if w.Code == http.StatusBadRequest {
+		t.Errorf("status = 400 for empty prefix, want non-400 (inventory lookup failure)")
+	}
+}
+
+func TestGetInventoryStatsAPI_EmptyPrefixAccepted(t *testing.T) {
+	h := newTestHandlers(t)
+	registerInventory(t, h, "test", "Test", "/path")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/inventories/test/stats?prefix=", http.NoBody)
+	req = withURLParam(req, "id", "test")
+	w := httptest.NewRecorder()
+
+	h.GetInventoryStatsAPI(w, req)
+
+	if w.Code == http.StatusBadRequest {
+		t.Errorf("status = 400 for empty prefix, want non-400 (inventory not-loaded)")
+	}
+}
+
+func TestGetDescendantsAPI_EmptyPrefixAccepted(t *testing.T) {
+	h := newTestHandlers(t)
+	registerInventory(t, h, "test", "Test", "/path")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/inventories/test/descendants?prefix=", http.NoBody)
+	req = withURLParam(req, "id", "test")
+	w := httptest.NewRecorder()
+
+	h.GetDescendantsAPI(w, req)
+
+	if w.Code == http.StatusBadRequest {
+		t.Errorf("status = 400 for empty prefix, want non-400 (inventory not-loaded)")
+	}
+}
+
 func TestGetStatsAPI_NotFound(t *testing.T) {
 	h := newTestHandlers(t)
 

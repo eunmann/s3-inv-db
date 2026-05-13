@@ -357,7 +357,7 @@ func TestStatsPage_FormStructure(t *testing.T) {
 	// Verify form structure
 	assertElementExists(t, doc, "form#stats-form")
 	assertElementExists(t, doc, "select#inventory_id")
-	assertElementExists(t, doc, "input#prefix[required]")
+	assertElementExists(t, doc, "input#prefix")
 	assertElementExists(t, doc, "input#show_tiers[type='checkbox']")
 	assertElementExists(t, doc, "input#estimate_cost[type='checkbox']")
 	assertElementExists(t, doc, "button[hx-get='/partials/stats-result']")
