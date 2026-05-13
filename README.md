@@ -165,9 +165,33 @@ seed-data/
 └── inv-003/
 ```
 
+## Docker
+
+The `infra/` directory carries a compose stack with three profiles. All commands accept the `S3INV_DEV_PORT` / `S3INV_PROD_PORT` env vars to override the host ports.
+
+| Profile | Make target | What it does |
+|---|---|---|
+| `dev` | `make docker-dev` | Source-mounted server with air hot-reload on `:8080` |
+| `prod` | `make docker-prod` | Slim multi-stage image (~21 MB) on `:8081`; mounts `./seed-data` read-only at `/data` |
+| `seed` | `make docker-seed` | One-shot inventory generator; writes to `./seed-data` on the host |
+
+```bash
+# Generate seed data inside a container, then run the slim image against it
+make docker-seed
+make docker-prod
+
+# Or develop with hot reload
+make docker-dev
+
+# Stop and clean up volumes
+make docker-down
+```
+
+When running against the dev container, register inventories using the in-container path (`/app/seed-data/inv-001`); against the prod container, use `/data/inv-001`.
+
 ## Requirements
 
-- Go 1.21+
+- Go 1.25+
 - AWS credentials configured for S3 access (build only)
 - S3 inventory configured in CSV or Parquet format
 

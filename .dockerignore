@@ -1,0 +1,33 @@
+# Keep the build context small.
+.git
+.gitignore
+.github
+.idea
+.vscode
+
+# Build outputs
+bin/
+tmp/
+
+# Local dev data
+seed-data/
+
+# Test / profiling artifacts
+*.test
+*.prof
+benchmark_results.txt
+coverage.out
+
+# Editor backups
+*.swp
+*.swo
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Memory / claude
+.claude
+
+# Docs (not needed in image)
+docs/

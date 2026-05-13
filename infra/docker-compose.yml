@@ -1,0 +1,75 @@
+# docker compose for s3-inv-db.
+#
+# Profiles:
+#   dev   - air-driven hot-reload server, source bind-mounted (port 8080).
+#   prod  - slim multi-stage image to validate production builds (port 8081
+#           so dev and prod can run side by side).
+#   seed  - one-shot inventory generator that writes to ../seed-data on the
+#           host. Invoke with:
+#               docker compose -f infra/docker-compose.yml \
+#                 --profile seed run --rm seeder
+
+services:
+  server-dev:
+    profiles: [dev]
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.dev
+    ports:
+      - "${S3INV_DEV_PORT:-8080}:8080"
+    volumes:
+      - ..:/app                                # source for hot-reload
+      - /app/tmp                               # keep air's tmp/ inside the container
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/api/inventories || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+
+  server:
+    profiles: [prod]
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    ports:
+      - "${S3INV_PROD_PORT:-8081}:8080"
+    volumes:
+      # Read-only mount lets the slim image serve indexes seeded on the host.
+      - ../seed-data:/data:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/api/inventories || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  seeder:
+    profiles: [seed]
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.dev
+    entrypoint: []
+    command:
+      - go
+      - run
+      - ./cmd/seeder
+      - --out
+      - /app/seed-data
+      - --count
+      - "${S3INV_SEED_COUNT:-3}"
+      - --objects
+      - "${S3INV_SEED_OBJECTS:-5000}"
+      - --preset
+      - "${S3INV_SEED_PRESET:-realistic}"
+      - --pretty-logs
+    volumes:
+      - ..:/app
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+
+volumes:
+  go-mod-cache:
+  go-build-cache:
