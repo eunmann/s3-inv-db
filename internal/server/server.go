@@ -66,6 +66,14 @@ func (s *Server) Run(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// Close the inventory manager on every exit path so mmaps and file
+	// handles never outlive Run, even if Shutdown or ListenAndServe errors.
+	defer func() {
+		if err := s.manager.Close(); err != nil {
+			s.config.Logger.Error().Err(err).Msg("failed to close inventory manager")
+		}
+	}()
+
 	errChan := make(chan error, 1)
 	go func() {
 		s.config.Logger.Info().Str("addr", s.config.Addr).Msg("starting HTTP server")
@@ -84,11 +92,6 @@ func (s *Server) Run(ctx context.Context) error {
 		if err := s.server.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("shutdown: %w", err)
 		}
-
-		if err := s.manager.Close(); err != nil {
-			s.config.Logger.Error().Err(err).Msg("failed to close inventory manager")
-		}
-
 		return nil
 
 	case err := <-errChan:

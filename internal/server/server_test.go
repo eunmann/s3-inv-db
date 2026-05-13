@@ -64,7 +64,8 @@ func TestServerAPIRoutes(t *testing.T) {
 }
 
 // TestServerGracefulShutdown verifies Run returns nil when ctx is cancelled,
-// so SIGINT/SIGTERM produce a clean exit.
+// so SIGINT/SIGTERM produce a clean exit, and that the inventory manager is
+// closed (cleared) afterward.
 func TestServerGracefulShutdown(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -85,6 +86,11 @@ func TestServerGracefulShutdown(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
+	// Register an inventory so Close has something to clear.
+	if err := srv.Manager().Register("probe", "Probe", "/no/such/path"); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	runErr := make(chan error, 1)
 	go func() {
@@ -102,5 +108,55 @@ func TestServerGracefulShutdown(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run() did not return within 5s after context cancel")
+	}
+
+	if got := len(srv.Manager().List()); got != 0 {
+		t.Errorf("Manager.List() length = %d after Run, want 0 (manager not closed)", got)
+	}
+}
+
+// TestServerRun_ListenError verifies that when ListenAndServe fails (port
+// already in use), Run returns the error and still closes the inventory
+// manager on the way out.
+func TestServerRun_ListenError(t *testing.T) {
+	// Occupy a port so the server can't bind to it.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	cfg := Config{
+		Addr:       ln.Addr().String(),
+		Logger:     zerolog.Nop(),
+		DevMode:    false,
+		PriceTable: pricing.DefaultUSEast1Prices(),
+	}
+
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if err := srv.Manager().Register("probe", "Probe", "/no/such/path"); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- srv.Run(context.Background())
+	}()
+
+	select {
+	case err := <-runErr:
+		if err == nil {
+			t.Error("Run() returned nil on port conflict, want non-nil error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return within 5s on port conflict")
+	}
+
+	if got := len(srv.Manager().List()); got != 0 {
+		t.Errorf("Manager.List() length = %d after ListenAndServe failure, want 0", got)
 	}
 }
