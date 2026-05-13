@@ -446,6 +446,26 @@ func TestBrowsePage_BoostedNavReturnsFullPage(t *testing.T) {
 	}
 }
 
+// TestLayout_DisablesHTMXHistoryCache pins the layout's two history-cache
+// safeties: the htmx-config meta tag and hx-history="false" on body.
+// Both together guarantee back/forward goes through the server so form
+// state reflects the URL — outerHTML snapshots can't preserve user-
+// edited <input value> or <option selected>.
+func TestLayout_DisablesHTMXHistoryCache(t *testing.T) {
+	f := newTestFixture(t)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	w := httptest.NewRecorder()
+	f.h.Dashboard(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, `name="htmx-config"`) || !strings.Contains(body, `"historyCacheSize":0`) {
+		t.Error("layout missing <meta name=\"htmx-config\"> with historyCacheSize:0")
+	}
+	if !strings.Contains(body, `hx-history="false"`) {
+		t.Error("layout body missing hx-history=\"false\"")
+	}
+}
+
 // TestBrowsePage_HistoryRestoreReturnsFullPage: HX-History-Restore-Request
 // from htmx back/forward must get the full layout, not a bare partial.
 func TestBrowsePage_HistoryRestoreReturnsFullPage(t *testing.T) {

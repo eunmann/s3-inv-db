@@ -25,6 +25,10 @@
     </script>
 
     <link rel="stylesheet" href="/static/tailwind.css">
+    <!-- historyCacheSize=0: never restore from htmx's localStorage snapshot.
+         outerHTML snapshots can't capture user-edited input values, so back/
+         forward must always go through the server. -->
+    <meta name="htmx-config" content='{"historyCacheSize":0}'>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
 </head>
 <body class="bg-gray-100 dark:bg-gray-900 min-h-screen text-gray-900 dark:text-gray-100" hx-boost="true" hx-history="false">
