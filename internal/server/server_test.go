@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,13 +13,27 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
+	_ "modernc.org/sqlite"
 )
+
+// testDB returns an in-memory SQLite handle wired up the same way main
+// opens the production one (foreign_keys on for cascade tests).
+func testDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
 
 func TestNewServer(t *testing.T) {
 	cfg := Config{
 		Addr:       ":8080",
 		Logger:     zerolog.Nop(),
 		PriceTable: pricing.DefaultUSEast1Prices(),
+		DB:         testDB(t),
 	}
 
 	srv, err := New(cfg)
@@ -40,6 +55,7 @@ func TestServerAPIRoutes(t *testing.T) {
 		Addr:       ":8080",
 		Logger:     zerolog.Nop(),
 		PriceTable: pricing.DefaultUSEast1Prices(),
+		DB:         testDB(t),
 	}
 
 	srv, err := New(cfg)
@@ -78,6 +94,7 @@ func TestServerGracefulShutdown(t *testing.T) {
 		Addr:       addr,
 		Logger:     zerolog.Nop(),
 		PriceTable: pricing.DefaultUSEast1Prices(),
+		DB:         testDB(t),
 	}
 
 	srv, err := New(cfg)
@@ -129,6 +146,7 @@ func TestServerRun_ListenError(t *testing.T) {
 		Addr:       ln.Addr().String(),
 		Logger:     zerolog.Nop(),
 		PriceTable: pricing.DefaultUSEast1Prices(),
+		DB:         testDB(t),
 	}
 
 	srv, err := New(cfg)
@@ -160,7 +178,7 @@ func TestServerRun_ListenError(t *testing.T) {
 }
 
 func TestSameOriginMiddleware_RejectsCrossOriginMutation(t *testing.T) {
-	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices()}
+	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: testDB(t)}
 	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -178,7 +196,7 @@ func TestSameOriginMiddleware_RejectsCrossOriginMutation(t *testing.T) {
 }
 
 func TestSameOriginMiddleware_AllowsSameOriginMutation(t *testing.T) {
-	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices()}
+	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: testDB(t)}
 	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -197,7 +215,7 @@ func TestSameOriginMiddleware_AllowsSameOriginMutation(t *testing.T) {
 }
 
 func TestSameOriginMiddleware_AllowsNoOrigin(t *testing.T) {
-	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices()}
+	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: testDB(t)}
 	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -214,7 +232,7 @@ func TestSameOriginMiddleware_AllowsNoOrigin(t *testing.T) {
 }
 
 func TestSameOriginMiddleware_DoesNotBlockReads(t *testing.T) {
-	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices()}
+	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: testDB(t)}
 	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -260,7 +278,7 @@ func TestSameOrigin_HostInPath(t *testing.T) {
 }
 
 func TestSameOriginMiddleware_ReadsBypassOriginCheck(t *testing.T) {
-	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices()}
+	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: testDB(t)}
 	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)

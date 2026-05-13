@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -32,6 +33,9 @@ type Config struct {
 	// CacheDir is the local directory where built indexes are written.
 	// Required when S3Source is set.
 	CacheDir string
+	// DB is the shared SQLite handle for domain Stores. Each domain
+	// (inventory, jobs, downloads) constructs its Store from this.
+	DB *sql.DB
 }
 
 // Server is the HTTP server.
@@ -39,6 +43,7 @@ type Server struct {
 	config   Config
 	router   chi.Router
 	manager  *inventory.Manager
+	invStore *inventory.Store
 	renderer *templates.Renderer
 	handlers *handlers.Handlers
 	server   *http.Server
@@ -46,6 +51,13 @@ type Server struct {
 
 // New creates a new server.
 func New(cfg Config) (*Server, error) {
+	if cfg.DB == nil {
+		return nil, errNoDB
+	}
+	invStore, err := inventory.NewStore(cfg.DB)
+	if err != nil {
+		return nil, fmt.Errorf("inventory store: %w", err)
+	}
 	mgr := inventory.NewManager()
 
 	renderer, err := templates.New()
@@ -78,6 +90,7 @@ func New(cfg Config) (*Server, error) {
 		config:   cfg,
 		router:   chi.NewRouter(),
 		manager:  mgr,
+		invStore: invStore,
 		renderer: renderer,
 		handlers: h,
 	}
@@ -87,7 +100,10 @@ func New(cfg Config) (*Server, error) {
 	return s, nil
 }
 
-var errEmptyCacheDir = errors.New("CacheDir is required when S3Source is set")
+var (
+	errEmptyCacheDir = errors.New("CacheDir is required when S3Source is set")
+	errNoDB          = errors.New("server.Config.DB is required")
+)
 
 // s3StartupTimeout caps how long s3fetch.NewClient may spend doing
 // region/STS probes during server startup. 30s is generous enough for
