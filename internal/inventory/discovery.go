@@ -5,10 +5,23 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/eunmann/s3-inv-db/internal/loader"
 	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 )
+
+// Discoverer is the subset of s3disco.Discoverer that DiscoveryService
+// uses. Defined here so the service can be unit-tested with a fake.
+type Discoverer interface {
+	List(ctx context.Context) ([]s3disco.Inventory, error)
+	Find(ctx context.Context, srcBucket, invID string) (s3disco.Inventory, error)
+	Bucket() string
+}
+
+// IndexBuilder is the subset of loader.Loader that DiscoveryService uses.
+type IndexBuilder interface {
+	Build(ctx context.Context, srcBucket, invID, manifestURI string) (string, error)
+	Evict(srcBucket, invID string) error
+}
 
 // MergedInventory is one discovered inventory plus its live load state
 // from the local Manager. Handlers and templates consume this directly;
@@ -29,21 +42,21 @@ func (m MergedInventory) CompositeID() string {
 
 // DiscoveryService orchestrates the inventory use cases that span the
 // Manager (in-memory state), the Discoverer (S3 listing of available
-// inventories), and the Loader (on-disk index materialisation).
+// inventories), and the IndexBuilder (on-disk index materialisation).
 //
-// Discoverer and Loader are optional — when discovery is disabled
+// Discoverer and IndexBuilder are optional — when discovery is disabled
 // (--s3-source unset) the service still exists; Enabled() reports that
-// state and the methods either short-circuit or return ErrDisabled.
+// state and the methods either short-circuit or return ErrDiscoveryDisabled.
 type DiscoveryService struct {
 	manager    *Manager
-	discoverer *s3disco.Discoverer
-	loader     *loader.Loader
+	discoverer Discoverer
+	builder    IndexBuilder
 }
 
-// NewDiscoveryService constructs a service. The discoverer and loader
+// NewDiscoveryService constructs a service. The discoverer and builder
 // arguments may be nil, in which case Enabled() returns false.
-func NewDiscoveryService(mgr *Manager, discoverer *s3disco.Discoverer, ldr *loader.Loader) *DiscoveryService {
-	return &DiscoveryService{manager: mgr, discoverer: discoverer, loader: ldr}
+func NewDiscoveryService(mgr *Manager, discoverer Discoverer, builder IndexBuilder) *DiscoveryService {
+	return &DiscoveryService{manager: mgr, discoverer: discoverer, builder: builder}
 }
 
 // ErrDiscoveryDisabled is returned by methods that require S3 discovery
@@ -53,7 +66,7 @@ var ErrDiscoveryDisabled = errors.New("discovery not configured")
 // Enabled reports whether discovery is configured. List, Find, and Load
 // require Enabled() == true.
 func (s *DiscoveryService) Enabled() bool {
-	return s.discoverer != nil && s.loader != nil
+	return s.discoverer != nil && s.builder != nil
 }
 
 // List walks the configured S3 source and merges each discovered
@@ -110,7 +123,7 @@ func (s *DiscoveryService) Load(ctx context.Context, disc s3disco.Inventory) (In
 	}
 	loadCtx := context.WithoutCancel(ctx)
 	err := s.manager.LoadWith(loadCtx, composite, func(c context.Context, _ Info) (string, error) {
-		return s.loader.Build(c, disc.SourceBucket, disc.InventoryID, manifestURI)
+		return s.builder.Build(c, disc.SourceBucket, disc.InventoryID, manifestURI)
 	})
 	if err != nil {
 		return Info{}, err
@@ -132,8 +145,8 @@ func (s *DiscoveryService) Evict(ctx context.Context, src, id string) error {
 	if err := s.manager.Remove(composite); err != nil && !errors.Is(err, ErrNotFound) {
 		return fmt.Errorf("remove: %w", err)
 	}
-	if s.loader != nil {
-		if err := s.loader.Evict(src, id); err != nil {
+	if s.builder != nil {
+		if err := s.builder.Evict(src, id); err != nil {
 			logctx.FromContext(ctx).Warn().Err(err).Str("composite", composite).Msg("evict cache")
 		}
 	}

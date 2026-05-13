@@ -9,17 +9,18 @@ import (
 
 // DashboardData contains data for the dashboard page.
 type DashboardData struct {
-	Title        string
-	TotalCount   int
-	LoadedCount  int
-	PendingCount int
-	ErrorCount   int
-	Inventories  []inventory.Info
-	TotalNodes   uint64
-	TotalNodesH  string
-	HasTierData  bool
-	S3Source     string
-	HasDiscovery bool
+	Title          string
+	TotalCount     int
+	LoadedCount    int
+	PendingCount   int
+	ErrorCount     int
+	Inventories    []inventory.Info
+	TotalNodes     uint64
+	TotalNodesH    string
+	HasTierData    bool
+	S3Source       string
+	HasDiscovery   bool
+	DiscoveryError string // non-empty when discovery is configured but failed
 }
 
 // Dashboard renders the dashboard HTML page. When discovery is configured
@@ -37,7 +38,8 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	if h.discovery.Enabled() {
 		views, err := h.discovery.List(r.Context())
 		if err != nil {
-			logger.Warn().Err(err).Msg("dashboard discovery failed; falling back to manager")
+			logger.Error().Err(err).Msg("dashboard discovery failed")
+			data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
 		} else {
 			infos = make([]inventory.Info, 0, len(views))
 			for i := range views {
@@ -52,8 +54,7 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 				})
 			}
 		}
-	}
-	if infos == nil {
+	} else {
 		infos = h.manager.List()
 	}
 

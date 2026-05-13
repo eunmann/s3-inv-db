@@ -44,9 +44,20 @@ func New(mgr *inventory.Manager, renderer *templates.Renderer, priceTable pricin
 
 // NewWithConfig creates a Handlers wired with optional S3 discovery + loader.
 func NewWithConfig(cfg Config) *Handlers {
+	// Convert typed-nil pointers to true nil interfaces so DiscoveryService.Enabled()
+	// reads correctly. (A typed-nil concrete pointer assigned to an interface
+	// parameter yields a non-nil interface, the classic Go pitfall.)
+	var disc inventory.Discoverer
+	if cfg.Discoverer != nil {
+		disc = cfg.Discoverer
+	}
+	var bld inventory.IndexBuilder
+	if cfg.Loader != nil {
+		bld = cfg.Loader
+	}
 	return &Handlers{
 		manager:     cfg.Manager,
-		discovery:   inventory.NewDiscoveryService(cfg.Manager, cfg.Discoverer, cfg.Loader),
+		discovery:   inventory.NewDiscoveryService(cfg.Manager, disc, bld),
 		renderer:    cfg.Renderer,
 		priceTable:  cfg.PriceTable,
 		s3SourceURI: cfg.S3SourceURI,

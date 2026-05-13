@@ -23,25 +23,18 @@ var errPrefixNotFound = errors.New("prefix not found")
 // HTML twins in lock-step: fixing a status code here updates both.
 func managerErrorStatus(err error) (status int, msg string) {
 	switch {
-	case errors.Is(err, inventory.ErrNotFound),
-		errors.Is(err, errPrefixNotFound):
-		return http.StatusNotFound, errMessage(err)
+	case errors.Is(err, inventory.ErrNotFound):
+		return http.StatusNotFound, "inventory not found"
+	case errors.Is(err, errPrefixNotFound):
+		return http.StatusNotFound, "prefix not found"
 	case errors.Is(err, inventory.ErrNotLoaded):
 		return http.StatusConflict, "inventory not loaded"
 	case errors.Is(err, inventory.ErrInvalidState):
+		// The InvalidState message is ours ("cannot load from state X")
+		// — useful diagnostic and contains no internal infrastructure detail.
 		return http.StatusConflict, err.Error()
 	}
 	return http.StatusInternalServerError, "operation failed"
-}
-
-func errMessage(err error) string {
-	switch {
-	case errors.Is(err, inventory.ErrNotFound):
-		return "inventory not found"
-	case errors.Is(err, errPrefixNotFound):
-		return "prefix not found"
-	}
-	return err.Error()
 }
 
 // respondManagerErrorHTML emits a text/plain (http.Error) response for
