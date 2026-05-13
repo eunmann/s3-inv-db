@@ -15,11 +15,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
+	"github.com/rs/zerolog"
 )
 
 // Inventory represents one discovered S3 Inventory configuration with its
@@ -52,6 +54,10 @@ type Inventory struct {
 	// CreationTimestamp is the manifest's reported creation time (UnixMilli
 	// as a decimal string, exactly as S3 writes it).
 	CreationTimestamp string `json:"creation_timestamp,omitempty"`
+
+	// Error captures a non-fatal per-inventory failure (e.g. unreadable
+	// manifest, listing error). Empty on success.
+	Error string `json:"error,omitempty"`
 }
 
 // CompositeID returns "<src-bucket>/<inv-id>" — the unique identifier we
@@ -65,6 +71,7 @@ type Discoverer struct {
 	client *s3.Client
 	bucket string
 	prefix string // ends with "/" when non-empty
+	logger zerolog.Logger
 }
 
 // New constructs a Discoverer from an s3.Client and a parsed bucket/prefix.
@@ -73,8 +80,21 @@ func New(client *s3.Client, bucket, prefix string) *Discoverer {
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
-	return &Discoverer{client: client, bucket: bucket, prefix: prefix}
+	return &Discoverer{client: client, bucket: bucket, prefix: prefix, logger: zerolog.Nop()}
 }
+
+// WithLogger returns d configured to use logger for per-inventory soft
+// failures (manifest parse errors, listing errors).
+func (d *Discoverer) WithLogger(logger zerolog.Logger) *Discoverer {
+	d.logger = logger
+	return d
+}
+
+// runFolderRE matches the two timestamp folder shapes S3 Inventory uses
+// (we also accept second-granularity output from our seeder). Any other
+// directory under the inventory prefix (e.g. data/) is filtered out so it
+// can't be misread as a run.
+var runFolderRE = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}(-\d{2})?Z$`)
 
 // NewFromS3URI builds a Discoverer from an s3:// URI like
 // "s3://bucket/optional/prefix/".
@@ -107,13 +127,18 @@ func (d *Discoverer) List(ctx context.Context) ([]Inventory, error) {
 		srcName := trimPrefix(src, d.prefix)
 		invs, err := d.listCommonPrefixes(ctx, src)
 		if err != nil {
-			return nil, fmt.Errorf("list inventories under %s: %w", src, err)
+			// One unreadable src-bucket shouldn't take down the whole
+			// listing — surface a stub entry tagged with the error.
+			d.logger.Warn().Err(err).Str("src", srcName).Msg("list inventories under src")
+			out = append(out, Inventory{SourceBucket: srcName, Error: "failed to list inventories under source bucket"})
+			continue
 		}
 		for _, inv := range invs {
 			invName := trimPrefix(inv, src)
 			entry, err := d.describeInventory(ctx, srcName, invName, inv)
 			if err != nil {
-				return nil, fmt.Errorf("describe %s/%s: %w", srcName, invName, err)
+				d.logger.Warn().Err(err).Str("src", srcName).Str("inv", invName).Msg("describe inventory")
+				entry = Inventory{SourceBucket: srcName, InventoryID: invName, Error: "failed to describe inventory"}
 			}
 			out = append(out, entry)
 		}
@@ -142,13 +167,12 @@ func (d *Discoverer) describeInventory(ctx context.Context, src, inv, invPrefix 
 	entry := Inventory{SourceBucket: src, InventoryID: inv}
 
 	// Pick the lex-greatest timestamp folder. ISO timestamps sort right.
-	// data/ is also a "common prefix" — filter it out by requiring the
-	// timestamp shape (must start with a digit).
+	// data/ and any other oddly-named folder are filtered out by the
+	// strict YYYY-MM-DDTHH-MM[-SS]Z shape.
 	latest := ""
 	for _, r := range runs {
 		name := trimPrefix(r, invPrefix)
-		name = strings.TrimSuffix(name, "/")
-		if name == "" || (name[0] < '0' || name[0] > '9') {
+		if !runFolderRE.MatchString(name) {
 			continue
 		}
 		if name > latest {
@@ -164,8 +188,10 @@ func (d *Discoverer) describeInventory(ctx context.Context, src, inv, invPrefix 
 	// Soft-fail on parse error so one broken manifest doesn't break List.
 	manifest, err := d.fetchManifest(ctx, entry.ManifestKey)
 	if err != nil {
+		d.logger.Warn().Err(err).Str("src", src).Str("inv", inv).Str("key", entry.ManifestKey).Msg("fetch manifest")
 		entry.FileFormat = "unknown"
-		return entry, nil //nolint:nilerr // surface a partial entry; List shouldn't fail for one broken manifest
+		entry.Error = "failed to read manifest"
+		return entry, nil
 	}
 	entry.FileFormat = manifest.FileFormat
 	entry.FileCount = len(manifest.Files)

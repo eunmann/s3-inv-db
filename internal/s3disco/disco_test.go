@@ -224,3 +224,27 @@ func emptyAndDeleteBucket(t *testing.T, client *s3.Client, bucket string) {
 		t.Logf("delete bucket: %v", err)
 	}
 }
+
+func TestRunFolderRE(t *testing.T) {
+	cases := []struct {
+		name  string
+		match bool
+	}{
+		{"2026-05-13T03-02Z", true},       // minute-granularity (AWS)
+		{"2026-05-13T03-02-15Z", true},    // second-granularity (seeder)
+		{"data", false},                   // never a run folder
+		{"9-trash", false},                // loose digit prefix must NOT match
+		{"2026-05-13T03-02", false},       // missing trailing Z
+		{"2026-05-13", false},             // date only
+		{"", false},                       // empty
+		{"2026-05-13T03-02Zextra", false}, // trailing junk
+		{"2026-13-99T99-99Z", true},       // shape matches even with absurd values
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := runFolderRE.MatchString(c.name); got != c.match {
+				t.Errorf("MatchString(%q) = %v, want %v", c.name, got, c.match)
+			}
+		})
+	}
+}

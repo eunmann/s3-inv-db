@@ -69,6 +69,7 @@ func New(cfg Config) (*Server, error) {
 		if err != nil {
 			return nil, fmt.Errorf("discovery from %q: %w", cfg.S3Source, err)
 		}
+		disco = disco.WithLogger(cfg.Logger)
 		if cfg.CacheDir == "" {
 			return nil, errEmptyCacheDir
 		}
