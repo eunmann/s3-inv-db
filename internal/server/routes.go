@@ -1,6 +1,8 @@
 package server
 
 import (
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -18,10 +20,14 @@ func (s *Server) setupRoutes() {
 	// HTML pages
 	r.Get("/", s.handlers.Dashboard)
 	r.Get("/inventories", s.handlers.InventoriesPage)
-	r.Get("/stats", s.handlers.StatsPage)
+	r.Get("/browse", s.handlers.BrowsePage)
+	// /stats redirects to /browse so old bookmarks still resolve.
+	r.Get("/stats", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/browse", http.StatusMovedPermanently)
+	})
 
 	// HTMX partials
-	r.Get("/partials/stats-result", s.handlers.StatsResultPartial)
+	r.Get("/partials/browse-level", s.handlers.BrowseLevelPartial)
 	r.Get("/partials/inventory-row/{id}", s.handlers.InventoryRowPartial)
 
 	// API routes

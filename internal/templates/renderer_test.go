@@ -63,25 +63,28 @@ func TestRenderer_Inventories(t *testing.T) {
 	}
 }
 
-func TestRenderer_Stats(t *testing.T) {
+func TestRenderer_Browse(t *testing.T) {
 	renderer, err := New(false)
 	if err != nil {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
 
 	data := map[string]interface{}{
-		"Title":       "Query Stats",
+		"Title":       "Browse",
 		"Inventories": []interface{}{},
 	}
 
 	var buf bytes.Buffer
-	if err := renderer.Render(&buf, "stats.html", data); err != nil {
-		t.Fatalf("failed to render stats: %v", err)
+	if err := renderer.Render(&buf, "browse.html", data); err != nil {
+		t.Fatalf("failed to render browse: %v", err)
 	}
 
 	html := buf.String()
-	if !strings.Contains(html, "Query Stats") {
-		t.Error("rendered output doesn't contain 'Query Stats'")
+	if !strings.Contains(html, "Browse") {
+		t.Error("rendered output doesn't contain 'Browse'")
+	}
+	if !strings.Contains(html, "browse-target") {
+		t.Error("rendered output doesn't contain the partial target div")
 	}
 }
 
@@ -185,8 +188,8 @@ func TestRenderer_RepeatedRenders(t *testing.T) {
 			"Title":       "Inventories",
 			"Inventories": []any{},
 		}},
-		{"stats.html", map[string]any{
-			"Title":       "Query Stats",
+		{"browse.html", map[string]any{
+			"Title":       "Browse",
 			"Inventories": []any{},
 		}},
 	}

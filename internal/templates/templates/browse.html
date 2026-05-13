@@ -1,0 +1,74 @@
+{{template "layout" .}}
+
+{{define "content"}}
+<div class="px-4 py-6 sm:px-0">
+    <h1 class="text-2xl font-semibold text-gray-900 mb-2">Browse</h1>
+    <p class="text-sm text-gray-500 mb-6">Click into a child prefix to drill down, or type a prefix to jump straight there.</p>
+
+    <div class="bg-white shadow sm:rounded-lg mb-6">
+        <div class="px-4 py-5 sm:p-6">
+            <form id="browse-form" class="space-y-4"
+                  hx-get="/partials/browse-level"
+                  hx-target="#browse-target"
+                  hx-push-url="true"
+                  hx-trigger="submit, change from:#inventory_id">
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <div>
+                        <label for="inventory_id" class="block text-sm font-medium text-gray-700">Inventory</label>
+                        <select id="inventory_id" name="inventory_id" required class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md border">
+                            <option value="">Select a loaded inventory…</option>
+                            {{range .Inventories}}
+                            <option value="{{.ID}}">{{.Name}} ({{formatCount .NodeCount}} prefixes)</option>
+                            {{end}}
+                        </select>
+                        {{if not .Inventories}}
+                        <p class="mt-1 text-sm text-gray-500">No loaded inventories. <a href="/inventories" class="text-indigo-600 hover:text-indigo-500">Discover and load one</a>.</p>
+                        {{end}}
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label for="prefix" class="block text-sm font-medium text-gray-700">Prefix</label>
+                        <div class="mt-1 flex rounded-md shadow-sm">
+                            <input type="text" id="prefix" name="prefix" value="" class="flex-1 block w-full border border-gray-300 rounded-l-md py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="empty = root, e.g. data/2024/">
+                            <button type="submit" class="inline-flex items-center px-4 py-2 border border-l-0 border-gray-300 rounded-r-md bg-gray-50 text-sm font-medium text-gray-700 hover:bg-gray-100">
+                                Go
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="browse-target">
+        <div class="text-center py-12 text-sm text-gray-500">
+            Pick an inventory to start browsing at the root, or type a prefix above and press <kbd class="border rounded px-1 text-xs">Enter</kbd>.
+        </div>
+    </div>
+
+    <div id="browse-loading" class="htmx-indicator text-center py-4">
+        <svg class="animate-spin h-6 w-6 text-indigo-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+    </div>
+</div>
+
+<script>
+// On page load, hydrate the form from URL params (so refresh / back / bookmarks
+// land on the same view) and kick off the initial fetch.
+window.addEventListener('DOMContentLoaded', () => {
+    const params = new URLSearchParams(window.location.search);
+    const invSel = document.getElementById('inventory_id');
+    const prefIn = document.getElementById('prefix');
+    if (params.has('inventory_id')) {
+        invSel.value = params.get('inventory_id');
+    }
+    if (params.has('prefix')) {
+        prefIn.value = params.get('prefix');
+    }
+    if (invSel.value) {
+        htmx.trigger('#browse-form', 'submit');
+    }
+});
+</script>
+{{end}}

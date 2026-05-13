@@ -247,85 +247,65 @@ func TestInventoriesPage_NoDiscoveryMessage(t *testing.T) {
 	}
 }
 
-// Stats Page Tests
+// Browse Page Tests
 
-func TestStatsPage_NoLoadedInventories(t *testing.T) {
+func TestBrowsePage_NoLoadedInventories(t *testing.T) {
 	f := newTestFixture(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/stats", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/browse", http.NoBody)
 	w := httptest.NewRecorder()
-	f.h.StatsPage(w, req)
+	f.h.BrowsePage(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 
 	doc := parseHTML(t, w.Body.String())
-
-	// Verify heading
-	assertElementText(t, doc, "h1", "Query Stats")
-
-	// Verify form exists
-	assertElementExists(t, doc, "form#stats-form")
-
-	// Verify no loaded inventories message
-	assertElementContainsText(t, doc, "p", "No loaded inventories")
-
-	// Select should have only placeholder option
+	assertElementText(t, doc, "h1", "Browse")
+	assertElementExists(t, doc, "form#browse-form")
+	assertElementContainsText(t, doc, "form p", "No loaded inventories")
 	options := doc.Find("select#inventory_id option")
 	if options.Length() != 1 {
 		t.Errorf("expected 1 option (placeholder), got %d", options.Length())
 	}
 }
 
-func TestStatsPage_FormStructure(t *testing.T) {
+func TestBrowsePage_FormStructure(t *testing.T) {
 	f := newTestFixture(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/stats", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/browse", http.NoBody)
 	w := httptest.NewRecorder()
-	f.h.StatsPage(w, req)
+	f.h.BrowsePage(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 
 	doc := parseHTML(t, w.Body.String())
-
-	// Verify form structure
-	assertElementExists(t, doc, "form#stats-form")
+	assertElementExists(t, doc, "form#browse-form")
 	assertElementExists(t, doc, "select#inventory_id")
 	assertElementExists(t, doc, "input#prefix")
-	assertElementExists(t, doc, "input#show_tiers[type='checkbox']")
-	assertElementExists(t, doc, "input#estimate_cost[type='checkbox']")
-	assertElementExists(t, doc, "button[hx-get='/partials/stats-result']")
-
-	// Verify result container
-	assertElementExists(t, doc, "#stats-result")
+	assertElementExists(t, doc, "#browse-target")
 }
 
-func TestStatsPage_WithPendingInventory(t *testing.T) {
+func TestBrowsePage_WithPendingInventory(t *testing.T) {
 	f := newTestFixture(t)
 	f.registerInventory(t, "inv1", "Test Inventory", "/path")
 
-	req := httptest.NewRequest(http.MethodGet, "/stats", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/browse", http.NoBody)
 	w := httptest.NewRecorder()
-	f.h.StatsPage(w, req)
+	f.h.BrowsePage(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 
+	// Pending inventories shouldn't appear in the dropdown — only loaded.
 	doc := parseHTML(t, w.Body.String())
-
-	// Pending inventory should NOT appear in dropdown (only loaded ones)
 	options := doc.Find("select#inventory_id option")
-	// Only placeholder option should exist
 	if options.Length() != 1 {
-		t.Errorf("expected 1 option (placeholder only, pending not shown), got %d", options.Length())
+		t.Errorf("expected 1 option (placeholder), got %d", options.Length())
 	}
-
-	// Should still show "No loaded inventories" message
-	assertElementContainsText(t, doc, "p", "No loaded inventories")
 }
 
 // Inventory Row Partial Tests
@@ -387,9 +367,9 @@ func TestInventoryRowPartial_NotFound(t *testing.T) {
 	}
 }
 
-// Stats Result Partial Tests
+// Browse-level Partial Tests
 
-func TestStatsResultPartial_MissingParams(t *testing.T) {
+func TestBrowseLevelPartial_MissingParams(t *testing.T) {
 	f := newTestFixture(t)
 
 	tests := []struct {
@@ -403,14 +383,14 @@ func TestStatsResultPartial_MissingParams(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			url := "/partials/stats-result"
+			url := "/partials/browse-level"
 			if tt.query != "" {
 				url += "?" + tt.query
 			}
 			req := httptest.NewRequest(http.MethodGet, url, http.NoBody)
 			w := httptest.NewRecorder()
 
-			f.h.StatsResultPartial(w, req)
+			f.h.BrowseLevelPartial(w, req)
 
 			if w.Code != http.StatusBadRequest {
 				t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
@@ -419,29 +399,28 @@ func TestStatsResultPartial_MissingParams(t *testing.T) {
 	}
 }
 
-func TestStatsResultPartial_InventoryNotFound(t *testing.T) {
+func TestBrowseLevelPartial_InventoryNotFound(t *testing.T) {
 	f := newTestFixture(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/partials/stats-result?inventory_id=nonexistent&prefix=test/", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/partials/browse-level?inventory_id=nonexistent&prefix=test/", http.NoBody)
 	w := httptest.NewRecorder()
 
-	f.h.StatsResultPartial(w, req)
+	f.h.BrowseLevelPartial(w, req)
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
 	}
 }
 
-func TestStatsResultPartial_NotLoaded(t *testing.T) {
+func TestBrowseLevelPartial_NotLoaded(t *testing.T) {
 	f := newTestFixture(t)
 	f.registerInventory(t, "inv1", "Test", "/path")
 
-	req := httptest.NewRequest(http.MethodGet, "/partials/stats-result?inventory_id=inv1&prefix=test/", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/partials/browse-level?inventory_id=inv1&prefix=test/", http.NoBody)
 	w := httptest.NewRecorder()
 
-	f.h.StatsResultPartial(w, req)
+	f.h.BrowseLevelPartial(w, req)
 
-	// Should return 409 conflict because inventory not loaded.
 	if w.Code != http.StatusConflict {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusConflict)
 	}

@@ -202,13 +202,13 @@ func TestGetDescendantsAPI_Filter(t *testing.T) {
 	}
 }
 
-func TestStatsResultPartial_Success(t *testing.T) {
+func TestBrowseLevelPartial_Success(t *testing.T) {
 	h := buildLoadedTestHandlers(t)
 
-	url := "/partials/stats-result?inventory_id=loaded&prefix=&show_tiers=true&estimate_cost=true"
+	url := "/partials/browse-level?inventory_id=loaded&prefix="
 	req := httptest.NewRequest(http.MethodGet, url, http.NoBody)
 	w := httptest.NewRecorder()
-	h.StatsResultPartial(w, req)
+	h.BrowseLevelPartial(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -220,11 +220,16 @@ func TestStatsResultPartial_Success(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	if !strings.Contains(body, "Storage Tier Breakdown") {
-		t.Errorf("rendered partial missing tier-breakdown section: %s", body)
+	// At root, breadcrumb shows "Root" and there should be a Children section.
+	if !strings.Contains(body, "Root") {
+		t.Errorf("rendered partial missing Root breadcrumb: %s", body)
 	}
-	if !strings.Contains(body, "Estimated Monthly Cost") {
-		t.Errorf("rendered partial missing cost section")
+	if !strings.Contains(body, "Children") {
+		t.Errorf("rendered partial missing Children section")
+	}
+	// The seeded inventory has tier data, so the breakdown should appear.
+	if !strings.Contains(body, "Storage tier breakdown") {
+		t.Errorf("rendered partial missing tier breakdown: %s", body)
 	}
 }
 
