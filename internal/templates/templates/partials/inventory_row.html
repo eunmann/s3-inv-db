@@ -39,7 +39,7 @@
             class="text-yellow-600 dark:text-yellow-400 hover:text-yellow-900 dark:hover:text-yellow-200">
             Unload
         </button>
-        {{else if or .State.IsUnloaded .State.IsError}}
+        {{else if .State.IsError}}
         <button type="button"
             hx-post="/partials/inventories/{{.ID}}/load"
             hx-target="closest tr"

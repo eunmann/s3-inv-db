@@ -20,6 +20,8 @@ type Discoverer interface {
 type IndexBuilder interface {
 	Build(ctx context.Context, srcBucket, invID, run, manifestURI string) (string, error)
 	BuildWith(ctx context.Context, srcBucket, invID, run, manifestURI string, onProgress func(stage string, done, total int64)) (string, error)
+	RemoveCache(srcBucket, invID, run string) error
+	CacheSizeBytes(srcBucket, invID, run string) (int64, error)
 }
 
 // MergedInventory is one discovered inventory plus its live load state

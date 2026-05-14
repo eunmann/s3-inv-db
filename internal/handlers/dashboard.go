@@ -2,30 +2,45 @@ package handlers
 
 import (
 	"net/http"
+	"sort"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/rs/zerolog"
 )
 
 // DashboardData contains data for the dashboard page.
 type DashboardData struct {
 	Title          string
-	TotalCount     int
-	LoadedCount    int
-	PendingCount   int
-	ErrorCount     int
-	Inventories    []inventory.Info
-	TotalNodes     uint64
-	TotalNodesH    string
-	HasTierData    bool
 	S3Source       string
 	HasDiscovery   bool
-	DiscoveryError string // non-empty when discovery is configured but failed
+	DiscoveryError string
+
+	// Top stats — one per card.
+	Configurations int    // distinct (src, inv) pairs
+	TotalRuns      int    // total Inventory entries from discovery
+	LoadedRuns     int    // how many are currently in memory
+	LoadingRuns    int    // how many have a build in flight
+	ErrorRuns      int    // how many ended in error
+	TotalNodesH    string // sum of NodeCount across loaded runs
+	DiskUsedH      string // sum of cache bytes across loaded runs
+
+	// One summary row per configuration.
+	Configs []DashboardConfig
 }
 
-// Dashboard renders the dashboard HTML page. When discovery is configured
-// the counts and rows reflect S3-discovered inventories merged with their
-// current load state; otherwise they come from the Manager directly.
+// DashboardConfig is the per-configuration row shown on the dashboard.
+type DashboardConfig struct {
+	SourceBucket string
+	InventoryID  string
+	TotalRuns    int
+	LoadedRuns   int
+	LatestRun    string // run timestamp of the newest entry
+	LatestState  inventory.State
+	DiskBytesH   string // size on disk across this configuration's loaded runs
+}
+
+// Dashboard renders the dashboard HTML page.
 func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	data := DashboardData{
 		Title:        "Dashboard",
@@ -34,45 +49,96 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logger := zerolog.Ctx(r.Context())
-	var infos []inventory.Info
-	if h.discovery.Enabled() {
-		views, err := h.discovery.List(r.Context())
-		if err != nil {
-			logger.Error().Err(err).Msg("dashboard discovery failed")
-			data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
-		} else {
-			infos = make([]inventory.Info, 0, len(views))
-			for i := range views {
-				v := &views[i]
-				infos = append(infos, inventory.Info{
-					ID:          v.CompositeID(),
-					Name:        v.SourceBucket + " / " + v.InventoryID,
-					Path:        v.ManifestKey,
-					State:       v.State,
-					NodeCount:   v.NodeCount,
-					HasTierData: v.HasTierData,
-				})
-			}
+	if !h.discovery.Enabled() {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := h.renderer.Render(w, "dashboard.html", data); err != nil {
+			logger.Error().Err(err).Msg("failed to render dashboard")
+			http.Error(w, "failed to render page", http.StatusInternalServerError)
 		}
-	} else {
-		infos = h.manager.List()
+		return
 	}
 
-	data.Inventories = infos
-	data.TotalCount = len(infos)
-	for i := range infos {
-		switch infos[i].State {
-		case inventory.StateLoaded:
-			data.LoadedCount++
-			data.TotalNodes += infos[i].NodeCount
-			if infos[i].HasTierData {
-				data.HasTierData = true
-			}
-		case inventory.StateNotLoaded:
-			data.PendingCount++
-		case inventory.StateError:
-			data.ErrorCount++
+	views, err := h.discovery.List(r.Context())
+	if err != nil {
+		logger.Error().Err(err).Msg("dashboard discovery failed")
+		data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
+	}
+
+	// Aggregate per configuration in one pass.
+	type confAgg struct {
+		Src, ID     string
+		TotalRuns   int
+		LoadedRuns  int
+		LatestRun   string
+		LatestState inventory.State
+		DiskBytes   int64
+	}
+	confs := map[string]*confAgg{}
+	order := []string{}
+	var totalNodes uint64
+	var totalDisk int64
+
+	for i := range views {
+		v := &views[i]
+		key := v.ConfigID()
+		data.TotalRuns++
+
+		c, ok := confs[key]
+		if !ok {
+			c = &confAgg{Src: v.SourceBucket, ID: v.InventoryID}
+			confs[key] = c
+			order = append(order, key)
 		}
+		c.TotalRuns++
+		// Discovery returns runs newest-first within a config, so the
+		// first one we see is the latest.
+		if c.LatestRun == "" && v.Run != "" {
+			c.LatestRun = v.Run
+			c.LatestState = v.State
+		}
+		switch v.State {
+		case inventory.StateLoaded:
+			data.LoadedRuns++
+			c.LoadedRuns++
+			totalNodes += v.NodeCount
+			if h.loader != nil {
+				size, err := h.loader.CacheSizeBytes(v.SourceBucket, v.InventoryID, v.Run)
+				if err == nil {
+					totalDisk += size
+					c.DiskBytes += size
+				}
+			}
+		case inventory.StateLoading:
+			data.LoadingRuns++
+		case inventory.StateError:
+			data.ErrorRuns++
+		}
+	}
+
+	data.Configurations = len(confs)
+	if totalNodes > 0 {
+		data.TotalNodesH = humanfmt.CountUint64(totalNodes)
+	}
+	if totalDisk > 0 {
+		data.DiskUsedH = humanfmt.BytesUint64(uint64(totalDisk))
+	}
+
+	// Stable, alphabetical order for the page rows.
+	sort.Strings(order)
+	for _, key := range order {
+		c := confs[key]
+		row := DashboardConfig{
+			SourceBucket: c.Src,
+			InventoryID:  c.ID,
+			TotalRuns:    c.TotalRuns,
+			LoadedRuns:   c.LoadedRuns,
+			LatestRun:    c.LatestRun,
+			LatestState:  c.LatestState,
+		}
+		if c.DiskBytes > 0 {
+			row.DiskBytesH = humanfmt.BytesUint64(uint64(c.DiskBytes))
+		}
+		data.Configs = append(data.Configs, row)
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

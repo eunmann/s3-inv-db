@@ -24,6 +24,7 @@ const DefaultSSEHeartbeat = 15 * time.Second
 type Handlers struct {
 	manager      *inventory.Manager
 	discovery    *inventory.DiscoveryService
+	loader       inventory.IndexBuilder
 	renderer     *templates.Renderer
 	priceTable   pricing.PriceTable
 	s3SourceURI  string // for display in templates
@@ -76,6 +77,7 @@ func NewWithConfig(cfg Config) *Handlers {
 	return &Handlers{
 		manager:      cfg.Manager,
 		discovery:    inventory.NewDiscoveryService(cfg.Manager, cfg.Discoverer, cfg.Loader),
+		loader:       cfg.Loader,
 		renderer:     cfg.Renderer,
 		priceTable:   cfg.PriceTable,
 		s3SourceURI:  cfg.S3SourceURI,

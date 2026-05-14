@@ -66,12 +66,12 @@ func TestHelpPage_StateChipsUseHelpers(t *testing.T) {
 	f.h.HelpPage(w, req)
 	body := w.Body.String()
 
-	for _, label := range []string{"Not loaded", "Loading", "Loaded", "On disk", "Error"} {
+	for _, label := range []string{"Not loaded", "Loading", "Loaded", "Error"} {
 		if !strings.Contains(body, label) {
 			t.Errorf("chip reference missing label %q", label)
 		}
 	}
-	for _, cls := range []string{"bg-green-100", "bg-yellow-100", "bg-blue-100", "bg-red-100", "bg-gray-100"} {
+	for _, cls := range []string{"bg-green-100", "bg-yellow-100", "bg-blue-100", "bg-red-100"} {
 		if !strings.Contains(body, cls) {
 			t.Errorf("chip reference missing class %q (helper changed?)", cls)
 		}

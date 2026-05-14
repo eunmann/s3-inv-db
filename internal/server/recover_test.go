@@ -26,7 +26,7 @@ func TestRecover_HydratesPersistedInventories(t *testing.T) {
 		ID:    "src/inv1",
 		Name:  "src/inv1",
 		Path:  "s3://src/inv1/manifest.json",
-		State: inventory.StateUnloaded,
+		State: inventory.StateNotLoaded,
 	}); err != nil {
 		t.Fatalf("seed inventory: %v", err)
 	}
@@ -45,8 +45,8 @@ func TestRecover_HydratesPersistedInventories(t *testing.T) {
 	if !ok {
 		t.Fatal("inventory not hydrated into Manager")
 	}
-	if got.State != inventory.StateUnloaded {
-		t.Errorf("hydrated state = %s, want unloaded", got.State)
+	if got.State != inventory.StateNotLoaded {
+		t.Errorf("hydrated state = %s, want not_loaded", got.State)
 	}
 }
 

@@ -21,7 +21,7 @@ func TestTailwindClasses_FromGoHelpersCompiled(t *testing.T) {
 	}
 
 	// Literals (not inventory.State constants) to avoid an import cycle.
-	states := []string{"loaded", "pending", "parsing", "error", "unloaded"}
+	states := []string{"loaded", "not_loaded", "loading", "error"}
 
 	for _, state := range states {
 		classes := strings.Fields(stateClass(state))

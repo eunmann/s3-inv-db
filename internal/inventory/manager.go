@@ -127,7 +127,7 @@ func (m *Manager) LoadWith(ctx context.Context, id string, build BuildFunc) erro
 		m.mu.Unlock()
 		return ErrNotFound
 	}
-	if inv.info.State != StateNotLoaded && inv.info.State != StateUnloaded && inv.info.State != StateError {
+	if !inv.info.State.CanLoad() {
 		m.mu.Unlock()
 		return fmt.Errorf("%w: cannot load from state %s", ErrInvalidState, inv.info.State)
 	}
@@ -199,7 +199,7 @@ func (m *Manager) Unload(id string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("%w: cannot unload from state %s", ErrInvalidState, inv.info.State)
 	}
-	inv.info.State = StateUnloaded
+	inv.info.State = StateNotLoaded
 	inv.info.NodeCount = 0
 	inv.info.MaxDepth = 0
 	inv.info.LoadedAt = time.Time{}

@@ -117,6 +117,9 @@ func chiCtxWithParams(r *http.Request, pairs ...string) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }
 
+func (f *fakeBuilder) RemoveCache(_, _, _ string) error             { return nil }
+func (f *fakeBuilder) CacheSizeBytes(_, _, _ string) (int64, error) { return 0, nil }
+
 func TestLoadDiscoveredRowPartial_FindError(t *testing.T) {
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findErr: errors.New("s3: throttled")},

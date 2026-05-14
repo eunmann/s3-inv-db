@@ -85,6 +85,44 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, run, manifestU
 	return outDir, nil
 }
 
+// RemoveCache deletes a run's on-disk cache. Used by Unload to free
+// disk after the in-memory index is released. Missing dirs are a no-op
+// — callers don't have to check existence.
+func (l *Loader) RemoveCache(srcBucket, invID, run string) error {
+	if srcBucket == "" || invID == "" || run == "" {
+		return errEmptyID
+	}
+	dir := l.CacheDirFor(srcBucket, invID, run)
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("remove cache dir %s: %w", dir, err)
+	}
+	return nil
+}
+
+// CacheSizeBytes returns the total on-disk size of a run's cache dir.
+// Walks every file and sums sizes. Returns 0, nil when the dir doesn't
+// exist (not an error — the inventory simply has no cached index).
+func (l *Loader) CacheSizeBytes(srcBucket, invID, run string) (int64, error) {
+	dir := l.CacheDirFor(srcBucket, invID, run)
+	var total int64
+	err := filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		return 0, fmt.Errorf("walk cache dir %s: %w", dir, err)
+	}
+	return total, nil
+}
+
 var (
 	errEmptyID       = errors.New("source bucket, inventory id, and run are required")
 	errEmptyManifest = errors.New("manifest URI is required")

@@ -8,6 +8,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
+	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
 )
@@ -121,15 +122,27 @@ func (h *Handlers) CancelJob(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// UnloadDiscoveredRowPartial unloads a discovered inventory run and returns its row.
+// UnloadDiscoveredRowPartial releases the in-memory index, removes the
+// on-disk cache, and returns the row (now in StateNotLoaded).
 func (h *Handlers) UnloadDiscoveredRowPartial(w http.ResponseWriter, r *http.Request) {
 	src := chi.URLParam(r, "src")
 	id := chi.URLParam(r, "id")
 	run := chi.URLParam(r, "run")
 	composite := src + "/" + id + "/" + run
+	logger := zerolog.Ctx(r.Context())
 	if err := h.manager.Unload(composite); err != nil {
 		respondManagerErrorHTML(w, r, err, "unload inventory")
 		return
+	}
+	if h.loader != nil {
+		if err := h.loader.RemoveCache(src, id, run); err != nil {
+			// Don't fail the request — the memory side is already
+			// released; surface the disk error in logs so the operator
+			// can clean up.
+			logger.Warn().Err(err).
+				Str("src", src).Str("id", id).Str("run", run).
+				Msg("remove cache dir after unload")
+		}
 	}
 	h.renderDiscoveredRow(w, r, src, id, run)
 }
@@ -172,11 +185,14 @@ func (h *Handlers) renderDiscoveredRow(w http.ResponseWriter, r *http.Request, s
 }
 
 // DiscoveredRowView extends the merged inventory with the latest job
-// for the same composite ID. The template surfaces progress and
-// renders Retry/Cancel buttons based on the job's state.
+// for the same composite ID and the on-disk size of its cache. The
+// template surfaces progress and renders Retry/Cancel buttons based on
+// the job's state.
 type DiscoveredRowView struct {
 	inventory.MergedInventory
-	LatestJob *jobs.Job
+	LatestJob   *jobs.Job
+	CacheBytes  int64  // 0 when no on-disk cache exists
+	CacheBytesH string // humanfmt.Bytes(CacheBytes); empty when zero
 }
 
 // renderDiscoveredRowFrom renders a discovered_row using a pre-fetched
@@ -205,9 +221,31 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 				Msg("look up latest job for row render")
 		}
 	}
+	view.CacheBytes, view.CacheBytesH = h.cacheSize(r, disc)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.RenderPartial(w, "discovered_row.html", view); err != nil {
 		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render discovered row")
 		http.Error(w, "failed to render row", http.StatusInternalServerError)
 	}
+}
+
+// cacheSize measures the on-disk cache footprint of a single run.
+// Returns (0, "") when there's no loader wired or the dir is missing.
+func (h *Handlers) cacheSize(r *http.Request, disc s3disco.Inventory) (bytes int64, human string) {
+	if h.loader == nil || disc.Run == "" {
+		return 0, ""
+	}
+	n, err := h.loader.CacheSizeBytes(disc.SourceBucket, disc.InventoryID, disc.Run)
+	if err != nil {
+		zerolog.Ctx(r.Context()).Warn().Err(err).
+			Str("src", disc.SourceBucket).
+			Str("id", disc.InventoryID).
+			Str("run", disc.Run).
+			Msg("measure cache size")
+		return 0, ""
+	}
+	if n <= 0 {
+		return 0, ""
+	}
+	return n, humanfmt.BytesUint64(uint64(n))
 }

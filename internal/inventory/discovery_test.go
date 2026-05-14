@@ -40,6 +40,10 @@ func (f *fakeBuilder) Build(_ context.Context, _, _, _, _ string) (string, error
 func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _, _ string, _ func(string, int64, int64)) (string, error) {
 	return f.buildResp, f.buildErr
 }
+
+func (f *fakeBuilder) RemoveCache(_, _, _ string) error             { return nil }
+func (f *fakeBuilder) CacheSizeBytes(_, _, _ string) (int64, error) { return 0, nil }
+
 func TestDiscoveryService_DisabledWithoutDeps(t *testing.T) {
 	mgr := NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })

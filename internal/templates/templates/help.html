@@ -97,8 +97,8 @@
                 <p class="text-gray-700 dark:text-gray-200">
                     One section per S3 inventory configuration, with one row per published run inside. Runs
                     are listed newest-first so the most recent snapshot is at the top of each section. This
-                    is the only page where you <strong>Load</strong>, <strong>Reload</strong>,
-                    <strong>Retry</strong>, <strong>Unload</strong>, or <strong>Cancel</strong> a build.
+                    is the only page where you <strong>Load</strong>, <strong>Retry</strong>,
+                    <strong>Unload</strong>, or <strong>Cancel</strong> a build.
                     Each row updates live while a job is in flight — no refresh needed. Different runs of the
                     same inventory configuration are independent — loading one doesn't affect the others, so
                     you can keep multiple snapshots in memory at once and compare them on Browse.
@@ -121,7 +121,7 @@
                 <h3 id="workflow-load" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">Load an inventory</h3>
                 <ol class="list-decimal pl-5 text-gray-700 dark:text-gray-200 space-y-1.5">
                     <li>Open <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:underline">Inventories</a>.</li>
-                    <li>Find the row. Click <strong>Load</strong> (or <strong>Reload</strong> / <strong>Retry</strong> if it already has a state).</li>
+                    <li>Find the row. Click <strong>Load</strong> (or <strong>Retry</strong> if it's in an error state).</li>
                     <li>The chip flips to <em>Loading…</em> and a spinner shows the current build stage:
                         Preparing → Initializing → Downloading &amp; parsing → Building index → Done. A
                         progress bar and ETA appear during downloading.</li>
@@ -147,7 +147,7 @@
                     <li><strong>Build failed.</strong> Hover the small "Error" label under the chip for the message, then click <strong>Retry</strong>.</li>
                     <li><strong>Build stuck.</strong> If the ETA stops moving, click <strong>Cancel</strong>, then <strong>Retry</strong>.</li>
                     <li><strong>Row shows "interrupted by server restart".</strong> A build was running when the server stopped. Click <strong>Retry</strong>.</li>
-                    <li><strong>Wrong inventory loaded.</strong> Click <strong>Unload</strong>, then <strong>Reload</strong> — the build runs fresh.</li>
+                    <li><strong>Wrong inventory loaded.</strong> Click <strong>Unload</strong> to drop it from memory and disk, then click <strong>Load</strong> on the run you actually want.</li>
                 </ul>
             </section>
 
@@ -183,11 +183,6 @@
                                 <td class="py-2.5">Unload</td>
                             </tr>
                             <tr>
-                                <td class="py-2.5 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "unloaded"}}">{{stateLabel "unloaded"}}</span></td>
-                                <td class="py-2.5 pr-6">Built once, currently released from memory. Reload is fast — no re-download.</td>
-                                <td class="py-2.5">Reload</td>
-                            </tr>
-                            <tr>
                                 <td class="py-2.5 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "error"}}">{{stateLabel "error"}}</span></td>
                                 <td class="py-2.5 pr-6">Last build failed or was interrupted. Hover the small Error label for the message.</td>
                                 <td class="py-2.5">Retry</td>
@@ -219,11 +214,6 @@
                                 <td class="py-2.5">Kicks off a fresh build of the index.</td>
                             </tr>
                             <tr>
-                                <td class="py-2.5 pr-6 font-medium text-indigo-600 dark:text-indigo-400">Reload</td>
-                                <td class="py-2.5 pr-6">State is On disk</td>
-                                <td class="py-2.5">Re-runs the build — use when a newer S3 inventory run is available.</td>
-                            </tr>
-                            <tr>
                                 <td class="py-2.5 pr-6 font-medium text-indigo-600 dark:text-indigo-400">Retry</td>
                                 <td class="py-2.5 pr-6">State is Error</td>
                                 <td class="py-2.5">Same as Load — wipes any partial files and starts a new build.</td>
@@ -231,7 +221,7 @@
                             <tr>
                                 <td class="py-2.5 pr-6 font-medium text-yellow-600 dark:text-yellow-400">Unload</td>
                                 <td class="py-2.5 pr-6">State is Loaded</td>
-                                <td class="py-2.5">Releases the inventory from memory. The on-disk cache stays so Reload is fast.</td>
+                                <td class="py-2.5">Releases the inventory from memory <em>and</em> removes its on-disk cache. The row returns to Not loaded.</td>
                             </tr>
                             <tr>
                                 <td class="py-2.5 pr-6 font-medium text-yellow-600 dark:text-yellow-400">Cancel</td>
@@ -338,7 +328,7 @@
                     </div>
                     <div class="py-4" data-search-target="browse dropdown select loaded">
                         <dt class="font-semibold text-gray-900 dark:text-gray-100">Browse dropdown says "Select a loaded inventory" but I just loaded one.</dt>
-                        <dd class="mt-1 text-gray-700 dark:text-gray-200">The dropdown only lists inventories currently in the <em>Loaded</em> state. If yours is <em>Loading…</em>, wait for the build to finish. If it's <em>Unloaded</em> or <em>Error</em>, click Reload / Retry on the Inventories page first.</dd>
+                        <dd class="mt-1 text-gray-700 dark:text-gray-200">The dropdown only lists inventories currently in the <em>Loaded</em> state. If yours is <em>Loading…</em>, wait for the build to finish. If it's <em>Not loaded</em> or <em>Error</em>, click Load / Retry on the Inventories page first.</dd>
                     </div>
                     <div class="py-4" data-search-target="page hangs navigation slow">
                         <dt class="font-semibold text-gray-900 dark:text-gray-100">Pages feel slow after a lot of navigation.</dt>

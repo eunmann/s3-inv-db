@@ -123,84 +123,15 @@ func TestDashboard_EmptyState(t *testing.T) {
 	}
 
 	doc := parseHTML(t, w.Body.String())
-
-	// Verify heading
 	assertElementText(t, doc, "h1", "Dashboard")
-
-	// Verify 4 summary cards
+	// Four stat cards, all reading zero when discovery is disabled.
 	assertElementCount(t, doc, ".grid > div", 4)
-
-	// Verify counts are 0
-	assertElementContainsText(t, doc, "dd", "0")
-
-	// Verify empty state message
-	assertElementContainsText(t, doc, ".text-center h3", "No inventories")
-
-	// No table rows since no inventories
-	assertElementCount(t, doc, "tbody tr", 0)
-}
-
-func TestDashboard_WithInventories(t *testing.T) {
-	f := newTestFixture(t)
-	f.registerInventory(t, "inv1", "Test Inventory", "/path/to/index")
-
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
-	w := httptest.NewRecorder()
-	f.h.Dashboard(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	body := w.Body.String()
+	if !strings.Contains(body, "Nothing discovered yet") && !strings.Contains(body, "Discovery disabled") {
+		t.Errorf("body should explain the empty state\n%s", body)
 	}
-
-	doc := parseHTML(t, w.Body.String())
-
-	// Verify heading
-	assertElementText(t, doc, "h1", "Dashboard")
-
-	// Verify 4 summary cards
-	assertElementCount(t, doc, ".grid > div", 4)
-
-	// Verify inventory appears in table
-	assertElementCount(t, doc, "tbody tr", 1)
-	assertElementContainsText(t, doc, "tbody tr td:first-child", "Test Inventory")
-
-	// Verify state badge has pending class (bg-yellow-100)
-	badge := doc.Find("tbody tr span.px-2").First()
-	classAttr, _ := badge.Attr("class")
-	if !strings.Contains(classAttr, "bg-yellow-100") {
-		t.Errorf("expected pending state badge with bg-yellow-100, got class=%q", classAttr)
-	}
-}
-
-func TestDashboard_CountsReflectState(t *testing.T) {
-	f := newTestFixture(t)
-	f.registerInventory(t, "inv1", "Inventory 1", "/path1")
-	f.registerInventory(t, "inv2", "Inventory 2", "/path2")
-	f.registerInventory(t, "inv3", "Inventory 3", "/path3")
-
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
-	w := httptest.NewRecorder()
-	f.h.Dashboard(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
-	}
-
-	doc := parseHTML(t, w.Body.String())
-
-	// Verify total count is 3
-	// The first dd should be the total count
-	dds := doc.Find("dl dd")
-	if dds.Length() < 1 {
-		t.Fatal("no dd elements found")
-	}
-	firstDD := strings.TrimSpace(dds.First().Text())
-	if firstDD != "3" {
-		t.Errorf("total count = %q, want %q", firstDD, "3")
-	}
-
-	// Verify 3 rows in table
-	assertElementCount(t, doc, "tbody tr", 3)
+	// No per-configuration row when discovery is empty/disabled.
+	assertElementCount(t, doc, "section tbody tr", 0)
 }
 
 // Inventories Page Tests
@@ -500,26 +431,6 @@ func TestBrowsePage_HistoryRestoreReturnsFullPage(t *testing.T) {
 }
 
 // State Badge Color Tests
-
-func TestStateBadgeColors(t *testing.T) {
-	f := newTestFixture(t)
-	f.registerInventory(t, "inv1", "Test Inventory", "/path")
-
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
-	w := httptest.NewRecorder()
-	f.h.Dashboard(w, req)
-
-	doc := parseHTML(t, w.Body.String())
-
-	// Find the state badge
-	badge := doc.Find("tbody tr span.px-2").First()
-	classAttr, _ := badge.Attr("class")
-
-	// Pending state should have yellow classes
-	if !strings.Contains(classAttr, "bg-yellow-100") || !strings.Contains(classAttr, "text-yellow-800") {
-		t.Errorf("pending badge should have yellow classes, got: %q", classAttr)
-	}
-}
 
 // withChiContext adds a chi URL param context with the given id.
 func withChiContext(r *http.Request, id string) *http.Request {

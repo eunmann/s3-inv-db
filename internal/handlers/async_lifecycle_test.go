@@ -43,6 +43,10 @@ func (*slowBuilder) Evict(string, string) error { return nil }
 // TestAsyncLifecycle_LoadSucceeds covers the happy-path flow: submit
 // returns 202 + queued, job moves through running, ends in failed (our
 // fake builder always fails after the delay).
+
+func (b *slowBuilder) RemoveCache(_, _, _ string) error             { return nil }
+func (b *slowBuilder) CacheSizeBytes(_, _, _ string) (int64, error) { return 0, nil }
+
 func TestAsyncLifecycle_LoadSucceeds(t *testing.T) {
 	disc := s3disco.Inventory{SourceBucket: "b", InventoryID: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,

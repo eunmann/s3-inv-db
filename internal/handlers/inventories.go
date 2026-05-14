@@ -209,6 +209,7 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 						Msg("look up latest job for inventories page")
 				}
 			}
+			row.CacheBytes, row.CacheBytesH = h.cacheSize(r, views[i].Inventory)
 			key := views[i].ConfigID()
 			if idx, ok := groupIdx[key]; ok {
 				data.Groups[idx].Runs = append(data.Groups[idx].Runs, row)
