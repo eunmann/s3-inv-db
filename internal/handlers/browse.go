@@ -31,9 +31,8 @@ type BrowseInventoryGroup struct {
 
 // BrowseInventoryOption is one loaded run inside a BrowseInventoryGroup.
 type BrowseInventoryOption struct {
-	ID        string // composite ID "<src>/<inv>/<run>"
-	RunLabel  string // run timestamp, or the full Name when ID isn't 3-part
-	NodeCount uint64
+	ID       string // composite ID "<src>/<inv>/<run>"
+	RunLabel string // run timestamp, or the full Name when ID isn't 3-part
 }
 
 // BrowseLevel is the data the browse_level.html partial renders. Lives
@@ -280,15 +279,7 @@ func groupLoadedInventories(all []inventory.Info) []BrowseInventoryGroup {
 func splitForGroup(info inventory.Info) (label string, opt BrowseInventoryOption) {
 	parts := strings.SplitN(info.ID, "/", 3)
 	if len(parts) == 3 {
-		return parts[0] + "/" + parts[1], BrowseInventoryOption{
-			ID:        info.ID,
-			RunLabel:  parts[2],
-			NodeCount: info.NodeCount,
-		}
+		return parts[0] + "/" + parts[1], BrowseInventoryOption{ID: info.ID, RunLabel: parts[2]}
 	}
-	return "Other", BrowseInventoryOption{
-		ID:        info.ID,
-		RunLabel:  info.Name,
-		NodeCount: info.NodeCount,
-	}
+	return "Other", BrowseInventoryOption{ID: info.ID, RunLabel: info.Name}
 }

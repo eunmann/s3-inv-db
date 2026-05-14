@@ -8,11 +8,11 @@ import (
 
 func TestGroupLoadedInventories_GroupsByConfigAndSortsRunsNewestFirst(t *testing.T) {
 	in := []inventory.Info{
-		{ID: "bucket-b/inv-1/2026-05-13T03-00Z", State: inventory.StateLoaded, NodeCount: 5},
-		{ID: "bucket-a/inv-1/2026-05-10T03-00Z", State: inventory.StateLoaded, NodeCount: 1},
-		{ID: "bucket-a/inv-1/2026-05-12T03-00Z", State: inventory.StateLoaded, NodeCount: 3},
-		{ID: "bucket-a/inv-2/2026-05-11T03-00Z", State: inventory.StateLoaded, NodeCount: 2},
-		{ID: "bucket-a/inv-1/2026-05-09T03-00Z", State: inventory.StateNotLoaded, NodeCount: 0}, // filtered
+		{ID: "bucket-b/inv-1/2026-05-13T03-00Z", State: inventory.StateLoaded},
+		{ID: "bucket-a/inv-1/2026-05-10T03-00Z", State: inventory.StateLoaded},
+		{ID: "bucket-a/inv-1/2026-05-12T03-00Z", State: inventory.StateLoaded},
+		{ID: "bucket-a/inv-2/2026-05-11T03-00Z", State: inventory.StateLoaded},
+		{ID: "bucket-a/inv-1/2026-05-09T03-00Z", State: inventory.StateNotLoaded}, // filtered
 	}
 	got := groupLoadedInventories(in)
 	if len(got) != 3 {
@@ -34,7 +34,7 @@ func TestGroupLoadedInventories_GroupsByConfigAndSortsRunsNewestFirst(t *testing
 
 func TestGroupLoadedInventories_LegacyTwoPartIDFallsBackToOther(t *testing.T) {
 	in := []inventory.Info{
-		{ID: "old-inv", Name: "Old Inventory", State: inventory.StateLoaded, NodeCount: 42},
+		{ID: "old-inv", Name: "Old Inventory", State: inventory.StateLoaded},
 	}
 	got := groupLoadedInventories(in)
 	if len(got) != 1 || got[0].ConfigLabel != "Other" {
