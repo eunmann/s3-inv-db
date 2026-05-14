@@ -52,11 +52,21 @@ type Result struct {
 }
 
 // setPhase updates both the memory diagnostic tracker and the user's
-// progress callback. Single hook so future phases stay consistent.
+// progress callback. Single hook so future phases stay consistent. The
+// stage transition reports done=0/total=0 — quantitative progress
+// within the stage is emitted separately by the stage's own loop.
 func (p *Pipeline) setPhase(name string) {
 	p.memTracker.SetPhase(name)
-	if p.config.OnPhase != nil {
-		p.config.OnPhase(name)
+	if p.config.OnProgress != nil {
+		p.config.OnProgress(name, 0, 0)
+	}
+}
+
+// reportProgress emits quantitative progress within the current phase.
+// Called from ingest after each chunk.
+func (p *Pipeline) reportProgress(phase string, done, total int64) {
+	if p.config.OnProgress != nil {
+		p.config.OnProgress(phase, done, total)
 	}
 }
 
@@ -505,6 +515,10 @@ func (p *Pipeline) handleIngestBatch(
 
 	atomic.AddInt64(&p.chunksProcessed, 1)
 	chunkNum := int(atomic.LoadInt64(&p.chunksProcessed))
+
+	// Emit progress on every chunk so the UI can render a useful ETA;
+	// the per-N log line is still throttled by progressInterval.
+	p.reportProgress("downloading", int64(chunkNum), int64(totalChunks))
 
 	if chunkNum%progressInterval == 0 || chunkNum == totalChunks {
 		p.logIngestProgress(log, chunkNum, totalChunks)

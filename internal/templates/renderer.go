@@ -36,6 +36,33 @@ func stateLabel(state string) string {
 	}
 }
 
+// formatETA produces a human-readable remaining-time estimate. Returns
+// the empty string when an estimate isn't meaningful — no start time,
+// no progress yet, or already at/past completion.
+func formatETA(startedAt time.Time, done, total int64) string {
+	if startedAt.IsZero() || done <= 0 || total <= 0 || done >= total {
+		return ""
+	}
+	elapsed := time.Since(startedAt)
+	if elapsed <= 0 {
+		return ""
+	}
+	remaining := time.Duration(float64(elapsed) * float64(total-done) / float64(done))
+	return humanfmt.Duration(remaining)
+}
+
+// progressPct rounds done/total to a whole-percent integer for display.
+// Returns 0 when total is zero so callers can do `{{if gt (progressPct …) 0}}`.
+func progressPct(done, total int64) int {
+	if total <= 0 || done <= 0 {
+		return 0
+	}
+	if done >= total {
+		return 100
+	}
+	return int(float64(done) * 100.0 / float64(total))
+}
+
 // stageLabel renders pipeline phase names from the build pipeline.
 func stageLabel(stage string) string {
 	switch stage {
@@ -111,8 +138,10 @@ func FuncMap() template.FuncMap {
 				return t.Format("Jan 2, 15:04")
 			}
 		},
-		"stateLabel": stateLabel,
-		"stageLabel": stageLabel,
+		"stateLabel":  stateLabel,
+		"stageLabel":  stageLabel,
+		"formatETA":   formatETA,
+		"progressPct": progressPct,
 		"stateClass": func(state string) string {
 			switch state {
 			case "loaded":

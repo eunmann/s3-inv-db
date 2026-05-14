@@ -19,7 +19,7 @@ type Discoverer interface {
 // IndexBuilder is the subset of loader.Loader that DiscoveryService uses.
 type IndexBuilder interface {
 	Build(ctx context.Context, srcBucket, invID, manifestURI string) (string, error)
-	BuildWith(ctx context.Context, srcBucket, invID, manifestURI string, onStage func(string)) (string, error)
+	BuildWith(ctx context.Context, srcBucket, invID, manifestURI string, onProgress func(stage string, done, total int64)) (string, error)
 }
 
 // MergedInventory is one discovered inventory plus its live load state
@@ -116,16 +116,16 @@ func (s *DiscoveryService) PrepareDiscovered(disc s3disco.Inventory) error {
 	return nil
 }
 
-// Load is LoadWith with no stage callback.
+// Load is LoadWith with no progress callback.
 func (s *DiscoveryService) Load(ctx context.Context, disc s3disco.Inventory) error {
 	return s.LoadWith(ctx, disc, nil)
 }
 
 // LoadWith registers (if not already) and triggers a build+open for a
-// discovered inventory. The onStage callback, if non-nil, receives
-// pipeline stage transitions for live progress reporting. The ctx
+// discovered inventory. The onProgress callback, if non-nil, receives
+// stage transitions and per-chunk quantitative progress. The ctx
 // threads through to the builder — cancellation kills the build.
-func (s *DiscoveryService) LoadWith(ctx context.Context, disc s3disco.Inventory, onStage func(string)) error {
+func (s *DiscoveryService) LoadWith(ctx context.Context, disc s3disco.Inventory, onProgress func(stage string, done, total int64)) error {
 	if !s.Enabled() {
 		return ErrDiscoveryDisabled
 	}
@@ -136,7 +136,7 @@ func (s *DiscoveryService) LoadWith(ctx context.Context, disc s3disco.Inventory,
 		return fmt.Errorf("register: %w", err)
 	}
 	err := s.manager.LoadWith(ctx, composite, func(c context.Context, _ Info) (string, error) {
-		return s.builder.BuildWith(c, disc.SourceBucket, disc.InventoryID, manifestURI, onStage)
+		return s.builder.BuildWith(c, disc.SourceBucket, disc.InventoryID, manifestURI, onProgress)
 	})
 	if err != nil {
 		return err

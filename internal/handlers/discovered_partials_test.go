@@ -46,7 +46,7 @@ func (f *fakeBuilder) Build(_ context.Context, _, _, _ string) (string, error) {
 	return f.buildResp, f.buildErr
 }
 
-func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _ string, _ func(string)) (string, error) {
+func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _ string, _ func(string, int64, int64)) (string, error) {
 	return f.buildResp, f.buildErr
 }
 

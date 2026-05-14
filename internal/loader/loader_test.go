@@ -59,7 +59,7 @@ func TestBuild_RejectsEmptyArgs(t *testing.T) {
 func TestBuildWith_ReportsPreparingStage(t *testing.T) {
 	l := New(t.TempDir(), nil)
 	var stages []string
-	_, _ = l.BuildWith(context.Background(), "buck", "inv", "not-s3-uri", func(name string) {
+	_, _ = l.BuildWith(context.Background(), "buck", "inv", "not-s3-uri", func(name string, _, _ int64) {
 		stages = append(stages, name)
 	})
 	if len(stages) == 0 || stages[0] != "preparing" {

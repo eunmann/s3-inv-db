@@ -129,10 +129,16 @@ func (m *Manager) run(ctx context.Context, cancel context.CancelFunc, job Job, w
 	job.StartedAt = time.Now()
 	m.persistAndPublish(&job)
 
-	// report applies a non-zero diff to the job and broadcasts.
+	// report applies a non-zero diff to the job and broadcasts. A stage
+	// transition resets quantitative progress so the UI doesn't show
+	// stale done/total from the previous stage (e.g. "downloading 10/10"
+	// while we've already moved on to "building").
 	report := func(u Update) {
-		if u.Stage != "" {
+		if u.Stage != "" && u.Stage != job.Stage {
 			job.Stage = u.Stage
+			job.Progress = 0
+			job.BytesDone = 0
+			job.BytesTotal = 0
 		}
 		if u.Progress > 0 {
 			job.Progress = u.Progress

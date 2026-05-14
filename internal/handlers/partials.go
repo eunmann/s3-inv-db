@@ -90,8 +90,8 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	// build outlives the HTTP request that started it.
 	//nolint:contextcheck // job owns its own lifetime
 	_, err = h.jobMgr.Submit(composite, jobs.KindBuild, func(ctx context.Context, report func(jobs.Update)) error {
-		return h.discovery.LoadWith(ctx, disc, func(stage string) {
-			report(jobs.Update{Stage: stage})
+		return h.discovery.LoadWith(ctx, disc, func(stage string, done, total int64) {
+			report(jobs.Update{Stage: stage, BytesDone: done, BytesTotal: total})
 		})
 	})
 	if err != nil {

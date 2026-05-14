@@ -14,10 +14,12 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
 
-// Stage callback values come from the loader ("preparing", "done") and
-// from the underlying pipeline ("init", "ingest", "merge"). The type
-// stays unnamed (plain func(string)) so loader.Loader directly
-// satisfies the inventory.IndexBuilder interface.
+// The progress callback receives stage transitions and per-chunk
+// quantitative progress. Stage values: "preparing", "initializing",
+// "downloading", "building", "done". done/total are 0 on plain stage
+// transitions; non-zero while ingesting chunks (where total = total
+// chunks, done = chunks processed). Unnamed func type keeps
+// inventory.IndexBuilder satisfaction structural.
 
 // Loader runs the S3-inventory → on-disk-index build pipeline into a
 // per-inventory subdirectory of the configured cache root.
@@ -44,21 +46,21 @@ func (l *Loader) Build(ctx context.Context, srcBucket, invID, manifestURI string
 
 // BuildWith downloads the inventory referenced by manifestURI and
 // produces a built index under CacheDirFor(srcBucket, invID). The
-// onStage callback, if non-nil, receives stage transitions from the
-// loader and the underlying pipeline. Partial builds are not safe to
-// resume — the cache dir is cleared first.
-func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, manifestURI string, onStage func(string)) (string, error) {
+// onProgress callback, if non-nil, receives stage transitions and
+// per-chunk quantitative progress for UI ETA. Partial builds are not
+// safe to resume — the cache dir is cleared first.
+func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, manifestURI string, onProgress func(stage string, done, total int64)) (string, error) {
 	if srcBucket == "" || invID == "" {
 		return "", errEmptyID
 	}
 	if manifestURI == "" {
 		return "", errEmptyManifest
 	}
-	if onStage == nil {
-		onStage = func(string) {}
+	if onProgress == nil {
+		onProgress = func(string, int64, int64) {}
 	}
 
-	onStage("preparing")
+	onProgress("preparing", 0, 0)
 	outDir := l.CacheDirFor(srcBucket, invID)
 	if err := os.RemoveAll(outDir); err != nil {
 		return "", fmt.Errorf("clear cache dir: %w", err)
@@ -69,7 +71,7 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, manifestURI st
 
 	cfg := extsort.DefaultConfig()
 	cfg.MemoryBudget = membudget.NewFromSystemRAM()
-	cfg.OnPhase = onStage
+	cfg.OnProgress = onProgress
 
 	pipeline := extsort.NewPipeline(cfg, l.s3Client)
 	if _, err := pipeline.Run(ctx, manifestURI, outDir); err != nil {
@@ -77,7 +79,7 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, manifestURI st
 		// Build call will RemoveAll it.
 		return "", fmt.Errorf("run pipeline: %w", err)
 	}
-	onStage("done")
+	onProgress("done", 0, 0)
 	return outDir, nil
 }
 

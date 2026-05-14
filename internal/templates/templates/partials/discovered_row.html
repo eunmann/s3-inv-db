@@ -25,6 +25,19 @@
             </svg>
             <span>{{if .LatestJob}}{{if .LatestJob.Stage}}{{stageLabel .LatestJob.Stage}}{{else}}Starting…{{end}}{{else}}Starting…{{end}}</span>
         </div>
+        {{if and .LatestJob (gt .LatestJob.BytesTotal 0)}}
+        {{$pct := progressPct .LatestJob.BytesDone .LatestJob.BytesTotal}}
+        {{$eta := formatETA .LatestJob.StartedAt .LatestJob.BytesDone .LatestJob.BytesTotal}}
+        <div class="mt-2">
+            <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+                <span>{{$pct}}% · {{.LatestJob.BytesDone}}/{{.LatestJob.BytesTotal}}</span>
+                {{if $eta}}<span>~{{$eta}} remaining</span>{{end}}
+            </div>
+            <div class="mt-1 h-1.5 w-full bg-gray-200 dark:bg-gray-700 rounded">
+                <div class="h-1.5 bg-indigo-500 dark:bg-indigo-400 rounded transition-all" style="width:{{$pct}}%"></div>
+            </div>
+        </div>
+        {{end}}
         {{end}}
         {{if .Error}}
         <div class="text-xs text-red-600 dark:text-red-400 mt-1" title="{{.Error}}">Error</div>

@@ -287,9 +287,11 @@ type Config struct {
 	// This reduces storage when prefixes share common path components.
 	UseSegmentEncoding bool
 
-	// OnPhase is invoked when the pipeline transitions between phases
-	// ("init", "ingest", "merge"). Use to drive progress UI. Optional.
-	OnPhase func(phase string)
+	// OnProgress is invoked on every phase transition and roughly once
+	// per ingest chunk. done/total are zero when only the stage label
+	// changed; otherwise they describe quantitative progress within
+	// the current stage (units vary — chunks during ingest). Optional.
+	OnProgress func(stage string, done, total int64)
 }
 
 // DefaultConfig returns a Config with sensible defaults based on the current machine.

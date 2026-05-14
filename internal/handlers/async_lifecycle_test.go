@@ -27,7 +27,7 @@ func (b *slowBuilder) Build(ctx context.Context, _, _, _ string) (string, error)
 	return b.BuildWith(ctx, "", "", "", nil)
 }
 
-func (b *slowBuilder) BuildWith(ctx context.Context, _, _, _ string, _ func(string)) (string, error) {
+func (b *slowBuilder) BuildWith(ctx context.Context, _, _, _ string, _ func(string, int64, int64)) (string, error) {
 	b.once.Do(func() { b.cancelled = make(chan struct{}) })
 	select {
 	case <-time.After(b.delay):
