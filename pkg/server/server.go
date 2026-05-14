@@ -35,7 +35,7 @@ type Config struct {
 	// Required when S3Source is set.
 	CacheDir string
 	// DB is the shared SQLite handle for domain Stores. Each domain
-	// (inventory, jobs, downloads) constructs its Store from this.
+	// (inventory, jobs) constructs its Store from this.
 	DB *sql.DB
 }
 

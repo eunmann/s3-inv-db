@@ -63,6 +63,13 @@ func (m *Manager) SetLogger(l zerolog.Logger) { m.logger = l }
 // registered before the bus publish so a Cancel triggered by an
 // immediate SSE consumer can't race in before the goroutine starts.
 func (m *Manager) Submit(invID inventory.ID, kind Kind, work Work) (Job, error) {
+	// Mint the ID before taking the manager lock so a (vanishingly rare)
+	// rand-source failure surfaces cleanly to the caller instead of
+	// producing a zero ID that would collide on the next submit.
+	id, err := newJobID()
+	if err != nil {
+		return Job{}, fmt.Errorf("mint job id: %w", err)
+	}
 	// Hold the lock long enough to (a) reject post-shutdown submits and
 	// (b) register the cancel handle + bump the wait group atomically
 	// with the goroutine launch. That way Shutdown's wg.Wait can't miss
@@ -76,7 +83,7 @@ func (m *Manager) Submit(invID inventory.ID, kind Kind, work Work) (Job, error) 
 	}
 
 	job := Job{
-		ID:          newJobID(),
+		ID:          id,
 		InventoryID: invID,
 		Kind:        kind,
 		State:       StateQueued,
@@ -199,8 +206,10 @@ func (m *Manager) persistAndPublish(j *Job) {
 	m.bus.Publish(*j)
 }
 
-func newJobID() ID {
+func newJobID() (ID, error) {
 	var b [12]byte
-	_, _ = rand.Read(b[:])
-	return ID(hex.EncodeToString(b[:]))
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("read random: %w", err)
+	}
+	return ID(hex.EncodeToString(b[:])), nil
 }

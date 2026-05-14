@@ -8,6 +8,28 @@ func TestIDString(t *testing.T) {
 	}
 }
 
+// TestNewJobID_NonEmptyAndUnique pins that newJobID actually consults
+// the random source and produces distinct IDs. Catches the regression
+// where rand.Read failures were silently ignored, leaving a zero-byte
+// (all-zeros hex) ID that collides on every subsequent Submit.
+func TestNewJobID_NonEmptyAndUnique(t *testing.T) {
+	const zero = "000000000000000000000000" // 24 hex chars of zeros
+	seen := map[ID]struct{}{}
+	for range 50 {
+		id, err := newJobID()
+		if err != nil {
+			t.Fatalf("newJobID: %v (rand source broken in test env?)", err)
+		}
+		if string(id) == zero {
+			t.Errorf("newJobID returned the all-zeros sentinel — rand.Read error swallowed?")
+		}
+		if _, dup := seen[id]; dup {
+			t.Errorf("newJobID produced a duplicate ID %q within 50 calls", id)
+		}
+		seen[id] = struct{}{}
+	}
+}
+
 func TestStatePredicates(t *testing.T) {
 	cases := []struct {
 		state        State

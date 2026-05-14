@@ -29,8 +29,8 @@ CREATE TABLE IF NOT EXISTS inventories (
 );`
 
 // NewStore ensures the inventories table exists and returns a Store.
-// The db must be opened with PRAGMA foreign_keys=1 so that downstream
-// cascades (jobs, downloads) fire on Delete.
+// The db must be opened with PRAGMA foreign_keys=1 so the jobs.jobs FK
+// cascade fires when an inventory is deleted.
 func NewStore(db *sql.DB) (*Store, error) {
 	if _, err := db.Exec(inventorySchema); err != nil {
 		return nil, fmt.Errorf("ensure inventories schema: %w", err)
@@ -117,8 +117,8 @@ func (s *Store) List() ([]Info, error) {
 	return out, nil
 }
 
-// Delete removes one inventory by ID. ON DELETE CASCADE on
-// downstream tables (jobs, downloads) wipes related records too.
+// Delete removes one inventory by ID. ON DELETE CASCADE on the jobs
+// table wipes related job rows too.
 func (s *Store) Delete(id ID) error {
 	res, err := s.db.Exec(`DELETE FROM inventories WHERE id = ?`, id)
 	if err != nil {
