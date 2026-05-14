@@ -258,19 +258,27 @@ func (m *Manager) Hydrate(info Info, indexDir string) error {
 	}
 	mi := &managedInventory{info: info}
 	if info.State == StateLoaded {
-		idx, err := indexread.Open(indexDir)
-		switch {
-		case err != nil:
+		if indexDir == "" {
 			mi.info.State = StateError
-			mi.info.Error = err.Error()
+			mi.info.Error = "cannot rehydrate loaded inventory without index dir"
 			mi.info.NodeCount = 0
 			mi.info.MaxDepth = 0
 			mi.info.HasTierData = false
-		default:
-			mi.index = idx
-			mi.info.NodeCount = idx.Count()
-			mi.info.MaxDepth = idx.MaxDepth()
-			mi.info.HasTierData = idx.HasTierData()
+		} else {
+			idx, err := indexread.Open(indexDir)
+			switch {
+			case err != nil:
+				mi.info.State = StateError
+				mi.info.Error = err.Error()
+				mi.info.NodeCount = 0
+				mi.info.MaxDepth = 0
+				mi.info.HasTierData = false
+			default:
+				mi.index = idx
+				mi.info.NodeCount = idx.Count()
+				mi.info.MaxDepth = idx.MaxDepth()
+				mi.info.HasTierData = idx.HasTierData()
+			}
 		}
 	}
 	m.inventories[info.ID] = mi

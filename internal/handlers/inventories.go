@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
 )
@@ -176,8 +177,16 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 		for i := range views {
 			row := DiscoveredRowView{MergedInventory: views[i]}
 			if h.jobStore != nil {
-				if j, err := h.jobStore.LatestForInventory(views[i].CompositeID()); err == nil {
+				j, err := h.jobStore.LatestForInventory(views[i].CompositeID())
+				switch {
+				case err == nil:
 					row.LatestJob = &j
+				case errors.Is(err, jobs.ErrStoreNotFound):
+					// no jobs yet — fine
+				default:
+					zerolog.Ctx(r.Context()).Warn().Err(err).
+						Str("composite", views[i].CompositeID()).
+						Msg("look up latest job for inventories page")
 				}
 			}
 			data.Discovered = append(data.Discovered, row)

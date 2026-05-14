@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,7 +18,9 @@ import (
 // slowBuilder simulates a build that takes time and respects ctx
 // cancellation. Used so the test can hit Cancel mid-flight.
 type slowBuilder struct {
-	delay time.Duration
+	delay     time.Duration
+	cancelled chan struct{}
+	once      sync.Once
 }
 
 func (b *slowBuilder) Build(ctx context.Context, _, _, _ string) (string, error) {
@@ -25,10 +28,12 @@ func (b *slowBuilder) Build(ctx context.Context, _, _, _ string) (string, error)
 }
 
 func (b *slowBuilder) BuildWith(ctx context.Context, _, _, _ string, _ func(string)) (string, error) {
+	b.once.Do(func() { b.cancelled = make(chan struct{}) })
 	select {
 	case <-time.After(b.delay):
 		return "", errors.New("not actually building anything")
 	case <-ctx.Done():
+		close(b.cancelled)
 		return "", fmt.Errorf("slowBuilder ctx: %w", ctx.Err())
 	}
 }

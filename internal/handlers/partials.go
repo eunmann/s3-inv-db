@@ -77,6 +77,15 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	composite := disc.CompositeID()
+
+	// Reject double-submit: if a job is already queued or running for
+	// this inventory, render the row with its current state instead of
+	// spawning a duplicate that will fail with an InvalidState error.
+	if existing, err := h.jobStore.LatestForInventory(composite); err == nil && existing.State.IsLive() {
+		h.renderDiscoveredRowFrom(w, r, disc)
+		return
+	}
+
 	// The job context is intentionally independent of the request — a
 	// build outlives the HTTP request that started it.
 	//nolint:contextcheck // job owns its own lifetime
@@ -129,9 +138,26 @@ func (h *Handlers) DiscoveredRowPartial(w http.ResponseWriter, r *http.Request) 
 
 // EvictDiscoveredRowPartial evicts a discovered inventory (unload + remove +
 // cache wipe) and returns an empty body so the row is removed via outerHTML.
+// Any in-flight job for this inventory is cancelled first so its goroutine
+// winds down before the cache directory is removed underneath it.
 func (h *Handlers) EvictDiscoveredRowPartial(w http.ResponseWriter, r *http.Request) {
 	src := chi.URLParam(r, "src")
 	id := chi.URLParam(r, "id")
+	composite := src + "/" + id
+	logger := zerolog.Ctx(r.Context())
+
+	if h.jobMgr != nil && h.jobStore != nil {
+		live, err := h.jobStore.ListForInventory(composite)
+		if err != nil {
+			logger.Warn().Err(err).Str("composite", composite).Msg("list jobs before evict")
+		}
+		for i := range live {
+			if live[i].State.IsLive() {
+				_ = h.jobMgr.Cancel(live[i].ID)
+			}
+		}
+	}
+
 	if err := h.discovery.Evict(r.Context(), src, id); err != nil {
 		respondManagerErrorHTML(w, r, err, "evict inventory")
 		return
@@ -190,8 +216,16 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 		view.HasTierData = info.HasTierData
 	}
 	if h.jobStore != nil {
-		if j, err := h.jobStore.LatestForInventory(disc.CompositeID()); err == nil {
+		j, err := h.jobStore.LatestForInventory(disc.CompositeID())
+		switch {
+		case err == nil:
 			view.LatestJob = &j
+		case errors.Is(err, jobs.ErrStoreNotFound):
+			// No prior job — render the row without LatestJob.
+		default:
+			zerolog.Ctx(r.Context()).Warn().Err(err).
+				Str("composite", disc.CompositeID()).
+				Msg("look up latest job for row render")
 		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

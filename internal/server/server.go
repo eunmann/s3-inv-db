@@ -70,6 +70,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	jobBus := jobs.NewBus(64)
 	jobMgr := jobs.NewManager(jobStore, jobBus)
+	jobMgr.SetLogger(cfg.Logger)
 	mgr := inventory.NewManager()
 	mgr.SetStore(invStore)
 
@@ -211,13 +212,12 @@ func (s *Server) Run(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// Close the inventory manager on every exit path so mmaps and file
-	// handles never outlive Run, even if Shutdown or ListenAndServe errors.
-	defer func() {
-		if err := s.manager.Close(); err != nil {
-			s.config.Logger.Error().Err(err).Msg("failed to close inventory manager")
-		}
-	}()
+	// On every exit path: cancel in-flight jobs (so goroutines don't
+	// outlive the DB they write to), then close the inventory manager
+	// so mmaps and file handles are released. The shutdown context is
+	// detached from ctx — if ctx is already cancelled (the usual
+	// shutdown trigger), we still need a few seconds to drain workers.
+	defer s.shutdownResources() //nolint:contextcheck // fresh ctx by design
 
 	errChan := make(chan error, 1)
 	go func() {
@@ -241,6 +241,21 @@ func (s *Server) Run(ctx context.Context) error {
 
 	case err := <-errChan:
 		return err
+	}
+}
+
+// shutdownResources cancels live jobs (waiting up to 5s) and closes
+// the inventory manager. Called from Run's defer, deliberately using a
+// fresh ctx because the parent is typically the one that's been
+// cancelled to trigger this exit.
+func (s *Server) shutdownResources() {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.jobMgr.Shutdown(shutdownCtx); err != nil {
+		s.config.Logger.Error().Err(err).Msg("shutdown job manager")
+	}
+	if err := s.manager.Close(); err != nil {
+		s.config.Logger.Error().Err(err).Msg("close inventory manager")
 	}
 }
 
