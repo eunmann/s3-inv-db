@@ -30,9 +30,13 @@ type BrowseInventoryGroup struct {
 }
 
 // BrowseInventoryOption is one loaded run inside a BrowseInventoryGroup.
+// Label is the full "<src>/<inv> · <run>" string and is what the closed
+// <select> displays once the user picks a value — native HTML doesn't
+// surface the surrounding <optgroup> in the chip, so the option text
+// has to be self-identifying.
 type BrowseInventoryOption struct {
-	ID       string // composite ID "<src>/<inv>/<run>"
-	RunLabel string // run timestamp, or the full Name when ID isn't 3-part
+	ID    string // composite ID "<src>/<inv>/<run>"
+	Label string
 }
 
 // BrowseLevel is the data the browse_level.html partial renders. Lives
@@ -268,7 +272,9 @@ func groupLoadedInventories(all []inventory.Info) []BrowseInventoryGroup {
 	out := make([]BrowseInventoryGroup, 0, len(groups))
 	for _, g := range groups {
 		sort.Slice(g.Options, func(i, j int) bool {
-			return g.Options[i].RunLabel > g.Options[j].RunLabel
+			// Within a group every Label has the same config prefix so
+			// lex-descending sorts by run timestamp newest-first.
+			return g.Options[i].Label > g.Options[j].Label
 		})
 		out = append(out, *g)
 	}
@@ -279,7 +285,11 @@ func groupLoadedInventories(all []inventory.Info) []BrowseInventoryGroup {
 func splitForGroup(info inventory.Info) (label string, opt BrowseInventoryOption) {
 	parts := strings.SplitN(info.ID, "/", 3)
 	if len(parts) == 3 {
-		return parts[0] + "/" + parts[1], BrowseInventoryOption{ID: info.ID, RunLabel: parts[2]}
+		config := parts[0] + "/" + parts[1]
+		return config, BrowseInventoryOption{
+			ID:    info.ID,
+			Label: config + " · " + humanfmt.RunTimestamp(parts[2]),
+		}
 	}
-	return "Other", BrowseInventoryOption{ID: info.ID, RunLabel: info.Name}
+	return "Other", BrowseInventoryOption{ID: info.ID, Label: info.Name}
 }

@@ -159,6 +159,20 @@ func formatWithCommas(n int64) string {
 	return string(out)
 }
 
+// RunTimestamp reformats an S3-Inventory run folder name into a more
+// readable label. AWS writes runs as "YYYY-MM-DDTHH-MMZ" (or with
+// trailing seconds); humans read "YYYY-MM-DD HH:MM UTC" much faster.
+// Falls back to the input unchanged when it doesn't match either
+// layout — defensive for ad-hoc inventory names.
+func RunTimestamp(raw string) string {
+	for _, layout := range []string{"2006-01-02T15-04-05Z", "2006-01-02T15-04Z"} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t.UTC().Format("2006-01-02 15:04 UTC")
+		}
+	}
+	return raw
+}
+
 // CountUint64 is like Count but for uint64. Computes natively rather
 // than casting through int64 so values above 2^63 don't underflow.
 func CountUint64(n uint64) string {

@@ -20,7 +20,7 @@
                             {{range .InventoryGroups}}
                             <optgroup label="{{.ConfigLabel}}">
                                 {{range .Options}}
-                                <option value="{{.ID}}"{{if eq .ID $selected}} selected{{end}}>{{.RunLabel}}</option>
+                                <option value="{{.ID}}"{{if eq .ID $selected}} selected{{end}}>{{.Label}}</option>
                                 {{end}}
                             </optgroup>
                             {{end}}

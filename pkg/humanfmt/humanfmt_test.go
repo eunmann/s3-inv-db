@@ -182,3 +182,19 @@ func TestCountUint64_OverflowAbove2_63(t *testing.T) {
 		t.Errorf("CountUint64(2^63) = %q, want a B-suffix value", got)
 	}
 }
+
+func TestRunTimestamp(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"2026-05-13T03-02Z", "2026-05-13 03:02 UTC"},
+		{"2026-05-13T03-02-17Z", "2026-05-13 03:02 UTC"},
+		{"not-a-timestamp", "not-a-timestamp"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := RunTimestamp(c.in); got != c.want {
+			t.Errorf("RunTimestamp(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

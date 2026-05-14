@@ -24,11 +24,12 @@ func TestGroupLoadedInventories_GroupsByConfigAndSortsRunsNewestFirst(t *testing
 	if len(got[0].Options) != 2 {
 		t.Fatalf("bucket-a/inv-1 options = %d, want 2", len(got[0].Options))
 	}
-	if got[0].Options[0].RunLabel != "2026-05-12T03-00Z" || got[0].Options[1].RunLabel != "2026-05-10T03-00Z" {
-		t.Errorf("runs not newest-first: got %q then %q", got[0].Options[0].RunLabel, got[0].Options[1].RunLabel)
+	if got[0].Options[0].ID != "bucket-a/inv-1/2026-05-12T03-00Z" || got[0].Options[1].ID != "bucket-a/inv-1/2026-05-10T03-00Z" {
+		t.Errorf("runs not newest-first by ID: got %q then %q", got[0].Options[0].ID, got[0].Options[1].ID)
 	}
-	if got[0].Options[0].ID != "bucket-a/inv-1/2026-05-12T03-00Z" {
-		t.Errorf("option preserves composite ID: got %q", got[0].Options[0].ID)
+	wantLabel := "bucket-a/inv-1 · 2026-05-12 03:00 UTC"
+	if got[0].Options[0].Label != wantLabel {
+		t.Errorf("Label = %q, want %q (config prefix + formatted timestamp)", got[0].Options[0].Label, wantLabel)
 	}
 }
 
@@ -40,8 +41,8 @@ func TestGroupLoadedInventories_LegacyTwoPartIDFallsBackToOther(t *testing.T) {
 	if len(got) != 1 || got[0].ConfigLabel != "Other" {
 		t.Fatalf("groups = %+v, want one 'Other' group", got)
 	}
-	if got[0].Options[0].RunLabel != "Old Inventory" {
-		t.Errorf("RunLabel = %q, want fallback to Name 'Old Inventory'", got[0].Options[0].RunLabel)
+	if got[0].Options[0].Label != "Old Inventory" {
+		t.Errorf("Label = %q, want fallback to Name 'Old Inventory'", got[0].Options[0].Label)
 	}
 }
 
