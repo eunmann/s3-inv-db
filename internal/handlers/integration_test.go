@@ -475,3 +475,67 @@ func TestBrowseLevelAPI_Integration_HappyPath(t *testing.T) {
 		t.Errorf("Pagination.PageSize = 0, want non-zero")
 	}
 }
+
+// TestDiffLevelAPI_Integration_HappyPath registers the same seeded
+// index under two composite IDs that share the configuration prefix
+// (src/inv/runA vs src/inv/runB) and diffs them against each other.
+// Because both point at identical data, every child is "unchanged" and
+// the deltas are zero — but the JSON shape, breadcrumbs, and pagination
+// must still come out correctly.
+func TestDiffLevelAPI_Integration_HappyPath(t *testing.T) {
+	tmp := t.TempDir()
+	if err := seeder.Run(seeder.Config{
+		OutputDir: tmp, Count: 1, Objects: 200, Preset: "small",
+		Seed: 42, Logger: zerolog.Nop(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	mgr := inventory.NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+	renderer, err := templates.New()
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+	h := New(mgr, renderer, pricing.DefaultUSEast1Prices())
+
+	indexPath := filepath.Join(tmp, "inv-001")
+	for _, id := range []inventory.ID{"src/inv/runA", "src/inv/runB"} {
+		if err := mgr.Register(id, string(id), indexPath); err != nil {
+			t.Fatalf("register %s: %v", id, err)
+		}
+		if err := mgr.Load(context.Background(), id); err != nil {
+			t.Fatalf("load %s: %v", id, err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/diff?from=src/inv/runA&to=src/inv/runB&prefix=&show_unchanged=true", http.NoBody)
+	w := httptest.NewRecorder()
+	h.DiffLevelAPI(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+	}
+	var resp DiffLevelResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v\nbody=%s", err, w.Body.String())
+	}
+	if resp.From != "src/inv/runA" || resp.To != "src/inv/runB" {
+		t.Errorf("From/To roundtrip wrong: from=%q to=%q", resp.From, resp.To)
+	}
+	if resp.Self.ObjectsDelta != 0 || resp.Self.BytesDelta != 0 {
+		t.Errorf("self-vs-self should have zero deltas, got objects=%d bytes=%d",
+			resp.Self.ObjectsDelta, resp.Self.BytesDelta)
+	}
+	if resp.Self.ObjectsBefore != resp.Self.ObjectsAfter {
+		t.Errorf("self-vs-self before/after differ: %d != %d",
+			resp.Self.ObjectsBefore, resp.Self.ObjectsAfter)
+	}
+	if resp.StatusCounts.Added != 0 || resp.StatusCounts.Removed != 0 || resp.StatusCounts.Changed != 0 {
+		t.Errorf("self-vs-self should be entirely unchanged, got %+v", resp.StatusCounts)
+	}
+	if resp.StatusCounts.Unchanged == 0 {
+		t.Errorf("expected unchanged > 0 with show_unchanged=true, got %+v", resp.StatusCounts)
+	}
+	if resp.Pagination.PageSize == 0 {
+		t.Errorf("Pagination.PageSize = 0, want non-zero")
+	}
+}

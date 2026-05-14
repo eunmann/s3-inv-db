@@ -18,9 +18,15 @@ type RuntimeOptions struct {
 	Addr     string
 	S3Source string
 	CacheDir string
-	StateDB  string // empty → <CacheDir>/state.db
 
-	PriceTablePath string // empty → DefaultUSEast1Prices
+	// StateDB is the SQLite path for persisted inventory + job state.
+	// Empty falls back to <CacheDir>/state.db; when CacheDir is also
+	// empty SQLite opens in-memory and state is lost on restart.
+	StateDB string
+
+	// PriceTablePath, when empty, falls back to
+	// pricing.DefaultUSEast1Prices.
+	PriceTablePath string
 
 	Logger zerolog.Logger
 }
@@ -71,8 +77,10 @@ func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
 
 // BootstrapAndRun is the full happy-path of the binary, factored out so
 // the main goroutine is just signal handling and exit-code reporting.
+// The S3 client probe inside Bootstrap uses its own bounded context
+// (see newDiscoveryWiring) so callers don't need to budget for it.
 //
-//nolint:contextcheck // Bootstrap intentionally uses a fresh ctx for the S3 startup probes
+//nolint:contextcheck // Bootstrap mints a fresh, bounded ctx for the S3 client probe
 func BootstrapAndRun(ctx context.Context, opts RuntimeOptions) error {
 	srv, cleanup, err := Bootstrap(opts)
 	if err != nil {
