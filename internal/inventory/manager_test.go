@@ -152,6 +152,29 @@ func TestManagerWithIndexNotFound(t *testing.T) {
 	}
 }
 
+func TestManagerWithTwoIndexes_NotFound(t *testing.T) {
+	m := NewManager()
+	defer m.Close()
+	_ = m.Register("a", "A", "/p")
+
+	err := m.WithTwoIndexes("a", "b", func(*indexread.Index, *indexread.Index) error { return nil })
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("WithTwoIndexes(a, missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestManagerWithTwoIndexes_NotLoaded(t *testing.T) {
+	m := NewManager()
+	defer m.Close()
+	_ = m.Register("a", "A", "/p")
+	_ = m.Register("b", "B", "/q")
+
+	err := m.WithTwoIndexes("a", "b", func(*indexread.Index, *indexread.Index) error { return nil })
+	if !errors.Is(err, ErrNotLoaded) {
+		t.Errorf("WithTwoIndexes neither loaded error = %v, want ErrNotLoaded", err)
+	}
+}
+
 // TestManagerConcurrent_RegisterListRemove stress-tests concurrent
 // access to the Manager. With -race it asserts there is no data race
 // between Register, List, Get, WithIndex, Unload, and Remove. Load

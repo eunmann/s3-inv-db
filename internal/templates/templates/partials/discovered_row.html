@@ -65,6 +65,11 @@
             {{if $canRetry}}Retry{{else if .State.IsNotLoaded}}Load{{else}}Reload{{end}}
         </button>
         {{else if .State.IsLoaded}}
+        <a href="/diff?from={{.SourceBucket}}/{{.InventoryID}}/{{.Run}}"
+           class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 dark:hover:text-indigo-200"
+           title="Compare this run against another loaded run">
+            Compare
+        </a>
         <button type="button"
             hx-post="/partials/discovered/{{.SourceBucket}}/{{.InventoryID}}/{{.Run}}/unload"
             hx-target="closest tr"

@@ -1,0 +1,78 @@
+{{template "layout" .}}
+
+{{define "content"}}
+<div class="px-4 py-6 sm:px-0 max-w-7xl mx-auto">
+
+    <header class="mb-6">
+        <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Compare runs</h1>
+        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            Pick two loaded runs of the same inventory configuration to see what changed between them.
+        </p>
+    </header>
+
+    <!-- Picker form. Plain HTML GET so back/forward stays in sync with the URL. -->
+    <div class="bg-white dark:bg-gray-800 shadow sm:rounded-lg mb-6">
+        <div class="px-4 py-5 sm:p-6">
+            <form id="diff-form" class="space-y-4" action="/diff" method="get">
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div>
+                        <label for="from" class="block text-sm font-medium text-gray-700 dark:text-gray-200">From <span class="text-gray-400 dark:text-gray-500">(baseline)</span></label>
+                        <select id="from" name="from" onchange="this.form.submit()"
+                                class="mt-1 block w-full pl-3 pr-10 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
+                            <option value="">Select a baseline run…</option>
+                            {{$from := .From}}
+                            {{range .Picker.Groups}}
+                            <optgroup label="{{.ConfigLabel}}">
+                                {{range .Options}}<option value="{{.ID}}"{{if eq .ID $from}} selected{{end}}>{{.Label}}</option>{{end}}
+                            </optgroup>
+                            {{end}}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="to" class="block text-sm font-medium text-gray-700 dark:text-gray-200">To <span class="text-gray-400 dark:text-gray-500">(compared)</span></label>
+                        <select id="to" name="to" onchange="this.form.submit()"
+                                class="mt-1 block w-full pl-3 pr-10 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
+                            <option value="">Select a run to compare…</option>
+                            {{$to := .To}}
+                            {{range .Picker.Groups}}
+                            <optgroup label="{{.ConfigLabel}}">
+                                {{range .Options}}<option value="{{.ID}}"{{if eq .ID $to}} selected{{end}}>{{.Label}}</option>{{end}}
+                            </optgroup>
+                            {{end}}
+                        </select>
+                    </div>
+                </div>
+
+                <input type="hidden" name="prefix" value="{{.Prefix}}">
+
+                {{if and .From .To}}
+                <div class="flex items-center justify-between text-sm">
+                    <p class="text-gray-500 dark:text-gray-400">
+                        {{if .ConfigLabel}}<code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">{{.ConfigLabel}}</code> · {{.FromRun}} → {{.ToRun}}{{end}}
+                    </p>
+                    <a href="/diff?from={{.To}}&to={{.From}}&prefix={{.Prefix}}" class="inline-flex items-center px-3 py-1.5 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline" title="Swap From and To">
+                        ⇄ Swap direction
+                    </a>
+                </div>
+                {{else if .Picker.Groups}}
+                <p class="text-sm text-gray-500 dark:text-gray-400">Pick a baseline and a comparison run above.</p>
+                {{else}}
+                <p class="text-sm text-gray-500 dark:text-gray-400">No inventories are loaded. <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:underline">Load two runs of the same configuration</a> to enable comparison.</p>
+                {{end}}
+            </form>
+        </div>
+    </div>
+
+    {{if .Error}}
+    <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-900/50 rounded-md p-4 mb-6">
+        <div class="text-sm text-yellow-800 dark:text-yellow-300">{{.Error}}</div>
+    </div>
+    {{end}}
+
+    <div id="diff-target">
+        {{if .Level}}
+            {{template "templates/partials/diff_level.html" .Partial}}
+        {{end}}
+    </div>
+</div>
+{{end}}

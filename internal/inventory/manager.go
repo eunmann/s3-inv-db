@@ -313,6 +313,47 @@ func (m *Manager) WithIndex(id string, fn func(*indexread.Index) error) error {
 	return fn(idx)
 }
 
+// WithTwoIndexes borrows two loaded indexes for the duration of fn —
+// the read-side primitive for compare/diff features. Per-inventory
+// locks are acquired in deterministic ID order so two callers diffing
+// the same pair in opposite directions cannot deadlock. When idA == idB
+// only one lock is taken and the same index pointer is passed in both
+// positions, letting callers treat self-compare as a degenerate case.
+func (m *Manager) WithTwoIndexes(idA, idB string, fn func(a, b *indexread.Index) error) error {
+	m.mu.RLock()
+	invA, okA := m.inventories[idA]
+	invB, okB := m.inventories[idB]
+	if !okA || !okB {
+		m.mu.RUnlock()
+		return ErrNotFound
+	}
+	if invA.info.State != StateLoaded || invA.index == nil ||
+		invB.info.State != StateLoaded || invB.index == nil {
+		m.mu.RUnlock()
+		return ErrNotLoaded
+	}
+	idxA, idxB := invA.index, invB.index
+
+	if idA == idB {
+		invA.mu.RLock()
+		m.mu.RUnlock()
+		defer invA.mu.RUnlock()
+		return fn(idxA, idxA)
+	}
+
+	first, second := invA, invB
+	if idA > idB {
+		first, second = invB, invA
+	}
+	first.mu.RLock()
+	second.mu.RLock()
+	m.mu.RUnlock()
+	defer second.mu.RUnlock()
+	defer first.mu.RUnlock()
+
+	return fn(idxA, idxB)
+}
+
 // Remove removes an inventory from the manager. It blocks until any
 // in-flight WithIndex reader on this inventory has returned.
 func (m *Manager) Remove(id string) error {
