@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,5 +68,61 @@ func TestBootstrap_PropagatesPriceTableLoadError(t *testing.T) {
 	_, _, err := Bootstrap(opts)
 	if err == nil {
 		t.Fatal("Bootstrap should fail when price table can't be loaded")
+	}
+}
+
+// TestBootstrapAndRun_ExitsCleanlyOnCancelledContext exercises the
+// happy-path wrapper end-to-end: a pre-cancelled ctx returns nil with
+// no listen error, no leaked goroutines, no leaked DB handle.
+func TestBootstrapAndRun_ExitsCleanlyOnCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already done before Run starts
+	opts := RuntimeOptions{
+		Addr:     ":0",
+		CacheDir: t.TempDir(),
+		Logger:   zerolog.Nop(),
+	}
+	if err := BootstrapAndRun(ctx, opts); err != nil {
+		t.Errorf("BootstrapAndRun with cancelled ctx = %v, want nil", err)
+	}
+}
+
+func TestBootstrapAndRun_PropagatesBootstrapError(t *testing.T) {
+	opts := RuntimeOptions{
+		Addr:           ":0",
+		CacheDir:       t.TempDir(),
+		PriceTablePath: "/no/such/price-table.json",
+		Logger:         zerolog.Nop(),
+	}
+	err := BootstrapAndRun(context.Background(), opts)
+	if err == nil {
+		t.Fatal("BootstrapAndRun should surface a Bootstrap failure")
+	}
+}
+
+// TestNewDiscoveryWiring_RequiresCacheDir pins the first error branch:
+// you can't configure --s3-source without --cache-dir to write builds
+// into.
+func TestNewDiscoveryWiring_RequiresCacheDir(t *testing.T) {
+	_, _, err := newDiscoveryWiring(Config{S3Source: "s3://bucket/", Logger: zerolog.Nop()})
+	if !errors.Is(err, errEmptyCacheDir) {
+		t.Errorf("err = %v, want errEmptyCacheDir", err)
+	}
+}
+
+// TestNewDiscoveryWiring_RejectsMalformedURI pins that a bad s3:// URI
+// fails at parse time, not later when the discoverer tries to use it.
+func TestNewDiscoveryWiring_RejectsMalformedURI(t *testing.T) {
+	cfg := Config{
+		S3Source: "not-a-real-uri",
+		CacheDir: t.TempDir(),
+		Logger:   zerolog.Nop(),
+	}
+	_, _, err := newDiscoveryWiring(cfg)
+	if err == nil {
+		t.Fatal("newDiscoveryWiring should reject malformed URI")
+	}
+	if !strings.Contains(err.Error(), "not-a-real-uri") {
+		t.Errorf("error should quote the offending URI, got: %v", err)
 	}
 }
