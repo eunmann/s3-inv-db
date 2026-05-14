@@ -15,33 +15,12 @@ type Store struct {
 	db *sql.DB
 }
 
-const jobsSchema = `
-CREATE TABLE IF NOT EXISTS jobs (
-    id            TEXT PRIMARY KEY,
-    inventory_id  TEXT NOT NULL REFERENCES inventories(id) ON DELETE CASCADE,
-    kind          TEXT NOT NULL,
-    state         TEXT NOT NULL,
-    stage         TEXT NOT NULL DEFAULT '',
-    progress      INTEGER NOT NULL DEFAULT 0,
-    bytes_total   INTEGER NOT NULL DEFAULT 0,
-    bytes_done    INTEGER NOT NULL DEFAULT 0,
-    started_at    INTEGER NOT NULL DEFAULT 0,
-    finished_at   INTEGER NOT NULL DEFAULT 0,
-    error         TEXT NOT NULL DEFAULT '',
-    updated_at    INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_jobs_inventory ON jobs(inventory_id);
-CREATE INDEX IF NOT EXISTS idx_jobs_state     ON jobs(state);`
-
 // ErrStoreNotFound is returned for missing rows.
 var ErrStoreNotFound = errors.New("job not in store")
 
-// NewStore ensures the jobs schema and returns a ready Store. The
-// inventories table must already exist (FK).
+// NewStore returns a Store backed by db. The schema must already be
+// migrated (see internal/migrate).
 func NewStore(db *sql.DB) (*Store, error) {
-	if _, err := db.Exec(jobsSchema); err != nil {
-		return nil, fmt.Errorf("ensure jobs schema: %w", err)
-	}
 	return &Store{db: db}, nil
 }
 

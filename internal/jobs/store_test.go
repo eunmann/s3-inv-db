@@ -8,6 +8,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
+	"github.com/eunmann/s3-inv-db/internal/migrate"
 	_ "modernc.org/sqlite"
 )
 
@@ -18,6 +19,9 @@ func storeWithInventory(t *testing.T, invID inventory.ID) (*jobs.Store, *sql.DB)
 		t.Fatalf("sql.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	if err := migrate.Apply(db); err != nil {
+		t.Fatalf("migrate.Apply: %v", err)
+	}
 	invStore, err := inventory.NewStore(db)
 	if err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)

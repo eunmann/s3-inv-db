@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/migrate"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
@@ -25,6 +26,9 @@ func testDB(t *testing.T) *sql.DB {
 		t.Fatalf("sql.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	if err := migrate.Apply(db); err != nil {
+		t.Fatalf("migrate.Apply: %v", err)
+	}
 	return db
 }
 

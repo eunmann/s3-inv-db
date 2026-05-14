@@ -12,6 +12,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
+	"github.com/eunmann/s3-inv-db/internal/migrate"
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5"
@@ -61,6 +62,9 @@ func newDiscoveredHandlers(t *testing.T, disc inventory.Discoverer, ldr inventor
 		t.Fatalf("sql.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	if err := migrate.Apply(db); err != nil {
+		t.Fatalf("migrate.Apply: %v", err)
+	}
 	invStore, err := inventory.NewStore(db)
 	if err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)

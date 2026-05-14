@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/migrate"
 	_ "modernc.org/sqlite"
 )
 
@@ -17,6 +18,9 @@ func openManagerWithStore(t *testing.T) (*inventory.Manager, *inventory.Store) {
 		t.Fatalf("sql.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	if err := migrate.Apply(db); err != nil {
+		t.Fatalf("migrate.Apply: %v", err)
+	}
 	store, err := inventory.NewStore(db)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)

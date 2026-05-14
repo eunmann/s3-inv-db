@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/eunmann/s3-inv-db/internal/migrate"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/rs/zerolog"
 )
@@ -59,6 +60,17 @@ func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
 			opts.Logger.Error().Err(err).Msg("close state db")
 		}
 	}
+
+	if err := migrate.Apply(db); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("apply migrations: %w", err)
+	}
+	version, dirty, err := migrate.Version(db)
+	if err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("read schema version: %w", err)
+	}
+	opts.Logger.Info().Uint("version", version).Bool("dirty", dirty).Msg("schema migrated")
 
 	srv, err = New(Config{
 		Addr:       opts.Addr,

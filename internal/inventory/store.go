@@ -14,27 +14,12 @@ type Store struct {
 	db *sql.DB
 }
 
-const inventorySchema = `
-CREATE TABLE IF NOT EXISTS inventories (
-    id            TEXT PRIMARY KEY,
-    name          TEXT NOT NULL,
-    path          TEXT NOT NULL,
-    state         TEXT NOT NULL,
-    error         TEXT NOT NULL DEFAULT '',
-    node_count    INTEGER NOT NULL DEFAULT 0,
-    max_depth     INTEGER NOT NULL DEFAULT 0,
-    has_tier_data INTEGER NOT NULL DEFAULT 0,
-    loaded_at     INTEGER NOT NULL DEFAULT 0,
-    updated_at    INTEGER NOT NULL
-);`
-
-// NewStore ensures the inventories table exists and returns a Store.
+// NewStore returns a Store backed by db. The schema must already be
+// migrated (server.Bootstrap calls migrate.Apply before constructing
+// stores; tests use migrate.Apply from internal/migrate or testmigrate).
 // The db must be opened with PRAGMA foreign_keys=1 so the jobs.jobs FK
 // cascade fires when an inventory is deleted.
 func NewStore(db *sql.DB) (*Store, error) {
-	if _, err := db.Exec(inventorySchema); err != nil {
-		return nil, fmt.Errorf("ensure inventories schema: %w", err)
-	}
 	return &Store{db: db}, nil
 }
 
