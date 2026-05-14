@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"database/sql"
@@ -8,7 +8,7 @@ import (
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
 )
 
-// StatePragmas are applied to every connection the pool opens. The
+// statePragmas are applied to every connection the pool opens. The
 // modernc.org/sqlite driver picks them up from _pragma= URL parameters
 // and re-applies them per new connection. That matters for the
 // connection-scoped ones (foreign_keys, busy_timeout, synchronous,
@@ -30,10 +30,11 @@ var statePragmas = []string{
 	"temp_store(MEMORY)",
 }
 
-// openStateDB opens (or creates) the SQLite file backing every domain's
-// store and applies statePragmas to every connection.
-func openStateDB(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", buildDSN(path))
+// OpenStateDB opens (or creates) the SQLite file backing every domain's
+// store and applies statePragmas to every connection. Exposed so the
+// server binary's main can wire the shared *sql.DB into Config.
+func OpenStateDB(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", buildStateDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite at %s: %w", path, err)
 	}
@@ -44,11 +45,10 @@ func openStateDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// buildDSN composes the modernc.org/sqlite DSN: the database path
+// buildStateDSN composes the modernc.org/sqlite DSN: the database path
 // followed by a _pragma=NAME(VALUE) parameter for each entry of
-// statePragmas. Exposed for tests that need the same per-connection
-// configuration the server uses.
-func buildDSN(path string) string {
+// statePragmas. Exposed (lowercase) for tests in this package.
+func buildStateDSN(path string) string {
 	base := path
 	hasQuery := strings.Contains(base, "?")
 	if base == "" {

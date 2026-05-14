@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"path/filepath"
@@ -12,9 +12,9 @@ import (
 // test catches it before production does.
 func TestOpenStateDB_AppliesPragmas(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
-	db, err := openStateDB(path)
+	db, err := OpenStateDB(path)
 	if err != nil {
-		t.Fatalf("openStateDB: %v", err)
+		t.Fatalf("OpenStateDB: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
@@ -38,8 +38,8 @@ func TestOpenStateDB_AppliesPragmas(t *testing.T) {
 	}
 }
 
-func TestBuildDSN_AddsPragmasToFilePath(t *testing.T) {
-	dsn := buildDSN("/cache/state.db")
+func TestBuildStateDSN_AddsPragmasToFilePath(t *testing.T) {
+	dsn := buildStateDSN("/cache/state.db")
 	for _, p := range statePragmas {
 		if !strings.Contains(dsn, "_pragma="+p) {
 			t.Errorf("DSN missing _pragma=%s\nDSN: %s", p, dsn)
@@ -50,9 +50,29 @@ func TestBuildDSN_AddsPragmasToFilePath(t *testing.T) {
 	}
 }
 
-func TestBuildDSN_AppendsToExistingQuery(t *testing.T) {
-	dsn := buildDSN("")
+func TestBuildStateDSN_AppendsToExistingQuery(t *testing.T) {
+	dsn := buildStateDSN("")
 	if !strings.HasPrefix(dsn, "file::memory:?cache=shared&_pragma=") {
 		t.Errorf("in-memory DSN must keep cache=shared and append with &, got %q", dsn)
+	}
+}
+
+func TestResolveStateDBPath(t *testing.T) {
+	cases := []struct {
+		name              string
+		stateDB, cacheDir string
+		want              string
+	}{
+		{"explicit state-db wins", "/srv/state.db", "/var/cache/s3inv", "/srv/state.db"},
+		{"defaults to cache-dir child", "", "/var/cache/s3inv", "/var/cache/s3inv/state.db"},
+		{"both empty stays empty", "", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveStateDBPath(tc.stateDB, tc.cacheDir); got != tc.want {
+				t.Errorf("resolveStateDBPath(%q, %q) = %q, want %q",
+					tc.stateDB, tc.cacheDir, got, tc.want)
+			}
+		})
 	}
 }
