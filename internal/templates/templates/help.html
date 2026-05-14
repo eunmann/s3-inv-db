@@ -2,21 +2,17 @@
 
 {{define "content"}}
 <style>
-    /* Smooth in-page scroll + offset so anchored headings clear the
-       sticky top nav (h-16). Scoped to .helpdoc. */
     .helpdoc { scroll-behavior: smooth; }
     .helpdoc h2[id], .helpdoc h3[id], .helpdoc section[id] { scroll-margin-top: 5rem; }
-    /* Anchor affordance — show "#" on heading hover. */
-    .helpdoc .anchor { opacity: 0; transition: opacity 120ms ease; }
-    .helpdoc h2:hover .anchor, .helpdoc h3:hover .anchor,
-    .helpdoc .anchor:focus { opacity: 1; }
-    /* Active TOC link (toggled by IntersectionObserver). */
     .helpdoc .toc a.active {
         color: rgb(79 70 229);
         font-weight: 500;
+        border-color: rgb(79 70 229);
     }
-    .dark .helpdoc .toc a.active { color: rgb(129 140 248); }
-    /* Hide irrelevant troubleshooting rows when search filter is active. */
+    .dark .helpdoc .toc a.active {
+        color: rgb(129 140 248);
+        border-color: rgb(129 140 248);
+    }
     .helpdoc [data-search-target].hidden-by-search { display: none; }
 </style>
 
@@ -27,9 +23,7 @@
         <p class="text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Documentation</p>
         <h1 class="mt-1 text-3xl sm:text-4xl font-bold text-gray-900 dark:text-gray-100">Help</h1>
         <p class="mt-3 text-base text-gray-600 dark:text-gray-300">
-            How every page, button, route, and configuration flag works.
-            Skim the sidebar, jump to what you need. All examples use
-            the <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-[0.85em] font-mono">s3-inv-db-server</code> binary.
+            A walkthrough of every page, button, and behavior on this site. Skim the sidebar, jump to what you need.
         </p>
     </header>
 
@@ -40,152 +34,131 @@
             <nav aria-label="Contents" class="toc sticky top-20 text-sm">
                 <p class="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">On this page</p>
                 <ul class="space-y-1.5 border-l border-gray-200 dark:border-gray-700">
-                    <li><a href="#overview"      class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Overview</a></li>
-                    <li><a href="#pages"         class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Pages</a>
+                    <li><a href="#overview"        class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Overview</a></li>
+                    <li><a href="#pages"           class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Pages</a>
                         <ul class="mt-1 space-y-1 ml-2 text-[13px]">
                             <li><a href="#p-dashboard"   class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Dashboard</a></li>
                             <li><a href="#p-inventories" class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Inventories</a></li>
                             <li><a href="#p-browse"      class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Browse</a></li>
                         </ul>
                     </li>
-                    <li><a href="#workflows"     class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Workflows</a>
+                    <li><a href="#workflows"       class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Workflows</a>
                         <ul class="mt-1 space-y-1 ml-2 text-[13px]">
-                            <li><a href="#workflow-load"   class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Load an inventory</a></li>
-                            <li><a href="#workflow-browse" class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Browse a prefix tree</a></li>
+                            <li><a href="#workflow-load"    class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Load an inventory</a></li>
+                            <li><a href="#workflow-browse"  class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Browse a prefix tree</a></li>
                             <li><a href="#workflow-recover" class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Recover from errors</a></li>
                         </ul>
                     </li>
-                    <li><a href="#chips"         class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">State chips</a></li>
-                    <li><a href="#buttons"       class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Action buttons</a></li>
-                    <li><a href="#progress"      class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Progress &amp; ETA</a></li>
-                    <li><a href="#urls"          class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">URL parameters</a></li>
-                    <li><a href="#routes"        class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">HTTP routes</a></li>
-                    <li><a href="#sse"           class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">SSE stream</a></li>
-                    <li><a href="#persistence"   class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Persistence</a></li>
-                    <li><a href="#config"        class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Configuration</a></li>
-                    <li><a href="#shortcuts"     class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Keyboard</a></li>
+                    <li><a href="#chips"           class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">State chips</a></li>
+                    <li><a href="#buttons"         class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Action buttons</a></li>
+                    <li><a href="#progress"        class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Progress &amp; ETA</a></li>
+                    <li><a href="#sharing"         class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Sharing URLs</a></li>
+                    <li><a href="#dark-mode"       class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Dark mode</a></li>
+                    <li><a href="#restarts"        class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Restarts &amp; saved state</a></li>
+                    <li><a href="#shortcuts"       class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Keyboard</a></li>
                     <li><a href="#troubleshooting" class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Troubleshooting</a></li>
-                    <li><a href="#glossary"      class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Glossary</a></li>
+                    <li><a href="#glossary"        class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Glossary</a></li>
                 </ul>
             </nav>
         </aside>
 
-        <main class="prose-none min-w-0 max-w-3xl space-y-12">
+        <main class="min-w-0 max-w-3xl space-y-12">
 
             <!-- Overview -->
             <section id="overview">
-                <h2 class="group flex items-center text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                    <a href="#overview" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-label="Permalink to Overview">#</a>
-                    Overview
-                </h2>
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Overview</h2>
                 <p class="text-gray-700 dark:text-gray-200">
-                    <strong>s3-inv-db</strong> turns an S3 Inventory report into a
-                    queryable, memory-mapped index. The HTTP server discovers inventories under an
-                    <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">s3://</code> source, builds an index per inventory in the background,
-                    and exposes prefix-level counts, sizes, and storage-tier cost estimates via an
-                    HTMX-driven UI plus a JSON API.
+                    This site lets you turn an S3 Inventory report into a queryable index and then explore it by prefix —
+                    object counts, sizes, and per-tier cost estimates, all in milliseconds.
                 </p>
                 <p class="mt-3 text-gray-700 dark:text-gray-200">
-                    Three pages — Dashboard, Inventories, Browse — and a tiny REST surface. Builds run async; the
-                    UI shows live progress over Server-Sent Events. State persists to SQLite so restarts don't lose work.
+                    There are three pages: <a href="/" class="text-indigo-600 dark:text-indigo-400 hover:underline">Dashboard</a> for an at-a-glance overview,
+                    <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:underline">Inventories</a> for loading and managing builds,
+                    and <a href="/browse" class="text-indigo-600 dark:text-indigo-400 hover:underline">Browse</a> for exploring a loaded inventory.
                 </p>
             </section>
 
             <!-- Pages -->
             <section id="pages">
-                <h2 class="group flex items-center text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                    <a href="#pages" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-label="Permalink to Pages">#</a>
-                    Pages
-                </h2>
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Pages</h2>
 
-                <h3 id="p-dashboard" class="group flex items-center text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">
-                    <a href="#p-dashboard" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-hidden="true">#</a>
-                    <a href="/" class="hover:text-indigo-600 dark:hover:text-indigo-400">Dashboard</a> <span class="ml-2 font-mono text-xs text-gray-500">GET /</span>
+                <h3 id="p-dashboard" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">
+                    <a href="/" class="hover:text-indigo-600 dark:hover:text-indigo-400">Dashboard</a>
                 </h3>
                 <p class="text-gray-700 dark:text-gray-200">
-                    Top-level counters (total / loaded / not loaded / error) plus a list of every inventory the server knows about.
-                    Read-only. Discovery-aware: when <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">--s3-source</code> is set, the list reflects S3-discovered
-                    inventories merged with current load state.
+                    The landing page. Counters at the top show how many inventories the server knows about and
+                    how many are loaded, not loaded, or in an error state. A list underneath shows every inventory.
+                    Read-only — use it to spot which inventories are ready to query.
                 </p>
 
-                <h3 id="p-inventories" class="group flex items-center text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">
-                    <a href="#p-inventories" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-hidden="true">#</a>
-                    <a href="/inventories" class="hover:text-indigo-600 dark:hover:text-indigo-400">Inventories</a> <span class="ml-2 font-mono text-xs text-gray-500">GET /inventories</span>
+                <h3 id="p-inventories" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">
+                    <a href="/inventories" class="hover:text-indigo-600 dark:hover:text-indigo-400">Inventories</a>
                 </h3>
                 <p class="text-gray-700 dark:text-gray-200">
-                    One row per discovered S3 inventory configuration. The only page where you can
+                    One row per discovered S3 inventory configuration. This is the only page where you
                     <strong>Load</strong>, <strong>Reload</strong>, <strong>Retry</strong>, <strong>Unload</strong>, or <strong>Cancel</strong> a build.
-                    Rows update live via SSE while a job is in flight.
+                    Each row's state chip, progress bar, and ETA update live while a job is in flight — you don't
+                    need to refresh.
                 </p>
 
-                <h3 id="p-browse" class="group flex items-center text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">
-                    <a href="#p-browse" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-hidden="true">#</a>
-                    <a href="/browse" class="hover:text-indigo-600 dark:hover:text-indigo-400">Browse</a> <span class="ml-2 font-mono text-xs text-gray-500">GET /browse?inventory_id=&amp;prefix=</span>
+                <h3 id="p-browse" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">
+                    <a href="/browse" class="hover:text-indigo-600 dark:hover:text-indigo-400">Browse</a>
                 </h3>
                 <p class="text-gray-700 dark:text-gray-200">
-                    Directory-style explorer over one <em>loaded</em> inventory. Pick an inventory, type a prefix or click into children,
-                    see aggregated object count + size + per-tier cost. URLs are shareable — every column-sort, page, and prefix is round-trippable.
+                    A directory-style explorer over one <em>loaded</em> inventory. Pick an inventory in the dropdown,
+                    type a prefix or click into children, see aggregated object count, size, and per-tier cost.
+                    The address bar always reflects the view — copy the URL to share or bookmark it.
                 </p>
             </section>
 
             <!-- Workflows -->
             <section id="workflows">
-                <h2 class="group flex items-center text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                    <a href="#workflows" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-label="Permalink to Workflows">#</a>
-                    Workflows
-                </h2>
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Workflows</h2>
 
-                <h3 id="workflow-load" class="group flex items-center text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">
-                    <a href="#workflow-load" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-hidden="true">#</a>
-                    Load an inventory
-                </h3>
+                <h3 id="workflow-load" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">Load an inventory</h3>
                 <ol class="list-decimal pl-5 text-gray-700 dark:text-gray-200 space-y-1.5">
                     <li>Open <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:underline">Inventories</a>.</li>
-                    <li>Find the row. Click <strong>Load</strong> (or <strong>Reload</strong> / <strong>Retry</strong> depending on state).</li>
-                    <li>State chip flips to <em>Loading…</em>. Server returns <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">202</code> immediately; the build keeps running in the background.</li>
-                    <li>SSE pushes updates: stage label (Preparing → Initializing → Downloading &amp; parsing → Building index → Done) plus progress bar and ETA during the downloading stage.</li>
-                    <li>When done, the chip becomes <em>Loaded</em>. Node count and tier-data flag populate.</li>
+                    <li>Find the row. Click <strong>Load</strong> (or <strong>Reload</strong> / <strong>Retry</strong> if it already has a state).</li>
+                    <li>The chip flips to <em>Loading…</em> and a spinner shows the current build stage:
+                        Preparing → Initializing → Downloading &amp; parsing → Building index → Done. A
+                        progress bar and ETA appear during downloading.</li>
+                    <li>When the build finishes, the chip becomes <em>Loaded</em>. The node count fills in.</li>
+                    <li>Open Browse to query it.</li>
                 </ol>
                 <p class="mt-3 text-gray-700 dark:text-gray-200">
-                    Closing the tab doesn't stop the build. Reopen Inventories to see current state.
+                    You can navigate away while the build is running — closing the page does not cancel it.
+                    Come back to Inventories any time and the row reflects the latest state.
                 </p>
 
-                <h3 id="workflow-browse" class="group flex items-center text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">
-                    <a href="#workflow-browse" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-hidden="true">#</a>
-                    Browse a prefix tree
-                </h3>
+                <h3 id="workflow-browse" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">Browse a prefix tree</h3>
                 <ol class="list-decimal pl-5 text-gray-700 dark:text-gray-200 space-y-1.5">
-                    <li>Open <a href="/browse" class="text-indigo-600 dark:text-indigo-400 hover:underline">Browse</a>. Choose a loaded inventory in the dropdown.</li>
-                    <li>Empty prefix = bucket root. Type a prefix and press Enter to jump.</li>
-                    <li>Click a child prefix (📁) to drill in. Breadcrumbs at the top navigate up.</li>
-                    <li>Sort the children table by Segment / Objects / Size / Est. Cost — click the header.</li>
-                    <li>Each column shows current aggregate. Tier breakdown is in the collapsible &ldquo;Storage tier breakdown&rdquo; panel.</li>
+                    <li>Open <a href="/browse" class="text-indigo-600 dark:text-indigo-400 hover:underline">Browse</a> and pick a loaded inventory.</li>
+                    <li>Empty prefix = the bucket root. Type a prefix and press <strong>Enter</strong> to jump straight there.</li>
+                    <li>Click a child prefix (📁) to drill in. The breadcrumbs at the top navigate up.</li>
+                    <li>Click a column header — Segment / Objects / Size / Est. Cost — to sort the children.</li>
+                    <li>Expand the <strong>Storage tier breakdown</strong> panel to see per-storage-class counts and the monthly cost estimate.</li>
                 </ol>
 
-                <h3 id="workflow-recover" class="group flex items-center text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">
-                    <a href="#workflow-recover" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-hidden="true">#</a>
-                    Recover from errors
-                </h3>
+                <h3 id="workflow-recover" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">Recover from errors</h3>
                 <ul class="list-disc pl-5 text-gray-700 dark:text-gray-200 space-y-1.5">
-                    <li><strong>Build failed</strong> (chip = Error) → hover the small "Error" subtitle for the message → click <strong>Retry</strong>.</li>
-                    <li><strong>Build stuck</strong> (no ETA progress for &gt;30s, network frozen) → click <strong>Cancel</strong>, then <strong>Retry</strong>.</li>
-                    <li><strong>Server restarted mid-build</strong> → row shows Error: <em>"interrupted by server restart"</em>. Click <strong>Retry</strong>.</li>
-                    <li><strong>Wrong cache</strong> → click <strong>Unload</strong>, delete <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">$CACHE_DIR/&lt;src&gt;/&lt;id&gt;/</code> on the host, click <strong>Load</strong>.</li>
+                    <li><strong>Build failed.</strong> Hover the small "Error" label under the chip for the message, then click <strong>Retry</strong>.</li>
+                    <li><strong>Build stuck.</strong> If the ETA stops moving, click <strong>Cancel</strong>, then <strong>Retry</strong>.</li>
+                    <li><strong>Row shows "interrupted by server restart".</strong> A build was running when the server stopped. Click <strong>Retry</strong>.</li>
+                    <li><strong>Wrong inventory loaded.</strong> Click <strong>Unload</strong>, then <strong>Reload</strong> — the build runs fresh.</li>
                 </ul>
             </section>
 
             <!-- State chips -->
             <section id="chips">
-                <h2 class="group flex items-center text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                    <a href="#chips" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-label="Permalink to State chips">#</a>
-                    State chips
-                </h2>
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">State chips</h2>
+                <p class="text-gray-700 dark:text-gray-200 mb-4">
+                    Every inventory row has a colored chip showing its current state.
+                </p>
                 <div class="overflow-x-auto -mx-4 sm:mx-0">
                     <table class="min-w-full text-sm">
                         <thead class="border-b border-gray-200 dark:border-gray-700">
                             <tr class="text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
                                 <th class="py-2 pr-6 font-medium">Chip</th>
-                                <th class="py-2 pr-6 font-medium">State value</th>
                                 <th class="py-2 pr-6 font-medium">Meaning</th>
                                 <th class="py-2 font-medium">Available action</th>
                             </tr>
@@ -193,32 +166,27 @@
                         <tbody class="divide-y divide-gray-100 dark:divide-gray-800 text-gray-700 dark:text-gray-200">
                             <tr>
                                 <td class="py-2.5 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "not_loaded"}}">{{stateLabel "not_loaded"}}</span></td>
-                                <td class="py-2.5 pr-6 font-mono text-xs">not_loaded</td>
                                 <td class="py-2.5 pr-6">Discovered in S3, never built.</td>
                                 <td class="py-2.5">Load</td>
                             </tr>
                             <tr>
                                 <td class="py-2.5 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "loading"}}">{{stateLabel "loading"}}</span></td>
-                                <td class="py-2.5 pr-6 font-mono text-xs">loading</td>
-                                <td class="py-2.5 pr-6">A build job is running.</td>
+                                <td class="py-2.5 pr-6">A build is running. Stage and ETA appear below the chip.</td>
                                 <td class="py-2.5">Cancel</td>
                             </tr>
                             <tr>
                                 <td class="py-2.5 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "loaded"}}">{{stateLabel "loaded"}}</span></td>
-                                <td class="py-2.5 pr-6 font-mono text-xs">loaded</td>
-                                <td class="py-2.5 pr-6">Index open in memory; queries ready.</td>
+                                <td class="py-2.5 pr-6">The index is ready; the inventory shows up on Browse.</td>
                                 <td class="py-2.5">Unload</td>
                             </tr>
                             <tr>
                                 <td class="py-2.5 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "unloaded"}}">{{stateLabel "unloaded"}}</span></td>
-                                <td class="py-2.5 pr-6 font-mono text-xs">unloaded</td>
-                                <td class="py-2.5 pr-6">Built, released from memory. Cache intact.</td>
-                                <td class="py-2.5">Reload (fast — no re-download)</td>
+                                <td class="py-2.5 pr-6">Built once, currently released from memory. Reload is fast — no re-download.</td>
+                                <td class="py-2.5">Reload</td>
                             </tr>
                             <tr>
                                 <td class="py-2.5 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "error"}}">{{stateLabel "error"}}</span></td>
-                                <td class="py-2.5 pr-6 font-mono text-xs">error</td>
-                                <td class="py-2.5 pr-6">Last build failed / cancelled / interrupted.</td>
+                                <td class="py-2.5 pr-6">Last build failed or was interrupted. Hover the small Error label for the message.</td>
                                 <td class="py-2.5">Retry</td>
                             </tr>
                         </tbody>
@@ -228,50 +196,44 @@
 
             <!-- Action buttons -->
             <section id="buttons">
-                <h2 class="group flex items-center text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                    <a href="#buttons" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-label="Permalink to Action buttons">#</a>
-                    Action buttons
-                </h2>
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Action buttons</h2>
+                <p class="text-gray-700 dark:text-gray-200 mb-4">
+                    Only the buttons that are valid in the current state appear on each row.
+                </p>
                 <div class="overflow-x-auto -mx-4 sm:mx-0">
                     <table class="min-w-full text-sm">
                         <thead class="border-b border-gray-200 dark:border-gray-700">
                             <tr class="text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
                                 <th class="py-2 pr-6 font-medium">Button</th>
                                 <th class="py-2 pr-6 font-medium">Shown when</th>
-                                <th class="py-2 pr-6 font-medium">Server effect</th>
-                                <th class="py-2 font-medium">Response</th>
+                                <th class="py-2 font-medium">What it does</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-100 dark:divide-gray-800 text-gray-700 dark:text-gray-200">
                             <tr>
                                 <td class="py-2.5 pr-6 font-medium text-indigo-600 dark:text-indigo-400">Load</td>
-                                <td class="py-2.5 pr-6">State = not_loaded</td>
-                                <td class="py-2.5 pr-6">Wipes cache dir, enqueues build job.</td>
-                                <td class="py-2.5 font-mono text-xs">202 + row</td>
+                                <td class="py-2.5 pr-6">State is Not loaded</td>
+                                <td class="py-2.5">Kicks off a fresh build of the index.</td>
                             </tr>
                             <tr>
                                 <td class="py-2.5 pr-6 font-medium text-indigo-600 dark:text-indigo-400">Reload</td>
-                                <td class="py-2.5 pr-6">State = unloaded</td>
-                                <td class="py-2.5 pr-6">Same as Load — fresh build.</td>
-                                <td class="py-2.5 font-mono text-xs">202 + row</td>
+                                <td class="py-2.5 pr-6">State is On disk</td>
+                                <td class="py-2.5">Re-runs the build — use when a newer S3 inventory run is available.</td>
                             </tr>
                             <tr>
                                 <td class="py-2.5 pr-6 font-medium text-indigo-600 dark:text-indigo-400">Retry</td>
-                                <td class="py-2.5 pr-6">State = error</td>
-                                <td class="py-2.5 pr-6">Same as Load — wipes partial cache, restarts.</td>
-                                <td class="py-2.5 font-mono text-xs">202 + row</td>
+                                <td class="py-2.5 pr-6">State is Error</td>
+                                <td class="py-2.5">Same as Load — wipes any partial files and starts a new build.</td>
                             </tr>
                             <tr>
                                 <td class="py-2.5 pr-6 font-medium text-yellow-600 dark:text-yellow-400">Unload</td>
-                                <td class="py-2.5 pr-6">State = loaded</td>
-                                <td class="py-2.5 pr-6">Releases mmap. Keeps cache dir.</td>
-                                <td class="py-2.5 font-mono text-xs">200 + row</td>
+                                <td class="py-2.5 pr-6">State is Loaded</td>
+                                <td class="py-2.5">Releases the inventory from memory. The on-disk cache stays so Reload is fast.</td>
                             </tr>
                             <tr>
                                 <td class="py-2.5 pr-6 font-medium text-yellow-600 dark:text-yellow-400">Cancel</td>
-                                <td class="py-2.5 pr-6">A job is queued or running</td>
-                                <td class="py-2.5 pr-6">Signals the job's ctx; pipeline winds down at next checkpoint.</td>
-                                <td class="py-2.5 font-mono text-xs">202 (empty)</td>
+                                <td class="py-2.5 pr-6">A build is running</td>
+                                <td class="py-2.5">Stops the in-flight build. The row flips to Error and you can click Retry.</td>
                             </tr>
                         </tbody>
                     </table>
@@ -280,267 +242,108 @@
 
             <!-- Progress -->
             <section id="progress">
-                <h2 class="group flex items-center text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                    <a href="#progress" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-label="Permalink to Progress & ETA">#</a>
-                    Progress &amp; ETA
-                </h2>
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Progress &amp; ETA</h2>
                 <p class="text-gray-700 dark:text-gray-200">
-                    Each Inventories page opens a single SSE connection (<code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">GET /api/jobs/stream</code>).
-                    The server emits one frame per job-state transition, named <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">row-&lt;composite-id&gt;</code>;
-                    htmx re-fetches the row whenever its frame arrives.
+                    While an inventory is loading, the row shows the current build stage, a progress bar, and an
+                    estimated time remaining. Updates come through automatically — leave the page open and the
+                    bar moves, or come back later and see the latest state. The build runs on the server, not in
+                    your browser, so closing the tab doesn't stop it.
                 </p>
                 <p class="mt-3 text-gray-700 dark:text-gray-200">
-                    Pipeline stages, in order: <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">preparing</code> → <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">initializing</code> →
-                    <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">downloading</code> → <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">building</code> → <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">done</code>.
-                    Quantitative progress (the chunk counter + ETA) only emits during <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">downloading</code>.
-                </p>
-                <p class="mt-3 text-gray-700 dark:text-gray-200">
-                    ETA is a linear projection from elapsed time:
-                </p>
-                <pre class="mt-3 p-3 rounded bg-gray-100 dark:bg-gray-800/80 text-[0.8rem] overflow-x-auto"><code class="font-mono">remaining = elapsed × (total − done) / done</code></pre>
-                <p class="mt-3 text-gray-700 dark:text-gray-200">
-                    The number is jittery for the first 1-2 chunks and settles within ~10% by the time
-                    a quarter of the manifest is ingested.
+                    The ETA is a simple linear projection: it watches how long the work has taken so far and
+                    assumes the rest will take roughly the same per unit. It's noisy at the very start and
+                    settles to within ~10% once a few chunks have been ingested.
                 </p>
             </section>
 
-            <!-- URL parameters -->
-            <section id="urls">
-                <h2 class="group flex items-center text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                    <a href="#urls" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-label="Permalink to URL parameters">#</a>
-                    URL parameters
-                </h2>
+            <!-- Sharing -->
+            <section id="sharing">
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Sharing URLs</h2>
                 <p class="text-gray-700 dark:text-gray-200">
-                    The Browse page is fully driven by query string. Every link, sort header, breadcrumb, and pager button updates these.
+                    Browse is fully reflected in the address bar — every drill-down, sort header, and page change
+                    updates the URL. Copy the address at any point and send it to a teammate: opening that link
+                    lands them in the exact same view (assuming the inventory is also loaded on their session).
                 </p>
-                <div class="mt-3 overflow-x-auto -mx-4 sm:mx-0">
-                    <table class="min-w-full text-sm">
-                        <thead class="border-b border-gray-200 dark:border-gray-700">
-                            <tr class="text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                                <th class="py-2 pr-6 font-medium">Param</th>
-                                <th class="py-2 pr-6 font-medium">Values</th>
-                                <th class="py-2 font-medium">Default</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-gray-100 dark:divide-gray-800 font-mono text-xs text-gray-700 dark:text-gray-200">
-                            <tr><td class="py-2 pr-6">inventory_id</td><td class="py-2 pr-6">composite id, e.g. <span class="opacity-70">my-bucket/daily-inv</span></td><td class="py-2 opacity-70">empty</td></tr>
-                            <tr><td class="py-2 pr-6">prefix</td><td class="py-2 pr-6">any path, e.g. <span class="opacity-70">data/2024/</span></td><td class="py-2 opacity-70">empty (root)</td></tr>
-                            <tr><td class="py-2 pr-6">sort</td><td class="py-2 pr-6">segment · objects · size · cost</td><td class="py-2 opacity-70">segment</td></tr>
-                            <tr><td class="py-2 pr-6">dir</td><td class="py-2 pr-6">asc · desc</td><td class="py-2 opacity-70">asc</td></tr>
-                            <tr><td class="py-2 pr-6">page</td><td class="py-2 pr-6">positive integer</td><td class="py-2 opacity-70">1</td></tr>
-                            <tr><td class="py-2 pr-6">page_size</td><td class="py-2 pr-6">positive integer, capped server-side</td><td class="py-2 opacity-70">100</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-
-            <!-- HTTP routes -->
-            <section id="routes">
-                <h2 class="group flex items-center text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                    <a href="#routes" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-label="Permalink to HTTP routes">#</a>
-                    HTTP routes
-                </h2>
-                <p class="text-gray-700 dark:text-gray-200">
-                    Same-origin CSRF middleware blocks cross-origin mutating requests. Read routes are unrestricted.
-                </p>
-                <div class="mt-3 overflow-x-auto -mx-4 sm:mx-0">
-                    <table class="min-w-full text-sm">
-                        <thead class="border-b border-gray-200 dark:border-gray-700">
-                            <tr class="text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                                <th class="py-2 pr-4 font-medium">Method</th>
-                                <th class="py-2 pr-6 font-medium">Path</th>
-                                <th class="py-2 font-medium">Returns</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-gray-100 dark:divide-gray-800 font-mono text-xs text-gray-700 dark:text-gray-200">
-                            <tr><td class="py-2 pr-4">GET</td><td class="py-2 pr-6">/healthz</td><td class="py-2">text/plain ok</td></tr>
-                            <tr><td class="py-2 pr-4">GET</td><td class="py-2 pr-6">/static/tailwind.css</td><td class="py-2">text/css (ETag)</td></tr>
-                            <tr><td class="py-2 pr-4">GET</td><td class="py-2 pr-6">/</td><td class="py-2">html — Dashboard</td></tr>
-                            <tr><td class="py-2 pr-4">GET</td><td class="py-2 pr-6">/inventories</td><td class="py-2">html — Inventories</td></tr>
-                            <tr><td class="py-2 pr-4">GET</td><td class="py-2 pr-6">/browse?inventory_id=&amp;prefix=&amp;…</td><td class="py-2">html (full or partial; content-negotiated on HX-Request)</td></tr>
-                            <tr><td class="py-2 pr-4">GET</td><td class="py-2 pr-6">/help</td><td class="py-2">html — this page</td></tr>
-                            <tr><td class="py-2 pr-4">GET</td><td class="py-2 pr-6">/partials/discovered/{src}/{id}</td><td class="py-2">html row</td></tr>
-                            <tr><td class="py-2 pr-4">POST</td><td class="py-2 pr-6">/partials/discovered/{src}/{id}/load</td><td class="py-2">202 + html row (queued)</td></tr>
-                            <tr><td class="py-2 pr-4">POST</td><td class="py-2 pr-6">/partials/discovered/{src}/{id}/unload</td><td class="py-2">200 + html row</td></tr>
-                            <tr><td class="py-2 pr-4">GET</td><td class="py-2 pr-6">/api/jobs/stream</td><td class="py-2">text/event-stream (SSE)</td></tr>
-                            <tr><td class="py-2 pr-4">POST</td><td class="py-2 pr-6">/api/jobs/{id}/cancel</td><td class="py-2">202 (empty)</td></tr>
-                            <tr><td class="py-2 pr-4">GET</td><td class="py-2 pr-6">/api/inventories</td><td class="py-2">application/json</td></tr>
-                            <tr><td class="py-2 pr-4">GET</td><td class="py-2 pr-6">/api/inventories/{id}</td><td class="py-2">application/json</td></tr>
-                            <tr><td class="py-2 pr-4">POST</td><td class="py-2 pr-6">/api/inventories/{id}/load · /unload</td><td class="py-2">application/json</td></tr>
-                            <tr><td class="py-2 pr-4">GET</td><td class="py-2 pr-6">/api/inventories/{id}/stats · /descendants</td><td class="py-2">application/json</td></tr>
-                            <tr><td class="py-2 pr-4">GET</td><td class="py-2 pr-6">/api/discovered</td><td class="py-2">application/json</td></tr>
-                            <tr><td class="py-2 pr-4">GET</td><td class="py-2 pr-6">/api/stats?inventory_id=&amp;prefix=</td><td class="py-2">application/json</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-
-            <!-- SSE -->
-            <section id="sse">
-                <h2 class="group flex items-center text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                    <a href="#sse" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-label="Permalink to SSE stream">#</a>
-                    SSE stream
-                </h2>
-                <p class="text-gray-700 dark:text-gray-200">
-                    <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">GET /api/jobs/stream</code> emits two frames per job state change — one keyed by job ID for debug consumers, one keyed by inventory ID for the row swap mechanism. A <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">: ping</code> heartbeat fires every 15s so departed clients are detected quickly.
-                </p>
-                <pre class="mt-3 p-3 rounded bg-gray-100 dark:bg-gray-800/80 text-[0.8rem] overflow-x-auto"><code class="font-mono">event: job-cbae234ba939f5d005e161e3
-data: {"ID":"cbae234ba939f5d005e161e3","InventoryID":"my-bucket/daily","Kind":"build","State":"running","Stage":"downloading","BytesDone":3,"BytesTotal":10,...}
-
-event: row-my-bucket/daily
-data: {...same...}
-
-: ping
-</code></pre>
                 <p class="mt-3 text-gray-700 dark:text-gray-200">
-                    Curl test: <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">curl -N http://localhost:8080/api/jobs/stream</code>.
+                    Browser <strong>back</strong> and <strong>forward</strong> work as you'd expect: each click into a child
+                    prefix is a history entry. The Inventory dropdown and Prefix input always reflect the URL
+                    you're on, so navigating back to the root resets them too.
                 </p>
             </section>
 
-            <!-- Persistence -->
-            <section id="persistence">
-                <h2 class="group flex items-center text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                    <a href="#persistence" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-label="Permalink to Persistence">#</a>
-                    Persistence
-                </h2>
+            <!-- Dark mode -->
+            <section id="dark-mode">
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Dark mode</h2>
                 <p class="text-gray-700 dark:text-gray-200">
-                    The server writes a SQLite file at <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">$CACHE_DIR/state.db</code> (override with
-                    <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">--state-db</code>). Schema:
+                    The sun / moon button in the top-right of every page toggles dark mode. Your choice is stored
+                    locally in this browser and applied before the first paint, so there's no light-mode flash
+                    when you reload. If you've never set a preference, the site follows your OS-level setting.
+                </p>
+            </section>
+
+            <!-- Restarts -->
+            <section id="restarts">
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Restarts &amp; saved state</h2>
+                <p class="text-gray-700 dark:text-gray-200">
+                    The server remembers which inventories you've loaded across restarts. When the server comes
+                    back up:
                 </p>
                 <ul class="mt-3 list-disc pl-5 text-gray-700 dark:text-gray-200 space-y-1">
-                    <li><code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">inventories</code> — one row per registered inventory, mirrored from the in-memory Manager.</li>
-                    <li><code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">jobs</code> — one row per build / load job, with FK <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">ON DELETE CASCADE</code>.</li>
+                    <li>Inventories that were <em>Loaded</em> are reopened from the cache — no rebuild, ready to query.</li>
+                    <li>Inventories that were mid-build flip to <em>Error</em> with the message
+                        <em>"interrupted by server restart"</em>. Builds can't safely resume from a partial cache,
+                        so the recovery is honest about it and asks you to Retry.</li>
+                    <li>Inventories that were idle (Not loaded, Unloaded) stay in the same state.</li>
                 </ul>
-                <p class="mt-3 text-gray-700 dark:text-gray-200">
-                    On startup:
-                </p>
-                <ul class="mt-3 list-disc pl-5 text-gray-700 dark:text-gray-200 space-y-1">
-                    <li>Jobs in <em>queued</em> or <em>running</em> are stamped <em>aborted</em>.</li>
-                    <li>Inventories in <em>loading</em> flip to <em>error</em> with reason <em>"interrupted by server restart"</em>.</li>
-                    <li>Inventories in <em>loaded</em> are re-opened from their on-disk index — no rebuild.</li>
-                    <li>Inventories whose Open fails flip to <em>error</em> so the UI surfaces a Retry.</li>
-                </ul>
-                <p class="mt-3 text-gray-700 dark:text-gray-200">
-                    Pragmas: <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">journal_mode=WAL</code>, <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">synchronous=NORMAL</code>, <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">foreign_keys=ON</code>, <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">busy_timeout=5000</code>.
-                </p>
-            </section>
-
-            <!-- Configuration -->
-            <section id="config">
-                <h2 class="group flex items-center text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                    <a href="#config" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-label="Permalink to Configuration">#</a>
-                    Configuration
-                </h2>
-                <p class="text-gray-700 dark:text-gray-200">
-                    All flags accept an env-var alternative. Run with <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">-h</code> for the canonical list; the table below is a cheat sheet.
-                </p>
-                <div class="mt-3 overflow-x-auto -mx-4 sm:mx-0">
-                    <table class="min-w-full text-sm">
-                        <thead class="border-b border-gray-200 dark:border-gray-700">
-                            <tr class="text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                                <th class="py-2 pr-6 font-medium">Flag</th>
-                                <th class="py-2 pr-6 font-medium">Env var</th>
-                                <th class="py-2 font-medium">Purpose</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-gray-100 dark:divide-gray-800 text-xs text-gray-700 dark:text-gray-200">
-                            <tr>
-                                <td class="py-2 pr-6 font-mono">--addr :8080</td>
-                                <td class="py-2 pr-6 font-mono">—</td>
-                                <td class="py-2">HTTP listen address.</td>
-                            </tr>
-                            <tr>
-                                <td class="py-2 pr-6 font-mono">--s3-source s3://…</td>
-                                <td class="py-2 pr-6 font-mono">S3INV_SOURCE</td>
-                                <td class="py-2">Discovery root. Without it, /inventories is empty.</td>
-                            </tr>
-                            <tr>
-                                <td class="py-2 pr-6 font-mono">--cache-dir /var/cache/s3inv</td>
-                                <td class="py-2 pr-6 font-mono">S3INV_CACHE_DIR</td>
-                                <td class="py-2">Where built indexes + state.db live.</td>
-                            </tr>
-                            <tr>
-                                <td class="py-2 pr-6 font-mono">--state-db /path/state.db</td>
-                                <td class="py-2 pr-6 font-mono">S3INV_STATE_DB</td>
-                                <td class="py-2">Override the default <code class="font-mono">$CACHE_DIR/state.db</code>.</td>
-                            </tr>
-                            <tr>
-                                <td class="py-2 pr-6 font-mono">--price-table path.json</td>
-                                <td class="py-2 pr-6 font-mono">—</td>
-                                <td class="py-2">Override US-East-1 prices for cost estimates.</td>
-                            </tr>
-                            <tr>
-                                <td class="py-2 pr-6 font-mono">--verbose</td>
-                                <td class="py-2 pr-6 font-mono">—</td>
-                                <td class="py-2">Debug logging.</td>
-                            </tr>
-                            <tr>
-                                <td class="py-2 pr-6 font-mono">--pretty-logs</td>
-                                <td class="py-2 pr-6 font-mono">—</td>
-                                <td class="py-2">Human-friendly console output (default is JSON).</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
             </section>
 
             <!-- Keyboard -->
             <section id="shortcuts">
-                <h2 class="group flex items-center text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                    <a href="#shortcuts" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-label="Permalink to Keyboard">#</a>
-                    Keyboard
-                </h2>
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Keyboard</h2>
                 <ul class="list-disc pl-5 text-gray-700 dark:text-gray-200 space-y-1">
                     <li><kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Tab</kbd> walks every page in reading order.</li>
-                    <li><kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Enter</kbd> / <kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Space</kbd> activates any button.</li>
+                    <li><kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Enter</kbd> or <kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Space</kbd> activates any button.</li>
                     <li><kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Enter</kbd> in the Prefix input on Browse jumps directly to that prefix.</li>
-                    <li>Browse child links are real <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">&lt;a&gt;</code> tags — middle-click or <kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Ctrl</kbd>+click opens in a new tab.</li>
+                    <li>Child prefix links on Browse are real anchors — middle-click or <kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Ctrl</kbd>+click opens them in a new tab.</li>
                 </ul>
             </section>
 
             <!-- Troubleshooting -->
             <section id="troubleshooting">
-                <h2 class="group flex items-center text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                    <a href="#troubleshooting" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-label="Permalink to Troubleshooting">#</a>
-                    Troubleshooting
-                </h2>
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Troubleshooting</h2>
                 <input id="ts-filter" type="search" placeholder="Filter…" aria-label="Filter troubleshooting"
                        class="mb-4 block w-full max-w-xs px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
 
                 <dl class="divide-y divide-gray-200 dark:divide-gray-700 text-sm">
-                    <div class="py-4" data-search-target="A build is stuck and the ETA isnt moving">
+                    <div class="py-4" data-search-target="stuck ETA progress">
                         <dt class="font-semibold text-gray-900 dark:text-gray-100">A build is stuck and the ETA isn't moving.</dt>
-                        <dd class="mt-1 text-gray-700 dark:text-gray-200">Click <strong>Cancel</strong>. The pipeline winds down at its next safe checkpoint and the row flips to Error. Then click <strong>Retry</strong>. If the same inventory consistently hangs in the same stage, check the server logs — the manifest may point at unreachable objects.</dd>
+                        <dd class="mt-1 text-gray-700 dark:text-gray-200">Click <strong>Cancel</strong>. The build stops at the next safe checkpoint and the row flips to Error. Then click <strong>Retry</strong>.</dd>
                     </div>
                     <div class="py-4" data-search-target="interrupted by server restart">
                         <dt class="font-semibold text-gray-900 dark:text-gray-100">Row shows "interrupted by server restart".</dt>
-                        <dd class="mt-1 text-gray-700 dark:text-gray-200">Expected — mid-flight builds can't safely resume. The partial cache directory is invalid. Click <strong>Retry</strong> to rerun cleanly. Inventories that were fully loaded before the restart come back as Loaded automatically.</dd>
+                        <dd class="mt-1 text-gray-700 dark:text-gray-200">Expected — a build was running when the server stopped, and partial builds can't safely resume. Click <strong>Retry</strong> to rerun cleanly.</dd>
                     </div>
                     <div class="py-4" data-search-target="inventories list empty">
                         <dt class="font-semibold text-gray-900 dark:text-gray-100">The Inventories list is empty.</dt>
                         <dd class="mt-1 text-gray-700 dark:text-gray-200">
                             {{if .HasDiscovery}}
-                            The server is configured with <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">{{.S3Source}}</code> but no inventory configurations were found there. Make sure your S3 Inventory configuration is publishing reports under that prefix and at least one run has completed.
+                            No S3 inventory configurations were found at the configured location. Make sure at least one inventory has published a completed run.
                             {{else}}
-                            Discovery is disabled. Start the server with <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">--s3-source s3://bucket/inventory-prefix/</code> to populate the list.
+                            S3 discovery isn't configured for this server. The operator needs to start the server pointing at a source location for inventories to appear.
                             {{end}}
                         </dd>
                     </div>
-                    <div class="py-4" data-search-target="browse select loaded inventory">
-                        <dt class="font-semibold text-gray-900 dark:text-gray-100">Browse dropdown shows "Select a loaded inventory" but I just loaded one.</dt>
-                        <dd class="mt-1 text-gray-700 dark:text-gray-200">The dropdown only lists inventories currently in the <em>Loaded</em> state. If yours is <em>Loading…</em>, wait for the build. If it's <em>Unloaded</em> or <em>Error</em>, click Reload / Retry first.</dd>
+                    <div class="py-4" data-search-target="browse dropdown select loaded">
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">Browse dropdown says "Select a loaded inventory" but I just loaded one.</dt>
+                        <dd class="mt-1 text-gray-700 dark:text-gray-200">The dropdown only lists inventories currently in the <em>Loaded</em> state. If yours is <em>Loading…</em>, wait for the build to finish. If it's <em>Unloaded</em> or <em>Error</em>, click Reload / Retry on the Inventories page first.</dd>
                     </div>
-                    <div class="py-4" data-search-target="free disk space cache">
-                        <dt class="font-semibold text-gray-900 dark:text-gray-100">I want to free disk space.</dt>
-                        <dd class="mt-1 text-gray-700 dark:text-gray-200">Click <strong>Unload</strong>, then <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">rm -rf $CACHE_DIR/&lt;src&gt;/&lt;id&gt;/</code> on the host. The row returns to <em>Not loaded</em> on the next refresh; click Load to rebuild.</dd>
+                    <div class="py-4" data-search-target="page hangs navigation slow">
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">Pages feel slow after a lot of navigation.</dt>
+                        <dd class="mt-1 text-gray-700 dark:text-gray-200">If clicks stop responding for a while, hard-reload the page (<kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Cmd/Ctrl+Shift+R</kbd>) to drop any stale background connections. Things should be snappy again.</dd>
                     </div>
-                    <div class="py-4" data-search-target="403 cross origin csrf">
-                        <dt class="font-semibold text-gray-900 dark:text-gray-100">My curl gets 403 on a POST.</dt>
-                        <dd class="mt-1 text-gray-700 dark:text-gray-200">CSRF middleware rejects mutating requests whose Origin or Referer doesn't match the server. Use the JSON API from same-origin scripts, or set an <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">Origin</code> header on curl that matches the host.</dd>
-                    </div>
-                    <div class="py-4" data-search-target="sse connection limit chrome">
-                        <dt class="font-semibold text-gray-900 dark:text-gray-100">Page hangs after several navigations.</dt>
-                        <dd class="mt-1 text-gray-700 dark:text-gray-200">Chrome's per-origin connection limit is 6. Stale SSE streams used to eat them; the server's 15s heartbeat detects gone clients quickly now. If you still see hangs, hard-reload (<kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Cmd/Ctrl+Shift+R</kbd>) to drop any lingering connections.</dd>
+                    <div class="py-4" data-search-target="storage tier breakdown missing">
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">Browse doesn't show a storage tier breakdown for an inventory.</dt>
+                        <dd class="mt-1 text-gray-700 dark:text-gray-200">Some S3 inventory configurations don't include the storage-class column. Without that column the per-tier breakdown and cost estimate can't be computed — only total counts and bytes are shown.</dd>
                     </div>
                 </dl>
                 <p id="ts-empty" class="hidden text-sm text-gray-500 dark:text-gray-400 italic">No items match.</p>
@@ -548,42 +351,31 @@ data: {...same...}
 
             <!-- Glossary -->
             <section id="glossary">
-                <h2 class="group flex items-center text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                    <a href="#glossary" class="anchor mr-2 text-gray-400 dark:text-gray-500" aria-label="Permalink to Glossary">#</a>
-                    Glossary
-                </h2>
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Glossary</h2>
                 <dl class="divide-y divide-gray-200 dark:divide-gray-700 text-sm">
                     <div class="grid sm:grid-cols-[10rem_1fr] gap-x-6 py-3">
                         <dt class="font-medium text-gray-900 dark:text-gray-100">Inventory</dt>
-                        <dd class="text-gray-700 dark:text-gray-200">One S3 Inventory configuration — a manifest describing every object in a source bucket at a point in time.</dd>
+                        <dd class="text-gray-700 dark:text-gray-200">An S3 Inventory configuration — a periodic report listing every object in a source bucket.</dd>
                     </div>
                     <div class="grid sm:grid-cols-[10rem_1fr] gap-x-6 py-3">
                         <dt class="font-medium text-gray-900 dark:text-gray-100">Run</dt>
-                        <dd class="text-gray-700 dark:text-gray-200">One snapshot produced by an inventory configuration. The server uses only the latest run per inventory.</dd>
+                        <dd class="text-gray-700 dark:text-gray-200">One snapshot produced by an inventory configuration. The site uses only the latest run per inventory.</dd>
                     </div>
                     <div class="grid sm:grid-cols-[10rem_1fr] gap-x-6 py-3">
                         <dt class="font-medium text-gray-900 dark:text-gray-100">Index</dt>
-                        <dd class="text-gray-700 dark:text-gray-200">The mmap-backed on-disk artifact built from an inventory. Enables O(1) prefix lookups and fast subtree aggregation.</dd>
-                    </div>
-                    <div class="grid sm:grid-cols-[10rem_1fr] gap-x-6 py-3">
-                        <dt class="font-medium text-gray-900 dark:text-gray-100">Composite ID</dt>
-                        <dd class="text-gray-700 dark:text-gray-200">The <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">&lt;src-bucket&gt;/&lt;inv-id&gt;</code> pair the server uses internally — same string that appears in API paths and SSE event names.</dd>
+                        <dd class="text-gray-700 dark:text-gray-200">The compact, queryable form built from an inventory. Lets Browse answer prefix questions in milliseconds.</dd>
                     </div>
                     <div class="grid sm:grid-cols-[10rem_1fr] gap-x-6 py-3">
                         <dt class="font-medium text-gray-900 dark:text-gray-100">Prefix</dt>
-                        <dd class="text-gray-700 dark:text-gray-200">A path inside the source bucket (e.g. <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">data/2024/</code>). Browse navigates the prefix tree.</dd>
+                        <dd class="text-gray-700 dark:text-gray-200">A path inside the source bucket — e.g. <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">data/2024/</code>. Browse navigates the prefix tree.</dd>
                     </div>
                     <div class="grid sm:grid-cols-[10rem_1fr] gap-x-6 py-3">
                         <dt class="font-medium text-gray-900 dark:text-gray-100">Tier</dt>
-                        <dd class="text-gray-700 dark:text-gray-200">The S3 storage class — Standard, Standard-IA, Glacier Instant, etc.</dd>
+                        <dd class="text-gray-700 dark:text-gray-200">The S3 storage class — Standard, Standard-IA, Glacier Instant, and so on.</dd>
                     </div>
                     <div class="grid sm:grid-cols-[10rem_1fr] gap-x-6 py-3">
                         <dt class="font-medium text-gray-900 dark:text-gray-100">Cost estimate</dt>
-                        <dd class="text-gray-700 dark:text-gray-200">Monthly $ figure from tier breakdown × price table. Defaults to US-East-1; override with <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">--price-table</code>.</dd>
-                    </div>
-                    <div class="grid sm:grid-cols-[10rem_1fr] gap-x-6 py-3">
-                        <dt class="font-medium text-gray-900 dark:text-gray-100">SSE</dt>
-                        <dd class="text-gray-700 dark:text-gray-200">Server-Sent Events — one-way push channel from server to browser. Used by /api/jobs/stream.</dd>
+                        <dd class="text-gray-700 dark:text-gray-200">Monthly $ figure computed from the per-tier object counts and sizes using S3's US-East-1 prices.</dd>
                     </div>
                 </dl>
             </section>
@@ -593,8 +385,8 @@ data: {...same...}
 </div>
 
 <script>
-// Active TOC link via IntersectionObserver. Familiar pattern on
-// modern docs sites (Stripe, Tailwind, GitHub Docs).
+// Active TOC link via IntersectionObserver — highlights whichever
+// section is currently in view as you scroll.
 (function () {
     var toc = document.querySelector('.helpdoc .toc');
     if (!toc) return;
@@ -607,20 +399,11 @@ data: {...same...}
     var active = null;
     function setActive(id) {
         if (active === id) return;
-        if (active && linkFor[active]) {
-            linkFor[active].classList.remove('active');
-            linkFor[active].classList.remove('border-indigo-500', 'dark:border-indigo-400');
-            linkFor[active].classList.add('border-transparent');
-        }
+        if (active && linkFor[active]) linkFor[active].classList.remove('active');
         active = id;
-        if (linkFor[id]) {
-            linkFor[id].classList.add('active');
-            linkFor[id].classList.add('border-indigo-500', 'dark:border-indigo-400');
-            linkFor[id].classList.remove('border-transparent');
-        }
+        if (linkFor[id]) linkFor[id].classList.add('active');
     }
     var obs = new IntersectionObserver(function (entries) {
-        // Pick the highest visible section (lowest top).
         var visible = entries.filter(function (e) { return e.isIntersecting; });
         if (!visible.length) return;
         visible.sort(function (a, b) { return a.target.getBoundingClientRect().top - b.target.getBoundingClientRect().top; });

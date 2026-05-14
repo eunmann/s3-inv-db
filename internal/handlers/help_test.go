@@ -31,8 +31,7 @@ func TestHelpPage_Renders(t *testing.T) {
 		}
 		t.Errorf("body missing header label\nbody[:500]=%q", head)
 	}
-	// A handful of meaningful section headings present.
-	for _, want := range []string{"Overview", "HTTP routes", "SSE stream", "Persistence", "Configuration", "Glossary"} {
+	for _, want := range []string{"Overview", "Workflows", "State chips", "Action buttons", "Restarts &amp; saved state", "Glossary"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing section heading %q", want)
 		}
@@ -41,12 +40,17 @@ func TestHelpPage_Renders(t *testing.T) {
 		`id="overview"`, `id="pages"`, `id="workflows"`,
 		`id="workflow-load"`, `id="workflow-browse"`, `id="workflow-recover"`,
 		`id="chips"`, `id="buttons"`, `id="progress"`,
-		`id="urls"`, `id="routes"`, `id="sse"`,
-		`id="persistence"`, `id="config"`,
+		`id="sharing"`, `id="dark-mode"`, `id="restarts"`,
 		`id="shortcuts"`, `id="troubleshooting"`, `id="glossary"`,
 	} {
 		if !strings.Contains(body, anchor) {
 			t.Errorf("body missing TOC anchor %s", anchor)
+		}
+	}
+	// Help is for site users, not API consumers — these terms must NOT leak in.
+	for _, leaked := range []string{"SSE stream", "HTTP routes", "curl", "/api/jobs/stream", "PRAGMA", "CSRF", "POST /partials/", "IntersectionObserver:"} {
+		if strings.Contains(body, leaked) {
+			t.Errorf("body unexpectedly contains developer-facing term %q (Help is for site users)", leaked)
 		}
 	}
 }
