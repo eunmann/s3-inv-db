@@ -449,3 +449,29 @@ func TestManagerWithIndex_NoUseAfterCloseUnderUnload(t *testing.T) {
 		}
 	}
 }
+
+func TestBrowseLevelAPI_Integration_HappyPath(t *testing.T) {
+	h := buildLoadedTestHandlers(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/browse?inventory_id=loaded&prefix=", http.NoBody)
+	w := httptest.NewRecorder()
+	h.BrowseLevelAPI(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+	}
+	var resp BrowseLevelResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.InventoryID != "loaded" {
+		t.Errorf("InventoryID = %q, want loaded", resp.InventoryID)
+	}
+	if resp.Stats.ObjectCount == 0 {
+		t.Errorf("root ObjectCount = 0, want > 0")
+	}
+	if len(resp.Children) == 0 {
+		t.Error("expected non-empty children at root")
+	}
+	if resp.Pagination.PageSize == 0 {
+		t.Errorf("Pagination.PageSize = 0, want non-zero")
+	}
+}

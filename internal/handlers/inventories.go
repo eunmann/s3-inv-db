@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
@@ -23,6 +25,137 @@ type RegisterInventoryRequest struct {
 func (h *Handlers) ListInventoriesAPI(w http.ResponseWriter, _ *http.Request) {
 	inventories := h.manager.List()
 	WriteJSON(w, http.StatusOK, inventories)
+}
+
+// ConfigurationsResponse is the shape returned by ListConfigurationsAPI.
+// Top-level wrapping object so callers can negotiate envelope additions
+// (paging, filters) without a breaking change.
+type ConfigurationsResponse struct {
+	Configurations   []ConfigurationView `json:"configurations"`
+	DiscoveryEnabled bool                `json:"discovery_enabled"`
+}
+
+// ConfigurationView is one (source bucket + inventory id) pair and its runs.
+type ConfigurationView struct {
+	SourceBucket string          `json:"source_bucket"`
+	InventoryID  string          `json:"inventory_id"`
+	Runs         []ConfigRunView `json:"runs"`
+}
+
+// ConfigRunView is one run's identity + lifecycle state. Bytes-on-disk
+// is reported when the loader can measure it.
+type ConfigRunView struct {
+	CompositeID string `json:"composite_id"` // "<src>/<inv>/<run>"
+	Run         string `json:"run"`          // S3 timestamp folder name
+	State       string `json:"state"`
+	Error       string `json:"error,omitempty"`
+	NodeCount   uint64 `json:"node_count,omitempty"`
+	LoadedAt    string `json:"loaded_at,omitempty"` // RFC3339
+	CacheBytes  int64  `json:"cache_bytes,omitempty"`
+	HasTierData bool   `json:"has_tier_data"`
+	ManifestKey string `json:"manifest_key,omitempty"`
+}
+
+// ListConfigurationsAPI returns inventory configurations grouped by
+// (source bucket, inventory ID). When discovery is enabled the list
+// covers every discovered run merged with its current Manager state;
+// otherwise it returns whatever's in the Manager keyed by composite
+// ID — useful for "list what's loadable" via one round trip.
+func (h *Handlers) ListConfigurationsAPI(w http.ResponseWriter, r *http.Request) {
+	resp := ConfigurationsResponse{DiscoveryEnabled: h.discovery.Enabled()}
+	if h.discovery.Enabled() {
+		views, err := h.discovery.List(r.Context())
+		if err != nil {
+			zerolog.Ctx(r.Context()).Error().Err(err).Msg("api configurations discovery")
+			WriteJSONError(w, http.StatusBadGateway, "failed to list discovered inventories")
+			return
+		}
+		resp.Configurations = h.groupDiscoveredForAPI(r, views)
+	} else {
+		resp.Configurations = groupManagerForAPI(h.manager.List())
+	}
+	WriteJSON(w, http.StatusOK, resp)
+}
+
+// groupDiscoveredForAPI maps MergedInventory views into the API shape.
+// Same grouping the UI uses, but JSON-tagged + with cache-bytes when
+// the loader can measure on-disk size.
+func (h *Handlers) groupDiscoveredForAPI(_ *http.Request, views []inventory.MergedInventory) []ConfigurationView {
+	groups := map[string]int{}
+	out := []ConfigurationView{}
+	for i := range views {
+		v := &views[i]
+		key := v.ConfigID()
+		idx, ok := groups[key]
+		if !ok {
+			groups[key] = len(out)
+			idx = len(out)
+			out = append(out, ConfigurationView{
+				SourceBucket: v.SourceBucket,
+				InventoryID:  v.InventoryID,
+			})
+		}
+		run := ConfigRunView{
+			CompositeID: v.CompositeID(),
+			Run:         v.Run,
+			State:       string(v.State),
+			Error:       v.Error,
+			NodeCount:   v.NodeCount,
+			HasTierData: v.HasTierData,
+			ManifestKey: v.ManifestKey,
+		}
+		if info, ok := h.manager.Get(v.CompositeID()); ok && !info.LoadedAt.IsZero() {
+			run.LoadedAt = info.LoadedAt.UTC().Format(time.RFC3339)
+		}
+		if h.loader != nil && v.Run != "" {
+			if n, err := h.loader.CacheSizeBytes(v.SourceBucket, v.InventoryID, v.Run); err == nil {
+				run.CacheBytes = n
+			}
+		}
+		out[idx].Runs = append(out[idx].Runs, run)
+	}
+	return out
+}
+
+// groupManagerForAPI groups by parsing the composite ID. Used when
+// discovery is disabled (no S3 source configured) — the Manager is
+// the only source of truth.
+func groupManagerForAPI(all []inventory.Info) []ConfigurationView {
+	groups := map[string]int{}
+	out := []ConfigurationView{}
+	for i := range all {
+		info := all[i]
+		parts := strings.SplitN(info.ID, "/", 3)
+		var src, inv, run string
+		switch len(parts) {
+		case 3:
+			src, inv, run = parts[0], parts[1], parts[2]
+		case 2:
+			src, inv = parts[0], parts[1]
+		default:
+			src, inv = "_other_", info.ID
+		}
+		key := src + "/" + inv
+		idx, ok := groups[key]
+		if !ok {
+			groups[key] = len(out)
+			idx = len(out)
+			out = append(out, ConfigurationView{SourceBucket: src, InventoryID: inv})
+		}
+		view := ConfigRunView{
+			CompositeID: info.ID,
+			Run:         run,
+			State:       string(info.State),
+			Error:       info.Error,
+			NodeCount:   info.NodeCount,
+			HasTierData: info.HasTierData,
+		}
+		if !info.LoadedAt.IsZero() {
+			view.LoadedAt = info.LoadedAt.UTC().Format(time.RFC3339)
+		}
+		out[idx].Runs = append(out[idx].Runs, view)
+	}
+	return out
 }
 
 // maxRegisterBodyBytes caps the registration request body. Three short

@@ -92,6 +92,13 @@ func (s *Server) setupRoutes() {
 		r.Post("/inventories/{id}/unload", s.handlers.UnloadInventoryAPI)
 		r.Delete("/inventories/{id}", s.handlers.DeleteInventoryAPI)
 
+		// Read-only JSON forms of the UI features. Cleaner shape for
+		// scripting — raw numbers, no Tailwind classes — and one round
+		// trip per page-equivalent view.
+		r.Get("/configurations", s.handlers.ListConfigurationsAPI)
+		r.Get("/browse", s.handlers.BrowseLevelAPI)
+		r.Get("/diff", s.handlers.DiffLevelAPI)
+
 		// Discovery — read-only listing. Mutating operations live on
 		// the /partials/discovered/* routes and return HTML directly.
 		r.Get("/discovered", s.handlers.ListDiscoveredAPI)

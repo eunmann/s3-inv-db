@@ -247,6 +247,124 @@ func (h *Handlers) fillChildCosts(idx *indexread.Index, visible []BrowseChild) {
 	}
 }
 
+// BrowseLevelResponse is the JSON shape returned by BrowseLevelAPI.
+// Mirrors BrowseLevel but drops the Tailwind/HTML-only fields and
+// converts the numeric fields to JSON-tagged structs.
+type BrowseLevelResponse struct {
+	InventoryID   string            `json:"inventory_id"`
+	Prefix        string            `json:"prefix"`
+	Breadcrumbs   []BrowseCrumbJSON `json:"breadcrumbs"`
+	Stats         PrefixStatsJSON   `json:"stats"`
+	Children      []BrowseChildJSON `json:"children"`
+	TotalChildren int               `json:"total_children"`
+	Sort          string            `json:"sort"`
+	Dir           string            `json:"dir"`
+	Pagination    PaginationJSON    `json:"pagination"`
+	NotFound      bool              `json:"not_found,omitempty"`
+}
+
+// BrowseCrumbJSON is one breadcrumb entry in the browse path.
+type BrowseCrumbJSON struct {
+	Label  string `json:"label"`
+	Prefix string `json:"prefix"`
+}
+
+// PrefixStatsJSON is the aggregated stats at the current prefix.
+type PrefixStatsJSON struct {
+	ObjectCount   uint64        `json:"object_count"`
+	TotalBytes    uint64        `json:"total_bytes"`
+	HasTierData   bool          `json:"has_tier_data"`
+	TierBreakdown []TierStats   `json:"tier_breakdown,omitempty"`
+	CostEstimate  *CostEstimate `json:"cost_estimate,omitempty"`
+}
+
+// BrowseChildJSON is one immediate-child prefix.
+type BrowseChildJSON struct {
+	Segment                 string `json:"segment"`
+	Prefix                  string `json:"prefix"`
+	ObjectCount             uint64 `json:"object_count"`
+	TotalBytes              uint64 `json:"total_bytes"`
+	MonthlyCostMicrodollars uint64 `json:"monthly_cost_microdollars,omitempty"`
+	HasChildren             bool   `json:"has_children"`
+}
+
+// PaginationJSON is the typed pagination block returned by paginated
+// list endpoints. Mirrors inventory.BrowsePagination minus the
+// First/LastRow human-friendly fields callers can derive themselves.
+type PaginationJSON struct {
+	Page     int `json:"page"`
+	PageSize int `json:"page_size"`
+	Pages    int `json:"pages"`
+	Total    int `json:"total"`
+}
+
+// BrowseLevelAPI returns the same data the Browse page renders, in
+// JSON form. Accepts the same query parameters as the page: inventory_id,
+// prefix, sort, dir, page, page_size. Returns 400 on missing inventory_id,
+// 404 when the inventory isn't registered, 409 when not loaded.
+func (h *Handlers) BrowseLevelAPI(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	inventoryID := q.Get("inventory_id")
+	prefix := q.Get("prefix")
+	sortBy, dir := inventory.NormalizeSort(q.Get("sort"), q.Get("dir"))
+	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
+
+	if inventoryID == "" {
+		WriteJSONError(w, http.StatusBadRequest, "inventory_id is required")
+		return
+	}
+
+	ctx := r.Context()
+	var level BrowseLevel
+	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
+		level = h.buildBrowseLevel(ctx, idx, inventoryID, prefix, sortBy, dir, page, pageSize)
+		return nil
+	})
+	if err != nil {
+		status, msg := managerErrorStatus(err)
+		WriteJSONError(w, status, msg)
+		return
+	}
+
+	resp := BrowseLevelResponse{
+		InventoryID:   inventoryID,
+		Prefix:        prefix,
+		Sort:          sortBy,
+		Dir:           dir,
+		TotalChildren: level.TotalChildren,
+		NotFound:      level.NotFound,
+		Stats: PrefixStatsJSON{
+			ObjectCount:   level.ObjectCount,
+			TotalBytes:    level.TotalBytes,
+			HasTierData:   level.HasTierData,
+			TierBreakdown: level.TierBreakdown,
+			CostEstimate:  level.CostEstimate,
+		},
+		Pagination: PaginationJSON{
+			Page:     level.Pagination.Page,
+			PageSize: level.Pagination.PageSize,
+			Pages:    level.Pagination.Pages,
+			Total:    level.TotalChildren,
+		},
+	}
+	for _, b := range level.Breadcrumbs {
+		resp.Breadcrumbs = append(resp.Breadcrumbs, BrowseCrumbJSON{Label: b.Label, Prefix: b.Prefix})
+	}
+	resp.Children = make([]BrowseChildJSON, 0, len(level.Children))
+	for i := range level.Children {
+		c := &level.Children[i]
+		resp.Children = append(resp.Children, BrowseChildJSON{
+			Segment:                 c.Segment,
+			Prefix:                  c.Prefix,
+			ObjectCount:             c.ObjectCount,
+			TotalBytes:              c.TotalBytes,
+			MonthlyCostMicrodollars: c.MonthlyCostMicrodollars,
+			HasChildren:             c.HasChildren,
+		})
+	}
+	WriteJSON(w, http.StatusOK, resp)
+}
+
 // groupLoadedInventories splits the manager's inventory list into one
 // BrowseInventoryGroup per configuration, keeping only StateLoaded runs.
 // Groups are sorted alphabetically by ConfigLabel; runs inside each

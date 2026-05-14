@@ -116,6 +116,9 @@ s3-inv-db-server \
 | `/api/inventories/{id}/stats`, `/descendants` | GET | JSON | Per-prefix stats / depth-walk |
 | `/api/discovered` | GET | JSON | List discovered inventories (when configured) |
 | `/api/stats` | GET | JSON | Stats for `?inventory_id=&prefix=` |
+| `/api/configurations` | GET | JSON | Inventory configurations grouped by `<src>/<inv>` with their runs |
+| `/api/browse` | GET | JSON | Browse one prefix in one run (`?inventory_id=&prefix=&sort=&dir=&page=&page_size=`) |
+| `/api/diff` | GET | JSON | Compare two runs at one prefix (`?from=&to=&prefix=&sort=&dir=&page=&page_size=&show_unchanged=`) |
 
 #### Async load flow
 

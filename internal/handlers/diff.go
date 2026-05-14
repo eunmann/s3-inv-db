@@ -477,6 +477,273 @@ func describeRun(id string) (configLabel, runLabel string) {
 	return parts[0] + "/" + parts[1], humanfmt.RunTimestamp(parts[2])
 }
 
+// DiffLevelResponse is the JSON shape returned by DiffLevelAPI. Carries
+// the same numeric facts the Diff page renders but drops the Tailwind/
+// HTML-only fields and keeps raw int64 deltas so clients can format
+// however they like.
+type DiffLevelResponse struct {
+	From          string               `json:"from"`
+	To            string               `json:"to"`
+	Prefix        string               `json:"prefix"`
+	Breadcrumbs   []BrowseCrumbJSON    `json:"breadcrumbs"`
+	Self          DiffSelfResponse     `json:"self"`
+	Children      []DiffChildResponse  `json:"children"`
+	StatusCounts  DiffStatusCountsJSON `json:"status_counts"`
+	TotalChildren int                  `json:"total_children"`
+	Sort          string               `json:"sort"`
+	Dir           string               `json:"dir"`
+	Pagination    PaginationJSON       `json:"pagination"`
+	HideUnchanged bool                 `json:"hide_unchanged"`
+	NotFound      bool                 `json:"not_found,omitempty"`
+}
+
+// DiffSelfResponse is the prefix-level before/after triple.
+type DiffSelfResponse struct {
+	ObjectsBefore uint64 `json:"objects_before"`
+	ObjectsAfter  uint64 `json:"objects_after"`
+	ObjectsDelta  int64  `json:"objects_delta"`
+	BytesBefore   uint64 `json:"bytes_before"`
+	BytesAfter    uint64 `json:"bytes_after"`
+	BytesDelta    int64  `json:"bytes_delta"`
+
+	HasCost                bool   `json:"has_cost"`
+	CostBeforeMicrodollars uint64 `json:"cost_before_microdollars,omitempty"`
+	CostAfterMicrodollars  uint64 `json:"cost_after_microdollars,omitempty"`
+	CostDeltaMicrodollars  int64  `json:"cost_delta_microdollars,omitempty"`
+
+	NotFoundInFrom bool `json:"not_found_in_from,omitempty"`
+	NotFoundInTo   bool `json:"not_found_in_to,omitempty"`
+}
+
+// DiffChildResponse is one row in the children diff.
+type DiffChildResponse struct {
+	Segment     string `json:"segment"`
+	Prefix      string `json:"prefix"`
+	Status      string `json:"status"` // added / removed / changed / unchanged
+	HasChildren bool   `json:"has_children"`
+
+	ObjectsBefore uint64 `json:"objects_before"`
+	ObjectsAfter  uint64 `json:"objects_after"`
+	ObjectsDelta  int64  `json:"objects_delta"`
+
+	BytesBefore uint64 `json:"bytes_before"`
+	BytesAfter  uint64 `json:"bytes_after"`
+	BytesDelta  int64  `json:"bytes_delta"`
+
+	HasCost                bool   `json:"has_cost"`
+	CostBeforeMicrodollars uint64 `json:"cost_before_microdollars,omitempty"`
+	CostAfterMicrodollars  uint64 `json:"cost_after_microdollars,omitempty"`
+	CostDeltaMicrodollars  int64  `json:"cost_delta_microdollars,omitempty"`
+}
+
+// DiffStatusCountsJSON mirrors DiffStatusCounts with JSON tags.
+type DiffStatusCountsJSON struct {
+	Added     int `json:"added"`
+	Removed   int `json:"removed"`
+	Changed   int `json:"changed"`
+	Unchanged int `json:"unchanged"`
+}
+
+// DiffLevelAPI returns the same data the Diff page renders, in JSON.
+// Same query parameters: from, to, prefix, sort, dir, page, page_size,
+// show_unchanged. 400 on mismatched configurations, 404 when either run
+// is unregistered, 409 when either isn't loaded.
+//
+// The API builds the response directly from inventory.DiffLevel rather
+// than reusing the page's view types so the JSON carries raw uint64
+// counts and microdollar costs — no formatted strings to parse back.
+func (h *Handlers) DiffLevelAPI(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	from := q.Get("from")
+	to := q.Get("to")
+	prefix := q.Get("prefix")
+	hideUnchanged := q.Get("show_unchanged") != "true"
+	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
+	sortBy, dir := inventory.NormalizeDiffSort(q.Get("sort"), q.Get("dir"))
+
+	if from == "" || to == "" {
+		WriteJSONError(w, http.StatusBadRequest, "from and to are required")
+		return
+	}
+	if !sameConfig(from, to) {
+		WriteJSONError(w, http.StatusBadRequest, "from and to must belong to the same inventory configuration")
+		return
+	}
+
+	var data inventory.DiffLevelData
+	err := h.manager.WithTwoIndexes(from, to, func(a, b *indexread.Index) error {
+		data = inventory.DiffLevel(a, b, prefix)
+		return nil
+	})
+	if err != nil {
+		status, msg := managerErrorStatus(err)
+		WriteJSONError(w, status, msg)
+		return
+	}
+
+	resp := h.buildDiffAPIResponse(from, to, prefix, sortBy, dir, hideUnchanged, page, pageSize, data)
+	WriteJSON(w, http.StatusOK, resp)
+}
+
+// buildDiffAPIResponse turns a DiffLevelData into the JSON payload,
+// applying the same filter→sort→paginate pipeline as the HTML view but
+// with raw numeric output.
+func (h *Handlers) buildDiffAPIResponse(from, to, prefix, sortBy, dir string, hideUnchanged bool, page, pageSize int, data inventory.DiffLevelData) DiffLevelResponse {
+	resp := DiffLevelResponse{
+		From:          from,
+		To:            to,
+		Prefix:        prefix,
+		Sort:          sortBy,
+		Dir:           dir,
+		HideUnchanged: hideUnchanged,
+		NotFound:      data.Self.NotFoundInA && data.Self.NotFoundInB,
+	}
+	for _, b := range inventory.Breadcrumbs(prefix) {
+		resp.Breadcrumbs = append(resp.Breadcrumbs, BrowseCrumbJSON{Label: b.Label, Prefix: b.Prefix})
+	}
+	resp.Self = h.buildDiffSelfJSON(data.Self)
+
+	rows := make([]DiffChildResponse, 0, len(data.Children))
+	for i := range data.Children {
+		c := &data.Children[i]
+		row := DiffChildResponse{
+			Segment:       c.Segment,
+			Prefix:        c.Prefix,
+			Status:        c.Status.String(),
+			HasChildren:   c.HasChildren,
+			ObjectsBefore: c.Objects.Before,
+			ObjectsAfter:  c.Objects.After,
+			ObjectsDelta:  c.Objects.Delta,
+			BytesBefore:   c.Bytes.Before,
+			BytesAfter:    c.Bytes.After,
+			BytesDelta:    c.Bytes.Delta,
+		}
+		if len(c.TierBefore) > 0 || len(c.TierAfter) > 0 {
+			row.HasCost = true
+			row.CostBeforeMicrodollars = tierMapCost(c.TierBefore, h.priceTable)
+			row.CostAfterMicrodollars = tierMapCost(c.TierAfter, h.priceTable)
+			row.CostDeltaMicrodollars = int64(row.CostAfterMicrodollars) - int64(row.CostBeforeMicrodollars)
+		}
+		switch c.Status {
+		case inventory.DiffAdded:
+			resp.StatusCounts.Added++
+		case inventory.DiffRemoved:
+			resp.StatusCounts.Removed++
+		case inventory.DiffChanged:
+			resp.StatusCounts.Changed++
+		case inventory.DiffUnchanged:
+			resp.StatusCounts.Unchanged++
+		}
+		rows = append(rows, row)
+	}
+	if hideUnchanged {
+		filtered := rows[:0]
+		for i := range rows {
+			if rows[i].Status != inventory.DiffUnchanged.String() {
+				filtered = append(filtered, rows[i])
+			}
+		}
+		rows = filtered
+	}
+	sortDiffAPIChildren(rows, sortBy, dir)
+	resp.TotalChildren = len(rows)
+	p := inventory.Paginate(len(rows), page, pageSize)
+	resp.Pagination = paginationFromBrowse(p, len(rows))
+	if p.FirstRow > 0 {
+		resp.Children = rows[p.FirstRow-1 : p.LastRow]
+	} else {
+		resp.Children = []DiffChildResponse{}
+	}
+	return resp
+}
+
+func (h *Handlers) buildDiffSelfJSON(self inventory.DiffSelf) DiffSelfResponse {
+	r := DiffSelfResponse{
+		ObjectsBefore:  self.Objects.Before,
+		ObjectsAfter:   self.Objects.After,
+		ObjectsDelta:   self.Objects.Delta,
+		BytesBefore:    self.Bytes.Before,
+		BytesAfter:     self.Bytes.After,
+		BytesDelta:     self.Bytes.Delta,
+		NotFoundInFrom: self.NotFoundInA,
+		NotFoundInTo:   self.NotFoundInB,
+	}
+	if self.HasTierDataA || self.HasTierDataB {
+		r.HasCost = true
+		r.CostBeforeMicrodollars = tierMapCost(self.TierBeforeMap, h.priceTable)
+		r.CostAfterMicrodollars = tierMapCost(self.TierAfterMap, h.priceTable)
+		r.CostDeltaMicrodollars = int64(r.CostAfterMicrodollars) - int64(r.CostBeforeMicrodollars)
+	}
+	return r
+}
+
+// sortDiffAPIChildren mirrors sortDiffChildView for the JSON row shape.
+// When sortBy is empty the default falls through to biggest |Δ bytes|.
+func sortDiffAPIChildren(rows []DiffChildResponse, sortBy, dir string) {
+	desc := dir == inventory.SortDirDesc
+	less := func(i, j int) bool {
+		a, b := &rows[i], &rows[j]
+		var primary, equal bool
+		switch sortBy {
+		case inventory.SortColDiffStatus:
+			oa, ob := statusRank(a.Status), statusRank(b.Status)
+			primary = oa < ob
+			equal = oa == ob
+		case inventory.SortColObjects:
+			primary = a.ObjectsDelta < b.ObjectsDelta
+			equal = a.ObjectsDelta == b.ObjectsDelta
+		case inventory.SortColSize:
+			primary = a.BytesDelta < b.BytesDelta
+			equal = a.BytesDelta == b.BytesDelta
+		case inventory.SortColCost:
+			primary = a.CostDeltaMicrodollars < b.CostDeltaMicrodollars
+			equal = a.CostDeltaMicrodollars == b.CostDeltaMicrodollars
+		case inventory.SortColSegment:
+			primary = a.Segment < b.Segment
+			equal = a.Segment == b.Segment
+		default:
+			ax, bx := absInt64(a.BytesDelta), absInt64(b.BytesDelta)
+			primary = ax < bx
+			equal = ax == bx
+			desc = true
+		}
+		if equal {
+			return a.Segment < b.Segment
+		}
+		if desc {
+			return !primary
+		}
+		return primary
+	}
+	sort.SliceStable(rows, less)
+}
+
+// statusRank mirrors inventory.StatusOrder for the JSON status strings.
+func statusRank(s string) int {
+	switch s {
+	case "added":
+		return 1
+	case "removed":
+		return 2
+	case "changed":
+		return 3
+	case "unchanged":
+		return 4
+	}
+	return 5
+}
+
+// paginationFromBrowse converts the domain pagination into the JSON
+// shape — keeps the field names aligned with PaginationJSON.
+func paginationFromBrowse(p inventory.BrowsePagination, total int) PaginationJSON {
+	return PaginationJSON{
+		Page:     p.Page,
+		PageSize: p.PageSize,
+		Pages:    p.Pages,
+		Total:    total,
+	}
+}
+
 // buildDiffPicker collects every StateLoaded inventory into per-config
 // optgroups. Configurations with only one loaded run still appear so
 // the user sees they're available — comparison just isn't possible
