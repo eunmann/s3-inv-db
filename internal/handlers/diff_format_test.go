@@ -3,6 +3,7 @@ package handlers
 import (
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 )
 
@@ -110,5 +111,121 @@ func TestAbsInt64(t *testing.T) {
 		if got := absInt64(tc.in); got != tc.want {
 			t.Errorf("absInt64(%d) = %d, want %d", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestDescribeRun(t *testing.T) {
+	cases := []struct {
+		id              string
+		wantLabel, want string
+	}{
+		{"src/inv/2026-05-13T03-02Z", "src/inv", ""}, // formatted run depends on humanfmt; we just check label
+		{"src/inv", "", "src/inv"},                   // 2-part: empty label, whole-id as run-fallback
+		{"placeholder", "", "placeholder"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			label, run := describeRun(inventory.ID(tc.id))
+			if label != tc.wantLabel {
+				t.Errorf("describeRun(%q) configLabel = %q, want %q", tc.id, label, tc.wantLabel)
+			}
+			// For the unsplittable cases we know exactly what the runLabel should be.
+			if tc.want != "" && run != tc.want {
+				t.Errorf("describeRun(%q) runLabel = %q, want %q", tc.id, run, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildDiffSelfView_FormatsBeforeAfterAndDelta(t *testing.T) {
+	h := newTestHandlers(t)
+	self := inventory.DiffSelf{
+		Prefix:  "data/",
+		Objects: inventory.DiffNumeric{Before: 100, After: 150, Delta: 50},
+		Bytes:   inventory.DiffNumeric{Before: 1_000, After: 2_000, Delta: 1_000},
+	}
+	v := h.buildDiffSelfView(self)
+	if v.Prefix != "data/" {
+		t.Errorf("Prefix = %q, want data/", v.Prefix)
+	}
+	if v.ObjectsSign != 1 || v.BytesSign != 1 {
+		t.Errorf("growth should produce sign=1, got objects=%d bytes=%d", v.ObjectsSign, v.BytesSign)
+	}
+	if v.ObjectsDeltaH == "" || v.BytesDeltaH == "" {
+		t.Errorf("delta strings empty: %+v", v)
+	}
+	if v.HasCost {
+		t.Error("HasCost = true with no tier data, want false")
+	}
+}
+
+func TestBuildDiffSelfView_MissingSideRendersDash(t *testing.T) {
+	h := newTestHandlers(t)
+	self := inventory.DiffSelf{
+		Prefix:      "data/",
+		NotFoundInA: true,
+		Objects:     inventory.DiffNumeric{Before: 0, After: 50, Delta: 50},
+		Bytes:       inventory.DiffNumeric{Before: 0, After: 500, Delta: 500},
+	}
+	v := h.buildDiffSelfView(self)
+	if v.ObjectsBeforeH != "—" || v.BytesBeforeH != "—" {
+		t.Errorf("missing side should render '—' for before columns, got objects=%q bytes=%q",
+			v.ObjectsBeforeH, v.BytesBeforeH)
+	}
+	if v.ObjectsAfterH == "—" || v.BytesAfterH == "—" {
+		t.Errorf("present side should not render '—', got objects=%q bytes=%q",
+			v.ObjectsAfterH, v.BytesAfterH)
+	}
+}
+
+func TestBuildDiffChildView_StatusOrderMatchesPublicHelper(t *testing.T) {
+	h := newTestHandlers(t)
+	child := inventory.DiffChild{
+		Segment: "logs/", Prefix: "data/logs/",
+		Status:  inventory.DiffChanged,
+		Objects: inventory.DiffNumeric{Before: 10, After: 8, Delta: -2},
+		Bytes:   inventory.DiffNumeric{Before: 1000, After: 900, Delta: -100},
+	}
+	v := h.buildDiffChildView(&child)
+	if v.Status != "changed" {
+		t.Errorf("Status = %q, want changed", v.Status)
+	}
+	if v.StatusOrder != inventory.StatusOrder(inventory.DiffChanged) {
+		t.Errorf("StatusOrder = %d, want %d (matches inventory.StatusOrder)",
+			v.StatusOrder, inventory.StatusOrder(inventory.DiffChanged))
+	}
+	if v.ObjectsSign != -1 || v.BytesSign != -1 {
+		t.Errorf("shrinkage should produce sign=-1, got objects=%d bytes=%d", v.ObjectsSign, v.BytesSign)
+	}
+	if v.AbsByteDelta != 100 {
+		t.Errorf("AbsByteDelta = %d, want 100", v.AbsByteDelta)
+	}
+}
+
+func TestBuildDiffChildView_AddedHidesBeforeColumn(t *testing.T) {
+	h := newTestHandlers(t)
+	child := inventory.DiffChild{
+		Segment: "new/", Prefix: "data/new/",
+		Status:  inventory.DiffAdded,
+		Objects: inventory.DiffNumeric{Before: 0, After: 5, Delta: 5},
+		Bytes:   inventory.DiffNumeric{Before: 0, After: 50, Delta: 50},
+	}
+	v := h.buildDiffChildView(&child)
+	if v.ObjectsBeforeH != "—" {
+		t.Errorf("Added child should show '—' in before columns, got %q", v.ObjectsBeforeH)
+	}
+}
+
+func TestBuildDiffChildView_RemovedHidesAfterColumn(t *testing.T) {
+	h := newTestHandlers(t)
+	child := inventory.DiffChild{
+		Segment: "old/", Prefix: "data/old/",
+		Status:  inventory.DiffRemoved,
+		Objects: inventory.DiffNumeric{Before: 5, After: 0, Delta: -5},
+		Bytes:   inventory.DiffNumeric{Before: 50, After: 0, Delta: -50},
+	}
+	v := h.buildDiffChildView(&child)
+	if v.ObjectsAfterH != "—" {
+		t.Errorf("Removed child should show '—' in after columns, got %q", v.ObjectsAfterH)
 	}
 }
