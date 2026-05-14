@@ -1,26 +1,24 @@
-# Dev image for s3-inv-db-server: Go toolchain + air for hot-reload.
-# Source is volume-mounted at /app at runtime; this image only carries the
-# toolchain and pre-downloaded modules.
+# Dev / test image. Alpine + gcc/musl-dev so `go test -race` has CGO.
+
+ARG AIR_VERSION=v1.61.7
+
+# Build air in a throwaway stage so its module cache doesn't bloat the
+# runtime image.
+FROM golang:1.25-alpine AS air
+ARG AIR_VERSION
+RUN go install github.com/air-verse/air@${AIR_VERSION}
 
 FROM golang:1.25-alpine
 
-# git: go modules over git, plus safe.directory tweak for volume-mounted source.
-# tini: clean PID 1 so Ctrl+C in `docker compose up` propagates to air.
-# wget: healthcheck.
-# make + curl: `make css` downloads the standalone tailwindcss binary
-# and runs it; air invokes `make css` on every rebuild.
-RUN apk add --no-cache git tini wget make curl
+RUN apk add --no-cache git tini wget make curl gcc musl-dev
+
+COPY --from=air /go/bin/air /usr/local/bin/air
 
 WORKDIR /app
 
-# Pin air to the version the Makefile uses so dev container and host match.
-ARG AIR_VERSION=v1.61.7
-RUN go install github.com/air-verse/air@${AIR_VERSION}
-
-# Volume-mounted source is owned by host UID; tell git it's safe.
+# Volume-mounted source carries the host UID.
 RUN git config --global --add safe.directory /app
 
-# Pre-download dependencies (cached layer).
 COPY go.mod go.sum ./
 RUN go mod download
 

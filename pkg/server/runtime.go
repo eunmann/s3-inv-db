@@ -70,7 +70,7 @@ func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
 		cleanup()
 		return nil, nil, fmt.Errorf("read schema version: %w", err)
 	}
-	opts.Logger.Info().Uint("version", version).Bool("dirty", dirty).Msg("schema migrated")
+	opts.Logger.Info().Uint("schema_version", version).Bool("dirty", dirty).Msg("schema migrated")
 
 	srv, err = New(Config{
 		Addr:       opts.Addr,

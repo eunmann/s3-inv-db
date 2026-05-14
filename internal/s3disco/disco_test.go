@@ -14,13 +14,13 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// minIOFromEnv builds an S3 client pointing at MinIO. If AWS_ENDPOINT_URL_S3
-// is unset (i.e., we're not in the dev compose stack), it skips the test.
+// minIOFromEnv builds an S3 client pointing at MinIO. Tests are
+// expected to run via `make test`, which sets AWS_ENDPOINT_URL_S3.
 func minIOFromEnv(t *testing.T) *s3.Client {
 	t.Helper()
 	endpoint := os.Getenv("AWS_ENDPOINT_URL_S3")
 	if endpoint == "" {
-		t.Skip("AWS_ENDPOINT_URL_S3 not set; skipping (run inside docker compose dev stack to exercise)")
+		t.Fatal("AWS_ENDPOINT_URL_S3 not set — run `make test`")
 	}
 	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion("us-east-1"),

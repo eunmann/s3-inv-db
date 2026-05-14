@@ -15,9 +15,7 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// Apply runs every pending up-migration against db. Idempotent —
-// already-applied versions are skipped. Bootstrap calls this after
-// opening the state DB and before constructing any domain Store.
+// Apply runs every pending up-migration against db. Idempotent.
 func Apply(db *sql.DB) error {
 	m, err := newMigrator(db)
 	if err != nil {
@@ -29,8 +27,7 @@ func Apply(db *sql.DB) error {
 	return nil
 }
 
-// Down rolls back the most recent n migrations. Not used at runtime;
-// exposed for tests and for ad-hoc operator rollbacks.
+// Down rolls back the most recent steps migrations.
 func Down(db *sql.DB, steps int) error {
 	m, err := newMigrator(db)
 	if err != nil {
@@ -60,10 +57,9 @@ func Version(db *sql.DB) (version uint, dirty bool, err error) {
 	return version, dirty, nil
 }
 
-// newMigrator builds a Migrate bound to db. Callers must NOT call
-// m.Close() — the sqlite WithInstance driver would close db underneath
-// them. The Migrate value is meant to outlive a single Up/Down call
-// and then be garbage-collected.
+// newMigrator builds a Migrate bound to db. Do not call m.Close() —
+// the WithInstance sqlite driver's Close closes db. Let the Migrate
+// value be garbage-collected instead.
 func newMigrator(db *sql.DB) (*migrate.Migrate, error) {
 	src, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {

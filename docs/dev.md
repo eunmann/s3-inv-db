@@ -42,44 +42,39 @@ curl -X POST \
 
 Open `http://localhost:8080` for the HTMX UI.
 
-## MinIO-backed tests
-
-A handful of tests under `internal/s3disco` and `pkg/s3fetch` exercise
-the real S3 client against MinIO. They `t.Skip` when
-`AWS_ENDPOINT_URL_S3` is unset, so plain `go test ./...` runs cleanly
-on the host but leaves those paths at 0% coverage.
-
-The `test` profile fixes that: it boots a dedicated `minio-test` (no
-host ports — runs side-by-side with `make dev` without colliding) and
-runs `go test ./...` against it inside a container.
+## Tests
 
 ```bash
-make docker-test   # boots minio-test, runs go test ./..., tears down
+make test         # full suite in the docker test profile
+make test-race    # same with -race
 ```
 
-The Makefile target builds the test-runner image once (cached after
-first run), captures the test exit code, and always tears the profile
-down so containers don't linger.
+Both targets run inside the `test-runner` container with a dedicated
+`minio-test` MinIO instance — no host ports, runs side-by-side with
+`make dev`. The Makefile builds the test-runner image once (cached
+after first run), captures the test exit code, and tears the profile
+down on every exit.
 
-To run a targeted subset (e.g. iterate on one package), drive compose
-directly — `run --rm` replaces the default command:
+To iterate on one package, drive compose directly:
 
 ```bash
 docker compose -f infra/docker-compose.yml --profile test run --rm test-runner \
   go test -v ./internal/s3disco/...
 ```
 
+Running `go test ./...` directly on the host bypasses MinIO and will
+fail the s3disco integration tests by design — that's the workflow the
+container exists to prevent.
+
 ## Local quality gates
 
 ```bash
 make lint           # golangci-lint v2 (govet, staticcheck, errcheck, …)
-make test           # unit + integration (S3 paths skipped without env)
+make test           # full suite, dockerised
 make test-race      # same with -race
-make docker-test    # full suite incl. MinIO-gated paths
 make cover-summary  # total coverage + 20 lowest-covered functions
 make tidy           # go mod tidy + go mod verify
 ```
 
-The CI signal is `make lint && make test && make test-race`; add
-`make docker-test` when MinIO-path coverage matters. See
+The CI signal is `make lint && make test && make test-race`. See
 `.golangci.yml` for the enabled-linter list.

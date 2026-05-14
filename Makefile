@@ -1,5 +1,5 @@
 .PHONY: all build server seeder test test-race lint lint-fix clean clean-seed seed \
-        css dev docker-build docker-prod docker-seed docker-test docker-down \
+        css dev docker-build docker-prod docker-seed docker-down \
         cover cover-html cover-summary tidy
 
 GOLANGCI_LINT_VERSION := v2.1.2
@@ -50,10 +50,16 @@ seeder:
 	go build -o bin/s3-inv-db-seeder ./cmd/s3-inv-db-seeder
 
 test:
-	go test ./...
+	@$(COMPOSE) --profile test run --rm test-runner go test ./...; \
+	rc=$$?; \
+	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
+	exit $$rc
 
 test-race:
-	go test -race ./...
+	@$(COMPOSE) --profile test run --rm test-runner go test -race ./...; \
+	rc=$$?; \
+	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
+	exit $$rc
 
 # Coverage profile. Writes one .out file the other coverage targets
 # consume. Run `make cover-summary` for a one-line-per-package report
@@ -63,7 +69,11 @@ COVER_OUT := coverage.out
 cover: $(COVER_OUT)
 
 $(COVER_OUT):
-	go test -covermode=atomic -coverprofile=$(COVER_OUT) ./...
+	@$(COMPOSE) --profile test run --rm test-runner \
+	    go test -covermode=atomic -coverprofile=$(COVER_OUT) ./...; \
+	rc=$$?; \
+	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
+	exit $$rc
 
 cover-summary: $(COVER_OUT)
 	@go tool cover -func=$(COVER_OUT) | tail -n 1
@@ -114,15 +124,6 @@ docker-prod:
 # S3INV_SEED_PRESET.
 docker-seed:
 	$(COMPOSE) --profile seed run --rm seeder
-
-# Run `go test ./...` against an internal MinIO so the s3disco integration
-# tests stop skipping. Tears the profile down on every exit and propagates
-# the test exit code so `make docker-test` fails red on red.
-docker-test:
-	@$(COMPOSE) --profile test up --build --abort-on-container-exit --exit-code-from test-runner; \
-	rc=$$?; \
-	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
-	exit $$rc
 
 # Stop everything and remove volumes (caches).
 docker-down:

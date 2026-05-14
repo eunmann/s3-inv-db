@@ -14,11 +14,10 @@ type Store struct {
 	db *sql.DB
 }
 
-// NewStore returns a Store backed by db. The schema must already be
-// migrated (server.Bootstrap calls migrate.Apply before constructing
-// stores; tests use migrate.Apply from internal/migrate or testmigrate).
-// The db must be opened with PRAGMA foreign_keys=1 so the jobs.jobs FK
-// cascade fires when an inventory is deleted.
+// NewStore returns a Store backed by db. The schema must be migrated
+// (see internal/migrate) before NewStore is called. The DB must be
+// opened with PRAGMA foreign_keys=1 so the jobs FK cascade fires on
+// Delete.
 func NewStore(db *sql.DB) (*Store, error) {
 	return &Store{db: db}, nil
 }

@@ -74,19 +74,18 @@ behind your own middleware. Full API in [docs/library-api.md](docs/library-api.m
 
 ```bash
 make lint           # golangci-lint v2 — also runs govet, staticcheck, errcheck
-make test           # unit + integration (host)
+make test           # full suite in docker (MinIO-backed integration tests included)
 make test-race      # same with -race
-make docker-test    # full suite incl. MinIO-gated tests; no host ports
 make cover          # write coverage.out
 make cover-summary  # total % + 20 lowest-covered functions
 make cover-html     # open coverage.html in a browser
 ```
 
-The S3 integration tests under `internal/s3disco` skip when
-`AWS_ENDPOINT_URL_S3` is unset — plain `go test ./...` runs cleanly
-without containers but reports 0% on those paths. `make docker-test`
-boots an internal-only MinIO and runs the full suite against it, no
-host ports bound, so it doesn't collide with anything already running.
+`make test` boots a dedicated `minio-test` container (no host ports,
+runs side-by-side with `make dev` without colliding) and exercises the
+S3 integration paths against it. There is no host-only path — running
+`go test ./...` directly skips the dockerised setup and the integration
+tests fail by design.
 
 ## Architecture
 
