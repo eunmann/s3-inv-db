@@ -179,7 +179,7 @@ func TestSameConfig(t *testing.T) {
 		{"", "", false},
 	}
 	for _, tc := range cases {
-		if got := sameConfig(tc.a, tc.b); got != tc.want {
+		if got := sameConfig(inventory.ID(tc.a), inventory.ID(tc.b)); got != tc.want {
 			t.Errorf("sameConfig(%q,%q) = %v, want %v", tc.a, tc.b, got, tc.want)
 		}
 	}

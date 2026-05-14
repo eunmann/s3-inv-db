@@ -5,7 +5,20 @@
 // to subscribers (the SSE handler today).
 package jobs
 
-import "time"
+import (
+	"time"
+
+	"github.com/eunmann/s3-inv-db/internal/inventory"
+)
+
+// ID is the typed identifier of a job row in the SQLite jobs table.
+// Distinct from inventory.ID so the compiler catches accidental
+// swaps when both flow through the same call (Store.Upsert,
+// SSE event names, etc).
+type ID string
+
+// String makes ID print transparently in logs and format strings.
+func (id ID) String() string { return string(id) }
 
 // Kind classifies what a job is doing.
 type Kind string
@@ -50,8 +63,8 @@ func (s State) IsLive() bool {
 
 // Job is one unit of background work.
 type Job struct {
-	ID          string
-	InventoryID string
+	ID          ID
+	InventoryID inventory.ID
 	Kind        Kind
 	State       State
 	Stage       string

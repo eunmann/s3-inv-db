@@ -94,10 +94,10 @@ func TestJobsStream_PushesEvents(t *testing.T) {
 	<-streamDone
 
 	body := w.Body.String()
-	if !strings.Contains(body, "event: job-"+job.ID) {
+	if !strings.Contains(body, "event: job-"+string(job.ID)) {
 		t.Errorf("stream missing event for job %s\nbody:\n%s", job.ID, body)
 	}
-	if !strings.Contains(body, "event: row-"+job.InventoryID) {
+	if !strings.Contains(body, "event: row-"+string(job.InventoryID)) {
 		t.Errorf("stream missing row event for inventory %s", job.InventoryID)
 	}
 	if !strings.Contains(body, `"State":"queued"`) && !strings.Contains(body, `"State":"running"`) {

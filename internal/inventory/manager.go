@@ -38,14 +38,14 @@ type managedInventory struct {
 // after a restart.
 type Manager struct {
 	mu          sync.RWMutex
-	inventories map[string]*managedInventory
+	inventories map[ID]*managedInventory
 	store       *Store
 }
 
 // NewManager creates a new inventory manager.
 func NewManager() *Manager {
 	return &Manager{
-		inventories: make(map[string]*managedInventory),
+		inventories: make(map[ID]*managedInventory),
 	}
 }
 
@@ -73,7 +73,7 @@ func (m *Manager) mirror(info Info) error {
 }
 
 // mirrorDelete removes id from the attached store, if one is configured.
-func (m *Manager) mirrorDelete(id string) error {
+func (m *Manager) mirrorDelete(id ID) error {
 	if m.store == nil {
 		return nil
 	}
@@ -84,7 +84,7 @@ func (m *Manager) mirrorDelete(id string) error {
 }
 
 // Register adds a new inventory in pending state.
-func (m *Manager) Register(id, name, path string) error {
+func (m *Manager) Register(id ID, name, path string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -112,7 +112,7 @@ func openLocalPath(_ context.Context, info Info) (string, error) {
 // Load builds (if needed) and opens the inventory index, using the
 // default BuildFunc (interpret Path as a local directory). Suitable for
 // legacy callers; new code should use LoadWith.
-func (m *Manager) Load(ctx context.Context, id string) error {
+func (m *Manager) Load(ctx context.Context, id ID) error {
 	return m.LoadWith(ctx, id, openLocalPath)
 }
 
@@ -120,7 +120,7 @@ func (m *Manager) Load(ctx context.Context, id string) error {
 // index, then opens it. State transitions are pending|unloaded|error → parsing
 // → loaded|error. Races against Remove or another Load are handled by
 // re-checking inventory presence after each lock re-acquire.
-func (m *Manager) LoadWith(ctx context.Context, id string, build BuildFunc) error {
+func (m *Manager) LoadWith(ctx context.Context, id ID, build BuildFunc) error {
 	m.mu.Lock()
 	inv, exists := m.inventories[id]
 	if !exists {
@@ -188,7 +188,7 @@ func (m *Manager) LoadWith(ctx context.Context, id string, build BuildFunc) erro
 
 // Unload closes an inventory index and releases its resources. It blocks
 // until any in-flight WithIndex reader on this inventory has returned.
-func (m *Manager) Unload(id string) error {
+func (m *Manager) Unload(id ID) error {
 	m.mu.Lock()
 	inv, exists := m.inventories[id]
 	if !exists {
@@ -218,7 +218,7 @@ func (m *Manager) Unload(id string) error {
 }
 
 // Get returns info about an inventory.
-func (m *Manager) Get(id string) (Info, bool) {
+func (m *Manager) Get(id ID) (Info, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -291,7 +291,7 @@ func (m *Manager) Hydrate(info Info, indexDir string) error {
 // the pointer or any slice/string derived from mmap-backed memory beyond
 // the call. Concurrent Unload/Remove/Close on the same inventory block
 // until fn returns.
-func (m *Manager) WithIndex(id string, fn func(*indexread.Index) error) error {
+func (m *Manager) WithIndex(id ID, fn func(*indexread.Index) error) error {
 	m.mu.RLock()
 	inv, exists := m.inventories[id]
 	if !exists {
@@ -319,7 +319,7 @@ func (m *Manager) WithIndex(id string, fn func(*indexread.Index) error) error {
 // the same pair in opposite directions cannot deadlock. When idA == idB
 // only one lock is taken and the same index pointer is passed in both
 // positions, letting callers treat self-compare as a degenerate case.
-func (m *Manager) WithTwoIndexes(idA, idB string, fn func(a, b *indexread.Index) error) error {
+func (m *Manager) WithTwoIndexes(idA, idB ID, fn func(a, b *indexread.Index) error) error {
 	m.mu.RLock()
 	invA, okA := m.inventories[idA]
 	invB, okB := m.inventories[idB]
@@ -356,7 +356,7 @@ func (m *Manager) WithTwoIndexes(idA, idB string, fn func(a, b *indexread.Index)
 
 // Remove removes an inventory from the manager. It blocks until any
 // in-flight WithIndex reader on this inventory has returned.
-func (m *Manager) Remove(id string) error {
+func (m *Manager) Remove(id ID) error {
 	m.mu.Lock()
 	inv, exists := m.inventories[id]
 	if !exists {
@@ -381,7 +381,7 @@ func (m *Manager) Remove(id string) error {
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	invs := m.inventories
-	m.inventories = make(map[string]*managedInventory)
+	m.inventories = make(map[ID]*managedInventory)
 	m.mu.Unlock()
 
 	var firstErr error

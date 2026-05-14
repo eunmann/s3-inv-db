@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
@@ -83,7 +84,7 @@ type DescendantInfo struct {
 // GetStatsAPI returns stats for a prefix.
 func (h *Handlers) GetStatsAPI(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	inventoryID := q.Get("inventory_id")
+	inventoryID := inventory.ID(q.Get("inventory_id"))
 	showTiers := q.Get("show_tiers") == "true"
 	estimateCost := q.Get("estimate_cost") == "true"
 
@@ -114,7 +115,7 @@ func (h *Handlers) GetStatsAPI(w http.ResponseWriter, r *http.Request) {
 
 // GetInventoryStatsAPI returns stats for a prefix within a specific inventory.
 func (h *Handlers) GetInventoryStatsAPI(w http.ResponseWriter, r *http.Request) {
-	inventoryID := chi.URLParam(r, "id")
+	inventoryID := inventory.ID(chi.URLParam(r, "id"))
 	q := r.URL.Query()
 	showTiers := q.Get("show_tiers") == "true"
 	estimateCost := q.Get("estimate_cost") == "true"
@@ -142,7 +143,7 @@ func (h *Handlers) GetInventoryStatsAPI(w http.ResponseWriter, r *http.Request) 
 
 // GetDescendantsAPI returns descendants at a specific depth.
 func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
-	inventoryID := chi.URLParam(r, "id")
+	inventoryID := inventory.ID(chi.URLParam(r, "id"))
 	q := r.URL.Query()
 	depthStr := q.Get("depth")
 	minCountStr := q.Get("min_count")

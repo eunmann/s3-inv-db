@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/handlers"
@@ -152,21 +151,19 @@ func (s *Server) recover(logger zerolog.Logger) {
 		}
 		indexDir := ""
 		if info.State == inventory.StateLoaded && s.bldr != nil {
-			// Composite IDs are <src>/<inv>/<run> — three segments. Older
-			// entries written before per-run cache layout had two; treat
-			// those as un-hydratable so the user sees the error and can
-			// rebuild.
-			parts := strings.SplitN(info.ID, "/", 3)
-			if len(parts) == 3 {
-				indexDir = s.bldr.CacheDirFor(parts[0], parts[1], parts[2])
+			// Older entries written before per-run cache layout had two
+			// segments; treat those as un-hydratable so the user sees
+			// the error and can rebuild.
+			if src, inv, run, ok := info.ID.Split(); ok {
+				indexDir = s.bldr.CacheDirFor(src, inv, run)
 			}
 		}
 		if err := s.manager.Hydrate(*info, indexDir); err != nil {
-			logger.Error().Err(err).Str("id", info.ID).Msg("hydrate inventory")
+			logger.Error().Err(err).Stringer("id", info.ID).Msg("hydrate inventory")
 			continue
 		}
 		final, _ := s.manager.Get(info.ID)
-		logger.Info().Str("id", final.ID).Str("state", string(final.State)).Msg("hydrated inventory")
+		logger.Info().Stringer("id", final.ID).Str("state", string(final.State)).Msg("hydrated inventory")
 		// Manager.Hydrate already mirrors to invStore (via SetStore),
 		// so no explicit Upsert is required here — but for the
 		// StateLoading→StateError flip we performed above the input,

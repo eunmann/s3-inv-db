@@ -1,7 +1,15 @@
-// Package inventory manages multiple S3 inventory indexes with thread-safe access.
+// Package inventory owns the inventory entity, its typed identifier,
+// and the in-memory Manager + SQLite Store that coordinate state
+// across discovery, loading, and serving. Discovery primitives
+// (walking S3, parsing manifests) live in the s3disco package, which
+// imports this one to construct Inventory values — the dependency
+// runs s3disco → inventory only.
 package inventory
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // State represents the lifecycle state of an inventory.
 type State string
@@ -34,9 +42,99 @@ func (s State) CanLoad() bool {
 	return s == StateNotLoaded || s == StateError
 }
 
+// ID is the typed identifier for one inventory run, formatted
+// "<source-bucket>/<inventory-name>/<run-timestamp>". The named type
+// distinguishes inventory IDs from jobs.ID at function signatures and
+// carries the splitting/grouping logic that handlers would otherwise
+// duplicate. Persisted as TEXT in the SQLite inventory table.
+type ID string
+
+// String makes ID print transparently in logs and format strings.
+func (id ID) String() string { return string(id) }
+
+// Split returns the three segments of a 3-part inventory ID. The ok
+// return is false for any input that doesn't split into exactly three
+// slash-separated parts (placeholder configurations with no completed
+// run, legacy 2-part entries, or hand-registered inventories).
+func (id ID) Split() (sourceBucket, inventoryName, run string, ok bool) {
+	parts := strings.SplitN(string(id), "/", 3)
+	if len(parts) != 3 {
+		return "", "", "", false
+	}
+	return parts[0], parts[1], parts[2], true
+}
+
+// ConfigID returns "<source-bucket>/<inventory-name>" — the identifier
+// shared across every run of one inventory configuration. Returns the
+// whole string for non-3-part IDs so callers always have a non-empty
+// grouping key.
+func (id ID) ConfigID() string {
+	if src, inv, _, ok := id.Split(); ok {
+		return src + "/" + inv
+	}
+	return string(id)
+}
+
+// Inventory is the value type describing one discovered S3 Inventory
+// run. The discovery layer mints these from S3 listings; the Manager
+// tracks each one's lifecycle state via Info.
+type Inventory struct {
+	// SourceBucket is the bucket the inventory is *describing* (the
+	// segment S3 inserts between the destination prefix and the
+	// inventory-name).
+	SourceBucket string `json:"source_bucket"`
+
+	// InventoryName is the AWS S3 inventory configuration's Id (its
+	// slug). Named "InventoryName" so it doesn't shadow the ID type —
+	// the field is one segment of an ID, not the whole thing.
+	InventoryName string `json:"inventory_name"`
+
+	// Run is the timestamp folder name (e.g., "2026-05-13T03-02Z"). Empty
+	// when the configuration has been discovered but has no completed
+	// runs yet — in that case the entry is returned as a placeholder so
+	// the UI can surface "no runs yet".
+	Run string `json:"run"`
+
+	// ManifestKey is the S3 key of this run's manifest.json. Empty when
+	// Run is empty.
+	ManifestKey string `json:"manifest_key"`
+
+	// FileFormat reported by the manifest ("CSV", "Parquet").
+	FileFormat string `json:"file_format,omitempty"`
+
+	// FileCount is the number of data files referenced by the manifest.
+	// A coarse "size" signal for the UI before download.
+	FileCount int `json:"file_count,omitempty"`
+
+	// CreationTimestamp is the manifest's reported creation time
+	// (UnixMilli as a decimal string, exactly as S3 writes it).
+	CreationTimestamp string `json:"creation_timestamp,omitempty"`
+
+	// Error captures a non-fatal per-run failure (e.g. unreadable
+	// manifest). Empty on success.
+	Error string `json:"error,omitempty"`
+}
+
+// CompositeID returns the typed identifier the Manager uses as its
+// primary key. When Run is empty (no completed runs yet) only
+// "<src>/<inv>" is returned — the placeholder is not independently
+// loadable.
+func (i Inventory) CompositeID() ID {
+	if i.Run == "" {
+		return ID(i.SourceBucket + "/" + i.InventoryName)
+	}
+	return ID(i.SourceBucket + "/" + i.InventoryName + "/" + i.Run)
+}
+
+// ConfigID returns "<source-bucket>/<inventory-name>" — the identifier
+// shared across every run of one inventory configuration.
+func (i Inventory) ConfigID() string {
+	return i.SourceBucket + "/" + i.InventoryName
+}
+
 // Info contains metadata about a managed inventory.
 type Info struct {
-	ID          string    `json:"id"`
+	ID          ID        `json:"id"`
 	Name        string    `json:"name"`
 	Path        string    `json:"path"`
 	State       State     `json:"state"`

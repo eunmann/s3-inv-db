@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
 // Store persists job snapshots so the UI can show jobs across restarts.
@@ -73,7 +75,7 @@ func (s *Store) Upsert(j Job) error {
 }
 
 // Get fetches one job by id.
-func (s *Store) Get(id string) (Job, error) {
+func (s *Store) Get(id ID) (Job, error) {
 	row := s.db.QueryRow(`
         SELECT id, inventory_id, kind, state, stage, progress,
                bytes_total, bytes_done, started_at, finished_at,
@@ -90,7 +92,7 @@ func (s *Store) Get(id string) (Job, error) {
 }
 
 // ListForInventory returns jobs for one inventory, newest first.
-func (s *Store) ListForInventory(invID string) ([]Job, error) {
+func (s *Store) ListForInventory(invID inventory.ID) ([]Job, error) {
 	rows, err := s.db.Query(`
         SELECT id, inventory_id, kind, state, stage, progress,
                bytes_total, bytes_done, started_at, finished_at,
@@ -105,7 +107,7 @@ func (s *Store) ListForInventory(invID string) ([]Job, error) {
 
 // LatestForInventory returns the most recently updated job for an
 // inventory, or ErrStoreNotFound if none exist.
-func (s *Store) LatestForInventory(invID string) (Job, error) {
+func (s *Store) LatestForInventory(invID inventory.ID) (Job, error) {
 	row := s.db.QueryRow(`
         SELECT id, inventory_id, kind, state, stage, progress,
                bytes_total, bytes_done, started_at, finished_at,

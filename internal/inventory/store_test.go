@@ -91,8 +91,8 @@ func TestStore_GetMissing(t *testing.T) {
 
 func TestStore_ListInsertionOrder(t *testing.T) {
 	s := openStore(t)
-	for _, id := range []string{"c", "a", "b"} {
-		if err := s.Upsert(inventory.Info{ID: id, Name: id, Path: "p", State: inventory.StateNotLoaded}); err != nil {
+	for _, id := range []inventory.ID{"c", "a", "b"} {
+		if err := s.Upsert(inventory.Info{ID: id, Name: string(id), Path: "p", State: inventory.StateNotLoaded}); err != nil {
 			t.Fatalf("upsert %s: %v", id, err)
 		}
 	}

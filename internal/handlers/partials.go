@@ -7,7 +7,6 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
-	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
@@ -20,7 +19,7 @@ import (
 // LoadInventoryRowPartial loads a (non-discovered) inventory and returns
 // its updated row.
 func (h *Handlers) LoadInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := h.manager.Load(context.WithoutCancel(r.Context()), id); err != nil {
 		respondManagerErrorHTML(w, r, err, "load inventory")
 		return
@@ -30,7 +29,7 @@ func (h *Handlers) LoadInventoryRowPartial(w http.ResponseWriter, r *http.Reques
 
 // UnloadInventoryRowPartial unloads an inventory and returns its updated row.
 func (h *Handlers) UnloadInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := h.manager.Unload(id); err != nil {
 		respondManagerErrorHTML(w, r, err, "unload inventory")
 		return
@@ -41,7 +40,7 @@ func (h *Handlers) UnloadInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 // DeleteInventoryRowPartial removes an inventory and returns an empty body
 // so htmx's outerHTML swap removes the row.
 func (h *Handlers) DeleteInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := h.manager.Remove(id); err != nil && !errors.Is(err, inventory.ErrNotFound) {
 		respondManagerErrorHTML(w, r, err, "delete inventory")
 		return
@@ -114,7 +113,7 @@ func (h *Handlers) CancelJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "jobs not configured", http.StatusServiceUnavailable)
 		return
 	}
-	id := chi.URLParam(r, "id")
+	id := jobs.ID(chi.URLParam(r, "id"))
 	if err := h.jobMgr.Cancel(id); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -126,25 +125,25 @@ func (h *Handlers) CancelJob(w http.ResponseWriter, r *http.Request) {
 // on-disk cache, and returns the row (now in StateNotLoaded).
 func (h *Handlers) UnloadDiscoveredRowPartial(w http.ResponseWriter, r *http.Request) {
 	src := chi.URLParam(r, "src")
-	id := chi.URLParam(r, "id")
+	name := chi.URLParam(r, "id")
 	run := chi.URLParam(r, "run")
-	composite := src + "/" + id + "/" + run
+	composite := inventory.ID(src + "/" + name + "/" + run)
 	logger := zerolog.Ctx(r.Context())
 	if err := h.manager.Unload(composite); err != nil {
 		respondManagerErrorHTML(w, r, err, "unload inventory")
 		return
 	}
 	if h.loader != nil {
-		if err := h.loader.RemoveCache(src, id, run); err != nil {
+		if err := h.loader.RemoveCache(src, name, run); err != nil {
 			// Don't fail the request — the memory side is already
 			// released; surface the disk error in logs so the operator
 			// can clean up.
 			logger.Warn().Err(err).
-				Str("src", src).Str("id", id).Str("run", run).
+				Str("src", src).Str("id", name).Str("run", run).
 				Msg("remove cache dir after unload")
 		}
 	}
-	h.renderDiscoveredRow(w, r, src, id, run)
+	h.renderDiscoveredRow(w, r, src, name, run)
 }
 
 // DiscoveredRowPartial returns the current state of one discovered row
@@ -158,7 +157,7 @@ func (h *Handlers) DiscoveredRowPartial(w http.ResponseWriter, r *http.Request) 
 
 // renderInventoryRow looks up the inventory in the manager and writes the
 // inventory_row.html partial. Used by the htmx-facing partial handlers.
-func (h *Handlers) renderInventoryRow(w http.ResponseWriter, r *http.Request, id string) {
+func (h *Handlers) renderInventoryRow(w http.ResponseWriter, r *http.Request, id inventory.ID) {
 	info, ok := h.manager.Get(id)
 	if !ok {
 		http.Error(w, "inventory not found", http.StatusNotFound)
@@ -198,7 +197,7 @@ type DiscoveredRowView struct {
 // renderDiscoveredRowFrom renders a discovered_row using a pre-fetched
 // disc value. Looks up the latest job (if jobs are configured) so the
 // row can render progress / cancel / retry.
-func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Request, disc s3disco.Inventory) {
+func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Request, disc inventory.Inventory) {
 	view := DiscoveredRowView{
 		MergedInventory: inventory.MergedInventory{Inventory: disc, State: inventory.StateNotLoaded},
 	}
@@ -217,7 +216,7 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 			// No prior job — render the row without LatestJob.
 		default:
 			zerolog.Ctx(r.Context()).Warn().Err(err).
-				Str("composite", disc.CompositeID()).
+				Stringer("composite", disc.CompositeID()).
 				Msg("look up latest job for row render")
 		}
 	}
@@ -231,15 +230,15 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 
 // cacheSize measures the on-disk cache footprint of a single run.
 // Returns (0, "") when there's no loader wired or the dir is missing.
-func (h *Handlers) cacheSize(r *http.Request, disc s3disco.Inventory) (bytes int64, human string) {
+func (h *Handlers) cacheSize(r *http.Request, disc inventory.Inventory) (bytes int64, human string) {
 	if h.loader == nil || disc.Run == "" {
 		return 0, ""
 	}
-	n, err := h.loader.CacheSizeBytes(disc.SourceBucket, disc.InventoryID, disc.Run)
+	n, err := h.loader.CacheSizeBytes(disc.SourceBucket, disc.InventoryName, disc.Run)
 	if err != nil {
 		zerolog.Ctx(r.Context()).Warn().Err(err).
 			Str("src", disc.SourceBucket).
-			Str("id", disc.InventoryID).
+			Str("name", disc.InventoryName).
 			Str("run", disc.Run).
 			Msg("measure cache size")
 		return 0, ""

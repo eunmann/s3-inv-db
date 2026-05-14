@@ -12,7 +12,6 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
-	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5"
@@ -22,17 +21,17 @@ import (
 // fakeDiscoverer / fakeBuilder are minimal stubs implementing the
 // inventory.Discoverer and inventory.IndexBuilder interfaces.
 type fakeDiscoverer struct {
-	listResp []s3disco.Inventory
+	listResp []inventory.Inventory
 	listErr  error
-	findResp s3disco.Inventory
+	findResp inventory.Inventory
 	findErr  error
 	bucket   string
 }
 
-func (f *fakeDiscoverer) List(context.Context) ([]s3disco.Inventory, error) {
+func (f *fakeDiscoverer) List(context.Context) ([]inventory.Inventory, error) {
 	return f.listResp, f.listErr
 }
-func (f *fakeDiscoverer) Find(_ context.Context, _, _, _ string) (s3disco.Inventory, error) {
+func (f *fakeDiscoverer) Find(_ context.Context, _, _, _ string) (inventory.Inventory, error) {
 	return f.findResp, f.findErr
 }
 func (f *fakeDiscoverer) Bucket() string { return f.bucket }
@@ -91,7 +90,7 @@ func newDiscoveredHandlers(t *testing.T, disc inventory.Discoverer, ldr inventor
 // waitForJobState polls jobStore for any job in the given state on the
 // inventory. Convenience for tests that submit a job and wait for it to
 // finish before asserting.
-func waitForJobInState(t *testing.T, store *jobs.Store, invID string, state jobs.State) jobs.Job {
+func waitForJobInState(t *testing.T, store *jobs.Store, invID inventory.ID, state jobs.State) jobs.Job {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -138,7 +137,7 @@ func TestLoadDiscoveredRowPartial_NoCompletedRuns(t *testing.T) {
 	// Find returns an Inventory with empty ManifestKey — semantically
 	// "discovered but no run has happened yet".
 	h := newDiscoveredHandlers(t,
-		&fakeDiscoverer{findResp: s3disco.Inventory{SourceBucket: "b", InventoryID: "i"}},
+		&fakeDiscoverer{findResp: inventory.Inventory{SourceBucket: "b", InventoryName: "i"}},
 		&fakeBuilder{},
 	)
 	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
@@ -156,7 +155,7 @@ func TestLoadDiscoveredRowPartial_NoCompletedRuns(t *testing.T) {
 func TestLoadDiscoveredRowPartial_AcceptsBuildError(t *testing.T) {
 	// The handler returns 202 immediately; the build error surfaces on
 	// the job, not the HTTP response. Verify the job moves to failed.
-	disc := s3disco.Inventory{SourceBucket: "b", InventoryID: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
+	disc := inventory.Inventory{SourceBucket: "b", InventoryName: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
 		&fakeBuilder{buildErr: errors.New("network broken")},
@@ -181,7 +180,7 @@ func TestInventoriesPage_PlaceholderRowOmitsHTMXRefresh(t *testing.T) {
 	// empty URL segments — those generate /partials/discovered/b/i//
 	// which 404s, and SSE topics like "row-b/i/" never fire.
 	h := newDiscoveredHandlers(t,
-		&fakeDiscoverer{listResp: []s3disco.Inventory{{SourceBucket: "b", InventoryID: "i"}}, bucket: "dst"},
+		&fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", InventoryName: "i"}}, bucket: "dst"},
 		&fakeBuilder{},
 	)
 	req := httptest.NewRequest(http.MethodGet, "/inventories", http.NoBody)

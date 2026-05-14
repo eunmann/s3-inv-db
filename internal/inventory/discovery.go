@@ -4,15 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	"github.com/eunmann/s3-inv-db/internal/s3disco"
 )
 
 // Discoverer is the subset of s3disco.Discoverer that DiscoveryService
-// uses. Defined here so the service can be unit-tested with a fake.
+// uses. Defined here so the service can be unit-tested with a fake and
+// so this package doesn't import s3disco (the dependency runs the
+// other way: s3disco constructs Inventory values defined here).
 type Discoverer interface {
-	List(ctx context.Context) ([]s3disco.Inventory, error)
-	Find(ctx context.Context, srcBucket, invID, run string) (s3disco.Inventory, error)
+	List(ctx context.Context) ([]Inventory, error)
+	Find(ctx context.Context, srcBucket, invID, run string) (Inventory, error)
 	Bucket() string
 }
 
@@ -28,7 +28,7 @@ type IndexBuilder interface {
 // from the local Manager. Handlers and templates consume this directly;
 // the join logic doesn't belong at the HTTP layer.
 type MergedInventory struct {
-	s3disco.Inventory
+	Inventory
 	State       State
 	Error       string
 	NodeCount   uint64
@@ -91,9 +91,9 @@ func (s *DiscoveryService) List(ctx context.Context) ([]MergedInventory, error) 
 
 // Find returns a single discovered inventory run by source bucket, ID,
 // and run timestamp.
-func (s *DiscoveryService) Find(ctx context.Context, src, id, run string) (s3disco.Inventory, error) {
+func (s *DiscoveryService) Find(ctx context.Context, src, id, run string) (Inventory, error) {
 	if s.discoverer == nil {
-		return s3disco.Inventory{}, ErrDiscoveryDisabled
+		return Inventory{}, ErrDiscoveryDisabled
 	}
 	inv, err := s.discoverer.Find(ctx, src, id, run)
 	if err != nil {
@@ -106,7 +106,7 @@ func (s *DiscoveryService) Find(ctx context.Context, src, id, run string) (s3dis
 // Manager without performing a build. Each run gets its own composite
 // ID; multiple runs of the same configuration can coexist as independent
 // entries.
-func (s *DiscoveryService) PrepareDiscovered(disc s3disco.Inventory) error {
+func (s *DiscoveryService) PrepareDiscovered(disc Inventory) error {
 	if !s.Enabled() {
 		return ErrDiscoveryDisabled
 	}
@@ -115,7 +115,7 @@ func (s *DiscoveryService) PrepareDiscovered(disc s3disco.Inventory) error {
 	}
 	composite := disc.CompositeID()
 	manifestURI := fmt.Sprintf("s3://%s/%s", s.discoverer.Bucket(), disc.ManifestKey)
-	displayName := fmt.Sprintf("%s/%s @ %s", disc.SourceBucket, disc.InventoryID, disc.Run)
+	displayName := fmt.Sprintf("%s/%s @ %s", disc.SourceBucket, disc.InventoryName, disc.Run)
 	if err := s.manager.Register(composite, displayName, manifestURI); err != nil &&
 		!errors.Is(err, ErrAlreadyExists) {
 		return fmt.Errorf("register: %w", err)
@@ -124,7 +124,7 @@ func (s *DiscoveryService) PrepareDiscovered(disc s3disco.Inventory) error {
 }
 
 // Load is LoadWith with no progress callback.
-func (s *DiscoveryService) Load(ctx context.Context, disc s3disco.Inventory) error {
+func (s *DiscoveryService) Load(ctx context.Context, disc Inventory) error {
 	return s.LoadWith(ctx, disc, nil)
 }
 
@@ -132,7 +132,7 @@ func (s *DiscoveryService) Load(ctx context.Context, disc s3disco.Inventory) err
 // specific inventory run. The onProgress callback, if non-nil, receives
 // stage transitions and per-chunk quantitative progress. The ctx
 // threads through to the builder — cancellation kills the build.
-func (s *DiscoveryService) LoadWith(ctx context.Context, disc s3disco.Inventory, onProgress func(stage string, done, total int64)) error {
+func (s *DiscoveryService) LoadWith(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64)) error {
 	if !s.Enabled() {
 		return ErrDiscoveryDisabled
 	}
@@ -141,13 +141,13 @@ func (s *DiscoveryService) LoadWith(ctx context.Context, disc s3disco.Inventory,
 	}
 	composite := disc.CompositeID()
 	manifestURI := fmt.Sprintf("s3://%s/%s", s.discoverer.Bucket(), disc.ManifestKey)
-	displayName := fmt.Sprintf("%s/%s @ %s", disc.SourceBucket, disc.InventoryID, disc.Run)
+	displayName := fmt.Sprintf("%s/%s @ %s", disc.SourceBucket, disc.InventoryName, disc.Run)
 	if err := s.manager.Register(composite, displayName, manifestURI); err != nil &&
 		!errors.Is(err, ErrAlreadyExists) {
 		return fmt.Errorf("register: %w", err)
 	}
 	err := s.manager.LoadWith(ctx, composite, func(c context.Context, _ Info) (string, error) {
-		return s.builder.BuildWith(c, disc.SourceBucket, disc.InventoryID, disc.Run, manifestURI, onProgress)
+		return s.builder.BuildWith(c, disc.SourceBucket, disc.InventoryName, disc.Run, manifestURI, onProgress)
 	})
 	if err != nil {
 		return err

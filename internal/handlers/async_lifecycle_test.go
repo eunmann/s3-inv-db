@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
-	"github.com/eunmann/s3-inv-db/internal/s3disco"
 )
 
 // slowBuilder simulates a build that takes time and respects ctx
@@ -48,7 +48,7 @@ func (b *slowBuilder) RemoveCache(_, _, _ string) error             { return nil
 func (b *slowBuilder) CacheSizeBytes(_, _, _ string) (int64, error) { return 0, nil }
 
 func TestAsyncLifecycle_LoadSucceeds(t *testing.T) {
-	disc := s3disco.Inventory{SourceBucket: "b", InventoryID: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
+	disc := inventory.Inventory{SourceBucket: "b", InventoryName: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
 		&slowBuilder{delay: 20 * time.Millisecond},
@@ -71,7 +71,7 @@ func TestAsyncLifecycle_LoadSucceeds(t *testing.T) {
 // TestAsyncLifecycle_Cancel cancels mid-build and verifies the job
 // reaches the cancelled state.
 func TestAsyncLifecycle_Cancel(t *testing.T) {
-	disc := s3disco.Inventory{SourceBucket: "b", InventoryID: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
+	disc := inventory.Inventory{SourceBucket: "b", InventoryName: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
 		&slowBuilder{delay: 5 * time.Second}, // long enough that Cancel arrives mid-build
@@ -88,8 +88,8 @@ func TestAsyncLifecycle_Cancel(t *testing.T) {
 	// Wait for the job to leave queued (running state) before cancelling.
 	running := waitForJobInState(t, h.jobStore, disc.CompositeID(), jobs.StateRunning)
 
-	cancelReq := httptest.NewRequest(http.MethodPost, "/api/jobs/"+running.ID+"/cancel", http.NoBody)
-	cancelReq = chiCtxWithParams(cancelReq, "id", running.ID)
+	cancelReq := httptest.NewRequest(http.MethodPost, "/api/jobs/"+string(running.ID)+"/cancel", http.NoBody)
+	cancelReq = chiCtxWithParams(cancelReq, "id", string(running.ID))
 	cw := httptest.NewRecorder()
 	h.CancelJob(cw, cancelReq)
 	if cw.Code != http.StatusAccepted {
@@ -107,7 +107,7 @@ func TestAsyncLifecycle_Cancel(t *testing.T) {
 // after failure verifies the Retry button surfaces. Pins the UI
 // contract independent of htmx-sse (which needs a browser).
 func TestAsyncLifecycle_RowReflectsJobState(t *testing.T) {
-	disc := s3disco.Inventory{SourceBucket: "b", InventoryID: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
+	disc := inventory.Inventory{SourceBucket: "b", InventoryName: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
 		&slowBuilder{delay: 5 * time.Second},
@@ -134,8 +134,8 @@ func TestAsyncLifecycle_RowReflectsJobState(t *testing.T) {
 	}
 
 	// Cancel and re-render — expect Retry to appear.
-	cancelReq := httptest.NewRequest(http.MethodPost, "/api/jobs/"+running.ID+"/cancel", http.NoBody)
-	cancelReq = chiCtxWithParams(cancelReq, "id", running.ID)
+	cancelReq := httptest.NewRequest(http.MethodPost, "/api/jobs/"+string(running.ID)+"/cancel", http.NoBody)
+	cancelReq = chiCtxWithParams(cancelReq, "id", string(running.ID))
 	h.CancelJob(httptest.NewRecorder(), cancelReq)
 	waitForJobInState(t, h.jobStore, disc.CompositeID(), jobs.StateCancelled)
 

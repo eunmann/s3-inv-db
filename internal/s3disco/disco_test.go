@@ -84,7 +84,7 @@ func TestDiscoverer_List_AgainstMinIO(t *testing.T) {
 		if e.SourceBucket != srcBucket {
 			t.Errorf("entry has SourceBucket = %q, want %q", e.SourceBucket, srcBucket)
 		}
-		runsByInv[e.InventoryID] = append(runsByInv[e.InventoryID], e.Run)
+		runsByInv[e.InventoryName] = append(runsByInv[e.InventoryName], e.Run)
 	}
 
 	if got := runsByInv["inv-001"]; len(got) != 2 {

@@ -77,7 +77,7 @@ func (s *Store) Upsert(info Info) error {
 
 // Get fetches one inventory by ID. Returns ErrStoreNotFound when the
 // row is missing.
-func (s *Store) Get(id string) (Info, error) {
+func (s *Store) Get(id ID) (Info, error) {
 	row := s.db.QueryRow(`
         SELECT id, name, path, state, error,
                node_count, max_depth, has_tier_data, loaded_at
@@ -119,7 +119,7 @@ func (s *Store) List() ([]Info, error) {
 
 // Delete removes one inventory by ID. ON DELETE CASCADE on
 // downstream tables (jobs, downloads) wipes related records too.
-func (s *Store) Delete(id string) error {
+func (s *Store) Delete(id ID) error {
 	res, err := s.db.Exec(`DELETE FROM inventories WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete inventory %s: %w", id, err)

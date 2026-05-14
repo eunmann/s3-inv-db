@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"sort"
-	"strings"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -35,14 +34,14 @@ type BrowseInventoryGroup struct {
 // surface the surrounding <optgroup> in the chip, so the option text
 // has to be self-identifying.
 type BrowseInventoryOption struct {
-	ID    string // composite ID "<src>/<inv>/<run>"
+	ID    inventory.ID
 	Label string
 }
 
 // BrowseLevel is the data the browse_level.html partial renders. Lives
 // in the HTTP layer because it composes TierStats and CostEstimate.
 type BrowseLevel struct {
-	InventoryID   string
+	InventoryID   inventory.ID
 	Prefix        string
 	Breadcrumbs   []BrowseCrumb
 	ObjectCount   uint64
@@ -65,7 +64,7 @@ type BrowseLevel struct {
 // same URL, dispatched via wantsHTMXPartial.
 func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	inventoryID := q.Get("inventory_id")
+	inventoryID := inventory.ID(q.Get("inventory_id"))
 	prefix := q.Get("prefix")
 	sortBy, dir := inventory.NormalizeSort(q.Get("sort"), q.Get("dir"))
 	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
@@ -78,7 +77,7 @@ func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request,
-	inventoryID, prefix, sortBy, dir string, page, pageSize int,
+	inventoryID inventory.ID, prefix, sortBy, dir string, page, pageSize int,
 ) {
 	data := map[string]any{
 		"Title":           "Browse",
@@ -107,7 +106,7 @@ func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request,
 }
 
 func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Request,
-	inventoryID, prefix, sortBy, dir string, page, pageSize int,
+	inventoryID inventory.ID, prefix, sortBy, dir string, page, pageSize int,
 ) {
 	if inventoryID == "" {
 		http.Error(w, "inventory_id is required", http.StatusBadRequest)
@@ -143,7 +142,7 @@ func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Reque
 // stats/tier/cost annotations. Pure prefix math lives in the inventory
 // package; this method just plumbs index reads + price-table-aware cost
 // formatting into the render struct.
-func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, inventoryID, prefix, sortBy, dir string, page, pageSize int) BrowseLevel {
+func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, inventoryID inventory.ID, prefix, sortBy, dir string, page, pageSize int) BrowseLevel {
 	level := BrowseLevel{
 		InventoryID: inventoryID,
 		Prefix:      prefix,
@@ -251,7 +250,7 @@ func (h *Handlers) fillChildCosts(idx *indexread.Index, visible []BrowseChild) {
 // Mirrors BrowseLevel but drops the Tailwind/HTML-only fields and
 // converts the numeric fields to JSON-tagged structs.
 type BrowseLevelResponse struct {
-	InventoryID   string            `json:"inventory_id"`
+	InventoryID   inventory.ID      `json:"inventory_id"`
 	Prefix        string            `json:"prefix"`
 	Breadcrumbs   []BrowseCrumbJSON `json:"breadcrumbs"`
 	Stats         PrefixStatsJSON   `json:"stats"`
@@ -304,7 +303,7 @@ type PaginationJSON struct {
 // 404 when the inventory isn't registered, 409 when not loaded.
 func (h *Handlers) BrowseLevelAPI(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	inventoryID := q.Get("inventory_id")
+	inventoryID := inventory.ID(q.Get("inventory_id"))
 	prefix := q.Get("prefix")
 	sortBy, dir := inventory.NormalizeSort(q.Get("sort"), q.Get("dir"))
 	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
@@ -401,12 +400,11 @@ func groupLoadedInventories(all []inventory.Info) []BrowseInventoryGroup {
 }
 
 func splitForGroup(info inventory.Info) (label string, opt BrowseInventoryOption) {
-	parts := strings.SplitN(info.ID, "/", 3)
-	if len(parts) == 3 {
-		config := parts[0] + "/" + parts[1]
+	if src, inv, run, ok := info.ID.Split(); ok {
+		config := src + "/" + inv
 		return config, BrowseInventoryOption{
 			ID:    info.ID,
-			Label: config + " · " + humanfmt.RunTimestamp(parts[2]),
+			Label: config + " · " + humanfmt.RunTimestamp(run),
 		}
 	}
 	return "Other", BrowseInventoryOption{ID: info.ID, Label: info.Name}

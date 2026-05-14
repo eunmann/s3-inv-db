@@ -16,8 +16,8 @@ import (
 func TestListConfigurationsAPI_DiscoveryDisabled(t *testing.T) {
 	f := newTestFixture(t)
 	// Two runs of one configuration + a legacy two-part entry.
-	for _, id := range []string{"src-a/inv-1/2026-05-13T03-00Z", "src-a/inv-1/2026-05-12T03-00Z", "src-a/inv-2/2026-05-13T03-00Z"} {
-		if err := f.mgr.Register(id, id, "/p"); err != nil {
+	for _, id := range []inventory.ID{"src-a/inv-1/2026-05-13T03-00Z", "src-a/inv-1/2026-05-12T03-00Z", "src-a/inv-2/2026-05-13T03-00Z"} {
+		if err := f.mgr.Register(id, string(id), "/p"); err != nil {
 			t.Fatalf("register %s: %v", id, err)
 		}
 	}
@@ -41,11 +41,11 @@ func TestListConfigurationsAPI_DiscoveryDisabled(t *testing.T) {
 		t.Fatalf("configurations = %d, want 2 (src-a/inv-1, src-a/inv-2)", len(resp.Configurations))
 	}
 	for _, c := range resp.Configurations {
-		if c.SourceBucket == "" || c.InventoryID == "" {
+		if c.SourceBucket == "" || c.InventoryName == "" {
 			t.Errorf("empty src/inv on group: %+v", c)
 		}
 		if len(c.Runs) == 0 {
-			t.Errorf("group %s/%s has no runs", c.SourceBucket, c.InventoryID)
+			t.Errorf("group %s/%s has no runs", c.SourceBucket, c.InventoryName)
 		}
 	}
 }

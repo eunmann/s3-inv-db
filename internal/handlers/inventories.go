@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
@@ -35,25 +34,26 @@ type ConfigurationsResponse struct {
 	DiscoveryEnabled bool                `json:"discovery_enabled"`
 }
 
-// ConfigurationView is one (source bucket + inventory id) pair and its runs.
+// ConfigurationView is one (source bucket + inventory configuration)
+// pair and its runs.
 type ConfigurationView struct {
-	SourceBucket string          `json:"source_bucket"`
-	InventoryID  string          `json:"inventory_id"`
-	Runs         []ConfigRunView `json:"runs"`
+	SourceBucket  string          `json:"source_bucket"`
+	InventoryName string          `json:"inventory_name"`
+	Runs          []ConfigRunView `json:"runs"`
 }
 
 // ConfigRunView is one run's identity + lifecycle state. Bytes-on-disk
 // is reported when the loader can measure it.
 type ConfigRunView struct {
-	CompositeID string `json:"composite_id"` // "<src>/<inv>/<run>"
-	Run         string `json:"run"`          // S3 timestamp folder name
-	State       string `json:"state"`
-	Error       string `json:"error,omitempty"`
-	NodeCount   uint64 `json:"node_count,omitempty"`
-	LoadedAt    string `json:"loaded_at,omitempty"` // RFC3339
-	CacheBytes  int64  `json:"cache_bytes,omitempty"`
-	HasTierData bool   `json:"has_tier_data"`
-	ManifestKey string `json:"manifest_key,omitempty"`
+	ID          inventory.ID `json:"id"` // "<src>/<inv>/<run>"
+	Run         string       `json:"run"`
+	State       string       `json:"state"`
+	Error       string       `json:"error,omitempty"`
+	NodeCount   uint64       `json:"node_count,omitempty"`
+	LoadedAt    string       `json:"loaded_at,omitempty"` // RFC3339
+	CacheBytes  int64        `json:"cache_bytes,omitempty"`
+	HasTierData bool         `json:"has_tier_data"`
+	ManifestKey string       `json:"manifest_key,omitempty"`
 }
 
 // ListConfigurationsAPI returns inventory configurations grouped by
@@ -91,12 +91,12 @@ func (h *Handlers) groupDiscoveredForAPI(_ *http.Request, views []inventory.Merg
 			groups[key] = len(out)
 			idx = len(out)
 			out = append(out, ConfigurationView{
-				SourceBucket: v.SourceBucket,
-				InventoryID:  v.InventoryID,
+				SourceBucket:  v.SourceBucket,
+				InventoryName: v.InventoryName,
 			})
 		}
 		run := ConfigRunView{
-			CompositeID: v.CompositeID(),
+			ID:          v.CompositeID(),
 			Run:         v.Run,
 			State:       string(v.State),
 			Error:       v.Error,
@@ -108,7 +108,7 @@ func (h *Handlers) groupDiscoveredForAPI(_ *http.Request, views []inventory.Merg
 			run.LoadedAt = info.LoadedAt.UTC().Format(time.RFC3339)
 		}
 		if h.loader != nil && v.Run != "" {
-			if n, err := h.loader.CacheSizeBytes(v.SourceBucket, v.InventoryID, v.Run); err == nil {
+			if n, err := h.loader.CacheSizeBytes(v.SourceBucket, v.InventoryName, v.Run); err == nil {
 				run.CacheBytes = n
 			}
 		}
@@ -125,25 +125,21 @@ func groupManagerForAPI(all []inventory.Info) []ConfigurationView {
 	out := []ConfigurationView{}
 	for i := range all {
 		info := all[i]
-		parts := strings.SplitN(info.ID, "/", 3)
-		var src, inv, run string
-		switch len(parts) {
-		case 3:
-			src, inv, run = parts[0], parts[1], parts[2]
-		case 2:
-			src, inv = parts[0], parts[1]
-		default:
-			src, inv = "_other_", info.ID
+		src, inv, run, ok := info.ID.Split()
+		if !ok {
+			// Fallback for legacy 2-part or hand-registered IDs: bucket
+			// them into a single "_other_" group so they remain visible.
+			src, inv = "_other_", string(info.ID)
 		}
 		key := src + "/" + inv
-		idx, ok := groups[key]
-		if !ok {
+		idx, exists := groups[key]
+		if !exists {
 			groups[key] = len(out)
 			idx = len(out)
-			out = append(out, ConfigurationView{SourceBucket: src, InventoryID: inv})
+			out = append(out, ConfigurationView{SourceBucket: src, InventoryName: inv})
 		}
 		view := ConfigRunView{
-			CompositeID: info.ID,
+			ID:          info.ID,
 			Run:         run,
 			State:       string(info.State),
 			Error:       info.Error,
@@ -188,7 +184,8 @@ func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := h.manager.Register(req.ID, req.Name, req.Path); err != nil {
+	id := inventory.ID(req.ID)
+	if err := h.manager.Register(id, req.Name, req.Path); err != nil {
 		if errors.Is(err, inventory.ErrAlreadyExists) {
 			WriteJSONError(w, http.StatusConflict, "inventory already exists")
 			return
@@ -198,13 +195,13 @@ func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	info, _ := h.manager.Get(req.ID)
+	info, _ := h.manager.Get(id)
 	WriteJSON(w, http.StatusCreated, info)
 }
 
 // GetInventoryAPI returns a single inventory by ID.
 func (h *Handlers) GetInventoryAPI(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := inventory.ID(chi.URLParam(r, "id"))
 
 	info, exists := h.manager.Get(id)
 	if !exists {
@@ -217,7 +214,7 @@ func (h *Handlers) GetInventoryAPI(w http.ResponseWriter, r *http.Request) {
 
 // LoadInventoryAPI loads an inventory index.
 func (h *Handlers) LoadInventoryAPI(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := inventory.ID(chi.URLParam(r, "id"))
 
 	// Build runs under WithoutCancel so a navigate-away or htmx-side
 	// cancellation doesn't poison the inventory state with "context
@@ -232,7 +229,7 @@ func (h *Handlers) LoadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 			WriteJSONError(w, http.StatusConflict, err.Error())
 			return
 		}
-		zerolog.Ctx(r.Context()).Error().Err(err).Str("id", id).Msg("failed to load inventory")
+		zerolog.Ctx(r.Context()).Error().Err(err).Stringer("id", id).Msg("failed to load inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to load inventory")
 		return
 	}
@@ -243,7 +240,7 @@ func (h *Handlers) LoadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 
 // UnloadInventoryAPI unloads an inventory index.
 func (h *Handlers) UnloadInventoryAPI(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := inventory.ID(chi.URLParam(r, "id"))
 
 	if err := h.manager.Unload(id); err != nil {
 		if errors.Is(err, inventory.ErrNotFound) {
@@ -254,7 +251,7 @@ func (h *Handlers) UnloadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 			WriteJSONError(w, http.StatusConflict, err.Error())
 			return
 		}
-		zerolog.Ctx(r.Context()).Error().Err(err).Str("id", id).Msg("failed to unload inventory")
+		zerolog.Ctx(r.Context()).Error().Err(err).Stringer("id", id).Msg("failed to unload inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to unload inventory")
 		return
 	}
@@ -265,14 +262,14 @@ func (h *Handlers) UnloadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 
 // DeleteInventoryAPI removes an inventory from the manager.
 func (h *Handlers) DeleteInventoryAPI(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := inventory.ID(chi.URLParam(r, "id"))
 
 	if err := h.manager.Remove(id); err != nil {
 		if errors.Is(err, inventory.ErrNotFound) {
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
 			return
 		}
-		zerolog.Ctx(r.Context()).Error().Err(err).Str("id", id).Msg("failed to delete inventory")
+		zerolog.Ctx(r.Context()).Error().Err(err).Stringer("id", id).Msg("failed to delete inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to delete inventory")
 		return
 	}
@@ -289,19 +286,19 @@ type InventoriesData struct {
 	Groups         []InventoryGroup
 }
 
-// InventoryGroup pins one inventory configuration (SourceBucket + InventoryID)
-// to all of its discovered runs. The template renders one section per
-// group so users can compare runs side-by-side.
+// InventoryGroup pins one inventory configuration (SourceBucket +
+// InventoryName) to all of its discovered runs. The template renders
+// one section per group so users can compare runs side-by-side.
 type InventoryGroup struct {
-	SourceBucket string
-	InventoryID  string
-	Runs         []DiscoveredRowView
+	SourceBucket  string
+	InventoryName string
+	Runs          []DiscoveredRowView
 }
 
 // ConfigID returns the "<src>/<inv>" identifier shared by every run in
 // the group — handy as a stable HTML id / aria label.
 func (g InventoryGroup) ConfigID() string {
-	return g.SourceBucket + "/" + g.InventoryID
+	return g.SourceBucket + "/" + g.InventoryName
 }
 
 // InventoriesPage renders the inventories HTML page. The page is
@@ -338,7 +335,7 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 					// no jobs yet — fine
 				default:
 					zerolog.Ctx(r.Context()).Warn().Err(err).
-						Str("composite", views[i].CompositeID()).
+						Stringer("composite", views[i].CompositeID()).
 						Msg("look up latest job for inventories page")
 				}
 			}
@@ -350,9 +347,9 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 			}
 			groupIdx[key] = len(data.Groups)
 			data.Groups = append(data.Groups, InventoryGroup{
-				SourceBucket: views[i].SourceBucket,
-				InventoryID:  views[i].InventoryID,
-				Runs:         []DiscoveredRowView{row},
+				SourceBucket:  views[i].SourceBucket,
+				InventoryName: views[i].InventoryName,
+				Runs:          []DiscoveredRowView{row},
 			})
 		}
 	}
@@ -366,7 +363,7 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 
 // InventoryRowPartial renders an inventory row partial for HTMX.
 func (h *Handlers) InventoryRowPartial(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := inventory.ID(chi.URLParam(r, "id"))
 
 	info, exists := h.manager.Get(id)
 	if !exists {

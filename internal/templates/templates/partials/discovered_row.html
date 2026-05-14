@@ -1,8 +1,8 @@
-{{$composite := printf "%s/%s/%s" .SourceBucket .InventoryID .Run}}
+{{$composite := printf "%s/%s/%s" .SourceBucket .InventoryName .Run}}
 {{$busy := or .State.IsLoading (and .LatestJob (eq (printf "%s" .LatestJob.State) "queued"))}}
 {{$canRetry := and .LatestJob (or (eq (printf "%s" .LatestJob.State) "failed") (eq (printf "%s" .LatestJob.State) "aborted") (eq (printf "%s" .LatestJob.State) "cancelled"))}}
-<tr id="discovered-row-{{.SourceBucket}}-{{.InventoryID}}-{{.Run}}"
-    {{if .Run}}hx-get="/partials/discovered/{{.SourceBucket}}/{{.InventoryID}}/{{.Run}}"
+<tr id="discovered-row-{{.SourceBucket}}-{{.InventoryName}}-{{.Run}}"
+    {{if .Run}}hx-get="/partials/discovered/{{.SourceBucket}}/{{.InventoryName}}/{{.Run}}"
     hx-trigger="sse:row-{{$composite}}"
     hx-swap="outerHTML"{{end}}>
     <td class="px-6 py-4 whitespace-nowrap">
@@ -58,20 +58,20 @@
             {{end}}
         {{else if and .Run .State.CanLoad}}
         <button type="button"
-            hx-post="/partials/discovered/{{.SourceBucket}}/{{.InventoryID}}/{{.Run}}/load"
+            hx-post="/partials/discovered/{{.SourceBucket}}/{{.InventoryName}}/{{.Run}}/load"
             hx-target="closest tr"
             hx-swap="outerHTML"
             class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 dark:hover:text-indigo-200">
             {{if $canRetry}}Retry{{else if .State.IsNotLoaded}}Load{{else}}Reload{{end}}
         </button>
         {{else if .State.IsLoaded}}
-        <a href="/diff?from={{.SourceBucket}}/{{.InventoryID}}/{{.Run}}"
+        <a href="/diff?from={{.SourceBucket}}/{{.InventoryName}}/{{.Run}}"
            class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 dark:hover:text-indigo-200"
            title="Compare this run against another loaded run">
             Compare
         </a>
         <button type="button"
-            hx-post="/partials/discovered/{{.SourceBucket}}/{{.InventoryID}}/{{.Run}}/unload"
+            hx-post="/partials/discovered/{{.SourceBucket}}/{{.InventoryName}}/{{.Run}}/unload"
             hx-target="closest tr"
             hx-swap="outerHTML"
             class="text-yellow-600 dark:text-yellow-400 hover:text-yellow-900 dark:hover:text-yellow-200">

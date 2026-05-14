@@ -1,5 +1,6 @@
 .PHONY: all build server seeder test test-race lint lint-fix clean clean-seed seed \
-        css dev docker-build docker-prod docker-seed docker-down
+        css dev docker-build docker-prod docker-seed docker-down \
+        cover cover-html cover-summary tidy
 
 GOLANGCI_LINT_VERSION := v2.1.2
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
@@ -54,6 +55,30 @@ test:
 test-race:
 	go test -race ./...
 
+# Coverage profile. Writes one .out file the other coverage targets
+# consume. Run `make cover-summary` for a one-line-per-package report
+# or `make cover-html` to open the line-level browser view.
+COVER_OUT := coverage.out
+
+cover: $(COVER_OUT)
+
+$(COVER_OUT):
+	go test -covermode=atomic -coverprofile=$(COVER_OUT) ./...
+
+cover-summary: $(COVER_OUT)
+	@go tool cover -func=$(COVER_OUT) | tail -n 1
+	@echo "--- 20 lowest-covered functions (gaps to consider): ---"
+	@go tool cover -func=$(COVER_OUT) | awk '/^total:/ {next} {print}' | sort -k3 -n | head -20
+
+cover-html: $(COVER_OUT)
+	go tool cover -html=$(COVER_OUT) -o coverage.html
+	@echo "open coverage.html"
+
+# Keep go.mod tidy and verify no vendored drift snuck in.
+tidy:
+	go mod tidy
+	go mod verify
+
 lint:
 	$(GOLANGCI_LINT) run ./...
 
@@ -61,7 +86,7 @@ lint-fix:
 	$(GOLANGCI_LINT) run --fix ./...
 
 clean:
-	rm -rf bin/ tmp/
+	rm -rf bin/ tmp/ $(COVER_OUT) coverage.html
 
 clean-seed:
 	rm -rf seed-data/

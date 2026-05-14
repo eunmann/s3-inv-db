@@ -112,7 +112,7 @@ func TestRecover_MarksStaleJobsAborted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("jobs.NewStore: %v", err)
 	}
-	for id, state := range map[string]jobs.State{"running1": jobs.StateRunning, "queued1": jobs.StateQueued, "ok1": jobs.StateSucceeded} {
+	for id, state := range map[jobs.ID]jobs.State{"running1": jobs.StateRunning, "queued1": jobs.StateQueued, "ok1": jobs.StateSucceeded} {
 		if err := jobStore.Upsert(jobs.Job{ID: id, InventoryID: "src/inv1", Kind: jobs.KindBuild, State: state}); err != nil {
 			t.Fatalf("seed job %s: %v", id, err)
 		}
@@ -129,7 +129,7 @@ func TestRecover_MarksStaleJobsAborted(t *testing.T) {
 	}
 	_ = srv // recover() is called inside New
 
-	for _, id := range []string{"running1", "queued1"} {
+	for _, id := range []jobs.ID{"running1", "queued1"} {
 		j, err := jobStore.Get(id)
 		if err != nil {
 			t.Fatalf("Get %s: %v", id, err)

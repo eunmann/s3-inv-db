@@ -43,7 +43,7 @@ func newManager(t *testing.T) (*jobs.Manager, *jobs.Store, *jobs.Bus) {
 	return jobs.NewManager(store, bus), store, bus
 }
 
-func waitForState(t *testing.T, store *jobs.Store, id string, target jobs.State) jobs.Job {
+func waitForState(t *testing.T, store *jobs.Store, id jobs.ID, target jobs.State) jobs.Job {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -156,7 +156,7 @@ func TestStore_MarkAborted(t *testing.T) {
 		t.Fatalf("NewStore: %v", err)
 	}
 	for _, st := range []jobs.State{jobs.StateRunning, jobs.StateQueued, jobs.StateSucceeded} {
-		if err := store.Upsert(jobs.Job{ID: string(st), InventoryID: "src/inv1", Kind: jobs.KindBuild, State: st}); err != nil {
+		if err := store.Upsert(jobs.Job{ID: jobs.ID(st), InventoryID: "src/inv1", Kind: jobs.KindBuild, State: st}); err != nil {
 			t.Fatalf("upsert: %v", err)
 		}
 	}
@@ -167,7 +167,7 @@ func TestStore_MarkAborted(t *testing.T) {
 	if n != 2 {
 		t.Errorf("aborted = %d, want 2", n)
 	}
-	for _, id := range []string{"running", "queued"} {
+	for _, id := range []jobs.ID{"running", "queued"} {
 		j, err := store.Get(id)
 		if err != nil {
 			t.Fatalf("Get %s: %v", id, err)

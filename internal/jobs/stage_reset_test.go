@@ -57,7 +57,7 @@ func TestManager_ReportResetsProgressOnStageChange(t *testing.T) {
 	}
 }
 
-func waitForStage(t *testing.T, store *jobs.Store, id, stage string) {
+func waitForStage(t *testing.T, store *jobs.Store, id jobs.ID, stage string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

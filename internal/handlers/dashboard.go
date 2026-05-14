@@ -33,13 +33,13 @@ type DashboardData struct {
 
 // DashboardConfig is the per-configuration row shown on the dashboard.
 type DashboardConfig struct {
-	SourceBucket string
-	InventoryID  string
-	TotalRuns    int
-	LoadedRuns   int
-	LatestRun    string // run timestamp of the newest entry
-	LatestState  inventory.State
-	DiskBytesH   string // size on disk across this configuration's loaded runs
+	SourceBucket  string
+	InventoryName string
+	TotalRuns     int
+	LoadedRuns    int
+	LatestRun     string // run timestamp of the newest entry
+	LatestState   inventory.State
+	DiskBytesH    string // size on disk across this configuration's loaded runs
 }
 
 // Dashboard renders the dashboard HTML page.
@@ -83,12 +83,12 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	for _, key := range order {
 		c := confs[key]
 		row := DashboardConfig{
-			SourceBucket: c.Src,
-			InventoryID:  c.ID,
-			TotalRuns:    c.TotalRuns,
-			LoadedRuns:   c.LoadedRuns,
-			LatestRun:    c.LatestRun,
-			LatestState:  c.LatestState,
+			SourceBucket:  c.Src,
+			InventoryName: c.ID,
+			TotalRuns:     c.TotalRuns,
+			LoadedRuns:    c.LoadedRuns,
+			LatestRun:     c.LatestRun,
+			LatestState:   c.LatestState,
 		}
 		if c.DiskBytes > 0 {
 			row.DiskBytesH = humanfmt.BytesUint64(uint64(c.DiskBytes))
@@ -127,7 +127,7 @@ func (h *Handlers) aggregateDashboard(logger *zerolog.Logger, views []inventory.
 
 		c, ok := confs[key]
 		if !ok {
-			c = &dashConfAgg{Src: v.SourceBucket, ID: v.InventoryID}
+			c = &dashConfAgg{Src: v.SourceBucket, ID: v.InventoryName}
 			confs[key] = c
 			order = append(order, key)
 		}
@@ -164,12 +164,12 @@ func (h *Handlers) addLoadedStats(logger *zerolog.Logger, v *inventory.MergedInv
 		return nil
 	})
 	if err != nil {
-		logger.Warn().Err(err).Str("id", v.CompositeID()).Msg("dashboard root stats")
+		logger.Warn().Err(err).Stringer("id", v.CompositeID()).Msg("dashboard root stats")
 	}
 	if h.loader == nil {
 		return
 	}
-	size, err := h.loader.CacheSizeBytes(v.SourceBucket, v.InventoryID, v.Run)
+	size, err := h.loader.CacheSizeBytes(v.SourceBucket, v.InventoryName, v.Run)
 	if err != nil {
 		return
 	}

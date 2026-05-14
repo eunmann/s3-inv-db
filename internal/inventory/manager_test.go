@@ -193,7 +193,7 @@ func TestManagerConcurrent_RegisterListRemove(t *testing.T) {
 		go func(workerID int) {
 			defer wg.Done()
 			for i := range ops {
-				id := fmt.Sprintf("w%d-i%d", workerID, i)
+				id := ID(fmt.Sprintf("w%d-i%d", workerID, i))
 				_ = m.Register(id, "name", "/path")
 				_, _ = m.Get(id)
 				_ = m.List()

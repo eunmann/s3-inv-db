@@ -4,25 +4,23 @@ import (
 	"context"
 	"errors"
 	"testing"
-
-	"github.com/eunmann/s3-inv-db/internal/s3disco"
 )
 
 // fakeDiscoverer is a minimal stub for the Discoverer interface that
 // the DiscoveryService consumes. Each method has a single response to
 // keep tests simple; specialise per-test by setting fields directly.
 type fakeDiscoverer struct {
-	listResp []s3disco.Inventory
+	listResp []Inventory
 	listErr  error
-	findResp s3disco.Inventory
+	findResp Inventory
 	findErr  error
 	bucket   string
 }
 
-func (f *fakeDiscoverer) List(context.Context) ([]s3disco.Inventory, error) {
+func (f *fakeDiscoverer) List(context.Context) ([]Inventory, error) {
 	return f.listResp, f.listErr
 }
-func (f *fakeDiscoverer) Find(_ context.Context, _, _, _ string) (s3disco.Inventory, error) {
+func (f *fakeDiscoverer) Find(_ context.Context, _, _, _ string) (Inventory, error) {
 	return f.findResp, f.findErr
 }
 func (f *fakeDiscoverer) Bucket() string { return f.bucket }
@@ -87,7 +85,7 @@ func TestDiscoveryService_FindWhenDisabledReturnsErr(t *testing.T) {
 
 func TestDiscoveryService_LoadWhenDisabledReturnsErr(t *testing.T) {
 	s := NewDiscoveryService(NewManager(), &fakeDiscoverer{}, nil)
-	err := s.Load(context.Background(), s3disco.Inventory{})
+	err := s.Load(context.Background(), Inventory{})
 	if !errors.Is(err, ErrDiscoveryDisabled) {
 		t.Errorf("Load() error = %v, want ErrDiscoveryDisabled", err)
 	}
@@ -105,9 +103,9 @@ func TestDiscoveryService_ListMergesWithManagerState(t *testing.T) {
 	}
 
 	disc := &fakeDiscoverer{
-		listResp: []s3disco.Inventory{
-			{SourceBucket: "bucket-a", InventoryID: "inv-1"},
-			{SourceBucket: "bucket-a", InventoryID: "inv-2"},
+		listResp: []Inventory{
+			{SourceBucket: "bucket-a", InventoryName: "inv-1"},
+			{SourceBucket: "bucket-a", InventoryName: "inv-2"},
 		},
 	}
 	s := NewDiscoveryService(mgr, disc, &fakeBuilder{})

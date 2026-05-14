@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/rs/zerolog"
 )
 
@@ -32,7 +33,7 @@ type Manager struct {
 	bus   *Bus
 
 	mu       sync.Mutex
-	cancels  map[string]context.CancelFunc
+	cancels  map[ID]context.CancelFunc
 	wg       sync.WaitGroup
 	shutdown bool
 
@@ -48,7 +49,7 @@ func NewManager(store *Store, bus *Bus) *Manager {
 	return &Manager{
 		store:   store,
 		bus:     bus,
-		cancels: make(map[string]context.CancelFunc),
+		cancels: make(map[ID]context.CancelFunc),
 		logger:  zerolog.Nop(),
 	}
 }
@@ -61,7 +62,7 @@ func (m *Manager) SetLogger(l zerolog.Logger) { m.logger = l }
 // goroutine, and returns the initial snapshot. The cancel handle is
 // registered before the bus publish so a Cancel triggered by an
 // immediate SSE consumer can't race in before the goroutine starts.
-func (m *Manager) Submit(invID string, kind Kind, work Work) (Job, error) {
+func (m *Manager) Submit(invID inventory.ID, kind Kind, work Work) (Job, error) {
 	// Hold the lock long enough to (a) reject post-shutdown submits and
 	// (b) register the cancel handle + bump the wait group atomically
 	// with the goroutine launch. That way Shutdown's wg.Wait can't miss
@@ -96,7 +97,7 @@ func (m *Manager) Submit(invID string, kind Kind, work Work) (Job, error) {
 
 // Cancel signals the cancel func associated with id. Returns ErrNotFound
 // if the job isn't currently live (already finished, or never existed).
-func (m *Manager) Cancel(id string) error {
+func (m *Manager) Cancel(id ID) error {
 	m.mu.Lock()
 	cancel, ok := m.cancels[id]
 	m.mu.Unlock()
@@ -192,14 +193,14 @@ func (m *Manager) persistAndPublish(j *Job) {
 		// Storage failure shouldn't kill the worker, but the operator
 		// needs to know. The job continues; subscribers see the
 		// in-memory state via the bus.
-		m.logger.Error().Err(err).Str("job_id", j.ID).Str("state", string(j.State)).
+		m.logger.Error().Err(err).Stringer("job_id", j.ID).Str("state", string(j.State)).
 			Msg("persist job state")
 	}
 	m.bus.Publish(*j)
 }
 
-func newJobID() string {
+func newJobID() ID {
 	var b [12]byte
 	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
+	return ID(hex.EncodeToString(b[:]))
 }

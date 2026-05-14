@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
-	"strings"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -31,7 +30,7 @@ type DiffPickerGroup struct {
 
 // DiffPickerOption is one loaded run inside a DiffPickerGroup.
 type DiffPickerOption struct {
-	ID    string // composite ID
+	ID    inventory.ID
 	Label string // "<src>/<inv> · <run>" — self-identifying in the closed <select>
 }
 
@@ -39,8 +38,8 @@ type DiffPickerOption struct {
 type DiffPageData struct {
 	Title       string
 	Picker      DiffPicker
-	From        string
-	To          string
+	From        inventory.ID
+	To          inventory.ID
 	ConfigLabel string // "<src>/<inv>" when both IDs share the config
 	FromRun     string // formatted run timestamp (or empty)
 	ToRun       string // formatted run timestamp (or empty)
@@ -57,7 +56,7 @@ type DiffPageData struct {
 type DiffPartialData struct {
 	Prefix      string
 	Breadcrumbs []BrowseCrumb
-	From, To    string
+	From, To    inventory.ID
 	Level       *DiffLevelView
 }
 
@@ -126,8 +125,8 @@ type DiffChildView struct {
 // the Browse handler's pattern.
 func (h *Handlers) DiffPage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	from := q.Get("from")
-	to := q.Get("to")
+	from := inventory.ID(q.Get("from"))
+	to := inventory.ID(q.Get("to"))
 	prefix := q.Get("prefix")
 	hideUnchanged := q.Get("show_unchanged") != "true"
 	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
@@ -150,7 +149,7 @@ func (h *Handlers) DiffPage(w http.ResponseWriter, r *http.Request) {
 // the inner render functions and computeDiffLevel don't drown in
 // positional parameters.
 type diffViewOptions struct {
-	from, to       string
+	from, to       inventory.ID
 	prefix         string
 	hideUnchanged  bool
 	page, pageSize int
@@ -458,23 +457,23 @@ func tierMapCost(m map[string]indexread.TierBreakdown, prices pricing.PriceTable
 	return pricing.ComputeMonthlyCost(breakdown, prices).TotalMicrodollars
 }
 
-// sameConfig reports whether two composite IDs share their first two
+// sameConfig reports whether two inventory IDs share their first two
 // segments. Both inputs must already be 3-part for the diff to apply.
-func sameConfig(idA, idB string) bool {
-	a := strings.SplitN(idA, "/", 3)
-	b := strings.SplitN(idB, "/", 3)
-	return len(a) == 3 && len(b) == 3 && a[0] == b[0] && a[1] == b[1]
+func sameConfig(idA, idB inventory.ID) bool {
+	srcA, invA, _, okA := idA.Split()
+	srcB, invB, _, okB := idB.Split()
+	return okA && okB && srcA == srcB && invA == invB
 }
 
 // describeRun extracts the configuration label ("<src>/<inv>") and the
-// formatted run timestamp from a composite ID. Returns ("", id) when
+// formatted run timestamp from an inventory ID. Returns ("", id) when
 // the ID isn't 3-part so the page still renders something sensible.
-func describeRun(id string) (configLabel, runLabel string) {
-	parts := strings.SplitN(id, "/", 3)
-	if len(parts) != 3 {
-		return "", id
+func describeRun(id inventory.ID) (configLabel, runLabel string) {
+	src, inv, run, ok := id.Split()
+	if !ok {
+		return "", string(id)
 	}
-	return parts[0] + "/" + parts[1], humanfmt.RunTimestamp(parts[2])
+	return src + "/" + inv, humanfmt.RunTimestamp(run)
 }
 
 // DiffLevelResponse is the JSON shape returned by DiffLevelAPI. Carries
@@ -482,8 +481,8 @@ func describeRun(id string) (configLabel, runLabel string) {
 // HTML-only fields and keeps raw int64 deltas so clients can format
 // however they like.
 type DiffLevelResponse struct {
-	From          string               `json:"from"`
-	To            string               `json:"to"`
+	From          inventory.ID         `json:"from"`
+	To            inventory.ID         `json:"to"`
 	Prefix        string               `json:"prefix"`
 	Breadcrumbs   []BrowseCrumbJSON    `json:"breadcrumbs"`
 	Self          DiffSelfResponse     `json:"self"`
@@ -554,8 +553,8 @@ type DiffStatusCountsJSON struct {
 // counts and microdollar costs — no formatted strings to parse back.
 func (h *Handlers) DiffLevelAPI(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	from := q.Get("from")
-	to := q.Get("to")
+	from := inventory.ID(q.Get("from"))
+	to := inventory.ID(q.Get("to"))
 	prefix := q.Get("prefix")
 	hideUnchanged := q.Get("show_unchanged") != "true"
 	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
@@ -588,7 +587,7 @@ func (h *Handlers) DiffLevelAPI(w http.ResponseWriter, r *http.Request) {
 // buildDiffAPIResponse turns a DiffLevelData into the JSON payload,
 // applying the same filter→sort→paginate pipeline as the HTML view but
 // with raw numeric output.
-func (h *Handlers) buildDiffAPIResponse(from, to, prefix, sortBy, dir string, hideUnchanged bool, page, pageSize int, data inventory.DiffLevelData) DiffLevelResponse {
+func (h *Handlers) buildDiffAPIResponse(from, to inventory.ID, prefix, sortBy, dir string, hideUnchanged bool, page, pageSize int, data inventory.DiffLevelData) DiffLevelResponse {
 	resp := DiffLevelResponse{
 		From:          from,
 		To:            to,
@@ -754,19 +753,19 @@ func buildDiffPicker(all []inventory.Info) DiffPicker {
 		if all[i].State != inventory.StateLoaded {
 			continue
 		}
-		parts := strings.SplitN(all[i].ID, "/", 3)
-		if len(parts) != 3 {
+		src, inv, run, ok := all[i].ID.Split()
+		if !ok {
 			continue
 		}
-		config := parts[0] + "/" + parts[1]
-		g, ok := groups[config]
-		if !ok {
+		config := src + "/" + inv
+		g, gok := groups[config]
+		if !gok {
 			g = &DiffPickerGroup{ConfigLabel: config}
 			groups[config] = g
 		}
 		g.Options = append(g.Options, DiffPickerOption{
 			ID:    all[i].ID,
-			Label: config + " · " + humanfmt.RunTimestamp(parts[2]),
+			Label: config + " · " + humanfmt.RunTimestamp(run),
 		})
 	}
 	out := DiffPicker{Groups: make([]DiffPickerGroup, 0, len(groups))}
