@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -24,8 +25,11 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Inventory represents one discovered S3 Inventory configuration with its
-// most recent run.
+// Inventory represents one discovered S3 Inventory run. The Discoverer
+// emits one Inventory per (SourceBucket, InventoryID, Run) so the UI
+// can show every snapshot, not just the most recent. Group by the
+// (SourceBucket, InventoryID) pair to render runs under the same
+// inventory configuration.
 type Inventory struct {
 	// SourceBucket is the bucket the inventory is *describing* (the layer
 	// of the S3 prefix that S3 inserts between the dest-prefix and the
@@ -35,34 +39,48 @@ type Inventory struct {
 	// InventoryID is the inventory configuration ID.
 	InventoryID string `json:"inventory_id"`
 
-	// LatestRun is the timestamp folder name of the most recent run
-	// (e.g., "2026-05-13T03-02Z"). Empty if the inventory exists but has
-	// no completed run yet.
-	LatestRun string `json:"latest_run"`
+	// Run is the timestamp folder name (e.g., "2026-05-13T03-02Z"). Empty
+	// when the configuration has been discovered but has no completed
+	// runs yet — in that case the entry is returned as a placeholder so
+	// the UI can surface "no runs yet".
+	Run string `json:"run"`
 
-	// ManifestKey is the S3 key of the latest manifest.json relative to
-	// DestinationBucket. Empty when LatestRun is empty.
+	// ManifestKey is the S3 key of this run's manifest.json. Empty when
+	// Run is empty.
 	ManifestKey string `json:"manifest_key"`
 
-	// FileFormat reported by the latest manifest ("CSV", "Parquet").
+	// FileFormat reported by the manifest ("CSV", "Parquet").
 	FileFormat string `json:"file_format,omitempty"`
 
-	// FileCount is the number of data files referenced by the latest
-	// manifest. A coarse "size" signal for the UI before download.
+	// FileCount is the number of data files referenced by the manifest.
+	// A coarse "size" signal for the UI before download.
 	FileCount int `json:"file_count,omitempty"`
 
-	// CreationTimestamp is the manifest's reported creation time (UnixMilli
-	// as a decimal string, exactly as S3 writes it).
+	// CreationTimestamp is the manifest's reported creation time
+	// (UnixMilli as a decimal string, exactly as S3 writes it).
 	CreationTimestamp string `json:"creation_timestamp,omitempty"`
 
-	// Error captures a non-fatal per-inventory failure (e.g. unreadable
-	// manifest, listing error). Empty on success.
+	// Error captures a non-fatal per-run failure (e.g. unreadable
+	// manifest). Empty on success.
 	Error string `json:"error,omitempty"`
 }
 
-// CompositeID returns "<src-bucket>/<inv-id>" — the unique identifier we
-// surface through the HTTP API. URL-encoding is the caller's job.
+// CompositeID returns "<src-bucket>/<inv-id>/<run>" — the unique
+// identifier we surface through the HTTP API and use as the inventory
+// Manager key. URL-encoding is the caller's job. When Run is empty
+// (no completed runs for the configuration), only "<src>/<inv>" is
+// returned and the entry is not independently loadable.
 func (i Inventory) CompositeID() string {
+	if i.Run == "" {
+		return i.SourceBucket + "/" + i.InventoryID
+	}
+	return i.SourceBucket + "/" + i.InventoryID + "/" + i.Run
+}
+
+// ConfigID returns "<src-bucket>/<inv-id>" — the identifier of the
+// inventory configuration, shared across all runs. Used by the UI to
+// group runs.
+func (i Inventory) ConfigID() string {
 	return i.SourceBucket + "/" + i.InventoryID
 }
 
@@ -107,9 +125,11 @@ func (d *Discoverer) Bucket() string { return d.bucket }
 func (d *Discoverer) Prefix() string { return d.prefix }
 
 // List walks the configured root and returns one Inventory entry per
-// discovered <src-bucket>/<inv-id> pair, populated with the latest run.
-// Inventories with no completed runs are still returned (LatestRun empty)
-// so the UI can show them.
+// (<src-bucket>, <inv-id>, <run>) triple — every run S3 has published.
+// Configurations with no completed runs still appear as a single
+// placeholder entry (Run empty) so the UI can show "no runs yet".
+// Runs come back newest-first within each configuration so the UI can
+// surface the most recent at the top of each group without re-sorting.
 func (d *Discoverer) List(ctx context.Context) ([]Inventory, error) {
 	srcBuckets, err := d.listCommonPrefixes(ctx, d.prefix)
 	if err != nil {
@@ -122,76 +142,102 @@ func (d *Discoverer) List(ctx context.Context) ([]Inventory, error) {
 		srcName := trimPrefix(src, d.prefix)
 		invs, err := d.listCommonPrefixes(ctx, src)
 		if err != nil {
-			// One unreadable src-bucket shouldn't take down the whole
-			// listing — surface a stub entry tagged with the error.
 			logger.Warn().Err(err).Str("src", srcName).Msg("list inventories under src")
 			out = append(out, Inventory{SourceBucket: srcName, Error: "failed to list inventories under source bucket"})
 			continue
 		}
 		for _, inv := range invs {
 			invName := trimPrefix(inv, src)
-			entry, err := d.describeInventory(ctx, srcName, invName, inv)
+			runs, err := d.describeRuns(ctx, srcName, invName, inv)
 			if err != nil {
-				logger.Warn().Err(err).Str("src", srcName).Str("inv", invName).Msg("describe inventory")
-				entry = Inventory{SourceBucket: srcName, InventoryID: invName, Error: "failed to describe inventory"}
+				logger.Warn().Err(err).Str("src", srcName).Str("inv", invName).Msg("describe runs")
+				out = append(out, Inventory{SourceBucket: srcName, InventoryID: invName, Error: "failed to describe inventory"})
+				continue
 			}
-			out = append(out, entry)
+			out = append(out, runs...)
 		}
 	}
 	return out, nil
 }
 
-// Find returns a single Inventory by composite ID, or an error.
-func (d *Discoverer) Find(ctx context.Context, srcBucket, invID string) (Inventory, error) {
+// Find returns one Inventory by (srcBucket, invID, run). When run is
+// empty, returns the most recent run for the configuration — preserves
+// the old caller contract for code paths that just want "the latest".
+func (d *Discoverer) Find(ctx context.Context, srcBucket, invID, run string) (Inventory, error) {
 	if srcBucket == "" || invID == "" {
 		return Inventory{}, errEmptyID
 	}
 	invPrefix := d.prefix + srcBucket + "/" + invID + "/"
-	return d.describeInventory(ctx, srcBucket, invID, invPrefix)
+	runs, err := d.describeRuns(ctx, srcBucket, invID, invPrefix)
+	if err != nil {
+		return Inventory{}, err
+	}
+	if len(runs) == 0 {
+		return Inventory{SourceBucket: srcBucket, InventoryID: invID}, nil
+	}
+	if run == "" {
+		// Newest first — caller wants "the latest".
+		return runs[0], nil
+	}
+	for i := range runs {
+		if runs[i].Run == run {
+			return runs[i], nil
+		}
+	}
+	return Inventory{}, fmt.Errorf("%w: %s/%s/%s", ErrRunNotFound, srcBucket, invID, run)
 }
+
+// ErrRunNotFound is returned by Find when the requested run isn't
+// present under the (srcBucket, invID) configuration.
+var ErrRunNotFound = errors.New("run not found")
 
 var errEmptyID = errors.New("source bucket and inventory id are required")
 
-// describeInventory walks <prefix><src>/<inv>/ to find the latest manifest.
-func (d *Discoverer) describeInventory(ctx context.Context, src, inv, invPrefix string) (Inventory, error) {
-	runs, err := d.listCommonPrefixes(ctx, invPrefix)
+// describeRuns walks <prefix><src>/<inv>/ and returns one Inventory per
+// run folder, newest-first. Each entry has its own manifest fetched. A
+// configuration with no run folders returns a single placeholder.
+func (d *Discoverer) describeRuns(ctx context.Context, src, inv, invPrefix string) ([]Inventory, error) {
+	folders, err := d.listCommonPrefixes(ctx, invPrefix)
 	if err != nil {
-		return Inventory{}, fmt.Errorf("list runs: %w", err)
+		return nil, fmt.Errorf("list runs: %w", err)
 	}
 
-	entry := Inventory{SourceBucket: src, InventoryID: inv}
-
-	// Pick the lex-greatest timestamp folder. ISO timestamps sort right.
-	// data/ and any other oddly-named folder are filtered out by the
-	// strict YYYY-MM-DDTHH-MM[-SS]Z shape.
-	latest := ""
-	for _, r := range runs {
+	// Filter to legitimate run folders; sort newest first.
+	var runs []string
+	for _, r := range folders {
 		name := trimPrefix(r, invPrefix)
-		if !runFolderRE.MatchString(name) {
+		if runFolderRE.MatchString(name) {
+			runs = append(runs, name)
+		}
+	}
+	if len(runs) == 0 {
+		return []Inventory{{SourceBucket: src, InventoryID: inv}}, nil
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(runs)))
+
+	out := make([]Inventory, 0, len(runs))
+	logger := zerolog.Ctx(ctx)
+	for _, name := range runs {
+		entry := Inventory{
+			SourceBucket: src,
+			InventoryID:  inv,
+			Run:          name,
+			ManifestKey:  invPrefix + name + "/manifest.json",
+		}
+		manifest, err := d.fetchManifest(ctx, entry.ManifestKey)
+		if err != nil {
+			logger.Warn().Err(err).Str("src", src).Str("inv", inv).Str("run", name).Msg("fetch manifest")
+			entry.FileFormat = "unknown"
+			entry.Error = "failed to read manifest"
+			out = append(out, entry)
 			continue
 		}
-		if name > latest {
-			latest = name
-		}
+		entry.FileFormat = manifest.FileFormat
+		entry.FileCount = len(manifest.Files)
+		entry.CreationTimestamp = manifest.CreationTimestamp
+		out = append(out, entry)
 	}
-	if latest == "" {
-		return entry, nil
-	}
-	entry.LatestRun = latest
-	entry.ManifestKey = invPrefix + latest + "/manifest.json"
-
-	// Soft-fail on parse error so one broken manifest doesn't break List.
-	manifest, err := d.fetchManifest(ctx, entry.ManifestKey)
-	if err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).Str("src", src).Str("inv", inv).Str("key", entry.ManifestKey).Msg("fetch manifest")
-		entry.FileFormat = "unknown"
-		entry.Error = "failed to read manifest"
-		return entry, nil
-	}
-	entry.FileFormat = manifest.FileFormat
-	entry.FileCount = len(manifest.Files)
-	entry.CreationTimestamp = manifest.CreationTimestamp
-	return entry, nil
+	return out, nil
 }
 
 // fetchManifest GETs and parses a manifest.json using the discoverer's s3

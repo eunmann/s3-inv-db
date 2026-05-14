@@ -32,7 +32,7 @@ type fakeDiscoverer struct {
 func (f *fakeDiscoverer) List(context.Context) ([]s3disco.Inventory, error) {
 	return f.listResp, f.listErr
 }
-func (f *fakeDiscoverer) Find(_ context.Context, _, _ string) (s3disco.Inventory, error) {
+func (f *fakeDiscoverer) Find(_ context.Context, _, _, _ string) (s3disco.Inventory, error) {
 	return f.findResp, f.findErr
 }
 func (f *fakeDiscoverer) Bucket() string { return f.bucket }
@@ -42,11 +42,11 @@ type fakeBuilder struct {
 	buildErr  error
 }
 
-func (f *fakeBuilder) Build(_ context.Context, _, _, _ string) (string, error) {
+func (f *fakeBuilder) Build(_ context.Context, _, _, _, _ string) (string, error) {
 	return f.buildResp, f.buildErr
 }
 
-func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _ string, _ func(string, int64, int64)) (string, error) {
+func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _, _ string, _ func(string, int64, int64)) (string, error) {
 	return f.buildResp, f.buildErr
 }
 
@@ -123,7 +123,7 @@ func TestLoadDiscoveredRowPartial_FindError(t *testing.T) {
 		&fakeBuilder{},
 	)
 	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
-	req = chiCtxWithParams(req, "src", "b", "id", "i")
+	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	w := httptest.NewRecorder()
 	h.LoadDiscoveredRowPartial(w, req)
 	if w.Code != http.StatusBadGateway {
@@ -139,27 +139,27 @@ func TestLoadDiscoveredRowPartial_NoCompletedRuns(t *testing.T) {
 		&fakeBuilder{},
 	)
 	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
-	req = chiCtxWithParams(req, "src", "b", "id", "i")
+	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	w := httptest.NewRecorder()
 	h.LoadDiscoveredRowPartial(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "no completed runs") {
-		t.Errorf("body = %q, want mention of no completed runs", w.Body.String())
+	if !strings.Contains(w.Body.String(), "no completed run") {
+		t.Errorf("body = %q, want mention of no completed run", w.Body.String())
 	}
 }
 
 func TestLoadDiscoveredRowPartial_AcceptsBuildError(t *testing.T) {
 	// The handler returns 202 immediately; the build error surfaces on
 	// the job, not the HTTP response. Verify the job moves to failed.
-	disc := s3disco.Inventory{SourceBucket: "b", InventoryID: "i", ManifestKey: "k/manifest.json"}
+	disc := s3disco.Inventory{SourceBucket: "b", InventoryID: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
 		&fakeBuilder{buildErr: errors.New("network broken")},
 	)
 	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
-	req = chiCtxWithParams(req, "src", "b", "id", "i")
+	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	w := httptest.NewRecorder()
 	h.LoadDiscoveredRowPartial(w, req)
 	if w.Code != http.StatusAccepted {
@@ -175,7 +175,7 @@ func TestLoadDiscoveredRowPartial_AcceptsBuildError(t *testing.T) {
 func TestUnloadDiscoveredRowPartial_NotFound(t *testing.T) {
 	h := newDiscoveredHandlers(t, &fakeDiscoverer{}, &fakeBuilder{})
 	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/unload", http.NoBody)
-	req = chiCtxWithParams(req, "src", "b", "id", "i")
+	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	w := httptest.NewRecorder()
 	h.UnloadDiscoveredRowPartial(w, req)
 	if w.Code != http.StatusNotFound {

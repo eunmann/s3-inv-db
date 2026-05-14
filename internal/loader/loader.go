@@ -33,24 +33,26 @@ func New(cacheRoot string, s3Client *s3fetch.Client) *Loader {
 	return &Loader{cacheRoot: cacheRoot, s3Client: s3Client}
 }
 
-// CacheDirFor returns the on-disk path where an inventory's built index
-// lives. Callers can also Stat it to check whether a build already exists.
-func (l *Loader) CacheDirFor(srcBucket, invID string) string {
-	return filepath.Join(l.cacheRoot, srcBucket, invID)
+// CacheDirFor returns the on-disk path where an inventory run's built
+// index lives. The run timestamp keeps cache directories per-run, so
+// multiple runs of the same inventory configuration can be loaded
+// independently without clobbering each other.
+func (l *Loader) CacheDirFor(srcBucket, invID, run string) string {
+	return filepath.Join(l.cacheRoot, srcBucket, invID, run)
 }
 
 // Build is BuildWith with no stage callback.
-func (l *Loader) Build(ctx context.Context, srcBucket, invID, manifestURI string) (string, error) {
-	return l.BuildWith(ctx, srcBucket, invID, manifestURI, nil)
+func (l *Loader) Build(ctx context.Context, srcBucket, invID, run, manifestURI string) (string, error) {
+	return l.BuildWith(ctx, srcBucket, invID, run, manifestURI, nil)
 }
 
 // BuildWith downloads the inventory referenced by manifestURI and
-// produces a built index under CacheDirFor(srcBucket, invID). The
+// produces a built index under CacheDirFor(srcBucket, invID, run). The
 // onProgress callback, if non-nil, receives stage transitions and
 // per-chunk quantitative progress for UI ETA. Partial builds are not
 // safe to resume — the cache dir is cleared first.
-func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, manifestURI string, onProgress func(stage string, done, total int64)) (string, error) {
-	if srcBucket == "" || invID == "" {
+func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, run, manifestURI string, onProgress func(stage string, done, total int64)) (string, error) {
+	if srcBucket == "" || invID == "" || run == "" {
 		return "", errEmptyID
 	}
 	if manifestURI == "" {
@@ -61,7 +63,7 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, manifestURI st
 	}
 
 	onProgress("preparing", 0, 0)
-	outDir := l.CacheDirFor(srcBucket, invID)
+	outDir := l.CacheDirFor(srcBucket, invID, run)
 	if err := os.RemoveAll(outDir); err != nil {
 		return "", fmt.Errorf("clear cache dir: %w", err)
 	}
@@ -84,6 +86,6 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, manifestURI st
 }
 
 var (
-	errEmptyID       = errors.New("source bucket and inventory id are required")
+	errEmptyID       = errors.New("source bucket, inventory id, and run are required")
 	errEmptyManifest = errors.New("manifest URI is required")
 )

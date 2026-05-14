@@ -153,7 +153,22 @@ type InventoriesData struct {
 	S3Source       string
 	HasDiscovery   bool
 	DiscoveryError string
-	Discovered     []DiscoveredRowView
+	Groups         []InventoryGroup
+}
+
+// InventoryGroup pins one inventory configuration (SourceBucket + InventoryID)
+// to all of its discovered runs. The template renders one section per
+// group so users can compare runs side-by-side.
+type InventoryGroup struct {
+	SourceBucket string
+	InventoryID  string
+	Runs         []DiscoveredRowView
+}
+
+// ConfigID returns the "<src>/<inv>" identifier shared by every run in
+// the group — handy as a stable HTML id / aria label.
+func (g InventoryGroup) ConfigID() string {
+	return g.SourceBucket + "/" + g.InventoryID
 }
 
 // InventoriesPage renders the inventories HTML page. The page is
@@ -173,7 +188,12 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 			zerolog.Ctx(r.Context()).Error().Err(err).Msg("discover for inventories page")
 			data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
 		}
-		data.Discovered = make([]DiscoveredRowView, 0, len(views))
+
+		// Build group → run-list. Discovery returns runs newest-first
+		// within a configuration; preserve that order. Use the order of
+		// first appearance to keep configurations in a stable
+		// (alphabetical-ish) sequence on the page.
+		groupIdx := map[string]int{}
 		for i := range views {
 			row := DiscoveredRowView{MergedInventory: views[i]}
 			if h.jobStore != nil {
@@ -189,7 +209,17 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 						Msg("look up latest job for inventories page")
 				}
 			}
-			data.Discovered = append(data.Discovered, row)
+			key := views[i].ConfigID()
+			if idx, ok := groupIdx[key]; ok {
+				data.Groups[idx].Runs = append(data.Groups[idx].Runs, row)
+				continue
+			}
+			groupIdx[key] = len(data.Groups)
+			data.Groups = append(data.Groups, InventoryGroup{
+				SourceBucket: views[i].SourceBucket,
+				InventoryID:  views[i].InventoryID,
+				Runs:         []DiscoveredRowView{row},
+			})
 		}
 	}
 

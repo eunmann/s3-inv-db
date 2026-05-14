@@ -22,7 +22,7 @@ type fakeDiscoverer struct {
 func (f *fakeDiscoverer) List(context.Context) ([]s3disco.Inventory, error) {
 	return f.listResp, f.listErr
 }
-func (f *fakeDiscoverer) Find(_ context.Context, _, _ string) (s3disco.Inventory, error) {
+func (f *fakeDiscoverer) Find(_ context.Context, _, _, _ string) (s3disco.Inventory, error) {
 	return f.findResp, f.findErr
 }
 func (f *fakeDiscoverer) Bucket() string { return f.bucket }
@@ -33,11 +33,11 @@ type fakeBuilder struct {
 	buildErr  error
 }
 
-func (f *fakeBuilder) Build(_ context.Context, _, _, _ string) (string, error) {
+func (f *fakeBuilder) Build(_ context.Context, _, _, _, _ string) (string, error) {
 	return f.buildResp, f.buildErr
 }
 
-func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _ string, _ func(string, int64, int64)) (string, error) {
+func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _, _ string, _ func(string, int64, int64)) (string, error) {
 	return f.buildResp, f.buildErr
 }
 func TestDiscoveryService_DisabledWithoutDeps(t *testing.T) {
@@ -75,7 +75,7 @@ func TestDiscoveryService_ListWhenDisabledReturnsErr(t *testing.T) {
 
 func TestDiscoveryService_FindWhenDisabledReturnsErr(t *testing.T) {
 	s := NewDiscoveryService(NewManager(), nil, nil)
-	_, err := s.Find(context.Background(), "src", "id")
+	_, err := s.Find(context.Background(), "src", "id", "")
 	if !errors.Is(err, ErrDiscoveryDisabled) {
 		t.Errorf("Find() error = %v, want ErrDiscoveryDisabled", err)
 	}

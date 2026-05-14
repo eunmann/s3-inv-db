@@ -30,10 +30,17 @@ type Config struct {
 	OutputDir string // TargetLocal: where indexes are written
 	S3        S3Config
 	Count     int
-	Objects   int
-	Preset    string
-	Seed      int64
-	Logger    zerolog.Logger
+	// RunsPerInventory is how many timestamped runs to publish per
+	// inventory configuration (TargetS3 only). Each run gets its own
+	// manifest folder under <src>/<inv>/<YYYY-MM-DDTHH-MM-SSZ>/. Runs
+	// are staggered backwards in time at RunStep intervals. Default 1.
+	RunsPerInventory int
+	// RunStep is how far apart consecutive runs are spaced. Default 24h.
+	RunStep time.Duration
+	Objects int
+	Preset  string
+	Seed    int64
+	Logger  zerolog.Logger
 }
 
 // InventoryInfo describes a generated inventory.
@@ -139,6 +146,12 @@ func runS3(cfg Config, startTime time.Time) error {
 	if err := cfg.S3.Validate(); err != nil {
 		return fmt.Errorf("invalid s3 config: %w", err)
 	}
+	if cfg.RunsPerInventory <= 0 {
+		cfg.RunsPerInventory = 1
+	}
+	if cfg.RunStep <= 0 {
+		cfg.RunStep = 24 * time.Hour
+	}
 
 	ctx := context.Background()
 	client, err := newS3Client(ctx)
@@ -146,26 +159,36 @@ func runS3(cfg Config, startTime time.Time) error {
 		return fmt.Errorf("s3 client: %w", err)
 	}
 
-	// Use one run timestamp for all inventories in this seeding so the
-	// folder names line up nicely in tooling. Second-granularity so two
-	// runs in the same minute don't overwrite each other's manifests.
-	runStamp := time.Now().UTC().Truncate(time.Second)
+	// Anchor all runs to a single "now" so timestamps stagger
+	// deterministically backwards (newest = now, then now-step, etc.).
+	now := time.Now().UTC().Truncate(time.Second)
 
+	totalRuns := 0
 	for i := range cfg.Count {
 		invSeed := cfg.Seed + int64(i+1)*1000
-		info, err := UploadInventory(ctx, client, cfg, cfg.S3, i+1, invSeed, runStamp)
-		if err != nil {
-			return fmt.Errorf("upload inventory %d: %w", i+1, err)
+		for r := range cfg.RunsPerInventory {
+			runStamp := now.Add(-time.Duration(r) * cfg.RunStep)
+			// Deterministic per-(inv, run) seed so re-seeding produces
+			// the same data layout; otherwise re-runs would shuffle.
+			runSeed := invSeed + int64(r+1)
+			info, err := UploadInventory(ctx, client, cfg, cfg.S3, i+1, runSeed, runStamp)
+			if err != nil {
+				return fmt.Errorf("upload inventory %d run %d: %w", i+1, r, err)
+			}
+			totalRuns++
+			cfg.Logger.Info().
+				Str("id", info.ID).
+				Str("manifest", info.Path).
+				Str("run", runStamp.Format("2006-01-02T15-04-05Z")).
+				Int("objects", info.Objects).
+				Msg("uploaded inventory run")
 		}
-		cfg.Logger.Info().
-			Str("id", info.ID).
-			Str("manifest", info.Path).
-			Int("objects", info.Objects).
-			Msg("uploaded inventory")
 	}
 
 	cfg.Logger.Info().
-		Int("total_inventories", cfg.Count).
+		Int("inventory_configs", cfg.Count).
+		Int("runs_per_inventory", cfg.RunsPerInventory).
+		Int("total_runs", totalRuns).
 		Str("duration", time.Since(startTime).Round(time.Millisecond).String()).
 		Msg("seeding complete")
 

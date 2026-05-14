@@ -23,11 +23,11 @@ type slowBuilder struct {
 	once      sync.Once
 }
 
-func (b *slowBuilder) Build(ctx context.Context, _, _, _ string) (string, error) {
-	return b.BuildWith(ctx, "", "", "", nil)
+func (b *slowBuilder) Build(ctx context.Context, _, _, _, _ string) (string, error) {
+	return b.BuildWith(ctx, "", "", "", "", nil)
 }
 
-func (b *slowBuilder) BuildWith(ctx context.Context, _, _, _ string, _ func(string, int64, int64)) (string, error) {
+func (b *slowBuilder) BuildWith(ctx context.Context, _, _, _, _ string, _ func(string, int64, int64)) (string, error) {
 	b.once.Do(func() { b.cancelled = make(chan struct{}) })
 	select {
 	case <-time.After(b.delay):
@@ -44,14 +44,14 @@ func (*slowBuilder) Evict(string, string) error { return nil }
 // returns 202 + queued, job moves through running, ends in failed (our
 // fake builder always fails after the delay).
 func TestAsyncLifecycle_LoadSucceeds(t *testing.T) {
-	disc := s3disco.Inventory{SourceBucket: "b", InventoryID: "i", ManifestKey: "k/manifest.json"}
+	disc := s3disco.Inventory{SourceBucket: "b", InventoryID: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
 		&slowBuilder{delay: 20 * time.Millisecond},
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
-	req = chiCtxWithParams(req, "src", "b", "id", "i")
+	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	w := httptest.NewRecorder()
 	h.LoadDiscoveredRowPartial(w, req)
 	if w.Code != http.StatusAccepted {
@@ -67,14 +67,14 @@ func TestAsyncLifecycle_LoadSucceeds(t *testing.T) {
 // TestAsyncLifecycle_Cancel cancels mid-build and verifies the job
 // reaches the cancelled state.
 func TestAsyncLifecycle_Cancel(t *testing.T) {
-	disc := s3disco.Inventory{SourceBucket: "b", InventoryID: "i", ManifestKey: "k/manifest.json"}
+	disc := s3disco.Inventory{SourceBucket: "b", InventoryID: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
 		&slowBuilder{delay: 5 * time.Second}, // long enough that Cancel arrives mid-build
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
-	req = chiCtxWithParams(req, "src", "b", "id", "i")
+	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	w := httptest.NewRecorder()
 	h.LoadDiscoveredRowPartial(w, req)
 	if w.Code != http.StatusAccepted {
@@ -103,14 +103,14 @@ func TestAsyncLifecycle_Cancel(t *testing.T) {
 // after failure verifies the Retry button surfaces. Pins the UI
 // contract independent of htmx-sse (which needs a browser).
 func TestAsyncLifecycle_RowReflectsJobState(t *testing.T) {
-	disc := s3disco.Inventory{SourceBucket: "b", InventoryID: "i", ManifestKey: "k/manifest.json"}
+	disc := s3disco.Inventory{SourceBucket: "b", InventoryID: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
 		&slowBuilder{delay: 5 * time.Second},
 	)
 
 	loadReq := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
-	loadReq = chiCtxWithParams(loadReq, "src", "b", "id", "i")
+	loadReq = chiCtxWithParams(loadReq, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	lw := httptest.NewRecorder()
 	h.LoadDiscoveredRowPartial(lw, loadReq)
 
@@ -118,7 +118,7 @@ func TestAsyncLifecycle_RowReflectsJobState(t *testing.T) {
 	running := waitForJobInState(t, h.jobStore, disc.CompositeID(), jobs.StateRunning)
 
 	rowReq := httptest.NewRequest(http.MethodGet, "/partials/discovered/b/i", http.NoBody)
-	rowReq = chiCtxWithParams(rowReq, "src", "b", "id", "i")
+	rowReq = chiCtxWithParams(rowReq, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	rw := httptest.NewRecorder()
 	h.DiscoveredRowPartial(rw, rowReq)
 	if rw.Code != http.StatusOK {

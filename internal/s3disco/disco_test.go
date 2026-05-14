@@ -69,39 +69,31 @@ func TestDiscoverer_List_AgainstMinIO(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("len(List) = %d, want 2; got=%+v", len(got), got)
+	// Discovery now returns one entry PER RUN: inv-001 has two runs,
+	// inv-002 has one — total three.
+	if len(got) != 3 {
+		t.Fatalf("len(List) = %d, want 3 (2 runs of inv-001 + 1 of inv-002); got=%+v", len(got), got)
 	}
 
-	byID := map[string]Inventory{}
+	nowStamp := now.Format("2006-01-02T15-04Z")
+	earlierStamp := earlier.Format("2006-01-02T15-04Z")
+
+	// Group by (src, inv).
+	runsByInv := map[string][]string{}
 	for _, e := range got {
-		byID[e.InventoryID] = e
+		if e.SourceBucket != srcBucket {
+			t.Errorf("entry has SourceBucket = %q, want %q", e.SourceBucket, srcBucket)
+		}
+		runsByInv[e.InventoryID] = append(runsByInv[e.InventoryID], e.Run)
 	}
 
-	one, ok := byID["inv-001"]
-	if !ok {
-		t.Fatal("inv-001 missing from List")
+	if got := runsByInv["inv-001"]; len(got) != 2 {
+		t.Errorf("inv-001 runs = %v, want 2 entries", got)
+	} else if got[0] != nowStamp || got[1] != earlierStamp {
+		t.Errorf("inv-001 runs out of order: %v, want [%s, %s] (newest first)", got, nowStamp, earlierStamp)
 	}
-	wantStamp := now.Format("2006-01-02T15-04Z")
-	if one.LatestRun != wantStamp {
-		t.Errorf("inv-001 LatestRun = %q, want %q (the newer of two runs)", one.LatestRun, wantStamp)
-	}
-	if one.SourceBucket != srcBucket {
-		t.Errorf("inv-001 SourceBucket = %q, want %q", one.SourceBucket, srcBucket)
-	}
-	if one.FileFormat != "CSV" {
-		t.Errorf("inv-001 FileFormat = %q, want CSV", one.FileFormat)
-	}
-	if one.FileCount != 1 {
-		t.Errorf("inv-001 FileCount = %d, want 1", one.FileCount)
-	}
-
-	two, ok := byID["inv-002"]
-	if !ok {
-		t.Fatal("inv-002 missing from List")
-	}
-	if two.LatestRun != wantStamp {
-		t.Errorf("inv-002 LatestRun = %q, want %q", two.LatestRun, wantStamp)
+	if got := runsByInv["inv-002"]; len(got) != 1 || got[0] != nowStamp {
+		t.Errorf("inv-002 runs = %v, want [%s]", got, nowStamp)
 	}
 }
 
@@ -115,16 +107,30 @@ func TestDiscoverer_Find(t *testing.T) {
 	uploadInventoryAt(ctx, t, client, bucket, "src-a", "inv/", "inv-001", now, 50, 7)
 	d := New(client, bucket, "inv/")
 
-	got, err := d.Find(ctx, "src-a", "inv-001")
+	// Empty run = "give me the latest".
+	got, err := d.Find(ctx, "src-a", "inv-001", "")
 	if err != nil {
 		t.Fatalf("Find: %v", err)
 	}
-	if got.LatestRun != now.Format("2006-01-02T15-04Z") {
-		t.Errorf("LatestRun = %q, want %q", got.LatestRun, now.Format("2006-01-02T15-04Z"))
+	want := now.Format("2006-01-02T15-04Z")
+	if got.Run != want {
+		t.Errorf("Run = %q, want %q", got.Run, want)
 	}
 
-	if _, err := d.Find(ctx, "", "inv-001"); err == nil {
+	// Exact-run lookup also works.
+	got, err = d.Find(ctx, "src-a", "inv-001", want)
+	if err != nil {
+		t.Fatalf("Find exact run: %v", err)
+	}
+	if got.Run != want {
+		t.Errorf("exact Run = %q, want %q", got.Run, want)
+	}
+
+	if _, err := d.Find(ctx, "", "inv-001", ""); err == nil {
 		t.Error("Find with empty src should error")
+	}
+	if _, err := d.Find(ctx, "src-a", "inv-001", "2099-01-01T00-00Z"); err == nil {
+		t.Error("Find with unknown run should error")
 	}
 }
 

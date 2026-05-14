@@ -108,6 +108,7 @@ services:
       - --s3-bucket=s3-inv
       - --s3-prefix=inventory-data/
       - --count=${S3INV_SEED_COUNT:-3}
+      - --runs-per-inventory=${S3INV_SEED_RUNS:-4}
       - --objects=${S3INV_SEED_OBJECTS:-5000}
       - --preset=${S3INV_SEED_PRESET:-realistic}
       - --pretty-logs

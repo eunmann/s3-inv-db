@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
@@ -23,8 +24,10 @@ func run() error {
 	s3Bucket := flag.String("s3-bucket", "", "S3 destination bucket (target=s3)")
 	s3Prefix := flag.String("s3-prefix", "inventory-data/", "key prefix under bucket; must end with / (target=s3)")
 	s3SrcBucket := flag.String("s3-src-bucket", "synthetic-prod", "simulated source bucket name written into the manifest (target=s3)")
-	count := flag.Int("count", 3, "number of inventories to generate")
-	objects := flag.Int("objects", 10000, "objects per inventory")
+	count := flag.Int("count", 3, "number of inventory configurations to generate")
+	runs := flag.Int("runs-per-inventory", 1, "number of timestamped runs per inventory (target=s3)")
+	runStep := flag.Duration("run-step", 24*time.Hour, "spacing between consecutive runs (target=s3)")
+	objects := flag.Int("objects", 10000, "objects per inventory run")
 	preset := flag.String("preset", "realistic", "config preset (small/medium/large/realistic)")
 	seed := flag.Int64("seed", 0, "random seed (0 = use default seed)")
 	verbose := flag.Bool("verbose", false, "enable debug logging")
@@ -42,11 +45,13 @@ func run() error {
 			Prefix:    *s3Prefix,
 			SrcBucket: *s3SrcBucket,
 		},
-		Count:   *count,
-		Objects: *objects,
-		Preset:  *preset,
-		Seed:    *seed,
-		Logger:  logger,
+		Count:            *count,
+		RunsPerInventory: *runs,
+		RunStep:          *runStep,
+		Objects:          *objects,
+		Preset:           *preset,
+		Seed:             *seed,
+		Logger:           logger,
 	}
 
 	if err := seeder.Run(cfg); err != nil {

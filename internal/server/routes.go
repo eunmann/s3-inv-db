@@ -71,9 +71,9 @@ func (s *Server) setupRoutes() {
 	// every route in here can assume Enabled() == true.
 	r.Group(func(r chi.Router) {
 		r.Use(requireDiscoveryMiddleware(s.handlers.DiscoveryEnabled))
-		r.Get("/partials/discovered/{src}/{id}", s.handlers.DiscoveredRowPartial)
-		r.Post("/partials/discovered/{src}/{id}/load", s.handlers.LoadDiscoveredRowPartial)
-		r.Post("/partials/discovered/{src}/{id}/unload", s.handlers.UnloadDiscoveredRowPartial)
+		r.Get("/partials/discovered/{src}/{id}/{run}", s.handlers.DiscoveredRowPartial)
+		r.Post("/partials/discovered/{src}/{id}/{run}/load", s.handlers.LoadDiscoveredRowPartial)
+		r.Post("/partials/discovered/{src}/{id}/{run}/unload", s.handlers.UnloadDiscoveredRowPartial)
 	})
 
 	// API routes

@@ -55,16 +55,17 @@ func (h *Handlers) DeleteInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Request) {
 	src := chi.URLParam(r, "src")
 	id := chi.URLParam(r, "id")
+	run := chi.URLParam(r, "run")
 	logger := zerolog.Ctx(r.Context())
 
-	disc, err := h.discovery.Find(r.Context(), src, id)
+	disc, err := h.discovery.Find(r.Context(), src, id, run)
 	if err != nil {
-		logger.Error().Err(err).Str("src", src).Str("id", id).Msg("find discovered inventory")
+		logger.Error().Err(err).Str("src", src).Str("id", id).Str("run", run).Msg("find discovered inventory")
 		http.Error(w, "failed to find inventory", http.StatusBadGateway)
 		return
 	}
-	if disc.ManifestKey == "" {
-		http.Error(w, "no completed runs for this inventory", http.StatusNotFound)
+	if disc.ManifestKey == "" || disc.Run == "" {
+		http.Error(w, "no completed run for this inventory", http.StatusNotFound)
 		return
 	}
 	if h.jobMgr == nil {
@@ -120,16 +121,17 @@ func (h *Handlers) CancelJob(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// UnloadDiscoveredRowPartial unloads a discovered inventory and returns its row.
+// UnloadDiscoveredRowPartial unloads a discovered inventory run and returns its row.
 func (h *Handlers) UnloadDiscoveredRowPartial(w http.ResponseWriter, r *http.Request) {
 	src := chi.URLParam(r, "src")
 	id := chi.URLParam(r, "id")
-	composite := src + "/" + id
+	run := chi.URLParam(r, "run")
+	composite := src + "/" + id + "/" + run
 	if err := h.manager.Unload(composite); err != nil {
 		respondManagerErrorHTML(w, r, err, "unload inventory")
 		return
 	}
-	h.renderDiscoveredRow(w, r, src, id)
+	h.renderDiscoveredRow(w, r, src, id, run)
 }
 
 // DiscoveredRowPartial returns the current state of one discovered row
@@ -137,7 +139,8 @@ func (h *Handlers) UnloadDiscoveredRowPartial(w http.ResponseWriter, r *http.Req
 func (h *Handlers) DiscoveredRowPartial(w http.ResponseWriter, r *http.Request) {
 	src := chi.URLParam(r, "src")
 	id := chi.URLParam(r, "id")
-	h.renderDiscoveredRow(w, r, src, id)
+	run := chi.URLParam(r, "run")
+	h.renderDiscoveredRow(w, r, src, id, run)
 }
 
 // renderInventoryRow looks up the inventory in the manager and writes the
@@ -157,11 +160,11 @@ func (h *Handlers) renderInventoryRow(w http.ResponseWriter, r *http.Request, id
 
 // renderDiscoveredRow re-fetches the discovery entry, merges in current
 // manager state, and renders the discovered_row.html partial.
-func (h *Handlers) renderDiscoveredRow(w http.ResponseWriter, r *http.Request, src, id string) {
+func (h *Handlers) renderDiscoveredRow(w http.ResponseWriter, r *http.Request, src, id, run string) {
 	logger := zerolog.Ctx(r.Context())
-	disc, err := h.discovery.Find(r.Context(), src, id)
+	disc, err := h.discovery.Find(r.Context(), src, id, run)
 	if err != nil {
-		logger.Error().Err(err).Str("src", src).Str("id", id).Msg("find discovered inventory for row render")
+		logger.Error().Err(err).Str("src", src).Str("id", id).Str("run", run).Msg("find discovered inventory for row render")
 		http.Error(w, "failed to render row", http.StatusBadGateway)
 		return
 	}
