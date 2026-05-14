@@ -3,6 +3,7 @@ package loader
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -72,5 +73,84 @@ func TestBuildWith_NilCallbackIsSafe(t *testing.T) {
 	_, err := l.BuildWith(context.Background(), "", "inv", "r", "s3://b/m", nil)
 	if !errors.Is(err, errEmptyID) {
 		t.Errorf("err = %v, want errEmptyID", err)
+	}
+}
+
+func TestRemoveCache_RejectsEmptyArgs(t *testing.T) {
+	l := New(t.TempDir(), nil)
+	cases := []struct {
+		name         string
+		src, id, run string
+	}{
+		{"empty src", "", "inv", "r"},
+		{"empty id", "buck", "", "r"},
+		{"empty run", "buck", "inv", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := l.RemoveCache(c.src, c.id, c.run); !errors.Is(err, errEmptyID) {
+				t.Errorf("err = %v, want errEmptyID", err)
+			}
+		})
+	}
+}
+
+func TestRemoveCache_MissingDirIsNoOp(t *testing.T) {
+	// "Unload before any Load" hits this path; treating ENOENT as success
+	// keeps callers from having to existence-check.
+	l := New(t.TempDir(), nil)
+	if err := l.RemoveCache("buck", "inv", "never-built"); err != nil {
+		t.Errorf("RemoveCache(missing) = %v, want nil", err)
+	}
+}
+
+func TestRemoveCache_DeletesExistingDir(t *testing.T) {
+	root := t.TempDir()
+	l := New(root, nil)
+	dir := l.CacheDirFor("buck", "inv", "r")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "data.bin"), []byte("xxx"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := l.RemoveCache("buck", "inv", "r"); err != nil {
+		t.Fatalf("RemoveCache: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("dir still exists after RemoveCache: stat err = %v", err)
+	}
+}
+
+func TestCacheSizeBytes_MissingDirReturnsZero(t *testing.T) {
+	l := New(t.TempDir(), nil)
+	size, err := l.CacheSizeBytes("buck", "inv", "never-built")
+	if err != nil {
+		t.Fatalf("CacheSizeBytes: %v", err)
+	}
+	if size != 0 {
+		t.Errorf("size = %d, want 0", size)
+	}
+}
+
+func TestCacheSizeBytes_SumsAllFiles(t *testing.T) {
+	root := t.TempDir()
+	l := New(root, nil)
+	dir := l.CacheDirFor("buck", "inv", "r")
+	if err := os.MkdirAll(filepath.Join(dir, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.bin"), make([]byte, 100), 0o644); err != nil {
+		t.Fatalf("write a: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nested", "b.bin"), make([]byte, 250), 0o644); err != nil {
+		t.Fatalf("write b: %v", err)
+	}
+	size, err := l.CacheSizeBytes("buck", "inv", "r")
+	if err != nil {
+		t.Fatalf("CacheSizeBytes: %v", err)
+	}
+	if size != 350 {
+		t.Errorf("size = %d, want 350 (100 + 250)", size)
 	}
 }
