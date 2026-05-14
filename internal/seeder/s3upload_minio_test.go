@@ -8,12 +8,12 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/eunmann/s3-inv-db/internal/miniotest"
 	"github.com/rs/zerolog"
 )
 
@@ -29,32 +29,9 @@ func newMinIOS3Client(t *testing.T) *s3.Client {
 	return c
 }
 
-func newSeederBucket(t *testing.T, c *s3.Client) string {
-	t.Helper()
-	name := "t-seeder-" + strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000"), ".", "")
-	if _, err := c.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: aws.String(name)}); err != nil {
-		t.Fatalf("CreateBucket %s: %v", name, err)
-	}
-	t.Cleanup(func() {
-		ctx := context.Background()
-		pages := s3.NewListObjectsV2Paginator(c, &s3.ListObjectsV2Input{Bucket: aws.String(name)})
-		for pages.HasMorePages() {
-			page, err := pages.NextPage(ctx)
-			if err != nil {
-				return
-			}
-			for _, obj := range page.Contents {
-				_, _ = c.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(name), Key: obj.Key})
-			}
-		}
-		_, _ = c.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(name)})
-	})
-	return name
-}
-
 func TestUploadInventory_RoundTrip(t *testing.T) {
 	client := newMinIOS3Client(t)
-	bucket := newSeederBucket(t, client)
+	bucket := miniotest.Bucket(t, client)
 	srcBucket := "synthetic-prod"
 	prefix := "inventory-data/"
 	stamp := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
@@ -79,7 +56,6 @@ func TestUploadInventory_RoundTrip(t *testing.T) {
 
 	manifestKey := "inventory-data/synthetic-prod/inv-001/2026-05-14T12-00Z/manifest.json"
 	checksumKey := "inventory-data/synthetic-prod/inv-001/2026-05-14T12-00Z/manifest.checksum"
-
 	for _, key := range []string{manifestKey, checksumKey} {
 		_, err := client.HeadObject(context.Background(), &s3.HeadObjectInput{
 			Bucket: aws.String(bucket), Key: aws.String(key),
@@ -105,22 +81,19 @@ func TestUploadInventory_RoundTrip(t *testing.T) {
 		t.Fatalf("manifest file entry not a map: %v", files[0])
 	}
 	dataKey, _ := dataEntry["key"].(string)
-
-	got := getCSVGzObjectCount(t, client, bucket, dataKey)
-	if got != objects {
+	if got := getCSVGzObjectCount(t, client, bucket, dataKey); got != objects {
 		t.Errorf("data file row count = %d, want %d", got, objects)
 	}
 }
 
 func TestUploadInventory_DataFileURLPlaced(t *testing.T) {
 	client := newMinIOS3Client(t)
-	bucket := newSeederBucket(t, client)
-	srcBucket := "src"
+	bucket := miniotest.Bucket(t, client)
 	stamp := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	_, err := UploadInventory(context.Background(), client, Config{
 		Target: TargetS3, Objects: 10, Preset: "small", Seed: 1,
 		Logger: zerolog.Nop(),
-	}, S3Config{Bucket: bucket, SrcBucket: srcBucket}, 1, 1, stamp)
+	}, S3Config{Bucket: bucket, SrcBucket: "src"}, 1, 1, stamp)
 	if err != nil {
 		t.Fatalf("UploadInventory: %v", err)
 	}

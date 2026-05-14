@@ -252,6 +252,47 @@ large/file3.txt,500
 	}
 }
 
+func TestIterator_EmptyOnOutOfBoundsOrNegativeDepth(t *testing.T) {
+	outDir := setupTestIndex(t)
+	csv := `Key,Size
+a/file.txt,100
+`
+	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	idx, err := Open(outDir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer idx.Close()
+
+	cases := []struct {
+		name string
+		pos  uint64
+		rel  int
+	}{
+		{"out of bounds", 9_999_999, 1},
+		{"negative depth", 0, -1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			it, err := idx.NewDescendantIterator(tc.pos, tc.rel)
+			if err != nil {
+				t.Fatalf("NewDescendantIterator: %v", err)
+			}
+			if it.Next() {
+				t.Error("Next() returned true on empty iterator")
+			}
+			if got := it.Pos(); got != 0 {
+				t.Errorf("Pos() = %d, want 0", got)
+			}
+			if got := it.Depth(); got != 0 {
+				t.Errorf("Depth() = %d, want 0", got)
+			}
+		})
+	}
+}
+
 func TestIterator(t *testing.T) {
 	outDir := setupTestIndex(t)
 

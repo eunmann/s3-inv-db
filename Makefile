@@ -70,7 +70,7 @@ cover: $(COVER_OUT)
 
 $(COVER_OUT):
 	@$(COMPOSE) --profile test run --rm test-runner \
-	    go test -covermode=atomic -coverprofile=$(COVER_OUT) ./...; \
+	    go test -covermode=atomic -coverpkg=./... -coverprofile=$(COVER_OUT) ./...; \
 	rc=$$?; \
 	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
 	exit $$rc

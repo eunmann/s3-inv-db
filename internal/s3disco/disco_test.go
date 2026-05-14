@@ -2,56 +2,19 @@ package s3disco
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/eunmann/s3-inv-db/internal/miniotest"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/rs/zerolog"
 )
 
-// minIOFromEnv builds an S3 client pointing at MinIO. Tests are
-// expected to run via `make test`, which sets AWS_ENDPOINT_URL_S3.
-func minIOFromEnv(t *testing.T) *s3.Client {
-	t.Helper()
-	endpoint := os.Getenv("AWS_ENDPOINT_URL_S3")
-	if endpoint == "" {
-		t.Fatal("AWS_ENDPOINT_URL_S3 not set — run `make test`")
-	}
-	cfg, err := config.LoadDefaultConfig(context.Background(),
-		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
-			envOr("AWS_ACCESS_KEY_ID", "minioadmin"),
-			envOr("AWS_SECRET_ACCESS_KEY", "minioadmin"),
-			"",
-		)),
-	)
-	if err != nil {
-		t.Fatalf("aws config: %v", err)
-	}
-	return s3.NewFromConfig(cfg, func(o *s3.Options) {
-		o.UsePathStyle = true
-		o.BaseEndpoint = aws.String(endpoint)
-	})
-}
-
-func envOr(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
-}
-
 func TestDiscoverer_List_AgainstMinIO(t *testing.T) {
-	client := minIOFromEnv(t)
+	client := miniotest.RawClient(t)
 	ctx := context.Background()
-
-	// Each test gets its own bucket so it can't see fixtures from other runs.
-	bucket := newTestBucket(t, client)
+	bucket := miniotest.Bucket(t, client)
 
 	// Upload two inventories with two timestamp folders each, via the
 	// seeder package so we exercise the same code path the CLI uses.
@@ -98,9 +61,9 @@ func TestDiscoverer_List_AgainstMinIO(t *testing.T) {
 }
 
 func TestDiscoverer_Find(t *testing.T) {
-	client := minIOFromEnv(t)
+	client := miniotest.RawClient(t)
 	ctx := context.Background()
-	bucket := newTestBucket(t, client)
+	bucket := miniotest.Bucket(t, client)
 
 	now := time.Now().UTC()
 	// The seeder always names inventories inv-NNN where NNN = index.
@@ -135,9 +98,9 @@ func TestDiscoverer_Find(t *testing.T) {
 }
 
 func TestDiscoverer_EmptyBucket(t *testing.T) {
-	client := minIOFromEnv(t)
+	client := miniotest.RawClient(t)
 	ctx := context.Background()
-	bucket := newTestBucket(t, client)
+	bucket := miniotest.Bucket(t, client)
 
 	d := New(client, bucket, "inventory-data/")
 	got, err := d.List(ctx)
@@ -184,51 +147,6 @@ func indexFromID(t *testing.T, id string) int {
 	}
 	t.Fatalf("unsupported test inv-id %q", id)
 	return 0
-}
-
-// newTestBucket creates a unique bucket and registers cleanup. Bucket
-// names must be lowercase, 3-63 chars; we use a timestamp + random suffix.
-func newTestBucket(t *testing.T, client *s3.Client) string {
-	t.Helper()
-	ctx := context.Background()
-	name := "t-" + time.Now().Format("20060102150405.000000")
-	// strip the dot from the fractional seconds — bucket names disallow it
-	clean := make([]byte, 0, len(name))
-	for _, b := range []byte(name) {
-		if b == '.' {
-			continue
-		}
-		clean = append(clean, b)
-	}
-	bucket := string(clean)
-	if _, err := client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
-		t.Fatalf("create bucket %s: %v", bucket, err)
-	}
-	t.Cleanup(func() {
-		emptyAndDeleteBucket(t, client, bucket)
-	})
-	return bucket
-}
-
-func emptyAndDeleteBucket(t *testing.T, client *s3.Client, bucket string) {
-	t.Helper()
-	ctx := context.Background()
-	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{Bucket: aws.String(bucket)})
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
-		if err != nil {
-			t.Logf("list for cleanup: %v", err)
-			return
-		}
-		for _, obj := range page.Contents {
-			if _, err := client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(bucket), Key: obj.Key}); err != nil {
-				t.Logf("delete %s: %v", aws.ToString(obj.Key), err)
-			}
-		}
-	}
-	if _, err := client.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucket)}); err != nil {
-		t.Logf("delete bucket: %v", err)
-	}
 }
 
 func TestRunFolderRE(t *testing.T) {

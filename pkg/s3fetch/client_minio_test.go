@@ -1,66 +1,23 @@
-package s3fetch
+package s3fetch_test
 
 import (
 	"bytes"
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/eunmann/s3-inv-db/internal/miniotest"
+	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
 
-func newMinIOClient(t *testing.T) *Client {
+func putObject(t *testing.T, c *s3.Client, bucket, key string, body []byte) {
 	t.Helper()
-	if os.Getenv("AWS_ENDPOINT_URL_S3") == "" {
-		t.Fatal("AWS_ENDPOINT_URL_S3 not set — run `make test`")
-	}
-	cfg, err := config.LoadDefaultConfig(context.Background(),
-		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("minioadmin", "minioadmin", "")),
-	)
-	if err != nil {
-		t.Fatalf("aws config: %v", err)
-	}
-	return NewClientWithConfig(cfg)
-}
-
-func newTestBucket(t *testing.T, c *Client) string {
-	t.Helper()
-	ctx := context.Background()
-	name := "t-s3fetch-" + strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000"), ".", "")
-	if _, err := c.Raw().CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(name)}); err != nil {
-		t.Fatalf("CreateBucket %s: %v", name, err)
-	}
-	t.Cleanup(func() { emptyBucket(t, c, name) })
-	return name
-}
-
-func emptyBucket(t *testing.T, c *Client, bucket string) {
-	t.Helper()
-	ctx := context.Background()
-	pages := s3.NewListObjectsV2Paginator(c.Raw(), &s3.ListObjectsV2Input{Bucket: aws.String(bucket)})
-	for pages.HasMorePages() {
-		page, err := pages.NextPage(ctx)
-		if err != nil {
-			t.Logf("list for cleanup: %v", err)
-			return
-		}
-		for _, obj := range page.Contents {
-			_, _ = c.Raw().DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(bucket), Key: obj.Key})
-		}
-	}
-	_, _ = c.Raw().DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucket)})
-}
-
-func putObject(t *testing.T, c *Client, bucket, key string, body []byte) {
-	t.Helper()
-	_, err := c.Raw().PutObject(context.Background(), &s3.PutObjectInput{
+	_, err := c.PutObject(context.Background(), &s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 		Body:   bytes.NewReader(body),
@@ -80,9 +37,9 @@ const validManifestJSON = `{
 }`
 
 func TestFetchManifest_RoundTrip(t *testing.T) {
-	c := newMinIOClient(t)
-	bucket := newTestBucket(t, c)
-	putObject(t, c, bucket, "manifest.json", []byte(validManifestJSON))
+	c := miniotest.FetchClient(t)
+	bucket := miniotest.Bucket(t, c.Raw())
+	putObject(t, c.Raw(), bucket, "manifest.json", []byte(validManifestJSON))
 
 	got, err := c.FetchManifest(context.Background(), bucket, "manifest.json")
 	if err != nil {
@@ -100,8 +57,8 @@ func TestFetchManifest_RoundTrip(t *testing.T) {
 }
 
 func TestFetchManifest_MissingObject(t *testing.T) {
-	c := newMinIOClient(t)
-	bucket := newTestBucket(t, c)
+	c := miniotest.FetchClient(t)
+	bucket := miniotest.Bucket(t, c.Raw())
 
 	_, err := c.FetchManifest(context.Background(), bucket, "absent.json")
 	if err == nil {
@@ -113,9 +70,9 @@ func TestFetchManifest_MissingObject(t *testing.T) {
 }
 
 func TestFetchManifest_MalformedJSON(t *testing.T) {
-	c := newMinIOClient(t)
-	bucket := newTestBucket(t, c)
-	putObject(t, c, bucket, "manifest.json", []byte("not valid json"))
+	c := miniotest.FetchClient(t)
+	bucket := miniotest.Bucket(t, c.Raw())
+	putObject(t, c.Raw(), bucket, "manifest.json", []byte("not valid json"))
 
 	_, err := c.FetchManifest(context.Background(), bucket, "manifest.json")
 	if err == nil {
@@ -124,10 +81,10 @@ func TestFetchManifest_MalformedJSON(t *testing.T) {
 }
 
 func TestStreamObject_RoundTrip(t *testing.T) {
-	c := newMinIOClient(t)
-	bucket := newTestBucket(t, c)
+	c := miniotest.FetchClient(t)
+	bucket := miniotest.Bucket(t, c.Raw())
 	body := []byte("hello s3fetch")
-	putObject(t, c, bucket, "blob.bin", body)
+	putObject(t, c.Raw(), bucket, "blob.bin", body)
 
 	r, err := c.StreamObject(context.Background(), bucket, "blob.bin")
 	if err != nil {
@@ -144,8 +101,8 @@ func TestStreamObject_RoundTrip(t *testing.T) {
 }
 
 func TestStreamObject_Missing(t *testing.T) {
-	c := newMinIOClient(t)
-	bucket := newTestBucket(t, c)
+	c := miniotest.FetchClient(t)
+	bucket := miniotest.Bucket(t, c.Raw())
 
 	_, err := c.StreamObject(context.Background(), bucket, "absent.bin")
 	if err == nil {
@@ -154,10 +111,10 @@ func TestStreamObject_Missing(t *testing.T) {
 }
 
 func TestDownloadObject_RoundTrip(t *testing.T) {
-	c := newMinIOClient(t)
-	bucket := newTestBucket(t, c)
+	c := miniotest.FetchClient(t)
+	bucket := miniotest.Bucket(t, c.Raw())
 	body := bytes.Repeat([]byte("xyzzy"), 4096)
-	putObject(t, c, bucket, "blob.bin", body)
+	putObject(t, c.Raw(), bucket, "blob.bin", body)
 
 	r, result, err := c.DownloadObject(context.Background(), bucket, "blob.bin")
 	if err != nil {
@@ -180,8 +137,8 @@ func TestDownloadObject_RoundTrip(t *testing.T) {
 }
 
 func TestDownloadObject_Missing(t *testing.T) {
-	c := newMinIOClient(t)
-	bucket := newTestBucket(t, c)
+	c := miniotest.FetchClient(t)
+	bucket := miniotest.Bucket(t, c.Raw())
 
 	_, _, err := c.DownloadObject(context.Background(), bucket, "absent.bin")
 	if err == nil {
@@ -189,16 +146,64 @@ func TestDownloadObject_Missing(t *testing.T) {
 	}
 }
 
+func TestDownloadToFile_RoundTrip(t *testing.T) {
+	c := miniotest.FetchClient(t)
+	bucket := miniotest.Bucket(t, c.Raw())
+	body := bytes.Repeat([]byte("payload-"), 2048)
+	putObject(t, c.Raw(), bucket, "blob.bin", body)
+
+	dest := filepath.Join(t.TempDir(), "out.bin")
+	d := s3fetch.NewDownloader(c.Raw(), s3fetch.DefaultDownloaderConfig())
+	result, err := d.DownloadToFile(context.Background(), bucket, "blob.bin", dest)
+	if err != nil {
+		t.Fatalf("DownloadToFile: %v", err)
+	}
+	if result.BytesDownloaded != int64(len(body)) {
+		t.Errorf("BytesDownloaded = %d, want %d", result.BytesDownloaded, len(body))
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read dest: %v", err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Errorf("dest contents differ; len=%d want=%d", len(got), len(body))
+	}
+}
+
+func TestDownloadToFile_MissingObjectRemovesPartial(t *testing.T) {
+	c := miniotest.FetchClient(t)
+	bucket := miniotest.Bucket(t, c.Raw())
+	dest := filepath.Join(t.TempDir(), "out.bin")
+
+	d := s3fetch.NewDownloader(c.Raw(), s3fetch.DefaultDownloaderConfig())
+	_, err := d.DownloadToFile(context.Background(), bucket, "absent.bin", dest)
+	if err == nil {
+		t.Fatal("DownloadToFile on missing object returned nil error")
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Errorf("dest file present after failed download: stat err = %v", statErr)
+	}
+}
+
+func TestDownloader_Config(t *testing.T) {
+	c := miniotest.FetchClient(t)
+	want := s3fetch.DownloaderConfig{Concurrency: 7, PartSize: 1024, BufferPoolSize: 14}
+	d := s3fetch.NewDownloader(c.Raw(), want)
+	if got := d.Config(); got != want {
+		t.Errorf("Config = %+v, want %+v", got, want)
+	}
+}
+
 func TestNewClient_ReadsEnvEndpoint(t *testing.T) {
-	c, err := NewClient(context.Background())
+	c, err := s3fetch.NewClient(context.Background())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 	if c.Raw() == nil {
 		t.Fatal("Raw() returned nil")
 	}
-	bucket := newTestBucket(t, c)
-	putObject(t, c, bucket, "manifest.json", []byte(validManifestJSON))
+	bucket := miniotest.Bucket(t, c.Raw())
+	putObject(t, c.Raw(), bucket, "manifest.json", []byte(validManifestJSON))
 	if _, err := c.FetchManifest(context.Background(), bucket, "manifest.json"); err != nil {
 		t.Errorf("env-configured client failed FetchManifest: %v", err)
 	}
