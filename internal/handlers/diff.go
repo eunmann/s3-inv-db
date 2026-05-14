@@ -66,8 +66,11 @@ type DiffLevelView struct {
 	Self DiffSelfView
 
 	Children      []DiffChildView
+	TotalChildren int // children before pagination, after hide-unchanged filter
 	Status        DiffStatusCounts
 	HideUnchanged bool // toggle state for the template
+	Pagination    BrowsePagination
+	NotFound      bool // prefix missing on both sides — empty state
 }
 
 // DiffStatusCounts summarises the change set at this prefix.
@@ -93,8 +96,7 @@ type DiffSelfView struct {
 // DiffChildView is one row in the children table.
 type DiffChildView struct {
 	Segment, Prefix string
-	Status          string // human label
-	StatusClass     string // Tailwind classes
+	Status          string // human label — template runs diffStatusClass on it
 	HasChildren     bool
 
 	ObjectsBeforeH, ObjectsAfterH, ObjectsDeltaH, ObjectsPct string
@@ -121,15 +123,16 @@ func (h *Handlers) DiffPage(w http.ResponseWriter, r *http.Request) {
 	to := q.Get("to")
 	prefix := q.Get("prefix")
 	hideUnchanged := q.Get("show_unchanged") != "true"
+	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
 
 	if wantsHTMXPartial(r) {
-		h.renderDiffLevelPartial(w, r, from, to, prefix, hideUnchanged)
+		h.renderDiffLevelPartial(w, r, from, to, prefix, hideUnchanged, page, pageSize)
 		return
 	}
-	h.renderDiffFullPage(w, r, from, to, prefix, hideUnchanged)
+	h.renderDiffFullPage(w, r, from, to, prefix, hideUnchanged, page, pageSize)
 }
 
-func (h *Handlers) renderDiffFullPage(w http.ResponseWriter, r *http.Request, from, to, prefix string, hideUnchanged bool) {
+func (h *Handlers) renderDiffFullPage(w http.ResponseWriter, r *http.Request, from, to, prefix string, hideUnchanged bool, page, pageSize int) {
 	data := DiffPageData{
 		Title:       "Compare runs",
 		Picker:      buildDiffPicker(h.manager.List()),
@@ -147,7 +150,7 @@ func (h *Handlers) renderDiffFullPage(w http.ResponseWriter, r *http.Request, fr
 	default:
 		data.ConfigLabel, data.FromRun = describeRun(from)
 		_, data.ToRun = describeRun(to)
-		level, err := h.computeDiffLevel(r.Context(), from, to, prefix, hideUnchanged)
+		level, err := h.computeDiffLevel(r.Context(), from, to, prefix, hideUnchanged, page, pageSize)
 		switch {
 		case errors.Is(err, inventory.ErrNotFound):
 			data.Error = "One of the runs is no longer registered. Refresh the Inventories page."
@@ -175,7 +178,7 @@ func (h *Handlers) renderDiffFullPage(w http.ResponseWriter, r *http.Request, fr
 	}
 }
 
-func (h *Handlers) renderDiffLevelPartial(w http.ResponseWriter, r *http.Request, from, to, prefix string, hideUnchanged bool) {
+func (h *Handlers) renderDiffLevelPartial(w http.ResponseWriter, r *http.Request, from, to, prefix string, hideUnchanged bool, page, pageSize int) {
 	if from == "" || to == "" {
 		http.Error(w, "from and to are required", http.StatusBadRequest)
 		return
@@ -184,7 +187,7 @@ func (h *Handlers) renderDiffLevelPartial(w http.ResponseWriter, r *http.Request
 		http.Error(w, "both runs must belong to the same inventory configuration", http.StatusBadRequest)
 		return
 	}
-	level, err := h.computeDiffLevel(r.Context(), from, to, prefix, hideUnchanged)
+	level, err := h.computeDiffLevel(r.Context(), from, to, prefix, hideUnchanged, page, pageSize)
 	if err != nil {
 		switch {
 		case errors.Is(err, inventory.ErrNotFound):
@@ -212,11 +215,14 @@ func (h *Handlers) renderDiffLevelPartial(w http.ResponseWriter, r *http.Request
 }
 
 // computeDiffLevel borrows both indexes and assembles the rendered view
-// with cost deltas, signs, and human-formatted numbers.
-func (h *Handlers) computeDiffLevel(_ context.Context, from, to, prefix string, hideUnchanged bool) (*DiffLevelView, error) {
+// with cost deltas, signs, and human-formatted numbers. Filters, sorts,
+// and paginates the children before returning so the caller doesn't
+// have to.
+func (h *Handlers) computeDiffLevel(_ context.Context, from, to, prefix string, hideUnchanged bool, page, pageSize int) (*DiffLevelView, error) {
 	var view DiffLevelView
 	err := h.manager.WithTwoIndexes(from, to, func(a, b *indexread.Index) error {
 		data := inventory.DiffLevel(a, b, prefix)
+		view.NotFound = data.Self.NotFoundInA && data.Self.NotFoundInB
 		view.Self = h.buildDiffSelfView(data.Self)
 		view.Children = make([]DiffChildView, 0, len(data.Children))
 		for i := range data.Children {
@@ -255,6 +261,14 @@ func (h *Handlers) computeDiffLevel(_ context.Context, from, to, prefix string, 
 		}
 		return view.Children[i].Segment < view.Children[j].Segment
 	})
+	view.TotalChildren = len(view.Children)
+	view.Pagination = inventory.Paginate(view.TotalChildren, page, pageSize)
+	from1, to1 := view.Pagination.FirstRow, view.Pagination.LastRow
+	if from1 > 0 {
+		view.Children = view.Children[from1-1 : to1]
+	} else {
+		view.Children = nil
+	}
 	return &view, nil
 }
 
@@ -284,7 +298,6 @@ func (h *Handlers) buildDiffChildView(c *inventory.DiffChild) DiffChildView {
 		Segment:        c.Segment,
 		Prefix:         c.Prefix,
 		Status:         c.Status.String(),
-		StatusClass:    statusClass(c.Status),
 		HasChildren:    c.HasChildren,
 		ObjectsBeforeH: numericLabel(c.Objects.Before, c.Status == inventory.DiffAdded, humanfmt.CountUint64),
 		ObjectsAfterH:  numericLabel(c.Objects.After, c.Status == inventory.DiffRemoved, humanfmt.CountUint64),
@@ -354,21 +367,6 @@ func pctChange(before, after uint64) string {
 		return fmt.Sprintf("+%.0f%%", pct)
 	}
 	return fmt.Sprintf("%.0f%%", pct)
-}
-
-// statusClass returns the Tailwind classes for the status pill. Mirrors
-// the colour palette of stateClass elsewhere in the UI.
-func statusClass(s inventory.DiffStatus) string {
-	switch s {
-	case inventory.DiffAdded:
-		return "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
-	case inventory.DiffRemoved:
-		return "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300"
-	case inventory.DiffChanged:
-		return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300"
-	default:
-		return "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300"
-	}
 }
 
 func absInt64(v int64) uint64 {

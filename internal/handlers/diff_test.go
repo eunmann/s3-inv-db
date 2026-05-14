@@ -96,6 +96,23 @@ func TestBuildDiffPicker_OnlyLoadedAndThreePart(t *testing.T) {
 	}
 }
 
+func TestDiffPage_PrefixInputPresentOnFirstVisit(t *testing.T) {
+	f := newTestFixture(t)
+	req := httptest.NewRequest(http.MethodGet, "/diff", http.NoBody)
+	w := httptest.NewRecorder()
+	f.h.DiffPage(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `id="prefix"`) {
+		t.Errorf("body missing prefix input")
+	}
+	if !strings.Contains(body, `name="prefix"`) {
+		t.Errorf("body missing prefix name=")
+	}
+}
+
 func TestSameConfig(t *testing.T) {
 	cases := []struct {
 		a, b string

@@ -19,6 +19,26 @@
         {{end}}
     </nav>
 
+    {{if .Level.NotFound}}
+    <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-900/50 rounded-md p-6 text-center">
+        <h3 class="text-base font-medium text-yellow-900 dark:text-yellow-200">Prefix not present in either run</h3>
+        <p class="mt-2 text-sm text-yellow-800 dark:text-yellow-300">
+            <code class="bg-yellow-100 dark:bg-yellow-900/50 px-1.5 py-0.5 rounded">{{if .Prefix}}{{.Prefix}}{{else}}(root){{end}}</code>
+            doesn't exist in either the From or To run. Try a shorter prefix or jump back to a parent.
+        </p>
+        <div class="mt-4">
+            <button type="button"
+                hx-get="/diff"
+                {{hxVals "from" $from "to" $to "prefix" ""}}
+                hx-target="#diff-target"
+                hx-push-url="true"
+                class="inline-flex items-center px-3 py-1.5 border border-yellow-300 dark:border-yellow-800 rounded-md bg-white dark:bg-gray-800 text-sm font-medium text-yellow-800 dark:text-yellow-300 hover:bg-yellow-50 dark:hover:bg-gray-700">
+                Back to root
+            </button>
+        </div>
+    </div>
+    {{else}}
+
     <!-- Self-stats card -->
     <section class="bg-white dark:bg-gray-800 shadow sm:rounded-lg">
         <div class="px-4 py-5 sm:px-6">
@@ -58,25 +78,55 @@
             <div>
                 <h3 class="text-md font-medium text-gray-900 dark:text-gray-100">Children</h3>
                 <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    {{if .Level.TotalChildren}}Showing {{.Level.Pagination.FirstRow}}–{{.Level.Pagination.LastRow}} of {{.Level.TotalChildren}}{{else}}No children to show.{{end}}
+                </p>
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     <span class="text-green-700 dark:text-green-400">{{.Level.Status.Added}} added</span> ·
                     <span class="text-red-700 dark:text-red-400">{{.Level.Status.Removed}} removed</span> ·
                     <span class="text-yellow-700 dark:text-yellow-400">{{.Level.Status.Changed}} changed</span> ·
                     <span class="text-gray-500 dark:text-gray-400">{{.Level.Status.Unchanged}} unchanged</span>
                 </p>
             </div>
-            <label class="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-                <input type="checkbox"
-                    hx-get="/diff"
-                    {{if .Level.HideUnchanged}}
-                    {{hxVals "from" $from "to" $to "prefix" $.Prefix "show_unchanged" "true"}}
+            <div class="flex items-center gap-4">
+                <label class="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                    <input type="checkbox"
+                        hx-get="/diff"
+                        {{if .Level.HideUnchanged}}
+                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "show_unchanged" "true"}}
+                        {{else}}
+                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "show_unchanged" "false"}} checked
+                        {{end}}
+                        hx-target="#diff-target"
+                        hx-push-url="true"
+                        class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500">
+                    Show unchanged
+                </label>
+                {{if gt .Level.Pagination.Pages 1}}
+                <div class="flex items-center gap-2 text-sm">
+                    {{if .Level.Pagination.PrevPage}}
+                    <button type="button"
+                        hx-get="/diff"
+                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "page" .Level.Pagination.PrevPage}}
+                        hx-target="#diff-target"
+                        hx-push-url="true"
+                        class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">← Prev</button>
                     {{else}}
-                    {{hxVals "from" $from "to" $to "prefix" $.Prefix "show_unchanged" "false"}} checked
+                    <span class="px-3 py-1 border border-gray-200 dark:border-gray-700 rounded text-gray-300 dark:text-gray-600 cursor-not-allowed">← Prev</span>
                     {{end}}
-                    hx-target="#diff-target"
-                    hx-push-url="true"
-                    class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500">
-                Show unchanged
-            </label>
+                    <span class="text-gray-500 dark:text-gray-400">Page {{.Level.Pagination.Page}} of {{.Level.Pagination.Pages}}</span>
+                    {{if .Level.Pagination.NextPage}}
+                    <button type="button"
+                        hx-get="/diff"
+                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "page" .Level.Pagination.NextPage}}
+                        hx-target="#diff-target"
+                        hx-push-url="true"
+                        class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">Next →</button>
+                    {{else}}
+                    <span class="px-3 py-1 border border-gray-200 dark:border-gray-700 rounded text-gray-300 dark:text-gray-600 cursor-not-allowed">Next →</span>
+                    {{end}}
+                </div>
+                {{end}}
+            </div>
         </header>
         {{if .Level.Children}}
         <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
@@ -94,7 +144,7 @@
                 {{range .Level.Children}}
                 <tr>
                     <td class="px-4 py-3 sm:px-6 whitespace-nowrap">
-                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{.StatusClass}}">{{.Status}}</span>
+                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{diffStatusClass .Status}}">{{.Status}}</span>
                     </td>
                     <td class="px-4 py-3 sm:px-6 whitespace-nowrap">
                         {{if .HasChildren}}
@@ -137,4 +187,5 @@
         </div>
         {{end}}
     </section>
+    {{end}}
 </div>
