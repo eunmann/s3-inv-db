@@ -24,12 +24,18 @@ func TestHelpPage_Renders(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	if !strings.Contains(body, "Help & quick start") && !strings.Contains(body, "Help &amp; quick start") {
+	// Hero check — distinctive enough to survive copy edits, broad
+	// enough to not pin a single phrase.
+	if !strings.Contains(body, "Everything you can") {
 		head := body
 		if len(head) > 500 {
 			head = head[:500]
 		}
-		t.Errorf("body missing hero label\nbody[:500]=%q", head)
+		t.Errorf("body missing hero heading\nbody[:500]=%q", head)
+	}
+	// At least one section marker — pins the editorial section style.
+	if !strings.Contains(body, "§ 01") {
+		t.Error("body missing section marker '§ 01'")
 	}
 	for _, anchor := range []string{
 		`id="pages"`, `id="workflow-load"`, `id="workflow-browse"`,
