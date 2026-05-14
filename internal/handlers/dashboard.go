@@ -6,6 +6,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
+	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/rs/zerolog"
 )
 
@@ -22,7 +23,8 @@ type DashboardData struct {
 	LoadedRuns     int    // how many are currently in memory
 	LoadingRuns    int    // how many have a build in flight
 	ErrorRuns      int    // how many ended in error
-	TotalNodesH    string // sum of NodeCount across loaded runs
+	TotalObjectsH  string // total S3 objects covered by loaded inventories
+	TotalBytesH    string // total bytes covered by loaded inventories
 	DiskUsedH      string // sum of cache bytes across loaded runs
 
 	// One summary row per configuration.
@@ -64,63 +66,16 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 		data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
 	}
 
-	// Aggregate per configuration in one pass.
-	type confAgg struct {
-		Src, ID     string
-		TotalRuns   int
-		LoadedRuns  int
-		LatestRun   string
-		LatestState inventory.State
-		DiskBytes   int64
-	}
-	confs := map[string]*confAgg{}
-	order := []string{}
-	var totalNodes uint64
-	var totalDisk int64
-
-	for i := range views {
-		v := &views[i]
-		key := v.ConfigID()
-		data.TotalRuns++
-
-		c, ok := confs[key]
-		if !ok {
-			c = &confAgg{Src: v.SourceBucket, ID: v.InventoryID}
-			confs[key] = c
-			order = append(order, key)
-		}
-		c.TotalRuns++
-		// Discovery returns runs newest-first within a config, so the
-		// first one we see is the latest.
-		if c.LatestRun == "" && v.Run != "" {
-			c.LatestRun = v.Run
-			c.LatestState = v.State
-		}
-		switch v.State {
-		case inventory.StateLoaded:
-			data.LoadedRuns++
-			c.LoadedRuns++
-			totalNodes += v.NodeCount
-			if h.loader != nil {
-				size, err := h.loader.CacheSizeBytes(v.SourceBucket, v.InventoryID, v.Run)
-				if err == nil {
-					totalDisk += size
-					c.DiskBytes += size
-				}
-			}
-		case inventory.StateLoading:
-			data.LoadingRuns++
-		case inventory.StateError:
-			data.ErrorRuns++
-		}
-	}
-
+	confs, order, totals := h.aggregateDashboard(logger, views, &data)
 	data.Configurations = len(confs)
-	if totalNodes > 0 {
-		data.TotalNodesH = humanfmt.CountUint64(totalNodes)
+	if totals.objects > 0 {
+		data.TotalObjectsH = humanfmt.CountUint64(totals.objects)
 	}
-	if totalDisk > 0 {
-		data.DiskUsedH = humanfmt.BytesUint64(uint64(totalDisk))
+	if totals.bytes > 0 {
+		data.TotalBytesH = humanfmt.BytesUint64(totals.bytes)
+	}
+	if totals.disk > 0 {
+		data.DiskUsedH = humanfmt.BytesUint64(uint64(totals.disk))
 	}
 
 	// Stable, alphabetical order for the page rows.
@@ -146,4 +101,78 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 		logger.Error().Err(err).Msg("failed to render dashboard")
 		http.Error(w, "failed to render page", http.StatusInternalServerError)
 	}
+}
+
+type dashConfAgg struct {
+	Src, ID     string
+	TotalRuns   int
+	LoadedRuns  int
+	LatestRun   string
+	LatestState inventory.State
+	DiskBytes   int64
+}
+
+type dashTotals struct {
+	objects uint64
+	bytes   uint64
+	disk    int64
+}
+
+func (h *Handlers) aggregateDashboard(logger *zerolog.Logger, views []inventory.MergedInventory, data *DashboardData) (confs map[string]*dashConfAgg, order []string, totals dashTotals) {
+	confs = map[string]*dashConfAgg{}
+	for i := range views {
+		v := &views[i]
+		key := v.ConfigID()
+		data.TotalRuns++
+
+		c, ok := confs[key]
+		if !ok {
+			c = &dashConfAgg{Src: v.SourceBucket, ID: v.InventoryID}
+			confs[key] = c
+			order = append(order, key)
+		}
+		c.TotalRuns++
+		if c.LatestRun == "" && v.Run != "" {
+			c.LatestRun = v.Run
+			c.LatestState = v.State
+		}
+		h.tallyView(logger, v, c, data, &totals)
+	}
+	return confs, order, totals
+}
+
+func (h *Handlers) tallyView(logger *zerolog.Logger, v *inventory.MergedInventory, c *dashConfAgg, data *DashboardData, totals *dashTotals) {
+	switch v.State {
+	case inventory.StateLoaded:
+		data.LoadedRuns++
+		c.LoadedRuns++
+		h.addLoadedStats(logger, v, c, totals)
+	case inventory.StateLoading:
+		data.LoadingRuns++
+	case inventory.StateError:
+		data.ErrorRuns++
+	}
+}
+
+func (h *Handlers) addLoadedStats(logger *zerolog.Logger, v *inventory.MergedInventory, c *dashConfAgg, totals *dashTotals) {
+	err := h.manager.WithIndex(v.CompositeID(), func(idx *indexread.Index) error {
+		if pos, ok := idx.Lookup(""); ok {
+			stats := idx.Stats(pos)
+			totals.objects += stats.ObjectCount
+			totals.bytes += stats.TotalBytes
+		}
+		return nil
+	})
+	if err != nil {
+		logger.Warn().Err(err).Str("id", v.CompositeID()).Msg("dashboard root stats")
+	}
+	if h.loader == nil {
+		return
+	}
+	size, err := h.loader.CacheSizeBytes(v.SourceBucket, v.InventoryID, v.Run)
+	if err != nil {
+		return
+	}
+	totals.disk += size
+	c.DiskBytes += size
 }

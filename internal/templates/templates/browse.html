@@ -18,7 +18,7 @@
                             <option value="">Select a loaded inventory…</option>
                             {{$selected := .InventoryID}}
                             {{range .Inventories}}
-                            <option value="{{.ID}}"{{if eq .ID $selected}} selected{{end}}>{{.Name}} ({{formatCount .NodeCount}} prefixes)</option>
+                            <option value="{{.ID}}"{{if eq .ID $selected}} selected{{end}}>{{.Name}} ({{formatCount .NodeCount}} paths)</option>
                             {{end}}
                         </select>
                         {{if not .Inventories}}

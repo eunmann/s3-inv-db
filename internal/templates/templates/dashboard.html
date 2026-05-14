@@ -40,7 +40,7 @@
             <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Loaded</dt>
             <dd class="mt-1 text-2xl font-semibold text-green-600 dark:text-green-400">{{.LoadedRuns}}</dd>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {{if .TotalNodesH}}{{.TotalNodesH}} prefixes in memory{{else}}—{{end}}
+                {{if .TotalObjectsH}}{{.TotalObjectsH}} objects · {{.TotalBytesH}}{{else}}—{{end}}
             </p>
         </div>
 
