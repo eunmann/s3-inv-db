@@ -53,6 +53,29 @@ func TestBuild_RejectsEmptyArgs(t *testing.T) {
 	}
 }
 
+// TestBuildWith_ReportsPreparingStage exercises the loader's own stage
+// reporting on the failure path (invalid manifest URI). The pipeline
+// phases need real S3 data to fire, so they're tested through the
+// integration path; the loader-level stage names are what we pin here.
+func TestBuildWith_ReportsPreparingStage(t *testing.T) {
+	l := New(t.TempDir(), nil)
+	var stages []string
+	_, _ = l.BuildWith(context.Background(), "buck", "inv", "not-s3-uri", func(name string) {
+		stages = append(stages, name)
+	})
+	if len(stages) == 0 || stages[0] != "preparing" {
+		t.Errorf("first stage = %v, want preparing as first entry", stages)
+	}
+}
+
+func TestBuildWith_NilCallbackIsSafe(t *testing.T) {
+	l := New(t.TempDir(), nil)
+	_, err := l.BuildWith(context.Background(), "", "inv", "s3://b/m", nil)
+	if !errors.Is(err, errEmptyID) {
+		t.Errorf("err = %v, want errEmptyID", err)
+	}
+}
+
 func TestEvict_RemovesCacheDir(t *testing.T) {
 	root := t.TempDir()
 	l := New(root, nil)

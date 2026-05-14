@@ -14,6 +14,11 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
 
+// Stage callback values come from the loader ("preparing", "done") and
+// from the underlying pipeline ("init", "ingest", "merge"). The type
+// stays unnamed (plain func(string)) so loader.Loader directly
+// satisfies the inventory.IndexBuilder interface.
+
 // Loader runs the S3-inventory → on-disk-index build pipeline into a
 // per-inventory subdirectory of the configured cache root.
 type Loader struct {
@@ -32,18 +37,28 @@ func (l *Loader) CacheDirFor(srcBucket, invID string) string {
 	return filepath.Join(l.cacheRoot, srcBucket, invID)
 }
 
-// Build downloads the inventory referenced by manifestURI (an s3:// URI
-// pointing at a manifest.json) and produces a built index under
-// CacheDirFor(srcBucket, invID). If the directory already exists it is
-// removed first; partial builds are not safe to resume.
+// Build is BuildWith with no stage callback.
 func (l *Loader) Build(ctx context.Context, srcBucket, invID, manifestURI string) (string, error) {
+	return l.BuildWith(ctx, srcBucket, invID, manifestURI, nil)
+}
+
+// BuildWith downloads the inventory referenced by manifestURI and
+// produces a built index under CacheDirFor(srcBucket, invID). The
+// onStage callback, if non-nil, receives stage transitions from the
+// loader and the underlying pipeline. Partial builds are not safe to
+// resume — the cache dir is cleared first.
+func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, manifestURI string, onStage func(string)) (string, error) {
 	if srcBucket == "" || invID == "" {
 		return "", errEmptyID
 	}
 	if manifestURI == "" {
 		return "", errEmptyManifest
 	}
+	if onStage == nil {
+		onStage = func(string) {}
+	}
 
+	onStage("preparing")
 	outDir := l.CacheDirFor(srcBucket, invID)
 	if err := os.RemoveAll(outDir); err != nil {
 		return "", fmt.Errorf("clear cache dir: %w", err)
@@ -53,9 +68,8 @@ func (l *Loader) Build(ctx context.Context, srcBucket, invID, manifestURI string
 	}
 
 	cfg := extsort.DefaultConfig()
-	// Budget from system RAM — same default the CLI uses when no flag is
-	// supplied.
 	cfg.MemoryBudget = membudget.NewFromSystemRAM()
+	cfg.OnPhase = onStage
 
 	pipeline := extsort.NewPipeline(cfg, l.s3Client)
 	if _, err := pipeline.Run(ctx, manifestURI, outDir); err != nil {
@@ -63,6 +77,7 @@ func (l *Loader) Build(ctx context.Context, srcBucket, invID, manifestURI string
 		// Build call will RemoveAll it.
 		return "", fmt.Errorf("run pipeline: %w", err)
 	}
+	onStage("done")
 	return outDir, nil
 }
 

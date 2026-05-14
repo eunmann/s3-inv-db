@@ -70,6 +70,7 @@ func (s *Server) setupRoutes() {
 	// every route in here can assume Enabled() == true.
 	r.Group(func(r chi.Router) {
 		r.Use(requireDiscoveryMiddleware(s.handlers.DiscoveryEnabled))
+		r.Get("/partials/discovered/{src}/{id}", s.handlers.DiscoveredRowPartial)
 		r.Post("/partials/discovered/{src}/{id}/load", s.handlers.LoadDiscoveredRowPartial)
 		r.Post("/partials/discovered/{src}/{id}/unload", s.handlers.UnloadDiscoveredRowPartial)
 		r.Delete("/partials/discovered/{src}/{id}", s.handlers.EvictDiscoveredRowPartial)
@@ -77,6 +78,10 @@ func (s *Server) setupRoutes() {
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
+		// Job stream — SSE, one event per job state change.
+		r.Get("/jobs/stream", s.handlers.JobsStream)
+		r.Post("/jobs/{id}/cancel", s.handlers.CancelJob)
+
 		// Inventory state (loaded/unloaded view). The POST endpoint is
 		// not surfaced in the UI; kept for tests and direct-path callers.
 		r.Get("/inventories", s.handlers.ListInventoriesAPI)

@@ -286,6 +286,10 @@ type Config struct {
 	// When true, prefixes are split by "/" and deduplicated into a segment dictionary.
 	// This reduces storage when prefixes share common path components.
 	UseSegmentEncoding bool
+
+	// OnPhase is invoked when the pipeline transitions between phases
+	// ("init", "ingest", "merge"). Use to drive progress UI. Optional.
+	OnPhase func(phase string)
 }
 
 // DefaultConfig returns a Config with sensible defaults based on the current machine.

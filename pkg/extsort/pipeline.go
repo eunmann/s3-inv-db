@@ -51,6 +51,15 @@ type Result struct {
 	Duration         time.Duration
 }
 
+// setPhase updates both the memory diagnostic tracker and the user's
+// progress callback. Single hook so future phases stay consistent.
+func (p *Pipeline) setPhase(name string) {
+	p.memTracker.SetPhase(name)
+	if p.config.OnPhase != nil {
+		p.config.OnPhase(name)
+	}
+}
+
 // NewPipeline creates a new external sort pipeline.
 func NewPipeline(config Config, s3Client *s3fetch.Client) *Pipeline {
 	// Ensure memory budget is set
@@ -76,7 +85,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	// Start memory diagnostics
 	p.memTracker.Start()
 	defer p.memTracker.Stop()
-	p.memTracker.SetPhase("init")
+	p.setPhase("init")
 
 	tempDir := p.config.TempDir
 	if tempDir == "" {
@@ -107,7 +116,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Str("index_budget", humanfmt.Bytes(p.config.IndexBuildBudget())).
 		Msg("pipeline starting")
 
-	p.memTracker.SetPhase("ingest")
+	p.setPhase("ingest")
 	ingestStart := time.Now()
 	if err := p.runIngestPhase(ctx, manifestURI); err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -130,7 +139,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Dur("duration_ms", ingestDuration).
 		Msg("ingest phase complete")
 
-	p.memTracker.SetPhase("merge")
+	p.setPhase("merge")
 	mergeStart := time.Now()
 	prefixCount, maxDepth, err := p.runMergeBuildPhase(ctx, outDir)
 	if err != nil {

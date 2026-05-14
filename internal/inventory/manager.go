@@ -33,9 +33,13 @@ type managedInventory struct {
 }
 
 // Manager manages multiple inventories with thread-safe access.
+// When a Store is attached via SetStore, every state-changing method
+// mirrors the new Info to durable storage so the server can rehydrate
+// after a restart.
 type Manager struct {
 	mu          sync.RWMutex
 	inventories map[string]*managedInventory
+	store       *Store
 }
 
 // NewManager creates a new inventory manager.
@@ -43,6 +47,40 @@ func NewManager() *Manager {
 	return &Manager{
 		inventories: make(map[string]*managedInventory),
 	}
+}
+
+// SetStore attaches a Store to the Manager. After this, every state
+// transition (Register, Load, Unload, Remove, Hydrate) is mirrored to
+// the Store. Pass nil to detach. Safe to call once at startup; later
+// changes during operation are not synchronized.
+func (m *Manager) SetStore(s *Store) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.store = s
+}
+
+// mirror writes info to the attached store if one is configured. Errors
+// are returned to the caller — Manager methods choose whether to fail
+// the operation or log + continue.
+func (m *Manager) mirror(info Info) error {
+	if m.store == nil {
+		return nil
+	}
+	if err := m.store.Upsert(info); err != nil {
+		return fmt.Errorf("mirror to store: %w", err)
+	}
+	return nil
+}
+
+// mirrorDelete removes id from the attached store, if one is configured.
+func (m *Manager) mirrorDelete(id string) error {
+	if m.store == nil {
+		return nil
+	}
+	if err := m.store.Delete(id); err != nil && !errors.Is(err, ErrStoreNotFound) {
+		return fmt.Errorf("mirror delete: %w", err)
+	}
+	return nil
 }
 
 // Register adds a new inventory in pending state.
@@ -54,16 +92,9 @@ func (m *Manager) Register(id, name, path string) error {
 		return ErrAlreadyExists
 	}
 
-	m.inventories[id] = &managedInventory{
-		info: Info{
-			ID:    id,
-			Name:  name,
-			Path:  path,
-			State: StatePending,
-		},
-	}
-
-	return nil
+	info := Info{ID: id, Name: name, Path: path, State: StatePending}
+	m.inventories[id] = &managedInventory{info: info}
+	return m.mirror(info)
 }
 
 // BuildFunc is the contract a Manager uses to materialise an on-disk index
@@ -102,6 +133,7 @@ func (m *Manager) LoadWith(ctx context.Context, id string, build BuildFunc) erro
 	}
 	inv.info.State = StateParsing
 	inv.info.Error = ""
+	_ = m.mirror(inv.info)
 	snapshot := inv.info
 	m.mu.Unlock()
 
@@ -127,15 +159,18 @@ func (m *Manager) LoadWith(ctx context.Context, id string, build BuildFunc) erro
 	case buildErr != nil:
 		inv.info.State = StateError
 		inv.info.Error = buildErr.Error()
+		_ = m.mirror(inv.info)
 		return fmt.Errorf("build index: %w", buildErr)
 	case openErr != nil:
 		inv.info.State = StateError
 		inv.info.Error = openErr.Error()
+		_ = m.mirror(inv.info)
 		return fmt.Errorf("open index: %w", openErr)
 	case ctx.Err() != nil:
 		idx.Close()
 		inv.info.State = StateError
 		inv.info.Error = ctx.Err().Error()
+		_ = m.mirror(inv.info)
 		return fmt.Errorf("load cancelled: %w", ctx.Err())
 	}
 
@@ -147,6 +182,7 @@ func (m *Manager) LoadWith(ctx context.Context, id string, build BuildFunc) erro
 	inv.info.MaxDepth = idx.MaxDepth()
 	inv.info.HasTierData = idx.HasTierData()
 	inv.info.LoadedAt = time.Now()
+	_ = m.mirror(inv.info)
 	return nil
 }
 
@@ -167,6 +203,7 @@ func (m *Manager) Unload(id string) error {
 	inv.info.NodeCount = 0
 	inv.info.MaxDepth = 0
 	inv.info.LoadedAt = time.Time{}
+	_ = m.mirror(inv.info)
 	m.mu.Unlock()
 
 	// Close the index outside the Manager lock so other inventories stay
@@ -206,6 +243,41 @@ func (m *Manager) List() []Info {
 	return result
 }
 
+// Hydrate adds an inventory back to the manager with state and metadata
+// previously persisted to a Store. If info.State is StateLoaded, the
+// on-disk index at indexDir is opened; an Open failure flips the
+// in-memory state to StateError but the inventory is still registered
+// so the UI can show it (and the user can retry). For non-loaded
+// states, indexDir is ignored.
+func (m *Manager) Hydrate(info Info, indexDir string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.inventories[info.ID]; exists {
+		return ErrAlreadyExists
+	}
+	mi := &managedInventory{info: info}
+	if info.State == StateLoaded {
+		idx, err := indexread.Open(indexDir)
+		switch {
+		case err != nil:
+			mi.info.State = StateError
+			mi.info.Error = err.Error()
+			mi.info.NodeCount = 0
+			mi.info.MaxDepth = 0
+			mi.info.HasTierData = false
+		default:
+			mi.index = idx
+			mi.info.NodeCount = idx.Count()
+			mi.info.MaxDepth = idx.MaxDepth()
+			mi.info.HasTierData = idx.HasTierData()
+		}
+	}
+	m.inventories[info.ID] = mi
+	_ = m.mirror(mi.info)
+	return nil
+}
+
 // WithIndex borrows the loaded index for the duration of fn. The index
 // is guaranteed to remain open until fn returns; callers must not retain
 // the pointer or any slice/string derived from mmap-backed memory beyond
@@ -243,6 +315,7 @@ func (m *Manager) Remove(id string) error {
 		return ErrNotFound
 	}
 	delete(m.inventories, id)
+	_ = m.mirrorDelete(id)
 	m.mu.Unlock()
 
 	inv.mu.Lock()

@@ -152,7 +152,7 @@ type InventoriesData struct {
 	S3Source       string
 	HasDiscovery   bool
 	DiscoveryError string
-	Discovered     []inventory.MergedInventory
+	Discovered     []DiscoveredRowView
 }
 
 // InventoriesPage renders the inventories HTML page. The page is
@@ -172,7 +172,16 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 			zerolog.Ctx(r.Context()).Error().Err(err).Msg("discover for inventories page")
 			data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
 		}
-		data.Discovered = views
+		data.Discovered = make([]DiscoveredRowView, 0, len(views))
+		for i := range views {
+			row := DiscoveredRowView{MergedInventory: views[i]}
+			if h.jobStore != nil {
+				if j, err := h.jobStore.LatestForInventory(views[i].CompositeID()); err == nil {
+					row.LatestJob = &j
+				}
+			}
+			data.Discovered = append(data.Discovered, row)
+		}
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

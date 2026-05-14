@@ -20,6 +20,7 @@ type Discoverer interface {
 // IndexBuilder is the subset of loader.Loader that DiscoveryService uses.
 type IndexBuilder interface {
 	Build(ctx context.Context, srcBucket, invID, manifestURI string) (string, error)
+	BuildWith(ctx context.Context, srcBucket, invID, manifestURI string, onStage func(string)) (string, error)
 	Evict(srcBucket, invID string) error
 }
 
@@ -100,12 +101,11 @@ func (s *DiscoveryService) Find(ctx context.Context, src, id string) (s3disco.In
 	return inv, nil
 }
 
-// Load registers (if not already) and triggers a build+open for a
-// discovered inventory. The build runs under ctx.WithoutCancel so a
-// caller-side cancellation (HTTP request abort) doesn't poison the
-// inventory state — the Manager's post-build re-check handles server
-// shutdown via map-clearing.
-func (s *DiscoveryService) Load(ctx context.Context, disc s3disco.Inventory) error {
+// PrepareDiscovered registers (if needed) the inventory in the Manager
+// without performing a build. Use this before submitting an async build
+// job so the FK to inventories is satisfied when the job row is
+// written.
+func (s *DiscoveryService) PrepareDiscovered(disc s3disco.Inventory) error {
 	if !s.Enabled() {
 		return ErrDiscoveryDisabled
 	}
@@ -115,9 +115,30 @@ func (s *DiscoveryService) Load(ctx context.Context, disc s3disco.Inventory) err
 		!errors.Is(err, ErrAlreadyExists) {
 		return fmt.Errorf("register: %w", err)
 	}
-	loadCtx := context.WithoutCancel(ctx)
-	err := s.manager.LoadWith(loadCtx, composite, func(c context.Context, _ Info) (string, error) {
-		return s.builder.Build(c, disc.SourceBucket, disc.InventoryID, manifestURI)
+	return nil
+}
+
+// Load is LoadWith with no stage callback.
+func (s *DiscoveryService) Load(ctx context.Context, disc s3disco.Inventory) error {
+	return s.LoadWith(ctx, disc, nil)
+}
+
+// LoadWith registers (if not already) and triggers a build+open for a
+// discovered inventory. The onStage callback, if non-nil, receives
+// pipeline stage transitions for live progress reporting. The ctx
+// threads through to the builder — cancellation kills the build.
+func (s *DiscoveryService) LoadWith(ctx context.Context, disc s3disco.Inventory, onStage func(string)) error {
+	if !s.Enabled() {
+		return ErrDiscoveryDisabled
+	}
+	composite := disc.CompositeID()
+	manifestURI := fmt.Sprintf("s3://%s/%s", s.discoverer.Bucket(), disc.ManifestKey)
+	if err := s.manager.Register(composite, disc.SourceBucket+"/"+disc.InventoryID, manifestURI); err != nil &&
+		!errors.Is(err, ErrAlreadyExists) {
+		return fmt.Errorf("register: %w", err)
+	}
+	err := s.manager.LoadWith(ctx, composite, func(c context.Context, _ Info) (string, error) {
+		return s.builder.BuildWith(c, disc.SourceBucket, disc.InventoryID, manifestURI, onStage)
 	})
 	if err != nil {
 		return err

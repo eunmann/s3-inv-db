@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/internal/loader"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/templates"
@@ -44,6 +46,10 @@ type Server struct {
 	router   chi.Router
 	manager  *inventory.Manager
 	invStore *inventory.Store
+	jobStore *jobs.Store
+	jobBus   *jobs.Bus
+	jobMgr   *jobs.Manager
+	bldr     *loader.Loader
 	renderer *templates.Renderer
 	handlers *handlers.Handlers
 	server   *http.Server
@@ -58,7 +64,14 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("inventory store: %w", err)
 	}
+	jobStore, err := jobs.NewStore(cfg.DB)
+	if err != nil {
+		return nil, fmt.Errorf("jobs store: %w", err)
+	}
+	jobBus := jobs.NewBus(64)
+	jobMgr := jobs.NewManager(jobStore, jobBus)
 	mgr := inventory.NewManager()
+	mgr.SetStore(invStore)
 
 	renderer, err := templates.New()
 	if err != nil {
@@ -69,7 +82,11 @@ func New(cfg Config) (*Server, error) {
 		Manager:    mgr,
 		Renderer:   renderer,
 		PriceTable: cfg.PriceTable,
+		JobMgr:     jobMgr,
+		JobStore:   jobStore,
+		JobBus:     jobBus,
 	}
+	var bldr *loader.Loader
 	if cfg.S3Source != "" {
 		disco, ldr, err := newDiscoveryWiring(cfg)
 		if err != nil {
@@ -78,6 +95,7 @@ func New(cfg Config) (*Server, error) {
 		hcfg.Discoverer = disco
 		hcfg.Loader = ldr
 		hcfg.S3SourceURI = cfg.S3Source
+		bldr = ldr
 		cfg.Logger.Info().
 			Str("s3_source", cfg.S3Source).
 			Str("cache_dir", cfg.CacheDir).
@@ -91,13 +109,64 @@ func New(cfg Config) (*Server, error) {
 		router:   chi.NewRouter(),
 		manager:  mgr,
 		invStore: invStore,
+		jobStore: jobStore,
+		jobBus:   jobBus,
+		jobMgr:   jobMgr,
+		bldr:     bldr,
 		renderer: renderer,
 		handlers: h,
 	}
 
 	s.setupRoutes()
+	s.recover(cfg.Logger)
 
 	return s, nil
+}
+
+// recover rehydrates the in-memory inventory.Manager from invStore and
+// marks any jobs left running/queued by the previous process as
+// aborted. Inventories left in the parsing state — meaning a load was
+// in flight when the previous process exited — get flipped to error so
+// the UI shows a Retry. Best-effort: failures are logged, not returned.
+func (s *Server) recover(logger zerolog.Logger) {
+	n, err := s.jobStore.MarkAborted("server restart", jobs.StateQueued, jobs.StateRunning)
+	if err != nil {
+		logger.Error().Err(err).Msg("mark stale jobs aborted")
+	} else if n > 0 {
+		logger.Info().Int64("count", n).Msg("aborted stale jobs from previous run")
+	}
+
+	infos, err := s.invStore.List()
+	if err != nil {
+		logger.Error().Err(err).Msg("list inventories at startup")
+		return
+	}
+	for i := range infos {
+		info := &infos[i]
+		// Stale parsing → error so the row shows Retry instead of a
+		// spinner that will never resolve.
+		if info.State == inventory.StateParsing {
+			info.State = inventory.StateError
+			info.Error = "interrupted by server restart"
+		}
+		indexDir := ""
+		if info.State == inventory.StateLoaded && s.bldr != nil {
+			src, invID, ok := strings.Cut(info.ID, "/")
+			if ok {
+				indexDir = s.bldr.CacheDirFor(src, invID)
+			}
+		}
+		if err := s.manager.Hydrate(*info, indexDir); err != nil {
+			logger.Error().Err(err).Str("id", info.ID).Msg("hydrate inventory")
+			continue
+		}
+		final, _ := s.manager.Get(info.ID)
+		logger.Info().Str("id", final.ID).Str("state", string(final.State)).Msg("hydrated inventory")
+		// Manager.Hydrate already mirrors to invStore (via SetStore),
+		// so no explicit Upsert is required here — but for the
+		// StateParsing→StateError flip we performed above the input,
+		// Hydrate's mirror already wrote the corrected state.
+	}
 }
 
 var (

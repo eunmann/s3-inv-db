@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
@@ -48,14 +49,14 @@ func (h *Handlers) DeleteInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusOK)
 }
 
-// LoadDiscoveredRowPartial loads a discovered inventory and returns its row.
-// The route group gates this handler on discovery being configured, so the
-// service calls below cannot return ErrDiscoveryDisabled.
+// LoadDiscoveredRowPartial submits a background build job and returns
+// the row in queued state with HTTP 202 immediately. The UI watches the
+// SSE stream for state transitions and swaps the row when the job moves.
 func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Request) {
 	src := chi.URLParam(r, "src")
 	id := chi.URLParam(r, "id")
-
 	logger := zerolog.Ctx(r.Context())
+
 	disc, err := h.discovery.Find(r.Context(), src, id)
 	if err != nil {
 		logger.Error().Err(err).Str("src", src).Str("id", id).Msg("find discovered inventory")
@@ -66,13 +67,44 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "no completed runs for this inventory", http.StatusNotFound)
 		return
 	}
-	if err := h.discovery.Load(r.Context(), disc); err != nil {
-		respondManagerErrorHTML(w, r, err, "load discovered inventory")
+	if h.jobMgr == nil {
+		http.Error(w, "jobs not configured", http.StatusServiceUnavailable)
 		return
 	}
-	// Reuse the disc we already fetched so a transient post-load S3 hiccup
-	// doesn't surface a 502 that hides the successful load.
+
+	if err := h.discovery.PrepareDiscovered(disc); err != nil {
+		respondManagerErrorHTML(w, r, err, "prepare discovered inventory")
+		return
+	}
+	composite := disc.CompositeID()
+	// The job context is intentionally independent of the request — a
+	// build outlives the HTTP request that started it.
+	//nolint:contextcheck // job owns its own lifetime
+	_, err = h.jobMgr.Submit(composite, jobs.KindBuild, func(ctx context.Context, report func(jobs.Update)) error {
+		return h.discovery.LoadWith(ctx, disc, func(stage string) {
+			report(jobs.Update{Stage: stage})
+		})
+	})
+	if err != nil {
+		respondManagerErrorHTML(w, r, err, "submit load job")
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 	h.renderDiscoveredRowFrom(w, r, disc)
+}
+
+// CancelJob cancels an in-flight job by ID. 404 if not currently live.
+func (h *Handlers) CancelJob(w http.ResponseWriter, r *http.Request) {
+	if h.jobMgr == nil {
+		http.Error(w, "jobs not configured", http.StatusServiceUnavailable)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if err := h.jobMgr.Cancel(id); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // UnloadDiscoveredRowPartial unloads a discovered inventory and returns its row.
@@ -84,6 +116,14 @@ func (h *Handlers) UnloadDiscoveredRowPartial(w http.ResponseWriter, r *http.Req
 		respondManagerErrorHTML(w, r, err, "unload inventory")
 		return
 	}
+	h.renderDiscoveredRow(w, r, src, id)
+}
+
+// DiscoveredRowPartial returns the current state of one discovered row
+// — used by htmx to refresh after an SSE notification.
+func (h *Handlers) DiscoveredRowPartial(w http.ResponseWriter, r *http.Request) {
+	src := chi.URLParam(r, "src")
+	id := chi.URLParam(r, "id")
 	h.renderDiscoveredRow(w, r, src, id)
 }
 
@@ -128,17 +168,31 @@ func (h *Handlers) renderDiscoveredRow(w http.ResponseWriter, r *http.Request, s
 	h.renderDiscoveredRowFrom(w, r, disc)
 }
 
+// DiscoveredRowView extends the merged inventory with the latest job
+// for the same composite ID. The template surfaces progress and
+// renders Retry/Cancel buttons based on the job's state.
+type DiscoveredRowView struct {
+	inventory.MergedInventory
+	LatestJob *jobs.Job
+}
+
 // renderDiscoveredRowFrom renders a discovered_row using a pre-fetched
-// disc value. Splitting this out lets callers that already have a
-// trusted disc (e.g. just before a successful load) skip the second
-// S3 round-trip and avoid surfacing transient post-load errors.
+// disc value. Looks up the latest job (if jobs are configured) so the
+// row can render progress / cancel / retry.
 func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Request, disc s3disco.Inventory) {
-	view := inventory.MergedInventory{Inventory: disc, State: inventory.StatePending}
+	view := DiscoveredRowView{
+		MergedInventory: inventory.MergedInventory{Inventory: disc, State: inventory.StatePending},
+	}
 	if info, ok := h.manager.Get(disc.CompositeID()); ok {
 		view.State = info.State
 		view.Error = info.Error
 		view.NodeCount = info.NodeCount
 		view.HasTierData = info.HasTierData
+	}
+	if h.jobStore != nil {
+		if j, err := h.jobStore.LatestForInventory(disc.CompositeID()); err == nil {
+			view.LatestJob = &j
+		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.RenderPartial(w, "discovered_row.html", view); err != nil {

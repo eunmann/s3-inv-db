@@ -38,6 +38,10 @@ type fakeBuilder struct {
 func (f *fakeBuilder) Build(_ context.Context, _, _, _ string) (string, error) {
 	return f.buildResp, f.buildErr
 }
+
+func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _ string, _ func(string)) (string, error) {
+	return f.buildResp, f.buildErr
+}
 func (f *fakeBuilder) Evict(src, id string) error {
 	f.evictedAt = append(f.evictedAt, src+"/"+id)
 	return f.evictErr

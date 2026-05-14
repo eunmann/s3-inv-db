@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 )
@@ -19,6 +20,9 @@ type Handlers struct {
 	renderer    *templates.Renderer
 	priceTable  pricing.PriceTable
 	s3SourceURI string // for display in templates
+	jobMgr      *jobs.Manager
+	jobStore    *jobs.Store
+	jobBus      *jobs.Bus
 }
 
 // Config gathers all Handlers dependencies for NewWithConfig. Discoverer
@@ -32,6 +36,9 @@ type Config struct {
 	Discoverer  inventory.Discoverer
 	Loader      inventory.IndexBuilder
 	S3SourceURI string
+	JobMgr      *jobs.Manager
+	JobStore    *jobs.Store
+	JobBus      *jobs.Bus
 }
 
 // New creates a Handlers instance without discovery wiring. Tests use it.
@@ -56,5 +63,8 @@ func NewWithConfig(cfg Config) *Handlers {
 		renderer:    cfg.Renderer,
 		priceTable:  cfg.PriceTable,
 		s3SourceURI: cfg.S3SourceURI,
+		jobMgr:      cfg.JobMgr,
+		jobStore:    cfg.JobStore,
+		jobBus:      cfg.JobBus,
 	}
 }

@@ -2,17 +2,21 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5"
+	_ "modernc.org/sqlite"
 )
 
 // fakeDiscoverer / fakeBuilder are minimal stubs implementing the
@@ -43,6 +47,10 @@ type fakeBuilder struct {
 func (f *fakeBuilder) Build(_ context.Context, _, _, _ string) (string, error) {
 	return f.buildResp, f.buildErr
 }
+
+func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _ string, _ func(string)) (string, error) {
+	return f.buildResp, f.buildErr
+}
 func (f *fakeBuilder) Evict(src, id string) error {
 	f.evicted = append(f.evicted, src+"/"+id)
 	return f.evictErr
@@ -56,13 +64,55 @@ func newDiscoveredHandlers(t *testing.T, disc inventory.Discoverer, ldr inventor
 	if err != nil {
 		t.Fatalf("renderer: %v", err)
 	}
+
+	db, err := sql.Open("sqlite", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	invStore, err := inventory.NewStore(db)
+	if err != nil {
+		t.Fatalf("inventory.NewStore: %v", err)
+	}
+	mgr.SetStore(invStore)
+	jobStore, err := jobs.NewStore(db)
+	if err != nil {
+		t.Fatalf("jobs.NewStore: %v", err)
+	}
+	bus := jobs.NewBus(8)
+	jobMgr := jobs.NewManager(jobStore, bus)
+
 	return NewWithConfig(Config{
 		Manager:    mgr,
 		Renderer:   renderer,
 		PriceTable: pricing.DefaultUSEast1Prices(),
 		Discoverer: disc,
 		Loader:     ldr,
+		JobMgr:     jobMgr,
+		JobStore:   jobStore,
+		JobBus:     bus,
 	})
+}
+
+// waitForJobState polls jobStore for any job in the given state on the
+// inventory. Convenience for tests that submit a job and wait for it to
+// finish before asserting.
+func waitForJobInState(t *testing.T, store *jobs.Store, invID string, state jobs.State) jobs.Job {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		js, err := store.ListForInventory(invID)
+		if err == nil {
+			for i := range js {
+				if js[i].State == state {
+					return js[i]
+				}
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("no job for %s reached state %s within deadline", invID, state)
+	return jobs.Job{}
 }
 
 func chiCtxWithParams(r *http.Request, pairs ...string) *http.Request {
@@ -106,7 +156,9 @@ func TestLoadDiscoveredRowPartial_NoCompletedRuns(t *testing.T) {
 	}
 }
 
-func TestLoadDiscoveredRowPartial_BuildError(t *testing.T) {
+func TestLoadDiscoveredRowPartial_AcceptsBuildError(t *testing.T) {
+	// The handler returns 202 immediately; the build error surfaces on
+	// the job, not the HTTP response. Verify the job moves to failed.
 	disc := s3disco.Inventory{SourceBucket: "b", InventoryID: "i", ManifestKey: "k/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
@@ -116,8 +168,13 @@ func TestLoadDiscoveredRowPartial_BuildError(t *testing.T) {
 	req = chiCtxWithParams(req, "src", "b", "id", "i")
 	w := httptest.NewRecorder()
 	h.LoadDiscoveredRowPartial(w, req)
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want 500", w.Code)
+	if w.Code != http.StatusAccepted {
+		t.Errorf("status = %d, want 202", w.Code)
+	}
+
+	final := waitForJobInState(t, h.jobStore, disc.CompositeID(), jobs.StateFailed)
+	if !strings.Contains(final.Error, "network broken") {
+		t.Errorf("job error = %q, want to contain 'network broken'", final.Error)
 	}
 }
 
