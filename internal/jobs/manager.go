@@ -21,6 +21,9 @@ type Work func(ctx context.Context, report func(Update)) error
 // ErrNotFound is returned by Cancel for unknown job IDs.
 var ErrNotFound = errors.New("job not found")
 
+// ErrShutdown is returned by Submit after Shutdown has been called.
+var ErrShutdown = errors.New("job manager is shut down")
+
 // Manager owns the in-memory registry of live jobs and their cancel
 // handles. Job snapshots are persisted to Store on every transition and
 // broadcast on Bus so the SSE handler can push updates to the UI.
@@ -28,9 +31,10 @@ type Manager struct {
 	store *Store
 	bus   *Bus
 
-	mu      sync.Mutex
-	cancels map[string]context.CancelFunc
-	wg      sync.WaitGroup
+	mu       sync.Mutex
+	cancels  map[string]context.CancelFunc
+	wg       sync.WaitGroup
+	shutdown bool
 
 	// logger receives best-effort errors from background goroutines —
 	// store failures, etc. — that can't bubble up to a caller.
@@ -58,6 +62,18 @@ func (m *Manager) SetLogger(l zerolog.Logger) { m.logger = l }
 // registered before the bus publish so a Cancel triggered by an
 // immediate SSE consumer can't race in before the goroutine starts.
 func (m *Manager) Submit(invID string, kind Kind, work Work) (Job, error) {
+	// Hold the lock long enough to (a) reject post-shutdown submits and
+	// (b) register the cancel handle + bump the wait group atomically
+	// with the goroutine launch. That way Shutdown's wg.Wait can't miss
+	// a goroutine that was about to start.
+	ctx, cancel := context.WithCancel(context.Background())
+	m.mu.Lock()
+	if m.shutdown {
+		m.mu.Unlock()
+		cancel()
+		return Job{}, ErrShutdown
+	}
+
 	job := Job{
 		ID:          newJobID(),
 		InventoryID: invID,
@@ -65,17 +81,15 @@ func (m *Manager) Submit(invID string, kind Kind, work Work) (Job, error) {
 		State:       StateQueued,
 	}
 	if err := m.store.Upsert(job); err != nil {
+		m.mu.Unlock()
+		cancel()
 		return Job{}, fmt.Errorf("queue job %s: %w", job.ID, err)
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	m.mu.Lock()
 	m.cancels[job.ID] = cancel
+	m.wg.Add(1)
 	m.mu.Unlock()
 
 	m.bus.Publish(job)
-
-	m.wg.Add(1)
 	go m.run(ctx, cancel, job, work)
 	return job, nil
 }
@@ -93,11 +107,14 @@ func (m *Manager) Cancel(id string) error {
 	return nil
 }
 
-// Shutdown cancels every live job and waits for their goroutines to
-// finish, up to ctx's deadline. Call from the server's graceful
-// shutdown path so in-flight builds don't outlive the process.
+// Shutdown cancels every live job, refuses new Submit calls
+// (returning ErrShutdown), and waits for in-flight goroutines to
+// finish, up to ctx's deadline. Idempotent. Call from the server's
+// graceful shutdown path so in-flight builds don't outlive the
+// process.
 func (m *Manager) Shutdown(ctx context.Context) error {
 	m.mu.Lock()
+	m.shutdown = true
 	for _, cancel := range m.cancels {
 		cancel()
 	}

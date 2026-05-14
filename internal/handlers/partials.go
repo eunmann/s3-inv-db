@@ -98,6 +98,10 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 		respondManagerErrorHTML(w, r, err, "submit load job")
 		return
 	}
+	// Headers must commit BEFORE WriteHeader, otherwise the Set on
+	// Content-Type inside renderDiscoveredRowFrom is a no-op and the
+	// browser falls back to Go's body sniffing.
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)
 	h.renderDiscoveredRowFrom(w, r, disc)
 }

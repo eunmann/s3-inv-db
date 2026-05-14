@@ -16,6 +16,12 @@ API and an HTMX-driven SSR web UI.
   inventories, viewing per-prefix cost estimates
 - **S3 discovery** — server walks an `s3://bucket/inventory-prefix/`
   source and surfaces every inventory + its latest run
+- **Asynchronous inventory loading** — Build & Load returns immediately
+  with a queued job; pipeline progress and ETA stream to the row over
+  Server-Sent Events. In-flight builds can be cancelled mid-pipeline.
+- **Restart-safe** — inventory state and job history persist to SQLite
+  (`$CACHE_DIR/state.db`); a fresh server process rehydrates the
+  in-memory Manager and shows aborted jobs with a Retry button.
 - **Pure Go** implementation with no CGO dependencies
 
 ## Binaries
@@ -92,21 +98,37 @@ s3-inv-db-server \
 |---|---|---|---|
 | `/` | GET | HTML | Dashboard — counters + recent inventories |
 | `/inventories` | GET | HTML | Discovery list (when `--s3-source` is set) |
-| `/browse` | GET | HTML | Prefix explorer; URL params seed the initial render |
+| `/browse` | GET | HTML or row partial | Prefix explorer; content-negotiated on `HX-Request` |
 | `/healthz` | GET | text/plain `ok` | Liveness probe (no auth, no S3) |
-| `/partials/browse-level` | GET | HTML | One level of the prefix tree (htmx target) |
+| `/static/tailwind.css` | GET | text/css | Embedded compiled stylesheet, ETag-revalidated |
+| `/partials/inventory-row/{id}` | GET | HTML row | Single row of the (non-discovered) inventory list |
 | `/partials/inventories/{id}/load` | POST | HTML row | Loads + returns updated row |
 | `/partials/inventories/{id}/unload` | POST | HTML row | Unloads + returns updated row |
 | `/partials/inventories/{id}` | DELETE | empty | Deletes (htmx outerHTML removes row) |
-| `/partials/discovered/{src}/{id}/load` | POST | HTML row | Build + load a discovered inventory |
+| `/partials/discovered/{src}/{id}` | GET | HTML row | Latest state of one discovered row (used by SSE refresh) |
+| `/partials/discovered/{src}/{id}/load` | POST | HTML row, **202** | Submits an async build job; row swaps to queued state |
 | `/partials/discovered/{src}/{id}/unload` | POST | HTML row | Unload |
-| `/partials/discovered/{src}/{id}` | DELETE | empty | Evict (unload + remove + delete cache) |
+| `/api/jobs/stream` | GET | `text/event-stream` | Server-Sent Events — one frame per job state change, with a `: ping` heartbeat |
+| `/api/jobs/{id}/cancel` | POST | empty, **202** | Cancels an in-flight job |
 | `/api/inventories` | GET, POST | JSON | List / register |
 | `/api/inventories/{id}` | GET, DELETE | JSON | Get / delete |
 | `/api/inventories/{id}/load`, `/unload` | POST | JSON | Load / unload |
 | `/api/inventories/{id}/stats`, `/descendants` | GET | JSON | Per-prefix stats / depth-walk |
 | `/api/discovered` | GET | JSON | List discovered inventories (when configured) |
 | `/api/stats` | GET | JSON | Stats for `?inventory_id=&prefix=` |
+
+#### Async load flow
+
+A click on **Load** for a discovered inventory:
+
+1. `POST /partials/discovered/{src}/{id}/load` → 202 + the row in `queued` state, no waiting for the build pipeline.
+2. The row's `hx-trigger="sse:row-{src}/{id}"` listens to `/api/jobs/stream` and re-fetches itself via `GET /partials/discovered/{src}/{id}` on every state change.
+3. A spinner + stage label ("Downloading & parsing") + progress bar + ETA render alongside the row's State chip while the job is live.
+4. **Cancel** posts to `/api/jobs/{job-id}/cancel`, the build context is signalled, the goroutine winds down, the row swaps back to the prior state with a **Retry** button.
+
+#### Persistence
+
+Inventory state + job history live in `$CACHE_DIR/state.db` (SQLite, WAL mode, pure-Go driver). On boot the server rehydrates the in-memory Manager from this file and marks any job left running by the previous process as `aborted`. Inventories caught mid-load get flipped to `error` so the UI shows Retry instead of a forever spinner.
 
 Cross-origin mutating requests (POST/PUT/PATCH/DELETE) are rejected by
 a same-origin middleware; reads are public.
