@@ -155,3 +155,23 @@ func TestDetermineMemoryBudgetInvalidEnv(t *testing.T) {
 		t.Errorf("expected 'S3INV_MEM_BUDGET' in error, got: %v", err)
 	}
 }
+
+func TestLoadPriceTable_DefaultsWhenEmpty(t *testing.T) {
+	pt, err := loadPriceTable("")
+	if err != nil {
+		t.Fatalf("loadPriceTable(empty): %v", err)
+	}
+	if len(pt.PerGBMonth) == 0 {
+		t.Error("default price table has no per-GB rates")
+	}
+}
+
+func TestLoadPriceTable_MissingFile(t *testing.T) {
+	_, err := loadPriceTable("/no/such/file.json")
+	if err == nil {
+		t.Fatal("loadPriceTable should error on missing file")
+	}
+	if !strings.Contains(err.Error(), "load price table") {
+		t.Errorf("error should wrap with context, got: %v", err)
+	}
+}
