@@ -92,7 +92,7 @@ func (m *Manager) Register(id, name, path string) error {
 		return ErrAlreadyExists
 	}
 
-	info := Info{ID: id, Name: name, Path: path, State: StatePending}
+	info := Info{ID: id, Name: name, Path: path, State: StateNotLoaded}
 	m.inventories[id] = &managedInventory{info: info}
 	return m.mirror(info)
 }
@@ -127,11 +127,11 @@ func (m *Manager) LoadWith(ctx context.Context, id string, build BuildFunc) erro
 		m.mu.Unlock()
 		return ErrNotFound
 	}
-	if inv.info.State != StatePending && inv.info.State != StateUnloaded && inv.info.State != StateError {
+	if inv.info.State != StateNotLoaded && inv.info.State != StateUnloaded && inv.info.State != StateError {
 		m.mu.Unlock()
 		return fmt.Errorf("%w: cannot load from state %s", ErrInvalidState, inv.info.State)
 	}
-	inv.info.State = StateParsing
+	inv.info.State = StateLoading
 	inv.info.Error = ""
 	_ = m.mirror(inv.info)
 	snapshot := inv.info
@@ -175,7 +175,7 @@ func (m *Manager) LoadWith(ctx context.Context, id string, build BuildFunc) erro
 	}
 
 	// inv.index assignment is safe under m.mu.Lock — no readers can be
-	// inside WithIndex on this inventory because state was StateParsing.
+	// inside WithIndex on this inventory because state was StateLoading.
 	inv.index = idx
 	inv.info.State = StateLoaded
 	inv.info.NodeCount = idx.Count()

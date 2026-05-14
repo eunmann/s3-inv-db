@@ -17,6 +17,43 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 )
 
+// stateLabel turns internal inventory state names into user-facing
+// language. Kept aligned with the inventory.State constants.
+func stateLabel(state string) string {
+	switch state {
+	case "loaded":
+		return "Loaded"
+	case "not_loaded":
+		return "Not loaded"
+	case "loading":
+		return "Loading…"
+	case "error":
+		return "Error"
+	case "unloaded":
+		return "On disk"
+	default:
+		return state
+	}
+}
+
+// stageLabel renders pipeline phase names from the build pipeline.
+func stageLabel(stage string) string {
+	switch stage {
+	case "preparing":
+		return "Preparing"
+	case "initializing":
+		return "Initializing"
+	case "downloading":
+		return "Downloading & parsing"
+	case "building":
+		return "Building index"
+	case "done":
+		return "Done"
+	default:
+		return stage
+	}
+}
+
 //go:embed templates/*.html templates/partials/*.html
 var embeddedTemplates embed.FS
 
@@ -74,13 +111,15 @@ func FuncMap() template.FuncMap {
 				return t.Format("Jan 2, 15:04")
 			}
 		},
+		"stateLabel": stateLabel,
+		"stageLabel": stageLabel,
 		"stateClass": func(state string) string {
 			switch state {
 			case "loaded":
 				return "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
-			case "pending":
+			case "not_loaded":
 				return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300"
-			case "parsing":
+			case "loading":
 				return "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300"
 			case "error":
 				return "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"

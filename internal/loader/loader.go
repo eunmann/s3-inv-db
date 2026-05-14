@@ -81,16 +81,6 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, manifestURI st
 	return outDir, nil
 }
 
-// Evict removes the cached on-disk index for an inventory. Returns nil if
-// the cache directory doesn't exist.
-func (l *Loader) Evict(srcBucket, invID string) error {
-	dir := l.CacheDirFor(srcBucket, invID)
-	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("remove cache dir %s: %w", dir, err)
-	}
-	return nil
-}
-
 var (
 	errEmptyID       = errors.New("source bucket and inventory id are required")
 	errEmptyManifest = errors.New("manifest URI is required")

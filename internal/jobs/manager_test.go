@@ -32,7 +32,7 @@ func newManager(t *testing.T) (*jobs.Manager, *jobs.Store, *jobs.Bus) {
 	if err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)
 	}
-	if err := invStore.Upsert(inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StatePending}); err != nil {
+	if err := invStore.Upsert(inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
 		t.Fatalf("seed inventory: %v", err)
 	}
 	store, err := jobs.NewStore(db)
@@ -148,7 +148,7 @@ func TestStore_MarkAborted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)
 	}
-	if err := invStore.Upsert(inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StatePending}); err != nil {
+	if err := invStore.Upsert(inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
 		t.Fatalf("seed inventory: %v", err)
 	}
 	store, err := jobs.NewStore(db)

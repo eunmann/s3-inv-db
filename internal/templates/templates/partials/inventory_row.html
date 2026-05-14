@@ -8,7 +8,7 @@
     </td>
     <td class="px-6 py-4 whitespace-nowrap">
         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass (printf "%s" .State)}}">
-            {{.State}}
+            {{stateLabel (printf "%s" .State)}}
         </span>
         {{if .Error}}
         <div class="text-xs text-red-600 dark:text-red-400 mt-1" title="{{.Error}}">Error</div>
@@ -21,7 +21,7 @@
         {{if .HasTierData}}Yes{{else}}No{{end}}
     </td>
     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
-        {{if .State.IsPending}}
+        {{if .State.IsNotLoaded}}
         <button type="button"
             hx-post="/partials/inventories/{{.ID}}/load"
             hx-target="closest tr"

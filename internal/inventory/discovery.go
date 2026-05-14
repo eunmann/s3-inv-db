@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
-	"github.com/rs/zerolog"
 )
 
 // Discoverer is the subset of s3disco.Discoverer that DiscoveryService
@@ -21,7 +20,6 @@ type Discoverer interface {
 type IndexBuilder interface {
 	Build(ctx context.Context, srcBucket, invID, manifestURI string) (string, error)
 	BuildWith(ctx context.Context, srcBucket, invID, manifestURI string, onStage func(string)) (string, error)
-	Evict(srcBucket, invID string) error
 }
 
 // MergedInventory is one discovered inventory plus its live load state
@@ -77,7 +75,7 @@ func (s *DiscoveryService) List(ctx context.Context) ([]MergedInventory, error) 
 	}
 	out := make([]MergedInventory, 0, len(discovered))
 	for _, d := range discovered {
-		m := MergedInventory{Inventory: d, State: StatePending}
+		m := MergedInventory{Inventory: d, State: StateNotLoaded}
 		if info, ok := s.manager.Get(d.CompositeID()); ok {
 			m.State = info.State
 			m.Error = info.Error
@@ -142,27 +140,6 @@ func (s *DiscoveryService) LoadWith(ctx context.Context, disc s3disco.Inventory,
 	})
 	if err != nil {
 		return err
-	}
-	return nil
-}
-
-// Evict unloads the inventory, removes it from the Manager, and deletes
-// its on-disk cache directory. ErrNotFound / ErrInvalidState from any
-// individual step are tolerated (the user wants the entry gone; it
-// being gone already is fine).
-func (s *DiscoveryService) Evict(ctx context.Context, src, id string) error {
-	composite := src + "/" + id
-	if err := s.manager.Unload(composite); err != nil &&
-		!errors.Is(err, ErrInvalidState) && !errors.Is(err, ErrNotFound) {
-		return fmt.Errorf("unload: %w", err)
-	}
-	if err := s.manager.Remove(composite); err != nil && !errors.Is(err, ErrNotFound) {
-		return fmt.Errorf("remove: %w", err)
-	}
-	if s.builder != nil {
-		if err := s.builder.Evict(src, id); err != nil {
-			zerolog.Ctx(ctx).Warn().Err(err).Str("composite", composite).Msg("evict cache")
-		}
 	}
 	return nil
 }

@@ -40,8 +40,6 @@ func (f *fakeDiscoverer) Bucket() string { return f.bucket }
 type fakeBuilder struct {
 	buildResp string
 	buildErr  error
-	evictErr  error
-	evicted   []string
 }
 
 func (f *fakeBuilder) Build(_ context.Context, _, _, _ string) (string, error) {
@@ -50,10 +48,6 @@ func (f *fakeBuilder) Build(_ context.Context, _, _, _ string) (string, error) {
 
 func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _ string, _ func(string)) (string, error) {
 	return f.buildResp, f.buildErr
-}
-func (f *fakeBuilder) Evict(src, id string) error {
-	f.evicted = append(f.evicted, src+"/"+id)
-	return f.evictErr
 }
 
 func newDiscoveredHandlers(t *testing.T, disc inventory.Discoverer, ldr inventory.IndexBuilder) *Handlers {
@@ -186,20 +180,5 @@ func TestUnloadDiscoveredRowPartial_NotFound(t *testing.T) {
 	h.UnloadDiscoveredRowPartial(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 for missing inventory", w.Code)
-	}
-}
-
-func TestEvictDiscoveredRowPartial_TolerantOfMissing(t *testing.T) {
-	bld := &fakeBuilder{}
-	h := newDiscoveredHandlers(t, &fakeDiscoverer{}, bld)
-	req := httptest.NewRequest(http.MethodDelete, "/partials/discovered/b/i", http.NoBody)
-	req = chiCtxWithParams(req, "src", "b", "id", "i")
-	w := httptest.NewRecorder()
-	h.EvictDiscoveredRowPartial(w, req)
-	if w.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200 even when missing", w.Code)
-	}
-	if len(bld.evicted) != 1 || bld.evicted[0] != "b/i" {
-		t.Errorf("loader.Evict called %v, want [b/i]", bld.evicted)
 	}
 }

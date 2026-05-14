@@ -3,7 +3,6 @@ package loader
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 )
@@ -73,66 +72,5 @@ func TestBuildWith_NilCallbackIsSafe(t *testing.T) {
 	_, err := l.BuildWith(context.Background(), "", "inv", "s3://b/m", nil)
 	if !errors.Is(err, errEmptyID) {
 		t.Errorf("err = %v, want errEmptyID", err)
-	}
-}
-
-func TestEvict_RemovesCacheDir(t *testing.T) {
-	root := t.TempDir()
-	l := New(root, nil)
-
-	dir := l.CacheDirFor("buck", "inv")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	// Drop a file in there to make sure RemoveAll handles non-empty dirs.
-	if err := os.WriteFile(filepath.Join(dir, "marker"), []byte("x"), 0o644); err != nil {
-		t.Fatalf("write marker: %v", err)
-	}
-
-	if err := l.Evict("buck", "inv"); err != nil {
-		t.Fatalf("Evict: %v", err)
-	}
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Errorf("cache dir still exists after Evict: stat err = %v", err)
-	}
-}
-
-func TestEvict_NoopOnMissingDir(t *testing.T) {
-	root := t.TempDir()
-	l := New(root, nil)
-	// Inventory was never built; Evict must succeed regardless.
-	if err := l.Evict("never", "built"); err != nil {
-		t.Errorf("Evict on missing dir returned: %v", err)
-	}
-}
-
-func TestEvict_OnlyTouchesNamedSubtree(t *testing.T) {
-	// Sanity: evicting one inventory must not affect siblings under the
-	// same src bucket or other src buckets.
-	root := t.TempDir()
-	l := New(root, nil)
-
-	mk := func(src, id string) string {
-		p := l.CacheDirFor(src, id)
-		if err := os.MkdirAll(p, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", p, err)
-		}
-		return p
-	}
-	target := mk("buck", "inv-1")
-	siblingSameSrc := mk("buck", "inv-2")
-	otherSrc := mk("otherbuck", "inv-1")
-
-	if err := l.Evict("buck", "inv-1"); err != nil {
-		t.Fatalf("Evict: %v", err)
-	}
-	if _, err := os.Stat(target); !os.IsNotExist(err) {
-		t.Errorf("target dir still exists: %v", err)
-	}
-	if _, err := os.Stat(siblingSameSrc); err != nil {
-		t.Errorf("sibling dir affected: %v", err)
-	}
-	if _, err := os.Stat(otherSrc); err != nil {
-		t.Errorf("other-bucket dir affected: %v", err)
 	}
 }

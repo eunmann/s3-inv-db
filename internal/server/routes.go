@@ -73,7 +73,6 @@ func (s *Server) setupRoutes() {
 		r.Get("/partials/discovered/{src}/{id}", s.handlers.DiscoveredRowPartial)
 		r.Post("/partials/discovered/{src}/{id}/load", s.handlers.LoadDiscoveredRowPartial)
 		r.Post("/partials/discovered/{src}/{id}/unload", s.handlers.UnloadDiscoveredRowPartial)
-		r.Delete("/partials/discovered/{src}/{id}", s.handlers.EvictDiscoveredRowPartial)
 	})
 
 	// API routes

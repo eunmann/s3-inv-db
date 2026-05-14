@@ -1,5 +1,5 @@
 {{$composite := printf "%s/%s" .SourceBucket .InventoryID}}
-{{$busy := or .State.IsParsing (and .LatestJob (eq (printf "%s" .LatestJob.State) "queued"))}}
+{{$busy := or .State.IsLoading (and .LatestJob (eq (printf "%s" .LatestJob.State) "queued"))}}
 {{$canRetry := and .LatestJob (or (eq (printf "%s" .LatestJob.State) "failed") (eq (printf "%s" .LatestJob.State) "aborted") (eq (printf "%s" .LatestJob.State) "cancelled"))}}
 <tr id="discovered-row-{{.SourceBucket}}-{{.InventoryID}}"
     hx-get="/partials/discovered/{{.SourceBucket}}/{{.InventoryID}}"
@@ -15,7 +15,7 @@
     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{{.FileFormat}}</td>
     <td class="px-6 py-4 whitespace-nowrap">
         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass (printf "%s" .State)}}">
-            {{.State}}
+            {{stateLabel (printf "%s" .State)}}
         </span>
         {{if $busy}}
         <div class="flex items-center gap-2 mt-2 text-xs text-gray-600 dark:text-gray-300">
@@ -23,7 +23,7 @@
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
             </svg>
-            <span>{{if .LatestJob}}{{if .LatestJob.Stage}}{{.LatestJob.Stage}}{{else}}working…{{end}}{{else}}working…{{end}}</span>
+            <span>{{if .LatestJob}}{{if .LatestJob.Stage}}{{stageLabel .LatestJob.Stage}}{{else}}Starting…{{end}}{{else}}Starting…{{end}}</span>
         </div>
         {{end}}
         {{if .Error}}
@@ -49,7 +49,7 @@
             hx-target="closest tr"
             hx-swap="outerHTML"
             class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 dark:hover:text-indigo-200">
-            {{if $canRetry}}Retry{{else if .State.IsPending}}Build &amp; Load{{else}}Reload{{end}}
+            {{if $canRetry}}Retry{{else if .State.IsNotLoaded}}Load{{else}}Reload{{end}}
         </button>
         {{else if .State.IsLoaded}}
         <button type="button"
@@ -58,16 +58,6 @@
             hx-swap="outerHTML"
             class="text-yellow-600 dark:text-yellow-400 hover:text-yellow-900 dark:hover:text-yellow-200">
             Unload
-        </button>
-        {{end}}
-        {{if not $busy}}
-        <button type="button"
-            hx-delete="/partials/discovered/{{.SourceBucket}}/{{.InventoryID}}"
-            hx-target="closest tr"
-            hx-swap="outerHTML"
-            hx-confirm="Evict cached index? The S3 source is untouched; you can re-load."
-            class="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-200">
-            Evict
         </button>
         {{end}}
     </td>

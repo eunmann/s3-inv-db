@@ -150,8 +150,8 @@ func TestRenderer_RepeatedRenders(t *testing.T) {
 	}
 
 	// Same for the partial path. Use the real Info type so the
-	// template's .State.IsPending predicate resolves.
-	partialData := inventory.Info{ID: "x", Name: "X", Path: "/p", State: inventory.StatePending}
+	// template's .State.IsNotLoaded predicate resolves.
+	partialData := inventory.Info{ID: "x", Name: "X", Path: "/p", State: inventory.StateNotLoaded}
 	for i := range 2 {
 		var buf bytes.Buffer
 		if err := renderer.RenderPartial(&buf, "inventory_row.html", partialData); err != nil {
@@ -170,7 +170,7 @@ func TestRenderer_Partial(t *testing.T) {
 		ID:    "test-id",
 		Name:  "Test Name",
 		Path:  "/path/to/test",
-		State: inventory.StatePending,
+		State: inventory.StateNotLoaded,
 	}
 
 	var buf bytes.Buffer

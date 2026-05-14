@@ -8,7 +8,7 @@ import (
 
 func TestHydrate_NonLoadedStateKeepsAsIs(t *testing.T) {
 	mgr := inventory.NewManager()
-	info := inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StatePending}
+	info := inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StateNotLoaded}
 	if err := mgr.Hydrate(info, ""); err != nil {
 		t.Fatalf("Hydrate: %v", err)
 	}
@@ -16,7 +16,7 @@ func TestHydrate_NonLoadedStateKeepsAsIs(t *testing.T) {
 	if !ok {
 		t.Fatal("inventory not registered")
 	}
-	if got.State != inventory.StatePending {
+	if got.State != inventory.StateNotLoaded {
 		t.Errorf("state = %s, want pending", got.State)
 	}
 }
@@ -42,7 +42,7 @@ func TestHydrate_LoadedStateOpenFailureBecomesError(t *testing.T) {
 
 func TestHydrate_DuplicateID(t *testing.T) {
 	mgr := inventory.NewManager()
-	info := inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StatePending}
+	info := inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StateNotLoaded}
 	if err := mgr.Hydrate(info, ""); err != nil {
 		t.Fatal(err)
 	}

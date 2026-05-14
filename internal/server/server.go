@@ -146,7 +146,7 @@ func (s *Server) recover(logger zerolog.Logger) {
 		info := &infos[i]
 		// Stale parsing → error so the row shows Retry instead of a
 		// spinner that will never resolve.
-		if info.State == inventory.StateParsing {
+		if info.State == inventory.StateLoading {
 			info.State = inventory.StateError
 			info.Error = "interrupted by server restart"
 		}
@@ -165,7 +165,7 @@ func (s *Server) recover(logger zerolog.Logger) {
 		logger.Info().Str("id", final.ID).Str("state", string(final.State)).Msg("hydrated inventory")
 		// Manager.Hydrate already mirrors to invStore (via SetStore),
 		// so no explicit Upsert is required here — but for the
-		// StateParsing→StateError flip we performed above the input,
+		// StateLoading→StateError flip we performed above the input,
 		// Hydrate's mirror already wrote the corrected state.
 	}
 }

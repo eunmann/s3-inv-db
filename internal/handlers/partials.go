@@ -136,36 +136,6 @@ func (h *Handlers) DiscoveredRowPartial(w http.ResponseWriter, r *http.Request) 
 	h.renderDiscoveredRow(w, r, src, id)
 }
 
-// EvictDiscoveredRowPartial evicts a discovered inventory (unload + remove +
-// cache wipe) and returns an empty body so the row is removed via outerHTML.
-// Any in-flight job for this inventory is cancelled first so its goroutine
-// winds down before the cache directory is removed underneath it.
-func (h *Handlers) EvictDiscoveredRowPartial(w http.ResponseWriter, r *http.Request) {
-	src := chi.URLParam(r, "src")
-	id := chi.URLParam(r, "id")
-	composite := src + "/" + id
-	logger := zerolog.Ctx(r.Context())
-
-	if h.jobMgr != nil && h.jobStore != nil {
-		live, err := h.jobStore.ListForInventory(composite)
-		if err != nil {
-			logger.Warn().Err(err).Str("composite", composite).Msg("list jobs before evict")
-		}
-		for i := range live {
-			if live[i].State.IsLive() {
-				_ = h.jobMgr.Cancel(live[i].ID)
-			}
-		}
-	}
-
-	if err := h.discovery.Evict(r.Context(), src, id); err != nil {
-		respondManagerErrorHTML(w, r, err, "evict inventory")
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-}
-
 // renderInventoryRow looks up the inventory in the manager and writes the
 // inventory_row.html partial. Used by the htmx-facing partial handlers.
 func (h *Handlers) renderInventoryRow(w http.ResponseWriter, r *http.Request, id string) {
@@ -207,7 +177,7 @@ type DiscoveredRowView struct {
 // row can render progress / cancel / retry.
 func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Request, disc s3disco.Inventory) {
 	view := DiscoveredRowView{
-		MergedInventory: inventory.MergedInventory{Inventory: disc, State: inventory.StatePending},
+		MergedInventory: inventory.MergedInventory{Inventory: disc, State: inventory.StateNotLoaded},
 	}
 	if info, ok := h.manager.Get(disc.CompositeID()); ok {
 		view.State = info.State

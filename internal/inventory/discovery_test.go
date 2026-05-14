@@ -31,8 +31,6 @@ func (f *fakeDiscoverer) Bucket() string { return f.bucket }
 type fakeBuilder struct {
 	buildResp string
 	buildErr  error
-	evictErr  error
-	evictedAt []string // record of (src/id) Evict calls
 }
 
 func (f *fakeBuilder) Build(_ context.Context, _, _, _ string) (string, error) {
@@ -42,11 +40,6 @@ func (f *fakeBuilder) Build(_ context.Context, _, _, _ string) (string, error) {
 func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _ string, _ func(string)) (string, error) {
 	return f.buildResp, f.buildErr
 }
-func (f *fakeBuilder) Evict(src, id string) error {
-	f.evictedAt = append(f.evictedAt, src+"/"+id)
-	return f.evictErr
-}
-
 func TestDiscoveryService_DisabledWithoutDeps(t *testing.T) {
 	mgr := NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
@@ -102,7 +95,7 @@ func TestDiscoveryService_ListMergesWithManagerState(t *testing.T) {
 
 	// Pre-load the manager with state for one of the inventories we'll
 	// surface via the discoverer. The merge should preserve that state
-	// instead of returning the default StatePending for known IDs.
+	// instead of returning the default StateNotLoaded for known IDs.
 	if err := mgr.Register("bucket-a/inv-1", "Pre-registered", "/path"); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -122,16 +115,16 @@ func TestDiscoveryService_ListMergesWithManagerState(t *testing.T) {
 		t.Fatalf("len(views) = %d, want 2", len(views))
 	}
 
-	// inv-1 is registered → State should be StatePending (the registered default).
+	// inv-1 is registered → State should be StateNotLoaded (the registered default).
 	if views[0].CompositeID() != "bucket-a/inv-1" {
 		t.Errorf("views[0].CompositeID() = %q, want bucket-a/inv-1", views[0].CompositeID())
 	}
-	if views[0].State != StatePending {
-		t.Errorf("views[0].State = %q, want %q", views[0].State, StatePending)
+	if views[0].State != StateNotLoaded {
+		t.Errorf("views[0].State = %q, want %q", views[0].State, StateNotLoaded)
 	}
-	// inv-2 is not registered → also StatePending (DiscoveryService's default).
-	if views[1].State != StatePending {
-		t.Errorf("views[1].State = %q, want %q", views[1].State, StatePending)
+	// inv-2 is not registered → also StateNotLoaded (DiscoveryService's default).
+	if views[1].State != StateNotLoaded {
+		t.Errorf("views[1].State = %q, want %q", views[1].State, StateNotLoaded)
 	}
 }
 
@@ -144,35 +137,5 @@ func TestDiscoveryService_ListPropagatesDiscovererError(t *testing.T) {
 	_, err := s.List(context.Background())
 	if !errors.Is(err, want) {
 		t.Errorf("List() error = %v, want %v wrapped", err, want)
-	}
-}
-
-func TestDiscoveryService_EvictWipesCache(t *testing.T) {
-	mgr := NewManager()
-	t.Cleanup(func() { _ = mgr.Close() })
-	if err := mgr.Register("bucket/inv", "X", "/path"); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	builder := &fakeBuilder{}
-	s := NewDiscoveryService(mgr, &fakeDiscoverer{}, builder)
-
-	if err := s.Evict(context.Background(), "bucket", "inv"); err != nil {
-		t.Fatalf("Evict: %v", err)
-	}
-	if _, ok := mgr.Get("bucket/inv"); ok {
-		t.Error("inventory still present in manager after Evict")
-	}
-	if len(builder.evictedAt) != 1 || builder.evictedAt[0] != "bucket/inv" {
-		t.Errorf("builder.Evict calls = %v, want [bucket/inv]", builder.evictedAt)
-	}
-}
-
-func TestDiscoveryService_EvictTolerantOfMissingEntry(t *testing.T) {
-	mgr := NewManager()
-	t.Cleanup(func() { _ = mgr.Close() })
-	// inventory was never registered — Evict should be a no-op.
-	s := NewDiscoveryService(mgr, &fakeDiscoverer{}, &fakeBuilder{})
-	if err := s.Evict(context.Background(), "missing", "id"); err != nil {
-		t.Errorf("Evict on missing entry returned error: %v", err)
 	}
 }

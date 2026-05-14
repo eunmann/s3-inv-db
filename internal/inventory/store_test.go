@@ -54,7 +54,7 @@ func TestStore_UpsertRoundTrip(t *testing.T) {
 
 func TestStore_UpsertReplacesRow(t *testing.T) {
 	s := openStore(t)
-	first := inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StatePending}
+	first := inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StateNotLoaded}
 	if err := s.Upsert(first); err != nil {
 		t.Fatalf("upsert first: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestStore_GetMissing(t *testing.T) {
 func TestStore_ListInsertionOrder(t *testing.T) {
 	s := openStore(t)
 	for _, id := range []string{"c", "a", "b"} {
-		if err := s.Upsert(inventory.Info{ID: id, Name: id, Path: "p", State: inventory.StatePending}); err != nil {
+		if err := s.Upsert(inventory.Info{ID: id, Name: id, Path: "p", State: inventory.StateNotLoaded}); err != nil {
 			t.Fatalf("upsert %s: %v", id, err)
 		}
 	}
@@ -107,7 +107,7 @@ func TestStore_ListInsertionOrder(t *testing.T) {
 
 func TestStore_Delete(t *testing.T) {
 	s := openStore(t)
-	if err := s.Upsert(inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StatePending}); err != nil {
+	if err := s.Upsert(inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	if err := s.Delete("id1"); err != nil {

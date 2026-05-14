@@ -38,7 +38,7 @@ func TestManager_RegisterMirrorsToStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.Get: %v", err)
 	}
-	if got.State != inventory.StatePending {
+	if got.State != inventory.StateNotLoaded {
 		t.Errorf("persisted state = %s, want pending", got.State)
 	}
 }

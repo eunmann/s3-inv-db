@@ -85,7 +85,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	// Start memory diagnostics
 	p.memTracker.Start()
 	defer p.memTracker.Stop()
-	p.setPhase("init")
+	p.setPhase("initializing")
 
 	tempDir := p.config.TempDir
 	if tempDir == "" {
@@ -116,7 +116,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Str("index_budget", humanfmt.Bytes(p.config.IndexBuildBudget())).
 		Msg("pipeline starting")
 
-	p.setPhase("ingest")
+	p.setPhase("downloading")
 	ingestStart := time.Now()
 	if err := p.runIngestPhase(ctx, manifestURI); err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -139,7 +139,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Dur("duration_ms", ingestDuration).
 		Msg("ingest phase complete")
 
-	p.setPhase("merge")
+	p.setPhase("building")
 	mergeStart := time.Now()
 	prefixCount, maxDepth, err := p.runMergeBuildPhase(ctx, outDir)
 	if err != nil {

@@ -68,7 +68,7 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 			if infos[i].HasTierData {
 				data.HasTierData = true
 			}
-		case inventory.StatePending:
+		case inventory.StateNotLoaded:
 			data.PendingCount++
 		case inventory.StateError:
 			data.ErrorCount++

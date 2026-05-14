@@ -6,28 +6,30 @@ import "time"
 // State represents the lifecycle state of an inventory.
 type State string
 
-// Inventory states.
+// Inventory states. String values match the user-facing vocabulary
+// the templates render — no separate enum-to-label table to keep in
+// sync.
 const (
-	StatePending  State = "pending"
-	StateParsing  State = "parsing"
-	StateLoaded   State = "loaded"
-	StateError    State = "error"
-	StateUnloaded State = "unloaded"
+	StateNotLoaded State = "not_loaded" // discovered, never built or built then evicted from disk
+	StateLoading   State = "loading"    // build pipeline running
+	StateLoaded    State = "loaded"     // index in memory + on disk
+	StateError     State = "error"      // last operation failed
+	StateUnloaded  State = "unloaded"   // built on disk, released from memory
 )
 
 // State predicates. Templates use these instead of stringly-typed
 // {{eq (printf "%s" .State) "loaded"}} comparisons so a state rename
 // becomes a refactor that compiler catches.
-func (s State) IsLoaded() bool   { return s == StateLoaded }
-func (s State) IsPending() bool  { return s == StatePending }
-func (s State) IsParsing() bool  { return s == StateParsing }
-func (s State) IsError() bool    { return s == StateError }
-func (s State) IsUnloaded() bool { return s == StateUnloaded }
+func (s State) IsLoaded() bool    { return s == StateLoaded }
+func (s State) IsNotLoaded() bool { return s == StateNotLoaded }
+func (s State) IsLoading() bool   { return s == StateLoading }
+func (s State) IsError() bool     { return s == StateError }
+func (s State) IsUnloaded() bool  { return s == StateUnloaded }
 
-// CanLoad reports whether a Load is a legal next operation. Pending,
-// Unloaded, and Error inventories can all be (re)loaded.
+// CanLoad reports whether a Load is a legal next operation. Not-loaded,
+// Unloaded, and Error inventories can all be (re)built.
 func (s State) CanLoad() bool {
-	return s == StatePending || s == StateUnloaded || s == StateError
+	return s == StateNotLoaded || s == StateUnloaded || s == StateError
 }
 
 // Info contains metadata about a managed inventory.

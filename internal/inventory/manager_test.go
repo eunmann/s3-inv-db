@@ -33,8 +33,8 @@ func TestManagerRegister(t *testing.T) {
 	if info.Path != "/path/to/index" {
 		t.Errorf("Path = %q, want %q", info.Path, "/path/to/index")
 	}
-	if info.State != StatePending {
-		t.Errorf("State = %q, want %q", info.State, StatePending)
+	if info.State != StateNotLoaded {
+		t.Errorf("State = %q, want %q", info.State, StateNotLoaded)
 	}
 }
 
