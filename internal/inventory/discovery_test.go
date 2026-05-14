@@ -141,3 +141,64 @@ func TestDiscoveryService_ListPropagatesDiscovererError(t *testing.T) {
 		t.Errorf("List() error = %v, want %v wrapped", err, want)
 	}
 }
+
+func TestDiscoveryService_PrepareDiscovered_DisabledReturnsErr(t *testing.T) {
+	s := NewDiscoveryService(NewManager(), nil, nil)
+	disc := Inventory{SourceBucket: "b", InventoryName: "i", Run: "r", ManifestKey: "k"}
+	if err := s.PrepareDiscovered(disc); !errors.Is(err, ErrDiscoveryDisabled) {
+		t.Errorf("PrepareDiscovered err = %v, want ErrDiscoveryDisabled", err)
+	}
+}
+
+func TestDiscoveryService_PrepareDiscovered_NoRunRejects(t *testing.T) {
+	mgr := NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+	s := NewDiscoveryService(mgr, &fakeDiscoverer{bucket: "dst"}, &fakeBuilder{})
+	disc := Inventory{SourceBucket: "b", InventoryName: "i"} // no Run
+	err := s.PrepareDiscovered(disc)
+	if err == nil {
+		t.Fatal("PrepareDiscovered with empty Run should return an error")
+	}
+	if errors.Is(err, ErrDiscoveryDisabled) {
+		t.Errorf("err = %v, want a 'no run' error, not ErrDiscoveryDisabled", err)
+	}
+}
+
+func TestDiscoveryService_PrepareDiscovered_RegistersInManager(t *testing.T) {
+	mgr := NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+	s := NewDiscoveryService(mgr, &fakeDiscoverer{bucket: "dst"}, &fakeBuilder{})
+	disc := Inventory{
+		SourceBucket: "b", InventoryName: "i", Run: "2026-05-13",
+		ManifestKey: "k/manifest.json",
+	}
+	if err := s.PrepareDiscovered(disc); err != nil {
+		t.Fatalf("PrepareDiscovered: %v", err)
+	}
+	got, ok := mgr.Get(disc.CompositeID())
+	if !ok {
+		t.Fatalf("inventory %s not registered in manager", disc.CompositeID())
+	}
+	if got.State != StateNotLoaded {
+		t.Errorf("state = %s, want %s", got.State, StateNotLoaded)
+	}
+	if got.Path == "" || got.Path != "s3://dst/k/manifest.json" {
+		t.Errorf("path = %q, want s3://dst/k/manifest.json", got.Path)
+	}
+}
+
+func TestDiscoveryService_PrepareDiscovered_AlreadyExistsIsIdempotent(t *testing.T) {
+	mgr := NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+	s := NewDiscoveryService(mgr, &fakeDiscoverer{bucket: "dst"}, &fakeBuilder{})
+	disc := Inventory{
+		SourceBucket: "b", InventoryName: "i", Run: "2026-05-13",
+		ManifestKey: "k/manifest.json",
+	}
+	if err := s.PrepareDiscovered(disc); err != nil {
+		t.Fatalf("first PrepareDiscovered: %v", err)
+	}
+	if err := s.PrepareDiscovered(disc); err != nil {
+		t.Errorf("second PrepareDiscovered: %v (want nil — ErrAlreadyExists swallowed)", err)
+	}
+}

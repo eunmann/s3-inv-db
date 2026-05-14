@@ -215,3 +215,70 @@ func TestUnloadDiscoveredRowPartial_NotFound(t *testing.T) {
 		t.Errorf("status = %d, want 404 for missing inventory", w.Code)
 	}
 }
+
+func TestDiscoveryEnabled_ReflectsWiring(t *testing.T) {
+	// No discoverer or builder wired → DiscoveryEnabled() == false. The
+	// routes.go middleware uses this to gate /partials/discovered/* with
+	// a 503 instead of letting handlers fall through.
+	bare := newTestHandlers(t)
+	if bare.DiscoveryEnabled() {
+		t.Error("DiscoveryEnabled() = true on bare handler, want false")
+	}
+	wired := newDiscoveredHandlers(t, &fakeDiscoverer{}, &fakeBuilder{})
+	if !wired.DiscoveryEnabled() {
+		t.Error("DiscoveryEnabled() = false with discoverer+builder wired, want true")
+	}
+}
+
+func TestListDiscoveredAPI_DisabledReturns503(t *testing.T) {
+	h := newTestHandlers(t) // no discoverer wired
+	req := httptest.NewRequest(http.MethodGet, "/api/discovered", http.NoBody)
+	w := httptest.NewRecorder()
+	h.ListDiscoveredAPI(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "discovery not configured") {
+		t.Errorf("body missing reason: %s", w.Body.String())
+	}
+}
+
+func TestListDiscoveredAPI_DiscovererErrorReturns502(t *testing.T) {
+	h := newDiscoveredHandlers(t,
+		&fakeDiscoverer{listErr: errors.New("s3: throttled")},
+		&fakeBuilder{},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/discovered", http.NoBody)
+	w := httptest.NewRecorder()
+	h.ListDiscoveredAPI(w, req)
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", w.Code)
+	}
+	// The internal error text ("s3: throttled") must NOT reach the client —
+	// see commit 9d4348f. Only the generic message.
+	if strings.Contains(w.Body.String(), "throttled") {
+		t.Errorf("internal error leaked to client: %s", w.Body.String())
+	}
+}
+
+func TestListDiscoveredAPI_SuccessReturnsJSON(t *testing.T) {
+	h := newDiscoveredHandlers(t,
+		&fakeDiscoverer{listResp: []inventory.Inventory{
+			{SourceBucket: "b1", InventoryName: "i1", Run: "2026-05-13T03-00Z"},
+			{SourceBucket: "b1", InventoryName: "i2"},
+		}},
+		&fakeBuilder{},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/discovered", http.NoBody)
+	w := httptest.NewRecorder()
+	h.ListDiscoveredAPI(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	if !strings.Contains(w.Body.String(), `"b1"`) {
+		t.Errorf("body missing expected source bucket: %s", w.Body.String())
+	}
+}

@@ -361,21 +361,10 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// InventoryRowPartial renders an inventory row partial for HTMX.
+// InventoryRowPartial renders an inventory row partial for HTMX. Used
+// by /partials/inventory-row/{id} when the client wants to refresh one
+// row after an external state change. Shares its body with the helper
+// the Load/Unload/Delete partials use.
 func (h *Handlers) InventoryRowPartial(w http.ResponseWriter, r *http.Request) {
-	id := inventory.ID(chi.URLParam(r, "id"))
-
-	info, exists := h.manager.Get(id)
-	if !exists {
-		// HTMX swaps the response body into the DOM, so keep the partial
-		// route HTML-shaped (text/plain via http.Error) rather than JSON.
-		http.Error(w, "inventory not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.renderer.RenderPartial(w, "inventory_row.html", info); err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Msg("failed to render inventory row")
-		http.Error(w, "failed to render partial", http.StatusInternalServerError)
-	}
+	h.renderInventoryRow(w, r, inventory.ID(chi.URLParam(r, "id")))
 }
