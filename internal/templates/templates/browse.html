@@ -17,11 +17,15 @@
                                 class="mt-1 block w-full pl-3 pr-10 py-2 text-base bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
                             <option value="">Select a loaded inventory…</option>
                             {{$selected := .InventoryID}}
-                            {{range .Inventories}}
-                            <option value="{{.ID}}"{{if eq .ID $selected}} selected{{end}}>{{.Name}} ({{formatCount .NodeCount}} paths)</option>
+                            {{range .InventoryGroups}}
+                            <optgroup label="{{.ConfigLabel}}">
+                                {{range .Options}}
+                                <option value="{{.ID}}"{{if eq .ID $selected}} selected{{end}}>{{.RunLabel}} · {{formatCount .NodeCount}} paths</option>
+                                {{end}}
+                            </optgroup>
                             {{end}}
                         </select>
-                        {{if not .Inventories}}
+                        {{if not .InventoryGroups}}
                         <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">No loaded inventories. <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300">Discover and load one</a>.</p>
                         {{end}}
                     </div>

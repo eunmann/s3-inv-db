@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sort"
+	"strings"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -17,6 +19,22 @@ type (
 	BrowseSortLink   = inventory.BrowseSortLink
 	BrowsePagination = inventory.BrowsePagination
 )
+
+// BrowseInventoryGroup is one (sourceBucket, inventoryID) configuration
+// with all of its loaded runs. The Browse page's inventory <select>
+// renders one <optgroup> per group so the user navigates configuration
+// first, then picks a run within it.
+type BrowseInventoryGroup struct {
+	ConfigLabel string // "<src>/<inv>" — the group header
+	Options     []BrowseInventoryOption
+}
+
+// BrowseInventoryOption is one loaded run inside a BrowseInventoryGroup.
+type BrowseInventoryOption struct {
+	ID        string // composite ID "<src>/<inv>/<run>"
+	RunLabel  string // run timestamp, or the full Name when ID isn't 3-part
+	NodeCount uint64
+}
 
 // BrowseLevel is the data the browse_level.html partial renders. Lives
 // in the HTTP layer because it composes TierStats and CostEstimate.
@@ -59,18 +77,11 @@ func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request,
 	inventoryID, prefix, sortBy, dir string, page, pageSize int,
 ) {
-	inventories := h.manager.List()
-	loaded := make([]inventory.Info, 0, len(inventories))
-	for i := range inventories {
-		if inventories[i].State == inventory.StateLoaded {
-			loaded = append(loaded, inventories[i])
-		}
-	}
 	data := map[string]any{
-		"Title":       "Browse",
-		"Inventories": loaded,
-		"InventoryID": inventoryID,
-		"Prefix":      prefix,
+		"Title":           "Browse",
+		"InventoryGroups": groupLoadedInventories(h.manager.List()),
+		"InventoryID":     inventoryID,
+		"Prefix":          prefix,
 	}
 	if inventoryID != "" {
 		ctx := r.Context()
@@ -230,5 +241,54 @@ func (h *Handlers) fillChildCosts(idx *indexread.Index, visible []BrowseChild) {
 			visible[i].MonthlyCostMicrodollars = est.TotalMicrodollars
 			visible[i].MonthlyCostFormatted = est.TotalFormatted
 		}
+	}
+}
+
+// groupLoadedInventories splits the manager's inventory list into one
+// BrowseInventoryGroup per configuration, keeping only StateLoaded runs.
+// Groups are sorted alphabetically by ConfigLabel; runs inside each
+// group come back newest-first (ISO run timestamps sort lexicographically).
+//
+// Composite IDs that don't split into the expected 3 parts (legacy
+// 2-part entries or hand-registered inventories) collapse into a
+// single "Other" group so they remain selectable.
+func groupLoadedInventories(all []inventory.Info) []BrowseInventoryGroup {
+	groups := map[string]*BrowseInventoryGroup{}
+	for i := range all {
+		if all[i].State != inventory.StateLoaded {
+			continue
+		}
+		label, opt := splitForGroup(all[i])
+		g, ok := groups[label]
+		if !ok {
+			g = &BrowseInventoryGroup{ConfigLabel: label}
+			groups[label] = g
+		}
+		g.Options = append(g.Options, opt)
+	}
+	out := make([]BrowseInventoryGroup, 0, len(groups))
+	for _, g := range groups {
+		sort.Slice(g.Options, func(i, j int) bool {
+			return g.Options[i].RunLabel > g.Options[j].RunLabel
+		})
+		out = append(out, *g)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ConfigLabel < out[j].ConfigLabel })
+	return out
+}
+
+func splitForGroup(info inventory.Info) (label string, opt BrowseInventoryOption) {
+	parts := strings.SplitN(info.ID, "/", 3)
+	if len(parts) == 3 {
+		return parts[0] + "/" + parts[1], BrowseInventoryOption{
+			ID:        info.ID,
+			RunLabel:  parts[2],
+			NodeCount: info.NodeCount,
+		}
+	}
+	return "Other", BrowseInventoryOption{
+		ID:        info.ID,
+		RunLabel:  info.Name,
+		NodeCount: info.NodeCount,
 	}
 }
