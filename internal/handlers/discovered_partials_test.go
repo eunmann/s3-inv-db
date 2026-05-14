@@ -175,6 +175,37 @@ func TestLoadDiscoveredRowPartial_AcceptsBuildError(t *testing.T) {
 	}
 }
 
+func TestInventoriesPage_PlaceholderRowOmitsHTMXRefresh(t *testing.T) {
+	// A configuration with no completed runs surfaces as a placeholder
+	// (Run empty). The template must NOT emit hx-get / hx-trigger with
+	// empty URL segments — those generate /partials/discovered/b/i//
+	// which 404s, and SSE topics like "row-b/i/" never fire.
+	h := newDiscoveredHandlers(t,
+		&fakeDiscoverer{listResp: []s3disco.Inventory{{SourceBucket: "b", InventoryID: "i"}}, bucket: "dst"},
+		&fakeBuilder{},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/inventories", http.NoBody)
+	w := httptest.NewRecorder()
+	h.InventoriesPage(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, bad := range []string{
+		`/partials/discovered/b/i/"`, // hx-get with empty run
+		`/partials/discovered/b/i/ `, // hx-get followed by space
+		`row-b/i/"`,                  // SSE topic missing run
+	} {
+		if strings.Contains(body, bad) {
+			t.Errorf("placeholder row emitted broken URL fragment %q\nbody: %s", bad, body)
+		}
+	}
+	// Sanity: the row's "no run" label DOES render.
+	if !strings.Contains(body, "no run") {
+		t.Errorf("placeholder row missing 'no run' label; body: %s", body)
+	}
+}
+
 func TestUnloadDiscoveredRowPartial_NotFound(t *testing.T) {
 	h := newDiscoveredHandlers(t, &fakeDiscoverer{}, &fakeBuilder{})
 	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/unload", http.NoBody)

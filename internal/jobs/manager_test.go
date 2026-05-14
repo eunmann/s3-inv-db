@@ -184,3 +184,49 @@ func TestStore_MarkAborted(t *testing.T) {
 		t.Errorf("succeeded reaped: %+v", survivor)
 	}
 }
+
+func TestManager_SubmitAfterShutdown(t *testing.T) {
+	mgr, _, _ := newManager(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := mgr.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	_, err := mgr.Submit("src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
+		return nil
+	})
+	if !errors.Is(err, jobs.ErrShutdown) {
+		t.Errorf("Submit after Shutdown error = %v, want ErrShutdown", err)
+	}
+}
+
+func TestManager_ShutdownCancelsLiveJob(t *testing.T) {
+	mgr, store, _ := newManager(t)
+
+	started := make(chan struct{})
+	job, err := mgr.Submit("src/inv1", jobs.KindBuild, func(ctx context.Context, _ func(jobs.Update)) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	<-started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := mgr.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	final, err := store.Get(job.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if final.State != jobs.StateCancelled && final.State != jobs.StateFailed {
+		t.Errorf("post-shutdown job state = %s, want cancelled or failed", final.State)
+	}
+}

@@ -18,7 +18,11 @@
         </div>
         <div class="flex items-center gap-2 text-sm">
             <a href="/inventories" class="inline-flex items-center px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">Manage inventories</a>
-            <a href="/browse" class="inline-flex items-center px-3 py-1.5 border border-transparent rounded-md bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white font-medium {{if not .LoadedRuns}}opacity-50 pointer-events-none{{end}}" aria-disabled="{{if not .LoadedRuns}}true{{end}}">Open Browse</a>
+            {{if .LoadedRuns}}
+            <a href="/browse" class="inline-flex items-center px-3 py-1.5 border border-transparent rounded-md bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white font-medium">Open Browse</a>
+            {{else}}
+            <span class="inline-flex items-center px-3 py-1.5 border border-transparent rounded-md bg-indigo-600 text-white font-medium opacity-50 cursor-not-allowed" aria-disabled="true" title="Load an inventory first">Open Browse</span>
+            {{end}}
         </div>
     </header>
 

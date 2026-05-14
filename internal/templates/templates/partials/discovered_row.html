@@ -2,9 +2,9 @@
 {{$busy := or .State.IsLoading (and .LatestJob (eq (printf "%s" .LatestJob.State) "queued"))}}
 {{$canRetry := and .LatestJob (or (eq (printf "%s" .LatestJob.State) "failed") (eq (printf "%s" .LatestJob.State) "aborted") (eq (printf "%s" .LatestJob.State) "cancelled"))}}
 <tr id="discovered-row-{{.SourceBucket}}-{{.InventoryID}}-{{.Run}}"
-    hx-get="/partials/discovered/{{.SourceBucket}}/{{.InventoryID}}/{{.Run}}"
+    {{if .Run}}hx-get="/partials/discovered/{{.SourceBucket}}/{{.InventoryID}}/{{.Run}}"
     hx-trigger="sse:row-{{$composite}}"
-    hx-swap="outerHTML">
+    hx-swap="outerHTML"{{end}}>
     <td class="px-6 py-4 whitespace-nowrap">
         <div class="text-sm font-medium text-gray-900 dark:text-gray-100 font-mono">{{if .Run}}{{.Run}}{{else}}<span class="text-red-600 dark:text-red-400">no run</span>{{end}}</div>
         <div class="text-xs text-gray-500 dark:text-gray-400 font-mono truncate max-w-md" title="{{.ManifestKey}}">{{.ManifestKey}}</div>

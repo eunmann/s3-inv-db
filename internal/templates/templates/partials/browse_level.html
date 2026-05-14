@@ -3,16 +3,18 @@
     <nav class="flex items-center flex-wrap text-sm" aria-label="Breadcrumb">
         {{range $i, $c := .Breadcrumbs}}
             {{if $i}}<span class="mx-2 text-gray-300 dark:text-gray-600">/</span>{{end}}
+            {{if eq $i (sub (len $.Breadcrumbs) 1)}}
+            <span aria-current="page" class="font-semibold text-gray-900 dark:text-gray-100">{{$c.Label}}</span>
+            {{else}}
             <button type="button"
                 hx-get="/browse"
                 {{hxVals "inventory_id" $inv "prefix" $c.Prefix}}
                 hx-target="#browse-target"
                 hx-push-url="true"
-
-                class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline {{if eq $i (sub (len $.Breadcrumbs) 1)}}font-semibold text-gray-900 dark:text-gray-100 cursor-default no-underline{{end}}"
-                {{if eq $i (sub (len $.Breadcrumbs) 1)}}disabled{{end}}>
+                class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline">
                 {{$c.Label}}
             </button>
+            {{end}}
         {{end}}
     </nav>
 
