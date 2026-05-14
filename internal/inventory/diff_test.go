@@ -142,6 +142,47 @@ func TestNormalizeDiffSort(t *testing.T) {
 	}
 }
 
+func TestDiffStatusString(t *testing.T) {
+	cases := []struct {
+		s    DiffStatus
+		want string
+	}{
+		{DiffAdded, "added"},
+		{DiffRemoved, "removed"},
+		{DiffChanged, "changed"},
+		{DiffUnchanged, "unchanged"},
+		{DiffStatus(99), "unchanged"}, // out-of-range falls through to the safe default
+	}
+	for _, tc := range cases {
+		if got := tc.s.String(); got != tc.want {
+			t.Errorf("DiffStatus(%d).String() = %q, want %q", tc.s, got, tc.want)
+		}
+	}
+}
+
+func TestStatusOrder_StableDistinctPerStatus(t *testing.T) {
+	// Pin that every concrete status gets its own rank and that the public
+	// wrapper matches the unexported helper. The exact integers are an
+	// implementation detail — what matters is "stable and distinct".
+	statuses := []DiffStatus{DiffAdded, DiffRemoved, DiffChanged, DiffUnchanged}
+	seen := map[int]DiffStatus{}
+	for _, s := range statuses {
+		got := StatusOrder(s)
+		if got != statusOrder(s) {
+			t.Errorf("public StatusOrder(%s)=%d disagrees with unexported helper", s, got)
+		}
+		if prev, dup := seen[got]; dup {
+			t.Errorf("rank %d collides for %s and %s", got, prev, s)
+		}
+		seen[got] = s
+	}
+	// Unknown values must not collide with the four real statuses.
+	bogus := StatusOrder(DiffStatus(99))
+	if _, dup := seen[bogus]; dup {
+		t.Errorf("bogus status rank %d collides with a real status", bogus)
+	}
+}
+
 func TestDiffSortLinks_ClickedColumnFlipsDirection(t *testing.T) {
 	links := DiffSortLinks("size", "desc")
 	if links["size"].Dir != "asc" || links["size"].Indicator != "↓" {
