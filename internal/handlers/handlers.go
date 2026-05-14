@@ -1,11 +1,18 @@
 package handlers
 
 import (
+	"time"
+
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 )
+
+// DefaultSSEHeartbeat is the production cadence used when Config.SSEHeartbeat
+// is left zero. 15s is small enough to free a stalled SSE slot in well under
+// Chrome's ~60s TCP idle window, large enough to be cheap.
+const DefaultSSEHeartbeat = 15 * time.Second
 
 // Handlers contains all HTTP handlers and their dependencies. No logger
 // field — handlers retrieve the request-scoped logger via
@@ -15,14 +22,15 @@ import (
 // go through `discovery` so the use-case logic lives in the inventory
 // package rather than at the HTTP boundary.
 type Handlers struct {
-	manager     *inventory.Manager
-	discovery   *inventory.DiscoveryService
-	renderer    *templates.Renderer
-	priceTable  pricing.PriceTable
-	s3SourceURI string // for display in templates
-	jobMgr      *jobs.Manager
-	jobStore    *jobs.Store
-	jobBus      *jobs.Bus
+	manager      *inventory.Manager
+	discovery    *inventory.DiscoveryService
+	renderer     *templates.Renderer
+	priceTable   pricing.PriceTable
+	s3SourceURI  string // for display in templates
+	jobMgr       *jobs.Manager
+	jobStore     *jobs.Store
+	jobBus       *jobs.Bus
+	sseHeartbeat time.Duration
 }
 
 // Config gathers all Handlers dependencies for NewWithConfig. Discoverer
@@ -39,6 +47,10 @@ type Config struct {
 	JobMgr      *jobs.Manager
 	JobStore    *jobs.Store
 	JobBus      *jobs.Bus
+	// SSEHeartbeat is how often the /api/jobs/stream handler emits a
+	// keep-alive comment to detect dead clients. Zero falls back to
+	// DefaultSSEHeartbeat.
+	SSEHeartbeat time.Duration
 }
 
 // New creates a Handlers instance without discovery wiring. Tests use it.
@@ -57,14 +69,19 @@ func (h *Handlers) DiscoveryEnabled() bool { return h.discovery.Enabled() }
 
 // NewWithConfig creates a Handlers wired with optional S3 discovery + loader.
 func NewWithConfig(cfg Config) *Handlers {
+	heartbeat := cfg.SSEHeartbeat
+	if heartbeat <= 0 {
+		heartbeat = DefaultSSEHeartbeat
+	}
 	return &Handlers{
-		manager:     cfg.Manager,
-		discovery:   inventory.NewDiscoveryService(cfg.Manager, cfg.Discoverer, cfg.Loader),
-		renderer:    cfg.Renderer,
-		priceTable:  cfg.PriceTable,
-		s3SourceURI: cfg.S3SourceURI,
-		jobMgr:      cfg.JobMgr,
-		jobStore:    cfg.JobStore,
-		jobBus:      cfg.JobBus,
+		manager:      cfg.Manager,
+		discovery:    inventory.NewDiscoveryService(cfg.Manager, cfg.Discoverer, cfg.Loader),
+		renderer:     cfg.Renderer,
+		priceTable:   cfg.PriceTable,
+		s3SourceURI:  cfg.S3SourceURI,
+		jobMgr:       cfg.JobMgr,
+		jobStore:     cfg.JobStore,
+		jobBus:       cfg.JobBus,
+		sseHeartbeat: heartbeat,
 	}
 }

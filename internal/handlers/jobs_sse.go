@@ -9,18 +9,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// sseHeartbeatInterval is how often the handler emits a comment line
-// when no job events have fired. Without it, a browser that navigated
-// away leaves an idle TCP connection alive (Chrome reuses sockets for
-// ~60s); the server can't detect the gone client until it tries to
-// write. With six dead SSE connections, all per-origin HTTP/1.1 slots
-// are eaten and every other htmx request stalls. The heartbeat surfaces
-// the dead peer quickly via a write error.
-//
-// It's a var (not const) so tests can shrink it; otherwise treat as
-// immutable.
-var sseHeartbeatInterval = 15 * time.Second
-
 // JobsStream serves text/event-stream and emits one event per job state
 // change. Browsers can subscribe with the htmx-sse extension; event
 // name = job ID so a single subscription can drive any number of row
@@ -55,7 +43,10 @@ func (h *Handlers) JobsStream(w http.ResponseWriter, r *http.Request) {
 	}
 	flusher.Flush()
 
-	heartbeat := time.NewTicker(sseHeartbeatInterval)
+	// Periodic keep-alive comment surfaces a dead client (browser
+	// navigated away, idle TCP socket Chrome will close in ~60s) via a
+	// write error well before the per-origin connection limit fills up.
+	heartbeat := time.NewTicker(h.sseHeartbeat)
 	defer heartbeat.Stop()
 
 	for {

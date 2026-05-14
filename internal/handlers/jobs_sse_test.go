@@ -114,11 +114,8 @@ func TestJobsStream_PushesEvents(t *testing.T) {
 // Chrome closes the TCP socket (~60s), eating per-origin HTTP/1.1
 // slots and stalling other htmx requests.
 func TestJobsStream_EmitsHeartbeat(t *testing.T) {
-	orig := sseHeartbeatInterval
-	sseHeartbeatInterval = 20 * time.Millisecond
-	t.Cleanup(func() { sseHeartbeatInterval = orig })
+	h := newHandlersWithHeartbeat(t, 20*time.Millisecond)
 
-	h, _ := newJobsHandlers(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/api/jobs/stream", http.NoBody).WithContext(ctx)
@@ -132,6 +129,39 @@ func TestJobsStream_EmitsHeartbeat(t *testing.T) {
 	if !strings.Contains(body, ": ping") {
 		t.Errorf("heartbeat ping not emitted within 200ms\nbody:\n%s", body)
 	}
+}
+
+// newHandlersWithHeartbeat is the same as newJobsHandlers but with a
+// caller-chosen SSE heartbeat interval — exercises the configurable path.
+func newHandlersWithHeartbeat(t *testing.T, hb time.Duration) *Handlers {
+	t.Helper()
+	db := openJobsTestDB(t)
+	invStore, err := inventory.NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := invStore.Upsert(inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StatePending}); err != nil {
+		t.Fatal(err)
+	}
+	jobStore, err := jobs.NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bus := jobs.NewBus(8)
+	mgr := jobs.NewManager(jobStore, bus)
+	renderer, err := templates.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewWithConfig(Config{
+		Manager:      inventory.NewManager(),
+		Renderer:     renderer,
+		PriceTable:   pricing.DefaultUSEast1Prices(),
+		JobMgr:       mgr,
+		JobStore:     jobStore,
+		JobBus:       bus,
+		SSEHeartbeat: hb,
+	})
 }
 
 func TestJobsStream_DisabledWhenJobBusMissing(t *testing.T) {
