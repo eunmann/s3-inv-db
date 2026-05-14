@@ -18,8 +18,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// fakeDiscoverer / fakeBuilder are minimal stubs implementing the
-// inventory.Discoverer and inventory.IndexBuilder interfaces.
 type fakeDiscoverer struct {
 	listResp []inventory.Inventory
 	listErr  error
@@ -87,9 +85,6 @@ func newDiscoveredHandlers(t *testing.T, disc inventory.Discoverer, ldr inventor
 	})
 }
 
-// waitForJobState polls jobStore for any job in the given state on the
-// inventory. Convenience for tests that submit a job and wait for it to
-// finish before asserting.
 func waitForJobInState(t *testing.T, store *jobs.Store, invID inventory.ID, state jobs.State) jobs.Job {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -134,8 +129,6 @@ func TestLoadDiscoveredRowPartial_FindError(t *testing.T) {
 }
 
 func TestLoadDiscoveredRowPartial_NoCompletedRuns(t *testing.T) {
-	// Find returns an Inventory with empty ManifestKey — semantically
-	// "discovered but no run has happened yet".
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: inventory.Inventory{SourceBucket: "b", InventoryName: "i"}},
 		&fakeBuilder{},
@@ -153,8 +146,6 @@ func TestLoadDiscoveredRowPartial_NoCompletedRuns(t *testing.T) {
 }
 
 func TestLoadDiscoveredRowPartial_AcceptsBuildError(t *testing.T) {
-	// The handler returns 202 immediately; the build error surfaces on
-	// the job, not the HTTP response. Verify the job moves to failed.
 	disc := inventory.Inventory{SourceBucket: "b", InventoryName: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
@@ -175,10 +166,9 @@ func TestLoadDiscoveredRowPartial_AcceptsBuildError(t *testing.T) {
 }
 
 func TestInventoriesPage_PlaceholderRowOmitsHTMXRefresh(t *testing.T) {
-	// A configuration with no completed runs surfaces as a placeholder
-	// (Run empty). The template must NOT emit hx-get / hx-trigger with
-	// empty URL segments — those generate /partials/discovered/b/i//
-	// which 404s, and SSE topics like "row-b/i/" never fire.
+	// Placeholder rows (Run == "") must not emit hx-get / hx-trigger with
+	// empty URL segments — those produce /partials/discovered/b/i// which
+	// 404s, and SSE topics like "row-b/i/" never fire.
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", InventoryName: "i"}}, bucket: "dst"},
 		&fakeBuilder{},
@@ -191,15 +181,14 @@ func TestInventoriesPage_PlaceholderRowOmitsHTMXRefresh(t *testing.T) {
 	}
 	body := w.Body.String()
 	for _, bad := range []string{
-		`/partials/discovered/b/i/"`, // hx-get with empty run
-		`/partials/discovered/b/i/ `, // hx-get followed by space
-		`row-b/i/"`,                  // SSE topic missing run
+		`/partials/discovered/b/i/"`,
+		`/partials/discovered/b/i/ `,
+		`row-b/i/"`,
 	} {
 		if strings.Contains(body, bad) {
 			t.Errorf("placeholder row emitted broken URL fragment %q\nbody: %s", bad, body)
 		}
 	}
-	// Sanity: the row's "no run" label DOES render.
 	if !strings.Contains(body, "no run") {
 		t.Errorf("placeholder row missing 'no run' label; body: %s", body)
 	}
@@ -217,9 +206,6 @@ func TestUnloadDiscoveredRowPartial_NotFound(t *testing.T) {
 }
 
 func TestDiscoveryEnabled_ReflectsWiring(t *testing.T) {
-	// No discoverer or builder wired → DiscoveryEnabled() == false. The
-	// routes.go middleware uses this to gate /partials/discovered/* with
-	// a 503 instead of letting handlers fall through.
 	bare := newTestHandlers(t)
 	if bare.DiscoveryEnabled() {
 		t.Error("DiscoveryEnabled() = true on bare handler, want false")
@@ -231,7 +217,7 @@ func TestDiscoveryEnabled_ReflectsWiring(t *testing.T) {
 }
 
 func TestListDiscoveredAPI_DisabledReturns503(t *testing.T) {
-	h := newTestHandlers(t) // no discoverer wired
+	h := newTestHandlers(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/discovered", http.NoBody)
 	w := httptest.NewRecorder()
 	h.ListDiscoveredAPI(w, req)
@@ -254,8 +240,6 @@ func TestListDiscoveredAPI_DiscovererErrorReturns502(t *testing.T) {
 	if w.Code != http.StatusBadGateway {
 		t.Errorf("status = %d, want 502", w.Code)
 	}
-	// The internal error text ("s3: throttled") must NOT reach the client —
-	// see commit 9d4348f. Only the generic message.
 	if strings.Contains(w.Body.String(), "throttled") {
 		t.Errorf("internal error leaked to client: %s", w.Body.String())
 	}

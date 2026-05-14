@@ -151,7 +151,7 @@ func TestDiffStatusString(t *testing.T) {
 		{DiffRemoved, "removed"},
 		{DiffChanged, "changed"},
 		{DiffUnchanged, "unchanged"},
-		{DiffStatus(99), "unchanged"}, // out-of-range falls through to the safe default
+		{DiffStatus(99), "unchanged"},
 	}
 	for _, tc := range cases {
 		if got := tc.s.String(); got != tc.want {
@@ -161,22 +161,18 @@ func TestDiffStatusString(t *testing.T) {
 }
 
 func TestStatusOrder_StableDistinctPerStatus(t *testing.T) {
-	// Pin that every concrete status gets its own rank and that the public
-	// wrapper matches the unexported helper. The exact integers are an
-	// implementation detail — what matters is "stable and distinct".
 	statuses := []DiffStatus{DiffAdded, DiffRemoved, DiffChanged, DiffUnchanged}
 	seen := map[int]DiffStatus{}
 	for _, s := range statuses {
 		got := StatusOrder(s)
 		if got != statusOrder(s) {
-			t.Errorf("public StatusOrder(%s)=%d disagrees with unexported helper", s, got)
+			t.Errorf("StatusOrder(%s)=%d disagrees with statusOrder(%s)=%d", s, got, s, statusOrder(s))
 		}
 		if prev, dup := seen[got]; dup {
 			t.Errorf("rank %d collides for %s and %s", got, prev, s)
 		}
 		seen[got] = s
 	}
-	// Unknown values must not collide with the four real statuses.
 	bogus := StatusOrder(DiffStatus(99))
 	if _, dup := seen[bogus]; dup {
 		t.Errorf("bogus status rank %d collides with a real status", bogus)
@@ -186,10 +182,10 @@ func TestStatusOrder_StableDistinctPerStatus(t *testing.T) {
 func TestDiffSortLinks_ClickedColumnFlipsDirection(t *testing.T) {
 	links := DiffSortLinks("size", "desc")
 	if links["size"].Dir != "asc" || links["size"].Indicator != "↓" {
-		t.Errorf("active column should toggle dir + show indicator, got %+v", links["size"])
+		t.Errorf("active column = %+v, want Dir=asc Indicator=↓", links["size"])
 	}
 	if links["objects"].Dir != "desc" || links["objects"].Indicator != "" {
-		t.Errorf("inactive column gets its default dir + no indicator, got %+v", links["objects"])
+		t.Errorf("inactive column = %+v, want Dir=desc Indicator=''", links["objects"])
 	}
 }
 

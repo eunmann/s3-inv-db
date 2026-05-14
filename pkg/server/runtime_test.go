@@ -10,8 +10,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// TestLoadPriceTable_DefaultsWhenPathEmpty verifies the
-// no-flag-supplied path falls back to the bundled US East 1 prices.
 func TestLoadPriceTable_DefaultsWhenPathEmpty(t *testing.T) {
 	pt, err := loadPriceTable("", zerolog.Nop())
 	if err != nil {
@@ -32,11 +30,6 @@ func TestLoadPriceTable_MissingFile(t *testing.T) {
 	}
 }
 
-// TestBootstrap_OpensDBAndReturnsCleanup exercises Bootstrap end-to-end
-// against a tempdir: it should resolve the state-db path under
-// CacheDir, open a real SQLite file, and return a cleanup that closes
-// the DB cleanly. Catches regressions where cleanup is forgotten in a
-// future error-branch refactor.
 func TestBootstrap_OpensDBAndReturnsCleanup(t *testing.T) {
 	tmp := t.TempDir()
 	opts := RuntimeOptions{
@@ -71,12 +64,9 @@ func TestBootstrap_PropagatesPriceTableLoadError(t *testing.T) {
 	}
 }
 
-// TestBootstrapAndRun_ExitsCleanlyOnCancelledContext exercises the
-// happy-path wrapper end-to-end: a pre-cancelled ctx returns nil with
-// no listen error, no leaked goroutines, no leaked DB handle.
 func TestBootstrapAndRun_ExitsCleanlyOnCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // already done before Run starts
+	cancel()
 	opts := RuntimeOptions{
 		Addr:     ":0",
 		CacheDir: t.TempDir(),
@@ -100,9 +90,6 @@ func TestBootstrapAndRun_PropagatesBootstrapError(t *testing.T) {
 	}
 }
 
-// TestNewDiscoveryWiring_RequiresCacheDir pins the first error branch:
-// you can't configure --s3-source without --cache-dir to write builds
-// into.
 func TestNewDiscoveryWiring_RequiresCacheDir(t *testing.T) {
 	_, _, err := newDiscoveryWiring(Config{S3Source: "s3://bucket/", Logger: zerolog.Nop()})
 	if !errors.Is(err, errEmptyCacheDir) {
@@ -110,8 +97,6 @@ func TestNewDiscoveryWiring_RequiresCacheDir(t *testing.T) {
 	}
 }
 
-// TestNewDiscoveryWiring_RejectsMalformedURI pins that a bad s3:// URI
-// fails at parse time, not later when the discoverer tries to use it.
 func TestNewDiscoveryWiring_RejectsMalformedURI(t *testing.T) {
 	cfg := Config{
 		S3Source: "not-a-real-uri",

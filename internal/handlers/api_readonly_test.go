@@ -169,9 +169,6 @@ func TestInventoryGroup_ConfigID(t *testing.T) {
 
 func TestGroupDiscoveredForAPI_GroupsRunsByConfig(t *testing.T) {
 	f := newTestFixture(t)
-	// Two runs of one configuration + one run of another, all flowing
-	// through the merge layer (Manager state defaults to StateNotLoaded
-	// when the inventory isn't registered yet).
 	views := []inventory.MergedInventory{
 		{Inventory: inventory.Inventory{SourceBucket: "b1", InventoryName: "i1", Run: "2026-05-13T03-00Z", ManifestKey: "k1/2026-05-13T03-00Z/manifest.json"}, State: inventory.StateNotLoaded},
 		{Inventory: inventory.Inventory{SourceBucket: "b1", InventoryName: "i1", Run: "2026-05-12T03-00Z", ManifestKey: "k1/2026-05-12T03-00Z/manifest.json"}, State: inventory.StateNotLoaded},
@@ -179,7 +176,7 @@ func TestGroupDiscoveredForAPI_GroupsRunsByConfig(t *testing.T) {
 	}
 	groups := f.h.groupDiscoveredForAPI(nil, views)
 	if len(groups) != 2 {
-		t.Fatalf("groups = %d, want 2 (i1, i2)", len(groups))
+		t.Fatalf("groups = %d, want 2", len(groups))
 	}
 	var i1, i2 ConfigurationView
 	for _, g := range groups {
@@ -196,8 +193,6 @@ func TestGroupDiscoveredForAPI_GroupsRunsByConfig(t *testing.T) {
 	if len(i2.Runs) != 1 {
 		t.Errorf("i2.Runs = %d, want 1", len(i2.Runs))
 	}
-	// CompositeID round-trip: every run carries the composite key the
-	// /partials/discovered/{src}/{id}/{run}/* endpoints expect.
 	for _, run := range i1.Runs {
 		if !strings.HasPrefix(string(run.ID), "b1/i1/") {
 			t.Errorf("run.ID = %q, want b1/i1/* prefix", run.ID)

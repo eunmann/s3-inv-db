@@ -11,9 +11,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// storeWithInventory opens an in-memory DB, ensures the inventory and
-// jobs schemas, registers a single inventory FK target, and returns the
-// jobs.Store. Shared by every store-level test below.
 func storeWithInventory(t *testing.T, invID inventory.ID) (*jobs.Store, *sql.DB) {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
@@ -48,9 +45,8 @@ func TestStore_ListForInventory_EmptyReturnsNilNoError(t *testing.T) {
 
 func TestStore_ListForInventory_OrderedByUpdatedAtDesc(t *testing.T) {
 	store, _ := storeWithInventory(t, "src/inv1")
-	// Insert three jobs spaced 1s apart so updated_at (set to time.Now()
-	// at Upsert) is monotonically ordered. The ORDER BY contract: newest
-	// first.
+	// updated_at has second resolution; sleep > 1s between writes so the
+	// ORDER BY produces a stable order.
 	for _, id := range []jobs.ID{"older", "middle", "newer"} {
 		if err := store.Upsert(jobs.Job{ID: id, InventoryID: "src/inv1", Kind: jobs.KindBuild, State: jobs.StateSucceeded}); err != nil {
 			t.Fatalf("Upsert %s: %v", id, err)
@@ -71,8 +67,6 @@ func TestStore_ListForInventory_OrderedByUpdatedAtDesc(t *testing.T) {
 
 func TestStore_ListForInventory_ScopedByInventoryID(t *testing.T) {
 	store, db := storeWithInventory(t, "src/inv1")
-	// Register a second inventory directly so we can FK-reference it from
-	// a foreign job and confirm List filters by inventory_id.
 	invStore, err := inventory.NewStore(db)
 	if err != nil {
 		t.Fatalf("inventory.NewStore (re-open): %v", err)
@@ -123,9 +117,6 @@ func TestStore_LatestForInventory_MissingReturnsErrStoreNotFound(t *testing.T) {
 }
 
 func TestStore_GetRoundTripsAllFields(t *testing.T) {
-	// scanJobs/scanJob is also exercised through ListForInventory, but
-	// going through Get pins that timestamps round-trip correctly via
-	// the unix-int columns.
 	store, _ := storeWithInventory(t, "src/inv1")
 	started := time.Now().Add(-time.Hour).Truncate(time.Second)
 	finished := started.Add(30 * time.Minute)

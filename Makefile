@@ -115,11 +115,9 @@ docker-prod:
 docker-seed:
 	$(COMPOSE) --profile seed run --rm seeder
 
-# Run the test suite against an internal MinIO so the otherwise skip-gated
-# integration tests (internal/s3disco, pkg/s3fetch) actually execute. No
-# host ports are bound, so this can run side-by-side with `make dev`.
-# Tears the profile down (volumes + containers) regardless of test outcome,
-# but propagates the test exit code so `make docker-test` fails CI on red.
+# Run `go test ./...` against an internal MinIO so the s3disco integration
+# tests stop skipping. Tears the profile down on every exit and propagates
+# the test exit code so `make docker-test` fails red on red.
 docker-test:
 	@$(COMPOSE) --profile test up --build --abort-on-container-exit --exit-code-from test-runner; \
 	rc=$$?; \

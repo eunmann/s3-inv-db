@@ -6,9 +6,10 @@ import (
 )
 
 func TestStatePredicates(t *testing.T) {
+	// want = [IsLoaded, IsNotLoaded, IsLoading, IsError, CanLoad]
 	cases := []struct {
 		state State
-		want  [5]bool // [IsLoaded, IsNotLoaded, IsLoading, IsError, CanLoad]
+		want  [5]bool
 	}{
 		{StateLoaded, [5]bool{true, false, false, false, false}},
 		{StateNotLoaded, [5]bool{false, true, false, false, true}},
@@ -40,8 +41,7 @@ func TestIDSplit(t *testing.T) {
 	}{
 		{"src/inv/run", "src", "inv", "run", true},
 		{"src/inv/2026-05-13T03-02Z", "src", "inv", "2026-05-13T03-02Z", true},
-		// Slashes inside the run segment must stay in the run — SplitN(_, 3).
-		{"src/inv/2026/05/13", "src", "inv", "2026/05/13", true},
+		{"src/inv/2026/05/13", "src", "inv", "2026/05/13", true}, // SplitN keeps slashes in the third segment.
 		{"src/inv", "", "", "", false},
 		{"placeholder", "", "", "", false},
 		{"", "", "", "", false},
@@ -58,13 +58,11 @@ func TestIDSplit(t *testing.T) {
 }
 
 func TestIDConfigID(t *testing.T) {
-	// 3-part: drops the run segment.
 	if got := ID("src/inv/run").ConfigID(); got != "src/inv" {
 		t.Errorf("ConfigID(3-part) = %q, want %q", got, "src/inv")
 	}
-	// 2-part: returns the whole string (no separate config to extract).
 	if got := ID("placeholder").ConfigID(); got != "placeholder" {
-		t.Errorf("ConfigID(unsplittable) = %q, want %q (preserves grouping key)", got, "placeholder")
+		t.Errorf("ConfigID(unsplittable) = %q, want %q", got, "placeholder")
 	}
 }
 
@@ -82,28 +80,17 @@ func TestInventoryCompositeID(t *testing.T) {
 func TestInventoryConfigID(t *testing.T) {
 	inv := Inventory{SourceBucket: "src", InventoryName: "inv", Run: "2026-01"}
 	if got := inv.ConfigID(); got != "src/inv" {
-		t.Errorf("ConfigID = %q, want %q (independent of Run)", got, "src/inv")
+		t.Errorf("ConfigID = %q, want %q", got, "src/inv")
 	}
 }
 
-// TestManagerLoad_UsesOpenLocalPath pins the default BuildFunc:
-// Manager.Load (no -With) treats Path as a local index directory. Opens
-// a seeded index from disk to exercise openLocalPath end-to-end.
 func TestManagerLoad_UsesOpenLocalPath(t *testing.T) {
-	// We don't want a full seeder run here; the goal is just to cover
-	// openLocalPath, which always returns info.Path as the indexDir. We
-	// stub indexread by registering an inventory whose Path is a
-	// directory we know indexread.Open will reject — Manager.Load should
-	// then return an error wrapping the indexread failure, but the
-	// openLocalPath branch is executed.
 	mgr := NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
 	if err := mgr.Register("inv", "n", "/tmp/this/path/does/not/exist"); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	// Load with the default BuildFunc — exercises openLocalPath even if
-	// indexread.Open fails on the bogus path.
 	if err := mgr.Load(context.Background(), "inv"); err == nil {
-		t.Error("Manager.Load on a bogus path should error (it should still go through openLocalPath)")
+		t.Error("Load on a bogus path returned nil, want non-nil")
 	}
 }

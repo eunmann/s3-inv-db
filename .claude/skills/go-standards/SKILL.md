@@ -82,8 +82,32 @@ description: "Reference: Go code quality standards — control flow, error handl
 ## Documentation
 
 - Doc comments on every exported symbol. Start with the symbol name: `// ParseAge parses...`. `revive` enforces this.
-- Comments explain *why*, not *what*. The code shows what; the comment explains the rationale, trade-off, or non-obvious invariant.
 - Comments are sentences: capital letter, full stop (`godot`).
+
+### What comments are for (and what they're not)
+
+A comment exists to surface what the code *can't* — a constraint imposed
+by something outside the file, a non-obvious invariant the surrounding
+code is honoring, or a specific past bug the shape of the code is
+preventing. Default to **no comment**; only add one when removing it
+would mislead a future reader who has the code in front of them.
+
+Keep:
+
+- Doc comments on exported symbols. `// ParseAge parses an ISO duration string.`
+- External constraints. `// AWS S3 Inventory uses minute-granularity folders (YYYY-MM-DDTHH-MMZ).`
+- Non-obvious invariants. `// Caller must hold m.mu before invoking.`
+- Specific past bugs with evidence. `// Regression for #142: index.Clone shares namespace after Execute.`
+
+Delete:
+
+- Narration of what well-named code already shows: `// We then aggregate the views by config.` — call out the function name instead.
+- Justifications of the chosen approach: `// Matching that here keeps the synthetic layouts indistinguishable from real ones.` — the commit message is the home for "why I picked this".
+- Restating the test name in prose: `// TestFoo_BarHappens pins that bar happens.` — the name is the documentation.
+- References to "the current task / this fix / the new behavior / the recent change". Code outlives the PR; the comment will read like fossilised PR description.
+- Multi-line laundry lists enumerating each branch or field a function inspects — those belong in the function name or in extracted helpers.
+
+If reasoning about *why this approach over alternatives* would help, write it in the commit message or the PR description, not the source tree.
 
 ## Architecture
 

@@ -55,8 +55,6 @@ func TestBuild_RejectsEmptyArgs(t *testing.T) {
 	}
 }
 
-// TestBuildWith_ReportsPreparingStage exercises the loader's own stage
-// reporting on the failure path (invalid manifest URI).
 func TestBuildWith_ReportsPreparingStage(t *testing.T) {
 	l := New(t.TempDir(), nil)
 	var stages []string
@@ -96,8 +94,6 @@ func TestRemoveCache_RejectsEmptyArgs(t *testing.T) {
 }
 
 func TestRemoveCache_MissingDirIsNoOp(t *testing.T) {
-	// "Unload before any Load" hits this path; treating ENOENT as success
-	// keeps callers from having to existence-check.
 	l := New(t.TempDir(), nil)
 	if err := l.RemoveCache("buck", "inv", "never-built"); err != nil {
 		t.Errorf("RemoveCache(missing) = %v, want nil", err)
@@ -151,6 +147,6 @@ func TestCacheSizeBytes_SumsAllFiles(t *testing.T) {
 		t.Fatalf("CacheSizeBytes: %v", err)
 	}
 	if size != 350 {
-		t.Errorf("size = %d, want 350 (100 + 250)", size)
+		t.Errorf("size = %d, want 350", size)
 	}
 }

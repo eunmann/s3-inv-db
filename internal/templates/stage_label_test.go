@@ -12,8 +12,6 @@ func TestStageLabel(t *testing.T) {
 		{"downloading", "Downloading & parsing"},
 		{"building", "Building index"},
 		{"done", "Done"},
-		// Unknown stages fall through verbatim so the UI can still surface
-		// new pipeline phases without a template+code change.
 		{"unknown-future-stage", "unknown-future-stage"},
 		{"", ""},
 	}

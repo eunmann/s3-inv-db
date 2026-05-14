@@ -197,9 +197,7 @@ func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) 
 
 	info, ok := h.manager.Get(id)
 	if !ok {
-		// Race window: a concurrent DELETE landed between Register and
-		// the readback. Surface the disappearance instead of returning
-		// a 201 with an empty body.
+		// Concurrent Remove between Register and Get.
 		zerolog.Ctx(r.Context()).Warn().Stringer("id", id).Msg("inventory removed concurrently with create")
 		WriteJSONError(w, http.StatusGone, "inventory was removed concurrently")
 		return
@@ -379,10 +377,7 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// InventoryRowPartial renders an inventory row partial for HTMX. Used
-// by /partials/inventory-row/{id} when the client wants to refresh one
-// row after an external state change. Shares its body with the helper
-// the Load/Unload/Delete partials use.
+// InventoryRowPartial renders the row for one inventory ID.
 func (h *Handlers) InventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	h.renderInventoryRow(w, r, inventory.ID(chi.URLParam(r, "id")))
 }

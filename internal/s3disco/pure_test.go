@@ -6,20 +6,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// Pure-function tests for s3disco — constructor, getters, and the
-// prefix-trim helper. None of these touch the S3 client, so they run
-// on every `make test` invocation regardless of AWS_ENDPOINT_URL_S3.
-
 func TestNew_NormalizesPrefixTrailingSlash(t *testing.T) {
 	cases := []struct {
 		input string
 		want  string
 	}{
-		{"", ""},                         // empty stays empty
-		{"foo/", "foo/"},                 // already slashed
-		{"foo", "foo/"},                  // bare gets a slash
-		{"nested/path/", "nested/path/"}, // multi-segment
-		{"nested/path", "nested/path/"},  // bare multi-segment
+		{"", ""},
+		{"foo/", "foo/"},
+		{"foo", "foo/"},
+		{"nested/path/", "nested/path/"},
+		{"nested/path", "nested/path/"},
 	}
 	for _, c := range cases {
 		t.Run(c.input, func(t *testing.T) {
@@ -79,11 +75,11 @@ func TestTrimPrefix_StripsBothEnds(t *testing.T) {
 	cases := []struct {
 		s, prefix, want string
 	}{
-		{"data/src/", "data/", "src"}, // both leading and trailing trimmed
-		{"data/src", "data/", "src"},  // no trailing slash to strip
-		{"src/", "", "src"},           // empty prefix, trailing slash trimmed
+		{"data/src/", "data/", "src"},
+		{"data/src", "data/", "src"},
+		{"src/", "", "src"},
 		{"data/nested/path/", "data/", "nested/path"},
-		{"different/path/", "data/", "different/path"}, // prefix absent — TrimPrefix is a no-op, trailing / still goes
+		{"different/path/", "data/", "different/path"},
 	}
 	for _, c := range cases {
 		t.Run(c.s, func(t *testing.T) {
@@ -95,14 +91,11 @@ func TestTrimPrefix_StripsBothEnds(t *testing.T) {
 }
 
 func TestRunFolderRegex_AcceptsKnownShapes(t *testing.T) {
-	// Minute-granularity (AWS) and second-granularity (our seeder).
 	for _, ok := range []string{"2026-05-13T03-02Z", "2026-05-13T03-02-15Z"} {
 		if !runFolderRE.MatchString(ok) {
 			t.Errorf("runFolderRE should accept %q", ok)
 		}
 	}
-	// "data/" is the inventory data folder — must NOT match so it isn't
-	// mistaken for a run.
 	for _, bad := range []string{"data", "data/", "manifest.json", "2026-05-13", "garbage", ""} {
 		if runFolderRE.MatchString(bad) {
 			t.Errorf("runFolderRE should reject %q", bad)

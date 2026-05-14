@@ -8,20 +8,16 @@ func TestIDString(t *testing.T) {
 	}
 }
 
-// TestNewJobID_NonEmptyAndUnique pins that newJobID actually consults
-// the random source and produces distinct IDs. Catches the regression
-// where rand.Read failures were silently ignored, leaving a zero-byte
-// (all-zeros hex) ID that collides on every subsequent Submit.
 func TestNewJobID_NonEmptyAndUnique(t *testing.T) {
-	const zero = "000000000000000000000000" // 24 hex chars of zeros
+	const zero = "000000000000000000000000"
 	seen := map[ID]struct{}{}
 	for range 50 {
 		id, err := newJobID()
 		if err != nil {
-			t.Fatalf("newJobID: %v (rand source broken in test env?)", err)
+			t.Fatalf("newJobID: %v", err)
 		}
 		if string(id) == zero {
-			t.Errorf("newJobID returned the all-zeros sentinel — rand.Read error swallowed?")
+			t.Errorf("newJobID returned the all-zeros sentinel")
 		}
 		if _, dup := seen[id]; dup {
 			t.Errorf("newJobID produced a duplicate ID %q within 50 calls", id)
@@ -52,9 +48,8 @@ func TestStatePredicates(t *testing.T) {
 			if got := tc.state.IsLive(); got != tc.wantLive {
 				t.Errorf("IsLive(%q) = %v, want %v", tc.state, got, tc.wantLive)
 			}
-			// Sanity invariant: a state can't be both live and terminal.
 			if tc.state.IsLive() && tc.state.IsTerminal() {
-				t.Errorf("%q reports IsLive && IsTerminal — incoherent", tc.state)
+				t.Errorf("%q reports IsLive && IsTerminal", tc.state)
 			}
 		})
 	}

@@ -83,11 +83,7 @@ func UploadInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S
 		return InventoryInfo{}, fmt.Errorf("encode csv.gz: %w", err)
 	}
 
-	// AWS S3 Inventory writes run folders at minute granularity
-	// (YYYY-MM-DDTHH-MMZ). Matching that here keeps the synthetic
-	// layouts indistinguishable from real ones for downstream tooling
-	// (s3disco's regex accepts either, but the seeder should emit the
-	// canonical form).
+	// AWS S3 Inventory uses minute-granularity run folders (YYYY-MM-DDTHH-MMZ).
 	stamp := runStamp.UTC().Format("2006-01-02T15-04Z")
 	dataKey := fmt.Sprintf("%s%s/%s/data/%s.csv.gz", s3cfg.Prefix, s3cfg.SrcBucket, invID, runStampUUID(runStamp, index))
 	manifestKey := fmt.Sprintf("%s%s/%s/%s/manifest.json", s3cfg.Prefix, s3cfg.SrcBucket, invID, stamp)

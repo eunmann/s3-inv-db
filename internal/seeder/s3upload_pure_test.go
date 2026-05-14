@@ -14,8 +14,6 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-// Pure-function tests for the s3upload helpers — no AWS / MinIO calls.
-
 func TestS3Config_Validate(t *testing.T) {
 	cases := []struct {
 		name string
@@ -66,7 +64,6 @@ func TestRunStampUUID_DeterministicPerRunAndIndex(t *testing.T) {
 	if a == d {
 		t.Errorf("different stamp produced same uuid: %q", a)
 	}
-	// Format invariants: 10 hex digits + dash + 4 hex digits.
 	if got := len(a); got != 15 {
 		t.Errorf("uuid len = %d, want 15 (got %q)", got, a)
 	}
@@ -97,12 +94,7 @@ func TestTierToS3Columns_IntelligentTiering(t *testing.T) {
 }
 
 func TestTierToS3Columns_NonIntelligentLeavesAccessTierEmpty(t *testing.T) {
-	// For non-intelligent-tiering classes, AccessTier is empty and the
-	// StorageClass falls back to the mapping's canonical name.
 	m := tiers.NewMapping()
-	// Standard tier should be ID 0 by convention; either way, calling the
-	// fallback path is exercised by passing any non-intelligent ID. We use
-	// the smallest concrete non-IT ID we can find.
 	for _, id := range []tiers.ID{tiers.Standard, tiers.StandardIA, tiers.GlacierFR} {
 		gotClass, gotTier := tierToS3Columns(m, id)
 		if gotTier != "" {
@@ -131,8 +123,6 @@ func TestEncodeCSVGz_RoundTripsRows(t *testing.T) {
 		t.Fatal("body is empty")
 	}
 
-	// Re-read the gzip body, parse the CSV, confirm row count and that
-	// the source-bucket column was written for every row.
 	gr, err := gzip.NewReader(bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("gzip.NewReader: %v", err)

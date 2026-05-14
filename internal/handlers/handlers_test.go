@@ -53,10 +53,6 @@ func TestRegisterInventoryAPI(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Errorf("status = %d, want %d, body = %s", w.Code, http.StatusCreated, w.Body.String())
 	}
-	// Pins that the response body is the registered inventory — not an
-	// empty Info. Catches a regression where Get-after-Register reads
-	// back a zero value (e.g., if the existence-check is dropped and a
-	// concurrent Remove slips in).
 	var got inventory.Info
 	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
 		t.Fatalf("decode response: %v", err)

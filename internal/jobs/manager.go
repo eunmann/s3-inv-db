@@ -63,9 +63,6 @@ func (m *Manager) SetLogger(l zerolog.Logger) { m.logger = l }
 // registered before the bus publish so a Cancel triggered by an
 // immediate SSE consumer can't race in before the goroutine starts.
 func (m *Manager) Submit(invID inventory.ID, kind Kind, work Work) (Job, error) {
-	// Mint the ID before taking the manager lock so a (vanishingly rare)
-	// rand-source failure surfaces cleanly to the caller instead of
-	// producing a zero ID that would collide on the next submit.
 	id, err := newJobID()
 	if err != nil {
 		return Job{}, fmt.Errorf("mint job id: %w", err)

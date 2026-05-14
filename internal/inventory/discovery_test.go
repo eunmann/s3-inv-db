@@ -154,13 +154,13 @@ func TestDiscoveryService_PrepareDiscovered_NoRunRejects(t *testing.T) {
 	mgr := NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
 	s := NewDiscoveryService(mgr, &fakeDiscoverer{bucket: "dst"}, &fakeBuilder{})
-	disc := Inventory{SourceBucket: "b", InventoryName: "i"} // no Run
+	disc := Inventory{SourceBucket: "b", InventoryName: "i"}
 	err := s.PrepareDiscovered(disc)
 	if err == nil {
-		t.Fatal("PrepareDiscovered with empty Run should return an error")
+		t.Fatal("PrepareDiscovered with empty Run returned nil")
 	}
 	if errors.Is(err, ErrDiscoveryDisabled) {
-		t.Errorf("err = %v, want a 'no run' error, not ErrDiscoveryDisabled", err)
+		t.Errorf("err = %v, want a non-ErrDiscoveryDisabled error", err)
 	}
 }
 
@@ -199,6 +199,6 @@ func TestDiscoveryService_PrepareDiscovered_AlreadyExistsIsIdempotent(t *testing
 		t.Fatalf("first PrepareDiscovered: %v", err)
 	}
 	if err := s.PrepareDiscovered(disc); err != nil {
-		t.Errorf("second PrepareDiscovered: %v (want nil — ErrAlreadyExists swallowed)", err)
+		t.Errorf("second PrepareDiscovered: %v, want nil", err)
 	}
 }
