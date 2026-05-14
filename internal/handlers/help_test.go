@@ -24,23 +24,26 @@ func TestHelpPage_Renders(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	// Hero check — distinctive enough to survive copy edits, broad
-	// enough to not pin a single phrase.
-	if !strings.Contains(body, "Everything you can") {
+	if !strings.Contains(body, "Documentation") || !strings.Contains(body, "Help") {
 		head := body
 		if len(head) > 500 {
 			head = head[:500]
 		}
-		t.Errorf("body missing hero heading\nbody[:500]=%q", head)
+		t.Errorf("body missing header label\nbody[:500]=%q", head)
 	}
-	// At least one section marker — pins the editorial section style.
-	if !strings.Contains(body, "§ 01") {
-		t.Error("body missing section marker '§ 01'")
+	// A handful of meaningful section headings present.
+	for _, want := range []string{"Overview", "HTTP routes", "SSE stream", "Persistence", "Configuration", "Glossary"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing section heading %q", want)
+		}
 	}
 	for _, anchor := range []string{
-		`id="pages"`, `id="workflow-load"`, `id="workflow-browse"`,
+		`id="overview"`, `id="pages"`, `id="workflows"`,
+		`id="workflow-load"`, `id="workflow-browse"`, `id="workflow-recover"`,
 		`id="chips"`, `id="buttons"`, `id="progress"`,
-		`id="persistence"`, `id="troubleshooting"`, `id="glossary"`,
+		`id="urls"`, `id="routes"`, `id="sse"`,
+		`id="persistence"`, `id="config"`,
+		`id="shortcuts"`, `id="troubleshooting"`, `id="glossary"`,
 	} {
 		if !strings.Contains(body, anchor) {
 			t.Errorf("body missing TOC anchor %s", anchor)
