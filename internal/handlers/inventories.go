@@ -195,7 +195,15 @@ func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	info, _ := h.manager.Get(id)
+	info, ok := h.manager.Get(id)
+	if !ok {
+		// Race window: a concurrent DELETE landed between Register and
+		// the readback. Surface the disappearance instead of returning
+		// a 201 with an empty body.
+		zerolog.Ctx(r.Context()).Warn().Stringer("id", id).Msg("inventory removed concurrently with create")
+		WriteJSONError(w, http.StatusGone, "inventory was removed concurrently")
+		return
+	}
 	WriteJSON(w, http.StatusCreated, info)
 }
 
@@ -234,7 +242,12 @@ func (h *Handlers) LoadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, _ := h.manager.Get(id)
+	info, ok := h.manager.Get(id)
+	if !ok {
+		zerolog.Ctx(r.Context()).Warn().Stringer("id", id).Msg("inventory removed concurrently with load")
+		WriteJSONError(w, http.StatusGone, "inventory was removed concurrently")
+		return
+	}
 	WriteJSON(w, http.StatusOK, info)
 }
 
@@ -256,7 +269,12 @@ func (h *Handlers) UnloadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, _ := h.manager.Get(id)
+	info, ok := h.manager.Get(id)
+	if !ok {
+		zerolog.Ctx(r.Context()).Warn().Stringer("id", id).Msg("inventory removed concurrently with unload")
+		WriteJSONError(w, http.StatusGone, "inventory was removed concurrently")
+		return
+	}
 	WriteJSON(w, http.StatusOK, info)
 }
 
