@@ -1,5 +1,5 @@
 .PHONY: all build server seeder test test-race lint lint-fix clean clean-seed seed \
-        css dev docker-build docker-prod docker-seed docker-down \
+        css dev docker-build docker-prod docker-seed docker-test docker-down \
         cover cover-html cover-summary tidy
 
 GOLANGCI_LINT_VERSION := v2.1.2
@@ -115,6 +115,17 @@ docker-prod:
 docker-seed:
 	$(COMPOSE) --profile seed run --rm seeder
 
+# Run the test suite against an internal MinIO so the otherwise skip-gated
+# integration tests (internal/s3disco, pkg/s3fetch) actually execute. No
+# host ports are bound, so this can run side-by-side with `make dev`.
+# Tears the profile down (volumes + containers) regardless of test outcome,
+# but propagates the test exit code so `make docker-test` fails CI on red.
+docker-test:
+	@$(COMPOSE) --profile test up --build --abort-on-container-exit --exit-code-from test-runner; \
+	rc=$$?; \
+	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
+	exit $$rc
+
 # Stop everything and remove volumes (caches).
 docker-down:
-	$(COMPOSE) --profile dev --profile prod --profile seed down -v
+	$(COMPOSE) --profile dev --profile prod --profile seed --profile test down -v

@@ -2,7 +2,7 @@
 
 The dev workflow runs in Docker — no host-binary path. The
 [`infra/docker-compose.yml`](../infra/docker-compose.yml) file carries
-three profiles: `dev`, `prod`, `seed`.
+four profiles: `dev`, `prod`, `seed`, and `test`.
 
 ## Boot the stack
 
@@ -44,16 +44,29 @@ Open `http://localhost:8080` for the HTMX UI.
 
 ## MinIO-backed tests
 
-A handful of tests under `internal/s3disco`, `internal/seeder`, and
-`pkg/s3fetch` exercise the real S3 client against MinIO. They `t.Skip`
-when `AWS_ENDPOINT_URL_S3` is unset, so plain `go test ./...` runs
-cleanly without containers.
+A handful of tests under `internal/s3disco` and `pkg/s3fetch` exercise
+the real S3 client against MinIO. They `t.Skip` when
+`AWS_ENDPOINT_URL_S3` is unset, so plain `go test ./...` runs cleanly
+on the host but leaves those paths at 0% coverage.
 
-To exercise them inside the dev stack:
+The `test` profile fixes that: it boots a dedicated `minio-test` (no
+host ports — runs side-by-side with `make dev` without colliding) and
+runs `go test ./...` against it inside a container.
 
 ```bash
-docker compose -f infra/docker-compose.yml --profile dev run --rm server-dev \
-  go test ./internal/s3disco/... ./internal/seeder/... ./pkg/s3fetch/...
+make docker-test   # boots minio-test, runs go test ./..., tears down
+```
+
+The Makefile target builds the test-runner image once (cached after
+first run), captures the test exit code, and always tears the profile
+down so containers don't linger.
+
+To run a targeted subset (e.g. iterate on one package), drive compose
+directly — `run --rm` replaces the default command:
+
+```bash
+docker compose -f infra/docker-compose.yml --profile test run --rm test-runner \
+  go test -v ./internal/s3disco/...
 ```
 
 ## Local quality gates
@@ -62,9 +75,11 @@ docker compose -f infra/docker-compose.yml --profile dev run --rm server-dev \
 make lint           # golangci-lint v2 (govet, staticcheck, errcheck, …)
 make test           # unit + integration (S3 paths skipped without env)
 make test-race      # same with -race
+make docker-test    # full suite incl. MinIO-gated paths
 make cover-summary  # total coverage + 20 lowest-covered functions
 make tidy           # go mod tidy + go mod verify
 ```
 
-The CI signal is `make lint && make test && make test-race`. See
+The CI signal is `make lint && make test && make test-race`; add
+`make docker-test` when MinIO-path coverage matters. See
 `.golangci.yml` for the enabled-linter list.

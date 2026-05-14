@@ -179,7 +179,7 @@ func runS3(cfg Config, startTime time.Time) error {
 			cfg.Logger.Info().
 				Str("id", info.ID).
 				Str("manifest", info.Path).
-				Str("run", runStamp.Format("2006-01-02T15-04-05Z")).
+				Str("run", runStamp.Format("2006-01-02T15-04Z")).
 				Int("objects", info.Objects).
 				Msg("uploaded inventory run")
 		}
