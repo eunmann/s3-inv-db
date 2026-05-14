@@ -88,13 +88,15 @@
                 </p>
             </div>
             <div class="flex items-center gap-4">
+                {{$sort := .Level.Sort}}
+                {{$dir := .Level.Dir}}
                 <label class="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
                     <input type="checkbox"
                         hx-get="/diff"
                         {{if .Level.HideUnchanged}}
-                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "show_unchanged" "true"}}
+                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "show_unchanged" "true"}}
                         {{else}}
-                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "show_unchanged" "false"}} checked
+                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "show_unchanged" "false"}} checked
                         {{end}}
                         hx-target="#diff-target"
                         hx-push-url="true"
@@ -106,7 +108,7 @@
                     {{if .Level.Pagination.PrevPage}}
                     <button type="button"
                         hx-get="/diff"
-                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "page" .Level.Pagination.PrevPage}}
+                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "page" .Level.Pagination.PrevPage}}
                         hx-target="#diff-target"
                         hx-push-url="true"
                         class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">← Prev</button>
@@ -117,7 +119,7 @@
                     {{if .Level.Pagination.NextPage}}
                     <button type="button"
                         hx-get="/diff"
-                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "page" .Level.Pagination.NextPage}}
+                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "page" .Level.Pagination.NextPage}}
                         hx-target="#diff-target"
                         hx-push-url="true"
                         class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">Next →</button>
@@ -129,14 +131,64 @@
             </div>
         </header>
         {{if .Level.Children}}
+        {{$statusLink := index .Level.SortLinks "status"}}
+        {{$segLink := index .Level.SortLinks "segment"}}
+        {{$objLink := index .Level.SortLinks "objects"}}
+        {{$sizeLink := index .Level.SortLinks "size"}}
+        {{$costLink := index .Level.SortLinks "cost"}}
         <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
             <thead class="bg-gray-50 dark:bg-gray-900/30">
                 <tr>
-                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
-                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Segment</th>
-                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Objects</th>
-                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Size</th>
-                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Cost / mo</th>
+                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <button type="button"
+                            hx-get="/diff"
+                            {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $statusLink.Sort "dir" $statusLink.Dir}}
+                            hx-target="#diff-target"
+                            hx-push-url="true"
+                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
+                            Status {{$statusLink.Indicator}}
+                        </button>
+                    </th>
+                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <button type="button"
+                            hx-get="/diff"
+                            {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $segLink.Sort "dir" $segLink.Dir}}
+                            hx-target="#diff-target"
+                            hx-push-url="true"
+                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
+                            Segment {{$segLink.Indicator}}
+                        </button>
+                    </th>
+                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <button type="button"
+                            hx-get="/diff"
+                            {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $objLink.Sort "dir" $objLink.Dir}}
+                            hx-target="#diff-target"
+                            hx-push-url="true"
+                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
+                            Objects {{$objLink.Indicator}}
+                        </button>
+                    </th>
+                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <button type="button"
+                            hx-get="/diff"
+                            {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $sizeLink.Sort "dir" $sizeLink.Dir}}
+                            hx-target="#diff-target"
+                            hx-push-url="true"
+                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
+                            Size {{$sizeLink.Indicator}}
+                        </button>
+                    </th>
+                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <button type="button"
+                            hx-get="/diff"
+                            {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $costLink.Sort "dir" $costLink.Dir}}
+                            hx-target="#diff-target"
+                            hx-push-url="true"
+                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
+                            Cost / mo {{$costLink.Indicator}}
+                        </button>
+                    </th>
                     <th class="px-4 py-3 sm:px-6"></th>
                 </tr>
             </thead>

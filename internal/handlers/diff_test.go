@@ -113,6 +113,59 @@ func TestDiffPage_PrefixInputPresentOnFirstVisit(t *testing.T) {
 	}
 }
 
+func TestSortDiffChildView_BiggestAbsoluteMoverByDefault(t *testing.T) {
+	rows := []DiffChildView{
+		{Segment: "a", BytesDelta: 10, AbsByteDelta: 10},
+		{Segment: "b", BytesDelta: -1000, AbsByteDelta: 1000},
+		{Segment: "c", BytesDelta: 500, AbsByteDelta: 500},
+	}
+	sortDiffChildView(rows, "", "")
+	if rows[0].Segment != "b" || rows[1].Segment != "c" || rows[2].Segment != "a" {
+		t.Errorf("default sort: got [%s, %s, %s]; want [b, c, a] (largest |delta| first)", rows[0].Segment, rows[1].Segment, rows[2].Segment)
+	}
+}
+
+func TestSortDiffChildView_SizeAsc_PutsShrinkersFirst(t *testing.T) {
+	rows := []DiffChildView{
+		{Segment: "a", BytesDelta: 100, AbsByteDelta: 100},
+		{Segment: "b", BytesDelta: -200, AbsByteDelta: 200},
+		{Segment: "c", BytesDelta: 50, AbsByteDelta: 50},
+	}
+	sortDiffChildView(rows, "size", "asc")
+	if rows[0].Segment != "b" {
+		t.Errorf("size asc top row = %q, want b (most negative)", rows[0].Segment)
+	}
+	sortDiffChildView(rows, "size", "desc")
+	if rows[0].Segment != "a" {
+		t.Errorf("size desc top row = %q, want a (most positive)", rows[0].Segment)
+	}
+}
+
+func TestSortDiffChildView_StatusOrder(t *testing.T) {
+	rows := []DiffChildView{
+		{Segment: "a", Status: "unchanged", StatusOrder: 4},
+		{Segment: "b", Status: "added", StatusOrder: 1},
+		{Segment: "c", Status: "changed", StatusOrder: 3},
+		{Segment: "d", Status: "removed", StatusOrder: 2},
+	}
+	sortDiffChildView(rows, "status", "asc")
+	if got := []string{rows[0].Status, rows[1].Status, rows[2].Status, rows[3].Status}; got[0] != "added" || got[1] != "removed" || got[2] != "changed" || got[3] != "unchanged" {
+		t.Errorf("status asc order = %v", got)
+	}
+}
+
+func TestSortDiffChildView_SegmentAlphabetical(t *testing.T) {
+	rows := []DiffChildView{
+		{Segment: "b"},
+		{Segment: "a"},
+		{Segment: "c"},
+	}
+	sortDiffChildView(rows, "segment", "asc")
+	if rows[0].Segment != "a" || rows[1].Segment != "b" || rows[2].Segment != "c" {
+		t.Errorf("segment asc = [%s, %s, %s]", rows[0].Segment, rows[1].Segment, rows[2].Segment)
+	}
+}
+
 func TestSameConfig(t *testing.T) {
 	cases := []struct {
 		a, b string

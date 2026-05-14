@@ -6,6 +6,91 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
 
+// Diff-specific sort column identifiers. The numeric ones (objects /
+// size / cost) deliberately reuse the Browse keys so the URLs read
+// the same — only the comparator differs. Status is diff-only.
+const (
+	SortColDiffStatus = "status"
+)
+
+// statusOrder orders the four DiffStatus values for column sort. The
+// numbers don't have a meaning beyond "stable, distinct" — they just
+// keep added together, changed together, etc.
+func statusOrder(s DiffStatus) int {
+	switch s {
+	case DiffAdded:
+		return 1
+	case DiffRemoved:
+		return 2
+	case DiffChanged:
+		return 3
+	case DiffUnchanged:
+		return 4
+	default:
+		return 5
+	}
+}
+
+// NormalizeDiffSort clamps sort/dir from user input to the diff's
+// known sort columns. Unknown column falls back to "" which the
+// handler treats as the "biggest absolute byte mover" default —
+// preserves the current first-visit experience.
+func NormalizeDiffSort(sortBy, dir string) (col, direction string) {
+	switch sortBy {
+	case SortColSegment, SortColObjects, SortColSize, SortColCost, SortColDiffStatus:
+		col = sortBy
+	default:
+		col = ""
+	}
+	switch dir {
+	case SortDirAsc, SortDirDesc:
+		direction = dir
+	default:
+		if col == SortColSegment || col == SortColDiffStatus {
+			direction = SortDirAsc
+		} else {
+			direction = SortDirDesc
+		}
+	}
+	return col, direction
+}
+
+// DiffSortLinks builds the per-column {sort, dir, indicator} bundle
+// for the diff children table. Same shape as inventory.SortLinks so
+// the template can reuse the helper pattern.
+func DiffSortLinks(currentSort, currentDir string) map[string]BrowseSortLink {
+	cols := []struct {
+		key        string
+		defaultDir string
+	}{
+		{SortColDiffStatus, SortDirAsc},
+		{SortColSegment, SortDirAsc},
+		{SortColObjects, SortDirDesc},
+		{SortColSize, SortDirDesc},
+		{SortColCost, SortDirDesc},
+	}
+	links := make(map[string]BrowseSortLink, len(cols))
+	for _, c := range cols {
+		link := BrowseSortLink{Sort: c.key, Dir: c.defaultDir}
+		if c.key == currentSort {
+			if currentDir == SortDirAsc {
+				link.Dir = SortDirDesc
+				link.Indicator = "↑"
+			} else {
+				link.Dir = SortDirAsc
+				link.Indicator = "↓"
+			}
+		}
+		links[c.key] = link
+	}
+	return links
+}
+
+// StatusOrder returns a stable, distinct integer for each status so
+// the handler can sort rows by status column. The numbers have no
+// semantic meaning beyond keeping like-statuses together.
+func StatusOrder(s DiffStatus) int { return statusOrder(s) }
+
 // Diff-view types and pure helpers. Two loaded indexes are compared at
 // one prefix to surface the deltas a user can act on: how the totals
 // moved, and which immediate-child segments grew, shrank, or appeared.

@@ -116,6 +116,42 @@ func TestDiffLevel_OneSideMissingPrefix(t *testing.T) {
 	}
 }
 
+func TestNormalizeDiffSort(t *testing.T) {
+	cases := []struct {
+		name              string
+		sort, dir         string
+		wantSort, wantDir string
+	}{
+		{"empty falls through (default sort)", "", "", "", "desc"},
+		{"unknown column falls through", "garbage", "", "", "desc"},
+		{"status defaults asc", "status", "", "status", "asc"},
+		{"segment defaults asc", "segment", "", "segment", "asc"},
+		{"objects defaults desc", "objects", "", "objects", "desc"},
+		{"size defaults desc", "size", "", "size", "desc"},
+		{"cost defaults desc", "cost", "", "cost", "desc"},
+		{"explicit asc on numeric wins", "size", "asc", "size", "asc"},
+		{"unknown dir falls back per column", "objects", "sideways", "objects", "desc"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotS, gotD := NormalizeDiffSort(tc.sort, tc.dir)
+			if gotS != tc.wantSort || gotD != tc.wantDir {
+				t.Errorf("NormalizeDiffSort(%q,%q) = (%q,%q), want (%q,%q)", tc.sort, tc.dir, gotS, gotD, tc.wantSort, tc.wantDir)
+			}
+		})
+	}
+}
+
+func TestDiffSortLinks_ClickedColumnFlipsDirection(t *testing.T) {
+	links := DiffSortLinks("size", "desc")
+	if links["size"].Dir != "asc" || links["size"].Indicator != "↓" {
+		t.Errorf("active column should toggle dir + show indicator, got %+v", links["size"])
+	}
+	if links["objects"].Dir != "desc" || links["objects"].Indicator != "" {
+		t.Errorf("inactive column gets its default dir + no indicator, got %+v", links["objects"])
+	}
+}
+
 func openSeededIndex(t *testing.T, seed int64, objects int) *indexread.Index {
 	t.Helper()
 	tmp := t.TempDir()

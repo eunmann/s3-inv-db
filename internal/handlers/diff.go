@@ -71,6 +71,10 @@ type DiffLevelView struct {
 	HideUnchanged bool // toggle state for the template
 	Pagination    BrowsePagination
 	NotFound      bool // prefix missing on both sides — empty state
+
+	Sort      string // current sort column (empty = default)
+	Dir       string // current direction (asc/desc)
+	SortLinks map[string]inventory.BrowseSortLink
 }
 
 // DiffStatusCounts summarises the change set at this prefix.
@@ -97,21 +101,24 @@ type DiffSelfView struct {
 type DiffChildView struct {
 	Segment, Prefix string
 	Status          string // human label — template runs diffStatusClass on it
+	StatusOrder     int    // stable rank for status-column sort
 	HasChildren     bool
 
+	ObjectsDelta                                             int64
 	ObjectsBeforeH, ObjectsAfterH, ObjectsDeltaH, ObjectsPct string
 	ObjectsSign                                              int
 
+	BytesDelta                                       int64
 	BytesBeforeH, BytesAfterH, BytesDeltaH, BytesPct string
 	BytesSign                                        int
 
 	HasCost                                      bool
+	CostDelta                                    int64
 	CostBeforeH, CostAfterH, CostDeltaH, CostPct string
 	CostSign                                     int
 
-	// SortKey is the absolute byte delta — the default ordering surfaces
-	// "biggest movers first" so the interesting rows are at the top.
-	SortKey uint64
+	// AbsByteDelta drives the default "biggest absolute mover" sort.
+	AbsByteDelta uint64
 }
 
 // DiffPage renders the comparison page. Same URL serves the full page
@@ -124,33 +131,51 @@ func (h *Handlers) DiffPage(w http.ResponseWriter, r *http.Request) {
 	prefix := q.Get("prefix")
 	hideUnchanged := q.Get("show_unchanged") != "true"
 	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
+	sortBy, dir := inventory.NormalizeDiffSort(q.Get("sort"), q.Get("dir"))
 
+	opts := diffViewOptions{
+		from: from, to: to, prefix: prefix,
+		hideUnchanged: hideUnchanged,
+		page:          page, pageSize: pageSize,
+		sortBy: sortBy, dir: dir,
+	}
 	if wantsHTMXPartial(r) {
-		h.renderDiffLevelPartial(w, r, from, to, prefix, hideUnchanged, page, pageSize)
+		h.renderDiffLevelPartial(w, r, opts)
 		return
 	}
-	h.renderDiffFullPage(w, r, from, to, prefix, hideUnchanged, page, pageSize)
+	h.renderDiffFullPage(w, r, opts)
 }
 
-func (h *Handlers) renderDiffFullPage(w http.ResponseWriter, r *http.Request, from, to, prefix string, hideUnchanged bool, page, pageSize int) {
+// diffViewOptions bundles the query-string knobs DiffPage parses so
+// the inner render functions and computeDiffLevel don't drown in
+// positional parameters.
+type diffViewOptions struct {
+	from, to       string
+	prefix         string
+	hideUnchanged  bool
+	page, pageSize int
+	sortBy, dir    string
+}
+
+func (h *Handlers) renderDiffFullPage(w http.ResponseWriter, r *http.Request, opts diffViewOptions) {
 	data := DiffPageData{
 		Title:       "Compare runs",
 		Picker:      buildDiffPicker(h.manager.List()),
-		From:        from,
-		To:          to,
-		Prefix:      prefix,
-		Breadcrumbs: inventory.Breadcrumbs(prefix),
+		From:        opts.from,
+		To:          opts.to,
+		Prefix:      opts.prefix,
+		Breadcrumbs: inventory.Breadcrumbs(opts.prefix),
 	}
 
 	switch {
-	case from == "" || to == "":
+	case opts.from == "" || opts.to == "":
 		// First visit — no validation error, just the picker.
-	case !sameConfig(from, to):
+	case !sameConfig(opts.from, opts.to):
 		data.Error = "Both runs must belong to the same inventory configuration."
 	default:
-		data.ConfigLabel, data.FromRun = describeRun(from)
-		_, data.ToRun = describeRun(to)
-		level, err := h.computeDiffLevel(r.Context(), from, to, prefix, hideUnchanged, page, pageSize)
+		data.ConfigLabel, data.FromRun = describeRun(opts.from)
+		_, data.ToRun = describeRun(opts.to)
+		level, err := h.computeDiffLevel(r.Context(), opts)
 		switch {
 		case errors.Is(err, inventory.ErrNotFound):
 			data.Error = "One of the runs is no longer registered. Refresh the Inventories page."
@@ -162,10 +187,10 @@ func (h *Handlers) renderDiffFullPage(w http.ResponseWriter, r *http.Request, fr
 		default:
 			data.Level = level
 			data.Partial = DiffPartialData{
-				Prefix:      prefix,
+				Prefix:      opts.prefix,
 				Breadcrumbs: data.Breadcrumbs,
-				From:        from,
-				To:          to,
+				From:        opts.from,
+				To:          opts.to,
 				Level:       level,
 			}
 		}
@@ -178,16 +203,16 @@ func (h *Handlers) renderDiffFullPage(w http.ResponseWriter, r *http.Request, fr
 	}
 }
 
-func (h *Handlers) renderDiffLevelPartial(w http.ResponseWriter, r *http.Request, from, to, prefix string, hideUnchanged bool, page, pageSize int) {
-	if from == "" || to == "" {
+func (h *Handlers) renderDiffLevelPartial(w http.ResponseWriter, r *http.Request, opts diffViewOptions) {
+	if opts.from == "" || opts.to == "" {
 		http.Error(w, "from and to are required", http.StatusBadRequest)
 		return
 	}
-	if !sameConfig(from, to) {
+	if !sameConfig(opts.from, opts.to) {
 		http.Error(w, "both runs must belong to the same inventory configuration", http.StatusBadRequest)
 		return
 	}
-	level, err := h.computeDiffLevel(r.Context(), from, to, prefix, hideUnchanged, page, pageSize)
+	level, err := h.computeDiffLevel(r.Context(), opts)
 	if err != nil {
 		switch {
 		case errors.Is(err, inventory.ErrNotFound):
@@ -202,10 +227,10 @@ func (h *Handlers) renderDiffLevelPartial(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	view := DiffPartialData{
-		Prefix:      prefix,
-		Breadcrumbs: inventory.Breadcrumbs(prefix),
-		From:        from,
-		To:          to,
+		Prefix:      opts.prefix,
+		Breadcrumbs: inventory.Breadcrumbs(opts.prefix),
+		From:        opts.from,
+		To:          opts.to,
 		Level:       level,
 	}
 	if err := h.renderer.RenderPartial(w, "diff_level.html", view); err != nil {
@@ -218,10 +243,10 @@ func (h *Handlers) renderDiffLevelPartial(w http.ResponseWriter, r *http.Request
 // with cost deltas, signs, and human-formatted numbers. Filters, sorts,
 // and paginates the children before returning so the caller doesn't
 // have to.
-func (h *Handlers) computeDiffLevel(_ context.Context, from, to, prefix string, hideUnchanged bool, page, pageSize int) (*DiffLevelView, error) {
+func (h *Handlers) computeDiffLevel(_ context.Context, opts diffViewOptions) (*DiffLevelView, error) {
 	var view DiffLevelView
-	err := h.manager.WithTwoIndexes(from, to, func(a, b *indexread.Index) error {
-		data := inventory.DiffLevel(a, b, prefix)
+	err := h.manager.WithTwoIndexes(opts.from, opts.to, func(a, b *indexread.Index) error {
+		data := inventory.DiffLevel(a, b, opts.prefix)
 		view.NotFound = data.Self.NotFoundInA && data.Self.NotFoundInB
 		view.Self = h.buildDiffSelfView(data.Self)
 		view.Children = make([]DiffChildView, 0, len(data.Children))
@@ -244,8 +269,8 @@ func (h *Handlers) computeDiffLevel(_ context.Context, from, to, prefix string, 
 	if err != nil {
 		return nil, fmt.Errorf("compute diff: %w", err)
 	}
-	view.HideUnchanged = hideUnchanged
-	if hideUnchanged {
+	view.HideUnchanged = opts.hideUnchanged
+	if opts.hideUnchanged {
 		filtered := view.Children[:0]
 		for i := range view.Children {
 			if view.Children[i].Status != inventory.DiffUnchanged.String() {
@@ -254,15 +279,12 @@ func (h *Handlers) computeDiffLevel(_ context.Context, from, to, prefix string, 
 		}
 		view.Children = filtered
 	}
-	// Biggest movers first by absolute byte delta; ties broken by segment.
-	sort.SliceStable(view.Children, func(i, j int) bool {
-		if view.Children[i].SortKey != view.Children[j].SortKey {
-			return view.Children[i].SortKey > view.Children[j].SortKey
-		}
-		return view.Children[i].Segment < view.Children[j].Segment
-	})
+	view.Sort = opts.sortBy
+	view.Dir = opts.dir
+	view.SortLinks = inventory.DiffSortLinks(opts.sortBy, opts.dir)
+	sortDiffChildView(view.Children, opts.sortBy, opts.dir)
 	view.TotalChildren = len(view.Children)
-	view.Pagination = inventory.Paginate(view.TotalChildren, page, pageSize)
+	view.Pagination = inventory.Paginate(view.TotalChildren, opts.page, opts.pageSize)
 	from1, to1 := view.Pagination.FirstRow, view.Pagination.LastRow
 	if from1 > 0 {
 		view.Children = view.Children[from1-1 : to1]
@@ -270,6 +292,49 @@ func (h *Handlers) computeDiffLevel(_ context.Context, from, to, prefix string, 
 		view.Children = nil
 	}
 	return &view, nil
+}
+
+// sortDiffChildView orders the table rows in place. When sortBy is
+// empty the default "biggest absolute byte mover" applies — handy on
+// first visit because users mostly want to see what moved. Explicit
+// sorts use signed deltas so direction picks growers vs shrinkers.
+func sortDiffChildView(rows []DiffChildView, sortBy, dir string) {
+	desc := dir == inventory.SortDirDesc
+	less := func(i, j int) bool {
+		a, b := &rows[i], &rows[j]
+		var primary, equal bool
+		switch sortBy {
+		case inventory.SortColDiffStatus:
+			primary = a.StatusOrder < b.StatusOrder
+			equal = a.StatusOrder == b.StatusOrder
+		case inventory.SortColObjects:
+			primary = a.ObjectsDelta < b.ObjectsDelta
+			equal = a.ObjectsDelta == b.ObjectsDelta
+		case inventory.SortColSize:
+			primary = a.BytesDelta < b.BytesDelta
+			equal = a.BytesDelta == b.BytesDelta
+		case inventory.SortColCost:
+			primary = a.CostDelta < b.CostDelta
+			equal = a.CostDelta == b.CostDelta
+		case inventory.SortColSegment:
+			primary = a.Segment < b.Segment
+			equal = a.Segment == b.Segment
+		default:
+			// No explicit sort — default to biggest absolute byte
+			// delta first so the most interesting rows land on top.
+			primary = a.AbsByteDelta < b.AbsByteDelta
+			equal = a.AbsByteDelta == b.AbsByteDelta
+			desc = true
+		}
+		if equal {
+			return a.Segment < b.Segment
+		}
+		if desc {
+			return !primary
+		}
+		return primary
+	}
+	sort.SliceStable(rows, less)
 }
 
 func (h *Handlers) buildDiffSelfView(self inventory.DiffSelf) DiffSelfView {
@@ -298,12 +363,15 @@ func (h *Handlers) buildDiffChildView(c *inventory.DiffChild) DiffChildView {
 		Segment:        c.Segment,
 		Prefix:         c.Prefix,
 		Status:         c.Status.String(),
+		StatusOrder:    inventory.StatusOrder(c.Status),
 		HasChildren:    c.HasChildren,
+		ObjectsDelta:   c.Objects.Delta,
+		BytesDelta:     c.Bytes.Delta,
 		ObjectsBeforeH: numericLabel(c.Objects.Before, c.Status == inventory.DiffAdded, humanfmt.CountUint64),
 		ObjectsAfterH:  numericLabel(c.Objects.After, c.Status == inventory.DiffRemoved, humanfmt.CountUint64),
 		BytesBeforeH:   numericLabel(c.Bytes.Before, c.Status == inventory.DiffAdded, humanfmt.BytesUint64),
 		BytesAfterH:    numericLabel(c.Bytes.After, c.Status == inventory.DiffRemoved, humanfmt.BytesUint64),
-		SortKey:        absInt64(c.Bytes.Delta),
+		AbsByteDelta:   absInt64(c.Bytes.Delta),
 	}
 	v.ObjectsDeltaH, v.ObjectsPct, v.ObjectsSign = formatDelta(c.Objects.Before, c.Objects.After, c.Objects.Delta, humanfmt.CountUint64)
 	v.BytesDeltaH, v.BytesPct, v.BytesSign = formatDelta(c.Bytes.Before, c.Bytes.After, c.Bytes.Delta, humanfmt.BytesUint64)
@@ -313,6 +381,7 @@ func (h *Handlers) buildDiffChildView(c *inventory.DiffChild) DiffChildView {
 		costAfter := tierMapCost(c.TierAfter, h.priceTable)
 		v.CostBeforeH = pricing.FormatCost(costBefore)
 		v.CostAfterH = pricing.FormatCost(costAfter)
+		v.CostDelta = int64(costAfter) - int64(costBefore)
 		v.CostDeltaH, v.CostPct, v.CostSign = formatCostDelta(costBefore, costAfter)
 	}
 	return v
