@@ -52,6 +52,7 @@ func (s *Server) setupRoutes() {
 	r.Get("/", s.handlers.Dashboard)
 	r.Get("/inventories", s.handlers.InventoriesPage)
 	r.Get("/browse", s.handlers.BrowsePage)
+	r.Get("/help", s.handlers.HelpPage)
 	// /stats redirects to /browse so old bookmarks still resolve.
 	r.Get("/stats", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/browse", http.StatusMovedPermanently)

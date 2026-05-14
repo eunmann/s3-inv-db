@@ -1,0 +1,400 @@
+{{template "layout" .}}
+
+{{define "content"}}
+<div class="px-4 py-6 sm:px-0 max-w-7xl mx-auto">
+
+    <!-- Hero -->
+    <header class="mb-10">
+        <p class="text-sm font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Help &amp; quick start</p>
+        <h1 class="mt-1 text-3xl sm:text-4xl font-bold text-gray-900 dark:text-gray-100">Everything you can do here</h1>
+        <p class="mt-3 max-w-2xl text-base text-gray-600 dark:text-gray-300">
+            s3-inv-db turns an S3 Inventory report into a queryable, mmap-backed index so you can
+            browse prefix-level object counts, sizes, and storage-class breakdowns in milliseconds.
+            This page is your map of the UI — what each control does, the typical workflows, and how
+            to recover when something goes sideways.
+        </p>
+    </header>
+
+    <!-- TOC + content grid -->
+    <div class="lg:grid lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-10">
+
+        <!-- Sticky TOC -->
+        <aside class="hidden lg:block">
+            <nav aria-label="Help table of contents" class="sticky top-6">
+                <p class="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">On this page</p>
+                <ul class="space-y-2 text-sm">
+                    <li><a href="#pages" class="text-gray-700 dark:text-gray-200 hover:text-indigo-600 dark:hover:text-indigo-400">Pages at a glance</a></li>
+                    <li><a href="#workflow-load" class="text-gray-700 dark:text-gray-200 hover:text-indigo-600 dark:hover:text-indigo-400">Load an inventory</a></li>
+                    <li><a href="#workflow-browse" class="text-gray-700 dark:text-gray-200 hover:text-indigo-600 dark:hover:text-indigo-400">Browse a prefix tree</a></li>
+                    <li><a href="#chips" class="text-gray-700 dark:text-gray-200 hover:text-indigo-600 dark:hover:text-indigo-400">State chips</a></li>
+                    <li><a href="#buttons" class="text-gray-700 dark:text-gray-200 hover:text-indigo-600 dark:hover:text-indigo-400">Action buttons</a></li>
+                    <li><a href="#progress" class="text-gray-700 dark:text-gray-200 hover:text-indigo-600 dark:hover:text-indigo-400">Progress &amp; ETA</a></li>
+                    <li><a href="#persistence" class="text-gray-700 dark:text-gray-200 hover:text-indigo-600 dark:hover:text-indigo-400">Persistence &amp; restarts</a></li>
+                    <li><a href="#shortcuts" class="text-gray-700 dark:text-gray-200 hover:text-indigo-600 dark:hover:text-indigo-400">Tips &amp; shortcuts</a></li>
+                    <li><a href="#troubleshooting" class="text-gray-700 dark:text-gray-200 hover:text-indigo-600 dark:hover:text-indigo-400">Troubleshooting</a></li>
+                    <li><a href="#glossary" class="text-gray-700 dark:text-gray-200 hover:text-indigo-600 dark:hover:text-indigo-400">Glossary</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="space-y-12 min-w-0">
+
+            <!-- Quick-start cards -->
+            <section aria-labelledby="quickstart-h">
+                <h2 id="quickstart-h" class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Quick start</h2>
+                <ol class="grid sm:grid-cols-3 gap-4 list-none">
+                    <li class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700">
+                        <div class="flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-semibold">
+                            <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-xs">1</span>
+                            <span>Find an inventory</span>
+                        </div>
+                        <p class="mt-2 text-sm text-gray-600 dark:text-gray-300">
+                            Open <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:underline">Inventories</a>.
+                            Each row is one S3 inventory configuration the server discovered under
+                            <code class="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded text-xs">--s3-source</code>.
+                        </p>
+                    </li>
+                    <li class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700">
+                        <div class="flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-semibold">
+                            <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-xs">2</span>
+                            <span>Click <strong>Load</strong></span>
+                        </div>
+                        <p class="mt-2 text-sm text-gray-600 dark:text-gray-300">
+                            The build runs in the background. The row turns blue, shows the current
+                            pipeline stage and an ETA. You can navigate away and come back; the row
+                            keeps updating live.
+                        </p>
+                    </li>
+                    <li class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700">
+                        <div class="flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-semibold">
+                            <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-xs">3</span>
+                            <span>Open <strong>Browse</strong></span>
+                        </div>
+                        <p class="mt-2 text-sm text-gray-600 dark:text-gray-300">
+                            Pick the loaded inventory in the dropdown. Drill into child prefixes,
+                            see per-prefix object counts, sizes, and monthly cost estimates by
+                            storage class.
+                        </p>
+                    </li>
+                </ol>
+            </section>
+
+            <!-- Pages at a glance -->
+            <section aria-labelledby="pages-h" id="pages">
+                <h2 id="pages-h" class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Pages at a glance</h2>
+                <dl class="space-y-4">
+                    <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700">
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">
+                            <a href="/" class="text-indigo-600 dark:text-indigo-400 hover:underline">Dashboard</a>
+                        </dt>
+                        <dd class="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                            Counters for total / loaded / not-loaded / error inventories, plus a
+                            list of everything the server currently knows about. Read-only — use it
+                            to spot which inventories are ready to query.
+                        </dd>
+                    </div>
+                    <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700">
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">
+                            <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:underline">Inventories</a>
+                        </dt>
+                        <dd class="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                            One row per S3 inventory configuration discovered under the source
+                            bucket/prefix. The only place you can <strong>Load</strong>,
+                            <strong>Unload</strong>, <strong>Retry</strong>, or <strong>Cancel</strong>
+                            an in-flight build.
+                        </dd>
+                    </div>
+                    <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700">
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">
+                            <a href="/browse" class="text-indigo-600 dark:text-indigo-400 hover:underline">Browse</a>
+                        </dt>
+                        <dd class="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                            Directory-style explorer over a <em>loaded</em> inventory. Pick an
+                            inventory + a starting prefix, then click into child prefixes. Sort
+                            children by size / objects / cost. URLs are shareable — the entire
+                            view is reproducible from <code class="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded text-xs">?inventory_id=&amp;prefix=&amp;sort=&amp;dir=&amp;page=</code>.
+                        </dd>
+                    </div>
+                </dl>
+            </section>
+
+            <!-- Load workflow -->
+            <section aria-labelledby="load-h" id="workflow-load">
+                <h2 id="load-h" class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Workflow: load an inventory</h2>
+                <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700 space-y-3">
+                    <p class="text-sm text-gray-700 dark:text-gray-200">
+                        Loading turns a remote S3 inventory report into a local, mmap-backed index.
+                        It's asynchronous — once you click, the build runs in the background and
+                        the row updates live over a single Server-Sent Events stream.
+                    </p>
+                    <ol class="text-sm text-gray-700 dark:text-gray-200 list-decimal pl-5 space-y-1">
+                        <li>Find the inventory row on the <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:underline">Inventories</a> page.</li>
+                        <li>Click <strong>Load</strong> (or <strong>Reload</strong> / <strong>Retry</strong>, depending on current state).</li>
+                        <li>The state chip flips to <em>Loading…</em> and a spinner + stage label appears
+                            (Preparing → Initializing → Downloading &amp; parsing → Building index → Done).
+                            A progress bar and ETA show during the downloading stage.</li>
+                        <li>When the build completes, the chip becomes <em>Loaded</em> and the node count
+                            populates. Open <a href="/browse" class="text-indigo-600 dark:text-indigo-400 hover:underline">Browse</a> to query it.</li>
+                    </ol>
+                    <p class="text-sm text-gray-700 dark:text-gray-200">
+                        You can leave the Inventories page during the build — row updates resume the
+                        next time you visit. The build keeps running even if your browser tab closes.
+                    </p>
+                </div>
+            </section>
+
+            <!-- Browse workflow -->
+            <section aria-labelledby="browse-h" id="workflow-browse">
+                <h2 id="browse-h" class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Workflow: browse a prefix tree</h2>
+                <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700 space-y-3">
+                    <p class="text-sm text-gray-700 dark:text-gray-200">
+                        Browse is a directory-style explorer. Pick a loaded inventory and a starting
+                        prefix (empty = the bucket root). The page shows aggregated stats for that
+                        prefix plus its immediate child prefixes.
+                    </p>
+                    <ul class="text-sm text-gray-700 dark:text-gray-200 list-disc pl-5 space-y-1">
+                        <li><strong>Click a child prefix</strong> (📁) to drill in. The address bar
+                            updates so you can share or bookmark the URL.</li>
+                        <li><strong>Breadcrumbs</strong> at the top navigate back up; the rightmost
+                            one is the current location.</li>
+                        <li><strong>Storage tier breakdown</strong> is collapsible. When present it
+                            also shows a monthly cost estimate using US-East-1 prices (override with
+                            <code class="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded text-xs">--price-table</code>).</li>
+                        <li><strong>Sort columns</strong> by clicking the header — Segment, Objects,
+                            Size, or Est. Cost / mo.</li>
+                        <li><strong>Type a prefix</strong> in the Prefix input + press Enter to jump
+                            directly without drilling down step by step.</li>
+                    </ul>
+                </div>
+            </section>
+
+            <!-- State chips reference -->
+            <section aria-labelledby="chips-h" id="chips">
+                <h2 id="chips-h" class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">State chips</h2>
+                <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700 overflow-x-auto">
+                    <table class="min-w-full text-sm">
+                        <thead class="text-left text-xs uppercase text-gray-500 dark:text-gray-400">
+                            <tr><th class="pb-3 pr-6">Chip</th><th class="pb-3 pr-6">Meaning</th><th class="pb-3">What you can do</th></tr>
+                        </thead>
+                        <tbody class="text-gray-700 dark:text-gray-200 divide-y divide-gray-100 dark:divide-gray-700">
+                            <tr>
+                                <td class="py-3 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "not_loaded"}}">{{stateLabel "not_loaded"}}</span></td>
+                                <td class="py-3 pr-6">Discovered in S3, but the index hasn't been built yet.</td>
+                                <td class="py-3"><strong>Load</strong></td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "loading"}}">{{stateLabel "loading"}}</span></td>
+                                <td class="py-3 pr-6">A build job is running. Stage label + progress bar appear below the chip.</td>
+                                <td class="py-3"><strong>Cancel</strong></td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "loaded"}}">{{stateLabel "loaded"}}</span></td>
+                                <td class="py-3 pr-6">The index is open in memory; queries are ready.</td>
+                                <td class="py-3"><strong>Unload</strong>, or open Browse</td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "unloaded"}}">{{stateLabel "unloaded"}}</span></td>
+                                <td class="py-3 pr-6">Built once, currently released from memory. The on-disk cache is intact.</td>
+                                <td class="py-3"><strong>Reload</strong> (cheap — no re-download)</td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "error"}}">{{stateLabel "error"}}</span></td>
+                                <td class="py-3 pr-6">Last build failed, was cancelled, or was interrupted by a server restart. Hover the small error label for details.</td>
+                                <td class="py-3"><strong>Retry</strong></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Buttons reference -->
+            <section aria-labelledby="buttons-h" id="buttons">
+                <h2 id="buttons-h" class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Action buttons</h2>
+                <div class="grid sm:grid-cols-2 gap-4">
+                    <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700">
+                        <p class="font-semibold text-indigo-600 dark:text-indigo-400">Load</p>
+                        <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">Submits a fresh build job. Cache directory is wiped before the pipeline runs; partial builds are never resumed.</p>
+                    </div>
+                    <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700">
+                        <p class="font-semibold text-indigo-600 dark:text-indigo-400">Reload</p>
+                        <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">Re-runs the build from scratch. Use when the upstream inventory has a newer run available.</p>
+                    </div>
+                    <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700">
+                        <p class="font-semibold text-indigo-600 dark:text-indigo-400">Retry</p>
+                        <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">Shown on error rows. Same as Load — wipes the partial cache and restarts the pipeline.</p>
+                    </div>
+                    <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700">
+                        <p class="font-semibold text-yellow-600 dark:text-yellow-400">Unload</p>
+                        <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">Releases the index from memory. The on-disk cache stays put for a fast Reload later. No re-download required.</p>
+                    </div>
+                    <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700 sm:col-span-2">
+                        <p class="font-semibold text-yellow-600 dark:text-yellow-400">Cancel</p>
+                        <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">Signals the in-flight build to stop. The pipeline winds down at its next safe checkpoint; the row flips to error with <em>"context canceled"</em> in the tooltip. Click Retry to start over.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Progress + ETA -->
+            <section aria-labelledby="progress-h" id="progress">
+                <h2 id="progress-h" class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Progress &amp; ETA</h2>
+                <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700 space-y-3">
+                    <p class="text-sm text-gray-700 dark:text-gray-200">
+                        During a load, the row updates over a single Server-Sent Events connection
+                        the page opens with the server. Whenever the build pipeline moves stage or
+                        finishes a chunk, the row re-renders itself with the new state — no manual
+                        refresh needed.
+                    </p>
+                    <ul class="text-sm text-gray-700 dark:text-gray-200 list-disc pl-5 space-y-1">
+                        <li><strong>Stage label</strong> tracks the pipeline: Preparing → Initializing →
+                            Downloading &amp; parsing → Building index → Done.</li>
+                        <li><strong>Progress bar &amp; "X/Y"</strong> show how many chunks of the inventory
+                            have been ingested out of the total declared in the manifest.</li>
+                        <li><strong>"~Xm Ys remaining"</strong> is a linear projection from elapsed time:
+                            <em>elapsed × (total − done) / done</em>. Less accurate at the very start, accurate
+                            by the time you've ingested a handful of chunks.</li>
+                    </ul>
+                </div>
+            </section>
+
+            <!-- Persistence -->
+            <section aria-labelledby="persistence-h" id="persistence">
+                <h2 id="persistence-h" class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Persistence &amp; restarts</h2>
+                <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700 space-y-3">
+                    <p class="text-sm text-gray-700 dark:text-gray-200">
+                        The server keeps a SQLite file at
+                        <code class="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded text-xs">$CACHE_DIR/state.db</code>
+                        with one row per inventory and one row per job. On every state change the
+                        in-memory Manager mirrors itself into this file.
+                    </p>
+                    <p class="text-sm text-gray-700 dark:text-gray-200">
+                        When the server restarts:
+                    </p>
+                    <ul class="text-sm text-gray-700 dark:text-gray-200 list-disc pl-5 space-y-1">
+                        <li><strong>Loaded inventories</strong> are rehydrated by re-opening their on-disk index — your queries keep working without a rebuild.</li>
+                        <li><strong>Builds in flight</strong> at shutdown can't safely resume mid-pipeline, so their inventories flip to <em>Error</em> with the message <em>"interrupted by server restart"</em>. Click Retry.</li>
+                        <li><strong>Queued or running jobs</strong> from the previous process are stamped <em>aborted</em> in the job history.</li>
+                    </ul>
+                </div>
+            </section>
+
+            <!-- Tips & shortcuts -->
+            <section aria-labelledby="shortcuts-h" id="shortcuts">
+                <h2 id="shortcuts-h" class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Tips &amp; shortcuts</h2>
+                <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700 space-y-3 text-sm text-gray-700 dark:text-gray-200">
+                    <p>
+                        <strong>Browse URLs are shareable.</strong> Copy the address bar at any point —
+                        another person opening it lands in the same prefix, with the same sort and page.
+                    </p>
+                    <p>
+                        <strong>Browser back/forward.</strong> Navigation inside Browse (children,
+                        breadcrumbs, sort headers) is reflected in history. Back returns the previous
+                        prefix; the inventory and prefix inputs always show the URL's actual values.
+                    </p>
+                    <p>
+                        <strong>Dark mode.</strong> Toggle the sun/moon icon in the top-right of any
+                        page. The choice is stored locally and applies before the first paint, so
+                        there's no light-mode flash on reload.
+                    </p>
+                    <p>
+                        <strong>Keyboard navigation.</strong> Tab walks the page in reading order;
+                        every button accepts Enter and Space. The Browse page's child links are
+                        proper <code class="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded text-xs">&lt;a&gt;</code> tags — middle-click or
+                        Ctrl-click to open in a new tab.
+                    </p>
+                </div>
+            </section>
+
+            <!-- Troubleshooting -->
+            <section aria-labelledby="trouble-h" id="troubleshooting">
+                <h2 id="trouble-h" class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Troubleshooting</h2>
+                <div class="space-y-3">
+                    <details class="bg-white dark:bg-gray-800 shadow rounded-lg border border-gray-200 dark:border-gray-700 group">
+                        <summary class="px-5 py-4 cursor-pointer text-sm font-medium text-gray-900 dark:text-gray-100 select-none">A build is stuck and the ETA isn't moving</summary>
+                        <div class="px-5 pb-4 text-sm text-gray-700 dark:text-gray-200">
+                            Click <strong>Cancel</strong>. The pipeline winds down at its next safe
+                            checkpoint and the row flips to <em>Error</em>. Then click <strong>Retry</strong>.
+                            If the same inventory consistently hangs in the same stage, check the
+                            server logs — the manifest may point at unreachable objects.
+                        </div>
+                    </details>
+                    <details class="bg-white dark:bg-gray-800 shadow rounded-lg border border-gray-200 dark:border-gray-700 group">
+                        <summary class="px-5 py-4 cursor-pointer text-sm font-medium text-gray-900 dark:text-gray-100 select-none">After a restart, my row shows <em>Error: interrupted by server restart</em></summary>
+                        <div class="px-5 pb-4 text-sm text-gray-700 dark:text-gray-200">
+                            That's expected. Mid-flight builds aren't safe to resume — the partial
+                            cache directory is invalid. Click <strong>Retry</strong> to rerun cleanly.
+                            Inventories that were fully loaded before the restart come back as
+                            <em>Loaded</em> automatically; no action needed.
+                        </div>
+                    </details>
+                    <details class="bg-white dark:bg-gray-800 shadow rounded-lg border border-gray-200 dark:border-gray-700 group">
+                        <summary class="px-5 py-4 cursor-pointer text-sm font-medium text-gray-900 dark:text-gray-100 select-none">The Inventories list is empty</summary>
+                        <div class="px-5 pb-4 text-sm text-gray-700 dark:text-gray-200">
+                            {{if .HasDiscovery}}
+                            The server is configured with <code class="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded text-xs">{{.S3Source}}</code>
+                            but no inventory configurations were found under that prefix. Make sure
+                            your S3 Inventory configuration is publishing reports to that location
+                            and that at least one run has completed.
+                            {{else}}
+                            Discovery is disabled. Start the server with
+                            <code class="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded text-xs">--s3-source s3://bucket/inventory-prefix/</code>
+                            to populate the list.
+                            {{end}}
+                        </div>
+                    </details>
+                    <details class="bg-white dark:bg-gray-800 shadow rounded-lg border border-gray-200 dark:border-gray-700 group">
+                        <summary class="px-5 py-4 cursor-pointer text-sm font-medium text-gray-900 dark:text-gray-100 select-none">Browse says "select a loaded inventory" but I just loaded one</summary>
+                        <div class="px-5 pb-4 text-sm text-gray-700 dark:text-gray-200">
+                            The dropdown only lists inventories currently in the <em>Loaded</em>
+                            state. If yours is <em>Loading…</em>, wait for the build to complete; if
+                            it's <em>Unloaded</em> or <em>Error</em>, click Reload / Retry on the
+                            Inventories page first.
+                        </div>
+                    </details>
+                    <details class="bg-white dark:bg-gray-800 shadow rounded-lg border border-gray-200 dark:border-gray-700 group">
+                        <summary class="px-5 py-4 cursor-pointer text-sm font-medium text-gray-900 dark:text-gray-100 select-none">I want to free disk space</summary>
+                        <div class="px-5 pb-4 text-sm text-gray-700 dark:text-gray-200">
+                            On-disk indexes live under
+                            <code class="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded text-xs">$CACHE_DIR/&lt;src-bucket&gt;/&lt;inv-id&gt;/</code>.
+                            Click <strong>Unload</strong> first (so no process is reading the files),
+                            then remove the directory manually. The row will return to <em>Not loaded</em>
+                            on the next page refresh; click Load again to rebuild.
+                        </div>
+                    </details>
+                </div>
+            </section>
+
+            <!-- Glossary -->
+            <section aria-labelledby="glossary-h" id="glossary">
+                <h2 id="glossary-h" class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Glossary</h2>
+                <dl class="bg-white dark:bg-gray-800 shadow rounded-lg p-5 border border-gray-200 dark:border-gray-700 space-y-3 text-sm">
+                    <div>
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">Inventory</dt>
+                        <dd class="text-gray-600 dark:text-gray-300">One S3 Inventory configuration — a manifest describing every object in a source bucket at a point in time.</dd>
+                    </div>
+                    <div>
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">Run</dt>
+                        <dd class="text-gray-600 dark:text-gray-300">One snapshot produced by an inventory configuration. S3 emits these on a daily/weekly schedule. The server uses only the latest run per inventory.</dd>
+                    </div>
+                    <div>
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">Index</dt>
+                        <dd class="text-gray-600 dark:text-gray-300">The mmap-backed on-disk artifact built from an inventory. Enables O(1) prefix lookups and fast subtree aggregation.</dd>
+                    </div>
+                    <div>
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">Prefix</dt>
+                        <dd class="text-gray-600 dark:text-gray-300">A path inside the source bucket (e.g. <code class="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded text-xs">data/2024/</code>). The Browse page navigates the prefix tree.</dd>
+                    </div>
+                    <div>
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">Tier</dt>
+                        <dd class="text-gray-600 dark:text-gray-300">The S3 storage class (Standard, Standard-IA, Glacier Instant, etc.). The tier breakdown shows how many objects + bytes live in each class for a given prefix.</dd>
+                    </div>
+                    <div>
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">Cost estimate</dt>
+                        <dd class="text-gray-600 dark:text-gray-300">Monthly $ figure computed from the tier breakdown × a price table. Defaults to US-East-1 prices; override with <code class="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded text-xs">--price-table</code>.</dd>
+                    </div>
+                </dl>
+            </section>
+
+        </main>
+    </div>
+</div>
+{{end}}
