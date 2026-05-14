@@ -108,6 +108,32 @@ func TestJobsStream_PushesEvents(t *testing.T) {
 	}
 }
 
+// TestJobsStream_EmitsHeartbeat verifies the periodic ping that
+// surfaces dead client connections quickly. Without it, idle SSE
+// connections from departed browser tabs sit on the server until
+// Chrome closes the TCP socket (~60s), eating per-origin HTTP/1.1
+// slots and stalling other htmx requests.
+func TestJobsStream_EmitsHeartbeat(t *testing.T) {
+	orig := sseHeartbeatInterval
+	sseHeartbeatInterval = 20 * time.Millisecond
+	t.Cleanup(func() { sseHeartbeatInterval = orig })
+
+	h, _ := newJobsHandlers(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/jobs/stream", http.NoBody).WithContext(ctx)
+	w := httptest.NewRecorder()
+	h.JobsStream(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, ": connected") {
+		t.Error("missing initial connected comment")
+	}
+	if !strings.Contains(body, ": ping") {
+		t.Errorf("heartbeat ping not emitted within 200ms\nbody:\n%s", body)
+	}
+}
+
 func TestJobsStream_DisabledWhenJobBusMissing(t *testing.T) {
 	renderer, err := templates.New()
 	if err != nil {

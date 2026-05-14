@@ -4,9 +4,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/rs/zerolog"
 )
+
+// sseHeartbeatInterval is how often the handler emits a comment line
+// when no job events have fired. Without it, a browser that navigated
+// away leaves an idle TCP connection alive (Chrome reuses sockets for
+// ~60s); the server can't detect the gone client until it tries to
+// write. With six dead SSE connections, all per-origin HTTP/1.1 slots
+// are eaten and every other htmx request stalls. The heartbeat surfaces
+// the dead peer quickly via a write error.
+//
+// It's a var (not const) so tests can shrink it; otherwise treat as
+// immutable.
+var sseHeartbeatInterval = 15 * time.Second
 
 // JobsStream serves text/event-stream and emits one event per job state
 // change. Browsers can subscribe with the htmx-sse extension; event
@@ -37,13 +50,23 @@ func (h *Handlers) JobsStream(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 	ctx := r.Context()
 	// Emit an initial comment to nail the connection open.
-	fmt.Fprintf(w, ": connected\n\n")
+	if _, err := fmt.Fprintf(w, ": connected\n\n"); err != nil {
+		return
+	}
 	flusher.Flush()
+
+	heartbeat := time.NewTicker(sseHeartbeatInterval)
+	defer heartbeat.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-heartbeat.C:
+			if _, err := fmt.Fprintf(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
 		case j, ok := <-events:
 			if !ok {
 				return
@@ -56,8 +79,12 @@ func (h *Handlers) JobsStream(w http.ResponseWriter, r *http.Request) {
 			// Two frames per change so different listeners can subscribe
 			// by job ID (debug consoles) or by inventory ID (the row
 			// elements, which don't know which job is theirs).
-			fmt.Fprintf(w, "event: job-%s\ndata: %s\n\n", j.ID, payload)
-			fmt.Fprintf(w, "event: row-%s\ndata: %s\n\n", j.InventoryID, payload)
+			if _, err := fmt.Fprintf(w, "event: job-%s\ndata: %s\n\n", j.ID, payload); err != nil {
+				return
+			}
+			if _, err := fmt.Fprintf(w, "event: row-%s\ndata: %s\n\n", j.InventoryID, payload); err != nil {
+				return
+			}
 			flusher.Flush()
 		}
 	}

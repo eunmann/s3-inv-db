@@ -24,7 +24,10 @@
     </div>
     {{end}}
 
-    <div class="bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-lg">
+    <!-- Only the inventories page wires htmx-sse. Dashboard/Browse don't
+         have rows that listen and were wasting a per-origin TCP slot. -->
+    <div class="bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-lg"
+         hx-ext="sse" sse-connect="/api/jobs/stream">
         {{if .Discovered}}
         <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
             <thead class="bg-gray-50 dark:bg-gray-900/30">
