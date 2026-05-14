@@ -43,6 +43,8 @@ make seeder  # bin/s3-inv-db-seeder
 
 ## Library usage
 
+Read a built index directly:
+
 ```go
 import "github.com/eunmann/s3-inv-db/pkg/indexread"
 
@@ -52,7 +54,21 @@ pos, ok := idx.Lookup("data/2024/")
 stats := idx.Stats(pos)  // ObjectCount, TotalBytes
 ```
 
-Full API in [docs/library-api.md](docs/library-api.md).
+Or embed the full HTTP server in your own binary:
+
+```go
+import "github.com/eunmann/s3-inv-db/pkg/server"
+
+err := server.BootstrapAndRun(ctx, server.RuntimeOptions{
+    Addr:     ":8080",
+    S3Source: "s3://my-bucket/inventory-data/",
+    CacheDir: "/var/cache/s3inv",
+    Logger:   logger,
+})
+```
+
+The server exposes its chi router via `srv.Router()` so it can be mounted
+behind your own middleware. Full API in [docs/library-api.md](docs/library-api.md).
 
 ## Testing & quality
 

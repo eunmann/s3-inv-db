@@ -260,12 +260,9 @@ func (s *Server) shutdownResources() {
 	}
 }
 
-// Router returns the chi router for testing.
+// Router returns the underlying chi router. Useful for mounting the
+// server onto another router (e.g., behind a path prefix) or for writing
+// tests that drive handlers via httptest without binding a port.
 func (s *Server) Router() chi.Router {
 	return s.router
-}
-
-// Manager returns the inventory manager.
-func (s *Server) Manager() *inventory.Manager {
-	return s.manager
 }

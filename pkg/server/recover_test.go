@@ -41,7 +41,7 @@ func TestRecover_HydratesPersistedInventories(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	got, ok := srv.Manager().Get("src/inv1")
+	got, ok := srv.manager.Get("src/inv1")
 	if !ok {
 		t.Fatal("inventory not hydrated into Manager")
 	}
@@ -79,7 +79,7 @@ func TestRecover_FlipsStaleLoadingToError(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	got, _ := srv.Manager().Get("src/inv1")
+	got, _ := srv.manager.Get("src/inv1")
 	if got.State != inventory.StateError {
 		t.Errorf("post-recover state = %s, want error", got.State)
 	}
@@ -159,7 +159,7 @@ func TestRecover_NoFailureWhenStoreIsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New on empty store: %v", err)
 	}
-	if got := srv.Manager().List(); len(got) != 0 {
+	if got := srv.manager.List(); len(got) != 0 {
 		t.Errorf("Manager.List() = %d entries on empty store, want 0", len(got))
 	}
 	ctx, cancel := context.WithCancel(context.Background())

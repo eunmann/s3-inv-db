@@ -45,8 +45,8 @@ func TestNewServer(t *testing.T) {
 		t.Error("Router() returned nil")
 	}
 
-	if srv.Manager() == nil {
-		t.Error("Manager() returned nil")
+	if srv.manager == nil {
+		t.Error("manager field was nil after New")
 	}
 }
 
@@ -103,7 +103,7 @@ func TestServerGracefulShutdown(t *testing.T) {
 	}
 
 	// Register an inventory so Close has something to clear.
-	if err := srv.Manager().Register("probe", "Probe", "/no/such/path"); err != nil {
+	if err := srv.manager.Register("probe", "Probe", "/no/such/path"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
@@ -126,7 +126,7 @@ func TestServerGracefulShutdown(t *testing.T) {
 		t.Fatal("Run() did not return within 5s after context cancel")
 	}
 
-	if got := len(srv.Manager().List()); got != 0 {
+	if got := len(srv.manager.List()); got != 0 {
 		t.Errorf("Manager.List() length = %d after Run, want 0 (manager not closed)", got)
 	}
 }
@@ -154,7 +154,7 @@ func TestServerRun_ListenError(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	if err := srv.Manager().Register("probe", "Probe", "/no/such/path"); err != nil {
+	if err := srv.manager.Register("probe", "Probe", "/no/such/path"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
@@ -172,7 +172,7 @@ func TestServerRun_ListenError(t *testing.T) {
 		t.Fatal("Run() did not return within 5s on port conflict")
 	}
 
-	if got := len(srv.Manager().List()); got != 0 {
+	if got := len(srv.manager.List()); got != 0 {
 		t.Errorf("Manager.List() length = %d after ListenAndServe failure, want 0", got)
 	}
 }
