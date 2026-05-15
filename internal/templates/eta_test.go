@@ -1,9 +1,11 @@
-package templates
+package templates_test
 
 import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/eunmann/s3-inv-db/internal/templates"
 )
 
 func TestFormatETA_ZeroOnUnknownInputs(t *testing.T) {
@@ -21,7 +23,7 @@ func TestFormatETA_ZeroOnUnknownInputs(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := formatETA(c.startedAt, c.done, c.total); got != "" {
+			if got := templates.FormatETA(c.startedAt, c.done, c.total); got != "" {
 				t.Errorf("formatETA(%v, %d, %d) = %q, want \"\"", c.startedAt, c.done, c.total, got)
 			}
 		})
@@ -33,7 +35,7 @@ func TestFormatETA_LinearProjection(t *testing.T) {
 	// "1m" or "60s" depending on rounding — accept anything non-empty
 	// that looks roughly like a minute.
 	start := time.Now().Add(-time.Minute)
-	got := formatETA(start, 5, 10)
+	got := templates.FormatETA(start, 5, 10)
 	if got == "" {
 		t.Fatal("formatETA returned empty for valid inputs")
 	}
@@ -57,7 +59,7 @@ func TestProgressPct(t *testing.T) {
 		{5, 0, 0},
 	}
 	for _, c := range cases {
-		if got := progressPct(c.done, c.total); got != c.want {
+		if got := templates.ProgressPct(c.done, c.total); got != c.want {
 			t.Errorf("progressPct(%d, %d) = %d, want %d", c.done, c.total, got, c.want)
 		}
 	}

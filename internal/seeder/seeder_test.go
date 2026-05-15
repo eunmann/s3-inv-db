@@ -1,4 +1,4 @@
-package seeder
+package seeder_test
 
 import (
 	"crypto/sha256"
@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/pkg/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/rs/zerolog"
@@ -17,7 +18,7 @@ import (
 func TestRun_GeneratesValidIndexes(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	cfg := Config{
+	cfg := seeder.Config{
 		OutputDir: tmpDir,
 		Count:     2,
 		Objects:   100,
@@ -26,7 +27,7 @@ func TestRun_GeneratesValidIndexes(t *testing.T) {
 		Logger:    zerolog.Nop(),
 	}
 
-	if err := Run(cfg); err != nil {
+	if err := seeder.Run(cfg); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 
@@ -37,7 +38,7 @@ func TestRun_GeneratesValidIndexes(t *testing.T) {
 		t.Fatalf("read summary.json: %v", err)
 	}
 
-	var summary Summary
+	var summary seeder.Summary
 	if err := json.Unmarshal(summaryData, &summary); err != nil {
 		t.Fatalf("unmarshal summary: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestRun_GeneratesValidIndexes(t *testing.T) {
 func TestRun_DistinctInventoriesWithDefaultSeed(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	cfg := Config{
+	cfg := seeder.Config{
 		OutputDir: tmpDir,
 		Count:     3,
 		Objects:   200,
@@ -86,7 +87,7 @@ func TestRun_DistinctInventoriesWithDefaultSeed(t *testing.T) {
 		Logger:    zerolog.Nop(),
 	}
 
-	if err := Run(cfg); err != nil {
+	if err := seeder.Run(cfg); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 
@@ -116,7 +117,7 @@ func TestGetGeneratorConfig_Presets(t *testing.T) {
 
 	for _, preset := range presets {
 		t.Run(preset, func(t *testing.T) {
-			cfg := getGeneratorConfig(preset, 1000)
+			cfg := seeder.GetGeneratorConfig(preset, 1000)
 
 			if cfg.NumObjects != 1000 {
 				t.Errorf("expected 1000 objects, got %d", cfg.NumObjects)
@@ -137,7 +138,7 @@ func TestGenerateInventory_Deterministic(t *testing.T) {
 	tmpDir1 := t.TempDir()
 	tmpDir2 := t.TempDir()
 
-	cfg1 := Config{
+	cfg1 := seeder.Config{
 		OutputDir: tmpDir1,
 		Count:     1,
 		Objects:   50,
@@ -146,7 +147,7 @@ func TestGenerateInventory_Deterministic(t *testing.T) {
 		Logger:    zerolog.Nop(),
 	}
 
-	cfg2 := Config{
+	cfg2 := seeder.Config{
 		OutputDir: tmpDir2,
 		Count:     1,
 		Objects:   50,
@@ -155,12 +156,12 @@ func TestGenerateInventory_Deterministic(t *testing.T) {
 		Logger:    zerolog.Nop(),
 	}
 
-	info1, err := generateInventory(cfg1, 1, 12345)
+	info1, err := seeder.GenerateInventory(cfg1, 1, 12345)
 	if err != nil {
 		t.Fatalf("generate inventory 1: %v", err)
 	}
 
-	info2, err := generateInventory(cfg2, 1, 12345)
+	info2, err := seeder.GenerateInventory(cfg2, 1, 12345)
 	if err != nil {
 		t.Fatalf("generate inventory 2: %v", err)
 	}
@@ -214,7 +215,7 @@ func TestGetGeneratorConfig_PresetValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.preset, func(t *testing.T) {
-			cfg := getGeneratorConfig(tt.preset, 1000)
+			cfg := seeder.GetGeneratorConfig(tt.preset, 1000)
 
 			if cfg.PrefixFanout != tt.wantFanout {
 				t.Errorf("fanout: want %d, got %d", tt.wantFanout, cfg.PrefixFanout)
@@ -227,7 +228,7 @@ func TestGetGeneratorConfig_PresetValues(t *testing.T) {
 	}
 
 	// Verify realistic uses S3RealisticConfig values
-	realistic := getGeneratorConfig("realistic", 1000)
+	realistic := seeder.GetGeneratorConfig("realistic", 1000)
 	expected := benchutil.S3RealisticConfig(1000)
 
 	if realistic.PrefixFanout != expected.PrefixFanout {
@@ -242,7 +243,7 @@ func TestGetGeneratorConfig_PresetValues(t *testing.T) {
 func TestRun_RejectsZeroAndNegativeCount(t *testing.T) {
 	for _, count := range []int{0, -1} {
 		t.Run(fmt.Sprintf("count=%d", count), func(t *testing.T) {
-			err := Run(Config{
+			err := seeder.Run(seeder.Config{
 				OutputDir: t.TempDir(),
 				Count:     count,
 				Objects:   10,
@@ -259,7 +260,7 @@ func TestRun_RejectsZeroAndNegativeCount(t *testing.T) {
 func TestRun_RejectsZeroAndNegativeObjects(t *testing.T) {
 	for _, objects := range []int{0, -1} {
 		t.Run(fmt.Sprintf("objects=%d", objects), func(t *testing.T) {
-			err := Run(Config{
+			err := seeder.Run(seeder.Config{
 				OutputDir: t.TempDir(),
 				Count:     1,
 				Objects:   objects,
@@ -277,7 +278,7 @@ func TestRun_DistinctInventoryHashAcrossAllPairs(t *testing.T) {
 	// Original test only checked adjacent pairs; this catches any
 	// coincidental periodicity in the seed math by comparing every pair.
 	tmpDir := t.TempDir()
-	if err := Run(Config{
+	if err := seeder.Run(seeder.Config{
 		OutputDir: tmpDir,
 		Count:     4,
 		Objects:   200,

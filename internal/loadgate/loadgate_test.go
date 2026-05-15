@@ -1,4 +1,4 @@
-package loadgate
+package loadgate_test
 
 import (
 	"context"
@@ -8,14 +8,17 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/budget"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/loadgate"
 )
 
-func newTestGate(capBytes, headroom uint64) (*Gate, *inventory.Manager, *budget.Tracker) {
+var errBuildOnPurpose = errors.New("build err on purpose")
+
+func newTestGate(capBytes, headroom uint64) (*loadgate.Gate, *inventory.Manager, *budget.Tracker) {
 	mgr := inventory.NewManager()
 	tracker := budget.New(capBytes, headroom)
 	planner := budget.NewPlanner(tracker, nil)
 
-	return New(mgr, tracker, planner), mgr, tracker
+	return loadgate.New(mgr, tracker, planner), mgr, tracker
 }
 
 func TestGate_Load_RefusesWhenEstimateOverBudget(t *testing.T) {
@@ -29,8 +32,8 @@ func TestGate_Load_RefusesWhenEstimateOverBudget(t *testing.T) {
 
 		return "", nil
 	}
-	err := gate.Load(context.Background(), id, build, Options{EstimateBytes: 500, Pin: true})
-	var refused *BudgetRefusedError
+	err := gate.Load(context.Background(), id, build, loadgate.Options{EstimateBytes: 500, Pin: true})
+	var refused *loadgate.BudgetRefusedError
 	if !errors.As(err, &refused) {
 		t.Errorf("expected BudgetRefusedError, got %v", err)
 	}
@@ -46,9 +49,9 @@ func TestGate_Load_ForceBypassesRefusal(t *testing.T) {
 	build := func(_ context.Context, _ inventory.Info) (string, error) {
 		called = true
 
-		return "", errors.New("build err on purpose")
+		return "", errBuildOnPurpose
 	}
-	_ = gate.Load(context.Background(), id, build, Options{EstimateBytes: 500, Force: true, Pin: true})
+	_ = gate.Load(context.Background(), id, build, loadgate.Options{EstimateBytes: 500, Force: true, Pin: true})
 	if !called {
 		t.Error("force should let the build attempt run despite budget refusal")
 	}
@@ -64,8 +67,8 @@ func TestGate_Load_RefusalCarriesPlan(t *testing.T) {
 	if err := mgr.Register(id, "n", "p"); err != nil {
 		t.Fatal(err)
 	}
-	err := gate.Load(context.Background(), id, nil, Options{EstimateBytes: 9999, Pin: false})
-	var refused *BudgetRefusedError
+	err := gate.Load(context.Background(), id, nil, loadgate.Options{EstimateBytes: 9999, Pin: false})
+	var refused *loadgate.BudgetRefusedError
 	if !errors.As(err, &refused) {
 		t.Fatalf("expected BudgetRefusedError, got %v", err)
 	}

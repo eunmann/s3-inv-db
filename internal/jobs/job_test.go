@@ -1,18 +1,22 @@
-package jobs
+package jobs_test
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/eunmann/s3-inv-db/internal/jobs"
+)
 
 func TestIDString(t *testing.T) {
-	if got := ID("job-123").String(); got != "job-123" {
+	if got := jobs.ID("job-123").String(); got != "job-123" {
 		t.Errorf("ID.String() = %q, want %q", got, "job-123")
 	}
 }
 
 func TestNewJobID_NonEmptyAndUnique(t *testing.T) {
 	const zero = "000000000000000000000000"
-	seen := map[ID]struct{}{}
+	seen := map[jobs.ID]struct{}{}
 	for range 50 {
-		id, err := newJobID()
+		id, err := jobs.NewJobIDForTest()
 		if err != nil {
 			t.Fatalf("newJobID: %v", err)
 		}
@@ -28,17 +32,17 @@ func TestNewJobID_NonEmptyAndUnique(t *testing.T) {
 
 func TestStatePredicates(t *testing.T) {
 	cases := []struct {
-		state        State
+		state        jobs.State
 		wantTerminal bool
 		wantLive     bool
 	}{
-		{StateQueued, false, true},
-		{StateRunning, false, true},
-		{StateSucceeded, true, false},
-		{StateFailed, true, false},
-		{StateCancelled, true, false},
-		{StateAborted, true, false},
-		{State("bogus"), false, false},
+		{jobs.StateQueued, false, true},
+		{jobs.StateRunning, false, true},
+		{jobs.StateSucceeded, true, false},
+		{jobs.StateFailed, true, false},
+		{jobs.StateCancelled, true, false},
+		{jobs.StateAborted, true, false},
+		{jobs.State("bogus"), false, false},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.state), func(t *testing.T) {

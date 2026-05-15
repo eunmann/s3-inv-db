@@ -13,6 +13,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+var errBoom = errors.New("boom")
+
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
@@ -88,7 +90,7 @@ func TestManager_SubmitSucceeds(t *testing.T) {
 func TestManager_FailingWork(t *testing.T) {
 	mgr, store, _ := newManager(t)
 	job, err := mgr.Submit("src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
-		return errors.New("boom")
+		return errBoom
 	})
 	if err != nil {
 		t.Fatalf("Submit: %v", err)

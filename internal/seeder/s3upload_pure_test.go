@@ -1,4 +1,4 @@
-package seeder
+package seeder_test
 
 import (
 	"bytes"
@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/pkg/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -17,14 +18,14 @@ import (
 func TestS3Config_Validate(t *testing.T) {
 	cases := []struct {
 		name string
-		cfg  S3Config
+		cfg  seeder.S3Config
 		want error
 	}{
-		{"ok", S3Config{Bucket: "b", SrcBucket: "s", Prefix: "p/"}, nil},
-		{"ok empty prefix", S3Config{Bucket: "b", SrcBucket: "s"}, nil},
-		{"missing bucket", S3Config{SrcBucket: "s"}, errEmptyBucket},
-		{"missing src bucket", S3Config{Bucket: "b"}, errEmptySrcBucket},
-		{"prefix without trailing slash", S3Config{Bucket: "b", SrcBucket: "s", Prefix: "p"}, errPrefixNotSlash},
+		{"ok", seeder.S3Config{Bucket: "b", SrcBucket: "s", Prefix: "p/"}, nil},
+		{"ok empty prefix", seeder.S3Config{Bucket: "b", SrcBucket: "s"}, nil},
+		{"missing bucket", seeder.S3Config{SrcBucket: "s"}, seeder.ErrEmptyBucket},
+		{"missing src bucket", seeder.S3Config{Bucket: "b"}, seeder.ErrEmptySrcBucket},
+		{"prefix without trailing slash", seeder.S3Config{Bucket: "b", SrcBucket: "s", Prefix: "p"}, seeder.ErrPrefixNotSlash},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -43,7 +44,7 @@ func TestMd5Hex_KnownVectors(t *testing.T) {
 		"abc": "900150983cd24fb0d6963f7d28e17f72",
 	}
 	for input, want := range cases {
-		if got := md5Hex([]byte(input)); got != want {
+		if got := seeder.MD5Hex([]byte(input)); got != want {
 			t.Errorf("md5Hex(%q) = %q, want %q", input, got, want)
 		}
 	}
@@ -51,16 +52,16 @@ func TestMd5Hex_KnownVectors(t *testing.T) {
 
 func TestRunStampUUID_DeterministicPerRunAndIndex(t *testing.T) {
 	stamp := time.Date(2026, 5, 13, 3, 2, 1, 0, time.UTC)
-	a := runStampUUID(stamp, 1)
-	b := runStampUUID(stamp, 1)
+	a := seeder.RunStampUUID(stamp, 1)
+	b := seeder.RunStampUUID(stamp, 1)
 	if a != b {
 		t.Errorf("same (stamp, index) produced different uuids: %q vs %q", a, b)
 	}
-	c := runStampUUID(stamp, 2)
+	c := seeder.RunStampUUID(stamp, 2)
 	if a == c {
 		t.Errorf("different index produced same uuid: %q", a)
 	}
-	d := runStampUUID(stamp.Add(time.Hour), 1)
+	d := seeder.RunStampUUID(stamp.Add(time.Hour), 1)
 	if a == d {
 		t.Errorf("different stamp produced same uuid: %q", a)
 	}
@@ -85,10 +86,10 @@ func TestTierToS3Columns_IntelligentTiering(t *testing.T) {
 		{tiers.ITDeepArchive, "INTELLIGENT_TIERING", "DEEP_ARCHIVE_ACCESS"},
 	}
 	for _, c := range cases {
-		gotClass, gotTier := tierToS3Columns(m, c.id)
-		if gotClass != c.wantClass || gotTier != c.wantTier {
+		got := seeder.TierToS3Columns(m, c.id)
+		if got.StorageClass != c.wantClass || got.AccessTier != c.wantTier {
 			t.Errorf("tierToS3Columns(%v) = (%q, %q), want (%q, %q)",
-				c.id, gotClass, gotTier, c.wantClass, c.wantTier)
+				c.id, got.StorageClass, got.AccessTier, c.wantClass, c.wantTier)
 		}
 	}
 }
@@ -96,11 +97,11 @@ func TestTierToS3Columns_IntelligentTiering(t *testing.T) {
 func TestTierToS3Columns_NonIntelligentLeavesAccessTierEmpty(t *testing.T) {
 	m := tiers.NewMapping()
 	for _, id := range []tiers.ID{tiers.Standard, tiers.StandardIA, tiers.GlacierFR} {
-		gotClass, gotTier := tierToS3Columns(m, id)
-		if gotTier != "" {
-			t.Errorf("non-IT tier %v produced AccessTier %q, want empty", id, gotTier)
+		got := seeder.TierToS3Columns(m, id)
+		if got.AccessTier != "" {
+			t.Errorf("non-IT tier %v produced AccessTier %q, want empty", id, got.AccessTier)
 		}
-		if gotClass == "" {
+		if got.StorageClass == "" {
 			t.Errorf("non-IT tier %v produced empty StorageClass", id)
 		}
 	}
@@ -112,18 +113,18 @@ func TestEncodeCSVGz_RoundTripsRows(t *testing.T) {
 		{Key: "a/2", Size: 250, TierID: tiers.ITFrequent},
 		{Key: "b/3", Size: 9999, TierID: tiers.GlacierFR},
 	}
-	body, size, err := encodeCSVGz("src-bucket", objects)
+	payload, err := seeder.EncodeCSVGz("src-bucket", objects)
 	if err != nil {
 		t.Fatalf("encodeCSVGz: %v", err)
 	}
-	if size != int64(len(body)) {
-		t.Errorf("size = %d, want %d (len(body))", size, len(body))
+	if payload.Size != int64(len(payload.Body)) {
+		t.Errorf("size = %d, want %d (len(body))", payload.Size, len(payload.Body))
 	}
-	if len(body) == 0 {
+	if len(payload.Body) == 0 {
 		t.Fatal("body is empty")
 	}
 
-	gr, err := gzip.NewReader(bytes.NewReader(body))
+	gr, err := gzip.NewReader(bytes.NewReader(payload.Body))
 	if err != nil {
 		t.Fatalf("gzip.NewReader: %v", err)
 	}

@@ -1,10 +1,10 @@
 package jobs
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
@@ -26,7 +26,7 @@ func NewStore(db *sql.DB) (*Store, error) {
 
 // Upsert writes j by primary key. UpdatedAt is set to time.Now().
 func (s *Store) Upsert(j Job) error {
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(context.Background(), `
         INSERT INTO jobs (
             id, inventory_id, kind, state, stage, progress,
             bytes_total, bytes_done, started_at, finished_at,
@@ -56,7 +56,7 @@ func (s *Store) Upsert(j Job) error {
 
 // Get fetches one job by id.
 func (s *Store) Get(id ID) (Job, error) {
-	row := s.db.QueryRow(`
+	row := s.db.QueryRowContext(context.Background(), `
         SELECT id, inventory_id, kind, state, stage, progress,
                bytes_total, bytes_done, started_at, finished_at,
                error, updated_at
@@ -74,7 +74,7 @@ func (s *Store) Get(id ID) (Job, error) {
 
 // ListForInventory returns jobs for one inventory, newest first.
 func (s *Store) ListForInventory(invID inventory.ID) ([]Job, error) {
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(context.Background(), `
         SELECT id, inventory_id, kind, state, stage, progress,
                bytes_total, bytes_done, started_at, finished_at,
                error, updated_at
@@ -90,7 +90,7 @@ func (s *Store) ListForInventory(invID inventory.ID) ([]Job, error) {
 // LatestForInventory returns the most recently updated job for an
 // inventory, or ErrStoreNotFound if none exist.
 func (s *Store) LatestForInventory(invID inventory.ID) (Job, error) {
-	row := s.db.QueryRow(`
+	row := s.db.QueryRowContext(context.Background(), `
         SELECT id, inventory_id, kind, state, stage, progress,
                bytes_total, bytes_done, started_at, finished_at,
                error, updated_at
@@ -113,24 +113,24 @@ func (s *Store) MarkAborted(reason string, fromStates ...State) (int64, error) {
 	if len(fromStates) == 0 {
 		return 0, nil
 	}
-	placeholders := make([]string, len(fromStates))
-	args := []any{reason, time.Now().Unix(), time.Now().Unix()}
-	for i, st := range fromStates {
-		placeholders[i] = "?"
-		args = append(args, string(st))
-	}
-	res, err := s.db.Exec(`
-        UPDATE jobs SET state = 'aborted', error = ?, finished_at = ?, updated_at = ?
-          WHERE state IN (`+strings.Join(placeholders, ", ")+`)`, args...)
-	if err != nil {
-		return 0, fmt.Errorf("mark aborted: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("rows affected: %w", err)
+	const stmt = `UPDATE jobs SET state = 'aborted', error = ?, finished_at = ?, updated_at = ?
+          WHERE state = ?`
+	now := time.Now().Unix()
+	ctx := context.Background()
+	var total int64
+	for _, st := range fromStates {
+		res, err := s.db.ExecContext(ctx, stmt, reason, now, now, string(st))
+		if err != nil {
+			return total, fmt.Errorf("mark aborted (%s): %w", st, err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, fmt.Errorf("rows affected: %w", err)
+		}
+		total += n
 	}
 
-	return n, nil
+	return total, nil
 }
 
 func scanJob(r rowScanner) (Job, error) {

@@ -21,6 +21,11 @@ import (
 // chunks, done = chunks processed). Unnamed func type keeps
 // inventory.IndexBuilder satisfaction structural.
 
+// cacheDirMode is the permission bits used for cache directories the
+// loader creates. Owner-only access is the right default for a
+// process-local cache.
+const cacheDirMode = 0o750
+
 // Loader runs the S3-inventory → on-disk-index build pipeline into a
 // per-inventory subdirectory of the configured cache root.
 type Loader struct {
@@ -67,7 +72,7 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, run, manifestU
 	if err := os.RemoveAll(outDir); err != nil {
 		return "", fmt.Errorf("clear cache dir: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(outDir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outDir), cacheDirMode); err != nil {
 		return "", fmt.Errorf("ensure cache parent: %w", err)
 	}
 

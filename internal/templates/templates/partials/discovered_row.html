@@ -81,7 +81,7 @@
         </a>
         <button type="button"
             hx-post="/partials/discovered/{{.SourceBucket}}/{{.InventoryName}}/{{.Run}}/pin"
-            {{if .Pinned}}{{hxVals "pinned" "false"}}{{else}}{{hxVals "pinned" "true"}}{{end}}
+            {{if .Pinned}}hx-vals="{{hxValsJSON "pinned" "false"}}"{{else}}hx-vals="{{hxValsJSON "pinned" "true"}}"{{end}}
             hx-target="closest tr"
             hx-swap="outerHTML"
             class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"

@@ -2,7 +2,6 @@
 package templates
 
 import (
-	"bytes"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -86,31 +85,49 @@ func stageLabel(stage string) string {
 // ("Intelligent-Tiering Frequent (< 128 KiB)") for UI rendering.
 // Unknown tiers fall back to the raw name.
 func tierLabel(raw string) string {
-	if label, ok := tierLabels[raw]; ok {
-		return label
+	switch raw {
+	case "STANDARD":
+		return "Standard"
+	case "STANDARD_IA":
+		return "Standard-IA"
+	case "ONEZONE_IA":
+		return "One Zone-IA"
+	case "GLACIER_IR":
+		return "Glacier Instant Retrieval"
+	case "GLACIER":
+		return "Glacier Flexible Retrieval"
+	case "DEEP_ARCHIVE":
+		return "Glacier Deep Archive"
+	case "REDUCED_REDUNDANCY":
+		return "Reduced Redundancy"
+	case "INTELLIGENT_TIERING_FREQUENT":
+		return "Intelligent-Tiering Frequent"
+	case "INTELLIGENT_TIERING_INFREQUENT":
+		return "Intelligent-Tiering Infrequent"
+	case "INTELLIGENT_TIERING_ARCHIVE_INSTANT":
+		return "Intelligent-Tiering Archive Instant"
+	case "INTELLIGENT_TIERING_ARCHIVE":
+		return "Intelligent-Tiering Archive"
+	case "INTELLIGENT_TIERING_DEEP_ARCHIVE":
+		return "Intelligent-Tiering Deep Archive"
+	case "INTELLIGENT_TIERING_FREQUENT_SMALL":
+		return "Intelligent-Tiering Frequent (< 128 KiB)"
 	}
 
 	return raw
 }
 
-var tierLabels = map[string]string{
-	"STANDARD":                            "Standard",
-	"STANDARD_IA":                         "Standard-IA",
-	"ONEZONE_IA":                          "One Zone-IA",
-	"GLACIER_IR":                          "Glacier Instant Retrieval",
-	"GLACIER":                             "Glacier Flexible Retrieval",
-	"DEEP_ARCHIVE":                        "Glacier Deep Archive",
-	"REDUCED_REDUNDANCY":                  "Reduced Redundancy",
-	"INTELLIGENT_TIERING_FREQUENT":        "Intelligent-Tiering Frequent",
-	"INTELLIGENT_TIERING_INFREQUENT":      "Intelligent-Tiering Infrequent",
-	"INTELLIGENT_TIERING_ARCHIVE_INSTANT": "Intelligent-Tiering Archive Instant",
-	"INTELLIGENT_TIERING_ARCHIVE":         "Intelligent-Tiering Archive",
-	"INTELLIGENT_TIERING_DEEP_ARCHIVE":    "Intelligent-Tiering Deep Archive",
-	"INTELLIGENT_TIERING_FREQUENT_SMALL":  "Intelligent-Tiering Frequent (< 128 KiB)",
-}
-
 //go:embed templates/*.html templates/partials/*.html
 var embeddedTemplates embed.FS
+
+// Sentinel errors for template helper argument validation.
+var (
+	errHxValsOddPairs    = errors.New("hxVals: expected key,value pairs")
+	errHxValsKeyType     = errors.New("hxVals: key is not a string")
+	errBrowseURLOddPairs = errors.New("browseURL: expected key,value pairs")
+	errBrowseURLKeyType  = errors.New("browseURL: key is not a string")
+	errPageNotFound      = errors.New("page template not found")
+)
 
 // Renderer manages HTML template rendering.
 //
@@ -208,27 +225,33 @@ func FuncMap() template.FuncMap {
 		"mul": func(a, b int) int {
 			return a * b
 		},
-		"hxVals":    hxValsAttr,
-		"browseURL": browseURL,
+		"hxValsJSON": hxValsJSON,
+		"browseURL":  browseURL,
 	}
 }
 
-// hxValsAttr emits a full `hx-vals='…'` attribute with JSON-encoded
-// values. Each pair is key,value. Values that contain `"`, `\` or `'`
-// break the naïve `hx-vals='{"k":"{{.V}}"}'` pattern: html/template
-// HTML-escapes `"` to `&#34;` which the browser un-escapes back to a
-// raw `"` inside the JSON, corrupting the payload. JSON-marshaling here
-// produces the proper `\"` escape, and we additionally replace any `'`
-// with the HTML entity so the surrounding single quotes stay intact.
-func hxValsAttr(pairs ...any) (template.HTMLAttr, error) {
+// hxValsJSON returns a JSON object literal for use as an `hx-vals`
+// attribute value. Templates embed it inside a double-quoted attribute:
+//
+//	<button hx-vals="{{hxValsJSON "k" .V}}">
+//
+// html/template's attribute-context escaping turns the JSON's literal
+// `"` into `&#34;`. The browser HTML-decodes attribute values before
+// scripts read them, so HTMX sees the original JSON and parses it
+// cleanly. No template.HTMLAttr cast is needed.
+//
+// Json.Marshal also escapes `<`, `>`, and `&` to JSON unicode escapes
+// (<, >, &) by default, so an attacker-controlled value
+// cannot break out of the attribute or close the surrounding tag.
+func hxValsJSON(pairs ...any) (string, error) {
 	if len(pairs)%2 != 0 {
-		return "", errors.New("hxVals: expected key,value pairs")
+		return "", errHxValsOddPairs
 	}
 	m := make(map[string]any, len(pairs)/2)
 	for i := 0; i < len(pairs); i += 2 {
 		key, ok := pairs[i].(string)
 		if !ok {
-			return "", fmt.Errorf("hxVals: key at position %d is not a string", i)
+			return "", fmt.Errorf("%w (position %d)", errHxValsKeyType, i)
 		}
 		m[key] = pairs[i+1]
 	}
@@ -236,9 +259,8 @@ func hxValsAttr(pairs ...any) (template.HTMLAttr, error) {
 	if err != nil {
 		return "", fmt.Errorf("hxVals: marshal: %w", err)
 	}
-	b = bytes.ReplaceAll(b, []byte("'"), []byte("&#39;"))
 
-	return template.HTMLAttr(`hx-vals='` + string(b) + `'`), nil
+	return string(b), nil
 }
 
 // Builds a percent-encoded /browse URL from key/value pairs. Required
@@ -248,14 +270,14 @@ func hxValsAttr(pairs ...any) (template.HTMLAttr, error) {
 // spaces in a prefix break the URL.
 func browseURL(pairs ...any) (string, error) {
 	if len(pairs)%2 != 0 {
-		return "", errors.New("browseURL: expected key,value pairs")
+		return "", errBrowseURLOddPairs
 	}
 	u := url.URL{Path: "/browse"}
 	q := u.Query()
 	for i := 0; i < len(pairs); i += 2 {
 		key, ok := pairs[i].(string)
 		if !ok {
-			return "", fmt.Errorf("browseURL: key at position %d is not a string", i)
+			return "", fmt.Errorf("%w (position %d)", errBrowseURLKeyType, i)
 		}
 		v := fmt.Sprint(pairs[i+1])
 		if v == "" {
@@ -269,14 +291,14 @@ func browseURL(pairs ...any) (string, error) {
 }
 
 func (r *Renderer) loadTemplates() error {
-	layoutSrc, partialSrcs, pageSrcs, err := readTemplates(embeddedTemplates)
+	srcs, err := readTemplates(embeddedTemplates)
 	if err != nil {
 		return err
 	}
 
 	// Partials-only tree for RenderPartial.
 	partials := template.New("partials").Funcs(r.funcMap)
-	for name, src := range partialSrcs {
+	for name, src := range srcs.Partials {
 		if _, err := partials.New(name).Parse(src); err != nil {
 			return fmt.Errorf("parse partial %s: %w", name, err)
 		}
@@ -284,13 +306,13 @@ func (r *Renderer) loadTemplates() error {
 	r.partials = partials
 
 	// One fully-resolved tree per page: layout + every partial + the page.
-	r.pages = make(map[string]*template.Template, len(pageSrcs))
-	for pageName, pageSrc := range pageSrcs {
+	r.pages = make(map[string]*template.Template, len(srcs.Pages))
+	for pageName, pageSrc := range srcs.Pages {
 		t := template.New(pageName).Funcs(r.funcMap)
-		if _, err := t.Parse(layoutSrc); err != nil {
+		if _, err := t.Parse(srcs.Layout); err != nil {
 			return fmt.Errorf("parse layout for %s: %w", pageName, err)
 		}
-		for partialName, partialSrc := range partialSrcs {
+		for partialName, partialSrc := range srcs.Partials {
 			if _, err := t.New(partialName).Parse(partialSrc); err != nil {
 				return fmt.Errorf("parse partial %s for page %s: %w", partialName, pageName, err)
 			}
@@ -304,24 +326,37 @@ func (r *Renderer) loadTemplates() error {
 	return nil
 }
 
+// templateSources groups the three text bundles loaded from disk: the
+// layout, the keyed partials, and the keyed pages. Returned together
+// from readTemplates so loadTemplates can wire them up.
+type templateSources struct {
+	Layout   string
+	Partials map[string]string
+	Pages    map[string]string
+}
+
 // readTemplates loads layout + partials + page sources from any fs.FS
 // rooted at the project layout (templates/, templates/partials/).
-func readTemplates(src fs.FS) (layoutSrc string, partials, pages map[string]string, err error) {
+func readTemplates(src fs.FS) (templateSources, error) {
 	layoutBytes, err := fs.ReadFile(src, "templates/layout.html")
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("read layout: %w", err)
+		return templateSources{}, fmt.Errorf("read layout: %w", err)
 	}
-	partials, err = readDirFiles(src, "templates/partials", false)
+	partials, err := readDirFiles(src, "templates/partials", false)
 	if err != nil {
-		return "", nil, nil, err
+		return templateSources{}, err
 	}
-	pages, err = readDirFiles(src, "templates", true)
+	pages, err := readDirFiles(src, "templates", true)
 	if err != nil {
-		return "", nil, nil, err
+		return templateSources{}, err
 	}
 	delete(pages, "layout.html")
 
-	return string(layoutBytes), partials, pages, nil
+	return templateSources{
+		Layout:   string(layoutBytes),
+		Partials: partials,
+		Pages:    pages,
+	}, nil
 }
 
 // Enumerates a directory and returns a map of either path→content
@@ -356,7 +391,7 @@ func readDirFiles(src fs.FS, dir string, basenameKey bool) (map[string]string, e
 func (r *Renderer) Render(w io.Writer, name string, data any) error {
 	t, ok := r.pages[name]
 	if !ok {
-		return fmt.Errorf("page template %s not found", name)
+		return fmt.Errorf("%w: %s", errPageNotFound, name)
 	}
 	if err := t.ExecuteTemplate(w, "layout", data); err != nil {
 		return fmt.Errorf("execute template %s: %w", name, err)

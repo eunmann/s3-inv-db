@@ -18,8 +18,12 @@ func TailwindCSS() []byte { return tailwindCSS }
 
 // TailwindCSSETag returns a weak ETag derived from the compiled CSS
 // content, so the browser can revalidate cheaply across deploys.
-var TailwindCSSETag = func() string {
+// SHA-256 over an embedded ~tens-of-KiB byte slice is in the
+// few-microseconds range and runs on the GET /static/tailwind.css path
+// only, so computing per call (rather than caching in a package var)
+// is the right trade.
+func TailwindCSSETag() string {
 	h := sha256.Sum256(tailwindCSS)
 
 	return `W/"` + hex.EncodeToString(h[:8]) + `"`
-}()
+}

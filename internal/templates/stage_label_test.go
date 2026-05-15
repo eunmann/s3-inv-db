@@ -1,6 +1,10 @@
-package templates
+package templates_test
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/eunmann/s3-inv-db/internal/templates"
+)
 
 func TestStageLabel(t *testing.T) {
 	cases := []struct {
@@ -17,7 +21,7 @@ func TestStageLabel(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.stage, func(t *testing.T) {
-			if got := stageLabel(c.stage); got != c.want {
+			if got := templates.StageLabel(c.stage); got != c.want {
 				t.Errorf("stageLabel(%q) = %q, want %q", c.stage, got, c.want)
 			}
 		})

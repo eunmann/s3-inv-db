@@ -1,4 +1,4 @@
-package seeder
+package seeder_test
 
 import (
 	"bytes"
@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/eunmann/s3-inv-db/internal/miniotest"
+	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/rs/zerolog"
 )
 
@@ -22,7 +23,7 @@ func newMinIOS3Client(t *testing.T) *s3.Client {
 	if os.Getenv("AWS_ENDPOINT_URL_S3") == "" {
 		t.Fatal("AWS_ENDPOINT_URL_S3 not set — run `make test`")
 	}
-	c, err := newS3Client(context.Background())
+	c, err := seeder.NewS3ClientForTest(context.Background())
 	if err != nil {
 		t.Fatalf("newS3Client: %v", err)
 	}
@@ -38,10 +39,10 @@ func TestUploadInventory_RoundTrip(t *testing.T) {
 	stamp := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	objects := 50
 
-	info, err := UploadInventory(context.Background(), client, Config{
-		Target: TargetS3, Objects: objects, Preset: "small", Seed: 7,
+	info, err := seeder.UploadInventory(context.Background(), client, seeder.Config{
+		Target: seeder.TargetS3, Objects: objects, Preset: "small", Seed: 7,
 		Logger: zerolog.Nop(),
-	}, S3Config{
+	}, seeder.S3Config{
 		Bucket: bucket, Prefix: prefix, SrcBucket: srcBucket,
 	}, 1, 7, stamp)
 	if err != nil {
@@ -91,10 +92,10 @@ func TestUploadInventory_DataFileURLPlaced(t *testing.T) {
 	client := newMinIOS3Client(t)
 	bucket := miniotest.Bucket(t, client)
 	stamp := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
-	_, err := UploadInventory(context.Background(), client, Config{
-		Target: TargetS3, Objects: 10, Preset: "small", Seed: 1,
+	_, err := seeder.UploadInventory(context.Background(), client, seeder.Config{
+		Target: seeder.TargetS3, Objects: 10, Preset: "small", Seed: 1,
 		Logger: zerolog.Nop(),
-	}, S3Config{Bucket: bucket, SrcBucket: "src"}, 1, 1, stamp)
+	}, seeder.S3Config{Bucket: bucket, SrcBucket: "src"}, 1, 1, stamp)
 	if err != nil {
 		t.Fatalf("UploadInventory: %v", err)
 	}

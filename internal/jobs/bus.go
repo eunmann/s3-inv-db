@@ -2,6 +2,12 @@ package jobs
 
 import "sync"
 
+// JobEvents is the read-side fan-out channel returned by Bus.Subscribe.
+type JobEvents <-chan Job
+
+// CancelFunc removes a Bus subscription and closes its events channel.
+type CancelFunc func()
+
 // Bus is a tiny fan-out for job snapshots. Publish is non-blocking — a
 // slow subscriber drops events rather than stalling Manager.
 type Bus struct {
@@ -21,7 +27,7 @@ func NewBus(bufSize int) *Bus {
 
 // Subscribe returns a receive channel and a cancel func. Calling cancel
 // removes the subscription and closes the channel.
-func (b *Bus) Subscribe() (events <-chan Job, cancel func()) {
+func (b *Bus) Subscribe() (JobEvents, CancelFunc) {
 	ch := make(chan Job, b.bufSize)
 	b.mu.Lock()
 	b.subs[ch] = struct{}{}

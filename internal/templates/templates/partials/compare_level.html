@@ -9,7 +9,7 @@
             {{else}}
             <button type="button"
                 hx-get="/compare"
-                {{hxVals "from" $from "to" $to "prefix" $c.Prefix}}
+                hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $c.Prefix}}"
                 hx-target="#compare-target"
                 hx-push-url="true"
                 class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline">
@@ -29,7 +29,7 @@
         <div class="mt-4">
             <button type="button"
                 hx-get="/compare"
-                {{hxVals "from" $from "to" $to "prefix" ""}}
+                hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" ""}}"
                 hx-target="#compare-target"
                 hx-push-url="true"
                 class="inline-flex items-center px-3 py-1.5 border border-yellow-300 dark:border-yellow-800 rounded-md bg-white dark:bg-gray-800 text-sm font-medium text-yellow-800 dark:text-yellow-300 hover:bg-yellow-50 dark:hover:bg-gray-700">
@@ -100,9 +100,9 @@
                     <input type="checkbox"
                         hx-get="/compare"
                         {{if .Level.HideUnchanged}}
-                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "show_unchanged" "true"}}
+                        hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "show_unchanged" "true"}}"
                         {{else}}
-                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "show_unchanged" "false"}} checked
+                        hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "show_unchanged" "false"}}" checked
                         {{end}}
                         hx-target="#compare-target"
                         hx-push-url="true"
@@ -114,7 +114,7 @@
                     {{if .Level.Pagination.PrevPage}}
                     <button type="button"
                         hx-get="/compare"
-                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "page" .Level.Pagination.PrevPage}}
+                        hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "page" .Level.Pagination.PrevPage}}"
                         hx-target="#compare-target"
                         hx-push-url="true"
                         class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">← Prev</button>
@@ -125,7 +125,7 @@
                     {{if .Level.Pagination.NextPage}}
                     <button type="button"
                         hx-get="/compare"
-                        {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "page" .Level.Pagination.NextPage}}
+                        hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "page" .Level.Pagination.NextPage}}"
                         hx-target="#compare-target"
                         hx-push-url="true"
                         class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">Next →</button>
@@ -148,7 +148,7 @@
                     <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
                             hx-get="/compare"
-                            {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $statusLink.Sort "dir" $statusLink.Dir}}
+                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $statusLink.Sort "dir" $statusLink.Dir}}"
                             hx-target="#compare-target"
                             hx-push-url="true"
                             class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
@@ -158,7 +158,7 @@
                     <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
                             hx-get="/compare"
-                            {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $segLink.Sort "dir" $segLink.Dir}}
+                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $segLink.Sort "dir" $segLink.Dir}}"
                             hx-target="#compare-target"
                             hx-push-url="true"
                             class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
@@ -168,7 +168,7 @@
                     <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
                             hx-get="/compare"
-                            {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $objLink.Sort "dir" $objLink.Dir}}
+                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $objLink.Sort "dir" $objLink.Dir}}"
                             hx-target="#compare-target"
                             hx-push-url="true"
                             class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
@@ -178,7 +178,7 @@
                     <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
                             hx-get="/compare"
-                            {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $sizeLink.Sort "dir" $sizeLink.Dir}}
+                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $sizeLink.Sort "dir" $sizeLink.Dir}}"
                             hx-target="#compare-target"
                             hx-push-url="true"
                             class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
@@ -188,7 +188,7 @@
                     <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
                             hx-get="/compare"
-                            {{hxVals "from" $from "to" $to "prefix" $.Prefix "sort" $costLink.Sort "dir" $costLink.Dir}}
+                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $costLink.Sort "dir" $costLink.Dir}}"
                             hx-target="#compare-target"
                             hx-push-url="true"
                             class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
@@ -209,7 +209,7 @@
                         {{if .HasChildren}}
                         <button type="button"
                             hx-get="/compare"
-                            {{hxVals "from" $from "to" $to "prefix" .Prefix}}
+                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" .Prefix}}"
                             hx-target="#compare-target"
                             hx-push-url="true"
                             class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline">

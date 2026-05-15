@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -37,7 +38,7 @@ func (s *Store) Upsert(info Info) error {
 	userUnloadedAt := unixOrZero(info.UserUnloadedAt)
 	backoffUntil := unixOrZero(info.AutoLoadBackoffUntil)
 	lastAccessed := unixOrZero(info.LastAccessedAt)
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(context.Background(), `
         INSERT INTO inventories (
             id, name, path, state, error,
             node_count, max_depth, has_tier_data,
@@ -84,7 +85,7 @@ const inventorySelectCols = `
 // Get fetches one inventory by ID. Returns ErrStoreNotFound when the
 // row is missing.
 func (s *Store) Get(id ID) (Info, error) {
-	row := s.db.QueryRow(`SELECT `+inventorySelectCols+` FROM inventories WHERE id = ?`, id)
+	row := s.db.QueryRowContext(context.Background(), `SELECT `+inventorySelectCols+` FROM inventories WHERE id = ?`, id)
 	info, err := scanInfo(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Info{}, ErrStoreNotFound
@@ -98,7 +99,7 @@ func (s *Store) Get(id ID) (Info, error) {
 
 // List returns every persisted inventory ordered by id.
 func (s *Store) List() ([]Info, error) {
-	rows, err := s.db.Query(`SELECT ` + inventorySelectCols + ` FROM inventories ORDER BY id`)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT `+inventorySelectCols+` FROM inventories ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("list inventories: %w", err)
 	}
@@ -122,7 +123,7 @@ func (s *Store) List() ([]Info, error) {
 // Delete removes one inventory by ID. ON DELETE CASCADE on the jobs
 // table wipes related job rows too.
 func (s *Store) Delete(id ID) error {
-	res, err := s.db.Exec(`DELETE FROM inventories WHERE id = ?`, id)
+	res, err := s.db.ExecContext(context.Background(), `DELETE FROM inventories WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete inventory %s: %w", id, err)
 	}

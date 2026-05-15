@@ -38,13 +38,13 @@ func (s *Server) setupRoutes() {
 	// browser revalidate cheaply; the content is immutable for a given
 	// build, so a 1-day max-age + revalidate is fine.
 	r.Get("/static/tailwind.css", func(w http.ResponseWriter, r *http.Request) {
-		if match := r.Header.Get("If-None-Match"); match == templates.TailwindCSSETag {
+		if match := r.Header.Get("If-None-Match"); match == templates.TailwindCSSETag() {
 			w.WriteHeader(http.StatusNotModified)
 
 			return
 		}
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
-		w.Header().Set("ETag", templates.TailwindCSSETag)
+		w.Header().Set("ETag", templates.TailwindCSSETag())
 		w.Header().Set("Cache-Control", "public, max-age=86400, must-revalidate")
 		_, _ = w.Write(templates.TailwindCSS())
 	})

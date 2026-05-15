@@ -80,7 +80,7 @@ func UploadInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S
 	gen := benchutil.NewGenerator(genCfg)
 	objects := gen.Generate()
 
-	csvGz, csvSize, err := encodeCSVGz(s3cfg.SrcBucket, objects)
+	payload, err := encodeCSVGz(s3cfg.SrcBucket, objects)
 	if err != nil {
 		return InventoryInfo{}, fmt.Errorf("encode csv.gz: %w", err)
 	}
@@ -99,7 +99,7 @@ func UploadInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S
 		"fileFormat":        "CSV",
 		"fileSchema":        "Bucket, Key, Size, LastModifiedDate, ETag, StorageClass, IntelligentTieringAccessTier",
 		"files": []map[string]any{
-			{"key": dataKey, "size": csvSize, "MD5checksum": md5Hex(csvGz)},
+			{"key": dataKey, "size": payload.Size, "MD5checksum": md5Hex(payload.Body)},
 		},
 	}
 	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
@@ -107,7 +107,7 @@ func UploadInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S
 		return InventoryInfo{}, fmt.Errorf("marshal manifest: %w", err)
 	}
 
-	if err := putObject(ctx, client, s3cfg.Bucket, dataKey, csvGz, "application/gzip"); err != nil {
+	if err := putObject(ctx, client, s3cfg.Bucket, dataKey, payload.Body, "application/gzip"); err != nil {
 		return InventoryInfo{}, fmt.Errorf("upload data: %w", err)
 	}
 	if err := putObject(ctx, client, s3cfg.Bucket, manifestKey, manifestJSON, "application/json"); err != nil {
@@ -126,10 +126,18 @@ func UploadInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S
 	}, nil
 }
 
+// csvGzPayload is the gzipped CSV body plus its on-the-wire byte size
+// (used to populate the manifest's `size` field). The two values are
+// always produced together so a struct is more honest than a tuple.
+type csvGzPayload struct {
+	Body []byte
+	Size int64
+}
+
 // encodeCSVGz writes synthetic objects as a gzipped, URL-encoded CSV body
 // matching the fileSchema declared in the manifest. AWS S3 Inventory uses
 // URL-encoded field values and CSV without a header row.
-func encodeCSVGz(srcBucket string, objects []benchutil.FakeObject) (body []byte, size int64, err error) {
+func encodeCSVGz(srcBucket string, objects []benchutil.FakeObject) (csvGzPayload, error) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	w := csv.NewWriter(gz)
@@ -139,7 +147,7 @@ func encodeCSVGz(srcBucket string, objects []benchutil.FakeObject) (body []byte,
 	etag := `"0000000000000000000000000000000000"`
 
 	for _, o := range objects {
-		storageClass, accessTier := tierToS3Columns(mapping, o.TierID)
+		cols := tierToS3Columns(mapping, o.TierID)
 		// Real S3 Inventory URL-encodes Key values, but our consumer
 		// (pkg/inventory/reader.go) does not URL-decode them, so keep the
 		// keys raw to match what the build pipeline actually expects.
@@ -149,44 +157,65 @@ func encodeCSVGz(srcBucket string, objects []benchutil.FakeObject) (body []byte,
 			strconv.FormatUint(o.Size, 10),
 			now,
 			etag,
-			storageClass,
-			accessTier,
+			cols.StorageClass,
+			cols.AccessTier,
 		}
 		if err := w.Write(row); err != nil {
-			return nil, 0, fmt.Errorf("write csv row: %w", err)
+			return csvGzPayload{}, fmt.Errorf("write csv row: %w", err)
 		}
 	}
 	w.Flush()
 	if err := w.Error(); err != nil {
-		return nil, 0, fmt.Errorf("flush csv: %w", err)
+		return csvGzPayload{}, fmt.Errorf("flush csv: %w", err)
 	}
 	if err := gz.Close(); err != nil {
-		return nil, 0, fmt.Errorf("close gzip: %w", err)
+		return csvGzPayload{}, fmt.Errorf("close gzip: %w", err)
 	}
 
-	return buf.Bytes(), int64(buf.Len()), nil
+	body := buf.Bytes()
+
+	return csvGzPayload{Body: body, Size: int64(len(body))}, nil
+}
+
+// storageClassIntelligentTiering is the S3 Inventory StorageClass column
+// value AWS writes for every Intelligent-Tiering object regardless of
+// the per-object access tier sub-state.
+const storageClassIntelligentTiering = "INTELLIGENT_TIERING"
+
+// S3InventoryColumns holds the pair of columns AWS writes per row in
+// the inventory CSV: the StorageClass and the per-object access tier
+// (the latter only populated for Intelligent-Tiering objects).
+type S3InventoryColumns struct {
+	StorageClass string
+	AccessTier   string
 }
 
 // tierToS3Columns inverts tiers.Mapping.FromS3: split a tier ID back into
 // the (StorageClass, IntelligentTieringAccessTier) inventory columns AWS
 // would produce.
-func tierToS3Columns(m *tiers.Mapping, id tiers.ID) (storageClass, accessTier string) {
+func tierToS3Columns(m *tiers.Mapping, id tiers.ID) S3InventoryColumns {
 	switch id {
 	case tiers.ITFrequent, tiers.ITFrequentSmall:
 		// Small IT_FREQUENT objects round-trip through the same S3 columns;
 		// the size-aware classifier on the read side reclassifies them.
-		return "INTELLIGENT_TIERING", "FREQUENT_ACCESS"
+		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "FREQUENT_ACCESS"}
 	case tiers.ITInfrequent:
-		return "INTELLIGENT_TIERING", "INFREQUENT_ACCESS"
+		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "INFREQUENT_ACCESS"}
 	case tiers.ITArchiveInstant:
-		return "INTELLIGENT_TIERING", "ARCHIVE_INSTANT_ACCESS"
+		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "ARCHIVE_INSTANT_ACCESS"}
 	case tiers.ITArchive:
-		return "INTELLIGENT_TIERING", "ARCHIVE_ACCESS"
+		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "ARCHIVE_ACCESS"}
 	case tiers.ITDeepArchive:
-		return "INTELLIGENT_TIERING", "DEEP_ARCHIVE_ACCESS"
+		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "DEEP_ARCHIVE_ACCESS"}
+	case tiers.Standard, tiers.StandardIA, tiers.OneZoneIA,
+		tiers.GlacierIR, tiers.GlacierFR, tiers.DeepArchive,
+		tiers.ReducedRedundancy, tiers.NumTiers:
+		// Plain S3 storage classes (no access-tier column). NumTiers is
+		// the sentinel and shouldn't appear at this layer, but handle it
+		// defensively rather than letting exhaustive fall through.
 	}
 
-	return m.ByID(id).Name, ""
+	return S3InventoryColumns{StorageClass: m.ByID(id).Name}
 }
 
 func putObject(ctx context.Context, client *s3.Client, bucket, key string, body []byte, contentType string) error {

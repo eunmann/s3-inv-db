@@ -94,13 +94,17 @@ func empty(t *testing.T, c *s3.Client, bucket string) {
 
 var bucketSanitizer = regexp.MustCompile(`[^a-z0-9-]+`)
 
+// maxBucketSlug bounds the sanitised test-name component so the full
+// "t-<slug>-<timestamp>" bucket name stays within S3's 63-char limit.
+const maxBucketSlug = 40
+
 // bucketName sanitises a Go test name into a valid S3 bucket name:
 // lowercase, 3-63 chars, ASCII alphanumeric + dash.
 func bucketName(testName string) string {
 	clean := bucketSanitizer.ReplaceAllString(strings.ToLower(testName), "-")
 	clean = strings.Trim(clean, "-")
-	if len(clean) > 40 {
-		clean = clean[:40]
+	if len(clean) > maxBucketSlug {
+		clean = clean[:maxBucketSlug]
 	}
 	stamp := strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000"), ".", "")
 

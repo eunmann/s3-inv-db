@@ -64,23 +64,31 @@ func Down(db *sql.DB, steps int) error {
 	return nil
 }
 
+// VersionInfo describes the migration state of the schema_migrations
+// table: the major version number and whether the previous migration
+// finished cleanly.
+type VersionInfo struct {
+	Version uint
+	Dirty   bool
+}
+
 // Version reports the current schema version and whether the DB is in
-// a dirty (interrupted) migration state. Returns (0, false, nil) for
-// a brand-new DB with no migrations recorded.
-func Version(db *sql.DB) (version uint, dirty bool, err error) {
-	m, mErr := newMigrator(db)
-	if mErr != nil {
-		return 0, false, mErr
+// a dirty (interrupted) migration state. Returns the zero VersionInfo
+// for a brand-new DB with no migrations recorded.
+func Version(db *sql.DB) (VersionInfo, error) {
+	m, err := newMigrator(db)
+	if err != nil {
+		return VersionInfo{}, err
 	}
-	version, dirty, err = m.Version()
+	version, dirty, err := m.Version()
 	if errors.Is(err, migrate.ErrNilVersion) {
-		return 0, false, nil
+		return VersionInfo{}, nil
 	}
 	if err != nil {
-		return 0, false, fmt.Errorf("read schema version: %w", err)
+		return VersionInfo{}, fmt.Errorf("read schema version: %w", err)
 	}
 
-	return version, dirty, nil
+	return VersionInfo{Version: version, Dirty: dirty}, nil
 }
 
 // newMigrator builds a Migrate bound to db. Do not call m.Close() —

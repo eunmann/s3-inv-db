@@ -1,21 +1,23 @@
-package inventory
+package inventory_test
 
 import (
 	"context"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
 func TestStatePredicates(t *testing.T) {
 	// want = [IsLoaded, IsNotLoaded, IsLoading, IsError, CanLoad]
 	cases := []struct {
-		state State
+		state inventory.State
 		want  [5]bool
 	}{
-		{StateLoaded, [5]bool{true, false, false, false, false}},
-		{StateNotLoaded, [5]bool{false, true, false, false, true}},
-		{StateLoading, [5]bool{false, false, true, false, false}},
-		{StateError, [5]bool{false, false, false, true, true}},
-		{State("bogus"), [5]bool{false, false, false, false, false}},
+		{inventory.StateLoaded, [5]bool{true, false, false, false, false}},
+		{inventory.StateNotLoaded, [5]bool{false, true, false, false, true}},
+		{inventory.StateLoading, [5]bool{false, false, true, false, false}},
+		{inventory.StateError, [5]bool{false, false, false, true, true}},
+		{inventory.State("bogus"), [5]bool{false, false, false, false, false}},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.state), func(t *testing.T) {
@@ -28,14 +30,14 @@ func TestStatePredicates(t *testing.T) {
 }
 
 func TestIDString(t *testing.T) {
-	if got := ID("src/inv/run").String(); got != "src/inv/run" {
+	if got := inventory.ID("src/inv/run").String(); got != "src/inv/run" {
 		t.Errorf("String() = %q, want %q", got, "src/inv/run")
 	}
 }
 
 func TestIDSplit(t *testing.T) {
 	cases := []struct {
-		id                        ID
+		id                        inventory.ID
 		wantSrc, wantInv, wantRun string
 		wantOK                    bool
 	}{
@@ -58,34 +60,34 @@ func TestIDSplit(t *testing.T) {
 }
 
 func TestIDConfigID(t *testing.T) {
-	if got := ID("src/inv/run").ConfigID(); got != "src/inv" {
+	if got := inventory.ID("src/inv/run").ConfigID(); got != "src/inv" {
 		t.Errorf("ConfigID(3-part) = %q, want %q", got, "src/inv")
 	}
-	if got := ID("placeholder").ConfigID(); got != "placeholder" {
+	if got := inventory.ID("placeholder").ConfigID(); got != "placeholder" {
 		t.Errorf("ConfigID(unsplittable) = %q, want %q", got, "placeholder")
 	}
 }
 
 func TestInventoryCompositeID(t *testing.T) {
-	with := Inventory{SourceBucket: "src", InventoryName: "inv", Run: "2026-01"}
-	if got := with.CompositeID(); got != ID("src/inv/2026-01") {
+	with := inventory.Inventory{SourceBucket: "src", InventoryName: "inv", Run: "2026-01"}
+	if got := with.CompositeID(); got != inventory.ID("src/inv/2026-01") {
 		t.Errorf("CompositeID(with run) = %q, want %q", got, "src/inv/2026-01")
 	}
-	without := Inventory{SourceBucket: "src", InventoryName: "inv"}
-	if got := without.CompositeID(); got != ID("src/inv") {
+	without := inventory.Inventory{SourceBucket: "src", InventoryName: "inv"}
+	if got := without.CompositeID(); got != inventory.ID("src/inv") {
 		t.Errorf("CompositeID(no run) = %q, want %q", got, "src/inv")
 	}
 }
 
 func TestInventoryConfigID(t *testing.T) {
-	inv := Inventory{SourceBucket: "src", InventoryName: "inv", Run: "2026-01"}
+	inv := inventory.Inventory{SourceBucket: "src", InventoryName: "inv", Run: "2026-01"}
 	if got := inv.ConfigID(); got != "src/inv" {
 		t.Errorf("ConfigID = %q, want %q", got, "src/inv")
 	}
 }
 
 func TestManagerLoad_UsesOpenLocalPath(t *testing.T) {
-	mgr := NewManager()
+	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
 	if err := mgr.Register("inv", "n", "/tmp/this/path/does/not/exist"); err != nil {
 		t.Fatalf("Register: %v", err)

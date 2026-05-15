@@ -4,6 +4,7 @@ package seeder
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,21 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/rs/zerolog"
+)
+
+// Sentinel errors for Run config validation.
+var (
+	errCountNotPositive   = errors.New("count must be > 0")
+	errObjectsNotPositive = errors.New("objects must be > 0")
+	errUnknownTarget      = errors.New("unknown seeder target")
+)
+
+// File-mode constants for seeded output. Owner-only access is the
+// right default for synthetic data written into a developer-controlled
+// working directory.
+const (
+	outputDirMode   = 0o750
+	summaryFileMode = 0o600
 )
 
 // Target selects the seeder output sink.
@@ -74,10 +90,10 @@ func Run(cfg Config) error {
 	// count/objects is a silent no-op that's almost never what the user
 	// wants — reject both explicitly.
 	if cfg.Count <= 0 {
-		return fmt.Errorf("count must be > 0, got %d", cfg.Count)
+		return fmt.Errorf("%w, got %d", errCountNotPositive, cfg.Count)
 	}
 	if cfg.Objects <= 0 {
-		return fmt.Errorf("objects must be > 0, got %d", cfg.Objects)
+		return fmt.Errorf("%w, got %d", errObjectsNotPositive, cfg.Objects)
 	}
 
 	logEv := cfg.Logger.Info().
@@ -91,7 +107,7 @@ func Run(cfg Config) error {
 	case TargetS3:
 		logEv = logEv.Str("s3_bucket", cfg.S3.Bucket).Str("s3_prefix", cfg.S3.Prefix).Str("s3_src_bucket", cfg.S3.SrcBucket)
 	default:
-		return fmt.Errorf("unknown seeder target: %q", cfg.Target)
+		return fmt.Errorf("%w: %q", errUnknownTarget, cfg.Target)
 	}
 	logEv.Msg("starting seeder")
 
@@ -101,12 +117,12 @@ func Run(cfg Config) error {
 	case TargetS3:
 		return runS3(cfg, startTime)
 	default:
-		return fmt.Errorf("unknown seeder target: %q", cfg.Target)
+		return fmt.Errorf("%w: %q", errUnknownTarget, cfg.Target)
 	}
 }
 
 func runLocal(cfg Config, startTime time.Time) error {
-	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.OutputDir, outputDirMode); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
 
@@ -288,7 +304,7 @@ func writeSummary(dir string, inventories []InventoryInfo, startTime time.Time) 
 	}
 
 	summaryPath := filepath.Join(dir, "summary.json")
-	if err := os.WriteFile(summaryPath, data, 0o644); err != nil {
+	if err := os.WriteFile(summaryPath, data, summaryFileMode); err != nil {
 		return fmt.Errorf("write summary file: %w", err)
 	}
 

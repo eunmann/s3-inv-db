@@ -1,4 +1,4 @@
-package templates
+package templates_test
 
 import (
 	"bytes"
@@ -6,10 +6,11 @@ import (
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/templates"
 )
 
 func TestRenderer_Dashboard(t *testing.T) {
-	renderer, err := New()
+	renderer, err := templates.New()
 	if err != nil {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestRenderer_Dashboard(t *testing.T) {
 }
 
 func TestRenderer_Inventories(t *testing.T) {
-	renderer, err := New()
+	renderer, err := templates.New()
 	if err != nil {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
@@ -64,7 +65,7 @@ func TestRenderer_Inventories(t *testing.T) {
 }
 
 func TestRenderer_Browse(t *testing.T) {
-	renderer, err := New()
+	renderer, err := templates.New()
 	if err != nil {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestRenderer_Browse(t *testing.T) {
 }
 
 func TestRenderer_PageNotFound(t *testing.T) {
-	renderer, err := New()
+	renderer, err := templates.New()
 	if err != nil {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
@@ -106,7 +107,7 @@ func TestRenderer_PageNotFound(t *testing.T) {
 // template on every request, which worked once and failed forever after.
 // Render each page (and a partial) twice and assert both calls succeed.
 func TestRenderer_RepeatedRenders(t *testing.T) {
-	renderer, err := New()
+	renderer, err := templates.New()
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -163,7 +164,7 @@ func TestRenderer_RepeatedRenders(t *testing.T) {
 }
 
 func TestRenderer_Partial(t *testing.T) {
-	renderer, err := New()
+	renderer, err := templates.New()
 	if err != nil {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
@@ -186,47 +187,32 @@ func TestRenderer_Partial(t *testing.T) {
 	}
 }
 
-func TestHxValsAttr_QuotesInValueAreJSONEscaped(t *testing.T) {
-	// The whole point of hxVals: a value containing `"` must not break
-	// the JSON payload after html/template's attribute-context escaping.
-	attr, err := hxValsAttr("prefix", `a"b`)
+func TestHxValsJSON_QuotesInValueAreJSONEscaped(t *testing.T) {
+	// The whole point of hxValsJSON: a value containing `"` must not
+	// break the JSON payload. json.Marshal escapes `"` to `\"`, and the
+	// surrounding html/template attribute-context escaping then encodes
+	// the literal `"` separators as `&#34;` (browsers decode that back
+	// to `"` before HTMX reads the attribute).
+	got, err := templates.HxValsJSON("prefix", `a"b`)
 	if err != nil {
-		t.Fatalf("hxValsAttr: %v", err)
+		t.Fatalf("hxValsJSON: %v", err)
 	}
-	got := string(attr)
 	if !strings.Contains(got, `\"`) {
-		t.Errorf("attr %q does not contain JSON-escaped quote", got)
+		t.Errorf("output %q does not contain JSON-escaped quote", got)
 	}
-	if !strings.HasPrefix(got, `hx-vals='`) || !strings.HasSuffix(got, `'`) {
-		t.Errorf("attr %q is not wrapped in single quotes", got)
-	}
-}
-
-func TestHxValsAttr_SingleQuoteInValueIsHTMLEscaped(t *testing.T) {
-	// A `'` in a value would otherwise terminate the single-quoted
-	// attribute. Must be replaced with the HTML entity.
-	attr, err := hxValsAttr("prefix", "it's")
-	if err != nil {
-		t.Fatalf("hxValsAttr: %v", err)
-	}
-	got := string(attr)
-	if !strings.Contains(got, "&#39;") {
-		t.Errorf("attr %q does not escape single quote", got)
-	}
-	// The outer single quotes of the attribute must remain.
-	if !strings.HasPrefix(got, `hx-vals='`) || !strings.HasSuffix(got, `'`) {
-		t.Errorf("attr %q broken outer single quotes", got)
+	if !strings.HasPrefix(got, `{`) || !strings.HasSuffix(got, `}`) {
+		t.Errorf("output %q is not a JSON object literal", got)
 	}
 }
 
-func TestHxValsAttr_OddPairs(t *testing.T) {
-	if _, err := hxValsAttr("only-key"); err == nil {
+func TestHxValsJSON_OddPairs(t *testing.T) {
+	if _, err := templates.HxValsJSON("only-key"); err == nil {
 		t.Error("expected error on odd number of args")
 	}
 }
 
 func TestBrowseURL_EncodesSpecialChars(t *testing.T) {
-	got, err := browseURL("inventory_id", "inv-1", "prefix", "a&b c#d/")
+	got, err := templates.BrowseURL("inventory_id", "inv-1", "prefix", "a&b c#d/")
 	if err != nil {
 		t.Fatalf("browseURL: %v", err)
 	}
@@ -237,7 +223,7 @@ func TestBrowseURL_EncodesSpecialChars(t *testing.T) {
 }
 
 func TestBrowseURL_SkipsEmpty(t *testing.T) {
-	got, err := browseURL("inventory_id", "inv-1", "prefix", "", "sort", "")
+	got, err := templates.BrowseURL("inventory_id", "inv-1", "prefix", "", "sort", "")
 	if err != nil {
 		t.Fatalf("browseURL: %v", err)
 	}
@@ -249,26 +235,26 @@ func TestBrowseURL_SkipsEmpty(t *testing.T) {
 	}
 }
 
-func TestHxValsAttr_HTMLSpecialCharsInValueAreSafe(t *testing.T) {
+func TestHxValsJSON_HTMLSpecialCharsInValueAreSafe(t *testing.T) {
 	// json.Marshal in Go escapes <, >, & to JSON unicode escapes
 	// (<, >, &) by default. So no literal `&`, `<`, or
-	// `>` ever appears in the output, the surrounding single-quoted HTML
-	// attribute can't terminate prematurely, and there's no half-formed
-	// entity for browsers to interpret. Lock that contract in.
-	attr, err := hxValsAttr("k", `a&b<c>d`)
+	// `>` ever appears in the output. Combined with html/template's
+	// attribute-context escaping at the call site, an attacker-controlled
+	// value cannot break out of the attribute or close the surrounding
+	// tag. Lock that contract in.
+	got, err := templates.HxValsJSON("k", `a&b<c>d`)
 	if err != nil {
-		t.Fatalf("hxValsAttr: %v", err)
+		t.Fatalf("hxValsJSON: %v", err)
 	}
-	got := string(attr)
 	for _, banned := range []string{"a&b", "<c", ">d"} {
 		if strings.Contains(got, banned) {
-			t.Errorf("attr %q contains literal %q — JSON HTML-safe escaping broken", got, banned)
+			t.Errorf("output %q contains literal %q — JSON HTML-safe escaping broken", got, banned)
 		}
 	}
 	// JSON unicode escapes (6 chars each: backslash + u + 4 hex digits).
 	for _, want := range []string{"\\u0026", "\\u003c", "\\u003e"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("attr %q missing JSON unicode escape %q", got, want)
+			t.Errorf("output %q missing JSON unicode escape %q", got, want)
 		}
 	}
 }

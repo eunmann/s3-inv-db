@@ -1,4 +1,4 @@
-package s3disco
+package s3disco_test
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/eunmann/s3-inv-db/internal/miniotest"
+	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/rs/zerolog"
 )
@@ -27,7 +28,7 @@ func TestDiscoverer_List_AgainstMinIO(t *testing.T) {
 	uploadInventoryAt(ctx, t, client, bucket, srcBucket, prefix, "inv-001", now, 100, 1002)
 	uploadInventoryAt(ctx, t, client, bucket, srcBucket, prefix, "inv-002", now, 100, 2001)
 
-	d := New(client, bucket, prefix)
+	d := s3disco.New(client, bucket, prefix)
 	got, err := d.List(ctx)
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -68,7 +69,7 @@ func TestDiscoverer_Find(t *testing.T) {
 	now := time.Now().UTC()
 	// The seeder always names inventories inv-NNN where NNN = index.
 	uploadInventoryAt(ctx, t, client, bucket, "src-a", "inv/", "inv-001", now, 50, 7)
-	d := New(client, bucket, "inv/")
+	d := s3disco.New(client, bucket, "inv/")
 
 	// Empty run = "give me the latest".
 	got, err := d.Find(ctx, "src-a", "inv-001", "")
@@ -102,7 +103,7 @@ func TestDiscoverer_EmptyBucket(t *testing.T) {
 	ctx := context.Background()
 	bucket := miniotest.Bucket(t, client)
 
-	d := New(client, bucket, "inventory-data/")
+	d := s3disco.New(client, bucket, "inventory-data/")
 	got, err := d.List(ctx)
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -167,7 +168,7 @@ func TestRunFolderRE(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := runFolderRE.MatchString(c.name); got != c.match {
+			if got := s3disco.RunFolderRE.MatchString(c.name); got != c.match {
 				t.Errorf("MatchString(%q) = %v, want %v", c.name, got, c.match)
 			}
 		})
