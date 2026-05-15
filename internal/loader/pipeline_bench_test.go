@@ -45,6 +45,12 @@ func benchmarkMultiChunkBuild(b *testing.B, numObjects, numChunks int) {
 	b.Helper()
 	b.ReportAllocs()
 
+	// The pipeline's internal debug logging would otherwise drown
+	// the bench output line and confuse benchstat parsing.
+	prev := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.Disabled)
+	b.Cleanup(func() { zerolog.SetGlobalLevel(prev) })
+
 	fc := miniotest.FetchClient(b)
 	bucket := miniotest.Bucket(b, fc.Raw())
 
