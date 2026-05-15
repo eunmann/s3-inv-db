@@ -12,13 +12,36 @@ JSON-and-reload patterns.
 # Standalone, listening on :8080, no discovery configured
 s3-inv-db-server
 
-# With S3 discovery: the server walks the s3:// source and shows
-# every inventory + run + load state in the UI
+# With S3 discovery + auto-load + budget
 s3-inv-db-server \
   --addr :8080 \
   --s3-source s3://my-bucket/inventory-data/ \
-  --cache-dir /var/cache/s3inv
+  --cache-dir /var/cache/s3inv \
+  --auto-load \
+  --max-index-disk 200GB
+
+# All flags can also come from a JSON file via --config (or
+# S3INV_CONFIG). Explicit flags override the file. See README for
+# the full schema.
+s3-inv-db-server --config /etc/s3inv/server.json
 ```
+
+## Auto-load + disk budget
+
+When `--auto-load` is enabled, a background poller (default every 15
+minutes) lists each configured S3 source, registers any new inventory
+runs, and queues loads for configurations whose `auto_load=true` is
+set in `inventory_configs`. The dashboard's **Auto-load** card and
+the top-of-page notifications banner surface poll failures and
+per-run load failures so the UI never silently swallows an error.
+
+`--max-index-disk` is required when `--auto-load` is on; the server
+refuses to start without it. The budget tracks both the on-disk size
+of loaded indexes and reservations for in-flight loads. When a new
+run would not fit, the planner evicts the oldest auto-loaded runs
+respecting per-config retention (default 2) and global LRU. Pinned
+runs (set via `/api/inventories/{id}/pin` or by manual Load) are
+never auto-evicted.
 
 ## Routes
 
@@ -26,10 +49,10 @@ s3-inv-db-server \
 
 | Route | Returns | Notes |
 |---|---|---|
-| `GET /` | HTML | Dashboard — counters + recent inventories |
-| `GET /inventories` | HTML | Discovery list (when `--s3-source` is set) |
+| `GET /` | HTML | Dashboard — counters, disk-budget gauge, auto-load summary |
+| `GET /inventories` | HTML | Discovery list with per-config auto-load toggle + retention input |
 | `GET /browse` | HTML or row partial | Prefix explorer; content-negotiated on `HX-Request` |
-| `GET /diff` | HTML or level partial | Compare two runs at one prefix |
+| `GET /compare` | HTML or level partial | Compare two runs at one prefix |
 | `GET /help` | HTML | Built-in glossary + workflows |
 | `GET /healthz` | text/plain `ok` | Liveness probe (no auth, no S3) |
 | `GET /static/tailwind.css` | text/css | Embedded compiled stylesheet, ETag-revalidated |
@@ -47,6 +70,7 @@ These mutate state and return HTML for the swapped row.
 | `/partials/discovered/{src}/{id}/{run}` | GET | Latest state of one discovered run (used by SSE refresh) |
 | `/partials/discovered/{src}/{id}/{run}/load` | POST | Submits an async build job; returns 202 + the row in `queued` state |
 | `/partials/discovered/{src}/{id}/{run}/unload` | POST | Unload + wipe on-disk cache |
+| `/partials/notifications` | GET | Failure-aggregation banner; the layout polls this every 30s |
 
 ### JSON APIs
 
@@ -62,7 +86,9 @@ Read-only:
 | `GET /api/stats?inventory_id=&prefix=` | Stats for one prefix in one inventory |
 | `GET /api/configurations` | Inventory configurations grouped by `<src>/<inv>` with their runs |
 | `GET /api/browse?inventory_id=&prefix=&sort=&dir=&page=&page_size=` | Browse one prefix in one run |
-| `GET /api/diff?from=&to=&prefix=&sort=&dir=&page=&page_size=&show_unchanged=` | Compare two runs at one prefix |
+| `GET /api/compare?from=&to=&prefix=&sort=&dir=&page=&page_size=&show_unchanged=` | Compare two runs at one prefix (includes PUT API one-time costs) |
+| `GET /api/disk-budget` | Tracker counters: cap, used, reserved, available, headroom |
+| `GET /api/notifications` | Aggregated poll-failure + auto-load-failure list |
 
 Mutating:
 
@@ -72,6 +98,8 @@ Mutating:
 | `/api/inventories/{id}/load` | POST | Synchronous load |
 | `/api/inventories/{id}/unload` | POST | Unload |
 | `/api/inventories/{id}` | DELETE | Remove |
+| `/api/inventories/{id}/pin` | POST | Toggle pin state (`pinned=true|false`); pinned runs are never auto-evicted |
+| `/api/configurations/{src}/{name}/auto-load` | POST | Set auto-load + retention for a configuration (`auto_load=on|off`, `retention=N`) |
 | `/api/jobs/{id}/cancel` | POST | Cancel an in-flight job |
 
 ### Server-Sent Events

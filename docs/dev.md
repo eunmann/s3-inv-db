@@ -32,7 +32,7 @@ make docker-seed
 curl -s http://localhost:8080/api/discovered | jq
 
 # Compare two loaded runs of the same configuration
-curl -s 'http://localhost:8080/api/diff?from=src/inv/runA&to=src/inv/runB' | jq
+curl -s 'http://localhost:8080/api/compare?from=src/inv/runA&to=src/inv/runB' | jq
 
 # Trigger a load via the partial route (returns HTML for the swapped row)
 curl -X POST \

@@ -302,9 +302,14 @@ err := server.BootstrapAndRun(ctx, server.RuntimeOptions{
 })
 ```
 
-`RuntimeOptions` mirrors the binary's flag set. `S3Source` and
-`CacheDir` are optional — when omitted, discovery is disabled and the
-server runs against whatever inventories are already in the state DB.
+`RuntimeOptions` mirrors the binary's flag set including auto-load
+(`AutoLoad`, `PollInterval`, `MaxIndexDisk`, `IndexHeadroomBytes`,
+`AutoLoadConcurrency`, `AutoLoadRetentionDefault`, `IndexRatio`) and
+the declarative `InventoryConfigs []InventoryConfigEntry` that gets
+upserted into the state DB at startup. `S3Source` and `CacheDir` are
+optional — when omitted, discovery is disabled and the server runs
+against whatever inventories are already in the state DB. Setting
+`AutoLoad=true` without `MaxIndexDisk` returns `ErrAutoLoadWithoutBudget`.
 
 ### Manual lifecycle control
 
@@ -338,8 +343,10 @@ parent.Mount("/inv", srv.Router())
 
 | Type / function | Purpose |
 |---|---|
-| `RuntimeOptions` | Flag-friendly inputs: addr, S3 source, cache dir, state DB path, price-table path, logger. |
-| `Config` | Wired dependencies: addr, logger, price table, S3 source, cache dir, `*sql.DB`. |
+| `RuntimeOptions` | Flag-friendly inputs: addr, S3 source, cache dir, scratch dir, state DB path, price-table path, auto-load knobs, declarative inventory configs, logger. |
+| `Config` | Wired dependencies: addr, logger, price table, S3 source, cache dir, scratch dir, `*sql.DB`, auto-load knobs. |
+| `InventoryConfigEntry` | Source, name, AutoLoad, RetentionCount — upserted into `inventory_configs` during `Bootstrap`. |
+| `ErrAutoLoadWithoutBudget` | Returned by `Bootstrap` when `AutoLoad=true && MaxIndexDisk==0`. |
 | `Server` | Opaque server instance. |
 | `New(Config)` | Construct a server from a populated Config. |
 | `Bootstrap(RuntimeOptions)` | Resolve paths, open DB, load price table, build server; returns `(*Server, cleanup, error)`. |

@@ -16,6 +16,7 @@ var (
 )
 
 func init() {
+	zerolog.TimeFieldFormat = time.RFC3339
 	zerolog.DurationFieldFormat = zerolog.DurationFormatString
 	l := zerolog.New(os.Stderr).With().Timestamp().Logger()
 	logger = &l

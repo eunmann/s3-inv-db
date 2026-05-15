@@ -38,8 +38,31 @@ make seeder  # bin/s3-inv-db-seeder
 | Binary | Purpose |
 |---|---|
 | `s3-inv-db` | CLI for `build` / `query` on a single index |
-| `s3-inv-db-server` | HTTP server: discovery, load/unload, JSON API, HTML UI |
+| `s3-inv-db-server` | HTTP server: discovery, load/unload, auto-load, compare, JSON API, HTML UI |
 | `s3-inv-db-seeder` | Synthetic-data generator (local dev + integration tests) |
+
+## Configuration
+
+All three binaries accept `--config <path>` (or `S3INV_CONFIG`) pointing
+at a JSON file. Precedence: explicit CLI flag → config file → env →
+default. Example:
+
+```json
+{
+  "addr": ":8080",
+  "s3_source": "s3://my-bucket/inventory-data/",
+  "cache_dir": "/var/cache/s3inv",
+  "auto_load": true,
+  "max_index_disk": "200GB",
+  "auto_load_poll_interval": "15m",
+  "auto_load_retention_default": 3,
+  "inventories": [
+    {"source": "prod-bucket", "name": "daily-inventory", "auto_load": true, "retention_count": 5}
+  ]
+}
+```
+
+The `inventories[]` array declares per-configuration auto-load + retention; entries are upserted into the state DB at startup. Per-run pin state lives in the UI/API, not the file.
 
 ## Library usage
 
