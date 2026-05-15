@@ -20,13 +20,17 @@ func writeConfig(t *testing.T, contents string) string {
 	return path
 }
 
-func TestLoad_EmptyPathReturnsNil(t *testing.T) {
+func TestLoad_EmptyPathReturnsEmptyConfig(t *testing.T) {
 	cfg, err := appconfig.Load("")
 	if err != nil {
 		t.Fatalf("appconfig.Load(\"\"): %v", err)
 	}
-	if cfg != nil {
-		t.Errorf("expected nil config, got %+v", cfg)
+	if cfg == nil {
+		t.Fatal("expected non-nil empty *Config, got nil")
+	}
+	if cfg.Addr != nil || cfg.Verbose != nil || cfg.PrettyLogs != nil ||
+		cfg.PriceTable != nil || len(cfg.Inventories) != 0 {
+		t.Errorf("expected zero-value Config, got %+v", cfg)
 	}
 }
 
