@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
@@ -173,6 +174,14 @@ func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) 
 
 	if req.ID == "" {
 		WriteJSONError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	if strings.ContainsAny(req.ID, "/?#%") {
+		// chi's {id} URL param is single-segment; an ID with slashes
+		// or other URL-meaningful characters would silently 404 every
+		// subsequent /api/inventories/{id}/... call. Composite IDs
+		// (src/name/run) flow through /partials/discovered/* instead.
+		WriteJSONError(w, http.StatusBadRequest, "id must not contain '/', '?', '#', or '%'")
 		return
 	}
 	if req.Name == "" {

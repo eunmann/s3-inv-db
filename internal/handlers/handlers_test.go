@@ -75,6 +75,13 @@ func TestRegisterInventoryAPI_MissingFields(t *testing.T) {
 		{"missing id", `{"name":"Test","path":"/path"}`},
 		{"missing name", `{"id":"test","path":"/path"}`},
 		{"missing path", `{"id":"test","name":"Test"}`},
+		// Single-segment chi `{id}` would silently 404 every later
+		// /api/inventories/{id}/... call, so these characters must be
+		// rejected at registration.
+		{"id contains slash", `{"id":"my/inv","name":"Test","path":"/p"}`},
+		{"id contains percent", `{"id":"my%20inv","name":"Test","path":"/p"}`},
+		{"id contains question", `{"id":"my?inv","name":"Test","path":"/p"}`},
+		{"id contains hash", `{"id":"my#inv","name":"Test","path":"/p"}`},
 	}
 
 	for _, tt := range tests {
