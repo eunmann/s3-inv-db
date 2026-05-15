@@ -125,8 +125,9 @@ func (s *DiscoveryService) List(ctx context.Context) ([]MergedInventory, error) 
 		return nil, fmt.Errorf("discover: %w", err)
 	}
 	out := make([]MergedInventory, 0, len(discovered))
-	for _, d := range discovered {
-		m := MergedInventory{Inventory: d, State: StateNotLoaded}
+	for i := range discovered {
+		d := &discovered[i]
+		m := MergedInventory{Inventory: *d, State: StateNotLoaded}
 		if info, ok := s.manager.Get(d.CompositeID()); ok {
 			m.State = info.State
 			m.Error = info.Error

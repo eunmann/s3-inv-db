@@ -5,6 +5,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
+	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
 
 func TestNew_NormalizesPrefixTrailingSlash(t *testing.T) {
@@ -86,6 +87,30 @@ func TestTrimPrefix_StripsBothEnds(t *testing.T) {
 		t.Run(c.s, func(t *testing.T) {
 			if got := s3disco.TrimPrefix(c.s, c.prefix); got != c.want {
 				t.Errorf("trimPrefix(%q, %q) = %q, want %q", c.s, c.prefix, got, c.want)
+			}
+		})
+	}
+}
+
+func TestManifestTotalBytes(t *testing.T) {
+	cases := []struct {
+		name  string
+		files []s3fetch.ManifestFile
+		want  int64
+	}{
+		{name: "empty", files: nil, want: 0},
+		{name: "single", files: []s3fetch.ManifestFile{{Size: 42}}, want: 42},
+		{
+			name:  "multiple",
+			files: []s3fetch.ManifestFile{{Size: 100}, {Size: 250}, {Size: 9999}},
+			want:  10349,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := &s3fetch.Manifest{Files: c.files}
+			if got := s3disco.ManifestTotalBytes(m); got != c.want {
+				t.Errorf("ManifestTotalBytes = %d, want %d", got, c.want)
 			}
 		})
 	}

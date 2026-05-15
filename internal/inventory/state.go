@@ -124,6 +124,12 @@ type Inventory struct {
 	// A coarse "size" signal for the UI before download.
 	FileCount int `json:"file_count,omitempty"`
 
+	// TotalBytes is the sum of compressed file sizes across every data
+	// file in the manifest. Zero when the manifest hasn't been fetched
+	// (older runs beyond the per-config fetch cap, or the placeholder
+	// "no runs yet" entry).
+	TotalBytes int64 `json:"total_bytes,omitempty"`
+
 	// CreationTimestamp is the manifest's reported creation time
 	// (UnixMilli as a decimal string, exactly as S3 writes it).
 	CreationTimestamp string `json:"creation_timestamp,omitempty"`

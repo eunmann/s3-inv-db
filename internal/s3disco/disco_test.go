@@ -61,6 +61,34 @@ func TestDiscoverer_List_AgainstMinIO(t *testing.T) {
 	}
 }
 
+func TestDiscoverer_List_PopulatesManifestStats(t *testing.T) {
+	client := miniotest.RawClient(t)
+	ctx := context.Background()
+	bucket := miniotest.Bucket(t, client)
+
+	now := time.Now().UTC()
+	uploadInventoryAt(ctx, t, client, bucket, "synthetic-prod", "inventory-data/", "inv-001", now, 100, 9999)
+
+	d := s3disco.New(client, bucket, "inventory-data/")
+	got, err := d.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(List) = %d, want 1", len(got))
+	}
+	entry := got[0]
+	if entry.FileCount == 0 {
+		t.Errorf("FileCount = 0, want > 0 (manifest should reference at least one data file)")
+	}
+	if entry.TotalBytes == 0 {
+		t.Errorf("TotalBytes = 0, want > 0 (manifest data files should report compressed size)")
+	}
+	if entry.CreationTimestamp == "" {
+		t.Errorf("CreationTimestamp = empty, want manifest creation timestamp")
+	}
+}
+
 func TestDiscoverer_Find(t *testing.T) {
 	client := miniotest.RawClient(t)
 	ctx := context.Background()

@@ -212,7 +212,8 @@ func (a *AutoLoader) runQueue(ctx context.Context, queue []inventory.Inventory) 
 	}
 	sem := make(chan struct{}, a.cfg.MaxConcurrency)
 	var wg sync.WaitGroup
-	for _, target := range queue {
+	for i := range queue {
+		target := &queue[i]
 		select {
 		case <-ctx.Done():
 			return
@@ -225,7 +226,7 @@ func (a *AutoLoader) runQueue(ctx context.Context, queue []inventory.Inventory) 
 			defer wg.Done()
 			defer func() { <-sem }()
 			a.loadOne(ctx, target)
-		}(target)
+		}(*target)
 	}
 	wg.Wait()
 }
