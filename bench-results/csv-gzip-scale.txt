@@ -1,0 +1,18 @@
+goos: linux
+goarch: amd64
+pkg: github.com/eunmann/s3-inv-db/pkg/inventory
+cpu: AMD Ryzen 9 5950X 16-Core Processor            
+BenchmarkCSVGzip_Stdlib/rows=100000-32         	     171	  20765115 ns/op	  64.26 MB/s	20248342 B/op	  100141 allocs/op
+BenchmarkCSVGzip_Stdlib/rows=100000-32         	     175	  20952764 ns/op	  63.69 MB/s	20247990 B/op	  100140 allocs/op
+BenchmarkCSVGzip_Stdlib/rows=1000000-32        	      18	 185337294 ns/op	  71.76 MB/s	164324294 B/op	 1000326 allocs/op
+BenchmarkCSVGzip_Stdlib/rows=1000000-32        	      19	 185516400 ns/op	  71.69 MB/s	164324427 B/op	 1000327 allocs/op
+BenchmarkCSVGzip_Stdlib/rows=10000000-32       	       2	2245076951 ns/op	  58.63 MB/s	1748418480 B/op	10001824 allocs/op
+BenchmarkCSVGzip_Stdlib/rows=10000000-32       	       2	2102934286 ns/op	  62.60 MB/s	1748418544 B/op	10001824 allocs/op
+BenchmarkCSVGzip_Fast/rows=100000-32           	      98	  37297760 ns/op	  35.78 MB/s	15637128 B/op	  200125 allocs/op
+BenchmarkCSVGzip_Fast/rows=100000-32           	      92	  37119513 ns/op	  35.95 MB/s	15637208 B/op	  200125 allocs/op
+BenchmarkCSVGzip_Fast/rows=1000000-32          	       9	 362682602 ns/op	  36.67 MB/s	80447822 B/op	 2000310 allocs/op
+BenchmarkCSVGzip_Fast/rows=1000000-32          	       9	 359498034 ns/op	  36.99 MB/s	80447294 B/op	 2000309 allocs/op
+BenchmarkCSVGzip_Fast/rows=10000000-32         	       1	3512577722 ns/op	  37.48 MB/s	728541728 B/op	20001809 allocs/op
+BenchmarkCSVGzip_Fast/rows=10000000-32         	       1	3520564793 ns/op	  37.39 MB/s	728541728 B/op	20001809 allocs/op
+PASS
+ok  	github.com/eunmann/s3-inv-db/pkg/inventory	118.959s
