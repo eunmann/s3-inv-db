@@ -70,8 +70,10 @@ func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	inventoryID := inventory.ID(q.Get("inventory_id"))
 	prefix := q.Get("prefix")
-	sortBy, dir := inventory.NormalizeSort(q.Get("sort"), q.Get("dir"))
-	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
+	sortParams := inventory.NormalizeSort(q.Get("sort"), q.Get("dir"))
+	sortBy, dir := sortParams.Col, sortParams.Dir
+	pageParams := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
+	page, pageSize := pageParams.Page, pageParams.Size
 
 	if wantsHTMXPartial(r) {
 		h.renderBrowseLevelPartial(w, r, inventoryID, prefix, sortBy, dir, page, pageSize)
@@ -318,8 +320,10 @@ func (h *Handlers) BrowseLevelAPI(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	inventoryID := inventory.ID(q.Get("inventory_id"))
 	prefix := q.Get("prefix")
-	sortBy, dir := inventory.NormalizeSort(q.Get("sort"), q.Get("dir"))
-	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
+	sortParams := inventory.NormalizeSort(q.Get("sort"), q.Get("dir"))
+	sortBy, dir := sortParams.Col, sortParams.Dir
+	pageParams := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
+	page, pageSize := pageParams.Page, pageParams.Size
 
 	if inventoryID == "" {
 		WriteJSONError(w, http.StatusBadRequest, "inventory_id is required")
@@ -335,8 +339,8 @@ func (h *Handlers) BrowseLevelAPI(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		status, msg := managerErrorStatus(err)
-		WriteJSONError(w, status, msg)
+		resp := managerErrorStatus(err)
+		WriteJSONError(w, resp.Status, resp.Message)
 
 		return
 	}

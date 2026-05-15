@@ -26,7 +26,7 @@ func storeWithInventory(t *testing.T, invID inventory.ID) (*jobs.Store, *sql.DB)
 	if err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)
 	}
-	if err := invStore.Upsert(inventory.Info{ID: invID, Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
+	if err := invStore.Upsert(t.Context(), inventory.Info{ID: invID, Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
 		t.Fatalf("seed inventory: %v", err)
 	}
 	store, err := jobs.NewStore(db)
@@ -39,7 +39,7 @@ func storeWithInventory(t *testing.T, invID inventory.ID) (*jobs.Store, *sql.DB)
 
 func TestStore_ListForInventory_EmptyReturnsNilNoError(t *testing.T) {
 	store, _ := storeWithInventory(t, "src/inv1")
-	got, err := store.ListForInventory("src/inv1")
+	got, err := store.ListForInventory(t.Context(), "src/inv1")
 	if err != nil {
 		t.Fatalf("ListForInventory: %v", err)
 	}
@@ -53,12 +53,12 @@ func TestStore_ListForInventory_OrderedByUpdatedAtDesc(t *testing.T) {
 	// updated_at has second resolution; sleep > 1s between writes so the
 	// ORDER BY produces a stable order.
 	for _, id := range []jobs.ID{"older", "middle", "newer"} {
-		if err := store.Upsert(jobs.Job{ID: id, InventoryID: "src/inv1", Kind: jobs.KindBuild, State: jobs.StateSucceeded}); err != nil {
+		if err := store.Upsert(t.Context(), jobs.Job{ID: id, InventoryID: "src/inv1", Kind: jobs.KindBuild, State: jobs.StateSucceeded}); err != nil {
 			t.Fatalf("Upsert %s: %v", id, err)
 		}
 		time.Sleep(1100 * time.Millisecond)
 	}
-	got, err := store.ListForInventory("src/inv1")
+	got, err := store.ListForInventory(t.Context(), "src/inv1")
 	if err != nil {
 		t.Fatalf("ListForInventory: %v", err)
 	}
@@ -76,18 +76,18 @@ func TestStore_ListForInventory_ScopedByInventoryID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inventory.NewStore (re-open): %v", err)
 	}
-	if err := invStore.Upsert(inventory.Info{ID: "src/other", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
+	if err := invStore.Upsert(t.Context(), inventory.Info{ID: "src/other", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
 		t.Fatalf("seed other inventory: %v", err)
 	}
 	for _, j := range []jobs.Job{
 		{ID: "j-mine", InventoryID: "src/inv1", Kind: jobs.KindBuild, State: jobs.StateSucceeded},
 		{ID: "j-theirs", InventoryID: "src/other", Kind: jobs.KindBuild, State: jobs.StateSucceeded},
 	} {
-		if err := store.Upsert(j); err != nil {
+		if err := store.Upsert(t.Context(), j); err != nil {
 			t.Fatalf("Upsert %s: %v", j.ID, err)
 		}
 	}
-	mine, err := store.ListForInventory("src/inv1")
+	mine, err := store.ListForInventory(t.Context(), "src/inv1")
 	if err != nil {
 		t.Fatalf("List mine: %v", err)
 	}
@@ -99,12 +99,12 @@ func TestStore_ListForInventory_ScopedByInventoryID(t *testing.T) {
 func TestStore_LatestForInventory_PicksMostRecent(t *testing.T) {
 	store, _ := storeWithInventory(t, "src/inv1")
 	for _, id := range []jobs.ID{"old", "new"} {
-		if err := store.Upsert(jobs.Job{ID: id, InventoryID: "src/inv1", Kind: jobs.KindBuild, State: jobs.StateSucceeded}); err != nil {
+		if err := store.Upsert(t.Context(), jobs.Job{ID: id, InventoryID: "src/inv1", Kind: jobs.KindBuild, State: jobs.StateSucceeded}); err != nil {
 			t.Fatalf("Upsert %s: %v", id, err)
 		}
 		time.Sleep(1100 * time.Millisecond)
 	}
-	got, err := store.LatestForInventory("src/inv1")
+	got, err := store.LatestForInventory(t.Context(), "src/inv1")
 	if err != nil {
 		t.Fatalf("LatestForInventory: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestStore_LatestForInventory_PicksMostRecent(t *testing.T) {
 
 func TestStore_LatestForInventory_MissingReturnsErrStoreNotFound(t *testing.T) {
 	store, _ := storeWithInventory(t, "src/inv1")
-	_, err := store.LatestForInventory("src/inv1")
+	_, err := store.LatestForInventory(t.Context(), "src/inv1")
 	if !errors.Is(err, jobs.ErrStoreNotFound) {
 		t.Errorf("err = %v, want ErrStoreNotFound", err)
 	}
@@ -131,10 +131,10 @@ func TestStore_GetRoundTripsAllFields(t *testing.T) {
 		BytesTotal: 12345, BytesDone: 12345,
 		StartedAt: started, FinishedAt: finished, Error: "",
 	}
-	if err := store.Upsert(want); err != nil {
+	if err := store.Upsert(t.Context(), want); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
-	got, err := store.Get("j1")
+	got, err := store.Get(t.Context(), "j1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}

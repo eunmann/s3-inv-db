@@ -243,7 +243,7 @@ func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 		// Budget refusal: surface via Manager so the UI can show the
 		// reason next to the row. Don't apply backoff — we want to
 		// retry next tick if budget frees up.
-		_ = a.manager.RecordAutoLoadFailure(id, refused.Error(), time.Time{})
+		_ = a.manager.RecordAutoLoadFailure(ctx, id, refused.Error(), time.Time{})
 		a.logger.Warn().Str("id", string(id)).Err(err).Msg("autoload: budget refused")
 
 		return
@@ -251,7 +251,7 @@ func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 	info, _ := a.manager.Get(id)
 	delay := backoffDelay(a.cfg.MinBackoff, a.cfg.MaxBackoff, info.AutoLoadFailureCount)
 	retryAt := a.now().Add(delay)
-	_ = a.manager.RecordAutoLoadFailure(id, err.Error(), retryAt)
+	_ = a.manager.RecordAutoLoadFailure(ctx, id, err.Error(), retryAt)
 	a.logger.Error().Str("id", string(id)).Time("retry_at", retryAt).Err(err).Msg("autoload: failed; backing off")
 }
 

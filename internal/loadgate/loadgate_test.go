@@ -24,7 +24,7 @@ func newTestGate(capBytes, headroom uint64) (*loadgate.Gate, *inventory.Manager,
 func TestGate_Load_RefusesWhenEstimateOverBudget(t *testing.T) {
 	gate, mgr, _ := newTestGate(100, 0)
 	id := inventory.ID("src/inv/runA")
-	if err := mgr.Register(id, "n", "p"); err != nil {
+	if err := mgr.Register(t.Context(), id, "n", "p"); err != nil {
 		t.Fatal(err)
 	}
 	build := func(_ context.Context, _ inventory.Info) (string, error) {
@@ -42,7 +42,7 @@ func TestGate_Load_RefusesWhenEstimateOverBudget(t *testing.T) {
 func TestGate_Load_ForceBypassesRefusal(t *testing.T) {
 	gate, mgr, _ := newTestGate(100, 0)
 	id := inventory.ID("src/inv/runA")
-	if err := mgr.Register(id, "n", "p"); err != nil {
+	if err := mgr.Register(t.Context(), id, "n", "p"); err != nil {
 		t.Fatal(err)
 	}
 	called := false
@@ -64,7 +64,7 @@ func TestGate_Load_ForceBypassesRefusal(t *testing.T) {
 func TestGate_Load_RefusalCarriesPlan(t *testing.T) {
 	gate, mgr, _ := newTestGate(100, 0)
 	id := inventory.ID("src/inv/runA")
-	if err := mgr.Register(id, "n", "p"); err != nil {
+	if err := mgr.Register(t.Context(), id, "n", "p"); err != nil {
 		t.Fatal(err)
 	}
 	err := gate.Load(context.Background(), id, nil, loadgate.Options{EstimateBytes: 9999, Pin: false})

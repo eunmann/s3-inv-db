@@ -9,7 +9,7 @@ import (
 func TestHydrate_NonLoadedStateKeepsAsIs(t *testing.T) {
 	mgr := inventory.NewManager()
 	info := inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StateNotLoaded}
-	if err := mgr.Hydrate(info, ""); err != nil {
+	if err := mgr.Hydrate(t.Context(), info, ""); err != nil {
 		t.Fatalf("Hydrate: %v", err)
 	}
 	got, ok := mgr.Get("id1")
@@ -25,7 +25,7 @@ func TestHydrate_LoadedStateOpenFailureBecomesError(t *testing.T) {
 	mgr := inventory.NewManager()
 	info := inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StateLoaded}
 	// indexDir doesn't exist on disk → Open will fail.
-	if err := mgr.Hydrate(info, "/nonexistent/index-dir"); err != nil {
+	if err := mgr.Hydrate(t.Context(), info, "/nonexistent/index-dir"); err != nil {
 		t.Fatalf("Hydrate must register even on open failure: %v", err)
 	}
 	got, ok := mgr.Get("id1")
@@ -43,10 +43,10 @@ func TestHydrate_LoadedStateOpenFailureBecomesError(t *testing.T) {
 func TestHydrate_DuplicateID(t *testing.T) {
 	mgr := inventory.NewManager()
 	info := inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StateNotLoaded}
-	if err := mgr.Hydrate(info, ""); err != nil {
+	if err := mgr.Hydrate(t.Context(), info, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.Hydrate(info, ""); err == nil {
+	if err := mgr.Hydrate(t.Context(), info, ""); err == nil {
 		t.Error("second Hydrate must error on duplicate id")
 	}
 }

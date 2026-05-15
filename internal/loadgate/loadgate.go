@@ -57,7 +57,7 @@ func (g *Gate) Load(ctx context.Context, id inventory.ID, build Build, opts Opti
 			continue
 		}
 		prevBytes := info.IndexBytes
-		if err := g.manager.EvictForBudget(victim); err != nil && !errors.Is(err, inventory.ErrInvalidState) {
+		if err := g.manager.EvictForBudget(ctx, victim); err != nil && !errors.Is(err, inventory.ErrInvalidState) {
 			return fmt.Errorf("evict %s: %w", victim, err)
 		}
 		g.tracker.Remove(string(victim), prevBytes)

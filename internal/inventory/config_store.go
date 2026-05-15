@@ -17,8 +17,8 @@ type Config struct {
 	AutoLoad         bool      `json:"auto_load"`
 	RetentionCount   uint32    `json:"retention_count"`
 	PollFailureCount uint32    `json:"poll_failure_count,omitempty"`
-	PollBackoffUntil time.Time `json:"poll_backoff_until,omitempty"`
-	LastPolledAt     time.Time `json:"last_polled_at,omitempty"`
+	PollBackoffUntil time.Time `json:"poll_backoff_until,omitzero"`
+	LastPolledAt     time.Time `json:"last_polled_at,omitzero"`
 	LastPollError    string    `json:"last_poll_error,omitempty"`
 }
 

@@ -139,8 +139,10 @@ func (h *Handlers) ComparePage(w http.ResponseWriter, r *http.Request) {
 	to := inventory.ID(q.Get("to"))
 	prefix := q.Get("prefix")
 	hideUnchanged := q.Get("show_unchanged") != trueLiteral
-	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
-	sortBy, dir := inventory.NormalizeCompareSort(q.Get("sort"), q.Get("dir"))
+	pageParams := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
+	page, pageSize := pageParams.Page, pageParams.Size
+	sortParams := inventory.NormalizeCompareSort(q.Get("sort"), q.Get("dir"))
+	sortBy, dir := sortParams.Col, sortParams.Dir
 
 	opts := compareViewOptions{
 		from: from, to: to, prefix: prefix,
@@ -625,8 +627,10 @@ func (h *Handlers) CompareLevelAPI(w http.ResponseWriter, r *http.Request) {
 	to := inventory.ID(q.Get("to"))
 	prefix := q.Get("prefix")
 	hideUnchanged := q.Get("show_unchanged") != trueLiteral
-	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
-	sortBy, dir := inventory.NormalizeCompareSort(q.Get("sort"), q.Get("dir"))
+	pageParams := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
+	page, pageSize := pageParams.Page, pageParams.Size
+	sortParams := inventory.NormalizeCompareSort(q.Get("sort"), q.Get("dir"))
+	sortBy, dir := sortParams.Col, sortParams.Dir
 
 	if from == "" || to == "" {
 		WriteJSONError(w, http.StatusBadRequest, "from and to are required")
@@ -646,8 +650,8 @@ func (h *Handlers) CompareLevelAPI(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		status, msg := managerErrorStatus(err)
-		WriteJSONError(w, status, msg)
+		resp := managerErrorStatus(err)
+		WriteJSONError(w, resp.Status, resp.Message)
 
 		return
 	}

@@ -39,7 +39,7 @@ func newManager(t *testing.T) (*jobs.Manager, *jobs.Store, *jobs.Bus) {
 	if err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)
 	}
-	if err := invStore.Upsert(inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
+	if err := invStore.Upsert(t.Context(), inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
 		t.Fatalf("seed inventory: %v", err)
 	}
 	store, err := jobs.NewStore(db)
@@ -55,7 +55,7 @@ func waitForState(t *testing.T, store *jobs.Store, id jobs.ID, target jobs.State
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		j, err := store.Get(id)
+		j, err := store.Get(t.Context(), id)
 		if err == nil && j.State == target {
 			return j
 		}
@@ -159,7 +159,7 @@ func TestStore_MarkAborted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)
 	}
-	if err := invStore.Upsert(inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
+	if err := invStore.Upsert(t.Context(), inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
 		t.Fatalf("seed inventory: %v", err)
 	}
 	store, err := jobs.NewStore(db)
@@ -167,11 +167,11 @@ func TestStore_MarkAborted(t *testing.T) {
 		t.Fatalf("NewStore: %v", err)
 	}
 	for _, st := range []jobs.State{jobs.StateRunning, jobs.StateQueued, jobs.StateSucceeded} {
-		if err := store.Upsert(jobs.Job{ID: jobs.ID(st), InventoryID: "src/inv1", Kind: jobs.KindBuild, State: st}); err != nil {
+		if err := store.Upsert(t.Context(), jobs.Job{ID: jobs.ID(st), InventoryID: "src/inv1", Kind: jobs.KindBuild, State: st}); err != nil {
 			t.Fatalf("upsert: %v", err)
 		}
 	}
-	n, err := store.MarkAborted("restart", jobs.StateRunning, jobs.StateQueued)
+	n, err := store.MarkAborted(t.Context(), "restart", jobs.StateRunning, jobs.StateQueued)
 	if err != nil {
 		t.Fatalf("MarkAborted: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestStore_MarkAborted(t *testing.T) {
 		t.Errorf("aborted = %d, want 2", n)
 	}
 	for _, id := range []jobs.ID{"running", "queued"} {
-		j, err := store.Get(id)
+		j, err := store.Get(t.Context(), id)
 		if err != nil {
 			t.Fatalf("Get %s: %v", id, err)
 		}
@@ -187,7 +187,7 @@ func TestStore_MarkAborted(t *testing.T) {
 			t.Errorf("job %s not aborted: %+v", id, j)
 		}
 	}
-	survivor, err := store.Get("succeeded")
+	survivor, err := store.Get(t.Context(), "succeeded")
 	if err != nil {
 		t.Fatalf("Get succeeded: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestManager_ShutdownCancelsLiveJob(t *testing.T) {
 		t.Fatalf("Shutdown: %v", err)
 	}
 
-	final, err := store.Get(job.ID)
+	final, err := store.Get(t.Context(), job.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}

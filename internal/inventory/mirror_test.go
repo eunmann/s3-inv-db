@@ -36,10 +36,10 @@ func openManagerWithStore(t *testing.T) (*inventory.Manager, *inventory.Store) {
 // writes through to the attached Store.
 func TestManager_RegisterMirrorsToStore(t *testing.T) {
 	mgr, store := openManagerWithStore(t)
-	if err := mgr.Register("src/inv1", "src/inv1", "s3://src/manifest.json"); err != nil {
+	if err := mgr.Register(t.Context(), "src/inv1", "src/inv1", "s3://src/manifest.json"); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	got, err := store.Get("src/inv1")
+	got, err := store.Get(t.Context(), "src/inv1")
 	if err != nil {
 		t.Fatalf("store.Get: %v", err)
 	}
@@ -52,27 +52,27 @@ func TestManager_RegisterMirrorsToStore(t *testing.T) {
 // Store too.
 func TestManager_RemoveDeletesFromStore(t *testing.T) {
 	mgr, store := openManagerWithStore(t)
-	if err := mgr.Register("src/inv1", "src/inv1", "u"); err != nil {
+	if err := mgr.Register(t.Context(), "src/inv1", "src/inv1", "u"); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.Remove("src/inv1"); err != nil {
+	if err := mgr.Remove(t.Context(), "src/inv1"); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	_, err := store.Get("src/inv1")
+	_, err := store.Get(t.Context(), "src/inv1")
 	if !errors.Is(err, inventory.ErrStoreNotFound) {
 		t.Errorf("store.Get after Remove err = %v, want ErrStoreNotFound", err)
 	}
 }
 
 // errFakeBuildBroke is the sentinel returned by tests that simulate a
-// build failure path. err113 forbids errors.New at call sites.
+// build failure path. The err113 linter forbids errors.New at call sites.
 var errFakeBuildBroke = errors.New("build broke")
 
 // TestManager_LoadWith_MirrorsErrorState verifies that a build failure
 // is persisted to the store (so the UI shows error after restart).
 func TestManager_LoadWith_MirrorsErrorState(t *testing.T) {
 	mgr, store := openManagerWithStore(t)
-	if err := mgr.Register("src/inv1", "src/inv1", "u"); err != nil {
+	if err := mgr.Register(t.Context(), "src/inv1", "src/inv1", "u"); err != nil {
 		t.Fatal(err)
 	}
 	err := mgr.LoadWith(context.Background(), "src/inv1", func(context.Context, inventory.Info) (string, error) {
@@ -82,7 +82,7 @@ func TestManager_LoadWith_MirrorsErrorState(t *testing.T) {
 		t.Fatal("LoadWith returned nil, want build error")
 	}
 
-	persisted, err := store.Get("src/inv1")
+	persisted, err := store.Get(t.Context(), "src/inv1")
 	if err != nil {
 		t.Fatalf("store.Get: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestManager_LoadWith_MirrorsErrorState(t *testing.T) {
 func TestManager_Hydrate_LoadedWithEmptyDir(t *testing.T) {
 	mgr, _ := openManagerWithStore(t)
 	info := inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateLoaded}
-	if err := mgr.Hydrate(info, ""); err != nil {
+	if err := mgr.Hydrate(t.Context(), info, ""); err != nil {
 		t.Fatalf("Hydrate: %v", err)
 	}
 	got, ok := mgr.Get("src/inv1")

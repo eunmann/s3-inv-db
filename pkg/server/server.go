@@ -172,8 +172,12 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	s.setupRoutes()
-	s.recover(cfg.Logger)
-	s.backfillTracker(cfg.Logger)
+	// Startup-time recovery/backfill are independent of any request — use
+	// a fresh background ctx so SQL calls thread one through to *Context
+	// query variants instead of bare context.Background() at every leaf.
+	startupCtx := context.Background()
+	s.recover(startupCtx, cfg.Logger)
+	s.backfillTracker(startupCtx, cfg.Logger)
 
 	return s, nil
 }
@@ -204,7 +208,7 @@ func (c configRetention) Retention(source, name string) uint32 {
 // backfillTracker walks every currently-loaded inventory and attributes
 // its on-disk size to the budget tracker so post-restart eviction
 // decisions see an accurate baseline.
-func (s *Server) backfillTracker(logger zerolog.Logger) {
+func (s *Server) backfillTracker(ctx context.Context, logger zerolog.Logger) {
 	if s.tracker == nil || s.bldr == nil {
 		return
 	}
@@ -221,9 +225,9 @@ func (s *Server) backfillTracker(logger zerolog.Logger) {
 				continue
 			}
 			dir := s.bldr.CacheDirFor(src, inv, run)
-			if measured, err := budget.MeasureDir(context.Background(), dir); err == nil {
+			if measured, err := budget.MeasureDir(ctx, dir); err == nil {
 				bytes = measured
-				_ = s.invStore.Upsert(infoWithBytes(*info, bytes))
+				_ = s.invStore.Upsert(ctx, infoWithBytes(*info, bytes))
 			} else {
 				logger.Warn().Stringer("id", info.ID).Err(err).Msg("backfill index size")
 			}
@@ -243,15 +247,15 @@ func infoWithBytes(i inventory.Info, bytes uint64) inventory.Info {
 // aborted. Inventories left in the parsing state — meaning a load was
 // in flight when the previous process exited — get flipped to error so
 // the UI shows a Retry. Best-effort: failures are logged, not returned.
-func (s *Server) recover(logger zerolog.Logger) {
-	n, err := s.jobStore.MarkAborted("server restart", jobs.StateQueued, jobs.StateRunning)
+func (s *Server) recover(ctx context.Context, logger zerolog.Logger) {
+	n, err := s.jobStore.MarkAborted(ctx, "server restart", jobs.StateQueued, jobs.StateRunning)
 	if err != nil {
 		logger.Error().Err(err).Msg("mark stale jobs aborted")
 	} else if n > 0 {
 		logger.Info().Int64("count", n).Msg("aborted stale jobs from previous run")
 	}
 
-	infos, err := s.invStore.List()
+	infos, err := s.invStore.List(ctx)
 	if err != nil {
 		logger.Error().Err(err).Msg("list inventories at startup")
 
@@ -274,7 +278,7 @@ func (s *Server) recover(logger zerolog.Logger) {
 				indexDir = s.bldr.CacheDirFor(src, inv, run)
 			}
 		}
-		if err := s.manager.Hydrate(*info, indexDir); err != nil {
+		if err := s.manager.Hydrate(ctx, *info, indexDir); err != nil {
 			logger.Error().Err(err).Stringer("id", info.ID).Msg("hydrate inventory")
 
 			continue

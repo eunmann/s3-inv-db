@@ -132,7 +132,7 @@ func TestAutoLoader_SkipsUserUnloadedRuns(t *testing.T) {
 	// Hydrate an Info that's NotLoaded but carries a UserUnloadedAt
 	// stamp — simulating "user manually unloaded earlier".
 	id := inventory.ID("bkt/inv/2026-01-01T00-00Z")
-	if err := mgr.Hydrate(inventory.Info{
+	if err := mgr.Hydrate(t.Context(), inventory.Info{
 		ID:             id,
 		Name:           "x",
 		Path:           "p",

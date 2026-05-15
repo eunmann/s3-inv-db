@@ -69,9 +69,15 @@ type BrowsePagination struct {
 	NextPage int
 }
 
+// PageParams is the (page, size) pair produced by NormalizePage.
+type PageParams struct {
+	Page int
+	Size int
+}
+
 // NormalizePage clamps page (≥1) and size (1..MaxPageSize) from user
-// input. Returns (page, size).
-func NormalizePage(pageStr, sizeStr string) (int, int) {
+// input.
+func NormalizePage(pageStr, sizeStr string) PageParams {
 	page := 1
 	if v, err := strconv.Atoi(pageStr); err == nil && v >= 1 {
 		page = v
@@ -84,13 +90,20 @@ func NormalizePage(pageStr, sizeStr string) (int, int) {
 		size = MaxPageSize
 	}
 
-	return page, size
+	return PageParams{Page: page, Size: size}
+}
+
+// SortParams is the (column, direction) pair produced by NormalizeSort
+// and NormalizeCompareSort.
+type SortParams struct {
+	Col string
+	Dir string
 }
 
 // NormalizeSort clamps sort/dir from user input to known values.
 // Unknown column → segment. Unknown direction → segment uses asc,
-// others desc. Returns (col, dir).
-func NormalizeSort(sortBy, dir string) (string, string) {
+// others desc.
+func NormalizeSort(sortBy, dir string) SortParams {
 	var col string
 	switch sortBy {
 	case SortColObjects, SortColSize, SortColCost, SortColSegment:
@@ -110,7 +123,7 @@ func NormalizeSort(sortBy, dir string) (string, string) {
 		}
 	}
 
-	return col, direction
+	return SortParams{Col: col, Dir: direction}
 }
 
 // Paginate returns the 1-indexed window for page of total items at pageSize.

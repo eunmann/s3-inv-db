@@ -43,11 +43,11 @@ func TestStore_UpsertRoundTrip(t *testing.T) {
 		HasTierData: true,
 		LoadedAt:    loaded,
 	}
-	if err := s.Upsert(want); err != nil {
+	if err := s.Upsert(t.Context(), want); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	got, err := s.Get("src/inv1")
+	got, err := s.Get(t.Context(), "src/inv1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -60,16 +60,16 @@ func TestStore_UpsertRoundTrip(t *testing.T) {
 func TestStore_UpsertReplacesRow(t *testing.T) {
 	s := openStore(t)
 	first := inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StateNotLoaded}
-	if err := s.Upsert(first); err != nil {
+	if err := s.Upsert(t.Context(), first); err != nil {
 		t.Fatalf("upsert first: %v", err)
 	}
 	first.State = inventory.StateLoaded
 	first.NodeCount = 99
-	if err := s.Upsert(first); err != nil {
+	if err := s.Upsert(t.Context(), first); err != nil {
 		t.Fatalf("upsert second: %v", err)
 	}
 
-	got, err := s.Get("id1")
+	got, err := s.Get(t.Context(), "id1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestStore_UpsertReplacesRow(t *testing.T) {
 		t.Errorf("upsert didn't update: %+v", got)
 	}
 
-	all, err := s.List()
+	all, err := s.List(t.Context())
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestStore_UpsertReplacesRow(t *testing.T) {
 
 func TestStore_GetMissing(t *testing.T) {
 	s := openStore(t)
-	_, err := s.Get("nope")
+	_, err := s.Get(t.Context(), "nope")
 	if !errors.Is(err, inventory.ErrStoreNotFound) {
 		t.Errorf("Get(missing) error = %v, want ErrStoreNotFound", err)
 	}
@@ -97,11 +97,11 @@ func TestStore_GetMissing(t *testing.T) {
 func TestStore_ListInsertionOrder(t *testing.T) {
 	s := openStore(t)
 	for _, id := range []inventory.ID{"c", "a", "b"} {
-		if err := s.Upsert(inventory.Info{ID: id, Name: string(id), Path: "p", State: inventory.StateNotLoaded}); err != nil {
+		if err := s.Upsert(t.Context(), inventory.Info{ID: id, Name: string(id), Path: "p", State: inventory.StateNotLoaded}); err != nil {
 			t.Fatalf("upsert %s: %v", id, err)
 		}
 	}
-	all, err := s.List()
+	all, err := s.List(t.Context())
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -112,17 +112,17 @@ func TestStore_ListInsertionOrder(t *testing.T) {
 
 func TestStore_Delete(t *testing.T) {
 	s := openStore(t)
-	if err := s.Upsert(inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
+	if err := s.Upsert(t.Context(), inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	if err := s.Delete("id1"); err != nil {
+	if err := s.Delete(t.Context(), "id1"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	_, err := s.Get("id1")
+	_, err := s.Get(t.Context(), "id1")
 	if !errors.Is(err, inventory.ErrStoreNotFound) {
 		t.Errorf("Get after Delete: %v, want ErrStoreNotFound", err)
 	}
-	if err := s.Delete("id1"); !errors.Is(err, inventory.ErrStoreNotFound) {
+	if err := s.Delete(t.Context(), "id1"); !errors.Is(err, inventory.ErrStoreNotFound) {
 		t.Errorf("Delete(missing) error = %v, want ErrStoreNotFound", err)
 	}
 }

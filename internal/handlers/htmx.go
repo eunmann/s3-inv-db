@@ -7,7 +7,7 @@ import "net/http"
 // history-restore both set HX-Request, but the user is navigating
 // pages — they need the full layout.
 func wantsHTMXPartial(r *http.Request) bool {
-	return r.Header.Get("HX-Request") == "true" &&
-		r.Header.Get("HX-Boosted") != "true" &&
-		r.Header.Get("HX-History-Restore-Request") != "true"
+	return r.Header.Get("HX-Request") == trueLiteral &&
+		r.Header.Get("HX-Boosted") != trueLiteral &&
+		r.Header.Get("HX-History-Restore-Request") != trueLiteral
 }

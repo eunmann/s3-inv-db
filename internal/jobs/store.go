@@ -25,8 +25,8 @@ func NewStore(db *sql.DB) (*Store, error) {
 }
 
 // Upsert writes j by primary key. UpdatedAt is set to time.Now().
-func (s *Store) Upsert(j Job) error {
-	_, err := s.db.ExecContext(context.Background(), `
+func (s *Store) Upsert(ctx context.Context, j Job) error {
+	_, err := s.db.ExecContext(ctx, `
         INSERT INTO jobs (
             id, inventory_id, kind, state, stage, progress,
             bytes_total, bytes_done, started_at, finished_at,
@@ -55,8 +55,8 @@ func (s *Store) Upsert(j Job) error {
 }
 
 // Get fetches one job by id.
-func (s *Store) Get(id ID) (Job, error) {
-	row := s.db.QueryRowContext(context.Background(), `
+func (s *Store) Get(ctx context.Context, id ID) (Job, error) {
+	row := s.db.QueryRowContext(ctx, `
         SELECT id, inventory_id, kind, state, stage, progress,
                bytes_total, bytes_done, started_at, finished_at,
                error, updated_at
@@ -73,8 +73,8 @@ func (s *Store) Get(id ID) (Job, error) {
 }
 
 // ListForInventory returns jobs for one inventory, newest first.
-func (s *Store) ListForInventory(invID inventory.ID) ([]Job, error) {
-	rows, err := s.db.QueryContext(context.Background(), `
+func (s *Store) ListForInventory(ctx context.Context, invID inventory.ID) ([]Job, error) {
+	rows, err := s.db.QueryContext(ctx, `
         SELECT id, inventory_id, kind, state, stage, progress,
                bytes_total, bytes_done, started_at, finished_at,
                error, updated_at
@@ -89,8 +89,8 @@ func (s *Store) ListForInventory(invID inventory.ID) ([]Job, error) {
 
 // LatestForInventory returns the most recently updated job for an
 // inventory, or ErrStoreNotFound if none exist.
-func (s *Store) LatestForInventory(invID inventory.ID) (Job, error) {
-	row := s.db.QueryRowContext(context.Background(), `
+func (s *Store) LatestForInventory(ctx context.Context, invID inventory.ID) (Job, error) {
+	row := s.db.QueryRowContext(ctx, `
         SELECT id, inventory_id, kind, state, stage, progress,
                bytes_total, bytes_done, started_at, finished_at,
                error, updated_at
@@ -109,14 +109,13 @@ func (s *Store) LatestForInventory(invID inventory.ID) (Job, error) {
 // MarkAborted moves every job in any of the given states to "aborted"
 // and stamps reason in the error column. Used at server boot to clear
 // orphaned in-flight jobs.
-func (s *Store) MarkAborted(reason string, fromStates ...State) (int64, error) {
+func (s *Store) MarkAborted(ctx context.Context, reason string, fromStates ...State) (int64, error) {
 	if len(fromStates) == 0 {
 		return 0, nil
 	}
 	const stmt = `UPDATE jobs SET state = 'aborted', error = ?, finished_at = ?, updated_at = ?
           WHERE state = ?`
 	now := time.Now().Unix()
-	ctx := context.Background()
 	var total int64
 	for _, st := range fromStates {
 		res, err := s.db.ExecContext(ctx, stmt, reason, now, now, string(st))

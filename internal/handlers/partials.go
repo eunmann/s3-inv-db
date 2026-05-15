@@ -31,7 +31,7 @@ func (h *Handlers) LoadInventoryRowPartial(w http.ResponseWriter, r *http.Reques
 // UnloadInventoryRowPartial unloads an inventory and returns its updated row.
 func (h *Handlers) UnloadInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
-	if err := h.manager.Unload(id); err != nil {
+	if err := h.manager.Unload(r.Context(), id); err != nil {
 		respondManagerErrorHTML(w, r, err, "unload inventory")
 
 		return
@@ -43,7 +43,7 @@ func (h *Handlers) UnloadInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 // so htmx's outerHTML swap removes the row.
 func (h *Handlers) DeleteInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
-	if err := h.manager.Remove(id); err != nil && !errors.Is(err, inventory.ErrNotFound) {
+	if err := h.manager.Remove(r.Context(), id); err != nil && !errors.Is(err, inventory.ErrNotFound) {
 		respondManagerErrorHTML(w, r, err, "delete inventory")
 
 		return
@@ -79,7 +79,7 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := h.discovery.PrepareDiscovered(disc); err != nil {
+	if err := h.discovery.PrepareDiscovered(r.Context(), disc); err != nil {
 		respondManagerErrorHTML(w, r, err, "prepare discovered inventory")
 
 		return
@@ -89,7 +89,7 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	// Reject double-submit: if a job is already queued or running for
 	// this inventory, render the row with its current state instead of
 	// spawning a duplicate that will fail with an InvalidState error.
-	if existing, err := h.jobStore.LatestForInventory(composite); err == nil && existing.State.IsLive() {
+	if existing, err := h.jobStore.LatestForInventory(r.Context(), composite); err == nil && existing.State.IsLive() {
 		h.renderDiscoveredRowFrom(w, r, disc)
 
 		return
@@ -140,7 +140,7 @@ func (h *Handlers) UnloadDiscoveredRowPartial(w http.ResponseWriter, r *http.Req
 	run := chi.URLParam(r, "run")
 	composite := inventory.ID(src + "/" + name + "/" + run)
 	logger := zerolog.Ctx(r.Context())
-	if err := h.manager.Unload(composite); err != nil {
+	if err := h.manager.Unload(r.Context(), composite); err != nil {
 		respondManagerErrorHTML(w, r, err, "unload inventory")
 
 		return
@@ -171,7 +171,7 @@ func (h *Handlers) PinDiscoveredRowPartial(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	pinned := parseBoolToggle(r.FormValue("pinned"))
-	if err := h.manager.SetPinned(composite, pinned); err != nil {
+	if err := h.manager.SetPinned(r.Context(), composite, pinned); err != nil {
 		respondManagerErrorHTML(w, r, err, "set pin")
 
 		return
@@ -260,7 +260,7 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if h.jobStore != nil {
-		j, err := h.jobStore.LatestForInventory(disc.CompositeID())
+		j, err := h.jobStore.LatestForInventory(r.Context(), disc.CompositeID())
 		switch {
 		case err == nil:
 			view.LatestJob = &j
@@ -272,7 +272,8 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 				Msg("look up latest job for row render")
 		}
 	}
-	view.CacheBytes, view.CacheBytesH = h.cacheSize(r, disc)
+	cs := h.cacheSize(r, disc)
+	view.CacheBytes, view.CacheBytesH = cs.Bytes, cs.Human
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.renderer.RenderPartial(w, "discovered_row.html", view); err != nil {
 		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render discovered row")
@@ -280,12 +281,18 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+// CacheSize is the raw-bytes / human-formatted pair returned by
+// cacheSize. Both are zero / empty when there's no loader wired, the
+// dir is missing, or the measurement failed.
+type CacheSize struct {
+	Bytes int64
+	Human string
+}
+
 // cacheSize measures the on-disk cache footprint of a single run.
-// Returns (0, "") when there's no loader wired or the dir is missing,
-// otherwise (raw-bytes, human-formatted).
-func (h *Handlers) cacheSize(r *http.Request, disc inventory.Inventory) (int64, string) {
+func (h *Handlers) cacheSize(r *http.Request, disc inventory.Inventory) CacheSize {
 	if h.loader == nil || disc.Run == "" {
-		return 0, ""
+		return CacheSize{}
 	}
 	n, err := h.loader.CacheSizeBytes(disc.SourceBucket, disc.InventoryName, disc.Run)
 	if err != nil {
@@ -295,11 +302,11 @@ func (h *Handlers) cacheSize(r *http.Request, disc inventory.Inventory) (int64, 
 			Str("run", disc.Run).
 			Msg("measure cache size")
 
-		return 0, ""
+		return CacheSize{}
 	}
 	if n <= 0 {
-		return 0, ""
+		return CacheSize{}
 	}
 
-	return n, humanfmt.BytesUint64(uint64(n))
+	return CacheSize{Bytes: n, Human: humanfmt.BytesUint64(uint64(n))}
 }

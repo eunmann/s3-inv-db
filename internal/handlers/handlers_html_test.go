@@ -35,7 +35,7 @@ func newTestFixture(t *testing.T) *testFixture {
 
 func (f *testFixture) registerInventory(t *testing.T, id inventory.ID, name, path string) {
 	t.Helper()
-	if err := f.mgr.Register(id, name, path); err != nil {
+	if err := f.mgr.Register(t.Context(), id, name, path); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 }

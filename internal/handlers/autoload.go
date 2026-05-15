@@ -78,7 +78,7 @@ func (h *Handlers) SetPinAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pinned := parseBoolToggle(r.FormValue("pinned"))
-	if err := h.manager.SetPinned(id, pinned); err != nil {
+	if err := h.manager.SetPinned(r.Context(), id, pinned); err != nil {
 		if errors.Is(err, inventory.ErrNotFound) {
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
 

@@ -114,7 +114,7 @@ func TestServerGracefulShutdown(t *testing.T) {
 	}
 
 	// Register an inventory so Close has something to clear.
-	if err := srv.manager.Register("probe", "Probe", "/no/such/path"); err != nil {
+	if err := srv.manager.Register(t.Context(), "probe", "Probe", "/no/such/path"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
@@ -166,7 +166,7 @@ func TestServerRun_ListenError(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	if err := srv.manager.Register("probe", "Probe", "/no/such/path"); err != nil {
+	if err := srv.manager.Register(t.Context(), "probe", "Probe", "/no/such/path"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 

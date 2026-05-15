@@ -58,10 +58,10 @@ func TestComparePage_PartialMismatchedConfigsReturns400(t *testing.T) {
 func TestComparePage_PartialBothLoadedRequired(t *testing.T) {
 	f := newTestFixture(t)
 	// Register two non-loaded entries with the same configuration.
-	if err := f.mgr.Register("bucket-a/inv-1/run1", "a r1", "/p1"); err != nil {
+	if err := f.mgr.Register(t.Context(), "bucket-a/inv-1/run1", "a r1", "/p1"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if err := f.mgr.Register("bucket-a/inv-1/run2", "a r2", "/p2"); err != nil {
+	if err := f.mgr.Register(t.Context(), "bucket-a/inv-1/run2", "a r2", "/p2"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/compare?from=bucket-a/inv-1/run1&to=bucket-a/inv-1/run2", http.NoBody)

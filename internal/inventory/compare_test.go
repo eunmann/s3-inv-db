@@ -135,7 +135,8 @@ func TestNormalizeCompareSort(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotS, gotD := inventory.NormalizeCompareSort(tc.sort, tc.dir)
+			got := inventory.NormalizeCompareSort(tc.sort, tc.dir)
+			gotS, gotD := got.Col, got.Dir
 			if gotS != tc.wantSort || gotD != tc.wantDir {
 				t.Errorf("inventory.NormalizeCompareSort(%q,%q) = (%q,%q), want (%q,%q)", tc.sort, tc.dir, gotS, gotD, tc.wantSort, tc.wantDir)
 			}

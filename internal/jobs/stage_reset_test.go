@@ -35,7 +35,7 @@ func TestManager_ReportResetsProgressOnStageChange(t *testing.T) {
 
 	// Snapshot after first stage so we don't race the second update.
 	waitForStage(t, store, job.ID, "downloading")
-	mid, err := store.Get(job.ID)
+	mid, err := store.Get(t.Context(), job.ID)
 	if err != nil {
 		t.Fatalf("Get mid: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestManager_ReportResetsProgressOnStageChange(t *testing.T) {
 
 	// Wait for the building snapshot.
 	waitForStage(t, store, job.ID, "building")
-	building, err := store.Get(job.ID)
+	building, err := store.Get(t.Context(), job.ID)
 	if err != nil {
 		t.Fatalf("Get building: %v", err)
 	}
@@ -62,7 +62,7 @@ func waitForStage(t *testing.T, store *jobs.Store, id jobs.ID, stage string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		j, err := store.Get(id)
+		j, err := store.Get(t.Context(), id)
 		if err == nil && j.Stage == stage {
 			return
 		}

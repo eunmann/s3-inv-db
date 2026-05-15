@@ -202,7 +202,7 @@ func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) 
 	}
 
 	id := inventory.ID(req.ID)
-	if err := h.manager.Register(id, req.Name, req.Path); err != nil {
+	if err := h.manager.Register(r.Context(), id, req.Name, req.Path); err != nil {
 		if errors.Is(err, inventory.ErrAlreadyExists) {
 			WriteJSONError(w, http.StatusConflict, "inventory already exists")
 
@@ -278,7 +278,7 @@ func (h *Handlers) LoadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) UnloadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
 
-	if err := h.manager.Unload(id); err != nil {
+	if err := h.manager.Unload(r.Context(), id); err != nil {
 		if errors.Is(err, inventory.ErrNotFound) {
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
 
@@ -309,7 +309,7 @@ func (h *Handlers) UnloadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) DeleteInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
 
-	if err := h.manager.Remove(id); err != nil {
+	if err := h.manager.Remove(r.Context(), id); err != nil {
 		if errors.Is(err, inventory.ErrNotFound) {
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
 
@@ -430,7 +430,7 @@ func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInvent
 		}
 	}
 	if h.jobStore != nil {
-		j, err := h.jobStore.LatestForInventory(v.CompositeID())
+		j, err := h.jobStore.LatestForInventory(r.Context(), v.CompositeID())
 		switch {
 		case err == nil:
 			row.LatestJob = &j
@@ -442,7 +442,8 @@ func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInvent
 				Msg("look up latest job for inventories page")
 		}
 	}
-	row.CacheBytes, row.CacheBytesH = h.cacheSize(r, v.Inventory)
+	cs := h.cacheSize(r, v.Inventory)
+	row.CacheBytes, row.CacheBytesH = cs.Bytes, cs.Human
 
 	return row
 }

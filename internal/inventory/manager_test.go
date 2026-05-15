@@ -15,7 +15,7 @@ func TestManagerRegister(t *testing.T) {
 	m := inventory.NewManager()
 	defer m.Close()
 
-	err := m.Register("test-id", "Test Inventory", "/path/to/index")
+	err := m.Register(t.Context(), "test-id", "Test Inventory", "/path/to/index")
 	if err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
@@ -43,12 +43,12 @@ func TestManagerRegisterDuplicate(t *testing.T) {
 	m := inventory.NewManager()
 	defer m.Close()
 
-	err := m.Register("test-id", "Test Inventory", "/path/to/index")
+	err := m.Register(t.Context(), "test-id", "Test Inventory", "/path/to/index")
 	if err != nil {
 		t.Fatalf("First Register failed: %v", err)
 	}
 
-	err = m.Register("test-id", "Another Name", "/another/path")
+	err = m.Register(t.Context(), "test-id", "Another Name", "/another/path")
 	if !errors.Is(err, inventory.ErrAlreadyExists) {
 		t.Errorf("Second Register error = %v, want %v", err, inventory.ErrAlreadyExists)
 	}
@@ -75,8 +75,8 @@ func TestManagerList(t *testing.T) {
 	}
 
 	// Add some inventories
-	m.Register("id1", "Inventory 1", "/path/1")
-	m.Register("id2", "Inventory 2", "/path/2")
+	m.Register(t.Context(), "id1", "Inventory 1", "/path/1")
+	m.Register(t.Context(), "id2", "Inventory 2", "/path/2")
 
 	list = m.List()
 	if len(list) != 2 {
@@ -98,7 +98,7 @@ func TestManagerUnloadNotFound(t *testing.T) {
 	m := inventory.NewManager()
 	defer m.Close()
 
-	err := m.Unload("nonexistent")
+	err := m.Unload(t.Context(), "nonexistent")
 	if !errors.Is(err, inventory.ErrNotFound) {
 		t.Errorf("Unload error = %v, want %v", err, inventory.ErrNotFound)
 	}
@@ -108,9 +108,9 @@ func TestManagerRemove(t *testing.T) {
 	m := inventory.NewManager()
 	defer m.Close()
 
-	m.Register("test-id", "Test Inventory", "/path/to/index")
+	m.Register(t.Context(), "test-id", "Test Inventory", "/path/to/index")
 
-	err := m.Remove("test-id")
+	err := m.Remove(t.Context(), "test-id")
 	if err != nil {
 		t.Fatalf("Remove failed: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestManagerRemoveNotFound(t *testing.T) {
 	m := inventory.NewManager()
 	defer m.Close()
 
-	err := m.Remove("nonexistent")
+	err := m.Remove(t.Context(), "nonexistent")
 	if !errors.Is(err, inventory.ErrNotFound) {
 		t.Errorf("Remove error = %v, want %v", err, inventory.ErrNotFound)
 	}
@@ -135,7 +135,7 @@ func TestManagerWithIndexNotLoaded(t *testing.T) {
 	m := inventory.NewManager()
 	defer m.Close()
 
-	_ = m.Register("test-id", "Test Inventory", "/path/to/index")
+	_ = m.Register(t.Context(), "test-id", "Test Inventory", "/path/to/index")
 
 	err := m.WithIndex("test-id", func(*indexread.Index) error { return nil })
 	if !errors.Is(err, inventory.ErrNotLoaded) {
@@ -156,7 +156,7 @@ func TestManagerWithIndexNotFound(t *testing.T) {
 func TestManagerWithTwoIndexes_NotFound(t *testing.T) {
 	m := inventory.NewManager()
 	defer m.Close()
-	_ = m.Register("a", "A", "/p")
+	_ = m.Register(t.Context(), "a", "A", "/p")
 
 	err := m.WithTwoIndexes("a", "b", func(*indexread.Index, *indexread.Index) error { return nil })
 	if !errors.Is(err, inventory.ErrNotFound) {
@@ -167,8 +167,8 @@ func TestManagerWithTwoIndexes_NotFound(t *testing.T) {
 func TestManagerWithTwoIndexes_NotLoaded(t *testing.T) {
 	m := inventory.NewManager()
 	defer m.Close()
-	_ = m.Register("a", "A", "/p")
-	_ = m.Register("b", "B", "/q")
+	_ = m.Register(t.Context(), "a", "A", "/p")
+	_ = m.Register(t.Context(), "b", "B", "/q")
 
 	err := m.WithTwoIndexes("a", "b", func(*indexread.Index, *indexread.Index) error { return nil })
 	if !errors.Is(err, inventory.ErrNotLoaded) {
@@ -195,12 +195,12 @@ func TestManagerConcurrent_RegisterListRemove(t *testing.T) {
 			defer wg.Done()
 			for i := range ops {
 				id := inventory.ID(fmt.Sprintf("w%d-i%d", workerID, i))
-				_ = m.Register(id, "name", "/path")
+				_ = m.Register(t.Context(), id, "name", "/path")
 				_, _ = m.Get(id)
 				_ = m.List()
 				_ = m.WithIndex(id, func(*indexread.Index) error { return nil })
-				_ = m.Unload(id)
-				_ = m.Remove(id)
+				_ = m.Unload(t.Context(), id)
+				_ = m.Remove(t.Context(), id)
 			}
 		}(w)
 	}
@@ -223,7 +223,7 @@ func TestManagerConcurrent_LoadRemoveRace(t *testing.T) {
 	// state transitions, not a real index load.
 	const id = "racy"
 	for range 50 {
-		if err := m.Register(id, "n", "/no/such/path"); err != nil {
+		if err := m.Register(t.Context(), id, "n", "/no/such/path"); err != nil {
 			t.Fatalf("register: %v", err)
 		}
 
@@ -235,7 +235,7 @@ func TestManagerConcurrent_LoadRemoveRace(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			_ = m.Remove(id)
+			_ = m.Remove(t.Context(), id)
 		}()
 		wg.Wait()
 

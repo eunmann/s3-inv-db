@@ -89,7 +89,7 @@ func TestInventoryConfigID(t *testing.T) {
 func TestManagerLoad_UsesOpenLocalPath(t *testing.T) {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
-	if err := mgr.Register("inv", "n", "/tmp/this/path/does/not/exist"); err != nil {
+	if err := mgr.Register(t.Context(), "inv", "n", "/tmp/this/path/does/not/exist"); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if err := mgr.Load(context.Background(), "inv"); err == nil {

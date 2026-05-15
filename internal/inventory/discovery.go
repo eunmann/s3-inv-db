@@ -157,7 +157,7 @@ func (s *DiscoveryService) Find(ctx context.Context, src, id, run string) (Inven
 // Manager without performing a build. Each run gets its own composite
 // ID; multiple runs of the same configuration can coexist as independent
 // entries.
-func (s *DiscoveryService) PrepareDiscovered(disc Inventory) error {
+func (s *DiscoveryService) PrepareDiscovered(ctx context.Context, disc Inventory) error {
 	if !s.Enabled() {
 		return ErrDiscoveryDisabled
 	}
@@ -167,7 +167,7 @@ func (s *DiscoveryService) PrepareDiscovered(disc Inventory) error {
 	composite := disc.CompositeID()
 	manifestURI := fmt.Sprintf("s3://%s/%s", s.discoverer.Bucket(), disc.ManifestKey)
 	displayName := fmt.Sprintf("%s/%s @ %s", disc.SourceBucket, disc.InventoryName, disc.Run)
-	if err := s.manager.Register(composite, displayName, manifestURI); err != nil &&
+	if err := s.manager.Register(ctx, composite, displayName, manifestURI); err != nil &&
 		!errors.Is(err, ErrAlreadyExists) {
 		return fmt.Errorf("register: %w", err)
 	}
@@ -208,7 +208,7 @@ func (s *DiscoveryService) loadInternal(ctx context.Context, disc Inventory, onP
 	composite := disc.CompositeID()
 	manifestURI := fmt.Sprintf("s3://%s/%s", s.discoverer.Bucket(), disc.ManifestKey)
 	displayName := fmt.Sprintf("%s/%s @ %s", disc.SourceBucket, disc.InventoryName, disc.Run)
-	if err := s.manager.Register(composite, displayName, manifestURI); err != nil &&
+	if err := s.manager.Register(ctx, composite, displayName, manifestURI); err != nil &&
 		!errors.Is(err, ErrAlreadyExists) {
 		return fmt.Errorf("register: %w", err)
 	}

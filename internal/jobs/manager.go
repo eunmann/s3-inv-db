@@ -86,7 +86,7 @@ func (m *Manager) Submit(invID inventory.ID, kind Kind, work Work) (Job, error) 
 		Kind:        kind,
 		State:       StateQueued,
 	}
-	if err := m.store.Upsert(job); err != nil {
+	if err := m.store.Upsert(ctx, job); err != nil {
 		m.mu.Unlock()
 		cancel()
 
@@ -153,7 +153,7 @@ func (m *Manager) run(ctx context.Context, cancel context.CancelFunc, job Job, w
 
 	job.State = StateRunning
 	job.StartedAt = time.Now()
-	m.persistAndPublish(&job)
+	m.persistAndPublish(ctx, &job)
 
 	// report applies a non-zero diff to the job and broadcasts. A stage
 	// transition resets quantitative progress so the UI doesn't show
@@ -175,7 +175,7 @@ func (m *Manager) run(ctx context.Context, cancel context.CancelFunc, job Job, w
 		if u.BytesDone > 0 {
 			job.BytesDone = u.BytesDone
 		}
-		m.persistAndPublish(&job)
+		m.persistAndPublish(ctx, &job)
 	}
 
 	err := work(ctx, report)
@@ -193,11 +193,13 @@ func (m *Manager) run(ctx context.Context, cancel context.CancelFunc, job Job, w
 		job.State = StateSucceeded
 		job.Progress = 100
 	}
-	m.persistAndPublish(&job)
+	// Final persist must succeed even after ctx is cancelled — that's
+	// how the UI learns the job actually transitioned to cancelled/failed.
+	m.persistAndPublish(context.WithoutCancel(ctx), &job)
 }
 
-func (m *Manager) persistAndPublish(j *Job) {
-	if err := m.store.Upsert(*j); err != nil {
+func (m *Manager) persistAndPublish(ctx context.Context, j *Job) {
+	if err := m.store.Upsert(ctx, *j); err != nil {
 		// Storage failure shouldn't kill the worker, but the operator
 		// needs to know. The job continues; subscribers see the
 		// in-memory state via the bus.

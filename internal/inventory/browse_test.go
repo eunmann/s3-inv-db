@@ -25,7 +25,8 @@ func TestNormalizeSort(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotCol, gotDir := inventory.NormalizeSort(tt.sort, tt.dir)
+			got := inventory.NormalizeSort(tt.sort, tt.dir)
+			gotCol, gotDir := got.Col, got.Dir
 			if gotCol != tt.wantCol {
 				t.Errorf("col = %q, want %q", gotCol, tt.wantCol)
 			}
@@ -160,7 +161,8 @@ func TestNormalizePage(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotP, gotS := inventory.NormalizePage(tt.page, tt.sz)
+			got := inventory.NormalizePage(tt.page, tt.sz)
+			gotP, gotS := got.Page, got.Size
 			if gotP != tt.wantPage || gotS != tt.wantSize {
 				t.Errorf("inventory.NormalizePage(%q,%q) = (%d,%d), want (%d,%d)",
 					tt.page, tt.sz, gotP, gotS, tt.wantPage, tt.wantSize)

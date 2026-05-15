@@ -109,8 +109,8 @@ func (h *Handlers) GetStatsAPI(w http.ResponseWriter, r *http.Request) {
 		return berr
 	})
 	if err != nil {
-		status, msg := managerErrorStatus(err)
-		WriteJSONError(w, status, msg)
+		resp := managerErrorStatus(err)
+		WriteJSONError(w, resp.Status, resp.Message)
 
 		return
 	}
@@ -140,8 +140,8 @@ func (h *Handlers) GetInventoryStatsAPI(w http.ResponseWriter, r *http.Request) 
 		return berr
 	})
 	if err != nil {
-		status, msg := managerErrorStatus(err)
-		WriteJSONError(w, status, msg)
+		resp := managerErrorStatus(err)
+		WriteJSONError(w, resp.Status, resp.Message)
 
 		return
 	}
@@ -230,8 +230,8 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		status, msg := managerErrorStatus(err)
-		WriteJSONError(w, status, msg)
+		resp := managerErrorStatus(err)
+		WriteJSONError(w, resp.Status, resp.Message)
 
 		return
 	}

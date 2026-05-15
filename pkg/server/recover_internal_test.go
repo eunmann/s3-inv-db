@@ -22,7 +22,7 @@ func TestRecover_HydratesPersistedInventories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)
 	}
-	if err := invStore.Upsert(inventory.Info{
+	if err := invStore.Upsert(t.Context(), inventory.Info{
 		ID:    "src/inv1",
 		Name:  "src/inv1",
 		Path:  "s3://src/inv1/manifest.json",
@@ -60,7 +60,7 @@ func TestRecover_FlipsStaleLoadingToError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)
 	}
-	if err := invStore.Upsert(inventory.Info{
+	if err := invStore.Upsert(t.Context(), inventory.Info{
 		ID:    "src/inv1",
 		Name:  "src/inv1",
 		Path:  "u",
@@ -87,7 +87,7 @@ func TestRecover_FlipsStaleLoadingToError(t *testing.T) {
 		t.Error("expected an explanatory error message after stale-loading flip")
 	}
 
-	persisted, err := invStore.Get("src/inv1")
+	persisted, err := invStore.Get(t.Context(), "src/inv1")
 	if err != nil {
 		t.Fatalf("re-read store: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestRecover_MarksStaleJobsAborted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)
 	}
-	if err := invStore.Upsert(inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateLoading}); err != nil {
+	if err := invStore.Upsert(t.Context(), inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateLoading}); err != nil {
 		t.Fatalf("seed inventory: %v", err)
 	}
 	jobStore, err := jobs.NewStore(db)
@@ -113,7 +113,7 @@ func TestRecover_MarksStaleJobsAborted(t *testing.T) {
 		t.Fatalf("jobs.NewStore: %v", err)
 	}
 	for id, state := range map[jobs.ID]jobs.State{"running1": jobs.StateRunning, "queued1": jobs.StateQueued, "ok1": jobs.StateSucceeded} {
-		if err := jobStore.Upsert(jobs.Job{ID: id, InventoryID: "src/inv1", Kind: jobs.KindBuild, State: state}); err != nil {
+		if err := jobStore.Upsert(t.Context(), jobs.Job{ID: id, InventoryID: "src/inv1", Kind: jobs.KindBuild, State: state}); err != nil {
 			t.Fatalf("seed job %s: %v", id, err)
 		}
 	}
@@ -130,7 +130,7 @@ func TestRecover_MarksStaleJobsAborted(t *testing.T) {
 	_ = srv // recover() is called inside New
 
 	for _, id := range []jobs.ID{"running1", "queued1"} {
-		j, err := jobStore.Get(id)
+		j, err := jobStore.Get(t.Context(), id)
 		if err != nil {
 			t.Fatalf("Get %s: %v", id, err)
 		}
@@ -138,7 +138,7 @@ func TestRecover_MarksStaleJobsAborted(t *testing.T) {
 			t.Errorf("job %s state = %s, want aborted", id, j.State)
 		}
 	}
-	survivor, err := jobStore.Get("ok1")
+	survivor, err := jobStore.Get(t.Context(), "ok1")
 	if err != nil {
 		t.Fatalf("Get ok1: %v", err)
 	}

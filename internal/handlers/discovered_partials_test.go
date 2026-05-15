@@ -21,8 +21,9 @@ import (
 )
 
 // Sentinel errors for fake S3 / build failures used across multiple
-// table tests. err113 forbids errors.New("...") at call sites; use
-// these wrapped via fmt.Errorf when callers need context.
+// table tests. The err113 linter forbids errors.New("...") at call
+// sites, so the sentinels are wrapped via fmt.Errorf where the caller
+// needs to add context.
 var (
 	errFakeS3Throttled = errors.New("s3: throttled")
 	errFakeNetwork     = errors.New("network broken")
@@ -103,7 +104,7 @@ func waitForJobInState(t *testing.T, store *jobs.Store, invID inventory.ID, stat
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		js, err := store.ListForInventory(invID)
+		js, err := store.ListForInventory(t.Context(), invID)
 		if err == nil {
 			for i := range js {
 				if js[i].State == state {

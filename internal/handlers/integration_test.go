@@ -47,7 +47,7 @@ func buildLoadedTestHandlers(t *testing.T) *handlers.Handlers {
 	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
 
 	indexPath := filepath.Join(tmp, "inv-001")
-	if err := mgr.Register("loaded", "Loaded", indexPath); err != nil {
+	if err := mgr.Register(t.Context(), "loaded", "Loaded", indexPath); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	if err := mgr.Load(context.Background(), "loaded"); err != nil {
@@ -357,7 +357,7 @@ func TestLoadInventoryAPI_BadPath(t *testing.T) {
 	}
 	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
 
-	if err := mgr.Register("bad", "Bad", "/nonexistent/path/that/does/not/exist"); err != nil {
+	if err := mgr.Register(t.Context(), "bad", "Bad", "/nonexistent/path/that/does/not/exist"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
@@ -402,7 +402,7 @@ func TestManagerWithIndex_NoUseAfterCloseUnderUnload(t *testing.T) {
 
 	const id = "racy"
 	indexPath := filepath.Join(tmp, "inv-001")
-	if err := mgr.Register(id, "Racy", indexPath); err != nil {
+	if err := mgr.Register(t.Context(), id, "Racy", indexPath); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	if err := mgr.Load(context.Background(), id); err != nil {
@@ -416,7 +416,7 @@ func TestManagerWithIndex_NoUseAfterCloseUnderUnload(t *testing.T) {
 	go func() {
 		// Flap the inventory state under the readers.
 		for range iters {
-			_ = mgr.Unload(id)
+			_ = mgr.Unload(t.Context(), id)
 			_ = mgr.Load(context.Background(), id)
 		}
 		close(done)
@@ -503,7 +503,7 @@ func TestCompareLevelAPI_Integration_HappyPath(t *testing.T) {
 
 	indexPath := filepath.Join(tmp, "inv-001")
 	for _, id := range []inventory.ID{"src/inv/runA", "src/inv/runB"} {
-		if err := mgr.Register(id, string(id), indexPath); err != nil {
+		if err := mgr.Register(t.Context(), id, string(id), indexPath); err != nil {
 			t.Fatalf("register %s: %v", id, err)
 		}
 		if err := mgr.Load(context.Background(), id); err != nil {

@@ -9,7 +9,8 @@ import (
 )
 
 // errFakeS3Throttled is the sentinel returned by tests that simulate
-// a throttled S3 listing. err113 forbids errors.New at call sites.
+// a throttled S3 listing. The err113 linter forbids errors.New at call
+// sites so the sentinel is package-private.
 var errFakeS3Throttled = errors.New("s3: throttled")
 
 // fakeDiscoverer is a minimal stub for the inventory.Discoverer interface that
@@ -105,7 +106,7 @@ func TestDiscoveryService_ListMergesWithManagerState(t *testing.T) {
 	// Pre-load the manager with state for one of the inventories we'll
 	// surface via the discoverer. The merge should preserve that state
 	// instead of returning the default inventory.StateNotLoaded for known IDs.
-	if err := mgr.Register("bucket-a/inv-1", "Pre-registered", "/path"); err != nil {
+	if err := mgr.Register(t.Context(), "bucket-a/inv-1", "Pre-registered", "/path"); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -151,7 +152,7 @@ func TestDiscoveryService_ListPropagatesDiscovererError(t *testing.T) {
 func TestDiscoveryService_PrepareDiscovered_DisabledReturnsErr(t *testing.T) {
 	s := inventory.NewDiscoveryService(inventory.NewManager(), nil, nil)
 	disc := inventory.Inventory{SourceBucket: "b", InventoryName: "i", Run: "r", ManifestKey: "k"}
-	if err := s.PrepareDiscovered(disc); !errors.Is(err, inventory.ErrDiscoveryDisabled) {
+	if err := s.PrepareDiscovered(t.Context(), disc); !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("PrepareDiscovered err = %v, want inventory.ErrDiscoveryDisabled", err)
 	}
 }
@@ -161,7 +162,7 @@ func TestDiscoveryService_PrepareDiscovered_NoRunRejects(t *testing.T) {
 	t.Cleanup(func() { _ = mgr.Close() })
 	s := inventory.NewDiscoveryService(mgr, &fakeDiscoverer{bucket: "dst"}, &fakeBuilder{})
 	disc := inventory.Inventory{SourceBucket: "b", InventoryName: "i"}
-	err := s.PrepareDiscovered(disc)
+	err := s.PrepareDiscovered(t.Context(), disc)
 	if err == nil {
 		t.Fatal("PrepareDiscovered with empty Run returned nil")
 	}
@@ -178,7 +179,7 @@ func TestDiscoveryService_PrepareDiscovered_RegistersInManager(t *testing.T) {
 		SourceBucket: "b", InventoryName: "i", Run: "2026-05-13",
 		ManifestKey: "k/manifest.json",
 	}
-	if err := s.PrepareDiscovered(disc); err != nil {
+	if err := s.PrepareDiscovered(t.Context(), disc); err != nil {
 		t.Fatalf("PrepareDiscovered: %v", err)
 	}
 	got, ok := mgr.Get(disc.CompositeID())
@@ -201,10 +202,10 @@ func TestDiscoveryService_PrepareDiscovered_AlreadyExistsIsIdempotent(t *testing
 		SourceBucket: "b", InventoryName: "i", Run: "2026-05-13",
 		ManifestKey: "k/manifest.json",
 	}
-	if err := s.PrepareDiscovered(disc); err != nil {
+	if err := s.PrepareDiscovered(t.Context(), disc); err != nil {
 		t.Fatalf("first PrepareDiscovered: %v", err)
 	}
-	if err := s.PrepareDiscovered(disc); err != nil {
+	if err := s.PrepareDiscovered(t.Context(), disc); err != nil {
 		t.Errorf("second PrepareDiscovered: %v, want nil", err)
 	}
 }

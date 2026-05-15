@@ -18,7 +18,7 @@ func TestListConfigurationsAPI_DiscoveryDisabled(t *testing.T) {
 	f := newTestFixture(t)
 	// Two runs of one configuration + a legacy two-part entry.
 	for _, id := range []inventory.ID{"src-a/inv-1/2026-05-13T03-00Z", "src-a/inv-1/2026-05-12T03-00Z", "src-a/inv-2/2026-05-13T03-00Z"} {
-		if err := f.mgr.Register(id, string(id), "/p"); err != nil {
+		if err := f.mgr.Register(t.Context(), id, string(id), "/p"); err != nil {
 			t.Fatalf("register %s: %v", id, err)
 		}
 	}
@@ -76,7 +76,7 @@ func TestBrowseLevelAPI_NotFound(t *testing.T) {
 
 func TestBrowseLevelAPI_NotLoaded(t *testing.T) {
 	f := newTestFixture(t)
-	if err := f.mgr.Register("inv1", "n", "/p"); err != nil {
+	if err := f.mgr.Register(t.Context(), "inv1", "n", "/p"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/browse?inventory_id=inv1", http.NoBody)
@@ -112,10 +112,10 @@ func TestCompareLevelAPI_MismatchedConfigurations(t *testing.T) {
 
 func TestCompareLevelAPI_NotLoaded(t *testing.T) {
 	f := newTestFixture(t)
-	if err := f.mgr.Register("a/b/1", "n1", "/p1"); err != nil {
+	if err := f.mgr.Register(t.Context(), "a/b/1", "n1", "/p1"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if err := f.mgr.Register("a/b/2", "n2", "/p2"); err != nil {
+	if err := f.mgr.Register(t.Context(), "a/b/2", "n2", "/p2"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/compare?from=a/b/1&to=a/b/2", http.NoBody)

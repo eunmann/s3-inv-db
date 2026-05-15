@@ -43,8 +43,8 @@ func statusOrder(s CompareStatus) int {
 // NormalizeCompareSort clamps sort/dir from user input to the compare
 // view's known sort columns. Unknown column falls back to "" which the
 // handler treats as the "biggest absolute byte mover" default —
-// preserves the current first-visit experience. Returns (col, dir).
-func NormalizeCompareSort(sortBy, dir string) (string, string) {
+// preserves the current first-visit experience.
+func NormalizeCompareSort(sortBy, dir string) SortParams {
 	var col string
 	switch sortBy {
 	case SortColSegment, SortColObjects, SortColSize, SortColCost, SortColCompareStatus:
@@ -64,7 +64,7 @@ func NormalizeCompareSort(sortBy, dir string) (string, string) {
 		}
 	}
 
-	return col, direction
+	return SortParams{Col: col, Dir: direction}
 }
 
 // CompareSortLinks builds the per-column {sort, dir, indicator} bundle

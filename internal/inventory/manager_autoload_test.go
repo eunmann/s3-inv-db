@@ -11,19 +11,19 @@ import (
 func TestManagerSetPinned(t *testing.T) {
 	m := inventory.NewManager()
 	const id = "src/inv/runA"
-	if err := m.Register(id, "n", "p"); err != nil {
+	if err := m.Register(t.Context(), id, "n", "p"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	if info, _ := m.Get(id); info.Pinned {
 		t.Fatal("freshly registered run should not be pinned")
 	}
-	if err := m.SetPinned(id, true); err != nil {
+	if err := m.SetPinned(t.Context(), id, true); err != nil {
 		t.Fatalf("SetPinned true: %v", err)
 	}
 	if info, _ := m.Get(id); !info.Pinned {
 		t.Error("Pinned not set after SetPinned(true)")
 	}
-	if err := m.SetPinned(id, false); err != nil {
+	if err := m.SetPinned(t.Context(), id, false); err != nil {
 		t.Fatalf("SetPinned false: %v", err)
 	}
 	if info, _ := m.Get(id); info.Pinned {
@@ -33,7 +33,7 @@ func TestManagerSetPinned(t *testing.T) {
 
 func TestManagerSetPinned_NotFound(t *testing.T) {
 	m := inventory.NewManager()
-	if err := m.SetPinned("nope", true); !errors.Is(err, inventory.ErrNotFound) {
+	if err := m.SetPinned(t.Context(), "nope", true); !errors.Is(err, inventory.ErrNotFound) {
 		t.Errorf("SetPinned on unknown id = %v, want inventory.ErrNotFound", err)
 	}
 }
@@ -41,11 +41,11 @@ func TestManagerSetPinned_NotFound(t *testing.T) {
 func TestManagerRecordAutoLoadFailure(t *testing.T) {
 	m := inventory.NewManager()
 	const id = "src/inv/run1"
-	if err := m.Register(id, "n", "p"); err != nil {
+	if err := m.Register(t.Context(), id, "n", "p"); err != nil {
 		t.Fatal(err)
 	}
 	retry := time.Now().Add(5 * time.Minute)
-	if err := m.RecordAutoLoadFailure(id, "boom", retry); err != nil {
+	if err := m.RecordAutoLoadFailure(t.Context(), id, "boom", retry); err != nil {
 		t.Fatalf("RecordAutoLoadFailure: %v", err)
 	}
 	info, _ := m.Get(id)
@@ -60,7 +60,7 @@ func TestManagerRecordAutoLoadFailure(t *testing.T) {
 	}
 
 	// Subsequent failure increments, not doubles.
-	if err := m.RecordAutoLoadFailure(id, "again", retry); err != nil {
+	if err := m.RecordAutoLoadFailure(t.Context(), id, "again", retry); err != nil {
 		t.Fatalf("second RecordAutoLoadFailure: %v", err)
 	}
 	if info, _ := m.Get(id); info.AutoLoadFailureCount != 2 {
@@ -71,7 +71,7 @@ func TestManagerRecordAutoLoadFailure(t *testing.T) {
 func TestManagerTouchAccessed_InMemoryOnly(t *testing.T) {
 	m := inventory.NewManager()
 	const id = "src/inv/run1"
-	if err := m.Register(id, "n", "p"); err != nil {
+	if err := m.Register(t.Context(), id, "n", "p"); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := m.Get(id)
@@ -93,7 +93,7 @@ func TestManagerEvictForBudget_PreservesUserUnloadedAt(t *testing.T) {
 	// reload the run later if a newer one appears.
 	m := inventory.NewManager()
 	const id = "src/inv/run1"
-	if err := m.Hydrate(inventory.Info{
+	if err := m.Hydrate(t.Context(), inventory.Info{
 		ID:         id,
 		Name:       "n",
 		Path:       "p",
@@ -104,7 +104,7 @@ func TestManagerEvictForBudget_PreservesUserUnloadedAt(t *testing.T) {
 	}
 	// EvictForBudget on a non-loaded inventory returns ErrInvalidState,
 	// which is the documented behaviour — callers (loadgate) ignore it.
-	err := m.EvictForBudget(id)
+	err := m.EvictForBudget(t.Context(), id)
 	if err == nil {
 		t.Fatal("EvictForBudget on non-loaded inventory should error")
 	}
