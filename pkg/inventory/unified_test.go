@@ -392,6 +392,112 @@ func TestParquetInventoryReader_LargeRowGroups(t *testing.T) {
 	}
 }
 
+// S3PascalCaseRecord mirrors what AWS S3 Inventory actually publishes
+// for Parquet exports: PascalCase column names that match the CSV
+// FileSchema convention, not the snake_case our older test record used.
+// Regression coverage for the silent-drop bug that left StorageClass
+// and IntelligentTieringAccessTier at -1 whenever the producer's
+// column naming didn't match the hardcoded lowercase strings.
+type S3PascalCaseRecord struct {
+	Key                          string `parquet:"Key"`
+	Size                         int64  `parquet:"Size"`
+	StorageClass                 string `parquet:"StorageClass,optional"`
+	IntelligentTieringAccessTier string `parquet:"IntelligentTieringAccessTier,optional"`
+}
+
+func TestParquetInventoryReader_DetectsPascalCaseColumns(t *testing.T) {
+	dir := t.TempDir()
+	parquetPath := filepath.Join(dir, "pascal.parquet")
+	rows := []S3PascalCaseRecord{
+		{Key: testKeyABC, Size: 100, StorageClass: "STANDARD", IntelligentTieringAccessTier: "FREQUENT"},
+		{Key: testKeyDE, Size: 200, StorageClass: "INTELLIGENT_TIERING", IntelligentTieringAccessTier: "INFREQUENT"},
+	}
+	if err := parquet.WriteFile(parquetPath, rows); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	f, err := os.Open(parquetPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+
+	reader, err := inventory.NewParquetInventoryReaderFromReaderAt(f, info.Size())
+	if err != nil {
+		t.Fatalf("NewParquetInventoryReaderFromReaderAt: %v", err)
+	}
+	defer reader.Close()
+
+	got := make([]inventory.Row, 0, len(rows))
+	for {
+		row, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+		got = append(got, row)
+	}
+	if len(got) != len(rows) {
+		t.Fatalf("len(rows) = %d, want %d", len(got), len(rows))
+	}
+	for i, want := range rows {
+		if got[i].Key != want.Key {
+			t.Errorf("row %d Key = %q, want %q", i, got[i].Key, want.Key)
+		}
+		if got[i].StorageClass != want.StorageClass {
+			t.Errorf("row %d StorageClass = %q, want %q (silent drop regression)", i, got[i].StorageClass, want.StorageClass)
+		}
+		if got[i].AccessTier != want.IntelligentTieringAccessTier {
+			t.Errorf("row %d AccessTier = %q, want %q (silent drop regression)", i, got[i].AccessTier, want.IntelligentTieringAccessTier)
+		}
+	}
+}
+
+// S3MixedCaseRecord checks a worst-case producer that mixes naming
+// styles in a single schema. The canonicaliser should still find every
+// column.
+type S3MixedCaseRecord struct {
+	Key          string `parquet:"key"`                    // lowercase
+	Size         int64  `parquet:"SIZE"`                   // uppercase
+	StorageClass string `parquet:"storage_class,optional"` // snake_case
+}
+
+func TestParquetInventoryReader_DetectsMixedCaseColumns(t *testing.T) {
+	dir := t.TempDir()
+	parquetPath := filepath.Join(dir, "mixed.parquet")
+	rows := []S3MixedCaseRecord{
+		{Key: testKeyABC, Size: 100, StorageClass: "STANDARD"},
+	}
+	if err := parquet.WriteFile(parquetPath, rows); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	f, err := os.Open(parquetPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+	info, _ := f.Stat()
+	reader, err := inventory.NewParquetInventoryReaderFromReaderAt(f, info.Size())
+	if err != nil {
+		t.Fatalf("NewParquetInventoryReaderFromReaderAt: %v", err)
+	}
+	defer reader.Close()
+
+	row, err := reader.Next()
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if row.Key != testKeyABC || row.Size != 100 || row.StorageClass != "STANDARD" {
+		t.Errorf("row = %+v, want Key=%s Size=100 StorageClass=STANDARD", row, testKeyABC)
+	}
+}
+
 // Benchmark functions
 
 func BenchmarkCSVInventoryReader(b *testing.B) {

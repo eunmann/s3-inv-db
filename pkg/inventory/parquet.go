@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/parquet-go/parquet-go"
 )
@@ -183,6 +184,15 @@ func NewParquetInventoryReaderWithConfig(r io.ReadCloser, size int64, cfg Parque
 }
 
 // detectParquetSchema detects column indices from the Parquet schema.
+// Column names are matched case-insensitively after stripping underscores
+// so AWS's PascalCase ("Key", "StorageClass") and the snake_case form
+// ("key", "storage_class") that some other producers emit both work.
+//
+// Without normalisation, a Parquet inventory whose schema differs in
+// case from the four hardcoded strings would silently drop the
+// StorageClass / IntelligentTieringAccessTier columns (KeyCol/SizeCol
+// failure is a hard error; tier columns silently default to -1), so
+// every tier bucket would collapse to "unknown" with no error surfaced.
 func detectParquetSchema(schema *parquet.Schema) (ParquetReaderConfig, error) {
 	cfg := ParquetReaderConfig{
 		KeyCol:        -1,
@@ -191,17 +201,15 @@ func detectParquetSchema(schema *parquet.Schema) (ParquetReaderConfig, error) {
 		AccessTierCol: -1,
 	}
 
-	fields := schema.Fields()
-	for i, field := range fields {
-		name := field.Name()
-		switch name {
+	for i, field := range schema.Fields() {
+		switch canonicalColumnName(field.Name()) {
 		case "key":
 			cfg.KeyCol = i
 		case "size":
 			cfg.SizeCol = i
-		case "storage_class":
+		case "storageclass":
 			cfg.StorageCol = i
-		case "intelligent_tiering_access_tier":
+		case "intelligenttieringaccesstier":
 			cfg.AccessTierCol = i
 		}
 	}
@@ -214,6 +222,15 @@ func detectParquetSchema(schema *parquet.Schema) (ParquetReaderConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// canonicalColumnName normalises a manifest/parquet column name to
+// lowercase with underscores stripped. The CSV reader already does
+// the same on its header row (pkg/inventory/reader.go); this keeps
+// the Parquet path consistent so both formats accept any reasonable
+// naming convention a producer publishes.
+func canonicalColumnName(name string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), "_", "")
 }
 
 // newParquetReader creates a parquetInventoryReader from an open file.
