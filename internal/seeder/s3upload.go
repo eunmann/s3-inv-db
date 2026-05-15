@@ -126,6 +126,80 @@ func UploadInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S
 	}, nil
 }
 
+// UploadMultiChunkInventory generates `cfg.Objects` synthetic objects,
+// splits them into numChunks equal-ish slices, uploads each slice as
+// its own .csv.gz data file, and writes a manifest pointing at all of
+// them. Useful for benchmarks that need to exercise the build pipeline's
+// chunk-level parallelism. NumChunks must be >= 1; values >= the
+// generated object count fall back to one file per object.
+func UploadMultiChunkInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S3Config, index int, seed int64, runStamp time.Time, numChunks int) (InventoryInfo, error) {
+	if numChunks < 1 {
+		numChunks = 1
+	}
+	invID := fmt.Sprintf("inv-%03d", index)
+	name := fmt.Sprintf("Seed Inventory %d (multi-chunk)", index)
+
+	genCfg := getGeneratorConfig(cfg.Preset, cfg.Objects)
+	genCfg.Seed = seed
+	gen := benchutil.NewGenerator(genCfg)
+	objects := gen.Generate()
+	if numChunks > len(objects) {
+		numChunks = len(objects)
+	}
+
+	stamp := runStamp.UTC().Format("2006-01-02T15-04Z")
+	manifestKey := fmt.Sprintf("%s%s/%s/%s/manifest.json", s3cfg.Prefix, s3cfg.SrcBucket, invID, stamp)
+	checksumKey := fmt.Sprintf("%s%s/%s/%s/manifest.checksum", s3cfg.Prefix, s3cfg.SrcBucket, invID, stamp)
+
+	files := make([]map[string]any, 0, numChunks)
+	chunkSize := (len(objects) + numChunks - 1) / numChunks
+	for chunk := range numChunks {
+		start := chunk * chunkSize
+		end := min(start+chunkSize, len(objects))
+		payload, err := encodeCSVGz(s3cfg.SrcBucket, objects[start:end])
+		if err != nil {
+			return InventoryInfo{}, fmt.Errorf("encode chunk %d: %w", chunk, err)
+		}
+		dataKey := fmt.Sprintf("%s%s/%s/data/%s-chunk-%04d.csv.gz", s3cfg.Prefix, s3cfg.SrcBucket, invID, runStampUUID(runStamp, index), chunk)
+		if err := putObject(ctx, client, s3cfg.Bucket, dataKey, payload.Body, "application/gzip"); err != nil {
+			return InventoryInfo{}, fmt.Errorf("upload chunk %d: %w", chunk, err)
+		}
+		files = append(files, map[string]any{
+			"key":         dataKey,
+			"size":        payload.Size,
+			"MD5checksum": md5Hex(payload.Body),
+		})
+	}
+
+	manifest := map[string]any{
+		"sourceBucket":      s3cfg.SrcBucket,
+		"destinationBucket": "arn:aws:s3:::" + s3cfg.Bucket,
+		"version":           "2016-11-30",
+		"creationTimestamp": strconv.FormatInt(runStamp.UnixMilli(), 10),
+		"fileFormat":        "CSV",
+		"fileSchema":        "Bucket, Key, Size, LastModifiedDate, ETag, StorageClass, IntelligentTieringAccessTier",
+		"files":             files,
+	}
+	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return InventoryInfo{}, fmt.Errorf("marshal manifest: %w", err)
+	}
+	if err := putObject(ctx, client, s3cfg.Bucket, manifestKey, manifestJSON, "application/json"); err != nil {
+		return InventoryInfo{}, fmt.Errorf("upload manifest: %w", err)
+	}
+	if err := putObject(ctx, client, s3cfg.Bucket, checksumKey, []byte(md5Hex(manifestJSON)), "text/plain"); err != nil {
+		return InventoryInfo{}, fmt.Errorf("upload checksum: %w", err)
+	}
+
+	return InventoryInfo{
+		ID:       invID,
+		Name:     name,
+		Path:     fmt.Sprintf("s3://%s/%s", s3cfg.Bucket, manifestKey),
+		Objects:  cfg.Objects,
+		Prefixes: 0,
+	}, nil
+}
+
 // csvGzPayload is the gzipped CSV body plus its on-the-wire byte size
 // (used to populate the manifest's `size` field). The two values are
 // always produced together so a struct is more honest than a tuple.
