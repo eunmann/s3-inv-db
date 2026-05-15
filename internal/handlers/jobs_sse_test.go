@@ -86,7 +86,7 @@ func TestJobsStream_PushesEvents(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	work := make(chan struct{})
-	job, err := mgr.Submit("src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
+	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
 		<-work
 
 		return nil

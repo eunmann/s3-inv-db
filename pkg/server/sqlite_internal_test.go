@@ -13,7 +13,7 @@ import (
 // test catches it before production does.
 func TestOpenStateDB_AppliesPragmas(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
-	db, err := OpenStateDB(path)
+	db, err := OpenStateDB(t.Context(), path)
 	if err != nil {
 		t.Fatalf("OpenStateDB: %v", err)
 	}

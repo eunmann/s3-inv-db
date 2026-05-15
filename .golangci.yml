@@ -40,7 +40,9 @@ linters:
       excludes:
         - G104 # errcheck already covers unchecked errors and gives better context
         - G115 # integer overflow conversion is excessively noisy; reviewed by hand at conversion sites
+        - G401 # MD5 is the wire-protocol checksum mandated by AWS S3 Inventory; replacing it would produce inventories the AWS tooling rejects
         - G404 # math/rand is fine for synthetic data and non-crypto IDs
+        - G501 # see G401 — the blocklisted crypto/md5 import is the same constraint
     mnd:
       ignored-numbers:
         - "0"

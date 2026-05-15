@@ -46,7 +46,7 @@ func TestNewServer(t *testing.T) {
 		DB:         testDB(t),
 	}
 
-	srv, err := New(cfg)
+	srv, err := New(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -68,7 +68,7 @@ func TestServerAPIRoutes(t *testing.T) {
 		DB:         testDB(t),
 	}
 
-	srv, err := New(cfg)
+	srv, err := New(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -108,7 +108,7 @@ func TestServerGracefulShutdown(t *testing.T) {
 		DB:         testDB(t),
 	}
 
-	srv, err := New(cfg)
+	srv, err := New(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -161,7 +161,7 @@ func TestServerRun_ListenError(t *testing.T) {
 		DB:         testDB(t),
 	}
 
-	srv, err := New(cfg)
+	srv, err := New(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -191,7 +191,7 @@ func TestServerRun_ListenError(t *testing.T) {
 
 func TestSameOriginMiddleware_RejectsCrossOriginMutation(t *testing.T) {
 	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: testDB(t)}
-	srv, err := New(cfg)
+	srv, err := New(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestSameOriginMiddleware_RejectsCrossOriginMutation(t *testing.T) {
 
 func TestSameOriginMiddleware_AllowsSameOriginMutation(t *testing.T) {
 	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: testDB(t)}
-	srv, err := New(cfg)
+	srv, err := New(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestSameOriginMiddleware_AllowsSameOriginMutation(t *testing.T) {
 
 func TestSameOriginMiddleware_AllowsNoOrigin(t *testing.T) {
 	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: testDB(t)}
-	srv, err := New(cfg)
+	srv, err := New(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestSameOriginMiddleware_AllowsNoOrigin(t *testing.T) {
 
 func TestSameOriginMiddleware_DoesNotBlockReads(t *testing.T) {
 	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: testDB(t)}
-	srv, err := New(cfg)
+	srv, err := New(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestSameOrigin_HostInPath(t *testing.T) {
 
 func TestSameOriginMiddleware_ReadsBypassOriginCheck(t *testing.T) {
 	cfg := Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: testDB(t)}
-	srv, err := New(cfg)
+	srv, err := New(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

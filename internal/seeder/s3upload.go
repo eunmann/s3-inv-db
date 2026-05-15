@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/md5" //nolint:gosec // MD5 is required by the S3 Inventory manifest spec
+	"crypto/md5" // MD5 is mandated by the AWS S3 Inventory manifest spec.
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
@@ -233,7 +233,7 @@ func putObject(ctx context.Context, client *s3.Client, bucket, key string, body 
 }
 
 func md5Hex(b []byte) string {
-	sum := md5.Sum(b) //nolint:gosec // mandated by manifest spec
+	sum := md5.Sum(b)
 
 	return hex.EncodeToString(sum[:])
 }

@@ -4,6 +4,8 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/rs/zerolog/log"
 )
 
 // errorBody is the JSON shape returned for non-2xx API responses. Success
@@ -14,11 +16,16 @@ type errorBody struct {
 }
 
 // WriteJSON writes data as a JSON response with the given status code.
+// The response headers have already been committed by the time the
+// encoder runs, so a write failure (typically a dropped client
+// connection) can't be propagated — it's logged at debug level so it
+// doesn't fill server logs but stays diagnosable.
 func WriteJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	//nolint:errchkjson // a closed/dropped connection is handled by the HTTP server
-	_ = json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Debug().Err(err).Int("status", status).Msg("write JSON response")
+	}
 }
 
 // WriteJSONError writes a JSON error response of the shape `{"error":"…"}`.

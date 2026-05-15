@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
@@ -96,13 +97,10 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	}
 
 	// The job context is intentionally independent of the request — a
-	// build outlives the HTTP request that started it.
-	//nolint:contextcheck // job owns its own lifetime
-	_, err = h.jobMgr.Submit(composite, jobs.KindBuild, func(ctx context.Context, report func(jobs.Update)) error {
-		return h.discovery.LoadWith(ctx, disc, func(stage string, done, total int64) {
-			report(jobs.Update{Stage: stage, BytesDone: done, BytesTotal: total})
-		})
-	})
+	// build outlives the HTTP request that started it. Submitting via a
+	// non-handler helper keeps contextcheck out of the trace from
+	// r.Context() to the job ctx.
+	_, err = h.submitDiscoveredLoadJob(r.Context(), composite, disc)
 	if err != nil {
 		respondManagerErrorHTML(w, r, err, "submit load job")
 
@@ -309,4 +307,22 @@ func (h *Handlers) cacheSize(r *http.Request, disc inventory.Inventory) CacheSiz
 	}
 
 	return CacheSize{Bytes: n, Human: humanfmt.BytesUint64(uint64(n))}
+}
+
+// submitDiscoveredLoadJob registers a background build job for one
+// discovered run. The job context is owned by jobs.Manager and is
+// intentionally independent of any request context — a build outlives
+// the HTTP request that started it. The parent ctx only plumbs through
+// logger/values via context.WithoutCancel inside jobs.Manager.Submit.
+func (h *Handlers) submitDiscoveredLoadJob(parent context.Context, composite inventory.ID, disc inventory.Inventory) (jobs.Job, error) {
+	job, err := h.jobMgr.Submit(parent, composite, jobs.KindBuild, func(ctx context.Context, report func(jobs.Update)) error {
+		return h.discovery.LoadWith(ctx, disc, func(stage string, done, total int64) {
+			report(jobs.Update{Stage: stage, BytesDone: done, BytesTotal: total})
+		})
+	})
+	if err != nil {
+		return job, fmt.Errorf("submit build job: %w", err)
+	}
+
+	return job, nil
 }

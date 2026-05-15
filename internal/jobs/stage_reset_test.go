@@ -18,7 +18,7 @@ func TestManager_ReportResetsProgressOnStageChange(t *testing.T) {
 
 	step := make(chan struct{})
 	done := make(chan struct{})
-	job, err := mgr.Submit("src/inv1", jobs.KindBuild, func(_ context.Context, report func(jobs.Update)) error {
+	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, report func(jobs.Update)) error {
 		// Stage 1: downloading, 5/10 done.
 		report(jobs.Update{Stage: "downloading", BytesDone: 5, BytesTotal: 10})
 		<-step

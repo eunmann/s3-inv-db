@@ -72,8 +72,9 @@ type Server struct {
 	server      *http.Server
 }
 
-// New creates a new server.
-func New(cfg Config) (*Server, error) {
+// New creates a new server. The ctx bounds any startup-time I/O the
+// discovery wiring needs (the S3 client probe in particular).
+func New(ctx context.Context, cfg Config) (*Server, error) {
 	if cfg.DB == nil {
 		return nil, errNoDB
 	}
@@ -107,7 +108,7 @@ func New(cfg Config) (*Server, error) {
 	var s3Client *s3fetch.Client
 
 	if cfg.S3Source != "" {
-		wiring, err := newDiscoveryWiring(cfg)
+		wiring, err := newDiscoveryWiring(ctx, cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -172,10 +173,10 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	s.setupRoutes()
-	// Startup-time recovery/backfill are independent of any request — use
-	// a fresh background ctx so SQL calls thread one through to *Context
-	// query variants instead of bare context.Background() at every leaf.
-	startupCtx := context.Background()
+	// Startup-time recovery/backfill should complete even if the caller's
+	// ctx is later cancelled — context.WithoutCancel inherits any
+	// values (logger, request id) but drops cancellation.
+	startupCtx := context.WithoutCancel(ctx)
 	s.recover(startupCtx, cfg.Logger)
 	s.backfillTracker(startupCtx, cfg.Logger)
 
@@ -318,13 +319,13 @@ type discoveryWiring struct {
 // newDiscoveryWiring constructs the S3 client, discoverer, and loader
 // for a server configured with --s3-source. Extracted from New so the
 // happy path stays readable and so the wiring is testable in isolation.
-func newDiscoveryWiring(cfg Config) (discoveryWiring, error) {
+func newDiscoveryWiring(ctx context.Context, cfg Config) (discoveryWiring, error) {
 	if cfg.CacheDir == "" {
 		return discoveryWiring{}, errEmptyCacheDir
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), s3StartupTimeout)
+	probeCtx, cancel := context.WithTimeout(ctx, s3StartupTimeout)
 	defer cancel()
-	s3Client, err := s3fetch.NewClient(ctx)
+	s3Client, err := s3fetch.NewClient(probeCtx)
 	if err != nil {
 		return discoveryWiring{}, fmt.Errorf("s3 client: %w", err)
 	}
@@ -356,7 +357,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// so mmaps and file handles are released. The shutdown context is
 	// detached from ctx — if ctx is already cancelled (the usual
 	// shutdown trigger), we still need a few seconds to drain workers.
-	defer s.shutdownResources() //nolint:contextcheck // fresh ctx by design
+	defer s.shutdownResources(ctx)
 
 	if s.autoloader != nil {
 		s.autoloader.Start(ctx)
@@ -389,11 +390,15 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 // shutdownResources cancels live jobs (waiting up to 5s) and closes
-// the inventory manager. Called from Run's defer, deliberately using a
-// fresh ctx because the parent is typically the one that's been
-// cancelled to trigger this exit.
-func (s *Server) shutdownResources() {
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// the inventory manager. Called from Run's defer.
+//
+// Context handling: the parent ctx is typically the one whose
+// cancellation triggered this exit. To drain workers even after the
+// run ctx has been cancelled, the shutdown ctx is rooted at
+// context.WithoutCancel(parent) so any values (logger, request id)
+// the parent carries are inherited while cancellation is dropped.
+func (s *Server) shutdownResources(ctx context.Context) {
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if s.autoloader != nil {
 		s.autoloader.Stop()

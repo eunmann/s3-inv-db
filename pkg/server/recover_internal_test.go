@@ -31,7 +31,7 @@ func TestRecover_HydratesPersistedInventories(t *testing.T) {
 		t.Fatalf("seed inventory: %v", err)
 	}
 
-	srv, err := New(Config{
+	srv, err := New(t.Context(), Config{
 		Addr:       ":0",
 		Logger:     zerolog.Nop(),
 		PriceTable: pricing.DefaultUSEast1Prices(),
@@ -69,7 +69,7 @@ func TestRecover_FlipsStaleLoadingToError(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	srv, err := New(Config{
+	srv, err := New(t.Context(), Config{
 		Addr:       ":0",
 		Logger:     zerolog.Nop(),
 		PriceTable: pricing.DefaultUSEast1Prices(),
@@ -118,7 +118,7 @@ func TestRecover_MarksStaleJobsAborted(t *testing.T) {
 		}
 	}
 
-	srv, err := New(Config{
+	srv, err := New(t.Context(), Config{
 		Addr:       ":0",
 		Logger:     zerolog.Nop(),
 		PriceTable: pricing.DefaultUSEast1Prices(),
@@ -150,7 +150,7 @@ func TestRecover_MarksStaleJobsAborted(t *testing.T) {
 // TestRecover_NoFailureWhenStoreIsEmpty is the happy startup path on
 // a clean install — no inventories, no jobs, no errors.
 func TestRecover_NoFailureWhenStoreIsEmpty(t *testing.T) {
-	srv, err := New(Config{
+	srv, err := New(t.Context(), Config{
 		Addr:       ":0",
 		Logger:     zerolog.Nop(),
 		PriceTable: pricing.DefaultUSEast1Prices(),

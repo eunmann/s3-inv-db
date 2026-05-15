@@ -43,15 +43,17 @@ func statePragmas() []string {
 
 // OpenStateDB opens (or creates) the SQLite file backing every domain's
 // store and applies statePragmas to every connection. Exposed so the
-// server binary's main can wire the shared *sql.DB into Config.
-func OpenStateDB(path string) (*sql.DB, error) {
+// server binary's main can wire the shared *sql.DB into Config. The
+// ctx bounds the initial ping; pass context.Background() at startup
+// where the binary has nothing to inherit from.
+func OpenStateDB(ctx context.Context, path string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", buildStateDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite at %s: %w", path, err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
+	pingCtx, cancel := context.WithTimeout(ctx, pingTimeout)
 	defer cancel()
-	if err := db.PingContext(ctx); err != nil {
+	if err := db.PingContext(pingCtx); err != nil {
 		_ = db.Close()
 
 		return nil, fmt.Errorf("ping sqlite at %s: %w", path, err)

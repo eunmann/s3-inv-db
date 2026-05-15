@@ -99,7 +99,7 @@ type InventoryConfigEntry struct {
 //
 // The error path closes any partially-initialised resources so the
 // caller never leaks a half-open handle on failure.
-func Bootstrap(opts RuntimeOptions) (*Server, func(), error) {
+func Bootstrap(ctx context.Context, opts RuntimeOptions) (*Server, func(), error) {
 	if opts.AutoLoad && opts.MaxIndexDisk == 0 {
 		return nil, nil, ErrAutoLoadWithoutBudget
 	}
@@ -113,7 +113,10 @@ func Bootstrap(opts RuntimeOptions) (*Server, func(), error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), stateDBParentMode); err != nil {
 		return nil, nil, fmt.Errorf("ensure state-db parent dir: %w", err)
 	}
-	db, err := OpenStateDB(dbPath)
+	// SQLite open + ping is fast and shouldn't be interrupted by a
+	// caller cancelling startup — context.WithoutCancel preserves any
+	// logger/value the parent carries while dropping cancellation.
+	db, err := OpenStateDB(context.WithoutCancel(ctx), dbPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open state db: %w", err)
 	}
@@ -138,7 +141,7 @@ func Bootstrap(opts RuntimeOptions) (*Server, func(), error) {
 	}
 	opts.Logger.Info().Uint("schema_version", versionInfo.Version).Bool("dirty", versionInfo.Dirty).Msg("schema migrated")
 
-	srv, err := New(Config{
+	srv, err := New(ctx, Config{
 		Addr:                     opts.Addr,
 		Logger:                   opts.Logger,
 		PriceTable:               priceTable,
@@ -159,7 +162,7 @@ func Bootstrap(opts RuntimeOptions) (*Server, func(), error) {
 
 		return nil, nil, fmt.Errorf("create server: %w", err)
 	}
-	if err := applyInventoryConfigs(context.Background(), srv.configStore, opts.InventoryConfigs); err != nil {
+	if err := applyInventoryConfigs(ctx, srv.configStore, opts.InventoryConfigs); err != nil {
 		cleanup()
 
 		return nil, nil, fmt.Errorf("apply inventory configs: %w", err)
@@ -210,10 +213,8 @@ var _ = time.Second
 // the main goroutine is just signal handling and exit-code reporting.
 // The S3 client probe inside Bootstrap uses its own bounded context
 // (see newDiscoveryWiring) so callers don't need to budget for it.
-//
-//nolint:contextcheck // Bootstrap mints a fresh, bounded ctx for the S3 client probe
 func BootstrapAndRun(ctx context.Context, opts RuntimeOptions) error {
-	srv, cleanup, err := Bootstrap(opts)
+	srv, cleanup, err := Bootstrap(ctx, opts)
 	if err != nil {
 		return err
 	}

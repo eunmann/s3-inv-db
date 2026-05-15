@@ -62,7 +62,11 @@ func (m *Manager) SetLogger(l zerolog.Logger) { m.logger = l }
 // goroutine, and returns the initial snapshot. The cancel handle is
 // registered before the bus publish so a Cancel triggered by an
 // immediate SSE consumer can't race in before the goroutine starts.
-func (m *Manager) Submit(invID inventory.ID, kind Kind, work Work) (Job, error) {
+//
+// The parent ctx is used only to plumb logger/values into the job (via
+// context.WithoutCancel) — the job's lifetime is decoupled from the
+// caller's so the work outlives its submitter (e.g. an HTTP request).
+func (m *Manager) Submit(parent context.Context, invID inventory.ID, kind Kind, work Work) (Job, error) {
 	id, err := newJobID()
 	if err != nil {
 		return Job{}, fmt.Errorf("mint job id: %w", err)
@@ -71,7 +75,7 @@ func (m *Manager) Submit(invID inventory.ID, kind Kind, work Work) (Job, error) 
 	// (b) register the cancel handle + bump the wait group atomically
 	// with the goroutine launch. That way Shutdown's wg.Wait can't miss
 	// a goroutine that was about to start.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	m.mu.Lock()
 	if m.shutdown {
 		m.mu.Unlock()

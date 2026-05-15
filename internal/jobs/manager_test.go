@@ -68,7 +68,7 @@ func waitForState(t *testing.T, store *jobs.Store, id jobs.ID, target jobs.State
 
 func TestManager_SubmitSucceeds(t *testing.T) {
 	mgr, store, _ := newManager(t)
-	job, err := mgr.Submit("src/inv1", jobs.KindBuild, func(_ context.Context, report func(jobs.Update)) error {
+	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, report func(jobs.Update)) error {
 		report(jobs.Update{Stage: "fetch", Progress: 30})
 		report(jobs.Update{Stage: "extsort", Progress: 70})
 
@@ -89,7 +89,7 @@ func TestManager_SubmitSucceeds(t *testing.T) {
 
 func TestManager_FailingWork(t *testing.T) {
 	mgr, store, _ := newManager(t)
-	job, err := mgr.Submit("src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
+	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
 		return errBoom
 	})
 	if err != nil {
@@ -105,7 +105,7 @@ func TestManager_Cancel(t *testing.T) {
 	mgr, store, _ := newManager(t)
 
 	started := make(chan struct{})
-	job, err := mgr.Submit("src/inv1", jobs.KindBuild, func(ctx context.Context, _ func(jobs.Update)) error {
+	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(ctx context.Context, _ func(jobs.Update)) error {
 		close(started)
 		<-ctx.Done()
 
@@ -205,7 +205,7 @@ func TestManager_SubmitAfterShutdown(t *testing.T) {
 		t.Fatalf("Shutdown: %v", err)
 	}
 
-	_, err := mgr.Submit("src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
+	_, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
 		return nil
 	})
 	if !errors.Is(err, jobs.ErrShutdown) {
@@ -217,7 +217,7 @@ func TestManager_ShutdownCancelsLiveJob(t *testing.T) {
 	mgr, store, _ := newManager(t)
 
 	started := make(chan struct{})
-	job, err := mgr.Submit("src/inv1", jobs.KindBuild, func(ctx context.Context, _ func(jobs.Update)) error {
+	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(ctx context.Context, _ func(jobs.Update)) error {
 		close(started)
 		<-ctx.Done()
 

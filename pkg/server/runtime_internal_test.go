@@ -37,7 +37,7 @@ func TestBootstrap_OpensDBAndReturnsCleanup(t *testing.T) {
 		CacheDir: tmp,
 		Logger:   zerolog.Nop(),
 	}
-	srv, cleanup, err := Bootstrap(opts)
+	srv, cleanup, err := Bootstrap(t.Context(), opts)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -58,14 +58,14 @@ func TestBootstrap_PropagatesPriceTableLoadError(t *testing.T) {
 		PriceTablePath: "/definitely/not/here.json",
 		Logger:         zerolog.Nop(),
 	}
-	_, _, err := Bootstrap(opts)
+	_, _, err := Bootstrap(t.Context(), opts)
 	if err == nil {
 		t.Fatal("Bootstrap should fail when price table can't be loaded")
 	}
 }
 
 func TestBootstrapAndRun_ExitsCleanlyOnCancelledContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	opts := RuntimeOptions{
 		Addr:     ":0",
@@ -91,7 +91,7 @@ func TestBootstrapAndRun_PropagatesBootstrapError(t *testing.T) {
 }
 
 func TestNewDiscoveryWiring_RequiresCacheDir(t *testing.T) {
-	_, err := newDiscoveryWiring(Config{S3Source: "s3://bucket/", Logger: zerolog.Nop()})
+	_, err := newDiscoveryWiring(t.Context(), Config{S3Source: "s3://bucket/", Logger: zerolog.Nop()})
 	if !errors.Is(err, errEmptyCacheDir) {
 		t.Errorf("err = %v, want errEmptyCacheDir", err)
 	}
@@ -103,7 +103,7 @@ func TestNewDiscoveryWiring_RejectsMalformedURI(t *testing.T) {
 		CacheDir: t.TempDir(),
 		Logger:   zerolog.Nop(),
 	}
-	_, err := newDiscoveryWiring(cfg)
+	_, err := newDiscoveryWiring(t.Context(), cfg)
 	if err == nil {
 		t.Fatal("newDiscoveryWiring should reject malformed URI")
 	}
