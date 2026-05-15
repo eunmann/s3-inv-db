@@ -175,8 +175,9 @@ func SortPrefixRows(rows []*PrefixRow) {
 }
 
 // PrefixStats holds aggregated statistics for a single prefix during the
-// in-memory aggregation phase. This is a lightweight version of PrefixRow
-// that can be used with map[string]*PrefixStats.
+// in-memory aggregation phase. All counters are uint64 because at
+// billion-object / PB-scale buckets, a single tier of the root prefix can
+// exceed 2^32. Smaller width risks silent overflow on real workloads.
 type PrefixStats struct {
 	// Depth is the directory depth.
 	Depth uint16
