@@ -1,0 +1,12 @@
+goos: linux
+goarch: amd64
+pkg: github.com/eunmann/s3-inv-db/pkg/extsort
+cpu: AMD Ryzen 9 5950X 16-Core Processor            
+BenchmarkPipelineScale_E2E/objects=1000000-32         	       1	10167550068 ns/op	      4388 ingest_ms	      5777 merge_ms	     98368 objs/sec	     10165 total_ms	4017181376 B/op	65721579 allocs/op
+BenchmarkPipelineScale_E2E/objects=1000000-32         	       1	10082076915 ns/op	      4310 ingest_ms	      5769 merge_ms	     99199 objs/sec	     10080 total_ms	4000035072 B/op	65720870 allocs/op
+BenchmarkPipelineScale_E2E/objects=1000000-32         	       1	10046727215 ns/op	      4332 ingest_ms	      5712 merge_ms	     99551 objs/sec	     10045 total_ms	4014054472 B/op	65720708 allocs/op
+BenchmarkPipelineScale_E2E/objects=10000000-32        	       1	102279349889 ns/op	     50420 ingest_ms	     51854 merge_ms	     97776 objs/sec	    102274 total_ms	33019801152 B/op	574424826 allocs/op
+BenchmarkPipelineScale_E2E/objects=10000000-32        	       1	102963229770 ns/op	     50907 ingest_ms	     52051 merge_ms	     97126 objs/sec	    102959 total_ms	32957969528 B/op	574424590 allocs/op
+BenchmarkPipelineScale_E2E/objects=10000000-32        	       1	102497392978 ns/op	     50834 ingest_ms	     51653 merge_ms	     97572 objs/sec	    102488 total_ms	32978047512 B/op	574424909 allocs/op
+PASS
+ok  	github.com/eunmann/s3-inv-db/pkg/extsort	354.212s
