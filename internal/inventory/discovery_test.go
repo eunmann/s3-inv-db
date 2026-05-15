@@ -339,7 +339,7 @@ func TestDiscoveryService_Refresh_RecordsClockTimestamp(t *testing.T) {
 func TestDiscoveryService_StartStop_NoopWhenDisabled(t *testing.T) {
 	s := inventory.NewDiscoveryService(inventory.NewManager(), nil, nil)
 	// Should not block, panic, or leak a goroutine.
-	s.Start(t.Context(), time.Millisecond)
+	s.Start(t.Context(), time.Millisecond, nil)
 	s.Stop()
 }
 
@@ -351,7 +351,7 @@ func TestDiscoveryService_Start_PerformsInitialRefresh(t *testing.T) {
 
 	// Long interval — the test only asserts that Start() warms the
 	// cache before returning, so background ticks shouldn't fire.
-	s.Start(t.Context(), time.Hour)
+	s.Start(t.Context(), time.Hour, nil)
 	t.Cleanup(s.Stop)
 
 	if got := disc.listCalls.Load(); got != 1 {
@@ -372,11 +372,11 @@ func TestDiscoveryService_Start_DoubleStartIsNoop(t *testing.T) {
 	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", InventoryName: "i"}}}
 	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
 
-	s.Start(t.Context(), time.Hour)
+	s.Start(t.Context(), time.Hour, nil)
 	t.Cleanup(s.Stop)
 	// Second Start with an active background loop must not launch a
 	// second goroutine — listCalls should still be 1 after.
-	s.Start(t.Context(), time.Hour)
+	s.Start(t.Context(), time.Hour, nil)
 	if got := disc.listCalls.Load(); got != 1 {
 		t.Errorf("listCalls after double Start = %d, want 1", got)
 	}
@@ -385,4 +385,27 @@ func TestDiscoveryService_Start_DoubleStartIsNoop(t *testing.T) {
 func TestDiscoveryService_Stop_WithoutStartIsNoop(_ *testing.T) {
 	s := inventory.NewDiscoveryService(inventory.NewManager(), &fakeDiscoverer{}, &fakeBuilder{})
 	s.Stop() // must not block or panic
+}
+
+func TestDiscoveryService_Background_TickerFiresRefresh(t *testing.T) {
+	mgr := inventory.NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", InventoryName: "i"}}}
+	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
+
+	// Very short interval — the ticker should fire at least once
+	// after the initial inline refresh before we stop.
+	s.Start(t.Context(), 5*time.Millisecond, nil)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if disc.listCalls.Load() >= 2 {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	s.Stop()
+
+	if got := disc.listCalls.Load(); got < 2 {
+		t.Errorf("listCalls = %d, want >= 2 (initial + at least one tick)", got)
+	}
 }

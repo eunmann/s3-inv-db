@@ -34,6 +34,7 @@ type Config struct {
 	AutoLoadConcurrency      *int     `json:"max_auto_load_concurrency,omitempty"`
 	AutoLoadRetentionDefault *uint32  `json:"auto_load_retention_default,omitempty"`
 	IndexRatio               *float64 `json:"index_ratio,omitempty"`
+	DiscoveryRefreshInterval *string  `json:"discovery_refresh_interval,omitempty"` // Go duration string
 
 	Inventories []InventoryEntry `json:"inventories,omitempty"`
 }

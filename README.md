@@ -56,6 +56,7 @@ default. Example:
   "max_index_disk": "200GB",
   "auto_load_poll_interval": "15m",
   "auto_load_retention_default": 3,
+  "discovery_refresh_interval": "1m",
   "inventories": [
     {"source": "prod-bucket", "name": "daily-inventory", "auto_load": true, "retention_count": 5}
   ]

@@ -370,7 +370,7 @@ func (s *Server) Run(ctx context.Context) error {
 	defer s.shutdownResources(ctx)
 
 	if s.discovery != nil && s.discovery.Enabled() {
-		s.discovery.Start(ctx, s.discoveryRefreshInterval())
+		s.discovery.Start(ctx, s.discoveryRefreshInterval(), &s.config.Logger)
 	}
 	if s.autoloader != nil {
 		s.autoloader.Start(ctx)

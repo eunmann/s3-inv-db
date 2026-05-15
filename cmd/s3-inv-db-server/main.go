@@ -88,6 +88,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("auto_load_poll_interval: %w", err)
 	}
+	finalDiscoveryRefresh, err := resolveDuration(*discoveryRefresh, explicit["discovery-refresh-interval"], fileConfigString(fileCfg, func(c *appconfig.Config) *string { return c.DiscoveryRefreshInterval }))
+	if err != nil {
+		return fmt.Errorf("discovery_refresh_interval: %w", err)
+	}
 
 	capStr := pickString(fileCfg, *maxIndexDisk, explicit["max-index-disk"], func(c *appconfig.Config) *string { return c.MaxIndexDisk })
 	headStr := pickString(fileCfg, *headroom, explicit["index-headroom"], func(c *appconfig.Config) *string { return c.IndexHeadroom })
@@ -118,7 +122,7 @@ func run() error {
 		PriceTablePath:           finalPrice,
 		AutoLoad:                 finalAuto,
 		PollInterval:             finalInterval,
-		DiscoveryRefreshInterval: *discoveryRefresh,
+		DiscoveryRefreshInterval: finalDiscoveryRefresh,
 		MaxIndexDisk:             capBytes,
 		IndexHeadroomBytes:       headBytes,
 		AutoLoadConcurrency:      finalConc,

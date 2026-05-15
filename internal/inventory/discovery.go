@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
 // Discoverer is the subset of s3disco.Discoverer that DiscoveryService
@@ -218,11 +220,12 @@ func (s *DiscoveryService) LastRefreshErr() error {
 // Start launches a background goroutine that calls Refresh every
 // `interval`. The very first refresh runs inline so Snapshot returns
 // fresh data immediately after Start returns. Subsequent refreshes run
-// asynchronously; ticker drift is acceptable.
+// asynchronously; ticker drift is acceptable. Refresh errors are
+// logged at warn level via the supplied logger (nil disables logging).
 //
 // Start is a no-op when discovery is disabled. Calling Start a second
 // time without Stop in between is also a no-op.
-func (s *DiscoveryService) Start(ctx context.Context, interval time.Duration) {
+func (s *DiscoveryService) Start(ctx context.Context, interval time.Duration, logger *zerolog.Logger) {
 	if s.discoverer == nil || interval <= 0 {
 		return
 	}
@@ -236,13 +239,14 @@ func (s *DiscoveryService) Start(ctx context.Context, interval time.Duration) {
 	s.bgStop = stop
 	s.bgMu.Unlock()
 
-	// Best-effort initial refresh so Snapshot is warm on entry.
-	_ = s.Refresh(ctx)
+	if err := s.Refresh(ctx); err != nil && logger != nil {
+		logger.Warn().Err(err).Msg("discovery: initial refresh failed; serving empty snapshot until next tick")
+	}
 	s.bgWG.Add(1)
-	go s.runRefresher(ctx, interval, stop)
+	go s.runRefresher(ctx, interval, stop, logger)
 }
 
-func (s *DiscoveryService) runRefresher(ctx context.Context, interval time.Duration, stop <-chan struct{}) {
+func (s *DiscoveryService) runRefresher(ctx context.Context, interval time.Duration, stop <-chan struct{}, logger *zerolog.Logger) {
 	defer s.bgWG.Done()
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -253,7 +257,9 @@ func (s *DiscoveryService) runRefresher(ctx context.Context, interval time.Durat
 		case <-stop:
 			return
 		case <-t.C:
-			_ = s.Refresh(ctx)
+			if err := s.Refresh(ctx); err != nil && logger != nil {
+				logger.Warn().Err(err).Msg("discovery: background refresh failed; serving last good snapshot")
+			}
 		}
 	}
 }
