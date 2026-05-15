@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
@@ -52,9 +52,9 @@ func DefaultDownloaderConfig() DownloaderConfig {
 	}
 }
 
-// Downloader wraps the AWS S3 Download Manager for high-throughput downloads.
+// Downloader wraps the AWS S3 Transfer Manager for high-throughput downloads.
 type Downloader struct {
-	manager    *manager.Downloader
+	manager    *transfermanager.Client
 	config     DownloaderConfig
 	bufferPool *sync.Pool
 }
@@ -71,18 +71,14 @@ func NewDownloader(s3Client *s3.Client, cfg DownloaderConfig) *Downloader {
 		cfg.BufferPoolSize = cfg.Concurrency * 2
 	}
 
-	// Create the AWS Download Manager with configured options
-	mgr := manager.NewDownloader(s3Client, func(d *manager.Downloader) {
-		d.Concurrency = cfg.Concurrency
-		d.PartSize = cfg.PartSize
-		// Use a buffer pool to reduce allocations
-		d.BufferProvider = manager.NewPooledBufferedWriterReadFromProvider(int(cfg.PartSize))
+	mgr := transfermanager.New(s3Client, func(o *transfermanager.Options) {
+		o.Concurrency = cfg.Concurrency
+		o.PartSizeBytes = cfg.PartSize
 	})
 
-	// Create a buffer pool for temporary files
 	bufferPool := &sync.Pool{
 		New: func() any {
-			return make([]byte, 32*1024) // 32KB read buffer
+			return make([]byte, 32*1024)
 		},
 	}
 
@@ -128,10 +124,10 @@ func (d *Downloader) DownloadToReader(ctx context.Context, bucket, key string) (
 		return nil, nil, fmt.Errorf("create temp file: %w", err)
 	}
 
-	// Download to the temp file using the download manager
-	n, err := d.manager.Download(ctx, tempFile, &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
+	out, err := d.manager.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(key),
+		WriterAt: tempFile,
 	})
 	if err != nil {
 		tempFile.Close()
@@ -139,7 +135,6 @@ func (d *Downloader) DownloadToReader(ctx context.Context, bucket, key string) (
 		return nil, nil, fmt.Errorf("download s3://%s/%s: %w", bucket, key, err)
 	}
 
-	// Seek back to start for reading
 	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
@@ -147,7 +142,7 @@ func (d *Downloader) DownloadToReader(ctx context.Context, bucket, key string) (
 	}
 
 	result := &DownloadResult{
-		BytesDownloaded: n,
+		BytesDownloaded: bytesDownloaded(out, tempFile),
 		Duration:        time.Since(startTime),
 		Concurrency:     d.config.Concurrency,
 		PartSize:        d.config.PartSize,
@@ -173,9 +168,10 @@ func (d *Downloader) DownloadToFile(ctx context.Context, bucket, key, destPath s
 	}
 	defer file.Close()
 
-	n, err := d.manager.Download(ctx, file, &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
+	out, err := d.manager.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(key),
+		WriterAt: file,
 	})
 	if err != nil {
 		os.Remove(destPath)
@@ -183,11 +179,24 @@ func (d *Downloader) DownloadToFile(ctx context.Context, bucket, key, destPath s
 	}
 
 	return &DownloadResult{
-		BytesDownloaded: n,
+		BytesDownloaded: bytesDownloaded(out, file),
 		Duration:        time.Since(startTime),
 		Concurrency:     d.config.Concurrency,
 		PartSize:        d.config.PartSize,
 	}, nil
+}
+
+// bytesDownloaded returns the size written for a DownloadObject call.
+// Prefers the service-reported ContentLength; falls back to stat'ing the
+// destination file when the field is absent.
+func bytesDownloaded(out *transfermanager.DownloadObjectOutput, f *os.File) int64 {
+	if out != nil && out.ContentLength != nil {
+		return *out.ContentLength
+	}
+	if info, err := f.Stat(); err == nil {
+		return info.Size()
+	}
+	return 0
 }
 
 // Config returns the downloader configuration.
