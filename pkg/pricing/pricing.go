@@ -28,8 +28,15 @@ type PriceTable struct {
 	PerGBMonth map[string]float64 `json:"per_gb_month"`
 
 	// MonitoringPer1000Objects is the Intelligent-Tiering monitoring fee
-	// per 1,000 objects per month. Only applies to objects >= 128KB.
+	// per 1,000 objects per month. Only applies to objects >= 128 KiB
+	// (small objects land in INTELLIGENT_TIERING_FREQUENT_SMALL, which
+	// is excluded from monitoring).
 	MonitoringPer1000Objects float64 `json:"monitoring_per_1000_objects"`
+
+	// PutPer1000Requests is the per-PUT/COPY/POST request charge, USD per
+	// 1,000 requests. Used by the Compare view to estimate the one-time
+	// upload cost for the objects that exist in a run.
+	PutPer1000Requests float64 `json:"put_per_1000_requests"`
 
 	// StandardPricePerGB is used for Glacier index overhead calculation.
 	StandardPricePerGB float64 `json:"standard_price_per_gb"`
@@ -85,11 +92,12 @@ func DefaultUSEast1Prices() PriceTable {
 			"INTELLIGENT_TIERING_ARCHIVE_INSTANT": 0.004,
 			"INTELLIGENT_TIERING_ARCHIVE":         0.0036,
 			"INTELLIGENT_TIERING_DEEP_ARCHIVE":    0.00099,
+			// IT objects below 128 KiB: Frequent rate, no monitoring fee.
+			"INTELLIGENT_TIERING_FREQUENT_SMALL": 0.023,
 		},
-		// $0.0025 per 1,000 objects per month for objects >= 128KB
 		MonitoringPer1000Objects: 0.0025,
-		// Standard price used for Glacier index overhead
-		StandardPricePerGB: 0.023,
+		PutPer1000Requests:       0.005,
+		StandardPricePerGB:       0.023,
 	}
 }
 
@@ -189,29 +197,14 @@ func ComputeMonthlyCost(breakdown []format.TierBreakdown, pt PriceTable) CostRes
 			result.MinObjectSizeMicrodollars += minSizePenalty
 		}
 
-		// Intelligent-Tiering monitoring cost
+		// Intelligent-Tiering monitoring cost. Every object in a monitored
+		// tier is billable; objects < 128 KiB are pre-segregated into
+		// INTELLIGENT_TIERING_FREQUENT_SMALL by the ingest classifier and
+		// therefore never reach this branch.
 		var monitoringCost uint64
 		if TiersWithMonitoringCost[tb.TierName] && pt.MonitoringPer1000Objects > 0 {
-			// Only objects >= 128KB incur monitoring fees.
-			// Since we only have aggregate data (total bytes / object count), we estimate
-			// the number of objects >= 128KB using the average object size as a proxy.
-			//
-			// Estimation methodology:
-			// - If avgSize >= 128KB: assume all objects qualify for monitoring
-			// - If avgSize < 128KB: assume 50% of objects qualify (conservative estimate)
-			//
-			// This is a simplification because the actual object size distribution matters.
-			// For accurate billing, individual object sizes would need to be tracked.
-			var monitoredObjects uint64
-			if avgObjectSize >= minObjectSizeBytes {
-				monitoredObjects = tb.ObjectCount
-			} else if avgObjectSize > 0 {
-				monitoredObjects = tb.ObjectCount / 2
-			}
-			if monitoredObjects > 0 {
-				monitoringCost = uint64(float64(monitoredObjects) / 1000.0 * pt.MonitoringPer1000Objects * 1_000_000)
-				result.MonitoringMicrodollars += monitoringCost
-			}
+			monitoringCost = uint64(float64(tb.ObjectCount) / 1000.0 * pt.MonitoringPer1000Objects * 1_000_000)
+			result.MonitoringMicrodollars += monitoringCost
 		}
 
 		// Glacier metadata overhead
@@ -285,15 +278,8 @@ func ComputeDetailedBreakdown(breakdown []format.TierBreakdown, pt PriceTable) [
 			cb.MinSizePenalty = additionalGB * price
 		}
 
-		// Intelligent-Tiering monitoring cost
 		if TiersWithMonitoringCost[tb.TierName] && pt.MonitoringPer1000Objects > 0 {
-			var monitoredObjects uint64
-			if cb.AvgObjectSizeBytes >= minObjectSizeBytes {
-				monitoredObjects = tb.ObjectCount
-			} else if cb.AvgObjectSizeBytes > 0 {
-				monitoredObjects = tb.ObjectCount / 2
-			}
-			cb.MonitoringCost = float64(monitoredObjects) / 1000.0 * pt.MonitoringPer1000Objects
+			cb.MonitoringCost = float64(tb.ObjectCount) / 1000.0 * pt.MonitoringPer1000Objects
 		}
 
 		// Glacier metadata overhead
@@ -310,6 +296,16 @@ func ComputeDetailedBreakdown(breakdown []format.TierBreakdown, pt PriceTable) [
 	}
 
 	return results
+}
+
+// ComputePutCost returns the one-time PUT/COPY/POST charge for ingesting
+// objectCount objects, in microdollars. Used by the Compare view to
+// surface the upload cost of a run alongside its monthly storage cost.
+func ComputePutCost(objectCount uint64, pt PriceTable) uint64 {
+	if pt.PutPer1000Requests <= 0 || objectCount == 0 {
+		return 0
+	}
+	return uint64(float64(objectCount) / 1000.0 * pt.PutPer1000Requests * 1_000_000)
 }
 
 // FormatCost formats a cost in microdollars for display.

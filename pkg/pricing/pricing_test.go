@@ -96,25 +96,58 @@ func TestComputeMonthlyCost_IntelligentTiering_Monitoring(t *testing.T) {
 	}
 }
 
-func TestComputeMonthlyCost_IntelligentTiering_SmallObjects(t *testing.T) {
+func TestComputeMonthlyCost_IntelligentTiering_SmallObjectsAreUnmonitored(t *testing.T) {
 	pt := DefaultUSEast1Prices()
 
-	// Small objects in IT (below 128KB - no monitoring fees for these)
+	// Objects classified at ingest as INTELLIGENT_TIERING_FREQUENT_SMALL —
+	// i.e. < 128 KiB — must not contribute to the monitoring fee.
 	breakdown := []format.TierBreakdown{
 		{
-			TierName:    "INTELLIGENT_TIERING_FREQUENT",
-			Bytes:       50 * 1024 * 1000, // 50KB * 1000 = 50MB
-			ObjectCount: 1000,             // Average 50KB per object
+			TierName:    "INTELLIGENT_TIERING_FREQUENT_SMALL",
+			Bytes:       50 * 1024 * 1000,
+			ObjectCount: 1000,
 		},
 	}
 
 	cost := ComputeMonthlyCost(breakdown, pt)
 
-	// With average size < 128KB, we estimate only half are monitored (conservative)
-	// 500 objects / 1000 * $0.0025 = $0.00125 = 1250 microdollars
-	expectedMonitoring := uint64(1250)
-	if cost.MonitoringMicrodollars != expectedMonitoring {
-		t.Errorf("got monitoring %d, expected %d", cost.MonitoringMicrodollars, expectedMonitoring)
+	if cost.MonitoringMicrodollars != 0 {
+		t.Errorf("small-IT monitoring cost = %d, want 0", cost.MonitoringMicrodollars)
+	}
+}
+
+func TestComputeMonthlyCost_IntelligentTiering_MonitoringPerObject(t *testing.T) {
+	pt := DefaultUSEast1Prices()
+
+	// 2,000 objects in monitored IT_FREQUENT should bill exactly:
+	//   2000 / 1000 * $0.0025 = $0.005 = 5000 microdollars
+	breakdown := []format.TierBreakdown{
+		{TierName: "INTELLIGENT_TIERING_FREQUENT", Bytes: 200 * 1024 * 1024, ObjectCount: 2000},
+	}
+	cost := ComputeMonthlyCost(breakdown, pt)
+	if cost.MonitoringMicrodollars != 5000 {
+		t.Errorf("monitoring = %d, want 5000", cost.MonitoringMicrodollars)
+	}
+}
+
+func TestComputePutCost(t *testing.T) {
+	pt := DefaultUSEast1Prices() // $0.005 per 1000 PUTs
+	cases := []struct {
+		name  string
+		count uint64
+		want  uint64
+	}{
+		{"zero", 0, 0},
+		{"one thousand", 1000, 5000},
+		{"five thousand", 5_000, 25_000},
+		{"odd count", 1234, uint64(float64(1234) / 1000.0 * 0.005 * 1_000_000)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ComputePutCost(tc.count, pt); got != tc.want {
+				t.Errorf("ComputePutCost(%d) = %d, want %d", tc.count, got, tc.want)
+			}
+		})
 	}
 }
 

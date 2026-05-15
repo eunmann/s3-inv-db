@@ -289,7 +289,7 @@ func (r *CSVReader) Read() (Record, error) {
 				accessTier = fields[r.accessTierCol]
 			}
 
-			rec.TierID = r.tierMapping.FromS3(storageClass, accessTier)
+			rec.TierID = tiers.Resolve(r.tierMapping.FromS3(storageClass, accessTier), size)
 		}
 
 		return rec, nil

@@ -26,8 +26,15 @@ const (
 	ITArchiveInstant
 	ITArchive
 	ITDeepArchive
-	NumTiers // Sentinel value for array sizing
+	ITFrequentSmall // IT objects < 128 KiB: Frequent rate, no monitoring fee
+	NumTiers        // Sentinel value for array sizing
 )
+
+// SmallObjectThresholdBytes is the AWS S3 Intelligent-Tiering minimum
+// monitored object size. Objects below this are stored at the Frequent
+// Access rate but are not monitored and cannot transition to lower tiers.
+// Source: https://aws.amazon.com/s3/storage-classes/intelligent-tiering/
+const SmallObjectThresholdBytes uint64 = 128 * 1024
 
 // Info describes a storage tier.
 type Info struct {
@@ -50,6 +57,7 @@ var AllTiers = []Info{
 	{ITArchiveInstant, "INTELLIGENT_TIERING_ARCHIVE_INSTANT", "it_archive_instant"},
 	{ITArchive, "INTELLIGENT_TIERING_ARCHIVE", "it_archive"},
 	{ITDeepArchive, "INTELLIGENT_TIERING_DEEP_ARCHIVE", "it_deep_archive"},
+	{ITFrequentSmall, "INTELLIGENT_TIERING_FREQUENT_SMALL", "it_frequent_small"},
 }
 
 // Mapping provides tier lookup and metadata.
@@ -112,6 +120,17 @@ func (m *Mapping) FromS3(storageClass, accessTier string) ID {
 
 	// Default to Standard for unknown classes
 	return Standard
+}
+
+// Resolve adjusts a classification based on object size. Intelligent-
+// Tiering Frequent objects smaller than 128 KiB are reclassified as
+// ITFrequentSmall: they are billed at the Frequent Access rate but do
+// not incur the monitoring fee and never auto-tier.
+func Resolve(id ID, size uint64) ID {
+	if id == ITFrequent && size < SmallObjectThresholdBytes {
+		return ITFrequentSmall
+	}
+	return id
 }
 
 // ByID returns tier info by ID.

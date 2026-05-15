@@ -699,7 +699,7 @@ func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, 
 			continue
 		}
 
-		tierID := cfg.tierMapping.FromS3(row.StorageClass, row.AccessTier)
+		tierID := tiers.Resolve(cfg.tierMapping.FromS3(row.StorageClass, row.AccessTier), row.Size)
 		objects = append(objects, objectRecord{
 			key:    row.Key,
 			size:   row.Size,

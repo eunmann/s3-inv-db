@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 func TestRecordType(t *testing.T) {
@@ -436,10 +438,12 @@ func TestOpenFileWithOptions_TrackTiers(t *testing.T) {
 	dir := t.TempDir()
 	csvPath := filepath.Join(dir, "test.csv")
 
+	// IT_FREQUENT row uses a size >= 128 KiB so the size-aware classifier
+	// keeps it in ITFrequent rather than reclassifying as ITFrequentSmall.
 	content := "Key,Size,StorageClass,IntelligentTieringAccessTier\n" +
 		"file1.txt,100,STANDARD,\n" +
 		"file2.txt,200,GLACIER,\n" +
-		"file3.txt,300,INTELLIGENT_TIERING,FREQUENT_ACCESS\n" +
+		"file3.txt,200000,INTELLIGENT_TIERING,FREQUENT_ACCESS\n" +
 		"file4.txt,400,INTELLIGENT_TIERING,ARCHIVE_ACCESS\n"
 
 	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
@@ -552,5 +556,45 @@ func TestOpenFileWithSchemaOptions_TrackTiers(t *testing.T) {
 	}
 	if rec.TierID != 8 { // Expected ITInfrequent tier
 		t.Errorf("file2: got TierID=%d, want 8 (ITInfrequent)", rec.TierID)
+	}
+}
+
+func TestOpenFileWithOptions_TrackTiers_SmallITFrequentRoutesToSmall(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "test.csv")
+
+	// One IT_FREQUENT row below 128 KiB, one at exactly the threshold,
+	// one above. The size-aware resolver reclassifies the first as
+	// ITFrequentSmall and leaves the others as ITFrequent.
+	content := "Key,Size,StorageClass,IntelligentTieringAccessTier\n" +
+		"small.txt,1024,INTELLIGENT_TIERING,FREQUENT_ACCESS\n" +
+		"boundary.txt,131072,INTELLIGENT_TIERING,FREQUENT_ACCESS\n" +
+		"big.txt,1048576,INTELLIGENT_TIERING,FREQUENT_ACCESS\n"
+	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	r, err := OpenFileWithOptions(csvPath, OpenOptions{TrackTiers: true})
+	if err != nil {
+		t.Fatalf("OpenFileWithOptions: %v", err)
+	}
+	defer r.Close()
+
+	want := []struct {
+		key  string
+		tier tiers.ID
+	}{
+		{"small.txt", tiers.ITFrequentSmall},
+		{"boundary.txt", tiers.ITFrequent},
+		{"big.txt", tiers.ITFrequent},
+	}
+	for _, w := range want {
+		rec, err := r.Read()
+		if err != nil {
+			t.Fatalf("Read %s: %v", w.key, err)
+		}
+		if rec.Key != w.key || rec.TierID != w.tier {
+			t.Errorf("%s: TierID=%d want %d", w.key, rec.TierID, w.tier)
+		}
 	}
 }

@@ -49,6 +49,7 @@
                             <li><a href="#workflow-recover" class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Recover from errors</a></li>
                         </ul>
                     </li>
+                    <li><a href="#cost-model"      class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Cost model</a></li>
                     <li><a href="#chips"           class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">State chips</a></li>
                     <li><a href="#buttons"         class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Action buttons</a></li>
                     <li><a href="#progress"        class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Progress &amp; ETA</a></li>
@@ -149,6 +150,44 @@
                     <li><strong>Row shows "interrupted by server restart".</strong> A build was running when the server stopped. Click <strong>Retry</strong>.</li>
                     <li><strong>Wrong inventory loaded.</strong> Click <strong>Unload</strong> to drop it from memory and disk, then click <strong>Load</strong> on the run you actually want.</li>
                 </ul>
+            </section>
+
+            <!-- Cost model -->
+            <section id="cost-model">
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Cost model</h2>
+                <p class="text-gray-700 dark:text-gray-200">
+                    All cost figures come from a single
+                    <a href="https://aws.amazon.com/s3/pricing/" class="text-indigo-600 dark:text-indigo-400 hover:underline" target="_blank" rel="noopener">us-east-1 price table</a>.
+                    Numbers are estimates — the goal is to make tier and run comparisons meaningful, not to reproduce your bill to the cent.
+                </p>
+
+                <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">Monthly storage</h3>
+                <p class="text-gray-700 dark:text-gray-200">For each tier present at a prefix:</p>
+                <ul class="mt-2 list-disc pl-5 text-gray-700 dark:text-gray-200 space-y-1">
+                    <li>Base: <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">bytes ÷ GB × $/GB-month</code> at that tier's rate.</li>
+                    <li>Standard-IA, One Zone-IA, and Glacier Instant Retrieval bill every object as if it were at least 128 KiB. Smaller objects pay the difference.</li>
+                    <li>Glacier and Deep Archive add per-object metadata overhead (32 KiB at the Glacier rate plus 8 KiB at the Standard rate).</li>
+                    <li>Monitored Intelligent-Tiering tiers add the per-object monitoring &amp; automation fee.</li>
+                </ul>
+
+                <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">PUT API cost (Compare only)</h3>
+                <p class="text-gray-700 dark:text-gray-200">
+                    The <a href="/compare" class="text-indigo-600 dark:text-indigo-400 hover:underline">Compare</a> page surfaces a one-time PUT API charge alongside monthly storage, so you can see what it cost to land the run's objects in S3 in the first place:
+                    <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">objectCount ÷ 1000 × $0.005</code>.
+                    PUTs/COPYs/POSTs are billed at $0.005 per 1,000 requests in us-east-1.
+                </p>
+
+                <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">Storage tiers</h3>
+                <p class="text-gray-700 dark:text-gray-200">
+                    Standard, Standard-IA, One Zone-IA, Glacier Instant Retrieval, Glacier Flexible Retrieval, and Deep Archive each have a fixed monthly rate.
+                    Intelligent-Tiering objects are bucketed by access tier — Frequent, Infrequent, Archive Instant, Archive, and Deep Archive — and the monitored tiers add the per-object monitoring fee.
+                    Reduced Redundancy is deprecated by AWS but still costed when present.
+                </p>
+                <p class="mt-3 text-gray-700 dark:text-gray-200">
+                    <strong>Intelligent-Tiering Frequent (&lt; 128 KiB).</strong> AWS does not monitor or auto-tier Intelligent-Tiering objects smaller than 128 KiB — see
+                    <a href="https://aws.amazon.com/s3/storage-classes/intelligent-tiering/" class="text-indigo-600 dark:text-indigo-400 hover:underline" target="_blank" rel="noopener">S3 Intelligent-Tiering</a>.
+                    These objects are split into their own bucket at ingest so the storage cost stays at the Frequent rate and they don't accrue the monitoring fee.
+                </p>
             </section>
 
             <!-- State chips -->

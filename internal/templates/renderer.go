@@ -79,6 +79,33 @@ func stageLabel(stage string) string {
 	}
 }
 
+// tierLabel converts a raw S3 storage-class identifier (e.g.
+// "INTELLIGENT_TIERING_FREQUENT_SMALL") into a friendlier label
+// ("Intelligent-Tiering Frequent (< 128 KiB)") for UI rendering.
+// Unknown tiers fall back to the raw name.
+func tierLabel(raw string) string {
+	if label, ok := tierLabels[raw]; ok {
+		return label
+	}
+	return raw
+}
+
+var tierLabels = map[string]string{
+	"STANDARD":                            "Standard",
+	"STANDARD_IA":                         "Standard-IA",
+	"ONEZONE_IA":                          "One Zone-IA",
+	"GLACIER_IR":                          "Glacier Instant Retrieval",
+	"GLACIER":                             "Glacier Flexible Retrieval",
+	"DEEP_ARCHIVE":                        "Glacier Deep Archive",
+	"REDUCED_REDUNDANCY":                  "Reduced Redundancy",
+	"INTELLIGENT_TIERING_FREQUENT":        "Intelligent-Tiering Frequent",
+	"INTELLIGENT_TIERING_INFREQUENT":      "Intelligent-Tiering Infrequent",
+	"INTELLIGENT_TIERING_ARCHIVE_INSTANT": "Intelligent-Tiering Archive Instant",
+	"INTELLIGENT_TIERING_ARCHIVE":         "Intelligent-Tiering Archive",
+	"INTELLIGENT_TIERING_DEEP_ARCHIVE":    "Intelligent-Tiering Deep Archive",
+	"INTELLIGENT_TIERING_FREQUENT_SMALL":  "Intelligent-Tiering Frequent (< 128 KiB)",
+}
+
 //go:embed templates/*.html templates/partials/*.html
 var embeddedTemplates embed.FS
 
@@ -154,6 +181,7 @@ func FuncMap() template.FuncMap {
 				return "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200"
 			}
 		},
+		"tierLabel": tierLabel,
 		"compareStatusClass": func(status string) string {
 			switch status {
 			case "added":

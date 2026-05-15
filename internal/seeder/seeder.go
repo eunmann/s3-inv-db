@@ -11,6 +11,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/pkg/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/rs/zerolog"
 )
 
@@ -211,7 +212,7 @@ func generateInventory(cfg Config, index int, seed int64) (InventoryInfo, error)
 
 	agg := extsort.NewAggregator(len(objects), 0)
 	for _, obj := range objects {
-		agg.AddObject(obj.Key, obj.Size, obj.TierID)
+		agg.AddObject(obj.Key, obj.Size, tiers.Resolve(obj.TierID, obj.Size))
 	}
 	rows := agg.Drain()
 	extsort.SortPrefixRows(rows)

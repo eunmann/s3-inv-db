@@ -94,6 +94,12 @@ type CompareSelfView struct {
 	HasCost                                      bool
 	CostBeforeH, CostAfterH, CostDeltaH, CostPct string
 	CostSign                                     int
+
+	// One-time PUT cost — the API charge to ingest the run's objects.
+	// Always populated (object counts are always known); the sign carries
+	// the direction of the move between runs.
+	APICostBeforeH, APICostAfterH, APICostDeltaH, APICostPct string
+	APICostSign                                              int
 }
 
 // CompareChildView is one row in the children table.
@@ -115,6 +121,10 @@ type CompareChildView struct {
 	CostDelta                                    int64
 	CostBeforeH, CostAfterH, CostDeltaH, CostPct string
 	CostSign                                     int
+
+	APICostDelta                                             int64
+	APICostBeforeH, APICostAfterH, APICostDeltaH, APICostPct string
+	APICostSign                                              int
 
 	// AbsByteDelta drives the default "biggest absolute mover" sort.
 	AbsByteDelta uint64
@@ -354,6 +364,11 @@ func (h *Handlers) buildCompareSelfView(self inventory.CompareSelf) CompareSelfV
 		v.CostAfterH = pricing.FormatCost(costAfter)
 		v.CostDeltaH, v.CostPct, v.CostSign = formatCostDelta(costBefore, costAfter)
 	}
+	apiBefore := pricing.ComputePutCost(self.Objects.Before, h.priceTable)
+	apiAfter := pricing.ComputePutCost(self.Objects.After, h.priceTable)
+	v.APICostBeforeH = pricing.FormatCost(apiBefore)
+	v.APICostAfterH = pricing.FormatCost(apiAfter)
+	v.APICostDeltaH, v.APICostPct, v.APICostSign = formatCostDelta(apiBefore, apiAfter)
 	return v
 }
 
@@ -383,6 +398,12 @@ func (h *Handlers) buildCompareChildView(c *inventory.CompareChild) CompareChild
 		v.CostDelta = int64(costAfter) - int64(costBefore)
 		v.CostDeltaH, v.CostPct, v.CostSign = formatCostDelta(costBefore, costAfter)
 	}
+	apiBefore := pricing.ComputePutCost(c.Objects.Before, h.priceTable)
+	apiAfter := pricing.ComputePutCost(c.Objects.After, h.priceTable)
+	v.APICostBeforeH = pricing.FormatCost(apiBefore)
+	v.APICostAfterH = pricing.FormatCost(apiAfter)
+	v.APICostDelta = int64(apiAfter) - int64(apiBefore)
+	v.APICostDeltaH, v.APICostPct, v.APICostSign = formatCostDelta(apiBefore, apiAfter)
 	return v
 }
 
@@ -510,6 +531,10 @@ type CompareSelfResponse struct {
 	CostAfterMicrodollars  uint64 `json:"cost_after_microdollars,omitempty"`
 	CostDeltaMicrodollars  int64  `json:"cost_delta_microdollars,omitempty"`
 
+	APICostBeforeMicrodollars uint64 `json:"api_cost_before_microdollars"`
+	APICostAfterMicrodollars  uint64 `json:"api_cost_after_microdollars"`
+	APICostDeltaMicrodollars  int64  `json:"api_cost_delta_microdollars"`
+
 	NotFoundInFrom bool `json:"not_found_in_from,omitempty"`
 	NotFoundInTo   bool `json:"not_found_in_to,omitempty"`
 }
@@ -533,6 +558,10 @@ type CompareChildResponse struct {
 	CostBeforeMicrodollars uint64 `json:"cost_before_microdollars,omitempty"`
 	CostAfterMicrodollars  uint64 `json:"cost_after_microdollars,omitempty"`
 	CostDeltaMicrodollars  int64  `json:"cost_delta_microdollars,omitempty"`
+
+	APICostBeforeMicrodollars uint64 `json:"api_cost_before_microdollars"`
+	APICostAfterMicrodollars  uint64 `json:"api_cost_after_microdollars"`
+	APICostDeltaMicrodollars  int64  `json:"api_cost_delta_microdollars"`
 }
 
 // CompareStatusCountsJSON mirrors CompareStatusCounts with JSON tags.
@@ -623,6 +652,9 @@ func (h *Handlers) buildCompareAPIResponse(from, to inventory.ID, prefix, sortBy
 			row.CostAfterMicrodollars = tierMapCost(c.TierAfter, h.priceTable)
 			row.CostDeltaMicrodollars = int64(row.CostAfterMicrodollars) - int64(row.CostBeforeMicrodollars)
 		}
+		row.APICostBeforeMicrodollars = pricing.ComputePutCost(c.Objects.Before, h.priceTable)
+		row.APICostAfterMicrodollars = pricing.ComputePutCost(c.Objects.After, h.priceTable)
+		row.APICostDeltaMicrodollars = int64(row.APICostAfterMicrodollars) - int64(row.APICostBeforeMicrodollars)
 		switch c.Status {
 		case inventory.CompareAdded:
 			resp.StatusCounts.Added++
@@ -673,6 +705,9 @@ func (h *Handlers) buildCompareSelfJSON(self inventory.CompareSelf) CompareSelfR
 		r.CostAfterMicrodollars = tierMapCost(self.TierAfterMap, h.priceTable)
 		r.CostDeltaMicrodollars = int64(r.CostAfterMicrodollars) - int64(r.CostBeforeMicrodollars)
 	}
+	r.APICostBeforeMicrodollars = pricing.ComputePutCost(self.Objects.Before, h.priceTable)
+	r.APICostAfterMicrodollars = pricing.ComputePutCost(self.Objects.After, h.priceTable)
+	r.APICostDeltaMicrodollars = int64(r.APICostAfterMicrodollars) - int64(r.APICostBeforeMicrodollars)
 	return r
 }
 

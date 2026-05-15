@@ -169,7 +169,9 @@ func encodeCSVGz(srcBucket string, objects []benchutil.FakeObject) (body []byte,
 // would produce.
 func tierToS3Columns(m *tiers.Mapping, id tiers.ID) (storageClass, accessTier string) {
 	switch id {
-	case tiers.ITFrequent:
+	case tiers.ITFrequent, tiers.ITFrequentSmall:
+		// Small IT_FREQUENT objects round-trip through the same S3 columns;
+		// the size-aware classifier on the read side reclassifies them.
 		return "INTELLIGENT_TIERING", "FREQUENT_ACCESS"
 	case tiers.ITInfrequent:
 		return "INTELLIGENT_TIERING", "INFREQUENT_ACCESS"

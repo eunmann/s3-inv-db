@@ -171,6 +171,29 @@ func TestReadManifest_NotExists(t *testing.T) {
 	}
 }
 
+func TestResolve_SmallITFrequent(t *testing.T) {
+	cases := []struct {
+		name string
+		id   ID
+		size uint64
+		want ID
+	}{
+		{"small IT frequent -> small bucket", ITFrequent, 1024, ITFrequentSmall},
+		{"IT frequent at threshold stays", ITFrequent, SmallObjectThresholdBytes, ITFrequent},
+		{"IT frequent above threshold stays", ITFrequent, SmallObjectThresholdBytes + 1, ITFrequent},
+		{"small Standard untouched", Standard, 1024, Standard},
+		{"small IT infrequent untouched", ITInfrequent, 1024, ITInfrequent},
+		{"zero-byte IT frequent reclassifies", ITFrequent, 0, ITFrequentSmall},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Resolve(tc.id, tc.size); got != tc.want {
+				t.Errorf("Resolve(%v, %d) = %v, want %v", tc.id, tc.size, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAllTiersComplete(t *testing.T) {
 	// Verify all tier IDs from 0 to NumTiers-1 are covered
 	if len(AllTiers) != int(NumTiers) {
