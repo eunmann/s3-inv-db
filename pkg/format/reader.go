@@ -114,7 +114,7 @@ func OpenArray(path string) (*ArrayReader, error) {
 	if mmap.Size() < expectedSize {
 		mmap.Close()
 
-		return nil, fmt.Errorf("file too small: %d < %d", mmap.Size(), expectedSize)
+		return nil, fmt.Errorf("%w: %d < %d", ErrFileTooSmall, mmap.Size(), expectedSize)
 	}
 
 	return &ArrayReader{
@@ -145,7 +145,7 @@ func (r *ArrayReader) GetU32(idx uint64) (uint32, error) {
 		return 0, ErrBoundsCheck
 	}
 	if r.header.Width != 4 {
-		return 0, fmt.Errorf("width mismatch: expected 4, got %d", r.header.Width)
+		return 0, fmt.Errorf("%w: expected 4, got %d", ErrWidthMismatch, r.header.Width)
 	}
 	offset := idx * 4
 
@@ -158,7 +158,7 @@ func (r *ArrayReader) GetU64(idx uint64) (uint64, error) {
 		return 0, ErrBoundsCheck
 	}
 	if r.header.Width != 8 {
-		return 0, fmt.Errorf("width mismatch: expected 8, got %d", r.header.Width)
+		return 0, fmt.Errorf("%w: expected 8, got %d", ErrWidthMismatch, r.header.Width)
 	}
 	offset := idx * 8
 
@@ -171,7 +171,7 @@ func (r *ArrayReader) GetU16(idx uint64) (uint16, error) {
 		return 0, ErrBoundsCheck
 	}
 	if r.header.Width != 2 {
-		return 0, fmt.Errorf("width mismatch: expected 2, got %d", r.header.Width)
+		return 0, fmt.Errorf("%w: expected 2, got %d", ErrWidthMismatch, r.header.Width)
 	}
 	offset := idx * 2
 

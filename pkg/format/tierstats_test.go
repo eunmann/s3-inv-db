@@ -147,14 +147,18 @@ func TestTierStatsWriteRead_NoTierData(t *testing.T) {
 		t.Error("tier_stats directory should not exist when TrackTiers is false")
 	}
 
-	// Read should return nil
+	// Read returns an empty reader (HasTierData == false) rather than nil
+	// so callers can dispatch on the method rather than nil-checking.
 	reader, err := OpenTierStats(dir)
 	if err != nil {
 		t.Fatalf("OpenTierStats failed: %v", err)
 	}
-	if reader != nil {
-		t.Error("expected nil reader when no tier data")
-		reader.Close()
+	if reader == nil {
+		t.Fatal("expected non-nil reader even when no tier data")
+	}
+	defer reader.Close()
+	if reader.HasTierData() {
+		t.Error("expected HasTierData() == false when no tier data")
 	}
 }
 
@@ -165,8 +169,12 @@ func TestTierStatsReader_MissingDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenTierStats failed: %v", err)
 	}
-	if reader != nil {
-		t.Error("expected nil reader when tiers.json doesn't exist")
+	if reader == nil {
+		t.Fatal("expected non-nil reader when tiers.json doesn't exist")
+	}
+	defer reader.Close()
+	if reader.HasTierData() {
+		t.Error("expected HasTierData() == false when tiers.json doesn't exist")
 	}
 }
 

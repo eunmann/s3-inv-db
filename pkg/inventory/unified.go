@@ -1,4 +1,3 @@
-// Package inventory provides readers for AWS S3 Inventory files (CSV and Parquet).
 package inventory
 
 import (

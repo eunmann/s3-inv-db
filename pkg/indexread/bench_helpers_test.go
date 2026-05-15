@@ -1,4 +1,4 @@
-package indexread
+package indexread_test
 
 import (
 	"path/filepath"

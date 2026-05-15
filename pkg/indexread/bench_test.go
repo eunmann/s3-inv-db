@@ -1,4 +1,4 @@
-package indexread
+package indexread_test
 
 import (
 	"fmt"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/pkg/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
@@ -44,7 +45,7 @@ Benchmark Categories for Index Reading:
 
 // benchIndex holds a pre-built index for benchmarking.
 type benchIndex struct {
-	idx      *Index
+	idx      *indexread.Index
 	prefixes []string
 	dir      string
 }
@@ -55,7 +56,7 @@ func setupBenchIndex(b *testing.B, keys []string) *benchIndex {
 
 	setup := setupIndexFromKeys(b, keys)
 
-	idx, err := Open(setup.IndexDir)
+	idx, err := indexread.Open(setup.IndexDir)
 	if err != nil {
 		b.Fatalf("Open failed: %v", err)
 	}
@@ -83,7 +84,7 @@ func setupBenchIndexWithTiers(b *testing.B, numObjects int) *benchIndex {
 
 	setup := setupIndex(b, numObjects)
 
-	idx, err := Open(setup.IndexDir)
+	idx, err := indexread.Open(setup.IndexDir)
 	if err != nil {
 		b.Fatalf("Open failed: %v", err)
 	}
@@ -238,7 +239,7 @@ func BenchmarkIndexOpen(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := range b.N {
-		idx, err := Open(dir)
+		idx, err := indexread.Open(dir)
 		if err != nil {
 			b.Fatalf("Open failed: %v", err)
 		}
@@ -544,7 +545,7 @@ func BenchmarkIndexOpen_Scaling(b *testing.B) {
 
 			b.ResetTimer()
 			for range b.N {
-				idx, err := Open(bi.dir)
+				idx, err := indexread.Open(bi.dir)
 				if err != nil {
 					b.Fatalf("Open failed: %v", err)
 				}

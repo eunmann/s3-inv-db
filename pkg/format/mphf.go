@@ -1,7 +1,6 @@
 package format
 
 import (
-	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -41,7 +40,8 @@ func (b *MPHFBuilder) Build(outDir string) error {
 	}
 
 	// Build MPHF with gamma=2.0 (good space/time tradeoff)
-	mph, err := bbhash.New(keys, bbhash.Gamma(2.0))
+	const bbhashGamma = 2.0
+	mph, err := bbhash.New(keys, bbhash.Gamma(bbhashGamma))
 	if err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
@@ -79,7 +79,7 @@ func (b *MPHFBuilder) Build(outDir string) error {
 		keyHash := keys[i]
 		hashVal := mph.Find(keyHash)
 		if hashVal == 0 {
-			return fmt.Errorf("MPHF lookup failed for %q", prefix)
+			return fmt.Errorf("%w for %q", ErrMPHFLookupFailed, prefix)
 		}
 		hashPos := hashVal - 1 // Convert to 0-indexed
 		fingerprints[hashPos] = computeFingerprint(prefix)
@@ -133,10 +133,15 @@ func (b *MPHFBuilder) Build(outDir string) error {
 	return nil
 }
 
+// indexFilePerm restricts MPHF and tier-stats files to owner read/write
+// only; index directories are written by the seeder and read by the
+// server process running as the same user.
+const indexFilePerm = 0o600
+
 func (b *MPHFBuilder) writeEmpty(outDir string) error {
 	// Create empty mph file
 	mphPath := filepath.Join(outDir, "mph.bin")
-	if err := os.WriteFile(mphPath, nil, 0o644); err != nil {
+	if err := os.WriteFile(mphPath, nil, indexFilePerm); err != nil {
 		return fmt.Errorf("write empty mph: %w", err)
 	}
 
@@ -309,7 +314,7 @@ func (m *MPHF) Close() error {
 }
 
 // Lookup returns the preorder position for a prefix, or ok=false if not found.
-func (m *MPHF) Lookup(prefix string) (pos uint64, ok bool) {
+func (m *MPHF) Lookup(prefix string) (uint64, bool) {
 	if m.count == 0 || m.mph == nil {
 		return 0, false
 	}
@@ -340,8 +345,8 @@ func (m *MPHF) Lookup(prefix string) (pos uint64, ok bool) {
 
 // LookupWithVerify returns the position and optionally verifies against
 // the prefix blob (slower but more certain).
-func (m *MPHF) LookupWithVerify(prefix string) (pos uint64, ok bool) {
-	pos, ok = m.Lookup(prefix)
+func (m *MPHF) LookupWithVerify(prefix string) (uint64, bool) {
+	pos, ok := m.Lookup(prefix)
 	if !ok {
 		return 0, false
 	}
@@ -375,7 +380,7 @@ func (m *MPHF) GetPrefix(pos uint64) (string, error) {
 	}
 
 	if m.prefixBlob == nil {
-		return "", errors.New("prefix blob not loaded")
+		return "", ErrPrefixBlobNotLoaded
 	}
 	s, err := m.prefixBlob.Get(pos)
 	if err != nil {
@@ -429,7 +434,7 @@ func computeFingerprintBytes(b []byte) uint64 {
 // Works with both segmented and raw blob prefix storage.
 func VerifyMPHF(m *MPHF) error {
 	if m.prefixBlob == nil && m.segmentedPrefixes == nil {
-		return errors.New("no prefix storage loaded")
+		return ErrNoPrefixStorage
 	}
 
 	for i := range m.count {
@@ -440,10 +445,10 @@ func VerifyMPHF(m *MPHF) error {
 
 		pos, ok := m.Lookup(prefix)
 		if !ok {
-			return fmt.Errorf("lookup failed for prefix %q at pos %d", prefix, i)
+			return fmt.Errorf("%w for prefix %q at pos %d", ErrMPHFLookupFailed, prefix, i)
 		}
 		if pos != i {
-			return fmt.Errorf("lookup returned wrong pos for %q: got %d, want %d", prefix, pos, i)
+			return fmt.Errorf("%w for %q: got %d, want %d", ErrLookupWrongPos, prefix, pos, i)
 		}
 	}
 

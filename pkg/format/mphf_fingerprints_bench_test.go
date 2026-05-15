@@ -338,7 +338,7 @@ func fingerprintModeWorker(
 			hashVal := mph.Find(keyHash)
 			if hashVal == 0 {
 				select {
-				case errChan <- fmt.Errorf("MPHF lookup failed for prefix at index %d", item.index):
+				case errChan <- fmt.Errorf("%w at index %d", ErrMPHFLookupFailed, item.index):
 				default:
 				}
 

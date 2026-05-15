@@ -133,7 +133,7 @@ type Stats struct {
 }
 
 // Lookup returns the preorder position for a prefix, or ok=false if not found.
-func (idx *Index) Lookup(prefix string) (pos uint64, ok bool) {
+func (idx *Index) Lookup(prefix string) (uint64, bool) {
 	return idx.mphf.Lookup(prefix)
 }
 
@@ -383,7 +383,7 @@ func (idx *Index) HasTierData() bool {
 //
 // Use HasTierData to distinguish "no tier data in index" from "empty breakdown".
 func (idx *Index) TierBreakdown(pos uint64) []TierBreakdown {
-	if idx.tierStats == nil {
+	if !idx.HasTierData() {
 		return nil
 	}
 
@@ -394,7 +394,7 @@ func (idx *Index) TierBreakdown(pos uint64) []TierBreakdown {
 // Returns nil if no tier data was collected during index build.
 // Use HasTierData to check if tier data is available.
 func (idx *Index) TierBreakdownAll(pos uint64) []TierBreakdown {
-	if idx.tierStats == nil {
+	if !idx.HasTierData() {
 		return nil
 	}
 

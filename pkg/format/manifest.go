@@ -162,8 +162,8 @@ func VerifyManifest(dir string, manifest *Manifest) error {
 
 		// Check size
 		if stat.Size() != info.Size {
-			return fmt.Errorf("file %s: size mismatch (got %d, want %d)",
-				name, stat.Size(), info.Size)
+			return fmt.Errorf("file %s: %w (got %d, want %d)",
+				name, ErrSizeMismatch, stat.Size(), info.Size)
 		}
 
 		// Check checksum
@@ -173,7 +173,7 @@ func VerifyManifest(dir string, manifest *Manifest) error {
 		}
 
 		if checksum != info.Checksum {
-			return fmt.Errorf("file %s: checksum mismatch", name)
+			return fmt.Errorf("file %s: %w", name, ErrChecksumMismatch)
 		}
 	}
 

@@ -1,4 +1,4 @@
-package inventory
+package inventory_test
 
 import (
 	"bytes"
@@ -10,11 +10,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/pkg/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 func TestRecordType(t *testing.T) {
-	r := Record{Key: "test/key.txt", Size: 1024}
+	r := inventory.Record{Key: "test/key.txt", Size: 1024}
 	if r.Key != "test/key.txt" {
 		t.Errorf("Key = %s, want test/key.txt", r.Key)
 	}
@@ -25,13 +26,13 @@ func TestRecordType(t *testing.T) {
 
 func TestNewReader(t *testing.T) {
 	csv := "a/b/c.txt,100\nd/e.txt,200\n"
-	r := NewReader(strings.NewReader(csv), 0, 1)
+	r := inventory.NewReader(strings.NewReader(csv), 0, 1)
 
 	rec, err := r.Read()
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
-	if rec.Key != "a/b/c.txt" || rec.Size != 100 {
+	if rec.Key != testKeyABC || rec.Size != 100 {
 		t.Errorf("got %+v, want {Key:a/b/c.txt Size:100}", rec)
 	}
 
@@ -39,7 +40,7 @@ func TestNewReader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
-	if rec.Key != "d/e.txt" || rec.Size != 200 {
+	if rec.Key != testKeyDE || rec.Size != 200 {
 		t.Errorf("got %+v, want {Key:d/e.txt Size:200}", rec)
 	}
 
@@ -54,11 +55,11 @@ func TestOpenFile_CSV(t *testing.T) {
 	csvPath := filepath.Join(dir, "test.csv")
 
 	content := "Bucket,Key,Size,LastModified\nmy-bucket,a/b/c.txt,1024,2024-01-01\nmy-bucket,d/e.txt,2048,2024-01-02\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	r, err := OpenFile(csvPath)
+	r, err := inventory.OpenFile(csvPath)
 	if err != nil {
 		t.Fatalf("OpenFile failed: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestOpenFile_CSV(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
-	if rec.Key != "a/b/c.txt" || rec.Size != 1024 {
+	if rec.Key != testKeyABC || rec.Size != 1024 {
 		t.Errorf("got %+v, want {Key:a/b/c.txt Size:1024}", rec)
 	}
 
@@ -76,7 +77,7 @@ func TestOpenFile_CSV(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
-	if rec.Key != "d/e.txt" || rec.Size != 2048 {
+	if rec.Key != testKeyDE || rec.Size != 2048 {
 		t.Errorf("got %+v, want {Key:d/e.txt Size:2048}", rec)
 	}
 
@@ -97,11 +98,11 @@ func TestOpenFile_CSVGZ(t *testing.T) {
 	_, _ = gzw.Write([]byte(content))
 	gzw.Close()
 
-	if err := os.WriteFile(gzPath, buf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(gzPath, buf.Bytes(), 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	r, err := OpenFile(gzPath)
+	r, err := inventory.OpenFile(gzPath)
 	if err != nil {
 		t.Fatalf("OpenFile failed: %v", err)
 	}
@@ -129,13 +130,13 @@ func TestOpenFile_MissingKeyColumn(t *testing.T) {
 	csvPath := filepath.Join(dir, "test.csv")
 
 	content := "Bucket,Size\nmy-bucket,1024\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	_, err := OpenFile(csvPath)
-	if !errors.Is(err, ErrNoKeyColumn) {
-		t.Errorf("expected ErrNoKeyColumn, got %v", err)
+	_, err := inventory.OpenFile(csvPath)
+	if !errors.Is(err, inventory.ErrNoKeyColumn) {
+		t.Errorf("expected inventory.ErrNoKeyColumn, got %v", err)
 	}
 }
 
@@ -144,13 +145,13 @@ func TestOpenFile_MissingSizeColumn(t *testing.T) {
 	csvPath := filepath.Join(dir, "test.csv")
 
 	content := "Bucket,Key\nmy-bucket,a/b.txt\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	_, err := OpenFile(csvPath)
-	if !errors.Is(err, ErrNoSizeColumn) {
-		t.Errorf("expected ErrNoSizeColumn, got %v", err)
+	_, err := inventory.OpenFile(csvPath)
+	if !errors.Is(err, inventory.ErrNoSizeColumn) {
+		t.Errorf("expected inventory.ErrNoSizeColumn, got %v", err)
 	}
 }
 
@@ -159,11 +160,11 @@ func TestOpenFile_CaseInsensitiveHeaders(t *testing.T) {
 	csvPath := filepath.Join(dir, "test.csv")
 
 	content := "BUCKET,KEY,SIZE\nmy-bucket,test.txt,512\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	r, err := OpenFile(csvPath)
+	r, err := inventory.OpenFile(csvPath)
 	if err != nil {
 		t.Fatalf("OpenFile failed: %v", err)
 	}
@@ -183,11 +184,11 @@ func TestOpenFile_WhitespaceInHeaders(t *testing.T) {
 	csvPath := filepath.Join(dir, "test.csv")
 
 	content := "  Key  ,  Size  \ntest.txt,256\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	r, err := OpenFile(csvPath)
+	r, err := inventory.OpenFile(csvPath)
 	if err != nil {
 		t.Fatalf("OpenFile failed: %v", err)
 	}
@@ -204,7 +205,7 @@ func TestOpenFile_WhitespaceInHeaders(t *testing.T) {
 
 func TestRead_InvalidSize(t *testing.T) {
 	csv := "abc/def.txt,not-a-number\n"
-	r := NewReader(strings.NewReader(csv), 0, 1)
+	r := inventory.NewReader(strings.NewReader(csv), 0, 1)
 
 	rec, err := r.Read()
 	if err != nil {
@@ -218,7 +219,7 @@ func TestRead_InvalidSize(t *testing.T) {
 
 func TestRead_EmptySize(t *testing.T) {
 	csv := "abc/def.txt,\n"
-	r := NewReader(strings.NewReader(csv), 0, 1)
+	r := inventory.NewReader(strings.NewReader(csv), 0, 1)
 
 	rec, err := r.Read()
 	if err != nil {
@@ -231,7 +232,7 @@ func TestRead_EmptySize(t *testing.T) {
 
 func TestRead_EmptyKey(t *testing.T) {
 	csv := ",100\nabc.txt,200\n"
-	r := NewReader(strings.NewReader(csv), 0, 1)
+	r := inventory.NewReader(strings.NewReader(csv), 0, 1)
 
 	// Should skip empty key and return abc.txt
 	rec, err := r.Read()
@@ -245,7 +246,7 @@ func TestRead_EmptyKey(t *testing.T) {
 
 func TestRead_InsufficientColumns(t *testing.T) {
 	csv := "only-one-column\nabc.txt,200\n"
-	r := NewReader(strings.NewReader(csv), 0, 1)
+	r := inventory.NewReader(strings.NewReader(csv), 0, 1)
 
 	// Should skip row with insufficient columns
 	rec, err := r.Read()
@@ -261,7 +262,7 @@ func TestRead_LargeKey(t *testing.T) {
 	// S3 keys can be up to 1024 bytes
 	longKey := strings.Repeat("a/", 500) + "file.txt"
 	csv := longKey + ",1024\n"
-	r := NewReader(strings.NewReader(csv), 0, 1)
+	r := inventory.NewReader(strings.NewReader(csv), 0, 1)
 
 	rec, err := r.Read()
 	if err != nil {
@@ -274,7 +275,7 @@ func TestRead_LargeKey(t *testing.T) {
 
 func TestRead_UnicodeKey(t *testing.T) {
 	csv := "日本語/ファイル.txt,100\n"
-	r := NewReader(strings.NewReader(csv), 0, 1)
+	r := inventory.NewReader(strings.NewReader(csv), 0, 1)
 
 	rec, err := r.Read()
 	if err != nil {
@@ -287,7 +288,7 @@ func TestRead_UnicodeKey(t *testing.T) {
 
 func TestRead_KeyWithQuotes(t *testing.T) {
 	csv := `"file with ""quotes"".txt",100` + "\n"
-	r := NewReader(strings.NewReader(csv), 0, 1)
+	r := inventory.NewReader(strings.NewReader(csv), 0, 1)
 
 	rec, err := r.Read()
 	if err != nil {
@@ -301,7 +302,7 @@ func TestRead_KeyWithQuotes(t *testing.T) {
 
 func TestRead_KeyWithCommas(t *testing.T) {
 	csv := `"file,with,commas.txt",100` + "\n"
-	r := NewReader(strings.NewReader(csv), 0, 1)
+	r := inventory.NewReader(strings.NewReader(csv), 0, 1)
 
 	rec, err := r.Read()
 	if err != nil {
@@ -314,7 +315,7 @@ func TestRead_KeyWithCommas(t *testing.T) {
 
 func TestRead_FolderMarker(t *testing.T) {
 	csv := "folder/,0\nfolder/file.txt,100\n"
-	r := NewReader(strings.NewReader(csv), 0, 1)
+	r := inventory.NewReader(strings.NewReader(csv), 0, 1)
 
 	rec, err := r.Read()
 	if err != nil {
@@ -334,7 +335,7 @@ func TestRead_FolderMarker(t *testing.T) {
 }
 
 func TestOpenFile_NotFound(t *testing.T) {
-	_, err := OpenFile("/nonexistent/path/file.csv")
+	_, err := inventory.OpenFile("/nonexistent/path/file.csv")
 	if err == nil {
 		t.Error("expected error for nonexistent file")
 	}
@@ -345,18 +346,18 @@ func TestOpenFile_InvalidGzip(t *testing.T) {
 	gzPath := filepath.Join(dir, "invalid.csv.gz")
 
 	// Write non-gzip content with .gz extension
-	if err := os.WriteFile(gzPath, []byte("not gzip content"), 0o644); err != nil {
+	if err := os.WriteFile(gzPath, []byte("not gzip content"), 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	_, err := OpenFile(gzPath)
+	_, err := inventory.OpenFile(gzPath)
 	if err == nil {
 		t.Error("expected error for invalid gzip file")
 	}
 }
 
 func TestClose_NilClosers(t *testing.T) {
-	r := &CSVReader{}
+	r := &inventory.CSVReader{}
 	err := r.Close()
 	if err != nil {
 		t.Errorf("Close on empty reader failed: %v", err)
@@ -369,12 +370,12 @@ func TestOpenFileWithSchema(t *testing.T) {
 
 	// AWS S3 inventory CSV files have no header
 	content := "my-bucket,a/b/c.txt,1024,2024-01-01\nmy-bucket,d/e.txt,2048,2024-01-02\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
 	// Key is column 1, Size is column 2
-	r, err := OpenFileWithSchema(csvPath, 1, 2)
+	r, err := inventory.OpenFileWithSchema(csvPath, 1, 2)
 	if err != nil {
 		t.Fatalf("OpenFileWithSchema failed: %v", err)
 	}
@@ -384,7 +385,7 @@ func TestOpenFileWithSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
-	if rec.Key != "a/b/c.txt" || rec.Size != 1024 {
+	if rec.Key != testKeyABC || rec.Size != 1024 {
 		t.Errorf("got %+v, want {Key:a/b/c.txt Size:1024}", rec)
 	}
 
@@ -392,7 +393,7 @@ func TestOpenFileWithSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
-	if rec.Key != "d/e.txt" || rec.Size != 2048 {
+	if rec.Key != testKeyDE || rec.Size != 2048 {
 		t.Errorf("got %+v, want {Key:d/e.txt Size:2048}", rec)
 	}
 
@@ -414,12 +415,12 @@ func TestOpenFileWithSchema_CSVGZ(t *testing.T) {
 	_, _ = gzw.Write([]byte(content))
 	gzw.Close()
 
-	if err := os.WriteFile(gzPath, buf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(gzPath, buf.Bytes(), 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
 	// Key is column 1, Size is column 2
-	r, err := OpenFileWithSchema(gzPath, 1, 2)
+	r, err := inventory.OpenFileWithSchema(gzPath, 1, 2)
 	if err != nil {
 		t.Fatalf("OpenFileWithSchema failed: %v", err)
 	}
@@ -446,11 +447,11 @@ func TestOpenFileWithOptions_TrackTiers(t *testing.T) {
 		"file3.txt,200000,INTELLIGENT_TIERING,FREQUENT_ACCESS\n" +
 		"file4.txt,400,INTELLIGENT_TIERING,ARCHIVE_ACCESS\n"
 
-	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	r, err := OpenFileWithOptions(csvPath, OpenOptions{TrackTiers: true})
+	r, err := inventory.OpenFileWithOptions(csvPath, inventory.OpenOptions{TrackTiers: true})
 	if err != nil {
 		t.Fatalf("OpenFileWithOptions failed: %v", err)
 	}
@@ -498,12 +499,12 @@ func TestOpenFileWithOptions_NoTrackTiers(t *testing.T) {
 	csvPath := filepath.Join(dir, "test.csv")
 
 	content := "Key,Size,StorageClass\nfile1.txt,100,GLACIER\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
 	// Without TrackTiers, TierID should be 0 (default)
-	r, err := OpenFileWithOptions(csvPath, OpenOptions{TrackTiers: false})
+	r, err := inventory.OpenFileWithOptions(csvPath, inventory.OpenOptions{TrackTiers: false})
 	if err != nil {
 		t.Fatalf("OpenFileWithOptions failed: %v", err)
 	}
@@ -524,11 +525,11 @@ func TestOpenFileWithSchemaOptions_TrackTiers(t *testing.T) {
 
 	// Headerless CSV with columns: Bucket, Key, Size, StorageClass, ITAccessTier
 	content := "my-bucket,file1.txt,100,STANDARD_IA,\nmy-bucket,file2.txt,200,INTELLIGENT_TIERING,INFREQUENT_ACCESS\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	r, err := OpenFileWithSchemaOptions(csvPath, SchemaOptions{
+	r, err := inventory.OpenFileWithSchemaOptions(csvPath, inventory.SchemaOptions{
 		KeyCol:        1,
 		SizeCol:       2,
 		StorageCol:    3,
@@ -570,11 +571,11 @@ func TestOpenFileWithOptions_TrackTiers_SmallITFrequentRoutesToSmall(t *testing.
 		"small.txt,1024,INTELLIGENT_TIERING,FREQUENT_ACCESS\n" +
 		"boundary.txt,131072,INTELLIGENT_TIERING,FREQUENT_ACCESS\n" +
 		"big.txt,1048576,INTELLIGENT_TIERING,FREQUENT_ACCESS\n"
-	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(csvPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	r, err := OpenFileWithOptions(csvPath, OpenOptions{TrackTiers: true})
+	r, err := inventory.OpenFileWithOptions(csvPath, inventory.OpenOptions{TrackTiers: true})
 	if err != nil {
 		t.Fatalf("OpenFileWithOptions: %v", err)
 	}

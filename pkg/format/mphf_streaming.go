@@ -176,7 +176,8 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		Msg("MPHF: calling bbhash.New with ReverseMap")
 
 	bbhashStart := time.Now()
-	mph, err := bbhash.New(b.hashes, bbhash.Gamma(2.0), bbhash.WithReverseMap())
+	const bbhashGamma = 2.0
+	mph, err := bbhash.New(b.hashes, bbhash.Gamma(bbhashGamma), bbhash.WithReverseMap())
 	if err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
@@ -295,11 +296,11 @@ func (b *StreamingMPHFBuilder) computeHashPositionsReverseMap(mph *bbhash.BBHash
 		if key == 0 {
 			// Key value 0 is ambiguous (could be sentinel or actual key)
 			// This should be extremely rare for FNV hashes
-			return nil, fmt.Errorf("MPHF Key(%d) returned 0, possible hash collision with sentinel", mphPos)
+			return nil, fmt.Errorf("%w: Key(%d) returned 0", ErrMPHFAmbiguousKey, mphPos)
 		}
 		origIdx, ok := hashToOrigIdx[key]
 		if !ok {
-			return nil, fmt.Errorf("MPHF Key(%d) returned unknown hash %d", mphPos, key)
+			return nil, fmt.Errorf("%w: Key(%d) returned %d", ErrMPHFUnknownHash, mphPos, key)
 		}
 		hashPositions[origIdx] = int(mphPos - 1)
 	}
@@ -441,7 +442,7 @@ func (b *StreamingMPHFBuilder) fingerprintWorker(
 			hashVal := mph.Find(keyHash)
 			if hashVal == 0 {
 				select {
-				case errChan <- fmt.Errorf("MPHF lookup failed for prefix at index %d", item.index):
+				case errChan <- fmt.Errorf("%w at index %d", ErrMPHFLookupFailed, item.index):
 				default:
 				}
 
@@ -606,7 +607,7 @@ func (b *StreamingMPHFBuilder) writePrefixBlobSegmented(outDir string) error {
 func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	// Create empty mph file
 	mphPath := filepath.Join(outDir, "mph.bin")
-	if err := os.WriteFile(mphPath, nil, 0o644); err != nil {
+	if err := os.WriteFile(mphPath, nil, indexFilePerm); err != nil {
 		return fmt.Errorf("write empty mph: %w", err)
 	}
 

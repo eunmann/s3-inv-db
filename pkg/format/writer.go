@@ -49,7 +49,7 @@ func NewArrayWriter(path string, width uint32) (*ArrayWriter, error) {
 // WriteU32 writes a uint32 value.
 func (w *ArrayWriter) WriteU32(val uint32) error {
 	if w.width != 4 {
-		return fmt.Errorf("width mismatch: expected 4, got %d", w.width)
+		return fmt.Errorf("%w: expected 4, got %d", ErrWidthMismatch, w.width)
 	}
 	var buf [4]byte
 	binary.LittleEndian.PutUint32(buf[:], val)
@@ -64,7 +64,7 @@ func (w *ArrayWriter) WriteU32(val uint32) error {
 // WriteU64 writes a uint64 value.
 func (w *ArrayWriter) WriteU64(val uint64) error {
 	if w.width != 8 {
-		return fmt.Errorf("width mismatch: expected 8, got %d", w.width)
+		return fmt.Errorf("%w: expected 8, got %d", ErrWidthMismatch, w.width)
 	}
 	var buf [8]byte
 	binary.LittleEndian.PutUint64(buf[:], val)
@@ -81,7 +81,7 @@ func (w *ArrayWriter) WriteU64(val uint64) error {
 // larger contiguous writes.
 func (w *ArrayWriter) WriteU64Batch(vals []uint64) error {
 	if w.width != 8 {
-		return fmt.Errorf("width mismatch: expected 8, got %d", w.width)
+		return fmt.Errorf("%w: expected 8, got %d", ErrWidthMismatch, w.width)
 	}
 	if len(vals) == 0 {
 		return nil
@@ -102,7 +102,7 @@ func (w *ArrayWriter) WriteU64Batch(vals []uint64) error {
 // WriteU16 writes a uint16 value.
 func (w *ArrayWriter) WriteU16(val uint16) error {
 	if w.width != 2 {
-		return fmt.Errorf("width mismatch: expected 2, got %d", w.width)
+		return fmt.Errorf("%w: expected 2, got %d", ErrWidthMismatch, w.width)
 	}
 	var buf [2]byte
 	binary.LittleEndian.PutUint16(buf[:], val)

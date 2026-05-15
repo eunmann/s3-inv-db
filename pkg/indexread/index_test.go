@@ -1,4 +1,4 @@
-package indexread
+package indexread_test
 
 import (
 	"os"
@@ -8,8 +8,15 @@ import (
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
+	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
+
+// minimalCSV is a one-row inventory used by tests that just need a valid
+// index to open; extracted to a constant to satisfy goconst.
+const minimalCSV = `Key,Size
+a/file.txt,100
+`
 
 func TestEndToEndSimple(t *testing.T) {
 	outDir := setupTestIndex(t)
@@ -26,7 +33,7 @@ b/sub/file.txt,400
 	}
 
 	// Open and query
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -97,7 +104,7 @@ b/m/file.txt,400
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -175,7 +182,7 @@ a/e/file.txt,300
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -225,7 +232,7 @@ large/file3.txt,500
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -234,7 +241,7 @@ large/file3.txt,500
 	rootPos, _ := idx.Lookup("")
 
 	// Filter by min count >= 2
-	filtered, err := idx.DescendantsAtDepthFiltered(rootPos, 1, Filter{MinCount: 2})
+	filtered, err := idx.DescendantsAtDepthFiltered(rootPos, 1, indexread.Filter{MinCount: 2})
 	if err != nil {
 		t.Fatalf("DescendantsAtDepthFiltered failed: %v", err)
 	}
@@ -243,7 +250,7 @@ large/file3.txt,500
 	}
 
 	// Filter by min bytes >= 500
-	filtered2, err := idx.DescendantsAtDepthFiltered(rootPos, 1, Filter{MinBytes: 500})
+	filtered2, err := idx.DescendantsAtDepthFiltered(rootPos, 1, indexread.Filter{MinBytes: 500})
 	if err != nil {
 		t.Fatalf("DescendantsAtDepthFiltered failed: %v", err)
 	}
@@ -254,13 +261,10 @@ large/file3.txt,500
 
 func TestIterator_EmptyOnOutOfBoundsOrNegativeDepth(t *testing.T) {
 	outDir := setupTestIndex(t)
-	csv := `Key,Size
-a/file.txt,100
-`
-	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
+	if err := buildIndexFromCSV(t, outDir, minimalCSV); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -305,7 +309,7 @@ c/file.txt,300
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -339,7 +343,7 @@ foo/baz/file.txt,200
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -376,7 +380,7 @@ func TestLargeDataset(t *testing.T) {
 	outDir := setupTestIndex(t)
 
 	// Generate keys
-	var keys []string
+	keys := make([]string, 0, 100*10)
 	for i := range 100 {
 		for j := range 10 {
 			key := prefixFromInt(i) + prefixFromInt(j) + "file.txt"
@@ -388,7 +392,7 @@ func TestLargeDataset(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -474,7 +478,7 @@ x/y/file.txt,200
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -494,14 +498,11 @@ x/y/file.txt,200
 func TestEmptyIterator(t *testing.T) {
 	outDir := setupTestIndex(t)
 
-	csv := `Key,Size
-a/file.txt,100
-`
-	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
+	if err := buildIndexFromCSV(t, outDir, minimalCSV); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -543,7 +544,7 @@ a/b/file.txt,100
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -574,7 +575,7 @@ file.txt,100
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -608,7 +609,7 @@ a/b/c/d/e/f/g/h/i/j/file.txt,100
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -653,7 +654,7 @@ banana/file.txt,400
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -703,7 +704,7 @@ func TestTierBreakdown(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -779,7 +780,7 @@ func TestTierBreakdownMap(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -813,14 +814,11 @@ func TestNoTierData(t *testing.T) {
 	outDir := setupTestIndex(t)
 
 	// Build index without using buildIndexWithTiers (uses Standard tier only)
-	csv := `Key,Size
-a/file.txt,100
-`
-	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
+	if err := buildIndexFromCSV(t, outDir, minimalCSV); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := Open(outDir)
+	idx, err := indexread.Open(outDir)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}

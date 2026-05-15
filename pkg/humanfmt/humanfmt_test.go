@@ -1,9 +1,11 @@
-package humanfmt
+package humanfmt_test
 
 import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 )
 
 func TestBytes(t *testing.T) {
@@ -27,7 +29,7 @@ func TestBytes(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := Bytes(tt.input)
+		got := humanfmt.Bytes(tt.input)
 		if got != tt.want {
 			t.Errorf("Bytes(%d) = %q, want %q", tt.input, got, tt.want)
 		}
@@ -57,7 +59,7 @@ func TestDuration(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := Duration(tt.input)
+		got := humanfmt.Duration(tt.input)
 		if got != tt.want {
 			t.Errorf("Duration(%v) = %q, want %q", tt.input, got, tt.want)
 		}
@@ -82,7 +84,7 @@ func TestThroughput(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := Throughput(tt.bytes, tt.duration)
+		got := humanfmt.Throughput(tt.bytes, tt.duration)
 		if got != tt.want {
 			t.Errorf("Throughput(%d, %v) = %q, want %q", tt.bytes, tt.duration, got, tt.want)
 		}
@@ -112,7 +114,7 @@ func TestCount(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Count(tt.input)
+			got := humanfmt.Count(tt.input)
 			if got != tt.want {
 				t.Errorf("Count(%d) = %q, want %q", tt.input, got, tt.want)
 			}
@@ -130,8 +132,8 @@ func TestFormatWithCommas(t *testing.T) {
 		{999, "999"},
 	}
 	for _, tt := range tests {
-		if got := formatWithCommas(tt.n); got != tt.want {
-			t.Errorf("formatWithCommas(%d) = %q, want %q", tt.n, got, tt.want)
+		if got := humanfmt.FormatWithCommas(tt.n); got != tt.want {
+			t.Errorf("FormatWithCommas(%d) = %q, want %q", tt.n, got, tt.want)
 		}
 	}
 }
@@ -140,7 +142,7 @@ func BenchmarkBytes(b *testing.B) {
 	sizes := []int64{100, 1024, 1048576, 1073741824}
 	b.ResetTimer()
 	for i := range b.N {
-		_ = Bytes(sizes[i%len(sizes)])
+		_ = humanfmt.Bytes(sizes[i%len(sizes)])
 	}
 }
 
@@ -153,14 +155,14 @@ func BenchmarkDuration(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := range b.N {
-		_ = Duration(durations[i%len(durations)])
+		_ = humanfmt.Duration(durations[i%len(durations)])
 	}
 }
 
 func BenchmarkThroughput(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
-		_ = Throughput(104857600, time.Second)
+		_ = humanfmt.Throughput(104857600, time.Second)
 	}
 }
 
@@ -169,17 +171,17 @@ func TestBytesUint64_OverflowAbove2_63(t *testing.T) {
 	// underflowed to a negative value and returned "-... B". The
 	// native uint64 implementation must surface a real TiB number.
 	const aboveMax = uint64(1) << 63
-	got := BytesUint64(aboveMax)
+	got := humanfmt.BytesUint64(aboveMax)
 	if !strings.HasSuffix(got, "TiB") {
-		t.Errorf("BytesUint64(2^63) = %q, want a TiB-suffix value", got)
+		t.Errorf("humanfmt.BytesUint64(2^63) = %q, want a TiB-suffix value", got)
 	}
 }
 
 func TestCountUint64_OverflowAbove2_63(t *testing.T) {
 	const aboveMax = uint64(1) << 63
-	got := CountUint64(aboveMax)
+	got := humanfmt.CountUint64(aboveMax)
 	if !strings.HasSuffix(got, "B") {
-		t.Errorf("CountUint64(2^63) = %q, want a B-suffix value", got)
+		t.Errorf("humanfmt.CountUint64(2^63) = %q, want a B-suffix value", got)
 	}
 }
 
@@ -193,7 +195,7 @@ func TestRunTimestamp(t *testing.T) {
 		{"", ""},
 	}
 	for _, c := range cases {
-		if got := RunTimestamp(c.in); got != c.want {
+		if got := humanfmt.RunTimestamp(c.in); got != c.want {
 			t.Errorf("RunTimestamp(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}

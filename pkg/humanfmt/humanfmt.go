@@ -54,6 +54,7 @@ func BytesUint64(b uint64) string {
 	}
 }
 
+// Duration formats a time.Duration using compact human-readable units.
 // Examples: "1.23s", "45.6ms", "789µs", "1m30s", "2h15m".
 func Duration(d time.Duration) string {
 	if d < 0 {
