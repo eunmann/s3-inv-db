@@ -57,6 +57,7 @@ const (
 type CompressedRunWriter struct {
 	file             *os.File
 	compressor       *zstd.Encoder
+	zstdLevel        zstd.EncoderLevel
 	writer           *bufio.Writer
 	count            uint64
 	uncompressedSize uint64
@@ -113,16 +114,18 @@ func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*Comp
 		zstdLevel = zstd.SpeedBetterCompression
 	}
 
-	enc, err := zstd.NewWriter(f, zstd.WithEncoderLevel(zstdLevel))
+	enc, err := acquireZstdEncoder(zstdLevel)
 	if err != nil {
 		f.Close()
 		os.Remove(path)
-		return nil, fmt.Errorf("create zstd encoder: %w", err)
+		return nil, fmt.Errorf("acquire zstd encoder: %w", err)
 	}
+	enc.Reset(f)
 
 	return &CompressedRunWriter{
 		file:       f,
 		compressor: enc,
+		zstdLevel:  zstdLevel,
 		writer:     bufio.NewWriterSize(enc, opts.BufferSize),
 		path:       path,
 		buf:        make([]byte, 1024),
@@ -216,11 +219,13 @@ func (w *CompressedRunWriter) Close() error {
 		return fmt.Errorf("flush buffer: %w", err)
 	}
 
-	// Close the compressor (finalizes zstd stream)
+	// Close the compressor (finalizes zstd stream) then return it to the pool.
 	if err := w.compressor.Close(); err != nil {
 		w.file.Close()
 		return fmt.Errorf("close compressor: %w", err)
 	}
+	releaseZstdEncoder(w.zstdLevel, w.compressor)
+	w.compressor = nil
 
 	// Update header with final count and uncompressed size
 	if _, err := w.file.Seek(12, 0); err != nil {
@@ -301,11 +306,16 @@ func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, e
 
 	count := binary.LittleEndian.Uint64(header[12:20])
 
-	// Create zstd decoder
-	dec, err := zstd.NewReader(f)
+	// Create or reuse a pooled zstd decoder.
+	dec, err := acquireZstdDecoder()
 	if err != nil {
 		f.Close()
-		return nil, fmt.Errorf("create zstd decoder: %w", err)
+		return nil, fmt.Errorf("acquire zstd decoder: %w", err)
+	}
+	if err := dec.Reset(f); err != nil {
+		f.Close()
+		dec.Close()
+		return nil, fmt.Errorf("reset zstd decoder: %w", err)
 	}
 
 	return &CompressedRunReader{
@@ -356,7 +366,8 @@ func (r *CompressedRunReader) Close() error {
 	}
 	r.closed = true
 
-	r.decompressor.Close()
+	releaseZstdDecoder(r.decompressor)
+	r.decompressor = nil
 
 	if err := r.file.Close(); err != nil {
 		return fmt.Errorf("close compressed run file: %w", err)
