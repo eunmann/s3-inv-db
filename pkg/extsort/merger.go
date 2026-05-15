@@ -1,7 +1,6 @@
 package extsort
 
 import (
-	"container/heap"
 	"errors"
 	"io"
 )
@@ -11,7 +10,7 @@ import (
 // automatically merging duplicates (same prefix from different runs).
 type MergeIterator struct {
 	readers []*RunFileReader
-	heap    *mergeHeap
+	heap    typedMergeHeap
 	err     error
 }
 
@@ -21,35 +20,81 @@ type mergeItem struct {
 	readerIdx int // index into readers slice
 }
 
-// mergeHeap implements heap.Interface for k-way merge.
-type mergeHeap struct {
+// typedMergeHeap is a hand-rolled binary min-heap of mergeItem values.
+// Avoids the container/heap interface{} boxing that allocates per Push/Pop.
+type typedMergeHeap struct {
 	items []mergeItem
 }
 
-func (h *mergeHeap) Len() int { return len(h.items) }
+// mergeHeap is the heap shape consumed by parallel_merge.go's hand-rolled
+// heapInit/heapPush/heapPop helpers. The struct is shared so both single-
+// reader and parallel mergers exercise the same code without container/heap.
+type mergeHeap = typedMergeHeap
 
-func (h *mergeHeap) Less(i, j int) bool {
+// Less is kept for parallel_merge.go's hand-rolled heap helpers that read it.
+func (h *typedMergeHeap) Less(i, j int) bool {
 	return h.items[i].row.Prefix < h.items[j].row.Prefix
 }
 
-func (h *mergeHeap) Swap(i, j int) {
+// Swap is kept for parallel_merge.go's hand-rolled heap helpers.
+func (h *typedMergeHeap) Swap(i, j int) {
 	h.items[i], h.items[j] = h.items[j], h.items[i]
 }
 
-func (h *mergeHeap) Push(x interface{}) {
-	item, ok := x.(mergeItem)
-	if !ok {
-		panic("heap Push received unexpected type")
-	}
-	h.items = append(h.items, item)
+func (h *typedMergeHeap) Len() int { return len(h.items) }
+
+func (h *typedMergeHeap) push(it mergeItem) {
+	h.items = append(h.items, it)
+	h.siftUp(len(h.items) - 1)
 }
 
-func (h *mergeHeap) Pop() interface{} {
-	old := h.items
-	n := len(old)
-	item := old[n-1]
-	h.items = old[0 : n-1]
-	return item
+func (h *typedMergeHeap) pop() mergeItem {
+	top := h.items[0]
+	n := len(h.items) - 1
+	h.items[0] = h.items[n]
+	h.items = h.items[:n]
+	if n > 0 {
+		h.siftDown(0)
+	}
+	return top
+}
+
+func (h *typedMergeHeap) peek() *mergeItem {
+	if len(h.items) == 0 {
+		return nil
+	}
+	return &h.items[0]
+}
+
+func (h *typedMergeHeap) siftUp(i int) {
+	for i > 0 {
+		parent := (i - 1) / 2
+		if h.items[parent].row.Prefix <= h.items[i].row.Prefix {
+			return
+		}
+		h.items[parent], h.items[i] = h.items[i], h.items[parent]
+		i = parent
+	}
+}
+
+func (h *typedMergeHeap) siftDown(i int) {
+	n := len(h.items)
+	for {
+		left := 2*i + 1
+		if left >= n {
+			return
+		}
+		smallest := left
+		right := left + 1
+		if right < n && h.items[right].row.Prefix < h.items[left].row.Prefix {
+			smallest = right
+		}
+		if h.items[i].row.Prefix <= h.items[smallest].row.Prefix {
+			return
+		}
+		h.items[i], h.items[smallest] = h.items[smallest], h.items[i]
+		i = smallest
+	}
 }
 
 // NewMergeIterator creates a merge iterator from multiple run file paths.
@@ -79,7 +124,7 @@ func NewMergeIterator(paths []string, bufferSize int) (*MergeIterator, error) {
 func NewMergeIteratorFromReaders(readers []*RunFileReader) (*MergeIterator, error) {
 	m := &MergeIterator{
 		readers: readers,
-		heap:    &mergeHeap{items: make([]mergeItem, 0, len(readers))},
+		heap:    typedMergeHeap{items: make([]mergeItem, 0, len(readers))},
 	}
 
 	for i, r := range readers {
@@ -91,10 +136,9 @@ func NewMergeIteratorFromReaders(readers []*RunFileReader) (*MergeIterator, erro
 			m.Close()
 			return nil, err
 		}
-		heap.Push(m.heap, mergeItem{row: row, readerIdx: i})
+		m.heap.push(mergeItem{row: row, readerIdx: i})
 	}
 
-	heap.Init(m.heap)
 	return m, nil
 }
 
@@ -110,11 +154,7 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 		return nil, io.EOF
 	}
 
-	itemAny := heap.Pop(m.heap)
-	item, ok := itemAny.(mergeItem)
-	if !ok {
-		panic("heap Pop returned unexpected type")
-	}
+	item := m.heap.pop()
 	result := item.row
 
 	if err := m.advanceReader(item.readerIdx); err != nil && !errors.Is(err, io.EOF) {
@@ -123,11 +163,7 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 	}
 
 	for m.heap.Len() > 0 && m.heap.items[0].row.Prefix == result.Prefix {
-		dupAny := heap.Pop(m.heap)
-		dup, ok := dupAny.(mergeItem)
-		if !ok {
-			panic("heap Pop returned unexpected type")
-		}
+		dup := m.heap.pop()
 		result.Merge(dup.row)
 
 		if err := m.advanceReader(dup.readerIdx); err != nil && !errors.Is(err, io.EOF) {
@@ -145,7 +181,7 @@ func (m *MergeIterator) advanceReader(idx int) error {
 	if err != nil {
 		return err
 	}
-	heap.Push(m.heap, mergeItem{row: row, readerIdx: idx})
+	m.heap.push(mergeItem{row: row, readerIdx: idx})
 	return nil
 }
 
