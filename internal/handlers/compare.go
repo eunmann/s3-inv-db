@@ -514,10 +514,10 @@ func tierMapCost(m map[string]indexread.TierBreakdown, prices pricing.PriceTable
 // sameConfig reports whether two inventory IDs share their first two
 // segments. Both inputs must already be 3-part for compare to apply.
 func sameConfig(idA, idB inventory.ID) bool {
-	srcA, invA, _, okA := idA.Split()
-	srcB, invB, _, okB := idB.Split()
+	a := idA.Split()
+	b := idB.Split()
 
-	return okA && okB && srcA == srcB && invA == invB
+	return a.OK && b.OK && a.Source == b.Source && a.Inventory == b.Inventory
 }
 
 // RunDescription is the parsed label/run pair produced by describeRun.
@@ -530,12 +530,12 @@ type RunDescription struct {
 // formatted run timestamp from an inventory ID. Returns ("", id) when
 // the ID isn't 3-part so the page still renders something sensible.
 func describeRun(id inventory.ID) RunDescription {
-	src, inv, run, ok := id.Split()
-	if !ok {
+	p := id.Split()
+	if !p.OK {
 		return RunDescription{RunLabel: string(id)}
 	}
 
-	return RunDescription{ConfigLabel: src + "/" + inv, RunLabel: humanfmt.RunTimestamp(run)}
+	return RunDescription{ConfigLabel: p.Source + "/" + p.Inventory, RunLabel: humanfmt.RunTimestamp(p.Run)}
 }
 
 // CompareLevelResponse is the JSON shape returned by CompareLevelAPI. Carries
@@ -846,10 +846,11 @@ func buildComparePicker(all []inventory.Info) ComparePicker {
 		if all[i].State != inventory.StateLoaded {
 			continue
 		}
-		src, inv, run, ok := all[i].ID.Split()
-		if !ok {
+		p := all[i].ID.Split()
+		if !p.OK {
 			continue
 		}
+		src, inv, run := p.Source, p.Inventory, p.Run
 		config := src + "/" + inv
 		g, gok := groups[config]
 		if !gok {

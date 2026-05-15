@@ -421,12 +421,12 @@ func groupLoadedInventories(all []inventory.Info) []BrowseInventoryGroup {
 }
 
 func splitForGroup(info inventory.Info) (string, BrowseInventoryOption) {
-	if src, inv, run, ok := info.ID.Split(); ok {
-		config := src + "/" + inv
+	if p := info.ID.Split(); p.OK {
+		config := p.Source + "/" + p.Inventory
 
 		return config, BrowseInventoryOption{
 			ID:    info.ID,
-			Label: config + " · " + humanfmt.RunTimestamp(run),
+			Label: config + " · " + humanfmt.RunTimestamp(p.Run),
 		}
 	}
 

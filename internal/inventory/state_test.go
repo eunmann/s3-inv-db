@@ -50,10 +50,10 @@ func TestIDSplit(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.id), func(t *testing.T) {
-			src, inv, run, ok := tc.id.Split()
-			if ok != tc.wantOK || src != tc.wantSrc || inv != tc.wantInv || run != tc.wantRun {
+			p := tc.id.Split()
+			if p.OK != tc.wantOK || p.Source != tc.wantSrc || p.Inventory != tc.wantInv || p.Run != tc.wantRun {
 				t.Errorf("Split(%q) = (%q,%q,%q,%v), want (%q,%q,%q,%v)",
-					tc.id, src, inv, run, ok, tc.wantSrc, tc.wantInv, tc.wantRun, tc.wantOK)
+					tc.id, p.Source, p.Inventory, p.Run, p.OK, tc.wantSrc, tc.wantInv, tc.wantRun, tc.wantOK)
 			}
 		})
 	}

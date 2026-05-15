@@ -220,11 +220,11 @@ func (s *Server) backfillTracker(ctx context.Context, logger zerolog.Logger) {
 		}
 		bytes := info.IndexBytes
 		if bytes == 0 {
-			src, inv, run, ok := info.ID.Split()
-			if !ok {
+			p := info.ID.Split()
+			if !p.OK {
 				continue
 			}
-			dir := s.bldr.CacheDirFor(src, inv, run)
+			dir := s.bldr.CacheDirFor(p.Source, p.Inventory, p.Run)
 			if measured, err := budget.MeasureDir(ctx, dir); err == nil {
 				bytes = measured
 				_ = s.invStore.Upsert(ctx, infoWithBytes(*info, bytes))
@@ -274,8 +274,8 @@ func (s *Server) recover(ctx context.Context, logger zerolog.Logger) {
 			// Older entries written before per-run cache layout had two
 			// segments; treat those as un-hydratable so the user sees
 			// the error and can rebuild.
-			if src, inv, run, ok := info.ID.Split(); ok {
-				indexDir = s.bldr.CacheDirFor(src, inv, run)
+			if p := info.ID.Split(); p.OK {
+				indexDir = s.bldr.CacheDirFor(p.Source, p.Inventory, p.Run)
 			}
 		}
 		if err := s.manager.Hydrate(ctx, *info, indexDir); err != nil {

@@ -187,20 +187,6 @@ linters:
         linters:
           - revive
         text: "var-naming: avoid package names that conflict"
-      # White-box tests in extsort/format/templates exercise unexported
-      # types (mergeHeap, singleRunIterator, objectBatch, prefixStatsSize,
-      # depth-index helpers, etc.) that are intentionally not part of the
-      # public API. Moving them to *_test packages would require leaking
-      # internals through an export_test.go shim across many files.
-      - path: pkg/extsort/.*_test\.go
-        linters:
-          - testpackage
-      - path: pkg/format/.*_test\.go
-        linters:
-          - testpackage
-      - path: internal/templates/.*_test\.go
-        linters:
-          - testpackage
 
 formatters:
   enable:

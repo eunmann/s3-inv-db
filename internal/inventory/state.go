@@ -58,18 +58,27 @@ type ID string
 // String makes ID print transparently in logs and format strings.
 func (id ID) String() string { return string(id) }
 
-// Split returns the three segments of a 3-part inventory ID
-// (sourceBucket, inventoryName, run, ok). The ok return is false for
-// any input that doesn't split into exactly three slash-separated parts
-// (placeholder configurations with no completed run, legacy 2-part
-// entries, or hand-registered inventories).
-func (id ID) Split() (string, string, string, bool) {
+// IDParts is the result of (ID).Split: the three slash-separated
+// segments of a composite ID plus an OK flag.
+type IDParts struct {
+	Source    string
+	Inventory string
+	Run       string
+	OK        bool
+}
+
+// Split returns the three segments of a 3-part inventory ID. The
+// OK field is false for any input that doesn't split into exactly
+// three slash-separated parts (placeholder configurations with no
+// completed run, legacy 2-part entries, or hand-registered
+// inventories).
+func (id ID) Split() IDParts {
 	parts := strings.SplitN(string(id), "/", 3)
 	if len(parts) != 3 {
-		return "", "", "", false
+		return IDParts{}
 	}
 
-	return parts[0], parts[1], parts[2], true
+	return IDParts{Source: parts[0], Inventory: parts[1], Run: parts[2], OK: true}
 }
 
 // ConfigID returns "<source-bucket>/<inventory-name>" — the identifier
@@ -77,8 +86,8 @@ func (id ID) Split() (string, string, string, bool) {
 // whole string for non-3-part IDs so callers always have a non-empty
 // grouping key.
 func (id ID) ConfigID() string {
-	if src, inv, _, ok := id.Split(); ok {
-		return src + "/" + inv
+	if p := id.Split(); p.OK {
+		return p.Source + "/" + p.Inventory
 	}
 
 	return string(id)

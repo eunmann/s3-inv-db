@@ -86,8 +86,8 @@ type DescendantInfo struct {
 func (h *Handlers) GetStatsAPI(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	inventoryID := inventory.ID(q.Get("inventory_id"))
-	showTiers := q.Get("show_tiers") == "true"
-	estimateCost := q.Get("estimate_cost") == "true"
+	showTiers := q.Get("show_tiers") == trueLiteral
+	estimateCost := q.Get("estimate_cost") == trueLiteral
 
 	if inventoryID == "" {
 		WriteJSONError(w, http.StatusBadRequest, "inventory_id is required")
@@ -122,8 +122,8 @@ func (h *Handlers) GetStatsAPI(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) GetInventoryStatsAPI(w http.ResponseWriter, r *http.Request) {
 	inventoryID := inventory.ID(chi.URLParam(r, "id"))
 	q := r.URL.Query()
-	showTiers := q.Get("show_tiers") == "true"
-	estimateCost := q.Get("estimate_cost") == "true"
+	showTiers := q.Get("show_tiers") == trueLiteral
+	estimateCost := q.Get("estimate_cost") == trueLiteral
 
 	if !q.Has("prefix") {
 		WriteJSONError(w, http.StatusBadRequest, "prefix query parameter is required")

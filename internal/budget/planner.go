@@ -57,10 +57,11 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 	if p.tracker.Cap() == 0 {
 		return Plan{EstimateBytes: in.EstimateBytes}, nil
 	}
-	targetSource, targetName, _, ok := in.Target.Split()
-	if !ok {
+	tp := in.Target.Split()
+	if !tp.OK {
 		return Plan{}, fmt.Errorf("%w: %q", ErrTargetIDFormat, in.Target)
 	}
+	targetSource, targetName := tp.Source, tp.Inventory
 
 	retention := DefaultRetention
 	if p.config != nil {
@@ -156,11 +157,11 @@ func (p *Planner) candidates(in Input) ([]inventory.Info, bool) {
 func selectByConfig(pool []inventory.Info, source, name string, retention uint32) []inventory.Info {
 	var inConfig []inventory.Info
 	for i := range pool {
-		src, n, _, ok := pool[i].ID.Split()
-		if !ok {
+		p := pool[i].ID.Split()
+		if !p.OK {
 			continue
 		}
-		if src == source && n == name {
+		if p.Source == source && p.Inventory == name {
 			inConfig = append(inConfig, pool[i])
 		}
 	}

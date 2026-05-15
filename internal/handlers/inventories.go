@@ -128,8 +128,9 @@ func groupManagerForAPI(all []inventory.Info) []ConfigurationView {
 	out := []ConfigurationView{}
 	for i := range all {
 		info := all[i]
-		src, inv, run, ok := info.ID.Split()
-		if !ok {
+		p := info.ID.Split()
+		src, inv, run := p.Source, p.Inventory, p.Run
+		if !p.OK {
 			// Fallback for legacy 2-part or hand-registered IDs: bucket
 			// them into a single "_other_" group so they remain visible.
 			src, inv = "_other_", string(info.ID)
