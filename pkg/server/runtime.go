@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/migrate"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/rs/zerolog"
@@ -74,7 +75,21 @@ type RuntimeOptions struct {
 	// inventory.DefaultIndexRatio.
 	IndexRatio float64
 
+	// InventoryConfigs declares per-configuration auto-load + retention
+	// settings to upsert at startup. Typically populated from the JSON
+	// config file.
+	InventoryConfigs []InventoryConfigEntry
+
 	Logger zerolog.Logger
+}
+
+// InventoryConfigEntry mirrors the JSON config file's inventories[].
+// Duplicated here so pkg/server doesn't import internal/appconfig.
+type InventoryConfigEntry struct {
+	Source         string
+	Name           string
+	AutoLoad       bool
+	RetentionCount uint32
 }
 
 // Bootstrap turns RuntimeOptions into a ready-to-Run server: it
@@ -140,7 +155,44 @@ func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
 		cleanup()
 		return nil, nil, fmt.Errorf("create server: %w", err)
 	}
+	if err := applyInventoryConfigs(srv.configStore, opts.InventoryConfigs); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("apply inventory configs: %w", err)
+	}
 	return srv, cleanup, nil
+}
+
+func applyInventoryConfigs(store *inventory.ConfigStore, entries []InventoryConfigEntry) error {
+	if store == nil || len(entries) == 0 {
+		return nil
+	}
+	for i := range entries {
+		e := &entries[i]
+		existing, err := store.Get(e.Source, e.Name)
+		if err == nil {
+			existing.AutoLoad = e.AutoLoad
+			if e.RetentionCount > 0 {
+				existing.RetentionCount = e.RetentionCount
+			}
+			if err := store.Upsert(existing); err != nil {
+				return fmt.Errorf("update %s/%s: %w", e.Source, e.Name, err)
+			}
+			continue
+		}
+		retention := e.RetentionCount
+		if retention == 0 {
+			retention = inventory.DefaultRetentionCount
+		}
+		if err := store.Upsert(inventory.Config{
+			Source:         e.Source,
+			Name:           e.Name,
+			AutoLoad:       e.AutoLoad,
+			RetentionCount: retention,
+		}); err != nil {
+			return fmt.Errorf("insert %s/%s: %w", e.Source, e.Name, err)
+		}
+	}
+	return nil
 }
 
 // _ keeps time import used when AutoLoad path is compiled out below.

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/appconfig"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/server"
 	"github.com/rs/zerolog/log"
@@ -25,6 +26,7 @@ func main() {
 }
 
 func run() error {
+	configPath := flag.String("config", envOr("S3INV_CONFIG", ""), "path to JSON config file (overridden by explicit flags)")
 	addr := flag.String("addr", ":8080", "HTTP server address")
 	verbose := flag.Bool("verbose", false, "enable debug logging")
 	prettyLogs := flag.Bool("pretty-logs", false, "use human-friendly console output")
@@ -43,43 +45,146 @@ func run() error {
 	indexRatio := flag.Float64("index-ratio", envFloat("S3INV_INDEX_RATIO", 0.30), "estimate multiplier: final index bytes ≈ ratio × compressed manifest total")
 	flag.Parse()
 
-	capBytes, err := parseSize(*maxIndexDisk)
+	fileCfg, err := appconfig.Load(*configPath)
 	if err != nil {
-		return fmt.Errorf("--max-index-disk: %w", err)
+		return fmt.Errorf("load config: %w", err)
 	}
-	headBytes, err := parseSize(*headroom)
+	explicit := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+
+	finalAddr := pickString(fileCfg, *addr, explicit["addr"], func(c *appconfig.Config) *string { return c.Addr })
+	finalVerbose := pickBool(fileCfg, *verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
+	finalPretty := pickBool(fileCfg, *prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
+	finalPrice := pickString(fileCfg, *priceTablePath, explicit["price-table"], func(c *appconfig.Config) *string { return c.PriceTable })
+	finalSrc := pickString(fileCfg, *s3Source, explicit["s3-source"], func(c *appconfig.Config) *string { return c.S3Source })
+	finalCache := pickString(fileCfg, *cacheDir, explicit["cache-dir"], func(c *appconfig.Config) *string { return c.CacheDir })
+	finalScratch := pickString(fileCfg, *scratchDir, explicit["scratch-dir"], func(c *appconfig.Config) *string { return c.ScratchDir })
+	finalState := pickString(fileCfg, *stateDB, explicit["state-db"], func(c *appconfig.Config) *string { return c.StateDB })
+	finalAuto := pickBool(fileCfg, *autoLoad, explicit["auto-load"], func(c *appconfig.Config) *bool { return c.AutoLoad })
+	finalConc := appconfig.PickInt(*autoLoadConcurrency, explicit["max-auto-load-concurrency"], fileConfigInt(fileCfg, func(c *appconfig.Config) *int { return c.AutoLoadConcurrency }))
+	finalRet := appconfig.PickUint32(uint32(*autoLoadRetention), explicit["auto-load-retention-default"], fileConfigUint32(fileCfg, func(c *appconfig.Config) *uint32 { return c.AutoLoadRetentionDefault }))
+	finalRatio := appconfig.PickFloat64(*indexRatio, explicit["index-ratio"], fileConfigFloat(fileCfg, func(c *appconfig.Config) *float64 { return c.IndexRatio }))
+
+	finalInterval, err := resolveDuration(*pollInterval, explicit["auto-load-poll-interval"], fileConfigString(fileCfg, func(c *appconfig.Config) *string { return c.PollInterval }))
 	if err != nil {
-		return fmt.Errorf("--index-headroom: %w", err)
+		return fmt.Errorf("auto_load_poll_interval: %w", err)
+	}
+
+	capStr := pickString(fileCfg, *maxIndexDisk, explicit["max-index-disk"], func(c *appconfig.Config) *string { return c.MaxIndexDisk })
+	headStr := pickString(fileCfg, *headroom, explicit["index-headroom"], func(c *appconfig.Config) *string { return c.IndexHeadroom })
+	capBytes, err := parseSize(capStr)
+	if err != nil {
+		return fmt.Errorf("max_index_disk: %w", err)
+	}
+	headBytes, err := parseSize(headStr)
+	if err != nil {
+		return fmt.Errorf("index_headroom: %w", err)
 	}
 	if capBytes > 0 && headBytes == 0 {
 		headBytes = capBytes / 5
 	}
 
-	logger := logging.NewLogger(*verbose, *prettyLogs)
-	log.Logger = logger // zerolog/log package-global for code paths without a ctx
+	logger := logging.NewLogger(finalVerbose, finalPretty)
+	log.Logger = logger
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	if err := server.BootstrapAndRun(ctx, server.RuntimeOptions{
-		Addr:                     *addr,
-		S3Source:                 *s3Source,
-		CacheDir:                 *cacheDir,
-		ScratchDir:               *scratchDir,
-		StateDB:                  *stateDB,
-		PriceTablePath:           *priceTablePath,
-		AutoLoad:                 *autoLoad,
-		PollInterval:             *pollInterval,
+		Addr:                     finalAddr,
+		S3Source:                 finalSrc,
+		CacheDir:                 finalCache,
+		ScratchDir:               finalScratch,
+		StateDB:                  finalState,
+		PriceTablePath:           finalPrice,
+		AutoLoad:                 finalAuto,
+		PollInterval:             finalInterval,
 		MaxIndexDisk:             capBytes,
 		IndexHeadroomBytes:       headBytes,
-		AutoLoadConcurrency:      *autoLoadConcurrency,
-		AutoLoadRetentionDefault: uint32(*autoLoadRetention),
-		IndexRatio:               *indexRatio,
+		AutoLoadConcurrency:      finalConc,
+		AutoLoadRetentionDefault: finalRet,
+		IndexRatio:               finalRatio,
+		InventoryConfigs:         inventoryConfigsFromFile(fileCfg),
 		Logger:                   logger,
 	}); err != nil {
 		return fmt.Errorf("server: %w", err)
 	}
 	return nil
+}
+
+func pickString(cfg *appconfig.Config, flagVal string, explicit bool, get func(*appconfig.Config) *string) string {
+	var p *string
+	if cfg != nil {
+		p = get(cfg)
+	}
+	return appconfig.PickString(flagVal, explicit, p)
+}
+
+func pickBool(cfg *appconfig.Config, flagVal, explicit bool, get func(*appconfig.Config) *bool) bool {
+	var p *bool
+	if cfg != nil {
+		p = get(cfg)
+	}
+	return appconfig.PickBool(flagVal, explicit, p)
+}
+
+func fileConfigInt(cfg *appconfig.Config, get func(*appconfig.Config) *int) *int {
+	if cfg == nil {
+		return nil
+	}
+	return get(cfg)
+}
+
+func fileConfigUint32(cfg *appconfig.Config, get func(*appconfig.Config) *uint32) *uint32 {
+	if cfg == nil {
+		return nil
+	}
+	return get(cfg)
+}
+
+func fileConfigFloat(cfg *appconfig.Config, get func(*appconfig.Config) *float64) *float64 {
+	if cfg == nil {
+		return nil
+	}
+	return get(cfg)
+}
+
+func fileConfigString(cfg *appconfig.Config, get func(*appconfig.Config) *string) *string {
+	if cfg == nil {
+		return nil
+	}
+	return get(cfg)
+}
+
+func resolveDuration(flagVal time.Duration, explicit bool, configVal *string) (time.Duration, error) {
+	if explicit {
+		return flagVal, nil
+	}
+	if configVal != nil {
+		d, err := time.ParseDuration(*configVal)
+		if err != nil {
+			return 0, fmt.Errorf("parse duration %q: %w", *configVal, err)
+		}
+		return d, nil
+	}
+	return flagVal, nil
+}
+
+func inventoryConfigsFromFile(cfg *appconfig.Config) []server.InventoryConfigEntry {
+	if cfg == nil || len(cfg.Inventories) == 0 {
+		return nil
+	}
+	out := make([]server.InventoryConfigEntry, 0, len(cfg.Inventories))
+	for i := range cfg.Inventories {
+		e := &cfg.Inventories[i]
+		out = append(out, server.InventoryConfigEntry{
+			Source:         e.Source,
+			Name:           e.Name,
+			AutoLoad:       e.AutoLoad,
+			RetentionCount: e.RetentionCount,
+		})
+	}
+	return out
 }
 
 // parseSize accepts "", a raw byte count, or a number with a suffix

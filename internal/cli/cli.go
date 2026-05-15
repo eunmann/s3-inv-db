@@ -11,6 +11,7 @@ import (
 	"sort"
 	"syscall"
 
+	"github.com/eunmann/s3-inv-db/internal/appconfig"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -45,6 +46,7 @@ func Run(args []string) error {
 
 func runBuild(args []string) error {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
+	configPath := fs.String("config", os.Getenv("S3INV_CONFIG"), "path to JSON config file (overridden by explicit flags)")
 	outDir := fs.String("out", "", "output directory for index files")
 	s3Manifest := fs.String("s3-manifest", "", "S3 URI to inventory manifest.json (s3://bucket/path/manifest.json)")
 	verbose := fs.Bool("verbose", false, "enable debug level logging")
@@ -64,13 +66,17 @@ func runBuild(args []string) error {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	// Initialize logging. NewLogger returns a configured zerolog.Logger;
-	// log.Logger sets the package-global default for any code that uses
-	// zerolog/log without a ctx; logging.Init keeps the legacy pkg/logging
-	// state machine in sync (operation tracking, pretty mode).
-	baseLogger := logging.NewLogger(*verbose, *prettyLogs)
+	fileCfg, err := appconfig.Load(*configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	explicit := explicitFlags(fs)
+	finalVerbose := resolveBool(fileCfg, *verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
+	finalPretty := resolveBool(fileCfg, *prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
+
+	baseLogger := logging.NewLogger(finalVerbose, finalPretty)
 	log.Logger = baseLogger
-	logging.Init(*verbose, *prettyLogs)
+	logging.Init(finalVerbose, finalPretty)
 
 	if *outDir == "" {
 		return errors.New("--out is required")
@@ -183,6 +189,7 @@ func determineMemoryBudget(cliValue string) (*membudget.Budget, error) {
 
 func runQuery(args []string) error {
 	fs := flag.NewFlagSet("query", flag.ContinueOnError)
+	configPath := fs.String("config", os.Getenv("S3INV_CONFIG"), "path to JSON config file (overridden by explicit flags)")
 	indexDir := fs.String("index", "", "index directory to query")
 	prefix := fs.String("prefix", "", "prefix to query")
 	showTiers := fs.Bool("show-tiers", false, "show per-tier breakdown")
@@ -195,7 +202,16 @@ func runQuery(args []string) error {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	logging.Init(*verbose, *prettyLogs)
+	fileCfg, err := appconfig.Load(*configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	explicit := explicitFlags(fs)
+	finalVerbose := resolveBool(fileCfg, *verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
+	finalPretty := resolveBool(fileCfg, *prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
+	finalPriceTable := resolveString(fileCfg, *priceTablePath, explicit["price-table"], func(c *appconfig.Config) *string { return c.PriceTable })
+
+	logging.Init(finalVerbose, finalPretty)
 	logger := logging.L()
 
 	if *indexDir == "" {
@@ -228,7 +244,29 @@ func runQuery(args []string) error {
 		return nil
 	}
 
-	return printTierAndCostInfo(idx, pos, *showTiers, *estimateCost, *priceTablePath)
+	return printTierAndCostInfo(idx, pos, *showTiers, *estimateCost, finalPriceTable)
+}
+
+func explicitFlags(fs *flag.FlagSet) map[string]bool {
+	out := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { out[f.Name] = true })
+	return out
+}
+
+func resolveBool(cfg *appconfig.Config, flagVal, explicit bool, get func(*appconfig.Config) *bool) bool {
+	var p *bool
+	if cfg != nil {
+		p = get(cfg)
+	}
+	return appconfig.PickBool(flagVal, explicit, p)
+}
+
+func resolveString(cfg *appconfig.Config, flagVal string, explicit bool, get func(*appconfig.Config) *string) string {
+	var p *string
+	if cfg != nil {
+		p = get(cfg)
+	}
+	return appconfig.PickString(flagVal, explicit, p)
 }
 
 // printTierAndCostInfo handles tier breakdown and cost estimation output.
