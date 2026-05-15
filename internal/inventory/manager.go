@@ -182,13 +182,11 @@ func (m *Manager) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	case buildErr != nil:
 		inv.info.State = StateError
 		inv.info.Error = buildErr.Error()
-		inv.info.AutoLoadFailureCount++
 		_ = m.mirror(inv.info)
 		return fmt.Errorf("build index: %w", buildErr)
 	case openErr != nil:
 		inv.info.State = StateError
 		inv.info.Error = openErr.Error()
-		inv.info.AutoLoadFailureCount++
 		_ = m.mirror(inv.info)
 		return fmt.Errorf("open index: %w", openErr)
 	case ctx.Err() != nil:
@@ -335,15 +333,14 @@ func (m *Manager) RecordAutoLoadFailure(id ID, errStr string, retryAt time.Time)
 	return m.mirror(inv.info)
 }
 
-// TouchAccessed updates LastAccessedAt to time.Now() for the given
-// inventory. Called by readers (WithIndex/WithTwoIndexes) so the LRU
-// tiebreak in eviction planning reflects actual usage.
+// TouchAccessed updates the in-memory LastAccessedAt used as the LRU
+// tiebreak in eviction. Not persisted — restart resets every entry's
+// access time, which is fine.
 func (m *Manager) TouchAccessed(id ID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if inv, ok := m.inventories[id]; ok {
 		inv.info.LastAccessedAt = time.Now()
-		_ = m.mirror(inv.info)
 	}
 }
 

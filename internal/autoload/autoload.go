@@ -237,11 +237,7 @@ func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 		return
 	}
 	info, _ := a.manager.Get(id)
-	count := info.AutoLoadFailureCount
-	delay := a.cfg.MinBackoff << count
-	if delay > a.cfg.MaxBackoff || delay <= 0 {
-		delay = a.cfg.MaxBackoff
-	}
+	delay := backoffDelay(a.cfg.MinBackoff, a.cfg.MaxBackoff, info.AutoLoadFailureCount)
 	retryAt := a.now().Add(delay)
 	_ = a.manager.RecordAutoLoadFailure(id, err.Error(), retryAt)
 	a.logger.Error().Str("id", string(id)).Time("retry_at", retryAt).Err(err).Msg("autoload: failed; backing off")
@@ -251,11 +247,20 @@ func (a *AutoLoader) recordPollFailure(enabled map[string]inventory.Config, msg 
 	for _, c := range enabled {
 		c.PollFailureCount++
 		c.LastPollError = msg
-		delay := a.cfg.MinBackoff << c.PollFailureCount
-		if delay > a.cfg.MaxBackoff || delay <= 0 {
-			delay = a.cfg.MaxBackoff
-		}
-		c.PollBackoffUntil = a.now().Add(delay)
+		c.PollBackoffUntil = a.now().Add(backoffDelay(a.cfg.MinBackoff, a.cfg.MaxBackoff, c.PollFailureCount))
 		_ = a.configStore.Upsert(c)
 	}
+}
+
+// backoffDelay returns minBackoff * 2^count, clamped to maxBackoff and
+// capped against shift overflow when count grows beyond int64 width.
+func backoffDelay(minBackoff, maxBackoff time.Duration, count uint32) time.Duration {
+	if count >= 32 {
+		return maxBackoff
+	}
+	delay := minBackoff << count
+	if delay <= 0 || delay > maxBackoff {
+		return maxBackoff
+	}
+	return delay
 }

@@ -168,6 +168,29 @@ func TestAutoLoader_PollFailureSetsBackoff(t *testing.T) {
 	}
 }
 
+func TestBackoffDelay(t *testing.T) {
+	const minB = time.Minute
+	const maxB = time.Hour
+	cases := []struct {
+		count uint32
+		want  time.Duration
+	}{
+		{0, time.Minute},
+		{1, 2 * time.Minute},
+		{2, 4 * time.Minute},
+		{5, 32 * time.Minute},
+		{6, time.Hour},
+		{32, time.Hour},
+		{99, time.Hour},
+	}
+	for _, c := range cases {
+		got := backoffDelay(minB, maxB, c.count)
+		if got != c.want {
+			t.Errorf("backoffDelay(%d) = %v, want %v", c.count, got, c.want)
+		}
+	}
+}
+
 func TestAutoLoader_BackoffSuppressesPolling(t *testing.T) {
 	cs, mgr := newFakeStores(t)
 	future := time.Now().Add(time.Hour)
