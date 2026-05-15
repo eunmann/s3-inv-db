@@ -209,6 +209,40 @@ func TestUnloadDiscoveredRowPartial_NotFound(t *testing.T) {
 	}
 }
 
+// PinDiscoveredRowPartial accepts a 3-segment composite ID via chi URL
+// params (src/id/run) so the template-generated URL maps to a real
+// route. The /api/inventories/{id}/pin route uses a single-segment {id}
+// and would silently 404 for a multi-segment composite ID, so the
+// partial route is the one HTMX templates must call.
+func TestPinDiscoveredRowPartial_NotFound(t *testing.T) {
+	h := newDiscoveredHandlers(t, &fakeDiscoverer{}, &fakeBuilder{})
+	req := httptest.NewRequest(http.MethodPost,
+		"/partials/discovered/b/i/2026-05-13T03-00Z/pin",
+		strings.NewReader("pinned=true"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
+	w := httptest.NewRecorder()
+	h.PinDiscoveredRowPartial(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for missing inventory", w.Code)
+	}
+}
+
+func TestPinDiscoveredRowPartial_BadForm(t *testing.T) {
+	h := newDiscoveredHandlers(t, &fakeDiscoverer{}, &fakeBuilder{})
+	// Send a malformed form body (invalid url-encoded sequence).
+	req := httptest.NewRequest(http.MethodPost,
+		"/partials/discovered/b/i/run/pin",
+		strings.NewReader("%ZZ"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "run")
+	w := httptest.NewRecorder()
+	h.PinDiscoveredRowPartial(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for malformed form", w.Code)
+	}
+}
+
 func TestDiscoveryEnabled_ReflectsWiring(t *testing.T) {
 	bare := newTestHandlers(t)
 	if bare.DiscoveryEnabled() {

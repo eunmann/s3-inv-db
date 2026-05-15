@@ -80,11 +80,10 @@
             Compare
         </a>
         <button type="button"
-            hx-post="/api/inventories/{{.SourceBucket}}/{{.InventoryName}}/{{.Run}}/pin"
-            hx-vals='{"pinned":"{{if .Pinned}}false{{else}}true{{end}}"}'
+            hx-post="/partials/discovered/{{.SourceBucket}}/{{.InventoryName}}/{{.Run}}/pin"
+            {{if .Pinned}}{{hxVals "pinned" "false"}}{{else}}{{hxVals "pinned" "true"}}{{end}}
             hx-target="closest tr"
-            hx-swap="none"
-            hx-on::after-request="if(event.detail.successful){window.location.reload()}"
+            hx-swap="outerHTML"
             class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
             title="{{if .Pinned}}Unpin (allow auto-eviction){{else}}Pin (protect from auto-eviction){{end}}">
             {{if .Pinned}}Unpin{{else}}Pin{{end}}

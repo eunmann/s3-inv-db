@@ -13,6 +13,10 @@ bin/
 *.out
 *.prof
 
+# Benchmark output
+benchmark_results.txt
+bench-results/
+
 # Dependency directories
 vendor/
 

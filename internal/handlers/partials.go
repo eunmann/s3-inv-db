@@ -146,6 +146,25 @@ func (h *Handlers) UnloadDiscoveredRowPartial(w http.ResponseWriter, r *http.Req
 	h.renderDiscoveredRow(w, r, src, name, run)
 }
 
+// PinDiscoveredRowPartial toggles the run's pin state and returns the
+// refreshed row. Form body: pinned=true|false (anything else flips).
+func (h *Handlers) PinDiscoveredRowPartial(w http.ResponseWriter, r *http.Request) {
+	src := chi.URLParam(r, "src")
+	name := chi.URLParam(r, "id")
+	run := chi.URLParam(r, "run")
+	composite := inventory.ID(src + "/" + name + "/" + run)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form body", http.StatusBadRequest)
+		return
+	}
+	pinned := parseBoolToggle(r.FormValue("pinned"))
+	if err := h.manager.SetPinned(composite, pinned); err != nil {
+		respondManagerErrorHTML(w, r, err, "set pin")
+		return
+	}
+	h.renderDiscoveredRow(w, r, src, name, run)
+}
+
 // DiscoveredRowPartial returns the current state of one discovered row
 // — used by htmx to refresh after an SSE notification.
 func (h *Handlers) DiscoveredRowPartial(w http.ResponseWriter, r *http.Request) {
