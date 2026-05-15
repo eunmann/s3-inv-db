@@ -14,6 +14,15 @@
         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass (printf "%s" .State)}}">
             {{stateLabel (printf "%s" .State)}}
         </span>
+        {{if .Pinned}}<span class="ml-1 text-xs text-indigo-600 dark:text-indigo-400" title="Pinned: never auto-evicted">📌</span>{{end}}
+        {{if and .UserUnloaded (not .State.IsLoaded)}}
+        <span class="ml-1 inline-flex items-center px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-semibold rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300" title="You unloaded this manually; auto-load will skip it until a newer run appears">user-unloaded</span>
+        {{end}}
+        {{if gt .AutoLoadFailureCount 0}}
+        <div class="text-xs text-red-600 dark:text-red-400 mt-1" title="{{if .Error}}{{.Error}}{{else}}Auto-load failed{{end}}">
+            Auto-load failed ({{.AutoLoadFailureCount}}× — retry after {{.AutoLoadBackoffUntil}})
+        </div>
+        {{end}}
         {{if $busy}}
         <div class="flex items-center gap-2 mt-2 text-xs text-gray-600 dark:text-gray-300">
             <svg aria-hidden="true" class="animate-spin h-4 w-4 text-indigo-600 dark:text-indigo-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -70,6 +79,16 @@
            title="Compare this run against another loaded run">
             Compare
         </a>
+        <button type="button"
+            hx-post="/api/inventories/{{.SourceBucket}}/{{.InventoryName}}/{{.Run}}/pin"
+            hx-vals='{"pinned":"{{if .Pinned}}false{{else}}true{{end}}"}'
+            hx-target="closest tr"
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful){window.location.reload()}"
+            class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
+            title="{{if .Pinned}}Unpin (allow auto-eviction){{else}}Pin (protect from auto-eviction){{end}}">
+            {{if .Pinned}}Unpin{{else}}Pin{{end}}
+        </button>
         <button type="button"
             hx-post="/partials/discovered/{{.SourceBucket}}/{{.InventoryName}}/{{.Run}}/unload"
             hx-target="closest tr"

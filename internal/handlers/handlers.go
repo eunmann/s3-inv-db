@@ -3,6 +3,7 @@ package handlers
 import (
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/budget"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/internal/templates"
@@ -25,6 +26,8 @@ type Handlers struct {
 	manager      *inventory.Manager
 	discovery    *inventory.DiscoveryService
 	loader       inventory.IndexBuilder
+	configStore  *inventory.ConfigStore
+	tracker      *budget.Tracker
 	renderer     *templates.Renderer
 	priceTable   pricing.PriceTable
 	s3SourceURI  string // for display in templates
@@ -48,6 +51,19 @@ type Config struct {
 	JobMgr      *jobs.Manager
 	JobStore    *jobs.Store
 	JobBus      *jobs.Bus
+
+	// Discovery, when non-nil, replaces the in-NewWithConfig fallback
+	// of constructing an empty DiscoveryService. The server wires the
+	// gate + sizer onto the same instance so manual and auto loads
+	// share the same orchestration.
+	Discovery *inventory.DiscoveryService
+
+	// ConfigStore + Tracker, when set, drive the auto-load and disk-
+	// budget portions of the UI. Tests that don't exercise those flows
+	// can leave them nil.
+	ConfigStore *inventory.ConfigStore
+	Tracker     *budget.Tracker
+
 	// SSEHeartbeat is how often the /api/jobs/stream handler emits a
 	// keep-alive comment to detect dead clients. Zero falls back to
 	// DefaultSSEHeartbeat.
@@ -74,10 +90,16 @@ func NewWithConfig(cfg Config) *Handlers {
 	if heartbeat <= 0 {
 		heartbeat = DefaultSSEHeartbeat
 	}
+	discovery := cfg.Discovery
+	if discovery == nil {
+		discovery = inventory.NewDiscoveryService(cfg.Manager, cfg.Discoverer, cfg.Loader)
+	}
 	return &Handlers{
 		manager:      cfg.Manager,
-		discovery:    inventory.NewDiscoveryService(cfg.Manager, cfg.Discoverer, cfg.Loader),
+		discovery:    discovery,
 		loader:       cfg.Loader,
+		configStore:  cfg.ConfigStore,
+		tracker:      cfg.Tracker,
 		renderer:     cfg.Renderer,
 		priceTable:   cfg.PriceTable,
 		s3SourceURI:  cfg.S3SourceURI,

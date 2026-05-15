@@ -31,7 +31,7 @@
         <div class="space-y-6">
             {{range .Groups}}
             <section class="bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-lg" aria-labelledby="grp-{{.SourceBucket}}-{{.InventoryName}}">
-                <header class="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-baseline justify-between gap-4">
+                <header class="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex flex-wrap items-baseline justify-between gap-4">
                     <div class="min-w-0">
                         <h2 id="grp-{{.SourceBucket}}-{{.InventoryName}}" class="text-base font-semibold text-gray-900 dark:text-gray-100 truncate">
                             <span class="text-gray-500 dark:text-gray-400 font-normal">{{.SourceBucket}}</span>
@@ -39,10 +39,29 @@
                             <span>{{.InventoryName}}</span>
                         </h2>
                     </div>
-                    <p class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                        {{len .Runs}} run{{if ne (len .Runs) 1}}s{{end}}
-                    </p>
+                    <div class="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                        <form class="flex items-center gap-2"
+                              hx-post="/api/configurations/{{.SourceBucket}}/{{.InventoryName}}/auto-load"
+                              hx-trigger="change"
+                              hx-swap="none">
+                            <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                                <input type="checkbox" name="auto_load" value="on" class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500" {{if .AutoLoad}}checked{{end}}>
+                                <span>Auto-load latest</span>
+                            </label>
+                            <label class="inline-flex items-center gap-1.5">
+                                <span>Keep last</span>
+                                <input type="number" name="retention" min="1" max="20" value="{{if .Retention}}{{.Retention}}{{else}}2{{end}}" class="w-14 px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+                                <span>runs</span>
+                            </label>
+                        </form>
+                        <span>{{len .Runs}} run{{if ne (len .Runs) 1}}s{{end}}</span>
+                    </div>
                 </header>
+                {{if .LastPollError}}
+                <div class="px-6 py-2 text-xs bg-red-50 dark:bg-red-900/30 border-b border-red-200 dark:border-red-900/50 text-red-800 dark:text-red-300">
+                    Last poll failed: {{.LastPollError}}{{if .PollBackoffUntil}} (next attempt after {{.PollBackoffUntil}}){{end}}
+                </div>
+                {{end}}
                 <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                     <thead class="bg-gray-50 dark:bg-gray-900/30">
                         <tr>

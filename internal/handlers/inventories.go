@@ -309,6 +309,14 @@ type InventoryGroup struct {
 	SourceBucket  string
 	InventoryName string
 	Runs          []DiscoveredRowView
+
+	// AutoLoad + Retention come from the inventory_configs table. The
+	// template shows toggles wired to /api/configurations/{src}/{name}/auto-load.
+	AutoLoad         bool
+	Retention        uint32
+	LastPollAt       string
+	LastPollError    string
+	PollBackoffUntil string
 }
 
 // ConfigID returns the "<src>/<inv>" identifier shared by every run in
@@ -334,40 +342,7 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 			zerolog.Ctx(r.Context()).Error().Err(err).Msg("discover for inventories page")
 			data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
 		}
-
-		// Build group → run-list. Discovery returns runs newest-first
-		// within a configuration; preserve that order. Use the order of
-		// first appearance to keep configurations in a stable
-		// (alphabetical-ish) sequence on the page.
-		groupIdx := map[string]int{}
-		for i := range views {
-			row := DiscoveredRowView{MergedInventory: views[i]}
-			if h.jobStore != nil {
-				j, err := h.jobStore.LatestForInventory(views[i].CompositeID())
-				switch {
-				case err == nil:
-					row.LatestJob = &j
-				case errors.Is(err, jobs.ErrStoreNotFound):
-					// no jobs yet — fine
-				default:
-					zerolog.Ctx(r.Context()).Warn().Err(err).
-						Stringer("composite", views[i].CompositeID()).
-						Msg("look up latest job for inventories page")
-				}
-			}
-			row.CacheBytes, row.CacheBytesH = h.cacheSize(r, views[i].Inventory)
-			key := views[i].ConfigID()
-			if idx, ok := groupIdx[key]; ok {
-				data.Groups[idx].Runs = append(data.Groups[idx].Runs, row)
-				continue
-			}
-			groupIdx[key] = len(data.Groups)
-			data.Groups = append(data.Groups, InventoryGroup{
-				SourceBucket:  views[i].SourceBucket,
-				InventoryName: views[i].InventoryName,
-				Runs:          []DiscoveredRowView{row},
-			})
-		}
+		data.Groups = h.buildInventoryGroups(r, views)
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -380,4 +355,77 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 // InventoryRowPartial renders the row for one inventory ID.
 func (h *Handlers) InventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	h.renderInventoryRow(w, r, inventory.ID(chi.URLParam(r, "id")))
+}
+
+// buildInventoryGroups composes the per-configuration row groups for
+// InventoriesPage. Extracted so the page handler stays under the
+// cognitive-complexity budget; the same shape was inlined before.
+func (h *Handlers) buildInventoryGroups(r *http.Request, views []inventory.MergedInventory) []InventoryGroup {
+	groupIdx := map[string]int{}
+	groups := make([]InventoryGroup, 0, len(views))
+	for i := range views {
+		row := h.buildDiscoveredRow(r, &views[i])
+		key := views[i].ConfigID()
+		if idx, ok := groupIdx[key]; ok {
+			groups[idx].Runs = append(groups[idx].Runs, row)
+			continue
+		}
+		groupIdx[key] = len(groups)
+		groups = append(groups, InventoryGroup{
+			SourceBucket:  views[i].SourceBucket,
+			InventoryName: views[i].InventoryName,
+			Runs:          []DiscoveredRowView{row},
+		})
+	}
+	h.annotateGroupsFromConfig(groups)
+	return groups
+}
+
+func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInventory) DiscoveredRowView {
+	row := DiscoveredRowView{MergedInventory: *v}
+	if info, ok := h.manager.Get(v.CompositeID()); ok {
+		row.Pinned = info.Pinned
+		row.UserUnloaded = !info.UserUnloadedAt.IsZero()
+		row.AutoLoadFailureCount = info.AutoLoadFailureCount
+		if !info.AutoLoadBackoffUntil.IsZero() {
+			row.AutoLoadBackoffUntil = info.AutoLoadBackoffUntil.UTC().Format("15:04:05")
+		}
+	}
+	if h.jobStore != nil {
+		j, err := h.jobStore.LatestForInventory(v.CompositeID())
+		switch {
+		case err == nil:
+			row.LatestJob = &j
+		case errors.Is(err, jobs.ErrStoreNotFound):
+			// no jobs yet — fine
+		default:
+			zerolog.Ctx(r.Context()).Warn().Err(err).
+				Stringer("composite", v.CompositeID()).
+				Msg("look up latest job for inventories page")
+		}
+	}
+	row.CacheBytes, row.CacheBytesH = h.cacheSize(r, v.Inventory)
+	return row
+}
+
+func (h *Handlers) annotateGroupsFromConfig(groups []InventoryGroup) {
+	if h.configStore == nil {
+		return
+	}
+	for i := range groups {
+		g := &groups[i]
+		cfg, err := h.configStore.Get(g.SourceBucket, g.InventoryName)
+		if err != nil {
+			continue
+		}
+		g.AutoLoad = cfg.AutoLoad
+		g.Retention = cfg.RetentionCount
+		if !cfg.LastPolledAt.IsZero() {
+			g.LastPollAt = cfg.LastPolledAt.UTC().Format(time.RFC3339)
+		}
+		g.LastPollError = cfg.LastPollError
+		if !cfg.PollBackoffUntil.IsZero() {
+			g.PollBackoffUntil = cfg.PollBackoffUntil.UTC().Format(time.RFC3339)
+		}
+	}
 }

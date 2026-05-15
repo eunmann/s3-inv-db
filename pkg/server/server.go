@@ -10,10 +10,13 @@ import (
 	"os"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/autoload"
+	"github.com/eunmann/s3-inv-db/internal/budget"
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/internal/loader"
+	"github.com/eunmann/s3-inv-db/internal/loadgate"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
@@ -34,24 +37,40 @@ type Config struct {
 	// CacheDir is the local directory where built indexes are written.
 	// Required when S3Source is set.
 	CacheDir string
+	// ScratchDir is the transient-files directory used by the build
+	// pipeline. Defaults to CacheDir when empty.
+	ScratchDir string
 	// DB is the shared SQLite handle for domain Stores. Each domain
 	// (inventory, jobs) constructs its Store from this.
 	DB *sql.DB
+
+	// AutoLoad and friends govern the background poller and budget
+	// gate. When AutoLoad is true, MaxIndexDisk must be > 0.
+	AutoLoad                 bool
+	PollInterval             time.Duration
+	MaxIndexDisk             uint64
+	IndexHeadroomBytes       uint64
+	AutoLoadConcurrency      int
+	AutoLoadRetentionDefault uint32
+	IndexRatio               float64
 }
 
 // Server is the HTTP server.
 type Server struct {
-	config   Config
-	router   chi.Router
-	manager  *inventory.Manager
-	invStore *inventory.Store
-	jobStore *jobs.Store
-	jobBus   *jobs.Bus
-	jobMgr   *jobs.Manager
-	bldr     *loader.Loader
-	renderer *templates.Renderer
-	handlers *handlers.Handlers
-	server   *http.Server
+	config      Config
+	router      chi.Router
+	manager     *inventory.Manager
+	invStore    *inventory.Store
+	configStore *inventory.ConfigStore
+	jobStore    *jobs.Store
+	jobBus      *jobs.Bus
+	jobMgr      *jobs.Manager
+	bldr        *loader.Loader
+	tracker     *budget.Tracker
+	autoloader  *autoload.AutoLoader
+	renderer    *templates.Renderer
+	handlers    *handlers.Handlers
+	server      *http.Server
 }
 
 // New creates a new server.
@@ -63,6 +82,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("inventory store: %w", err)
 	}
+	configStore := inventory.NewConfigStore(cfg.DB)
 	jobStore, err := jobs.NewStore(cfg.DB)
 	if err != nil {
 		return nil, fmt.Errorf("jobs store: %w", err)
@@ -78,49 +98,140 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("create renderer: %w", err)
 	}
 
-	hcfg := handlers.Config{
-		Manager:    mgr,
-		Renderer:   renderer,
-		PriceTable: cfg.PriceTable,
-		JobMgr:     jobMgr,
-		JobStore:   jobStore,
-		JobBus:     jobBus,
-	}
+	tracker := budget.New(cfg.MaxIndexDisk, cfg.IndexHeadroomBytes)
+	retentionLookup := configRetention{store: configStore, fallback: cfg.AutoLoadRetentionDefault}
+	planner := budget.NewPlanner(tracker, retentionLookup)
+	gate := loadgate.New(mgr, tracker, planner)
+
+	var discovery *inventory.DiscoveryService
 	var bldr *loader.Loader
+	var s3Client *s3fetch.Client
+
 	if cfg.S3Source != "" {
-		disco, ldr, err := newDiscoveryWiring(cfg)
+		disco, ldr, client, err := newDiscoveryWiring(cfg)
 		if err != nil {
 			return nil, err
 		}
-		hcfg.Discoverer = disco
-		hcfg.Loader = ldr
-		hcfg.S3SourceURI = cfg.S3Source
 		bldr = ldr
+		s3Client = client
+		discovery = inventory.NewDiscoveryService(mgr, disco, ldr)
+		sizer := loadgate.NewManifestSizer(client)
+		discovery.SetGate(gate, sizer, cfg.IndexRatio)
 		cfg.Logger.Info().
 			Str("s3_source", cfg.S3Source).
 			Str("cache_dir", cfg.CacheDir).
-			Msg("discovery configured")
+			Uint64("max_index_disk_bytes", cfg.MaxIndexDisk).
+			Msg("discovery + budget configured")
+	} else {
+		discovery = inventory.NewDiscoveryService(mgr, nil, nil)
+	}
+
+	hcfg := handlers.Config{
+		Manager:     mgr,
+		Renderer:    renderer,
+		PriceTable:  cfg.PriceTable,
+		JobMgr:      jobMgr,
+		JobStore:    jobStore,
+		JobBus:      jobBus,
+		Discovery:   discovery,
+		Loader:      bldr,
+		ConfigStore: configStore,
+		Tracker:     tracker,
+	}
+	if cfg.S3Source != "" {
+		hcfg.S3SourceURI = cfg.S3Source
 	}
 
 	h := handlers.NewWithConfig(hcfg)
 
+	var al *autoload.AutoLoader
+	if cfg.AutoLoad && discovery != nil && discovery.Enabled() {
+		al = autoload.New(autoload.Config{
+			PollInterval:     cfg.PollInterval,
+			MaxConcurrency:   cfg.AutoLoadConcurrency,
+			DefaultRetention: cfg.AutoLoadRetentionDefault,
+		}, discovery, autoload.NewDiscoveryLoader(discovery), configStore, mgr, &cfg.Logger)
+		cfg.Logger.Info().Msg("auto-loader configured")
+	}
+
+	_ = s3Client // silence unused if discovery is off
+
 	s := &Server{
-		config:   cfg,
-		router:   chi.NewRouter(),
-		manager:  mgr,
-		invStore: invStore,
-		jobStore: jobStore,
-		jobBus:   jobBus,
-		jobMgr:   jobMgr,
-		bldr:     bldr,
-		renderer: renderer,
-		handlers: h,
+		config:      cfg,
+		router:      chi.NewRouter(),
+		manager:     mgr,
+		invStore:    invStore,
+		configStore: configStore,
+		jobStore:    jobStore,
+		jobBus:      jobBus,
+		jobMgr:      jobMgr,
+		bldr:        bldr,
+		tracker:     tracker,
+		autoloader:  al,
+		renderer:    renderer,
+		handlers:    h,
 	}
 
 	s.setupRoutes()
 	s.recover(cfg.Logger)
+	s.backfillTracker(cfg.Logger)
 
 	return s, nil
+}
+
+// configRetention adapts ConfigStore to budget.Config so the Planner
+// can look up per-configuration retention without depending on the
+// inventory package's persistence types.
+type configRetention struct {
+	store    *inventory.ConfigStore
+	fallback uint32
+}
+
+func (c configRetention) Retention(source, name string) uint32 {
+	cfg, err := c.store.Get(source, name)
+	if err == nil && cfg.RetentionCount > 0 {
+		return cfg.RetentionCount
+	}
+	if c.fallback > 0 {
+		return c.fallback
+	}
+	return 0
+}
+
+// backfillTracker walks every currently-loaded inventory and attributes
+// its on-disk size to the budget tracker so post-restart eviction
+// decisions see an accurate baseline.
+func (s *Server) backfillTracker(logger zerolog.Logger) {
+	if s.tracker == nil || s.bldr == nil {
+		return
+	}
+	list := s.manager.List()
+	for i := range list {
+		info := &list[i]
+		if info.State != inventory.StateLoaded {
+			continue
+		}
+		bytes := info.IndexBytes
+		if bytes == 0 {
+			src, inv, run, ok := info.ID.Split()
+			if !ok {
+				continue
+			}
+			dir := s.bldr.CacheDirFor(src, inv, run)
+			if measured, err := budget.MeasureDir(context.Background(), dir); err == nil {
+				bytes = measured
+				_ = s.invStore.Upsert(infoWithBytes(*info, bytes))
+			} else {
+				logger.Warn().Stringer("id", info.ID).Err(err).Msg("backfill index size")
+			}
+		}
+		s.tracker.Add(string(info.ID), bytes)
+	}
+}
+
+func infoWithBytes(i inventory.Info, bytes uint64) inventory.Info {
+	i.IndexBytes = bytes
+	return i
 }
 
 // recover rehydrates the in-memory inventory.Manager from invStore and
@@ -185,24 +296,24 @@ const s3StartupTimeout = 30 * time.Second
 // newDiscoveryWiring constructs the S3 client, discoverer, and loader
 // for a server configured with --s3-source. Extracted from New so the
 // happy path stays readable and so the wiring is testable in isolation.
-func newDiscoveryWiring(cfg Config) (*s3disco.Discoverer, *loader.Loader, error) {
+func newDiscoveryWiring(cfg Config) (*s3disco.Discoverer, *loader.Loader, *s3fetch.Client, error) {
 	if cfg.CacheDir == "" {
-		return nil, nil, errEmptyCacheDir
+		return nil, nil, nil, errEmptyCacheDir
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s3StartupTimeout)
 	defer cancel()
 	s3Client, err := s3fetch.NewClient(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("s3 client: %w", err)
+		return nil, nil, nil, fmt.Errorf("s3 client: %w", err)
 	}
 	disco, err := s3disco.NewFromS3URI(s3Client.Raw(), cfg.S3Source)
 	if err != nil {
-		return nil, nil, fmt.Errorf("discovery from %q: %w", cfg.S3Source, err)
+		return nil, nil, nil, fmt.Errorf("discovery from %q: %w", cfg.S3Source, err)
 	}
 	if err := os.MkdirAll(cfg.CacheDir, 0o755); err != nil {
-		return nil, nil, fmt.Errorf("ensure cache dir %s: %w", cfg.CacheDir, err)
+		return nil, nil, nil, fmt.Errorf("ensure cache dir %s: %w", cfg.CacheDir, err)
 	}
-	return disco, loader.New(cfg.CacheDir, s3Client), nil
+	return disco, loader.New(cfg.CacheDir, s3Client), s3Client, nil
 }
 
 // Run starts the HTTP server and blocks until the context is cancelled.
@@ -219,6 +330,10 @@ func (s *Server) Run(ctx context.Context) error {
 	// detached from ctx — if ctx is already cancelled (the usual
 	// shutdown trigger), we still need a few seconds to drain workers.
 	defer s.shutdownResources() //nolint:contextcheck // fresh ctx by design
+
+	if s.autoloader != nil {
+		s.autoloader.Start(ctx)
+	}
 
 	errChan := make(chan error, 1)
 	go func() {
@@ -252,6 +367,9 @@ func (s *Server) Run(ctx context.Context) error {
 func (s *Server) shutdownResources() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if s.autoloader != nil {
+		s.autoloader.Stop()
+	}
 	if err := s.jobMgr.Shutdown(shutdownCtx); err != nil {
 		s.config.Logger.Error().Err(err).Msg("shutdown job manager")
 	}

@@ -30,6 +30,10 @@ type FileInfo struct {
 }
 
 // WriteManifest creates a manifest for all files in the index directory.
+// The manifest enumerates every file (top-level index files plus the
+// tier_stats subdirectory) with size + checksum so consumers can verify
+// integrity and so callers can compute on-disk size by summing
+// manifest.Files[*].Size — no directory walk needed.
 func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 	manifest := Manifest{
 		Version:   ManifestVersion,
@@ -39,8 +43,7 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		Files:     make(map[string]FileInfo),
 	}
 
-	// List of expected index files
-	expectedFiles := []string{
+	expectedTopLevel := []string{
 		"subtree_end.u64",
 		"depth.u32",
 		"object_count.u64",
@@ -51,38 +54,39 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		"mph.bin",
 		"mph_fp.u64",
 		"mph_pos.u64",
-		// Raw prefix blob (legacy encoding)
 		"prefix_blob.bin",
 		"prefix_offsets.u64",
-		// Segmented prefix encoding (new compression format)
-		SegmentsBlobFile,     // "segments.bin"
-		SegmentsOffsetsFile,  // "segments.off.u64"
-		PrefixSegIDsFile,     // "prefix_seg_ids.u32"
-		PrefixSegOffsetsFile, // "prefix_seg_off.u64"
+		SegmentsBlobFile,
+		SegmentsOffsetsFile,
+		PrefixSegIDsFile,
+		PrefixSegOffsetsFile,
+		"tiers.json",
 	}
 
-	for _, name := range expectedFiles {
-		path := filepath.Join(dir, name)
-		info, err := os.Stat(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue // Skip optional files
+	for _, name := range expectedTopLevel {
+		if err := addFile(dir, name, manifest.Files); err != nil {
+			return err
+		}
+	}
+
+	// Tier-stats files live in a subdirectory and are named by tier
+	// FilePrefix; enumerate the directory rather than hard-coding the
+	// list so a new tier added later is captured automatically.
+	tierDir := filepath.Join(dir, "tier_stats")
+	if entries, err := os.ReadDir(tierDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !e.Type().IsRegular() {
+				continue
 			}
-			return fmt.Errorf("stat %s: %w", name, err)
+			name := filepath.Join("tier_stats", e.Name())
+			if err := addFile(dir, name, manifest.Files); err != nil {
+				return err
+			}
 		}
-
-		checksum, err := checksumFile(path)
-		if err != nil {
-			return fmt.Errorf("checksum %s: %w", name, err)
-		}
-
-		manifest.Files[name] = FileInfo{
-			Size:     info.Size(),
-			Checksum: checksum,
-		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read tier_stats dir: %w", err)
 	}
 
-	// Write manifest
 	manifestPath := filepath.Join(dir, "manifest.json")
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -93,6 +97,36 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		return fmt.Errorf("write manifest: %w", err)
 	}
 
+	return nil
+}
+
+// TotalBytes sums the size of every file the manifest enumerates. The
+// budget tracker and on-disk-size readout use this to avoid walking
+// the directory on every load.
+func (m *Manifest) TotalBytes() uint64 {
+	var total uint64
+	for _, f := range m.Files {
+		if f.Size > 0 {
+			total += uint64(f.Size)
+		}
+	}
+	return total
+}
+
+func addFile(root, name string, dst map[string]FileInfo) error {
+	path := filepath.Join(root, name)
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", name, err)
+	}
+	checksum, err := checksumFile(path)
+	if err != nil {
+		return fmt.Errorf("checksum %s: %w", name, err)
+	}
+	dst[name] = FileInfo{Size: info.Size(), Checksum: checksum}
 	return nil
 }
 

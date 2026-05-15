@@ -143,4 +143,28 @@ type Info struct {
 	MaxDepth    uint32    `json:"max_depth,omitempty"`
 	LoadedAt    time.Time `json:"loaded_at,omitempty"`
 	HasTierData bool      `json:"has_tier_data"`
+
+	// Pinned runs are never auto-evicted. Manual Load sets this true;
+	// manual Unload sets it false.
+	Pinned bool `json:"pinned"`
+
+	// UserUnloadedAt is set when the user manually unloads a run. The
+	// auto-loader skips runs that have a non-zero UserUnloadedAt so a
+	// deliberate unload sticks across poll cycles. Cleared on the next
+	// manual Load.
+	UserUnloadedAt time.Time `json:"user_unloaded_at,omitempty"`
+
+	// IndexBytes is the on-disk size of the materialised index in bytes,
+	// measured after a successful Load. Zero for non-loaded runs.
+	IndexBytes uint64 `json:"index_bytes,omitempty"`
+
+	// AutoLoadFailureCount and AutoLoadBackoffUntil track per-run
+	// backoff state for the auto-loader; cleared on successful load.
+	AutoLoadFailureCount uint32    `json:"auto_load_failure_count,omitempty"`
+	AutoLoadBackoffUntil time.Time `json:"auto_load_backoff_until,omitempty"`
+
+	// LastAccessedAt is updated whenever a reader (WithIndex /
+	// WithTwoIndexes) touches the index. Drives the LRU tiebreak in
+	// eviction planning.
+	LastAccessedAt time.Time `json:"last_accessed_at,omitempty"`
 }

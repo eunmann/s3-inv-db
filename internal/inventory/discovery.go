@@ -35,6 +35,30 @@ type MergedInventory struct {
 	HasTierData bool
 }
 
+// GatedLoader runs a build under the disk-budget planner. Optional —
+// when set on DiscoveryService, LoadWith routes through the gate so
+// loads honour the global byte cap. Defined as an interface to keep
+// inventory free of an import on internal/loadgate.
+type GatedLoader interface {
+	Load(ctx context.Context, id ID, build BuildFunc, opts GatedLoadOptions) error
+}
+
+// GatedLoadOptions mirrors the fields of internal/loadgate.Options.
+// Duplicated here so DiscoveryService doesn't import the gate package
+// (the gate already imports this one).
+type GatedLoadOptions struct {
+	EstimateBytes uint64
+	Force         bool
+	Pin           bool
+}
+
+// ManifestSizer reports the total compressed size of an inventory
+// manifest's data files. Used to estimate the post-build index size
+// before downloading anything.
+type ManifestSizer interface {
+	ManifestSize(ctx context.Context, bucket, key string) (uint64, error)
+}
+
 // DiscoveryService orchestrates the inventory use cases that span the
 // Manager (in-memory state), the Discoverer (S3 listing of available
 // inventories), and the IndexBuilder (on-disk index materialisation).
@@ -46,13 +70,32 @@ type DiscoveryService struct {
 	manager    *Manager
 	discoverer Discoverer
 	builder    IndexBuilder
+	gate       GatedLoader
+	sizer      ManifestSizer
+	indexRatio float64
 }
 
 // NewDiscoveryService constructs a service. The discoverer and builder
 // arguments may be nil, in which case Enabled() returns false.
 func NewDiscoveryService(mgr *Manager, discoverer Discoverer, builder IndexBuilder) *DiscoveryService {
-	return &DiscoveryService{manager: mgr, discoverer: discoverer, builder: builder}
+	return &DiscoveryService{manager: mgr, discoverer: discoverer, builder: builder, indexRatio: DefaultIndexRatio}
 }
+
+// SetGate attaches a GatedLoader + ManifestSizer. When both are set,
+// LoadWith routes through the gate so disk-budget rules apply.
+func (s *DiscoveryService) SetGate(gate GatedLoader, sizer ManifestSizer, indexRatio float64) {
+	s.gate = gate
+	s.sizer = sizer
+	if indexRatio > 0 {
+		s.indexRatio = indexRatio
+	}
+}
+
+// DefaultIndexRatio is the conservative seed ratio used to estimate
+// final index bytes from a manifest's compressed CSV total. The
+// expected per-load reservation is `manifest_total * indexRatio`.
+// Loaders should refine via benchmarks per pkg/extsort.
+const DefaultIndexRatio = 0.30
 
 // ErrDiscoveryDisabled is returned by methods that require S3 discovery
 // to be configured.
@@ -129,10 +172,24 @@ func (s *DiscoveryService) Load(ctx context.Context, disc Inventory) error {
 }
 
 // LoadWith registers (if not already) and triggers a build+open for a
-// specific inventory run. The onProgress callback, if non-nil, receives
-// stage transitions and per-chunk quantitative progress. The ctx
-// threads through to the builder — cancellation kills the build.
+// specific inventory run. Routes through the disk-budget gate when one
+// has been attached via SetGate; otherwise calls the manager directly
+// (which the gate's tests and dev-mode setups depend on). The
+// onProgress callback, if non-nil, receives stage transitions and
+// per-chunk quantitative progress. The ctx threads through to the
+// builder — cancellation kills the build.
 func (s *DiscoveryService) LoadWith(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64)) error {
+	return s.loadInternal(ctx, disc, onProgress, false /* auto */)
+}
+
+// AutoLoadWith is LoadWith without the Pin flag — used by the
+// auto-loader so the discovered run remains eligible for future
+// eviction. Routes through the gate just like LoadWith.
+func (s *DiscoveryService) AutoLoadWith(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64)) error {
+	return s.loadInternal(ctx, disc, onProgress, true /* auto */)
+}
+
+func (s *DiscoveryService) loadInternal(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64), auto bool) error {
 	if !s.Enabled() {
 		return ErrDiscoveryDisabled
 	}
@@ -146,11 +203,29 @@ func (s *DiscoveryService) LoadWith(ctx context.Context, disc Inventory, onProgr
 		!errors.Is(err, ErrAlreadyExists) {
 		return fmt.Errorf("register: %w", err)
 	}
-	err := s.manager.LoadWith(ctx, composite, func(c context.Context, _ Info) (string, error) {
+	build := func(c context.Context, _ Info) (string, error) {
 		return s.builder.BuildWith(c, disc.SourceBucket, disc.InventoryName, disc.Run, manifestURI, onProgress)
-	})
-	if err != nil {
-		return err
+	}
+	if s.gate == nil {
+		// No budget — manager direct. Pin manual loads.
+		if auto {
+			return s.manager.AutoLoad(ctx, composite, build)
+		}
+		return s.manager.LoadWith(ctx, composite, build)
+	}
+	opts := GatedLoadOptions{Pin: !auto}
+	if s.sizer != nil {
+		size, err := s.sizer.ManifestSize(ctx, s.discoverer.Bucket(), disc.ManifestKey)
+		if err == nil {
+			opts.EstimateBytes = uint64(float64(size) * s.indexRatio)
+		}
+		// On error we proceed with EstimateBytes=0, letting the planner
+		// reserve nothing — the load might still refuse later but at
+		// least we don't lose the manual-Load attempt to a transient
+		// manifest fetch hiccup.
+	}
+	if err := s.gate.Load(ctx, composite, build, opts); err != nil {
+		return fmt.Errorf("gated load %s: %w", composite, err)
 	}
 	return nil
 }

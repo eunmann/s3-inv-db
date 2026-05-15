@@ -29,29 +29,43 @@ func (s *Store) Upsert(info Info) error {
 	if info.HasTierData {
 		hasTier = 1
 	}
-	loadedAt := int64(0)
-	if !info.LoadedAt.IsZero() {
-		loadedAt = info.LoadedAt.Unix()
+	pinned := 0
+	if info.Pinned {
+		pinned = 1
 	}
+	loadedAt := unixOrZero(info.LoadedAt)
+	userUnloadedAt := unixOrZero(info.UserUnloadedAt)
+	backoffUntil := unixOrZero(info.AutoLoadBackoffUntil)
+	lastAccessed := unixOrZero(info.LastAccessedAt)
 	_, err := s.db.Exec(`
         INSERT INTO inventories (
             id, name, path, state, error,
             node_count, max_depth, has_tier_data,
-            loaded_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            loaded_at, pinned, user_unloaded_at, index_bytes,
+            auto_load_failure_count, auto_load_backoff_until,
+            last_accessed_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
-            name          = excluded.name,
-            path          = excluded.path,
-            state         = excluded.state,
-            error         = excluded.error,
-            node_count    = excluded.node_count,
-            max_depth     = excluded.max_depth,
-            has_tier_data = excluded.has_tier_data,
-            loaded_at     = excluded.loaded_at,
-            updated_at    = excluded.updated_at`,
+            name                    = excluded.name,
+            path                    = excluded.path,
+            state                   = excluded.state,
+            error                   = excluded.error,
+            node_count              = excluded.node_count,
+            max_depth               = excluded.max_depth,
+            has_tier_data           = excluded.has_tier_data,
+            loaded_at               = excluded.loaded_at,
+            pinned                  = excluded.pinned,
+            user_unloaded_at        = excluded.user_unloaded_at,
+            index_bytes             = excluded.index_bytes,
+            auto_load_failure_count = excluded.auto_load_failure_count,
+            auto_load_backoff_until = excluded.auto_load_backoff_until,
+            last_accessed_at        = excluded.last_accessed_at,
+            updated_at              = excluded.updated_at`,
 		info.ID, info.Name, info.Path, string(info.State), info.Error,
 		info.NodeCount, info.MaxDepth, hasTier,
-		loadedAt, time.Now().Unix(),
+		loadedAt, pinned, userUnloadedAt, info.IndexBytes,
+		info.AutoLoadFailureCount, backoffUntil,
+		lastAccessed, time.Now().Unix(),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert inventory %s: %w", info.ID, err)
@@ -59,13 +73,17 @@ func (s *Store) Upsert(info Info) error {
 	return nil
 }
 
+const inventorySelectCols = `
+    id, name, path, state, error,
+    node_count, max_depth, has_tier_data, loaded_at,
+    pinned, user_unloaded_at, index_bytes,
+    auto_load_failure_count, auto_load_backoff_until,
+    last_accessed_at`
+
 // Get fetches one inventory by ID. Returns ErrStoreNotFound when the
 // row is missing.
 func (s *Store) Get(id ID) (Info, error) {
-	row := s.db.QueryRow(`
-        SELECT id, name, path, state, error,
-               node_count, max_depth, has_tier_data, loaded_at
-          FROM inventories WHERE id = ?`, id)
+	row := s.db.QueryRow(`SELECT `+inventorySelectCols+` FROM inventories WHERE id = ?`, id)
 	info, err := scanInfo(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Info{}, ErrStoreNotFound
@@ -78,10 +96,7 @@ func (s *Store) Get(id ID) (Info, error) {
 
 // List returns every persisted inventory ordered by id.
 func (s *Store) List() ([]Info, error) {
-	rows, err := s.db.Query(`
-        SELECT id, name, path, state, error,
-               node_count, max_depth, has_tier_data, loaded_at
-          FROM inventories ORDER BY id`)
+	rows, err := s.db.Query(`SELECT ` + inventorySelectCols + ` FROM inventories ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("list inventories: %w", err)
 	}
@@ -126,20 +141,38 @@ var ErrStoreNotFound = errors.New("inventory not in store")
 func scanInfo(r rowScanner) (Info, error) {
 	var info Info
 	var state string
-	var hasTier int
-	var loadedAt int64
+	var hasTier, pinned int
+	var loadedAt, userUnloadedAt, backoffUntil, lastAccessed int64
 	if err := r.Scan(
 		&info.ID, &info.Name, &info.Path, &state, &info.Error,
 		&info.NodeCount, &info.MaxDepth, &hasTier, &loadedAt,
+		&pinned, &userUnloadedAt, &info.IndexBytes,
+		&info.AutoLoadFailureCount, &backoffUntil, &lastAccessed,
 	); err != nil {
 		return Info{}, fmt.Errorf("scan inventory: %w", err)
 	}
 	info.State = State(state)
 	info.HasTierData = hasTier != 0
-	if loadedAt != 0 {
-		info.LoadedAt = time.Unix(loadedAt, 0)
-	}
+	info.Pinned = pinned != 0
+	info.LoadedAt = timeFromUnix(loadedAt)
+	info.UserUnloadedAt = timeFromUnix(userUnloadedAt)
+	info.AutoLoadBackoffUntil = timeFromUnix(backoffUntil)
+	info.LastAccessedAt = timeFromUnix(lastAccessed)
 	return info, nil
+}
+
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
+func timeFromUnix(sec int64) time.Time {
+	if sec == 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0)
 }
 
 type rowScanner interface {

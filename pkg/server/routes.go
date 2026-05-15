@@ -99,6 +99,11 @@ func (s *Server) setupRoutes() {
 		r.Get("/browse", s.handlers.BrowseLevelAPI)
 		r.Get("/compare", s.handlers.CompareLevelAPI)
 
+		// Auto-load + disk-budget controls.
+		r.Post("/configurations/{src}/{name}/auto-load", s.handlers.SetAutoLoadConfigAPI)
+		r.Post("/inventories/{id}/pin", s.handlers.SetPinAPI)
+		r.Get("/disk-budget", s.handlers.DiskBudgetAPI)
+
 		// Discovery — read-only listing. Mutating operations live on
 		// the /partials/discovered/* routes and return HTML directly.
 		r.Get("/discovered", s.handlers.ListDiscoveredAPI)

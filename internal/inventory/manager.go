@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
 
@@ -110,17 +114,27 @@ func openLocalPath(_ context.Context, info Info) (string, error) {
 }
 
 // Load builds (if needed) and opens the inventory index, using the
-// default BuildFunc (interpret Path as a local directory). Suitable for
-// legacy callers; new code should use LoadWith.
+// default BuildFunc (interpret Path as a local directory). Marks the
+// run as Pinned so it's protected from auto-eviction.
 func (m *Manager) Load(ctx context.Context, id ID) error {
 	return m.LoadWith(ctx, id, openLocalPath)
 }
 
-// LoadWith calls build outside the manager lock to materialise an on-disk
-// index, then opens it. State transitions are pending|unloaded|error → parsing
-// → loaded|error. Races against Remove or another Load are handled by
-// re-checking inventory presence after each lock re-acquire.
+// LoadWith calls build outside the manager lock to materialise an
+// on-disk index, then opens it. Marks the run as Pinned (manual intent)
+// and clears any prior UserUnloadedAt sentinel.
 func (m *Manager) LoadWith(ctx context.Context, id ID, build BuildFunc) error {
+	return m.loadInternal(ctx, id, build, true /* pin */)
+}
+
+// AutoLoad performs a load on behalf of the background auto-loader.
+// Identical to LoadWith except the inventory is not pinned, so future
+// auto-eviction may unload it when retention or budget demands.
+func (m *Manager) AutoLoad(ctx context.Context, id ID, build BuildFunc) error {
+	return m.loadInternal(ctx, id, build, false /* pin */)
+}
+
+func (m *Manager) loadInternal(ctx context.Context, id ID, build BuildFunc, pin bool) error {
 	m.mu.Lock()
 	inv, exists := m.inventories[id]
 	if !exists {
@@ -133,6 +147,10 @@ func (m *Manager) LoadWith(ctx context.Context, id ID, build BuildFunc) error {
 	}
 	inv.info.State = StateLoading
 	inv.info.Error = ""
+	if pin {
+		inv.info.Pinned = true
+		inv.info.UserUnloadedAt = time.Time{}
+	}
 	_ = m.mirror(inv.info)
 	snapshot := inv.info
 	m.mu.Unlock()
@@ -143,6 +161,11 @@ func (m *Manager) LoadWith(ctx context.Context, id ID, build BuildFunc) error {
 	var openErr error
 	if buildErr == nil {
 		idx, openErr = indexread.Open(indexDir)
+	}
+
+	var bytes uint64
+	if openErr == nil && buildErr == nil && ctx.Err() == nil {
+		bytes, _ = measureIndexDir(indexDir)
 	}
 
 	m.mu.Lock()
@@ -159,11 +182,13 @@ func (m *Manager) LoadWith(ctx context.Context, id ID, build BuildFunc) error {
 	case buildErr != nil:
 		inv.info.State = StateError
 		inv.info.Error = buildErr.Error()
+		inv.info.AutoLoadFailureCount++
 		_ = m.mirror(inv.info)
 		return fmt.Errorf("build index: %w", buildErr)
 	case openErr != nil:
 		inv.info.State = StateError
 		inv.info.Error = openErr.Error()
+		inv.info.AutoLoadFailureCount++
 		_ = m.mirror(inv.info)
 		return fmt.Errorf("open index: %w", openErr)
 	case ctx.Err() != nil:
@@ -182,13 +207,71 @@ func (m *Manager) LoadWith(ctx context.Context, id ID, build BuildFunc) error {
 	inv.info.MaxDepth = idx.MaxDepth()
 	inv.info.HasTierData = idx.HasTierData()
 	inv.info.LoadedAt = time.Now()
+	inv.info.LastAccessedAt = inv.info.LoadedAt
+	inv.info.IndexBytes = bytes
+	inv.info.AutoLoadFailureCount = 0
+	inv.info.AutoLoadBackoffUntil = time.Time{}
 	_ = m.mirror(inv.info)
 	return nil
 }
 
-// Unload closes an inventory index and releases its resources. It blocks
-// until any in-flight WithIndex reader on this inventory has returned.
+// measureIndexDir returns the cumulative byte size of an index by
+// reading manifest.json — the build process records each file's size
+// there, so we avoid a directory walk. Falls back to walking when the
+// manifest is missing or unreadable (covers indexes built by older
+// code that didn't list every file).
+func measureIndexDir(dir string) (uint64, error) {
+	if dir == "" {
+		return 0, nil
+	}
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("stat %s: %w", dir, err)
+	}
+	if manifest, err := format.ReadManifest(dir); err == nil && len(manifest.Files) > 0 {
+		return manifest.TotalBytes(), nil
+	}
+	var total uint64
+	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("walk entry: %w", err)
+		}
+		if d.IsDir() || !d.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return fmt.Errorf("stat entry: %w", err)
+		}
+		total += uint64(info.Size())
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("walk %s: %w", dir, err)
+	}
+	return total, nil
+}
+
+// Unload closes an inventory index and releases its resources. Used
+// for explicit user-driven unloads: stamps UserUnloadedAt so the
+// auto-loader treats it as deliberately removed, and clears the pin.
+// It blocks until any in-flight WithIndex reader on this inventory has
+// returned.
 func (m *Manager) Unload(id ID) error {
+	return m.unloadInternal(id, true /* userInitiated */)
+}
+
+// EvictForBudget closes an inventory index released by the auto-loader's
+// eviction planner. Distinct from Unload because it does NOT stamp
+// UserUnloadedAt — the auto-loader is free to reload this run later if
+// a newer (or the same) run is discovered and there's budget.
+func (m *Manager) EvictForBudget(id ID) error {
+	return m.unloadInternal(id, false /* userInitiated */)
+}
+
+func (m *Manager) unloadInternal(id ID, userInitiated bool) error {
 	m.mu.Lock()
 	inv, exists := m.inventories[id]
 	if !exists {
@@ -203,6 +286,11 @@ func (m *Manager) Unload(id ID) error {
 	inv.info.NodeCount = 0
 	inv.info.MaxDepth = 0
 	inv.info.LoadedAt = time.Time{}
+	inv.info.IndexBytes = 0
+	if userInitiated {
+		inv.info.UserUnloadedAt = time.Now()
+		inv.info.Pinned = false
+	}
 	_ = m.mirror(inv.info)
 	m.mu.Unlock()
 
@@ -215,6 +303,48 @@ func (m *Manager) Unload(id ID) error {
 		inv.index = nil
 	}
 	return nil
+}
+
+// SetPinned flips the pin state of a managed inventory. Returns
+// ErrNotFound when id is unknown. Mirrors to the store.
+func (m *Manager) SetPinned(id ID, pinned bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inv, exists := m.inventories[id]
+	if !exists {
+		return ErrNotFound
+	}
+	inv.info.Pinned = pinned
+	return m.mirror(inv.info)
+}
+
+// RecordAutoLoadFailure marks an auto-load attempt as failed and
+// stamps the next-eligible time. Used by the auto-loader to apply
+// exponential backoff without flipping state to StateError (which is
+// reserved for full-load failures).
+func (m *Manager) RecordAutoLoadFailure(id ID, errStr string, retryAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inv, exists := m.inventories[id]
+	if !exists {
+		return ErrNotFound
+	}
+	inv.info.AutoLoadFailureCount++
+	inv.info.AutoLoadBackoffUntil = retryAt
+	inv.info.Error = errStr
+	return m.mirror(inv.info)
+}
+
+// TouchAccessed updates LastAccessedAt to time.Now() for the given
+// inventory. Called by readers (WithIndex/WithTwoIndexes) so the LRU
+// tiebreak in eviction planning reflects actual usage.
+func (m *Manager) TouchAccessed(id ID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if inv, ok := m.inventories[id]; ok {
+		inv.info.LastAccessedAt = time.Now()
+		_ = m.mirror(inv.info)
+	}
 }
 
 // Get returns info about an inventory.
@@ -309,6 +439,7 @@ func (m *Manager) WithIndex(id ID, fn func(*indexread.Index) error) error {
 	inv.mu.RLock()
 	m.mu.RUnlock()
 	defer inv.mu.RUnlock()
+	defer m.TouchAccessed(id)
 
 	return fn(idx)
 }
@@ -338,6 +469,7 @@ func (m *Manager) WithTwoIndexes(idA, idB ID, fn func(a, b *indexread.Index) err
 		invA.mu.RLock()
 		m.mu.RUnlock()
 		defer invA.mu.RUnlock()
+		defer m.TouchAccessed(idA)
 		return fn(idxA, idxA)
 	}
 
@@ -350,6 +482,10 @@ func (m *Manager) WithTwoIndexes(idA, idB ID, fn func(a, b *indexread.Index) err
 	m.mu.RUnlock()
 	defer second.mu.RUnlock()
 	defer first.mu.RUnlock()
+	defer func() {
+		m.TouchAccessed(idA)
+		m.TouchAccessed(idB)
+	}()
 
 	return fn(idxA, idxB)
 }

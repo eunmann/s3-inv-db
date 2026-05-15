@@ -192,6 +192,16 @@ type DiscoveredRowView struct {
 	LatestJob   *jobs.Job
 	CacheBytes  int64  // 0 when no on-disk cache exists
 	CacheBytesH string // humanfmt.Bytes(CacheBytes); empty when zero
+
+	// Pin / auto-load surfaces fed in from inventory.Info so the row
+	// template can render the 📌 badge, the "auto-load suspended"
+	// label, and the "user-unloaded" sticky hint without re-querying
+	// the Manager.
+	Pinned                  bool
+	UserUnloaded            bool
+	AutoLoadFailureCount    uint32
+	AutoLoadBackoffUntil    string
+	AutoLoadLastErrorString string
 }
 
 // renderDiscoveredRowFrom renders a discovered_row using a pre-fetched
@@ -206,6 +216,12 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 		view.Error = info.Error
 		view.NodeCount = info.NodeCount
 		view.HasTierData = info.HasTierData
+		view.Pinned = info.Pinned
+		view.UserUnloaded = !info.UserUnloadedAt.IsZero()
+		view.AutoLoadFailureCount = info.AutoLoadFailureCount
+		if !info.AutoLoadBackoffUntil.IsZero() {
+			view.AutoLoadBackoffUntil = info.AutoLoadBackoffUntil.UTC().Format("15:04:05")
+		}
 	}
 	if h.jobStore != nil {
 		j, err := h.jobStore.LatestForInventory(disc.CompositeID())

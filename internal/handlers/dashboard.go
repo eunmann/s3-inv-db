@@ -27,6 +27,15 @@ type DashboardData struct {
 	TotalBytesH    string // total bytes covered by loaded inventories
 	DiskUsedH      string // sum of cache bytes across loaded runs
 
+	// Budget gauge — populated when a budget tracker is configured.
+	BudgetCapH      string
+	BudgetUsedH     string
+	BudgetReservedH string
+	BudgetAvailH    string
+	BudgetHeadroomH string
+	BudgetUsedPct   int
+	BudgetActive    bool
+
 	// One summary row per configuration.
 	Configs []DashboardConfig
 }
@@ -76,6 +85,17 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	if totals.disk > 0 {
 		data.DiskUsedH = humanfmt.BytesUint64(uint64(totals.disk))
+	}
+	if h.tracker != nil && h.tracker.Cap() > 0 {
+		capBytes := h.tracker.Cap()
+		used := h.tracker.Used()
+		data.BudgetActive = true
+		data.BudgetCapH = humanfmt.BytesUint64(capBytes)
+		data.BudgetUsedH = humanfmt.BytesUint64(used)
+		data.BudgetReservedH = humanfmt.BytesUint64(h.tracker.Reserved())
+		data.BudgetAvailH = humanfmt.BytesUint64(h.tracker.Available())
+		data.BudgetHeadroomH = humanfmt.BytesUint64(h.tracker.Headroom())
+		data.BudgetUsedPct = int((float64(used+h.tracker.Reserved()) / float64(capBytes)) * 100)
 	}
 
 	// Stable, alphabetical order for the page rows.

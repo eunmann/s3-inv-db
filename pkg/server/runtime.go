@@ -2,14 +2,21 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/migrate"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/rs/zerolog"
 )
+
+// ErrAutoLoadWithoutBudget is returned by Bootstrap when AutoLoad is
+// enabled without --max-index-disk. Forcing operators to size the
+// budget up front prevents an unbounded poller from filling the disk.
+var ErrAutoLoadWithoutBudget = errors.New("--auto-load requires --max-index-disk")
 
 // RuntimeOptions is the binary-level configuration the server entry
 // point parses from flags/env. Separated from Config so the orchestration
@@ -29,6 +36,44 @@ type RuntimeOptions struct {
 	// pricing.DefaultUSEast1Prices.
 	PriceTablePath string
 
+	// AutoLoad turns on the background poller that automatically loads
+	// the newest run of every opted-in inventory configuration. When
+	// true, MaxIndexDisk MUST be set — otherwise Bootstrap refuses to
+	// start so the operator confronts the disk-budget decision before
+	// the process discovers a billion-object inventory.
+	AutoLoad bool
+
+	// PollInterval governs how often the auto-loader hits S3 for new
+	// runs. Default 15m.
+	PollInterval time.Duration
+
+	// MaxIndexDisk caps the on-disk index footprint in bytes. Required
+	// when AutoLoad is true; refused otherwise to keep the configuration
+	// fail-fast and explicit.
+	MaxIndexDisk uint64
+
+	// IndexHeadroomBytes is reserved unused space inside MaxIndexDisk so
+	// a load that exceeds its estimate has room to grow. Default 20% of
+	// MaxIndexDisk when MaxIndexDisk is set.
+	IndexHeadroomBytes uint64
+
+	// ScratchDir is the location of transient load-time files (extsort
+	// runs, downloads). Defaults to CacheDir so single-volume deployments
+	// share one knob.
+	ScratchDir string
+
+	// AutoLoadConcurrency caps in-flight auto-loads. Default 1.
+	AutoLoadConcurrency int
+
+	// AutoLoadRetentionDefault is the per-config retention used when
+	// inventory_configs.retention_count is unset. Default 2.
+	AutoLoadRetentionDefault uint32
+
+	// IndexRatio is the multiplier applied to a manifest's total
+	// compressed size to estimate the final index bytes. Default
+	// inventory.DefaultIndexRatio.
+	IndexRatio float64
+
 	Logger zerolog.Logger
 }
 
@@ -40,6 +85,9 @@ type RuntimeOptions struct {
 // The error path closes any partially-initialised resources so the
 // caller never leaks a half-open handle on failure.
 func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
+	if opts.AutoLoad && opts.MaxIndexDisk == 0 {
+		return nil, nil, ErrAutoLoadWithoutBudget
+	}
 	priceTable, err := loadPriceTable(opts.PriceTablePath, opts.Logger)
 	if err != nil {
 		return nil, nil, err
@@ -73,12 +121,20 @@ func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
 	opts.Logger.Info().Uint("schema_version", version).Bool("dirty", dirty).Msg("schema migrated")
 
 	srv, err = New(Config{
-		Addr:       opts.Addr,
-		Logger:     opts.Logger,
-		PriceTable: priceTable,
-		S3Source:   opts.S3Source,
-		CacheDir:   opts.CacheDir,
-		DB:         db,
+		Addr:                     opts.Addr,
+		Logger:                   opts.Logger,
+		PriceTable:               priceTable,
+		S3Source:                 opts.S3Source,
+		CacheDir:                 opts.CacheDir,
+		ScratchDir:               opts.ScratchDir,
+		DB:                       db,
+		AutoLoad:                 opts.AutoLoad,
+		PollInterval:             opts.PollInterval,
+		MaxIndexDisk:             opts.MaxIndexDisk,
+		IndexHeadroomBytes:       opts.IndexHeadroomBytes,
+		AutoLoadConcurrency:      opts.AutoLoadConcurrency,
+		AutoLoadRetentionDefault: opts.AutoLoadRetentionDefault,
+		IndexRatio:               opts.IndexRatio,
 	})
 	if err != nil {
 		cleanup()
@@ -86,6 +142,9 @@ func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
 	}
 	return srv, cleanup, nil
 }
+
+// _ keeps time import used when AutoLoad path is compiled out below.
+var _ = time.Second
 
 // BootstrapAndRun is the full happy-path of the binary, factored out so
 // the main goroutine is just signal handling and exit-code reporting.
