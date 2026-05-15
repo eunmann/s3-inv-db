@@ -21,18 +21,18 @@ import (
 // RawClient returns an aws-sdk-go-v2 S3 client wired to the MinIO
 // endpoint in AWS_ENDPOINT_URL_S3. Fails the test loudly if the env
 // is missing so a misconfigured runner can't silently skip.
-func RawClient(t *testing.T) *s3.Client {
-	t.Helper()
+func RawClient(tb testing.TB) *s3.Client {
+	tb.Helper()
 	endpoint := os.Getenv("AWS_ENDPOINT_URL_S3")
 	if endpoint == "" {
-		t.Fatal("AWS_ENDPOINT_URL_S3 not set — run `make test`")
+		tb.Fatal("AWS_ENDPOINT_URL_S3 not set — run `make test`")
 	}
 	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion("us-east-1"),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("minioadmin", "minioadmin", "")),
 	)
 	if err != nil {
-		t.Fatalf("aws config: %v", err)
+		tb.Fatalf("aws config: %v", err)
 	}
 
 	return s3.NewFromConfig(cfg, func(o *s3.Options) {
@@ -42,46 +42,46 @@ func RawClient(t *testing.T) *s3.Client {
 }
 
 // FetchClient is the project's *s3fetch.Client wired to MinIO.
-func FetchClient(t *testing.T) *s3fetch.Client {
-	t.Helper()
+func FetchClient(tb testing.TB) *s3fetch.Client {
+	tb.Helper()
 	endpoint := os.Getenv("AWS_ENDPOINT_URL_S3")
 	if endpoint == "" {
-		t.Fatal("AWS_ENDPOINT_URL_S3 not set — run `make test`")
+		tb.Fatal("AWS_ENDPOINT_URL_S3 not set — run `make test`")
 	}
 	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion("us-east-1"),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("minioadmin", "minioadmin", "")),
 	)
 	if err != nil {
-		t.Fatalf("aws config: %v", err)
+		tb.Fatalf("aws config: %v", err)
 	}
 
 	return s3fetch.NewClientWithConfig(cfg)
 }
 
 // Bucket creates a uniquely-named bucket and registers cleanup that
-// empties and deletes it on test exit. Names are derived from t.Name()
+// empties and deletes it on test exit. Names are derived from tb.Name()
 // so the bucket is identifiable mid-test, with a timestamp suffix to
 // avoid collisions on re-runs.
-func Bucket(t *testing.T, c *s3.Client) string {
-	t.Helper()
-	name := bucketName(t.Name())
+func Bucket(tb testing.TB, c *s3.Client) string {
+	tb.Helper()
+	name := bucketName(tb.Name())
 	if _, err := c.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: aws.String(name)}); err != nil {
-		t.Fatalf("CreateBucket %s: %v", name, err)
+		tb.Fatalf("CreateBucket %s: %v", name, err)
 	}
-	t.Cleanup(func() { empty(t, c, name) })
+	tb.Cleanup(func() { empty(tb, c, name) })
 
 	return name
 }
 
-func empty(t *testing.T, c *s3.Client, bucket string) {
-	t.Helper()
+func empty(tb testing.TB, c *s3.Client, bucket string) {
+	tb.Helper()
 	ctx := context.Background()
 	pages := s3.NewListObjectsV2Paginator(c, &s3.ListObjectsV2Input{Bucket: aws.String(bucket)})
 	for pages.HasMorePages() {
 		page, err := pages.NextPage(ctx)
 		if err != nil {
-			t.Logf("list for cleanup: %v", err)
+			tb.Logf("list for cleanup: %v", err)
 
 			return
 		}
