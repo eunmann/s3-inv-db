@@ -154,8 +154,6 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		cfg.Logger.Info().Msg("auto-loader configured")
 	}
 
-	_ = s3Client // silence unused if discovery is off
-
 	s := &Server{
 		config:      cfg,
 		router:      chi.NewRouter(),

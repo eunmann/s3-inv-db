@@ -206,9 +206,6 @@ func applyInventoryConfigs(ctx context.Context, store *inventory.ConfigStore, en
 	return nil
 }
 
-// _ keeps time import used when AutoLoad path is compiled out below.
-var _ = time.Second
-
 // BootstrapAndRun is the full happy-path of the binary, factored out so
 // the main goroutine is just signal handling and exit-code reporting.
 // The S3 client probe inside Bootstrap uses its own bounded context

@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"sort"
 	"time"
-
-	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
 // Notification is one surfaced failure or warning.
@@ -86,5 +84,3 @@ func (h *Handlers) NotificationsPartial(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "render notifications", http.StatusInternalServerError)
 	}
 }
-
-var _ = inventory.StateLoaded // keep inventory imported for future fields
