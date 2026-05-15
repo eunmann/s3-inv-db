@@ -1,27 +1,32 @@
 package extsort
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/klauspost/compress/zstd"
 )
 
-// zstdEncoderPools holds one sync.Pool per compression level. zstd
-// encoders allocate multi-MB window buffers; reusing them across run
-// files cuts per-flush allocations dramatically.
+// One sync.Pool per compression level. Zstd encoders allocate multi-MB
+// window buffers; reusing them across run files cuts per-flush
+// allocations dramatically.
 var zstdEncoderPools = map[zstd.EncoderLevel]*sync.Pool{
 	zstd.SpeedFastest:           {},
 	zstd.SpeedDefault:           {},
 	zstd.SpeedBetterCompression: {},
 }
 
-// zstdDecoderPool reuses decoder instances across run-file reads.
+// Decoder instances are reused across run-file reads.
 var zstdDecoderPool sync.Pool
 
 func acquireZstdEncoder(level zstd.EncoderLevel) (*zstd.Encoder, error) {
 	pool := zstdEncoderPools[level]
 	if pool == nil {
-		return zstd.NewWriter(nil, zstd.WithEncoderLevel(level))
+		enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level))
+		if err != nil {
+			return nil, fmt.Errorf("zstd new writer: %w", err)
+		}
+		return enc, nil
 	}
 	if v := pool.Get(); v != nil {
 		enc, ok := v.(*zstd.Encoder)
@@ -29,7 +34,11 @@ func acquireZstdEncoder(level zstd.EncoderLevel) (*zstd.Encoder, error) {
 			return enc, nil
 		}
 	}
-	return zstd.NewWriter(nil, zstd.WithEncoderLevel(level))
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level))
+	if err != nil {
+		return nil, fmt.Errorf("zstd new writer: %w", err)
+	}
+	return enc, nil
 }
 
 func releaseZstdEncoder(level zstd.EncoderLevel, enc *zstd.Encoder) {
@@ -53,7 +62,11 @@ func acquireZstdDecoder() (*zstd.Decoder, error) {
 			return dec, nil
 		}
 	}
-	return zstd.NewReader(nil)
+	dec, err := zstd.NewReader(nil)
+	if err != nil {
+		return nil, fmt.Errorf("zstd new reader: %w", err)
+	}
+	return dec, nil
 }
 
 func releaseZstdDecoder(dec *zstd.Decoder) {

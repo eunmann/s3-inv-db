@@ -2,6 +2,7 @@ package extsort
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"testing"
@@ -30,12 +31,9 @@ func serializeRunBody(n int) []byte {
 
 type runRecordEncoder struct {
 	buf *bytes.Buffer
-	scratch [1024]byte
 }
 
 func (e *runRecordEncoder) write(row *PrefixRow) {
-	rfw := &RunFileWriter{buf: e.scratch[:]}
-	_ = rfw // placeholder reuse if needed
 	// Hand-encode using the same layout as RunFileWriter.Write.
 	prefixLen := len(row.Prefix)
 	e.buf.Write(u32le(uint32(prefixLen)))
@@ -72,7 +70,7 @@ func BenchmarkReadPrefixRowAlloc(b *testing.B) {
 		buf := make([]byte, 1024)
 		for {
 			row, err := readPrefixRowRecord(r, &buf)
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {
@@ -96,7 +94,7 @@ func BenchmarkReadPrefixRowReused(b *testing.B) {
 		row := &PrefixRow{}
 		for {
 			_, err := readPrefixRowRecordInto(r, &buf, row)
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {

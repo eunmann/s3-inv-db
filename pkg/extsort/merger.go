@@ -56,13 +56,6 @@ func (h *typedMergeHeap) pop() mergeItem {
 	return top
 }
 
-func (h *typedMergeHeap) peek() *mergeItem {
-	if len(h.items) == 0 {
-		return nil
-	}
-	return &h.items[0]
-}
-
 func (h *typedMergeHeap) siftUp(i int) {
 	for i > 0 {
 		parent := (i - 1) / 2
