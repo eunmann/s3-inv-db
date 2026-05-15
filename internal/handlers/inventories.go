@@ -65,7 +65,7 @@ type ConfigRunView struct {
 func (h *Handlers) ListConfigurationsAPI(w http.ResponseWriter, r *http.Request) {
 	resp := ConfigurationsResponse{DiscoveryEnabled: h.discovery.Enabled()}
 	if h.discovery.Enabled() {
-		views, err := h.discovery.List(r.Context())
+		views, _, err := h.discovery.Snapshot(r.Context())
 		if err != nil {
 			zerolog.Ctx(r.Context()).Error().Err(err).Msg("api configurations discovery")
 			WriteJSONError(w, http.StatusBadGateway, "failed to list discovered inventories")
@@ -371,7 +371,7 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 		HasDiscovery: h.discovery.Enabled(),
 	}
 	if data.HasDiscovery {
-		views, err := h.discovery.List(r.Context())
+		views, _, err := h.discovery.Snapshot(r.Context())
 		if err != nil {
 			zerolog.Ctx(r.Context()).Error().Err(err).Msg("discover for inventories page")
 			data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."

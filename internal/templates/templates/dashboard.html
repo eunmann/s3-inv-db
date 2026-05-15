@@ -9,6 +9,7 @@
             {{if .HasDiscovery}}
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Source: <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">{{.S3Source}}</code>
+                {{if .SnapshotAge}}<span class="ml-2 text-xs">Snapshot refreshed {{.SnapshotAge}} ago</span>{{end}}
             </p>
             {{else}}
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">

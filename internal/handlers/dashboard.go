@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -17,6 +18,11 @@ type DashboardData struct {
 	S3Source       string
 	HasDiscovery   bool
 	DiscoveryError string
+
+	// SnapshotAge is a human-readable age for the discovery snapshot
+	// rendered on the page (e.g., "12s", "2m"). Empty when discovery is
+	// disabled or the snapshot has never been populated.
+	SnapshotAge string
 
 	// Top stats — one per card.
 	Configurations int // distinct (src, inv) pairs
@@ -86,10 +92,13 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	views, err := h.discovery.List(r.Context())
+	views, fetchedAt, err := h.discovery.Snapshot(r.Context())
 	if err != nil {
 		logger.Error().Err(err).Msg("dashboard discovery failed")
 		data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
+	}
+	if !fetchedAt.IsZero() {
+		data.SnapshotAge = humanfmt.Duration(time.Since(fetchedAt))
 	}
 
 	agg := h.aggregateDashboard(logger, views, &data)

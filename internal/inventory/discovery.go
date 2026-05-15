@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 )
 
 // Discoverer is the subset of s3disco.Discoverer that DiscoveryService
@@ -74,6 +76,17 @@ type DiscoveryService struct {
 	gate       GatedLoader
 	sizer      ManifestSizer
 	indexRatio float64
+
+	cacheMu       sync.RWMutex
+	cacheViews    []MergedInventory
+	cacheAt       time.Time
+	cacheLastErr  error
+	cachePopulate bool // true once Refresh has succeeded at least once
+
+	bgMu    sync.Mutex
+	bgStop  chan struct{}
+	bgWG    sync.WaitGroup
+	bgClock func() time.Time
 }
 
 // NewDiscoveryService constructs a service. The discoverer and builder
@@ -138,6 +151,133 @@ func (s *DiscoveryService) List(ctx context.Context) ([]MergedInventory, error) 
 	}
 
 	return out, nil
+}
+
+// Snapshot returns the most recently cached merged-inventory view and
+// the time at which it was captured. When no refresh has succeeded yet,
+// Snapshot performs one inline so cold-start callers (e.g. the first
+// dashboard page load after process start) don't see an empty result.
+// Subsequent calls always read the cache, even if a later Refresh
+// failed — the FetchedAt timestamp lets callers age out the result
+// themselves if they need fresher data.
+func (s *DiscoveryService) Snapshot(ctx context.Context) ([]MergedInventory, time.Time, error) {
+	if s.discoverer == nil {
+		return nil, time.Time{}, ErrDiscoveryDisabled
+	}
+	s.cacheMu.RLock()
+	populated := s.cachePopulate
+	s.cacheMu.RUnlock()
+	if !populated {
+		if err := s.Refresh(ctx); err != nil {
+			return nil, time.Time{}, err
+		}
+	}
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	out := make([]MergedInventory, len(s.cacheViews))
+	copy(out, s.cacheViews)
+
+	return out, s.cacheAt, nil
+}
+
+// Refresh runs a live List and stores the result in the snapshot. The
+// previous snapshot is preserved on error so consumers continue to see
+// the last-known-good views instead of falling back to empty.
+// LastRefreshErr returns the most recent error, if any.
+func (s *DiscoveryService) Refresh(ctx context.Context) error {
+	if s.discoverer == nil {
+		return ErrDiscoveryDisabled
+	}
+	views, err := s.List(ctx)
+	now := s.now()
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	if err != nil {
+		s.cacheLastErr = err
+		// Keep prior cacheViews / cachePopulate as-is so readers still
+		// get the last-known-good snapshot.
+		return err
+	}
+	s.cacheViews = views
+	s.cacheAt = now
+	s.cachePopulate = true
+	s.cacheLastErr = nil
+
+	return nil
+}
+
+// LastRefreshErr returns the error from the most recent Refresh, or nil
+// if the most recent Refresh succeeded (or none has run yet).
+func (s *DiscoveryService) LastRefreshErr() error {
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+
+	return s.cacheLastErr
+}
+
+// Start launches a background goroutine that calls Refresh every
+// `interval`. The very first refresh runs inline so Snapshot returns
+// fresh data immediately after Start returns. Subsequent refreshes run
+// asynchronously; ticker drift is acceptable.
+//
+// Start is a no-op when discovery is disabled. Calling Start a second
+// time without Stop in between is also a no-op.
+func (s *DiscoveryService) Start(ctx context.Context, interval time.Duration) {
+	if s.discoverer == nil || interval <= 0 {
+		return
+	}
+	s.bgMu.Lock()
+	if s.bgStop != nil {
+		s.bgMu.Unlock()
+
+		return
+	}
+	stop := make(chan struct{})
+	s.bgStop = stop
+	s.bgMu.Unlock()
+
+	// Best-effort initial refresh so Snapshot is warm on entry.
+	_ = s.Refresh(ctx)
+	s.bgWG.Add(1)
+	go s.runRefresher(ctx, interval, stop)
+}
+
+func (s *DiscoveryService) runRefresher(ctx context.Context, interval time.Duration, stop <-chan struct{}) {
+	defer s.bgWG.Done()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-stop:
+			return
+		case <-t.C:
+			_ = s.Refresh(ctx)
+		}
+	}
+}
+
+// Stop signals the background refresher to exit and waits for it. Safe
+// to call without a matching Start.
+func (s *DiscoveryService) Stop() {
+	s.bgMu.Lock()
+	stop := s.bgStop
+	s.bgStop = nil
+	s.bgMu.Unlock()
+	if stop == nil {
+		return
+	}
+	close(stop)
+	s.bgWG.Wait()
+}
+
+func (s *DiscoveryService) now() time.Time {
+	if s.bgClock != nil {
+		return s.bgClock()
+	}
+
+	return time.Now()
 }
 
 // Find returns a single discovered inventory run by source bucket, ID,

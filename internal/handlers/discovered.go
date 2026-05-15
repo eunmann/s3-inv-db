@@ -17,7 +17,7 @@ import (
 // JSON-API callers and the duplication invited divergence between the
 // two response shapes.
 func (h *Handlers) ListDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
-	views, err := h.discovery.List(r.Context())
+	views, _, err := h.discovery.Snapshot(r.Context())
 	if err != nil {
 		if errors.Is(err, inventory.ErrDiscoveryDisabled) {
 			WriteJSONError(w, http.StatusServiceUnavailable, "discovery not configured (start the server with --s3-source)")

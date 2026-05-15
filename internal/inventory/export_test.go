@@ -1,6 +1,16 @@
 package inventory
 
-import "github.com/eunmann/s3-inv-db/pkg/indexread"
+import (
+	"time"
+
+	"github.com/eunmann/s3-inv-db/pkg/indexread"
+)
+
+// SetClockForTest injects a clock used to timestamp Refresh()'s
+// snapshot. Lets tests assert on the timestamp deterministically.
+func (s *DiscoveryService) SetClockForTest(clock func() time.Time) {
+	s.bgClock = clock
+}
 
 // Test-only exports of internal helpers so external _test packages can
 // exercise them without changing production visibility. Defined in
