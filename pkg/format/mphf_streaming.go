@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync"
 	"time"
 
@@ -224,7 +226,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	posStart := time.Now()
 
 	n := int(b.count)
-	hashPositions, err := b.computeHashPositionsReverseMap(mph, n)
+	hashPositions, err := b.computeHashPositionsParallelSort(mph, n)
 	if err != nil {
 		return err
 	}
@@ -292,6 +294,10 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 // computeHashPositionsReverseMap computes MPHF hash positions using the ReverseMap.
 // This avoids expensive Find() calls by iterating through the ReverseMap to build
 // a forward mapping. Approximately 17x faster than calling Find() for each hash.
+//
+// Baseline implementation: serial map build, serial lookup loop. Retained as the
+// reference variant for benchmarking; production callers use whichever variant
+// wins on representative workloads.
 func (b *StreamingMPHFBuilder) computeHashPositionsReverseMap(mph *bbhash.BBHash2, n int) ([]int, error) {
 	// Build hash → original index map
 	hashToOrigIdx := make(map[uint64]int, n)
@@ -316,6 +322,159 @@ func (b *StreamingMPHFBuilder) computeHashPositionsReverseMap(mph *bbhash.BBHash
 	}
 
 	return hashPositions, nil
+}
+
+// computeHashPositionsParallelMap is the baseline variant with the lookup
+// loop parallelised across runtime.NumCPU() workers. The map is built once
+// (serial) and then read concurrently by every worker. Concurrent map reads
+// are race-free in Go as long as no goroutine writes — which holds here.
+//
+// Writes to hashPositions are race-free because each mphPos maps to a
+// unique origIdx (the MPHF is a perfect hash), so workers never touch the
+// same slot.
+func (b *StreamingMPHFBuilder) computeHashPositionsParallelMap(mph *bbhash.BBHash2, n int) ([]int, error) {
+	hashToOrigIdx := make(map[uint64]int, n)
+	for i, h := range b.hashes {
+		hashToOrigIdx[h] = i
+	}
+
+	hashPositions := make([]int, n)
+	numWorkers := mphfWorkerCount(n)
+
+	chunkSize := (n + numWorkers - 1) / numWorkers
+	errs := make([]error, numWorkers)
+	var wg sync.WaitGroup
+	for w := range numWorkers {
+		start := uint64(w*chunkSize) + 1 // mph.Key uses 1-based positions
+		end := min(uint64((w+1)*chunkSize)+1, uint64(n)+1)
+		if start >= end {
+			continue
+		}
+		wg.Go(func() {
+			for mphPos := start; mphPos < end; mphPos++ {
+				key := mph.Key(mphPos)
+				if key == 0 {
+					errs[w] = fmt.Errorf("%w: Key(%d) returned 0", ErrMPHFAmbiguousKey, mphPos)
+
+					return
+				}
+				origIdx, ok := hashToOrigIdx[key]
+				if !ok {
+					errs[w] = fmt.Errorf("%w: Key(%d) returned %d", ErrMPHFUnknownHash, mphPos, key)
+
+					return
+				}
+				hashPositions[origIdx] = int(mphPos - 1)
+			}
+		})
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return hashPositions, nil
+}
+
+// hashIdxPair packs a (hash, original-index) tuple for the sorted-array
+// lookup variant. The 12-byte layout (vs Go's ~24-byte map entry) keeps
+// the table inside L3 for one more decade of input scale.
+type hashIdxPair struct {
+	hash uint64
+	idx  uint32
+}
+
+// computeHashPositionsParallelSort replaces the map with a sorted
+// (hash, idx) array and binary-searches it in parallel across
+// runtime.NumCPU() workers. Trades O(n) map build for O(n log n) sort,
+// betting that the cache-friendlier flat array plus parallelism wins
+// at scale where the map exceeds L3.
+//
+// Uint32 indices cap input at ~4B prefixes; the build pipeline tracks
+// uint64 counts elsewhere but no realistic MPHF input approaches 2^32.
+func (b *StreamingMPHFBuilder) computeHashPositionsParallelSort(mph *bbhash.BBHash2, n int) ([]int, error) {
+	if uint64(n) > math.MaxUint32 {
+		return nil, fmt.Errorf("%w: %d prefixes exceeds uint32 index range used by the sorted-array variant", ErrMPHFAmbiguousKey, n)
+	}
+	pairs := make([]hashIdxPair, n)
+	for i, h := range b.hashes {
+		pairs[i] = hashIdxPair{hash: h, idx: uint32(i)}
+	}
+	slices.SortFunc(pairs, func(a, b hashIdxPair) int {
+		switch {
+		case a.hash < b.hash:
+			return -1
+		case a.hash > b.hash:
+			return 1
+		default:
+			return 0
+		}
+	})
+
+	hashPositions := make([]int, n)
+	numWorkers := mphfWorkerCount(n)
+	chunkSize := (n + numWorkers - 1) / numWorkers
+	errs := make([]error, numWorkers)
+	var wg sync.WaitGroup
+	for w := range numWorkers {
+		start := uint64(w*chunkSize) + 1
+		end := min(uint64((w+1)*chunkSize)+1, uint64(n)+1)
+		if start >= end {
+			continue
+		}
+		wg.Go(func() {
+			for mphPos := start; mphPos < end; mphPos++ {
+				key := mph.Key(mphPos)
+				if key == 0 {
+					errs[w] = fmt.Errorf("%w: Key(%d) returned 0", ErrMPHFAmbiguousKey, mphPos)
+
+					return
+				}
+				pos, ok := slices.BinarySearchFunc(pairs, key, func(p hashIdxPair, target uint64) int {
+					switch {
+					case p.hash < target:
+						return -1
+					case p.hash > target:
+						return 1
+					default:
+						return 0
+					}
+				})
+				if !ok {
+					errs[w] = fmt.Errorf("%w: Key(%d) returned %d", ErrMPHFUnknownHash, mphPos, key)
+
+					return
+				}
+				hashPositions[pairs[pos].idx] = int(mphPos - 1)
+			}
+		})
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return hashPositions, nil
+}
+
+// mphfWorkerCount caps parallelism at the smaller of NumCPU and the
+// per-worker amortised cost threshold — there's no point spinning up
+// 64 workers for 10k prefixes. Floor of 1 keeps callers off zero-divide.
+func mphfWorkerCount(n int) int {
+	const minPerWorker = 4096
+	w := runtime.NumCPU()
+	if maxFromWork := n / minPerWorker; maxFromWork < w {
+		w = maxFromWork
+	}
+	if w < 1 {
+		w = 1
+	}
+
+	return w
 }
 
 // prefixChunkItem holds data for one prefix during parallel processing.
