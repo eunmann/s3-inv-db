@@ -21,8 +21,30 @@ func Apply(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	if err := recoverDirty(m); err != nil {
+		return err
+	}
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("apply migrations: %w", err)
+	}
+	return nil
+}
+
+// recoverDirty clears the dirty flag if set. Safe because every up
+// migration is idempotent.
+func recoverDirty(m *migrate.Migrate) error {
+	version, dirty, err := m.Version()
+	if errors.Is(err, migrate.ErrNilVersion) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	if !dirty {
+		return nil
+	}
+	if err := m.Force(int(version)); err != nil {
+		return fmt.Errorf("clear dirty version %d: %w", version, err)
 	}
 	return nil
 }

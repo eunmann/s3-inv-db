@@ -1,4 +1,4 @@
-CREATE TABLE jobs (
+CREATE TABLE IF NOT EXISTS jobs (
     id            TEXT PRIMARY KEY,
     inventory_id  TEXT NOT NULL REFERENCES inventories(id) ON DELETE CASCADE,
     kind          TEXT NOT NULL,
@@ -13,5 +13,5 @@ CREATE TABLE jobs (
     updated_at    INTEGER NOT NULL
 );
 
-CREATE INDEX idx_jobs_inventory ON jobs(inventory_id);
-CREATE INDEX idx_jobs_state     ON jobs(state);
+CREATE INDEX IF NOT EXISTS idx_jobs_inventory ON jobs(inventory_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_state     ON jobs(state);

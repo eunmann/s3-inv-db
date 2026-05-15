@@ -1,4 +1,4 @@
-CREATE TABLE inventories (
+CREATE TABLE IF NOT EXISTS inventories (
     id            TEXT PRIMARY KEY,
     name          TEXT NOT NULL,
     path          TEXT NOT NULL,

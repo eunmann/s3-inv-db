@@ -88,3 +88,34 @@ func TestDown_RollsBackOneStep(t *testing.T) {
 		t.Errorf("version after Down = %d, want < %d", after, before)
 	}
 }
+
+func TestApply_RecoversFromDirtyState(t *testing.T) {
+	db := openMemDB(t)
+	if err := Apply(db); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE schema_migrations SET dirty = 1`); err != nil {
+		t.Fatalf("seed dirty: %v", err)
+	}
+	if err := Apply(db); err != nil {
+		t.Fatalf("Apply with dirty flag: %v", err)
+	}
+	_, dirty, _ := Version(db)
+	if dirty {
+		t.Error("dirty flag still set after Apply")
+	}
+}
+
+func TestApply_TolerantOfPreExistingTables(t *testing.T) {
+	db := openMemDB(t)
+	if _, err := db.Exec(`CREATE TABLE inventories (id TEXT PRIMARY KEY, name TEXT, path TEXT, state TEXT, error TEXT, node_count INTEGER, max_depth INTEGER, has_tier_data INTEGER, loaded_at INTEGER, updated_at INTEGER NOT NULL)`); err != nil {
+		t.Fatalf("seed legacy table: %v", err)
+	}
+	if err := Apply(db); err != nil {
+		t.Fatalf("Apply on legacy DB: %v", err)
+	}
+	v, _, _ := Version(db)
+	if v < 2 {
+		t.Errorf("version = %d, want >= 2", v)
+	}
+}
