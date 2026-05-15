@@ -327,6 +327,10 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 		return nil, fmt.Errorf("get destination bucket: %w", err)
 	}
 
+	// LPT scheduling: sort manifest files largest-first so the tail of the
+	// ingest doesn't leave most workers idle behind one big chunk.
+	sortFilesLargestFirst(manifest)
+
 	numWorkers := p.computeWorkerCount(log)
 
 	return &ingestConfig{
@@ -340,6 +344,26 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 		numWorkers:    numWorkers,
 		tierMapping:   tiers.NewMapping(),
 	}, nil
+}
+
+// sortFilesLargestFirst reorders manifest.Files by Size DESC so that
+// large chunks land at the head of the work queue. This is the
+// classic Longest-Processing-Time-first heuristic for makespan: the
+// last worker to start a job finishes near the median rather than
+// being stuck on the only remaining giant chunk.
+func sortFilesLargestFirst(manifest *s3fetch.Manifest) {
+	if manifest == nil || len(manifest.Files) < 2 {
+		return
+	}
+	files := manifest.Files
+	// Insertion sort is fine — manifests have at most a few hundred files.
+	for i := 1; i < len(files); i++ {
+		j := i
+		for j > 0 && files[j-1].Size < files[j].Size {
+			files[j-1], files[j] = files[j], files[j-1]
+			j--
+		}
+	}
 }
 
 // formatString returns a human-readable format name.
@@ -936,19 +960,21 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 }
 
 // singleRunIterator wraps a RunReader to implement the iterator interface expected by IndexBuilder.
+// Reuses one PrefixRow across all Next() calls — caller must consume the
+// returned row before calling Next again. IndexBuilder.Add does this.
 type singleRunIterator struct {
 	reader RunReader
+	row    PrefixRow
 }
 
 func (s *singleRunIterator) Next() (*PrefixRow, error) {
-	row, err := s.reader.Read()
-	if err != nil {
+	if err := s.reader.ReadInto(&s.row); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
 		return nil, fmt.Errorf("read from run: %w", err)
 	}
-	return row, nil
+	return &s.row, nil
 }
 
 func (s *singleRunIterator) Remaining() uint64 {

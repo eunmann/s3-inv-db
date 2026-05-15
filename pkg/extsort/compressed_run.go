@@ -344,6 +344,18 @@ func (r *CompressedRunReader) Read() (*PrefixRow, error) {
 	return row, nil
 }
 
+// ReadInto reads the next row into the caller-owned PrefixRow.
+func (r *CompressedRunReader) ReadInto(into *PrefixRow) error {
+	if r.read >= r.count {
+		return io.EOF
+	}
+	if _, err := readPrefixRowRecordInto(r.reader, &r.buf, into); err != nil {
+		return err
+	}
+	r.read++
+	return nil
+}
+
 // Count returns the total number of records in the file.
 func (r *CompressedRunReader) Count() uint64 {
 	return r.count
@@ -389,6 +401,9 @@ func (r *CompressedRunReader) Remove() error {
 // RunReader is an interface that abstracts reading from either compressed or uncompressed run files.
 type RunReader interface {
 	Read() (*PrefixRow, error)
+	// ReadInto reads the next row into the caller-owned PrefixRow,
+	// avoiding the per-row allocation in Read.
+	ReadInto(into *PrefixRow) error
 	Count() uint64
 	ReadCount() uint64
 	Path() string
