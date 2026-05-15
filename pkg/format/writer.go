@@ -219,26 +219,29 @@ func (w *BlobWriter) WriteBytes(b []byte) error {
 	return nil
 }
 
-// Close finalizes both files, writing a sentinel offset.
+// Close finalizes both files, writing a sentinel offset. On the
+// error path the cleanup calls are best-effort — we already have a
+// fatal error to return, so secondary close/flush failures during
+// cleanup are intentionally discarded via the leading underscores.
 func (w *BlobWriter) Close() error {
 	// Write sentinel offset (points past end)
 	if err := w.offsets.WriteU64(w.offset); err != nil {
-		w.blobWriter.Flush()
-		w.blobFile.Close()
-		w.offsets.Close()
+		_ = w.blobWriter.Flush()
+		_ = w.blobFile.Close()
+		_ = w.offsets.Close()
 
 		return fmt.Errorf("write sentinel offset: %w", err)
 	}
 
 	if err := w.blobWriter.Flush(); err != nil {
-		w.blobFile.Close()
-		w.offsets.Close()
+		_ = w.blobFile.Close()
+		_ = w.offsets.Close()
 
 		return fmt.Errorf("flush blob: %w", err)
 	}
 
 	if err := w.blobFile.Close(); err != nil {
-		w.offsets.Close()
+		_ = w.offsets.Close()
 
 		return fmt.Errorf("close blob: %w", err)
 	}

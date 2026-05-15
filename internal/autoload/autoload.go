@@ -163,7 +163,9 @@ func (a *AutoLoader) tick(ctx context.Context) {
 		c.PollFailureCount = 0
 		c.LastPollError = ""
 		c.PollBackoffUntil = time.Time{}
-		_ = a.configStore.Upsert(ctx, c)
+		if err := a.configStore.Upsert(ctx, c); err != nil {
+			a.logger.Warn().Err(err).Str("config_id", c.ConfigID()).Msg("autoload: persist poll-success state")
+		}
 	}
 	a.runQueue(ctx, queue)
 }
@@ -261,7 +263,9 @@ func (a *AutoLoader) recordPollFailure(ctx context.Context, enabled map[string]i
 		c.PollFailureCount++
 		c.LastPollError = msg
 		c.PollBackoffUntil = a.now().Add(backoffDelay(a.cfg.MinBackoff, a.cfg.MaxBackoff, c.PollFailureCount))
-		_ = a.configStore.Upsert(ctx, c)
+		if err := a.configStore.Upsert(ctx, c); err != nil {
+			a.logger.Warn().Err(err).Str("config_id", c.ConfigID()).Msg("autoload: persist poll-failure state")
+		}
 	}
 }
 

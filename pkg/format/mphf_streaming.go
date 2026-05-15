@@ -3,6 +3,7 @@ package format
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -137,17 +138,26 @@ func (b *StreamingMPHFBuilder) Count() uint64 {
 	return b.count
 }
 
-// Close closes the builder and removes temporary files.
+// Close closes the builder and removes temporary files. Aggregates
+// the cleanup errors so callers don't lose visibility when the
+// tempfile flush or close fails (typical on disk-full mid-build).
 func (b *StreamingMPHFBuilder) Close() error {
+	var errs []error
 	if b.tempWriter != nil {
-		b.tempWriter.Flush()
+		if err := b.tempWriter.Flush(); err != nil {
+			errs = append(errs, fmt.Errorf("flush mphf tempfile: %w", err))
+		}
 	}
 	if b.tempFile != nil {
-		b.tempFile.Close()
-		os.Remove(b.tempPath)
+		if err := b.tempFile.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close mphf tempfile: %w", err))
+		}
+		if err := os.Remove(b.tempPath); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove mphf tempfile: %w", err))
+		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // Build constructs the MPHF and writes it to the output directory.

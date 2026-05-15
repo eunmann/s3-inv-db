@@ -155,7 +155,10 @@ func (d *Downloader) DownloadToReader(ctx context.Context, bucket, key string) (
 }
 
 // DownloadToFile downloads an S3 object to a specified file path.
-// Returns download statistics.
+// Returns download statistics. The destination file's Close is
+// error-checked: on NFS or other backed filesystems a close can
+// surface a deferred write failure that an unchecked defer would
+// silently swallow.
 func (d *Downloader) DownloadToFile(ctx context.Context, bucket, key, destPath string) (*DownloadResult, error) {
 	startTime := time.Now()
 
@@ -163,7 +166,6 @@ func (d *Downloader) DownloadToFile(ctx context.Context, bucket, key, destPath s
 	if err != nil {
 		return nil, fmt.Errorf("create destination file: %w", err)
 	}
-	defer file.Close()
 
 	out, err := d.manager.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
 		Bucket:   aws.String(bucket),
@@ -171,13 +173,24 @@ func (d *Downloader) DownloadToFile(ctx context.Context, bucket, key, destPath s
 		WriterAt: file,
 	})
 	if err != nil {
-		os.Remove(destPath)
+		_ = file.Close()
+		_ = os.Remove(destPath)
 
 		return nil, fmt.Errorf("download s3://%s/%s: %w", bucket, key, err)
 	}
 
+	// Close after the successful download so a deferred write
+	// failure (NFS commit, etc.) surfaces here instead of being
+	// silently swallowed by an unchecked deferred Close.
+	bytes := bytesDownloaded(out, file)
+	if err := file.Close(); err != nil {
+		_ = os.Remove(destPath)
+
+		return nil, fmt.Errorf("close downloaded file %s: %w", destPath, err)
+	}
+
 	return &DownloadResult{
-		BytesDownloaded: bytesDownloaded(out, file),
+		BytesDownloaded: bytes,
 		Duration:        time.Since(startTime),
 		Concurrency:     d.config.Concurrency,
 		PartSize:        d.config.PartSize,
