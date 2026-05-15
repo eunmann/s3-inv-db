@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -560,8 +561,7 @@ func (p *Pipeline) handleIngestBatch(
 		p.logIngestProgress(log, chunkNum, totalChunks)
 	}
 
-	heapThreshold := p.config.MemoryBudget.AggregatorBudget()
-	if ShouldFlush(heapThreshold) {
+	if ShouldFlush(HeapAllocBytes(), debug.SetMemoryLimit(-1)) {
 		p.memTracker.LogNow("pre_flush")
 		if err := p.flushAggregator(ctx, agg); err != nil {
 			return ingestBatchResult{FlushErr: fmt.Errorf("flush aggregator: %w", err)}

@@ -121,15 +121,72 @@ func HeapAllocBytes() uint64 {
 	return m.HeapAlloc
 }
 
-// ShouldFlush returns true if the aggregator should flush based on
-// actual heap usage approaching the given threshold.
+// HeapInuseBytes returns the bytes Go's runtime currently has carved
+// out of the OS for heap allocations (in-use spans + spans not yet
+// returned). This is a more conservative pressure signal than HeapAlloc
+// because it includes recently-freed memory the runtime hasn't given
+// back yet — which still counts against GOMEMLIMIT.
+func HeapInuseBytes() uint64 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+
+	return m.HeapInuse
+}
+
+// AbsoluteAggregatorCap is the hard ceiling on aggregator memory
+// before it's forced to flush. We never let the aggregator's heap
+// share exceed this regardless of overall GOMEMLIMIT; the cap bounds
+// the number of run files a build generates and keeps per-flush GC
+// pauses tractable.
+const AbsoluteAggregatorCap uint64 = 512 * 1024 * 1024
+
+// HeapPressureRatio is the HeapInuse / GOMEMLIMIT fraction above which
+// the aggregator must spill regardless of its own size. Crossing this
+// means the rest of the pipeline is approaching the soft memory limit
+// and the aggregator is the only structure with a flush valve.
+const HeapPressureRatio = 0.85
+
+// AggregatorFractionOfLimit caps the aggregator at this share of the
+// process memory limit so a multi-GiB GOMEMLIMIT doesn't translate
+// into an aggregator big enough to dwarf every other working set.
+const AggregatorFractionOfLimit = 0.15
+
+// AggregatorCap returns the spill threshold for aggregator-bytes
+// given a process memory limit (typically the value returned by
+// sysmem.ApplyMemoryLimit). The result is the smaller of the absolute
+// cap and AggregatorFractionOfLimit × memoryLimit. A zero or negative
+// memoryLimit falls back to the absolute cap.
+func AggregatorCap(memoryLimit int64) uint64 {
+	if memoryLimit <= 0 {
+		return AbsoluteAggregatorCap
+	}
+	fractional := uint64(float64(memoryLimit) * AggregatorFractionOfLimit)
+	if fractional < AbsoluteAggregatorCap {
+		return fractional
+	}
+
+	return AbsoluteAggregatorCap
+}
+
+// ShouldFlush returns true if the aggregator should spill to disk
+// based on either:
+//   - its own estimated-bytes exceeding AggregatorCap(memoryLimit), or
+//   - overall HeapInuse exceeding HeapPressureRatio × memoryLimit.
 //
-// The threshold should be the maximum heap size allowed. We flush
-// when heap usage exceeds 80% of threshold to leave headroom.
-func ShouldFlush(heapThreshold uint64) bool {
-	current := HeapAllocBytes()
-	// Flush at 80% of threshold to leave headroom for flush operations
-	return current > (heapThreshold * 80 / 100)
+// aggregatorBytes is the aggregator's best estimate of its own
+// in-memory footprint (typically Aggregator.EstimatedMemoryUsage's
+// successor). When memoryLimit is zero/negative only the absolute
+// aggregator cap is checked.
+func ShouldFlush(aggregatorBytes uint64, memoryLimit int64) bool {
+	if aggregatorBytes >= AggregatorCap(memoryLimit) {
+		return true
+	}
+	if memoryLimit <= 0 {
+		return false
+	}
+	heapPressure := uint64(float64(memoryLimit) * HeapPressureRatio)
+
+	return HeapInuseBytes() >= heapPressure
 }
 
 // Drain extracts all prefixes from the aggregator and returns them as PrefixRows.

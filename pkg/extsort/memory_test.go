@@ -33,7 +33,7 @@ func TestAggregatorMemoryBounded(t *testing.T) {
 		agg.AddObject(key, 1024, tiers.Standard)
 
 		// Check if we should flush (simulating pipeline behavior)
-		if i%1000 == 0 && extsort.ShouldFlush(flushThresholdMB*1024*1024) {
+		if i%1000 == 0 && extsort.ShouldFlush(extsort.HeapAllocBytes(), flushThresholdMB*1024*1024) {
 			rows := agg.Drain()
 			_ = rows // In real pipeline, these would be written to run file
 			flushCount++
@@ -172,20 +172,35 @@ func TestHeapAllocBytes(t *testing.T) {
 
 // TestShouldFlush verifies the extsort.ShouldFlush function.
 func TestShouldFlush(t *testing.T) {
-	// Get current heap
-	currentHeap := extsort.HeapAllocBytes()
-
-	// extsort.ShouldFlush with threshold below current heap should return true
-	if !extsort.ShouldFlush(1) {
-		t.Error("extsort.ShouldFlush(1) should return true (threshold below current heap)")
+	// Aggregator size at or above the cap forces a spill regardless
+	// of pressure rule.
+	if !extsort.ShouldFlush(extsort.AbsoluteAggregatorCap, 0) {
+		t.Error("ShouldFlush should fire when aggregator hits the absolute cap")
 	}
-
-	// extsort.ShouldFlush with very high threshold should return false
-	if extsort.ShouldFlush(100 * 1024 * 1024 * 1024) { // 100 GB
-		t.Error("extsort.ShouldFlush(100GB) should return false")
+	// Aggregator well below cap, no memory limit set, no heap pressure
+	// signal: must not fire.
+	if extsort.ShouldFlush(1024, 0) {
+		t.Error("ShouldFlush should not fire when aggregator is tiny and no limit set")
 	}
+}
 
-	t.Logf("Current heap: %.2f MB", float64(currentHeap)/(1024*1024))
+// TestAggregatorCap verifies the cap formula respects the absolute
+// ceiling and the fractional rule.
+func TestAggregatorCap(t *testing.T) {
+	if got := extsort.AggregatorCap(0); got != extsort.AbsoluteAggregatorCap {
+		t.Errorf("AggregatorCap(0) = %d, want absolute %d", got, extsort.AbsoluteAggregatorCap)
+	}
+	// 100 GiB limit → 15 GiB fractional, far above the absolute → absolute wins.
+	huge := int64(100 * 1024 * 1024 * 1024)
+	if got := extsort.AggregatorCap(huge); got != extsort.AbsoluteAggregatorCap {
+		t.Errorf("AggregatorCap(huge) = %d, want absolute %d", got, extsort.AbsoluteAggregatorCap)
+	}
+	// 1 GiB limit → 153 MiB fractional, below absolute → fractional wins.
+	small := int64(1024 * 1024 * 1024)
+	want := uint64(float64(small) * extsort.AggregatorFractionOfLimit)
+	if got := extsort.AggregatorCap(small); got != want {
+		t.Errorf("AggregatorCap(1GiB) = %d, want fractional %d", got, want)
+	}
 }
 
 // BenchmarkAggregatorMemory benchmarks aggregator memory efficiency.
