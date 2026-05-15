@@ -13,35 +13,46 @@ const (
 	SortColCompareStatus = "status"
 )
 
-// statusOrder orders the four CompareStatus values for column sort. The
-// numbers don't have a meaning beyond "stable, distinct" — they just
-// keep added together, changed together, etc.
+// Stable, distinct ranks for each CompareStatus so column sort can
+// order rows by status. The numbers carry no meaning beyond keeping
+// like-statuses together.
+const (
+	statusOrderAdded     = 1
+	statusOrderRemoved   = 2
+	statusOrderChanged   = 3
+	statusOrderUnchanged = 4
+	statusOrderUnknown   = 5
+)
+
+// statusOrder orders the four CompareStatus values for column sort.
 func statusOrder(s CompareStatus) int {
 	switch s {
 	case CompareAdded:
-		return 1
+		return statusOrderAdded
 	case CompareRemoved:
-		return 2
+		return statusOrderRemoved
 	case CompareChanged:
-		return 3
+		return statusOrderChanged
 	case CompareUnchanged:
-		return 4
+		return statusOrderUnchanged
 	default:
-		return 5
+		return statusOrderUnknown
 	}
 }
 
 // NormalizeCompareSort clamps sort/dir from user input to the compare
 // view's known sort columns. Unknown column falls back to "" which the
 // handler treats as the "biggest absolute byte mover" default —
-// preserves the current first-visit experience.
-func NormalizeCompareSort(sortBy, dir string) (col, direction string) {
+// preserves the current first-visit experience. Returns (col, dir).
+func NormalizeCompareSort(sortBy, dir string) (string, string) {
+	var col string
 	switch sortBy {
 	case SortColSegment, SortColObjects, SortColSize, SortColCost, SortColCompareStatus:
 		col = sortBy
 	default:
 		col = ""
 	}
+	var direction string
 	switch dir {
 	case SortDirAsc, SortDirDesc:
 		direction = dir
@@ -76,10 +87,10 @@ func CompareSortLinks(currentSort, currentDir string) map[string]BrowseSortLink 
 		if c.key == currentSort {
 			if currentDir == SortDirAsc {
 				link.Dir = SortDirDesc
-				link.Indicator = "↑"
+				link.Indicator = sortIndicatorAsc
 			} else {
 				link.Dir = SortDirAsc
-				link.Indicator = "↓"
+				link.Indicator = sortIndicatorDesc
 			}
 		}
 		links[c.key] = link

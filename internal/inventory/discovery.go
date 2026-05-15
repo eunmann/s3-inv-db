@@ -102,6 +102,11 @@ const DefaultIndexRatio = 0.30
 // to be configured.
 var ErrDiscoveryDisabled = errors.New("discovery not configured")
 
+// ErrNoRun is returned by Prepare/Load when the supplied Inventory has
+// an empty Run — the operation needs a specific timestamped run to
+// register or build. Callers wrap it with the config ID for context.
+var ErrNoRun = errors.New("inventory has no run")
+
 // Enabled reports whether discovery is configured. List, Find, and Load
 // require Enabled() == true.
 func (s *DiscoveryService) Enabled() bool {
@@ -157,7 +162,7 @@ func (s *DiscoveryService) PrepareDiscovered(disc Inventory) error {
 		return ErrDiscoveryDisabled
 	}
 	if disc.Run == "" {
-		return fmt.Errorf("prepare: inventory %s has no run", disc.ConfigID())
+		return fmt.Errorf("prepare inventory %s: %w", disc.ConfigID(), ErrNoRun)
 	}
 	composite := disc.CompositeID()
 	manifestURI := fmt.Sprintf("s3://%s/%s", s.discoverer.Bucket(), disc.ManifestKey)
@@ -198,7 +203,7 @@ func (s *DiscoveryService) loadInternal(ctx context.Context, disc Inventory, onP
 		return ErrDiscoveryDisabled
 	}
 	if disc.Run == "" {
-		return fmt.Errorf("load: inventory %s has no run", disc.ConfigID())
+		return fmt.Errorf("load inventory %s: %w", disc.ConfigID(), ErrNoRun)
 	}
 	composite := disc.CompositeID()
 	manifestURI := fmt.Sprintf("s3://%s/%s", s.discoverer.Bucket(), disc.ManifestKey)

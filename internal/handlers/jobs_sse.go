@@ -6,8 +6,53 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/rs/zerolog"
 )
+
+// jobEvent is the JSON envelope the SSE stream emits. Defined here
+// (rather than reusing jobs.Job directly) so the wire format is owned
+// by the HTTP layer — renames inside the jobs package can't accidentally
+// change what browsers see, and every field carries an explicit json tag.
+type jobEvent struct {
+	ID          string `json:"ID"`
+	InventoryID string `json:"InventoryID"`
+	Kind        string `json:"Kind"`
+	State       string `json:"State"`
+	Stage       string `json:"Stage"`
+	Progress    int    `json:"Progress"`
+	BytesTotal  int64  `json:"BytesTotal"`
+	BytesDone   int64  `json:"BytesDone"`
+	StartedAt   string `json:"StartedAt,omitempty"`
+	FinishedAt  string `json:"FinishedAt,omitempty"`
+	Error       string `json:"Error,omitempty"`
+	UpdatedAt   string `json:"UpdatedAt,omitempty"`
+}
+
+func jobToEvent(j jobs.Job) jobEvent {
+	ev := jobEvent{
+		ID:          string(j.ID),
+		InventoryID: string(j.InventoryID),
+		Kind:        string(j.Kind),
+		State:       string(j.State),
+		Stage:       j.Stage,
+		Progress:    j.Progress,
+		BytesTotal:  j.BytesTotal,
+		BytesDone:   j.BytesDone,
+		Error:       j.Error,
+	}
+	if !j.StartedAt.IsZero() {
+		ev.StartedAt = j.StartedAt.Format(time.RFC3339Nano)
+	}
+	if !j.FinishedAt.IsZero() {
+		ev.FinishedAt = j.FinishedAt.Format(time.RFC3339Nano)
+	}
+	if !j.UpdatedAt.IsZero() {
+		ev.UpdatedAt = j.UpdatedAt.Format(time.RFC3339Nano)
+	}
+
+	return ev
+}
 
 // JobsStream serves text/event-stream and emits one event per job state
 // change. Browsers can subscribe with the htmx-sse extension; event
@@ -64,7 +109,7 @@ func (h *Handlers) JobsStream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			payload, err := json.Marshal(j)
+			payload, err := json.Marshal(jobToEvent(j))
 			if err != nil {
 				logger.Error().Err(err).Msg("marshal job event")
 

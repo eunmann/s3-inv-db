@@ -21,7 +21,8 @@ var errPrefixNotFound = errors.New("prefix not found")
 // JSON handlers wrap the result via WriteJSONError; partial (HTML)
 // handlers use http.Error. Centralising the mapping keeps the JSON and
 // HTML twins in lock-step: fixing a status code here updates both.
-func managerErrorStatus(err error) (status int, msg string) {
+// Returns (status, message).
+func managerErrorStatus(err error) (int, string) {
 	switch {
 	case errors.Is(err, inventory.ErrNotFound):
 		return http.StatusNotFound, "inventory not found"

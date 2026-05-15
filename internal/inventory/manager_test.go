@@ -1,4 +1,4 @@
-package inventory
+package inventory_test
 
 import (
 	"context"
@@ -7,11 +7,12 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
 
 func TestManagerRegister(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	defer m.Close()
 
 	err := m.Register("test-id", "Test Inventory", "/path/to/index")
@@ -33,13 +34,13 @@ func TestManagerRegister(t *testing.T) {
 	if info.Path != "/path/to/index" {
 		t.Errorf("Path = %q, want %q", info.Path, "/path/to/index")
 	}
-	if info.State != StateNotLoaded {
-		t.Errorf("State = %q, want %q", info.State, StateNotLoaded)
+	if info.State != inventory.StateNotLoaded {
+		t.Errorf("State = %q, want %q", info.State, inventory.StateNotLoaded)
 	}
 }
 
 func TestManagerRegisterDuplicate(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	defer m.Close()
 
 	err := m.Register("test-id", "Test Inventory", "/path/to/index")
@@ -48,13 +49,13 @@ func TestManagerRegisterDuplicate(t *testing.T) {
 	}
 
 	err = m.Register("test-id", "Another Name", "/another/path")
-	if !errors.Is(err, ErrAlreadyExists) {
-		t.Errorf("Second Register error = %v, want %v", err, ErrAlreadyExists)
+	if !errors.Is(err, inventory.ErrAlreadyExists) {
+		t.Errorf("Second Register error = %v, want %v", err, inventory.ErrAlreadyExists)
 	}
 }
 
 func TestManagerGetNotFound(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	defer m.Close()
 
 	_, ok := m.Get("nonexistent")
@@ -64,7 +65,7 @@ func TestManagerGetNotFound(t *testing.T) {
 }
 
 func TestManagerList(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	defer m.Close()
 
 	// Empty list
@@ -84,27 +85,27 @@ func TestManagerList(t *testing.T) {
 }
 
 func TestManagerLoadNotFound(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	defer m.Close()
 
 	err := m.Load(context.Background(), "nonexistent")
-	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("Load error = %v, want %v", err, ErrNotFound)
+	if !errors.Is(err, inventory.ErrNotFound) {
+		t.Errorf("Load error = %v, want %v", err, inventory.ErrNotFound)
 	}
 }
 
 func TestManagerUnloadNotFound(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	defer m.Close()
 
 	err := m.Unload("nonexistent")
-	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("Unload error = %v, want %v", err, ErrNotFound)
+	if !errors.Is(err, inventory.ErrNotFound) {
+		t.Errorf("Unload error = %v, want %v", err, inventory.ErrNotFound)
 	}
 }
 
 func TestManagerRemove(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	defer m.Close()
 
 	m.Register("test-id", "Test Inventory", "/path/to/index")
@@ -121,57 +122,57 @@ func TestManagerRemove(t *testing.T) {
 }
 
 func TestManagerRemoveNotFound(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	defer m.Close()
 
 	err := m.Remove("nonexistent")
-	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("Remove error = %v, want %v", err, ErrNotFound)
+	if !errors.Is(err, inventory.ErrNotFound) {
+		t.Errorf("Remove error = %v, want %v", err, inventory.ErrNotFound)
 	}
 }
 
 func TestManagerWithIndexNotLoaded(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	defer m.Close()
 
 	_ = m.Register("test-id", "Test Inventory", "/path/to/index")
 
 	err := m.WithIndex("test-id", func(*indexread.Index) error { return nil })
-	if !errors.Is(err, ErrNotLoaded) {
-		t.Errorf("WithIndex error = %v, want %v", err, ErrNotLoaded)
+	if !errors.Is(err, inventory.ErrNotLoaded) {
+		t.Errorf("WithIndex error = %v, want %v", err, inventory.ErrNotLoaded)
 	}
 }
 
 func TestManagerWithIndexNotFound(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	defer m.Close()
 
 	err := m.WithIndex("nonexistent", func(*indexread.Index) error { return nil })
-	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("WithIndex error = %v, want %v", err, ErrNotFound)
+	if !errors.Is(err, inventory.ErrNotFound) {
+		t.Errorf("WithIndex error = %v, want %v", err, inventory.ErrNotFound)
 	}
 }
 
 func TestManagerWithTwoIndexes_NotFound(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	defer m.Close()
 	_ = m.Register("a", "A", "/p")
 
 	err := m.WithTwoIndexes("a", "b", func(*indexread.Index, *indexread.Index) error { return nil })
-	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("WithTwoIndexes(a, missing) error = %v, want ErrNotFound", err)
+	if !errors.Is(err, inventory.ErrNotFound) {
+		t.Errorf("WithTwoIndexes(a, missing) error = %v, want inventory.ErrNotFound", err)
 	}
 }
 
 func TestManagerWithTwoIndexes_NotLoaded(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	defer m.Close()
 	_ = m.Register("a", "A", "/p")
 	_ = m.Register("b", "B", "/q")
 
 	err := m.WithTwoIndexes("a", "b", func(*indexread.Index, *indexread.Index) error { return nil })
-	if !errors.Is(err, ErrNotLoaded) {
-		t.Errorf("WithTwoIndexes neither loaded error = %v, want ErrNotLoaded", err)
+	if !errors.Is(err, inventory.ErrNotLoaded) {
+		t.Errorf("WithTwoIndexes neither loaded error = %v, want inventory.ErrNotLoaded", err)
 	}
 }
 
@@ -181,7 +182,7 @@ func TestManagerWithTwoIndexes_NotLoaded(t *testing.T) {
 // itself isn't exercised here because it requires a real index on
 // disk — see internal/handlers integration tests for that.
 func TestManagerConcurrent_RegisterListRemove(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	defer m.Close()
 
 	const workers = 16
@@ -193,7 +194,7 @@ func TestManagerConcurrent_RegisterListRemove(t *testing.T) {
 		go func(workerID int) {
 			defer wg.Done()
 			for i := range ops {
-				id := ID(fmt.Sprintf("w%d-i%d", workerID, i))
+				id := inventory.ID(fmt.Sprintf("w%d-i%d", workerID, i))
 				_ = m.Register(id, "name", "/path")
 				_, _ = m.Get(id)
 				_ = m.List()
@@ -215,7 +216,7 @@ func TestManagerConcurrent_RegisterListRemove(t *testing.T) {
 // A racing Remove during that window must not corrupt state and must
 // leave the loaded index closed.
 func TestManagerConcurrent_LoadRemoveRace(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	defer m.Close()
 
 	// Use a bogus path so Open fails quickly — we're testing the

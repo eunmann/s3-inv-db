@@ -64,6 +64,10 @@ func TestManager_RemoveDeletesFromStore(t *testing.T) {
 	}
 }
 
+// errFakeBuildBroke is the sentinel returned by tests that simulate a
+// build failure path. err113 forbids errors.New at call sites.
+var errFakeBuildBroke = errors.New("build broke")
+
 // TestManager_LoadWith_MirrorsErrorState verifies that a build failure
 // is persisted to the store (so the UI shows error after restart).
 func TestManager_LoadWith_MirrorsErrorState(t *testing.T) {
@@ -71,9 +75,8 @@ func TestManager_LoadWith_MirrorsErrorState(t *testing.T) {
 	if err := mgr.Register("src/inv1", "src/inv1", "u"); err != nil {
 		t.Fatal(err)
 	}
-	wantErr := errors.New("build broke")
 	err := mgr.LoadWith(context.Background(), "src/inv1", func(context.Context, inventory.Info) (string, error) {
-		return "", wantErr
+		return "", errFakeBuildBroke
 	})
 	if err == nil {
 		t.Fatal("LoadWith returned nil, want build error")

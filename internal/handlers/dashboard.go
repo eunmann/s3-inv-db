@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"sort"
 
@@ -90,7 +91,7 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 		data.DiskUsedH = humanfmt.BytesUint64(uint64(totals.disk))
 	}
 	h.fillBudgetCounters(&data)
-	h.fillAutoLoadCounters(&data, views)
+	h.fillAutoLoadCounters(r.Context(), &data, views)
 
 	// Stable, alphabetical order for the page rows.
 	sort.Strings(order)
@@ -132,9 +133,9 @@ func (h *Handlers) fillBudgetCounters(data *DashboardData) {
 	data.BudgetUsedPct = int((float64(used+h.tracker.Reserved()) / float64(capBytes)) * 100)
 }
 
-func (h *Handlers) fillAutoLoadCounters(data *DashboardData, views []inventory.MergedInventory) {
+func (h *Handlers) fillAutoLoadCounters(ctx context.Context, data *DashboardData, views []inventory.MergedInventory) {
 	if h.configStore != nil {
-		if configs, err := h.configStore.List(); err == nil {
+		if configs, err := h.configStore.List(ctx); err == nil {
 			for i := range configs {
 				if configs[i].AutoLoad {
 					data.AutoLoadConfigs++
@@ -171,8 +172,10 @@ type dashTotals struct {
 	disk    int64
 }
 
-func (h *Handlers) aggregateDashboard(logger *zerolog.Logger, views []inventory.MergedInventory, data *DashboardData) (confs map[string]*dashConfAgg, order []string, totals dashTotals) {
-	confs = map[string]*dashConfAgg{}
+func (h *Handlers) aggregateDashboard(logger *zerolog.Logger, views []inventory.MergedInventory, data *DashboardData) (map[string]*dashConfAgg, []string, dashTotals) {
+	confs := map[string]*dashConfAgg{}
+	var order []string
+	var totals dashTotals
 	for i := range views {
 		v := &views[i]
 		key := v.ConfigID()
@@ -205,6 +208,9 @@ func (h *Handlers) tallyView(logger *zerolog.Logger, v *inventory.MergedInventor
 		data.LoadingRuns++
 	case inventory.StateError:
 		data.ErrorRuns++
+	case inventory.StateNotLoaded:
+		// Not counted; placeholder for a run that has been discovered
+		// but not loaded into the manager yet.
 	}
 }
 

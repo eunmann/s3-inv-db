@@ -129,13 +129,13 @@ func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
 
 		return nil, nil, fmt.Errorf("apply migrations: %w", err)
 	}
-	version, dirty, err := migrate.Version(db)
+	versionInfo, err := migrate.Version(db)
 	if err != nil {
 		cleanup()
 
 		return nil, nil, fmt.Errorf("read schema version: %w", err)
 	}
-	opts.Logger.Info().Uint("schema_version", version).Bool("dirty", dirty).Msg("schema migrated")
+	opts.Logger.Info().Uint("schema_version", versionInfo.Version).Bool("dirty", versionInfo.Dirty).Msg("schema migrated")
 
 	srv, err = New(Config{
 		Addr:                     opts.Addr,
@@ -158,7 +158,7 @@ func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
 
 		return nil, nil, fmt.Errorf("create server: %w", err)
 	}
-	if err := applyInventoryConfigs(srv.configStore, opts.InventoryConfigs); err != nil {
+	if err := applyInventoryConfigs(context.Background(), srv.configStore, opts.InventoryConfigs); err != nil {
 		cleanup()
 
 		return nil, nil, fmt.Errorf("apply inventory configs: %w", err)
@@ -167,19 +167,19 @@ func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
 	return srv, cleanup, nil
 }
 
-func applyInventoryConfigs(store *inventory.ConfigStore, entries []InventoryConfigEntry) error {
+func applyInventoryConfigs(ctx context.Context, store *inventory.ConfigStore, entries []InventoryConfigEntry) error {
 	if store == nil || len(entries) == 0 {
 		return nil
 	}
 	for i := range entries {
 		e := &entries[i]
-		existing, err := store.Get(e.Source, e.Name)
+		existing, err := store.Get(ctx, e.Source, e.Name)
 		if err == nil {
 			existing.AutoLoad = e.AutoLoad
 			if e.RetentionCount > 0 {
 				existing.RetentionCount = e.RetentionCount
 			}
-			if err := store.Upsert(existing); err != nil {
+			if err := store.Upsert(ctx, existing); err != nil {
 				return fmt.Errorf("update %s/%s: %w", e.Source, e.Name, err)
 			}
 
@@ -189,7 +189,7 @@ func applyInventoryConfigs(store *inventory.ConfigStore, entries []InventoryConf
 		if retention == 0 {
 			retention = inventory.DefaultRetentionCount
 		}
-		if err := store.Upsert(inventory.Config{
+		if err := store.Upsert(ctx, inventory.Config{
 			Source:         e.Source,
 			Name:           e.Name,
 			AutoLoad:       e.AutoLoad,

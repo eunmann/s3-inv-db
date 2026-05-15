@@ -414,7 +414,7 @@ func (h *Handlers) buildInventoryGroups(r *http.Request, views []inventory.Merge
 	for i := range groups {
 		groups[i].VisibleRuns = min(DefaultVisibleRuns, len(groups[i].Runs))
 	}
-	h.annotateGroupsFromConfig(groups)
+	h.annotateGroupsFromConfig(r.Context(), groups)
 
 	return groups
 }
@@ -447,13 +447,13 @@ func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInvent
 	return row
 }
 
-func (h *Handlers) annotateGroupsFromConfig(groups []InventoryGroup) {
+func (h *Handlers) annotateGroupsFromConfig(ctx context.Context, groups []InventoryGroup) {
 	if h.configStore == nil {
 		return
 	}
 	for i := range groups {
 		g := &groups[i]
-		cfg, err := h.configStore.Get(g.SourceBucket, g.InventoryName)
+		cfg, err := h.configStore.Get(ctx, g.SourceBucket, g.InventoryName)
 		if err != nil {
 			continue
 		}

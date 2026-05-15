@@ -108,14 +108,14 @@ func New(cfg Config) (*Server, error) {
 	var s3Client *s3fetch.Client
 
 	if cfg.S3Source != "" {
-		disco, ldr, client, err := newDiscoveryWiring(cfg)
+		wiring, err := newDiscoveryWiring(cfg)
 		if err != nil {
 			return nil, err
 		}
-		bldr = ldr
-		s3Client = client
-		discovery = inventory.NewDiscoveryService(mgr, disco, ldr)
-		sizer := loadgate.NewManifestSizer(client)
+		bldr = wiring.Loader
+		s3Client = wiring.Client
+		discovery = inventory.NewDiscoveryService(mgr, wiring.Discoverer, wiring.Loader)
+		sizer := loadgate.NewManifestSizer(s3Client)
 		discovery.SetGate(gate, sizer, cfg.IndexRatio)
 		cfg.Logger.Info().
 			Str("s3_source", cfg.S3Source).
@@ -188,7 +188,10 @@ type configRetention struct {
 }
 
 func (c configRetention) Retention(source, name string) uint32 {
-	cfg, err := c.store.Get(source, name)
+	// The budget.Config interface intentionally has no ctx — eviction
+	// planning is a quick local lookup. Use a bounded background ctx so
+	// the SQL call still goes through ConfigStore's *Context variants.
+	cfg, err := c.store.Get(context.Background(), source, name)
 	if err == nil && cfg.RetentionCount > 0 {
 		return cfg.RetentionCount
 	}
@@ -297,28 +300,40 @@ var (
 // endpoint fails fast.
 const s3StartupTimeout = 30 * time.Second
 
+// discoveryWiring bundles the three values newDiscoveryWiring builds so
+// callers don't end up with a 4-arity return that invites `_, _, _, err`.
+type discoveryWiring struct {
+	Discoverer *s3disco.Discoverer
+	Loader     *loader.Loader
+	Client     *s3fetch.Client
+}
+
 // newDiscoveryWiring constructs the S3 client, discoverer, and loader
 // for a server configured with --s3-source. Extracted from New so the
 // happy path stays readable and so the wiring is testable in isolation.
-func newDiscoveryWiring(cfg Config) (*s3disco.Discoverer, *loader.Loader, *s3fetch.Client, error) {
+func newDiscoveryWiring(cfg Config) (discoveryWiring, error) {
 	if cfg.CacheDir == "" {
-		return nil, nil, nil, errEmptyCacheDir
+		return discoveryWiring{}, errEmptyCacheDir
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s3StartupTimeout)
 	defer cancel()
 	s3Client, err := s3fetch.NewClient(ctx)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("s3 client: %w", err)
+		return discoveryWiring{}, fmt.Errorf("s3 client: %w", err)
 	}
 	disco, err := s3disco.NewFromS3URI(s3Client.Raw(), cfg.S3Source)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("discovery from %q: %w", cfg.S3Source, err)
+		return discoveryWiring{}, fmt.Errorf("discovery from %q: %w", cfg.S3Source, err)
 	}
 	if err := os.MkdirAll(cfg.CacheDir, 0o755); err != nil {
-		return nil, nil, nil, fmt.Errorf("ensure cache dir %s: %w", cfg.CacheDir, err)
+		return discoveryWiring{}, fmt.Errorf("ensure cache dir %s: %w", cfg.CacheDir, err)
 	}
 
-	return disco, loader.New(cfg.CacheDir, s3Client), s3Client, nil
+	return discoveryWiring{
+		Discoverer: disco,
+		Loader:     loader.New(cfg.CacheDir, s3Client),
+		Client:     s3Client,
+	}, nil
 }
 
 // Run starts the HTTP server and blocks until the context is cancelled.

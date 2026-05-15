@@ -1,8 +1,9 @@
-package inventory
+package inventory_test
 
 import (
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -24,7 +25,7 @@ func TestNormalizeSort(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotCol, gotDir := NormalizeSort(tt.sort, tt.dir)
+			gotCol, gotDir := inventory.NormalizeSort(tt.sort, tt.dir)
 			if gotCol != tt.wantCol {
 				t.Errorf("col = %q, want %q", gotCol, tt.wantCol)
 			}
@@ -38,8 +39,8 @@ func TestNormalizeSort(t *testing.T) {
 func TestSortChildren(t *testing.T) {
 	// Three children with deliberately misaligned orderings so we can tell
 	// which sort key was applied.
-	mkInput := func() []BrowseChild {
-		return []BrowseChild{
+	mkInput := func() []inventory.BrowseChild {
+		return []inventory.BrowseChild{
 			{Segment: "c", ObjectCount: 10, TotalBytes: 100, MonthlyCostMicrodollars: 300},
 			{Segment: "a", ObjectCount: 30, TotalBytes: 200, MonthlyCostMicrodollars: 100},
 			{Segment: "b", ObjectCount: 20, TotalBytes: 300, MonthlyCostMicrodollars: 200},
@@ -63,7 +64,7 @@ func TestSortChildren(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			children := mkInput()
-			SortChildren(children, tt.sortBy, tt.dir)
+			inventory.SortChildren(children, tt.sortBy, tt.dir)
 			got := make([]string, len(children))
 			for i, c := range children {
 				got[i] = c.Segment
@@ -78,12 +79,12 @@ func TestSortChildren(t *testing.T) {
 func TestSortChildren_TieBreakOnSegment(t *testing.T) {
 	// All three have the same ObjectCount — the tie-breaker should be
 	// alphabetical segment, regardless of direction.
-	children := []BrowseChild{
+	children := []inventory.BrowseChild{
 		{Segment: "c", ObjectCount: 5},
 		{Segment: "a", ObjectCount: 5},
 		{Segment: "b", ObjectCount: 5},
 	}
-	SortChildren(children, "objects", "desc")
+	inventory.SortChildren(children, "objects", "desc")
 	got := []string{children[0].Segment, children[1].Segment, children[2].Segment}
 	want := []string{"a", "b", "c"}
 	if diff := cmp.Diff(want, got); diff != "" {
@@ -94,23 +95,23 @@ func TestSortChildren_TieBreakOnSegment(t *testing.T) {
 func TestSortLinks_IndicatorsAndToggles(t *testing.T) {
 	// Currently sorted by objects desc: that column shows ↓, clicking it
 	// would flip to asc; other columns offer their defaults with no indicator.
-	got := SortLinks("objects", "desc")
+	got := inventory.SortLinks("objects", "desc")
 
-	want := map[string]BrowseSortLink{
+	want := map[string]inventory.BrowseSortLink{
 		"segment": {Sort: "segment", Dir: "asc", Indicator: ""},
 		"objects": {Sort: "objects", Dir: "asc", Indicator: "↓"},
 		"size":    {Sort: "size", Dir: "desc", Indicator: ""},
 		"cost":    {Sort: "cost", Dir: "desc", Indicator: ""},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("SortLinks (-want +got):\n%s", diff)
+		t.Errorf("inventory.SortLinks (-want +got):\n%s", diff)
 	}
 }
 
 func TestSortLinks_AscArrowAndAscFlip(t *testing.T) {
 	// Currently sorted by segment asc: that column shows ↑, clicking it
 	// would flip to desc.
-	got := SortLinks("segment", "asc")
+	got := inventory.SortLinks("segment", "asc")
 	if got["segment"].Indicator != "↑" {
 		t.Errorf("segment indicator = %q, want ↑", got["segment"].Indicator)
 	}
@@ -122,11 +123,11 @@ func TestSortLinks_AscArrowAndAscFlip(t *testing.T) {
 func TestBreadcrumbs(t *testing.T) {
 	tests := []struct {
 		in   string
-		want []BrowseCrumb
+		want []inventory.BrowseCrumb
 	}{
-		{"", []BrowseCrumb{{Label: "Root", Prefix: ""}}},
-		{"foo/", []BrowseCrumb{{Label: "Root", Prefix: ""}, {Label: "foo", Prefix: "foo/"}}},
-		{"foo/bar/", []BrowseCrumb{
+		{"", []inventory.BrowseCrumb{{Label: "Root", Prefix: ""}}},
+		{"foo/", []inventory.BrowseCrumb{{Label: "Root", Prefix: ""}, {Label: "foo", Prefix: "foo/"}}},
+		{"foo/bar/", []inventory.BrowseCrumb{
 			{Label: "Root", Prefix: ""},
 			{Label: "foo", Prefix: "foo/"},
 			{Label: "bar", Prefix: "foo/bar/"},
@@ -134,9 +135,9 @@ func TestBreadcrumbs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
-			got := Breadcrumbs(tt.in)
+			got := inventory.Breadcrumbs(tt.in)
 			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("Breadcrumbs(%q) (-want +got):\n%s", tt.in, diff)
+				t.Errorf("inventory.Breadcrumbs(%q) (-want +got):\n%s", tt.in, diff)
 			}
 		})
 	}
@@ -159,9 +160,9 @@ func TestNormalizePage(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotP, gotS := NormalizePage(tt.page, tt.sz)
+			gotP, gotS := inventory.NormalizePage(tt.page, tt.sz)
 			if gotP != tt.wantPage || gotS != tt.wantSize {
-				t.Errorf("NormalizePage(%q,%q) = (%d,%d), want (%d,%d)",
+				t.Errorf("inventory.NormalizePage(%q,%q) = (%d,%d), want (%d,%d)",
 					tt.page, tt.sz, gotP, gotS, tt.wantPage, tt.wantSize)
 			}
 		})
@@ -183,11 +184,11 @@ func TestPaginate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Paginate(tt.total, tt.page, tt.size)
+			got := inventory.Paginate(tt.total, tt.page, tt.size)
 			if got.Pages != tt.wantPages || got.FirstRow != tt.wantFirst ||
 				got.LastRow != tt.wantLast || got.PrevPage != tt.wantPrev ||
 				got.NextPage != tt.wantNext {
-				t.Errorf("Paginate(%d, %d, %d) = %+v, want pages=%d first=%d last=%d prev=%d next=%d",
+				t.Errorf("inventory.Paginate(%d, %d, %d) = %+v, want pages=%d first=%d last=%d prev=%d next=%d",
 					tt.total, tt.page, tt.size, got,
 					tt.wantPages, tt.wantFirst, tt.wantLast, tt.wantPrev, tt.wantNext)
 			}
@@ -205,8 +206,8 @@ func TestSegmentOf(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.parent+"->"+tt.child, func(t *testing.T) {
-			if got := SegmentOf(tt.parent, tt.child); got != tt.want {
-				t.Errorf("SegmentOf(%q,%q) = %q, want %q", tt.parent, tt.child, got, tt.want)
+			if got := inventory.SegmentOf(tt.parent, tt.child); got != tt.want {
+				t.Errorf("inventory.SegmentOf(%q,%q) = %q, want %q", tt.parent, tt.child, got, tt.want)
 			}
 		})
 	}

@@ -1,4 +1,4 @@
-package handlers
+package handlers_test
 
 import (
 	"context"
@@ -9,13 +9,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5"
 )
 
-func newTestHandlers(t *testing.T) *Handlers {
+func newTestHandlers(t *testing.T) *handlers.Handlers {
 	t.Helper()
 
 	mgr := inventory.NewManager()
@@ -24,7 +25,7 @@ func newTestHandlers(t *testing.T) *Handlers {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
 
-	return New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	return handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
 }
 
 func TestListInventoriesAPI_Empty(t *testing.T) {
@@ -166,7 +167,7 @@ func withURLParam(r *http.Request, key, value string) *http.Request {
 }
 
 // Helper to register an inventory in the manager.
-func registerInventory(t *testing.T, h *Handlers, id, name, path string) {
+func registerInventory(t *testing.T, h *handlers.Handlers, id, name, path string) {
 	t.Helper()
 	body := `{"id":"` + id + `","name":"` + name + `","path":"` + path + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/inventories", strings.NewReader(body))
@@ -539,7 +540,7 @@ func TestDeleteInventoryRowPartial_RemovesAndReturnsEmpty(t *testing.T) {
 	if body := w.Body.String(); body != "" {
 		t.Errorf("body = %q, want empty", body)
 	}
-	if _, ok := h.manager.Get("test"); ok {
+	if _, ok := h.ManagerForTest().Get("test"); ok {
 		t.Error("inventory still present after partial delete")
 	}
 }

@@ -1,4 +1,4 @@
-package handlers
+package handlers_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/internal/migrate"
@@ -31,7 +32,7 @@ func openJobsTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func newJobsHandlers(t *testing.T) (*Handlers, *jobs.Manager) {
+func newJobsHandlers(t *testing.T) (*handlers.Handlers, *jobs.Manager) {
 	t.Helper()
 	db := openJobsTestDB(t)
 	invStore, err := inventory.NewStore(db)
@@ -51,7 +52,7 @@ func newJobsHandlers(t *testing.T) (*Handlers, *jobs.Manager) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := NewWithConfig(Config{
+	h := handlers.NewWithConfig(handlers.Config{
 		Manager:    inventory.NewManager(),
 		Renderer:   renderer,
 		PriceTable: pricing.DefaultUSEast1Prices(),
@@ -140,7 +141,7 @@ func TestJobsStream_EmitsHeartbeat(t *testing.T) {
 
 // newHandlersWithHeartbeat is the same as newJobsHandlers but with a
 // caller-chosen SSE heartbeat interval — exercises the configurable path.
-func newHandlersWithHeartbeat(t *testing.T, hb time.Duration) *Handlers {
+func newHandlersWithHeartbeat(t *testing.T, hb time.Duration) *handlers.Handlers {
 	t.Helper()
 	db := openJobsTestDB(t)
 	invStore, err := inventory.NewStore(db)
@@ -161,7 +162,7 @@ func newHandlersWithHeartbeat(t *testing.T, hb time.Duration) *Handlers {
 		t.Fatal(err)
 	}
 
-	return NewWithConfig(Config{
+	return handlers.NewWithConfig(handlers.Config{
 		Manager:      inventory.NewManager(),
 		Renderer:     renderer,
 		PriceTable:   pricing.DefaultUSEast1Prices(),
@@ -177,7 +178,7 @@ func TestJobsStream_DisabledWhenJobBusMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := NewWithConfig(Config{
+	h := handlers.NewWithConfig(handlers.Config{
 		Manager:    inventory.NewManager(),
 		Renderer:   renderer,
 		PriceTable: pricing.DefaultUSEast1Prices(),

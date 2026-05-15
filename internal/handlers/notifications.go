@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"time"
@@ -22,10 +23,10 @@ type NotificationsResponse struct {
 	Notifications []Notification `json:"notifications"`
 }
 
-func (h *Handlers) collectNotifications() []Notification {
+func (h *Handlers) collectNotifications(ctx context.Context) []Notification {
 	out := make([]Notification, 0, 8)
 	if h.configStore != nil {
-		configs, err := h.configStore.List()
+		configs, err := h.configStore.List(ctx)
 		if err == nil {
 			for i := range configs {
 				c := &configs[i]
@@ -67,14 +68,14 @@ func (h *Handlers) collectNotifications() []Notification {
 
 // NotificationsAPI returns aggregated failure notifications for the
 // page-level banner.
-func (h *Handlers) NotificationsAPI(w http.ResponseWriter, _ *http.Request) {
-	WriteJSON(w, http.StatusOK, NotificationsResponse{Notifications: h.collectNotifications()})
+func (h *Handlers) NotificationsAPI(w http.ResponseWriter, r *http.Request) {
+	WriteJSON(w, http.StatusOK, NotificationsResponse{Notifications: h.collectNotifications(r.Context())})
 }
 
 // NotificationsPartial renders the banner HTML; empty when nothing to surface.
-func (h *Handlers) NotificationsPartial(w http.ResponseWriter, _ *http.Request) {
+func (h *Handlers) NotificationsPartial(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	notifs := h.collectNotifications()
+	notifs := h.collectNotifications(r.Context())
 	if len(notifs) == 0 {
 		return
 	}

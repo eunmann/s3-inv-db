@@ -1,4 +1,4 @@
-package handlers
+package handlers_test
 
 import (
 	"encoding/json"
@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
@@ -30,7 +31,7 @@ func TestListConfigurationsAPI_DiscoveryDisabled(t *testing.T) {
 	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
 		t.Errorf("Content-Type = %q, want application/json", ct)
 	}
-	var resp ConfigurationsResponse
+	var resp handlers.ConfigurationsResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -131,11 +132,11 @@ func TestGroupManagerForAPI_GroupsAndFallsBack(t *testing.T) {
 		{ID: "src/inv/2026-05-12T03-00Z", State: inventory.StateNotLoaded},
 		{ID: "two-part-only", State: inventory.StateLoaded}, // legacy
 	}
-	got := groupManagerForAPI(in)
+	got := handlers.GroupManagerForAPIForTest(in)
 	if len(got) != 2 {
 		t.Fatalf("groups = %d, want 2", len(got))
 	}
-	var srcGroup, fallback ConfigurationView
+	var srcGroup, fallback handlers.ConfigurationView
 	for _, g := range got {
 		if g.SourceBucket == "src" {
 			srcGroup = g
@@ -154,14 +155,14 @@ func TestGroupManagerForAPI_GroupsAndFallsBack(t *testing.T) {
 func TestStatusRank(t *testing.T) {
 	cases := map[string]int{"added": 1, "removed": 2, "changed": 3, "unchanged": 4, "garbage": 5}
 	for s, want := range cases {
-		if got := statusRank(s); got != want {
-			t.Errorf("statusRank(%q) = %d, want %d", s, got, want)
+		if got := handlers.StatusRankForTest(s); got != want {
+			t.Errorf("handlers.StatusRankForTest(%q) = %d, want %d", s, got, want)
 		}
 	}
 }
 
 func TestInventoryGroup_ConfigID(t *testing.T) {
-	g := InventoryGroup{SourceBucket: "src-a", InventoryName: "inv-1"}
+	g := handlers.InventoryGroup{SourceBucket: "src-a", InventoryName: "inv-1"}
 	if got := g.ConfigID(); got != "src-a/inv-1" {
 		t.Errorf("ConfigID() = %q, want %q", got, "src-a/inv-1")
 	}
@@ -174,11 +175,11 @@ func TestGroupDiscoveredForAPI_GroupsRunsByConfig(t *testing.T) {
 		{Inventory: inventory.Inventory{SourceBucket: "b1", InventoryName: "i1", Run: "2026-05-12T03-00Z", ManifestKey: "k1/2026-05-12T03-00Z/manifest.json"}, State: inventory.StateNotLoaded},
 		{Inventory: inventory.Inventory{SourceBucket: "b1", InventoryName: "i2", Run: "2026-05-13T03-00Z", ManifestKey: "k2/2026-05-13T03-00Z/manifest.json"}, State: inventory.StateNotLoaded},
 	}
-	groups := f.h.groupDiscoveredForAPI(nil, views)
+	groups := f.h.GroupDiscoveredForAPIForTest(nil, views)
 	if len(groups) != 2 {
 		t.Fatalf("groups = %d, want 2", len(groups))
 	}
-	var i1, i2 ConfigurationView
+	var i1, i2 handlers.ConfigurationView
 	for _, g := range groups {
 		switch g.InventoryName {
 		case "i1":

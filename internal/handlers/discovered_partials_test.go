@@ -1,4 +1,4 @@
-package handlers
+package handlers_test
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/internal/migrate"
@@ -17,6 +18,14 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5"
 	_ "modernc.org/sqlite"
+)
+
+// Sentinel errors for fake S3 / build failures used across multiple
+// table tests. err113 forbids errors.New("...") at call sites; use
+// these wrapped via fmt.Errorf when callers need context.
+var (
+	errFakeS3Throttled = errors.New("s3: throttled")
+	errFakeNetwork     = errors.New("network broken")
 )
 
 type fakeDiscoverer struct {
@@ -49,7 +58,7 @@ func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _, _ string, _ func(str
 	return f.buildResp, f.buildErr
 }
 
-func newDiscoveredHandlers(t *testing.T, disc inventory.Discoverer, ldr inventory.IndexBuilder) *Handlers {
+func newDiscoveredHandlers(t *testing.T, disc inventory.Discoverer, ldr inventory.IndexBuilder) *handlers.Handlers {
 	t.Helper()
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
@@ -78,7 +87,7 @@ func newDiscoveredHandlers(t *testing.T, disc inventory.Discoverer, ldr inventor
 	bus := jobs.NewBus(8)
 	jobMgr := jobs.NewManager(jobStore, bus)
 
-	return NewWithConfig(Config{
+	return handlers.NewWithConfig(handlers.Config{
 		Manager:    mgr,
 		Renderer:   renderer,
 		PriceTable: pricing.DefaultUSEast1Prices(),
@@ -123,7 +132,7 @@ func (f *fakeBuilder) CacheSizeBytes(_, _, _ string) (int64, error) { return 0, 
 
 func TestLoadDiscoveredRowPartial_FindError(t *testing.T) {
 	h := newDiscoveredHandlers(t,
-		&fakeDiscoverer{findErr: errors.New("s3: throttled")},
+		&fakeDiscoverer{findErr: errFakeS3Throttled},
 		&fakeBuilder{},
 	)
 	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
@@ -156,7 +165,7 @@ func TestLoadDiscoveredRowPartial_AcceptsBuildError(t *testing.T) {
 	disc := inventory.Inventory{SourceBucket: "b", InventoryName: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
-		&fakeBuilder{buildErr: errors.New("network broken")},
+		&fakeBuilder{buildErr: errFakeNetwork},
 	)
 	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
 	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
@@ -166,7 +175,7 @@ func TestLoadDiscoveredRowPartial_AcceptsBuildError(t *testing.T) {
 		t.Errorf("status = %d, want 202", w.Code)
 	}
 
-	final := waitForJobInState(t, h.jobStore, disc.CompositeID(), jobs.StateFailed)
+	final := waitForJobInState(t, h.JobStoreForTest(), disc.CompositeID(), jobs.StateFailed)
 	if !strings.Contains(final.Error, "network broken") {
 		t.Errorf("job error = %q, want to contain 'network broken'", final.Error)
 	}
@@ -272,7 +281,7 @@ func TestListDiscoveredAPI_DisabledReturns503(t *testing.T) {
 
 func TestListDiscoveredAPI_DiscovererErrorReturns502(t *testing.T) {
 	h := newDiscoveredHandlers(t,
-		&fakeDiscoverer{listErr: errors.New("s3: throttled")},
+		&fakeDiscoverer{listErr: errFakeS3Throttled},
 		&fakeBuilder{},
 	)
 	req := httptest.NewRequest(http.MethodGet, "/api/discovered", http.NoBody)

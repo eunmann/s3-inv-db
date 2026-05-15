@@ -281,8 +281,9 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 }
 
 // cacheSize measures the on-disk cache footprint of a single run.
-// Returns (0, "") when there's no loader wired or the dir is missing.
-func (h *Handlers) cacheSize(r *http.Request, disc inventory.Inventory) (bytes int64, human string) {
+// Returns (0, "") when there's no loader wired or the dir is missing,
+// otherwise (raw-bytes, human-formatted).
+func (h *Handlers) cacheSize(r *http.Request, disc inventory.Inventory) (int64, string) {
 	if h.loader == nil || disc.Run == "" {
 		return 0, ""
 	}

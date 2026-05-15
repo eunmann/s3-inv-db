@@ -1,9 +1,10 @@
-package inventory
+package inventory_test
 
 import (
 	"path/filepath"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/rs/zerolog"
@@ -15,46 +16,46 @@ func TestClassify(t *testing.T) {
 	}
 	cases := []struct {
 		name       string
-		obj, bytes CompareNumeric
+		obj, bytes inventory.CompareNumeric
 		ta, tb     map[string]indexread.TierBreakdown
-		want       CompareStatus
+		want       inventory.CompareStatus
 	}{
 		{
 			name: "only after = added",
-			obj:  NewCompareNumeric(0, 100), bytes: NewCompareNumeric(0, 100),
+			obj:  inventory.NewCompareNumeric(0, 100), bytes: inventory.NewCompareNumeric(0, 100),
 			ta: nil, tb: tb(100, 100),
-			want: CompareAdded,
+			want: inventory.CompareAdded,
 		},
 		{
 			name: "only before = removed",
-			obj:  NewCompareNumeric(100, 0), bytes: NewCompareNumeric(100, 0),
+			obj:  inventory.NewCompareNumeric(100, 0), bytes: inventory.NewCompareNumeric(100, 0),
 			ta: tb(100, 100), tb: nil,
-			want: CompareRemoved,
+			want: inventory.CompareRemoved,
 		},
 		{
 			name: "objects moved but bytes same = changed",
-			obj:  NewCompareNumeric(10, 12), bytes: NewCompareNumeric(100, 100),
-			want: CompareChanged,
+			obj:  inventory.NewCompareNumeric(10, 12), bytes: inventory.NewCompareNumeric(100, 100),
+			want: inventory.CompareChanged,
 		},
 		{
 			name: "all fields identical = unchanged",
-			obj:  NewCompareNumeric(10, 10), bytes: NewCompareNumeric(100, 100),
+			obj:  inventory.NewCompareNumeric(10, 10), bytes: inventory.NewCompareNumeric(100, 100),
 			ta: tb(100, 10), tb: tb(100, 10),
-			want: CompareUnchanged,
+			want: inventory.CompareUnchanged,
 		},
 		{
 			name: "tier mix changed (objects+bytes identical) = changed",
-			obj:  NewCompareNumeric(10, 10), bytes: NewCompareNumeric(100, 100),
+			obj:  inventory.NewCompareNumeric(10, 10), bytes: inventory.NewCompareNumeric(100, 100),
 			ta:   map[string]indexread.TierBreakdown{"STANDARD": {Bytes: 100, ObjectCount: 10}},
 			tb:   map[string]indexread.TierBreakdown{"GLACIER": {Bytes: 100, ObjectCount: 10}},
-			want: CompareChanged,
+			want: inventory.CompareChanged,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := classify(tc.obj, tc.bytes, tc.ta, tc.tb)
+			got := inventory.ClassifyForTest(tc.obj, tc.bytes, tc.ta, tc.tb)
 			if got != tc.want {
-				t.Errorf("classify = %s, want %s", got, tc.want)
+				t.Errorf("inventory.ClassifyForTest = %s, want %s", got, tc.want)
 			}
 		})
 	}
@@ -74,8 +75,8 @@ func TestTierMapsEqual(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := tierMapsEqual(tc.a, tc.b); got != tc.want {
-				t.Errorf("tierMapsEqual = %v, want %v", got, tc.want)
+			if got := inventory.TierMapsEqualForTest(tc.a, tc.b); got != tc.want {
+				t.Errorf("inventory.TierMapsEqualForTest = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -85,7 +86,7 @@ func TestCompareLevel_AgainstSeededIndexes(t *testing.T) {
 	a := openSeededIndex(t, 42, 100)
 	b := openSeededIndex(t, 42, 200) // same shape, twice as many objects
 
-	got := CompareLevel(a, b, "")
+	got := inventory.CompareLevel(a, b, "")
 	if got.Self.NotFoundInA || got.Self.NotFoundInB {
 		t.Fatalf("root must exist in both indexes; got %+v", got.Self)
 	}
@@ -99,10 +100,10 @@ func TestCompareLevel_AgainstSeededIndexes(t *testing.T) {
 		t.Fatal("root should have child segments")
 	}
 	for _, c := range got.Children {
-		if c.Status == CompareUnchanged {
+		if c.Status == inventory.CompareUnchanged {
 			continue // ok
 		}
-		if c.Objects.Delta == 0 && c.Bytes.Delta == 0 && tierMapsEqual(c.TierBefore, c.TierAfter) {
+		if c.Objects.Delta == 0 && c.Bytes.Delta == 0 && inventory.TierMapsEqualForTest(c.TierBefore, c.TierAfter) {
 			t.Errorf("child %q classified %s but all deltas are zero", c.Segment, c.Status)
 		}
 	}
@@ -110,7 +111,7 @@ func TestCompareLevel_AgainstSeededIndexes(t *testing.T) {
 
 func TestCompareLevel_OneSideMissingPrefix(t *testing.T) {
 	a := openSeededIndex(t, 42, 100)
-	got := CompareLevel(a, a, "this/does/not/exist/")
+	got := inventory.CompareLevel(a, a, "this/does/not/exist/")
 	if !got.Self.NotFoundInA || !got.Self.NotFoundInB {
 		t.Errorf("missing prefix should mark both sides not-found: %+v", got.Self)
 	}
@@ -134,9 +135,9 @@ func TestNormalizeCompareSort(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotS, gotD := NormalizeCompareSort(tc.sort, tc.dir)
+			gotS, gotD := inventory.NormalizeCompareSort(tc.sort, tc.dir)
 			if gotS != tc.wantSort || gotD != tc.wantDir {
-				t.Errorf("NormalizeCompareSort(%q,%q) = (%q,%q), want (%q,%q)", tc.sort, tc.dir, gotS, gotD, tc.wantSort, tc.wantDir)
+				t.Errorf("inventory.NormalizeCompareSort(%q,%q) = (%q,%q), want (%q,%q)", tc.sort, tc.dir, gotS, gotD, tc.wantSort, tc.wantDir)
 			}
 		})
 	}
@@ -144,43 +145,43 @@ func TestNormalizeCompareSort(t *testing.T) {
 
 func TestCompareStatusString(t *testing.T) {
 	cases := []struct {
-		s    CompareStatus
+		s    inventory.CompareStatus
 		want string
 	}{
-		{CompareAdded, "added"},
-		{CompareRemoved, "removed"},
-		{CompareChanged, "changed"},
-		{CompareUnchanged, "unchanged"},
-		{CompareStatus(99), "unchanged"},
+		{inventory.CompareAdded, "added"},
+		{inventory.CompareRemoved, "removed"},
+		{inventory.CompareChanged, "changed"},
+		{inventory.CompareUnchanged, "unchanged"},
+		{inventory.CompareStatus(99), "unchanged"},
 	}
 	for _, tc := range cases {
 		if got := tc.s.String(); got != tc.want {
-			t.Errorf("CompareStatus(%d).String() = %q, want %q", tc.s, got, tc.want)
+			t.Errorf("inventory.CompareStatus(%d).String() = %q, want %q", tc.s, got, tc.want)
 		}
 	}
 }
 
 func TestStatusOrder_StableDistinctPerStatus(t *testing.T) {
-	statuses := []CompareStatus{CompareAdded, CompareRemoved, CompareChanged, CompareUnchanged}
-	seen := map[int]CompareStatus{}
+	statuses := []inventory.CompareStatus{inventory.CompareAdded, inventory.CompareRemoved, inventory.CompareChanged, inventory.CompareUnchanged}
+	seen := map[int]inventory.CompareStatus{}
 	for _, s := range statuses {
-		got := StatusOrder(s)
-		if got != statusOrder(s) {
-			t.Errorf("StatusOrder(%s)=%d disagrees with statusOrder(%s)=%d", s, got, s, statusOrder(s))
+		got := inventory.StatusOrder(s)
+		if got != inventory.StatusOrderForTest(s) {
+			t.Errorf("inventory.StatusOrder(%s)=%d disagrees with inventory.StatusOrderForTest(%s)=%d", s, got, s, inventory.StatusOrderForTest(s))
 		}
 		if prev, dup := seen[got]; dup {
 			t.Errorf("rank %d collides for %s and %s", got, prev, s)
 		}
 		seen[got] = s
 	}
-	bogus := StatusOrder(CompareStatus(99))
+	bogus := inventory.StatusOrder(inventory.CompareStatus(99))
 	if _, dup := seen[bogus]; dup {
 		t.Errorf("bogus status rank %d collides with a real status", bogus)
 	}
 }
 
 func TestCompareSortLinks_ClickedColumnFlipsDirection(t *testing.T) {
-	links := CompareSortLinks("size", "desc")
+	links := inventory.CompareSortLinks("size", "desc")
 	if links["size"].Dir != "asc" || links["size"].Indicator != "↓" {
 		t.Errorf("active column = %+v, want Dir=asc Indicator=↓", links["size"])
 	}

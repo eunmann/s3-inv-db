@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -45,7 +46,7 @@ const configSelectCols = `
 // Upsert writes the config row, replacing any existing row keyed by
 // (source, name). Zero retention is rewritten to DefaultRetentionCount
 // so callers can pass a zero-value Config and get sane defaults.
-func (s *ConfigStore) Upsert(c Config) error {
+func (s *ConfigStore) Upsert(ctx context.Context, c Config) error {
 	if c.RetentionCount == 0 {
 		c.RetentionCount = DefaultRetentionCount
 	}
@@ -53,7 +54,7 @@ func (s *ConfigStore) Upsert(c Config) error {
 	if c.AutoLoad {
 		autoLoad = 1
 	}
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(ctx, `
         INSERT INTO inventory_configs (
             source, name, auto_load, retention_count,
             poll_failure_count, poll_backoff_until, last_polled_at,
@@ -79,8 +80,8 @@ func (s *ConfigStore) Upsert(c Config) error {
 }
 
 // Get fetches one config row. ErrStoreNotFound when missing.
-func (s *ConfigStore) Get(source, name string) (Config, error) {
-	row := s.db.QueryRow(`SELECT `+configSelectCols+` FROM inventory_configs WHERE source = ? AND name = ?`, source, name)
+func (s *ConfigStore) Get(ctx context.Context, source, name string) (Config, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+configSelectCols+` FROM inventory_configs WHERE source = ? AND name = ?`, source, name)
 	c, err := scanConfig(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Config{}, ErrStoreNotFound
@@ -93,8 +94,8 @@ func (s *ConfigStore) Get(source, name string) (Config, error) {
 }
 
 // List returns every config row ordered by (source, name).
-func (s *ConfigStore) List() ([]Config, error) {
-	rows, err := s.db.Query(`SELECT ` + configSelectCols + ` FROM inventory_configs ORDER BY source, name`)
+func (s *ConfigStore) List(ctx context.Context) ([]Config, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+configSelectCols+` FROM inventory_configs ORDER BY source, name`)
 	if err != nil {
 		return nil, fmt.Errorf("list configs: %w", err)
 	}
@@ -115,8 +116,8 @@ func (s *ConfigStore) List() ([]Config, error) {
 }
 
 // Delete removes one config row.
-func (s *ConfigStore) Delete(source, name string) error {
-	res, err := s.db.Exec(`DELETE FROM inventory_configs WHERE source = ? AND name = ?`, source, name)
+func (s *ConfigStore) Delete(ctx context.Context, source, name string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM inventory_configs WHERE source = ? AND name = ?`, source, name)
 	if err != nil {
 		return fmt.Errorf("delete config %s/%s: %w", source, name, err)
 	}

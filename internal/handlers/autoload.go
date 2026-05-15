@@ -11,6 +11,10 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// trueLiteral is the lowercase token used by checkbox/htmx toggles to
+// signal "on"; centralised so callers don't repeat the magic string.
+const trueLiteral = "true"
+
 type AutoLoadToggleResponse struct {
 	OK bool `json:"ok"`
 }
@@ -35,7 +39,7 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 
 		return
 	}
-	cfg, err := h.configStore.Get(src, name)
+	cfg, err := h.configStore.Get(r.Context(), src, name)
 	if errors.Is(err, inventory.ErrStoreNotFound) {
 		cfg = inventory.Config{Source: src, Name: name, RetentionCount: inventory.DefaultRetentionCount}
 	} else if err != nil {
@@ -56,7 +60,7 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 		}
 		cfg.RetentionCount = uint32(n)
 	}
-	if err := h.configStore.Upsert(cfg); err != nil {
+	if err := h.configStore.Upsert(r.Context(), cfg); err != nil {
 		zerolog.Ctx(r.Context()).Error().Err(err).Msg("upsert config")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to save config")
 
@@ -111,7 +115,7 @@ func (h *Handlers) DiskBudgetAPI(w http.ResponseWriter, _ *http.Request) {
 
 func parseBoolToggle(s string) bool {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "on", "true", "1", "yes":
+	case "on", trueLiteral, "1", "yes":
 		return true
 	default:
 		return false

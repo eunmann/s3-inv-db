@@ -24,6 +24,13 @@ const (
 	MaxPageSize     = 500
 )
 
+// Sort-indicator glyphs rendered next to the active column header.
+// Templates pipe these through as-is so direction is visually obvious.
+const (
+	sortIndicatorAsc  = "↑"
+	sortIndicatorDesc = "↓"
+)
+
 // BrowseCrumb is one segment of the breadcrumb trail.
 type BrowseCrumb struct {
 	Label  string
@@ -62,13 +69,14 @@ type BrowsePagination struct {
 	NextPage int
 }
 
-// NormalizePage clamps page (≥1) and size (1..MaxPageSize) from user input.
-func NormalizePage(pageStr, sizeStr string) (page, size int) {
-	page = 1
+// NormalizePage clamps page (≥1) and size (1..MaxPageSize) from user
+// input. Returns (page, size).
+func NormalizePage(pageStr, sizeStr string) (int, int) {
+	page := 1
 	if v, err := strconv.Atoi(pageStr); err == nil && v >= 1 {
 		page = v
 	}
-	size = DefaultPageSize
+	size := DefaultPageSize
 	if v, err := strconv.Atoi(sizeStr); err == nil && v >= 1 {
 		size = v
 	}
@@ -80,14 +88,17 @@ func NormalizePage(pageStr, sizeStr string) (page, size int) {
 }
 
 // NormalizeSort clamps sort/dir from user input to known values.
-// Unknown column → segment. Unknown direction → segment uses asc, others desc.
-func NormalizeSort(sortBy, dir string) (col, direction string) {
+// Unknown column → segment. Unknown direction → segment uses asc,
+// others desc. Returns (col, dir).
+func NormalizeSort(sortBy, dir string) (string, string) {
+	var col string
 	switch sortBy {
 	case SortColObjects, SortColSize, SortColCost, SortColSegment:
 		col = sortBy
 	default:
 		col = SortColSegment
 	}
+	var direction string
 	switch dir {
 	case SortDirAsc, SortDirDesc:
 		direction = dir
@@ -184,10 +195,10 @@ func SortLinks(currentSort, currentDir string) map[string]BrowseSortLink {
 		if c.key == currentSort {
 			if currentDir == SortDirAsc {
 				link.Dir = SortDirDesc
-				link.Indicator = "↑"
+				link.Indicator = sortIndicatorAsc
 			} else {
 				link.Dir = SortDirAsc
-				link.Indicator = "↓"
+				link.Indicator = sortIndicatorDesc
 			}
 		}
 		links[c.key] = link

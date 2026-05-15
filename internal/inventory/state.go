@@ -28,13 +28,19 @@ const (
 	StateError     State = "error"      // last operation failed
 )
 
-// State predicates. Templates use these instead of stringly-typed
+// IsLoaded and its sibling predicates let templates avoid stringly-typed
 // {{eq (printf "%s" .State) "loaded"}} comparisons so a state rename
-// becomes a refactor that compiler catches.
-func (s State) IsLoaded() bool    { return s == StateLoaded }
+// becomes a refactor that the compiler catches.
+func (s State) IsLoaded() bool { return s == StateLoaded }
+
+// IsNotLoaded reports whether the inventory is in the not-loaded state.
 func (s State) IsNotLoaded() bool { return s == StateNotLoaded }
-func (s State) IsLoading() bool   { return s == StateLoading }
-func (s State) IsError() bool     { return s == StateError }
+
+// IsLoading reports whether the inventory's build pipeline is running.
+func (s State) IsLoading() bool { return s == StateLoading }
+
+// IsError reports whether the last operation on the inventory failed.
+func (s State) IsError() bool { return s == StateError }
 
 // CanLoad reports whether a Load is a legal next operation. Not-loaded
 // and Error inventories can both be (re)built.
@@ -52,11 +58,12 @@ type ID string
 // String makes ID print transparently in logs and format strings.
 func (id ID) String() string { return string(id) }
 
-// Split returns the three segments of a 3-part inventory ID. The ok
-// return is false for any input that doesn't split into exactly three
-// slash-separated parts (placeholder configurations with no completed
-// run, legacy 2-part entries, or hand-registered inventories).
-func (id ID) Split() (sourceBucket, inventoryName, run string, ok bool) {
+// Split returns the three segments of a 3-part inventory ID
+// (sourceBucket, inventoryName, run, ok). The ok return is false for
+// any input that doesn't split into exactly three slash-separated parts
+// (placeholder configurations with no completed run, legacy 2-part
+// entries, or hand-registered inventories).
+func (id ID) Split() (string, string, string, bool) {
 	parts := strings.SplitN(string(id), "/", 3)
 	if len(parts) != 3 {
 		return "", "", "", false

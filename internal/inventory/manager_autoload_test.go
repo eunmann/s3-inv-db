@@ -1,13 +1,15 @@
-package inventory
+package inventory_test
 
 import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
 func TestManagerSetPinned(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	const id = "src/inv/runA"
 	if err := m.Register(id, "n", "p"); err != nil {
 		t.Fatalf("register: %v", err)
@@ -30,14 +32,14 @@ func TestManagerSetPinned(t *testing.T) {
 }
 
 func TestManagerSetPinned_NotFound(t *testing.T) {
-	m := NewManager()
-	if err := m.SetPinned("nope", true); !errors.Is(err, ErrNotFound) {
-		t.Errorf("SetPinned on unknown id = %v, want ErrNotFound", err)
+	m := inventory.NewManager()
+	if err := m.SetPinned("nope", true); !errors.Is(err, inventory.ErrNotFound) {
+		t.Errorf("SetPinned on unknown id = %v, want inventory.ErrNotFound", err)
 	}
 }
 
 func TestManagerRecordAutoLoadFailure(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	const id = "src/inv/run1"
 	if err := m.Register(id, "n", "p"); err != nil {
 		t.Fatal(err)
@@ -67,7 +69,7 @@ func TestManagerRecordAutoLoadFailure(t *testing.T) {
 }
 
 func TestManagerTouchAccessed_InMemoryOnly(t *testing.T) {
-	m := NewManager()
+	m := inventory.NewManager()
 	const id = "src/inv/run1"
 	if err := m.Register(id, "n", "p"); err != nil {
 		t.Fatal(err)
@@ -89,13 +91,13 @@ func TestManagerEvictForBudget_PreservesUserUnloadedAt(t *testing.T) {
 	// EvictForBudget must NOT stamp UserUnloadedAt — it represents
 	// budget eviction, not user intent. The auto-loader is free to
 	// reload the run later if a newer one appears.
-	m := NewManager()
+	m := inventory.NewManager()
 	const id = "src/inv/run1"
-	if err := m.Hydrate(Info{
+	if err := m.Hydrate(inventory.Info{
 		ID:         id,
 		Name:       "n",
 		Path:       "p",
-		State:      StateNotLoaded,
+		State:      inventory.StateNotLoaded,
 		IndexBytes: 1024,
 	}, ""); err != nil {
 		t.Fatal(err)

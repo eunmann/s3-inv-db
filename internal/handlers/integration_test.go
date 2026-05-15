@@ -1,4 +1,4 @@
-package handlers
+package handlers_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/internal/templates"
@@ -19,7 +20,7 @@ import (
 
 // buildLoadedTestHandlers seeds a small synthetic index, registers and
 // loads it into a fresh Manager, and returns ready-to-query handlers.
-func buildLoadedTestHandlers(t *testing.T) *Handlers {
+func buildLoadedTestHandlers(t *testing.T) *handlers.Handlers {
 	t.Helper()
 
 	tmp := t.TempDir()
@@ -43,7 +44,7 @@ func buildLoadedTestHandlers(t *testing.T) *Handlers {
 		t.Fatalf("renderer: %v", err)
 	}
 
-	h := New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
 
 	indexPath := filepath.Join(tmp, "inv-001")
 	if err := mgr.Register("loaded", "Loaded", indexPath); err != nil {
@@ -56,9 +57,9 @@ func buildLoadedTestHandlers(t *testing.T) *Handlers {
 	return h
 }
 
-func decodeStatsResponse(t *testing.T, body []byte) *StatsResponse {
+func decodeStatsResponse(t *testing.T, body []byte) *handlers.StatsResponse {
 	t.Helper()
-	var resp StatsResponse
+	var resp handlers.StatsResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("decode: %v (body=%s)", err, body)
 	}
@@ -138,7 +139,7 @@ func TestGetDescendantsAPI_Success(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 
-	var descendants []DescendantInfo
+	var descendants []handlers.DescendantInfo
 	if err := json.NewDecoder(w.Body).Decode(&descendants); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -175,7 +176,7 @@ func TestGetDescendantsAPI_Filter(t *testing.T) {
 		t.Fatalf("filtered status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 
-	var descendants []DescendantInfo
+	var descendants []handlers.DescendantInfo
 	if err := json.NewDecoder(w.Body).Decode(&descendants); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -263,7 +264,7 @@ func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderer: %v", err)
 	}
-	h := New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
 
 	// Register via handler.
 	body := `{"id":"life","name":"Life","path":"` + indexPath + `"}`
@@ -354,7 +355,7 @@ func TestLoadInventoryAPI_BadPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderer: %v", err)
 	}
-	h := New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
 
 	if err := mgr.Register("bad", "Bad", "/nonexistent/path/that/does/not/exist"); err != nil {
 		t.Fatalf("register: %v", err)
@@ -460,7 +461,7 @@ func TestBrowseLevelAPI_Integration_HappyPath(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
 	}
-	var resp BrowseLevelResponse
+	var resp handlers.BrowseLevelResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -498,7 +499,7 @@ func TestCompareLevelAPI_Integration_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderer: %v", err)
 	}
-	h := New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
 
 	indexPath := filepath.Join(tmp, "inv-001")
 	for _, id := range []inventory.ID{"src/inv/runA", "src/inv/runB"} {
@@ -516,7 +517,7 @@ func TestCompareLevelAPI_Integration_HappyPath(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
 	}
-	var resp CompareLevelResponse
+	var resp handlers.CompareLevelResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v\nbody=%s", err, w.Body.String())
 	}

@@ -1,4 +1,4 @@
-package handlers
+package handlers_test
 
 import (
 	"context"
@@ -14,6 +14,10 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
 )
+
+// errSlowBuilderTimedOut is returned when the slow-builder fake's
+// configured delay elapses without context cancellation.
+var errSlowBuilderTimedOut = errors.New("slow-builder delay elapsed without cancel")
 
 // slowBuilder simulates a build that takes time and respects ctx
 // cancellation. Used so the test can hit Cancel mid-flight.
@@ -31,7 +35,7 @@ func (b *slowBuilder) BuildWith(ctx context.Context, _, _, _, _ string, _ func(s
 	b.once.Do(func() { b.cancelled = make(chan struct{}) })
 	select {
 	case <-time.After(b.delay):
-		return "", errors.New("not actually building anything")
+		return "", errSlowBuilderTimedOut
 	case <-ctx.Done():
 		close(b.cancelled)
 
@@ -63,7 +67,7 @@ func TestAsyncLifecycle_LoadSucceeds(t *testing.T) {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 
-	final := waitForJobInState(t, h.jobStore, disc.CompositeID(), jobs.StateFailed)
+	final := waitForJobInState(t, h.JobStoreForTest(), disc.CompositeID(), jobs.StateFailed)
 	if final.FinishedAt.IsZero() {
 		t.Errorf("failed job missing FinishedAt: %+v", final)
 	}
@@ -87,7 +91,7 @@ func TestAsyncLifecycle_Cancel(t *testing.T) {
 	}
 
 	// Wait for the job to leave queued (running state) before cancelling.
-	running := waitForJobInState(t, h.jobStore, disc.CompositeID(), jobs.StateRunning)
+	running := waitForJobInState(t, h.JobStoreForTest(), disc.CompositeID(), jobs.StateRunning)
 
 	cancelReq := httptest.NewRequest(http.MethodPost, "/api/jobs/"+string(running.ID)+"/cancel", http.NoBody)
 	cancelReq = chiCtxWithParams(cancelReq, "id", string(running.ID))
@@ -97,7 +101,7 @@ func TestAsyncLifecycle_Cancel(t *testing.T) {
 		t.Fatalf("Cancel status = %d, want 202", cw.Code)
 	}
 
-	final := waitForJobInState(t, h.jobStore, disc.CompositeID(), jobs.StateCancelled)
+	final := waitForJobInState(t, h.JobStoreForTest(), disc.CompositeID(), jobs.StateCancelled)
 	if final.FinishedAt.IsZero() {
 		t.Errorf("cancelled job missing FinishedAt: %+v", final)
 	}
@@ -120,7 +124,7 @@ func TestAsyncLifecycle_RowReflectsJobState(t *testing.T) {
 	h.LoadDiscoveredRowPartial(lw, loadReq)
 
 	// Wait for running so the row should render with Cancel.
-	running := waitForJobInState(t, h.jobStore, disc.CompositeID(), jobs.StateRunning)
+	running := waitForJobInState(t, h.JobStoreForTest(), disc.CompositeID(), jobs.StateRunning)
 
 	rowReq := httptest.NewRequest(http.MethodGet, "/partials/discovered/b/i", http.NoBody)
 	rowReq = chiCtxWithParams(rowReq, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
@@ -138,7 +142,7 @@ func TestAsyncLifecycle_RowReflectsJobState(t *testing.T) {
 	cancelReq := httptest.NewRequest(http.MethodPost, "/api/jobs/"+string(running.ID)+"/cancel", http.NoBody)
 	cancelReq = chiCtxWithParams(cancelReq, "id", string(running.ID))
 	h.CancelJob(httptest.NewRecorder(), cancelReq)
-	waitForJobInState(t, h.jobStore, disc.CompositeID(), jobs.StateCancelled)
+	waitForJobInState(t, h.JobStoreForTest(), disc.CompositeID(), jobs.StateCancelled)
 
 	rw2 := httptest.NewRecorder()
 	h.DiscoveredRowPartial(rw2, rowReq)

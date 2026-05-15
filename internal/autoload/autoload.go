@@ -14,6 +14,10 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// defaultPollInterval is the fallback polling interval for an
+// AutoLoader created with a zero PollInterval.
+const defaultPollInterval = 15 * time.Minute
+
 // Config holds the AutoLoader's runtime knobs. Zero values pick
 // sensible defaults (15m poll, 1 concurrent load, 1m–1h backoff).
 type Config struct {
@@ -53,7 +57,7 @@ type AutoLoader struct {
 // New constructs an AutoLoader; logger may be nil.
 func New(cfg Config, discovery Discovery, loader Loader, configStore *inventory.ConfigStore, manager *inventory.Manager, logger *zerolog.Logger) *AutoLoader {
 	if cfg.PollInterval <= 0 {
-		cfg.PollInterval = 15 * time.Minute
+		cfg.PollInterval = defaultPollInterval
 	}
 	if cfg.MaxConcurrency <= 0 {
 		cfg.MaxConcurrency = 1
@@ -125,7 +129,7 @@ func (a *AutoLoader) tick(ctx context.Context) {
 	if a.discovery == nil || !a.discovery.Enabled() {
 		return
 	}
-	configs, err := a.configStore.List()
+	configs, err := a.configStore.List(ctx)
 	if err != nil {
 		a.logger.Error().Err(err).Msg("autoload: list configs")
 
@@ -143,7 +147,7 @@ func (a *AutoLoader) tick(ctx context.Context) {
 	merged, err := a.discovery.List(ctx)
 	if err != nil {
 		a.logger.Error().Err(err).Msg("autoload: discover")
-		a.recordPollFailure(enabled, err.Error())
+		a.recordPollFailure(ctx, enabled, err.Error())
 
 		return
 	}
@@ -159,7 +163,7 @@ func (a *AutoLoader) tick(ctx context.Context) {
 		c.PollFailureCount = 0
 		c.LastPollError = ""
 		c.PollBackoffUntil = time.Time{}
-		_ = a.configStore.Upsert(c)
+		_ = a.configStore.Upsert(ctx, c)
 	}
 	a.runQueue(ctx, queue)
 }
@@ -251,12 +255,12 @@ func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 	a.logger.Error().Str("id", string(id)).Time("retry_at", retryAt).Err(err).Msg("autoload: failed; backing off")
 }
 
-func (a *AutoLoader) recordPollFailure(enabled map[string]inventory.Config, msg string) {
+func (a *AutoLoader) recordPollFailure(ctx context.Context, enabled map[string]inventory.Config, msg string) {
 	for _, c := range enabled {
 		c.PollFailureCount++
 		c.LastPollError = msg
 		c.PollBackoffUntil = a.now().Add(backoffDelay(a.cfg.MinBackoff, a.cfg.MaxBackoff, c.PollFailureCount))
-		_ = a.configStore.Upsert(c)
+		_ = a.configStore.Upsert(ctx, c)
 	}
 }
 
