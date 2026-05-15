@@ -1,23 +1,25 @@
-package format
+package format_test
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/pkg/format"
 )
 
 // BenchmarkBuildRaw benchmarks building with raw prefix blob encoding.
 func BenchmarkBuildRaw(b *testing.B) {
-	benchmarkBuild(b, PrefixEncodingRaw)
+	benchmarkBuild(b, format.PrefixEncodingRaw)
 }
 
 // BenchmarkBuildSegmented benchmarks building with segmented prefix encoding.
 func BenchmarkBuildSegmented(b *testing.B) {
-	benchmarkBuild(b, PrefixEncodingSegDict)
+	benchmarkBuild(b, format.PrefixEncodingSegDict)
 }
 
-func benchmarkBuild(b *testing.B, enc PrefixEncoding) {
+func benchmarkBuild(b *testing.B, enc format.PrefixEncoding) {
 	b.Helper()
 
 	const numPrefixes = 100000
@@ -26,9 +28,9 @@ func benchmarkBuild(b *testing.B, enc PrefixEncoding) {
 	b.ResetTimer()
 	for range b.N {
 		dir := b.TempDir()
-		builder, err := NewStreamingMPHFBuilder(dir, WithPrefixEncoding(enc))
+		builder, err := format.NewStreamingMPHFBuilder(dir, format.WithPrefixEncoding(enc))
 		if err != nil {
-			b.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
+			b.Fatalf("format.NewStreamingMPHFBuilder failed: %v", err)
 		}
 
 		for i, p := range prefixes {
@@ -48,24 +50,24 @@ func benchmarkBuild(b *testing.B, enc PrefixEncoding) {
 
 // BenchmarkGetPrefixRaw benchmarks GetPrefix with raw blob encoding.
 func BenchmarkGetPrefixRaw(b *testing.B) {
-	benchmarkGetPrefix(b, PrefixEncodingRaw)
+	benchmarkGetPrefix(b, format.PrefixEncodingRaw)
 }
 
 // BenchmarkGetPrefixSegmented benchmarks GetPrefix with segmented encoding.
 func BenchmarkGetPrefixSegmented(b *testing.B) {
-	benchmarkGetPrefix(b, PrefixEncodingSegDict)
+	benchmarkGetPrefix(b, format.PrefixEncodingSegDict)
 }
 
-func benchmarkGetPrefix(b *testing.B, enc PrefixEncoding) {
+func benchmarkGetPrefix(b *testing.B, enc format.PrefixEncoding) {
 	b.Helper()
 
 	const numPrefixes = 100000
 	prefixes := generateDataLakePrefixes(numPrefixes)
 
 	dir := b.TempDir()
-	builder, err := NewStreamingMPHFBuilder(dir, WithPrefixEncoding(enc))
+	builder, err := format.NewStreamingMPHFBuilder(dir, format.WithPrefixEncoding(enc))
 	if err != nil {
-		b.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
+		b.Fatalf("format.NewStreamingMPHFBuilder failed: %v", err)
 	}
 
 	for i, p := range prefixes {
@@ -81,9 +83,9 @@ func benchmarkGetPrefix(b *testing.B, enc PrefixEncoding) {
 	}
 	builder.Close()
 
-	m, err := OpenMPHF(dir)
+	m, err := format.OpenMPHF(dir)
 	if err != nil {
-		b.Fatalf("OpenMPHF failed: %v", err)
+		b.Fatalf("format.OpenMPHF failed: %v", err)
 	}
 	defer m.Close()
 
@@ -97,24 +99,24 @@ func benchmarkGetPrefix(b *testing.B, enc PrefixEncoding) {
 
 // BenchmarkMPHFLookupRaw benchmarks full lookup with raw encoding.
 func BenchmarkMPHFLookupRaw(b *testing.B) {
-	benchmarkMPHFLookupEncoding(b, PrefixEncodingRaw)
+	benchmarkMPHFLookupEncoding(b, format.PrefixEncodingRaw)
 }
 
 // BenchmarkMPHFLookupSegmented benchmarks full lookup with segmented encoding.
 func BenchmarkMPHFLookupSegmented(b *testing.B) {
-	benchmarkMPHFLookupEncoding(b, PrefixEncodingSegDict)
+	benchmarkMPHFLookupEncoding(b, format.PrefixEncodingSegDict)
 }
 
-func benchmarkMPHFLookupEncoding(b *testing.B, enc PrefixEncoding) {
+func benchmarkMPHFLookupEncoding(b *testing.B, enc format.PrefixEncoding) {
 	b.Helper()
 
 	const numPrefixes = 100000
 	prefixes := generateDataLakePrefixes(numPrefixes)
 
 	dir := b.TempDir()
-	builder, err := NewStreamingMPHFBuilder(dir, WithPrefixEncoding(enc))
+	builder, err := format.NewStreamingMPHFBuilder(dir, format.WithPrefixEncoding(enc))
 	if err != nil {
-		b.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
+		b.Fatalf("format.NewStreamingMPHFBuilder failed: %v", err)
 	}
 
 	for i, p := range prefixes {
@@ -130,9 +132,9 @@ func benchmarkMPHFLookupEncoding(b *testing.B, enc PrefixEncoding) {
 	}
 	builder.Close()
 
-	m, err := OpenMPHF(dir)
+	m, err := format.OpenMPHF(dir)
 	if err != nil {
-		b.Fatalf("OpenMPHF failed: %v", err)
+		b.Fatalf("format.OpenMPHF failed: %v", err)
 	}
 	defer m.Close()
 
@@ -310,9 +312,9 @@ func TestSizeComparison(t *testing.T) {
 
 	// Build with raw encoding
 	rawDir := t.TempDir()
-	rawBuilder, err := NewStreamingMPHFBuilder(rawDir, WithPrefixEncoding(PrefixEncodingRaw))
+	rawBuilder, err := format.NewStreamingMPHFBuilder(rawDir, format.WithPrefixEncoding(format.PrefixEncodingRaw))
 	if err != nil {
-		t.Fatalf("NewStreamingMPHFBuilder (raw) failed: %v", err)
+		t.Fatalf("format.NewStreamingMPHFBuilder (raw) failed: %v", err)
 	}
 	for i, p := range prefixes {
 		if err := rawBuilder.Add(p, uint64(i)); err != nil {
@@ -326,9 +328,9 @@ func TestSizeComparison(t *testing.T) {
 
 	// Build with segmented encoding
 	segDir := t.TempDir()
-	segBuilder, err := NewStreamingMPHFBuilder(segDir, WithPrefixEncoding(PrefixEncodingSegDict))
+	segBuilder, err := format.NewStreamingMPHFBuilder(segDir, format.WithPrefixEncoding(format.PrefixEncodingSegDict))
 	if err != nil {
-		t.Fatalf("NewStreamingMPHFBuilder (seg) failed: %v", err)
+		t.Fatalf("format.NewStreamingMPHFBuilder (seg) failed: %v", err)
 	}
 	for i, p := range prefixes {
 		if err := segBuilder.Add(p, uint64(i)); err != nil {
@@ -342,10 +344,10 @@ func TestSizeComparison(t *testing.T) {
 
 	// Compare sizes
 	rawPrefixSize := fileSize(t, rawDir, "prefix_blob.bin") + fileSize(t, rawDir, "prefix_offsets.u64")
-	segPrefixSize := fileSize(t, segDir, SegmentsBlobFile) +
-		fileSize(t, segDir, SegmentsOffsetsFile) +
-		fileSize(t, segDir, PrefixSegIDsFile) +
-		fileSize(t, segDir, PrefixSegOffsetsFile)
+	segPrefixSize := fileSize(t, segDir, format.SegmentsBlobFile) +
+		fileSize(t, segDir, format.SegmentsOffsetsFile) +
+		fileSize(t, segDir, format.PrefixSegIDsFile) +
+		fileSize(t, segDir, format.PrefixSegOffsetsFile)
 
 	// Calculate total directory sizes
 	rawTotalSize := totalDirSize(t, rawDir)
@@ -373,15 +375,15 @@ func TestSizeComparison(t *testing.T) {
 	logDirContents(t, segDir)
 
 	// Verify both produce correct lookups
-	rawM, err := OpenMPHF(rawDir)
+	rawM, err := format.OpenMPHF(rawDir)
 	if err != nil {
-		t.Fatalf("OpenMPHF (raw) failed: %v", err)
+		t.Fatalf("format.OpenMPHF (raw) failed: %v", err)
 	}
 	defer rawM.Close()
 
-	segM, err := OpenMPHF(segDir)
+	segM, err := format.OpenMPHF(segDir)
 	if err != nil {
-		t.Fatalf("OpenMPHF (seg) failed: %v", err)
+		t.Fatalf("format.OpenMPHF (seg) failed: %v", err)
 	}
 	defer segM.Close()
 

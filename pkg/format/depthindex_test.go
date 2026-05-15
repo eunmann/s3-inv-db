@@ -1,21 +1,23 @@
-package format
+package format_test
 
 import (
 	"reflect"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/pkg/format"
 )
 
 func TestDepthIndexBuilderEmpty(t *testing.T) {
 	dir := t.TempDir()
-	b := NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder()
 
 	if err := b.Build(dir); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := OpenDepthIndex(dir)
+	idx, err := format.OpenDepthIndex(dir)
 	if err != nil {
-		t.Fatalf("OpenDepthIndex failed: %v", err)
+		t.Fatalf("format.OpenDepthIndex failed: %v", err)
 	}
 	defer idx.Close()
 
@@ -30,7 +32,7 @@ func TestDepthIndexBuilderEmpty(t *testing.T) {
 
 func TestDepthIndexBuilderSimple(t *testing.T) {
 	dir := t.TempDir()
-	b := NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder()
 
 	// Add positions at various depths
 	// Depth 0: pos 0 (root)
@@ -51,9 +53,9 @@ func TestDepthIndexBuilderSimple(t *testing.T) {
 		t.Errorf("MaxDepth = %d, want 2", b.MaxDepth())
 	}
 
-	idx, err := OpenDepthIndex(dir)
+	idx, err := format.OpenDepthIndex(dir)
 	if err != nil {
-		t.Fatalf("OpenDepthIndex failed: %v", err)
+		t.Fatalf("format.OpenDepthIndex failed: %v", err)
 	}
 	defer idx.Close()
 
@@ -96,7 +98,7 @@ func TestDepthIndexBuilderSimple(t *testing.T) {
 
 func TestDepthIndexSubtreeQuery(t *testing.T) {
 	dir := t.TempDir()
-	b := NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder()
 
 	// Build a tree:
 	// 0: root (subtree 0-5)
@@ -116,9 +118,9 @@ func TestDepthIndexSubtreeQuery(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := OpenDepthIndex(dir)
+	idx, err := format.OpenDepthIndex(dir)
 	if err != nil {
-		t.Fatalf("OpenDepthIndex failed: %v", err)
+		t.Fatalf("format.OpenDepthIndex failed: %v", err)
 	}
 	defer idx.Close()
 
@@ -152,7 +154,7 @@ func TestDepthIndexSubtreeQuery(t *testing.T) {
 
 func TestDepthIterator(t *testing.T) {
 	dir := t.TempDir()
-	b := NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder()
 
 	b.Add(0, 0)
 	b.Add(1, 1)
@@ -165,9 +167,9 @@ func TestDepthIterator(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := OpenDepthIndex(dir)
+	idx, err := format.OpenDepthIndex(dir)
 	if err != nil {
-		t.Fatalf("OpenDepthIndex failed: %v", err)
+		t.Fatalf("format.OpenDepthIndex failed: %v", err)
 	}
 	defer idx.Close()
 
@@ -189,7 +191,7 @@ func TestDepthIterator(t *testing.T) {
 
 func TestDepthIteratorEmpty(t *testing.T) {
 	dir := t.TempDir()
-	b := NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder()
 	b.Add(0, 0)
 	b.Add(1, 1)
 
@@ -197,9 +199,9 @@ func TestDepthIteratorEmpty(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := OpenDepthIndex(dir)
+	idx, err := format.OpenDepthIndex(dir)
 	if err != nil {
-		t.Fatalf("OpenDepthIndex failed: %v", err)
+		t.Fatalf("format.OpenDepthIndex failed: %v", err)
 	}
 	defer idx.Close()
 
@@ -216,16 +218,16 @@ func TestDepthIteratorEmpty(t *testing.T) {
 
 func TestDepthIndexOutOfRange(t *testing.T) {
 	dir := t.TempDir()
-	b := NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder()
 	b.Add(0, 0)
 
 	if err := b.Build(dir); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := OpenDepthIndex(dir)
+	idx, err := format.OpenDepthIndex(dir)
 	if err != nil {
-		t.Fatalf("OpenDepthIndex failed: %v", err)
+		t.Fatalf("format.OpenDepthIndex failed: %v", err)
 	}
 	defer idx.Close()
 
@@ -241,7 +243,7 @@ func TestDepthIndexOutOfRange(t *testing.T) {
 
 func TestDepthIndexLarge(t *testing.T) {
 	dir := t.TempDir()
-	b := NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder()
 
 	// Create 10 levels with varying positions
 	for d := range uint32(10) {
@@ -255,9 +257,9 @@ func TestDepthIndexLarge(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := OpenDepthIndex(dir)
+	idx, err := format.OpenDepthIndex(dir)
 	if err != nil {
-		t.Fatalf("OpenDepthIndex failed: %v", err)
+		t.Fatalf("format.OpenDepthIndex failed: %v", err)
 	}
 	defer idx.Close()
 
@@ -295,7 +297,7 @@ func TestDepthIndexLarge(t *testing.T) {
 
 func TestDepthIndexBinarySearch(t *testing.T) {
 	dir := t.TempDir()
-	b := NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder()
 
 	// Add sparse positions at depth 1
 	// Positions: 10, 20, 30, 40, 50
@@ -307,9 +309,9 @@ func TestDepthIndexBinarySearch(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := OpenDepthIndex(dir)
+	idx, err := format.OpenDepthIndex(dir)
 	if err != nil {
-		t.Fatalf("OpenDepthIndex failed: %v", err)
+		t.Fatalf("format.OpenDepthIndex failed: %v", err)
 	}
 	defer idx.Close()
 
@@ -339,7 +341,7 @@ func TestDepthIndexBinarySearch(t *testing.T) {
 
 func TestDepthIteratorCount(t *testing.T) {
 	dir := t.TempDir()
-	b := NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder()
 
 	for p := range uint64(10) {
 		b.Add(p, 1)
@@ -349,9 +351,9 @@ func TestDepthIteratorCount(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	idx, err := OpenDepthIndex(dir)
+	idx, err := format.OpenDepthIndex(dir)
 	if err != nil {
-		t.Fatalf("OpenDepthIndex failed: %v", err)
+		t.Fatalf("format.OpenDepthIndex failed: %v", err)
 	}
 	defer idx.Close()
 

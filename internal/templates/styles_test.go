@@ -1,8 +1,10 @@
-package templates
+package templates_test
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/internal/templates"
 )
 
 // TestTailwindClasses_FromGoHelpersCompiled: every Tailwind class
@@ -10,12 +12,12 @@ import (
 // Regression guard for the chip dark-mode bug — a helper file missing
 // from tailwind.config.js content paths silently drops its variants.
 func TestTailwindClasses_FromGoHelpersCompiled(t *testing.T) {
-	css := string(TailwindCSS())
+	css := string(templates.TailwindCSS())
 	if css == "" {
 		t.Fatal("TailwindCSS() returned empty; run `make css`")
 	}
 
-	stateClass, ok := FuncMap()["stateClass"].(func(string) string)
+	stateClass, ok := templates.FuncMap()["stateClass"].(func(string) string)
 	if !ok {
 		t.Fatal("funcmap entry stateClass is missing or has the wrong signature")
 	}

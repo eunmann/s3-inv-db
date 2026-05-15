@@ -1,4 +1,4 @@
-package extsort
+package extsort_test
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -21,25 +22,25 @@ func TestTierWriterBackfillAlignment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b, err := NewIndexBuilder(outDir, tempDir, false)
+	b, err := extsort.NewIndexBuilder(outDir, tempDir, false)
 	if err != nil {
 		t.Fatalf("NewIndexBuilder: %v", err)
 	}
 
-	row0 := &PrefixRow{Prefix: "a/", Depth: 1}
+	row0 := &extsort.PrefixRow{Prefix: "a/", Depth: 1}
 	row0.TierCounts[tiers.Standard] = 1
 	row0.TierBytes[tiers.Standard] = 100
-	row1 := &PrefixRow{Prefix: "b/", Depth: 1}
+	row1 := &extsort.PrefixRow{Prefix: "b/", Depth: 1}
 	row1.TierCounts[tiers.Standard] = 1
 	row1.TierBytes[tiers.Standard] = 200
-	row2 := &PrefixRow{Prefix: "c/", Depth: 1}
+	row2 := &extsort.PrefixRow{Prefix: "c/", Depth: 1}
 	row2.TierCounts[tiers.GlacierFR] = 1
 	row2.TierBytes[tiers.GlacierFR] = 300
-	row3 := &PrefixRow{Prefix: "d/", Depth: 1}
+	row3 := &extsort.PrefixRow{Prefix: "d/", Depth: 1}
 	row3.TierCounts[tiers.Standard] = 1
 	row3.TierBytes[tiers.Standard] = 400
 
-	for _, r := range []*PrefixRow{row0, row1, row2, row3} {
+	for _, r := range []*extsort.PrefixRow{row0, row1, row2, row3} {
 		if err := b.Add(r); err != nil {
 			t.Fatalf("Add %q: %v", r.Prefix, err)
 		}

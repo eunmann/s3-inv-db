@@ -1,15 +1,16 @@
-package extsort
+package extsort_test
 
 import (
 	"fmt"
 	"runtime"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 // TestAggregatorMemoryBounded tests that the aggregator's memory usage
-// is bounded when processing many objects with ShouldFlush.
+// is bounded when processing many objects with extsort.ShouldFlush.
 func TestAggregatorMemoryBounded(t *testing.T) {
 	// Force GC to get baseline
 	runtime.GC()
@@ -17,7 +18,7 @@ func TestAggregatorMemoryBounded(t *testing.T) {
 	runtime.ReadMemStats(&before)
 
 	// Create aggregator
-	agg := NewAggregator(0, 0) // Use default capacity
+	agg := extsort.NewAggregator(0, 0) // Use default capacity
 
 	// Simulate processing 1M objects with 10K unique prefixes
 	// Each object goes to ~5 prefixes on average
@@ -32,7 +33,7 @@ func TestAggregatorMemoryBounded(t *testing.T) {
 		agg.AddObject(key, 1024, tiers.Standard)
 
 		// Check if we should flush (simulating pipeline behavior)
-		if i%1000 == 0 && ShouldFlush(flushThresholdMB*1024*1024) {
+		if i%1000 == 0 && extsort.ShouldFlush(flushThresholdMB*1024*1024) {
 			rows := agg.Drain()
 			_ = rows // In real pipeline, these would be written to run file
 			flushCount++
@@ -70,7 +71,7 @@ func TestIndexBuilderMemoryBounded(t *testing.T) {
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 
-	builder, err := NewIndexBuilder(tmpDir, "", false)
+	builder, err := extsort.NewIndexBuilder(tmpDir, "", false)
 	if err != nil {
 		t.Fatalf("create builder: %v", err)
 	}
@@ -80,7 +81,7 @@ func TestIndexBuilderMemoryBounded(t *testing.T) {
 	for i := range numPrefixes {
 		// Create unique sorted prefixes
 		prefix := fmt.Sprintf("data/%05d/", i)
-		row := &PrefixRow{
+		row := &extsort.PrefixRow{
 			Prefix:     prefix,
 			Depth:      uint16(2),
 			Count:      uint64(i + 1),
@@ -124,9 +125,9 @@ func TestIndexBuilderMemoryBounded(t *testing.T) {
 	}
 }
 
-// TestPrefixStatsMemoryLayout verifies the memory layout of PrefixStats.
+// TestPrefixStatsMemoryLayout verifies the memory layout of extsort.PrefixStats.
 func TestPrefixStatsMemoryLayout(t *testing.T) {
-	// PrefixStats should be:
+	// extsort.PrefixStats should be:
 	// - Depth: 2 bytes (uint16)
 	// - Count: 8 bytes (uint64)
 	// - TotalBytes: 8 bytes (uint64)
@@ -134,54 +135,54 @@ func TestPrefixStatsMemoryLayout(t *testing.T) {
 	// - TierBytes: 12 * 8 = 96 bytes ([12]uint64)
 	// Total: 2 + 8 + 8 + 96 + 96 = 210 bytes (but alignment may add padding)
 
-	stats := PrefixStats{}
+	stats := extsort.PrefixStats{}
 	size := prefixStatsSize(stats)
 
-	t.Logf("PrefixStats size: %d bytes", size)
+	t.Logf("extsort.PrefixStats size: %d bytes", size)
 
 	// Should be around 210 bytes with alignment
 	if size < 200 || size > 256 {
-		t.Errorf("PrefixStats size unexpected: %d bytes (expected 200-256)", size)
+		t.Errorf("extsort.PrefixStats size unexpected: %d bytes (expected 200-256)", size)
 	}
 }
 
-// prefixStatsSize returns the known size of PrefixStats in bytes.
+// prefixStatsSize returns the known size of extsort.PrefixStats in bytes.
 // This avoids importing unsafe in tests while documenting the expected size.
-func prefixStatsSize(_ PrefixStats) int {
+func prefixStatsSize(_ extsort.PrefixStats) int {
 	// Known size from struct definition:
 	// 2 (Depth) + 6 (padding) + 8 (Count) + 8 (TotalBytes) + 96 (TierCounts) + 96 (TierBytes) = 216 bytes
 	return 216
 }
 
-// TestHeapAllocBytes verifies that HeapAllocBytes returns sensible values.
+// TestHeapAllocBytes verifies that extsort.HeapAllocBytes returns sensible values.
 func TestHeapAllocBytes(t *testing.T) {
 	// Allocate some memory
 	data := make([]byte, 1024*1024) // 1 MB
 	_ = data
 
-	heap := HeapAllocBytes()
+	heap := extsort.HeapAllocBytes()
 
 	// Should be at least 1 MB
 	if heap < 1024*1024 {
-		t.Errorf("HeapAllocBytes returned %d, expected at least 1 MB", heap)
+		t.Errorf("extsort.HeapAllocBytes returned %d, expected at least 1 MB", heap)
 	}
 
-	t.Logf("HeapAllocBytes: %.2f MB", float64(heap)/(1024*1024))
+	t.Logf("extsort.HeapAllocBytes: %.2f MB", float64(heap)/(1024*1024))
 }
 
-// TestShouldFlush verifies the ShouldFlush function.
+// TestShouldFlush verifies the extsort.ShouldFlush function.
 func TestShouldFlush(t *testing.T) {
 	// Get current heap
-	currentHeap := HeapAllocBytes()
+	currentHeap := extsort.HeapAllocBytes()
 
-	// ShouldFlush with threshold below current heap should return true
-	if !ShouldFlush(1) {
-		t.Error("ShouldFlush(1) should return true (threshold below current heap)")
+	// extsort.ShouldFlush with threshold below current heap should return true
+	if !extsort.ShouldFlush(1) {
+		t.Error("extsort.ShouldFlush(1) should return true (threshold below current heap)")
 	}
 
-	// ShouldFlush with very high threshold should return false
-	if ShouldFlush(100 * 1024 * 1024 * 1024) { // 100 GB
-		t.Error("ShouldFlush(100GB) should return false")
+	// extsort.ShouldFlush with very high threshold should return false
+	if extsort.ShouldFlush(100 * 1024 * 1024 * 1024) { // 100 GB
+		t.Error("extsort.ShouldFlush(100GB) should return false")
 	}
 
 	t.Logf("Current heap: %.2f MB", float64(currentHeap)/(1024*1024))
@@ -192,7 +193,7 @@ func BenchmarkAggregatorMemory(b *testing.B) {
 	b.ReportAllocs()
 
 	for range b.N {
-		agg := NewAggregator(0, 0)
+		agg := extsort.NewAggregator(0, 0)
 
 		// Add 10K objects
 		for j := range 10000 {

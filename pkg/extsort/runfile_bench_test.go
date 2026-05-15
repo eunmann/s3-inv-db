@@ -1,4 +1,4 @@
-package extsort
+package extsort_test
 
 import (
 	"fmt"
@@ -6,16 +6,17 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 // makePrefixRows returns N rows with realistic tier sparsity — only
 // Standard populated, matching a typical S3 bucket. Most of the on-disk
 // tier columns are zero.
-func makePrefixRows(n int) []*PrefixRow {
-	rows := make([]*PrefixRow, n)
+func makePrefixRows(n int) []*extsort.PrefixRow {
+	rows := make([]*extsort.PrefixRow, n)
 	for i := range rows {
-		r := &PrefixRow{
+		r := &extsort.PrefixRow{
 			Prefix:     fmt.Sprintf("tenant-%05d/year=2024/month=%02d/object-%08d.parquet", i%1000, (i%12)+1, i),
 			Depth:      4,
 			Count:      uint64(i + 1),
@@ -41,7 +42,7 @@ func BenchmarkRunFileWriteUncompressed(b *testing.B) {
 	var totalBytes int64
 	for i := range b.N {
 		path := filepath.Join(b.TempDir(), fmt.Sprintf("run_%d.bin", i))
-		w, err := NewRunFileWriter(path, 4*1024*1024)
+		w, err := extsort.NewRunFileWriter(path, 4*1024*1024)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -68,9 +69,9 @@ func BenchmarkRunFileWriteCompressed(b *testing.B) {
 	var totalBytes int64
 	for i := range b.N {
 		path := filepath.Join(b.TempDir(), fmt.Sprintf("run_%d.crun", i))
-		w, err := NewCompressedRunWriter(path, CompressedRunWriterOptions{
+		w, err := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{
 			BufferSize:       4 * 1024 * 1024,
-			CompressionLevel: CompressionFastest,
+			CompressionLevel: extsort.CompressionFastest,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -94,9 +95,9 @@ func BenchmarkRunFileReadCompressed(b *testing.B) {
 	const N = 50_000
 	rows := makePrefixRows(N)
 	path := filepath.Join(b.TempDir(), "bench.crun")
-	w, err := NewCompressedRunWriter(path, CompressedRunWriterOptions{
+	w, err := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{
 		BufferSize:       4 * 1024 * 1024,
-		CompressionLevel: CompressionFastest,
+		CompressionLevel: extsort.CompressionFastest,
 	})
 	if err != nil {
 		b.Fatal(err)
@@ -111,7 +112,7 @@ func BenchmarkRunFileReadCompressed(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		r, err := OpenCompressedRunFile(path, 4*1024*1024)
+		r, err := extsort.OpenCompressedRunFile(path, 4*1024*1024)
 		if err != nil {
 			b.Fatal(err)
 		}

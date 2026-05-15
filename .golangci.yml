@@ -136,6 +136,13 @@ linters:
         - github.com/eunmann/s3-inv-db/pkg/indexread\.Iterator
     testifylint:
       enable-all: true
+    testpackage:
+      # White-box tests use the *_internal_test.go naming convention and
+      # remain in `package <pkg>` so they can exercise unexported APIs.
+      # `export_test.go` is the standard Go convention for re-exporting
+      # unexported identifiers to a sibling `_test` package.
+      # All other *_test.go files must use `package <pkg>_test`.
+      skip-regexp: "(_internal_test|export_test)\\.go$"
 
   exclusions:
     presets:

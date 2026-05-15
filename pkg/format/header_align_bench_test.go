@@ -1,9 +1,11 @@
-package format
+package format_test
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/pkg/format"
 )
 
 // BenchmarkArrayReaderU64 measures GetU64 throughput. With the current
@@ -14,7 +16,7 @@ func BenchmarkArrayReaderU64(b *testing.B) {
 	path := filepath.Join(dir, "bench.u64")
 	const N = 1_000_000
 
-	w, err := NewArrayWriter(path, 8)
+	w, err := format.NewArrayWriter(path, 8)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -27,7 +29,7 @@ func BenchmarkArrayReaderU64(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	r, err := OpenArray(path)
+	r, err := format.OpenArray(path)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -72,7 +74,7 @@ func BenchmarkOpenMmap(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		m, err := OpenMmap(path)
+		m, err := format.OpenMmap(path)
 		if err != nil {
 			b.Fatal(err)
 		}

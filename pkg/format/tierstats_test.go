@@ -1,10 +1,11 @@
-package format
+package format_test
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/eunmann/s3-inv-db/pkg/triebuild"
 )
@@ -48,9 +49,9 @@ func TestTierStatsWriteRead(t *testing.T) {
 	}
 
 	// Write tier stats
-	writer, err := NewTierStatsWriter(dir)
+	writer, err := format.NewTierStatsWriter(dir)
 	if err != nil {
-		t.Fatalf("NewTierStatsWriter failed: %v", err)
+		t.Fatalf("format.NewTierStatsWriter failed: %v", err)
 	}
 
 	if err := writer.Write(result); err != nil {
@@ -81,9 +82,9 @@ func TestTierStatsWriteRead(t *testing.T) {
 	}
 
 	// Read tier stats back
-	reader, err := OpenTierStats(dir)
+	reader, err := format.OpenTierStats(dir)
 	if err != nil {
-		t.Fatalf("OpenTierStats failed: %v", err)
+		t.Fatalf("format.OpenTierStats failed: %v", err)
 	}
 	defer reader.Close()
 
@@ -98,7 +99,7 @@ func TestTierStatsWriteRead(t *testing.T) {
 	}
 
 	// Verify values
-	tierValues := make(map[string]TierBreakdown)
+	tierValues := make(map[string]format.TierBreakdown)
 	for _, tb := range breakdown {
 		tierValues[tb.TierName] = tb
 	}
@@ -132,9 +133,9 @@ func TestTierStatsWriteRead_NoTierData(t *testing.T) {
 		TrackTiers: false,
 	}
 
-	writer, err := NewTierStatsWriter(dir)
+	writer, err := format.NewTierStatsWriter(dir)
 	if err != nil {
-		t.Fatalf("NewTierStatsWriter failed: %v", err)
+		t.Fatalf("format.NewTierStatsWriter failed: %v", err)
 	}
 
 	if err := writer.Write(result); err != nil {
@@ -149,9 +150,9 @@ func TestTierStatsWriteRead_NoTierData(t *testing.T) {
 
 	// Read returns an empty reader (HasTierData == false) rather than nil
 	// so callers can dispatch on the method rather than nil-checking.
-	reader, err := OpenTierStats(dir)
+	reader, err := format.OpenTierStats(dir)
 	if err != nil {
-		t.Fatalf("OpenTierStats failed: %v", err)
+		t.Fatalf("format.OpenTierStats failed: %v", err)
 	}
 	if reader == nil {
 		t.Fatal("expected non-nil reader even when no tier data")
@@ -165,9 +166,9 @@ func TestTierStatsWriteRead_NoTierData(t *testing.T) {
 func TestTierStatsReader_MissingDir(t *testing.T) {
 	dir := t.TempDir()
 
-	reader, err := OpenTierStats(dir)
+	reader, err := format.OpenTierStats(dir)
 	if err != nil {
-		t.Fatalf("OpenTierStats failed: %v", err)
+		t.Fatalf("format.OpenTierStats failed: %v", err)
 	}
 	if reader == nil {
 		t.Fatal("expected non-nil reader when tiers.json doesn't exist")
@@ -196,17 +197,17 @@ func TestGetBreakdownAll(t *testing.T) {
 		PresentTiers: []tiers.ID{tiers.Standard, tiers.GlacierFR},
 	}
 
-	writer, err := NewTierStatsWriter(dir)
+	writer, err := format.NewTierStatsWriter(dir)
 	if err != nil {
-		t.Fatalf("NewTierStatsWriter failed: %v", err)
+		t.Fatalf("format.NewTierStatsWriter failed: %v", err)
 	}
 	if err := writer.Write(result); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
-	reader, err := OpenTierStats(dir)
+	reader, err := format.OpenTierStats(dir)
 	if err != nil {
-		t.Fatalf("OpenTierStats failed: %v", err)
+		t.Fatalf("format.OpenTierStats failed: %v", err)
 	}
 	defer reader.Close()
 
@@ -232,17 +233,17 @@ func TestPresentTiers(t *testing.T) {
 		PresentTiers: []tiers.ID{tiers.Standard, tiers.DeepArchive},
 	}
 
-	writer, err := NewTierStatsWriter(dir)
+	writer, err := format.NewTierStatsWriter(dir)
 	if err != nil {
-		t.Fatalf("NewTierStatsWriter failed: %v", err)
+		t.Fatalf("format.NewTierStatsWriter failed: %v", err)
 	}
 	if err := writer.Write(result); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
-	reader, err := OpenTierStats(dir)
+	reader, err := format.OpenTierStats(dir)
 	if err != nil {
-		t.Fatalf("OpenTierStats failed: %v", err)
+		t.Fatalf("format.OpenTierStats failed: %v", err)
 	}
 	defer reader.Close()
 

@@ -1,4 +1,4 @@
-package extsort
+package extsort_test
 
 import (
 	"errors"
@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
@@ -17,7 +18,7 @@ func TestCompressedRunFile(t *testing.T) {
 		path := filepath.Join(tmpDir, "test.crun")
 
 		// Create test rows
-		rows := []*PrefixRow{
+		rows := []*extsort.PrefixRow{
 			{Prefix: "", Depth: 0, Count: 10, TotalBytes: 1000},
 			{Prefix: "data/", Depth: 1, Count: 5, TotalBytes: 500},
 			{Prefix: "data/2024/", Depth: 2, Count: 3, TotalBytes: 300},
@@ -28,7 +29,7 @@ func TestCompressedRunFile(t *testing.T) {
 		rows[0].TierBytes[tiers.GlacierFR] = 300
 
 		// Write compressed
-		writer, err := NewCompressedRunWriter(path, CompressedRunWriterOptions{})
+		writer, err := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{})
 		if err != nil {
 			t.Fatalf("create writer: %v", err)
 		}
@@ -42,7 +43,7 @@ func TestCompressedRunFile(t *testing.T) {
 		}
 
 		// Read compressed
-		reader, err := OpenCompressedRunFile(path, 0)
+		reader, err := extsort.OpenCompressedRunFile(path, 0)
 		if err != nil {
 			t.Fatalf("open reader: %v", err)
 		}
@@ -73,7 +74,7 @@ func TestCompressedRunFile(t *testing.T) {
 		}
 
 		// Verify tier data on first row
-		row, _ := OpenCompressedRunFile(path, 0)
+		row, _ := extsort.OpenCompressedRunFile(path, 0)
 		firstRow, _ := row.Read()
 		row.Close()
 		if firstRow.TierCounts[tiers.Standard] != 7 {
@@ -84,7 +85,7 @@ func TestCompressedRunFile(t *testing.T) {
 		}
 
 		// EOF
-		reader2, _ := OpenCompressedRunFile(path, 0)
+		reader2, _ := extsort.OpenCompressedRunFile(path, 0)
 		for range 3 {
 			reader2.Read()
 		}
@@ -100,13 +101,13 @@ func TestCompressedRunFile(t *testing.T) {
 		path := filepath.Join(tmpDir, "test.crun")
 
 		// Create unsorted rows
-		rows := []*PrefixRow{
+		rows := []*extsort.PrefixRow{
 			{Prefix: "z/", Depth: 1, Count: 1, TotalBytes: 100},
 			{Prefix: "a/", Depth: 1, Count: 2, TotalBytes: 200},
 			{Prefix: "m/", Depth: 1, Count: 3, TotalBytes: 300},
 		}
 
-		writer, err := NewCompressedRunWriter(path, CompressedRunWriterOptions{})
+		writer, err := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{})
 		if err != nil {
 			t.Fatalf("create writer: %v", err)
 		}
@@ -118,7 +119,7 @@ func TestCompressedRunFile(t *testing.T) {
 		}
 
 		// Read back and verify sorted order
-		reader, err := OpenCompressedRunFile(path, 0)
+		reader, err := extsort.OpenCompressedRunFile(path, 0)
 		if err != nil {
 			t.Fatalf("open reader: %v", err)
 		}
@@ -143,12 +144,12 @@ func TestCompressedRunFile(t *testing.T) {
 		const numRows = 10000
 
 		// Write many rows
-		writer, err := NewCompressedRunWriter(path, CompressedRunWriterOptions{})
+		writer, err := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{})
 		if err != nil {
 			t.Fatalf("create writer: %v", err)
 		}
 		for i := range numRows {
-			row := &PrefixRow{
+			row := &extsort.PrefixRow{
 				Prefix:     fmt.Sprintf("prefix/%05d/", i),
 				Depth:      2,
 				Count:      uint64(i + 1),
@@ -163,7 +164,7 @@ func TestCompressedRunFile(t *testing.T) {
 		}
 
 		// Verify count
-		reader, err := OpenCompressedRunFile(path, 0)
+		reader, err := extsort.OpenCompressedRunFile(path, 0)
 		if err != nil {
 			t.Fatalf("open reader: %v", err)
 		}
@@ -192,23 +193,23 @@ func TestCompressedRunFile(t *testing.T) {
 	t.Run("compression levels", func(t *testing.T) {
 		tmpDir := t.TempDir()
 
-		levels := []CompressionLevel{
-			CompressionFastest,
-			CompressionDefault,
-			CompressionBetter,
+		levels := []extsort.CompressionLevel{
+			extsort.CompressionFastest,
+			extsort.CompressionDefault,
+			extsort.CompressionBetter,
 		}
 
 		for _, level := range levels {
 			path := filepath.Join(tmpDir, fmt.Sprintf("level%d.crun", level))
 
-			writer, err := NewCompressedRunWriter(path, CompressedRunWriterOptions{
+			writer, err := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{
 				CompressionLevel: level,
 			})
 			if err != nil {
 				t.Fatalf("level %d: create writer: %v", level, err)
 			}
 			for i := range 100 {
-				row := &PrefixRow{
+				row := &extsort.PrefixRow{
 					Prefix:     fmt.Sprintf("data/%d/", i),
 					Depth:      2,
 					Count:      uint64(i),
@@ -223,7 +224,7 @@ func TestCompressedRunFile(t *testing.T) {
 			}
 
 			// Verify readable
-			reader, err := OpenCompressedRunFile(path, 0)
+			reader, err := extsort.OpenCompressedRunFile(path, 0)
 			if err != nil {
 				t.Fatalf("level %d: open: %v", level, err)
 			}
@@ -238,14 +239,14 @@ func TestCompressedRunFile(t *testing.T) {
 		tmpDir := t.TempDir()
 		path := filepath.Join(tmpDir, "test.crun")
 
-		writer, err := NewCompressedRunWriter(path, CompressedRunWriterOptions{})
+		writer, err := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{})
 		if err != nil {
 			t.Fatalf("create writer: %v", err)
 		}
-		writer.Write(&PrefixRow{Prefix: "test/"})
+		writer.Write(&extsort.PrefixRow{Prefix: "test/"})
 		writer.Close()
 
-		reader, err := OpenCompressedRunFile(path, 0)
+		reader, err := extsort.OpenCompressedRunFile(path, 0)
 		if err != nil {
 			t.Fatalf("open reader: %v", err)
 		}
@@ -269,9 +270,9 @@ func TestCompressedVsUncompressedSize(t *testing.T) {
 	const numRows = 5000
 
 	// Create test rows with realistic prefix data (highly compressible)
-	rows := make([]*PrefixRow, numRows)
+	rows := make([]*extsort.PrefixRow, numRows)
 	for i := range numRows {
-		rows[i] = &PrefixRow{
+		rows[i] = &extsort.PrefixRow{
 			Prefix:     fmt.Sprintf("s3://my-bucket/data/year=2024/month=%02d/day=%02d/file_%08d.parquet", i%12+1, i%28+1, i),
 			Depth:      6,
 			Count:      uint64(i + 1),
@@ -282,7 +283,7 @@ func TestCompressedVsUncompressedSize(t *testing.T) {
 	}
 
 	// Write uncompressed
-	uWriter, err := NewRunFileWriter(uncompressedPath, 0)
+	uWriter, err := extsort.NewRunFileWriter(uncompressedPath, 0)
 	if err != nil {
 		t.Fatalf("create uncompressed writer: %v", err)
 	}
@@ -296,7 +297,7 @@ func TestCompressedVsUncompressedSize(t *testing.T) {
 	}
 
 	// Write compressed
-	cWriter, err := NewCompressedRunWriter(compressedPath, CompressedRunWriterOptions{})
+	cWriter, err := extsort.NewCompressedRunWriter(compressedPath, extsort.CompressedRunWriterOptions{})
 	if err != nil {
 		t.Fatalf("create compressed writer: %v", err)
 	}
@@ -333,11 +334,11 @@ func TestRunReaderInterface(t *testing.T) {
 	t.Run("auto-detect uncompressed", func(t *testing.T) {
 		path := filepath.Join(tmpDir, "uncompressed.run")
 
-		writer, _ := NewRunFileWriter(path, 0)
-		writer.Write(&PrefixRow{Prefix: "test/", Count: 42})
+		writer, _ := extsort.NewRunFileWriter(path, 0)
+		writer.Write(&extsort.PrefixRow{Prefix: "test/", Count: 42})
 		writer.Close()
 
-		reader, err := OpenRunFileAuto(path, 0)
+		reader, err := extsort.OpenRunFileAuto(path, 0)
 		if err != nil {
 			t.Fatalf("open auto: %v", err)
 		}
@@ -359,11 +360,11 @@ func TestRunReaderInterface(t *testing.T) {
 	t.Run("auto-detect compressed", func(t *testing.T) {
 		path := filepath.Join(tmpDir, "compressed.crun")
 
-		writer, _ := NewCompressedRunWriter(path, CompressedRunWriterOptions{})
-		writer.Write(&PrefixRow{Prefix: "test/", Count: 42})
+		writer, _ := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{})
+		writer.Write(&extsort.PrefixRow{Prefix: "test/", Count: 42})
 		writer.Close()
 
-		reader, err := OpenRunFileAuto(path, 0)
+		reader, err := extsort.OpenRunFileAuto(path, 0)
 		if err != nil {
 			t.Fatalf("open auto: %v", err)
 		}
@@ -387,7 +388,7 @@ func TestCompressedRunEmptyFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "empty.crun")
 
-	writer, err := NewCompressedRunWriter(path, CompressedRunWriterOptions{})
+	writer, err := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{})
 	if err != nil {
 		t.Fatalf("create writer: %v", err)
 	}
@@ -395,7 +396,7 @@ func TestCompressedRunEmptyFile(t *testing.T) {
 		t.Fatalf("close writer: %v", err)
 	}
 
-	reader, err := OpenCompressedRunFile(path, 0)
+	reader, err := extsort.OpenCompressedRunFile(path, 0)
 	if err != nil {
 		t.Fatalf("open reader: %v", err)
 	}

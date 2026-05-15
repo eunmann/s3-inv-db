@@ -1,4 +1,4 @@
-package extsort
+package extsort_test
 
 import (
 	"fmt"
@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/benchutil"
+	"github.com/eunmann/s3-inv-db/pkg/extsort"
 )
 
 // BenchmarkLoadDiskPeak measures the final on-disk index size against
@@ -55,13 +56,13 @@ func measureOne(b *testing.B, numObjects int) {
 		inputBytes += int64(len(objects[i].Key)) + 16 // key + size + tier
 	}
 
-	agg := NewAggregator(numObjects, 0)
+	agg := extsort.NewAggregator(numObjects, 0)
 	for i := range objects {
 		agg.AddObject(objects[i].Key, objects[i].Size, objects[i].TierID)
 	}
 	rows := agg.Drain()
 	runPath := filepath.Join(runDir, "run_0000.bin")
-	writer, err := NewRunFileWriter(runPath, 4*1024*1024)
+	writer, err := extsort.NewRunFileWriter(runPath, 4*1024*1024)
 	if err != nil {
 		b.Fatalf("run writer: %v", err)
 	}
@@ -74,11 +75,11 @@ func measureOne(b *testing.B, numObjects int) {
 
 	scratchPeak, _ := dirSize(runDir)
 
-	merger, err := NewMergeIterator([]string{runPath}, 4*1024*1024)
+	merger, err := extsort.NewMergeIterator([]string{runPath}, 4*1024*1024)
 	if err != nil {
 		b.Fatalf("merger: %v", err)
 	}
-	builder, err := NewIndexBuilder(outDir, "", false)
+	builder, err := extsort.NewIndexBuilder(outDir, "", false)
 	if err != nil {
 		merger.Close()
 		b.Fatalf("builder: %v", err)

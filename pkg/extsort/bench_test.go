@@ -1,4 +1,4 @@
-package extsort
+package extsort_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/benchutil"
+	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
 
@@ -80,7 +81,7 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 
 		// Phase 1: Memory Aggregation
 		phase1Start := time.Now()
-		agg := NewAggregator(100000, 0)
+		agg := extsort.NewAggregator(100000, 0)
 		for _, obj := range objects {
 			agg.AddObject(obj.Key, obj.Size, obj.TierID)
 		}
@@ -91,7 +92,7 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 		phase2Start := time.Now()
 		rows := agg.Drain()
 		runPath := filepath.Join(runDir, "run_0000.bin")
-		writer, err := NewRunFileWriter(runPath, 4*1024*1024)
+		writer, err := extsort.NewRunFileWriter(runPath, 4*1024*1024)
 		if err != nil {
 			b.Fatalf("create run file: %v", err)
 		}
@@ -112,12 +113,12 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 
 		// Phase 3: Merge and build index
 		phase3Start := time.Now()
-		merger, err := NewMergeIterator([]string{runPath}, 4*1024*1024)
+		merger, err := extsort.NewMergeIterator([]string{runPath}, 4*1024*1024)
 		if err != nil {
 			b.Fatalf("create merger: %v", err)
 		}
 
-		builder, err := NewIndexBuilder(outDir, "", false)
+		builder, err := extsort.NewIndexBuilder(outDir, "", false)
 		if err != nil {
 			merger.Close()
 			b.Fatalf("create builder: %v", err)
@@ -198,7 +199,7 @@ func BenchmarkExtsortPhases(b *testing.B) {
 	b.Run("aggregation", func(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
-			agg := NewAggregator(100000, 0)
+			agg := extsort.NewAggregator(100000, 0)
 			for _, obj := range objects {
 				agg.AddObject(obj.Key, obj.Size, obj.TierID)
 			}
@@ -211,7 +212,7 @@ func BenchmarkExtsortPhases(b *testing.B) {
 		for range b.N {
 			b.StopTimer()
 			// Pre-aggregate
-			agg := NewAggregator(100000, 0)
+			agg := extsort.NewAggregator(100000, 0)
 			for _, obj := range objects {
 				agg.AddObject(obj.Key, obj.Size, obj.TierID)
 			}
@@ -221,7 +222,7 @@ func BenchmarkExtsortPhases(b *testing.B) {
 			runPath := filepath.Join(tmpDir, "run.bin")
 			b.StartTimer()
 
-			writer, _ := NewRunFileWriter(runPath, 4*1024*1024)
+			writer, _ := extsort.NewRunFileWriter(runPath, 4*1024*1024)
 			writer.WriteSorted(rows)
 			writer.Close()
 		}
@@ -232,19 +233,19 @@ func BenchmarkExtsortPhases(b *testing.B) {
 		// Create run file once
 		tmpDir := b.TempDir()
 
-		agg := NewAggregator(100000, 0)
+		agg := extsort.NewAggregator(100000, 0)
 		for _, obj := range objects {
 			agg.AddObject(obj.Key, obj.Size, obj.TierID)
 		}
 		rows := agg.Drain()
 		runPath := filepath.Join(tmpDir, "run.bin")
-		writer, _ := NewRunFileWriter(runPath, 4*1024*1024)
+		writer, _ := extsort.NewRunFileWriter(runPath, 4*1024*1024)
 		writer.WriteSorted(rows)
 		writer.Close()
 
 		b.ResetTimer()
 		for range b.N {
-			merger, _ := NewMergeIterator([]string{runPath}, 4*1024*1024)
+			merger, _ := extsort.NewMergeIterator([]string{runPath}, 4*1024*1024)
 			for {
 				_, err := merger.Next()
 				if err != nil {
@@ -260,13 +261,13 @@ func BenchmarkExtsortPhases(b *testing.B) {
 		// Create run file once
 		tmpDir := b.TempDir()
 
-		agg := NewAggregator(100000, 0)
+		agg := extsort.NewAggregator(100000, 0)
 		for _, obj := range objects {
 			agg.AddObject(obj.Key, obj.Size, obj.TierID)
 		}
 		rows := agg.Drain()
 		runPath := filepath.Join(tmpDir, "run.bin")
-		writer, _ := NewRunFileWriter(runPath, 4*1024*1024)
+		writer, _ := extsort.NewRunFileWriter(runPath, 4*1024*1024)
 		writer.WriteSorted(rows)
 		writer.Close()
 
@@ -276,8 +277,8 @@ func BenchmarkExtsortPhases(b *testing.B) {
 			outDir := filepath.Join(tmpDir, fmt.Sprintf("index-%d", i))
 			b.StartTimer()
 
-			merger, _ := NewMergeIterator([]string{runPath}, 4*1024*1024)
-			builder, _ := NewIndexBuilder(outDir, "", false)
+			merger, _ := extsort.NewMergeIterator([]string{runPath}, 4*1024*1024)
+			builder, _ := extsort.NewIndexBuilder(outDir, "", false)
 			builder.AddAll(merger)
 			merger.Close()
 			builder.Finalize()
@@ -308,19 +309,19 @@ func BenchmarkCompressedVsUncompressed(b *testing.B) {
 	objects := gen.Generate()
 
 	// Pre-aggregate rows
-	agg := NewAggregator(100000, 0)
+	agg := extsort.NewAggregator(100000, 0)
 	for _, obj := range objects {
 		agg.AddObject(obj.Key, obj.Size, obj.TierID)
 	}
 	rows := agg.Drain()
-	SortPrefixRows(rows)
+	extsort.SortPrefixRows(rows)
 
 	b.Run("uncompressed_write", func(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
 			tmpDir := b.TempDir()
 			path := filepath.Join(tmpDir, "run.bin")
-			writer, _ := NewRunFileWriter(path, 4*1024*1024)
+			writer, _ := extsort.NewRunFileWriter(path, 4*1024*1024)
 			writer.WriteAll(rows)
 			writer.Close()
 		}
@@ -331,9 +332,9 @@ func BenchmarkCompressedVsUncompressed(b *testing.B) {
 		for range b.N {
 			tmpDir := b.TempDir()
 			path := filepath.Join(tmpDir, "run.crun")
-			writer, _ := NewCompressedRunWriter(path, CompressedRunWriterOptions{
+			writer, _ := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{
 				BufferSize:       4 * 1024 * 1024,
-				CompressionLevel: CompressionFastest,
+				CompressionLevel: extsort.CompressionFastest,
 			})
 			writer.WriteAll(rows)
 			writer.Close()
@@ -345,9 +346,9 @@ func BenchmarkCompressedVsUncompressed(b *testing.B) {
 		for range b.N {
 			tmpDir := b.TempDir()
 			path := filepath.Join(tmpDir, "run.crun")
-			writer, _ := NewCompressedRunWriter(path, CompressedRunWriterOptions{
+			writer, _ := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{
 				BufferSize:       4 * 1024 * 1024,
-				CompressionLevel: CompressionDefault,
+				CompressionLevel: extsort.CompressionDefault,
 			})
 			writer.WriteAll(rows)
 			writer.Close()
@@ -361,11 +362,11 @@ func BenchmarkCompressedVsUncompressed(b *testing.B) {
 		uncompPath := filepath.Join(tmpDir, "run.bin")
 		compPath := filepath.Join(tmpDir, "run.crun")
 
-		uWriter, _ := NewRunFileWriter(uncompPath, 0)
+		uWriter, _ := extsort.NewRunFileWriter(uncompPath, 0)
 		uWriter.WriteAll(rows)
 		uWriter.Close()
 
-		cWriter, _ := NewCompressedRunWriter(compPath, CompressedRunWriterOptions{})
+		cWriter, _ := extsort.NewCompressedRunWriter(compPath, extsort.CompressedRunWriterOptions{})
 		cWriter.WriteAll(rows)
 		cWriter.Close()
 
@@ -390,20 +391,20 @@ func BenchmarkParallelMerge(b *testing.B) {
 	setupFiles := func(dir string) []string {
 		paths := make([]string, 0, numFiles)
 		for i := range numFiles {
-			rows := make([]*PrefixRow, 0, prefixesPerFile)
+			rows := make([]*extsort.PrefixRow, 0, prefixesPerFile)
 			for j := range prefixesPerFile {
-				rows = append(rows, &PrefixRow{
+				rows = append(rows, &extsort.PrefixRow{
 					Prefix:     fmt.Sprintf("bucket/data/year=2024/month=%02d/day=%02d/file_%08d.parquet", i%12+1, j%28+1, i*prefixesPerFile+j),
 					Depth:      6,
 					Count:      uint64(j + 1),
 					TotalBytes: uint64((j + 1) * 1024),
 				})
 			}
-			SortPrefixRows(rows)
+			extsort.SortPrefixRows(rows)
 
 			path := filepath.Join(dir, fmt.Sprintf("run_%02d.crun", i))
-			writer, _ := NewCompressedRunWriter(path, CompressedRunWriterOptions{
-				CompressionLevel: CompressionFastest,
+			writer, _ := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{
+				CompressionLevel: extsort.CompressionFastest,
 			})
 			writer.WriteAll(rows)
 			writer.Close()
@@ -422,7 +423,7 @@ func BenchmarkParallelMerge(b *testing.B) {
 				paths := setupFiles(tmpDir)
 				b.StartTimer()
 
-				merger := NewParallelMerger(ParallelMergeConfig{
+				merger := extsort.NewParallelMerger(extsort.ParallelMergeConfig{
 					NumWorkers:     workers,
 					MaxFanIn:       4,
 					TempDir:        tmpDir,
@@ -445,7 +446,7 @@ func BenchmarkParallelMerge(b *testing.B) {
 				paths := setupFiles(tmpDir)
 				b.StartTimer()
 
-				merger := NewParallelMerger(ParallelMergeConfig{
+				merger := extsort.NewParallelMerger(extsort.ParallelMergeConfig{
 					NumWorkers:     4,
 					MaxFanIn:       fanIn,
 					TempDir:        tmpDir,
@@ -467,30 +468,30 @@ func BenchmarkReadPerformance(b *testing.B) {
 	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(numObjects))
 	objects := gen.Generate()
 
-	agg := NewAggregator(100000, 0)
+	agg := extsort.NewAggregator(100000, 0)
 	for _, obj := range objects {
 		agg.AddObject(obj.Key, obj.Size, obj.TierID)
 	}
 	rows := agg.Drain()
-	SortPrefixRows(rows)
+	extsort.SortPrefixRows(rows)
 
 	tmpDir := b.TempDir()
 	uncompPath := filepath.Join(tmpDir, "run.bin")
 	compPath := filepath.Join(tmpDir, "run.crun")
 
 	// Write both formats
-	uWriter, _ := NewRunFileWriter(uncompPath, 0)
+	uWriter, _ := extsort.NewRunFileWriter(uncompPath, 0)
 	uWriter.WriteAll(rows)
 	uWriter.Close()
 
-	cWriter, _ := NewCompressedRunWriter(compPath, CompressedRunWriterOptions{})
+	cWriter, _ := extsort.NewCompressedRunWriter(compPath, extsort.CompressedRunWriterOptions{})
 	cWriter.WriteAll(rows)
 	cWriter.Close()
 
 	b.Run("uncompressed_read", func(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
-			reader, _ := OpenRunFile(uncompPath, 4*1024*1024)
+			reader, _ := extsort.OpenRunFile(uncompPath, 4*1024*1024)
 			for {
 				_, err := reader.Read()
 				if err != nil {
@@ -504,7 +505,7 @@ func BenchmarkReadPerformance(b *testing.B) {
 	b.Run("compressed_read", func(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
-			reader, _ := OpenCompressedRunFile(compPath, 4*1024*1024)
+			reader, _ := extsort.OpenCompressedRunFile(compPath, 4*1024*1024)
 			for {
 				_, err := reader.Read()
 				if err != nil {
