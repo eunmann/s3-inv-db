@@ -74,11 +74,31 @@
                         </tr>
                     </thead>
                     <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                        {{range .Runs}}
-                            {{template "templates/partials/discovered_row.html" .}}
+                        {{$visible := .VisibleRuns}}
+                        {{range $i, $r := .Runs}}
+                            {{if lt $i $visible}}
+                                {{template "templates/partials/discovered_row.html" $r}}
+                            {{end}}
                         {{end}}
                     </tbody>
                 </table>
+                {{if lt .VisibleRuns (len .Runs)}}
+                <details class="bg-gray-50 dark:bg-gray-900/30">
+                    <summary class="px-6 py-2.5 text-sm text-indigo-600 dark:text-indigo-400 cursor-pointer hover:text-indigo-800 dark:hover:text-indigo-300">
+                        Show {{sub (len .Runs) .VisibleRuns}} older runs
+                    </summary>
+                    <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                        <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                            {{$visible := .VisibleRuns}}
+                            {{range $i, $r := .Runs}}
+                                {{if ge $i $visible}}
+                                    {{template "templates/partials/discovered_row.html" $r}}
+                                {{end}}
+                            {{end}}
+                        </tbody>
+                    </table>
+                </details>
+                {{end}}
             </section>
             {{end}}
         </div>

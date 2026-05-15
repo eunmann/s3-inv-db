@@ -1,9 +1,5 @@
-// Package autoload runs a background poller that discovers new
-// inventory runs on S3 and queues loads for any configuration whose
-// auto_load flag is set in inventory_configs. Per-config retention
-// shrinks back to the configured limit; the disk-budget Gate enforces
-// the global cap and refuses politely (surfaced in the UI) when there
-// isn't room.
+// Package autoload polls S3 for new inventory runs and queues loads
+// for configurations whose auto_load flag is set.
 package autoload
 
 import (
@@ -18,41 +14,26 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Config holds the AutoLoader's runtime knobs.
+// Config holds the AutoLoader's runtime knobs. Zero values pick
+// sensible defaults (15m poll, 1 concurrent load, 1m–1h backoff).
 type Config struct {
-	// PollInterval is the wall-clock period between discovery passes.
-	// Default 15m if zero.
-	PollInterval time.Duration
-
-	// MaxConcurrency caps how many in-flight auto-loads can run at
-	// once. Default 1 if zero.
-	MaxConcurrency int
-
-	// MinBackoff and MaxBackoff bound the per-run exponential backoff
-	// applied after a failed auto-load. Defaults: 1m / 1h.
-	MinBackoff, MaxBackoff time.Duration
-
-	// DefaultRetention applies when an inventory_configs row sets
-	// retention_count = 0.
+	PollInterval     time.Duration
+	MaxConcurrency   int
+	MinBackoff       time.Duration
+	MaxBackoff       time.Duration
 	DefaultRetention uint32
 }
 
-// Discovery is the surface AutoLoader uses on the discovery service.
-// Defined as an interface so tests can plug in a fake without
-// constructing a real DiscoveryService.
 type Discovery interface {
 	Enabled() bool
 	List(ctx context.Context) ([]inventory.MergedInventory, error)
 }
 
-// Loader runs one gated auto-load for a discovered run.
 type Loader interface {
 	AutoLoad(ctx context.Context, disc inventory.Inventory) error
 }
 
-// AutoLoader is the background service. Start spawns the ticker
-// goroutine and returns immediately. Stop drains the queue and
-// returns when in-flight loads are done.
+// AutoLoader polls Discovery on a ticker and feeds new runs into Loader.
 type AutoLoader struct {
 	cfg         Config
 	discovery   Discovery
@@ -69,8 +50,7 @@ type AutoLoader struct {
 	stop    chan struct{}
 }
 
-// New constructs an AutoLoader. Required arguments are non-nil; the
-// logger may be nil (a no-op logger is used).
+// New constructs an AutoLoader; logger may be nil.
 func New(cfg Config, discovery Discovery, loader Loader, configStore *inventory.ConfigStore, manager *inventory.Manager, logger *zerolog.Logger) *AutoLoader {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 15 * time.Minute
@@ -103,13 +83,13 @@ func New(cfg Config, discovery Discovery, loader Loader, configStore *inventory.
 	}
 }
 
-// Start launches the poll loop. Safe to call once.
+// Start launches the poll loop.
 func (a *AutoLoader) Start(ctx context.Context) {
 	a.wg.Add(1)
 	go a.run(ctx)
 }
 
-// Stop signals the poll loop to exit and waits for it.
+// Stop signals the poll loop to exit and waits.
 func (a *AutoLoader) Stop() {
 	a.mu.Lock()
 	if a.stopped {
@@ -124,8 +104,6 @@ func (a *AutoLoader) Stop() {
 
 func (a *AutoLoader) run(ctx context.Context) {
 	defer a.wg.Done()
-	// Run an immediate pass so a freshly-started server doesn't wait
-	// the full interval before the first auto-load attempt.
 	a.tick(ctx)
 	t := time.NewTicker(a.cfg.PollInterval)
 	defer t.Stop()
@@ -141,7 +119,6 @@ func (a *AutoLoader) run(ctx context.Context) {
 	}
 }
 
-// tick runs one discovery pass.
 func (a *AutoLoader) tick(ctx context.Context) {
 	if a.discovery == nil || !a.discovery.Enabled() {
 		return
@@ -166,9 +143,6 @@ func (a *AutoLoader) tick(ctx context.Context) {
 		a.recordPollFailure(enabled, err.Error())
 		return
 	}
-	// Group by config; pick the newest run per group whose composite
-	// ID isn't already loaded and isn't user-unloaded and isn't in
-	// per-run backoff.
 	byConfig := map[string][]inventory.MergedInventory{}
 	for i := range merged {
 		key := merged[i].ConfigID()
@@ -186,9 +160,6 @@ func (a *AutoLoader) tick(ctx context.Context) {
 	a.runQueue(ctx, queue)
 }
 
-// pickTargets returns one target inventory per config — the newest
-// completed run that hasn't been loaded, isn't sticky-unloaded, and
-// isn't currently within its auto-load backoff window.
 func (a *AutoLoader) pickTargets(byConfig map[string][]inventory.MergedInventory, enabled map[string]inventory.Config) []inventory.Inventory {
 	var queue []inventory.Inventory
 	for cfgID := range enabled {
@@ -196,8 +167,6 @@ func (a *AutoLoader) pickTargets(byConfig map[string][]inventory.MergedInventory
 		if len(runs) == 0 {
 			continue
 		}
-		// Discovery returns newest-first within a config, but enforce
-		// order so we don't depend on that for correctness.
 		sort.SliceStable(runs, func(i, j int) bool { return runs[i].Run > runs[j].Run })
 		var target inventory.Inventory
 		for i := range runs {
@@ -227,8 +196,6 @@ func (a *AutoLoader) pickTargets(byConfig map[string][]inventory.MergedInventory
 	return queue
 }
 
-// runQueue loads each target through the gated loader, respecting
-// MaxConcurrency. Per-target failures get exponential backoff.
 func (a *AutoLoader) runQueue(ctx context.Context, queue []inventory.Inventory) {
 	if len(queue) == 0 {
 		return
@@ -269,7 +236,6 @@ func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 		a.logger.Warn().Str("id", string(id)).Err(err).Msg("autoload: budget refused")
 		return
 	}
-	// Other failures: exponential backoff per-run.
 	info, _ := a.manager.Get(id)
 	count := info.AutoLoadFailureCount
 	delay := a.cfg.MinBackoff << count

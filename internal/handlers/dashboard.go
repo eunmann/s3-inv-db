@@ -18,16 +18,15 @@ type DashboardData struct {
 	DiscoveryError string
 
 	// Top stats — one per card.
-	Configurations int    // distinct (src, inv) pairs
-	TotalRuns      int    // total Inventory entries from discovery
-	LoadedRuns     int    // how many are currently in memory
-	LoadingRuns    int    // how many have a build in flight
-	ErrorRuns      int    // how many ended in error
-	TotalObjectsH  string // total S3 objects covered by loaded inventories
-	TotalBytesH    string // total bytes covered by loaded inventories
-	DiskUsedH      string // sum of cache bytes across loaded runs
+	Configurations int // distinct (src, inv) pairs
+	TotalRuns      int // total Inventory entries from discovery
+	LoadedRuns     int // how many are currently in memory
+	LoadingRuns    int // how many have a build in flight
+	ErrorRuns      int // how many ended in error
+	TotalObjectsH  string
+	TotalBytesH    string
+	DiskUsedH      string
 
-	// Budget gauge — populated when a budget tracker is configured.
 	BudgetCapH      string
 	BudgetUsedH     string
 	BudgetReservedH string
@@ -36,7 +35,10 @@ type DashboardData struct {
 	BudgetUsedPct   int
 	BudgetActive    bool
 
-	// One summary row per configuration.
+	AutoLoadConfigs   int
+	AutoLoadFailures  int
+	PendingPollErrors int
+
 	Configs []DashboardConfig
 }
 
@@ -86,17 +88,8 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	if totals.disk > 0 {
 		data.DiskUsedH = humanfmt.BytesUint64(uint64(totals.disk))
 	}
-	if h.tracker != nil && h.tracker.Cap() > 0 {
-		capBytes := h.tracker.Cap()
-		used := h.tracker.Used()
-		data.BudgetActive = true
-		data.BudgetCapH = humanfmt.BytesUint64(capBytes)
-		data.BudgetUsedH = humanfmt.BytesUint64(used)
-		data.BudgetReservedH = humanfmt.BytesUint64(h.tracker.Reserved())
-		data.BudgetAvailH = humanfmt.BytesUint64(h.tracker.Available())
-		data.BudgetHeadroomH = humanfmt.BytesUint64(h.tracker.Headroom())
-		data.BudgetUsedPct = int((float64(used+h.tracker.Reserved()) / float64(capBytes)) * 100)
-	}
+	h.fillBudgetCounters(&data)
+	h.fillAutoLoadCounters(&data, views)
 
 	// Stable, alphabetical order for the page rows.
 	sort.Strings(order)
@@ -120,6 +113,45 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	if err := h.renderer.Render(w, "dashboard.html", data); err != nil {
 		logger.Error().Err(err).Msg("failed to render dashboard")
 		http.Error(w, "failed to render page", http.StatusInternalServerError)
+	}
+}
+
+func (h *Handlers) fillBudgetCounters(data *DashboardData) {
+	if h.tracker == nil || h.tracker.Cap() == 0 {
+		return
+	}
+	capBytes := h.tracker.Cap()
+	used := h.tracker.Used()
+	data.BudgetActive = true
+	data.BudgetCapH = humanfmt.BytesUint64(capBytes)
+	data.BudgetUsedH = humanfmt.BytesUint64(used)
+	data.BudgetReservedH = humanfmt.BytesUint64(h.tracker.Reserved())
+	data.BudgetAvailH = humanfmt.BytesUint64(h.tracker.Available())
+	data.BudgetHeadroomH = humanfmt.BytesUint64(h.tracker.Headroom())
+	data.BudgetUsedPct = int((float64(used+h.tracker.Reserved()) / float64(capBytes)) * 100)
+}
+
+func (h *Handlers) fillAutoLoadCounters(data *DashboardData, views []inventory.MergedInventory) {
+	if h.configStore != nil {
+		if configs, err := h.configStore.List(); err == nil {
+			for i := range configs {
+				if configs[i].AutoLoad {
+					data.AutoLoadConfigs++
+				}
+				if configs[i].LastPollError != "" {
+					data.PendingPollErrors++
+				}
+			}
+		}
+	}
+	for i := range views {
+		id := views[i].CompositeID()
+		if id == "" {
+			continue
+		}
+		if info, ok := h.manager.Get(id); ok && info.AutoLoadFailureCount > 0 {
+			data.AutoLoadFailures++
+		}
 	}
 }
 

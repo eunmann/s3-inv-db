@@ -11,17 +11,12 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// AutoLoadToggleResponse is the JSON shape returned by
-// SetAutoLoadConfigAPI and SetPinAPI. Tiny because the UI swaps the
-// page section rather than reading individual fields, but exposed for
-// scripting.
 type AutoLoadToggleResponse struct {
 	OK bool `json:"ok"`
 }
 
-// SetAutoLoadConfigAPI flips the auto_load flag (and optionally the
-// retention count) for one inventory configuration. Body is form-encoded:
-// `auto_load=on|off` and optionally `retention=N`.
+// SetAutoLoadConfigAPI sets auto_load and (optionally) retention for
+// one inventory configuration. Form body: auto_load, retention.
 func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) {
 	if h.configStore == nil {
 		WriteJSONError(w, http.StatusServiceUnavailable, "auto-load not configured")
@@ -64,8 +59,7 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 	WriteJSON(w, http.StatusOK, AutoLoadToggleResponse{OK: true})
 }
 
-// SetPinAPI flips a run's pin state. Body: `pinned=true|false`.
-// 404 if the run isn't known to the Manager.
+// SetPinAPI sets a run's pin state. Form body: pinned.
 func (h *Handlers) SetPinAPI(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := r.ParseForm(); err != nil {
@@ -85,8 +79,6 @@ func (h *Handlers) SetPinAPI(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, AutoLoadToggleResponse{OK: true})
 }
 
-// DiskBudgetResponse exposes the current budget tracker state for the
-// dashboard gauge. Bytes throughout so the UI can format consistently.
 type DiskBudgetResponse struct {
 	CapBytes      uint64 `json:"cap_bytes"`
 	UsedBytes     uint64 `json:"used_bytes"`
@@ -95,8 +87,7 @@ type DiskBudgetResponse struct {
 	AvailBytes    uint64 `json:"available_bytes"`
 }
 
-// DiskBudgetAPI returns the current Tracker counters. When no budget is
-// configured (cap==0) returns zeros — clients can switch off the gauge.
+// DiskBudgetAPI returns the current Tracker counters; zeros when no budget is set.
 func (h *Handlers) DiskBudgetAPI(w http.ResponseWriter, _ *http.Request) {
 	resp := DiskBudgetResponse{}
 	if h.tracker != nil {
@@ -109,8 +100,6 @@ func (h *Handlers) DiskBudgetAPI(w http.ResponseWriter, _ *http.Request) {
 	WriteJSON(w, http.StatusOK, resp)
 }
 
-// parseBoolToggle interprets a form value that may come from a checkbox
-// (Web form "on"/empty), an explicit "true"/"false", or "1"/"0".
 func parseBoolToggle(s string) bool {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "on", "true", "1", "yes":

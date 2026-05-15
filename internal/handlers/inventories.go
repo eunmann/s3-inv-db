@@ -303,21 +303,23 @@ type InventoriesData struct {
 }
 
 // InventoryGroup pins one inventory configuration (SourceBucket +
-// InventoryName) to all of its discovered runs. The template renders
-// one section per group so users can compare runs side-by-side.
+// InventoryName) to all of its discovered runs.
 type InventoryGroup struct {
-	SourceBucket  string
-	InventoryName string
-	Runs          []DiscoveredRowView
-
-	// AutoLoad + Retention come from the inventory_configs table. The
-	// template shows toggles wired to /api/configurations/{src}/{name}/auto-load.
+	SourceBucket     string
+	InventoryName    string
+	Runs             []DiscoveredRowView // first VisibleRuns are shown unconditionally
+	VisibleRuns      int                 // how many of Runs render outside <details>
 	AutoLoad         bool
 	Retention        uint32
 	LastPollAt       string
 	LastPollError    string
 	PollBackoffUntil string
 }
+
+// DefaultVisibleRuns caps how many runs in a configuration render in
+// the inventories page above the fold. Older ones collapse into a
+// <details> block.
+const DefaultVisibleRuns = 5
 
 // ConfigID returns the "<src>/<inv>" identifier shared by every run in
 // the group — handy as a stable HTML id / aria label.
@@ -376,6 +378,12 @@ func (h *Handlers) buildInventoryGroups(r *http.Request, views []inventory.Merge
 			InventoryName: views[i].InventoryName,
 			Runs:          []DiscoveredRowView{row},
 		})
+	}
+	for i := range groups {
+		groups[i].VisibleRuns = DefaultVisibleRuns
+		if groups[i].VisibleRuns > len(groups[i].Runs) {
+			groups[i].VisibleRuns = len(groups[i].Runs)
+		}
 	}
 	h.annotateGroupsFromConfig(groups)
 	return groups

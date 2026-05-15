@@ -1,0 +1,20 @@
+{{if .Notifications}}
+<div class="bg-red-50 dark:bg-red-900/30 border-b border-red-200 dark:border-red-900/50">
+    <details class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <summary class="py-2.5 text-sm text-red-800 dark:text-red-300 cursor-pointer flex items-center justify-between gap-3">
+            <span class="font-medium">
+                ⚠ {{len .Notifications}} active issue{{if ne (len .Notifications) 1}}s{{end}}
+            </span>
+            <span class="text-xs text-red-700 dark:text-red-400 hover:underline">expand</span>
+        </summary>
+        <ul class="pb-3 space-y-2">
+            {{range .Notifications}}
+            <li class="text-xs text-red-900 dark:text-red-200 border-l-2 border-red-300 dark:border-red-700 pl-3 py-1">
+                <div class="font-medium">{{.Title}}{{if .Target}} · <code class="font-mono text-red-700 dark:text-red-300">{{.Target}}</code>{{end}}</div>
+                <div class="mt-0.5 break-words">{{.Message}}</div>
+            </li>
+            {{end}}
+        </ul>
+    </details>
+</div>
+{{end}}

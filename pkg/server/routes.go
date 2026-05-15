@@ -64,6 +64,7 @@ func (s *Server) setupRoutes() {
 	// itself content-negotiates via the HX-Request header rather than
 	// living at a separate /partials/ URL.
 	r.Get("/partials/inventory-row/{id}", s.handlers.InventoryRowPartial)
+	r.Get("/partials/notifications", s.handlers.NotificationsPartial)
 	r.Post("/partials/inventories/{id}/load", s.handlers.LoadInventoryRowPartial)
 	r.Post("/partials/inventories/{id}/unload", s.handlers.UnloadInventoryRowPartial)
 	r.Delete("/partials/inventories/{id}", s.handlers.DeleteInventoryRowPartial)
@@ -103,6 +104,7 @@ func (s *Server) setupRoutes() {
 		r.Post("/configurations/{src}/{name}/auto-load", s.handlers.SetAutoLoadConfigAPI)
 		r.Post("/inventories/{id}/pin", s.handlers.SetPinAPI)
 		r.Get("/disk-budget", s.handlers.DiskBudgetAPI)
+		r.Get("/notifications", s.handlers.NotificationsAPI)
 
 		// Discovery — read-only listing. Mutating operations live on
 		// the /partials/discovered/* routes and return HTML directly.

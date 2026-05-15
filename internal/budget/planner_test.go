@@ -132,12 +132,16 @@ func TestPlanner_RefusesWhenEstimateExceedsCap(t *testing.T) {
 	}
 }
 
-func TestPlanner_ZeroCapRefuses(t *testing.T) {
+func TestPlanner_ZeroCapPassesThrough(t *testing.T) {
+	// No --max-index-disk configured — the planner must not police
+	// anything. Otherwise manual loads break for every deployment that
+	// hasn't opted into the budget (the regression that prompted this
+	// test).
 	tr := New(0, 0)
 	p := NewPlanner(tr, nil)
 	plan, _ := p.Plan(Input{Target: "a/b/c", EstimateBytes: 1})
-	if plan.Fits() {
-		t.Error("zero cap must refuse non-zero estimate")
+	if !plan.Fits() {
+		t.Errorf("zero-cap planner should pass through, got refusal: %s", plan.Refusal)
 	}
 }
 

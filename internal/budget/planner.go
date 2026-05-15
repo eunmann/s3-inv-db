@@ -3,37 +3,22 @@ package budget
 import (
 	"fmt"
 	"sort"
-	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
-// Plan describes how to make room for a pending load: a list of
-// inventory IDs to unload first, plus a verdict and (when refused) a
-// structured Reason callers can surface verbatim in the UI. A nil-error
-// Plan with empty Evict means the load fits as-is.
+// Plan is the eviction plan for a pending load.
 type Plan struct {
-	// Evict is the ordered list of inventory IDs to unload before the
-	// new load proceeds. May be empty.
-	Evict []inventory.ID
-
-	// FreedBytes is the sum of IndexBytes for everything in Evict.
-	FreedBytes uint64
-
-	// EstimateBytes is the byte estimate the planner was asked to fit.
+	Evict         []inventory.ID
+	FreedBytes    uint64
 	EstimateBytes uint64
-
-	// Refusal is non-empty when the load cannot proceed even after
-	// evicting every auto-loaded run. Surfaced in the UI.
-	Refusal string
+	Refusal       string
 }
 
-// Fits reports whether the plan actually makes room (Refusal == "").
+// Fits reports whether the plan makes room (Refusal is empty).
 func (p Plan) Fits() bool { return p.Refusal == "" }
 
-// Config supplies the planner with per-config retention overrides.
-// Retention(source, name) returns the configured max-loaded run count
-// for that configuration; zero falls back to DefaultRetention.
+// Config supplies per-configuration retention overrides.
 type Config interface {
 	Retention(source, name string) uint32
 }
@@ -41,63 +26,31 @@ type Config interface {
 // DefaultRetention is used when Config.Retention returns 0.
 const DefaultRetention uint32 = 2
 
-// Planner produces an eviction plan that respects (a) per-config
-// retention and (b) the Tracker's remaining capacity. Pinned runs and
-// the in-flight loading targets are never evicted.
+// Planner produces eviction plans honouring per-config retention and
+// the Tracker's remaining capacity. Pinned runs are never evicted.
 type Planner struct {
 	tracker *Tracker
 	config  Config
 }
 
-// NewPlanner constructs a Planner. Tracker may not be nil; config may
-// be nil (every configuration falls back to DefaultRetention).
 func NewPlanner(tracker *Tracker, config Config) *Planner {
 	return &Planner{tracker: tracker, config: config}
 }
 
-// Input describes the load the planner is asked to fit.
+// Input is one load the planner is asked to fit.
 type Input struct {
-	// Target identifies the run we're trying to load. Used to skip
-	// itself in the candidate list and to read its source/inventory
-	// for the per-config retention check.
-	Target inventory.ID
-
-	// EstimateBytes is the expected final on-disk size of the new
-	// index, post-load. Working/scratch overhead is accounted for via
-	// the tracker's headroom; callers may pass an inflated estimate
-	// for safety.
+	Target        inventory.ID
 	EstimateBytes uint64
-
-	// All is a snapshot of the manager's current Info set. The planner
-	// classifies these into "loaded" (eviction candidates) and "other"
-	// (ignored). Loaded entries must have non-zero IndexBytes for the
-	// planner to consider them — runs with unknown size are skipped
-	// (better to refuse than to evict blindly).
-	All []inventory.Info
+	All           []inventory.Info
 }
 
-// Plan computes the eviction plan for in. Algorithm:
-//
-//  1. Drop any candidate that's pinned, currently loading, the target
-//     itself, or already not-loaded.
-//  2. Enforce per-config retention: within the target's source/name,
-//     evict oldest auto-loaded so that after this load we sit at
-//     retention - 1 (i.e. (retention - 1) old + 1 new = retention).
-//  3. If still over budget, evict auto-loaded runs across all configs
-//     in LRU order (LastAccessedAt asc; oldest LoadedAt as tiebreak).
-//  4. Stop as soon as the freed bytes plus the tracker's existing
-//     available are enough to fit in.EstimateBytes.
-//  5. If we can't make room without evicting a pinned run, return
-//     Refusal explaining what blocked us.
+// Plan computes the eviction plan for in.
 func (p *Planner) Plan(in Input) (Plan, error) {
 	if in.EstimateBytes == 0 {
 		return Plan{EstimateBytes: 0}, nil
 	}
 	if p.tracker.Cap() == 0 {
-		return Plan{
-			EstimateBytes: in.EstimateBytes,
-			Refusal:       "disk budget is not configured (--max-index-disk unset)",
-		}, nil
+		return Plan{EstimateBytes: in.EstimateBytes}, nil
 	}
 	targetSource, targetName, _, ok := in.Target.Split()
 	if !ok {
@@ -113,7 +66,7 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 
 	candidates, pinnedPresent := p.candidates(in)
 
-	// (2) Per-config retention: drop oldest within this configuration.
+	// Per-config retention: trim oldest within this configuration first.
 	plan := Plan{EstimateBytes: in.EstimateBytes}
 	configEvict := selectByConfig(candidates, targetSource, targetName, retention)
 	for i := range configEvict {
@@ -123,7 +76,7 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 		candidates = drop(candidates, c.ID)
 	}
 
-	// (3+4) Global LRU fill until in.EstimateBytes fits.
+	// If still short, evict across configs in LRU order.
 	need := requiredBytes(in.EstimateBytes, p.tracker.Available(), plan.FreedBytes)
 	if need > 0 {
 		sort.SliceStable(candidates, func(i, j int) bool {
@@ -163,7 +116,6 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 	return plan, nil
 }
 
-// candidates filters in.All down to the runs the planner may evict.
 func (p *Planner) candidates(in Input) (eligible []inventory.Info, pinnedPresent bool) {
 	for i := range in.All {
 		info := &in.All[i]
@@ -178,8 +130,7 @@ func (p *Planner) candidates(in Input) (eligible []inventory.Info, pinnedPresent
 			continue
 		}
 		if info.IndexBytes == 0 {
-			// Unknown size — refuse to evict blindly. Counts toward
-			// pinnedPresent so the refusal message is honest.
+			// Unknown size — refuse to evict blindly.
 			pinnedPresent = true
 			continue
 		}
@@ -188,9 +139,8 @@ func (p *Planner) candidates(in Input) (eligible []inventory.Info, pinnedPresent
 	return eligible, pinnedPresent
 }
 
-// selectByConfig returns the runs within (source,name) that exceed
-// retention-1 — i.e. the oldest auto-loaded runs that must come out so
-// the new run lands at exactly `retention` loaded.
+// selectByConfig returns the oldest runs in (source, name) that must
+// come out so the new run lands at exactly `retention`.
 func selectByConfig(pool []inventory.Info, source, name string, retention uint32) []inventory.Info {
 	var inConfig []inventory.Info
 	for i := range pool {
@@ -205,7 +155,6 @@ func selectByConfig(pool []inventory.Info, source, name string, retention uint32
 	if uint32(len(inConfig)) < retention {
 		return nil
 	}
-	// Sort oldest LoadedAt first; LastAccessedAt as tiebreak.
 	sort.SliceStable(inConfig, func(i, j int) bool {
 		ai, bi := inConfig[i].LoadedAt, inConfig[j].LoadedAt
 		if ai.Equal(bi) {
@@ -213,7 +162,6 @@ func selectByConfig(pool []inventory.Info, source, name string, retention uint32
 		}
 		return ai.Before(bi)
 	})
-	// Number to drop so that adding the new run lands at retention.
 	drop := uint32(len(inConfig)) - (retention - 1)
 	if drop > uint32(len(inConfig)) {
 		drop = uint32(len(inConfig))
@@ -232,9 +180,6 @@ func drop(pool []inventory.Info, id inventory.ID) []inventory.Info {
 	return out
 }
 
-// requiredBytes returns how many more bytes need freeing beyond what
-// the tracker reports as already-available plus the bytes the planner
-// has already queued for eviction.
 func requiredBytes(estimate, available, alreadyFreed uint64) uint64 {
 	have := available + alreadyFreed
 	if estimate <= have {
@@ -242,9 +187,3 @@ func requiredBytes(estimate, available, alreadyFreed uint64) uint64 {
 	}
 	return estimate - have
 }
-
-// nowFunc lets tests override time. Production code uses time.Now via
-// the default zero value.
-type nowFunc func() time.Time
-
-var _ = nowFunc(time.Now)

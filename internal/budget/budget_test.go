@@ -68,13 +68,16 @@ func TestTracker_HeadroomShrinksAvailable(t *testing.T) {
 	}
 }
 
-func TestTracker_ZeroCapAlwaysOverBudget(t *testing.T) {
+func TestTracker_ZeroCapPassesThrough(t *testing.T) {
+	// No --max-index-disk: the tracker becomes a no-op so manual
+	// loads aren't blocked by an unconfigured budget.
 	tr := New(0, 0)
-	if err := tr.Reserve("anything", 1); !errors.Is(err, ErrOverBudget) {
-		t.Errorf("Zero-cap tracker must reject non-zero reservations, got %v", err)
+	if err := tr.Reserve("anything", 1); err != nil {
+		t.Errorf("Zero-cap tracker should pass reservations through, got %v", err)
 	}
-	if err := tr.Reserve("zero", 0); err != nil {
-		t.Errorf("Zero-byte reservation should succeed even with zero cap, got %v", err)
+	tr.Release("anything")
+	if got := tr.Reserved(); got != 0 {
+		t.Errorf("Reserved bytes should remain 0 with zero cap, got %d", got)
 	}
 }
 

@@ -27,13 +27,17 @@ import (
 )
 
 // Discoverer wraps an S3 client + bucket/prefix root and lists inventories.
-// Per-call logging uses zerolog.Ctx(ctx) so the request-scoped
-// logger (with request_id) attaches automatically.
 type Discoverer struct {
-	client *s3.Client
-	bucket string
-	prefix string // ends with "/" when non-empty
+	client          *s3.Client
+	bucket          string
+	prefix          string
+	manifestFetches int
 }
+
+// DefaultManifestFetches is the per-configuration cap on how many of
+// the newest run manifests are fetched per discovery pass. Older runs
+// surface with only their run timestamp.
+const DefaultManifestFetches = 10
 
 // New constructs a Discoverer from an s3.Client and a parsed bucket/prefix.
 // Prefix may be empty or end with "/"; callers should normalize.
@@ -41,7 +45,13 @@ func New(client *s3.Client, bucket, prefix string) *Discoverer {
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
-	return &Discoverer{client: client, bucket: bucket, prefix: prefix}
+	return &Discoverer{client: client, bucket: bucket, prefix: prefix, manifestFetches: DefaultManifestFetches}
+}
+
+// SetManifestFetches overrides the per-configuration manifest-fetch
+// cap. Pass 0 to fetch every run's manifest.
+func (d *Discoverer) SetManifestFetches(n int) {
+	d.manifestFetches = n
 }
 
 // runFolderRE matches the two timestamp folder shapes S3 Inventory uses
@@ -159,12 +169,17 @@ func (d *Discoverer) describeRuns(ctx context.Context, src, inv, invPrefix strin
 
 	out := make([]inventory.Inventory, 0, len(runs))
 	logger := zerolog.Ctx(ctx)
-	for _, name := range runs {
+	limit := d.manifestFetches
+	for i, name := range runs {
 		entry := inventory.Inventory{
 			SourceBucket:  src,
 			InventoryName: inv,
 			Run:           name,
 			ManifestKey:   invPrefix + name + "/manifest.json",
+		}
+		if limit > 0 && i >= limit {
+			out = append(out, entry)
+			continue
 		}
 		manifest, err := d.fetchManifest(ctx, entry.ManifestKey)
 		if err != nil {

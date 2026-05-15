@@ -57,9 +57,13 @@
         </div>
 
         <div class="bg-white dark:bg-gray-800 shadow rounded-lg px-5 py-4">
-            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Disk used</dt>
-            <dd class="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100 font-mono">{{if .DiskUsedH}}{{.DiskUsedH}}{{else}}0 B{{end}}</dd>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">cached indexes</p>
+            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Auto-load</dt>
+            <dd class="mt-1 text-2xl font-semibold {{if .AutoLoadConfigs}}text-indigo-600 dark:text-indigo-400{{else}}text-gray-900 dark:text-gray-100{{end}}">{{.AutoLoadConfigs}}</dd>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{if or .AutoLoadFailures .PendingPollErrors}}
+                <span class="text-red-600 dark:text-red-400">{{add .AutoLoadFailures .PendingPollErrors}} active issue{{if ne (add .AutoLoadFailures .PendingPollErrors) 1}}s{{end}}</span>
+                {{else}}config{{if ne .AutoLoadConfigs 1}}s{{end}} opted in{{end}}
+            </p>
         </div>
     </div>
 

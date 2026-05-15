@@ -80,6 +80,11 @@
         </div>
     </nav>
 
+    <div id="notifications-banner"
+         hx-get="/partials/notifications"
+         hx-trigger="load, every 30s"
+         hx-swap="innerHTML"></div>
+
     <main id="main-content" class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         {{template "content" .}}
     </main>
