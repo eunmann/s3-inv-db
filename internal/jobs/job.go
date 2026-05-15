@@ -51,6 +51,8 @@ func (s State) IsTerminal() bool {
 	switch s {
 	case StateSucceeded, StateFailed, StateCancelled, StateAborted:
 		return true
+	case StateQueued, StateRunning:
+		return false
 	}
 
 	return false
