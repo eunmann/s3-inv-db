@@ -61,12 +61,6 @@ func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 }
 
 // accumulate updates the statistics for a single prefix.
-//
-// The prefix is stored as a substring of the caller's source key — this
-// pins the source-key backing buffer while the prefix lives in the map.
-// Tested at 10M scale: cloning the prefix on cache-miss buys ~12% bytes
-// of GC headroom but costs ~10% ingest wall time, so the substring form
-// is preferred when ingest speed dominates.
 func (a *Aggregator) accumulate(prefix string, depth uint16, size uint64, tierID tiers.ID) {
 	stats, ok := a.prefixes[prefix]
 	if !ok {

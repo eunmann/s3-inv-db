@@ -20,23 +20,20 @@ type mergeItem struct {
 	readerIdx int // index into readers slice
 }
 
-// typedMergeHeap is a hand-rolled binary min-heap of mergeItem values.
-// Avoids the container/heap interface{} boxing that allocates per Push/Pop.
+// typedMergeHeap is a typed binary min-heap of mergeItem values, ordered
+// by mergeItem.row.Prefix. It avoids the per-op allocations that
+// container/heap incurs through its interface{}-typed Push/Pop API.
 type typedMergeHeap struct {
 	items []mergeItem
 }
 
-// mergeHeap is the heap shape consumed by parallel_merge.go's hand-rolled
-// heapInit/heapPush/heapPop helpers. The struct is shared so both single-
-// reader and parallel mergers exercise the same code without container/heap.
+// mergeHeap is an alias used by parallel_merge.go's heap helpers.
 type mergeHeap = typedMergeHeap
 
-// Less is kept for parallel_merge.go's hand-rolled heap helpers that read it.
 func (h *typedMergeHeap) Less(i, j int) bool {
 	return h.items[i].row.Prefix < h.items[j].row.Prefix
 }
 
-// Swap is kept for parallel_merge.go's hand-rolled heap helpers.
 func (h *typedMergeHeap) Swap(i, j int) {
 	h.items[i], h.items[j] = h.items[j], h.items[i]
 }

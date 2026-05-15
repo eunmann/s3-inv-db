@@ -5,9 +5,8 @@ import (
 	"testing"
 )
 
-// BenchmarkMergeHeap measures one push+pop cycle on the merge heap.
-// The current implementation (typed, hand-rolled in merger.go +
-// parallel_merge.go) is interface{}-free and should report 0 allocs/op.
+// BenchmarkMergeHeap measures one push+pop cycle on the merge heap
+// across realistic heap sizes (k=8/32/64).
 func BenchmarkMergeHeap(b *testing.B) {
 	for _, k := range []int{8, 32, 64} {
 		b.Run(fmt.Sprintf("k=%d", k), func(b *testing.B) {

@@ -60,8 +60,8 @@ func u64le(v uint64) []byte {
 	}
 }
 
-// BenchmarkReadPrefixRowAlloc is the current path: a fresh PrefixRow is
-// allocated per record.
+// BenchmarkReadPrefixRowAlloc reads run-file records via the path that
+// allocates a fresh PrefixRow per call (Read).
 func BenchmarkReadPrefixRowAlloc(b *testing.B) {
 	const N = 10_000
 	body := serializeRunBody(N)
@@ -83,9 +83,8 @@ func BenchmarkReadPrefixRowAlloc(b *testing.B) {
 	}
 }
 
-// BenchmarkReadPrefixRowReused passes an externally-owned PrefixRow into
-// readPrefixRowRecordInto to keep the read path allocation-free for the
-// row itself.
+// BenchmarkReadPrefixRowReused reads run-file records via ReadInto into
+// a caller-owned PrefixRow.
 func BenchmarkReadPrefixRowReused(b *testing.B) {
 	const N = 10_000
 	body := serializeRunBody(N)
