@@ -17,6 +17,10 @@ import (
 // ErrOverBudget is returned by Reserve when the requested bytes won't fit.
 var ErrOverBudget = errors.New("over disk budget")
 
+// ErrReservationActive is returned by Reserve when the caller's token
+// is already tracking an in-flight reservation.
+var ErrReservationActive = errors.New("reservation already active")
+
 // Tracker is the thread-safe budget accounting primitive.
 type Tracker struct {
 	mu       sync.Mutex
@@ -118,7 +122,7 @@ func (t *Tracker) Reserve(token string, bytes uint64) error {
 		return nil
 	}
 	if _, exists := t.keys[token]; exists {
-		return fmt.Errorf("reservation %q already active", token)
+		return fmt.Errorf("%w: %q", ErrReservationActive, token)
 	}
 	if bytes > t.availableLocked() {
 		return ErrOverBudget

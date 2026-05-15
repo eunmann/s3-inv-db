@@ -18,7 +18,8 @@ func TestAggregateDashboard_TalliesByState(t *testing.T) {
 	}
 	data := &handlers.DashboardData{}
 	logger := zerolog.Nop()
-	confs, order, _ := h.AggregateDashboardForTest(&logger, views, data)
+	agg := h.AggregateDashboardForTest(&logger, views, data)
+	confs, order := agg.Confs, agg.Order
 
 	if data.TotalRuns != 4 {
 		t.Errorf("TotalRuns = %d, want 4", data.TotalRuns)
@@ -55,7 +56,7 @@ func TestAggregateDashboard_LatestRunIsFirstSeen(t *testing.T) {
 	}
 	data := &handlers.DashboardData{}
 	logger := zerolog.Nop()
-	confs, _, _ := h.AggregateDashboardForTest(&logger, views, data)
+	confs := h.AggregateDashboardForTest(&logger, views, data).Confs
 	if got := confs["b/i1"].LatestRun; got != "2026-05-13" {
 		t.Errorf("LatestRun = %q, want 2026-05-13", got)
 	}
@@ -71,7 +72,7 @@ func TestAggregateDashboard_PlaceholderConfigCounts(t *testing.T) {
 	}
 	data := &handlers.DashboardData{}
 	logger := zerolog.Nop()
-	confs, _, _ := h.AggregateDashboardForTest(&logger, views, data)
+	confs := h.AggregateDashboardForTest(&logger, views, data).Confs
 	if _, ok := confs["b/no-runs"]; !ok {
 		t.Fatal("placeholder configuration missing")
 	}

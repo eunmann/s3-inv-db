@@ -1,11 +1,17 @@
-package handlers
+package handlers_test
 
 import (
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 )
+
+// missingGlyph is the em-dash rendered when a metric is unavailable on
+// one side of a comparison; centralised here so goconst doesn't flag
+// the repeated literal across assertions in this file.
+const missingGlyph = "—"
 
 func TestNumericLabel(t *testing.T) {
 	cases := []struct {
@@ -15,13 +21,13 @@ func TestNumericLabel(t *testing.T) {
 		fn      func(uint64) string
 		want    string
 	}{
-		{"missing wins", 100, true, humanfmt.CountUint64, "—"},
+		{"missing wins", 100, true, humanfmt.CountUint64, missingGlyph},
 		{"present formats", 100, false, humanfmt.CountUint64, "100"},
 		{"zero is shown when not missing", 0, false, humanfmt.CountUint64, "0"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := numericLabel(tc.n, tc.missing, tc.fn); got != tc.want {
+			if got := handlers.NumericLabelForTest(tc.n, tc.missing, tc.fn); got != tc.want {
 				t.Errorf("numericLabel(%d, %v) = %q, want %q", tc.n, tc.missing, got, tc.want)
 			}
 		})
@@ -46,10 +52,10 @@ func TestFormatDelta(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			deltaH, pct, sign := formatDelta(tc.before, tc.after, tc.delta, id)
-			if deltaH != tc.wantDeltaH || pct != tc.wantPct || sign != tc.wantSign {
+			got := handlers.FormatDeltaForTest(tc.before, tc.after, tc.delta, id)
+			if got.DeltaH != tc.wantDeltaH || got.Pct != tc.wantPct || got.Sign != tc.wantSign {
 				t.Errorf("formatDelta = (%q, %q, %d), want (%q, %q, %d)",
-					deltaH, pct, sign, tc.wantDeltaH, tc.wantPct, tc.wantSign)
+					got.DeltaH, got.Pct, got.Sign, tc.wantDeltaH, tc.wantPct, tc.wantSign)
 			}
 		})
 	}
@@ -68,12 +74,12 @@ func TestFormatCostDelta(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, pct, sign := formatCostDelta(tc.before, tc.after)
-			if sign != tc.wantSign {
-				t.Errorf("formatCostDelta sign = %d, want %d", sign, tc.wantSign)
+			got := handlers.FormatCostDeltaForTest(tc.before, tc.after)
+			if got.Sign != tc.wantSign {
+				t.Errorf("formatCostDelta sign = %d, want %d", got.Sign, tc.wantSign)
 			}
-			if (pct == "") != tc.wantPctIsZero {
-				t.Errorf("formatCostDelta pct = %q, wantEmpty=%v", pct, tc.wantPctIsZero)
+			if (got.Pct == "") != tc.wantPctIsZero {
+				t.Errorf("formatCostDelta pct = %q, wantEmpty=%v", got.Pct, tc.wantPctIsZero)
 			}
 		})
 	}
@@ -93,7 +99,7 @@ func TestPctChange(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := pctChange(tc.before, tc.after); got != tc.want {
+			if got := handlers.PctChangeForTest(tc.before, tc.after); got != tc.want {
 				t.Errorf("pctChange(%d, %d) = %q, want %q", tc.before, tc.after, got, tc.want)
 			}
 		})
@@ -108,7 +114,7 @@ func TestAbsInt64(t *testing.T) {
 		{0, 0}, {1, 1}, {-1, 1}, {123456, 123456}, {-987654, 987654},
 	}
 	for _, tc := range cases {
-		if got := absInt64(tc.in); got != tc.want {
+		if got := handlers.AbsInt64ForTest(tc.in); got != tc.want {
 			t.Errorf("absInt64(%d) = %d, want %d", tc.in, got, tc.want)
 		}
 	}
@@ -125,12 +131,12 @@ func TestDescribeRun(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.id, func(t *testing.T) {
-			label, run := describeRun(inventory.ID(tc.id))
-			if label != tc.wantLabel {
-				t.Errorf("describeRun(%q) configLabel = %q, want %q", tc.id, label, tc.wantLabel)
+			got := handlers.DescribeRunForTest(inventory.ID(tc.id))
+			if got.ConfigLabel != tc.wantLabel {
+				t.Errorf("describeRun(%q) configLabel = %q, want %q", tc.id, got.ConfigLabel, tc.wantLabel)
 			}
-			if tc.want != "" && run != tc.want {
-				t.Errorf("describeRun(%q) runLabel = %q, want %q", tc.id, run, tc.want)
+			if tc.want != "" && got.RunLabel != tc.want {
+				t.Errorf("describeRun(%q) runLabel = %q, want %q", tc.id, got.RunLabel, tc.want)
 			}
 		})
 	}
@@ -143,7 +149,7 @@ func TestBuildCompareSelfView_FormatsBeforeAfterAndDelta(t *testing.T) {
 		Objects: inventory.CompareNumeric{Before: 100, After: 150, Delta: 50},
 		Bytes:   inventory.CompareNumeric{Before: 1_000, After: 2_000, Delta: 1_000},
 	}
-	v := h.buildCompareSelfView(self)
+	v := h.BuildCompareSelfViewForTest(self)
 	if v.Prefix != "data/" {
 		t.Errorf("Prefix = %q, want data/", v.Prefix)
 	}
@@ -166,11 +172,11 @@ func TestBuildCompareSelfView_MissingSideRendersDash(t *testing.T) {
 		Objects:     inventory.CompareNumeric{Before: 0, After: 50, Delta: 50},
 		Bytes:       inventory.CompareNumeric{Before: 0, After: 500, Delta: 500},
 	}
-	v := h.buildCompareSelfView(self)
-	if v.ObjectsBeforeH != "—" || v.BytesBeforeH != "—" {
+	v := h.BuildCompareSelfViewForTest(self)
+	if v.ObjectsBeforeH != missingGlyph || v.BytesBeforeH != missingGlyph {
 		t.Errorf("before columns: objects=%q bytes=%q, want both '—'", v.ObjectsBeforeH, v.BytesBeforeH)
 	}
-	if v.ObjectsAfterH == "—" || v.BytesAfterH == "—" {
+	if v.ObjectsAfterH == missingGlyph || v.BytesAfterH == missingGlyph {
 		t.Errorf("after columns: objects=%q bytes=%q, want neither '—'", v.ObjectsAfterH, v.BytesAfterH)
 	}
 }
@@ -183,7 +189,7 @@ func TestBuildCompareChildView_StatusOrderMatchesPublicHelper(t *testing.T) {
 		Objects: inventory.CompareNumeric{Before: 10, After: 8, Delta: -2},
 		Bytes:   inventory.CompareNumeric{Before: 1000, After: 900, Delta: -100},
 	}
-	v := h.buildCompareChildView(&child)
+	v := h.BuildCompareChildViewForTest(&child)
 	if v.Status != "changed" {
 		t.Errorf("Status = %q, want changed", v.Status)
 	}
@@ -206,8 +212,8 @@ func TestBuildCompareChildView_AddedHidesBeforeColumn(t *testing.T) {
 		Objects: inventory.CompareNumeric{Before: 0, After: 5, Delta: 5},
 		Bytes:   inventory.CompareNumeric{Before: 0, After: 50, Delta: 50},
 	}
-	v := h.buildCompareChildView(&child)
-	if v.ObjectsBeforeH != "—" {
+	v := h.BuildCompareChildViewForTest(&child)
+	if v.ObjectsBeforeH != missingGlyph {
 		t.Errorf("ObjectsBeforeH = %q, want '—'", v.ObjectsBeforeH)
 	}
 }
@@ -220,8 +226,8 @@ func TestBuildCompareChildView_RemovedHidesAfterColumn(t *testing.T) {
 		Objects: inventory.CompareNumeric{Before: 5, After: 0, Delta: -5},
 		Bytes:   inventory.CompareNumeric{Before: 50, After: 0, Delta: -50},
 	}
-	v := h.buildCompareChildView(&child)
-	if v.ObjectsAfterH != "—" {
+	v := h.BuildCompareChildViewForTest(&child)
+	if v.ObjectsAfterH != missingGlyph {
 		t.Errorf("ObjectsAfterH = %q, want '—'", v.ObjectsAfterH)
 	}
 }

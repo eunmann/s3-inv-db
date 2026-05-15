@@ -1,10 +1,12 @@
-package appconfig
+package appconfig_test
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/internal/appconfig"
 )
 
 func writeConfig(t *testing.T, contents string) string {
@@ -19,9 +21,9 @@ func writeConfig(t *testing.T, contents string) string {
 }
 
 func TestLoad_EmptyPathReturnsNil(t *testing.T) {
-	cfg, err := Load("")
+	cfg, err := appconfig.Load("")
 	if err != nil {
-		t.Fatalf("Load(\"\"): %v", err)
+		t.Fatalf("appconfig.Load(\"\"): %v", err)
 	}
 	if cfg != nil {
 		t.Errorf("expected nil config, got %+v", cfg)
@@ -43,7 +45,7 @@ func TestLoad_FullExample(t *testing.T) {
 			{"source": "bkt", "name": "daily", "auto_load": true, "retention_count": 5}
 		]
 	}`)
-	cfg, err := Load(path)
+	cfg, err := appconfig.Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -69,14 +71,14 @@ func TestLoad_FullExample(t *testing.T) {
 
 func TestLoad_RejectsUnknownFields(t *testing.T) {
 	path := writeConfig(t, `{"addr": ":9000", "bogus": true}`)
-	if _, err := Load(path); err == nil {
+	if _, err := appconfig.Load(path); err == nil {
 		t.Fatal("expected unknown-field error")
 	}
 }
 
 func TestLoad_RejectsBlankInventoryKeys(t *testing.T) {
 	path := writeConfig(t, `{"inventories": [{"source": "", "name": "x"}]}`)
-	_, err := Load(path)
+	_, err := appconfig.Load(path)
 	if err == nil || !strings.Contains(err.Error(), "source and name") {
 		t.Errorf("expected blank-key error, got %v", err)
 	}
@@ -97,7 +99,7 @@ func TestPickString_PrecedenceOrder(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := PickString(tc.flagVal, tc.explicit, tc.cfg)
+			got := appconfig.PickString(tc.flagVal, tc.explicit, tc.cfg)
 			if got != tc.want {
 				t.Errorf("PickString = %q, want %q", got, tc.want)
 			}
@@ -107,13 +109,13 @@ func TestPickString_PrecedenceOrder(t *testing.T) {
 
 func TestPickBool_PrecedenceOrder(t *testing.T) {
 	tr := true
-	if got := PickBool(false, true, &tr); got != false {
+	if got := appconfig.PickBool(false, true, &tr); got != false {
 		t.Errorf("explicit false flag should override config true, got %v", got)
 	}
-	if got := PickBool(false, false, &tr); got != true {
+	if got := appconfig.PickBool(false, false, &tr); got != true {
 		t.Errorf("non-explicit flag should pick up config true, got %v", got)
 	}
-	if got := PickBool(true, false, nil); got != true {
+	if got := appconfig.PickBool(true, false, nil); got != true {
 		t.Errorf("env-default true should win when no config, got %v", got)
 	}
 }

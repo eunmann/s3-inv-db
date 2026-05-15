@@ -35,11 +35,19 @@ func (h *Handlers) GroupDiscoveredForAPIForTest(r *http.Request, views []invento
 	return h.groupDiscoveredForAPI(r, views)
 }
 
+// AggregateForTest is the test-facing copy of dashAggregate using
+// exported fields so handlers_test code can read them directly.
+type AggregateForTest struct {
+	Confs  map[string]DashConfAggForTest
+	Order  []string
+	Totals DashTotalsForTest
+}
+
 // AggregateDashboardForTest exposes aggregateDashboard for tests.
-func (h *Handlers) AggregateDashboardForTest(logger *zerolog.Logger, views []inventory.MergedInventory, data *DashboardData) (map[string]DashConfAggForTest, []string, DashTotalsForTest) {
-	confs, order, totals := h.aggregateDashboard(logger, views, data)
-	out := make(map[string]DashConfAggForTest, len(confs))
-	for k, v := range confs {
+func (h *Handlers) AggregateDashboardForTest(logger *zerolog.Logger, views []inventory.MergedInventory, data *DashboardData) AggregateForTest {
+	agg := h.aggregateDashboard(logger, views, data)
+	out := make(map[string]DashConfAggForTest, len(agg.Confs))
+	for k, v := range agg.Confs {
 		out[k] = DashConfAggForTest{
 			Src: v.Src, ID: v.ID,
 			TotalRuns: v.TotalRuns, LoadedRuns: v.LoadedRuns,
@@ -48,7 +56,7 @@ func (h *Handlers) AggregateDashboardForTest(logger *zerolog.Logger, views []inv
 		}
 	}
 
-	return out, order, DashTotalsForTest{Objects: totals.objects, Bytes: totals.bytes, Disk: totals.disk}
+	return AggregateForTest{Confs: out, Order: agg.Order, Totals: DashTotalsForTest{Objects: agg.Totals.objects, Bytes: agg.Totals.bytes, Disk: agg.Totals.disk}}
 }
 
 // AddLoadedStatsForTest exposes addLoadedStats for tests.

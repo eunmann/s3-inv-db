@@ -1,9 +1,10 @@
-package budget
+package budget_test
 
 import (
 	"testing"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/budget"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
@@ -25,10 +26,10 @@ func loaded(id string, bytes uint64, loadedAt, accessedAt time.Time, pinned bool
 }
 
 func TestPlanner_FitsWithoutEviction(t *testing.T) {
-	tr := New(1000, 0)
+	tr := budget.New(1000, 0)
 	tr.Add("x", 100)
-	p := NewPlanner(tr, nil)
-	in := Input{
+	p := budget.NewPlanner(tr, nil)
+	in := budget.Input{
 		Target:        "src/inv/runC",
 		EstimateBytes: 200,
 		All:           []inventory.Info{loaded("src/inv/runA", 100, time.Unix(1, 0), time.Unix(1, 0), false)},
@@ -46,12 +47,12 @@ func TestPlanner_FitsWithoutEviction(t *testing.T) {
 }
 
 func TestPlanner_EvictsWithinConfigToRespectRetention(t *testing.T) {
-	tr := New(1000, 0)
+	tr := budget.New(1000, 0)
 	tr.Add("a", 100)
 	tr.Add("b", 100)
 	cfg := fakeConfig{"src/inv": 2}
-	p := NewPlanner(tr, cfg)
-	in := Input{
+	p := budget.NewPlanner(tr, cfg)
+	in := budget.Input{
 		Target:        "src/inv/runC",
 		EstimateBytes: 100,
 		All: []inventory.Info{
@@ -72,12 +73,12 @@ func TestPlanner_EvictsWithinConfigToRespectRetention(t *testing.T) {
 }
 
 func TestPlanner_GlobalLRUWhenStillOverBudget(t *testing.T) {
-	tr := New(1000, 0)
+	tr := budget.New(1000, 0)
 	tr.Add("a", 400)
 	tr.Add("b", 400)
 	cfg := fakeConfig{"alpha/inv": 5, "beta/inv": 5} // retention won't force eviction
-	p := NewPlanner(tr, cfg)
-	in := Input{
+	p := budget.NewPlanner(tr, cfg)
+	in := budget.Input{
 		Target:        "gamma/inv/run1",
 		EstimateBytes: 400,
 		All: []inventory.Info{
@@ -99,10 +100,10 @@ func TestPlanner_GlobalLRUWhenStillOverBudget(t *testing.T) {
 }
 
 func TestPlanner_RefusesWhenAllPinned(t *testing.T) {
-	tr := New(500, 0)
+	tr := budget.New(500, 0)
 	tr.Add("p1", 400)
-	p := NewPlanner(tr, nil)
-	in := Input{
+	p := budget.NewPlanner(tr, nil)
+	in := budget.Input{
 		Target:        "src/inv/runNew",
 		EstimateBytes: 200,
 		All:           []inventory.Info{loaded("src/inv/runOld", 400, time.Unix(1, 0), time.Unix(1, 0), true)},
@@ -117,9 +118,9 @@ func TestPlanner_RefusesWhenAllPinned(t *testing.T) {
 }
 
 func TestPlanner_RefusesWhenEstimateExceedsCap(t *testing.T) {
-	tr := New(500, 0)
-	p := NewPlanner(tr, nil)
-	in := Input{
+	tr := budget.New(500, 0)
+	p := budget.NewPlanner(tr, nil)
+	in := budget.Input{
 		Target:        "src/inv/run1",
 		EstimateBytes: 600,
 	}
@@ -137,19 +138,19 @@ func TestPlanner_ZeroCapPassesThrough(t *testing.T) {
 	// anything. Otherwise manual loads break for every deployment that
 	// hasn't opted into the budget (the regression that prompted this
 	// test).
-	tr := New(0, 0)
-	p := NewPlanner(tr, nil)
-	plan, _ := p.Plan(Input{Target: "a/b/c", EstimateBytes: 1})
+	tr := budget.New(0, 0)
+	p := budget.NewPlanner(tr, nil)
+	plan, _ := p.Plan(budget.Input{Target: "a/b/c", EstimateBytes: 1})
 	if !plan.Fits() {
 		t.Errorf("zero-cap planner should pass through, got refusal: %s", plan.Refusal)
 	}
 }
 
 func TestPlanner_SkipsRunsWithoutKnownSize(t *testing.T) {
-	tr := New(1000, 0)
+	tr := budget.New(1000, 0)
 	tr.Add("x", 400) // accounted for elsewhere
-	p := NewPlanner(tr, nil)
-	in := Input{
+	p := budget.NewPlanner(tr, nil)
+	in := budget.Input{
 		Target:        "src/inv/run2",
 		EstimateBytes: 700,
 		All: []inventory.Info{

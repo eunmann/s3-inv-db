@@ -1,4 +1,4 @@
-package handlers
+package handlers_test
 
 import (
 	"net/http"
@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
@@ -80,7 +81,7 @@ func TestBuildComparePicker_OnlyLoadedAndThreePart(t *testing.T) {
 		{ID: "src-b/inv-1/2026-05-13T03-00Z", State: inventory.StateNotLoaded}, // filtered
 		{ID: "legacy-two-part", State: inventory.StateLoaded},                  // filtered (not 3-part)
 	}
-	got := buildComparePicker(in)
+	got := handlers.BuildComparePickerForTest(in)
 	if len(got.Groups) != 2 {
 		t.Fatalf("groups = %d, want 2 (src-a/inv-1 and src-a/inv-2)", len(got.Groups))
 	}
@@ -114,53 +115,53 @@ func TestComparePage_PrefixInputPresentOnFirstVisit(t *testing.T) {
 }
 
 func TestSortCompareChildView_BiggestAbsoluteMoverByDefault(t *testing.T) {
-	rows := []CompareChildView{
+	rows := []handlers.CompareChildView{
 		{Segment: "a", BytesDelta: 10, AbsByteDelta: 10},
 		{Segment: "b", BytesDelta: -1000, AbsByteDelta: 1000},
 		{Segment: "c", BytesDelta: 500, AbsByteDelta: 500},
 	}
-	sortCompareChildView(rows, "", "")
+	handlers.SortCompareChildViewForTest(rows, "", "")
 	if rows[0].Segment != "b" || rows[1].Segment != "c" || rows[2].Segment != "a" {
 		t.Errorf("default sort: got [%s, %s, %s]; want [b, c, a] (largest |delta| first)", rows[0].Segment, rows[1].Segment, rows[2].Segment)
 	}
 }
 
 func TestSortCompareChildView_SizeAsc_PutsShrinkersFirst(t *testing.T) {
-	rows := []CompareChildView{
+	rows := []handlers.CompareChildView{
 		{Segment: "a", BytesDelta: 100, AbsByteDelta: 100},
 		{Segment: "b", BytesDelta: -200, AbsByteDelta: 200},
 		{Segment: "c", BytesDelta: 50, AbsByteDelta: 50},
 	}
-	sortCompareChildView(rows, "size", "asc")
+	handlers.SortCompareChildViewForTest(rows, "size", "asc")
 	if rows[0].Segment != "b" {
 		t.Errorf("size asc top row = %q, want b (most negative)", rows[0].Segment)
 	}
-	sortCompareChildView(rows, "size", "desc")
+	handlers.SortCompareChildViewForTest(rows, "size", "desc")
 	if rows[0].Segment != "a" {
 		t.Errorf("size desc top row = %q, want a (most positive)", rows[0].Segment)
 	}
 }
 
 func TestSortCompareChildView_StatusOrder(t *testing.T) {
-	rows := []CompareChildView{
+	rows := []handlers.CompareChildView{
 		{Segment: "a", Status: "unchanged", StatusOrder: 4},
 		{Segment: "b", Status: "added", StatusOrder: 1},
 		{Segment: "c", Status: "changed", StatusOrder: 3},
 		{Segment: "d", Status: "removed", StatusOrder: 2},
 	}
-	sortCompareChildView(rows, "status", "asc")
+	handlers.SortCompareChildViewForTest(rows, "status", "asc")
 	if got := []string{rows[0].Status, rows[1].Status, rows[2].Status, rows[3].Status}; got[0] != "added" || got[1] != "removed" || got[2] != "changed" || got[3] != "unchanged" {
 		t.Errorf("status asc order = %v", got)
 	}
 }
 
 func TestSortCompareChildView_SegmentAlphabetical(t *testing.T) {
-	rows := []CompareChildView{
+	rows := []handlers.CompareChildView{
 		{Segment: "b"},
 		{Segment: "a"},
 		{Segment: "c"},
 	}
-	sortCompareChildView(rows, "segment", "asc")
+	handlers.SortCompareChildViewForTest(rows, "segment", "asc")
 	if rows[0].Segment != "a" || rows[1].Segment != "b" || rows[2].Segment != "c" {
 		t.Errorf("segment asc = [%s, %s, %s]", rows[0].Segment, rows[1].Segment, rows[2].Segment)
 	}
@@ -179,7 +180,7 @@ func TestSameConfig(t *testing.T) {
 		{"", "", false},
 	}
 	for _, tc := range cases {
-		if got := sameConfig(inventory.ID(tc.a), inventory.ID(tc.b)); got != tc.want {
+		if got := handlers.SameConfigForTest(inventory.ID(tc.a), inventory.ID(tc.b)); got != tc.want {
 			t.Errorf("sameConfig(%q,%q) = %v, want %v", tc.a, tc.b, got, tc.want)
 		}
 	}

@@ -1,8 +1,9 @@
-package handlers
+package handlers_test
 
 import (
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
@@ -14,7 +15,7 @@ func TestGroupLoadedInventories_GroupsByConfigAndSortsRunsNewestFirst(t *testing
 		{ID: "bucket-a/inv-2/2026-05-11T03-00Z", State: inventory.StateLoaded},
 		{ID: "bucket-a/inv-1/2026-05-09T03-00Z", State: inventory.StateNotLoaded}, // filtered
 	}
-	got := groupLoadedInventories(in)
+	got := handlers.GroupLoadedInventoriesForTst(in)
 	if len(got) != 3 {
 		t.Fatalf("len(groups) = %d, want 3", len(got))
 	}
@@ -37,7 +38,7 @@ func TestGroupLoadedInventories_LegacyTwoPartIDFallsBackToOther(t *testing.T) {
 	in := []inventory.Info{
 		{ID: "old-inv", Name: "Old Inventory", State: inventory.StateLoaded},
 	}
-	got := groupLoadedInventories(in)
+	got := handlers.GroupLoadedInventoriesForTst(in)
 	if len(got) != 1 || got[0].ConfigLabel != "Other" {
 		t.Fatalf("groups = %+v, want one 'Other' group", got)
 	}
@@ -47,10 +48,10 @@ func TestGroupLoadedInventories_LegacyTwoPartIDFallsBackToOther(t *testing.T) {
 }
 
 func TestGroupLoadedInventories_Empty(t *testing.T) {
-	if got := groupLoadedInventories(nil); len(got) != 0 {
+	if got := handlers.GroupLoadedInventoriesForTst(nil); len(got) != 0 {
 		t.Errorf("nil → groups = %+v, want empty", got)
 	}
-	if got := groupLoadedInventories([]inventory.Info{{ID: "x/y/z", State: inventory.StateNotLoaded}}); len(got) != 0 {
+	if got := handlers.GroupLoadedInventoriesForTst([]inventory.Info{{ID: "x/y/z", State: inventory.StateNotLoaded}}); len(got) != 0 {
 		t.Errorf("no loaded → groups = %+v, want empty", got)
 	}
 }

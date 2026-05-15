@@ -10,6 +10,10 @@ import (
 	"os"
 )
 
+// ErrInventoryKeysRequired is returned by validate when an inventory
+// entry has a blank source or name.
+var ErrInventoryKeysRequired = errors.New("inventories[]: source and name are required")
+
 // Config mirrors the JSON file shape. Pointer fields are nil when the
 // key was absent from the file.
 type Config struct {
@@ -42,10 +46,12 @@ type InventoryEntry struct {
 	RetentionCount uint32 `json:"retention_count,omitempty"`
 }
 
-// Load reads and parses the file at path. Returns nil if path is empty.
+// Load reads and parses the file at path. Returns an empty Config when
+// path is empty so callers don't need a separate nil check before
+// resolving precedence with CLI/env flags.
 func Load(path string) (*Config, error) {
 	if path == "" {
-		return nil, nil
+		return &Config{}, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -71,7 +77,7 @@ func (c *Config) validate() error {
 	for i := range c.Inventories {
 		e := &c.Inventories[i]
 		if e.Source == "" || e.Name == "" {
-			return errors.New("inventories[]: source and name are required")
+			return fmt.Errorf("%w", ErrInventoryKeysRequired)
 		}
 	}
 

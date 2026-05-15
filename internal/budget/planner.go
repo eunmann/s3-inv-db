@@ -1,11 +1,16 @@
 package budget
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
+
+// ErrTargetIDFormat is returned by Plan when the target inventory ID
+// isn't the expected three-part "<source>/<inventory>/<run>" shape.
+var ErrTargetIDFormat = errors.New("target id is not a 3-part inventory ID")
 
 // Plan is the eviction plan for a pending load.
 type Plan struct {
@@ -54,7 +59,7 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 	}
 	targetSource, targetName, _, ok := in.Target.Split()
 	if !ok {
-		return Plan{}, fmt.Errorf("target id %q is not a 3-part inventory ID", in.Target)
+		return Plan{}, fmt.Errorf("%w: %q", ErrTargetIDFormat, in.Target)
 	}
 
 	retention := DefaultRetention
@@ -118,7 +123,9 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 	return plan, nil
 }
 
-func (p *Planner) candidates(in Input) (eligible []inventory.Info, pinnedPresent bool) {
+func (p *Planner) candidates(in Input) ([]inventory.Info, bool) {
+	var eligible []inventory.Info
+	var pinnedPresent bool
 	for i := range in.All {
 		info := &in.All[i]
 		if info.ID == in.Target {

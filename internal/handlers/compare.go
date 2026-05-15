@@ -138,7 +138,7 @@ func (h *Handlers) ComparePage(w http.ResponseWriter, r *http.Request) {
 	from := inventory.ID(q.Get("from"))
 	to := inventory.ID(q.Get("to"))
 	prefix := q.Get("prefix")
-	hideUnchanged := q.Get("show_unchanged") != "true"
+	hideUnchanged := q.Get("show_unchanged") != trueLiteral
 	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
 	sortBy, dir := inventory.NormalizeCompareSort(q.Get("sort"), q.Get("dir"))
 
@@ -183,8 +183,9 @@ func (h *Handlers) renderCompareFullPage(w http.ResponseWriter, r *http.Request,
 	case !sameConfig(opts.from, opts.to):
 		data.Error = "Both runs must belong to the same inventory configuration."
 	default:
-		data.ConfigLabel, data.FromRun = describeRun(opts.from)
-		_, data.ToRun = describeRun(opts.to)
+		fromDesc := describeRun(opts.from)
+		data.ConfigLabel, data.FromRun = fromDesc.ConfigLabel, fromDesc.RunLabel
+		data.ToRun = describeRun(opts.to).RunLabel
 		level, err := h.computeCompareLevel(r.Context(), opts)
 		switch {
 		case errors.Is(err, inventory.ErrNotFound):
@@ -361,21 +362,25 @@ func (h *Handlers) buildCompareSelfView(self inventory.CompareSelf) CompareSelfV
 		BytesBeforeH:   numericLabel(self.Bytes.Before, self.NotFoundInA, humanfmt.BytesUint64),
 		BytesAfterH:    numericLabel(self.Bytes.After, self.NotFoundInB, humanfmt.BytesUint64),
 	}
-	v.ObjectsDeltaH, v.ObjectsPct, v.ObjectsSign = formatDelta(self.Objects.Before, self.Objects.After, self.Objects.Delta, humanfmt.CountUint64)
-	v.BytesDeltaH, v.BytesPct, v.BytesSign = formatDelta(self.Bytes.Before, self.Bytes.After, self.Bytes.Delta, humanfmt.BytesUint64)
+	objDelta := formatDelta(self.Objects.Before, self.Objects.After, self.Objects.Delta, humanfmt.CountUint64)
+	v.ObjectsDeltaH, v.ObjectsPct, v.ObjectsSign = objDelta.DeltaH, objDelta.Pct, objDelta.Sign
+	bDelta := formatDelta(self.Bytes.Before, self.Bytes.After, self.Bytes.Delta, humanfmt.BytesUint64)
+	v.BytesDeltaH, v.BytesPct, v.BytesSign = bDelta.DeltaH, bDelta.Pct, bDelta.Sign
 	if self.HasTierDataA || self.HasTierDataB {
 		v.HasCost = true
 		costBefore := tierMapCost(self.TierBeforeMap, h.priceTable)
 		costAfter := tierMapCost(self.TierAfterMap, h.priceTable)
 		v.CostBeforeH = pricing.FormatCost(costBefore)
 		v.CostAfterH = pricing.FormatCost(costAfter)
-		v.CostDeltaH, v.CostPct, v.CostSign = formatCostDelta(costBefore, costAfter)
+		cDelta := formatCostDelta(costBefore, costAfter)
+		v.CostDeltaH, v.CostPct, v.CostSign = cDelta.DeltaH, cDelta.Pct, cDelta.Sign
 	}
 	apiBefore := pricing.ComputePutCost(self.Objects.Before, h.priceTable)
 	apiAfter := pricing.ComputePutCost(self.Objects.After, h.priceTable)
 	v.APICostBeforeH = pricing.FormatCost(apiBefore)
 	v.APICostAfterH = pricing.FormatCost(apiAfter)
-	v.APICostDeltaH, v.APICostPct, v.APICostSign = formatCostDelta(apiBefore, apiAfter)
+	apiDelta := formatCostDelta(apiBefore, apiAfter)
+	v.APICostDeltaH, v.APICostPct, v.APICostSign = apiDelta.DeltaH, apiDelta.Pct, apiDelta.Sign
 
 	return v
 }
@@ -395,8 +400,10 @@ func (h *Handlers) buildCompareChildView(c *inventory.CompareChild) CompareChild
 		BytesAfterH:    numericLabel(c.Bytes.After, c.Status == inventory.CompareRemoved, humanfmt.BytesUint64),
 		AbsByteDelta:   absInt64(c.Bytes.Delta),
 	}
-	v.ObjectsDeltaH, v.ObjectsPct, v.ObjectsSign = formatDelta(c.Objects.Before, c.Objects.After, c.Objects.Delta, humanfmt.CountUint64)
-	v.BytesDeltaH, v.BytesPct, v.BytesSign = formatDelta(c.Bytes.Before, c.Bytes.After, c.Bytes.Delta, humanfmt.BytesUint64)
+	objDelta := formatDelta(c.Objects.Before, c.Objects.After, c.Objects.Delta, humanfmt.CountUint64)
+	v.ObjectsDeltaH, v.ObjectsPct, v.ObjectsSign = objDelta.DeltaH, objDelta.Pct, objDelta.Sign
+	bDelta := formatDelta(c.Bytes.Before, c.Bytes.After, c.Bytes.Delta, humanfmt.BytesUint64)
+	v.BytesDeltaH, v.BytesPct, v.BytesSign = bDelta.DeltaH, bDelta.Pct, bDelta.Sign
 	if len(c.TierBefore) > 0 || len(c.TierAfter) > 0 {
 		v.HasCost = true
 		costBefore := tierMapCost(c.TierBefore, h.priceTable)
@@ -404,14 +411,16 @@ func (h *Handlers) buildCompareChildView(c *inventory.CompareChild) CompareChild
 		v.CostBeforeH = pricing.FormatCost(costBefore)
 		v.CostAfterH = pricing.FormatCost(costAfter)
 		v.CostDelta = int64(costAfter) - int64(costBefore)
-		v.CostDeltaH, v.CostPct, v.CostSign = formatCostDelta(costBefore, costAfter)
+		cDelta := formatCostDelta(costBefore, costAfter)
+		v.CostDeltaH, v.CostPct, v.CostSign = cDelta.DeltaH, cDelta.Pct, cDelta.Sign
 	}
 	apiBefore := pricing.ComputePutCost(c.Objects.Before, h.priceTable)
 	apiAfter := pricing.ComputePutCost(c.Objects.After, h.priceTable)
 	v.APICostBeforeH = pricing.FormatCost(apiBefore)
 	v.APICostAfterH = pricing.FormatCost(apiAfter)
 	v.APICostDelta = int64(apiAfter) - int64(apiBefore)
-	v.APICostDeltaH, v.APICostPct, v.APICostSign = formatCostDelta(apiBefore, apiAfter)
+	apiDelta := formatCostDelta(apiBefore, apiAfter)
+	v.APICostDeltaH, v.APICostPct, v.APICostSign = apiDelta.DeltaH, apiDelta.Pct, apiDelta.Sign
 
 	return v
 }
@@ -420,33 +429,42 @@ func (h *Handlers) buildCompareChildView(c *inventory.CompareChild) CompareChild
 // missing on that side, in which case the cell shows "—".
 func numericLabel(n uint64, missing bool, fn func(uint64) string) string {
 	if missing {
-		return "—"
+		return missingValueGlyph
 	}
 
 	return fn(n)
 }
 
+// DeltaParts is the formatted-delta triple shared by Browse/Compare:
+// the rendered delta string ("+200K"), the percentage label ("+20%"),
+// and the sign (-1/0/+1) for template styling.
+type DeltaParts struct {
+	DeltaH string
+	Pct    string
+	Sign   int
+}
+
 // formatDelta returns ("+200K", "+20%", +1) style triples. A zero
 // delta returns ("±0", "", 0) so the template can hide the percentage.
-func formatDelta(before, after uint64, delta int64, fn func(uint64) string) (deltaH, pct string, sign int) {
+func formatDelta(before, after uint64, delta int64, fn func(uint64) string) DeltaParts {
 	switch {
 	case delta > 0:
-		return "+" + fn(uint64(delta)), pctChange(before, after), 1
+		return DeltaParts{DeltaH: "+" + fn(uint64(delta)), Pct: pctChange(before, after), Sign: 1}
 	case delta < 0:
-		return "−" + fn(uint64(-delta)), pctChange(before, after), -1
+		return DeltaParts{DeltaH: "−" + fn(uint64(-delta)), Pct: pctChange(before, after), Sign: -1}
 	default:
-		return "±0", "", 0
+		return DeltaParts{DeltaH: "±0"}
 	}
 }
 
-func formatCostDelta(before, after uint64) (deltaH, pct string, sign int) {
+func formatCostDelta(before, after uint64) DeltaParts {
 	switch {
 	case after > before:
-		return "+" + pricing.FormatCost(after-before), pctChange(before, after), 1
+		return DeltaParts{DeltaH: "+" + pricing.FormatCost(after-before), Pct: pctChange(before, after), Sign: 1}
 	case after < before:
-		return "−" + pricing.FormatCost(before-after), pctChange(before, after), -1
+		return DeltaParts{DeltaH: "−" + pricing.FormatCost(before-after), Pct: pctChange(before, after), Sign: -1}
 	default:
-		return "±0", "", 0
+		return DeltaParts{DeltaH: "±0"}
 	}
 }
 
@@ -500,16 +518,22 @@ func sameConfig(idA, idB inventory.ID) bool {
 	return okA && okB && srcA == srcB && invA == invB
 }
 
+// RunDescription is the parsed label/run pair produced by describeRun.
+type RunDescription struct {
+	ConfigLabel string
+	RunLabel    string
+}
+
 // describeRun extracts the configuration label ("<src>/<inv>") and the
 // formatted run timestamp from an inventory ID. Returns ("", id) when
 // the ID isn't 3-part so the page still renders something sensible.
-func describeRun(id inventory.ID) (configLabel, runLabel string) {
+func describeRun(id inventory.ID) RunDescription {
 	src, inv, run, ok := id.Split()
 	if !ok {
-		return "", string(id)
+		return RunDescription{RunLabel: string(id)}
 	}
 
-	return src + "/" + inv, humanfmt.RunTimestamp(run)
+	return RunDescription{ConfigLabel: src + "/" + inv, RunLabel: humanfmt.RunTimestamp(run)}
 }
 
 // CompareLevelResponse is the JSON shape returned by CompareLevelAPI. Carries
@@ -600,7 +624,7 @@ func (h *Handlers) CompareLevelAPI(w http.ResponseWriter, r *http.Request) {
 	from := inventory.ID(q.Get("from"))
 	to := inventory.ID(q.Get("to"))
 	prefix := q.Get("prefix")
-	hideUnchanged := q.Get("show_unchanged") != "true"
+	hideUnchanged := q.Get("show_unchanged") != trueLiteral
 	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
 	sortBy, dir := inventory.NormalizeCompareSort(q.Get("sort"), q.Get("dir"))
 
@@ -781,14 +805,21 @@ func statusRank(s string) int {
 		return 1
 	case "removed":
 		return 2
-	case "changed":
+	case statusChangedString:
 		return 3
 	case "unchanged":
 		return 4
 	}
 
-	return 5
+	return statusUnknownRank
 }
+
+// Status sort keys mirrored from the inventory package; lifted out as
+// constants so goconst and mnd don't flag the literals.
+const (
+	statusChangedString = "changed"
+	statusUnknownRank   = 5
+)
 
 // paginationFromBrowse converts the domain pagination into the JSON
 // shape — keeps the field names aligned with PaginationJSON.

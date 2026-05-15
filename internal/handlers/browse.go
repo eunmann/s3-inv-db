@@ -12,6 +12,10 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// missingValueGlyph is the em-dash rendered in browse/compare cells
+// when a metric is unavailable on that side of the comparison.
+const missingValueGlyph = "—"
+
 type (
 	BrowseCrumb      = inventory.BrowseCrumb
 	BrowseChild      = inventory.BrowseChild
@@ -233,7 +237,7 @@ func (h *Handlers) buildChildren(ctx context.Context, idx *indexread.Index, pos 
 				child.MonthlyCostFormatted = est.TotalFormatted
 			}
 		} else if !hasTier {
-			child.MonthlyCostFormatted = "—"
+			child.MonthlyCostFormatted = missingValueGlyph
 		}
 		children = append(children, child)
 	}
@@ -412,7 +416,7 @@ func groupLoadedInventories(all []inventory.Info) []BrowseInventoryGroup {
 	return out
 }
 
-func splitForGroup(info inventory.Info) (label string, opt BrowseInventoryOption) {
+func splitForGroup(info inventory.Info) (string, BrowseInventoryOption) {
 	if src, inv, run, ok := info.ID.Split(); ok {
 		config := src + "/" + inv
 

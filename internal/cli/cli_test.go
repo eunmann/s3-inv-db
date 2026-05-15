@@ -1,15 +1,15 @@
-package cli
+package cli_test
 
 import (
-	"os"
 	"strings"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/cli"
 	"github.com/eunmann/s3-inv-db/pkg/membudget"
 )
 
 func TestRunNoArgs(t *testing.T) {
-	err := Run(nil)
+	err := cli.Run(nil)
 	if err == nil {
 		t.Fatal("expected error with no args")
 	}
@@ -19,7 +19,7 @@ func TestRunNoArgs(t *testing.T) {
 }
 
 func TestRunUnknownCommand(t *testing.T) {
-	err := Run([]string{"unknown"})
+	err := cli.Run([]string{"unknown"})
 	if err == nil {
 		t.Fatal("expected error with unknown command")
 	}
@@ -29,7 +29,7 @@ func TestRunUnknownCommand(t *testing.T) {
 }
 
 func TestBuildMissingOut(t *testing.T) {
-	err := Run([]string{"build", "--s3-manifest", "s3://bucket/manifest.json"})
+	err := cli.Run([]string{"build", "--s3-manifest", "s3://bucket/manifest.json"})
 	if err == nil {
 		t.Fatal("expected error with missing --out")
 	}
@@ -39,7 +39,7 @@ func TestBuildMissingOut(t *testing.T) {
 }
 
 func TestBuildMissingS3Manifest(t *testing.T) {
-	err := Run([]string{"build", "--out", "/out"})
+	err := cli.Run([]string{"build", "--out", "/out"})
 	if err == nil {
 		t.Fatal("expected error with missing --s3-manifest")
 	}
@@ -49,7 +49,7 @@ func TestBuildMissingS3Manifest(t *testing.T) {
 }
 
 func TestQueryMissingIndex(t *testing.T) {
-	err := Run([]string{"query", "--prefix", "test/"})
+	err := cli.Run([]string{"query", "--prefix", "test/"})
 	if err == nil {
 		t.Fatal("expected error with missing --index")
 	}
@@ -59,7 +59,7 @@ func TestQueryMissingIndex(t *testing.T) {
 }
 
 func TestQueryMissingPrefix(t *testing.T) {
-	err := Run([]string{"query", "--index", "/path/to/index"})
+	err := cli.Run([]string{"query", "--index", "/path/to/index"})
 	if err == nil {
 		t.Fatal("expected error with missing --prefix")
 	}
@@ -70,7 +70,7 @@ func TestQueryMissingPrefix(t *testing.T) {
 
 func TestDetermineMemoryBudgetCLI(t *testing.T) {
 	// CLI flag takes priority
-	budget, err := determineMemoryBudget("4GiB")
+	budget, err := cli.DetermineMemoryBudget("4GiB")
 	if err != nil {
 		t.Fatalf("determineMemoryBudget error: %v", err)
 	}
@@ -83,12 +83,10 @@ func TestDetermineMemoryBudgetCLI(t *testing.T) {
 }
 
 func TestDetermineMemoryBudgetEnv(t *testing.T) {
-	// Set environment variable
-	os.Setenv("S3INV_MEM_BUDGET", "2GiB")
-	defer os.Unsetenv("S3INV_MEM_BUDGET")
+	t.Setenv("S3INV_MEM_BUDGET", "2GiB")
 
 	// Empty CLI should use env var
-	budget, err := determineMemoryBudget("")
+	budget, err := cli.DetermineMemoryBudget("")
 	if err != nil {
 		t.Fatalf("determineMemoryBudget error: %v", err)
 	}
@@ -101,12 +99,10 @@ func TestDetermineMemoryBudgetEnv(t *testing.T) {
 }
 
 func TestDetermineMemoryBudgetCLIOverridesEnv(t *testing.T) {
-	// Set environment variable
-	os.Setenv("S3INV_MEM_BUDGET", "2GiB")
-	defer os.Unsetenv("S3INV_MEM_BUDGET")
+	t.Setenv("S3INV_MEM_BUDGET", "2GiB")
 
 	// CLI should take priority over env
-	budget, err := determineMemoryBudget("8GiB")
+	budget, err := cli.DetermineMemoryBudget("8GiB")
 	if err != nil {
 		t.Fatalf("determineMemoryBudget error: %v", err)
 	}
@@ -119,11 +115,10 @@ func TestDetermineMemoryBudgetCLIOverridesEnv(t *testing.T) {
 }
 
 func TestDetermineMemoryBudgetDefault(t *testing.T) {
-	// Clear env var
-	os.Unsetenv("S3INV_MEM_BUDGET")
+	t.Setenv("S3INV_MEM_BUDGET", "")
 
 	// No CLI, no env should use system RAM detection
-	budget, err := determineMemoryBudget("")
+	budget, err := cli.DetermineMemoryBudget("")
 	if err != nil {
 		t.Fatalf("determineMemoryBudget error: %v", err)
 	}
@@ -134,7 +129,7 @@ func TestDetermineMemoryBudgetDefault(t *testing.T) {
 }
 
 func TestDetermineMemoryBudgetInvalidCLI(t *testing.T) {
-	_, err := determineMemoryBudget("invalid")
+	_, err := cli.DetermineMemoryBudget("invalid")
 	if err == nil {
 		t.Fatal("expected error with invalid CLI budget")
 	}
@@ -144,10 +139,9 @@ func TestDetermineMemoryBudgetInvalidCLI(t *testing.T) {
 }
 
 func TestDetermineMemoryBudgetInvalidEnv(t *testing.T) {
-	os.Setenv("S3INV_MEM_BUDGET", "badvalue")
-	defer os.Unsetenv("S3INV_MEM_BUDGET")
+	t.Setenv("S3INV_MEM_BUDGET", "badvalue")
 
-	_, err := determineMemoryBudget("")
+	_, err := cli.DetermineMemoryBudget("")
 	if err == nil {
 		t.Fatal("expected error with invalid env budget")
 	}
@@ -157,9 +151,9 @@ func TestDetermineMemoryBudgetInvalidEnv(t *testing.T) {
 }
 
 func TestLoadPriceTable_DefaultsWhenEmpty(t *testing.T) {
-	pt, err := loadPriceTable("")
+	pt, err := cli.LoadPriceTable("")
 	if err != nil {
-		t.Fatalf("loadPriceTable(empty): %v", err)
+		t.Fatalf("cli.LoadPriceTable(empty): %v", err)
 	}
 	if len(pt.PerGBMonth) == 0 {
 		t.Error("default price table has no per-GB rates")
@@ -167,7 +161,7 @@ func TestLoadPriceTable_DefaultsWhenEmpty(t *testing.T) {
 }
 
 func TestLoadPriceTable_MissingFile(t *testing.T) {
-	_, err := loadPriceTable("/no/such/file.json")
+	_, err := cli.LoadPriceTable("/no/such/file.json")
 	if err == nil {
 		t.Fatal("loadPriceTable should error on missing file")
 	}

@@ -79,24 +79,24 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 		data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
 	}
 
-	confs, order, totals := h.aggregateDashboard(logger, views, &data)
-	data.Configurations = len(confs)
-	if totals.objects > 0 {
-		data.TotalObjectsH = humanfmt.CountUint64(totals.objects)
+	agg := h.aggregateDashboard(logger, views, &data)
+	data.Configurations = len(agg.Confs)
+	if agg.Totals.objects > 0 {
+		data.TotalObjectsH = humanfmt.CountUint64(agg.Totals.objects)
 	}
-	if totals.bytes > 0 {
-		data.TotalBytesH = humanfmt.BytesUint64(totals.bytes)
+	if agg.Totals.bytes > 0 {
+		data.TotalBytesH = humanfmt.BytesUint64(agg.Totals.bytes)
 	}
-	if totals.disk > 0 {
-		data.DiskUsedH = humanfmt.BytesUint64(uint64(totals.disk))
+	if agg.Totals.disk > 0 {
+		data.DiskUsedH = humanfmt.BytesUint64(uint64(agg.Totals.disk))
 	}
 	h.fillBudgetCounters(&data)
 	h.fillAutoLoadCounters(r.Context(), &data, views)
 
 	// Stable, alphabetical order for the page rows.
-	sort.Strings(order)
-	for _, key := range order {
-		c := confs[key]
+	sort.Strings(agg.Order)
+	for _, key := range agg.Order {
+		c := agg.Confs[key]
 		row := DashboardConfig{
 			SourceBucket:  c.Src,
 			InventoryName: c.ID,
@@ -172,30 +172,36 @@ type dashTotals struct {
 	disk    int64
 }
 
-func (h *Handlers) aggregateDashboard(logger *zerolog.Logger, views []inventory.MergedInventory, data *DashboardData) (map[string]*dashConfAgg, []string, dashTotals) {
-	confs := map[string]*dashConfAgg{}
-	var order []string
-	var totals dashTotals
+// dashAggregate bundles aggregateDashboard's three outputs so the
+// caller doesn't juggle a triple return.
+type dashAggregate struct {
+	Confs  map[string]*dashConfAgg
+	Order  []string
+	Totals dashTotals
+}
+
+func (h *Handlers) aggregateDashboard(logger *zerolog.Logger, views []inventory.MergedInventory, data *DashboardData) dashAggregate {
+	agg := dashAggregate{Confs: map[string]*dashConfAgg{}}
 	for i := range views {
 		v := &views[i]
 		key := v.ConfigID()
 		data.TotalRuns++
 
-		c, ok := confs[key]
+		c, ok := agg.Confs[key]
 		if !ok {
 			c = &dashConfAgg{Src: v.SourceBucket, ID: v.InventoryName}
-			confs[key] = c
-			order = append(order, key)
+			agg.Confs[key] = c
+			agg.Order = append(agg.Order, key)
 		}
 		c.TotalRuns++
 		if c.LatestRun == "" && v.Run != "" {
 			c.LatestRun = v.Run
 			c.LatestState = v.State
 		}
-		h.tallyView(logger, v, c, data, &totals)
+		h.tallyView(logger, v, c, data, &agg.Totals)
 	}
 
-	return confs, order, totals
+	return agg
 }
 
 func (h *Handlers) tallyView(logger *zerolog.Logger, v *inventory.MergedInventory, c *dashConfAgg, data *DashboardData, totals *dashTotals) {

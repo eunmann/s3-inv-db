@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -16,6 +17,22 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/server"
 	"github.com/rs/zerolog/log"
+)
+
+// ErrNegativeSize is returned when a human size string parses to a negative value.
+var ErrNegativeSize = errors.New("negative size")
+
+// Server-flag defaults split out as constants so the call-site reads
+// declaratively and `mnd` lint stops flagging the literals.
+const (
+	defaultPollInterval      = 15 * time.Minute
+	defaultIndexRatio        = 0.30
+	defaultAutoLoadRetention = 2
+	headroomDivisor          = 5
+	// Power-of-two byte multipliers for "KiB/MiB/GiB/TiB" suffixes.
+	bitsPerTebibyte = 40
+	bitsPerGibibyte = 30
+	bitsPerMebibyte = 20
 )
 
 func main() {
@@ -37,12 +54,12 @@ func run() error {
 	stateDB := flag.String("state-db", envOr("S3INV_STATE_DB", ""), "SQLite path for persisted state (default: <cache-dir>/state.db)")
 
 	autoLoad := flag.Bool("auto-load", envBool("S3INV_AUTO_LOAD", false), "enable background discovery + auto-load of new inventory runs; requires --max-index-disk")
-	pollInterval := flag.Duration("auto-load-poll-interval", envDuration("S3INV_AUTO_LOAD_POLL_INTERVAL", 15*time.Minute), "discovery polling interval")
+	pollInterval := flag.Duration("auto-load-poll-interval", envDuration("S3INV_AUTO_LOAD_POLL_INTERVAL", defaultPollInterval), "discovery polling interval")
 	maxIndexDisk := flag.String("max-index-disk", envOr("S3INV_MAX_INDEX_DISK", ""), "max cumulative on-disk bytes for loaded indexes (e.g. 100GB); required with --auto-load")
 	headroom := flag.String("index-headroom", envOr("S3INV_INDEX_HEADROOM", ""), "reserved unused space inside --max-index-disk; default 20% of the cap")
 	autoLoadConcurrency := flag.Int("max-auto-load-concurrency", envInt("S3INV_MAX_AUTO_LOAD_CONCURRENCY", 1), "max concurrent auto-loads")
-	autoLoadRetention := flag.Uint("auto-load-retention-default", uint(envInt("S3INV_AUTO_LOAD_RETENTION_DEFAULT", 2)), "default per-config run-retention when a configuration sets none")
-	indexRatio := flag.Float64("index-ratio", envFloat("S3INV_INDEX_RATIO", 0.30), "estimate multiplier: final index bytes ≈ ratio × compressed manifest total")
+	autoLoadRetention := flag.Uint("auto-load-retention-default", uint(envInt("S3INV_AUTO_LOAD_RETENTION_DEFAULT", defaultAutoLoadRetention)), "default per-config run-retention when a configuration sets none")
+	indexRatio := flag.Float64("index-ratio", envFloat("S3INV_INDEX_RATIO", defaultIndexRatio), "estimate multiplier: final index bytes ≈ ratio × compressed manifest total")
 	flag.Parse()
 
 	fileCfg, err := appconfig.Load(*configPath)
@@ -81,7 +98,7 @@ func run() error {
 		return fmt.Errorf("index_headroom: %w", err)
 	}
 	if capBytes > 0 && headBytes == 0 {
-		headBytes = capBytes / 5
+		headBytes = capBytes / headroomDivisor
 	}
 
 	logger := logging.NewLogger(finalVerbose, finalPretty)
@@ -208,11 +225,11 @@ func parseSize(s string) (uint64, error) {
 	upper := strings.ToUpper(s)
 	switch {
 	case strings.HasSuffix(upper, "TIB"):
-		mult, s = 1<<40, s[:len(s)-3]
+		mult, s = 1<<bitsPerTebibyte, s[:len(s)-3]
 	case strings.HasSuffix(upper, "GIB"):
-		mult, s = 1<<30, s[:len(s)-3]
+		mult, s = 1<<bitsPerGibibyte, s[:len(s)-3]
 	case strings.HasSuffix(upper, "MIB"):
-		mult, s = 1<<20, s[:len(s)-3]
+		mult, s = 1<<bitsPerMebibyte, s[:len(s)-3]
 	case strings.HasSuffix(upper, "KIB"):
 		mult, s = 1<<10, s[:len(s)-3]
 	case strings.HasSuffix(upper, "TB"):
@@ -229,7 +246,7 @@ func parseSize(s string) (uint64, error) {
 		return 0, fmt.Errorf("parse %q: %w", s, err)
 	}
 	if n < 0 {
-		return 0, fmt.Errorf("negative size %q", s)
+		return 0, fmt.Errorf("%w %q", ErrNegativeSize, s)
 	}
 
 	return uint64(n * float64(mult)), nil

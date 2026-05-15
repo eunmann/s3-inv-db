@@ -25,10 +25,22 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Sentinel errors keep `err113` happy and let callers test for the
+// specific failure mode with errors.Is.
+var (
+	ErrUsage           = errors.New("usage: s3-inv-db <command> [options]\ncommands: build, query")
+	ErrUnknownCommand  = errors.New("unknown command")
+	ErrOutRequired     = errors.New("--out is required")
+	ErrManifestRequire = errors.New("--s3-manifest is required")
+	ErrIndexRequired   = errors.New("--index is required")
+	ErrPrefixRequired  = errors.New("--prefix is required")
+	ErrPrefixNotFound  = errors.New("prefix not found")
+)
+
 // Run executes the CLI with the given arguments.
 func Run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: s3-inv-db <command> [options]\ncommands: build, query")
+		return ErrUsage
 	}
 
 	cmd := args[0]
@@ -40,7 +52,7 @@ func Run(args []string) error {
 	case "query":
 		return runQuery(cmdArgs)
 	default:
-		return fmt.Errorf("unknown command: %s", cmd)
+		return fmt.Errorf("%w: %s", ErrUnknownCommand, cmd)
 	}
 }
 
@@ -79,10 +91,10 @@ func runBuild(args []string) error {
 	logging.Init(finalVerbose, finalPretty)
 
 	if *outDir == "" {
-		return errors.New("--out is required")
+		return ErrOutRequired
 	}
 	if *s3Manifest == "" {
-		return errors.New("--s3-manifest is required")
+		return ErrManifestRequire
 	}
 
 	return runBuildExtSort(*outDir, *s3Manifest, *workers, *maxDepth, *memBudgetStr, *segmentPrefixes, baseLogger)
@@ -219,10 +231,10 @@ func runQuery(args []string) error {
 	logger := logging.L()
 
 	if *indexDir == "" {
-		return errors.New("--index is required")
+		return ErrIndexRequired
 	}
 	if *prefix == "" {
-		return errors.New("--prefix is required")
+		return ErrPrefixRequired
 	}
 
 	logger.Debug().Str("index_dir", *indexDir).Str("prefix", *prefix).Msg("opening index")
@@ -235,14 +247,14 @@ func runQuery(args []string) error {
 
 	pos, ok := idx.Lookup(*prefix)
 	if !ok {
-		return fmt.Errorf("prefix not found: %s", *prefix)
+		return fmt.Errorf("%w: %s", ErrPrefixNotFound, *prefix)
 	}
 
 	stats := idx.Stats(pos)
-	// Query results go to stdout as formatted output (not logs)
-	fmt.Printf("Prefix: %s\n", *prefix)
-	fmt.Printf("Objects: %d\n", stats.ObjectCount)
-	fmt.Printf("Bytes: %d\n", stats.TotalBytes)
+	// Query results go to stdout as formatted output (not logs).
+	fmt.Fprintf(os.Stdout, "Prefix: %s\n", *prefix)
+	fmt.Fprintf(os.Stdout, "Objects: %d\n", stats.ObjectCount)
+	fmt.Fprintf(os.Stdout, "Bytes: %d\n", stats.TotalBytes)
 
 	if !*showTiers && !*estimateCost {
 		return nil
@@ -279,14 +291,14 @@ func resolveString(cfg *appconfig.Config, flagVal string, explicit bool, get fun
 // printTierAndCostInfo handles tier breakdown and cost estimation output.
 func printTierAndCostInfo(idx *indexread.Index, pos uint64, showTiers, estimateCost bool, priceTablePath string) error {
 	if !idx.HasTierData() {
-		fmt.Println("\nNo tier data available (index was built without tier tracking)")
+		fmt.Fprintln(os.Stdout, "\nNo tier data available (index was built without tier tracking)")
 
 		return nil
 	}
 
 	breakdown := idx.TierBreakdown(pos)
 	if len(breakdown) == 0 {
-		fmt.Println("\nNo tier data at this prefix")
+		fmt.Fprintln(os.Stdout, "\nNo tier data at this prefix")
 
 		return nil
 	}
@@ -304,9 +316,9 @@ func printTierAndCostInfo(idx *indexread.Index, pos uint64, showTiers, estimateC
 
 // printTierBreakdown outputs the tier breakdown to stdout.
 func printTierBreakdown(breakdown []format.TierBreakdown) {
-	fmt.Println("\nTier breakdown:")
+	fmt.Fprintln(os.Stdout, "\nTier breakdown:")
 	for _, tb := range breakdown {
-		fmt.Printf("  %s: %d objects, %d bytes\n", tb.TierName, tb.ObjectCount, tb.Bytes)
+		fmt.Fprintf(os.Stdout, "  %s: %d objects, %d bytes\n", tb.TierName, tb.ObjectCount, tb.Bytes)
 	}
 }
 
@@ -318,8 +330,8 @@ func printCostEstimate(breakdown []format.TierBreakdown, showTiers bool, priceTa
 	}
 
 	cost := pricing.ComputeMonthlyCost(breakdown, pt)
-	fmt.Println("\nEstimated monthly cost:")
-	fmt.Printf("  Total: %s/month\n", pricing.FormatCost(cost.TotalMicrodollars))
+	fmt.Fprintln(os.Stdout, "\nEstimated monthly cost:")
+	fmt.Fprintf(os.Stdout, "  Total: %s/month\n", pricing.FormatCost(cost.TotalMicrodollars))
 
 	if showTiers {
 		printPerTierCosts(cost.PerTierMicrodollars)
@@ -350,6 +362,6 @@ func printPerTierCosts(perTierMicrodollars map[string]uint64) {
 	}
 	sort.Strings(tierNames)
 	for _, tier := range tierNames {
-		fmt.Printf("  %s: %s/month\n", tier, pricing.FormatCost(perTierMicrodollars[tier]))
+		fmt.Fprintf(os.Stdout, "  %s: %s/month\n", tier, pricing.FormatCost(perTierMicrodollars[tier]))
 	}
 }

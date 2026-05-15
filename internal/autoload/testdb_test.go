@@ -1,6 +1,7 @@
-package autoload
+package autoload_test
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 
@@ -16,7 +17,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+	if _, err := db.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`); err != nil {
 		t.Fatalf("pragma: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })

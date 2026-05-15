@@ -11,6 +11,10 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
 
+// defaultObjectsPerRun is the default object count generated per
+// inventory run when --objects isn't supplied.
+const defaultObjectsPerRun = 10000
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -27,7 +31,7 @@ func run() error {
 	count := flag.Int("count", 3, "number of inventory configurations to generate")
 	runs := flag.Int("runs-per-inventory", 1, "number of timestamped runs per inventory (target=s3)")
 	runStep := flag.Duration("run-step", 24*time.Hour, "spacing between consecutive runs (target=s3)")
-	objects := flag.Int("objects", 10000, "objects per inventory run")
+	objects := flag.Int("objects", defaultObjectsPerRun, "objects per inventory run")
 	preset := flag.String("preset", "realistic", "config preset (small/medium/large/realistic)")
 	seed := flag.Int64("seed", 0, "random seed (0 = use default seed)")
 	verbose := flag.Bool("verbose", false, "enable debug logging")
