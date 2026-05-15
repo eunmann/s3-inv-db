@@ -34,6 +34,7 @@ func managerErrorStatus(err error) (status int, msg string) {
 		// — useful diagnostic and contains no internal infrastructure detail.
 		return http.StatusConflict, err.Error()
 	}
+
 	return http.StatusInternalServerError, "operation failed"
 }
 

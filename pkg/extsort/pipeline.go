@@ -132,6 +132,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		if errors.Is(err, context.Canceled) {
 			log.Warn().Msg("pipeline cancelled during ingest phase")
 		}
+
 		return nil, fmt.Errorf("ingest phase: %w", err)
 	}
 	ingestDuration := time.Since(ingestStart)
@@ -156,6 +157,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		if errors.Is(err, context.Canceled) {
 			log.Warn().Msg("pipeline cancelled during merge phase")
 		}
+
 		return nil, fmt.Errorf("merge/build phase: %w", err)
 	}
 	mergeDuration := time.Since(mergeStart)
@@ -264,6 +266,7 @@ func estimateObjectCount(fileSize int64, format s3fetch.InventoryFormat) int {
 	if estimate > 10_000_000 { // Cap at 10M to prevent excessive preallocation
 		return 10_000_000
 	}
+
 	return int(estimate)
 }
 
@@ -371,6 +374,7 @@ func (c *ingestConfig) formatString() string {
 	if c.format == s3fetch.InventoryFormatParquet {
 		return "Parquet"
 	}
+
 	return "CSV"
 }
 
@@ -391,10 +395,7 @@ func (p *Pipeline) computeWorkerCount(log *zerolog.Logger) int {
 		p.config.MemoryBudget.RunBufferBudget() - p.config.MemoryBudget.MergeBudget() -
 		p.config.MemoryBudget.IndexBuildBudget()
 
-	maxWorkersFromBudget := int(headroom / bytesPerWorkerInFlight)
-	if maxWorkersFromBudget < 2 {
-		maxWorkersFromBudget = 2
-	}
+	maxWorkersFromBudget := max(int(headroom/bytesPerWorkerInFlight), 2)
 
 	if numWorkers > maxWorkersFromBudget {
 		log.Warn().
@@ -405,6 +406,7 @@ func (p *Pipeline) computeWorkerCount(log *zerolog.Logger) int {
 			Msg("reducing worker count to fit memory budget")
 		numWorkers = maxWorkersFromBudget
 	}
+
 	return numWorkers
 }
 
@@ -422,11 +424,9 @@ func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
 	// Start workers
 	var wg sync.WaitGroup
 	for range cfg.numWorkers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			p.chunkWorker(ctx, jobs, results)
-		}()
+		})
 	}
 
 	// Start job sender
@@ -489,6 +489,7 @@ func (p *Pipeline) processIngestResults(
 			for range results {
 				continue
 			}
+
 			return firstErr
 		default:
 		}
@@ -598,6 +599,7 @@ func (p *Pipeline) chunkWorker(ctx context.Context, jobs <-chan chunkJob, result
 			case results <- objectBatch{err: fmt.Errorf("chunk %d: %w", job.index, err)}:
 			case <-ctx.Done():
 			}
+
 			continue
 		}
 
@@ -631,6 +633,7 @@ func createInventoryReader(body io.ReadCloser, key string, cfg chunkConfig) (inv
 	if cfg.format == s3fetch.InventoryFormatParquet {
 		return createParquetReader(body, cfg.fileSize)
 	}
+
 	return createCSVReader(body, key, cfg)
 }
 
@@ -646,6 +649,7 @@ func createParquetReader(body io.ReadCloser, fileSize int64) (inventory.Inventor
 			if err != nil {
 				return nil, fmt.Errorf("create parquet reader from readerAt: %w", err)
 			}
+
 			return reader, nil
 		}
 	}
@@ -654,6 +658,7 @@ func createParquetReader(body io.ReadCloser, fileSize int64) (inventory.Inventor
 	if err != nil {
 		return nil, fmt.Errorf("create parquet reader from stream: %w", err)
 	}
+
 	return reader, nil
 }
 
@@ -669,6 +674,7 @@ func createCSVReader(body io.ReadCloser, key string, cfg chunkConfig) (inventory
 	if err != nil {
 		return nil, fmt.Errorf("create csv reader: %w", err)
 	}
+
 	return reader, nil
 }
 
@@ -787,6 +793,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 		if err := writer.WriteSorted(rows); err != nil {
 			writer.Close()
 			os.Remove(runPath)
+
 			return fmt.Errorf("write sorted: %w", err)
 		}
 		writeErr = writer.Close()
@@ -798,6 +805,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 		if err := writer.WriteSorted(rows); err != nil {
 			writer.Close()
 			os.Remove(runPath)
+
 			return fmt.Errorf("write sorted: %w", err)
 		}
 		writeErr = writer.Close()
@@ -805,6 +813,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 
 	if writeErr != nil {
 		os.Remove(runPath)
+
 		return fmt.Errorf("close run file: %w", writeErr)
 	}
 
@@ -848,6 +857,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 		if err := builder.FinalizeWithContext(ctx); err != nil {
 			return 0, 0, fmt.Errorf("finalize empty index: %w", err)
 		}
+
 		return 0, 0, nil
 	}
 
@@ -944,11 +954,13 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 	builder, err := NewIndexBuilderWithCapacity(outDir, p.config.TempDir, prefixCount, p.config.UseSegmentEncoding)
 	if err != nil {
 		reader.Close()
+
 		return 0, 0, fmt.Errorf("create index builder: %w", err)
 	}
 
 	if err := builder.AddAllWithContext(ctx, mergeIter); err != nil {
 		builder.cleanup()
+
 		return 0, 0, fmt.Errorf("build index: %w", err)
 	}
 
@@ -972,8 +984,10 @@ func (s *singleRunIterator) Next() (*PrefixRow, error) {
 		if errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
+
 		return nil, fmt.Errorf("read from run: %w", err)
 	}
+
 	return &s.row, nil
 }
 
@@ -985,6 +999,7 @@ func (s *singleRunIterator) Close() error {
 	if err := s.reader.Close(); err != nil {
 		return fmt.Errorf("close run reader: %w", err)
 	}
+
 	return nil
 }
 
@@ -992,6 +1007,7 @@ func (s *singleRunIterator) RemoveAll() error {
 	if err := s.reader.Remove(); err != nil {
 		return fmt.Errorf("remove run file: %w", err)
 	}
+
 	return nil
 }
 

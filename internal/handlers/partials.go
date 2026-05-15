@@ -22,6 +22,7 @@ func (h *Handlers) LoadInventoryRowPartial(w http.ResponseWriter, r *http.Reques
 	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := h.manager.Load(context.WithoutCancel(r.Context()), id); err != nil {
 		respondManagerErrorHTML(w, r, err, "load inventory")
+
 		return
 	}
 	h.renderInventoryRow(w, r, id)
@@ -32,6 +33,7 @@ func (h *Handlers) UnloadInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := h.manager.Unload(id); err != nil {
 		respondManagerErrorHTML(w, r, err, "unload inventory")
+
 		return
 	}
 	h.renderInventoryRow(w, r, id)
@@ -43,6 +45,7 @@ func (h *Handlers) DeleteInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := h.manager.Remove(id); err != nil && !errors.Is(err, inventory.ErrNotFound) {
 		respondManagerErrorHTML(w, r, err, "delete inventory")
+
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -62,19 +65,23 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		logger.Error().Err(err).Str("src", src).Str("id", id).Str("run", run).Msg("find discovered inventory")
 		http.Error(w, "failed to find inventory", http.StatusBadGateway)
+
 		return
 	}
 	if disc.ManifestKey == "" || disc.Run == "" {
 		http.Error(w, "no completed run for this inventory", http.StatusNotFound)
+
 		return
 	}
 	if h.jobMgr == nil {
 		http.Error(w, "jobs not configured", http.StatusServiceUnavailable)
+
 		return
 	}
 
 	if err := h.discovery.PrepareDiscovered(disc); err != nil {
 		respondManagerErrorHTML(w, r, err, "prepare discovered inventory")
+
 		return
 	}
 	composite := disc.CompositeID()
@@ -84,6 +91,7 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	// spawning a duplicate that will fail with an InvalidState error.
 	if existing, err := h.jobStore.LatestForInventory(composite); err == nil && existing.State.IsLive() {
 		h.renderDiscoveredRowFrom(w, r, disc)
+
 		return
 	}
 
@@ -97,6 +105,7 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	})
 	if err != nil {
 		respondManagerErrorHTML(w, r, err, "submit load job")
+
 		return
 	}
 	// Headers must commit BEFORE WriteHeader, otherwise the Set on
@@ -111,11 +120,13 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 func (h *Handlers) CancelJob(w http.ResponseWriter, r *http.Request) {
 	if h.jobMgr == nil {
 		http.Error(w, "jobs not configured", http.StatusServiceUnavailable)
+
 		return
 	}
 	id := jobs.ID(chi.URLParam(r, "id"))
 	if err := h.jobMgr.Cancel(id); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
+
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
@@ -131,6 +142,7 @@ func (h *Handlers) UnloadDiscoveredRowPartial(w http.ResponseWriter, r *http.Req
 	logger := zerolog.Ctx(r.Context())
 	if err := h.manager.Unload(composite); err != nil {
 		respondManagerErrorHTML(w, r, err, "unload inventory")
+
 		return
 	}
 	if h.loader != nil {
@@ -155,11 +167,13 @@ func (h *Handlers) PinDiscoveredRowPartial(w http.ResponseWriter, r *http.Reques
 	composite := inventory.ID(src + "/" + name + "/" + run)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid form body", http.StatusBadRequest)
+
 		return
 	}
 	pinned := parseBoolToggle(r.FormValue("pinned"))
 	if err := h.manager.SetPinned(composite, pinned); err != nil {
 		respondManagerErrorHTML(w, r, err, "set pin")
+
 		return
 	}
 	h.renderDiscoveredRow(w, r, src, name, run)
@@ -180,6 +194,7 @@ func (h *Handlers) renderInventoryRow(w http.ResponseWriter, r *http.Request, id
 	info, ok := h.manager.Get(id)
 	if !ok {
 		http.Error(w, "inventory not found", http.StatusNotFound)
+
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -197,6 +212,7 @@ func (h *Handlers) renderDiscoveredRow(w http.ResponseWriter, r *http.Request, s
 	if err != nil {
 		logger.Error().Err(err).Str("src", src).Str("id", id).Str("run", run).Msg("find discovered inventory for row render")
 		http.Error(w, "failed to render row", http.StatusBadGateway)
+
 		return
 	}
 	h.renderDiscoveredRowFrom(w, r, disc)
@@ -208,6 +224,7 @@ func (h *Handlers) renderDiscoveredRow(w http.ResponseWriter, r *http.Request, s
 // the job's state.
 type DiscoveredRowView struct {
 	inventory.MergedInventory
+
 	LatestJob   *jobs.Job
 	CacheBytes  int64  // 0 when no on-disk cache exists
 	CacheBytesH string // humanfmt.Bytes(CacheBytes); empty when zero
@@ -276,10 +293,12 @@ func (h *Handlers) cacheSize(r *http.Request, disc inventory.Inventory) (bytes i
 			Str("name", disc.InventoryName).
 			Str("run", disc.Run).
 			Msg("measure cache size")
+
 		return 0, ""
 	}
 	if n <= 0 {
 		return 0, ""
 	}
+
 	return n, humanfmt.BytesUint64(uint64(n))
 }

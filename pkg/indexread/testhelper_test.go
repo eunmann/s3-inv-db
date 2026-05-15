@@ -15,6 +15,7 @@ import (
 // Sizes are assigned based on key index.
 func buildIndexFromKeys(t *testing.T, outDir string, keys []string) error {
 	t.Helper()
+
 	return buildIndexFromKeysWithSizes(t, outDir, keys, nil)
 }
 
@@ -107,6 +108,7 @@ func splitLines(s string) []string {
 	if start < len(s) {
 		lines = append(lines, s[start:])
 	}
+
 	return lines
 }
 
@@ -121,6 +123,7 @@ func splitCSVLine(line string) []string {
 		}
 	}
 	parts = append(parts, line[start:])
+
 	return parts
 }
 
@@ -128,6 +131,7 @@ func splitCSVLine(line string) []string {
 func setupTestIndex(t *testing.T) string {
 	t.Helper()
 	tmpDir := t.TempDir()
+
 	return filepath.Join(tmpDir, "index")
 }
 

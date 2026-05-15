@@ -128,6 +128,7 @@ func (b *StreamingMPHFBuilder) Add(prefix string, pos uint64) error {
 
 	b.count++
 	b.totalBytes += uint64(len(prefix))
+
 	return nil
 }
 
@@ -145,6 +146,7 @@ func (b *StreamingMPHFBuilder) Close() error {
 		b.tempFile.Close()
 		os.Remove(b.tempPath)
 	}
+
 	return nil
 }
 
@@ -159,6 +161,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 
 	if b.count == 0 {
 		log.Debug().Msg("MPHF: writing empty (zero prefixes)")
+
 		return b.writeEmpty(outDir)
 	}
 
@@ -194,11 +197,13 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	if err != nil {
 		mphFile.Close()
 		os.Remove(mphPath)
+
 		return fmt.Errorf("marshal MPHF: %w", err)
 	}
 	if _, err := mphFile.Write(data); err != nil {
 		mphFile.Close()
 		os.Remove(mphPath)
+
 		return fmt.Errorf("write MPHF: %w", err)
 	}
 	mphFile.Close()
@@ -336,10 +341,7 @@ func (r *prefixChunkReader) ReadChunk() ([]prefixChunkItem, error) {
 
 	// Determine chunk size for this iteration
 	remaining := r.n - r.processed
-	thisChunk := r.chunkSize
-	if remaining < thisChunk {
-		thisChunk = remaining
-	}
+	thisChunk := min(remaining, r.chunkSize)
 
 	// Pre-allocate buffer for prefixes (estimate 24 bytes average)
 	const estimatedAvgPrefixLen = 24
@@ -393,10 +395,7 @@ func (b *StreamingMPHFBuilder) computeFingerprintsParallel(
 	preorderPositions []uint64,
 	orderedPrefixOffsets []uint64,
 ) error {
-	numWorkers := runtime.NumCPU()
-	if numWorkers < 1 {
-		numWorkers = 1
-	}
+	numWorkers := max(runtime.NumCPU(), 1)
 
 	const chunkSize = 50000
 	workChan := make(chan []prefixChunkItem, numWorkers*2)
@@ -405,11 +404,9 @@ func (b *StreamingMPHFBuilder) computeFingerprintsParallel(
 	// Start workers
 	var wg sync.WaitGroup
 	for range numWorkers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			b.fingerprintWorker(workChan, errChan, mph, fingerprints, preorderPositions, orderedPrefixOffsets)
-		}()
+		})
 	}
 
 	// Read and dispatch chunks
@@ -447,6 +444,7 @@ func (b *StreamingMPHFBuilder) fingerprintWorker(
 				case errChan <- fmt.Errorf("MPHF lookup failed for prefix at index %d", item.index):
 				default:
 				}
+
 				return
 			}
 			hashPos := int(hashVal - 1)
@@ -504,6 +502,7 @@ func (b *StreamingMPHFBuilder) writePrefixBlobPreorder(outDir string) error {
 	// Seek to start of temp file
 	if _, err := b.tempFile.Seek(0, 0); err != nil {
 		writer.Close()
+
 		return fmt.Errorf("seek temp file: %w", err)
 	}
 	reader := bufio.NewReaderSize(b.tempFile, b.bufferSize)
@@ -519,6 +518,7 @@ func (b *StreamingMPHFBuilder) writePrefixBlobPreorder(outDir string) error {
 		// Read prefix length
 		if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
 			writer.Close()
+
 			return fmt.Errorf("read prefix length at %d: %w", i, err)
 		}
 		prefixLen := binary.LittleEndian.Uint32(lenBuf[:])
@@ -532,12 +532,14 @@ func (b *StreamingMPHFBuilder) writePrefixBlobPreorder(outDir string) error {
 		// Read prefix
 		if _, err := io.ReadFull(reader, prefixBuf); err != nil {
 			writer.Close()
+
 			return fmt.Errorf("read prefix at %d: %w", i, err)
 		}
 
 		// Write to blob (WriteBytes avoids string conversion)
 		if err := writer.WriteBytes(prefixBuf); err != nil {
 			writer.Close()
+
 			return fmt.Errorf("write prefix %d to blob: %w", i, err)
 		}
 	}
@@ -556,6 +558,7 @@ func (b *StreamingMPHFBuilder) writePrefixBlobSegmented(outDir string) error {
 	// Seek to start of temp file
 	if _, err := b.tempFile.Seek(0, 0); err != nil {
 		writer.Close()
+
 		return fmt.Errorf("seek temp file: %w", err)
 	}
 	reader := bufio.NewReaderSize(b.tempFile, b.bufferSize)
@@ -571,6 +574,7 @@ func (b *StreamingMPHFBuilder) writePrefixBlobSegmented(outDir string) error {
 		// Read prefix length
 		if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
 			writer.Close()
+
 			return fmt.Errorf("read prefix length at %d: %w", i, err)
 		}
 		prefixLen := binary.LittleEndian.Uint32(lenBuf[:])
@@ -584,12 +588,14 @@ func (b *StreamingMPHFBuilder) writePrefixBlobSegmented(outDir string) error {
 		// Read prefix
 		if _, err := io.ReadFull(reader, prefixBuf); err != nil {
 			writer.Close()
+
 			return fmt.Errorf("read prefix at %d: %w", i, err)
 		}
 
 		// Write to segmented blob
 		if err := writer.WritePrefix(string(prefixBuf)); err != nil {
 			writer.Close()
+
 			return fmt.Errorf("write prefix %d to segmented blob: %w", i, err)
 		}
 	}
@@ -631,6 +637,7 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 		if err != nil {
 			return fmt.Errorf("create empty segmented prefix writer: %w", err)
 		}
+
 		return writer.Close()
 	default:
 		blobPath := filepath.Join(outDir, "prefix_blob.bin")
@@ -639,6 +646,7 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 		if err != nil {
 			return fmt.Errorf("create empty blob writer: %w", err)
 		}
+
 		return writer.Close()
 	}
 }
@@ -659,11 +667,13 @@ func writeArraysParallel(outDir string, fingerprints, positions []uint64) error 
 		fpWriter, err := NewArrayWriter(fpPath, 8)
 		if err != nil {
 			fpErr = fmt.Errorf("create fingerprint writer: %w", err)
+
 			return
 		}
 		if err := fpWriter.WriteU64Batch(fingerprints); err != nil {
 			fpWriter.Close()
 			fpErr = fmt.Errorf("write fingerprints: %w", err)
+
 			return
 		}
 		if err := fpWriter.Close(); err != nil {
@@ -678,11 +688,13 @@ func writeArraysParallel(outDir string, fingerprints, positions []uint64) error 
 		posWriter, err := NewArrayWriter(posPath, 8)
 		if err != nil {
 			posErr = fmt.Errorf("create position writer: %w", err)
+
 			return
 		}
 		if err := posWriter.WriteU64Batch(positions); err != nil {
 			posWriter.Close()
 			posErr = fmt.Errorf("write positions: %w", err)
+
 			return
 		}
 		if err := posWriter.Close(); err != nil {
@@ -695,5 +707,6 @@ func writeArraysParallel(outDir string, fingerprints, positions []uint64) error 
 	if fpErr != nil {
 		return fpErr
 	}
+
 	return posErr
 }

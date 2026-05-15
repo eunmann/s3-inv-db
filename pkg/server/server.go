@@ -195,6 +195,7 @@ func (c configRetention) Retention(source, name string) uint32 {
 	if c.fallback > 0 {
 		return c.fallback
 	}
+
 	return 0
 }
 
@@ -231,6 +232,7 @@ func (s *Server) backfillTracker(logger zerolog.Logger) {
 
 func infoWithBytes(i inventory.Info, bytes uint64) inventory.Info {
 	i.IndexBytes = bytes
+
 	return i
 }
 
@@ -250,6 +252,7 @@ func (s *Server) recover(logger zerolog.Logger) {
 	infos, err := s.invStore.List()
 	if err != nil {
 		logger.Error().Err(err).Msg("list inventories at startup")
+
 		return
 	}
 	for i := range infos {
@@ -271,6 +274,7 @@ func (s *Server) recover(logger zerolog.Logger) {
 		}
 		if err := s.manager.Hydrate(*info, indexDir); err != nil {
 			logger.Error().Err(err).Stringer("id", info.ID).Msg("hydrate inventory")
+
 			continue
 		}
 		final, _ := s.manager.Get(info.ID)
@@ -313,6 +317,7 @@ func newDiscoveryWiring(cfg Config) (*s3disco.Discoverer, *loader.Loader, *s3fet
 	if err := os.MkdirAll(cfg.CacheDir, 0o755); err != nil {
 		return nil, nil, nil, fmt.Errorf("ensure cache dir %s: %w", cfg.CacheDir, err)
 	}
+
 	return disco, loader.New(cfg.CacheDir, s3Client), s3Client, nil
 }
 
@@ -353,6 +358,7 @@ func (s *Server) Run(ctx context.Context) error {
 		if err := s.server.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("shutdown: %w", err)
 		}
+
 		return nil
 
 	case err := <-errChan:

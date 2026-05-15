@@ -50,6 +50,7 @@ func TestWriteAndReadManifest(t *testing.T) {
 		info, ok := manifest.Files[name]
 		if !ok {
 			t.Errorf("File %q not in manifest", name)
+
 			continue
 		}
 		if info.Size != int64(len(data)) {

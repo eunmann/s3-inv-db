@@ -71,6 +71,7 @@ func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 
 	if wantsHTMXPartial(r) {
 		h.renderBrowseLevelPartial(w, r, inventoryID, prefix, sortBy, dir, page, pageSize)
+
 		return
 	}
 	h.renderBrowsePage(w, r, inventoryID, prefix, sortBy, dir, page, pageSize)
@@ -90,6 +91,7 @@ func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request,
 		var level BrowseLevel
 		err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
 			level = h.buildBrowseLevel(ctx, idx, inventoryID, prefix, sortBy, dir, page, pageSize)
+
 			return nil
 		})
 		// On ErrNotLoaded / ErrNotFound, fall through to the empty
@@ -110,6 +112,7 @@ func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Reque
 ) {
 	if inventoryID == "" {
 		http.Error(w, "inventory_id is required", http.StatusBadRequest)
+
 		return
 	}
 	ctx := r.Context()
@@ -117,6 +120,7 @@ func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Reque
 	var level BrowseLevel
 	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
 		level = h.buildBrowseLevel(ctx, idx, inventoryID, prefix, sortBy, dir, page, pageSize)
+
 		return nil
 	})
 	if err != nil {
@@ -129,6 +133,7 @@ func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Reque
 			logger.Error().Err(err).Msg("get index")
 			http.Error(w, "failed to get index", http.StatusInternalServerError)
 		}
+
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -156,6 +161,7 @@ func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, i
 	pos, ok := idx.Lookup(prefix)
 	if !ok {
 		level.NotFound = true
+
 		return level
 	}
 
@@ -192,6 +198,7 @@ func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, i
 			h.fillChildCosts(idx, level.Children)
 		}
 	}
+
 	return level
 }
 
@@ -199,6 +206,7 @@ func (h *Handlers) buildChildren(ctx context.Context, idx *indexread.Index, pos 
 	positions, err := idx.DescendantsAtDepthFiltered(pos, 1, indexread.Filter{})
 	if err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("descendants at depth 1")
+
 		return nil
 	}
 	hasTier := idx.HasTierData()
@@ -229,6 +237,7 @@ func (h *Handlers) buildChildren(ctx context.Context, idx *indexread.Index, pos 
 		}
 		children = append(children, child)
 	}
+
 	return children
 }
 
@@ -310,6 +319,7 @@ func (h *Handlers) BrowseLevelAPI(w http.ResponseWriter, r *http.Request) {
 
 	if inventoryID == "" {
 		WriteJSONError(w, http.StatusBadRequest, "inventory_id is required")
+
 		return
 	}
 
@@ -317,11 +327,13 @@ func (h *Handlers) BrowseLevelAPI(w http.ResponseWriter, r *http.Request) {
 	var level BrowseLevel
 	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
 		level = h.buildBrowseLevel(ctx, idx, inventoryID, prefix, sortBy, dir, page, pageSize)
+
 		return nil
 	})
 	if err != nil {
 		status, msg := managerErrorStatus(err)
 		WriteJSONError(w, status, msg)
+
 		return
 	}
 
@@ -396,16 +408,19 @@ func groupLoadedInventories(all []inventory.Info) []BrowseInventoryGroup {
 		out = append(out, *g)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ConfigLabel < out[j].ConfigLabel })
+
 	return out
 }
 
 func splitForGroup(info inventory.Info) (label string, opt BrowseInventoryOption) {
 	if src, inv, run, ok := info.ID.Split(); ok {
 		config := src + "/" + inv
+
 		return config, BrowseInventoryOption{
 			ID:    info.ID,
 			Label: config + " · " + humanfmt.RunTimestamp(run),
 		}
 	}
+
 	return "Other", BrowseInventoryOption{ID: info.ID, Label: info.Name}
 }

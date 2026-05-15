@@ -25,6 +25,7 @@ func openStore(t *testing.T) *inventory.Store {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+
 	return store
 }
 

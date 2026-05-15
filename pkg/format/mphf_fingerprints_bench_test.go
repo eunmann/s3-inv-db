@@ -292,10 +292,7 @@ func computeFingerprintsWithMode(
 	preorderPos []uint64,
 	mode FingerprintMode,
 ) error {
-	numWorkers := runtime.NumCPU()
-	if numWorkers < 1 {
-		numWorkers = 1
-	}
+	numWorkers := max(runtime.NumCPU(), 1)
 
 	const chunkSize = 50000
 	workChan := make(chan []prefixChunkItem, numWorkers*2)
@@ -303,11 +300,9 @@ func computeFingerprintsWithMode(
 
 	var wg sync.WaitGroup
 	for range numWorkers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			fingerprintModeWorker(workChan, errChan, mph, fingerprints, preorderPositions, orderedPrefixOffsets, preorderPos, mode)
-		}()
+		})
 	}
 
 	// Read and dispatch chunks using shared helper
@@ -346,6 +341,7 @@ func fingerprintModeWorker(
 				case errChan <- fmt.Errorf("MPHF lookup failed for prefix at index %d", item.index):
 				default:
 				}
+
 				return
 			}
 			hashPos := int(hashVal - 1)
@@ -414,6 +410,7 @@ func fnvZeroCopy(b []byte) uint64 {
 		hash *= prime64
 		hash ^= uint64(c)
 	}
+
 	return hash
 }
 
@@ -487,6 +484,7 @@ func fnv1aZeroCopy(b []byte) uint64 {
 		hash ^= uint64(c)
 		hash *= prime64
 	}
+
 	return hash
 }
 

@@ -26,6 +26,7 @@ func newMinIOS3Client(t *testing.T) *s3.Client {
 	if err != nil {
 		t.Fatalf("newS3Client: %v", err)
 	}
+
 	return c
 }
 
@@ -128,6 +129,7 @@ func getManifest(t *testing.T, c *s3.Client, bucket, key string) map[string]any 
 	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
 		t.Fatalf("decode manifest: %v", err)
 	}
+
 	return m
 }
 
@@ -153,5 +155,6 @@ func getCSVGzObjectCount(t *testing.T, c *s3.Client, bucket, key string) int {
 	if err != nil {
 		t.Fatalf("csv.ReadAll: %v", err)
 	}
+
 	return len(rows)
 }

@@ -61,6 +61,7 @@ func isMutating(method string) bool {
 	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 		return true
 	}
+
 	return false
 }
 
@@ -73,6 +74,7 @@ func requireDiscoveryMiddleware(enabled func() bool) func(http.Handler) http.Han
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !enabled() {
 				http.Error(w, "discovery not configured (start the server with --s3-source)", http.StatusServiceUnavailable)
+
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -94,6 +96,7 @@ func sameOriginMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !isMutating(r.Method) {
 			next.ServeHTTP(w, r)
+
 			return
 		}
 		origin := r.Header.Get("Origin")
@@ -102,6 +105,7 @@ func sameOriginMiddleware(next http.Handler) http.Handler {
 		}
 		if origin == "" {
 			next.ServeHTTP(w, r)
+
 			return
 		}
 		if !sameOrigin(origin, r.Host) {
@@ -111,6 +115,7 @@ func sameOriginMiddleware(next http.Handler) http.Handler {
 				Str("path", r.URL.Path).
 				Msg("rejecting cross-origin mutating request")
 			http.Error(w, "cross-origin request rejected", http.StatusForbidden)
+
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -131,5 +136,6 @@ func sameOrigin(origin, host string) bool {
 	if u.Host == "" {
 		return false
 	}
+
 	return strings.EqualFold(u.Host, host)
 }

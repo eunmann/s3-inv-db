@@ -153,6 +153,7 @@ func decodeErr(t *testing.T, body io.Reader) string {
 	if err := json.NewDecoder(body).Decode(&e); err != nil {
 		t.Fatalf("decode error body: %v", err)
 	}
+
 	return e.Error
 }
 
@@ -160,6 +161,7 @@ func decodeErr(t *testing.T, body io.Reader) string {
 func withURLParam(r *http.Request, key, value string) *http.Request {
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(key, value)
+
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }
 

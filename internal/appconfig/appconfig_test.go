@@ -14,6 +14,7 @@ func writeConfig(t *testing.T, contents string) string {
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+
 	return path
 }
 

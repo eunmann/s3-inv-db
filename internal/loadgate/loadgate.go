@@ -87,5 +87,6 @@ func (g *Gate) Load(ctx context.Context, id inventory.ID, build Build, opts Opti
 	if info, ok := g.manager.Get(id); ok && info.IndexBytes > 0 {
 		g.tracker.Add(string(id), info.IndexBytes)
 	}
+
 	return nil
 }

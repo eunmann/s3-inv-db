@@ -82,6 +82,7 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, run, manifestU
 		return "", fmt.Errorf("run pipeline: %w", err)
 	}
 	onProgress("done", 0, 0)
+
 	return outDir, nil
 }
 
@@ -96,6 +97,7 @@ func (l *Loader) RemoveCache(srcBucket, invID, run string) error {
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("remove cache dir %s: %w", dir, err)
 	}
+
 	return nil
 }
 
@@ -110,16 +112,19 @@ func (l *Loader) CacheSizeBytes(srcBucket, invID, run string) (int64, error) {
 			if os.IsNotExist(err) {
 				return nil
 			}
+
 			return err
 		}
 		if !info.IsDir() {
 			total += info.Size()
 		}
+
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
 		return 0, fmt.Errorf("walk cache dir %s: %w", dir, err)
 	}
+
 	return total, nil
 }
 

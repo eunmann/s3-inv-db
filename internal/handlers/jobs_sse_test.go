@@ -27,6 +27,7 @@ func openJobsTestDB(t *testing.T) *sql.DB {
 	if err := migrate.Apply(db); err != nil {
 		t.Fatalf("migrate.Apply: %v", err)
 	}
+
 	return db
 }
 
@@ -58,6 +59,7 @@ func newJobsHandlers(t *testing.T) (*Handlers, *jobs.Manager) {
 		JobStore:   jobStore,
 		JobBus:     bus,
 	})
+
 	return h, mgr
 }
 
@@ -85,6 +87,7 @@ func TestJobsStream_PushesEvents(t *testing.T) {
 	work := make(chan struct{})
 	job, err := mgr.Submit("src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
 		<-work
+
 		return nil
 	})
 	if err != nil {
@@ -157,6 +160,7 @@ func newHandlersWithHeartbeat(t *testing.T, hb time.Duration) *Handlers {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return NewWithConfig(Config{
 		Manager:      inventory.NewManager(),
 		Renderer:     renderer,

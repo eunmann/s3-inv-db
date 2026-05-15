@@ -146,6 +146,7 @@ func indexFromID(t *testing.T, id string) int {
 		return 2
 	}
 	t.Fatalf("unsupported test inv-id %q", id)
+
 	return 0
 }
 

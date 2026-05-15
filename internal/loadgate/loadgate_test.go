@@ -14,6 +14,7 @@ func newTestGate(capBytes, headroom uint64) (*Gate, *inventory.Manager, *budget.
 	mgr := inventory.NewManager()
 	tracker := budget.New(capBytes, headroom)
 	planner := budget.NewPlanner(tracker, nil)
+
 	return New(mgr, tracker, planner), mgr, tracker
 }
 
@@ -25,6 +26,7 @@ func TestGate_Load_RefusesWhenEstimateOverBudget(t *testing.T) {
 	}
 	build := func(_ context.Context, _ inventory.Info) (string, error) {
 		t.Fatal("build must not run when budget refuses")
+
 		return "", nil
 	}
 	err := gate.Load(context.Background(), id, build, Options{EstimateBytes: 500, Pin: true})
@@ -43,6 +45,7 @@ func TestGate_Load_ForceBypassesRefusal(t *testing.T) {
 	called := false
 	build := func(_ context.Context, _ inventory.Info) (string, error) {
 		called = true
+
 		return "", errors.New("build err on purpose")
 	}
 	_ = gate.Load(context.Background(), id, build, Options{EstimateBytes: 500, Force: true, Pin: true})

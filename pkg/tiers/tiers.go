@@ -130,6 +130,7 @@ func Resolve(id ID, size uint64) ID {
 	if id == ITFrequent && size < SmallObjectThresholdBytes {
 		return ITFrequentSmall
 	}
+
 	return id
 }
 
@@ -138,6 +139,7 @@ func (m *Mapping) ByID(id ID) Info {
 	if int(id) < len(m.Tiers) {
 		return m.Tiers[id]
 	}
+
 	return Info{ID: id, Name: "UNKNOWN", FilePrefix: "unknown"}
 }
 
@@ -177,6 +179,7 @@ func ReadManifest(dir string) (*TierManifest, error) {
 		if os.IsNotExist(err) {
 			return nil, nil // No tier data
 		}
+
 		return nil, fmt.Errorf("read tier manifest: %w", err)
 	}
 

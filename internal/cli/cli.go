@@ -145,8 +145,10 @@ func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudget
 		// Check if this was a cancellation
 		if errors.Is(err, context.Canceled) {
 			logger.Warn().Msg("build cancelled by user")
+
 			return fmt.Errorf("build cancelled: %w", err)
 		}
+
 		return fmt.Errorf("run pipeline: %w", err)
 	}
 
@@ -165,6 +167,7 @@ func determineMemoryBudget(cliValue string) (*membudget.Budget, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse --mem-budget: %w", err)
 		}
+
 		return membudget.New(membudget.Config{
 			TotalBytes: bytes,
 			Source:     membudget.BudgetSourceCLI,
@@ -177,6 +180,7 @@ func determineMemoryBudget(cliValue string) (*membudget.Budget, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse S3INV_MEM_BUDGET=%q: %w", envValue, err)
 		}
+
 		return membudget.New(membudget.Config{
 			TotalBytes: bytes,
 			Source:     membudget.BudgetSourceEnv,
@@ -250,6 +254,7 @@ func runQuery(args []string) error {
 func explicitFlags(fs *flag.FlagSet) map[string]bool {
 	out := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { out[f.Name] = true })
+
 	return out
 }
 
@@ -258,6 +263,7 @@ func resolveBool(cfg *appconfig.Config, flagVal, explicit bool, get func(*appcon
 	if cfg != nil {
 		p = get(cfg)
 	}
+
 	return appconfig.PickBool(flagVal, explicit, p)
 }
 
@@ -266,6 +272,7 @@ func resolveString(cfg *appconfig.Config, flagVal string, explicit bool, get fun
 	if cfg != nil {
 		p = get(cfg)
 	}
+
 	return appconfig.PickString(flagVal, explicit, p)
 }
 
@@ -273,12 +280,14 @@ func resolveString(cfg *appconfig.Config, flagVal string, explicit bool, get fun
 func printTierAndCostInfo(idx *indexread.Index, pos uint64, showTiers, estimateCost bool, priceTablePath string) error {
 	if !idx.HasTierData() {
 		fmt.Println("\nNo tier data available (index was built without tier tracking)")
+
 		return nil
 	}
 
 	breakdown := idx.TierBreakdown(pos)
 	if len(breakdown) == 0 {
 		fmt.Println("\nNo tier data at this prefix")
+
 		return nil
 	}
 
@@ -326,8 +335,10 @@ func loadPriceTable(path string) (pricing.PriceTable, error) {
 		if err != nil {
 			return pricing.PriceTable{}, fmt.Errorf("load price table: %w", err)
 		}
+
 		return pt, nil
 	}
+
 	return pricing.DefaultUSEast1Prices(), nil
 }
 

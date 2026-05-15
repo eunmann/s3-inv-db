@@ -3,6 +3,7 @@ package loader_test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -52,13 +53,7 @@ func TestBuildWith_BuildsIndexFromSeededManifest(t *testing.T) {
 		t.Errorf("outDir = %q, want %q", outDir, l.CacheDirFor(srcBucket, info.ID, run))
 	}
 	for _, want := range []string{"preparing", "done"} {
-		found := false
-		for _, s := range stages {
-			if s == want {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(stages, want)
 		if !found {
 			t.Errorf("stages = %v, missing %q", stages, want)
 		}

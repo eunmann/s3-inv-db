@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strconv"
+	"strings"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -77,6 +78,7 @@ func NewGenerator(cfg GeneratorConfig) *Generator {
 	if seed == 0 {
 		seed = 42
 	}
+
 	return &Generator{
 		cfg: cfg,
 		rng: rand.New(rand.NewSource(seed)),
@@ -122,13 +124,16 @@ func (g *Generator) generateKey() string {
 
 	// Build path
 	path := ""
+	var pathSb125 strings.Builder
 	for range depth {
 		segment := g.generateSegment()
-		path += segment + "/"
+		pathSb125.WriteString(segment + "/")
 	}
+	path += pathSb125.String()
 
 	// Add filename
 	path += g.generateFilename()
+
 	return path
 }
 
@@ -145,16 +150,19 @@ func (g *Generator) generateSegment() string {
 			fmt.Sprintf("hour=%02d", g.rng.Intn(24)), // hour partition
 			fmt.Sprintf("dt=%d-%02d-%02d", 2020+g.rng.Intn(5), 1+g.rng.Intn(12), 1+g.rng.Intn(28)),
 		}
+
 		return formats[g.rng.Intn(len(formats))]
 
 	case 1: // ID-like: user_12345, account_abc
 		prefixes := []string{"user", "account", "tenant", "org", "project"}
 		prefix := prefixes[g.rng.Intn(len(prefixes))]
 		id := g.rng.Intn(g.cfg.PrefixFanout * 100)
+
 		return fmt.Sprintf("%s_%05d", prefix, id)
 
 	case 2: // Category: logs, data, exports, backups
 		categories := []string{"logs", "data", "exports", "backups", "raw", "processed", "archive", "tmp"}
+
 		return categories[g.rng.Intn(len(categories))]
 
 	default: // Simple alphabetic: a, b, ..., z, aa, ab, ...
@@ -168,12 +176,14 @@ func (g *Generator) generateAlphaSegment() string {
 	if n < 26 {
 		return string(rune('a' + n))
 	}
+
 	return string(rune('a'+n/26-1)) + string(rune('a'+n%26))
 }
 
 func (g *Generator) generateFilename() string {
 	extensions := []string{".json", ".csv", ".parquet", ".txt", ".gz", ".log", ".dat"}
 	ext := extensions[g.rng.Intn(len(extensions))]
+
 	return fmt.Sprintf("file_%08x%s", g.rng.Uint32(), ext)
 }
 
@@ -236,32 +246,29 @@ func generateDeepNarrowKeys(size int) []string {
 	keys := make([]string, size)
 	depth := 20
 	numBranches := 26
-	filesPerLeaf := size / numBranches
-	if filesPerLeaf < 1 {
-		filesPerLeaf = 1
-	}
+	filesPerLeaf := max(size/numBranches, 1)
 
 	idx := 0
 	for branch := 0; idx < size && branch < numBranches; branch++ {
 		prefix := ""
+		var prefixSb247 strings.Builder
 		for range depth {
-			prefix += fmt.Sprintf("%c/", 'a'+byte(branch))
+			prefixSb247.WriteString(fmt.Sprintf("%c/", 'a'+byte(branch)))
 		}
+		prefix += prefixSb247.String()
 		for f := 0; idx < size && f < filesPerLeaf; f++ {
 			keys[idx] = fmt.Sprintf("%sfile%d.txt", prefix, f)
 			idx++
 		}
 	}
+
 	return keys[:idx]
 }
 
 func generateWideShallowKeys(size int) []string {
 	keys := make([]string, size)
 	filesPerPrefix := 5
-	numPrefixes := size / filesPerPrefix
-	if numPrefixes < 1 {
-		numPrefixes = 1
-	}
+	numPrefixes := max(size/filesPerPrefix, 1)
 
 	idx := 0
 	for p := 0; idx < size && p < numPrefixes; p++ {
@@ -271,6 +278,7 @@ func generateWideShallowKeys(size int) []string {
 			idx++
 		}
 	}
+
 	return keys[:idx]
 }
 
@@ -290,6 +298,7 @@ func generateBalancedKeys(size int) []string {
 				keys[idx] = fmt.Sprintf("%sfile%d.txt", prefix, f)
 				idx++
 			}
+
 			return
 		}
 		for c := 0; c < branchFactor && idx < size; c++ {
@@ -297,6 +306,7 @@ func generateBalancedKeys(size int) []string {
 		}
 	}
 	generate("", 0)
+
 	return keys[:idx]
 }
 
@@ -320,6 +330,7 @@ func generateS3RealisticKeys(size int) []string {
 
 		keys[i] = fmt.Sprintf("%s/%s/%s/%s/%s/%s%s", prefix, year, month, day, userID, fileID, ext)
 	}
+
 	return keys
 }
 
@@ -328,5 +339,6 @@ func generateWideSingleLevelKeys(size int) []string {
 	for i := range size {
 		keys[i] = fmt.Sprintf("root/child%07d/file.txt", i)
 	}
+
 	return keys
 }

@@ -26,6 +26,7 @@ func serializeRunBody(n int) []byte {
 			TierBytes:  [MaxTiers]uint64{tiers.Standard: uint64(i) * 4096},
 		})
 	}
+
 	return buf.Bytes()
 }
 

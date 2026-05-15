@@ -61,6 +61,7 @@ func TestAggregator(t *testing.T) {
 		for _, row := range rows {
 			if row.Prefix == "data/" {
 				dataRow = row
+
 				break
 			}
 		}

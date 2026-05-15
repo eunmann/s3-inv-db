@@ -57,11 +57,13 @@ func (b *MPHFBuilder) Build(outDir string) error {
 	if err != nil {
 		mphFile.Close()
 		os.Remove(mphPath)
+
 		return fmt.Errorf("marshal MPHF: %w", err)
 	}
 	if _, err := mphFile.Write(data); err != nil {
 		mphFile.Close()
 		os.Remove(mphPath)
+
 		return fmt.Errorf("write MPHF: %w", err)
 	}
 	mphFile.Close()
@@ -95,6 +97,7 @@ func (b *MPHFBuilder) Build(outDir string) error {
 	for _, fp := range fingerprints {
 		if err := fpWriter.WriteU64(fp); err != nil {
 			fpWriter.Close()
+
 			return fmt.Errorf("write fingerprint: %w", err)
 		}
 	}
@@ -113,6 +116,7 @@ func (b *MPHFBuilder) Build(outDir string) error {
 	for _, p := range preorderPositions {
 		if err := posWriter.WriteU64(p); err != nil {
 			posWriter.Close()
+
 			return fmt.Errorf("write preorder position: %w", err)
 		}
 	}
@@ -224,6 +228,7 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 	preorderPos, err := OpenArray(posPath)
 	if err != nil {
 		fingerprints.Close()
+
 		return nil, fmt.Errorf("open preorder positions: %w", err)
 	}
 
@@ -241,6 +246,7 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 		if err != nil {
 			fingerprints.Close()
 			preorderPos.Close()
+
 			return nil, fmt.Errorf("open segmented prefixes: %w", err)
 		}
 		useSegments = true
@@ -254,6 +260,7 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 			if err != nil {
 				fingerprints.Close()
 				preorderPos.Close()
+
 				return nil, fmt.Errorf("open prefix blob: %w", err)
 			}
 		}
@@ -363,6 +370,7 @@ func (m *MPHF) GetPrefix(pos uint64) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("get segmented prefix at pos %d: %w", pos, err)
 		}
+
 		return s, nil
 	}
 
@@ -373,6 +381,7 @@ func (m *MPHF) GetPrefix(pos uint64) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get prefix at pos %d: %w", pos, err)
 	}
+
 	return s, nil
 }
 
@@ -385,6 +394,7 @@ func (m *MPHF) Count() uint64 {
 func hashString(s string) uint64 {
 	h := fnv.New64a()
 	h.Write([]byte(s))
+
 	return h.Sum64()
 }
 
@@ -393,6 +403,7 @@ func hashString(s string) uint64 {
 func hashBytes(b []byte) uint64 {
 	h := fnv.New64a()
 	h.Write(b)
+
 	return h.Sum64()
 }
 
@@ -401,6 +412,7 @@ func hashBytes(b []byte) uint64 {
 func computeFingerprint(s string) uint64 {
 	h := fnv.New64()
 	h.Write([]byte(s))
+
 	return h.Sum64()
 }
 
@@ -409,6 +421,7 @@ func computeFingerprint(s string) uint64 {
 func computeFingerprintBytes(b []byte) uint64 {
 	h := fnv.New64()
 	h.Write(b)
+
 	return h.Sum64()
 }
 
@@ -450,6 +463,7 @@ func WritePrefixBlob(outDir string, prefixes []string) error {
 	for i, p := range prefixes {
 		if err := writer.WriteString(p); err != nil {
 			writer.Close()
+
 			return fmt.Errorf("write prefix %d: %w", i, err)
 		}
 	}
@@ -457,5 +471,6 @@ func WritePrefixBlob(outDir string, prefixes []string) error {
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("close blob writer: %w", err)
 	}
+
 	return nil
 }

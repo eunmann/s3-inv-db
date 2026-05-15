@@ -28,6 +28,7 @@ func getRealistic(n int) []benchutil.FakeObject {
 	cfg := benchutil.S3RealisticConfig(n)
 	v := benchutil.NewGenerator(cfg).Generate()
 	realisticCache[n] = v
+
 	return v
 }
 

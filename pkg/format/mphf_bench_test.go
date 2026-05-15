@@ -3,6 +3,7 @@ package format
 import (
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"testing"
 )
 
@@ -15,11 +16,13 @@ func generateRealisticPrefixes(n int) []string {
 	for i := range n {
 		depth := 1 + (i % 5) // depths 1-5
 		prefix := ""
+		var prefixSb18 strings.Builder
 		for d := range depth {
 			// Generate path segment like "segment_123/"
 			segmentNum := (i*7 + d*13) % 1000000
-			prefix += fmt.Sprintf("seg%d/", segmentNum)
+			prefixSb18.WriteString(fmt.Sprintf("seg%d/", segmentNum))
 		}
+		prefix += prefixSb18.String()
 		prefixes[i] = prefix
 	}
 

@@ -21,6 +21,7 @@ func SortKeys(keys []string) []string {
 	sorted := make([]string, len(keys))
 	copy(sorted, keys)
 	sort.Strings(sorted)
+
 	return sorted
 }
 
@@ -31,5 +32,6 @@ func KeysToSizes(keys []string) []uint64 {
 	for i := range keys {
 		sizes[i] = uint64((i%1000 + 1) * 100)
 	}
+
 	return sizes
 }

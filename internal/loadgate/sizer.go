@@ -34,6 +34,7 @@ func (s *ManifestSizer) ManifestSize(ctx context.Context, bucket, key string) (u
 			total += uint64(f.Size)
 		}
 	}
+
 	return total, nil
 }
 

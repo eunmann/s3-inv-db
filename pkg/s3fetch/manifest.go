@@ -66,6 +66,7 @@ func (m *Manifest) validate() error {
 			return fmt.Errorf("unsupported file format: %s (supported: CSV, Parquet)", m.FileFormat)
 		}
 	}
+
 	return nil
 }
 
@@ -131,6 +132,7 @@ func (m *Manifest) StorageClassColumnIndex() int {
 	if err != nil {
 		return -1
 	}
+
 	return idx
 }
 
@@ -141,6 +143,7 @@ func (m *Manifest) AccessTierColumnIndex() int {
 	if err != nil {
 		return -1
 	}
+
 	return idx
 }
 
@@ -152,6 +155,7 @@ func (m *Manifest) columnIndex(name string) (int, error) {
 			return i, nil
 		}
 	}
+
 	return -1, fmt.Errorf("column %q not found in schema: %s", name, m.FileSchema)
 }
 

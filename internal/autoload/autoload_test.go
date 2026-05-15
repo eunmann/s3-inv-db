@@ -23,6 +23,7 @@ type fakeDiscovery struct {
 func (f *fakeDiscovery) Enabled() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	return f.enabled
 }
 
@@ -33,6 +34,7 @@ func (f *fakeDiscovery) List(_ context.Context) ([]inventory.MergedInventory, er
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
+
 	return f.views, nil
 }
 
@@ -51,12 +53,14 @@ func (f *fakeLoader) AutoLoad(_ context.Context, disc inventory.Inventory) error
 	id := disc.CompositeID()
 	if f.failOnce && f.failedOn != id {
 		f.failedOn = id
+
 		return f.autoLoadE
 	}
 	if f.loadErr != nil {
 		return f.loadErr
 	}
 	f.loaded = append(f.loaded, id)
+
 	return nil
 }
 
@@ -70,6 +74,7 @@ func newFakeStores(t *testing.T) (*inventory.ConfigStore, *inventory.Manager) {
 	mgr := inventory.NewManager()
 	store, _ := inventory.NewStore(db)
 	mgr.SetStore(store)
+
 	return cs, mgr
 }
 

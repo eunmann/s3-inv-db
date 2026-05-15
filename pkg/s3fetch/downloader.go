@@ -36,13 +36,7 @@ type DownloaderConfig struct {
 // DefaultDownloaderConfig returns sensible defaults based on the current machine.
 func DefaultDownloaderConfig() DownloaderConfig {
 	numCPU := runtime.NumCPU()
-	concurrency := numCPU
-	if concurrency < 4 {
-		concurrency = 4
-	}
-	if concurrency > 16 {
-		concurrency = 16
-	}
+	concurrency := min(max(numCPU, 4), 16)
 
 	return DownloaderConfig{
 		Concurrency:    concurrency,
@@ -132,12 +126,14 @@ func (d *Downloader) DownloadToReader(ctx context.Context, bucket, key string) (
 	if err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, nil, fmt.Errorf("download s3://%s/%s: %w", bucket, key, err)
 	}
 
 	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, nil, fmt.Errorf("seek temp file: %w", err)
 	}
 
@@ -175,6 +171,7 @@ func (d *Downloader) DownloadToFile(ctx context.Context, bucket, key, destPath s
 	})
 	if err != nil {
 		os.Remove(destPath)
+
 		return nil, fmt.Errorf("download s3://%s/%s: %w", bucket, key, err)
 	}
 
@@ -196,6 +193,7 @@ func bytesDownloaded(out *transfermanager.DownloadObjectOutput, f *os.File) int6
 	if info, err := f.Stat(); err == nil {
 		return info.Size()
 	}
+
 	return 0
 }
 
@@ -216,8 +214,10 @@ func (r *tempFileReader) Read(p []byte) (n int, err error) {
 		if err == io.EOF {
 			return n, io.EOF
 		}
+
 		return n, fmt.Errorf("read temp file: %w", err)
 	}
+
 	return n, nil
 }
 
@@ -227,6 +227,7 @@ func (r *tempFileReader) Close() error {
 	if err != nil {
 		return fmt.Errorf("close temp file: %w", err)
 	}
+
 	return nil
 }
 
@@ -237,8 +238,10 @@ func (r *tempFileReader) ReadAt(p []byte, off int64) (n int, err error) {
 		if err == io.EOF {
 			return n, io.EOF
 		}
+
 		return n, fmt.Errorf("read temp file at offset %d: %w", off, err)
 	}
+
 	return n, nil
 }
 
@@ -248,5 +251,6 @@ func (r *tempFileReader) Size() (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("stat temp file: %w", err)
 	}
+
 	return info.Size(), nil
 }

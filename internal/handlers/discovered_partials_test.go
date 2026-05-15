@@ -30,6 +30,7 @@ type fakeDiscoverer struct {
 func (f *fakeDiscoverer) List(context.Context) ([]inventory.Inventory, error) {
 	return f.listResp, f.listErr
 }
+
 func (f *fakeDiscoverer) Find(_ context.Context, _, _, _ string) (inventory.Inventory, error) {
 	return f.findResp, f.findErr
 }
@@ -104,6 +105,7 @@ func waitForJobInState(t *testing.T, store *jobs.Store, invID inventory.ID, stat
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("no job for %s reached state %s within deadline", invID, state)
+
 	return jobs.Job{}
 }
 
@@ -112,6 +114,7 @@ func chiCtxWithParams(r *http.Request, pairs ...string) *http.Request {
 	for i := 0; i+1 < len(pairs); i += 2 {
 		rctx.URLParams.Add(pairs[i], pairs[i+1])
 	}
+
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }
 

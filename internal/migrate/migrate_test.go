@@ -14,6 +14,7 @@ func openMemDB(t *testing.T) *sql.DB {
 		t.Fatalf("sql.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+
 	return db
 }
 

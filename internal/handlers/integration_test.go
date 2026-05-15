@@ -62,6 +62,7 @@ func decodeStatsResponse(t *testing.T, body []byte) *StatsResponse {
 	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("decode: %v (body=%s)", err, body)
 	}
+
 	return &resp
 }
 
@@ -435,6 +436,7 @@ func TestManagerWithIndex_NoUseAfterCloseUnderUnload(t *testing.T) {
 					if pos, ok := idx.Lookup(""); ok {
 						_ = idx.Stats(pos)
 					}
+
 					return nil
 				})
 			}

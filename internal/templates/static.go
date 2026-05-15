@@ -20,5 +20,6 @@ func TailwindCSS() []byte { return tailwindCSS }
 // content, so the browser can revalidate cheaply across deploys.
 var TailwindCSSETag = func() string {
 	h := sha256.Sum256(tailwindCSS)
+
 	return `W/"` + hex.EncodeToString(h[:8]) + `"`
 }()

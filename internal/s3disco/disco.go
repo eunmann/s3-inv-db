@@ -45,6 +45,7 @@ func New(client *s3.Client, bucket, prefix string) *Discoverer {
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
+
 	return &Discoverer{client: client, bucket: bucket, prefix: prefix, manifestFetches: DefaultManifestFetches}
 }
 
@@ -67,6 +68,7 @@ func NewFromS3URI(client *s3.Client, uri string) (*Discoverer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse source URI %q: %w", uri, err)
 	}
+
 	return New(client, bucket, key), nil
 }
 
@@ -96,6 +98,7 @@ func (d *Discoverer) List(ctx context.Context) ([]inventory.Inventory, error) {
 		if err != nil {
 			logger.Warn().Err(err).Str("src", srcName).Msg("list inventories under src")
 			out = append(out, inventory.Inventory{SourceBucket: srcName, Error: "failed to list inventories under source bucket"})
+
 			continue
 		}
 		for _, inv := range invs {
@@ -104,11 +107,13 @@ func (d *Discoverer) List(ctx context.Context) ([]inventory.Inventory, error) {
 			if err != nil {
 				logger.Warn().Err(err).Str("src", srcName).Str("inv", invName).Msg("describe runs")
 				out = append(out, inventory.Inventory{SourceBucket: srcName, InventoryName: invName, Error: "failed to describe inventory"})
+
 				continue
 			}
 			out = append(out, runs...)
 		}
 	}
+
 	return out, nil
 }
 
@@ -136,6 +141,7 @@ func (d *Discoverer) Find(ctx context.Context, srcBucket, invID, run string) (in
 			return runs[i], nil
 		}
 	}
+
 	return inventory.Inventory{}, fmt.Errorf("%w: %s/%s/%s", ErrRunNotFound, srcBucket, invID, run)
 }
 
@@ -179,6 +185,7 @@ func (d *Discoverer) describeRuns(ctx context.Context, src, inv, invPrefix strin
 		}
 		if limit > 0 && i >= limit {
 			out = append(out, entry)
+
 			continue
 		}
 		manifest, err := d.fetchManifest(ctx, entry.ManifestKey)
@@ -187,6 +194,7 @@ func (d *Discoverer) describeRuns(ctx context.Context, src, inv, invPrefix strin
 			entry.FileFormat = "unknown"
 			entry.Error = "failed to read manifest"
 			out = append(out, entry)
+
 			continue
 		}
 		entry.FileFormat = manifest.FileFormat
@@ -194,6 +202,7 @@ func (d *Discoverer) describeRuns(ctx context.Context, src, inv, invPrefix strin
 		entry.CreationTimestamp = manifest.CreationTimestamp
 		out = append(out, entry)
 	}
+
 	return out, nil
 }
 
@@ -212,6 +221,7 @@ func (d *Discoverer) fetchManifest(ctx context.Context, key string) (*s3fetch.Ma
 	if err != nil {
 		return nil, fmt.Errorf("parse manifest s3://%s/%s: %w", d.bucket, key, err)
 	}
+
 	return manifest, nil
 }
 
@@ -235,6 +245,7 @@ func (d *Discoverer) listCommonPrefixes(ctx context.Context, prefix string) ([]s
 			}
 		}
 	}
+
 	return out, nil
 }
 

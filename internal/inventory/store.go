@@ -70,6 +70,7 @@ func (s *Store) Upsert(info Info) error {
 	if err != nil {
 		return fmt.Errorf("upsert inventory %s: %w", info.ID, err)
 	}
+
 	return nil
 }
 
@@ -91,6 +92,7 @@ func (s *Store) Get(id ID) (Info, error) {
 	if err != nil {
 		return Info{}, fmt.Errorf("get inventory %s: %w", id, err)
 	}
+
 	return info, nil
 }
 
@@ -113,6 +115,7 @@ func (s *Store) List() ([]Info, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate inventories: %w", err)
 	}
+
 	return out, nil
 }
 
@@ -130,6 +133,7 @@ func (s *Store) Delete(id ID) error {
 	if n == 0 {
 		return ErrStoreNotFound
 	}
+
 	return nil
 }
 
@@ -158,6 +162,7 @@ func scanInfo(r rowScanner) (Info, error) {
 	info.UserUnloadedAt = timeFromUnix(userUnloadedAt)
 	info.AutoLoadBackoffUntil = timeFromUnix(backoffUntil)
 	info.LastAccessedAt = timeFromUnix(lastAccessed)
+
 	return info, nil
 }
 
@@ -165,6 +170,7 @@ func unixOrZero(t time.Time) int64 {
 	if t.IsZero() {
 		return 0
 	}
+
 	return t.Unix()
 }
 
@@ -172,6 +178,7 @@ func timeFromUnix(sec int64) time.Time {
 	if sec == 0 {
 		return time.Time{}
 	}
+
 	return time.Unix(sec, 0)
 }
 

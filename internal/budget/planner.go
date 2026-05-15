@@ -84,6 +84,7 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 			if a.LastAccessedAt.Equal(b.LastAccessedAt) {
 				return a.LoadedAt.Before(b.LoadedAt)
 			}
+
 			return a.LastAccessedAt.Before(b.LastAccessedAt)
 		})
 		for i := range candidates {
@@ -113,6 +114,7 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 				in.EstimateBytes, p.tracker.Available()+plan.FreedBytes)
 		}
 	}
+
 	return plan, nil
 }
 
@@ -127,15 +129,18 @@ func (p *Planner) candidates(in Input) (eligible []inventory.Info, pinnedPresent
 		}
 		if info.Pinned {
 			pinnedPresent = true
+
 			continue
 		}
 		if info.IndexBytes == 0 {
 			// Unknown size — refuse to evict blindly.
 			pinnedPresent = true
+
 			continue
 		}
 		eligible = append(eligible, *info)
 	}
+
 	return eligible, pinnedPresent
 }
 
@@ -160,12 +165,11 @@ func selectByConfig(pool []inventory.Info, source, name string, retention uint32
 		if ai.Equal(bi) {
 			return inConfig[i].LastAccessedAt.Before(inConfig[j].LastAccessedAt)
 		}
+
 		return ai.Before(bi)
 	})
-	drop := uint32(len(inConfig)) - (retention - 1)
-	if drop > uint32(len(inConfig)) {
-		drop = uint32(len(inConfig))
-	}
+	drop := min(uint32(len(inConfig))-(retention-1), uint32(len(inConfig)))
+
 	return inConfig[:drop]
 }
 
@@ -177,6 +181,7 @@ func drop(pool []inventory.Info, id inventory.ID) []inventory.Info {
 		}
 		out = append(out, pool[i])
 	}
+
 	return out
 }
 
@@ -185,5 +190,6 @@ func requiredBytes(estimate, available, alreadyFreed uint64) uint64 {
 	if estimate <= have {
 		return 0
 	}
+
 	return estimate - have
 }

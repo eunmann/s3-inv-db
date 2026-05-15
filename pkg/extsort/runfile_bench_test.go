@@ -25,6 +25,7 @@ func makePrefixRows(n int) []*PrefixRow {
 		r.TierBytes[tiers.Standard] = uint64((i + 1) * 4096)
 		rows[i] = r
 	}
+
 	return rows
 }
 

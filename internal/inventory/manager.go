@@ -73,6 +73,7 @@ func (m *Manager) mirror(info Info) error {
 	if err := m.store.Upsert(info); err != nil {
 		return fmt.Errorf("mirror to store: %w", err)
 	}
+
 	return nil
 }
 
@@ -84,6 +85,7 @@ func (m *Manager) mirrorDelete(id ID) error {
 	if err := m.store.Delete(id); err != nil && !errors.Is(err, ErrStoreNotFound) {
 		return fmt.Errorf("mirror delete: %w", err)
 	}
+
 	return nil
 }
 
@@ -98,6 +100,7 @@ func (m *Manager) Register(id ID, name, path string) error {
 
 	info := Info{ID: id, Name: name, Path: path, State: StateNotLoaded}
 	m.inventories[id] = &managedInventory{info: info}
+
 	return m.mirror(info)
 }
 
@@ -139,10 +142,12 @@ func (m *Manager) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	inv, exists := m.inventories[id]
 	if !exists {
 		m.mu.Unlock()
+
 		return ErrNotFound
 	}
 	if !inv.info.State.CanLoad() {
 		m.mu.Unlock()
+
 		return fmt.Errorf("%w: cannot load from state %s", ErrInvalidState, inv.info.State)
 	}
 	inv.info.State = StateLoading
@@ -175,6 +180,7 @@ func (m *Manager) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 		if idx != nil {
 			idx.Close()
 		}
+
 		return ErrNotFound
 	}
 
@@ -183,17 +189,20 @@ func (m *Manager) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 		inv.info.State = StateError
 		inv.info.Error = buildErr.Error()
 		_ = m.mirror(inv.info)
+
 		return fmt.Errorf("build index: %w", buildErr)
 	case openErr != nil:
 		inv.info.State = StateError
 		inv.info.Error = openErr.Error()
 		_ = m.mirror(inv.info)
+
 		return fmt.Errorf("open index: %w", openErr)
 	case ctx.Err() != nil:
 		idx.Close()
 		inv.info.State = StateError
 		inv.info.Error = ctx.Err().Error()
 		_ = m.mirror(inv.info)
+
 		return fmt.Errorf("load cancelled: %w", ctx.Err())
 	}
 
@@ -210,6 +219,7 @@ func (m *Manager) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	inv.info.AutoLoadFailureCount = 0
 	inv.info.AutoLoadBackoffUntil = time.Time{}
 	_ = m.mirror(inv.info)
+
 	return nil
 }
 
@@ -226,6 +236,7 @@ func measureIndexDir(dir string) (uint64, error) {
 		if os.IsNotExist(err) {
 			return 0, nil
 		}
+
 		return 0, fmt.Errorf("stat %s: %w", dir, err)
 	}
 	if manifest, err := format.ReadManifest(dir); err == nil && len(manifest.Files) > 0 {
@@ -244,11 +255,13 @@ func measureIndexDir(dir string) (uint64, error) {
 			return fmt.Errorf("stat entry: %w", err)
 		}
 		total += uint64(info.Size())
+
 		return nil
 	})
 	if err != nil {
 		return 0, fmt.Errorf("walk %s: %w", dir, err)
 	}
+
 	return total, nil
 }
 
@@ -274,10 +287,12 @@ func (m *Manager) unloadInternal(id ID, userInitiated bool) error {
 	inv, exists := m.inventories[id]
 	if !exists {
 		m.mu.Unlock()
+
 		return ErrNotFound
 	}
 	if inv.info.State != StateLoaded {
 		m.mu.Unlock()
+
 		return fmt.Errorf("%w: cannot unload from state %s", ErrInvalidState, inv.info.State)
 	}
 	inv.info.State = StateNotLoaded
@@ -300,6 +315,7 @@ func (m *Manager) unloadInternal(id ID, userInitiated bool) error {
 		inv.index.Close()
 		inv.index = nil
 	}
+
 	return nil
 }
 
@@ -313,6 +329,7 @@ func (m *Manager) SetPinned(id ID, pinned bool) error {
 		return ErrNotFound
 	}
 	inv.info.Pinned = pinned
+
 	return m.mirror(inv.info)
 }
 
@@ -330,6 +347,7 @@ func (m *Manager) RecordAutoLoadFailure(id ID, errStr string, retryAt time.Time)
 	inv.info.AutoLoadFailureCount++
 	inv.info.AutoLoadBackoffUntil = retryAt
 	inv.info.Error = errStr
+
 	return m.mirror(inv.info)
 }
 
@@ -410,6 +428,7 @@ func (m *Manager) Hydrate(info Info, indexDir string) error {
 	}
 	m.inventories[info.ID] = mi
 	_ = m.mirror(mi.info)
+
 	return nil
 }
 
@@ -423,10 +442,12 @@ func (m *Manager) WithIndex(id ID, fn func(*indexread.Index) error) error {
 	inv, exists := m.inventories[id]
 	if !exists {
 		m.mu.RUnlock()
+
 		return ErrNotFound
 	}
 	if inv.info.State != StateLoaded || inv.index == nil {
 		m.mu.RUnlock()
+
 		return ErrNotLoaded
 	}
 	idx := inv.index
@@ -453,11 +474,13 @@ func (m *Manager) WithTwoIndexes(idA, idB ID, fn func(a, b *indexread.Index) err
 	invB, okB := m.inventories[idB]
 	if !okA || !okB {
 		m.mu.RUnlock()
+
 		return ErrNotFound
 	}
 	if invA.info.State != StateLoaded || invA.index == nil ||
 		invB.info.State != StateLoaded || invB.index == nil {
 		m.mu.RUnlock()
+
 		return ErrNotLoaded
 	}
 	idxA, idxB := invA.index, invB.index
@@ -467,6 +490,7 @@ func (m *Manager) WithTwoIndexes(idA, idB ID, fn func(a, b *indexread.Index) err
 		m.mu.RUnlock()
 		defer invA.mu.RUnlock()
 		defer m.TouchAccessed(idA)
+
 		return fn(idxA, idxA)
 	}
 
@@ -494,6 +518,7 @@ func (m *Manager) Remove(id ID) error {
 	inv, exists := m.inventories[id]
 	if !exists {
 		m.mu.Unlock()
+
 		return ErrNotFound
 	}
 	delete(m.inventories, id)
@@ -506,6 +531,7 @@ func (m *Manager) Remove(id ID) error {
 		inv.index.Close()
 		inv.index = nil
 	}
+
 	return nil
 }
 
@@ -528,5 +554,6 @@ func (m *Manager) Close() error {
 		}
 		inv.mu.Unlock()
 	}
+
 	return firstErr
 }

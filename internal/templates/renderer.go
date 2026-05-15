@@ -46,6 +46,7 @@ func formatETA(startedAt time.Time, done, total int64) string {
 		return ""
 	}
 	remaining := time.Duration(float64(elapsed) * float64(total-done) / float64(done))
+
 	return humanfmt.Duration(remaining)
 }
 
@@ -58,6 +59,7 @@ func progressPct(done, total int64) int {
 	if done >= total {
 		return 100
 	}
+
 	return int(float64(done) * 100.0 / float64(total))
 }
 
@@ -87,6 +89,7 @@ func tierLabel(raw string) string {
 	if label, ok := tierLabels[raw]; ok {
 		return label
 	}
+
 	return raw
 }
 
@@ -132,6 +135,7 @@ func New() (*Renderer, error) {
 	if err := r.loadTemplates(); err != nil {
 		return nil, err
 	}
+
 	return r, nil
 }
 
@@ -145,6 +149,7 @@ func FuncMap() template.FuncMap {
 			if t.IsZero() {
 				return "-"
 			}
+
 			return t.Format(time.RFC3339)
 		},
 		"formatTimeRelative": func(t time.Time) string {
@@ -232,6 +237,7 @@ func hxValsAttr(pairs ...any) (template.HTMLAttr, error) {
 		return "", fmt.Errorf("hxVals: marshal: %w", err)
 	}
 	b = bytes.ReplaceAll(b, []byte("'"), []byte("&#39;"))
+
 	return template.HTMLAttr(`hx-vals='` + string(b) + `'`), nil
 }
 
@@ -258,6 +264,7 @@ func browseURL(pairs ...any) (string, error) {
 		q.Set(key, v)
 	}
 	u.RawQuery = q.Encode()
+
 	return u.String(), nil
 }
 
@@ -313,6 +320,7 @@ func readTemplates(src fs.FS) (layoutSrc string, partials, pages map[string]stri
 		return "", nil, nil, err
 	}
 	delete(pages, "layout.html")
+
 	return string(layoutBytes), partials, pages, nil
 }
 
@@ -340,11 +348,12 @@ func readDirFiles(src fs.FS, dir string, basenameKey bool) (map[string]string, e
 		}
 		out[key] = string(content)
 	}
+
 	return out, nil
 }
 
 // Render renders a full page template.
-func (r *Renderer) Render(w io.Writer, name string, data interface{}) error {
+func (r *Renderer) Render(w io.Writer, name string, data any) error {
 	t, ok := r.pages[name]
 	if !ok {
 		return fmt.Errorf("page template %s not found", name)
@@ -352,13 +361,15 @@ func (r *Renderer) Render(w io.Writer, name string, data interface{}) error {
 	if err := t.ExecuteTemplate(w, "layout", data); err != nil {
 		return fmt.Errorf("execute template %s: %w", name, err)
 	}
+
 	return nil
 }
 
 // RenderPartial renders a partial template without layout.
-func (r *Renderer) RenderPartial(w io.Writer, name string, data interface{}) error {
+func (r *Renderer) RenderPartial(w io.Writer, name string, data any) error {
 	if err := r.partials.ExecuteTemplate(w, "templates/partials/"+name, data); err != nil {
 		return fmt.Errorf("execute partial template %s: %w", name, err)
 	}
+
 	return nil
 }

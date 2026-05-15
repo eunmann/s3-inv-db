@@ -159,6 +159,7 @@ func (r CostResult) PerTierDollars() map[string]float64 {
 	for tier, microdollars := range r.PerTierMicrodollars {
 		result[tier] = float64(microdollars) / 1_000_000
 	}
+
 	return result
 }
 
@@ -305,6 +306,7 @@ func ComputePutCost(objectCount uint64, pt PriceTable) uint64 {
 	if pt.PutPer1000Requests <= 0 || objectCount == 0 {
 		return 0
 	}
+
 	return uint64(float64(objectCount) / 1000.0 * pt.PutPer1000Requests * 1_000_000)
 }
 
@@ -345,11 +347,13 @@ func FormatCost(microdollars uint64) string {
 	}
 
 	cents := (microdollars + microsPerCent - 1) / microsPerCent
+
 	return fmt.Sprintf("$%d.%02d", cents/100, cents%100)
 }
 
 // roundHalfAway rounds x to decimals decimal places, half-away-from-zero.
 func roundHalfAway(x float64, decimals int) float64 {
 	factor := math.Pow(10, float64(decimals))
+
 	return math.Round(x*factor) / factor
 }

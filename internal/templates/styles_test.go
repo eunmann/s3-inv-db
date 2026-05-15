@@ -24,8 +24,8 @@ func TestTailwindClasses_FromGoHelpersCompiled(t *testing.T) {
 	states := []string{"loaded", "not_loaded", "loading", "error"}
 
 	for _, state := range states {
-		classes := strings.Fields(stateClass(state))
-		for _, cls := range classes {
+		classes := strings.FieldsSeq(stateClass(state))
+		for cls := range classes {
 			if !cssHasClass(css, cls) {
 				t.Errorf("compiled CSS is missing a rule for stateClass(%q) class %q — "+
 					"check tailwind.config.js content paths include the Go file that emits it",
@@ -40,5 +40,6 @@ func TestTailwindClasses_FromGoHelpersCompiled(t *testing.T) {
 // escaped in Tailwind selectors (`.dark\:bg-yellow-900\/40`).
 func cssHasClass(css, class string) bool {
 	r := strings.NewReplacer(":", `\:`, "/", `\/`)
+
 	return strings.Contains(css, "."+r.Replace(class))
 }

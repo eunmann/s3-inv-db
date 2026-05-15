@@ -1,118 +1,80 @@
 version: "2"
 
 linters:
-  default: standard
-  enable:
-    # Core correctness & bugs
-    - errcheck
-    - errchkjson
-    - errorlint
-    - govet
-    - ineffassign
-    - nilerr
-    - nilnil
-    - rowserrcheck
-    - sqlclosecheck
-    - staticcheck
-    - unused
-
-    # Concurrency, context & resource handling
-    - bodyclose
-    - containedctx
-    - contextcheck
-    - noctx
-    - spancheck
-    - thelper
-    - tparallel
-
-    # Performance & modern idioms
-    - intrange
-    - makezero
-    - perfsprint
-    - prealloc
-    - unconvert
-    - usestdlibvars
-
-    # Error handling discipline
-    - forcetypeassert
-    - wrapcheck
-
-    # API / interface hygiene
-    - inamedparam
-    - interfacebloat
-    - predeclared
-
-    # Style, readability, and structure
-    - cyclop
-    - decorder
-    - funlen
-    - gocognit
-    - gocritic
-    - gocyclo
-    - maintidx
-    - nestif
-    - revive
-    - whitespace
-    - dupl
-
-    # Imports, modules & dependencies
-    - depguard
-    - gomoddirectives
-    - gomodguard
-    - importas
-    - reassign
-
-    # Documentation & comments
-    - dupword
-    - godot
-    - godox
-    - goheader
-    - misspell
-    - nolintlint
-
-    # Logging & observability
-    - loggercheck
-    - sloglint
-    - zerologlint
-
-    # Testing & frameworks
-    - testableexamples
-    - testifylint
-
-    # Other useful
-    - copyloopvar
-    - errname
-    - unparam
-
+  default: all
   disable:
-    # Framework-specific linters not used in this project
-    - ginkgolinter    # Ginkgo/Gomega-specific
-    - promlinter      # Prometheus metrics naming
-    # Overly opinionated/noisy linters
-    - funcorder       # Method ordering is a style preference
-    - paralleltest    # Not all tests should run in parallel
-    - varnamelen      # Variable name length is very context dependent
-    - wsl             # Too opinionated about whitespace
-    # Design choices that shouldn't be flagged
-    - ireturn         # Returning interfaces is intentional for API design
-    - nilnil          # Returning nil,nil is sometimes correct
-
+    # Style preferences / noise the project explicitly does not enforce.
+    - lll              # line length
+    - wsl              # whitespace
+    - wsl_v5
+    - varnamelen       # variable-name length is context-dependent
+    - tagliatelle      # struct-tag case
+    - paralleltest     # not every test wants t.Parallel()
+    - exhaustruct      # struct-field exhaustive init is too strict
+    - canonicalheader  # HTTP header canonicalisation noise
+    - noinlineerr      # idiomatic Go uses inline `if err := ...; err != nil`
+    - funcorder        # method ordering
+    - nlreturn         # mandatory blank line before return
+    # Framework-specific linters not used here.
+    - ginkgolinter     # Ginkgo/Gomega
+    - promlinter       # Prometheus metric naming
   settings:
     cyclop:
       max-complexity: 25
       package-average: 15.0
-
     funlen:
       lines: 120
       statements: 80
       ignore-comments: true
-
     gocognit:
       min-complexity: 30
-
     gocyclo:
       min-complexity: 20
-
+    interfacebloat:
+      max: 20
+    nestif:
+      min-complexity: 6
+    maintidx:
+      under: 20
+    gosec:
+      excludes:
+        - G104 # errcheck already covers unchecked errors and gives better context
+        - G115 # integer overflow conversion is excessively noisy; reviewed by hand at conversion sites
+        - G404 # math/rand is fine for synthetic data and non-crypto IDs
+    mnd:
+      ignored-numbers:
+        - "0"
+        - "1"
+        - "2"
+        - "3"
+        - "4"
+        - "8"
+        - "10"
+        - "16"
+        - "24"
+        - "32"
+        - "60"
+        - "64"
+        - "100"
+        - "128"
+        - "256"
+        - "1000"
+        - "1024"
+      ignored-functions:
+        - strconv.FormatInt
+        - strconv.FormatUint
+        - strconv.ParseFloat
+        - strconv.ParseInt
+        - strconv.ParseUint
+        - time.Duration
+        - context.WithTimeout
+    gosmopolitan:
+      ignore-tests: true
+    exhaustive:
+      default-signifies-exhaustive: true
+    godot:
+      scope: declarations
+      capital: true
     gocritic:
       enabled-tags:
         - diagnostic
@@ -120,17 +82,6 @@ linters:
         - performance
       disabled-checks:
         - hugeParam
-
-    godot:
-      scope: declarations
-      capital: true
-
-    maintidx:
-      under: 20
-
-    nestif:
-      min-complexity: 6
-
     revive:
       rules:
         - name: blank-imports
@@ -157,7 +108,6 @@ linters:
         - name: unused-parameter
         - name: unreachable-code
         - name: redefines-builtin-id
-
     depguard:
       rules:
         main:
@@ -167,7 +117,6 @@ linters:
               desc: "Use io and os packages instead"
             - pkg: "github.com/pkg/errors"
               desc: "Use standard library errors package with fmt.Errorf"
-
     ireturn:
       allow:
         - anon
@@ -182,7 +131,6 @@ linters:
         - io.ReaderAt
         - io.Closer
         - context.Context
-
     testifylint:
       enable-all: true
 
@@ -192,7 +140,11 @@ linters:
       - std-error-handling
       - common-false-positives
     rules:
-      # Reduced lint strictness for test files (complexity/nesting checks)
+      # CLI binaries use fmt.Println/Print* legitimately.
+      - path: "cmd/"
+        linters:
+          - forbidigo
+      # Test files: relax complexity / unused-param / errcheck thresholds.
       - path: _test\.go
         linters:
           - unparam
@@ -203,19 +155,17 @@ linters:
           - maintidx
           - nestif
           - errcheck
-      # Event(L().Info()) pattern: linter can't track that Event wrapper dispatches the event
-      - path: pkg/logging/logging_test\.go
-        linters:
-          - zerologlint
-      # Allow context.TODO in tests
+          - dupl
+          - gochecknoglobals
+      # context.TODO is fine in tests.
       - path: _test\.go
         text: "context.TODO"
-      # Allow dot imports in tests for testify
+      # Dot-imports are fine in tests (e.g. testify suite helpers).
       - path: _test\.go
         linters:
           - revive
         text: "dot-imports"
-      # Allow InventoryReader name (canonical public API)
+      # InventoryReader is the canonical public API name.
       - path: pkg/inventory/unified\.go
         linters:
           - revive
@@ -225,7 +175,12 @@ formatters:
   enable:
     - gci
     - gofmt
+    - gofumpt
     - goimports
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
 
 run:
   timeout: 5m

@@ -139,6 +139,7 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 			if err == nil && !info.IsDir() {
 				indexSize += info.Size()
 			}
+
 			return nil
 		})
 
@@ -294,6 +295,7 @@ func formatBytes(b int64) string {
 		div *= unit
 		exp++
 	}
+
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
@@ -407,6 +409,7 @@ func BenchmarkParallelMerge(b *testing.B) {
 			writer.Close()
 			paths = append(paths, path)
 		}
+
 		return paths
 	}
 

@@ -96,6 +96,7 @@ func NewCSVInventoryReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderC
 		gzr, err := pgzip.NewReader(r)
 		if err != nil {
 			r.Close()
+
 			return nil, fmt.Errorf("create gzip reader: %w", err)
 		}
 		closers = append(closers, gzr)
@@ -125,6 +126,7 @@ func (r *csvInventoryReader) Next() (Row, error) {
 			if errors.Is(err, io.EOF) {
 				return Row{}, io.EOF
 			}
+
 			return Row{}, fmt.Errorf("read CSV row: %w", err)
 		}
 
@@ -169,5 +171,6 @@ func (r *csvInventoryReader) Close() error {
 			firstErr = err
 		}
 	}
+
 	return firstErr
 }

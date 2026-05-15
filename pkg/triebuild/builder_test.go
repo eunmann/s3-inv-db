@@ -3,6 +3,7 @@ package triebuild
 import (
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -344,9 +345,11 @@ func TestBuildFromKeys_LongPath(t *testing.T) {
 	// Create a very deep path
 	var keys []string
 	path := ""
+	var pathSb347 strings.Builder
 	for range 50 {
-		path += "dir/"
+		pathSb347.WriteString("dir/")
 	}
+	path += pathSb347.String()
 	path += "file.txt"
 	keys = append(keys, path)
 
@@ -482,6 +485,7 @@ func countSlashes(s string) int {
 			count++
 		}
 	}
+
 	return count
 }
 

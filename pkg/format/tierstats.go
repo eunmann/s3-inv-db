@@ -80,6 +80,7 @@ func (w *TierStatsWriter) writeTierArray(path string, nodes []triebuild.Node, ti
 		}
 		if err := writer.WriteU64(val); err != nil {
 			writer.Close()
+
 			return fmt.Errorf("write value at node %d: %w", i, err)
 		}
 	}
@@ -87,6 +88,7 @@ func (w *TierStatsWriter) writeTierArray(path string, nodes []triebuild.Node, ti
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("close array writer: %w", err)
 	}
+
 	return nil
 }
 
@@ -129,6 +131,7 @@ func OpenTierStats(indexDir string) (*TierStatsReader, error) {
 		bytesReader, err := OpenArray(bytesPath)
 		if err != nil {
 			r.Close()
+
 			return nil, fmt.Errorf("open %s bytes: %w", tier.Name, err)
 		}
 		r.bytesArrays[tier.ID] = bytesReader
@@ -137,6 +140,7 @@ func OpenTierStats(indexDir string) (*TierStatsReader, error) {
 		countsReader, err := OpenArray(countsPath)
 		if err != nil {
 			r.Close()
+
 			return nil, fmt.Errorf("open %s counts: %w", tier.Name, err)
 		}
 		r.countsArrays[tier.ID] = countsReader
@@ -224,6 +228,7 @@ func (r *TierStatsReader) PresentTiers() []tiers.Info {
 	if r == nil || r.manifest == nil {
 		return nil
 	}
+
 	return r.manifest.Tiers
 }
 

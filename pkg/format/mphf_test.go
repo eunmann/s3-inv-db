@@ -57,6 +57,7 @@ func TestMPHFBuilderSimple(t *testing.T) {
 		pos, ok := m.Lookup(p)
 		if !ok {
 			t.Errorf("Lookup(%q) failed", p)
+
 			continue
 		}
 		// Verify we can get the prefix back
@@ -239,6 +240,7 @@ func TestMPHFUnicode(t *testing.T) {
 		pos, ok := m.Lookup(p)
 		if !ok {
 			t.Errorf("Lookup(%q) failed", p)
+
 			continue
 		}
 		stored, _ := m.GetPrefix(pos)
@@ -275,6 +277,7 @@ func prefixFromInt(i int) string {
 	if result == "" {
 		result = "root/"
 	}
+
 	return result
 }
 

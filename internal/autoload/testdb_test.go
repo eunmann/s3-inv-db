@@ -20,5 +20,6 @@ func openTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("pragma: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+
 	return db
 }

@@ -26,6 +26,7 @@ func acquireZstdEncoder(level zstd.EncoderLevel) (*zstd.Encoder, error) {
 		if err != nil {
 			return nil, fmt.Errorf("zstd new writer: %w", err)
 		}
+
 		return enc, nil
 	}
 	if v := pool.Get(); v != nil {
@@ -38,6 +39,7 @@ func acquireZstdEncoder(level zstd.EncoderLevel) (*zstd.Encoder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("zstd new writer: %w", err)
 	}
+
 	return enc, nil
 }
 
@@ -66,6 +68,7 @@ func acquireZstdDecoder() (*zstd.Decoder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("zstd new reader: %w", err)
 	}
+
 	return dec, nil
 }
 
@@ -76,6 +79,7 @@ func releaseZstdDecoder(dec *zstd.Decoder) {
 	// Reset(nil) detaches from the current source.
 	if err := dec.Reset(nil); err != nil {
 		dec.Close()
+
 		return
 	}
 	zstdDecoderPool.Put(dec)

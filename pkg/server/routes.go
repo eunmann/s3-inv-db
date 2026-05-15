@@ -40,6 +40,7 @@ func (s *Server) setupRoutes() {
 	r.Get("/static/tailwind.css", func(w http.ResponseWriter, r *http.Request) {
 		if match := r.Header.Get("If-None-Match"); match == templates.TailwindCSSETag {
 			w.WriteHeader(http.StatusNotModified)
+
 			return
 		}
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")

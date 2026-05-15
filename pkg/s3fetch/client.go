@@ -18,6 +18,7 @@ func s3ClientOptions() []func(*s3.Options) {
 	if os.Getenv("AWS_ENDPOINT_URL_S3") == "" {
 		return nil
 	}
+
 	return []func(*s3.Options){
 		func(o *s3.Options) { o.UsePathStyle = true },
 	}
@@ -42,6 +43,7 @@ func NewClientWithDownloaderConfig(ctx context.Context, dlCfg DownloaderConfig) 
 	}
 
 	s3Client := s3.NewFromConfig(cfg, s3ClientOptions()...)
+
 	return &Client{
 		s3Client:   s3Client,
 		downloader: NewDownloader(s3Client, dlCfg),
@@ -56,6 +58,7 @@ func NewClientWithConfig(cfg aws.Config) *Client {
 // NewClientWithConfigAndDownloader creates a new S3 client with custom AWS and downloader configs.
 func NewClientWithConfigAndDownloader(cfg aws.Config, dlCfg DownloaderConfig) *Client {
 	s3Client := s3.NewFromConfig(cfg, s3ClientOptions()...)
+
 	return &Client{
 		s3Client:   s3Client,
 		downloader: NewDownloader(s3Client, dlCfg),
@@ -77,6 +80,7 @@ func (c *Client) FetchManifest(ctx context.Context, bucket, key string) (*Manife
 	if err != nil {
 		return nil, fmt.Errorf("parse manifest from s3://%s/%s: %w", bucket, key, err)
 	}
+
 	return manifest, nil
 }
 
@@ -92,6 +96,7 @@ func (c *Client) StreamObject(ctx context.Context, bucket, key string) (io.ReadC
 	if err != nil {
 		return nil, fmt.Errorf("get object s3://%s/%s: %w", bucket, key, err)
 	}
+
 	return resp.Body, nil
 }
 

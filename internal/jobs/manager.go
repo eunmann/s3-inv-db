@@ -76,6 +76,7 @@ func (m *Manager) Submit(invID inventory.ID, kind Kind, work Work) (Job, error) 
 	if m.shutdown {
 		m.mu.Unlock()
 		cancel()
+
 		return Job{}, ErrShutdown
 	}
 
@@ -88,6 +89,7 @@ func (m *Manager) Submit(invID inventory.ID, kind Kind, work Work) (Job, error) 
 	if err := m.store.Upsert(job); err != nil {
 		m.mu.Unlock()
 		cancel()
+
 		return Job{}, fmt.Errorf("queue job %s: %w", job.ID, err)
 	}
 	m.cancels[job.ID] = cancel
@@ -96,6 +98,7 @@ func (m *Manager) Submit(invID inventory.ID, kind Kind, work Work) (Job, error) 
 
 	m.bus.Publish(job)
 	go m.run(ctx, cancel, job, work)
+
 	return job, nil
 }
 
@@ -109,6 +112,7 @@ func (m *Manager) Cancel(id ID) error {
 		return ErrNotFound
 	}
 	cancel()
+
 	return nil
 }
 
@@ -208,5 +212,6 @@ func newJobID() (ID, error) {
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", fmt.Errorf("read random: %w", err)
 	}
+
 	return ID(hex.EncodeToString(b[:])), nil
 }

@@ -52,6 +52,7 @@ func NormalizeCompareSort(sortBy, dir string) (col, direction string) {
 			direction = SortDirDesc
 		}
 	}
+
 	return col, direction
 }
 
@@ -83,6 +84,7 @@ func CompareSortLinks(currentSort, currentDir string) map[string]BrowseSortLink 
 		}
 		links[c.key] = link
 	}
+
 	return links
 }
 
@@ -262,6 +264,7 @@ func CompareLevel(a, b *indexread.Index, prefix string) CompareLevelData {
 		c.Status = classify(c.Objects, c.Bytes, c.TierBefore, c.TierAfter)
 		out.Children = append(out.Children, *c)
 	}
+
 	return out
 }
 
@@ -299,6 +302,7 @@ func indexChildren(idx *indexread.Index, parent uint64, ok bool, prefix string) 
 		}
 		out[seg] = rec
 	}
+
 	return out
 }
 
@@ -333,5 +337,6 @@ func tierMapsEqual(a, b map[string]indexread.TierBreakdown) bool {
 			return false
 		}
 	}
+
 	return true
 }

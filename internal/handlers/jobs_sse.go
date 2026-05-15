@@ -17,11 +17,13 @@ import (
 func (h *Handlers) JobsStream(w http.ResponseWriter, r *http.Request) {
 	if h.jobBus == nil {
 		http.Error(w, "jobs not configured", http.StatusServiceUnavailable)
+
 		return
 	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+
 		return
 	}
 
@@ -65,6 +67,7 @@ func (h *Handlers) JobsStream(w http.ResponseWriter, r *http.Request) {
 			payload, err := json.Marshal(j)
 			if err != nil {
 				logger.Error().Err(err).Msg("marshal job event")
+
 				continue
 			}
 			// Two frames per change so different listeners can subscribe

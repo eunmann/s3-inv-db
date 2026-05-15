@@ -72,6 +72,7 @@ func (si *SegmentInterner) Intern(segment string) (uint32, error) {
 		if si.segments[id] != segment {
 			return 0, fmt.Errorf("hash collision between %q and %q", si.segments[id], segment)
 		}
+
 		return id, nil
 	}
 
@@ -105,6 +106,7 @@ func (si *SegmentInterner) Close() error {
 func hashSegment(s string) uint64 {
 	h := fnv.New64a()
 	h.Write([]byte(s))
+
 	return h.Sum64()
 }
 
@@ -133,6 +135,7 @@ func OpenSegmentDictionaryWithCacheSize(outDir string, cacheSize int) (*SegmentD
 	cache, err := lru.New[uint32, string](cacheSize)
 	if err != nil {
 		blob.Close()
+
 		return nil, fmt.Errorf("create segment cache: %w", err)
 	}
 
@@ -149,6 +152,7 @@ func (sd *SegmentDictionary) GetSegment(id uint32) (string, error) {
 		return "", err
 	}
 	sd.cache.Add(id, seg)
+
 	return seg, nil
 }
 
@@ -159,6 +163,7 @@ func (sd *SegmentDictionary) UnsafeGetSegment(id uint32) string {
 	}
 	seg := sd.blob.UnsafeGet(uint64(id))
 	sd.cache.Add(id, seg)
+
 	return seg
 }
 
@@ -191,6 +196,7 @@ func (sd *SegmentDictionary) PreloadSegments() (*PreloadedSegmentCache, error) {
 		}
 		segments[i] = seg
 	}
+
 	return &PreloadedSegmentCache{segments: segments}, nil
 }
 
@@ -224,6 +230,7 @@ func NewSegmentedPrefixWriter(outDir string) (*SegmentedPrefixWriter, error) {
 	segIDsWriter, err := NewArrayWriter(segIDsPath, 4)
 	if err != nil {
 		interner.Close()
+
 		return nil, fmt.Errorf("create seg IDs writer: %w", err)
 	}
 
@@ -232,6 +239,7 @@ func NewSegmentedPrefixWriter(outDir string) (*SegmentedPrefixWriter, error) {
 	if err != nil {
 		interner.Close()
 		segIDsWriter.Close()
+
 		return nil, fmt.Errorf("create seg offsets writer: %w", err)
 	}
 
@@ -290,6 +298,7 @@ func (w *SegmentedPrefixWriter) Close() error {
 	if len(errs) > 0 {
 		return errs[0]
 	}
+
 	return nil
 }
 
@@ -323,6 +332,7 @@ func OpenSegmentedPrefixReader(outDir string) (*SegmentedPrefixReader, error) {
 	cache, err := dict.PreloadSegments()
 	if err != nil {
 		dict.Close()
+
 		return nil, fmt.Errorf("preload segments: %w", err)
 	}
 
@@ -330,6 +340,7 @@ func OpenSegmentedPrefixReader(outDir string) (*SegmentedPrefixReader, error) {
 	segIDs, err := OpenArray(segIDsPath)
 	if err != nil {
 		dict.Close()
+
 		return nil, fmt.Errorf("open seg IDs: %w", err)
 	}
 
@@ -338,6 +349,7 @@ func OpenSegmentedPrefixReader(outDir string) (*SegmentedPrefixReader, error) {
 	if err != nil {
 		dict.Close()
 		segIDs.Close()
+
 		return nil, fmt.Errorf("open offsets: %w", err)
 	}
 
@@ -383,6 +395,7 @@ func (r *SegmentedPrefixReader) GetPrefix(pos uint64) (string, error) {
 		segID, err := r.segIDs.GetU32(i)
 		if err != nil {
 			builderPool.Put(builder)
+
 			return "", fmt.Errorf("get segment ID at %d: %w", i, err)
 		}
 		if i > start {
@@ -393,6 +406,7 @@ func (r *SegmentedPrefixReader) GetPrefix(pos uint64) (string, error) {
 
 	result := builder.String()
 	builderPool.Put(builder)
+
 	return result, nil
 }
 
@@ -424,6 +438,7 @@ func (r *SegmentedPrefixReader) UnsafeGetPrefix(pos uint64) string {
 
 	result := builder.String()
 	builderPool.Put(builder)
+
 	return result
 }
 
@@ -432,6 +447,7 @@ func (r *SegmentedPrefixReader) Count() uint64 {
 	if r.offsets.Count() == 0 {
 		return 0
 	}
+
 	return r.offsets.Count() - 1
 }
 

@@ -61,6 +61,7 @@ func (id ID) Split() (sourceBucket, inventoryName, run string, ok bool) {
 	if len(parts) != 3 {
 		return "", "", "", false
 	}
+
 	return parts[0], parts[1], parts[2], true
 }
 
@@ -72,6 +73,7 @@ func (id ID) ConfigID() string {
 	if src, inv, _, ok := id.Split(); ok {
 		return src + "/" + inv
 	}
+
 	return string(id)
 }
 
@@ -123,6 +125,7 @@ func (i Inventory) CompositeID() ID {
 	if i.Run == "" {
 		return ID(i.SourceBucket + "/" + i.InventoryName)
 	}
+
 	return ID(i.SourceBucket + "/" + i.InventoryName + "/" + i.Run)
 }
 

@@ -57,5 +57,6 @@ func run() error {
 	if err := seeder.Run(cfg); err != nil {
 		return fmt.Errorf("run seeder: %w", err)
 	}
+
 	return nil
 }

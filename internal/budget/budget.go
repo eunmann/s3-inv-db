@@ -33,6 +33,7 @@ func New(capBytes, headroomBytes uint64) *Tracker {
 	if headroomBytes > capBytes {
 		headroomBytes = capBytes
 	}
+
 	return &Tracker{
 		cap:      capBytes,
 		headroom: headroomBytes,
@@ -43,24 +44,28 @@ func New(capBytes, headroomBytes uint64) *Tracker {
 func (t *Tracker) Cap() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	return t.cap
 }
 
 func (t *Tracker) Headroom() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	return t.headroom
 }
 
 func (t *Tracker) Used() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	return t.used
 }
 
 func (t *Tracker) Reserved() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	return t.reserved
 }
 
@@ -68,6 +73,7 @@ func (t *Tracker) Reserved() uint64 {
 func (t *Tracker) Available() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	return t.availableLocked()
 }
 
@@ -76,6 +82,7 @@ func (t *Tracker) availableLocked() uint64 {
 	if committed >= t.cap {
 		return 0
 	}
+
 	return t.cap - committed
 }
 
@@ -90,6 +97,7 @@ func (t *Tracker) Remove(_ string, bytes uint64) {
 	defer t.mu.Unlock()
 	if bytes >= t.used {
 		t.used = 0
+
 		return
 	}
 	t.used -= bytes
@@ -101,10 +109,12 @@ func (t *Tracker) Reserve(token string, bytes uint64) error {
 	defer t.mu.Unlock()
 	if t.cap == 0 {
 		t.keys[token] = 0
+
 		return nil
 	}
 	if bytes == 0 {
 		t.keys[token] = 0
+
 		return nil
 	}
 	if _, exists := t.keys[token]; exists {
@@ -115,6 +125,7 @@ func (t *Tracker) Reserve(token string, bytes uint64) error {
 	}
 	t.keys[token] = bytes
 	t.reserved += bytes
+
 	return nil
 }
 
@@ -129,6 +140,7 @@ func (t *Tracker) Release(token string) {
 	delete(t.keys, token)
 	if bytes >= t.reserved {
 		t.reserved = 0
+
 		return
 	}
 	t.reserved -= bytes
@@ -144,6 +156,7 @@ func MeasureDir(ctx context.Context, root string) (uint64, error) {
 		if os.IsNotExist(err) {
 			return 0, nil
 		}
+
 		return 0, fmt.Errorf("stat %s: %w", root, err)
 	}
 	if manifest, err := format.ReadManifest(root); err == nil && len(manifest.Files) > 0 {
@@ -165,10 +178,12 @@ func MeasureDir(ctx context.Context, root string) (uint64, error) {
 			return fmt.Errorf("stat entry: %w", err)
 		}
 		total += uint64(info.Size())
+
 		return nil
 	})
 	if err != nil {
 		return 0, fmt.Errorf("walk %s: %w", root, err)
 	}
+
 	return total, nil
 }

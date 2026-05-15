@@ -30,6 +30,7 @@ func TestOpenStateDB_AppliesPragmas(t *testing.T) {
 		var got string
 		if err := db.QueryRow("PRAGMA " + name).Scan(&got); err != nil {
 			t.Errorf("query PRAGMA %s: %v", name, err)
+
 			continue
 		}
 		if !strings.EqualFold(got, expect) {

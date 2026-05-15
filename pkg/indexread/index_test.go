@@ -351,12 +351,14 @@ foo/baz/file.txt,200
 		pos, ok := idx.Lookup(prefix)
 		if !ok {
 			t.Errorf("Lookup(%q) failed", prefix)
+
 			continue
 		}
 
 		retrieved, err := idx.PrefixString(pos)
 		if err != nil {
 			t.Errorf("PrefixString(%d) failed: %v", pos, err)
+
 			continue
 		}
 

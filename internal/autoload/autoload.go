@@ -71,6 +71,7 @@ func New(cfg Config, discovery Discovery, loader Loader, configStore *inventory.
 		nop := zerolog.Nop()
 		logger = &nop
 	}
+
 	return &AutoLoader{
 		cfg:         cfg,
 		discovery:   discovery,
@@ -94,6 +95,7 @@ func (a *AutoLoader) Stop() {
 	a.mu.Lock()
 	if a.stopped {
 		a.mu.Unlock()
+
 		return
 	}
 	a.stopped = true
@@ -126,6 +128,7 @@ func (a *AutoLoader) tick(ctx context.Context) {
 	configs, err := a.configStore.List()
 	if err != nil {
 		a.logger.Error().Err(err).Msg("autoload: list configs")
+
 		return
 	}
 	enabled := map[string]inventory.Config{}
@@ -141,6 +144,7 @@ func (a *AutoLoader) tick(ctx context.Context) {
 	if err != nil {
 		a.logger.Error().Err(err).Msg("autoload: discover")
 		a.recordPollFailure(enabled, err.Error())
+
 		return
 	}
 	byConfig := map[string][]inventory.MergedInventory{}
@@ -187,12 +191,14 @@ func (a *AutoLoader) pickTargets(byConfig map[string][]inventory.MergedInventory
 				}
 			}
 			target = r.Inventory
+
 			break
 		}
 		if target.Run != "" {
 			queue = append(queue, target)
 		}
 	}
+
 	return queue
 }
 
@@ -225,6 +231,7 @@ func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 	err := a.loader.AutoLoad(ctx, target)
 	if err == nil {
 		a.logger.Info().Str("id", string(id)).Msg("autoload: loaded")
+
 		return
 	}
 	var refused *loadgate.BudgetRefusedError
@@ -234,6 +241,7 @@ func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 		// retry next tick if budget frees up.
 		_ = a.manager.RecordAutoLoadFailure(id, refused.Error(), time.Time{})
 		a.logger.Warn().Str("id", string(id)).Err(err).Msg("autoload: budget refused")
+
 		return
 	}
 	info, _ := a.manager.Get(id)
@@ -262,5 +270,6 @@ func backoffDelay(minBackoff, maxBackoff time.Duration, count uint32) time.Durat
 	if delay <= 0 || delay > maxBackoff {
 		return maxBackoff
 	}
+
 	return delay
 }

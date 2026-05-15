@@ -26,6 +26,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	if _, err := inventory.NewStore(db); err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)
 	}
+
 	return db
 }
 
@@ -44,6 +45,7 @@ func newManager(t *testing.T) (*jobs.Manager, *jobs.Store, *jobs.Bus) {
 		t.Fatalf("NewStore: %v", err)
 	}
 	bus := jobs.NewBus(16)
+
 	return jobs.NewManager(store, bus), store, bus
 }
 
@@ -58,6 +60,7 @@ func waitForState(t *testing.T, store *jobs.Store, id jobs.ID, target jobs.State
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("job %s never reached state %s", id, target)
+
 	return jobs.Job{}
 }
 
@@ -66,6 +69,7 @@ func TestManager_SubmitSucceeds(t *testing.T) {
 	job, err := mgr.Submit("src/inv1", jobs.KindBuild, func(_ context.Context, report func(jobs.Update)) error {
 		report(jobs.Update{Stage: "fetch", Progress: 30})
 		report(jobs.Update{Stage: "extsort", Progress: 70})
+
 		return nil
 	})
 	if err != nil {
@@ -102,6 +106,7 @@ func TestManager_Cancel(t *testing.T) {
 	job, err := mgr.Submit("src/inv1", jobs.KindBuild, func(ctx context.Context, _ func(jobs.Update)) error {
 		close(started)
 		<-ctx.Done()
+
 		return ctx.Err()
 	})
 	if err != nil {
@@ -213,6 +218,7 @@ func TestManager_ShutdownCancelsLiveJob(t *testing.T) {
 	job, err := mgr.Submit("src/inv1", jobs.KindBuild, func(ctx context.Context, _ func(jobs.Update)) error {
 		close(started)
 		<-ctx.Done()
+
 		return ctx.Err()
 	})
 	if err != nil {

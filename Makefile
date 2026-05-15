@@ -1,8 +1,8 @@
-.PHONY: all build server seeder test test-race lint lint-fix clean clean-seed seed \
+.PHONY: all build server seeder test test-race lint lint-check clean clean-seed seed \
         css dev docker-build docker-prod docker-seed docker-down \
         cover cover-html cover-summary tidy
 
-GOLANGCI_LINT_VERSION := v2.1.2
+GOLANGCI_LINT_VERSION := v2.9.0
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 COMPOSE := docker compose -f infra/docker-compose.yml
@@ -89,11 +89,14 @@ tidy:
 	go mod tidy
 	go mod verify
 
+# Default `lint` runs with --fix so iterative dev cleans up auto-fixable
+# issues (gofumpt/gci/goimports/some style). CI should call `lint-check`
+# instead so the build fails on anything --fix would have rewritten.
 lint:
-	$(GOLANGCI_LINT) run ./...
-
-lint-fix:
 	$(GOLANGCI_LINT) run --fix ./...
+
+lint-check:
+	$(GOLANGCI_LINT) run ./...
 
 clean:
 	rm -rf bin/ tmp/ $(COVER_OUT) coverage.html

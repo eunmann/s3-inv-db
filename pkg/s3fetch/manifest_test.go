@@ -78,6 +78,7 @@ func TestParseManifest(t *testing.T) {
 				if err == nil {
 					t.Error("expected error, got nil")
 				}
+
 				return
 			}
 			if err != nil {
@@ -190,6 +191,7 @@ func TestParseS3URI(t *testing.T) {
 				if err == nil {
 					t.Error("expected error, got nil")
 				}
+
 				return
 			}
 			if err != nil {
@@ -349,6 +351,7 @@ func TestParseBucketIdentifier(t *testing.T) {
 				if err == nil {
 					t.Error("expected error, got nil")
 				}
+
 				return
 			}
 			if err != nil {
@@ -405,6 +408,7 @@ func TestManifest_GetDestinationBucketName(t *testing.T) {
 				if err == nil {
 					t.Error("expected error, got nil")
 				}
+
 				return
 			}
 			if err != nil {

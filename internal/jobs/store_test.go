@@ -33,6 +33,7 @@ func storeWithInventory(t *testing.T, invID inventory.ID) (*jobs.Store, *sql.DB)
 	if err != nil {
 		t.Fatalf("jobs.NewStore: %v", err)
 	}
+
 	return store, db
 }
 

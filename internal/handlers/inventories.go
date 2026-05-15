@@ -69,6 +69,7 @@ func (h *Handlers) ListConfigurationsAPI(w http.ResponseWriter, r *http.Request)
 		if err != nil {
 			zerolog.Ctx(r.Context()).Error().Err(err).Msg("api configurations discovery")
 			WriteJSONError(w, http.StatusBadGateway, "failed to list discovered inventories")
+
 			return
 		}
 		resp.Configurations = h.groupDiscoveredForAPI(r, views)
@@ -115,6 +116,7 @@ func (h *Handlers) groupDiscoveredForAPI(_ *http.Request, views []inventory.Merg
 		}
 		out[idx].Runs = append(out[idx].Runs, run)
 	}
+
 	return out
 }
 
@@ -152,6 +154,7 @@ func groupManagerForAPI(all []inventory.Info) []ConfigurationView {
 		}
 		out[idx].Runs = append(out[idx].Runs, view)
 	}
+
 	return out
 }
 
@@ -169,11 +172,13 @@ func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) 
 	if err := dec.Decode(&req); err != nil {
 		zerolog.Ctx(r.Context()).Debug().Err(err).Msg("invalid register body")
 		WriteJSONError(w, http.StatusBadRequest, "invalid JSON body")
+
 		return
 	}
 
 	if req.ID == "" {
 		WriteJSONError(w, http.StatusBadRequest, "id is required")
+
 		return
 	}
 	if strings.ContainsAny(req.ID, "/?#%") {
@@ -182,14 +187,17 @@ func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) 
 		// subsequent /api/inventories/{id}/... call. Composite IDs
 		// (src/name/run) flow through /partials/discovered/* instead.
 		WriteJSONError(w, http.StatusBadRequest, "id must not contain '/', '?', '#', or '%'")
+
 		return
 	}
 	if req.Name == "" {
 		WriteJSONError(w, http.StatusBadRequest, "name is required")
+
 		return
 	}
 	if req.Path == "" {
 		WriteJSONError(w, http.StatusBadRequest, "path is required")
+
 		return
 	}
 
@@ -197,10 +205,12 @@ func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) 
 	if err := h.manager.Register(id, req.Name, req.Path); err != nil {
 		if errors.Is(err, inventory.ErrAlreadyExists) {
 			WriteJSONError(w, http.StatusConflict, "inventory already exists")
+
 			return
 		}
 		zerolog.Ctx(r.Context()).Error().Err(err).Msg("failed to register inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to register inventory")
+
 		return
 	}
 
@@ -209,6 +219,7 @@ func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) 
 		// Concurrent Remove between Register and Get.
 		zerolog.Ctx(r.Context()).Warn().Stringer("id", id).Msg("inventory removed concurrently with create")
 		WriteJSONError(w, http.StatusGone, "inventory was removed concurrently")
+
 		return
 	}
 	WriteJSON(w, http.StatusCreated, info)
@@ -221,6 +232,7 @@ func (h *Handlers) GetInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	info, exists := h.manager.Get(id)
 	if !exists {
 		WriteJSONError(w, http.StatusNotFound, "inventory not found")
+
 		return
 	}
 
@@ -238,14 +250,17 @@ func (h *Handlers) LoadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	if err := h.manager.Load(loadCtx, id); err != nil {
 		if errors.Is(err, inventory.ErrNotFound) {
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
+
 			return
 		}
 		if errors.Is(err, inventory.ErrInvalidState) {
 			WriteJSONError(w, http.StatusConflict, err.Error())
+
 			return
 		}
 		zerolog.Ctx(r.Context()).Error().Err(err).Stringer("id", id).Msg("failed to load inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to load inventory")
+
 		return
 	}
 
@@ -253,6 +268,7 @@ func (h *Handlers) LoadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		zerolog.Ctx(r.Context()).Warn().Stringer("id", id).Msg("inventory removed concurrently with load")
 		WriteJSONError(w, http.StatusGone, "inventory was removed concurrently")
+
 		return
 	}
 	WriteJSON(w, http.StatusOK, info)
@@ -265,14 +281,17 @@ func (h *Handlers) UnloadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	if err := h.manager.Unload(id); err != nil {
 		if errors.Is(err, inventory.ErrNotFound) {
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
+
 			return
 		}
 		if errors.Is(err, inventory.ErrInvalidState) {
 			WriteJSONError(w, http.StatusConflict, err.Error())
+
 			return
 		}
 		zerolog.Ctx(r.Context()).Error().Err(err).Stringer("id", id).Msg("failed to unload inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to unload inventory")
+
 		return
 	}
 
@@ -280,6 +299,7 @@ func (h *Handlers) UnloadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		zerolog.Ctx(r.Context()).Warn().Stringer("id", id).Msg("inventory removed concurrently with unload")
 		WriteJSONError(w, http.StatusGone, "inventory was removed concurrently")
+
 		return
 	}
 	WriteJSON(w, http.StatusOK, info)
@@ -292,10 +312,12 @@ func (h *Handlers) DeleteInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	if err := h.manager.Remove(id); err != nil {
 		if errors.Is(err, inventory.ErrNotFound) {
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
+
 			return
 		}
 		zerolog.Ctx(r.Context()).Error().Err(err).Stringer("id", id).Msg("failed to delete inventory")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to delete inventory")
+
 		return
 	}
 
@@ -379,6 +401,7 @@ func (h *Handlers) buildInventoryGroups(r *http.Request, views []inventory.Merge
 		key := views[i].ConfigID()
 		if idx, ok := groupIdx[key]; ok {
 			groups[idx].Runs = append(groups[idx].Runs, row)
+
 			continue
 		}
 		groupIdx[key] = len(groups)
@@ -389,12 +412,10 @@ func (h *Handlers) buildInventoryGroups(r *http.Request, views []inventory.Merge
 		})
 	}
 	for i := range groups {
-		groups[i].VisibleRuns = DefaultVisibleRuns
-		if groups[i].VisibleRuns > len(groups[i].Runs) {
-			groups[i].VisibleRuns = len(groups[i].Runs)
-		}
+		groups[i].VisibleRuns = min(DefaultVisibleRuns, len(groups[i].Runs))
 	}
 	h.annotateGroupsFromConfig(groups)
+
 	return groups
 }
 
@@ -422,6 +443,7 @@ func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInvent
 		}
 	}
 	row.CacheBytes, row.CacheBytesH = h.cacheSize(r, v.Inventory)
+
 	return row
 }
 

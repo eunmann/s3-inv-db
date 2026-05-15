@@ -78,6 +78,7 @@ type Stats struct {
 func Read() Stats {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
+
 	return Stats{
 		Alloc:         m.Alloc,
 		TotalAlloc:    m.TotalAlloc,
@@ -252,6 +253,7 @@ func (t *Tracker) LogWithBudget(reason string, budgetInUse, budgetTotal uint64) 
 func (t *Tracker) PeakHeap() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	return t.peakHeap
 }
 
@@ -266,6 +268,7 @@ func (t *Tracker) logLoop() {
 		select {
 		case <-t.stopCh:
 			t.LogNow("shutdown")
+
 			return
 		case <-ticker.C:
 			t.LogNow("periodic")
@@ -274,14 +277,17 @@ func (t *Tracker) logLoop() {
 }
 
 // Global tracker for convenience.
-var globalTracker *Tracker
-var globalOnce sync.Once
+var (
+	globalTracker *Tracker
+	globalOnce    sync.Once
+)
 
 // Global returns the global tracker, initializing if needed.
 func Global() *Tracker {
 	globalOnce.Do(func() {
 		globalTracker = NewTracker(DefaultConfig())
 	})
+
 	return globalTracker
 }
 

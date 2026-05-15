@@ -29,6 +29,7 @@ func testDB(t *testing.T) *sql.DB {
 	if err := migrate.Apply(db); err != nil {
 		t.Fatalf("migrate.Apply: %v", err)
 	}
+
 	return db
 }
 
@@ -329,5 +330,8 @@ func TestHlogChain_LogsAfterPanic(t *testing.T) {
 
 type writeBuffer struct{ b []byte }
 
-func (w *writeBuffer) Write(p []byte) (int, error) { w.b = append(w.b, p...); return len(p), nil }
-func (w *writeBuffer) String() string              { return string(w.b) }
+func (w *writeBuffer) Write(p []byte) (int, error) {
+	w.b = append(w.b, p...)
+	return len(p), nil
+}
+func (w *writeBuffer) String() string { return string(w.b) }

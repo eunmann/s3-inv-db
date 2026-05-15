@@ -65,6 +65,7 @@ func (pt *ProgressTracker) ProgressPct() float64 {
 	if pt.total == 0 {
 		return 100.0
 	}
+
 	return float64(done) * 100.0 / float64(pt.total)
 }
 
@@ -124,7 +125,7 @@ type CompletionEvent struct {
 	event   string
 	phase   string
 	elapsed time.Duration
-	fields  map[string]interface{}
+	fields  map[string]any
 }
 
 // NewCompletionEvent creates a new completion event builder.
@@ -134,37 +135,42 @@ func NewCompletionEvent(log zerolog.Logger, event, phase string, elapsed time.Du
 		event:   event,
 		phase:   phase,
 		elapsed: elapsed,
-		fields:  make(map[string]interface{}),
+		fields:  make(map[string]any),
 	}
 }
 
 // Str adds a string field.
 func (ce *CompletionEvent) Str(key, val string) *CompletionEvent {
 	ce.fields[key] = val
+
 	return ce
 }
 
 // Int adds an int field.
 func (ce *CompletionEvent) Int(key string, val int) *CompletionEvent {
 	ce.fields[key] = val
+
 	return ce
 }
 
 // Int64 adds an int64 field.
 func (ce *CompletionEvent) Int64(key string, val int64) *CompletionEvent {
 	ce.fields[key] = val
+
 	return ce
 }
 
 // Uint64 adds a uint64 field.
 func (ce *CompletionEvent) Uint64(key string, val uint64) *CompletionEvent {
 	ce.fields[key] = val
+
 	return ce
 }
 
 // Float64 adds a float64 field.
 func (ce *CompletionEvent) Float64(key string, val float64) *CompletionEvent {
 	ce.fields[key] = val
+
 	return ce
 }
 
@@ -174,6 +180,7 @@ func (ce *CompletionEvent) Bytes(key string, bytes int64) *CompletionEvent {
 	if IsPrettyMode() {
 		ce.fields[key+"_h"] = humanfmt.Bytes(bytes)
 	}
+
 	return ce
 }
 
@@ -188,6 +195,7 @@ func (ce *CompletionEvent) Count(key string, n int64) *CompletionEvent {
 	if IsPrettyMode() {
 		ce.fields[key+"_h"] = humanfmt.Count(n)
 	}
+
 	return ce
 }
 
@@ -213,6 +221,7 @@ func (ce *CompletionEvent) Progress(done, total int64, eta time.Duration) *Compl
 			ce.fields["eta_h"] = humanfmt.Duration(eta)
 		}
 	}
+
 	return ce
 }
 
@@ -233,6 +242,7 @@ func (ce *CompletionEvent) ProgressFromTracker(pt *ProgressTracker) *CompletionE
 			ce.fields["eta_h"] = humanfmt.Duration(eta)
 		}
 	}
+
 	return ce
 }
 
@@ -245,6 +255,7 @@ func (ce *CompletionEvent) Throughput(bytes int64) *CompletionEvent {
 			ce.fields["throughput_h"] = humanfmt.Throughput(bytes, ce.elapsed)
 		}
 	}
+
 	return ce
 }
 

@@ -27,6 +27,7 @@ func Apply(db *sql.DB) error {
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
+
 	return nil
 }
 
@@ -46,6 +47,7 @@ func recoverDirty(m *migrate.Migrate) error {
 	if err := m.Force(int(version)); err != nil {
 		return fmt.Errorf("clear dirty version %d: %w", version, err)
 	}
+
 	return nil
 }
 
@@ -58,6 +60,7 @@ func Down(db *sql.DB, steps int) error {
 	if err := m.Steps(-steps); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("roll back %d migrations: %w", steps, err)
 	}
+
 	return nil
 }
 
@@ -76,6 +79,7 @@ func Version(db *sql.DB) (version uint, dirty bool, err error) {
 	if err != nil {
 		return 0, false, fmt.Errorf("read schema version: %w", err)
 	}
+
 	return version, dirty, nil
 }
 
@@ -95,5 +99,6 @@ func newMigrator(db *sql.DB) (*migrate.Migrate, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build migrator: %w", err)
 	}
+
 	return m, nil
 }

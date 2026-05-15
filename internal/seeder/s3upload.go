@@ -39,6 +39,7 @@ func (c S3Config) Validate() error {
 	if c.Prefix != "" && c.Prefix[len(c.Prefix)-1] != '/' {
 		return errPrefixNotSlash
 	}
+
 	return nil
 }
 
@@ -59,6 +60,7 @@ func newS3Client(ctx context.Context) (*s3.Client, error) {
 	if os.Getenv("AWS_ENDPOINT_URL_S3") != "" {
 		opts = append(opts, func(o *s3.Options) { o.UsePathStyle = true })
 	}
+
 	return s3.NewFromConfig(cfg, opts...), nil
 }
 
@@ -161,6 +163,7 @@ func encodeCSVGz(srcBucket string, objects []benchutil.FakeObject) (body []byte,
 	if err := gz.Close(); err != nil {
 		return nil, 0, fmt.Errorf("close gzip: %w", err)
 	}
+
 	return buf.Bytes(), int64(buf.Len()), nil
 }
 
@@ -182,6 +185,7 @@ func tierToS3Columns(m *tiers.Mapping, id tiers.ID) (storageClass, accessTier st
 	case tiers.ITDeepArchive:
 		return "INTELLIGENT_TIERING", "DEEP_ARCHIVE_ACCESS"
 	}
+
 	return m.ByID(id).Name, ""
 }
 
@@ -195,11 +199,13 @@ func putObject(ctx context.Context, client *s3.Client, bucket, key string, body 
 	if err != nil {
 		return fmt.Errorf("put s3://%s/%s: %w", bucket, key, err)
 	}
+
 	return nil
 }
 
 func md5Hex(b []byte) string {
 	sum := md5.Sum(b) //nolint:gosec // mandated by manifest spec
+
 	return hex.EncodeToString(sum[:])
 }
 

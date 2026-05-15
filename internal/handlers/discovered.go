@@ -21,10 +21,12 @@ func (h *Handlers) ListDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, inventory.ErrDiscoveryDisabled) {
 			WriteJSONError(w, http.StatusServiceUnavailable, "discovery not configured (start the server with --s3-source)")
+
 			return
 		}
 		zerolog.Ctx(r.Context()).Error().Err(err).Msg("discover inventories")
 		WriteJSONError(w, http.StatusBadGateway, "failed to discover inventories")
+
 		return
 	}
 	WriteJSON(w, http.StatusOK, views)

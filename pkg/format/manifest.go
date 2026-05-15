@@ -110,6 +110,7 @@ func (m *Manifest) TotalBytes() uint64 {
 			total += uint64(f.Size)
 		}
 	}
+
 	return total
 }
 
@@ -120,6 +121,7 @@ func addFile(root, name string, dst map[string]FileInfo) error {
 		if os.IsNotExist(err) {
 			return nil
 		}
+
 		return fmt.Errorf("stat %s: %w", name, err)
 	}
 	checksum, err := checksumFile(path)
@@ -127,6 +129,7 @@ func addFile(root, name string, dst map[string]FileInfo) error {
 		return fmt.Errorf("checksum %s: %w", name, err)
 	}
 	dst[name] = FileInfo{Size: info.Size(), Checksum: checksum}
+
 	return nil
 }
 
@@ -202,17 +205,20 @@ func writeFileSync(path string, data []byte) error {
 
 	if _, err := f.Write(data); err != nil {
 		f.Close()
+
 		return fmt.Errorf("write file: %w", err)
 	}
 
 	if err := f.Sync(); err != nil {
 		f.Close()
+
 		return fmt.Errorf("sync file: %w", err)
 	}
 
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close file: %w", err)
 	}
+
 	return nil
 }
 
@@ -227,5 +233,6 @@ func SyncDir(dir string) error {
 	if err := d.Sync(); err != nil {
 		return fmt.Errorf("sync directory: %w", err)
 	}
+
 	return nil
 }

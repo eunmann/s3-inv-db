@@ -14,7 +14,7 @@ type errorBody struct {
 }
 
 // WriteJSON writes data as a JSON response with the given status code.
-func WriteJSON(w http.ResponseWriter, status int, data interface{}) {
+func WriteJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	//nolint:errchkjson // a closed/dropped connection is handled by the HTTP server

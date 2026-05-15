@@ -288,6 +288,7 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 
 		if !errors.Is(csvErr, parquetErr) {
 			t.Errorf("row %d: CSV err=%v, Parquet err=%v", i, csvErr, parquetErr)
+
 			continue
 		}
 		if csvErr != nil {

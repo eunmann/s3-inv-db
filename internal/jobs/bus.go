@@ -15,6 +15,7 @@ func NewBus(bufSize int) *Bus {
 	if bufSize <= 0 {
 		bufSize = 32
 	}
+
 	return &Bus{bufSize: bufSize, subs: make(map[chan Job]struct{})}
 }
 
@@ -33,6 +34,7 @@ func (b *Bus) Subscribe() (events <-chan Job, cancel func()) {
 		}
 		b.mu.Unlock()
 	}
+
 	return ch, cancelFn
 }
 

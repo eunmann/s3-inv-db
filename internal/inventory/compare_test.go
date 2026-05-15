@@ -208,5 +208,6 @@ func openSeededIndex(t *testing.T, seed int64, objects int) *indexread.Index {
 		t.Fatalf("indexread.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = idx.Close() })
+
 	return idx
 }

@@ -29,6 +29,7 @@ func Total() Result {
 			Reliable:   false,
 		}
 	}
+
 	return Result{
 		TotalBytes: bytes,
 		Reliable:   true,

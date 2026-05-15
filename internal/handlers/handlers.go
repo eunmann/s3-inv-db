@@ -94,6 +94,7 @@ func NewWithConfig(cfg Config) *Handlers {
 	if discovery == nil {
 		discovery = inventory.NewDiscoveryService(cfg.Manager, cfg.Discoverer, cfg.Loader)
 	}
+
 	return &Handlers{
 		manager:      cfg.Manager,
 		discovery:    discovery,

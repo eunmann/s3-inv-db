@@ -150,6 +150,7 @@ func (h *Handlers) ComparePage(w http.ResponseWriter, r *http.Request) {
 	}
 	if wantsHTMXPartial(r) {
 		h.renderCompareLevelPartial(w, r, opts)
+
 		return
 	}
 	h.renderCompareFullPage(w, r, opts)
@@ -215,10 +216,12 @@ func (h *Handlers) renderCompareFullPage(w http.ResponseWriter, r *http.Request,
 func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Request, opts compareViewOptions) {
 	if opts.from == "" || opts.to == "" {
 		http.Error(w, "from and to are required", http.StatusBadRequest)
+
 		return
 	}
 	if !sameConfig(opts.from, opts.to) {
 		http.Error(w, "both runs must belong to the same inventory configuration", http.StatusBadRequest)
+
 		return
 	}
 	level, err := h.computeCompareLevel(r.Context(), opts)
@@ -232,6 +235,7 @@ func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Requ
 			zerolog.Ctx(r.Context()).Error().Err(err).Msg("compare level partial")
 			http.Error(w, "failed to compute comparison", http.StatusInternalServerError)
 		}
+
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -273,6 +277,7 @@ func (h *Handlers) computeCompareLevel(_ context.Context, opts compareViewOption
 				view.Status.Unchanged++
 			}
 		}
+
 		return nil
 	})
 	if err != nil {
@@ -300,6 +305,7 @@ func (h *Handlers) computeCompareLevel(_ context.Context, opts compareViewOption
 	} else {
 		view.Children = nil
 	}
+
 	return &view, nil
 }
 
@@ -341,6 +347,7 @@ func sortCompareChildView(rows []CompareChildView, sortBy, dir string) {
 		if desc {
 			return !primary
 		}
+
 		return primary
 	}
 	sort.SliceStable(rows, less)
@@ -369,6 +376,7 @@ func (h *Handlers) buildCompareSelfView(self inventory.CompareSelf) CompareSelfV
 	v.APICostBeforeH = pricing.FormatCost(apiBefore)
 	v.APICostAfterH = pricing.FormatCost(apiAfter)
 	v.APICostDeltaH, v.APICostPct, v.APICostSign = formatCostDelta(apiBefore, apiAfter)
+
 	return v
 }
 
@@ -404,6 +412,7 @@ func (h *Handlers) buildCompareChildView(c *inventory.CompareChild) CompareChild
 	v.APICostAfterH = pricing.FormatCost(apiAfter)
 	v.APICostDelta = int64(apiAfter) - int64(apiBefore)
 	v.APICostDeltaH, v.APICostPct, v.APICostSign = formatCostDelta(apiBefore, apiAfter)
+
 	return v
 }
 
@@ -413,6 +422,7 @@ func numericLabel(n uint64, missing bool, fn func(uint64) string) string {
 	if missing {
 		return "—"
 	}
+
 	return fn(n)
 }
 
@@ -455,6 +465,7 @@ func pctChange(before, after uint64) string {
 	if pct > 0 {
 		return fmt.Sprintf("+%.0f%%", pct)
 	}
+
 	return fmt.Sprintf("%.0f%%", pct)
 }
 
@@ -462,6 +473,7 @@ func absInt64(v int64) uint64 {
 	if v < 0 {
 		return uint64(-v)
 	}
+
 	return uint64(v)
 }
 
@@ -475,6 +487,7 @@ func tierMapCost(m map[string]indexread.TierBreakdown, prices pricing.PriceTable
 	for _, v := range m {
 		breakdown = append(breakdown, v)
 	}
+
 	return pricing.ComputeMonthlyCost(breakdown, prices).TotalMicrodollars
 }
 
@@ -483,6 +496,7 @@ func tierMapCost(m map[string]indexread.TierBreakdown, prices pricing.PriceTable
 func sameConfig(idA, idB inventory.ID) bool {
 	srcA, invA, _, okA := idA.Split()
 	srcB, invB, _, okB := idB.Split()
+
 	return okA && okB && srcA == srcB && invA == invB
 }
 
@@ -494,6 +508,7 @@ func describeRun(id inventory.ID) (configLabel, runLabel string) {
 	if !ok {
 		return "", string(id)
 	}
+
 	return src + "/" + inv, humanfmt.RunTimestamp(run)
 }
 
@@ -591,21 +606,25 @@ func (h *Handlers) CompareLevelAPI(w http.ResponseWriter, r *http.Request) {
 
 	if from == "" || to == "" {
 		WriteJSONError(w, http.StatusBadRequest, "from and to are required")
+
 		return
 	}
 	if !sameConfig(from, to) {
 		WriteJSONError(w, http.StatusBadRequest, "from and to must belong to the same inventory configuration")
+
 		return
 	}
 
 	var data inventory.CompareLevelData
 	err := h.manager.WithTwoIndexes(from, to, func(a, b *indexread.Index) error {
 		data = inventory.CompareLevel(a, b, prefix)
+
 		return nil
 	})
 	if err != nil {
 		status, msg := managerErrorStatus(err)
 		WriteJSONError(w, status, msg)
+
 		return
 	}
 
@@ -685,6 +704,7 @@ func (h *Handlers) buildCompareAPIResponse(from, to inventory.ID, prefix, sortBy
 	} else {
 		resp.Children = []CompareChildResponse{}
 	}
+
 	return resp
 }
 
@@ -708,6 +728,7 @@ func (h *Handlers) buildCompareSelfJSON(self inventory.CompareSelf) CompareSelfR
 	r.APICostBeforeMicrodollars = pricing.ComputePutCost(self.Objects.Before, h.priceTable)
 	r.APICostAfterMicrodollars = pricing.ComputePutCost(self.Objects.After, h.priceTable)
 	r.APICostDeltaMicrodollars = int64(r.APICostAfterMicrodollars) - int64(r.APICostBeforeMicrodollars)
+
 	return r
 }
 
@@ -747,6 +768,7 @@ func sortCompareAPIChildren(rows []CompareChildResponse, sortBy, dir string) {
 		if desc {
 			return !primary
 		}
+
 		return primary
 	}
 	sort.SliceStable(rows, less)
@@ -764,6 +786,7 @@ func statusRank(s string) int {
 	case "unchanged":
 		return 4
 	}
+
 	return 5
 }
 
@@ -809,5 +832,6 @@ func buildComparePicker(all []inventory.Info) ComparePicker {
 		out.Groups = append(out.Groups, *g)
 	}
 	sort.Slice(out.Groups, func(i, j int) bool { return out.Groups[i].ConfigLabel < out.Groups[j].ConfigLabel })
+
 	return out
 }

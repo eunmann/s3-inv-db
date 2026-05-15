@@ -34,6 +34,7 @@ func RawClient(t *testing.T) *s3.Client {
 	if err != nil {
 		t.Fatalf("aws config: %v", err)
 	}
+
 	return s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.UsePathStyle = true
 		o.BaseEndpoint = aws.String(endpoint)
@@ -54,6 +55,7 @@ func FetchClient(t *testing.T) *s3fetch.Client {
 	if err != nil {
 		t.Fatalf("aws config: %v", err)
 	}
+
 	return s3fetch.NewClientWithConfig(cfg)
 }
 
@@ -68,6 +70,7 @@ func Bucket(t *testing.T, c *s3.Client) string {
 		t.Fatalf("CreateBucket %s: %v", name, err)
 	}
 	t.Cleanup(func() { empty(t, c, name) })
+
 	return name
 }
 
@@ -79,6 +82,7 @@ func empty(t *testing.T, c *s3.Client, bucket string) {
 		page, err := pages.NextPage(ctx)
 		if err != nil {
 			t.Logf("list for cleanup: %v", err)
+
 			return
 		}
 		for _, obj := range page.Contents {
@@ -99,5 +103,6 @@ func bucketName(testName string) string {
 		clean = clean[:40]
 	}
 	stamp := strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000"), ".", "")
+
 	return "t-" + clean + "-" + stamp
 }

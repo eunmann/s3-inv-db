@@ -100,6 +100,7 @@ func (r *PrefixRow) Clone() *PrefixRow {
 	}
 	copy(clone.TierCounts[:], r.TierCounts[:])
 	copy(clone.TierBytes[:], r.TierBytes[:])
+
 	return clone
 }
 
@@ -119,6 +120,7 @@ func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) (*Pr
 		if err == io.EOF {
 			return nil, io.EOF
 		}
+
 		return nil, fmt.Errorf("read prefix length: %w", err)
 	}
 	prefixLen := int(binary.LittleEndian.Uint32(lenBuf[:]))
@@ -226,6 +228,7 @@ func (s *PrefixStats) ToPrefixRow(prefix string) *PrefixRow {
 	}
 	copy(row.TierCounts[:], s.TierCounts[:])
 	copy(row.TierBytes[:], s.TierBytes[:])
+
 	return row
 }
 
@@ -320,22 +323,10 @@ func DefaultConfig() Config {
 	}
 
 	// Part concurrency for parallel range downloads within a single object
-	partConcurrency := numCPU
-	if partConcurrency < 4 {
-		partConcurrency = 4
-	}
-	if partConcurrency > 16 {
-		partConcurrency = 16
-	}
+	partConcurrency := min(max(numCPU, 4), 16)
 
 	// Merge workers scale with CPU but cap lower to avoid memory pressure
-	mergeWorkers := numCPU / 2
-	if mergeWorkers < 1 {
-		mergeWorkers = 1
-	}
-	if mergeWorkers > 8 {
-		mergeWorkers = 8
-	}
+	mergeWorkers := min(max(numCPU/2, 1), 8)
 
 	return Config{
 		TempDir:                   "",
@@ -365,24 +356,28 @@ func (c *Config) EnsureBudget() {
 // This is the budget's aggregator allocation (50% of total budget).
 func (c *Config) AggregatorMemoryThreshold() int64 {
 	c.EnsureBudget()
+
 	return int64(c.MemoryBudget.AggregatorBudget())
 }
 
 // RunBufferBudget returns the total budget for run file buffers.
 func (c *Config) RunBufferBudget() int64 {
 	c.EnsureBudget()
+
 	return int64(c.MemoryBudget.RunBufferBudget())
 }
 
 // MergeBudget returns the total budget for merge phase operations.
 func (c *Config) MergeBudget() int64 {
 	c.EnsureBudget()
+
 	return int64(c.MemoryBudget.MergeBudget())
 }
 
 // IndexBuildBudget returns the total budget for index building.
 func (c *Config) IndexBuildBudget() int64 {
 	c.EnsureBudget()
+
 	return int64(c.MemoryBudget.IndexBuildBudget())
 }
 

@@ -51,6 +51,7 @@ func TestRun_GeneratesValidIndexes(t *testing.T) {
 		idx, err := indexread.Open(inv.Path)
 		if err != nil {
 			t.Errorf("failed to open index %s: %v", inv.ID, err)
+
 			continue
 		}
 

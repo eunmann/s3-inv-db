@@ -67,6 +67,7 @@ func Duration(d time.Duration) string {
 		if m == 0 {
 			return fmt.Sprintf("%dh", h)
 		}
+
 		return fmt.Sprintf("%dh%dm", h, m)
 	case d >= time.Minute:
 		m := d / time.Minute
@@ -74,6 +75,7 @@ func Duration(d time.Duration) string {
 		if s == 0 {
 			return fmt.Sprintf("%dm", m)
 		}
+
 		return fmt.Sprintf("%dm%ds", m, s)
 	case d >= time.Second:
 		return fmt.Sprintf("%.2fs", d.Seconds())
@@ -156,6 +158,7 @@ func formatWithCommas(n int64) string {
 		out = append(out, ',')
 		out = append(out, s[i:i+3]...)
 	}
+
 	return string(out)
 }
 
@@ -170,6 +173,7 @@ func RunTimestamp(raw string) string {
 			return t.UTC().Format("2006-01-02 15:04 UTC")
 		}
 	}
+
 	return raw
 }
 

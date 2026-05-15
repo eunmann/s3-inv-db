@@ -53,6 +53,7 @@ func (m *MmapFile) Close() error {
 	if err := unix.Munmap(m.data); err != nil {
 		return fmt.Errorf("munmap: %w", err)
 	}
+
 	return nil
 }
 
@@ -86,28 +87,33 @@ func OpenArray(path string) (*ArrayReader, error) {
 
 	if mmap.Size() < int64(HeaderSize) {
 		mmap.Close()
+
 		return nil, ErrInvalidHeader
 	}
 
 	header, err := DecodeHeader(mmap.Data()[:HeaderSize])
 	if err != nil {
 		mmap.Close()
+
 		return nil, fmt.Errorf("decode header: %w", err)
 	}
 
 	if header.Magic != MagicNumber {
 		mmap.Close()
+
 		return nil, ErrMagicMismatch
 	}
 
 	if header.Version != Version {
 		mmap.Close()
+
 		return nil, ErrVersionMismatch
 	}
 
 	expectedSize := int64(HeaderSize) + int64(header.Count)*int64(header.Width)
 	if mmap.Size() < expectedSize {
 		mmap.Close()
+
 		return nil, fmt.Errorf("file too small: %d < %d", mmap.Size(), expectedSize)
 	}
 
@@ -142,6 +148,7 @@ func (r *ArrayReader) GetU32(idx uint64) (uint32, error) {
 		return 0, fmt.Errorf("width mismatch: expected 4, got %d", r.header.Width)
 	}
 	offset := idx * 4
+
 	return binary.LittleEndian.Uint32(r.data[offset:]), nil
 }
 
@@ -154,6 +161,7 @@ func (r *ArrayReader) GetU64(idx uint64) (uint64, error) {
 		return 0, fmt.Errorf("width mismatch: expected 8, got %d", r.header.Width)
 	}
 	offset := idx * 8
+
 	return binary.LittleEndian.Uint64(r.data[offset:]), nil
 }
 
@@ -166,6 +174,7 @@ func (r *ArrayReader) GetU16(idx uint64) (uint16, error) {
 		return 0, fmt.Errorf("width mismatch: expected 2, got %d", r.header.Width)
 	}
 	offset := idx * 2
+
 	return binary.LittleEndian.Uint16(r.data[offset:]), nil
 }
 
@@ -219,6 +228,7 @@ func OpenBlob(blobPath, offsetsPath string) (*BlobReader, error) {
 	offsets, err := OpenArray(offsetsPath)
 	if err != nil {
 		blobMmap.Close()
+
 		return nil, fmt.Errorf("open offsets: %w", err)
 	}
 
@@ -235,6 +245,7 @@ func (r *BlobReader) Close() error {
 	if err1 != nil {
 		return err1
 	}
+
 	return err2
 }
 
@@ -243,6 +254,7 @@ func (r *BlobReader) Count() uint64 {
 	if r.offsetsMmap.Count() == 0 {
 		return 0
 	}
+
 	return r.offsetsMmap.Count() - 1
 }
 
@@ -278,5 +290,6 @@ func (r *BlobReader) Get(idx uint64) (string, error) {
 func (r *BlobReader) UnsafeGet(idx uint64) string {
 	start := r.offsetsMmap.UnsafeGetU64(idx)
 	end := r.offsetsMmap.UnsafeGetU64(idx + 1)
+
 	return string(r.blobMmap.Data()[start:end])
 }

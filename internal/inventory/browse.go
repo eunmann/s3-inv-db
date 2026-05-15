@@ -75,6 +75,7 @@ func NormalizePage(pageStr, sizeStr string) (page, size int) {
 	if size > MaxPageSize {
 		size = MaxPageSize
 	}
+
 	return page, size
 }
 
@@ -97,6 +98,7 @@ func NormalizeSort(sortBy, dir string) (col, direction string) {
 			direction = SortDirDesc
 		}
 	}
+
 	return col, direction
 }
 
@@ -113,10 +115,7 @@ func Paginate(total, page, pageSize int) BrowsePagination {
 		page = 1
 	}
 	first := (page-1)*pageSize + 1
-	last := first + pageSize - 1
-	if last > total {
-		last = total
-	}
+	last := min(first+pageSize-1, total)
 	p := BrowsePagination{
 		Page:     page,
 		PageSize: pageSize,
@@ -130,6 +129,7 @@ func Paginate(total, page, pageSize int) BrowsePagination {
 	if page < pages {
 		p.NextPage = page + 1
 	}
+
 	return p
 }
 
@@ -159,6 +159,7 @@ func SortChildren(children []BrowseChild, sortBy, dir string) {
 		if dir == SortDirDesc {
 			return !primary
 		}
+
 		return primary
 	}
 	sort.SliceStable(children, less)
@@ -191,6 +192,7 @@ func SortLinks(currentSort, currentDir string) map[string]BrowseSortLink {
 		}
 		links[c.key] = link
 	}
+
 	return links
 }
 
@@ -202,11 +204,12 @@ func Breadcrumbs(prefix string) []BrowseCrumb {
 	}
 	trimmed := strings.TrimSuffix(prefix, "/")
 	parts := strings.Split(trimmed, "/")
-	cum := ""
+	var cum strings.Builder
 	for _, p := range parts {
-		cum += p + "/"
-		crumbs = append(crumbs, BrowseCrumb{Label: p, Prefix: cum})
+		cum.WriteString(p + "/")
+		crumbs = append(crumbs, BrowseCrumb{Label: p, Prefix: cum.String()})
 	}
+
 	return crumbs
 }
 

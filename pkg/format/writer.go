@@ -34,6 +34,7 @@ func NewArrayWriter(path string, width uint32) (*ArrayWriter, error) {
 	if _, err := w.Write(header); err != nil {
 		f.Close()
 		os.Remove(path)
+
 		return nil, fmt.Errorf("write header: %w", err)
 	}
 
@@ -56,6 +57,7 @@ func (w *ArrayWriter) WriteU32(val uint32) error {
 		return fmt.Errorf("write u32: %w", err)
 	}
 	w.count++
+
 	return nil
 }
 
@@ -70,6 +72,7 @@ func (w *ArrayWriter) WriteU64(val uint64) error {
 		return fmt.Errorf("write u64: %w", err)
 	}
 	w.count++
+
 	return nil
 }
 
@@ -92,6 +95,7 @@ func (w *ArrayWriter) WriteU64Batch(vals []uint64) error {
 		return fmt.Errorf("write u64 batch: %w", err)
 	}
 	w.count += uint64(len(vals))
+
 	return nil
 }
 
@@ -106,6 +110,7 @@ func (w *ArrayWriter) WriteU16(val uint16) error {
 		return fmt.Errorf("write u16: %w", err)
 	}
 	w.count++
+
 	return nil
 }
 
@@ -113,12 +118,14 @@ func (w *ArrayWriter) WriteU16(val uint16) error {
 func (w *ArrayWriter) Close() error {
 	if err := w.writer.Flush(); err != nil {
 		w.file.Close()
+
 		return fmt.Errorf("flush: %w", err)
 	}
 
 	// Seek back and update header with correct count
 	if _, err := w.file.Seek(0, 0); err != nil {
 		w.file.Close()
+
 		return fmt.Errorf("seek: %w", err)
 	}
 
@@ -130,12 +137,14 @@ func (w *ArrayWriter) Close() error {
 	})
 	if _, err := w.file.Write(header); err != nil {
 		w.file.Close()
+
 		return fmt.Errorf("update header: %w", err)
 	}
 
 	if err := w.file.Close(); err != nil {
 		return fmt.Errorf("close file: %w", err)
 	}
+
 	return nil
 }
 
@@ -163,6 +172,7 @@ func NewBlobWriter(blobPath, offsetsPath string) (*BlobWriter, error) {
 	if err != nil {
 		blobFile.Close()
 		os.Remove(blobPath)
+
 		return nil, fmt.Errorf("create offsets: %w", err)
 	}
 
@@ -216,23 +226,27 @@ func (w *BlobWriter) Close() error {
 		w.blobWriter.Flush()
 		w.blobFile.Close()
 		w.offsets.Close()
+
 		return fmt.Errorf("write sentinel offset: %w", err)
 	}
 
 	if err := w.blobWriter.Flush(); err != nil {
 		w.blobFile.Close()
 		w.offsets.Close()
+
 		return fmt.Errorf("flush blob: %w", err)
 	}
 
 	if err := w.blobFile.Close(); err != nil {
 		w.offsets.Close()
+
 		return fmt.Errorf("close blob: %w", err)
 	}
 
 	if err := w.offsets.Close(); err != nil {
 		return fmt.Errorf("close offsets: %w", err)
 	}
+
 	return nil
 }
 
@@ -242,5 +256,6 @@ func (w *BlobWriter) Count() uint64 {
 	if w.offsets.Count() == 0 {
 		return 0
 	}
+
 	return w.offsets.Count() - 1
 }

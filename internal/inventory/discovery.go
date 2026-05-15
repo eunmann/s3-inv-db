@@ -29,6 +29,7 @@ type IndexBuilder interface {
 // the join logic doesn't belong at the HTTP layer.
 type MergedInventory struct {
 	Inventory
+
 	State       State
 	Error       string
 	NodeCount   uint64
@@ -129,6 +130,7 @@ func (s *DiscoveryService) List(ctx context.Context) ([]MergedInventory, error) 
 		}
 		out = append(out, m)
 	}
+
 	return out, nil
 }
 
@@ -142,6 +144,7 @@ func (s *DiscoveryService) Find(ctx context.Context, src, id, run string) (Inven
 	if err != nil {
 		return inv, fmt.Errorf("find: %w", err)
 	}
+
 	return inv, nil
 }
 
@@ -163,6 +166,7 @@ func (s *DiscoveryService) PrepareDiscovered(disc Inventory) error {
 		!errors.Is(err, ErrAlreadyExists) {
 		return fmt.Errorf("register: %w", err)
 	}
+
 	return nil
 }
 
@@ -211,6 +215,7 @@ func (s *DiscoveryService) loadInternal(ctx context.Context, disc Inventory, onP
 		if auto {
 			return s.manager.AutoLoad(ctx, composite, build)
 		}
+
 		return s.manager.LoadWith(ctx, composite, build)
 	}
 	opts := GatedLoadOptions{Pin: !auto}
@@ -227,5 +232,6 @@ func (s *DiscoveryService) loadInternal(ctx context.Context, disc Inventory, onP
 	if err := s.gate.Load(ctx, composite, build, opts); err != nil {
 		return fmt.Errorf("gated load %s: %w", composite, err)
 	}
+
 	return nil
 }

@@ -109,6 +109,7 @@ func run() error {
 	}); err != nil {
 		return fmt.Errorf("server: %w", err)
 	}
+
 	return nil
 }
 
@@ -117,6 +118,7 @@ func pickString(cfg *appconfig.Config, flagVal string, explicit bool, get func(*
 	if cfg != nil {
 		p = get(cfg)
 	}
+
 	return appconfig.PickString(flagVal, explicit, p)
 }
 
@@ -125,6 +127,7 @@ func pickBool(cfg *appconfig.Config, flagVal, explicit bool, get func(*appconfig
 	if cfg != nil {
 		p = get(cfg)
 	}
+
 	return appconfig.PickBool(flagVal, explicit, p)
 }
 
@@ -132,6 +135,7 @@ func fileConfigInt(cfg *appconfig.Config, get func(*appconfig.Config) *int) *int
 	if cfg == nil {
 		return nil
 	}
+
 	return get(cfg)
 }
 
@@ -139,6 +143,7 @@ func fileConfigUint32(cfg *appconfig.Config, get func(*appconfig.Config) *uint32
 	if cfg == nil {
 		return nil
 	}
+
 	return get(cfg)
 }
 
@@ -146,6 +151,7 @@ func fileConfigFloat(cfg *appconfig.Config, get func(*appconfig.Config) *float64
 	if cfg == nil {
 		return nil
 	}
+
 	return get(cfg)
 }
 
@@ -153,6 +159,7 @@ func fileConfigString(cfg *appconfig.Config, get func(*appconfig.Config) *string
 	if cfg == nil {
 		return nil
 	}
+
 	return get(cfg)
 }
 
@@ -165,8 +172,10 @@ func resolveDuration(flagVal time.Duration, explicit bool, configVal *string) (t
 		if err != nil {
 			return 0, fmt.Errorf("parse duration %q: %w", *configVal, err)
 		}
+
 		return d, nil
 	}
+
 	return flagVal, nil
 }
 
@@ -184,6 +193,7 @@ func inventoryConfigsFromFile(cfg *appconfig.Config) []server.InventoryConfigEnt
 			RetentionCount: e.RetentionCount,
 		})
 	}
+
 	return out
 }
 
@@ -221,6 +231,7 @@ func parseSize(s string) (uint64, error) {
 	if n < 0 {
 		return 0, fmt.Errorf("negative size %q", s)
 	}
+
 	return uint64(n * float64(mult)), nil
 }
 
@@ -233,6 +244,7 @@ func envBool(k string, def bool) bool {
 	if err != nil {
 		return def
 	}
+
 	return b
 }
 
@@ -245,6 +257,7 @@ func envInt(k string, def int) int {
 	if err != nil {
 		return def
 	}
+
 	return n
 }
 
@@ -257,6 +270,7 @@ func envFloat(k string, def float64) float64 {
 	if err != nil {
 		return def
 	}
+
 	return f
 }
 
@@ -269,6 +283,7 @@ func envDuration(k string, def time.Duration) time.Duration {
 	if err != nil {
 		return def
 	}
+
 	return d
 }
 
@@ -276,5 +291,6 @@ func envOr(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
 	}
+
 	return def
 }

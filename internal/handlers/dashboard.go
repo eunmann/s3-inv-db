@@ -68,6 +68,7 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 			logger.Error().Err(err).Msg("failed to render dashboard")
 			http.Error(w, "failed to render page", http.StatusInternalServerError)
 		}
+
 		return
 	}
 
@@ -190,6 +191,7 @@ func (h *Handlers) aggregateDashboard(logger *zerolog.Logger, views []inventory.
 		}
 		h.tallyView(logger, v, c, data, &totals)
 	}
+
 	return confs, order, totals
 }
 
@@ -213,6 +215,7 @@ func (h *Handlers) addLoadedStats(logger *zerolog.Logger, v *inventory.MergedInv
 			totals.objects += stats.ObjectCount
 			totals.bytes += stats.TotalBytes
 		}
+
 		return nil
 	})
 	if err != nil {

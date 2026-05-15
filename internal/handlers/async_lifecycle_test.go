@@ -34,6 +34,7 @@ func (b *slowBuilder) BuildWith(ctx context.Context, _, _, _, _ string, _ func(s
 		return "", errors.New("not actually building anything")
 	case <-ctx.Done():
 		close(b.cancelled)
+
 		return "", fmt.Errorf("slowBuilder ctx: %w", ctx.Err())
 	}
 }

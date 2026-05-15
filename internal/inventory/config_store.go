@@ -74,6 +74,7 @@ func (s *ConfigStore) Upsert(c Config) error {
 	if err != nil {
 		return fmt.Errorf("upsert config %s/%s: %w", c.Source, c.Name, err)
 	}
+
 	return nil
 }
 
@@ -87,6 +88,7 @@ func (s *ConfigStore) Get(source, name string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("get config %s/%s: %w", source, name, err)
 	}
+
 	return c, nil
 }
 
@@ -108,6 +110,7 @@ func (s *ConfigStore) List() ([]Config, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate configs: %w", err)
 	}
+
 	return out, nil
 }
 
@@ -124,6 +127,7 @@ func (s *ConfigStore) Delete(source, name string) error {
 	if n == 0 {
 		return ErrStoreNotFound
 	}
+
 	return nil
 }
 
@@ -140,5 +144,6 @@ func scanConfig(r rowScanner) (Config, error) {
 	c.AutoLoad = autoLoad != 0
 	c.PollBackoffUntil = timeFromUnix(backoff)
 	c.LastPolledAt = timeFromUnix(polled)
+
 	return c, nil
 }

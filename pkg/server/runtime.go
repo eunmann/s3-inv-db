@@ -126,11 +126,13 @@ func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
 
 	if err := migrate.Apply(db); err != nil {
 		cleanup()
+
 		return nil, nil, fmt.Errorf("apply migrations: %w", err)
 	}
 	version, dirty, err := migrate.Version(db)
 	if err != nil {
 		cleanup()
+
 		return nil, nil, fmt.Errorf("read schema version: %w", err)
 	}
 	opts.Logger.Info().Uint("schema_version", version).Bool("dirty", dirty).Msg("schema migrated")
@@ -153,12 +155,15 @@ func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
 	})
 	if err != nil {
 		cleanup()
+
 		return nil, nil, fmt.Errorf("create server: %w", err)
 	}
 	if err := applyInventoryConfigs(srv.configStore, opts.InventoryConfigs); err != nil {
 		cleanup()
+
 		return nil, nil, fmt.Errorf("apply inventory configs: %w", err)
 	}
+
 	return srv, cleanup, nil
 }
 
@@ -177,6 +182,7 @@ func applyInventoryConfigs(store *inventory.ConfigStore, entries []InventoryConf
 			if err := store.Upsert(existing); err != nil {
 				return fmt.Errorf("update %s/%s: %w", e.Source, e.Name, err)
 			}
+
 			continue
 		}
 		retention := e.RetentionCount
@@ -192,6 +198,7 @@ func applyInventoryConfigs(store *inventory.ConfigStore, entries []InventoryConf
 			return fmt.Errorf("insert %s/%s: %w", e.Source, e.Name, err)
 		}
 	}
+
 	return nil
 }
 
@@ -213,6 +220,7 @@ func BootstrapAndRun(ctx context.Context, opts RuntimeOptions) error {
 	if err := srv.Run(ctx); err != nil {
 		return fmt.Errorf("run server: %w", err)
 	}
+
 	return nil
 }
 
@@ -225,6 +233,7 @@ func loadPriceTable(path string, logger zerolog.Logger) (pricing.PriceTable, err
 		return pricing.PriceTable{}, fmt.Errorf("load price table %s: %w", path, err)
 	}
 	logger.Info().Str("path", path).Msg("loaded custom price table")
+
 	return pt, nil
 }
 
@@ -238,5 +247,6 @@ func resolveStateDBPath(stateDB, cacheDir string) string {
 	if cacheDir != "" {
 		return filepath.Join(cacheDir, "state.db")
 	}
+
 	return ""
 }

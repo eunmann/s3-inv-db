@@ -115,10 +115,12 @@ func dirSize(root string) (int64, error) {
 			return fmt.Errorf("stat entry: %w", err)
 		}
 		total += info.Size()
+
 		return nil
 	})
 	if err != nil {
 		return 0, fmt.Errorf("walk %s: %w", root, err)
 	}
+
 	return total, nil
 }

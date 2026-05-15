@@ -79,6 +79,7 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 	tempFile, err := os.CreateTemp("", "parquet-inventory-*.parquet")
 	if err != nil {
 		r.Close()
+
 		return nil, fmt.Errorf("create temp file: %w", err)
 	}
 
@@ -87,6 +88,7 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 	if err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, fmt.Errorf("buffer parquet data: %w", err)
 	}
 
@@ -94,12 +96,14 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 	if size > 0 && written != size {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, fmt.Errorf("size mismatch: expected %d, got %d", size, written)
 	}
 
 	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, fmt.Errorf("seek temp file: %w", err)
 	}
 
@@ -107,6 +111,7 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 	if err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, fmt.Errorf("open parquet file: %w", err)
 	}
 
@@ -114,6 +119,7 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 	if err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, err
 	}
 
@@ -126,6 +132,7 @@ func NewParquetInventoryReaderWithConfig(r io.ReadCloser, size int64, cfg Parque
 	tempFile, err := os.CreateTemp("", "parquet-inventory-*.parquet")
 	if err != nil {
 		r.Close()
+
 		return nil, fmt.Errorf("create temp file: %w", err)
 	}
 
@@ -134,6 +141,7 @@ func NewParquetInventoryReaderWithConfig(r io.ReadCloser, size int64, cfg Parque
 	if err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, fmt.Errorf("buffer parquet data: %w", err)
 	}
 
@@ -141,12 +149,14 @@ func NewParquetInventoryReaderWithConfig(r io.ReadCloser, size int64, cfg Parque
 	if size > 0 && written != size {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, fmt.Errorf("size mismatch: expected %d, got %d", size, written)
 	}
 
 	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, fmt.Errorf("seek temp file: %w", err)
 	}
 
@@ -154,6 +164,7 @@ func NewParquetInventoryReaderWithConfig(r io.ReadCloser, size int64, cfg Parque
 	if err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, fmt.Errorf("open parquet file: %w", err)
 	}
 
@@ -218,6 +229,7 @@ func (r *parquetInventoryReader) Next() (Row, error) {
 		if r.bufIdx < r.bufLen {
 			row := r.rowBuf[r.bufIdx]
 			r.bufIdx++
+
 			return r.rowToRow(row), nil
 		}
 
@@ -226,6 +238,7 @@ func (r *parquetInventoryReader) Next() (Row, error) {
 			if n > 0 {
 				r.bufIdx = 0
 				r.bufLen = n
+
 				continue
 			}
 			if err != nil && !errors.Is(err, io.EOF) {

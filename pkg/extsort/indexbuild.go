@@ -89,10 +89,7 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, us
 	}
 
 	// Use capacity hint for arrays, with a minimum of 1024
-	arrayCap := uint64(1024)
-	if capacityHint > arrayCap {
-		arrayCap = capacityHint
-	}
+	arrayCap := max(capacityHint, uint64(1024))
 
 	b := &IndexBuilder{
 		outDir:             outDir,
@@ -111,18 +108,21 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, us
 	b.objectCountW, err = format.NewArrayWriter(filepath.Join(outDir, "object_count.u64"), 8)
 	if err != nil {
 		b.cleanup()
+
 		return nil, fmt.Errorf("create object_count writer: %w", err)
 	}
 
 	b.totalBytesW, err = format.NewArrayWriter(filepath.Join(outDir, "total_bytes.u64"), 8)
 	if err != nil {
 		b.cleanup()
+
 		return nil, fmt.Errorf("create total_bytes writer: %w", err)
 	}
 
 	b.depthW, err = format.NewArrayWriter(filepath.Join(outDir, "depth.u32"), 4)
 	if err != nil {
 		b.cleanup()
+
 		return nil, fmt.Errorf("create depth writer: %w", err)
 	}
 
@@ -195,7 +195,7 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	b.subtreeEnds = append(b.subtreeEnds, 0)
 	b.maxDepthInSubtrees = append(b.maxDepthInSubtrees, 0)
 
-	for tierID := tiers.ID(0); tierID < tiers.NumTiers; tierID++ {
+	for tierID := range tiers.NumTiers {
 		if row.TierCounts[tierID] > 0 || row.TierBytes[tierID] > 0 {
 			b.presentTiers[tierID] = true
 		}
@@ -228,6 +228,7 @@ func (b *IndexBuilder) closeNodesAbove(targetDepth int) error {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -255,7 +256,7 @@ func (b *IndexBuilder) closeTopNode() error {
 
 // writeTierStats writes tier statistics for a row.
 func (b *IndexBuilder) writeTierStats(row *PrefixRow) error {
-	for tierID := tiers.ID(0); tierID < tiers.NumTiers; tierID++ {
+	for tierID := range tiers.NumTiers {
 		_, hasCountWriter := b.tierCountWriters[tierID]
 		_, hasBytesWriter := b.tierBytesWriters[tierID]
 
@@ -279,6 +280,7 @@ func (b *IndexBuilder) writeTierStats(row *PrefixRow) error {
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -303,6 +305,7 @@ func (b *IndexBuilder) createTierWriter(tierID tiers.ID, _ *PrefixRow) error {
 	bytesW, err := format.NewArrayWriter(bytesPath, 8)
 	if err != nil {
 		countW.Close()
+
 		return fmt.Errorf("create tier %s bytes writer: %w", info.Name, err)
 	}
 	b.tierBytesWriters[tierID] = bytesW
@@ -473,6 +476,7 @@ func (b *IndexBuilder) closeStreamingWriters() error {
 			return fmt.Errorf("close tier %d bytes: %w", tierID, err)
 		}
 	}
+
 	return nil
 }
 
@@ -485,6 +489,7 @@ func (b *IndexBuilder) writeSubtreeArrays() error {
 	for _, v := range b.subtreeEnds {
 		if err := subtreeEndW.WriteU64(v); err != nil {
 			subtreeEndW.Close()
+
 			return fmt.Errorf("write subtree_end: %w", err)
 		}
 	}
@@ -499,12 +504,14 @@ func (b *IndexBuilder) writeSubtreeArrays() error {
 	for _, v := range b.maxDepthInSubtrees {
 		if err := maxDepthW.WriteU32(v); err != nil {
 			maxDepthW.Close()
+
 			return fmt.Errorf("write max_depth_in_subtree: %w", err)
 		}
 	}
 	if err := maxDepthW.Close(); err != nil {
 		return fmt.Errorf("close max_depth_in_subtree: %w", err)
 	}
+
 	return nil
 }
 
@@ -520,6 +527,7 @@ func (b *IndexBuilder) buildMPHF(ctx context.Context) error {
 	log.Debug().
 		Str("mphf_duration", humanfmt.Duration(time.Since(mphfStart))).
 		Msg("index builder: MPHF build complete")
+
 	return nil
 }
 
@@ -535,6 +543,7 @@ func (b *IndexBuilder) writeTierManifest() error {
 	if err := tiers.WriteManifest(b.outDir, presentTierList); err != nil {
 		return fmt.Errorf("write tier manifest: %w", err)
 	}
+
 	return nil
 }
 
@@ -554,5 +563,6 @@ func (b *IndexBuilder) PresentTiers() []tiers.ID {
 	for tierID := range b.presentTiers {
 		result = append(result, tierID)
 	}
+
 	return result
 }

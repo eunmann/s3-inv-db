@@ -142,6 +142,7 @@ func ParseHumanSize(s string) (uint64, error) {
 	for i, c := range s {
 		if (c < '0' || c > '9') && c != '.' {
 			numEnd = i
+
 			break
 		}
 		numEnd = i + 1

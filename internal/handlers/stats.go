@@ -68,6 +68,7 @@ func (h *Handlers) computeCostEstimate(breakdown []format.TierBreakdown, include
 			est.PerTierFormatted[tier] = pricing.FormatCost(microdollars)
 		}
 	}
+
 	return est
 }
 
@@ -90,10 +91,12 @@ func (h *Handlers) GetStatsAPI(w http.ResponseWriter, r *http.Request) {
 
 	if inventoryID == "" {
 		WriteJSONError(w, http.StatusBadRequest, "inventory_id is required")
+
 		return
 	}
 	if !q.Has("prefix") {
 		WriteJSONError(w, http.StatusBadRequest, "prefix is required")
+
 		return
 	}
 	prefix := q.Get("prefix")
@@ -102,11 +105,13 @@ func (h *Handlers) GetStatsAPI(w http.ResponseWriter, r *http.Request) {
 	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
 		var berr error
 		resp, berr = h.buildStatsResponse(idx, prefix, showTiers, estimateCost)
+
 		return berr
 	})
 	if err != nil {
 		status, msg := managerErrorStatus(err)
 		WriteJSONError(w, status, msg)
+
 		return
 	}
 
@@ -122,6 +127,7 @@ func (h *Handlers) GetInventoryStatsAPI(w http.ResponseWriter, r *http.Request) 
 
 	if !q.Has("prefix") {
 		WriteJSONError(w, http.StatusBadRequest, "prefix query parameter is required")
+
 		return
 	}
 	prefix := q.Get("prefix")
@@ -130,11 +136,13 @@ func (h *Handlers) GetInventoryStatsAPI(w http.ResponseWriter, r *http.Request) 
 	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
 		var berr error
 		resp, berr = h.buildStatsResponse(idx, prefix, showTiers, estimateCost)
+
 		return berr
 	})
 	if err != nil {
 		status, msg := managerErrorStatus(err)
 		WriteJSONError(w, status, msg)
+
 		return
 	}
 
@@ -151,6 +159,7 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 
 	if !q.Has("prefix") {
 		WriteJSONError(w, http.StatusBadRequest, "prefix query parameter is required")
+
 		return
 	}
 	prefix := q.Get("prefix")
@@ -161,6 +170,7 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 		depth, err = strconv.Atoi(depthStr)
 		if err != nil || depth < 1 {
 			WriteJSONError(w, http.StatusBadRequest, "invalid depth")
+
 			return
 		}
 	}
@@ -170,6 +180,7 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 		v, err := strconv.ParseUint(minCountStr, 10, 64)
 		if err != nil {
 			WriteJSONError(w, http.StatusBadRequest, "invalid min_count")
+
 			return
 		}
 		filter.MinCount = v
@@ -178,6 +189,7 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 		v, err := strconv.ParseUint(minBytesStr, 10, 64)
 		if err != nil {
 			WriteJSONError(w, http.StatusBadRequest, "invalid min_bytes")
+
 			return
 		}
 		filter.MinBytes = v
@@ -193,6 +205,7 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 		positions, perr := idx.DescendantsAtDepthFiltered(pos, depth, filter)
 		if perr != nil {
 			logger.Error().Err(perr).Msg("failed to get descendants")
+
 			return fmt.Errorf("descendants at depth: %w", perr)
 		}
 		descendants = make([]DescendantInfo, 0, len(positions))
@@ -200,6 +213,7 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 			prefixStr, pserr := idx.PrefixString(p)
 			if pserr != nil {
 				logger.Warn().Err(pserr).Uint64("pos", p).Msg("failed to get prefix string")
+
 				continue
 			}
 			stats := idx.Stats(p)
@@ -212,11 +226,13 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 				Depth:        idx.Depth(p),
 			})
 		}
+
 		return nil
 	})
 	if err != nil {
 		status, msg := managerErrorStatus(err)
 		WriteJSONError(w, status, msg)
+
 		return
 	}
 

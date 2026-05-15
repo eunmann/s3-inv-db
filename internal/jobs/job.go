@@ -52,6 +52,7 @@ func (s State) IsTerminal() bool {
 	case StateSucceeded, StateFailed, StateCancelled, StateAborted:
 		return true
 	}
+
 	return false
 }
 

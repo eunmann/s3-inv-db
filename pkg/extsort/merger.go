@@ -53,6 +53,7 @@ func (h *typedMergeHeap) pop() mergeItem {
 	if n > 0 {
 		h.siftDown(0)
 	}
+
 	return top
 }
 
@@ -101,6 +102,7 @@ func NewMergeIterator(paths []string, bufferSize int) (*MergeIterator, error) {
 			for _, opened := range readers {
 				opened.Close()
 			}
+
 			return nil, err
 		}
 		readers = append(readers, r)
@@ -124,6 +126,7 @@ func NewMergeIteratorFromReaders(readers []*RunFileReader) (*MergeIterator, erro
 		}
 		if err != nil {
 			m.Close()
+
 			return nil, err
 		}
 		m.heap.push(mergeItem{row: row, readerIdx: i})
@@ -149,6 +152,7 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 
 	if err := m.advanceReader(item.readerIdx); err != nil && !errors.Is(err, io.EOF) {
 		m.err = err
+
 		return nil, err
 	}
 
@@ -158,6 +162,7 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 
 		if err := m.advanceReader(dup.readerIdx); err != nil && !errors.Is(err, io.EOF) {
 			m.err = err
+
 			return nil, err
 		}
 	}
@@ -172,6 +177,7 @@ func (m *MergeIterator) advanceReader(idx int) error {
 		return err
 	}
 	m.heap.push(mergeItem{row: row, readerIdx: idx})
+
 	return nil
 }
 
@@ -181,6 +187,7 @@ func (m *MergeIterator) Remaining() uint64 {
 	for _, r := range m.readers {
 		total += r.Count() - r.ReadCount()
 	}
+
 	return total
 }
 
@@ -192,6 +199,7 @@ func (m *MergeIterator) Close() error {
 			firstErr = err
 		}
 	}
+
 	return firstErr
 }
 
@@ -203,5 +211,6 @@ func (m *MergeIterator) RemoveAll() error {
 			firstErr = err
 		}
 	}
+
 	return firstErr
 }

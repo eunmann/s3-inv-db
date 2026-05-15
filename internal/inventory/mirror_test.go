@@ -28,6 +28,7 @@ func openManagerWithStore(t *testing.T) (*inventory.Manager, *inventory.Store) {
 	mgr := inventory.NewManager()
 	mgr.SetStore(store)
 	t.Cleanup(func() { _ = mgr.Close() })
+
 	return mgr, store
 }
 

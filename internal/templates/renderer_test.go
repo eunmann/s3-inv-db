@@ -14,13 +14,13 @@ func TestRenderer_Dashboard(t *testing.T) {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
 
-	data := map[string]interface{}{
+	data := map[string]any{
 		"Title":        "Dashboard",
 		"TotalCount":   0,
 		"LoadedCount":  0,
 		"PendingCount": 0,
 		"ErrorCount":   0,
-		"Inventories":  []interface{}{},
+		"Inventories":  []any{},
 	}
 
 	var buf bytes.Buffer
@@ -47,9 +47,9 @@ func TestRenderer_Inventories(t *testing.T) {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
 
-	data := map[string]interface{}{
+	data := map[string]any{
 		"Title":       "Inventories",
-		"Inventories": []interface{}{},
+		"Inventories": []any{},
 	}
 
 	var buf bytes.Buffer
@@ -69,9 +69,9 @@ func TestRenderer_Browse(t *testing.T) {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
 
-	data := map[string]interface{}{
+	data := map[string]any{
 		"Title":       "Browse",
-		"Inventories": []interface{}{},
+		"Inventories": []any{},
 	}
 
 	var buf bytes.Buffer
@@ -138,10 +138,12 @@ func TestRenderer_RepeatedRenders(t *testing.T) {
 		var first, second bytes.Buffer
 		if err := renderer.Render(&first, c.name, c.data); err != nil {
 			t.Errorf("Render(%s) first call: %v", c.name, err)
+
 			continue
 		}
 		if err := renderer.Render(&second, c.name, c.data); err != nil {
 			t.Errorf("Render(%s) second call: %v", c.name, err)
+
 			continue
 		}
 		if first.Len() == 0 || second.Len() == 0 {

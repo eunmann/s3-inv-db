@@ -60,6 +60,7 @@ func Load(path string) (*Config, error) {
 	if err := c.validate(); err != nil {
 		return nil, fmt.Errorf("validate config %s: %w", path, err)
 	}
+
 	return &c, nil
 }
 
@@ -73,6 +74,7 @@ func (c *Config) validate() error {
 			return errors.New("inventories[]: source and name are required")
 		}
 	}
+
 	return nil
 }
 
@@ -86,6 +88,7 @@ func PickString(flagVal string, explicit bool, configVal *string) string {
 	if configVal != nil {
 		return *configVal
 	}
+
 	return flagVal
 }
 
@@ -96,6 +99,7 @@ func PickBool(flagVal, explicit bool, configVal *bool) bool {
 	if configVal != nil {
 		return *configVal
 	}
+
 	return flagVal
 }
 
@@ -106,6 +110,7 @@ func PickInt(flagVal int, explicit bool, configVal *int) int {
 	if configVal != nil {
 		return *configVal
 	}
+
 	return flagVal
 }
 
@@ -116,6 +121,7 @@ func PickUint32(flagVal uint32, explicit bool, configVal *uint32) uint32 {
 	if configVal != nil {
 		return *configVal
 	}
+
 	return flagVal
 }
 
@@ -126,5 +132,6 @@ func PickFloat64(flagVal float64, explicit bool, configVal *float64) float64 {
 	if configVal != nil {
 		return *configVal
 	}
+
 	return flagVal
 }

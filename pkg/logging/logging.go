@@ -53,6 +53,7 @@ func NewLogger(debug, human bool) zerolog.Logger {
 	} else {
 		output = zerolog.LevelWriterAdapter{Writer: os.Stderr}
 	}
+
 	return zerolog.New(output).With().Timestamp().Logger()
 }
 
@@ -92,7 +93,7 @@ type Operation struct {
 	name   string
 	start  time.Time
 	log    zerolog.Logger
-	fields map[string]interface{}
+	fields map[string]any
 }
 
 // NewOperation creates a new operation timer with the given name.
@@ -101,7 +102,7 @@ func NewOperation(name string) *Operation {
 		name:   name,
 		start:  time.Now(),
 		log:    *logger,
-		fields: make(map[string]interface{}),
+		fields: make(map[string]any),
 	}
 }
 
@@ -111,13 +112,14 @@ func NewOperationWithLogger(name string, log zerolog.Logger) *Operation {
 		name:   name,
 		start:  time.Now(),
 		log:    log,
-		fields: make(map[string]interface{}),
+		fields: make(map[string]any),
 	}
 }
 
 // WithField adds a field to be logged when the operation ends.
-func (o *Operation) WithField(key string, value interface{}) *Operation {
+func (o *Operation) WithField(key string, value any) *Operation {
 	o.fields[key] = value
+
 	return o
 }
 
@@ -127,6 +129,7 @@ func (o *Operation) WithBytes(key string, bytes int64) *Operation {
 	if IsPrettyMode() {
 		o.fields[key+"_h"] = humanfmt.Bytes(bytes)
 	}
+
 	return o
 }
 
@@ -141,6 +144,7 @@ func (o *Operation) WithCount(key string, count int64) *Operation {
 	if IsPrettyMode() {
 		o.fields[key+"_h"] = humanfmt.Count(count)
 	}
+
 	return o
 }
 
@@ -256,6 +260,7 @@ func (le *LogEvent) Bytes(key string, bytes int64) *LogEvent {
 	if IsPrettyMode() {
 		le.event = le.event.Str(key+"_h", humanfmt.Bytes(bytes))
 	}
+
 	return le
 }
 
@@ -270,6 +275,7 @@ func (le *LogEvent) Duration(key string, d time.Duration) *LogEvent {
 	if IsPrettyMode() {
 		le.event = le.event.Str(key+"_h", humanfmt.Duration(d))
 	}
+
 	return le
 }
 
@@ -279,6 +285,7 @@ func (le *LogEvent) Count(key string, n int64) *LogEvent {
 	if IsPrettyMode() {
 		le.event = le.event.Str(key+"_h", humanfmt.Count(n))
 	}
+
 	return le
 }
 
@@ -296,30 +303,35 @@ func (le *LogEvent) Throughput(key string, bytes int64, d time.Duration) *LogEve
 			le.event = le.event.Str(key+"_h", humanfmt.Throughput(bytes, d))
 		}
 	}
+
 	return le
 }
 
 // Str adds a string field.
 func (le *LogEvent) Str(key, val string) *LogEvent {
 	le.event = le.event.Str(key, val)
+
 	return le
 }
 
 // Int adds an int field.
 func (le *LogEvent) Int(key string, val int) *LogEvent {
 	le.event = le.event.Int(key, val)
+
 	return le
 }
 
 // Int64 adds an int64 field.
 func (le *LogEvent) Int64(key string, val int64) *LogEvent {
 	le.event = le.event.Int64(key, val)
+
 	return le
 }
 
 // Uint64 adds a uint64 field.
 func (le *LogEvent) Uint64(key string, val uint64) *LogEvent {
 	le.event = le.event.Uint64(key, val)
+
 	return le
 }
 

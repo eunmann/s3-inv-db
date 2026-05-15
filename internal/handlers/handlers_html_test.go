@@ -28,6 +28,7 @@ func newTestFixture(t *testing.T) *testFixture {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
 	h := New(mgr, renderer, pricing.DefaultUSEast1Prices())
+
 	return &testFixture{h: h, mgr: mgr}
 }
 
@@ -45,6 +46,7 @@ func parseHTML(t *testing.T, body string) *goquery.Document {
 	if err != nil {
 		t.Fatalf("parse HTML: %v", err)
 	}
+
 	return doc
 }
 
@@ -61,6 +63,7 @@ func parseHTMLFragment(t *testing.T, body string) *goquery.Document {
 	if err != nil {
 		t.Fatalf("parse HTML fragment: %v", err)
 	}
+
 	return doc
 }
 
@@ -78,6 +81,7 @@ func assertElementText(t *testing.T, doc *goquery.Document, selector, expected s
 	el := doc.Find(selector).First()
 	if el.Length() == 0 {
 		t.Errorf("element %q not found", selector)
+
 		return
 	}
 	got := strings.TrimSpace(el.Text())
@@ -92,6 +96,7 @@ func assertElementContainsText(t *testing.T, doc *goquery.Document, selector, co
 	el := doc.Find(selector).First()
 	if el.Length() == 0 {
 		t.Errorf("element %q not found", selector)
+
 		return
 	}
 	got := el.Text()
@@ -303,6 +308,7 @@ func TestInventoryRowPartial_NotFound(t *testing.T) {
 func newHXRequest(method, target string) *http.Request {
 	req := httptest.NewRequest(method, target, http.NoBody)
 	req.Header.Set("HX-Request", "true")
+
 	return req
 }
 
@@ -436,5 +442,6 @@ func TestBrowsePage_HistoryRestoreReturnsFullPage(t *testing.T) {
 func withChiContext(r *http.Request, id string) *http.Request {
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("id", id)
+
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }

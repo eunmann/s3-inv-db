@@ -50,6 +50,7 @@ func (s *Store) Upsert(j Job) error {
 	if err != nil {
 		return fmt.Errorf("upsert job %s: %w", j.ID, err)
 	}
+
 	return nil
 }
 
@@ -67,6 +68,7 @@ func (s *Store) Get(id ID) (Job, error) {
 	if err != nil {
 		return Job{}, fmt.Errorf("get job %s: %w", id, err)
 	}
+
 	return j, nil
 }
 
@@ -81,6 +83,7 @@ func (s *Store) ListForInventory(invID inventory.ID) ([]Job, error) {
 		return nil, fmt.Errorf("list jobs for %s: %w", invID, err)
 	}
 	defer func() { _ = rows.Close() }()
+
 	return scanJobs(rows)
 }
 
@@ -99,6 +102,7 @@ func (s *Store) LatestForInventory(invID inventory.ID) (Job, error) {
 	if err != nil {
 		return Job{}, fmt.Errorf("latest job for %s: %w", invID, err)
 	}
+
 	return j, nil
 }
 
@@ -125,6 +129,7 @@ func (s *Store) MarkAborted(reason string, fromStates ...State) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("rows affected: %w", err)
 	}
+
 	return n, nil
 }
 
@@ -147,6 +152,7 @@ func scanJob(r rowScanner) (Job, error) {
 		j.FinishedAt = time.Unix(finishedAt, 0)
 	}
 	j.UpdatedAt = time.Unix(updatedAt, 0)
+
 	return j, nil
 }
 
@@ -162,6 +168,7 @@ func scanJobs(rows *sql.Rows) ([]Job, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate jobs: %w", err)
 	}
+
 	return out, nil
 }
 
@@ -173,5 +180,6 @@ func unixOrZero(t time.Time) int64 {
 	if t.IsZero() {
 		return 0
 	}
+
 	return t.Unix()
 }

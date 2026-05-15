@@ -253,16 +253,19 @@ func getGeneratorConfig(preset string, numObjects int) benchutil.GeneratorConfig
 		cfg := benchutil.DefaultConfig(numObjects)
 		cfg.PrefixFanout = 5
 		cfg.MaxDepth = 3
+
 		return cfg
 	case "medium":
 		cfg := benchutil.DefaultConfig(numObjects)
 		cfg.PrefixFanout = 10
 		cfg.MaxDepth = 5
+
 		return cfg
 	case "large":
 		cfg := benchutil.DefaultConfig(numObjects)
 		cfg.PrefixFanout = 20
 		cfg.MaxDepth = 8
+
 		return cfg
 	case "realistic":
 		return benchutil.S3RealisticConfig(numObjects)

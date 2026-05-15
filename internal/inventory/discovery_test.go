@@ -20,6 +20,7 @@ type fakeDiscoverer struct {
 func (f *fakeDiscoverer) List(context.Context) ([]Inventory, error) {
 	return f.listResp, f.listErr
 }
+
 func (f *fakeDiscoverer) Find(_ context.Context, _, _, _ string) (Inventory, error) {
 	return f.findResp, f.findErr
 }

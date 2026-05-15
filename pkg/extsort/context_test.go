@@ -142,6 +142,7 @@ outerLoop:
 				// Intentionally empty: just consuming remaining items
 				continue
 			}
+
 			break outerLoop
 		default:
 		}

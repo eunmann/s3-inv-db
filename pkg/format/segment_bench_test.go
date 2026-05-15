@@ -410,6 +410,7 @@ func fileSize(t *testing.T, dir, name string) int64 {
 		}
 		t.Fatalf("stat %s: %v", path, err)
 	}
+
 	return info.Size()
 }
 
@@ -433,6 +434,7 @@ func totalDirSize(t *testing.T, dir string) int64 {
 		}
 		total += info.Size()
 	}
+
 	return total
 }
 
@@ -465,6 +467,7 @@ func countSlashes(s string) int {
 			count++
 		}
 	}
+
 	return count
 }
 
@@ -486,5 +489,6 @@ func splitSegments(prefix string) []string {
 	if start < len(prefix) {
 		segments = append(segments, prefix[start:])
 	}
+
 	return segments
 }

@@ -26,5 +26,6 @@ func (l *DiscoveryLoader) AutoLoad(ctx context.Context, disc inventory.Inventory
 	if err := l.d.AutoLoadWith(ctx, disc, nil); err != nil {
 		return fmt.Errorf("auto-load %s: %w", disc.CompositeID(), err)
 	}
+
 	return nil
 }

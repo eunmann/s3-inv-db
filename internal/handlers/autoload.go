@@ -20,16 +20,19 @@ type AutoLoadToggleResponse struct {
 func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) {
 	if h.configStore == nil {
 		WriteJSONError(w, http.StatusServiceUnavailable, "auto-load not configured")
+
 		return
 	}
 	src := chi.URLParam(r, "src")
 	name := chi.URLParam(r, "name")
 	if src == "" || name == "" {
 		WriteJSONError(w, http.StatusBadRequest, "source and name are required")
+
 		return
 	}
 	if err := r.ParseForm(); err != nil {
 		WriteJSONError(w, http.StatusBadRequest, "invalid form body")
+
 		return
 	}
 	cfg, err := h.configStore.Get(src, name)
@@ -38,6 +41,7 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 	} else if err != nil {
 		zerolog.Ctx(r.Context()).Error().Err(err).Msg("get config")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to read config")
+
 		return
 	}
 	if v := r.FormValue("auto_load"); v != "" {
@@ -47,6 +51,7 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 		n, parseErr := strconv.ParseUint(strings.TrimSpace(v), 10, 32)
 		if parseErr != nil || n == 0 {
 			WriteJSONError(w, http.StatusBadRequest, "retention must be a positive integer")
+
 			return
 		}
 		cfg.RetentionCount = uint32(n)
@@ -54,6 +59,7 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 	if err := h.configStore.Upsert(cfg); err != nil {
 		zerolog.Ctx(r.Context()).Error().Err(err).Msg("upsert config")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to save config")
+
 		return
 	}
 	WriteJSON(w, http.StatusOK, AutoLoadToggleResponse{OK: true})
@@ -64,16 +70,19 @@ func (h *Handlers) SetPinAPI(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := r.ParseForm(); err != nil {
 		WriteJSONError(w, http.StatusBadRequest, "invalid form body")
+
 		return
 	}
 	pinned := parseBoolToggle(r.FormValue("pinned"))
 	if err := h.manager.SetPinned(id, pinned); err != nil {
 		if errors.Is(err, inventory.ErrNotFound) {
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
+
 			return
 		}
 		zerolog.Ctx(r.Context()).Error().Err(err).Stringer("id", id).Msg("set pin")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to set pin")
+
 		return
 	}
 	WriteJSON(w, http.StatusOK, AutoLoadToggleResponse{OK: true})

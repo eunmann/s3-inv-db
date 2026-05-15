@@ -61,6 +61,7 @@ func (h *Handlers) collectNotifications() []Notification {
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
+
 	return out
 }
 

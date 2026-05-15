@@ -100,6 +100,7 @@ func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*Comp
 	if _, err := f.Write(header); err != nil {
 		f.Close()
 		os.Remove(path)
+
 		return nil, fmt.Errorf("write header: %w", err)
 	}
 
@@ -118,6 +119,7 @@ func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*Comp
 	if err != nil {
 		f.Close()
 		os.Remove(path)
+
 		return nil, fmt.Errorf("acquire zstd encoder: %w", err)
 	}
 	enc.Reset(f)
@@ -174,6 +176,7 @@ func (w *CompressedRunWriter) Write(row *PrefixRow) error {
 
 	w.count++
 	w.uncompressedSize += uint64(offset)
+
 	return nil
 }
 
@@ -184,6 +187,7 @@ func (w *CompressedRunWriter) WriteAll(rows []*PrefixRow) error {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -192,6 +196,7 @@ func (w *CompressedRunWriter) WriteSorted(rows []*PrefixRow) error {
 	slices.SortFunc(rows, func(a, b *PrefixRow) int {
 		return strings.Compare(a.Prefix, b.Prefix)
 	})
+
 	return w.WriteAll(rows)
 }
 
@@ -216,12 +221,14 @@ func (w *CompressedRunWriter) Close() error {
 	if err := w.writer.Flush(); err != nil {
 		w.compressor.Close()
 		w.file.Close()
+
 		return fmt.Errorf("flush buffer: %w", err)
 	}
 
 	// Close the compressor (finalizes zstd stream) then return it to the pool.
 	if err := w.compressor.Close(); err != nil {
 		w.file.Close()
+
 		return fmt.Errorf("close compressor: %w", err)
 	}
 	releaseZstdEncoder(w.zstdLevel, w.compressor)
@@ -230,6 +237,7 @@ func (w *CompressedRunWriter) Close() error {
 	// Update header with final count and uncompressed size
 	if _, err := w.file.Seek(12, 0); err != nil {
 		w.file.Close()
+
 		return fmt.Errorf("seek to count: %w", err)
 	}
 
@@ -240,12 +248,14 @@ func (w *CompressedRunWriter) Close() error {
 
 	if _, err := w.file.Write(headerUpdate[:]); err != nil {
 		w.file.Close()
+
 		return fmt.Errorf("update header: %w", err)
 	}
 
 	if err := w.file.Close(); err != nil {
 		return fmt.Errorf("close file: %w", err)
 	}
+
 	return nil
 }
 
@@ -277,30 +287,35 @@ func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, e
 	header := make([]byte, compressedRunFileHeader)
 	if _, err := io.ReadFull(f, header); err != nil {
 		f.Close()
+
 		return nil, fmt.Errorf("read header: %w", err)
 	}
 
 	magic := binary.LittleEndian.Uint32(header[0:4])
 	if magic != runFileMagic {
 		f.Close()
+
 		return nil, fmt.Errorf("invalid magic: got %x, want %x", magic, runFileMagic)
 	}
 
 	version := binary.LittleEndian.Uint32(header[4:8])
 	if version != compressedRunFileVersion {
 		f.Close()
+
 		return nil, fmt.Errorf("unsupported version for compressed reader: %d (want %d)", version, compressedRunFileVersion)
 	}
 
 	flags := binary.LittleEndian.Uint32(header[8:12])
 	if flags&flagCompressed == 0 {
 		f.Close()
+
 		return nil, fmt.Errorf("file is not compressed (flags=%d)", flags)
 	}
 
 	compressionType := (flags & flagCompressionMask) >> 1
 	if compressionType != compressionTypeZstd {
 		f.Close()
+
 		return nil, fmt.Errorf("unsupported compression type: %d", compressionType)
 	}
 
@@ -310,11 +325,13 @@ func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, e
 	dec, err := acquireZstdDecoder()
 	if err != nil {
 		f.Close()
+
 		return nil, fmt.Errorf("acquire zstd decoder: %w", err)
 	}
 	if err := dec.Reset(f); err != nil {
 		f.Close()
 		dec.Close()
+
 		return nil, fmt.Errorf("reset zstd decoder: %w", err)
 	}
 
@@ -341,6 +358,7 @@ func (r *CompressedRunReader) Read() (*PrefixRow, error) {
 	}
 
 	r.read++
+
 	return row, nil
 }
 
@@ -353,6 +371,7 @@ func (r *CompressedRunReader) ReadInto(into *PrefixRow) error {
 		return err
 	}
 	r.read++
+
 	return nil
 }
 
@@ -384,6 +403,7 @@ func (r *CompressedRunReader) Close() error {
 	if err := r.file.Close(); err != nil {
 		return fmt.Errorf("close compressed run file: %w", err)
 	}
+
 	return nil
 }
 
@@ -395,6 +415,7 @@ func (r *CompressedRunReader) Remove() error {
 	if err := os.Remove(r.path); err != nil {
 		return fmt.Errorf("remove compressed run file: %w", err)
 	}
+
 	return nil
 }
 
@@ -433,6 +454,7 @@ func OpenRunFileAuto(path string, bufferSize int) (RunReader, error) {
 	header := make([]byte, 8)
 	if _, err := io.ReadFull(f, header); err != nil {
 		f.Close()
+
 		return nil, fmt.Errorf("read header: %w", err)
 	}
 	f.Close()

@@ -26,6 +26,7 @@ func TestManager_ReportResetsProgressOnStageChange(t *testing.T) {
 		// 5/10 must NOT persist into this stage.
 		report(jobs.Update{Stage: "building"})
 		close(done)
+
 		return nil
 	})
 	if err != nil {

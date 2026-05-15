@@ -40,8 +40,10 @@ func OpenStateDB(path string) (*sql.DB, error) {
 	}
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
+
 		return nil, fmt.Errorf("ping sqlite at %s: %w", path, err)
 	}
+
 	return db, nil
 }
 
@@ -63,5 +65,6 @@ func buildStateDSN(path string) string {
 	if hasQuery {
 		sep = "&"
 	}
+
 	return base + sep + strings.Join(parts, "&")
 }

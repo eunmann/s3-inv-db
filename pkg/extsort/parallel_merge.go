@@ -47,13 +47,9 @@ type ParallelMergeConfig struct {
 // DefaultParallelMergeConfig returns sensible defaults for parallel merge.
 func DefaultParallelMergeConfig() ParallelMergeConfig {
 	numCPU := runtime.NumCPU()
-	workers := numCPU / 2
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > 8 {
-		workers = 8 // Cap to avoid excessive parallelism
-	}
+	workers := min(max(numCPU/2, 1),
+		// Cap to avoid excessive parallelism
+		8)
 
 	return ParallelMergeConfig{
 		NumWorkers:       workers,
@@ -159,6 +155,7 @@ func (m *ParallelMerger) MergeAll(ctx context.Context, inputPaths []string) (str
 			for _, p := range nextPaths {
 				os.Remove(p)
 			}
+
 			return "", fmt.Errorf("merge round %d: %w", round, err)
 		}
 
@@ -200,11 +197,9 @@ func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, ro
 	// Start workers
 	var wg sync.WaitGroup
 	for range min(m.config.NumWorkers, len(groups)) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			m.mergeWorker(ctx, jobs, results)
-		}()
+		})
 	}
 
 	// Send jobs
@@ -233,6 +228,7 @@ func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, ro
 			if firstErr == nil {
 				firstErr = result.err
 			}
+
 			continue
 		}
 		outputPaths[result.jobIndex] = result.outputPath
@@ -246,6 +242,7 @@ func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, ro
 				os.Remove(p)
 			}
 		}
+
 		return nil, firstErr
 	}
 
@@ -256,12 +253,10 @@ func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, ro
 func (m *ParallelMerger) partitionPaths(paths []string) [][]string {
 	var groups [][]string
 	for i := 0; i < len(paths); i += m.config.MaxFanIn {
-		end := i + m.config.MaxFanIn
-		if end > len(paths) {
-			end = len(paths)
-		}
+		end := min(i+m.config.MaxFanIn, len(paths))
 		groups = append(groups, paths[i:end])
 	}
+
 	return groups
 }
 
@@ -274,6 +269,7 @@ func (m *ParallelMerger) mergeWorker(ctx context.Context, jobs <-chan mergeJob, 
 				err:      ctx.Err(),
 				jobIndex: job.jobIndex,
 			}
+
 			return
 		default:
 		}
@@ -302,6 +298,7 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 			for _, r := range readers {
 				r.Close()
 			}
+
 			return result
 		}
 		readers = append(readers, reader)
@@ -314,6 +311,7 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 		for _, r := range readers {
 			r.Close()
 		}
+
 		return result
 	}
 
@@ -331,6 +329,7 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 		if err != nil {
 			result.err = fmt.Errorf("create output writer: %w", err)
 			merger.Close()
+
 			return result
 		}
 		outputWriter = w
@@ -339,6 +338,7 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 		if err != nil {
 			result.err = fmt.Errorf("create output writer: %w", err)
 			merger.Close()
+
 			return result
 		}
 		outputWriter = w
@@ -353,6 +353,7 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 			merger.Close()
 			os.Remove(job.outputPath)
 			result.err = ctx.Err()
+
 			return result
 		default:
 		}
@@ -366,6 +367,7 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 			merger.Close()
 			os.Remove(job.outputPath)
 			result.err = fmt.Errorf("read from merger: %w", err)
+
 			return result
 		}
 
@@ -374,6 +376,7 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 			merger.Close()
 			os.Remove(job.outputPath)
 			result.err = fmt.Errorf("write to output: %w", err)
+
 			return result
 		}
 		count++
@@ -386,6 +389,7 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 	if err := outputWriter.Close(); err != nil {
 		os.Remove(job.outputPath)
 		result.err = fmt.Errorf("close output: %w", err)
+
 		return result
 	}
 
@@ -429,12 +433,14 @@ func newMergeIteratorFromRunReaders(readers []RunReader) (*runReaderMergeIterato
 		}
 		if err != nil {
 			m.Close()
+
 			return nil, fmt.Errorf("initial read from run %d: %w", i, err)
 		}
 		m.heap.items = append(m.heap.items, mergeItem{row: row, readerIdx: i})
 	}
 
 	heapInit(m.heap)
+
 	return m, nil
 }
 
@@ -453,6 +459,7 @@ func (m *runReaderMergeIterator) Next() (*PrefixRow, error) {
 
 	if err := m.advanceReader(item.readerIdx); err != nil && !errors.Is(err, io.EOF) {
 		m.err = err
+
 		return nil, err
 	}
 
@@ -463,6 +470,7 @@ func (m *runReaderMergeIterator) Next() (*PrefixRow, error) {
 
 		if err := m.advanceReader(dup.readerIdx); err != nil && !errors.Is(err, io.EOF) {
 			m.err = err
+
 			return nil, err
 		}
 	}
@@ -477,9 +485,11 @@ func (m *runReaderMergeIterator) advanceReader(idx int) error {
 		if errors.Is(err, io.EOF) {
 			return io.EOF
 		}
+
 		return fmt.Errorf("advance reader %d: %w", idx, err)
 	}
 	heapPush(m.heap, mergeItem{row: row, readerIdx: idx})
+
 	return nil
 }
 
@@ -491,6 +501,7 @@ func (m *runReaderMergeIterator) Close() error {
 			firstErr = err
 		}
 	}
+
 	return firstErr
 }
 
@@ -514,6 +525,7 @@ func heapPop(h *mergeHeap) mergeItem {
 	heapDown(h, 0, n)
 	item := h.items[n]
 	h.items = h.items[:n]
+
 	return item
 }
 
@@ -567,5 +579,6 @@ func (m *ParallelMerger) CleanupIntermediateFiles() error {
 			firstErr = err
 		}
 	}
+
 	return firstErr
 }

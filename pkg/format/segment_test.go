@@ -22,6 +22,7 @@ func TestSplitPrefix(t *testing.T) {
 		got := SplitPrefix(tc.prefix)
 		if len(got) != len(tc.expected) {
 			t.Errorf("SplitPrefix(%q) = %v, want %v", tc.prefix, got, tc.expected)
+
 			continue
 		}
 		for i := range got {
@@ -110,6 +111,7 @@ func TestSegmentDictionaryRoundTrip(t *testing.T) {
 		got, err := dict.GetSegment(uint32(i))
 		if err != nil {
 			t.Errorf("GetSegment(%d) failed: %v", i, err)
+
 			continue
 		}
 		if got != expected {
@@ -161,6 +163,7 @@ func TestSegmentedPrefixWriterReader(t *testing.T) {
 		got, err := reader.GetPrefix(uint64(i))
 		if err != nil {
 			t.Errorf("GetPrefix(%d) failed: %v", i, err)
+
 			continue
 		}
 		if got != expected {
@@ -262,6 +265,7 @@ func TestSegmentedPrefixUnicode(t *testing.T) {
 		got, err := reader.GetPrefix(uint64(i))
 		if err != nil {
 			t.Errorf("GetPrefix(%d) failed: %v", i, err)
+
 			continue
 		}
 		if got != expected {
@@ -315,6 +319,7 @@ func TestSegmentedPrefixDeduplication(t *testing.T) {
 		got, err := reader.GetPrefix(uint64(i))
 		if err != nil {
 			t.Errorf("GetPrefix(%d) failed: %v", i, err)
+
 			continue
 		}
 		if got != expected {
@@ -371,6 +376,7 @@ func TestStreamingMPHFWithSegmentedEncoding(t *testing.T) {
 		pos, ok := m.Lookup(p)
 		if !ok {
 			t.Errorf("Lookup(%q) failed", p)
+
 			continue
 		}
 		if pos != uint64(i) {
@@ -380,6 +386,7 @@ func TestStreamingMPHFWithSegmentedEncoding(t *testing.T) {
 		stored, err := m.GetPrefix(pos)
 		if err != nil {
 			t.Errorf("GetPrefix(%d) failed: %v", pos, err)
+
 			continue
 		}
 		if stored != p {
@@ -487,6 +494,7 @@ func TestStreamingMPHFSegmentedUnicode(t *testing.T) {
 		pos, ok := m.Lookup(p)
 		if !ok {
 			t.Errorf("Lookup(%q) failed", p)
+
 			continue
 		}
 		stored, _ := m.GetPrefix(pos)

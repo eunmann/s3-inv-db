@@ -102,6 +102,7 @@ func TestTempFileReader(t *testing.T) {
 			n, err := reader.ReadAt(buf, off)
 			if err != nil && !errors.Is(err, io.EOF) {
 				t.Errorf("ReadAt(%d): %v", off, err)
+
 				continue
 			}
 			if n > 0 && !bytes.Equal(buf[:n], testData[off:off+int64(n)]) {
