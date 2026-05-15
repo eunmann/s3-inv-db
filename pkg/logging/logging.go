@@ -16,7 +16,7 @@ var (
 )
 
 func init() {
-	// Default to JSON logging at info level
+	zerolog.DurationFieldFormat = zerolog.DurationFormatString
 	l := zerolog.New(os.Stderr).With().Timestamp().Logger()
 	logger = &l
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
