@@ -16,6 +16,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/appconfig"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/server"
+	"github.com/eunmann/s3-inv-db/pkg/sysmem"
 	"github.com/rs/zerolog/log"
 )
 
@@ -109,6 +110,15 @@ func run() error {
 
 	logger := logging.NewLogger(finalVerbose, finalPretty)
 	log.Logger = logger
+
+	memLimit := sysmem.ApplyMemoryLimit(sysmem.DefaultMemoryLimitFraction)
+	logger.Info().
+		Int64("bytes", memLimit.Bytes).
+		Str("source", string(memLimit.Source)).
+		Int64("env_bytes", memLimit.EnvBytes).
+		Int64("cgroup_bytes", memLimit.CgroupBytes).
+		Int64("sysmem_fraction_bytes", memLimit.SysmemFractionBytes).
+		Msg("process memory limit configured")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

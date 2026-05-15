@@ -90,6 +90,15 @@ func runBuild(args []string) error {
 	log.Logger = baseLogger
 	logging.Init(finalVerbose, finalPretty)
 
+	memLimit := sysmem.ApplyMemoryLimit(sysmem.DefaultMemoryLimitFraction)
+	baseLogger.Info().
+		Int64("bytes", memLimit.Bytes).
+		Str("source", string(memLimit.Source)).
+		Int64("env_bytes", memLimit.EnvBytes).
+		Int64("cgroup_bytes", memLimit.CgroupBytes).
+		Int64("sysmem_fraction_bytes", memLimit.SysmemFractionBytes).
+		Msg("process memory limit configured")
+
 	if *outDir == "" {
 		return ErrOutRequired
 	}
