@@ -43,7 +43,7 @@ func measureOne(b *testing.B, numObjects int) {
 	tmp := b.TempDir()
 	outDir := filepath.Join(tmp, "index")
 	runDir := filepath.Join(tmp, "runs")
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
+	if err := os.MkdirAll(runDir, 0o750); err != nil {
 		b.Fatalf("mkdir runs: %v", err)
 	}
 

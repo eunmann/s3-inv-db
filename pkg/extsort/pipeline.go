@@ -152,7 +152,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 	p.setPhase("building")
 	mergeStart := time.Now()
-	prefixCount, maxDepth, err := p.runMergeBuildPhase(ctx, outDir)
+	mergeRes, err := p.runMergeBuildPhase(ctx, outDir)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			log.Warn().Msg("pipeline cancelled during merge phase")
@@ -160,6 +160,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 		return nil, fmt.Errorf("merge/build phase: %w", err)
 	}
+	prefixCount, maxDepth := mergeRes.PrefixCount, mergeRes.MaxDepth
 	mergeDuration := time.Since(mergeStart)
 
 	// Force GC after merge
@@ -236,7 +237,9 @@ type objectRecord struct {
 // avoid repeated slice growth during parsing.
 func estimateObjectCount(fileSize int64, format s3fetch.InventoryFormat) int {
 	const (
-		minCapacity = 10000 // Minimum capacity to avoid tiny allocations
+		minCapacity = 10_000 // Minimum capacity to avoid tiny allocations
+		// Upper bound to prevent absurd preallocations even for huge files.
+		maxCapacity = 10_000_000
 
 		// CSV inventory: each row is ~100-200 bytes uncompressed.
 		// S3 inventory CSVs are gzip-compressed with ~8x ratio.
@@ -263,8 +266,8 @@ func estimateObjectCount(fileSize int64, format s3fetch.InventoryFormat) int {
 	if estimate < int64(minCapacity) {
 		return minCapacity
 	}
-	if estimate > 10_000_000 { // Cap at 10M to prevent excessive preallocation
-		return 10_000_000
+	if estimate > maxCapacity {
+		return maxCapacity
 	}
 
 	return int(estimate)
@@ -474,7 +477,8 @@ func (p *Pipeline) processIngestResults(
 	cancel context.CancelFunc,
 	totalChunks int,
 ) error {
-	agg := NewAggregator(10000, p.config.MaxDepth)
+	const initialAggCapacity = 10_000
+	agg := NewAggregator(initialAggCapacity, p.config.MaxDepth)
 	progressInterval := max(totalChunks/10, 1)
 	var firstErr error
 
@@ -494,13 +498,13 @@ func (p *Pipeline) processIngestResults(
 		default:
 		}
 
-		batchErr, flushErr := p.handleIngestBatch(ctx, log, agg, batch, totalChunks, progressInterval)
-		if batchErr != nil && firstErr == nil {
-			firstErr = batchErr
+		res := p.handleIngestBatch(ctx, log, agg, batch, totalChunks, progressInterval)
+		if res.BatchErr != nil && firstErr == nil {
+			firstErr = res.BatchErr
 			cancel()
 		}
-		if flushErr != nil {
-			return flushErr
+		if res.FlushErr != nil {
+			return res.FlushErr
 		}
 	}
 
@@ -517,9 +521,16 @@ func (p *Pipeline) processIngestResults(
 	return nil
 }
 
+// ingestBatchResult reports the outcome of processing a single ingest
+// batch. BatchErr records the batch's own (non-fatal) error so the caller
+// can fold it into firstErr. FlushErr is fatal: the caller must abort
+// the ingest loop on a non-nil FlushErr.
+type ingestBatchResult struct {
+	BatchErr error
+	FlushErr error
+}
+
 // handleIngestBatch processes a single batch of objects.
-// Returns (batchErr, flushErr) where batchErr is the batch's own error (if any),
-// and flushErr is set if flushing to disk failed.
 func (p *Pipeline) handleIngestBatch(
 	ctx context.Context,
 	log *zerolog.Logger,
@@ -527,9 +538,9 @@ func (p *Pipeline) handleIngestBatch(
 	batch objectBatch,
 	totalChunks int,
 	progressInterval int,
-) (batchErr, flushErr error) {
+) ingestBatchResult {
 	if batch.err != nil {
-		return batch.err, nil
+		return ingestBatchResult{BatchErr: batch.err}
 	}
 
 	for _, obj := range batch.objects {
@@ -553,13 +564,13 @@ func (p *Pipeline) handleIngestBatch(
 	if ShouldFlush(heapThreshold) {
 		p.memTracker.LogNow("pre_flush")
 		if err := p.flushAggregator(ctx, agg); err != nil {
-			return nil, fmt.Errorf("flush aggregator: %w", err)
+			return ingestBatchResult{FlushErr: fmt.Errorf("flush aggregator: %w", err)}
 		}
 		runtime.GC()
 		p.memTracker.LogNow("post_flush_gc")
 	}
 
-	return nil, nil
+	return ingestBatchResult{}
 }
 
 // logIngestProgress logs progress information.
@@ -567,7 +578,8 @@ func (p *Pipeline) logIngestProgress(log *zerolog.Logger, chunkNum, totalChunks 
 	elapsed := time.Since(p.startTime)
 	avgPerChunk := elapsed / time.Duration(chunkNum)
 	remaining := time.Duration(totalChunks-chunkNum) * avgPerChunk
-	pct := float64(chunkNum) * 100.0 / float64(totalChunks)
+	const percentScale = 100.0
+	pct := float64(chunkNum) * percentScale / float64(totalChunks)
 
 	log.Info().
 		Int("chunk_num", chunkNum).
@@ -820,8 +832,10 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 	p.runFiles = append(p.runFiles, runPath)
 	p.flushCount++
 
-	// Log flush with memory stats
-	aggMemory := int64(len(rows)) * 288 // Estimated bytes used before flush
+	// Log flush with memory stats. Empirically each PrefixStats slot uses
+	// ~288 bytes (depth + counts + per-tier arrays) inside the aggregator.
+	const bytesPerAggregatorEntry = 288
+	aggMemory := int64(len(rows)) * bytesPerAggregatorEntry
 	flushDuration := time.Since(start)
 	log.Info().
 		Int("run_index", p.runCount-1).
@@ -837,14 +851,20 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 	return nil
 }
 
+// mergeBuildResult is the output of runMergeBuildPhase.
+type mergeBuildResult struct {
+	PrefixCount uint64
+	MaxDepth    uint32
+}
+
 // runMergeBuildPhase merges run files and builds the index.
-func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefixCount uint64, maxDepth uint32, err error) {
+func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (mergeBuildResult, error) {
 	log := zerolog.Ctx(ctx)
 
 	// Check for cancellation before starting
 	select {
 	case <-ctx.Done():
-		return 0, 0, fmt.Errorf("merge phase cancelled: %w", ctx.Err())
+		return mergeBuildResult{}, fmt.Errorf("merge phase cancelled: %w", ctx.Err())
 	default:
 	}
 
@@ -852,13 +872,13 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 		log.Info().Msg("no run files to merge, creating empty index")
 		builder, err := NewIndexBuilder(outDir, p.config.TempDir, p.config.UseSegmentEncoding)
 		if err != nil {
-			return 0, 0, fmt.Errorf("create index builder: %w", err)
+			return mergeBuildResult{}, fmt.Errorf("create index builder: %w", err)
 		}
 		if err := builder.FinalizeWithContext(ctx); err != nil {
-			return 0, 0, fmt.Errorf("finalize empty index: %w", err)
+			return mergeBuildResult{}, fmt.Errorf("finalize empty index: %w", err)
 		}
 
-		return 0, 0, nil
+		return mergeBuildResult{}, nil
 	}
 
 	// Calculate per-reader buffer size for merge
@@ -907,14 +927,14 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 		var mergeErr error
 		finalRunPath, mergeErr = parallelMerger.MergeAll(ctx, p.runFiles)
 		if mergeErr != nil {
-			return 0, 0, fmt.Errorf("parallel merge: %w", mergeErr)
+			return mergeBuildResult{}, fmt.Errorf("parallel merge: %w", mergeErr)
 		}
 
-		rounds, totalTime, bytesWritten := parallelMerger.Statistics()
+		stats := parallelMerger.Statistics()
 		log.Info().
-			Int("merge_rounds", rounds).
-			Str("merge_duration", humanfmt.Duration(totalTime)).
-			Str("bytes_written", humanfmt.Bytes(bytesWritten)).
+			Int("merge_rounds", stats.Rounds).
+			Str("merge_duration", humanfmt.Duration(stats.TotalMergeTime)).
+			Str("bytes_written", humanfmt.Bytes(stats.BytesWritten)).
 			Msg("parallel merge complete")
 
 		cleanupIntermediates = func() {
@@ -939,14 +959,14 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 	// Open final merged run for index building
 	reader, err := OpenRunFileAuto(finalRunPath, int(perReaderBuffer))
 	if err != nil {
-		return 0, 0, fmt.Errorf("open merged run: %w", err)
+		return mergeBuildResult{}, fmt.Errorf("open merged run: %w", err)
 	}
 
 	// Create iterator adapter for index builder
 	mergeIter := &singleRunIterator{reader: reader}
 
 	// Use prefix count from run file header to pre-size index builder arrays
-	prefixCount = reader.Count()
+	prefixCount := reader.Count()
 	log.Debug().
 		Uint64("prefix_count", prefixCount).
 		Msg("index build starting")
@@ -955,20 +975,20 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 	if err != nil {
 		reader.Close()
 
-		return 0, 0, fmt.Errorf("create index builder: %w", err)
+		return mergeBuildResult{}, fmt.Errorf("create index builder: %w", err)
 	}
 
 	if err := builder.AddAllWithContext(ctx, mergeIter); err != nil {
 		builder.cleanup()
 
-		return 0, 0, fmt.Errorf("build index: %w", err)
+		return mergeBuildResult{}, fmt.Errorf("build index: %w", err)
 	}
 
 	if err := builder.FinalizeWithContext(ctx); err != nil {
-		return 0, 0, fmt.Errorf("finalize index: %w", err)
+		return mergeBuildResult{}, fmt.Errorf("finalize index: %w", err)
 	}
 
-	return builder.Count(), builder.MaxDepth(), nil
+	return mergeBuildResult{PrefixCount: builder.Count(), MaxDepth: builder.MaxDepth()}, nil
 }
 
 // singleRunIterator wraps a RunReader to implement the iterator interface expected by IndexBuilder.

@@ -10,6 +10,39 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
+// defaultBenchSeed is the deterministic seed used when callers don't
+// specify one. Stable so benchmark runs reproduce.
+const defaultBenchSeed int64 = 42
+
+// Default tier mix probabilities used by DefaultConfig. Together they
+// sum to 1.0.
+const (
+	defaultProbStandard   = 0.60
+	defaultProbStandardIA = 0.15
+	defaultProbGlacierIR  = 0.10
+	defaultProbITFrequent = 0.10
+	defaultProbITArchive  = 0.05
+)
+
+// S3-realistic tier mix probabilities used by S3RealisticConfig.
+const (
+	s3ProbStandard   = 0.50
+	s3ProbStandardIA = 0.20
+	s3ProbGlacierIR  = 0.15
+	s3ProbITFrequent = 0.10
+	s3ProbITArchive  = 0.05
+)
+
+// Synthetic directory depth used by DefaultConfig.
+const defaultMaxDepth = 6
+
+// Fanout and depth used by S3RealisticConfig, modelling
+// bucket/type/year/month/day/user/file paths.
+const (
+	s3PrefixFanout = 15
+	s3MaxDepth     = 7
+)
+
 // FakeObject represents a synthetic S3 object for benchmarks.
 type FakeObject struct {
 	Key    string
@@ -37,15 +70,15 @@ func DefaultConfig(numObjects int) GeneratorConfig {
 	return GeneratorConfig{
 		NumObjects:   numObjects,
 		PrefixFanout: 10,
-		MaxDepth:     6,
+		MaxDepth:     defaultMaxDepth,
 		TierDistribution: map[tiers.ID]float64{
-			tiers.Standard:   0.60,
-			tiers.StandardIA: 0.15,
-			tiers.GlacierIR:  0.10,
-			tiers.ITFrequent: 0.10,
-			tiers.ITArchive:  0.05,
+			tiers.Standard:   defaultProbStandard,
+			tiers.StandardIA: defaultProbStandardIA,
+			tiers.GlacierIR:  defaultProbGlacierIR,
+			tiers.ITFrequent: defaultProbITFrequent,
+			tiers.ITArchive:  defaultProbITArchive,
 		},
-		Seed: 42,
+		Seed: defaultBenchSeed,
 	}
 }
 
@@ -53,16 +86,16 @@ func DefaultConfig(numObjects int) GeneratorConfig {
 func S3RealisticConfig(numObjects int) GeneratorConfig {
 	return GeneratorConfig{
 		NumObjects:   numObjects,
-		PrefixFanout: 15, // date-based structures
-		MaxDepth:     7,  // bucket/type/year/month/day/user/file
+		PrefixFanout: s3PrefixFanout,
+		MaxDepth:     s3MaxDepth,
 		TierDistribution: map[tiers.ID]float64{
-			tiers.Standard:   0.50,
-			tiers.StandardIA: 0.20,
-			tiers.GlacierIR:  0.15,
-			tiers.ITFrequent: 0.10,
-			tiers.ITArchive:  0.05,
+			tiers.Standard:   s3ProbStandard,
+			tiers.StandardIA: s3ProbStandardIA,
+			tiers.GlacierIR:  s3ProbGlacierIR,
+			tiers.ITFrequent: s3ProbITFrequent,
+			tiers.ITArchive:  s3ProbITArchive,
 		},
-		Seed: 42,
+		Seed: defaultBenchSeed,
 	}
 }
 
@@ -76,7 +109,7 @@ type Generator struct {
 func NewGenerator(cfg GeneratorConfig) *Generator {
 	seed := cfg.Seed
 	if seed == 0 {
-		seed = 42
+		seed = defaultBenchSeed
 	}
 
 	return &Generator{
@@ -138,17 +171,23 @@ func (g *Generator) generateKey() string {
 }
 
 func (g *Generator) generateSegment() string {
+	const (
+		yearBase    = 2020
+		yearSpan    = 5
+		monthsCount = 12
+		daysCount   = 28
+	)
 	// Mix of different segment types to create realistic structure
 	segmentType := g.rng.Intn(4)
 
 	switch segmentType {
 	case 0: // Date-like: 2024, 01, 15
 		formats := []string{
-			strconv.Itoa(2020 + g.rng.Intn(5)),       // year
-			fmt.Sprintf("%02d", 1+g.rng.Intn(12)),    // month
-			fmt.Sprintf("%02d", 1+g.rng.Intn(28)),    // day
-			fmt.Sprintf("hour=%02d", g.rng.Intn(24)), // hour partition
-			fmt.Sprintf("dt=%d-%02d-%02d", 2020+g.rng.Intn(5), 1+g.rng.Intn(12), 1+g.rng.Intn(28)),
+			strconv.Itoa(yearBase + g.rng.Intn(yearSpan)),  // year
+			fmt.Sprintf("%02d", 1+g.rng.Intn(monthsCount)), // month
+			fmt.Sprintf("%02d", 1+g.rng.Intn(daysCount)),   // day
+			fmt.Sprintf("hour=%02d", g.rng.Intn(24)),       // hour partition
+			fmt.Sprintf("dt=%d-%02d-%02d", yearBase+g.rng.Intn(yearSpan), 1+g.rng.Intn(monthsCount), 1+g.rng.Intn(daysCount)),
 		}
 
 		return formats[g.rng.Intn(len(formats))]
@@ -171,13 +210,14 @@ func (g *Generator) generateSegment() string {
 }
 
 func (g *Generator) generateAlphaSegment() string {
+	const lettersInAlphabet = 26
 	// Generate segments like: a, b, ..., z, aa, ab, ..., zz
 	n := g.rng.Intn(g.cfg.PrefixFanout)
-	if n < 26 {
+	if n < lettersInAlphabet {
 		return string(rune('a' + n))
 	}
 
-	return string(rune('a'+n/26-1)) + string(rune('a'+n%26))
+	return string(rune('a'+n/lettersInAlphabet-1)) + string(rune('a'+n%lettersInAlphabet))
 }
 
 func (g *Generator) generateFilename() string {
@@ -188,18 +228,38 @@ func (g *Generator) generateFilename() string {
 }
 
 func (g *Generator) generateSize() uint64 {
-	// Log-normal-ish distribution: mostly small files, some large
-	switch g.rng.Intn(10) {
-	case 0: // 10% tiny files (< 1KB)
+	const (
+		sizeBuckets       = 10
+		smallFileSpan     = 1024 * 1024
+		mediumFileSpan    = 100 * 1024 * 1024
+		largeFileSpan     = 900 * 1024 * 1024
+		veryLargeFileSpan = int64(4 * 1024 * 1024 * 1024)
+	)
+	// Log-normal-ish distribution: mostly small files, some large.
+	// Threshold layout (g.rng.Intn(sizeBuckets) < threshold) by bucket:
+	//   tiny [<1KB)            : 10%
+	//   small [1KB,1MB)        : 30%
+	//   medium [1MB,100MB)     : 40%
+	//   large [100MB,1GB)      : 10%
+	//   very large [1GB,5GB]   : 10%
+	const (
+		thresholdTiny   = 1
+		thresholdSmall  = thresholdTiny + 3  // 30% small
+		thresholdMedium = thresholdSmall + 4 // 40% medium
+		thresholdLarge  = thresholdMedium + 1
+	)
+	bucket := g.rng.Intn(sizeBuckets)
+	switch {
+	case bucket < thresholdTiny:
 		return uint64(g.rng.Intn(1024))
-	case 1, 2, 3: // 30% small files (1KB - 1MB)
-		return uint64(1024 + g.rng.Intn(1024*1024))
-	case 4, 5, 6, 7: // 40% medium files (1MB - 100MB)
-		return uint64(1024*1024 + g.rng.Intn(100*1024*1024))
-	case 8: // 10% large files (100MB - 1GB)
-		return uint64(100*1024*1024 + g.rng.Intn(900*1024*1024))
-	default: // 10% very large files (1GB - 5GB)
-		return uint64(1024*1024*1024 + g.rng.Int63n(4*1024*1024*1024))
+	case bucket < thresholdSmall:
+		return uint64(1024 + g.rng.Intn(smallFileSpan))
+	case bucket < thresholdMedium:
+		return uint64(1024*1024 + g.rng.Intn(mediumFileSpan))
+	case bucket < thresholdLarge:
+		return uint64(100*1024*1024 + g.rng.Intn(largeFileSpan))
+	default:
+		return uint64(1024*1024*1024 + g.rng.Int63n(veryLargeFileSpan))
 	}
 }
 
@@ -311,7 +371,8 @@ func generateBalancedKeys(size int) []string {
 }
 
 func generateS3RealisticKeys(size int) []string {
-	rng := rand.New(rand.NewSource(42))
+	const daysInMonth = 28
+	rng := rand.New(rand.NewSource(defaultBenchSeed))
 	keys := make([]string, size)
 
 	prefixes := []string{"data", "logs", "backups", "exports", "uploads"}
@@ -323,7 +384,7 @@ func generateS3RealisticKeys(size int) []string {
 		prefix := prefixes[rng.Intn(len(prefixes))]
 		year := years[rng.Intn(len(years))]
 		month := months[rng.Intn(len(months))]
-		day := fmt.Sprintf("%02d", rng.Intn(28)+1)
+		day := fmt.Sprintf("%02d", rng.Intn(daysInMonth)+1)
 		userID := fmt.Sprintf("user%05d", rng.Intn(1000))
 		fileID := fmt.Sprintf("file_%08x", rng.Uint32())
 		ext := extensions[rng.Intn(len(extensions))]

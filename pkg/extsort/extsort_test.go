@@ -3,7 +3,6 @@ package extsort
 import (
 	"errors"
 	"io"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -493,9 +492,4 @@ func BenchmarkRunFile(b *testing.B) {
 			reader.Close()
 		}
 	})
-}
-
-func init() {
-	// Ensure test temp dirs are cleaned up
-	os.MkdirAll(os.TempDir(), 0o755)
 }

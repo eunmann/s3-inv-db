@@ -66,7 +66,7 @@ func BenchmarkArrayReaderU64(b *testing.B) {
 func BenchmarkOpenMmap(b *testing.B) {
 	dir := b.TempDir()
 	path := filepath.Join(dir, "bench.bin")
-	if err := os.WriteFile(path, make([]byte, 16*1024*1024), 0o644); err != nil {
+	if err := os.WriteFile(path, make([]byte, 16*1024*1024), 0o600); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()

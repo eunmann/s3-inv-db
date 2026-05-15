@@ -48,11 +48,11 @@ func BenchmarkPipelineScale_E2E(b *testing.B) {
 				tmp := b.TempDir()
 				runDir := filepath.Join(tmp, "runs")
 				outDir := filepath.Join(tmp, "idx")
-				os.MkdirAll(runDir, 0o755)
+				os.MkdirAll(runDir, 0o750)
 				start := time.Now()
 
 				// Ingest phase: 8 flushes of compressed run files.
-				var runPaths []string
+				runPaths := make([]string, 0, flushes)
 				ingestStart := time.Now()
 				for f := range flushes {
 					agg := NewAggregator(perFlush, 0)

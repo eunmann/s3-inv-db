@@ -15,6 +15,11 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// indexDirPerm restricts the index output directory and its subdirectories
+// to owner+group access, matching gosec's expectation that directory mode
+// is 0o750 or stricter.
+const indexDirPerm = 0o750
+
 // IndexBuilder builds index files directly from a sorted stream of PrefixRows.
 // It processes prefixes in a single streaming pass, computing preorder positions
 // and subtree ranges on the fly without building an in-memory trie.
@@ -71,7 +76,7 @@ func NewIndexBuilder(outDir, tempDir string, useSegmentEncoding bool) (*IndexBui
 // the approximate number of prefixes is known (e.g., from a run file header).
 // If capacityHint is 0, a small default capacity is used.
 func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, useSegmentEncoding bool) (*IndexBuilder, error) {
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	if err := os.MkdirAll(outDir, indexDirPerm); err != nil {
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
 
@@ -287,7 +292,7 @@ func (b *IndexBuilder) writeTierStats(row *PrefixRow) error {
 // createTierWriter creates writers for a tier and backfills zeros for previous positions.
 func (b *IndexBuilder) createTierWriter(tierID tiers.ID, _ *PrefixRow) error {
 	tierDir := filepath.Join(b.outDir, "tier_stats")
-	if err := os.MkdirAll(tierDir, 0o755); err != nil {
+	if err := os.MkdirAll(tierDir, indexDirPerm); err != nil {
 		return fmt.Errorf("create tier_stats dir: %w", err)
 	}
 

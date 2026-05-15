@@ -63,7 +63,7 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 		tmpDir := b.TempDir()
 		outDir := filepath.Join(tmpDir, "index")
 		runDir := filepath.Join(tmpDir, "runs")
-		os.MkdirAll(runDir, 0o755)
+		os.MkdirAll(runDir, 0o750)
 
 		// Generate synthetic data
 		gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(numObjects))
@@ -388,9 +388,9 @@ func BenchmarkParallelMerge(b *testing.B) {
 
 	// Create test run files once
 	setupFiles := func(dir string) []string {
-		var paths []string
+		paths := make([]string, 0, numFiles)
 		for i := range numFiles {
-			var rows []*PrefixRow
+			rows := make([]*PrefixRow, 0, prefixesPerFile)
 			for j := range prefixesPerFile {
 				rows = append(rows, &PrefixRow{
 					Prefix:     fmt.Sprintf("bucket/data/year=2024/month=%02d/day=%02d/file_%08d.parquet", i%12+1, j%28+1, i*prefixesPerFile+j),

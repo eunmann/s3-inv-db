@@ -225,14 +225,14 @@ func OpenRunFile(path string, bufferSize int) (*RunFileReader, error) {
 	if magic != runFileMagic {
 		f.Close()
 
-		return nil, fmt.Errorf("invalid magic: got %x, want %x", magic, runFileMagic)
+		return nil, fmt.Errorf("%w: got %x, want %x", ErrInvalidMagic, magic, runFileMagic)
 	}
 
 	version := binary.LittleEndian.Uint32(header[4:8])
 	if version != runFileVersion {
 		f.Close()
 
-		return nil, fmt.Errorf("unsupported version: %d", version)
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedVersion, version)
 	}
 
 	r.count = binary.LittleEndian.Uint64(header[8:16])
@@ -278,7 +278,7 @@ func (r *RunFileReader) Count() uint64 {
 	return r.count
 }
 
-// Read returns the number of records read so far.
+// ReadCount returns the number of records read so far.
 func (r *RunFileReader) ReadCount() uint64 {
 	return r.read
 }

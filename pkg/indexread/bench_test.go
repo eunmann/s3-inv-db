@@ -40,7 +40,7 @@ Benchmark Categories for Index Reading:
 */
 
 // Use shared constants from benchutil for consistency across packages.
-// benchutil.BenchmarkSeed, benchutil.TreeShapes, benchutil.BenchmarkSizes
+// benchutil.BenchmarkSeed, benchutil.TreeShapes(), benchutil.BenchmarkSizes()
 
 // benchIndex holds a pre-built index for benchmarking.
 type benchIndex struct {
@@ -115,8 +115,8 @@ func (bi *benchIndex) Close() {
 // The opFunc is called with a prefix and should perform the operation being benchmarked.
 func benchmarkIndexOp(b *testing.B, opFunc func(bi *benchIndex, prefix string)) {
 	b.Helper()
-	for _, shape := range benchutil.TreeShapes {
-		for _, size := range benchutil.BenchmarkSizes {
+	for _, shape := range benchutil.TreeShapes() {
+		for _, size := range benchutil.BenchmarkSizes() {
 			name := fmt.Sprintf("%s/size=%d", shape, size)
 
 			b.Run(name+"/sequential", func(b *testing.B) {
@@ -327,8 +327,8 @@ func BenchmarkTierBreakdown(b *testing.B) {
 func BenchmarkDescendantsAtDepth(b *testing.B) {
 	depths := []int{1, 2, 3, 5}
 
-	for _, shape := range benchutil.TreeShapes {
-		for _, size := range benchutil.BenchmarkSizes {
+	for _, shape := range benchutil.TreeShapes() {
+		for _, size := range benchutil.BenchmarkSizes() {
 			keys := benchutil.GenerateKeys(size, shape)
 			bi := setupBenchIndex(b, keys)
 
@@ -410,8 +410,8 @@ func BenchmarkDescendantsSubtree(b *testing.B) {
 
 // BenchmarkIterator benchmarks the iterator interface.
 func BenchmarkIterator(b *testing.B) {
-	for _, shape := range benchutil.TreeShapes {
-		for _, size := range benchutil.BenchmarkSizes {
+	for _, shape := range benchutil.TreeShapes() {
+		for _, size := range benchutil.BenchmarkSizes() {
 			keys := benchutil.GenerateKeys(size, shape)
 			bi := setupBenchIndex(b, keys)
 
@@ -440,7 +440,7 @@ func BenchmarkIterator(b *testing.B) {
 
 // BenchmarkMixedWorkload simulates realistic mixed query patterns.
 func BenchmarkMixedWorkload(b *testing.B) {
-	for _, shape := range benchutil.TreeShapes {
+	for _, shape := range benchutil.TreeShapes() {
 		size := 10000
 		keys := benchutil.GenerateKeys(size, shape)
 		bi := setupBenchIndex(b, keys)
@@ -537,7 +537,7 @@ func BenchmarkPrefixHeavy(b *testing.B) {
 func BenchmarkIndexOpen_Scaling(b *testing.B) {
 	benchutil.SkipIfNoLongBench(b)
 
-	for _, size := range benchutil.ScalingSizes {
+	for _, size := range benchutil.ScalingSizes() {
 		b.Run(fmt.Sprintf("objects=%d", size), func(b *testing.B) {
 			bi := setupBenchIndexWithTiers(b, size)
 			bi.Close()

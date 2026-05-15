@@ -158,7 +158,7 @@ func TestParallelMerger_ManyFiles(t *testing.T) {
 	allPrefixes := make([]string, 0, numFiles*prefixesPerFile)
 
 	for i := range numFiles {
-		var prefixes []string
+		prefixes := make([]string, 0, prefixesPerFile)
 		for j := range prefixesPerFile {
 			prefix := fmt.Sprintf("file%02d/prefix%04d/", i, j)
 			prefixes = append(prefixes, prefix)
@@ -217,9 +217,9 @@ func TestParallelMerger_ManyFiles(t *testing.T) {
 	}
 
 	// Verify statistics
-	rounds, _, _ := merger.Statistics()
-	if rounds < 2 {
-		t.Logf("Merge completed in %d rounds (20 files with fanIn=4 should need ~2 rounds)", rounds)
+	stats := merger.Statistics()
+	if stats.Rounds < 2 {
+		t.Logf("Merge completed in %d rounds (20 files with fanIn=4 should need ~2 rounds)", stats.Rounds)
 	}
 }
 

@@ -39,6 +39,10 @@ const (
 	// Flags field bit masks.
 	flagCompressed      = 1 << 0
 	flagCompressionMask = 0x0E // bits 1-3
+
+	// Byte offset of the Count field in the compressed run file header
+	// (4 magic + 4 version + 4 flags).
+	compressedRunCountOffset = 12
 )
 
 // CompressionLevel defines the compression effort level.
@@ -235,7 +239,7 @@ func (w *CompressedRunWriter) Close() error {
 	w.compressor = nil
 
 	// Update header with final count and uncompressed size
-	if _, err := w.file.Seek(12, 0); err != nil {
+	if _, err := w.file.Seek(compressedRunCountOffset, 0); err != nil {
 		w.file.Close()
 
 		return fmt.Errorf("seek to count: %w", err)
@@ -295,28 +299,28 @@ func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, e
 	if magic != runFileMagic {
 		f.Close()
 
-		return nil, fmt.Errorf("invalid magic: got %x, want %x", magic, runFileMagic)
+		return nil, fmt.Errorf("%w: got %x, want %x", ErrInvalidMagic, magic, runFileMagic)
 	}
 
 	version := binary.LittleEndian.Uint32(header[4:8])
 	if version != compressedRunFileVersion {
 		f.Close()
 
-		return nil, fmt.Errorf("unsupported version for compressed reader: %d (want %d)", version, compressedRunFileVersion)
+		return nil, fmt.Errorf("%w (compressed reader): %d (want %d)", ErrUnsupportedVersion, version, compressedRunFileVersion)
 	}
 
 	flags := binary.LittleEndian.Uint32(header[8:12])
 	if flags&flagCompressed == 0 {
 		f.Close()
 
-		return nil, fmt.Errorf("file is not compressed (flags=%d)", flags)
+		return nil, fmt.Errorf("%w (flags=%d)", ErrNotCompressed, flags)
 	}
 
 	compressionType := (flags & flagCompressionMask) >> 1
 	if compressionType != compressionTypeZstd {
 		f.Close()
 
-		return nil, fmt.Errorf("unsupported compression type: %d", compressionType)
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedCompression, compressionType)
 	}
 
 	count := binary.LittleEndian.Uint64(header[12:20])
@@ -461,7 +465,7 @@ func OpenRunFileAuto(path string, bufferSize int) (RunReader, error) {
 
 	magic := binary.LittleEndian.Uint32(header[0:4])
 	if magic != runFileMagic {
-		return nil, fmt.Errorf("invalid magic: got %x, want %x", magic, runFileMagic)
+		return nil, fmt.Errorf("%w: got %x, want %x", ErrInvalidMagic, magic, runFileMagic)
 	}
 
 	version := binary.LittleEndian.Uint32(header[4:8])
@@ -471,6 +475,6 @@ func OpenRunFileAuto(path string, bufferSize int) (RunReader, error) {
 	case compressedRunFileVersion:
 		return OpenCompressedRunFile(path, bufferSize)
 	default:
-		return nil, fmt.Errorf("unsupported run file version: %d", version)
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedVersion, version)
 	}
 }

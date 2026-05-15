@@ -212,7 +212,7 @@ func TestBlobWriterReader(t *testing.T) {
 		t.Fatalf("NewBlobWriter failed: %v", err)
 	}
 
-	strings := []string{"", "a/", "a/b/", "b/", "日本語/"}
+	strings := []string{"", "a/", "a/b/", "b/", "nihongo/"}
 	for _, s := range strings {
 		if err := w.WriteString(s); err != nil {
 			t.Fatalf("WriteString failed: %v", err)
@@ -307,7 +307,7 @@ func TestOpenArrayBadMagic(t *testing.T) {
 		Count:   0,
 		Width:   8,
 	})
-	if err := os.WriteFile(path, header, 0o644); err != nil {
+	if err := os.WriteFile(path, header, 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -327,7 +327,7 @@ func TestOpenArrayBadVersion(t *testing.T) {
 		Count:   0,
 		Width:   8,
 	})
-	if err := os.WriteFile(path, header, 0o644); err != nil {
+	if err := os.WriteFile(path, header, 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -348,7 +348,7 @@ func TestOpenArrayFileTooSmall(t *testing.T) {
 		Count:   10,
 		Width:   8,
 	})
-	if err := os.WriteFile(path, header, 0o644); err != nil {
+	if err := os.WriteFile(path, header, 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -362,7 +362,7 @@ func TestMmapEmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.bin")
 
-	if err := os.WriteFile(path, nil, 0o644); err != nil {
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 

@@ -17,7 +17,7 @@ func TestTierWriterBackfillAlignment(t *testing.T) {
 	dir := t.TempDir()
 	outDir := filepath.Join(dir, "idx")
 	tempDir := filepath.Join(dir, "tmp")
-	if err := os.MkdirAll(tempDir, 0o755); err != nil {
+	if err := os.MkdirAll(tempDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 

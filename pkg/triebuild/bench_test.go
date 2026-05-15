@@ -24,8 +24,8 @@ Benchmark Categories for Trie Building:
 
 // BenchmarkTrieBuild benchmarks trie construction from sorted keys.
 func BenchmarkTrieBuild(b *testing.B) {
-	for _, shape := range benchutil.TreeShapes {
-		for _, size := range benchutil.BenchmarkSizes {
+	for _, shape := range benchutil.TreeShapes() {
+		for _, size := range benchutil.BenchmarkSizes() {
 			name := fmt.Sprintf("%s/size=%d", shape, size)
 
 			// Generate and sort keys once
@@ -92,7 +92,7 @@ func BenchmarkExtractPrefixes(b *testing.B) {
 func BenchmarkTrieBuild_Scaling(b *testing.B) {
 	benchutil.SkipIfNoLongBench(b)
 
-	for _, size := range benchutil.ScalingSizes {
+	for _, size := range benchutil.ScalingSizes() {
 		b.Run(fmt.Sprintf("s3_realistic/size=%d", size), func(b *testing.B) {
 			keys := benchutil.SortKeys(benchutil.GenerateKeys(size, "s3_realistic"))
 			sizes := benchutil.KeysToSizes(keys)
