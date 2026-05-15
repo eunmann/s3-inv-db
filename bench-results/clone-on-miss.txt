@@ -1,0 +1,18 @@
+goos: linux
+goarch: amd64
+pkg: github.com/eunmann/s3-inv-db/pkg/extsort
+cpu: AMD Ryzen 9 5950X 16-Core Processor            
+BenchmarkAddObjectDiverse-32       	 7536512	       159.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAddObjectDiverse-32       	 7421061	       159.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAddObjectDiverse-32       	 7444074	       160.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAddObjectCold-32          	 4472103	       299.1 ns/op	       1 B/op	       0 allocs/op
+BenchmarkAddObjectCold-32          	 4965450	       298.5 ns/op	       1 B/op	       0 allocs/op
+BenchmarkAddObjectCold-32          	 4917102	       293.0 ns/op	       1 B/op	       0 allocs/op
+BenchmarkAggregatorRetention-32    	1000000000	         0.09949 ns/op	       552.8 bytes/prefix	  14374160 heap_bytes	     26001 prefixes	       0 B/op	       0 allocs/op
+BenchmarkAggregatorRetention-32    	1000000000	         0.09849 ns/op	       552.8 bytes/prefix	  14374160 heap_bytes	     26001 prefixes	       0 B/op	       0 allocs/op
+BenchmarkAggregatorRetention-32    	1000000000	         0.1024 ns/op	       552.8 bytes/prefix	  14374160 heap_bytes	     26001 prefixes	       0 B/op	       0 allocs/op
+BenchmarkAggregatorDrain-32        	     127	   9832119 ns/op	 7429280 B/op	   26037 allocs/op
+BenchmarkAggregatorDrain-32        	     130	   9282378 ns/op	 7430507 B/op	   26040 allocs/op
+BenchmarkAggregatorDrain-32        	     124	   9097642 ns/op	 7434997 B/op	   26039 allocs/op
+PASS
+ok  	github.com/eunmann/s3-inv-db/pkg/extsort	41.400s
