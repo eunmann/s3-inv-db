@@ -52,11 +52,20 @@ func (h *Handlers) AggregateDashboardForTest(logger *zerolog.Logger, views []inv
 			Src: v.Src, ID: v.ID,
 			TotalRuns: v.TotalRuns, LoadedRuns: v.LoadedRuns,
 			LatestRun: v.LatestRun, LatestState: v.LatestState,
-			DiskBytes: v.DiskBytes,
+			DiskBytes:    v.DiskBytes,
+			LatestFiles:  v.LatestFiles,
+			LatestBytes:  v.LatestBytes,
+			LatestFormat: v.LatestFormat,
 		}
 	}
 
-	return AggregateForTest{Confs: out, Order: agg.Order, Totals: DashTotalsForTest{Objects: agg.Totals.objects, Bytes: agg.Totals.bytes, Disk: agg.Totals.disk}}
+	return AggregateForTest{Confs: out, Order: agg.Order, Totals: DashTotalsForTest{
+		Objects:       agg.Totals.objects,
+		Bytes:         agg.Totals.bytes,
+		Disk:          agg.Totals.disk,
+		ManifestFiles: agg.Totals.manifestFiles,
+		ManifestBytes: agg.Totals.manifestBytes,
+	}}
 }
 
 // AddLoadedStatsForTest exposes addLoadedStats for tests.
@@ -71,19 +80,24 @@ func (h *Handlers) AddLoadedStatsForTest(logger *zerolog.Logger, v *inventory.Me
 
 // DashConfAggForTest mirrors dashConfAgg with exported fields for tests.
 type DashConfAggForTest struct {
-	Src, ID     string
-	TotalRuns   int
-	LoadedRuns  int
-	LatestRun   string
-	LatestState inventory.State
-	DiskBytes   int64
+	Src, ID      string
+	TotalRuns    int
+	LoadedRuns   int
+	LatestRun    string
+	LatestState  inventory.State
+	DiskBytes    int64
+	LatestFiles  int
+	LatestBytes  int64
+	LatestFormat string
 }
 
 // DashTotalsForTest mirrors dashTotals with exported fields for tests.
 type DashTotalsForTest struct {
-	Objects uint64
-	Bytes   uint64
-	Disk    int64
+	Objects       uint64
+	Bytes         uint64
+	Disk          int64
+	ManifestFiles int
+	ManifestBytes int64
 }
 
 // Exported aliases for unexported helpers used by external tests.
