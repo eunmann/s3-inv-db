@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
-	"github.com/eunmann/s3-inv-db/pkg/membudget"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
 
@@ -77,7 +76,6 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, run, manifestU
 	}
 
 	cfg := extsort.DefaultConfig()
-	cfg.MemoryBudget = membudget.NewFromSystemRAM()
 	cfg.OnProgress = onProgress
 
 	pipeline := extsort.NewPipeline(cfg, l.s3Client)

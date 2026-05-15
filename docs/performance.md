@@ -35,31 +35,32 @@ Build performance depends on:
 - Memory budget (affects flush frequency)
 - Number of unique prefixes
 
-### Memory Budget
+### Memory limit
 
-The `--mem-budget` flag controls the trade-off between memory usage and build speed:
+The process memory ceiling is set via `runtime/debug.SetMemoryLimit`
+at startup. Resolution is `min(GOMEMLIMIT env, cgroup v2 memory.max,
+0.6 × detected RAM)` — whichever candidate is smallest binds, so a
+permissive `GOMEMLIMIT` can't override a tighter container cap.
 
-| Budget | Effect |
-|--------|--------|
-| Higher | Fewer flush cycles, faster builds |
-| Lower | More flush cycles, lower memory usage |
+Override the limit by exporting `GOMEMLIMIT=4GiB` (etc.) or running
+under a constrained cgroup. The aggregator's spill threshold is
+`min(512 MiB, 0.15 × GOMEMLIMIT)`; it also spills when overall
+heap-in-use exceeds 85% of the limit.
 
-Default: 50% of system RAM
-
-Minimum recommended: 512MB
-
-### Tuning Flags
+### Tuning
 
 ```bash
-# More workers for higher S3 throughput
-s3-inv-db build --workers 16 ...
+# Cap a build at 4 GiB
+GOMEMLIMIT=4GiB s3-inv-db build ...
 
 # Limit depth to reduce prefix count
 s3-inv-db build --max-depth 5 ...
-
-# Constrain memory usage
-s3-inv-db build --mem-budget 2GiB ...
 ```
+
+Worker counts and S3 part concurrency derive from `runtime.NumCPU()`:
+parser + download workers each scale to `min(NumCPU, manifest_files)`,
+SDK part concurrency is `max(NumCPU/4, 2)`. The same binary scales
+linearly from a laptop to an ingest node without flags.
 
 ### Build Phases
 
@@ -149,9 +150,9 @@ The OS manages page cache automatically. Frequently accessed index regions stay 
 
 | Symptom | Likely Cause | Fix |
 |---------|--------------|-----|
-| Low CPU usage | S3 bandwidth limited | Increase `--workers` |
+| Low CPU usage | S3 bandwidth limited | Run on a host with more vCPUs (workers scale with `NumCPU`) |
 | High memory, slow | Too many unique prefixes | Use `--max-depth` |
-| Lots of temp files | Memory budget too low | Increase `--mem-budget` |
+| Lots of temp files | Aggregator spilling often under a tight `GOMEMLIMIT` | Raise the limit or run on a fatter host |
 | Slow final phase | Large MPHF build | Expected for >5M prefixes |
 
 ### Query Bottlenecks

@@ -17,7 +17,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/eunmann/s3-inv-db/pkg/membudget"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
@@ -238,28 +237,6 @@ type Config struct {
 	// If empty, os.TempDir() is used.
 	TempDir string
 
-	// MemoryBudget is the central memory budget manager for the pipeline.
-	// If nil, a default budget based on system RAM is created.
-	MemoryBudget *membudget.Budget
-
-	// MemoryThreshold is the approximate memory limit (in bytes) for the
-	// in-memory prefix aggregator before flushing to a run file.
-	//
-	// Deprecated: Use MemoryBudget instead. This field is kept for backward
-	// compatibility but is ignored when MemoryBudget is set.
-	MemoryThreshold int64
-
-	// RunFileBufferSize is the buffer size for reading/writing run files.
-	// Default: 4MB.
-	//
-	// Deprecated: Buffer sizes are now calculated from MemoryBudget.
-	// This field is kept for backward compatibility.
-	RunFileBufferSize int
-
-	// S3DownloadConcurrency is the number of concurrent S3 chunk downloads.
-	// Default: 4.
-	S3DownloadConcurrency int
-
 	// S3DownloadPartConcurrency is the number of concurrent parts for each S3 download.
 	// Used by the S3 Download Manager for parallel range downloads within a single object.
 	// Default: max(4, NumCPU).
@@ -309,76 +286,31 @@ type Config struct {
 	OnProgress func(stage string, done, total int64)
 }
 
-// DefaultConfig returns a Config with sensible defaults based on the current machine.
-// Concurrency is scaled with CPU count, and memory budget is set to 50% of system RAM.
+// DefaultConfig returns a Config with sensible defaults based on the
+// current machine. Concurrency is derived from runtime.NumCPU per the
+// pipeline's "throughput scales with instance size" contract; the
+// process memory limit is governed by GOMEMLIMIT (see
+// sysmem.ApplyMemoryLimit) rather than a fractional partition here.
 func DefaultConfig() Config {
 	numCPU := runtime.NumCPU()
-
-	// Scale concurrency with CPU count, with reasonable bounds
-	concurrency := numCPU
-	if concurrency < 2 {
-		concurrency = 2
-	} else if concurrency > 16 {
-		concurrency = 16
-	}
-
-	// Part concurrency for parallel range downloads within a single object
-	partConcurrency := min(max(numCPU, 4), 16)
-
-	// Merge workers scale with CPU but cap lower to avoid memory pressure
-	mergeWorkers := min(max(numCPU/2, 1), 8)
+	const minPartConcurrency = 2
+	partConcurrency := max(numCPU/4, minPartConcurrency)
+	// Merge workers scale with CPU but cap to avoid pathological
+	// parallel-merge fan-in on very large machines.
+	const mergeWorkerCap = 8
+	mergeWorkers := min(max(numCPU/2, 1), mergeWorkerCap)
 
 	return Config{
 		TempDir:                   "",
-		MemoryBudget:              membudget.NewFromSystemRAM(),
-		RunFileBufferSize:         4 * 1024 * 1024, // 4MB
-		S3DownloadConcurrency:     concurrency,
 		S3DownloadPartConcurrency: partConcurrency,
 		S3DownloadPartSize:        16 * 1024 * 1024, // 16MB
-		ParseConcurrency:          concurrency,
-		IndexWriteConcurrency:     concurrency,
+		ParseConcurrency:          numCPU,
+		IndexWriteConcurrency:     numCPU,
 		MaxDepth:                  0, // unlimited
 		NumMergeWorkers:           mergeWorkers,
 		MaxMergeFanIn:             16, // Higher fan-in reduces merge rounds
 		UseCompressedRuns:         true,
 	}
-}
-
-// EnsureBudget ensures that Config has a valid MemoryBudget.
-// If MemoryBudget is nil, it creates one from system RAM.
-func (c *Config) EnsureBudget() {
-	if c.MemoryBudget == nil {
-		c.MemoryBudget = membudget.NewFromSystemRAM()
-	}
-}
-
-// AggregatorMemoryThreshold returns the memory threshold for the aggregator.
-// This is the budget's aggregator allocation (50% of total budget).
-func (c *Config) AggregatorMemoryThreshold() int64 {
-	c.EnsureBudget()
-
-	return int64(c.MemoryBudget.AggregatorBudget())
-}
-
-// RunBufferBudget returns the total budget for run file buffers.
-func (c *Config) RunBufferBudget() int64 {
-	c.EnsureBudget()
-
-	return int64(c.MemoryBudget.RunBufferBudget())
-}
-
-// MergeBudget returns the total budget for merge phase operations.
-func (c *Config) MergeBudget() int64 {
-	c.EnsureBudget()
-
-	return int64(c.MemoryBudget.MergeBudget())
-}
-
-// IndexBuildBudget returns the total budget for index building.
-func (c *Config) IndexBuildBudget() int64 {
-	c.EnsureBudget()
-
-	return int64(c.MemoryBudget.IndexBuildBudget())
 }
 
 // S3DownloaderConfig returns the S3 downloader configuration derived from this Config.

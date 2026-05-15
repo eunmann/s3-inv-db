@@ -73,13 +73,6 @@ func (p *Pipeline) reportProgress(phase string, done, total int64) {
 
 // NewPipeline creates a new external sort pipeline.
 func NewPipeline(config Config, s3Client *s3fetch.Client) *Pipeline {
-	// Ensure memory budget is set
-	config.EnsureBudget()
-
-	if config.RunFileBufferSize <= 0 {
-		config.RunFileBufferSize = 4 * 1024 * 1024 // 4MB default
-	}
-
 	return &Pipeline{
 		config:     config,
 		s3Client:   s3Client,
@@ -115,16 +108,11 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		}
 	}()
 
-	// Log memory budget breakdown with human-readable formatting
-	p.config.EnsureBudget()
-	aggThreshold := p.config.AggregatorMemoryThreshold()
+	memoryLimit := debug.SetMemoryLimit(-1)
 	log.Info().
 		Str("manifest_uri", manifestURI).
-		Str("total_budget", humanfmt.BytesUint64(p.config.MemoryBudget.Total())).
-		Str("aggregator_budget", humanfmt.Bytes(aggThreshold)).
-		Str("run_buffer_budget", humanfmt.Bytes(p.config.RunBufferBudget())).
-		Str("merge_budget", humanfmt.Bytes(p.config.MergeBudget())).
-		Str("index_budget", humanfmt.Bytes(p.config.IndexBuildBudget())).
+		Int64("gomemlimit_bytes", memoryLimit).
+		Str("aggregator_cap", humanfmt.BytesUint64(AggregatorCap(memoryLimit))).
 		Msg("pipeline starting")
 
 	p.setPhase("downloading")
@@ -338,7 +326,12 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 	// ingest doesn't leave most workers idle behind one big chunk.
 	sortFilesLargestFirst(manifest)
 
-	numWorkers := p.computeWorkerCount(log)
+	numWorkers := ingestWorkerCount(len(manifest.Files))
+	log.Info().
+		Int("num_cpu", runtime.NumCPU()).
+		Int("manifest_files", len(manifest.Files)).
+		Int("ingest_workers", numWorkers).
+		Msg("ingest worker count derived from NumCPU")
 
 	return &ingestConfig{
 		manifest:      manifest,
@@ -351,6 +344,23 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 		numWorkers:    numWorkers,
 		tierMapping:   tiers.NewMapping(),
 	}, nil
+}
+
+// ingestWorkerCount returns the worker count for download+parse: the
+// smaller of NumCPU and the manifest's chunk count (no point spinning
+// up 64 workers for a 3-file manifest). Floored at 2 so even a single
+// CPU runs with overlap between download and parse.
+func ingestWorkerCount(fileCount int) int {
+	const minWorkers = 2
+	n := runtime.NumCPU()
+	if fileCount > 0 && fileCount < n {
+		n = fileCount
+	}
+	if n < minWorkers {
+		n = minWorkers
+	}
+
+	return n
 }
 
 // sortFilesLargestFirst reorders manifest.Files by Size DESC so that
@@ -380,38 +390,6 @@ func (c *ingestConfig) formatString() string {
 	}
 
 	return "CSV"
-}
-
-// computeWorkerCount calculates the number of workers based on memory budget.
-func (p *Pipeline) computeWorkerCount(log *zerolog.Logger) int {
-	numWorkers := p.config.S3DownloadConcurrency
-	if numWorkers <= 0 {
-		numWorkers = runtime.NumCPU()
-	}
-
-	dlConfig := p.config.S3DownloaderConfig()
-	downloadBufferPerWorker := uint64(dlConfig.PartSize) * uint64(dlConfig.Concurrency)
-	const parsedBatchOverhead uint64 = 64 * 1024 * 1024
-	bytesPerWorkerInFlight := downloadBufferPerWorker + parsedBatchOverhead
-
-	p.config.EnsureBudget()
-	headroom := p.config.MemoryBudget.Total() - p.config.MemoryBudget.AggregatorBudget() -
-		p.config.MemoryBudget.RunBufferBudget() - p.config.MemoryBudget.MergeBudget() -
-		p.config.MemoryBudget.IndexBuildBudget()
-
-	maxWorkersFromBudget := max(int(headroom/bytesPerWorkerInFlight), 2)
-
-	if numWorkers > maxWorkersFromBudget {
-		log.Warn().
-			Int("requested_workers", numWorkers).
-			Int("max_from_budget", maxWorkersFromBudget).
-			Uint64("headroom_mb", headroom/(1024*1024)).
-			Uint64("per_worker_mb", bytesPerWorkerInFlight/(1024*1024)).
-			Msg("reducing worker count to fit memory budget")
-		numWorkers = maxWorkersFromBudget
-	}
-
-	return numWorkers
 }
 
 // runIngestLoop runs the main ingest loop with worker coordination.
@@ -781,17 +759,10 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 	runPath := filepath.Join(p.tempDir, fmt.Sprintf("run_%04d%s", p.runCount, ext))
 	p.runCount++
 
-	// Calculate buffer size from run buffer budget
-	// During ingest, we write one run file at a time, so use full run buffer budget
-	// Clamp to reasonable range: [64KB, 16MB]
-	bufferSize := p.config.RunBufferBudget()
-	const minBuffer = 64 * 1024
-	const maxBuffer = 16 * 1024 * 1024
-	if bufferSize < minBuffer {
-		bufferSize = minBuffer
-	} else if bufferSize > maxBuffer {
-		bufferSize = maxBuffer
-	}
+	// Run file buffer: a fixed 4 MiB is well above the syscall sweet
+	// spot for sequential writes and bounded per-worker, so no need to
+	// derive it from a fractional memory partition.
+	const bufferSize = 4 * 1024 * 1024
 
 	var writeErr error
 	if p.config.UseCompressedRuns {
@@ -881,16 +852,11 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		return mergeBuildResult{}, nil
 	}
 
-	// Calculate per-reader buffer size for merge
+	// Per-reader buffer for the k-way merge. Bounded constant rather
+	// than a fraction of a budget — each reader's working set is
+	// dominated by its inflight prefix-row decode, not this buffer.
 	numRunFiles := len(p.runFiles)
-	perReaderBuffer := p.config.MergeBudget() / int64(numRunFiles)
-	const minBuffer = 64 * 1024
-	const maxBuffer = 8 * 1024 * 1024
-	if perReaderBuffer < minBuffer {
-		perReaderBuffer = minBuffer
-	} else if perReaderBuffer > maxBuffer {
-		perReaderBuffer = maxBuffer
-	}
+	const perReaderBuffer int64 = 1 * 1024 * 1024
 
 	// Use parallel merge for multiple run files
 	numWorkers := p.config.NumMergeWorkers
