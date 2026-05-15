@@ -245,6 +245,21 @@ func (r *RunFileReader) Read() (*PrefixRow, error) {
 	return row, nil
 }
 
+// ReadInto reads the next PrefixRow into the caller-owned row, avoiding
+// the per-row PrefixRow allocation in Read. The caller must ensure the
+// previous returned row is no longer in use.
+// Returns io.EOF when all records have been read.
+func (r *RunFileReader) ReadInto(into *PrefixRow) error {
+	if r.read >= r.count {
+		return io.EOF
+	}
+	if _, err := readPrefixRowRecordInto(r.reader, &r.buf, into); err != nil {
+		return err
+	}
+	r.read++
+	return nil
+}
+
 // Count returns the total number of records in the file.
 func (r *RunFileReader) Count() uint64 {
 	return r.count

@@ -107,6 +107,13 @@ func (r *PrefixRow) Clone() *PrefixRow {
 // The buf pointer is used for temporary storage and may be resized if needed.
 // Returns io.EOF when the source is exhausted.
 func readPrefixRowRecord(reader io.Reader, buf *[]byte) (*PrefixRow, error) {
+	return readPrefixRowRecordInto(reader, buf, nil)
+}
+
+// readPrefixRowRecordInto is like readPrefixRowRecord but reuses the given
+// PrefixRow when non-nil. Pass a row obtained from prefixRowPool to keep
+// the merge loop allocation-free.
+func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) (*PrefixRow, error) {
 	var lenBuf [4]byte
 	if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
 		if err == io.EOF {
@@ -127,7 +134,11 @@ func readPrefixRowRecord(reader io.Reader, buf *[]byte) (*PrefixRow, error) {
 		return nil, fmt.Errorf("read record: %w", err)
 	}
 
-	row := &PrefixRow{}
+	if row == nil {
+		row = &PrefixRow{}
+	} else {
+		row.Reset()
+	}
 	offset := 0
 
 	row.Prefix = string((*buf)[offset : offset+prefixLen])
@@ -164,8 +175,9 @@ func SortPrefixRows(rows []*PrefixRow) {
 }
 
 // PrefixStats holds aggregated statistics for a single prefix during the
-// in-memory aggregation phase. This is a lightweight version of PrefixRow
-// that can be used with map[string]*PrefixStats.
+// in-memory aggregation phase. All counters are uint64 because at
+// billion-object / PB-scale buckets, a single tier of the root prefix can
+// exceed 2^32. Smaller width risks silent overflow on real workloads.
 type PrefixStats struct {
 	// Depth is the directory depth.
 	Depth uint16
