@@ -52,7 +52,17 @@ type Config struct {
 	AutoLoadConcurrency      int
 	AutoLoadRetentionDefault uint32
 	IndexRatio               float64
+
+	// DiscoveryRefreshInterval governs how often the background
+	// discovery refresher rebuilds the cached snapshot the HTTP
+	// handlers serve. Zero means use defaultDiscoveryRefreshInterval.
+	DiscoveryRefreshInterval time.Duration
 }
+
+// defaultDiscoveryRefreshInterval is the fallback cadence for the
+// discovery snapshot refresher. The dashboard reads the snapshot, so
+// the value sets the page-load freshness ceiling.
+const defaultDiscoveryRefreshInterval = time.Minute
 
 // Server is the HTTP server.
 type Server struct {
@@ -67,6 +77,7 @@ type Server struct {
 	bldr        *loader.Loader
 	tracker     *budget.Tracker
 	autoloader  *autoload.AutoLoader
+	discovery   *inventory.DiscoveryService
 	renderer    *templates.Renderer
 	handlers    *handlers.Handlers
 	server      *http.Server
@@ -166,6 +177,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		bldr:        bldr,
 		tracker:     tracker,
 		autoloader:  al,
+		discovery:   discovery,
 		renderer:    renderer,
 		handlers:    h,
 	}
@@ -357,6 +369,9 @@ func (s *Server) Run(ctx context.Context) error {
 	// shutdown trigger), we still need a few seconds to drain workers.
 	defer s.shutdownResources(ctx)
 
+	if s.discovery != nil && s.discovery.Enabled() {
+		s.discovery.Start(ctx, s.discoveryRefreshInterval())
+	}
 	if s.autoloader != nil {
 		s.autoloader.Start(ctx)
 	}
@@ -401,6 +416,9 @@ func (s *Server) shutdownResources(ctx context.Context) {
 	if s.autoloader != nil {
 		s.autoloader.Stop()
 	}
+	if s.discovery != nil {
+		s.discovery.Stop()
+	}
 	if err := s.jobMgr.Shutdown(shutdownCtx); err != nil {
 		s.config.Logger.Error().Err(err).Msg("shutdown job manager")
 	}
@@ -415,4 +433,12 @@ func (s *Server) shutdownResources(ctx context.Context) {
 // happy; callers can still treat it as a chi.Router/http.Handler.
 func (s *Server) Router() *chi.Mux {
 	return s.router
+}
+
+func (s *Server) discoveryRefreshInterval() time.Duration {
+	if s.config.DiscoveryRefreshInterval > 0 {
+		return s.config.DiscoveryRefreshInterval
+	}
+
+	return defaultDiscoveryRefreshInterval
 }

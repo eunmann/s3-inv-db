@@ -25,10 +25,11 @@ var ErrNegativeSize = errors.New("negative size")
 // Server-flag defaults split out as constants so the call-site reads
 // declaratively and `mnd` lint stops flagging the literals.
 const (
-	defaultPollInterval      = 15 * time.Minute
-	defaultIndexRatio        = 0.30
-	defaultAutoLoadRetention = 2
-	headroomDivisor          = 5
+	defaultPollInterval             = 15 * time.Minute
+	defaultDiscoveryRefreshInterval = time.Minute
+	defaultIndexRatio               = 0.30
+	defaultAutoLoadRetention        = 2
+	headroomDivisor                 = 5
 	// Power-of-two byte multipliers for "KiB/MiB/GiB/TiB" suffixes.
 	bitsPerTebibyte = 40
 	bitsPerGibibyte = 30
@@ -55,6 +56,7 @@ func run() error {
 
 	autoLoad := flag.Bool("auto-load", envBool("S3INV_AUTO_LOAD", false), "enable background discovery + auto-load of new inventory runs; requires --max-index-disk")
 	pollInterval := flag.Duration("auto-load-poll-interval", envDuration("S3INV_AUTO_LOAD_POLL_INTERVAL", defaultPollInterval), "discovery polling interval")
+	discoveryRefresh := flag.Duration("discovery-refresh-interval", envDuration("S3INV_DISCOVERY_REFRESH_INTERVAL", defaultDiscoveryRefreshInterval), "interval at which the background discovery refresher updates the cached snapshot served by HTTP handlers")
 	maxIndexDisk := flag.String("max-index-disk", envOr("S3INV_MAX_INDEX_DISK", ""), "max cumulative on-disk bytes for loaded indexes (e.g. 100GB); required with --auto-load")
 	headroom := flag.String("index-headroom", envOr("S3INV_INDEX_HEADROOM", ""), "reserved unused space inside --max-index-disk; default 20% of the cap")
 	autoLoadConcurrency := flag.Int("max-auto-load-concurrency", envInt("S3INV_MAX_AUTO_LOAD_CONCURRENCY", 1), "max concurrent auto-loads")
@@ -116,6 +118,7 @@ func run() error {
 		PriceTablePath:           finalPrice,
 		AutoLoad:                 finalAuto,
 		PollInterval:             finalInterval,
+		DiscoveryRefreshInterval: *discoveryRefresh,
 		MaxIndexDisk:             capBytes,
 		IndexHeadroomBytes:       headBytes,
 		AutoLoadConcurrency:      finalConc,

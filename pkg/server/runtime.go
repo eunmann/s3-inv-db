@@ -75,6 +75,11 @@ type RuntimeOptions struct {
 	// inventory.DefaultIndexRatio.
 	IndexRatio float64
 
+	// DiscoveryRefreshInterval governs how often the background
+	// discovery refresher updates the cached snapshot HTTP handlers
+	// serve. Zero falls back to the server's default (1 minute).
+	DiscoveryRefreshInterval time.Duration
+
 	// InventoryConfigs declares per-configuration auto-load + retention
 	// settings to upsert at startup. Typically populated from the JSON
 	// config file.
@@ -156,6 +161,7 @@ func Bootstrap(ctx context.Context, opts RuntimeOptions) (*Server, func(), error
 		AutoLoadConcurrency:      opts.AutoLoadConcurrency,
 		AutoLoadRetentionDefault: opts.AutoLoadRetentionDefault,
 		IndexRatio:               opts.IndexRatio,
+		DiscoveryRefreshInterval: opts.DiscoveryRefreshInterval,
 	})
 	if err != nil {
 		cleanup()
