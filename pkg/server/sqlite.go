@@ -1,33 +1,44 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
 )
 
-// statePragmas are applied to every connection the pool opens. The
-// modernc.org/sqlite driver picks them up from _pragma= URL parameters
-// and re-applies them per new connection. That matters for the
-// connection-scoped ones (foreign_keys, busy_timeout, synchronous,
-// cache_size, temp_store); journal_mode is database-wide and sticky,
-// so re-stating it on each connection is a harmless no-op.
+// pingTimeout caps the initial database round-trip OpenStateDB makes
+// to verify the connection. Five seconds is generous for SQLite's
+// local-file backend and tight enough that a misconfigured DSN fails
+// fast.
+const pingTimeout = 5 * time.Second
+
+// statePragmas returns the PRAGMA values applied to every connection
+// the pool opens. The modernc.org/sqlite driver picks them up from
+// _pragma= URL parameters and re-applies them per new connection.
+// That matters for the connection-scoped ones (foreign_keys,
+// busy_timeout, synchronous, cache_size, temp_store); journal_mode is
+// database-wide and sticky, so re-stating it on each connection is a
+// harmless no-op.
 //
-//	journal_mode = WAL    — concurrent readers while a writer commits
-//	synchronous  = NORMAL — WAL-safe durability, much faster than FULL
-//	foreign_keys = ON     — enforce ON DELETE CASCADE
-//	busy_timeout = 5000   — wait up to 5s for the writer lock
-//	cache_size   = -20000 — 20MB page cache (negative = KiB)
-//	temp_store   = MEMORY — temp btrees in RAM, not in /tmp
-var statePragmas = []string{
-	"journal_mode(WAL)",
-	"synchronous(NORMAL)",
-	"foreign_keys(ON)",
-	"busy_timeout(5000)",
-	"cache_size(-20000)",
-	"temp_store(MEMORY)",
+//	journal_mode = WAL    - concurrent readers while a writer commits
+//	synchronous  = NORMAL - WAL-safe durability, much faster than FULL
+//	foreign_keys = ON     - enforce ON DELETE CASCADE
+//	busy_timeout = 5000   - wait up to 5s for the writer lock
+//	cache_size   = -20000 - 20MB page cache (negative = KiB)
+//	temp_store   = MEMORY - temp btrees in RAM, not in /tmp
+func statePragmas() []string {
+	return []string{
+		"journal_mode(WAL)",
+		"synchronous(NORMAL)",
+		"foreign_keys(ON)",
+		"busy_timeout(5000)",
+		"cache_size(-20000)",
+		"temp_store(MEMORY)",
+	}
 }
 
 // OpenStateDB opens (or creates) the SQLite file backing every domain's
@@ -38,7 +49,9 @@ func OpenStateDB(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite at %s: %w", path, err)
 	}
-	if err := db.Ping(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 
 		return nil, fmt.Errorf("ping sqlite at %s: %w", path, err)
@@ -57,8 +70,9 @@ func buildStateDSN(path string) string {
 		base = "file::memory:?cache=shared"
 		hasQuery = true
 	}
-	parts := make([]string, 0, len(statePragmas))
-	for _, p := range statePragmas {
+	pragmas := statePragmas()
+	parts := make([]string, 0, len(pragmas))
+	for _, p := range pragmas {
 		parts = append(parts, "_pragma="+p)
 	}
 	sep := "?"

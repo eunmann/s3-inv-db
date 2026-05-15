@@ -29,17 +29,15 @@ func TestDefaultDownloaderConfig(t *testing.T) {
 }
 
 func TestTempFileReader(t *testing.T) {
-	// Create a temp file with test data
 	tmpDir := t.TempDir()
 	testPath := filepath.Join(tmpDir, "test.bin")
 
-	// Write 1MB of random data
 	testData := make([]byte, 1024*1024)
 	if _, err := rand.Read(testData); err != nil {
 		t.Fatalf("generate random data: %v", err)
 	}
 
-	if err := os.WriteFile(testPath, testData, 0o644); err != nil {
+	if err := os.WriteFile(testPath, testData, 0o600); err != nil {
 		t.Fatalf("write test file: %v", err)
 	}
 
@@ -51,7 +49,6 @@ func TestTempFileReader(t *testing.T) {
 
 		reader := &tempFileReader{file: f, path: testPath}
 
-		// Read in chunks and compare
 		buf := make([]byte, 4096)
 		var read []byte
 		for {
@@ -71,7 +68,6 @@ func TestTempFileReader(t *testing.T) {
 			t.Error("read data doesn't match original")
 		}
 
-		// Close should delete the file
 		if err := reader.Close(); err != nil {
 			t.Errorf("close: %v", err)
 		}
@@ -81,8 +77,7 @@ func TestTempFileReader(t *testing.T) {
 		}
 	})
 
-	// Recreate the file for ReadAt tests
-	if err := os.WriteFile(testPath, testData, 0o644); err != nil {
+	if err := os.WriteFile(testPath, testData, 0o600); err != nil {
 		t.Fatalf("write test file: %v", err)
 	}
 
@@ -95,7 +90,6 @@ func TestTempFileReader(t *testing.T) {
 		reader := &tempFileReader{file: f, path: testPath}
 		defer reader.Close()
 
-		// Read at various offsets
 		offsets := []int64{0, 1000, 50000, 512000}
 		for _, off := range offsets {
 			buf := make([]byte, 1000)
@@ -111,8 +105,7 @@ func TestTempFileReader(t *testing.T) {
 		}
 	})
 
-	// Recreate for Size test
-	if err := os.WriteFile(testPath, testData, 0o644); err != nil {
+	if err := os.WriteFile(testPath, testData, 0o600); err != nil {
 		t.Fatalf("write test file: %v", err)
 	}
 
@@ -136,7 +129,6 @@ func TestTempFileReader(t *testing.T) {
 }
 
 func TestDownloaderConfig_Defaults(t *testing.T) {
-	// Test that zero values get filled with defaults
 	tests := []struct {
 		name     string
 		cfg      DownloaderConfig
@@ -165,8 +157,6 @@ func TestDownloaderConfig_Defaults(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Can't actually create a downloader without an S3 client,
-			// but we can test the config defaults logic inline
 			cfg := tt.cfg
 			if cfg.Concurrency <= 0 {
 				cfg.Concurrency = DefaultDownloaderConfig().Concurrency
@@ -185,7 +175,6 @@ func TestDownloaderConfig_Defaults(t *testing.T) {
 	}
 }
 
-// TestDownloadResult verifies the download result struct.
 func TestDownloadResult(t *testing.T) {
 	result := DownloadResult{
 		BytesDownloaded: 1024 * 1024 * 10,
@@ -217,7 +206,6 @@ func TestDownloaderIntegration(t *testing.T) {
 		t.Fatalf("create client: %v", err)
 	}
 
-	// Test downloading a small public object (if available)
 	bucket := os.Getenv("AWS_TEST_BUCKET")
 	key := os.Getenv("AWS_TEST_KEY")
 	if bucket == "" || key == "" {
@@ -233,7 +221,6 @@ func TestDownloaderIntegration(t *testing.T) {
 	t.Logf("Downloaded %d bytes in %v (concurrency=%d, partSize=%d)",
 		result.BytesDownloaded, result.Duration, result.Concurrency, result.PartSize)
 
-	// Read all content
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatalf("read content: %v", err)

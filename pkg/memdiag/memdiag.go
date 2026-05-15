@@ -5,9 +5,10 @@
 package memdiag
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
-	_ "net/http/pprof" // Registers pprof handlers on DefaultServeMux
+	"net/http/pprof"
 	"os"
 	"runtime"
 	"sync"
@@ -15,7 +16,31 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
+	"github.com/rs/zerolog"
 )
+
+// defaultLogIntervalSeconds is how often the tracker prints memory
+// statistics when periodic logging is enabled. Pulled out as a named
+// constant so mnd doesn't flag the 5 in DefaultConfig.
+const defaultLogIntervalSeconds = 5
+
+// pprofAddr is the bind address the diagnostics pprof server listens
+// on when S3INV_MEM_PPROF=1.
+const pprofAddr = ":6060"
+
+// pprofServerTimeout caps how long a single pprof request can hold the
+// connection. Matches gosec G114's expectation of an explicit
+// ReadHeaderTimeout on every http.Server.
+const pprofServerTimeout = 30 * time.Second
+
+// memoryDivergenceWarnRatio is the heap/budget ratio above which
+// LogWithBudget surfaces a warning that internal accounting has
+// drifted from the runtime's heap statistic.
+const memoryDivergenceWarnRatio = 2.0
+
+// budgetCheckMinBytes guards the divergence warning so it only fires
+// once the tracked budget is large enough to make the ratio meaningful.
+const budgetCheckMinBytes = 100 * 1024 * 1024
 
 // Config holds configuration for memory diagnostics.
 type Config struct {
@@ -34,7 +59,7 @@ func DefaultConfig() Config {
 	return Config{
 		Enabled:      os.Getenv("S3INV_MEM_DEBUG") == "1",
 		PprofEnabled: os.Getenv("S3INV_MEM_PPROF") == "1",
-		LogInterval:  5 * time.Second,
+		LogInterval:  defaultLogIntervalSeconds * time.Second,
 	}
 }
 
@@ -132,24 +157,49 @@ func (t *Tracker) Start() {
 	}
 
 	if !t.started.CompareAndSwap(false, true) {
-		return // Already started
+		return
 	}
 
 	log := logging.L()
 	log.Info().Msg("memory diagnostics enabled")
 
-	// Start pprof if requested
 	if t.config.PprofEnabled {
-		go func() {
-			log.Info().Str("addr", ":6060").Msg("starting pprof server")
-			if err := http.ListenAndServe(":6060", nil); err != nil {
-				log.Error().Err(err).Msg("pprof server failed")
-			}
-		}()
+		startPprofServer(*log)
 	}
 
-	// Start periodic logging
 	go t.logLoop()
+}
+
+// pprofMux builds an http.ServeMux with the explicit /debug/pprof/*
+// handlers registered. The blank-import side effect of "net/http/pprof"
+// attaches those handlers to http.DefaultServeMux, which gosec flags
+// (G108); using a private mux keeps profiling opt-in.
+func pprofMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	return mux
+}
+
+// startPprofServer launches the diagnostics pprof endpoint with
+// explicit ReadHeaderTimeout (gosec G114). Runs in its own goroutine
+// so Tracker.Start returns immediately.
+func startPprofServer(log zerolog.Logger) {
+	srv := &http.Server{
+		Addr:              pprofAddr,
+		Handler:           pprofMux(),
+		ReadHeaderTimeout: pprofServerTimeout,
+	}
+	go func() {
+		log.Info().Str("addr", pprofAddr).Msg("starting pprof server")
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error().Err(err).Msg("pprof server failed")
+		}
+	}()
 }
 
 // Stop stops the tracker.
@@ -221,7 +271,7 @@ func (t *Tracker) LogWithBudget(reason string, budgetInUse, budgetTotal uint64) 
 	peakHeap := t.peakHeap
 	t.mu.Unlock()
 
-	// Calculate divergence between budget tracking and actual heap
+	// Calculate divergence between budget tracking and actual heap.
 	var divergence float64
 	if budgetInUse > 0 {
 		divergence = float64(stats.HeapAlloc) / float64(budgetInUse)
@@ -239,8 +289,8 @@ func (t *Tracker) LogWithBudget(reason string, budgetInUse, budgetTotal uint64) 
 		Uint32("num_gc", stats.NumGC).
 		Msg("memory stats with budget")
 
-	// Warn if heap is significantly larger than budget tracking
-	if divergence > 2.0 && budgetInUse > 100*1024*1024 {
+	// Warn if heap is significantly larger than budget tracking.
+	if divergence > memoryDivergenceWarnRatio && budgetInUse > budgetCheckMinBytes {
 		log.Warn().
 			Str("heap_alloc", FormatMB(stats.HeapAlloc)).
 			Str("budget_inuse", FormatMB(budgetInUse)).
@@ -273,33 +323,6 @@ func (t *Tracker) logLoop() {
 		case <-ticker.C:
 			t.LogNow("periodic")
 		}
-	}
-}
-
-// Global tracker for convenience.
-var (
-	globalTracker *Tracker
-	globalOnce    sync.Once
-)
-
-// Global returns the global tracker, initializing if needed.
-func Global() *Tracker {
-	globalOnce.Do(func() {
-		globalTracker = NewTracker(DefaultConfig())
-	})
-
-	return globalTracker
-}
-
-// StartGlobal starts the global tracker.
-func StartGlobal() {
-	Global().Start()
-}
-
-// StopGlobal stops the global tracker.
-func StopGlobal() {
-	if globalTracker != nil {
-		globalTracker.Stop()
 	}
 }
 

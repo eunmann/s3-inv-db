@@ -2,6 +2,7 @@ package s3fetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -208,10 +209,10 @@ type tempFileReader struct {
 	path string
 }
 
-func (r *tempFileReader) Read(p []byte) (n int, err error) {
-	n, err = r.file.Read(p)
+func (r *tempFileReader) Read(p []byte) (int, error) {
+	n, err := r.file.Read(p)
 	if err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return n, io.EOF
 		}
 
@@ -232,10 +233,10 @@ func (r *tempFileReader) Close() error {
 }
 
 // ReadAt implements io.ReaderAt for Parquet compatibility.
-func (r *tempFileReader) ReadAt(p []byte, off int64) (n int, err error) {
-	n, err = r.file.ReadAt(p, off)
+func (r *tempFileReader) ReadAt(p []byte, off int64) (int, error) {
+	n, err := r.file.ReadAt(p, off)
 	if err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return n, io.EOF
 		}
 

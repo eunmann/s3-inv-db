@@ -99,7 +99,7 @@ type InventoryConfigEntry struct {
 //
 // The error path closes any partially-initialised resources so the
 // caller never leaks a half-open handle on failure.
-func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
+func Bootstrap(opts RuntimeOptions) (*Server, func(), error) {
 	if opts.AutoLoad && opts.MaxIndexDisk == 0 {
 		return nil, nil, ErrAutoLoadWithoutBudget
 	}
@@ -108,8 +108,9 @@ func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
 		return nil, nil, err
 	}
 
+	const stateDBParentMode = 0o750
 	dbPath := resolveStateDBPath(opts.StateDB, opts.CacheDir)
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dbPath), stateDBParentMode); err != nil {
 		return nil, nil, fmt.Errorf("ensure state-db parent dir: %w", err)
 	}
 	db, err := OpenStateDB(dbPath)
@@ -118,9 +119,9 @@ func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
 	}
 	opts.Logger.Info().Str("path", dbPath).Msg("opened state db")
 
-	cleanup = func() {
-		if err := db.Close(); err != nil {
-			opts.Logger.Error().Err(err).Msg("close state db")
+	cleanup := func() {
+		if cerr := db.Close(); cerr != nil {
+			opts.Logger.Error().Err(cerr).Msg("close state db")
 		}
 	}
 
@@ -137,7 +138,7 @@ func Bootstrap(opts RuntimeOptions) (srv *Server, cleanup func(), err error) {
 	}
 	opts.Logger.Info().Uint("schema_version", versionInfo.Version).Bool("dirty", versionInfo.Dirty).Msg("schema migrated")
 
-	srv, err = New(Config{
+	srv, err := New(Config{
 		Addr:                     opts.Addr,
 		Logger:                   opts.Logger,
 		PriceTable:               priceTable,

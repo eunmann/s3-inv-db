@@ -64,12 +64,12 @@ var runFolderRE = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}(-\d{2})?Z$`
 // NewFromS3URI builds a Discoverer from an s3:// URI like
 // "s3://bucket/optional/prefix/".
 func NewFromS3URI(client *s3.Client, uri string) (*Discoverer, error) {
-	bucket, key, err := s3fetch.ParseS3URI(uri)
+	parsed, err := s3fetch.ParseS3URI(uri)
 	if err != nil {
 		return nil, fmt.Errorf("parse source URI %q: %w", uri, err)
 	}
 
-	return New(client, bucket, key), nil
+	return New(client, parsed.Bucket, parsed.Key), nil
 }
 
 // Bucket returns the destination bucket name being discovered.

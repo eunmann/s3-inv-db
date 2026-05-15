@@ -342,8 +342,8 @@ func TestBuildFromKeys_ConsecutiveSlashes(t *testing.T) {
 }
 
 func TestBuildFromKeys_LongPath(t *testing.T) {
-	// Create a very deep path
-	var keys []string
+	// Create a very deep path.
+	keys := make([]string, 0, 1)
 	path := ""
 	var pathSb347 strings.Builder
 	for range 50 {

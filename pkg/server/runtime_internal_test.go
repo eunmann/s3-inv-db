@@ -91,7 +91,7 @@ func TestBootstrapAndRun_PropagatesBootstrapError(t *testing.T) {
 }
 
 func TestNewDiscoveryWiring_RequiresCacheDir(t *testing.T) {
-	_, _, _, err := newDiscoveryWiring(Config{S3Source: "s3://bucket/", Logger: zerolog.Nop()})
+	_, err := newDiscoveryWiring(Config{S3Source: "s3://bucket/", Logger: zerolog.Nop()})
 	if !errors.Is(err, errEmptyCacheDir) {
 		t.Errorf("err = %v, want errEmptyCacheDir", err)
 	}
@@ -103,7 +103,7 @@ func TestNewDiscoveryWiring_RejectsMalformedURI(t *testing.T) {
 		CacheDir: t.TempDir(),
 		Logger:   zerolog.Nop(),
 	}
-	_, _, _, err := newDiscoveryWiring(cfg)
+	_, err := newDiscoveryWiring(cfg)
 	if err == nil {
 		t.Fatal("newDiscoveryWiring should reject malformed URI")
 	}

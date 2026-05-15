@@ -17,6 +17,11 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// localhostHost is the synthetic request Host used across the
+// same-origin middleware tests. Pulled into a constant so goconst
+// doesn't flag the repeated literal.
+const localhostHost = "localhost"
+
 // testDB returns an in-memory SQLite handle wired up the same way main
 // opens the production one (foreign_keys on for cascade tests).
 func testDB(t *testing.T) *sql.DB {
@@ -88,7 +93,8 @@ func TestServerAPIRoutes(t *testing.T) {
 // so SIGINT/SIGTERM produce a clean exit, and that the inventory manager is
 // closed (cleared) afterward.
 func TestServerGracefulShutdown(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	lc := &net.ListenConfig{}
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -141,7 +147,8 @@ func TestServerGracefulShutdown(t *testing.T) {
 // manager on the way out.
 func TestServerRun_ListenError(t *testing.T) {
 	// Occupy a port so the server can't bind to it.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	lc := &net.ListenConfig{}
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -191,7 +198,7 @@ func TestSameOriginMiddleware_RejectsCrossOriginMutation(t *testing.T) {
 
 	// POST with cross-origin Referer must be rejected.
 	req := httptest.NewRequest(http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
-	req.Host = "localhost"
+	req.Host = localhostHost
 	req.Header.Set("Origin", "http://attacker.example")
 	w := httptest.NewRecorder()
 	srv.Router().ServeHTTP(w, req)
@@ -208,7 +215,7 @@ func TestSameOriginMiddleware_AllowsSameOriginMutation(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
-	req.Host = "localhost"
+	req.Host = localhostHost
 	req.Header.Set("Origin", "http://localhost")
 	w := httptest.NewRecorder()
 	srv.Router().ServeHTTP(w, req)
@@ -228,7 +235,7 @@ func TestSameOriginMiddleware_AllowsNoOrigin(t *testing.T) {
 
 	// No Origin and no Referer — typical curl/script request, allowed.
 	req := httptest.NewRequest(http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
-	req.Host = "localhost"
+	req.Host = localhostHost
 	w := httptest.NewRecorder()
 	srv.Router().ServeHTTP(w, req)
 	if w.Code == http.StatusForbidden {
@@ -244,7 +251,7 @@ func TestSameOriginMiddleware_DoesNotBlockReads(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "http://localhost/api/inventories", http.NoBody)
-	req.Host = "localhost"
+	req.Host = localhostHost
 	req.Header.Set("Origin", "http://attacker.example")
 	w := httptest.NewRecorder()
 	srv.Router().ServeHTTP(w, req)
@@ -292,7 +299,7 @@ func TestSameOriginMiddleware_ReadsBypassOriginCheck(t *testing.T) {
 	// pins the contract that only POST/PUT/PATCH/DELETE are blocked.
 	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
 		req := httptest.NewRequest(method, "http://localhost/healthz", http.NoBody)
-		req.Host = "localhost"
+		req.Host = localhostHost
 		req.Header.Set("Origin", "http://attacker.example")
 		w := httptest.NewRecorder()
 		srv.Router().ServeHTTP(w, req)

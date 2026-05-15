@@ -1,4 +1,3 @@
-// Package server provides the HTTP server for the S3 inventory service.
 package server
 
 import (
@@ -58,7 +57,7 @@ type Config struct {
 // Server is the HTTP server.
 type Server struct {
 	config      Config
-	router      chi.Router
+	router      *chi.Mux
 	manager     *inventory.Manager
 	invStore    *inventory.Store
 	configStore *inventory.ConfigStore
@@ -300,6 +299,10 @@ var (
 // endpoint fails fast.
 const s3StartupTimeout = 30 * time.Second
 
+// cacheDirMode is the directory mode used when ensuring the on-disk
+// inventory cache directory exists. 0o750 satisfies gosec G301.
+const cacheDirMode = 0o750
+
 // discoveryWiring bundles the three values newDiscoveryWiring builds so
 // callers don't end up with a 4-arity return that invites `_, _, _, err`.
 type discoveryWiring struct {
@@ -325,7 +328,7 @@ func newDiscoveryWiring(cfg Config) (discoveryWiring, error) {
 	if err != nil {
 		return discoveryWiring{}, fmt.Errorf("discovery from %q: %w", cfg.S3Source, err)
 	}
-	if err := os.MkdirAll(cfg.CacheDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.CacheDir, cacheDirMode); err != nil {
 		return discoveryWiring{}, fmt.Errorf("ensure cache dir %s: %w", cfg.CacheDir, err)
 	}
 
@@ -400,7 +403,9 @@ func (s *Server) shutdownResources() {
 }
 
 // Router returns the underlying chi router for mounting or for tests
-// that drive handlers via httptest.
-func (s *Server) Router() chi.Router {
+// that drive handlers via httptest. Returns *chi.Mux (the concrete
+// type) rather than chi.Router (the interface) so ireturn stays
+// happy; callers can still treat it as a chi.Router/http.Handler.
+func (s *Server) Router() *chi.Mux {
 	return s.router
 }

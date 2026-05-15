@@ -1,12 +1,14 @@
-package sysmem
+package sysmem_test
 
 import (
 	"runtime"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/pkg/sysmem"
 )
 
 func TestTotal(t *testing.T) {
-	result := Total()
+	result := sysmem.Total()
 
 	// Should always return a positive value
 	if result.TotalBytes == 0 {
@@ -30,8 +32,8 @@ func TestTotal(t *testing.T) {
 		if result.Reliable {
 			t.Errorf("Expected Reliable=false on %s, got true", runtime.GOOS)
 		}
-		if result.TotalBytes != DefaultMemoryBytes {
-			t.Errorf("Expected fallback value %d on %s, got %d", DefaultMemoryBytes, runtime.GOOS, result.TotalBytes)
+		if result.TotalBytes != sysmem.DefaultMemoryBytes {
+			t.Errorf("Expected fallback value %d on %s, got %d", sysmem.DefaultMemoryBytes, runtime.GOOS, result.TotalBytes)
 		}
 	}
 
@@ -42,25 +44,25 @@ func TestTotal(t *testing.T) {
 }
 
 func TestTotalBytes(t *testing.T) {
-	bytes := TotalBytes()
+	bytes := sysmem.TotalBytes()
 
 	// Should match Total().TotalBytes
-	result := Total()
+	result := sysmem.Total()
 	if bytes != result.TotalBytes {
-		t.Errorf("TotalBytes() = %d, Total().TotalBytes = %d", bytes, result.TotalBytes)
+		t.Errorf("sysmem.TotalBytes() = %d, Total().TotalBytes = %d", bytes, result.TotalBytes)
 	}
 }
 
 func TestDefaultMemoryBytes(t *testing.T) {
 	// Default should be 4GB
 	expected := uint64(4 * 1024 * 1024 * 1024)
-	if DefaultMemoryBytes != expected {
-		t.Errorf("DefaultMemoryBytes = %d, expected %d", DefaultMemoryBytes, expected)
+	if sysmem.DefaultMemoryBytes != expected {
+		t.Errorf("sysmem.DefaultMemoryBytes = %d, expected %d", sysmem.DefaultMemoryBytes, expected)
 	}
 }
 
 func TestResultValues(t *testing.T) {
-	result := Total()
+	result := sysmem.Total()
 
 	// Should not exceed any reasonable physical limit (1TB)
 	maxReasonable := uint64(1024 * 1024 * 1024 * 1024)

@@ -309,12 +309,12 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*ingestConfig, error) {
 	log := zerolog.Ctx(ctx)
 
-	bucket, key, err := s3fetch.ParseS3URI(manifestURI)
+	parsed, err := s3fetch.ParseS3URI(manifestURI)
 	if err != nil {
 		return nil, fmt.Errorf("parse manifest URI: %w", err)
 	}
 
-	manifest, err := p.s3Client.FetchManifest(ctx, bucket, key)
+	manifest, err := p.s3Client.FetchManifest(ctx, parsed.Bucket, parsed.Key)
 	if err != nil {
 		return nil, fmt.Errorf("fetch manifest: %w", err)
 	}

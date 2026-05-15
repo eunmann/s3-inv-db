@@ -130,14 +130,27 @@ func (b *Budget) IndexBuildBudget() uint64 {
 	return uint64(float64(b.total) * FractionIndexBuild)
 }
 
+// Sentinel errors for ParseHumanSize. Wrapped with %w by the parser so
+// callers can errors.Is them out of a wrapped chain.
+var (
+	// ErrEmptySize is returned when ParseHumanSize is called on "".
+	ErrEmptySize = errors.New("empty size string")
+	// ErrInvalidSizeNumber is returned when the numeric prefix of a
+	// size string fails to parse as a float.
+	ErrInvalidSizeNumber = errors.New("invalid size number")
+	// ErrUnknownSizeSuffix is returned when the suffix following the
+	// number isn't one of the recognised SI/IEC units.
+	ErrUnknownSizeSuffix = errors.New("unknown size suffix")
+)
+
 // ParseHumanSize parses a human-readable size string (e.g., "4GiB", "512MB").
 // Supported suffixes: B, KB, KiB, MB, MiB, GB, GiB, TB, TiB.
 func ParseHumanSize(s string) (uint64, error) {
 	if s == "" {
-		return 0, errors.New("empty size string")
+		return 0, ErrEmptySize
 	}
 
-	// Find where the number ends
+	// Find where the number ends.
 	numEnd := 0
 	for i, c := range s {
 		if (c < '0' || c > '9') && c != '.' {
@@ -153,31 +166,42 @@ func ParseHumanSize(s string) (uint64, error) {
 
 	var num float64
 	if _, err := fmt.Sscanf(numStr, "%f", &num); err != nil {
-		return 0, fmt.Errorf("invalid number: %s", numStr)
+		return 0, fmt.Errorf("%w %q: %w", ErrInvalidSizeNumber, numStr, err)
 	}
+
+	const (
+		kb  = 1000.0
+		kib = 1024.0
+		mb  = kb * kb
+		mib = kib * kib
+		gb  = mb * kb
+		gib = mib * kib
+		tb  = gb * kb
+		tib = gib * kib
+	)
 
 	var multiplier float64
 	switch suffix {
 	case "", "B":
 		multiplier = 1.0
 	case "KB":
-		multiplier = 1000
+		multiplier = kb
 	case "KiB", "K":
-		multiplier = 1024
+		multiplier = kib
 	case "MB":
-		multiplier = 1000 * 1000
+		multiplier = mb
 	case "MiB", "M":
-		multiplier = 1024 * 1024
+		multiplier = mib
 	case "GB":
-		multiplier = 1000 * 1000 * 1000
+		multiplier = gb
 	case "GiB", "G":
-		multiplier = 1024 * 1024 * 1024
+		multiplier = gib
 	case "TB":
-		multiplier = 1000 * 1000 * 1000 * 1000
+		multiplier = tb
 	case "TiB", "T":
-		multiplier = 1024 * 1024 * 1024 * 1024
+		multiplier = tib
 	default:
-		return 0, fmt.Errorf("unknown size suffix: %s", suffix)
+		return 0, fmt.Errorf("%w: %q", ErrUnknownSizeSuffix, suffix)
 	}
 
 	return uint64(num * multiplier), nil

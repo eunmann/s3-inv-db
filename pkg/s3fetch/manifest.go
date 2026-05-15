@@ -9,6 +9,49 @@ import (
 	"strings"
 )
 
+// Sentinel errors surfaced by manifest parsing and S3 URI/ARN
+// validation. Wrapped with %w so callers can errors.Is them out of a
+// fmt.Errorf chain.
+var (
+	// ErrManifestMissingBucket is returned when a parsed manifest has no
+	// destinationBucket field.
+	ErrManifestMissingBucket = errors.New("manifest missing destinationBucket")
+
+	// ErrManifestNoFiles is returned when a parsed manifest's files
+	// array is empty.
+	ErrManifestNoFiles = errors.New("manifest has no files")
+
+	// ErrUnsupportedFileFormat is returned when the manifest declares a
+	// fileFormat that isn't CSV or Parquet.
+	ErrUnsupportedFileFormat = errors.New("unsupported file format")
+
+	// ErrColumnNotFound is returned when a requested column name is
+	// absent from the manifest's fileSchema.
+	ErrColumnNotFound = errors.New("column not found in schema")
+
+	// ErrEmptyBucketIdent is returned when ParseBucketIdentifier is
+	// called with an empty string.
+	ErrEmptyBucketIdent = errors.New("empty bucket identifier")
+
+	// ErrBucketIdentIsURI is returned when the input to
+	// ParseBucketIdentifier looks like a URI rather than a bare bucket
+	// name or ARN.
+	ErrBucketIdentIsURI = errors.New("bucket identifier looks like a URI, use ParseS3URI instead")
+
+	// ErrInvalidARN is returned by parseBucketARN when the ARN's
+	// structure is malformed (too few parts, missing prefix, wrong
+	// service, etc.).
+	ErrInvalidARN = errors.New("invalid ARN")
+
+	// ErrInvalidS3URI is returned by ParseS3URI when the input is not
+	// a well-formed s3:// URI.
+	ErrInvalidS3URI = errors.New("invalid S3 URI")
+)
+
+// arnPartsRequired is the minimum number of colon-separated parts a
+// valid S3 ARN carries: arn:partition:service:region:account:resource.
+const arnPartsRequired = 6
+
 // InventoryFormat represents the format of S3 inventory files.
 type InventoryFormat int
 
@@ -53,17 +96,17 @@ func ParseManifest(r io.Reader) (*Manifest, error) {
 
 func (m *Manifest) validate() error {
 	if m.DestinationBucket == "" {
-		return errors.New("manifest missing destinationBucket")
+		return ErrManifestMissingBucket
 	}
 	if len(m.Files) == 0 {
-		return errors.New("manifest has no files")
+		return ErrManifestNoFiles
 	}
-	// Validate format - accept CSV, Parquet, or detect from file extensions
-	// If there's an explicit format declaration, it must be CSV or Parquet
+	// Validate format - accept CSV, Parquet, or detect from file extensions.
+	// If there's an explicit format declaration, it must be CSV or Parquet.
 	if m.FileFormat != "" {
 		upper := strings.ToUpper(m.FileFormat)
 		if upper != "CSV" && upper != "PARQUET" {
-			return fmt.Errorf("unsupported file format: %s (supported: CSV, Parquet)", m.FileFormat)
+			return fmt.Errorf("%w %q (supported: CSV, Parquet)", ErrUnsupportedFileFormat, m.FileFormat)
 		}
 	}
 
@@ -75,7 +118,6 @@ func (m *Manifest) validate() error {
 //  1. Explicit fileFormat field ("CSV" or "Parquet")
 //  2. File extension detection (.parquet, .csv, .csv.gz)
 func (m *Manifest) DetectFormat() InventoryFormat {
-	// Check explicit format declaration
 	switch strings.ToUpper(m.FileFormat) {
 	case "CSV":
 		return InventoryFormatCSV
@@ -83,7 +125,6 @@ func (m *Manifest) DetectFormat() InventoryFormat {
 		return InventoryFormatParquet
 	}
 
-	// Fall back to file extension detection
 	if len(m.Files) > 0 {
 		key := strings.ToLower(m.Files[0].Key)
 		if strings.HasSuffix(key, ".parquet") {
@@ -94,7 +135,7 @@ func (m *Manifest) DetectFormat() InventoryFormat {
 		}
 	}
 
-	// Default to CSV for backwards compatibility
+	// Default to CSV for backwards compatibility.
 	return InventoryFormatCSV
 }
 
@@ -156,7 +197,7 @@ func (m *Manifest) columnIndex(name string) (int, error) {
 		}
 	}
 
-	return -1, fmt.Errorf("column %q not found in schema: %s", name, m.FileSchema)
+	return -1, fmt.Errorf("%w: column %q in schema %q", ErrColumnNotFound, name, m.FileSchema)
 }
 
 // ParseBucketIdentifier extracts the bucket name from either a plain bucket name
@@ -168,17 +209,16 @@ func (m *Manifest) columnIndex(name string) (int, error) {
 // Returns the bucket name suitable for use with S3 API calls.
 func ParseBucketIdentifier(bucketOrARN string) (string, error) {
 	if bucketOrARN == "" {
-		return "", errors.New("empty bucket identifier")
+		return "", ErrEmptyBucketIdent
 	}
 
-	// Check if it's an ARN
 	if strings.HasPrefix(bucketOrARN, "arn:") {
 		return parseBucketARN(bucketOrARN)
 	}
 
-	// Plain bucket name - validate it doesn't contain obvious issues
+	// Plain bucket name - validate it doesn't contain obvious issues.
 	if strings.Contains(bucketOrARN, "://") {
-		return "", fmt.Errorf("invalid bucket identifier %q: looks like a URI, use ParseS3URI instead", bucketOrARN)
+		return "", fmt.Errorf("%w: %q", ErrBucketIdentIsURI, bucketOrARN)
 	}
 
 	return bucketOrARN, nil
@@ -190,61 +230,69 @@ func ParseBucketIdentifier(bucketOrARN string) (string, error) {
 // For S3 bucket ARNs, region and account are empty, and resource is the bucket name.
 func parseBucketARN(arn string) (string, error) {
 	parts := strings.Split(arn, ":")
-	if len(parts) < 6 {
-		return "", fmt.Errorf("invalid ARN %q: expected at least 6 colon-separated parts", arn)
+	if len(parts) < arnPartsRequired {
+		return "", fmt.Errorf("%w %q: expected at least %d colon-separated parts", ErrInvalidARN, arn, arnPartsRequired)
 	}
 
-	// Validate ARN structure
 	if parts[0] != "arn" {
-		return "", fmt.Errorf("invalid ARN %q: must start with 'arn:'", arn)
+		return "", fmt.Errorf("%w %q: must start with 'arn:'", ErrInvalidARN, arn)
 	}
 
 	// parts[1] = partition (aws, aws-cn, aws-us-gov)
 	// parts[2] = service (should be s3)
 	if parts[2] != "s3" {
-		return "", fmt.Errorf("invalid S3 ARN %q: service must be 's3', got %q", arn, parts[2])
+		return "", fmt.Errorf("%w %q: service must be 's3', got %q", ErrInvalidARN, arn, parts[2])
 	}
 
 	// parts[3] = region (empty for bucket ARNs)
 	// parts[4] = account (empty for bucket ARNs)
 	// parts[5] = resource (bucket name, possibly with more parts for access points)
 
-	// For simple bucket ARNs like arn:aws:s3:::bucket-name, the resource is just the bucket name
-	// Join remaining parts in case there's additional path info
-	resource := strings.Join(parts[5:], ":")
+	// For simple bucket ARNs like arn:aws:s3:::bucket-name, the resource is just the bucket name.
+	// Join remaining parts in case there's additional path info.
+	resource := strings.Join(parts[arnPartsRequired-1:], ":")
 	if resource == "" {
-		return "", fmt.Errorf("invalid S3 ARN %q: missing bucket name", arn)
+		return "", fmt.Errorf("%w %q: missing bucket name", ErrInvalidARN, arn)
 	}
 
-	// The resource might contain a path for S3 access points, but for bucket ARNs it's just the bucket name
-	// Extract just the bucket name (first path component if there's a /)
+	// The resource might contain a path for S3 access points, but for bucket ARNs it's just the bucket name.
+	// Extract just the bucket name (first path component if there's a /).
 	if idx := strings.Index(resource, "/"); idx >= 0 {
 		resource = resource[:idx]
 	}
 
 	if resource == "" {
-		return "", fmt.Errorf("invalid S3 ARN %q: empty bucket name", arn)
+		return "", fmt.Errorf("%w %q: empty bucket name", ErrInvalidARN, arn)
 	}
 
 	return resource, nil
 }
 
-// ParseS3URI parses an S3 URI (s3://bucket/key) into bucket and key components.
-func ParseS3URI(uri string) (bucket, key string, err error) {
+// S3URI is the bucket/key pair extracted from an s3:// URI. Returned
+// as a struct so ParseS3URI has a single typed result instead of two
+// stringly-typed positional ones (which gocritic flags as unnamed).
+type S3URI struct {
+	Bucket string
+	Key    string
+}
+
+// ParseS3URI parses an S3 URI (s3://bucket/key).
+func ParseS3URI(uri string) (S3URI, error) {
 	if !strings.HasPrefix(uri, "s3://") {
-		return "", "", errors.New("invalid S3 URI: must start with s3://")
+		return S3URI{}, fmt.Errorf("%w: must start with s3://", ErrInvalidS3URI)
 	}
 
 	path := strings.TrimPrefix(uri, "s3://")
-	parts := strings.SplitN(path, "/", 2)
+	const bucketKeyParts = 2
+	parts := strings.SplitN(path, "/", bucketKeyParts)
 	if len(parts) < 1 || parts[0] == "" {
-		return "", "", errors.New("invalid S3 URI: missing bucket name")
+		return S3URI{}, fmt.Errorf("%w: missing bucket name", ErrInvalidS3URI)
 	}
 
-	bucket = parts[0]
-	if len(parts) == 2 {
-		key = parts[1]
+	out := S3URI{Bucket: parts[0]}
+	if len(parts) == bucketKeyParts {
+		out.Key = parts[1]
 	}
 
-	return bucket, key, nil
+	return out, nil
 }

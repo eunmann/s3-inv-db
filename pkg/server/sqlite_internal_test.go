@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,9 +27,10 @@ func TestOpenStateDB_AppliesPragmas(t *testing.T) {
 		"cache_size":   "-20000",
 		"temp_store":   "2", // MEMORY
 	}
+	ctx := context.Background()
 	for name, expect := range want {
 		var got string
-		if err := db.QueryRow("PRAGMA " + name).Scan(&got); err != nil {
+		if err := db.QueryRowContext(ctx, "PRAGMA "+name).Scan(&got); err != nil {
 			t.Errorf("query PRAGMA %s: %v", name, err)
 
 			continue
@@ -41,7 +43,7 @@ func TestOpenStateDB_AppliesPragmas(t *testing.T) {
 
 func TestBuildStateDSN_AddsPragmasToFilePath(t *testing.T) {
 	dsn := buildStateDSN("/cache/state.db")
-	for _, p := range statePragmas {
+	for _, p := range statePragmas() {
 		if !strings.Contains(dsn, "_pragma="+p) {
 			t.Errorf("DSN missing _pragma=%s\nDSN: %s", p, dsn)
 		}
