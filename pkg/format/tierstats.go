@@ -11,6 +11,11 @@ import (
 
 const tierStatsDir = "tier_stats"
 
+// indexDirPerm restricts subdirectories of the index (e.g. tier_stats)
+// to owner read/write/execute only. Index files are produced by the
+// seeder and read by the server running as the same user.
+const indexDirPerm = 0o750
+
 // TierStatsWriter writes per-tier columnar arrays.
 type TierStatsWriter struct {
 	outDir       string
@@ -33,7 +38,7 @@ func (w *TierStatsWriter) Write(result *triebuild.Result) error {
 	}
 
 	// Create tier_stats directory only when there's data to write
-	if err := os.MkdirAll(w.tierDir, 0o755); err != nil {
+	if err := os.MkdirAll(w.tierDir, indexDirPerm); err != nil {
 		return fmt.Errorf("create tier_stats dir: %w", err)
 	}
 
@@ -80,6 +85,7 @@ func (w *TierStatsWriter) writeTierArray(path string, nodes []triebuild.Node, ti
 		}
 		if err := writer.WriteU64(val); err != nil {
 			writer.Close()
+
 			return fmt.Errorf("write value at node %d: %w", i, err)
 		}
 	}
@@ -87,6 +93,7 @@ func (w *TierStatsWriter) writeTierArray(path string, nodes []triebuild.Node, ti
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("close array writer: %w", err)
 	}
+
 	return nil
 }
 
@@ -103,15 +110,22 @@ type TierStatsReader struct {
 	countsArrays map[tiers.ID]*ArrayReader
 }
 
-// OpenTierStats opens tier statistics from an index directory.
-// Returns nil if no tier data exists.
+// OpenTierStats opens tier statistics from an index directory. Returns
+// an empty TierStatsReader (manifest with zero tiers) when no tier
+// data exists, so callers can dispatch on (*TierStatsReader).Empty()
+// rather than nil-checking the return.
 func OpenTierStats(indexDir string) (*TierStatsReader, error) {
 	manifest, err := tiers.ReadManifest(indexDir)
 	if err != nil {
 		return nil, fmt.Errorf("read tier manifest: %w", err)
 	}
 	if manifest == nil || len(manifest.Tiers) == 0 {
-		return nil, nil // No tier data
+		return &TierStatsReader{
+			tierDir:      filepath.Join(indexDir, tierStatsDir),
+			manifest:     &tiers.TierManifest{},
+			bytesArrays:  map[tiers.ID]*ArrayReader{},
+			countsArrays: map[tiers.ID]*ArrayReader{},
+		}, nil
 	}
 
 	tierDir := filepath.Join(indexDir, tierStatsDir)
@@ -129,6 +143,7 @@ func OpenTierStats(indexDir string) (*TierStatsReader, error) {
 		bytesReader, err := OpenArray(bytesPath)
 		if err != nil {
 			r.Close()
+
 			return nil, fmt.Errorf("open %s bytes: %w", tier.Name, err)
 		}
 		r.bytesArrays[tier.ID] = bytesReader
@@ -137,6 +152,7 @@ func OpenTierStats(indexDir string) (*TierStatsReader, error) {
 		countsReader, err := OpenArray(countsPath)
 		if err != nil {
 			r.Close()
+
 			return nil, fmt.Errorf("open %s counts: %w", tier.Name, err)
 		}
 		r.countsArrays[tier.ID] = countsReader
@@ -224,6 +240,7 @@ func (r *TierStatsReader) PresentTiers() []tiers.Info {
 	if r == nil || r.manifest == nil {
 		return nil
 	}
+
 	return r.manifest.Tiers
 }
 

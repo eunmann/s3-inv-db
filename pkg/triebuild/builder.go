@@ -221,13 +221,7 @@ func (b *Builder) openNode(prefix string, depth uint32) {
 func (b *Builder) storeNode(node Node) {
 	// Ensure slice is large enough
 	if uint64(len(b.nodes)) <= node.Pos {
-		newSize := node.Pos + 1
-		if newSize < uint64(len(b.nodes))*2 {
-			newSize = uint64(len(b.nodes)) * 2
-		}
-		if newSize < 64 {
-			newSize = 64
-		}
+		newSize := max(max(node.Pos+1, uint64(len(b.nodes))*2), 64)
 		newNodes := make([]Node, newSize)
 		copy(newNodes, b.nodes)
 		b.nodes = newNodes
@@ -250,6 +244,7 @@ func (r *Result) PrefixStrings() []string {
 	for i := range r.Nodes {
 		prefixes[i] = r.Nodes[i].Prefix
 	}
+
 	return prefixes
 }
 
@@ -268,6 +263,7 @@ func (r *Result) VerifySubtreeRanges() bool {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -277,6 +273,7 @@ func (r *Result) VerifyDepthOrder() bool {
 	if len(r.Nodes) > 0 && r.Nodes[0].Depth != 0 {
 		return false
 	}
+
 	return true
 }
 
@@ -315,7 +312,7 @@ func BuildFromKeysWithTiers(keys []string, sizes []uint64, tierIDs []tiers.ID) (
 	// Collect present tiers - pre-allocate with capacity for all tiers
 	presentTiers := make([]tiers.ID, 0, tiers.NumTiers)
 	if b.trackTiers {
-		for i := tiers.ID(0); i < tiers.NumTiers; i++ {
+		for i := range tiers.NumTiers {
 			if b.tierPresent[i] {
 				presentTiers = append(presentTiers, i)
 			}
@@ -337,6 +334,7 @@ func (r *Result) GetNodeByPrefix(prefix string) (Node, bool) {
 			return r.Nodes[i], true
 		}
 	}
+
 	return Node{}, false
 }
 

@@ -4,6 +4,7 @@ package pricing
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -13,13 +14,64 @@ const (
 	bytesPerGB = 1024 * 1024 * 1024
 	bytesPerKB = 1024
 
-	// Minimum billable object size for Standard-IA, One Zone-IA, and Glacier Instant Retrieval.
+	// Minimum billable object size for Standard-IA, One Zone-IA, and
+	// Glacier Instant Retrieval.
 	minObjectSizeBytes = 128 * bytesPerKB
 
-	// - 8KB charged at S3 Standard rate.
+	// Per-object Glacier-rate metadata overhead (32 KiB).
 	glacierMetadataOverheadBytes = 32 * bytesPerKB
-	glacierIndexOverheadBytes    = 8 * bytesPerKB
+
+	// Per-object Standard-rate index overhead (8 KiB) added to
+	// Glacier-class objects.
+	glacierIndexOverheadBytes = 8 * bytesPerKB
 )
+
+// US-East-1 (2025) per-GB-month pricing for every supported storage
+// class. Centralising the literals here lets DefaultUSEast1Prices
+// stay declaration-only and lets mnd ignore the table.
+const (
+	priceStandard          = 0.023
+	priceStandardIA        = 0.0125
+	priceOneZoneIA         = 0.01
+	priceReducedRedundancy = 0.024 // Deprecated S3 class.
+	priceGlacierIR         = 0.004
+	priceGlacier           = 0.0036
+	priceDeepArchive       = 0.00099
+
+	// Intelligent-Tiering access tiers (same rate as their standard
+	// class equivalents). Listed separately so the JSON keys stay
+	// self-documenting.
+	priceITFrequent       = priceStandard
+	priceITInfrequent     = priceStandardIA
+	priceITArchiveInstant = priceGlacierIR
+	priceITArchive        = priceGlacier
+	priceITDeepArchive    = priceDeepArchive
+
+	// IT objects below 128 KiB are charged at the Frequent rate with
+	// no monitoring fee.
+	priceITFrequentSmall = priceITFrequent
+
+	// IT monitoring fee per 1,000 objects per month for objects >=
+	// 128 KiB.
+	monitoringPer1000Objects = 0.0025
+
+	// Per-PUT/COPY/POST charge per 1,000 requests. Used by the
+	// Compare view to estimate one-time upload cost.
+	putPer1000Requests = 0.005
+)
+
+// microdollarsPerDollar is the cost unit the package quotes results
+// in: 1 USD = 1,000,000 microdollars. Lets us keep integer math
+// throughout without losing sub-cent precision on per-tier totals.
+const microdollarsPerDollar = 1_000_000
+
+// requestsPerThousand is the unit the AWS request-rate fields are
+// quoted in (e.g. monitoring fee per 1,000 objects).
+const requestsPerThousand = 1000.0
+
+// jsonFileMode is the umask-respecting mode applied to JSON config
+// files this package writes. 0o600 keeps gosec G306 happy.
+const jsonFileMode = 0o600
 
 // PriceTable contains comprehensive S3 pricing information.
 type PriceTable struct {
@@ -27,37 +79,60 @@ type PriceTable struct {
 	PerGBMonth map[string]float64 `json:"per_gb_month"`
 
 	// MonitoringPer1000Objects is the Intelligent-Tiering monitoring fee
-	// per 1,000 objects per month. Only applies to objects >= 128KB.
+	// per 1,000 objects per month. Only applies to objects >= 128 KiB
+	// (small objects land in INTELLIGENT_TIERING_FREQUENT_SMALL, which
+	// is excluded from monitoring).
 	MonitoringPer1000Objects float64 `json:"monitoring_per_1000_objects"`
+
+	// PutPer1000Requests is the per-PUT/COPY/POST request charge, USD per
+	// 1,000 requests. Used by the Compare view to estimate the one-time
+	// upload cost for the objects that exist in a run.
+	PutPer1000Requests float64 `json:"put_per_1000_requests"`
 
 	// StandardPricePerGB is used for Glacier index overhead calculation.
 	StandardPricePerGB float64 `json:"standard_price_per_gb"`
 }
 
-// TiersWithMinObjectSize lists tiers that have 128KB minimum object size billing.
-// Objects smaller than 128KB are billed as if they were 128KB.
-var TiersWithMinObjectSize = map[string]bool{
-	"STANDARD_IA": true,
-	"ONEZONE_IA":  true,
-	"GLACIER_IR":  true,
+// TierHasMinObjectSize reports whether a tier bills objects smaller
+// than 128 KiB as if they were 128 KiB (Standard-IA, One Zone-IA,
+// Glacier Instant Retrieval).
+func TierHasMinObjectSize(tier string) bool {
+	switch tier {
+	case "STANDARD_IA", "ONEZONE_IA", "GLACIER_IR":
+		return true
+	}
+
+	return false
 }
 
-// TiersWithMonitoringCost lists Intelligent-Tiering tiers that incur monitoring fees.
-var TiersWithMonitoringCost = map[string]bool{
-	"INTELLIGENT_TIERING_FREQUENT":        true,
-	"INTELLIGENT_TIERING_INFREQUENT":      true,
-	"INTELLIGENT_TIERING_ARCHIVE_INSTANT": true,
-	"INTELLIGENT_TIERING_ARCHIVE":         true,
-	"INTELLIGENT_TIERING_DEEP_ARCHIVE":    true,
+// TierHasMonitoringCost reports whether a tier incurs the Intelligent-
+// Tiering per-object monitoring fee.
+func TierHasMonitoringCost(tier string) bool {
+	switch tier {
+	case "INTELLIGENT_TIERING_FREQUENT",
+		"INTELLIGENT_TIERING_INFREQUENT",
+		"INTELLIGENT_TIERING_ARCHIVE_INSTANT",
+		"INTELLIGENT_TIERING_ARCHIVE",
+		"INTELLIGENT_TIERING_DEEP_ARCHIVE":
+		return true
+	}
+
+	return false
 }
 
-// TiersWithGlacierOverhead lists Glacier tiers that have per-object metadata overhead.
-// For each object: 32KB at Glacier rate + 8KB at Standard rate.
-var TiersWithGlacierOverhead = map[string]bool{
-	"GLACIER":                          true,
-	"DEEP_ARCHIVE":                     true,
-	"INTELLIGENT_TIERING_ARCHIVE":      true,
-	"INTELLIGENT_TIERING_DEEP_ARCHIVE": true,
+// TierHasGlacierOverhead reports whether a tier carries per-object
+// Glacier metadata overhead: 32 KiB at the tier's own rate plus 8 KiB
+// at the Standard rate.
+func TierHasGlacierOverhead(tier string) bool {
+	switch tier {
+	case "GLACIER",
+		"DEEP_ARCHIVE",
+		"INTELLIGENT_TIERING_ARCHIVE",
+		"INTELLIGENT_TIERING_DEEP_ARCHIVE":
+		return true
+	}
+
+	return false
 }
 
 // DefaultUSEast1Prices returns the default pricing for US East 1 region (as of 2025).
@@ -67,28 +142,25 @@ var TiersWithGlacierOverhead = map[string]bool{
 func DefaultUSEast1Prices() PriceTable {
 	return PriceTable{
 		PerGBMonth: map[string]float64{
-			// Standard storage classes
-			"STANDARD":           0.023,
-			"STANDARD_IA":        0.0125,
-			"ONEZONE_IA":         0.01,
-			"REDUCED_REDUNDANCY": 0.024, // Deprecated
+			"STANDARD":           priceStandard,
+			"STANDARD_IA":        priceStandardIA,
+			"ONEZONE_IA":         priceOneZoneIA,
+			"REDUCED_REDUNDANCY": priceReducedRedundancy,
 
-			// Glacier storage classes
-			"GLACIER_IR":   0.004,  // Glacier Instant Retrieval
-			"GLACIER":      0.0036, // Glacier Flexible Retrieval
-			"DEEP_ARCHIVE": 0.00099,
+			"GLACIER_IR":   priceGlacierIR,
+			"GLACIER":      priceGlacier,
+			"DEEP_ARCHIVE": priceDeepArchive,
 
-			// Intelligent-Tiering access tiers
-			"INTELLIGENT_TIERING_FREQUENT":        0.023,
-			"INTELLIGENT_TIERING_INFREQUENT":      0.0125,
-			"INTELLIGENT_TIERING_ARCHIVE_INSTANT": 0.004,
-			"INTELLIGENT_TIERING_ARCHIVE":         0.0036,
-			"INTELLIGENT_TIERING_DEEP_ARCHIVE":    0.00099,
+			"INTELLIGENT_TIERING_FREQUENT":        priceITFrequent,
+			"INTELLIGENT_TIERING_INFREQUENT":      priceITInfrequent,
+			"INTELLIGENT_TIERING_ARCHIVE_INSTANT": priceITArchiveInstant,
+			"INTELLIGENT_TIERING_ARCHIVE":         priceITArchive,
+			"INTELLIGENT_TIERING_DEEP_ARCHIVE":    priceITDeepArchive,
+			"INTELLIGENT_TIERING_FREQUENT_SMALL":  priceITFrequentSmall,
 		},
-		// $0.0025 per 1,000 objects per month for objects >= 128KB
-		MonitoringPer1000Objects: 0.0025,
-		// Standard price used for Glacier index overhead
-		StandardPricePerGB: 0.023,
+		MonitoringPer1000Objects: monitoringPer1000Objects,
+		PutPer1000Requests:       putPer1000Requests,
+		StandardPricePerGB:       priceStandard,
 	}
 }
 
@@ -114,7 +186,7 @@ func SavePriceTable(path string, pt PriceTable) error {
 		return fmt.Errorf("marshal price table: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, jsonFileMode); err != nil {
 		return fmt.Errorf("write price table: %w", err)
 	}
 
@@ -141,15 +213,16 @@ type CostResult struct {
 
 // TotalDollars returns the total cost in dollars.
 func (r CostResult) TotalDollars() float64 {
-	return float64(r.TotalMicrodollars) / 1_000_000
+	return float64(r.TotalMicrodollars) / microdollarsPerDollar
 }
 
 // PerTierDollars returns per-tier storage costs in dollars.
 func (r CostResult) PerTierDollars() map[string]float64 {
 	result := make(map[string]float64, len(r.PerTierMicrodollars))
 	for tier, microdollars := range r.PerTierMicrodollars {
-		result[tier] = float64(microdollars) / 1_000_000
+		result[tier] = float64(microdollars) / microdollarsPerDollar
 	}
+
 	return result
 }
 
@@ -167,62 +240,46 @@ func ComputeMonthlyCost(breakdown []format.TierBreakdown, pt PriceTable) CostRes
 			continue
 		}
 
-		// Base storage cost
+		// Base storage cost.
 		gbFrac := float64(tb.Bytes) / float64(bytesPerGB)
-		storageMicrodollars := uint64(gbFrac * price * 1_000_000)
+		storageMicrodollars := uint64(gbFrac * price * microdollarsPerDollar)
 
-		// Calculate average object size for this tier
+		// Average object size for this tier.
 		var avgObjectSize uint64
 		if tb.ObjectCount > 0 {
 			avgObjectSize = tb.Bytes / tb.ObjectCount
 		}
 
-		// Minimum object size penalty for applicable tiers
+		// Minimum object size penalty for applicable tiers.
 		var minSizePenalty uint64
-		if TiersWithMinObjectSize[tb.TierName] && avgObjectSize < minObjectSizeBytes && avgObjectSize > 0 {
-			// Estimate: each object is charged as 128KB
-			// Additional bytes = (128KB - avgSize) * objectCount
+		if TierHasMinObjectSize(tb.TierName) && avgObjectSize < minObjectSizeBytes && avgObjectSize > 0 {
+			// Each object is charged as 128 KiB.
 			additionalBytes := (minObjectSizeBytes - avgObjectSize) * tb.ObjectCount
 			additionalGB := float64(additionalBytes) / float64(bytesPerGB)
-			minSizePenalty = uint64(additionalGB * price * 1_000_000)
+			minSizePenalty = uint64(additionalGB * price * microdollarsPerDollar)
 			result.MinObjectSizeMicrodollars += minSizePenalty
 		}
 
-		// Intelligent-Tiering monitoring cost
+		// Intelligent-Tiering monitoring cost. Every object in a
+		// monitored tier is billable; objects < 128 KiB are pre-
+		// segregated into INTELLIGENT_TIERING_FREQUENT_SMALL by the
+		// ingest classifier and therefore never reach this branch.
 		var monitoringCost uint64
-		if TiersWithMonitoringCost[tb.TierName] && pt.MonitoringPer1000Objects > 0 {
-			// Only objects >= 128KB incur monitoring fees.
-			// Since we only have aggregate data (total bytes / object count), we estimate
-			// the number of objects >= 128KB using the average object size as a proxy.
-			//
-			// Estimation methodology:
-			// - If avgSize >= 128KB: assume all objects qualify for monitoring
-			// - If avgSize < 128KB: assume 50% of objects qualify (conservative estimate)
-			//
-			// This is a simplification because the actual object size distribution matters.
-			// For accurate billing, individual object sizes would need to be tracked.
-			var monitoredObjects uint64
-			if avgObjectSize >= minObjectSizeBytes {
-				monitoredObjects = tb.ObjectCount
-			} else if avgObjectSize > 0 {
-				monitoredObjects = tb.ObjectCount / 2
-			}
-			if monitoredObjects > 0 {
-				monitoringCost = uint64(float64(monitoredObjects) / 1000.0 * pt.MonitoringPer1000Objects * 1_000_000)
-				result.MonitoringMicrodollars += monitoringCost
-			}
+		if TierHasMonitoringCost(tb.TierName) && pt.MonitoringPer1000Objects > 0 {
+			monitoringCost = uint64(float64(tb.ObjectCount) / requestsPerThousand * pt.MonitoringPer1000Objects * microdollarsPerDollar)
+			result.MonitoringMicrodollars += monitoringCost
 		}
 
-		// Glacier metadata overhead
+		// Glacier metadata overhead.
 		var glacierOverhead uint64
-		if TiersWithGlacierOverhead[tb.TierName] && tb.ObjectCount > 0 {
-			// 32KB at Glacier rate per object
+		if TierHasGlacierOverhead(tb.TierName) && tb.ObjectCount > 0 {
+			// 32 KiB at Glacier rate per object.
 			glacierOverheadGB := float64(tb.ObjectCount*glacierMetadataOverheadBytes) / float64(bytesPerGB)
-			glacierOverhead = uint64(glacierOverheadGB * price * 1_000_000)
+			glacierOverhead = uint64(glacierOverheadGB * price * microdollarsPerDollar)
 
-			// 8KB at Standard rate per object
+			// 8 KiB at Standard rate per object.
 			indexOverheadGB := float64(tb.ObjectCount*glacierIndexOverheadBytes) / float64(bytesPerGB)
-			indexOverhead := uint64(indexOverheadGB * pt.StandardPricePerGB * 1_000_000)
+			indexOverhead := uint64(indexOverheadGB * pt.StandardPricePerGB * microdollarsPerDollar)
 			glacierOverhead += indexOverhead
 
 			result.GlacierOverheadMicrodollars += glacierOverhead
@@ -233,7 +290,8 @@ func ComputeMonthlyCost(breakdown []format.TierBreakdown, pt PriceTable) CostRes
 		result.TotalMicrodollars += tierTotal
 	}
 
-	// Add monitoring costs to total (not per-tier as it spans all IT tiers)
+	// Monitoring costs feed the global total, not the per-tier slice
+	// (the IT monitoring fee spans multiple tiers).
 	result.TotalMicrodollars += result.MonitoringMicrodollars
 
 	return result
@@ -268,35 +326,27 @@ func ComputeDetailedBreakdown(breakdown []format.TierBreakdown, pt PriceTable) [
 			Bytes:       tb.Bytes,
 		}
 
-		// Average object size
 		if tb.ObjectCount > 0 {
 			cb.AvgObjectSizeBytes = tb.Bytes / tb.ObjectCount
 		}
 
-		// Base storage cost
+		// Base storage cost.
 		gbFrac := float64(tb.Bytes) / float64(bytesPerGB)
 		cb.StorageCost = gbFrac * price
 
-		// Minimum object size penalty
-		if TiersWithMinObjectSize[tb.TierName] && cb.AvgObjectSizeBytes < minObjectSizeBytes && cb.AvgObjectSizeBytes > 0 {
+		// Minimum object size penalty.
+		if TierHasMinObjectSize(tb.TierName) && cb.AvgObjectSizeBytes < minObjectSizeBytes && cb.AvgObjectSizeBytes > 0 {
 			additionalBytes := (minObjectSizeBytes - cb.AvgObjectSizeBytes) * tb.ObjectCount
 			additionalGB := float64(additionalBytes) / float64(bytesPerGB)
 			cb.MinSizePenalty = additionalGB * price
 		}
 
-		// Intelligent-Tiering monitoring cost
-		if TiersWithMonitoringCost[tb.TierName] && pt.MonitoringPer1000Objects > 0 {
-			var monitoredObjects uint64
-			if cb.AvgObjectSizeBytes >= minObjectSizeBytes {
-				monitoredObjects = tb.ObjectCount
-			} else if cb.AvgObjectSizeBytes > 0 {
-				monitoredObjects = tb.ObjectCount / 2
-			}
-			cb.MonitoringCost = float64(monitoredObjects) / 1000.0 * pt.MonitoringPer1000Objects
+		if TierHasMonitoringCost(tb.TierName) && pt.MonitoringPer1000Objects > 0 {
+			cb.MonitoringCost = float64(tb.ObjectCount) / requestsPerThousand * pt.MonitoringPer1000Objects
 		}
 
-		// Glacier metadata overhead
-		if TiersWithGlacierOverhead[tb.TierName] && tb.ObjectCount > 0 {
+		// Glacier metadata overhead.
+		if TierHasGlacierOverhead(tb.TierName) && tb.ObjectCount > 0 {
 			glacierOverheadGB := float64(tb.ObjectCount*glacierMetadataOverheadBytes) / float64(bytesPerGB)
 			cb.GlacierOverhead = glacierOverheadGB * price
 
@@ -311,21 +361,62 @@ func ComputeDetailedBreakdown(breakdown []format.TierBreakdown, pt PriceTable) [
 	return results
 }
 
-// FormatCost formats a cost in microdollars as a human-readable string.
-func FormatCost(microdollars uint64) string {
-	return FormatCostDollars(float64(microdollars) / 1_000_000)
+// ComputePutCost returns the one-time PUT/COPY/POST charge for ingesting
+// objectCount objects, in microdollars. Used by the Compare view to
+// surface the upload cost of a run alongside its monthly storage cost.
+func ComputePutCost(objectCount uint64, pt PriceTable) uint64 {
+	if pt.PutPer1000Requests <= 0 || objectCount == 0 {
+		return 0
+	}
+
+	return uint64(float64(objectCount) / requestsPerThousand * pt.PutPer1000Requests * microdollarsPerDollar)
 }
 
-// FormatCostDollars formats a cost in dollars as a human-readable string.
-func FormatCostDollars(dollars float64) string {
-	switch {
-	case dollars < 0.01:
-		return fmt.Sprintf("$%.6f", dollars)
-	case dollars < 1:
-		return fmt.Sprintf("$%.4f", dollars)
-	case dollars < 100:
-		return fmt.Sprintf("$%.2f", dollars)
-	default:
-		return fmt.Sprintf("$%.0f", dollars)
+// FormatCost formats a cost in microdollars for display.
+//
+//   - 0                       → "$0.00"
+//   - 0 < c < $0.01           → "<$0.01"
+//   - $0.01 ≤ c < $1,000      → "$X.XX" (ceiling to next cent)
+//   - $1,000 ≤ c < $1M        → "$X.YK"
+//   - $1M ≤ c < $1B           → "$X.YM"
+//   - c ≥ $1B                 → "$X.YB"
+//
+// K/M/B suffixes use one decimal, round-half-away-from-zero.
+func FormatCost(microdollars uint64) string {
+	const (
+		microsPerCent   = uint64(10_000)
+		microsPerDollar = uint64(microdollarsPerDollar)
+		thousand        = 1_000.0
+		million         = 1_000_000.0
+		billion         = 1_000_000_000.0
+		centsPerDollar  = 100
+	)
+
+	if microdollars == 0 {
+		return "$0.00"
 	}
+	if microdollars < microsPerCent {
+		return "<$0.01"
+	}
+
+	dollars := float64(microdollars) / float64(microsPerDollar)
+	switch {
+	case dollars >= billion:
+		return fmt.Sprintf("$%.1fB", roundHalfAway(dollars/billion, 1))
+	case dollars >= million:
+		return fmt.Sprintf("$%.1fM", roundHalfAway(dollars/million, 1))
+	case dollars >= thousand:
+		return fmt.Sprintf("$%.1fK", roundHalfAway(dollars/thousand, 1))
+	}
+
+	cents := (microdollars + microsPerCent - 1) / microsPerCent
+
+	return fmt.Sprintf("$%d.%02d", cents/centsPerDollar, cents%centsPerDollar)
+}
+
+// roundHalfAway rounds x to decimals decimal places, half-away-from-zero.
+func roundHalfAway(x float64, decimals int) float64 {
+	factor := math.Pow(10, float64(decimals))
+
+	return math.Round(x*factor) / factor
 }

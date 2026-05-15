@@ -4,7 +4,7 @@ package format
 import "encoding/binary"
 
 const (
-	// MagicNumber identifies s3inv-index files.
+	// MagicNumber identifies s3-inv-db files.
 	MagicNumber uint32 = 0x53334944 // "S3ID"
 	// Version is the current format version.
 	Version uint32 = 1
@@ -28,6 +28,7 @@ func EncodeHeader(h Header) []byte {
 	binary.LittleEndian.PutUint32(buf[4:8], h.Version)
 	binary.LittleEndian.PutUint64(buf[8:16], h.Count)
 	binary.LittleEndian.PutUint32(buf[16:20], h.Width)
+
 	return buf
 }
 
@@ -36,6 +37,7 @@ func DecodeHeader(buf []byte) (Header, error) {
 	if len(buf) < HeaderSize {
 		return Header{}, ErrInvalidHeader
 	}
+
 	return Header{
 		Magic:   binary.LittleEndian.Uint32(buf[0:4]),
 		Version: binary.LittleEndian.Uint32(buf[4:8]),

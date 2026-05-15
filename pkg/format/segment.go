@@ -10,11 +10,6 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2"
 )
 
-// builderPool pools strings.Builder to reduce allocations in GetPrefix.
-var builderPool = sync.Pool{
-	New: func() any { return &strings.Builder{} },
-}
-
 // Segment compression file names.
 const (
 	SegmentsBlobFile     = "segments.bin"
@@ -26,6 +21,10 @@ const (
 // DefaultSegmentCacheSize is the default LRU cache size for segment lookups.
 // This covers most hot segments while keeping memory usage bounded.
 const DefaultSegmentCacheSize = 10000
+
+// avgSegmentBytes is the per-segment byte estimate used to size the strings.Builder
+// when reconstructing a prefix (~12 bytes per segment + slashes).
+const avgSegmentBytes = 12
 
 // SegmentInterner interns unique path segments during index building.
 // It assigns a sequential uint32 ID to each unique segment string.
@@ -70,8 +69,9 @@ func (si *SegmentInterner) Intern(segment string) (uint32, error) {
 	if id, ok := si.segmentMap[h]; ok {
 		// Verify it's actually the same segment (collision check)
 		if si.segments[id] != segment {
-			return 0, fmt.Errorf("hash collision between %q and %q", si.segments[id], segment)
+			return 0, fmt.Errorf("%w between %q and %q", ErrHashCollision, si.segments[id], segment)
 		}
+
 		return id, nil
 	}
 
@@ -105,6 +105,7 @@ func (si *SegmentInterner) Close() error {
 func hashSegment(s string) uint64 {
 	h := fnv.New64a()
 	h.Write([]byte(s))
+
 	return h.Sum64()
 }
 
@@ -133,6 +134,7 @@ func OpenSegmentDictionaryWithCacheSize(outDir string, cacheSize int) (*SegmentD
 	cache, err := lru.New[uint32, string](cacheSize)
 	if err != nil {
 		blob.Close()
+
 		return nil, fmt.Errorf("create segment cache: %w", err)
 	}
 
@@ -149,6 +151,7 @@ func (sd *SegmentDictionary) GetSegment(id uint32) (string, error) {
 		return "", err
 	}
 	sd.cache.Add(id, seg)
+
 	return seg, nil
 }
 
@@ -159,6 +162,7 @@ func (sd *SegmentDictionary) UnsafeGetSegment(id uint32) string {
 	}
 	seg := sd.blob.UnsafeGet(uint64(id))
 	sd.cache.Add(id, seg)
+
 	return seg
 }
 
@@ -191,6 +195,7 @@ func (sd *SegmentDictionary) PreloadSegments() (*PreloadedSegmentCache, error) {
 		}
 		segments[i] = seg
 	}
+
 	return &PreloadedSegmentCache{segments: segments}, nil
 }
 
@@ -224,6 +229,7 @@ func NewSegmentedPrefixWriter(outDir string) (*SegmentedPrefixWriter, error) {
 	segIDsWriter, err := NewArrayWriter(segIDsPath, 4)
 	if err != nil {
 		interner.Close()
+
 		return nil, fmt.Errorf("create seg IDs writer: %w", err)
 	}
 
@@ -232,6 +238,7 @@ func NewSegmentedPrefixWriter(outDir string) (*SegmentedPrefixWriter, error) {
 	if err != nil {
 		interner.Close()
 		segIDsWriter.Close()
+
 		return nil, fmt.Errorf("create seg offsets writer: %w", err)
 	}
 
@@ -290,6 +297,7 @@ func (w *SegmentedPrefixWriter) Close() error {
 	if len(errs) > 0 {
 		return errs[0]
 	}
+
 	return nil
 }
 
@@ -309,6 +317,10 @@ type SegmentedPrefixReader struct {
 	cache   *PreloadedSegmentCache // preloaded segments for fast lookup
 	segIDs  *ArrayReader           // prefix_seg_ids.u32
 	offsets *ArrayReader           // prefix_seg_off.u64
+	// builders pools strings.Builder per-reader so concurrent GetPrefix calls
+	// avoid allocating a builder each time. Per-reader (rather than package
+	// global) keeps the pool's lifetime tied to the reader.
+	builders sync.Pool
 }
 
 // OpenSegmentedPrefixReader opens a segmented prefix reader from disk.
@@ -323,6 +335,7 @@ func OpenSegmentedPrefixReader(outDir string) (*SegmentedPrefixReader, error) {
 	cache, err := dict.PreloadSegments()
 	if err != nil {
 		dict.Close()
+
 		return nil, fmt.Errorf("preload segments: %w", err)
 	}
 
@@ -330,6 +343,7 @@ func OpenSegmentedPrefixReader(outDir string) (*SegmentedPrefixReader, error) {
 	segIDs, err := OpenArray(segIDsPath)
 	if err != nil {
 		dict.Close()
+
 		return nil, fmt.Errorf("open seg IDs: %w", err)
 	}
 
@@ -338,15 +352,33 @@ func OpenSegmentedPrefixReader(outDir string) (*SegmentedPrefixReader, error) {
 	if err != nil {
 		dict.Close()
 		segIDs.Close()
+
 		return nil, fmt.Errorf("open offsets: %w", err)
 	}
 
 	return &SegmentedPrefixReader{
-		dict:    dict,
-		cache:   cache,
-		segIDs:  segIDs,
-		offsets: offsets,
+		dict:     dict,
+		cache:    cache,
+		segIDs:   segIDs,
+		offsets:  offsets,
+		builders: sync.Pool{New: func() any { return &strings.Builder{} }},
 	}, nil
+}
+
+// getBuilder fetches a reset strings.Builder from the per-reader pool.
+func (r *SegmentedPrefixReader) getBuilder() *strings.Builder {
+	b, _ := r.builders.Get().(*strings.Builder)
+	if b == nil {
+		b = &strings.Builder{}
+	}
+	b.Reset()
+
+	return b
+}
+
+// putBuilder returns a strings.Builder to the per-reader pool.
+func (r *SegmentedPrefixReader) putBuilder(b *strings.Builder) {
+	r.builders.Put(b)
 }
 
 // GetPrefix reconstructs the prefix string at the given position.
@@ -372,17 +404,14 @@ func (r *SegmentedPrefixReader) GetPrefix(pos uint64) (string, error) {
 	}
 
 	// Use pooled builder to reduce allocations
-	builder, _ := builderPool.Get().(*strings.Builder)
-	if builder == nil {
-		builder = &strings.Builder{}
-	}
-	builder.Reset()
-	builder.Grow(numSegs * 12) // ~12 bytes avg per segment + slashes
+	builder := r.getBuilder()
+	builder.Grow(numSegs * avgSegmentBytes)
 
 	for i := start; i < end; i++ {
 		segID, err := r.segIDs.GetU32(i)
 		if err != nil {
-			builderPool.Put(builder)
+			r.putBuilder(builder)
+
 			return "", fmt.Errorf("get segment ID at %d: %w", i, err)
 		}
 		if i > start {
@@ -392,7 +421,8 @@ func (r *SegmentedPrefixReader) GetPrefix(pos uint64) (string, error) {
 	}
 
 	result := builder.String()
-	builderPool.Put(builder)
+	r.putBuilder(builder)
+
 	return result, nil
 }
 
@@ -407,12 +437,8 @@ func (r *SegmentedPrefixReader) UnsafeGetPrefix(pos uint64) string {
 	}
 
 	// Use pooled builder to reduce allocations
-	builder, _ := builderPool.Get().(*strings.Builder)
-	if builder == nil {
-		builder = &strings.Builder{}
-	}
-	builder.Reset()
-	builder.Grow(numSegs * 12) // ~12 bytes avg per segment + slashes
+	builder := r.getBuilder()
+	builder.Grow(numSegs * avgSegmentBytes)
 
 	for i := start; i < end; i++ {
 		if i > start {
@@ -423,7 +449,8 @@ func (r *SegmentedPrefixReader) UnsafeGetPrefix(pos uint64) string {
 	}
 
 	result := builder.String()
-	builderPool.Put(builder)
+	r.putBuilder(builder)
+
 	return result
 }
 
@@ -432,6 +459,7 @@ func (r *SegmentedPrefixReader) Count() uint64 {
 	if r.offsets.Count() == 0 {
 		return 0
 	}
+
 	return r.offsets.Count() - 1
 }
 

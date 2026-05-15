@@ -39,6 +39,10 @@ const (
 	// Flags field bit masks.
 	flagCompressed      = 1 << 0
 	flagCompressionMask = 0x0E // bits 1-3
+
+	// Byte offset of the Count field in the compressed run file header
+	// (4 magic + 4 version + 4 flags).
+	compressedRunCountOffset = 12
 )
 
 // CompressionLevel defines the compression effort level.
@@ -57,6 +61,7 @@ const (
 type CompressedRunWriter struct {
 	file             *os.File
 	compressor       *zstd.Encoder
+	zstdLevel        zstd.EncoderLevel
 	writer           *bufio.Writer
 	count            uint64
 	uncompressedSize uint64
@@ -99,6 +104,7 @@ func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*Comp
 	if _, err := f.Write(header); err != nil {
 		f.Close()
 		os.Remove(path)
+
 		return nil, fmt.Errorf("write header: %w", err)
 	}
 
@@ -113,16 +119,19 @@ func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*Comp
 		zstdLevel = zstd.SpeedBetterCompression
 	}
 
-	enc, err := zstd.NewWriter(f, zstd.WithEncoderLevel(zstdLevel))
+	enc, err := acquireZstdEncoder(zstdLevel)
 	if err != nil {
 		f.Close()
 		os.Remove(path)
-		return nil, fmt.Errorf("create zstd encoder: %w", err)
+
+		return nil, fmt.Errorf("acquire zstd encoder: %w", err)
 	}
+	enc.Reset(f)
 
 	return &CompressedRunWriter{
 		file:       f,
 		compressor: enc,
+		zstdLevel:  zstdLevel,
 		writer:     bufio.NewWriterSize(enc, opts.BufferSize),
 		path:       path,
 		buf:        make([]byte, 1024),
@@ -171,6 +180,7 @@ func (w *CompressedRunWriter) Write(row *PrefixRow) error {
 
 	w.count++
 	w.uncompressedSize += uint64(offset)
+
 	return nil
 }
 
@@ -181,6 +191,7 @@ func (w *CompressedRunWriter) WriteAll(rows []*PrefixRow) error {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -189,6 +200,7 @@ func (w *CompressedRunWriter) WriteSorted(rows []*PrefixRow) error {
 	slices.SortFunc(rows, func(a, b *PrefixRow) int {
 		return strings.Compare(a.Prefix, b.Prefix)
 	})
+
 	return w.WriteAll(rows)
 }
 
@@ -213,18 +225,23 @@ func (w *CompressedRunWriter) Close() error {
 	if err := w.writer.Flush(); err != nil {
 		w.compressor.Close()
 		w.file.Close()
+
 		return fmt.Errorf("flush buffer: %w", err)
 	}
 
-	// Close the compressor (finalizes zstd stream)
+	// Close the compressor (finalizes zstd stream) then return it to the pool.
 	if err := w.compressor.Close(); err != nil {
 		w.file.Close()
+
 		return fmt.Errorf("close compressor: %w", err)
 	}
+	releaseZstdEncoder(w.zstdLevel, w.compressor)
+	w.compressor = nil
 
 	// Update header with final count and uncompressed size
-	if _, err := w.file.Seek(12, 0); err != nil {
+	if _, err := w.file.Seek(compressedRunCountOffset, 0); err != nil {
 		w.file.Close()
+
 		return fmt.Errorf("seek to count: %w", err)
 	}
 
@@ -235,12 +252,14 @@ func (w *CompressedRunWriter) Close() error {
 
 	if _, err := w.file.Write(headerUpdate[:]); err != nil {
 		w.file.Close()
+
 		return fmt.Errorf("update header: %w", err)
 	}
 
 	if err := w.file.Close(); err != nil {
 		return fmt.Errorf("close file: %w", err)
 	}
+
 	return nil
 }
 
@@ -272,40 +291,52 @@ func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, e
 	header := make([]byte, compressedRunFileHeader)
 	if _, err := io.ReadFull(f, header); err != nil {
 		f.Close()
+
 		return nil, fmt.Errorf("read header: %w", err)
 	}
 
 	magic := binary.LittleEndian.Uint32(header[0:4])
 	if magic != runFileMagic {
 		f.Close()
-		return nil, fmt.Errorf("invalid magic: got %x, want %x", magic, runFileMagic)
+
+		return nil, fmt.Errorf("%w: got %x, want %x", ErrInvalidMagic, magic, runFileMagic)
 	}
 
 	version := binary.LittleEndian.Uint32(header[4:8])
 	if version != compressedRunFileVersion {
 		f.Close()
-		return nil, fmt.Errorf("unsupported version for compressed reader: %d (want %d)", version, compressedRunFileVersion)
+
+		return nil, fmt.Errorf("%w (compressed reader): %d (want %d)", ErrUnsupportedVersion, version, compressedRunFileVersion)
 	}
 
 	flags := binary.LittleEndian.Uint32(header[8:12])
 	if flags&flagCompressed == 0 {
 		f.Close()
-		return nil, fmt.Errorf("file is not compressed (flags=%d)", flags)
+
+		return nil, fmt.Errorf("%w (flags=%d)", ErrNotCompressed, flags)
 	}
 
 	compressionType := (flags & flagCompressionMask) >> 1
 	if compressionType != compressionTypeZstd {
 		f.Close()
-		return nil, fmt.Errorf("unsupported compression type: %d", compressionType)
+
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedCompression, compressionType)
 	}
 
 	count := binary.LittleEndian.Uint64(header[12:20])
 
-	// Create zstd decoder
-	dec, err := zstd.NewReader(f)
+	// Create or reuse a pooled zstd decoder.
+	dec, err := acquireZstdDecoder()
 	if err != nil {
 		f.Close()
-		return nil, fmt.Errorf("create zstd decoder: %w", err)
+
+		return nil, fmt.Errorf("acquire zstd decoder: %w", err)
+	}
+	if err := dec.Reset(f); err != nil {
+		f.Close()
+		dec.Close()
+
+		return nil, fmt.Errorf("reset zstd decoder: %w", err)
 	}
 
 	return &CompressedRunReader{
@@ -331,7 +362,21 @@ func (r *CompressedRunReader) Read() (*PrefixRow, error) {
 	}
 
 	r.read++
+
 	return row, nil
+}
+
+// ReadInto reads the next row into the caller-owned PrefixRow.
+func (r *CompressedRunReader) ReadInto(into *PrefixRow) error {
+	if r.read >= r.count {
+		return io.EOF
+	}
+	if _, err := readPrefixRowRecordInto(r.reader, &r.buf, into); err != nil {
+		return err
+	}
+	r.read++
+
+	return nil
 }
 
 // Count returns the total number of records in the file.
@@ -356,11 +401,13 @@ func (r *CompressedRunReader) Close() error {
 	}
 	r.closed = true
 
-	r.decompressor.Close()
+	releaseZstdDecoder(r.decompressor)
+	r.decompressor = nil
 
 	if err := r.file.Close(); err != nil {
 		return fmt.Errorf("close compressed run file: %w", err)
 	}
+
 	return nil
 }
 
@@ -372,12 +419,16 @@ func (r *CompressedRunReader) Remove() error {
 	if err := os.Remove(r.path); err != nil {
 		return fmt.Errorf("remove compressed run file: %w", err)
 	}
+
 	return nil
 }
 
 // RunReader is an interface that abstracts reading from either compressed or uncompressed run files.
 type RunReader interface {
 	Read() (*PrefixRow, error)
+	// ReadInto reads the next row into the caller-owned PrefixRow,
+	// avoiding the per-row allocation in Read.
+	ReadInto(into *PrefixRow) error
 	Count() uint64
 	ReadCount() uint64
 	Path() string
@@ -407,13 +458,14 @@ func OpenRunFileAuto(path string, bufferSize int) (RunReader, error) {
 	header := make([]byte, 8)
 	if _, err := io.ReadFull(f, header); err != nil {
 		f.Close()
+
 		return nil, fmt.Errorf("read header: %w", err)
 	}
 	f.Close()
 
 	magic := binary.LittleEndian.Uint32(header[0:4])
 	if magic != runFileMagic {
-		return nil, fmt.Errorf("invalid magic: got %x, want %x", magic, runFileMagic)
+		return nil, fmt.Errorf("%w: got %x, want %x", ErrInvalidMagic, magic, runFileMagic)
 	}
 
 	version := binary.LittleEndian.Uint32(header[4:8])
@@ -423,6 +475,6 @@ func OpenRunFileAuto(path string, bufferSize int) (RunReader, error) {
 	case compressedRunFileVersion:
 		return OpenCompressedRunFile(path, bufferSize)
 	default:
-		return nil, fmt.Errorf("unsupported run file version: %d", version)
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedVersion, version)
 	}
 }

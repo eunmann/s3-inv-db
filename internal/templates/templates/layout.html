@@ -1,0 +1,99 @@
+{{define "layout"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} - S3 Inventory</title>
+    <meta name="color-scheme" content="light dark">
+
+    <!-- FOUC-free theme init. Runs BEFORE the body parses so the
+         right class is on <html> before the first paint. Stored
+         choice ("light"/"dark") wins; otherwise follow OS preference.
+         Tailwind is built with darkMode:'class', so .dark on <html>
+         activates every `dark:` utility in the compiled stylesheet. -->
+    <script>
+        (function () {
+            try {
+                var stored = localStorage.getItem('theme');
+                var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                if (stored === 'dark' || (!stored && prefersDark)) {
+                    document.documentElement.classList.add('dark');
+                }
+            } catch (_) { /* private mode / disabled storage: fall back to media */ }
+        })();
+    </script>
+
+    <link rel="stylesheet" href="/static/tailwind.css">
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 min-h-screen text-gray-900 dark:text-gray-100">
+    <a href="#main-content" class="sr-only focus:not-sr-only">Skip to main content</a>
+    <nav class="bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700" aria-label="Primary">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex">
+                    <div class="flex-shrink-0 flex items-center">
+                        <span class="text-xl font-bold text-gray-800 dark:text-gray-100">S3 Inventory</span>
+                    </div>
+                    <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
+                        <a href="/" class="border-transparent text-gray-500 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-500 hover:text-gray-700 dark:hover:text-gray-100 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                            Dashboard
+                        </a>
+                        <a href="/inventories" class="border-transparent text-gray-500 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-500 hover:text-gray-700 dark:hover:text-gray-100 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                            Inventories
+                        </a>
+                        <a href="/browse" class="border-transparent text-gray-500 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-500 hover:text-gray-700 dark:hover:text-gray-100 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                            Browse
+                        </a>
+                        <a href="/compare" class="border-transparent text-gray-500 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-500 hover:text-gray-700 dark:hover:text-gray-100 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                            Compare
+                        </a>
+                        <a href="/help" class="border-transparent text-gray-500 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-500 hover:text-gray-700 dark:hover:text-gray-100 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                            Help
+                        </a>
+                    </div>
+                </div>
+                <div class="flex items-center">
+                    <button type="button"
+                            id="theme-toggle"
+                            aria-label="Toggle dark mode"
+                            class="inline-flex items-center justify-center h-9 w-9 rounded-md text-gray-500 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-700 dark:hover:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            onclick="(function(){
+                                var root = document.documentElement;
+                                var dark = root.classList.toggle('dark');
+                                try { localStorage.setItem('theme', dark ? 'dark' : 'light'); } catch(_) {}
+                            })()">
+                        <!-- Sun (shown in dark mode) -->
+                        <svg class="hidden dark:block h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="4"></circle>
+                            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+                        </svg>
+                        <!-- Moon (shown in light mode) -->
+                        <svg class="block dark:hidden h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div id="notifications-banner"
+         hx-get="/partials/notifications"
+         hx-trigger="load, every 30s"
+         hx-swap="innerHTML"></div>
+
+    <main id="main-content" class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        {{template "content" .}}
+    </main>
+
+    <footer class="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 mt-8">
+        <div class="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8">
+            <p class="text-center text-sm text-gray-500 dark:text-gray-400">S3 Inventory Index Server</p>
+        </div>
+    </footer>
+</body>
+</html>
+{{end}}

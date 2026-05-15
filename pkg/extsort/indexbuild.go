@@ -9,11 +9,16 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
+	"github.com/rs/zerolog"
 )
+
+// indexDirPerm restricts the index output directory and its subdirectories
+// to owner+group access, matching gosec's expectation that directory mode
+// is 0o750 or stricter.
+const indexDirPerm = 0o750
 
 // IndexBuilder builds index files directly from a sorted stream of PrefixRows.
 // It processes prefixes in a single streaming pass, computing preorder positions
@@ -71,7 +76,7 @@ func NewIndexBuilder(outDir, tempDir string, useSegmentEncoding bool) (*IndexBui
 // the approximate number of prefixes is known (e.g., from a run file header).
 // If capacityHint is 0, a small default capacity is used.
 func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, useSegmentEncoding bool) (*IndexBuilder, error) {
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	if err := os.MkdirAll(outDir, indexDirPerm); err != nil {
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
 
@@ -89,10 +94,7 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, us
 	}
 
 	// Use capacity hint for arrays, with a minimum of 1024
-	arrayCap := uint64(1024)
-	if capacityHint > arrayCap {
-		arrayCap = capacityHint
-	}
+	arrayCap := max(capacityHint, uint64(1024))
 
 	b := &IndexBuilder{
 		outDir:             outDir,
@@ -111,18 +113,21 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, us
 	b.objectCountW, err = format.NewArrayWriter(filepath.Join(outDir, "object_count.u64"), 8)
 	if err != nil {
 		b.cleanup()
+
 		return nil, fmt.Errorf("create object_count writer: %w", err)
 	}
 
 	b.totalBytesW, err = format.NewArrayWriter(filepath.Join(outDir, "total_bytes.u64"), 8)
 	if err != nil {
 		b.cleanup()
+
 		return nil, fmt.Errorf("create total_bytes writer: %w", err)
 	}
 
 	b.depthW, err = format.NewArrayWriter(filepath.Join(outDir, "depth.u32"), 4)
 	if err != nil {
 		b.cleanup()
+
 		return nil, fmt.Errorf("create depth writer: %w", err)
 	}
 
@@ -195,7 +200,7 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	b.subtreeEnds = append(b.subtreeEnds, 0)
 	b.maxDepthInSubtrees = append(b.maxDepthInSubtrees, 0)
 
-	for tierID := tiers.ID(0); tierID < tiers.NumTiers; tierID++ {
+	for tierID := range tiers.NumTiers {
 		if row.TierCounts[tierID] > 0 || row.TierBytes[tierID] > 0 {
 			b.presentTiers[tierID] = true
 		}
@@ -228,6 +233,7 @@ func (b *IndexBuilder) closeNodesAbove(targetDepth int) error {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -255,7 +261,7 @@ func (b *IndexBuilder) closeTopNode() error {
 
 // writeTierStats writes tier statistics for a row.
 func (b *IndexBuilder) writeTierStats(row *PrefixRow) error {
-	for tierID := tiers.ID(0); tierID < tiers.NumTiers; tierID++ {
+	for tierID := range tiers.NumTiers {
 		_, hasCountWriter := b.tierCountWriters[tierID]
 		_, hasBytesWriter := b.tierBytesWriters[tierID]
 
@@ -279,13 +285,14 @@ func (b *IndexBuilder) writeTierStats(row *PrefixRow) error {
 			}
 		}
 	}
+
 	return nil
 }
 
 // createTierWriter creates writers for a tier and backfills zeros for previous positions.
 func (b *IndexBuilder) createTierWriter(tierID tiers.ID, _ *PrefixRow) error {
 	tierDir := filepath.Join(b.outDir, "tier_stats")
-	if err := os.MkdirAll(tierDir, 0o755); err != nil {
+	if err := os.MkdirAll(tierDir, indexDirPerm); err != nil {
 		return fmt.Errorf("create tier_stats dir: %w", err)
 	}
 
@@ -303,6 +310,7 @@ func (b *IndexBuilder) createTierWriter(tierID tiers.ID, _ *PrefixRow) error {
 	bytesW, err := format.NewArrayWriter(bytesPath, 8)
 	if err != nil {
 		countW.Close()
+
 		return fmt.Errorf("create tier %s bytes writer: %w", info.Name, err)
 	}
 	b.tierBytesWriters[tierID] = bytesW
@@ -329,7 +337,7 @@ func (b *IndexBuilder) AddAll(iter RowIterator) error {
 func (b *IndexBuilder) AddAllWithContext(ctx context.Context, iter RowIterator) error {
 	const checkInterval = 1000 // Check context every N rows
 	const logInterval = 100000 // Log progress every N rows
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 	count := 0
 	startTime := time.Now()
 	lastLogTime := startTime
@@ -391,7 +399,7 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	}
 	b.closed = true
 
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 	startTime := time.Now()
 
 	log.Debug().Msg("index builder: starting Finalize")
@@ -473,6 +481,7 @@ func (b *IndexBuilder) closeStreamingWriters() error {
 			return fmt.Errorf("close tier %d bytes: %w", tierID, err)
 		}
 	}
+
 	return nil
 }
 
@@ -485,6 +494,7 @@ func (b *IndexBuilder) writeSubtreeArrays() error {
 	for _, v := range b.subtreeEnds {
 		if err := subtreeEndW.WriteU64(v); err != nil {
 			subtreeEndW.Close()
+
 			return fmt.Errorf("write subtree_end: %w", err)
 		}
 	}
@@ -499,18 +509,20 @@ func (b *IndexBuilder) writeSubtreeArrays() error {
 	for _, v := range b.maxDepthInSubtrees {
 		if err := maxDepthW.WriteU32(v); err != nil {
 			maxDepthW.Close()
+
 			return fmt.Errorf("write max_depth_in_subtree: %w", err)
 		}
 	}
 	if err := maxDepthW.Close(); err != nil {
 		return fmt.Errorf("close max_depth_in_subtree: %w", err)
 	}
+
 	return nil
 }
 
 // buildMPHF builds the MPHF and logs progress.
 func (b *IndexBuilder) buildMPHF(ctx context.Context) error {
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 	mphfStart := time.Now()
 	if err := b.mphfBuilder.Build(b.outDir); err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
@@ -520,6 +532,7 @@ func (b *IndexBuilder) buildMPHF(ctx context.Context) error {
 	log.Debug().
 		Str("mphf_duration", humanfmt.Duration(time.Since(mphfStart))).
 		Msg("index builder: MPHF build complete")
+
 	return nil
 }
 
@@ -535,6 +548,7 @@ func (b *IndexBuilder) writeTierManifest() error {
 	if err := tiers.WriteManifest(b.outDir, presentTierList); err != nil {
 		return fmt.Errorf("write tier manifest: %w", err)
 	}
+
 	return nil
 }
 
@@ -554,5 +568,6 @@ func (b *IndexBuilder) PresentTiers() []tiers.ID {
 	for tierID := range b.presentTiers {
 		result = append(result, tierID)
 	}
+
 	return result
 }

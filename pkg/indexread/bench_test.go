@@ -1,4 +1,4 @@
-package indexread
+package indexread_test
 
 import (
 	"fmt"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/pkg/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
@@ -40,11 +41,11 @@ Benchmark Categories for Index Reading:
 */
 
 // Use shared constants from benchutil for consistency across packages.
-// benchutil.BenchmarkSeed, benchutil.TreeShapes, benchutil.BenchmarkSizes
+// benchutil.BenchmarkSeed, benchutil.TreeShapes(), benchutil.BenchmarkSizes()
 
 // benchIndex holds a pre-built index for benchmarking.
 type benchIndex struct {
-	idx      *Index
+	idx      *indexread.Index
 	prefixes []string
 	dir      string
 }
@@ -55,7 +56,7 @@ func setupBenchIndex(b *testing.B, keys []string) *benchIndex {
 
 	setup := setupIndexFromKeys(b, keys)
 
-	idx, err := Open(setup.IndexDir)
+	idx, err := indexread.Open(setup.IndexDir)
 	if err != nil {
 		b.Fatalf("Open failed: %v", err)
 	}
@@ -83,7 +84,7 @@ func setupBenchIndexWithTiers(b *testing.B, numObjects int) *benchIndex {
 
 	setup := setupIndex(b, numObjects)
 
-	idx, err := Open(setup.IndexDir)
+	idx, err := indexread.Open(setup.IndexDir)
 	if err != nil {
 		b.Fatalf("Open failed: %v", err)
 	}
@@ -115,8 +116,8 @@ func (bi *benchIndex) Close() {
 // The opFunc is called with a prefix and should perform the operation being benchmarked.
 func benchmarkIndexOp(b *testing.B, opFunc func(bi *benchIndex, prefix string)) {
 	b.Helper()
-	for _, shape := range benchutil.TreeShapes {
-		for _, size := range benchutil.BenchmarkSizes {
+	for _, shape := range benchutil.TreeShapes() {
+		for _, size := range benchutil.BenchmarkSizes() {
 			name := fmt.Sprintf("%s/size=%d", shape, size)
 
 			b.Run(name+"/sequential", func(b *testing.B) {
@@ -238,7 +239,7 @@ func BenchmarkIndexOpen(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := range b.N {
-		idx, err := Open(dir)
+		idx, err := indexread.Open(dir)
 		if err != nil {
 			b.Fatalf("Open failed: %v", err)
 		}
@@ -327,8 +328,8 @@ func BenchmarkTierBreakdown(b *testing.B) {
 func BenchmarkDescendantsAtDepth(b *testing.B) {
 	depths := []int{1, 2, 3, 5}
 
-	for _, shape := range benchutil.TreeShapes {
-		for _, size := range benchutil.BenchmarkSizes {
+	for _, shape := range benchutil.TreeShapes() {
+		for _, size := range benchutil.BenchmarkSizes() {
 			keys := benchutil.GenerateKeys(size, shape)
 			bi := setupBenchIndex(b, keys)
 
@@ -410,8 +411,8 @@ func BenchmarkDescendantsSubtree(b *testing.B) {
 
 // BenchmarkIterator benchmarks the iterator interface.
 func BenchmarkIterator(b *testing.B) {
-	for _, shape := range benchutil.TreeShapes {
-		for _, size := range benchutil.BenchmarkSizes {
+	for _, shape := range benchutil.TreeShapes() {
+		for _, size := range benchutil.BenchmarkSizes() {
 			keys := benchutil.GenerateKeys(size, shape)
 			bi := setupBenchIndex(b, keys)
 
@@ -440,7 +441,7 @@ func BenchmarkIterator(b *testing.B) {
 
 // BenchmarkMixedWorkload simulates realistic mixed query patterns.
 func BenchmarkMixedWorkload(b *testing.B) {
-	for _, shape := range benchutil.TreeShapes {
+	for _, shape := range benchutil.TreeShapes() {
 		size := 10000
 		keys := benchutil.GenerateKeys(size, shape)
 		bi := setupBenchIndex(b, keys)
@@ -537,14 +538,14 @@ func BenchmarkPrefixHeavy(b *testing.B) {
 func BenchmarkIndexOpen_Scaling(b *testing.B) {
 	benchutil.SkipIfNoLongBench(b)
 
-	for _, size := range benchutil.ScalingSizes {
+	for _, size := range benchutil.ScalingSizes() {
 		b.Run(fmt.Sprintf("objects=%d", size), func(b *testing.B) {
 			bi := setupBenchIndexWithTiers(b, size)
 			bi.Close()
 
 			b.ResetTimer()
 			for range b.N {
-				idx, err := Open(bi.dir)
+				idx, err := indexread.Open(bi.dir)
 				if err != nil {
 					b.Fatalf("Open failed: %v", err)
 				}

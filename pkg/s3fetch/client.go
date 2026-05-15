@@ -4,11 +4,25 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
+
+// s3ClientOptions forces path-style addressing when AWS_ENDPOINT_URL_S3
+// is set. MinIO and most non-AWS S3 implementations reject the SDK
+// default (virtual-host style).
+func s3ClientOptions() []func(*s3.Options) {
+	if os.Getenv("AWS_ENDPOINT_URL_S3") == "" {
+		return nil
+	}
+
+	return []func(*s3.Options){
+		func(o *s3.Options) { o.UsePathStyle = true },
+	}
+}
 
 // Client provides S3 operations for fetching inventory files.
 type Client struct {
@@ -28,7 +42,8 @@ func NewClientWithDownloaderConfig(ctx context.Context, dlCfg DownloaderConfig) 
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
 
-	s3Client := s3.NewFromConfig(cfg)
+	s3Client := s3.NewFromConfig(cfg, s3ClientOptions()...)
+
 	return &Client{
 		s3Client:   s3Client,
 		downloader: NewDownloader(s3Client, dlCfg),
@@ -42,7 +57,8 @@ func NewClientWithConfig(cfg aws.Config) *Client {
 
 // NewClientWithConfigAndDownloader creates a new S3 client with custom AWS and downloader configs.
 func NewClientWithConfigAndDownloader(cfg aws.Config, dlCfg DownloaderConfig) *Client {
-	s3Client := s3.NewFromConfig(cfg)
+	s3Client := s3.NewFromConfig(cfg, s3ClientOptions()...)
+
 	return &Client{
 		s3Client:   s3Client,
 		downloader: NewDownloader(s3Client, dlCfg),
@@ -64,6 +80,7 @@ func (c *Client) FetchManifest(ctx context.Context, bucket, key string) (*Manife
 	if err != nil {
 		return nil, fmt.Errorf("parse manifest from s3://%s/%s: %w", bucket, key, err)
 	}
+
 	return manifest, nil
 }
 
@@ -79,6 +96,7 @@ func (c *Client) StreamObject(ctx context.Context, bucket, key string) (io.ReadC
 	if err != nil {
 		return nil, fmt.Errorf("get object s3://%s/%s: %w", bucket, key, err)
 	}
+
 	return resp.Body, nil
 }
 
@@ -95,4 +113,11 @@ func (c *Client) DownloadObject(ctx context.Context, bucket, key string) (io.Rea
 // DownloaderConfig returns the current downloader configuration.
 func (c *Client) DownloaderConfig() DownloaderConfig {
 	return c.downloader.Config()
+}
+
+// Raw returns the underlying aws-sdk-go-v2 S3 client. Useful for callers
+// that need List, Put, or other operations beyond the manifest/download
+// surface that this package exposes.
+func (c *Client) Raw() *s3.Client {
+	return c.s3Client
 }

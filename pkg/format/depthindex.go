@@ -3,6 +3,7 @@ package format
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 )
 
@@ -42,6 +43,7 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 	positionsWriter, err := NewArrayWriter(positionsPath, 8)
 	if err != nil {
 		offsetsWriter.Close()
+
 		return fmt.Errorf("create positions writer: %w", err)
 	}
 
@@ -52,6 +54,7 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 		if err := offsetsWriter.WriteU64(offset); err != nil {
 			offsetsWriter.Close()
 			positionsWriter.Close()
+
 			return fmt.Errorf("write offset: %w", err)
 		}
 
@@ -61,15 +64,14 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 		if !sort.SliceIsSorted(positions, func(i, j int) bool {
 			return positions[i] < positions[j]
 		}) {
-			sort.Slice(positions, func(i, j int) bool {
-				return positions[i] < positions[j]
-			})
+			slices.Sort(positions)
 		}
 
 		for _, pos := range positions {
 			if err := positionsWriter.WriteU64(pos); err != nil {
 				offsetsWriter.Close()
 				positionsWriter.Close()
+
 				return fmt.Errorf("write position: %w", err)
 			}
 		}
@@ -80,11 +82,13 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 	if err := offsetsWriter.WriteU64(offset); err != nil {
 		offsetsWriter.Close()
 		positionsWriter.Close()
+
 		return fmt.Errorf("write sentinel offset: %w", err)
 	}
 
 	if err := positionsWriter.Close(); err != nil {
 		offsetsWriter.Close()
+
 		return fmt.Errorf("close positions: %w", err)
 	}
 
@@ -124,6 +128,7 @@ func OpenDepthIndex(outDir string) (*DepthIndex, error) {
 	positions, err := OpenArray(positionsPath)
 	if err != nil {
 		offsets.Close()
+
 		return nil, fmt.Errorf("open positions: %w", err)
 	}
 
@@ -147,6 +152,7 @@ func (d *DepthIndex) Close() error {
 	if err1 != nil {
 		return err1
 	}
+
 	return err2
 }
 
@@ -240,6 +246,7 @@ func (d *DepthIndex) binarySearchLower(start, end, target uint64) uint64 {
 			hi = mid
 		}
 	}
+
 	return lo
 }
 
@@ -255,6 +262,7 @@ func (d *DepthIndex) binarySearchUpper(start, end, target uint64) uint64 {
 			hi = mid
 		}
 	}
+
 	return lo
 }
 
@@ -302,6 +310,7 @@ func (it *DepthIterator) Next() bool {
 	}
 	it.pos = it.index.positions.UnsafeGetU64(it.current)
 	it.current++
+
 	return true
 }
 

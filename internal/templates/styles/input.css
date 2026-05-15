@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Visually-hidden helper for screen-reader-only text + skip link. */
+@layer components {
+    .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+    }
+    a.sr-only:focus,
+    .sr-only.focus\:not-sr-only:focus {
+        position: static;
+        width: auto;
+        height: auto;
+        clip: auto;
+        padding: 0.5rem 1rem;
+        background: #fff;
+        color: #1f2937;
+        border: 2px solid #4f46e5;
+    }
+    html.dark a.sr-only:focus,
+    html.dark .sr-only.focus\:not-sr-only:focus {
+        background: #111827;
+        color: #f3f4f6;
+        border-color: #818cf8;
+    }
+}

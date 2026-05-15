@@ -26,8 +26,15 @@ const (
 	ITArchiveInstant
 	ITArchive
 	ITDeepArchive
-	NumTiers // Sentinel value for array sizing
+	ITFrequentSmall // IT objects < 128 KiB: Frequent rate, no monitoring fee
+	NumTiers        // Sentinel value for array sizing
 )
+
+// SmallObjectThresholdBytes is the AWS S3 Intelligent-Tiering minimum
+// monitored object size. Objects below this are stored at the Frequent
+// Access rate but are not monitored and cannot transition to lower tiers.
+// Source: https://aws.amazon.com/s3/storage-classes/intelligent-tiering/
+const SmallObjectThresholdBytes uint64 = 128 * 1024
 
 // Info describes a storage tier.
 type Info struct {
@@ -36,20 +43,25 @@ type Info struct {
 	FilePrefix string `json:"file"`
 }
 
-// AllTiers contains information about all supported tiers.
-var AllTiers = []Info{
-	{Standard, "STANDARD", "standard"},
-	{StandardIA, "STANDARD_IA", "standard_ia"},
-	{OneZoneIA, "ONEZONE_IA", "onezone_ia"},
-	{GlacierIR, "GLACIER_IR", "glacier_ir"},
-	{GlacierFR, "GLACIER", "glacier_fr"},
-	{DeepArchive, "DEEP_ARCHIVE", "deep_archive"},
-	{ReducedRedundancy, "REDUCED_REDUNDANCY", "reduced_redundancy"},
-	{ITFrequent, "INTELLIGENT_TIERING_FREQUENT", "it_frequent"},
-	{ITInfrequent, "INTELLIGENT_TIERING_INFREQUENT", "it_infrequent"},
-	{ITArchiveInstant, "INTELLIGENT_TIERING_ARCHIVE_INSTANT", "it_archive_instant"},
-	{ITArchive, "INTELLIGENT_TIERING_ARCHIVE", "it_archive"},
-	{ITDeepArchive, "INTELLIGENT_TIERING_DEEP_ARCHIVE", "it_deep_archive"},
+// AllTiers returns information about all supported tiers in tier-ID
+// order. A function (rather than a package-level slice) keeps tier
+// data immutable from outside the package and avoids a global.
+func AllTiers() []Info {
+	return []Info{
+		{Standard, "STANDARD", "standard"},
+		{StandardIA, "STANDARD_IA", "standard_ia"},
+		{OneZoneIA, "ONEZONE_IA", "onezone_ia"},
+		{GlacierIR, "GLACIER_IR", "glacier_ir"},
+		{GlacierFR, "GLACIER", "glacier_fr"},
+		{DeepArchive, "DEEP_ARCHIVE", "deep_archive"},
+		{ReducedRedundancy, "REDUCED_REDUNDANCY", "reduced_redundancy"},
+		{ITFrequent, "INTELLIGENT_TIERING_FREQUENT", "it_frequent"},
+		{ITInfrequent, "INTELLIGENT_TIERING_INFREQUENT", "it_infrequent"},
+		{ITArchiveInstant, "INTELLIGENT_TIERING_ARCHIVE_INSTANT", "it_archive_instant"},
+		{ITArchive, "INTELLIGENT_TIERING_ARCHIVE", "it_archive"},
+		{ITDeepArchive, "INTELLIGENT_TIERING_DEEP_ARCHIVE", "it_deep_archive"},
+		{ITFrequentSmall, "INTELLIGENT_TIERING_FREQUENT_SMALL", "it_frequent_small"},
+	}
 }
 
 // Mapping provides tier lookup and metadata.
@@ -61,19 +73,20 @@ type Mapping struct {
 
 // NewMapping creates a new tier mapping with all supported tiers.
 func NewMapping() *Mapping {
+	all := AllTiers()
 	m := &Mapping{
-		Tiers:         make([]Info, len(AllTiers)),
+		Tiers:         make([]Info, len(all)),
 		indexByName:   make(map[string]ID),
 		indexByS3Name: make(map[string]ID),
 	}
-	copy(m.Tiers, AllTiers)
+	copy(m.Tiers, all)
 
 	for _, t := range m.Tiers {
 		m.indexByName[t.Name] = t.ID
 		m.indexByS3Name[strings.ToUpper(t.Name)] = t.ID
 	}
 
-	// Add INTELLIGENT_TIERING as alias for ITFrequent (default when no access tier specified)
+	// Add INTELLIGENT_TIERING as alias for ITFrequent (default when no access tier specified).
 	m.indexByS3Name["INTELLIGENT_TIERING"] = ITFrequent
 
 	return m
@@ -114,11 +127,24 @@ func (m *Mapping) FromS3(storageClass, accessTier string) ID {
 	return Standard
 }
 
+// Resolve adjusts a classification based on object size. Intelligent-
+// Tiering Frequent objects smaller than 128 KiB are reclassified as
+// ITFrequentSmall: they are billed at the Frequent Access rate but do
+// not incur the monitoring fee and never auto-tier.
+func Resolve(id ID, size uint64) ID {
+	if id == ITFrequent && size < SmallObjectThresholdBytes {
+		return ITFrequentSmall
+	}
+
+	return id
+}
+
 // ByID returns tier info by ID.
 func (m *Mapping) ByID(id ID) Info {
 	if int(id) < len(m.Tiers) {
 		return m.Tiers[id]
 	}
+
 	return Info{ID: id, Name: "UNKNOWN", FilePrefix: "unknown"}
 }
 
@@ -142,22 +168,26 @@ func WriteManifest(dir string, presentTiers []ID) error {
 		return fmt.Errorf("marshal tier manifest: %w", err)
 	}
 
+	const tierManifestMode = 0o600
 	path := filepath.Join(dir, "tiers.json")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, tierManifestMode); err != nil {
 		return fmt.Errorf("write tier manifest: %w", err)
 	}
 
 	return nil
 }
 
-// ReadManifest reads tiers.json from the index directory.
+// ReadManifest reads tiers.json from the index directory. Returns an
+// empty TierManifest (zero Tiers) when the file is missing so callers
+// can dispatch on len(manifest.Tiers) rather than nil-checking.
 func ReadManifest(dir string) (*TierManifest, error) {
 	path := filepath.Join(dir, "tiers.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil // No tier data
+			return &TierManifest{}, nil
 		}
+
 		return nil, fmt.Errorf("read tier manifest: %w", err)
 	}
 

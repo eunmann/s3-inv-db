@@ -1,8 +1,10 @@
-package s3fetch
+package s3fetch_test
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
 
 func TestParseManifest(t *testing.T) {
@@ -73,11 +75,12 @@ func TestParseManifest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m, err := ParseManifest(strings.NewReader(tt.json))
+			m, err := s3fetch.ParseManifest(strings.NewReader(tt.json))
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error, got nil")
 				}
+
 				return
 			}
 			if err != nil {
@@ -91,7 +94,7 @@ func TestParseManifest(t *testing.T) {
 }
 
 func TestManifestColumnIndex(t *testing.T) {
-	manifest := &Manifest{
+	manifest := &s3fetch.Manifest{
 		FileSchema: "Bucket, Key, Size, LastModifiedDate, ETag",
 	}
 
@@ -113,7 +116,7 @@ func TestManifestColumnIndex(t *testing.T) {
 }
 
 func TestManifestColumnIndex_CaseInsensitive(t *testing.T) {
-	manifest := &Manifest{
+	manifest := &s3fetch.Manifest{
 		FileSchema: "bucket, KEY, SIZE, lastmodifieddate",
 	}
 
@@ -127,7 +130,7 @@ func TestManifestColumnIndex_CaseInsensitive(t *testing.T) {
 }
 
 func TestManifestColumnIndex_NotFound(t *testing.T) {
-	manifest := &Manifest{
+	manifest := &s3fetch.Manifest{
 		FileSchema: "Bucket, ObjectKey, ObjectSize",
 	}
 
@@ -185,21 +188,22 @@ func TestParseS3URI(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.uri, func(t *testing.T) {
-			bucket, key, err := ParseS3URI(tt.uri)
+			parsed, err := s3fetch.ParseS3URI(tt.uri)
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error, got nil")
 				}
+
 				return
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if bucket != tt.wantBucket {
-				t.Errorf("bucket = %q, want %q", bucket, tt.wantBucket)
+			if parsed.Bucket != tt.wantBucket {
+				t.Errorf("bucket = %q, want %q", parsed.Bucket, tt.wantBucket)
 			}
-			if key != tt.wantKey {
-				t.Errorf("key = %q, want %q", key, tt.wantKey)
+			if parsed.Key != tt.wantKey {
+				t.Errorf("key = %q, want %q", parsed.Key, tt.wantKey)
 			}
 		})
 	}
@@ -230,7 +234,7 @@ func TestManifestStorageClassColumnIndex(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := &Manifest{FileSchema: tt.schema}
+			m := &s3fetch.Manifest{FileSchema: tt.schema}
 			got := m.StorageClassColumnIndex()
 			if got != tt.want {
 				t.Errorf("StorageClassColumnIndex() = %d, want %d", got, tt.want)
@@ -259,7 +263,7 @@ func TestManifestAccessTierColumnIndex(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := &Manifest{FileSchema: tt.schema}
+			m := &s3fetch.Manifest{FileSchema: tt.schema}
 			got := m.AccessTierColumnIndex()
 			if got != tt.want {
 				t.Errorf("AccessTierColumnIndex() = %d, want %d", got, tt.want)
@@ -344,11 +348,12 @@ func TestParseBucketIdentifier(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bucket, err := ParseBucketIdentifier(tt.input)
+			bucket, err := s3fetch.ParseBucketIdentifier(tt.input)
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error, got nil")
 				}
+
 				return
 			}
 			if err != nil {
@@ -364,7 +369,7 @@ func TestParseBucketIdentifier(t *testing.T) {
 func TestParseBucketIdentifier_RealWorldManifest(t *testing.T) {
 	// Test case that matches the actual error from the user's manifest
 	// The destinationBucket field in their manifest was "arn:aws:s3:::txg-s3-inventories"
-	bucket, err := ParseBucketIdentifier("arn:aws:s3:::txg-s3-inventories")
+	bucket, err := s3fetch.ParseBucketIdentifier("arn:aws:s3:::txg-s3-inventories")
 	if err != nil {
 		t.Fatalf("failed to parse real-world ARN: %v", err)
 	}
@@ -399,12 +404,13 @@ func TestManifest_GetDestinationBucketName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := &Manifest{DestinationBucket: tt.destBucket}
+			m := &s3fetch.Manifest{DestinationBucket: tt.destBucket}
 			bucket, err := m.GetDestinationBucketName()
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error, got nil")
 				}
+
 				return
 			}
 			if err != nil {
@@ -422,67 +428,67 @@ func TestManifestDetectFormat(t *testing.T) {
 		name       string
 		fileFormat string
 		fileKey    string
-		wantFormat InventoryFormat
+		wantFormat s3fetch.InventoryFormat
 		wantIsCSV  bool
 	}{
 		{
 			name:       "explicit CSV format",
 			fileFormat: "CSV",
 			fileKey:    "file.csv.gz",
-			wantFormat: InventoryFormatCSV,
+			wantFormat: s3fetch.InventoryFormatCSV,
 			wantIsCSV:  true,
 		},
 		{
 			name:       "explicit Parquet format",
 			fileFormat: "Parquet",
 			fileKey:    "file.parquet",
-			wantFormat: InventoryFormatParquet,
+			wantFormat: s3fetch.InventoryFormatParquet,
 			wantIsCSV:  false,
 		},
 		{
 			name:       "explicit PARQUET format uppercase",
 			fileFormat: "PARQUET",
 			fileKey:    "file.parquet",
-			wantFormat: InventoryFormatParquet,
+			wantFormat: s3fetch.InventoryFormatParquet,
 			wantIsCSV:  false,
 		},
 		{
 			name:       "detect from .parquet extension",
 			fileFormat: "",
 			fileKey:    "inventory/data/file.parquet",
-			wantFormat: InventoryFormatParquet,
+			wantFormat: s3fetch.InventoryFormatParquet,
 			wantIsCSV:  false,
 		},
 		{
 			name:       "detect from .csv.gz extension",
 			fileFormat: "",
 			fileKey:    "inventory/data/file.csv.gz",
-			wantFormat: InventoryFormatCSV,
+			wantFormat: s3fetch.InventoryFormatCSV,
 			wantIsCSV:  true,
 		},
 		{
 			name:       "detect from .csv extension",
 			fileFormat: "",
 			fileKey:    "file.csv",
-			wantFormat: InventoryFormatCSV,
+			wantFormat: s3fetch.InventoryFormatCSV,
 			wantIsCSV:  true,
 		},
 		{
 			name:       "default to CSV when unknown",
 			fileFormat: "",
 			fileKey:    "file.unknown",
-			wantFormat: InventoryFormatCSV,
+			wantFormat: s3fetch.InventoryFormatCSV,
 			wantIsCSV:  true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := &Manifest{
+			m := &s3fetch.Manifest{
 				DestinationBucket: "bucket",
 				FileFormat:        tt.fileFormat,
 				FileSchema:        "Key, Size",
-				Files:             []ManifestFile{{Key: tt.fileKey, Size: 100}},
+				Files:             []s3fetch.ManifestFile{{Key: tt.fileKey, Size: 100}},
 			}
 
 			gotFormat := m.DetectFormat()
@@ -555,7 +561,7 @@ func TestManifestIntegration_ARNvsBucketName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			manifest, err := ParseManifest(strings.NewReader(tt.manifestJSON))
+			manifest, err := s3fetch.ParseManifest(strings.NewReader(tt.manifestJSON))
 			if err != nil {
 				t.Fatalf("failed to parse manifest: %v", err)
 			}

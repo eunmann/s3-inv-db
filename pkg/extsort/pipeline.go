@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/eunmann/s3-inv-db/internal/logctx"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/memdiag"
@@ -52,6 +51,25 @@ type Result struct {
 	Duration         time.Duration
 }
 
+// setPhase updates both the memory diagnostic tracker and the user's
+// progress callback. Single hook so future phases stay consistent. The
+// stage transition reports done=0/total=0 — quantitative progress
+// within the stage is emitted separately by the stage's own loop.
+func (p *Pipeline) setPhase(name string) {
+	p.memTracker.SetPhase(name)
+	if p.config.OnProgress != nil {
+		p.config.OnProgress(name, 0, 0)
+	}
+}
+
+// reportProgress emits quantitative progress within the current phase.
+// Called from ingest after each chunk.
+func (p *Pipeline) reportProgress(phase string, done, total int64) {
+	if p.config.OnProgress != nil {
+		p.config.OnProgress(phase, done, total)
+	}
+}
+
 // NewPipeline creates a new external sort pipeline.
 func NewPipeline(config Config, s3Client *s3fetch.Client) *Pipeline {
 	// Ensure memory budget is set
@@ -72,12 +90,12 @@ func NewPipeline(config Config, s3Client *s3fetch.Client) *Pipeline {
 // Run executes the full pipeline.
 func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result, error) {
 	p.startTime = time.Now()
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 
 	// Start memory diagnostics
 	p.memTracker.Start()
 	defer p.memTracker.Stop()
-	p.memTracker.SetPhase("init")
+	p.setPhase("initializing")
 
 	tempDir := p.config.TempDir
 	if tempDir == "" {
@@ -108,12 +126,13 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Str("index_budget", humanfmt.Bytes(p.config.IndexBuildBudget())).
 		Msg("pipeline starting")
 
-	p.memTracker.SetPhase("ingest")
+	p.setPhase("downloading")
 	ingestStart := time.Now()
 	if err := p.runIngestPhase(ctx, manifestURI); err != nil {
 		if errors.Is(err, context.Canceled) {
 			log.Warn().Msg("pipeline cancelled during ingest phase")
 		}
+
 		return nil, fmt.Errorf("ingest phase: %w", err)
 	}
 	ingestDuration := time.Since(ingestStart)
@@ -131,15 +150,17 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Dur("duration_ms", ingestDuration).
 		Msg("ingest phase complete")
 
-	p.memTracker.SetPhase("merge")
+	p.setPhase("building")
 	mergeStart := time.Now()
-	prefixCount, maxDepth, err := p.runMergeBuildPhase(ctx, outDir)
+	mergeRes, err := p.runMergeBuildPhase(ctx, outDir)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			log.Warn().Msg("pipeline cancelled during merge phase")
 		}
+
 		return nil, fmt.Errorf("merge/build phase: %w", err)
 	}
+	prefixCount, maxDepth := mergeRes.PrefixCount, mergeRes.MaxDepth
 	mergeDuration := time.Since(mergeStart)
 
 	// Force GC after merge
@@ -216,7 +237,9 @@ type objectRecord struct {
 // avoid repeated slice growth during parsing.
 func estimateObjectCount(fileSize int64, format s3fetch.InventoryFormat) int {
 	const (
-		minCapacity = 10000 // Minimum capacity to avoid tiny allocations
+		minCapacity = 10_000 // Minimum capacity to avoid tiny allocations
+		// Upper bound to prevent absurd preallocations even for huge files.
+		maxCapacity = 10_000_000
 
 		// CSV inventory: each row is ~100-200 bytes uncompressed.
 		// S3 inventory CSVs are gzip-compressed with ~8x ratio.
@@ -243,9 +266,10 @@ func estimateObjectCount(fileSize int64, format s3fetch.InventoryFormat) int {
 	if estimate < int64(minCapacity) {
 		return minCapacity
 	}
-	if estimate > 10_000_000 { // Cap at 10M to prevent excessive preallocation
-		return 10_000_000
+	if estimate > maxCapacity {
+		return maxCapacity
 	}
+
 	return int(estimate)
 }
 
@@ -265,7 +289,7 @@ type ingestConfig struct {
 // runIngestPhase streams S3 inventory and creates sorted run files.
 // It uses concurrent workers to download and parse chunks in parallel.
 func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error {
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 
 	cfg, err := p.setupIngestConfig(ctx, manifestURI)
 	if err != nil {
@@ -283,14 +307,14 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 
 // setupIngestConfig parses the manifest and computes configuration.
 func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*ingestConfig, error) {
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 
-	bucket, key, err := s3fetch.ParseS3URI(manifestURI)
+	parsed, err := s3fetch.ParseS3URI(manifestURI)
 	if err != nil {
 		return nil, fmt.Errorf("parse manifest URI: %w", err)
 	}
 
-	manifest, err := p.s3Client.FetchManifest(ctx, bucket, key)
+	manifest, err := p.s3Client.FetchManifest(ctx, parsed.Bucket, parsed.Key)
 	if err != nil {
 		return nil, fmt.Errorf("fetch manifest: %w", err)
 	}
@@ -309,6 +333,10 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 		return nil, fmt.Errorf("get destination bucket: %w", err)
 	}
 
+	// LPT scheduling: sort manifest files largest-first so the tail of the
+	// ingest doesn't leave most workers idle behind one big chunk.
+	sortFilesLargestFirst(manifest)
+
 	numWorkers := p.computeWorkerCount(log)
 
 	return &ingestConfig{
@@ -324,16 +352,37 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 	}, nil
 }
 
+// sortFilesLargestFirst reorders manifest.Files by Size DESC so that
+// large chunks land at the head of the work queue. This is the
+// classic Longest-Processing-Time-first heuristic for makespan: the
+// last worker to start a job finishes near the median rather than
+// being stuck on the only remaining giant chunk.
+func sortFilesLargestFirst(manifest *s3fetch.Manifest) {
+	if manifest == nil || len(manifest.Files) < 2 {
+		return
+	}
+	files := manifest.Files
+	// Insertion sort is fine — manifests have at most a few hundred files.
+	for i := 1; i < len(files); i++ {
+		j := i
+		for j > 0 && files[j-1].Size < files[j].Size {
+			files[j-1], files[j] = files[j], files[j-1]
+			j--
+		}
+	}
+}
+
 // formatString returns a human-readable format name.
 func (c *ingestConfig) formatString() string {
 	if c.format == s3fetch.InventoryFormatParquet {
 		return "Parquet"
 	}
+
 	return "CSV"
 }
 
 // computeWorkerCount calculates the number of workers based on memory budget.
-func (p *Pipeline) computeWorkerCount(log zerolog.Logger) int {
+func (p *Pipeline) computeWorkerCount(log *zerolog.Logger) int {
 	numWorkers := p.config.S3DownloadConcurrency
 	if numWorkers <= 0 {
 		numWorkers = runtime.NumCPU()
@@ -349,10 +398,7 @@ func (p *Pipeline) computeWorkerCount(log zerolog.Logger) int {
 		p.config.MemoryBudget.RunBufferBudget() - p.config.MemoryBudget.MergeBudget() -
 		p.config.MemoryBudget.IndexBuildBudget()
 
-	maxWorkersFromBudget := int(headroom / bytesPerWorkerInFlight)
-	if maxWorkersFromBudget < 2 {
-		maxWorkersFromBudget = 2
-	}
+	maxWorkersFromBudget := max(int(headroom/bytesPerWorkerInFlight), 2)
 
 	if numWorkers > maxWorkersFromBudget {
 		log.Warn().
@@ -363,12 +409,13 @@ func (p *Pipeline) computeWorkerCount(log zerolog.Logger) int {
 			Msg("reducing worker count to fit memory budget")
 		numWorkers = maxWorkersFromBudget
 	}
+
 	return numWorkers
 }
 
 // runIngestLoop runs the main ingest loop with worker coordination.
 func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 	totalChunks := len(cfg.manifest.Files)
 
 	jobs := make(chan chunkJob, cfg.numWorkers)
@@ -380,11 +427,9 @@ func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
 	// Start workers
 	var wg sync.WaitGroup
 	for range cfg.numWorkers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			p.chunkWorker(ctx, jobs, results)
-		}()
+		})
 	}
 
 	// Start job sender
@@ -427,12 +472,13 @@ func (p *Pipeline) sendIngestJobs(ctx context.Context, cfg *ingestConfig, jobs c
 // processIngestResults processes results from workers and aggregates data.
 func (p *Pipeline) processIngestResults(
 	ctx context.Context,
-	log zerolog.Logger,
+	log *zerolog.Logger,
 	results <-chan objectBatch,
 	cancel context.CancelFunc,
 	totalChunks int,
 ) error {
-	agg := NewAggregator(10000, p.config.MaxDepth)
+	const initialAggCapacity = 10_000
+	agg := NewAggregator(initialAggCapacity, p.config.MaxDepth)
 	progressInterval := max(totalChunks/10, 1)
 	var firstErr error
 
@@ -447,17 +493,18 @@ func (p *Pipeline) processIngestResults(
 			for range results {
 				continue
 			}
+
 			return firstErr
 		default:
 		}
 
-		batchErr, flushErr := p.handleIngestBatch(ctx, log, agg, batch, totalChunks, progressInterval)
-		if batchErr != nil && firstErr == nil {
-			firstErr = batchErr
+		res := p.handleIngestBatch(ctx, log, agg, batch, totalChunks, progressInterval)
+		if res.BatchErr != nil && firstErr == nil {
+			firstErr = res.BatchErr
 			cancel()
 		}
-		if flushErr != nil {
-			return flushErr
+		if res.FlushErr != nil {
+			return res.FlushErr
 		}
 	}
 
@@ -474,19 +521,26 @@ func (p *Pipeline) processIngestResults(
 	return nil
 }
 
+// ingestBatchResult reports the outcome of processing a single ingest
+// batch. BatchErr records the batch's own (non-fatal) error so the caller
+// can fold it into firstErr. FlushErr is fatal: the caller must abort
+// the ingest loop on a non-nil FlushErr.
+type ingestBatchResult struct {
+	BatchErr error
+	FlushErr error
+}
+
 // handleIngestBatch processes a single batch of objects.
-// Returns (batchErr, flushErr) where batchErr is the batch's own error (if any),
-// and flushErr is set if flushing to disk failed.
 func (p *Pipeline) handleIngestBatch(
 	ctx context.Context,
-	log zerolog.Logger,
+	log *zerolog.Logger,
 	agg *Aggregator,
 	batch objectBatch,
 	totalChunks int,
 	progressInterval int,
-) (batchErr, flushErr error) {
+) ingestBatchResult {
 	if batch.err != nil {
-		return batch.err, nil
+		return ingestBatchResult{BatchErr: batch.err}
 	}
 
 	for _, obj := range batch.objects {
@@ -498,6 +552,10 @@ func (p *Pipeline) handleIngestBatch(
 	atomic.AddInt64(&p.chunksProcessed, 1)
 	chunkNum := int(atomic.LoadInt64(&p.chunksProcessed))
 
+	// Emit progress on every chunk so the UI can render a useful ETA;
+	// the per-N log line is still throttled by progressInterval.
+	p.reportProgress("downloading", int64(chunkNum), int64(totalChunks))
+
 	if chunkNum%progressInterval == 0 || chunkNum == totalChunks {
 		p.logIngestProgress(log, chunkNum, totalChunks)
 	}
@@ -506,21 +564,22 @@ func (p *Pipeline) handleIngestBatch(
 	if ShouldFlush(heapThreshold) {
 		p.memTracker.LogNow("pre_flush")
 		if err := p.flushAggregator(ctx, agg); err != nil {
-			return nil, fmt.Errorf("flush aggregator: %w", err)
+			return ingestBatchResult{FlushErr: fmt.Errorf("flush aggregator: %w", err)}
 		}
 		runtime.GC()
 		p.memTracker.LogNow("post_flush_gc")
 	}
 
-	return nil, nil
+	return ingestBatchResult{}
 }
 
 // logIngestProgress logs progress information.
-func (p *Pipeline) logIngestProgress(log zerolog.Logger, chunkNum, totalChunks int) {
+func (p *Pipeline) logIngestProgress(log *zerolog.Logger, chunkNum, totalChunks int) {
 	elapsed := time.Since(p.startTime)
 	avgPerChunk := elapsed / time.Duration(chunkNum)
 	remaining := time.Duration(totalChunks-chunkNum) * avgPerChunk
-	pct := float64(chunkNum) * 100.0 / float64(totalChunks)
+	const percentScale = 100.0
+	pct := float64(chunkNum) * percentScale / float64(totalChunks)
 
 	log.Info().
 		Int("chunk_num", chunkNum).
@@ -552,6 +611,7 @@ func (p *Pipeline) chunkWorker(ctx context.Context, jobs <-chan chunkJob, result
 			case results <- objectBatch{err: fmt.Errorf("chunk %d: %w", job.index, err)}:
 			case <-ctx.Done():
 			}
+
 			continue
 		}
 
@@ -585,6 +645,7 @@ func createInventoryReader(body io.ReadCloser, key string, cfg chunkConfig) (inv
 	if cfg.format == s3fetch.InventoryFormatParquet {
 		return createParquetReader(body, cfg.fileSize)
 	}
+
 	return createCSVReader(body, key, cfg)
 }
 
@@ -600,6 +661,7 @@ func createParquetReader(body io.ReadCloser, fileSize int64) (inventory.Inventor
 			if err != nil {
 				return nil, fmt.Errorf("create parquet reader from readerAt: %w", err)
 			}
+
 			return reader, nil
 		}
 	}
@@ -608,6 +670,7 @@ func createParquetReader(body io.ReadCloser, fileSize int64) (inventory.Inventor
 	if err != nil {
 		return nil, fmt.Errorf("create parquet reader from stream: %w", err)
 	}
+
 	return reader, nil
 }
 
@@ -623,6 +686,7 @@ func createCSVReader(body io.ReadCloser, key string, cfg chunkConfig) (inventory
 	if err != nil {
 		return nil, fmt.Errorf("create csv reader: %w", err)
 	}
+
 	return reader, nil
 }
 
@@ -630,7 +694,7 @@ func createCSVReader(body io.ReadCloser, key string, cfg chunkConfig) (inventory
 // Uses the S3 Download Manager for parallel range downloads to maximize throughput.
 func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, cfg chunkConfig, capacityHint int) ([]objectRecord, *chunkTiming, error) {
 	timing := &chunkTiming{}
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 
 	// Download phase using S3 Download Manager (parallel range downloads)
 	body, dlResult, err := p.s3Client.DownloadObject(ctx, bucket, key)
@@ -677,7 +741,7 @@ func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, 
 			continue
 		}
 
-		tierID := cfg.tierMapping.FromS3(row.StorageClass, row.AccessTier)
+		tierID := tiers.Resolve(cfg.tierMapping.FromS3(row.StorageClass, row.AccessTier), row.Size)
 		objects = append(objects, objectRecord{
 			key:    row.Key,
 			size:   row.Size,
@@ -701,7 +765,7 @@ func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, 
 
 // flushAggregator drains the aggregator to a sorted run file.
 func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
-	log := logctx.FromContext(ctx)
+	log := zerolog.Ctx(ctx)
 	start := time.Now()
 
 	rows := agg.Drain()
@@ -741,6 +805,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 		if err := writer.WriteSorted(rows); err != nil {
 			writer.Close()
 			os.Remove(runPath)
+
 			return fmt.Errorf("write sorted: %w", err)
 		}
 		writeErr = writer.Close()
@@ -752,6 +817,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 		if err := writer.WriteSorted(rows); err != nil {
 			writer.Close()
 			os.Remove(runPath)
+
 			return fmt.Errorf("write sorted: %w", err)
 		}
 		writeErr = writer.Close()
@@ -759,14 +825,17 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 
 	if writeErr != nil {
 		os.Remove(runPath)
+
 		return fmt.Errorf("close run file: %w", writeErr)
 	}
 
 	p.runFiles = append(p.runFiles, runPath)
 	p.flushCount++
 
-	// Log flush with memory stats
-	aggMemory := int64(len(rows)) * 288 // Estimated bytes used before flush
+	// Log flush with memory stats. Empirically each PrefixStats slot uses
+	// ~288 bytes (depth + counts + per-tier arrays) inside the aggregator.
+	const bytesPerAggregatorEntry = 288
+	aggMemory := int64(len(rows)) * bytesPerAggregatorEntry
 	flushDuration := time.Since(start)
 	log.Info().
 		Int("run_index", p.runCount-1).
@@ -782,14 +851,20 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 	return nil
 }
 
+// mergeBuildResult is the output of runMergeBuildPhase.
+type mergeBuildResult struct {
+	PrefixCount uint64
+	MaxDepth    uint32
+}
+
 // runMergeBuildPhase merges run files and builds the index.
-func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefixCount uint64, maxDepth uint32, err error) {
-	log := logctx.FromContext(ctx)
+func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (mergeBuildResult, error) {
+	log := zerolog.Ctx(ctx)
 
 	// Check for cancellation before starting
 	select {
 	case <-ctx.Done():
-		return 0, 0, fmt.Errorf("merge phase cancelled: %w", ctx.Err())
+		return mergeBuildResult{}, fmt.Errorf("merge phase cancelled: %w", ctx.Err())
 	default:
 	}
 
@@ -797,12 +872,13 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 		log.Info().Msg("no run files to merge, creating empty index")
 		builder, err := NewIndexBuilder(outDir, p.config.TempDir, p.config.UseSegmentEncoding)
 		if err != nil {
-			return 0, 0, fmt.Errorf("create index builder: %w", err)
+			return mergeBuildResult{}, fmt.Errorf("create index builder: %w", err)
 		}
 		if err := builder.FinalizeWithContext(ctx); err != nil {
-			return 0, 0, fmt.Errorf("finalize empty index: %w", err)
+			return mergeBuildResult{}, fmt.Errorf("finalize empty index: %w", err)
 		}
-		return 0, 0, nil
+
+		return mergeBuildResult{}, nil
 	}
 
 	// Calculate per-reader buffer size for merge
@@ -851,14 +927,14 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 		var mergeErr error
 		finalRunPath, mergeErr = parallelMerger.MergeAll(ctx, p.runFiles)
 		if mergeErr != nil {
-			return 0, 0, fmt.Errorf("parallel merge: %w", mergeErr)
+			return mergeBuildResult{}, fmt.Errorf("parallel merge: %w", mergeErr)
 		}
 
-		rounds, totalTime, bytesWritten := parallelMerger.Statistics()
+		stats := parallelMerger.Statistics()
 		log.Info().
-			Int("merge_rounds", rounds).
-			Str("merge_duration", humanfmt.Duration(totalTime)).
-			Str("bytes_written", humanfmt.Bytes(bytesWritten)).
+			Int("merge_rounds", stats.Rounds).
+			Str("merge_duration", humanfmt.Duration(stats.TotalMergeTime)).
+			Str("bytes_written", humanfmt.Bytes(stats.BytesWritten)).
 			Msg("parallel merge complete")
 
 		cleanupIntermediates = func() {
@@ -883,14 +959,14 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 	// Open final merged run for index building
 	reader, err := OpenRunFileAuto(finalRunPath, int(perReaderBuffer))
 	if err != nil {
-		return 0, 0, fmt.Errorf("open merged run: %w", err)
+		return mergeBuildResult{}, fmt.Errorf("open merged run: %w", err)
 	}
 
 	// Create iterator adapter for index builder
 	mergeIter := &singleRunIterator{reader: reader}
 
 	// Use prefix count from run file header to pre-size index builder arrays
-	prefixCount = reader.Count()
+	prefixCount := reader.Count()
 	log.Debug().
 		Uint64("prefix_count", prefixCount).
 		Msg("index build starting")
@@ -898,35 +974,41 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (prefi
 	builder, err := NewIndexBuilderWithCapacity(outDir, p.config.TempDir, prefixCount, p.config.UseSegmentEncoding)
 	if err != nil {
 		reader.Close()
-		return 0, 0, fmt.Errorf("create index builder: %w", err)
+
+		return mergeBuildResult{}, fmt.Errorf("create index builder: %w", err)
 	}
 
 	if err := builder.AddAllWithContext(ctx, mergeIter); err != nil {
 		builder.cleanup()
-		return 0, 0, fmt.Errorf("build index: %w", err)
+
+		return mergeBuildResult{}, fmt.Errorf("build index: %w", err)
 	}
 
 	if err := builder.FinalizeWithContext(ctx); err != nil {
-		return 0, 0, fmt.Errorf("finalize index: %w", err)
+		return mergeBuildResult{}, fmt.Errorf("finalize index: %w", err)
 	}
 
-	return builder.Count(), builder.MaxDepth(), nil
+	return mergeBuildResult{PrefixCount: builder.Count(), MaxDepth: builder.MaxDepth()}, nil
 }
 
 // singleRunIterator wraps a RunReader to implement the iterator interface expected by IndexBuilder.
+// Reuses one PrefixRow across all Next() calls — caller must consume the
+// returned row before calling Next again. IndexBuilder.Add does this.
 type singleRunIterator struct {
 	reader RunReader
+	row    PrefixRow
 }
 
 func (s *singleRunIterator) Next() (*PrefixRow, error) {
-	row, err := s.reader.Read()
-	if err != nil {
+	if err := s.reader.ReadInto(&s.row); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
+
 		return nil, fmt.Errorf("read from run: %w", err)
 	}
-	return row, nil
+
+	return &s.row, nil
 }
 
 func (s *singleRunIterator) Remaining() uint64 {
@@ -937,6 +1019,7 @@ func (s *singleRunIterator) Close() error {
 	if err := s.reader.Close(); err != nil {
 		return fmt.Errorf("close run reader: %w", err)
 	}
+
 	return nil
 }
 
@@ -944,6 +1027,7 @@ func (s *singleRunIterator) RemoveAll() error {
 	if err := s.reader.Remove(); err != nil {
 		return fmt.Errorf("remove run file: %w", err)
 	}
+
 	return nil
 }
 

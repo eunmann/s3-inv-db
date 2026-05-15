@@ -1,118 +1,150 @@
-# s3inv-index
+# s3-inv-db
 
-A high-performance indexer for S3 inventory reports. Builds a compact, memory-mapped index that enables O(1) prefix lookups and fast subtree aggregation queries.
+High-performance indexer + HTTP server for [S3 Inventory](https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-inventory.html)
+reports. Builds a compact, memory-mapped index that answers O(1)
+prefix lookups and fast subtree aggregations, and exposes it through
+a JSON API and an HTMX SSR web UI.
 
-## Features
-
-- **O(1) prefix lookups** using minimal perfect hashing (BBHash)
-- **Memory-mapped queries** with sub-millisecond latency
-- **Bounded memory builds** via external sort with configurable budget
-- **Per-tier storage statistics** for all 12 S3 storage classes
-- **Subtree aggregation** queries by depth with filtering
-- **Pure Go** implementation with no CGO dependencies
-
-## Installation
-
-```bash
-go install github.com/eunmann/s3-inv-db/cmd/s3inv-index@latest
+```
+┌──────────┐    ┌────────────┐    ┌──────────┐    ┌─────────────────┐
+│ S3       │ →  │ build      │ →  │ mmap     │ ←  │ HTTP server     │
+│ inventory│    │ pipeline   │    │ index    │    │ + CLI + library │
+└──────────┘    └────────────┘    └──────────┘    └─────────────────┘
 ```
 
-Or build from source:
+## Quick start
 
 ```bash
 git clone https://github.com/eunmann/s3-inv-db.git
 cd s3-inv-db
-go build -o s3inv-index ./cmd/s3inv-index
+make dev        # hot-reload server + MinIO at http://localhost:8080
 ```
 
-## Quick Start
+That's the only supported dev workflow — `make dev` boots the
+[docker-compose](infra/docker-compose.yml) stack with Air watching
+`*.go` and `*.html` so edits rebuild in seconds. See
+[docs/dev.md](docs/dev.md) for the full local workflow,
+[docs/seeding.md](docs/seeding.md) for synthetic data, and
+[docs/http-api.md](docs/http-api.md) for the HTTP surface (routes,
+JSON shapes, SSE).
 
-### Build an Index
+## Build standalone binaries
 
 ```bash
-s3inv-index build \
-  --s3-manifest s3://my-bucket/inventory/data/manifest.json \
-  --out ./my-index
+make all     # bin/s3-inv-db (CLI) + bin/s3-inv-db-server
+make seeder  # bin/s3-inv-db-seeder
 ```
 
-### Query the Index
+| Binary | Purpose |
+|---|---|
+| `s3-inv-db` | CLI for `build` / `query` on a single index |
+| `s3-inv-db-server` | HTTP server: discovery, load/unload, auto-load, compare, JSON API, HTML UI |
+| `s3-inv-db-seeder` | Synthetic-data generator (local dev + integration tests) |
 
-```bash
-# Basic prefix lookup
-s3inv-index query --index ./my-index --prefix "data/2024/"
+## Configuration
 
-# With tier breakdown and cost estimate
-s3inv-index query --index ./my-index --prefix "data/2024/" \
-  --show-tiers --estimate-cost
+All three binaries accept `--config <path>` (or `S3INV_CONFIG`) pointing
+at a JSON file. Precedence: explicit CLI flag → config file → env →
+default. Example:
+
+```json
+{
+  "addr": ":8080",
+  "s3_source": "s3://my-bucket/inventory-data/",
+  "cache_dir": "/var/cache/s3inv",
+  "auto_load": true,
+  "max_index_disk": "200GB",
+  "auto_load_poll_interval": "15m",
+  "auto_load_retention_default": 3,
+  "inventories": [
+    {"source": "prod-bucket", "name": "daily-inventory", "auto_load": true, "retention_count": 5}
+  ]
+}
 ```
 
-## Architecture
+The `inventories[]` array declares per-configuration auto-load + retention; entries are upserted into the state DB at startup. Per-run pin state lives in the UI/API, not the file.
 
-The index stores prefix statistics in a columnar format optimized for memory-mapped access:
+## Library usage
 
-```
-my-index/
-├── manifest.json         # File checksums and metadata
-├── subtree_end.u64       # Preorder subtree ranges
-├── depth.u32             # Prefix depths
-├── object_count.u64      # Object counts per prefix
-├── total_bytes.u64       # Byte totals per prefix
-├── max_depth_in_subtree.u32
-├── depth_offsets.u64     # Depth index for range queries
-├── depth_positions.u64
-├── mph.bin               # BBHash MPHF
-├── mph_fp.u64            # Fingerprints for verification
-├── mph_pos.u64           # Position mapping
-├── prefix_blob.bin       # Concatenated prefix strings
-├── prefix_offsets.u64    # Offsets into prefix blob
-└── tier_stats/           # Per-tier statistics (optional)
-    ├── tier_0_count.u64
-    ├── tier_0_bytes.u64
-    └── ...
-```
-
-## Library Usage
+Read a built index directly:
 
 ```go
 import "github.com/eunmann/s3-inv-db/pkg/indexread"
 
 idx, err := indexread.Open("./my-index")
-if err != nil {
-    log.Fatal(err)
-}
-defer idx.Close()
-
-// O(1) prefix lookup
+// ...
 pos, ok := idx.Lookup("data/2024/")
-if !ok {
-    log.Fatal("prefix not found")
-}
-
-// Get statistics
-stats := idx.Stats(pos)
-fmt.Printf("Objects: %d, Bytes: %d\n", stats.ObjectCount, stats.TotalBytes)
-
-// Get tier breakdown
-if idx.HasTierData() {
-    for _, tb := range idx.TierBreakdown(pos) {
-        fmt.Printf("%s: %d objects\n", tb.TierName, tb.ObjectCount)
-    }
-}
+stats := idx.Stats(pos)  // ObjectCount, TotalBytes
 ```
+
+Or embed the full HTTP server in your own binary:
+
+```go
+import "github.com/eunmann/s3-inv-db/pkg/server"
+
+err := server.BootstrapAndRun(ctx, server.RuntimeOptions{
+    Addr:     ":8080",
+    S3Source: "s3://my-bucket/inventory-data/",
+    CacheDir: "/var/cache/s3inv",
+    Logger:   logger,
+})
+```
+
+The server exposes its chi router via `srv.Router()` so it can be mounted
+behind your own middleware. Full API in [docs/library-api.md](docs/library-api.md).
+
+## Testing & quality
+
+```bash
+make lint           # golangci-lint v2 — also runs govet, staticcheck, errcheck
+make test           # full suite in docker (MinIO-backed integration tests included)
+make test-race      # same with -race
+make cover          # write coverage.out
+make cover-summary  # total % + 20 lowest-covered functions
+make cover-html     # open coverage.html in a browser
+```
+
+`make test` boots a dedicated `minio-test` container (no host ports,
+runs side-by-side with `make dev` without colliding) and exercises the
+S3 integration paths against it. There is no host-only path — running
+`go test ./...` directly skips the dockerised setup and the integration
+tests fail by design.
+
+## Architecture
+
+Three layers, dependency direction enforced top-down:
+
+```
+HTTP        internal/{server,handlers,templates}
+              │
+Domain      internal/{inventory,s3disco,loader,jobs}
+              │
+Storage     pkg/{indexread,format,extsort,triebuild,s3fetch}
+```
+
+- The HTTP layer never reaches past the domain boundary.
+- The Inventory entity + typed `inventory.ID` live in `internal/inventory`
+  — s3disco imports inventory, not the other way around.
+- Logging is request-scoped via `zerolog` + `rs/zerolog/hlog`. No
+  custom context-logger wrapper.
+
+More in [docs/overview.md](docs/overview.md).
 
 ## Documentation
 
-- [Overview](docs/overview.md) - System design and data flow
-- [Index Format](docs/index-format.md) - On-disk format specification
-- [CLI Reference](docs/cli.md) - Command-line interface
-- [Library API](docs/library-api.md) - Go package documentation
-- [Performance](docs/performance.md) - Benchmarks and tuning
+- [Overview](docs/overview.md) — system design, data flow, package layout
+- [HTTP API](docs/http-api.md) — routes, JSON shapes, SSE, persistence
+- [Dev workflow](docs/dev.md) — docker compose, Air, MinIO
+- [Seeding](docs/seeding.md) — synthetic-data generation
+- [CLI](docs/cli.md) — `s3-inv-db build` / `query`
+- [Library API](docs/library-api.md) — Go package reference
+- [Index format](docs/index-format.md) — on-disk layout
+- [Performance](docs/performance.md) — benchmarks and tuning
 
 ## Requirements
 
-- Go 1.21+
-- AWS credentials configured for S3 access (build only)
-- S3 inventory configured in CSV or Parquet format
+Go 1.25+, AWS credentials for build-time S3 access, Docker for the
+dev/test stack.
 
 ## License
 

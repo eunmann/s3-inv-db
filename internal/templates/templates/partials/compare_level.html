@@ -1,0 +1,254 @@
+{{$from := .From}}
+{{$to := .To}}
+<div class="space-y-6">
+    <nav class="flex items-center flex-wrap text-sm" aria-label="Breadcrumb">
+        {{range $i, $c := .Breadcrumbs}}
+            {{if $i}}<span class="mx-2 text-gray-300 dark:text-gray-600">/</span>{{end}}
+            {{if eq $i (sub (len $.Breadcrumbs) 1)}}
+            <span aria-current="page" class="font-semibold text-gray-900 dark:text-gray-100">{{$c.Label}}</span>
+            {{else}}
+            <button type="button"
+                hx-get="/compare"
+                hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $c.Prefix}}"
+                hx-target="#compare-target"
+                hx-push-url="true"
+                class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline">
+                {{$c.Label}}
+            </button>
+            {{end}}
+        {{end}}
+    </nav>
+
+    {{if .Level.NotFound}}
+    <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-900/50 rounded-md p-6 text-center">
+        <h3 class="text-base font-medium text-yellow-900 dark:text-yellow-200">Prefix not present in either run</h3>
+        <p class="mt-2 text-sm text-yellow-800 dark:text-yellow-300">
+            <code class="bg-yellow-100 dark:bg-yellow-900/50 px-1.5 py-0.5 rounded">{{if .Prefix}}{{.Prefix}}{{else}}(root){{end}}</code>
+            doesn't exist in either the From or To run. Try a shorter prefix or jump back to a parent.
+        </p>
+        <div class="mt-4">
+            <button type="button"
+                hx-get="/compare"
+                hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" ""}}"
+                hx-target="#compare-target"
+                hx-push-url="true"
+                class="inline-flex items-center px-3 py-1.5 border border-yellow-300 dark:border-yellow-800 rounded-md bg-white dark:bg-gray-800 text-sm font-medium text-yellow-800 dark:text-yellow-300 hover:bg-yellow-50 dark:hover:bg-gray-700">
+                Back to root
+            </button>
+        </div>
+    </div>
+    {{else}}
+
+    <!-- Self-stats card -->
+    <section class="bg-white dark:bg-gray-800 shadow sm:rounded-lg">
+        <div class="px-4 py-5 sm:px-6">
+            <h2 class="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">
+                At {{if .Prefix}}<code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-2 py-1 rounded">{{.Prefix}}</code>{{else}}<span>the root</span>{{end}}
+            </h2>
+        </div>
+        <dl class="border-t border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
+            {{with .Level.Self}}
+            <div class="px-4 py-3 sm:px-6 grid grid-cols-1 sm:grid-cols-4 gap-2 items-baseline">
+                <dt class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Objects</dt>
+                <dd class="text-sm text-gray-700 dark:text-gray-200 font-mono">{{.ObjectsBeforeH}} <span class="text-gray-400 dark:text-gray-500">→</span> {{.ObjectsAfterH}}</dd>
+                <dd class="text-sm font-mono {{if eq .ObjectsSign 1}}text-green-600 dark:text-green-400{{else if eq .ObjectsSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.ObjectsDeltaH}}</dd>
+                <dd class="text-sm font-mono {{if eq .ObjectsSign 1}}text-green-600 dark:text-green-400{{else if eq .ObjectsSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-400 dark:text-gray-500{{end}}">{{.ObjectsPct}}</dd>
+            </div>
+            <div class="px-4 py-3 sm:px-6 grid grid-cols-1 sm:grid-cols-4 gap-2 items-baseline">
+                <dt class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Size</dt>
+                <dd class="text-sm text-gray-700 dark:text-gray-200 font-mono">{{.BytesBeforeH}} <span class="text-gray-400 dark:text-gray-500">→</span> {{.BytesAfterH}}</dd>
+                <dd class="text-sm font-mono {{if eq .BytesSign 1}}text-green-600 dark:text-green-400{{else if eq .BytesSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.BytesDeltaH}}</dd>
+                <dd class="text-sm font-mono {{if eq .BytesSign 1}}text-green-600 dark:text-green-400{{else if eq .BytesSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-400 dark:text-gray-500{{end}}">{{.BytesPct}}</dd>
+            </div>
+            {{if .HasCost}}
+            <div class="px-4 py-3 sm:px-6 grid grid-cols-1 sm:grid-cols-4 gap-2 items-baseline">
+                <dt class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Cost / month</dt>
+                <dd class="text-sm text-gray-700 dark:text-gray-200 font-mono">{{.CostBeforeH}} <span class="text-gray-400 dark:text-gray-500">→</span> {{.CostAfterH}}</dd>
+                <dd class="text-sm font-mono {{if eq .CostSign 1}}text-green-600 dark:text-green-400{{else if eq .CostSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.CostDeltaH}}</dd>
+                <dd class="text-sm font-mono {{if eq .CostSign 1}}text-green-600 dark:text-green-400{{else if eq .CostSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-400 dark:text-gray-500{{end}}">{{.CostPct}}</dd>
+            </div>
+            {{end}}
+            <div class="px-4 py-3 sm:px-6 grid grid-cols-1 sm:grid-cols-4 gap-2 items-baseline">
+                <dt class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">PUT API <span class="normal-case text-gray-400 dark:text-gray-500">(one-time)</span></dt>
+                <dd class="text-sm text-gray-700 dark:text-gray-200 font-mono">{{.APICostBeforeH}} <span class="text-gray-400 dark:text-gray-500">→</span> {{.APICostAfterH}}</dd>
+                <dd class="text-sm font-mono {{if eq .APICostSign 1}}text-green-600 dark:text-green-400{{else if eq .APICostSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.APICostDeltaH}}</dd>
+                <dd class="text-sm font-mono {{if eq .APICostSign 1}}text-green-600 dark:text-green-400{{else if eq .APICostSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-400 dark:text-gray-500{{end}}">{{.APICostPct}}</dd>
+            </div>
+            {{end}}
+        </dl>
+    </section>
+
+    <!-- Children -->
+    <section class="bg-white dark:bg-gray-800 shadow sm:rounded-lg">
+        <header class="px-4 py-4 sm:px-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-4 flex-wrap">
+            <div>
+                <h3 class="text-md font-medium text-gray-900 dark:text-gray-100">Children</h3>
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    {{if .Level.TotalChildren}}Showing {{.Level.Pagination.FirstRow}}–{{.Level.Pagination.LastRow}} of {{.Level.TotalChildren}}{{else}}No children to show.{{end}}
+                </p>
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    <span class="text-green-700 dark:text-green-400">{{.Level.Status.Added}} added</span> ·
+                    <span class="text-red-700 dark:text-red-400">{{.Level.Status.Removed}} removed</span> ·
+                    <span class="text-yellow-700 dark:text-yellow-400">{{.Level.Status.Changed}} changed</span> ·
+                    <span class="text-gray-500 dark:text-gray-400">{{.Level.Status.Unchanged}} unchanged</span>
+                </p>
+            </div>
+            <div class="flex items-center gap-4">
+                {{$sort := .Level.Sort}}
+                {{$dir := .Level.Dir}}
+                <label class="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                    <input type="checkbox"
+                        hx-get="/compare"
+                        {{if .Level.HideUnchanged}}
+                        hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "show_unchanged" "true"}}"
+                        {{else}}
+                        hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "show_unchanged" "false"}}" checked
+                        {{end}}
+                        hx-target="#compare-target"
+                        hx-push-url="true"
+                        class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500">
+                    Show unchanged
+                </label>
+                {{if gt .Level.Pagination.Pages 1}}
+                <div class="flex items-center gap-2 text-sm">
+                    {{if .Level.Pagination.PrevPage}}
+                    <button type="button"
+                        hx-get="/compare"
+                        hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "page" .Level.Pagination.PrevPage}}"
+                        hx-target="#compare-target"
+                        hx-push-url="true"
+                        class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">← Prev</button>
+                    {{else}}
+                    <span class="px-3 py-1 border border-gray-200 dark:border-gray-700 rounded text-gray-300 dark:text-gray-600 cursor-not-allowed">← Prev</span>
+                    {{end}}
+                    <span class="text-gray-500 dark:text-gray-400">Page {{.Level.Pagination.Page}} of {{.Level.Pagination.Pages}}</span>
+                    {{if .Level.Pagination.NextPage}}
+                    <button type="button"
+                        hx-get="/compare"
+                        hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "page" .Level.Pagination.NextPage}}"
+                        hx-target="#compare-target"
+                        hx-push-url="true"
+                        class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">Next →</button>
+                    {{else}}
+                    <span class="px-3 py-1 border border-gray-200 dark:border-gray-700 rounded text-gray-300 dark:text-gray-600 cursor-not-allowed">Next →</span>
+                    {{end}}
+                </div>
+                {{end}}
+            </div>
+        </header>
+        {{if .Level.Children}}
+        {{$statusLink := index .Level.SortLinks "status"}}
+        {{$segLink := index .Level.SortLinks "segment"}}
+        {{$objLink := index .Level.SortLinks "objects"}}
+        {{$sizeLink := index .Level.SortLinks "size"}}
+        {{$costLink := index .Level.SortLinks "cost"}}
+        <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+            <thead class="bg-gray-50 dark:bg-gray-900/30">
+                <tr>
+                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <button type="button"
+                            hx-get="/compare"
+                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $statusLink.Sort "dir" $statusLink.Dir}}"
+                            hx-target="#compare-target"
+                            hx-push-url="true"
+                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
+                            Status {{$statusLink.Indicator}}
+                        </button>
+                    </th>
+                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <button type="button"
+                            hx-get="/compare"
+                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $segLink.Sort "dir" $segLink.Dir}}"
+                            hx-target="#compare-target"
+                            hx-push-url="true"
+                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
+                            Segment {{$segLink.Indicator}}
+                        </button>
+                    </th>
+                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <button type="button"
+                            hx-get="/compare"
+                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $objLink.Sort "dir" $objLink.Dir}}"
+                            hx-target="#compare-target"
+                            hx-push-url="true"
+                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
+                            Objects {{$objLink.Indicator}}
+                        </button>
+                    </th>
+                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <button type="button"
+                            hx-get="/compare"
+                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $sizeLink.Sort "dir" $sizeLink.Dir}}"
+                            hx-target="#compare-target"
+                            hx-push-url="true"
+                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
+                            Size {{$sizeLink.Indicator}}
+                        </button>
+                    </th>
+                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <button type="button"
+                            hx-get="/compare"
+                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $costLink.Sort "dir" $costLink.Dir}}"
+                            hx-target="#compare-target"
+                            hx-push-url="true"
+                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
+                            Cost / mo {{$costLink.Indicator}}
+                        </button>
+                    </th>
+                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider" title="One-time PUT API cost at $0.005 per 1,000 PUTs (us-east-1)">PUT API</th>
+                    <th class="px-4 py-3 sm:px-6"></th>
+                </tr>
+            </thead>
+            <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                {{range .Level.Children}}
+                <tr>
+                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap">
+                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{compareStatusClass .Status}}">{{.Status}}</span>
+                    </td>
+                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap">
+                        {{if .HasChildren}}
+                        <button type="button"
+                            hx-get="/compare"
+                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" .Prefix}}"
+                            hx-target="#compare-target"
+                            hx-push-url="true"
+                            class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+                            📁 {{.Segment}}/
+                        </button>
+                        {{else}}
+                        <span class="text-sm font-medium text-gray-700 dark:text-gray-200">📄 {{.Segment}}</span>
+                        {{end}}
+                    </td>
+                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap font-mono text-gray-700 dark:text-gray-200">
+                        <div class="text-xs text-gray-500 dark:text-gray-400">{{.ObjectsBeforeH}} → {{.ObjectsAfterH}}</div>
+                        <div class="{{if eq .ObjectsSign 1}}text-green-600 dark:text-green-400{{else if eq .ObjectsSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.ObjectsDeltaH}}{{if .ObjectsPct}} <span class="text-xs">({{.ObjectsPct}})</span>{{end}}</div>
+                    </td>
+                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap font-mono text-gray-700 dark:text-gray-200">
+                        <div class="text-xs text-gray-500 dark:text-gray-400">{{.BytesBeforeH}} → {{.BytesAfterH}}</div>
+                        <div class="{{if eq .BytesSign 1}}text-green-600 dark:text-green-400{{else if eq .BytesSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.BytesDeltaH}}{{if .BytesPct}} <span class="text-xs">({{.BytesPct}})</span>{{end}}</div>
+                    </td>
+                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap font-mono text-gray-700 dark:text-gray-200">
+                        {{if .HasCost}}
+                        <div class="text-xs text-gray-500 dark:text-gray-400">{{.CostBeforeH}} → {{.CostAfterH}}</div>
+                        <div class="{{if eq .CostSign 1}}text-green-600 dark:text-green-400{{else if eq .CostSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.CostDeltaH}}{{if .CostPct}} <span class="text-xs">({{.CostPct}})</span>{{end}}</div>
+                        {{else}}<span class="text-gray-400 dark:text-gray-500">—</span>{{end}}
+                    </td>
+                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap font-mono text-gray-700 dark:text-gray-200">
+                        <div class="text-xs text-gray-500 dark:text-gray-400">{{.APICostBeforeH}} → {{.APICostAfterH}}</div>
+                        <div class="{{if eq .APICostSign 1}}text-green-600 dark:text-green-400{{else if eq .APICostSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.APICostDeltaH}}{{if .APICostPct}} <span class="text-xs">({{.APICostPct}})</span>{{end}}</div>
+                    </td>
+                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap text-right text-gray-400 dark:text-gray-500" aria-hidden="true">
+                        {{if .HasChildren}}→{{end}}
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{else}}
+        <div class="px-4 py-8 sm:px-6 text-sm text-gray-500 dark:text-gray-400 text-center">
+            {{if .Level.HideUnchanged}}No changes at this prefix. Toggle "Show unchanged" to see all children.{{else}}No children under this prefix.{{end}}
+        </div>
+        {{end}}
+    </section>
+    {{end}}
+</div>

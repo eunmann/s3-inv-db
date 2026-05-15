@@ -82,6 +82,7 @@ func OpenFileWithOptions(path string, opts OpenOptions) (*CSVReader, error) {
 		gzr, err := gzip.NewReader(reader)
 		if err != nil {
 			f.Close()
+
 			return nil, fmt.Errorf("create gzip reader: %w", err)
 		}
 		closers = append(closers, gzr)
@@ -98,6 +99,7 @@ func OpenFileWithOptions(path string, opts OpenOptions) (*CSVReader, error) {
 		for _, c := range closers {
 			c.Close()
 		}
+
 		return nil, fmt.Errorf("read CSV header: %w", err)
 	}
 
@@ -125,12 +127,14 @@ func OpenFileWithOptions(path string, opts OpenOptions) (*CSVReader, error) {
 		for _, c := range closers {
 			c.Close()
 		}
+
 		return nil, ErrNoKeyColumn
 	}
 	if sizeCol < 0 {
 		for _, c := range closers {
 			c.Close()
 		}
+
 		return nil, ErrNoSizeColumn
 	}
 
@@ -217,6 +221,7 @@ func OpenFileWithSchemaOptions(path string, opts SchemaOptions) (*CSVReader, err
 		gzr, err := gzip.NewReader(reader)
 		if err != nil {
 			f.Close()
+
 			return nil, fmt.Errorf("create gzip reader: %w", err)
 		}
 		closers = append(closers, gzr)
@@ -254,6 +259,7 @@ func (r *CSVReader) Read() (Record, error) {
 			if errors.Is(err, io.EOF) {
 				return Record{}, io.EOF
 			}
+
 			return Record{}, fmt.Errorf("read CSV row: %w", err)
 		}
 
@@ -289,7 +295,7 @@ func (r *CSVReader) Read() (Record, error) {
 				accessTier = fields[r.accessTierCol]
 			}
 
-			rec.TierID = r.tierMapping.FromS3(storageClass, accessTier)
+			rec.TierID = tiers.Resolve(r.tierMapping.FromS3(storageClass, accessTier), size)
 		}
 
 		return rec, nil
@@ -305,5 +311,6 @@ func (r *CSVReader) Close() error {
 			firstErr = err
 		}
 	}
+
 	return firstErr
 }

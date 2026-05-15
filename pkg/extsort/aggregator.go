@@ -28,10 +28,11 @@ func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 		// Each prefix entry uses ~300 bytes (map overhead + PrefixStats)
 		initialCapacity = 10000
 	}
+
 	return &Aggregator{
 		prefixes: make(map[string]*PrefixStats, initialCapacity),
 		statsPool: sync.Pool{
-			New: func() interface{} {
+			New: func() any {
 				return &PrefixStats{}
 			},
 		},
@@ -107,6 +108,7 @@ func (a *Aggregator) EstimatedMemoryUsage() int64 {
 	// - String allocations being larger
 	// - Memory fragmentation
 	const bytesPerPrefix = 288
+
 	return int64(len(a.prefixes)) * bytesPerPrefix
 }
 
@@ -115,6 +117,7 @@ func (a *Aggregator) EstimatedMemoryUsage() int64 {
 func HeapAllocBytes() uint64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
+
 	return m.HeapAlloc
 }
 

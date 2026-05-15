@@ -70,6 +70,7 @@ func NewRunFileWriter(path string, bufferSize int) (*RunFileWriter, error) {
 	if _, err := w.writer.Write(header); err != nil {
 		f.Close()
 		os.Remove(path)
+
 		return nil, fmt.Errorf("write header: %w", err)
 	}
 
@@ -116,6 +117,7 @@ func (w *RunFileWriter) Write(row *PrefixRow) error {
 	}
 
 	w.count++
+
 	return nil
 }
 
@@ -126,6 +128,7 @@ func (w *RunFileWriter) WriteAll(rows []*PrefixRow) error {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -134,6 +137,7 @@ func (w *RunFileWriter) WriteSorted(rows []*PrefixRow) error {
 	slices.SortFunc(rows, func(a, b *PrefixRow) int {
 		return strings.Compare(a.Prefix, b.Prefix)
 	})
+
 	return w.WriteAll(rows)
 }
 
@@ -156,11 +160,13 @@ func (w *RunFileWriter) Close() error {
 
 	if err := w.writer.Flush(); err != nil {
 		w.file.Close()
+
 		return fmt.Errorf("flush: %w", err)
 	}
 
 	if _, err := w.file.Seek(8, 0); err != nil {
 		w.file.Close()
+
 		return fmt.Errorf("seek: %w", err)
 	}
 
@@ -168,12 +174,14 @@ func (w *RunFileWriter) Close() error {
 	binary.LittleEndian.PutUint64(countBuf[:], w.count)
 	if _, err := w.file.Write(countBuf[:]); err != nil {
 		w.file.Close()
+
 		return fmt.Errorf("update header: %w", err)
 	}
 
 	if err := w.file.Close(); err != nil {
 		return fmt.Errorf("close run file: %w", err)
 	}
+
 	return nil
 }
 
@@ -209,19 +217,22 @@ func OpenRunFile(path string, bufferSize int) (*RunFileReader, error) {
 	header := make([]byte, runFileHeader)
 	if _, err := io.ReadFull(r.reader, header); err != nil {
 		f.Close()
+
 		return nil, fmt.Errorf("read header: %w", err)
 	}
 
 	magic := binary.LittleEndian.Uint32(header[0:4])
 	if magic != runFileMagic {
 		f.Close()
-		return nil, fmt.Errorf("invalid magic: got %x, want %x", magic, runFileMagic)
+
+		return nil, fmt.Errorf("%w: got %x, want %x", ErrInvalidMagic, magic, runFileMagic)
 	}
 
 	version := binary.LittleEndian.Uint32(header[4:8])
 	if version != runFileVersion {
 		f.Close()
-		return nil, fmt.Errorf("unsupported version: %d", version)
+
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedVersion, version)
 	}
 
 	r.count = binary.LittleEndian.Uint64(header[8:16])
@@ -242,7 +253,24 @@ func (r *RunFileReader) Read() (*PrefixRow, error) {
 	}
 
 	r.read++
+
 	return row, nil
+}
+
+// ReadInto reads the next PrefixRow into the caller-owned row, avoiding
+// the per-row PrefixRow allocation in Read. The caller must ensure the
+// previous returned row is no longer in use.
+// Returns io.EOF when all records have been read.
+func (r *RunFileReader) ReadInto(into *PrefixRow) error {
+	if r.read >= r.count {
+		return io.EOF
+	}
+	if _, err := readPrefixRowRecordInto(r.reader, &r.buf, into); err != nil {
+		return err
+	}
+	r.read++
+
+	return nil
 }
 
 // Count returns the total number of records in the file.
@@ -250,7 +278,7 @@ func (r *RunFileReader) Count() uint64 {
 	return r.count
 }
 
-// Read returns the number of records read so far.
+// ReadCount returns the number of records read so far.
 func (r *RunFileReader) ReadCount() uint64 {
 	return r.read
 }
@@ -269,6 +297,7 @@ func (r *RunFileReader) Close() error {
 	if err := r.file.Close(); err != nil {
 		return fmt.Errorf("close run file: %w", err)
 	}
+
 	return nil
 }
 
@@ -280,5 +309,6 @@ func (r *RunFileReader) Remove() error {
 	if err := os.Remove(r.path); err != nil {
 		return fmt.Errorf("remove run file: %w", err)
 	}
+
 	return nil
 }

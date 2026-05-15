@@ -1,4 +1,4 @@
-package inventory
+package inventory_test
 
 import (
 	"bytes"
@@ -10,12 +10,20 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/pkg/inventory"
 	"github.com/parquet-go/parquet-go"
 )
 
+// Test fixture keys shared between CSV and Parquet tests so changes
+// stay in sync; also satisfies goconst.
+const (
+	testKeyABC = "a/b/c.txt"
+	testKeyDE  = "d/e.txt"
+)
+
 func TestCSVInventoryReader(t *testing.T) {
-	csv := "a/b/c.txt,100,STANDARD,\nd/e.txt,200,GLACIER,\n"
-	r := NewCSVInventoryReader(bytes.NewReader([]byte(csv)), CSVReaderConfig{
+	csv := testKeyABC + ",100,STANDARD,\n" + testKeyDE + ",200,GLACIER,\n"
+	r := inventory.NewCSVInventoryReader(bytes.NewReader([]byte(csv)), inventory.CSVReaderConfig{
 		KeyCol:        0,
 		SizeCol:       1,
 		StorageCol:    2,
@@ -26,16 +34,16 @@ func TestCSVInventoryReader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next failed: %v", err)
 	}
-	if row.Key != "a/b/c.txt" || row.Size != 100 || row.StorageClass != "STANDARD" {
-		t.Errorf("got %+v, want {Key:a/b/c.txt Size:100 StorageClass:STANDARD}", row)
+	if row.Key != testKeyABC || row.Size != 100 || row.StorageClass != "STANDARD" {
+		t.Errorf("got %+v, want {Key:%s Size:100 StorageClass:STANDARD}", row, testKeyABC)
 	}
 
 	row, err = r.Next()
 	if err != nil {
 		t.Fatalf("Next failed: %v", err)
 	}
-	if row.Key != "d/e.txt" || row.Size != 200 || row.StorageClass != "GLACIER" {
-		t.Errorf("got %+v, want {Key:d/e.txt Size:200 StorageClass:GLACIER}", row)
+	if row.Key != testKeyDE || row.Size != 200 || row.StorageClass != "GLACIER" {
+		t.Errorf("got %+v, want {Key:%s Size:200 StorageClass:GLACIER}", row, testKeyDE)
 	}
 
 	_, err = r.Next()
@@ -48,10 +56,10 @@ func TestCSVInventoryReaderFromStream(t *testing.T) {
 	csv := "file.txt,1024,STANDARD,\n"
 
 	// Create a mock ReadCloser
-	r, err := NewCSVInventoryReaderFromStream(
+	r, err := inventory.NewCSVInventoryReaderFromStream(
 		io.NopCloser(bytes.NewReader([]byte(csv))),
 		"test.csv",
-		CSVReaderConfig{
+		inventory.CSVReaderConfig{
 			KeyCol:     0,
 			SizeCol:    1,
 			StorageCol: 2,
@@ -79,10 +87,10 @@ func TestCSVInventoryReaderFromStream_Gzip(t *testing.T) {
 	_, _ = gzw.Write([]byte(csv))
 	gzw.Close()
 
-	r, err := NewCSVInventoryReaderFromStream(
+	r, err := inventory.NewCSVInventoryReaderFromStream(
 		io.NopCloser(bytes.NewReader(buf.Bytes())),
 		"test.csv.gz",
-		CSVReaderConfig{
+		inventory.CSVReaderConfig{
 			KeyCol:     0,
 			SizeCol:    1,
 			StorageCol: 2,
@@ -115,8 +123,8 @@ func TestParquetInventoryReader(t *testing.T) {
 
 	// Create test Parquet file
 	rows := []S3InventoryRecord{
-		{Key: "a/b/c.txt", Size: 100, StorageClass: "STANDARD"},
-		{Key: "d/e.txt", Size: 200, StorageClass: "GLACIER"},
+		{Key: testKeyABC, Size: 100, StorageClass: "STANDARD"},
+		{Key: testKeyDE, Size: 200, StorageClass: "GLACIER"},
 		{Key: "f/g/h.txt", Size: 300, StorageClass: "STANDARD_IA"},
 	}
 
@@ -136,7 +144,7 @@ func TestParquetInventoryReader(t *testing.T) {
 		t.Fatalf("Stat failed: %v", err)
 	}
 
-	reader, err := NewParquetInventoryReader(f, info.Size(), ParquetReaderConfig{
+	reader, err := inventory.NewParquetInventoryReader(f, info.Size(), inventory.ParquetReaderConfig{
 		KeyCol:     0,
 		SizeCol:    1,
 		StorageCol: 2,
@@ -190,7 +198,7 @@ func TestParquetInventoryReaderFromStream(t *testing.T) {
 	}
 
 	// Create reader from stream
-	reader, err := NewParquetInventoryReaderFromStream(
+	reader, err := inventory.NewParquetInventoryReaderFromStream(
 		io.NopCloser(bytes.NewReader(content)),
 		int64(len(content)),
 	)
@@ -244,7 +252,7 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 	for _, r := range testRows {
 		fmt.Fprintf(&csvBuf, "%s,%d,%s,\n", r.Key, r.Size, r.StorageClass)
 	}
-	if err := os.WriteFile(csvPath, csvBuf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(csvPath, csvBuf.Bytes(), 0o600); err != nil {
 		t.Fatalf("WriteFile CSV failed: %v", err)
 	}
 
@@ -263,9 +271,9 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 	}
 
 	// Read CSV
-	csvReader := NewCSVInventoryReader(
+	csvReader := inventory.NewCSVInventoryReader(
 		bytes.NewReader(csvBuf.Bytes()),
-		CSVReaderConfig{KeyCol: 0, SizeCol: 1, StorageCol: 2},
+		inventory.CSVReaderConfig{KeyCol: 0, SizeCol: 1, StorageCol: 2},
 	)
 	defer csvReader.Close()
 
@@ -273,7 +281,7 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 	f, _ := os.Open(parquetPath)
 	defer f.Close()
 	info, _ := f.Stat()
-	parquetReader, err := NewParquetInventoryReader(f, info.Size(), ParquetReaderConfig{
+	parquetReader, err := inventory.NewParquetInventoryReader(f, info.Size(), inventory.ParquetReaderConfig{
 		KeyCol: 0, SizeCol: 1, StorageCol: 2,
 	})
 	if err != nil {
@@ -288,6 +296,7 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 
 		if !errors.Is(csvErr, parquetErr) {
 			t.Errorf("row %d: CSV err=%v, Parquet err=%v", i, csvErr, parquetErr)
+
 			continue
 		}
 		if csvErr != nil {
@@ -320,7 +329,7 @@ func TestParquetInventoryReader_EmptyFile(t *testing.T) {
 	defer f.Close()
 	info, _ := f.Stat()
 
-	reader, err := NewParquetInventoryReader(f, info.Size(), ParquetReaderConfig{
+	reader, err := inventory.NewParquetInventoryReader(f, info.Size(), inventory.ParquetReaderConfig{
 		KeyCol: 0, SizeCol: 1, StorageCol: 2,
 	})
 	if err != nil {
@@ -357,7 +366,7 @@ func TestParquetInventoryReader_LargeRowGroups(t *testing.T) {
 	defer f.Close()
 	info, _ := f.Stat()
 
-	reader, err := NewParquetInventoryReader(f, info.Size(), ParquetReaderConfig{
+	reader, err := inventory.NewParquetInventoryReader(f, info.Size(), inventory.ParquetReaderConfig{
 		KeyCol: 0, SizeCol: 1, StorageCol: 2,
 	})
 	if err != nil {
@@ -398,7 +407,7 @@ func BenchmarkCSVInventoryReader(b *testing.B) {
 	b.ReportAllocs()
 
 	for range b.N {
-		reader := NewCSVInventoryReader(bytes.NewReader(csvData), CSVReaderConfig{
+		reader := inventory.NewCSVInventoryReader(bytes.NewReader(csvData), inventory.CSVReaderConfig{
 			KeyCol: 0, SizeCol: 1, StorageCol: 2, AccessTierCol: 3,
 		})
 
@@ -450,7 +459,7 @@ func BenchmarkParquetInventoryReader(b *testing.B) {
 	b.ReportAllocs()
 
 	for range b.N {
-		reader, err := NewParquetInventoryReaderFromStream(
+		reader, err := inventory.NewParquetInventoryReaderFromStream(
 			io.NopCloser(bytes.NewReader(content)),
 			int64(len(content)),
 		)

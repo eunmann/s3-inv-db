@@ -1,4 +1,4 @@
-// Package cli implements the command-line interface for s3inv-index.
+// Package cli implements the command-line interface for s3-inv-db.
 package cli
 
 import (
@@ -11,7 +11,7 @@ import (
 	"sort"
 	"syscall"
 
-	"github.com/eunmann/s3-inv-db/internal/logctx"
+	"github.com/eunmann/s3-inv-db/internal/appconfig"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -22,12 +22,25 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/sysmem"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+)
+
+// Sentinel errors keep `err113` happy and let callers test for the
+// specific failure mode with errors.Is.
+var (
+	ErrUsage           = errors.New("usage: s3-inv-db <command> [options]\ncommands: build, query")
+	ErrUnknownCommand  = errors.New("unknown command")
+	ErrOutRequired     = errors.New("--out is required")
+	ErrManifestRequire = errors.New("--s3-manifest is required")
+	ErrIndexRequired   = errors.New("--index is required")
+	ErrPrefixRequired  = errors.New("--prefix is required")
+	ErrPrefixNotFound  = errors.New("prefix not found")
 )
 
 // Run executes the CLI with the given arguments.
 func Run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: s3inv-index <command> [options]\ncommands: build, query")
+		return ErrUsage
 	}
 
 	cmd := args[0]
@@ -39,12 +52,13 @@ func Run(args []string) error {
 	case "query":
 		return runQuery(cmdArgs)
 	default:
-		return fmt.Errorf("unknown command: %s", cmd)
+		return fmt.Errorf("%w: %s", ErrUnknownCommand, cmd)
 	}
 }
 
 func runBuild(args []string) error {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
+	configPath := fs.String("config", os.Getenv("S3INV_CONFIG"), "path to JSON config file (overridden by explicit flags)")
 	outDir := fs.String("out", "", "output directory for index files")
 	s3Manifest := fs.String("s3-manifest", "", "S3 URI to inventory manifest.json (s3://bucket/path/manifest.json)")
 	verbose := fs.Bool("verbose", false, "enable debug level logging")
@@ -64,16 +78,23 @@ func runBuild(args []string) error {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	// Initialize logging with context-based logger
-	baseLogger := logctx.NewConfiguredLogger(*verbose, *prettyLogs)
-	logctx.SetDefaultLogger(baseLogger)
-	logging.Init(*verbose, *prettyLogs) // Keep legacy logging for existing code
+	fileCfg, err := appconfig.Load(*configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	explicit := explicitFlags(fs)
+	finalVerbose := resolveBool(fileCfg, *verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
+	finalPretty := resolveBool(fileCfg, *prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
+
+	baseLogger := logging.NewLogger(finalVerbose, finalPretty)
+	log.Logger = baseLogger
+	logging.Init(finalVerbose, finalPretty)
 
 	if *outDir == "" {
-		return errors.New("--out is required")
+		return ErrOutRequired
 	}
 	if *s3Manifest == "" {
-		return errors.New("--s3-manifest is required")
+		return ErrManifestRequire
 	}
 
 	return runBuildExtSort(*outDir, *s3Manifest, *workers, *maxDepth, *memBudgetStr, *segmentPrefixes, baseLogger)
@@ -85,9 +106,10 @@ func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudget
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Inject the logger into context for pipeline functions
-	ctx = logctx.WithLogger(ctx, baseLogger)
-	log := logctx.FromContext(ctx)
+	// Inject the logger into ctx for pipeline functions. zerolog's
+	// WithContext returns a new ctx; zerolog.Ctx(ctx) retrieves later.
+	ctx = baseLogger.WithContext(ctx)
+	logger := zerolog.Ctx(ctx)
 
 	// Determine memory budget
 	budget, err := determineMemoryBudget(memBudgetStr)
@@ -97,7 +119,7 @@ func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudget
 
 	// Log memory budget at startup
 	ramResult := sysmem.Total()
-	log.Info().
+	logger.Info().
 		Str("total_ram", humanfmt.BytesUint64(ramResult.TotalBytes)).
 		Str("mem_budget", humanfmt.BytesUint64(budget.Total())).
 		Str("mem_budget_source", string(budget.Source())).
@@ -123,7 +145,7 @@ func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudget
 	config.UseSegmentEncoding = segmentPrefixes
 
 	// Log concurrency settings
-	log.Info().
+	logger.Info().
 		Int("workers", config.S3DownloadConcurrency).
 		Int("max_depth", config.MaxDepth).
 		Msg("pipeline configuration")
@@ -134,9 +156,11 @@ func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudget
 	if err != nil {
 		// Check if this was a cancellation
 		if errors.Is(err, context.Canceled) {
-			log.Warn().Msg("build cancelled by user")
+			logger.Warn().Msg("build cancelled by user")
+
 			return fmt.Errorf("build cancelled: %w", err)
 		}
+
 		return fmt.Errorf("run pipeline: %w", err)
 	}
 
@@ -155,6 +179,7 @@ func determineMemoryBudget(cliValue string) (*membudget.Budget, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse --mem-budget: %w", err)
 		}
+
 		return membudget.New(membudget.Config{
 			TotalBytes: bytes,
 			Source:     membudget.BudgetSourceCLI,
@@ -167,6 +192,7 @@ func determineMemoryBudget(cliValue string) (*membudget.Budget, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse S3INV_MEM_BUDGET=%q: %w", envValue, err)
 		}
+
 		return membudget.New(membudget.Config{
 			TotalBytes: bytes,
 			Source:     membudget.BudgetSourceEnv,
@@ -179,6 +205,7 @@ func determineMemoryBudget(cliValue string) (*membudget.Budget, error) {
 
 func runQuery(args []string) error {
 	fs := flag.NewFlagSet("query", flag.ContinueOnError)
+	configPath := fs.String("config", os.Getenv("S3INV_CONFIG"), "path to JSON config file (overridden by explicit flags)")
 	indexDir := fs.String("index", "", "index directory to query")
 	prefix := fs.String("prefix", "", "prefix to query")
 	showTiers := fs.Bool("show-tiers", false, "show per-tier breakdown")
@@ -191,17 +218,26 @@ func runQuery(args []string) error {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	logging.Init(*verbose, *prettyLogs)
-	log := logging.L()
+	fileCfg, err := appconfig.Load(*configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	explicit := explicitFlags(fs)
+	finalVerbose := resolveBool(fileCfg, *verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
+	finalPretty := resolveBool(fileCfg, *prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
+	finalPriceTable := resolveString(fileCfg, *priceTablePath, explicit["price-table"], func(c *appconfig.Config) *string { return c.PriceTable })
+
+	logging.Init(finalVerbose, finalPretty)
+	logger := logging.L()
 
 	if *indexDir == "" {
-		return errors.New("--index is required")
+		return ErrIndexRequired
 	}
 	if *prefix == "" {
-		return errors.New("--prefix is required")
+		return ErrPrefixRequired
 	}
 
-	log.Debug().Str("index_dir", *indexDir).Str("prefix", *prefix).Msg("opening index")
+	logger.Debug().Str("index_dir", *indexDir).Str("prefix", *prefix).Msg("opening index")
 
 	idx, err := indexread.Open(*indexDir)
 	if err != nil {
@@ -211,32 +247,59 @@ func runQuery(args []string) error {
 
 	pos, ok := idx.Lookup(*prefix)
 	if !ok {
-		return fmt.Errorf("prefix not found: %s", *prefix)
+		return fmt.Errorf("%w: %s", ErrPrefixNotFound, *prefix)
 	}
 
 	stats := idx.Stats(pos)
-	// Query results go to stdout as formatted output (not logs)
-	fmt.Printf("Prefix: %s\n", *prefix)
-	fmt.Printf("Objects: %d\n", stats.ObjectCount)
-	fmt.Printf("Bytes: %d\n", stats.TotalBytes)
+	// Query results go to stdout as formatted output (not logs).
+	fmt.Fprintf(os.Stdout, "Prefix: %s\n", *prefix)
+	fmt.Fprintf(os.Stdout, "Objects: %d\n", stats.ObjectCount)
+	fmt.Fprintf(os.Stdout, "Bytes: %d\n", stats.TotalBytes)
 
 	if !*showTiers && !*estimateCost {
 		return nil
 	}
 
-	return printTierAndCostInfo(idx, pos, *showTiers, *estimateCost, *priceTablePath)
+	return printTierAndCostInfo(idx, pos, *showTiers, *estimateCost, finalPriceTable)
+}
+
+func explicitFlags(fs *flag.FlagSet) map[string]bool {
+	out := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { out[f.Name] = true })
+
+	return out
+}
+
+func resolveBool(cfg *appconfig.Config, flagVal, explicit bool, get func(*appconfig.Config) *bool) bool {
+	var p *bool
+	if cfg != nil {
+		p = get(cfg)
+	}
+
+	return appconfig.PickBool(flagVal, explicit, p)
+}
+
+func resolveString(cfg *appconfig.Config, flagVal string, explicit bool, get func(*appconfig.Config) *string) string {
+	var p *string
+	if cfg != nil {
+		p = get(cfg)
+	}
+
+	return appconfig.PickString(flagVal, explicit, p)
 }
 
 // printTierAndCostInfo handles tier breakdown and cost estimation output.
 func printTierAndCostInfo(idx *indexread.Index, pos uint64, showTiers, estimateCost bool, priceTablePath string) error {
 	if !idx.HasTierData() {
-		fmt.Println("\nNo tier data available (index was built without tier tracking)")
+		fmt.Fprintln(os.Stdout, "\nNo tier data available (index was built without tier tracking)")
+
 		return nil
 	}
 
 	breakdown := idx.TierBreakdown(pos)
 	if len(breakdown) == 0 {
-		fmt.Println("\nNo tier data at this prefix")
+		fmt.Fprintln(os.Stdout, "\nNo tier data at this prefix")
+
 		return nil
 	}
 
@@ -253,9 +316,9 @@ func printTierAndCostInfo(idx *indexread.Index, pos uint64, showTiers, estimateC
 
 // printTierBreakdown outputs the tier breakdown to stdout.
 func printTierBreakdown(breakdown []format.TierBreakdown) {
-	fmt.Println("\nTier breakdown:")
+	fmt.Fprintln(os.Stdout, "\nTier breakdown:")
 	for _, tb := range breakdown {
-		fmt.Printf("  %s: %d objects, %d bytes\n", tb.TierName, tb.ObjectCount, tb.Bytes)
+		fmt.Fprintf(os.Stdout, "  %s: %d objects, %d bytes\n", tb.TierName, tb.ObjectCount, tb.Bytes)
 	}
 }
 
@@ -267,8 +330,8 @@ func printCostEstimate(breakdown []format.TierBreakdown, showTiers bool, priceTa
 	}
 
 	cost := pricing.ComputeMonthlyCost(breakdown, pt)
-	fmt.Println("\nEstimated monthly cost:")
-	fmt.Printf("  Total: %s/month\n", pricing.FormatCost(cost.TotalMicrodollars))
+	fmt.Fprintln(os.Stdout, "\nEstimated monthly cost:")
+	fmt.Fprintf(os.Stdout, "  Total: %s/month\n", pricing.FormatCost(cost.TotalMicrodollars))
 
 	if showTiers {
 		printPerTierCosts(cost.PerTierMicrodollars)
@@ -284,8 +347,10 @@ func loadPriceTable(path string) (pricing.PriceTable, error) {
 		if err != nil {
 			return pricing.PriceTable{}, fmt.Errorf("load price table: %w", err)
 		}
+
 		return pt, nil
 	}
+
 	return pricing.DefaultUSEast1Prices(), nil
 }
 
@@ -297,6 +362,6 @@ func printPerTierCosts(perTierMicrodollars map[string]uint64) {
 	}
 	sort.Strings(tierNames)
 	for _, tier := range tierNames {
-		fmt.Printf("  %s: %s/month\n", tier, pricing.FormatCost(perTierMicrodollars[tier]))
+		fmt.Fprintf(os.Stdout, "  %s: %s/month\n", tier, pricing.FormatCost(perTierMicrodollars[tier]))
 	}
 }

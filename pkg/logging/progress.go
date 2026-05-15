@@ -9,6 +9,15 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// percentScale converts the [0..1] fraction (done/total) to a [0..100]
+// percentage. Pulled out as a named constant so mnd doesn't flag it
+// each time we render progress.
+const percentScale = 100.0
+
+// progressRecentWindow is the size of the moving-average window the
+// tracker keeps for ETA smoothing.
+const progressRecentWindow = 10
+
 // ProgressTracker tracks progress for a set of items with ETA calculation.
 // It is safe for concurrent use.
 type ProgressTracker struct {
@@ -19,7 +28,7 @@ type ProgressTracker struct {
 	log       zerolog.Logger
 	phase     string
 
-	// For moving average of item durations
+	// For moving average of item durations.
 	mu              sync.Mutex
 	recentDurations []time.Duration
 	maxRecent       int
@@ -32,8 +41,8 @@ func NewProgressTracker(phase string, total int64, log zerolog.Logger) *Progress
 		startTime:       time.Now(),
 		log:             log,
 		phase:           phase,
-		recentDurations: make([]time.Duration, 0, 10),
-		maxRecent:       10,
+		recentDurations: make([]time.Duration, 0, progressRecentWindow),
+		maxRecent:       progressRecentWindow,
 	}
 }
 
@@ -54,18 +63,33 @@ func (pt *ProgressTracker) RecordSkip() {
 	pt.skipped.Add(1)
 }
 
-// Progress returns current progress stats.
-func (pt *ProgressTracker) Progress() (completed, skipped, total int64) {
-	return pt.completed.Load(), pt.skipped.Load(), pt.total
+// ProgressSnapshot reports the tracker's counts at a point in time.
+// Replaces the previous (completed, skipped, total int64) named-return
+// signature so progress can be read as a struct instead of three
+// positional ints.
+type ProgressSnapshot struct {
+	Completed int64
+	Skipped   int64
+	Total     int64
+}
+
+// Progress returns current progress stats as a snapshot.
+func (pt *ProgressTracker) Progress() ProgressSnapshot {
+	return ProgressSnapshot{
+		Completed: pt.completed.Load(),
+		Skipped:   pt.skipped.Load(),
+		Total:     pt.total,
+	}
 }
 
 // ProgressPct returns the progress percentage (0-100).
 func (pt *ProgressTracker) ProgressPct() float64 {
 	done := pt.completed.Load() + pt.skipped.Load()
 	if pt.total == 0 {
-		return 100.0
+		return percentScale
 	}
-	return float64(done) * 100.0 / float64(pt.total)
+
+	return float64(done) * percentScale / float64(pt.total)
 }
 
 // ETA returns the estimated time remaining based on average completion rate.
@@ -80,7 +104,7 @@ func (pt *ProgressTracker) ETA() time.Duration {
 		return 0
 	}
 
-	// Use moving average if available, else overall average
+	// Use moving average if available, else overall average.
 	pt.mu.Lock()
 	var avgDuration time.Duration
 	if len(pt.recentDurations) > 0 {
@@ -124,56 +148,66 @@ type CompletionEvent struct {
 	event   string
 	phase   string
 	elapsed time.Duration
-	fields  map[string]interface{}
+	pretty  bool
+	fields  map[string]any
 }
 
-// NewCompletionEvent creates a new completion event builder.
-func NewCompletionEvent(log zerolog.Logger, event, phase string, elapsed time.Duration) *CompletionEvent {
+// NewCompletionEvent creates a new completion event builder. The pretty
+// flag mirrors the LogEvent contract: when true, *_h human-readable
+// companion fields are emitted alongside the raw values.
+func NewCompletionEvent(log zerolog.Logger, event, phase string, elapsed time.Duration, pretty bool) *CompletionEvent {
 	return &CompletionEvent{
 		log:     log,
 		event:   event,
 		phase:   phase,
 		elapsed: elapsed,
-		fields:  make(map[string]interface{}),
+		pretty:  pretty,
+		fields:  make(map[string]any),
 	}
 }
 
 // Str adds a string field.
 func (ce *CompletionEvent) Str(key, val string) *CompletionEvent {
 	ce.fields[key] = val
+
 	return ce
 }
 
 // Int adds an int field.
 func (ce *CompletionEvent) Int(key string, val int) *CompletionEvent {
 	ce.fields[key] = val
+
 	return ce
 }
 
 // Int64 adds an int64 field.
 func (ce *CompletionEvent) Int64(key string, val int64) *CompletionEvent {
 	ce.fields[key] = val
+
 	return ce
 }
 
 // Uint64 adds a uint64 field.
 func (ce *CompletionEvent) Uint64(key string, val uint64) *CompletionEvent {
 	ce.fields[key] = val
+
 	return ce
 }
 
 // Float64 adds a float64 field.
 func (ce *CompletionEvent) Float64(key string, val float64) *CompletionEvent {
 	ce.fields[key] = val
+
 	return ce
 }
 
 // Bytes adds byte count with optional human-readable companion.
 func (ce *CompletionEvent) Bytes(key string, bytes int64) *CompletionEvent {
 	ce.fields[key] = bytes
-	if IsPrettyMode() {
+	if ce.pretty {
 		ce.fields[key+"_h"] = humanfmt.Bytes(bytes)
 	}
+
 	return ce
 }
 
@@ -185,15 +219,16 @@ func (ce *CompletionEvent) BytesUint64(key string, bytes uint64) *CompletionEven
 // Count adds count with optional human-readable companion.
 func (ce *CompletionEvent) Count(key string, n int64) *CompletionEvent {
 	ce.fields[key] = n
-	if IsPrettyMode() {
+	if ce.pretty {
 		ce.fields[key+"_h"] = humanfmt.Count(n)
 	}
+
 	return ce
 }
 
 // CountUint64 adds a uint64 count field.
-func (ce *CompletionEvent) CountUint64(key string, n uint64) *CompletionEvent {
-	return ce.Count(key, int64(n))
+func (ce *CompletionEvent) CountUint64(key string, n int64) *CompletionEvent {
+	return ce.Count(key, n)
 }
 
 // Progress adds progress fields (done, total, percentage, optional ETA).
@@ -201,38 +236,40 @@ func (ce *CompletionEvent) Progress(done, total int64, eta time.Duration) *Compl
 	ce.fields["done"] = done
 	ce.fields["total"] = total
 	if total > 0 {
-		pct := float64(done) * 100.0 / float64(total)
+		pct := float64(done) * percentScale / float64(total)
 		ce.fields["progress_pct"] = pct
-		if IsPrettyMode() {
+		if ce.pretty {
 			ce.fields["progress_h"] = humanfmt.Count(done) + "/" + humanfmt.Count(total)
 		}
 	}
 	if eta > 0 {
 		ce.fields["eta_ms"] = eta.Milliseconds()
-		if IsPrettyMode() {
+		if ce.pretty {
 			ce.fields["eta_h"] = humanfmt.Duration(eta)
 		}
 	}
+
 	return ce
 }
 
 // ProgressFromTracker adds progress fields from a ProgressTracker.
 func (ce *CompletionEvent) ProgressFromTracker(pt *ProgressTracker) *CompletionEvent {
-	completed, skipped, total := pt.Progress()
-	done := completed + skipped
-	ce.fields["completed"] = completed
-	ce.fields["skipped"] = skipped
-	ce.fields["total"] = total
-	if total > 0 {
-		pct := float64(done) * 100.0 / float64(total)
+	snap := pt.Progress()
+	done := snap.Completed + snap.Skipped
+	ce.fields["completed"] = snap.Completed
+	ce.fields["skipped"] = snap.Skipped
+	ce.fields["total"] = snap.Total
+	if snap.Total > 0 {
+		pct := float64(done) * percentScale / float64(snap.Total)
 		ce.fields["progress_pct"] = pct
 	}
 	if eta := pt.ETA(); eta > 0 {
 		ce.fields["eta_ms"] = eta.Milliseconds()
-		if IsPrettyMode() {
+		if ce.pretty {
 			ce.fields["eta_h"] = humanfmt.Duration(eta)
 		}
 	}
+
 	return ce
 }
 
@@ -241,10 +278,11 @@ func (ce *CompletionEvent) Throughput(bytes int64) *CompletionEvent {
 	if ce.elapsed > 0 {
 		bps := float64(bytes) / ce.elapsed.Seconds()
 		ce.fields["throughput_bps"] = bps
-		if IsPrettyMode() {
+		if ce.pretty {
 			ce.fields["throughput_h"] = humanfmt.Throughput(bytes, ce.elapsed)
 		}
 	}
+
 	return ce
 }
 
@@ -255,7 +293,7 @@ func (ce *CompletionEvent) Log(msg string) {
 		Str("phase", ce.phase).
 		Int64("duration_ms", ce.elapsed.Milliseconds())
 
-	if IsPrettyMode() {
+	if ce.pretty {
 		e = e.Str("duration_h", humanfmt.Duration(ce.elapsed))
 	}
 
@@ -273,7 +311,7 @@ func (ce *CompletionEvent) LogDebug(msg string) {
 		Str("phase", ce.phase).
 		Int64("duration_ms", ce.elapsed.Milliseconds())
 
-	if IsPrettyMode() {
+	if ce.pretty {
 		e = e.Str("duration_h", humanfmt.Duration(ce.elapsed))
 	}
 
@@ -285,23 +323,23 @@ func (ce *CompletionEvent) LogDebug(msg string) {
 }
 
 // PhaseComplete logs a phase completion event.
-func PhaseComplete(log zerolog.Logger, phase string, elapsed time.Duration) *CompletionEvent {
-	return NewCompletionEvent(log, "phase_completed", phase, elapsed)
+func PhaseComplete(log zerolog.Logger, phase string, elapsed time.Duration, pretty bool) *CompletionEvent {
+	return NewCompletionEvent(log, "phase_completed", phase, elapsed, pretty)
 }
 
 // ChunkComplete logs a chunk completion event.
-func ChunkComplete(log zerolog.Logger, phase string, elapsed time.Duration) *CompletionEvent {
-	return NewCompletionEvent(log, "chunk_completed", phase, elapsed)
+func ChunkComplete(log zerolog.Logger, phase string, elapsed time.Duration, pretty bool) *CompletionEvent {
+	return NewCompletionEvent(log, "chunk_completed", phase, elapsed, pretty)
 }
 
 // BatchComplete logs a batch/transaction completion event.
-func BatchComplete(log zerolog.Logger, phase string, elapsed time.Duration) *CompletionEvent {
-	return NewCompletionEvent(log, "batch_completed", phase, elapsed)
+func BatchComplete(log zerolog.Logger, phase string, elapsed time.Duration, pretty bool) *CompletionEvent {
+	return NewCompletionEvent(log, "batch_completed", phase, elapsed, pretty)
 }
 
 // FileCreated logs a file creation completion event.
-func FileCreated(log zerolog.Logger, phase string, elapsed time.Duration) *CompletionEvent {
-	return NewCompletionEvent(log, "file_created", phase, elapsed)
+func FileCreated(log zerolog.Logger, phase string, elapsed time.Duration, pretty bool) *CompletionEvent {
+	return NewCompletionEvent(log, "file_created", phase, elapsed, pretty)
 }
 
 // ChunkStarted logs a chunk start event (no duration, no progress_pct).

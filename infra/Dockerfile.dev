@@ -1,0 +1,28 @@
+# Dev / test image. Alpine + gcc/musl-dev so `go test -race` has CGO.
+
+ARG AIR_VERSION=v1.61.7
+
+# Build air in a throwaway stage so its module cache doesn't bloat the
+# runtime image.
+FROM golang:1.25-alpine AS air
+ARG AIR_VERSION
+RUN go install github.com/air-verse/air@${AIR_VERSION}
+
+FROM golang:1.25-alpine
+
+RUN apk add --no-cache git tini wget make curl gcc musl-dev
+
+COPY --from=air /go/bin/air /usr/local/bin/air
+
+WORKDIR /app
+
+# Volume-mounted source carries the host UID.
+RUN git config --global --add safe.directory /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+EXPOSE 8080
+
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["air", "-c", ".air.toml"]

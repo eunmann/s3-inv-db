@@ -1,4 +1,4 @@
-package indexread
+package indexread_test
 
 import (
 	"errors"
@@ -10,11 +10,16 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
+// errCSVTooShort is returned by buildIndexFromCSV when the input lacks a header
+// row plus at least one data row.
+var errCSVTooShort = errors.New("CSV must have at least header and one data row")
+
 // buildIndexFromKeys creates an index from a slice of keys for testing.
 // Keys should be S3-style object keys (e.g., "a/b/file.txt").
 // Sizes are assigned based on key index.
 func buildIndexFromKeys(t *testing.T, outDir string, keys []string) error {
 	t.Helper()
+
 	return buildIndexFromKeysWithSizes(t, outDir, keys, nil)
 }
 
@@ -66,7 +71,7 @@ func buildIndexFromCSV(t *testing.T, outDir, csv string) error {
 	// Parse CSV
 	lines := splitLines(csv)
 	if len(lines) < 2 {
-		return errors.New("CSV must have at least header and one data row")
+		return errCSVTooShort
 	}
 
 	// Skip header
@@ -107,6 +112,7 @@ func splitLines(s string) []string {
 	if start < len(s) {
 		lines = append(lines, s[start:])
 	}
+
 	return lines
 }
 
@@ -121,6 +127,7 @@ func splitCSVLine(line string) []string {
 		}
 	}
 	parts = append(parts, line[start:])
+
 	return parts
 }
 
@@ -128,6 +135,7 @@ func splitCSVLine(line string) []string {
 func setupTestIndex(t *testing.T) string {
 	t.Helper()
 	tmpDir := t.TempDir()
+
 	return filepath.Join(tmpDir, "index")
 }
 

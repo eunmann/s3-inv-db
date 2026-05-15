@@ -1,35 +1,37 @@
-package format
+package format_test
 
 import (
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/pkg/format"
 )
 
 func TestHeaderRoundTrip(t *testing.T) {
-	h := Header{
-		Magic:   MagicNumber,
-		Version: Version,
+	h := format.Header{
+		Magic:   format.MagicNumber,
+		Version: format.Version,
 		Count:   12345,
 		Width:   8,
 	}
 
-	encoded := EncodeHeader(h)
-	if len(encoded) != HeaderSize {
-		t.Fatalf("encoded size = %d, want %d", len(encoded), HeaderSize)
+	encoded := format.EncodeHeader(h)
+	if len(encoded) != format.HeaderSize {
+		t.Fatalf("encoded size = %d, want %d", len(encoded), format.HeaderSize)
 	}
 
-	decoded, err := DecodeHeader(encoded)
+	decoded, err := format.DecodeHeader(encoded)
 	if err != nil {
-		t.Fatalf("DecodeHeader failed: %v", err)
+		t.Fatalf("format.DecodeHeader failed: %v", err)
 	}
 
 	if decoded.Magic != h.Magic {
 		t.Errorf("Magic = %x, want %x", decoded.Magic, h.Magic)
 	}
 	if decoded.Version != h.Version {
-		t.Errorf("Version = %d, want %d", decoded.Version, h.Version)
+		t.Errorf("format.Version = %d, want %d", decoded.Version, h.Version)
 	}
 	if decoded.Count != h.Count {
 		t.Errorf("Count = %d, want %d", decoded.Count, h.Count)
@@ -40,9 +42,9 @@ func TestHeaderRoundTrip(t *testing.T) {
 }
 
 func TestDecodeHeaderTooShort(t *testing.T) {
-	_, err := DecodeHeader(make([]byte, HeaderSize-1))
-	if !errors.Is(err, ErrInvalidHeader) {
-		t.Errorf("DecodeHeader(short) = %v, want ErrInvalidHeader", err)
+	_, err := format.DecodeHeader(make([]byte, format.HeaderSize-1))
+	if !errors.Is(err, format.ErrInvalidHeader) {
+		t.Errorf("format.DecodeHeader(short) = %v, want format.ErrInvalidHeader", err)
 	}
 }
 
@@ -50,9 +52,9 @@ func TestArrayWriterU64(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.u64")
 
-	w, err := NewArrayWriter(path, 8)
+	w, err := format.NewArrayWriter(path, 8)
 	if err != nil {
-		t.Fatalf("NewArrayWriter failed: %v", err)
+		t.Fatalf("format.NewArrayWriter failed: %v", err)
 	}
 
 	values := []uint64{100, 200, 300, 400, 500}
@@ -67,9 +69,9 @@ func TestArrayWriterU64(t *testing.T) {
 	}
 
 	// Read back
-	r, err := OpenArray(path)
+	r, err := format.OpenArray(path)
 	if err != nil {
-		t.Fatalf("OpenArray failed: %v", err)
+		t.Fatalf("format.OpenArray failed: %v", err)
 	}
 	defer r.Close()
 
@@ -92,9 +94,9 @@ func TestArrayWriterU32(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.u32")
 
-	w, err := NewArrayWriter(path, 4)
+	w, err := format.NewArrayWriter(path, 4)
 	if err != nil {
-		t.Fatalf("NewArrayWriter failed: %v", err)
+		t.Fatalf("format.NewArrayWriter failed: %v", err)
 	}
 
 	values := []uint32{10, 20, 30}
@@ -108,9 +110,9 @@ func TestArrayWriterU32(t *testing.T) {
 		t.Fatalf("Close failed: %v", err)
 	}
 
-	r, err := OpenArray(path)
+	r, err := format.OpenArray(path)
 	if err != nil {
-		t.Fatalf("OpenArray failed: %v", err)
+		t.Fatalf("format.OpenArray failed: %v", err)
 	}
 	defer r.Close()
 
@@ -129,9 +131,9 @@ func TestArrayWriterU16(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.u16")
 
-	w, err := NewArrayWriter(path, 2)
+	w, err := format.NewArrayWriter(path, 2)
 	if err != nil {
-		t.Fatalf("NewArrayWriter failed: %v", err)
+		t.Fatalf("format.NewArrayWriter failed: %v", err)
 	}
 
 	values := []uint16{1, 2, 3, 65535}
@@ -145,9 +147,9 @@ func TestArrayWriterU16(t *testing.T) {
 		t.Fatalf("Close failed: %v", err)
 	}
 
-	r, err := OpenArray(path)
+	r, err := format.OpenArray(path)
 	if err != nil {
-		t.Fatalf("OpenArray failed: %v", err)
+		t.Fatalf("format.OpenArray failed: %v", err)
 	}
 	defer r.Close()
 
@@ -166,23 +168,23 @@ func TestArrayReaderBoundsCheck(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.u64")
 
-	w, err := NewArrayWriter(path, 8)
+	w, err := format.NewArrayWriter(path, 8)
 	if err != nil {
-		t.Fatalf("NewArrayWriter failed: %v", err)
+		t.Fatalf("format.NewArrayWriter failed: %v", err)
 	}
 	_ = w.WriteU64(100)
 	_ = w.WriteU64(200)
 	_ = w.Close()
 
-	r, err := OpenArray(path)
+	r, err := format.OpenArray(path)
 	if err != nil {
-		t.Fatalf("OpenArray failed: %v", err)
+		t.Fatalf("format.OpenArray failed: %v", err)
 	}
 	defer r.Close()
 
 	_, err = r.GetU64(2)
-	if !errors.Is(err, ErrBoundsCheck) {
-		t.Errorf("GetU64(out of bounds) = %v, want ErrBoundsCheck", err)
+	if !errors.Is(err, format.ErrBoundsCheck) {
+		t.Errorf("GetU64(out of bounds) = %v, want format.ErrBoundsCheck", err)
 	}
 }
 
@@ -190,9 +192,9 @@ func TestArrayWidthMismatch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.u64")
 
-	w, err := NewArrayWriter(path, 8)
+	w, err := format.NewArrayWriter(path, 8)
 	if err != nil {
-		t.Fatalf("NewArrayWriter failed: %v", err)
+		t.Fatalf("format.NewArrayWriter failed: %v", err)
 	}
 
 	err = w.WriteU32(100)
@@ -207,12 +209,12 @@ func TestBlobWriterReader(t *testing.T) {
 	blobPath := filepath.Join(dir, "prefix_blob.bin")
 	offsetsPath := filepath.Join(dir, "prefix_offsets.u64")
 
-	w, err := NewBlobWriter(blobPath, offsetsPath)
+	w, err := format.NewBlobWriter(blobPath, offsetsPath)
 	if err != nil {
-		t.Fatalf("NewBlobWriter failed: %v", err)
+		t.Fatalf("format.NewBlobWriter failed: %v", err)
 	}
 
-	strings := []string{"", "a/", "a/b/", "b/", "日本語/"}
+	strings := []string{"", "a/", "a/b/", "b/", "nihongo/"}
 	for _, s := range strings {
 		if err := w.WriteString(s); err != nil {
 			t.Fatalf("WriteString failed: %v", err)
@@ -223,9 +225,9 @@ func TestBlobWriterReader(t *testing.T) {
 		t.Fatalf("Close failed: %v", err)
 	}
 
-	r, err := OpenBlob(blobPath, offsetsPath)
+	r, err := format.OpenBlob(blobPath, offsetsPath)
 	if err != nil {
-		t.Fatalf("OpenBlob failed: %v", err)
+		t.Fatalf("format.OpenBlob failed: %v", err)
 	}
 	defer r.Close()
 
@@ -249,18 +251,18 @@ func TestBlobReaderUnsafeGet(t *testing.T) {
 	blobPath := filepath.Join(dir, "prefix_blob.bin")
 	offsetsPath := filepath.Join(dir, "prefix_offsets.u64")
 
-	w, err := NewBlobWriter(blobPath, offsetsPath)
+	w, err := format.NewBlobWriter(blobPath, offsetsPath)
 	if err != nil {
-		t.Fatalf("NewBlobWriter failed: %v", err)
+		t.Fatalf("format.NewBlobWriter failed: %v", err)
 	}
 
 	_ = w.WriteString("hello")
 	_ = w.WriteString("world")
 	_ = w.Close()
 
-	r, err := OpenBlob(blobPath, offsetsPath)
+	r, err := format.OpenBlob(blobPath, offsetsPath)
 	if err != nil {
-		t.Fatalf("OpenBlob failed: %v", err)
+		t.Fatalf("format.OpenBlob failed: %v", err)
 	}
 	defer r.Close()
 
@@ -277,22 +279,22 @@ func TestBlobReaderBoundsCheck(t *testing.T) {
 	blobPath := filepath.Join(dir, "prefix_blob.bin")
 	offsetsPath := filepath.Join(dir, "prefix_offsets.u64")
 
-	w, err := NewBlobWriter(blobPath, offsetsPath)
+	w, err := format.NewBlobWriter(blobPath, offsetsPath)
 	if err != nil {
-		t.Fatalf("NewBlobWriter failed: %v", err)
+		t.Fatalf("format.NewBlobWriter failed: %v", err)
 	}
 	_ = w.WriteString("test")
 	_ = w.Close()
 
-	r, err := OpenBlob(blobPath, offsetsPath)
+	r, err := format.OpenBlob(blobPath, offsetsPath)
 	if err != nil {
-		t.Fatalf("OpenBlob failed: %v", err)
+		t.Fatalf("format.OpenBlob failed: %v", err)
 	}
 	defer r.Close()
 
 	_, err = r.Get(1)
-	if !errors.Is(err, ErrBoundsCheck) {
-		t.Errorf("Get(out of bounds) = %v, want ErrBoundsCheck", err)
+	if !errors.Is(err, format.ErrBoundsCheck) {
+		t.Errorf("Get(out of bounds) = %v, want format.ErrBoundsCheck", err)
 	}
 }
 
@@ -301,19 +303,19 @@ func TestOpenArrayBadMagic(t *testing.T) {
 	path := filepath.Join(dir, "bad.bin")
 
 	// Write file with wrong magic
-	header := EncodeHeader(Header{
+	header := format.EncodeHeader(format.Header{
 		Magic:   0xDEADBEEF,
-		Version: Version,
+		Version: format.Version,
 		Count:   0,
 		Width:   8,
 	})
-	if err := os.WriteFile(path, header, 0o644); err != nil {
+	if err := os.WriteFile(path, header, 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	_, err := OpenArray(path)
-	if !errors.Is(err, ErrMagicMismatch) {
-		t.Errorf("OpenArray(bad magic) = %v, want ErrMagicMismatch", err)
+	_, err := format.OpenArray(path)
+	if !errors.Is(err, format.ErrMagicMismatch) {
+		t.Errorf("format.OpenArray(bad magic) = %v, want format.ErrMagicMismatch", err)
 	}
 }
 
@@ -321,19 +323,19 @@ func TestOpenArrayBadVersion(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.bin")
 
-	header := EncodeHeader(Header{
-		Magic:   MagicNumber,
+	header := format.EncodeHeader(format.Header{
+		Magic:   format.MagicNumber,
 		Version: 999,
 		Count:   0,
 		Width:   8,
 	})
-	if err := os.WriteFile(path, header, 0o644); err != nil {
+	if err := os.WriteFile(path, header, 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	_, err := OpenArray(path)
-	if !errors.Is(err, ErrVersionMismatch) {
-		t.Errorf("OpenArray(bad version) = %v, want ErrVersionMismatch", err)
+	_, err := format.OpenArray(path)
+	if !errors.Is(err, format.ErrVersionMismatch) {
+		t.Errorf("format.OpenArray(bad version) = %v, want format.ErrVersionMismatch", err)
 	}
 }
 
@@ -342,17 +344,17 @@ func TestOpenArrayFileTooSmall(t *testing.T) {
 	path := filepath.Join(dir, "small.bin")
 
 	// Write header claiming 10 elements but file is too small
-	header := EncodeHeader(Header{
-		Magic:   MagicNumber,
-		Version: Version,
+	header := format.EncodeHeader(format.Header{
+		Magic:   format.MagicNumber,
+		Version: format.Version,
 		Count:   10,
 		Width:   8,
 	})
-	if err := os.WriteFile(path, header, 0o644); err != nil {
+	if err := os.WriteFile(path, header, 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	_, err := OpenArray(path)
+	_, err := format.OpenArray(path)
 	if err == nil {
 		t.Error("expected error for file too small")
 	}
@@ -362,13 +364,13 @@ func TestMmapEmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.bin")
 
-	if err := os.WriteFile(path, nil, 0o644); err != nil {
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	m, err := OpenMmap(path)
+	m, err := format.OpenMmap(path)
 	if err != nil {
-		t.Fatalf("OpenMmap failed: %v", err)
+		t.Fatalf("format.OpenMmap failed: %v", err)
 	}
 	defer m.Close()
 
@@ -384,18 +386,18 @@ func TestArrayUnsafeGet(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.u64")
 
-	w, err := NewArrayWriter(path, 8)
+	w, err := format.NewArrayWriter(path, 8)
 	if err != nil {
-		t.Fatalf("NewArrayWriter failed: %v", err)
+		t.Fatalf("format.NewArrayWriter failed: %v", err)
 	}
 	_ = w.WriteU64(111)
 	_ = w.WriteU64(222)
 	_ = w.WriteU64(333)
 	_ = w.Close()
 
-	r, err := OpenArray(path)
+	r, err := format.OpenArray(path)
 	if err != nil {
-		t.Fatalf("OpenArray failed: %v", err)
+		t.Fatalf("format.OpenArray failed: %v", err)
 	}
 	defer r.Close()
 
@@ -415,9 +417,9 @@ func TestLargeArray(t *testing.T) {
 	path := filepath.Join(dir, "large.u64")
 
 	n := 10000
-	w, err := NewArrayWriter(path, 8)
+	w, err := format.NewArrayWriter(path, 8)
 	if err != nil {
-		t.Fatalf("NewArrayWriter failed: %v", err)
+		t.Fatalf("format.NewArrayWriter failed: %v", err)
 	}
 
 	for i := range n {
@@ -430,9 +432,9 @@ func TestLargeArray(t *testing.T) {
 		t.Fatalf("Close failed: %v", err)
 	}
 
-	r, err := OpenArray(path)
+	r, err := format.OpenArray(path)
 	if err != nil {
-		t.Fatalf("OpenArray failed: %v", err)
+		t.Fatalf("format.OpenArray failed: %v", err)
 	}
 	defer r.Close()
 

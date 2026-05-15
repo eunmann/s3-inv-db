@@ -52,13 +52,13 @@ Minimum recommended: 512MB
 
 ```bash
 # More workers for higher S3 throughput
-s3inv-index build --workers 16 ...
+s3-inv-db build --workers 16 ...
 
 # Limit depth to reduce prefix count
-s3inv-index build --max-depth 5 ...
+s3-inv-db build --max-depth 5 ...
 
 # Constrain memory usage
-s3inv-index build --mem-budget 2GiB ...
+s3-inv-db build --mem-budget 2GiB ...
 ```
 
 ### Build Phases
@@ -169,3 +169,25 @@ The OS manages page cache automatically. Frequently accessed index regions stay 
 3. **Pre-warm for latency-sensitive queries**: Read index files sequentially to populate page cache
 4. **Use iterators for large result sets**: Avoids allocating million-element slices
 5. **Monitor temp disk usage**: External sort needs 2-3x index size in temp space
+
+## Server: sizing the disk budget
+
+When auto-load is enabled, `--max-index-disk` caps the total bytes the
+server will hold for materialised indexes. `BenchmarkLoadDiskPeak` in
+`pkg/extsort` measures the final index size and scratch peak for a
+range of object counts; representative numbers from a single run:
+
+| Synthetic objects | Final index bytes | Scratch peak |
+|---|---|---|
+| 10 K | ~5 MB | ~7 MB |
+| 100 K | ~46 MB | ~69 MB |
+| 500 K | ~213 MB | ~318 MB |
+
+These scale near-linearly with prefix count, not object count, so
+realistic billion-object inventories with deep paths land closer to
+~430–510 bytes per object on disk. Use `--index-ratio` to refine the
+multiplier the planner applies to a manifest's compressed CSV total
+when estimating final index bytes (default `0.30` is a conservative
+seed — measure your own corpus). Keep `--scratch-dir` on a volume
+with at least 2× the expected manifest-compressed-size of the largest
+inventory you intend to load.

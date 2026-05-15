@@ -1,5 +1,15 @@
 # Library API
 
+Two packages are intended for external use:
+
+- [`pkg/indexread`](#indexread) — read-only access to a built index.
+- [`pkg/server`](#server) — embed the full HTTP server in another binary.
+
+The `internal/` tree (handlers, inventory, jobs, loader, s3disco,
+templates) is implementation detail and is not part of the public API.
+
+## indexread
+
 The `indexread` package provides read-only access to S3 inventory indexes.
 
 ```go
@@ -266,3 +276,81 @@ func main() {
     }
 }
 ```
+
+## server
+
+The `server` package wires up the full HTTP service — chi router, HTML
+UI, JSON API, HTMX partials, SSE job stream, SQLite state, and optional
+S3 discovery — so another binary can embed it with a few lines.
+
+```go
+import "github.com/eunmann/s3-inv-db/pkg/server"
+```
+
+### One-shot lifecycle
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(),
+    os.Interrupt, syscall.SIGTERM)
+defer stop()
+
+err := server.BootstrapAndRun(ctx, server.RuntimeOptions{
+    Addr:     ":8080",
+    S3Source: "s3://my-bucket/inventory-data/",
+    CacheDir: "/var/cache/s3inv",
+    Logger:   logger,
+})
+```
+
+`RuntimeOptions` mirrors the binary's flag set including auto-load
+(`AutoLoad`, `PollInterval`, `MaxIndexDisk`, `IndexHeadroomBytes`,
+`AutoLoadConcurrency`, `AutoLoadRetentionDefault`, `IndexRatio`) and
+the declarative `InventoryConfigs []InventoryConfigEntry` that gets
+upserted into the state DB at startup. `S3Source` and `CacheDir` are
+optional — when omitted, discovery is disabled and the server runs
+against whatever inventories are already in the state DB. Setting
+`AutoLoad=true` without `MaxIndexDisk` returns `ErrAutoLoadWithoutBudget`.
+
+### Manual lifecycle control
+
+When you want to manage shutdown yourself (or run multiple servers):
+
+```go
+srv, cleanup, err := server.Bootstrap(opts)
+if err != nil { return err }
+defer cleanup() // closes the state DB
+
+if err := srv.Run(ctx); err != nil { return err }
+```
+
+For full wiring control (sharing one `*sql.DB` across subsystems, for
+example), use `server.New(server.Config{...})` directly. See
+`server.OpenStateDB` for opening a SQLite handle with the same pragmas
+the binary uses.
+
+### Mounting under a path prefix
+
+`Server.Router()` returns the chi router so it can be embedded inside
+another HTTP application:
+
+```go
+parent := chi.NewRouter()
+parent.Use(myAuthMiddleware)
+parent.Mount("/inv", srv.Router())
+```
+
+### API surface
+
+| Type / function | Purpose |
+|---|---|
+| `RuntimeOptions` | Flag-friendly inputs: addr, S3 source, cache dir, scratch dir, state DB path, price-table path, auto-load knobs, declarative inventory configs, logger. |
+| `Config` | Wired dependencies: addr, logger, price table, S3 source, cache dir, scratch dir, `*sql.DB`, auto-load knobs. |
+| `InventoryConfigEntry` | Source, name, AutoLoad, RetentionCount — upserted into `inventory_configs` during `Bootstrap`. |
+| `ErrAutoLoadWithoutBudget` | Returned by `Bootstrap` when `AutoLoad=true && MaxIndexDisk==0`. |
+| `Server` | Opaque server instance. |
+| `New(Config)` | Construct a server from a populated Config. |
+| `Bootstrap(RuntimeOptions)` | Resolve paths, open DB, load price table, build server; returns `(*Server, cleanup, error)`. |
+| `BootstrapAndRun(ctx, RuntimeOptions)` | Bootstrap + Run + cleanup in one call. |
+| `OpenStateDB(path)` | Open a SQLite handle with the production pragma set. |
+| `(*Server).Run(ctx)` | Block until ctx is cancelled, then graceful-shutdown. |
+| `(*Server).Router()` | Underlying chi router (for mounting or testing). |

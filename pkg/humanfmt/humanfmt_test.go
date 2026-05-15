@@ -1,8 +1,11 @@
-package humanfmt
+package humanfmt_test
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 )
 
 func TestBytes(t *testing.T) {
@@ -26,7 +29,7 @@ func TestBytes(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := Bytes(tt.input)
+		got := humanfmt.Bytes(tt.input)
 		if got != tt.want {
 			t.Errorf("Bytes(%d) = %q, want %q", tt.input, got, tt.want)
 		}
@@ -56,7 +59,7 @@ func TestDuration(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := Duration(tt.input)
+		got := humanfmt.Duration(tt.input)
 		if got != tt.want {
 			t.Errorf("Duration(%v) = %q, want %q", tt.input, got, tt.want)
 		}
@@ -81,7 +84,7 @@ func TestThroughput(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := Throughput(tt.bytes, tt.duration)
+		got := humanfmt.Throughput(tt.bytes, tt.duration)
 		if got != tt.want {
 			t.Errorf("Throughput(%d, %v) = %q, want %q", tt.bytes, tt.duration, got, tt.want)
 		}
@@ -90,24 +93,47 @@ func TestThroughput(t *testing.T) {
 
 func TestCount(t *testing.T) {
 	tests := []struct {
+		name  string
 		input int64
 		want  string
 	}{
-		{0, "0"},
-		{999, "999"},
-		{1000, "1.00K"},
-		{1500, "1.50K"},
-		{1000000, "1.00M"},
-		{1500000, "1.50M"},
-		{1000000000, "1.00B"},
-		{1500000000, "1.50B"},
-		{-100, "-100"},
+		{"zero", 0, "0"},
+		{"small", 42, "42"},
+		{"three digits", 999, "999"},
+		{"four digits → commas", 1234, "1.2K"}, // routed to K
+		{"exact thousand", 1000, "1.0K"},
+		{"round half away", 1250, "1.3K"},
+		{"1.5K", 1500, "1.5K"},
+		{"12.5K", 12_500, "12.5K"},
+		{"1M", 1_000_000, "1.0M"},
+		{"1.5M", 1_500_000, "1.5M"},
+		{"1B", 1_000_000_000, "1.0B"},
+		{"1.5B", 1_500_000_000, "1.5B"},
+		{"negative", -100, "-100"},
 	}
 
 	for _, tt := range tests {
-		got := Count(tt.input)
-		if got != tt.want {
-			t.Errorf("Count(%d) = %q, want %q", tt.input, got, tt.want)
+		t.Run(tt.name, func(t *testing.T) {
+			got := humanfmt.Count(tt.input)
+			if got != tt.want {
+				t.Errorf("Count(%d) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatWithCommas(t *testing.T) {
+	tests := []struct {
+		n    int64
+		want string
+	}{
+		{0, "0"},
+		{42, "42"},
+		{999, "999"},
+	}
+	for _, tt := range tests {
+		if got := humanfmt.FormatWithCommas(tt.n); got != tt.want {
+			t.Errorf("FormatWithCommas(%d) = %q, want %q", tt.n, got, tt.want)
 		}
 	}
 }
@@ -116,7 +142,7 @@ func BenchmarkBytes(b *testing.B) {
 	sizes := []int64{100, 1024, 1048576, 1073741824}
 	b.ResetTimer()
 	for i := range b.N {
-		_ = Bytes(sizes[i%len(sizes)])
+		_ = humanfmt.Bytes(sizes[i%len(sizes)])
 	}
 }
 
@@ -129,13 +155,48 @@ func BenchmarkDuration(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := range b.N {
-		_ = Duration(durations[i%len(durations)])
+		_ = humanfmt.Duration(durations[i%len(durations)])
 	}
 }
 
 func BenchmarkThroughput(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
-		_ = Throughput(104857600, time.Second)
+		_ = humanfmt.Throughput(104857600, time.Second)
+	}
+}
+
+func TestBytesUint64_OverflowAbove2_63(t *testing.T) {
+	// 9 EiB is above int64 max; the old int64-cast wrapper would have
+	// underflowed to a negative value and returned "-... B". The
+	// native uint64 implementation must surface a real TiB number.
+	const aboveMax = uint64(1) << 63
+	got := humanfmt.BytesUint64(aboveMax)
+	if !strings.HasSuffix(got, "TiB") {
+		t.Errorf("humanfmt.BytesUint64(2^63) = %q, want a TiB-suffix value", got)
+	}
+}
+
+func TestCountUint64_OverflowAbove2_63(t *testing.T) {
+	const aboveMax = uint64(1) << 63
+	got := humanfmt.CountUint64(aboveMax)
+	if !strings.HasSuffix(got, "B") {
+		t.Errorf("humanfmt.CountUint64(2^63) = %q, want a B-suffix value", got)
+	}
+}
+
+func TestRunTimestamp(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"2026-05-13T03-02Z", "2026-05-13 03:02 UTC"},
+		{"2026-05-13T03-02-17Z", "2026-05-13 03:02 UTC"},
+		{"not-a-timestamp", "not-a-timestamp"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := humanfmt.RunTimestamp(c.in); got != c.want {
+			t.Errorf("RunTimestamp(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }

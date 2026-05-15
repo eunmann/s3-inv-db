@@ -1,27 +1,29 @@
-package tiers
+package tiers_test
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 func TestFromS3_StandardClasses(t *testing.T) {
-	m := NewMapping()
+	m := tiers.NewMapping()
 
 	tests := []struct {
 		storageClass string
 		accessTier   string
-		wantID       ID
+		wantID       tiers.ID
 	}{
-		{"STANDARD", "", Standard},
-		{"standard", "", Standard},
-		{"STANDARD_IA", "", StandardIA},
-		{"ONEZONE_IA", "", OneZoneIA},
-		{"GLACIER_IR", "", GlacierIR},
-		{"GLACIER", "", GlacierFR},
-		{"DEEP_ARCHIVE", "", DeepArchive},
-		{"REDUCED_REDUNDANCY", "", ReducedRedundancy},
+		{"STANDARD", "", tiers.Standard},
+		{"standard", "", tiers.Standard},
+		{"STANDARD_IA", "", tiers.StandardIA},
+		{"ONEZONE_IA", "", tiers.OneZoneIA},
+		{"GLACIER_IR", "", tiers.GlacierIR},
+		{"GLACIER", "", tiers.GlacierFR},
+		{"DEEP_ARCHIVE", "", tiers.DeepArchive},
+		{"REDUCED_REDUNDANCY", "", tiers.ReducedRedundancy},
 	}
 
 	for _, tt := range tests {
@@ -35,23 +37,23 @@ func TestFromS3_StandardClasses(t *testing.T) {
 }
 
 func TestFromS3_IntelligentTiering(t *testing.T) {
-	m := NewMapping()
+	m := tiers.NewMapping()
 
 	tests := []struct {
 		accessTier string
-		wantID     ID
+		wantID     tiers.ID
 	}{
-		{"FREQUENT_ACCESS", ITFrequent},
-		{"FREQUENT", ITFrequent},
-		{"INFREQUENT_ACCESS", ITInfrequent},
-		{"INFREQUENT", ITInfrequent},
-		{"ARCHIVE_INSTANT_ACCESS", ITArchiveInstant},
-		{"ARCHIVE_ACCESS", ITArchive},
-		{"ARCHIVE", ITArchive},
-		{"DEEP_ARCHIVE_ACCESS", ITDeepArchive},
-		{"DEEP_ARCHIVE", ITDeepArchive},
-		{"", ITFrequent},        // Missing defaults to Frequent
-		{"UNKNOWN", ITFrequent}, // Unknown defaults to Frequent
+		{"FREQUENT_ACCESS", tiers.ITFrequent},
+		{"FREQUENT", tiers.ITFrequent},
+		{"INFREQUENT_ACCESS", tiers.ITInfrequent},
+		{"INFREQUENT", tiers.ITInfrequent},
+		{"ARCHIVE_INSTANT_ACCESS", tiers.ITArchiveInstant},
+		{"ARCHIVE_ACCESS", tiers.ITArchive},
+		{"ARCHIVE", tiers.ITArchive},
+		{"DEEP_ARCHIVE_ACCESS", tiers.ITDeepArchive},
+		{"DEEP_ARCHIVE", tiers.ITDeepArchive},
+		{"", tiers.ITFrequent},
+		{"UNKNOWN", tiers.ITFrequent},
 	}
 
 	for _, tt := range tests {
@@ -65,18 +67,18 @@ func TestFromS3_IntelligentTiering(t *testing.T) {
 }
 
 func TestFromS3_CaseInsensitive(t *testing.T) {
-	m := NewMapping()
+	m := tiers.NewMapping()
 
 	tests := []struct {
 		storageClass string
 		accessTier   string
-		wantID       ID
+		wantID       tiers.ID
 	}{
-		{"standard", "", Standard},
-		{"Standard", "", Standard},
-		{"STANDARD", "", Standard},
-		{"intelligent_tiering", "frequent_access", ITFrequent},
-		{"Intelligent_Tiering", "Frequent_Access", ITFrequent},
+		{"standard", "", tiers.Standard},
+		{"Standard", "", tiers.Standard},
+		{"STANDARD", "", tiers.Standard},
+		{"intelligent_tiering", "frequent_access", tiers.ITFrequent},
+		{"Intelligent_Tiering", "Frequent_Access", tiers.ITFrequent},
 	}
 
 	for _, tt := range tests {
@@ -90,29 +92,27 @@ func TestFromS3_CaseInsensitive(t *testing.T) {
 }
 
 func TestFromS3_UnknownClass(t *testing.T) {
-	m := NewMapping()
+	m := tiers.NewMapping()
 
-	// Unknown storage class should default to Standard
 	got := m.FromS3("UNKNOWN_CLASS", "")
-	if got != Standard {
-		t.Errorf("FromS3(UNKNOWN_CLASS, '') = %d, want %d (Standard)", got, Standard)
+	if got != tiers.Standard {
+		t.Errorf("FromS3(UNKNOWN_CLASS, '') = %d, want %d (Standard)", got, tiers.Standard)
 	}
 }
 
 func TestFromS3_Whitespace(t *testing.T) {
-	m := NewMapping()
+	m := tiers.NewMapping()
 
-	// Should handle whitespace
 	got := m.FromS3("  STANDARD  ", "")
-	if got != Standard {
-		t.Errorf("FromS3 with whitespace = %d, want %d", got, Standard)
+	if got != tiers.Standard {
+		t.Errorf("FromS3 with whitespace = %d, want %d", got, tiers.Standard)
 	}
 }
 
 func TestByID(t *testing.T) {
-	m := NewMapping()
+	m := tiers.NewMapping()
 
-	info := m.ByID(Standard)
+	info := m.ByID(tiers.Standard)
 	if info.Name != "STANDARD" {
 		t.Errorf("ByID(Standard).Name = %q, want STANDARD", info.Name)
 	}
@@ -120,7 +120,7 @@ func TestByID(t *testing.T) {
 		t.Errorf("ByID(Standard).FilePrefix = %q, want standard", info.FilePrefix)
 	}
 
-	info = m.ByID(ITFrequent)
+	info = m.ByID(tiers.ITFrequent)
 	if info.FilePrefix != "it_frequent" {
 		t.Errorf("ByID(ITFrequent).FilePrefix = %q, want it_frequent", info.FilePrefix)
 	}
@@ -129,19 +129,17 @@ func TestByID(t *testing.T) {
 func TestWriteReadManifest(t *testing.T) {
 	dir := t.TempDir()
 
-	presentTiers := []ID{Standard, GlacierFR, ITFrequent}
-	if err := WriteManifest(dir, presentTiers); err != nil {
+	presentTiers := []tiers.ID{tiers.Standard, tiers.GlacierFR, tiers.ITFrequent}
+	if err := tiers.WriteManifest(dir, presentTiers); err != nil {
 		t.Fatalf("WriteManifest failed: %v", err)
 	}
 
-	// Verify file exists
 	path := filepath.Join(dir, "tiers.json")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("tiers.json not created: %v", err)
 	}
 
-	// Read it back
-	manifest, err := ReadManifest(dir)
+	manifest, err := tiers.ReadManifest(dir)
 	if err != nil {
 		t.Fatalf("ReadManifest failed: %v", err)
 	}
@@ -150,8 +148,7 @@ func TestWriteReadManifest(t *testing.T) {
 		t.Errorf("got %d tiers, want 3", len(manifest.Tiers))
 	}
 
-	// Verify tier IDs
-	wantIDs := map[ID]bool{Standard: true, GlacierFR: true, ITFrequent: true}
+	wantIDs := map[tiers.ID]bool{tiers.Standard: true, tiers.GlacierFR: true, tiers.ITFrequent: true}
 	for _, tier := range manifest.Tiers {
 		if !wantIDs[tier.ID] {
 			t.Errorf("unexpected tier ID %d in manifest", tier.ID)
@@ -162,22 +159,48 @@ func TestWriteReadManifest(t *testing.T) {
 func TestReadManifest_NotExists(t *testing.T) {
 	dir := t.TempDir()
 
-	manifest, err := ReadManifest(dir)
+	manifest, err := tiers.ReadManifest(dir)
 	if err != nil {
 		t.Fatalf("ReadManifest failed: %v", err)
 	}
-	if manifest != nil {
-		t.Error("expected nil manifest for missing file")
+	if manifest == nil {
+		t.Fatal("expected non-nil empty manifest for missing file")
+	}
+	if len(manifest.Tiers) != 0 {
+		t.Errorf("expected zero tiers when file is missing, got %d", len(manifest.Tiers))
+	}
+}
+
+func TestResolve_SmallITFrequent(t *testing.T) {
+	cases := []struct {
+		name string
+		id   tiers.ID
+		size uint64
+		want tiers.ID
+	}{
+		{"small IT frequent -> small bucket", tiers.ITFrequent, 1024, tiers.ITFrequentSmall},
+		{"IT frequent at threshold stays", tiers.ITFrequent, tiers.SmallObjectThresholdBytes, tiers.ITFrequent},
+		{"IT frequent above threshold stays", tiers.ITFrequent, tiers.SmallObjectThresholdBytes + 1, tiers.ITFrequent},
+		{"small Standard untouched", tiers.Standard, 1024, tiers.Standard},
+		{"small IT infrequent untouched", tiers.ITInfrequent, 1024, tiers.ITInfrequent},
+		{"zero-byte IT frequent reclassifies", tiers.ITFrequent, 0, tiers.ITFrequentSmall},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tiers.Resolve(tc.id, tc.size); got != tc.want {
+				t.Errorf("Resolve(%v, %d) = %v, want %v", tc.id, tc.size, got, tc.want)
+			}
+		})
 	}
 }
 
 func TestAllTiersComplete(t *testing.T) {
-	// Verify all tier IDs from 0 to NumTiers-1 are covered
-	if len(AllTiers) != int(NumTiers) {
-		t.Errorf("AllTiers has %d entries, expected %d", len(AllTiers), NumTiers)
+	all := tiers.AllTiers()
+	if len(all) != int(tiers.NumTiers) {
+		t.Errorf("AllTiers has %d entries, expected %d", len(all), tiers.NumTiers)
 	}
 
-	for i, tier := range AllTiers {
+	for i, tier := range all {
 		if int(tier.ID) != i {
 			t.Errorf("AllTiers[%d].ID = %d, expected %d", i, tier.ID, i)
 		}

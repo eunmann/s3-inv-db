@@ -1,61 +1,42 @@
-package logging
+package logging_test
 
 import (
 	"bytes"
 	"testing"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/rs/zerolog"
 )
 
 func TestInit_DoesNotPanic(_ *testing.T) {
-	// Test JSON mode (default)
-	Init(false, false)
-	log := L()
+	// Test JSON mode (default).
+	logging.Init(false, false)
+	log := logging.L()
 	log.Info().Msg("test json info")
 	log.Debug().Msg("test json debug (should not appear at info level)")
 
-	// Test debug mode
-	Init(true, false)
-	log = L()
+	// Test debug mode.
+	logging.Init(true, false)
+	log = logging.L()
 	log.Debug().Msg("test json debug (should appear)")
 
-	// Test human-friendly mode
-	Init(false, true)
-	log = L()
+	// Test human-friendly mode.
+	logging.Init(false, true)
+	log = logging.L()
 	log.Info().Msg("test human info")
 
-	// Test debug + human
-	Init(true, true)
-	log = L()
+	// Test debug + human.
+	logging.Init(true, true)
+	log = logging.L()
 	log.Debug().Msg("test human debug")
-}
-
-func TestPrettyMode(t *testing.T) {
-	// Default should be false
-	SetPrettyMode(false)
-	if IsPrettyMode() {
-		t.Error("expected pretty mode to be false by default")
-	}
-
-	// Set to true
-	SetPrettyMode(true)
-	if !IsPrettyMode() {
-		t.Error("expected pretty mode to be true after SetPrettyMode(true)")
-	}
-
-	// Reset
-	SetPrettyMode(false)
-	if IsPrettyMode() {
-		t.Error("expected pretty mode to be false after SetPrettyMode(false)")
-	}
 }
 
 func TestLogEvent_PrettyMode(t *testing.T) {
 	tests := []struct {
-		name       string
-		prettyMode bool
-		wantHuman  bool
+		name      string
+		pretty    bool
+		wantHuman bool
 	}{
 		{"pretty_off", false, false},
 		{"pretty_on", true, true},
@@ -64,10 +45,9 @@ func TestLogEvent_PrettyMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			SetLogger(zerolog.New(&buf))
-			SetPrettyMode(tt.prettyMode)
+			log := zerolog.New(&buf)
 
-			Event(L().Info()).
+			logging.InfoEvent(log, tt.pretty).
 				Bytes("bytes", 1073741824).
 				Duration("elapsed", 1500*time.Millisecond).
 				Count("count", 1500000).
@@ -75,7 +55,7 @@ func TestLogEvent_PrettyMode(t *testing.T) {
 
 			output := buf.String()
 
-			// Raw fields should always be present
+			// Raw fields should always be present.
 			if !bytes.Contains(buf.Bytes(), []byte(`"bytes":1073741824`)) {
 				t.Errorf("expected raw bytes field, got: %s", output)
 			}
@@ -83,9 +63,9 @@ func TestLogEvent_PrettyMode(t *testing.T) {
 				t.Errorf("expected raw count field, got: %s", output)
 			}
 
-			// Human fields depend on mode
+			// Human fields depend on mode.
 			hasHumanBytes := bytes.Contains(buf.Bytes(), []byte(`"bytes_h":"1.00 GiB"`))
-			hasHumanCount := bytes.Contains(buf.Bytes(), []byte(`"count_h":"1.50M"`))
+			hasHumanCount := bytes.Contains(buf.Bytes(), []byte(`"count_h":"1.5M"`))
 			hasHumanElapsed := bytes.Contains(buf.Bytes(), []byte(`"elapsed_h":`))
 
 			if tt.wantHuman {
@@ -112,18 +92,14 @@ func TestLogEvent_PrettyMode(t *testing.T) {
 		})
 	}
 
-	// Reset
-	SetPrettyMode(false)
-	Init(false, false)
+	logging.Init(false, false)
 }
 
 func TestOperation(t *testing.T) {
 	var buf bytes.Buffer
-	SetLogger(zerolog.New(&buf))
-	SetPrettyMode(false)
+	logging.SetLogger(zerolog.New(&buf))
 
-	// Test basic operation
-	op := NewOperation("test_op")
+	op := logging.NewOperation("test_op")
 	time.Sleep(10 * time.Millisecond)
 	op.End()
 
@@ -135,17 +111,14 @@ func TestOperation(t *testing.T) {
 		t.Errorf("expected elapsed_ms field, got: %s", output)
 	}
 
-	// Reset
-	SetPrettyMode(false)
-	Init(false, false)
+	logging.Init(false, false)
 }
 
 func TestOperation_WithBytes(t *testing.T) {
 	var buf bytes.Buffer
-	SetLogger(zerolog.New(&buf))
-	SetPrettyMode(true)
+	logging.SetLogger(zerolog.New(&buf))
 
-	op := NewOperation("byte_op")
+	op := logging.NewOperation("byte_op").Pretty(true)
 	op.EndWithBytes(104857600) // 100 MiB
 
 	output := buf.String()
@@ -159,17 +132,14 @@ func TestOperation_WithBytes(t *testing.T) {
 		t.Errorf("expected throughput_h, got: %s", output)
 	}
 
-	// Reset
-	SetPrettyMode(false)
-	Init(false, false)
+	logging.Init(false, false)
 }
 
 func TestOperation_WithFields(t *testing.T) {
 	var buf bytes.Buffer
-	SetLogger(zerolog.New(&buf))
-	SetPrettyMode(true)
+	logging.SetLogger(zerolog.New(&buf))
 
-	op := NewOperation("field_op")
+	op := logging.NewOperation("field_op").Pretty(true)
 	op.WithField("custom", "value").
 		WithBytes("data_size", 1048576).
 		WithCount("items", 1500000)
@@ -188,20 +158,18 @@ func TestOperation_WithFields(t *testing.T) {
 	if !bytes.Contains(buf.Bytes(), []byte(`"items":1500000`)) {
 		t.Errorf("expected items field, got: %s", output)
 	}
-	if !bytes.Contains(buf.Bytes(), []byte(`"items_h":"1.50M"`)) {
+	if !bytes.Contains(buf.Bytes(), []byte(`"items_h":"1.5M"`)) {
 		t.Errorf("expected items_h field, got: %s", output)
 	}
 
-	// Reset
-	SetPrettyMode(false)
-	Init(false, false)
+	logging.Init(false, false)
 }
 
 func TestWithPhase(t *testing.T) {
 	var buf bytes.Buffer
-	SetLogger(zerolog.New(&buf))
+	logging.SetLogger(zerolog.New(&buf))
 
-	log := WithPhase("test_phase")
+	log := logging.WithPhase("test_phase")
 	log.Info().Msg("test message")
 
 	output := buf.String()
@@ -209,7 +177,6 @@ func TestWithPhase(t *testing.T) {
 		t.Error("expected log output, got empty string")
 	}
 
-	// Check that phase field is present
 	if !bytes.Contains(buf.Bytes(), []byte(`"phase":"test_phase"`)) {
 		t.Errorf("expected phase field in output, got: %s", output)
 	}
@@ -218,14 +185,13 @@ func TestWithPhase(t *testing.T) {
 func TestSetLogger(t *testing.T) {
 	var buf bytes.Buffer
 	customLogger := zerolog.New(&buf).With().Str("custom", "field").Logger()
-	SetLogger(customLogger)
+	logging.SetLogger(customLogger)
 
-	L().Info().Msg("test")
+	logging.L().Info().Msg("test")
 
 	if !bytes.Contains(buf.Bytes(), []byte(`"custom":"field"`)) {
 		t.Errorf("expected custom field in output, got: %s", buf.String())
 	}
 
-	// Reset to default for other tests
-	Init(false, false)
+	logging.Init(false, false)
 }

@@ -9,6 +9,17 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
+// Sentinel errors for parquet inventory reading. Static errors satisfy
+// err113 by letting callers use errors.Is and fmt.Errorf("...: %w", err).
+var (
+	// ErrSizeMismatch indicates buffered bytes did not match the declared size.
+	ErrSizeMismatch = errors.New("size mismatch")
+	// ErrMissingKeyColumn indicates the parquet schema has no recognized key column.
+	ErrMissingKeyColumn = errors.New("parquet schema missing 'key' column")
+	// ErrMissingSizeColumn indicates the parquet schema has no recognized size column.
+	ErrMissingSizeColumn = errors.New("parquet schema missing 'size' column")
+)
+
 // parquetInventoryReader reads S3 inventory records from Parquet files.
 // It implements streaming by iterating through row groups.
 type parquetInventoryReader struct {
@@ -79,6 +90,7 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 	tempFile, err := os.CreateTemp("", "parquet-inventory-*.parquet")
 	if err != nil {
 		r.Close()
+
 		return nil, fmt.Errorf("create temp file: %w", err)
 	}
 
@@ -87,6 +99,7 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 	if err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, fmt.Errorf("buffer parquet data: %w", err)
 	}
 
@@ -94,12 +107,14 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 	if size > 0 && written != size {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
-		return nil, fmt.Errorf("size mismatch: expected %d, got %d", size, written)
+
+		return nil, fmt.Errorf("%w: expected %d, got %d", ErrSizeMismatch, size, written)
 	}
 
 	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, fmt.Errorf("seek temp file: %w", err)
 	}
 
@@ -107,6 +122,7 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 	if err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, fmt.Errorf("open parquet file: %w", err)
 	}
 
@@ -114,6 +130,7 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 	if err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, err
 	}
 
@@ -126,6 +143,7 @@ func NewParquetInventoryReaderWithConfig(r io.ReadCloser, size int64, cfg Parque
 	tempFile, err := os.CreateTemp("", "parquet-inventory-*.parquet")
 	if err != nil {
 		r.Close()
+
 		return nil, fmt.Errorf("create temp file: %w", err)
 	}
 
@@ -134,6 +152,7 @@ func NewParquetInventoryReaderWithConfig(r io.ReadCloser, size int64, cfg Parque
 	if err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, fmt.Errorf("buffer parquet data: %w", err)
 	}
 
@@ -141,12 +160,14 @@ func NewParquetInventoryReaderWithConfig(r io.ReadCloser, size int64, cfg Parque
 	if size > 0 && written != size {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
-		return nil, fmt.Errorf("size mismatch: expected %d, got %d", size, written)
+
+		return nil, fmt.Errorf("%w: expected %d, got %d", ErrSizeMismatch, size, written)
 	}
 
 	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, fmt.Errorf("seek temp file: %w", err)
 	}
 
@@ -154,6 +175,7 @@ func NewParquetInventoryReaderWithConfig(r io.ReadCloser, size int64, cfg Parque
 	if err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())
+
 		return nil, fmt.Errorf("open parquet file: %w", err)
 	}
 
@@ -185,10 +207,10 @@ func detectParquetSchema(schema *parquet.Schema) (ParquetReaderConfig, error) {
 	}
 
 	if cfg.KeyCol < 0 {
-		return cfg, errors.New("parquet schema missing 'key' column")
+		return cfg, ErrMissingKeyColumn
 	}
 	if cfg.SizeCol < 0 {
-		return cfg, errors.New("parquet schema missing 'size' column")
+		return cfg, ErrMissingSizeColumn
 	}
 
 	return cfg, nil
@@ -218,6 +240,7 @@ func (r *parquetInventoryReader) Next() (Row, error) {
 		if r.bufIdx < r.bufLen {
 			row := r.rowBuf[r.bufIdx]
 			r.bufIdx++
+
 			return r.rowToRow(row), nil
 		}
 
@@ -226,6 +249,7 @@ func (r *parquetInventoryReader) Next() (Row, error) {
 			if n > 0 {
 				r.bufIdx = 0
 				r.bufLen = n
+
 				continue
 			}
 			if err != nil && !errors.Is(err, io.EOF) {

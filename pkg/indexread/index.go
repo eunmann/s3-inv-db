@@ -40,42 +40,49 @@ func Open(dir string) (*Index, error) {
 	idx.depth, err = format.OpenArray(filepath.Join(dir, "depth.u32"))
 	if err != nil {
 		idx.Close()
+
 		return nil, fmt.Errorf("open depth: %w", err)
 	}
 
 	idx.objectCount, err = format.OpenArray(filepath.Join(dir, "object_count.u64"))
 	if err != nil {
 		idx.Close()
+
 		return nil, fmt.Errorf("open object_count: %w", err)
 	}
 
 	idx.totalBytes, err = format.OpenArray(filepath.Join(dir, "total_bytes.u64"))
 	if err != nil {
 		idx.Close()
+
 		return nil, fmt.Errorf("open total_bytes: %w", err)
 	}
 
 	idx.maxDepthInSubtree, err = format.OpenArray(filepath.Join(dir, "max_depth_in_subtree.u32"))
 	if err != nil {
 		idx.Close()
+
 		return nil, fmt.Errorf("open max_depth_in_subtree: %w", err)
 	}
 
 	idx.depthIndex, err = format.OpenDepthIndex(dir)
 	if err != nil {
 		idx.Close()
+
 		return nil, fmt.Errorf("open depth index: %w", err)
 	}
 
 	idx.mphf, err = format.OpenMPHF(dir)
 	if err != nil {
 		idx.Close()
+
 		return nil, fmt.Errorf("open MPHF: %w", err)
 	}
 
 	idx.tierStats, err = format.OpenTierStats(dir)
 	if err != nil {
 		idx.Close()
+
 		return nil, fmt.Errorf("open tier stats: %w", err)
 	}
 
@@ -101,6 +108,7 @@ func closeAll(closers ...closer) error {
 			firstErr = err
 		}
 	}
+
 	return firstErr
 }
 
@@ -125,7 +133,7 @@ type Stats struct {
 }
 
 // Lookup returns the preorder position for a prefix, or ok=false if not found.
-func (idx *Index) Lookup(prefix string) (pos uint64, ok bool) {
+func (idx *Index) Lookup(prefix string) (uint64, bool) {
 	return idx.mphf.Lookup(prefix)
 }
 
@@ -136,6 +144,7 @@ func (idx *Index) Stats(pos uint64) Stats {
 	if pos >= idx.count {
 		return Stats{}
 	}
+
 	return Stats{
 		ObjectCount: idx.objectCount.UnsafeGetU64(pos),
 		TotalBytes:  idx.totalBytes.UnsafeGetU64(pos),
@@ -148,6 +157,7 @@ func (idx *Index) StatsForPrefix(prefix string) (Stats, bool) {
 	if !ok {
 		return Stats{}, false
 	}
+
 	return idx.Stats(pos), true
 }
 
@@ -156,6 +166,7 @@ func (idx *Index) Depth(pos uint64) uint32 {
 	if pos >= idx.count {
 		return 0
 	}
+
 	return idx.depth.UnsafeGetU32(pos)
 }
 
@@ -164,6 +175,7 @@ func (idx *Index) SubtreeEnd(pos uint64) uint64 {
 	if pos >= idx.count {
 		return 0
 	}
+
 	return idx.subtreeEnd.UnsafeGetU64(pos)
 }
 
@@ -172,6 +184,7 @@ func (idx *Index) MaxDepthInSubtree(pos uint64) uint32 {
 	if pos >= idx.count {
 		return 0
 	}
+
 	return idx.maxDepthInSubtree.UnsafeGetU32(pos)
 }
 
@@ -181,6 +194,7 @@ func (idx *Index) PrefixString(pos uint64) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get prefix for pos %d: %w", pos, err)
 	}
+
 	return s, nil
 }
 
@@ -225,6 +239,7 @@ func (idx *Index) DescendantsAtDepth(prefixPos uint64, relDepth int) ([]uint64, 
 	if err != nil {
 		return nil, fmt.Errorf("get positions at depth %d: %w", targetDepth, err)
 	}
+
 	return positions, nil
 }
 
@@ -368,9 +383,10 @@ func (idx *Index) HasTierData() bool {
 //
 // Use HasTierData to distinguish "no tier data in index" from "empty breakdown".
 func (idx *Index) TierBreakdown(pos uint64) []TierBreakdown {
-	if idx.tierStats == nil {
+	if !idx.HasTierData() {
 		return nil
 	}
+
 	return idx.tierStats.GetBreakdown(pos)
 }
 
@@ -378,9 +394,10 @@ func (idx *Index) TierBreakdown(pos uint64) []TierBreakdown {
 // Returns nil if no tier data was collected during index build.
 // Use HasTierData to check if tier data is available.
 func (idx *Index) TierBreakdownAll(pos uint64) []TierBreakdown {
-	if idx.tierStats == nil {
+	if !idx.HasTierData() {
 		return nil
 	}
+
 	return idx.tierStats.GetBreakdownAll(pos)
 }
 
@@ -395,6 +412,7 @@ func (idx *Index) TierBreakdownForPrefix(prefix string) []TierBreakdown {
 	if !ok {
 		return nil
 	}
+
 	return idx.TierBreakdown(pos)
 }
 
@@ -410,5 +428,6 @@ func (idx *Index) TierBreakdownMap(pos uint64) map[string]TierBreakdown {
 	for _, tb := range breakdown {
 		result[tb.TierName] = tb
 	}
+
 	return result
 }

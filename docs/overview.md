@@ -1,6 +1,6 @@
 # Overview
 
-s3inv-index transforms S3 inventory reports into a compact index optimized for prefix-based queries.
+s3-inv-db transforms S3 inventory reports into a compact index optimized for prefix-based queries.
 
 ## Problem
 
@@ -99,21 +99,37 @@ The index stores prefixes in preorder traversal. A prefix's descendants form a c
 
 ## Storage Tiers
 
-The index tracks statistics for all 12 S3 storage classes:
+The index tracks statistics for 13 S3 storage classes:
 
-| Tier | Description |
-|------|-------------|
-| Standard | S3 Standard |
-| StandardIA | S3 Standard-IA |
-| OneZoneIA | S3 One Zone-IA |
-| GlacierIR | Glacier Instant Retrieval |
-| GlacierFR | Glacier Flexible Retrieval |
-| DeepArchive | Glacier Deep Archive |
-| ReducedRedundancy | Reduced Redundancy (legacy) |
-| ITFrequent | Intelligent-Tiering Frequent Access |
-| ITInfrequent | Intelligent-Tiering Infrequent Access |
-| ITArchiveInstant | Intelligent-Tiering Archive Instant |
-| ITArchive | Intelligent-Tiering Archive |
-| ITDeepArchive | Intelligent-Tiering Deep Archive |
+| Tier ID | S3 name | Notes |
+|---|---|---|
+| Standard | `STANDARD` |  |
+| StandardIA | `STANDARD_IA` | 128 KiB minimum billable size |
+| OneZoneIA | `ONEZONE_IA` | 128 KiB minimum billable size |
+| GlacierIR | `GLACIER_IR` | 128 KiB minimum billable size |
+| GlacierFR | `GLACIER` | Per-object metadata overhead |
+| DeepArchive | `DEEP_ARCHIVE` | Per-object metadata overhead |
+| ReducedRedundancy | `REDUCED_REDUNDANCY` | Deprecated by AWS |
+| ITFrequent | `INTELLIGENT_TIERING_FREQUENT` | Monitored |
+| ITInfrequent | `INTELLIGENT_TIERING_INFREQUENT` | Monitored |
+| ITArchiveInstant | `INTELLIGENT_TIERING_ARCHIVE_INSTANT` | Monitored |
+| ITArchive | `INTELLIGENT_TIERING_ARCHIVE` | Monitored + Glacier overhead |
+| ITDeepArchive | `INTELLIGENT_TIERING_DEEP_ARCHIVE` | Monitored + Glacier overhead |
+| ITFrequentSmall | `INTELLIGENT_TIERING_FREQUENT_SMALL` | Synthetic bucket for IT-Frequent objects < 128 KiB; billed at Frequent rate but excluded from the monitoring fee |
 
-Per-tier statistics are stored in separate columnar files, allowing queries to break down storage by class.
+`pkg/tiers.Resolve(id, size)` re-routes IT-Frequent objects below
+128 KiB into the synthetic `ITFrequentSmall` bucket at ingest time so
+cost estimates honour the AWS minimum-monitored-size rule exactly.
+Per-tier statistics live in `tier_stats/<file_prefix>_{bytes,count}.u64`
+beside the main index files.
+
+## Server features
+
+When the `s3-inv-db-server` binary is started with `--auto-load` and
+`--max-index-disk`, it runs a background poller that discovers new
+inventory runs, plans evictions against a per-config retention count
+and a global byte cap, and loads runs through a single-flight gate.
+Pinned runs are protected from auto-eviction. The dashboard surfaces
+the budget gauge; the inventories page exposes per-configuration
+toggles. See [HTTP API](http-api.md) for the routes and [README](../README.md#configuration)
+for the JSON config-file schema that drives all flags.

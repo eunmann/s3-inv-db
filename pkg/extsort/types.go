@@ -100,6 +100,7 @@ func (r *PrefixRow) Clone() *PrefixRow {
 	}
 	copy(clone.TierCounts[:], r.TierCounts[:])
 	copy(clone.TierBytes[:], r.TierBytes[:])
+
 	return clone
 }
 
@@ -107,11 +108,19 @@ func (r *PrefixRow) Clone() *PrefixRow {
 // The buf pointer is used for temporary storage and may be resized if needed.
 // Returns io.EOF when the source is exhausted.
 func readPrefixRowRecord(reader io.Reader, buf *[]byte) (*PrefixRow, error) {
+	return readPrefixRowRecordInto(reader, buf, nil)
+}
+
+// readPrefixRowRecordInto is like readPrefixRowRecord but reuses the given
+// PrefixRow when non-nil. Pass a row obtained from prefixRowPool to keep
+// the merge loop allocation-free.
+func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) (*PrefixRow, error) {
 	var lenBuf [4]byte
 	if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
 		if err == io.EOF {
 			return nil, io.EOF
 		}
+
 		return nil, fmt.Errorf("read prefix length: %w", err)
 	}
 	prefixLen := int(binary.LittleEndian.Uint32(lenBuf[:]))
@@ -127,7 +136,11 @@ func readPrefixRowRecord(reader io.Reader, buf *[]byte) (*PrefixRow, error) {
 		return nil, fmt.Errorf("read record: %w", err)
 	}
 
-	row := &PrefixRow{}
+	if row == nil {
+		row = &PrefixRow{}
+	} else {
+		row.Reset()
+	}
 	offset := 0
 
 	row.Prefix = string((*buf)[offset : offset+prefixLen])
@@ -164,8 +177,9 @@ func SortPrefixRows(rows []*PrefixRow) {
 }
 
 // PrefixStats holds aggregated statistics for a single prefix during the
-// in-memory aggregation phase. This is a lightweight version of PrefixRow
-// that can be used with map[string]*PrefixStats.
+// in-memory aggregation phase. All counters are uint64 because at
+// billion-object / PB-scale buckets, a single tier of the root prefix can
+// exceed 2^32. Smaller width risks silent overflow on real workloads.
 type PrefixStats struct {
 	// Depth is the directory depth.
 	Depth uint16
@@ -214,6 +228,7 @@ func (s *PrefixStats) ToPrefixRow(prefix string) *PrefixRow {
 	}
 	copy(row.TierCounts[:], s.TierCounts[:])
 	copy(row.TierBytes[:], s.TierBytes[:])
+
 	return row
 }
 
@@ -286,6 +301,12 @@ type Config struct {
 	// When true, prefixes are split by "/" and deduplicated into a segment dictionary.
 	// This reduces storage when prefixes share common path components.
 	UseSegmentEncoding bool
+
+	// OnProgress is invoked on every phase transition and roughly once
+	// per ingest chunk. done/total are zero when only the stage label
+	// changed; otherwise they describe quantitative progress within
+	// the current stage (units vary — chunks during ingest). Optional.
+	OnProgress func(stage string, done, total int64)
 }
 
 // DefaultConfig returns a Config with sensible defaults based on the current machine.
@@ -302,22 +323,10 @@ func DefaultConfig() Config {
 	}
 
 	// Part concurrency for parallel range downloads within a single object
-	partConcurrency := numCPU
-	if partConcurrency < 4 {
-		partConcurrency = 4
-	}
-	if partConcurrency > 16 {
-		partConcurrency = 16
-	}
+	partConcurrency := min(max(numCPU, 4), 16)
 
 	// Merge workers scale with CPU but cap lower to avoid memory pressure
-	mergeWorkers := numCPU / 2
-	if mergeWorkers < 1 {
-		mergeWorkers = 1
-	}
-	if mergeWorkers > 8 {
-		mergeWorkers = 8
-	}
+	mergeWorkers := min(max(numCPU/2, 1), 8)
 
 	return Config{
 		TempDir:                   "",
@@ -347,24 +356,28 @@ func (c *Config) EnsureBudget() {
 // This is the budget's aggregator allocation (50% of total budget).
 func (c *Config) AggregatorMemoryThreshold() int64 {
 	c.EnsureBudget()
+
 	return int64(c.MemoryBudget.AggregatorBudget())
 }
 
 // RunBufferBudget returns the total budget for run file buffers.
 func (c *Config) RunBufferBudget() int64 {
 	c.EnsureBudget()
+
 	return int64(c.MemoryBudget.RunBufferBudget())
 }
 
 // MergeBudget returns the total budget for merge phase operations.
 func (c *Config) MergeBudget() int64 {
 	c.EnsureBudget()
+
 	return int64(c.MemoryBudget.MergeBudget())
 }
 
 // IndexBuildBudget returns the total budget for index building.
 func (c *Config) IndexBuildBudget() int64 {
 	c.EnsureBudget()
+
 	return int64(c.MemoryBudget.IndexBuildBudget())
 }
 
