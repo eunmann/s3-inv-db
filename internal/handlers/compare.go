@@ -14,30 +14,30 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// DiffPicker is the per-configuration run list driving the from/to
+// ComparePicker is the per-configuration run list driving the from/to
 // dropdowns. Each configuration's loaded runs are grouped under their
 // "<src>/<inv>" label, mirroring the Browse picker's <optgroup>
 // presentation so the two pages feel coherent.
-type DiffPicker struct {
-	Groups []DiffPickerGroup
+type ComparePicker struct {
+	Groups []ComparePickerGroup
 }
 
-// DiffPickerGroup is one configuration with all of its loaded runs.
-type DiffPickerGroup struct {
+// ComparePickerGroup is one configuration with all of its loaded runs.
+type ComparePickerGroup struct {
 	ConfigLabel string
-	Options     []DiffPickerOption
+	Options     []ComparePickerOption
 }
 
-// DiffPickerOption is one loaded run inside a DiffPickerGroup.
-type DiffPickerOption struct {
+// ComparePickerOption is one loaded run inside a ComparePickerGroup.
+type ComparePickerOption struct {
 	ID    inventory.ID
 	Label string // "<src>/<inv> · <run>" — self-identifying in the closed <select>
 }
 
-// DiffPageData is the typed page data for diff.html.
-type DiffPageData struct {
+// ComparePageData is the typed page data for compare.html.
+type ComparePageData struct {
 	Title       string
-	Picker      DiffPicker
+	Picker      ComparePicker
 	From        inventory.ID
 	To          inventory.ID
 	ConfigLabel string // "<src>/<inv>" when both IDs share the config
@@ -46,27 +46,27 @@ type DiffPageData struct {
 	Prefix      string
 	Breadcrumbs []BrowseCrumb // shared with Browse; same template idiom
 	Error       string        // user-facing setup error (empty when level is shown)
-	Level       *DiffLevelView
-	Partial     DiffPartialData // shape passed to the inner partial
+	Level       *CompareLevelView
+	Partial     ComparePartialData // shape passed to the inner partial
 }
 
-// DiffPartialData carries the diff_level partial's inputs. Used for
+// ComparePartialData carries the compare_level partial's inputs. Used for
 // both the htmx-driven swap and the initial full-page render so the
 // partial template has one stable shape.
-type DiffPartialData struct {
+type ComparePartialData struct {
 	Prefix      string
 	Breadcrumbs []BrowseCrumb
 	From, To    inventory.ID
-	Level       *DiffLevelView
+	Level       *CompareLevelView
 }
 
-// DiffLevelView is the rendered comparison at one prefix.
-type DiffLevelView struct {
-	Self DiffSelfView
+// CompareLevelView is the rendered comparison at one prefix.
+type CompareLevelView struct {
+	Self CompareSelfView
 
-	Children      []DiffChildView
+	Children      []CompareChildView
 	TotalChildren int // children before pagination, after hide-unchanged filter
-	Status        DiffStatusCounts
+	Status        CompareStatusCounts
 	HideUnchanged bool // toggle state for the template
 	Pagination    BrowsePagination
 	NotFound      bool // prefix missing on both sides — empty state
@@ -76,13 +76,13 @@ type DiffLevelView struct {
 	SortLinks map[string]inventory.BrowseSortLink
 }
 
-// DiffStatusCounts summarises the change set at this prefix.
-type DiffStatusCounts struct {
+// CompareStatusCounts summarises the change set at this prefix.
+type CompareStatusCounts struct {
 	Added, Removed, Changed, Unchanged int
 }
 
-// DiffSelfView is the prefix-level summary card.
-type DiffSelfView struct {
+// CompareSelfView is the prefix-level summary card.
+type CompareSelfView struct {
 	Prefix string
 
 	ObjectsBeforeH, ObjectsAfterH, ObjectsDeltaH, ObjectsPct string
@@ -96,10 +96,10 @@ type DiffSelfView struct {
 	CostSign                                     int
 }
 
-// DiffChildView is one row in the children table.
-type DiffChildView struct {
+// CompareChildView is one row in the children table.
+type CompareChildView struct {
 	Segment, Prefix string
-	Status          string // human label — template runs diffStatusClass on it
+	Status          string // human label — template runs compareStatusClass on it
 	StatusOrder     int    // stable rank for status-column sort
 	HasChildren     bool
 
@@ -120,35 +120,35 @@ type DiffChildView struct {
 	AbsByteDelta uint64
 }
 
-// DiffPage renders the comparison page. Same URL serves the full page
+// ComparePage renders the comparison page. Same URL serves the full page
 // or the inner level partial dispatched via wantsHTMXPartial, matching
 // the Browse handler's pattern.
-func (h *Handlers) DiffPage(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) ComparePage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	from := inventory.ID(q.Get("from"))
 	to := inventory.ID(q.Get("to"))
 	prefix := q.Get("prefix")
 	hideUnchanged := q.Get("show_unchanged") != "true"
 	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
-	sortBy, dir := inventory.NormalizeDiffSort(q.Get("sort"), q.Get("dir"))
+	sortBy, dir := inventory.NormalizeCompareSort(q.Get("sort"), q.Get("dir"))
 
-	opts := diffViewOptions{
+	opts := compareViewOptions{
 		from: from, to: to, prefix: prefix,
 		hideUnchanged: hideUnchanged,
 		page:          page, pageSize: pageSize,
 		sortBy: sortBy, dir: dir,
 	}
 	if wantsHTMXPartial(r) {
-		h.renderDiffLevelPartial(w, r, opts)
+		h.renderCompareLevelPartial(w, r, opts)
 		return
 	}
-	h.renderDiffFullPage(w, r, opts)
+	h.renderCompareFullPage(w, r, opts)
 }
 
-// diffViewOptions bundles the query-string knobs DiffPage parses so
-// the inner render functions and computeDiffLevel don't drown in
+// compareViewOptions bundles the query-string knobs ComparePage parses so
+// the inner render functions and computeCompareLevel don't drown in
 // positional parameters.
-type diffViewOptions struct {
+type compareViewOptions struct {
 	from, to       inventory.ID
 	prefix         string
 	hideUnchanged  bool
@@ -156,10 +156,10 @@ type diffViewOptions struct {
 	sortBy, dir    string
 }
 
-func (h *Handlers) renderDiffFullPage(w http.ResponseWriter, r *http.Request, opts diffViewOptions) {
-	data := DiffPageData{
+func (h *Handlers) renderCompareFullPage(w http.ResponseWriter, r *http.Request, opts compareViewOptions) {
+	data := ComparePageData{
 		Title:       "Compare runs",
-		Picker:      buildDiffPicker(h.manager.List()),
+		Picker:      buildComparePicker(h.manager.List()),
 		From:        opts.from,
 		To:          opts.to,
 		Prefix:      opts.prefix,
@@ -174,18 +174,18 @@ func (h *Handlers) renderDiffFullPage(w http.ResponseWriter, r *http.Request, op
 	default:
 		data.ConfigLabel, data.FromRun = describeRun(opts.from)
 		_, data.ToRun = describeRun(opts.to)
-		level, err := h.computeDiffLevel(r.Context(), opts)
+		level, err := h.computeCompareLevel(r.Context(), opts)
 		switch {
 		case errors.Is(err, inventory.ErrNotFound):
 			data.Error = "One of the runs is no longer registered. Refresh the Inventories page."
 		case errors.Is(err, inventory.ErrNotLoaded):
 			data.Error = "Both runs must be loaded before they can be compared."
 		case err != nil:
-			zerolog.Ctx(r.Context()).Error().Err(err).Msg("diff level")
-			data.Error = "Failed to compute the diff. See server logs for details."
+			zerolog.Ctx(r.Context()).Error().Err(err).Msg("compare level")
+			data.Error = "Failed to compute the comparison. See server logs for details."
 		default:
 			data.Level = level
-			data.Partial = DiffPartialData{
+			data.Partial = ComparePartialData{
 				Prefix:      opts.prefix,
 				Breadcrumbs: data.Breadcrumbs,
 				From:        opts.from,
@@ -196,13 +196,13 @@ func (h *Handlers) renderDiffFullPage(w http.ResponseWriter, r *http.Request, op
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.renderer.Render(w, "diff.html", data); err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render diff page")
+	if err := h.renderer.Render(w, "compare.html", data); err != nil {
+		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render compare page")
 		http.Error(w, "failed to render page", http.StatusInternalServerError)
 	}
 }
 
-func (h *Handlers) renderDiffLevelPartial(w http.ResponseWriter, r *http.Request, opts diffViewOptions) {
+func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Request, opts compareViewOptions) {
 	if opts.from == "" || opts.to == "" {
 		http.Error(w, "from and to are required", http.StatusBadRequest)
 		return
@@ -211,7 +211,7 @@ func (h *Handlers) renderDiffLevelPartial(w http.ResponseWriter, r *http.Request
 		http.Error(w, "both runs must belong to the same inventory configuration", http.StatusBadRequest)
 		return
 	}
-	level, err := h.computeDiffLevel(r.Context(), opts)
+	level, err := h.computeCompareLevel(r.Context(), opts)
 	if err != nil {
 		switch {
 		case errors.Is(err, inventory.ErrNotFound):
@@ -219,60 +219,60 @@ func (h *Handlers) renderDiffLevelPartial(w http.ResponseWriter, r *http.Request
 		case errors.Is(err, inventory.ErrNotLoaded):
 			http.Error(w, "both runs must be loaded before they can be compared", http.StatusConflict)
 		default:
-			zerolog.Ctx(r.Context()).Error().Err(err).Msg("diff level partial")
-			http.Error(w, "failed to compute diff", http.StatusInternalServerError)
+			zerolog.Ctx(r.Context()).Error().Err(err).Msg("compare level partial")
+			http.Error(w, "failed to compute comparison", http.StatusInternalServerError)
 		}
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	view := DiffPartialData{
+	view := ComparePartialData{
 		Prefix:      opts.prefix,
 		Breadcrumbs: inventory.Breadcrumbs(opts.prefix),
 		From:        opts.from,
 		To:          opts.to,
 		Level:       level,
 	}
-	if err := h.renderer.RenderPartial(w, "diff_level.html", view); err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render diff level partial")
+	if err := h.renderer.RenderPartial(w, "compare_level.html", view); err != nil {
+		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render compare level partial")
 		http.Error(w, "failed to render partial", http.StatusInternalServerError)
 	}
 }
 
-// computeDiffLevel borrows both indexes and assembles the rendered view
+// computeCompareLevel borrows both indexes and assembles the rendered view
 // with cost deltas, signs, and human-formatted numbers. Filters, sorts,
 // and paginates the children before returning so the caller doesn't
 // have to.
-func (h *Handlers) computeDiffLevel(_ context.Context, opts diffViewOptions) (*DiffLevelView, error) {
-	var view DiffLevelView
+func (h *Handlers) computeCompareLevel(_ context.Context, opts compareViewOptions) (*CompareLevelView, error) {
+	var view CompareLevelView
 	err := h.manager.WithTwoIndexes(opts.from, opts.to, func(a, b *indexread.Index) error {
-		data := inventory.DiffLevel(a, b, opts.prefix)
+		data := inventory.CompareLevel(a, b, opts.prefix)
 		view.NotFound = data.Self.NotFoundInA && data.Self.NotFoundInB
-		view.Self = h.buildDiffSelfView(data.Self)
-		view.Children = make([]DiffChildView, 0, len(data.Children))
+		view.Self = h.buildCompareSelfView(data.Self)
+		view.Children = make([]CompareChildView, 0, len(data.Children))
 		for i := range data.Children {
-			c := h.buildDiffChildView(&data.Children[i])
+			c := h.buildCompareChildView(&data.Children[i])
 			view.Children = append(view.Children, c)
 			switch data.Children[i].Status {
-			case inventory.DiffAdded:
+			case inventory.CompareAdded:
 				view.Status.Added++
-			case inventory.DiffRemoved:
+			case inventory.CompareRemoved:
 				view.Status.Removed++
-			case inventory.DiffChanged:
+			case inventory.CompareChanged:
 				view.Status.Changed++
-			case inventory.DiffUnchanged:
+			case inventory.CompareUnchanged:
 				view.Status.Unchanged++
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("compute diff: %w", err)
+		return nil, fmt.Errorf("compute compare level: %w", err)
 	}
 	view.HideUnchanged = opts.hideUnchanged
 	if opts.hideUnchanged {
 		filtered := view.Children[:0]
 		for i := range view.Children {
-			if view.Children[i].Status != inventory.DiffUnchanged.String() {
+			if view.Children[i].Status != inventory.CompareUnchanged.String() {
 				filtered = append(filtered, view.Children[i])
 			}
 		}
@@ -280,8 +280,8 @@ func (h *Handlers) computeDiffLevel(_ context.Context, opts diffViewOptions) (*D
 	}
 	view.Sort = opts.sortBy
 	view.Dir = opts.dir
-	view.SortLinks = inventory.DiffSortLinks(opts.sortBy, opts.dir)
-	sortDiffChildView(view.Children, opts.sortBy, opts.dir)
+	view.SortLinks = inventory.CompareSortLinks(opts.sortBy, opts.dir)
+	sortCompareChildView(view.Children, opts.sortBy, opts.dir)
 	view.TotalChildren = len(view.Children)
 	view.Pagination = inventory.Paginate(view.TotalChildren, opts.page, opts.pageSize)
 	from1, to1 := view.Pagination.FirstRow, view.Pagination.LastRow
@@ -293,17 +293,17 @@ func (h *Handlers) computeDiffLevel(_ context.Context, opts diffViewOptions) (*D
 	return &view, nil
 }
 
-// sortDiffChildView orders the table rows in place. When sortBy is
+// sortCompareChildView orders the table rows in place. When sortBy is
 // empty the default "biggest absolute byte mover" applies — handy on
 // first visit because users mostly want to see what moved. Explicit
 // sorts use signed deltas so direction picks growers vs shrinkers.
-func sortDiffChildView(rows []DiffChildView, sortBy, dir string) {
+func sortCompareChildView(rows []CompareChildView, sortBy, dir string) {
 	desc := dir == inventory.SortDirDesc
 	less := func(i, j int) bool {
 		a, b := &rows[i], &rows[j]
 		var primary, equal bool
 		switch sortBy {
-		case inventory.SortColDiffStatus:
+		case inventory.SortColCompareStatus:
 			primary = a.StatusOrder < b.StatusOrder
 			equal = a.StatusOrder == b.StatusOrder
 		case inventory.SortColObjects:
@@ -336,8 +336,8 @@ func sortDiffChildView(rows []DiffChildView, sortBy, dir string) {
 	sort.SliceStable(rows, less)
 }
 
-func (h *Handlers) buildDiffSelfView(self inventory.DiffSelf) DiffSelfView {
-	v := DiffSelfView{
+func (h *Handlers) buildCompareSelfView(self inventory.CompareSelf) CompareSelfView {
+	v := CompareSelfView{
 		Prefix:         self.Prefix,
 		ObjectsBeforeH: numericLabel(self.Objects.Before, self.NotFoundInA, humanfmt.CountUint64),
 		ObjectsAfterH:  numericLabel(self.Objects.After, self.NotFoundInB, humanfmt.CountUint64),
@@ -357,8 +357,8 @@ func (h *Handlers) buildDiffSelfView(self inventory.DiffSelf) DiffSelfView {
 	return v
 }
 
-func (h *Handlers) buildDiffChildView(c *inventory.DiffChild) DiffChildView {
-	v := DiffChildView{
+func (h *Handlers) buildCompareChildView(c *inventory.CompareChild) CompareChildView {
+	v := CompareChildView{
 		Segment:        c.Segment,
 		Prefix:         c.Prefix,
 		Status:         c.Status.String(),
@@ -366,10 +366,10 @@ func (h *Handlers) buildDiffChildView(c *inventory.DiffChild) DiffChildView {
 		HasChildren:    c.HasChildren,
 		ObjectsDelta:   c.Objects.Delta,
 		BytesDelta:     c.Bytes.Delta,
-		ObjectsBeforeH: numericLabel(c.Objects.Before, c.Status == inventory.DiffAdded, humanfmt.CountUint64),
-		ObjectsAfterH:  numericLabel(c.Objects.After, c.Status == inventory.DiffRemoved, humanfmt.CountUint64),
-		BytesBeforeH:   numericLabel(c.Bytes.Before, c.Status == inventory.DiffAdded, humanfmt.BytesUint64),
-		BytesAfterH:    numericLabel(c.Bytes.After, c.Status == inventory.DiffRemoved, humanfmt.BytesUint64),
+		ObjectsBeforeH: numericLabel(c.Objects.Before, c.Status == inventory.CompareAdded, humanfmt.CountUint64),
+		ObjectsAfterH:  numericLabel(c.Objects.After, c.Status == inventory.CompareRemoved, humanfmt.CountUint64),
+		BytesBeforeH:   numericLabel(c.Bytes.Before, c.Status == inventory.CompareAdded, humanfmt.BytesUint64),
+		BytesAfterH:    numericLabel(c.Bytes.After, c.Status == inventory.CompareRemoved, humanfmt.BytesUint64),
 		AbsByteDelta:   absInt64(c.Bytes.Delta),
 	}
 	v.ObjectsDeltaH, v.ObjectsPct, v.ObjectsSign = formatDelta(c.Objects.Before, c.Objects.After, c.Objects.Delta, humanfmt.CountUint64)
@@ -458,7 +458,7 @@ func tierMapCost(m map[string]indexread.TierBreakdown, prices pricing.PriceTable
 }
 
 // sameConfig reports whether two inventory IDs share their first two
-// segments. Both inputs must already be 3-part for the diff to apply.
+// segments. Both inputs must already be 3-part for compare to apply.
 func sameConfig(idA, idB inventory.ID) bool {
 	srcA, invA, _, okA := idA.Split()
 	srcB, invB, _, okB := idB.Split()
@@ -476,28 +476,28 @@ func describeRun(id inventory.ID) (configLabel, runLabel string) {
 	return src + "/" + inv, humanfmt.RunTimestamp(run)
 }
 
-// DiffLevelResponse is the JSON shape returned by DiffLevelAPI. Carries
-// the same numeric facts the Diff page renders but drops the Tailwind/
+// CompareLevelResponse is the JSON shape returned by CompareLevelAPI. Carries
+// the same numeric facts the Compare page renders but drops the Tailwind/
 // HTML-only fields and keeps raw int64 deltas so clients can format
 // however they like.
-type DiffLevelResponse struct {
-	From          inventory.ID         `json:"from"`
-	To            inventory.ID         `json:"to"`
-	Prefix        string               `json:"prefix"`
-	Breadcrumbs   []BrowseCrumbJSON    `json:"breadcrumbs"`
-	Self          DiffSelfResponse     `json:"self"`
-	Children      []DiffChildResponse  `json:"children"`
-	StatusCounts  DiffStatusCountsJSON `json:"status_counts"`
-	TotalChildren int                  `json:"total_children"`
-	Sort          string               `json:"sort"`
-	Dir           string               `json:"dir"`
-	Pagination    PaginationJSON       `json:"pagination"`
-	HideUnchanged bool                 `json:"hide_unchanged"`
-	NotFound      bool                 `json:"not_found,omitempty"`
+type CompareLevelResponse struct {
+	From          inventory.ID            `json:"from"`
+	To            inventory.ID            `json:"to"`
+	Prefix        string                  `json:"prefix"`
+	Breadcrumbs   []BrowseCrumbJSON       `json:"breadcrumbs"`
+	Self          CompareSelfResponse     `json:"self"`
+	Children      []CompareChildResponse  `json:"children"`
+	StatusCounts  CompareStatusCountsJSON `json:"status_counts"`
+	TotalChildren int                     `json:"total_children"`
+	Sort          string                  `json:"sort"`
+	Dir           string                  `json:"dir"`
+	Pagination    PaginationJSON          `json:"pagination"`
+	HideUnchanged bool                    `json:"hide_unchanged"`
+	NotFound      bool                    `json:"not_found,omitempty"`
 }
 
-// DiffSelfResponse is the prefix-level before/after triple.
-type DiffSelfResponse struct {
+// CompareSelfResponse is the prefix-level before/after triple.
+type CompareSelfResponse struct {
 	ObjectsBefore uint64 `json:"objects_before"`
 	ObjectsAfter  uint64 `json:"objects_after"`
 	ObjectsDelta  int64  `json:"objects_delta"`
@@ -514,8 +514,8 @@ type DiffSelfResponse struct {
 	NotFoundInTo   bool `json:"not_found_in_to,omitempty"`
 }
 
-// DiffChildResponse is one row in the children diff.
-type DiffChildResponse struct {
+// CompareChildResponse is one row in the children comparison.
+type CompareChildResponse struct {
 	Segment     string `json:"segment"`
 	Prefix      string `json:"prefix"`
 	Status      string `json:"status"` // added / removed / changed / unchanged
@@ -535,30 +535,30 @@ type DiffChildResponse struct {
 	CostDeltaMicrodollars  int64  `json:"cost_delta_microdollars,omitempty"`
 }
 
-// DiffStatusCountsJSON mirrors DiffStatusCounts with JSON tags.
-type DiffStatusCountsJSON struct {
+// CompareStatusCountsJSON mirrors CompareStatusCounts with JSON tags.
+type CompareStatusCountsJSON struct {
 	Added     int `json:"added"`
 	Removed   int `json:"removed"`
 	Changed   int `json:"changed"`
 	Unchanged int `json:"unchanged"`
 }
 
-// DiffLevelAPI returns the same data the Diff page renders, in JSON.
+// CompareLevelAPI returns the same data the Compare page renders, in JSON.
 // Same query parameters: from, to, prefix, sort, dir, page, page_size,
 // show_unchanged. 400 on mismatched configurations, 404 when either run
 // is unregistered, 409 when either isn't loaded.
 //
-// The API builds the response directly from inventory.DiffLevel rather
+// The API builds the response directly from inventory.CompareLevel rather
 // than reusing the page's view types so the JSON carries raw uint64
 // counts and microdollar costs — no formatted strings to parse back.
-func (h *Handlers) DiffLevelAPI(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) CompareLevelAPI(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	from := inventory.ID(q.Get("from"))
 	to := inventory.ID(q.Get("to"))
 	prefix := q.Get("prefix")
 	hideUnchanged := q.Get("show_unchanged") != "true"
 	page, pageSize := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
-	sortBy, dir := inventory.NormalizeDiffSort(q.Get("sort"), q.Get("dir"))
+	sortBy, dir := inventory.NormalizeCompareSort(q.Get("sort"), q.Get("dir"))
 
 	if from == "" || to == "" {
 		WriteJSONError(w, http.StatusBadRequest, "from and to are required")
@@ -569,9 +569,9 @@ func (h *Handlers) DiffLevelAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var data inventory.DiffLevelData
+	var data inventory.CompareLevelData
 	err := h.manager.WithTwoIndexes(from, to, func(a, b *indexread.Index) error {
-		data = inventory.DiffLevel(a, b, prefix)
+		data = inventory.CompareLevel(a, b, prefix)
 		return nil
 	})
 	if err != nil {
@@ -580,15 +580,15 @@ func (h *Handlers) DiffLevelAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := h.buildDiffAPIResponse(from, to, prefix, sortBy, dir, hideUnchanged, page, pageSize, data)
+	resp := h.buildCompareAPIResponse(from, to, prefix, sortBy, dir, hideUnchanged, page, pageSize, data)
 	WriteJSON(w, http.StatusOK, resp)
 }
 
-// buildDiffAPIResponse turns a DiffLevelData into the JSON payload,
+// buildCompareAPIResponse turns a CompareLevelData into the JSON payload,
 // applying the same filter→sort→paginate pipeline as the HTML view but
 // with raw numeric output.
-func (h *Handlers) buildDiffAPIResponse(from, to inventory.ID, prefix, sortBy, dir string, hideUnchanged bool, page, pageSize int, data inventory.DiffLevelData) DiffLevelResponse {
-	resp := DiffLevelResponse{
+func (h *Handlers) buildCompareAPIResponse(from, to inventory.ID, prefix, sortBy, dir string, hideUnchanged bool, page, pageSize int, data inventory.CompareLevelData) CompareLevelResponse {
+	resp := CompareLevelResponse{
 		From:          from,
 		To:            to,
 		Prefix:        prefix,
@@ -600,12 +600,12 @@ func (h *Handlers) buildDiffAPIResponse(from, to inventory.ID, prefix, sortBy, d
 	for _, b := range inventory.Breadcrumbs(prefix) {
 		resp.Breadcrumbs = append(resp.Breadcrumbs, BrowseCrumbJSON{Label: b.Label, Prefix: b.Prefix})
 	}
-	resp.Self = h.buildDiffSelfJSON(data.Self)
+	resp.Self = h.buildCompareSelfJSON(data.Self)
 
-	rows := make([]DiffChildResponse, 0, len(data.Children))
+	rows := make([]CompareChildResponse, 0, len(data.Children))
 	for i := range data.Children {
 		c := &data.Children[i]
-		row := DiffChildResponse{
+		row := CompareChildResponse{
 			Segment:       c.Segment,
 			Prefix:        c.Prefix,
 			Status:        c.Status.String(),
@@ -624,13 +624,13 @@ func (h *Handlers) buildDiffAPIResponse(from, to inventory.ID, prefix, sortBy, d
 			row.CostDeltaMicrodollars = int64(row.CostAfterMicrodollars) - int64(row.CostBeforeMicrodollars)
 		}
 		switch c.Status {
-		case inventory.DiffAdded:
+		case inventory.CompareAdded:
 			resp.StatusCounts.Added++
-		case inventory.DiffRemoved:
+		case inventory.CompareRemoved:
 			resp.StatusCounts.Removed++
-		case inventory.DiffChanged:
+		case inventory.CompareChanged:
 			resp.StatusCounts.Changed++
-		case inventory.DiffUnchanged:
+		case inventory.CompareUnchanged:
 			resp.StatusCounts.Unchanged++
 		}
 		rows = append(rows, row)
@@ -638,26 +638,26 @@ func (h *Handlers) buildDiffAPIResponse(from, to inventory.ID, prefix, sortBy, d
 	if hideUnchanged {
 		filtered := rows[:0]
 		for i := range rows {
-			if rows[i].Status != inventory.DiffUnchanged.String() {
+			if rows[i].Status != inventory.CompareUnchanged.String() {
 				filtered = append(filtered, rows[i])
 			}
 		}
 		rows = filtered
 	}
-	sortDiffAPIChildren(rows, sortBy, dir)
+	sortCompareAPIChildren(rows, sortBy, dir)
 	resp.TotalChildren = len(rows)
 	p := inventory.Paginate(len(rows), page, pageSize)
 	resp.Pagination = paginationFromBrowse(p, len(rows))
 	if p.FirstRow > 0 {
 		resp.Children = rows[p.FirstRow-1 : p.LastRow]
 	} else {
-		resp.Children = []DiffChildResponse{}
+		resp.Children = []CompareChildResponse{}
 	}
 	return resp
 }
 
-func (h *Handlers) buildDiffSelfJSON(self inventory.DiffSelf) DiffSelfResponse {
-	r := DiffSelfResponse{
+func (h *Handlers) buildCompareSelfJSON(self inventory.CompareSelf) CompareSelfResponse {
+	r := CompareSelfResponse{
 		ObjectsBefore:  self.Objects.Before,
 		ObjectsAfter:   self.Objects.After,
 		ObjectsDelta:   self.Objects.Delta,
@@ -676,15 +676,15 @@ func (h *Handlers) buildDiffSelfJSON(self inventory.DiffSelf) DiffSelfResponse {
 	return r
 }
 
-// sortDiffAPIChildren mirrors sortDiffChildView for the JSON row shape.
+// sortCompareAPIChildren mirrors sortCompareChildView for the JSON row shape.
 // When sortBy is empty the default falls through to biggest |Δ bytes|.
-func sortDiffAPIChildren(rows []DiffChildResponse, sortBy, dir string) {
+func sortCompareAPIChildren(rows []CompareChildResponse, sortBy, dir string) {
 	desc := dir == inventory.SortDirDesc
 	less := func(i, j int) bool {
 		a, b := &rows[i], &rows[j]
 		var primary, equal bool
 		switch sortBy {
-		case inventory.SortColDiffStatus:
+		case inventory.SortColCompareStatus:
 			oa, ob := statusRank(a.Status), statusRank(b.Status)
 			primary = oa < ob
 			equal = oa == ob
@@ -743,12 +743,12 @@ func paginationFromBrowse(p inventory.BrowsePagination, total int) PaginationJSO
 	}
 }
 
-// buildDiffPicker collects every StateLoaded inventory into per-config
+// buildComparePicker collects every StateLoaded inventory into per-config
 // optgroups. Configurations with only one loaded run still appear so
 // the user sees they're available — comparison just isn't possible
 // until a second run is loaded.
-func buildDiffPicker(all []inventory.Info) DiffPicker {
-	groups := map[string]*DiffPickerGroup{}
+func buildComparePicker(all []inventory.Info) ComparePicker {
+	groups := map[string]*ComparePickerGroup{}
 	for i := range all {
 		if all[i].State != inventory.StateLoaded {
 			continue
@@ -760,15 +760,15 @@ func buildDiffPicker(all []inventory.Info) DiffPicker {
 		config := src + "/" + inv
 		g, gok := groups[config]
 		if !gok {
-			g = &DiffPickerGroup{ConfigLabel: config}
+			g = &ComparePickerGroup{ConfigLabel: config}
 			groups[config] = g
 		}
-		g.Options = append(g.Options, DiffPickerOption{
+		g.Options = append(g.Options, ComparePickerOption{
 			ID:    all[i].ID,
 			Label: config + " · " + humanfmt.RunTimestamp(run),
 		})
 	}
-	out := DiffPicker{Groups: make([]DiffPickerGroup, 0, len(groups))}
+	out := ComparePicker{Groups: make([]ComparePickerGroup, 0, len(groups))}
 	for _, g := range groups {
 		sort.Slice(g.Options, func(i, j int) bool { return g.Options[i].Label > g.Options[j].Label })
 		out.Groups = append(out.Groups, *g)

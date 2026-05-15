@@ -136,14 +136,14 @@ func TestDescribeRun(t *testing.T) {
 	}
 }
 
-func TestBuildDiffSelfView_FormatsBeforeAfterAndDelta(t *testing.T) {
+func TestBuildCompareSelfView_FormatsBeforeAfterAndDelta(t *testing.T) {
 	h := newTestHandlers(t)
-	self := inventory.DiffSelf{
+	self := inventory.CompareSelf{
 		Prefix:  "data/",
-		Objects: inventory.DiffNumeric{Before: 100, After: 150, Delta: 50},
-		Bytes:   inventory.DiffNumeric{Before: 1_000, After: 2_000, Delta: 1_000},
+		Objects: inventory.CompareNumeric{Before: 100, After: 150, Delta: 50},
+		Bytes:   inventory.CompareNumeric{Before: 1_000, After: 2_000, Delta: 1_000},
 	}
-	v := h.buildDiffSelfView(self)
+	v := h.buildCompareSelfView(self)
 	if v.Prefix != "data/" {
 		t.Errorf("Prefix = %q, want data/", v.Prefix)
 	}
@@ -158,15 +158,15 @@ func TestBuildDiffSelfView_FormatsBeforeAfterAndDelta(t *testing.T) {
 	}
 }
 
-func TestBuildDiffSelfView_MissingSideRendersDash(t *testing.T) {
+func TestBuildCompareSelfView_MissingSideRendersDash(t *testing.T) {
 	h := newTestHandlers(t)
-	self := inventory.DiffSelf{
+	self := inventory.CompareSelf{
 		Prefix:      "data/",
 		NotFoundInA: true,
-		Objects:     inventory.DiffNumeric{Before: 0, After: 50, Delta: 50},
-		Bytes:       inventory.DiffNumeric{Before: 0, After: 500, Delta: 500},
+		Objects:     inventory.CompareNumeric{Before: 0, After: 50, Delta: 50},
+		Bytes:       inventory.CompareNumeric{Before: 0, After: 500, Delta: 500},
 	}
-	v := h.buildDiffSelfView(self)
+	v := h.buildCompareSelfView(self)
 	if v.ObjectsBeforeH != "—" || v.BytesBeforeH != "—" {
 		t.Errorf("before columns: objects=%q bytes=%q, want both '—'", v.ObjectsBeforeH, v.BytesBeforeH)
 	}
@@ -175,20 +175,20 @@ func TestBuildDiffSelfView_MissingSideRendersDash(t *testing.T) {
 	}
 }
 
-func TestBuildDiffChildView_StatusOrderMatchesPublicHelper(t *testing.T) {
+func TestBuildCompareChildView_StatusOrderMatchesPublicHelper(t *testing.T) {
 	h := newTestHandlers(t)
-	child := inventory.DiffChild{
+	child := inventory.CompareChild{
 		Segment: "logs/", Prefix: "data/logs/",
-		Status:  inventory.DiffChanged,
-		Objects: inventory.DiffNumeric{Before: 10, After: 8, Delta: -2},
-		Bytes:   inventory.DiffNumeric{Before: 1000, After: 900, Delta: -100},
+		Status:  inventory.CompareChanged,
+		Objects: inventory.CompareNumeric{Before: 10, After: 8, Delta: -2},
+		Bytes:   inventory.CompareNumeric{Before: 1000, After: 900, Delta: -100},
 	}
-	v := h.buildDiffChildView(&child)
+	v := h.buildCompareChildView(&child)
 	if v.Status != "changed" {
 		t.Errorf("Status = %q, want changed", v.Status)
 	}
-	if v.StatusOrder != inventory.StatusOrder(inventory.DiffChanged) {
-		t.Errorf("StatusOrder = %d, want %d", v.StatusOrder, inventory.StatusOrder(inventory.DiffChanged))
+	if v.StatusOrder != inventory.StatusOrder(inventory.CompareChanged) {
+		t.Errorf("StatusOrder = %d, want %d", v.StatusOrder, inventory.StatusOrder(inventory.CompareChanged))
 	}
 	if v.ObjectsSign != -1 || v.BytesSign != -1 {
 		t.Errorf("sign for shrinkage: objects=%d bytes=%d, want both -1", v.ObjectsSign, v.BytesSign)
@@ -198,29 +198,29 @@ func TestBuildDiffChildView_StatusOrderMatchesPublicHelper(t *testing.T) {
 	}
 }
 
-func TestBuildDiffChildView_AddedHidesBeforeColumn(t *testing.T) {
+func TestBuildCompareChildView_AddedHidesBeforeColumn(t *testing.T) {
 	h := newTestHandlers(t)
-	child := inventory.DiffChild{
+	child := inventory.CompareChild{
 		Segment: "new/", Prefix: "data/new/",
-		Status:  inventory.DiffAdded,
-		Objects: inventory.DiffNumeric{Before: 0, After: 5, Delta: 5},
-		Bytes:   inventory.DiffNumeric{Before: 0, After: 50, Delta: 50},
+		Status:  inventory.CompareAdded,
+		Objects: inventory.CompareNumeric{Before: 0, After: 5, Delta: 5},
+		Bytes:   inventory.CompareNumeric{Before: 0, After: 50, Delta: 50},
 	}
-	v := h.buildDiffChildView(&child)
+	v := h.buildCompareChildView(&child)
 	if v.ObjectsBeforeH != "—" {
 		t.Errorf("ObjectsBeforeH = %q, want '—'", v.ObjectsBeforeH)
 	}
 }
 
-func TestBuildDiffChildView_RemovedHidesAfterColumn(t *testing.T) {
+func TestBuildCompareChildView_RemovedHidesAfterColumn(t *testing.T) {
 	h := newTestHandlers(t)
-	child := inventory.DiffChild{
+	child := inventory.CompareChild{
 		Segment: "old/", Prefix: "data/old/",
-		Status:  inventory.DiffRemoved,
-		Objects: inventory.DiffNumeric{Before: 5, After: 0, Delta: -5},
-		Bytes:   inventory.DiffNumeric{Before: 50, After: 0, Delta: -50},
+		Status:  inventory.CompareRemoved,
+		Objects: inventory.CompareNumeric{Before: 5, After: 0, Delta: -5},
+		Bytes:   inventory.CompareNumeric{Before: 50, After: 0, Delta: -50},
 	}
-	v := h.buildDiffChildView(&child)
+	v := h.buildCompareChildView(&child)
 	if v.ObjectsAfterH != "—" {
 		t.Errorf("ObjectsAfterH = %q, want '—'", v.ObjectsAfterH)
 	}

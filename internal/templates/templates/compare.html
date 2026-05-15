@@ -13,7 +13,7 @@
     <!-- Picker form. Plain HTML GET so back/forward stays in sync with the URL. -->
     <div class="bg-white dark:bg-gray-800 shadow sm:rounded-lg mb-6">
         <div class="px-4 py-5 sm:p-6">
-            <form id="diff-form" class="space-y-4" action="/diff" method="get">
+            <form id="compare-form" class="space-y-4" action="/compare" method="get">
                 <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div>
                         <label for="from" class="block text-sm font-medium text-gray-700 dark:text-gray-200">From <span class="text-gray-400 dark:text-gray-500">(baseline)</span></label>
@@ -60,7 +60,7 @@
                     <p class="text-gray-500 dark:text-gray-400">
                         {{if .ConfigLabel}}<code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">{{.ConfigLabel}}</code> · {{.FromRun}} → {{.ToRun}}{{end}}
                     </p>
-                    <a href="/diff?from={{.To}}&to={{.From}}&prefix={{.Prefix}}" class="inline-flex items-center px-3 py-1.5 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline" title="Swap From and To">
+                    <a href="/compare?from={{.To}}&to={{.From}}&prefix={{.Prefix}}" class="inline-flex items-center px-3 py-1.5 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline" title="Swap From and To">
                         ⇄ Swap direction
                     </a>
                 </div>
@@ -79,9 +79,9 @@
     </div>
     {{end}}
 
-    <div id="diff-target">
+    <div id="compare-target">
         {{if .Level}}
-            {{template "templates/partials/diff_level.html" .Partial}}
+            {{template "templates/partials/compare_level.html" .Partial}}
         {{end}}
     </div>
 </div>
@@ -90,7 +90,7 @@
 // After in-page htmx swaps the address bar updates but the Prefix input
 // doesn't — sync it from the URL so the user can edit from here.
 document.body.addEventListener('htmx:afterSettle', function (event) {
-    if (!event.target || event.target.id !== 'diff-target') return;
+    if (!event.target || event.target.id !== 'compare-target') return;
     var el = document.getElementById('prefix');
     if (!el) return;
     var params = new URLSearchParams(window.location.search);

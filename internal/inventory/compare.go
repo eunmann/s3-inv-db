@@ -6,38 +6,38 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
 
-// Diff-specific sort column identifiers. The numeric ones (objects /
+// Compare-specific sort column identifiers. The numeric ones (objects /
 // size / cost) deliberately reuse the Browse keys so the URLs read
-// the same — only the comparator differs. Status is diff-only.
+// the same — only the comparator differs. Status is compare-only.
 const (
-	SortColDiffStatus = "status"
+	SortColCompareStatus = "status"
 )
 
-// statusOrder orders the four DiffStatus values for column sort. The
+// statusOrder orders the four CompareStatus values for column sort. The
 // numbers don't have a meaning beyond "stable, distinct" — they just
 // keep added together, changed together, etc.
-func statusOrder(s DiffStatus) int {
+func statusOrder(s CompareStatus) int {
 	switch s {
-	case DiffAdded:
+	case CompareAdded:
 		return 1
-	case DiffRemoved:
+	case CompareRemoved:
 		return 2
-	case DiffChanged:
+	case CompareChanged:
 		return 3
-	case DiffUnchanged:
+	case CompareUnchanged:
 		return 4
 	default:
 		return 5
 	}
 }
 
-// NormalizeDiffSort clamps sort/dir from user input to the diff's
-// known sort columns. Unknown column falls back to "" which the
+// NormalizeCompareSort clamps sort/dir from user input to the compare
+// view's known sort columns. Unknown column falls back to "" which the
 // handler treats as the "biggest absolute byte mover" default —
 // preserves the current first-visit experience.
-func NormalizeDiffSort(sortBy, dir string) (col, direction string) {
+func NormalizeCompareSort(sortBy, dir string) (col, direction string) {
 	switch sortBy {
-	case SortColSegment, SortColObjects, SortColSize, SortColCost, SortColDiffStatus:
+	case SortColSegment, SortColObjects, SortColSize, SortColCost, SortColCompareStatus:
 		col = sortBy
 	default:
 		col = ""
@@ -46,7 +46,7 @@ func NormalizeDiffSort(sortBy, dir string) (col, direction string) {
 	case SortDirAsc, SortDirDesc:
 		direction = dir
 	default:
-		if col == SortColSegment || col == SortColDiffStatus {
+		if col == SortColSegment || col == SortColCompareStatus {
 			direction = SortDirAsc
 		} else {
 			direction = SortDirDesc
@@ -55,15 +55,15 @@ func NormalizeDiffSort(sortBy, dir string) (col, direction string) {
 	return col, direction
 }
 
-// DiffSortLinks builds the per-column {sort, dir, indicator} bundle
-// for the diff children table. Same shape as inventory.SortLinks so
+// CompareSortLinks builds the per-column {sort, dir, indicator} bundle
+// for the compare children table. Same shape as inventory.SortLinks so
 // the template can reuse the helper pattern.
-func DiffSortLinks(currentSort, currentDir string) map[string]BrowseSortLink {
+func CompareSortLinks(currentSort, currentDir string) map[string]BrowseSortLink {
 	cols := []struct {
 		key        string
 		defaultDir string
 	}{
-		{SortColDiffStatus, SortDirAsc},
+		{SortColCompareStatus, SortDirAsc},
 		{SortColSegment, SortDirAsc},
 		{SortColObjects, SortDirDesc},
 		{SortColSize, SortDirDesc},
@@ -89,70 +89,70 @@ func DiffSortLinks(currentSort, currentDir string) map[string]BrowseSortLink {
 // StatusOrder returns a stable, distinct integer for each status so
 // the handler can sort rows by status column. The numbers have no
 // semantic meaning beyond keeping like-statuses together.
-func StatusOrder(s DiffStatus) int { return statusOrder(s) }
+func StatusOrder(s CompareStatus) int { return statusOrder(s) }
 
-// Diff-view types and pure helpers. Two loaded indexes are compared at
+// Compare-view types and pure helpers. Two loaded indexes are compared at
 // one prefix to surface the deltas a user can act on: how the totals
 // moved, and which immediate-child segments grew, shrank, or appeared.
 // HTTP-shape concerns (cost formatting, sort links, pagination wiring)
 // live in the handler that composes these values.
 
-// DiffStatus classifies a child relative to the two runs.
+// CompareStatus classifies a child relative to the two runs.
 //
-//	DiffAdded     — present only in B (the "to" side)
-//	DiffRemoved   — present only in A (the "from" side)
-//	DiffChanged   — present in both, with a non-zero delta in objects,
+//	CompareAdded     — present only in B (the "to" side)
+//	CompareRemoved   — present only in A (the "from" side)
+//	CompareChanged   — present in both, with a non-zero delta in objects,
 //	                bytes, or tier mix (which surfaces as a cost delta
 //	                even when objects/bytes are unchanged)
-//	DiffUnchanged — present in both with all measured fields equal
-type DiffStatus uint8
+//	CompareUnchanged — present in both with all measured fields equal
+type CompareStatus uint8
 
-// Diff status constants. String values match the user-facing badge
+// Compare status constants. String values match the user-facing badge
 // labels in the template so a rename catches both ends.
 const (
-	DiffUnchanged DiffStatus = iota
-	DiffAdded
-	DiffRemoved
-	DiffChanged
+	CompareUnchanged CompareStatus = iota
+	CompareAdded
+	CompareRemoved
+	CompareChanged
 )
 
 // String returns the user-facing label for the status. Templates render
 // {{.Status}} directly into the badge text.
-func (s DiffStatus) String() string {
+func (s CompareStatus) String() string {
 	switch s {
-	case DiffAdded:
+	case CompareAdded:
 		return "added"
-	case DiffRemoved:
+	case CompareRemoved:
 		return "removed"
-	case DiffChanged:
+	case CompareChanged:
 		return "changed"
 	default:
 		return "unchanged"
 	}
 }
 
-// DiffNumeric pairs a before/after value with its signed delta.
+// CompareNumeric pairs a before/after value with its signed delta.
 // Delta is the int64 of (after - before) so callers can format growth
 // (positive, green) or shrinkage (negative, red) symmetrically.
-type DiffNumeric struct {
+type CompareNumeric struct {
 	Before uint64
 	After  uint64
 	Delta  int64
 }
 
-// NewDiffNumeric computes the delta for a before/after pair.
-func NewDiffNumeric(before, after uint64) DiffNumeric {
-	return DiffNumeric{Before: before, After: after, Delta: int64(after) - int64(before)}
+// NewCompareNumeric computes the delta for a before/after pair.
+func NewCompareNumeric(before, after uint64) CompareNumeric {
+	return CompareNumeric{Before: before, After: after, Delta: int64(after) - int64(before)}
 }
 
-// DiffSelf is the prefix-level diff: how the totals moved between runs
+// CompareSelf is the prefix-level comparison: how the totals moved between runs
 // at this exact prefix. NotFoundInA/NotFoundInB report whether the
 // prefix exists in either side — when both are false the page renders
 // the empty state.
-type DiffSelf struct {
+type CompareSelf struct {
 	Prefix        string
-	Objects       DiffNumeric
-	Bytes         DiffNumeric
+	Objects       CompareNumeric
+	Bytes         CompareNumeric
 	NotFoundInA   bool
 	NotFoundInB   bool
 	HasTierDataA  bool
@@ -161,13 +161,13 @@ type DiffSelf struct {
 	TierAfterMap  map[string]indexread.TierBreakdown
 }
 
-// DiffChild is one immediate-child segment diff.
-type DiffChild struct {
+// CompareChild is one immediate-child segment comparison.
+type CompareChild struct {
 	Segment     string
 	Prefix      string
-	Status      DiffStatus
-	Objects     DiffNumeric
-	Bytes       DiffNumeric
+	Status      CompareStatus
+	Objects     CompareNumeric
+	Bytes       CompareNumeric
 	HasChildren bool // in either A or B — drill-in is possible if true
 
 	// Per-tier breakdown for cost computation downstream. Keyed by
@@ -176,19 +176,19 @@ type DiffChild struct {
 	TierAfter  map[string]indexread.TierBreakdown
 }
 
-// DiffLevelData is the full set of inputs the template needs to render
+// CompareLevelData is the full set of inputs the template needs to render
 // one prefix's comparison.
-type DiffLevelData struct {
-	Self     DiffSelf
-	Children []DiffChild
+type CompareLevelData struct {
+	Self     CompareSelf
+	Children []CompareChild
 }
 
-// DiffLevel compares two indexes at one prefix and returns the self-
+// CompareLevel compares two indexes at one prefix and returns the self-
 // delta plus a row per child segment present in either side. The
 // caller is responsible for filtering (e.g. hide-unchanged), sorting,
 // and pagination — keeps this helper pure and order-independent.
-func DiffLevel(a, b *indexread.Index, prefix string) DiffLevelData {
-	out := DiffLevelData{Self: DiffSelf{Prefix: prefix}}
+func CompareLevel(a, b *indexread.Index, prefix string) CompareLevelData {
+	out := CompareLevelData{Self: CompareSelf{Prefix: prefix}}
 	posA, okA := a.Lookup(prefix)
 	posB, okB := b.Lookup(prefix)
 	out.Self.NotFoundInA = !okA
@@ -221,14 +221,14 @@ func DiffLevel(a, b *indexread.Index, prefix string) DiffLevelData {
 	childrenA := indexChildren(a, posA, okA, prefix)
 	childrenB := indexChildren(b, posB, okB, prefix)
 
-	merged := map[string]*DiffChild{}
+	merged := map[string]*CompareChild{}
 	order := []string{}
 	for seg, rec := range childrenA {
-		merged[seg] = &DiffChild{
+		merged[seg] = &CompareChild{
 			Segment:     seg,
 			Prefix:      rec.fullPrefix,
-			Objects:     DiffNumeric{Before: rec.stats.ObjectCount},
-			Bytes:       DiffNumeric{Before: rec.stats.TotalBytes},
+			Objects:     CompareNumeric{Before: rec.stats.ObjectCount},
+			Bytes:       CompareNumeric{Before: rec.stats.TotalBytes},
 			HasChildren: rec.hasChildren,
 			TierBefore:  rec.tiers,
 		}
@@ -237,7 +237,7 @@ func DiffLevel(a, b *indexread.Index, prefix string) DiffLevelData {
 	for seg, rec := range childrenB {
 		child, ok := merged[seg]
 		if !ok {
-			child = &DiffChild{
+			child = &CompareChild{
 				Segment:     seg,
 				Prefix:      rec.fullPrefix,
 				HasChildren: rec.hasChildren,
@@ -254,7 +254,7 @@ func DiffLevel(a, b *indexread.Index, prefix string) DiffLevelData {
 	}
 
 	sort.Strings(order)
-	out.Children = make([]DiffChild, 0, len(order))
+	out.Children = make([]CompareChild, 0, len(order))
 	for _, seg := range order {
 		c := merged[seg]
 		c.Objects.Delta = int64(c.Objects.After) - int64(c.Objects.Before)
@@ -306,20 +306,20 @@ func indexChildren(idx *indexread.Index, parent uint64, ok bool, prefix string) 
 // per-tier maps. A child present only on one side is Added/Removed.
 // One present on both is Changed if any measurable field — including
 // the tier mix — moved, otherwise Unchanged.
-func classify(objects, bytes DiffNumeric, tierBefore, tierAfter map[string]indexread.TierBreakdown) DiffStatus {
+func classify(objects, bytes CompareNumeric, tierBefore, tierAfter map[string]indexread.TierBreakdown) CompareStatus {
 	onlyAfter := objects.Before == 0 && bytes.Before == 0 && len(tierBefore) == 0 &&
 		(objects.After > 0 || bytes.After > 0 || len(tierAfter) > 0)
 	onlyBefore := objects.After == 0 && bytes.After == 0 && len(tierAfter) == 0 &&
 		(objects.Before > 0 || bytes.Before > 0 || len(tierBefore) > 0)
 	switch {
 	case onlyAfter:
-		return DiffAdded
+		return CompareAdded
 	case onlyBefore:
-		return DiffRemoved
+		return CompareRemoved
 	case objects.Delta != 0, bytes.Delta != 0, !tierMapsEqual(tierBefore, tierAfter):
-		return DiffChanged
+		return CompareChanged
 	default:
-		return DiffUnchanged
+		return CompareUnchanged
 	}
 }
 

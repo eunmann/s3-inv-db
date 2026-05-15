@@ -86,21 +86,21 @@ func TestBrowseLevelAPI_NotLoaded(t *testing.T) {
 	}
 }
 
-func TestDiffLevelAPI_RequiresFromAndTo(t *testing.T) {
+func TestCompareLevelAPI_RequiresFromAndTo(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/diff", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/api/compare", http.NoBody)
 	w := httptest.NewRecorder()
-	f.h.DiffLevelAPI(w, req)
+	f.h.CompareLevelAPI(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
 }
 
-func TestDiffLevelAPI_MismatchedConfigurations(t *testing.T) {
+func TestCompareLevelAPI_MismatchedConfigurations(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/diff?from=a/b/c&to=x/y/z", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/api/compare?from=a/b/c&to=x/y/z", http.NoBody)
 	w := httptest.NewRecorder()
-	f.h.DiffLevelAPI(w, req)
+	f.h.CompareLevelAPI(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
@@ -109,7 +109,7 @@ func TestDiffLevelAPI_MismatchedConfigurations(t *testing.T) {
 	}
 }
 
-func TestDiffLevelAPI_NotLoaded(t *testing.T) {
+func TestCompareLevelAPI_NotLoaded(t *testing.T) {
 	f := newTestFixture(t)
 	if err := f.mgr.Register("a/b/1", "n1", "/p1"); err != nil {
 		t.Fatalf("register: %v", err)
@@ -117,9 +117,9 @@ func TestDiffLevelAPI_NotLoaded(t *testing.T) {
 	if err := f.mgr.Register("a/b/2", "n2", "/p2"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/diff?from=a/b/1&to=a/b/2", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/api/compare?from=a/b/1&to=a/b/2", http.NoBody)
 	w := httptest.NewRecorder()
-	f.h.DiffLevelAPI(w, req)
+	f.h.CompareLevelAPI(w, req)
 	if w.Code != http.StatusConflict {
 		t.Errorf("status = %d, want 409 (not loaded); body=%s", w.Code, w.Body.String())
 	}

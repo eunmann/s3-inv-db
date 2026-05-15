@@ -476,13 +476,13 @@ func TestBrowseLevelAPI_Integration_HappyPath(t *testing.T) {
 	}
 }
 
-// TestDiffLevelAPI_Integration_HappyPath registers the same seeded
+// TestCompareLevelAPI_Integration_HappyPath registers the same seeded
 // index under two composite IDs that share the configuration prefix
-// (src/inv/runA vs src/inv/runB) and diffs them against each other.
+// (src/inv/runA vs src/inv/runB) and compares them against each other.
 // Because both point at identical data, every child is "unchanged" and
 // the deltas are zero — but the JSON shape, breadcrumbs, and pagination
 // must still come out correctly.
-func TestDiffLevelAPI_Integration_HappyPath(t *testing.T) {
+func TestCompareLevelAPI_Integration_HappyPath(t *testing.T) {
 	tmp := t.TempDir()
 	if err := seeder.Run(seeder.Config{
 		OutputDir: tmp, Count: 1, Objects: 200, Preset: "small",
@@ -508,13 +508,13 @@ func TestDiffLevelAPI_Integration_HappyPath(t *testing.T) {
 		}
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/diff?from=src/inv/runA&to=src/inv/runB&prefix=&show_unchanged=true", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/api/compare?from=src/inv/runA&to=src/inv/runB&prefix=&show_unchanged=true", http.NoBody)
 	w := httptest.NewRecorder()
-	h.DiffLevelAPI(w, req)
+	h.CompareLevelAPI(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
 	}
-	var resp DiffLevelResponse
+	var resp CompareLevelResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v\nbody=%s", err, w.Body.String())
 	}

@@ -9,11 +9,11 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
-func TestDiffPage_FirstVisitShowsPicker(t *testing.T) {
+func TestComparePage_FirstVisitShowsPicker(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/diff", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/compare", http.NoBody)
 	w := httptest.NewRecorder()
-	f.h.DiffPage(w, req)
+	f.h.ComparePage(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -29,11 +29,11 @@ func TestDiffPage_FirstVisitShowsPicker(t *testing.T) {
 	}
 }
 
-func TestDiffPage_MismatchedConfigsExplains(t *testing.T) {
+func TestComparePage_MismatchedConfigsExplains(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/diff?from=bucket-a/inv-1/run1&to=bucket-b/inv-1/run1", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/compare?from=bucket-a/inv-1/run1&to=bucket-b/inv-1/run1", http.NoBody)
 	w := httptest.NewRecorder()
-	f.h.DiffPage(w, req)
+	f.h.ComparePage(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -43,18 +43,18 @@ func TestDiffPage_MismatchedConfigsExplains(t *testing.T) {
 	}
 }
 
-func TestDiffPage_PartialMismatchedConfigsReturns400(t *testing.T) {
+func TestComparePage_PartialMismatchedConfigsReturns400(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/diff?from=a/b/c&to=x/y/z", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/compare?from=a/b/c&to=x/y/z", http.NoBody)
 	req.Header.Set("HX-Request", "true")
 	w := httptest.NewRecorder()
-	f.h.DiffPage(w, req)
+	f.h.ComparePage(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("htmx partial mismatched configs status = %d, want 400", w.Code)
 	}
 }
 
-func TestDiffPage_PartialBothLoadedRequired(t *testing.T) {
+func TestComparePage_PartialBothLoadedRequired(t *testing.T) {
 	f := newTestFixture(t)
 	// Register two non-loaded entries with the same configuration.
 	if err := f.mgr.Register("bucket-a/inv-1/run1", "a r1", "/p1"); err != nil {
@@ -63,16 +63,16 @@ func TestDiffPage_PartialBothLoadedRequired(t *testing.T) {
 	if err := f.mgr.Register("bucket-a/inv-1/run2", "a r2", "/p2"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/diff?from=bucket-a/inv-1/run1&to=bucket-a/inv-1/run2", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/compare?from=bucket-a/inv-1/run1&to=bucket-a/inv-1/run2", http.NoBody)
 	req.Header.Set("HX-Request", "true")
 	w := httptest.NewRecorder()
-	f.h.DiffPage(w, req)
+	f.h.ComparePage(w, req)
 	if w.Code != http.StatusConflict {
 		t.Errorf("not-loaded partial status = %d, want 409", w.Code)
 	}
 }
 
-func TestBuildDiffPicker_OnlyLoadedAndThreePart(t *testing.T) {
+func TestBuildComparePicker_OnlyLoadedAndThreePart(t *testing.T) {
 	in := []inventory.Info{
 		{ID: "src-a/inv-1/2026-05-13T03-00Z", State: inventory.StateLoaded},
 		{ID: "src-a/inv-1/2026-05-12T03-00Z", State: inventory.StateLoaded},
@@ -80,7 +80,7 @@ func TestBuildDiffPicker_OnlyLoadedAndThreePart(t *testing.T) {
 		{ID: "src-b/inv-1/2026-05-13T03-00Z", State: inventory.StateNotLoaded}, // filtered
 		{ID: "legacy-two-part", State: inventory.StateLoaded},                  // filtered (not 3-part)
 	}
-	got := buildDiffPicker(in)
+	got := buildComparePicker(in)
 	if len(got.Groups) != 2 {
 		t.Fatalf("groups = %d, want 2 (src-a/inv-1 and src-a/inv-2)", len(got.Groups))
 	}
@@ -96,11 +96,11 @@ func TestBuildDiffPicker_OnlyLoadedAndThreePart(t *testing.T) {
 	}
 }
 
-func TestDiffPage_PrefixInputPresentOnFirstVisit(t *testing.T) {
+func TestComparePage_PrefixInputPresentOnFirstVisit(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/diff", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/compare", http.NoBody)
 	w := httptest.NewRecorder()
-	f.h.DiffPage(w, req)
+	f.h.ComparePage(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -113,54 +113,54 @@ func TestDiffPage_PrefixInputPresentOnFirstVisit(t *testing.T) {
 	}
 }
 
-func TestSortDiffChildView_BiggestAbsoluteMoverByDefault(t *testing.T) {
-	rows := []DiffChildView{
+func TestSortCompareChildView_BiggestAbsoluteMoverByDefault(t *testing.T) {
+	rows := []CompareChildView{
 		{Segment: "a", BytesDelta: 10, AbsByteDelta: 10},
 		{Segment: "b", BytesDelta: -1000, AbsByteDelta: 1000},
 		{Segment: "c", BytesDelta: 500, AbsByteDelta: 500},
 	}
-	sortDiffChildView(rows, "", "")
+	sortCompareChildView(rows, "", "")
 	if rows[0].Segment != "b" || rows[1].Segment != "c" || rows[2].Segment != "a" {
 		t.Errorf("default sort: got [%s, %s, %s]; want [b, c, a] (largest |delta| first)", rows[0].Segment, rows[1].Segment, rows[2].Segment)
 	}
 }
 
-func TestSortDiffChildView_SizeAsc_PutsShrinkersFirst(t *testing.T) {
-	rows := []DiffChildView{
+func TestSortCompareChildView_SizeAsc_PutsShrinkersFirst(t *testing.T) {
+	rows := []CompareChildView{
 		{Segment: "a", BytesDelta: 100, AbsByteDelta: 100},
 		{Segment: "b", BytesDelta: -200, AbsByteDelta: 200},
 		{Segment: "c", BytesDelta: 50, AbsByteDelta: 50},
 	}
-	sortDiffChildView(rows, "size", "asc")
+	sortCompareChildView(rows, "size", "asc")
 	if rows[0].Segment != "b" {
 		t.Errorf("size asc top row = %q, want b (most negative)", rows[0].Segment)
 	}
-	sortDiffChildView(rows, "size", "desc")
+	sortCompareChildView(rows, "size", "desc")
 	if rows[0].Segment != "a" {
 		t.Errorf("size desc top row = %q, want a (most positive)", rows[0].Segment)
 	}
 }
 
-func TestSortDiffChildView_StatusOrder(t *testing.T) {
-	rows := []DiffChildView{
+func TestSortCompareChildView_StatusOrder(t *testing.T) {
+	rows := []CompareChildView{
 		{Segment: "a", Status: "unchanged", StatusOrder: 4},
 		{Segment: "b", Status: "added", StatusOrder: 1},
 		{Segment: "c", Status: "changed", StatusOrder: 3},
 		{Segment: "d", Status: "removed", StatusOrder: 2},
 	}
-	sortDiffChildView(rows, "status", "asc")
+	sortCompareChildView(rows, "status", "asc")
 	if got := []string{rows[0].Status, rows[1].Status, rows[2].Status, rows[3].Status}; got[0] != "added" || got[1] != "removed" || got[2] != "changed" || got[3] != "unchanged" {
 		t.Errorf("status asc order = %v", got)
 	}
 }
 
-func TestSortDiffChildView_SegmentAlphabetical(t *testing.T) {
-	rows := []DiffChildView{
+func TestSortCompareChildView_SegmentAlphabetical(t *testing.T) {
+	rows := []CompareChildView{
 		{Segment: "b"},
 		{Segment: "a"},
 		{Segment: "c"},
 	}
-	sortDiffChildView(rows, "segment", "asc")
+	sortCompareChildView(rows, "segment", "asc")
 	if rows[0].Segment != "a" || rows[1].Segment != "b" || rows[2].Segment != "c" {
 		t.Errorf("segment asc = [%s, %s, %s]", rows[0].Segment, rows[1].Segment, rows[2].Segment)
 	}

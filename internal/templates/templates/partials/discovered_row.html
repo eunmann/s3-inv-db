@@ -65,7 +65,7 @@
             {{if $canRetry}}Retry{{else if .State.IsNotLoaded}}Load{{else}}Reload{{end}}
         </button>
         {{else if .State.IsLoaded}}
-        <a href="/diff?from={{.SourceBucket}}/{{.InventoryName}}/{{.Run}}"
+        <a href="/compare?from={{.SourceBucket}}/{{.InventoryName}}/{{.Run}}"
            class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 dark:hover:text-indigo-200"
            title="Compare this run against another loaded run">
             Compare

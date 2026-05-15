@@ -314,8 +314,8 @@ func (m *Manager) WithIndex(id ID, fn func(*indexread.Index) error) error {
 }
 
 // WithTwoIndexes borrows two loaded indexes for the duration of fn —
-// the read-side primitive for compare/diff features. Per-inventory
-// locks are acquired in deterministic ID order so two callers diffing
+// the read-side primitive for the Compare feature. Per-inventory
+// locks are acquired in deterministic ID order so two callers comparing
 // the same pair in opposite directions cannot deadlock. When idA == idB
 // only one lock is taken and the same index pointer is passed in both
 // positions, letting callers treat self-compare as a degenerate case.

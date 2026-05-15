@@ -52,7 +52,7 @@ func (s *Server) setupRoutes() {
 	r.Get("/", s.handlers.Dashboard)
 	r.Get("/inventories", s.handlers.InventoriesPage)
 	r.Get("/browse", s.handlers.BrowsePage)
-	r.Get("/diff", s.handlers.DiffPage)
+	r.Get("/compare", s.handlers.ComparePage)
 	r.Get("/help", s.handlers.HelpPage)
 	// /stats redirects to /browse so old bookmarks still resolve.
 	r.Get("/stats", func(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +97,7 @@ func (s *Server) setupRoutes() {
 		// trip per page-equivalent view.
 		r.Get("/configurations", s.handlers.ListConfigurationsAPI)
 		r.Get("/browse", s.handlers.BrowseLevelAPI)
-		r.Get("/diff", s.handlers.DiffLevelAPI)
+		r.Get("/compare", s.handlers.CompareLevelAPI)
 
 		// Discovery — read-only listing. Mutating operations live on
 		// the /partials/discovered/* routes and return HTML directly.

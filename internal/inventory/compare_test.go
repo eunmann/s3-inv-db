@@ -15,39 +15,39 @@ func TestClassify(t *testing.T) {
 	}
 	cases := []struct {
 		name       string
-		obj, bytes DiffNumeric
+		obj, bytes CompareNumeric
 		ta, tb     map[string]indexread.TierBreakdown
-		want       DiffStatus
+		want       CompareStatus
 	}{
 		{
 			name: "only after = added",
-			obj:  NewDiffNumeric(0, 100), bytes: NewDiffNumeric(0, 100),
+			obj:  NewCompareNumeric(0, 100), bytes: NewCompareNumeric(0, 100),
 			ta: nil, tb: tb(100, 100),
-			want: DiffAdded,
+			want: CompareAdded,
 		},
 		{
 			name: "only before = removed",
-			obj:  NewDiffNumeric(100, 0), bytes: NewDiffNumeric(100, 0),
+			obj:  NewCompareNumeric(100, 0), bytes: NewCompareNumeric(100, 0),
 			ta: tb(100, 100), tb: nil,
-			want: DiffRemoved,
+			want: CompareRemoved,
 		},
 		{
 			name: "objects moved but bytes same = changed",
-			obj:  NewDiffNumeric(10, 12), bytes: NewDiffNumeric(100, 100),
-			want: DiffChanged,
+			obj:  NewCompareNumeric(10, 12), bytes: NewCompareNumeric(100, 100),
+			want: CompareChanged,
 		},
 		{
 			name: "all fields identical = unchanged",
-			obj:  NewDiffNumeric(10, 10), bytes: NewDiffNumeric(100, 100),
+			obj:  NewCompareNumeric(10, 10), bytes: NewCompareNumeric(100, 100),
 			ta: tb(100, 10), tb: tb(100, 10),
-			want: DiffUnchanged,
+			want: CompareUnchanged,
 		},
 		{
 			name: "tier mix changed (objects+bytes identical) = changed",
-			obj:  NewDiffNumeric(10, 10), bytes: NewDiffNumeric(100, 100),
+			obj:  NewCompareNumeric(10, 10), bytes: NewCompareNumeric(100, 100),
 			ta:   map[string]indexread.TierBreakdown{"STANDARD": {Bytes: 100, ObjectCount: 10}},
 			tb:   map[string]indexread.TierBreakdown{"GLACIER": {Bytes: 100, ObjectCount: 10}},
-			want: DiffChanged,
+			want: CompareChanged,
 		},
 	}
 	for _, tc := range cases {
@@ -81,11 +81,11 @@ func TestTierMapsEqual(t *testing.T) {
 	}
 }
 
-func TestDiffLevel_AgainstSeededIndexes(t *testing.T) {
+func TestCompareLevel_AgainstSeededIndexes(t *testing.T) {
 	a := openSeededIndex(t, 42, 100)
 	b := openSeededIndex(t, 42, 200) // same shape, twice as many objects
 
-	got := DiffLevel(a, b, "")
+	got := CompareLevel(a, b, "")
 	if got.Self.NotFoundInA || got.Self.NotFoundInB {
 		t.Fatalf("root must exist in both indexes; got %+v", got.Self)
 	}
@@ -99,7 +99,7 @@ func TestDiffLevel_AgainstSeededIndexes(t *testing.T) {
 		t.Fatal("root should have child segments")
 	}
 	for _, c := range got.Children {
-		if c.Status == DiffUnchanged {
+		if c.Status == CompareUnchanged {
 			continue // ok
 		}
 		if c.Objects.Delta == 0 && c.Bytes.Delta == 0 && tierMapsEqual(c.TierBefore, c.TierAfter) {
@@ -108,15 +108,15 @@ func TestDiffLevel_AgainstSeededIndexes(t *testing.T) {
 	}
 }
 
-func TestDiffLevel_OneSideMissingPrefix(t *testing.T) {
+func TestCompareLevel_OneSideMissingPrefix(t *testing.T) {
 	a := openSeededIndex(t, 42, 100)
-	got := DiffLevel(a, a, "this/does/not/exist/")
+	got := CompareLevel(a, a, "this/does/not/exist/")
 	if !got.Self.NotFoundInA || !got.Self.NotFoundInB {
 		t.Errorf("missing prefix should mark both sides not-found: %+v", got.Self)
 	}
 }
 
-func TestNormalizeDiffSort(t *testing.T) {
+func TestNormalizeCompareSort(t *testing.T) {
 	cases := []struct {
 		name              string
 		sort, dir         string
@@ -134,35 +134,35 @@ func TestNormalizeDiffSort(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotS, gotD := NormalizeDiffSort(tc.sort, tc.dir)
+			gotS, gotD := NormalizeCompareSort(tc.sort, tc.dir)
 			if gotS != tc.wantSort || gotD != tc.wantDir {
-				t.Errorf("NormalizeDiffSort(%q,%q) = (%q,%q), want (%q,%q)", tc.sort, tc.dir, gotS, gotD, tc.wantSort, tc.wantDir)
+				t.Errorf("NormalizeCompareSort(%q,%q) = (%q,%q), want (%q,%q)", tc.sort, tc.dir, gotS, gotD, tc.wantSort, tc.wantDir)
 			}
 		})
 	}
 }
 
-func TestDiffStatusString(t *testing.T) {
+func TestCompareStatusString(t *testing.T) {
 	cases := []struct {
-		s    DiffStatus
+		s    CompareStatus
 		want string
 	}{
-		{DiffAdded, "added"},
-		{DiffRemoved, "removed"},
-		{DiffChanged, "changed"},
-		{DiffUnchanged, "unchanged"},
-		{DiffStatus(99), "unchanged"},
+		{CompareAdded, "added"},
+		{CompareRemoved, "removed"},
+		{CompareChanged, "changed"},
+		{CompareUnchanged, "unchanged"},
+		{CompareStatus(99), "unchanged"},
 	}
 	for _, tc := range cases {
 		if got := tc.s.String(); got != tc.want {
-			t.Errorf("DiffStatus(%d).String() = %q, want %q", tc.s, got, tc.want)
+			t.Errorf("CompareStatus(%d).String() = %q, want %q", tc.s, got, tc.want)
 		}
 	}
 }
 
 func TestStatusOrder_StableDistinctPerStatus(t *testing.T) {
-	statuses := []DiffStatus{DiffAdded, DiffRemoved, DiffChanged, DiffUnchanged}
-	seen := map[int]DiffStatus{}
+	statuses := []CompareStatus{CompareAdded, CompareRemoved, CompareChanged, CompareUnchanged}
+	seen := map[int]CompareStatus{}
 	for _, s := range statuses {
 		got := StatusOrder(s)
 		if got != statusOrder(s) {
@@ -173,14 +173,14 @@ func TestStatusOrder_StableDistinctPerStatus(t *testing.T) {
 		}
 		seen[got] = s
 	}
-	bogus := StatusOrder(DiffStatus(99))
+	bogus := StatusOrder(CompareStatus(99))
 	if _, dup := seen[bogus]; dup {
 		t.Errorf("bogus status rank %d collides with a real status", bogus)
 	}
 }
 
-func TestDiffSortLinks_ClickedColumnFlipsDirection(t *testing.T) {
-	links := DiffSortLinks("size", "desc")
+func TestCompareSortLinks_ClickedColumnFlipsDirection(t *testing.T) {
+	links := CompareSortLinks("size", "desc")
 	if links["size"].Dir != "asc" || links["size"].Indicator != "↓" {
 		t.Errorf("active column = %+v, want Dir=asc Indicator=↓", links["size"])
 	}
