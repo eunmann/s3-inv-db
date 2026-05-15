@@ -1,0 +1,36 @@
+goos: linux
+goarch: amd64
+pkg: github.com/eunmann/s3-inv-db/pkg/extsort
+cpu: AMD Ryzen 9 5950X 16-Core Processor            
+BenchmarkAddObjectDiverse-32            	 7424049	       157.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAddObjectDiverse-32            	 7538052	       157.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAddObjectDiverse-32            	 7555078	       158.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAddObjectCold-32               	 4454488	       360.8 ns/op	       1 B/op	       0 allocs/op
+BenchmarkAddObjectCold-32               	 3725107	       336.5 ns/op	       1 B/op	       0 allocs/op
+BenchmarkAddObjectCold-32               	 4538161	       359.0 ns/op	       1 B/op	       0 allocs/op
+BenchmarkAggregatorRetention-32         	1000000000	         0.09932 ns/op	       508.8 bytes/prefix	  13230160 heap_bytes	     26001 prefixes	       0 B/op	       0 allocs/op
+BenchmarkAggregatorRetention-32         	1000000000	         0.1012 ns/op	       508.8 bytes/prefix	  13229888 heap_bytes	     26001 prefixes	       0 B/op	       0 allocs/op
+BenchmarkAggregatorRetention-32         	1000000000	         0.1003 ns/op	       508.8 bytes/prefix	  13229872 heap_bytes	     26001 prefixes	       0 B/op	       0 allocs/op
+BenchmarkAggregatorDrain-32             	     114	  10750359 ns/op	 7424045 B/op	   26036 allocs/op
+BenchmarkAggregatorDrain-32             	     128	   9387582 ns/op	 7421496 B/op	   26037 allocs/op
+BenchmarkAggregatorDrain-32             	     126	   9408238 ns/op	 7426673 B/op	   26036 allocs/op
+BenchmarkMergeHeap/k=8-32               	 4841791	       249.4 ns/op	     312 B/op	       5 allocs/op
+BenchmarkMergeHeap/k=8-32               	 4824217	       248.0 ns/op	     312 B/op	       5 allocs/op
+BenchmarkMergeHeap/k=8-32               	 4835390	       249.8 ns/op	     312 B/op	       5 allocs/op
+BenchmarkMergeHeap/k=32-32              	 4183668	       289.3 ns/op	     312 B/op	       5 allocs/op
+BenchmarkMergeHeap/k=32-32              	 4155522	       288.7 ns/op	     312 B/op	       5 allocs/op
+BenchmarkMergeHeap/k=32-32              	 4152636	       287.7 ns/op	     312 B/op	       5 allocs/op
+BenchmarkMergeHeap/k=64-32              	 3903650	       310.4 ns/op	     312 B/op	       5 allocs/op
+BenchmarkMergeHeap/k=64-32              	 3865953	       308.1 ns/op	     312 B/op	       5 allocs/op
+BenchmarkMergeHeap/k=64-32              	 3900309	       308.3 ns/op	     312 B/op	       5 allocs/op
+BenchmarkRunFileWriteUncompressed-32    	     219	   5438347 ns/op	  14250016 bytes/file	       285.0 bytes/row	 4197430 B/op	      18 allocs/op
+BenchmarkRunFileWriteUncompressed-32    	     218	   5396891 ns/op	  14250016 bytes/file	       285.0 bytes/row	 4197465 B/op	      18 allocs/op
+BenchmarkRunFileWriteUncompressed-32    	     220	   5451425 ns/op	  14250016 bytes/file	       285.0 bytes/row	 4197478 B/op	      18 allocs/op
+BenchmarkRunFileWriteCompressed-32      	      62	  17465739 ns/op	    649904 bytes/file	        13.00 bytes/row	13737183 B/op	     736 allocs/op
+BenchmarkRunFileWriteCompressed-32      	      64	  17047398 ns/op	    649904 bytes/file	        13.00 bytes/row	13735379 B/op	     732 allocs/op
+BenchmarkRunFileWriteCompressed-32      	      66	  17388045 ns/op	    649904 bytes/file	        13.00 bytes/row	13735473 B/op	     732 allocs/op
+BenchmarkRunFileReadCompressed-32       	      76	  15014758 ns/op	27015903 B/op	  150105 allocs/op
+BenchmarkRunFileReadCompressed-32       	      78	  14825025 ns/op	27017095 B/op	  150106 allocs/op
+BenchmarkRunFileReadCompressed-32       	      76	  14679273 ns/op	27013736 B/op	  150104 allocs/op
+PASS
+ok  	github.com/eunmann/s3-inv-db/pkg/extsort	66.918s
