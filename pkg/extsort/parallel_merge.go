@@ -375,8 +375,11 @@ func drainMerger(ctx context.Context, merger *runReaderMergeIterator, outputWrit
 		}
 
 		if err := outputWriter.Write(row); err != nil {
+			merger.Release(row)
+
 			return count, fmt.Errorf("write to output: %w", err)
 		}
+		merger.Release(row)
 		count++
 	}
 }
@@ -460,6 +463,38 @@ type runReaderMergeIterator struct {
 	err     error
 }
 
+// mergeRowPool reuses PrefixRow allocations across the merge phase.
+// At billion-row builds the merger reads roughly the same number of
+// rows as inputs (1B+); without pooling that's hundreds of GiB of
+// short-lived allocation churn slowing the GC. With pooling the
+// allocator hands out the same rotating handful of rows.
+//
+//nolint:gochecknoglobals // package-level pool, by design
+var mergeRowPool = sync.Pool{
+	New: func() any { return &PrefixRow{} },
+}
+
+func acquireMergeRow() *PrefixRow {
+	r, ok := mergeRowPool.Get().(*PrefixRow)
+	if !ok {
+		return &PrefixRow{}
+	}
+	r.Reset()
+
+	return r
+}
+
+// releaseMergeRow returns a row to the pool. Callers of
+// runReaderMergeIterator.Next must release the returned row when
+// they're done with its data — the next call to Next may overwrite
+// it via the pool.
+func releaseMergeRow(r *PrefixRow) {
+	if r == nil {
+		return
+	}
+	mergeRowPool.Put(r)
+}
+
 // newMergeIteratorFromRunReaders creates a merge iterator from RunReader interfaces.
 func newMergeIteratorFromRunReaders(readers []RunReader) (*runReaderMergeIterator, error) {
 	m := &runReaderMergeIterator{
@@ -468,11 +503,15 @@ func newMergeIteratorFromRunReaders(readers []RunReader) (*runReaderMergeIterato
 	}
 
 	for i, r := range readers {
-		row, err := r.Read()
+		row := acquireMergeRow()
+		err := r.ReadInto(row)
 		if errors.Is(err, io.EOF) {
+			releaseMergeRow(row)
+
 			continue // empty reader
 		}
 		if err != nil {
+			releaseMergeRow(row)
 			m.Close()
 
 			return nil, fmt.Errorf("initial read from run %d: %w", i, err)
@@ -485,7 +524,9 @@ func newMergeIteratorFromRunReaders(readers []RunReader) (*runReaderMergeIterato
 	return m, nil
 }
 
-// Next returns the next merged PrefixRow in sorted order.
+// Next returns the next merged PrefixRow in sorted order. The caller
+// owns the returned row until it calls Release(row); after Release the
+// row may be handed to a future Next caller via the pool.
 func (m *runReaderMergeIterator) Next() (*PrefixRow, error) {
 	if m.err != nil {
 		return nil, m.err
@@ -504,10 +545,12 @@ func (m *runReaderMergeIterator) Next() (*PrefixRow, error) {
 		return nil, err
 	}
 
-	// Merge duplicates
+	// Merge duplicates. The duplicate rows are returned to the pool
+	// after their data is folded into result.
 	for m.heap.Len() > 0 && m.heap.items[0].row.Prefix == result.Prefix {
 		dup := heapPop(m.heap)
 		result.Merge(dup.row)
+		releaseMergeRow(dup.row)
 
 		if err := m.advanceReader(dup.readerIdx); err != nil && !errors.Is(err, io.EOF) {
 			m.err = err
@@ -519,10 +562,18 @@ func (m *runReaderMergeIterator) Next() (*PrefixRow, error) {
 	return result, nil
 }
 
+// Release returns a row received from Next back to the pool. Callers
+// must not retain the row after calling Release.
+func (m *runReaderMergeIterator) Release(row *PrefixRow) {
+	releaseMergeRow(row)
+}
+
 // advanceReader reads the next row from the given reader and pushes to heap.
 func (m *runReaderMergeIterator) advanceReader(idx int) error {
-	row, err := m.readers[idx].Read()
+	row := acquireMergeRow()
+	err := m.readers[idx].ReadInto(row)
 	if err != nil {
+		releaseMergeRow(row)
 		if errors.Is(err, io.EOF) {
 			return io.EOF
 		}

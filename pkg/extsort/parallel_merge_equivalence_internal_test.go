@@ -112,6 +112,7 @@ func drainSerial(t *testing.T, paths []string) []PrefixRow {
 			t.Fatalf("serial Next: %v", err)
 		}
 		out = append(out, *row)
+		iter.Release(row)
 	}
 
 	return out
