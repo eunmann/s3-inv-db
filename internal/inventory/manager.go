@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -34,6 +35,12 @@ type managedInventory struct {
 	mu    sync.RWMutex
 	info  Info
 	index *indexread.Index
+	// lastAccessedNano holds the most recent read timestamp as the
+	// authoritative source for LastAccessedAt. Atomic so TouchAccessed
+	// (called on every WithIndex completion, the read hot path) doesn't
+	// need a write lock on the manager. Get/List copies this value
+	// into the returned Info before returning.
+	lastAccessedNano atomic.Int64
 }
 
 // Manager manages multiple inventories with thread-safe access.
@@ -217,6 +224,7 @@ func (m *Manager) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	inv.info.HasTierData = idx.HasTierData()
 	inv.info.LoadedAt = time.Now()
 	inv.info.LastAccessedAt = inv.info.LoadedAt
+	inv.lastAccessedNano.Store(inv.info.LoadedAt.UnixNano())
 	inv.info.IndexBytes = bytes
 	inv.info.AutoLoadFailureCount = 0
 	inv.info.AutoLoadBackoffUntil = time.Time{}
@@ -353,14 +361,33 @@ func (m *Manager) RecordAutoLoadFailure(ctx context.Context, id ID, errStr strin
 	return m.mirror(ctx, inv.info)
 }
 
+// touchedInfo returns inv.info with LastAccessedAt overlaid from the
+// atomic. Callers must hold either m.mu or inv.mu while reading the
+// rest of inv.info; this helper just patches in the atomic-tracked
+// access timestamp.
+func (m *Manager) touchedInfo(inv *managedInventory) Info {
+	out := inv.info
+	if nano := inv.lastAccessedNano.Load(); nano > 0 {
+		out.LastAccessedAt = time.Unix(0, nano)
+	}
+
+	return out
+}
+
 // TouchAccessed updates the in-memory LastAccessedAt used as the LRU
 // tiebreak in eviction. Not persisted — restart resets every entry's
 // access time, which is fine.
 func (m *Manager) TouchAccessed(id ID) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if inv, ok := m.inventories[id]; ok {
-		inv.info.LastAccessedAt = time.Now()
+	// Only need a read lock to look up the inventory; the actual
+	// timestamp update is an atomic store. This keeps the read hot
+	// path (every WithIndex completion calls TouchAccessed) free of
+	// the manager-wide write lock that previously serialised every
+	// concurrent reader.
+	m.mu.RLock()
+	inv, ok := m.inventories[id]
+	m.mu.RUnlock()
+	if ok {
+		inv.lastAccessedNano.Store(time.Now().UnixNano())
 	}
 }
 
@@ -374,7 +401,7 @@ func (m *Manager) Get(id ID) (Info, bool) {
 		return Info{}, false
 	}
 
-	return inv.info, true
+	return m.touchedInfo(inv), true
 }
 
 // List returns info about all inventories.
@@ -384,7 +411,7 @@ func (m *Manager) List() []Info {
 
 	result := make([]Info, 0, len(m.inventories))
 	for _, inv := range m.inventories {
-		result = append(result, inv.info)
+		result = append(result, m.touchedInfo(inv))
 	}
 
 	return result

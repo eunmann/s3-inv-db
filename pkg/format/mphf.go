@@ -223,14 +223,15 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 		return nil, fmt.Errorf("unmarshal MPHF: %w", err)
 	}
 
-	// Load fingerprints
-	fingerprints, err := OpenArray(fpPath)
+	// Load fingerprints. Random access — every Lookup hits one slot
+	// at an unpredictable hash position.
+	fingerprints, err := OpenArrayWithHint(fpPath, AccessHintRandom)
 	if err != nil {
 		return nil, fmt.Errorf("open fingerprints: %w", err)
 	}
 
-	// Load preorder positions
-	preorderPos, err := OpenArray(posPath)
+	// Load preorder positions. Same random access pattern.
+	preorderPos, err := OpenArrayWithHint(posPath, AccessHintRandom)
 	if err != nil {
 		fingerprints.Close()
 

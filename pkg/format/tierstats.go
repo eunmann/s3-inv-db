@@ -137,10 +137,12 @@ func OpenTierStats(indexDir string) (*TierStatsReader, error) {
 		countsArrays: make(map[tiers.ID]*ArrayReader),
 	}
 
-	// Open all tier arrays using ArrayReader (handles headers properly)
+	// Open all tier arrays using ArrayReader (handles headers
+	// properly). Tier-stats lookups are random per prefix-position;
+	// hint accordingly so the kernel doesn't waste readahead.
 	for _, tier := range manifest.Tiers {
 		bytesPath := filepath.Join(tierDir, tier.FilePrefix+"_bytes.u64")
-		bytesReader, err := OpenArray(bytesPath)
+		bytesReader, err := OpenArrayWithHint(bytesPath, AccessHintRandom)
 		if err != nil {
 			r.Close()
 
@@ -149,7 +151,7 @@ func OpenTierStats(indexDir string) (*TierStatsReader, error) {
 		r.bytesArrays[tier.ID] = bytesReader
 
 		countsPath := filepath.Join(tierDir, tier.FilePrefix+"_count.u64")
-		countsReader, err := OpenArray(countsPath)
+		countsReader, err := OpenArrayWithHint(countsPath, AccessHintRandom)
 		if err != nil {
 			r.Close()
 

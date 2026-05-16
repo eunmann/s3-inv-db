@@ -32,33 +32,33 @@ func Open(dir string) (*Index, error) {
 	var idx Index
 	var err error
 
-	idx.subtreeEnd, err = format.OpenArray(filepath.Join(dir, "subtree_end.u64"))
+	idx.subtreeEnd, err = format.OpenArrayWithHint(filepath.Join(dir, "subtree_end.u64"), format.AccessHintRandom)
 	if err != nil {
 		return nil, fmt.Errorf("open subtree_end: %w", err)
 	}
 
-	idx.depth, err = format.OpenArray(filepath.Join(dir, "depth.u32"))
+	idx.depth, err = format.OpenArrayWithHint(filepath.Join(dir, "depth.u32"), format.AccessHintRandom)
 	if err != nil {
 		idx.Close()
 
 		return nil, fmt.Errorf("open depth: %w", err)
 	}
 
-	idx.objectCount, err = format.OpenArray(filepath.Join(dir, "object_count.u64"))
+	idx.objectCount, err = format.OpenArrayWithHint(filepath.Join(dir, "object_count.u64"), format.AccessHintRandom)
 	if err != nil {
 		idx.Close()
 
 		return nil, fmt.Errorf("open object_count: %w", err)
 	}
 
-	idx.totalBytes, err = format.OpenArray(filepath.Join(dir, "total_bytes.u64"))
+	idx.totalBytes, err = format.OpenArrayWithHint(filepath.Join(dir, "total_bytes.u64"), format.AccessHintRandom)
 	if err != nil {
 		idx.Close()
 
 		return nil, fmt.Errorf("open total_bytes: %w", err)
 	}
 
-	idx.maxDepthInSubtree, err = format.OpenArray(filepath.Join(dir, "max_depth_in_subtree.u32"))
+	idx.maxDepthInSubtree, err = format.OpenArrayWithHint(filepath.Join(dir, "max_depth_in_subtree.u32"), format.AccessHintRandom)
 	if err != nil {
 		idx.Close()
 
