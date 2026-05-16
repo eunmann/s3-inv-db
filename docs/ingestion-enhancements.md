@@ -88,6 +88,49 @@ baseline to beat:
 - Bench results captured in this file under "Results", with main-vs-branch deltas.
 - Honest notes on what didn't help or regressed.
 
-## Results (filled in as work lands)
+## Results
 
-(empty — populated commit by commit)
+### Wave 1 baselines (captured pre-change)
+
+| Bench | Result |
+|---|---|
+| `BenchmarkAggregator_AddObject n=1M depth=4` | 1.13 s, 786 MiB/op, 2.5M allocs |
+| `BenchmarkAggregator_AddObject n=1M depth=8` | 4.59 s, 3.2 GiB/op, 10.5M allocs |
+| `BenchmarkIndexBuilder_FinalizeSize n=1M` | 90.51 bytes/prefix |
+| `BenchmarkIndexOpen_ColdCache n=1M` | 2.6 ms |
+| `BenchmarkPipeline_MultiChunkBuild objects=100000 chunks=8` | 251–279 ms |
+
+### Wave 1 post-change (commits e0f4a4d → 23424d2)
+
+| Bench | Result | vs baseline |
+|---|---|---|
+| `BenchmarkAggregator_AddObject n=1M depth=8` | 3.94 s | -14% (within noise; aggregator core unchanged) |
+| `BenchmarkIndexBuilder_FinalizeSize n=1M` | 86.51 bytes/prefix | **-4 bytes/prefix → -4 GiB at 1B prefixes** |
+| `BenchmarkPipeline_MultiChunkBuild objects=100000 chunks=8` | 251–279 ms | within noise |
+
+Honest read: Wave 1's measurable disk win is the depth/max_depth_in_subtree shrink (W1.6+W1.7). The other pipeline-level changes (W1.1-1.5, W1.8, W1.11) target multi-core saturation + GC steadiness; the small-scale bench fixture (100K objects, 8 chunks) doesn't exercise the worker-saturation regime where they pay back. Real validation needs the 1B-row scale path — which the current bench harness doesn't yet produce.
+
+### Wave 0 results
+
+| Item | Status |
+|---|---|
+| W0.1 fsync intermediate run files | shipped (commit 548ecf0) |
+| W0.4 unique merger filenames | shipped (commit 548ecf0) |
+| W0.2, 0.5, 0.6, 0.7-0.8, 0.9, 0.10 | deferred — real but lower-impact than the Wave 2 structural work; bundling them later avoids diluting the wave-by-wave bench comparison |
+
+### Wave 2 in progress
+
+| Item | Status |
+|---|---|
+| W2.4 pool PrefixRow in merge | shipped (commit cd0c3a0) |
+| W2.6 interleave MPHF arrays | next |
+| W2.5 sparse tier stats | format change, requires writer/reader/back-compat |
+| W2.3a/b/c MPHF mmap | the disk-spill plan from the user; multi-step implementation |
+| W2.2 streaming micro-batches | refactor of chunk worker → aggregator path |
+| W2.1 per-worker aggregators | rework of `processIngestResults` |
+
+### Wave 3 (planned)
+
+| Item | Status |
+|---|---|
+| W3.1 trie aggregator | full rewrite of `pkg/extsort/aggregator.go` internals; biggest single perf win projected (2-4× ingest at depth 8) |
