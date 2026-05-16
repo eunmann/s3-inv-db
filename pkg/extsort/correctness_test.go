@@ -11,10 +11,15 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-// TestTierWriterBackfillAlignment verifies that lazy tier-writer creation
-// correctly backfills zeros so tier columns align with preorder positions
-// when a tier appears for the first time partway through a build.
-func TestTierWriterBackfillAlignment(t *testing.T) {
+// TestTierStatsRow_PreorderAlignment guards the invariant that the
+// row-major tier-stats file places each prefix's stats at exactly its
+// preorder position. The original per-tier writers required explicit
+// backfill when a tier first appeared partway through a build; the
+// row-major writer always emits all NumTiers slots so no backfill is
+// needed, but a regression that dropped or duplicated a row would
+// silently misalign tier data with prefix positions — exactly the
+// failure mode this test is here to catch.
+func TestTierStatsRow_PreorderAlignment(t *testing.T) {
 	dir := t.TempDir()
 	outDir := filepath.Join(dir, "idx")
 	tempDir := filepath.Join(dir, "tmp")
@@ -49,33 +54,33 @@ func TestTierWriterBackfillAlignment(t *testing.T) {
 		t.Fatalf("Finalize: %v", err)
 	}
 
-	stdCount, err := format.OpenArray(filepath.Join(outDir, "tier_stats", "standard_count.u64"))
+	tsr, err := format.OpenTierStats(outDir)
 	if err != nil {
-		t.Fatalf("open standard_count: %v", err)
+		t.Fatalf("OpenTierStats: %v", err)
 	}
-	defer stdCount.Close()
-	if got, want := stdCount.Count(), uint64(4); got != want {
-		t.Errorf("standard_count length = %d, want %d", got, want)
-	}
-	for i, want := range []uint64{1, 1, 0, 1} {
-		got, _ := stdCount.GetU64(uint64(i))
-		if got != want {
-			t.Errorf("standard_count[%d] = %d, want %d", i, got, want)
-		}
-	}
+	defer tsr.Close()
 
-	glCount, err := format.OpenArray(filepath.Join(outDir, "tier_stats", "glacier_fr_count.u64"))
-	if err != nil {
-		t.Fatalf("open glacier_fr_count: %v", err)
-	}
-	defer glCount.Close()
-	if got, want := glCount.Count(), uint64(4); got != want {
-		t.Errorf("glacier_fr_count length = %d, want %d", got, want)
-	}
-	for i, want := range []uint64{0, 0, 1, 0} {
-		got, _ := glCount.GetU64(uint64(i))
-		if got != want {
-			t.Errorf("glacier_fr_count[%d] = %d, want %d", i, got, want)
+	wantStd := []uint64{1, 1, 0, 1}
+	wantStdBytes := []uint64{100, 200, 0, 400}
+	wantGl := []uint64{0, 0, 1, 0}
+	wantGlBytes := []uint64{0, 0, 300, 0}
+
+	for pos := range uint64(4) {
+		breakdown := tsr.GetBreakdownAll(pos)
+		gotStd, gotStdBytes, gotGl, gotGlBytes := uint64(0), uint64(0), uint64(0), uint64(0)
+		for _, tb := range breakdown {
+			if tb.TierID == tiers.Standard {
+				gotStd, gotStdBytes = tb.ObjectCount, tb.Bytes
+			}
+			if tb.TierID == tiers.GlacierFR {
+				gotGl, gotGlBytes = tb.ObjectCount, tb.Bytes
+			}
+		}
+		if gotStd != wantStd[pos] || gotStdBytes != wantStdBytes[pos] {
+			t.Errorf("pos %d Standard: got (%d, %d), want (%d, %d)", pos, gotStd, gotStdBytes, wantStd[pos], wantStdBytes[pos])
+		}
+		if gotGl != wantGl[pos] || gotGlBytes != wantGlBytes[pos] {
+			t.Errorf("pos %d GlacierFR: got (%d, %d), want (%d, %d)", pos, gotGl, gotGlBytes, wantGl[pos], wantGlBytes[pos])
 		}
 	}
 }

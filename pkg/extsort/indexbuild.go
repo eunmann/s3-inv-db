@@ -39,8 +39,11 @@ type IndexBuilder struct {
 	totalBytesW  *format.ArrayWriter
 	depthW       *format.ArrayWriter
 
-	tierCountWriters map[tiers.ID]*format.ArrayWriter
-	tierBytesWriters map[tiers.ID]*format.ArrayWriter
+	// tierStatsRowW writes all NumTiers × (count, bytes) per prefix
+	// into one fixed-stride row file. Replaces the previous
+	// per-tier column writers. Reader fall-back still handles the
+	// legacy layout.
+	tierStatsRowW *format.TierStatsRowWriter
 
 	mphfBuilder       *format.StreamingMPHFBuilder
 	depthIndexBuilder *format.DepthIndexBuilder
@@ -131,8 +134,15 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, us
 		presentTiers:       make(map[tiers.ID]bool),
 		subtreeEnds:        subtreeEnds,
 		maxDepthInSubtrees: maxDepthInSubtrees,
-		tierCountWriters:   make(map[tiers.ID]*format.ArrayWriter),
-		tierBytesWriters:   make(map[tiers.ID]*format.ArrayWriter),
+	}
+
+	b.tierStatsRowW, err = format.NewTierStatsRowWriter(outDir)
+	if err != nil {
+		subtreeEnds.Close()
+		maxDepthInSubtrees.Close()
+		mphfBuilder.Close()
+
+		return nil, fmt.Errorf("create tier stats row writer: %w", err)
 	}
 
 	b.objectCountW, err = format.NewArrayWriter(filepath.Join(outDir, "object_count.u64"), 8)
@@ -187,11 +197,8 @@ func (b *IndexBuilder) cleanup() {
 	if b.maxDepthInSubtrees != nil {
 		b.maxDepthInSubtrees.Close()
 	}
-	for _, w := range b.tierCountWriters {
-		w.Close()
-	}
-	for _, w := range b.tierBytesWriters {
-		w.Close()
+	if b.tierStatsRowW != nil {
+		b.tierStatsRowW.Close()
 	}
 	os.RemoveAll(b.outDir)
 }
@@ -303,69 +310,13 @@ func (b *IndexBuilder) closeTopNode() error {
 	return nil
 }
 
-// writeTierStats writes tier statistics for a row.
+// writeTierStats writes one row of all-tier stats for the current prefix.
+// All NumTiers slots are written every call (zero for absent tiers) —
+// fixed-stride layout means the reader's GetBreakdown is O(1) per slot
+// and a single page fault per row on a cold index.
 func (b *IndexBuilder) writeTierStats(row *PrefixRow) error {
-	for tierID := range tiers.NumTiers {
-		_, hasCountWriter := b.tierCountWriters[tierID]
-		_, hasBytesWriter := b.tierBytesWriters[tierID]
-
-		if !hasCountWriter || !hasBytesWriter {
-			if row.TierCounts[tierID] == 0 && row.TierBytes[tierID] == 0 {
-				continue
-			}
-			if err := b.createTierWriter(tierID, row); err != nil {
-				return err
-			}
-		}
-
-		if countW, ok := b.tierCountWriters[tierID]; ok {
-			if err := countW.WriteU64(row.TierCounts[tierID]); err != nil {
-				return fmt.Errorf("write tier %d count: %w", tierID, err)
-			}
-		}
-		if bytesW, ok := b.tierBytesWriters[tierID]; ok {
-			if err := bytesW.WriteU64(row.TierBytes[tierID]); err != nil {
-				return fmt.Errorf("write tier %d bytes: %w", tierID, err)
-			}
-		}
-	}
-
-	return nil
-}
-
-// createTierWriter creates writers for a tier and backfills zeros for previous positions.
-func (b *IndexBuilder) createTierWriter(tierID tiers.ID, _ *PrefixRow) error {
-	tierDir := filepath.Join(b.outDir, "tier_stats")
-	if err := os.MkdirAll(tierDir, indexDirPerm); err != nil {
-		return fmt.Errorf("create tier_stats dir: %w", err)
-	}
-
-	mapping := tiers.NewMapping()
-	info := mapping.ByID(tierID)
-
-	countPath := filepath.Join(tierDir, info.FilePrefix+"_count.u64")
-	countW, err := format.NewArrayWriter(countPath, 8)
-	if err != nil {
-		return fmt.Errorf("create tier %s count writer: %w", info.Name, err)
-	}
-	b.tierCountWriters[tierID] = countW
-
-	bytesPath := filepath.Join(tierDir, info.FilePrefix+"_bytes.u64")
-	bytesW, err := format.NewArrayWriter(bytesPath, 8)
-	if err != nil {
-		countW.Close()
-
-		return fmt.Errorf("create tier %s bytes writer: %w", info.Name, err)
-	}
-	b.tierBytesWriters[tierID] = bytesW
-
-	for range b.posCount - 1 {
-		if err := countW.WriteU64(0); err != nil {
-			return fmt.Errorf("backfill tier %s count: %w", info.Name, err)
-		}
-		if err := bytesW.WriteU64(0); err != nil {
-			return fmt.Errorf("backfill tier %s bytes: %w", info.Name, err)
-		}
+	if err := b.tierStatsRowW.Add(&row.TierCounts, &row.TierBytes); err != nil {
+		return fmt.Errorf("write tier stats row: %w", err)
 	}
 
 	return nil
@@ -514,17 +465,10 @@ func (b *IndexBuilder) closeStreamingWriters() error {
 	if err := b.depthW.Close(); err != nil {
 		return fmt.Errorf("close depth: %w", err)
 	}
-
-	for tierID, w := range b.tierCountWriters {
-		if err := w.Close(); err != nil {
-			return fmt.Errorf("close tier %d count: %w", tierID, err)
-		}
+	if err := b.tierStatsRowW.Close(); err != nil {
+		return fmt.Errorf("close tier stats row: %w", err)
 	}
-	for tierID, w := range b.tierBytesWriters {
-		if err := w.Close(); err != nil {
-			return fmt.Errorf("close tier %d bytes: %w", tierID, err)
-		}
-	}
+	b.tierStatsRowW = nil
 
 	return nil
 }

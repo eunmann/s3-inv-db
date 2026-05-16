@@ -1,6 +1,7 @@
 package format
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -102,10 +103,16 @@ func (w *TierStatsWriter) PresentTiers() []tiers.ID {
 	return w.presentTiers
 }
 
-// TierStatsReader reads per-tier columnar arrays.
+// TierStatsReader reads per-tier statistics. Prefers the row-major
+// file (tier_stats_row.bin) when present — one mmap'd region with
+// fixed-stride rows lets GetBreakdown(pos) take a single page fault
+// on a cold index. Falls back to the legacy per-tier columnar files
+// (one bytes file + one counts file per present tier) for indexes
+// built before the row-major layout existed.
 type TierStatsReader struct {
 	tierDir      string
 	manifest     *tiers.TierManifest
+	rowReader    *TierStatsRowReader // non-nil when row-major file present
 	bytesArrays  map[tiers.ID]*ArrayReader
 	countsArrays map[tiers.ID]*ArrayReader
 }
@@ -137,9 +144,22 @@ func OpenTierStats(indexDir string) (*TierStatsReader, error) {
 		countsArrays: make(map[tiers.ID]*ArrayReader),
 	}
 
-	// Open all tier arrays using ArrayReader (handles headers
-	// properly). Tier-stats lookups are random per prefix-position;
-	// hint accordingly so the kernel doesn't waste readahead.
+	// Prefer the row-major file (one mmap'd region, one page fault
+	// per GetBreakdown call). When present, skip opening the legacy
+	// per-tier columnar files entirely — they're not used.
+	rowReader, err := OpenTierStatsRow(indexDir)
+	if err != nil {
+		return nil, fmt.Errorf("open tier stats row: %w", err)
+	}
+	if rowReader != nil {
+		r.rowReader = rowReader
+
+		return r, nil
+	}
+
+	// Legacy fallback: per-tier columnar arrays. Tier-stats lookups
+	// are random per prefix-position; hint accordingly so the kernel
+	// doesn't waste readahead.
 	for _, tier := range manifest.Tiers {
 		bytesPath := filepath.Join(tierDir, tier.FilePrefix+"_bytes.u64")
 		bytesReader, err := OpenArrayWithHint(bytesPath, AccessHintRandom)
@@ -172,12 +192,35 @@ type TierBreakdown struct {
 }
 
 // GetBreakdown returns the tier breakdown for a given position.
+// Only includes tiers with non-zero data at this position.
 func (r *TierStatsReader) GetBreakdown(pos uint64) []TierBreakdown {
 	if r == nil || r.manifest == nil {
 		return nil
 	}
 
 	breakdown := make([]TierBreakdown, 0, len(r.manifest.Tiers))
+
+	if r.rowReader != nil {
+		if pos >= r.rowReader.Count() {
+			return breakdown
+		}
+		row := r.rowReader.UnsafeRow(pos)
+		for _, tier := range r.manifest.Tiers {
+			off := int(tier.ID) * 16
+			count := binary.LittleEndian.Uint64(row[off : off+8])
+			bytes := binary.LittleEndian.Uint64(row[off+8 : off+16])
+			if bytes > 0 || count > 0 {
+				breakdown = append(breakdown, TierBreakdown{
+					TierID:      tier.ID,
+					TierName:    tier.Name,
+					Bytes:       bytes,
+					ObjectCount: count,
+				})
+			}
+		}
+
+		return breakdown
+	}
 
 	for _, tier := range r.manifest.Tiers {
 		var bytes, count uint64
@@ -189,7 +232,6 @@ func (r *TierStatsReader) GetBreakdown(pos uint64) []TierBreakdown {
 			count = reader.UnsafeGetU64(pos)
 		}
 
-		// Only include tiers with data at this position
 		if bytes > 0 || count > 0 {
 			breakdown = append(breakdown, TierBreakdown{
 				TierID:      tier.ID,
@@ -210,6 +252,26 @@ func (r *TierStatsReader) GetBreakdownAll(pos uint64) []TierBreakdown {
 	}
 
 	breakdown := make([]TierBreakdown, 0, len(r.manifest.Tiers))
+
+	if r.rowReader != nil {
+		if pos >= r.rowReader.Count() {
+			return breakdown
+		}
+		row := r.rowReader.UnsafeRow(pos)
+		for _, tier := range r.manifest.Tiers {
+			off := int(tier.ID) * 16
+			count := binary.LittleEndian.Uint64(row[off : off+8])
+			bytes := binary.LittleEndian.Uint64(row[off+8 : off+16])
+			breakdown = append(breakdown, TierBreakdown{
+				TierID:      tier.ID,
+				TierName:    tier.Name,
+				Bytes:       bytes,
+				ObjectCount: count,
+			})
+		}
+
+		return breakdown
+	}
 
 	for _, tier := range r.manifest.Tiers {
 		var bytes, count uint64
@@ -253,6 +315,13 @@ func (r *TierStatsReader) Close() error {
 	}
 
 	var firstErr error
+
+	if r.rowReader != nil {
+		if err := r.rowReader.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		r.rowReader = nil
+	}
 
 	for _, reader := range r.bytesArrays {
 		if reader != nil {
