@@ -1,0 +1,6 @@
+BenchmarkPhaseTimings/n=500000-32         	       1	3253760783 ns/op	         1.000 batch_events/op	         3.000 events/op	1224616792 B/op	12302128 allocs/op
+BenchmarkPhaseTimings/n=500000-32         	       1	3115713136 ns/op	         1.000 batch_events/op	         3.000 events/op	1220086840 B/op	12301649 allocs/op
+BenchmarkPhaseTimings/n=500000-32         	       1	3117221642 ns/op	         1.000 batch_events/op	         3.000 events/op	1226118336 B/op	12301670 allocs/op
+BenchmarkPhaseTimings/n=1000000-32        	       1	6490910749 ns/op	         1.000 batch_events/op	         3.000 events/op	2369350288 B/op	23755829 allocs/op
+BenchmarkPhaseTimings/n=1000000-32        	       1	6432216350 ns/op	         1.000 batch_events/op	         3.000 events/op	2375326496 B/op	23755749 allocs/op
+BenchmarkPhaseTimings/n=1000000-32        	       1	6470927311 ns/op	         1.000 batch_events/op	         3.000 events/op	2371591832 B/op	23755748 allocs/op
