@@ -153,7 +153,16 @@ func benchmarkFingerprintComputeOnly(b *testing.B, n int) {
 		b.Fatalf("flush temp file: %v", err)
 	}
 
-	mph, err := bbhash.New(builder.hashes, bbhash.Gamma(2.0))
+	if err := builder.hashes.Freeze(); err != nil {
+		b.Fatalf("freeze hashes: %v", err)
+	}
+	if err := builder.preorderPos.Freeze(); err != nil {
+		b.Fatalf("freeze preorderPos: %v", err)
+	}
+	if err := builder.fingerprints.Freeze(); err != nil {
+		b.Fatalf("freeze fingerprints: %v", err)
+	}
+	mph, err := bbhash.New(builder.hashes.Slice(), bbhash.Gamma(2.0))
 	if err != nil {
 		b.Fatalf("bbhash.New failed: %v", err)
 	}
@@ -247,7 +256,16 @@ func benchmarkFingerprintMode(b *testing.B, prefixes []string, n int, mode Finge
 		b.Fatalf("flush temp file: %v", err)
 	}
 
-	mph, err := bbhash.New(builder.hashes, bbhash.Gamma(2.0))
+	if err := builder.hashes.Freeze(); err != nil {
+		b.Fatalf("freeze hashes: %v", err)
+	}
+	if err := builder.preorderPos.Freeze(); err != nil {
+		b.Fatalf("freeze preorderPos: %v", err)
+	}
+	if err := builder.fingerprints.Freeze(); err != nil {
+		b.Fatalf("freeze fingerprints: %v", err)
+	}
+	mph, err := bbhash.New(builder.hashes.Slice(), bbhash.Gamma(2.0))
 	if err != nil {
 		b.Fatalf("bbhash.New failed: %v", err)
 	}
@@ -271,7 +289,7 @@ func benchmarkFingerprintMode(b *testing.B, prefixes []string, n int, mode Finge
 
 		if err := computeFingerprintsWithMode(
 			reader, mph, n, fingerprints, preorderPositions, orderedPrefixOffsets,
-			builder.preorderPos, mode,
+			builder.preorderPos.Slice(), mode,
 		); err != nil {
 			b.Fatalf("computeFingerprintsWithMode failed: %v", err)
 		}
@@ -740,8 +758,8 @@ func BenchmarkBuildPhaseBreakdown_BBHash(b *testing.B) {
 	builder.tempWriter.Flush()
 
 	// Copy hashes for repeated use
-	hashes := make([]uint64, len(builder.hashes))
-	copy(hashes, builder.hashes)
+	hashes := make([]uint64, len(builder.hashes.Slice()))
+	copy(hashes, builder.hashes.Slice())
 	builder.Close()
 
 	b.ResetTimer()
@@ -776,8 +794,8 @@ func BenchmarkBuildPhaseBreakdown_Find(b *testing.B) {
 	builder.tempWriter.Flush()
 
 	// Copy hashes
-	hashes := make([]uint64, len(builder.hashes))
-	copy(hashes, builder.hashes)
+	hashes := make([]uint64, len(builder.hashes.Slice()))
+	copy(hashes, builder.hashes.Slice())
 
 	mph, err := bbhash.New(hashes, bbhash.Gamma(2.0))
 	if err != nil {
@@ -819,21 +837,30 @@ func BenchmarkBuildPhaseBreakdown_ArrayMapping(b *testing.B) {
 	}
 	builder.tempWriter.Flush()
 
-	mph, err := bbhash.New(builder.hashes, bbhash.Gamma(2.0))
+	if err := builder.hashes.Freeze(); err != nil {
+		b.Fatalf("freeze hashes: %v", err)
+	}
+	if err := builder.preorderPos.Freeze(); err != nil {
+		b.Fatalf("freeze preorderPos: %v", err)
+	}
+	if err := builder.fingerprints.Freeze(); err != nil {
+		b.Fatalf("freeze fingerprints: %v", err)
+	}
+	mph, err := bbhash.New(builder.hashes.Slice(), bbhash.Gamma(2.0))
 	if err != nil {
 		b.Fatalf("bbhash.New failed: %v", err)
 	}
 
 	hashPositions := make([]int, n)
-	for i, h := range builder.hashes {
+	for i, h := range builder.hashes.Slice() {
 		hashPositions[i] = int(mph.Find(h) - 1)
 	}
 
 	// Keep copies of source data
-	fingerprints := make([]uint64, len(builder.fingerprints))
-	copy(fingerprints, builder.fingerprints)
-	preorderPos := make([]uint64, len(builder.preorderPos))
-	copy(preorderPos, builder.preorderPos)
+	fingerprints := make([]uint64, len(builder.fingerprints.Slice()))
+	copy(fingerprints, builder.fingerprints.Slice())
+	preorderPos := make([]uint64, len(builder.preorderPos.Slice()))
+	copy(preorderPos, builder.preorderPos.Slice())
 	builder.Close()
 
 	outputFP := make([]uint64, n)
@@ -871,7 +898,16 @@ func BenchmarkReverseMapPositions(b *testing.B) {
 	}
 	builder.tempWriter.Flush()
 
-	mph, err := bbhash.New(builder.hashes, bbhash.Gamma(2.0), bbhash.WithReverseMap())
+	if err := builder.hashes.Freeze(); err != nil {
+		b.Fatalf("freeze hashes: %v", err)
+	}
+	if err := builder.preorderPos.Freeze(); err != nil {
+		b.Fatalf("freeze preorderPos: %v", err)
+	}
+	if err := builder.fingerprints.Freeze(); err != nil {
+		b.Fatalf("freeze fingerprints: %v", err)
+	}
+	mph, err := bbhash.New(builder.hashes.Slice(), bbhash.Gamma(2.0), bbhash.WithReverseMap())
 	if err != nil {
 		b.Fatalf("bbhash.New failed: %v", err)
 	}

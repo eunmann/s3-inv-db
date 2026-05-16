@@ -28,7 +28,10 @@ func TestComputeHashPositions_VariantsAgree(t *testing.T) {
 			}
 
 			const bbhashGamma = 2.0
-			mph, err := bbhash.New(b.hashes, bbhash.Gamma(bbhashGamma), bbhash.WithReverseMap())
+			if err := b.hashes.Freeze(); err != nil {
+				t.Fatalf("freeze hashes: %v", err)
+			}
+			mph, err := bbhash.New(b.hashes.Slice(), bbhash.Gamma(bbhashGamma), bbhash.WithReverseMap())
 			if err != nil {
 				t.Fatalf("bbhash.New: %v", err)
 			}

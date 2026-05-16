@@ -101,7 +101,16 @@ func makeBuilderAndMPH(b *testing.B, n int) (*StreamingMPHFBuilder, *bbhash.BBHa
 	}
 
 	const bbhashGamma = 2.0
-	mph, err := bbhash.New(builder.hashes, bbhash.Gamma(bbhashGamma), bbhash.WithReverseMap())
+	if err := builder.hashes.Freeze(); err != nil {
+		b.Fatalf("freeze hashes: %v", err)
+	}
+	if err := builder.preorderPos.Freeze(); err != nil {
+		b.Fatalf("freeze preorderPos: %v", err)
+	}
+	if err := builder.fingerprints.Freeze(); err != nil {
+		b.Fatalf("freeze fingerprints: %v", err)
+	}
+	mph, err := bbhash.New(builder.hashes.Slice(), bbhash.Gamma(bbhashGamma), bbhash.WithReverseMap())
 	if err != nil {
 		b.Fatalf("bbhash.New: %v", err)
 	}

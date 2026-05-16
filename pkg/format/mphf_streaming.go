@@ -45,10 +45,13 @@ const (
 // This is much more memory efficient than MPHFBuilder which stores all
 // prefix strings in memory (~50+ bytes per prefix average).
 type StreamingMPHFBuilder struct {
-	// In-memory: hashes, positions, and fingerprints (24 bytes per prefix total)
-	hashes       []uint64
-	preorderPos  []uint64
-	fingerprints []uint64 // Pre-computed during Add phase
+	// Disk-backed: hashes, positions, fingerprints. At billion-prefix
+	// scale these would otherwise be ~24 GiB of heap. Backed by mmap'd
+	// files in tempDir; bbhash receives the mmap'd slice directly via
+	// unsafe.Slice so there's no copy to heap during construction.
+	hashes       *u64DiskArray
+	preorderPos  *u64DiskArray
+	fingerprints *u64DiskArray
 
 	// Temp file for prefix strings
 	tempFile   *os.File
@@ -75,23 +78,49 @@ func WithPrefixEncoding(enc PrefixEncoding) StreamingMPHFOption {
 }
 
 // NewStreamingMPHFBuilder creates a new streaming MPHF builder.
-// The tempDir is used for temporary storage of prefix strings.
+// The tempDir is used for temporary storage of prefix strings and
+// the three disk-backed u64 arrays (hashes / preorderPos /
+// fingerprints).
 func NewStreamingMPHFBuilder(tempDir string, opts ...StreamingMPHFOption) (*StreamingMPHFBuilder, error) {
-	// Create temp file for prefix strings
 	tempFile, err := os.CreateTemp(tempDir, "mphf_prefixes_*.tmp")
 	if err != nil {
 		return nil, fmt.Errorf("create temp file: %w", err)
 	}
 
+	hashes, err := newU64DiskArray(tempDir, "mphf_hashes")
+	if err != nil {
+		tempFile.Close()
+		os.Remove(tempFile.Name())
+
+		return nil, err
+	}
+	preorderPos, err := newU64DiskArray(tempDir, "mphf_preorderpos")
+	if err != nil {
+		hashes.Close()
+		tempFile.Close()
+		os.Remove(tempFile.Name())
+
+		return nil, err
+	}
+	fingerprints, err := newU64DiskArray(tempDir, "mphf_fingerprints")
+	if err != nil {
+		preorderPos.Close()
+		hashes.Close()
+		tempFile.Close()
+		os.Remove(tempFile.Name())
+
+		return nil, err
+	}
+
 	b := &StreamingMPHFBuilder{
-		hashes:         make([]uint64, 0, 1024),
-		preorderPos:    make([]uint64, 0, 1024),
-		fingerprints:   make([]uint64, 0, 1024),
+		hashes:         hashes,
+		preorderPos:    preorderPos,
+		fingerprints:   fingerprints,
 		tempFile:       tempFile,
-		tempWriter:     bufio.NewWriterSize(tempFile, 1024*1024), // 1MB buffer
+		tempWriter:     bufio.NewWriterSize(tempFile, 1024*1024),
 		tempPath:       tempFile.Name(),
 		bufferSize:     1024 * 1024,
-		prefixEncoding: PrefixEncodingRaw, // Default to raw encoding
+		prefixEncoding: PrefixEncodingRaw,
 	}
 
 	for _, opt := range opts {
@@ -101,27 +130,26 @@ func NewStreamingMPHFBuilder(tempDir string, opts ...StreamingMPHFOption) (*Stre
 	return b, nil
 }
 
-// Add adds a prefix at the given preorder position.
-// The prefix is written to disk immediately; only the hash and fingerprint are kept in memory.
+// Add adds a prefix at the given preorder position. All three
+// per-prefix uint64 values (hash / preorderPos / fingerprint) are
+// appended to disk-backed arrays rather than heap slices, so memory
+// usage during Add stays flat regardless of prefix count.
 func (b *StreamingMPHFBuilder) Add(prefix string, pos uint64) error {
-	// Convert to bytes once, reuse for all operations
 	prefixBytes := []byte(prefix)
 
-	// Store hash in memory (8 bytes) - used for BBHash construction
-	b.hashes = append(b.hashes, hashBytes(prefixBytes))
+	if err := b.hashes.Append(hashBytes(prefixBytes)); err != nil {
+		return fmt.Errorf("append hash: %w", err)
+	}
+	if err := b.preorderPos.Append(pos); err != nil {
+		return fmt.Errorf("append preorder pos: %w", err)
+	}
+	if err := b.fingerprints.Append(computeFingerprintBytes(prefixBytes)); err != nil {
+		return fmt.Errorf("append fingerprint: %w", err)
+	}
 
-	// Store position in memory (8 bytes)
-	b.preorderPos = append(b.preorderPos, pos)
-
-	// Pre-compute fingerprint now (8 bytes) - avoids recomputing later
-	// This is Option 4: compute fingerprint during Add phase
-	b.fingerprints = append(b.fingerprints, computeFingerprintBytes(prefixBytes))
-
-	// Write prefix to temp file with length prefix
-	// Format: [4-byte length][prefix bytes]
+	// Write prefix to temp file with length prefix.
 	var lenBuf [4]byte
 	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(prefixBytes)))
-
 	if _, err := b.tempWriter.Write(lenBuf[:]); err != nil {
 		return fmt.Errorf("write prefix length: %w", err)
 	}
@@ -158,6 +186,19 @@ func (b *StreamingMPHFBuilder) Close() error {
 			errs = append(errs, fmt.Errorf("remove mphf tempfile: %w", err))
 		}
 	}
+	// Disk-backed arrays may have been already closed during a
+	// successful Build; nil-guard so Close stays idempotent.
+	for _, a := range []*u64DiskArray{b.hashes, b.preorderPos, b.fingerprints} {
+		if a == nil {
+			continue
+		}
+		if err := a.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	b.hashes = nil
+	b.preorderPos = nil
+	b.fingerprints = nil
 
 	return errors.Join(errs...)
 }
@@ -182,6 +223,19 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		return fmt.Errorf("flush temp file: %w", err)
 	}
 
+	// Freeze the disk-backed arrays so their backing files are mmap'd
+	// and exposable as []uint64. bbhash reads the slice; the values
+	// live in the page cache, not the Go heap.
+	if err := b.hashes.Freeze(); err != nil {
+		return fmt.Errorf("freeze hashes: %w", err)
+	}
+	if err := b.preorderPos.Freeze(); err != nil {
+		return fmt.Errorf("freeze preorderPos: %w", err)
+	}
+	if err := b.fingerprints.Freeze(); err != nil {
+		return fmt.Errorf("freeze fingerprints: %w", err)
+	}
+
 	// Build MPHF with gamma=2.0 and ReverseMap for fast position lookup
 	log.Debug().
 		Uint64("hash_count", b.count).
@@ -189,7 +243,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 
 	bbhashStart := time.Now()
 	const bbhashGamma = 2.0
-	mph, err := bbhash.New(b.hashes, bbhash.Gamma(bbhashGamma), bbhash.WithReverseMap())
+	mph, err := bbhash.New(b.hashes.Slice(), bbhash.Gamma(bbhashGamma), bbhash.WithReverseMap())
 	if err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
@@ -235,7 +289,11 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		Dur("pos_ms", time.Since(posStart)).
 		Msg("MPHF: hash positions computed")
 
-	// Free hashes now - we have all positions
+	// Free hashes now — bbhash + lookup are done with them. The
+	// underlying mmap stays around until builder.Close.
+	if err := b.hashes.Close(); err != nil {
+		return fmt.Errorf("close hashes: %w", err)
+	}
 	b.hashes = nil
 
 	// =========================================================================
@@ -244,26 +302,10 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	// Fingerprints were computed during Add() phase, so we just copy them
 	// to the output array at the correct positions. No recomputation needed.
 
-	log.Debug().Msg("MPHF: mapping fingerprints and positions to output arrays")
-	mapStart := time.Now()
-
-	outputFingerprints := make([]uint64, n)
-	outputPreorderPos := make([]uint64, n)
-
-	// Simple copy loop - no hash computation, no I/O
-	for i, hashPos := range hashPositions {
-		outputFingerprints[hashPos] = b.fingerprints[i]
-		outputPreorderPos[hashPos] = b.preorderPos[i]
+	outputFingerprints, outputPreorderPos, err := b.materialiseOutputArrays(n, hashPositions)
+	if err != nil {
+		return err
 	}
-
-	log.Debug().
-		Dur("map_ms", time.Since(mapStart)).
-		Msg("MPHF: arrays mapped")
-
-	// Free source arrays
-	b.fingerprints = nil
-	b.preorderPos = nil
-	runtime.GC()
 
 	log.Debug().Msg("MPHF: writing fingerprints and positions (parallel)")
 
@@ -291,6 +333,44 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	return nil
 }
 
+// materialiseOutputArrays builds outputFingerprints/outputPreorderPos
+// at MPH-position layout by walking the per-prefix disk-backed arrays
+// and scattering them via the hashPositions mapping. Releases the
+// input mmaps after copy.
+//
+//nolint:gocritic // returns are documented in the function comment; the project forbids named returns
+func (b *StreamingMPHFBuilder) materialiseOutputArrays(n int, hashPositions []int) ([]uint64, []uint64, error) {
+	log := logging.L()
+	log.Debug().Msg("MPHF: mapping fingerprints and positions to output arrays")
+	mapStart := time.Now()
+
+	outputFingerprints := make([]uint64, n)
+	outputPreorderPos := make([]uint64, n)
+	fps := b.fingerprints.Slice()
+	poss := b.preorderPos.Slice()
+
+	for i, hashPos := range hashPositions {
+		outputFingerprints[hashPos] = fps[i]
+		outputPreorderPos[hashPos] = poss[i]
+	}
+
+	log.Debug().
+		Dur("map_ms", time.Since(mapStart)).
+		Msg("MPHF: arrays mapped")
+
+	if err := b.fingerprints.Close(); err != nil {
+		return nil, nil, fmt.Errorf("close fingerprints: %w", err)
+	}
+	b.fingerprints = nil
+	if err := b.preorderPos.Close(); err != nil {
+		return nil, nil, fmt.Errorf("close preorderPos: %w", err)
+	}
+	b.preorderPos = nil
+	runtime.GC()
+
+	return outputFingerprints, outputPreorderPos, nil
+}
+
 // computeHashPositionsReverseMap computes MPHF hash positions using the ReverseMap.
 // This avoids expensive Find() calls by iterating through the ReverseMap to build
 // a forward mapping. Approximately 17x faster than calling Find() for each hash.
@@ -301,7 +381,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 func (b *StreamingMPHFBuilder) computeHashPositionsReverseMap(mph *bbhash.BBHash2, n int) ([]int, error) {
 	// Build hash → original index map
 	hashToOrigIdx := make(map[uint64]int, n)
-	for i, h := range b.hashes {
+	for i, h := range b.hashes.Slice() {
 		hashToOrigIdx[h] = i
 	}
 
@@ -334,7 +414,7 @@ func (b *StreamingMPHFBuilder) computeHashPositionsReverseMap(mph *bbhash.BBHash
 // same slot.
 func (b *StreamingMPHFBuilder) computeHashPositionsParallelMap(mph *bbhash.BBHash2, n int) ([]int, error) {
 	hashToOrigIdx := make(map[uint64]int, n)
-	for i, h := range b.hashes {
+	for i, h := range b.hashes.Slice() {
 		hashToOrigIdx[h] = i
 	}
 
@@ -399,7 +479,7 @@ func (b *StreamingMPHFBuilder) computeHashPositionsParallelSort(mph *bbhash.BBHa
 		return nil, fmt.Errorf("%w: %d prefixes exceeds uint32 index range used by the sorted-array variant", ErrMPHFAmbiguousKey, n)
 	}
 	pairs := make([]hashIdxPair, n)
-	for i, h := range b.hashes {
+	for i, h := range b.hashes.Slice() {
 		pairs[i] = hashIdxPair{hash: h, idx: uint32(i)}
 	}
 	slices.SortFunc(pairs, func(a, b hashIdxPair) int {
@@ -620,7 +700,7 @@ func (b *StreamingMPHFBuilder) fingerprintWorker(
 			hashPos := int(hashVal - 1)
 
 			fingerprints[hashPos] = computeFingerprintBytes(item.prefixBytes)
-			preorderPositions[hashPos] = b.preorderPos[item.index]
+			preorderPositions[hashPos] = b.preorderPos.Slice()[item.index]
 			orderedPrefixOffsets[hashPos] = item.offset
 		}
 	}

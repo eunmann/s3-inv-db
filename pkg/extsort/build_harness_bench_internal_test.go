@@ -112,10 +112,11 @@ func approxPrefixCount(objects []benchutil.FakeObject) int {
 	return agg.PrefixCount()
 }
 
-// heapSampler polls runtime memory stats every 5 ms and updates `max`
-// with the highest HeapAlloc seen. Cheap enough that it doesn't move
-// the timing needle on its own. Closing `stop` ends the goroutine.
-func heapSampler(stop <-chan struct{}, max *atomic.Uint64) {
+// heapSampler polls runtime memory stats every 5 ms and updates the
+// highest HeapAlloc seen into peak. Cheap enough that it doesn't
+// move the timing needle on its own. Closing `stop` ends the
+// goroutine.
+func heapSampler(stop <-chan struct{}, peak *atomic.Uint64) {
 	const interval = 5 * time.Millisecond
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -128,8 +129,8 @@ func heapSampler(stop <-chan struct{}, max *atomic.Uint64) {
 			runtime.ReadMemStats(&ms)
 			cur := ms.HeapAlloc
 			for {
-				old := max.Load()
-				if cur <= old || max.CompareAndSwap(old, cur) {
+				old := peak.Load()
+				if cur <= old || peak.CompareAndSwap(old, cur) {
 					break
 				}
 			}
