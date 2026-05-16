@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -27,15 +28,23 @@ type Pipeline struct {
 	config    Config
 	s3Client  *s3fetch.Client
 	tempDir   string
-	runFiles  []string
-	runCount  int
 	startTime time.Time
 
-	// Progress tracking
-	chunksProcessed  int64
-	objectsProcessed int64
-	bytesProcessed   int64
-	flushCount       int64
+	// runFilesMu guards runFiles + runCount. Both are mutated from N
+	// chunkWorker goroutines (each flushing its private aggregator)
+	// plus the merge phase which reads runFiles. The mutex is held
+	// only across the slice append + counter bump — never across
+	// I/O — so contention is negligible.
+	runFilesMu sync.Mutex
+	runFiles   []string
+	runCount   int
+
+	// Progress tracking — atomics because N chunkWorkers update
+	// these concurrently as they parse and aggregate.
+	chunksProcessed  atomic.Int64
+	objectsProcessed atomic.Int64
+	bytesProcessed   atomic.Int64
+	flushCount       atomic.Int64
 
 	// Memory diagnostics
 	memTracker *memdiag.Tracker
@@ -131,9 +140,9 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 	log.Info().
 		Int("run_files_count", len(p.runFiles)).
-		Str("objects", humanfmt.Count(p.objectsProcessed)).
-		Int64("objects_count", p.objectsProcessed).
-		Int64("flushes_count", p.flushCount).
+		Str("objects", humanfmt.Count(p.objectsProcessed.Load())).
+		Int64("objects_count", p.objectsProcessed.Load()).
+		Int64("flushes_count", p.flushCount.Load()).
 		Str("duration", humanfmt.Duration(ingestDuration)).
 		Dur("duration_ms", ingestDuration).
 		Msg("ingest phase complete")
@@ -170,16 +179,16 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	log.Info().
 		Str("total_duration", humanfmt.Duration(duration)).
 		Dur("total_duration_ms", duration).
-		Str("objects", humanfmt.Count(p.objectsProcessed)).
-		Int64("objects_count", p.objectsProcessed).
+		Str("objects", humanfmt.Count(p.objectsProcessed.Load())).
+		Int64("objects_count", p.objectsProcessed.Load()).
 		Str("prefixes", humanfmt.CountUint64(prefixCount)).
 		Uint64("prefixes_count", prefixCount).
-		Str("throughput", humanfmt.Count(int64(float64(p.objectsProcessed)/duration.Seconds()))+"/s").
+		Str("throughput", humanfmt.Count(int64(float64(p.objectsProcessed.Load())/duration.Seconds()))+"/s").
 		Msg("pipeline complete")
 
 	return &Result{
-		ChunksProcessed:  int(p.chunksProcessed),
-		ObjectsProcessed: p.objectsProcessed,
+		ChunksProcessed:  int(p.chunksProcessed.Load()),
+		ObjectsProcessed: p.objectsProcessed.Load(),
 		PrefixCount:      prefixCount,
 		MaxDepth:         maxDepth,
 		RunFilesCreated:  len(p.runFiles),
@@ -204,13 +213,6 @@ type chunkJob struct {
 	bucket string
 	key    string
 	config chunkConfig
-}
-
-// objectBatch holds a batch of objects to be aggregated.
-// Using batches reduces channel overhead compared to sending individual objects.
-type objectBatch struct {
-	objects []objectRecord
-	err     error
 }
 
 // objectRecord holds a single object's data for aggregation.
@@ -391,39 +393,92 @@ func (c *ingestConfig) formatString() string {
 	return "CSV"
 }
 
-// runIngestLoop runs the main ingest loop with worker coordination.
+// runIngestLoop runs the main ingest loop with per-worker
+// aggregators. Each chunk worker maintains its own Aggregator and
+// flushes directly to its own run files. This eliminates the
+// previous single-consumer bottleneck where all AddObject calls
+// were funneled onto one goroutine — at N-core ingest, that one
+// goroutine was the dominant wall-time cost.
+//
+// Coordination:
+//   - Per-worker state: Aggregator + bytesProcessed counter, all local
+//   - Shared state behind p.runFilesMu: runFiles slice + runCount
+//     (only mutated at flush time, never on the hot AddObject path)
+//   - Atomic counters for cross-worker progress (objectsProcessed,
+//     chunksProcessed, bytesProcessed, flushCount)
+//   - Errgroup for error propagation; first error cancels the rest
 func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
 	log := zerolog.Ctx(ctx)
 	totalChunks := len(cfg.manifest.Files)
 
 	jobs := make(chan chunkJob, cfg.numWorkers)
-	// Buffer results at numWorkers depth so workers don't stall waiting
-	// for the single aggregator-side consumer. The previous depth of 2
-	// could leave numWorkers-2 workers blocked on the channel send when
-	// chunk parse latency varied across workers.
-	results := make(chan objectBatch, cfg.numWorkers)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Start workers
 	var wg sync.WaitGroup
-	for range cfg.numWorkers {
+	errCh := make(chan error, cfg.numWorkers)
+	progressTicker := p.startIngestProgressLogger(ctx, log, totalChunks)
+
+	for workerID := range cfg.numWorkers {
 		wg.Go(func() {
-			p.chunkWorker(ctx, jobs, results)
+			if err := p.runChunkWorker(ctx, workerID, jobs, totalChunks); err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+				cancel()
+			}
 		})
 	}
 
-	// Start job sender
 	go p.sendIngestJobs(ctx, cfg, jobs)
 
-	// Close results when workers done
+	wg.Wait()
+	close(errCh)
+	close(progressTicker)
+
+	for err := range errCh {
+		if err != nil {
+			return fmt.Errorf("chunk worker: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// startIngestProgressLogger starts a background goroutine that logs
+// per-N-chunk progress based on the atomic counters. Returns a
+// channel that the caller closes to stop the logger.
+func (p *Pipeline) startIngestProgressLogger(ctx context.Context, log *zerolog.Logger, totalChunks int) chan struct{} {
+	stop := make(chan struct{})
+	progressInterval := max(totalChunks/10, 1)
 	go func() {
-		wg.Wait()
-		close(results)
+		var lastLogged int
+		const tickInterval = 500 * time.Millisecond
+		ticker := time.NewTicker(tickInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-stop:
+				return
+			case <-ticker.C:
+				chunkNum := int(p.chunksProcessed.Load())
+				if chunkNum == 0 || chunkNum == lastLogged {
+					continue
+				}
+				p.reportProgress("downloading", int64(chunkNum), int64(totalChunks))
+				if chunkNum-lastLogged >= progressInterval || chunkNum == totalChunks {
+					p.logIngestProgress(log, chunkNum, totalChunks)
+					lastLogged = chunkNum
+				}
+			}
+		}
 	}()
 
-	return p.processIngestResults(ctx, log, results, cancel, totalChunks)
+	return stop
 }
 
 // sendIngestJobs sends chunk jobs to workers.
@@ -451,120 +506,6 @@ func (p *Pipeline) sendIngestJobs(ctx context.Context, cfg *ingestConfig, jobs c
 	}
 }
 
-// processIngestResults processes results from workers and aggregates data.
-func (p *Pipeline) processIngestResults(
-	ctx context.Context,
-	log *zerolog.Logger,
-	results <-chan objectBatch,
-	cancel context.CancelFunc,
-	totalChunks int,
-) error {
-	const initialAggCapacity = 10_000
-	agg := NewAggregator(initialAggCapacity, p.config.MaxDepth)
-	progressInterval := max(totalChunks/10, 1)
-	var firstErr error
-
-	for batch := range results {
-		// Check for context cancellation
-		select {
-		case <-ctx.Done():
-			if firstErr == nil {
-				firstErr = fmt.Errorf("context cancelled: %w", ctx.Err())
-			}
-			cancel()
-			for range results {
-				continue
-			}
-
-			return firstErr
-		default:
-		}
-
-		res := p.handleIngestBatch(ctx, log, agg, batch, totalChunks, progressInterval)
-		if res.BatchErr != nil && firstErr == nil {
-			firstErr = res.BatchErr
-			cancel()
-		}
-		if res.FlushErr != nil {
-			return res.FlushErr
-		}
-	}
-
-	if firstErr != nil {
-		return fmt.Errorf("process chunk: %w", firstErr)
-	}
-
-	if agg.PrefixCount() > 0 {
-		if err := p.flushAggregator(ctx, agg); err != nil {
-			return fmt.Errorf("final flush: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// ingestBatchResult reports the outcome of processing a single ingest
-// batch. BatchErr records the batch's own (non-fatal) error so the caller
-// can fold it into firstErr. FlushErr is fatal: the caller must abort
-// the ingest loop on a non-nil FlushErr.
-type ingestBatchResult struct {
-	BatchErr error
-	FlushErr error
-}
-
-// handleIngestBatch processes a single batch of objects.
-func (p *Pipeline) handleIngestBatch(
-	ctx context.Context,
-	log *zerolog.Logger,
-	agg *Aggregator,
-	batch objectBatch,
-	totalChunks int,
-	progressInterval int,
-) ingestBatchResult {
-	if batch.err != nil {
-		return ingestBatchResult{BatchErr: batch.err}
-	}
-
-	// All counter writes here happen on the single results-processing
-	// goroutine (handleIngestBatch is only called from
-	// processIngestResults, which serially drains the results channel).
-	// Atomics were pure overhead — false-shared cache-line bouncing
-	// across cores when chunk workers fanned out — without any actual
-	// race to defend against. Plain field writes are correct and
-	// remove a measurable per-row cost on multi-core ingest.
-	for _, obj := range batch.objects {
-		agg.AddObject(obj.key, obj.size, obj.tierID)
-		p.objectsProcessed++
-		p.bytesProcessed += int64(obj.size)
-	}
-
-	p.chunksProcessed++
-	chunkNum := int(p.chunksProcessed)
-
-	// Emit progress on every chunk so the UI can render a useful ETA;
-	// the per-N log line is still throttled by progressInterval.
-	p.reportProgress("downloading", int64(chunkNum), int64(totalChunks))
-
-	if chunkNum%progressInterval == 0 || chunkNum == totalChunks {
-		p.logIngestProgress(log, chunkNum, totalChunks)
-	}
-
-	if ShouldFlush(HeapAllocBytes(), debug.SetMemoryLimit(-1)) {
-		p.memTracker.LogNow("pre_flush")
-		if err := p.flushAggregator(ctx, agg); err != nil {
-			return ingestBatchResult{FlushErr: fmt.Errorf("flush aggregator: %w", err)}
-		}
-		// Don't force a runtime.GC() here. The Go GC under GOMEMLIMIT
-		// reclaims aggregator memory the moment the slice is dropped;
-		// a manual GC adds a stop-the-world pause without improving
-		// the steady-state heap. Empirically: 28+ flushes per build
-		// at 4B objects = 280ms-2.8s of avoidable STW.
-		p.memTracker.LogNow("post_flush")
-	}
-
-	return ingestBatchResult{}
-}
-
 // logIngestProgress logs progress information.
 func (p *Pipeline) logIngestProgress(log *zerolog.Logger, chunkNum, totalChunks int) {
 	elapsed := time.Since(p.startTime)
@@ -577,17 +518,34 @@ func (p *Pipeline) logIngestProgress(log *zerolog.Logger, chunkNum, totalChunks 
 		Int("chunk_num", chunkNum).
 		Int("chunks_total", totalChunks).
 		Float64("progress_pct", pct).
-		Int64("objects_count", p.objectsProcessed).
+		Int64("objects_count", p.objectsProcessed.Load()).
 		Dur("eta_ms", remaining).
 		Msg("ingest progress")
 }
 
-// chunkWorker processes chunks from the jobs channel and sends results to the results channel.
-func (p *Pipeline) chunkWorker(ctx context.Context, jobs <-chan chunkJob, results chan<- objectBatch) {
+// runChunkWorker is the per-worker hot path: own a private Aggregator,
+// pull chunks off the jobs channel, parse + AddObject directly into
+// the local aggregator (zero contention), flush to a private run file
+// when memory pressure hits. At end-of-input (channel closed), flush
+// the residual aggregator state to a final run file.
+func (p *Pipeline) runChunkWorker(ctx context.Context, workerID int, jobs <-chan chunkJob, totalChunks int) error {
+	const initialAggCapacity = 10_000
+	agg := NewAggregator(initialAggCapacity, p.config.MaxDepth)
+	defer func() {
+		if agg.PrefixCount() > 0 {
+			if err := p.flushAggregator(ctx, agg); err != nil {
+				zerolog.Ctx(ctx).Error().
+					Int("worker_id", workerID).
+					Err(err).
+					Msg("final flush failed")
+			}
+		}
+	}()
+
 	for job := range jobs {
 		select {
 		case <-ctx.Done():
-			return
+			return fmt.Errorf("worker %d cancelled: %w", workerID, ctx.Err())
 		default:
 		}
 
@@ -599,20 +557,29 @@ func (p *Pipeline) chunkWorker(ctx context.Context, jobs <-chan chunkJob, result
 
 		objects, _, err := p.processChunkToBatch(ctx, job.bucket, job.key, job.config, capacityHint)
 		if err != nil {
-			select {
-			case results <- objectBatch{err: fmt.Errorf("chunk %d: %w", job.index, err)}:
-			case <-ctx.Done():
+			return fmt.Errorf("chunk %d: %w", job.index, err)
+		}
+
+		var localBytes int64
+		for _, obj := range objects {
+			agg.AddObject(obj.key, obj.size, obj.tierID)
+			localBytes += int64(obj.size)
+		}
+		p.objectsProcessed.Add(int64(len(objects)))
+		p.bytesProcessed.Add(localBytes)
+		p.chunksProcessed.Add(1)
+
+		if ShouldFlush(HeapAllocBytes(), debug.SetMemoryLimit(-1)) {
+			p.memTracker.LogNow("pre_flush")
+			if err := p.flushAggregator(ctx, agg); err != nil {
+				return fmt.Errorf("worker %d flush: %w", workerID, err)
 			}
-
-			continue
+			p.memTracker.LogNow("post_flush")
 		}
-
-		select {
-		case results <- objectBatch{objects: objects}:
-		case <-ctx.Done():
-			return
-		}
+		_ = totalChunks
 	}
+
+	return nil
 }
 
 // chunkTiming holds timing information for chunk processing.
@@ -755,7 +722,10 @@ func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, 
 	return objects, timing, nil
 }
 
-// flushAggregator drains the aggregator to a sorted run file.
+// flushAggregator drains the aggregator to a sorted run file. Safe
+// to call concurrently from multiple worker goroutines — the only
+// shared state (p.runFiles + p.runCount) is guarded by p.runFilesMu;
+// the actual sort + write is per-goroutine-local until the append.
 func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 	log := zerolog.Ctx(ctx)
 	start := time.Now()
@@ -770,8 +740,11 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 	if p.config.UseCompressedRuns {
 		ext = ".crun"
 	}
-	runPath := filepath.Join(p.tempDir, fmt.Sprintf("run_%04d%s", p.runCount, ext))
+	p.runFilesMu.Lock()
+	runIdx := p.runCount
 	p.runCount++
+	p.runFilesMu.Unlock()
+	runPath := filepath.Join(p.tempDir, fmt.Sprintf("run_%04d%s", runIdx, ext))
 
 	// Run file buffer: a fixed 4 MiB is well above the syscall sweet
 	// spot for sequential writes and bounded per-worker, so no need to
@@ -814,8 +787,10 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 		return fmt.Errorf("close run file: %w", writeErr)
 	}
 
+	p.runFilesMu.Lock()
 	p.runFiles = append(p.runFiles, runPath)
-	p.flushCount++
+	p.runFilesMu.Unlock()
+	p.flushCount.Add(1)
 
 	// Log flush with memory stats. Empirically each PrefixStats slot uses
 	// ~288 bytes (depth + counts + per-tier arrays) inside the aggregator.
@@ -823,7 +798,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 	aggMemory := int64(len(rows)) * bytesPerAggregatorEntry
 	flushDuration := time.Since(start)
 	log.Info().
-		Int("run_index", p.runCount-1).
+		Int("run_index", runIdx).
 		Str("prefixes", humanfmt.Count(int64(len(rows)))).
 		Int("prefixes_count", len(rows)).
 		Str("aggregator_memory", humanfmt.Bytes(aggMemory)).
