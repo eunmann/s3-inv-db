@@ -159,12 +159,12 @@ The MPHF mmap work (W2.3a/b/c) and subtree mmap (Random-Disk arrays) were measur
 
 #### Q-tier (Query time — priority #1)
 
-| ID  | Change | Where | Expected impact | Bench |
-|-----|--------|-------|-----------------|-------|
-| Q1  | **Row-major tier_stats**: pack all 11 tiers × (count + bytes) into one mmap'd file at 176 B/row. Single page fault per `TierBreakdown(pos)` instead of 22 (11 tiers × 2 files). Same disk bytes; just rearranged. | `pkg/format/tierstats.go` (writer + reader); back-compat shim opens legacy per-tier files when new file absent | TierBreakdown cold: **-22× page faults → ~5–10× latency**; warm: cache-line locality (one line covers 4 tiers instead of one column-fetch per tier) | new `BenchmarkTierBreakdown_Cold`; existing `BenchmarkTierBreakdown` warm |
-| Q2  | **Row-major core stats**: pack `objectCount` (8) + `totalBytes` (8) + `depth` (2) + `subtree_end` (8) + `max_depth_in_subtree` (2) into one 28 B/row mmap'd file. `StatsForPrefix` → 1 page fault instead of 5. | `pkg/format/` (new corestats writer/reader); IndexBuilder switches to one row write per prefix; back-compat shim opens legacy individual files | StatsForPrefix cold: **-5× page faults**; Children iteration cold: huge — child loop sweeps one contiguous region | new `BenchmarkStatsForPrefix_Cold`; new `BenchmarkChildrenIterate_Cold`; existing warm benches |
-| Q3  | **Sequential madvise + readahead for Children/subtree iteration**: when caller indicates "I'm about to iterate `[pos, subtreeEnd]`", `madvise(MADV_WILLNEED)` on the core-stats and prefix-blob ranges. | `pkg/format/reader.go` + `pkg/indexread/index.go` (new Iterator hint API) | Children cold: smooth ramp-up vs current first-page-fault stalls | new `BenchmarkChildrenIterate_Cold` (covers Q2 too) |
-| Q4  | **Pool the per-call `TierBreakdown` slice** in `GetBreakdown` (currently `make([]TierBreakdown, 0, n)` per call, 11-cap × N requests = GC pressure on the hot dashboard path). | `pkg/format/tierstats.go` | TierBreakdown warm: drop the alloc; ~10% latency on tight loops | existing `BenchmarkTierBreakdown` and `BenchmarkConcurrentTierBreakdown` |
+| ID  | Change | Status | Result |
+|-----|--------|--------|--------|
+| Q1  | **Row-major tier_stats** — one file at NumTiers × 16 B/row, single mmap'd region. Replaces 22 per-tier files. | **shipped** | TierBreakdown cold @ n=1M: **1.36 ms → 62 µs** (-95% / 22× fewer page faults). Ingestion -29% as bonus from collapsing 22 file writes into 1. |
+| Q2  | **Row-major core_stats** — one 28 B/row file replacing 5 per-column files (object_count, total_bytes, subtree_end, depth, max_depth_in_subtree). | **shipped** | StatsForPrefix single-shot cold: 227 µs → 146 µs (-36%). Amortized cold @ n=1M: 177 µs (MPHF-lookup-bound — Q2's win shows up as fewer per-call page faults but the bench is dominated by the MPHF + dropPageCache walk at this size). Warm: flat. |
+| Q3  | **MADV_WILLNEED on subtree iteration** | **DROPPED**. Implemented + measured: cold ChildrenIterate at n=1M went 315 µs → 173 µs (-45%). But: (a) zero gain on warm cache (the common production state), (b) Linux's adaptive readahead does the same job within a few pages, (c) saves <1% of a 10–100 ms HTTP request budget. Below the bar — too deep into kernel hinting for too little realistic gain. Reverted. |
+| Q4  | **Pool TierBreakdown slice** | **DROPPED**. Saves ~50 ns warm per call (allocator already fast for 448 B objects). 4.5 MB/s of GC pressure at 10K req/s is trivial for Go's GC. Adds a sync.Pool footgun (callers must Put-back, no escape across goroutines). Below the bar. |
 
 #### I-tier (Ingestion wall time — priority #2)
 
