@@ -226,7 +226,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	posStart := time.Now()
 
 	n := int(b.count)
-	hashPositions, err := b.computeHashPositionsParallelSort(mph, n)
+	hashPositions, err := b.computeHashPositionsParallelMap(mph, n)
 	if err != nil {
 		return err
 	}
