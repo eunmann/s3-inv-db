@@ -1,0 +1,25 @@
+BenchmarkPrefixString_Matrix/encoding=raw/n=100000/warm-32    	    2000	       427.5 ns/op	      35 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=raw/n=100000/warm-32    	    2000	       121.5 ns/op	      35 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=raw/n=100000/warm-32    	    2000	        81.59 ns/op	      35 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=raw/n=100000/cold-32    	    2000	       127.2 ns/op	      35 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=raw/n=100000/cold-32    	    2000	       105.1 ns/op	      35 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=raw/n=100000/cold-32    	    2000	       121.5 ns/op	      35 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=raw/n=1000000/warm-32   	    2000	      2242 ns/op	      35 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=raw/n=1000000/warm-32   	    2000	       151.5 ns/op	      35 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=raw/n=1000000/warm-32   	    2000	        90.25 ns/op	      35 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=raw/n=1000000/cold-32   	    2000	       196.9 ns/op	      35 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=raw/n=1000000/cold-32   	    2000	       209.5 ns/op	      35 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=raw/n=1000000/cold-32   	    2000	       236.1 ns/op	      35 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=segmented/n=100000/warm-32         	    2000	       570.8 ns/op	      71 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=segmented/n=100000/warm-32         	    2000	       282.6 ns/op	      71 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=segmented/n=100000/warm-32         	    2000	       255.7 ns/op	      71 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=segmented/n=100000/cold-32         	    2000	       347.7 ns/op	      71 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=segmented/n=100000/cold-32         	    2000	       298.4 ns/op	      71 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=segmented/n=100000/cold-32         	    2000	       227.4 ns/op	      71 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=segmented/n=1000000/warm-32        	    2000	      2473 ns/op	      71 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=segmented/n=1000000/warm-32        	    2000	       348.1 ns/op	      71 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=segmented/n=1000000/warm-32        	    2000	       297.2 ns/op	      71 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=segmented/n=1000000/cold-32        	    2000	       576.6 ns/op	      71 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=segmented/n=1000000/cold-32        	    2000	       568.2 ns/op	      71 B/op	       1 allocs/op
+BenchmarkPrefixString_Matrix/encoding=segmented/n=1000000/cold-32        	    2000	       555.8 ns/op	      71 B/op	       1 allocs/op
+PASS
