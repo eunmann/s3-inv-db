@@ -351,3 +351,22 @@ func (r *BlobReader) UnsafeGet(idx uint64) string {
 
 	return string(r.blobMmap.Data()[start:end])
 }
+
+// UnsafeBytesNoCopy returns the prefix at idx as a []byte slice that
+// aliases the mmap'd region directly — no copy. Saves one allocation
+// per call on hot Browse/Compare paths that just want to compare
+// bytes (or pass to a Reader) without needing to retain the string.
+//
+// WARNING: the returned slice MUST NOT outlive the BlobReader (its
+// Close munmaps the backing region) and MUST NOT be mutated. Treat
+// it as `string` semantically. Callers that need a long-lived value
+// should `string(slice)`-copy at the boundary.
+//
+// No bounds checking — caller must have validated idx via Lookup or
+// a separate range check.
+func (r *BlobReader) UnsafeBytesNoCopy(idx uint64) []byte {
+	start := r.offsetsMmap.UnsafeGetU64(idx)
+	end := r.offsetsMmap.UnsafeGetU64(idx + 1)
+
+	return r.blobMmap.Data()[start:end]
+}
