@@ -104,7 +104,7 @@ item lists: change, where, expected impact, measurement.
 |---|---|---|---|---|
 | Q5 | Browse benchmark suite (both raw + segmented, cold + warm, varying child counts and depths) | `pkg/indexread/*_bench_test.go` (new) | Establishes baseline for the dominant production query | New `BenchmarkBrowseMatrix` |
 | Q6 | PrefixString cold/warm bench, raw vs segmented | `pkg/format/*_bench_test.go` (new) | Identifies per-child Browse cost. Segmented = O(depth) reads per call | New `BenchmarkPrefixString` |
-| Q7 | If Q5/Q6 show segmented hurts Browse beyond what's tolerable, restrict it to a separate index variant or drop it | `pkg/extsort/indexbuild.go`, `pkg/format/segment.go` | Removes a query-time foot-gun while keeping disk savings opt-in | Compare BrowseMatrix raw vs segmented |
+| Q7 | ✅ **DECIDED: drop segmented encoding entirely.** B3 shows 3.3× warm / 2.7× cold PrefixString penalty + 2× allocs. B2 shows 10-15% end-to-end Browse penalty. CLI exposure is an opt-in `--segment-prefixes` flag (default false), no production path. Disk savings rank #4; query latency rank #1. Per "never trade query latency for disk bytes", drop. Deletion folded into S1-S6 simplification batch | `pkg/format/segment.go` + flag in `internal/cli/cli.go` + `UseSegmentEncoding` config field | -800+ LOC, simpler MPHF Lookup path, no per-call width dispatch on useSegments | Re-run B2 raw-only after deletion |
 | Q8 | Cold Lookup behavior at 1B-scale plan | research only | Lookup at 1M warm is 14 µs (mostly bbhash rank). At 1B working set won't fit in RAM. Need a plan that doesn't trade query latency for memory | Write-up only; no implementation until measured |
 
 ### I — Ingestion wall time (priority #2)
