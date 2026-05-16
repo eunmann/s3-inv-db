@@ -222,47 +222,6 @@ type objectRecord struct {
 	tierID tiers.ID
 }
 
-// estimateObjectCount estimates the number of objects in an inventory file
-// based on its compressed size and format. This helps pre-size buffers to
-// avoid repeated slice growth during parsing.
-func estimateObjectCount(fileSize int64, format s3fetch.InventoryFormat) int {
-	const (
-		minCapacity = 10_000 // Minimum capacity to avoid tiny allocations
-		// Upper bound to prevent absurd preallocations even for huge files.
-		maxCapacity = 10_000_000
-
-		// CSV inventory: each row is ~100-200 bytes uncompressed.
-		// S3 inventory CSVs are gzip-compressed with ~8x ratio.
-		// Estimate: fileSize * 8 (decompress) / 150 (avg row size)
-		csvBytesPerRecord = 150 / 8 // ~18 bytes compressed per record
-
-		// Parquet inventory: very compact columnar format.
-		// Empirically ~40-60 bytes per record including overhead.
-		parquetBytesPerRecord = 50
-	)
-
-	if fileSize <= 0 {
-		return minCapacity
-	}
-
-	var estimate int64
-	if format == s3fetch.InventoryFormatParquet {
-		estimate = fileSize / parquetBytesPerRecord
-	} else {
-		estimate = fileSize / csvBytesPerRecord
-	}
-
-	// Clamp to reasonable range
-	if estimate < int64(minCapacity) {
-		return minCapacity
-	}
-	if estimate > maxCapacity {
-		return maxCapacity
-	}
-
-	return int(estimate)
-}
-
 // ingestConfig holds configuration for the ingest phase.
 type ingestConfig struct {
 	manifest      *s3fetch.Manifest
@@ -524,10 +483,11 @@ func (p *Pipeline) logIngestProgress(log *zerolog.Logger, chunkNum, totalChunks 
 }
 
 // runChunkWorker is the per-worker hot path: own a private Aggregator,
-// pull chunks off the jobs channel, parse + AddObject directly into
-// the local aggregator (zero contention), flush to a private run file
-// when memory pressure hits. At end-of-input (channel closed), flush
-// the residual aggregator state to a final run file.
+// pull chunks off the jobs channel, stream-parse each chunk row-by-row
+// directly into the local aggregator (no intermediate slice), flush to
+// a private run file when memory pressure hits. At end-of-input
+// (channel closed), flush the residual aggregator state to a final
+// run file.
 func (p *Pipeline) runChunkWorker(ctx context.Context, workerID int, jobs <-chan chunkJob, totalChunks int) error {
 	const initialAggCapacity = 10_000
 	agg := NewAggregator(initialAggCapacity, p.config.MaxDepth)
@@ -549,24 +509,9 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID int, jobs <-chan
 		default:
 		}
 
-		// Estimate capacity from file size to reduce slice growth allocations.
-		// For compressed CSV: assume ~8x compression, ~100 bytes/record uncompressed.
-		// For Parquet: ~50 bytes/record (column-compressed).
-		// Minimum 10K to avoid tiny initial allocations.
-		capacityHint := estimateObjectCount(job.config.fileSize, job.config.format)
-
-		objects, _, err := p.processChunkToBatch(ctx, job.bucket, job.key, job.config, capacityHint)
-		if err != nil {
+		if err := p.streamChunkIntoAggregator(ctx, job, agg); err != nil {
 			return fmt.Errorf("chunk %d: %w", job.index, err)
 		}
-
-		var localBytes int64
-		for _, obj := range objects {
-			agg.AddObject(obj.key, obj.size, obj.tierID)
-			localBytes += int64(obj.size)
-		}
-		p.objectsProcessed.Add(int64(len(objects)))
-		p.bytesProcessed.Add(localBytes)
 		p.chunksProcessed.Add(1)
 
 		if ShouldFlush(HeapAllocBytes(), debug.SetMemoryLimit(-1)) {
@@ -582,12 +527,69 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID int, jobs <-chan
 	return nil
 }
 
-// chunkTiming holds timing information for chunk processing.
-type chunkTiming struct {
-	downloadDuration time.Duration
-	parseDuration    time.Duration
-	objectCount      int
-	totalBytes       int64
+// streamChunkIntoAggregator downloads one chunk and pumps rows
+// directly from the parquet/CSV reader into the worker's aggregator.
+// No intermediate slice — the per-chunk objectRecord buffer that the
+// old processChunkToBatch path materialised is eliminated, saving
+// chunk-size × N-workers of transient heap.
+func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, agg *Aggregator) error {
+	log := zerolog.Ctx(ctx)
+
+	body, dlResult, err := p.s3Client.DownloadObject(ctx, job.bucket, job.key)
+	if err != nil {
+		return fmt.Errorf("download object: %w", err)
+	}
+
+	parseStart := time.Now()
+	reader, err := createInventoryReader(body, job.key, job.config)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	const ctxCheckInterval = 4096
+	var (
+		rowsParsed int64
+		bytesAdded int64
+		i          int
+	)
+	for {
+		if i%ctxCheckInterval == 0 {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("chunk processing cancelled: %w", ctx.Err())
+			default:
+			}
+		}
+		i++
+		row, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read inventory row: %w", err)
+		}
+		if row.Key == "" {
+			continue
+		}
+		tierID := tiers.Resolve(job.config.tierMapping.FromS3(row.StorageClass, row.AccessTier), row.Size)
+		agg.AddObject(row.Key, row.Size, tierID)
+		rowsParsed++
+		bytesAdded += int64(row.Size)
+	}
+
+	p.objectsProcessed.Add(rowsParsed)
+	p.bytesProcessed.Add(bytesAdded)
+
+	log.Debug().
+		Str("chunk_key", job.key).
+		Int64("objects_count", rowsParsed).
+		Str("bytes_downloaded", humanfmt.Bytes(dlResult.BytesDownloaded)).
+		Dur("download_ms", dlResult.Duration).
+		Dur("parse_ms", time.Since(parseStart)).
+		Msg("chunk streamed into aggregator")
+
+	return nil
 }
 
 // sizedReaderAt is an interface for readers that support both ReaderAt and Size.
@@ -647,79 +649,6 @@ func createCSVReader(body io.ReadCloser, key string, cfg chunkConfig) (inventory
 	}
 
 	return reader, nil
-}
-
-// processChunkToBatch downloads and parses a chunk, returning all objects as a batch.
-// Uses the S3 Download Manager for parallel range downloads to maximize throughput.
-func (p *Pipeline) processChunkToBatch(ctx context.Context, bucket, key string, cfg chunkConfig, capacityHint int) ([]objectRecord, *chunkTiming, error) {
-	timing := &chunkTiming{}
-	log := zerolog.Ctx(ctx)
-
-	// Download phase using S3 Download Manager (parallel range downloads)
-	body, dlResult, err := p.s3Client.DownloadObject(ctx, bucket, key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("download object: %w", err)
-	}
-	timing.downloadDuration = dlResult.Duration
-
-	// Log download details
-	log.Debug().
-		Str("chunk_key", key).
-		Str("bytes_downloaded", humanfmt.Bytes(dlResult.BytesDownloaded)).
-		Str("download_duration", humanfmt.Duration(dlResult.Duration)).
-		Int("concurrency", dlResult.Concurrency).
-		Str("part_size", humanfmt.Bytes(dlResult.PartSize)).
-		Msg("chunk downloaded")
-
-	// Create reader (parse header/schema)
-	parseStart := time.Now()
-	reader, err := createInventoryReader(body, key, cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer reader.Close()
-
-	objects := make([]objectRecord, 0, capacityHint)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, nil, fmt.Errorf("chunk processing cancelled: %w", ctx.Err())
-		default:
-		}
-
-		row, err := reader.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return nil, nil, fmt.Errorf("read inventory row: %w", err)
-		}
-
-		if row.Key == "" {
-			continue
-		}
-
-		tierID := tiers.Resolve(cfg.tierMapping.FromS3(row.StorageClass, row.AccessTier), row.Size)
-		objects = append(objects, objectRecord{
-			key:    row.Key,
-			size:   row.Size,
-			tierID: tierID,
-		})
-		timing.totalBytes += int64(row.Size)
-	}
-	timing.parseDuration = time.Since(parseStart)
-	timing.objectCount = len(objects)
-
-	// Log chunk timing at debug level
-	log.Debug().
-		Str("chunk_key", key).
-		Int("objects_count", timing.objectCount).
-		Dur("download_ms", timing.downloadDuration).
-		Dur("parse_ms", timing.parseDuration).
-		Msg("chunk processed")
-
-	return objects, timing, nil
 }
 
 // flushAggregator drains the aggregator to a sorted run file. Safe
