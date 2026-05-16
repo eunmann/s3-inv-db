@@ -438,7 +438,7 @@ func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
 
 	for workerID := range cfg.numWorkers {
 		wg.Go(func() {
-			if err := p.runChunkWorker(ctx, workerID, jobs, totalChunks); err != nil {
+			if err := p.runChunkWorker(ctx, workerID, cfg.numWorkers, jobs, totalChunks); err != nil {
 				select {
 				case errCh <- err:
 				default:
@@ -545,7 +545,7 @@ func (p *Pipeline) logIngestProgress(log *zerolog.Logger, chunkNum, totalChunks 
 // a private run file when memory pressure hits. At end-of-input
 // (channel closed), flush the residual aggregator state to a final
 // run file.
-func (p *Pipeline) runChunkWorker(ctx context.Context, workerID int, jobs <-chan chunkJob, totalChunks int) error {
+func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int, jobs <-chan chunkJob, totalChunks int) error {
 	const initialAggCapacity = 10_000
 	agg := NewAggregator(initialAggCapacity, p.config.MaxDepth)
 	defer func() {
@@ -595,7 +595,7 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID int, jobs <-chan
 		}
 		p.chunksProcessed.Add(1)
 
-		if ShouldFlush(HeapAllocBytes(), debug.SetMemoryLimit(-1)) {
+		if ShouldWorkerFlush(uint64(agg.EstimatedMemoryUsage()), debug.SetMemoryLimit(-1), numWorkers) {
 			p.memTracker.LogNow("pre_flush")
 			if err := p.flushAggregator(ctx, agg, workerID); err != nil {
 				return fmt.Errorf("worker %d flush: %w", workerID, err)

@@ -174,11 +174,42 @@ func AggregatorCap(memoryLimit int64) uint64 {
 //   - overall HeapInuse exceeding HeapPressureRatio × memoryLimit.
 //
 // aggregatorBytes is the aggregator's best estimate of its own
-// in-memory footprint (typically Aggregator.EstimatedMemoryUsage's
-// successor). When memoryLimit is zero/negative only the absolute
-// aggregator cap is checked.
+// in-memory footprint. When memoryLimit is zero/negative only the
+// absolute aggregator cap is checked.
+//
+// Deprecated: this signature treats `aggregatorBytes` as the GLOBAL
+// memory snapshot. Multi-worker callers should use ShouldWorkerFlush
+// which takes a per-worker budget so one hot worker doesn't trigger
+// flushes in all others.
 func ShouldFlush(aggregatorBytes uint64, memoryLimit int64) bool {
 	if aggregatorBytes >= AggregatorCap(memoryLimit) {
+		return true
+	}
+	if memoryLimit <= 0 {
+		return false
+	}
+	heapPressure := uint64(float64(memoryLimit) * HeapPressureRatio)
+
+	return HeapInuseBytes() >= heapPressure
+}
+
+// ShouldWorkerFlush returns true if a single chunk worker's private
+// aggregator should spill, given:
+//   - workerAggBytes: this worker's own estimated aggregator memory
+//   - memoryLimit:    GOMEMLIMIT (or sysmem.ApplyMemoryLimit output)
+//   - numWorkers:     total chunkWorker count; the per-worker share
+//     of the aggregator budget is AggregatorCap/numWorkers
+//
+// Each worker decides independently — matches the per-worker
+// aggregator invariant (nothing shared, no flush stampedes). A
+// process-wide heap pressure check remains as a safety valve: if
+// HeapInuse approaches the limit any worker spilling helps.
+func ShouldWorkerFlush(workerAggBytes uint64, memoryLimit int64, numWorkers int) bool {
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+	perWorkerBudget := AggregatorCap(memoryLimit) / uint64(numWorkers)
+	if workerAggBytes >= perWorkerBudget {
 		return true
 	}
 	if memoryLimit <= 0 {
