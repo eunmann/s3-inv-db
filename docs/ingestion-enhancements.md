@@ -129,8 +129,20 @@ Honest read: Wave 1's measurable disk win is the depth/max_depth_in_subtree shri
 | W2.2 streaming micro-batches | refactor of chunk worker → aggregator path |
 | W2.1 per-worker aggregators | rework of `processIngestResults` |
 
-### Wave 3 (planned)
+### Wave 3 — trie aggregator NEGATIVE RESULT
 
 | Item | Status |
 |---|---|
-| W3.1 trie aggregator | full rewrite of `pkg/extsort/aggregator.go` internals; biggest single perf win projected (2-4× ingest at depth 8) |
+| W3.1 trie aggregator | **implemented and reverted.** The deep-review agent's "O(depth) map ops" framing was misleading: both the map-by-full-prefix and a path-segment trie are O(depth) per object, and the map-by-full-prefix approach has *lower per-step constant factors* in Go. |
+
+**Empirical comparison (BenchmarkAggregator_AddObject n=1M depth=8, n=5)**:
+
+| Variant | sec/op | B/op | allocs/op |
+|---|---|---|---|
+| map (baseline) | 4.06 s | 3.2 GiB | 10.5 M |
+| trie v1 (with fullPrefix copy per node) | 3.95 s | 4.0 GiB | 30 M |
+| trie v2 (no fullPrefix; reconstructed at Drain) | 3.73 s | 3.9 GiB | 30 M |
+
+The trie was **tied on time** and **strictly worse on memory** (×3 allocs, +20% bytes). The map-by-full-prefix approach is better than the synthesis predicted; per-step cost is dominated by `runtime.mapaccess` which Go has aggressively optimised, not by the prefix-string hashing my analysis assumed.
+
+**Reverted** in commit (this commit). Lesson reinforced: pre-implementation skepticism wasn't enough — the bench is the only honest signal.
