@@ -178,6 +178,16 @@ func (w *RunFileWriter) Close() error {
 		return fmt.Errorf("update header: %w", err)
 	}
 
+	// fsync before close so a crash between Close() returning and the
+	// kernel flushing dirty pages can't corrupt or truncate this run.
+	// Intermediate run files are only kept until merge completes; the
+	// fsync cost (~5-10 ms per file on SSD) is the price of durability.
+	if err := w.file.Sync(); err != nil {
+		w.file.Close()
+
+		return fmt.Errorf("fsync run file: %w", err)
+	}
+
 	if err := w.file.Close(); err != nil {
 		return fmt.Errorf("close run file: %w", err)
 	}

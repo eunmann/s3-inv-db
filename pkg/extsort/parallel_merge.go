@@ -71,6 +71,11 @@ type ParallelMerger struct {
 	config   ParallelMergeConfig
 	tempDir  string
 	runCount atomic.Int64 // Counter for generating unique run file names
+	// instanceID disambiguates intermediate filenames when multiple
+	// mergers share a tempDir (e.g. parallel pipelines or test
+	// runners). Without it, two mergers both generating
+	// merge_r1_0001.crun would clobber each other.
+	instanceID string
 
 	// Statistics
 	totalMergeTime    time.Duration
@@ -96,9 +101,22 @@ func NewParallelMerger(config ParallelMergeConfig) *ParallelMerger {
 	}
 
 	return &ParallelMerger{
-		config:  config,
-		tempDir: tempDir,
+		config:     config,
+		tempDir:    tempDir,
+		instanceID: newMergerInstanceID(),
 	}
+}
+
+// nextMergerInstanceCounter is a process-wide counter that
+// disambiguates concurrent ParallelMerger instances. Combined with the
+// process PID it gives intermediate files unique names within the
+// shared tempDir.
+//
+//nolint:gochecknoglobals // process-wide counter, by design
+var nextMergerInstanceCounter atomic.Int64
+
+func newMergerInstanceID() string {
+	return fmt.Sprintf("p%d_i%d", os.Getpid(), nextMergerInstanceCounter.Add(1))
 }
 
 // mergeJob represents a group of runs to merge.
@@ -213,7 +231,7 @@ func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, ro
 
 	// Send jobs
 	for i, group := range groups {
-		outputPath := filepath.Join(m.tempDir, fmt.Sprintf("merge_r%d_%04d.crun", round, m.runCount.Add(1)))
+		outputPath := filepath.Join(m.tempDir, fmt.Sprintf("merge_%s_r%d_%04d.crun", m.instanceID, round, m.runCount.Add(1)))
 		jobs <- mergeJob{
 			inputPaths: group,
 			outputPath: outputPath,
@@ -601,7 +619,9 @@ func (m *ParallelMerger) Statistics() MergeStatistics {
 // CleanupIntermediateFiles removes all intermediate merge files from the temp directory.
 // Call this after the final merge is complete and you've processed the output.
 func (m *ParallelMerger) CleanupIntermediateFiles() error {
-	pattern := filepath.Join(m.tempDir, "merge_r*_*.crun")
+	// Glob only this merger instance's files so a concurrent merger
+	// in the same tempDir doesn't have its files swept by our cleanup.
+	pattern := filepath.Join(m.tempDir, fmt.Sprintf("merge_%s_r*_*.crun", m.instanceID))
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return fmt.Errorf("glob intermediate files: %w", err)
