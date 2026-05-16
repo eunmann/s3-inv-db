@@ -16,6 +16,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/relab/bbhash"
+	"golang.org/x/sys/unix"
 )
 
 // PrefixEncoding specifies how prefix strings are stored in the index.
@@ -297,22 +298,30 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	b.hashes = nil
 
 	// =========================================================================
-	// OPTIMIZATION: Use pre-computed fingerprints (Option 4)
+	// OPTIMIZATION: scatter fingerprints + positions directly into an
+	// mmap'd output file. Previous path allocated two N-element heap
+	// slices, filled them, then handed them to writeArraysParallel
+	// which serialised to disk. With direct-mmap-write the scatter
+	// loop writes through the page cache: zero heap intermediate.
 	// =========================================================================
-	// Fingerprints were computed during Add() phase, so we just copy them
-	// to the output array at the correct positions. No recomputation needed.
-
-	outputFingerprints, outputPreorderPos, err := b.materialiseOutputArrays(n, hashPositions)
-	if err != nil {
+	log.Debug().Msg("MPHF: writing combined fp+pos via mmap")
+	mapStart := time.Now()
+	if err := writeCombinedMmap(outDir, n, hashPositions, b.fingerprints.Slice(), b.preorderPos.Slice()); err != nil {
 		return err
 	}
+	log.Debug().
+		Dur("write_ms", time.Since(mapStart)).
+		Msg("MPHF: combined fp+pos written")
 
-	log.Debug().Msg("MPHF: writing fingerprints and positions (parallel)")
-
-	// Write fingerprints and positions in parallel since they are independent files
-	if err := writeArraysParallel(outDir, outputFingerprints, outputPreorderPos); err != nil {
-		return err
+	if err := b.fingerprints.Close(); err != nil {
+		return fmt.Errorf("close fingerprints: %w", err)
 	}
+	b.fingerprints = nil
+	if err := b.preorderPos.Close(); err != nil {
+		return fmt.Errorf("close preorderPos: %w", err)
+	}
+	b.preorderPos = nil
+	runtime.GC()
 
 	log.Debug().Msg("MPHF: writing prefix blob")
 
@@ -331,44 +340,6 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	log.Debug().Msg("MPHF: build complete")
 
 	return nil
-}
-
-// materialiseOutputArrays builds outputFingerprints/outputPreorderPos
-// at MPH-position layout by walking the per-prefix disk-backed arrays
-// and scattering them via the hashPositions mapping. Releases the
-// input mmaps after copy.
-//
-//nolint:gocritic // returns are documented in the function comment; the project forbids named returns
-func (b *StreamingMPHFBuilder) materialiseOutputArrays(n int, hashPositions []int) ([]uint64, []uint64, error) {
-	log := logging.L()
-	log.Debug().Msg("MPHF: mapping fingerprints and positions to output arrays")
-	mapStart := time.Now()
-
-	outputFingerprints := make([]uint64, n)
-	outputPreorderPos := make([]uint64, n)
-	fps := b.fingerprints.Slice()
-	poss := b.preorderPos.Slice()
-
-	for i, hashPos := range hashPositions {
-		outputFingerprints[hashPos] = fps[i]
-		outputPreorderPos[hashPos] = poss[i]
-	}
-
-	log.Debug().
-		Dur("map_ms", time.Since(mapStart)).
-		Msg("MPHF: arrays mapped")
-
-	if err := b.fingerprints.Close(); err != nil {
-		return nil, nil, fmt.Errorf("close fingerprints: %w", err)
-	}
-	b.fingerprints = nil
-	if err := b.preorderPos.Close(); err != nil {
-		return nil, nil, fmt.Errorf("close preorderPos: %w", err)
-	}
-	b.preorderPos = nil
-	runtime.GC()
-
-	return outputFingerprints, outputPreorderPos, nil
 }
 
 // computeHashPositionsReverseMap computes MPHF hash positions using the ReverseMap.
@@ -891,6 +862,92 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	}
 }
 
+// writeCombinedMmap materialises mph_fp_pos.u64 directly into an
+// mmap'd output file, bypassing the heap intermediate that
+// writeArraysParallel uses. For 1B prefixes the previous path
+// allocated two 8 GiB heap slices; this path allocates zero — the
+// scatter writes go straight into the page cache via the mmap.
+//
+// File layout matches the existing combined format: 20-byte header
+// (count = 2N, width = 8) followed by 2N×8 bytes of interleaved
+// (fp, pos, fp, pos, …) data.
+func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []uint64) error {
+	if len(fps) != n || len(poss) != n {
+		return fmt.Errorf("%w: fps=%d poss=%d n=%d", errMPHFArrayLengthMismatch, len(fps), len(poss), n)
+	}
+	path := filepath.Join(outDir, CombinedMPHFArrayFile)
+	dataBytes := int64(2*n) * 8
+	totalBytes := int64(HeaderSize) + dataBytes
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create combined file: %w", err)
+	}
+	if err := f.Truncate(totalBytes); err != nil {
+		f.Close()
+		os.Remove(path)
+
+		return fmt.Errorf("truncate combined file: %w", err)
+	}
+
+	if _, err := f.Write(EncodeHeader(Header{
+		Magic:   MagicNumber,
+		Version: Version,
+		Count:   uint64(2 * n),
+		Width:   8,
+	})); err != nil {
+		f.Close()
+		os.Remove(path)
+
+		return fmt.Errorf("write combined header: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(path)
+
+		return fmt.Errorf("sync header: %w", err)
+	}
+
+	data, err := unix.Mmap(int(f.Fd()), 0, int(totalBytes), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+	if err != nil {
+		f.Close()
+		os.Remove(path)
+
+		return fmt.Errorf("mmap combined: %w", err)
+	}
+
+	// View the post-header data section as []uint64 of length 2N.
+	// Mmap is page-aligned and HeaderSize=20 means the data section
+	// starts at offset 20 — not 8-aligned! Need to write via
+	// binary.LittleEndian.PutUint64 into the raw bytes rather than
+	// via a misaligned []uint64 view.
+	slot := data[HeaderSize:]
+	for i, hashPos := range hashPositions {
+		// Each slot is 16 bytes: 8 for fp, 8 for pos.
+		off := 2 * hashPos * 8
+		binary.LittleEndian.PutUint64(slot[off:off+8], fps[i])
+		binary.LittleEndian.PutUint64(slot[off+8:off+16], poss[i])
+	}
+
+	if err := unix.Msync(data, unix.MS_SYNC); err != nil {
+		_ = unix.Munmap(data)
+		f.Close()
+		os.Remove(path)
+
+		return fmt.Errorf("msync combined: %w", err)
+	}
+	if err := unix.Munmap(data); err != nil {
+		f.Close()
+		os.Remove(path)
+
+		return fmt.Errorf("munmap combined: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close combined: %w", err)
+	}
+
+	return nil
+}
+
 // errMPHFArrayLengthMismatch fires when the writer's fingerprints and
 // positions slices have differing lengths — a programming bug; both
 // must come from the same parallel-lookup pass.
@@ -903,35 +960,3 @@ var errMPHFArrayLengthMismatch = errors.New("mphf fingerprints/positions length 
 // separate mph_fp.u64 / mph_pos.u64 files; openMPHFArrays falls back
 // to the separate format when this file isn't present.
 const CombinedMPHFArrayFile = "mph_fp_pos.u64"
-
-// writeArraysParallel writes the combined interleaved fingerprints+
-// positions array. Single file, single header — half the cache misses
-// of the previous separate-array layout on the Lookup hot path. Writes
-// the combined file only; new builds no longer emit the legacy
-// mph_fp.u64 / mph_pos.u64 pair.
-func writeArraysParallel(outDir string, fingerprints, positions []uint64) error {
-	if len(fingerprints) != len(positions) {
-		return fmt.Errorf("%w: %d vs %d", errMPHFArrayLengthMismatch, len(fingerprints), len(positions))
-	}
-	combined := make([]uint64, len(fingerprints)*2)
-	for i := range fingerprints {
-		combined[2*i] = fingerprints[i]
-		combined[2*i+1] = positions[i]
-	}
-
-	path := filepath.Join(outDir, CombinedMPHFArrayFile)
-	w, err := NewArrayWriter(path, 8)
-	if err != nil {
-		return fmt.Errorf("create combined fp+pos writer: %w", err)
-	}
-	if err := w.WriteU64Batch(combined); err != nil {
-		w.Close()
-
-		return fmt.Errorf("write combined fp+pos: %w", err)
-	}
-	if err := w.Close(); err != nil {
-		return fmt.Errorf("close combined fp+pos: %w", err)
-	}
-
-	return nil
-}
