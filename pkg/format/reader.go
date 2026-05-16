@@ -168,8 +168,12 @@ func OpenArrayWithHint(path string, hint AccessHint) (*ArrayReader, error) {
 	}, nil
 }
 
-// Close releases the memory mapping.
+// Close releases the memory mapping. Idempotent and nil-safe.
 func (r *ArrayReader) Close() error {
+	if r == nil || r.mmap == nil {
+		return nil
+	}
+
 	return r.mmap.Close()
 }
 

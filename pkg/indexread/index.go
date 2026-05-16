@@ -15,6 +15,12 @@ import (
 // called concurrently. Close should only be called once, after all read
 // operations have completed.
 type Index struct {
+	// coreStats is the row-major core-stats reader. When non-nil,
+	// all per-prefix calls (Stats/Depth/SubtreeEnd/MaxDepthInSubtree)
+	// dispatch through it and the legacy per-column readers below
+	// stay nil. When opening a legacy index (no core_stats.bin) the
+	// per-column readers are populated and coreStats stays nil.
+	coreStats         *format.CoreStatsReader
 	subtreeEnd        *format.ArrayReader
 	depth             *format.ArrayReader
 	objectCount       *format.ArrayReader
@@ -32,37 +38,42 @@ func Open(dir string) (*Index, error) {
 	var idx Index
 	var err error
 
-	idx.subtreeEnd, err = format.OpenArrayWithHint(filepath.Join(dir, "subtree_end.u64"), format.AccessHintRandom)
+	// Prefer the row-major core stats file. When present, the legacy
+	// per-column files are not opened — one mmap'd region covers all
+	// five core fields.
+	idx.coreStats, err = format.OpenCoreStats(dir)
 	if err != nil {
-		return nil, fmt.Errorf("open subtree_end: %w", err)
+		return nil, fmt.Errorf("open core stats: %w", err)
 	}
+	if idx.coreStats == nil {
+		idx.subtreeEnd, err = format.OpenArrayWithHint(filepath.Join(dir, "subtree_end.u64"), format.AccessHintRandom)
+		if err != nil {
+			return nil, fmt.Errorf("open subtree_end: %w", err)
+		}
+		idx.depth, err = format.OpenArrayWithHint(filepath.Join(dir, "depth.u32"), format.AccessHintRandom)
+		if err != nil {
+			idx.Close()
 
-	idx.depth, err = format.OpenArrayWithHint(filepath.Join(dir, "depth.u32"), format.AccessHintRandom)
-	if err != nil {
-		idx.Close()
+			return nil, fmt.Errorf("open depth: %w", err)
+		}
+		idx.objectCount, err = format.OpenArrayWithHint(filepath.Join(dir, "object_count.u64"), format.AccessHintRandom)
+		if err != nil {
+			idx.Close()
 
-		return nil, fmt.Errorf("open depth: %w", err)
-	}
+			return nil, fmt.Errorf("open object_count: %w", err)
+		}
+		idx.totalBytes, err = format.OpenArrayWithHint(filepath.Join(dir, "total_bytes.u64"), format.AccessHintRandom)
+		if err != nil {
+			idx.Close()
 
-	idx.objectCount, err = format.OpenArrayWithHint(filepath.Join(dir, "object_count.u64"), format.AccessHintRandom)
-	if err != nil {
-		idx.Close()
+			return nil, fmt.Errorf("open total_bytes: %w", err)
+		}
+		idx.maxDepthInSubtree, err = format.OpenArrayWithHint(filepath.Join(dir, "max_depth_in_subtree.u32"), format.AccessHintRandom)
+		if err != nil {
+			idx.Close()
 
-		return nil, fmt.Errorf("open object_count: %w", err)
-	}
-
-	idx.totalBytes, err = format.OpenArrayWithHint(filepath.Join(dir, "total_bytes.u64"), format.AccessHintRandom)
-	if err != nil {
-		idx.Close()
-
-		return nil, fmt.Errorf("open total_bytes: %w", err)
-	}
-
-	idx.maxDepthInSubtree, err = format.OpenArrayWithHint(filepath.Join(dir, "max_depth_in_subtree.u32"), format.AccessHintRandom)
-	if err != nil {
-		idx.Close()
-
-		return nil, fmt.Errorf("open max_depth_in_subtree: %w", err)
+			return nil, fmt.Errorf("open max_depth_in_subtree: %w", err)
+		}
 	}
 
 	idx.depthIndex, err = format.OpenDepthIndex(dir)
@@ -86,7 +97,11 @@ func Open(dir string) (*Index, error) {
 		return nil, fmt.Errorf("open tier stats: %w", err)
 	}
 
-	idx.count = idx.subtreeEnd.Count()
+	if idx.coreStats != nil {
+		idx.count = idx.coreStats.Count()
+	} else {
+		idx.count = idx.subtreeEnd.Count()
+	}
 	idx.maxDepth = idx.depthIndex.MaxDepth()
 
 	return &idx, nil
@@ -115,6 +130,7 @@ func closeAll(closers ...closer) error {
 // Close releases all resources.
 func (idx *Index) Close() error {
 	return closeAll(
+		idx.coreStats,
 		idx.subtreeEnd,
 		idx.depth,
 		idx.objectCount,
@@ -144,6 +160,11 @@ func (idx *Index) Stats(pos uint64) Stats {
 	if pos >= idx.count {
 		return Stats{}
 	}
+	if idx.coreStats != nil {
+		objCount, totalBytes := idx.coreStats.UnsafeStats(pos)
+
+		return Stats{ObjectCount: objCount, TotalBytes: totalBytes}
+	}
 
 	return Stats{
 		ObjectCount: idx.objectCount.UnsafeGetU64(pos),
@@ -166,6 +187,9 @@ func (idx *Index) Depth(pos uint64) uint32 {
 	if pos >= idx.count {
 		return 0
 	}
+	if idx.coreStats != nil {
+		return idx.coreStats.UnsafeDepth(pos)
+	}
 
 	return idx.depth.UnsafeGetUint32(pos)
 }
@@ -175,6 +199,9 @@ func (idx *Index) SubtreeEnd(pos uint64) uint64 {
 	if pos >= idx.count {
 		return 0
 	}
+	if idx.coreStats != nil {
+		return idx.coreStats.UnsafeSubtreeEnd(pos)
+	}
 
 	return idx.subtreeEnd.UnsafeGetU64(pos)
 }
@@ -183,6 +210,9 @@ func (idx *Index) SubtreeEnd(pos uint64) uint64 {
 func (idx *Index) MaxDepthInSubtree(pos uint64) uint32 {
 	if pos >= idx.count {
 		return 0
+	}
+	if idx.coreStats != nil {
+		return idx.coreStats.UnsafeMaxDepth(pos)
 	}
 
 	return idx.maxDepthInSubtree.UnsafeGetUint32(pos)

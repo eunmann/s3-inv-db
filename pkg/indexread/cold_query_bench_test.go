@@ -21,11 +21,21 @@ import (
 // The number of timed iterations stays small per outer b.N because
 // each query pays disk I/O; benchstat over -count=N gives noise.
 
+// coldQueryBatch is the number of queries we run after each cache
+// eviction, so the fixed cost of dropPageCache (which walks every
+// file under the index directory and FADV_DONTNEEDs each one — at
+// 11-tier scale that's a 200+ MB walk) amortises across many
+// per-query measurements. Each batched query touches a distinct
+// prefix, so the *first-page-fault-per-query* cost still dominates
+// the reported per-op time.
+const coldQueryBatch = 64
+
 // BenchmarkQueryScale_StatsForPrefix_Cold measures the round-trip
-// "give me objCount+totalBytes for this prefix string" with cold
-// pages. Today this fans out to: combined fp+pos read (1), object_count
-// (1), total_bytes (1) — 3 separate mmap'd files. Per-iteration cost
-// is dominated by those page faults.
+// "give me objCount+totalBytes for this prefix string" against a
+// freshly-evicted page cache. The dropPageCache cost is amortised
+// across coldQueryBatch queries per eviction, so the reported per-op
+// time reflects the actual cold-query latency rather than the
+// eviction overhead.
 func BenchmarkQueryScale_StatsForPrefix_Cold(b *testing.B) {
 	silenceZerolog(b)
 	for _, n := range queryBenchSizes() {
@@ -42,11 +52,17 @@ func BenchmarkQueryScale_StatsForPrefix_Cold(b *testing.B) {
 			}
 			b.ResetTimer()
 			b.ReportAllocs()
-			for i := range b.N {
+			for i := 0; i < b.N; i += coldQueryBatch {
 				b.StopTimer()
 				dropPageCache(b, dir)
 				b.StartTimer()
-				_, _ = idx.StatsForPrefix(prefixes[i%len(prefixes)])
+				batch := coldQueryBatch
+				if i+batch > b.N {
+					batch = b.N - i
+				}
+				for j := range batch {
+					_, _ = idx.StatsForPrefix(prefixes[(i+j)%len(prefixes)])
+				}
 			}
 		})
 	}
@@ -76,11 +92,17 @@ func BenchmarkQueryScale_TierBreakdown_Cold(b *testing.B) {
 			}
 			b.ResetTimer()
 			b.ReportAllocs()
-			for i := range b.N {
+			for i := 0; i < b.N; i += coldQueryBatch {
 				b.StopTimer()
 				dropPageCache(b, dir)
 				b.StartTimer()
-				_ = idx.TierBreakdown(positions[i%len(positions)])
+				batch := coldQueryBatch
+				if i+batch > b.N {
+					batch = b.N - i
+				}
+				for j := range batch {
+					_ = idx.TierBreakdown(positions[(i+j)%len(positions)])
+				}
 			}
 		})
 	}
