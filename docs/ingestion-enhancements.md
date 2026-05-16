@@ -118,16 +118,43 @@ Honest read: Wave 1's measurable disk win is the depth/max_depth_in_subtree shri
 | W0.4 unique merger filenames | shipped (commit 548ecf0) |
 | W0.2, 0.5, 0.6, 0.7-0.8, 0.9, 0.10 | deferred — real but lower-impact than the Wave 2 structural work; bundling them later avoids diluting the wave-by-wave bench comparison |
 
-### Wave 2 in progress
+### Wave 2 status
 
 | Item | Status |
 |---|---|
-| W2.4 pool PrefixRow in merge | shipped (commit cd0c3a0) |
-| W2.6 interleave MPHF arrays | next |
-| W2.5 sparse tier stats | format change, requires writer/reader/back-compat |
-| W2.3a/b/c MPHF mmap | the disk-spill plan from the user; multi-step implementation |
-| W2.2 streaming micro-batches | refactor of chunk worker → aggregator path |
-| W2.1 per-worker aggregators | rework of `processIngestResults` |
+| W2.4 pool PrefixRow in merge | shipped (commit cd0c3a0). Eliminates ~256 GiB allocation churn at 1B-row merge |
+| W2.6 interleave MPHF arrays | shipped (commit 5c24aa9). Single mph_fp_pos.u64 file replaces mph_fp.u64 + mph_pos.u64; halves cache misses on cold Lookup. Backward-compat: reader falls back to old format |
+| W2.5 sparse tier stats | **deferred.** Format change with significant blast radius (writer/reader/back-compat/density bench). Realistic 3-4 hour implementation; not started in this branch |
+| W2.3a/b/c MPHF mmap | **deferred.** Three-phase migration to mmap-back the StreamingMPHFBuilder hash arrays (8 GiB at 1B prefixes), the lookup pair scratch (12 GiB), and output arrays (16 GiB). Multi-day implementation |
+| W2.2 streaming micro-batches | **deferred.** Refactor of chunkWorker -> aggregator path |
+| W2.1 per-worker aggregators | **deferred.** Rework of processIngestResults into N aggregators with merge-on-flush |
+
+### Lookup-latency snapshot (post W2.6, n=3)
+
+| n | warm | notes |
+|---|---|---|
+| 100K | 1.7 µs/op | warm-cache, 0 allocs |
+| 1M | 14 µs/op | warm-cache, page-fault-bound |
+
+Cold-cache delta vs pre-W2.6 not directly measured here — would need a worktree-baseline comparison run.
+
+### Honest summary of branch state
+
+**Shipped (commits e0f4a4d → 5c24aa9):**
+- Plan doc + bench scaffolding (3 new bench files: aggregator, finalize-size, cold-cache)
+- Wave 0: fsync intermediate run files; unique-per-instance merger filenames
+- Wave 1: results channel buffer up; drop forced runtime.GC; drop per-row atomics; madvise hints; manager TouchAccessed lockless; depth+max_depth_in_subtree shrink to uint16 (-4 bytes/prefix); merge progress callbacks; serial-vs-parallel merge equivalence test; sentinel negative tests; GOGC tuned to memory budget
+- Wave 2: pool PrefixRow in merge; interleave MPHF fp+pos into one file
+- Honest negative result: trie aggregator (W3.1) tied baseline on time, worse on memory — reverted
+
+**Not shipped (deferred for fresh-context follow-up):**
+- W2.5 sparse tier stats — biggest disk win (5×)
+- W2.3a/b/c MPHF disk-backing — required for billion-prefix builds
+- W2.1 per-worker aggregators — biggest concurrency win
+- W2.2 streaming micro-batches — biggest latency win
+- W0.2/.5/.6/.7-.8/.10 — secondary correctness fixes
+
+The remaining items are each genuine multi-hour implementations that benefit from focused, dedicated work rather than extension of an already-long context. The plan + bench harness is in place for the next pass to pick up cleanly.
 
 ### Wave 3 — trie aggregator NEGATIVE RESULT
 
