@@ -780,24 +780,14 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 		return fmt.Errorf("write empty mph: %w", err)
 	}
 
-	// Create empty fingerprint array
-	fpPath := filepath.Join(outDir, "mph_fp.u64")
-	fpWriter, err := NewArrayWriter(fpPath, 8)
+	// Create empty combined fp+pos array (new format).
+	combinedPath := filepath.Join(outDir, CombinedMPHFArrayFile)
+	combinedWriter, err := NewArrayWriter(combinedPath, 8)
 	if err != nil {
-		return fmt.Errorf("create empty fingerprint writer: %w", err)
+		return fmt.Errorf("create empty combined fp+pos writer: %w", err)
 	}
-	if err := fpWriter.Close(); err != nil {
-		return fmt.Errorf("close empty fingerprint writer: %w", err)
-	}
-
-	// Create empty position array
-	posPath := filepath.Join(outDir, "mph_pos.u64")
-	posWriter, err := NewArrayWriter(posPath, 8)
-	if err != nil {
-		return fmt.Errorf("create empty position writer: %w", err)
-	}
-	if err := posWriter.Close(); err != nil {
-		return fmt.Errorf("close empty position writer: %w", err)
+	if err := combinedWriter.Close(); err != nil {
+		return fmt.Errorf("close empty combined fp+pos writer: %w", err)
 	}
 
 	// Create empty prefix files based on encoding
@@ -821,62 +811,47 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	}
 }
 
-// writeArraysParallel writes fingerprints and positions arrays in parallel.
-// Since these are independent files, parallel writes can utilize disk bandwidth better.
-// Uses WriteU64Batch for efficient bulk writes.
+// errMPHFArrayLengthMismatch fires when the writer's fingerprints and
+// positions slices have differing lengths — a programming bug; both
+// must come from the same parallel-lookup pass.
+var errMPHFArrayLengthMismatch = errors.New("mphf fingerprints/positions length mismatch")
+
+// CombinedMPHFArrayFile is the filename used for the combined
+// interleaved fingerprint+position table. Slot i holds the
+// fingerprint at offset 2i and the position at 2i+1, so a single
+// cache line covers both reads on a Lookup. Replaces the older
+// separate mph_fp.u64 / mph_pos.u64 files; openMPHFArrays falls back
+// to the separate format when this file isn't present.
+const CombinedMPHFArrayFile = "mph_fp_pos.u64"
+
+// writeArraysParallel writes the combined interleaved fingerprints+
+// positions array. Single file, single header — half the cache misses
+// of the previous separate-array layout on the Lookup hot path. Writes
+// the combined file only; new builds no longer emit the legacy
+// mph_fp.u64 / mph_pos.u64 pair.
 func writeArraysParallel(outDir string, fingerprints, positions []uint64) error {
-	var wg sync.WaitGroup
-	var fpErr, posErr error
-
-	wg.Add(2)
-
-	// Write fingerprints
-	go func() {
-		defer wg.Done()
-		fpPath := filepath.Join(outDir, "mph_fp.u64")
-		fpWriter, err := NewArrayWriter(fpPath, 8)
-		if err != nil {
-			fpErr = fmt.Errorf("create fingerprint writer: %w", err)
-
-			return
-		}
-		if err := fpWriter.WriteU64Batch(fingerprints); err != nil {
-			fpWriter.Close()
-			fpErr = fmt.Errorf("write fingerprints: %w", err)
-
-			return
-		}
-		if err := fpWriter.Close(); err != nil {
-			fpErr = fmt.Errorf("close fingerprint writer: %w", err)
-		}
-	}()
-
-	// Write positions
-	go func() {
-		defer wg.Done()
-		posPath := filepath.Join(outDir, "mph_pos.u64")
-		posWriter, err := NewArrayWriter(posPath, 8)
-		if err != nil {
-			posErr = fmt.Errorf("create position writer: %w", err)
-
-			return
-		}
-		if err := posWriter.WriteU64Batch(positions); err != nil {
-			posWriter.Close()
-			posErr = fmt.Errorf("write positions: %w", err)
-
-			return
-		}
-		if err := posWriter.Close(); err != nil {
-			posErr = fmt.Errorf("close position writer: %w", err)
-		}
-	}()
-
-	wg.Wait()
-
-	if fpErr != nil {
-		return fpErr
+	if len(fingerprints) != len(positions) {
+		return fmt.Errorf("%w: %d vs %d", errMPHFArrayLengthMismatch, len(fingerprints), len(positions))
+	}
+	combined := make([]uint64, len(fingerprints)*2)
+	for i := range fingerprints {
+		combined[2*i] = fingerprints[i]
+		combined[2*i+1] = positions[i]
 	}
 
-	return posErr
+	path := filepath.Join(outDir, CombinedMPHFArrayFile)
+	w, err := NewArrayWriter(path, 8)
+	if err != nil {
+		return fmt.Errorf("create combined fp+pos writer: %w", err)
+	}
+	if err := w.WriteU64Batch(combined); err != nil {
+		w.Close()
+
+		return fmt.Errorf("write combined fp+pos: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("close combined fp+pos: %w", err)
+	}
+
+	return nil
 }
