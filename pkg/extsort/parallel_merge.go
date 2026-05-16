@@ -42,6 +42,12 @@ type ParallelMergeConfig struct {
 	// CompressionLevel is the compression level for intermediate runs.
 	// Default: CompressionFastest (optimize for merge speed).
 	CompressionLevel CompressionLevel
+
+	// OnRoundComplete fires after each merge round with (round,
+	// remainingFiles). Lets the pipeline emit progress updates so the
+	// SSE stream isn't silent for the duration of multi-round merges.
+	// Optional; nil disables.
+	OnRoundComplete func(round, remainingFiles int)
 }
 
 // DefaultParallelMergeConfig returns sensible defaults for parallel merge.
@@ -171,6 +177,9 @@ func (m *ParallelMerger) MergeAll(ctx context.Context, inputPaths []string) (str
 			Int("round", round).
 			Int("output_files_count", len(currentPaths)).
 			Msg("merge round complete")
+		if m.config.OnRoundComplete != nil {
+			m.config.OnRoundComplete(round, len(currentPaths))
+		}
 	}
 
 	m.totalMergeTime = time.Since(startTime)

@@ -902,6 +902,12 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 			TempDir:          p.tempDir,
 			UseCompression:   p.config.UseCompressedRuns,
 			CompressionLevel: CompressionFastest,
+			OnRoundComplete: func(_, remaining int) {
+				// Emit progress so the SSE stream isn't silent during
+				// long multi-round merges. Done = remaining files
+				// reduced from the original; total = numRunFiles.
+				p.reportProgress("building", int64(numRunFiles-remaining), int64(numRunFiles))
+			},
 		})
 
 		var mergeErr error

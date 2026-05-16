@@ -76,6 +76,19 @@ func ApplyMemoryLimit(fraction float64) MemoryLimitResult {
 	out.Bytes, out.Source = pickSmallest(out)
 	if out.Bytes > 0 {
 		debug.SetMemoryLimit(out.Bytes)
+		// Tune GOGC down from the default 100 when the soft limit is
+		// tight. At GOGC=100 the runtime targets a 2× live-heap peak,
+		// which thrashes near GOMEMLIMIT. Sliding to 50 at small
+		// budgets trades a bit of CPU for steadier headroom; large
+		// budgets keep the default. Operators can still override via
+		// the GOGC env (which we don't read here) if they prefer.
+		const (
+			tightLimitBytes = 4 * 1024 * 1024 * 1024 // 4 GiB
+			tightGCPercent  = 50
+		)
+		if out.Bytes <= tightLimitBytes {
+			debug.SetGCPercent(tightGCPercent)
+		}
 	}
 
 	return out
