@@ -1,8 +1,6 @@
 package inventory
 
 import (
-	"sort"
-
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
 
@@ -233,50 +231,92 @@ func CompareLevel(a, b *indexread.Index, prefix string) CompareLevelData {
 
 	childrenA := indexChildren(a, posA, okA, prefix)
 	childrenB := indexChildren(b, posB, okB, prefix)
+	out.Children = mergeChildren(childrenA, childrenB)
 
-	merged := map[string]*CompareChild{}
-	order := []string{}
-	for seg, rec := range childrenA {
-		merged[seg] = &CompareChild{
-			Segment:     seg,
-			Prefix:      rec.fullPrefix,
-			Objects:     CompareNumeric{Before: rec.stats.ObjectCount},
-			Bytes:       CompareNumeric{Before: rec.stats.TotalBytes},
-			HasChildren: rec.hasChildren,
-			TierBefore:  rec.tiers,
-		}
-		order = append(order, seg)
-	}
-	for seg, rec := range childrenB {
-		child, ok := merged[seg]
-		if !ok {
-			child = &CompareChild{
-				Segment:     seg,
-				Prefix:      rec.fullPrefix,
-				HasChildren: rec.hasChildren,
-			}
-			merged[seg] = child
-			order = append(order, seg)
-		}
-		child.Objects.After = rec.stats.ObjectCount
-		child.Bytes.After = rec.stats.TotalBytes
-		if rec.hasChildren {
-			child.HasChildren = true
-		}
-		child.TierAfter = rec.tiers
-	}
+	return out
+}
 
-	sort.Strings(order)
-	out.Children = make([]CompareChild, 0, len(order))
-	for _, seg := range order {
-		c := merged[seg]
-		c.Objects.Delta = int64(c.Objects.After) - int64(c.Objects.Before)
-		c.Bytes.Delta = int64(c.Bytes.After) - int64(c.Bytes.Before)
-		c.Status = classify(c.Objects, c.Bytes, c.TierBefore, c.TierAfter)
-		out.Children = append(out.Children, *c)
+// mergeChildren performs an O(n+m) sorted merge of two pre-sorted
+// child-record slices, emitting one CompareChild per distinct
+// segment. Replaces the previous map-based join (one map alloc per
+// child × two sides) which dominated allocation cost on wide
+// prefixes.
+func mergeChildren(a, b []segChildRec) []CompareChild {
+	out := make([]CompareChild, 0, len(a)+len(b))
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		switch {
+		case a[i].seg < b[j].seg:
+			out = append(out, fromBefore(a[i]))
+			i++
+		case a[i].seg > b[j].seg:
+			out = append(out, fromAfter(b[j]))
+			j++
+		default:
+			out = append(out, fromBoth(a[i], b[j]))
+			i++
+			j++
+		}
+	}
+	for ; i < len(a); i++ {
+		out = append(out, fromBefore(a[i]))
+	}
+	for ; j < len(b); j++ {
+		out = append(out, fromAfter(b[j]))
 	}
 
 	return out
+}
+
+func fromBefore(r segChildRec) CompareChild {
+	c := CompareChild{
+		Segment:     r.seg,
+		Prefix:      r.rec.fullPrefix,
+		Objects:     CompareNumeric{Before: r.rec.stats.ObjectCount},
+		Bytes:       CompareNumeric{Before: r.rec.stats.TotalBytes},
+		HasChildren: r.rec.hasChildren,
+		TierBefore:  r.rec.tiers,
+	}
+	c.Objects.Delta = -int64(c.Objects.Before)
+	c.Bytes.Delta = -int64(c.Bytes.Before)
+	c.Status = classify(c.Objects, c.Bytes, c.TierBefore, c.TierAfter)
+
+	return c
+}
+
+func fromAfter(r segChildRec) CompareChild {
+	c := CompareChild{
+		Segment:     r.seg,
+		Prefix:      r.rec.fullPrefix,
+		Objects:     CompareNumeric{After: r.rec.stats.ObjectCount},
+		Bytes:       CompareNumeric{After: r.rec.stats.TotalBytes},
+		HasChildren: r.rec.hasChildren,
+		TierAfter:   r.rec.tiers,
+	}
+	c.Objects.Delta = int64(c.Objects.After)
+	c.Bytes.Delta = int64(c.Bytes.After)
+	c.Status = classify(c.Objects, c.Bytes, c.TierBefore, c.TierAfter)
+
+	return c
+}
+
+func fromBoth(a, b segChildRec) CompareChild {
+	c := CompareChild{
+		Segment: a.seg,
+		// Prefer A's fullPrefix; both are identical to a.seg for the
+		// same segment under the same parent.
+		Prefix:      a.rec.fullPrefix,
+		Objects:     CompareNumeric{Before: a.rec.stats.ObjectCount, After: b.rec.stats.ObjectCount},
+		Bytes:       CompareNumeric{Before: a.rec.stats.TotalBytes, After: b.rec.stats.TotalBytes},
+		HasChildren: a.rec.hasChildren || b.rec.hasChildren,
+		TierBefore:  a.rec.tiers,
+		TierAfter:   b.rec.tiers,
+	}
+	c.Objects.Delta = int64(c.Objects.After) - int64(c.Objects.Before)
+	c.Bytes.Delta = int64(c.Bytes.After) - int64(c.Bytes.Before)
+	c.Status = classify(c.Objects, c.Bytes, c.TierBefore, c.TierAfter)
+
+	return c
 }
 
 type childRec struct {
@@ -286,7 +326,20 @@ type childRec struct {
 	hasChildren bool
 }
 
-func indexChildren(idx *indexread.Index, parent uint64, ok bool, prefix string) map[string]childRec {
+// segChildRec pairs a child's segment label with its record. Returned
+// from indexChildren in segment-sorted order so callers can do an
+// O(n+m) sorted merge across two indexes.
+type segChildRec struct {
+	seg string
+	rec childRec
+}
+
+// indexChildren returns the children of `parent` as a slice sorted by
+// segment. Sortedness comes for free: DescendantsAtDepthFiltered
+// returns positions in subtree-preorder, and the underlying prefixes
+// are stored in preorder which is lex-sorted, so the derived
+// segments are already in order.
+func indexChildren(idx *indexread.Index, parent uint64, ok bool, prefix string) []segChildRec {
 	if !ok {
 		return nil
 	}
@@ -295,7 +348,7 @@ func indexChildren(idx *indexread.Index, parent uint64, ok bool, prefix string) 
 		return nil
 	}
 	hasTier := idx.HasTierData()
-	out := make(map[string]childRec, len(positions))
+	out := make([]segChildRec, 0, len(positions))
 	parentDepth := idx.Depth(parent)
 	for _, p := range positions {
 		full, err := idx.PrefixString(p)
@@ -311,7 +364,7 @@ func indexChildren(idx *indexread.Index, parent uint64, ok bool, prefix string) 
 		if hasTier {
 			rec.tiers = idx.TierBreakdownMap(p)
 		}
-		out[seg] = rec
+		out = append(out, segChildRec{seg: seg, rec: rec})
 	}
 
 	return out
