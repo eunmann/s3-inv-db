@@ -50,15 +50,19 @@ type IndexBuilder struct {
 	maxDepth uint32
 
 	presentTiers map[tiers.ID]bool
-	subtreeEnds  []uint64 // 8 bytes per prefix
+	// subtreeEnds: 8 bytes per prefix. mmap-backed disk file so the
+	// array doesn't count against GOMEMLIMIT at billion scale (8 GiB
+	// at 1B prefixes). Random write access by `pos` during subtree
+	// close, sequential read at Finalize.
+	subtreeEnds *format.U64RandomDiskArray
 	// maxDepthInSubtrees holds max depth observed inside each prefix's
 	// subtree. uint16 is plenty — S3 keys with >65k path components
-	// don't exist in practice and the format would have rejected them
-	// elsewhere. Half the on-disk + in-memory bytes vs the previous
-	// uint32. The on-disk filename keeps the .u32 suffix for backward
-	// compatibility; the actual width is recorded in each array's
-	// header and the reader dispatches via Width().
-	maxDepthInSubtrees []uint16
+	// don't exist in practice. Half the on-disk + in-memory bytes vs
+	// the previous uint32. Mmap-backed for the same reason as
+	// subtreeEnds. The on-disk filename keeps the .u32 suffix for
+	// backward compatibility; the actual width is recorded in each
+	// array's header and the reader dispatches via Width().
+	maxDepthInSubtrees *format.U16RandomDiskArray
 
 	closed bool
 }
@@ -103,6 +107,20 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, us
 	// Use capacity hint for arrays, with a minimum of 1024
 	arrayCap := max(capacityHint, uint64(1024))
 
+	subtreeEnds, err := format.NewU64RandomDiskArray(tempDir, "subtree_ends", arrayCap)
+	if err != nil {
+		mphfBuilder.Close()
+
+		return nil, fmt.Errorf("create subtree_ends disk array: %w", err)
+	}
+	maxDepthInSubtrees, err := format.NewU16RandomDiskArray(tempDir, "max_depth_in_subtrees", arrayCap)
+	if err != nil {
+		subtreeEnds.Close()
+		mphfBuilder.Close()
+
+		return nil, fmt.Errorf("create max_depth_in_subtrees disk array: %w", err)
+	}
+
 	b := &IndexBuilder{
 		outDir:             outDir,
 		tempDir:            tempDir,
@@ -111,8 +129,8 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, us
 		depthIndexBuilder:  format.NewDepthIndexBuilder(),
 		stack:              make([]stackEntry, 0, 32),
 		presentTiers:       make(map[tiers.ID]bool),
-		subtreeEnds:        make([]uint64, 0, arrayCap),
-		maxDepthInSubtrees: make([]uint16, 0, arrayCap),
+		subtreeEnds:        subtreeEnds,
+		maxDepthInSubtrees: maxDepthInSubtrees,
 		tierCountWriters:   make(map[tiers.ID]*format.ArrayWriter),
 		tierBytesWriters:   make(map[tiers.ID]*format.ArrayWriter),
 	}
@@ -163,6 +181,12 @@ func (b *IndexBuilder) cleanup() {
 	if b.mphfBuilder != nil {
 		b.mphfBuilder.Close()
 	}
+	if b.subtreeEnds != nil {
+		b.subtreeEnds.Close()
+	}
+	if b.maxDepthInSubtrees != nil {
+		b.maxDepthInSubtrees.Close()
+	}
 	for _, w := range b.tierCountWriters {
 		w.Close()
 	}
@@ -209,8 +233,12 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 		return fmt.Errorf("write depth: %w", err)
 	}
 
-	b.subtreeEnds = append(b.subtreeEnds, 0)
-	b.maxDepthInSubtrees = append(b.maxDepthInSubtrees, 0)
+	if err := b.subtreeEnds.Append(0); err != nil {
+		return fmt.Errorf("append subtree_ends: %w", err)
+	}
+	if err := b.maxDepthInSubtrees.Append(0); err != nil {
+		return fmt.Errorf("append max_depth_in_subtrees: %w", err)
+	}
 
 	for tierID := range tiers.NumTiers {
 		if row.TierCounts[tierID] > 0 || row.TierBytes[tierID] > 0 {
@@ -259,8 +287,12 @@ func (b *IndexBuilder) closeTopNode() error {
 	b.stack = b.stack[:len(b.stack)-1]
 
 	subtreeEnd := b.posCount - 1
-	b.subtreeEnds[top.pos] = subtreeEnd
-	b.maxDepthInSubtrees[top.pos] = uint16(top.maxDepthInSubtree)
+	if err := b.subtreeEnds.Set(int(top.pos), subtreeEnd); err != nil {
+		return fmt.Errorf("set subtree_end: %w", err)
+	}
+	if err := b.maxDepthInSubtrees.Set(int(top.pos), uint16(top.maxDepthInSubtree)); err != nil {
+		return fmt.Errorf("set max_depth_in_subtree: %w", err)
+	}
 
 	if len(b.stack) > 0 {
 		if top.maxDepthInSubtree > b.stack[len(b.stack)-1].maxDepthInSubtree {
@@ -427,7 +459,7 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	}
 
 	log.Debug().
-		Int("prefix_count", len(b.subtreeEnds)).
+		Int("prefix_count", b.subtreeEnds.Len()).
 		Msg("index builder: writing subtree_end array")
 
 	if err := b.writeSubtreeArrays(); err != nil {
@@ -503,7 +535,7 @@ func (b *IndexBuilder) writeSubtreeArrays() error {
 	if err != nil {
 		return fmt.Errorf("create subtree_end writer: %w", err)
 	}
-	for _, v := range b.subtreeEnds {
+	for _, v := range b.subtreeEnds.Slice() {
 		if err := subtreeEndW.WriteU64(v); err != nil {
 			subtreeEndW.Close()
 
@@ -513,6 +545,10 @@ func (b *IndexBuilder) writeSubtreeArrays() error {
 	if err := subtreeEndW.Close(); err != nil {
 		return fmt.Errorf("close subtree_end: %w", err)
 	}
+	if err := b.subtreeEnds.Close(); err != nil {
+		return fmt.Errorf("release subtree_ends scratch: %w", err)
+	}
+	b.subtreeEnds = nil
 
 	// max_depth_in_subtree keeps its .u32 filename for compatibility
 	// but stores values at width=2.
@@ -520,7 +556,7 @@ func (b *IndexBuilder) writeSubtreeArrays() error {
 	if err != nil {
 		return fmt.Errorf("create max_depth_in_subtree writer: %w", err)
 	}
-	for _, v := range b.maxDepthInSubtrees {
+	for _, v := range b.maxDepthInSubtrees.Slice() {
 		if err := maxDepthW.WriteU16(v); err != nil {
 			maxDepthW.Close()
 
@@ -530,6 +566,10 @@ func (b *IndexBuilder) writeSubtreeArrays() error {
 	if err := maxDepthW.Close(); err != nil {
 		return fmt.Errorf("close max_depth_in_subtree: %w", err)
 	}
+	if err := b.maxDepthInSubtrees.Close(); err != nil {
+		return fmt.Errorf("release max_depth_in_subtrees scratch: %w", err)
+	}
+	b.maxDepthInSubtrees = nil
 
 	return nil
 }
