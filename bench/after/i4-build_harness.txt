@@ -1,0 +1,6 @@
+BenchmarkBuildHarness/n=500000-32         	       1	3171347057 ns/op	 365070152 disk_B	       296.9 disk_B/prefix	      6958 lookup_ns	 799405200 peak_heap_B	       650.2 peak_heap_B/prefix	1214058880 B/op	13533124 allocs/op
+BenchmarkBuildHarness/n=500000-32         	       1	3189501727 ns/op	 365070152 disk_B	       296.9 disk_B/prefix	      6986 lookup_ns	 798864432 peak_heap_B	       649.8 peak_heap_B/prefix	1213506256 B/op	13532908 allocs/op
+BenchmarkBuildHarness/n=500000-32         	       1	3161562854 ns/op	 365070152 disk_B	       296.9 disk_B/prefix	      7011 lookup_ns	 799252128 peak_heap_B	       650.1 peak_heap_B/prefix	1213891376 B/op	13532878 allocs/op
+BenchmarkBuildHarness/n=1000000-32        	       1	6648688644 ns/op	 706104401 disk_B	       297.4 disk_B/prefix	     13569 lookup_ns	1533351128 peak_heap_B	       645.8 peak_heap_B/prefix	2340239568 B/op	26133552 allocs/op
+BenchmarkBuildHarness/n=1000000-32        	       1	6666686463 ns/op	 706104400 disk_B	       297.4 disk_B/prefix	     13854 lookup_ns	1534306272 peak_heap_B	       646.2 peak_heap_B/prefix	2341196752 B/op	26133482 allocs/op
+BenchmarkBuildHarness/n=1000000-32        	       1	6527719507 ns/op	 706104401 disk_B	       297.4 disk_B/prefix	     13789 lookup_ns	1533421040 peak_heap_B	       645.9 peak_heap_B/prefix	2340311776 B/op	26133540 allocs/op

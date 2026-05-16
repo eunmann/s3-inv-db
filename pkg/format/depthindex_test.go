@@ -9,7 +9,7 @@ import (
 
 func TestDepthIndexBuilderEmpty(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 
 	if err := b.Build(dir); err != nil {
 		t.Fatalf("Build failed: %v", err)
@@ -32,7 +32,7 @@ func TestDepthIndexBuilderEmpty(t *testing.T) {
 
 func TestDepthIndexBuilderSimple(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 
 	// Add positions at various depths
 	// Depth 0: pos 0 (root)
@@ -98,7 +98,7 @@ func TestDepthIndexBuilderSimple(t *testing.T) {
 
 func TestDepthIndexSubtreeQuery(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 
 	// Build a tree:
 	// 0: root (subtree 0-5)
@@ -154,7 +154,7 @@ func TestDepthIndexSubtreeQuery(t *testing.T) {
 
 func TestDepthIterator(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 
 	b.Add(0, 0)
 	b.Add(1, 1)
@@ -191,7 +191,7 @@ func TestDepthIterator(t *testing.T) {
 
 func TestDepthIteratorEmpty(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 	b.Add(0, 0)
 	b.Add(1, 1)
 
@@ -218,7 +218,7 @@ func TestDepthIteratorEmpty(t *testing.T) {
 
 func TestDepthIndexOutOfRange(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 	b.Add(0, 0)
 
 	if err := b.Build(dir); err != nil {
@@ -243,7 +243,7 @@ func TestDepthIndexOutOfRange(t *testing.T) {
 
 func TestDepthIndexLarge(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 
 	// Create 10 levels with varying positions
 	for d := range uint32(10) {
@@ -297,7 +297,7 @@ func TestDepthIndexLarge(t *testing.T) {
 
 func TestDepthIndexBinarySearch(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 
 	// Add sparse positions at depth 1
 	// Positions: 10, 20, 30, 40, 50
@@ -341,7 +341,7 @@ func TestDepthIndexBinarySearch(t *testing.T) {
 
 func TestDepthIteratorCount(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 
 	for p := range uint64(10) {
 		b.Add(p, 1)

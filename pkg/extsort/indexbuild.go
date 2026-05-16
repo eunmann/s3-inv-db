@@ -106,7 +106,7 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		tempDir:           tempDir,
 		coreStatsW:        coreStatsW,
 		mphfBuilder:       mphfBuilder,
-		depthIndexBuilder: format.NewDepthIndexBuilder(),
+		depthIndexBuilder: format.NewDepthIndexBuilder(tempDir),
 		stack:             make([]stackEntry, 0, 32),
 		presentTiers:      make(map[tiers.ID]bool),
 	}
@@ -158,7 +158,9 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 		b.maxDepth = uint32(row.Depth)
 	}
 
-	b.depthIndexBuilder.Add(pos, uint32(row.Depth))
+	if err := b.depthIndexBuilder.Add(pos, uint32(row.Depth)); err != nil {
+		return fmt.Errorf("add to depth index: %w", err)
+	}
 	if err := b.mphfBuilder.Add(row.Prefix, pos); err != nil {
 		return fmt.Errorf("add to MPHF builder: %w", err)
 	}
