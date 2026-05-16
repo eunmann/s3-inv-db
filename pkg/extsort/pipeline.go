@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/memdiag"
@@ -79,6 +80,75 @@ func (p *Pipeline) reportProgress(phase string, done, total int64) {
 	}
 }
 
+// publish emits an event on the configured bus, if any. Cheap when
+// no bus is set (single nil check). Sets the timestamp if missing.
+func (p *Pipeline) publish(ev events.Event) {
+	if p.config.EventBus == nil {
+		return
+	}
+	if ev.Time.IsZero() {
+		ev.Time = time.Now()
+	}
+	p.config.EventBus.Publish(ev)
+}
+
+// timedIngestPhase wraps runIngestPhase with start/end events and
+// returns the duration. Extracted from Run to keep that function
+// under the funlen ceiling now that pub-sub events bloat it.
+func (p *Pipeline) timedIngestPhase(ctx context.Context, log *zerolog.Logger, manifestURI string) (time.Duration, error) {
+	p.setPhase("downloading")
+	p.publish(events.Event{Stage: events.StagePipeline, Type: events.EvtStageStart, Payload: events.StageTiming{Stage: events.StageDownload}})
+	start := time.Now()
+	if err := p.runIngestPhase(ctx, manifestURI); err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Warn().Msg("pipeline cancelled during ingest phase")
+		}
+
+		return 0, fmt.Errorf("ingest phase: %w", err)
+	}
+	d := time.Since(start)
+	p.publish(events.Event{
+		Stage: events.StagePipeline,
+		Type:  events.EvtStageEnd,
+		Payload: events.StageTiming{
+			Stage:    events.StageDownload,
+			Duration: d,
+			Rows:     uint64(p.objectsProcessed.Load()),
+			Bytes:    uint64(p.bytesProcessed.Load()),
+		},
+	})
+
+	return d, nil
+}
+
+// timedMergeBuildPhase wraps runMergeBuildPhase with start/end
+// events; counterpart to timedIngestPhase.
+func (p *Pipeline) timedMergeBuildPhase(ctx context.Context, log *zerolog.Logger, outDir string) (mergeBuildResult, time.Duration, error) {
+	p.setPhase("building")
+	p.publish(events.Event{Stage: events.StagePipeline, Type: events.EvtStageStart, Payload: events.StageTiming{Stage: events.StageMerge}})
+	start := time.Now()
+	res, err := p.runMergeBuildPhase(ctx, outDir)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Warn().Msg("pipeline cancelled during merge phase")
+		}
+
+		return mergeBuildResult{}, 0, fmt.Errorf("merge/build phase: %w", err)
+	}
+	d := time.Since(start)
+	p.publish(events.Event{
+		Stage: events.StagePipeline,
+		Type:  events.EvtStageEnd,
+		Payload: events.StageTiming{
+			Stage:    events.StageMerge,
+			Duration: d,
+			Rows:     res.PrefixCount,
+		},
+	})
+
+	return res, d, nil
+}
+
 // NewPipeline creates a new external sort pipeline.
 func NewPipeline(config Config, s3Client *s3fetch.Client) *Pipeline {
 	return &Pipeline{
@@ -123,16 +193,10 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Str("aggregator_cap", humanfmt.BytesUint64(AggregatorCap(memoryLimit))).
 		Msg("pipeline starting")
 
-	p.setPhase("downloading")
-	ingestStart := time.Now()
-	if err := p.runIngestPhase(ctx, manifestURI); err != nil {
-		if errors.Is(err, context.Canceled) {
-			log.Warn().Msg("pipeline cancelled during ingest phase")
-		}
-
-		return nil, fmt.Errorf("ingest phase: %w", err)
+	ingestDuration, err := p.timedIngestPhase(ctx, log, manifestURI)
+	if err != nil {
+		return nil, err
 	}
-	ingestDuration := time.Since(ingestStart)
 
 	// Force GC after ingest to release aggregator memory
 	runtime.GC()
@@ -147,18 +211,11 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Dur("duration_ms", ingestDuration).
 		Msg("ingest phase complete")
 
-	p.setPhase("building")
-	mergeStart := time.Now()
-	mergeRes, err := p.runMergeBuildPhase(ctx, outDir)
+	mergeRes, mergeDuration, err := p.timedMergeBuildPhase(ctx, log, outDir)
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			log.Warn().Msg("pipeline cancelled during merge phase")
-		}
-
-		return nil, fmt.Errorf("merge/build phase: %w", err)
+		return nil, err
 	}
 	prefixCount, maxDepth := mergeRes.PrefixCount, mergeRes.MaxDepth
-	mergeDuration := time.Since(mergeStart)
 
 	// Force GC after merge
 	runtime.GC()
@@ -493,7 +550,7 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID int, jobs <-chan
 	agg := NewAggregator(initialAggCapacity, p.config.MaxDepth)
 	defer func() {
 		if agg.PrefixCount() > 0 {
-			if err := p.flushAggregator(ctx, agg); err != nil {
+			if err := p.flushAggregator(ctx, agg, workerID); err != nil {
 				zerolog.Ctx(ctx).Error().
 					Int("worker_id", workerID).
 					Err(err).
@@ -502,29 +559,51 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID int, jobs <-chan
 		}
 	}()
 
-	for job := range jobs {
+	// Track per-worker idle time so E2 utilization is exact rather
+	// than inferred from logs.
+	publishIdle := func(reason string) {
+		p.publish(events.Event{
+			Stage:   events.StageAggregator,
+			Type:    events.EvtWorkerIdle,
+			Payload: events.WorkerState{WorkerID: workerID, Reason: reason},
+		})
+	}
+	publishBusy := func(reason string) {
+		p.publish(events.Event{
+			Stage:   events.StageAggregator,
+			Type:    events.EvtWorkerBusy,
+			Payload: events.WorkerState{WorkerID: workerID, Reason: reason},
+		})
+	}
+
+	for {
+		publishIdle("waiting_jobs")
+		var job chunkJob
+		var ok bool
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("worker %d cancelled: %w", workerID, ctx.Err())
-		default:
+		case job, ok = <-jobs:
+			if !ok {
+				return nil
+			}
 		}
+		publishBusy("processing_chunk")
 
-		if err := p.streamChunkIntoAggregator(ctx, job, agg); err != nil {
+		if err := p.streamChunkIntoAggregator(ctx, job, agg, workerID); err != nil {
 			return fmt.Errorf("chunk %d: %w", job.index, err)
 		}
 		p.chunksProcessed.Add(1)
 
 		if ShouldFlush(HeapAllocBytes(), debug.SetMemoryLimit(-1)) {
 			p.memTracker.LogNow("pre_flush")
-			if err := p.flushAggregator(ctx, agg); err != nil {
+			if err := p.flushAggregator(ctx, agg, workerID); err != nil {
 				return fmt.Errorf("worker %d flush: %w", workerID, err)
 			}
 			p.memTracker.LogNow("post_flush")
 		}
 		_ = totalChunks
 	}
-
-	return nil
 }
 
 // streamChunkIntoAggregator downloads one chunk and pumps rows
@@ -532,7 +611,7 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID int, jobs <-chan
 // No intermediate slice — the per-chunk objectRecord buffer that the
 // old processChunkToBatch path materialised is eliminated, saving
 // chunk-size × N-workers of transient heap.
-func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, agg *Aggregator) error {
+func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, agg *Aggregator, workerID int) error {
 	log := zerolog.Ctx(ctx)
 
 	body, dlResult, err := p.s3Client.DownloadObject(ctx, job.bucket, job.key)
@@ -580,6 +659,16 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 
 	p.objectsProcessed.Add(rowsParsed)
 	p.bytesProcessed.Add(bytesAdded)
+
+	p.publish(events.Event{
+		Stage: events.StageParse,
+		Type:  events.EvtBatchCommitted,
+		Payload: events.BatchCommitted{
+			WorkerID: workerID,
+			Rows:     uint64(rowsParsed),
+			Bytes:    uint64(bytesAdded),
+		},
+	})
 
 	log.Debug().
 		Str("chunk_key", job.key).
@@ -655,7 +744,10 @@ func createCSVReader(body io.ReadCloser, key string, cfg chunkConfig) (inventory
 // to call concurrently from multiple worker goroutines — the only
 // shared state (p.runFiles + p.runCount) is guarded by p.runFilesMu;
 // the actual sort + write is per-goroutine-local until the append.
-func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
+//
+// WorkerID is included in spill events so listeners can attribute
+// disk I/O to specific workers (utilization analysis).
+func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerID int) error {
 	log := zerolog.Ctx(ctx)
 	start := time.Now()
 
@@ -663,6 +755,11 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 	if len(rows) == 0 {
 		return nil
 	}
+	p.publish(events.Event{
+		Stage:   events.StageSpill,
+		Type:    events.EvtSpillStarted,
+		Payload: events.WorkerState{WorkerID: workerID, Reason: "spilling"},
+	})
 
 	// Use compressed runs if configured (default: true)
 	ext := ".bin"
@@ -726,6 +823,19 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 	const bytesPerAggregatorEntry = 288
 	aggMemory := int64(len(rows)) * bytesPerAggregatorEntry
 	flushDuration := time.Since(start)
+
+	p.publish(events.Event{
+		Stage: events.StageSpill,
+		Type:  events.EvtSpillCompleted,
+		Payload: events.SpillCompleted{
+			WorkerID:   workerID,
+			Rows:       uint64(len(rows)),
+			Bytes:      aggMemory,
+			Duration:   flushDuration,
+			OutputPath: runPath,
+		},
+	})
+
 	log.Info().
 		Int("run_index", runIdx).
 		Str("prefixes", humanfmt.Count(int64(len(rows)))).
@@ -744,6 +854,62 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator) error {
 type mergeBuildResult struct {
 	PrefixCount uint64
 	MaxDepth    uint32
+}
+
+// runMergePhase executes the k-way merge over p.runFiles and returns
+// the final-merged-file path plus a cleanup closure. Single-run case
+// short-circuits: just hand back the lone run file.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func (p *Pipeline) runMergePhase(
+	ctx context.Context,
+	log *zerolog.Logger,
+	numRunFiles, numWorkers, maxFanIn int,
+	perReaderBuffer int64,
+) (string, func(), error) {
+	if numRunFiles == 1 {
+		finalRunPath := p.runFiles[0]
+
+		return finalRunPath, func() { os.Remove(finalRunPath) }, nil
+	}
+	parallelMerger := NewParallelMerger(ParallelMergeConfig{
+		NumWorkers:       numWorkers,
+		MaxFanIn:         maxFanIn,
+		BufferSize:       int(perReaderBuffer),
+		TempDir:          p.tempDir,
+		UseCompression:   p.config.UseCompressedRuns,
+		CompressionLevel: CompressionFastest,
+		OnRoundComplete: func(round, remaining int) {
+			p.reportProgress("building", int64(numRunFiles-remaining), int64(numRunFiles))
+			p.publish(events.Event{
+				Stage: events.StageMerge,
+				Type:  events.EvtRoundCompleted,
+				Payload: events.BatchCommitted{
+					WorkerID: round,
+					Rows:     uint64(numRunFiles - remaining),
+				},
+			})
+		},
+	})
+	finalRunPath, err := parallelMerger.MergeAll(ctx, p.runFiles)
+	if err != nil {
+		return "", nil, fmt.Errorf("parallel merge: %w", err)
+	}
+	stats := parallelMerger.Statistics()
+	log.Info().
+		Int("merge_rounds", stats.Rounds).
+		Str("merge_duration", humanfmt.Duration(stats.TotalMergeTime)).
+		Str("bytes_written", humanfmt.Bytes(stats.BytesWritten)).
+		Msg("parallel merge complete")
+	cleanup := func() {
+		_ = parallelMerger.CleanupIntermediateFiles()
+		for _, path := range p.runFiles {
+			os.Remove(path)
+		}
+		os.Remove(finalRunPath)
+	}
+
+	return finalRunPath, cleanup, nil
 }
 
 // runMergeBuildPhase merges run files and builds the index.
@@ -794,54 +960,9 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		Bool("compressed", p.config.UseCompressedRuns).
 		Msg("merge phase starting")
 
-	// Use parallel merger if we have multiple run files
-	var finalRunPath string
-	var cleanupIntermediates func()
-
-	if numRunFiles > 1 {
-		parallelMerger := NewParallelMerger(ParallelMergeConfig{
-			NumWorkers:       numWorkers,
-			MaxFanIn:         maxFanIn,
-			BufferSize:       int(perReaderBuffer),
-			TempDir:          p.tempDir,
-			UseCompression:   p.config.UseCompressedRuns,
-			CompressionLevel: CompressionFastest,
-			OnRoundComplete: func(_, remaining int) {
-				// Emit progress so the SSE stream isn't silent during
-				// long multi-round merges. Done = remaining files
-				// reduced from the original; total = numRunFiles.
-				p.reportProgress("building", int64(numRunFiles-remaining), int64(numRunFiles))
-			},
-		})
-
-		var mergeErr error
-		finalRunPath, mergeErr = parallelMerger.MergeAll(ctx, p.runFiles)
-		if mergeErr != nil {
-			return mergeBuildResult{}, fmt.Errorf("parallel merge: %w", mergeErr)
-		}
-
-		stats := parallelMerger.Statistics()
-		log.Info().
-			Int("merge_rounds", stats.Rounds).
-			Str("merge_duration", humanfmt.Duration(stats.TotalMergeTime)).
-			Str("bytes_written", humanfmt.Bytes(stats.BytesWritten)).
-			Msg("parallel merge complete")
-
-		cleanupIntermediates = func() {
-			_ = parallelMerger.CleanupIntermediateFiles()
-			// Remove original run files
-			for _, path := range p.runFiles {
-				os.Remove(path)
-			}
-			// Remove final merged file
-			os.Remove(finalRunPath)
-		}
-	} else {
-		// Single run file, no merge needed
-		finalRunPath = p.runFiles[0]
-		cleanupIntermediates = func() {
-			os.Remove(finalRunPath)
-		}
+	finalRunPath, cleanupIntermediates, err := p.runMergePhase(ctx, log, numRunFiles, numWorkers, maxFanIn, perReaderBuffer)
+	if err != nil {
+		return mergeBuildResult{}, err
 	}
 
 	defer cleanupIntermediates()

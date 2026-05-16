@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
@@ -284,6 +285,13 @@ type Config struct {
 	// changed; otherwise they describe quantitative progress within
 	// the current stage (units vary — chunks during ingest). Optional.
 	OnProgress func(stage string, done, total int64)
+
+	// EventBus, if non-nil, receives structured events from every
+	// pipeline stage (download, parse, aggregator, spill, merge,
+	// index build, MPHF). Use for benchmarking (phase timings,
+	// worker utilization) or live observability. The pipeline does
+	// not close the bus; the caller owns its lifecycle.
+	EventBus *events.Bus
 }
 
 // DefaultConfig returns a Config with sensible defaults based on the
