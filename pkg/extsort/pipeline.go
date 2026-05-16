@@ -856,21 +856,35 @@ type mergeBuildResult struct {
 	MaxDepth    uint32
 }
 
-// runMergePhase executes the k-way merge over p.runFiles and returns
-// the final-merged-file path plus a cleanup closure. Single-run case
-// short-circuits: just hand back the lone run file.
+// runMergePhase returns a streaming RowIterator over the K-way merge
+// of p.runFiles, plus a cleanup closure. Single-run case wraps the
+// lone run file directly. Multi-run case uses
+// ParallelMerger.MergeAllToIterator which avoids writing a final
+// merged file to disk (I3 win).
 //
-//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+//nolint:ireturn // RowIterator is the right shape — callers don't care which variant underneath
 func (p *Pipeline) runMergePhase(
 	ctx context.Context,
 	log *zerolog.Logger,
 	numRunFiles, numWorkers, maxFanIn int,
 	perReaderBuffer int64,
-) (string, func(), error) {
+) (RowIterator, func() error, error) {
 	if numRunFiles == 1 {
-		finalRunPath := p.runFiles[0]
+		reader, err := OpenRunFileAuto(p.runFiles[0], int(perReaderBuffer))
+		if err != nil {
+			return nil, nil, fmt.Errorf("open single run: %w", err)
+		}
 
-		return finalRunPath, func() { os.Remove(finalRunPath) }, nil
+		return &singleRunIterator{reader: reader}, func() error {
+			if err := reader.Close(); err != nil {
+				os.Remove(p.runFiles[0])
+
+				return fmt.Errorf("close single run: %w", err)
+			}
+			os.Remove(p.runFiles[0])
+
+			return nil
+		}, nil
 	}
 	parallelMerger := NewParallelMerger(ParallelMergeConfig{
 		NumWorkers:       numWorkers,
@@ -891,25 +905,26 @@ func (p *Pipeline) runMergePhase(
 			})
 		},
 	})
-	finalRunPath, err := parallelMerger.MergeAll(ctx, p.runFiles)
+	iter, mergerCleanup, err := parallelMerger.MergeAllToIterator(ctx, p.runFiles)
 	if err != nil {
-		return "", nil, fmt.Errorf("parallel merge: %w", err)
+		return nil, nil, fmt.Errorf("parallel merge: %w", err)
 	}
 	stats := parallelMerger.Statistics()
 	log.Info().
 		Int("merge_rounds", stats.Rounds).
 		Str("merge_duration", humanfmt.Duration(stats.TotalMergeTime)).
 		Str("bytes_written", humanfmt.Bytes(stats.BytesWritten)).
-		Msg("parallel merge complete")
-	cleanup := func() {
-		_ = parallelMerger.CleanupIntermediateFiles()
+		Msg("parallel merge → streaming iterator")
+	cleanup := func() error {
+		err := mergerCleanup()
 		for _, path := range p.runFiles {
 			os.Remove(path)
 		}
-		os.Remove(finalRunPath)
+
+		return err
 	}
 
-	return finalRunPath, cleanup, nil
+	return iter, cleanup, nil
 }
 
 // runMergeBuildPhase merges run files and builds the index.
@@ -960,32 +975,27 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		Bool("compressed", p.config.UseCompressedRuns).
 		Msg("merge phase starting")
 
-	finalRunPath, cleanupIntermediates, err := p.runMergePhase(ctx, log, numRunFiles, numWorkers, maxFanIn, perReaderBuffer)
+	mergeIter, cleanupIntermediates, err := p.runMergePhase(ctx, log, numRunFiles, numWorkers, maxFanIn, perReaderBuffer)
 	if err != nil {
 		return mergeBuildResult{}, err
 	}
 
-	defer cleanupIntermediates()
+	defer func() {
+		if cleanupErr := cleanupIntermediates(); cleanupErr != nil {
+			log.Warn().Err(cleanupErr).Msg("merge intermediates cleanup")
+		}
+	}()
 
-	// Open final merged run for index building
-	reader, err := OpenRunFileAuto(finalRunPath, int(perReaderBuffer))
-	if err != nil {
-		return mergeBuildResult{}, fmt.Errorf("open merged run: %w", err)
-	}
-
-	// Create iterator adapter for index builder
-	mergeIter := &singleRunIterator{reader: reader}
-
-	// Use prefix count from run file header to pre-size index builder arrays
-	prefixCount := reader.Count()
+	// Use prefix count if the iterator can report it (single-run +
+	// streaming K-way iterator both implement Remaining()); pass 0
+	// when unknown and let the builder grow incrementally.
+	prefixCount := iteratorRemaining(mergeIter)
 	log.Debug().
 		Uint64("prefix_count", prefixCount).
 		Msg("index build starting")
 
 	builder, err := NewIndexBuilderWithCapacity(outDir, p.config.TempDir, prefixCount, p.config.UseSegmentEncoding)
 	if err != nil {
-		reader.Close()
-
 		return mergeBuildResult{}, fmt.Errorf("create index builder: %w", err)
 	}
 
@@ -1000,6 +1010,24 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	}
 
 	return mergeBuildResult{PrefixCount: builder.Count(), MaxDepth: builder.MaxDepth()}, nil
+}
+
+// remainingReporter is implemented by iterators that can report an
+// upper-bound row count up front (singleRunIterator from the file
+// header, MergeIterator from the sum of underlying readers). Used
+// to pre-size the IndexBuilder.
+type remainingReporter interface {
+	Remaining() uint64
+}
+
+// iteratorRemaining returns the iterator's reported remaining count
+// if it implements remainingReporter, else 0.
+func iteratorRemaining(it RowIterator) uint64 {
+	if r, ok := it.(remainingReporter); ok {
+		return r.Remaining()
+	}
+
+	return 0
 }
 
 // singleRunIterator wraps a RunReader to implement the iterator interface expected by IndexBuilder.

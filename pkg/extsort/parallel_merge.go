@@ -136,6 +136,97 @@ type mergeResult struct {
 	jobIndex     int
 }
 
+// MergeAllToIterator merges all input run files and returns a
+// streaming row iterator over the final sorted output, plus a
+// cleanup closure the caller must run when done.
+//
+// Unlike MergeAll, no final-merged file is written to disk: when the
+// remaining file count fits in MaxFanIn after the N-1 disk-backed
+// rounds, the last round is replaced by a live K-way MergeIterator
+// that the IndexBuilder consumes directly. At billion-prefix scale
+// this saves writing and re-reading the entire deduplicated prefix
+// set (hundreds of GB of avoidable I/O).
+//
+// The cleanup closure closes the iterator's underlying readers and
+// removes any intermediate files this call produced. It does NOT
+// remove the original input files; that remains the caller's job.
+//
+//nolint:ireturn // RowIterator is the right return shape — callers don't care if it's a single-run or k-way merge underneath
+func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []string) (RowIterator, func() error, error) {
+	if len(inputPaths) == 0 {
+		return nil, func() error { return nil }, ErrNoInputPaths
+	}
+
+	log := zerolog.Ctx(ctx)
+	startTime := time.Now()
+
+	finalPaths := inputPaths
+	round := 0
+	intermediates := []string{}
+
+	// Disk-backed rounds while the file count exceeds MaxFanIn —
+	// each round shrinks the count by ~MaxFanIn×.
+	for len(finalPaths) > m.config.MaxFanIn {
+		select {
+		case <-ctx.Done():
+			for _, p := range intermediates {
+				os.Remove(p)
+			}
+
+			return nil, nil, fmt.Errorf("merge cancelled: %w", ctx.Err())
+		default:
+		}
+		round++
+		m.mergeRounds = round
+		nextPaths, err := m.mergeRound(ctx, finalPaths, round)
+		if err != nil {
+			for _, p := range append(intermediates, nextPaths...) {
+				os.Remove(p)
+			}
+
+			return nil, nil, fmt.Errorf("merge round %d: %w", round, err)
+		}
+		if round > 1 {
+			for _, p := range finalPaths {
+				os.Remove(p)
+			}
+		}
+		intermediates = append(intermediates, nextPaths...)
+		finalPaths = nextPaths
+		if m.config.OnRoundComplete != nil {
+			m.config.OnRoundComplete(round, len(finalPaths))
+		}
+	}
+
+	// Final round: stream the K-way merge directly, no file write.
+	iter, err := NewMergeIterator(finalPaths, m.config.BufferSize)
+	if err != nil {
+		for _, p := range intermediates {
+			os.Remove(p)
+		}
+
+		return nil, nil, fmt.Errorf("open final merge iterator: %w", err)
+	}
+
+	m.totalMergeTime = time.Since(startTime)
+	log.Info().
+		Int("rounds_count", m.mergeRounds).
+		Int("final_fan_in", len(finalPaths)).
+		Str("disk_rounds_duration", humanfmt.Duration(m.totalMergeTime)).
+		Msg("parallel merge → streaming iterator")
+
+	cleanup := func() error {
+		err := iter.Close()
+		for _, p := range intermediates {
+			os.Remove(p)
+		}
+
+		return err
+	}
+
+	return iter, cleanup, nil
+}
+
 // MergeAll merges all input run files into a single sorted output.
 // Returns the path to the final merged run file.
 // The caller is responsible for cleaning up the output file when done.
