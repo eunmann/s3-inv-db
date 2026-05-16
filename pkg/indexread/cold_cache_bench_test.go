@@ -155,20 +155,25 @@ func buildFixtureIndex(b *testing.B, n int) string {
 	return dir
 }
 
-// dropPageCache evicts the index files from the page cache so the
-// next Open() pays cold-page-fault costs. Uses POSIX fadvise
-// DONTNEED, which is best-effort but sufficient on linux.
+// dropPageCache recursively evicts every regular file under dir from
+// the page cache so the next access pays cold-page-fault costs. Walks
+// subdirectories (notably tier_stats/) — a flat ReadDir would miss
+// most of the index byte volume at 11-tier scale.
 func dropPageCache(b *testing.B, dir string) {
 	b.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		b.Fatalf("readdir: %v", err)
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
 		}
-		dropFileFromCache(b, filepath.Join(dir, e.Name()))
+		if info.IsDir() {
+			return nil
+		}
+		dropFileFromCache(b, path)
+
+		return nil
+	})
+	if err != nil {
+		b.Fatalf("walk: %v", err)
 	}
 }
 

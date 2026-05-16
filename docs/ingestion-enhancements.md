@@ -7,9 +7,17 @@ lands.
 
 ## Goal
 
-Two headline metrics, both at billion-object scale:
-- **Fast loading times**: build wall-clock + index Open time + per-lookup latency.
-- **Small on-disk size**: bytes per prefix in the materialised index.
+Optimization priorities, in order. Higher items dominate lower items
+in design tradeoffs:
+
+1. **Query time** — per-prefix lookup, stats, tier breakdown, children/subtree
+2. **Ingestion wall time** — end-to-end build (including merge + finalize)
+3. **Memory during ingestion** — must scale to the machine; mmap preferred so the OS can page out under pressure rather than OOM-killing
+4. **On-disk size** — least important; never trade query latency for disk bytes
+
+**Constraint**: object counts and total bytes per prefix MUST stay
+uint64. Aggregated values at root prefixes can hit > 2^32 in
+production; any "shrink counts to uint32" idea is dead on arrival.
 
 ## Ordering
 
@@ -145,15 +153,40 @@ The synthetic generator initially populated only 5 of 11 tiers, undersized the o
 
 The MPHF mmap work (W2.3a/b/c) and subtree mmap (Random-Disk arrays) were measured against the synthetic generator before the fix. Empirical cumulative heap drop there was **1.76 GB → 1.39 GB (−21%)** at n=1M synthetic, equivalent to ~370 GB of heap moved to page cache at 1B prefixes. Re-measuring under the realistic generator would re-confirm in absolute terms but won't change the relative effect — the heap-eliminated arrays are tier-independent.
 
-### Future work — actual disk levers (post-discovery)
+### Re-planned queue (priority-reordered, post-direction-correction)
 
-Realistic disk footprint @ 1M prefixes = **265 B/prefix**. With 11 tier columns at uint64 fp+bytes, tier_stats alone is ≥176 B/prefix — 66% of the index. Real wins:
+**Priority order is query time → ingestion time → memory → disk.** Counts/bytes stay uint64; no variable-width-counts work. The dominant query cost on a cold cache is page faults — per-prefix queries today touch up to 28 separate files. The dominant warm cost is cache misses across the same fanout. Both improve with row-major interleaving.
 
-| Idea | Estimated impact | Notes |
-|---|---|---|
-| Per-column variable-width tier_stats (uint16/uint32 instead of uint64) | -8 B/prefix per column × 11 cols × 2 (count+bytes) = up to **-176 B/prefix → 33% disk shrink** | Most aggregated counts < 2^32; bytes need uint64 for root only. Could pick width per-file based on observed max during build. |
-| Frame-of-reference block encoding per column | additional -2x to -4x on top of variable-width | Per-block min + delta-bits; adds a tiny lookup-time decode cost |
-| Combine count+bytes columns into a single 16-byte interleaved file per tier | better cache locality on filter scans | Mirrors what W2.6 did for MPHF |
+#### Q-tier (Query time — priority #1)
+
+| ID  | Change | Where | Expected impact | Bench |
+|-----|--------|-------|-----------------|-------|
+| Q1  | **Row-major tier_stats**: pack all 11 tiers × (count + bytes) into one mmap'd file at 176 B/row. Single page fault per `TierBreakdown(pos)` instead of 22 (11 tiers × 2 files). Same disk bytes; just rearranged. | `pkg/format/tierstats.go` (writer + reader); back-compat shim opens legacy per-tier files when new file absent | TierBreakdown cold: **-22× page faults → ~5–10× latency**; warm: cache-line locality (one line covers 4 tiers instead of one column-fetch per tier) | new `BenchmarkTierBreakdown_Cold`; existing `BenchmarkTierBreakdown` warm |
+| Q2  | **Row-major core stats**: pack `objectCount` (8) + `totalBytes` (8) + `depth` (2) + `subtree_end` (8) + `max_depth_in_subtree` (2) into one 28 B/row mmap'd file. `StatsForPrefix` → 1 page fault instead of 5. | `pkg/format/` (new corestats writer/reader); IndexBuilder switches to one row write per prefix; back-compat shim opens legacy individual files | StatsForPrefix cold: **-5× page faults**; Children iteration cold: huge — child loop sweeps one contiguous region | new `BenchmarkStatsForPrefix_Cold`; new `BenchmarkChildrenIterate_Cold`; existing warm benches |
+| Q3  | **Sequential madvise + readahead for Children/subtree iteration**: when caller indicates "I'm about to iterate `[pos, subtreeEnd]`", `madvise(MADV_WILLNEED)` on the core-stats and prefix-blob ranges. | `pkg/format/reader.go` + `pkg/indexread/index.go` (new Iterator hint API) | Children cold: smooth ramp-up vs current first-page-fault stalls | new `BenchmarkChildrenIterate_Cold` (covers Q2 too) |
+| Q4  | **Pool the per-call `TierBreakdown` slice** in `GetBreakdown` (currently `make([]TierBreakdown, 0, n)` per call, 11-cap × N requests = GC pressure on the hot dashboard path). | `pkg/format/tierstats.go` | TierBreakdown warm: drop the alloc; ~10% latency on tight loops | existing `BenchmarkTierBreakdown` and `BenchmarkConcurrentTierBreakdown` |
+
+#### I-tier (Ingestion wall time — priority #2)
+
+| ID  | Change | Where | Expected impact | Bench |
+|-----|--------|-------|-----------------|-------|
+| I1  | **W2.1 per-worker aggregators**: each chunk worker maintains its own `Aggregator`, merge happens in the same N-way merge as run files. Currently a single mutex-fronted aggregator serialises all chunk workers' AddObject calls. | `pkg/extsort/pipeline.go:451-501`, `aggregator.go` | Ingest wall time: scales with NumCPU (currently bottlenecked at one core for the aggregator stage) | `BenchmarkBuildHarness` |
+| I2  | **W2.2 streaming micro-batches**: 10K-row micro-batches instead of full-chunk batch — overlaps aggregation with parquet decode. | `pkg/extsort/pipeline.go:701` | Latency: hide aggregator-stage time under the decode | `BenchmarkBuildHarness` |
+| I3  | **Tier_stats writer concurrency**: in `IndexBuilder.Finalize`, the 22 tier-stat columns are currently written sequentially. After Q1 these collapse to 1 file. Pre-Q1, could parallelise. After Q1, moot. | `pkg/extsort/indexbuild.go:writeTierStats` | (moot after Q1) | n/a |
+
+#### M-tier (Memory during ingestion — priority #3)
+
+| ID  | Change | Where | Expected impact | Bench |
+|-----|--------|-------|-----------------|-------|
+| M1  | **Mmap-back the IndexBuilder per-tier in-flight writers' line buffers**: each tier `ArrayWriter` keeps a buffered write file; at 11 tiers × N buffers = small but real. | `pkg/extsort/indexbuild.go:createTierWriter` | Marginal (<100 MB heap) at 1B prefixes | `BenchmarkBuildHarness` |
+| M2  | **Pool `PrefixStats` in Aggregator.Drain**: currently allocates `len(prefixes)` `PrefixRow` instances; pool them. | `pkg/extsort/aggregator.go` | Lower GC pressure during drain | `BenchmarkAggregator_AddObject` |
+
+#### D-tier (Disk — priority #4, mostly dead)
+
+Counts/bytes stay uint64 (overflow risk at root). Realistic disk @ 1M prefixes = 265 B/prefix with 11 tiers × 16 B = 176 B for tier_stats alone. After Q1 the tier_stats file layout changes but **size stays the same**. Surviving disk ideas:
+
+- **Frame-of-reference block encoding per column**: split tier_stats into N-prefix blocks, store per-block (min, max) and (max-min)-bit-width values. Could shrink tier_stats 2-4× when adjacent prefixes have similar counts. Costs a per-lookup decode. **Pending: must measure cold-cache vs disk-bytes tradeoff — only worth it if query cost stays equal or wins.**
+- Already shipped: depth/maxDIS at uint16; combined MPHF fp+pos.
 
 ### Lookup-latency snapshot (post W2.6, n=3)
 
