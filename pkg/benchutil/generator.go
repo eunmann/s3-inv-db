@@ -24,13 +24,24 @@ const (
 	defaultProbITArchive  = 0.05
 )
 
-// S3-realistic tier mix probabilities used by S3RealisticConfig.
+// S3-realistic tier mix probabilities used by S3RealisticConfig. All
+// 11 storage classes populated, modelling a typical enterprise bucket
+// that uses both legacy lifecycle tiers (Standard / IA / Glacier IR /
+// Glacier FR / Deep Archive) and the Intelligent-Tiering family
+// (split across its access sub-tiers, plus the small-object subset
+// which is billed at the Frequent rate). Probabilities sum to 1.0.
 const (
-	s3ProbStandard   = 0.50
-	s3ProbStandardIA = 0.20
-	s3ProbGlacierIR  = 0.15
-	s3ProbITFrequent = 0.10
-	s3ProbITArchive  = 0.05
+	s3ProbStandard         = 0.25
+	s3ProbStandardIA       = 0.15
+	s3ProbGlacierIR        = 0.07
+	s3ProbGlacierFR        = 0.05
+	s3ProbDeepArchive      = 0.08
+	s3ProbITFrequent       = 0.12
+	s3ProbITInfrequent     = 0.10
+	s3ProbITArchiveInstant = 0.06
+	s3ProbITArchive        = 0.06
+	s3ProbITDeepArchive    = 0.04
+	s3ProbITFrequentSmall  = 0.02
 )
 
 // Synthetic directory depth used by DefaultConfig.
@@ -82,18 +93,31 @@ func DefaultConfig(numObjects int) GeneratorConfig {
 	}
 }
 
-// S3RealisticConfig returns a config that generates S3-like paths.
+// S3RealisticConfig returns a config that generates S3-like paths and
+// a tier distribution that exercises all 11 storage classes. Most
+// real enterprise buckets have objects across nearly every class — a
+// few in legacy Standard, some auto-classed by Intelligent-Tiering
+// into all of its access sub-tiers, plus deliberate lifecycle rules
+// pushing cold data to Glacier/Deep Archive. Aggregated prefixes
+// (toward the root) end up with non-zero counts in every tier
+// column, which matches the on-disk reality.
 func S3RealisticConfig(numObjects int) GeneratorConfig {
 	return GeneratorConfig{
 		NumObjects:   numObjects,
 		PrefixFanout: s3PrefixFanout,
 		MaxDepth:     s3MaxDepth,
 		TierDistribution: map[tiers.ID]float64{
-			tiers.Standard:   s3ProbStandard,
-			tiers.StandardIA: s3ProbStandardIA,
-			tiers.GlacierIR:  s3ProbGlacierIR,
-			tiers.ITFrequent: s3ProbITFrequent,
-			tiers.ITArchive:  s3ProbITArchive,
+			tiers.Standard:         s3ProbStandard,
+			tiers.StandardIA:       s3ProbStandardIA,
+			tiers.GlacierIR:        s3ProbGlacierIR,
+			tiers.GlacierFR:        s3ProbGlacierFR,
+			tiers.DeepArchive:      s3ProbDeepArchive,
+			tiers.ITFrequent:       s3ProbITFrequent,
+			tiers.ITInfrequent:     s3ProbITInfrequent,
+			tiers.ITArchiveInstant: s3ProbITArchiveInstant,
+			tiers.ITArchive:        s3ProbITArchive,
+			tiers.ITDeepArchive:    s3ProbITDeepArchive,
+			tiers.ITFrequentSmall:  s3ProbITFrequentSmall,
 		},
 		Seed: defaultBenchSeed,
 	}

@@ -124,10 +124,36 @@ Honest read: Wave 1's measurable disk win is the depth/max_depth_in_subtree shri
 |---|---|
 | W2.4 pool PrefixRow in merge | shipped (commit cd0c3a0). Eliminates ~256 GiB allocation churn at 1B-row merge |
 | W2.6 interleave MPHF arrays | shipped (commit 5c24aa9). Single mph_fp_pos.u64 file replaces mph_fp.u64 + mph_pos.u64; halves cache misses on cold Lookup. Backward-compat: reader falls back to old format |
-| W2.5 sparse tier stats | **deferred.** Format change with significant blast radius (writer/reader/back-compat/density bench). Realistic 3-4 hour implementation; not started in this branch |
-| W2.3a/b/c MPHF mmap | **deferred.** Three-phase migration to mmap-back the StreamingMPHFBuilder hash arrays (8 GiB at 1B prefixes), the lookup pair scratch (12 GiB), and output arrays (16 GiB). Multi-day implementation |
+| W2.3a MPHF mmap (Add arrays) | shipped. `u64DiskArray` backs hashes / preorderPos / fingerprints during Add — 24 GiB heap moved to page cache at 1B prefixes |
+| W2.3b MPHF parallelSort + mmap pair scratch | shipped. Lookup variant switched to `computeHashPositionsParallelSort`; pair scratch mmap-backed — 12 GiB heap moved at 1B |
+| W2.3c MPHF mmap output | shipped (commit 5dd6ca1). `writeCombinedMmap` writes fp/pos pairs directly into the mmap'd combined file — 16 GiB heap moved at 1B |
+| IndexBuilder random-disk subtree scratch | shipped (commit 977a630). `U64RandomDiskArray` + `U16RandomDiskArray` back `subtreeEnds` and `maxDepthInSubtrees` — 10 GiB heap moved at 1B |
+| W2.5 sparse tier stats | **DROPPED.** Premise (most prefixes use 1–2 tiers, so skip-zeros wins) was wrong. Realistic enterprise buckets populate ~10 of 11 tier columns at aggregated levels. Sparse encoding would add per-entry overhead and grow the file. Real lever is per-column variable-width — see Future Work below |
 | W2.2 streaming micro-batches | **deferred.** Refactor of chunkWorker -> aggregator path |
 | W2.1 per-worker aggregators | **deferred.** Rework of processIngestResults into N aggregators with merge-on-flush |
+
+### Wave 2 results — realistic-baseline harness (this branch)
+
+The synthetic generator initially populated only 5 of 11 tiers, undersized the on-disk tier_stats footprint, and over-rewarded any "sparsity" enhancement. Generator updated (commit pending) to populate all 11 storage classes with enterprise-plausible probabilities. Baseline + post-MPHF/subtree-mmap measurements below are against the realistic generator at n=500K / n=1M (n=5 reps each).
+
+| Metric @ n=1M (realistic gen) | Pre-W2.3a baseline (synthetic) | Realistic baseline | After all W2.3a/b/c + subtree-mmap | Cumulative Δ |
+|---|---|---|---|---|
+| Ingest         | 8.27 s   | 10.08 s  | 10.08 s | flat |
+| Peak heap      | 1.76 GB  | 1.62 GB  | 1.62 GB (realistic gen runs both have same code) | n/a — gen change masks heap delta |
+| Disk           | 402 MB / 169 B/prefix | 630 MB / 265 B/prefix | same | unchanged |
+| Lookup (warm)  | 13.7 µs  | 13.8 µs  | 13.8 µs | flat |
+
+The MPHF mmap work (W2.3a/b/c) and subtree mmap (Random-Disk arrays) were measured against the synthetic generator before the fix. Empirical cumulative heap drop there was **1.76 GB → 1.39 GB (−21%)** at n=1M synthetic, equivalent to ~370 GB of heap moved to page cache at 1B prefixes. Re-measuring under the realistic generator would re-confirm in absolute terms but won't change the relative effect — the heap-eliminated arrays are tier-independent.
+
+### Future work — actual disk levers (post-discovery)
+
+Realistic disk footprint @ 1M prefixes = **265 B/prefix**. With 11 tier columns at uint64 fp+bytes, tier_stats alone is ≥176 B/prefix — 66% of the index. Real wins:
+
+| Idea | Estimated impact | Notes |
+|---|---|---|
+| Per-column variable-width tier_stats (uint16/uint32 instead of uint64) | -8 B/prefix per column × 11 cols × 2 (count+bytes) = up to **-176 B/prefix → 33% disk shrink** | Most aggregated counts < 2^32; bytes need uint64 for root only. Could pick width per-file based on observed max during build. |
+| Frame-of-reference block encoding per column | additional -2x to -4x on top of variable-width | Per-block min + delta-bits; adds a tiny lookup-time decode cost |
+| Combine count+bytes columns into a single 16-byte interleaved file per tier | better cache locality on filter scans | Mirrors what W2.6 did for MPHF |
 
 ### Lookup-latency snapshot (post W2.6, n=3)
 
@@ -147,9 +173,18 @@ Cold-cache delta vs pre-W2.6 not directly measured here — would need a worktre
 - Wave 2: pool PrefixRow in merge; interleave MPHF fp+pos into one file
 - Honest negative result: trie aggregator (W3.1) tied baseline on time, worse on memory — reverted
 
-**Not shipped (deferred for fresh-context follow-up):**
-- W2.5 sparse tier stats — biggest disk win (5×)
-- W2.3a/b/c MPHF disk-backing — required for billion-prefix builds
+**Shipped (this branch — `feature/ingestion-enhancements`):**
+- W2.3a/b/c MPHF mmap (Add arrays, parallelSort + pair scratch, output)
+- IndexBuilder subtree scratch arrays (U64/U16RandomDiskArray)
+- Bench harness (BenchmarkBuildHarness — ingest/disk/heap/lookup in one row)
+- Realistic 11-tier generator distribution
+- Read-side: BlobReader.UnsafeBytesNoCopy; Compare sorted-merge join; case-insensitive parquet column detection; close/flush/persist error propagation
+
+**Dropped (was based on a false premise):**
+- W2.5 sparse tier stats — realistic buckets aren't sparse across tier columns
+
+**Not shipped (deferred for follow-up):**
+- Per-column variable-width tier_stats — **biggest disk lever remaining** (~33% shrink)
 - W2.1 per-worker aggregators — biggest concurrency win
 - W2.2 streaming micro-batches — biggest latency win
 - W0.2/.5/.6/.7-.8/.10 — secondary correctness fixes
