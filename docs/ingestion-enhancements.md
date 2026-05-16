@@ -100,30 +100,30 @@ item lists: change, where, expected impact, measurement.
 
 ### Q — Query path (priority #1)
 
-| ID | Change | Where | Expected impact | Measurement |
-|---|---|---|---|---|
-| Q5 | Browse benchmark suite (both raw + segmented, cold + warm, varying child counts and depths) | `pkg/indexread/*_bench_test.go` (new) | Establishes baseline for the dominant production query | New `BenchmarkBrowseMatrix` |
-| Q6 | PrefixString cold/warm bench, raw vs segmented | `pkg/format/*_bench_test.go` (new) | Identifies per-child Browse cost. Segmented = O(depth) reads per call | New `BenchmarkPrefixString` |
-| Q7 | ✅ **DECIDED: drop segmented encoding entirely.** B3 shows 3.3× warm / 2.7× cold PrefixString penalty + 2× allocs. B2 shows 10-15% end-to-end Browse penalty. CLI exposure is an opt-in `--segment-prefixes` flag (default false), no production path. Disk savings rank #4; query latency rank #1. Per "never trade query latency for disk bytes", drop. Deletion folded into S1-S6 simplification batch | `pkg/format/segment.go` + flag in `internal/cli/cli.go` + `UseSegmentEncoding` config field | -800+ LOC, simpler MPHF Lookup path, no per-call width dispatch on useSegments | Re-run B2 raw-only after deletion |
-| Q8 | Cold Lookup behavior at 1B-scale plan | research only | Lookup at 1M warm is 14 µs (mostly bbhash rank). At 1B working set won't fit in RAM. Need a plan that doesn't trade query latency for memory | Write-up only; no implementation until measured |
+| ID | Status | Result |
+|---|---|---|
+| Q5 ✅ | shipped (`BenchmarkBrowse_Matrix`) | Browse warm @ n=1M = ~294 µs / 515 KB / 2168 allocs per call |
+| Q6 ✅ | shipped (`BenchmarkPrefixString_Matrix`) | Raw warm @ n=1M = ~90 ns/call. Used by Q7 |
+| Q7 ✅ | **decision shipped — segmented dropped entirely.** ~850 LOC removed | Raw blob is the only prefix encoding. -1 dispatch branch from every read. Tests + lint clean |
+| Q8 | open (research only) | At 1B prefixes Lookup working set won't fit in RAM. Investigation pending |
 
 ### I — Ingestion wall time (priority #2)
 
-| ID | Change | Where | Expected impact | Measurement |
-|---|---|---|---|---|
-| I3 | Pipe Merge → Build directly. Eliminate disk write+re-read of the final merged file by piping `parallelMerger` output as an in-process iterator into `IndexBuilder.AddAllWithContext` | `pkg/extsort/pipeline.go:runMergeBuildPhase`, `parallel_merge.go` (expose streaming output) | Saves one full pass of N×row-size I/O — at 1B prefixes × ~150 B/row ≈ ~150 GB of avoided disk I/O | New phase-timed bench via E1 events |
-| I4 | Stream DepthIndex to disk during Add (eliminate in-memory `buckets` map). Either: (a) write `(depth, pos)` pairs as Add proceeds and sort+merge at Finalize, or (b) accept that the sorted stream already gives us depth in pos order and build the index directly without a map | `pkg/format/depthindex.go`, `pkg/extsort/indexbuild.go` | -1 to 2 GiB heap at 1B prefixes (the last big in-memory accumulator) | `BenchmarkBuildHarness` peak heap |
-| I5 | Per-worker memory budget. Replace global `HeapAlloc` check with a per-worker aggregator-bytes counter; each worker decides its own flush trigger. Matches the "per-worker, nothing shared" intent | `pkg/extsort/aggregator.go`, `pipeline.go:runChunkWorker` | More predictable spill behaviour; eliminates "one worker triggers all" flush storms | New `BenchmarkWorkerSpillIndependence` |
-| I6 | Pub-sub event bus (also serves all other priorities — placed here because instrumentation enables every other measurement) | `pkg/extsort/events/` (new package) | Per-stage throughput, queue depths, worker utilization observable at runtime | Used by E2/E3 + every new bench |
-| I7 | K-way merge strategy comparison. Bench round-based fan-in vs tree merge vs continuous-merge-while-aggregating | `pkg/extsort/parallel_merge.go`, `pipeline.go` | Verify the round-based approach is fastest; or switch if not | `BenchmarkMergeStrategy` (new) |
+| ID | Status | Result |
+|---|---|---|
+| I3 ✅ | shipped — `MergeAllToIterator` pipes K-way merge into IndexBuilder | Merge→Build seam @ n=1M, 8 runs: **4.00 s → 2.95 s (-26%)**; eliminates final-file disk round-trip (~150 GB I/O saved at 1B) |
+| I4 ✅ | shipped — `DepthIndexBuilder` per-depth `u64DiskArray` | Peak heap @ n=1M: **1.613 GB → 1.533 GB (-80 MB, -5%)**; linear to **-80 GB at 1B prefixes** |
+| I5 ✅ | shipped — `ShouldWorkerFlush` (per-worker budget) | Replaces global HeapAlloc trigger; each worker decides independently |
+| I6 = E1 ✅ | shipped (event bus is foundational, not its own perf item) | See E1 below |
+| I7 | open (research) | K-way merge strategy comparison not yet performed |
 
 ### E — Instrumentation (cross-cutting, enables benchmarking)
 
-| ID | Change | Where | Expected impact | Measurement |
-|---|---|---|---|---|
-| E1 | **Pub-sub event bus** across pipeline stages. Each stage emits `{stage, event_type, timestamp, payload}`. Listeners subscribe by stage. Backends: aggregating logger, in-memory ring for tests, optional Prometheus exporter | `pkg/extsort/events/` (new); inject into `Pipeline`, `IndexBuilder`, `StreamingMPHFBuilder`, `ParallelMerger`, `Aggregator` | Foundation for every other measurement. Your explicit ask | Itself: `BenchmarkEventBus_Overhead` |
-| E2 | Worker utilization metric (% idle / blocked / working per worker per second) emitted via E1 | each worker calls into E1 on state transitions | Quantifies "all workers always working" invariant | Read from event stream during BuildHarness |
-| E3 | Per-stage throughput metric (rows/sec, MB/sec) emitted via E1 | each stage calls into E1 on row/byte commits | Identifies the bottleneck stage in any given run | Read from event stream during BuildHarness |
+| ID | Status | Result |
+|---|---|---|
+| E1 ✅ | shipped (`pkg/extsort/events/`) | Pub-sub bus, never blocks publishers, zero-cost when nobody subscribes. Wired into Pipeline.Run / chunkWorker / streamChunkIntoAggregator / flushAggregator / ParallelMerger. Tests + concurrency stress validated |
+| E2 ✅ | shipped (via E1 worker_idle/busy events) | Workers emit state transitions on jobs-channel wait + chunk processing; subscribers can compute utilization in real time |
+| E3 ✅ | shipped (via E1 batch_committed events) | Each stage emits row+byte commits; subscribers compute throughput per stage |
 
 ### M — Memory during ingestion (priority #3)
 
@@ -145,14 +145,15 @@ that don't violate constraints:
 
 ### S — Simplification (per "no back-compat needed")
 
-| ID | Change | Where | Notes |
-|---|---|---|---|
-| S1 | Drop legacy per-tier columnar `TierStatsReader` path. Only `tier_stats_row.bin` is needed going forward | `pkg/format/tierstats.go` | Removes ~80 LOC + a probe step |
-| S2 | Drop legacy per-column core stats readers (object_count.u64, total_bytes.u64, subtree_end.u64, depth.u32, max_depth_in_subtree.u32). Only `core_stats.bin` needed | `pkg/format/reader.go`, `pkg/indexread/index.go`, `pkg/format/manifest.go` | Removes 5 fields + back-compat branches in Open |
-| S3 | Drop legacy MPHF non-combined fp/pos format. Only `mph_fp_pos.u64` needed | `pkg/format/mphf.go` | Removes combined != nil branches |
-| S4 | Drop `LookupWithVerify` if no caller uses it (grep first) | `pkg/format/mphf.go` | Removes a code path nothing exercises |
-| S5 | Consolidate `MPHFBuilder` + `StreamingMPHFBuilder` (keep only streaming) | `pkg/format/mphf.go`, `mphf_streaming.go` | Single builder, fewer paths |
-| S6 | Resolve outstanding correctness items: implement or formally close W0.2 (merge row-count verification), W0.5 (fd ceiling), W0.6 (single-run header validation), W0.9 (bounded zstd pool), W0.10 (cancel cleanup). W0.7 superseded by per-file manifest checksums. W0.8 moot post-S5 (one encoding) | various | Each is small; bundle | 
+| ID | Status | Notes |
+|---|---|---|
+| S0 = Q7 ✅ | shipped (segmented removed) | ~850 LOC + an entire dispatch dimension gone |
+| S1 | open — legacy per-tier columnar `TierStatsReader` shim still present | Reader probes for row file; falls back. Removal pending |
+| S2 | open — legacy per-column core stats readers still in `pkg/indexread/index.go` | Same probe-and-fallback shape |
+| S3 | open — legacy MPHF non-combined fp/pos branch still in `pkg/format/mphf.go` | Same |
+| S4 | open — `LookupWithVerify` retained; need to grep callers to confirm dead |
+| S5 | open — `MPHFBuilder` + `StreamingMPHFBuilder` duplication | Keep streaming, drop the in-memory variant |
+| S6 | open — W0.2/.5/.6/.9/.10 correctness items | Each small, can bundle |
 
 ### Cleanups
 
