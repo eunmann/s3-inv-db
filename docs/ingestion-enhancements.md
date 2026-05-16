@@ -168,11 +168,11 @@ The MPHF mmap work (W2.3a/b/c) and subtree mmap (Random-Disk arrays) were measur
 
 #### I-tier (Ingestion wall time — priority #2)
 
-| ID  | Change | Where | Expected impact | Bench |
-|-----|--------|-------|-----------------|-------|
-| I1  | **W2.1 per-worker aggregators**: each chunk worker maintains its own `Aggregator`, merge happens in the same N-way merge as run files. Currently a single mutex-fronted aggregator serialises all chunk workers' AddObject calls. | `pkg/extsort/pipeline.go:451-501`, `aggregator.go` | Ingest wall time: scales with NumCPU (currently bottlenecked at one core for the aggregator stage) | `BenchmarkBuildHarness` |
-| I2  | **W2.2 streaming micro-batches**: 10K-row micro-batches instead of full-chunk batch — overlaps aggregation with parquet decode. | `pkg/extsort/pipeline.go:701` | Latency: hide aggregator-stage time under the decode | `BenchmarkBuildHarness` |
-| I3  | **Tier_stats writer concurrency**: in `IndexBuilder.Finalize`, the 22 tier-stat columns are currently written sequentially. After Q1 these collapse to 1 file. Pre-Q1, could parallelise. After Q1, moot. | `pkg/extsort/indexbuild.go:writeTierStats` | (moot after Q1) | n/a |
+| ID  | Change | Status | Result |
+|-----|--------|--------|--------|
+| I1  | **Per-worker aggregators** — each chunk worker owns a private Aggregator; flush to its own run file under runFilesMu. Replaces the single-consumer drain loop where ALL AddObject calls ran on one goroutine. | **shipped** | Aggregation-phase wall time @ 500K objects: **7.1× speedup at 32 workers** (1040 ms → 146 ms), 3.5× at 4 workers, 2× at 2 workers. The shared model didn't scale with worker count; per-worker scales close to linearly. |
+| I2  | **Stream chunk into aggregator** — eliminate the intermediate `[]objectRecord` slice between parquet decode and aggregator. After I1 these run on the same goroutine, so the slice was pure overhead. | **shipped** | ~32 B/row × 1M-row chunks × 32 workers = up to ~1 GB transient heap saved per build; -70 lines of code; no wall-time change at the harness bench (correctly predicted — same goroutine, same work, just no intermediate buffer). |
+| I3  | **Tier_stats writer concurrency** | **moot** (subsumed by Q1 — 22 per-tier writers collapsed to 1) |
 
 #### M-tier (Memory during ingestion — priority #3)
 
