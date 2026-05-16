@@ -98,7 +98,7 @@ func BenchmarkPipelineScale_E2E(b *testing.B) {
 					b.Fatal(err)
 				}
 				it := &singleRunIterator{reader: reader}
-				builder, err := NewIndexBuilder(outDir, runDir, false)
+				builder, err := NewIndexBuilder(outDir, runDir)
 				if err != nil {
 					b.Fatal(err)
 				}

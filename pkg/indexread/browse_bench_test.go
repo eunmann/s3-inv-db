@@ -15,40 +15,31 @@ import (
 // breakdown.
 //
 // This is the user's stated production-critical query #2 ("get
-// the children of this prefix and all of their stats"). Until
-// this bench landed there was zero coverage of the full path.
+// the children of this prefix and all of their stats").
 //
-// Matrix:
-//
-//	encoding  raw | segmented
-//	cache     warm | cold
-//	n         100K | 1M
-//
-// Reports per-call ns + per-call B/op + per-call allocs.
+// Matrix: cache {warm, cold} × n {100K, 1M}. Reports per-call
+// ns/op + B/op + allocs/op.
 func BenchmarkBrowse_Matrix(b *testing.B) {
 	silenceZerolog(b)
-	for _, useSeg := range []bool{false, true} {
-		for _, n := range queryBenchSizes() {
-			label := fmt.Sprintf("encoding=%s/n=%d", encodingLabel(useSeg), n)
-			b.Run(label, func(b *testing.B) {
-				dir := buildFixtureIndexWithEncoding(b, n, useSeg)
-				idx, err := indexread.Open(dir)
-				if err != nil {
-					b.Fatalf("Open: %v", err)
-				}
-				defer idx.Close()
-				parents := pickBrowseParents(b, idx, 32)
-				if len(parents) == 0 {
-					b.Skip("no browseable parents")
-				}
-				b.Run("warm", func(b *testing.B) {
-					runBrowseLoop(b, idx, parents)
-				})
-				b.Run("cold", func(b *testing.B) {
-					runBrowseColdLoop(b, idx, dir, parents)
-				})
+	for _, n := range queryBenchSizes() {
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			dir := buildFixtureIndex(b, n)
+			idx, err := indexread.Open(dir)
+			if err != nil {
+				b.Fatalf("Open: %v", err)
+			}
+			defer idx.Close()
+			parents := pickBrowseParents(b, idx, 32)
+			if len(parents) == 0 {
+				b.Skip("no browseable parents")
+			}
+			b.Run("warm", func(b *testing.B) {
+				runBrowseLoop(b, idx, parents)
 			})
-		}
+			b.Run("cold", func(b *testing.B) {
+				runBrowseColdLoop(b, idx, dir, parents)
+			})
+		})
 	}
 }
 

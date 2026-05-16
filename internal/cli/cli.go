@@ -65,9 +65,6 @@ func runBuild(args []string) error {
 	// Concurrency tuning
 	maxDepth := fs.Int("max-depth", 0, "maximum prefix depth to track (0 = unlimited)")
 
-	// Prefix encoding
-	segmentPrefixes := fs.Bool("segment-prefixes", false, "use segment dictionary compression for prefixes (reduces size when prefixes share path components)")
-
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
@@ -100,11 +97,11 @@ func runBuild(args []string) error {
 		return ErrManifestRequire
 	}
 
-	return runBuildExtSort(*outDir, *s3Manifest, *maxDepth, *segmentPrefixes, baseLogger)
+	return runBuildExtSort(*outDir, *s3Manifest, *maxDepth, baseLogger)
 }
 
 // runBuildExtSort runs the build using the external sort backend (pure Go, no CGO).
-func runBuildExtSort(outDir, s3Manifest string, maxDepth int, segmentPrefixes bool, baseLogger zerolog.Logger) error {
+func runBuildExtSort(outDir, s3Manifest string, maxDepth int, baseLogger zerolog.Logger) error {
 	// Create a context that responds to OS signals (SIGINT, SIGTERM)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -123,7 +120,6 @@ func runBuildExtSort(outDir, s3Manifest string, maxDepth int, segmentPrefixes bo
 	if maxDepth > 0 {
 		config.MaxDepth = maxDepth
 	}
-	config.UseSegmentEncoding = segmentPrefixes
 
 	logger.Info().
 		Int("parse_workers", config.ParseConcurrency).

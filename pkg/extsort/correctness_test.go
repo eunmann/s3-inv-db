@@ -27,7 +27,7 @@ func TestTierStatsRow_PreorderAlignment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b, err := extsort.NewIndexBuilder(outDir, tempDir, false)
+	b, err := extsort.NewIndexBuilder(outDir, tempDir)
 	if err != nil {
 		t.Fatalf("NewIndexBuilder: %v", err)
 	}

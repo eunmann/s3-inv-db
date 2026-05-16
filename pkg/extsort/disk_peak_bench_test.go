@@ -79,7 +79,7 @@ func measureOne(b *testing.B, numObjects int) {
 	if err != nil {
 		b.Fatalf("merger: %v", err)
 	}
-	builder, err := extsort.NewIndexBuilder(outDir, "", false)
+	builder, err := extsort.NewIndexBuilder(outDir, "")
 	if err != nil {
 		merger.Close()
 		b.Fatalf("builder: %v", err)

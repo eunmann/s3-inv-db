@@ -30,9 +30,8 @@ const indexDirPerm = 0o750
 // (via StreamingMPHFBuilder). Subtree arrays remain in memory (~12 bytes per prefix)
 // which is much smaller than storing all prefix strings (~50+ bytes each).
 type IndexBuilder struct {
-	outDir             string
-	tempDir            string
-	useSegmentEncoding bool
+	outDir  string
+	tempDir string
 
 	// coreStatsW packs object_count, total_bytes, subtree_end,
 	// depth, and max_depth_in_subtree per prefix into one fixed-stride
@@ -70,15 +69,15 @@ type stackEntry struct {
 // NewIndexBuilder creates a streaming index builder.
 // The tempDir is used for temporary storage during construction (for MPHF builder).
 // If tempDir is empty, os.TempDir() is used.
-func NewIndexBuilder(outDir, tempDir string, useSegmentEncoding bool) (*IndexBuilder, error) {
-	return NewIndexBuilderWithCapacity(outDir, tempDir, 0, useSegmentEncoding)
+func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
+	return NewIndexBuilderWithCapacity(outDir, tempDir, 0)
 }
 
 // NewIndexBuilderWithCapacity creates a streaming index builder with a capacity hint.
 // The capacityHint is used to pre-size internal arrays, reducing allocations when
 // the approximate number of prefixes is known (e.g., from a run file header).
 // If capacityHint is 0, a small default capacity is used.
-func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, useSegmentEncoding bool) (*IndexBuilder, error) {
+func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*IndexBuilder, error) {
 	if err := os.MkdirAll(outDir, indexDirPerm); err != nil {
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
@@ -87,11 +86,7 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, us
 		tempDir = os.TempDir()
 	}
 
-	var opts []format.StreamingMPHFOption
-	if useSegmentEncoding {
-		opts = append(opts, format.WithPrefixEncoding(format.PrefixEncodingSegDict))
-	}
-	mphfBuilder, err := format.NewStreamingMPHFBuilder(tempDir, opts...)
+	mphfBuilder, err := format.NewStreamingMPHFBuilder(tempDir)
 	if err != nil {
 		return nil, fmt.Errorf("create MPHF builder: %w", err)
 	}
@@ -107,14 +102,13 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, us
 	}
 
 	b := &IndexBuilder{
-		outDir:             outDir,
-		tempDir:            tempDir,
-		useSegmentEncoding: useSegmentEncoding,
-		coreStatsW:         coreStatsW,
-		mphfBuilder:        mphfBuilder,
-		depthIndexBuilder:  format.NewDepthIndexBuilder(),
-		stack:              make([]stackEntry, 0, 32),
-		presentTiers:       make(map[tiers.ID]bool),
+		outDir:            outDir,
+		tempDir:           tempDir,
+		coreStatsW:        coreStatsW,
+		mphfBuilder:       mphfBuilder,
+		depthIndexBuilder: format.NewDepthIndexBuilder(),
+		stack:             make([]stackEntry, 0, 32),
+		presentTiers:      make(map[tiers.ID]bool),
 	}
 
 	b.tierStatsRowW, err = format.NewTierStatsRowWriter(outDir)

@@ -118,7 +118,7 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 			b.Fatalf("create merger: %v", err)
 		}
 
-		builder, err := extsort.NewIndexBuilder(outDir, "", false)
+		builder, err := extsort.NewIndexBuilder(outDir, "")
 		if err != nil {
 			merger.Close()
 			b.Fatalf("create builder: %v", err)
@@ -278,7 +278,7 @@ func BenchmarkExtsortPhases(b *testing.B) {
 			b.StartTimer()
 
 			merger, _ := extsort.NewMergeIterator([]string{runPath}, 4*1024*1024)
-			builder, _ := extsort.NewIndexBuilder(outDir, "", false)
+			builder, _ := extsort.NewIndexBuilder(outDir, "")
 			builder.AddAll(merger)
 			merger.Close()
 			builder.Finalize()

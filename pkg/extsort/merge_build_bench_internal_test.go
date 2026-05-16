@@ -86,7 +86,7 @@ func runMergeBuildSeamBench(b *testing.B, n, runFileCount int, streamed bool) {
 			cleanup = func() { reader.Close() }
 		}
 
-		builder, err := NewIndexBuilderWithCapacity(outDir, "", capacity, false)
+		builder, err := NewIndexBuilderWithCapacity(outDir, "", capacity)
 		if err != nil {
 			b.Fatalf("NewIndexBuilder: %v", err)
 		}

@@ -19,20 +19,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// PrefixEncoding specifies how prefix strings are stored in the index.
-type PrefixEncoding int
-
-const (
-	// PrefixEncodingRaw stores prefixes as raw UTF-8 strings concatenated in a blob.
-	// This is the legacy format with prefix_blob.bin and prefix_offsets.u64.
-	PrefixEncodingRaw PrefixEncoding = iota
-
-	// PrefixEncodingSegDict splits prefixes into "/"-delimited segments,
-	// interns unique segments into a dictionary, and stores each prefix
-	// as a sequence of uint32 segment IDs. This provides significant size
-	// reduction when prefixes share common path components.
-	PrefixEncodingSegDict
-)
+// Prefix storage is exclusively raw blob: prefix_blob.bin +
+// prefix_offsets.u64. The segmented dictionary encoding was removed
+// (commit) — B2/B3 benches showed segmented adds 3.3× to PrefixString
+// and ~10-15% to Browse end-to-end while only saving disk (priority
+// #4). Per the priority order, query latency wins.
 
 // StreamingMPHFBuilder builds a minimal perfect hash function for prefix strings
 // while keeping memory usage bounded by writing prefixes to disk during construction.
@@ -63,26 +54,13 @@ type StreamingMPHFBuilder struct {
 	count      uint64
 	totalBytes uint64
 	bufferSize int
-
-	// Prefix encoding configuration
-	prefixEncoding PrefixEncoding
-}
-
-// StreamingMPHFOption configures a StreamingMPHFBuilder.
-type StreamingMPHFOption func(*StreamingMPHFBuilder)
-
-// WithPrefixEncoding sets the prefix encoding method.
-func WithPrefixEncoding(enc PrefixEncoding) StreamingMPHFOption {
-	return func(b *StreamingMPHFBuilder) {
-		b.prefixEncoding = enc
-	}
 }
 
 // NewStreamingMPHFBuilder creates a new streaming MPHF builder.
 // The tempDir is used for temporary storage of prefix strings and
 // the three disk-backed u64 arrays (hashes / preorderPos /
 // fingerprints).
-func NewStreamingMPHFBuilder(tempDir string, opts ...StreamingMPHFOption) (*StreamingMPHFBuilder, error) {
+func NewStreamingMPHFBuilder(tempDir string) (*StreamingMPHFBuilder, error) {
 	tempFile, err := os.CreateTemp(tempDir, "mphf_prefixes_*.tmp")
 	if err != nil {
 		return nil, fmt.Errorf("create temp file: %w", err)
@@ -114,18 +92,13 @@ func NewStreamingMPHFBuilder(tempDir string, opts ...StreamingMPHFOption) (*Stre
 	}
 
 	b := &StreamingMPHFBuilder{
-		hashes:         hashes,
-		preorderPos:    preorderPos,
-		fingerprints:   fingerprints,
-		tempFile:       tempFile,
-		tempWriter:     bufio.NewWriterSize(tempFile, 1024*1024),
-		tempPath:       tempFile.Name(),
-		bufferSize:     1024 * 1024,
-		prefixEncoding: PrefixEncodingRaw,
-	}
-
-	for _, opt := range opts {
-		opt(b)
+		hashes:       hashes,
+		preorderPos:  preorderPos,
+		fingerprints: fingerprints,
+		tempFile:     tempFile,
+		tempWriter:   bufio.NewWriterSize(tempFile, 1024*1024),
+		tempPath:     tempFile.Name(),
+		bufferSize:   1024 * 1024,
 	}
 
 	return b, nil
@@ -325,16 +298,8 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 
 	log.Debug().Msg("MPHF: writing prefix blob")
 
-	// Write prefix blob in preorder (original order)
-	switch b.prefixEncoding {
-	case PrefixEncodingSegDict:
-		if err := b.writePrefixBlobSegmented(outDir); err != nil {
-			return fmt.Errorf("write segmented prefix blob: %w", err)
-		}
-	default:
-		if err := b.writePrefixBlobPreorder(outDir); err != nil {
-			return fmt.Errorf("write prefix blob: %w", err)
-		}
+	if err := b.writePrefixBlobPreorder(outDir); err != nil {
+		return fmt.Errorf("write prefix blob: %w", err)
 	}
 
 	log.Debug().Msg("MPHF: build complete")
@@ -768,62 +733,6 @@ func (b *StreamingMPHFBuilder) writePrefixBlobPreorder(outDir string) error {
 	return writer.Close()
 }
 
-// writePrefixBlobSegmented writes prefixes using segment dictionary compression.
-// This reads from the temp file in sequence and writes segmented encoding files.
-func (b *StreamingMPHFBuilder) writePrefixBlobSegmented(outDir string) error {
-	writer, err := NewSegmentedPrefixWriter(outDir)
-	if err != nil {
-		return fmt.Errorf("create segmented prefix writer: %w", err)
-	}
-
-	// Seek to start of temp file
-	if _, err := b.tempFile.Seek(0, 0); err != nil {
-		writer.Close()
-
-		return fmt.Errorf("seek temp file: %w", err)
-	}
-	reader := bufio.NewReaderSize(b.tempFile, b.bufferSize)
-
-	// Read all prefixes in original (preorder) order and write to segmented blob
-	var lenBuf [4]byte
-	n := int(b.count)
-
-	// Reusable buffer for reading prefixes
-	prefixBuf := make([]byte, 0, 256)
-
-	for i := range n {
-		// Read prefix length
-		if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
-			writer.Close()
-
-			return fmt.Errorf("read prefix length at %d: %w", i, err)
-		}
-		prefixLen := binary.LittleEndian.Uint32(lenBuf[:])
-
-		// Grow buffer if needed
-		if cap(prefixBuf) < int(prefixLen) {
-			prefixBuf = make([]byte, prefixLen)
-		}
-		prefixBuf = prefixBuf[:prefixLen]
-
-		// Read prefix
-		if _, err := io.ReadFull(reader, prefixBuf); err != nil {
-			writer.Close()
-
-			return fmt.Errorf("read prefix at %d: %w", i, err)
-		}
-
-		// Write to segmented blob
-		if err := writer.WritePrefix(string(prefixBuf)); err != nil {
-			writer.Close()
-
-			return fmt.Errorf("write prefix %d to segmented blob: %w", i, err)
-		}
-	}
-
-	return writer.Close()
-}
-
 func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	// Create empty mph file
 	mphPath := filepath.Join(outDir, "mph.bin")
@@ -841,25 +750,17 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 		return fmt.Errorf("close empty combined fp+pos writer: %w", err)
 	}
 
-	// Create empty prefix files based on encoding
-	switch b.prefixEncoding {
-	case PrefixEncodingSegDict:
-		writer, err := NewSegmentedPrefixWriter(outDir)
-		if err != nil {
-			return fmt.Errorf("create empty segmented prefix writer: %w", err)
-		}
-
-		return writer.Close()
-	default:
-		blobPath := filepath.Join(outDir, "prefix_blob.bin")
-		offsetsPath := filepath.Join(outDir, "prefix_offsets.u64")
-		writer, err := NewBlobWriter(blobPath, offsetsPath)
-		if err != nil {
-			return fmt.Errorf("create empty blob writer: %w", err)
-		}
-
-		return writer.Close()
+	blobPath := filepath.Join(outDir, "prefix_blob.bin")
+	offsetsPath := filepath.Join(outDir, "prefix_offsets.u64")
+	writer, err := NewBlobWriter(blobPath, offsetsPath)
+	if err != nil {
+		return fmt.Errorf("create empty blob writer: %w", err)
 	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close empty blob writer: %w", err)
+	}
+
+	return nil
 }
 
 // writeCombinedMmap materialises mph_fp_pos.u64 directly into an

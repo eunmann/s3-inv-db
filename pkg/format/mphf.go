@@ -199,10 +199,6 @@ type MPHF struct {
 	preorderPos  *ArrayReader // maps hash position -> preorder position
 	prefixBlob   *BlobReader
 	count        uint64
-
-	// Segmented prefix reader (alternative to prefixBlob)
-	segmentedPrefixes *SegmentedPrefixReader
-	useSegments       bool
 }
 
 // OpenMPHF opens an MPHF from the given directory. New builds emit a
@@ -257,49 +253,32 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 		}
 	}
 
-	// Try to load prefix data (either segmented or raw blob)
-	// Prefer segmented encoding if files exist
-	segmentsPath := filepath.Join(outDir, SegmentsBlobFile)
-
+	// Load prefix blob (raw encoding; segmented removed).
 	var prefixBlob *BlobReader
-	var segmentedPrefixes *SegmentedPrefixReader
-	useSegments := false
+	blobPath := filepath.Join(outDir, "prefix_blob.bin")
+	offsetsPath := filepath.Join(outDir, "prefix_offsets.u64")
 
-	if _, err := os.Stat(segmentsPath); err == nil {
-		// Segmented prefix files exist - use them
-		segmentedPrefixes, err = OpenSegmentedPrefixReader(outDir)
+	if _, err := os.Stat(blobPath); err == nil {
+		prefixBlob, err = OpenBlob(blobPath, offsetsPath)
 		if err != nil {
-			fingerprints.Close()
-			preorderPos.Close()
-
-			return nil, fmt.Errorf("open segmented prefixes: %w", err)
-		}
-		useSegments = true
-	} else {
-		// Fall back to raw blob
-		blobPath := filepath.Join(outDir, "prefix_blob.bin")
-		offsetsPath := filepath.Join(outDir, "prefix_offsets.u64")
-
-		if _, err := os.Stat(blobPath); err == nil {
-			prefixBlob, err = OpenBlob(blobPath, offsetsPath)
-			if err != nil {
+			if fingerprints != nil {
 				fingerprints.Close()
-				preorderPos.Close()
-
-				return nil, fmt.Errorf("open prefix blob: %w", err)
 			}
+			if preorderPos != nil {
+				preorderPos.Close()
+			}
+
+			return nil, fmt.Errorf("open prefix blob: %w", err)
 		}
 	}
 
 	return &MPHF{
-		mph:               mph,
-		combined:          combined,
-		fingerprints:      fingerprints,
-		preorderPos:       preorderPos,
-		prefixBlob:        prefixBlob,
-		count:             mphCount(combined, fingerprints),
-		segmentedPrefixes: segmentedPrefixes,
-		useSegments:       useSegments,
+		mph:          mph,
+		combined:     combined,
+		fingerprints: fingerprints,
+		preorderPos:  preorderPos,
+		prefixBlob:   prefixBlob,
+		count:        mphCount(combined, fingerprints),
 	}, nil
 }
 
@@ -345,12 +324,6 @@ func (m *MPHF) Close() error {
 		}
 	}
 
-	if m.segmentedPrefixes != nil {
-		if err := m.segmentedPrefixes.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-
 	return firstErr
 }
 
@@ -390,21 +363,14 @@ func (m *MPHF) Lookup(prefix string) (uint64, bool) {
 	return preorderPosVal, true
 }
 
-// LookupWithVerify returns the position and optionally verifies against
-// the prefix blob (slower but more certain).
+// LookupWithVerify returns the position and verifies against the
+// stored prefix in the blob (more certain than fingerprint-only).
 func (m *MPHF) LookupWithVerify(prefix string) (uint64, bool) {
 	pos, ok := m.Lookup(prefix)
 	if !ok {
 		return 0, false
 	}
-
-	// Verify against stored prefix (segmented or raw blob)
-	if m.useSegments && m.segmentedPrefixes != nil {
-		storedPrefix, err := m.segmentedPrefixes.GetPrefix(pos)
-		if err != nil || storedPrefix != prefix {
-			return 0, false
-		}
-	} else if m.prefixBlob != nil {
+	if m.prefixBlob != nil {
 		storedPrefix, err := m.prefixBlob.Get(pos)
 		if err != nil || storedPrefix != prefix {
 			return 0, false
@@ -415,17 +381,8 @@ func (m *MPHF) LookupWithVerify(prefix string) (uint64, bool) {
 }
 
 // GetPrefix returns the prefix string at the given position.
-// Requires either prefix blob or segmented prefixes to be loaded.
+// Requires the prefix blob to be loaded.
 func (m *MPHF) GetPrefix(pos uint64) (string, error) {
-	if m.useSegments {
-		s, err := m.segmentedPrefixes.GetPrefix(pos)
-		if err != nil {
-			return "", fmt.Errorf("get segmented prefix at pos %d: %w", pos, err)
-		}
-
-		return s, nil
-	}
-
 	if m.prefixBlob == nil {
 		return "", ErrPrefixBlobNotLoaded
 	}
@@ -478,9 +435,8 @@ func computeFingerprintBytes(b []byte) uint64 {
 }
 
 // VerifyMPHF checks that all prefixes can be looked up correctly.
-// Works with both segmented and raw blob prefix storage.
 func VerifyMPHF(m *MPHF) error {
-	if m.prefixBlob == nil && m.segmentedPrefixes == nil {
+	if m.prefixBlob == nil {
 		return ErrNoPrefixStorage
 	}
 

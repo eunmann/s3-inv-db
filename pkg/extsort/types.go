@@ -275,11 +275,6 @@ type Config struct {
 	// Default: true.
 	UseCompressedRuns bool
 
-	// UseSegmentEncoding enables segment dictionary compression for prefix storage.
-	// When true, prefixes are split by "/" and deduplicated into a segment dictionary.
-	// This reduces storage when prefixes share common path components.
-	UseSegmentEncoding bool
-
 	// OnProgress is invoked on every phase transition and roughly once
 	// per ingest chunk. done/total are zero when only the stage label
 	// changed; otherwise they describe quantitative progress within

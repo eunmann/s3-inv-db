@@ -57,10 +57,6 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		"mph_pos.u64",
 		"prefix_blob.bin",
 		"prefix_offsets.u64",
-		SegmentsBlobFile,
-		SegmentsOffsetsFile,
-		PrefixSegIDsFile,
-		PrefixSegOffsetsFile,
 		"tiers.json",
 	}
 	for _, name := range requiredTopLevel {

@@ -116,7 +116,7 @@ func runEventInstrumentedBuild(b *testing.B, bus *events.Bus, objects []benchuti
 		Time: time.Now(),
 	})
 
-	builder, err := extsort.NewIndexBuilderWithCapacity(outDir, "", uint64(len(rows)), false)
+	builder, err := extsort.NewIndexBuilderWithCapacity(outDir, "", uint64(len(rows)))
 	if err != nil {
 		b.Fatalf("NewIndexBuilder: %v", err)
 	}

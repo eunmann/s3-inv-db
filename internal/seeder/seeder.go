@@ -233,7 +233,7 @@ func generateInventory(cfg Config, index int, seed int64) (InventoryInfo, error)
 	rows := agg.Drain()
 	extsort.SortPrefixRows(rows)
 
-	builder, err := extsort.NewIndexBuilder(outDir, "", false)
+	builder, err := extsort.NewIndexBuilder(outDir, "")
 	if err != nil {
 		return InventoryInfo{}, fmt.Errorf("create index builder: %w", err)
 	}

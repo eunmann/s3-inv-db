@@ -124,18 +124,8 @@ func BenchmarkMPHFLookup_Latency(b *testing.B) {
 
 // buildFixtureIndex constructs a real index of n synthetic objects
 // once per (b, n) pair via b.Cleanup. Multiple bench iterations share
-// the same dir. Uses raw blob prefix encoding (production default).
+// the same dir.
 func buildFixtureIndex(b *testing.B, n int) string {
-	b.Helper()
-
-	return buildFixtureIndexWithEncoding(b, n, false)
-}
-
-// buildFixtureIndexWithEncoding is the parameterized form of
-// buildFixtureIndex. UseSegmentEncoding=true builds with the segment
-// dictionary prefix encoding so benches can compare raw vs segmented
-// on the same input.
-func buildFixtureIndexWithEncoding(b *testing.B, n int, useSegmentEncoding bool) string {
 	b.Helper()
 	dir := b.TempDir()
 
@@ -149,7 +139,7 @@ func buildFixtureIndexWithEncoding(b *testing.B, n int, useSegmentEncoding bool)
 	rows := agg.Drain()
 	extsort.SortPrefixRows(rows)
 
-	builder, err := extsort.NewIndexBuilderWithCapacity(dir, "", uint64(len(rows)), useSegmentEncoding)
+	builder, err := extsort.NewIndexBuilderWithCapacity(dir, "", uint64(len(rows)))
 	if err != nil {
 		b.Fatalf("NewIndexBuilder: %v", err)
 	}

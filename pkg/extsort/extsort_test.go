@@ -260,7 +260,7 @@ func TestIndexBuilder(t *testing.T) {
 		outDir := filepath.Join(tmpDir, "index")
 
 		// Create builder
-		builder, err := extsort.NewIndexBuilder(outDir, "", false)
+		builder, err := extsort.NewIndexBuilder(outDir, "")
 		if err != nil {
 			t.Fatalf("create builder: %v", err)
 		}
@@ -373,7 +373,7 @@ func TestEndToEndWithAggregator(t *testing.T) {
 
 		// Build index
 		outDir := filepath.Join(tmpDir, "index")
-		builder, err := extsort.NewIndexBuilder(outDir, "", false)
+		builder, err := extsort.NewIndexBuilder(outDir, "")
 		if err != nil {
 			t.Fatalf("create builder: %v", err)
 		}

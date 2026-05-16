@@ -66,7 +66,7 @@ func runBuildHarness(b *testing.B, n int) {
 		rows := agg.Drain()
 		SortPrefixRows(rows)
 
-		builder, err := NewIndexBuilderWithCapacity(dir, "", uint64(len(rows)), false)
+		builder, err := NewIndexBuilderWithCapacity(dir, "", uint64(len(rows)))
 		if err != nil {
 			b.Fatalf("NewIndexBuilderWithCapacity: %v", err)
 		}
