@@ -252,6 +252,20 @@ func (r *ArrayReader) UnsafeGetU16(idx uint64) uint16 {
 	return binary.LittleEndian.Uint16(r.data[idx*2:])
 }
 
+// UnsafeGetUint32 returns the value at idx as uint32, dispatching on
+// the array's stored width. Lets a single logical column (e.g. depth)
+// be encoded at width=2 for new builds while still reading width=4
+// from older indexes. The branch is perfectly predicted (Width never
+// changes for a given array) so the cost is negligible vs the array
+// fetch itself.
+func (r *ArrayReader) UnsafeGetUint32(idx uint64) uint32 {
+	if r.header.Width == 2 {
+		return uint32(binary.LittleEndian.Uint16(r.data[idx*2:]))
+	}
+
+	return binary.LittleEndian.Uint32(r.data[idx*4:])
+}
+
 // BlobReader provides read access to prefix strings via mmap.
 //
 // Thread Safety: BlobReader is safe for concurrent read access from multiple

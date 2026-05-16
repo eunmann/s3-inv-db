@@ -167,7 +167,7 @@ func (idx *Index) Depth(pos uint64) uint32 {
 		return 0
 	}
 
-	return idx.depth.UnsafeGetU32(pos)
+	return idx.depth.UnsafeGetUint32(pos)
 }
 
 // SubtreeEnd returns the end position of the subtree rooted at pos.
@@ -185,7 +185,7 @@ func (idx *Index) MaxDepthInSubtree(pos uint64) uint32 {
 		return 0
 	}
 
-	return idx.maxDepthInSubtree.UnsafeGetU32(pos)
+	return idx.maxDepthInSubtree.UnsafeGetUint32(pos)
 }
 
 // PrefixString returns the prefix string for the node at pos.

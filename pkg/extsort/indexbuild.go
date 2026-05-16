@@ -49,9 +49,16 @@ type IndexBuilder struct {
 	posCount uint64
 	maxDepth uint32
 
-	presentTiers       map[tiers.ID]bool
-	subtreeEnds        []uint64 // 8 bytes per prefix
-	maxDepthInSubtrees []uint32 // 4 bytes per prefix
+	presentTiers map[tiers.ID]bool
+	subtreeEnds  []uint64 // 8 bytes per prefix
+	// maxDepthInSubtrees holds max depth observed inside each prefix's
+	// subtree. uint16 is plenty — S3 keys with >65k path components
+	// don't exist in practice and the format would have rejected them
+	// elsewhere. Half the on-disk + in-memory bytes vs the previous
+	// uint32. The on-disk filename keeps the .u32 suffix for backward
+	// compatibility; the actual width is recorded in each array's
+	// header and the reader dispatches via Width().
+	maxDepthInSubtrees []uint16
 
 	closed bool
 }
@@ -105,7 +112,7 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, us
 		stack:              make([]stackEntry, 0, 32),
 		presentTiers:       make(map[tiers.ID]bool),
 		subtreeEnds:        make([]uint64, 0, arrayCap),
-		maxDepthInSubtrees: make([]uint32, 0, arrayCap),
+		maxDepthInSubtrees: make([]uint16, 0, arrayCap),
 		tierCountWriters:   make(map[tiers.ID]*format.ArrayWriter),
 		tierBytesWriters:   make(map[tiers.ID]*format.ArrayWriter),
 	}
@@ -124,7 +131,12 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, us
 		return nil, fmt.Errorf("create total_bytes writer: %w", err)
 	}
 
-	b.depthW, err = format.NewArrayWriter(filepath.Join(outDir, "depth.u32"), 4)
+	// depth.u32 keeps its filename for compatibility but stores values
+	// at width=2 (uint16). 64K levels of depth is far beyond any
+	// realistic key — no production inventory approaches this. The
+	// ArrayReader dispatches on Width() so old wide indexes still
+	// open.
+	b.depthW, err = format.NewArrayWriter(filepath.Join(outDir, "depth.u32"), 2)
 	if err != nil {
 		b.cleanup()
 
@@ -193,7 +205,7 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	if err := b.totalBytesW.WriteU64(row.TotalBytes); err != nil {
 		return fmt.Errorf("write total_bytes: %w", err)
 	}
-	if err := b.depthW.WriteU32(uint32(row.Depth)); err != nil {
+	if err := b.depthW.WriteU16(row.Depth); err != nil {
 		return fmt.Errorf("write depth: %w", err)
 	}
 
@@ -248,7 +260,7 @@ func (b *IndexBuilder) closeTopNode() error {
 
 	subtreeEnd := b.posCount - 1
 	b.subtreeEnds[top.pos] = subtreeEnd
-	b.maxDepthInSubtrees[top.pos] = top.maxDepthInSubtree
+	b.maxDepthInSubtrees[top.pos] = uint16(top.maxDepthInSubtree)
 
 	if len(b.stack) > 0 {
 		if top.maxDepthInSubtree > b.stack[len(b.stack)-1].maxDepthInSubtree {
@@ -502,12 +514,14 @@ func (b *IndexBuilder) writeSubtreeArrays() error {
 		return fmt.Errorf("close subtree_end: %w", err)
 	}
 
-	maxDepthW, err := format.NewArrayWriter(filepath.Join(b.outDir, "max_depth_in_subtree.u32"), 4)
+	// max_depth_in_subtree keeps its .u32 filename for compatibility
+	// but stores values at width=2.
+	maxDepthW, err := format.NewArrayWriter(filepath.Join(b.outDir, "max_depth_in_subtree.u32"), 2)
 	if err != nil {
 		return fmt.Errorf("create max_depth_in_subtree writer: %w", err)
 	}
 	for _, v := range b.maxDepthInSubtrees {
-		if err := maxDepthW.WriteU32(v); err != nil {
+		if err := maxDepthW.WriteU16(v); err != nil {
 			maxDepthW.Close()
 
 			return fmt.Errorf("write max_depth_in_subtree: %w", err)
