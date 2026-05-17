@@ -226,32 +226,6 @@ func (idx *Index) TierBreakdown(pos uint64) []TierBreakdown {
 	return idx.tierStats.Breakdown(pos)
 }
 
-// TierBreakdownAll returns the per-tier statistics for all present tiers (including zeros).
-// Returns nil if no tier data was collected during index build.
-// Use HasTierData to check if tier data is available.
-func (idx *Index) TierBreakdownAll(pos uint64) []TierBreakdown {
-	if !idx.HasTierData() {
-		return nil
-	}
-
-	return idx.tierStats.BreakdownAll(pos)
-}
-
-// TierBreakdownForPrefix returns the per-tier statistics for a prefix string.
-// Returns nil if:
-//   - The prefix is not found in the index
-//   - No tier data was collected during index build
-//
-// Use Lookup to check if a prefix exists, and HasTierData to check for tier data.
-func (idx *Index) TierBreakdownForPrefix(prefix string) []TierBreakdown {
-	pos, ok := idx.Lookup(prefix)
-	if !ok {
-		return nil
-	}
-
-	return idx.TierBreakdown(pos)
-}
-
 // TierBreakdownMap returns the per-tier statistics as a map keyed by tier name.
 // Returns nil if no tier data was collected during index build.
 // Use HasTierData to check if tier data is available.

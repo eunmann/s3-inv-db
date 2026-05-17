@@ -177,9 +177,7 @@ func (a *Aggregator) Drain() []*PrefixRow {
 		a.statsPool.Put(stats)
 	}
 
-	for k := range a.prefixes {
-		delete(a.prefixes, k)
-	}
+	clear(a.prefixes)
 
 	a.objectCount = 0
 	a.bytesProcessed = 0

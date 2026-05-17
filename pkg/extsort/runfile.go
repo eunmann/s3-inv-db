@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
-	"strings"
 )
 
 // DefaultRunBufferSize is the default I/O buffer for run-file reader
@@ -127,9 +125,7 @@ func (w *RunFileWriter) WriteAll(rows []*PrefixRow) error {
 
 // WriteSorted sorts the rows by prefix and writes them to the run file.
 func (w *RunFileWriter) WriteSorted(rows []*PrefixRow) error {
-	slices.SortFunc(rows, func(a, b *PrefixRow) int {
-		return strings.Compare(a.Prefix, b.Prefix)
-	})
+	SortPrefixRows(rows)
 
 	return w.WriteAll(rows)
 }

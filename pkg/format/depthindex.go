@@ -184,13 +184,7 @@ func OpenDepthIndex(outDir string) (*DepthIndex, error) {
 
 // Close releases resources.
 func (d *DepthIndex) Close() error {
-	err1 := d.offsets.Close()
-	err2 := d.positions.Close()
-	if err1 != nil {
-		return err1
-	}
-
-	return err2
+	return errors.Join(d.offsets.Close(), d.positions.Close())
 }
 
 // MaxDepth returns the maximum depth in the index.
@@ -268,62 +262,4 @@ func (d *DepthIndex) binarySearchUpper(start, end, target uint64) uint64 {
 	}
 
 	return lo
-}
-
-// DepthIterator iterates over positions at a specific depth within a subtree.
-type DepthIterator struct {
-	index   *DepthIndex
-	start   uint64 // slice start in positions array
-	end     uint64 // slice end in positions array
-	current uint64 // current index in positions array
-	pos     uint64 // current position value
-}
-
-// NewDepthIterator creates an iterator for a subtree at a specific depth.
-func (d *DepthIndex) NewDepthIterator(depth uint32, subtreeStart, subtreeEnd uint64) (*DepthIterator, error) {
-	if depth > d.maxDepth {
-		return &DepthIterator{current: 0, end: 0}, nil
-	}
-
-	sliceStart, err := d.offsets.GetU64(uint64(depth))
-	if err != nil {
-		return nil, fmt.Errorf("get start offset for depth %d: %w", depth, err)
-	}
-
-	sliceEnd, err := d.offsets.GetU64(uint64(depth + 1))
-	if err != nil {
-		return nil, fmt.Errorf("get end offset for depth %d: %w", depth, err)
-	}
-
-	// Binary search for bounds
-	lo := d.binarySearchLower(sliceStart, sliceEnd, subtreeStart)
-	hi := d.binarySearchUpper(lo, sliceEnd, subtreeEnd)
-
-	return &DepthIterator{
-		index:   d,
-		start:   lo,
-		end:     hi,
-		current: lo,
-	}, nil
-}
-
-// Next advances to the next position. Returns false when done.
-func (it *DepthIterator) Next() bool {
-	if it.current >= it.end {
-		return false
-	}
-	it.pos = it.index.positions.UnsafeGetU64(it.current)
-	it.current++
-
-	return true
-}
-
-// Pos returns the current position.
-func (it *DepthIterator) Pos() uint64 {
-	return it.pos
-}
-
-// Count returns the number of remaining positions.
-func (it *DepthIterator) Count() uint64 {
-	return it.end - it.current
 }

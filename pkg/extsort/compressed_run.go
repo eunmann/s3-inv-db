@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
-	"strings"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -164,9 +162,7 @@ func (w *CompressedRunWriter) WriteAll(rows []*PrefixRow) error {
 
 // WriteSorted sorts the rows by prefix and writes them to the compressed run file.
 func (w *CompressedRunWriter) WriteSorted(rows []*PrefixRow) error {
-	slices.SortFunc(rows, func(a, b *PrefixRow) int {
-		return strings.Compare(a.Prefix, b.Prefix)
-	})
+	SortPrefixRows(rows)
 
 	return w.WriteAll(rows)
 }

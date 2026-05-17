@@ -527,7 +527,7 @@ func TestTierBreakdown(t *testing.T) {
 	}
 
 	// Test root tier breakdown - should have all tiers
-	rootBreakdown := idx.TierBreakdownForPrefix("")
+	rootBreakdown := tierBreakdownForPrefixTest(idx, "")
 	if len(rootBreakdown) == 0 {
 		t.Fatal("root tier breakdown is empty")
 	}
@@ -553,7 +553,7 @@ func TestTierBreakdown(t *testing.T) {
 	}
 
 	// Test prefix-specific breakdown
-	glacierBreakdown := idx.TierBreakdownForPrefix("glacier/")
+	glacierBreakdown := tierBreakdownForPrefixTest(idx, "glacier/")
 	if len(glacierBreakdown) == 0 {
 		t.Fatal("glacier/ tier breakdown is empty")
 	}
@@ -572,7 +572,7 @@ func TestTierBreakdown(t *testing.T) {
 	}
 
 	// Test mixed prefix breakdown
-	mixedBreakdown := idx.TierBreakdownForPrefix("mixed/")
+	mixedBreakdown := tierBreakdownForPrefixTest(idx, "mixed/")
 	if len(mixedBreakdown) < 3 {
 		t.Errorf("mixed/ tier breakdown has %d entries, want at least 3", len(mixedBreakdown))
 	}
@@ -637,7 +637,17 @@ func TestNoTierData(t *testing.T) {
 
 	// When only one tier (Standard) is used, tier tracking may be disabled
 	// This is implementation-dependent, so we just verify no panic
-	breakdown := idx.TierBreakdownForPrefix("")
+	breakdown := tierBreakdownForPrefixTest(idx, "")
 	// With a single tier, breakdown may be empty or contain just Standard
 	_ = breakdown
+}
+
+// tierBreakdownForPrefixTest restores the removed convenience helper
+// for tests that need lookup+breakdown in one call.
+func tierBreakdownForPrefixTest(idx *indexread.Index, prefix string) []indexread.TierBreakdown {
+	pos, ok := idx.Lookup(prefix)
+	if !ok {
+		return nil
+	}
+	return idx.TierBreakdown(pos)
 }
