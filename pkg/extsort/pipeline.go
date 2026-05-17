@@ -691,24 +691,20 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 	return nil
 }
 
-// openParquetReader picks the ReaderAt path when the body supports it,
+// openParquetReader uses the *DownloadedObject's ReaderAt directly,
 // avoiding a second temp-file copy. Falls back to stream-based open
-// otherwise.
-func openParquetReader(body io.ReadCloser, fileSize int64) (*inventory.ParquetReader, error) {
-	if ra, ok := body.(interface {
-		io.ReaderAt
-		Size() (int64, error)
-	}); ok {
-		if size, sizeErr := ra.Size(); sizeErr == nil {
-			r, err := inventory.NewParquetInventoryReaderFromReaderAt(ra, size)
-			if err != nil {
-				return nil, fmt.Errorf("parquet reader from readerAt: %w", err)
-			}
-
-			return r, nil
+// only when Size() reports an error (in practice impossible — the
+// file was just written).
+func openParquetReader(obj *s3fetch.DownloadedObject, fileSize int64) (*inventory.ParquetReader, error) {
+	if size, err := obj.Size(); err == nil {
+		r, openErr := inventory.NewParquetInventoryReaderFromReaderAt(obj, size)
+		if openErr != nil {
+			return nil, fmt.Errorf("parquet reader from readerAt: %w", openErr)
 		}
+
+		return r, nil
 	}
-	r, err := inventory.NewParquetInventoryReaderFromStream(body, fileSize)
+	r, err := inventory.NewParquetInventoryReaderFromStream(obj, fileSize)
 	if err != nil {
 		return nil, fmt.Errorf("parquet reader from stream: %w", err)
 	}

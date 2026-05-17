@@ -88,7 +88,7 @@ type DownloadResult struct {
 //
 // This method uses the AWS S3 Download Manager for parallel range downloads,
 // which significantly improves throughput for large objects.
-func (d *Downloader) DownloadToReader(ctx context.Context, bucket, key string) (io.ReadCloser, *DownloadResult, error) {
+func (d *Downloader) DownloadToReader(ctx context.Context, bucket, key string) (*DownloadedObject, *DownloadResult, error) {
 	startTime := time.Now()
 
 	// Create temp file for download
@@ -128,13 +128,10 @@ func (d *Downloader) DownloadToReader(ctx context.Context, bucket, key string) (
 		PartSize:        d.config.PartSize,
 	}
 
-	// Wrap in a reader that cleans up the temp file on close
-	reader := &tempFileReader{
+	return &DownloadedObject{
 		file: tempFile,
 		path: tempFile.Name(),
-	}
-
-	return reader, result, nil
+	}, result, nil
 }
 
 // bytesDownloaded returns the size written for a DownloadObject call.
@@ -156,14 +153,18 @@ func (d *Downloader) Config() DownloaderConfig {
 	return d.config
 }
 
-// tempFileReader wraps an os.File and deletes it on close.
-type tempFileReader struct {
+// DownloadedObject is the random-access reader returned by
+// Client.DownloadObject / Downloader.DownloadToReader. Backed by a
+// temp file that is removed on Close. Supports streaming (Read),
+// random access (ReadAt), and length (Size) so callers can choose the
+// access pattern that fits their parser (e.g. Parquet needs ReadAt).
+type DownloadedObject struct {
 	file *os.File
 	path string
 }
 
-func (r *tempFileReader) Read(p []byte) (int, error) {
-	n, err := r.file.Read(p)
+func (d *DownloadedObject) Read(p []byte) (int, error) {
+	n, err := d.file.Read(p)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			return n, io.EOF
@@ -175,9 +176,9 @@ func (r *tempFileReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func (r *tempFileReader) Close() error {
-	err := r.file.Close()
-	os.Remove(r.path)
+func (d *DownloadedObject) Close() error {
+	err := d.file.Close()
+	os.Remove(d.path)
 	if err != nil {
 		return fmt.Errorf("close temp file: %w", err)
 	}
@@ -185,9 +186,8 @@ func (r *tempFileReader) Close() error {
 	return nil
 }
 
-// ReadAt implements io.ReaderAt for Parquet compatibility.
-func (r *tempFileReader) ReadAt(p []byte, off int64) (int, error) {
-	n, err := r.file.ReadAt(p, off)
+func (d *DownloadedObject) ReadAt(p []byte, off int64) (int, error) {
+	n, err := d.file.ReadAt(p, off)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			return n, io.EOF
@@ -199,9 +199,9 @@ func (r *tempFileReader) ReadAt(p []byte, off int64) (int, error) {
 	return n, nil
 }
 
-// Size returns the file size for Parquet compatibility.
-func (r *tempFileReader) Size() (int64, error) {
-	info, err := r.file.Stat()
+// Size returns the downloaded byte count.
+func (d *DownloadedObject) Size() (int64, error) {
+	info, err := d.file.Stat()
 	if err != nil {
 		return 0, fmt.Errorf("stat temp file: %w", err)
 	}

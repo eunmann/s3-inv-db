@@ -25,7 +25,7 @@ func TestDefaultDownloaderConfig(t *testing.T) {
 	}
 }
 
-func TestTempFileReader(t *testing.T) {
+func TestDownloadedObject(t *testing.T) {
 	tmpDir := t.TempDir()
 	testPath := filepath.Join(tmpDir, "test.bin")
 
@@ -44,7 +44,7 @@ func TestTempFileReader(t *testing.T) {
 			t.Fatalf("open file: %v", err)
 		}
 
-		reader := &tempFileReader{file: f, path: testPath}
+		reader := &DownloadedObject{file: f, path: testPath}
 
 		buf := make([]byte, 4096)
 		var read []byte
@@ -84,7 +84,7 @@ func TestTempFileReader(t *testing.T) {
 			t.Fatalf("open file: %v", err)
 		}
 
-		reader := &tempFileReader{file: f, path: testPath}
+		reader := &DownloadedObject{file: f, path: testPath}
 		defer reader.Close()
 
 		offsets := []int64{0, 1000, 50000, 512000}
@@ -112,7 +112,7 @@ func TestTempFileReader(t *testing.T) {
 			t.Fatalf("open file: %v", err)
 		}
 
-		reader := &tempFileReader{file: f, path: testPath}
+		reader := &DownloadedObject{file: f, path: testPath}
 		defer reader.Close()
 
 		size, err := reader.Size()
