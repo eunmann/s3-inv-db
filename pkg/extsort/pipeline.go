@@ -61,10 +61,8 @@ type Result struct {
 	Duration         time.Duration
 }
 
-// setPhase updates both the memory diagnostic tracker and the user's
-// progress callback. Single hook so future phases stay consistent. The
-// stage transition reports done=0/total=0 — quantitative progress
-// within the stage is emitted separately by the stage's own loop.
+// setPhase notifies the memory tracker and the OnProgress callback
+// of a phase transition (done=total=0).
 func (p *Pipeline) setPhase(name string) {
 	p.memTracker.SetPhase(name)
 	if p.config.Observe.OnProgress != nil {
@@ -73,15 +71,13 @@ func (p *Pipeline) setPhase(name string) {
 }
 
 // reportProgress emits quantitative progress within the current phase.
-// Called from ingest after each chunk.
 func (p *Pipeline) reportProgress(phase string, done, total int64) {
 	if p.config.Observe.OnProgress != nil {
 		p.config.Observe.OnProgress(phase, done, total)
 	}
 }
 
-// publish emits an event on the configured bus, if any. Cheap when
-// no bus is set (single nil check). Sets the timestamp if missing.
+// publish emits ev on the configured bus, if any.
 func (p *Pipeline) publish(ev events.Event) {
 	if p.config.Observe.EventBus == nil {
 		return

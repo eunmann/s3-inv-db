@@ -14,22 +14,7 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
 
-// The progress callback receives stage transitions and per-chunk
-// quantitative progress. Stage values: "preparing", "initializing",
-// "downloading", "building", "done". done/total are 0 on plain stage
-// transitions; non-zero while ingesting chunks (where total = total
-// chunks, done = chunks processed). Unnamed func type keeps
-// inventory.IndexBuilder satisfaction structural.
-
-// format.DirPerm is the permission bits used for cache directories the
-// loader creates. Owner-only access is the right default for a
-// process-local cache.
-
-// noopProgress is the package-level no-op callback used when callers
-// pass a nil progress function. Reusing one closure avoids a small
-// per-Build allocation.
-//
-//nolint:gochecknoglobals // intentional package-level no-op closure
+//nolint:gochecknoglobals // shared no-op closure so BuildWith doesn't allocate per call
 var noopProgress = func(string, int64, int64) {}
 
 // Loader runs the S3-inventory → on-disk-index build pipeline into a

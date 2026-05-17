@@ -21,53 +21,29 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-// MaxTiers is the maximum number of storage tiers supported.
-// This matches tiers.NumTiers and is used for fixed-size arrays to avoid map allocations.
+// MaxTiers mirrors tiers.NumTiers as an int so PrefixRow / PrefixStats
+// can declare fixed-size arrays for tier data (avoids map allocs).
 const MaxTiers = int(tiers.NumTiers)
 
-// RowIterator provides sequential access to sorted PrefixRows.
-// This interface is implemented by both MergeIterator and singleRunIterator.
+// RowIterator yields PrefixRows in sorted order; Next returns io.EOF
+// once exhausted.
 type RowIterator interface {
-	// Next returns the next PrefixRow in sorted order.
-	// Returns io.EOF when all rows have been consumed.
 	Next() (*PrefixRow, error)
 }
 
-// PrefixRow represents a single prefix with its aggregated statistics.
-// This is the primary data type passed through the external sort pipeline.
-//
-// Field order is tuned for alignment: large fields first, then the
-// fixed-size tier arrays, then the small uint16 Depth at the end.
-// Putting Depth between Prefix and Count would waste 6 bytes of
-// padding inside each row (real bytes at billion-row scale).
-//
-// The struct uses fixed-size arrays for tier data to avoid map
-// allocations in hot paths. Tier index i corresponds to tiers.ID(i).
+// PrefixRow is the primary unit passed through the external sort.
+// Field order is tuned for alignment (Depth at the end avoids 6 bytes
+// of inter-field padding at billion-row scale). Tier index i ↔ tiers.ID(i).
 type PrefixRow struct {
-	// Prefix is the full prefix string (e.g., "data/2024/01/").
-	Prefix string
-
-	// Count is the total number of objects under this prefix.
-	Count uint64
-
-	// TotalBytes is the total size in bytes of all objects under this prefix.
+	Prefix     string
+	Count      uint64
 	TotalBytes uint64
-
-	// TierCounts holds object counts per storage tier.
-	// Index i corresponds to tiers.ID(i).
 	TierCounts [MaxTiers]uint64
-
-	// TierBytes holds byte counts per storage tier.
-	// Index i corresponds to tiers.ID(i).
-	TierBytes [MaxTiers]uint64
-
-	// Depth is the directory depth (number of '/' characters).
-	// uint16 supports up to 65535 levels — far beyond any realistic key.
-	Depth uint16
+	TierBytes  [MaxTiers]uint64
+	Depth      uint16
 }
 
-// Reset clears all fields of the PrefixRow for reuse.
-// This is used with sync.Pool to avoid allocations.
+// Reset clears the row for reuse via sync.Pool.
 func (r *PrefixRow) Reset() {
 	r.Prefix = ""
 	r.Depth = 0
@@ -81,9 +57,8 @@ func (r *PrefixRow) Reset() {
 	}
 }
 
-// Merge adds the statistics from another PrefixRow into this one.
-// The Prefix and Depth fields are not modified; only counts and bytes are summed.
-// This is used during the k-way merge phase to combine duplicate prefixes.
+// Merge sums counts and bytes from other into r. Prefix and Depth
+// are not modified — only the per-prefix stats accumulate.
 func (r *PrefixRow) Merge(other *PrefixRow) {
 	r.Count += other.Count
 	r.TotalBytes += other.TotalBytes
@@ -211,26 +186,15 @@ func encodePrefixRowRecord(buf *[]byte, row *PrefixRow) int {
 	return offset
 }
 
-// PrefixStats holds aggregated statistics for a single prefix during
-// the in-memory aggregation phase. All counters are uint64 because at
-// billion-object / PB-scale buckets, a single tier of the root prefix
-// can exceed 2^32. Field order matches PrefixRow for alignment
-// efficiency (Depth at the end avoids inter-field padding).
+// PrefixStats holds aggregated stats for one prefix during the
+// in-memory aggregation phase. Uint64 counters because a single tier
+// of the root prefix can exceed 2^32 at PB scale.
 type PrefixStats struct {
-	// Count is the total number of objects under this prefix.
-	Count uint64
-
-	// TotalBytes is the total size in bytes.
+	Count      uint64
 	TotalBytes uint64
-
-	// TierCounts holds object counts per storage tier.
 	TierCounts [MaxTiers]uint64
-
-	// TierBytes holds byte counts per storage tier.
-	TierBytes [MaxTiers]uint64
-
-	// Depth is the directory depth.
-	Depth uint16
+	TierBytes  [MaxTiers]uint64
+	Depth      uint16
 }
 
 // Reset clears all fields of the PrefixStats for reuse.
@@ -268,17 +232,13 @@ func (s *PrefixStats) ToPrefixRow(prefix string) *PrefixRow {
 	return row
 }
 
-// Config holds configuration for the external sort pipeline.
-// Concerns are grouped into substructs: S3 download tuning, Merge
-// concurrency, Observe (progress + events). Top-level fields are
-// the ones that apply across the whole pipeline.
+// Config holds pipeline configuration. Grouped into substructs by
+// concern: S3 download, Merge concurrency, Observe (progress+events).
 type Config struct {
-	// TempDir is the directory for temporary run files. If empty,
-	// os.TempDir() is used.
+	// TempDir for run files; empty falls back to os.TempDir().
 	TempDir string
 
-	// MaxDepth is the maximum prefix depth to track. Prefixes
-	// deeper than this are not aggregated. 0 means unlimited.
+	// MaxDepth caps prefix depth aggregated. 0 means unlimited.
 	MaxDepth int
 
 	S3      S3Config
@@ -286,45 +246,37 @@ type Config struct {
 	Observe ObserveConfig
 }
 
-// S3Config tunes the S3 download manager used during ingest.
+// S3Config tunes the S3 download manager.
 type S3Config struct {
-	// DownloadPartConcurrency is the number of concurrent parts for
-	// each S3 download (parallel range downloads within one object).
-	// Default: max(2, NumCPU/4).
+	// DownloadPartConcurrency: parallel range downloads per object.
+	// Default max(2, NumCPU/4).
 	DownloadPartConcurrency int
 
-	// DownloadPartSize is the size of each part for parallel S3
-	// downloads. Larger values may improve throughput but use more
-	// memory. Default: 16 MiB.
+	// DownloadPartSize per part. Default 16 MiB.
 	DownloadPartSize int64
 }
 
 // MergeConfig tunes the K-way merge phase.
 type MergeConfig struct {
-	// NumWorkers is the number of concurrent merge workers.
-	// Default: min(max(NumCPU/2, 1), 8).
+	// NumWorkers: concurrent merge workers. Default min(max(NumCPU/2,1), 8).
 	NumWorkers int
 
-	// MaxFanIn is the maximum number of runs merged in a single
-	// worker. Higher values reduce merge rounds but increase memory
-	// per worker. Default: 16.
+	// MaxFanIn: runs merged per worker. Higher = fewer rounds, more
+	// memory per worker. Default 16.
 	MaxFanIn int
 
-	// UseCompressedRuns enables zstd compression for intermediate
-	// run files. Default: true.
+	// UseCompressedRuns enables zstd on intermediate run files. Default true.
 	UseCompressedRuns bool
 }
 
-// ObserveConfig wires up optional progress + event consumers.
+// ObserveConfig wires optional progress + event consumers.
 type ObserveConfig struct {
-	// OnProgress is invoked on every phase transition and roughly
-	// once per ingest chunk. done/total are zero on stage transitions;
-	// otherwise they describe quantitative progress.
+	// OnProgress fires on phase transitions and once per ingest chunk.
+	// done/total are zero on transitions.
 	OnProgress func(stage string, done, total int64)
 
-	// EventBus, if non-nil, receives structured events from every
-	// pipeline stage. The pipeline does not close the bus; the
-	// caller owns its lifecycle.
+	// EventBus, when non-nil, receives structured events. Caller owns
+	// its lifecycle; the pipeline does not Close it.
 	EventBus *events.Bus
 }
 

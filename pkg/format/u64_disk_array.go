@@ -16,17 +16,12 @@ import (
 // runtime condition.
 var errU64DiskArrayMisaligned = errors.New("u64 disk array file size not a multiple of 8")
 
-// u64DiskArray is an append-only sequence of uint64 backed by a file
-// on disk. During the "write" phase callers Append values through a
-// buffered writer; once Freeze is called the file is mmap'd and the
-// values become randomly accessible via Slice as []uint64.
-//
-// The point of routing through disk is to keep large hash/position/
-// fingerprint arrays out of the Go heap during a streaming MPHF build.
-// At 1B prefixes a single []uint64 in heap is 8 GiB; with the disk
-// array the same data lives in the OS page cache (paged in/out
-// transparently, doesn't count against GOMEMLIMIT, survives
-// MADV_DONTNEED if pressure mounts).
+// u64DiskArray is an append-only []uint64 backed by a file. Writers
+// Append through a buffered writer; Freeze mmap's the file and exposes
+// Slice as []uint64. Used by the streaming MPHF build to keep the
+// hash/position/fingerprint arrays out of the Go heap — at 1B prefixes
+// an in-heap []uint64 would be 8 GiB; here the data lives in the page
+// cache and doesn't count against GOMEMLIMIT.
 type u64DiskArray struct {
 	path   string
 	file   *os.File

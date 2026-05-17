@@ -17,13 +17,8 @@ import (
 // Chrome's ~60s TCP idle window, large enough to be cheap.
 const DefaultSSEHeartbeat = 15 * time.Second
 
-// Handlers contains all HTTP handlers and their dependencies. No logger
-// field — handlers retrieve the request-scoped logger via
-// zerolog.Ctx(r.Context()), set by the server's contextLoggerMiddleware.
-//
-// Domain operations on discovered inventories (list+merge, load, evict)
-// go through `discovery` so the use-case logic lives in the inventory
-// package rather than at the HTTP boundary.
+// Handlers contains all HTTP handlers and their dependencies. The
+// request-scoped logger comes from zerolog.Ctx(r.Context()).
 type Handlers struct {
 	manager      *inventory.Manager
 	discovery    *inventory.DiscoveryService
@@ -39,10 +34,9 @@ type Handlers struct {
 	sseHeartbeat time.Duration
 }
 
-// Config gathers all Handlers dependencies for NewWithConfig. Discoverer
-// and Loader take the narrow inventory.Discoverer / inventory.IndexBuilder
-// interfaces so tests can wire fakes without spinning up MinIO. Production
-// passes the concrete *s3disco.Discoverer and *loader.Loader pointers.
+// Config gathers Handlers dependencies for NewWithConfig. Discoverer
+// and Loader take narrow interfaces so tests can wire fakes; production
+// passes *s3disco.Discoverer and *loader.Loader.
 type Config struct {
 	Manager     *inventory.Manager
 	Renderer    *templates.Renderer
@@ -54,21 +48,17 @@ type Config struct {
 	JobStore    *jobs.Store
 	JobBus      *jobs.Bus
 
-	// Discovery, when non-nil, replaces the in-NewWithConfig fallback
-	// of constructing an empty DiscoveryService. The server wires the
-	// gate + sizer onto the same instance so manual and auto loads
-	// share the same orchestration.
+	// Discovery, when non-nil, replaces the empty-DiscoveryService
+	// fallback so manual+auto loads share one gate+sizer wiring.
 	Discovery *inventory.DiscoveryService
 
-	// ConfigStore + Tracker, when set, drive the auto-load and disk-
-	// budget portions of the UI. Tests that don't exercise those flows
-	// can leave them nil.
+	// ConfigStore + Tracker drive the auto-load + disk-budget UI;
+	// optional for tests.
 	ConfigStore *inventory.ConfigStore
 	Tracker     *budget.Tracker
 
-	// SSEHeartbeat is how often the /api/jobs/stream handler emits a
-	// keep-alive comment to detect dead clients. Zero falls back to
-	// DefaultSSEHeartbeat.
+	// SSEHeartbeat: /api/jobs/stream keep-alive cadence. Zero falls
+	// back to DefaultSSEHeartbeat.
 	SSEHeartbeat time.Duration
 }
 

@@ -108,8 +108,6 @@ func (m *MPHF) Lookup(prefix string) (uint64, bool) {
 	if hashPos >= m.count {
 		return 0, false
 	}
-	// fp + pos live in the same 16-byte slot of the interleaved
-	// combined array; both reads typically hit one cache line.
 	storedFP := m.combined.UnsafeGetU64(2 * hashPos)
 	preorderPosVal := m.combined.UnsafeGetU64(2*hashPos + 1)
 	if storedFP != computeFingerprint(prefix) {

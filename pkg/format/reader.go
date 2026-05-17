@@ -227,32 +227,17 @@ func (r *ArrayReader) GetU16(idx uint64) (uint16, error) {
 	return binary.LittleEndian.Uint16(r.data[offset:]), nil
 }
 
-// UnsafeGetU32 returns the value without bounds checking.
-//
-// WARNING: This method performs NO bounds checking for performance.
-// Passing an idx >= Count() will cause undefined behavior (likely a panic
-// or memory corruption). Only use this in hot paths where the caller has
-// already validated the index. For safe access, use GetU32 instead.
+// Unsafe* readers skip bounds checking. Callers must have already
+// validated idx < Count(); out-of-range reads are undefined behaviour.
+
 func (r *ArrayReader) UnsafeGetU32(idx uint64) uint32 {
 	return binary.LittleEndian.Uint32(r.data[idx*4:])
 }
 
-// UnsafeGetU64 returns the value without bounds checking.
-//
-// WARNING: This method performs NO bounds checking for performance.
-// Passing an idx >= Count() will cause undefined behavior (likely a panic
-// or memory corruption). Only use this in hot paths where the caller has
-// already validated the index. For safe access, use GetU64 instead.
 func (r *ArrayReader) UnsafeGetU64(idx uint64) uint64 {
 	return binary.LittleEndian.Uint64(r.data[idx*8:])
 }
 
-// UnsafeGetU16 returns the value without bounds checking.
-//
-// WARNING: This method performs NO bounds checking for performance.
-// Passing an idx >= Count() will cause undefined behavior (likely a panic
-// or memory corruption). Only use this in hot paths where the caller has
-// already validated the index. For safe access, use GetU16 instead.
 func (r *ArrayReader) UnsafeGetU16(idx uint64) uint16 {
 	return binary.LittleEndian.Uint16(r.data[idx*2:])
 }
