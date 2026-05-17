@@ -35,9 +35,3 @@ func Total() Result {
 		Reliable:   true,
 	}
 }
-
-// TotalBytes is a convenience function that returns just the memory value.
-// Use Total() if you need to know whether the value is reliable.
-func TotalBytes() uint64 {
-	return Total().TotalBytes
-}
