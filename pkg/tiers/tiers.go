@@ -165,8 +165,8 @@ func WriteManifest(dir string, presentTiers []ID) error {
 		return fmt.Errorf("marshal tier manifest: %w", err)
 	}
 
-	const tierManifestMode = 0o600
 	path := filepath.Join(dir, "tiers.json")
+	const tierManifestMode = 0o600
 	if err := os.WriteFile(path, data, tierManifestMode); err != nil {
 		return fmt.Errorf("write tier manifest: %w", err)
 	}

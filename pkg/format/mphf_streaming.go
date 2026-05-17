@@ -468,7 +468,7 @@ func (b *StreamingMPHFBuilder) writePrefixBlobPreorder(outDir string) error {
 func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	// Create empty mph file
 	mphPath := filepath.Join(outDir, "mph.bin")
-	if err := os.WriteFile(mphPath, nil, indexFilePerm); err != nil {
+	if err := os.WriteFile(mphPath, nil, FilePerm); err != nil {
 		return fmt.Errorf("write empty mph: %w", err)
 	}
 

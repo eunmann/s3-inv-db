@@ -10,10 +10,14 @@ import (
 	"github.com/relab/bbhash"
 )
 
-// indexFilePerm restricts MPHF and tier-stats files to owner read/write
-// only; index directories are written by the seeder and read by the
-// server process running as the same user.
-const indexFilePerm = 0o600
+// DirPerm and FilePerm are the permission bits applied to every
+// index directory and file the project creates. Owner-only access
+// is the right default for a single-user cache + a single-user
+// service. Exported so seeder/loader/server share one constant.
+const (
+	DirPerm  os.FileMode = 0o750
+	FilePerm os.FileMode = 0o600
+)
 
 // MPHF provides read access to the minimal perfect hash function.
 //

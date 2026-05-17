@@ -62,7 +62,7 @@ type TierStatsRowWriter struct {
 // outDir/tier_stats/. The directory is created if missing.
 func NewTierStatsRowWriter(outDir string) (*TierStatsRowWriter, error) {
 	tierDir := filepath.Join(outDir, tierStatsDir)
-	if err := os.MkdirAll(tierDir, indexDirPerm); err != nil {
+	if err := os.MkdirAll(tierDir, DirPerm); err != nil {
 		return nil, fmt.Errorf("create tier_stats dir: %w", err)
 	}
 	path := filepath.Join(tierDir, TierStatsRowFile)

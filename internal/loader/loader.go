@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
 
@@ -20,10 +21,9 @@ import (
 // chunks, done = chunks processed). Unnamed func type keeps
 // inventory.IndexBuilder satisfaction structural.
 
-// cacheDirMode is the permission bits used for cache directories the
+// format.DirPerm is the permission bits used for cache directories the
 // loader creates. Owner-only access is the right default for a
 // process-local cache.
-const cacheDirMode = 0o750
 
 // noopProgress is the package-level no-op callback used when callers
 // pass a nil progress function. Reusing one closure avoids a small
@@ -73,7 +73,7 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, run, manifestU
 	if err := os.RemoveAll(outDir); err != nil {
 		return "", fmt.Errorf("clear cache dir: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(outDir), cacheDirMode); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outDir), format.DirPerm); err != nil {
 		return "", fmt.Errorf("ensure cache parent: %w", err)
 	}
 

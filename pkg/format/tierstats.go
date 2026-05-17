@@ -9,10 +9,6 @@ import (
 
 const tierStatsDir = "tier_stats"
 
-// indexDirPerm restricts subdirectories of the index (e.g. tier_stats)
-// to owner read/write/execute only.
-const indexDirPerm = 0o750
-
 // TierStatsReader reads per-prefix tier breakdowns from the row-major
 // tier_stats_row.bin file. Production writers (TierStatsRowWriter)
 // always produce this layout; the legacy per-tier columnar layout

@@ -10,6 +10,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/migrate"
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/rs/zerolog"
 )
@@ -108,9 +109,8 @@ func Bootstrap(ctx context.Context, opts RuntimeOptions) (*Server, func(), error
 		return nil, nil, err
 	}
 
-	const stateDBParentMode = 0o750
 	dbPath := resolveStateDBPath(opts.StateDB, opts.CacheDir)
-	if err := os.MkdirAll(filepath.Dir(dbPath), stateDBParentMode); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dbPath), format.DirPerm); err != nil {
 		return nil, nil, fmt.Errorf("ensure state-db parent dir: %w", err)
 	}
 	// SQLite open + ping is fast and shouldn't be interrupted by a

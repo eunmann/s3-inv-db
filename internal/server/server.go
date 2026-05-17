@@ -18,6 +18,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/loader"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/templates"
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/go-chi/chi/v5"
@@ -306,9 +307,8 @@ var (
 // endpoint fails fast.
 const s3StartupTimeout = 30 * time.Second
 
-// cacheDirMode is the directory mode used when ensuring the on-disk
+// format.DirPerm is the directory mode used when ensuring the on-disk
 // inventory cache directory exists. 0o750 satisfies gosec G301.
-const cacheDirMode = 0o750
 
 // discoveryWiring bundles the three values newDiscoveryWiring builds so
 // callers don't end up with a 4-arity return that invites `_, _, _, err`.
@@ -335,7 +335,7 @@ func newDiscoveryWiring(ctx context.Context, cfg Config) (discoveryWiring, error
 	if err != nil {
 		return discoveryWiring{}, fmt.Errorf("discovery from %q: %w", cfg.S3Source, err)
 	}
-	if err := os.MkdirAll(cfg.CacheDir, cacheDirMode); err != nil {
+	if err := os.MkdirAll(cfg.CacheDir, format.DirPerm); err != nil {
 		return discoveryWiring{}, fmt.Errorf("ensure cache dir %s: %w", cfg.CacheDir, err)
 	}
 
