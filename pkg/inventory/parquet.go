@@ -213,7 +213,7 @@ func (r *ParquetReader) Next() (Row, error) {
 			row := r.rowBuf[r.bufIdx]
 			r.bufIdx++
 
-			return r.rowToRow(row), nil
+			return r.toRow(row), nil
 		}
 
 		if r.currentRows != nil {
@@ -240,8 +240,8 @@ func (r *ParquetReader) Next() (Row, error) {
 	}
 }
 
-// rowToRow converts a parquet.Row to an Row.
-func (r *ParquetReader) rowToRow(row parquet.Row) Row {
+// toRow projects a parquet.Row into the unified inventory.Row.
+func (r *ParquetReader) toRow(row parquet.Row) Row {
 	inv := Row{}
 
 	for _, val := range row {
