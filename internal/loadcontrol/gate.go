@@ -43,7 +43,7 @@ func New(manager *inventory.Manager, tracker *budget.Tracker, planner *budget.Pl
 // Load plans, evicts, reserves, builds, releases. Returns
 // *BudgetRefusedError when the planner refuses and opts.Force is false.
 func (g *Gate) Load(ctx context.Context, id inventory.ID, build Build, opts Options) error {
-	plan, err := g.planner.Plan(budget.Input{
+	plan, err := g.planner.Plan(ctx, budget.Input{
 		Target:        id,
 		EstimateBytes: opts.EstimateBytes,
 		All:           g.manager.List(),

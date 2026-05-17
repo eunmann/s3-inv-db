@@ -103,7 +103,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	tracker := budget.New(cfg.MaxIndexDisk, cfg.IndexHeadroomBytes)
-	planner := budget.NewPlanner(tracker, retentionLookup(configStore, cfg.AutoLoadRetentionDefault)) //nolint:contextcheck // sync eviction lookup; budget.RetentionFunc has no ctx parameter
+	planner := budget.NewPlanner(tracker, retentionLookup(configStore, cfg.AutoLoadRetentionDefault))
 	gate := loadcontrol.New(mgr, tracker, planner)
 
 	var discovery *inventory.DiscoveryService
@@ -188,31 +188,18 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 // retentionLookup returns a budget.RetentionFunc that resolves
 // per-configuration retention from the ConfigStore, falling back to
 // the server-wide default when the store has no row.
-//
-
 func retentionLookup(store *inventory.ConfigStore, fallback uint32) budget.RetentionFunc {
-	return func(source, name string) uint32 {
-		return lookupRetention(store, fallback, source, name)
-	}
-}
+	return func(ctx context.Context, source, name string) uint32 {
+		cfg, err := store.Get(ctx, source, name)
+		if err == nil && cfg.RetentionCount > 0 {
+			return cfg.RetentionCount
+		}
+		if fallback > 0 {
+			return fallback
+		}
 
-// lookupRetention is the non-closure body for retentionLookup.
-// Budget.RetentionFunc has no ctx parameter, eviction planning is a
-// leafward sync SQL lookup, and the caller (a closure inside
-// retentionLookup) cannot thread a context.
-//
-
-func lookupRetention(store *inventory.ConfigStore, fallback uint32, source, name string) uint32 {
-	ctx := context.Background()
-	cfg, err := store.Get(ctx, source, name)
-	if err == nil && cfg.RetentionCount > 0 {
-		return cfg.RetentionCount
+		return 0
 	}
-	if fallback > 0 {
-		return fallback
-	}
-
-	return 0
 }
 
 // backfillTracker walks every currently-loaded inventory and attributes
