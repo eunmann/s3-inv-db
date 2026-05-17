@@ -67,7 +67,7 @@ func newJobsHandlers(t *testing.T) (*handlers.Handlers, *jobs.Manager) {
 func TestJobsStream_PushesEvents(t *testing.T) {
 	h, mgr := newJobsHandlers(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/api/jobs/stream", http.NoBody).WithContext(ctx)
 	w := httptest.NewRecorder()
@@ -121,7 +121,7 @@ func TestJobsStream_PushesEvents(t *testing.T) {
 func TestJobsStream_EmitsHeartbeat(t *testing.T) {
 	h := newHandlersWithHeartbeat(t, 20*time.Millisecond)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/api/jobs/stream", http.NoBody).WithContext(ctx)
 	w := httptest.NewRecorder()

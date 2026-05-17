@@ -1,7 +1,6 @@
 package extsort_test
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -130,7 +129,7 @@ func runEventInstrumentedBuild(b *testing.B, bus *events.Bus, objects []benchuti
 		Type:  events.EvtFinalizeStarted,
 		Time:  time.Now(),
 	})
-	if err := builder.FinalizeWithContext(context.Background()); err != nil {
+	if err := builder.FinalizeWithContext(b.Context()); err != nil {
 		b.Fatalf("Finalize: %v", err)
 	}
 	bus.Publish(events.Event{

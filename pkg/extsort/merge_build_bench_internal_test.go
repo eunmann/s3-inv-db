@@ -1,7 +1,6 @@
 package extsort
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -65,7 +64,7 @@ func runMergeBuildSeamBench(b *testing.B, n, runFileCount int, streamed bool) {
 		var capacity uint64
 		var cleanup func()
 		if streamed {
-			it, c, err := merger.MergeAllToIterator(context.Background(), runPaths)
+			it, c, err := merger.MergeAllToIterator(b.Context(), runPaths)
 			if err != nil {
 				b.Fatalf("MergeAllToIterator: %v", err)
 			}
@@ -73,7 +72,7 @@ func runMergeBuildSeamBench(b *testing.B, n, runFileCount int, streamed bool) {
 			capacity = it.Remaining()
 			cleanup = func() { _ = c() }
 		} else {
-			finalPath, err := merger.MergeAll(context.Background(), runPaths)
+			finalPath, err := merger.MergeAll(b.Context(), runPaths)
 			if err != nil {
 				b.Fatalf("MergeAll: %v", err)
 			}
@@ -90,10 +89,10 @@ func runMergeBuildSeamBench(b *testing.B, n, runFileCount int, streamed bool) {
 		if err != nil {
 			b.Fatalf("NewIndexBuilder: %v", err)
 		}
-		if err := builder.AddAllWithContext(context.Background(), iter); err != nil {
+		if err := builder.AddAllWithContext(b.Context(), iter); err != nil {
 			b.Fatalf("AddAll: %v", err)
 		}
-		if err := builder.FinalizeWithContext(context.Background()); err != nil {
+		if err := builder.FinalizeWithContext(b.Context()); err != nil {
 			b.Fatalf("Finalize: %v", err)
 		}
 		cleanup()

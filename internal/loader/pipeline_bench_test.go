@@ -1,7 +1,6 @@
 package loader_test
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -59,7 +58,7 @@ func benchmarkMultiChunkBuild(b *testing.B, numObjects, numChunks int) {
 	stamp := time.Now().UTC().Truncate(time.Minute)
 
 	info, err := seeder.UploadMultiChunkInventory(
-		context.Background(), fc.Raw(),
+		b.Context(), fc.Raw(),
 		seeder.Config{
 			Target:  seeder.TargetS3,
 			Objects: numObjects,
@@ -86,7 +85,7 @@ func benchmarkMultiChunkBuild(b *testing.B, numObjects, numChunks int) {
 		// before each build but a fresh root is even cleaner.
 		cacheRoot := b.TempDir()
 		l := loader.New(cacheRoot, fc)
-		if _, err := l.BuildWith(context.Background(), srcBucket, info.ID, run, info.Path, nilProgress); err != nil {
+		if _, err := l.BuildWith(b.Context(), srcBucket, info.ID, run, info.Path, nilProgress); err != nil {
 			b.Fatalf("BuildWith: %v", err)
 		}
 	}

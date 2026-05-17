@@ -45,7 +45,7 @@ func createTestRunFile(t *testing.T, dir, name string, prefixes []string, countO
 
 func TestParallelMerger_TwoFiles(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create two sorted run files with interleaved prefixes
 	prefixes1 := []string{"a/", "c/", "e/", "g/"}
@@ -91,7 +91,7 @@ func TestParallelMerger_TwoFiles(t *testing.T) {
 
 func TestParallelMerger_DuplicatePrefixes(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create two run files with overlapping prefixes
 	prefixes1 := []string{"a/", "b/", "c/"}
@@ -149,7 +149,7 @@ func TestParallelMerger_DuplicatePrefixes(t *testing.T) {
 
 func TestParallelMerger_ManyFiles(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	const numFiles = 20
 	const prefixesPerFile = 50
@@ -225,7 +225,7 @@ func TestParallelMerger_ManyFiles(t *testing.T) {
 
 func TestParallelMerger_SingleFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	path := createTestRunFile(t, tmpDir, "single.crun", []string{"a/", "b/", "c/"}, 0)
 
@@ -245,7 +245,7 @@ func TestParallelMerger_SingleFile(t *testing.T) {
 func TestParallelMerger_EmptyInput(t *testing.T) {
 	merger := NewParallelMerger(DefaultParallelMergeConfig())
 
-	_, err := merger.MergeAll(context.Background(), []string{})
+	_, err := merger.MergeAll(t.Context(), []string{})
 	if err == nil {
 		t.Error("expected error for empty input")
 	}
@@ -253,7 +253,7 @@ func TestParallelMerger_EmptyInput(t *testing.T) {
 
 func TestParallelMerger_ContextCancellation(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	// Create enough files to ensure we have multiple rounds
 	const numFiles = 10
@@ -284,7 +284,7 @@ func TestParallelMerger_ContextCancellation(t *testing.T) {
 
 func TestParallelMerger_UncompressedOutput(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	path1 := createTestRunFile(t, tmpDir, "run1.crun", []string{"a/", "c/"}, 0)
 	path2 := createTestRunFile(t, tmpDir, "run2.crun", []string{"b/", "d/"}, 0)
@@ -313,7 +313,7 @@ func TestParallelMerger_UncompressedOutput(t *testing.T) {
 
 func TestParallelMerger_MixedInputFormats(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create one compressed and one uncompressed run file
 	compressedPath := filepath.Join(tmpDir, "compressed.crun")
@@ -361,7 +361,7 @@ func TestParallelMerger_MixedInputFormats(t *testing.T) {
 
 func TestParallelMerger_TierDataPreserved(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create run files with tier data
 	path1 := filepath.Join(tmpDir, "run1.crun")

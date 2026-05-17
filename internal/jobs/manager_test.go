@@ -193,7 +193,7 @@ func TestStore_MarkAborted(t *testing.T) {
 func TestManager_SubmitAfterShutdown(t *testing.T) {
 	mgr, _, _ := newManager(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	if err := mgr.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
@@ -222,7 +222,7 @@ func TestManager_ShutdownCancelsLiveJob(t *testing.T) {
 	}
 	<-started
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	if err := mgr.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)

@@ -1,7 +1,6 @@
 package s3fetch
 
 import (
-	"context"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -37,7 +36,7 @@ func TestClient_Raw_ReturnsUnderlyingClient(t *testing.T) {
 
 func TestNewClient_DefaultsPathStyleByEnv(t *testing.T) {
 	t.Setenv(EnvEndpointURL, "http://minio:9000")
-	c, err := NewClient(context.Background())
+	c, err := NewClient(t.Context())
 	if err != nil {
 		t.Skipf("NewClient requires AWS config in env; skipping: %v", err)
 	}

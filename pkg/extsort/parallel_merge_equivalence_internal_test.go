@@ -1,7 +1,6 @@
 package extsort
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -60,7 +59,7 @@ func runEquivalenceTest(t *testing.T, runCount, rowsPerRun, maxFanIn int) {
 		UseCompression:   true,
 		CompressionLevel: CompressionFastest,
 	})
-	finalPath, err := merger.MergeAll(context.Background(), paths)
+	finalPath, err := merger.MergeAll(t.Context(), paths)
 	if err != nil {
 		t.Fatalf("MergeAll: %v", err)
 	}

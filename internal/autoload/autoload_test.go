@@ -85,7 +85,7 @@ func newFakeStores(t *testing.T) (*inventory.ConfigStore, *inventory.Manager) {
 
 func TestAutoLoader_PicksNewestUnloadedRun(t *testing.T) {
 	cs, mgr := newFakeStores(t)
-	_ = cs.Upsert(context.Background(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: true, RetentionCount: 2})
+	_ = cs.Upsert(t.Context(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: true, RetentionCount: 2})
 
 	disc := &fakeDiscovery{
 		enabled: true,
@@ -97,7 +97,7 @@ func TestAutoLoader_PicksNewestUnloadedRun(t *testing.T) {
 	}
 	ldr := &fakeLoader{}
 	a := autoload.New(autoload.Config{MaxConcurrency: 1, MinBackoff: time.Millisecond, MaxBackoff: time.Millisecond}, disc, ldr.AutoLoad, cs, mgr, nil)
-	a.Tick(context.Background())
+	a.Tick(t.Context())
 
 	if len(ldr.loaded) != 1 {
 		t.Fatalf("expected 1 load, got %d", len(ldr.loaded))
@@ -109,7 +109,7 @@ func TestAutoLoader_PicksNewestUnloadedRun(t *testing.T) {
 
 func TestAutoLoader_SkipsConfigsWithAutoLoadOff(t *testing.T) {
 	cs, mgr := newFakeStores(t)
-	_ = cs.Upsert(context.Background(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: false})
+	_ = cs.Upsert(t.Context(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: false})
 
 	disc := &fakeDiscovery{
 		enabled: true,
@@ -119,7 +119,7 @@ func TestAutoLoader_SkipsConfigsWithAutoLoadOff(t *testing.T) {
 	}
 	ldr := &fakeLoader{}
 	a := autoload.New(autoload.Config{MaxConcurrency: 1}, disc, ldr.AutoLoad, cs, mgr, nil)
-	a.Tick(context.Background())
+	a.Tick(t.Context())
 	if len(ldr.loaded) != 0 {
 		t.Errorf("expected 0 loads (auto-load off), got %d", len(ldr.loaded))
 	}
@@ -127,7 +127,7 @@ func TestAutoLoader_SkipsConfigsWithAutoLoadOff(t *testing.T) {
 
 func TestAutoLoader_SkipsUserUnloadedRuns(t *testing.T) {
 	cs, mgr := newFakeStores(t)
-	_ = cs.Upsert(context.Background(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: true})
+	_ = cs.Upsert(t.Context(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: true})
 
 	// Hydrate an Info that's NotLoaded but carries a UserUnloadedAt
 	// stamp — simulating "user manually unloaded earlier".
@@ -150,7 +150,7 @@ func TestAutoLoader_SkipsUserUnloadedRuns(t *testing.T) {
 	}
 	ldr := &fakeLoader{}
 	a := autoload.New(autoload.Config{MaxConcurrency: 1}, disc, ldr.AutoLoad, cs, mgr, nil)
-	a.Tick(context.Background())
+	a.Tick(t.Context())
 	if len(ldr.loaded) != 0 {
 		t.Errorf("expected 0 loads (user-unloaded), got %d", len(ldr.loaded))
 	}
@@ -158,12 +158,12 @@ func TestAutoLoader_SkipsUserUnloadedRuns(t *testing.T) {
 
 func TestAutoLoader_PollFailureSetsBackoff(t *testing.T) {
 	cs, mgr := newFakeStores(t)
-	_ = cs.Upsert(context.Background(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: true})
+	_ = cs.Upsert(t.Context(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: true})
 
 	disc := &fakeDiscovery{enabled: true, listErr: errBoom}
 	a := autoload.New(autoload.Config{MaxConcurrency: 1, MinBackoff: time.Minute, MaxBackoff: time.Hour}, disc, (&fakeLoader{}).AutoLoad, cs, mgr, nil)
-	a.Tick(context.Background())
-	cfg, err := cs.Get(context.Background(), "bkt", "inv")
+	a.Tick(t.Context())
+	cfg, err := cs.Get(t.Context(), "bkt", "inv")
 	if err != nil {
 		t.Fatalf("get cfg: %v", err)
 	}
@@ -204,11 +204,11 @@ func TestBackoffDelay(t *testing.T) {
 func TestAutoLoader_BackoffSuppressesPolling(t *testing.T) {
 	cs, mgr := newFakeStores(t)
 	future := time.Now().Add(time.Hour)
-	_ = cs.Upsert(context.Background(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: true, PollBackoffUntil: future})
+	_ = cs.Upsert(t.Context(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: true, PollBackoffUntil: future})
 
 	disc := &fakeDiscovery{enabled: true}
 	a := autoload.New(autoload.Config{MaxConcurrency: 1}, disc, (&fakeLoader{}).AutoLoad, cs, mgr, nil)
-	a.Tick(context.Background())
+	a.Tick(t.Context())
 	if disc.listCall != 0 {
 		t.Errorf("Discovery.List should be skipped during backoff, got %d calls", disc.listCall)
 	}

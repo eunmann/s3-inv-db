@@ -1,7 +1,6 @@
 package migrate_test
 
 import (
-	"context"
 	"database/sql"
 	"testing"
 
@@ -60,7 +59,7 @@ func TestApply_CreatesTables(t *testing.T) {
 	if err := migrate.Apply(db); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, table := range []string{"inventories", "jobs"} {
 		var name string
 		err := db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
@@ -87,7 +86,7 @@ func TestApply_RecoversFromDirtyState(t *testing.T) {
 	if err := migrate.Apply(db); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	if _, err := db.ExecContext(ctx, `UPDATE schema_migrations SET dirty = 1`); err != nil {
 		t.Fatalf("seed dirty: %v", err)
 	}
@@ -102,7 +101,7 @@ func TestApply_RecoversFromDirtyState(t *testing.T) {
 
 func TestApply_TolerantOfPreExistingTables(t *testing.T) {
 	db := openMemDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	if _, err := db.ExecContext(ctx, `CREATE TABLE inventories (id TEXT PRIMARY KEY, name TEXT, path TEXT, state TEXT, error TEXT, node_count INTEGER, max_depth INTEGER, has_tier_data INTEGER, loaded_at INTEGER, updated_at INTEGER NOT NULL)`); err != nil {
 		t.Fatalf("seed legacy table: %v", err)
 	}
