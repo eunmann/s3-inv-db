@@ -36,36 +36,22 @@ type Client struct {
 
 // NewClient creates a new S3 client using default AWS configuration.
 func NewClient(ctx context.Context) (*Client, error) {
-	return NewClientWithDownloaderConfig(ctx, DefaultDownloaderConfig())
-}
-
-// NewClientWithDownloaderConfig creates a new S3 client with custom downloader configuration.
-func NewClientWithDownloaderConfig(ctx context.Context, dlCfg DownloaderConfig) (*Client, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
 
-	s3Client := s3.NewFromConfig(cfg, s3ClientOptions()...)
-
-	return &Client{
-		s3Client:   s3Client,
-		downloader: NewDownloader(s3Client, dlCfg),
-	}, nil
+	return NewClientWithConfig(cfg), nil
 }
 
-// NewClientWithConfig creates a new S3 client with a custom AWS config.
+// NewClientWithConfig creates a new S3 client from an explicit AWS
+// config (test harnesses use it to point at MinIO).
 func NewClientWithConfig(cfg aws.Config) *Client {
-	return NewClientWithConfigAndDownloader(cfg, DefaultDownloaderConfig())
-}
-
-// NewClientWithConfigAndDownloader creates a new S3 client with custom AWS and downloader configs.
-func NewClientWithConfigAndDownloader(cfg aws.Config, dlCfg DownloaderConfig) *Client {
 	s3Client := s3.NewFromConfig(cfg, s3ClientOptions()...)
 
 	return &Client{
 		s3Client:   s3Client,
-		downloader: NewDownloader(s3Client, dlCfg),
+		downloader: NewDownloader(s3Client, DefaultDownloaderConfig()),
 	}
 }
 

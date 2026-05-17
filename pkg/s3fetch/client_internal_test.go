@@ -35,9 +35,9 @@ func TestClient_Raw_ReturnsUnderlyingClient(t *testing.T) {
 	}
 }
 
-func TestNewClientWithConfigAndDownloader_DefaultsPathStyleByEnv(t *testing.T) {
+func TestNewClient_DefaultsPathStyleByEnv(t *testing.T) {
 	t.Setenv(EnvEndpointURL, "http://minio:9000")
-	c, err := NewClientWithDownloaderConfig(context.Background(), DownloaderConfig{})
+	c, err := NewClient(context.Background())
 	if err != nil {
 		t.Skipf("NewClient requires AWS config in env; skipping: %v", err)
 	}
