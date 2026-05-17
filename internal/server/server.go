@@ -70,13 +70,11 @@ type Server struct {
 	invStore    *inventory.Store
 	configStore *inventory.ConfigStore
 	jobStore    *jobs.Store
-	jobBus      *jobs.Bus
 	jobMgr      *jobs.Manager
 	bldr        *loader.Loader
 	tracker     *budget.Tracker
 	autoloader  *autoload.AutoLoader
 	discovery   *inventory.DiscoveryService
-	renderer    *templates.Renderer
 	handlers    *handlers.Handlers
 	server      *http.Server
 }
@@ -169,13 +167,11 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		invStore:    invStore,
 		configStore: configStore,
 		jobStore:    jobStore,
-		jobBus:      jobBus,
 		jobMgr:      jobMgr,
 		bldr:        bldr,
 		tracker:     tracker,
 		autoloader:  al,
 		discovery:   discovery,
-		renderer:    renderer,
 		handlers:    h,
 	}
 

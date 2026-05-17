@@ -12,10 +12,10 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// DefaultSSEHeartbeat is the production cadence used when Config.SSEHeartbeat
+// defaultSSEHeartbeat is the production cadence used when Config.SSEHeartbeat
 // is left zero. 15s is small enough to free a stalled SSE slot in well under
 // Chrome's ~60s TCP idle window, large enough to be cheap.
-const DefaultSSEHeartbeat = 15 * time.Second
+const defaultSSEHeartbeat = 15 * time.Second
 
 // CacheStore is the loader subset handlers actually use: cache size
 // for the dashboard + cache removal on unload. Narrower than
@@ -67,7 +67,7 @@ type Config struct {
 	Tracker     *budget.Tracker
 
 	// SSEHeartbeat: /api/jobs/stream keep-alive cadence. Zero falls
-	// back to DefaultSSEHeartbeat.
+	// back to defaultSSEHeartbeat.
 	SSEHeartbeat time.Duration
 }
 
@@ -111,7 +111,7 @@ func (h *Handlers) renderHTMLPartial(w http.ResponseWriter, r *http.Request, nam
 func NewWithConfig(cfg Config) *Handlers {
 	heartbeat := cfg.SSEHeartbeat
 	if heartbeat <= 0 {
-		heartbeat = DefaultSSEHeartbeat
+		heartbeat = defaultSSEHeartbeat
 	}
 	discovery := cfg.Discovery
 	if discovery == nil {

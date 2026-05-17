@@ -512,8 +512,8 @@ func sameConfig(idA, idB inventory.ID) bool {
 	return a.OK && b.OK && a.Source == b.Source && a.Inventory == b.Inventory
 }
 
-// RunDescription is the parsed label/run pair produced by describeRun.
-type RunDescription struct {
+// runDescription is the parsed label/run pair produced by describeRun.
+type runDescription struct {
 	ConfigLabel string
 	RunLabel    string
 }
@@ -521,13 +521,13 @@ type RunDescription struct {
 // describeRun extracts the configuration label ("<src>/<inv>") and the
 // formatted run timestamp from an inventory ID. Returns ("", id) when
 // the ID isn't 3-part so the page still renders something sensible.
-func describeRun(id inventory.ID) RunDescription {
+func describeRun(id inventory.ID) runDescription {
 	p := id.Split()
 	if !p.OK {
-		return RunDescription{RunLabel: string(id)}
+		return runDescription{RunLabel: string(id)}
 	}
 
-	return RunDescription{ConfigLabel: p.Source + "/" + p.Inventory, RunLabel: humanfmt.RunTimestamp(p.Run)}
+	return runDescription{ConfigLabel: p.Source + "/" + p.Inventory, RunLabel: humanfmt.RunTimestamp(p.Run)}
 }
 
 // CompareLevelResponse is the JSON shape returned by CompareLevelAPI. Carries

@@ -265,23 +265,23 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 				Msg("look up latest job for row render")
 		}
 	}
-	cs := h.cacheSize(r, disc)
+	cs := h.measureCacheSize(r, disc)
 	view.CacheBytes, view.CacheBytesH = cs.Bytes, cs.Human
 	h.renderHTMLPartial(w, r, "discovered_row.html", "render discovered row", view)
 }
 
-// CacheSize is the raw-bytes / human-formatted pair returned by
-// cacheSize. Both are zero / empty when there's no loader wired, the
+// cacheSize is the raw-bytes / human-formatted pair returned by
+// measureCacheSize. Zero / empty when there's no loader wired, the
 // dir is missing, or the measurement failed.
-type CacheSize struct {
+type cacheSize struct {
 	Bytes int64
 	Human string
 }
 
-// cacheSize measures the on-disk cache footprint of a single run.
-func (h *Handlers) cacheSize(r *http.Request, disc inventory.Inventory) CacheSize {
+// measureCacheSize returns the on-disk cache footprint of a single run.
+func (h *Handlers) measureCacheSize(r *http.Request, disc inventory.Inventory) cacheSize {
 	if h.loader == nil || disc.Run == "" {
-		return CacheSize{}
+		return cacheSize{}
 	}
 	n, err := h.loader.CacheSizeBytes(disc.SourceBucket, disc.InventoryName, disc.Run)
 	if err != nil {
@@ -291,13 +291,13 @@ func (h *Handlers) cacheSize(r *http.Request, disc inventory.Inventory) CacheSiz
 			Str("run", disc.Run).
 			Msg("measure cache size")
 
-		return CacheSize{}
+		return cacheSize{}
 	}
 	if n <= 0 {
-		return CacheSize{}
+		return cacheSize{}
 	}
 
-	return CacheSize{Bytes: n, Human: humanfmt.BytesUint64(uint64(n))}
+	return cacheSize{Bytes: n, Human: humanfmt.BytesUint64(uint64(n))}
 }
 
 // submitDiscoveredLoadJob registers a background build job for one

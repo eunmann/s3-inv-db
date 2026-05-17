@@ -413,7 +413,7 @@ func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInvent
 				Msg("look up latest job for inventories page")
 		}
 	}
-	cs := h.cacheSize(r, v.Inventory)
+	cs := h.measureCacheSize(r, v.Inventory)
 	row.CacheBytes, row.CacheBytesH = cs.Bytes, cs.Human
 
 	return row
