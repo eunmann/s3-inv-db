@@ -124,5 +124,3 @@ func (s *ManifestSizer) ManifestSize(ctx context.Context, bucket, key string) (u
 
 	return total, nil
 }
-
-var _ inventory.ManifestSizer = (*ManifestSizer)(nil)

@@ -103,7 +103,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	tracker := budget.New(cfg.MaxIndexDisk, cfg.IndexHeadroomBytes)
-	planner := budget.NewPlanner(tracker, retentionLookup(configStore, cfg.AutoLoadRetentionDefault))
+	planner := budget.NewPlanner(tracker, retentionLookup(configStore, cfg.AutoLoadRetentionDefault)) //nolint:contextcheck // sync eviction lookup; budget.RetentionFunc has no ctx parameter
 	gate := loadcontrol.New(mgr, tracker, planner)
 
 	var discovery *inventory.DiscoveryService
@@ -119,7 +119,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		s3Client = wiring.Client
 		discovery = inventory.NewDiscoveryService(mgr, wiring.Discoverer, wiring.Loader)
 		sizer := loadcontrol.NewManifestSizer(s3Client)
-		discovery.SetGate(gate, sizer, cfg.IndexRatio)
+		discovery.SetGate(gate.Load, sizer.ManifestSize, cfg.IndexRatio)
 		cfg.Logger.Info().
 			Str("s3_source", cfg.S3Source).
 			Str("cache_dir", cfg.CacheDir).
@@ -197,6 +197,9 @@ func retentionLookup(store *inventory.ConfigStore, fallback uint32) budget.Reten
 }
 
 // lookupRetention is the non-closure body for retentionLookup.
+// Budget.RetentionFunc has no ctx parameter, eviction planning is a
+// leafward sync SQL lookup, and the caller (a closure inside
+// retentionLookup) cannot thread a context.
 //
 
 func lookupRetention(store *inventory.ConfigStore, fallback uint32, source, name string) uint32 {
