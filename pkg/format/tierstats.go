@@ -94,15 +94,6 @@ func (r *TierStatsReader) HasTierData() bool {
 	return r != nil && r.manifest != nil && len(r.manifest.Tiers) > 0
 }
 
-// PresentTiers returns the list of tiers with data.
-func (r *TierStatsReader) PresentTiers() []tiers.Info {
-	if r == nil || r.manifest == nil {
-		return nil
-	}
-
-	return r.manifest.Tiers
-}
-
 // Close releases the mmap'd row file.
 func (r *TierStatsReader) Close() error {
 	if r == nil || r.rowReader == nil {

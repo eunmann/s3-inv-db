@@ -70,7 +70,7 @@ func (h *Handlers) AggregateDashboardForTest(logger *zerolog.Logger, views []inv
 
 // AddLoadedStatsForTest exposes addLoadedStats for tests.
 func (h *Handlers) AddLoadedStatsForTest(logger *zerolog.Logger, v *inventory.MergedInventory, totals *DashTotalsForTest) {
-	c := &dashConfAgg{Src: v.SourceBucket, ID: v.InventoryName}
+	c := &dashConfAgg{Src: v.SourceBucket, ID: v.Name}
 	t := dashTotals{objects: totals.Objects, bytes: totals.Bytes, disk: totals.Disk}
 	h.addLoadedStats(logger, v, c, &t)
 	totals.Objects = t.objects

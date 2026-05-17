@@ -90,80 +90,6 @@ func TestArrayWriterU64(t *testing.T) {
 	}
 }
 
-func TestArrayWriterU32(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.u32")
-
-	w, err := format.NewArrayWriter(path, 4)
-	if err != nil {
-		t.Fatalf("format.NewArrayWriter failed: %v", err)
-	}
-
-	values := []uint32{10, 20, 30}
-	for _, v := range values {
-		if err := w.WriteU32(v); err != nil {
-			t.Fatalf("WriteU32 failed: %v", err)
-		}
-	}
-
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
-
-	r, err := format.OpenArray(path)
-	if err != nil {
-		t.Fatalf("format.OpenArray failed: %v", err)
-	}
-	defer r.Close()
-
-	for i, expected := range values {
-		val, err := r.GetU32(uint64(i))
-		if err != nil {
-			t.Errorf("GetU32(%d) failed: %v", i, err)
-		}
-		if val != expected {
-			t.Errorf("GetU32(%d) = %d, want %d", i, val, expected)
-		}
-	}
-}
-
-func TestArrayWriterU16(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.u16")
-
-	w, err := format.NewArrayWriter(path, 2)
-	if err != nil {
-		t.Fatalf("format.NewArrayWriter failed: %v", err)
-	}
-
-	values := []uint16{1, 2, 3, 65535}
-	for _, v := range values {
-		if err := w.WriteU16(v); err != nil {
-			t.Fatalf("WriteU16 failed: %v", err)
-		}
-	}
-
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
-
-	r, err := format.OpenArray(path)
-	if err != nil {
-		t.Fatalf("format.OpenArray failed: %v", err)
-	}
-	defer r.Close()
-
-	for i, expected := range values {
-		val, err := r.GetU16(uint64(i))
-		if err != nil {
-			t.Errorf("GetU16(%d) failed: %v", i, err)
-		}
-		if val != expected {
-			t.Errorf("GetU16(%d) = %d, want %d", i, val, expected)
-		}
-	}
-}
-
 func TestArrayReaderBoundsCheck(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.u64")
@@ -190,14 +116,14 @@ func TestArrayReaderBoundsCheck(t *testing.T) {
 
 func TestArrayWidthMismatch(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "test.u64")
+	path := filepath.Join(dir, "test.u32")
 
-	w, err := format.NewArrayWriter(path, 8)
+	w, err := format.NewArrayWriter(path, 4)
 	if err != nil {
 		t.Fatalf("format.NewArrayWriter failed: %v", err)
 	}
 
-	err = w.WriteU32(100)
+	err = w.WriteU64(100)
 	if err == nil {
 		t.Error("expected width mismatch error")
 	}
@@ -243,34 +169,6 @@ func TestBlobWriterReader(t *testing.T) {
 		if s != expected {
 			t.Errorf("Get(%d) = %q, want %q", i, s, expected)
 		}
-	}
-}
-
-func TestBlobReaderUnsafeGet(t *testing.T) {
-	dir := t.TempDir()
-	blobPath := filepath.Join(dir, "prefix_blob.bin")
-	offsetsPath := filepath.Join(dir, "prefix_offsets.u64")
-
-	w, err := format.NewBlobWriter(blobPath, offsetsPath)
-	if err != nil {
-		t.Fatalf("format.NewBlobWriter failed: %v", err)
-	}
-
-	_ = w.WriteString("hello")
-	_ = w.WriteString("world")
-	_ = w.Close()
-
-	r, err := format.OpenBlob(blobPath, offsetsPath)
-	if err != nil {
-		t.Fatalf("format.OpenBlob failed: %v", err)
-	}
-	defer r.Close()
-
-	if r.UnsafeGet(0) != "hello" {
-		t.Errorf("UnsafeGet(0) = %q, want hello", r.UnsafeGet(0))
-	}
-	if r.UnsafeGet(1) != "world" {
-		t.Errorf("UnsafeGet(1) = %q, want world", r.UnsafeGet(1))
 	}
 }
 

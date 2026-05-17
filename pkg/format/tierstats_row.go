@@ -11,28 +11,13 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-// TierStatsRowFile is the on-disk filename for the row-major
-// per-prefix tier-stats layout. Lives inside tier_stats/ alongside
-// the legacy per-tier columnar files (which are no longer written
-// when row-major is enabled but may still exist on older indexes).
+// TierStatsRowFile is the row-major per-prefix tier-stats file.
 const TierStatsRowFile = "tier_stats_row.bin"
 
-// TierStatsRowStride is the fixed byte stride per prefix row.
-// Layout (little-endian): for each tier ID in 0..NumTiers-1,
-//
-//	count (8 bytes), bytes (8 bytes) — total 16 bytes per tier
-//
-// Slot index for tier T is T*16; this is independent of the
-// tier manifest. The manifest is read separately to know which
-// tier IDs actually have data so callers can skip empty slots
-// during iteration.
-//
-// Fixed layout keeps Add()-time work O(NumTiers) bytes regardless
-// of which tiers are populated for a given prefix, eliminates the
-// per-tier discovery branch on the hot writer path, and makes the
-// reader's GetBreakdown(pos) a single page fault on a cold index
-// (vs 2×NumTiers page faults across the legacy per-tier columnar
-// files — the dominant TierBreakdown cost at 11+ active tiers).
+// TierStatsRowStride is the byte stride per prefix row: every tier
+// gets a count (8B) + bytes (8B) slot. Slot index for tier T is T*16,
+// independent of the manifest. The manifest is read separately to
+// know which tier IDs actually have data.
 const TierStatsRowStride = int(tiers.NumTiers) * 16
 
 // Sentinel errors for err113.
@@ -146,7 +131,7 @@ func (w *TierStatsRowWriter) Close() error {
 }
 
 // TierStatsRowReader reads the row-major tier-stats file. One mmap'd
-// region; GetBreakdown(pos) is a single page fault on a cold index.
+// region; Breakdown(pos) is a single page fault on a cold index.
 type TierStatsRowReader struct {
 	mmap     *MmapFile
 	dataOff  int64 // offset to first row (== HeaderSize)

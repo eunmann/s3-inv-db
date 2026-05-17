@@ -11,10 +11,10 @@ import (
 func TestAggregateDashboard_TalliesByState(t *testing.T) {
 	h := newTestHandlers(t)
 	views := []inventory.MergedInventory{
-		{Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "i1", Run: "2026-05-13"}, State: inventory.StateLoaded},
-		{Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "i1", Run: "2026-05-12"}, State: inventory.StateNotLoaded},
-		{Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "i2", Run: "2026-05-13"}, State: inventory.StateLoading},
-		{Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "i3", Run: "2026-05-13"}, State: inventory.StateError},
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "i1", Run: "2026-05-13"}, State: inventory.StateLoaded},
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "i1", Run: "2026-05-12"}, State: inventory.StateNotLoaded},
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "i2", Run: "2026-05-13"}, State: inventory.StateLoading},
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "i3", Run: "2026-05-13"}, State: inventory.StateError},
 	}
 	data := &handlers.DashboardData{}
 	logger := zerolog.Nop()
@@ -51,8 +51,8 @@ func TestAggregateDashboard_TalliesByState(t *testing.T) {
 func TestAggregateDashboard_LatestRunIsFirstSeen(t *testing.T) {
 	h := newTestHandlers(t)
 	views := []inventory.MergedInventory{
-		{Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "i1", Run: "2026-05-13"}, State: inventory.StateLoaded},
-		{Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "i1", Run: "2026-05-12"}, State: inventory.StateNotLoaded},
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "i1", Run: "2026-05-13"}, State: inventory.StateLoaded},
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "i1", Run: "2026-05-12"}, State: inventory.StateNotLoaded},
 	}
 	data := &handlers.DashboardData{}
 	logger := zerolog.Nop()
@@ -68,7 +68,7 @@ func TestAggregateDashboard_LatestRunIsFirstSeen(t *testing.T) {
 func TestAggregateDashboard_PlaceholderConfigCounts(t *testing.T) {
 	h := newTestHandlers(t)
 	views := []inventory.MergedInventory{
-		{Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "no-runs"}, State: inventory.StateNotLoaded},
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "no-runs"}, State: inventory.StateNotLoaded},
 	}
 	data := &handlers.DashboardData{}
 	logger := zerolog.Nop()
@@ -85,15 +85,15 @@ func TestAggregateDashboard_SumsManifestStats(t *testing.T) {
 	h := newTestHandlers(t)
 	views := []inventory.MergedInventory{
 		{Inventory: inventory.Inventory{
-			SourceBucket: "b", InventoryName: "i1", Run: "2026-05-13",
+			SourceBucket: "b", Name: "i1", Run: "2026-05-13",
 			FileCount: 4, TotalBytes: 1000, FileFormat: "Parquet",
 		}, State: inventory.StateLoaded},
 		{Inventory: inventory.Inventory{
-			SourceBucket: "b", InventoryName: "i1", Run: "2026-05-12",
+			SourceBucket: "b", Name: "i1", Run: "2026-05-12",
 			FileCount: 3, TotalBytes: 500,
 		}, State: inventory.StateNotLoaded},
 		{Inventory: inventory.Inventory{
-			SourceBucket: "b", InventoryName: "i2", Run: "2026-05-13",
+			SourceBucket: "b", Name: "i2", Run: "2026-05-13",
 			FileCount: 7, TotalBytes: 2500, FileFormat: "CSV",
 		}, State: inventory.StateLoaded},
 	}
@@ -123,7 +123,7 @@ func TestAggregateDashboard_SumsManifestStats(t *testing.T) {
 func TestAggregateDashboard_OmitsManifestStatsWhenAbsent(t *testing.T) {
 	h := newTestHandlers(t)
 	views := []inventory.MergedInventory{
-		{Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "i1", Run: "2026-05-13"}, State: inventory.StateNotLoaded},
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "i1", Run: "2026-05-13"}, State: inventory.StateNotLoaded},
 	}
 	data := &handlers.DashboardData{}
 	logger := zerolog.Nop()
@@ -136,7 +136,7 @@ func TestAggregateDashboard_OmitsManifestStatsWhenAbsent(t *testing.T) {
 func TestAddLoadedStats_TolerantOfUnloadedIndex(t *testing.T) {
 	h := newTestHandlers(t)
 	v := inventory.MergedInventory{
-		Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "i1", Run: "r"},
+		Inventory: inventory.Inventory{SourceBucket: "b", Name: "i1", Run: "r"},
 		State:     inventory.StateLoaded,
 	}
 	totals := handlers.DashTotalsForTest{}

@@ -743,7 +743,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	// Run file buffer: a fixed 4 MiB is well above the syscall sweet
 	// spot for sequential writes and bounded per-worker, so no need to
 	// derive it from a fractional memory partition.
-	const bufferSize = 4 * 1024 * 1024
+	const bufferSize = DefaultRunBufferSize
 
 	var writeErr error
 	if p.config.Merge.UseCompressedRuns {
@@ -830,7 +830,7 @@ type mergeBuildResult struct {
 // ParallelMerger.MergeAllToIterator which avoids writing a final
 // merged file to disk (I3 win).
 //
-//nolint:ireturn // RowIterator is the right shape — callers don't care which variant underneath
+//nolint:ireturn // dispatches between single-run + K-way variants
 func (p *Pipeline) runMergePhase(
 	ctx context.Context,
 	log *zerolog.Logger,
@@ -954,10 +954,9 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		}
 	}()
 
-	// Use prefix count if the iterator can report it (single-run +
-	// streaming K-way iterator both implement Remaining()); pass 0
-	// when unknown and let the builder grow incrementally.
-	prefixCount := iteratorRemaining(mergeIter)
+	// Use prefix count if the iterator can report it; 0 means unknown
+	// and the builder grows incrementally.
+	prefixCount := mergeIter.Remaining()
 	log.Debug().
 		Uint64("prefix_count", prefixCount).
 		Msg("index build starting")
@@ -978,24 +977,6 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	}
 
 	return mergeBuildResult{PrefixCount: builder.Count(), MaxDepth: builder.MaxDepth()}, nil
-}
-
-// remainingReporter is implemented by iterators that can report an
-// upper-bound row count up front (singleRunIterator from the file
-// header, MergeIterator from the sum of underlying readers). Used
-// to pre-size the IndexBuilder.
-type remainingReporter interface {
-	Remaining() uint64
-}
-
-// iteratorRemaining returns the iterator's reported remaining count
-// if it implements remainingReporter, else 0.
-func iteratorRemaining(it RowIterator) uint64 {
-	if r, ok := it.(remainingReporter); ok {
-		return r.Remaining()
-	}
-
-	return 0
 }
 
 // singleRunIterator wraps a RunReader to implement the iterator interface expected by IndexBuilder.
@@ -1025,14 +1006,6 @@ func (s *singleRunIterator) Remaining() uint64 {
 func (s *singleRunIterator) Close() error {
 	if err := s.reader.Close(); err != nil {
 		return fmt.Errorf("close run reader: %w", err)
-	}
-
-	return nil
-}
-
-func (s *singleRunIterator) RemoveAll() error {
-	if err := s.reader.Remove(); err != nil {
-		return fmt.Errorf("remove run file: %w", err)
 	}
 
 	return nil

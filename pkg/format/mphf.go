@@ -117,23 +117,6 @@ func (m *MPHF) Lookup(prefix string) (uint64, bool) {
 	return preorderPosVal, true
 }
 
-// LookupWithVerify returns the position and verifies against the
-// stored prefix in the blob (more certain than fingerprint-only).
-func (m *MPHF) LookupWithVerify(prefix string) (uint64, bool) {
-	pos, ok := m.Lookup(prefix)
-	if !ok {
-		return 0, false
-	}
-	if m.prefixBlob != nil {
-		storedPrefix, err := m.prefixBlob.Get(pos)
-		if err != nil || storedPrefix != prefix {
-			return 0, false
-		}
-	}
-
-	return pos, true
-}
-
 // Prefix returns the prefix string at the given position.
 // Requires the prefix blob to be loaded.
 func (m *MPHF) Prefix(pos uint64) (string, error) {
@@ -186,28 +169,4 @@ func computeFingerprintBytes(b []byte) uint64 {
 	h.Write(b)
 
 	return h.Sum64()
-}
-
-// VerifyMPHF checks that all prefixes can be looked up correctly.
-func VerifyMPHF(m *MPHF) error {
-	if m.prefixBlob == nil {
-		return ErrNoPrefixStorage
-	}
-
-	for i := range m.count {
-		prefix, err := m.Prefix(i)
-		if err != nil {
-			return fmt.Errorf("get prefix %d: %w", i, err)
-		}
-
-		pos, ok := m.Lookup(prefix)
-		if !ok {
-			return fmt.Errorf("%w for prefix %q at pos %d", ErrMPHFLookupFailed, prefix, i)
-		}
-		if pos != i {
-			return fmt.Errorf("%w for %q: got %d, want %d", ErrLookupWrongPos, prefix, pos, i)
-		}
-	}
-
-	return nil
 }

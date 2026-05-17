@@ -117,8 +117,8 @@ func TestDiscoveryService_ListMergesWithManagerState(t *testing.T) {
 
 	disc := &fakeDiscoverer{
 		listResp: []inventory.Inventory{
-			{SourceBucket: "bucket-a", InventoryName: "inv-1"},
-			{SourceBucket: "bucket-a", InventoryName: "inv-2"},
+			{SourceBucket: "bucket-a", Name: "inv-1"},
+			{SourceBucket: "bucket-a", Name: "inv-2"},
 		},
 	}
 	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
@@ -156,7 +156,7 @@ func TestDiscoveryService_ListPropagatesDiscovererError(t *testing.T) {
 
 func TestDiscoveryService_PrepareDiscovered_DisabledReturnsErr(t *testing.T) {
 	s := inventory.NewDiscoveryService(inventory.NewManager(), nil, nil)
-	disc := inventory.Inventory{SourceBucket: "b", InventoryName: "i", Run: "r", ManifestKey: "k"}
+	disc := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "r", ManifestKey: "k"}
 	if err := s.PrepareDiscovered(t.Context(), disc); !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("PrepareDiscovered err = %v, want inventory.ErrDiscoveryDisabled", err)
 	}
@@ -166,7 +166,7 @@ func TestDiscoveryService_PrepareDiscovered_NoRunRejects(t *testing.T) {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
 	s := inventory.NewDiscoveryService(mgr, &fakeDiscoverer{bucket: "dst"}, &fakeBuilder{})
-	disc := inventory.Inventory{SourceBucket: "b", InventoryName: "i"}
+	disc := inventory.Inventory{SourceBucket: "b", Name: "i"}
 	err := s.PrepareDiscovered(t.Context(), disc)
 	if err == nil {
 		t.Fatal("PrepareDiscovered with empty Run returned nil")
@@ -181,7 +181,7 @@ func TestDiscoveryService_PrepareDiscovered_RegistersInManager(t *testing.T) {
 	t.Cleanup(func() { _ = mgr.Close() })
 	s := inventory.NewDiscoveryService(mgr, &fakeDiscoverer{bucket: "dst"}, &fakeBuilder{})
 	disc := inventory.Inventory{
-		SourceBucket: "b", InventoryName: "i", Run: "2026-05-13",
+		SourceBucket: "b", Name: "i", Run: "2026-05-13",
 		ManifestKey: "k/manifest.json",
 	}
 	if err := s.PrepareDiscovered(t.Context(), disc); err != nil {
@@ -204,7 +204,7 @@ func TestDiscoveryService_PrepareDiscovered_AlreadyExistsIsIdempotent(t *testing
 	t.Cleanup(func() { _ = mgr.Close() })
 	s := inventory.NewDiscoveryService(mgr, &fakeDiscoverer{bucket: "dst"}, &fakeBuilder{})
 	disc := inventory.Inventory{
-		SourceBucket: "b", InventoryName: "i", Run: "2026-05-13",
+		SourceBucket: "b", Name: "i", Run: "2026-05-13",
 		ManifestKey: "k/manifest.json",
 	}
 	if err := s.PrepareDiscovered(t.Context(), disc); err != nil {
@@ -226,7 +226,7 @@ func TestDiscoveryService_Snapshot_ColdStartLoadsLive(t *testing.T) {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
 	disc := &fakeDiscoverer{
-		listResp: []inventory.Inventory{{SourceBucket: "b", InventoryName: "i"}},
+		listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}},
 	}
 	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
 
@@ -248,7 +248,7 @@ func TestDiscoveryService_Snapshot_ColdStartLoadsLive(t *testing.T) {
 func TestDiscoveryService_Snapshot_ServesFromCache(t *testing.T) {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
-	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", InventoryName: "i"}}}
+	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}}
 	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
 
 	if _, _, err := s.Snapshot(t.Context()); err != nil {
@@ -265,15 +265,15 @@ func TestDiscoveryService_Snapshot_ServesFromCache(t *testing.T) {
 func TestDiscoveryService_Refresh_UpdatesSnapshot(t *testing.T) {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
-	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", InventoryName: "first"}}}
+	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "first"}}}
 	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
 
 	if err := s.Refresh(t.Context()); err != nil {
 		t.Fatalf("first Refresh: %v", err)
 	}
 	disc.listResp = []inventory.Inventory{
-		{SourceBucket: "b", InventoryName: "first"},
-		{SourceBucket: "b", InventoryName: "second"},
+		{SourceBucket: "b", Name: "first"},
+		{SourceBucket: "b", Name: "second"},
 	}
 	if err := s.Refresh(t.Context()); err != nil {
 		t.Fatalf("second Refresh: %v", err)
@@ -293,7 +293,7 @@ func TestDiscoveryService_Refresh_UpdatesSnapshot(t *testing.T) {
 func TestDiscoveryService_Refresh_ErrorPreservesPriorSnapshot(t *testing.T) {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
-	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", InventoryName: "i"}}}
+	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}}
 	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
 
 	if err := s.Refresh(t.Context()); err != nil {
@@ -311,7 +311,7 @@ func TestDiscoveryService_Refresh_ErrorPreservesPriorSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	if len(views) != 1 || views[0].InventoryName != "i" {
+	if len(views) != 1 || views[0].Name != "i" {
 		t.Errorf("snapshot lost after failed Refresh: %+v", views)
 	}
 }
@@ -319,7 +319,7 @@ func TestDiscoveryService_Refresh_ErrorPreservesPriorSnapshot(t *testing.T) {
 func TestDiscoveryService_Refresh_RecordsClockTimestamp(t *testing.T) {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
-	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", InventoryName: "i"}}}
+	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}}
 	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
 	want := time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
 	s.SetClockForTest(func() time.Time { return want })
@@ -346,7 +346,7 @@ func TestDiscoveryService_StartStop_NoopWhenDisabled(t *testing.T) {
 func TestDiscoveryService_Start_PerformsInitialRefresh(t *testing.T) {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
-	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", InventoryName: "i"}}}
+	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}}
 	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
 
 	// Long interval — the test only asserts that Start() warms the
@@ -369,7 +369,7 @@ func TestDiscoveryService_Start_PerformsInitialRefresh(t *testing.T) {
 func TestDiscoveryService_Start_DoubleStartIsNoop(t *testing.T) {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
-	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", InventoryName: "i"}}}
+	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}}
 	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
 
 	s.Start(t.Context(), time.Hour, nil)
@@ -390,7 +390,7 @@ func TestDiscoveryService_Stop_WithoutStartIsNoop(_ *testing.T) {
 func TestDiscoveryService_Background_TickerFiresRefresh(t *testing.T) {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
-	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", InventoryName: "i"}}}
+	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}}
 	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
 
 	// Very short interval — the ticker should fire at least once

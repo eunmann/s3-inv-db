@@ -113,7 +113,7 @@ func TestMeasureDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sub, "b.bin"), make([]byte, 512), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := budget.MeasureDir(context.Background(), root)
+	got, err := budget.MeasureDir(t.Context(), root)
 	if err != nil {
 		t.Fatalf("MeasureDir: %v", err)
 	}

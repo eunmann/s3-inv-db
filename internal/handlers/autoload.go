@@ -11,7 +11,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-type AutoLoadToggleResponse struct {
+type autoLoadToggleResponse struct {
 	OK bool `json:"ok"`
 }
 
@@ -62,7 +62,7 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 
 		return
 	}
-	WriteJSON(w, http.StatusOK, AutoLoadToggleResponse{OK: true})
+	WriteJSON(w, http.StatusOK, autoLoadToggleResponse{OK: true})
 }
 
 // SetPinAPI sets a run's pin state. Form body: pinned.
@@ -85,7 +85,7 @@ func (h *Handlers) SetPinAPI(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
-	WriteJSON(w, http.StatusOK, AutoLoadToggleResponse{OK: true})
+	WriteJSON(w, http.StatusOK, autoLoadToggleResponse{OK: true})
 }
 
 type DiskBudgetResponse struct {

@@ -151,7 +151,7 @@ type mergeResult struct {
 // removes any intermediate files this call produced. It does NOT
 // remove the original input files; that remains the caller's job.
 //
-//nolint:ireturn // RowIterator is the right return shape — callers don't care if it's a single-run or k-way merge underneath
+//nolint:ireturn // dispatches between single-run + K-way merge variants
 func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []string) (RowIterator, func() error, error) {
 	if len(inputPaths) == 0 {
 		return nil, func() error { return nil }, ErrNoInputPaths
@@ -552,22 +552,14 @@ type runReaderMergeIterator struct {
 	err     error
 }
 
-// mergeRowPool reuses PrefixRow allocations across the merge phase.
-// At billion-row builds the merger reads roughly the same number of
-// rows as inputs (1B+); without pooling that's hundreds of GiB of
-// short-lived allocation churn slowing the GC. With pooling the
-// allocator hands out the same rotating handful of rows.
+// mergeRowPool reuses PrefixRow allocations across the merge phase
+// (billion-row builds otherwise churn hundreds of GiB).
 //
 //nolint:gochecknoglobals // package-level pool, by design
-var mergeRowPool = sync.Pool{
-	New: func() any { return &PrefixRow{} },
-}
+var mergeRowPool = newTypedPool(func() *PrefixRow { return &PrefixRow{} })
 
 func acquireMergeRow() *PrefixRow {
-	r, ok := mergeRowPool.Get().(*PrefixRow)
-	if !ok {
-		return &PrefixRow{}
-	}
+	r := mergeRowPool.Get()
 	r.Reset()
 
 	return r
@@ -656,6 +648,11 @@ func (m *runReaderMergeIterator) Next() (*PrefixRow, error) {
 func (m *runReaderMergeIterator) Release(row *PrefixRow) {
 	releaseMergeRow(row)
 }
+
+// Remaining returns 0 — RunReaders don't surface a known total ahead
+// of time. Satisfies the RowIterator interface for the builder's
+// capacity hint.
+func (m *runReaderMergeIterator) Remaining() uint64 { return 0 }
 
 // advanceReader reads the next row from the given reader and pushes to heap.
 func (m *runReaderMergeIterator) advanceReader(idx int) error {

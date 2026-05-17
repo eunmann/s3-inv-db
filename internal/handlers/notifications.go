@@ -3,7 +3,7 @@ package handlers
 import (
 	"context"
 	"net/http"
-	"sort"
+	"slices"
 	"time"
 )
 
@@ -59,7 +59,7 @@ func (h *Handlers) collectNotifications(ctx context.Context) []Notification {
 			At:      info.AutoLoadBackoffUntil,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
+	slices.SortFunc(out, func(a, b Notification) int { return b.At.Compare(a.At) })
 
 	return out
 }

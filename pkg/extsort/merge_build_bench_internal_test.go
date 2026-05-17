@@ -70,7 +70,7 @@ func runMergeBuildSeamBench(b *testing.B, n, runFileCount int, streamed bool) {
 				b.Fatalf("MergeAllToIterator: %v", err)
 			}
 			iter = it
-			capacity = iteratorRemaining(it)
+			capacity = it.Remaining()
 			cleanup = func() { _ = c() }
 		} else {
 			finalPath, err := merger.MergeAll(context.Background(), runPaths)
@@ -121,7 +121,7 @@ func writePartitionedRunFiles(b *testing.B, runDir string, objects []benchutil.F
 		SortPrefixRows(rows)
 		path := filepath.Join(runDir, fmt.Sprintf("run_%02d.crun", i))
 		w, err := NewCompressedRunWriter(path, CompressedRunWriterOptions{
-			BufferSize:       4 * 1024 * 1024,
+			BufferSize:       DefaultRunBufferSize,
 			CompressionLevel: CompressionFastest,
 		})
 		if err != nil {

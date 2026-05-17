@@ -86,9 +86,9 @@ func (idx *Index) Lookup(prefix string) (uint64, bool) {
 	return idx.mphf.Lookup(prefix)
 }
 
-// Stats returns the object count and total bytes for the node at pos.
-// Returns zero-valued Stats if pos is out of bounds. Use StatsForPrefix
-// if you need to distinguish between "not found" and "found with zero stats".
+// Stats returns the per-prefix object count and total bytes at pos.
+// Returns zero-valued Stats when pos is out of bounds — use
+// StatsForPrefix to distinguish "not found" from "found with zero stats".
 func (idx *Index) Stats(pos uint64) Stats {
 	if pos >= idx.count {
 		return Stats{}
@@ -98,7 +98,7 @@ func (idx *Index) Stats(pos uint64) Stats {
 	return Stats{ObjectCount: objCount, TotalBytes: totalBytes}
 }
 
-// StatsForPrefix returns stats for a prefix string.
+// StatsForPrefix is Lookup + Stats; ok=false on miss.
 func (idx *Index) StatsForPrefix(prefix string) (Stats, bool) {
 	pos, ok := idx.Lookup(prefix)
 	if !ok {
@@ -108,7 +108,6 @@ func (idx *Index) StatsForPrefix(prefix string) (Stats, bool) {
 	return idx.Stats(pos), true
 }
 
-// Depth returns the depth of the node at pos.
 func (idx *Index) Depth(pos uint64) uint32 {
 	if pos >= idx.count {
 		return 0
@@ -117,7 +116,6 @@ func (idx *Index) Depth(pos uint64) uint32 {
 	return idx.coreStats.UnsafeDepth(pos)
 }
 
-// SubtreeEnd returns the end position of the subtree rooted at pos.
 func (idx *Index) SubtreeEnd(pos uint64) uint64 {
 	if pos >= idx.count {
 		return 0
@@ -126,7 +124,6 @@ func (idx *Index) SubtreeEnd(pos uint64) uint64 {
 	return idx.coreStats.UnsafeSubtreeEnd(pos)
 }
 
-// MaxDepthInSubtree returns the maximum depth in the subtree rooted at pos.
 func (idx *Index) MaxDepthInSubtree(pos uint64) uint32 {
 	if pos >= idx.count {
 		return 0
@@ -135,7 +132,6 @@ func (idx *Index) MaxDepthInSubtree(pos uint64) uint32 {
 	return idx.coreStats.UnsafeMaxDepth(pos)
 }
 
-// PrefixString returns the prefix string for the node at pos.
 func (idx *Index) PrefixString(pos uint64) (string, error) {
 	s, err := idx.mphf.Prefix(pos)
 	if err != nil {
@@ -145,15 +141,8 @@ func (idx *Index) PrefixString(pos uint64) (string, error) {
 	return s, nil
 }
 
-// Count returns the total number of prefix nodes.
-func (idx *Index) Count() uint64 {
-	return idx.count
-}
-
-// MaxDepth returns the maximum depth in the trie.
-func (idx *Index) MaxDepth() uint32 {
-	return idx.maxDepth
-}
+func (idx *Index) Count() uint64    { return idx.count }
+func (idx *Index) MaxDepth() uint32 { return idx.maxDepth }
 
 // DescendantsAtDepth returns positions of descendants at exactly the given
 // relative depth, in alphabetical order.
@@ -190,47 +179,6 @@ func (idx *Index) DescendantsAtDepth(prefixPos uint64, relDepth int) ([]uint64, 
 	return positions, nil
 }
 
-// DescendantsUpToDepth returns positions of descendants up to the given
-// relative depth, grouped by depth then alphabetical.
-//
-// Returns (nil, nil) for invalid inputs:
-//   - prefixPos >= Count() (out of bounds)
-//   - maxRelDepth < 0 (negative depth)
-//
-// An empty slice indicates no descendants up to that depth (valid but empty result).
-func (idx *Index) DescendantsUpToDepth(prefixPos uint64, maxRelDepth int) ([][]uint64, error) {
-	if prefixPos >= idx.count {
-		return nil, nil
-	}
-	if maxRelDepth < 0 {
-		return nil, nil
-	}
-
-	baseDepth := idx.Depth(prefixPos)
-	maxSubtreeDepth := idx.MaxDepthInSubtree(prefixPos)
-	subtreeStart := prefixPos
-	subtreeEnd := idx.SubtreeEnd(prefixPos)
-
-	// Pre-size the outer slice to the number of depth levels we'll
-	// iterate. The inner per-depth slices are variably sized — those
-	// allocations happen in GetPositionsInSubtree.
-	depthLevels := min(int(maxSubtreeDepth-baseDepth), maxRelDepth)
-	if depthLevels <= 0 {
-		return nil, nil
-	}
-	result := make([][]uint64, 0, depthLevels)
-
-	for d := baseDepth + 1; d <= baseDepth+uint32(maxRelDepth) && d <= maxSubtreeDepth; d++ {
-		positions, err := idx.depthIndex.PositionsInSubtree(d, subtreeStart, subtreeEnd)
-		if err != nil {
-			return nil, fmt.Errorf("get positions at depth %d: %w", d, err)
-		}
-		result = append(result, positions)
-	}
-
-	return result, nil
-}
-
 // Filter specifies criteria for filtering results.
 type Filter struct {
 	MinCount uint64
@@ -259,63 +207,6 @@ func (idx *Index) DescendantsAtDepthFiltered(prefixPos uint64, relDepth int, fil
 
 	return filtered, nil
 }
-
-// Iterator provides sequential access to node positions.
-type Iterator interface {
-	// Next advances to the next position. Returns false when done.
-	Next() bool
-	// Pos returns the current position. Valid after Next() returns true.
-	Pos() uint64
-	// Depth returns the depth of the current position.
-	Depth() uint32
-}
-
-// depthIteratorWrapper wraps format.DepthIterator to implement Iterator.
-type depthIteratorWrapper struct {
-	it    *format.DepthIterator
-	depth uint32
-}
-
-func (w *depthIteratorWrapper) Next() bool {
-	return w.it.Next()
-}
-
-func (w *depthIteratorWrapper) Pos() uint64 {
-	return w.it.Pos()
-}
-
-func (w *depthIteratorWrapper) Depth() uint32 {
-	return w.depth
-}
-
-// NewDescendantIterator returns an iterator over descendants at a specific depth.
-func (idx *Index) NewDescendantIterator(prefixPos uint64, relDepth int) (Iterator, error) {
-	if prefixPos >= idx.count {
-		return &emptyIterator{}, nil
-	}
-	if relDepth < 0 {
-		return &emptyIterator{}, nil
-	}
-
-	baseDepth := idx.Depth(prefixPos)
-	targetDepth := baseDepth + uint32(relDepth)
-
-	subtreeStart := prefixPos
-	subtreeEnd := idx.SubtreeEnd(prefixPos)
-
-	it, err := idx.depthIndex.NewDepthIterator(targetDepth, subtreeStart, subtreeEnd)
-	if err != nil {
-		return nil, fmt.Errorf("create depth iterator at depth %d: %w", targetDepth, err)
-	}
-
-	return &depthIteratorWrapper{it: it, depth: targetDepth}, nil
-}
-
-type emptyIterator struct{}
-
-func (e *emptyIterator) Next() bool    { return false }
-func (e *emptyIterator) Pos() uint64   { return 0 }
-func (e *emptyIterator) Depth() uint32 { return 0 }
 
 // TierBreakdown is an alias for format.TierBreakdown.
 type TierBreakdown = format.TierBreakdown

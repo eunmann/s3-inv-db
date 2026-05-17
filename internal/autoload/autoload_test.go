@@ -90,9 +90,9 @@ func TestAutoLoader_PicksNewestUnloadedRun(t *testing.T) {
 	disc := &fakeDiscovery{
 		enabled: true,
 		views: []inventory.MergedInventory{
-			{Inventory: inventory.Inventory{SourceBucket: "bkt", InventoryName: "inv", Run: "2026-01-01T00-00Z", ManifestKey: "k1"}, State: inventory.StateNotLoaded},
-			{Inventory: inventory.Inventory{SourceBucket: "bkt", InventoryName: "inv", Run: "2026-01-02T00-00Z", ManifestKey: "k2"}, State: inventory.StateNotLoaded},
-			{Inventory: inventory.Inventory{SourceBucket: "bkt", InventoryName: "inv", Run: "2026-01-03T00-00Z", ManifestKey: "k3"}, State: inventory.StateNotLoaded},
+			{Inventory: inventory.Inventory{SourceBucket: "bkt", Name: "inv", Run: "2026-01-01T00-00Z", ManifestKey: "k1"}, State: inventory.StateNotLoaded},
+			{Inventory: inventory.Inventory{SourceBucket: "bkt", Name: "inv", Run: "2026-01-02T00-00Z", ManifestKey: "k2"}, State: inventory.StateNotLoaded},
+			{Inventory: inventory.Inventory{SourceBucket: "bkt", Name: "inv", Run: "2026-01-03T00-00Z", ManifestKey: "k3"}, State: inventory.StateNotLoaded},
 		},
 	}
 	ldr := &fakeLoader{}
@@ -114,7 +114,7 @@ func TestAutoLoader_SkipsConfigsWithAutoLoadOff(t *testing.T) {
 	disc := &fakeDiscovery{
 		enabled: true,
 		views: []inventory.MergedInventory{
-			{Inventory: inventory.Inventory{SourceBucket: "bkt", InventoryName: "inv", Run: "2026-01-01T00-00Z", ManifestKey: "k1"}},
+			{Inventory: inventory.Inventory{SourceBucket: "bkt", Name: "inv", Run: "2026-01-01T00-00Z", ManifestKey: "k1"}},
 		},
 	}
 	ldr := &fakeLoader{}
@@ -145,7 +145,7 @@ func TestAutoLoader_SkipsUserUnloadedRuns(t *testing.T) {
 	disc := &fakeDiscovery{
 		enabled: true,
 		views: []inventory.MergedInventory{
-			{Inventory: inventory.Inventory{SourceBucket: "bkt", InventoryName: "inv", Run: "2026-01-01T00-00Z", ManifestKey: "k1"}, State: inventory.StateNotLoaded},
+			{Inventory: inventory.Inventory{SourceBucket: "bkt", Name: "inv", Run: "2026-01-01T00-00Z", ManifestKey: "k1"}, State: inventory.StateNotLoaded},
 		},
 	}
 	ldr := &fakeLoader{}

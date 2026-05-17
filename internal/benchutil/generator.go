@@ -153,20 +153,6 @@ func (g *Generator) Generate() []FakeObject {
 	return objects
 }
 
-// GenerateChannel returns objects via a channel for streaming processing.
-func (g *Generator) GenerateChannel() <-chan FakeObject {
-	ch := make(chan FakeObject, 1000)
-
-	go func() {
-		defer close(ch)
-		for range g.cfg.NumObjects {
-			ch <- g.generateObject()
-		}
-	}()
-
-	return ch
-}
-
 func (g *Generator) generateObject() FakeObject {
 	return FakeObject{
 		Key:    g.generateKey(),

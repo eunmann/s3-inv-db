@@ -13,10 +13,10 @@ import (
 // 404 like a regular not-found.
 var errPrefixNotFound = errors.New("prefix not found")
 
-// ManagerErrorResponse is the HTTP status / client message pair returned
+// managerErrorResponse is the HTTP status / client message pair returned
 // by managerErrorStatus. Named so callers don't have to remember the
 // positional convention.
-type ManagerErrorResponse struct {
+type managerErrorResponse struct {
 	Status  int
 	Message string
 }
@@ -29,21 +29,21 @@ type ManagerErrorResponse struct {
 // JSON handlers wrap the result via WriteJSONError; partial (HTML)
 // handlers use http.Error. Centralising the mapping keeps the JSON and
 // HTML twins in lock-step: fixing a status code here updates both.
-func managerErrorStatus(err error) ManagerErrorResponse {
+func managerErrorStatus(err error) managerErrorResponse {
 	switch {
 	case errors.Is(err, inventory.ErrNotFound):
-		return ManagerErrorResponse{Status: http.StatusNotFound, Message: "inventory not found"}
+		return managerErrorResponse{Status: http.StatusNotFound, Message: "inventory not found"}
 	case errors.Is(err, errPrefixNotFound):
-		return ManagerErrorResponse{Status: http.StatusNotFound, Message: "prefix not found"}
+		return managerErrorResponse{Status: http.StatusNotFound, Message: "prefix not found"}
 	case errors.Is(err, inventory.ErrNotLoaded):
-		return ManagerErrorResponse{Status: http.StatusConflict, Message: "inventory not loaded"}
+		return managerErrorResponse{Status: http.StatusConflict, Message: "inventory not loaded"}
 	case errors.Is(err, inventory.ErrInvalidState):
 		// The InvalidState message is ours ("cannot load from state X")
 		// — useful diagnostic and contains no internal infrastructure detail.
-		return ManagerErrorResponse{Status: http.StatusConflict, Message: err.Error()}
+		return managerErrorResponse{Status: http.StatusConflict, Message: err.Error()}
 	}
 
-	return ManagerErrorResponse{Status: http.StatusInternalServerError, Message: "operation failed"}
+	return managerErrorResponse{Status: http.StatusInternalServerError, Message: "operation failed"}
 }
 
 // respondManagerError emits a text/plain (http.Error) response for

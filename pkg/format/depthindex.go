@@ -198,39 +198,6 @@ func (d *DepthIndex) MaxDepth() uint32 {
 	return d.maxDepth
 }
 
-// PositionsAtDepth returns all positions at the given depth.
-func (d *DepthIndex) PositionsAtDepth(depth uint32) ([]uint64, error) {
-	if depth > d.maxDepth {
-		return nil, nil
-	}
-
-	start, err := d.offsets.GetU64(uint64(depth))
-	if err != nil {
-		return nil, fmt.Errorf("get start offset for depth %d: %w", depth, err)
-	}
-
-	end, err := d.offsets.GetU64(uint64(depth + 1))
-	if err != nil {
-		return nil, fmt.Errorf("get end offset for depth %d: %w", depth, err)
-	}
-
-	count := end - start
-	if count == 0 {
-		return nil, nil
-	}
-
-	positions := make([]uint64, count)
-	for i := range count {
-		pos, err := d.positions.GetU64(start + i)
-		if err != nil {
-			return nil, fmt.Errorf("get position at index %d: %w", start+i, err)
-		}
-		positions[i] = pos
-	}
-
-	return positions, nil
-}
-
 // PositionsInSubtree returns positions at the given depth that fall within
 // the subtree [subtreeStart, subtreeEnd]. Uses binary search.
 func (d *DepthIndex) PositionsInSubtree(depth uint32, subtreeStart, subtreeEnd uint64) ([]uint64, error) {

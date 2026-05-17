@@ -411,13 +411,3 @@ func (b *IndexBuilder) Count() uint64 {
 func (b *IndexBuilder) MaxDepth() uint32 {
 	return b.maxDepth
 }
-
-// PresentTiers returns the tier IDs that have data.
-func (b *IndexBuilder) PresentTiers() []tiers.ID {
-	result := make([]tiers.ID, 0, len(b.presentTiers))
-	for tierID := range b.presentTiers {
-		result = append(result, tierID)
-	}
-
-	return result
-}

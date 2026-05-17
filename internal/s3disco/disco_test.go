@@ -14,7 +14,7 @@ import (
 
 func TestDiscoverer_List_AgainstMinIO(t *testing.T) {
 	client := miniotest.RawClient(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	bucket := miniotest.Bucket(t, client)
 
 	// Upload two inventories with two timestamp folders each, via the
@@ -48,7 +48,7 @@ func TestDiscoverer_List_AgainstMinIO(t *testing.T) {
 		if e.SourceBucket != srcBucket {
 			t.Errorf("entry has SourceBucket = %q, want %q", e.SourceBucket, srcBucket)
 		}
-		runsByInv[e.InventoryName] = append(runsByInv[e.InventoryName], e.Run)
+		runsByInv[e.Name] = append(runsByInv[e.Name], e.Run)
 	}
 
 	if got := runsByInv["inv-001"]; len(got) != 2 {
@@ -63,7 +63,7 @@ func TestDiscoverer_List_AgainstMinIO(t *testing.T) {
 
 func TestDiscoverer_List_PopulatesManifestStats(t *testing.T) {
 	client := miniotest.RawClient(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	bucket := miniotest.Bucket(t, client)
 
 	now := time.Now().UTC()
@@ -91,7 +91,7 @@ func TestDiscoverer_List_PopulatesManifestStats(t *testing.T) {
 
 func TestDiscoverer_Find(t *testing.T) {
 	client := miniotest.RawClient(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	bucket := miniotest.Bucket(t, client)
 
 	now := time.Now().UTC()
@@ -128,7 +128,7 @@ func TestDiscoverer_Find(t *testing.T) {
 
 func TestDiscoverer_EmptyBucket(t *testing.T) {
 	client := miniotest.RawClient(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	bucket := miniotest.Bucket(t, client)
 
 	d := s3disco.New(client, bucket, "inventory-data/")

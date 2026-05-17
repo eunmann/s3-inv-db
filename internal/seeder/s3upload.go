@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/eunmann/s3-inv-db/internal/benchutil"
+	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
@@ -57,7 +58,7 @@ func newS3Client(ctx context.Context) (*s3.Client, error) {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
 	opts := []func(*s3.Options){}
-	if os.Getenv("AWS_ENDPOINT_URL_S3") != "" {
+	if os.Getenv(s3fetch.EnvEndpointURL) != "" {
 		opts = append(opts, func(o *s3.Options) { o.UsePathStyle = true })
 	}
 

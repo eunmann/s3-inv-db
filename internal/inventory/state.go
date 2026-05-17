@@ -94,10 +94,9 @@ type Inventory struct {
 	// inventory-name).
 	SourceBucket string `json:"source_bucket"`
 
-	// InventoryName is the AWS S3 inventory configuration's Id (its
-	// slug). Named "InventoryName" so it doesn't shadow the ID type —
-	// the field is one segment of an ID, not the whole thing.
-	InventoryName string `json:"inventory_name"`
+	// Name is the AWS S3 inventory configuration's Id (its slug).
+	// One segment of the composite ID, not the whole thing.
+	Name string `json:"inventory_name"`
 
 	// Run is the timestamp folder name (e.g., "2026-05-13T03-02Z"). Empty
 	// when the configuration has been discovered but has no completed
@@ -137,16 +136,16 @@ type Inventory struct {
 // loadable.
 func (i Inventory) CompositeID() ID {
 	if i.Run == "" {
-		return ID(i.SourceBucket + "/" + i.InventoryName)
+		return ID(i.SourceBucket + "/" + i.Name)
 	}
 
-	return ID(i.SourceBucket + "/" + i.InventoryName + "/" + i.Run)
+	return ID(i.SourceBucket + "/" + i.Name + "/" + i.Run)
 }
 
 // ConfigID returns "<source-bucket>/<inventory-name>" — the identifier
 // shared across every run of one inventory configuration.
 func (i Inventory) ConfigID() string {
-	return i.SourceBucket + "/" + i.InventoryName
+	return i.SourceBucket + "/" + i.Name
 }
 
 // Info contains metadata about a managed inventory.

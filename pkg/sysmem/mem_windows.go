@@ -26,7 +26,7 @@ var (
 	procGlobalMemoryStatusEx = kernel32.NewProc("GlobalMemoryStatusEx")
 )
 
-// totalSystemMemory returns total system RAM on Windows using GlobalMemoryStatusEx.
+// totalSystemMemory uses GlobalMemoryStatusEx for total physical RAM.
 func totalSystemMemory() (uint64, bool) {
 	var memStatus memoryStatusEx
 	memStatus.Length = uint32(unsafe.Sizeof(memStatus))
@@ -35,5 +35,9 @@ func totalSystemMemory() (uint64, bool) {
 	if ret == 0 {
 		return 0, false
 	}
+
 	return memStatus.TotalPhys, true
 }
+
+// cgroupMemoryMax has no Windows analogue; ApplyMemoryLimit skips it.
+func cgroupMemoryMax() (uint64, bool) { return 0, false }

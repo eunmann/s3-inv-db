@@ -36,7 +36,7 @@ func TestCacheDirFor_NestsBySrcIDRun(t *testing.T) {
 
 func TestBuild_RejectsEmptyArgs(t *testing.T) {
 	l := loader.New(t.TempDir(), nil)
-	ctx := context.Background()
+	ctx := t.Context()
 	cases := []struct {
 		name                   string
 		src, id, run, manifest string

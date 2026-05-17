@@ -23,7 +23,7 @@ import (
 // is missing so a misconfigured runner can't silently skip.
 func RawClient(tb testing.TB) *s3.Client {
 	tb.Helper()
-	endpoint := os.Getenv("AWS_ENDPOINT_URL_S3")
+	endpoint := os.Getenv(s3fetch.EnvEndpointURL)
 	if endpoint == "" {
 		tb.Fatal("AWS_ENDPOINT_URL_S3 not set — run `make test`")
 	}
@@ -44,7 +44,7 @@ func RawClient(tb testing.TB) *s3.Client {
 // FetchClient is the project's *s3fetch.Client wired to MinIO.
 func FetchClient(tb testing.TB) *s3fetch.Client {
 	tb.Helper()
-	endpoint := os.Getenv("AWS_ENDPOINT_URL_S3")
+	endpoint := os.Getenv(s3fetch.EnvEndpointURL)
 	if endpoint == "" {
 		tb.Fatal("AWS_ENDPOINT_URL_S3 not set — run `make test`")
 	}

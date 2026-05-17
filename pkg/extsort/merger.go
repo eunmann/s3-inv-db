@@ -113,12 +113,6 @@ func NewMergeIterator(paths []string, bufferSize int) (*MergeIterator, error) {
 		readers = append(readers, r)
 	}
 
-	return NewMergeIteratorFromReaders(readers)
-}
-
-// NewMergeIteratorFromReaders creates a merge iterator from existing readers.
-// Takes ownership of the readers; they will be closed when the iterator is closed.
-func NewMergeIteratorFromReaders(readers []RunReader) (*MergeIterator, error) {
 	m := &MergeIterator{
 		readers: readers,
 		heap:    typedMergeHeap{items: make([]mergeItem, 0, len(readers))},

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"sort"
+	"slices"
 	"syscall"
 
 	"github.com/eunmann/s3-inv-db/internal/appconfig"
@@ -300,7 +300,7 @@ func printPerTierCosts(perTierMicrodollars map[string]uint64) {
 	for tier := range perTierMicrodollars {
 		tierNames = append(tierNames, tier)
 	}
-	sort.Strings(tierNames)
+	slices.Sort(tierNames)
 	for _, tier := range tierNames {
 		fmt.Fprintf(os.Stdout, "  %s: %s/month\n", tier, pricing.FormatCost(perTierMicrodollars[tier]))
 	}

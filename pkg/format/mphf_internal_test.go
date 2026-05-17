@@ -77,65 +77,6 @@ func TestMPHFBuilderSimple(t *testing.T) {
 	}
 }
 
-func TestMPHFLookupWithVerify(t *testing.T) {
-	dir := t.TempDir()
-	b := newTestMPHFBuilder(t)
-
-	prefixes := []string{"", "x/", "y/", "z/"}
-	for i, p := range prefixes {
-		b.Add(p, uint64(i))
-	}
-
-	if err := b.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	m, err := OpenMPHF(dir)
-	if err != nil {
-		t.Fatalf("OpenMPHF failed: %v", err)
-	}
-	defer m.Close()
-
-	// LookupWithVerify should work for existing prefixes
-	for _, p := range prefixes {
-		pos, ok := m.LookupWithVerify(p)
-		if !ok {
-			t.Errorf("LookupWithVerify(%q) failed", p)
-		}
-		_ = pos
-	}
-
-	// LookupWithVerify should fail for non-existent prefix
-	_, ok := m.LookupWithVerify("missing/")
-	if ok {
-		t.Error("LookupWithVerify(missing) should return false")
-	}
-}
-
-func TestMPHFVerify(t *testing.T) {
-	dir := t.TempDir()
-	b := newTestMPHFBuilder(t)
-
-	prefixes := []string{"", "foo/", "bar/", "baz/"}
-	for i, p := range prefixes {
-		b.Add(p, uint64(i))
-	}
-
-	if err := b.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	m, err := OpenMPHF(dir)
-	if err != nil {
-		t.Fatalf("OpenMPHF failed: %v", err)
-	}
-	defer m.Close()
-
-	if err := VerifyMPHF(m); err != nil {
-		t.Errorf("VerifyMPHF failed: %v", err)
-	}
-}
-
 func TestMPHFLarge(t *testing.T) {
 	dir := t.TempDir()
 	b := newTestMPHFBuilder(t)
@@ -164,9 +105,16 @@ func TestMPHFLarge(t *testing.T) {
 		t.Errorf("Count = %d, want 1000", m.Count())
 	}
 
-	// Verify all lookups
-	if err := VerifyMPHF(m); err != nil {
-		t.Errorf("VerifyMPHF failed: %v", err)
+	// Verify all lookups round-trip to their build positions.
+	for i := range uint64(1000) {
+		p := prefixFromInt(int(i))
+		pos, ok := m.Lookup(p)
+		if !ok {
+			t.Errorf("Lookup(%q) failed", p)
+		}
+		if pos != i {
+			t.Errorf("Lookup(%q) = %d, want %d", p, pos, i)
+		}
 	}
 
 	// Test some random lookups

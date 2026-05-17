@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
+	"strings"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -406,7 +408,7 @@ func groupLoadedInventories(all []inventory.Info) []BrowseInventoryGroup {
 		})
 		out = append(out, *g)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ConfigLabel < out[j].ConfigLabel })
+	slices.SortFunc(out, func(a, b BrowseInventoryGroup) int { return strings.Compare(a.ConfigLabel, b.ConfigLabel) })
 
 	return out
 }

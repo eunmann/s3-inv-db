@@ -409,36 +409,6 @@ func BenchmarkDescendantsSubtree(b *testing.B) {
 	})
 }
 
-// BenchmarkIterator benchmarks the iterator interface.
-func BenchmarkIterator(b *testing.B) {
-	for _, shape := range benchutil.TreeShapes() {
-		for _, size := range benchutil.BenchmarkSizes() {
-			keys := benchutil.GenerateKeys(size, shape)
-			bi := setupBenchIndex(b, keys)
-
-			name := fmt.Sprintf("%s/size=%d", shape, size)
-
-			b.Run(name+"/depth1_iterate_all", func(b *testing.B) {
-				rootPos, _ := bi.idx.Lookup("")
-				b.ResetTimer()
-				for range b.N {
-					it, err := bi.idx.NewDescendantIterator(rootPos, 1)
-					if err != nil {
-						b.Fatal(err)
-					}
-					count := 0
-					for it.Next() {
-						count++
-						_ = it.Pos()
-					}
-				}
-			})
-
-			bi.Close()
-		}
-	}
-}
-
 // BenchmarkMixedWorkload simulates realistic mixed query patterns.
 func BenchmarkMixedWorkload(b *testing.B) {
 	for _, shape := range benchutil.TreeShapes() {

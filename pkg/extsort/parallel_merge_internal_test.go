@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"sort"
+	"slices"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -169,7 +169,7 @@ func TestParallelMerger_ManyFiles(t *testing.T) {
 	}
 
 	// Sort expected prefixes
-	sort.Strings(allPrefixes)
+	slices.Sort(allPrefixes)
 
 	merger := NewParallelMerger(ParallelMergeConfig{
 		NumWorkers:     4,

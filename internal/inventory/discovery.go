@@ -312,7 +312,7 @@ func (s *DiscoveryService) PrepareDiscovered(ctx context.Context, disc Inventory
 	}
 	composite := disc.CompositeID()
 	manifestURI := fmt.Sprintf("s3://%s/%s", s.discoverer.Bucket(), disc.ManifestKey)
-	displayName := fmt.Sprintf("%s/%s @ %s", disc.SourceBucket, disc.InventoryName, disc.Run)
+	displayName := fmt.Sprintf("%s/%s @ %s", disc.SourceBucket, disc.Name, disc.Run)
 	if err := s.manager.Register(ctx, composite, displayName, manifestURI); err != nil &&
 		!errors.Is(err, ErrAlreadyExists) {
 		return fmt.Errorf("register: %w", err)
@@ -353,13 +353,13 @@ func (s *DiscoveryService) loadInternal(ctx context.Context, disc Inventory, onP
 	}
 	composite := disc.CompositeID()
 	manifestURI := fmt.Sprintf("s3://%s/%s", s.discoverer.Bucket(), disc.ManifestKey)
-	displayName := fmt.Sprintf("%s/%s @ %s", disc.SourceBucket, disc.InventoryName, disc.Run)
+	displayName := fmt.Sprintf("%s/%s @ %s", disc.SourceBucket, disc.Name, disc.Run)
 	if err := s.manager.Register(ctx, composite, displayName, manifestURI); err != nil &&
 		!errors.Is(err, ErrAlreadyExists) {
 		return fmt.Errorf("register: %w", err)
 	}
 	build := func(c context.Context, _ Info) (string, error) {
-		return s.builder.BuildWith(c, disc.SourceBucket, disc.InventoryName, disc.Run, manifestURI, onProgress)
+		return s.builder.BuildWith(c, disc.SourceBucket, disc.Name, disc.Run, manifestURI, onProgress)
 	}
 	if s.gate == nil {
 		// No budget — manager direct. Pin manual loads.
