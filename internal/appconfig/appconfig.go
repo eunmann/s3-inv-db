@@ -74,54 +74,12 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
-// PickString returns flagVal if the flag was explicit, otherwise
-// configVal (when non-nil), otherwise flagVal (which is already the
-// env-or-default value).
-func PickString(flagVal string, explicit bool, configVal *string) string {
-	if explicit {
-		return flagVal
-	}
-	if configVal != nil {
-		return *configVal
-	}
-
-	return flagVal
-}
-
-func PickBool(flagVal, explicit bool, configVal *bool) bool {
-	if explicit {
-		return flagVal
-	}
-	if configVal != nil {
-		return *configVal
-	}
-
-	return flagVal
-}
-
-func PickInt(flagVal int, explicit bool, configVal *int) int {
-	if explicit {
-		return flagVal
-	}
-	if configVal != nil {
-		return *configVal
-	}
-
-	return flagVal
-}
-
-func PickUint32(flagVal uint32, explicit bool, configVal *uint32) uint32 {
-	if explicit {
-		return flagVal
-	}
-	if configVal != nil {
-		return *configVal
-	}
-
-	return flagVal
-}
-
-func PickFloat64(flagVal float64, explicit bool, configVal *float64) float64 {
+// Pick returns flagVal if the flag was explicit, otherwise configVal
+// (when non-nil), otherwise flagVal (which is already the env-or-default
+// value). Generic over every type a CLI flag carries in this repo.
+//
+//nolint:ireturn // T is the caller's concrete type, not an interface to satisfy
+func Pick[T any](flagVal T, explicit bool, configVal *T) T {
 	if explicit {
 		return flagVal
 	}

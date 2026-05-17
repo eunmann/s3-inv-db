@@ -78,9 +78,9 @@ func run() error {
 	finalCache := pickString(fileCfg, *cacheDir, explicit["cache-dir"], func(c *appconfig.Config) *string { return c.CacheDir })
 	finalState := pickString(fileCfg, *stateDB, explicit["state-db"], func(c *appconfig.Config) *string { return c.StateDB })
 	finalAuto := pickBool(fileCfg, *autoLoad, explicit["auto-load"], func(c *appconfig.Config) *bool { return c.AutoLoad })
-	finalConc := appconfig.PickInt(*autoLoadConcurrency, explicit["max-auto-load-concurrency"], fileConfigInt(fileCfg, func(c *appconfig.Config) *int { return c.AutoLoadConcurrency }))
-	finalRet := appconfig.PickUint32(uint32(*autoLoadRetention), explicit["auto-load-retention-default"], fileConfigUint32(fileCfg, func(c *appconfig.Config) *uint32 { return c.AutoLoadRetentionDefault }))
-	finalRatio := appconfig.PickFloat64(*indexRatio, explicit["index-ratio"], fileConfigFloat(fileCfg, func(c *appconfig.Config) *float64 { return c.IndexRatio }))
+	finalConc := appconfig.Pick(*autoLoadConcurrency, explicit["max-auto-load-concurrency"], fileConfigInt(fileCfg, func(c *appconfig.Config) *int { return c.AutoLoadConcurrency }))
+	finalRet := appconfig.Pick(uint32(*autoLoadRetention), explicit["auto-load-retention-default"], fileConfigUint32(fileCfg, func(c *appconfig.Config) *uint32 { return c.AutoLoadRetentionDefault }))
+	finalRatio := appconfig.Pick(*indexRatio, explicit["index-ratio"], fileConfigFloat(fileCfg, func(c *appconfig.Config) *float64 { return c.IndexRatio }))
 
 	finalInterval, err := resolveDuration(*pollInterval, explicit["auto-load-poll-interval"], fileConfigString(fileCfg, func(c *appconfig.Config) *string { return c.PollInterval }))
 	if err != nil {
@@ -149,7 +149,7 @@ func pickString(cfg *appconfig.Config, flagVal string, explicit bool, get func(*
 		p = get(cfg)
 	}
 
-	return appconfig.PickString(flagVal, explicit, p)
+	return appconfig.Pick(flagVal, explicit, p)
 }
 
 func pickBool(cfg *appconfig.Config, flagVal, explicit bool, get func(*appconfig.Config) *bool) bool {
@@ -158,7 +158,7 @@ func pickBool(cfg *appconfig.Config, flagVal, explicit bool, get func(*appconfig
 		p = get(cfg)
 	}
 
-	return appconfig.PickBool(flagVal, explicit, p)
+	return appconfig.Pick(flagVal, explicit, p)
 }
 
 func fileConfigInt(cfg *appconfig.Config, get func(*appconfig.Config) *int) *int {
