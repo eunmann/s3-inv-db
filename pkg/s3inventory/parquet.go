@@ -1,4 +1,4 @@
-package inventory
+package s3inventory
 
 import (
 	"errors"
@@ -24,21 +24,19 @@ var (
 // ParquetReader reads S3 inventory records from Parquet files.
 // It implements streaming by iterating through row groups.
 type ParquetReader struct {
-	file          *parquet.File
-	tempFile      *os.File // Temp file for buffering (only if created by us)
+	currentRows   parquet.Rows
+	tempFile      *os.File
 	schema        *parquet.Schema
+	file          *parquet.File
+	rowGroups     []parquet.RowGroup
+	rowBuf        []parquet.Row
 	keyCol        int
+	accessTierCol int
+	currentRGIdx  int
+	storageCol    int
 	sizeCol       int
-	storageCol    int // -1 if not available
-	accessTierCol int // -1 if not available
-
-	// Row group iteration state
-	rowGroups    []parquet.RowGroup
-	currentRGIdx int
-	currentRows  parquet.Rows
-	rowBuf       []parquet.Row
-	bufIdx       int
-	bufLen       int
+	bufIdx        int
+	bufLen        int
 }
 
 // ParquetReaderConfig configures the Parquet reader.
@@ -56,9 +54,9 @@ type ParquetReaderConfig struct {
 	AccessTierCol int
 }
 
-// NewParquetInventoryReader creates a Parquet inventory reader from an io.ReaderAt.
+// NewParquetReader creates a Parquet inventory reader from an io.ReaderAt.
 // This is used when you already have a ReaderAt (e.g., a local file or memory-mapped data).
-func NewParquetInventoryReader(r io.ReaderAt, size int64, cfg ParquetReaderConfig) (*ParquetReader, error) {
+func NewParquetReader(r io.ReaderAt, size int64, cfg ParquetReaderConfig) (*ParquetReader, error) {
 	file, err := parquet.OpenFile(r, size)
 	if err != nil {
 		return nil, fmt.Errorf("open parquet file: %w", err)
@@ -67,10 +65,10 @@ func NewParquetInventoryReader(r io.ReaderAt, size int64, cfg ParquetReaderConfi
 	return newParquetReader(file, nil, cfg), nil
 }
 
-// NewParquetInventoryReaderFromReaderAt creates a Parquet inventory reader from an io.ReaderAt.
+// NewParquetReaderFromReaderAt creates a Parquet inventory reader from an io.ReaderAt.
 // This auto-detects the schema from the Parquet file and is more efficient than
-// NewParquetInventoryReaderFromStream when you already have a ReaderAt (e.g., from temp file).
-func NewParquetInventoryReaderFromReaderAt(r io.ReaderAt, size int64) (*ParquetReader, error) {
+// NewParquetReaderFromStream when you already have a ReaderAt (e.g., from temp file).
+func NewParquetReaderFromReaderAt(r io.ReaderAt, size int64) (*ParquetReader, error) {
 	file, err := parquet.OpenFile(r, size)
 	if err != nil {
 		return nil, fmt.Errorf("open parquet file: %w", err)
@@ -84,10 +82,10 @@ func NewParquetInventoryReaderFromReaderAt(r io.ReaderAt, size int64) (*ParquetR
 	return newParquetReader(file, nil, cfg), nil
 }
 
-// NewParquetInventoryReaderFromStream creates a Parquet inventory reader from a stream.
+// NewParquetReaderFromStream creates a Parquet inventory reader from a stream.
 // Since Parquet requires random access, this buffers the entire stream to a temp file.
 // The size parameter is used for validation (if non-zero) but the full stream is read regardless.
-func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (*ParquetReader, error) {
+func NewParquetReaderFromStream(r io.ReadCloser, size int64) (*ParquetReader, error) {
 	tempFile, err := os.CreateTemp("", "parquet-inventory-*.parquet")
 	if err != nil {
 		r.Close()

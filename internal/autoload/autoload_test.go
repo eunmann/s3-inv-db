@@ -9,8 +9,6 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/autoload"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/migrate"
-	_ "modernc.org/sqlite"
 )
 
 // errBoom is the sentinel error used by tests that need to simulate a
@@ -18,11 +16,11 @@ import (
 var errBoom = errors.New("boom")
 
 type fakeDiscovery struct {
-	mu       sync.Mutex
-	enabled  bool
+	listErr  error
 	views    []inventory.MergedInventory
 	listCall int
-	listErr  error
+	mu       sync.Mutex
+	enabled  bool
 }
 
 func (f *fakeDiscovery) Enabled() bool {
@@ -44,12 +42,12 @@ func (f *fakeDiscovery) List(_ context.Context) ([]inventory.MergedInventory, er
 }
 
 type fakeLoader struct {
-	mu        sync.Mutex
-	loaded    []inventory.ID
-	failOnce  bool
-	failedOn  inventory.ID
 	loadErr   error
 	autoLoadE error
+	failedOn  inventory.ID
+	loaded    []inventory.ID
+	mu        sync.Mutex
+	failOnce  bool
 }
 
 func (f *fakeLoader) AutoLoad(_ context.Context, disc inventory.Inventory) error {
@@ -72,9 +70,6 @@ func (f *fakeLoader) AutoLoad(_ context.Context, disc inventory.Inventory) error
 func newFakeStores(t *testing.T) (*inventory.ConfigStore, *inventory.Manager) {
 	t.Helper()
 	db := openTestDB(t)
-	if err := migrate.Apply(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	cs := inventory.NewConfigStore(db)
 	mgr := inventory.NewManager()
 	store, _ := inventory.NewStore(db)

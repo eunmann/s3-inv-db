@@ -207,7 +207,6 @@ func (idx *Index) DescendantsAtDepthFiltered(prefixPos uint64, relDepth int, fil
 // TierBreakdown is an alias for format.TierBreakdown.
 type TierBreakdown = format.TierBreakdown
 
-// HasTierData returns whether the index has tier statistics.
 func (idx *Index) HasTierData() bool {
 	return idx.tierStats != nil && idx.tierStats.HasTierData()
 }

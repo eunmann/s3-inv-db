@@ -113,11 +113,11 @@ func TestRenderer_RepeatedRenders(t *testing.T) {
 	}
 
 	type renderCase struct {
-		name string
 		data any
+		name string
 	}
 	cases := []renderCase{
-		{"dashboard.html", map[string]any{
+		{name: "dashboard.html", data: map[string]any{
 			"Title":        "Dashboard",
 			"TotalCount":   0,
 			"LoadedCount":  0,
@@ -125,11 +125,11 @@ func TestRenderer_RepeatedRenders(t *testing.T) {
 			"ErrorCount":   0,
 			"Inventories":  []any{},
 		}},
-		{"inventories.html", map[string]any{
+		{name: "inventories.html", data: map[string]any{
 			"Title":       "Inventories",
 			"Inventories": []any{},
 		}},
-		{"browse.html", map[string]any{
+		{name: "browse.html", data: map[string]any{
 			"Title":       "Browse",
 			"Inventories": []any{},
 		}},

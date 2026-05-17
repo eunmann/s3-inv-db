@@ -127,16 +127,17 @@ func TestDepthIndexBinarySearch(t *testing.T) {
 	defer idx.Close()
 
 	tests := []struct {
-		start, end uint64
-		expected   []uint64
+		expected []uint64
+		start    uint64
+		end      uint64
 	}{
-		{0, 100, []uint64{10, 20, 30, 40, 50}},
-		{15, 35, []uint64{20, 30}},
-		{10, 10, []uint64{10}},
-		{30, 30, []uint64{30}},
-		{0, 9, nil},
-		{51, 100, nil},
-		{25, 25, nil},
+		{expected: []uint64{10, 20, 30, 40, 50}, start: 0, end: 100},
+		{expected: []uint64{20, 30}, start: 15, end: 35},
+		{expected: []uint64{10}, start: 10, end: 10},
+		{expected: []uint64{30}, start: 30, end: 30},
+		{expected: nil, start: 0, end: 9},
+		{expected: nil, start: 51, end: 100},
+		{expected: nil, start: 25, end: 25},
 	}
 
 	for _, tc := range tests {

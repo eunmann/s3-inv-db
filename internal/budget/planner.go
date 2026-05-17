@@ -15,10 +15,10 @@ var ErrTargetIDFormat = errors.New("target id is not a 3-part inventory ID")
 
 // Plan is the eviction plan for a pending load.
 type Plan struct {
+	Refusal       string
 	Evict         []inventory.ID
 	FreedBytes    uint64
 	EstimateBytes uint64
-	Refusal       string
 }
 
 // Fits reports whether the plan makes room (Refusal is empty).
@@ -49,8 +49,8 @@ func NewPlanner(tracker *Tracker, retention RetentionFunc) *Planner {
 // Input is one load the planner is asked to fit.
 type Input struct {
 	Target        inventory.ID
-	EstimateBytes uint64
 	All           []inventory.Info
+	EstimateBytes uint64
 }
 
 // Plan computes the eviction plan for in. Ctx is threaded into the

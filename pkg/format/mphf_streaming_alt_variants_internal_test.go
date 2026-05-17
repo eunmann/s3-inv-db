@@ -102,8 +102,8 @@ func (b *StreamingMPHFBuilder) computeHashPositionsParallelMap(mph *bbhash.BBHas
 // a single-threaded read; this variant exists for bench comparison.
 
 type prefixChunkItem struct {
-	index       int
 	prefixBytes []byte
+	index       int
 	offset      uint64
 }
 

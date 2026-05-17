@@ -44,21 +44,16 @@ const (
 
 // Config configures the seeder.
 type Config struct {
-	Target    Target
-	OutputDir string // TargetLocal: where indexes are written
-	S3        S3Config
-	Count     int
-	// RunsPerInventory is how many timestamped runs to publish per
-	// inventory configuration (TargetS3 only). Each run gets its own
-	// manifest folder under <src>/<inv>/<YYYY-MM-DDTHH-MM-SSZ>/. Runs
-	// are staggered backwards in time at RunStep intervals. Default 1.
+	Logger           zerolog.Logger
+	S3               S3Config
+	Target           Target
+	OutputDir        string
+	Preset           string
+	Count            int
 	RunsPerInventory int
-	// RunStep is how far apart consecutive runs are spaced. Default 24h.
-	RunStep time.Duration
-	Objects int
-	Preset  string
-	Seed    int64
-	Logger  zerolog.Logger
+	RunStep          time.Duration
+	Objects          int
+	Seed             int64
 }
 
 // InventoryInfo describes a generated inventory.

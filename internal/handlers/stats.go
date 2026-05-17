@@ -16,30 +16,30 @@ import (
 
 // StatsResponse is the response for stats queries.
 type StatsResponse struct {
+	CostEstimate  *CostEstimate `json:"cost_estimate,omitempty"`
 	Prefix        string        `json:"prefix"`
-	ObjectCount   uint64        `json:"object_count"`
 	ObjectCountH  string        `json:"object_count_human"`
-	TotalBytes    uint64        `json:"total_bytes"`
 	TotalBytesH   string        `json:"total_bytes_human"`
 	TierBreakdown []TierStats   `json:"tier_breakdown,omitempty"`
-	CostEstimate  *CostEstimate `json:"cost_estimate,omitempty"`
+	ObjectCount   uint64        `json:"object_count"`
+	TotalBytes    uint64        `json:"total_bytes"`
 }
 
 // TierStats contains per-tier statistics.
 type TierStats struct {
 	TierName     string `json:"tier_name"`
-	ObjectCount  uint64 `json:"object_count"`
 	ObjectCountH string `json:"object_count_human"`
-	Bytes        uint64 `json:"bytes"`
 	BytesH       string `json:"bytes_human"`
+	ObjectCount  uint64 `json:"object_count"`
+	Bytes        uint64 `json:"bytes"`
 }
 
 // CostEstimate contains cost estimation details.
 type CostEstimate struct {
-	TotalMicrodollars           uint64            `json:"total_microdollars"`
-	TotalFormatted              string            `json:"total_formatted"`
 	PerTierMicrodollars         map[string]uint64 `json:"per_tier_microdollars,omitempty"`
 	PerTierFormatted            map[string]string `json:"per_tier_formatted,omitempty"`
+	TotalFormatted              string            `json:"total_formatted"`
+	TotalMicrodollars           uint64            `json:"total_microdollars"`
 	MonitoringMicrodollars      uint64            `json:"monitoring_microdollars,omitempty"`
 	MinObjectSizeMicrodollars   uint64            `json:"min_object_size_microdollars,omitempty"`
 	GlacierOverheadMicrodollars uint64            `json:"glacier_overhead_microdollars,omitempty"`
@@ -75,10 +75,10 @@ func (h *Handlers) computeCostEstimate(breakdown []format.TierBreakdown, include
 // DescendantInfo contains info about a descendant prefix.
 type DescendantInfo struct {
 	Prefix       string `json:"prefix"`
-	ObjectCount  uint64 `json:"object_count"`
 	ObjectCountH string `json:"object_count_human"`
-	TotalBytes   uint64 `json:"total_bytes"`
 	TotalBytesH  string `json:"total_bytes_human"`
+	ObjectCount  uint64 `json:"object_count"`
+	TotalBytes   uint64 `json:"total_bytes"`
 	Depth        uint32 `json:"depth"`
 }
 

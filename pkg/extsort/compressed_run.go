@@ -59,14 +59,14 @@ const (
 type CompressedRunWriter struct {
 	file             *os.File
 	compressor       *zstd.Encoder
-	zstdLevel        zstd.EncoderLevel
 	writer           *bufio.Writer
-	count            uint64
-	uncompressedSize uint64
 	path             string
 	buf              []byte
-	closed           bool
+	zstdLevel        zstd.EncoderLevel
+	count            uint64
+	uncompressedSize uint64
 	level            CompressionLevel
+	closed           bool
 }
 
 // CompressedRunWriterOptions configures the compressed run writer.
@@ -167,12 +167,10 @@ func (w *CompressedRunWriter) WriteSorted(rows []*PrefixRow) error {
 	return w.WriteAll(rows)
 }
 
-// Count returns the number of records written.
 func (w *CompressedRunWriter) Count() uint64 {
 	return w.count
 }
 
-// Path returns the path to the run file.
 func (w *CompressedRunWriter) Path() string {
 	return w.path
 }
@@ -240,10 +238,10 @@ type CompressedRunReader struct {
 	file         *os.File
 	decompressor *zstd.Decoder
 	reader       *bufio.Reader
-	count        uint64
-	read         uint64
 	path         string
 	buf          []byte
+	count        uint64
+	read         uint64
 	closed       bool
 }
 
@@ -351,17 +349,14 @@ func (r *CompressedRunReader) ReadInto(into *PrefixRow) error {
 	return nil
 }
 
-// Count returns the total number of records in the file.
 func (r *CompressedRunReader) Count() uint64 {
 	return r.count
 }
 
-// ReadCount returns the number of records read so far.
 func (r *CompressedRunReader) ReadCount() uint64 {
 	return r.read
 }
 
-// Path returns the path to the run file.
 func (r *CompressedRunReader) Path() string {
 	return r.path
 }

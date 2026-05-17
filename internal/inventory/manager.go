@@ -32,15 +32,10 @@ var ErrInvalidState = errors.New("invalid state for operation")
 // read lock for the duration of their fn so Unload/Remove/Close cannot
 // unmap the underlying mmap files mid-read.
 type managedInventory struct {
-	mu    sync.RWMutex
-	info  Info
-	index *indexread.Index
-	// lastAccessedNano holds the most recent read timestamp as the
-	// authoritative source for LastAccessedAt. Atomic so TouchAccessed
-	// (called on every WithIndex completion, the read hot path) doesn't
-	// need a write lock on the manager. Get/List copies this value
-	// into the returned Info before returning.
+	info             Info
+	index            *indexread.Index
 	lastAccessedNano atomic.Int64
+	mu               sync.RWMutex
 }
 
 // Manager manages multiple inventories with thread-safe access.
@@ -48,9 +43,9 @@ type managedInventory struct {
 // mirrors the new Info to durable storage so the server can rehydrate
 // after a restart.
 type Manager struct {
-	mu          sync.RWMutex
 	inventories map[ID]*managedInventory
 	store       *Store
+	mu          sync.RWMutex
 }
 
 // NewManager creates a new inventory manager.

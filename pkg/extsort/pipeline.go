@@ -16,8 +16,8 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/memdiag"
 	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
-	"github.com/eunmann/s3-inv-db/pkg/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
+	"github.com/eunmann/s3-inv-db/pkg/s3inventory"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/rs/zerolog"
 )
@@ -26,29 +26,18 @@ import (
 // It streams S3 inventory data, aggregates in bounded memory,
 // spills to sorted run files, and merges to build the final index.
 type Pipeline struct {
-	config    Config
-	s3Client  *s3fetch.Client
-	tempDir   string
-	startTime time.Time
-
-	// runFilesMu guards runFiles + runCount. Both are mutated from N
-	// chunkWorker goroutines (each flushing its private aggregator)
-	// plus the merge phase which reads runFiles. The mutex is held
-	// only across the slice append + counter bump — never across
-	// I/O — so contention is negligible.
-	runFilesMu sync.Mutex
-	runFiles   []string
-	runCount   int
-
-	// Progress tracking — atomics because N chunkWorkers update
-	// these concurrently as they parse and aggregate.
+	config           Config
+	startTime        time.Time
+	s3Client         *s3fetch.Client
+	memTracker       *memdiag.Tracker
+	tempDir          string
+	runFiles         []string
+	runCount         int
 	chunksProcessed  atomic.Int64
 	objectsProcessed atomic.Int64
 	bytesProcessed   atomic.Int64
 	flushCount       atomic.Int64
-
-	// Memory diagnostics
-	memTracker *memdiag.Tracker
+	runFilesMu       sync.Mutex
 }
 
 // Result holds the pipeline execution result.
@@ -251,21 +240,21 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 // chunkConfig holds configuration for processing a chunk.
 type chunkConfig struct {
+	tierMapping   *tiers.Mapping
 	format        s3fetch.InventoryFormat
 	keyCol        int
 	sizeCol       int
 	storageCol    int
 	accessTierCol int
-	tierMapping   *tiers.Mapping
-	fileSize      int64 // Size of the file (used for Parquet)
+	fileSize      int64
 }
 
 // chunkJob represents a chunk to be processed by a worker.
 type chunkJob struct {
-	index  int
+	config chunkConfig
 	bucket string
 	key    string
-	config chunkConfig
+	index  int
 }
 
 // objectRecord holds a single object's data for aggregation.
@@ -278,14 +267,14 @@ type objectRecord struct {
 // ingestConfig holds configuration for the ingest phase.
 type ingestConfig struct {
 	manifest      *s3fetch.Manifest
-	format        s3fetch.InventoryFormat
+	tierMapping   *tiers.Mapping
 	destBucket    string
+	format        s3fetch.InventoryFormat
 	keyCol        int
 	sizeCol       int
 	storageCol    int
 	accessTierCol int
 	numWorkers    int
-	tierMapping   *tiers.Mapping
 }
 
 // runIngestPhase streams S3 inventory and creates sorted run files.
@@ -616,11 +605,11 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 	}
 
 	parseStart := time.Now()
-	var reader inventory.Reader
+	var reader s3inventory.Reader
 	if job.config.format == s3fetch.InventoryFormatParquet {
 		reader, err = openParquetReader(body, job.config.fileSize)
 	} else {
-		reader, err = inventory.NewCSVInventoryReaderFromStream(body, job.key, inventory.CSVReaderConfig{
+		reader, err = s3inventory.NewCSVReaderFromStream(body, job.key, s3inventory.CSVReaderConfig{
 			KeyCol:        job.config.keyCol,
 			SizeCol:       job.config.sizeCol,
 			StorageCol:    job.config.storageCol,
@@ -691,16 +680,16 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 // avoiding a second temp-file copy. Falls back to stream-based open
 // only when Size() reports an error (in practice impossible — the
 // file was just written).
-func openParquetReader(obj *s3fetch.DownloadedObject, fileSize int64) (*inventory.ParquetReader, error) {
+func openParquetReader(obj *s3fetch.DownloadedObject, fileSize int64) (*s3inventory.ParquetReader, error) {
 	if size, err := obj.Size(); err == nil {
-		r, openErr := inventory.NewParquetInventoryReaderFromReaderAt(obj, size)
+		r, openErr := s3inventory.NewParquetReaderFromReaderAt(obj, size)
 		if openErr != nil {
 			return nil, fmt.Errorf("parquet reader from readerAt: %w", openErr)
 		}
 
 		return r, nil
 	}
-	r, err := inventory.NewParquetInventoryReaderFromStream(obj, fileSize)
+	r, err := s3inventory.NewParquetReaderFromStream(obj, fileSize)
 	if err != nil {
 		return nil, fmt.Errorf("parquet reader from stream: %w", err)
 	}

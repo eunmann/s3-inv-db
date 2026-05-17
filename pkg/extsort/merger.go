@@ -13,9 +13,9 @@ import (
 // Readers use the RunReader interface so both compressed and raw run
 // files work uniformly.
 type MergeIterator struct {
+	err     error
 	readers []RunReader
 	heap    typedMergeHeap
-	err     error
 }
 
 // mergeItem represents an item in the merge heap.
@@ -184,7 +184,6 @@ func (m *MergeIterator) advanceReader(idx int) error {
 	return nil
 }
 
-// Remaining returns an estimate of remaining rows to process.
 func (m *MergeIterator) Remaining() uint64 {
 	var total uint64
 	for _, r := range m.readers {

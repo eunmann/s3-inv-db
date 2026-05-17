@@ -67,17 +67,14 @@ func (a *Aggregator) accumulate(prefix string, depth uint16, size uint64, tierID
 	stats.Add(size, tierID)
 }
 
-// PrefixCount returns the number of unique prefixes currently tracked.
 func (a *Aggregator) PrefixCount() int {
 	return len(a.prefixes)
 }
 
-// ObjectCount returns the total number of objects processed.
 func (a *Aggregator) ObjectCount() int64 {
 	return a.objectCount
 }
 
-// BytesProcessed returns the total bytes processed.
 func (a *Aggregator) BytesProcessed() int64 {
 	return a.bytesProcessed
 }
@@ -85,18 +82,15 @@ func (a *Aggregator) BytesProcessed() int64 {
 // EstimatedMemoryUsage returns the per-worker aggregator's approximate
 // in-memory footprint in bytes (~288 B/entry covering map overhead +
 // avg prefix string + PrefixStats). Undercounts by 2-3× vs runtime
-// reality; the HeapPressureRatio safety check in ShouldWorkerFlush
-// catches that case.
+// reality; the heap-pressure safety check in ShouldWorkerFlush catches
+// that case.
 func (a *Aggregator) EstimatedMemoryUsage() int64 {
 	const bytesPerPrefix = 288
 
 	return int64(len(a.prefixes)) * bytesPerPrefix
 }
 
-// HeapInuseBytes returns runtime.MemStats.HeapInuse — a more
-// conservative GOMEMLIMIT-relative pressure signal than HeapAlloc
-// because it includes recently-freed spans not yet returned to the OS.
-func HeapInuseBytes() uint64 {
+func heapInuseBytes() uint64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
@@ -107,10 +101,10 @@ func HeapInuseBytes() uint64 {
 // footprint of all worker aggregators before they're forced to spill.
 const AbsoluteAggregatorCap uint64 = 512 * 1024 * 1024
 
-// HeapPressureRatio is the HeapInuse / GOMEMLIMIT fraction above which
+// heapPressureRatio is the HeapInuse / GOMEMLIMIT fraction above which
 // any worker must spill regardless of its own size — the aggregator
 // is the pipeline's only flush valve.
-const HeapPressureRatio = 0.85
+const heapPressureRatio = 0.85
 
 // AggregatorFractionOfLimit caps the combined aggregator footprint as
 // a share of GOMEMLIMIT so a multi-GiB limit doesn't dwarf other
@@ -132,9 +126,7 @@ func AggregatorCap(memoryLimit int64) uint64 {
 	return AbsoluteAggregatorCap
 }
 
-// PerWorkerAggregatorCap returns the spill threshold for one chunk
-// worker — AggregatorCap divided by numWorkers (min 1).
-func PerWorkerAggregatorCap(memoryLimit int64, numWorkers int) uint64 {
+func perWorkerAggregatorCap(memoryLimit int64, numWorkers int) uint64 {
 	if numWorkers < 1 {
 		numWorkers = 1
 	}
@@ -147,15 +139,15 @@ func PerWorkerAggregatorCap(memoryLimit int64, numWorkers int) uint64 {
 // Each worker decides independently (no flush stampedes); a HeapInuse-
 // vs-limit pressure check is the safety valve.
 func ShouldWorkerFlush(workerAggBytes uint64, memoryLimit int64, numWorkers int) bool {
-	if workerAggBytes >= PerWorkerAggregatorCap(memoryLimit, numWorkers) {
+	if workerAggBytes >= perWorkerAggregatorCap(memoryLimit, numWorkers) {
 		return true
 	}
 	if memoryLimit <= 0 {
 		return false
 	}
-	heapPressure := uint64(float64(memoryLimit) * HeapPressureRatio)
+	heapPressure := uint64(float64(memoryLimit) * heapPressureRatio)
 
-	return HeapInuseBytes() >= heapPressure
+	return heapInuseBytes() >= heapPressure
 }
 
 // Drain extracts all prefixes from the aggregator and returns them as PrefixRows.

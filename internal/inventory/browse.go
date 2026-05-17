@@ -41,12 +41,12 @@ type BrowseCrumb struct {
 type BrowseChild struct {
 	Segment                 string
 	Prefix                  string
-	ObjectCount             uint64
 	ObjectCountH            string
-	TotalBytes              uint64
 	TotalBytesH             string
-	MonthlyCostMicrodollars uint64
 	MonthlyCostFormatted    string
+	ObjectCount             uint64
+	TotalBytes              uint64
+	MonthlyCostMicrodollars uint64
 	HasChildren             bool
 }
 

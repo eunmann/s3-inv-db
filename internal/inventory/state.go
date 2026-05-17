@@ -89,45 +89,15 @@ func (id ID) ConfigID() string {
 // run. The discovery layer mints these from S3 listings; the Manager
 // tracks each one's lifecycle state via Info.
 type Inventory struct {
-	// SourceBucket is the bucket the inventory is *describing* (the
-	// segment S3 inserts between the destination prefix and the
-	// inventory-name).
-	SourceBucket string `json:"source_bucket"`
-
-	// Name is the AWS S3 inventory configuration's Id (its slug).
-	// One segment of the composite ID, not the whole thing.
-	Name string `json:"inventory_name"`
-
-	// Run is the timestamp folder name (e.g., "2026-05-13T03-02Z"). Empty
-	// when the configuration has been discovered but has no completed
-	// runs yet — in that case the entry is returned as a placeholder so
-	// the UI can surface "no runs yet".
-	Run string `json:"run"`
-
-	// ManifestKey is the S3 key of this run's manifest.json. Empty when
-	// Run is empty.
-	ManifestKey string `json:"manifest_key"`
-
-	// FileFormat reported by the manifest ("CSV", "Parquet").
-	FileFormat string `json:"file_format,omitempty"`
-
-	// FileCount is the number of data files referenced by the manifest.
-	// A coarse "size" signal for the UI before download.
-	FileCount int `json:"file_count,omitempty"`
-
-	// TotalBytes is the sum of compressed file sizes across every data
-	// file in the manifest. Zero when the manifest hasn't been fetched
-	// (older runs beyond the per-config fetch cap, or the placeholder
-	// "no runs yet" entry).
-	TotalBytes int64 `json:"total_bytes,omitempty"`
-
-	// CreationTimestamp is the manifest's reported creation time
-	// (UnixMilli as a decimal string, exactly as S3 writes it).
+	SourceBucket      string `json:"source_bucket"`
+	Name              string `json:"inventory_name"`
+	Run               string `json:"run"`
+	ManifestKey       string `json:"manifest_key"`
+	FileFormat        string `json:"file_format,omitempty"`
 	CreationTimestamp string `json:"creation_timestamp,omitempty"`
-
-	// Error captures a non-fatal per-run failure (e.g. unreadable
-	// manifest). Empty on success.
-	Error string `json:"error,omitempty"`
+	Error             string `json:"error,omitempty"`
+	FileCount         int    `json:"file_count,omitempty"`
+	TotalBytes        int64  `json:"total_bytes,omitempty"`
 }
 
 // CompositeID returns the typed identifier the Manager uses as its
@@ -150,37 +120,19 @@ func (i Inventory) ConfigID() string {
 
 // Info contains metadata about a managed inventory.
 type Info struct {
-	ID          ID        `json:"id"`
-	Name        string    `json:"name"`
-	Path        string    `json:"path"`
-	State       State     `json:"state"`
-	Error       string    `json:"error,omitempty"`
-	NodeCount   uint64    `json:"node_count,omitempty"`
-	MaxDepth    uint32    `json:"max_depth,omitempty"`
-	LoadedAt    time.Time `json:"loaded_at,omitzero"`
-	HasTierData bool      `json:"has_tier_data"`
-
-	// Pinned runs are never auto-evicted. Manual Load sets this true;
-	// manual Unload sets it false.
-	Pinned bool `json:"pinned"`
-
-	// UserUnloadedAt is set when the user manually unloads a run. The
-	// auto-loader skips runs that have a non-zero UserUnloadedAt so a
-	// deliberate unload sticks across poll cycles. Cleared on the next
-	// manual Load.
-	UserUnloadedAt time.Time `json:"user_unloaded_at,omitzero"`
-
-	// IndexBytes is the on-disk size of the materialised index in bytes,
-	// measured after a successful Load. Zero for non-loaded runs.
-	IndexBytes uint64 `json:"index_bytes,omitempty"`
-
-	// AutoLoadFailureCount and AutoLoadBackoffUntil track per-run
-	// backoff state for the auto-loader; cleared on successful load.
-	AutoLoadFailureCount uint32    `json:"auto_load_failure_count,omitempty"`
+	LoadedAt             time.Time `json:"loaded_at,omitzero"`
+	LastAccessedAt       time.Time `json:"last_accessed_at,omitzero"`
 	AutoLoadBackoffUntil time.Time `json:"auto_load_backoff_until,omitzero"`
-
-	// LastAccessedAt is updated whenever a reader (WithIndex /
-	// WithTwoIndexes) touches the index. Drives the LRU tiebreak in
-	// eviction planning.
-	LastAccessedAt time.Time `json:"last_accessed_at,omitzero"`
+	UserUnloadedAt       time.Time `json:"user_unloaded_at,omitzero"`
+	Name                 string    `json:"name"`
+	Path                 string    `json:"path"`
+	State                State     `json:"state"`
+	Error                string    `json:"error,omitempty"`
+	ID                   ID        `json:"id"`
+	IndexBytes           uint64    `json:"index_bytes,omitempty"`
+	NodeCount            uint64    `json:"node_count,omitempty"`
+	MaxDepth             uint32    `json:"max_depth,omitempty"`
+	AutoLoadFailureCount uint32    `json:"auto_load_failure_count,omitempty"`
+	Pinned               bool      `json:"pinned"`
+	HasTierData          bool      `json:"has_tier_data"`
 }

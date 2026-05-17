@@ -15,15 +15,15 @@ const missingGlyph = "—"
 
 func TestNumericLabel(t *testing.T) {
 	cases := []struct {
+		fn      func(uint64) string
 		name    string
+		want    string
 		n       uint64
 		missing bool
-		fn      func(uint64) string
-		want    string
 	}{
-		{"missing wins", 100, true, humanfmt.CountUint64, missingGlyph},
-		{"present formats", 100, false, humanfmt.CountUint64, "100"},
-		{"zero is shown when not missing", 0, false, humanfmt.CountUint64, "0"},
+		{name: "missing wins", n: 100, missing: true, fn: humanfmt.CountUint64, want: missingGlyph},
+		{name: "present formats", n: 100, missing: false, fn: humanfmt.CountUint64, want: "100"},
+		{name: "zero is shown when not missing", n: 0, missing: false, fn: humanfmt.CountUint64, want: "0"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -37,18 +37,19 @@ func TestNumericLabel(t *testing.T) {
 func TestFormatDelta(t *testing.T) {
 	id := func(_ uint64) string { return "x" }
 	cases := []struct {
-		name          string
-		before, after uint64
-		delta         int64
-		wantDeltaH    string
-		wantPct       string
-		wantSign      int
+		name       string
+		wantDeltaH string
+		wantPct    string
+		before     uint64
+		after      uint64
+		delta      int64
+		wantSign   int
 	}{
-		{"positive growth", 100, 120, 20, "+x", "+20%", 1},
-		{"shrink", 100, 80, -20, "−x", "-20%", -1},
-		{"zero delta", 100, 100, 0, "±0", "", 0},
-		{"new (zero before)", 0, 50, 50, "+x", "new", 1},
-		{"gone (zero after)", 50, 0, -50, "−x", "gone", -1},
+		{name: "positive growth", before: 100, after: 120, delta: 20, wantDeltaH: "+x", wantPct: "+20%", wantSign: 1},
+		{name: "shrink", before: 100, after: 80, delta: -20, wantDeltaH: "−x", wantPct: "-20%", wantSign: -1},
+		{name: "zero delta", before: 100, after: 100, delta: 0, wantDeltaH: "±0", wantPct: "", wantSign: 0},
+		{name: "new (zero before)", before: 0, after: 50, delta: 50, wantDeltaH: "+x", wantPct: "new", wantSign: 1},
+		{name: "gone (zero after)", before: 50, after: 0, delta: -50, wantDeltaH: "−x", wantPct: "gone", wantSign: -1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -87,15 +88,16 @@ func TestFormatCostDelta(t *testing.T) {
 
 func TestPctChange(t *testing.T) {
 	cases := []struct {
-		name          string
-		before, after uint64
-		want          string
+		name   string
+		want   string
+		before uint64
+		after  uint64
 	}{
-		{"new (before=0)", 0, 100, "new"},
-		{"gone (after=0)", 100, 0, "gone"},
-		{"both zero", 0, 0, ""},
-		{"+20%", 100, 120, "+20%"},
-		{"-50%", 200, 100, "-50%"},
+		{name: "new (before=0)", before: 0, after: 100, want: "new"},
+		{name: "gone (after=0)", before: 100, after: 0, want: "gone"},
+		{name: "both zero", before: 0, after: 0, want: ""},
+		{name: "+20%", before: 100, after: 120, want: "+20%"},
+		{name: "-50%", before: 200, after: 100, want: "-50%"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

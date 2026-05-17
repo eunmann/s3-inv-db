@@ -20,8 +20,8 @@ var noopProgress = func(string, int64, int64) {}
 // Loader runs the S3-inventory → on-disk-index build pipeline into a
 // per-inventory subdirectory of the configured cache root.
 type Loader struct {
-	cacheRoot string
 	s3Client  *s3fetch.Client
+	cacheRoot string
 }
 
 // New constructs a Loader. CacheRoot must already exist and be writable.

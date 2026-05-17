@@ -331,9 +331,9 @@ func (r *Renderer) loadTemplates() error {
 // layout, the keyed partials, and the keyed pages. Returned together
 // from readTemplates so loadTemplates can wire them up.
 type templateSources struct {
-	Layout   string
 	Partials map[string]string
 	Pages    map[string]string
+	Layout   string
 }
 
 // readTemplates loads layout + partials + page sources from any fs.FS

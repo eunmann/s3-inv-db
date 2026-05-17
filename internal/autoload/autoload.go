@@ -41,19 +41,17 @@ type LoaderFunc func(ctx context.Context, disc inventory.Inventory) error
 
 // AutoLoader polls Discovery on a ticker and feeds new runs into Loader.
 type AutoLoader struct {
-	cfg         Config
 	discovery   Discovery
 	loader      LoaderFunc
 	configStore *inventory.ConfigStore
 	manager     *inventory.Manager
 	logger      *zerolog.Logger
-
-	now func() time.Time
-
-	mu      sync.Mutex
-	stopped bool
-	wg      sync.WaitGroup
-	stop    chan struct{}
+	now         func() time.Time
+	stop        chan struct{}
+	cfg         Config
+	wg          sync.WaitGroup
+	mu          sync.Mutex
+	stopped     bool
 }
 
 // New constructs an AutoLoader; logger may be nil.

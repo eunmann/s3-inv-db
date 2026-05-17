@@ -63,17 +63,11 @@ type FakeObject struct {
 
 // GeneratorConfig configures synthetic data generation.
 type GeneratorConfig struct {
-	// NumObjects is the total number of objects to generate.
-	NumObjects int
-	// PrefixFanout is the average number of children per directory.
-	PrefixFanout int
-	// MaxDepth is the maximum directory depth.
-	MaxDepth int
-	// TierDistribution maps tier IDs to their probability (0.0-1.0).
-	// If nil, all objects use Standard tier.
 	TierDistribution map[tiers.ID]float64
-	// Seed for reproducible generation. 0 = use default seed.
-	Seed int64
+	NumObjects       int
+	PrefixFanout     int
+	MaxDepth         int
+	Seed             int64
 }
 
 // DefaultConfig returns a reasonable default configuration.
@@ -125,8 +119,8 @@ func S3RealisticConfig(numObjects int) GeneratorConfig {
 
 // Generator generates synthetic S3 inventory data.
 type Generator struct {
-	cfg GeneratorConfig
 	rng *rand.Rand
+	cfg GeneratorConfig
 }
 
 // NewGenerator creates a new data generator.

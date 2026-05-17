@@ -2,7 +2,6 @@ package handlers_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,11 +12,10 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
-	"github.com/eunmann/s3-inv-db/internal/migrate"
 	"github.com/eunmann/s3-inv-db/internal/templates"
+	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5"
-	_ "modernc.org/sqlite"
 )
 
 // Sentinel errors for fake S3 / build failures used across multiple
@@ -30,11 +28,11 @@ var (
 )
 
 type fakeDiscoverer struct {
-	listResp []inventory.Inventory
 	listErr  error
-	findResp inventory.Inventory
 	findErr  error
+	findResp inventory.Inventory
 	bucket   string
+	listResp []inventory.Inventory
 }
 
 func (f *fakeDiscoverer) List(context.Context) ([]inventory.Inventory, error) {
@@ -47,8 +45,8 @@ func (f *fakeDiscoverer) Find(_ context.Context, _, _, _ string) (inventory.Inve
 func (f *fakeDiscoverer) Bucket() string { return f.bucket }
 
 type fakeBuilder struct {
-	buildResp string
 	buildErr  error
+	buildResp string
 }
 
 func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _, _ string, _ func(string, int64, int64)) (string, error) {
@@ -64,14 +62,7 @@ func newDiscoveredHandlers(t *testing.T, disc inventory.Discoverer, ldr inventor
 		t.Fatalf("renderer: %v", err)
 	}
 
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := migrate.Apply(db); err != nil {
-		t.Fatalf("migrate.Apply: %v", err)
-	}
+	db := dbtest.OpenMemDB(t)
 	invStore, err := inventory.NewStore(db)
 	if err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)

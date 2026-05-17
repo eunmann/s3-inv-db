@@ -4,22 +4,13 @@ import (
 	"database/sql"
 	"testing"
 
-	_ "modernc.org/sqlite"
+	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
 )
 
-// openTestDB opens an in-memory SQLite database for autoload tests.
-// Foreign keys on for parity with production wiring; each test gets a
-// fresh DB via t.Cleanup.
+// openTestDB opens a fresh, migrated in-memory SQLite database for
+// autoload tests. Each test gets a clean handle via t.Cleanup.
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	if _, err := db.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
-		t.Fatalf("pragma: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
 
-	return db
+	return dbtest.OpenMemDB(t)
 }

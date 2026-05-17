@@ -68,10 +68,10 @@ const (
 // Event is the unit of communication on the bus. Payload type is
 // up to the publisher; subscribers type-assert.
 type Event struct {
-	Stage   Stage
-	Type    Type
 	Time    time.Time
 	Payload any
+	Stage   Stage
+	Type    Type
 }
 
 // Common payloads. Stages can also publish their own custom shapes.
@@ -86,18 +86,18 @@ type BatchCommitted struct {
 
 // SpillCompleted reports the result of a spill write.
 type SpillCompleted struct {
+	OutputPath string
 	WorkerID   int
 	Rows       uint64
 	Bytes      int64
 	Duration   time.Duration
-	OutputPath string
 }
 
 // WorkerState reports a worker transitioning between idle and busy.
 // Used to compute utilization.
 type WorkerState struct {
+	Reason   string
 	WorkerID int
-	Reason   string // e.g. "waiting_jobs", "downloading", "parsing", "aggregating", "spilling"
 }
 
 // StageTiming reports a full stage start/end pair.
@@ -113,10 +113,10 @@ type StageTiming struct {
 // channel was full. Call Cancel to detach.
 type Subscription struct {
 	C       <-chan Event
-	dropped atomic.Uint64
-	stages  map[Stage]struct{} // empty = all stages
+	stages  map[Stage]struct{}
 	send    chan<- Event
 	cancel  func()
+	dropped atomic.Uint64
 }
 
 // Dropped returns how many events were dropped because this
@@ -133,8 +133,8 @@ func (s *Subscription) Cancel() {
 
 // Bus is the shared event bus. Zero-value is unusable; call NewBus.
 type Bus struct {
-	mu     sync.Mutex
 	subs   []*Subscription
+	mu     sync.Mutex
 	closed atomic.Bool
 }
 

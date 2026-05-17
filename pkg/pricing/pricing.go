@@ -177,19 +177,10 @@ func LoadPriceTable(path string) (PriceTable, error) {
 
 // CostResult contains the estimated monthly storage costs with detailed breakdown.
 type CostResult struct {
-	// TotalMicrodollars is the total cost in microdollars (1 USD = 1,000,000 microdollars).
-	TotalMicrodollars uint64
-
-	// PerTierMicrodollars maps tier names to their storage cost in microdollars.
-	PerTierMicrodollars map[string]uint64
-
-	// MonitoringMicrodollars is the Intelligent-Tiering monitoring fee.
-	MonitoringMicrodollars uint64
-
-	// MinObjectSizeMicrodollars is the additional cost from 128KB minimum billing.
-	MinObjectSizeMicrodollars uint64
-
-	// GlacierOverheadMicrodollars is the metadata overhead cost for Glacier objects.
+	PerTierMicrodollars         map[string]uint64
+	TotalMicrodollars           uint64
+	MonitoringMicrodollars      uint64
+	MinObjectSizeMicrodollars   uint64
 	GlacierOverheadMicrodollars uint64
 }
 

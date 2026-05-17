@@ -76,8 +76,8 @@ type Manifest struct {
 // ManifestFile represents a single inventory file in the manifest.
 type ManifestFile struct {
 	Key         string `json:"key"`
-	Size        int64  `json:"size"`
 	MD5Checksum string `json:"MD5checksum"`
+	Size        int64  `json:"size"`
 }
 
 // ParseManifest parses an AWS S3 Inventory manifest.json.

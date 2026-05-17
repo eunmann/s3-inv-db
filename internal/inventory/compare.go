@@ -157,6 +157,8 @@ func NewCompareNumeric(before, after uint64) CompareNumeric {
 // prefix exists in either side — when both are false the page renders
 // the empty state.
 type CompareSelf struct {
+	TierBeforeMap map[string]indexread.TierBreakdown
+	TierAfterMap  map[string]indexread.TierBreakdown
 	Prefix        string
 	Objects       CompareNumeric
 	Bytes         CompareNumeric
@@ -164,23 +166,18 @@ type CompareSelf struct {
 	NotFoundInB   bool
 	HasTierDataA  bool
 	HasTierDataB  bool
-	TierBeforeMap map[string]indexread.TierBreakdown
-	TierAfterMap  map[string]indexread.TierBreakdown
 }
 
 // CompareChild is one immediate-child segment comparison.
 type CompareChild struct {
+	TierBefore  map[string]indexread.TierBreakdown
+	TierAfter   map[string]indexread.TierBreakdown
 	Segment     string
 	Prefix      string
-	Status      CompareStatus
 	Objects     CompareNumeric
 	Bytes       CompareNumeric
-	HasChildren bool // in either A or B — drill-in is possible if true
-
-	// Per-tier breakdown for cost computation downstream. Keyed by
-	// tier name. Empty when neither side has tier data.
-	TierBefore map[string]indexread.TierBreakdown
-	TierAfter  map[string]indexread.TierBreakdown
+	Status      CompareStatus
+	HasChildren bool
 }
 
 // CompareLevelData is the full set of inputs the template needs to render
@@ -316,9 +313,9 @@ func fromBoth(a, b segChildRec) CompareChild {
 }
 
 type childRec struct {
+	tiers       map[string]indexread.TierBreakdown
 	fullPrefix  string
 	stats       indexread.Stats
-	tiers       map[string]indexread.TierBreakdown
 	hasChildren bool
 }
 

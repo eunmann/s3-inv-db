@@ -57,18 +57,18 @@ func (s State) IsLive() bool {
 
 // Job is one unit of background work.
 type Job struct {
+	StartedAt   time.Time
+	FinishedAt  time.Time
+	UpdatedAt   time.Time
 	ID          ID
 	InventoryID inventory.ID
 	Kind        Kind
 	State       State
 	Stage       string
+	Error       string
 	Progress    int
 	BytesTotal  int64
 	BytesDone   int64
-	StartedAt   time.Time
-	FinishedAt  time.Time
-	Error       string
-	UpdatedAt   time.Time
 }
 
 // Update is the diff a Work function reports back during execution. Zero

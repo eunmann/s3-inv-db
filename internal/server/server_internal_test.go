@@ -10,11 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eunmann/s3-inv-db/internal/migrate"
+	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
-	_ "modernc.org/sqlite"
 )
 
 // localhostHost is the synthetic request Host used across the
@@ -26,16 +25,8 @@ const localhostHost = "localhost"
 // opens the production one (foreign_keys on for cascade tests).
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := migrate.Apply(db); err != nil {
-		t.Fatalf("migrate.Apply: %v", err)
-	}
 
-	return db
+	return dbtest.OpenMemDB(t)
 }
 
 func TestNewServer(t *testing.T) {
