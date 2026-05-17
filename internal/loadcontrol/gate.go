@@ -13,13 +13,6 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
 
-// Build / Options are convenience re-exports so callers can
-// reference loadgate types without a parallel inventory import.
-type (
-	Build   = inventory.BuildFunc
-	Options = inventory.GatedLoadOptions
-)
-
 // BudgetRefusedError carries the planner's verdict to the UI.
 type BudgetRefusedError struct {
 	Plan budget.Plan
@@ -42,7 +35,7 @@ func New(manager *inventory.Manager, tracker *budget.Tracker, planner *budget.Pl
 
 // Load plans, evicts, reserves, builds, releases. Returns
 // *BudgetRefusedError when the planner refuses and opts.Force is false.
-func (g *Gate) Load(ctx context.Context, id inventory.ID, build Build, opts Options) error {
+func (g *Gate) Load(ctx context.Context, id inventory.ID, build inventory.BuildFunc, opts inventory.GatedLoadOptions) error {
 	plan, err := g.planner.Plan(ctx, budget.Input{
 		Target:        id,
 		EstimateBytes: opts.EstimateBytes,

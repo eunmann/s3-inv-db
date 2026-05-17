@@ -31,7 +31,7 @@ func TestGate_Load_RefusesWhenEstimateOverBudget(t *testing.T) {
 
 		return "", nil
 	}
-	err := gate.Load(t.Context(), id, build, loadcontrol.Options{EstimateBytes: 500, Pin: true})
+	err := gate.Load(t.Context(), id, build, inventory.GatedLoadOptions{EstimateBytes: 500, Pin: true})
 	var refused *loadcontrol.BudgetRefusedError
 	if !errors.As(err, &refused) {
 		t.Errorf("expected BudgetRefusedError, got %v", err)
@@ -50,7 +50,7 @@ func TestGate_Load_ForceBypassesRefusal(t *testing.T) {
 
 		return "", errBuildOnPurpose
 	}
-	_ = gate.Load(t.Context(), id, build, loadcontrol.Options{EstimateBytes: 500, Force: true, Pin: true})
+	_ = gate.Load(t.Context(), id, build, inventory.GatedLoadOptions{EstimateBytes: 500, Force: true, Pin: true})
 	if !called {
 		t.Error("force should let the build attempt run despite budget refusal")
 	}
@@ -66,7 +66,7 @@ func TestGate_Load_RefusalCarriesPlan(t *testing.T) {
 	if err := mgr.Register(t.Context(), id, "n", "p"); err != nil {
 		t.Fatal(err)
 	}
-	err := gate.Load(t.Context(), id, nil, loadcontrol.Options{EstimateBytes: 9999, Pin: false})
+	err := gate.Load(t.Context(), id, nil, inventory.GatedLoadOptions{EstimateBytes: 9999, Pin: false})
 	var refused *loadcontrol.BudgetRefusedError
 	if !errors.As(err, &refused) {
 		t.Fatalf("expected BudgetRefusedError, got %v", err)
