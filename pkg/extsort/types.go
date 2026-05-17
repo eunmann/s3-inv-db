@@ -181,6 +181,50 @@ func SortPrefixRows(rows []*PrefixRow) {
 	})
 }
 
+// encodePrefixRowRecord serialises one PrefixRow into buf using the
+// shared on-the-wire layout (length-prefixed string + fixed fields +
+// tier arrays). The caller passes &buf so the slice can be grown
+// in place across many calls; the encoded byte length is returned so
+// callers can track uncompressed size or pass a partial slice to
+// the underlying writer.
+//
+// Both RunFileWriter and CompressedRunWriter delegate to this — the
+// binary format is identical and only the I/O layer differs.
+func encodePrefixRowRecord(buf *[]byte, row *PrefixRow) int {
+	prefixLen := len(row.Prefix)
+	recordSize := 4 + prefixLen + 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
+	if len(*buf) < recordSize {
+		*buf = make([]byte, recordSize*2)
+	}
+	b := *buf
+	offset := 0
+
+	binary.LittleEndian.PutUint32(b[offset:], uint32(prefixLen))
+	offset += 4
+	copy(b[offset:], row.Prefix)
+	offset += prefixLen
+
+	binary.LittleEndian.PutUint16(b[offset:], row.Depth)
+	offset += 2
+
+	binary.LittleEndian.PutUint64(b[offset:], row.Count)
+	offset += 8
+
+	binary.LittleEndian.PutUint64(b[offset:], row.TotalBytes)
+	offset += 8
+
+	for i := range MaxTiers {
+		binary.LittleEndian.PutUint64(b[offset:], row.TierCounts[i])
+		offset += 8
+	}
+	for i := range MaxTiers {
+		binary.LittleEndian.PutUint64(b[offset:], row.TierBytes[i])
+		offset += 8
+	}
+
+	return offset
+}
+
 // PrefixStats holds aggregated statistics for a single prefix during
 // the in-memory aggregation phase. All counters are uint64 because at
 // billion-object / PB-scale buckets, a single tier of the root prefix
@@ -239,51 +283,62 @@ func (s *PrefixStats) ToPrefixRow(prefix string) *PrefixRow {
 }
 
 // Config holds configuration for the external sort pipeline.
+// Concerns are grouped into substructs: S3 download tuning, Merge
+// concurrency, Observe (progress + events). Top-level fields are
+// the ones that apply across the whole pipeline.
 type Config struct {
-	// TempDir is the directory for temporary run files.
-	// If empty, os.TempDir() is used.
+	// TempDir is the directory for temporary run files. If empty,
+	// os.TempDir() is used.
 	TempDir string
 
-	// S3DownloadPartConcurrency is the number of concurrent parts for each S3 download.
-	// Used by the S3 Download Manager for parallel range downloads within a single object.
-	// Default: max(4, NumCPU).
-	S3DownloadPartConcurrency int
-
-	// S3DownloadPartSize is the size of each part for parallel S3 downloads.
-	// Larger values may improve throughput but use more memory.
-	// Default: 16MB.
-	S3DownloadPartSize int64
-
-	// MaxDepth is the maximum prefix depth to track.
-	// Prefixes deeper than this are not aggregated.
-	// Default: 0 (unlimited).
+	// MaxDepth is the maximum prefix depth to track. Prefixes
+	// deeper than this are not aggregated. 0 means unlimited.
 	MaxDepth int
 
-	// NumMergeWorkers is the number of concurrent merge workers.
-	// Default: max(1, NumCPU/2).
-	NumMergeWorkers int
+	S3      S3Config
+	Merge   MergeConfig
+	Observe ObserveConfig
+}
 
-	// MaxMergeFanIn is the maximum number of runs merged in a single worker.
-	// Higher values reduce merge rounds but increase memory per worker.
-	// Default: 8.
-	MaxMergeFanIn int
+// S3Config tunes the S3 download manager used during ingest.
+type S3Config struct {
+	// DownloadPartConcurrency is the number of concurrent parts for
+	// each S3 download (parallel range downloads within one object).
+	// Default: max(2, NumCPU/4).
+	DownloadPartConcurrency int
 
-	// UseCompressedRuns enables compression for intermediate run files.
-	// This significantly reduces disk I/O and storage at minimal CPU cost.
-	// Default: true.
+	// DownloadPartSize is the size of each part for parallel S3
+	// downloads. Larger values may improve throughput but use more
+	// memory. Default: 16 MiB.
+	DownloadPartSize int64
+}
+
+// MergeConfig tunes the K-way merge phase.
+type MergeConfig struct {
+	// NumWorkers is the number of concurrent merge workers.
+	// Default: min(max(NumCPU/2, 1), 8).
+	NumWorkers int
+
+	// MaxFanIn is the maximum number of runs merged in a single
+	// worker. Higher values reduce merge rounds but increase memory
+	// per worker. Default: 16.
+	MaxFanIn int
+
+	// UseCompressedRuns enables zstd compression for intermediate
+	// run files. Default: true.
 	UseCompressedRuns bool
+}
 
-	// OnProgress is invoked on every phase transition and roughly once
-	// per ingest chunk. done/total are zero when only the stage label
-	// changed; otherwise they describe quantitative progress within
-	// the current stage (units vary — chunks during ingest). Optional.
+// ObserveConfig wires up optional progress + event consumers.
+type ObserveConfig struct {
+	// OnProgress is invoked on every phase transition and roughly
+	// once per ingest chunk. done/total are zero on stage transitions;
+	// otherwise they describe quantitative progress.
 	OnProgress func(stage string, done, total int64)
 
 	// EventBus, if non-nil, receives structured events from every
-	// pipeline stage (download, parse, aggregator, spill, merge,
-	// index build, MPHF). Use for benchmarking (phase timings,
-	// worker utilization) or live observability. The pipeline does
-	// not close the bus; the caller owns its lifecycle.
+	// pipeline stage. The pipeline does not close the bus; the
+	// caller owns its lifecycle.
 	EventBus *events.Bus
 }
 
@@ -302,12 +357,16 @@ func DefaultConfig() Config {
 	mergeWorkers := min(max(numCPU/2, 1), mergeWorkerCap)
 
 	return Config{
-		TempDir:                   "",
-		S3DownloadPartConcurrency: partConcurrency,
-		S3DownloadPartSize:        16 * 1024 * 1024, // 16MB
-		MaxDepth:                  0,                // unlimited
-		NumMergeWorkers:           mergeWorkers,
-		MaxMergeFanIn:             16, // Higher fan-in reduces merge rounds
-		UseCompressedRuns:         true,
+		TempDir:  "",
+		MaxDepth: 0,
+		S3: S3Config{
+			DownloadPartConcurrency: partConcurrency,
+			DownloadPartSize:        16 * 1024 * 1024,
+		},
+		Merge: MergeConfig{
+			NumWorkers:        mergeWorkers,
+			MaxFanIn:          16,
+			UseCompressedRuns: true,
+		},
 	}
 }

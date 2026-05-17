@@ -25,6 +25,13 @@ import (
 // process-local cache.
 const cacheDirMode = 0o750
 
+// noopProgress is the package-level no-op callback used when callers
+// pass a nil progress function. Reusing one closure avoids a small
+// per-Build allocation.
+//
+//nolint:gochecknoglobals // intentional package-level no-op closure
+var noopProgress = func(string, int64, int64) {}
+
 // Loader runs the S3-inventory → on-disk-index build pipeline into a
 // per-inventory subdirectory of the configured cache root.
 type Loader struct {
@@ -63,7 +70,7 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, run, manifestU
 		return "", errEmptyManifest
 	}
 	if onProgress == nil {
-		onProgress = func(string, int64, int64) {}
+		onProgress = noopProgress
 	}
 
 	onProgress("preparing", 0, 0)
@@ -76,7 +83,7 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, run, manifestU
 	}
 
 	cfg := extsort.DefaultConfig()
-	cfg.OnProgress = onProgress
+	cfg.Observe.OnProgress = onProgress
 
 	pipeline := extsort.NewPipeline(cfg, l.s3Client)
 	if _, err := pipeline.Run(ctx, manifestURI, outDir); err != nil {

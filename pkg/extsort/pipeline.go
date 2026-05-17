@@ -67,29 +67,29 @@ type Result struct {
 // within the stage is emitted separately by the stage's own loop.
 func (p *Pipeline) setPhase(name string) {
 	p.memTracker.SetPhase(name)
-	if p.config.OnProgress != nil {
-		p.config.OnProgress(name, 0, 0)
+	if p.config.Observe.OnProgress != nil {
+		p.config.Observe.OnProgress(name, 0, 0)
 	}
 }
 
 // reportProgress emits quantitative progress within the current phase.
 // Called from ingest after each chunk.
 func (p *Pipeline) reportProgress(phase string, done, total int64) {
-	if p.config.OnProgress != nil {
-		p.config.OnProgress(phase, done, total)
+	if p.config.Observe.OnProgress != nil {
+		p.config.Observe.OnProgress(phase, done, total)
 	}
 }
 
 // publish emits an event on the configured bus, if any. Cheap when
 // no bus is set (single nil check). Sets the timestamp if missing.
 func (p *Pipeline) publish(ev events.Event) {
-	if p.config.EventBus == nil {
+	if p.config.Observe.EventBus == nil {
 		return
 	}
 	if ev.Time.IsZero() {
 		ev.Time = time.Now()
 	}
-	p.config.EventBus.Publish(ev)
+	p.config.Observe.EventBus.Publish(ev)
 }
 
 // timedIngestPhase wraps runIngestPhase with start/end events and
@@ -763,7 +763,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 
 	// Use compressed runs if configured (default: true)
 	ext := ".bin"
-	if p.config.UseCompressedRuns {
+	if p.config.Merge.UseCompressedRuns {
 		ext = ".crun"
 	}
 	p.runFilesMu.Lock()
@@ -778,7 +778,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	const bufferSize = 4 * 1024 * 1024
 
 	var writeErr error
-	if p.config.UseCompressedRuns {
+	if p.config.Merge.UseCompressedRuns {
 		writer, err := NewCompressedRunWriter(runPath, CompressedRunWriterOptions{
 			BufferSize:       int(bufferSize),
 			CompressionLevel: CompressionFastest, // Optimize for write speed during ingest
@@ -842,7 +842,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 		Int("prefixes_count", len(rows)).
 		Str("aggregator_memory", humanfmt.Bytes(aggMemory)).
 		Str("buffer_size", humanfmt.Bytes(bufferSize)).
-		Bool("compressed", p.config.UseCompressedRuns).
+		Bool("compressed", p.config.Merge.UseCompressedRuns).
 		Str("duration", humanfmt.Duration(flushDuration)).
 		Dur("duration_ms", flushDuration).
 		Msg("run file written")
@@ -891,7 +891,7 @@ func (p *Pipeline) runMergePhase(
 		MaxFanIn:         maxFanIn,
 		BufferSize:       int(perReaderBuffer),
 		TempDir:          p.tempDir,
-		UseCompression:   p.config.UseCompressedRuns,
+		UseCompression:   p.config.Merge.UseCompressedRuns,
 		CompressionLevel: CompressionFastest,
 		OnRoundComplete: func(round, remaining int) {
 			p.reportProgress("building", int64(numRunFiles-remaining), int64(numRunFiles))
@@ -958,11 +958,11 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	const perReaderBuffer int64 = 1 * 1024 * 1024
 
 	// Use parallel merge for multiple run files
-	numWorkers := p.config.NumMergeWorkers
+	numWorkers := p.config.Merge.NumWorkers
 	if numWorkers <= 0 {
 		numWorkers = 1
 	}
-	maxFanIn := p.config.MaxMergeFanIn
+	maxFanIn := p.config.Merge.MaxFanIn
 	if maxFanIn <= 1 {
 		maxFanIn = 8
 	}
@@ -972,7 +972,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		Int("merge_workers_count", numWorkers).
 		Int("max_fan_in", maxFanIn).
 		Int64("per_reader_buffer_kb", perReaderBuffer/1024).
-		Bool("compressed", p.config.UseCompressedRuns).
+		Bool("compressed", p.config.Merge.UseCompressedRuns).
 		Msg("merge phase starting")
 
 	mergeIter, cleanupIntermediates, err := p.runMergePhase(ctx, log, numRunFiles, numWorkers, maxFanIn, perReaderBuffer)

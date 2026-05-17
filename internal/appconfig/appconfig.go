@@ -64,25 +64,14 @@ func Load(path string) (*Config, error) {
 	if err := dec.Decode(&c); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
-	if err := c.validate(); err != nil {
-		return nil, fmt.Errorf("validate config %s: %w", path, err)
-	}
-
-	return &c, nil
-}
-
-func (c *Config) validate() error {
-	if c == nil {
-		return nil
-	}
 	for i := range c.Inventories {
 		e := &c.Inventories[i]
 		if e.Source == "" || e.Name == "" {
-			return fmt.Errorf("%w", ErrInventoryKeysRequired)
+			return nil, fmt.Errorf("validate config %s: %w", path, ErrInventoryKeysRequired)
 		}
 	}
 
-	return nil
+	return &c, nil
 }
 
 // PickString returns flagVal if the flag was explicit, otherwise

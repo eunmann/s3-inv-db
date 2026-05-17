@@ -10,6 +10,12 @@ import (
 	"strings"
 )
 
+// defaultRunBufferSize is the default I/O buffer for run-file reader
+// and writer instances when the caller passes 0. Big enough to
+// amortise syscall overhead on sequential append/scan, small enough
+// that holding several per worker stays well under any memory cap.
+const defaultRunBufferSize = 4 * 1024 * 1024
+
 // RunFile format:
 //
 // Header (16 bytes):
@@ -52,7 +58,7 @@ func NewRunFileWriter(path string, bufferSize int) (*RunFileWriter, error) {
 	}
 
 	if bufferSize <= 0 {
-		bufferSize = 4 * 1024 * 1024 // 4MB default
+		bufferSize = defaultRunBufferSize
 	}
 
 	w := &RunFileWriter{
@@ -79,43 +85,10 @@ func NewRunFileWriter(path string, bufferSize int) (*RunFileWriter, error) {
 
 // Write writes a single PrefixRow to the run file.
 func (w *RunFileWriter) Write(row *PrefixRow) error {
-	prefixLen := len(row.Prefix)
-	recordSize := 4 + prefixLen + 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
-
-	if len(w.buf) < recordSize {
-		w.buf = make([]byte, recordSize*2)
-	}
-
-	offset := 0
-
-	binary.LittleEndian.PutUint32(w.buf[offset:], uint32(prefixLen))
-	offset += 4
-	copy(w.buf[offset:], row.Prefix)
-	offset += prefixLen
-
-	binary.LittleEndian.PutUint16(w.buf[offset:], row.Depth)
-	offset += 2
-
-	binary.LittleEndian.PutUint64(w.buf[offset:], row.Count)
-	offset += 8
-
-	binary.LittleEndian.PutUint64(w.buf[offset:], row.TotalBytes)
-	offset += 8
-
-	for i := range MaxTiers {
-		binary.LittleEndian.PutUint64(w.buf[offset:], row.TierCounts[i])
-		offset += 8
-	}
-
-	for i := range MaxTiers {
-		binary.LittleEndian.PutUint64(w.buf[offset:], row.TierBytes[i])
-		offset += 8
-	}
-
-	if _, err := w.writer.Write(w.buf[:offset]); err != nil {
+	n := encodePrefixRowRecord(&w.buf, row)
+	if _, err := w.writer.Write(w.buf[:n]); err != nil {
 		return fmt.Errorf("write record: %w", err)
 	}
-
 	w.count++
 
 	return nil
@@ -214,7 +187,7 @@ func OpenRunFile(path string, bufferSize int) (*RunFileReader, error) {
 	}
 
 	if bufferSize <= 0 {
-		bufferSize = 4 * 1024 * 1024 // 4MB default
+		bufferSize = defaultRunBufferSize
 	}
 
 	r := &RunFileReader{

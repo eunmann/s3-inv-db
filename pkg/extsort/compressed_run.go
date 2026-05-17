@@ -82,7 +82,7 @@ type CompressedRunWriterOptions struct {
 // NewCompressedRunWriter creates a new compressed run file writer.
 func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*CompressedRunWriter, error) {
 	if opts.BufferSize <= 0 {
-		opts.BufferSize = 4 * 1024 * 1024 // 4MB default
+		opts.BufferSize = defaultRunBufferSize
 	}
 	if opts.CompressionLevel == 0 {
 		opts.CompressionLevel = CompressionDefault
@@ -141,45 +141,12 @@ func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*Comp
 
 // Write writes a single PrefixRow to the compressed run file.
 func (w *CompressedRunWriter) Write(row *PrefixRow) error {
-	prefixLen := len(row.Prefix)
-	recordSize := 4 + prefixLen + 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
-
-	if len(w.buf) < recordSize {
-		w.buf = make([]byte, recordSize*2)
-	}
-
-	offset := 0
-
-	binary.LittleEndian.PutUint32(w.buf[offset:], uint32(prefixLen))
-	offset += 4
-	copy(w.buf[offset:], row.Prefix)
-	offset += prefixLen
-
-	binary.LittleEndian.PutUint16(w.buf[offset:], row.Depth)
-	offset += 2
-
-	binary.LittleEndian.PutUint64(w.buf[offset:], row.Count)
-	offset += 8
-
-	binary.LittleEndian.PutUint64(w.buf[offset:], row.TotalBytes)
-	offset += 8
-
-	for i := range MaxTiers {
-		binary.LittleEndian.PutUint64(w.buf[offset:], row.TierCounts[i])
-		offset += 8
-	}
-
-	for i := range MaxTiers {
-		binary.LittleEndian.PutUint64(w.buf[offset:], row.TierBytes[i])
-		offset += 8
-	}
-
-	if _, err := w.writer.Write(w.buf[:offset]); err != nil {
+	n := encodePrefixRowRecord(&w.buf, row)
+	if _, err := w.writer.Write(w.buf[:n]); err != nil {
 		return fmt.Errorf("write record: %w", err)
 	}
-
 	w.count++
-	w.uncompressedSize += uint64(offset)
+	w.uncompressedSize += uint64(n)
 
 	return nil
 }
@@ -288,7 +255,7 @@ type CompressedRunReader struct {
 // It auto-detects whether the file is compressed or uncompressed based on the version.
 func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, error) {
 	if bufferSize <= 0 {
-		bufferSize = 4 * 1024 * 1024 // 4MB default
+		bufferSize = defaultRunBufferSize
 	}
 
 	f, err := os.Open(path)
@@ -455,7 +422,7 @@ var (
 // Returns a RunReader interface that works with either format.
 func OpenRunFileAuto(path string, bufferSize int) (RunReader, error) {
 	if bufferSize <= 0 {
-		bufferSize = 4 * 1024 * 1024
+		bufferSize = defaultRunBufferSize
 	}
 
 	f, err := os.Open(path)

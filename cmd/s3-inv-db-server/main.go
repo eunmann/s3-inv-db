@@ -45,24 +45,24 @@ func main() {
 }
 
 func run() error {
-	configPath := flag.String("config", envOr("S3INV_CONFIG", ""), "path to JSON config file (overridden by explicit flags)")
+	configPath := flag.String("config", appconfig.EnvOr("S3INV_CONFIG", ""), "path to JSON config file (overridden by explicit flags)")
 	addr := flag.String("addr", ":8080", "HTTP server address")
 	verbose := flag.Bool("verbose", false, "enable debug logging")
 	prettyLogs := flag.Bool("pretty-logs", false, "use human-friendly console output")
 	priceTablePath := flag.String("price-table", "", "path to custom price table JSON (default: US East 1 prices)")
-	s3Source := flag.String("s3-source", envOr("S3INV_SOURCE", ""), "S3 URI to discover inventories under (e.g., s3://bucket/inventory-data/)")
-	cacheDir := flag.String("cache-dir", envOr("S3INV_CACHE_DIR", "/var/cache/s3inv"), "local directory for built indexes downloaded from S3")
-	scratchDir := flag.String("scratch-dir", envOr("S3INV_SCRATCH_DIR", ""), "directory for transient load-time files; defaults to --cache-dir")
-	stateDB := flag.String("state-db", envOr("S3INV_STATE_DB", ""), "SQLite path for persisted state (default: <cache-dir>/state.db)")
+	s3Source := flag.String("s3-source", appconfig.EnvOr("S3INV_SOURCE", ""), "S3 URI to discover inventories under (e.g., s3://bucket/inventory-data/)")
+	cacheDir := flag.String("cache-dir", appconfig.EnvOr("S3INV_CACHE_DIR", "/var/cache/s3inv"), "local directory for built indexes downloaded from S3")
+	scratchDir := flag.String("scratch-dir", appconfig.EnvOr("S3INV_SCRATCH_DIR", ""), "directory for transient load-time files; defaults to --cache-dir")
+	stateDB := flag.String("state-db", appconfig.EnvOr("S3INV_STATE_DB", ""), "SQLite path for persisted state (default: <cache-dir>/state.db)")
 
-	autoLoad := flag.Bool("auto-load", envBool("S3INV_AUTO_LOAD", false), "enable background discovery + auto-load of new inventory runs; requires --max-index-disk")
-	pollInterval := flag.Duration("auto-load-poll-interval", envDuration("S3INV_AUTO_LOAD_POLL_INTERVAL", defaultPollInterval), "discovery polling interval")
-	discoveryRefresh := flag.Duration("discovery-refresh-interval", envDuration("S3INV_DISCOVERY_REFRESH_INTERVAL", defaultDiscoveryRefreshInterval), "interval at which the background discovery refresher updates the cached snapshot served by HTTP handlers")
-	maxIndexDisk := flag.String("max-index-disk", envOr("S3INV_MAX_INDEX_DISK", ""), "max cumulative on-disk bytes for loaded indexes (e.g. 100GB); required with --auto-load")
-	headroom := flag.String("index-headroom", envOr("S3INV_INDEX_HEADROOM", ""), "reserved unused space inside --max-index-disk; default 20% of the cap")
-	autoLoadConcurrency := flag.Int("max-auto-load-concurrency", envInt("S3INV_MAX_AUTO_LOAD_CONCURRENCY", 1), "max concurrent auto-loads")
-	autoLoadRetention := flag.Uint("auto-load-retention-default", uint(envInt("S3INV_AUTO_LOAD_RETENTION_DEFAULT", defaultAutoLoadRetention)), "default per-config run-retention when a configuration sets none")
-	indexRatio := flag.Float64("index-ratio", envFloat("S3INV_INDEX_RATIO", defaultIndexRatio), "estimate multiplier: final index bytes ≈ ratio × compressed manifest total")
+	autoLoad := flag.Bool("auto-load", appconfig.EnvBool("S3INV_AUTO_LOAD", false), "enable background discovery + auto-load of new inventory runs; requires --max-index-disk")
+	pollInterval := flag.Duration("auto-load-poll-interval", appconfig.EnvDuration("S3INV_AUTO_LOAD_POLL_INTERVAL", defaultPollInterval), "discovery polling interval")
+	discoveryRefresh := flag.Duration("discovery-refresh-interval", appconfig.EnvDuration("S3INV_DISCOVERY_REFRESH_INTERVAL", defaultDiscoveryRefreshInterval), "interval at which the background discovery refresher updates the cached snapshot served by HTTP handlers")
+	maxIndexDisk := flag.String("max-index-disk", appconfig.EnvOr("S3INV_MAX_INDEX_DISK", ""), "max cumulative on-disk bytes for loaded indexes (e.g. 100GB); required with --auto-load")
+	headroom := flag.String("index-headroom", appconfig.EnvOr("S3INV_INDEX_HEADROOM", ""), "reserved unused space inside --max-index-disk; default 20% of the cap")
+	autoLoadConcurrency := flag.Int("max-auto-load-concurrency", appconfig.EnvInt("S3INV_MAX_AUTO_LOAD_CONCURRENCY", 1), "max concurrent auto-loads")
+	autoLoadRetention := flag.Uint("auto-load-retention-default", uint(appconfig.EnvInt("S3INV_AUTO_LOAD_RETENTION_DEFAULT", defaultAutoLoadRetention)), "default per-config run-retention when a configuration sets none")
+	indexRatio := flag.Float64("index-ratio", appconfig.EnvFloat("S3INV_INDEX_RATIO", defaultIndexRatio), "estimate multiplier: final index bytes ≈ ratio × compressed manifest total")
 	flag.Parse()
 
 	fileCfg, err := appconfig.Load(*configPath)
@@ -269,62 +269,3 @@ func parseSize(s string) (uint64, error) {
 	return uint64(n * float64(mult)), nil
 }
 
-func envBool(k string, def bool) bool {
-	v := os.Getenv(k)
-	if v == "" {
-		return def
-	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		return def
-	}
-
-	return b
-}
-
-func envInt(k string, def int) int {
-	v := os.Getenv(k)
-	if v == "" {
-		return def
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return def
-	}
-
-	return n
-}
-
-func envFloat(k string, def float64) float64 {
-	v := os.Getenv(k)
-	if v == "" {
-		return def
-	}
-	f, err := strconv.ParseFloat(v, 64)
-	if err != nil {
-		return def
-	}
-
-	return f
-}
-
-func envDuration(k string, def time.Duration) time.Duration {
-	v := os.Getenv(k)
-	if v == "" {
-		return def
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return def
-	}
-
-	return d
-}
-
-func envOr(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-
-	return def
-}

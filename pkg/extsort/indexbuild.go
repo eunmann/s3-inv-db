@@ -139,7 +139,7 @@ func (b *IndexBuilder) cleanup() {
 // Add processes a single PrefixRow from the sorted stream.
 // Prefixes must be added in lexicographic (sorted) order.
 func (b *IndexBuilder) Add(row *PrefixRow) error {
-	commonDepth := b.findCommonAncestorDepth(row.Prefix, int(row.Depth))
+	commonDepth := b.findCommonAncestorDepth(row.Prefix)
 	if err := b.closeNodesAbove(commonDepth); err != nil {
 		return err
 	}
@@ -179,7 +179,7 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 }
 
 // findCommonAncestorDepth finds the depth of the deepest common ancestor.
-func (b *IndexBuilder) findCommonAncestorDepth(prefix string, _ int) int {
+func (b *IndexBuilder) findCommonAncestorDepth(prefix string) int {
 	commonDepth := 0
 
 	for i := range len(b.stack) {
