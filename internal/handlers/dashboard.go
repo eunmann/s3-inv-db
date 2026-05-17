@@ -3,7 +3,7 @@ package handlers
 import (
 	"context"
 	"net/http"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
@@ -116,7 +116,7 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	h.fillAutoLoadCounters(r.Context(), &data, views)
 
 	// Stable, alphabetical order for the page rows.
-	sort.Strings(agg.Order)
+	slices.Sort(agg.Order)
 	for _, key := range agg.Order {
 		c := agg.Confs[key]
 		row := DashboardConfig{

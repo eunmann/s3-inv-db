@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
+	"strings"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -859,7 +861,7 @@ func buildComparePicker(all []inventory.Info) ComparePicker {
 		sort.Slice(g.Options, func(i, j int) bool { return g.Options[i].Label > g.Options[j].Label })
 		out.Groups = append(out.Groups, *g)
 	}
-	sort.Slice(out.Groups, func(i, j int) bool { return out.Groups[i].ConfigLabel < out.Groups[j].ConfigLabel })
+	slices.SortFunc(out.Groups, func(a, b ComparePickerGroup) int { return strings.Compare(a.ConfigLabel, b.ConfigLabel) })
 
 	return out
 }

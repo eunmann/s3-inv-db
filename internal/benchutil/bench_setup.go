@@ -2,7 +2,7 @@ package benchutil
 
 import (
 	"os"
-	"sort"
+	"slices"
 	"testing"
 )
 
@@ -20,7 +20,7 @@ func SkipIfNoLongBench(b *testing.B) {
 func SortKeys(keys []string) []string {
 	sorted := make([]string, len(keys))
 	copy(sorted, keys)
-	sort.Strings(sorted)
+	slices.Sort(sorted)
 
 	return sorted
 }

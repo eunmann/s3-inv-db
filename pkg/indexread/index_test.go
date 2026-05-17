@@ -4,7 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
+	"slices"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -491,7 +491,7 @@ banana/file.txt,400
 	// Verify sorted
 	sortedNames := make([]string, len(names))
 	copy(sortedNames, names)
-	sort.Strings(sortedNames)
+	slices.Sort(sortedNames)
 	if !reflect.DeepEqual(names, sortedNames) {
 		t.Error("names not in alphabetical order")
 	}

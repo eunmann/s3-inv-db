@@ -5,7 +5,8 @@ package autoload
 import (
 	"context"
 	"errors"
-	"sort"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -177,7 +178,7 @@ func (a *AutoLoader) pickTargets(byConfig map[string][]inventory.MergedInventory
 		if len(runs) == 0 {
 			continue
 		}
-		sort.SliceStable(runs, func(i, j int) bool { return runs[i].Run > runs[j].Run })
+		slices.SortStableFunc(runs, func(a, b inventory.MergedInventory) int { return strings.Compare(b.Run, a.Run) })
 		var target inventory.Inventory
 		for i := range runs {
 			r := &runs[i]

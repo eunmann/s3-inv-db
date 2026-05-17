@@ -3,7 +3,7 @@ package budget
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
@@ -85,13 +85,12 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 	// If still short, evict across configs in LRU order.
 	need := requiredBytes(in.EstimateBytes, p.tracker.Available(), plan.FreedBytes)
 	if need > 0 {
-		sort.SliceStable(candidates, func(i, j int) bool {
-			a, b := &candidates[i], &candidates[j]
+		slices.SortStableFunc(candidates, func(a, b inventory.Info) int {
 			if a.LastAccessedAt.Equal(b.LastAccessedAt) {
-				return a.LoadedAt.Before(b.LoadedAt)
+				return a.LoadedAt.Compare(b.LoadedAt)
 			}
 
-			return a.LastAccessedAt.Before(b.LastAccessedAt)
+			return a.LastAccessedAt.Compare(b.LastAccessedAt)
 		})
 		for i := range candidates {
 			if need == 0 {
@@ -168,13 +167,12 @@ func selectByConfig(pool []inventory.Info, source, name string, retention uint32
 	if uint32(len(inConfig)) < retention {
 		return nil
 	}
-	sort.SliceStable(inConfig, func(i, j int) bool {
-		ai, bi := inConfig[i].LoadedAt, inConfig[j].LoadedAt
-		if ai.Equal(bi) {
-			return inConfig[i].LastAccessedAt.Before(inConfig[j].LastAccessedAt)
+	slices.SortStableFunc(inConfig, func(a, b inventory.Info) int {
+		if a.LoadedAt.Equal(b.LoadedAt) {
+			return a.LastAccessedAt.Compare(b.LastAccessedAt)
 		}
 
-		return ai.Before(bi)
+		return a.LoadedAt.Compare(b.LoadedAt)
 	})
 	drop := min(uint32(len(inConfig))-(retention-1), uint32(len(inConfig)))
 

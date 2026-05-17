@@ -16,7 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -171,7 +171,7 @@ func (d *Discoverer) describeRuns(ctx context.Context, src, inv, invPrefix strin
 	if len(runs) == 0 {
 		return []inventory.Inventory{{SourceBucket: src, Name: inv}}, nil
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(runs)))
+	slices.SortFunc(runs, func(a, b string) int { return strings.Compare(b, a) })
 
 	out := make([]inventory.Inventory, 0, len(runs))
 	logger := zerolog.Ctx(ctx)
