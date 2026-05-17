@@ -2,7 +2,6 @@ package extsort
 
 import (
 	"runtime"
-	"sync"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -14,7 +13,7 @@ import (
 // use multiple aggregators or external synchronization.
 type Aggregator struct {
 	prefixes       map[string]*PrefixStats
-	statsPool      sync.Pool
+	statsPool      *typedPool[PrefixStats]
 	maxDepth       int
 	objectCount    int64
 	bytesProcessed int64
@@ -30,13 +29,9 @@ func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 	}
 
 	return &Aggregator{
-		prefixes: make(map[string]*PrefixStats, initialCapacity),
-		statsPool: sync.Pool{
-			New: func() any {
-				return &PrefixStats{}
-			},
-		},
-		maxDepth: maxDepth,
+		prefixes:  make(map[string]*PrefixStats, initialCapacity),
+		statsPool: newTypedPool(func() *PrefixStats { return &PrefixStats{} }),
+		maxDepth:  maxDepth,
 	}
 }
 
@@ -65,11 +60,7 @@ func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 func (a *Aggregator) accumulate(prefix string, depth uint16, size uint64, tierID tiers.ID) {
 	stats, ok := a.prefixes[prefix]
 	if !ok {
-		poolObj := a.statsPool.Get()
-		stats, ok = poolObj.(*PrefixStats)
-		if !ok {
-			panic("statsPool contained unexpected type")
-		}
+		stats = a.statsPool.Get()
 		stats.Depth = depth
 		a.prefixes[prefix] = stats
 	}

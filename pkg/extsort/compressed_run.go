@@ -8,7 +8,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -456,35 +455,24 @@ func OpenRunFileAuto(path string, bufferSize int) (RunReader, error) {
 	}
 }
 
-// One sync.Pool per compression level. Zstd encoders allocate multi-MB
-// window buffers; reusing them across run files cuts per-flush
+// One typed pool per compression level. Zstd encoders allocate
+// multi-MB window buffers; reusing them across run files cuts per-flush
 // allocations dramatically.
 //
 //nolint:gochecknoglobals // intentional package-level encoder pools
-var zstdEncoderPools = map[zstd.EncoderLevel]*sync.Pool{
-	zstd.SpeedFastest:           {},
-	zstd.SpeedDefault:           {},
-	zstd.SpeedBetterCompression: {},
+var zstdEncoderPools = map[zstd.EncoderLevel]*typedPool[zstd.Encoder]{
+	zstd.SpeedFastest:           newTypedPool(func() *zstd.Encoder { return nil }),
+	zstd.SpeedDefault:           newTypedPool(func() *zstd.Encoder { return nil }),
+	zstd.SpeedBetterCompression: newTypedPool(func() *zstd.Encoder { return nil }),
 }
 
-// Decoder instances are reused across run-file reads.
-//
 //nolint:gochecknoglobals // intentional package-level decoder pool
-var zstdDecoderPool sync.Pool
+var zstdDecoderPool = newTypedPool(func() *zstd.Decoder { return nil })
 
 func acquireZstdEncoder(level zstd.EncoderLevel) (*zstd.Encoder, error) {
 	pool := zstdEncoderPools[level]
-	if pool == nil {
-		enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level))
-		if err != nil {
-			return nil, fmt.Errorf("zstd new writer: %w", err)
-		}
-
-		return enc, nil
-	}
-	if v := pool.Get(); v != nil {
-		enc, ok := v.(*zstd.Encoder)
-		if ok {
+	if pool != nil {
+		if enc := pool.Get(); enc != nil {
 			return enc, nil
 		}
 	}
@@ -504,18 +492,15 @@ func releaseZstdEncoder(level zstd.EncoderLevel, enc *zstd.Encoder) {
 	if pool == nil {
 		return
 	}
-	// Reset(nil) detaches the encoder from its current sink so the
-	// next user can re-target it without re-allocating window buffers.
+	// Reset(nil) detaches the encoder so the next user can re-target it
+	// without re-allocating window buffers.
 	enc.Reset(nil)
 	pool.Put(enc)
 }
 
 func acquireZstdDecoder() (*zstd.Decoder, error) {
-	if v := zstdDecoderPool.Get(); v != nil {
-		dec, ok := v.(*zstd.Decoder)
-		if ok {
-			return dec, nil
-		}
+	if dec := zstdDecoderPool.Get(); dec != nil {
+		return dec, nil
 	}
 	dec, err := zstd.NewReader(nil)
 	if err != nil {

@@ -70,7 +70,7 @@ func runMergeBuildSeamBench(b *testing.B, n, runFileCount int, streamed bool) {
 				b.Fatalf("MergeAllToIterator: %v", err)
 			}
 			iter = it
-			capacity = iteratorRemaining(it)
+			capacity = it.Remaining()
 			cleanup = func() { _ = c() }
 		} else {
 			finalPath, err := merger.MergeAll(context.Background(), runPaths)

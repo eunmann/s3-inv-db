@@ -26,9 +26,11 @@ import (
 const MaxTiers = int(tiers.NumTiers)
 
 // RowIterator yields PrefixRows in sorted order; Next returns io.EOF
-// once exhausted.
+// once exhausted. Remaining returns an upper-bound row count (0 if
+// unknown) so the IndexBuilder can pre-size its arrays.
 type RowIterator interface {
 	Next() (*PrefixRow, error)
+	Remaining() uint64
 }
 
 // PrefixRow is the primary unit passed through the external sort.
