@@ -58,6 +58,15 @@ const (
 	runFileHeader  = 16
 )
 
+// removeFiles best-effort deletes each path. Used on cancellation /
+// failure paths in the merge pipeline where the original error is the
+// one that matters and a missed cleanup is bounded to temp files.
+func removeFiles(paths []string) {
+	for _, p := range paths {
+		_ = os.Remove(p)
+	}
+}
+
 // runWriter is the shared shape between RunFileWriter and
 // CompressedRunWriter for the pipeline's ingest spill path.
 type runWriter interface {
