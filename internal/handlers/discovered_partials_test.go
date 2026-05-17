@@ -144,7 +144,7 @@ func TestLoadDiscoveredRowPartial_FindError(t *testing.T) {
 
 func TestLoadDiscoveredRowPartial_NoCompletedRuns(t *testing.T) {
 	h := newDiscoveredHandlers(t,
-		&fakeDiscoverer{findResp: inventory.Inventory{SourceBucket: "b", InventoryName: "i"}},
+		&fakeDiscoverer{findResp: inventory.Inventory{SourceBucket: "b", Name: "i"}},
 		&fakeBuilder{},
 	)
 	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
@@ -160,7 +160,7 @@ func TestLoadDiscoveredRowPartial_NoCompletedRuns(t *testing.T) {
 }
 
 func TestLoadDiscoveredRowPartial_AcceptsBuildError(t *testing.T) {
-	disc := inventory.Inventory{SourceBucket: "b", InventoryName: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
+	disc := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
 		&fakeBuilder{buildErr: errFakeNetwork},
@@ -184,7 +184,7 @@ func TestInventoriesPage_PlaceholderRowOmitsHTMXRefresh(t *testing.T) {
 	// empty URL segments — those produce /partials/discovered/b/i// which
 	// 404s, and SSE topics like "row-b/i/" never fire.
 	h := newDiscoveredHandlers(t,
-		&fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", InventoryName: "i"}}, bucket: "dst"},
+		&fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}, bucket: "dst"},
 		&fakeBuilder{},
 	)
 	req := httptest.NewRequest(http.MethodGet, "/inventories", http.NoBody)
@@ -296,8 +296,8 @@ func TestListDiscoveredAPI_DiscovererErrorReturns502(t *testing.T) {
 func TestListDiscoveredAPI_SuccessReturnsJSON(t *testing.T) {
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{listResp: []inventory.Inventory{
-			{SourceBucket: "b1", InventoryName: "i1", Run: "2026-05-13T03-00Z"},
-			{SourceBucket: "b1", InventoryName: "i2"},
+			{SourceBucket: "b1", Name: "i1", Run: "2026-05-13T03-00Z"},
+			{SourceBucket: "b1", Name: "i2"},
 		}},
 		&fakeBuilder{},
 	)

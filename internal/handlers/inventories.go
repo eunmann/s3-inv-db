@@ -32,9 +32,9 @@ type ConfigurationsResponse struct {
 // ConfigurationView is one (source bucket + inventory configuration)
 // pair and its runs.
 type ConfigurationView struct {
-	SourceBucket  string          `json:"source_bucket"`
-	InventoryName string          `json:"inventory_name"`
-	Runs          []ConfigRunView `json:"runs"`
+	SourceBucket string          `json:"source_bucket"`
+	Name         string          `json:"inventory_name"`
+	Runs         []ConfigRunView `json:"runs"`
 }
 
 // ConfigRunView is one run's identity + lifecycle state. Bytes-on-disk
@@ -87,8 +87,8 @@ func (h *Handlers) groupDiscoveredForAPI(_ *http.Request, views []inventory.Merg
 			groups[key] = len(out)
 			idx = len(out)
 			out = append(out, ConfigurationView{
-				SourceBucket:  v.SourceBucket,
-				InventoryName: v.InventoryName,
+				SourceBucket: v.SourceBucket,
+				Name:         v.Name,
 			})
 		}
 		run := ConfigRunView{
@@ -104,7 +104,7 @@ func (h *Handlers) groupDiscoveredForAPI(_ *http.Request, views []inventory.Merg
 			run.LoadedAt = info.LoadedAt.UTC().Format(time.RFC3339)
 		}
 		if h.loader != nil && v.Run != "" {
-			if n, err := h.loader.CacheSizeBytes(v.SourceBucket, v.InventoryName, v.Run); err == nil {
+			if n, err := h.loader.CacheSizeBytes(v.SourceBucket, v.Name, v.Run); err == nil {
 				run.CacheBytes = n
 			}
 		}
@@ -134,7 +134,7 @@ func groupManagerForAPI(all []inventory.Info) []ConfigurationView {
 		if !exists {
 			groups[key] = len(out)
 			idx = len(out)
-			out = append(out, ConfigurationView{SourceBucket: src, InventoryName: inv})
+			out = append(out, ConfigurationView{SourceBucket: src, Name: inv})
 		}
 		view := ConfigRunView{
 			ID:          info.ID,
@@ -309,10 +309,10 @@ type InventoriesData struct {
 }
 
 // InventoryGroup pins one inventory configuration (SourceBucket +
-// InventoryName) to all of its discovered runs.
+// Name) to all of its discovered runs.
 type InventoryGroup struct {
 	SourceBucket     string
-	InventoryName    string
+	Name             string
 	Runs             []DiscoveredRowView // first VisibleRuns are shown unconditionally
 	VisibleRuns      int                 // how many of Runs render outside <details>
 	AutoLoad         bool
@@ -330,7 +330,7 @@ const DefaultVisibleRuns = 5
 // ConfigID returns the "<src>/<inv>" identifier shared by every run in
 // the group — handy as a stable HTML id / aria label.
 func (g InventoryGroup) ConfigID() string {
-	return g.SourceBucket + "/" + g.InventoryName
+	return g.SourceBucket + "/" + g.Name
 }
 
 // InventoriesPage renders the inventories HTML page. The page is
@@ -377,9 +377,9 @@ func (h *Handlers) buildInventoryGroups(r *http.Request, views []inventory.Merge
 		}
 		groupIdx[key] = len(groups)
 		groups = append(groups, InventoryGroup{
-			SourceBucket:  views[i].SourceBucket,
-			InventoryName: views[i].InventoryName,
-			Runs:          []DiscoveredRowView{row},
+			SourceBucket: views[i].SourceBucket,
+			Name:         views[i].Name,
+			Runs:         []DiscoveredRowView{row},
 		})
 	}
 	for i := range groups {
@@ -425,7 +425,7 @@ func (h *Handlers) annotateGroupsFromConfig(ctx context.Context, groups []Invent
 	}
 	for i := range groups {
 		g := &groups[i]
-		cfg, err := h.configStore.Get(ctx, g.SourceBucket, g.InventoryName)
+		cfg, err := h.configStore.Get(ctx, g.SourceBucket, g.Name)
 		if err != nil {
 			continue
 		}

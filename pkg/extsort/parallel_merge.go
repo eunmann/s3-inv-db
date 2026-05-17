@@ -152,7 +152,6 @@ type mergeResult struct {
 // remove the original input files; that remains the caller's job.
 //
 
-//nolint:ireturn // dispatches between single-run + K-way merge variants; caller iterates polymorphically
 func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []string) (RowIterator, func() error, error) {
 	if len(inputPaths) == 0 {
 		return nil, func() error { return nil }, ErrNoInputPaths

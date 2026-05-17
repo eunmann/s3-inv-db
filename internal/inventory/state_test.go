@@ -69,18 +69,18 @@ func TestIDConfigID(t *testing.T) {
 }
 
 func TestInventoryCompositeID(t *testing.T) {
-	with := inventory.Inventory{SourceBucket: "src", InventoryName: "inv", Run: "2026-01"}
+	with := inventory.Inventory{SourceBucket: "src", Name: "inv", Run: "2026-01"}
 	if got := with.CompositeID(); got != inventory.ID("src/inv/2026-01") {
 		t.Errorf("CompositeID(with run) = %q, want %q", got, "src/inv/2026-01")
 	}
-	without := inventory.Inventory{SourceBucket: "src", InventoryName: "inv"}
+	without := inventory.Inventory{SourceBucket: "src", Name: "inv"}
 	if got := without.CompositeID(); got != inventory.ID("src/inv") {
 		t.Errorf("CompositeID(no run) = %q, want %q", got, "src/inv")
 	}
 }
 
 func TestInventoryConfigID(t *testing.T) {
-	inv := inventory.Inventory{SourceBucket: "src", InventoryName: "inv", Run: "2026-01"}
+	inv := inventory.Inventory{SourceBucket: "src", Name: "inv", Run: "2026-01"}
 	if got := inv.ConfigID(); got != "src/inv" {
 		t.Errorf("ConfigID = %q, want %q", got, "src/inv")
 	}

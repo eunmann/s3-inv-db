@@ -57,13 +57,13 @@ type DashboardData struct {
 
 // DashboardConfig is the per-configuration row shown on the dashboard.
 type DashboardConfig struct {
-	SourceBucket  string
-	InventoryName string
-	TotalRuns     int
-	LoadedRuns    int
-	LatestRun     string // run timestamp of the newest entry
-	LatestState   inventory.State
-	DiskBytesH    string // size on disk across this configuration's loaded runs
+	SourceBucket string
+	Name         string
+	TotalRuns    int
+	LoadedRuns   int
+	LatestRun    string // run timestamp of the newest entry
+	LatestState  inventory.State
+	DiskBytesH   string // size on disk across this configuration's loaded runs
 
 	// LatestFiles and LatestBytesH describe the newest run's manifest
 	// (chunk file count + summed compressed size). Empty/zero when the
@@ -120,14 +120,14 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	for _, key := range agg.Order {
 		c := agg.Confs[key]
 		row := DashboardConfig{
-			SourceBucket:  c.Src,
-			InventoryName: c.ID,
-			TotalRuns:     c.TotalRuns,
-			LoadedRuns:    c.LoadedRuns,
-			LatestRun:     c.LatestRun,
-			LatestState:   c.LatestState,
-			LatestFiles:   c.LatestFiles,
-			LatestFormat:  c.LatestFormat,
+			SourceBucket: c.Src,
+			Name:         c.ID,
+			TotalRuns:    c.TotalRuns,
+			LoadedRuns:   c.LoadedRuns,
+			LatestRun:    c.LatestRun,
+			LatestState:  c.LatestState,
+			LatestFiles:  c.LatestFiles,
+			LatestFormat: c.LatestFormat,
 		}
 		if c.DiskBytes > 0 {
 			row.DiskBytesH = humanfmt.BytesUint64(uint64(c.DiskBytes))
@@ -217,7 +217,7 @@ func (h *Handlers) aggregateDashboard(logger *zerolog.Logger, views []inventory.
 
 		c, ok := agg.Confs[key]
 		if !ok {
-			c = &dashConfAgg{Src: v.SourceBucket, ID: v.InventoryName}
+			c = &dashConfAgg{Src: v.SourceBucket, ID: v.Name}
 			agg.Confs[key] = c
 			agg.Order = append(agg.Order, key)
 		}
@@ -269,7 +269,7 @@ func (h *Handlers) addLoadedStats(logger *zerolog.Logger, v *inventory.MergedInv
 	if h.loader == nil {
 		return
 	}
-	size, err := h.loader.CacheSizeBytes(v.SourceBucket, v.InventoryName, v.Run)
+	size, err := h.loader.CacheSizeBytes(v.SourceBucket, v.Name, v.Run)
 	if err != nil {
 		return
 	}

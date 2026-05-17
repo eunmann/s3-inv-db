@@ -283,11 +283,11 @@ func (h *Handlers) measureCacheSize(r *http.Request, disc inventory.Inventory) c
 	if h.loader == nil || disc.Run == "" {
 		return cacheSize{}
 	}
-	n, err := h.loader.CacheSizeBytes(disc.SourceBucket, disc.InventoryName, disc.Run)
+	n, err := h.loader.CacheSizeBytes(disc.SourceBucket, disc.Name, disc.Run)
 	if err != nil {
 		zerolog.Ctx(r.Context()).Warn().Err(err).
 			Str("src", disc.SourceBucket).
-			Str("name", disc.InventoryName).
+			Str("name", disc.Name).
 			Str("run", disc.Run).
 			Msg("measure cache size")
 

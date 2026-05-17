@@ -53,7 +53,7 @@ func (b *slowBuilder) RemoveCache(_, _, _ string) error             { return nil
 func (b *slowBuilder) CacheSizeBytes(_, _, _ string) (int64, error) { return 0, nil }
 
 func TestAsyncLifecycle_LoadSucceeds(t *testing.T) {
-	disc := inventory.Inventory{SourceBucket: "b", InventoryName: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
+	disc := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
 		&slowBuilder{delay: 20 * time.Millisecond},
@@ -76,7 +76,7 @@ func TestAsyncLifecycle_LoadSucceeds(t *testing.T) {
 // TestAsyncLifecycle_Cancel cancels mid-build and verifies the job
 // reaches the cancelled state.
 func TestAsyncLifecycle_Cancel(t *testing.T) {
-	disc := inventory.Inventory{SourceBucket: "b", InventoryName: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
+	disc := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
 		&slowBuilder{delay: 5 * time.Second}, // long enough that Cancel arrives mid-build
@@ -112,7 +112,7 @@ func TestAsyncLifecycle_Cancel(t *testing.T) {
 // after failure verifies the Retry button surfaces. Pins the UI
 // contract independent of htmx-sse (which needs a browser).
 func TestAsyncLifecycle_RowReflectsJobState(t *testing.T) {
-	disc := inventory.Inventory{SourceBucket: "b", InventoryName: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
+	disc := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
 		&slowBuilder{delay: 5 * time.Second},

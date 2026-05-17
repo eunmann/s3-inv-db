@@ -42,11 +42,11 @@ func TestListConfigurationsAPI_DiscoveryDisabled(t *testing.T) {
 		t.Fatalf("configurations = %d, want 2 (src-a/inv-1, src-a/inv-2)", len(resp.Configurations))
 	}
 	for _, c := range resp.Configurations {
-		if c.SourceBucket == "" || c.InventoryName == "" {
+		if c.SourceBucket == "" || c.Name == "" {
 			t.Errorf("empty src/inv on group: %+v", c)
 		}
 		if len(c.Runs) == 0 {
-			t.Errorf("group %s/%s has no runs", c.SourceBucket, c.InventoryName)
+			t.Errorf("group %s/%s has no runs", c.SourceBucket, c.Name)
 		}
 	}
 }
@@ -162,7 +162,7 @@ func TestStatusRank(t *testing.T) {
 }
 
 func TestInventoryGroup_ConfigID(t *testing.T) {
-	g := handlers.InventoryGroup{SourceBucket: "src-a", InventoryName: "inv-1"}
+	g := handlers.InventoryGroup{SourceBucket: "src-a", Name: "inv-1"}
 	if got := g.ConfigID(); got != "src-a/inv-1" {
 		t.Errorf("ConfigID() = %q, want %q", got, "src-a/inv-1")
 	}
@@ -171,9 +171,9 @@ func TestInventoryGroup_ConfigID(t *testing.T) {
 func TestGroupDiscoveredForAPI_GroupsRunsByConfig(t *testing.T) {
 	f := newTestFixture(t)
 	views := []inventory.MergedInventory{
-		{Inventory: inventory.Inventory{SourceBucket: "b1", InventoryName: "i1", Run: "2026-05-13T03-00Z", ManifestKey: "k1/2026-05-13T03-00Z/manifest.json"}, State: inventory.StateNotLoaded},
-		{Inventory: inventory.Inventory{SourceBucket: "b1", InventoryName: "i1", Run: "2026-05-12T03-00Z", ManifestKey: "k1/2026-05-12T03-00Z/manifest.json"}, State: inventory.StateNotLoaded},
-		{Inventory: inventory.Inventory{SourceBucket: "b1", InventoryName: "i2", Run: "2026-05-13T03-00Z", ManifestKey: "k2/2026-05-13T03-00Z/manifest.json"}, State: inventory.StateNotLoaded},
+		{Inventory: inventory.Inventory{SourceBucket: "b1", Name: "i1", Run: "2026-05-13T03-00Z", ManifestKey: "k1/2026-05-13T03-00Z/manifest.json"}, State: inventory.StateNotLoaded},
+		{Inventory: inventory.Inventory{SourceBucket: "b1", Name: "i1", Run: "2026-05-12T03-00Z", ManifestKey: "k1/2026-05-12T03-00Z/manifest.json"}, State: inventory.StateNotLoaded},
+		{Inventory: inventory.Inventory{SourceBucket: "b1", Name: "i2", Run: "2026-05-13T03-00Z", ManifestKey: "k2/2026-05-13T03-00Z/manifest.json"}, State: inventory.StateNotLoaded},
 	}
 	groups := f.h.GroupDiscoveredForAPIForTest(nil, views)
 	if len(groups) != 2 {
@@ -181,7 +181,7 @@ func TestGroupDiscoveredForAPI_GroupsRunsByConfig(t *testing.T) {
 	}
 	var i1, i2 handlers.ConfigurationView
 	for _, g := range groups {
-		switch g.InventoryName {
+		switch g.Name {
 		case "i1":
 			i1 = g
 		case "i2":

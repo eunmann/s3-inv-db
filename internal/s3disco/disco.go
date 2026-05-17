@@ -106,7 +106,7 @@ func (d *Discoverer) List(ctx context.Context) ([]inventory.Inventory, error) {
 			runs, err := d.describeRuns(ctx, srcName, invName, inv)
 			if err != nil {
 				logger.Warn().Err(err).Str("src", srcName).Str("inv", invName).Msg("describe runs")
-				out = append(out, inventory.Inventory{SourceBucket: srcName, InventoryName: invName, Error: "failed to describe inventory"})
+				out = append(out, inventory.Inventory{SourceBucket: srcName, Name: invName, Error: "failed to describe inventory"})
 
 				continue
 			}
@@ -130,7 +130,7 @@ func (d *Discoverer) Find(ctx context.Context, srcBucket, invID, run string) (in
 		return inventory.Inventory{}, err
 	}
 	if len(runs) == 0 {
-		return inventory.Inventory{SourceBucket: srcBucket, InventoryName: invID}, nil
+		return inventory.Inventory{SourceBucket: srcBucket, Name: invID}, nil
 	}
 	if run == "" {
 		// Newest first — caller wants "the latest".
@@ -169,7 +169,7 @@ func (d *Discoverer) describeRuns(ctx context.Context, src, inv, invPrefix strin
 		}
 	}
 	if len(runs) == 0 {
-		return []inventory.Inventory{{SourceBucket: src, InventoryName: inv}}, nil
+		return []inventory.Inventory{{SourceBucket: src, Name: inv}}, nil
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(runs)))
 
@@ -178,10 +178,10 @@ func (d *Discoverer) describeRuns(ctx context.Context, src, inv, invPrefix strin
 	limit := d.manifestFetches
 	for i, name := range runs {
 		entry := inventory.Inventory{
-			SourceBucket:  src,
-			InventoryName: inv,
-			Run:           name,
-			ManifestKey:   invPrefix + name + "/manifest.json",
+			SourceBucket: src,
+			Name:         inv,
+			Run:          name,
+			ManifestKey:  invPrefix + name + "/manifest.json",
 		}
 		if limit > 0 && i >= limit {
 			out = append(out, entry)
