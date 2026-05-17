@@ -21,9 +21,9 @@ var (
 	ErrMissingSizeColumn = errors.New("parquet schema missing 'size' column")
 )
 
-// parquetInventoryReader reads S3 inventory records from Parquet files.
+// ParquetReader reads S3 inventory records from Parquet files.
 // It implements streaming by iterating through row groups.
-type parquetInventoryReader struct {
+type ParquetReader struct {
 	file          *parquet.File
 	tempFile      *os.File // Temp file for buffering (only if created by us)
 	schema        *parquet.Schema
@@ -58,7 +58,7 @@ type ParquetReaderConfig struct {
 
 // NewParquetInventoryReader creates a Parquet inventory reader from an io.ReaderAt.
 // This is used when you already have a ReaderAt (e.g., a local file or memory-mapped data).
-func NewParquetInventoryReader(r io.ReaderAt, size int64, cfg ParquetReaderConfig) (InventoryReader, error) {
+func NewParquetInventoryReader(r io.ReaderAt, size int64, cfg ParquetReaderConfig) (*ParquetReader, error) {
 	file, err := parquet.OpenFile(r, size)
 	if err != nil {
 		return nil, fmt.Errorf("open parquet file: %w", err)
@@ -70,7 +70,7 @@ func NewParquetInventoryReader(r io.ReaderAt, size int64, cfg ParquetReaderConfi
 // NewParquetInventoryReaderFromReaderAt creates a Parquet inventory reader from an io.ReaderAt.
 // This auto-detects the schema from the Parquet file and is more efficient than
 // NewParquetInventoryReaderFromStream when you already have a ReaderAt (e.g., from temp file).
-func NewParquetInventoryReaderFromReaderAt(r io.ReaderAt, size int64) (InventoryReader, error) {
+func NewParquetInventoryReaderFromReaderAt(r io.ReaderAt, size int64) (*ParquetReader, error) {
 	file, err := parquet.OpenFile(r, size)
 	if err != nil {
 		return nil, fmt.Errorf("open parquet file: %w", err)
@@ -87,7 +87,7 @@ func NewParquetInventoryReaderFromReaderAt(r io.ReaderAt, size int64) (Inventory
 // NewParquetInventoryReaderFromStream creates a Parquet inventory reader from a stream.
 // Since Parquet requires random access, this buffers the entire stream to a temp file.
 // The size parameter is used for validation (if non-zero) but the full stream is read regardless.
-func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (InventoryReader, error) {
+func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (*ParquetReader, error) {
 	tempFile, err := os.CreateTemp("", "parquet-inventory-*.parquet")
 	if err != nil {
 		r.Close()
@@ -188,11 +188,11 @@ func canonicalColumnName(name string) string {
 	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), "_", "")
 }
 
-// newParquetReader creates a parquetInventoryReader from an open file.
-func newParquetReader(file *parquet.File, tempFile *os.File, cfg ParquetReaderConfig) *parquetInventoryReader {
+// newParquetReader creates a ParquetReader from an open file.
+func newParquetReader(file *parquet.File, tempFile *os.File, cfg ParquetReaderConfig) *ParquetReader {
 	rowGroups := file.RowGroups()
 
-	return &parquetInventoryReader{
+	return &ParquetReader{
 		file:          file,
 		tempFile:      tempFile,
 		schema:        file.Schema(),
@@ -207,7 +207,7 @@ func newParquetReader(file *parquet.File, tempFile *os.File, cfg ParquetReaderCo
 }
 
 // Next returns the next inventory row.
-func (r *parquetInventoryReader) Next() (Row, error) {
+func (r *ParquetReader) Next() (Row, error) {
 	for {
 		if r.bufIdx < r.bufLen {
 			row := r.rowBuf[r.bufIdx]
@@ -241,7 +241,7 @@ func (r *parquetInventoryReader) Next() (Row, error) {
 }
 
 // rowToRow converts a parquet.Row to an Row.
-func (r *parquetInventoryReader) rowToRow(row parquet.Row) Row {
+func (r *ParquetReader) rowToRow(row parquet.Row) Row {
 	inv := Row{}
 
 	for _, val := range row {
@@ -270,7 +270,7 @@ func (r *parquetInventoryReader) rowToRow(row parquet.Row) Row {
 }
 
 // Close releases resources.
-func (r *parquetInventoryReader) Close() error {
+func (r *ParquetReader) Close() error {
 	if r.currentRows != nil {
 		r.currentRows.Close()
 	}

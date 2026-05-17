@@ -29,11 +29,9 @@ type Row struct {
 	AccessTier string
 }
 
-// InventoryReader is the unified interface for reading S3 inventory
-// files. CSV and Parquet implementations live in this package.
-//
-//nolint:revive // shorter "Reader" would collide with stdlib io.Reader at use sites
-type InventoryReader interface {
+// Reader is the unified interface for reading S3 inventory files.
+// CSV and Parquet implementations live in this package.
+type Reader interface {
 	// Next returns the next inventory row.
 	// Returns io.EOF when all rows have been read.
 	Next() (Row, error)
@@ -42,8 +40,8 @@ type InventoryReader interface {
 	Close() error
 }
 
-// csvInventoryReader reads S3 inventory records from CSV streams.
-type csvInventoryReader struct {
+// CSVReader reads S3 inventory records from CSV streams.
+type CSVReader struct {
 	csvReader     *csv.Reader
 	keyCol        int
 	sizeCol       int
@@ -70,13 +68,13 @@ type CSVReaderConfig struct {
 // NewCSVInventoryReader creates a new CSV inventory reader from an io.Reader.
 // The reader should provide the raw CSV data (already decompressed if needed).
 // Use NewCSVInventoryReaderFromStream for automatic gzip handling.
-func NewCSVInventoryReader(r io.Reader, cfg CSVReaderConfig) InventoryReader {
+func NewCSVInventoryReader(r io.Reader, cfg CSVReaderConfig) *CSVReader {
 	csvr := csv.NewReader(r)
 	csvr.ReuseRecord = true
 	csvr.FieldsPerRecord = -1
 	csvr.LazyQuotes = true
 
-	return &csvInventoryReader{
+	return &CSVReader{
 		csvReader:     csvr,
 		keyCol:        cfg.KeyCol,
 		sizeCol:       cfg.SizeCol,
@@ -87,7 +85,7 @@ func NewCSVInventoryReader(r io.Reader, cfg CSVReaderConfig) InventoryReader {
 
 // NewCSVInventoryReaderFromStream creates a CSV inventory reader from an S3 stream.
 // It handles gzip decompression based on the object key extension.
-func NewCSVInventoryReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderConfig) (InventoryReader, error) {
+func NewCSVInventoryReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderConfig) (*CSVReader, error) {
 	var reader io.Reader = r
 	closers := []io.Closer{r}
 
@@ -109,7 +107,7 @@ func NewCSVInventoryReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderC
 	csvr.FieldsPerRecord = -1
 	csvr.LazyQuotes = true
 
-	return &csvInventoryReader{
+	return &CSVReader{
 		csvReader:     csvr,
 		keyCol:        cfg.KeyCol,
 		sizeCol:       cfg.SizeCol,
@@ -120,7 +118,7 @@ func NewCSVInventoryReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderC
 }
 
 // Next returns the next inventory row.
-func (r *csvInventoryReader) Next() (Row, error) {
+func (r *CSVReader) Next() (Row, error) {
 	for {
 		fields, err := r.csvReader.Read()
 		if err != nil {
@@ -164,7 +162,7 @@ func (r *csvInventoryReader) Next() (Row, error) {
 }
 
 // Close releases resources.
-func (r *csvInventoryReader) Close() error {
+func (r *CSVReader) Close() error {
 	var firstErr error
 	// Close in reverse order (gzip reader before underlying stream)
 	for i := len(r.closers) - 1; i >= 0; i-- {

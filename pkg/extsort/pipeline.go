@@ -620,9 +620,19 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 	}
 
 	parseStart := time.Now()
-	reader, err := createInventoryReader(body, job.key, job.config)
+	var reader inventory.Reader
+	if job.config.format == s3fetch.InventoryFormatParquet {
+		reader, err = openParquetReader(body, job.config.fileSize)
+	} else {
+		reader, err = inventory.NewCSVInventoryReaderFromStream(body, job.key, inventory.CSVReaderConfig{
+			KeyCol:        job.config.keyCol,
+			SizeCol:       job.config.sizeCol,
+			StorageCol:    job.config.storageCol,
+			AccessTierCol: job.config.accessTierCol,
+		})
+	}
 	if err != nil {
-		return err
+		return fmt.Errorf("open inventory reader: %w", err)
 	}
 	defer reader.Close()
 
@@ -681,63 +691,29 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 	return nil
 }
 
-// sizedReaderAt is an interface for readers that support both ReaderAt and Size.
-// This is implemented by tempFileReader from the S3 downloader.
-type sizedReaderAt interface {
-	io.ReaderAt
-	Size() (int64, error)
-}
-
-// createInventoryReader creates an appropriate inventory reader based on format.
-// For Parquet files, it optimizes by using ReaderAt directly when available
-// (from the S3 downloader's temp file), avoiding a second temp file copy.
-func createInventoryReader(body io.ReadCloser, key string, cfg chunkConfig) (inventory.InventoryReader, error) {
-	if cfg.format == s3fetch.InventoryFormatParquet {
-		return createParquetReader(body, cfg.fileSize)
-	}
-
-	return createCSVReader(body, key, cfg)
-}
-
-// createParquetReader creates a Parquet inventory reader.
-// It optimizes by using ReaderAt directly when available to avoid a second temp file.
-func createParquetReader(body io.ReadCloser, fileSize int64) (inventory.InventoryReader, error) {
-	// Optimization: if the body supports ReaderAt (e.g., tempFileReader from S3 downloader),
-	// use it directly to avoid copying to a second temp file.
-	if ra, ok := body.(sizedReaderAt); ok {
-		size, err := ra.Size()
-		if err == nil {
-			reader, err := inventory.NewParquetInventoryReaderFromReaderAt(ra, size)
+// openParquetReader picks the ReaderAt path when the body supports it,
+// avoiding a second temp-file copy. Falls back to stream-based open
+// otherwise.
+func openParquetReader(body io.ReadCloser, fileSize int64) (*inventory.ParquetReader, error) {
+	if ra, ok := body.(interface {
+		io.ReaderAt
+		Size() (int64, error)
+	}); ok {
+		if size, sizeErr := ra.Size(); sizeErr == nil {
+			r, err := inventory.NewParquetInventoryReaderFromReaderAt(ra, size)
 			if err != nil {
-				return nil, fmt.Errorf("create parquet reader from readerAt: %w", err)
+				return nil, fmt.Errorf("parquet reader from readerAt: %w", err)
 			}
 
-			return reader, nil
+			return r, nil
 		}
 	}
-	// Fallback to stream-based reader if ReaderAt not available or Size() failed
-	reader, err := inventory.NewParquetInventoryReaderFromStream(body, fileSize)
+	r, err := inventory.NewParquetInventoryReaderFromStream(body, fileSize)
 	if err != nil {
-		return nil, fmt.Errorf("create parquet reader from stream: %w", err)
+		return nil, fmt.Errorf("parquet reader from stream: %w", err)
 	}
 
-	return reader, nil
-}
-
-// createCSVReader creates a CSV inventory reader.
-func createCSVReader(body io.ReadCloser, key string, cfg chunkConfig) (inventory.InventoryReader, error) {
-	csvCfg := inventory.CSVReaderConfig{
-		KeyCol:        cfg.keyCol,
-		SizeCol:       cfg.sizeCol,
-		StorageCol:    cfg.storageCol,
-		AccessTierCol: cfg.accessTierCol,
-	}
-	reader, err := inventory.NewCSVInventoryReaderFromStream(body, key, csvCfg)
-	if err != nil {
-		return nil, fmt.Errorf("create csv reader: %w", err)
-	}
-
-	return reader, nil
+	return r, nil
 }
 
 // flushAggregator drains the aggregator to a sorted run file. Safe
