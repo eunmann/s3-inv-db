@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/loadgate"
+	"github.com/eunmann/s3-inv-db/internal/loadcontrol"
 	"github.com/rs/zerolog"
 )
 
@@ -33,15 +33,15 @@ type Discovery interface {
 	List(ctx context.Context) ([]inventory.MergedInventory, error)
 }
 
-type Loader interface {
-	AutoLoad(ctx context.Context, disc inventory.Inventory) error
-}
+// LoaderFunc loads a single discovered inventory. Callers wire the
+// DiscoveryService.AutoLoadWith call (with nil progress) here.
+type LoaderFunc func(ctx context.Context, disc inventory.Inventory) error
 
 // AutoLoader polls Discovery on a ticker and feeds new runs into Loader.
 type AutoLoader struct {
 	cfg         Config
 	discovery   Discovery
-	loader      Loader
+	loader      LoaderFunc
 	configStore *inventory.ConfigStore
 	manager     *inventory.Manager
 	logger      *zerolog.Logger
@@ -55,7 +55,7 @@ type AutoLoader struct {
 }
 
 // New constructs an AutoLoader; logger may be nil.
-func New(cfg Config, discovery Discovery, loader Loader, configStore *inventory.ConfigStore, manager *inventory.Manager, logger *zerolog.Logger) *AutoLoader {
+func New(cfg Config, discovery Discovery, loader LoaderFunc, configStore *inventory.ConfigStore, manager *inventory.Manager, logger *zerolog.Logger) *AutoLoader {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = defaultPollInterval
 	}
@@ -163,7 +163,9 @@ func (a *AutoLoader) tick(ctx context.Context) {
 		c.PollFailureCount = 0
 		c.LastPollError = ""
 		c.PollBackoffUntil = time.Time{}
-		_ = a.configStore.Upsert(ctx, c)
+		if err := a.configStore.Upsert(ctx, c); err != nil {
+			a.logger.Warn().Err(err).Str("config_id", c.ConfigID()).Msg("autoload: persist poll-success state")
+		}
 	}
 	a.runQueue(ctx, queue)
 }
@@ -212,7 +214,8 @@ func (a *AutoLoader) runQueue(ctx context.Context, queue []inventory.Inventory) 
 	}
 	sem := make(chan struct{}, a.cfg.MaxConcurrency)
 	var wg sync.WaitGroup
-	for _, target := range queue {
+	for i := range queue {
+		target := &queue[i]
 		select {
 		case <-ctx.Done():
 			return
@@ -225,20 +228,20 @@ func (a *AutoLoader) runQueue(ctx context.Context, queue []inventory.Inventory) 
 			defer wg.Done()
 			defer func() { <-sem }()
 			a.loadOne(ctx, target)
-		}(target)
+		}(*target)
 	}
 	wg.Wait()
 }
 
 func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 	id := target.CompositeID()
-	err := a.loader.AutoLoad(ctx, target)
+	err := a.loader(ctx, target)
 	if err == nil {
 		a.logger.Info().Str("id", string(id)).Msg("autoload: loaded")
 
 		return
 	}
-	var refused *loadgate.BudgetRefusedError
+	var refused *loadcontrol.BudgetRefusedError
 	if errors.As(err, &refused) {
 		// Budget refusal: surface via Manager so the UI can show the
 		// reason next to the row. Don't apply backoff — we want to
@@ -260,7 +263,9 @@ func (a *AutoLoader) recordPollFailure(ctx context.Context, enabled map[string]i
 		c.PollFailureCount++
 		c.LastPollError = msg
 		c.PollBackoffUntil = a.now().Add(backoffDelay(a.cfg.MinBackoff, a.cfg.MaxBackoff, c.PollFailureCount))
-		_ = a.configStore.Upsert(ctx, c)
+		if err := a.configStore.Upsert(ctx, c); err != nil {
+			a.logger.Warn().Err(err).Str("config_id", c.ConfigID()).Msg("autoload: persist poll-failure state")
+		}
 	}
 }
 

@@ -10,8 +10,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/eunmann/s3-inv-db/pkg/benchutil"
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/rs/zerolog"
 )
@@ -27,8 +28,8 @@ var (
 // right default for synthetic data written into a developer-controlled
 // working directory.
 const (
-	outputDirMode   = 0o750
-	summaryFileMode = 0o600
+	outputDirMode   = format.DirPerm
+	summaryFileMode = format.FilePerm
 )
 
 // Target selects the seeder output sink.
@@ -233,7 +234,7 @@ func generateInventory(cfg Config, index int, seed int64) (InventoryInfo, error)
 	rows := agg.Drain()
 	extsort.SortPrefixRows(rows)
 
-	builder, err := extsort.NewIndexBuilder(outDir, "", false)
+	builder, err := extsort.NewIndexBuilder(outDir, "")
 	if err != nil {
 		return InventoryInfo{}, fmt.Errorf("create index builder: %w", err)
 	}

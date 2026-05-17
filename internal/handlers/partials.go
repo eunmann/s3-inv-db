@@ -22,7 +22,7 @@ import (
 func (h *Handlers) LoadInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := h.manager.Load(context.WithoutCancel(r.Context()), id); err != nil {
-		respondManagerErrorHTML(w, r, err, "load inventory")
+		respondManagerError(w, r, err, "load inventory")
 
 		return
 	}
@@ -33,7 +33,7 @@ func (h *Handlers) LoadInventoryRowPartial(w http.ResponseWriter, r *http.Reques
 func (h *Handlers) UnloadInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := h.manager.Unload(r.Context(), id); err != nil {
-		respondManagerErrorHTML(w, r, err, "unload inventory")
+		respondManagerError(w, r, err, "unload inventory")
 
 		return
 	}
@@ -45,11 +45,11 @@ func (h *Handlers) UnloadInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 func (h *Handlers) DeleteInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := h.manager.Remove(r.Context(), id); err != nil && !errors.Is(err, inventory.ErrNotFound) {
-		respondManagerErrorHTML(w, r, err, "delete inventory")
+		respondManagerError(w, r, err, "delete inventory")
 
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Type", contentTypeHTML)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -81,7 +81,7 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	}
 
 	if err := h.discovery.PrepareDiscovered(r.Context(), disc); err != nil {
-		respondManagerErrorHTML(w, r, err, "prepare discovered inventory")
+		respondManagerError(w, r, err, "prepare discovered inventory")
 
 		return
 	}
@@ -102,14 +102,14 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	// r.Context() to the job ctx.
 	_, err = h.submitDiscoveredLoadJob(r.Context(), composite, disc)
 	if err != nil {
-		respondManagerErrorHTML(w, r, err, "submit load job")
+		respondManagerError(w, r, err, "submit load job")
 
 		return
 	}
 	// Headers must commit BEFORE WriteHeader, otherwise the Set on
 	// Content-Type inside renderDiscoveredRowFrom is a no-op and the
 	// browser falls back to Go's body sniffing.
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Type", contentTypeHTML)
 	w.WriteHeader(http.StatusAccepted)
 	h.renderDiscoveredRowFrom(w, r, disc)
 }
@@ -139,7 +139,7 @@ func (h *Handlers) UnloadDiscoveredRowPartial(w http.ResponseWriter, r *http.Req
 	composite := inventory.ID(src + "/" + name + "/" + run)
 	logger := zerolog.Ctx(r.Context())
 	if err := h.manager.Unload(r.Context(), composite); err != nil {
-		respondManagerErrorHTML(w, r, err, "unload inventory")
+		respondManagerError(w, r, err, "unload inventory")
 
 		return
 	}
@@ -170,7 +170,7 @@ func (h *Handlers) PinDiscoveredRowPartial(w http.ResponseWriter, r *http.Reques
 	}
 	pinned := parseBoolToggle(r.FormValue("pinned"))
 	if err := h.manager.SetPinned(r.Context(), composite, pinned); err != nil {
-		respondManagerErrorHTML(w, r, err, "set pin")
+		respondManagerError(w, r, err, "set pin")
 
 		return
 	}
@@ -195,11 +195,7 @@ func (h *Handlers) renderInventoryRow(w http.ResponseWriter, r *http.Request, id
 
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.renderer.RenderPartial(w, "inventory_row.html", info); err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render inventory row")
-		http.Error(w, "failed to render row", http.StatusInternalServerError)
-	}
+	h.renderHTMLPartial(w, r, "inventory_row.html", "render inventory row", info)
 }
 
 // renderDiscoveredRow re-fetches the discovery entry, merges in current
@@ -231,11 +227,10 @@ type DiscoveredRowView struct {
 	// template can render the 📌 badge, the "auto-load suspended"
 	// label, and the "user-unloaded" sticky hint without re-querying
 	// the Manager.
-	Pinned                  bool
-	UserUnloaded            bool
-	AutoLoadFailureCount    uint32
-	AutoLoadBackoffUntil    string
-	AutoLoadLastErrorString string
+	Pinned               bool
+	UserUnloaded         bool
+	AutoLoadFailureCount uint32
+	AutoLoadBackoffUntil string
 }
 
 // renderDiscoveredRowFrom renders a discovered_row using a pre-fetched
@@ -272,11 +267,7 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 	}
 	cs := h.cacheSize(r, disc)
 	view.CacheBytes, view.CacheBytesH = cs.Bytes, cs.Human
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.renderer.RenderPartial(w, "discovered_row.html", view); err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render discovered row")
-		http.Error(w, "failed to render row", http.StatusInternalServerError)
-	}
+	h.renderHTMLPartial(w, r, "discovered_row.html", "render discovered row", view)
 }
 
 // CacheSize is the raw-bytes / human-formatted pair returned by

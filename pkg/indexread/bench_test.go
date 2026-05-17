@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/eunmann/s3-inv-db/pkg/benchutil"
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -210,7 +210,7 @@ func setupFixtureIndex(b *testing.B) string {
 		rows := agg.Drain()
 		extsort.SortPrefixRows(rows)
 
-		builder, err := extsort.NewIndexBuilder(tmpDir, "", false)
+		builder, err := extsort.NewIndexBuilder(tmpDir, "")
 		if err != nil {
 			b.Fatalf("NewIndexBuilder failed: %v", err)
 		}

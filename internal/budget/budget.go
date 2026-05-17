@@ -90,13 +90,13 @@ func (t *Tracker) availableLocked() uint64 {
 	return t.cap - committed
 }
 
-func (t *Tracker) Add(_ string, bytes uint64) {
+func (t *Tracker) Add(bytes uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.used += bytes
 }
 
-func (t *Tracker) Remove(_ string, bytes uint64) {
+func (t *Tracker) Remove(bytes uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if bytes >= t.used {

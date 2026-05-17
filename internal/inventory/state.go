@@ -28,22 +28,14 @@ const (
 	StateError     State = "error"      // last operation failed
 )
 
-// IsLoaded and its sibling predicates let templates avoid stringly-typed
-// {{eq (printf "%s" .State) "loaded"}} comparisons so a state rename
-// becomes a refactor that the compiler catches.
-func (s State) IsLoaded() bool { return s == StateLoaded }
-
-// IsNotLoaded reports whether the inventory is in the not-loaded state.
+// IsLoaded + siblings let templates avoid stringly-typed comparisons
+// so a state rename becomes a compiler-caught refactor.
+func (s State) IsLoaded() bool    { return s == StateLoaded }
 func (s State) IsNotLoaded() bool { return s == StateNotLoaded }
+func (s State) IsLoading() bool   { return s == StateLoading }
+func (s State) IsError() bool     { return s == StateError }
 
-// IsLoading reports whether the inventory's build pipeline is running.
-func (s State) IsLoading() bool { return s == StateLoading }
-
-// IsError reports whether the last operation on the inventory failed.
-func (s State) IsError() bool { return s == StateError }
-
-// CanLoad reports whether a Load is a legal next operation. Not-loaded
-// and Error inventories can both be (re)built.
+// CanLoad: Not-loaded and Error inventories can both be (re)built.
 func (s State) CanLoad() bool {
 	return s == StateNotLoaded || s == StateError
 }
@@ -123,6 +115,12 @@ type Inventory struct {
 	// FileCount is the number of data files referenced by the manifest.
 	// A coarse "size" signal for the UI before download.
 	FileCount int `json:"file_count,omitempty"`
+
+	// TotalBytes is the sum of compressed file sizes across every data
+	// file in the manifest. Zero when the manifest hasn't been fetched
+	// (older runs beyond the per-config fetch cap, or the placeholder
+	// "no runs yet" entry).
+	TotalBytes int64 `json:"total_bytes,omitempty"`
 
 	// CreationTimestamp is the manifest's reported creation time
 	// (UnixMilli as a decimal string, exactly as S3 writes it).

@@ -130,8 +130,8 @@ func TestDashboard_EmptyState(t *testing.T) {
 
 	doc := parseHTML(t, w.Body.String())
 	assertElementText(t, doc, "h1", "Dashboard")
-	// Four stat cards, all reading zero when discovery is disabled.
-	assertElementCount(t, doc, ".grid > div", 4)
+	// Five stat cards, all reading zero when discovery is disabled.
+	assertElementCount(t, doc, ".grid > div", 5)
 	body := w.Body.String()
 	if !strings.Contains(body, "Nothing discovered yet") && !strings.Contains(body, "Discovery disabled") {
 		t.Errorf("body should explain the empty state\n%s", body)

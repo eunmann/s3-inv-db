@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/loader"
-	"github.com/eunmann/s3-inv-db/internal/miniotest"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
+	"github.com/eunmann/s3-inv-db/internal/testsupport/miniotest"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/rs/zerolog"
 )
@@ -83,7 +83,7 @@ func TestBuild_FailsOnMissingManifest(t *testing.T) {
 
 	l := loader.New(t.TempDir(), fc)
 	bogus := fmt.Sprintf("s3://%s/does/not/exist/manifest.json", bucket)
-	_, err := l.Build(context.Background(), "src", "inv", "run", bogus)
+	_, err := l.BuildWith(context.Background(), "src", "inv", "run", bogus, nil)
 	if err == nil {
 		t.Fatal("Build with missing manifest returned nil error")
 	}

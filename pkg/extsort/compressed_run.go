@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -82,7 +83,7 @@ type CompressedRunWriterOptions struct {
 // NewCompressedRunWriter creates a new compressed run file writer.
 func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*CompressedRunWriter, error) {
 	if opts.BufferSize <= 0 {
-		opts.BufferSize = 4 * 1024 * 1024 // 4MB default
+		opts.BufferSize = defaultRunBufferSize
 	}
 	if opts.CompressionLevel == 0 {
 		opts.CompressionLevel = CompressionDefault
@@ -141,45 +142,12 @@ func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*Comp
 
 // Write writes a single PrefixRow to the compressed run file.
 func (w *CompressedRunWriter) Write(row *PrefixRow) error {
-	prefixLen := len(row.Prefix)
-	recordSize := 4 + prefixLen + 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
-
-	if len(w.buf) < recordSize {
-		w.buf = make([]byte, recordSize*2)
-	}
-
-	offset := 0
-
-	binary.LittleEndian.PutUint32(w.buf[offset:], uint32(prefixLen))
-	offset += 4
-	copy(w.buf[offset:], row.Prefix)
-	offset += prefixLen
-
-	binary.LittleEndian.PutUint16(w.buf[offset:], row.Depth)
-	offset += 2
-
-	binary.LittleEndian.PutUint64(w.buf[offset:], row.Count)
-	offset += 8
-
-	binary.LittleEndian.PutUint64(w.buf[offset:], row.TotalBytes)
-	offset += 8
-
-	for i := range MaxTiers {
-		binary.LittleEndian.PutUint64(w.buf[offset:], row.TierCounts[i])
-		offset += 8
-	}
-
-	for i := range MaxTiers {
-		binary.LittleEndian.PutUint64(w.buf[offset:], row.TierBytes[i])
-		offset += 8
-	}
-
-	if _, err := w.writer.Write(w.buf[:offset]); err != nil {
+	n := encodePrefixRowRecord(&w.buf, row)
+	if _, err := w.writer.Write(w.buf[:n]); err != nil {
 		return fmt.Errorf("write record: %w", err)
 	}
-
 	w.count++
-	w.uncompressedSize += uint64(offset)
+	w.uncompressedSize += uint64(n)
 
 	return nil
 }
@@ -256,6 +224,15 @@ func (w *CompressedRunWriter) Close() error {
 		return fmt.Errorf("update header: %w", err)
 	}
 
+	// fsync before close — see RunFileWriter.Close. A crash between
+	// the write and the kernel flush would otherwise leave the
+	// compressed stream truncated and unreadable.
+	if err := w.file.Sync(); err != nil {
+		w.file.Close()
+
+		return fmt.Errorf("fsync compressed run file: %w", err)
+	}
+
 	if err := w.file.Close(); err != nil {
 		return fmt.Errorf("close file: %w", err)
 	}
@@ -279,7 +256,7 @@ type CompressedRunReader struct {
 // It auto-detects whether the file is compressed or uncompressed based on the version.
 func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, error) {
 	if bufferSize <= 0 {
-		bufferSize = 4 * 1024 * 1024 // 4MB default
+		bufferSize = defaultRunBufferSize
 	}
 
 	f, err := os.Open(path)
@@ -446,7 +423,7 @@ var (
 // Returns a RunReader interface that works with either format.
 func OpenRunFileAuto(path string, bufferSize int) (RunReader, error) {
 	if bufferSize <= 0 {
-		bufferSize = 4 * 1024 * 1024
+		bufferSize = defaultRunBufferSize
 	}
 
 	f, err := os.Open(path)
@@ -477,4 +454,86 @@ func OpenRunFileAuto(path string, bufferSize int) (RunReader, error) {
 	default:
 		return nil, fmt.Errorf("%w: %d", ErrUnsupportedVersion, version)
 	}
+}
+
+// One sync.Pool per compression level. Zstd encoders allocate multi-MB
+// window buffers; reusing them across run files cuts per-flush
+// allocations dramatically.
+//
+//nolint:gochecknoglobals // intentional package-level encoder pools
+var zstdEncoderPools = map[zstd.EncoderLevel]*sync.Pool{
+	zstd.SpeedFastest:           {},
+	zstd.SpeedDefault:           {},
+	zstd.SpeedBetterCompression: {},
+}
+
+// Decoder instances are reused across run-file reads.
+//
+//nolint:gochecknoglobals // intentional package-level decoder pool
+var zstdDecoderPool sync.Pool
+
+func acquireZstdEncoder(level zstd.EncoderLevel) (*zstd.Encoder, error) {
+	pool := zstdEncoderPools[level]
+	if pool == nil {
+		enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level))
+		if err != nil {
+			return nil, fmt.Errorf("zstd new writer: %w", err)
+		}
+
+		return enc, nil
+	}
+	if v := pool.Get(); v != nil {
+		enc, ok := v.(*zstd.Encoder)
+		if ok {
+			return enc, nil
+		}
+	}
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level))
+	if err != nil {
+		return nil, fmt.Errorf("zstd new writer: %w", err)
+	}
+
+	return enc, nil
+}
+
+func releaseZstdEncoder(level zstd.EncoderLevel, enc *zstd.Encoder) {
+	if enc == nil {
+		return
+	}
+	pool := zstdEncoderPools[level]
+	if pool == nil {
+		return
+	}
+	// Reset(nil) detaches the encoder from its current sink so the
+	// next user can re-target it without re-allocating window buffers.
+	enc.Reset(nil)
+	pool.Put(enc)
+}
+
+func acquireZstdDecoder() (*zstd.Decoder, error) {
+	if v := zstdDecoderPool.Get(); v != nil {
+		dec, ok := v.(*zstd.Decoder)
+		if ok {
+			return dec, nil
+		}
+	}
+	dec, err := zstd.NewReader(nil)
+	if err != nil {
+		return nil, fmt.Errorf("zstd new reader: %w", err)
+	}
+
+	return dec, nil
+}
+
+func releaseZstdDecoder(dec *zstd.Decoder) {
+	if dec == nil {
+		return
+	}
+	// Reset(nil) detaches from the current source.
+	if err := dec.Reset(nil); err != nil {
+		dec.Close()
+
+		return
+	}
+	zstdDecoderPool.Put(dec)
 }

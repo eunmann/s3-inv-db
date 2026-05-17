@@ -4,6 +4,7 @@
 package appconfig
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,10 +23,9 @@ type Config struct {
 	PrettyLogs *bool   `json:"pretty_logs,omitempty"`
 	PriceTable *string `json:"price_table,omitempty"`
 
-	S3Source   *string `json:"s3_source,omitempty"`
-	CacheDir   *string `json:"cache_dir,omitempty"`
-	ScratchDir *string `json:"scratch_dir,omitempty"`
-	StateDB    *string `json:"state_db,omitempty"`
+	S3Source *string `json:"s3_source,omitempty"`
+	CacheDir *string `json:"cache_dir,omitempty"`
+	StateDB  *string `json:"state_db,omitempty"`
 
 	AutoLoad                 *bool    `json:"auto_load,omitempty"`
 	PollInterval             *string  `json:"auto_load_poll_interval,omitempty"` // Go duration string
@@ -34,6 +34,7 @@ type Config struct {
 	AutoLoadConcurrency      *int     `json:"max_auto_load_concurrency,omitempty"`
 	AutoLoadRetentionDefault *uint32  `json:"auto_load_retention_default,omitempty"`
 	IndexRatio               *float64 `json:"index_ratio,omitempty"`
+	DiscoveryRefreshInterval *string  `json:"discovery_refresh_interval,omitempty"` // Go duration string
 
 	Inventories []InventoryEntry `json:"inventories,omitempty"`
 }
@@ -57,31 +58,20 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
-	dec := json.NewDecoder(newReader(data))
+	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var c Config
 	if err := dec.Decode(&c); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
-	if err := c.validate(); err != nil {
-		return nil, fmt.Errorf("validate config %s: %w", path, err)
-	}
-
-	return &c, nil
-}
-
-func (c *Config) validate() error {
-	if c == nil {
-		return nil
-	}
 	for i := range c.Inventories {
 		e := &c.Inventories[i]
 		if e.Source == "" || e.Name == "" {
-			return fmt.Errorf("%w", ErrInventoryKeysRequired)
+			return nil, fmt.Errorf("validate config %s: %w", path, ErrInventoryKeysRequired)
 		}
 	}
 
-	return nil
+	return &c, nil
 }
 
 // PickString returns flagVal if the flag was explicit, otherwise

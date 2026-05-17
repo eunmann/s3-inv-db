@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/eunmann/s3-inv-db/internal/miniotest"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
+	"github.com/eunmann/s3-inv-db/internal/testsupport/miniotest"
 	"github.com/rs/zerolog"
 )
 
@@ -58,6 +58,34 @@ func TestDiscoverer_List_AgainstMinIO(t *testing.T) {
 	}
 	if got := runsByInv["inv-002"]; len(got) != 1 || got[0] != nowStamp {
 		t.Errorf("inv-002 runs = %v, want [%s]", got, nowStamp)
+	}
+}
+
+func TestDiscoverer_List_PopulatesManifestStats(t *testing.T) {
+	client := miniotest.RawClient(t)
+	ctx := context.Background()
+	bucket := miniotest.Bucket(t, client)
+
+	now := time.Now().UTC()
+	uploadInventoryAt(ctx, t, client, bucket, "synthetic-prod", "inventory-data/", "inv-001", now, 100, 9999)
+
+	d := s3disco.New(client, bucket, "inventory-data/")
+	got, err := d.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(List) = %d, want 1", len(got))
+	}
+	entry := got[0]
+	if entry.FileCount == 0 {
+		t.Errorf("FileCount = 0, want > 0 (manifest should reference at least one data file)")
+	}
+	if entry.TotalBytes == 0 {
+		t.Errorf("TotalBytes = 0, want > 0 (manifest data files should report compressed size)")
+	}
+	if entry.CreationTimestamp == "" {
+		t.Errorf("CreationTimestamp = empty, want manifest creation timestamp")
 	}
 }
 

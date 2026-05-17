@@ -10,21 +10,12 @@ import (
 	"path/filepath"
 
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
-	"github.com/eunmann/s3-inv-db/pkg/membudget"
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
 
-// The progress callback receives stage transitions and per-chunk
-// quantitative progress. Stage values: "preparing", "initializing",
-// "downloading", "building", "done". done/total are 0 on plain stage
-// transitions; non-zero while ingesting chunks (where total = total
-// chunks, done = chunks processed). Unnamed func type keeps
-// inventory.IndexBuilder satisfaction structural.
-
-// cacheDirMode is the permission bits used for cache directories the
-// loader creates. Owner-only access is the right default for a
-// process-local cache.
-const cacheDirMode = 0o750
+//nolint:gochecknoglobals // shared no-op closure so BuildWith doesn't allocate per call
+var noopProgress = func(string, int64, int64) {}
 
 // Loader runs the S3-inventory → on-disk-index build pipeline into a
 // per-inventory subdirectory of the configured cache root.
@@ -46,11 +37,6 @@ func (l *Loader) CacheDirFor(srcBucket, invID, run string) string {
 	return filepath.Join(l.cacheRoot, srcBucket, invID, run)
 }
 
-// Build is BuildWith with no stage callback.
-func (l *Loader) Build(ctx context.Context, srcBucket, invID, run, manifestURI string) (string, error) {
-	return l.BuildWith(ctx, srcBucket, invID, run, manifestURI, nil)
-}
-
 // BuildWith downloads the inventory referenced by manifestURI and
 // produces a built index under CacheDirFor(srcBucket, invID, run). The
 // onProgress callback, if non-nil, receives stage transitions and
@@ -64,7 +50,7 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, run, manifestU
 		return "", errEmptyManifest
 	}
 	if onProgress == nil {
-		onProgress = func(string, int64, int64) {}
+		onProgress = noopProgress
 	}
 
 	onProgress("preparing", 0, 0)
@@ -72,13 +58,12 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, run, manifestU
 	if err := os.RemoveAll(outDir); err != nil {
 		return "", fmt.Errorf("clear cache dir: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(outDir), cacheDirMode); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outDir), format.DirPerm); err != nil {
 		return "", fmt.Errorf("ensure cache parent: %w", err)
 	}
 
 	cfg := extsort.DefaultConfig()
-	cfg.MemoryBudget = membudget.NewFromSystemRAM()
-	cfg.OnProgress = onProgress
+	cfg.Observe.OnProgress = onProgress
 
 	pipeline := extsort.NewPipeline(cfg, l.s3Client)
 	if _, err := pipeline.Run(ctx, manifestURI, outDir); err != nil {

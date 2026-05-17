@@ -167,9 +167,6 @@ func TestStatusOrder_StableDistinctPerStatus(t *testing.T) {
 	seen := map[int]inventory.CompareStatus{}
 	for _, s := range statuses {
 		got := inventory.StatusOrder(s)
-		if got != inventory.StatusOrderForTest(s) {
-			t.Errorf("inventory.StatusOrder(%s)=%d disagrees with inventory.StatusOrderForTest(%s)=%d", s, got, s, inventory.StatusOrderForTest(s))
-		}
 		if prev, dup := seen[got]; dup {
 			t.Errorf("rank %d collides for %s and %s", got, prev, s)
 		}

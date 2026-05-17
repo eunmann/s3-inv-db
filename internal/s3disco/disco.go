@@ -199,11 +199,24 @@ func (d *Discoverer) describeRuns(ctx context.Context, src, inv, invPrefix strin
 		}
 		entry.FileFormat = manifest.FileFormat
 		entry.FileCount = len(manifest.Files)
+		entry.TotalBytes = manifestTotalBytes(manifest)
 		entry.CreationTimestamp = manifest.CreationTimestamp
 		out = append(out, entry)
 	}
 
 	return out, nil
+}
+
+// manifestTotalBytes sums the compressed sizes of every data file in
+// the manifest. AWS records the size as int64 already; we keep the
+// same width so big inventories don't roll over.
+func manifestTotalBytes(m *s3fetch.Manifest) int64 {
+	var total int64
+	for _, f := range m.Files {
+		total += f.Size
+	}
+
+	return total
 }
 
 // fetchManifest GETs and parses a manifest.json using the discoverer's s3

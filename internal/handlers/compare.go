@@ -209,11 +209,7 @@ func (h *Handlers) renderCompareFullPage(w http.ResponseWriter, r *http.Request,
 		}
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.renderer.Render(w, "compare.html", data); err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render compare page")
-		http.Error(w, "failed to render page", http.StatusInternalServerError)
-	}
+	h.renderHTML(w, r, "compare.html", "render compare page", data)
 }
 
 func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Request, opts compareViewOptions) {
@@ -241,7 +237,6 @@ func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Requ
 
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	view := ComparePartialData{
 		Prefix:      opts.prefix,
 		Breadcrumbs: inventory.Breadcrumbs(opts.prefix),
@@ -249,10 +244,7 @@ func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Requ
 		To:          opts.to,
 		Level:       level,
 	}
-	if err := h.renderer.RenderPartial(w, "compare_level.html", view); err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render compare level partial")
-		http.Error(w, "failed to render partial", http.StatusInternalServerError)
-	}
+	h.renderHTMLPartial(w, r, "compare_level.html", "render compare level partial", view)
 }
 
 // computeCompareLevel borrows both indexes and assembles the rendered view

@@ -82,66 +82,47 @@ type DescendantInfo struct {
 	Depth        uint32 `json:"depth"`
 }
 
-// GetStatsAPI returns stats for a prefix.
+// GetStatsAPI returns stats for a prefix. Inventory_id comes from the
+// query string (legacy / cross-inventory variant).
 func (h *Handlers) GetStatsAPI(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	inventoryID := inventory.ID(q.Get("inventory_id"))
-	showTiers := q.Get("show_tiers") == trueLiteral
-	estimateCost := q.Get("estimate_cost") == trueLiteral
-
-	if inventoryID == "" {
+	id := inventory.ID(r.URL.Query().Get("inventory_id"))
+	if id == "" {
 		WriteJSONError(w, http.StatusBadRequest, "inventory_id is required")
 
 		return
 	}
+	h.writeStatsForInventory(w, r, id)
+}
+
+// GetInventoryStatsAPI returns stats for a prefix within a specific
+// inventory whose ID is in the URL path.
+func (h *Handlers) GetInventoryStatsAPI(w http.ResponseWriter, r *http.Request) {
+	h.writeStatsForInventory(w, r, inventory.ID(chi.URLParam(r, "id")))
+}
+
+// writeStatsForInventory backs both stats endpoints: GetStatsAPI (id
+// from query) and GetInventoryStatsAPI (id from URL path).
+func (h *Handlers) writeStatsForInventory(w http.ResponseWriter, r *http.Request, id inventory.ID) {
+	q := r.URL.Query()
 	if !q.Has("prefix") {
 		WriteJSONError(w, http.StatusBadRequest, "prefix is required")
 
 		return
 	}
 	prefix := q.Get("prefix")
-
-	var resp *StatsResponse
-	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
-		var berr error
-		resp, berr = h.buildStatsResponse(idx, prefix, showTiers, estimateCost)
-
-		return berr
-	})
-	if err != nil {
-		resp := managerErrorStatus(err)
-		WriteJSONError(w, resp.Status, resp.Message)
-
-		return
-	}
-
-	WriteJSON(w, http.StatusOK, resp)
-}
-
-// GetInventoryStatsAPI returns stats for a prefix within a specific inventory.
-func (h *Handlers) GetInventoryStatsAPI(w http.ResponseWriter, r *http.Request) {
-	inventoryID := inventory.ID(chi.URLParam(r, "id"))
-	q := r.URL.Query()
 	showTiers := q.Get("show_tiers") == trueLiteral
 	estimateCost := q.Get("estimate_cost") == trueLiteral
 
-	if !q.Has("prefix") {
-		WriteJSONError(w, http.StatusBadRequest, "prefix query parameter is required")
-
-		return
-	}
-	prefix := q.Get("prefix")
-
 	var resp *StatsResponse
-	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
+	err := h.manager.WithIndex(id, func(idx *indexread.Index) error {
 		var berr error
 		resp, berr = h.buildStatsResponse(idx, prefix, showTiers, estimateCost)
 
 		return berr
 	})
 	if err != nil {
-		resp := managerErrorStatus(err)
-		WriteJSONError(w, resp.Status, resp.Message)
+		mr := managerErrorStatus(err)
+		WriteJSONError(w, mr.Status, mr.Message)
 
 		return
 	}

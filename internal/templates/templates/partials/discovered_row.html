@@ -9,7 +9,12 @@
         <div class="text-sm font-medium text-gray-900 dark:text-gray-100 font-mono">{{if .Run}}{{.Run}}{{else}}<span class="text-red-600 dark:text-red-400">no run</span>{{end}}</div>
         <div class="text-xs text-gray-500 dark:text-gray-400 font-mono truncate max-w-md" title="{{.ManifestKey}}">{{.ManifestKey}}</div>
     </td>
-    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{{.FileFormat}}</td>
+    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+        <div>{{if .FileFormat}}{{.FileFormat}}{{else}}—{{end}}</div>
+        {{if .FileCount}}
+        <div class="text-xs font-mono" title="Chunk files in manifest; compressed total bytes">{{.FileCount}} file{{if ne .FileCount 1}}s{{end}}{{if .TotalBytes}} · {{formatBytesInt64 .TotalBytes}}{{end}}</div>
+        {{end}}
+    </td>
     <td class="px-6 py-4 whitespace-nowrap">
         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass (printf "%s" .State)}}">
             {{stateLabel (printf "%s" .State)}}

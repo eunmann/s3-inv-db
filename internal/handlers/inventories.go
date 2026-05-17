@@ -21,12 +21,6 @@ type RegisterInventoryRequest struct {
 	Path string `json:"path"`
 }
 
-// ListInventoriesAPI returns a JSON list of all inventories.
-func (h *Handlers) ListInventoriesAPI(w http.ResponseWriter, _ *http.Request) {
-	inventories := h.manager.List()
-	WriteJSON(w, http.StatusOK, inventories)
-}
-
 // ConfigurationsResponse is the shape returned by ListConfigurationsAPI.
 // Top-level wrapping object so callers can negotiate envelope additions
 // (paging, filters) without a breaking change.
@@ -65,7 +59,7 @@ type ConfigRunView struct {
 func (h *Handlers) ListConfigurationsAPI(w http.ResponseWriter, r *http.Request) {
 	resp := ConfigurationsResponse{DiscoveryEnabled: h.discovery.Enabled()}
 	if h.discovery.Enabled() {
-		views, err := h.discovery.List(r.Context())
+		views, _, err := h.discovery.Snapshot(r.Context())
 		if err != nil {
 			zerolog.Ctx(r.Context()).Error().Err(err).Msg("api configurations discovery")
 			WriteJSONError(w, http.StatusBadGateway, "failed to list discovered inventories")
@@ -240,65 +234,45 @@ func (h *Handlers) GetInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, info)
 }
 
-// LoadInventoryAPI loads an inventory index.
+// LoadInventoryAPI loads an inventory index. Build runs under
+// WithoutCancel so a navigate-away or htmx-side cancellation doesn't
+// poison the state with "context canceled".
 func (h *Handlers) LoadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
-
-	// Build runs under WithoutCancel so a navigate-away or htmx-side
-	// cancellation doesn't poison the inventory state with "context
-	// canceled". Server shutdown still terminates it via Manager.Close.
 	loadCtx := context.WithoutCancel(r.Context())
-	if err := h.manager.Load(loadCtx, id); err != nil {
-		if errors.Is(err, inventory.ErrNotFound) {
-			WriteJSONError(w, http.StatusNotFound, "inventory not found")
-
-			return
-		}
-		if errors.Is(err, inventory.ErrInvalidState) {
-			WriteJSONError(w, http.StatusConflict, err.Error())
-
-			return
-		}
-		zerolog.Ctx(r.Context()).Error().Err(err).Stringer("id", id).Msg("failed to load inventory")
-		WriteJSONError(w, http.StatusInternalServerError, "failed to load inventory")
-
-		return
-	}
-
-	info, ok := h.manager.Get(id)
-	if !ok {
-		zerolog.Ctx(r.Context()).Warn().Stringer("id", id).Msg("inventory removed concurrently with load")
-		WriteJSONError(w, http.StatusGone, "inventory was removed concurrently")
-
-		return
-	}
-	WriteJSON(w, http.StatusOK, info)
+	h.runInventoryOp(w, r, id, "load", func(_ context.Context) error {
+		return h.manager.Load(loadCtx, id)
+	})
 }
 
 // UnloadInventoryAPI unloads an inventory index.
 func (h *Handlers) UnloadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
+	h.runInventoryOp(w, r, id, "unload", func(ctx context.Context) error {
+		return h.manager.Unload(ctx, id)
+	})
+}
 
-	if err := h.manager.Unload(r.Context(), id); err != nil {
-		if errors.Is(err, inventory.ErrNotFound) {
+// runInventoryOp runs op against the manager, maps the error space to
+// the JSON-API responses Load/Unload share, then returns the post-op
+// Info so the client can refresh its view.
+func (h *Handlers) runInventoryOp(w http.ResponseWriter, r *http.Request, id inventory.ID, opName string, op func(context.Context) error) {
+	if err := op(r.Context()); err != nil {
+		switch {
+		case errors.Is(err, inventory.ErrNotFound):
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
-
-			return
-		}
-		if errors.Is(err, inventory.ErrInvalidState) {
+		case errors.Is(err, inventory.ErrInvalidState):
 			WriteJSONError(w, http.StatusConflict, err.Error())
-
-			return
+		default:
+			zerolog.Ctx(r.Context()).Error().Err(err).Stringer("id", id).Msgf("failed to %s inventory", opName)
+			WriteJSONError(w, http.StatusInternalServerError, "failed to "+opName+" inventory")
 		}
-		zerolog.Ctx(r.Context()).Error().Err(err).Stringer("id", id).Msg("failed to unload inventory")
-		WriteJSONError(w, http.StatusInternalServerError, "failed to unload inventory")
 
 		return
 	}
-
 	info, ok := h.manager.Get(id)
 	if !ok {
-		zerolog.Ctx(r.Context()).Warn().Stringer("id", id).Msg("inventory removed concurrently with unload")
+		zerolog.Ctx(r.Context()).Warn().Stringer("id", id).Msgf("inventory removed concurrently with %s", opName)
 		WriteJSONError(w, http.StatusGone, "inventory was removed concurrently")
 
 		return
@@ -371,7 +345,7 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 		HasDiscovery: h.discovery.Enabled(),
 	}
 	if data.HasDiscovery {
-		views, err := h.discovery.List(r.Context())
+		views, _, err := h.discovery.Snapshot(r.Context())
 		if err != nil {
 			zerolog.Ctx(r.Context()).Error().Err(err).Msg("discover for inventories page")
 			data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
@@ -379,11 +353,7 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 		data.Groups = h.buildInventoryGroups(r, views)
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.renderer.Render(w, "inventories.html", data); err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Msg("failed to render inventories page")
-		http.Error(w, "failed to render page", http.StatusInternalServerError)
-	}
+	h.renderHTML(w, r, "inventories.html", "failed to render inventories page", data)
 }
 
 // InventoryRowPartial renders the row for one inventory ID.
@@ -469,4 +439,23 @@ func (h *Handlers) annotateGroupsFromConfig(ctx context.Context, groups []Invent
 			g.PollBackoffUntil = cfg.PollBackoffUntil.UTC().Format(time.RFC3339)
 		}
 	}
+}
+
+// ListDiscoveredAPI lists inventories under the configured S3 source,
+// merging in any current load state. Returns 503 when discovery is not
+// configured (server started without --s3-source).
+func (h *Handlers) ListDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
+	views, _, err := h.discovery.Snapshot(r.Context())
+	if err != nil {
+		if errors.Is(err, inventory.ErrDiscoveryDisabled) {
+			WriteJSONError(w, http.StatusServiceUnavailable, "discovery not configured (start the server with --s3-source)")
+
+			return
+		}
+		zerolog.Ctx(r.Context()).Error().Err(err).Msg("discover inventories")
+		WriteJSONError(w, http.StatusBadGateway, "failed to discover inventories")
+
+		return
+	}
+	WriteJSON(w, http.StatusOK, views)
 }

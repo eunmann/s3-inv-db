@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
 )
 
 // Discoverer is the subset of s3disco.Discoverer that DiscoveryService
@@ -18,7 +22,6 @@ type Discoverer interface {
 
 // IndexBuilder is the subset of loader.Loader that DiscoveryService uses.
 type IndexBuilder interface {
-	Build(ctx context.Context, srcBucket, invID, run, manifestURI string) (string, error)
 	BuildWith(ctx context.Context, srcBucket, invID, run, manifestURI string, onProgress func(stage string, done, total int64)) (string, error)
 	RemoveCache(srcBucket, invID, run string) error
 	CacheSizeBytes(srcBucket, invID, run string) (int64, error)
@@ -39,12 +42,12 @@ type MergedInventory struct {
 // GatedLoader runs a build under the disk-budget planner. Optional —
 // when set on DiscoveryService, LoadWith routes through the gate so
 // loads honour the global byte cap. Defined as an interface to keep
-// inventory free of an import on internal/loadgate.
+// inventory free of an import on internal/loadcontrol.
 type GatedLoader interface {
 	Load(ctx context.Context, id ID, build BuildFunc, opts GatedLoadOptions) error
 }
 
-// GatedLoadOptions mirrors the fields of internal/loadgate.Options.
+// GatedLoadOptions mirrors the fields of internal/loadcontrol.Options.
 // Duplicated here so DiscoveryService doesn't import the gate package
 // (the gate already imports this one).
 type GatedLoadOptions struct {
@@ -74,6 +77,17 @@ type DiscoveryService struct {
 	gate       GatedLoader
 	sizer      ManifestSizer
 	indexRatio float64
+
+	cacheMu       sync.RWMutex
+	cacheViews    []MergedInventory
+	cacheAt       time.Time
+	cacheLastErr  error
+	cachePopulate bool // true once Refresh has succeeded at least once
+
+	bgMu    sync.Mutex
+	bgStop  chan struct{}
+	bgWG    sync.WaitGroup
+	bgClock func() time.Time
 }
 
 // NewDiscoveryService constructs a service. The discoverer and builder
@@ -125,8 +139,9 @@ func (s *DiscoveryService) List(ctx context.Context) ([]MergedInventory, error) 
 		return nil, fmt.Errorf("discover: %w", err)
 	}
 	out := make([]MergedInventory, 0, len(discovered))
-	for _, d := range discovered {
-		m := MergedInventory{Inventory: d, State: StateNotLoaded}
+	for i := range discovered {
+		d := &discovered[i]
+		m := MergedInventory{Inventory: *d, State: StateNotLoaded}
 		if info, ok := s.manager.Get(d.CompositeID()); ok {
 			m.State = info.State
 			m.Error = info.Error
@@ -137,6 +152,137 @@ func (s *DiscoveryService) List(ctx context.Context) ([]MergedInventory, error) 
 	}
 
 	return out, nil
+}
+
+// Snapshot returns the most recently cached merged-inventory view and
+// the time at which it was captured. When no refresh has succeeded yet,
+// Snapshot performs one inline so cold-start callers (e.g. the first
+// dashboard page load after process start) don't see an empty result.
+// Subsequent calls always read the cache, even if a later Refresh
+// failed — the FetchedAt timestamp lets callers age out the result
+// themselves if they need fresher data.
+func (s *DiscoveryService) Snapshot(ctx context.Context) ([]MergedInventory, time.Time, error) {
+	if s.discoverer == nil {
+		return nil, time.Time{}, ErrDiscoveryDisabled
+	}
+	s.cacheMu.RLock()
+	populated := s.cachePopulate
+	s.cacheMu.RUnlock()
+	if !populated {
+		if err := s.Refresh(ctx); err != nil {
+			return nil, time.Time{}, err
+		}
+	}
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	out := make([]MergedInventory, len(s.cacheViews))
+	copy(out, s.cacheViews)
+
+	return out, s.cacheAt, nil
+}
+
+// Refresh runs a live List and stores the result in the snapshot. The
+// previous snapshot is preserved on error so consumers continue to see
+// the last-known-good views instead of falling back to empty.
+// LastRefreshErr returns the most recent error, if any.
+func (s *DiscoveryService) Refresh(ctx context.Context) error {
+	if s.discoverer == nil {
+		return ErrDiscoveryDisabled
+	}
+	views, err := s.List(ctx)
+	now := s.now()
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	if err != nil {
+		s.cacheLastErr = err
+		// Keep prior cacheViews / cachePopulate as-is so readers still
+		// get the last-known-good snapshot.
+		return err
+	}
+	s.cacheViews = views
+	s.cacheAt = now
+	s.cachePopulate = true
+	s.cacheLastErr = nil
+
+	return nil
+}
+
+// LastRefreshErr returns the error from the most recent Refresh, or nil
+// if the most recent Refresh succeeded (or none has run yet).
+func (s *DiscoveryService) LastRefreshErr() error {
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+
+	return s.cacheLastErr
+}
+
+// Start launches a background goroutine that calls Refresh every
+// `interval`. The very first refresh runs inline so Snapshot returns
+// fresh data immediately after Start returns. Subsequent refreshes run
+// asynchronously; ticker drift is acceptable. Refresh errors are
+// logged at warn level via the supplied logger (nil disables logging).
+//
+// Start is a no-op when discovery is disabled. Calling Start a second
+// time without Stop in between is also a no-op.
+func (s *DiscoveryService) Start(ctx context.Context, interval time.Duration, logger *zerolog.Logger) {
+	if s.discoverer == nil || interval <= 0 {
+		return
+	}
+	s.bgMu.Lock()
+	if s.bgStop != nil {
+		s.bgMu.Unlock()
+
+		return
+	}
+	stop := make(chan struct{})
+	s.bgStop = stop
+	s.bgMu.Unlock()
+
+	if err := s.Refresh(ctx); err != nil && logger != nil {
+		logger.Warn().Err(err).Msg("discovery: initial refresh failed; serving empty snapshot until next tick")
+	}
+	s.bgWG.Add(1)
+	go s.runRefresher(ctx, interval, stop, logger)
+}
+
+func (s *DiscoveryService) runRefresher(ctx context.Context, interval time.Duration, stop <-chan struct{}, logger *zerolog.Logger) {
+	defer s.bgWG.Done()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-stop:
+			return
+		case <-t.C:
+			if err := s.Refresh(ctx); err != nil && logger != nil {
+				logger.Warn().Err(err).Msg("discovery: background refresh failed; serving last good snapshot")
+			}
+		}
+	}
+}
+
+// Stop signals the background refresher to exit and waits for it. Safe
+// to call without a matching Start.
+func (s *DiscoveryService) Stop() {
+	s.bgMu.Lock()
+	stop := s.bgStop
+	s.bgStop = nil
+	s.bgMu.Unlock()
+	if stop == nil {
+		return
+	}
+	close(stop)
+	s.bgWG.Wait()
+}
+
+func (s *DiscoveryService) now() time.Time {
+	if s.bgClock != nil {
+		return s.bgClock()
+	}
+
+	return time.Now()
 }
 
 // Find returns a single discovered inventory run by source bucket, ID,

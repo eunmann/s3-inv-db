@@ -18,7 +18,7 @@ func TestIndexBuilderContextCancellation(t *testing.T) {
 		cancel() // Cancel immediately
 
 		dir := t.TempDir()
-		builder, err := NewIndexBuilder(dir, "", false)
+		builder, err := NewIndexBuilder(dir, "")
 		if err != nil {
 			t.Fatalf("NewIndexBuilder: %v", err)
 		}
@@ -96,7 +96,7 @@ func TestIndexBuilderContextCancellation(t *testing.T) {
 		defer iter.Close()
 
 		outDir := filepath.Join(dir, "out")
-		builder, err := NewIndexBuilder(outDir, "", false)
+		builder, err := NewIndexBuilder(outDir, "")
 		if err != nil {
 			t.Fatalf("NewIndexBuilder: %v", err)
 		}
@@ -108,54 +108,41 @@ func TestIndexBuilderContextCancellation(t *testing.T) {
 	})
 }
 
-// TestAggregationContextCancellation tests that the aggregation loop
-// handles context cancellation properly when the context is already cancelled.
-func TestAggregationContextCancellation(t *testing.T) {
-	// Create an already-cancelled context
+// TestPerWorkerAggregator_ContextCancellation guards the per-worker
+// ingest pattern: a worker goroutine pulls jobs off a shared channel
+// and processes each one into its private aggregator; on context
+// cancellation it must exit cleanly without consuming further jobs.
+//
+// This is the worker-loop shape used by Pipeline.runChunkWorker after
+// the I1 per-worker-aggregator refactor (which replaced the previous
+// single-consumer aggregation loop that this test originally covered).
+func TestPerWorkerAggregator_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// Create channels for the aggregation loop pattern
-	results := make(chan objectBatch, 10)
+	jobs := make(chan objectRecord, 10)
+	for range 5 {
+		jobs <- objectRecord{key: "test/obj", size: 100, tierID: 0}
+	}
+	close(jobs)
 
-	// Send a few batches
-	go func() {
-		for range 5 {
-			results <- objectBatch{objects: []objectRecord{
-				{key: "test/obj", size: 100, tierID: 0},
-			}}
-		}
-		close(results)
-	}()
-
-	// Run aggregation loop (similar to pipeline code)
 	agg := NewAggregator(100, 0)
-	var cancelled bool
-outerLoop:
-	for batch := range results {
-		// Check for context cancellation (same pattern as pipeline)
+	var exitedDueToCancel bool
+workerLoop:
+	for job := range jobs {
 		select {
 		case <-ctx.Done():
-			cancelled = true
-			// Drain remaining channel items
-			for range results {
-				// Intentionally empty: just consuming remaining items
-				continue
-			}
+			exitedDueToCancel = true
 
-			break outerLoop
+			break workerLoop
 		default:
 		}
-		for _, obj := range batch.objects {
-			agg.AddObject(obj.key, obj.size, obj.tierID)
-		}
+		agg.AddObject(job.key, job.size, job.tierID)
 	}
 
-	if !cancelled {
-		t.Error("expected loop to be cancelled by pre-cancelled context")
+	if !exitedDueToCancel {
+		t.Error("worker did not exit on pre-cancelled context")
 	}
-
-	// Should have processed zero or very few objects
 	if agg.ObjectCount() > 5 {
 		t.Errorf("processed too many objects: %d (expected <= 5)", agg.ObjectCount())
 	}

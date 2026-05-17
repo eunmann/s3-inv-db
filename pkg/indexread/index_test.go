@@ -447,12 +447,12 @@ b/file.txt,200
 		t.Errorf("MaxDepth = %d, want 1", manifest.MaxDepth)
 	}
 
-	// Verify all files have checksums
+	// Verify the expected file set has checksums. Indexes built with
+	// the row-major layout (Q2) replace the five per-column files
+	// with core_stats.bin; older indexes carry the per-column files.
+	// One of the two file sets must be present.
 	expectedFiles := []string{
-		"subtree_end.u64",
-		"depth.u32",
-		"object_count.u64",
-		"total_bytes.u64",
+		format.CoreStatsFile,
 		"mph.bin",
 	}
 	for _, name := range expectedFiles {

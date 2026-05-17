@@ -91,29 +91,18 @@ func (a *Aggregator) BytesProcessed() int64 {
 	return a.bytesProcessed
 }
 
-// EstimatedMemoryUsage returns an approximate memory usage in bytes.
-// This is a rough estimate based on prefix count and average prefix length.
-//
-// Deprecated: This estimate is inaccurate. Use ShouldFlush() with actual
-// heap measurements instead.
+// EstimatedMemoryUsage returns the per-worker aggregator's approximate
+// in-memory footprint in bytes (~288 B/entry covering map overhead +
+// avg prefix string + PrefixStats). Undercounts by 2-3× vs runtime
+// reality; the HeapPressureRatio safety check in ShouldWorkerFlush
+// catches that case.
 func (a *Aggregator) EstimatedMemoryUsage() int64 {
-	// Estimate per-prefix overhead:
-	// - Map entry: ~48 bytes (key pointer, value pointer, hash bucket)
-	// - Average prefix string: ~30 bytes
-	// - PrefixStats: ~(2 + 8 + 8 + 12*8 + 12*8) = ~210 bytes
-	// Total: ~288 bytes per prefix
-	//
-	// NOTE: This estimate is often 2-3x lower than actual usage due to:
-	// - Go map overhead being higher
-	// - String allocations being larger
-	// - Memory fragmentation
 	const bytesPerPrefix = 288
 
 	return int64(len(a.prefixes)) * bytesPerPrefix
 }
 
-// HeapAllocBytes returns the current heap allocation from runtime.
-// This provides ground-truth memory usage for making flush decisions.
+// HeapAllocBytes returns runtime.MemStats.HeapAlloc.
 func HeapAllocBytes() uint64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -121,15 +110,69 @@ func HeapAllocBytes() uint64 {
 	return m.HeapAlloc
 }
 
-// ShouldFlush returns true if the aggregator should flush based on
-// actual heap usage approaching the given threshold.
-//
-// The threshold should be the maximum heap size allowed. We flush
-// when heap usage exceeds 80% of threshold to leave headroom.
-func ShouldFlush(heapThreshold uint64) bool {
-	current := HeapAllocBytes()
-	// Flush at 80% of threshold to leave headroom for flush operations
-	return current > (heapThreshold * 80 / 100)
+// HeapInuseBytes returns runtime.MemStats.HeapInuse — a more
+// conservative GOMEMLIMIT-relative pressure signal than HeapAlloc
+// because it includes recently-freed spans not yet returned to the OS.
+func HeapInuseBytes() uint64 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+
+	return m.HeapInuse
+}
+
+// AbsoluteAggregatorCap is the hard ceiling on the combined in-memory
+// footprint of all worker aggregators before they're forced to spill.
+const AbsoluteAggregatorCap uint64 = 512 * 1024 * 1024
+
+// HeapPressureRatio is the HeapInuse / GOMEMLIMIT fraction above which
+// any worker must spill regardless of its own size — the aggregator
+// is the pipeline's only flush valve.
+const HeapPressureRatio = 0.85
+
+// AggregatorFractionOfLimit caps the combined aggregator footprint as
+// a share of GOMEMLIMIT so a multi-GiB limit doesn't dwarf other
+// working sets.
+const AggregatorFractionOfLimit = 0.15
+
+// AggregatorCap returns the combined spill threshold for all workers,
+// the smaller of AbsoluteAggregatorCap and 15% of memoryLimit. Zero or
+// negative memoryLimit falls back to the absolute cap.
+func AggregatorCap(memoryLimit int64) uint64 {
+	if memoryLimit <= 0 {
+		return AbsoluteAggregatorCap
+	}
+	fractional := uint64(float64(memoryLimit) * AggregatorFractionOfLimit)
+	if fractional < AbsoluteAggregatorCap {
+		return fractional
+	}
+
+	return AbsoluteAggregatorCap
+}
+
+// PerWorkerAggregatorCap returns the spill threshold for one chunk
+// worker — AggregatorCap divided by numWorkers (min 1).
+func PerWorkerAggregatorCap(memoryLimit int64, numWorkers int) uint64 {
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+
+	return AggregatorCap(memoryLimit) / uint64(numWorkers)
+}
+
+// ShouldWorkerFlush decides whether one worker's aggregator should
+// spill, given its own footprint, GOMEMLIMIT, and total worker count.
+// Each worker decides independently (no flush stampedes); a HeapInuse-
+// vs-limit pressure check is the safety valve.
+func ShouldWorkerFlush(workerAggBytes uint64, memoryLimit int64, numWorkers int) bool {
+	if workerAggBytes >= PerWorkerAggregatorCap(memoryLimit, numWorkers) {
+		return true
+	}
+	if memoryLimit <= 0 {
+		return false
+	}
+	heapPressure := uint64(float64(memoryLimit) * HeapPressureRatio)
+
+	return HeapInuseBytes() >= heapPressure
 }
 
 // Drain extracts all prefixes from the aggregator and returns them as PrefixRows.

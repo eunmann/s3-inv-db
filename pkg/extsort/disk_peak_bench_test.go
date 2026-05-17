@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/eunmann/s3-inv-db/pkg/benchutil"
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 )
 
@@ -79,7 +79,7 @@ func measureOne(b *testing.B, numObjects int) {
 	if err != nil {
 		b.Fatalf("merger: %v", err)
 	}
-	builder, err := extsort.NewIndexBuilder(outDir, "", false)
+	builder, err := extsort.NewIndexBuilder(outDir, "")
 	if err != nil {
 		merger.Close()
 		b.Fatalf("builder: %v", err)

@@ -3,11 +3,34 @@ package extsort
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"slices"
 	"strings"
+)
+
+// defaultRunBufferSize is the default I/O buffer for run-file reader
+// and writer instances when the caller passes 0. Big enough to
+// amortise syscall overhead on sequential append/scan, small enough
+// that holding several per worker stays well under any memory cap.
+const defaultRunBufferSize = 4 * 1024 * 1024
+
+// Sentinel errors for the extsort package. Wrap with %w when adding
+// context via fmt.Errorf so callers can match with errors.Is.
+var (
+	// ErrInvalidMagic indicates a run file has the wrong magic number.
+	ErrInvalidMagic = errors.New("invalid magic")
+	// ErrUnsupportedVersion indicates an unsupported run file format version.
+	ErrUnsupportedVersion = errors.New("unsupported run file version")
+	// ErrNotCompressed indicates the file is not compressed when a
+	// compressed reader is required.
+	ErrNotCompressed = errors.New("file is not compressed")
+	// ErrUnsupportedCompression indicates an unsupported compression type.
+	ErrUnsupportedCompression = errors.New("unsupported compression type")
+	// ErrNoInputPaths indicates a merge call received no input paths.
+	ErrNoInputPaths = errors.New("no input paths provided")
 )
 
 // RunFile format:
@@ -52,7 +75,7 @@ func NewRunFileWriter(path string, bufferSize int) (*RunFileWriter, error) {
 	}
 
 	if bufferSize <= 0 {
-		bufferSize = 4 * 1024 * 1024 // 4MB default
+		bufferSize = defaultRunBufferSize
 	}
 
 	w := &RunFileWriter{
@@ -79,43 +102,10 @@ func NewRunFileWriter(path string, bufferSize int) (*RunFileWriter, error) {
 
 // Write writes a single PrefixRow to the run file.
 func (w *RunFileWriter) Write(row *PrefixRow) error {
-	prefixLen := len(row.Prefix)
-	recordSize := 4 + prefixLen + 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
-
-	if len(w.buf) < recordSize {
-		w.buf = make([]byte, recordSize*2)
-	}
-
-	offset := 0
-
-	binary.LittleEndian.PutUint32(w.buf[offset:], uint32(prefixLen))
-	offset += 4
-	copy(w.buf[offset:], row.Prefix)
-	offset += prefixLen
-
-	binary.LittleEndian.PutUint16(w.buf[offset:], row.Depth)
-	offset += 2
-
-	binary.LittleEndian.PutUint64(w.buf[offset:], row.Count)
-	offset += 8
-
-	binary.LittleEndian.PutUint64(w.buf[offset:], row.TotalBytes)
-	offset += 8
-
-	for i := range MaxTiers {
-		binary.LittleEndian.PutUint64(w.buf[offset:], row.TierCounts[i])
-		offset += 8
-	}
-
-	for i := range MaxTiers {
-		binary.LittleEndian.PutUint64(w.buf[offset:], row.TierBytes[i])
-		offset += 8
-	}
-
-	if _, err := w.writer.Write(w.buf[:offset]); err != nil {
+	n := encodePrefixRowRecord(&w.buf, row)
+	if _, err := w.writer.Write(w.buf[:n]); err != nil {
 		return fmt.Errorf("write record: %w", err)
 	}
-
 	w.count++
 
 	return nil
@@ -178,6 +168,16 @@ func (w *RunFileWriter) Close() error {
 		return fmt.Errorf("update header: %w", err)
 	}
 
+	// fsync before close so a crash between Close() returning and the
+	// kernel flushing dirty pages can't corrupt or truncate this run.
+	// Intermediate run files are only kept until merge completes; the
+	// fsync cost (~5-10 ms per file on SSD) is the price of durability.
+	if err := w.file.Sync(); err != nil {
+		w.file.Close()
+
+		return fmt.Errorf("fsync run file: %w", err)
+	}
+
 	if err := w.file.Close(); err != nil {
 		return fmt.Errorf("close run file: %w", err)
 	}
@@ -204,7 +204,7 @@ func OpenRunFile(path string, bufferSize int) (*RunFileReader, error) {
 	}
 
 	if bufferSize <= 0 {
-		bufferSize = 4 * 1024 * 1024 // 4MB default
+		bufferSize = defaultRunBufferSize
 	}
 
 	r := &RunFileReader{

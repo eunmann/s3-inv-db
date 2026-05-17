@@ -46,12 +46,10 @@ func managerErrorStatus(err error) ManagerErrorResponse {
 	return ManagerErrorResponse{Status: http.StatusInternalServerError, Message: "operation failed"}
 }
 
-// respondManagerErrorHTML emits a text/plain (http.Error) response for
-// the same set of errors. Used by /partials/* handlers because htmx
-// surfaces non-2xx response bodies verbatim. (The JSON counterpart
-// is unused now that the /api/discovered mutating routes are gone;
-// re-introduce it as `respondManagerError` if a JSON mutator returns.)
-func respondManagerErrorHTML(w http.ResponseWriter, r *http.Request, err error, op string) {
+// respondManagerError emits a text/plain (http.Error) response for
+// the manager-error set. Used by /partials/* handlers because htmx
+// surfaces non-2xx response bodies verbatim.
+func respondManagerError(w http.ResponseWriter, r *http.Request, err error, op string) {
 	resp := managerErrorStatus(err)
 	if resp.Status >= http.StatusInternalServerError {
 		zerolog.Ctx(r.Context()).Error().Err(err).Str("op", op).Msg("manager error")

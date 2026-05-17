@@ -14,10 +14,8 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/appconfig"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/format"
-	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
-	"github.com/eunmann/s3-inv-db/pkg/membudget"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/sysmem"
@@ -65,14 +63,7 @@ func runBuild(args []string) error {
 	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
 
 	// Concurrency tuning
-	workers := fs.Int("workers", 0, "number of concurrent S3 download/parse workers (default: CPU count)")
 	maxDepth := fs.Int("max-depth", 0, "maximum prefix depth to track (0 = unlimited)")
-
-	// Memory budget
-	memBudgetStr := fs.String("mem-budget", "", "total memory budget (e.g., 4GiB, 8GB). Default: 50% of RAM")
-
-	// Prefix encoding
-	segmentPrefixes := fs.Bool("segment-prefixes", false, "use segment dictionary compression for prefixes (reduces size when prefixes share path components)")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -90,6 +81,15 @@ func runBuild(args []string) error {
 	log.Logger = baseLogger
 	logging.Init(finalVerbose, finalPretty)
 
+	memLimit := sysmem.ApplyMemoryLimit(sysmem.DefaultMemoryLimitFraction)
+	baseLogger.Info().
+		Int64("bytes", memLimit.Bytes).
+		Str("source", string(memLimit.Source)).
+		Int64("env_bytes", memLimit.EnvBytes).
+		Int64("cgroup_bytes", memLimit.CgroupBytes).
+		Int64("sysmem_fraction_bytes", memLimit.SysmemFractionBytes).
+		Msg("process memory limit configured")
+
 	if *outDir == "" {
 		return ErrOutRequired
 	}
@@ -97,11 +97,11 @@ func runBuild(args []string) error {
 		return ErrManifestRequire
 	}
 
-	return runBuildExtSort(*outDir, *s3Manifest, *workers, *maxDepth, *memBudgetStr, *segmentPrefixes, baseLogger)
+	return runBuildExtSort(*outDir, *s3Manifest, *maxDepth, baseLogger)
 }
 
 // runBuildExtSort runs the build using the external sort backend (pure Go, no CGO).
-func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudgetStr string, segmentPrefixes bool, baseLogger zerolog.Logger) error {
+func runBuildExtSort(outDir, s3Manifest string, maxDepth int, baseLogger zerolog.Logger) error {
 	// Create a context that responds to OS signals (SIGINT, SIGTERM)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -111,42 +111,18 @@ func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudget
 	ctx = baseLogger.WithContext(ctx)
 	logger := zerolog.Ctx(ctx)
 
-	// Determine memory budget
-	budget, err := determineMemoryBudget(memBudgetStr)
-	if err != nil {
-		return fmt.Errorf("invalid memory budget: %w", err)
-	}
-
-	// Log memory budget at startup
-	ramResult := sysmem.Total()
-	logger.Info().
-		Str("total_ram", humanfmt.BytesUint64(ramResult.TotalBytes)).
-		Str("mem_budget", humanfmt.BytesUint64(budget.Total())).
-		Str("mem_budget_source", string(budget.Source())).
-		Msg("memory budget configured")
-
 	client, err := s3fetch.NewClient(ctx)
 	if err != nil {
 		return fmt.Errorf("create S3 client: %w", err)
 	}
 
 	config := extsort.DefaultConfig()
-	config.MemoryBudget = budget
-
-	// Apply CLI overrides
-	if workers > 0 {
-		config.S3DownloadConcurrency = workers
-		config.ParseConcurrency = workers
-		config.IndexWriteConcurrency = workers
-	}
 	if maxDepth > 0 {
 		config.MaxDepth = maxDepth
 	}
-	config.UseSegmentEncoding = segmentPrefixes
 
-	// Log concurrency settings
 	logger.Info().
-		Int("workers", config.S3DownloadConcurrency).
+		Int("s3_part_concurrency", config.S3.DownloadPartConcurrency).
 		Int("max_depth", config.MaxDepth).
 		Msg("pipeline configuration")
 
@@ -165,42 +141,6 @@ func runBuildExtSort(outDir, s3Manifest string, workers, maxDepth int, memBudget
 	}
 
 	return nil
-}
-
-// determineMemoryBudget determines the memory budget from CLI flag, environment variable,
-// or auto-detection in this order of priority:
-//  1. CLI flag --mem-budget
-//  2. Environment variable S3INV_MEM_BUDGET
-//  3. 50% of detected system RAM.
-func determineMemoryBudget(cliValue string) (*membudget.Budget, error) {
-	// Check CLI flag first
-	if cliValue != "" {
-		bytes, err := membudget.ParseHumanSize(cliValue)
-		if err != nil {
-			return nil, fmt.Errorf("parse --mem-budget: %w", err)
-		}
-
-		return membudget.New(membudget.Config{
-			TotalBytes: bytes,
-			Source:     membudget.BudgetSourceCLI,
-		}), nil
-	}
-
-	// Check environment variable
-	if envValue := os.Getenv("S3INV_MEM_BUDGET"); envValue != "" {
-		bytes, err := membudget.ParseHumanSize(envValue)
-		if err != nil {
-			return nil, fmt.Errorf("parse S3INV_MEM_BUDGET=%q: %w", envValue, err)
-		}
-
-		return membudget.New(membudget.Config{
-			TotalBytes: bytes,
-			Source:     membudget.BudgetSourceEnv,
-		}), nil
-	}
-
-	// Fall back to 50% of system RAM
-	return membudget.NewFromSystemRAM(), nil
 }
 
 func runQuery(args []string) error {

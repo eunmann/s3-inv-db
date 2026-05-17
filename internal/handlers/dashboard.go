@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -18,6 +19,11 @@ type DashboardData struct {
 	HasDiscovery   bool
 	DiscoveryError string
 
+	// SnapshotAge is a human-readable age for the discovery snapshot
+	// rendered on the page (e.g., "12s", "2m"). Empty when discovery is
+	// disabled or the snapshot has never been populated.
+	SnapshotAge string
+
 	// Top stats — one per card.
 	Configurations int // distinct (src, inv) pairs
 	TotalRuns      int // total Inventory entries from discovery
@@ -27,6 +33,12 @@ type DashboardData struct {
 	TotalObjectsH  string
 	TotalBytesH    string
 	DiskUsedH      string
+
+	// Aggregate manifest stats across every run whose manifest was
+	// fetched at discovery time. The discoverer caps manifest fetches
+	// per configuration, so these undercount older runs beyond the cap.
+	ManifestFiles  int    // total chunk files across discovered runs
+	ManifestBytesH string // sum of compressed chunk sizes
 
 	BudgetCapH      string
 	BudgetUsedH     string
@@ -52,6 +64,13 @@ type DashboardConfig struct {
 	LatestRun     string // run timestamp of the newest entry
 	LatestState   inventory.State
 	DiskBytesH    string // size on disk across this configuration's loaded runs
+
+	// LatestFiles and LatestBytesH describe the newest run's manifest
+	// (chunk file count + summed compressed size). Empty/zero when the
+	// manifest was not fetched at discovery time.
+	LatestFiles  int
+	LatestBytesH string
+	LatestFormat string // CSV / Parquet (from manifest)
 }
 
 // Dashboard renders the dashboard HTML page.
@@ -64,19 +83,18 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 	logger := zerolog.Ctx(r.Context())
 	if !h.discovery.Enabled() {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := h.renderer.Render(w, "dashboard.html", data); err != nil {
-			logger.Error().Err(err).Msg("failed to render dashboard")
-			http.Error(w, "failed to render page", http.StatusInternalServerError)
-		}
+		h.renderHTML(w, r, "dashboard.html", "failed to render dashboard", data)
 
 		return
 	}
 
-	views, err := h.discovery.List(r.Context())
+	views, fetchedAt, err := h.discovery.Snapshot(r.Context())
 	if err != nil {
 		logger.Error().Err(err).Msg("dashboard discovery failed")
 		data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
+	}
+	if !fetchedAt.IsZero() {
+		data.SnapshotAge = humanfmt.Duration(time.Since(fetchedAt))
 	}
 
 	agg := h.aggregateDashboard(logger, views, &data)
@@ -89,6 +107,10 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	if agg.Totals.disk > 0 {
 		data.DiskUsedH = humanfmt.BytesUint64(uint64(agg.Totals.disk))
+	}
+	data.ManifestFiles = agg.Totals.manifestFiles
+	if agg.Totals.manifestBytes > 0 {
+		data.ManifestBytesH = humanfmt.BytesUint64(uint64(agg.Totals.manifestBytes))
 	}
 	h.fillBudgetCounters(&data)
 	h.fillAutoLoadCounters(r.Context(), &data, views)
@@ -104,18 +126,19 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 			LoadedRuns:    c.LoadedRuns,
 			LatestRun:     c.LatestRun,
 			LatestState:   c.LatestState,
+			LatestFiles:   c.LatestFiles,
+			LatestFormat:  c.LatestFormat,
 		}
 		if c.DiskBytes > 0 {
 			row.DiskBytesH = humanfmt.BytesUint64(uint64(c.DiskBytes))
 		}
+		if c.LatestBytes > 0 {
+			row.LatestBytesH = humanfmt.BytesUint64(uint64(c.LatestBytes))
+		}
 		data.Configs = append(data.Configs, row)
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.renderer.Render(w, "dashboard.html", data); err != nil {
-		logger.Error().Err(err).Msg("failed to render dashboard")
-		http.Error(w, "failed to render page", http.StatusInternalServerError)
-	}
+	h.renderHTML(w, r, "dashboard.html", "failed to render dashboard", data)
 }
 
 func (h *Handlers) fillBudgetCounters(data *DashboardData) {
@@ -158,18 +181,23 @@ func (h *Handlers) fillAutoLoadCounters(ctx context.Context, data *DashboardData
 }
 
 type dashConfAgg struct {
-	Src, ID     string
-	TotalRuns   int
-	LoadedRuns  int
-	LatestRun   string
-	LatestState inventory.State
-	DiskBytes   int64
+	Src, ID      string
+	TotalRuns    int
+	LoadedRuns   int
+	LatestRun    string
+	LatestState  inventory.State
+	DiskBytes    int64
+	LatestFiles  int
+	LatestBytes  int64
+	LatestFormat string
 }
 
 type dashTotals struct {
-	objects uint64
-	bytes   uint64
-	disk    int64
+	objects       uint64
+	bytes         uint64
+	disk          int64
+	manifestFiles int
+	manifestBytes int64
 }
 
 // dashAggregate bundles aggregateDashboard's three outputs so the
@@ -197,7 +225,12 @@ func (h *Handlers) aggregateDashboard(logger *zerolog.Logger, views []inventory.
 		if c.LatestRun == "" && v.Run != "" {
 			c.LatestRun = v.Run
 			c.LatestState = v.State
+			c.LatestFiles = v.FileCount
+			c.LatestBytes = v.TotalBytes
+			c.LatestFormat = v.FileFormat
 		}
+		agg.Totals.manifestFiles += v.FileCount
+		agg.Totals.manifestBytes += v.TotalBytes
 		h.tallyView(logger, v, c, data, &agg.Totals)
 	}
 

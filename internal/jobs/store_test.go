@@ -29,10 +29,7 @@ func storeWithInventory(t *testing.T, invID inventory.ID) (*jobs.Store, *sql.DB)
 	if err := invStore.Upsert(t.Context(), inventory.Info{ID: invID, Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
 		t.Fatalf("seed inventory: %v", err)
 	}
-	store, err := jobs.NewStore(db)
-	if err != nil {
-		t.Fatalf("jobs.NewStore: %v", err)
-	}
+	store := jobs.NewStore(db)
 
 	return store, db
 }

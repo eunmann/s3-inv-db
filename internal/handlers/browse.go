@@ -106,11 +106,7 @@ func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request,
 			data["InitialLevel"] = level
 		}
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.renderer.Render(w, "browse.html", data); err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Msg("failed to render browse page")
-		http.Error(w, "failed to render page", http.StatusInternalServerError)
-	}
+	h.renderHTML(w, r, "browse.html", "failed to render browse page", data)
 }
 
 func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Request,
@@ -142,11 +138,7 @@ func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Reque
 
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.renderer.RenderPartial(w, "browse_level.html", level); err != nil {
-		logger.Error().Err(err).Msg("failed to render browse level")
-		http.Error(w, "failed to render partial", http.StatusInternalServerError)
-	}
+	h.renderHTMLPartial(w, r, "browse_level.html", "failed to render browse level", level)
 }
 
 // buildBrowseLevel composes the domain-level prefix view with HTTP-shape
@@ -200,8 +192,21 @@ func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, i
 	from, to := level.Pagination.FirstRow, level.Pagination.LastRow
 	if from > 0 {
 		level.Children = all[from-1 : to]
+		// When sortBy != cost, buildChildren skipped per-child cost to
+		// avoid TierBreakdown on the unpaginated set. Only the visible
+		// page needs cost numbers, so backfill them here.
 		if sortBy != inventory.SortColCost && idx.HasTierData() {
-			h.fillChildCosts(idx, level.Children)
+			for i := range level.Children {
+				p, ok := idx.Lookup(level.Children[i].Prefix)
+				if !ok {
+					continue
+				}
+				est := h.computeCostEstimate(idx.TierBreakdown(p), false)
+				if est != nil {
+					level.Children[i].MonthlyCostMicrodollars = est.TotalMicrodollars
+					level.Children[i].MonthlyCostFormatted = est.TotalFormatted
+				}
+			}
 		}
 	}
 
@@ -245,20 +250,6 @@ func (h *Handlers) buildChildren(ctx context.Context, idx *indexread.Index, pos 
 	}
 
 	return children
-}
-
-func (h *Handlers) fillChildCosts(idx *indexread.Index, visible []BrowseChild) {
-	for i := range visible {
-		p, ok := idx.Lookup(visible[i].Prefix)
-		if !ok {
-			continue
-		}
-		est := h.computeCostEstimate(idx.TierBreakdown(p), false)
-		if est != nil {
-			visible[i].MonthlyCostMicrodollars = est.TotalMicrodollars
-			visible[i].MonthlyCostFormatted = est.TotalFormatted
-		}
-	}
 }
 
 // BrowseLevelResponse is the JSON shape returned by BrowseLevelAPI.

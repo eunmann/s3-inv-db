@@ -27,7 +27,7 @@ func loaded(id string, bytes uint64, loadedAt, accessedAt time.Time, pinned bool
 
 func TestPlanner_FitsWithoutEviction(t *testing.T) {
 	tr := budget.New(1000, 0)
-	tr.Add("x", 100)
+	tr.Add(100)
 	p := budget.NewPlanner(tr, nil)
 	in := budget.Input{
 		Target:        "src/inv/runC",
@@ -48,8 +48,8 @@ func TestPlanner_FitsWithoutEviction(t *testing.T) {
 
 func TestPlanner_EvictsWithinConfigToRespectRetention(t *testing.T) {
 	tr := budget.New(1000, 0)
-	tr.Add("a", 100)
-	tr.Add("b", 100)
+	tr.Add(100)
+	tr.Add(100)
 	cfg := fakeConfig{"src/inv": 2}
 	p := budget.NewPlanner(tr, cfg)
 	in := budget.Input{
@@ -74,8 +74,8 @@ func TestPlanner_EvictsWithinConfigToRespectRetention(t *testing.T) {
 
 func TestPlanner_GlobalLRUWhenStillOverBudget(t *testing.T) {
 	tr := budget.New(1000, 0)
-	tr.Add("a", 400)
-	tr.Add("b", 400)
+	tr.Add(400)
+	tr.Add(400)
 	cfg := fakeConfig{"alpha/inv": 5, "beta/inv": 5} // retention won't force eviction
 	p := budget.NewPlanner(tr, cfg)
 	in := budget.Input{
@@ -101,7 +101,7 @@ func TestPlanner_GlobalLRUWhenStillOverBudget(t *testing.T) {
 
 func TestPlanner_RefusesWhenAllPinned(t *testing.T) {
 	tr := budget.New(500, 0)
-	tr.Add("p1", 400)
+	tr.Add(400)
 	p := budget.NewPlanner(tr, nil)
 	in := budget.Input{
 		Target:        "src/inv/runNew",
@@ -148,7 +148,7 @@ func TestPlanner_ZeroCapPassesThrough(t *testing.T) {
 
 func TestPlanner_SkipsRunsWithoutKnownSize(t *testing.T) {
 	tr := budget.New(1000, 0)
-	tr.Add("x", 400) // accounted for elsewhere
+	tr.Add(400) // accounted for elsewhere
 	p := budget.NewPlanner(tr, nil)
 	in := budget.Input{
 		Target:        "src/inv/run2",

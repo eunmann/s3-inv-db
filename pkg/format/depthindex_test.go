@@ -9,7 +9,7 @@ import (
 
 func TestDepthIndexBuilderEmpty(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 
 	if err := b.Build(dir); err != nil {
 		t.Fatalf("Build failed: %v", err)
@@ -21,7 +21,7 @@ func TestDepthIndexBuilderEmpty(t *testing.T) {
 	}
 	defer idx.Close()
 
-	positions, err := idx.GetPositionsAtDepth(0)
+	positions, err := idx.PositionsAtDepth(0)
 	if err != nil {
 		t.Fatalf("GetPositionsAtDepth failed: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestDepthIndexBuilderEmpty(t *testing.T) {
 
 func TestDepthIndexBuilderSimple(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 
 	// Add positions at various depths
 	// Depth 0: pos 0 (root)
@@ -60,7 +60,7 @@ func TestDepthIndexBuilderSimple(t *testing.T) {
 	defer idx.Close()
 
 	// Verify depth 0
-	pos0, err := idx.GetPositionsAtDepth(0)
+	pos0, err := idx.PositionsAtDepth(0)
 	if err != nil {
 		t.Fatalf("GetPositionsAtDepth(0) failed: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestDepthIndexBuilderSimple(t *testing.T) {
 	}
 
 	// Verify depth 1
-	pos1, err := idx.GetPositionsAtDepth(1)
+	pos1, err := idx.PositionsAtDepth(1)
 	if err != nil {
 		t.Fatalf("GetPositionsAtDepth(1) failed: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestDepthIndexBuilderSimple(t *testing.T) {
 	}
 
 	// Verify depth 2
-	pos2, err := idx.GetPositionsAtDepth(2)
+	pos2, err := idx.PositionsAtDepth(2)
 	if err != nil {
 		t.Fatalf("GetPositionsAtDepth(2) failed: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestDepthIndexBuilderSimple(t *testing.T) {
 	}
 
 	// Verify depth 3 (doesn't exist)
-	pos3, err := idx.GetPositionsAtDepth(3)
+	pos3, err := idx.PositionsAtDepth(3)
 	if err != nil {
 		t.Fatalf("GetPositionsAtDepth(3) failed: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestDepthIndexBuilderSimple(t *testing.T) {
 
 func TestDepthIndexSubtreeQuery(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 
 	// Build a tree:
 	// 0: root (subtree 0-5)
@@ -125,7 +125,7 @@ func TestDepthIndexSubtreeQuery(t *testing.T) {
 	defer idx.Close()
 
 	// Query depth 2 positions in subtree of a/ [1, 3]
-	posInA, err := idx.GetPositionsInSubtree(2, 1, 3)
+	posInA, err := idx.PositionsInSubtree(2, 1, 3)
 	if err != nil {
 		t.Fatalf("GetPositionsInSubtree failed: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestDepthIndexSubtreeQuery(t *testing.T) {
 	}
 
 	// Query depth 2 positions in subtree of b/ [4, 5]
-	posInB, err := idx.GetPositionsInSubtree(2, 4, 5)
+	posInB, err := idx.PositionsInSubtree(2, 4, 5)
 	if err != nil {
 		t.Fatalf("GetPositionsInSubtree failed: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestDepthIndexSubtreeQuery(t *testing.T) {
 	}
 
 	// Query depth 1 in root subtree
-	posDepth1, err := idx.GetPositionsInSubtree(1, 0, 5)
+	posDepth1, err := idx.PositionsInSubtree(1, 0, 5)
 	if err != nil {
 		t.Fatalf("GetPositionsInSubtree failed: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestDepthIndexSubtreeQuery(t *testing.T) {
 
 func TestDepthIterator(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 
 	b.Add(0, 0)
 	b.Add(1, 1)
@@ -191,7 +191,7 @@ func TestDepthIterator(t *testing.T) {
 
 func TestDepthIteratorEmpty(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 	b.Add(0, 0)
 	b.Add(1, 1)
 
@@ -218,7 +218,7 @@ func TestDepthIteratorEmpty(t *testing.T) {
 
 func TestDepthIndexOutOfRange(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 	b.Add(0, 0)
 
 	if err := b.Build(dir); err != nil {
@@ -232,7 +232,7 @@ func TestDepthIndexOutOfRange(t *testing.T) {
 	defer idx.Close()
 
 	// Query beyond max depth
-	positions, err := idx.GetPositionsAtDepth(100)
+	positions, err := idx.PositionsAtDepth(100)
 	if err != nil {
 		t.Fatalf("GetPositionsAtDepth failed: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestDepthIndexOutOfRange(t *testing.T) {
 
 func TestDepthIndexLarge(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 
 	// Create 10 levels with varying positions
 	for d := range uint32(10) {
@@ -269,7 +269,7 @@ func TestDepthIndexLarge(t *testing.T) {
 
 	// Verify each depth has 100 positions
 	for d := range uint32(10) {
-		positions, err := idx.GetPositionsAtDepth(d)
+		positions, err := idx.PositionsAtDepth(d)
 		if err != nil {
 			t.Fatalf("GetPositionsAtDepth(%d) failed: %v", d, err)
 		}
@@ -280,7 +280,7 @@ func TestDepthIndexLarge(t *testing.T) {
 
 	// Test subtree query
 	// Positions at depth 5 in range [500, 550] should be 500-550 (51 positions)
-	positions, err := idx.GetPositionsInSubtree(5, 500, 550)
+	positions, err := idx.PositionsInSubtree(5, 500, 550)
 	if err != nil {
 		t.Fatalf("GetPositionsInSubtree failed: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestDepthIndexLarge(t *testing.T) {
 
 func TestDepthIndexBinarySearch(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 
 	// Add sparse positions at depth 1
 	// Positions: 10, 20, 30, 40, 50
@@ -329,7 +329,7 @@ func TestDepthIndexBinarySearch(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		positions, err := idx.GetPositionsInSubtree(1, tc.start, tc.end)
+		positions, err := idx.PositionsInSubtree(1, tc.start, tc.end)
 		if err != nil {
 			t.Fatalf("GetPositionsInSubtree(%d, %d) failed: %v", tc.start, tc.end, err)
 		}
@@ -341,7 +341,7 @@ func TestDepthIndexBinarySearch(t *testing.T) {
 
 func TestDepthIteratorCount(t *testing.T) {
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder()
+	b := format.NewDepthIndexBuilder(t.TempDir())
 
 	for p := range uint64(10) {
 		b.Add(p, 1)

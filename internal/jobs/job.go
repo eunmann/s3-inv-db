@@ -11,31 +11,26 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
-// ID is the typed identifier of a job row in the SQLite jobs table.
-// Distinct from inventory.ID so the compiler catches accidental
-// swaps when both flow through the same call (Store.Upsert,
-// SSE event names, etc).
+// ID is the typed identifier of a job row. Distinct from inventory.ID
+// so the compiler catches swaps when both flow through one call.
 type ID string
 
-// String makes ID print transparently in logs and format strings.
 func (id ID) String() string { return string(id) }
 
 // Kind classifies what a job is doing.
 type Kind string
 
-// Kind values.
 const (
 	KindBuild  Kind = "build"
 	KindUnload Kind = "unload"
 )
 
-// State is the lifecycle state of a job.
+// State is the job lifecycle. Happy path: queued → running → succeeded.
+// Failed/cancelled are alternate terminals; aborted is set at server
+// startup for jobs left running from the previous process (mid-pipeline
+// resume is unsafe).
 type State string
 
-// State values. Happy path is queued → running → succeeded. Failed
-// and cancelled are alternate terminals; aborted is set at server
-// startup for jobs left running from the previous process (we can't
-// safely resume mid-pipeline).
 const (
 	StateQueued    State = "queued"
 	StateRunning   State = "running"
@@ -45,8 +40,6 @@ const (
 	StateAborted   State = "aborted"
 )
 
-// IsTerminal reports whether a state is a final resting state — no
-// further transitions will occur from here.
 func (s State) IsTerminal() bool {
 	switch s {
 	case StateSucceeded, StateFailed, StateCancelled, StateAborted:
@@ -58,8 +51,6 @@ func (s State) IsTerminal() bool {
 	return false
 }
 
-// IsLive reports whether the job is currently consuming resources or
-// queued to do so.
 func (s State) IsLive() bool {
 	return s == StateQueued || s == StateRunning
 }
