@@ -734,40 +734,26 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	// derive it from a fractional memory partition.
 	const bufferSize = DefaultRunBufferSize
 
-	var writeErr error
+	var writer runWriter
+	var err error
 	if p.config.Merge.UseCompressedRuns {
-		writer, err := NewCompressedRunWriter(runPath, CompressedRunWriterOptions{
+		writer, err = NewCompressedRunWriter(runPath, CompressedRunWriterOptions{
 			BufferSize:       int(bufferSize),
 			CompressionLevel: CompressionFastest, // Optimize for write speed during ingest
 		})
 		if err != nil {
 			return fmt.Errorf("create compressed run file: %w", err)
 		}
-		if err := writer.WriteSorted(rows); err != nil {
-			writer.Close()
-			os.Remove(runPath)
-
-			return fmt.Errorf("write sorted: %w", err)
-		}
-		writeErr = writer.Close()
 	} else {
-		writer, err := NewRunFileWriter(runPath, int(bufferSize))
+		writer, err = NewRunFileWriter(runPath, int(bufferSize))
 		if err != nil {
 			return fmt.Errorf("create run file: %w", err)
 		}
-		if err := writer.WriteSorted(rows); err != nil {
-			writer.Close()
-			os.Remove(runPath)
-
-			return fmt.Errorf("write sorted: %w", err)
-		}
-		writeErr = writer.Close()
 	}
+	if err := writeAndCloseRun(writer, rows, runPath); err != nil {
+		_ = os.Remove(runPath)
 
-	if writeErr != nil {
-		os.Remove(runPath)
-
-		return fmt.Errorf("close run file: %w", writeErr)
+		return err
 	}
 
 	p.runFilesMu.Lock()
