@@ -8,7 +8,7 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 )
 
-func TestBus_Publish_NoSubscribers_NoOp(t *testing.T) {
+func TestBus_Publish_NoSubscribers_NoOp(_ *testing.T) {
 	bus := events.NewBus()
 	defer bus.Close()
 	// Should not panic, not block, not allocate.

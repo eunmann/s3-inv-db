@@ -22,8 +22,9 @@ const (
 	statusOrderUnknown   = 5
 )
 
-// statusOrder orders the four CompareStatus values for column sort.
-func statusOrder(s CompareStatus) int {
+// StatusOrder returns a stable, distinct integer for each CompareStatus
+// so the handler can sort rows by status column. Like-statuses cluster.
+func StatusOrder(s CompareStatus) int {
 	switch s {
 	case CompareAdded:
 		return statusOrderAdded
@@ -96,11 +97,6 @@ func CompareSortLinks(currentSort, currentDir string) map[string]BrowseSortLink 
 
 	return links
 }
-
-// StatusOrder returns a stable, distinct integer for each status so
-// the handler can sort rows by status column. The numbers have no
-// semantic meaning beyond keeping like-statuses together.
-func StatusOrder(s CompareStatus) int { return statusOrder(s) }
 
 // Compare-view types and pure helpers. Two loaded indexes are compared at
 // one prefix to surface the deltas a user can act on: how the totals

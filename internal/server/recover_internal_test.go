@@ -108,10 +108,7 @@ func TestRecover_MarksStaleJobsAborted(t *testing.T) {
 	if err := invStore.Upsert(t.Context(), inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateLoading}); err != nil {
 		t.Fatalf("seed inventory: %v", err)
 	}
-	jobStore, err := jobs.NewStore(db)
-	if err != nil {
-		t.Fatalf("jobs.NewStore: %v", err)
-	}
+	jobStore := jobs.NewStore(db)
 	for id, state := range map[jobs.ID]jobs.State{"running1": jobs.StateRunning, "queued1": jobs.StateQueued, "ok1": jobs.StateSucceeded} {
 		if err := jobStore.Upsert(t.Context(), jobs.Job{ID: id, InventoryID: "src/inv1", Kind: jobs.KindBuild, State: state}); err != nil {
 			t.Fatalf("seed job %s: %v", id, err)

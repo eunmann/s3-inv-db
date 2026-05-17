@@ -81,10 +81,7 @@ func newDiscoveredHandlers(t *testing.T, disc inventory.Discoverer, ldr inventor
 		t.Fatalf("inventory.NewStore: %v", err)
 	}
 	mgr.SetStore(invStore)
-	jobStore, err := jobs.NewStore(db)
-	if err != nil {
-		t.Fatalf("jobs.NewStore: %v", err)
-	}
+	jobStore := jobs.NewStore(db)
 	bus := jobs.NewBus(8)
 	jobMgr := jobs.NewManager(jobStore, bus)
 

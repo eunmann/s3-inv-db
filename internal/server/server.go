@@ -36,9 +36,6 @@ type Config struct {
 	// CacheDir is the local directory where built indexes are written.
 	// Required when S3Source is set.
 	CacheDir string
-	// ScratchDir is the transient-files directory used by the build
-	// pipeline. Defaults to CacheDir when empty.
-	ScratchDir string
 	// DB is the shared SQLite handle for domain Stores. Each domain
 	// (inventory, jobs) constructs its Store from this.
 	DB *sql.DB
@@ -94,10 +91,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("inventory store: %w", err)
 	}
 	configStore := inventory.NewConfigStore(cfg.DB)
-	jobStore, err := jobs.NewStore(cfg.DB)
-	if err != nil {
-		return nil, fmt.Errorf("jobs store: %w", err)
-	}
+	jobStore := jobs.NewStore(cfg.DB)
 	jobBus := jobs.NewBus(64)
 	jobMgr := jobs.NewManager(jobStore, jobBus)
 	jobMgr.SetLogger(cfg.Logger)
@@ -238,19 +232,15 @@ func (s *Server) backfillTracker(ctx context.Context, logger zerolog.Logger) {
 			dir := s.bldr.CacheDirFor(p.Source, p.Inventory, p.Run)
 			if measured, err := budget.MeasureDir(ctx, dir); err == nil {
 				bytes = measured
-				_ = s.invStore.Upsert(ctx, infoWithBytes(*info, bytes))
+				updated := *info
+				updated.IndexBytes = bytes
+				_ = s.invStore.Upsert(ctx, updated)
 			} else {
 				logger.Warn().Stringer("id", info.ID).Err(err).Msg("backfill index size")
 			}
 		}
-		s.tracker.Add(string(info.ID), bytes)
+		s.tracker.Add(bytes)
 	}
-}
-
-func infoWithBytes(i inventory.Info, bytes uint64) inventory.Info {
-	i.IndexBytes = bytes
-
-	return i
 }
 
 // recover rehydrates the in-memory inventory.Manager from invStore and

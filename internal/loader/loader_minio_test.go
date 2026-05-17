@@ -83,7 +83,7 @@ func TestBuild_FailsOnMissingManifest(t *testing.T) {
 
 	l := loader.New(t.TempDir(), fc)
 	bogus := fmt.Sprintf("s3://%s/does/not/exist/manifest.json", bucket)
-	_, err := l.Build(context.Background(), "src", "inv", "run", bogus)
+	_, err := l.BuildWith(context.Background(), "src", "inv", "run", bogus, nil)
 	if err == nil {
 		t.Fatal("Build with missing manifest returned nil error")
 	}

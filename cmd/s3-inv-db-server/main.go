@@ -52,7 +52,6 @@ func run() error {
 	priceTablePath := flag.String("price-table", "", "path to custom price table JSON (default: US East 1 prices)")
 	s3Source := flag.String("s3-source", appconfig.EnvOr("S3INV_SOURCE", ""), "S3 URI to discover inventories under (e.g., s3://bucket/inventory-data/)")
 	cacheDir := flag.String("cache-dir", appconfig.EnvOr("S3INV_CACHE_DIR", "/var/cache/s3inv"), "local directory for built indexes downloaded from S3")
-	scratchDir := flag.String("scratch-dir", appconfig.EnvOr("S3INV_SCRATCH_DIR", ""), "directory for transient load-time files; defaults to --cache-dir")
 	stateDB := flag.String("state-db", appconfig.EnvOr("S3INV_STATE_DB", ""), "SQLite path for persisted state (default: <cache-dir>/state.db)")
 
 	autoLoad := flag.Bool("auto-load", appconfig.EnvBool("S3INV_AUTO_LOAD", false), "enable background discovery + auto-load of new inventory runs; requires --max-index-disk")
@@ -78,7 +77,6 @@ func run() error {
 	finalPrice := pickString(fileCfg, *priceTablePath, explicit["price-table"], func(c *appconfig.Config) *string { return c.PriceTable })
 	finalSrc := pickString(fileCfg, *s3Source, explicit["s3-source"], func(c *appconfig.Config) *string { return c.S3Source })
 	finalCache := pickString(fileCfg, *cacheDir, explicit["cache-dir"], func(c *appconfig.Config) *string { return c.CacheDir })
-	finalScratch := pickString(fileCfg, *scratchDir, explicit["scratch-dir"], func(c *appconfig.Config) *string { return c.ScratchDir })
 	finalState := pickString(fileCfg, *stateDB, explicit["state-db"], func(c *appconfig.Config) *string { return c.StateDB })
 	finalAuto := pickBool(fileCfg, *autoLoad, explicit["auto-load"], func(c *appconfig.Config) *bool { return c.AutoLoad })
 	finalConc := appconfig.PickInt(*autoLoadConcurrency, explicit["max-auto-load-concurrency"], fileConfigInt(fileCfg, func(c *appconfig.Config) *int { return c.AutoLoadConcurrency }))
@@ -127,7 +125,6 @@ func run() error {
 		Addr:                     finalAddr,
 		S3Source:                 finalSrc,
 		CacheDir:                 finalCache,
-		ScratchDir:               finalScratch,
 		StateDB:                  finalState,
 		PriceTablePath:           finalPrice,
 		AutoLoad:                 finalAuto,

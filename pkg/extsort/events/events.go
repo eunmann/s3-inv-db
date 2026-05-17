@@ -235,4 +235,3 @@ func (b *Bus) Close() {
 		close(sub.send)
 	}
 }
-

@@ -49,7 +49,7 @@ func TestBuild_RejectsEmptyArgs(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := l.Build(ctx, c.src, c.id, c.run, c.manifest)
+			_, err := l.BuildWith(ctx, c.src, c.id, c.run, c.manifest, nil)
 			if !errors.Is(err, c.wantErr) {
 				t.Errorf("Build err = %v, want %v", err, c.wantErr)
 			}

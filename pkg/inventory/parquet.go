@@ -138,7 +138,6 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 	return newParquetReader(file, tempFile, cfg), nil
 }
 
-
 // detectParquetSchema detects column indices from the Parquet schema.
 // Column names are matched case-insensitively after stripping underscores
 // so AWS's PascalCase ("Key", "StorageClass") and the snake_case form

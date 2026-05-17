@@ -12,12 +12,12 @@ import (
 
 func TestTracker_AddRemove(t *testing.T) {
 	tr := budget.New(1000, 0)
-	tr.Add("a", 200)
-	tr.Add("b", 300)
+	tr.Add(200)
+	tr.Add(300)
 	if got := tr.Used(); got != 500 {
 		t.Errorf("Used = %d, want 500", got)
 	}
-	tr.Remove("a", 200)
+	tr.Remove(200)
 	if got := tr.Used(); got != 300 {
 		t.Errorf("Used after remove = %d, want 300", got)
 	}
@@ -25,8 +25,8 @@ func TestTracker_AddRemove(t *testing.T) {
 
 func TestTracker_RemoveClampsAtZero(t *testing.T) {
 	tr := budget.New(1000, 0)
-	tr.Add("a", 100)
-	tr.Remove("a", 9999)
+	tr.Add(100)
+	tr.Remove(9999)
 	if got := tr.Used(); got != 0 {
 		t.Errorf("Used should clamp at 0, got %d", got)
 	}
@@ -51,7 +51,7 @@ func TestTracker_ReserveRelease(t *testing.T) {
 
 func TestTracker_OverBudget(t *testing.T) {
 	tr := budget.New(1000, 0)
-	tr.Add("existing", 800)
+	tr.Add(800)
 	if err := tr.Reserve("load-1", 300); !errors.Is(err, budget.ErrOverBudget) {
 		t.Errorf("Reserve over budget = %v, want budget.ErrOverBudget", err)
 	}

@@ -18,7 +18,7 @@ func configureZerolog() {
 	zerolog.DurationFieldFormat = zerolog.DurationFormatString
 }
 
-// Init configures the global logger. human=true selects a console
+// Init configures the global logger. Human=true selects a console
 // writer; debug=true lowers the global level to Debug.
 func Init(debug, human bool) {
 	configureZerolog()

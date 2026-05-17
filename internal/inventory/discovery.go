@@ -22,7 +22,6 @@ type Discoverer interface {
 
 // IndexBuilder is the subset of loader.Loader that DiscoveryService uses.
 type IndexBuilder interface {
-	Build(ctx context.Context, srcBucket, invID, run, manifestURI string) (string, error)
 	BuildWith(ctx context.Context, srcBucket, invID, run, manifestURI string, onProgress func(stage string, done, total int64)) (string, error)
 	RemoveCache(srcBucket, invID, run string) error
 	CacheSizeBytes(srcBucket, invID, run string) (int64, error)

@@ -42,10 +42,7 @@ func newJobsHandlers(t *testing.T) (*handlers.Handlers, *jobs.Manager) {
 	if err := invStore.Upsert(t.Context(), inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
 		t.Fatal(err)
 	}
-	jobStore, err := jobs.NewStore(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	jobStore := jobs.NewStore(db)
 	bus := jobs.NewBus(8)
 	mgr := jobs.NewManager(jobStore, bus)
 	renderer, err := templates.New()
@@ -151,10 +148,7 @@ func newHandlersWithHeartbeat(t *testing.T, hb time.Duration) *handlers.Handlers
 	if err := invStore.Upsert(t.Context(), inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
 		t.Fatal(err)
 	}
-	jobStore, err := jobs.NewStore(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	jobStore := jobs.NewStore(db)
 	bus := jobs.NewBus(8)
 	mgr := jobs.NewManager(jobStore, bus)
 	renderer, err := templates.New()

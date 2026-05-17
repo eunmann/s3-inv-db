@@ -22,10 +22,9 @@ type Config struct {
 	PrettyLogs *bool   `json:"pretty_logs,omitempty"`
 	PriceTable *string `json:"price_table,omitempty"`
 
-	S3Source   *string `json:"s3_source,omitempty"`
-	CacheDir   *string `json:"cache_dir,omitempty"`
-	ScratchDir *string `json:"scratch_dir,omitempty"`
-	StateDB    *string `json:"state_db,omitempty"`
+	S3Source *string `json:"s3_source,omitempty"`
+	CacheDir *string `json:"cache_dir,omitempty"`
+	StateDB  *string `json:"state_db,omitempty"`
 
 	AutoLoad                 *bool    `json:"auto_load,omitempty"`
 	PollInterval             *string  `json:"auto_load_poll_interval,omitempty"` // Go duration string

@@ -175,7 +175,11 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 		}
 	}
 
-	return b.writeTierStats(row)
+	if err := b.tierStatsRowW.Add(&row.TierCounts, &row.TierBytes); err != nil {
+		return fmt.Errorf("write tier stats row: %w", err)
+	}
+
+	return nil
 }
 
 // findCommonAncestorDepth finds the depth of the deepest common ancestor.
@@ -224,18 +228,6 @@ func (b *IndexBuilder) closeTopNode() error {
 		if top.maxDepthInSubtree > b.stack[len(b.stack)-1].maxDepthInSubtree {
 			b.stack[len(b.stack)-1].maxDepthInSubtree = top.maxDepthInSubtree
 		}
-	}
-
-	return nil
-}
-
-// writeTierStats writes one row of all-tier stats for the current prefix.
-// All NumTiers slots are written every call (zero for absent tiers) —
-// fixed-stride layout means the reader's GetBreakdown is O(1) per slot
-// and a single page fault per row on a cold index.
-func (b *IndexBuilder) writeTierStats(row *PrefixRow) error {
-	if err := b.tierStatsRowW.Add(&row.TierCounts, &row.TierBytes); err != nil {
-		return fmt.Errorf("write tier stats row: %w", err)
 	}
 
 	return nil

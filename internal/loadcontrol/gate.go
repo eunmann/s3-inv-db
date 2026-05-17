@@ -63,7 +63,7 @@ func (g *Gate) Load(ctx context.Context, id inventory.ID, build Build, opts Opti
 		if err := g.manager.EvictForBudget(ctx, victim); err != nil && !errors.Is(err, inventory.ErrInvalidState) {
 			return fmt.Errorf("evict %s: %w", victim, err)
 		}
-		g.tracker.Remove(string(victim), prevBytes)
+		g.tracker.Remove(prevBytes)
 	}
 
 	token := fmt.Sprintf("%s-%d", id, time.Now().UnixNano())
@@ -88,7 +88,7 @@ func (g *Gate) Load(ctx context.Context, id inventory.ID, build Build, opts Opti
 	}
 
 	if info, ok := g.manager.Get(id); ok && info.IndexBytes > 0 {
-		g.tracker.Add(string(id), info.IndexBytes)
+		g.tracker.Add(info.IndexBytes)
 	}
 
 	return nil

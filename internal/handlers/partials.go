@@ -227,11 +227,10 @@ type DiscoveredRowView struct {
 	// template can render the 📌 badge, the "auto-load suspended"
 	// label, and the "user-unloaded" sticky hint without re-querying
 	// the Manager.
-	Pinned                  bool
-	UserUnloaded            bool
-	AutoLoadFailureCount    uint32
-	AutoLoadBackoffUntil    string
-	AutoLoadLastErrorString string
+	Pinned               bool
+	UserUnloaded         bool
+	AutoLoadFailureCount uint32
+	AutoLoadBackoffUntil string
 }
 
 // renderDiscoveredRowFrom renders a discovered_row using a pre-fetched

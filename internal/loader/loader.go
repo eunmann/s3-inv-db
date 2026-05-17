@@ -52,11 +52,6 @@ func (l *Loader) CacheDirFor(srcBucket, invID, run string) string {
 	return filepath.Join(l.cacheRoot, srcBucket, invID, run)
 }
 
-// Build is BuildWith with no stage callback.
-func (l *Loader) Build(ctx context.Context, srcBucket, invID, run, manifestURI string) (string, error) {
-	return l.BuildWith(ctx, srcBucket, invID, run, manifestURI, nil)
-}
-
 // BuildWith downloads the inventory referenced by manifestURI and
 // produces a built index under CacheDirFor(srcBucket, invID, run). The
 // onProgress callback, if non-nil, receives stage transitions and

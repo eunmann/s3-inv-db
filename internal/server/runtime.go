@@ -58,11 +58,6 @@ type RuntimeOptions struct {
 	// MaxIndexDisk when MaxIndexDisk is set.
 	IndexHeadroomBytes uint64
 
-	// ScratchDir is the location of transient load-time files (extsort
-	// runs, downloads). Defaults to CacheDir so single-volume deployments
-	// share one knob.
-	ScratchDir string
-
 	// AutoLoadConcurrency caps in-flight auto-loads. Default 1.
 	AutoLoadConcurrency int
 
@@ -152,7 +147,6 @@ func Bootstrap(ctx context.Context, opts RuntimeOptions) (*Server, func(), error
 		PriceTable:               priceTable,
 		S3Source:                 opts.S3Source,
 		CacheDir:                 opts.CacheDir,
-		ScratchDir:               opts.ScratchDir,
 		DB:                       db,
 		AutoLoad:                 opts.AutoLoad,
 		PollInterval:             opts.PollInterval,

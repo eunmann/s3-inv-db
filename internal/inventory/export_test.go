@@ -25,6 +25,3 @@ func ClassifyForTest(objects, bytes CompareNumeric, tierBefore, tierAfter map[st
 func TierMapsEqualForTest(a, b map[string]indexread.TierBreakdown) bool {
 	return tierMapsEqual(a, b)
 }
-
-// StatusOrderForTest exposes the unexported statusOrder helper to external tests.
-func StatusOrderForTest(s CompareStatus) int { return statusOrder(s) }
