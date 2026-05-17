@@ -61,7 +61,7 @@ func TestMPHFBuilderSimple(t *testing.T) {
 			continue
 		}
 		// Verify we can get the prefix back
-		stored, err := m.GetPrefix(pos)
+		stored, err := m.Prefix(pos)
 		if err != nil {
 			t.Errorf("GetPrefix(%d) failed: %v", pos, err)
 		}
@@ -243,7 +243,7 @@ func TestMPHFUnicode(t *testing.T) {
 
 			continue
 		}
-		stored, _ := m.GetPrefix(pos)
+		stored, _ := m.Prefix(pos)
 		if stored != p {
 			t.Errorf("GetPrefix returned %q, want %q", stored, p)
 		}

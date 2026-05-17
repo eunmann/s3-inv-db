@@ -334,7 +334,7 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 		return nil, fmt.Errorf("get size column: %w", err)
 	}
 
-	destBucket, err := manifest.GetDestinationBucketName()
+	destBucket, err := manifest.DestinationBucketName()
 	if err != nil {
 		return nil, fmt.Errorf("get destination bucket: %w", err)
 	}

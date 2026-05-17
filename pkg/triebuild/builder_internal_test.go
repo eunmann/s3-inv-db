@@ -63,7 +63,7 @@ func TestBuildFromKeys_Simple(t *testing.T) {
 	}
 
 	// Verify a/
-	nodeA, ok := result.GetNodeByPrefix("a/")
+	nodeA, ok := result.NodeByPrefix("a/")
 	if !ok {
 		t.Fatal("node a/ not found")
 	}
@@ -75,7 +75,7 @@ func TestBuildFromKeys_Simple(t *testing.T) {
 	}
 
 	// Verify b/
-	nodeB, ok := result.GetNodeByPrefix("b/")
+	nodeB, ok := result.NodeByPrefix("b/")
 	if !ok {
 		t.Fatal("node b/ not found")
 	}
@@ -116,7 +116,7 @@ func TestBuildFromKeys_Nested(t *testing.T) {
 	}
 
 	// Verify a/b/ stats
-	nodeAB, ok := result.GetNodeByPrefix("a/b/")
+	nodeAB, ok := result.NodeByPrefix("a/b/")
 	if !ok {
 		t.Fatal("node a/b/ not found")
 	}
@@ -151,12 +151,12 @@ func TestBuildFromKeys_SubtreeRanges(t *testing.T) {
 	}
 
 	// Find a/ and verify its subtree
-	nodeA, ok := result.GetNodeByPrefix("a/")
+	nodeA, ok := result.NodeByPrefix("a/")
 	if !ok {
 		t.Fatal("node a/ not found")
 	}
 
-	descendants := result.GetDescendants(nodeA.Pos)
+	descendants := result.Descendants(nodeA.Pos)
 	// a/ should have descendants: a/x/, a/y/
 	if len(descendants) != 2 {
 		t.Errorf("a/ has %d descendants, want 2", len(descendants))
@@ -210,7 +210,7 @@ func TestBuildFromKeys_FolderMarkers(t *testing.T) {
 	}
 
 	// folder/ and folder/sub/ should exist
-	folderNode, ok := result.GetNodeByPrefix("folder/")
+	folderNode, ok := result.NodeByPrefix("folder/")
 	if !ok {
 		t.Fatal("folder/ not found")
 	}
@@ -218,7 +218,7 @@ func TestBuildFromKeys_FolderMarkers(t *testing.T) {
 		t.Errorf("folder/ count = %d, want 4", folderNode.ObjectCount)
 	}
 
-	subNode, ok := result.GetNodeByPrefix("folder/sub/")
+	subNode, ok := result.NodeByPrefix("folder/sub/")
 	if !ok {
 		t.Fatal("folder/sub/ not found")
 	}
@@ -277,7 +277,7 @@ func TestBuildFromKeys_Unicode(t *testing.T) {
 		t.Fatalf("BuildFromKeys failed: %v", err)
 	}
 
-	jpNode, ok := result.GetNodeByPrefix("日本語/")
+	jpNode, ok := result.NodeByPrefix("日本語/")
 	if !ok {
 		t.Fatal("日本語/ not found")
 	}
@@ -285,7 +285,7 @@ func TestBuildFromKeys_Unicode(t *testing.T) {
 		t.Errorf("日本語/ count = %d, want 2", jpNode.ObjectCount)
 	}
 
-	krNode, ok := result.GetNodeByPrefix("한국어/")
+	krNode, ok := result.NodeByPrefix("한국어/")
 	if !ok {
 		t.Fatal("한국어/ not found")
 	}
@@ -307,7 +307,7 @@ func TestBuildFromKeys_RepeatedKeys(t *testing.T) {
 		t.Fatalf("BuildFromKeys failed: %v", err)
 	}
 
-	nodeA, ok := result.GetNodeByPrefix("a/")
+	nodeA, ok := result.NodeByPrefix("a/")
 	if !ok {
 		t.Fatal("a/ not found")
 	}
@@ -430,13 +430,13 @@ func TestResult_GetDescendants(t *testing.T) {
 	}
 
 	// Root descendants should be all other nodes
-	rootDesc := result.GetDescendants(0)
+	rootDesc := result.Descendants(0)
 	if len(rootDesc) != len(result.Nodes)-1 {
 		t.Errorf("root has %d descendants, want %d", len(rootDesc), len(result.Nodes)-1)
 	}
 
 	// Out of bounds
-	outDesc := result.GetDescendants(100)
+	outDesc := result.Descendants(100)
 	if outDesc != nil {
 		t.Errorf("out of bounds should return nil, got %v", outDesc)
 	}
@@ -509,7 +509,7 @@ func TestBuildFromKeys_MixedDepths(t *testing.T) {
 	}
 
 	// a/ should count 2 objects
-	nodeA, ok := result.GetNodeByPrefix("a/")
+	nodeA, ok := result.NodeByPrefix("a/")
 	if !ok {
 		t.Fatal("a/ not found")
 	}
@@ -518,7 +518,7 @@ func TestBuildFromKeys_MixedDepths(t *testing.T) {
 	}
 
 	// a/b/ should count 1 object
-	nodeAB, ok := result.GetNodeByPrefix("a/b/")
+	nodeAB, ok := result.NodeByPrefix("a/b/")
 	if !ok {
 		t.Fatal("a/b/ not found")
 	}

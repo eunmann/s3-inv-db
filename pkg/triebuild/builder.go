@@ -327,8 +327,8 @@ func BuildFromKeysWithTiers(keys []string, sizes []uint64, tierIDs []tiers.ID) (
 	}, nil
 }
 
-// GetNodeByPrefix finds a node by its prefix string.
-func (r *Result) GetNodeByPrefix(prefix string) (Node, bool) {
+// NodeByPrefix finds a node by its prefix string.
+func (r *Result) NodeByPrefix(prefix string) (Node, bool) {
 	for i := range r.Nodes {
 		if r.Nodes[i].Prefix == prefix {
 			return r.Nodes[i], true
@@ -338,8 +338,8 @@ func (r *Result) GetNodeByPrefix(prefix string) (Node, bool) {
 	return Node{}, false
 }
 
-// GetDescendants returns all nodes that are descendants of the given position.
-func (r *Result) GetDescendants(pos uint64) []Node {
+// Descendants returns all nodes that are descendants of the given position.
+func (r *Result) Descendants(pos uint64) []Node {
 	if pos >= uint64(len(r.Nodes)) {
 		return nil
 	}

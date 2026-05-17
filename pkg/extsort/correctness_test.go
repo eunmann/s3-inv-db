@@ -66,7 +66,7 @@ func TestTierStatsRow_PreorderAlignment(t *testing.T) {
 	wantGlBytes := []uint64{0, 0, 300, 0}
 
 	for pos := range uint64(4) {
-		breakdown := tsr.GetBreakdownAll(pos)
+		breakdown := tsr.BreakdownAll(pos)
 		gotStd, gotStdBytes, gotGl, gotGlBytes := uint64(0), uint64(0), uint64(0), uint64(0)
 		for _, tb := range breakdown {
 			if tb.TierID == tiers.Standard {

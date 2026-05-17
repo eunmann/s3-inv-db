@@ -198,8 +198,8 @@ func (d *DepthIndex) MaxDepth() uint32 {
 	return d.maxDepth
 }
 
-// GetPositionsAtDepth returns all positions at the given depth.
-func (d *DepthIndex) GetPositionsAtDepth(depth uint32) ([]uint64, error) {
+// PositionsAtDepth returns all positions at the given depth.
+func (d *DepthIndex) PositionsAtDepth(depth uint32) ([]uint64, error) {
 	if depth > d.maxDepth {
 		return nil, nil
 	}
@@ -231,9 +231,9 @@ func (d *DepthIndex) GetPositionsAtDepth(depth uint32) ([]uint64, error) {
 	return positions, nil
 }
 
-// GetPositionsInSubtree returns positions at the given depth that fall within
+// PositionsInSubtree returns positions at the given depth that fall within
 // the subtree [subtreeStart, subtreeEnd]. Uses binary search.
-func (d *DepthIndex) GetPositionsInSubtree(depth uint32, subtreeStart, subtreeEnd uint64) ([]uint64, error) {
+func (d *DepthIndex) PositionsInSubtree(depth uint32, subtreeStart, subtreeEnd uint64) ([]uint64, error) {
 	if depth > d.maxDepth {
 		return nil, nil
 	}

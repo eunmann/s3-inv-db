@@ -149,10 +149,10 @@ func (m *Manifest) IsCSV() bool {
 	return m.DetectFormat() == InventoryFormatCSV
 }
 
-// GetDestinationBucketName returns the normalized bucket name from the DestinationBucket field.
+// DestinationBucketName returns the normalized bucket name from the DestinationBucket field.
 // The DestinationBucket may be either a plain bucket name or an S3 ARN.
 // This method extracts the bucket name suitable for S3 API calls.
-func (m *Manifest) GetDestinationBucketName() (string, error) {
+func (m *Manifest) DestinationBucketName() (string, error) {
 	return ParseBucketIdentifier(m.DestinationBucket)
 }
 

@@ -54,15 +54,15 @@ type TierBreakdown struct {
 	ObjectCount uint64
 }
 
-// GetBreakdown returns the tier breakdown for the given preorder
+// Breakdown returns the tier breakdown for the given preorder
 // position, including only tiers with non-zero data.
-func (r *TierStatsReader) GetBreakdown(pos uint64) []TierBreakdown {
+func (r *TierStatsReader) Breakdown(pos uint64) []TierBreakdown {
 	return r.breakdownAt(pos, true)
 }
 
-// GetBreakdownAll returns the tier breakdown for all present tiers
+// BreakdownAll returns the tier breakdown for all present tiers
 // at the given preorder position, including zeros.
-func (r *TierStatsReader) GetBreakdownAll(pos uint64) []TierBreakdown {
+func (r *TierStatsReader) BreakdownAll(pos uint64) []TierBreakdown {
 	return r.breakdownAt(pos, false)
 }
 

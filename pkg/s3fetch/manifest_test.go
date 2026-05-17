@@ -378,7 +378,7 @@ func TestParseBucketIdentifier_RealWorldManifest(t *testing.T) {
 	}
 }
 
-func TestManifest_GetDestinationBucketName(t *testing.T) {
+func TestManifest_DestinationBucketName(t *testing.T) {
 	tests := []struct {
 		name       string
 		destBucket string
@@ -405,7 +405,7 @@ func TestManifest_GetDestinationBucketName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &s3fetch.Manifest{DestinationBucket: tt.destBucket}
-			bucket, err := m.GetDestinationBucketName()
+			bucket, err := m.DestinationBucketName()
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error, got nil")
@@ -567,7 +567,7 @@ func TestManifestIntegration_ARNvsBucketName(t *testing.T) {
 			}
 
 			// Verify we can get the normalized bucket name
-			bucketName, err := manifest.GetDestinationBucketName()
+			bucketName, err := manifest.DestinationBucketName()
 			if err != nil {
 				t.Fatalf("failed to get destination bucket name: %v", err)
 			}

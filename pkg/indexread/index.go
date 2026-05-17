@@ -214,7 +214,7 @@ func (idx *Index) MaxDepthInSubtree(pos uint64) uint32 {
 
 // PrefixString returns the prefix string for the node at pos.
 func (idx *Index) PrefixString(pos uint64) (string, error) {
-	s, err := idx.mphf.GetPrefix(pos)
+	s, err := idx.mphf.Prefix(pos)
 	if err != nil {
 		return "", fmt.Errorf("get prefix for pos %d: %w", pos, err)
 	}
@@ -259,7 +259,7 @@ func (idx *Index) DescendantsAtDepth(prefixPos uint64, relDepth int) ([]uint64, 
 	subtreeStart := prefixPos
 	subtreeEnd := idx.SubtreeEnd(prefixPos)
 
-	positions, err := idx.depthIndex.GetPositionsInSubtree(targetDepth, subtreeStart, subtreeEnd)
+	positions, err := idx.depthIndex.PositionsInSubtree(targetDepth, subtreeStart, subtreeEnd)
 	if err != nil {
 		return nil, fmt.Errorf("get positions at depth %d: %w", targetDepth, err)
 	}
@@ -298,7 +298,7 @@ func (idx *Index) DescendantsUpToDepth(prefixPos uint64, maxRelDepth int) ([][]u
 	result := make([][]uint64, 0, depthLevels)
 
 	for d := baseDepth + 1; d <= baseDepth+uint32(maxRelDepth) && d <= maxSubtreeDepth; d++ {
-		positions, err := idx.depthIndex.GetPositionsInSubtree(d, subtreeStart, subtreeEnd)
+		positions, err := idx.depthIndex.PositionsInSubtree(d, subtreeStart, subtreeEnd)
 		if err != nil {
 			return nil, fmt.Errorf("get positions at depth %d: %w", d, err)
 		}
@@ -413,7 +413,7 @@ func (idx *Index) TierBreakdown(pos uint64) []TierBreakdown {
 		return nil
 	}
 
-	return idx.tierStats.GetBreakdown(pos)
+	return idx.tierStats.Breakdown(pos)
 }
 
 // TierBreakdownAll returns the per-tier statistics for all present tiers (including zeros).
@@ -424,7 +424,7 @@ func (idx *Index) TierBreakdownAll(pos uint64) []TierBreakdown {
 		return nil
 	}
 
-	return idx.tierStats.GetBreakdownAll(pos)
+	return idx.tierStats.BreakdownAll(pos)
 }
 
 // TierBreakdownForPrefix returns the per-tier statistics for a prefix string.

@@ -216,9 +216,9 @@ func (m *MPHF) LookupWithVerify(prefix string) (uint64, bool) {
 	return pos, true
 }
 
-// GetPrefix returns the prefix string at the given position.
+// Prefix returns the prefix string at the given position.
 // Requires the prefix blob to be loaded.
-func (m *MPHF) GetPrefix(pos uint64) (string, error) {
+func (m *MPHF) Prefix(pos uint64) (string, error) {
 	if m.prefixBlob == nil {
 		return "", ErrPrefixBlobNotLoaded
 	}
@@ -277,7 +277,7 @@ func VerifyMPHF(m *MPHF) error {
 	}
 
 	for i := range m.count {
-		prefix, err := m.GetPrefix(i)
+		prefix, err := m.Prefix(i)
 		if err != nil {
 			return fmt.Errorf("get prefix %d: %w", i, err)
 		}
