@@ -16,8 +16,8 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/memdiag"
 	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
-	"github.com/eunmann/s3-inv-db/pkg/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
+	"github.com/eunmann/s3-inv-db/pkg/s3inventory"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/rs/zerolog"
 )
@@ -605,11 +605,11 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 	}
 
 	parseStart := time.Now()
-	var reader inventory.Reader
+	var reader s3inventory.Reader
 	if job.config.format == s3fetch.InventoryFormatParquet {
 		reader, err = openParquetReader(body, job.config.fileSize)
 	} else {
-		reader, err = inventory.NewCSVInventoryReaderFromStream(body, job.key, inventory.CSVReaderConfig{
+		reader, err = s3inventory.NewCSVReaderFromStream(body, job.key, s3inventory.CSVReaderConfig{
 			KeyCol:        job.config.keyCol,
 			SizeCol:       job.config.sizeCol,
 			StorageCol:    job.config.storageCol,
@@ -680,16 +680,16 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 // avoiding a second temp-file copy. Falls back to stream-based open
 // only when Size() reports an error (in practice impossible — the
 // file was just written).
-func openParquetReader(obj *s3fetch.DownloadedObject, fileSize int64) (*inventory.ParquetReader, error) {
+func openParquetReader(obj *s3fetch.DownloadedObject, fileSize int64) (*s3inventory.ParquetReader, error) {
 	if size, err := obj.Size(); err == nil {
-		r, openErr := inventory.NewParquetInventoryReaderFromReaderAt(obj, size)
+		r, openErr := s3inventory.NewParquetReaderFromReaderAt(obj, size)
 		if openErr != nil {
 			return nil, fmt.Errorf("parquet reader from readerAt: %w", openErr)
 		}
 
 		return r, nil
 	}
-	r, err := inventory.NewParquetInventoryReaderFromStream(obj, fileSize)
+	r, err := s3inventory.NewParquetReaderFromStream(obj, fileSize)
 	if err != nil {
 		return nil, fmt.Errorf("parquet reader from stream: %w", err)
 	}

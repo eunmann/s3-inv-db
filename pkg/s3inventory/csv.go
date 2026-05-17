@@ -1,4 +1,4 @@
-package inventory
+package s3inventory
 
 import (
 	"encoding/csv"
@@ -56,10 +56,10 @@ type CSVReaderConfig struct {
 	AccessTierCol int
 }
 
-// NewCSVInventoryReader creates a new CSV inventory reader from an io.Reader.
+// NewCSVReader creates a new CSV inventory reader from an io.Reader.
 // The reader should provide the raw CSV data (already decompressed if needed).
-// Use NewCSVInventoryReaderFromStream for automatic gzip handling.
-func NewCSVInventoryReader(r io.Reader, cfg CSVReaderConfig) *CSVReader {
+// Use NewCSVReaderFromStream for automatic gzip handling.
+func NewCSVReader(r io.Reader, cfg CSVReaderConfig) *CSVReader {
 	csvr := csv.NewReader(r)
 	csvr.ReuseRecord = true
 	csvr.FieldsPerRecord = -1
@@ -74,9 +74,9 @@ func NewCSVInventoryReader(r io.Reader, cfg CSVReaderConfig) *CSVReader {
 	}
 }
 
-// NewCSVInventoryReaderFromStream creates a CSV inventory reader from an S3 stream.
+// NewCSVReaderFromStream creates a CSV inventory reader from an S3 stream.
 // It handles gzip decompression based on the object key extension.
-func NewCSVInventoryReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderConfig) (*CSVReader, error) {
+func NewCSVReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderConfig) (*CSVReader, error) {
 	var reader io.Reader = r
 	closers := []io.Closer{r}
 

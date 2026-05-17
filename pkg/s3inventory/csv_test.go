@@ -1,4 +1,4 @@
-package inventory_test
+package s3inventory_test
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/eunmann/s3-inv-db/pkg/inventory"
+	"github.com/eunmann/s3-inv-db/pkg/s3inventory"
 	"github.com/parquet-go/parquet-go"
 )
 
@@ -23,7 +23,7 @@ const (
 
 func TestCSVInventoryReader(t *testing.T) {
 	csv := testKeyABC + ",100,STANDARD,\n" + testKeyDE + ",200,GLACIER,\n"
-	r := inventory.NewCSVInventoryReader(bytes.NewReader([]byte(csv)), inventory.CSVReaderConfig{
+	r := s3inventory.NewCSVReader(bytes.NewReader([]byte(csv)), s3inventory.CSVReaderConfig{
 		KeyCol:        0,
 		SizeCol:       1,
 		StorageCol:    2,
@@ -56,17 +56,17 @@ func TestCSVInventoryReaderFromStream(t *testing.T) {
 	csv := "file.txt,1024,STANDARD,\n"
 
 	// Create a mock ReadCloser
-	r, err := inventory.NewCSVInventoryReaderFromStream(
+	r, err := s3inventory.NewCSVReaderFromStream(
 		io.NopCloser(bytes.NewReader([]byte(csv))),
 		"test.csv",
-		inventory.CSVReaderConfig{
+		s3inventory.CSVReaderConfig{
 			KeyCol:     0,
 			SizeCol:    1,
 			StorageCol: 2,
 		},
 	)
 	if err != nil {
-		t.Fatalf("NewCSVInventoryReaderFromStream failed: %v", err)
+		t.Fatalf("NewCSVReaderFromStream failed: %v", err)
 	}
 	defer r.Close()
 
@@ -87,17 +87,17 @@ func TestCSVInventoryReaderFromStream_Gzip(t *testing.T) {
 	_, _ = gzw.Write([]byte(csv))
 	gzw.Close()
 
-	r, err := inventory.NewCSVInventoryReaderFromStream(
+	r, err := s3inventory.NewCSVReaderFromStream(
 		io.NopCloser(bytes.NewReader(buf.Bytes())),
 		"test.csv.gz",
-		inventory.CSVReaderConfig{
+		s3inventory.CSVReaderConfig{
 			KeyCol:     0,
 			SizeCol:    1,
 			StorageCol: 2,
 		},
 	)
 	if err != nil {
-		t.Fatalf("NewCSVInventoryReaderFromStream failed: %v", err)
+		t.Fatalf("NewCSVReaderFromStream failed: %v", err)
 	}
 	defer r.Close()
 
@@ -144,13 +144,13 @@ func TestParquetInventoryReader(t *testing.T) {
 		t.Fatalf("Stat failed: %v", err)
 	}
 
-	reader, err := inventory.NewParquetInventoryReader(f, info.Size(), inventory.ParquetReaderConfig{
+	reader, err := s3inventory.NewParquetReader(f, info.Size(), s3inventory.ParquetReaderConfig{
 		KeyCol:     0,
 		StorageCol: 1,
 		SizeCol:    2,
 	})
 	if err != nil {
-		t.Fatalf("NewParquetInventoryReader failed: %v", err)
+		t.Fatalf("NewParquetReader failed: %v", err)
 	}
 	defer reader.Close()
 
@@ -198,12 +198,12 @@ func TestParquetInventoryReaderFromStream(t *testing.T) {
 	}
 
 	// Create reader from stream
-	reader, err := inventory.NewParquetInventoryReaderFromStream(
+	reader, err := s3inventory.NewParquetReaderFromStream(
 		io.NopCloser(bytes.NewReader(content)),
 		int64(len(content)),
 	)
 	if err != nil {
-		t.Fatalf("NewParquetInventoryReaderFromStream failed: %v", err)
+		t.Fatalf("NewParquetReaderFromStream failed: %v", err)
 	}
 	defer reader.Close()
 
@@ -247,7 +247,7 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 	}
 
 	// Create CSV file
-	csvPath := filepath.Join(dir, "inventory.csv")
+	csvPath := filepath.Join(dir, "s3inventory.csv")
 	var csvBuf bytes.Buffer
 	for _, r := range testRows {
 		fmt.Fprintf(&csvBuf, "%s,%d,%s,\n", r.Key, r.Size, r.StorageClass)
@@ -257,7 +257,7 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 	}
 
 	// Create Parquet file
-	parquetPath := filepath.Join(dir, "inventory.parquet")
+	parquetPath := filepath.Join(dir, "s3inventory.parquet")
 	parquetRows := make([]S3InventoryRecord, len(testRows))
 	for i, r := range testRows {
 		parquetRows[i] = S3InventoryRecord{
@@ -271,9 +271,9 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 	}
 
 	// Read CSV
-	csvReader := inventory.NewCSVInventoryReader(
+	csvReader := s3inventory.NewCSVReader(
 		bytes.NewReader(csvBuf.Bytes()),
-		inventory.CSVReaderConfig{KeyCol: 0, SizeCol: 1, StorageCol: 2},
+		s3inventory.CSVReaderConfig{KeyCol: 0, SizeCol: 1, StorageCol: 2},
 	)
 	defer csvReader.Close()
 
@@ -281,11 +281,11 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 	f, _ := os.Open(parquetPath)
 	defer f.Close()
 	info, _ := f.Stat()
-	parquetReader, err := inventory.NewParquetInventoryReader(f, info.Size(), inventory.ParquetReaderConfig{
+	parquetReader, err := s3inventory.NewParquetReader(f, info.Size(), s3inventory.ParquetReaderConfig{
 		KeyCol: 0, StorageCol: 1, SizeCol: 2,
 	})
 	if err != nil {
-		t.Fatalf("NewParquetInventoryReader failed: %v", err)
+		t.Fatalf("NewParquetReader failed: %v", err)
 	}
 	defer parquetReader.Close()
 
@@ -329,11 +329,11 @@ func TestParquetInventoryReader_EmptyFile(t *testing.T) {
 	defer f.Close()
 	info, _ := f.Stat()
 
-	reader, err := inventory.NewParquetInventoryReader(f, info.Size(), inventory.ParquetReaderConfig{
+	reader, err := s3inventory.NewParquetReader(f, info.Size(), s3inventory.ParquetReaderConfig{
 		KeyCol: 0, SizeCol: 1, StorageCol: 2,
 	})
 	if err != nil {
-		t.Fatalf("NewParquetInventoryReader failed: %v", err)
+		t.Fatalf("NewParquetReader failed: %v", err)
 	}
 	defer reader.Close()
 
@@ -366,11 +366,11 @@ func TestParquetInventoryReader_LargeRowGroups(t *testing.T) {
 	defer f.Close()
 	info, _ := f.Stat()
 
-	reader, err := inventory.NewParquetInventoryReader(f, info.Size(), inventory.ParquetReaderConfig{
+	reader, err := s3inventory.NewParquetReader(f, info.Size(), s3inventory.ParquetReaderConfig{
 		KeyCol: 0, SizeCol: 1, StorageCol: 2,
 	})
 	if err != nil {
-		t.Fatalf("NewParquetInventoryReader failed: %v", err)
+		t.Fatalf("NewParquetReader failed: %v", err)
 	}
 	defer reader.Close()
 
@@ -426,13 +426,13 @@ func TestParquetInventoryReader_DetectsPascalCaseColumns(t *testing.T) {
 		t.Fatalf("Stat: %v", err)
 	}
 
-	reader, err := inventory.NewParquetInventoryReaderFromReaderAt(f, info.Size())
+	reader, err := s3inventory.NewParquetReaderFromReaderAt(f, info.Size())
 	if err != nil {
-		t.Fatalf("NewParquetInventoryReaderFromReaderAt: %v", err)
+		t.Fatalf("NewParquetReaderFromReaderAt: %v", err)
 	}
 	defer reader.Close()
 
-	got := make([]inventory.Row, 0, len(rows))
+	got := make([]s3inventory.Row, 0, len(rows))
 	for {
 		row, err := reader.Next()
 		if errors.Is(err, io.EOF) {
@@ -483,9 +483,9 @@ func TestParquetInventoryReader_DetectsMixedCaseColumns(t *testing.T) {
 	}
 	defer f.Close()
 	info, _ := f.Stat()
-	reader, err := inventory.NewParquetInventoryReaderFromReaderAt(f, info.Size())
+	reader, err := s3inventory.NewParquetReaderFromReaderAt(f, info.Size())
 	if err != nil {
-		t.Fatalf("NewParquetInventoryReaderFromReaderAt: %v", err)
+		t.Fatalf("NewParquetReaderFromReaderAt: %v", err)
 	}
 	defer reader.Close()
 
@@ -513,7 +513,7 @@ func BenchmarkCSVInventoryReader(b *testing.B) {
 	b.ReportAllocs()
 
 	for range b.N {
-		reader := inventory.NewCSVInventoryReader(bytes.NewReader(csvData), inventory.CSVReaderConfig{
+		reader := s3inventory.NewCSVReader(bytes.NewReader(csvData), s3inventory.CSVReaderConfig{
 			KeyCol: 0, SizeCol: 1, StorageCol: 2, AccessTierCol: 3,
 		})
 
@@ -565,7 +565,7 @@ func BenchmarkParquetInventoryReader(b *testing.B) {
 	b.ReportAllocs()
 
 	for range b.N {
-		reader, err := inventory.NewParquetInventoryReaderFromStream(
+		reader, err := s3inventory.NewParquetReaderFromStream(
 			io.NopCloser(bytes.NewReader(content)),
 			int64(len(content)),
 		)
