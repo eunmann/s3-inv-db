@@ -3,184 +3,47 @@ package format
 import (
 	"encoding/binary"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
-	"github.com/eunmann/s3-inv-db/pkg/triebuild"
 )
 
 const tierStatsDir = "tier_stats"
 
 // indexDirPerm restricts subdirectories of the index (e.g. tier_stats)
-// to owner read/write/execute only. Index files are produced by the
-// seeder and read by the server running as the same user.
+// to owner read/write/execute only.
 const indexDirPerm = 0o750
 
-// TierStatsWriter writes per-tier columnar arrays.
-type TierStatsWriter struct {
-	outDir       string
-	tierDir      string
-	presentTiers []tiers.ID
-}
-
-// NewTierStatsWriter creates a writer for tier statistics.
-func NewTierStatsWriter(outDir string) (*TierStatsWriter, error) {
-	return &TierStatsWriter{
-		outDir:  outDir,
-		tierDir: filepath.Join(outDir, tierStatsDir),
-	}, nil
-}
-
-// Write writes tier statistics from the trie result.
-func (w *TierStatsWriter) Write(result *triebuild.Result) error {
-	if !result.TrackTiers || len(result.PresentTiers) == 0 {
-		return nil // No tier data to write
-	}
-
-	// Create tier_stats directory only when there's data to write
-	if err := os.MkdirAll(w.tierDir, indexDirPerm); err != nil {
-		return fmt.Errorf("create tier_stats dir: %w", err)
-	}
-
-	mapping := tiers.NewMapping()
-
-	for _, tierID := range result.PresentTiers {
-		info := mapping.ByID(tierID)
-
-		// Write bytes array
-		bytesPath := filepath.Join(w.tierDir, info.FilePrefix+"_bytes.u64")
-		if err := w.writeTierArray(bytesPath, result.Nodes, tierID, true); err != nil {
-			return fmt.Errorf("write %s bytes: %w", info.Name, err)
-		}
-
-		// Write counts array
-		countsPath := filepath.Join(w.tierDir, info.FilePrefix+"_count.u64")
-		if err := w.writeTierArray(countsPath, result.Nodes, tierID, false); err != nil {
-			return fmt.Errorf("write %s counts: %w", info.Name, err)
-		}
-	}
-
-	w.presentTiers = result.PresentTiers
-
-	// Write tiers manifest
-	if err := tiers.WriteManifest(w.outDir, result.PresentTiers); err != nil {
-		return fmt.Errorf("write tier manifest: %w", err)
-	}
-
-	return nil
-}
-
-func (w *TierStatsWriter) writeTierArray(path string, nodes []triebuild.Node, tierID tiers.ID, isBytes bool) error {
-	writer, err := NewArrayWriter(path, 8)
-	if err != nil {
-		return fmt.Errorf("create array writer: %w", err)
-	}
-
-	for i := range nodes {
-		var val uint64
-		if isBytes {
-			val = nodes[i].TierBytes[tierID]
-		} else {
-			val = nodes[i].TierCounts[tierID]
-		}
-		if err := writer.WriteU64(val); err != nil {
-			writer.Close()
-
-			return fmt.Errorf("write value at node %d: %w", i, err)
-		}
-	}
-
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("close array writer: %w", err)
-	}
-
-	return nil
-}
-
-// PresentTiers returns the tiers that were written.
-func (w *TierStatsWriter) PresentTiers() []tiers.ID {
-	return w.presentTiers
-}
-
-// TierStatsReader reads per-tier statistics. Prefers the row-major
-// file (tier_stats_row.bin) when present — one mmap'd region with
-// fixed-stride rows lets GetBreakdown(pos) take a single page fault
-// on a cold index. Falls back to the legacy per-tier columnar files
-// (one bytes file + one counts file per present tier) for indexes
-// built before the row-major layout existed.
+// TierStatsReader reads per-prefix tier breakdowns from the row-major
+// tier_stats_row.bin file. Production writers (TierStatsRowWriter)
+// always produce this layout; the legacy per-tier columnar layout
+// is no longer supported.
 type TierStatsReader struct {
-	tierDir      string
-	manifest     *tiers.TierManifest
-	rowReader    *TierStatsRowReader // non-nil when row-major file present
-	bytesArrays  map[tiers.ID]*ArrayReader
-	countsArrays map[tiers.ID]*ArrayReader
+	manifest  *tiers.TierManifest
+	rowReader *TierStatsRowReader
 }
 
-// OpenTierStats opens tier statistics from an index directory. Returns
-// an empty TierStatsReader (manifest with zero tiers) when no tier
-// data exists, so callers can dispatch on (*TierStatsReader).Empty()
-// rather than nil-checking the return.
+// OpenTierStats opens the tier-stats file from an index directory.
+// Returns an empty reader (manifest with zero tiers) when no tier
+// data exists, so callers can dispatch on
+// (*TierStatsReader).HasTierData() rather than nil-checking.
 func OpenTierStats(indexDir string) (*TierStatsReader, error) {
 	manifest, err := tiers.ReadManifest(indexDir)
 	if err != nil {
 		return nil, fmt.Errorf("read tier manifest: %w", err)
 	}
 	if manifest == nil || len(manifest.Tiers) == 0 {
-		return &TierStatsReader{
-			tierDir:      filepath.Join(indexDir, tierStatsDir),
-			manifest:     &tiers.TierManifest{},
-			bytesArrays:  map[tiers.ID]*ArrayReader{},
-			countsArrays: map[tiers.ID]*ArrayReader{},
-		}, nil
+		return &TierStatsReader{manifest: &tiers.TierManifest{}}, nil
 	}
 
-	tierDir := filepath.Join(indexDir, tierStatsDir)
-
-	r := &TierStatsReader{
-		tierDir:      tierDir,
-		manifest:     manifest,
-		bytesArrays:  make(map[tiers.ID]*ArrayReader),
-		countsArrays: make(map[tiers.ID]*ArrayReader),
-	}
-
-	// Prefer the row-major file (one mmap'd region, one page fault
-	// per GetBreakdown call). When present, skip opening the legacy
-	// per-tier columnar files entirely — they're not used.
 	rowReader, err := OpenTierStatsRow(indexDir)
 	if err != nil {
 		return nil, fmt.Errorf("open tier stats row: %w", err)
 	}
-	if rowReader != nil {
-		r.rowReader = rowReader
 
-		return r, nil
-	}
-
-	// Legacy fallback: per-tier columnar arrays. Tier-stats lookups
-	// are random per prefix-position; hint accordingly so the kernel
-	// doesn't waste readahead.
-	for _, tier := range manifest.Tiers {
-		bytesPath := filepath.Join(tierDir, tier.FilePrefix+"_bytes.u64")
-		bytesReader, err := OpenArrayWithHint(bytesPath, AccessHintRandom)
-		if err != nil {
-			r.Close()
-
-			return nil, fmt.Errorf("open %s bytes: %w", tier.Name, err)
-		}
-		r.bytesArrays[tier.ID] = bytesReader
-
-		countsPath := filepath.Join(tierDir, tier.FilePrefix+"_count.u64")
-		countsReader, err := OpenArrayWithHint(countsPath, AccessHintRandom)
-		if err != nil {
-			r.Close()
-
-			return nil, fmt.Errorf("open %s counts: %w", tier.Name, err)
-		}
-		r.countsArrays[tier.ID] = countsReader
-	}
-
-	return r, nil
+	return &TierStatsReader{
+		manifest:  manifest,
+		rowReader: rowReader,
+	}, nil
 }
 
 // TierBreakdown represents statistics for a single tier.
@@ -191,98 +54,34 @@ type TierBreakdown struct {
 	ObjectCount uint64
 }
 
-// GetBreakdown returns the tier breakdown for a given position.
-// Only includes tiers with non-zero data at this position.
+// GetBreakdown returns the tier breakdown for the given preorder
+// position, including only tiers with non-zero data.
 func (r *TierStatsReader) GetBreakdown(pos uint64) []TierBreakdown {
-	if r == nil || r.manifest == nil {
-		return nil
-	}
-
-	breakdown := make([]TierBreakdown, 0, len(r.manifest.Tiers))
-
-	if r.rowReader != nil {
-		if pos >= r.rowReader.Count() {
-			return breakdown
-		}
-		row := r.rowReader.UnsafeRow(pos)
-		for _, tier := range r.manifest.Tiers {
-			off := int(tier.ID) * 16
-			count := binary.LittleEndian.Uint64(row[off : off+8])
-			bytes := binary.LittleEndian.Uint64(row[off+8 : off+16])
-			if bytes > 0 || count > 0 {
-				breakdown = append(breakdown, TierBreakdown{
-					TierID:      tier.ID,
-					TierName:    tier.Name,
-					Bytes:       bytes,
-					ObjectCount: count,
-				})
-			}
-		}
-
-		return breakdown
-	}
-
-	for _, tier := range r.manifest.Tiers {
-		var bytes, count uint64
-
-		if reader, ok := r.bytesArrays[tier.ID]; ok && pos < reader.Count() {
-			bytes = reader.UnsafeGetU64(pos)
-		}
-		if reader, ok := r.countsArrays[tier.ID]; ok && pos < reader.Count() {
-			count = reader.UnsafeGetU64(pos)
-		}
-
-		if bytes > 0 || count > 0 {
-			breakdown = append(breakdown, TierBreakdown{
-				TierID:      tier.ID,
-				TierName:    tier.Name,
-				Bytes:       bytes,
-				ObjectCount: count,
-			})
-		}
-	}
-
-	return breakdown
+	return r.breakdownAt(pos, true)
 }
 
-// GetBreakdownAll returns the tier breakdown for all present tiers (including zeros).
+// GetBreakdownAll returns the tier breakdown for all present tiers
+// at the given preorder position, including zeros.
 func (r *TierStatsReader) GetBreakdownAll(pos uint64) []TierBreakdown {
-	if r == nil || r.manifest == nil {
+	return r.breakdownAt(pos, false)
+}
+
+func (r *TierStatsReader) breakdownAt(pos uint64, nonZeroOnly bool) []TierBreakdown {
+	if r == nil || r.manifest == nil || r.rowReader == nil {
 		return nil
 	}
-
 	breakdown := make([]TierBreakdown, 0, len(r.manifest.Tiers))
-
-	if r.rowReader != nil {
-		if pos >= r.rowReader.Count() {
-			return breakdown
-		}
-		row := r.rowReader.UnsafeRow(pos)
-		for _, tier := range r.manifest.Tiers {
-			off := int(tier.ID) * 16
-			count := binary.LittleEndian.Uint64(row[off : off+8])
-			bytes := binary.LittleEndian.Uint64(row[off+8 : off+16])
-			breakdown = append(breakdown, TierBreakdown{
-				TierID:      tier.ID,
-				TierName:    tier.Name,
-				Bytes:       bytes,
-				ObjectCount: count,
-			})
-		}
-
+	if pos >= r.rowReader.Count() {
 		return breakdown
 	}
-
+	row := r.rowReader.UnsafeRow(pos)
 	for _, tier := range r.manifest.Tiers {
-		var bytes, count uint64
-
-		if reader, ok := r.bytesArrays[tier.ID]; ok && pos < reader.Count() {
-			bytes = reader.UnsafeGetU64(pos)
+		off := int(tier.ID) * 16
+		count := binary.LittleEndian.Uint64(row[off : off+8])
+		bytes := binary.LittleEndian.Uint64(row[off+8 : off+16])
+		if nonZeroOnly && bytes == 0 && count == 0 {
+			continue
 		}
-		if reader, ok := r.countsArrays[tier.ID]; ok && pos < reader.Count() {
-			count = reader.UnsafeGetU64(pos)
-		}
-
 		breakdown = append(breakdown, TierBreakdown{
 			TierID:      tier.ID,
 			TierName:    tier.Name,
@@ -294,7 +93,7 @@ func (r *TierStatsReader) GetBreakdownAll(pos uint64) []TierBreakdown {
 	return breakdown
 }
 
-// HasTierData returns whether tier data is available.
+// HasTierData reports whether any tier data is available.
 func (r *TierStatsReader) HasTierData() bool {
 	return r != nil && r.manifest != nil && len(r.manifest.Tiers) > 0
 }
@@ -308,38 +107,16 @@ func (r *TierStatsReader) PresentTiers() []tiers.Info {
 	return r.manifest.Tiers
 }
 
-// Close releases all mmap'd resources.
+// Close releases the mmap'd row file.
 func (r *TierStatsReader) Close() error {
-	if r == nil {
+	if r == nil || r.rowReader == nil {
 		return nil
 	}
-
-	var firstErr error
-
-	if r.rowReader != nil {
-		if err := r.rowReader.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		r.rowReader = nil
+	err := r.rowReader.Close()
+	r.rowReader = nil
+	if err != nil {
+		return fmt.Errorf("close tier stats row: %w", err)
 	}
 
-	for _, reader := range r.bytesArrays {
-		if reader != nil {
-			if err := reader.Close(); err != nil && firstErr == nil {
-				firstErr = err
-			}
-		}
-	}
-	for _, reader := range r.countsArrays {
-		if reader != nil {
-			if err := reader.Close(); err != nil && firstErr == nil {
-				firstErr = err
-			}
-		}
-	}
-
-	r.bytesArrays = nil
-	r.countsArrays = nil
-
-	return firstErr
+	return nil
 }

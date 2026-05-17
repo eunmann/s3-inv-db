@@ -6,7 +6,7 @@ import (
 
 func TestMPHFBuilderEmpty(t *testing.T) {
 	dir := t.TempDir()
-	b := NewMPHFBuilder()
+	b := newTestMPHFBuilder(t)
 
 	if err := b.Build(dir); err != nil {
 		t.Fatalf("Build failed: %v", err)
@@ -30,7 +30,7 @@ func TestMPHFBuilderEmpty(t *testing.T) {
 
 func TestMPHFBuilderSimple(t *testing.T) {
 	dir := t.TempDir()
-	b := NewMPHFBuilder()
+	b := newTestMPHFBuilder(t)
 
 	prefixes := []string{"", "a/", "a/b/", "b/", "c/"}
 	for i, p := range prefixes {
@@ -79,7 +79,7 @@ func TestMPHFBuilderSimple(t *testing.T) {
 
 func TestMPHFLookupWithVerify(t *testing.T) {
 	dir := t.TempDir()
-	b := NewMPHFBuilder()
+	b := newTestMPHFBuilder(t)
 
 	prefixes := []string{"", "x/", "y/", "z/"}
 	for i, p := range prefixes {
@@ -114,7 +114,7 @@ func TestMPHFLookupWithVerify(t *testing.T) {
 
 func TestMPHFVerify(t *testing.T) {
 	dir := t.TempDir()
-	b := NewMPHFBuilder()
+	b := newTestMPHFBuilder(t)
 
 	prefixes := []string{"", "foo/", "bar/", "baz/"}
 	for i, p := range prefixes {
@@ -138,7 +138,7 @@ func TestMPHFVerify(t *testing.T) {
 
 func TestMPHFLarge(t *testing.T) {
 	dir := t.TempDir()
-	b := NewMPHFBuilder()
+	b := newTestMPHFBuilder(t)
 
 	// Create 1000 unique prefixes
 	prefixes := make([]string, 1000)
@@ -182,7 +182,7 @@ func TestMPHFLarge(t *testing.T) {
 
 func TestMPHFNoFalsePositives(t *testing.T) {
 	dir := t.TempDir()
-	b := NewMPHFBuilder()
+	b := newTestMPHFBuilder(t)
 
 	prefixes := []string{"alpha/", "beta/", "gamma/"}
 	for i, p := range prefixes {
@@ -219,7 +219,7 @@ func TestMPHFNoFalsePositives(t *testing.T) {
 
 func TestMPHFUnicode(t *testing.T) {
 	dir := t.TempDir()
-	b := NewMPHFBuilder()
+	b := newTestMPHFBuilder(t)
 
 	prefixes := []string{"", "日本語/", "한국어/", "emoji/🎉/"}
 	for i, p := range prefixes {
@@ -265,6 +265,34 @@ func TestComputeFingerprint(t *testing.T) {
 	}
 }
 
+// testMPHFBuilder wraps StreamingMPHFBuilder with the no-arg shape
+// the legacy MPHFBuilder API offered. Internal to this test file
+// so the production builder stays the single non-test code path.
+type testMPHFBuilder struct {
+	tb testing.TB
+	sb *StreamingMPHFBuilder
+}
+
+func newTestMPHFBuilder(tb testing.TB) *testMPHFBuilder {
+	tb.Helper()
+	sb, err := NewStreamingMPHFBuilder(tb.TempDir())
+	if err != nil {
+		tb.Fatalf("NewStreamingMPHFBuilder: %v", err)
+	}
+
+	return &testMPHFBuilder{tb: tb, sb: sb}
+}
+
+func (b *testMPHFBuilder) Add(prefix string, pos uint64) {
+	b.tb.Helper()
+	if err := b.sb.Add(prefix, pos); err != nil {
+		b.tb.Fatalf("Add(%q, %d): %v", prefix, pos, err)
+	}
+}
+
+func (b *testMPHFBuilder) Build(dir string) error { return b.sb.Build(dir) }
+func (b *testMPHFBuilder) Count() int             { return int(b.sb.Count()) }
+
 // Helper function to create unique prefix strings.
 func prefixFromInt(i int) string {
 	// Create a path like "a/b/c/" based on integer
@@ -283,7 +311,7 @@ func prefixFromInt(i int) string {
 
 func BenchmarkMPHFLookup(b *testing.B) {
 	dir := b.TempDir()
-	builder := NewMPHFBuilder()
+	builder := newTestMPHFBuilder(b)
 
 	prefixes := make([]string, 10000)
 	for i := range 10000 {
