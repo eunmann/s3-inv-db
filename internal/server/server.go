@@ -196,12 +196,12 @@ func retentionLookup(store *inventory.ConfigStore, fallback uint32) budget.Reten
 	}
 }
 
-// lookupRetention is the non-closure body, factored out so a
-// file-level //nolint:contextcheck applies. The caller has no ctx.
+// lookupRetention is the non-closure body for retentionLookup.
 //
 
 func lookupRetention(store *inventory.ConfigStore, fallback uint32, source, name string) uint32 {
-	cfg, err := store.Get(context.Background(), source, name)
+	ctx := context.Background()
+	cfg, err := store.Get(ctx, source, name)
 	if err == nil && cfg.RetentionCount > 0 {
 		return cfg.RetentionCount
 	}

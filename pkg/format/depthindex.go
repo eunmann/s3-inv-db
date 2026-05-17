@@ -184,13 +184,7 @@ func OpenDepthIndex(outDir string) (*DepthIndex, error) {
 
 // Close releases resources.
 func (d *DepthIndex) Close() error {
-	err1 := d.offsets.Close()
-	err2 := d.positions.Close()
-	if err1 != nil {
-		return err1
-	}
-
-	return err2
+	return errors.Join(d.offsets.Close(), d.positions.Close())
 }
 
 // MaxDepth returns the maximum depth in the index.

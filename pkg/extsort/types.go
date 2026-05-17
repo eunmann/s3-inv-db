@@ -51,12 +51,8 @@ func (r *PrefixRow) Reset() {
 	r.Depth = 0
 	r.Count = 0
 	r.TotalBytes = 0
-	for i := range r.TierCounts {
-		r.TierCounts[i] = 0
-	}
-	for i := range r.TierBytes {
-		r.TierBytes[i] = 0
-	}
+	clear(r.TierCounts[:])
+	clear(r.TierBytes[:])
 }
 
 // Merge sums counts and bytes from other into r. Prefix and Depth
@@ -204,12 +200,8 @@ func (s *PrefixStats) Reset() {
 	s.Depth = 0
 	s.Count = 0
 	s.TotalBytes = 0
-	for i := range s.TierCounts {
-		s.TierCounts[i] = 0
-	}
-	for i := range s.TierBytes {
-		s.TierBytes[i] = 0
-	}
+	clear(s.TierCounts[:])
+	clear(s.TierBytes[:])
 }
 
 // Add accumulates statistics from a single object.
