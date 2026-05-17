@@ -50,7 +50,6 @@ func NewLogger(debug, human bool) zerolog.Logger {
 	return zerolog.New(output).With().Timestamp().Logger()
 }
 
-// L returns the base logger.
 func L() *zerolog.Logger {
 	configureZerolog()
 

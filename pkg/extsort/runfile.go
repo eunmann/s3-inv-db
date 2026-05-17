@@ -130,12 +130,10 @@ func (w *RunFileWriter) WriteSorted(rows []*PrefixRow) error {
 	return w.WriteAll(rows)
 }
 
-// Count returns the number of records written.
 func (w *RunFileWriter) Count() uint64 {
 	return w.count
 }
 
-// Path returns the path to the run file.
 func (w *RunFileWriter) Path() string {
 	return w.path
 }
@@ -272,17 +270,14 @@ func (r *RunFileReader) ReadInto(into *PrefixRow) error {
 	return nil
 }
 
-// Count returns the total number of records in the file.
 func (r *RunFileReader) Count() uint64 {
 	return r.count
 }
 
-// ReadCount returns the number of records read so far.
 func (r *RunFileReader) ReadCount() uint64 {
 	return r.read
 }
 
-// Path returns the path to the run file.
 func (r *RunFileReader) Path() string {
 	return r.path
 }

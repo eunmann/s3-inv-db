@@ -399,12 +399,10 @@ func (b *IndexBuilder) writeTierManifest() error {
 	return nil
 }
 
-// Count returns the number of prefixes processed.
 func (b *IndexBuilder) Count() uint64 {
 	return b.posCount
 }
 
-// MaxDepth returns the maximum depth encountered.
 func (b *IndexBuilder) MaxDepth() uint32 {
 	return b.maxDepth
 }

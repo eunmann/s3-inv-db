@@ -67,17 +67,14 @@ func (a *Aggregator) accumulate(prefix string, depth uint16, size uint64, tierID
 	stats.Add(size, tierID)
 }
 
-// PrefixCount returns the number of unique prefixes currently tracked.
 func (a *Aggregator) PrefixCount() int {
 	return len(a.prefixes)
 }
 
-// ObjectCount returns the total number of objects processed.
 func (a *Aggregator) ObjectCount() int64 {
 	return a.objectCount
 }
 
-// BytesProcessed returns the total bytes processed.
 func (a *Aggregator) BytesProcessed() int64 {
 	return a.bytesProcessed
 }

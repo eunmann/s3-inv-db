@@ -184,7 +184,6 @@ func (m *MergeIterator) advanceReader(idx int) error {
 	return nil
 }
 
-// Remaining returns an estimate of remaining rows to process.
 func (m *MergeIterator) Remaining() uint64 {
 	var total uint64
 	for _, r := range m.readers {
