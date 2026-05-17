@@ -43,12 +43,12 @@ type MergedInventory struct {
 // GatedLoader runs a build under the disk-budget planner. Optional —
 // when set on DiscoveryService, LoadWith routes through the gate so
 // loads honour the global byte cap. Defined as an interface to keep
-// inventory free of an import on internal/loadgate.
+// inventory free of an import on internal/loadcontrol.
 type GatedLoader interface {
 	Load(ctx context.Context, id ID, build BuildFunc, opts GatedLoadOptions) error
 }
 
-// GatedLoadOptions mirrors the fields of internal/loadgate.Options.
+// GatedLoadOptions mirrors the fields of internal/loadcontrol.Options.
 // Duplicated here so DiscoveryService doesn't import the gate package
 // (the gate already imports this one).
 type GatedLoadOptions struct {

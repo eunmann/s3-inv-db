@@ -14,8 +14,8 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
+	"github.com/eunmann/s3-inv-db/internal/loadcontrol"
 	"github.com/eunmann/s3-inv-db/internal/loader"
-	"github.com/eunmann/s3-inv-db/internal/loadgate"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
@@ -112,7 +112,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	tracker := budget.New(cfg.MaxIndexDisk, cfg.IndexHeadroomBytes)
 	retentionLookup := configRetention{store: configStore, fallback: cfg.AutoLoadRetentionDefault}
 	planner := budget.NewPlanner(tracker, retentionLookup)
-	gate := loadgate.New(mgr, tracker, planner)
+	gate := loadcontrol.New(mgr, tracker, planner)
 
 	var discovery *inventory.DiscoveryService
 	var bldr *loader.Loader
@@ -126,7 +126,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		bldr = wiring.Loader
 		s3Client = wiring.Client
 		discovery = inventory.NewDiscoveryService(mgr, wiring.Discoverer, wiring.Loader)
-		sizer := loadgate.NewManifestSizer(s3Client)
+		sizer := loadcontrol.NewManifestSizer(s3Client)
 		discovery.SetGate(gate, sizer, cfg.IndexRatio)
 		cfg.Logger.Info().
 			Str("s3_source", cfg.S3Source).

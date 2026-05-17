@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/appconfig"
+	"github.com/eunmann/s3-inv-db/internal/server"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
-	"github.com/eunmann/s3-inv-db/pkg/server"
 	"github.com/eunmann/s3-inv-db/pkg/sysmem"
 	"github.com/rs/zerolog/log"
 )

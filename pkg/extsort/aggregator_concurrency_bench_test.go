@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/eunmann/s3-inv-db/pkg/benchutil"
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 )
 
 // BenchmarkAggregationConcurrency_SharedVsPerWorker measures the

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/loadgate"
+	"github.com/eunmann/s3-inv-db/internal/loadcontrol"
 	"github.com/rs/zerolog"
 )
 
@@ -241,7 +241,7 @@ func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 
 		return
 	}
-	var refused *loadgate.BudgetRefusedError
+	var refused *loadcontrol.BudgetRefusedError
 	if errors.As(err, &refused) {
 		// Budget refusal: surface via Manager so the UI can show the
 		// reason next to the row. Don't apply backoff — we want to

@@ -305,33 +305,3 @@ func DefaultConfig() Config {
 		UseCompressedRuns:         true,
 	}
 }
-
-// S3DownloaderConfig returns the S3 downloader configuration derived from this Config.
-// Use this when creating an S3 client to ensure consistent configuration.
-func (c *Config) S3DownloaderConfig() S3DownloaderConfig {
-	cfg := S3DownloaderConfig{
-		TempDir: c.TempDir,
-	}
-
-	if c.S3DownloadPartConcurrency > 0 {
-		cfg.Concurrency = c.S3DownloadPartConcurrency
-	} else {
-		cfg.Concurrency = DefaultConfig().S3DownloadPartConcurrency
-	}
-
-	if c.S3DownloadPartSize > 0 {
-		cfg.PartSize = c.S3DownloadPartSize
-	} else {
-		cfg.PartSize = DefaultConfig().S3DownloadPartSize
-	}
-
-	return cfg
-}
-
-// S3DownloaderConfig mirrors s3fetch.DownloaderConfig to avoid import cycles.
-// This is used to configure the S3 client with the pipeline's settings.
-type S3DownloaderConfig struct {
-	Concurrency int
-	PartSize    int64
-	TempDir     string
-}

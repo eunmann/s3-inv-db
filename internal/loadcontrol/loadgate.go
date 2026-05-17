@@ -1,6 +1,6 @@
-// Package loadgate orchestrates one load lifecycle — plan, evict,
+// Package loadcontrol orchestrates one load lifecycle — plan, evict,
 // reserve, build, release — for both manual and auto loads.
-package loadgate
+package loadcontrol
 
 import (
 	"context"
