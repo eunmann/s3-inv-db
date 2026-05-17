@@ -192,16 +192,24 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 
 func retentionLookup(store *inventory.ConfigStore, fallback uint32) budget.RetentionFunc {
 	return func(source, name string) uint32 {
-		cfg, err := store.Get(context.Background(), source, name)
-		if err == nil && cfg.RetentionCount > 0 {
-			return cfg.RetentionCount
-		}
-		if fallback > 0 {
-			return fallback
-		}
-
-		return 0
+		return lookupRetention(store, fallback, source, name)
 	}
+}
+
+// lookupRetention is the non-closure body, factored out so a
+// file-level //nolint:contextcheck applies. The caller has no ctx.
+//
+
+func lookupRetention(store *inventory.ConfigStore, fallback uint32, source, name string) uint32 {
+	cfg, err := store.Get(context.Background(), source, name)
+	if err == nil && cfg.RetentionCount > 0 {
+		return cfg.RetentionCount
+	}
+	if fallback > 0 {
+		return fallback
+	}
+
+	return 0
 }
 
 // backfillTracker walks every currently-loaded inventory and attributes
