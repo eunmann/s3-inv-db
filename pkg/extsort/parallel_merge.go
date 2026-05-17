@@ -138,9 +138,7 @@ func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []st
 	for len(finalPaths) > m.config.MaxFanIn {
 		select {
 		case <-ctx.Done():
-			for _, p := range intermediates {
-				os.Remove(p)
-			}
+			removeFiles(intermediates)
 
 			return nil, nil, fmt.Errorf("merge cancelled: %w", ctx.Err())
 		default:
@@ -149,16 +147,12 @@ func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []st
 		m.mergeRounds = round
 		nextPaths, err := m.mergeRound(ctx, finalPaths, round)
 		if err != nil {
-			for _, p := range append(intermediates, nextPaths...) {
-				os.Remove(p)
-			}
+			removeFiles(append(intermediates, nextPaths...))
 
 			return nil, nil, fmt.Errorf("merge round %d: %w", round, err)
 		}
 		if round > 1 {
-			for _, p := range finalPaths {
-				os.Remove(p)
-			}
+			removeFiles(finalPaths)
 		}
 		intermediates = append(intermediates, nextPaths...)
 		finalPaths = nextPaths
@@ -170,9 +164,7 @@ func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []st
 	// Final round: stream the K-way merge directly, no file write.
 	iter, err := NewMergeIterator(finalPaths, m.config.BufferSize)
 	if err != nil {
-		for _, p := range intermediates {
-			os.Remove(p)
-		}
+		removeFiles(intermediates)
 
 		return nil, nil, fmt.Errorf("open final merge iterator: %w", err)
 	}
@@ -186,9 +178,7 @@ func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []st
 
 	cleanup := func() error {
 		err := iter.Close()
-		for _, p := range intermediates {
-			os.Remove(p)
-		}
+		removeFiles(intermediates)
 
 		return err
 	}
@@ -235,19 +225,14 @@ func (m *ParallelMerger) MergeAll(ctx context.Context, inputPaths []string) (str
 
 		nextPaths, err := m.mergeRound(ctx, currentPaths, round)
 		if err != nil {
-			// Clean up any files we created
-			for _, p := range nextPaths {
-				os.Remove(p)
-			}
+			removeFiles(nextPaths)
 
 			return "", fmt.Errorf("merge round %d: %w", round, err)
 		}
 
 		// Clean up input files from previous round (except original inputs on first round)
 		if round > 1 {
-			for _, p := range currentPaths {
-				os.Remove(p)
-			}
+			removeFiles(currentPaths)
 		}
 
 		currentPaths = nextPaths

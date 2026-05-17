@@ -58,6 +58,39 @@ const (
 	runFileHeader  = 16
 )
 
+// removeFiles best-effort deletes each path. Used on cancellation /
+// failure paths in the merge pipeline where the original error is the
+// one that matters and a missed cleanup is bounded to temp files.
+func removeFiles(paths []string) {
+	for _, p := range paths {
+		_ = os.Remove(p)
+	}
+}
+
+// runWriter is the shared shape between RunFileWriter and
+// CompressedRunWriter for the pipeline's ingest spill path.
+type runWriter interface {
+	WriteSorted(rows []*PrefixRow) error
+	Close() error
+}
+
+// writeAndCloseRun writes rows through w; on a write error it closes w
+// and deletes runPath before returning. On success it returns the
+// close result so the caller can react to a close-only failure.
+func writeAndCloseRun(w runWriter, rows []*PrefixRow, runPath string) error {
+	if err := w.WriteSorted(rows); err != nil {
+		_ = w.Close()
+		_ = os.Remove(runPath)
+
+		return fmt.Errorf("write sorted: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("close run writer: %w", err)
+	}
+
+	return nil
+}
+
 // RunFileWriter writes sorted PrefixRows to a temporary run file.
 type RunFileWriter struct {
 	file   *os.File
