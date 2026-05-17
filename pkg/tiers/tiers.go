@@ -80,7 +80,7 @@ func NewMapping() *Mapping {
 	copy(m.Tiers, all)
 
 	for _, t := range m.Tiers {
-		m.indexByS3Name[strings.ToUpper(t.Name)] = t.ID
+		m.indexByS3Name[t.Name] = t.ID
 	}
 
 	// Add INTELLIGENT_TIERING as alias for ITFrequent (default when no access tier specified).
