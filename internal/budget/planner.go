@@ -23,23 +23,24 @@ type Plan struct {
 // Fits reports whether the plan makes room (Refusal is empty).
 func (p Plan) Fits() bool { return p.Refusal == "" }
 
-// Config supplies per-configuration retention overrides.
-type Config interface {
-	Retention(source, name string) uint32
-}
+// RetentionFunc returns the per-configuration retention override.
+// Return 0 to accept the planner default.
+type RetentionFunc func(source, name string) uint32
 
-// DefaultRetention is used when Config.Retention returns 0.
+// DefaultRetention is used when RetentionFunc returns 0.
 const DefaultRetention uint32 = 2
 
 // Planner produces eviction plans honouring per-config retention and
 // the Tracker's remaining capacity. Pinned runs are never evicted.
 type Planner struct {
-	tracker *Tracker
-	config  Config
+	tracker   *Tracker
+	retention RetentionFunc
 }
 
-func NewPlanner(tracker *Tracker, config Config) *Planner {
-	return &Planner{tracker: tracker, config: config}
+// NewPlanner constructs a planner. Retention may be nil — every load
+// then falls back to DefaultRetention.
+func NewPlanner(tracker *Tracker, retention RetentionFunc) *Planner {
+	return &Planner{tracker: tracker, retention: retention}
 }
 
 // Input is one load the planner is asked to fit.
@@ -64,8 +65,8 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 	targetSource, targetName := tp.Source, tp.Inventory
 
 	retention := DefaultRetention
-	if p.config != nil {
-		if r := p.config.Retention(targetSource, targetName); r > 0 {
+	if p.retention != nil {
+		if r := p.retention(targetSource, targetName); r > 0 {
 			retention = r
 		}
 	}

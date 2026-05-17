@@ -43,40 +43,20 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		Files:     make(map[string]FileInfo),
 	}
 
-	// Files that are always present (when applicable to the index
-	// shape). Hard-coded so the manifest can be verified against an
-	// expected file set rather than just whatever happened to land
-	// on disk. Files marked optional are skipped when absent — the
-	// IndexBuilder chooses between row-major (core_stats.bin) and
-	// the legacy per-column files depending on build version.
+	// Files always written by the current builder. Hard-coded so the
+	// manifest can be verified against an expected set rather than
+	// whatever happened to land on disk.
 	requiredTopLevel := []string{
 		"depth_offsets.u64",
 		"depth_positions.u64",
 		"mph.bin",
-		"mph_fp.u64",
-		"mph_pos.u64",
+		CombinedMPHFArrayFile,
 		"prefix_blob.bin",
 		"prefix_offsets.u64",
 		"tiers.json",
+		CoreStatsFile,
 	}
 	for _, name := range requiredTopLevel {
-		if err := addFile(dir, name, manifest.Files); err != nil {
-			return err
-		}
-	}
-
-	// Either the new row-major core_stats.bin OR the legacy per-column
-	// files exist — never both. Walk both lists and include whichever
-	// is present.
-	optionalTopLevel := []string{
-		CoreStatsFile,
-		"subtree_end.u64",
-		"depth.u32",
-		"object_count.u64",
-		"total_bytes.u64",
-		"max_depth_in_subtree.u32",
-	}
-	for _, name := range optionalTopLevel {
 		if err := addFile(dir, name, manifest.Files); err != nil {
 			return err
 		}

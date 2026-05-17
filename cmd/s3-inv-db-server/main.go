@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/appconfig"
+	"github.com/eunmann/s3-inv-db/internal/autoload"
 	"github.com/eunmann/s3-inv-db/internal/server"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/sysmem"
@@ -26,11 +27,9 @@ var ErrNegativeSize = errors.New("negative size")
 // Server-flag defaults split out as constants so the call-site reads
 // declaratively and `mnd` lint stops flagging the literals.
 const (
-	defaultPollInterval             = 15 * time.Minute
-	defaultDiscoveryRefreshInterval = time.Minute
-	defaultIndexRatio               = 0.30
-	defaultAutoLoadRetention        = 2
-	headroomDivisor                 = 5
+	defaultIndexRatio        = 0.30
+	defaultAutoLoadRetention = 2
+	headroomDivisor          = 5
 	// Power-of-two byte multipliers for "KiB/MiB/GiB/TiB" suffixes.
 	bitsPerTebibyte = 40
 	bitsPerGibibyte = 30
@@ -55,8 +54,8 @@ func run() error {
 	stateDB := flag.String("state-db", appconfig.EnvOr("S3INV_STATE_DB", ""), "SQLite path for persisted state (default: <cache-dir>/state.db)")
 
 	autoLoad := flag.Bool("auto-load", appconfig.EnvBool("S3INV_AUTO_LOAD", false), "enable background discovery + auto-load of new inventory runs; requires --max-index-disk")
-	pollInterval := flag.Duration("auto-load-poll-interval", appconfig.EnvDuration("S3INV_AUTO_LOAD_POLL_INTERVAL", defaultPollInterval), "discovery polling interval")
-	discoveryRefresh := flag.Duration("discovery-refresh-interval", appconfig.EnvDuration("S3INV_DISCOVERY_REFRESH_INTERVAL", defaultDiscoveryRefreshInterval), "interval at which the background discovery refresher updates the cached snapshot served by HTTP handlers")
+	pollInterval := flag.Duration("auto-load-poll-interval", appconfig.EnvDuration("S3INV_AUTO_LOAD_POLL_INTERVAL", autoload.DefaultPollInterval), "discovery polling interval")
+	discoveryRefresh := flag.Duration("discovery-refresh-interval", appconfig.EnvDuration("S3INV_DISCOVERY_REFRESH_INTERVAL", server.DefaultDiscoveryRefreshInterval), "interval at which the background discovery refresher updates the cached snapshot served by HTTP handlers")
 	maxIndexDisk := flag.String("max-index-disk", appconfig.EnvOr("S3INV_MAX_INDEX_DISK", ""), "max cumulative on-disk bytes for loaded indexes (e.g. 100GB); required with --auto-load")
 	headroom := flag.String("index-headroom", appconfig.EnvOr("S3INV_INDEX_HEADROOM", ""), "reserved unused space inside --max-index-disk; default 20% of the cap")
 	autoLoadConcurrency := flag.Int("max-auto-load-concurrency", appconfig.EnvInt("S3INV_MAX_AUTO_LOAD_CONCURRENCY", 1), "max concurrent auto-loads")

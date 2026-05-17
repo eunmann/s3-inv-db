@@ -53,14 +53,14 @@ type Config struct {
 
 	// DiscoveryRefreshInterval governs how often the background
 	// discovery refresher rebuilds the cached snapshot the HTTP
-	// handlers serve. Zero means use defaultDiscoveryRefreshInterval.
+	// handlers serve. Zero means use DefaultDiscoveryRefreshInterval.
 	DiscoveryRefreshInterval time.Duration
 }
 
-// defaultDiscoveryRefreshInterval is the fallback cadence for the
-// discovery snapshot refresher. The dashboard reads the snapshot, so
-// the value sets the page-load freshness ceiling.
-const defaultDiscoveryRefreshInterval = time.Minute
+// DefaultDiscoveryRefreshInterval is the fallback cadence for the
+// discovery snapshot refresher. The dashboard reads the snapshot,
+// so this value sets the page-load freshness ceiling.
+const DefaultDiscoveryRefreshInterval = time.Minute
 
 // Server is the HTTP server.
 type Server struct {
@@ -103,8 +103,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	tracker := budget.New(cfg.MaxIndexDisk, cfg.IndexHeadroomBytes)
-	retentionLookup := configRetention{store: configStore, fallback: cfg.AutoLoadRetentionDefault}
-	planner := budget.NewPlanner(tracker, retentionLookup)
+	planner := budget.NewPlanner(tracker, retentionLookup(configStore, cfg.AutoLoadRetentionDefault))
 	gate := loadcontrol.New(mgr, tracker, planner)
 
 	var discovery *inventory.DiscoveryService
@@ -186,27 +185,23 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	return s, nil
 }
 
-// configRetention adapts ConfigStore to budget.Config so the Planner
-// can look up per-configuration retention without depending on the
-// inventory package's persistence types.
-type configRetention struct {
-	store    *inventory.ConfigStore
-	fallback uint32
-}
+// retentionLookup returns a budget.RetentionFunc that resolves
+// per-configuration retention from the ConfigStore, falling back to
+// the server-wide default when the store has no row.
+//
 
-func (c configRetention) Retention(source, name string) uint32 {
-	// The budget.Config interface intentionally has no ctx — eviction
-	// planning is a quick local lookup. Use a bounded background ctx so
-	// the SQL call still goes through ConfigStore's *Context variants.
-	cfg, err := c.store.Get(context.Background(), source, name)
-	if err == nil && cfg.RetentionCount > 0 {
-		return cfg.RetentionCount
-	}
-	if c.fallback > 0 {
-		return c.fallback
-	}
+func retentionLookup(store *inventory.ConfigStore, fallback uint32) budget.RetentionFunc {
+	return func(source, name string) uint32 {
+		cfg, err := store.Get(context.Background(), source, name)
+		if err == nil && cfg.RetentionCount > 0 {
+			return cfg.RetentionCount
+		}
+		if fallback > 0 {
+			return fallback
+		}
 
-	return 0
+		return 0
+	}
 }
 
 // backfillTracker walks every currently-loaded inventory and attributes
@@ -428,5 +423,5 @@ func (s *Server) discoveryRefreshInterval() time.Duration {
 		return s.config.DiscoveryRefreshInterval
 	}
 
-	return defaultDiscoveryRefreshInterval
+	return DefaultDiscoveryRefreshInterval
 }
