@@ -16,17 +16,9 @@ import (
 
 // DownloaderConfig configures the S3 Download Manager.
 type DownloaderConfig struct {
-	// Concurrency is the number of concurrent download parts.
-	// Default: max(4, NumCPU).
+	TempDir     string
 	Concurrency int
-
-	// PartSize is the size of each download part in bytes.
-	// Default: 16MB. Higher values use more memory but may improve throughput.
-	PartSize int64
-
-	// TempDir is the directory for temporary download files.
-	// If empty, os.TempDir() is used.
-	TempDir string
+	PartSize    int64
 }
 
 // DefaultDownloaderConfig returns sensible defaults based on the current machine.

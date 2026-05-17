@@ -18,36 +18,13 @@ import (
 
 // ParallelMergeConfig configures parallel merge operations.
 type ParallelMergeConfig struct {
-	// NumWorkers is the number of concurrent merge workers.
-	// Default: max(1, NumCPU/2).
-	NumWorkers int
-
-	// MaxFanIn is the maximum number of runs merged in a single worker (K for K-way).
-	// Higher values reduce merge rounds but increase memory per worker.
-	// Default: 8.
-	MaxFanIn int
-
-	// BufferSize is the read/write buffer size per run file.
-	// Default: 1MB.
-	BufferSize int
-
-	// TempDir is the directory for intermediate merge output.
-	// If empty, uses os.TempDir().
-	TempDir string
-
-	// UseCompression determines whether to write compressed intermediate runs.
-	// Default: true.
-	UseCompression bool
-
-	// CompressionLevel is the compression level for intermediate runs.
-	// Default: CompressionFastest (optimize for merge speed).
+	OnRoundComplete  func(round, remainingFiles int)
+	TempDir          string
+	NumWorkers       int
+	MaxFanIn         int
+	BufferSize       int
 	CompressionLevel CompressionLevel
-
-	// OnRoundComplete fires after each merge round with (round,
-	// remainingFiles). Lets the pipeline emit progress updates so the
-	// SSE stream isn't silent for the duration of multi-round merges.
-	// Optional; nil disables.
-	OnRoundComplete func(round, remainingFiles int)
+	UseCompression   bool
 }
 
 // DefaultParallelMergeConfig returns sensible defaults for parallel merge.
@@ -68,16 +45,10 @@ func DefaultParallelMergeConfig() ParallelMergeConfig {
 
 // ParallelMerger coordinates parallel merging of sorted run files.
 type ParallelMerger struct {
-	config   ParallelMergeConfig
-	tempDir  string
-	runCount atomic.Int64 // Counter for generating unique run file names
-	// instanceID disambiguates intermediate filenames when multiple
-	// mergers share a tempDir (e.g. parallel pipelines or test
-	// runners). Without it, two mergers both generating
-	// merge_r1_0001.crun would clobber each other.
-	instanceID string
-
-	// Statistics
+	config            ParallelMergeConfig
+	tempDir           string
+	instanceID        string
+	runCount          atomic.Int64
 	totalMergeTime    time.Duration
 	totalBytesWritten int64
 	mergeRounds       int
@@ -121,18 +92,18 @@ func newMergerInstanceID() string {
 
 // mergeJob represents a group of runs to merge.
 type mergeJob struct {
-	inputPaths []string
 	outputPath string
+	inputPaths []string
 	jobIndex   int
 }
 
 // mergeResult holds the result of a merge job.
 type mergeResult struct {
+	err          error
 	outputPath   string
 	recordCount  uint64
 	bytesWritten int64
 	duration     time.Duration
-	err          error
 	jobIndex     int
 }
 
@@ -151,8 +122,8 @@ type mergeResult struct {
 // removes any intermediate files this call produced. It does NOT
 // remove the original input files; that remains the caller's job.
 //
-
-func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []string) (RowIterator, func() error, error) { //nolint:ireturn // dispatches between single-run + K-way merge variants
+//nolint:ireturn // dispatches between single-run + K-way merge variants
+func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []string) (RowIterator, func() error, error) {
 	if len(inputPaths) == 0 {
 		return nil, func() error { return nil }, ErrNoInputPaths
 	}
@@ -547,9 +518,9 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 
 // runReaderMergeIterator wraps RunReader interface for use with merge heap.
 type runReaderMergeIterator struct {
-	readers []RunReader
-	heap    *mergeHeap
 	err     error
+	heap    *mergeHeap
+	readers []RunReader
 }
 
 // mergeRowPool reuses PrefixRow allocations across the merge phase

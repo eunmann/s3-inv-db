@@ -27,30 +27,17 @@ import (
 // (via StreamingMPHFBuilder). Subtree arrays remain in memory (~12 bytes per prefix)
 // which is much smaller than storing all prefix strings (~50+ bytes each).
 type IndexBuilder struct {
-	outDir  string
-	tempDir string
-
-	// coreStatsW packs object_count, total_bytes, subtree_end,
-	// depth, and max_depth_in_subtree per prefix into one fixed-stride
-	// mmap'd file (core_stats.bin). Replaces the previous five
-	// separate per-column writers. Random writes (subtree_end +
-	// max_depth_in_subtree) happen during subtree close.
-	coreStatsW *format.CoreStatsBuilder
-
-	// tierStatsRowW writes all NumTiers × (count, bytes) per prefix
-	// into one fixed-stride row file.
-	tierStatsRowW *format.TierStatsRowWriter
-
+	coreStatsW        *format.CoreStatsBuilder
+	tierStatsRowW     *format.TierStatsRowWriter
 	mphfBuilder       *format.StreamingMPHFBuilder
 	depthIndexBuilder *format.DepthIndexBuilder
-
-	stack    []stackEntry
-	posCount uint64
-	maxDepth uint32
-
-	presentTiers map[tiers.ID]struct{}
-
-	closed bool
+	presentTiers      map[tiers.ID]struct{}
+	outDir            string
+	tempDir           string
+	stack             []stackEntry
+	posCount          uint64
+	maxDepth          uint32
+	closed            bool
 }
 
 // stackEntry tracks an open prefix on the stack.

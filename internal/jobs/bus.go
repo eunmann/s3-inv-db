@@ -8,9 +8,9 @@ type CancelFunc func()
 // Bus is a tiny fan-out for job snapshots. Publish is non-blocking — a
 // slow subscriber drops events rather than stalling Manager.
 type Bus struct {
-	mu      sync.Mutex
-	bufSize int
 	subs    map[chan Job]struct{}
+	bufSize int
+	mu      sync.Mutex
 }
 
 // NewBus creates a Bus with the given per-subscriber buffer.

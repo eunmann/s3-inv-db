@@ -24,21 +24,19 @@ var (
 // ParquetReader reads S3 inventory records from Parquet files.
 // It implements streaming by iterating through row groups.
 type ParquetReader struct {
-	file          *parquet.File
-	tempFile      *os.File // Temp file for buffering (only if created by us)
+	currentRows   parquet.Rows
+	tempFile      *os.File
 	schema        *parquet.Schema
+	file          *parquet.File
+	rowGroups     []parquet.RowGroup
+	rowBuf        []parquet.Row
 	keyCol        int
+	accessTierCol int
+	currentRGIdx  int
+	storageCol    int
 	sizeCol       int
-	storageCol    int // -1 if not available
-	accessTierCol int // -1 if not available
-
-	// Row group iteration state
-	rowGroups    []parquet.RowGroup
-	currentRGIdx int
-	currentRows  parquet.Rows
-	rowBuf       []parquet.Row
-	bufIdx       int
-	bufLen       int
+	bufIdx        int
+	bufLen        int
 }
 
 // ParquetReaderConfig configures the Parquet reader.

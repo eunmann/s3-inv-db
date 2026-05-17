@@ -28,17 +28,8 @@ const (
 
 // MemoryLimitResult describes the resolved process memory limit.
 type MemoryLimitResult struct {
-	// Bytes is the soft memory limit installed via debug.SetMemoryLimit.
-	// Zero means no limit was applied (detection failed completely).
-	Bytes int64
-
-	// Source reports which input drove the chosen limit when multiple
-	// candidates exist; the smallest wins so this is the binding one.
-	Source MemoryLimitSource
-
-	// EnvBytes, CgroupBytes, and SysmemFractionBytes report each
-	// candidate independently so callers can log the full picture.
-	// Zero means the candidate wasn't available.
+	Source              MemoryLimitSource
+	Bytes               int64
 	EnvBytes            int64
 	CgroupBytes         int64
 	SysmemFractionBytes int64
@@ -96,12 +87,12 @@ func ApplyMemoryLimit(fraction float64) MemoryLimitResult {
 
 func pickSmallest(r MemoryLimitResult) (int64, MemoryLimitSource) {
 	candidates := []struct {
-		bytes  int64
 		source MemoryLimitSource
+		bytes  int64
 	}{
-		{r.EnvBytes, MemoryLimitSourceEnv},
-		{r.CgroupBytes, MemoryLimitSourceCgroup},
-		{r.SysmemFractionBytes, MemoryLimitSourceSysmem},
+		{source: MemoryLimitSourceEnv, bytes: r.EnvBytes},
+		{source: MemoryLimitSourceCgroup, bytes: r.CgroupBytes},
+		{source: MemoryLimitSourceSysmem, bytes: r.SysmemFractionBytes},
 	}
 	var (
 		bestBytes  int64

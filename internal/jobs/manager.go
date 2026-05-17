@@ -29,17 +29,13 @@ var ErrShutdown = errors.New("job manager is shut down")
 // handles. Job snapshots are persisted to Store on every transition and
 // broadcast on Bus so the SSE handler can push updates to the UI.
 type Manager struct {
-	store *Store
-	bus   *Bus
-
-	mu       sync.Mutex
+	logger   zerolog.Logger
+	store    *Store
+	bus      *Bus
 	cancels  map[ID]context.CancelFunc
 	wg       sync.WaitGroup
+	mu       sync.Mutex
 	shutdown bool
-
-	// logger receives best-effort errors from background goroutines —
-	// store failures, etc. — that can't bubble up to a caller.
-	logger zerolog.Logger
 }
 
 // NewManager wires a Store and a Bus. Logger is used for background

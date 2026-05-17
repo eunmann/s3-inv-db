@@ -17,15 +17,15 @@ import (
 
 func TestS3Config_Validate(t *testing.T) {
 	cases := []struct {
-		name string
-		cfg  seeder.S3Config
 		want error
+		cfg  seeder.S3Config
+		name string
 	}{
-		{"ok", seeder.S3Config{Bucket: "b", SrcBucket: "s", Prefix: "p/"}, nil},
-		{"ok empty prefix", seeder.S3Config{Bucket: "b", SrcBucket: "s"}, nil},
-		{"missing bucket", seeder.S3Config{SrcBucket: "s"}, seeder.ErrEmptyBucket},
-		{"missing src bucket", seeder.S3Config{Bucket: "b"}, seeder.ErrEmptySrcBucket},
-		{"prefix without trailing slash", seeder.S3Config{Bucket: "b", SrcBucket: "s", Prefix: "p"}, seeder.ErrPrefixNotSlash},
+		{name: "ok", cfg: seeder.S3Config{Bucket: "b", SrcBucket: "s", Prefix: "p/"}, want: nil},
+		{name: "ok empty prefix", cfg: seeder.S3Config{Bucket: "b", SrcBucket: "s"}, want: nil},
+		{name: "missing bucket", cfg: seeder.S3Config{SrcBucket: "s"}, want: seeder.ErrEmptyBucket},
+		{name: "missing src bucket", cfg: seeder.S3Config{Bucket: "b"}, want: seeder.ErrEmptySrcBucket},
+		{name: "prefix without trailing slash", cfg: seeder.S3Config{Bucket: "b", SrcBucket: "s", Prefix: "p"}, want: seeder.ErrPrefixNotSlash},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -76,14 +76,15 @@ func TestRunStampUUID_DeterministicPerRunAndIndex(t *testing.T) {
 func TestTierToS3Columns_IntelligentTiering(t *testing.T) {
 	m := tiers.NewMapping()
 	cases := []struct {
-		id                  tiers.ID
-		wantClass, wantTier string
+		wantClass string
+		wantTier  string
+		id        tiers.ID
 	}{
-		{tiers.ITFrequent, "INTELLIGENT_TIERING", "FREQUENT_ACCESS"},
-		{tiers.ITInfrequent, "INTELLIGENT_TIERING", "INFREQUENT_ACCESS"},
-		{tiers.ITArchiveInstant, "INTELLIGENT_TIERING", "ARCHIVE_INSTANT_ACCESS"},
-		{tiers.ITArchive, "INTELLIGENT_TIERING", "ARCHIVE_ACCESS"},
-		{tiers.ITDeepArchive, "INTELLIGENT_TIERING", "DEEP_ARCHIVE_ACCESS"},
+		{id: tiers.ITFrequent, wantClass: "INTELLIGENT_TIERING", wantTier: "FREQUENT_ACCESS"},
+		{id: tiers.ITInfrequent, wantClass: "INTELLIGENT_TIERING", wantTier: "INFREQUENT_ACCESS"},
+		{id: tiers.ITArchiveInstant, wantClass: "INTELLIGENT_TIERING", wantTier: "ARCHIVE_INSTANT_ACCESS"},
+		{id: tiers.ITArchive, wantClass: "INTELLIGENT_TIERING", wantTier: "ARCHIVE_ACCESS"},
+		{id: tiers.ITDeepArchive, wantClass: "INTELLIGENT_TIERING", wantTier: "DEEP_ARCHIVE_ACCESS"},
 	}
 	for _, c := range cases {
 		got := seeder.TierToS3Columns(m, c.id)

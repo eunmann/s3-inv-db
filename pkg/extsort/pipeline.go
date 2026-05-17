@@ -26,29 +26,18 @@ import (
 // It streams S3 inventory data, aggregates in bounded memory,
 // spills to sorted run files, and merges to build the final index.
 type Pipeline struct {
-	config    Config
-	s3Client  *s3fetch.Client
-	tempDir   string
-	startTime time.Time
-
-	// runFilesMu guards runFiles + runCount. Both are mutated from N
-	// chunkWorker goroutines (each flushing its private aggregator)
-	// plus the merge phase which reads runFiles. The mutex is held
-	// only across the slice append + counter bump — never across
-	// I/O — so contention is negligible.
-	runFilesMu sync.Mutex
-	runFiles   []string
-	runCount   int
-
-	// Progress tracking — atomics because N chunkWorkers update
-	// these concurrently as they parse and aggregate.
+	config           Config
+	startTime        time.Time
+	s3Client         *s3fetch.Client
+	memTracker       *memdiag.Tracker
+	tempDir          string
+	runFiles         []string
+	runCount         int
 	chunksProcessed  atomic.Int64
 	objectsProcessed atomic.Int64
 	bytesProcessed   atomic.Int64
 	flushCount       atomic.Int64
-
-	// Memory diagnostics
-	memTracker *memdiag.Tracker
+	runFilesMu       sync.Mutex
 }
 
 // Result holds the pipeline execution result.
@@ -251,21 +240,21 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 // chunkConfig holds configuration for processing a chunk.
 type chunkConfig struct {
+	tierMapping   *tiers.Mapping
 	format        s3fetch.InventoryFormat
 	keyCol        int
 	sizeCol       int
 	storageCol    int
 	accessTierCol int
-	tierMapping   *tiers.Mapping
-	fileSize      int64 // Size of the file (used for Parquet)
+	fileSize      int64
 }
 
 // chunkJob represents a chunk to be processed by a worker.
 type chunkJob struct {
-	index  int
+	config chunkConfig
 	bucket string
 	key    string
-	config chunkConfig
+	index  int
 }
 
 // objectRecord holds a single object's data for aggregation.
@@ -278,14 +267,14 @@ type objectRecord struct {
 // ingestConfig holds configuration for the ingest phase.
 type ingestConfig struct {
 	manifest      *s3fetch.Manifest
-	format        s3fetch.InventoryFormat
+	tierMapping   *tiers.Mapping
 	destBucket    string
+	format        s3fetch.InventoryFormat
 	keyCol        int
 	sizeCol       int
 	storageCol    int
 	accessTierCol int
 	numWorkers    int
-	tierMapping   *tiers.Mapping
 }
 
 // runIngestPhase streams S3 inventory and creates sorted run files.

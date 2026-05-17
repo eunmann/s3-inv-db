@@ -229,15 +229,11 @@ func (s *PrefixStats) ToPrefixRow(prefix string) *PrefixRow {
 // Config holds pipeline configuration. Grouped into substructs by
 // concern: S3 download, Merge concurrency, Observe (progress+events).
 type Config struct {
-	// TempDir for run files; empty falls back to os.TempDir().
-	TempDir string
-
-	// MaxDepth caps prefix depth aggregated. 0 means unlimited.
+	Observe  ObserveConfig
+	TempDir  string
+	Merge    MergeConfig
+	S3       S3Config
 	MaxDepth int
-
-	S3      S3Config
-	Merge   MergeConfig
-	Observe ObserveConfig
 }
 
 // S3Config tunes the S3 download manager.

@@ -47,22 +47,22 @@ type BrowseInventoryOption struct {
 // BrowseLevel is the data the browse_level.html partial renders. Lives
 // in the HTTP layer because it composes TierStats and CostEstimate.
 type BrowseLevel struct {
+	CostEstimate  *CostEstimate
+	SortLinks     map[string]BrowseSortLink
+	ObjectCountH  string
+	Sort          string
 	InventoryID   inventory.ID
 	Prefix        string
-	Breadcrumbs   []BrowseCrumb
-	ObjectCount   uint64
-	ObjectCountH  string
-	TotalBytes    uint64
 	TotalBytesH   string
-	TierBreakdown []TierStats
-	CostEstimate  *CostEstimate
-	HasTierData   bool
-	Children      []BrowseChild
-	TotalChildren int
-	Sort          string
 	Dir           string
-	SortLinks     map[string]BrowseSortLink
+	Breadcrumbs   []BrowseCrumb
+	Children      []BrowseChild
+	TierBreakdown []TierStats
 	Pagination    BrowsePagination
+	TotalChildren int
+	ObjectCount   uint64
+	TotalBytes    uint64
+	HasTierData   bool
 	NotFound      bool
 }
 
@@ -258,15 +258,15 @@ func (h *Handlers) buildChildren(ctx context.Context, idx *indexread.Index, pos 
 // Mirrors BrowseLevel but drops the Tailwind/HTML-only fields and
 // converts the numeric fields to JSON-tagged structs.
 type BrowseLevelResponse struct {
+	Stats         PrefixStatsJSON   `json:"stats"`
 	InventoryID   inventory.ID      `json:"inventory_id"`
 	Prefix        string            `json:"prefix"`
-	Breadcrumbs   []BrowseCrumbJSON `json:"breadcrumbs"`
-	Stats         PrefixStatsJSON   `json:"stats"`
-	Children      []BrowseChildJSON `json:"children"`
-	TotalChildren int               `json:"total_children"`
 	Sort          string            `json:"sort"`
 	Dir           string            `json:"dir"`
+	Breadcrumbs   []BrowseCrumbJSON `json:"breadcrumbs"`
+	Children      []BrowseChildJSON `json:"children"`
 	Pagination    PaginationJSON    `json:"pagination"`
+	TotalChildren int               `json:"total_children"`
 	NotFound      bool              `json:"not_found,omitempty"`
 }
 
@@ -278,11 +278,11 @@ type BrowseCrumbJSON struct {
 
 // PrefixStatsJSON is the aggregated stats at the current prefix.
 type PrefixStatsJSON struct {
+	CostEstimate  *CostEstimate `json:"cost_estimate,omitempty"`
+	TierBreakdown []TierStats   `json:"tier_breakdown,omitempty"`
 	ObjectCount   uint64        `json:"object_count"`
 	TotalBytes    uint64        `json:"total_bytes"`
 	HasTierData   bool          `json:"has_tier_data"`
-	TierBreakdown []TierStats   `json:"tier_breakdown,omitempty"`
-	CostEstimate  *CostEstimate `json:"cost_estimate,omitempty"`
 }
 
 // BrowseChildJSON is one immediate-child prefix.

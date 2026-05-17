@@ -13,9 +13,9 @@ import (
 // Readers use the RunReader interface so both compressed and raw run
 // files work uniformly.
 type MergeIterator struct {
+	err     error
 	readers []RunReader
 	heap    typedMergeHeap
-	err     error
 }
 
 // mergeItem represents an item in the merge heap.

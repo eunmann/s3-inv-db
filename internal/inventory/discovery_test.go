@@ -19,11 +19,11 @@ var errFakeS3Throttled = errors.New("s3: throttled")
 // the DiscoveryService consumes. Each method has a single response to
 // keep tests simple; specialise per-test by setting fields directly.
 type fakeDiscoverer struct {
-	listResp  []inventory.Inventory
 	listErr   error
-	findResp  inventory.Inventory
 	findErr   error
+	findResp  inventory.Inventory
 	bucket    string
+	listResp  []inventory.Inventory
 	listCalls atomic.Int64
 }
 
@@ -40,8 +40,8 @@ func (f *fakeDiscoverer) Bucket() string { return f.bucket }
 
 // fakeBuilder satisfies the inventory.IndexBuilder interface.
 type fakeBuilder struct {
-	buildResp string
 	buildErr  error
+	buildResp string
 }
 
 func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _, _ string, _ func(string, int64, int64)) (string, error) {
@@ -56,15 +56,15 @@ func TestDiscoveryService_DisabledWithoutDeps(t *testing.T) {
 	t.Cleanup(func() { _ = mgr.Close() })
 
 	cases := []struct {
-		name    string
 		disc    inventory.Discoverer
 		builder inventory.IndexBuilder
+		name    string
 		enabled bool
 	}{
-		{"both nil", nil, nil, false},
-		{"discoverer only", &fakeDiscoverer{}, nil, false},
-		{"builder only", nil, &fakeBuilder{}, false},
-		{"both set", &fakeDiscoverer{}, &fakeBuilder{}, true},
+		{name: "both nil", disc: nil, builder: nil, enabled: false},
+		{name: "discoverer only", disc: &fakeDiscoverer{}, builder: nil, enabled: false},
+		{name: "builder only", disc: nil, builder: &fakeBuilder{}, enabled: false},
+		{name: "both set", disc: &fakeDiscoverer{}, builder: &fakeBuilder{}, enabled: true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

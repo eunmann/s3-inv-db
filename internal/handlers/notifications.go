@@ -9,11 +9,11 @@ import (
 
 // Notification is one surfaced failure or warning.
 type Notification struct {
-	Kind    string    `json:"kind"` // "poll" | "load" | "budget"
+	At      time.Time `json:"at"`
+	Kind    string    `json:"kind"`
 	Title   string    `json:"title"`
 	Message string    `json:"message"`
-	Target  string    `json:"target,omitempty"` // config id or run id
-	At      time.Time `json:"at"`
+	Target  string    `json:"target,omitempty"`
 }
 
 // NotificationsResponse is the JSON the banner consumes.

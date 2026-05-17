@@ -14,63 +14,46 @@ import (
 
 // DashboardData contains data for the dashboard page.
 type DashboardData struct {
-	Title          string
-	S3Source       string
-	HasDiscovery   bool
-	DiscoveryError string
-
-	// SnapshotAge is a human-readable age for the discovery snapshot
-	// rendered on the page (e.g., "12s", "2m"). Empty when discovery is
-	// disabled or the snapshot has never been populated.
-	SnapshotAge string
-
-	// Top stats — one per card.
-	Configurations int // distinct (src, inv) pairs
-	TotalRuns      int // total Inventory entries from discovery
-	LoadedRuns     int // how many are currently in memory
-	LoadingRuns    int // how many have a build in flight
-	ErrorRuns      int // how many ended in error
-	TotalObjectsH  string
-	TotalBytesH    string
-	DiskUsedH      string
-
-	// Aggregate manifest stats across every run whose manifest was
-	// fetched at discovery time. The discoverer caps manifest fetches
-	// per configuration, so these undercount older runs beyond the cap.
-	ManifestFiles  int    // total chunk files across discovered runs
-	ManifestBytesH string // sum of compressed chunk sizes
-
-	BudgetCapH      string
-	BudgetUsedH     string
-	BudgetReservedH string
-	BudgetAvailH    string
-	BudgetHeadroomH string
-	BudgetUsedPct   int
-	BudgetActive    bool
-
+	BudgetAvailH      string
+	DiskUsedH         string
+	BudgetCapH        string
+	DiscoveryError    string
+	SnapshotAge       string
+	BudgetHeadroomH   string
+	ManifestBytesH    string
+	Title             string
+	BudgetReservedH   string
+	BudgetUsedH       string
+	TotalObjectsH     string
+	TotalBytesH       string
+	S3Source          string
+	Configs           []DashboardConfig
+	LoadedRuns        int
 	AutoLoadConfigs   int
+	ErrorRuns         int
+	LoadingRuns       int
+	TotalRuns         int
+	Configurations    int
+	BudgetUsedPct     int
+	ManifestFiles     int
 	AutoLoadFailures  int
 	PendingPollErrors int
-
-	Configs []DashboardConfig
+	BudgetActive      bool
+	HasDiscovery      bool
 }
 
 // DashboardConfig is the per-configuration row shown on the dashboard.
 type DashboardConfig struct {
 	SourceBucket string
 	Name         string
+	LatestRun    string
+	LatestState  inventory.State
+	DiskBytesH   string
+	LatestBytesH string
+	LatestFormat string
 	TotalRuns    int
 	LoadedRuns   int
-	LatestRun    string // run timestamp of the newest entry
-	LatestState  inventory.State
-	DiskBytesH   string // size on disk across this configuration's loaded runs
-
-	// LatestFiles and LatestBytesH describe the newest run's manifest
-	// (chunk file count + summed compressed size). Empty/zero when the
-	// manifest was not fetched at discovery time.
 	LatestFiles  int
-	LatestBytesH string
-	LatestFormat string // CSV / Parquet (from manifest)
 }
 
 // Dashboard renders the dashboard HTML page.
@@ -181,15 +164,16 @@ func (h *Handlers) fillAutoLoadCounters(ctx context.Context, data *DashboardData
 }
 
 type dashConfAgg struct {
-	Src, ID      string
-	TotalRuns    int
-	LoadedRuns   int
+	Src          string
+	ID           string
 	LatestRun    string
 	LatestState  inventory.State
+	LatestFormat string
+	TotalRuns    int
+	LoadedRuns   int
 	DiskBytes    int64
 	LatestFiles  int
 	LatestBytes  int64
-	LatestFormat string
 }
 
 type dashTotals struct {

@@ -40,15 +40,15 @@ type ConfigurationView struct {
 // ConfigRunView is one run's identity + lifecycle state. Bytes-on-disk
 // is reported when the loader can measure it.
 type ConfigRunView struct {
-	ID          inventory.ID `json:"id"` // "<src>/<inv>/<run>"
+	ID          inventory.ID `json:"id"`
 	Run         string       `json:"run"`
 	State       string       `json:"state"`
 	Error       string       `json:"error,omitempty"`
+	LoadedAt    string       `json:"loaded_at,omitempty"`
+	ManifestKey string       `json:"manifest_key,omitempty"`
 	NodeCount   uint64       `json:"node_count,omitempty"`
-	LoadedAt    string       `json:"loaded_at,omitempty"` // RFC3339
 	CacheBytes  int64        `json:"cache_bytes,omitempty"`
 	HasTierData bool         `json:"has_tier_data"`
-	ManifestKey string       `json:"manifest_key,omitempty"`
 }
 
 // ListConfigurationsAPI returns inventory configurations grouped by
@@ -303,9 +303,9 @@ func (h *Handlers) DeleteInventoryAPI(w http.ResponseWriter, r *http.Request) {
 type InventoriesData struct {
 	Title          string
 	S3Source       string
-	HasDiscovery   bool
 	DiscoveryError string
 	Groups         []InventoryGroup
+	HasDiscovery   bool
 }
 
 // InventoryGroup pins one inventory configuration (SourceBucket +
@@ -313,13 +313,13 @@ type InventoriesData struct {
 type InventoryGroup struct {
 	SourceBucket     string
 	Name             string
-	Runs             []DiscoveredRowView // first VisibleRuns are shown unconditionally
-	VisibleRuns      int                 // how many of Runs render outside <details>
-	AutoLoad         bool
-	Retention        uint32
 	LastPollAt       string
 	LastPollError    string
 	PollBackoffUntil string
+	Runs             []DiscoveredRowView
+	VisibleRuns      int
+	Retention        uint32
+	AutoLoad         bool
 }
 
 // DefaultVisibleRuns caps how many runs in a configuration render in

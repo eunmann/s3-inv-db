@@ -80,15 +80,16 @@ func (h *Handlers) AddLoadedStatsForTest(logger *zerolog.Logger, v *inventory.Me
 
 // DashConfAggForTest mirrors dashConfAgg with exported fields for tests.
 type DashConfAggForTest struct {
-	Src, ID      string
-	TotalRuns    int
-	LoadedRuns   int
+	Src          string
+	ID           string
 	LatestRun    string
 	LatestState  inventory.State
+	LatestFormat string
+	TotalRuns    int
+	LoadedRuns   int
 	DiskBytes    int64
 	LatestFiles  int
 	LatestBytes  int64
-	LatestFormat string
 }
 
 // DashTotalsForTest mirrors dashTotals with exported fields for tests.

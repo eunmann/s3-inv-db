@@ -16,17 +16,17 @@ const ManifestVersion = 1
 
 // Manifest describes the contents of an index directory.
 type Manifest struct {
-	Version   int                 `json:"version"`
 	CreatedAt time.Time           `json:"created_at"`
+	Files     map[string]FileInfo `json:"files"`
+	Version   int                 `json:"version"`
 	NodeCount uint64              `json:"node_count"`
 	MaxDepth  uint32              `json:"max_depth"`
-	Files     map[string]FileInfo `json:"files"`
 }
 
 // FileInfo describes a single file in the index.
 type FileInfo struct {
+	Checksum string `json:"checksum"`
 	Size     int64  `json:"size"`
-	Checksum string `json:"checksum"` // SHA-256 hex
 }
 
 // WriteManifest creates a manifest for all files in the index directory.

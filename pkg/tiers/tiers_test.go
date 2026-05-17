@@ -174,16 +174,16 @@ func TestReadManifest_NotExists(t *testing.T) {
 func TestResolve_SmallITFrequent(t *testing.T) {
 	cases := []struct {
 		name string
-		id   tiers.ID
 		size uint64
+		id   tiers.ID
 		want tiers.ID
 	}{
-		{"small IT frequent -> small bucket", tiers.ITFrequent, 1024, tiers.ITFrequentSmall},
-		{"IT frequent at threshold stays", tiers.ITFrequent, tiers.SmallObjectThresholdBytes, tiers.ITFrequent},
-		{"IT frequent above threshold stays", tiers.ITFrequent, tiers.SmallObjectThresholdBytes + 1, tiers.ITFrequent},
-		{"small Standard untouched", tiers.Standard, 1024, tiers.Standard},
-		{"small IT infrequent untouched", tiers.ITInfrequent, 1024, tiers.ITInfrequent},
-		{"zero-byte IT frequent reclassifies", tiers.ITFrequent, 0, tiers.ITFrequentSmall},
+		{name: "small IT frequent -> small bucket", id: tiers.ITFrequent, size: 1024, want: tiers.ITFrequentSmall},
+		{name: "IT frequent at threshold stays", id: tiers.ITFrequent, size: tiers.SmallObjectThresholdBytes, want: tiers.ITFrequent},
+		{name: "IT frequent above threshold stays", id: tiers.ITFrequent, size: tiers.SmallObjectThresholdBytes + 1, want: tiers.ITFrequent},
+		{name: "small Standard untouched", id: tiers.Standard, size: 1024, want: tiers.Standard},
+		{name: "small IT infrequent untouched", id: tiers.ITInfrequent, size: 1024, want: tiers.ITInfrequent},
+		{name: "zero-byte IT frequent reclassifies", id: tiers.ITFrequent, size: 0, want: tiers.ITFrequentSmall},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

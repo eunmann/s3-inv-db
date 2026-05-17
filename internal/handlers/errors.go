@@ -17,8 +17,8 @@ var errPrefixNotFound = errors.New("prefix not found")
 // by managerErrorStatus. Named so callers don't have to remember the
 // positional convention.
 type managerErrorResponse struct {
-	Status  int
 	Message string
+	Status  int
 }
 
 // managerErrorStatus maps a Manager / index-query error to the HTTP

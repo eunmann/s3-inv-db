@@ -18,11 +18,11 @@ import (
 var errBoom = errors.New("boom")
 
 type fakeDiscovery struct {
-	mu       sync.Mutex
-	enabled  bool
+	listErr  error
 	views    []inventory.MergedInventory
 	listCall int
-	listErr  error
+	mu       sync.Mutex
+	enabled  bool
 }
 
 func (f *fakeDiscovery) Enabled() bool {
@@ -44,12 +44,12 @@ func (f *fakeDiscovery) List(_ context.Context) ([]inventory.MergedInventory, er
 }
 
 type fakeLoader struct {
-	mu        sync.Mutex
-	loaded    []inventory.ID
-	failOnce  bool
-	failedOn  inventory.ID
 	loadErr   error
 	autoLoadE error
+	failedOn  inventory.ID
+	loaded    []inventory.ID
+	mu        sync.Mutex
+	failOnce  bool
 }
 
 func (f *fakeLoader) AutoLoad(_ context.Context, disc inventory.Inventory) error {

@@ -30,11 +30,11 @@ var (
 )
 
 type fakeDiscoverer struct {
-	listResp []inventory.Inventory
 	listErr  error
-	findResp inventory.Inventory
 	findErr  error
+	findResp inventory.Inventory
 	bucket   string
+	listResp []inventory.Inventory
 }
 
 func (f *fakeDiscoverer) List(context.Context) ([]inventory.Inventory, error) {
@@ -47,8 +47,8 @@ func (f *fakeDiscoverer) Find(_ context.Context, _, _, _ string) (inventory.Inve
 func (f *fakeDiscoverer) Bucket() string { return f.bucket }
 
 type fakeBuilder struct {
-	buildResp string
 	buildErr  error
+	buildResp string
 }
 
 func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _, _ string, _ func(string, int64, int64)) (string, error) {

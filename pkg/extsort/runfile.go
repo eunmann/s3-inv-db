@@ -62,9 +62,9 @@ const (
 type RunFileWriter struct {
 	file   *os.File
 	writer *bufio.Writer
-	count  uint64
 	path   string
-	buf    []byte // reusable buffer for encoding
+	buf    []byte
+	count  uint64
 	closed bool
 }
 
@@ -186,10 +186,10 @@ func (w *RunFileWriter) Close() error {
 type RunFileReader struct {
 	file   *os.File
 	reader *bufio.Reader
+	path   string
+	buf    []byte
 	count  uint64
 	read   uint64
-	path   string
-	buf    []byte // reusable buffer for decoding
 	closed bool
 }
 

@@ -22,8 +22,8 @@ var errSlowBuilderTimedOut = errors.New("slow-builder delay elapsed without canc
 // slowBuilder simulates a build that takes time and respects ctx
 // cancellation. Used so the test can hit Cancel mid-flight.
 type slowBuilder struct {
-	delay     time.Duration
 	cancelled chan struct{}
+	delay     time.Duration
 	once      sync.Once
 }
 

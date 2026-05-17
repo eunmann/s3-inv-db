@@ -29,17 +29,17 @@ type CacheStore interface {
 // Handlers contains all HTTP handlers and their dependencies. The
 // request-scoped logger comes from zerolog.Ctx(r.Context()).
 type Handlers struct {
+	loader       CacheStore
 	manager      *inventory.Manager
 	discovery    *inventory.DiscoveryService
-	loader       CacheStore
 	configStore  *inventory.ConfigStore
 	tracker      *budget.Tracker
 	renderer     *templates.Renderer
-	priceTable   pricing.PriceTable
-	s3SourceURI  string // for display in templates
 	jobMgr       *jobs.Manager
 	jobStore     *jobs.Store
 	jobBus       *jobs.Bus
+	s3SourceURI  string
+	priceTable   pricing.PriceTable
 	sseHeartbeat time.Duration
 }
 
@@ -47,27 +47,18 @@ type Handlers struct {
 // and Loader take narrow interfaces so tests can wire fakes; production
 // passes *s3disco.Discoverer and *loader.Loader.
 type Config struct {
-	Manager     *inventory.Manager
-	Renderer    *templates.Renderer
-	PriceTable  pricing.PriceTable
-	Discoverer  inventory.Discoverer
-	Loader      inventory.IndexBuilder
-	S3SourceURI string
-	JobMgr      *jobs.Manager
-	JobStore    *jobs.Store
-	JobBus      *jobs.Bus
-
-	// Discovery, when non-nil, replaces the empty-DiscoveryService
-	// fallback so manual+auto loads share one gate+sizer wiring.
-	Discovery *inventory.DiscoveryService
-
-	// ConfigStore + Tracker drive the auto-load + disk-budget UI;
-	// optional for tests.
-	ConfigStore *inventory.ConfigStore
-	Tracker     *budget.Tracker
-
-	// SSEHeartbeat: /api/jobs/stream keep-alive cadence. Zero falls
-	// back to defaultSSEHeartbeat.
+	Discoverer   inventory.Discoverer
+	Loader       inventory.IndexBuilder
+	JobMgr       *jobs.Manager
+	Renderer     *templates.Renderer
+	Manager      *inventory.Manager
+	JobStore     *jobs.Store
+	JobBus       *jobs.Bus
+	Discovery    *inventory.DiscoveryService
+	ConfigStore  *inventory.ConfigStore
+	Tracker      *budget.Tracker
+	S3SourceURI  string
+	PriceTable   pricing.PriceTable
 	SSEHeartbeat time.Duration
 }
 

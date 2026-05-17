@@ -219,18 +219,13 @@ func (h *Handlers) renderDiscoveredRow(w http.ResponseWriter, r *http.Request, s
 type DiscoveredRowView struct {
 	inventory.MergedInventory
 
-	LatestJob   *jobs.Job
-	CacheBytes  int64  // 0 when no on-disk cache exists
-	CacheBytesH string // humanfmt.Bytes(CacheBytes); empty when zero
-
-	// Pin / auto-load surfaces fed in from inventory.Info so the row
-	// template can render the 📌 badge, the "auto-load suspended"
-	// label, and the "user-unloaded" sticky hint without re-querying
-	// the Manager.
+	LatestJob            *jobs.Job
+	CacheBytesH          string
+	AutoLoadBackoffUntil string
+	CacheBytes           int64
+	AutoLoadFailureCount uint32
 	Pinned               bool
 	UserUnloaded         bool
-	AutoLoadFailureCount uint32
-	AutoLoadBackoffUntil string
 }
 
 // renderDiscoveredRowFrom renders a discovered_row using a pre-fetched
@@ -274,8 +269,8 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 // measureCacheSize. Zero / empty when there's no loader wired, the
 // dir is missing, or the measurement failed.
 type cacheSize struct {
-	Bytes int64
 	Human string
+	Bytes int64
 }
 
 // measureCacheSize returns the on-disk cache footprint of a single run.

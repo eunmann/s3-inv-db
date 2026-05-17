@@ -109,8 +109,8 @@ func (m *MmapFile) Size() int64 {
 // be called once, after all read operations have completed.
 type ArrayReader struct {
 	mmap   *MmapFile
-	header Header
 	data   []byte
+	header Header
 }
 
 // OpenArray opens a columnar array file with no access hint. See

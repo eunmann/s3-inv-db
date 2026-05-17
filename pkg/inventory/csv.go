@@ -14,19 +14,10 @@ import (
 // Row represents a single object from an S3 inventory file.
 // This is the unified representation used by both CSV and Parquet readers.
 type Row struct {
-	// Key is the S3 object key.
-	Key string
-
-	// Size is the object size in bytes.
-	Size uint64
-
-	// StorageClass is the S3 storage class (e.g., "STANDARD", "GLACIER").
-	// May be empty if not included in the inventory.
+	Key          string
 	StorageClass string
-
-	// AccessTier is the Intelligent-Tiering access tier (e.g., "ARCHIVE_ACCESS").
-	// May be empty if not applicable or not included in the inventory.
-	AccessTier string
+	AccessTier   string
+	Size         uint64
 }
 
 // Reader is the unified interface for reading S3 inventory files.
@@ -43,11 +34,11 @@ type Reader interface {
 // CSVReader reads S3 inventory records from CSV streams.
 type CSVReader struct {
 	csvReader     *csv.Reader
+	closers       []io.Closer
 	keyCol        int
 	sizeCol       int
-	storageCol    int // -1 if not available
-	accessTierCol int // -1 if not available
-	closers       []io.Closer
+	storageCol    int
+	accessTierCol int
 }
 
 // CSVReaderConfig configures column indices for the CSV reader.

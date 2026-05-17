@@ -11,15 +11,16 @@ import (
 func TestFormatETA_ZeroOnUnknownInputs(t *testing.T) {
 	now := time.Now()
 	cases := []struct {
-		name        string
-		startedAt   time.Time
-		done, total int64
+		startedAt time.Time
+		name      string
+		done      int64
+		total     int64
 	}{
-		{"no start", time.Time{}, 5, 10},
-		{"no progress", now.Add(-time.Minute), 0, 10},
-		{"no total", now.Add(-time.Minute), 5, 0},
-		{"already done", now.Add(-time.Minute), 10, 10},
-		{"past done", now.Add(-time.Minute), 11, 10},
+		{name: "no start", startedAt: time.Time{}, done: 5, total: 10},
+		{name: "no progress", startedAt: now.Add(-time.Minute), done: 0, total: 10},
+		{name: "no total", startedAt: now.Add(-time.Minute), done: 5, total: 0},
+		{name: "already done", startedAt: now.Add(-time.Minute), done: 10, total: 10},
+		{name: "past done", startedAt: now.Add(-time.Minute), done: 11, total: 10},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

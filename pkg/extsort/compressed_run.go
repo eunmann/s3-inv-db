@@ -59,14 +59,14 @@ const (
 type CompressedRunWriter struct {
 	file             *os.File
 	compressor       *zstd.Encoder
-	zstdLevel        zstd.EncoderLevel
 	writer           *bufio.Writer
-	count            uint64
-	uncompressedSize uint64
 	path             string
 	buf              []byte
-	closed           bool
+	zstdLevel        zstd.EncoderLevel
+	count            uint64
+	uncompressedSize uint64
 	level            CompressionLevel
+	closed           bool
 }
 
 // CompressedRunWriterOptions configures the compressed run writer.
@@ -238,10 +238,10 @@ type CompressedRunReader struct {
 	file         *os.File
 	decompressor *zstd.Decoder
 	reader       *bufio.Reader
-	count        uint64
-	read         uint64
 	path         string
 	buf          []byte
+	count        uint64
+	read         uint64
 	closed       bool
 }
 

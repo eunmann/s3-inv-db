@@ -44,10 +44,10 @@ func OpenTierStats(indexDir string) (*TierStatsReader, error) {
 
 // TierBreakdown represents statistics for a single tier.
 type TierBreakdown struct {
-	TierID      tiers.ID
 	TierName    string
 	Bytes       uint64
 	ObjectCount uint64
+	TierID      tiers.ID
 }
 
 // Breakdown returns the tier breakdown for the given preorder

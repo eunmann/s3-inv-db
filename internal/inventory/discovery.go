@@ -66,23 +66,21 @@ type ManifestSizeFunc func(ctx context.Context, bucket, key string) (uint64, err
 // (--s3-source unset) the service still exists; Enabled() reports that
 // state and the methods either short-circuit or return ErrDiscoveryDisabled.
 type DiscoveryService struct {
-	manager    *Manager
-	discoverer Discoverer
-	builder    IndexBuilder
-	gate       GatedLoadFunc
-	sizer      ManifestSizeFunc
-	indexRatio float64
-
-	cacheMu       sync.RWMutex
-	cacheViews    []MergedInventory
 	cacheAt       time.Time
+	discoverer    Discoverer
+	builder       IndexBuilder
 	cacheLastErr  error
-	cachePopulate bool // true once Refresh has succeeded at least once
-
-	bgMu    sync.Mutex
-	bgStop  chan struct{}
-	bgWG    sync.WaitGroup
-	bgClock func() time.Time
+	gate          GatedLoadFunc
+	sizer         ManifestSizeFunc
+	manager       *Manager
+	bgStop        chan struct{}
+	bgClock       func() time.Time
+	cacheViews    []MergedInventory
+	bgWG          sync.WaitGroup
+	indexRatio    float64
+	cacheMu       sync.RWMutex
+	bgMu          sync.Mutex
+	cachePopulate bool
 }
 
 // NewDiscoveryService constructs a service. The discoverer and builder

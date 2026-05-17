@@ -126,13 +126,13 @@ func FormatMB(b uint64) string {
 
 // Tracker tracks memory usage over time with periodic logging.
 type Tracker struct {
-	config   Config
 	stopCh   chan struct{}
 	doneCh   chan struct{}
-	started  atomic.Bool
-	mu       sync.Mutex
 	phase    string
+	config   Config
 	peakHeap uint64
+	mu       sync.Mutex
+	started  atomic.Bool
 }
 
 // NewTracker creates a new memory tracker.

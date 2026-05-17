@@ -113,8 +113,8 @@ func TestCSVInventoryReaderFromStream_Gzip(t *testing.T) {
 // S3InventoryRecord represents a row in an S3 inventory Parquet file.
 type S3InventoryRecord struct {
 	Key          string `parquet:"key"`
-	Size         int64  `parquet:"size"`
 	StorageClass string `parquet:"storage_class,optional"`
+	Size         int64  `parquet:"size"`
 }
 
 func TestParquetInventoryReader(t *testing.T) {
@@ -146,8 +146,8 @@ func TestParquetInventoryReader(t *testing.T) {
 
 	reader, err := inventory.NewParquetInventoryReader(f, info.Size(), inventory.ParquetReaderConfig{
 		KeyCol:     0,
-		SizeCol:    1,
-		StorageCol: 2,
+		StorageCol: 1,
+		SizeCol:    2,
 	})
 	if err != nil {
 		t.Fatalf("NewParquetInventoryReader failed: %v", err)
@@ -237,13 +237,13 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 	// Create test data
 	testRows := []struct {
 		Key          string
-		Size         uint64
 		StorageClass string
+		Size         uint64
 	}{
-		{"data/file1.txt", 100, "STANDARD"},
-		{"data/file2.txt", 200, "GLACIER"},
-		{"data/subfolder/file3.txt", 300, "STANDARD_IA"},
-		{"archive/old.zip", 1000, "DEEP_ARCHIVE"},
+		{Key: "data/file1.txt", Size: 100, StorageClass: "STANDARD"},
+		{Key: "data/file2.txt", Size: 200, StorageClass: "GLACIER"},
+		{Key: "data/subfolder/file3.txt", Size: 300, StorageClass: "STANDARD_IA"},
+		{Key: "archive/old.zip", Size: 1000, StorageClass: "DEEP_ARCHIVE"},
 	}
 
 	// Create CSV file
@@ -282,7 +282,7 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 	defer f.Close()
 	info, _ := f.Stat()
 	parquetReader, err := inventory.NewParquetInventoryReader(f, info.Size(), inventory.ParquetReaderConfig{
-		KeyCol: 0, SizeCol: 1, StorageCol: 2,
+		KeyCol: 0, StorageCol: 1, SizeCol: 2,
 	})
 	if err != nil {
 		t.Fatalf("NewParquetInventoryReader failed: %v", err)
@@ -400,9 +400,9 @@ func TestParquetInventoryReader_LargeRowGroups(t *testing.T) {
 // column naming didn't match the hardcoded lowercase strings.
 type S3PascalCaseRecord struct {
 	Key                          string `parquet:"Key"`
-	Size                         int64  `parquet:"Size"`
 	StorageClass                 string `parquet:"StorageClass,optional"`
 	IntelligentTieringAccessTier string `parquet:"IntelligentTieringAccessTier,optional"`
+	Size                         int64  `parquet:"Size"`
 }
 
 func TestParquetInventoryReader_DetectsPascalCaseColumns(t *testing.T) {
@@ -463,9 +463,9 @@ func TestParquetInventoryReader_DetectsPascalCaseColumns(t *testing.T) {
 // styles in a single schema. The canonicaliser should still find every
 // column.
 type S3MixedCaseRecord struct {
-	Key          string `parquet:"key"`                    // lowercase
-	Size         int64  `parquet:"SIZE"`                   // uppercase
-	StorageClass string `parquet:"storage_class,optional"` // snake_case
+	Key          string `parquet:"key"`
+	StorageClass string `parquet:"storage_class,optional"`
+	Size         int64  `parquet:"SIZE"`
 }
 
 func TestParquetInventoryReader_DetectsMixedCaseColumns(t *testing.T) {
