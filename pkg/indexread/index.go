@@ -86,9 +86,9 @@ func (idx *Index) Lookup(prefix string) (uint64, bool) {
 	return idx.mphf.Lookup(prefix)
 }
 
-// Stats returns the object count and total bytes for the node at pos.
-// Returns zero-valued Stats if pos is out of bounds. Use StatsForPrefix
-// if you need to distinguish between "not found" and "found with zero stats".
+// Stats returns the per-prefix object count and total bytes at pos.
+// Returns zero-valued Stats when pos is out of bounds — use
+// StatsForPrefix to distinguish "not found" from "found with zero stats".
 func (idx *Index) Stats(pos uint64) Stats {
 	if pos >= idx.count {
 		return Stats{}
@@ -98,7 +98,7 @@ func (idx *Index) Stats(pos uint64) Stats {
 	return Stats{ObjectCount: objCount, TotalBytes: totalBytes}
 }
 
-// StatsForPrefix returns stats for a prefix string.
+// StatsForPrefix is Lookup + Stats; ok=false on miss.
 func (idx *Index) StatsForPrefix(prefix string) (Stats, bool) {
 	pos, ok := idx.Lookup(prefix)
 	if !ok {
@@ -108,7 +108,6 @@ func (idx *Index) StatsForPrefix(prefix string) (Stats, bool) {
 	return idx.Stats(pos), true
 }
 
-// Depth returns the depth of the node at pos.
 func (idx *Index) Depth(pos uint64) uint32 {
 	if pos >= idx.count {
 		return 0
@@ -117,7 +116,6 @@ func (idx *Index) Depth(pos uint64) uint32 {
 	return idx.coreStats.UnsafeDepth(pos)
 }
 
-// SubtreeEnd returns the end position of the subtree rooted at pos.
 func (idx *Index) SubtreeEnd(pos uint64) uint64 {
 	if pos >= idx.count {
 		return 0
@@ -126,7 +124,6 @@ func (idx *Index) SubtreeEnd(pos uint64) uint64 {
 	return idx.coreStats.UnsafeSubtreeEnd(pos)
 }
 
-// MaxDepthInSubtree returns the maximum depth in the subtree rooted at pos.
 func (idx *Index) MaxDepthInSubtree(pos uint64) uint32 {
 	if pos >= idx.count {
 		return 0
@@ -135,7 +132,6 @@ func (idx *Index) MaxDepthInSubtree(pos uint64) uint32 {
 	return idx.coreStats.UnsafeMaxDepth(pos)
 }
 
-// PrefixString returns the prefix string for the node at pos.
 func (idx *Index) PrefixString(pos uint64) (string, error) {
 	s, err := idx.mphf.Prefix(pos)
 	if err != nil {
@@ -145,15 +141,8 @@ func (idx *Index) PrefixString(pos uint64) (string, error) {
 	return s, nil
 }
 
-// Count returns the total number of prefix nodes.
-func (idx *Index) Count() uint64 {
-	return idx.count
-}
-
-// MaxDepth returns the maximum depth in the trie.
-func (idx *Index) MaxDepth() uint32 {
-	return idx.maxDepth
-}
+func (idx *Index) Count() uint64    { return idx.count }
+func (idx *Index) MaxDepth() uint32 { return idx.maxDepth }
 
 // DescendantsAtDepth returns positions of descendants at exactly the given
 // relative depth, in alphabetical order.

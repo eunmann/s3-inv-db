@@ -10,27 +10,17 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// CoreStatsFile is the on-disk filename for the row-major per-prefix
-// core stats layout. Lives at the top of the index directory next to
-// the legacy individual columnar files (object_count.u64, total_bytes.u64,
-// depth.u32, subtree_end.u64, max_depth_in_subtree.u32) which are no
-// longer written when the row-major file is the source of truth.
+// CoreStatsFile is the row-major per-prefix core stats file.
 const CoreStatsFile = "core_stats.bin"
 
-// CoreStatsRowStride is the fixed byte stride per prefix row. Layout
-// (little-endian) keeps the two hot uint64s (object_count, total_bytes)
-// at the start so a StatsForPrefix call hits cache-aligned bytes
-// without any per-field width dispatch:
+// CoreStatsRowStride is the fixed byte stride per prefix row.
+// Layout (little-endian):
 //
 //	offset  0: object_count           uint64
 //	offset  8: total_bytes            uint64
 //	offset 16: subtree_end            uint64
 //	offset 24: depth                  uint16
 //	offset 26: max_depth_in_subtree   uint16
-//
-// stride = 28. Five fields that used to live in five separate
-// mmap'd files now share one row — a cold StatsForPrefix call
-// faults one page instead of three.
 const CoreStatsRowStride = 28
 
 const (

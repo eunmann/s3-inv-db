@@ -38,7 +38,7 @@ func TestDepthIndexSubtreeQuery(t *testing.T) {
 	// Query depth 2 positions in subtree of a/ [1, 3]
 	posInA, err := idx.PositionsInSubtree(2, 1, 3)
 	if err != nil {
-		t.Fatalf("GetPositionsInSubtree failed: %v", err)
+		t.Fatalf("PositionsInSubtree failed: %v", err)
 	}
 	if !reflect.DeepEqual(posInA, []uint64{2, 3}) {
 		t.Errorf("depth 2 in a/ subtree = %v, want [2, 3]", posInA)
@@ -47,7 +47,7 @@ func TestDepthIndexSubtreeQuery(t *testing.T) {
 	// Query depth 2 positions in subtree of b/ [4, 5]
 	posInB, err := idx.PositionsInSubtree(2, 4, 5)
 	if err != nil {
-		t.Fatalf("GetPositionsInSubtree failed: %v", err)
+		t.Fatalf("PositionsInSubtree failed: %v", err)
 	}
 	if !reflect.DeepEqual(posInB, []uint64{5}) {
 		t.Errorf("depth 2 in b/ subtree = %v, want [5]", posInB)
@@ -56,7 +56,7 @@ func TestDepthIndexSubtreeQuery(t *testing.T) {
 	// Query depth 1 in root subtree
 	posDepth1, err := idx.PositionsInSubtree(1, 0, 5)
 	if err != nil {
-		t.Fatalf("GetPositionsInSubtree failed: %v", err)
+		t.Fatalf("PositionsInSubtree failed: %v", err)
 	}
 	if !reflect.DeepEqual(posDepth1, []uint64{1, 4}) {
 		t.Errorf("depth 1 in root subtree = %v, want [1, 4]", posDepth1)
@@ -157,7 +157,7 @@ func TestDepthIndexLarge(t *testing.T) {
 	// Positions at depth 5 in range [500, 550] should be 500-550 (51 positions)
 	positions, err := idx.PositionsInSubtree(5, 500, 550)
 	if err != nil {
-		t.Fatalf("GetPositionsInSubtree failed: %v", err)
+		t.Fatalf("PositionsInSubtree failed: %v", err)
 	}
 	if len(positions) != 51 {
 		t.Errorf("got %d positions, want 51", len(positions))
@@ -206,10 +206,10 @@ func TestDepthIndexBinarySearch(t *testing.T) {
 	for _, tc := range tests {
 		positions, err := idx.PositionsInSubtree(1, tc.start, tc.end)
 		if err != nil {
-			t.Fatalf("GetPositionsInSubtree(%d, %d) failed: %v", tc.start, tc.end, err)
+			t.Fatalf("PositionsInSubtree(%d, %d) failed: %v", tc.start, tc.end, err)
 		}
 		if !reflect.DeepEqual(positions, tc.expected) {
-			t.Errorf("GetPositionsInSubtree(%d, %d) = %v, want %v", tc.start, tc.end, positions, tc.expected)
+			t.Errorf("PositionsInSubtree(%d, %d) = %v, want %v", tc.start, tc.end, positions, tc.expected)
 		}
 	}
 }
