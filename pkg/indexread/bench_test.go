@@ -318,7 +318,7 @@ func BenchmarkTierBreakdown(b *testing.B) {
 			b.ResetTimer()
 			for i := range b.N {
 				pos := uint64(i % len(bi.prefixes))
-				_ = bi.idx.TierBreakdownAll(pos)
+				_ = bi.idx.TierBreakdown(pos)
 			}
 		})
 	}
@@ -573,7 +573,7 @@ func BenchmarkConcurrentTierBreakdown(b *testing.B) {
 			rng := rand.New(rand.NewSource(rand.Int63()))
 			for pb.Next() {
 				pos := uint64(rng.Int63()) % prefixCount
-				_ = bi.idx.TierBreakdownAll(pos)
+				_ = bi.idx.TierBreakdown(pos)
 			}
 		})
 	})

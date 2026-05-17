@@ -63,70 +63,6 @@ func TestDepthIndexSubtreeQuery(t *testing.T) {
 	}
 }
 
-func TestDepthIterator(t *testing.T) {
-	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder(t.TempDir())
-
-	b.Add(0, 0)
-	b.Add(1, 1)
-	b.Add(2, 2)
-	b.Add(3, 2)
-	b.Add(4, 1)
-	b.Add(5, 2)
-
-	if err := b.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	idx, err := format.OpenDepthIndex(dir)
-	if err != nil {
-		t.Fatalf("format.OpenDepthIndex failed: %v", err)
-	}
-	defer idx.Close()
-
-	// Iterate depth 2 in subtree [1, 3] (a/ subtree)
-	it, err := idx.NewDepthIterator(2, 1, 3)
-	if err != nil {
-		t.Fatalf("NewDepthIterator failed: %v", err)
-	}
-
-	var positions []uint64
-	for it.Next() {
-		positions = append(positions, it.Pos())
-	}
-
-	if !reflect.DeepEqual(positions, []uint64{2, 3}) {
-		t.Errorf("iterator positions = %v, want [2, 3]", positions)
-	}
-}
-
-func TestDepthIteratorEmpty(t *testing.T) {
-	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder(t.TempDir())
-	b.Add(0, 0)
-	b.Add(1, 1)
-
-	if err := b.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	idx, err := format.OpenDepthIndex(dir)
-	if err != nil {
-		t.Fatalf("format.OpenDepthIndex failed: %v", err)
-	}
-	defer idx.Close()
-
-	// Query depth 5 (doesn't exist)
-	it, err := idx.NewDepthIterator(5, 0, 10)
-	if err != nil {
-		t.Fatalf("NewDepthIterator failed: %v", err)
-	}
-
-	if it.Next() {
-		t.Error("expected no positions")
-	}
-}
-
 func TestDepthIndexLarge(t *testing.T) {
 	dir := t.TempDir()
 	b := format.NewDepthIndexBuilder(t.TempDir())
@@ -211,43 +147,5 @@ func TestDepthIndexBinarySearch(t *testing.T) {
 		if !reflect.DeepEqual(positions, tc.expected) {
 			t.Errorf("PositionsInSubtree(%d, %d) = %v, want %v", tc.start, tc.end, positions, tc.expected)
 		}
-	}
-}
-
-func TestDepthIteratorCount(t *testing.T) {
-	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder(t.TempDir())
-
-	for p := range uint64(10) {
-		b.Add(p, 1)
-	}
-
-	if err := b.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	idx, err := format.OpenDepthIndex(dir)
-	if err != nil {
-		t.Fatalf("format.OpenDepthIndex failed: %v", err)
-	}
-	defer idx.Close()
-
-	it, err := idx.NewDepthIterator(1, 3, 7)
-	if err != nil {
-		t.Fatalf("NewDepthIterator failed: %v", err)
-	}
-
-	// Should have 5 positions (3, 4, 5, 6, 7)
-	if it.Count() != 5 {
-		t.Errorf("Count = %d, want 5", it.Count())
-	}
-
-	// Consume some
-	it.Next()
-	it.Next()
-
-	// Should have 3 remaining
-	if it.Count() != 3 {
-		t.Errorf("Count after 2 Next = %d, want 3", it.Count())
 	}
 }

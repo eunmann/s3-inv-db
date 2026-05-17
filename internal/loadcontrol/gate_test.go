@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/budget"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
@@ -81,4 +80,3 @@ func TestGate_Load_RefusalCarriesPlan(t *testing.T) {
 }
 
 // Avoid unused import errors.
-var _ = time.Second
