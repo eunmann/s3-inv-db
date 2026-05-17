@@ -12,24 +12,15 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
-	"github.com/eunmann/s3-inv-db/internal/migrate"
 	"github.com/eunmann/s3-inv-db/internal/templates"
+	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
-	_ "modernc.org/sqlite"
 )
 
 func openJobsTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := migrate.Apply(db); err != nil {
-		t.Fatalf("migrate.Apply: %v", err)
-	}
 
-	return db
+	return dbtest.OpenMemDB(t)
 }
 
 func newJobsHandlers(t *testing.T) (*handlers.Handlers, *jobs.Manager) {

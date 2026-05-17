@@ -9,22 +9,14 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
-	"github.com/eunmann/s3-inv-db/internal/migrate"
-	_ "modernc.org/sqlite"
+	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
 )
 
 var errBoom = errors.New("boom")
 
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := migrate.Apply(db); err != nil {
-		t.Fatalf("migrate.Apply: %v", err)
-	}
+	db := dbtest.OpenMemDB(t)
 	if _, err := inventory.NewStore(db); err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)
 	}

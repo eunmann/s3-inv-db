@@ -2,7 +2,6 @@ package handlers_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,11 +12,10 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
-	"github.com/eunmann/s3-inv-db/internal/migrate"
 	"github.com/eunmann/s3-inv-db/internal/templates"
+	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5"
-	_ "modernc.org/sqlite"
 )
 
 // Sentinel errors for fake S3 / build failures used across multiple
@@ -64,14 +62,7 @@ func newDiscoveredHandlers(t *testing.T, disc inventory.Discoverer, ldr inventor
 		t.Fatalf("renderer: %v", err)
 	}
 
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := migrate.Apply(db); err != nil {
-		t.Fatalf("migrate.Apply: %v", err)
-	}
+	db := dbtest.OpenMemDB(t)
 	invStore, err := inventory.NewStore(db)
 	if err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)

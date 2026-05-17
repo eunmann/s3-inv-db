@@ -9,8 +9,6 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/autoload"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/migrate"
-	_ "modernc.org/sqlite"
 )
 
 // errBoom is the sentinel error used by tests that need to simulate a
@@ -72,9 +70,6 @@ func (f *fakeLoader) AutoLoad(_ context.Context, disc inventory.Inventory) error
 func newFakeStores(t *testing.T) (*inventory.ConfigStore, *inventory.Manager) {
 	t.Helper()
 	db := openTestDB(t)
-	if err := migrate.Apply(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	cs := inventory.NewConfigStore(db)
 	mgr := inventory.NewManager()
 	store, _ := inventory.NewStore(db)
