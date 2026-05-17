@@ -29,8 +29,10 @@ type Row struct {
 	AccessTier string
 }
 
-// InventoryReader is the unified interface for reading S3 inventory files.
-// Implementations exist for both CSV and Parquet formats.
+// InventoryReader is the unified interface for reading S3 inventory
+// files. CSV and Parquet implementations live in this package.
+//
+//nolint:revive // shorter "Reader" would collide with stdlib io.Reader at use sites
 type InventoryReader interface {
 	// Next returns the next inventory row.
 	// Returns io.EOF when all rows have been read.

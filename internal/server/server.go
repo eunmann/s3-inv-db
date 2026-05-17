@@ -155,7 +155,9 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 			PollInterval:     cfg.PollInterval,
 			MaxConcurrency:   cfg.AutoLoadConcurrency,
 			DefaultRetention: cfg.AutoLoadRetentionDefault,
-		}, discovery, autoload.NewDiscoveryLoader(discovery), configStore, mgr, &cfg.Logger)
+		}, discovery, func(c context.Context, d inventory.Inventory) error {
+			return discovery.AutoLoadWith(c, d, nil)
+		}, configStore, mgr, &cfg.Logger)
 		cfg.Logger.Info().Msg("auto-loader configured")
 	}
 

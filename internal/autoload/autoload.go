@@ -33,15 +33,15 @@ type Discovery interface {
 	List(ctx context.Context) ([]inventory.MergedInventory, error)
 }
 
-type Loader interface {
-	AutoLoad(ctx context.Context, disc inventory.Inventory) error
-}
+// LoaderFunc loads a single discovered inventory. Callers wire the
+// DiscoveryService.AutoLoadWith call (with nil progress) here.
+type LoaderFunc func(ctx context.Context, disc inventory.Inventory) error
 
 // AutoLoader polls Discovery on a ticker and feeds new runs into Loader.
 type AutoLoader struct {
 	cfg         Config
 	discovery   Discovery
-	loader      Loader
+	loader      LoaderFunc
 	configStore *inventory.ConfigStore
 	manager     *inventory.Manager
 	logger      *zerolog.Logger
@@ -55,7 +55,7 @@ type AutoLoader struct {
 }
 
 // New constructs an AutoLoader; logger may be nil.
-func New(cfg Config, discovery Discovery, loader Loader, configStore *inventory.ConfigStore, manager *inventory.Manager, logger *zerolog.Logger) *AutoLoader {
+func New(cfg Config, discovery Discovery, loader LoaderFunc, configStore *inventory.ConfigStore, manager *inventory.Manager, logger *zerolog.Logger) *AutoLoader {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = defaultPollInterval
 	}
@@ -235,7 +235,7 @@ func (a *AutoLoader) runQueue(ctx context.Context, queue []inventory.Inventory) 
 
 func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 	id := target.CompositeID()
-	err := a.loader.AutoLoad(ctx, target)
+	err := a.loader(ctx, target)
 	if err == nil {
 		a.logger.Info().Str("id", string(id)).Msg("autoload: loaded")
 

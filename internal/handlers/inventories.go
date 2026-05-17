@@ -466,3 +466,22 @@ func (h *Handlers) annotateGroupsFromConfig(ctx context.Context, groups []Invent
 		}
 	}
 }
+
+// ListDiscoveredAPI lists inventories under the configured S3 source,
+// merging in any current load state. Returns 503 when discovery is not
+// configured (server started without --s3-source).
+func (h *Handlers) ListDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
+	views, _, err := h.discovery.Snapshot(r.Context())
+	if err != nil {
+		if errors.Is(err, inventory.ErrDiscoveryDisabled) {
+			WriteJSONError(w, http.StatusServiceUnavailable, "discovery not configured (start the server with --s3-source)")
+
+			return
+		}
+		zerolog.Ctx(r.Context()).Error().Err(err).Msg("discover inventories")
+		WriteJSONError(w, http.StatusBadGateway, "failed to discover inventories")
+
+		return
+	}
+	WriteJSON(w, http.StatusOK, views)
+}
