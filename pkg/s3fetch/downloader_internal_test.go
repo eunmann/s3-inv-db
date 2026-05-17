@@ -23,9 +23,6 @@ func TestDefaultDownloaderConfig(t *testing.T) {
 	if cfg.PartSize != 16*1024*1024 {
 		t.Errorf("PartSize = %d, want 16MB", cfg.PartSize)
 	}
-	if cfg.BufferPoolSize != cfg.Concurrency*2 {
-		t.Errorf("BufferPoolSize = %d, want %d", cfg.BufferPoolSize, cfg.Concurrency*2)
-	}
 }
 
 func TestTempFileReader(t *testing.T) {

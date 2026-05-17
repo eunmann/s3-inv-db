@@ -1,6 +1,7 @@
 package pricing_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -226,66 +227,6 @@ func TestComputeMonthlyCost_ZeroBytes(t *testing.T) {
 	}
 }
 
-func TestComputeDetailedBreakdown(t *testing.T) {
-	pt := pricing.DefaultUSEast1Prices()
-
-	breakdown := []format.TierBreakdown{
-		{TierName: "STANDARD_IA", Bytes: 10 * 1024 * 1000, ObjectCount: 1000},
-		{TierName: "INTELLIGENT_TIERING_FREQUENT", Bytes: 1024 * 1024 * 100, ObjectCount: 100},
-		{TierName: "GLACIER", Bytes: 1024 * 1024 * 1024, ObjectCount: 500},
-	}
-
-	detailed := pricing.ComputeDetailedBreakdown(breakdown, pt)
-
-	if len(detailed) != 3 {
-		t.Fatalf("expected 3 entries, got %d", len(detailed))
-	}
-
-	for _, cb := range detailed {
-		if cb.TierName == "STANDARD_IA" {
-			if cb.MinSizePenalty == 0 {
-				t.Error("expected min size penalty for STANDARD_IA with small objects")
-			}
-			if cb.AvgObjectSizeBytes != 10*1024 {
-				t.Errorf("expected avg size 10KB, got %d", cb.AvgObjectSizeBytes)
-			}
-		}
-		if cb.TierName == "INTELLIGENT_TIERING_FREQUENT" {
-			if cb.MonitoringCost == 0 {
-				t.Error("expected monitoring cost for IT tier")
-			}
-		}
-		if cb.TierName == "GLACIER" {
-			if cb.GlacierOverhead == 0 {
-				t.Error("expected glacier overhead for GLACIER tier")
-			}
-		}
-	}
-}
-
-func TestTotalDollars(t *testing.T) {
-	result := pricing.CostResult{
-		TotalMicrodollars: 1_000_000,
-	}
-
-	if result.TotalDollars() != 1.0 {
-		t.Errorf("expected $1.00, got $%.2f", result.TotalDollars())
-	}
-}
-
-func TestPerTierDollars(t *testing.T) {
-	result := pricing.CostResult{
-		PerTierMicrodollars: map[string]uint64{
-			"STANDARD": 500_000,
-		},
-	}
-
-	dollars := result.PerTierDollars()
-	if dollars["STANDARD"] != 0.5 {
-		t.Errorf("expected $0.50, got $%.2f", dollars["STANDARD"])
-	}
-}
-
 func TestFormatCost(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -324,7 +265,7 @@ func TestFormatCost(t *testing.T) {
 	}
 }
 
-func TestLoadSavePriceTable(t *testing.T) {
+func TestLoadPriceTable(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "prices.json")
 
@@ -336,9 +277,12 @@ func TestLoadSavePriceTable(t *testing.T) {
 		MonitoringPer1000Objects: 0.0025,
 		StandardPricePerGB:       0.023,
 	}
-
-	if err := pricing.SavePriceTable(path, original); err != nil {
-		t.Fatalf("SavePriceTable failed: %v", err)
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
 	}
 
 	loaded, err := pricing.LoadPriceTable(path)

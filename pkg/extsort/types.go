@@ -95,20 +95,6 @@ func (r *PrefixRow) Merge(other *PrefixRow) {
 	}
 }
 
-// Clone creates a deep copy of the PrefixRow.
-func (r *PrefixRow) Clone() *PrefixRow {
-	clone := &PrefixRow{
-		Prefix:     r.Prefix,
-		Depth:      r.Depth,
-		Count:      r.Count,
-		TotalBytes: r.TotalBytes,
-	}
-	copy(clone.TierCounts[:], r.TierCounts[:])
-	copy(clone.TierBytes[:], r.TierBytes[:])
-
-	return clone
-}
-
 // readPrefixRowRecord reads a single PrefixRow from a reader using the common binary format.
 // The buf pointer is used for temporary storage and may be resized if needed.
 // Returns io.EOF when the source is exhausted.

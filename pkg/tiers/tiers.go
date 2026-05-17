@@ -67,7 +67,6 @@ func AllTiers() []Info {
 // Mapping provides tier lookup and metadata.
 type Mapping struct {
 	Tiers         []Info
-	indexByName   map[string]ID
 	indexByS3Name map[string]ID
 }
 
@@ -76,13 +75,11 @@ func NewMapping() *Mapping {
 	all := AllTiers()
 	m := &Mapping{
 		Tiers:         make([]Info, len(all)),
-		indexByName:   make(map[string]ID),
 		indexByS3Name: make(map[string]ID),
 	}
 	copy(m.Tiers, all)
 
 	for _, t := range m.Tiers {
-		m.indexByName[t.Name] = t.ID
 		m.indexByS3Name[strings.ToUpper(t.Name)] = t.ID
 	}
 

@@ -209,28 +209,3 @@ func VerifyMPHF(m *MPHF) error {
 
 	return nil
 }
-
-// WritePrefixBlob writes prefix strings from a slice.
-func WritePrefixBlob(outDir string, prefixes []string) error {
-	blobPath := filepath.Join(outDir, "prefix_blob.bin")
-	offsetsPath := filepath.Join(outDir, "prefix_offsets.u64")
-
-	writer, err := NewBlobWriter(blobPath, offsetsPath)
-	if err != nil {
-		return fmt.Errorf("create blob writer: %w", err)
-	}
-
-	for i, p := range prefixes {
-		if err := writer.WriteString(p); err != nil {
-			writer.Close()
-
-			return fmt.Errorf("write prefix %d: %w", i, err)
-		}
-	}
-
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("close blob writer: %w", err)
-	}
-
-	return nil
-}

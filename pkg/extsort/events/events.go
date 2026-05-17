@@ -46,7 +46,6 @@ const (
 	StageSpill      Stage = "spill"
 	StageMerge      Stage = "merge"
 	StageIndexBuild Stage = "index_build"
-	StageMPHF       Stage = "mphf"
 )
 
 // Type names a specific event within a stage.
@@ -237,14 +236,3 @@ func (b *Bus) Close() {
 	}
 }
 
-// HasSubscribers reports whether the bus has any subscribers. Hot
-// publishers can guard expensive payload construction with this.
-func (b *Bus) HasSubscribers() bool {
-	if b == nil || b.closed.Load() {
-		return false
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return len(b.subs) > 0
-}

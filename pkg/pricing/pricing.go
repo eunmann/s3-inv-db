@@ -69,10 +69,6 @@ const microdollarsPerDollar = 1_000_000
 // quoted in (e.g. monitoring fee per 1,000 objects).
 const requestsPerThousand = 1000.0
 
-// jsonFileMode is the umask-respecting mode applied to JSON config
-// files this package writes. 0o600 keeps gosec G306 happy.
-const jsonFileMode = 0o600
-
 // PriceTable contains comprehensive S3 pricing information.
 type PriceTable struct {
 	// PerGBMonth maps tier names to USD per GB per month for storage.
@@ -179,20 +175,6 @@ func LoadPriceTable(path string) (PriceTable, error) {
 	return pt, nil
 }
 
-// SavePriceTable saves a price table to a JSON file.
-func SavePriceTable(path string, pt PriceTable) error {
-	data, err := json.MarshalIndent(pt, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal price table: %w", err)
-	}
-
-	if err := os.WriteFile(path, data, jsonFileMode); err != nil {
-		return fmt.Errorf("write price table: %w", err)
-	}
-
-	return nil
-}
-
 // CostResult contains the estimated monthly storage costs with detailed breakdown.
 type CostResult struct {
 	// TotalMicrodollars is the total cost in microdollars (1 USD = 1,000,000 microdollars).
@@ -209,21 +191,6 @@ type CostResult struct {
 
 	// GlacierOverheadMicrodollars is the metadata overhead cost for Glacier objects.
 	GlacierOverheadMicrodollars uint64
-}
-
-// TotalDollars returns the total cost in dollars.
-func (r CostResult) TotalDollars() float64 {
-	return float64(r.TotalMicrodollars) / microdollarsPerDollar
-}
-
-// PerTierDollars returns per-tier storage costs in dollars.
-func (r CostResult) PerTierDollars() map[string]float64 {
-	result := make(map[string]float64, len(r.PerTierMicrodollars))
-	for tier, microdollars := range r.PerTierMicrodollars {
-		result[tier] = float64(microdollars) / microdollarsPerDollar
-	}
-
-	return result
 }
 
 // ComputeMonthlyCost calculates the monthly storage cost for a tier breakdown.
@@ -295,70 +262,6 @@ func ComputeMonthlyCost(breakdown []format.TierBreakdown, pt PriceTable) CostRes
 	result.TotalMicrodollars += result.MonitoringMicrodollars
 
 	return result
-}
-
-// CostBreakdown provides a detailed breakdown of costs for display.
-type CostBreakdown struct {
-	TierName           string
-	StorageCost        float64 // Base storage cost in dollars
-	MinSizePenalty     float64 // 128KB minimum penalty in dollars
-	MonitoringCost     float64 // IT monitoring fee in dollars
-	GlacierOverhead    float64 // Glacier metadata overhead in dollars
-	TotalCost          float64 // Total cost for this tier
-	ObjectCount        uint64
-	Bytes              uint64
-	AvgObjectSizeBytes uint64
-}
-
-// ComputeDetailedBreakdown returns detailed cost information per tier.
-func ComputeDetailedBreakdown(breakdown []format.TierBreakdown, pt PriceTable) []CostBreakdown {
-	results := make([]CostBreakdown, 0, len(breakdown))
-
-	for _, tb := range breakdown {
-		price, ok := pt.PerGBMonth[tb.TierName]
-		if !ok {
-			continue
-		}
-
-		cb := CostBreakdown{
-			TierName:    tb.TierName,
-			ObjectCount: tb.ObjectCount,
-			Bytes:       tb.Bytes,
-		}
-
-		if tb.ObjectCount > 0 {
-			cb.AvgObjectSizeBytes = tb.Bytes / tb.ObjectCount
-		}
-
-		// Base storage cost.
-		gbFrac := float64(tb.Bytes) / float64(bytesPerGB)
-		cb.StorageCost = gbFrac * price
-
-		// Minimum object size penalty.
-		if TierHasMinObjectSize(tb.TierName) && cb.AvgObjectSizeBytes < minObjectSizeBytes && cb.AvgObjectSizeBytes > 0 {
-			additionalBytes := (minObjectSizeBytes - cb.AvgObjectSizeBytes) * tb.ObjectCount
-			additionalGB := float64(additionalBytes) / float64(bytesPerGB)
-			cb.MinSizePenalty = additionalGB * price
-		}
-
-		if TierHasMonitoringCost(tb.TierName) && pt.MonitoringPer1000Objects > 0 {
-			cb.MonitoringCost = float64(tb.ObjectCount) / requestsPerThousand * pt.MonitoringPer1000Objects
-		}
-
-		// Glacier metadata overhead.
-		if TierHasGlacierOverhead(tb.TierName) && tb.ObjectCount > 0 {
-			glacierOverheadGB := float64(tb.ObjectCount*glacierMetadataOverheadBytes) / float64(bytesPerGB)
-			cb.GlacierOverhead = glacierOverheadGB * price
-
-			indexOverheadGB := float64(tb.ObjectCount*glacierIndexOverheadBytes) / float64(bytesPerGB)
-			cb.GlacierOverhead += indexOverheadGB * pt.StandardPricePerGB
-		}
-
-		cb.TotalCost = cb.StorageCost + cb.MinSizePenalty + cb.MonitoringCost + cb.GlacierOverhead
-		results = append(results, cb)
-	}
-
-	return results
 }
 
 // ComputePutCost returns the one-time PUT/COPY/POST charge for ingesting

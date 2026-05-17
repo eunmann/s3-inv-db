@@ -13,9 +13,6 @@ func TestBus_Publish_NoSubscribers_NoOp(t *testing.T) {
 	defer bus.Close()
 	// Should not panic, not block, not allocate.
 	bus.Publish(events.Event{Stage: events.StageAggregator, Type: events.EvtBatchCommitted})
-	if bus.HasSubscribers() {
-		t.Fatal("HasSubscribers() should be false with no subscribers")
-	}
 }
 
 func TestBus_Subscribe_ReceivesMatchingStage(t *testing.T) {

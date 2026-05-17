@@ -84,22 +84,6 @@ func (c *Client) FetchManifest(ctx context.Context, bucket, key string) (*Manife
 	return manifest, nil
 }
 
-// StreamObject returns a reader for an S3 object using a simple GetObject call.
-//
-// Deprecated: Use DownloadObject for better throughput on large objects.
-// StreamObject is kept for backwards compatibility and small objects like manifests.
-func (c *Client) StreamObject(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
-	resp, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("get object s3://%s/%s: %w", bucket, key, err)
-	}
-
-	return resp.Body, nil
-}
-
 // DownloadObject downloads an S3 object using the S3 Download Manager for parallel
 // range downloads. This provides significantly better throughput for large objects.
 // Returns a reader for the downloaded content and download statistics.

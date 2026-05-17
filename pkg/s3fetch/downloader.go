@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"runtime"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -28,10 +27,6 @@ type DownloaderConfig struct {
 	// TempDir is the directory for temporary download files.
 	// If empty, os.TempDir() is used.
 	TempDir string
-
-	// BufferPoolSize is the number of pre-allocated buffers in the pool.
-	// Default: Concurrency * 2.
-	BufferPoolSize int
 }
 
 // DefaultDownloaderConfig returns sensible defaults based on the current machine.
@@ -40,18 +35,16 @@ func DefaultDownloaderConfig() DownloaderConfig {
 	concurrency := min(max(numCPU, 4), 16)
 
 	return DownloaderConfig{
-		Concurrency:    concurrency,
-		PartSize:       16 * 1024 * 1024, // 16MB
-		TempDir:        "",
-		BufferPoolSize: concurrency * 2,
+		Concurrency: concurrency,
+		PartSize:    16 * 1024 * 1024, // 16MB
+		TempDir:     "",
 	}
 }
 
 // Downloader wraps the AWS S3 Transfer Manager for high-throughput downloads.
 type Downloader struct {
-	manager    *transfermanager.Client
-	config     DownloaderConfig
-	bufferPool *sync.Pool
+	manager *transfermanager.Client
+	config  DownloaderConfig
 }
 
 // NewDownloader creates an S3 Downloader from an existing S3 client.
@@ -62,25 +55,15 @@ func NewDownloader(s3Client *s3.Client, cfg DownloaderConfig) *Downloader {
 	if cfg.PartSize <= 0 {
 		cfg.PartSize = DefaultDownloaderConfig().PartSize
 	}
-	if cfg.BufferPoolSize <= 0 {
-		cfg.BufferPoolSize = cfg.Concurrency * 2
-	}
 
 	mgr := transfermanager.New(s3Client, func(o *transfermanager.Options) {
 		o.Concurrency = cfg.Concurrency
 		o.PartSizeBytes = cfg.PartSize
 	})
 
-	bufferPool := &sync.Pool{
-		New: func() any {
-			return make([]byte, 32*1024)
-		},
-	}
-
 	return &Downloader{
-		manager:    mgr,
-		config:     cfg,
-		bufferPool: bufferPool,
+		manager: mgr,
+		config:  cfg,
 	}
 }
 
@@ -152,49 +135,6 @@ func (d *Downloader) DownloadToReader(ctx context.Context, bucket, key string) (
 	}
 
 	return reader, result, nil
-}
-
-// DownloadToFile downloads an S3 object to a specified file path.
-// Returns download statistics. The destination file's Close is
-// error-checked: on NFS or other backed filesystems a close can
-// surface a deferred write failure that an unchecked defer would
-// silently swallow.
-func (d *Downloader) DownloadToFile(ctx context.Context, bucket, key, destPath string) (*DownloadResult, error) {
-	startTime := time.Now()
-
-	file, err := os.Create(destPath)
-	if err != nil {
-		return nil, fmt.Errorf("create destination file: %w", err)
-	}
-
-	out, err := d.manager.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
-		Bucket:   aws.String(bucket),
-		Key:      aws.String(key),
-		WriterAt: file,
-	})
-	if err != nil {
-		_ = file.Close()
-		_ = os.Remove(destPath)
-
-		return nil, fmt.Errorf("download s3://%s/%s: %w", bucket, key, err)
-	}
-
-	// Close after the successful download so a deferred write
-	// failure (NFS commit, etc.) surfaces here instead of being
-	// silently swallowed by an unchecked deferred Close.
-	bytes := bytesDownloaded(out, file)
-	if err := file.Close(); err != nil {
-		_ = os.Remove(destPath)
-
-		return nil, fmt.Errorf("close downloaded file %s: %w", destPath, err)
-	}
-
-	return &DownloadResult{
-		BytesDownloaded: bytes,
-		Duration:        time.Since(startTime),
-		Concurrency:     d.config.Concurrency,
-		PartSize:        d.config.PartSize,
-	}, nil
 }
 
 // bytesDownloaded returns the size written for a DownloadObject call.

@@ -138,50 +138,6 @@ func NewParquetInventoryReaderFromStream(r io.ReadCloser, size int64) (Inventory
 	return newParquetReader(file, tempFile, cfg), nil
 }
 
-// NewParquetInventoryReaderWithConfig creates a Parquet reader with explicit config.
-// The size parameter is used for validation (if non-zero) but the full stream is read regardless.
-func NewParquetInventoryReaderWithConfig(r io.ReadCloser, size int64, cfg ParquetReaderConfig) (InventoryReader, error) {
-	tempFile, err := os.CreateTemp("", "parquet-inventory-*.parquet")
-	if err != nil {
-		r.Close()
-
-		return nil, fmt.Errorf("create temp file: %w", err)
-	}
-
-	written, err := io.Copy(tempFile, r)
-	r.Close()
-	if err != nil {
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
-		return nil, fmt.Errorf("buffer parquet data: %w", err)
-	}
-
-	// Validate size if provided
-	if size > 0 && written != size {
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
-		return nil, fmt.Errorf("%w: expected %d, got %d", ErrSizeMismatch, size, written)
-	}
-
-	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
-		return nil, fmt.Errorf("seek temp file: %w", err)
-	}
-
-	file, err := parquet.OpenFile(tempFile, written)
-	if err != nil {
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
-		return nil, fmt.Errorf("open parquet file: %w", err)
-	}
-
-	return newParquetReader(file, tempFile, cfg), nil
-}
 
 // detectParquetSchema detects column indices from the Parquet schema.
 // Column names are matched case-insensitively after stripping underscores

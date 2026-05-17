@@ -429,57 +429,14 @@ func TestManifestDetectFormat(t *testing.T) {
 		fileFormat string
 		fileKey    string
 		wantFormat s3fetch.InventoryFormat
-		wantIsCSV  bool
 	}{
-		{
-			name:       "explicit CSV format",
-			fileFormat: "CSV",
-			fileKey:    "file.csv.gz",
-			wantFormat: s3fetch.InventoryFormatCSV,
-			wantIsCSV:  true,
-		},
-		{
-			name:       "explicit Parquet format",
-			fileFormat: "Parquet",
-			fileKey:    "file.parquet",
-			wantFormat: s3fetch.InventoryFormatParquet,
-			wantIsCSV:  false,
-		},
-		{
-			name:       "explicit PARQUET format uppercase",
-			fileFormat: "PARQUET",
-			fileKey:    "file.parquet",
-			wantFormat: s3fetch.InventoryFormatParquet,
-			wantIsCSV:  false,
-		},
-		{
-			name:       "detect from .parquet extension",
-			fileFormat: "",
-			fileKey:    "inventory/data/file.parquet",
-			wantFormat: s3fetch.InventoryFormatParquet,
-			wantIsCSV:  false,
-		},
-		{
-			name:       "detect from .csv.gz extension",
-			fileFormat: "",
-			fileKey:    "inventory/data/file.csv.gz",
-			wantFormat: s3fetch.InventoryFormatCSV,
-			wantIsCSV:  true,
-		},
-		{
-			name:       "detect from .csv extension",
-			fileFormat: "",
-			fileKey:    "file.csv",
-			wantFormat: s3fetch.InventoryFormatCSV,
-			wantIsCSV:  true,
-		},
-		{
-			name:       "default to CSV when unknown",
-			fileFormat: "",
-			fileKey:    "file.unknown",
-			wantFormat: s3fetch.InventoryFormatCSV,
-			wantIsCSV:  true,
-		},
+		{"explicit CSV format", "CSV", "file.csv.gz", s3fetch.InventoryFormatCSV},
+		{"explicit Parquet format", "Parquet", "file.parquet", s3fetch.InventoryFormatParquet},
+		{"explicit PARQUET format uppercase", "PARQUET", "file.parquet", s3fetch.InventoryFormatParquet},
+		{"detect from .parquet extension", "", "inventory/data/file.parquet", s3fetch.InventoryFormatParquet},
+		{"detect from .csv.gz extension", "", "inventory/data/file.csv.gz", s3fetch.InventoryFormatCSV},
+		{"detect from .csv extension", "", "file.csv", s3fetch.InventoryFormatCSV},
+		{"default to CSV when unknown", "", "file.unknown", s3fetch.InventoryFormatCSV},
 	}
 
 	for _, tt := range tests {
@@ -491,19 +448,8 @@ func TestManifestDetectFormat(t *testing.T) {
 				Files:             []s3fetch.ManifestFile{{Key: tt.fileKey, Size: 100}},
 			}
 
-			gotFormat := m.DetectFormat()
-			if gotFormat != tt.wantFormat {
-				t.Errorf("DetectFormat() = %v, want %v", gotFormat, tt.wantFormat)
-			}
-
-			gotIsCSV := m.IsCSV()
-			if gotIsCSV != tt.wantIsCSV {
-				t.Errorf("IsCSV() = %v, want %v", gotIsCSV, tt.wantIsCSV)
-			}
-
-			gotIsParquet := m.IsParquet()
-			if gotIsParquet != !tt.wantIsCSV {
-				t.Errorf("IsParquet() = %v, want %v", gotIsParquet, !tt.wantIsCSV)
+			if got := m.DetectFormat(); got != tt.wantFormat {
+				t.Errorf("DetectFormat() = %v, want %v", got, tt.wantFormat)
 			}
 		})
 	}
