@@ -379,11 +379,7 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 		data.Groups = h.buildInventoryGroups(r, views)
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.renderer.Render(w, "inventories.html", data); err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Msg("failed to render inventories page")
-		http.Error(w, "failed to render page", http.StatusInternalServerError)
-	}
+	h.renderHTML(w, r, "inventories.html", "failed to render inventories page", data)
 }
 
 // InventoryRowPartial renders the row for one inventory ID.

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/budget"
@@ -8,6 +9,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
+	"github.com/rs/zerolog"
 )
 
 // DefaultSSEHeartbeat is the production cadence used when Config.SSEHeartbeat
@@ -83,6 +85,28 @@ func New(mgr *inventory.Manager, renderer *templates.Renderer, priceTable pricin
 // Exposed so the server can gate discovery-dependent routes via middleware
 // rather than each handler duplicating the check.
 func (h *Handlers) DiscoveryEnabled() bool { return h.discovery.Enabled() }
+
+// contentTypeHTML is the Content-Type set on every HTML response.
+const contentTypeHTML = "text/html; charset=utf-8"
+
+// renderHTML writes a full template, logging and returning HTTP 500 on
+// failure. LogMsg becomes the zerolog message for renderer errors.
+func (h *Handlers) renderHTML(w http.ResponseWriter, r *http.Request, name, logMsg string, data any) {
+	w.Header().Set("Content-Type", contentTypeHTML)
+	if err := h.renderer.Render(w, name, data); err != nil {
+		zerolog.Ctx(r.Context()).Error().Err(err).Msg(logMsg)
+		http.Error(w, "failed to render page", http.StatusInternalServerError)
+	}
+}
+
+// renderHTMLPartial is renderHTML for partial templates (htmx fragments).
+func (h *Handlers) renderHTMLPartial(w http.ResponseWriter, r *http.Request, name, logMsg string, data any) {
+	w.Header().Set("Content-Type", contentTypeHTML)
+	if err := h.renderer.RenderPartial(w, name, data); err != nil {
+		zerolog.Ctx(r.Context()).Error().Err(err).Msg(logMsg)
+		http.Error(w, "failed to render partial", http.StatusInternalServerError)
+	}
+}
 
 // NewWithConfig creates a Handlers wired with optional S3 discovery + loader.
 func NewWithConfig(cfg Config) *Handlers {

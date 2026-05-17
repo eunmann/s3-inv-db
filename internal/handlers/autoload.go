@@ -11,10 +11,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// trueLiteral is the lowercase token used by checkbox/htmx toggles to
-// signal "on"; centralised so callers don't repeat the magic string.
-const trueLiteral = "true"
-
 type AutoLoadToggleResponse struct {
 	OK bool `json:"ok"`
 }

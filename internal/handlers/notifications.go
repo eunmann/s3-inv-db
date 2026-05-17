@@ -72,7 +72,7 @@ func (h *Handlers) NotificationsAPI(w http.ResponseWriter, r *http.Request) {
 
 // NotificationsPartial renders the banner HTML; empty when nothing to surface.
 func (h *Handlers) NotificationsPartial(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Type", contentTypeHTML)
 	notifs := h.collectNotifications(r.Context())
 	if len(notifs) == 0 {
 		return
@@ -80,7 +80,5 @@ func (h *Handlers) NotificationsPartial(w http.ResponseWriter, r *http.Request) 
 	data := struct {
 		Notifications []Notification
 	}{Notifications: notifs}
-	if err := h.renderer.RenderPartial(w, "notifications_banner.html", data); err != nil {
-		http.Error(w, "render notifications", http.StatusInternalServerError)
-	}
+	h.renderHTMLPartial(w, r, "notifications_banner.html", "render notifications", data)
 }

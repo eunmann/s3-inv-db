@@ -83,11 +83,7 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 	logger := zerolog.Ctx(r.Context())
 	if !h.discovery.Enabled() {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := h.renderer.Render(w, "dashboard.html", data); err != nil {
-			logger.Error().Err(err).Msg("failed to render dashboard")
-			http.Error(w, "failed to render page", http.StatusInternalServerError)
-		}
+		h.renderHTML(w, r, "dashboard.html", "failed to render dashboard", data)
 
 		return
 	}
@@ -142,11 +138,7 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 		data.Configs = append(data.Configs, row)
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.renderer.Render(w, "dashboard.html", data); err != nil {
-		logger.Error().Err(err).Msg("failed to render dashboard")
-		http.Error(w, "failed to render page", http.StatusInternalServerError)
-	}
+	h.renderHTML(w, r, "dashboard.html", "failed to render dashboard", data)
 }
 
 func (h *Handlers) fillBudgetCounters(data *DashboardData) {

@@ -49,7 +49,7 @@ func (h *Handlers) DeleteInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Type", contentTypeHTML)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -109,7 +109,7 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	// Headers must commit BEFORE WriteHeader, otherwise the Set on
 	// Content-Type inside renderDiscoveredRowFrom is a no-op and the
 	// browser falls back to Go's body sniffing.
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Type", contentTypeHTML)
 	w.WriteHeader(http.StatusAccepted)
 	h.renderDiscoveredRowFrom(w, r, disc)
 }
@@ -195,11 +195,7 @@ func (h *Handlers) renderInventoryRow(w http.ResponseWriter, r *http.Request, id
 
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.renderer.RenderPartial(w, "inventory_row.html", info); err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render inventory row")
-		http.Error(w, "failed to render row", http.StatusInternalServerError)
-	}
+	h.renderHTMLPartial(w, r, "inventory_row.html", "render inventory row", info)
 }
 
 // renderDiscoveredRow re-fetches the discovery entry, merges in current
@@ -272,11 +268,7 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 	}
 	cs := h.cacheSize(r, disc)
 	view.CacheBytes, view.CacheBytesH = cs.Bytes, cs.Human
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.renderer.RenderPartial(w, "discovered_row.html", view); err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render discovered row")
-		http.Error(w, "failed to render row", http.StatusInternalServerError)
-	}
+	h.renderHTMLPartial(w, r, "discovered_row.html", "render discovered row", view)
 }
 
 // CacheSize is the raw-bytes / human-formatted pair returned by

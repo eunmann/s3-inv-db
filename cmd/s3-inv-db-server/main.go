@@ -268,4 +268,3 @@ func parseSize(s string) (uint64, error) {
 
 	return uint64(n * float64(mult)), nil
 }
-
