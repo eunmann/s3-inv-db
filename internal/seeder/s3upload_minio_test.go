@@ -15,12 +15,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/internal/testsupport/miniotest"
+	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/rs/zerolog"
 )
 
 func newMinIOS3Client(t *testing.T) *s3.Client {
 	t.Helper()
-	if os.Getenv("AWS_ENDPOINT_URL_S3") == "" {
+	if os.Getenv(s3fetch.EnvEndpointURL) == "" {
 		t.Fatal("AWS_ENDPOINT_URL_S3 not set — run `make test`")
 	}
 	c, err := seeder.NewS3ClientForTest(context.Background())

@@ -9,14 +9,14 @@ import (
 )
 
 func TestS3ClientOptions_UnsetEnvReturnsNil(t *testing.T) {
-	t.Setenv("AWS_ENDPOINT_URL_S3", "")
+	t.Setenv(EnvEndpointURL, "")
 	if got := s3ClientOptions(); got != nil {
 		t.Errorf("s3ClientOptions() = %v, want nil", got)
 	}
 }
 
 func TestS3ClientOptions_SetEnvForcesPathStyle(t *testing.T) {
-	t.Setenv("AWS_ENDPOINT_URL_S3", "http://minio:9000")
+	t.Setenv(EnvEndpointURL, "http://minio:9000")
 	opts := s3ClientOptions()
 	if len(opts) != 1 {
 		t.Fatalf("len(opts) = %d, want 1", len(opts))
@@ -36,7 +36,7 @@ func TestClient_Raw_ReturnsUnderlyingClient(t *testing.T) {
 }
 
 func TestNewClientWithConfigAndDownloader_DefaultsPathStyleByEnv(t *testing.T) {
-	t.Setenv("AWS_ENDPOINT_URL_S3", "http://minio:9000")
+	t.Setenv(EnvEndpointURL, "http://minio:9000")
 	c, err := NewClientWithDownloaderConfig(context.Background(), DownloaderConfig{})
 	if err != nil {
 		t.Skipf("NewClient requires AWS config in env; skipping: %v", err)

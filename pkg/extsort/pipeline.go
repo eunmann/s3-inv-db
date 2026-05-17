@@ -743,7 +743,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	// Run file buffer: a fixed 4 MiB is well above the syscall sweet
 	// spot for sequential writes and bounded per-worker, so no need to
 	// derive it from a fractional memory partition.
-	const bufferSize = 4 * 1024 * 1024
+	const bufferSize = DefaultRunBufferSize
 
 	var writeErr error
 	if p.config.Merge.UseCompressedRuns {

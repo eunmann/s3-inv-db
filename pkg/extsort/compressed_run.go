@@ -82,7 +82,7 @@ type CompressedRunWriterOptions struct {
 // NewCompressedRunWriter creates a new compressed run file writer.
 func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*CompressedRunWriter, error) {
 	if opts.BufferSize <= 0 {
-		opts.BufferSize = defaultRunBufferSize
+		opts.BufferSize = DefaultRunBufferSize
 	}
 	if opts.CompressionLevel == 0 {
 		opts.CompressionLevel = CompressionDefault
@@ -255,7 +255,7 @@ type CompressedRunReader struct {
 // It auto-detects whether the file is compressed or uncompressed based on the version.
 func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, error) {
 	if bufferSize <= 0 {
-		bufferSize = defaultRunBufferSize
+		bufferSize = DefaultRunBufferSize
 	}
 
 	f, err := os.Open(path)
@@ -422,7 +422,7 @@ var (
 // Returns a RunReader interface that works with either format.
 func OpenRunFileAuto(path string, bufferSize int) (RunReader, error) {
 	if bufferSize <= 0 {
-		bufferSize = defaultRunBufferSize
+		bufferSize = DefaultRunBufferSize
 	}
 
 	f, err := os.Open(path)

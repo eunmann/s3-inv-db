@@ -10,11 +10,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// s3ClientOptions forces path-style addressing when AWS_ENDPOINT_URL_S3
-// is set. MinIO and most non-AWS S3 implementations reject the SDK
+// EnvEndpointURL is the env var used by the AWS SDK to override the S3
+// endpoint URL. Exported so callers, tests, and infra glue all
+// reference one source of truth.
+const EnvEndpointURL = "AWS_ENDPOINT_URL_S3"
+
+// s3ClientOptions forces path-style addressing when EnvEndpointURL is
+// set. MinIO and most non-AWS S3 implementations reject the SDK
 // default (virtual-host style).
 func s3ClientOptions() []func(*s3.Options) {
-	if os.Getenv("AWS_ENDPOINT_URL_S3") == "" {
+	if os.Getenv(EnvEndpointURL) == "" {
 		return nil
 	}
 

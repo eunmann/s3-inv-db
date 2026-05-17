@@ -333,7 +333,7 @@ func BenchmarkCompressedVsUncompressed(b *testing.B) {
 			tmpDir := b.TempDir()
 			path := filepath.Join(tmpDir, "run.crun")
 			writer, _ := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{
-				BufferSize:       4 * 1024 * 1024,
+				BufferSize:       extsort.DefaultRunBufferSize,
 				CompressionLevel: extsort.CompressionFastest,
 			})
 			writer.WriteAll(rows)
@@ -347,7 +347,7 @@ func BenchmarkCompressedVsUncompressed(b *testing.B) {
 			tmpDir := b.TempDir()
 			path := filepath.Join(tmpDir, "run.crun")
 			writer, _ := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{
-				BufferSize:       4 * 1024 * 1024,
+				BufferSize:       extsort.DefaultRunBufferSize,
 				CompressionLevel: extsort.CompressionDefault,
 			})
 			writer.WriteAll(rows)

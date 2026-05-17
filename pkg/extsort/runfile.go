@@ -11,11 +11,14 @@ import (
 	"strings"
 )
 
-// defaultRunBufferSize is the default I/O buffer for run-file reader
+// DefaultRunBufferSize is the default I/O buffer for run-file reader
 // and writer instances when the caller passes 0. Big enough to
 // amortise syscall overhead on sequential append/scan, small enough
 // that holding several per worker stays well under any memory cap.
-const defaultRunBufferSize = 4 * 1024 * 1024
+//
+// Exported so benches and integration tests can reuse the same default
+// without duplicating the literal across files.
+const DefaultRunBufferSize = 4 * 1024 * 1024
 
 // Sentinel errors for the extsort package. Wrap with %w when adding
 // context via fmt.Errorf so callers can match with errors.Is.
@@ -75,7 +78,7 @@ func NewRunFileWriter(path string, bufferSize int) (*RunFileWriter, error) {
 	}
 
 	if bufferSize <= 0 {
-		bufferSize = defaultRunBufferSize
+		bufferSize = DefaultRunBufferSize
 	}
 
 	w := &RunFileWriter{
@@ -204,7 +207,7 @@ func OpenRunFile(path string, bufferSize int) (*RunFileReader, error) {
 	}
 
 	if bufferSize <= 0 {
-		bufferSize = defaultRunBufferSize
+		bufferSize = DefaultRunBufferSize
 	}
 
 	r := &RunFileReader{

@@ -64,7 +64,7 @@ func BenchmarkPipelineScale_E2E(b *testing.B) {
 					rows := agg.Drain()
 					path := filepath.Join(runDir, fmt.Sprintf("run_%02d.crun", f))
 					w, err := NewCompressedRunWriter(path, CompressedRunWriterOptions{
-						BufferSize:       4 * 1024 * 1024,
+						BufferSize:       DefaultRunBufferSize,
 						CompressionLevel: CompressionFastest,
 					})
 					if err != nil {
@@ -85,7 +85,7 @@ func BenchmarkPipelineScale_E2E(b *testing.B) {
 				merger := NewParallelMerger(ParallelMergeConfig{
 					NumWorkers:     4,
 					MaxFanIn:       8,
-					BufferSize:     4 * 1024 * 1024,
+					BufferSize:     DefaultRunBufferSize,
 					TempDir:        runDir,
 					UseCompression: true,
 				})
