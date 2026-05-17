@@ -124,11 +124,6 @@ func FormatMB(b uint64) string {
 	return fmt.Sprintf("%.1fMB", float64(b)/(1024*1024))
 }
 
-// FormatGB formats bytes as gigabytes.
-func FormatGB(b uint64) string {
-	return fmt.Sprintf("%.2fGB", float64(b)/(1024*1024*1024))
-}
-
 // Tracker tracks memory usage over time with periodic logging.
 type Tracker struct {
 	config   Config
@@ -299,14 +294,6 @@ func (t *Tracker) LogWithBudget(reason string, budgetInUse, budgetTotal uint64) 
 	}
 }
 
-// PeakHeap returns the peak heap allocation seen.
-func (t *Tracker) PeakHeap() uint64 {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	return t.peakHeap
-}
-
 // logLoop runs the periodic logging.
 func (t *Tracker) logLoop() {
 	defer close(t.doneCh)
@@ -324,21 +311,4 @@ func (t *Tracker) logLoop() {
 			t.LogNow("periodic")
 		}
 	}
-}
-
-// ForceGC forces a garbage collection and logs the result.
-func ForceGC() {
-	log := logging.L()
-
-	before := Read()
-	runtime.GC()
-	after := Read()
-
-	freed := int64(before.HeapAlloc) - int64(after.HeapAlloc)
-
-	log.Debug().
-		Str("before_heap", FormatMB(before.HeapAlloc)).
-		Str("after_heap", FormatMB(after.HeapAlloc)).
-		Str("freed", FormatMB(uint64(max(freed, 0)))).
-		Msg("forced GC")
 }

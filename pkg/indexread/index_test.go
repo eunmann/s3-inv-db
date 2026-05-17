@@ -170,53 +170,6 @@ b/m/file.txt,400
 	}
 }
 
-func TestDescendantsUpToDepth(t *testing.T) {
-	outDir := setupTestIndex(t)
-
-	csv := `Key,Size
-a/b/c/file.txt,100
-a/b/d/file.txt,200
-a/e/file.txt,300
-`
-	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	idx, err := indexread.Open(outDir)
-	if err != nil {
-		t.Fatalf("Open failed: %v", err)
-	}
-	defer idx.Close()
-
-	rootPos, _ := idx.Lookup("")
-
-	// Get descendants up to depth 3
-	grouped, err := idx.DescendantsUpToDepth(rootPos, 3)
-	if err != nil {
-		t.Fatalf("DescendantsUpToDepth failed: %v", err)
-	}
-
-	// Should have 3 groups (depth 1, 2, 3)
-	if len(grouped) != 3 {
-		t.Errorf("got %d depth groups, want 3", len(grouped))
-	}
-
-	// Depth 1: a/
-	if len(grouped) > 0 && len(grouped[0]) != 1 {
-		t.Errorf("depth 1 has %d entries, want 1", len(grouped[0]))
-	}
-
-	// Depth 2: a/b/, a/e/
-	if len(grouped) > 1 && len(grouped[1]) != 2 {
-		t.Errorf("depth 2 has %d entries, want 2", len(grouped[1]))
-	}
-
-	// Depth 3: a/b/c/, a/b/d/
-	if len(grouped) > 2 && len(grouped[2]) != 2 {
-		t.Errorf("depth 3 has %d entries, want 2", len(grouped[2]))
-	}
-}
-
 func TestFiltering(t *testing.T) {
 	outDir := setupTestIndex(t)
 
@@ -256,79 +209,6 @@ large/file3.txt,500
 	}
 	if len(filtered2) != 1 {
 		t.Errorf("got %d filtered results, want 1 (large/)", len(filtered2))
-	}
-}
-
-func TestIterator_EmptyOnOutOfBoundsOrNegativeDepth(t *testing.T) {
-	outDir := setupTestIndex(t)
-	if err := buildIndexFromCSV(t, outDir, minimalCSV); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-	idx, err := indexread.Open(outDir)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer idx.Close()
-
-	cases := []struct {
-		name string
-		pos  uint64
-		rel  int
-	}{
-		{"out of bounds", 9_999_999, 1},
-		{"negative depth", 0, -1},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			it, err := idx.NewDescendantIterator(tc.pos, tc.rel)
-			if err != nil {
-				t.Fatalf("NewDescendantIterator: %v", err)
-			}
-			if it.Next() {
-				t.Error("Next() returned true on empty iterator")
-			}
-			if got := it.Pos(); got != 0 {
-				t.Errorf("Pos() = %d, want 0", got)
-			}
-			if got := it.Depth(); got != 0 {
-				t.Errorf("Depth() = %d, want 0", got)
-			}
-		})
-	}
-}
-
-func TestIterator(t *testing.T) {
-	outDir := setupTestIndex(t)
-
-	csv := `Key,Size
-a/file.txt,100
-b/file.txt,200
-c/file.txt,300
-`
-	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	idx, err := indexread.Open(outDir)
-	if err != nil {
-		t.Fatalf("Open failed: %v", err)
-	}
-	defer idx.Close()
-
-	rootPos, _ := idx.Lookup("")
-
-	it, err := idx.NewDescendantIterator(rootPos, 1)
-	if err != nil {
-		t.Fatalf("NewDescendantIterator failed: %v", err)
-	}
-
-	var positions []uint64
-	for it.Next() {
-		positions = append(positions, it.Pos())
-	}
-
-	if len(positions) != 3 {
-		t.Errorf("iterator returned %d positions, want 3", len(positions))
 	}
 }
 
@@ -492,75 +372,6 @@ x/y/file.txt,200
 	// MaxDepth should be 3 (a/b/c/)
 	if idx.MaxDepth() != 3 {
 		t.Errorf("MaxDepth() = %d, want 3", idx.MaxDepth())
-	}
-}
-
-func TestEmptyIterator(t *testing.T) {
-	outDir := setupTestIndex(t)
-
-	if err := buildIndexFromCSV(t, outDir, minimalCSV); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	idx, err := indexread.Open(outDir)
-	if err != nil {
-		t.Fatalf("Open failed: %v", err)
-	}
-	defer idx.Close()
-
-	// Query for descendants at depth 5 (doesn't exist)
-	rootPos, _ := idx.Lookup("")
-	it, err := idx.NewDescendantIterator(rootPos, 5)
-	if err != nil {
-		t.Fatalf("NewDescendantIterator failed: %v", err)
-	}
-
-	// Should return no results
-	count := 0
-	for it.Next() {
-		count++
-	}
-	if count != 0 {
-		t.Errorf("Expected 0 results at depth 5, got %d", count)
-	}
-
-	// Test iterator on invalid position
-	it2, err := idx.NewDescendantIterator(999999, 1)
-	if err != nil {
-		t.Fatalf("NewDescendantIterator failed: %v", err)
-	}
-	if it2.Next() {
-		t.Error("Expected empty iterator for invalid position")
-	}
-}
-
-func TestIteratorDepthMethod(t *testing.T) {
-	outDir := setupTestIndex(t)
-
-	csv := `Key,Size
-a/b/file.txt,100
-`
-	if err := buildIndexFromCSV(t, outDir, csv); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	idx, err := indexread.Open(outDir)
-	if err != nil {
-		t.Fatalf("Open failed: %v", err)
-	}
-	defer idx.Close()
-
-	rootPos, _ := idx.Lookup("")
-	it, err := idx.NewDescendantIterator(rootPos, 2)
-	if err != nil {
-		t.Fatalf("NewDescendantIterator failed: %v", err)
-	}
-
-	if it.Next() {
-		// Depth should be 2 (root depth 0 + relative depth 2)
-		if it.Depth() != 2 {
-			t.Errorf("Depth() = %d, want 2", it.Depth())
-		}
 	}
 }
 

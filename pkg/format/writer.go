@@ -46,21 +46,6 @@ func NewArrayWriter(path string, width uint32) (*ArrayWriter, error) {
 	}, nil
 }
 
-// WriteU32 writes a uint32 value.
-func (w *ArrayWriter) WriteU32(val uint32) error {
-	if w.width != 4 {
-		return fmt.Errorf("%w: expected 4, got %d", ErrWidthMismatch, w.width)
-	}
-	var buf [4]byte
-	binary.LittleEndian.PutUint32(buf[:], val)
-	if _, err := w.writer.Write(buf[:]); err != nil {
-		return fmt.Errorf("write u32: %w", err)
-	}
-	w.count++
-
-	return nil
-}
-
 // WriteU64 writes a uint64 value.
 func (w *ArrayWriter) WriteU64(val uint64) error {
 	if w.width != 8 {
@@ -70,44 +55,6 @@ func (w *ArrayWriter) WriteU64(val uint64) error {
 	binary.LittleEndian.PutUint64(buf[:], val)
 	if _, err := w.writer.Write(buf[:]); err != nil {
 		return fmt.Errorf("write u64: %w", err)
-	}
-	w.count++
-
-	return nil
-}
-
-// WriteU64Batch writes multiple uint64 values efficiently in a single operation.
-// This reduces function call overhead and allows the buffered writer to handle
-// larger contiguous writes.
-func (w *ArrayWriter) WriteU64Batch(vals []uint64) error {
-	if w.width != 8 {
-		return fmt.Errorf("%w: expected 8, got %d", ErrWidthMismatch, w.width)
-	}
-	if len(vals) == 0 {
-		return nil
-	}
-	// Encode all values into a single buffer
-	buf := make([]byte, len(vals)*8)
-	for i, v := range vals {
-		binary.LittleEndian.PutUint64(buf[i*8:], v)
-	}
-	if _, err := w.writer.Write(buf); err != nil {
-		return fmt.Errorf("write u64 batch: %w", err)
-	}
-	w.count += uint64(len(vals))
-
-	return nil
-}
-
-// WriteU16 writes a uint16 value.
-func (w *ArrayWriter) WriteU16(val uint16) error {
-	if w.width != 2 {
-		return fmt.Errorf("%w: expected 2, got %d", ErrWidthMismatch, w.width)
-	}
-	var buf [2]byte
-	binary.LittleEndian.PutUint16(buf[:], val)
-	if _, err := w.writer.Write(buf[:]); err != nil {
-		return fmt.Errorf("write u16: %w", err)
 	}
 	w.count++
 

@@ -1030,14 +1030,6 @@ func (s *singleRunIterator) Close() error {
 	return nil
 }
 
-func (s *singleRunIterator) RemoveAll() error {
-	if err := s.reader.Remove(); err != nil {
-		return fmt.Errorf("remove run file: %w", err)
-	}
-
-	return nil
-}
-
 // cleanup removes temporary files.
 func (p *Pipeline) cleanup() {
 	for _, path := range p.runFiles {

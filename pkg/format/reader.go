@@ -188,19 +188,6 @@ func (r *ArrayReader) Width() uint32 {
 	return r.header.Width
 }
 
-// GetU32 returns the uint32 value at the given index.
-func (r *ArrayReader) GetU32(idx uint64) (uint32, error) {
-	if idx >= r.header.Count {
-		return 0, ErrBoundsCheck
-	}
-	if r.header.Width != 4 {
-		return 0, fmt.Errorf("%w: expected 4, got %d", ErrWidthMismatch, r.header.Width)
-	}
-	offset := idx * 4
-
-	return binary.LittleEndian.Uint32(r.data[offset:]), nil
-}
-
 // GetU64 returns the uint64 value at the given index.
 func (r *ArrayReader) GetU64(idx uint64) (uint64, error) {
 	if idx >= r.header.Count {
@@ -214,46 +201,10 @@ func (r *ArrayReader) GetU64(idx uint64) (uint64, error) {
 	return binary.LittleEndian.Uint64(r.data[offset:]), nil
 }
 
-// GetU16 returns the uint16 value at the given index.
-func (r *ArrayReader) GetU16(idx uint64) (uint16, error) {
-	if idx >= r.header.Count {
-		return 0, ErrBoundsCheck
-	}
-	if r.header.Width != 2 {
-		return 0, fmt.Errorf("%w: expected 2, got %d", ErrWidthMismatch, r.header.Width)
-	}
-	offset := idx * 2
-
-	return binary.LittleEndian.Uint16(r.data[offset:]), nil
-}
-
-// Unsafe* readers skip bounds checking. Callers must have already
-// validated idx < Count(); out-of-range reads are undefined behaviour.
-
-func (r *ArrayReader) UnsafeGetU32(idx uint64) uint32 {
-	return binary.LittleEndian.Uint32(r.data[idx*4:])
-}
-
+// UnsafeGetU64 returns the value without bounds checking. Caller must
+// have validated idx < Count(); out-of-range reads are undefined.
 func (r *ArrayReader) UnsafeGetU64(idx uint64) uint64 {
 	return binary.LittleEndian.Uint64(r.data[idx*8:])
-}
-
-func (r *ArrayReader) UnsafeGetU16(idx uint64) uint16 {
-	return binary.LittleEndian.Uint16(r.data[idx*2:])
-}
-
-// UnsafeGetUint32 returns the value at idx as uint32, dispatching on
-// the array's stored width. Lets a single logical column (e.g. depth)
-// be encoded at width=2 for new builds while still reading width=4
-// from older indexes. The branch is perfectly predicted (Width never
-// changes for a given array) so the cost is negligible vs the array
-// fetch itself.
-func (r *ArrayReader) UnsafeGetUint32(idx uint64) uint32 {
-	if r.header.Width == 2 {
-		return uint32(binary.LittleEndian.Uint16(r.data[idx*2:]))
-	}
-
-	return binary.LittleEndian.Uint32(r.data[idx*4:])
 }
 
 // BlobReader provides read access to prefix strings via mmap.
@@ -321,36 +272,4 @@ func (r *BlobReader) Get(idx uint64) (string, error) {
 	}
 
 	return string(r.blobMmap.Data()[start:end]), nil
-}
-
-// UnsafeGet returns the string without bounds checking.
-//
-// WARNING: This method performs NO bounds checking for performance.
-// Passing an idx >= Count() will cause undefined behavior (likely a panic
-// or memory corruption). Only use this in hot paths where the caller has
-// already validated the index. For safe access, use Get instead.
-func (r *BlobReader) UnsafeGet(idx uint64) string {
-	start := r.offsetsMmap.UnsafeGetU64(idx)
-	end := r.offsetsMmap.UnsafeGetU64(idx + 1)
-
-	return string(r.blobMmap.Data()[start:end])
-}
-
-// UnsafeBytesNoCopy returns the prefix at idx as a []byte slice that
-// aliases the mmap'd region directly — no copy. Saves one allocation
-// per call on hot Browse/Compare paths that just want to compare
-// bytes (or pass to a Reader) without needing to retain the string.
-//
-// WARNING: the returned slice MUST NOT outlive the BlobReader (its
-// Close munmaps the backing region) and MUST NOT be mutated. Treat
-// it as `string` semantically. Callers that need a long-lived value
-// should `string(slice)`-copy at the boundary.
-//
-// No bounds checking — caller must have validated idx via Lookup or
-// a separate range check.
-func (r *BlobReader) UnsafeBytesNoCopy(idx uint64) []byte {
-	start := r.offsetsMmap.UnsafeGetU64(idx)
-	end := r.offsetsMmap.UnsafeGetU64(idx + 1)
-
-	return r.blobMmap.Data()[start:end]
 }

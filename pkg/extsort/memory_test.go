@@ -33,7 +33,7 @@ func TestAggregatorMemoryBounded(t *testing.T) {
 		agg.AddObject(key, 1024, tiers.Standard)
 
 		// Check if we should flush (simulating pipeline behavior)
-		if i%1000 == 0 && extsort.ShouldWorkerFlush(extsort.HeapAllocBytes(), flushThresholdMB*1024*1024, 1) {
+		if i%1000 == 0 && extsort.ShouldWorkerFlush(currentHeapAlloc(), flushThresholdMB*1024*1024, 1) {
 			rows := agg.Drain()
 			_ = rows // In real pipeline, these would be written to run file
 			flushCount++
@@ -154,20 +154,13 @@ func prefixStatsSize(_ extsort.PrefixStats) int {
 	return 216
 }
 
-// TestHeapAllocBytes verifies that extsort.HeapAllocBytes returns sensible values.
-func TestHeapAllocBytes(t *testing.T) {
-	// Allocate some memory
-	data := make([]byte, 1024*1024) // 1 MB
-	_ = data
+// currentHeapAlloc reads runtime.MemStats.HeapAlloc, used to feed
+// ShouldWorkerFlush in tests.
+func currentHeapAlloc() uint64 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
 
-	heap := extsort.HeapAllocBytes()
-
-	// Should be at least 1 MB
-	if heap < 1024*1024 {
-		t.Errorf("extsort.HeapAllocBytes returned %d, expected at least 1 MB", heap)
-	}
-
-	t.Logf("extsort.HeapAllocBytes: %.2f MB", float64(heap)/(1024*1024))
+	return m.HeapAlloc
 }
 
 // TestShouldWorkerFlush verifies the per-worker spill decision.

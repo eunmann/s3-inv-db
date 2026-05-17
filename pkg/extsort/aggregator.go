@@ -102,14 +102,6 @@ func (a *Aggregator) EstimatedMemoryUsage() int64 {
 	return int64(len(a.prefixes)) * bytesPerPrefix
 }
 
-// HeapAllocBytes returns runtime.MemStats.HeapAlloc.
-func HeapAllocBytes() uint64 {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-
-	return m.HeapAlloc
-}
-
 // HeapInuseBytes returns runtime.MemStats.HeapInuse — a more
 // conservative GOMEMLIMIT-relative pressure signal than HeapAlloc
 // because it includes recently-freed spans not yet returned to the OS.
@@ -202,17 +194,4 @@ func (a *Aggregator) Drain() []*PrefixRow {
 	a.bytesProcessed = 0
 
 	return rows
-}
-
-// Clear resets the aggregator, returning all PrefixStats to the pool.
-func (a *Aggregator) Clear() {
-	for _, stats := range a.prefixes {
-		stats.Reset()
-		a.statsPool.Put(stats)
-	}
-	for k := range a.prefixes {
-		delete(a.prefixes, k)
-	}
-	a.objectCount = 0
-	a.bytesProcessed = 0
 }

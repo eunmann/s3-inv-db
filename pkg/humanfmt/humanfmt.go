@@ -89,29 +89,6 @@ func Duration(d time.Duration) string {
 	}
 }
 
-// Throughput formats bytes per duration as a human-readable rate.
-// Returns a string like "123.4 MiB/s".
-func Throughput(bytes int64, d time.Duration) string {
-	if d <= 0 {
-		return "∞"
-	}
-
-	bytesPerSec := float64(bytes) / d.Seconds()
-
-	switch {
-	case bytesPerSec >= TiB:
-		return fmt.Sprintf("%.2f TiB/s", bytesPerSec/TiB)
-	case bytesPerSec >= GiB:
-		return fmt.Sprintf("%.2f GiB/s", bytesPerSec/GiB)
-	case bytesPerSec >= MiB:
-		return fmt.Sprintf("%.2f MiB/s", bytesPerSec/MiB)
-	case bytesPerSec >= KiB:
-		return fmt.Sprintf("%.2f KiB/s", bytesPerSec/KiB)
-	default:
-		return fmt.Sprintf("%.0f B/s", bytesPerSec)
-	}
-}
-
 // Count renders an integer for human display.
 //
 //   - < 0     → plain decimal

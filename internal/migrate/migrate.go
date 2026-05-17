@@ -51,19 +51,6 @@ func recoverDirty(m *migrate.Migrate) error {
 	return nil
 }
 
-// Down rolls back the most recent steps migrations.
-func Down(db *sql.DB, steps int) error {
-	m, err := newMigrator(db)
-	if err != nil {
-		return err
-	}
-	if err := m.Steps(-steps); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return fmt.Errorf("roll back %d migrations: %w", steps, err)
-	}
-
-	return nil
-}
-
 // VersionInfo describes the migration state of the schema_migrations
 // table: the major version number and whether the previous migration
 // finished cleanly.

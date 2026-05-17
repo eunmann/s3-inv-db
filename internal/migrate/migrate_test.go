@@ -82,23 +82,6 @@ func TestVersion_FreshDBIsZero(t *testing.T) {
 	}
 }
 
-func TestDown_RollsBackOneStep(t *testing.T) {
-	db := openMemDB(t)
-	if err := migrate.Apply(db); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	infoBefore, _ := migrate.Version(db)
-	before := infoBefore.Version
-	if err := migrate.Down(db, 1); err != nil {
-		t.Fatalf("Down: %v", err)
-	}
-	infoAfter, _ := migrate.Version(db)
-	after := infoAfter.Version
-	if after >= before {
-		t.Errorf("version after Down = %d, want < %d", after, before)
-	}
-}
-
 func TestApply_RecoversFromDirtyState(t *testing.T) {
 	db := openMemDB(t)
 	if err := migrate.Apply(db); err != nil {
