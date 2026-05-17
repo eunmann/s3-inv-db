@@ -15,9 +15,10 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// defaultPollInterval is the fallback polling interval for an
-// AutoLoader created with a zero PollInterval.
-const defaultPollInterval = 15 * time.Minute
+// DefaultPollInterval is the fallback polling interval for an
+// AutoLoader created with a zero PollInterval. Exported so the
+// server binary's CLI flag default stays in sync.
+const DefaultPollInterval = 15 * time.Minute
 
 // Config holds the AutoLoader's runtime knobs. Zero values pick
 // sensible defaults (15m poll, 1 concurrent load, 1m–1h backoff).
@@ -58,7 +59,7 @@ type AutoLoader struct {
 // New constructs an AutoLoader; logger may be nil.
 func New(cfg Config, discovery Discovery, loader LoaderFunc, configStore *inventory.ConfigStore, manager *inventory.Manager, logger *zerolog.Logger) *AutoLoader {
 	if cfg.PollInterval <= 0 {
-		cfg.PollInterval = defaultPollInterval
+		cfg.PollInterval = DefaultPollInterval
 	}
 	if cfg.MaxConcurrency <= 0 {
 		cfg.MaxConcurrency = 1

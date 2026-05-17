@@ -53,14 +53,14 @@ type Config struct {
 
 	// DiscoveryRefreshInterval governs how often the background
 	// discovery refresher rebuilds the cached snapshot the HTTP
-	// handlers serve. Zero means use defaultDiscoveryRefreshInterval.
+	// handlers serve. Zero means use DefaultDiscoveryRefreshInterval.
 	DiscoveryRefreshInterval time.Duration
 }
 
-// defaultDiscoveryRefreshInterval is the fallback cadence for the
-// discovery snapshot refresher. The dashboard reads the snapshot, so
-// the value sets the page-load freshness ceiling.
-const defaultDiscoveryRefreshInterval = time.Minute
+// DefaultDiscoveryRefreshInterval is the fallback cadence for the
+// discovery snapshot refresher. The dashboard reads the snapshot,
+// so this value sets the page-load freshness ceiling.
+const DefaultDiscoveryRefreshInterval = time.Minute
 
 // Server is the HTTP server.
 type Server struct {
@@ -188,10 +188,10 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 // retentionLookup returns a budget.RetentionFunc that resolves
 // per-configuration retention from the ConfigStore, falling back to
 // the server-wide default when the store has no row.
+//
+
 func retentionLookup(store *inventory.ConfigStore, fallback uint32) budget.RetentionFunc {
 	return func(source, name string) uint32 {
-		// Bounded background ctx — eviction planning is a quick local
-		// lookup; ConfigStore.Get always uses its *Context variant.
 		cfg, err := store.Get(context.Background(), source, name)
 		if err == nil && cfg.RetentionCount > 0 {
 			return cfg.RetentionCount
@@ -423,5 +423,5 @@ func (s *Server) discoveryRefreshInterval() time.Duration {
 		return s.config.DiscoveryRefreshInterval
 	}
 
-	return defaultDiscoveryRefreshInterval
+	return DefaultDiscoveryRefreshInterval
 }

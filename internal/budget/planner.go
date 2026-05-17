@@ -37,7 +37,7 @@ type Planner struct {
 	retention RetentionFunc
 }
 
-// NewPlanner constructs a planner. retention may be nil — every load
+// NewPlanner constructs a planner. Retention may be nil — every load
 // then falls back to DefaultRetention.
 func NewPlanner(tracker *Tracker, retention RetentionFunc) *Planner {
 	return &Planner{tracker: tracker, retention: retention}
