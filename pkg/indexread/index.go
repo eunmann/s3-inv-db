@@ -4,136 +4,75 @@ package indexread
 import (
 	"errors"
 	"fmt"
-	"io"
-	"path/filepath"
-	"reflect"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
 )
 
-// Index provides low-latency access to an S3 inventory index via mmap.
-//
-// Thread Safety: Index is safe for concurrent read access from multiple
-// goroutines. All read methods (Lookup, Stats, TierBreakdown, etc.) can be
-// called concurrently. Close should only be called once, after all read
-// operations have completed.
+// Index provides low-latency access to an S3 inventory index via
+// mmap. Safe for concurrent read access; Close once after all reads.
 type Index struct {
-	// coreStats is the row-major core-stats reader. When non-nil,
-	// all per-prefix calls (Stats/Depth/SubtreeEnd/MaxDepthInSubtree)
-	// dispatch through it and the legacy per-column readers below
-	// stay nil. When opening a legacy index (no core_stats.bin) the
-	// per-column readers are populated and coreStats stays nil.
-	coreStats         *format.CoreStatsReader
-	subtreeEnd        *format.ArrayReader
-	depth             *format.ArrayReader
-	objectCount       *format.ArrayReader
-	totalBytes        *format.ArrayReader
-	maxDepthInSubtree *format.ArrayReader
-	depthIndex        *format.DepthIndex
-	mphf              *format.MPHF
-	tierStats         *format.TierStatsReader
-	count             uint64
-	maxDepth          uint32
+	coreStats  *format.CoreStatsReader
+	depthIndex *format.DepthIndex
+	mphf       *format.MPHF
+	tierStats  *format.TierStatsReader
+	count      uint64
+	maxDepth   uint32
 }
 
 // Open opens an index from the given directory.
 func Open(dir string) (*Index, error) {
-	var idx Index
-	var err error
-
-	// Prefer the row-major core stats file. When present, the legacy
-	// per-column files are not opened — one mmap'd region covers all
-	// five core fields.
-	idx.coreStats, err = format.OpenCoreStats(dir)
+	coreStats, err := format.OpenCoreStats(dir)
 	if err != nil {
 		return nil, fmt.Errorf("open core stats: %w", err)
 	}
-	if idx.coreStats == nil {
-		idx.subtreeEnd, err = format.OpenArrayWithHint(filepath.Join(dir, "subtree_end.u64"), format.AccessHintRandom)
-		if err != nil {
-			return nil, fmt.Errorf("open subtree_end: %w", err)
-		}
-		idx.depth, err = format.OpenArrayWithHint(filepath.Join(dir, "depth.u32"), format.AccessHintRandom)
-		if err != nil {
-			idx.Close()
-
-			return nil, fmt.Errorf("open depth: %w", err)
-		}
-		idx.objectCount, err = format.OpenArrayWithHint(filepath.Join(dir, "object_count.u64"), format.AccessHintRandom)
-		if err != nil {
-			idx.Close()
-
-			return nil, fmt.Errorf("open object_count: %w", err)
-		}
-		idx.totalBytes, err = format.OpenArrayWithHint(filepath.Join(dir, "total_bytes.u64"), format.AccessHintRandom)
-		if err != nil {
-			idx.Close()
-
-			return nil, fmt.Errorf("open total_bytes: %w", err)
-		}
-		idx.maxDepthInSubtree, err = format.OpenArrayWithHint(filepath.Join(dir, "max_depth_in_subtree.u32"), format.AccessHintRandom)
-		if err != nil {
-			idx.Close()
-
-			return nil, fmt.Errorf("open max_depth_in_subtree: %w", err)
-		}
+	if coreStats == nil {
+		return nil, fmt.Errorf("%w: missing %s", ErrMissingCoreStats, format.CoreStatsFile)
 	}
 
-	idx.depthIndex, err = format.OpenDepthIndex(dir)
+	depthIndex, err := format.OpenDepthIndex(dir)
 	if err != nil {
-		idx.Close()
+		coreStats.Close()
 
 		return nil, fmt.Errorf("open depth index: %w", err)
 	}
 
-	idx.mphf, err = format.OpenMPHF(dir)
+	mphf, err := format.OpenMPHF(dir)
 	if err != nil {
-		idx.Close()
+		_ = errors.Join(coreStats.Close(), depthIndex.Close())
 
 		return nil, fmt.Errorf("open MPHF: %w", err)
 	}
 
-	idx.tierStats, err = format.OpenTierStats(dir)
+	tierStats, err := format.OpenTierStats(dir)
 	if err != nil {
-		idx.Close()
+		_ = errors.Join(coreStats.Close(), depthIndex.Close(), mphf.Close())
 
 		return nil, fmt.Errorf("open tier stats: %w", err)
 	}
 
-	if idx.coreStats != nil {
-		idx.count = idx.coreStats.Count()
-	} else {
-		idx.count = idx.subtreeEnd.Count()
-	}
-	idx.maxDepth = idx.depthIndex.MaxDepth()
-
-	return &idx, nil
+	return &Index{
+		coreStats:  coreStats,
+		depthIndex: depthIndex,
+		mphf:       mphf,
+		tierStats:  tierStats,
+		count:      coreStats.Count(),
+		maxDepth:   depthIndex.MaxDepth(),
+	}, nil
 }
 
-// Close releases all resources.
-func (idx *Index) Close() error {
-	closers := []io.Closer{
-		idx.coreStats,
-		idx.subtreeEnd,
-		idx.depth,
-		idx.objectCount,
-		idx.totalBytes,
-		idx.maxDepthInSubtree,
-		idx.depthIndex,
-		idx.mphf,
-		idx.tierStats,
-	}
-	var errs []error
-	for _, c := range closers {
-		if c == nil || reflect.ValueOf(c).IsNil() {
-			continue
-		}
-		if err := c.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
+// ErrMissingCoreStats is returned by Open when the index directory
+// has no core_stats.bin (legacy per-column layout is no longer
+// supported; rebuild required).
+var ErrMissingCoreStats = errors.New("index missing core_stats.bin (rebuild required)")
 
-	return errors.Join(errs...)
+// Close releases all resources, joining any errors.
+func (idx *Index) Close() error {
+	return errors.Join(
+		idx.coreStats.Close(),
+		idx.depthIndex.Close(),
+		idx.mphf.Close(),
+		idx.tierStats.Close(),
+	)
 }
 
 // Stats holds aggregated statistics for a prefix.
@@ -154,16 +93,9 @@ func (idx *Index) Stats(pos uint64) Stats {
 	if pos >= idx.count {
 		return Stats{}
 	}
-	if idx.coreStats != nil {
-		objCount, totalBytes := idx.coreStats.UnsafeStats(pos)
+	objCount, totalBytes := idx.coreStats.UnsafeStats(pos)
 
-		return Stats{ObjectCount: objCount, TotalBytes: totalBytes}
-	}
-
-	return Stats{
-		ObjectCount: idx.objectCount.UnsafeGetU64(pos),
-		TotalBytes:  idx.totalBytes.UnsafeGetU64(pos),
-	}
+	return Stats{ObjectCount: objCount, TotalBytes: totalBytes}
 }
 
 // StatsForPrefix returns stats for a prefix string.
@@ -181,11 +113,8 @@ func (idx *Index) Depth(pos uint64) uint32 {
 	if pos >= idx.count {
 		return 0
 	}
-	if idx.coreStats != nil {
-		return idx.coreStats.UnsafeDepth(pos)
-	}
 
-	return idx.depth.UnsafeGetUint32(pos)
+	return idx.coreStats.UnsafeDepth(pos)
 }
 
 // SubtreeEnd returns the end position of the subtree rooted at pos.
@@ -193,11 +122,8 @@ func (idx *Index) SubtreeEnd(pos uint64) uint64 {
 	if pos >= idx.count {
 		return 0
 	}
-	if idx.coreStats != nil {
-		return idx.coreStats.UnsafeSubtreeEnd(pos)
-	}
 
-	return idx.subtreeEnd.UnsafeGetU64(pos)
+	return idx.coreStats.UnsafeSubtreeEnd(pos)
 }
 
 // MaxDepthInSubtree returns the maximum depth in the subtree rooted at pos.
@@ -205,11 +131,8 @@ func (idx *Index) MaxDepthInSubtree(pos uint64) uint32 {
 	if pos >= idx.count {
 		return 0
 	}
-	if idx.coreStats != nil {
-		return idx.coreStats.UnsafeMaxDepth(pos)
-	}
 
-	return idx.maxDepthInSubtree.UnsafeGetUint32(pos)
+	return idx.coreStats.UnsafeMaxDepth(pos)
 }
 
 // PrefixString returns the prefix string for the node at pos.

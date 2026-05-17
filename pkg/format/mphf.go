@@ -1,6 +1,7 @@
 package format
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -16,151 +17,77 @@ const indexFilePerm = 0o600
 
 // MPHF provides read access to the minimal perfect hash function.
 //
-// Thread Safety: MPHF is safe for concurrent read access from multiple
-// goroutines. All read methods can be called concurrently. Close should only
-// be called once, after all read operations have completed.
+// Thread Safety: MPHF is safe for concurrent read access from
+// multiple goroutines. Close once, after all reads.
 type MPHF struct {
 	mph *bbhash.BBHash2
-	// combined holds the interleaved [fp, pos, fp, pos, ...] array
-	// when present (new format). Lookup at hash position p reads
-	// combined.UnsafeGetU64(2p) for fp and combined.UnsafeGetU64(2p+1)
-	// for pos — adjacent words in the same array, typically the same
-	// 64-byte cache line. Halves the cold-cache cost of a Lookup vs
-	// the previous separate-array layout.
-	combined *ArrayReader
-	// fingerprints + preorderPos hold the legacy separate-array
-	// layout. Populated only when an old index without combined is
-	// opened. Mutually exclusive with `combined`.
-	fingerprints *ArrayReader
-	preorderPos  *ArrayReader // maps hash position -> preorder position
-	prefixBlob   *BlobReader
-	count        uint64
+	// combined holds the interleaved [fp, pos, fp, pos, ...] array.
+	// Lookup at hash position p reads combined.UnsafeGetU64(2p) for
+	// fp and combined.UnsafeGetU64(2p+1) for pos — adjacent words
+	// in the same cache line.
+	combined   *ArrayReader
+	prefixBlob *BlobReader
+	count      uint64
 }
 
-// OpenMPHF opens an MPHF from the given directory. New builds emit a
-// single combined fp+pos file; older builds had separate files. We
-// handle either layout transparently.
+// OpenMPHF opens an MPHF from the given directory.
 func OpenMPHF(outDir string) (*MPHF, error) {
 	mphPath := filepath.Join(outDir, "mph.bin")
 	combinedPath := filepath.Join(outDir, CombinedMPHFArrayFile)
-	fpPath := filepath.Join(outDir, "mph_fp.u64")
-	posPath := filepath.Join(outDir, "mph_pos.u64")
 
-	// Check if empty
 	info, err := os.Stat(mphPath)
 	if err != nil {
 		return nil, fmt.Errorf("stat mph file: %w", err)
 	}
-
 	if info.Size() == 0 {
-		// Empty MPHF
 		return &MPHF{count: 0}, nil
 	}
 
-	// Load MPHF
 	mphData, err := os.ReadFile(mphPath)
 	if err != nil {
 		return nil, fmt.Errorf("read mph file: %w", err)
 	}
-
 	mph := &bbhash.BBHash2{}
 	if err := mph.UnmarshalBinary(mphData); err != nil {
 		return nil, fmt.Errorf("unmarshal MPHF: %w", err)
 	}
 
-	// Prefer the combined fp+pos file (new format). Fall back to
-	// separate fp + pos files if the combined one isn't present.
-	var combined, fingerprints, preorderPos *ArrayReader
-	if _, err := os.Stat(combinedPath); err == nil {
-		combined, err = OpenArrayWithHint(combinedPath, AccessHintRandom)
-		if err != nil {
-			return nil, fmt.Errorf("open combined fp+pos: %w", err)
-		}
-	} else {
-		fingerprints, err = OpenArrayWithHint(fpPath, AccessHintRandom)
-		if err != nil {
-			return nil, fmt.Errorf("open fingerprints: %w", err)
-		}
-		preorderPos, err = OpenArrayWithHint(posPath, AccessHintRandom)
-		if err != nil {
-			fingerprints.Close()
-
-			return nil, fmt.Errorf("open preorder positions: %w", err)
-		}
+	combined, err := OpenArrayWithHint(combinedPath, AccessHintRandom)
+	if err != nil {
+		return nil, fmt.Errorf("open combined fp+pos: %w", err)
 	}
 
-	// Load prefix blob (raw encoding; segmented removed).
 	var prefixBlob *BlobReader
 	blobPath := filepath.Join(outDir, "prefix_blob.bin")
 	offsetsPath := filepath.Join(outDir, "prefix_offsets.u64")
-
 	if _, err := os.Stat(blobPath); err == nil {
 		prefixBlob, err = OpenBlob(blobPath, offsetsPath)
 		if err != nil {
-			if fingerprints != nil {
-				fingerprints.Close()
-			}
-			if preorderPos != nil {
-				preorderPos.Close()
-			}
+			combined.Close()
 
 			return nil, fmt.Errorf("open prefix blob: %w", err)
 		}
 	}
 
 	return &MPHF{
-		mph:          mph,
-		combined:     combined,
-		fingerprints: fingerprints,
-		preorderPos:  preorderPos,
-		prefixBlob:   prefixBlob,
-		count:        mphCount(combined, fingerprints),
+		mph:        mph,
+		combined:   combined,
+		prefixBlob: prefixBlob,
+		count:      combined.Count() / 2,
 	}, nil
-}
-
-// mphCount returns the prefix count from whichever array layout the
-// MPHF is using. The combined array stores 2 entries per prefix; the
-// separate fingerprints array stores 1.
-func mphCount(combined, fingerprints *ArrayReader) uint64 {
-	if combined != nil {
-		return combined.Count() / 2
-	}
-	if fingerprints != nil {
-		return fingerprints.Count()
-	}
-
-	return 0
 }
 
 // Close releases resources.
 func (m *MPHF) Close() error {
-	var firstErr error
-
+	var combinedErr, blobErr error
 	if m.combined != nil {
-		if err := m.combined.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+		combinedErr = m.combined.Close()
 	}
-
-	if m.fingerprints != nil {
-		if err := m.fingerprints.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-
-	if m.preorderPos != nil {
-		if err := m.preorderPos.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-
 	if m.prefixBlob != nil {
-		if err := m.prefixBlob.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+		blobErr = m.prefixBlob.Close()
 	}
 
-	return firstErr
+	return errors.Join(combinedErr, blobErr)
 }
 
 // Lookup returns the preorder position for a prefix, or ok=false if not found.
@@ -168,30 +95,19 @@ func (m *MPHF) Lookup(prefix string) (uint64, bool) {
 	if m.count == 0 || m.mph == nil {
 		return 0, false
 	}
-
 	keyHash := hashString(prefix)
 	hashVal := m.mph.Find(keyHash)
 	if hashVal == 0 {
 		return 0, false
 	}
-
-	hashPos := hashVal - 1 // Convert to 0-indexed
-
+	hashPos := hashVal - 1
 	if hashPos >= m.count {
 		return 0, false
 	}
-
-	// Verify with fingerprint, then read preorder position. When the
-	// combined interleaved layout is in use both reads land in the
-	// same cache line (slot 2p = fp, slot 2p+1 = pos).
-	var storedFP, preorderPosVal uint64
-	if m.combined != nil {
-		storedFP = m.combined.UnsafeGetU64(2 * hashPos)
-		preorderPosVal = m.combined.UnsafeGetU64(2*hashPos + 1)
-	} else {
-		storedFP = m.fingerprints.UnsafeGetU64(hashPos)
-		preorderPosVal = m.preorderPos.UnsafeGetU64(hashPos)
-	}
+	// fp + pos live in the same 16-byte slot of the interleaved
+	// combined array; both reads typically hit one cache line.
+	storedFP := m.combined.UnsafeGetU64(2 * hashPos)
+	preorderPosVal := m.combined.UnsafeGetU64(2*hashPos + 1)
 	if storedFP != computeFingerprint(prefix) {
 		return 0, false
 	}

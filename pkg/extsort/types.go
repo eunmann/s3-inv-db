@@ -36,15 +36,16 @@ type RowIterator interface {
 // PrefixRow represents a single prefix with its aggregated statistics.
 // This is the primary data type passed through the external sort pipeline.
 //
-// The struct uses fixed-size arrays for tier data to avoid map allocations
-// in hot paths. Tier index i corresponds to tiers.ID(i).
+// Field order is tuned for alignment: large fields first, then the
+// fixed-size tier arrays, then the small uint16 Depth at the end.
+// Putting Depth between Prefix and Count would waste 6 bytes of
+// padding inside each row (real bytes at billion-row scale).
+//
+// The struct uses fixed-size arrays for tier data to avoid map
+// allocations in hot paths. Tier index i corresponds to tiers.ID(i).
 type PrefixRow struct {
 	// Prefix is the full prefix string (e.g., "data/2024/01/").
 	Prefix string
-
-	// Depth is the directory depth (number of '/' characters).
-	// Uses uint16 to save memory (max depth of 65535 is more than sufficient).
-	Depth uint16
 
 	// Count is the total number of objects under this prefix.
 	Count uint64
@@ -59,6 +60,10 @@ type PrefixRow struct {
 	// TierBytes holds byte counts per storage tier.
 	// Index i corresponds to tiers.ID(i).
 	TierBytes [MaxTiers]uint64
+
+	// Depth is the directory depth (number of '/' characters).
+	// uint16 supports up to 65535 levels — far beyond any realistic key.
+	Depth uint16
 }
 
 // Reset clears all fields of the PrefixRow for reuse.
@@ -176,14 +181,12 @@ func SortPrefixRows(rows []*PrefixRow) {
 	})
 }
 
-// PrefixStats holds aggregated statistics for a single prefix during the
-// in-memory aggregation phase. All counters are uint64 because at
-// billion-object / PB-scale buckets, a single tier of the root prefix can
-// exceed 2^32. Smaller width risks silent overflow on real workloads.
+// PrefixStats holds aggregated statistics for a single prefix during
+// the in-memory aggregation phase. All counters are uint64 because at
+// billion-object / PB-scale buckets, a single tier of the root prefix
+// can exceed 2^32. Field order matches PrefixRow for alignment
+// efficiency (Depth at the end avoids inter-field padding).
 type PrefixStats struct {
-	// Depth is the directory depth.
-	Depth uint16
-
 	// Count is the total number of objects under this prefix.
 	Count uint64
 
@@ -195,6 +198,9 @@ type PrefixStats struct {
 
 	// TierBytes holds byte counts per storage tier.
 	TierBytes [MaxTiers]uint64
+
+	// Depth is the directory depth.
+	Depth uint16
 }
 
 // Reset clears all fields of the PrefixStats for reuse.
