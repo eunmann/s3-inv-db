@@ -23,23 +23,16 @@ func Bytes(b int64) string {
 		return fmt.Sprintf("%d B", b)
 	}
 
-	switch {
-	case b >= TiB:
-		return fmt.Sprintf("%.2f TiB", float64(b)/TiB)
-	case b >= GiB:
-		return fmt.Sprintf("%.2f GiB", float64(b)/GiB)
-	case b >= MiB:
-		return fmt.Sprintf("%.2f MiB", float64(b)/MiB)
-	case b >= KiB:
-		return fmt.Sprintf("%.2f KiB", float64(b)/KiB)
-	default:
-		return fmt.Sprintf("%d B", b)
-	}
+	return formatBytes(uint64(b))
 }
 
 // BytesUint64 is like Bytes but for uint64. Computes natively rather
 // than casting through int64 so values above 2^63 don't underflow.
 func BytesUint64(b uint64) string {
+	return formatBytes(b)
+}
+
+func formatBytes(b uint64) string {
 	switch {
 	case b >= TiB:
 		return fmt.Sprintf("%.2f TiB", float64(b)/TiB)
@@ -100,23 +93,28 @@ func Count(n int64) string {
 	if n < 0 {
 		return strconv.FormatInt(n, 10)
 	}
+	if n < kCutoff {
+		return formatWithCommas(n)
+	}
 
-	const (
-		thousand = 1000.0
-		million  = 1000 * thousand
-		billion  = 1000 * million
-	)
+	return formatLargeCount(uint64(n))
+}
 
+const (
+	kCutoff = 1000
+	mCutoff = 1000 * kCutoff
+	bCutoff = 1000 * mCutoff
+)
+
+func formatLargeCount(n uint64) string {
 	f := float64(n)
 	switch {
-	case f >= billion:
-		return fmt.Sprintf("%.1fB", math.Round(f/billion*10)/10)
-	case f >= million:
-		return fmt.Sprintf("%.1fM", math.Round(f/million*10)/10)
-	case f >= thousand:
-		return fmt.Sprintf("%.1fK", math.Round(f/thousand*10)/10)
+	case f >= bCutoff:
+		return fmt.Sprintf("%.1fB", math.Round(f/bCutoff*10)/10)
+	case f >= mCutoff:
+		return fmt.Sprintf("%.1fM", math.Round(f/mCutoff*10)/10)
 	default:
-		return formatWithCommas(n)
+		return fmt.Sprintf("%.1fK", math.Round(f/kCutoff*10)/10)
 	}
 }
 
@@ -158,20 +156,9 @@ func RunTimestamp(raw string) string {
 // CountUint64 is like Count but for uint64. Computes natively rather
 // than casting through int64 so values above 2^63 don't underflow.
 func CountUint64(n uint64) string {
-	const (
-		thousand = 1000.0
-		million  = 1000 * thousand
-		billion  = 1000 * million
-	)
-	f := float64(n)
-	switch {
-	case f >= billion:
-		return fmt.Sprintf("%.1fB", math.Round(f/billion*10)/10)
-	case f >= million:
-		return fmt.Sprintf("%.1fM", math.Round(f/million*10)/10)
-	case f >= thousand:
-		return fmt.Sprintf("%.1fK", math.Round(f/thousand*10)/10)
-	default:
+	if n < kCutoff {
 		return strconv.FormatUint(n, 10)
 	}
+
+	return formatLargeCount(n)
 }
