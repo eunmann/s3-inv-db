@@ -2,8 +2,11 @@
 package indexread
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
+	"reflect"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
 )
@@ -107,29 +110,9 @@ func Open(dir string) (*Index, error) {
 	return &idx, nil
 }
 
-// closer is an interface for types with a Close method.
-type closer interface {
-	Close() error
-}
-
-// closeAll closes multiple resources and returns the first error encountered.
-func closeAll(closers ...closer) error {
-	var firstErr error
-	for _, c := range closers {
-		if c == nil {
-			continue
-		}
-		if err := c.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-
-	return firstErr
-}
-
 // Close releases all resources.
 func (idx *Index) Close() error {
-	return closeAll(
+	closers := []io.Closer{
 		idx.coreStats,
 		idx.subtreeEnd,
 		idx.depth,
@@ -139,7 +122,18 @@ func (idx *Index) Close() error {
 		idx.depthIndex,
 		idx.mphf,
 		idx.tierStats,
-	)
+	}
+	var errs []error
+	for _, c := range closers {
+		if c == nil || reflect.ValueOf(c).IsNil() {
+			continue
+		}
+		if err := c.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // Stats holds aggregated statistics for a prefix.
@@ -294,7 +288,9 @@ func (idx *Index) DescendantsUpToDepth(prefixPos uint64, maxRelDepth int) ([][]u
 	subtreeStart := prefixPos
 	subtreeEnd := idx.SubtreeEnd(prefixPos)
 
-	// Pre-allocate result slice with exact capacity
+	// Pre-size the outer slice to the number of depth levels we'll
+	// iterate. The inner per-depth slices are variably sized — those
+	// allocations happen in GetPositionsInSubtree.
 	depthLevels := min(int(maxSubtreeDepth-baseDepth), maxRelDepth)
 	if depthLevels <= 0 {
 		return nil, nil

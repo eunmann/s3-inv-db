@@ -339,13 +339,11 @@ func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, ro
 
 	// Collect results
 	outputPaths := make([]string, len(groups))
-	var firstErr error
+	var errs []error
 
 	for result := range results {
 		if result.err != nil {
-			if firstErr == nil {
-				firstErr = result.err
-			}
+			errs = append(errs, result.err)
 
 			continue
 		}
@@ -353,7 +351,7 @@ func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, ro
 		m.totalBytesWritten += result.bytesWritten
 	}
 
-	if firstErr != nil {
+	if len(errs) > 0 {
 		// Clean up any successful outputs
 		for _, p := range outputPaths {
 			if p != "" {
@@ -361,7 +359,7 @@ func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, ro
 			}
 		}
 
-		return nil, firstErr
+		return nil, errors.Join(errs...)
 	}
 
 	return outputPaths, nil
@@ -676,16 +674,16 @@ func (m *runReaderMergeIterator) advanceReader(idx int) error {
 	return nil
 }
 
-// Close closes all underlying readers.
+// Close closes all underlying readers, joining any errors.
 func (m *runReaderMergeIterator) Close() error {
-	var firstErr error
+	errs := make([]error, 0, len(m.readers))
 	for _, r := range m.readers {
-		if err := r.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := r.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
-	return firstErr
+	return errors.Join(errs...)
 }
 
 // Heap operations without using container/heap to avoid interface{} conversions
@@ -769,12 +767,12 @@ func (m *ParallelMerger) CleanupIntermediateFiles() error {
 		return fmt.Errorf("glob intermediate files: %w", err)
 	}
 
-	var firstErr error
+	errs := make([]error, 0, len(matches))
 	for _, match := range matches {
-		if err := os.Remove(match); err != nil && firstErr == nil {
-			firstErr = err
+		if err := os.Remove(match); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
-	return firstErr
+	return errors.Join(errs...)
 }

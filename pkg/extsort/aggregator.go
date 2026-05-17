@@ -184,31 +184,6 @@ func PerWorkerAggregatorCap(memoryLimit int64, numWorkers int) uint64 {
 	return AggregatorCap(memoryLimit) / uint64(numWorkers)
 }
 
-// ShouldFlush returns true if the aggregator should spill to disk
-// based on either:
-//   - its own estimated-bytes exceeding AggregatorCap(memoryLimit), or
-//   - overall HeapInuse exceeding HeapPressureRatio × memoryLimit.
-//
-// aggregatorBytes is the aggregator's best estimate of its own
-// in-memory footprint. When memoryLimit is zero/negative only the
-// absolute aggregator cap is checked.
-//
-// Deprecated: this signature treats `aggregatorBytes` as the GLOBAL
-// memory snapshot. Multi-worker callers should use ShouldWorkerFlush
-// which takes a per-worker budget so one hot worker doesn't trigger
-// flushes in all others.
-func ShouldFlush(aggregatorBytes uint64, memoryLimit int64) bool {
-	if aggregatorBytes >= AggregatorCap(memoryLimit) {
-		return true
-	}
-	if memoryLimit <= 0 {
-		return false
-	}
-	heapPressure := uint64(float64(memoryLimit) * HeapPressureRatio)
-
-	return HeapInuseBytes() >= heapPressure
-}
-
 // ShouldWorkerFlush returns true if a single chunk worker's private
 // aggregator should spill, given:
 //   - workerAggBytes: this worker's own estimated aggregator memory

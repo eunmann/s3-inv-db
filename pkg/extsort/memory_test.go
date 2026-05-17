@@ -33,7 +33,7 @@ func TestAggregatorMemoryBounded(t *testing.T) {
 		agg.AddObject(key, 1024, tiers.Standard)
 
 		// Check if we should flush (simulating pipeline behavior)
-		if i%1000 == 0 && extsort.ShouldFlush(extsort.HeapAllocBytes(), flushThresholdMB*1024*1024) {
+		if i%1000 == 0 && extsort.ShouldWorkerFlush(extsort.HeapAllocBytes(), flushThresholdMB*1024*1024, 1) {
 			rows := agg.Drain()
 			_ = rows // In real pipeline, these would be written to run file
 			flushCount++
@@ -170,17 +170,15 @@ func TestHeapAllocBytes(t *testing.T) {
 	t.Logf("extsort.HeapAllocBytes: %.2f MB", float64(heap)/(1024*1024))
 }
 
-// TestShouldFlush verifies the extsort.ShouldFlush function.
-func TestShouldFlush(t *testing.T) {
-	// Aggregator size at or above the cap forces a spill regardless
-	// of pressure rule.
-	if !extsort.ShouldFlush(extsort.AbsoluteAggregatorCap, 0) {
-		t.Error("ShouldFlush should fire when aggregator hits the absolute cap")
+// TestShouldWorkerFlush verifies the per-worker spill decision.
+func TestShouldWorkerFlush(t *testing.T) {
+	// Aggregator at or above the per-worker share forces a spill.
+	if !extsort.ShouldWorkerFlush(extsort.AbsoluteAggregatorCap, 0, 1) {
+		t.Error("ShouldWorkerFlush should fire when worker hits the absolute cap")
 	}
-	// Aggregator well below cap, no memory limit set, no heap pressure
-	// signal: must not fire.
-	if extsort.ShouldFlush(1024, 0) {
-		t.Error("ShouldFlush should not fire when aggregator is tiny and no limit set")
+	// Tiny aggregator, no memory limit set, no heap pressure: no spill.
+	if extsort.ShouldWorkerFlush(1024, 0, 1) {
+		t.Error("ShouldWorkerFlush should not fire when worker is tiny and no limit set")
 	}
 }
 

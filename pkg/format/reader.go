@@ -2,6 +2,7 @@ package format
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 
@@ -302,13 +303,7 @@ func OpenBlob(blobPath, offsetsPath string) (*BlobReader, error) {
 
 // Close releases resources.
 func (r *BlobReader) Close() error {
-	err1 := r.blobMmap.Close()
-	err2 := r.offsetsMmap.Close()
-	if err1 != nil {
-		return err1
-	}
-
-	return err2
+	return errors.Join(r.blobMmap.Close(), r.offsetsMmap.Close())
 }
 
 // Count returns the number of strings (N, not N+1).
