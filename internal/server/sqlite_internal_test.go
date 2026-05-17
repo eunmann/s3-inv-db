@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,7 +26,7 @@ func TestOpenStateDB_AppliesPragmas(t *testing.T) {
 		"cache_size":   "-20000",
 		"temp_store":   "2", // MEMORY
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	for name, expect := range want {
 		var got string
 		if err := db.QueryRowContext(ctx, "PRAGMA "+name).Scan(&got); err != nil {

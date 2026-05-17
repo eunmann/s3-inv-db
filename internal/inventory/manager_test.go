@@ -1,7 +1,6 @@
 package inventory_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -88,7 +87,7 @@ func TestManagerLoadNotFound(t *testing.T) {
 	m := inventory.NewManager()
 	defer m.Close()
 
-	err := m.Load(context.Background(), "nonexistent")
+	err := m.Load(t.Context(), "nonexistent")
 	if !errors.Is(err, inventory.ErrNotFound) {
 		t.Errorf("Load error = %v, want %v", err, inventory.ErrNotFound)
 	}
@@ -231,7 +230,7 @@ func TestManagerConcurrent_LoadRemoveRace(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			_ = m.Load(context.Background(), id)
+			_ = m.Load(t.Context(), id)
 		}()
 		go func() {
 			defer wg.Done()

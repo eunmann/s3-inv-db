@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -46,7 +48,7 @@ type IndexBuilder struct {
 	posCount uint64
 	maxDepth uint32
 
-	presentTiers map[tiers.ID]bool
+	presentTiers map[tiers.ID]struct{}
 
 	closed bool
 }
@@ -101,7 +103,7 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		mphfBuilder:       mphfBuilder,
 		depthIndexBuilder: format.NewDepthIndexBuilder(tempDir),
 		stack:             make([]stackEntry, 0, 32),
-		presentTiers:      make(map[tiers.ID]bool),
+		presentTiers:      make(map[tiers.ID]struct{}),
 	}
 
 	b.tierStatsRowW, err = format.NewTierStatsRowWriter(outDir)
@@ -164,7 +166,7 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 
 	for tierID := range tiers.NumTiers {
 		if row.TierCounts[tierID] > 0 || row.TierBytes[tierID] > 0 {
-			b.presentTiers[tierID] = true
+			b.presentTiers[tierID] = struct{}{}
 		}
 	}
 
@@ -389,10 +391,7 @@ func (b *IndexBuilder) writeTierManifest() error {
 	if len(b.presentTiers) == 0 {
 		return nil
 	}
-	presentTierList := make([]tiers.ID, 0, len(b.presentTiers))
-	for tierID := range b.presentTiers {
-		presentTierList = append(presentTierList, tierID)
-	}
+	presentTierList := slices.Sorted(maps.Keys(b.presentTiers))
 	if err := tiers.WriteManifest(b.outDir, presentTierList); err != nil {
 		return fmt.Errorf("write tier manifest: %w", err)
 	}

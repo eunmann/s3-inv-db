@@ -1,7 +1,6 @@
 package budget_test
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -123,7 +122,7 @@ func TestMeasureDir(t *testing.T) {
 }
 
 func TestMeasureDir_MissingPathIsZero(t *testing.T) {
-	got, err := budget.MeasureDir(context.Background(), "/definitely/does/not/exist")
+	got, err := budget.MeasureDir(t.Context(), "/definitely/does/not/exist")
 	if err != nil {
 		t.Fatalf("MeasureDir on missing path: %v", err)
 	}

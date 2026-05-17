@@ -1,7 +1,6 @@
 package extsort
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -89,7 +88,7 @@ func BenchmarkPipelineScale_E2E(b *testing.B) {
 					TempDir:        runDir,
 					UseCompression: true,
 				})
-				finalPath, err := merger.MergeAll(context.Background(), runPaths)
+				finalPath, err := merger.MergeAll(b.Context(), runPaths)
 				if err != nil {
 					b.Fatal(err)
 				}

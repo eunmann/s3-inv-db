@@ -159,7 +159,7 @@ func TestRecover_NoFailureWhenStoreIsEmpty(t *testing.T) {
 	if got := srv.manager.List(); len(got) != 0 {
 		t.Errorf("Manager.List() = %d entries on empty store, want 0", len(got))
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_ = ctx
 }

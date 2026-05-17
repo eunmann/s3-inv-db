@@ -1,6 +1,7 @@
 package budget_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 
 type fakeConfig map[string]uint32
 
-func (f fakeConfig) Retention(source, name string) uint32 {
+func (f fakeConfig) Retention(_ context.Context, source, name string) uint32 {
 	return f[source+"/"+name]
 }
 
@@ -34,7 +35,7 @@ func TestPlanner_FitsWithoutEviction(t *testing.T) {
 		EstimateBytes: 200,
 		All:           []inventory.Info{loaded("src/inv/runA", 100, time.Unix(1, 0), time.Unix(1, 0), false)},
 	}
-	plan, err := p.Plan(in)
+	plan, err := p.Plan(t.Context(), in)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -60,7 +61,7 @@ func TestPlanner_EvictsWithinConfigToRespectRetention(t *testing.T) {
 			loaded("src/inv/runB", 100, time.Unix(2, 0), time.Unix(2, 0), false),
 		},
 	}
-	plan, err := p.Plan(in)
+	plan, err := p.Plan(t.Context(), in)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -86,7 +87,7 @@ func TestPlanner_GlobalLRUWhenStillOverBudget(t *testing.T) {
 			loaded("beta/inv/run1", 400, time.Unix(2, 0), time.Unix(5, 0), false),
 		},
 	}
-	plan, err := p.Plan(in)
+	plan, err := p.Plan(t.Context(), in)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -108,7 +109,7 @@ func TestPlanner_RefusesWhenAllPinned(t *testing.T) {
 		EstimateBytes: 200,
 		All:           []inventory.Info{loaded("src/inv/runOld", 400, time.Unix(1, 0), time.Unix(1, 0), true)},
 	}
-	plan, err := p.Plan(in)
+	plan, err := p.Plan(t.Context(), in)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -124,7 +125,7 @@ func TestPlanner_RefusesWhenEstimateExceedsCap(t *testing.T) {
 		Target:        "src/inv/run1",
 		EstimateBytes: 600,
 	}
-	plan, err := p.Plan(in)
+	plan, err := p.Plan(t.Context(), in)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -140,7 +141,7 @@ func TestPlanner_ZeroCapPassesThrough(t *testing.T) {
 	// test).
 	tr := budget.New(0, 0)
 	p := budget.NewPlanner(tr, nil)
-	plan, _ := p.Plan(budget.Input{Target: "a/b/c", EstimateBytes: 1})
+	plan, _ := p.Plan(t.Context(), budget.Input{Target: "a/b/c", EstimateBytes: 1})
 	if !plan.Fits() {
 		t.Errorf("zero-cap planner should pass through, got refusal: %s", plan.Refusal)
 	}
@@ -157,7 +158,7 @@ func TestPlanner_SkipsRunsWithoutKnownSize(t *testing.T) {
 			loaded("src/inv/run1", 0, time.Unix(1, 0), time.Unix(1, 0), false), // unknown bytes, skip
 		},
 	}
-	plan, _ := p.Plan(in)
+	plan, _ := p.Plan(t.Context(), in)
 	if plan.Fits() {
 		t.Error("unknown-size eligible run should not be evicted blindly; expected refusal")
 	}

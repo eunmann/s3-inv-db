@@ -1,7 +1,6 @@
 package inventory_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
@@ -92,7 +91,7 @@ func TestManagerLoad_UsesOpenLocalPath(t *testing.T) {
 	if err := mgr.Register(t.Context(), "inv", "n", "/tmp/this/path/does/not/exist"); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if err := mgr.Load(context.Background(), "inv"); err == nil {
+	if err := mgr.Load(t.Context(), "inv"); err == nil {
 		t.Error("Load on a bogus path returned nil, want non-nil")
 	}
 }

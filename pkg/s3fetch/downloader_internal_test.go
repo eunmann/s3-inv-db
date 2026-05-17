@@ -2,7 +2,6 @@ package s3fetch
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"errors"
 	"io"
@@ -197,7 +196,7 @@ func TestDownloaderIntegration(t *testing.T) {
 		t.Skip("skipping integration test; set AWS_INTEGRATION_TEST=1 to run")
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	client, err := NewClient(ctx)
 	if err != nil {
 		t.Fatalf("create client: %v", err)

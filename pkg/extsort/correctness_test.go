@@ -1,7 +1,6 @@
 package extsort_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -50,7 +49,7 @@ func TestTierStatsRow_PreorderAlignment(t *testing.T) {
 			t.Fatalf("Add %q: %v", r.Prefix, err)
 		}
 	}
-	if err := b.FinalizeWithContext(context.Background()); err != nil {
+	if err := b.FinalizeWithContext(t.Context()); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 

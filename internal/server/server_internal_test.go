@@ -94,7 +94,7 @@ func TestServerAPIRoutes(t *testing.T) {
 // closed (cleared) afterward.
 func TestServerGracefulShutdown(t *testing.T) {
 	lc := &net.ListenConfig{}
-	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestServerGracefulShutdown(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	runErr := make(chan error, 1)
 	go func() {
 		runErr <- srv.Run(ctx)
@@ -148,7 +148,7 @@ func TestServerGracefulShutdown(t *testing.T) {
 func TestServerRun_ListenError(t *testing.T) {
 	// Occupy a port so the server can't bind to it.
 	lc := &net.ListenConfig{}
-	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}

@@ -179,6 +179,7 @@ func TestBus_ConcurrentPublishersAndSubscribers(t *testing.T) {
 				break loop
 			}
 		}
+		drain.Stop()
 		if uint64(recv)+sub.Dropped() < expectedPerSub-100 {
 			t.Errorf("sub %d: recv=%d dropped=%d, expected sum ~%d", i, recv, sub.Dropped(), expectedPerSub)
 		}

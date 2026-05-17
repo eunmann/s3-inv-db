@@ -84,7 +84,7 @@ func TestBootstrapAndRun_PropagatesBootstrapError(t *testing.T) {
 		PriceTablePath: "/no/such/price-table.json",
 		Logger:         zerolog.Nop(),
 	}
-	err := BootstrapAndRun(context.Background(), opts)
+	err := BootstrapAndRun(t.Context(), opts)
 	if err == nil {
 		t.Fatal("BootstrapAndRun should surface a Bootstrap failure")
 	}

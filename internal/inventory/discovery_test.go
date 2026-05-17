@@ -78,7 +78,7 @@ func TestDiscoveryService_DisabledWithoutDeps(t *testing.T) {
 
 func TestDiscoveryService_ListWhenDisabledReturnsErr(t *testing.T) {
 	s := inventory.NewDiscoveryService(inventory.NewManager(), nil, nil)
-	_, err := s.List(context.Background())
+	_, err := s.List(t.Context())
 	if !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("List() error = %v, want inventory.ErrDiscoveryDisabled", err)
 	}
@@ -86,7 +86,7 @@ func TestDiscoveryService_ListWhenDisabledReturnsErr(t *testing.T) {
 
 func TestDiscoveryService_FindWhenDisabledReturnsErr(t *testing.T) {
 	s := inventory.NewDiscoveryService(inventory.NewManager(), nil, nil)
-	_, err := s.Find(context.Background(), "src", "id", "")
+	_, err := s.Find(t.Context(), "src", "id", "")
 	if !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("Find() error = %v, want inventory.ErrDiscoveryDisabled", err)
 	}
@@ -94,7 +94,7 @@ func TestDiscoveryService_FindWhenDisabledReturnsErr(t *testing.T) {
 
 func TestDiscoveryService_LoadWhenDisabledReturnsErr(t *testing.T) {
 	s := inventory.NewDiscoveryService(inventory.NewManager(), &fakeDiscoverer{}, nil)
-	err := s.Load(context.Background(), inventory.Inventory{})
+	err := s.Load(t.Context(), inventory.Inventory{})
 	if !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("Load() error = %v, want inventory.ErrDiscoveryDisabled", err)
 	}
@@ -118,7 +118,7 @@ func TestDiscoveryService_ListMergesWithManagerState(t *testing.T) {
 		},
 	}
 	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
-	views, err := s.List(context.Background())
+	views, err := s.List(t.Context())
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestDiscoveryService_ListPropagatesDiscovererError(t *testing.T) {
 	t.Cleanup(func() { _ = mgr.Close() })
 	disc := &fakeDiscoverer{listErr: errFakeS3Throttled}
 	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
-	_, err := s.List(context.Background())
+	_, err := s.List(t.Context())
 	if !errors.Is(err, errFakeS3Throttled) {
 		t.Errorf("List() error = %v, want %v wrapped", err, errFakeS3Throttled)
 	}

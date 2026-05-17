@@ -1,7 +1,6 @@
 package extsort_test
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -429,7 +428,7 @@ func BenchmarkParallelMerge(b *testing.B) {
 					TempDir:        tmpDir,
 					UseCompression: true,
 				})
-				outPath, _ := merger.MergeAll(context.Background(), paths)
+				outPath, _ := merger.MergeAll(b.Context(), paths)
 				os.Remove(outPath)
 				merger.CleanupIntermediateFiles()
 			}
@@ -452,7 +451,7 @@ func BenchmarkParallelMerge(b *testing.B) {
 					TempDir:        tmpDir,
 					UseCompression: true,
 				})
-				outPath, _ := merger.MergeAll(context.Background(), paths)
+				outPath, _ := merger.MergeAll(b.Context(), paths)
 				os.Remove(outPath)
 				merger.CleanupIntermediateFiles()
 			}

@@ -1,7 +1,6 @@
 package loader_test
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -60,7 +59,7 @@ func TestBuild_RejectsEmptyArgs(t *testing.T) {
 func TestBuildWith_ReportsPreparingStage(t *testing.T) {
 	l := loader.New(t.TempDir(), nil)
 	var stages []string
-	_, _ = l.BuildWith(context.Background(), "buck", "inv", "r", "not-s3-uri", func(name string, _, _ int64) {
+	_, _ = l.BuildWith(t.Context(), "buck", "inv", "r", "not-s3-uri", func(name string, _, _ int64) {
 		stages = append(stages, name)
 	})
 	if len(stages) == 0 || stages[0] != "preparing" {
@@ -70,7 +69,7 @@ func TestBuildWith_ReportsPreparingStage(t *testing.T) {
 
 func TestBuildWith_NilCallbackIsSafe(t *testing.T) {
 	l := loader.New(t.TempDir(), nil)
-	_, err := l.BuildWith(context.Background(), "", "inv", "r", "s3://b/m", nil)
+	_, err := l.BuildWith(t.Context(), "", "inv", "r", "s3://b/m", nil)
 	if !errors.Is(err, loader.ErrEmptyID) {
 		t.Errorf("err = %v, want errEmptyID", err)
 	}

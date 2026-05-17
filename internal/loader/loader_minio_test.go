@@ -1,7 +1,6 @@
 package loader_test
 
 import (
-	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -23,7 +22,7 @@ func TestBuildWith_BuildsIndexFromSeededManifest(t *testing.T) {
 	prefix := "inventory-data/"
 	stamp := time.Now().UTC().Truncate(time.Minute)
 
-	info, err := seeder.UploadInventory(context.Background(), fc.Raw(), seeder.Config{
+	info, err := seeder.UploadInventory(t.Context(), fc.Raw(), seeder.Config{
 		Target:  seeder.TargetS3,
 		Objects: 200,
 		Preset:  "small",
@@ -43,7 +42,7 @@ func TestBuildWith_BuildsIndexFromSeededManifest(t *testing.T) {
 
 	run := stamp.Format("2006-01-02T15-04Z")
 	var stages []string
-	outDir, err := l.BuildWith(context.Background(), srcBucket, info.ID, run, info.Path,
+	outDir, err := l.BuildWith(t.Context(), srcBucket, info.ID, run, info.Path,
 		func(stage string, _, _ int64) { stages = append(stages, stage) },
 	)
 	if err != nil {
@@ -83,7 +82,7 @@ func TestBuild_FailsOnMissingManifest(t *testing.T) {
 
 	l := loader.New(t.TempDir(), fc)
 	bogus := fmt.Sprintf("s3://%s/does/not/exist/manifest.json", bucket)
-	_, err := l.BuildWith(context.Background(), "src", "inv", "run", bogus, nil)
+	_, err := l.BuildWith(t.Context(), "src", "inv", "run", bogus, nil)
 	if err == nil {
 		t.Fatal("Build with missing manifest returned nil error")
 	}

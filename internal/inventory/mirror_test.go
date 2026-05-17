@@ -75,7 +75,7 @@ func TestManager_LoadWith_MirrorsErrorState(t *testing.T) {
 	if err := mgr.Register(t.Context(), "src/inv1", "src/inv1", "u"); err != nil {
 		t.Fatal(err)
 	}
-	err := mgr.LoadWith(context.Background(), "src/inv1", func(context.Context, inventory.Info) (string, error) {
+	err := mgr.LoadWith(t.Context(), "src/inv1", func(context.Context, inventory.Info) (string, error) {
 		return "", errFakeBuildBroke
 	})
 	if err == nil {

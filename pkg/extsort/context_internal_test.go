@@ -14,7 +14,7 @@ import (
 func TestIndexBuilderContextCancellation(t *testing.T) {
 	t.Run("immediate_cancellation", func(t *testing.T) {
 		// Create a cancelled context
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel() // Cancel immediately
 
 		dir := t.TempDir()
@@ -59,7 +59,7 @@ func TestIndexBuilderContextCancellation(t *testing.T) {
 
 	t.Run("timeout_cancellation", func(t *testing.T) {
 		// Use a very short timeout - shorter than it would take to process all rows
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+		ctx, cancel := context.WithTimeout(t.Context(), 1*time.Nanosecond)
 		defer cancel()
 
 		// Give timeout a chance to fire
@@ -117,7 +117,7 @@ func TestIndexBuilderContextCancellation(t *testing.T) {
 // the I1 per-worker-aggregator refactor (which replaced the previous
 // single-consumer aggregation loop that this test originally covered).
 func TestPerWorkerAggregator_ContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	jobs := make(chan objectRecord, 10)

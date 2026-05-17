@@ -85,16 +85,4 @@
         {{end}}
     </div>
 </div>
-
-<script>
-// After in-page htmx swaps the address bar updates but the Prefix input
-// doesn't — sync it from the URL so the user can edit from here.
-document.body.addEventListener('htmx:afterSettle', function (event) {
-    if (!event.target || event.target.id !== 'compare-target') return;
-    var el = document.getElementById('prefix');
-    if (!el) return;
-    var params = new URLSearchParams(window.location.search);
-    el.value = params.get('prefix') || '';
-});
-</script>
 {{end}}

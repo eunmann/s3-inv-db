@@ -1,6 +1,7 @@
 package budget
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -24,8 +25,10 @@ type Plan struct {
 func (p Plan) Fits() bool { return p.Refusal == "" }
 
 // RetentionFunc returns the per-configuration retention override.
-// Return 0 to accept the planner default.
-type RetentionFunc func(source, name string) uint32
+// Return 0 to accept the planner default. Ctx flows from the
+// originating load call so the implementation can honour
+// cancellation while consulting external state (e.g. a SQL store).
+type RetentionFunc func(ctx context.Context, source, name string) uint32
 
 // DefaultRetention is used when RetentionFunc returns 0.
 const DefaultRetention uint32 = 2
@@ -50,8 +53,10 @@ type Input struct {
 	All           []inventory.Info
 }
 
-// Plan computes the eviction plan for in.
-func (p *Planner) Plan(in Input) (Plan, error) {
+// Plan computes the eviction plan for in. Ctx is threaded into the
+// optional RetentionFunc so per-config retention lookups (e.g. a SQL
+// store) honour cancellation.
+func (p *Planner) Plan(ctx context.Context, in Input) (Plan, error) {
 	if in.EstimateBytes == 0 {
 		return Plan{EstimateBytes: 0}, nil
 	}
@@ -66,7 +71,7 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 
 	retention := DefaultRetention
 	if p.retention != nil {
-		if r := p.retention(targetSource, targetName); r > 0 {
+		if r := p.retention(ctx, targetSource, targetName); r > 0 {
 			retention = r
 		}
 	}
