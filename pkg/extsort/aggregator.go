@@ -91,22 +91,21 @@ func (a *Aggregator) BytesProcessed() int64 {
 	return a.bytesProcessed
 }
 
-// EstimatedMemoryUsage returns an approximate memory usage in bytes.
-// This is a rough estimate based on prefix count and average prefix length.
+// EstimatedMemoryUsage returns the per-worker aggregator's
+// approximate in-memory footprint in bytes — the signal
+// ShouldWorkerFlush compares against PerWorkerAggregatorCap.
 //
-// Deprecated: This estimate is inaccurate. Use ShouldFlush() with actual
-// heap measurements instead.
+// Estimate per prefix entry (~288 B total):
+//   - Map entry: ~48 B (key pointer, value pointer, hash bucket)
+//   - Average prefix string: ~30 B
+//   - PrefixStats: ~210 B (depth + counts + per-tier arrays)
+//
+// The estimate tends to undercount by 2–3× vs actual Go-runtime
+// usage (map overhead, string fragmentation). That's tolerable
+// because the global HeapPressureRatio check in ShouldWorkerFlush
+// catches the case where the process as a whole is approaching
+// the limit, regardless of any one worker's estimate.
 func (a *Aggregator) EstimatedMemoryUsage() int64 {
-	// Estimate per-prefix overhead:
-	// - Map entry: ~48 bytes (key pointer, value pointer, hash bucket)
-	// - Average prefix string: ~30 bytes
-	// - PrefixStats: ~(2 + 8 + 8 + 12*8 + 12*8) = ~210 bytes
-	// Total: ~288 bytes per prefix
-	//
-	// NOTE: This estimate is often 2-3x lower than actual usage due to:
-	// - Go map overhead being higher
-	// - String allocations being larger
-	// - Memory fragmentation
 	const bytesPerPrefix = 288
 
 	return int64(len(a.prefixes)) * bytesPerPrefix
@@ -133,28 +132,32 @@ func HeapInuseBytes() uint64 {
 	return m.HeapInuse
 }
 
-// AbsoluteAggregatorCap is the hard ceiling on aggregator memory
-// before it's forced to flush. We never let the aggregator's heap
-// share exceed this regardless of overall GOMEMLIMIT; the cap bounds
-// the number of run files a build generates and keeps per-flush GC
-// pauses tractable.
+// AbsoluteAggregatorCap is the hard ceiling on the AGGREGATE in-memory
+// footprint of all worker aggregators combined before they're forced
+// to spill. Each worker's share is this divided by numWorkers (see
+// PerWorkerAggregatorCap). The cap bounds the run-file count a build
+// generates and keeps per-flush GC pauses tractable.
 const AbsoluteAggregatorCap uint64 = 512 * 1024 * 1024
 
 // HeapPressureRatio is the HeapInuse / GOMEMLIMIT fraction above which
-// the aggregator must spill regardless of its own size. Crossing this
+// any worker must spill regardless of its own size. Crossing this
 // means the rest of the pipeline is approaching the soft memory limit
 // and the aggregator is the only structure with a flush valve.
 const HeapPressureRatio = 0.85
 
-// AggregatorFractionOfLimit caps the aggregator at this share of the
-// process memory limit so a multi-GiB GOMEMLIMIT doesn't translate
-// into an aggregator big enough to dwarf every other working set.
+// AggregatorFractionOfLimit caps the combined aggregator footprint
+// at this share of the process memory limit so a multi-GiB
+// GOMEMLIMIT doesn't translate into aggregators big enough to dwarf
+// every other working set.
 const AggregatorFractionOfLimit = 0.15
 
-// AggregatorCap returns the spill threshold for aggregator-bytes
-// given a process memory limit (typically the value returned by
-// sysmem.ApplyMemoryLimit). The result is the smaller of the absolute
-// cap and AggregatorFractionOfLimit × memoryLimit. A zero or negative
+// AggregatorCap returns the TOTAL spill threshold across all worker
+// aggregators combined, given a process memory limit (typically
+// sysmem.ApplyMemoryLimit's value). The per-worker share is this
+// divided by numWorkers; see PerWorkerAggregatorCap.
+//
+// The result is the smaller of the absolute cap and
+// AggregatorFractionOfLimit × memoryLimit. A zero or negative
 // memoryLimit falls back to the absolute cap.
 func AggregatorCap(memoryLimit int64) uint64 {
 	if memoryLimit <= 0 {
@@ -166,6 +169,19 @@ func AggregatorCap(memoryLimit int64) uint64 {
 	}
 
 	return AbsoluteAggregatorCap
+}
+
+// PerWorkerAggregatorCap returns the spill threshold for ONE
+// chunk worker's private aggregator. Equal to the total
+// AggregatorCap divided by numWorkers, with a minimum of 1
+// worker. Use this when measuring a single worker's footprint
+// against its budget.
+func PerWorkerAggregatorCap(memoryLimit int64, numWorkers int) uint64 {
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+
+	return AggregatorCap(memoryLimit) / uint64(numWorkers)
 }
 
 // ShouldFlush returns true if the aggregator should spill to disk
@@ -205,11 +221,7 @@ func ShouldFlush(aggregatorBytes uint64, memoryLimit int64) bool {
 // process-wide heap pressure check remains as a safety valve: if
 // HeapInuse approaches the limit any worker spilling helps.
 func ShouldWorkerFlush(workerAggBytes uint64, memoryLimit int64, numWorkers int) bool {
-	if numWorkers < 1 {
-		numWorkers = 1
-	}
-	perWorkerBudget := AggregatorCap(memoryLimit) / uint64(numWorkers)
-	if workerAggBytes >= perWorkerBudget {
+	if workerAggBytes >= PerWorkerAggregatorCap(memoryLimit, numWorkers) {
 		return true
 	}
 	if memoryLimit <= 0 {

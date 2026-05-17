@@ -248,14 +248,6 @@ type Config struct {
 	// Default: 16MB.
 	S3DownloadPartSize int64
 
-	// ParseConcurrency is the number of concurrent CSV parsing goroutines.
-	// Default: 4.
-	ParseConcurrency int
-
-	// IndexWriteConcurrency is the number of concurrent index file writers.
-	// Default: 4.
-	IndexWriteConcurrency int
-
 	// MaxDepth is the maximum prefix depth to track.
 	// Prefixes deeper than this are not aggregated.
 	// Default: 0 (unlimited).
@@ -307,9 +299,7 @@ func DefaultConfig() Config {
 		TempDir:                   "",
 		S3DownloadPartConcurrency: partConcurrency,
 		S3DownloadPartSize:        16 * 1024 * 1024, // 16MB
-		ParseConcurrency:          numCPU,
-		IndexWriteConcurrency:     numCPU,
-		MaxDepth:                  0, // unlimited
+		MaxDepth:                  0,                // unlimited
 		NumMergeWorkers:           mergeWorkers,
 		MaxMergeFanIn:             16, // Higher fan-in reduces merge rounds
 		UseCompressedRuns:         true,

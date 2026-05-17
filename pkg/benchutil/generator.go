@@ -181,12 +181,12 @@ func (g *Generator) generateKey() string {
 
 	// Build path
 	path := ""
-	var pathSb125 strings.Builder
+	var pathBuilder strings.Builder
 	for range depth {
 		segment := g.generateSegment()
-		pathSb125.WriteString(segment + "/")
+		pathBuilder.WriteString(segment + "/")
 	}
-	path += pathSb125.String()
+	path += pathBuilder.String()
 
 	// Add filename
 	path += g.generateFilename()
@@ -335,11 +335,11 @@ func generateDeepNarrowKeys(size int) []string {
 	idx := 0
 	for branch := 0; idx < size && branch < numBranches; branch++ {
 		prefix := ""
-		var prefixSb247 strings.Builder
+		var prefixBuilder strings.Builder
 		for range depth {
-			prefixSb247.WriteString(fmt.Sprintf("%c/", 'a'+byte(branch)))
+			prefixBuilder.WriteString(fmt.Sprintf("%c/", 'a'+byte(branch)))
 		}
-		prefix += prefixSb247.String()
+		prefix += prefixBuilder.String()
 		for f := 0; idx < size && f < filesPerLeaf; f++ {
 			keys[idx] = fmt.Sprintf("%sfile%d.txt", prefix, f)
 			idx++

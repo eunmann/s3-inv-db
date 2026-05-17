@@ -818,8 +818,8 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	p.runFilesMu.Unlock()
 	p.flushCount.Add(1)
 
-	// Log flush with memory stats. Empirically each PrefixStats slot uses
-	// ~288 bytes (depth + counts + per-tier arrays) inside the aggregator.
+	// Same estimate as Aggregator.EstimatedMemoryUsage — kept as a
+	// log-only post-drain footprint approximation.
 	const bytesPerAggregatorEntry = 288
 	aggMemory := int64(len(rows)) * bytesPerAggregatorEntry
 	flushDuration := time.Since(start)

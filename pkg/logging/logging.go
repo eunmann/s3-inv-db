@@ -141,11 +141,6 @@ func (o *Operation) WithBytes(key string, bytes int64) *Operation {
 	return o
 }
 
-// WithBytesUint64 adds byte count fields for uint64.
-func (o *Operation) WithBytesUint64(key string, bytes uint64) *Operation {
-	return o.WithBytes(key, int64(bytes))
-}
-
 // WithCount adds count fields (raw + human-readable when pretty).
 func (o *Operation) WithCount(key string, count int64) *Operation {
 	o.fields[key] = count
@@ -295,11 +290,6 @@ func (le *LogEvent) Bytes(key string, bytes int64) *LogEvent {
 	return le
 }
 
-// BytesUint64 adds a uint64 byte count field.
-func (le *LogEvent) BytesUint64(key string, bytes uint64) *LogEvent {
-	return le.Bytes(key, int64(bytes))
-}
-
 // Duration adds a duration field with optional human-readable companion.
 func (le *LogEvent) Duration(key string, d time.Duration) *LogEvent {
 	le.fields[key] = d
@@ -318,11 +308,6 @@ func (le *LogEvent) Count(key string, n int64) *LogEvent {
 	}
 
 	return le
-}
-
-// CountUint64 adds a uint64 count field.
-func (le *LogEvent) CountUint64(key string, n uint64) *LogEvent {
-	return le.Count(key, int64(n))
 }
 
 // Throughput adds throughput fields (raw bps + human-readable when pretty).

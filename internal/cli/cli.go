@@ -122,8 +122,6 @@ func runBuildExtSort(outDir, s3Manifest string, maxDepth int, baseLogger zerolog
 	}
 
 	logger.Info().
-		Int("parse_workers", config.ParseConcurrency).
-		Int("index_write_workers", config.IndexWriteConcurrency).
 		Int("s3_part_concurrency", config.S3DownloadPartConcurrency).
 		Int("max_depth", config.MaxDepth).
 		Msg("pipeline configuration")

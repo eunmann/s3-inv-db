@@ -12,9 +12,12 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
-type Build = inventory.BuildFunc
-
-type Options = inventory.GatedLoadOptions
+// Build / Options are convenience re-exports so callers can
+// reference loadgate types without a parallel inventory import.
+type (
+	Build   = inventory.BuildFunc
+	Options = inventory.GatedLoadOptions
+)
 
 // BudgetRefusedError carries the planner's verdict to the UI.
 type BudgetRefusedError struct {
