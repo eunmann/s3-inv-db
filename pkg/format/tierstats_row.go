@@ -139,18 +139,10 @@ type TierStatsRowReader struct {
 	stride   int
 }
 
-// OpenTierStatsRow opens the row-major tier stats file. Returns
-// (nil, nil) when the file is absent — callers should fall back to
-// the legacy per-tier columnar reader in that case (back-compat).
+// OpenTierStatsRow opens the row-major tier stats file. Returns an
+// error if the file is missing or unreadable.
 func OpenTierStatsRow(indexDir string) (*TierStatsRowReader, error) {
 	path := filepath.Join(indexDir, tierStatsDir, TierStatsRowFile)
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil //nolint:nilnil // legacy callers fall back to per-tier reader
-		}
-
-		return nil, fmt.Errorf("stat tier stats row: %w", err)
-	}
 	mmap, err := OpenMmapWithHint(path, AccessHintRandom)
 	if err != nil {
 		return nil, fmt.Errorf("open tier stats row mmap: %w", err)

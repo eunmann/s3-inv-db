@@ -10,10 +10,11 @@ import (
 func TestWriteAndReadManifest(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create some test files
+	// Create the two artifact files the manifest enumerator always
+	// includes; their names must match requiredTopLevel.
 	testFiles := map[string][]byte{
-		"subtree_end.u64": []byte("test data 1"),
-		"depth.u32":       []byte("test data 2"),
+		CoreStatsFile:         []byte("test data 1"),
+		CombinedMPHFArrayFile: []byte("test data 2"),
 	}
 
 	for name, data := range testFiles {
@@ -66,7 +67,7 @@ func TestVerifyManifest(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create test files
-	path := filepath.Join(dir, "subtree_end.u64")
+	path := filepath.Join(dir, CoreStatsFile)
 	data := []byte("test data for verification")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)

@@ -221,19 +221,11 @@ type CoreStatsReader struct {
 	stride   int
 }
 
-// OpenCoreStats opens the row-major core stats file. Returns
-// (nil, nil) when the file is absent — callers fall back to the
-// legacy per-column ArrayReader path in that case (back-compat with
-// indexes built before the row-major layout existed).
+// OpenCoreStats opens the row-major core stats file. Returns an
+// error if the file is missing — every supported index format
+// includes core_stats.bin.
 func OpenCoreStats(indexDir string) (*CoreStatsReader, error) {
 	path := filepath.Join(indexDir, CoreStatsFile)
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil //nolint:nilnil // legacy callers fall back to per-column reader
-		}
-
-		return nil, fmt.Errorf("stat core stats: %w", err)
-	}
 	// core_stats.bin serves both random-access (StatsForPrefix on
 	// individual prefixes from HTTP requests) AND sequential-access
 	// (subtree walks, browse children). MADV_RANDOM disables kernel

@@ -36,9 +36,7 @@ type IndexBuilder struct {
 	coreStatsW *format.CoreStatsBuilder
 
 	// tierStatsRowW writes all NumTiers × (count, bytes) per prefix
-	// into one fixed-stride row file. Replaces the previous
-	// per-tier column writers. Reader fall-back still handles the
-	// legacy layout.
+	// into one fixed-stride row file.
 	tierStatsRowW *format.TierStatsRowWriter
 
 	mphfBuilder       *format.StreamingMPHFBuilder

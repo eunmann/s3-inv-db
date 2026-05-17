@@ -25,10 +25,6 @@ func Open(dir string) (*Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open core stats: %w", err)
 	}
-	if coreStats == nil {
-		return nil, fmt.Errorf("%w: missing %s", ErrMissingCoreStats, format.CoreStatsFile)
-	}
-
 	depthIndex, err := format.OpenDepthIndex(dir)
 	if err != nil {
 		coreStats.Close()
