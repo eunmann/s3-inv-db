@@ -151,7 +151,8 @@ type mergeResult struct {
 // removes any intermediate files this call produced. It does NOT
 // remove the original input files; that remains the caller's job.
 //
-//nolint:ireturn // RowIterator is the right return shape — callers don't care if it's a single-run or k-way merge underneath
+
+//nolint:ireturn // dispatches between single-run + K-way merge variants; caller iterates polymorphically
 func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []string) (RowIterator, func() error, error) {
 	if len(inputPaths) == 0 {
 		return nil, func() error { return nil }, ErrNoInputPaths

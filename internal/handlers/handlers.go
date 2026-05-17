@@ -17,12 +17,21 @@ import (
 // Chrome's ~60s TCP idle window, large enough to be cheap.
 const DefaultSSEHeartbeat = 15 * time.Second
 
+// CacheStore is the loader subset handlers actually use: cache size
+// for the dashboard + cache removal on unload. Narrower than
+// inventory.IndexBuilder (which DiscoveryService needs for BuildWith)
+// so the handlers don't see methods they don't call.
+type CacheStore interface {
+	RemoveCache(srcBucket, invID, run string) error
+	CacheSizeBytes(srcBucket, invID, run string) (int64, error)
+}
+
 // Handlers contains all HTTP handlers and their dependencies. The
 // request-scoped logger comes from zerolog.Ctx(r.Context()).
 type Handlers struct {
 	manager      *inventory.Manager
 	discovery    *inventory.DiscoveryService
-	loader       inventory.IndexBuilder
+	loader       CacheStore
 	configStore  *inventory.ConfigStore
 	tracker      *budget.Tracker
 	renderer     *templates.Renderer

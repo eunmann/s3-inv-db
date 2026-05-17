@@ -830,7 +830,7 @@ type mergeBuildResult struct {
 // ParallelMerger.MergeAllToIterator which avoids writing a final
 // merged file to disk (I3 win).
 //
-//nolint:ireturn // RowIterator is the right shape — callers don't care which variant underneath
+//nolint:ireturn // dispatches between single-run + K-way variants
 func (p *Pipeline) runMergePhase(
 	ctx context.Context,
 	log *zerolog.Logger,
