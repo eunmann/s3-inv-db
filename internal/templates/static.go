@@ -13,8 +13,14 @@ import (
 //go:embed styles/tailwind.css
 var tailwindCSS []byte
 
+//go:embed scripts/help.js
+var helpJS []byte
+
 // TailwindCSS returns the embedded compiled stylesheet.
 func TailwindCSS() []byte { return tailwindCSS }
+
+// HelpJS returns the embedded help-page JS (TOC active link + filter).
+func HelpJS() []byte { return helpJS }
 
 // TailwindCSSETag returns a weak ETag derived from the compiled CSS
 // content, so the browser can revalidate cheaply across deploys.
@@ -23,7 +29,16 @@ func TailwindCSS() []byte { return tailwindCSS }
 // only, so computing per call (rather than caching in a package var)
 // is the right trade.
 func TailwindCSSETag() string {
-	h := sha256.Sum256(tailwindCSS)
+	return weakETag(tailwindCSS)
+}
+
+// HelpJSETag returns a weak ETag for HelpJS, mirroring TailwindCSSETag.
+func HelpJSETag() string {
+	return weakETag(helpJS)
+}
+
+func weakETag(content []byte) string {
+	h := sha256.Sum256(content)
 
 	return `W/"` + hex.EncodeToString(h[:8]) + `"`
 }

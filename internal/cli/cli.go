@@ -216,7 +216,7 @@ func resolveBool(cfg *appconfig.Config, flagVal, explicit bool, get func(*appcon
 		p = get(cfg)
 	}
 
-	return appconfig.PickBool(flagVal, explicit, p)
+	return appconfig.Pick(flagVal, explicit, p)
 }
 
 func resolveString(cfg *appconfig.Config, flagVal string, explicit bool, get func(*appconfig.Config) *string) string {
@@ -225,7 +225,7 @@ func resolveString(cfg *appconfig.Config, flagVal string, explicit bool, get fun
 		p = get(cfg)
 	}
 
-	return appconfig.PickString(flagVal, explicit, p)
+	return appconfig.Pick(flagVal, explicit, p)
 }
 
 // printTierAndCostInfo handles tier breakdown and cost estimation output.

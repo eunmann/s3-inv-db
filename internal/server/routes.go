@@ -8,6 +8,24 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
+// staticAsset returns an http.HandlerFunc that serves embedded
+// asset content with ETag-based revalidation. Both content and etag
+// are funcs so the handler always reads through the current package
+// vars (no init-order surprises in tests).
+func staticAsset(contentType string, content func() []byte, etag func() string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if match := r.Header.Get("If-None-Match"); match == etag() {
+			w.WriteHeader(http.StatusNotModified)
+
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("ETag", etag())
+		w.Header().Set("Cache-Control", "public, max-age=86400, must-revalidate")
+		_, _ = w.Write(content())
+	}
+}
+
 // setupRoutes configures all HTTP routes.
 func (s *Server) setupRoutes() {
 	r := s.router
@@ -37,17 +55,8 @@ func (s *Server) setupRoutes() {
 	// Compiled Tailwind CSS embedded into the binary. ETag lets the
 	// browser revalidate cheaply; the content is immutable for a given
 	// build, so a 1-day max-age + revalidate is fine.
-	r.Get("/static/tailwind.css", func(w http.ResponseWriter, r *http.Request) {
-		if match := r.Header.Get("If-None-Match"); match == templates.TailwindCSSETag() {
-			w.WriteHeader(http.StatusNotModified)
-
-			return
-		}
-		w.Header().Set("Content-Type", "text/css; charset=utf-8")
-		w.Header().Set("ETag", templates.TailwindCSSETag())
-		w.Header().Set("Cache-Control", "public, max-age=86400, must-revalidate")
-		_, _ = w.Write(templates.TailwindCSS())
-	})
+	r.Get("/static/tailwind.css", staticAsset("text/css; charset=utf-8", templates.TailwindCSS, templates.TailwindCSSETag))
+	r.Get("/static/help.js", staticAsset("application/javascript; charset=utf-8", templates.HelpJS, templates.HelpJSETag))
 
 	// HTML pages
 	r.Get("/", s.handlers.Dashboard)
