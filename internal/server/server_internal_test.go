@@ -74,7 +74,7 @@ func TestServerAPIRoutes(t *testing.T) {
 	}
 
 	// Test API routes return JSON
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "/api/configurations", http.NoBody)
 	w := httptest.NewRecorder()
 
 	srv.Router().ServeHTTP(w, req)
@@ -250,7 +250,7 @@ func TestSameOriginMiddleware_DoesNotBlockReads(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://localhost/api/inventories", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/api/configurations", http.NoBody)
 	req.Host = localhostHost
 	req.Header.Set("Origin", "http://attacker.example")
 	w := httptest.NewRecorder()

@@ -22,7 +22,7 @@ import (
 func (h *Handlers) LoadInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := h.manager.Load(context.WithoutCancel(r.Context()), id); err != nil {
-		respondManagerErrorHTML(w, r, err, "load inventory")
+		respondManagerError(w, r, err, "load inventory")
 
 		return
 	}
@@ -33,7 +33,7 @@ func (h *Handlers) LoadInventoryRowPartial(w http.ResponseWriter, r *http.Reques
 func (h *Handlers) UnloadInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := h.manager.Unload(r.Context(), id); err != nil {
-		respondManagerErrorHTML(w, r, err, "unload inventory")
+		respondManagerError(w, r, err, "unload inventory")
 
 		return
 	}
@@ -45,7 +45,7 @@ func (h *Handlers) UnloadInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 func (h *Handlers) DeleteInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := h.manager.Remove(r.Context(), id); err != nil && !errors.Is(err, inventory.ErrNotFound) {
-		respondManagerErrorHTML(w, r, err, "delete inventory")
+		respondManagerError(w, r, err, "delete inventory")
 
 		return
 	}
@@ -81,7 +81,7 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	}
 
 	if err := h.discovery.PrepareDiscovered(r.Context(), disc); err != nil {
-		respondManagerErrorHTML(w, r, err, "prepare discovered inventory")
+		respondManagerError(w, r, err, "prepare discovered inventory")
 
 		return
 	}
@@ -102,7 +102,7 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	// r.Context() to the job ctx.
 	_, err = h.submitDiscoveredLoadJob(r.Context(), composite, disc)
 	if err != nil {
-		respondManagerErrorHTML(w, r, err, "submit load job")
+		respondManagerError(w, r, err, "submit load job")
 
 		return
 	}
@@ -139,7 +139,7 @@ func (h *Handlers) UnloadDiscoveredRowPartial(w http.ResponseWriter, r *http.Req
 	composite := inventory.ID(src + "/" + name + "/" + run)
 	logger := zerolog.Ctx(r.Context())
 	if err := h.manager.Unload(r.Context(), composite); err != nil {
-		respondManagerErrorHTML(w, r, err, "unload inventory")
+		respondManagerError(w, r, err, "unload inventory")
 
 		return
 	}
@@ -170,7 +170,7 @@ func (h *Handlers) PinDiscoveredRowPartial(w http.ResponseWriter, r *http.Reques
 	}
 	pinned := parseBoolToggle(r.FormValue("pinned"))
 	if err := h.manager.SetPinned(r.Context(), composite, pinned); err != nil {
-		respondManagerErrorHTML(w, r, err, "set pin")
+		respondManagerError(w, r, err, "set pin")
 
 		return
 	}

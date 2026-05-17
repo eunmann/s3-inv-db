@@ -88,7 +88,6 @@ func (s *Server) setupRoutes() {
 
 		// Inventory state (loaded/unloaded view). The POST endpoint is
 		// not surfaced in the UI; kept for tests and direct-path callers.
-		r.Get("/inventories", s.handlers.ListInventoriesAPI)
 		r.Post("/inventories", s.handlers.RegisterInventoryAPI)
 		r.Get("/inventories/{id}", s.handlers.GetInventoryAPI)
 		r.Post("/inventories/{id}/load", s.handlers.LoadInventoryAPI)
