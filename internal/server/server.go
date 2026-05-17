@@ -103,8 +103,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	tracker := budget.New(cfg.MaxIndexDisk, cfg.IndexHeadroomBytes)
-	retentionLookup := configRetention{store: configStore, fallback: cfg.AutoLoadRetentionDefault}
-	planner := budget.NewPlanner(tracker, retentionLookup)
+	planner := budget.NewPlanner(tracker, retentionLookup(configStore, cfg.AutoLoadRetentionDefault))
 	gate := loadcontrol.New(mgr, tracker, planner)
 
 	var discovery *inventory.DiscoveryService
@@ -186,27 +185,23 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	return s, nil
 }
 
-// configRetention adapts ConfigStore to budget.Config so the Planner
-// can look up per-configuration retention without depending on the
-// inventory package's persistence types.
-type configRetention struct {
-	store    *inventory.ConfigStore
-	fallback uint32
-}
+// retentionLookup returns a budget.RetentionFunc that resolves
+// per-configuration retention from the ConfigStore, falling back to
+// the server-wide default when the store has no row.
+func retentionLookup(store *inventory.ConfigStore, fallback uint32) budget.RetentionFunc {
+	return func(source, name string) uint32 {
+		// Bounded background ctx — eviction planning is a quick local
+		// lookup; ConfigStore.Get always uses its *Context variant.
+		cfg, err := store.Get(context.Background(), source, name)
+		if err == nil && cfg.RetentionCount > 0 {
+			return cfg.RetentionCount
+		}
+		if fallback > 0 {
+			return fallback
+		}
 
-func (c configRetention) Retention(source, name string) uint32 {
-	// The budget.Config interface intentionally has no ctx — eviction
-	// planning is a quick local lookup. Use a bounded background ctx so
-	// the SQL call still goes through ConfigStore's *Context variants.
-	cfg, err := c.store.Get(context.Background(), source, name)
-	if err == nil && cfg.RetentionCount > 0 {
-		return cfg.RetentionCount
+		return 0
 	}
-	if c.fallback > 0 {
-		return c.fallback
-	}
-
-	return 0
 }
 
 // backfillTracker walks every currently-loaded inventory and attributes

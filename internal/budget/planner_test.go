@@ -51,7 +51,7 @@ func TestPlanner_EvictsWithinConfigToRespectRetention(t *testing.T) {
 	tr.Add(100)
 	tr.Add(100)
 	cfg := fakeConfig{"src/inv": 2}
-	p := budget.NewPlanner(tr, cfg)
+	p := budget.NewPlanner(tr, cfg.Retention)
 	in := budget.Input{
 		Target:        "src/inv/runC",
 		EstimateBytes: 100,
@@ -77,7 +77,7 @@ func TestPlanner_GlobalLRUWhenStillOverBudget(t *testing.T) {
 	tr.Add(400)
 	tr.Add(400)
 	cfg := fakeConfig{"alpha/inv": 5, "beta/inv": 5} // retention won't force eviction
-	p := budget.NewPlanner(tr, cfg)
+	p := budget.NewPlanner(tr, cfg.Retention)
 	in := budget.Input{
 		Target:        "gamma/inv/run1",
 		EstimateBytes: 400,
