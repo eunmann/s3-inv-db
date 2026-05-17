@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
@@ -34,16 +35,11 @@ func queryBenchSizes() []int {
 }
 
 func parseSizes(env string) []int {
-	out := make([]int, 0, 4)
-	start := 0
-	for i := 0; i <= len(env); i++ {
-		if i == len(env) || env[i] == ',' {
-			if i > start {
-				if n, err := strconv.Atoi(env[start:i]); err == nil && n > 0 {
-					out = append(out, n)
-				}
-			}
-			start = i + 1
+	parts := strings.Split(env, ",")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
+			out = append(out, n)
 		}
 	}
 
