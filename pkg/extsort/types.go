@@ -11,6 +11,7 @@ package extsort
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"runtime"
@@ -81,7 +82,7 @@ func readPrefixRowRecord(reader io.Reader, buf *[]byte) (*PrefixRow, error) {
 func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) (*PrefixRow, error) {
 	var lenBuf [4]byte
 	if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
 
