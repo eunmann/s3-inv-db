@@ -149,9 +149,6 @@ func benchmarkMPHFLookupEncoding(b *testing.B, useDict bool) {
 	}
 }
 
-// newBuilder dispatches between the raw-blob and dictionary-encoded
-// builder configurations from a single bool, keeping the benchmark
-// bodies free of option-plumbing.
 func newBuilder(dir string, useDict bool) (*format.StreamingMPHFBuilder, error) {
 	if useDict {
 		b, err := format.NewStreamingMPHFBuilder(dir, format.WithPrefixDictionary())
@@ -170,13 +167,9 @@ func newBuilder(dir string, useDict bool) (*format.StreamingMPHFBuilder, error) 
 	return b, nil
 }
 
-// generateDataLakePrefixes generates realistic S3 prefixes with deep hierarchies.
-// Simulates a data lake with multiple tenants, projects, and time-partitioned data.
-// Paths can be up to 10 levels deep with realistic segment lengths.
+// generateDataLakePrefixes generates n S3 prefixes shaped like
+// {org}/{team}/{project}/{env}/{data_type}/{year}/{month}/{day}/{hour}/{batch}/.
 func generateDataLakePrefixes(n int) []string {
-	// Realistic S3 organizational structure:
-	// {org}/{team}/{project}/{environment}/{data_type}/{year}/{month}/{day}/{hour}/{batch}/
-
 	orgs := []string{
 		"acme-corp", "globex-industries", "initech-solutions",
 		"umbrella-analytics", "wayne-enterprises",
@@ -199,10 +192,8 @@ func generateDataLakePrefixes(n int) []string {
 	months := []string{"01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"}
 
 	prefixes := make([]string, 0, n)
-	prefixes = append(prefixes, "") // root
+	prefixes = append(prefixes, "")
 
-	// Generate hierarchical structure with realistic distribution
-	// More prefixes at deeper levels (leaf-heavy distribution)
 	for _, org := range orgs {
 		if len(prefixes) >= n {
 			break
@@ -252,7 +243,6 @@ func generateDataLakePrefixes(n int) []string {
 								monthPrefix := yearPrefix + "month=" + month + "/"
 								prefixes = append(prefixes, monthPrefix)
 
-								// Days 1-28 (leaf-heavy: most prefixes here)
 								for day := 1; day <= 28; day++ {
 									if len(prefixes) >= n {
 										break
@@ -260,8 +250,7 @@ func generateDataLakePrefixes(n int) []string {
 									dayPrefix := fmt.Sprintf("%sday=%02d/", monthPrefix, day)
 									prefixes = append(prefixes, dayPrefix)
 
-									// Hours 0-23 for some days (even more granular)
-									if day <= 7 { // First week has hourly partitions
+									if day <= 7 {
 										for hour := range 24 {
 											if len(prefixes) >= n {
 												break
@@ -269,7 +258,6 @@ func generateDataLakePrefixes(n int) []string {
 											hourPrefix := fmt.Sprintf("%shour=%02d/", dayPrefix, hour)
 											prefixes = append(prefixes, hourPrefix)
 
-											// Some hours have batch directories
 											if hour%6 == 0 {
 												for batch := range 4 {
 													if len(prefixes) >= n {
@@ -305,7 +293,6 @@ func TestSizeComparison(t *testing.T) {
 
 	t.Logf("Testing with %d prefixes", len(prefixes))
 
-	// Calculate prefix statistics
 	var totalLen, totalDepth int
 	var maxDepth int
 	uniqueSegments := make(map[string]struct{})
@@ -316,7 +303,6 @@ func TestSizeComparison(t *testing.T) {
 		if depth > maxDepth {
 			maxDepth = depth
 		}
-		// Extract segments
 		for _, seg := range splitSegments(p) {
 			uniqueSegments[seg] = struct{}{}
 		}
@@ -334,7 +320,6 @@ func TestSizeComparison(t *testing.T) {
 		t.Logf("Sample longest:  %q", prefixes[len(prefixes)-1])
 	}
 
-	// Build with raw encoding
 	rawDir := t.TempDir()
 	rawBuilder, err := format.NewStreamingMPHFBuilder(rawDir)
 	if err != nil {
@@ -350,7 +335,6 @@ func TestSizeComparison(t *testing.T) {
 	}
 	rawBuilder.Close()
 
-	// Build with dictionary encoding
 	dictDir := t.TempDir()
 	dictBuilder, err := format.NewStreamingMPHFBuilder(dictDir, format.WithPrefixDictionary())
 	if err != nil {
@@ -366,14 +350,12 @@ func TestSizeComparison(t *testing.T) {
 	}
 	dictBuilder.Close()
 
-	// Compare sizes
 	rawPrefixSize := fileSize(t, rawDir, "prefix_blob.bin") + fileSize(t, rawDir, "prefix_offsets.u64")
 	dictPrefixSize := fileSize(t, dictDir, format.PrefixDictBlobFile) +
 		fileSize(t, dictDir, format.PrefixDictOffsetsFile) +
 		fileSize(t, dictDir, format.PrefixDictIDsFile) +
 		fileSize(t, dictDir, format.PrefixDictOffsetsPerPrefixFile)
 
-	// Calculate total directory sizes
 	rawTotalSize := totalDirSize(t, rawDir)
 	dictTotalSize := totalDirSize(t, dictDir)
 
@@ -398,7 +380,6 @@ func TestSizeComparison(t *testing.T) {
 	t.Log("=== FILE-BY-FILE BREAKDOWN (DICTIONARY) ===")
 	logDirContents(t, dictDir)
 
-	// Verify both produce correct lookups
 	rawM, err := format.OpenMPHF(rawDir)
 	if err != nil {
 		t.Fatalf("format.OpenMPHF (raw) failed: %v", err)
@@ -411,7 +392,6 @@ func TestSizeComparison(t *testing.T) {
 	}
 	defer dictM.Close()
 
-	// Verify lookups match
 	for _, p := range prefixes {
 		rawPos, rawOk := rawM.Lookup(p)
 		dictPos, dictOk := dictM.Lookup(p)

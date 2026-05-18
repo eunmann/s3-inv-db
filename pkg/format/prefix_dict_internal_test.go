@@ -41,7 +41,6 @@ func TestPrefixSegmentInternerBasic(t *testing.T) {
 		t.Fatalf("NewPrefixSegmentInterner failed: %v", err)
 	}
 
-	// Intern some segments
 	id1, err := interner.Intern("data")
 	if err != nil {
 		t.Fatalf("Intern(data) failed: %v", err)
@@ -58,7 +57,6 @@ func TestPrefixSegmentInternerBasic(t *testing.T) {
 		t.Errorf("second ID = %d, want 1", id2)
 	}
 
-	// Intern same segment again - should return same ID
 	id3, err := interner.Intern("data")
 	if err != nil {
 		t.Fatalf("Intern(data) second time failed: %v", err)
@@ -79,7 +77,6 @@ func TestPrefixSegmentInternerBasic(t *testing.T) {
 func TestPrefixDictionaryRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create and populate interner
 	interner, err := NewPrefixSegmentInterner(dir)
 	if err != nil {
 		t.Fatalf("NewPrefixSegmentInterner failed: %v", err)
@@ -96,7 +93,6 @@ func TestPrefixDictionaryRoundTrip(t *testing.T) {
 		t.Fatalf("interner.Close failed: %v", err)
 	}
 
-	// Open dictionary and verify
 	dict, err := OpenPrefixDictionary(dir)
 	if err != nil {
 		t.Fatalf("OpenPrefixDictionary failed: %v", err)
@@ -123,7 +119,6 @@ func TestPrefixDictionaryRoundTrip(t *testing.T) {
 func TestDictPrefixWriterReader(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create writer and write some prefixes
 	writer, err := NewDictPrefixWriter(dir)
 	if err != nil {
 		t.Fatalf("NewDictPrefixWriter failed: %v", err)
@@ -148,7 +143,6 @@ func TestDictPrefixWriterReader(t *testing.T) {
 		t.Fatalf("writer.Close failed: %v", err)
 	}
 
-	// Open reader and verify all prefixes
 	reader, err := OpenDictPrefixReader(dir)
 	if err != nil {
 		t.Fatalf("OpenDictPrefixReader failed: %v", err)
@@ -197,7 +191,6 @@ func TestDictPrefixUnsafeGet(t *testing.T) {
 	}
 	defer reader.Close()
 
-	// Test UnsafeGetPrefix
 	for i, expected := range prefixes {
 		got := reader.UnsafeGetPrefix(uint64(i))
 		if got != expected {
@@ -214,7 +207,6 @@ func TestDictPrefixEmpty(t *testing.T) {
 		t.Fatalf("NewDictPrefixWriter failed: %v", err)
 	}
 
-	// Close without writing any prefixes
 	if err := writer.Close(); err != nil {
 		t.Fatalf("writer.Close failed: %v", err)
 	}
@@ -282,7 +274,6 @@ func TestDictPrefixDeduplication(t *testing.T) {
 		t.Fatalf("NewDictPrefixWriter failed: %v", err)
 	}
 
-	// These prefixes share many common segments
 	prefixes := []string{
 		"bucket/year/month/day/",
 		"bucket/year/month/",
@@ -297,8 +288,7 @@ func TestDictPrefixDeduplication(t *testing.T) {
 		}
 	}
 
-	// Check segment count - should be much less than total segments.
-	// Expected unique segments: bucket, year, month, day, hour, "" (empty for trailing slash).
+	// Unique segments: bucket, year, month, day, hour, "" (trailing slash).
 	expectedSegments := uint32(6)
 	if writer.SegmentCount() != expectedSegments {
 		t.Errorf("SegmentCount() = %d, want %d", writer.SegmentCount(), expectedSegments)
@@ -314,7 +304,6 @@ func TestDictPrefixDeduplication(t *testing.T) {
 	}
 	defer reader.Close()
 
-	// Verify all prefixes can be reconstructed
 	for i, expected := range prefixes {
 		got, err := reader.GetPrefix(uint64(i))
 		if err != nil {
@@ -356,7 +345,6 @@ func TestStreamingMPHFWithPrefixDictionary(t *testing.T) {
 	}
 	builder.Close()
 
-	// Open and verify
 	m, err := OpenMPHF(dir)
 	if err != nil {
 		t.Fatalf("OpenMPHF failed: %v", err)
@@ -371,7 +359,6 @@ func TestStreamingMPHFWithPrefixDictionary(t *testing.T) {
 		t.Errorf("Count = %d, want %d", m.Count(), len(prefixes))
 	}
 
-	// Verify lookups and GetPrefix
 	for i, p := range prefixes {
 		pos, ok := m.Lookup(p)
 		if !ok {
@@ -394,7 +381,6 @@ func TestStreamingMPHFWithPrefixDictionary(t *testing.T) {
 		}
 	}
 
-	// Verify with VerifyMPHF
 	if err := VerifyMPHF(m); err != nil {
 		t.Errorf("VerifyMPHF failed: %v", err)
 	}
@@ -432,7 +418,6 @@ func TestStreamingMPHFPrefixDictionaryLarge(t *testing.T) {
 		t.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
 	}
 
-	// Create 1000 prefixes with shared segments
 	prefixes := make([]string, 1000)
 	for i := range 1000 {
 		prefixes[i] = prefixFromInt(i)
@@ -530,7 +515,6 @@ func TestMPHFLookupWithVerifyPrefixDictionary(t *testing.T) {
 	}
 	defer m.Close()
 
-	// LookupWithVerify should work for existing prefixes
 	for _, p := range prefixes {
 		pos, ok := m.LookupWithVerify(p)
 		if !ok {
@@ -539,9 +523,7 @@ func TestMPHFLookupWithVerifyPrefixDictionary(t *testing.T) {
 		_ = pos
 	}
 
-	// LookupWithVerify should fail for non-existent prefix
-	_, ok := m.LookupWithVerify("missing/")
-	if ok {
+	if _, ok := m.LookupWithVerify("missing/"); ok {
 		t.Error("LookupWithVerify(missing) should return false")
 	}
 }
@@ -549,7 +531,6 @@ func TestMPHFLookupWithVerifyPrefixDictionary(t *testing.T) {
 func TestPreloadedPrefixCache(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create segment dictionary
 	interner, err := NewPrefixSegmentInterner(dir)
 	if err != nil {
 		t.Fatalf("NewPrefixSegmentInterner failed: %v", err)
@@ -566,7 +547,6 @@ func TestPreloadedPrefixCache(t *testing.T) {
 		t.Fatalf("interner.Close failed: %v", err)
 	}
 
-	// Open dictionary and preload
 	dict, err := OpenPrefixDictionary(dir)
 	if err != nil {
 		t.Fatalf("OpenPrefixDictionary failed: %v", err)
@@ -578,12 +558,10 @@ func TestPreloadedPrefixCache(t *testing.T) {
 		t.Fatalf("PreloadSegments failed: %v", err)
 	}
 
-	// Verify cache count
 	if cache.Count() != len(segments) {
 		t.Errorf("cache.Count() = %d, want %d", cache.Count(), len(segments))
 	}
 
-	// Verify all segments can be retrieved
 	for i, expected := range segments {
 		got := cache.Get(uint32(i))
 		if got != expected {
