@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -47,23 +48,24 @@ type BrowseInventoryOption struct {
 // BrowseLevel is the data the browse_level.html partial renders. Lives
 // in the HTTP layer because it composes TierStats and CostEstimate.
 type BrowseLevel struct {
-	CostEstimate  *CostEstimate
-	SortLinks     map[string]BrowseSortLink
-	ObjectCountH  string
-	Sort          string
-	InventoryID   inventory.ID
-	Prefix        string
-	TotalBytesH   string
-	Dir           string
-	Breadcrumbs   []BrowseCrumb
-	Children      []BrowseChild
-	TierBreakdown []TierStats
-	Pagination    BrowsePagination
-	TotalChildren int
-	ObjectCount   uint64
-	TotalBytes    uint64
-	HasTierData   bool
-	NotFound      bool
+	CostEstimate   *CostEstimate
+	SortLinks      map[string]BrowseSortLink
+	ObjectCountH   string
+	Sort           string
+	InventoryID    inventory.ID
+	Prefix         string
+	TotalBytesH    string
+	Dir            string
+	QueryDurationH string
+	Breadcrumbs    []BrowseCrumb
+	Children       []BrowseChild
+	TierBreakdown  []TierStats
+	Pagination     BrowsePagination
+	TotalChildren  int
+	ObjectCount    uint64
+	TotalBytes     uint64
+	HasTierData    bool
+	NotFound       bool
 }
 
 // BrowsePage serves the full page and the inner level partial at the
@@ -97,6 +99,7 @@ func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request,
 	if inventoryID != "" {
 		ctx := r.Context()
 		var level BrowseLevel
+		start := time.Now()
 		err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
 			level = h.buildBrowseLevel(ctx, idx, inventoryID, prefix, sortBy, dir, page, pageSize)
 
@@ -105,6 +108,7 @@ func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request,
 		// On ErrNotLoaded / ErrNotFound, fall through to the empty
 		// placeholder — the user can pick a different inventory.
 		if err == nil {
+			level.QueryDurationH = humanfmt.Duration(time.Since(start))
 			data["InitialLevel"] = level
 		}
 	}
@@ -122,6 +126,7 @@ func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Reque
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
 	var level BrowseLevel
+	start := time.Now()
 	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
 		level = h.buildBrowseLevel(ctx, idx, inventoryID, prefix, sortBy, dir, page, pageSize)
 
@@ -140,6 +145,7 @@ func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Reque
 
 		return
 	}
+	level.QueryDurationH = humanfmt.Duration(time.Since(start))
 	h.renderHTMLPartial(w, r, "browse_level.html", "failed to render browse level", level)
 }
 

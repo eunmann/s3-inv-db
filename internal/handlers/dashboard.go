@@ -19,6 +19,7 @@ type DashboardData struct {
 	BudgetCapH        string
 	DiscoveryError    string
 	SnapshotAge       string
+	NextRefreshIn     string
 	BudgetHeadroomH   string
 	ManifestBytesH    string
 	Title             string
@@ -78,6 +79,14 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	if !fetchedAt.IsZero() {
 		data.SnapshotAge = humanfmt.Duration(time.Since(fetchedAt))
+		if h.discoveryRefreshInt > 0 {
+			remaining := time.Until(fetchedAt.Add(h.discoveryRefreshInt))
+			if remaining <= 0 {
+				data.NextRefreshIn = "due now"
+			} else {
+				data.NextRefreshIn = humanfmt.Duration(remaining.Round(time.Second))
+			}
+		}
 	}
 
 	agg := h.aggregateDashboard(logger, views, &data)

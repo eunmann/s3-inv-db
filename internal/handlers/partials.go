@@ -222,6 +222,7 @@ type DiscoveredRowView struct {
 	LatestJob            *jobs.Job
 	CacheBytesH          string
 	AutoLoadBackoffUntil string
+	LoadDurationH        string
 	CacheBytes           int64
 	AutoLoadFailureCount uint32
 	Pinned               bool
@@ -262,7 +263,27 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 	}
 	cs := h.measureCacheSize(r, disc)
 	view.CacheBytes, view.CacheBytesH = cs.Bytes, cs.Human
+	view.LoadDurationH = loadDurationLabel(view.LatestJob)
 	h.renderHTMLPartial(w, r, "discovered_row.html", "render discovered row", view)
+}
+
+// loadDurationLabel renders the wall-clock build time for a finished
+// build job. Returns "" when there's no job, the job isn't a build, the
+// timestamps are missing, or the run hasn't finished — the caller's
+// template then falls back to a dash.
+func loadDurationLabel(j *jobs.Job) string {
+	if j == nil || j.Kind != jobs.KindBuild {
+		return ""
+	}
+	if j.StartedAt.IsZero() || j.FinishedAt.IsZero() {
+		return ""
+	}
+	d := j.FinishedAt.Sub(j.StartedAt)
+	if d <= 0 {
+		return ""
+	}
+
+	return humanfmt.Duration(d)
 }
 
 // cacheSize is the raw-bytes / human-formatted pair returned by

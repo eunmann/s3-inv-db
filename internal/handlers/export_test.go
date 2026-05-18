@@ -103,16 +103,18 @@ type DashTotalsForTest struct {
 
 // Exported aliases for unexported helpers used by external tests.
 var (
-	NumericLabelForTest          = numericLabel
-	FormatDeltaForTest           = formatDelta
-	FormatCostDeltaForTest       = formatCostDelta
-	PctChangeForTest             = pctChange
-	AbsInt64ForTest              = absInt64
-	DescribeRunForTest           = describeRun
-	GroupManagerForAPIForTest    = groupManagerForAPI
-	StatusRankForTest            = statusRank
-	GroupLoadedInventoriesForTst = groupLoadedInventories
-	BuildComparePickerForTest    = buildComparePicker
-	SortCompareChildViewForTest  = sortCompareChildView
-	SameConfigForTest            = sameConfig
+	NumericLabelForTest                = numericLabel
+	FormatDeltaForTest                 = formatDelta
+	FormatCostDeltaForTest             = formatCostDelta
+	PctChangeForTest                   = pctChange
+	AbsInt64ForTest                    = absInt64
+	DescribeRunForTest                 = describeRun
+	GroupManagerForAPIForTest          = groupManagerForAPI
+	StatusRankForTest                  = statusRank
+	GroupLoadedInventoriesForTst       = groupLoadedInventories
+	BuildComparePickerForTest          = buildComparePicker
+	SortCompareChildViewForTest        = sortCompareChildView
+	SameConfigForTest                  = sameConfig
+	FilterComparePickerByConfigForTest = filterComparePickerByConfig
+	LoadDurationLabelForTest           = loadDurationLabel
 )

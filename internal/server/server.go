@@ -141,6 +141,10 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		ConfigStore: configStore,
 		Tracker:     tracker,
 	}
+	hcfg.DiscoveryRefreshInterval = cfg.DiscoveryRefreshInterval
+	if hcfg.DiscoveryRefreshInterval <= 0 {
+		hcfg.DiscoveryRefreshInterval = DefaultDiscoveryRefreshInterval
+	}
 	if cfg.S3Source != "" {
 		hcfg.S3SourceURI = cfg.S3Source
 	}

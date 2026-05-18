@@ -29,18 +29,19 @@ type CacheStore interface {
 // Handlers contains all HTTP handlers and their dependencies. The
 // request-scoped logger comes from zerolog.Ctx(r.Context()).
 type Handlers struct {
-	loader       CacheStore
-	manager      *inventory.Manager
-	discovery    *inventory.DiscoveryService
-	configStore  *inventory.ConfigStore
-	tracker      *budget.Tracker
-	renderer     *templates.Renderer
-	jobMgr       *jobs.Manager
-	jobStore     *jobs.Store
-	jobBus       *jobs.Bus
-	s3SourceURI  string
-	priceTable   pricing.PriceTable
-	sseHeartbeat time.Duration
+	loader              CacheStore
+	manager             *inventory.Manager
+	discovery           *inventory.DiscoveryService
+	configStore         *inventory.ConfigStore
+	tracker             *budget.Tracker
+	renderer            *templates.Renderer
+	jobMgr              *jobs.Manager
+	jobStore            *jobs.Store
+	jobBus              *jobs.Bus
+	s3SourceURI         string
+	priceTable          pricing.PriceTable
+	sseHeartbeat        time.Duration
+	discoveryRefreshInt time.Duration
 }
 
 // Config gathers Handlers dependencies for NewWithConfig. Discoverer
@@ -60,6 +61,10 @@ type Config struct {
 	S3SourceURI  string
 	PriceTable   pricing.PriceTable
 	SSEHeartbeat time.Duration
+	// DiscoveryRefreshInterval is the cadence at which DiscoveryService
+	// rebuilds the cached snapshot. Surfaced to the dashboard so it can
+	// render a "next refresh in …" hint alongside the snapshot age.
+	DiscoveryRefreshInterval time.Duration
 }
 
 // New creates a Handlers instance without discovery wiring. Tests use it.
@@ -110,17 +115,18 @@ func NewWithConfig(cfg Config) *Handlers {
 	}
 
 	return &Handlers{
-		manager:      cfg.Manager,
-		discovery:    discovery,
-		loader:       cfg.Loader,
-		configStore:  cfg.ConfigStore,
-		tracker:      cfg.Tracker,
-		renderer:     cfg.Renderer,
-		priceTable:   cfg.PriceTable,
-		s3SourceURI:  cfg.S3SourceURI,
-		jobMgr:       cfg.JobMgr,
-		jobStore:     cfg.JobStore,
-		jobBus:       cfg.JobBus,
-		sseHeartbeat: heartbeat,
+		manager:             cfg.Manager,
+		discovery:           discovery,
+		loader:              cfg.Loader,
+		configStore:         cfg.ConfigStore,
+		tracker:             cfg.Tracker,
+		renderer:            cfg.Renderer,
+		priceTable:          cfg.PriceTable,
+		s3SourceURI:         cfg.S3SourceURI,
+		jobMgr:              cfg.JobMgr,
+		jobStore:            cfg.JobStore,
+		jobBus:              cfg.JobBus,
+		sseHeartbeat:        heartbeat,
+		discoveryRefreshInt: cfg.DiscoveryRefreshInterval,
 	}
 }

@@ -415,6 +415,7 @@ func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInvent
 	}
 	cs := h.measureCacheSize(r, v.Inventory)
 	row.CacheBytes, row.CacheBytesH = cs.Bytes, cs.Human
+	row.LoadDurationH = loadDurationLabel(row.LatestJob)
 
 	return row
 }

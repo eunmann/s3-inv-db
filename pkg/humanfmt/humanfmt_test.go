@@ -148,8 +148,28 @@ func TestBytesUint64_OverflowAbove2_63(t *testing.T) {
 func TestCountUint64_OverflowAbove2_63(t *testing.T) {
 	const aboveMax = uint64(1) << 63
 	got := humanfmt.CountUint64(aboveMax)
-	if !strings.HasSuffix(got, "B") {
-		t.Errorf("humanfmt.CountUint64(2^63) = %q, want a B-suffix value", got)
+	if !strings.HasSuffix(got, "P") {
+		t.Errorf("humanfmt.CountUint64(2^63) = %q, want a P-suffix value", got)
+	}
+}
+
+func TestCount_TeraAndPeta(t *testing.T) {
+	tests := []struct {
+		name  string
+		input int64
+		want  string
+	}{
+		{"1T", 1_000_000_000_000, "1.0T"},
+		{"2.5T", 2_500_000_000_000, "2.5T"},
+		{"1P", 1_000_000_000_000_000, "1.0P"},
+		{"3.7P", 3_700_000_000_000_000, "3.7P"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := humanfmt.Count(tt.input); got != tt.want {
+				t.Errorf("Count(%d) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }
 

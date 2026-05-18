@@ -86,9 +86,10 @@ func Duration(d time.Duration) string {
 //
 //   - < 0     → plain decimal
 //   - 0–999   → plain decimal with grouping commas
-//   - 1,000+  → "X.YK" / "X.YM" / "X.YB", one decimal, half-away-from-zero
+//   - 1,000+  → "X.YK" / "X.YM" / "X.YB" / "X.YT" / "X.YP", one decimal,
+//     half-away-from-zero
 //
-// Examples: "789", "1.2K", "12.5K", "1.0M", "2.5B".
+// Examples: "789", "1.2K", "12.5K", "1.0M", "2.5B", "3.7T", "1.0P".
 func Count(n int64) string {
 	if n < 0 {
 		return strconv.FormatInt(n, 10)
@@ -104,11 +105,17 @@ const (
 	kCutoff = 1000
 	mCutoff = 1000 * kCutoff
 	bCutoff = 1000 * mCutoff
+	tCutoff = 1000 * bCutoff
+	pCutoff = 1000 * tCutoff
 )
 
 func formatLargeCount(n uint64) string {
 	f := float64(n)
 	switch {
+	case f >= pCutoff:
+		return fmt.Sprintf("%.1fP", math.Round(f/pCutoff*10)/10)
+	case f >= tCutoff:
+		return fmt.Sprintf("%.1fT", math.Round(f/tCutoff*10)/10)
 	case f >= bCutoff:
 		return fmt.Sprintf("%.1fB", math.Round(f/bCutoff*10)/10)
 	case f >= mCutoff:

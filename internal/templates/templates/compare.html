@@ -31,10 +31,11 @@
                     <div>
                         <label for="to" class="block text-sm font-medium text-gray-700 dark:text-gray-200">To <span class="text-gray-400 dark:text-gray-500">(compared)</span></label>
                         <select id="to" name="to" onchange="this.form.submit()"
-                                class="mt-1 block w-full pl-3 pr-10 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
-                            <option value="">Select a run to compare…</option>
+                                {{if not .From}}disabled aria-disabled="true" title="Pick a baseline first"{{end}}
+                                class="mt-1 block w-full pl-3 pr-10 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md disabled:opacity-50 disabled:cursor-not-allowed">
+                            <option value="">{{if .From}}Select a run to compare…{{else}}Pick a baseline first…{{end}}</option>
                             {{$to := .To}}
-                            {{range .Picker.Groups}}
+                            {{range .ToPicker.Groups}}
                             <optgroup label="{{.ConfigLabel}}">
                                 {{range .Options}}<option value="{{.ID}}"{{if eq .ID $to}} selected{{end}}>{{.Label}}</option>{{end}}
                             </optgroup>

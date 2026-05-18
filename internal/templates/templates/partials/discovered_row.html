@@ -54,11 +54,11 @@
         <div class="text-xs text-red-600 dark:text-red-400 mt-1" title="{{.Error}}">Error</div>
         {{end}}
     </td>
-    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-        {{if .NodeCount}}{{formatCount .NodeCount}}{{else}}-{{end}}
-    </td>
     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400 font-mono">
         {{if .CacheBytesH}}{{.CacheBytesH}}{{else}}-{{end}}
+    </td>
+    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400 font-mono">
+        {{if .LoadDurationH}}{{.LoadDurationH}}{{else}}-{{end}}
     </td>
     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
         {{if $busy}}
@@ -79,6 +79,11 @@
             {{if $canRetry}}Retry{{else if .State.IsNotLoaded}}Load{{else}}Reload{{end}}
         </button>
         {{else if .State.IsLoaded}}
+        <a href="/browse?inventory_id={{.SourceBucket}}/{{.Name}}/{{.Run}}"
+           class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 dark:hover:text-indigo-200"
+           title="Browse this run's prefix tree">
+            Browse
+        </a>
         <a href="/compare?from={{.SourceBucket}}/{{.Name}}/{{.Run}}"
            class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 dark:hover:text-indigo-200"
            title="Compare this run against another loaded run">

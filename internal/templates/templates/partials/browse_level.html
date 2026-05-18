@@ -32,6 +32,9 @@
                 </h3>
                 <div class="text-sm text-gray-500 dark:text-gray-400">{{.ObjectCountH}} objects · {{.TotalBytesH}}</div>
             </div>
+            {{if .QueryDurationH}}
+            <p class="mt-1 text-xs text-gray-400 dark:text-gray-500" title="Server-side query time, excluding HTML template rendering.">Queried in {{.QueryDurationH}}</p>
+            {{end}}
         </div>
 
         {{if .TierBreakdown}}

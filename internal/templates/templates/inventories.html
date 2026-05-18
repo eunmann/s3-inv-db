@@ -65,12 +65,12 @@
                 <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                     <thead class="bg-gray-50 dark:bg-gray-900/30">
                         <tr>
-                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Run</th>
-                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Format</th>
-                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">State</th>
-                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Nodes</th>
-                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Cache</th>
-                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Run{{template "templates/partials/info_icon.html" "Inventory run timestamp (UTC) and the S3 manifest key it was discovered under."}}</th>
+                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Format{{template "templates/partials/info_icon.html" "Manifest file format (CSV / Parquet / ORC), chunk-file count, and total compressed manifest bytes."}}</th>
+                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">State{{template "templates/partials/info_icon.html" "Lifecycle state: not loaded, loading (build in progress), loaded, or error."}}</th>
+                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Cache{{template "templates/partials/info_icon.html" "On-disk size of this run's built index inside the cache directory."}}</th>
+                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Load time{{template "templates/partials/info_icon.html" "Wall-clock time the latest build job took to load this run (download + parse + index build)."}}</th>
+                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions{{template "templates/partials/info_icon.html" "Per-run actions: Load builds the index; Browse opens the prefix tree; Compare picks a baseline; Pin protects from auto-eviction; Unload releases the index."}}</th>
                         </tr>
                     </thead>
                     <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
