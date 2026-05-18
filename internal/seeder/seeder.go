@@ -300,6 +300,8 @@ func getGeneratorConfig(preset string, numObjects int) benchutil.GeneratorConfig
 		return cfg
 	case "realistic":
 		return benchutil.S3RealisticConfig(numObjects)
+	case "deep_pyramid", "deep-pyramid":
+		return benchutil.S3DeepPyramidConfig(numObjects)
 	default:
 		return benchutil.S3RealisticConfig(numObjects)
 	}

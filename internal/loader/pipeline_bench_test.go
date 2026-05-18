@@ -1,54 +1,98 @@
 package loader_test
 
 import (
-	"fmt"
+	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"testing"
 	"time"
 
-	"github.com/eunmann/s3-inv-db/internal/loader"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/internal/testsupport/miniotest"
+	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/rs/zerolog"
 )
 
-// BenchmarkPipeline_MultiChunkBuild runs the full build pipeline against
-// a MinIO-hosted multi-chunk inventory. The chunk count is the key
-// dimension: it gates how much chunk-level parallelism the pipeline can
-// actually use, so changes to worker-count derivation surface here in
-// a way they don't in any pkg/extsort microbench.
+// Pipeline integration benchmarks — full S3-to-index path against
+// MinIO. Each bench seeds a fresh inventory into a uniquely-named
+// bucket, then runs extsort.Pipeline end-to-end (download → parse
+// → aggregate → spill → merge → build) and reports build time and
+// total on-disk index size.
 //
-// Requires the docker compose `test` profile (AWS_ENDPOINT_URL_S3 must
-// point at a reachable MinIO). Runs under `make test` paths but isn't
-// part of the standard test run — invoke explicitly:
+// Naming: `BenchmarkPipeline_<Shape>_<Size>_<DictKnob>`. Three
+// dimensions surface here that microbenches can't see — chunk-level
+// download parallelism, real CSV parsing cost, and the spill phase
+// running on the production code path through chunkWorker.
 //
-//	go test -bench=BenchmarkPipeline_MultiChunkBuild -benchtime=1x \
-//	  -run=^$ -count=N ./internal/loader/...
-func BenchmarkPipeline_MultiChunkBuild(b *testing.B) {
-	cases := []struct {
-		name    string
-		objects int
-		chunks  int
-	}{
-		{"objects=20000_chunks=4", 20000, 4},
-		{"objects=20000_chunks=16", 20000, 16},
-		{"objects=100000_chunks=8", 100000, 8},
-	}
-	for _, c := range cases {
-		b.Run(c.name, func(b *testing.B) {
-			benchmarkMultiChunkBuild(b, c.objects, c.chunks)
-		})
-	}
+// Requires the docker compose `test` profile (AWS_ENDPOINT_URL_S3
+// must point at a reachable MinIO). Run via:
+//
+//	go test -bench=BenchmarkPipeline -benchtime=1x -count=1 \
+//	  -run=^$ ./internal/loader/...
+//
+// Or via the make target that brings MinIO up around it:
+//
+//	make docker-bench-pipeline   (not yet defined; see bench README)
+
+const (
+	pipelineBenchChunkCount = 8
+)
+
+func BenchmarkPipeline_Realistic_500K_DictOff(b *testing.B) {
+	runPipelineBench(b, "realistic", 500_000, false, 0)
 }
 
-func benchmarkMultiChunkBuild(b *testing.B, numObjects, numChunks int) {
-	b.Helper()
-	b.ReportAllocs()
+func BenchmarkPipeline_Realistic_500K_DictOn(b *testing.B) {
+	runPipelineBench(b, "realistic", 500_000, true, 0)
+}
 
-	// The pipeline's internal debug logging would otherwise drown
-	// the bench output line and confuse benchstat parsing.
-	prev := zerolog.GlobalLevel()
-	zerolog.SetGlobalLevel(zerolog.Disabled)
-	b.Cleanup(func() { zerolog.SetGlobalLevel(prev) })
+func BenchmarkPipeline_Realistic_1M_DictOff(b *testing.B) {
+	runPipelineBench(b, "realistic", 1_000_000, false, 0)
+}
+
+func BenchmarkPipeline_Realistic_1M_DictOn(b *testing.B) {
+	runPipelineBench(b, "realistic", 1_000_000, true, 0)
+}
+
+func BenchmarkPipeline_DeepPyramid_500K_DictOff(b *testing.B) {
+	runPipelineBench(b, "deep_pyramid", 500_000, false, 0)
+}
+
+func BenchmarkPipeline_DeepPyramid_500K_DictOn(b *testing.B) {
+	runPipelineBench(b, "deep_pyramid", 500_000, true, 0)
+}
+
+func BenchmarkPipeline_DeepPyramid_1M_DictOff(b *testing.B) {
+	runPipelineBench(b, "deep_pyramid", 1_000_000, false, 0)
+}
+
+func BenchmarkPipeline_DeepPyramid_1M_DictOn(b *testing.B) {
+	runPipelineBench(b, "deep_pyramid", 1_000_000, true, 0)
+}
+
+// BenchmarkPipeline_AutoScale_DeepPyramid_1M_Mem* sweeps the
+// GOMEMLIMIT budget against the same fixture to show that
+// AggregatorCap scales with the configured limit — fewer spills and
+// shorter merge phase as the budget grows. All three runs share
+// shape, size, and dict setting; only the memory cap varies.
+func BenchmarkPipeline_AutoScale_DeepPyramid_1M_Mem2G(b *testing.B) {
+	runPipelineBench(b, "deep_pyramid", 1_000_000, true, 2<<30)
+}
+
+func BenchmarkPipeline_AutoScale_DeepPyramid_1M_Mem8G(b *testing.B) {
+	runPipelineBench(b, "deep_pyramid", 1_000_000, true, 8<<30)
+}
+
+func BenchmarkPipeline_AutoScale_DeepPyramid_1M_Mem16G(b *testing.B) {
+	runPipelineBench(b, "deep_pyramid", 1_000_000, true, 16<<30)
+}
+
+// runPipelineBench is the shared body. MemLimit==0 leaves GOMEMLIMIT
+// unchanged (uses whatever the test runtime has, normally unset →
+// DefaultAggregatorCap kicks in).
+func runPipelineBench(b *testing.B, preset string, numObjects int, prefixDict bool, memLimit int64) {
+	b.Helper()
+	silenceZerologPipelineBench(b)
 
 	fc := miniotest.FetchClient(b)
 	bucket := miniotest.Bucket(b, fc.Raw())
@@ -62,34 +106,64 @@ func benchmarkMultiChunkBuild(b *testing.B, numObjects, numChunks int) {
 		seeder.Config{
 			Target:  seeder.TargetS3,
 			Objects: numObjects,
-			Preset:  "small",
-			Seed:    int64(numObjects ^ numChunks),
+			Preset:  preset,
+			Seed:    int64(numObjects ^ pipelineBenchChunkCount),
 			Logger:  zerolog.Nop(),
 		},
-		seeder.S3Config{
-			Bucket:    bucket,
-			Prefix:    prefix,
-			SrcBucket: srcBucket,
-		},
-		1, int64(numObjects), stamp, numChunks,
+		seeder.S3Config{Bucket: bucket, Prefix: prefix, SrcBucket: srcBucket},
+		1, int64(numObjects), stamp, pipelineBenchChunkCount,
 	)
 	if err != nil {
 		b.Fatalf("UploadMultiChunkInventory: %v", err)
 	}
 
-	run := stamp.Format("2006-01-02T15-04Z")
+	var lastDiskBytes int64
+	var lastPeakHeap uint64
+
 	b.ResetTimer()
 	for range b.N {
-		// Use a fresh cache dir per iteration so each run rebuilds from
-		// scratch; the loader RemoveAlls cache_dir/<src>/<inv>/<run>
-		// before each build but a fresh root is even cleaner.
-		cacheRoot := b.TempDir()
-		l := loader.New(cacheRoot, fc)
-		if _, err := l.BuildWith(b.Context(), srcBucket, info.ID, run, info.Path, nilProgress); err != nil {
-			b.Fatalf("BuildWith: %v", err)
-		}
-	}
-	_ = fmt.Sprintf
-}
+		b.StopTimer()
+		outDir := filepath.Join(b.TempDir(), "index")
 
-func nilProgress(string, int64, int64) {}
+		// Save + restore GOMEMLIMIT so the bench sweep doesn't leak
+		// configured limits into sibling benchmarks.
+		var prevLimit int64
+		if memLimit > 0 {
+			prevLimit = debug.SetMemoryLimit(memLimit)
+		}
+
+		runtime.GC()
+		var msStart runtime.MemStats
+		runtime.ReadMemStats(&msStart)
+		peak := atomicHeapSampler(b)
+
+		cfg := extsort.DefaultConfig()
+		cfg.PrefixDictionary = prefixDict
+		cfg.Observe.OnProgress = func(string, int64, int64) {}
+		pipeline := extsort.NewPipeline(cfg, fc)
+
+		b.StartTimer()
+		if _, err := pipeline.Run(b.Context(), info.Path, outDir); err != nil {
+			b.StopTimer()
+			peak.stop()
+			if memLimit > 0 {
+				debug.SetMemoryLimit(prevLimit)
+			}
+			b.Fatalf("pipeline.Run: %v", err)
+		}
+		b.StopTimer()
+
+		samplerMax := peak.stop()
+		if memLimit > 0 {
+			debug.SetMemoryLimit(prevLimit)
+		}
+		if delta := safeSubPipelineBench(samplerMax, msStart.HeapAlloc); delta > lastPeakHeap {
+			lastPeakHeap = delta
+		}
+		lastDiskBytes = dirBytesPipelineBench(b, outDir)
+		b.StartTimer()
+	}
+
+	b.ReportMetric(float64(lastDiskBytes), "disk_B")
+	b.ReportMetric(float64(lastPeakHeap), "peak_heap_B")
+}
