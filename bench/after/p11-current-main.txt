@@ -1,0 +1,12 @@
+goos: linux
+goarch: amd64
+pkg: github.com/eunmann/s3-inv-db/pkg/extsort
+cpu: AMD Ryzen 9 5950X 16-Core Processor            
+BenchmarkBuildHarness/n=500000-32         	       1	3112241972 ns/op	 365070292 disk_B	       296.9 disk_B/prefix	      6935 lookup_ns	 991913408 peak_heap_B	       806.8 peak_heap_B/prefix	1221389728 B/op	13533165 allocs/op
+BenchmarkBuildHarness/n=500000-32         	       1	3139244888 ns/op	 365070292 disk_B	       296.9 disk_B/prefix	      6960 lookup_ns	 994324472 peak_heap_B	       808.7 peak_heap_B/prefix	1217460224 B/op	13532962 allocs/op
+BenchmarkBuildHarness/n=500000-32         	       1	3174896000 ns/op	 365070292 disk_B	       296.9 disk_B/prefix	      7011 lookup_ns	1005185496 peak_heap_B	       817.6 peak_heap_B/prefix	1221358088 B/op	13532946 allocs/op
+BenchmarkBuildHarness/n=1000000-32        	       1	6567998844 ns/op	 706104541 disk_B	       297.4 disk_B/prefix	     13670 lookup_ns	1953658624 peak_heap_B	       822.9 peak_heap_B/prefix	2338270712 B/op	26133542 allocs/op
+BenchmarkBuildHarness/n=1000000-32        	       1	6572034226 ns/op	 706104541 disk_B	       297.4 disk_B/prefix	     13767 lookup_ns	1968101976 peak_heap_B	       828.9 peak_heap_B/prefix	2343650032 B/op	26133561 allocs/op
+BenchmarkBuildHarness/n=1000000-32        	       1	6574598402 ns/op	 706104541 disk_B	       297.4 disk_B/prefix	     13555 lookup_ns	1961855320 peak_heap_B	       826.3 peak_heap_B/prefix	2336452680 B/op	26133587 allocs/op
+PASS
+ok  	github.com/eunmann/s3-inv-db/pkg/extsort	42.713s
