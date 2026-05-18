@@ -31,4 +31,9 @@ var (
 	ErrNoPrefixStorage = errors.New("no prefix storage loaded")
 	// ErrLookupWrongPos indicates a verification lookup returned an unexpected position.
 	ErrLookupWrongPos = errors.New("lookup returned wrong pos")
+	// ErrHashCollision indicates two distinct segments hashed to the same value.
+	// This should be statistically negligible for FNV-64 on path segments; if
+	// it ever fires it points at either a real collision (corruption of one
+	// of the inputs) or an interner-state bug.
+	ErrHashCollision = errors.New("hash collision")
 )

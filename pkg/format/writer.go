@@ -46,6 +46,22 @@ func NewArrayWriter(path string, width uint32) (*ArrayWriter, error) {
 	}, nil
 }
 
+// WriteU32 writes a uint32 value. Requires the array to have been
+// constructed with width=4.
+func (w *ArrayWriter) WriteU32(val uint32) error {
+	if w.width != 4 {
+		return fmt.Errorf("%w: expected 4, got %d", ErrWidthMismatch, w.width)
+	}
+	var buf [4]byte
+	binary.LittleEndian.PutUint32(buf[:], val)
+	if _, err := w.writer.Write(buf[:]); err != nil {
+		return fmt.Errorf("write u32: %w", err)
+	}
+	w.count++
+
+	return nil
+}
+
 // WriteU64 writes a uint64 value.
 func (w *ArrayWriter) WriteU64(val uint64) error {
 	if w.width != 8 {

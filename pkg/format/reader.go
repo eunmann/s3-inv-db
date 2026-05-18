@@ -188,6 +188,20 @@ func (r *ArrayReader) Width() uint32 {
 	return r.header.Width
 }
 
+// GetU32 returns the uint32 value at the given index. Requires the
+// array to have been written with width=4.
+func (r *ArrayReader) GetU32(idx uint64) (uint32, error) {
+	if idx >= r.header.Count {
+		return 0, ErrBoundsCheck
+	}
+	if r.header.Width != 4 {
+		return 0, fmt.Errorf("%w: expected 4, got %d", ErrWidthMismatch, r.header.Width)
+	}
+	offset := idx * 4
+
+	return binary.LittleEndian.Uint32(r.data[offset:]), nil
+}
+
 // GetU64 returns the uint64 value at the given index.
 func (r *ArrayReader) GetU64(idx uint64) (uint64, error) {
 	if idx >= r.header.Count {
@@ -199,6 +213,12 @@ func (r *ArrayReader) GetU64(idx uint64) (uint64, error) {
 	offset := idx * 8
 
 	return binary.LittleEndian.Uint64(r.data[offset:]), nil
+}
+
+// UnsafeGetU32 returns the value without bounds checking. Caller must
+// have validated idx < Count(); out-of-range reads are undefined.
+func (r *ArrayReader) UnsafeGetU32(idx uint64) uint32 {
+	return binary.LittleEndian.Uint32(r.data[idx*4:])
 }
 
 // UnsafeGetU64 returns the value without bounds checking. Caller must
@@ -272,4 +292,14 @@ func (r *BlobReader) Get(idx uint64) (string, error) {
 	}
 
 	return string(r.blobMmap.Data()[start:end]), nil
+}
+
+// UnsafeGet returns the string at idx without bounds checking. Caller
+// must have validated idx < Count(); out-of-range reads are
+// undefined.
+func (r *BlobReader) UnsafeGet(idx uint64) string {
+	start := r.offsetsMmap.UnsafeGetU64(idx)
+	end := r.offsetsMmap.UnsafeGetU64(idx + 1)
+
+	return string(r.blobMmap.Data()[start:end])
 }
