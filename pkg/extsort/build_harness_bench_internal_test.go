@@ -17,23 +17,10 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// BuildHarness — explicit per-(shape × prefix-dictionary × size)
-// benchmarks. Each function names the exact knob combination it
-// measures, so a `go test -bench` selector picks the comparison the
-// caller wants.
-//
-// The harness mirrors Pipeline's bounded-memory invariant: every
-// harnessFlushCheckInterval objects, ShouldWorkerFlush decides whether
-// the in-memory aggregator has crossed the per-worker cap. When it
-// has, the aggregator drains to a compressed run file on disk and is
-// reset. After the stream completes, all run files (plus any final
-// partial drain) are k-way-merged into the IndexBuilder. This is the
-// same sequence Pipeline.Run uses; the harness just runs it
-// single-threaded so phase costs stay attributable.
-//
-// Net effect: the harness scales to the machine. A 10M deep-pyramid
-// run spills ~30 run files at ~512 MiB each instead of holding the
-// entire 15 GB+ aggregator in RAM.
+// BuildHarness benchmarks the build phases in isolation by mirroring
+// Pipeline's flush-on-cap → spill → k-way-merge sequence
+// single-threaded. Naming is BenchmarkBuildHarness_<shape>_<size>_<dict>
+// so a single -bench selector pulls one knob combination.
 
 func BenchmarkBuildHarness_Realistic_500K_DictOff(b *testing.B) {
 	runShapeHarness(b, benchutil.S3RealisticConfig(500_000), false)
@@ -84,30 +71,16 @@ func BenchmarkBuildHarness_DeepPyramid_10M_DictOn(b *testing.B) {
 }
 
 const (
-	// HarnessPrefixSampleCap caps the prefix sample retained for the
-	// post-build Lookup measurement. 1024 is plenty for a meaningful
-	// average; larger sets just inflate per-bench RSS.
-	harnessPrefixSampleCap = 1024
-	// HarnessAggregatorChunkRatio sizes the aggregator's initial map hint as
-	// NumObjects / harnessAggregatorChunkRatio. Matches the n/8 the old harness used.
+	harnessPrefixSampleCap      = 1024
 	harnessAggregatorChunkRatio = 8
-	// HarnessFlushCheckInterval is the per-object stride between
-	// ShouldWorkerFlush checks. ReadMemStats inside ShouldWorkerFlush
-	// is not free, so checking every object would distort timing.
-	// Pipeline checks per-chunk (typically tens of thousands of rows);
-	// 10K mirrors that cadence.
+	// HarnessFlushCheckInterval bounds how often ShouldWorkerFlush
+	// fires inside a chunk. ReadMemStats inside it is not free, so
+	// per-object would distort timing.
 	harnessFlushCheckInterval = 10_000
-	// HarnessSingleWorker is the synthetic worker count used to compute
-	// the per-worker aggregator cap. The harness is single-threaded by
-	// design (phase isolation), so 1 here gives the same cap a real
-	// 1-worker pipeline would see.
-	harnessSingleWorker = 1
-	// HarnessRunBufferSize matches Pipeline's run-file buffer default.
-	harnessRunBufferSize = DefaultRunBufferSize
+	harnessSingleWorker       = 1
+	harnessRunBufferSize      = DefaultRunBufferSize
 )
 
-// runShapeHarness runs one (shape, dict) build under the same
-// bounded-aggregator + spill + merge sequence Pipeline uses.
 func runShapeHarness(b *testing.B, cfg benchutil.GeneratorConfig, prefixDict bool) {
 	b.Helper()
 	silenceZerologExtsort(b)
@@ -164,21 +137,13 @@ func runShapeHarness(b *testing.B, cfg benchutil.GeneratorConfig, prefixDict boo
 	}
 }
 
-// harnessResult bundles the post-build state the bench needs to
-// compute metrics.
 type harnessResult struct {
 	prefixCount  uint64
 	prefixSample []string
 }
 
-// buildIndexBounded runs the same flush-on-cap → spill → merge →
-// IndexBuilder sequence Pipeline uses, but single-threaded so the
-// harness can attribute timing to each phase. Every
-// harnessFlushCheckInterval streamed objects, ShouldWorkerFlush
-// decides whether the in-memory aggregator has crossed the per-worker
-// memory cap; when it has, the aggregator drains to a compressed run
-// file on disk and is reset. After the stream ends, run files are
-// k-way-merged into the IndexBuilder.
+// buildIndexBounded streams objects through one aggregator that
+// spills on cap, then k-way-merges the spills into IndexBuilder.
 func buildIndexBounded(cfg benchutil.GeneratorConfig, outDir, tempDir string, prefixDict bool) (*harnessResult, error) {
 	agg := NewAggregator(cfg.NumObjects/harnessAggregatorChunkRatio, 0)
 	sample := newPrefixSampler(harnessPrefixSampleCap)
@@ -222,10 +187,6 @@ func buildIndexBounded(cfg benchutil.GeneratorConfig, outDir, tempDir string, pr
 		return nil, streamErr
 	}
 
-	// Final drain — if there's anything left, either spill it (when
-	// some workers already spilled, so we have multiple sorted runs to
-	// merge) or feed it directly into the builder (single-batch case
-	// skips the round-trip through a run file).
 	finalRows := agg.Drain()
 	SortPrefixRows(finalRows)
 
@@ -243,9 +204,6 @@ func buildIndexBounded(cfg benchutil.GeneratorConfig, outDir, tempDir string, pr
 	}, nil
 }
 
-// flushAggregatorToRun drains agg into a compressed run file under
-// tempDir and resets the aggregator. Index is the run's sequence
-// number; used only to name the file deterministically.
 func flushAggregatorToRun(agg *Aggregator, tempDir string, runIdx int) (string, error) {
 	rows := agg.Drain()
 	SortPrefixRows(rows)
@@ -266,14 +224,6 @@ func flushAggregatorToRun(agg *Aggregator, tempDir string, runIdx int) (string, 
 	return path, nil
 }
 
-// buildFromRuns is the merge-and-build phase. Three cases:
-//
-//  1. No spilled runs: finalRows is the whole dataset; feed it
-//     directly into the builder.
-//  2. Spilled runs but no final remainder: open a MergeIterator
-//     across the run files, feed every yielded row to the builder.
-//  3. Spilled runs *plus* a final batch: write the final batch as
-//     one more run file and merge the combined set.
 func buildFromRuns(outDir, tempDir string, runFiles []string, finalRows []*PrefixRow, prefixDict bool) (uint64, error) {
 	builder, err := NewIndexBuilderWithCapacity(outDir, tempDir, 0)
 	if err != nil {
@@ -344,9 +294,8 @@ func writeFinalRun(tempDir string, rows []*PrefixRow, runIdx int) (string, error
 	return path, nil
 }
 
-// prefixSampler keeps a bounded set of distinct directory-prefixes
-// observed in a streaming object pass. First-seen wins so the sample
-// is deterministic for a given input ordering.
+// prefixSampler retains the first `limit` distinct directory prefixes
+// seen during a streaming pass for use as a Lookup fixture.
 type prefixSampler struct {
 	seen  map[string]struct{}
 	out   []string
@@ -386,10 +335,7 @@ func (s *prefixSampler) observe(key string) {
 
 func (s *prefixSampler) prefixes() []string { return s.out }
 
-// heapSampler polls runtime memory stats every 5 ms and updates the
-// highest HeapAlloc seen into peak. Cheap enough that it doesn't
-// move the timing needle on its own. Closing `stop` ends the
-// goroutine.
+// heapSampler tracks the max HeapAlloc seen until stop closes.
 func heapSampler(stop <-chan struct{}, peak *atomic.Uint64) {
 	const interval = 5 * time.Millisecond
 	t := time.NewTicker(interval)

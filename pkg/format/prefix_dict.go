@@ -12,8 +12,7 @@ import (
 
 // Prefix-dictionary file names. The dictionary stores unique "/"-
 // delimited path segments once and replaces each prefix with a
-// sequence of uint32 segment IDs, typically shrinking prefix_blob
-// bytes by 50-70% on inventories with shared path components.
+// sequence of uint32 segment IDs.
 const (
 	PrefixDictBlobFile             = "prefix_dict.bin"
 	PrefixDictOffsetsFile          = "prefix_dict.off.u64"
@@ -21,14 +20,12 @@ const (
 	PrefixDictOffsetsPerPrefixFile = "prefix_dict.prefix_off.u64"
 )
 
-// DefaultPrefixDictCacheSize is the default LRU cache size used by
-// PrefixDictionary when callers don't preload. Sized to cover the
-// hot working set on typical inventories while keeping memory bounded.
+// DefaultPrefixDictCacheSize is the default LRU cache size for
+// PrefixDictionary when callers don't preload.
 const DefaultPrefixDictCacheSize = 10000
 
-// avgSegmentBytes is the per-segment byte estimate used to size the
-// strings.Builder when reconstructing a prefix (~12 bytes per
-// segment + slashes).
+// avgSegmentBytes presizes the strings.Builder when reconstructing
+// a prefix (~12 bytes per segment + slash).
 const avgSegmentBytes = 12
 
 // PrefixSegmentInterner interns unique path segments during index
@@ -73,9 +70,7 @@ func NewPrefixSegmentInterner(outDir string) (*PrefixSegmentInterner, error) {
 func (si *PrefixSegmentInterner) Intern(segment string) (uint32, error) {
 	h := hashSegment(segment)
 
-	// Check if we've seen this hash before
 	if id, ok := si.segmentMap[h]; ok {
-		// Verify it's actually the same segment (collision check)
 		if si.segments[id] != segment {
 			return 0, fmt.Errorf("%w between %q and %q", ErrHashCollision, si.segments[id], segment)
 		}
@@ -83,16 +78,13 @@ func (si *PrefixSegmentInterner) Intern(segment string) (uint32, error) {
 		return id, nil
 	}
 
-	// New segment - assign next ID
 	id := si.nextID
 	si.nextID++
 
-	// Write to blob
 	if err := si.blobWriter.WriteString(segment); err != nil {
 		return 0, fmt.Errorf("write segment: %w", err)
 	}
 
-	// Record in maps
 	si.segmentMap[h] = id
 	si.segments = append(si.segments, segment)
 
@@ -187,15 +179,13 @@ func (sd *PrefixDictionary) Close() error {
 	return sd.blob.Close()
 }
 
-// PreloadedPrefixCache holds all segments in memory for fast lookups.
-// This eliminates LRU cache overhead by using direct slice indexing.
+// PreloadedPrefixCache holds every segment in memory for direct
+// slice-index lookup, avoiding the LRU.
 type PreloadedPrefixCache struct {
-	segments []string // segment ID -> string (direct index lookup)
+	segments []string
 }
 
 // PreloadSegments loads all segments into memory for fast lookups.
-// Recommended when segment dictionaries are small relative to prefix
-// data (typical case: ~100-200 unique segments for 100K prefixes).
 func (sd *PrefixDictionary) PreloadSegments() (*PreloadedPrefixCache, error) {
 	count := sd.Count()
 	segments := make([]string, count)
@@ -224,8 +214,8 @@ func (c *PreloadedPrefixCache) Count() int {
 // DictPrefixWriter writes prefixes as sequences of dictionary segment IDs.
 type DictPrefixWriter struct {
 	interner      *PrefixSegmentInterner
-	segIDsWriter  *ArrayWriter // prefix_dict.ids.u32
-	offsetsWriter *ArrayWriter // prefix_dict.prefix_off.u64
+	segIDsWriter  *ArrayWriter
+	offsetsWriter *ArrayWriter
 	currentOffset uint64
 }
 
@@ -265,15 +255,12 @@ func NewDictPrefixWriter(outDir string) (*DictPrefixWriter, error) {
 // WritePrefix splits a prefix into segments, interns each segment,
 // and writes the segment IDs to the output files.
 func (w *DictPrefixWriter) WritePrefix(prefix string) error {
-	// Write offset for this prefix
 	if err := w.offsetsWriter.WriteU64(w.currentOffset); err != nil {
 		return fmt.Errorf("write prefix offset: %w", err)
 	}
 
-	// Split prefix into segments
 	segments := SplitPrefix(prefix)
 
-	// Intern and write each segment ID
 	for _, seg := range segments {
 		id, err := w.interner.Intern(seg)
 		if err != nil {
@@ -290,7 +277,6 @@ func (w *DictPrefixWriter) WritePrefix(prefix string) error {
 
 // Close finalizes all output files, writing the sentinel offset.
 func (w *DictPrefixWriter) Close() error {
-	// Write sentinel offset (points past end)
 	if err := w.offsetsWriter.WriteU64(w.currentOffset); err != nil {
 		return fmt.Errorf("write sentinel offset: %w", err)
 	}
@@ -325,14 +311,10 @@ func (w *DictPrefixWriter) PrefixCount() uint64 {
 
 // DictPrefixReader reads prefixes from dictionary-encoded storage.
 type DictPrefixReader struct {
-	dict    *PrefixDictionary
-	cache   *PreloadedPrefixCache // preloaded segments for fast lookup
-	segIDs  *ArrayReader          // prefix_dict.ids.u32
-	offsets *ArrayReader          // prefix_dict.prefix_off.u64
-	// builders pools strings.Builder per-reader so concurrent
-	// GetPrefix calls avoid allocating a builder each time. Per-
-	// reader (rather than package global) keeps the pool's lifetime
-	// tied to the reader.
+	dict     *PrefixDictionary
+	cache    *PreloadedPrefixCache
+	segIDs   *ArrayReader
+	offsets  *ArrayReader
 	builders sync.Pool
 }
 

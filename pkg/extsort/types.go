@@ -234,13 +234,8 @@ type Config struct {
 	TempDir string
 	Merge   MergeConfig
 	S3      S3Config
-	// PrefixDictionary toggles dictionary-encoded prefix storage.
-	// When true (default), prefix strings are deduplicated into a
-	// shared dictionary of path segments (split on "/") and each
-	// prefix is stored as a sequence of segment IDs. Shrinks
-	// prefix_blob bytes by typically 50-70% on inventories with
-	// shared path components, but adds ~3× warm prefix-string read
-	// latency. Set false to opt into the raw concatenated blob.
+	// PrefixDictionary toggles dictionary-encoded prefix storage
+	// (smaller blob, slower prefix-string reads). Default true.
 	PrefixDictionary bool
 	MaxDepth         int
 }
@@ -257,7 +252,7 @@ type S3Config struct {
 
 // MergeConfig tunes the K-way merge phase.
 type MergeConfig struct {
-	// NumWorkers: concurrent merge workers. Default min(max(NumCPU/2,1), 8).
+	// NumWorkers: concurrent merge workers. Default max(NumCPU/2, 1).
 	NumWorkers int
 
 	// MaxFanIn: runs merged per worker. Higher = fewer rounds, more
@@ -288,11 +283,6 @@ func DefaultConfig() Config {
 	numCPU := runtime.NumCPU()
 	const minPartConcurrency = 2
 	partConcurrency := max(numCPU/4, minPartConcurrency)
-	// Merge workers scale with available CPU. No hard upper cap:
-	// the file-handle pressure concern (each worker holds MaxFanIn
-	// readers open) is bounded by MaxFanIn × workers, and Linux
-	// default ulimits absorb O(thousands) of fds. Lower bound at 1
-	// so a single-CPU host still works.
 	mergeWorkers := max(numCPU/2, 1)
 
 	return Config{

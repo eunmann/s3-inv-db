@@ -156,18 +156,14 @@ func UploadMultiChunkInventory(ctx context.Context, client *s3.Client, cfg Confi
 	remainder := cfg.Objects % numChunks
 	chunkBuf := make([]benchutil.FakeObject, 0, baseChunkSize+1)
 	for chunk := range numChunks {
-		// Distribute the remainder across the first `remainder` chunks
-		// so chunks differ by at most 1 object — matches the prior
-		// (len+n-1)/n slicing without materialising the full slice.
+		// Spread the remainder across the first `remainder` chunks so
+		// chunks differ by at most 1 object.
 		thisChunkSize := baseChunkSize
 		if chunk < remainder {
 			thisChunkSize++
 		}
 		chunkBuf = chunkBuf[:0]
 		for range thisChunkSize {
-			// Hot loop — drive the generator directly per object so
-			// we never accumulate more than one chunk's objects in
-			// memory at a time.
 			chunkBuf = append(chunkBuf, gen.Next())
 		}
 		payload, err := encodeCSVGz(s3cfg.SrcBucket, chunkBuf)

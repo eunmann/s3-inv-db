@@ -172,14 +172,9 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		}
 	}()
 
-	// Resolve the memory budget. If the caller (server, CLI, bench)
-	// didn't already install one, auto-detect via sysmem so the
-	// aggregator cap scales with the actual machine RAM instead of
-	// falling back to a fixed 512 MiB. Pipeline.Run is the lowest
-	// common entrypoint that every build path crosses, so this is
-	// where the detection belongs — callers that DO want to pin a
-	// budget can call sysmem.ApplyMemoryLimit before us and we'll
-	// inherit it.
+	// Auto-detect a memory budget when none is installed so the
+	// aggregator cap scales with the machine. Callers can pin a
+	// specific budget by calling sysmem.ApplyMemoryLimit before Run.
 	memoryLimit := debug.SetMemoryLimit(-1)
 	memSource := "configured"
 	if memoryLimit >= unsetMemoryLimit {
@@ -639,13 +634,8 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 
 	const (
 		ctxCheckInterval = 4096
-		// Mid-chunk flush check cadence. ShouldWorkerFlush calls
-		// runtime.ReadMemStats so we can't afford to check every row,
-		// but the per-chunk check that was previously the only safety
-		// net let a single 600K-row chunk (10M objects / 16 chunks) grow
-		// the aggregator past 1 GB before getting a chance to spill —
-		// the deep-pyramid expansion factor (~6.5× prefixes per object)
-		// is what blew through the per-worker cap.
+		// ShouldWorkerFlush calls runtime.ReadMemStats; cadence the
+		// in-chunk check so big chunks can still spill before OOM.
 		midChunkFlushInterval = 50_000
 	)
 	var (
@@ -958,16 +948,9 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		}
 	}()
 
-	// MergeIterator.Remaining sums the row counts of every spilled
-	// run file, which OVERESTIMATES the post-merge prefix count by
-	// the inter-spill duplication factor: a prefix touched in N
-	// run files is counted N times here but the K-way merge will
-	// collapse them to one row. At billion-prefix scale the multiplier
-	// is enough that a naive pre-allocation can size core_stats.bin
-	// many times larger than the final index. Use the count only as
-	// an upper bound for the *initial* mmap region, and let the
-	// IndexBuilder grow + final-truncate down to the real size at
-	// Finalize. 0 means "unknown — start small and grow".
+	// Upper bound: sums every spilled run's row count, so a prefix
+	// touched in N runs is counted N times. IndexBuilder uses this
+	// only to size the initial mmap and truncates down at Finalize.
 	prefixCount := mergeIter.Remaining()
 	log.Debug().
 		Uint64("merge_iter_remaining", prefixCount).

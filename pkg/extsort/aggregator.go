@@ -97,11 +97,7 @@ func heapInuseBytes() uint64 {
 	return m.HeapInuse
 }
 
-// DefaultAggregatorCap is the combined-aggregator spill threshold used
-// when no real memory budget is available — e.g. a CLI invocation
-// without GOMEMLIMIT or a cgroup memory.max set. Servers should call
-// sysmem.ApplyMemoryLimit at startup so AggregatorCap can scale with
-// the actual machine; this constant is the conservative fallback.
+// DefaultAggregatorCap is the spill threshold when no GOMEMLIMIT is set.
 const DefaultAggregatorCap uint64 = 512 * 1024 * 1024
 
 // heapPressureRatio is the HeapInuse / GOMEMLIMIT fraction above which
@@ -109,25 +105,15 @@ const DefaultAggregatorCap uint64 = 512 * 1024 * 1024
 // is the pipeline's only flush valve.
 const heapPressureRatio = 0.85
 
-// AggregatorFractionOfLimit caps the combined aggregator footprint as
-// a share of GOMEMLIMIT so the aggregator can't cannibalise the heap
-// budget that download / parse / merge / IndexBuilder mmap also need.
+// AggregatorFractionOfLimit caps the aggregator share of GOMEMLIMIT;
+// the remainder is left for download / parse / merge / mmap.
 const AggregatorFractionOfLimit = 0.15
 
-// unsetMemoryLimit is the sentinel above which a memoryLimit value is
-// treated as "unset" — runtime/debug.SetMemoryLimit reports
-// math.MaxInt64 when GOMEMLIMIT has never been set, and that value
-// multiplied by AggregatorFractionOfLimit is nonsense. The threshold
-// is well above any reachable real cgroup or container limit.
+// unsetMemoryLimit treats debug.SetMemoryLimit's math.MaxInt64 sentinel
+// (no GOMEMLIMIT configured) as unset.
 const unsetMemoryLimit int64 = 1 << 62
 
 // AggregatorCap returns the combined spill threshold for all workers.
-// When memoryLimit is configured (a positive value below the
-// unsetMemoryLimit sentinel) the cap scales with it via
-// AggregatorFractionOfLimit, so the algorithm uses the budget the
-// machine was provisioned for. When the runtime reports no real
-// limit (default Go behaviour, no cgroup), the cap falls back to
-// DefaultAggregatorCap so unconfigured invocations stay conservative.
 func AggregatorCap(memoryLimit int64) uint64 {
 	if memoryLimit <= 0 || memoryLimit >= unsetMemoryLimit {
 		return DefaultAggregatorCap

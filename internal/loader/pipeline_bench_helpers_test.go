@@ -11,8 +11,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// silenceZerologPipelineBench mutes the pipeline's internal logging
-// so benchstat-style parsers see a clean output line.
 func silenceZerologPipelineBench(b *testing.B) {
 	b.Helper()
 	prev := zerolog.GlobalLevel()
@@ -20,10 +18,7 @@ func silenceZerologPipelineBench(b *testing.B) {
 	b.Cleanup(func() { zerolog.SetGlobalLevel(prev) })
 }
 
-// heapPeakSampler runs a goroutine that polls runtime.MemStats every
-// 5ms and tracks the highest HeapAlloc seen. Stop() ends the sampler
-// and returns the peak. Cheap enough that 5ms cadence doesn't move
-// the timing needle on the run we're measuring.
+// heapPeakSampler polls runtime.MemStats and tracks max HeapAlloc.
 type heapPeakSampler struct {
 	max  atomic.Uint64
 	stop func() uint64

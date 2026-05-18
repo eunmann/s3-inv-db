@@ -62,11 +62,8 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		}
 	}
 
-	// Prefix-dictionary files are optional — only present when the
-	// dictionary-encoded prefix storage path was selected. addFile
-	// is a no-op for missing files, so listing them here keeps the
-	// manifest complete without forcing the raw-blob path to emit
-	// these stubs.
+	// Optional: only present when dictionary-encoded prefix storage
+	// was selected. addFile is a no-op for missing files.
 	optionalPrefixDict := []string{
 		PrefixDictBlobFile,
 		PrefixDictOffsetsFile,

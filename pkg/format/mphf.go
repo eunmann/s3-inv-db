@@ -24,11 +24,8 @@ const (
 // Thread Safety: MPHF is safe for concurrent read access from
 // multiple goroutines. Close once, after all reads.
 //
-// Prefix storage is either the raw concatenated blob (prefixBlob)
-// or the dictionary-encoded form (dictPrefixes). The two paths are
-// mutually exclusive; usePrefixDict selects between them. When
-// dictionary storage is present on disk it is preferred — the raw
-// blob path is the fallback when dictionary files are absent.
+// Exactly one of prefixBlob or dictPrefixes is non-nil; usePrefixDict
+// selects between them.
 type MPHF struct {
 	mph *bbhash.BBHash2
 	// combined holds the interleaved [fp, pos, fp, pos, ...] array.
@@ -69,8 +66,6 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 		return nil, fmt.Errorf("open combined fp+pos: %w", err)
 	}
 
-	// Prefer the dictionary-encoded prefix storage when its files are
-	// present; fall back to the raw concatenated blob otherwise.
 	var (
 		prefixBlob    *BlobReader
 		dictPrefixes  *DictPrefixReader
@@ -153,8 +148,7 @@ func (m *MPHF) Prefix(pos uint64) (string, error) {
 	return m.GetPrefix(pos)
 }
 
-// GetPrefix returns the prefix string at the given position. Dispatches
-// to dictionary-encoded storage when present, otherwise the raw blob.
+// GetPrefix returns the prefix string at the given position.
 func (m *MPHF) GetPrefix(pos uint64) (string, error) {
 	if m.usePrefixDict {
 		s, err := m.dictPrefixes.GetPrefix(pos)
@@ -176,10 +170,8 @@ func (m *MPHF) GetPrefix(pos uint64) (string, error) {
 	return s, nil
 }
 
-// LookupWithVerify returns the position and additionally verifies the
-// stored prefix exactly matches the queried prefix. Slower than
-// Lookup but eliminates the fingerprint-collision false-positive
-// path. Works with either prefix storage shape.
+// LookupWithVerify returns the position and verifies the stored prefix
+// matches exactly, eliminating fingerprint-collision false positives.
 func (m *MPHF) LookupWithVerify(prefix string) (uint64, bool) {
 	pos, ok := m.Lookup(prefix)
 	if !ok {
@@ -202,8 +194,7 @@ func (m *MPHF) LookupWithVerify(prefix string) (uint64, bool) {
 }
 
 // VerifyMPHF checks that every stored prefix round-trips: GetPrefix
-// at every position returns a string that Lookups back to that
-// position. Works with either dictionary or raw-blob prefix storage.
+// at every position returns a string that Lookups back to that position.
 func VerifyMPHF(m *MPHF) error {
 	if m.prefixBlob == nil && m.dictPrefixes == nil {
 		return ErrNoPrefixStorage

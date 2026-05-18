@@ -53,18 +53,12 @@ type Config struct {
 	RunsPerInventory int
 	RunStep          time.Duration
 	Objects          int
-	// ObjectsPerConfig overrides Objects per inventory configuration when
-	// non-empty. The slice cycles modulo Count, so a length of N <= Count
-	// produces a deterministic mix where inv-001 uses [0], inv-002 uses
-	// [1], etc. Used to seed a UI with a mix of fast- and slow-loading
-	// inventories without N separate seeder invocations.
+	// ObjectsPerConfig, when non-empty, overrides Objects for the i-th
+	// inventory; cycles modulo len.
 	ObjectsPerConfig []int
 	Seed             int64
 }
 
-// objectsForConfig returns the object count to use for the i-th
-// inventory configuration (0-indexed). Falls back to cfg.Objects when
-// ObjectsPerConfig is empty.
 func (c Config) objectsForConfig(i int) int {
 	if len(c.ObjectsPerConfig) == 0 {
 		return c.Objects

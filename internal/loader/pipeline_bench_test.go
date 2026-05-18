@@ -14,37 +14,16 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Pipeline integration benchmarks — full S3-to-index path against
-// MinIO. Each bench seeds a fresh inventory into a uniquely-named
-// bucket, then runs extsort.Pipeline end-to-end (download → parse
-// → aggregate → spill → merge → build) and reports build time and
-// total on-disk index size.
-//
-// Naming: `BenchmarkPipeline_<Shape>_<Size>_<DictKnob>`. Three
-// dimensions surface here that microbenches can't see — chunk-level
-// download parallelism, real CSV parsing cost, and the spill phase
-// running on the production code path through chunkWorker.
-//
-// Requires the docker compose `test` profile (AWS_ENDPOINT_URL_S3
-// must point at a reachable MinIO). Run via:
+// Pipeline integration benchmarks — full S3-to-index path against MinIO.
+// Requires AWS_ENDPOINT_URL_S3 pointing at a reachable MinIO (docker
+// compose `test` profile). Run:
 //
 //	go test -bench=BenchmarkPipeline -benchtime=1x -count=1 \
 //	  -run=^$ ./internal/loader/...
-//
-// Or via the make target that brings MinIO up around it:
-//
-//	make docker-bench-pipeline   (not yet defined; see bench README)
 
-// chunkCountFor scales the manifest's chunk count so Pipeline's
-// ingest pool — sized as min(NumCPU, manifest_files) — can saturate
-// the host's cores at every reasonable input size. The previous
-// targetPerChunk=500K knob was too coarse: at 1M objects it
-// produced only 4 chunks, pinning a 32-core host to 12.5% CPU
-// during ingest. Now: at least NumCPU chunks once the input is big
-// enough that per-chunk size stays above the minPerChunk floor,
-// falling back to the floor for small inputs where over-chunking
-// is wasteful per-chunk fixed cost (manifest entries, download
-// setup) for no parallelism win.
+// chunkCountFor returns a chunk count that lets Pipeline's ingest pool
+// (sized as min(NumCPU, manifest_files)) saturate the host while
+// keeping per-chunk size above minPerChunk.
 func chunkCountFor(numObjects int) int {
 	const (
 		minPerChunk = 50_000
@@ -104,11 +83,8 @@ func BenchmarkPipeline_DeepPyramid_10M_DictOn(b *testing.B) {
 	runPipelineBench(b, "deep_pyramid", 10_000_000, true, 0)
 }
 
-// BenchmarkPipeline_AutoScale_DeepPyramid_1M_Mem* sweeps the
-// GOMEMLIMIT budget against the same fixture to show that
-// AggregatorCap scales with the configured limit — fewer spills and
-// shorter merge phase as the budget grows. All three runs share
-// shape, size, and dict setting; only the memory cap varies.
+// BenchmarkPipeline_AutoScale_DeepPyramid_1M_Mem* sweeps GOMEMLIMIT
+// against the same fixture; only the memory cap varies.
 func BenchmarkPipeline_AutoScale_DeepPyramid_1M_Mem2G(b *testing.B) {
 	runPipelineBench(b, "deep_pyramid", 1_000_000, true, 2<<30)
 }
@@ -122,8 +98,7 @@ func BenchmarkPipeline_AutoScale_DeepPyramid_1M_Mem16G(b *testing.B) {
 }
 
 // runPipelineBench is the shared body. MemLimit==0 leaves GOMEMLIMIT
-// unchanged (uses whatever the test runtime has, normally unset →
-// DefaultAggregatorCap kicks in).
+// unchanged.
 func runPipelineBench(b *testing.B, preset string, numObjects int, prefixDict bool, memLimit int64) {
 	b.Helper()
 	silenceZerologPipelineBench(b)
@@ -162,8 +137,6 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, prefixDict bo
 		b.StopTimer()
 		outDir := filepath.Join(b.TempDir(), "index")
 
-		// Save + restore GOMEMLIMIT so the bench sweep doesn't leak
-		// configured limits into sibling benchmarks.
 		var prevLimit int64
 		if memLimit > 0 {
 			prevLimit = debug.SetMemoryLimit(memLimit)
@@ -198,11 +171,6 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, prefixDict bo
 			lastPeakHeap = delta
 		}
 		lastDiskBytes = dirBytesPipelineBench(b, outDir)
-		// Inspect the resulting index for the shape metrics: total
-		// distinct prefixes (the aggregator's deduped output) and
-		// max depth observed. These confirm the synthetic data
-		// produced the breadth + depth the bench claims, not just
-		// the right NumObjects count.
 		if idx, err := indexread.Open(outDir); err == nil {
 			lastPrefixCount = idx.Count()
 			lastMaxDepth = idx.MaxDepth()

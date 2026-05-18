@@ -19,20 +19,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Prefix storage has two on-disk shapes:
-//   - raw blob: prefix_blob.bin + prefix_offsets.u64 (default for the
-//     low-level builder; selected when no option is passed)
-//   - prefix dictionary: prefix_dict.bin + prefix_dict.off.u64 +
-//     prefix_dict.ids.u32 + prefix_dict.prefix_off.u64 (opt-in via
-//     WithPrefixDictionary). Path segments are interned once and each
-//     prefix is stored as a sequence of uint32 segment IDs. Shrinks
-//     prefix bytes ~50-70% on shared-path inventories at the cost of
-//     ~3× warm prefix-string read latency.
-//
-// At the format layer the default is raw blob — callers that want the
-// dictionary path opt in explicitly. Higher layers (extsort.Config)
-// default to dictionary-on per the project's policy.
-
 // StreamingMPHFBuilder builds a minimal perfect hash function for prefix strings
 // while keeping memory usage bounded by writing prefixes to disk during construction.
 //
@@ -63,21 +49,13 @@ type StreamingMPHFBuilder struct {
 	totalBytes uint64
 	bufferSize int
 
-	// usePrefixDict selects the dictionary-encoded prefix storage
-	// path at Build time. False (the default) writes the raw blob.
 	usePrefixDict bool
 }
 
-// StreamingMPHFOption configures a StreamingMPHFBuilder at
-// construction time.
+// StreamingMPHFOption configures a StreamingMPHFBuilder.
 type StreamingMPHFOption func(*StreamingMPHFBuilder)
 
-// WithPrefixDictionary enables dictionary-encoded prefix storage:
-// path segments are interned into a shared dictionary and each
-// prefix is stored as a sequence of uint32 segment IDs. Shrinks the
-// on-disk prefix bytes substantially on inventories with shared
-// path components, at the cost of higher prefix-string read
-// latency.
+// WithPrefixDictionary enables dictionary-encoded prefix storage.
 func WithPrefixDictionary() StreamingMPHFOption {
 	return func(b *StreamingMPHFBuilder) {
 		b.usePrefixDict = true
@@ -85,11 +63,7 @@ func WithPrefixDictionary() StreamingMPHFOption {
 }
 
 // NewStreamingMPHFBuilder creates a new streaming MPHF builder.
-// The tempDir is used for temporary storage of prefix strings and
-// the three disk-backed u64 arrays (hashes / preorderPos /
-// fingerprints). Pass WithPrefixDictionary to enable the
-// dictionary-encoded prefix storage path; otherwise the raw blob
-// path is used.
+// TempDir holds prefix strings plus the disk-backed u64 arrays.
 func NewStreamingMPHFBuilder(tempDir string, opts ...StreamingMPHFOption) (*StreamingMPHFBuilder, error) {
 	tempFile, err := os.CreateTemp(tempDir, "mphf_prefixes_*.tmp")
 	if err != nil {
@@ -505,12 +479,8 @@ func (b *StreamingMPHFBuilder) writePrefixBlobPreorder(outDir string) error {
 	return writer.Close()
 }
 
-// writePrefixBlobDictionary writes prefixes via the dictionary-encoded
-// path: each prefix is split on "/", segments are interned, and the
-// resulting uint32 IDs are appended to prefix_dict.ids.u32 with one
-// offset per prefix in prefix_dict.prefix_off.u64. Mirrors the loop
-// shape of writePrefixBlobPreorder so the temp-file scan stays
-// streaming and single-pass.
+// writePrefixBlobDictionary writes prefixes as dictionary-encoded
+// segment-ID sequences (prefix_dict.ids.u32 + prefix_dict.prefix_off.u64).
 func (b *StreamingMPHFBuilder) writePrefixBlobDictionary(outDir string) error {
 	writer, err := NewDictPrefixWriter(outDir)
 	if err != nil {

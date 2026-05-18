@@ -14,14 +14,8 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
 
-// errNonPositiveObjectCount rejects zero/negative entries in
-// --objects-per-config; the underlying generator panics on Count <= 0
-// in Go 1.22+ range-over-int, so catching it at parse-time gives a
-// clean CLI error.
 var errNonPositiveObjectCount = errors.New("objects-per-config value must be positive")
 
-// defaultObjectsPerRun is the default object count generated per
-// inventory run when --objects isn't supplied.
 const defaultObjectsPerRun = 10000
 
 func main() {
@@ -81,9 +75,8 @@ func run() error {
 	return nil
 }
 
-// parseObjectsPerConfig parses a comma-separated list of positive
-// integers. Empty input returns nil — the caller treats nil as
-// "fall back to --objects".
+// parseObjectsPerConfig parses a comma-separated list of positive ints.
+// Empty input returns nil.
 func parseObjectsPerConfig(raw string) ([]int, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
