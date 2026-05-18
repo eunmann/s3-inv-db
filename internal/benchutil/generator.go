@@ -120,7 +120,6 @@ func S3RealisticConfig(numObjects int) GeneratorConfig {
 	}
 }
 
-// Shape constants for GeneratorConfig.Shape.
 const (
 	ShapeUniform     = "uniform"
 	ShapeDeepPyramid = "deep_pyramid"
