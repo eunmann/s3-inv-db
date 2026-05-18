@@ -13,11 +13,19 @@ index/
 ├── depth_positions.u64
 ├── mph.bin
 ├── mph_fp_pos.u64
-├── prefix_blob.bin
-├── prefix_offsets.u64
+├── prefix_blob.bin              ◀── present only when --prefix-dictionary=false
+├── prefix_offsets.u64           ◀── present only when --prefix-dictionary=false
+├── prefix_dict.bin              ◀── present when --prefix-dictionary=true (default)
+├── prefix_dict.off.u64          ◀──    ″
+├── prefix_dict.ids.u32          ◀──    ″
+├── prefix_dict.prefix_off.u64   ◀──    ″
 └── tier_stats/
     └── tier_stats_row.bin
 ```
+
+Prefix storage has two on-disk shapes; exactly one is written per
+build. See [Prefix Strings](#prefix-strings) below for the layout of
+each.
 
 ## File Header
 
@@ -99,6 +107,11 @@ The two-hash design (FNV-1a for BBHash input, FNV-1 for verification) minimizes 
 
 ## Prefix Strings
 
+Two layouts; the build flag `--prefix-dictionary` selects between
+them. `OpenMPHF` auto-detects which is on disk and dispatches.
+
+### Raw blob (`--prefix-dictionary=false`)
+
 | File | Description |
 |------|-------------|
 | `prefix_blob.bin` | Concatenated prefix strings (no separators) |
@@ -107,6 +120,29 @@ The two-hash design (FNV-1a for BBHash input, FNV-1 for verification) minimizes 
 To read prefix at position `i`:
 1. Read `prefix_offsets[i]` and `prefix_offsets[i+1]`
 2. Slice `prefix_blob[start:end]`
+
+### Dictionary-encoded (default)
+
+Each "/"-delimited segment is interned once into a shared blob; each
+prefix is then stored as a sequence of `uint32` segment IDs. Shared
+top-level segments on a deep S3 hierarchy can compress the
+prefix bytes substantially.
+
+| File | Description |
+|------|-------------|
+| `prefix_dict.bin` | Concatenated segment strings (no separators) |
+| `prefix_dict.off.u64` | Byte offset for each segment in `prefix_dict.bin` |
+| `prefix_dict.ids.u32` | Per-prefix concatenated segment-ID streams |
+| `prefix_dict.prefix_off.u64` | Start offset (into `prefix_dict.ids.u32`) for each prefix; trailing sentinel marks the end |
+
+To read prefix at position `i`:
+1. Read `prefix_off[i]` and `prefix_off[i+1]` — the segment-ID range
+2. For each ID in `ids[start:end]`, look up the segment string via `prefix_dict.bin` + `prefix_dict.off.u64`
+3. Join with `/`
+
+On Open, all segments are preloaded into an in-memory cache (typical
+inventories have ~100s of unique segments), so the warm-path cost is
+one map lookup per segment rather than a blob read.
 
 ## Tier Statistics (`tier_stats/tier_stats_row.bin`)
 

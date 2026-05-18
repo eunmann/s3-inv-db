@@ -71,6 +71,7 @@ These mutate state and return HTML for the swapped row.
 | `/partials/discovered/{src}/{id}/{run}` | GET | Latest state of one discovered run (used by SSE refresh) |
 | `/partials/discovered/{src}/{id}/{run}/load` | POST | Submits an async build job; returns 202 + the row in `queued` state |
 | `/partials/discovered/{src}/{id}/{run}/unload` | POST | Unload + wipe on-disk cache |
+| `/partials/discovered/{src}/{id}/{run}/pin` | POST | Toggle pin state (`pinned=true|false`) on a discovered run |
 | `/partials/notifications` | GET | Failure-aggregation banner; the layout polls this every 30s |
 
 ### JSON APIs
@@ -79,7 +80,6 @@ Read-only:
 
 | Route | Notes |
 |---|---|
-| `GET /api/inventories` | Flat list of managed inventories |
 | `GET /api/inventories/{id}` | One inventory's metadata |
 | `GET /api/inventories/{id}/stats?prefix=…` | Per-prefix stats |
 | `GET /api/inventories/{id}/descendants?prefix=…&depth=…` | Depth-walk descendants |

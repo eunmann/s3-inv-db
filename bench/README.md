@@ -39,10 +39,14 @@ benchstat bench/before/<id>-<short>.txt bench/after/<id>-<short>.txt
 ## Reproducibility rules
 
 - RNG seeded (use `benchutil` defaults — seed 42)
-- Bench takes size via env var (e.g. `S3INV_HARNESS_SIZES`)
+- Benches encode the shape × size × dict knob combination in the
+  function name (e.g. `BenchmarkBuildHarness_DeepPyramid_1M_DictOn`);
+  pick a comparison directly with `-bench=<pattern>`
 - Use `-count` ≥ 3 for benchstat to compute variance
 - `-benchtime` chosen so per-iter cost > 1 ms to swamp setup overhead
 - Bench output uses Go's standard format (one row per bench/n combo)
+- Pipeline integration benches under `internal/loader/` require
+  `AWS_ENDPOINT_URL_S3` (the docker compose `test` profile)
 
 ## Convention for commits
 

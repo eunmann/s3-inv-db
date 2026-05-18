@@ -1,12 +1,13 @@
 # Library API
 
-Two packages are intended for external use:
+`pkg/indexread` is the supported external entry point for reading a
+built index. Other `pkg/*` packages (`format`, `extsort`, `s3fetch`,
+etc.) are also importable but their surfaces target the internal
+build pipeline rather than third-party callers — expect churn.
 
-- [`pkg/indexread`](#indexread) — read-only access to a built index.
-- [`pkg/server`](#server) — embed the full HTTP server in another binary.
-
-The `internal/` tree (handlers, inventory, jobs, loader, s3disco,
-templates) is implementation detail and is not part of the public API.
+The HTTP server lives in `internal/server` and is not currently
+exposed as an importable package; embed-in-another-binary support
+would require promoting it to `pkg/server` first.
 
 ## indexread
 
@@ -106,10 +107,6 @@ func (idx *Index) PrefixString(pos uint64) (string, error)
 // levels below the prefix at prefixPos. Returns them in alphabetical order.
 func (idx *Index) DescendantsAtDepth(prefixPos uint64, relDepth int) ([]uint64, error)
 
-// DescendantsUpToDepth returns positions grouped by depth, up to maxRelDepth
-// levels below prefixPos.
-func (idx *Index) DescendantsUpToDepth(prefixPos uint64, maxRelDepth int) ([][]uint64, error)
-
 // DescendantsAtDepthFiltered returns filtered descendants.
 func (idx *Index) DescendantsAtDepthFiltered(prefixPos uint64, relDepth int, filter Filter) ([]uint64, error)
 ```
@@ -138,37 +135,6 @@ for _, childPos := range children {
 }
 ```
 
-### Descendant Iterator
-
-For large result sets, use an iterator to avoid allocating the full position slice:
-
-```go
-// NewDescendantIterator returns an iterator over descendants at relDepth.
-func (idx *Index) NewDescendantIterator(prefixPos uint64, relDepth int) (Iterator, error)
-```
-
-The `Iterator` interface:
-```go
-type Iterator interface {
-    Next() bool      // Advance to next position
-    Pos() uint64     // Current position (valid after Next returns true)
-    Depth() uint32   // Depth of current position
-}
-```
-
-Example:
-```go
-pos, _ := idx.Lookup("data/")
-it, err := idx.NewDescendantIterator(pos, 1)
-if err != nil {
-    log.Fatal(err)
-}
-for it.Next() {
-    prefix, _ := idx.PrefixString(it.Pos())
-    fmt.Println(prefix)
-}
-```
-
 ### Tier Statistics
 
 ```go
@@ -177,12 +143,6 @@ func (idx *Index) HasTierData() bool
 
 // TierBreakdown returns per-tier stats for non-zero tiers at pos.
 func (idx *Index) TierBreakdown(pos uint64) []TierBreakdown
-
-// TierBreakdownAll returns stats for all tiers (including zeros).
-func (idx *Index) TierBreakdownAll(pos uint64) []TierBreakdown
-
-// TierBreakdownForPrefix combines Lookup and TierBreakdown.
-func (idx *Index) TierBreakdownForPrefix(prefix string) []TierBreakdown
 
 // TierBreakdownMap returns breakdown as a map keyed by tier name.
 func (idx *Index) TierBreakdownMap(pos uint64) map[string]TierBreakdown
@@ -200,7 +160,11 @@ type TierBreakdown struct {
 Example:
 ```go
 if idx.HasTierData() {
-    for _, tb := range idx.TierBreakdownForPrefix("data/2024/") {
+    pos, ok := idx.Lookup("data/2024/")
+    if !ok {
+        return
+    }
+    for _, tb := range idx.TierBreakdown(pos) {
         fmt.Printf("%s: %d objects, %d bytes\n",
             tb.TierName, tb.ObjectCount, tb.Bytes)
     }
@@ -277,80 +241,3 @@ func main() {
 }
 ```
 
-## server
-
-The `server` package wires up the full HTTP service — chi router, HTML
-UI, JSON API, HTMX partials, SSE job stream, SQLite state, and optional
-S3 discovery — so another binary can embed it with a few lines.
-
-```go
-import "github.com/eunmann/s3-inv-db/pkg/server"
-```
-
-### One-shot lifecycle
-
-```go
-ctx, stop := signal.NotifyContext(context.Background(),
-    os.Interrupt, syscall.SIGTERM)
-defer stop()
-
-err := server.BootstrapAndRun(ctx, server.RuntimeOptions{
-    Addr:     ":8080",
-    S3Source: "s3://my-bucket/inventory-data/",
-    CacheDir: "/var/cache/s3inv",
-    Logger:   logger,
-})
-```
-
-`RuntimeOptions` mirrors the binary's flag set including auto-load
-(`AutoLoad`, `PollInterval`, `MaxIndexDisk`, `IndexHeadroomBytes`,
-`AutoLoadConcurrency`, `AutoLoadRetentionDefault`, `IndexRatio`) and
-the declarative `InventoryConfigs []InventoryConfigEntry` that gets
-upserted into the state DB at startup. `S3Source` and `CacheDir` are
-optional — when omitted, discovery is disabled and the server runs
-against whatever inventories are already in the state DB. Setting
-`AutoLoad=true` without `MaxIndexDisk` returns `ErrAutoLoadWithoutBudget`.
-
-### Manual lifecycle control
-
-When you want to manage shutdown yourself (or run multiple servers):
-
-```go
-srv, cleanup, err := server.Bootstrap(opts)
-if err != nil { return err }
-defer cleanup() // closes the state DB
-
-if err := srv.Run(ctx); err != nil { return err }
-```
-
-For full wiring control (sharing one `*sql.DB` across subsystems, for
-example), use `server.New(server.Config{...})` directly. See
-`server.OpenStateDB` for opening a SQLite handle with the same pragmas
-the binary uses.
-
-### Mounting under a path prefix
-
-`Server.Router()` returns the chi router so it can be embedded inside
-another HTTP application:
-
-```go
-parent := chi.NewRouter()
-parent.Use(myAuthMiddleware)
-parent.Mount("/inv", srv.Router())
-```
-
-### API surface
-
-| Type / function | Purpose |
-|---|---|
-| `RuntimeOptions` | Flag-friendly inputs: addr, S3 source, cache dir, scratch dir, state DB path, price-table path, auto-load knobs, declarative inventory configs, logger. |
-| `Config` | Wired dependencies: addr, logger, price table, S3 source, cache dir, scratch dir, `*sql.DB`, auto-load knobs. |
-| `InventoryConfigEntry` | Source, name, AutoLoad, RetentionCount — upserted into `inventory_configs` during `Bootstrap`. |
-| `ErrAutoLoadWithoutBudget` | Returned by `Bootstrap` when `AutoLoad=true && MaxIndexDisk==0`. |
-| `Server` | Opaque server instance. |
-| `New(Config)` | Construct a server from a populated Config. |
-| `Bootstrap(RuntimeOptions)` | Resolve paths, open DB, load price table, build server; returns `(*Server, cleanup, error)`. |
-| `BootstrapAndRun(ctx, RuntimeOptions)` | Bootstrap + Run + cleanup in one call. |
-| `OpenStateDB(path)` | Open a SQLite handle with the production pragma set. |
-| `(*Server).Run(ctx)` | Block until ctx is cancelled, then graceful-shutdown. |
-| `(*Server).Router()` | Underlying chi router (for mounting or testing). |

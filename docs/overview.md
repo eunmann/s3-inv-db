@@ -55,7 +55,7 @@ S3 Inventory CSV/Parquet
 
 ### Memory Management
 
-The build uses a configurable memory budget (default: 50% of RAM). When the in-memory aggregator reaches its threshold, it flushes sorted prefix data to a temporary run file. After processing all inventory files, a k-way merge combines all runs into the final sorted stream.
+The build uses GOMEMLIMIT (env var, cgroup `memory.max`, or 60% of detected RAM — whichever is smallest) installed at process startup. The aggregator spills when its footprint hits `0.15 × GOMEMLIMIT` divided across workers, or when overall heap pressure exceeds 85% of the limit, whichever fires first. After all inventory files are processed, a k-way merge combines the run files into the final sorted stream.
 
 This allows indexing inventories of any size with bounded memory.
 

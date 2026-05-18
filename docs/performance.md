@@ -55,9 +55,12 @@ at startup. Resolution is `min(GOMEMLIMIT env, cgroup v2 memory.max,
 permissive `GOMEMLIMIT` can't override a tighter container cap.
 
 Override the limit by exporting `GOMEMLIMIT=4GiB` (etc.) or running
-under a constrained cgroup. The aggregator's spill threshold is
-`min(512 MiB, 0.15 × GOMEMLIMIT)`; it also spills when overall
-heap-in-use exceeds 85% of the limit.
+under a constrained cgroup. The aggregator's combined spill threshold
+is `0.15 × GOMEMLIMIT` when a limit is configured, otherwise a 512 MiB
+fallback; that threshold is divided across the per-worker aggregators.
+A single worker also spills when overall heap-in-use exceeds 85% of
+the limit, and a mid-chunk safety check fires every 50K rows so a
+single very large chunk can't grow past the cap before spilling.
 
 ### Tuning
 
@@ -137,13 +140,16 @@ At a 1M-prefix sample workload this comes out to roughly **300 B/prefix on disk*
 
 Aggregators are sized off the process memory limit
 (`min(GOMEMLIMIT env, cgroup memory.max, 0.6 × detected RAM)` —
-applied at startup via `runtime/debug.SetMemoryLimit`). The cap on
-the combined worker aggregator footprint is
-`min(512 MiB, 0.15 × GOMEMLIMIT)` and is split evenly across N
-chunk workers. Any worker also force-spills when overall
-HeapInuse crosses 85% of the limit — the safety valve for cases
-where the aggregator footprint estimate undercounts runtime
-reality.
+applied at startup via `runtime/debug.SetMemoryLimit`). The combined
+worker aggregator footprint is capped at `0.15 × GOMEMLIMIT` (or a
+512 MiB fallback when no limit is configured) and split evenly across
+N chunk workers, so the cap auto-scales from a 4 GiB CI host up to a
+multi-hundred-GiB ingest box without flag tuning. Any worker also
+force-spills when overall HeapInuse crosses 85% of the limit — the
+safety valve for cases where the aggregator footprint estimate
+undercounts runtime reality. A mid-chunk check every 50K rows
+ensures a single very large chunk can't grow past the cap before
+getting its first spill opportunity.
 
 Run-file write buffers (zstd-compressed by default), the K-way
 merge heap, and the index-build streaming arrays each take
@@ -175,15 +181,15 @@ The OS manages page cache automatically. Frequently accessed index regions stay 
 | Symptom | Likely Cause | Fix |
 |---------|--------------|-----|
 | First query slow | Cold page cache | Expected, subsequent queries fast |
-| Descendant queries slow | Large subtrees | Use iterator API |
+| Descendant queries slow | Large subtrees | Apply a `Filter` (MinCount / MinBytes) via `DescendantsAtDepthFiltered` |
 | High memory usage | OS caching full index | Expected behavior, safe |
 
 ## Best Practices
 
-1. **Size memory budget appropriately**: 50% of RAM works well for dedicated build servers
+1. **Let GOMEMLIMIT do the work**: the default 60% of detected RAM (or the cgroup `memory.max` when smaller) is usually right for a dedicated build host; override only when sharing the box.
 2. **Use `--max-depth` for large buckets**: Limits prefix explosion from deep hierarchies
 3. **Pre-warm for latency-sensitive queries**: Read index files sequentially to populate page cache
-4. **Use iterators for large result sets**: Avoids allocating million-element slices
+4. **Filter descendant queries**: `DescendantsAtDepthFiltered` accepts a `MinCount` / `MinBytes` filter to avoid materialising irrelevant positions
 5. **Monitor temp disk usage**: External sort needs 2-3x index size in temp space
 
 ## Server: sizing the disk budget
@@ -204,6 +210,7 @@ realistic billion-object inventories with deep paths land closer to
 ~430–510 bytes per object on disk. Use `--index-ratio` to refine the
 multiplier the planner applies to a manifest's compressed CSV total
 when estimating final index bytes (default `0.30` is a conservative
-seed — measure your own corpus). Keep `--scratch-dir` on a volume
-with at least 2× the expected manifest-compressed-size of the largest
-inventory you intend to load.
+seed — measure your own corpus). Builds use `os.TempDir()` for
+intermediate run files; keep that volume sized to at least 2× the
+expected manifest-compressed-size of the largest inventory you intend
+to load.
