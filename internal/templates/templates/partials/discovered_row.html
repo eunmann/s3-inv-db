@@ -1,72 +1,62 @@
 {{$composite := printf "%s/%s/%s" .SourceBucket .Name .Run}}
 {{$busy := or .State.IsLoading (and .LatestJob (eq (printf "%s" .LatestJob.State) "queued"))}}
 {{$canRetry := and .LatestJob (or (eq (printf "%s" .LatestJob.State) "failed") (eq (printf "%s" .LatestJob.State) "aborted") (eq (printf "%s" .LatestJob.State) "cancelled"))}}
+{{$pct := 0}}{{$eta := ""}}
+{{if and $busy .LatestJob (gt .LatestJob.BytesTotal 0)}}
+    {{$pct = progressPct .LatestJob.BytesDone .LatestJob.BytesTotal}}
+    {{$eta = formatETA .LatestJob.StartedAt .LatestJob.BytesDone .LatestJob.BytesTotal}}
+{{end}}
 <tr id="discovered-row-{{.SourceBucket}}-{{.Name}}-{{.Run}}"
+    class="{{stateBorderClass (printf "%s" .State)}}"
     {{if .Run}}hx-get="/partials/discovered/{{.SourceBucket}}/{{.Name}}/{{.Run}}"
     hx-trigger="sse:row-{{$composite}}"
     hx-swap="outerHTML"{{end}}>
-    <td class="px-6 py-4 whitespace-nowrap">
-        <div class="text-sm font-medium text-gray-900 dark:text-gray-100 font-mono">{{if .Run}}{{.Run}}{{else}}<span class="text-red-600 dark:text-red-400">no run</span>{{end}}</div>
-        <div class="text-xs text-gray-500 dark:text-gray-400 font-mono truncate max-w-md" title="{{.ManifestKey}}">{{.ManifestKey}}</div>
-    </td>
-    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-        <div>{{if .FileFormat}}{{.FileFormat}}{{else}}—{{end}}</div>
-        {{if .FileCount}}
-        <div class="text-xs font-mono" title="Chunk files in manifest; compressed total bytes">{{.FileCount}} file{{if ne .FileCount 1}}s{{end}}{{if .TotalBytes}} · {{formatBytesInt64 .TotalBytes}}{{end}}</div>
+    <td class="px-6 py-4 align-top">
+        <div class="flex items-baseline gap-2 flex-wrap">
+            <span class="text-sm font-medium text-gray-900 dark:text-gray-100 font-mono">
+                {{if .Run}}{{if .RunLabel}}{{.RunLabel}}{{else}}{{.Run}}{{end}}{{else}}<span class="text-red-600 dark:text-red-400">no run</span>{{end}}
+            </span>
+            {{if .Pinned}}
+            <span class="inline-flex items-center text-indigo-600 dark:text-indigo-400" title="Pinned: never auto-evicted" aria-label="Pinned">
+                <svg viewBox="0 0 20 20" fill="currentColor" class="h-3.5 w-3.5" aria-hidden="true"><path d="M14.7 5.3a1 1 0 0 0-1.4 0L11 7.6 8 6 6.6 7.4l1.6 3-2.3 2.3a1 1 0 0 0 0 1.4l1 1L9.6 13l3.4 3.4 1.4-1.4-3.4-3.4 2.3-2.3 1 1a1 1 0 0 0 1.4 0l-0.0-0.0 1.4-1.4-3.4-3.6z"/></svg>
+            </span>
+            {{end}}
+            {{if and .UserUnloaded (not .State.IsLoaded)}}
+            <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-semibold rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300" title="You unloaded this manually; auto-load will skip it until a newer run appears">user-unloaded</span>
+            {{end}}
+        </div>
+        {{if .MetaLine}}
+        <div class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-0.5">{{.MetaLine}}</div>
         {{end}}
+        <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono truncate max-w-md mt-0.5" title="{{.ManifestKey}}">{{.ManifestKey}}</div>
     </td>
-    <td class="px-6 py-4 whitespace-nowrap">
+    <td class="px-6 py-4 align-top whitespace-nowrap">
         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass (printf "%s" .State)}}">
             {{stateLabel (printf "%s" .State)}}
         </span>
-        {{if .Pinned}}<span class="ml-1 text-xs text-indigo-600 dark:text-indigo-400" title="Pinned: never auto-evicted">📌</span>{{end}}
-        {{if and .UserUnloaded (not .State.IsLoaded)}}
-        <span class="ml-1 inline-flex items-center px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-semibold rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300" title="You unloaded this manually; auto-load will skip it until a newer run appears">user-unloaded</span>
+        {{if $busy}}
+        <div class="mt-1 text-xs text-gray-600 dark:text-gray-300">
+            {{if .LatestJob}}{{if .LatestJob.Stage}}{{stageLabel .LatestJob.Stage}}{{else}}Starting…{{end}}{{else}}Starting…{{end}}
+            {{if gt $pct 0}}<span class="text-gray-400 dark:text-gray-500">· {{$pct}}%{{if $eta}} · ~{{$eta}}{{end}}</span>{{end}}
+        </div>
         {{end}}
         {{if gt .AutoLoadFailureCount 0}}
         <div class="text-xs text-red-600 dark:text-red-400 mt-1" title="{{if .Error}}{{.Error}}{{else}}Auto-load failed{{end}}">
             Auto-load failed ({{.AutoLoadFailureCount}}× — retry after {{.AutoLoadBackoffUntil}})
         </div>
         {{end}}
-        {{if $busy}}
-        <div class="flex items-center gap-2 mt-2 text-xs text-gray-600 dark:text-gray-300">
-            <svg aria-hidden="true" class="animate-spin h-4 w-4 text-indigo-600 dark:text-indigo-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-            </svg>
-            <span>{{if .LatestJob}}{{if .LatestJob.Stage}}{{stageLabel .LatestJob.Stage}}{{else}}Starting…{{end}}{{else}}Starting…{{end}}</span>
-        </div>
-        {{if and .LatestJob (gt .LatestJob.BytesTotal 0)}}
-        {{$pct := progressPct .LatestJob.BytesDone .LatestJob.BytesTotal}}
-        {{$eta := formatETA .LatestJob.StartedAt .LatestJob.BytesDone .LatestJob.BytesTotal}}
-        <div class="mt-2">
-            <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
-                <span>{{$pct}}% · {{.LatestJob.BytesDone}}/{{.LatestJob.BytesTotal}}</span>
-                {{if $eta}}<span>~{{$eta}} remaining</span>{{end}}
-            </div>
-            <div class="mt-1 h-1.5 w-full bg-gray-200 dark:bg-gray-700 rounded">
-                <div class="h-1.5 bg-indigo-500 dark:bg-indigo-400 rounded transition-all" style="width:{{$pct}}%"></div>
-            </div>
-        </div>
-        {{end}}
-        {{end}}
-        {{if .Error}}
+        {{if and .Error (not $busy)}}
         <div class="text-xs text-red-600 dark:text-red-400 mt-1" title="{{.Error}}">Error</div>
         {{end}}
     </td>
-    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400 font-mono">
-        {{if .CacheBytesH}}{{.CacheBytesH}}{{else}}-{{end}}
-    </td>
-    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400 font-mono">
-        {{if .LoadDurationH}}{{.LoadDurationH}}{{else}}-{{end}}
-    </td>
-    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+    <td class="px-6 py-4 align-top whitespace-nowrap text-sm font-medium">
+        <div class="flex items-center gap-2">
         {{if $busy}}
             {{if .LatestJob}}
             <button type="button"
                 hx-post="/api/jobs/{{.LatestJob.ID}}/cancel"
                 hx-swap="none"
-                class="text-yellow-600 dark:text-yellow-400 hover:text-yellow-900 dark:hover:text-yellow-200">
+                class="inline-flex items-center px-2.5 py-1 rounded border border-yellow-300 dark:border-yellow-700 text-yellow-700 dark:text-yellow-300 hover:bg-yellow-50 dark:hover:bg-yellow-900/30">
                 Cancel
             </button>
             {{end}}
@@ -75,17 +65,17 @@
             hx-post="/partials/discovered/{{.SourceBucket}}/{{.Name}}/{{.Run}}/load"
             hx-target="closest tr"
             hx-swap="outerHTML"
-            class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 dark:hover:text-indigo-200">
+            class="inline-flex items-center px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white">
             {{if $canRetry}}Retry{{else if .State.IsNotLoaded}}Load{{else}}Reload{{end}}
         </button>
         {{else if .State.IsLoaded}}
         <a href="/browse?inventory_id={{.SourceBucket}}/{{.Name}}/{{.Run}}"
-           class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 dark:hover:text-indigo-200"
+           class="inline-flex items-center px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white"
            title="Browse this run's prefix tree">
             Browse
         </a>
         <a href="/compare?from={{.SourceBucket}}/{{.Name}}/{{.Run}}"
-           class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 dark:hover:text-indigo-200"
+           class="inline-flex items-center px-2.5 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
            title="Compare this run against another loaded run">
             Compare
         </a>
@@ -94,17 +84,34 @@
             {{if .Pinned}}hx-vals="{{hxValsJSON "pinned" "false"}}"{{else}}hx-vals="{{hxValsJSON "pinned" "true"}}"{{end}}
             hx-target="closest tr"
             hx-swap="outerHTML"
-            class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
-            title="{{if .Pinned}}Unpin (allow auto-eviction){{else}}Pin (protect from auto-eviction){{end}}">
-            {{if .Pinned}}Unpin{{else}}Pin{{end}}
+            class="inline-flex items-center justify-center h-7 w-7 rounded {{if .Pinned}}text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50{{else}}text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700{{end}}"
+            title="{{if .Pinned}}Unpin (allow auto-eviction){{else}}Pin (protect from auto-eviction){{end}}"
+            aria-label="{{if .Pinned}}Unpin run{{else}}Pin run{{end}}">
+            {{if .Pinned}}
+            <svg viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4" aria-hidden="true"><path d="M13.4 2.1a1 1 0 0 0-1.4 0l-1.4 1.4 0.7 0.7-3.7 2.3-1.4-0.4a1 1 0 0 0-1 1.7l3 3-3.5 3.5a1 1 0 0 0 1.4 1.4l3.5-3.5 3 3a1 1 0 0 0 1.7-1l-0.4-1.4 2.3-3.7 0.7 0.7 1.4-1.4a1 1 0 0 0 0-1.4l-4.4-4.4z"/></svg>
+            {{else}}
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M13.4 2.1l4.4 4.4-1.4 1.4-0.7-0.7-2.3 3.7 0.4 1.4-3-3-3.5 3.5-1.4-1.4 3.5-3.5-3-3 1.4-0.4 3.7-2.3-0.7-0.7 1.4-1.4z"/></svg>
+            {{end}}
         </button>
         <button type="button"
             hx-post="/partials/discovered/{{.SourceBucket}}/{{.Name}}/{{.Run}}/unload"
             hx-target="closest tr"
             hx-swap="outerHTML"
-            class="text-yellow-600 dark:text-yellow-400 hover:text-yellow-900 dark:hover:text-yellow-200">
-            Unload
+            class="inline-flex items-center justify-center h-7 w-7 rounded text-yellow-600 dark:text-yellow-400 hover:bg-yellow-50 dark:hover:bg-yellow-900/30"
+            title="Unload (release the index and remove cached files)"
+            aria-label="Unload run">
+            <svg viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4" aria-hidden="true"><path d="M10 3l5 8H5l5-8zM4 14h12v2H4v-2z"/></svg>
         </button>
         {{end}}
+        </div>
     </td>
 </tr>
+{{if $busy}}
+<tr aria-hidden="true" class="discovered-progress-row">
+    <td colspan="3" class="p-0">
+        <div class="h-1 w-full bg-gray-100 dark:bg-gray-900/30">
+            <div class="h-1 bg-indigo-500 dark:bg-indigo-400 transition-all" style="width:{{if gt $pct 0}}{{$pct}}{{else}}5{{end}}%"></div>
+        </div>
+    </td>
+</tr>
+{{end}}

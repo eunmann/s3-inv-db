@@ -117,4 +117,5 @@ var (
 	SameConfigForTest                  = sameConfig
 	FilterComparePickerByConfigForTest = filterComparePickerByConfig
 	LoadDurationLabelForTest           = loadDurationLabel
+	DiscoveredMetaLineForTest          = discoveredMetaLine
 )

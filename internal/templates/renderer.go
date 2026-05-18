@@ -16,17 +16,27 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 )
 
+// State name literals shared by stateLabel / stateClass / stateBorderClass.
+// Kept aligned with the inventory.State constants but as plain strings
+// here so renderer.go doesn't import the inventory package.
+const (
+	stateLoaded    = "loaded"
+	stateNotLoaded = "not_loaded"
+	stateLoading   = "loading"
+	stateErrored   = "error"
+)
+
 // stateLabel turns internal inventory state names into user-facing
 // language. Kept aligned with the inventory.State constants.
 func stateLabel(state string) string {
 	switch state {
-	case "loaded":
+	case stateLoaded:
 		return "Loaded"
-	case "not_loaded":
+	case stateNotLoaded:
 		return "Not loaded"
-	case "loading":
+	case stateLoading:
 		return "Loading…"
-	case "error":
+	case stateErrored:
 		return "Error"
 	default:
 		return state
@@ -192,16 +202,30 @@ func FuncMap() template.FuncMap {
 		"progressPct": progressPct,
 		"stateClass": func(state string) string {
 			switch state {
-			case "loaded":
+			case stateLoaded:
 				return "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
-			case "not_loaded":
+			case stateNotLoaded:
 				return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300"
-			case "loading":
+			case stateLoading:
 				return "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300"
-			case "error":
+			case stateErrored:
 				return "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
 			default:
 				return "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200"
+			}
+		},
+		"stateBorderClass": func(state string) string {
+			switch state {
+			case stateLoaded:
+				return "border-l-4 border-green-500 dark:border-green-400"
+			case stateNotLoaded:
+				return "border-l-4 border-yellow-400 dark:border-yellow-500"
+			case stateLoading:
+				return "border-l-4 border-blue-500 dark:border-blue-400"
+			case stateErrored:
+				return "border-l-4 border-red-500 dark:border-red-400"
+			default:
+				return "border-l-4 border-gray-300 dark:border-gray-600"
 			}
 		},
 		"tierLabel": tierLabel,

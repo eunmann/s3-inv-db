@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
@@ -223,10 +224,49 @@ type DiscoveredRowView struct {
 	CacheBytesH          string
 	AutoLoadBackoffUntil string
 	LoadDurationH        string
+	RunLabel             string
+	MetaLine             string
 	CacheBytes           int64
 	AutoLoadFailureCount uint32
 	Pinned               bool
 	UserUnloaded         bool
+}
+
+// populateRowDerived fills the view fields that depend on the
+// already-populated raw data: a humanised run timestamp, and a one-line
+// "format · N files, X bytes · cache Y · loaded in Z" summary the
+// template renders under the run timestamp.
+func populateRowDerived(view *DiscoveredRowView) {
+	view.RunLabel = humanfmt.RunTimestamp(view.Run)
+	view.MetaLine = discoveredMetaLine(view)
+}
+
+// discoveredMetaLine joins the secondary facts about one run into a
+// single bullet-separated string. Empty pieces are omitted so the
+// result has no dangling separators.
+func discoveredMetaLine(view *DiscoveredRowView) string {
+	parts := make([]string, 0, 4)
+	if view.FileFormat != "" {
+		parts = append(parts, view.FileFormat)
+	}
+	if view.FileCount > 0 {
+		seg := fmt.Sprintf("%d file", view.FileCount)
+		if view.FileCount != 1 {
+			seg += "s"
+		}
+		if view.TotalBytes > 0 {
+			seg += ", " + humanfmt.Bytes(view.TotalBytes)
+		}
+		parts = append(parts, seg)
+	}
+	if view.CacheBytesH != "" {
+		parts = append(parts, "cache "+view.CacheBytesH)
+	}
+	if view.LoadDurationH != "" {
+		parts = append(parts, "loaded in "+view.LoadDurationH)
+	}
+
+	return strings.Join(parts, " · ")
 }
 
 // renderDiscoveredRowFrom renders a discovered_row using a pre-fetched
@@ -264,6 +304,7 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 	cs := h.measureCacheSize(r, disc)
 	view.CacheBytes, view.CacheBytesH = cs.Bytes, cs.Human
 	view.LoadDurationH = loadDurationLabel(view.LatestJob)
+	populateRowDerived(&view)
 	h.renderHTMLPartial(w, r, "discovered_row.html", "render discovered row", view)
 }
 
