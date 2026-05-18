@@ -163,37 +163,28 @@ func currentHeapAlloc() uint64 {
 	return m.HeapAlloc
 }
 
-// TestShouldWorkerFlush verifies the per-worker spill decision.
 func TestShouldWorkerFlush(t *testing.T) {
-	// Aggregator at or above the per-worker share forces a spill.
 	if !extsort.ShouldWorkerFlush(extsort.DefaultAggregatorCap, 0, 1) {
 		t.Error("ShouldWorkerFlush should fire when worker hits the default cap")
 	}
-	// Tiny aggregator, no memory limit set, no heap pressure: no spill.
 	if extsort.ShouldWorkerFlush(1024, 0, 1) {
 		t.Error("ShouldWorkerFlush should not fire when worker is tiny and no limit set")
 	}
 }
 
-// TestAggregatorCap verifies the cap formula scales with a configured
-// memory limit and falls back to the default when no limit is set.
 func TestAggregatorCap(t *testing.T) {
-	// memoryLimit = 0 → unset → default cap.
 	if got := extsort.AggregatorCap(0); got != extsort.DefaultAggregatorCap {
 		t.Errorf("AggregatorCap(0) = %d, want default %d", got, extsort.DefaultAggregatorCap)
 	}
-	// 1 GiB limit → 153 MiB fractional. Cap scales down with the budget.
 	small := int64(1024 * 1024 * 1024)
 	want := uint64(float64(small) * extsort.AggregatorFractionOfLimit)
 	if got := extsort.AggregatorCap(small); got != want {
 		t.Errorf("AggregatorCap(1GiB) = %d, want fractional %d", got, want)
 	}
-	// 100 GiB limit → 15 GiB fractional. Cap scales up with the budget —
-	// no hard ceiling defeats the fraction-of-budget rule.
 	huge := int64(100 * 1024 * 1024 * 1024)
 	wantHuge := uint64(float64(huge) * extsort.AggregatorFractionOfLimit)
 	if got := extsort.AggregatorCap(huge); got != wantHuge {
-		t.Errorf("AggregatorCap(100GiB) = %d, want fractional %d (no longer capped at default)", got, wantHuge)
+		t.Errorf("AggregatorCap(100GiB) = %d, want fractional %d", got, wantHuge)
 	}
 }
 

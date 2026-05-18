@@ -172,9 +172,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		}
 	}()
 
-	// Auto-detect a memory budget when none is installed so the
-	// aggregator cap scales with the machine. Callers can pin a
-	// specific budget by calling sysmem.ApplyMemoryLimit before Run.
+	// Auto-detect memory budget if caller hasn't installed one.
 	memoryLimit := debug.SetMemoryLimit(-1)
 	memSource := "configured"
 	if memoryLimit >= unsetMemoryLimit {

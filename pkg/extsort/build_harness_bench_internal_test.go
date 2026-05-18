@@ -17,10 +17,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// BuildHarness benchmarks the build phases in isolation by mirroring
-// Pipeline's flush-on-cap → spill → k-way-merge sequence
-// single-threaded. Naming is BenchmarkBuildHarness_<shape>_<size>_<dict>
-// so a single -bench selector pulls one knob combination.
+// BuildHarness benchmarks the build phases single-threaded
+// (flush-on-cap → spill → k-way-merge).
 
 func BenchmarkBuildHarness_Realistic_500K_DictOff(b *testing.B) {
 	runShapeHarness(b, benchutil.S3RealisticConfig(500_000), false)
@@ -73,9 +71,7 @@ func BenchmarkBuildHarness_DeepPyramid_10M_DictOn(b *testing.B) {
 const (
 	harnessPrefixSampleCap      = 1024
 	harnessAggregatorChunkRatio = 8
-	// HarnessFlushCheckInterval bounds how often ShouldWorkerFlush
-	// fires inside a chunk. ReadMemStats inside it is not free, so
-	// per-object would distort timing.
+	// ShouldWorkerFlush reads MemStats; cadence it to avoid timing skew.
 	harnessFlushCheckInterval = 10_000
 	harnessSingleWorker       = 1
 	harnessRunBufferSize      = DefaultRunBufferSize

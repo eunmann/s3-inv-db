@@ -10,9 +10,7 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2"
 )
 
-// Prefix-dictionary file names. The dictionary stores unique "/"-
-// delimited path segments once and replaces each prefix with a
-// sequence of uint32 segment IDs.
+// Prefix-dictionary file names.
 const (
 	PrefixDictBlobFile             = "prefix_dict.bin"
 	PrefixDictOffsetsFile          = "prefix_dict.off.u64"
@@ -28,16 +26,9 @@ const DefaultPrefixDictCacheSize = 10000
 // a prefix (~12 bytes per segment + slash).
 const avgSegmentBytes = 12
 
-// PrefixSegmentInterner interns unique path segments during index
-// building. It assigns a sequential uint32 ID to each unique segment
-// string.
-//
-// Segments are split from prefixes by "/" delimiter. For example:
-//
-//	"data/2024/01/" → ["data", "2024", "01", ""]
-//
-// The empty string after a trailing slash is significant — it
-// distinguishes prefixes from keys (prefixes always end with "/").
+// PrefixSegmentInterner assigns a sequential uint32 ID to each unique
+// path segment. The trailing empty segment after a "/" is preserved
+// so prefixes ("data/") stay distinguishable from keys ("data").
 type PrefixSegmentInterner struct {
 	segmentMap map[uint64]uint32
 	blobWriter *BlobWriter
@@ -64,9 +55,8 @@ func NewPrefixSegmentInterner(outDir string) (*PrefixSegmentInterner, error) {
 	}, nil
 }
 
-// Intern returns the ID for a segment, creating a new ID if this is
-// the first occurrence. The segment is written to the blob file on
-// first occurrence.
+// Intern returns the ID for segment, assigning and writing a new one
+// on first occurrence.
 func (si *PrefixSegmentInterner) Intern(segment string) (uint32, error) {
 	h := hashSegment(segment)
 
@@ -109,9 +99,7 @@ func hashSegment(s string) uint64 {
 	return h.Sum64()
 }
 
-// PrefixDictionary provides runtime lookup of segment strings by ID.
-// It uses an LRU cache to speed up lookups for frequently accessed
-// segments.
+// PrefixDictionary provides ID→segment lookup backed by an LRU cache.
 type PrefixDictionary struct {
 	blob  *BlobReader
 	cache *lru.Cache[uint32, string]
@@ -326,7 +314,6 @@ func OpenDictPrefixReader(outDir string) (*DictPrefixReader, error) {
 		return nil, fmt.Errorf("open prefix dictionary: %w", err)
 	}
 
-	// Preload all segments for fast lookups (eliminates LRU overhead)
 	cache, err := dict.PreloadSegments()
 	if err != nil {
 		dict.Close()
@@ -398,7 +385,6 @@ func (r *DictPrefixReader) GetPrefix(pos uint64) (string, error) {
 		return "", nil
 	}
 
-	// Use pooled builder to reduce allocations
 	builder := r.getBuilder()
 	builder.Grow(numSegs * avgSegmentBytes)
 
@@ -431,7 +417,6 @@ func (r *DictPrefixReader) UnsafeGetPrefix(pos uint64) string {
 		return ""
 	}
 
-	// Use pooled builder to reduce allocations
 	builder := r.getBuilder()
 	builder.Grow(numSegs * avgSegmentBytes)
 
