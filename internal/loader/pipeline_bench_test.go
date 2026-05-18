@@ -35,25 +35,18 @@ import (
 //
 //	make docker-bench-pipeline   (not yet defined; see bench README)
 
-// chunkCountFor scales the number of manifest chunks with the
-// object count so per-chunk size stays in a healthy range
-// (~125K-625K objects per chunk). Larger chunk counts let
-// Pipeline's ingest pool actually use more cores, but more workers
-// each hold their own aggregator + download/parse buffers, so the
-// count is capped to avoid pathological RAM use during ingest.
-// At 10M deep-pyramid, 32 ingest workers × per-worker download/
-// parse/aggregate state pushed RAM to swap on a 32 GB host.
+// chunkCountFor scales the manifest's chunk count so Pipeline's
+// ingest pool — sized as min(NumCPU, manifest_files) — can saturate
+// the host's cores at every input size. Targets ~500K objects per
+// chunk so a typical box ends up with 1-2 chunks per core. Bounded
+// at NumCPU on the upper end (no point producing more chunks than
+// the pipeline will ever spin up workers for) and at 4 on the lower
+// end (still gets parallel overlap on tiny workloads).
 func chunkCountFor(numObjects int) int {
-	switch {
-	case numObjects >= 10_000_000:
-		return 16
-	case numObjects >= 5_000_000:
-		return 16
-	case numObjects >= 1_000_000:
-		return 16
-	default:
-		return 8
-	}
+	const targetPerChunk = 500_000
+	chunks := (numObjects + targetPerChunk - 1) / targetPerChunk
+
+	return min(max(chunks, 4), runtime.NumCPU())
 }
 
 func BenchmarkPipeline_Realistic_500K_DictOff(b *testing.B) {

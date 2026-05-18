@@ -18,9 +18,17 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/s3inventory"
+	"github.com/eunmann/s3-inv-db/pkg/sysmem"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/rs/zerolog"
 )
+
+// memoryLimitUnsetSentinel is the threshold above which we treat
+// runtime/debug.SetMemoryLimit's return value as "no limit configured"
+// — Go reports math.MaxInt64 when GOMEMLIMIT has never been set, and
+// any value above an exabyte is well past every realistic container
+// or cgroup cap.
+const memoryLimitUnsetSentinel int64 = 1 << 62
 
 // Pipeline orchestrates the external sort build process.
 // It streams S3 inventory data, aggregates in bounded memory,
@@ -171,10 +179,25 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		}
 	}()
 
+	// Resolve the memory budget. If the caller (server, CLI, bench)
+	// didn't already install one, auto-detect via sysmem so the
+	// aggregator cap scales with the actual machine RAM instead of
+	// falling back to a fixed 512 MiB. Pipeline.Run is the lowest
+	// common entrypoint that every build path crosses, so this is
+	// where the detection belongs — callers that DO want to pin a
+	// budget can call sysmem.ApplyMemoryLimit before us and we'll
+	// inherit it.
 	memoryLimit := debug.SetMemoryLimit(-1)
+	memSource := "configured"
+	if memoryLimit >= memoryLimitUnsetSentinel {
+		res := sysmem.ApplyMemoryLimit(sysmem.DefaultMemoryLimitFraction)
+		memoryLimit = debug.SetMemoryLimit(-1)
+		memSource = string(res.Source)
+	}
 	log.Info().
 		Str("manifest_uri", manifestURI).
-		Int64("gomemlimit_bytes", memoryLimit).
+		Int64("memory_limit_bytes", memoryLimit).
+		Str("memory_limit_source", memSource).
 		Str("aggregator_cap", humanfmt.BytesUint64(AggregatorCap(memoryLimit))).
 		Msg("pipeline starting")
 

@@ -288,16 +288,12 @@ func DefaultConfig() Config {
 	numCPU := runtime.NumCPU()
 	const minPartConcurrency = 2
 	partConcurrency := max(numCPU/4, minPartConcurrency)
-	// Merge workers scale with CPU. The cap exists so a 128-core
-	// host doesn't spin up 64 mergers, each holding MaxFanIn readers
-	// open — at 16 mergers × 16 readers × ~1 MiB buffer that's
-	// already 256 MiB of merge-side buffer state, plus the file
-	// descriptor pressure. Bumped from 8 (the prior fixed cap which
-	// pinned the 32-core machine here to 25% utilisation) to 16,
-	// which lets NumCPU/2 win on machines up to 32 cores and leaves
-	// headroom on bigger ones.
-	const mergeWorkerCap = 16
-	mergeWorkers := min(max(numCPU/2, 1), mergeWorkerCap)
+	// Merge workers scale with available CPU. No hard upper cap:
+	// the file-handle pressure concern (each worker holds MaxFanIn
+	// readers open) is bounded by MaxFanIn × workers, and Linux
+	// default ulimits absorb O(thousands) of fds. Lower bound at 1
+	// so a single-CPU host still works.
+	mergeWorkers := max(numCPU/2, 1)
 
 	return Config{
 		TempDir:          "",
