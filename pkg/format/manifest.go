@@ -62,6 +62,23 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		}
 	}
 
+	// Prefix-dictionary files are optional — only present when the
+	// dictionary-encoded prefix storage path was selected. addFile
+	// is a no-op for missing files, so listing them here keeps the
+	// manifest complete without forcing the raw-blob path to emit
+	// these stubs.
+	optionalPrefixDict := []string{
+		PrefixDictBlobFile,
+		PrefixDictOffsetsFile,
+		PrefixDictIDsFile,
+		PrefixDictOffsetsPerPrefixFile,
+	}
+	for _, name := range optionalPrefixDict {
+		if err := addFile(dir, name, manifest.Files); err != nil {
+			return err
+		}
+	}
+
 	// Tier-stats files live in a subdirectory and are named by tier
 	// FilePrefix; enumerate the directory rather than hard-coding the
 	// list so a new tier added later is captured automatically.
