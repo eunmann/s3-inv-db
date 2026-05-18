@@ -37,16 +37,23 @@ import (
 
 // chunkCountFor scales the manifest's chunk count so Pipeline's
 // ingest pool — sized as min(NumCPU, manifest_files) — can saturate
-// the host's cores at every input size. Targets ~500K objects per
-// chunk so a typical box ends up with 1-2 chunks per core. Bounded
-// at NumCPU on the upper end (no point producing more chunks than
-// the pipeline will ever spin up workers for) and at 4 on the lower
-// end (still gets parallel overlap on tiny workloads).
+// the host's cores at every reasonable input size. The previous
+// targetPerChunk=500K knob was too coarse: at 1M objects it
+// produced only 4 chunks, pinning a 32-core host to 12.5% CPU
+// during ingest. Now: at least NumCPU chunks once the input is big
+// enough that per-chunk size stays above the minPerChunk floor,
+// falling back to the floor for small inputs where over-chunking
+// is wasteful per-chunk fixed cost (manifest entries, download
+// setup) for no parallelism win.
 func chunkCountFor(numObjects int) int {
-	const targetPerChunk = 500_000
-	chunks := (numObjects + targetPerChunk - 1) / targetPerChunk
+	const (
+		minPerChunk = 50_000
+		minChunks   = 4
+	)
+	byCPU := runtime.NumCPU()
+	byFloor := max(numObjects/minPerChunk, minChunks)
 
-	return min(max(chunks, 4), runtime.NumCPU())
+	return min(byFloor, byCPU)
 }
 
 func BenchmarkPipeline_Realistic_500K_DictOff(b *testing.B) {

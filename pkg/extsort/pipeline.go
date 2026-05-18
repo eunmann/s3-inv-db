@@ -23,13 +23,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// memoryLimitUnsetSentinel is the threshold above which we treat
-// runtime/debug.SetMemoryLimit's return value as "no limit configured"
-// — Go reports math.MaxInt64 when GOMEMLIMIT has never been set, and
-// any value above an exabyte is well past every realistic container
-// or cgroup cap.
-const memoryLimitUnsetSentinel int64 = 1 << 62
-
 // Pipeline orchestrates the external sort build process.
 // It streams S3 inventory data, aggregates in bounded memory,
 // spills to sorted run files, and merges to build the final index.
@@ -189,7 +182,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	// inherit it.
 	memoryLimit := debug.SetMemoryLimit(-1)
 	memSource := "configured"
-	if memoryLimit >= memoryLimitUnsetSentinel {
+	if memoryLimit >= unsetMemoryLimit {
 		res := sysmem.ApplyMemoryLimit(sysmem.DefaultMemoryLimitFraction)
 		memoryLimit = debug.SetMemoryLimit(-1)
 		memSource = string(res.Source)
