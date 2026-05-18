@@ -64,10 +64,16 @@ type FakeObject struct {
 // GeneratorConfig configures synthetic data generation.
 type GeneratorConfig struct {
 	TierDistribution map[tiers.ID]float64
-	NumObjects       int
-	PrefixFanout     int
-	MaxDepth         int
-	Seed             int64
+	// Shape selects the path-generation strategy. Empty / "uniform"
+	// is the legacy random-depth/random-segment behaviour. "deep_pyramid"
+	// models the real S3-inventory shape: narrow shared top
+	// (org/year/month/day), wider middle, large fan-out at the leaves
+	// — the structure where prefix dictionary encoding actually pays off.
+	Shape        string
+	NumObjects   int
+	PrefixFanout int
+	MaxDepth     int
+	Seed         int64
 }
 
 // DefaultConfig returns a reasonable default configuration.
@@ -117,6 +123,45 @@ func S3RealisticConfig(numObjects int) GeneratorConfig {
 	}
 }
 
+// Shape constants for GeneratorConfig.Shape.
+const (
+	ShapeUniform     = "uniform"
+	ShapeDeepPyramid = "deep_pyramid"
+)
+
+// Deep-pyramid path constants. Realistic enterprise buckets have a
+// narrow top (a handful of orgs / dataset roots), date partitions
+// 4 levels deep (year/month/day/hour), and then 3-8 sub-categorisation
+// levels with growing fan-out before the leaf filenames. The numbers
+// below pick small enough cardinalities for the top to share heavily
+// and grow toward the leaves where files are dumped.
+const (
+	deepOrgCount    = 4   // dataset roots (data, logs, exports, archive)
+	deepYearCount   = 5   // 2020-2024
+	deepMonthsCount = 12  // 01-12
+	deepDaysCount   = 28  // 01-28
+	deepHoursCount  = 24  // 00-23
+	deepMidFanout   = 32  // category levels in the middle
+	deepLeafFanout  = 256 // immediate-parent fan-out at the leaf
+	deepExtraLevels = 6   // sub-category depth between dates and leaves
+)
+
+// S3DeepPyramidConfig returns a generator that models the
+// narrow-top / wide-bottom shape typical of real S3 inventories:
+// few shared top-level org segments, dated partitions, then a deep
+// sub-category tree that fans out into many leaf files at depth
+// 10+. This is the shape where prefix-dictionary encoding should
+// shine, because the top segments are reused across many leaves
+// and dedupe heavily.
+func S3DeepPyramidConfig(numObjects int) GeneratorConfig {
+	cfg := S3RealisticConfig(numObjects)
+	cfg.Shape = ShapeDeepPyramid
+	cfg.MaxDepth = 4 + deepExtraLevels // dates + sub-cats
+	cfg.PrefixFanout = deepLeafFanout
+
+	return cfg
+}
+
 // Generator generates synthetic S3 inventory data.
 type Generator struct {
 	rng *rand.Rand
@@ -147,6 +192,17 @@ func (g *Generator) Generate() []FakeObject {
 	return objects
 }
 
+// Stream emits NumObjects synthetic objects through visit without
+// materialising them as a slice first. Use this in bench harnesses
+// where you want the full object stream to flow through aggregation
+// (or any other consumer) without paying the upfront memory cost of
+// holding every object — at 10M objects the slice alone is ~640 MB.
+func (g *Generator) Stream(visit func(FakeObject)) {
+	for range g.cfg.NumObjects {
+		visit(g.generateObject())
+	}
+}
+
 func (g *Generator) generateObject() FakeObject {
 	return FakeObject{
 		Key:    g.generateKey(),
@@ -156,6 +212,9 @@ func (g *Generator) generateObject() FakeObject {
 }
 
 func (g *Generator) generateKey() string {
+	if g.cfg.Shape == ShapeDeepPyramid {
+		return g.generateDeepPyramidKey()
+	}
 	// Determine depth (1 to MaxDepth)
 	depth := 1 + g.rng.Intn(g.cfg.MaxDepth)
 
@@ -172,6 +231,102 @@ func (g *Generator) generateKey() string {
 	path += g.generateFilename()
 
 	return path
+}
+
+// Realistic word pools for deep-pyramid path generation. Real
+// enterprise buckets use descriptive names, not 3-char shorthands.
+//
+//nolint:gochecknoglobals // pure read-only seed data for synthetic paths
+var (
+	deepOrgPool = []string{
+		"customer-data-warehouse",
+		"application-event-logs",
+		"machine-learning-features",
+		"analytics-pipeline-outputs",
+		"transactional-database-snapshots",
+		"realtime-streaming-archive",
+		"third-party-vendor-exports",
+		"observability-trace-storage",
+	}
+	deepDatasetPool = []string{
+		"page-view-events",
+		"user-engagement-metrics",
+		"transaction-records",
+		"clickstream-aggregations",
+		"session-replay-frames",
+		"a-b-experiment-results",
+		"recommendation-model-predictions",
+		"fraud-detection-features",
+		"customer-support-tickets",
+		"inventory-stock-movements",
+		"billing-invoice-line-items",
+		"audit-log-events",
+	}
+	deepCategoryPool = []string{
+		"feature-encoding-pipeline-v2",
+		"raw-ingestion-batch-staging",
+		"delta-table-snapshot-current",
+		"parquet-rewrite-compacted",
+		"intermediate-aggregation-state",
+		"validated-deduplicated-output",
+		"schema-evolution-migration-step",
+		"backfill-recovery-window",
+		"streaming-checkpoint-archive",
+		"join-broadcast-intermediate",
+		"sample-fraction-debug-dump",
+		"reconciliation-side-output",
+		"shuffle-partition-spilled",
+		"materialized-view-refresh-state",
+		"experimental-cohort-snapshot",
+		"long-tail-bucket-overflow",
+	}
+)
+
+// generateDeepPyramidKey produces paths shaped like real
+// enterprise S3 inventories:
+//
+//	<org-words>/<dataset-words>/year=YYYY/month=YYYY-MM/day=YYYY-MM-DD/
+//	  hour=YYYY-MM-DD-HH/<category-words>/.../partition-<uuid>/<file>
+//
+// The top three levels use multi-word descriptive names (full
+// "page-view-events" rather than "events"), date partitions use
+// Hive-style key=value with timestamps embedded in each level, the
+// middle "category" pool is moderate-cardinality but each entry is
+// 20-40 chars, and the leaf partition embeds a per-shard token.
+// Total depth lands at 9-13. This is the shape where the dictionary
+// can actually amortise its per-prefix segment-ID overhead, because
+// each shared segment is ~20+ chars, not 2-4.
+func (g *Generator) generateDeepPyramidKey() string {
+	const yearBase = 2020
+	var b strings.Builder
+	// Org + dataset: long descriptive names, heavily shared
+	b.WriteString(deepOrgPool[g.rng.Intn(len(deepOrgPool))])
+	b.WriteByte('/')
+	b.WriteString(deepDatasetPool[g.rng.Intn(len(deepDatasetPool))])
+	b.WriteByte('/')
+	// Date partitions: full Hive-style key=value with embedded
+	// timestamps. Each deeper date level repeats more of the date in
+	// its name, mirroring how real partitioned tables write them out.
+	year := yearBase + g.rng.Intn(deepYearCount)
+	month := 1 + g.rng.Intn(deepMonthsCount)
+	day := 1 + g.rng.Intn(deepDaysCount)
+	hour := g.rng.Intn(deepHoursCount)
+	fmt.Fprintf(&b, "year=%04d/", year)
+	fmt.Fprintf(&b, "month=%04d-%02d/", year, month)
+	fmt.Fprintf(&b, "day=%04d-%02d-%02d/", year, month, day)
+	fmt.Fprintf(&b, "hour=%04d-%02d-%02d-%02d/", year, month, day, hour)
+	// Mid sub-category levels: 3-6, drawn from the long-named pool.
+	midLevels := 3 + g.rng.Intn(4)
+	for range midLevels {
+		b.WriteString(deepCategoryPool[g.rng.Intn(len(deepCategoryPool))])
+		b.WriteByte('/')
+	}
+	// Final leaf directory: fans out widely with a descriptive
+	// per-partition token, again multi-word.
+	fmt.Fprintf(&b, "partition-shard-%08x/", g.rng.Uint32()%uint32(deepLeafFanout))
+	b.WriteString(g.generateFilename())
+
+	return b.String()
 }
 
 func (g *Generator) generateSegment() string {

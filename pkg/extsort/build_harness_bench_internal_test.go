@@ -1,11 +1,9 @@
 package extsort
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,38 +13,61 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// BenchmarkBuildHarness runs a full local index build and reports four
-// numbers per iteration: ingestion time, peak heap delta during build,
-// total bytes-on-disk, and warm post-build Lookup latency. One bench,
-// four signals — so each enhancement's effect on the headline metrics
-// shows up in a single comparable row.
+// BuildHarness — explicit per-(shape × prefix-dictionary × size)
+// benchmarks. Each function names the exact knob combination it
+// measures, so a `go test -bench` selector picks the comparison the
+// caller wants without env-var gymnastics. 500K is the standard size;
+// flip to 1M (the *_1M variants) when the smaller run is dominated by
+// fixture-setup noise.
 //
-// Sizes default to 500K and 1M (per the user's "long enough to
-// simulate reality" guidance); override with S3INV_HARNESS_SIZES
-// (comma-separated decimal). 10M auto-enabled when S3INV_LONG_BENCH is
-// set.
-func BenchmarkBuildHarness(b *testing.B) {
-	silenceZerologExtsort(b)
-	for _, n := range harnessSizes() {
-		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
-			runBuildHarness(b, n)
-		})
-	}
+// The harness streams generated objects directly into the aggregator,
+// so peak resident memory is bounded by the aggregator + the run-file
+// scratch — *not* by NumObjects × sizeof(FakeObject). At 10M objects
+// the slice-materialising path needed >600 MB just for the inputs;
+// the streaming path adds zero.
+
+func BenchmarkBuildHarness_Realistic_500K_DictOff(b *testing.B) {
+	runShapeHarness(b, benchutil.S3RealisticConfig(500_000), false)
 }
 
-func runBuildHarness(b *testing.B, n int) {
+func BenchmarkBuildHarness_Realistic_500K_DictOn(b *testing.B) {
+	runShapeHarness(b, benchutil.S3RealisticConfig(500_000), true)
+}
+
+func BenchmarkBuildHarness_DeepPyramid_500K_DictOff(b *testing.B) {
+	runShapeHarness(b, benchutil.S3DeepPyramidConfig(500_000), false)
+}
+
+func BenchmarkBuildHarness_DeepPyramid_500K_DictOn(b *testing.B) {
+	runShapeHarness(b, benchutil.S3DeepPyramidConfig(500_000), true)
+}
+
+const (
+	// HarnessPrefixSampleCap caps the prefix sample retained for the
+	// post-build Lookup measurement. 1024 is plenty for a meaningful
+	// average; larger sets just inflate per-bench RSS.
+	harnessPrefixSampleCap = 1024
+	// AggregatorChunkRatio sizes the per-worker aggregator hint as
+	// NumObjects / aggregatorChunkRatio. Matches the n/8 the old harness used.
+	aggregatorChunkRatio = 8
+)
+
+// runShapeHarness runs the build harness for one (shape, dict)
+// combination. Streams object generation through the aggregator so
+// peak resident memory does not scale with NumObjects.
+func runShapeHarness(b *testing.B, cfg benchutil.GeneratorConfig, prefixDict bool) {
 	b.Helper()
-	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(n))
-	objects := gen.Generate()
-	prefixCount := approxPrefixCount(objects)
+	silenceZerologExtsort(b)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	var (
-		peakHeap uint64
-		lastSize int64
-		lastNs   float64
+		peakHeap     uint64
+		lastSize     int64
+		lastNs       float64
+		prefixCount  int
+		prefixSample []string
 	)
 	for range b.N {
 		b.StopTimer()
@@ -59,18 +80,26 @@ func runBuildHarness(b *testing.B, n int) {
 		go heapSampler(samplerStop, &samplerMax)
 		b.StartTimer()
 
-		agg := NewAggregator(n/8, 0)
-		for _, o := range objects {
+		// Stream objects through aggregation; capture a bounded prefix
+		// sample on the way through for the post-build Lookup measurement
+		// so we never need to retain the full object slice.
+		agg := NewAggregator(cfg.NumObjects/aggregatorChunkRatio, 0)
+		sample := newPrefixSampler(harnessPrefixSampleCap)
+		gen := benchutil.NewGenerator(cfg)
+		gen.Stream(func(o benchutil.FakeObject) {
 			agg.AddObject(o.Key, o.Size, o.TierID)
-		}
+			sample.observe(o.Key)
+		})
 		rows := agg.Drain()
 		SortPrefixRows(rows)
+		prefixCount = agg.PrefixCount()
+		prefixSample = sample.prefixes()
 
 		builder, err := NewIndexBuilderWithCapacity(dir, "", uint64(len(rows)))
 		if err != nil {
 			b.Fatalf("NewIndexBuilderWithCapacity: %v", err)
 		}
-		if os.Getenv("S3INV_PREFIX_DICT") == "1" {
+		if prefixDict {
 			if err := builder.SetPrefixDictionary(true); err != nil {
 				b.Fatalf("SetPrefixDictionary: %v", err)
 			}
@@ -92,7 +121,7 @@ func runBuildHarness(b *testing.B, n int) {
 			peakHeap = delta
 		}
 		lastSize = dirBytesHarness(b, dir)
-		lastNs = measureLookupHarness(b, dir, objects)
+		lastNs = measureLookupHarnessSampled(b, dir, prefixSample)
 		b.StartTimer()
 	}
 
@@ -105,17 +134,47 @@ func runBuildHarness(b *testing.B, n int) {
 	}
 }
 
-// approxPrefixCount runs a throwaway aggregator to count distinct
-// prefixes in the synthetic input — used for per-prefix metric
-// denominators.
-func approxPrefixCount(objects []benchutil.FakeObject) int {
-	agg := NewAggregator(len(objects)/8, 0)
-	for _, o := range objects {
-		agg.AddObject(o.Key, o.Size, o.TierID)
-	}
-
-	return agg.PrefixCount()
+// prefixSampler keeps a bounded set of distinct directory-prefixes
+// observed in a streaming object pass. First-seen wins so the sample
+// is deterministic for a given input ordering.
+type prefixSampler struct {
+	seen  map[string]struct{}
+	out   []string
+	limit int
 }
+
+func newPrefixSampler(limit int) *prefixSampler {
+	return &prefixSampler{
+		seen:  make(map[string]struct{}, limit),
+		out:   make([]string, 0, limit),
+		limit: limit,
+	}
+}
+
+func (s *prefixSampler) observe(key string) {
+	if len(s.out) >= s.limit {
+		return
+	}
+	idx := -1
+	for i := len(key) - 1; i >= 0; i-- {
+		if key[i] == '/' {
+			idx = i
+
+			break
+		}
+	}
+	if idx < 0 {
+		return
+	}
+	p := key[:idx+1]
+	if _, ok := s.seen[p]; ok {
+		return
+	}
+	s.seen[p] = struct{}{}
+	s.out = append(s.out, p)
+}
+
+func (s *prefixSampler) prefixes() []string { return s.out }
 
 // heapSampler polls runtime memory stats every 5 ms and updates the
 // highest HeapAlloc seen into peak. Cheap enough that it doesn't
@@ -151,18 +210,17 @@ func safeSubHarness(a, b uint64) uint64 {
 	return a - b
 }
 
-func measureLookupHarness(b *testing.B, dir string, objects []benchutil.FakeObject) float64 {
+func measureLookupHarnessSampled(b *testing.B, dir string, prefixes []string) float64 {
 	b.Helper()
+	if len(prefixes) == 0 {
+		return 0
+	}
 	idx, err := indexread.Open(dir)
 	if err != nil {
 		b.Fatalf("indexread.Open: %v", err)
 	}
 	defer idx.Close()
 
-	prefixes := harnessPrefixes(objects)
-	if len(prefixes) == 0 {
-		return 0
-	}
 	const (
 		warmup = 1000
 		iters  = 10_000
@@ -176,35 +234,6 @@ func measureLookupHarness(b *testing.B, dir string, objects []benchutil.FakeObje
 	}
 
 	return float64(time.Since(start).Nanoseconds()) / float64(iters)
-}
-
-func harnessPrefixes(objects []benchutil.FakeObject) []string {
-	seen := make(map[string]struct{}, 1024)
-	out := make([]string, 0, 1024)
-	for _, o := range objects {
-		idx := -1
-		for i := len(o.Key) - 1; i >= 0; i-- {
-			if o.Key[i] == '/' {
-				idx = i
-
-				break
-			}
-		}
-		if idx < 0 {
-			continue
-		}
-		p := o.Key[:idx+1]
-		if _, ok := seen[p]; ok {
-			continue
-		}
-		seen[p] = struct{}{}
-		out = append(out, p)
-		if len(out) >= 1024 {
-			break
-		}
-	}
-
-	return out
 }
 
 func dirBytesHarness(b *testing.B, dir string) int64 {
@@ -232,32 +261,4 @@ func silenceZerologExtsort(b *testing.B) {
 	prev := zerolog.GlobalLevel()
 	zerolog.SetGlobalLevel(zerolog.Disabled)
 	b.Cleanup(func() { zerolog.SetGlobalLevel(prev) })
-}
-
-func harnessSizes() []int {
-	if env := os.Getenv("S3INV_HARNESS_SIZES"); env != "" {
-		return parseHarnessSizes(env)
-	}
-	if os.Getenv("S3INV_LONG_BENCH") != "" {
-		return []int{500_000, 1_000_000, 10_000_000}
-	}
-
-	return []int{500_000, 1_000_000}
-}
-
-func parseHarnessSizes(env string) []int {
-	out := make([]int, 0, 4)
-	start := 0
-	for i := 0; i <= len(env); i++ {
-		if i == len(env) || env[i] == ',' {
-			if i > start {
-				if n, err := strconv.Atoi(env[start:i]); err == nil && n > 0 {
-					out = append(out, n)
-				}
-			}
-			start = i + 1
-		}
-	}
-
-	return out
 }
