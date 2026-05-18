@@ -33,7 +33,7 @@ func TestAggregatorMemoryBounded(t *testing.T) {
 		agg.AddObject(key, 1024, tiers.Standard)
 
 		// Check if we should flush (simulating pipeline behavior)
-		if i%1000 == 0 && extsort.ShouldFlush(flushThresholdMB*1024*1024) {
+		if i%1000 == 0 && extsort.ShouldWorkerFlush(currentHeapAlloc(), flushThresholdMB*1024*1024, 1) {
 			rows := agg.Drain()
 			_ = rows // In real pipeline, these would be written to run file
 			flushCount++
@@ -71,7 +71,7 @@ func TestIndexBuilderMemoryBounded(t *testing.T) {
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 
-	builder, err := extsort.NewIndexBuilder(tmpDir, "", false)
+	builder, err := extsort.NewIndexBuilder(tmpDir, "")
 	if err != nil {
 		t.Fatalf("create builder: %v", err)
 	}
@@ -154,38 +154,38 @@ func prefixStatsSize(_ extsort.PrefixStats) int {
 	return 216
 }
 
-// TestHeapAllocBytes verifies that extsort.HeapAllocBytes returns sensible values.
-func TestHeapAllocBytes(t *testing.T) {
-	// Allocate some memory
-	data := make([]byte, 1024*1024) // 1 MB
-	_ = data
+// currentHeapAlloc reads runtime.MemStats.HeapAlloc, used to feed
+// ShouldWorkerFlush in tests.
+func currentHeapAlloc() uint64 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
 
-	heap := extsort.HeapAllocBytes()
-
-	// Should be at least 1 MB
-	if heap < 1024*1024 {
-		t.Errorf("extsort.HeapAllocBytes returned %d, expected at least 1 MB", heap)
-	}
-
-	t.Logf("extsort.HeapAllocBytes: %.2f MB", float64(heap)/(1024*1024))
+	return m.HeapAlloc
 }
 
-// TestShouldFlush verifies the extsort.ShouldFlush function.
-func TestShouldFlush(t *testing.T) {
-	// Get current heap
-	currentHeap := extsort.HeapAllocBytes()
-
-	// extsort.ShouldFlush with threshold below current heap should return true
-	if !extsort.ShouldFlush(1) {
-		t.Error("extsort.ShouldFlush(1) should return true (threshold below current heap)")
+func TestShouldWorkerFlush(t *testing.T) {
+	if !extsort.ShouldWorkerFlush(extsort.DefaultAggregatorCap, 0, 1) {
+		t.Error("ShouldWorkerFlush should fire when worker hits the default cap")
 	}
-
-	// extsort.ShouldFlush with very high threshold should return false
-	if extsort.ShouldFlush(100 * 1024 * 1024 * 1024) { // 100 GB
-		t.Error("extsort.ShouldFlush(100GB) should return false")
+	if extsort.ShouldWorkerFlush(1024, 0, 1) {
+		t.Error("ShouldWorkerFlush should not fire when worker is tiny and no limit set")
 	}
+}
 
-	t.Logf("Current heap: %.2f MB", float64(currentHeap)/(1024*1024))
+func TestAggregatorCap(t *testing.T) {
+	if got := extsort.AggregatorCap(0); got != extsort.DefaultAggregatorCap {
+		t.Errorf("AggregatorCap(0) = %d, want default %d", got, extsort.DefaultAggregatorCap)
+	}
+	small := int64(1024 * 1024 * 1024)
+	want := uint64(float64(small) * extsort.AggregatorFractionOfLimit)
+	if got := extsort.AggregatorCap(small); got != want {
+		t.Errorf("AggregatorCap(1GiB) = %d, want fractional %d", got, want)
+	}
+	huge := int64(100 * 1024 * 1024 * 1024)
+	wantHuge := uint64(float64(huge) * extsort.AggregatorFractionOfLimit)
+	if got := extsort.AggregatorCap(huge); got != wantHuge {
+		t.Errorf("AggregatorCap(100GiB) = %d, want fractional %d", got, wantHuge)
+	}
 }
 
 // BenchmarkAggregatorMemory benchmarks aggregator memory efficiency.

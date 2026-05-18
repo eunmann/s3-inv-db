@@ -6,7 +6,7 @@ import (
 
 func TestMPHFBuilderEmpty(t *testing.T) {
 	dir := t.TempDir()
-	b := NewMPHFBuilder()
+	b := newTestMPHFBuilder(t)
 
 	if err := b.Build(dir); err != nil {
 		t.Fatalf("Build failed: %v", err)
@@ -30,7 +30,7 @@ func TestMPHFBuilderEmpty(t *testing.T) {
 
 func TestMPHFBuilderSimple(t *testing.T) {
 	dir := t.TempDir()
-	b := NewMPHFBuilder()
+	b := newTestMPHFBuilder(t)
 
 	prefixes := []string{"", "a/", "a/b/", "b/", "c/"}
 	for i, p := range prefixes {
@@ -61,7 +61,7 @@ func TestMPHFBuilderSimple(t *testing.T) {
 			continue
 		}
 		// Verify we can get the prefix back
-		stored, err := m.GetPrefix(pos)
+		stored, err := m.Prefix(pos)
 		if err != nil {
 			t.Errorf("GetPrefix(%d) failed: %v", pos, err)
 		}
@@ -77,68 +77,9 @@ func TestMPHFBuilderSimple(t *testing.T) {
 	}
 }
 
-func TestMPHFLookupWithVerify(t *testing.T) {
-	dir := t.TempDir()
-	b := NewMPHFBuilder()
-
-	prefixes := []string{"", "x/", "y/", "z/"}
-	for i, p := range prefixes {
-		b.Add(p, uint64(i))
-	}
-
-	if err := b.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	m, err := OpenMPHF(dir)
-	if err != nil {
-		t.Fatalf("OpenMPHF failed: %v", err)
-	}
-	defer m.Close()
-
-	// LookupWithVerify should work for existing prefixes
-	for _, p := range prefixes {
-		pos, ok := m.LookupWithVerify(p)
-		if !ok {
-			t.Errorf("LookupWithVerify(%q) failed", p)
-		}
-		_ = pos
-	}
-
-	// LookupWithVerify should fail for non-existent prefix
-	_, ok := m.LookupWithVerify("missing/")
-	if ok {
-		t.Error("LookupWithVerify(missing) should return false")
-	}
-}
-
-func TestMPHFVerify(t *testing.T) {
-	dir := t.TempDir()
-	b := NewMPHFBuilder()
-
-	prefixes := []string{"", "foo/", "bar/", "baz/"}
-	for i, p := range prefixes {
-		b.Add(p, uint64(i))
-	}
-
-	if err := b.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	m, err := OpenMPHF(dir)
-	if err != nil {
-		t.Fatalf("OpenMPHF failed: %v", err)
-	}
-	defer m.Close()
-
-	if err := VerifyMPHF(m); err != nil {
-		t.Errorf("VerifyMPHF failed: %v", err)
-	}
-}
-
 func TestMPHFLarge(t *testing.T) {
 	dir := t.TempDir()
-	b := NewMPHFBuilder()
+	b := newTestMPHFBuilder(t)
 
 	// Create 1000 unique prefixes
 	prefixes := make([]string, 1000)
@@ -164,9 +105,16 @@ func TestMPHFLarge(t *testing.T) {
 		t.Errorf("Count = %d, want 1000", m.Count())
 	}
 
-	// Verify all lookups
-	if err := VerifyMPHF(m); err != nil {
-		t.Errorf("VerifyMPHF failed: %v", err)
+	// Verify all lookups round-trip to their build positions.
+	for i := range uint64(1000) {
+		p := prefixFromInt(int(i))
+		pos, ok := m.Lookup(p)
+		if !ok {
+			t.Errorf("Lookup(%q) failed", p)
+		}
+		if pos != i {
+			t.Errorf("Lookup(%q) = %d, want %d", p, pos, i)
+		}
 	}
 
 	// Test some random lookups
@@ -182,7 +130,7 @@ func TestMPHFLarge(t *testing.T) {
 
 func TestMPHFNoFalsePositives(t *testing.T) {
 	dir := t.TempDir()
-	b := NewMPHFBuilder()
+	b := newTestMPHFBuilder(t)
 
 	prefixes := []string{"alpha/", "beta/", "gamma/"}
 	for i, p := range prefixes {
@@ -219,7 +167,7 @@ func TestMPHFNoFalsePositives(t *testing.T) {
 
 func TestMPHFUnicode(t *testing.T) {
 	dir := t.TempDir()
-	b := NewMPHFBuilder()
+	b := newTestMPHFBuilder(t)
 
 	prefixes := []string{"", "日本語/", "한국어/", "emoji/🎉/"}
 	for i, p := range prefixes {
@@ -243,7 +191,7 @@ func TestMPHFUnicode(t *testing.T) {
 
 			continue
 		}
-		stored, _ := m.GetPrefix(pos)
+		stored, _ := m.Prefix(pos)
 		if stored != p {
 			t.Errorf("GetPrefix returned %q, want %q", stored, p)
 		}
@@ -265,6 +213,34 @@ func TestComputeFingerprint(t *testing.T) {
 	}
 }
 
+// testMPHFBuilder wraps StreamingMPHFBuilder with the no-arg shape
+// the legacy MPHFBuilder API offered. Internal to this test file
+// so the production builder stays the single non-test code path.
+type testMPHFBuilder struct {
+	tb testing.TB
+	sb *StreamingMPHFBuilder
+}
+
+func newTestMPHFBuilder(tb testing.TB) *testMPHFBuilder {
+	tb.Helper()
+	sb, err := NewStreamingMPHFBuilder(tb.TempDir())
+	if err != nil {
+		tb.Fatalf("NewStreamingMPHFBuilder: %v", err)
+	}
+
+	return &testMPHFBuilder{tb: tb, sb: sb}
+}
+
+func (b *testMPHFBuilder) Add(prefix string, pos uint64) {
+	b.tb.Helper()
+	if err := b.sb.Add(prefix, pos); err != nil {
+		b.tb.Fatalf("Add(%q, %d): %v", prefix, pos, err)
+	}
+}
+
+func (b *testMPHFBuilder) Build(dir string) error { return b.sb.Build(dir) }
+func (b *testMPHFBuilder) Count() int             { return int(b.sb.Count()) }
+
 // Helper function to create unique prefix strings.
 func prefixFromInt(i int) string {
 	// Create a path like "a/b/c/" based on integer
@@ -283,7 +259,7 @@ func prefixFromInt(i int) string {
 
 func BenchmarkMPHFLookup(b *testing.B) {
 	dir := b.TempDir()
-	builder := NewMPHFBuilder()
+	builder := newTestMPHFBuilder(b)
 
 	prefixes := make([]string, 10000)
 	for i := range 10000 {

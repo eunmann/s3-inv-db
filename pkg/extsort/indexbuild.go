@@ -5,8 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
-	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -14,11 +15,6 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/rs/zerolog"
 )
-
-// indexDirPerm restricts the index output directory and its subdirectories
-// to owner+group access, matching gosec's expectation that directory mode
-// is 0o750 or stricter.
-const indexDirPerm = 0o750
 
 // IndexBuilder builds index files directly from a sorted stream of PrefixRows.
 // It processes prefixes in a single streaming pass, computing preorder positions
@@ -31,29 +27,18 @@ const indexDirPerm = 0o750
 // (via StreamingMPHFBuilder). Subtree arrays remain in memory (~12 bytes per prefix)
 // which is much smaller than storing all prefix strings (~50+ bytes each).
 type IndexBuilder struct {
-	outDir             string
-	tempDir            string
-	useSegmentEncoding bool
-
-	objectCountW *format.ArrayWriter
-	totalBytesW  *format.ArrayWriter
-	depthW       *format.ArrayWriter
-
-	tierCountWriters map[tiers.ID]*format.ArrayWriter
-	tierBytesWriters map[tiers.ID]*format.ArrayWriter
-
+	coreStatsW        *format.CoreStatsBuilder
+	tierStatsRowW     *format.TierStatsRowWriter
 	mphfBuilder       *format.StreamingMPHFBuilder
 	depthIndexBuilder *format.DepthIndexBuilder
-
-	stack    []stackEntry
-	posCount uint64
-	maxDepth uint32
-
-	presentTiers       map[tiers.ID]bool
-	subtreeEnds        []uint64 // 8 bytes per prefix
-	maxDepthInSubtrees []uint32 // 4 bytes per prefix
-
-	closed bool
+	presentTiers      map[tiers.ID]struct{}
+	outDir            string
+	tempDir           string
+	stack             []stackEntry
+	posCount          uint64
+	maxDepth          uint32
+	prefixDictionary  bool
+	closed            bool
 }
 
 // stackEntry tracks an open prefix on the stack.
@@ -67,16 +52,16 @@ type stackEntry struct {
 // NewIndexBuilder creates a streaming index builder.
 // The tempDir is used for temporary storage during construction (for MPHF builder).
 // If tempDir is empty, os.TempDir() is used.
-func NewIndexBuilder(outDir, tempDir string, useSegmentEncoding bool) (*IndexBuilder, error) {
-	return NewIndexBuilderWithCapacity(outDir, tempDir, 0, useSegmentEncoding)
+func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
+	return NewIndexBuilderWithCapacity(outDir, tempDir, 0)
 }
 
 // NewIndexBuilderWithCapacity creates a streaming index builder with a capacity hint.
 // The capacityHint is used to pre-size internal arrays, reducing allocations when
 // the approximate number of prefixes is known (e.g., from a run file header).
 // If capacityHint is 0, a small default capacity is used.
-func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, useSegmentEncoding bool) (*IndexBuilder, error) {
-	if err := os.MkdirAll(outDir, indexDirPerm); err != nil {
+func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*IndexBuilder, error) {
+	if err := os.MkdirAll(outDir, format.DirPerm); err != nil {
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
 
@@ -84,11 +69,7 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, us
 		tempDir = os.TempDir()
 	}
 
-	var opts []format.StreamingMPHFOption
-	if useSegmentEncoding {
-		opts = append(opts, format.WithPrefixEncoding(format.PrefixEncodingSegDict))
-	}
-	mphfBuilder, err := format.NewStreamingMPHFBuilder(tempDir, opts...)
+	mphfBuilder, err := format.NewStreamingMPHFBuilder(tempDir)
 	if err != nil {
 		return nil, fmt.Errorf("create MPHF builder: %w", err)
 	}
@@ -96,66 +77,70 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64, us
 	// Use capacity hint for arrays, with a minimum of 1024
 	arrayCap := max(capacityHint, uint64(1024))
 
+	coreStatsW, err := format.NewCoreStatsBuilder(outDir, arrayCap)
+	if err != nil {
+		mphfBuilder.Close()
+
+		return nil, fmt.Errorf("create core stats builder: %w", err)
+	}
+
 	b := &IndexBuilder{
-		outDir:             outDir,
-		tempDir:            tempDir,
-		useSegmentEncoding: useSegmentEncoding,
-		mphfBuilder:        mphfBuilder,
-		depthIndexBuilder:  format.NewDepthIndexBuilder(),
-		stack:              make([]stackEntry, 0, 32),
-		presentTiers:       make(map[tiers.ID]bool),
-		subtreeEnds:        make([]uint64, 0, arrayCap),
-		maxDepthInSubtrees: make([]uint32, 0, arrayCap),
-		tierCountWriters:   make(map[tiers.ID]*format.ArrayWriter),
-		tierBytesWriters:   make(map[tiers.ID]*format.ArrayWriter),
+		outDir:            outDir,
+		tempDir:           tempDir,
+		coreStatsW:        coreStatsW,
+		mphfBuilder:       mphfBuilder,
+		depthIndexBuilder: format.NewDepthIndexBuilder(tempDir),
+		stack:             make([]stackEntry, 0, 32),
+		presentTiers:      make(map[tiers.ID]struct{}),
 	}
 
-	b.objectCountW, err = format.NewArrayWriter(filepath.Join(outDir, "object_count.u64"), 8)
+	b.tierStatsRowW, err = format.NewTierStatsRowWriter(outDir)
 	if err != nil {
-		b.cleanup()
+		coreStatsW.Close()
+		mphfBuilder.Close()
 
-		return nil, fmt.Errorf("create object_count writer: %w", err)
+		return nil, fmt.Errorf("create tier stats row writer: %w", err)
 	}
-
-	b.totalBytesW, err = format.NewArrayWriter(filepath.Join(outDir, "total_bytes.u64"), 8)
-	if err != nil {
-		b.cleanup()
-
-		return nil, fmt.Errorf("create total_bytes writer: %w", err)
-	}
-
-	b.depthW, err = format.NewArrayWriter(filepath.Join(outDir, "depth.u32"), 4)
-	if err != nil {
-		b.cleanup()
-
-		return nil, fmt.Errorf("create depth writer: %w", err)
-	}
-
-	// subtreeEnd and maxDepthInSubtree are accumulated in memory and written at Finalize()
-	// because they can only be computed when nodes close (which happens out of order).
 
 	return b, nil
 }
 
+// SetPrefixDictionary toggles dictionary-encoded prefix storage.
+// Must be called before the first Add — recreates the MPHF builder.
+func (b *IndexBuilder) SetPrefixDictionary(enabled bool) error {
+	if b.prefixDictionary == enabled {
+		return nil
+	}
+	b.prefixDictionary = enabled
+
+	if b.mphfBuilder != nil {
+		_ = b.mphfBuilder.Close()
+		b.mphfBuilder = nil
+	}
+
+	var opts []format.StreamingMPHFOption
+	if enabled {
+		opts = append(opts, format.WithPrefixDictionary())
+	}
+	mphfBuilder, err := format.NewStreamingMPHFBuilder(b.tempDir, opts...)
+	if err != nil {
+		return fmt.Errorf("recreate MPHF builder: %w", err)
+	}
+	b.mphfBuilder = mphfBuilder
+
+	return nil
+}
+
 // cleanup closes and removes all partially created files on error.
 func (b *IndexBuilder) cleanup() {
-	if b.objectCountW != nil {
-		b.objectCountW.Close()
-	}
-	if b.totalBytesW != nil {
-		b.totalBytesW.Close()
-	}
-	if b.depthW != nil {
-		b.depthW.Close()
+	if b.coreStatsW != nil {
+		b.coreStatsW.Close()
 	}
 	if b.mphfBuilder != nil {
 		b.mphfBuilder.Close()
 	}
-	for _, w := range b.tierCountWriters {
-		w.Close()
-	}
-	for _, w := range b.tierBytesWriters {
-		w.Close()
+	if b.tierStatsRowW != nil {
+		b.tierStatsRowW.Close()
 	}
 	os.RemoveAll(b.outDir)
 }
@@ -163,7 +148,7 @@ func (b *IndexBuilder) cleanup() {
 // Add processes a single PrefixRow from the sorted stream.
 // Prefixes must be added in lexicographic (sorted) order.
 func (b *IndexBuilder) Add(row *PrefixRow) error {
-	commonDepth := b.findCommonAncestorDepth(row.Prefix, int(row.Depth))
+	commonDepth := b.findCommonAncestorDepth(row.Prefix)
 	if err := b.closeNodesAbove(commonDepth); err != nil {
 		return err
 	}
@@ -182,35 +167,32 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 		b.maxDepth = uint32(row.Depth)
 	}
 
-	b.depthIndexBuilder.Add(pos, uint32(row.Depth))
+	if err := b.depthIndexBuilder.Add(pos, uint32(row.Depth)); err != nil {
+		return fmt.Errorf("add to depth index: %w", err)
+	}
 	if err := b.mphfBuilder.Add(row.Prefix, pos); err != nil {
 		return fmt.Errorf("add to MPHF builder: %w", err)
 	}
 
-	if err := b.objectCountW.WriteU64(row.Count); err != nil {
-		return fmt.Errorf("write object_count: %w", err)
+	if err := b.coreStatsW.Add(row.Count, row.TotalBytes, row.Depth); err != nil {
+		return fmt.Errorf("write core stats row: %w", err)
 	}
-	if err := b.totalBytesW.WriteU64(row.TotalBytes); err != nil {
-		return fmt.Errorf("write total_bytes: %w", err)
-	}
-	if err := b.depthW.WriteU32(uint32(row.Depth)); err != nil {
-		return fmt.Errorf("write depth: %w", err)
-	}
-
-	b.subtreeEnds = append(b.subtreeEnds, 0)
-	b.maxDepthInSubtrees = append(b.maxDepthInSubtrees, 0)
 
 	for tierID := range tiers.NumTiers {
 		if row.TierCounts[tierID] > 0 || row.TierBytes[tierID] > 0 {
-			b.presentTiers[tierID] = true
+			b.presentTiers[tierID] = struct{}{}
 		}
 	}
 
-	return b.writeTierStats(row)
+	if err := b.tierStatsRowW.Add(&row.TierCounts, &row.TierBytes); err != nil {
+		return fmt.Errorf("write tier stats row: %w", err)
+	}
+
+	return nil
 }
 
 // findCommonAncestorDepth finds the depth of the deepest common ancestor.
-func (b *IndexBuilder) findCommonAncestorDepth(prefix string, _ int) int {
+func (b *IndexBuilder) findCommonAncestorDepth(prefix string) int {
 	commonDepth := 0
 
 	for i := range len(b.stack) {
@@ -247,80 +229,13 @@ func (b *IndexBuilder) closeTopNode() error {
 	b.stack = b.stack[:len(b.stack)-1]
 
 	subtreeEnd := b.posCount - 1
-	b.subtreeEnds[top.pos] = subtreeEnd
-	b.maxDepthInSubtrees[top.pos] = top.maxDepthInSubtree
+	if err := b.coreStatsW.SetSubtree(top.pos, subtreeEnd, uint16(top.maxDepthInSubtree)); err != nil {
+		return fmt.Errorf("set subtree_end: %w", err)
+	}
 
 	if len(b.stack) > 0 {
 		if top.maxDepthInSubtree > b.stack[len(b.stack)-1].maxDepthInSubtree {
 			b.stack[len(b.stack)-1].maxDepthInSubtree = top.maxDepthInSubtree
-		}
-	}
-
-	return nil
-}
-
-// writeTierStats writes tier statistics for a row.
-func (b *IndexBuilder) writeTierStats(row *PrefixRow) error {
-	for tierID := range tiers.NumTiers {
-		_, hasCountWriter := b.tierCountWriters[tierID]
-		_, hasBytesWriter := b.tierBytesWriters[tierID]
-
-		if !hasCountWriter || !hasBytesWriter {
-			if row.TierCounts[tierID] == 0 && row.TierBytes[tierID] == 0 {
-				continue
-			}
-			if err := b.createTierWriter(tierID, row); err != nil {
-				return err
-			}
-		}
-
-		if countW, ok := b.tierCountWriters[tierID]; ok {
-			if err := countW.WriteU64(row.TierCounts[tierID]); err != nil {
-				return fmt.Errorf("write tier %d count: %w", tierID, err)
-			}
-		}
-		if bytesW, ok := b.tierBytesWriters[tierID]; ok {
-			if err := bytesW.WriteU64(row.TierBytes[tierID]); err != nil {
-				return fmt.Errorf("write tier %d bytes: %w", tierID, err)
-			}
-		}
-	}
-
-	return nil
-}
-
-// createTierWriter creates writers for a tier and backfills zeros for previous positions.
-func (b *IndexBuilder) createTierWriter(tierID tiers.ID, _ *PrefixRow) error {
-	tierDir := filepath.Join(b.outDir, "tier_stats")
-	if err := os.MkdirAll(tierDir, indexDirPerm); err != nil {
-		return fmt.Errorf("create tier_stats dir: %w", err)
-	}
-
-	mapping := tiers.NewMapping()
-	info := mapping.ByID(tierID)
-
-	countPath := filepath.Join(tierDir, info.FilePrefix+"_count.u64")
-	countW, err := format.NewArrayWriter(countPath, 8)
-	if err != nil {
-		return fmt.Errorf("create tier %s count writer: %w", info.Name, err)
-	}
-	b.tierCountWriters[tierID] = countW
-
-	bytesPath := filepath.Join(tierDir, info.FilePrefix+"_bytes.u64")
-	bytesW, err := format.NewArrayWriter(bytesPath, 8)
-	if err != nil {
-		countW.Close()
-
-		return fmt.Errorf("create tier %s bytes writer: %w", info.Name, err)
-	}
-	b.tierBytesWriters[tierID] = bytesW
-
-	for range b.posCount - 1 {
-		if err := countW.WriteU64(0); err != nil {
-			return fmt.Errorf("backfill tier %s count: %w", info.Name, err)
-		}
-		if err := bytesW.WriteU64(0); err != nil {
-			return fmt.Errorf("backfill tier %s bytes: %w", info.Name, err)
 		}
 	}
 
@@ -408,17 +323,11 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 		return fmt.Errorf("close remaining nodes: %w", err)
 	}
 
-	log.Debug().Msg("index builder: closing streaming writers")
+	log.Debug().
+		Int("prefix_count", b.coreStatsW.Count()).
+		Msg("index builder: finalizing core stats + tier stats files")
 
 	if err := b.closeStreamingWriters(); err != nil {
-		return err
-	}
-
-	log.Debug().
-		Int("prefix_count", len(b.subtreeEnds)).
-		Msg("index builder: writing subtree_end array")
-
-	if err := b.writeSubtreeArrays(); err != nil {
 		return err
 	}
 
@@ -459,63 +368,18 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	return nil
 }
 
-// closeStreamingWriters closes all streaming array writers.
+// closeStreamingWriters finalizes the row-major core stats + tier
+// stats files. Both leave their final files in place at the index
+// dir; no rename / temp-promote dance.
 func (b *IndexBuilder) closeStreamingWriters() error {
-	if err := b.objectCountW.Close(); err != nil {
-		return fmt.Errorf("close object_count: %w", err)
+	if err := b.coreStatsW.Finalize(); err != nil {
+		return fmt.Errorf("finalize core stats: %w", err)
 	}
-	if err := b.totalBytesW.Close(); err != nil {
-		return fmt.Errorf("close total_bytes: %w", err)
+	b.coreStatsW = nil
+	if err := b.tierStatsRowW.Close(); err != nil {
+		return fmt.Errorf("close tier stats row: %w", err)
 	}
-	if err := b.depthW.Close(); err != nil {
-		return fmt.Errorf("close depth: %w", err)
-	}
-
-	for tierID, w := range b.tierCountWriters {
-		if err := w.Close(); err != nil {
-			return fmt.Errorf("close tier %d count: %w", tierID, err)
-		}
-	}
-	for tierID, w := range b.tierBytesWriters {
-		if err := w.Close(); err != nil {
-			return fmt.Errorf("close tier %d bytes: %w", tierID, err)
-		}
-	}
-
-	return nil
-}
-
-// writeSubtreeArrays writes subtree_end and max_depth_in_subtree arrays.
-func (b *IndexBuilder) writeSubtreeArrays() error {
-	subtreeEndW, err := format.NewArrayWriter(filepath.Join(b.outDir, "subtree_end.u64"), 8)
-	if err != nil {
-		return fmt.Errorf("create subtree_end writer: %w", err)
-	}
-	for _, v := range b.subtreeEnds {
-		if err := subtreeEndW.WriteU64(v); err != nil {
-			subtreeEndW.Close()
-
-			return fmt.Errorf("write subtree_end: %w", err)
-		}
-	}
-	if err := subtreeEndW.Close(); err != nil {
-		return fmt.Errorf("close subtree_end: %w", err)
-	}
-
-	maxDepthW, err := format.NewArrayWriter(filepath.Join(b.outDir, "max_depth_in_subtree.u32"), 4)
-	if err != nil {
-		return fmt.Errorf("create max_depth_in_subtree writer: %w", err)
-	}
-	for _, v := range b.maxDepthInSubtrees {
-		if err := maxDepthW.WriteU32(v); err != nil {
-			maxDepthW.Close()
-
-			return fmt.Errorf("write max_depth_in_subtree: %w", err)
-		}
-	}
-	if err := maxDepthW.Close(); err != nil {
-		return fmt.Errorf("close max_depth_in_subtree: %w", err)
-	}
+	b.tierStatsRowW = nil
 
 	return nil
 }
@@ -541,10 +405,7 @@ func (b *IndexBuilder) writeTierManifest() error {
 	if len(b.presentTiers) == 0 {
 		return nil
 	}
-	presentTierList := make([]tiers.ID, 0, len(b.presentTiers))
-	for tierID := range b.presentTiers {
-		presentTierList = append(presentTierList, tierID)
-	}
+	presentTierList := slices.Sorted(maps.Keys(b.presentTiers))
 	if err := tiers.WriteManifest(b.outDir, presentTierList); err != nil {
 		return fmt.Errorf("write tier manifest: %w", err)
 	}
@@ -552,22 +413,10 @@ func (b *IndexBuilder) writeTierManifest() error {
 	return nil
 }
 
-// Count returns the number of prefixes processed.
 func (b *IndexBuilder) Count() uint64 {
 	return b.posCount
 }
 
-// MaxDepth returns the maximum depth encountered.
 func (b *IndexBuilder) MaxDepth() uint32 {
 	return b.maxDepth
-}
-
-// PresentTiers returns the tier IDs that have data.
-func (b *IndexBuilder) PresentTiers() []tiers.ID {
-	result := make([]tiers.ID, 0, len(b.presentTiers))
-	for tierID := range b.presentTiers {
-		result = append(result, tierID)
-	}
-
-	return result
 }

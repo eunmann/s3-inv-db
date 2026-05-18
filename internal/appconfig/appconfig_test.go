@@ -103,7 +103,7 @@ func TestPickString_PrecedenceOrder(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := appconfig.PickString(tc.flagVal, tc.explicit, tc.cfg)
+			got := appconfig.Pick(tc.flagVal, tc.explicit, tc.cfg)
 			if got != tc.want {
 				t.Errorf("PickString = %q, want %q", got, tc.want)
 			}
@@ -113,13 +113,13 @@ func TestPickString_PrecedenceOrder(t *testing.T) {
 
 func TestPickBool_PrecedenceOrder(t *testing.T) {
 	tr := true
-	if got := appconfig.PickBool(false, true, &tr); got != false {
+	if got := appconfig.Pick(false, true, &tr); got != false {
 		t.Errorf("explicit false flag should override config true, got %v", got)
 	}
-	if got := appconfig.PickBool(false, false, &tr); got != true {
+	if got := appconfig.Pick(false, false, &tr); got != true {
 		t.Errorf("non-explicit flag should pick up config true, got %v", got)
 	}
-	if got := appconfig.PickBool(true, false, nil); got != true {
+	if got := appconfig.Pick(true, false, nil); got != true {
 		t.Errorf("env-default true should win when no config, got %v", got)
 	}
 }

@@ -2,9 +2,8 @@
 
 package sysmem
 
-// totalSystemMemory returns a fallback for unsupported platforms.
-// Returns false to indicate the value is not reliable.
-func totalSystemMemory() (uint64, bool) {
-	// On unsupported platforms, return 0 to trigger the default fallback
-	return 0, false
-}
+// totalSystemMemory has no implementation on unsupported platforms.
+func totalSystemMemory() (uint64, bool) { return 0, false }
+
+// cgroupMemoryMax is Linux-only.
+func cgroupMemoryMax() (uint64, bool) { return 0, false }

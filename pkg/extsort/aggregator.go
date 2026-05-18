@@ -2,7 +2,6 @@ package extsort
 
 import (
 	"runtime"
-	"sync"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -14,7 +13,7 @@ import (
 // use multiple aggregators or external synchronization.
 type Aggregator struct {
 	prefixes       map[string]*PrefixStats
-	statsPool      sync.Pool
+	statsPool      *typedPool[PrefixStats]
 	maxDepth       int
 	objectCount    int64
 	bytesProcessed int64
@@ -30,13 +29,9 @@ func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 	}
 
 	return &Aggregator{
-		prefixes: make(map[string]*PrefixStats, initialCapacity),
-		statsPool: sync.Pool{
-			New: func() any {
-				return &PrefixStats{}
-			},
-		},
-		maxDepth: maxDepth,
+		prefixes:  make(map[string]*PrefixStats, initialCapacity),
+		statsPool: newTypedPool(func() *PrefixStats { return &PrefixStats{} }),
+		maxDepth:  maxDepth,
 	}
 }
 
@@ -65,71 +60,90 @@ func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 func (a *Aggregator) accumulate(prefix string, depth uint16, size uint64, tierID tiers.ID) {
 	stats, ok := a.prefixes[prefix]
 	if !ok {
-		poolObj := a.statsPool.Get()
-		stats, ok = poolObj.(*PrefixStats)
-		if !ok {
-			panic("statsPool contained unexpected type")
-		}
+		stats = a.statsPool.Get()
 		stats.Depth = depth
 		a.prefixes[prefix] = stats
 	}
 	stats.Add(size, tierID)
 }
 
-// PrefixCount returns the number of unique prefixes currently tracked.
 func (a *Aggregator) PrefixCount() int {
 	return len(a.prefixes)
 }
 
-// ObjectCount returns the total number of objects processed.
 func (a *Aggregator) ObjectCount() int64 {
 	return a.objectCount
 }
 
-// BytesProcessed returns the total bytes processed.
 func (a *Aggregator) BytesProcessed() int64 {
 	return a.bytesProcessed
 }
 
-// EstimatedMemoryUsage returns an approximate memory usage in bytes.
-// This is a rough estimate based on prefix count and average prefix length.
-//
-// Deprecated: This estimate is inaccurate. Use ShouldFlush() with actual
-// heap measurements instead.
+// EstimatedMemoryUsage returns the per-worker aggregator's approximate
+// in-memory footprint in bytes (~288 B/entry covering map overhead +
+// avg prefix string + PrefixStats). Undercounts by 2-3× vs runtime
+// reality; the heap-pressure safety check in ShouldWorkerFlush catches
+// that case.
 func (a *Aggregator) EstimatedMemoryUsage() int64 {
-	// Estimate per-prefix overhead:
-	// - Map entry: ~48 bytes (key pointer, value pointer, hash bucket)
-	// - Average prefix string: ~30 bytes
-	// - PrefixStats: ~(2 + 8 + 8 + 12*8 + 12*8) = ~210 bytes
-	// Total: ~288 bytes per prefix
-	//
-	// NOTE: This estimate is often 2-3x lower than actual usage due to:
-	// - Go map overhead being higher
-	// - String allocations being larger
-	// - Memory fragmentation
 	const bytesPerPrefix = 288
 
 	return int64(len(a.prefixes)) * bytesPerPrefix
 }
 
-// HeapAllocBytes returns the current heap allocation from runtime.
-// This provides ground-truth memory usage for making flush decisions.
-func HeapAllocBytes() uint64 {
+func heapInuseBytes() uint64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	return m.HeapAlloc
+	return m.HeapInuse
 }
 
-// ShouldFlush returns true if the aggregator should flush based on
-// actual heap usage approaching the given threshold.
-//
-// The threshold should be the maximum heap size allowed. We flush
-// when heap usage exceeds 80% of threshold to leave headroom.
-func ShouldFlush(heapThreshold uint64) bool {
-	current := HeapAllocBytes()
-	// Flush at 80% of threshold to leave headroom for flush operations
-	return current > (heapThreshold * 80 / 100)
+// DefaultAggregatorCap is the spill threshold when no GOMEMLIMIT is set.
+const DefaultAggregatorCap uint64 = 512 * 1024 * 1024
+
+// heapPressureRatio is the HeapInuse / GOMEMLIMIT fraction above which
+// any worker must spill regardless of its own size — the aggregator
+// is the pipeline's only flush valve.
+const heapPressureRatio = 0.85
+
+// AggregatorFractionOfLimit caps the aggregator share of GOMEMLIMIT;
+// the remainder is left for download / parse / merge / mmap.
+const AggregatorFractionOfLimit = 0.15
+
+// unsetMemoryLimit treats debug.SetMemoryLimit's math.MaxInt64 sentinel
+// (no GOMEMLIMIT configured) as unset.
+const unsetMemoryLimit int64 = 1 << 62
+
+// AggregatorCap returns the combined spill threshold for all workers.
+func AggregatorCap(memoryLimit int64) uint64 {
+	if memoryLimit <= 0 || memoryLimit >= unsetMemoryLimit {
+		return DefaultAggregatorCap
+	}
+
+	return uint64(float64(memoryLimit) * AggregatorFractionOfLimit)
+}
+
+func perWorkerAggregatorCap(memoryLimit int64, numWorkers int) uint64 {
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+
+	return AggregatorCap(memoryLimit) / uint64(numWorkers)
+}
+
+// ShouldWorkerFlush decides whether one worker's aggregator should
+// spill, given its own footprint, GOMEMLIMIT, and total worker count.
+// Each worker decides independently (no flush stampedes); a HeapInuse-
+// vs-limit pressure check is the safety valve.
+func ShouldWorkerFlush(workerAggBytes uint64, memoryLimit int64, numWorkers int) bool {
+	if workerAggBytes >= perWorkerAggregatorCap(memoryLimit, numWorkers) {
+		return true
+	}
+	if memoryLimit <= 0 {
+		return false
+	}
+	heapPressure := uint64(float64(memoryLimit) * heapPressureRatio)
+
+	return heapInuseBytes() >= heapPressure
 }
 
 // Drain extracts all prefixes from the aggregator and returns them as PrefixRows.
@@ -151,25 +165,10 @@ func (a *Aggregator) Drain() []*PrefixRow {
 		a.statsPool.Put(stats)
 	}
 
-	for k := range a.prefixes {
-		delete(a.prefixes, k)
-	}
+	clear(a.prefixes)
 
 	a.objectCount = 0
 	a.bytesProcessed = 0
 
 	return rows
-}
-
-// Clear resets the aggregator, returning all PrefixStats to the pool.
-func (a *Aggregator) Clear() {
-	for _, stats := range a.prefixes {
-		stats.Reset()
-		a.statsPool.Put(stats)
-	}
-	for k := range a.prefixes {
-		delete(a.prefixes, k)
-	}
-	a.objectCount = 0
-	a.bytesProcessed = 0
 }

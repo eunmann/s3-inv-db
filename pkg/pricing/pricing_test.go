@@ -1,6 +1,7 @@
 package pricing_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -226,92 +227,32 @@ func TestComputeMonthlyCost_ZeroBytes(t *testing.T) {
 	}
 }
 
-func TestComputeDetailedBreakdown(t *testing.T) {
-	pt := pricing.DefaultUSEast1Prices()
-
-	breakdown := []format.TierBreakdown{
-		{TierName: "STANDARD_IA", Bytes: 10 * 1024 * 1000, ObjectCount: 1000},
-		{TierName: "INTELLIGENT_TIERING_FREQUENT", Bytes: 1024 * 1024 * 100, ObjectCount: 100},
-		{TierName: "GLACIER", Bytes: 1024 * 1024 * 1024, ObjectCount: 500},
-	}
-
-	detailed := pricing.ComputeDetailedBreakdown(breakdown, pt)
-
-	if len(detailed) != 3 {
-		t.Fatalf("expected 3 entries, got %d", len(detailed))
-	}
-
-	for _, cb := range detailed {
-		if cb.TierName == "STANDARD_IA" {
-			if cb.MinSizePenalty == 0 {
-				t.Error("expected min size penalty for STANDARD_IA with small objects")
-			}
-			if cb.AvgObjectSizeBytes != 10*1024 {
-				t.Errorf("expected avg size 10KB, got %d", cb.AvgObjectSizeBytes)
-			}
-		}
-		if cb.TierName == "INTELLIGENT_TIERING_FREQUENT" {
-			if cb.MonitoringCost == 0 {
-				t.Error("expected monitoring cost for IT tier")
-			}
-		}
-		if cb.TierName == "GLACIER" {
-			if cb.GlacierOverhead == 0 {
-				t.Error("expected glacier overhead for GLACIER tier")
-			}
-		}
-	}
-}
-
-func TestTotalDollars(t *testing.T) {
-	result := pricing.CostResult{
-		TotalMicrodollars: 1_000_000,
-	}
-
-	if result.TotalDollars() != 1.0 {
-		t.Errorf("expected $1.00, got $%.2f", result.TotalDollars())
-	}
-}
-
-func TestPerTierDollars(t *testing.T) {
-	result := pricing.CostResult{
-		PerTierMicrodollars: map[string]uint64{
-			"STANDARD": 500_000,
-		},
-	}
-
-	dollars := result.PerTierDollars()
-	if dollars["STANDARD"] != 0.5 {
-		t.Errorf("expected $0.50, got $%.2f", dollars["STANDARD"])
-	}
-}
-
 func TestFormatCost(t *testing.T) {
 	tests := []struct {
 		name         string
-		microdollars uint64
 		want         string
+		microdollars uint64
 	}{
-		{"zero", 0, "$0.00"},
-		{"sub-penny, just-above-zero", 1, "<$0.01"},
-		{"sub-penny, just-below-cent", 9_999, "<$0.01"},
-		{"exactly one cent", 10_000, "$0.01"},
-		{"between cents rounds up", 10_001, "$0.02"},
-		{"$0.99", 990_000, "$0.99"},
-		{"$0.999 rounds up to $1.00", 999_000, "$1.00"},
-		{"$1 even", 1_000_000, "$1.00"},
-		{"$5.50", 5_500_000, "$5.50"},
-		{"$50.12 even", 50_120_000, "$50.12"},
-		{"$50.121 rounds to $50.13", 50_121_000, "$50.13"},
-		{"$999.99", 999_990_000, "$999.99"},
-		{"$1,000 -> $1.0K", 1_000_000_000, "$1.0K"},
-		{"$1,234 -> $1.2K", 1_234_000_000, "$1.2K"},
-		{"$1,250 -> $1.3K (round half up)", 1_250_000_000, "$1.3K"},
-		{"$12,500 -> $12.5K", 12_500_000_000, "$12.5K"},
-		{"$999,999 -> $1000.0K", 999_999_000_000, "$1000.0K"},
-		{"$1,000,000 -> $1.0M", 1_000_000_000_000, "$1.0M"},
-		{"$1,500,000 -> $1.5M", 1_500_000_000_000, "$1.5M"},
-		{"$1B -> $1.0B", 1_000_000_000_000_000, "$1.0B"},
+		{name: "zero", microdollars: 0, want: "$0.00"},
+		{name: "sub-penny, just-above-zero", microdollars: 1, want: "<$0.01"},
+		{name: "sub-penny, just-below-cent", microdollars: 9_999, want: "<$0.01"},
+		{name: "exactly one cent", microdollars: 10_000, want: "$0.01"},
+		{name: "between cents rounds up", microdollars: 10_001, want: "$0.02"},
+		{name: "$0.99", microdollars: 990_000, want: "$0.99"},
+		{name: "$0.999 rounds up to $1.00", microdollars: 999_000, want: "$1.00"},
+		{name: "$1 even", microdollars: 1_000_000, want: "$1.00"},
+		{name: "$5.50", microdollars: 5_500_000, want: "$5.50"},
+		{name: "$50.12 even", microdollars: 50_120_000, want: "$50.12"},
+		{name: "$50.121 rounds to $50.13", microdollars: 50_121_000, want: "$50.13"},
+		{name: "$999.99", microdollars: 999_990_000, want: "$999.99"},
+		{name: "$1,000 -> $1.0K", microdollars: 1_000_000_000, want: "$1.0K"},
+		{name: "$1,234 -> $1.2K", microdollars: 1_234_000_000, want: "$1.2K"},
+		{name: "$1,250 -> $1.3K (round half up)", microdollars: 1_250_000_000, want: "$1.3K"},
+		{name: "$12,500 -> $12.5K", microdollars: 12_500_000_000, want: "$12.5K"},
+		{name: "$999,999 -> $1000.0K", microdollars: 999_999_000_000, want: "$1000.0K"},
+		{name: "$1,000,000 -> $1.0M", microdollars: 1_000_000_000_000, want: "$1.0M"},
+		{name: "$1,500,000 -> $1.5M", microdollars: 1_500_000_000_000, want: "$1.5M"},
+		{name: "$1B -> $1.0B", microdollars: 1_000_000_000_000_000, want: "$1.0B"},
 	}
 
 	for _, tt := range tests {
@@ -324,7 +265,7 @@ func TestFormatCost(t *testing.T) {
 	}
 }
 
-func TestLoadSavePriceTable(t *testing.T) {
+func TestLoadPriceTable(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "prices.json")
 
@@ -336,9 +277,12 @@ func TestLoadSavePriceTable(t *testing.T) {
 		MonitoringPer1000Objects: 0.0025,
 		StandardPricePerGB:       0.023,
 	}
-
-	if err := pricing.SavePriceTable(path, original); err != nil {
-		t.Fatalf("SavePriceTable failed: %v", err)
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
 	}
 
 	loaded, err := pricing.LoadPriceTable(path)

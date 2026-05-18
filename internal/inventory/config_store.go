@@ -12,14 +12,14 @@ import (
 // configuration (source bucket + inventory name). Persisted in the
 // inventory_configs table so toggles survive restarts.
 type Config struct {
-	Source           string    `json:"source"`
-	Name             string    `json:"name"`
-	AutoLoad         bool      `json:"auto_load"`
-	RetentionCount   uint32    `json:"retention_count"`
-	PollFailureCount uint32    `json:"poll_failure_count,omitempty"`
 	PollBackoffUntil time.Time `json:"poll_backoff_until,omitzero"`
 	LastPolledAt     time.Time `json:"last_polled_at,omitzero"`
+	Source           string    `json:"source"`
+	Name             string    `json:"name"`
 	LastPollError    string    `json:"last_poll_error,omitempty"`
+	RetentionCount   uint32    `json:"retention_count"`
+	PollFailureCount uint32    `json:"poll_failure_count,omitempty"`
+	AutoLoad         bool      `json:"auto_load"`
 }
 
 // ConfigID is the natural key — "<source>/<name>" — for use in URLs

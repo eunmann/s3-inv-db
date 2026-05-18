@@ -20,8 +20,8 @@ var ErrStoreNotFound = errors.New("job not in store")
 
 // NewStore returns a Store backed by db. The schema must already be
 // migrated (see internal/migrate).
-func NewStore(db *sql.DB) (*Store, error) {
-	return &Store{db: db}, nil
+func NewStore(db *sql.DB) *Store {
+	return &Store{db: db}
 }
 
 // Upsert writes j by primary key. UpdatedAt is set to time.Now().

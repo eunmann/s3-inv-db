@@ -2,16 +2,20 @@ package extsort
 
 import (
 	"errors"
+	"fmt"
 	"io"
 )
 
 // MergeIterator provides a k-way merge of sorted run files.
 // It reads from multiple run files and yields PrefixRows in globally sorted order,
 // automatically merging duplicates (same prefix from different runs).
+//
+// Readers use the RunReader interface so both compressed and raw run
+// files work uniformly.
 type MergeIterator struct {
-	readers []*RunFileReader
-	heap    typedMergeHeap
 	err     error
+	readers []RunReader
+	heap    typedMergeHeap
 }
 
 // mergeItem represents an item in the merge heap.
@@ -88,16 +92,17 @@ func (h *typedMergeHeap) siftDown(i int) {
 	}
 }
 
-// NewMergeIterator creates a merge iterator from multiple run file paths.
+// NewMergeIterator creates a merge iterator from multiple run file
+// paths, auto-detecting compressed vs raw via OpenRunFileAuto.
 // The caller is responsible for calling Close() to release resources.
 func NewMergeIterator(paths []string, bufferSize int) (*MergeIterator, error) {
 	if len(paths) == 0 {
 		return &MergeIterator{}, nil
 	}
 
-	readers := make([]*RunFileReader, 0, len(paths))
+	readers := make([]RunReader, 0, len(paths))
 	for _, path := range paths {
-		r, err := OpenRunFile(path, bufferSize)
+		r, err := OpenRunFileAuto(path, bufferSize)
 		if err != nil {
 			for _, opened := range readers {
 				opened.Close()
@@ -108,12 +113,6 @@ func NewMergeIterator(paths []string, bufferSize int) (*MergeIterator, error) {
 		readers = append(readers, r)
 	}
 
-	return NewMergeIteratorFromReaders(readers)
-}
-
-// NewMergeIteratorFromReaders creates a merge iterator from existing readers.
-// Takes ownership of the readers; they will be closed when the iterator is closed.
-func NewMergeIteratorFromReaders(readers []*RunFileReader) (*MergeIterator, error) {
 	m := &MergeIterator{
 		readers: readers,
 		heap:    typedMergeHeap{items: make([]mergeItem, 0, len(readers))},
@@ -127,7 +126,7 @@ func NewMergeIteratorFromReaders(readers []*RunFileReader) (*MergeIterator, erro
 		if err != nil {
 			m.Close()
 
-			return nil, err
+			return nil, fmt.Errorf("seed reader %d: %w", i, err)
 		}
 		m.heap.push(mergeItem{row: row, readerIdx: i})
 	}
@@ -174,14 +173,17 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 func (m *MergeIterator) advanceReader(idx int) error {
 	row, err := m.readers[idx].Read()
 	if err != nil {
-		return err
+		if errors.Is(err, io.EOF) {
+			return io.EOF
+		}
+
+		return fmt.Errorf("advance reader %d: %w", idx, err)
 	}
 	m.heap.push(mergeItem{row: row, readerIdx: idx})
 
 	return nil
 }
 
-// Remaining returns an estimate of remaining rows to process.
 func (m *MergeIterator) Remaining() uint64 {
 	var total uint64
 	for _, r := range m.readers {

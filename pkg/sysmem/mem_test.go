@@ -43,16 +43,6 @@ func TestTotal(t *testing.T) {
 		result.Reliable)
 }
 
-func TestTotalBytes(t *testing.T) {
-	bytes := sysmem.TotalBytes()
-
-	// Should match Total().TotalBytes
-	result := sysmem.Total()
-	if bytes != result.TotalBytes {
-		t.Errorf("sysmem.TotalBytes() = %d, Total().TotalBytes = %d", bytes, result.TotalBytes)
-	}
-}
-
 func TestDefaultMemoryBytes(t *testing.T) {
 	// Default should be 4GB
 	expected := uint64(4 * 1024 * 1024 * 1024)

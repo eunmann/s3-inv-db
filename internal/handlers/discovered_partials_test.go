@@ -2,7 +2,6 @@ package handlers_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,11 +12,10 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
-	"github.com/eunmann/s3-inv-db/internal/migrate"
 	"github.com/eunmann/s3-inv-db/internal/templates"
+	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5"
-	_ "modernc.org/sqlite"
 )
 
 // Sentinel errors for fake S3 / build failures used across multiple
@@ -30,11 +28,11 @@ var (
 )
 
 type fakeDiscoverer struct {
-	listResp []inventory.Inventory
 	listErr  error
-	findResp inventory.Inventory
 	findErr  error
+	findResp inventory.Inventory
 	bucket   string
+	listResp []inventory.Inventory
 }
 
 func (f *fakeDiscoverer) List(context.Context) ([]inventory.Inventory, error) {
@@ -47,12 +45,8 @@ func (f *fakeDiscoverer) Find(_ context.Context, _, _, _ string) (inventory.Inve
 func (f *fakeDiscoverer) Bucket() string { return f.bucket }
 
 type fakeBuilder struct {
-	buildResp string
 	buildErr  error
-}
-
-func (f *fakeBuilder) Build(_ context.Context, _, _, _, _ string) (string, error) {
-	return f.buildResp, f.buildErr
+	buildResp string
 }
 
 func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _, _ string, _ func(string, int64, int64)) (string, error) {
@@ -68,23 +62,13 @@ func newDiscoveredHandlers(t *testing.T, disc inventory.Discoverer, ldr inventor
 		t.Fatalf("renderer: %v", err)
 	}
 
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := migrate.Apply(db); err != nil {
-		t.Fatalf("migrate.Apply: %v", err)
-	}
+	db := dbtest.OpenMemDB(t)
 	invStore, err := inventory.NewStore(db)
 	if err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)
 	}
 	mgr.SetStore(invStore)
-	jobStore, err := jobs.NewStore(db)
-	if err != nil {
-		t.Fatalf("jobs.NewStore: %v", err)
-	}
+	jobStore := jobs.NewStore(db)
 	bus := jobs.NewBus(8)
 	jobMgr := jobs.NewManager(jobStore, bus)
 
@@ -147,7 +131,7 @@ func TestLoadDiscoveredRowPartial_FindError(t *testing.T) {
 
 func TestLoadDiscoveredRowPartial_NoCompletedRuns(t *testing.T) {
 	h := newDiscoveredHandlers(t,
-		&fakeDiscoverer{findResp: inventory.Inventory{SourceBucket: "b", InventoryName: "i"}},
+		&fakeDiscoverer{findResp: inventory.Inventory{SourceBucket: "b", Name: "i"}},
 		&fakeBuilder{},
 	)
 	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
@@ -163,7 +147,7 @@ func TestLoadDiscoveredRowPartial_NoCompletedRuns(t *testing.T) {
 }
 
 func TestLoadDiscoveredRowPartial_AcceptsBuildError(t *testing.T) {
-	disc := inventory.Inventory{SourceBucket: "b", InventoryName: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
+	disc := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
 		&fakeBuilder{buildErr: errFakeNetwork},
@@ -187,7 +171,7 @@ func TestInventoriesPage_PlaceholderRowOmitsHTMXRefresh(t *testing.T) {
 	// empty URL segments — those produce /partials/discovered/b/i// which
 	// 404s, and SSE topics like "row-b/i/" never fire.
 	h := newDiscoveredHandlers(t,
-		&fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", InventoryName: "i"}}, bucket: "dst"},
+		&fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}, bucket: "dst"},
 		&fakeBuilder{},
 	)
 	req := httptest.NewRequest(http.MethodGet, "/inventories", http.NoBody)
@@ -299,8 +283,8 @@ func TestListDiscoveredAPI_DiscovererErrorReturns502(t *testing.T) {
 func TestListDiscoveredAPI_SuccessReturnsJSON(t *testing.T) {
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{listResp: []inventory.Inventory{
-			{SourceBucket: "b1", InventoryName: "i1", Run: "2026-05-13T03-00Z"},
-			{SourceBucket: "b1", InventoryName: "i2"},
+			{SourceBucket: "b1", Name: "i1", Run: "2026-05-13T03-00Z"},
+			{SourceBucket: "b1", Name: "i2"},
 		}},
 		&fakeBuilder{},
 	)

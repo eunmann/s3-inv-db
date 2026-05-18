@@ -11,74 +11,53 @@ package extsort
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"runtime"
 	"slices"
 	"strings"
 
-	"github.com/eunmann/s3-inv-db/pkg/membudget"
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-// MaxTiers is the maximum number of storage tiers supported.
-// This matches tiers.NumTiers and is used for fixed-size arrays to avoid map allocations.
+// MaxTiers mirrors tiers.NumTiers as an int so PrefixRow / PrefixStats
+// can declare fixed-size arrays for tier data (avoids map allocs).
 const MaxTiers = int(tiers.NumTiers)
 
-// RowIterator provides sequential access to sorted PrefixRows.
-// This interface is implemented by both MergeIterator and singleRunIterator.
+// RowIterator yields PrefixRows in sorted order; Next returns io.EOF
+// once exhausted. Remaining returns an upper-bound row count (0 if
+// unknown) so the IndexBuilder can pre-size its arrays.
 type RowIterator interface {
-	// Next returns the next PrefixRow in sorted order.
-	// Returns io.EOF when all rows have been consumed.
 	Next() (*PrefixRow, error)
+	Remaining() uint64
 }
 
-// PrefixRow represents a single prefix with its aggregated statistics.
-// This is the primary data type passed through the external sort pipeline.
-//
-// The struct uses fixed-size arrays for tier data to avoid map allocations
-// in hot paths. Tier index i corresponds to tiers.ID(i).
+// PrefixRow is the primary unit passed through the external sort.
+// Field order is tuned for alignment (Depth at the end avoids 6 bytes
+// of inter-field padding at billion-row scale). Tier index i ↔ tiers.ID(i).
 type PrefixRow struct {
-	// Prefix is the full prefix string (e.g., "data/2024/01/").
-	Prefix string
-
-	// Depth is the directory depth (number of '/' characters).
-	// Uses uint16 to save memory (max depth of 65535 is more than sufficient).
-	Depth uint16
-
-	// Count is the total number of objects under this prefix.
-	Count uint64
-
-	// TotalBytes is the total size in bytes of all objects under this prefix.
+	Prefix     string
+	Count      uint64
 	TotalBytes uint64
-
-	// TierCounts holds object counts per storage tier.
-	// Index i corresponds to tiers.ID(i).
 	TierCounts [MaxTiers]uint64
-
-	// TierBytes holds byte counts per storage tier.
-	// Index i corresponds to tiers.ID(i).
-	TierBytes [MaxTiers]uint64
+	TierBytes  [MaxTiers]uint64
+	Depth      uint16
 }
 
-// Reset clears all fields of the PrefixRow for reuse.
-// This is used with sync.Pool to avoid allocations.
+// Reset clears the row for reuse via sync.Pool.
 func (r *PrefixRow) Reset() {
 	r.Prefix = ""
 	r.Depth = 0
 	r.Count = 0
 	r.TotalBytes = 0
-	for i := range r.TierCounts {
-		r.TierCounts[i] = 0
-	}
-	for i := range r.TierBytes {
-		r.TierBytes[i] = 0
-	}
+	clear(r.TierCounts[:])
+	clear(r.TierBytes[:])
 }
 
-// Merge adds the statistics from another PrefixRow into this one.
-// The Prefix and Depth fields are not modified; only counts and bytes are summed.
-// This is used during the k-way merge phase to combine duplicate prefixes.
+// Merge sums counts and bytes from other into r. Prefix and Depth
+// are not modified — only the per-prefix stats accumulate.
 func (r *PrefixRow) Merge(other *PrefixRow) {
 	r.Count += other.Count
 	r.TotalBytes += other.TotalBytes
@@ -88,20 +67,6 @@ func (r *PrefixRow) Merge(other *PrefixRow) {
 	for i := range r.TierBytes {
 		r.TierBytes[i] += other.TierBytes[i]
 	}
-}
-
-// Clone creates a deep copy of the PrefixRow.
-func (r *PrefixRow) Clone() *PrefixRow {
-	clone := &PrefixRow{
-		Prefix:     r.Prefix,
-		Depth:      r.Depth,
-		Count:      r.Count,
-		TotalBytes: r.TotalBytes,
-	}
-	copy(clone.TierCounts[:], r.TierCounts[:])
-	copy(clone.TierBytes[:], r.TierBytes[:])
-
-	return clone
 }
 
 // readPrefixRowRecord reads a single PrefixRow from a reader using the common binary format.
@@ -117,7 +82,7 @@ func readPrefixRowRecord(reader io.Reader, buf *[]byte) (*PrefixRow, error) {
 func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) (*PrefixRow, error) {
 	var lenBuf [4]byte
 	if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
 
@@ -176,25 +141,59 @@ func SortPrefixRows(rows []*PrefixRow) {
 	})
 }
 
-// PrefixStats holds aggregated statistics for a single prefix during the
-// in-memory aggregation phase. All counters are uint64 because at
-// billion-object / PB-scale buckets, a single tier of the root prefix can
-// exceed 2^32. Smaller width risks silent overflow on real workloads.
+// encodePrefixRowRecord serialises one PrefixRow into buf using the
+// shared on-the-wire layout (length-prefixed string + fixed fields +
+// tier arrays). The caller passes &buf so the slice can be grown
+// in place across many calls; the encoded byte length is returned so
+// callers can track uncompressed size or pass a partial slice to
+// the underlying writer.
+//
+// Both RunFileWriter and CompressedRunWriter delegate to this — the
+// binary format is identical and only the I/O layer differs.
+func encodePrefixRowRecord(buf *[]byte, row *PrefixRow) int {
+	prefixLen := len(row.Prefix)
+	recordSize := 4 + prefixLen + 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
+	if len(*buf) < recordSize {
+		*buf = make([]byte, recordSize*2)
+	}
+	b := *buf
+	offset := 0
+
+	binary.LittleEndian.PutUint32(b[offset:], uint32(prefixLen))
+	offset += 4
+	copy(b[offset:], row.Prefix)
+	offset += prefixLen
+
+	binary.LittleEndian.PutUint16(b[offset:], row.Depth)
+	offset += 2
+
+	binary.LittleEndian.PutUint64(b[offset:], row.Count)
+	offset += 8
+
+	binary.LittleEndian.PutUint64(b[offset:], row.TotalBytes)
+	offset += 8
+
+	for i := range MaxTiers {
+		binary.LittleEndian.PutUint64(b[offset:], row.TierCounts[i])
+		offset += 8
+	}
+	for i := range MaxTiers {
+		binary.LittleEndian.PutUint64(b[offset:], row.TierBytes[i])
+		offset += 8
+	}
+
+	return offset
+}
+
+// PrefixStats holds aggregated stats for one prefix during the
+// in-memory aggregation phase. Uint64 counters because a single tier
+// of the root prefix can exceed 2^32 at PB scale.
 type PrefixStats struct {
-	// Depth is the directory depth.
-	Depth uint16
-
-	// Count is the total number of objects under this prefix.
-	Count uint64
-
-	// TotalBytes is the total size in bytes.
+	Count      uint64
 	TotalBytes uint64
-
-	// TierCounts holds object counts per storage tier.
 	TierCounts [MaxTiers]uint64
-
-	// TierBytes holds byte counts per storage tier.
-	TierBytes [MaxTiers]uint64
+	TierBytes  [MaxTiers]uint64
+	Depth      uint16
 }
 
 // Reset clears all fields of the PrefixStats for reuse.
@@ -202,12 +201,8 @@ func (s *PrefixStats) Reset() {
 	s.Depth = 0
 	s.Count = 0
 	s.TotalBytes = 0
-	for i := range s.TierCounts {
-		s.TierCounts[i] = 0
-	}
-	for i := range s.TierBytes {
-		s.TierBytes[i] = 0
-	}
+	clear(s.TierCounts[:])
+	clear(s.TierBytes[:])
 }
 
 // Add accumulates statistics from a single object.
@@ -232,181 +227,76 @@ func (s *PrefixStats) ToPrefixRow(prefix string) *PrefixRow {
 	return row
 }
 
-// Config holds configuration for the external sort pipeline.
+// Config holds pipeline configuration. Grouped into substructs by
+// concern: S3 download, Merge concurrency, Observe (progress+events).
 type Config struct {
-	// TempDir is the directory for temporary run files.
-	// If empty, os.TempDir() is used.
+	Observe ObserveConfig
 	TempDir string
-
-	// MemoryBudget is the central memory budget manager for the pipeline.
-	// If nil, a default budget based on system RAM is created.
-	MemoryBudget *membudget.Budget
-
-	// MemoryThreshold is the approximate memory limit (in bytes) for the
-	// in-memory prefix aggregator before flushing to a run file.
-	//
-	// Deprecated: Use MemoryBudget instead. This field is kept for backward
-	// compatibility but is ignored when MemoryBudget is set.
-	MemoryThreshold int64
-
-	// RunFileBufferSize is the buffer size for reading/writing run files.
-	// Default: 4MB.
-	//
-	// Deprecated: Buffer sizes are now calculated from MemoryBudget.
-	// This field is kept for backward compatibility.
-	RunFileBufferSize int
-
-	// S3DownloadConcurrency is the number of concurrent S3 chunk downloads.
-	// Default: 4.
-	S3DownloadConcurrency int
-
-	// S3DownloadPartConcurrency is the number of concurrent parts for each S3 download.
-	// Used by the S3 Download Manager for parallel range downloads within a single object.
-	// Default: max(4, NumCPU).
-	S3DownloadPartConcurrency int
-
-	// S3DownloadPartSize is the size of each part for parallel S3 downloads.
-	// Larger values may improve throughput but use more memory.
-	// Default: 16MB.
-	S3DownloadPartSize int64
-
-	// ParseConcurrency is the number of concurrent CSV parsing goroutines.
-	// Default: 4.
-	ParseConcurrency int
-
-	// IndexWriteConcurrency is the number of concurrent index file writers.
-	// Default: 4.
-	IndexWriteConcurrency int
-
-	// MaxDepth is the maximum prefix depth to track.
-	// Prefixes deeper than this are not aggregated.
-	// Default: 0 (unlimited).
-	MaxDepth int
-
-	// NumMergeWorkers is the number of concurrent merge workers.
-	// Default: max(1, NumCPU/2).
-	NumMergeWorkers int
-
-	// MaxMergeFanIn is the maximum number of runs merged in a single worker.
-	// Higher values reduce merge rounds but increase memory per worker.
-	// Default: 8.
-	MaxMergeFanIn int
-
-	// UseCompressedRuns enables compression for intermediate run files.
-	// This significantly reduces disk I/O and storage at minimal CPU cost.
-	// Default: true.
-	UseCompressedRuns bool
-
-	// UseSegmentEncoding enables segment dictionary compression for prefix storage.
-	// When true, prefixes are split by "/" and deduplicated into a segment dictionary.
-	// This reduces storage when prefixes share common path components.
-	UseSegmentEncoding bool
-
-	// OnProgress is invoked on every phase transition and roughly once
-	// per ingest chunk. done/total are zero when only the stage label
-	// changed; otherwise they describe quantitative progress within
-	// the current stage (units vary — chunks during ingest). Optional.
-	OnProgress func(stage string, done, total int64)
+	Merge   MergeConfig
+	S3      S3Config
+	// PrefixDictionary toggles dictionary-encoded prefix storage
+	// (smaller blob, slower prefix-string reads). Default true.
+	PrefixDictionary bool
+	MaxDepth         int
 }
 
-// DefaultConfig returns a Config with sensible defaults based on the current machine.
-// Concurrency is scaled with CPU count, and memory budget is set to 50% of system RAM.
+// S3Config tunes the S3 download manager.
+type S3Config struct {
+	// DownloadPartConcurrency: parallel range downloads per object.
+	// Default max(2, NumCPU/4).
+	DownloadPartConcurrency int
+
+	// DownloadPartSize per part. Default 16 MiB.
+	DownloadPartSize int64
+}
+
+// MergeConfig tunes the K-way merge phase.
+type MergeConfig struct {
+	// NumWorkers: concurrent merge workers. Default max(NumCPU/2, 1).
+	NumWorkers int
+
+	// MaxFanIn: runs merged per worker. Higher = fewer rounds, more
+	// memory per worker. Default 16.
+	MaxFanIn int
+
+	// UseCompressedRuns enables zstd on intermediate run files. Default true.
+	UseCompressedRuns bool
+}
+
+// ObserveConfig wires optional progress + event consumers.
+type ObserveConfig struct {
+	// OnProgress fires on phase transitions and once per ingest chunk.
+	// done/total are zero on transitions.
+	OnProgress func(stage string, done, total int64)
+
+	// EventBus, when non-nil, receives structured events. Caller owns
+	// its lifecycle; the pipeline does not Close it.
+	EventBus *events.Bus
+}
+
+// DefaultConfig returns a Config with sensible defaults based on the
+// current machine. Concurrency is derived from runtime.NumCPU per the
+// pipeline's "throughput scales with instance size" contract; the
+// process memory limit is governed by GOMEMLIMIT (see
+// sysmem.ApplyMemoryLimit) rather than a fractional partition here.
 func DefaultConfig() Config {
 	numCPU := runtime.NumCPU()
-
-	// Scale concurrency with CPU count, with reasonable bounds
-	concurrency := numCPU
-	if concurrency < 2 {
-		concurrency = 2
-	} else if concurrency > 16 {
-		concurrency = 16
-	}
-
-	// Part concurrency for parallel range downloads within a single object
-	partConcurrency := min(max(numCPU, 4), 16)
-
-	// Merge workers scale with CPU but cap lower to avoid memory pressure
-	mergeWorkers := min(max(numCPU/2, 1), 8)
+	const minPartConcurrency = 2
+	partConcurrency := max(numCPU/4, minPartConcurrency)
+	mergeWorkers := max(numCPU/2, 1)
 
 	return Config{
-		TempDir:                   "",
-		MemoryBudget:              membudget.NewFromSystemRAM(),
-		RunFileBufferSize:         4 * 1024 * 1024, // 4MB
-		S3DownloadConcurrency:     concurrency,
-		S3DownloadPartConcurrency: partConcurrency,
-		S3DownloadPartSize:        16 * 1024 * 1024, // 16MB
-		ParseConcurrency:          concurrency,
-		IndexWriteConcurrency:     concurrency,
-		MaxDepth:                  0, // unlimited
-		NumMergeWorkers:           mergeWorkers,
-		MaxMergeFanIn:             16, // Higher fan-in reduces merge rounds
-		UseCompressedRuns:         true,
+		TempDir:          "",
+		MaxDepth:         0,
+		PrefixDictionary: true,
+		S3: S3Config{
+			DownloadPartConcurrency: partConcurrency,
+			DownloadPartSize:        16 * 1024 * 1024,
+		},
+		Merge: MergeConfig{
+			NumWorkers:        mergeWorkers,
+			MaxFanIn:          16,
+			UseCompressedRuns: true,
+		},
 	}
-}
-
-// EnsureBudget ensures that Config has a valid MemoryBudget.
-// If MemoryBudget is nil, it creates one from system RAM.
-func (c *Config) EnsureBudget() {
-	if c.MemoryBudget == nil {
-		c.MemoryBudget = membudget.NewFromSystemRAM()
-	}
-}
-
-// AggregatorMemoryThreshold returns the memory threshold for the aggregator.
-// This is the budget's aggregator allocation (50% of total budget).
-func (c *Config) AggregatorMemoryThreshold() int64 {
-	c.EnsureBudget()
-
-	return int64(c.MemoryBudget.AggregatorBudget())
-}
-
-// RunBufferBudget returns the total budget for run file buffers.
-func (c *Config) RunBufferBudget() int64 {
-	c.EnsureBudget()
-
-	return int64(c.MemoryBudget.RunBufferBudget())
-}
-
-// MergeBudget returns the total budget for merge phase operations.
-func (c *Config) MergeBudget() int64 {
-	c.EnsureBudget()
-
-	return int64(c.MemoryBudget.MergeBudget())
-}
-
-// IndexBuildBudget returns the total budget for index building.
-func (c *Config) IndexBuildBudget() int64 {
-	c.EnsureBudget()
-
-	return int64(c.MemoryBudget.IndexBuildBudget())
-}
-
-// S3DownloaderConfig returns the S3 downloader configuration derived from this Config.
-// Use this when creating an S3 client to ensure consistent configuration.
-func (c *Config) S3DownloaderConfig() S3DownloaderConfig {
-	cfg := S3DownloaderConfig{
-		TempDir: c.TempDir,
-	}
-
-	if c.S3DownloadPartConcurrency > 0 {
-		cfg.Concurrency = c.S3DownloadPartConcurrency
-	} else {
-		cfg.Concurrency = DefaultConfig().S3DownloadPartConcurrency
-	}
-
-	if c.S3DownloadPartSize > 0 {
-		cfg.PartSize = c.S3DownloadPartSize
-	} else {
-		cfg.PartSize = DefaultConfig().S3DownloadPartSize
-	}
-
-	return cfg
-}
-
-// S3DownloaderConfig mirrors s3fetch.DownloaderConfig to avoid import cycles.
-// This is used to configure the S3 client with the pipeline's settings.
-type S3DownloaderConfig struct {
-	Concurrency int
-	PartSize    int64
-	TempDir     string
 }

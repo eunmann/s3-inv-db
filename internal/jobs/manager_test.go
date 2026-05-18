@@ -9,22 +9,14 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
-	"github.com/eunmann/s3-inv-db/internal/migrate"
-	_ "modernc.org/sqlite"
+	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
 )
 
 var errBoom = errors.New("boom")
 
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := migrate.Apply(db); err != nil {
-		t.Fatalf("migrate.Apply: %v", err)
-	}
+	db := dbtest.OpenMemDB(t)
 	if _, err := inventory.NewStore(db); err != nil {
 		t.Fatalf("inventory.NewStore: %v", err)
 	}
@@ -42,10 +34,7 @@ func newManager(t *testing.T) (*jobs.Manager, *jobs.Store, *jobs.Bus) {
 	if err := invStore.Upsert(t.Context(), inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
 		t.Fatalf("seed inventory: %v", err)
 	}
-	store, err := jobs.NewStore(db)
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
+	store := jobs.NewStore(db)
 	bus := jobs.NewBus(16)
 
 	return jobs.NewManager(store, bus), store, bus
@@ -162,10 +151,7 @@ func TestStore_MarkAborted(t *testing.T) {
 	if err := invStore.Upsert(t.Context(), inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
 		t.Fatalf("seed inventory: %v", err)
 	}
-	store, err := jobs.NewStore(db)
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
+	store := jobs.NewStore(db)
 	for _, st := range []jobs.State{jobs.StateRunning, jobs.StateQueued, jobs.StateSucceeded} {
 		if err := store.Upsert(t.Context(), jobs.Job{ID: jobs.ID(st), InventoryID: "src/inv1", Kind: jobs.KindBuild, State: st}); err != nil {
 			t.Fatalf("upsert: %v", err)
@@ -199,7 +185,7 @@ func TestStore_MarkAborted(t *testing.T) {
 func TestManager_SubmitAfterShutdown(t *testing.T) {
 	mgr, _, _ := newManager(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	if err := mgr.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
@@ -228,7 +214,7 @@ func TestManager_ShutdownCancelsLiveJob(t *testing.T) {
 	}
 	<-started
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	if err := mgr.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)

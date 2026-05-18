@@ -38,9 +38,9 @@ const SmallObjectThresholdBytes uint64 = 128 * 1024
 
 // Info describes a storage tier.
 type Info struct {
-	ID         ID     `json:"id"`
 	Name       string `json:"name"`
 	FilePrefix string `json:"file"`
+	ID         ID     `json:"id"`
 }
 
 // AllTiers returns information about all supported tiers in tier-ID
@@ -48,27 +48,26 @@ type Info struct {
 // data immutable from outside the package and avoids a global.
 func AllTiers() []Info {
 	return []Info{
-		{Standard, "STANDARD", "standard"},
-		{StandardIA, "STANDARD_IA", "standard_ia"},
-		{OneZoneIA, "ONEZONE_IA", "onezone_ia"},
-		{GlacierIR, "GLACIER_IR", "glacier_ir"},
-		{GlacierFR, "GLACIER", "glacier_fr"},
-		{DeepArchive, "DEEP_ARCHIVE", "deep_archive"},
-		{ReducedRedundancy, "REDUCED_REDUNDANCY", "reduced_redundancy"},
-		{ITFrequent, "INTELLIGENT_TIERING_FREQUENT", "it_frequent"},
-		{ITInfrequent, "INTELLIGENT_TIERING_INFREQUENT", "it_infrequent"},
-		{ITArchiveInstant, "INTELLIGENT_TIERING_ARCHIVE_INSTANT", "it_archive_instant"},
-		{ITArchive, "INTELLIGENT_TIERING_ARCHIVE", "it_archive"},
-		{ITDeepArchive, "INTELLIGENT_TIERING_DEEP_ARCHIVE", "it_deep_archive"},
-		{ITFrequentSmall, "INTELLIGENT_TIERING_FREQUENT_SMALL", "it_frequent_small"},
+		{ID: Standard, Name: "STANDARD", FilePrefix: "standard"},
+		{ID: StandardIA, Name: "STANDARD_IA", FilePrefix: "standard_ia"},
+		{ID: OneZoneIA, Name: "ONEZONE_IA", FilePrefix: "onezone_ia"},
+		{ID: GlacierIR, Name: "GLACIER_IR", FilePrefix: "glacier_ir"},
+		{ID: GlacierFR, Name: "GLACIER", FilePrefix: "glacier_fr"},
+		{ID: DeepArchive, Name: "DEEP_ARCHIVE", FilePrefix: "deep_archive"},
+		{ID: ReducedRedundancy, Name: "REDUCED_REDUNDANCY", FilePrefix: "reduced_redundancy"},
+		{ID: ITFrequent, Name: "INTELLIGENT_TIERING_FREQUENT", FilePrefix: "it_frequent"},
+		{ID: ITInfrequent, Name: "INTELLIGENT_TIERING_INFREQUENT", FilePrefix: "it_infrequent"},
+		{ID: ITArchiveInstant, Name: "INTELLIGENT_TIERING_ARCHIVE_INSTANT", FilePrefix: "it_archive_instant"},
+		{ID: ITArchive, Name: "INTELLIGENT_TIERING_ARCHIVE", FilePrefix: "it_archive"},
+		{ID: ITDeepArchive, Name: "INTELLIGENT_TIERING_DEEP_ARCHIVE", FilePrefix: "it_deep_archive"},
+		{ID: ITFrequentSmall, Name: "INTELLIGENT_TIERING_FREQUENT_SMALL", FilePrefix: "it_frequent_small"},
 	}
 }
 
 // Mapping provides tier lookup and metadata.
 type Mapping struct {
-	Tiers         []Info
-	indexByName   map[string]ID
 	indexByS3Name map[string]ID
+	Tiers         []Info
 }
 
 // NewMapping creates a new tier mapping with all supported tiers.
@@ -76,14 +75,12 @@ func NewMapping() *Mapping {
 	all := AllTiers()
 	m := &Mapping{
 		Tiers:         make([]Info, len(all)),
-		indexByName:   make(map[string]ID),
 		indexByS3Name: make(map[string]ID),
 	}
 	copy(m.Tiers, all)
 
 	for _, t := range m.Tiers {
-		m.indexByName[t.Name] = t.ID
-		m.indexByS3Name[strings.ToUpper(t.Name)] = t.ID
+		m.indexByS3Name[t.Name] = t.ID
 	}
 
 	// Add INTELLIGENT_TIERING as alias for ITFrequent (default when no access tier specified).
@@ -168,8 +165,8 @@ func WriteManifest(dir string, presentTiers []ID) error {
 		return fmt.Errorf("marshal tier manifest: %w", err)
 	}
 
-	const tierManifestMode = 0o600
 	path := filepath.Join(dir, "tiers.json")
+	const tierManifestMode = 0o600
 	if err := os.WriteFile(path, data, tierManifestMode); err != nil {
 		return fmt.Errorf("write tier manifest: %w", err)
 	}

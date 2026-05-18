@@ -15,50 +15,26 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// Apply runs every pending up-migration against db. Idempotent.
+// Apply runs every pending up-migration against db. Idempotent. If the
+// schema is marked dirty from an interrupted prior run, the version is
+// force-cleared first — every up migration here is idempotent.
 func Apply(db *sql.DB) error {
 	m, err := newMigrator(db)
 	if err != nil {
 		return err
 	}
-	if err := recoverDirty(m); err != nil {
-		return err
+	switch version, dirty, vErr := m.Version(); {
+	case errors.Is(vErr, migrate.ErrNilVersion):
+		// fresh DB; nothing to recover
+	case vErr != nil:
+		return fmt.Errorf("read schema version: %w", vErr)
+	case dirty:
+		if err := m.Force(int(version)); err != nil {
+			return fmt.Errorf("clear dirty version %d: %w", version, err)
+		}
 	}
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("apply migrations: %w", err)
-	}
-
-	return nil
-}
-
-// recoverDirty clears the dirty flag if set. Safe because every up
-// migration is idempotent.
-func recoverDirty(m *migrate.Migrate) error {
-	version, dirty, err := m.Version()
-	if errors.Is(err, migrate.ErrNilVersion) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read schema version: %w", err)
-	}
-	if !dirty {
-		return nil
-	}
-	if err := m.Force(int(version)); err != nil {
-		return fmt.Errorf("clear dirty version %d: %w", version, err)
-	}
-
-	return nil
-}
-
-// Down rolls back the most recent steps migrations.
-func Down(db *sql.DB, steps int) error {
-	m, err := newMigrator(db)
-	if err != nil {
-		return err
-	}
-	if err := m.Steps(-steps); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return fmt.Errorf("roll back %d migrations: %w", steps, err)
 	}
 
 	return nil

@@ -3,11 +3,35 @@ package extsort
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"slices"
-	"strings"
+)
+
+// DefaultRunBufferSize is the default I/O buffer for run-file reader
+// and writer instances when the caller passes 0. Big enough to
+// amortise syscall overhead on sequential append/scan, small enough
+// that holding several per worker stays well under any memory cap.
+//
+// Exported so benches and integration tests can reuse the same default
+// without duplicating the literal across files.
+const DefaultRunBufferSize = 4 * 1024 * 1024
+
+// Sentinel errors for the extsort package. Wrap with %w when adding
+// context via fmt.Errorf so callers can match with errors.Is.
+var (
+	// ErrInvalidMagic indicates a run file has the wrong magic number.
+	ErrInvalidMagic = errors.New("invalid magic")
+	// ErrUnsupportedVersion indicates an unsupported run file format version.
+	ErrUnsupportedVersion = errors.New("unsupported run file version")
+	// ErrNotCompressed indicates the file is not compressed when a
+	// compressed reader is required.
+	ErrNotCompressed = errors.New("file is not compressed")
+	// ErrUnsupportedCompression indicates an unsupported compression type.
+	ErrUnsupportedCompression = errors.New("unsupported compression type")
+	// ErrNoInputPaths indicates a merge call received no input paths.
+	ErrNoInputPaths = errors.New("no input paths provided")
 )
 
 // RunFile format:
@@ -34,13 +58,46 @@ const (
 	runFileHeader  = 16
 )
 
+// removeFiles best-effort deletes each path. Used on cancellation /
+// failure paths in the merge pipeline where the original error is the
+// one that matters and a missed cleanup is bounded to temp files.
+func removeFiles(paths []string) {
+	for _, p := range paths {
+		_ = os.Remove(p)
+	}
+}
+
+// runWriter is the shared shape between RunFileWriter and
+// CompressedRunWriter for the pipeline's ingest spill path.
+type runWriter interface {
+	WriteSorted(rows []*PrefixRow) error
+	Close() error
+}
+
+// writeAndCloseRun writes rows through w; on a write error it closes w
+// and deletes runPath before returning. On success it returns the
+// close result so the caller can react to a close-only failure.
+func writeAndCloseRun(w runWriter, rows []*PrefixRow, runPath string) error {
+	if err := w.WriteSorted(rows); err != nil {
+		_ = w.Close()
+		_ = os.Remove(runPath)
+
+		return fmt.Errorf("write sorted: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("close run writer: %w", err)
+	}
+
+	return nil
+}
+
 // RunFileWriter writes sorted PrefixRows to a temporary run file.
 type RunFileWriter struct {
 	file   *os.File
 	writer *bufio.Writer
-	count  uint64
 	path   string
-	buf    []byte // reusable buffer for encoding
+	buf    []byte
+	count  uint64
 	closed bool
 }
 
@@ -52,7 +109,7 @@ func NewRunFileWriter(path string, bufferSize int) (*RunFileWriter, error) {
 	}
 
 	if bufferSize <= 0 {
-		bufferSize = 4 * 1024 * 1024 // 4MB default
+		bufferSize = DefaultRunBufferSize
 	}
 
 	w := &RunFileWriter{
@@ -79,43 +136,10 @@ func NewRunFileWriter(path string, bufferSize int) (*RunFileWriter, error) {
 
 // Write writes a single PrefixRow to the run file.
 func (w *RunFileWriter) Write(row *PrefixRow) error {
-	prefixLen := len(row.Prefix)
-	recordSize := 4 + prefixLen + 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
-
-	if len(w.buf) < recordSize {
-		w.buf = make([]byte, recordSize*2)
-	}
-
-	offset := 0
-
-	binary.LittleEndian.PutUint32(w.buf[offset:], uint32(prefixLen))
-	offset += 4
-	copy(w.buf[offset:], row.Prefix)
-	offset += prefixLen
-
-	binary.LittleEndian.PutUint16(w.buf[offset:], row.Depth)
-	offset += 2
-
-	binary.LittleEndian.PutUint64(w.buf[offset:], row.Count)
-	offset += 8
-
-	binary.LittleEndian.PutUint64(w.buf[offset:], row.TotalBytes)
-	offset += 8
-
-	for i := range MaxTiers {
-		binary.LittleEndian.PutUint64(w.buf[offset:], row.TierCounts[i])
-		offset += 8
-	}
-
-	for i := range MaxTiers {
-		binary.LittleEndian.PutUint64(w.buf[offset:], row.TierBytes[i])
-		offset += 8
-	}
-
-	if _, err := w.writer.Write(w.buf[:offset]); err != nil {
+	n := encodePrefixRowRecord(&w.buf, row)
+	if _, err := w.writer.Write(w.buf[:n]); err != nil {
 		return fmt.Errorf("write record: %w", err)
 	}
-
 	w.count++
 
 	return nil
@@ -134,19 +158,15 @@ func (w *RunFileWriter) WriteAll(rows []*PrefixRow) error {
 
 // WriteSorted sorts the rows by prefix and writes them to the run file.
 func (w *RunFileWriter) WriteSorted(rows []*PrefixRow) error {
-	slices.SortFunc(rows, func(a, b *PrefixRow) int {
-		return strings.Compare(a.Prefix, b.Prefix)
-	})
+	SortPrefixRows(rows)
 
 	return w.WriteAll(rows)
 }
 
-// Count returns the number of records written.
 func (w *RunFileWriter) Count() uint64 {
 	return w.count
 }
 
-// Path returns the path to the run file.
 func (w *RunFileWriter) Path() string {
 	return w.path
 }
@@ -178,6 +198,16 @@ func (w *RunFileWriter) Close() error {
 		return fmt.Errorf("update header: %w", err)
 	}
 
+	// fsync before close so a crash between Close() returning and the
+	// kernel flushing dirty pages can't corrupt or truncate this run.
+	// Intermediate run files are only kept until merge completes; the
+	// fsync cost (~5-10 ms per file on SSD) is the price of durability.
+	if err := w.file.Sync(); err != nil {
+		w.file.Close()
+
+		return fmt.Errorf("fsync run file: %w", err)
+	}
+
 	if err := w.file.Close(); err != nil {
 		return fmt.Errorf("close run file: %w", err)
 	}
@@ -189,10 +219,10 @@ func (w *RunFileWriter) Close() error {
 type RunFileReader struct {
 	file   *os.File
 	reader *bufio.Reader
+	path   string
+	buf    []byte
 	count  uint64
 	read   uint64
-	path   string
-	buf    []byte // reusable buffer for decoding
 	closed bool
 }
 
@@ -204,7 +234,7 @@ func OpenRunFile(path string, bufferSize int) (*RunFileReader, error) {
 	}
 
 	if bufferSize <= 0 {
-		bufferSize = 4 * 1024 * 1024 // 4MB default
+		bufferSize = DefaultRunBufferSize
 	}
 
 	r := &RunFileReader{
@@ -273,17 +303,14 @@ func (r *RunFileReader) ReadInto(into *PrefixRow) error {
 	return nil
 }
 
-// Count returns the total number of records in the file.
 func (r *RunFileReader) Count() uint64 {
 	return r.count
 }
 
-// ReadCount returns the number of records read so far.
 func (r *RunFileReader) ReadCount() uint64 {
 	return r.read
 }
 
-// Path returns the path to the run file.
 func (r *RunFileReader) Path() string {
 	return r.path
 }

@@ -1,45 +1,65 @@
 package format
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
-	"slices"
-	"sort"
 )
 
-// DepthIndexBuilder builds depth posting lists from depth array.
+// DepthIndexBuilder accumulates positions per depth and writes the
+// depth posting lists at Finalize. Storage is **disk-backed per
+// depth** via u64DiskArray: at billion-prefix scale the positions
+// would otherwise be ~8 GiB of heap (1B × 8 B). Each per-depth
+// array is append-only and grows monotonically because positions
+// are added in preorder (pos = 0, 1, 2, ...), so within any one
+// depth the values are already sorted — no post-add sort needed.
 type DepthIndexBuilder struct {
-	buckets  map[uint32][]uint64 // depth -> positions
+	tempDir  string
+	buckets  []*u64DiskArray // index = depth
 	maxDepth uint32
 }
 
-// NewDepthIndexBuilder creates a new depth index builder.
-func NewDepthIndexBuilder() *DepthIndexBuilder {
-	return &DepthIndexBuilder{
-		// Pre-allocate for typical max depth (16 levels)
-		buckets: make(map[uint32][]uint64, 16),
-	}
+// NewDepthIndexBuilder creates a depth index builder backed by
+// per-depth disk arrays. The tempDir is where per-depth scratch
+// files live; cleaned up by Build (after the final arrays are
+// written) or by Close on the error path.
+func NewDepthIndexBuilder(tempDir string) *DepthIndexBuilder {
+	return &DepthIndexBuilder{tempDir: tempDir}
 }
 
-// Add adds a position at the given depth.
-func (b *DepthIndexBuilder) Add(pos uint64, depth uint32) {
-	b.buckets[depth] = append(b.buckets[depth], pos)
+// Add appends pos to the per-depth posting list. Caller must add
+// in pos order — positions within a depth are written in arrival
+// order and Build relies on that order being already sorted.
+func (b *DepthIndexBuilder) Add(pos uint64, depth uint32) error {
+	for uint32(len(b.buckets)) <= depth {
+		a, err := newU64DiskArray(b.tempDir, fmt.Sprintf("depth_%02d", len(b.buckets)))
+		if err != nil {
+			return fmt.Errorf("create depth bucket %d: %w", len(b.buckets), err)
+		}
+		b.buckets = append(b.buckets, a)
+	}
+	if err := b.buckets[depth].Append(pos); err != nil {
+		return fmt.Errorf("append depth %d pos: %w", depth, err)
+	}
 	if depth > b.maxDepth {
 		b.maxDepth = depth
 	}
+
+	return nil
 }
 
-// Build writes the depth index files.
+// Build writes the depth index files (depth_offsets.u64 +
+// depth_positions.u64), concatenating per-depth disk buckets in
+// depth order. Each bucket is read once and copied to the final
+// file. Per-bucket scratch is closed and removed as we go.
 func (b *DepthIndexBuilder) Build(outDir string) error {
 	offsetsPath := filepath.Join(outDir, "depth_offsets.u64")
 	positionsPath := filepath.Join(outDir, "depth_positions.u64")
 
-	// Create offsets writer (maxDepth+2 entries: one for each depth + sentinel)
 	offsetsWriter, err := NewArrayWriter(offsetsPath, 8)
 	if err != nil {
 		return fmt.Errorf("create offsets writer: %w", err)
 	}
-
 	positionsWriter, err := NewArrayWriter(positionsPath, 8)
 	if err != nil {
 		offsetsWriter.Close()
@@ -48,55 +68,66 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 	}
 
 	offset := uint64(0)
-
-	// Write positions for each depth, track offsets
+	var errs []error
 	for d := uint32(0); d <= b.maxDepth; d++ {
 		if err := offsetsWriter.WriteU64(offset); err != nil {
-			offsetsWriter.Close()
-			positionsWriter.Close()
+			errs = append(errs, fmt.Errorf("write offset depth %d: %w", d, err))
 
-			return fmt.Errorf("write offset: %w", err)
+			break
 		}
-
-		positions := b.buckets[d]
-		// Positions should already be sorted since we add in pos order,
-		// but verify/sort for safety
-		if !sort.SliceIsSorted(positions, func(i, j int) bool {
-			return positions[i] < positions[j]
-		}) {
-			slices.Sort(positions)
+		var bucket *u64DiskArray
+		if int(d) < len(b.buckets) {
+			bucket = b.buckets[d]
 		}
+		if bucket == nil {
+			continue
+		}
+		if err := bucket.Freeze(); err != nil {
+			errs = append(errs, fmt.Errorf("freeze depth %d: %w", d, err))
 
-		for _, pos := range positions {
-			if err := positionsWriter.WriteU64(pos); err != nil {
-				offsetsWriter.Close()
-				positionsWriter.Close()
+			break
+		}
+		positions := bucket.Slice()
+		for _, p := range positions {
+			if err := positionsWriter.WriteU64(p); err != nil {
+				errs = append(errs, fmt.Errorf("write position depth %d: %w", d, err))
 
-				return fmt.Errorf("write position: %w", err)
+				break
 			}
 		}
 		offset += uint64(len(positions))
+		bucket.Close()
+		b.buckets[d] = nil
 	}
 
-	// Write sentinel offset
 	if err := offsetsWriter.WriteU64(offset); err != nil {
-		offsetsWriter.Close()
-		positionsWriter.Close()
-
-		return fmt.Errorf("write sentinel offset: %w", err)
+		errs = append(errs, fmt.Errorf("write sentinel offset: %w", err))
 	}
-
 	if err := positionsWriter.Close(); err != nil {
-		offsetsWriter.Close()
-
-		return fmt.Errorf("close positions: %w", err)
+		errs = append(errs, fmt.Errorf("close positions: %w", err))
 	}
-
 	if err := offsetsWriter.Close(); err != nil {
-		return fmt.Errorf("close offsets: %w", err)
+		errs = append(errs, fmt.Errorf("close offsets: %w", err))
 	}
 
-	return nil
+	return errors.Join(errs...)
+}
+
+// Close releases any open per-depth buckets without writing the
+// output. Used on the error path; idempotent.
+func (b *DepthIndexBuilder) Close() error {
+	var errs []error
+	for i, bucket := range b.buckets {
+		if bucket == nil {
+			continue
+		}
+		if err := bucket.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close depth %d bucket: %w", i, err))
+		}
+		b.buckets[i] = nil
+	}
+
+	return errors.Join(errs...)
 }
 
 // MaxDepth returns the maximum depth seen.
@@ -120,12 +151,18 @@ func OpenDepthIndex(outDir string) (*DepthIndex, error) {
 	offsetsPath := filepath.Join(outDir, "depth_offsets.u64")
 	positionsPath := filepath.Join(outDir, "depth_positions.u64")
 
-	offsets, err := OpenArray(offsetsPath)
+	// Depth-index offsets are read at well-known indices (one per
+	// depth) then once per query; small enough that hint doesn't
+	// matter, but keep sequential for symmetry with positions.
+	offsets, err := OpenArrayWithHint(offsetsPath, AccessHintSequential)
 	if err != nil {
 		return nil, fmt.Errorf("open offsets: %w", err)
 	}
 
-	positions, err := OpenArray(positionsPath)
+	// Depth positions are scanned in contiguous ranges during browse
+	// iteration — every prefix at a given depth in subtree order.
+	// Sequential hint enables kernel readahead.
+	positions, err := OpenArrayWithHint(positionsPath, AccessHintSequential)
 	if err != nil {
 		offsets.Close()
 
@@ -147,13 +184,7 @@ func OpenDepthIndex(outDir string) (*DepthIndex, error) {
 
 // Close releases resources.
 func (d *DepthIndex) Close() error {
-	err1 := d.offsets.Close()
-	err2 := d.positions.Close()
-	if err1 != nil {
-		return err1
-	}
-
-	return err2
+	return errors.Join(d.offsets.Close(), d.positions.Close())
 }
 
 // MaxDepth returns the maximum depth in the index.
@@ -161,42 +192,9 @@ func (d *DepthIndex) MaxDepth() uint32 {
 	return d.maxDepth
 }
 
-// GetPositionsAtDepth returns all positions at the given depth.
-func (d *DepthIndex) GetPositionsAtDepth(depth uint32) ([]uint64, error) {
-	if depth > d.maxDepth {
-		return nil, nil
-	}
-
-	start, err := d.offsets.GetU64(uint64(depth))
-	if err != nil {
-		return nil, fmt.Errorf("get start offset for depth %d: %w", depth, err)
-	}
-
-	end, err := d.offsets.GetU64(uint64(depth + 1))
-	if err != nil {
-		return nil, fmt.Errorf("get end offset for depth %d: %w", depth, err)
-	}
-
-	count := end - start
-	if count == 0 {
-		return nil, nil
-	}
-
-	positions := make([]uint64, count)
-	for i := range count {
-		pos, err := d.positions.GetU64(start + i)
-		if err != nil {
-			return nil, fmt.Errorf("get position at index %d: %w", start+i, err)
-		}
-		positions[i] = pos
-	}
-
-	return positions, nil
-}
-
-// GetPositionsInSubtree returns positions at the given depth that fall within
+// PositionsInSubtree returns positions at the given depth that fall within
 // the subtree [subtreeStart, subtreeEnd]. Uses binary search.
-func (d *DepthIndex) GetPositionsInSubtree(depth uint32, subtreeStart, subtreeEnd uint64) ([]uint64, error) {
+func (d *DepthIndex) PositionsInSubtree(depth uint32, subtreeStart, subtreeEnd uint64) ([]uint64, error) {
 	if depth > d.maxDepth {
 		return nil, nil
 	}
@@ -264,62 +262,4 @@ func (d *DepthIndex) binarySearchUpper(start, end, target uint64) uint64 {
 	}
 
 	return lo
-}
-
-// DepthIterator iterates over positions at a specific depth within a subtree.
-type DepthIterator struct {
-	index   *DepthIndex
-	start   uint64 // slice start in positions array
-	end     uint64 // slice end in positions array
-	current uint64 // current index in positions array
-	pos     uint64 // current position value
-}
-
-// NewDepthIterator creates an iterator for a subtree at a specific depth.
-func (d *DepthIndex) NewDepthIterator(depth uint32, subtreeStart, subtreeEnd uint64) (*DepthIterator, error) {
-	if depth > d.maxDepth {
-		return &DepthIterator{current: 0, end: 0}, nil
-	}
-
-	sliceStart, err := d.offsets.GetU64(uint64(depth))
-	if err != nil {
-		return nil, fmt.Errorf("get start offset for depth %d: %w", depth, err)
-	}
-
-	sliceEnd, err := d.offsets.GetU64(uint64(depth + 1))
-	if err != nil {
-		return nil, fmt.Errorf("get end offset for depth %d: %w", depth, err)
-	}
-
-	// Binary search for bounds
-	lo := d.binarySearchLower(sliceStart, sliceEnd, subtreeStart)
-	hi := d.binarySearchUpper(lo, sliceEnd, subtreeEnd)
-
-	return &DepthIterator{
-		index:   d,
-		start:   lo,
-		end:     hi,
-		current: lo,
-	}, nil
-}
-
-// Next advances to the next position. Returns false when done.
-func (it *DepthIterator) Next() bool {
-	if it.current >= it.end {
-		return false
-	}
-	it.pos = it.index.positions.UnsafeGetU64(it.current)
-	it.current++
-
-	return true
-}
-
-// Pos returns the current position.
-func (it *DepthIterator) Pos() uint64 {
-	return it.pos
-}
-
-// Count returns the number of remaining positions.
-func (it *DepthIterator) Count() uint64 {
-	return it.end - it.current
 }

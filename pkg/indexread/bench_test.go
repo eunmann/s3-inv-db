@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/eunmann/s3-inv-db/pkg/benchutil"
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -210,7 +210,7 @@ func setupFixtureIndex(b *testing.B) string {
 		rows := agg.Drain()
 		extsort.SortPrefixRows(rows)
 
-		builder, err := extsort.NewIndexBuilder(tmpDir, "", false)
+		builder, err := extsort.NewIndexBuilder(tmpDir, "")
 		if err != nil {
 			b.Fatalf("NewIndexBuilder failed: %v", err)
 		}
@@ -318,7 +318,7 @@ func BenchmarkTierBreakdown(b *testing.B) {
 			b.ResetTimer()
 			for i := range b.N {
 				pos := uint64(i % len(bi.prefixes))
-				_ = bi.idx.TierBreakdownAll(pos)
+				_ = bi.idx.TierBreakdown(pos)
 			}
 		})
 	}
@@ -407,36 +407,6 @@ func BenchmarkDescendantsSubtree(b *testing.B) {
 			_, _ = bi.idx.DescendantsAtDepth(pos, 1)
 		}
 	})
-}
-
-// BenchmarkIterator benchmarks the iterator interface.
-func BenchmarkIterator(b *testing.B) {
-	for _, shape := range benchutil.TreeShapes() {
-		for _, size := range benchutil.BenchmarkSizes() {
-			keys := benchutil.GenerateKeys(size, shape)
-			bi := setupBenchIndex(b, keys)
-
-			name := fmt.Sprintf("%s/size=%d", shape, size)
-
-			b.Run(name+"/depth1_iterate_all", func(b *testing.B) {
-				rootPos, _ := bi.idx.Lookup("")
-				b.ResetTimer()
-				for range b.N {
-					it, err := bi.idx.NewDescendantIterator(rootPos, 1)
-					if err != nil {
-						b.Fatal(err)
-					}
-					count := 0
-					for it.Next() {
-						count++
-						_ = it.Pos()
-					}
-				}
-			})
-
-			bi.Close()
-		}
-	}
 }
 
 // BenchmarkMixedWorkload simulates realistic mixed query patterns.
@@ -603,7 +573,7 @@ func BenchmarkConcurrentTierBreakdown(b *testing.B) {
 			rng := rand.New(rand.NewSource(rand.Int63()))
 			for pb.Next() {
 				pos := uint64(rng.Int63()) % prefixCount
-				_ = bi.idx.TierBreakdownAll(pos)
+				_ = bi.idx.TierBreakdown(pos)
 			}
 		})
 	})

@@ -1,7 +1,6 @@
 package loader_test
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -36,20 +35,23 @@ func TestCacheDirFor_NestsBySrcIDRun(t *testing.T) {
 
 func TestBuild_RejectsEmptyArgs(t *testing.T) {
 	l := loader.New(t.TempDir(), nil)
-	ctx := context.Background()
+	ctx := t.Context()
 	cases := []struct {
-		name                   string
-		src, id, run, manifest string
-		wantErr                error
+		wantErr  error
+		name     string
+		src      string
+		id       string
+		run      string
+		manifest string
 	}{
-		{"empty src", "", "inv", "r", "s3://b/m", loader.ErrEmptyID},
-		{"empty id", "buck", "", "r", "s3://b/m", loader.ErrEmptyID},
-		{"empty run", "buck", "inv", "", "s3://b/m", loader.ErrEmptyID},
-		{"empty manifest", "buck", "inv", "r", "", loader.ErrEmptyManifest},
+		{name: "empty src", src: "", id: "inv", run: "r", manifest: "s3://b/m", wantErr: loader.ErrEmptyID},
+		{name: "empty id", src: "buck", id: "", run: "r", manifest: "s3://b/m", wantErr: loader.ErrEmptyID},
+		{name: "empty run", src: "buck", id: "inv", run: "", manifest: "s3://b/m", wantErr: loader.ErrEmptyID},
+		{name: "empty manifest", src: "buck", id: "inv", run: "r", manifest: "", wantErr: loader.ErrEmptyManifest},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := l.Build(ctx, c.src, c.id, c.run, c.manifest)
+			_, err := l.BuildWith(ctx, c.src, c.id, c.run, c.manifest, nil)
 			if !errors.Is(err, c.wantErr) {
 				t.Errorf("Build err = %v, want %v", err, c.wantErr)
 			}
@@ -60,7 +62,7 @@ func TestBuild_RejectsEmptyArgs(t *testing.T) {
 func TestBuildWith_ReportsPreparingStage(t *testing.T) {
 	l := loader.New(t.TempDir(), nil)
 	var stages []string
-	_, _ = l.BuildWith(context.Background(), "buck", "inv", "r", "not-s3-uri", func(name string, _, _ int64) {
+	_, _ = l.BuildWith(t.Context(), "buck", "inv", "r", "not-s3-uri", func(name string, _, _ int64) {
 		stages = append(stages, name)
 	})
 	if len(stages) == 0 || stages[0] != "preparing" {
@@ -70,7 +72,7 @@ func TestBuildWith_ReportsPreparingStage(t *testing.T) {
 
 func TestBuildWith_NilCallbackIsSafe(t *testing.T) {
 	l := loader.New(t.TempDir(), nil)
-	_, err := l.BuildWith(context.Background(), "", "inv", "r", "s3://b/m", nil)
+	_, err := l.BuildWith(t.Context(), "", "inv", "r", "s3://b/m", nil)
 	if !errors.Is(err, loader.ErrEmptyID) {
 		t.Errorf("err = %v, want errEmptyID", err)
 	}

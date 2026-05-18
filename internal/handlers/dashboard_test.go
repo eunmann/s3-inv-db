@@ -11,10 +11,10 @@ import (
 func TestAggregateDashboard_TalliesByState(t *testing.T) {
 	h := newTestHandlers(t)
 	views := []inventory.MergedInventory{
-		{Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "i1", Run: "2026-05-13"}, State: inventory.StateLoaded},
-		{Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "i1", Run: "2026-05-12"}, State: inventory.StateNotLoaded},
-		{Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "i2", Run: "2026-05-13"}, State: inventory.StateLoading},
-		{Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "i3", Run: "2026-05-13"}, State: inventory.StateError},
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "i1", Run: "2026-05-13"}, State: inventory.StateLoaded},
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "i1", Run: "2026-05-12"}, State: inventory.StateNotLoaded},
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "i2", Run: "2026-05-13"}, State: inventory.StateLoading},
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "i3", Run: "2026-05-13"}, State: inventory.StateError},
 	}
 	data := &handlers.DashboardData{}
 	logger := zerolog.Nop()
@@ -51,8 +51,8 @@ func TestAggregateDashboard_TalliesByState(t *testing.T) {
 func TestAggregateDashboard_LatestRunIsFirstSeen(t *testing.T) {
 	h := newTestHandlers(t)
 	views := []inventory.MergedInventory{
-		{Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "i1", Run: "2026-05-13"}, State: inventory.StateLoaded},
-		{Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "i1", Run: "2026-05-12"}, State: inventory.StateNotLoaded},
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "i1", Run: "2026-05-13"}, State: inventory.StateLoaded},
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "i1", Run: "2026-05-12"}, State: inventory.StateNotLoaded},
 	}
 	data := &handlers.DashboardData{}
 	logger := zerolog.Nop()
@@ -68,7 +68,7 @@ func TestAggregateDashboard_LatestRunIsFirstSeen(t *testing.T) {
 func TestAggregateDashboard_PlaceholderConfigCounts(t *testing.T) {
 	h := newTestHandlers(t)
 	views := []inventory.MergedInventory{
-		{Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "no-runs"}, State: inventory.StateNotLoaded},
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "no-runs"}, State: inventory.StateNotLoaded},
 	}
 	data := &handlers.DashboardData{}
 	logger := zerolog.Nop()
@@ -81,10 +81,62 @@ func TestAggregateDashboard_PlaceholderConfigCounts(t *testing.T) {
 	}
 }
 
+func TestAggregateDashboard_SumsManifestStats(t *testing.T) {
+	h := newTestHandlers(t)
+	views := []inventory.MergedInventory{
+		{Inventory: inventory.Inventory{
+			SourceBucket: "b", Name: "i1", Run: "2026-05-13",
+			FileCount: 4, TotalBytes: 1000, FileFormat: "Parquet",
+		}, State: inventory.StateLoaded},
+		{Inventory: inventory.Inventory{
+			SourceBucket: "b", Name: "i1", Run: "2026-05-12",
+			FileCount: 3, TotalBytes: 500,
+		}, State: inventory.StateNotLoaded},
+		{Inventory: inventory.Inventory{
+			SourceBucket: "b", Name: "i2", Run: "2026-05-13",
+			FileCount: 7, TotalBytes: 2500, FileFormat: "CSV",
+		}, State: inventory.StateLoaded},
+	}
+	data := &handlers.DashboardData{}
+	logger := zerolog.Nop()
+	agg := h.AggregateDashboardForTest(&logger, views, data)
+
+	if agg.Totals.ManifestFiles != 14 {
+		t.Errorf("Totals.ManifestFiles = %d, want 14", agg.Totals.ManifestFiles)
+	}
+	if agg.Totals.ManifestBytes != 4000 {
+		t.Errorf("Totals.ManifestBytes = %d, want 4000", agg.Totals.ManifestBytes)
+	}
+	i1 := agg.Confs["b/i1"]
+	if i1.LatestFiles != 4 || i1.LatestBytes != 1000 {
+		t.Errorf("b/i1 latest manifest = {Files: %d, Bytes: %d}, want {4, 1000}", i1.LatestFiles, i1.LatestBytes)
+	}
+	if i1.LatestFormat != "Parquet" {
+		t.Errorf("b/i1 LatestFormat = %q, want Parquet", i1.LatestFormat)
+	}
+	i2 := agg.Confs["b/i2"]
+	if i2.LatestFormat != "CSV" {
+		t.Errorf("b/i2 LatestFormat = %q, want CSV", i2.LatestFormat)
+	}
+}
+
+func TestAggregateDashboard_OmitsManifestStatsWhenAbsent(t *testing.T) {
+	h := newTestHandlers(t)
+	views := []inventory.MergedInventory{
+		{Inventory: inventory.Inventory{SourceBucket: "b", Name: "i1", Run: "2026-05-13"}, State: inventory.StateNotLoaded},
+	}
+	data := &handlers.DashboardData{}
+	logger := zerolog.Nop()
+	agg := h.AggregateDashboardForTest(&logger, views, data)
+	if agg.Totals.ManifestFiles != 0 || agg.Totals.ManifestBytes != 0 {
+		t.Errorf("totals manifest = {%d, %d}, want zero when not fetched", agg.Totals.ManifestFiles, agg.Totals.ManifestBytes)
+	}
+}
+
 func TestAddLoadedStats_TolerantOfUnloadedIndex(t *testing.T) {
 	h := newTestHandlers(t)
 	v := inventory.MergedInventory{
-		Inventory: inventory.Inventory{SourceBucket: "b", InventoryName: "i1", Run: "r"},
+		Inventory: inventory.Inventory{SourceBucket: "b", Name: "i1", Run: "r"},
 		State:     inventory.StateLoaded,
 	}
 	totals := handlers.DashTotalsForTest{}

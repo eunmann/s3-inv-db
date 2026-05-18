@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/eunmann/s3-inv-db/pkg/benchutil"
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -37,7 +37,7 @@ func setupIndex(tb testing.TB, numObjects int) *indexSetup {
 	extsort.SortPrefixRows(rows)
 
 	// Build index
-	builder, err := extsort.NewIndexBuilder(indexDir, "", false)
+	builder, err := extsort.NewIndexBuilder(indexDir, "")
 	if err != nil {
 		tb.Fatalf("NewIndexBuilder failed: %v", err)
 	}
@@ -78,7 +78,7 @@ func setupIndexFromKeys(tb testing.TB, keys []string) *indexSetup {
 	extsort.SortPrefixRows(rows)
 
 	// Build index
-	builder, err := extsort.NewIndexBuilder(indexDir, "", false)
+	builder, err := extsort.NewIndexBuilder(indexDir, "")
 	if err != nil {
 		tb.Fatalf("NewIndexBuilder failed: %v", err)
 	}

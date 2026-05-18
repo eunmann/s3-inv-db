@@ -1,7 +1,6 @@
 package inventory_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
@@ -69,18 +68,18 @@ func TestIDConfigID(t *testing.T) {
 }
 
 func TestInventoryCompositeID(t *testing.T) {
-	with := inventory.Inventory{SourceBucket: "src", InventoryName: "inv", Run: "2026-01"}
+	with := inventory.Inventory{SourceBucket: "src", Name: "inv", Run: "2026-01"}
 	if got := with.CompositeID(); got != inventory.ID("src/inv/2026-01") {
 		t.Errorf("CompositeID(with run) = %q, want %q", got, "src/inv/2026-01")
 	}
-	without := inventory.Inventory{SourceBucket: "src", InventoryName: "inv"}
+	without := inventory.Inventory{SourceBucket: "src", Name: "inv"}
 	if got := without.CompositeID(); got != inventory.ID("src/inv") {
 		t.Errorf("CompositeID(no run) = %q, want %q", got, "src/inv")
 	}
 }
 
 func TestInventoryConfigID(t *testing.T) {
-	inv := inventory.Inventory{SourceBucket: "src", InventoryName: "inv", Run: "2026-01"}
+	inv := inventory.Inventory{SourceBucket: "src", Name: "inv", Run: "2026-01"}
 	if got := inv.ConfigID(); got != "src/inv" {
 		t.Errorf("ConfigID = %q, want %q", got, "src/inv")
 	}
@@ -92,7 +91,7 @@ func TestManagerLoad_UsesOpenLocalPath(t *testing.T) {
 	if err := mgr.Register(t.Context(), "inv", "n", "/tmp/this/path/does/not/exist"); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if err := mgr.Load(context.Background(), "inv"); err == nil {
+	if err := mgr.Load(t.Context(), "inv"); err == nil {
 		t.Error("Load on a bogus path returned nil, want non-nil")
 	}
 }

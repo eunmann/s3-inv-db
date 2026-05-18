@@ -1,7 +1,6 @@
 package handlers_test
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -50,7 +49,7 @@ func buildLoadedTestHandlers(t *testing.T) *handlers.Handlers {
 	if err := mgr.Register(t.Context(), "loaded", "Loaded", indexPath); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if err := mgr.Load(context.Background(), "loaded"); err != nil {
+	if err := mgr.Load(t.Context(), "loaded"); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 
@@ -405,7 +404,7 @@ func TestManagerWithIndex_NoUseAfterCloseUnderUnload(t *testing.T) {
 	if err := mgr.Register(t.Context(), id, "Racy", indexPath); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if err := mgr.Load(context.Background(), id); err != nil {
+	if err := mgr.Load(t.Context(), id); err != nil {
 		t.Fatalf("initial load: %v", err)
 	}
 
@@ -417,7 +416,7 @@ func TestManagerWithIndex_NoUseAfterCloseUnderUnload(t *testing.T) {
 		// Flap the inventory state under the readers.
 		for range iters {
 			_ = mgr.Unload(t.Context(), id)
-			_ = mgr.Load(context.Background(), id)
+			_ = mgr.Load(t.Context(), id)
 		}
 		close(done)
 	}()
@@ -506,7 +505,7 @@ func TestCompareLevelAPI_Integration_HappyPath(t *testing.T) {
 		if err := mgr.Register(t.Context(), id, string(id), indexPath); err != nil {
 			t.Fatalf("register %s: %v", id, err)
 		}
-		if err := mgr.Load(context.Background(), id); err != nil {
+		if err := mgr.Load(t.Context(), id); err != nil {
 			t.Fatalf("load %s: %v", id, err)
 		}
 	}

@@ -159,9 +159,10 @@ func New() (*Renderer, error) {
 // FuncMap returns the template function map.
 func FuncMap() template.FuncMap {
 	return template.FuncMap{
-		"formatBytes": humanfmt.BytesUint64,
-		"formatCount": humanfmt.CountUint64,
-		"formatCost":  pricing.FormatCost,
+		"formatBytes":      humanfmt.BytesUint64,
+		"formatBytesInt64": humanfmt.Bytes,
+		"formatCount":      humanfmt.CountUint64,
+		"formatCost":       pricing.FormatCost,
 		"formatTime": func(t time.Time) string {
 			if t.IsZero() {
 				return "-"
@@ -330,9 +331,9 @@ func (r *Renderer) loadTemplates() error {
 // layout, the keyed partials, and the keyed pages. Returned together
 // from readTemplates so loadTemplates can wire them up.
 type templateSources struct {
-	Layout   string
 	Partials map[string]string
 	Pages    map[string]string
+	Layout   string
 }
 
 // readTemplates loads layout + partials + page sources from any fs.FS

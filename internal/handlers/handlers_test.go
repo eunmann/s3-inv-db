@@ -28,19 +28,6 @@ func newTestHandlers(t *testing.T) *handlers.Handlers {
 	return handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
 }
 
-func TestListInventoriesAPI_Empty(t *testing.T) {
-	h := newTestHandlers(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories", http.NoBody)
-	w := httptest.NewRecorder()
-
-	h.ListInventoriesAPI(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
-	}
-}
-
 func TestRegisterInventoryAPI(t *testing.T) {
 	h := newTestHandlers(t)
 

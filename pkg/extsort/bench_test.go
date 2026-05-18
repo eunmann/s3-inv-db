@@ -1,14 +1,13 @@
 package extsort_test
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/eunmann/s3-inv-db/pkg/benchutil"
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
@@ -118,7 +117,7 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 			b.Fatalf("create merger: %v", err)
 		}
 
-		builder, err := extsort.NewIndexBuilder(outDir, "", false)
+		builder, err := extsort.NewIndexBuilder(outDir, "")
 		if err != nil {
 			merger.Close()
 			b.Fatalf("create builder: %v", err)
@@ -278,7 +277,7 @@ func BenchmarkExtsortPhases(b *testing.B) {
 			b.StartTimer()
 
 			merger, _ := extsort.NewMergeIterator([]string{runPath}, 4*1024*1024)
-			builder, _ := extsort.NewIndexBuilder(outDir, "", false)
+			builder, _ := extsort.NewIndexBuilder(outDir, "")
 			builder.AddAll(merger)
 			merger.Close()
 			builder.Finalize()
@@ -333,7 +332,7 @@ func BenchmarkCompressedVsUncompressed(b *testing.B) {
 			tmpDir := b.TempDir()
 			path := filepath.Join(tmpDir, "run.crun")
 			writer, _ := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{
-				BufferSize:       4 * 1024 * 1024,
+				BufferSize:       extsort.DefaultRunBufferSize,
 				CompressionLevel: extsort.CompressionFastest,
 			})
 			writer.WriteAll(rows)
@@ -347,7 +346,7 @@ func BenchmarkCompressedVsUncompressed(b *testing.B) {
 			tmpDir := b.TempDir()
 			path := filepath.Join(tmpDir, "run.crun")
 			writer, _ := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{
-				BufferSize:       4 * 1024 * 1024,
+				BufferSize:       extsort.DefaultRunBufferSize,
 				CompressionLevel: extsort.CompressionDefault,
 			})
 			writer.WriteAll(rows)
@@ -429,7 +428,7 @@ func BenchmarkParallelMerge(b *testing.B) {
 					TempDir:        tmpDir,
 					UseCompression: true,
 				})
-				outPath, _ := merger.MergeAll(context.Background(), paths)
+				outPath, _ := merger.MergeAll(b.Context(), paths)
 				os.Remove(outPath)
 				merger.CleanupIntermediateFiles()
 			}
@@ -452,7 +451,7 @@ func BenchmarkParallelMerge(b *testing.B) {
 					TempDir:        tmpDir,
 					UseCompression: true,
 				})
-				outPath, _ := merger.MergeAll(context.Background(), paths)
+				outPath, _ := merger.MergeAll(b.Context(), paths)
 				os.Remove(outPath)
 				merger.CleanupIntermediateFiles()
 			}

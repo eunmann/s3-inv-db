@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/cli"
-	"github.com/eunmann/s3-inv-db/pkg/membudget"
 )
 
 func TestRunNoArgs(t *testing.T) {
@@ -65,88 +64,6 @@ func TestQueryMissingPrefix(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--prefix") {
 		t.Errorf("expected '--prefix' error, got: %v", err)
-	}
-}
-
-func TestDetermineMemoryBudgetCLI(t *testing.T) {
-	// CLI flag takes priority
-	budget, err := cli.DetermineMemoryBudget("4GiB")
-	if err != nil {
-		t.Fatalf("determineMemoryBudget error: %v", err)
-	}
-	if budget.Total() != 4*1024*1024*1024 {
-		t.Errorf("Total() = %d, want %d", budget.Total(), 4*1024*1024*1024)
-	}
-	if budget.Source() != membudget.BudgetSourceCLI {
-		t.Errorf("Source() = %s, want %s", budget.Source(), membudget.BudgetSourceCLI)
-	}
-}
-
-func TestDetermineMemoryBudgetEnv(t *testing.T) {
-	t.Setenv("S3INV_MEM_BUDGET", "2GiB")
-
-	// Empty CLI should use env var
-	budget, err := cli.DetermineMemoryBudget("")
-	if err != nil {
-		t.Fatalf("determineMemoryBudget error: %v", err)
-	}
-	if budget.Total() != 2*1024*1024*1024 {
-		t.Errorf("Total() = %d, want %d", budget.Total(), 2*1024*1024*1024)
-	}
-	if budget.Source() != membudget.BudgetSourceEnv {
-		t.Errorf("Source() = %s, want %s", budget.Source(), membudget.BudgetSourceEnv)
-	}
-}
-
-func TestDetermineMemoryBudgetCLIOverridesEnv(t *testing.T) {
-	t.Setenv("S3INV_MEM_BUDGET", "2GiB")
-
-	// CLI should take priority over env
-	budget, err := cli.DetermineMemoryBudget("8GiB")
-	if err != nil {
-		t.Fatalf("determineMemoryBudget error: %v", err)
-	}
-	if budget.Total() != 8*1024*1024*1024 {
-		t.Errorf("Total() = %d, want %d", budget.Total(), 8*1024*1024*1024)
-	}
-	if budget.Source() != membudget.BudgetSourceCLI {
-		t.Errorf("Source() = %s, want %s", budget.Source(), membudget.BudgetSourceCLI)
-	}
-}
-
-func TestDetermineMemoryBudgetDefault(t *testing.T) {
-	t.Setenv("S3INV_MEM_BUDGET", "")
-
-	// No CLI, no env should use system RAM detection
-	budget, err := cli.DetermineMemoryBudget("")
-	if err != nil {
-		t.Fatalf("determineMemoryBudget error: %v", err)
-	}
-	// Should use auto detection
-	if budget.Source() != membudget.BudgetSourceAuto50Pct && budget.Source() != membudget.BudgetSourceDefault {
-		t.Errorf("Source() = %s, want auto-50pct or default", budget.Source())
-	}
-}
-
-func TestDetermineMemoryBudgetInvalidCLI(t *testing.T) {
-	_, err := cli.DetermineMemoryBudget("invalid")
-	if err == nil {
-		t.Fatal("expected error with invalid CLI budget")
-	}
-	if !strings.Contains(err.Error(), "--mem-budget") {
-		t.Errorf("expected '--mem-budget' in error, got: %v", err)
-	}
-}
-
-func TestDetermineMemoryBudgetInvalidEnv(t *testing.T) {
-	t.Setenv("S3INV_MEM_BUDGET", "badvalue")
-
-	_, err := cli.DetermineMemoryBudget("")
-	if err == nil {
-		t.Fatal("expected error with invalid env budget")
-	}
-	if !strings.Contains(err.Error(), "S3INV_MEM_BUDGET") {
-		t.Errorf("expected 'S3INV_MEM_BUDGET' in error, got: %v", err)
 	}
 }
 

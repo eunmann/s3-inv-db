@@ -56,6 +56,7 @@ default. Example:
   "max_index_disk": "200GB",
   "auto_load_poll_interval": "15m",
   "auto_load_retention_default": 3,
+  "discovery_refresh_interval": "1m",
   "inventories": [
     {"source": "prod-bucket", "name": "daily-inventory", "auto_load": true, "retention_count": 5}
   ]
@@ -77,21 +78,9 @@ pos, ok := idx.Lookup("data/2024/")
 stats := idx.Stats(pos)  // ObjectCount, TotalBytes
 ```
 
-Or embed the full HTTP server in your own binary:
-
-```go
-import "github.com/eunmann/s3-inv-db/pkg/server"
-
-err := server.BootstrapAndRun(ctx, server.RuntimeOptions{
-    Addr:     ":8080",
-    S3Source: "s3://my-bucket/inventory-data/",
-    CacheDir: "/var/cache/s3inv",
-    Logger:   logger,
-})
-```
-
-The server exposes its chi router via `srv.Router()` so it can be mounted
-behind your own middleware. Full API in [docs/library-api.md](docs/library-api.md).
+The HTTP server is not currently exposed as an importable package —
+build the `s3-inv-db-server` binary or run `make dev` to use it. Full
+library reference in [docs/library-api.md](docs/library-api.md).
 
 ## Testing & quality
 
@@ -119,7 +108,7 @@ HTTP        internal/{server,handlers,templates}
               │
 Domain      internal/{inventory,s3disco,loader,jobs}
               │
-Storage     pkg/{indexread,format,extsort,triebuild,s3fetch}
+Storage     pkg/{indexread,format,extsort,s3fetch,s3inventory,sysmem,tiers}
 ```
 
 - The HTTP layer never reaches past the domain boundary.

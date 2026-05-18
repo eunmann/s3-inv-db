@@ -46,7 +46,8 @@ func NewArrayWriter(path string, width uint32) (*ArrayWriter, error) {
 	}, nil
 }
 
-// WriteU32 writes a uint32 value.
+// WriteU32 writes a uint32 value. Requires the array to have been
+// constructed with width=4.
 func (w *ArrayWriter) WriteU32(val uint32) error {
 	if w.width != 4 {
 		return fmt.Errorf("%w: expected 4, got %d", ErrWidthMismatch, w.width)
@@ -70,44 +71,6 @@ func (w *ArrayWriter) WriteU64(val uint64) error {
 	binary.LittleEndian.PutUint64(buf[:], val)
 	if _, err := w.writer.Write(buf[:]); err != nil {
 		return fmt.Errorf("write u64: %w", err)
-	}
-	w.count++
-
-	return nil
-}
-
-// WriteU64Batch writes multiple uint64 values efficiently in a single operation.
-// This reduces function call overhead and allows the buffered writer to handle
-// larger contiguous writes.
-func (w *ArrayWriter) WriteU64Batch(vals []uint64) error {
-	if w.width != 8 {
-		return fmt.Errorf("%w: expected 8, got %d", ErrWidthMismatch, w.width)
-	}
-	if len(vals) == 0 {
-		return nil
-	}
-	// Encode all values into a single buffer
-	buf := make([]byte, len(vals)*8)
-	for i, v := range vals {
-		binary.LittleEndian.PutUint64(buf[i*8:], v)
-	}
-	if _, err := w.writer.Write(buf); err != nil {
-		return fmt.Errorf("write u64 batch: %w", err)
-	}
-	w.count += uint64(len(vals))
-
-	return nil
-}
-
-// WriteU16 writes a uint16 value.
-func (w *ArrayWriter) WriteU16(val uint16) error {
-	if w.width != 2 {
-		return fmt.Errorf("%w: expected 2, got %d", ErrWidthMismatch, w.width)
-	}
-	var buf [2]byte
-	binary.LittleEndian.PutUint16(buf[:], val)
-	if _, err := w.writer.Write(buf[:]); err != nil {
-		return fmt.Errorf("write u16: %w", err)
 	}
 	w.count++
 
@@ -219,26 +182,29 @@ func (w *BlobWriter) WriteBytes(b []byte) error {
 	return nil
 }
 
-// Close finalizes both files, writing a sentinel offset.
+// Close finalizes both files, writing a sentinel offset. On the
+// error path the cleanup calls are best-effort — we already have a
+// fatal error to return, so secondary close/flush failures during
+// cleanup are intentionally discarded via the leading underscores.
 func (w *BlobWriter) Close() error {
 	// Write sentinel offset (points past end)
 	if err := w.offsets.WriteU64(w.offset); err != nil {
-		w.blobWriter.Flush()
-		w.blobFile.Close()
-		w.offsets.Close()
+		_ = w.blobWriter.Flush()
+		_ = w.blobFile.Close()
+		_ = w.offsets.Close()
 
 		return fmt.Errorf("write sentinel offset: %w", err)
 	}
 
 	if err := w.blobWriter.Flush(); err != nil {
-		w.blobFile.Close()
-		w.offsets.Close()
+		_ = w.blobFile.Close()
+		_ = w.offsets.Close()
 
 		return fmt.Errorf("flush blob: %w", err)
 	}
 
 	if err := w.blobFile.Close(); err != nil {
-		w.offsets.Close()
+		_ = w.offsets.Close()
 
 		return fmt.Errorf("close blob: %w", err)
 	}

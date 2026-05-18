@@ -20,13 +20,13 @@ type jobEvent struct {
 	Kind        string `json:"Kind"`
 	State       string `json:"State"`
 	Stage       string `json:"Stage"`
-	Progress    int    `json:"Progress"`
-	BytesTotal  int64  `json:"BytesTotal"`
-	BytesDone   int64  `json:"BytesDone"`
 	StartedAt   string `json:"StartedAt,omitempty"`
 	FinishedAt  string `json:"FinishedAt,omitempty"`
 	Error       string `json:"Error,omitempty"`
 	UpdatedAt   string `json:"UpdatedAt,omitempty"`
+	Progress    int    `json:"Progress"`
+	BytesTotal  int64  `json:"BytesTotal"`
+	BytesDone   int64  `json:"BytesDone"`
 }
 
 func jobToEvent(j jobs.Job) jobEvent {

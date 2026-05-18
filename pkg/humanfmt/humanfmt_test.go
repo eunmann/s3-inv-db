@@ -66,31 +66,6 @@ func TestDuration(t *testing.T) {
 	}
 }
 
-func TestThroughput(t *testing.T) {
-	tests := []struct {
-		bytes    int64
-		duration time.Duration
-		want     string
-	}{
-		{0, time.Second, "0 B/s"},
-		{1000, time.Second, "1000 B/s"},
-		{1024, time.Second, "1.00 KiB/s"},
-		{1048576, time.Second, "1.00 MiB/s"},
-		{104857600, time.Second, "100.00 MiB/s"},
-		{1073741824, time.Second, "1.00 GiB/s"},
-		{1099511627776, time.Second, "1.00 TiB/s"},
-		{1048576, 2 * time.Second, "512.00 KiB/s"},
-		{0, 0, "∞"},
-	}
-
-	for _, tt := range tests {
-		got := humanfmt.Throughput(tt.bytes, tt.duration)
-		if got != tt.want {
-			t.Errorf("Throughput(%d, %v) = %q, want %q", tt.bytes, tt.duration, got, tt.want)
-		}
-	}
-}
-
 func TestCount(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -156,13 +131,6 @@ func BenchmarkDuration(b *testing.B) {
 	b.ResetTimer()
 	for i := range b.N {
 		_ = humanfmt.Duration(durations[i%len(durations)])
-	}
-}
-
-func BenchmarkThroughput(b *testing.B) {
-	b.ResetTimer()
-	for range b.N {
-		_ = humanfmt.Throughput(104857600, time.Second)
 	}
 }
 

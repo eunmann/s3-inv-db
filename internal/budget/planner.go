@@ -1,9 +1,10 @@
 package budget
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
@@ -14,43 +15,48 @@ var ErrTargetIDFormat = errors.New("target id is not a 3-part inventory ID")
 
 // Plan is the eviction plan for a pending load.
 type Plan struct {
+	Refusal       string
 	Evict         []inventory.ID
 	FreedBytes    uint64
 	EstimateBytes uint64
-	Refusal       string
 }
 
 // Fits reports whether the plan makes room (Refusal is empty).
 func (p Plan) Fits() bool { return p.Refusal == "" }
 
-// Config supplies per-configuration retention overrides.
-type Config interface {
-	Retention(source, name string) uint32
-}
+// RetentionFunc returns the per-configuration retention override.
+// Return 0 to accept the planner default. Ctx flows from the
+// originating load call so the implementation can honour
+// cancellation while consulting external state (e.g. a SQL store).
+type RetentionFunc func(ctx context.Context, source, name string) uint32
 
-// DefaultRetention is used when Config.Retention returns 0.
+// DefaultRetention is used when RetentionFunc returns 0.
 const DefaultRetention uint32 = 2
 
 // Planner produces eviction plans honouring per-config retention and
 // the Tracker's remaining capacity. Pinned runs are never evicted.
 type Planner struct {
-	tracker *Tracker
-	config  Config
+	tracker   *Tracker
+	retention RetentionFunc
 }
 
-func NewPlanner(tracker *Tracker, config Config) *Planner {
-	return &Planner{tracker: tracker, config: config}
+// NewPlanner constructs a planner. Retention may be nil — every load
+// then falls back to DefaultRetention.
+func NewPlanner(tracker *Tracker, retention RetentionFunc) *Planner {
+	return &Planner{tracker: tracker, retention: retention}
 }
 
 // Input is one load the planner is asked to fit.
 type Input struct {
 	Target        inventory.ID
-	EstimateBytes uint64
 	All           []inventory.Info
+	EstimateBytes uint64
 }
 
-// Plan computes the eviction plan for in.
-func (p *Planner) Plan(in Input) (Plan, error) {
+// Plan computes the eviction plan for in. Ctx is threaded into the
+// optional RetentionFunc so per-config retention lookups (e.g. a SQL
+// store) honour cancellation.
+func (p *Planner) Plan(ctx context.Context, in Input) (Plan, error) {
 	if in.EstimateBytes == 0 {
 		return Plan{EstimateBytes: 0}, nil
 	}
@@ -64,8 +70,8 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 	targetSource, targetName := tp.Source, tp.Inventory
 
 	retention := DefaultRetention
-	if p.config != nil {
-		if r := p.config.Retention(targetSource, targetName); r > 0 {
+	if p.retention != nil {
+		if r := p.retention(ctx, targetSource, targetName); r > 0 {
 			retention = r
 		}
 	}
@@ -85,13 +91,12 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 	// If still short, evict across configs in LRU order.
 	need := requiredBytes(in.EstimateBytes, p.tracker.Available(), plan.FreedBytes)
 	if need > 0 {
-		sort.SliceStable(candidates, func(i, j int) bool {
-			a, b := &candidates[i], &candidates[j]
+		slices.SortStableFunc(candidates, func(a, b inventory.Info) int {
 			if a.LastAccessedAt.Equal(b.LastAccessedAt) {
-				return a.LoadedAt.Before(b.LoadedAt)
+				return a.LoadedAt.Compare(b.LoadedAt)
 			}
 
-			return a.LastAccessedAt.Before(b.LastAccessedAt)
+			return a.LastAccessedAt.Compare(b.LastAccessedAt)
 		})
 		for i := range candidates {
 			if need == 0 {
@@ -168,13 +173,12 @@ func selectByConfig(pool []inventory.Info, source, name string, retention uint32
 	if uint32(len(inConfig)) < retention {
 		return nil
 	}
-	sort.SliceStable(inConfig, func(i, j int) bool {
-		ai, bi := inConfig[i].LoadedAt, inConfig[j].LoadedAt
-		if ai.Equal(bi) {
-			return inConfig[i].LastAccessedAt.Before(inConfig[j].LastAccessedAt)
+	slices.SortStableFunc(inConfig, func(a, b inventory.Info) int {
+		if a.LoadedAt.Equal(b.LoadedAt) {
+			return a.LastAccessedAt.Compare(b.LastAccessedAt)
 		}
 
-		return ai.Before(bi)
+		return a.LoadedAt.Compare(b.LoadedAt)
 	})
 	drop := min(uint32(len(inConfig))-(retention-1), uint32(len(inConfig)))
 

@@ -16,17 +16,17 @@ const ManifestVersion = 1
 
 // Manifest describes the contents of an index directory.
 type Manifest struct {
-	Version   int                 `json:"version"`
 	CreatedAt time.Time           `json:"created_at"`
+	Files     map[string]FileInfo `json:"files"`
+	Version   int                 `json:"version"`
 	NodeCount uint64              `json:"node_count"`
 	MaxDepth  uint32              `json:"max_depth"`
-	Files     map[string]FileInfo `json:"files"`
 }
 
 // FileInfo describes a single file in the index.
 type FileInfo struct {
+	Checksum string `json:"checksum"`
 	Size     int64  `json:"size"`
-	Checksum string `json:"checksum"` // SHA-256 hex
 }
 
 // WriteManifest creates a manifest for all files in the index directory.
@@ -43,27 +43,34 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		Files:     make(map[string]FileInfo),
 	}
 
-	expectedTopLevel := []string{
-		"subtree_end.u64",
-		"depth.u32",
-		"object_count.u64",
-		"total_bytes.u64",
-		"max_depth_in_subtree.u32",
+	// Files always written by the current builder. Hard-coded so the
+	// manifest can be verified against an expected set rather than
+	// whatever happened to land on disk.
+	requiredTopLevel := []string{
 		"depth_offsets.u64",
 		"depth_positions.u64",
 		"mph.bin",
-		"mph_fp.u64",
-		"mph_pos.u64",
+		CombinedMPHFArrayFile,
 		"prefix_blob.bin",
 		"prefix_offsets.u64",
-		SegmentsBlobFile,
-		SegmentsOffsetsFile,
-		PrefixSegIDsFile,
-		PrefixSegOffsetsFile,
 		"tiers.json",
+		CoreStatsFile,
+	}
+	for _, name := range requiredTopLevel {
+		if err := addFile(dir, name, manifest.Files); err != nil {
+			return err
+		}
 	}
 
-	for _, name := range expectedTopLevel {
+	// Optional: only present when dictionary-encoded prefix storage
+	// was selected. addFile is a no-op for missing files.
+	optionalPrefixDict := []string{
+		PrefixDictBlobFile,
+		PrefixDictOffsetsFile,
+		PrefixDictIDsFile,
+		PrefixDictOffsetsPerPrefixFile,
+	}
+	for _, name := range optionalPrefixDict {
 		if err := addFile(dir, name, manifest.Files); err != nil {
 			return err
 		}

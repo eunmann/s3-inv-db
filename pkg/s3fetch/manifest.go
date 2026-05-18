@@ -76,8 +76,8 @@ type Manifest struct {
 // ManifestFile represents a single inventory file in the manifest.
 type ManifestFile struct {
 	Key         string `json:"key"`
-	Size        int64  `json:"size"`
 	MD5Checksum string `json:"MD5checksum"`
+	Size        int64  `json:"size"`
 }
 
 // ParseManifest parses an AWS S3 Inventory manifest.json.
@@ -139,20 +139,10 @@ func (m *Manifest) DetectFormat() InventoryFormat {
 	return InventoryFormatCSV
 }
 
-// IsParquet returns true if the inventory format is Parquet.
-func (m *Manifest) IsParquet() bool {
-	return m.DetectFormat() == InventoryFormatParquet
-}
-
-// IsCSV returns true if the inventory format is CSV.
-func (m *Manifest) IsCSV() bool {
-	return m.DetectFormat() == InventoryFormatCSV
-}
-
-// GetDestinationBucketName returns the normalized bucket name from the DestinationBucket field.
+// DestinationBucketName returns the normalized bucket name from the DestinationBucket field.
 // The DestinationBucket may be either a plain bucket name or an S3 ARN.
 // This method extracts the bucket name suitable for S3 API calls.
-func (m *Manifest) GetDestinationBucketName() (string, error) {
+func (m *Manifest) DestinationBucketName() (string, error) {
 	return ParseBucketIdentifier(m.DestinationBucket)
 }
 

@@ -113,6 +113,12 @@ services:
       - --count=${S3INV_SEED_COUNT:-3}
       - --runs-per-inventory=${S3INV_SEED_RUNS:-4}
       - --objects=${S3INV_SEED_OBJECTS:-5000}
+      # Mixed sizes give the UI a visible load progression: inv-001 is
+      # tiny (instant), inv-002 is mid (hundreds of ms), inv-003 is
+      # large (seconds — the spinner + stage labels actually appear).
+      # Override with S3INV_SEED_OBJECTS_PER_CONFIG=a,b,c, or set it to
+      # empty string to fall back to --objects for every config.
+      - --objects-per-config=${S3INV_SEED_OBJECTS_PER_CONFIG-5000,250000,2500000}
       - --preset=${S3INV_SEED_PRESET:-realistic}
       - --pretty-logs
     environment:

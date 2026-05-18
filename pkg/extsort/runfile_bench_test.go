@@ -70,7 +70,7 @@ func BenchmarkRunFileWriteCompressed(b *testing.B) {
 	for i := range b.N {
 		path := filepath.Join(b.TempDir(), fmt.Sprintf("run_%d.crun", i))
 		w, err := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{
-			BufferSize:       4 * 1024 * 1024,
+			BufferSize:       extsort.DefaultRunBufferSize,
 			CompressionLevel: extsort.CompressionFastest,
 		})
 		if err != nil {
@@ -96,7 +96,7 @@ func BenchmarkRunFileReadCompressed(b *testing.B) {
 	rows := makePrefixRows(N)
 	path := filepath.Join(b.TempDir(), "bench.crun")
 	w, err := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{
-		BufferSize:       4 * 1024 * 1024,
+		BufferSize:       extsort.DefaultRunBufferSize,
 		CompressionLevel: extsort.CompressionFastest,
 	})
 	if err != nil {

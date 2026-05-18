@@ -1,14 +1,13 @@
 package extsort
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/eunmann/s3-inv-db/pkg/benchutil"
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
 
@@ -64,7 +63,7 @@ func BenchmarkPipelineScale_E2E(b *testing.B) {
 					rows := agg.Drain()
 					path := filepath.Join(runDir, fmt.Sprintf("run_%02d.crun", f))
 					w, err := NewCompressedRunWriter(path, CompressedRunWriterOptions{
-						BufferSize:       4 * 1024 * 1024,
+						BufferSize:       DefaultRunBufferSize,
 						CompressionLevel: CompressionFastest,
 					})
 					if err != nil {
@@ -85,11 +84,11 @@ func BenchmarkPipelineScale_E2E(b *testing.B) {
 				merger := NewParallelMerger(ParallelMergeConfig{
 					NumWorkers:     4,
 					MaxFanIn:       8,
-					BufferSize:     4 * 1024 * 1024,
+					BufferSize:     DefaultRunBufferSize,
 					TempDir:        runDir,
 					UseCompression: true,
 				})
-				finalPath, err := merger.MergeAll(context.Background(), runPaths)
+				finalPath, err := merger.MergeAll(b.Context(), runPaths)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -98,7 +97,7 @@ func BenchmarkPipelineScale_E2E(b *testing.B) {
 					b.Fatal(err)
 				}
 				it := &singleRunIterator{reader: reader}
-				builder, err := NewIndexBuilder(outDir, runDir, false)
+				builder, err := NewIndexBuilder(outDir, runDir)
 				if err != nil {
 					b.Fatal(err)
 				}

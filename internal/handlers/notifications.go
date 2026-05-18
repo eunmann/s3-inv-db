@@ -3,17 +3,17 @@ package handlers
 import (
 	"context"
 	"net/http"
-	"sort"
+	"slices"
 	"time"
 )
 
 // Notification is one surfaced failure or warning.
 type Notification struct {
-	Kind    string    `json:"kind"` // "poll" | "load" | "budget"
+	At      time.Time `json:"at"`
+	Kind    string    `json:"kind"`
 	Title   string    `json:"title"`
 	Message string    `json:"message"`
-	Target  string    `json:"target,omitempty"` // config id or run id
-	At      time.Time `json:"at"`
+	Target  string    `json:"target,omitempty"`
 }
 
 // NotificationsResponse is the JSON the banner consumes.
@@ -59,7 +59,7 @@ func (h *Handlers) collectNotifications(ctx context.Context) []Notification {
 			At:      info.AutoLoadBackoffUntil,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
+	slices.SortFunc(out, func(a, b Notification) int { return b.At.Compare(a.At) })
 
 	return out
 }
@@ -72,7 +72,7 @@ func (h *Handlers) NotificationsAPI(w http.ResponseWriter, r *http.Request) {
 
 // NotificationsPartial renders the banner HTML; empty when nothing to surface.
 func (h *Handlers) NotificationsPartial(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Type", contentTypeHTML)
 	notifs := h.collectNotifications(r.Context())
 	if len(notifs) == 0 {
 		return
@@ -80,7 +80,5 @@ func (h *Handlers) NotificationsPartial(w http.ResponseWriter, r *http.Request) 
 	data := struct {
 		Notifications []Notification
 	}{Notifications: notifs}
-	if err := h.renderer.RenderPartial(w, "notifications_banner.html", data); err != nil {
-		http.Error(w, "render notifications", http.StatusInternalServerError)
-	}
+	h.renderHTMLPartial(w, r, "notifications_banner.html", "render notifications", data)
 }

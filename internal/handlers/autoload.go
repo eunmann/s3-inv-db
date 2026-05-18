@@ -11,11 +11,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// trueLiteral is the lowercase token used by checkbox/htmx toggles to
-// signal "on"; centralised so callers don't repeat the magic string.
-const trueLiteral = "true"
-
-type AutoLoadToggleResponse struct {
+type autoLoadToggleResponse struct {
 	OK bool `json:"ok"`
 }
 
@@ -66,7 +62,7 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 
 		return
 	}
-	WriteJSON(w, http.StatusOK, AutoLoadToggleResponse{OK: true})
+	WriteJSON(w, http.StatusOK, autoLoadToggleResponse{OK: true})
 }
 
 // SetPinAPI sets a run's pin state. Form body: pinned.
@@ -89,7 +85,7 @@ func (h *Handlers) SetPinAPI(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
-	WriteJSON(w, http.StatusOK, AutoLoadToggleResponse{OK: true})
+	WriteJSON(w, http.StatusOK, autoLoadToggleResponse{OK: true})
 }
 
 type DiskBudgetResponse struct {

@@ -18,30 +18,13 @@ import (
 
 // ParallelMergeConfig configures parallel merge operations.
 type ParallelMergeConfig struct {
-	// NumWorkers is the number of concurrent merge workers.
-	// Default: max(1, NumCPU/2).
-	NumWorkers int
-
-	// MaxFanIn is the maximum number of runs merged in a single worker (K for K-way).
-	// Higher values reduce merge rounds but increase memory per worker.
-	// Default: 8.
-	MaxFanIn int
-
-	// BufferSize is the read/write buffer size per run file.
-	// Default: 1MB.
-	BufferSize int
-
-	// TempDir is the directory for intermediate merge output.
-	// If empty, uses os.TempDir().
-	TempDir string
-
-	// UseCompression determines whether to write compressed intermediate runs.
-	// Default: true.
-	UseCompression bool
-
-	// CompressionLevel is the compression level for intermediate runs.
-	// Default: CompressionFastest (optimize for merge speed).
+	OnRoundComplete  func(round, remainingFiles int)
+	TempDir          string
+	NumWorkers       int
+	MaxFanIn         int
+	BufferSize       int
 	CompressionLevel CompressionLevel
+	UseCompression   bool
 }
 
 // DefaultParallelMergeConfig returns sensible defaults for parallel merge.
@@ -62,11 +45,10 @@ func DefaultParallelMergeConfig() ParallelMergeConfig {
 
 // ParallelMerger coordinates parallel merging of sorted run files.
 type ParallelMerger struct {
-	config   ParallelMergeConfig
-	tempDir  string
-	runCount atomic.Int64 // Counter for generating unique run file names
-
-	// Statistics
+	config            ParallelMergeConfig
+	tempDir           string
+	instanceID        string
+	runCount          atomic.Int64
 	totalMergeTime    time.Duration
 	totalBytesWritten int64
 	mergeRounds       int
@@ -90,26 +72,118 @@ func NewParallelMerger(config ParallelMergeConfig) *ParallelMerger {
 	}
 
 	return &ParallelMerger{
-		config:  config,
-		tempDir: tempDir,
+		config:     config,
+		tempDir:    tempDir,
+		instanceID: newMergerInstanceID(),
 	}
+}
+
+// nextMergerInstanceCounter is a process-wide counter that
+// disambiguates concurrent ParallelMerger instances. Combined with the
+// process PID it gives intermediate files unique names within the
+// shared tempDir.
+//
+//nolint:gochecknoglobals // process-wide counter, by design
+var nextMergerInstanceCounter atomic.Int64
+
+func newMergerInstanceID() string {
+	return fmt.Sprintf("p%d_i%d", os.Getpid(), nextMergerInstanceCounter.Add(1))
 }
 
 // mergeJob represents a group of runs to merge.
 type mergeJob struct {
-	inputPaths []string
 	outputPath string
+	inputPaths []string
 	jobIndex   int
 }
 
 // mergeResult holds the result of a merge job.
 type mergeResult struct {
+	err          error
 	outputPath   string
 	recordCount  uint64
 	bytesWritten int64
 	duration     time.Duration
-	err          error
 	jobIndex     int
+}
+
+// MergeAllToIterator merges all input run files and returns a
+// streaming row iterator over the final sorted output, plus a
+// cleanup closure the caller must run when done.
+//
+// Unlike MergeAll, no final-merged file is written to disk: when the
+// remaining file count fits in MaxFanIn after the N-1 disk-backed
+// rounds, the last round is replaced by a live K-way MergeIterator
+// that the IndexBuilder consumes directly. At billion-prefix scale
+// this saves writing and re-reading the entire deduplicated prefix
+// set (hundreds of GB of avoidable I/O).
+//
+// The cleanup closure closes the iterator's underlying readers and
+// removes any intermediate files this call produced. It does NOT
+// remove the original input files; that remains the caller's job.
+func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []string) (RowIterator, func() error, error) { //nolint:ireturn // dispatches between single-run + K-way merge variants
+	if len(inputPaths) == 0 {
+		return nil, func() error { return nil }, ErrNoInputPaths
+	}
+
+	log := zerolog.Ctx(ctx)
+	startTime := time.Now()
+
+	finalPaths := inputPaths
+	round := 0
+	intermediates := []string{}
+
+	// Disk-backed rounds while the file count exceeds MaxFanIn —
+	// each round shrinks the count by ~MaxFanIn×.
+	for len(finalPaths) > m.config.MaxFanIn {
+		select {
+		case <-ctx.Done():
+			removeFiles(intermediates)
+
+			return nil, nil, fmt.Errorf("merge cancelled: %w", ctx.Err())
+		default:
+		}
+		round++
+		m.mergeRounds = round
+		nextPaths, err := m.mergeRound(ctx, finalPaths, round)
+		if err != nil {
+			removeFiles(append(intermediates, nextPaths...))
+
+			return nil, nil, fmt.Errorf("merge round %d: %w", round, err)
+		}
+		if round > 1 {
+			removeFiles(finalPaths)
+		}
+		intermediates = append(intermediates, nextPaths...)
+		finalPaths = nextPaths
+		if m.config.OnRoundComplete != nil {
+			m.config.OnRoundComplete(round, len(finalPaths))
+		}
+	}
+
+	// Final round: stream the K-way merge directly, no file write.
+	iter, err := NewMergeIterator(finalPaths, m.config.BufferSize)
+	if err != nil {
+		removeFiles(intermediates)
+
+		return nil, nil, fmt.Errorf("open final merge iterator: %w", err)
+	}
+
+	m.totalMergeTime = time.Since(startTime)
+	log.Info().
+		Int("rounds_count", m.mergeRounds).
+		Int("final_fan_in", len(finalPaths)).
+		Str("disk_rounds_duration", humanfmt.Duration(m.totalMergeTime)).
+		Msg("parallel merge → streaming iterator")
+
+	cleanup := func() error {
+		err := iter.Close()
+		removeFiles(intermediates)
+
+		return err
+	}
+
+	return iter, cleanup, nil
 }
 
 // MergeAll merges all input run files into a single sorted output.
@@ -151,19 +225,14 @@ func (m *ParallelMerger) MergeAll(ctx context.Context, inputPaths []string) (str
 
 		nextPaths, err := m.mergeRound(ctx, currentPaths, round)
 		if err != nil {
-			// Clean up any files we created
-			for _, p := range nextPaths {
-				os.Remove(p)
-			}
+			removeFiles(nextPaths)
 
 			return "", fmt.Errorf("merge round %d: %w", round, err)
 		}
 
 		// Clean up input files from previous round (except original inputs on first round)
 		if round > 1 {
-			for _, p := range currentPaths {
-				os.Remove(p)
-			}
+			removeFiles(currentPaths)
 		}
 
 		currentPaths = nextPaths
@@ -171,6 +240,9 @@ func (m *ParallelMerger) MergeAll(ctx context.Context, inputPaths []string) (str
 			Int("round", round).
 			Int("output_files_count", len(currentPaths)).
 			Msg("merge round complete")
+		if m.config.OnRoundComplete != nil {
+			m.config.OnRoundComplete(round, len(currentPaths))
+		}
 	}
 
 	m.totalMergeTime = time.Since(startTime)
@@ -204,7 +276,7 @@ func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, ro
 
 	// Send jobs
 	for i, group := range groups {
-		outputPath := filepath.Join(m.tempDir, fmt.Sprintf("merge_r%d_%04d.crun", round, m.runCount.Add(1)))
+		outputPath := filepath.Join(m.tempDir, fmt.Sprintf("merge_%s_r%d_%04d.crun", m.instanceID, round, m.runCount.Add(1)))
 		jobs <- mergeJob{
 			inputPaths: group,
 			outputPath: outputPath,
@@ -221,13 +293,11 @@ func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, ro
 
 	// Collect results
 	outputPaths := make([]string, len(groups))
-	var firstErr error
+	var errs []error
 
 	for result := range results {
 		if result.err != nil {
-			if firstErr == nil {
-				firstErr = result.err
-			}
+			errs = append(errs, result.err)
 
 			continue
 		}
@@ -235,7 +305,7 @@ func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, ro
 		m.totalBytesWritten += result.bytesWritten
 	}
 
-	if firstErr != nil {
+	if len(errs) > 0 {
 		// Clean up any successful outputs
 		for _, p := range outputPaths {
 			if p != "" {
@@ -243,7 +313,7 @@ func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, ro
 			}
 		}
 
-		return nil, firstErr
+		return nil, errors.Join(errs...)
 	}
 
 	return outputPaths, nil
@@ -348,8 +418,11 @@ func drainMerger(ctx context.Context, merger *runReaderMergeIterator, outputWrit
 		}
 
 		if err := outputWriter.Write(row); err != nil {
+			merger.Release(row)
+
 			return count, fmt.Errorf("write to output: %w", err)
 		}
+		merger.Release(row)
 		count++
 	}
 }
@@ -428,9 +501,33 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 
 // runReaderMergeIterator wraps RunReader interface for use with merge heap.
 type runReaderMergeIterator struct {
-	readers []RunReader
-	heap    *mergeHeap
 	err     error
+	heap    *mergeHeap
+	readers []RunReader
+}
+
+// mergeRowPool reuses PrefixRow allocations across the merge phase
+// (billion-row builds otherwise churn hundreds of GiB).
+//
+//nolint:gochecknoglobals // package-level pool, by design
+var mergeRowPool = newTypedPool(func() *PrefixRow { return &PrefixRow{} })
+
+func acquireMergeRow() *PrefixRow {
+	r := mergeRowPool.Get()
+	r.Reset()
+
+	return r
+}
+
+// releaseMergeRow returns a row to the pool. Callers of
+// runReaderMergeIterator.Next must release the returned row when
+// they're done with its data — the next call to Next may overwrite
+// it via the pool.
+func releaseMergeRow(r *PrefixRow) {
+	if r == nil {
+		return
+	}
+	mergeRowPool.Put(r)
 }
 
 // newMergeIteratorFromRunReaders creates a merge iterator from RunReader interfaces.
@@ -441,11 +538,15 @@ func newMergeIteratorFromRunReaders(readers []RunReader) (*runReaderMergeIterato
 	}
 
 	for i, r := range readers {
-		row, err := r.Read()
+		row := acquireMergeRow()
+		err := r.ReadInto(row)
 		if errors.Is(err, io.EOF) {
+			releaseMergeRow(row)
+
 			continue // empty reader
 		}
 		if err != nil {
+			releaseMergeRow(row)
 			m.Close()
 
 			return nil, fmt.Errorf("initial read from run %d: %w", i, err)
@@ -458,7 +559,9 @@ func newMergeIteratorFromRunReaders(readers []RunReader) (*runReaderMergeIterato
 	return m, nil
 }
 
-// Next returns the next merged PrefixRow in sorted order.
+// Next returns the next merged PrefixRow in sorted order. The caller
+// owns the returned row until it calls Release(row); after Release the
+// row may be handed to a future Next caller via the pool.
 func (m *runReaderMergeIterator) Next() (*PrefixRow, error) {
 	if m.err != nil {
 		return nil, m.err
@@ -477,10 +580,12 @@ func (m *runReaderMergeIterator) Next() (*PrefixRow, error) {
 		return nil, err
 	}
 
-	// Merge duplicates
+	// Merge duplicates. The duplicate rows are returned to the pool
+	// after their data is folded into result.
 	for m.heap.Len() > 0 && m.heap.items[0].row.Prefix == result.Prefix {
 		dup := heapPop(m.heap)
 		result.Merge(dup.row)
+		releaseMergeRow(dup.row)
 
 		if err := m.advanceReader(dup.readerIdx); err != nil && !errors.Is(err, io.EOF) {
 			m.err = err
@@ -492,10 +597,23 @@ func (m *runReaderMergeIterator) Next() (*PrefixRow, error) {
 	return result, nil
 }
 
+// Release returns a row received from Next back to the pool. Callers
+// must not retain the row after calling Release.
+func (m *runReaderMergeIterator) Release(row *PrefixRow) {
+	releaseMergeRow(row)
+}
+
+// Remaining returns 0 — RunReaders don't surface a known total ahead
+// of time. Satisfies the RowIterator interface for the builder's
+// capacity hint.
+func (m *runReaderMergeIterator) Remaining() uint64 { return 0 }
+
 // advanceReader reads the next row from the given reader and pushes to heap.
 func (m *runReaderMergeIterator) advanceReader(idx int) error {
-	row, err := m.readers[idx].Read()
+	row := acquireMergeRow()
+	err := m.readers[idx].ReadInto(row)
 	if err != nil {
+		releaseMergeRow(row)
 		if errors.Is(err, io.EOF) {
 			return io.EOF
 		}
@@ -507,16 +625,16 @@ func (m *runReaderMergeIterator) advanceReader(idx int) error {
 	return nil
 }
 
-// Close closes all underlying readers.
+// Close closes all underlying readers, joining any errors.
 func (m *runReaderMergeIterator) Close() error {
-	var firstErr error
+	errs := make([]error, 0, len(m.readers))
 	for _, r := range m.readers {
-		if err := r.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := r.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
-	return firstErr
+	return errors.Join(errs...)
 }
 
 // Heap operations without using container/heap to avoid interface{} conversions
@@ -592,18 +710,20 @@ func (m *ParallelMerger) Statistics() MergeStatistics {
 // CleanupIntermediateFiles removes all intermediate merge files from the temp directory.
 // Call this after the final merge is complete and you've processed the output.
 func (m *ParallelMerger) CleanupIntermediateFiles() error {
-	pattern := filepath.Join(m.tempDir, "merge_r*_*.crun")
+	// Glob only this merger instance's files so a concurrent merger
+	// in the same tempDir doesn't have its files swept by our cleanup.
+	pattern := filepath.Join(m.tempDir, fmt.Sprintf("merge_%s_r*_*.crun", m.instanceID))
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return fmt.Errorf("glob intermediate files: %w", err)
 	}
 
-	var firstErr error
+	errs := make([]error, 0, len(matches))
 	for _, match := range matches {
-		if err := os.Remove(match); err != nil && firstErr == nil {
-			firstErr = err
+		if err := os.Remove(match); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
-	return firstErr
+	return errors.Join(errs...)
 }

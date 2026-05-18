@@ -19,8 +19,6 @@ var (
 	ErrFileTooSmall = errors.New("file too small")
 	// ErrWidthMismatch indicates an array width does not match the requested operation width.
 	ErrWidthMismatch = errors.New("width mismatch")
-	// ErrHashCollision indicates two distinct inputs produced the same hash key.
-	ErrHashCollision = errors.New("hash collision")
 	// ErrMPHFLookupFailed indicates a Find call into the MPHF returned no result for a known prefix.
 	ErrMPHFLookupFailed = errors.New("MPHF lookup failed")
 	// ErrMPHFAmbiguousKey indicates the MPHF returned 0 (ambiguous sentinel) for an existing key.
@@ -33,4 +31,6 @@ var (
 	ErrNoPrefixStorage = errors.New("no prefix storage loaded")
 	// ErrLookupWrongPos indicates a verification lookup returned an unexpected position.
 	ErrLookupWrongPos = errors.New("lookup returned wrong pos")
+	// ErrHashCollision indicates two distinct segments hashed to the same value.
+	ErrHashCollision = errors.New("hash collision")
 )

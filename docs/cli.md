@@ -22,16 +22,18 @@ s3-inv-db build --s3-manifest s3://bucket/inv/data/manifest.json --out ./my-inde
 |---|---|---|---|
 | `--s3-manifest` | yes |  | S3 URI to `manifest.json` |
 | `--out` | yes |  | Output directory for index files |
-| `--workers` |  | CPU count | Concurrent S3 download/parse workers |
 | `--max-depth` |  | 0 (unlimited) | Maximum prefix depth to retain |
-| `--mem-budget` |  | 50% of RAM | Memory budget (e.g. `4GiB`, `8GB`) |
-| `--segment-prefixes` |  | false | Dictionary-compress shared prefix segments |
+| `--prefix-dictionary` |  | true | Store prefixes as a shared segment dictionary; set `=false` for the raw blob layout |
 | `--config` |  |  | JSON config file (see above) |
 | `--verbose` |  | false | Debug-level logging |
 | `--pretty-logs` |  | false | Human-friendly console output |
 
-Environment: `S3INV_MEM_BUDGET` provides the default when `--mem-budget`
-is omitted.
+Memory and concurrency are no longer tunable per-flag. Worker counts
+derive from `runtime.NumCPU()`; the process memory ceiling is
+`GOMEMLIMIT` (env var, cgroup `memory.max`, or 60% of detected RAM —
+whichever is smallest) installed at startup via
+`runtime/debug.SetMemoryLimit`. Set `GOMEMLIMIT=4GiB` to cap a build,
+or run under a constrained cgroup.
 
 AWS credentials use the standard SDK chain: env vars → shared
 credentials file → IAM role. Required permissions: `s3:GetObject` on

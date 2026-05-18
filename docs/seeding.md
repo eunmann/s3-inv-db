@@ -57,6 +57,23 @@ stack has grouping content from the first boot.
 | `medium` | 10 | 5 | Moderate complexity |
 | `large` | 20 | 8 | Deep, wide trees |
 | `realistic` | 15 | 7 | S3-like path patterns (default) |
+| `deep_pyramid` | 256 (leaf) | 10 | Narrow-top / wide-bottom shape with long descriptive segments — the regime where the prefix dictionary pays off |
+
+## Mixed-size mixes
+
+`--objects-per-config` overrides `--objects` per inventory configuration.
+The list cycles modulo `--count`, so a single seeder invocation can
+populate the UI with a mix of fast- and slow-loading inventories:
+
+```bash
+./bin/s3-inv-db-seeder \
+  --target s3 \
+  --count 6 \
+  --objects-per-config 5000,500000,5000000
+# inv-001/004 → 5K objects
+# inv-002/005 → 500K objects
+# inv-003/006 → 5M objects
+```
 
 ## Deterministic output
 

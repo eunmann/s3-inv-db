@@ -2,6 +2,10 @@ package handlers
 
 import "net/http"
 
+// trueLiteral is the lowercase token used by checkbox/htmx toggles to
+// signal "on"; centralised so callers don't repeat the magic string.
+const trueLiteral = "true"
+
 // wantsHTMXPartial reports whether the request expects an htmx-partial
 // response rather than a full HTML page. A boosted nav click and a
 // history-restore both set HX-Request, but the user is navigating

@@ -23,12 +23,12 @@ var ErrReservationActive = errors.New("reservation already active")
 
 // Tracker is the thread-safe budget accounting primitive.
 type Tracker struct {
-	mu       sync.Mutex
+	keys     map[string]uint64
 	cap      uint64
 	headroom uint64
 	used     uint64
 	reserved uint64
-	keys     map[string]uint64
+	mu       sync.Mutex
 }
 
 // New constructs a Tracker. Zero cap disables the budget — Reserve
@@ -90,13 +90,13 @@ func (t *Tracker) availableLocked() uint64 {
 	return t.cap - committed
 }
 
-func (t *Tracker) Add(_ string, bytes uint64) {
+func (t *Tracker) Add(bytes uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.used += bytes
 }
 
-func (t *Tracker) Remove(_ string, bytes uint64) {
+func (t *Tracker) Remove(bytes uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if bytes >= t.used {

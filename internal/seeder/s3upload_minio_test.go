@@ -3,7 +3,6 @@ package seeder_test
 import (
 	"bytes"
 	"compress/gzip"
-	"context"
 	"encoding/csv"
 	"encoding/json"
 	"io"
@@ -13,17 +12,18 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/eunmann/s3-inv-db/internal/miniotest"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
+	"github.com/eunmann/s3-inv-db/internal/testsupport/miniotest"
+	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/rs/zerolog"
 )
 
 func newMinIOS3Client(t *testing.T) *s3.Client {
 	t.Helper()
-	if os.Getenv("AWS_ENDPOINT_URL_S3") == "" {
+	if os.Getenv(s3fetch.EnvEndpointURL) == "" {
 		t.Fatal("AWS_ENDPOINT_URL_S3 not set — run `make test`")
 	}
-	c, err := seeder.NewS3ClientForTest(context.Background())
+	c, err := seeder.NewS3ClientForTest(t.Context())
 	if err != nil {
 		t.Fatalf("newS3Client: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestUploadInventory_RoundTrip(t *testing.T) {
 	stamp := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	objects := 50
 
-	info, err := seeder.UploadInventory(context.Background(), client, seeder.Config{
+	info, err := seeder.UploadInventory(t.Context(), client, seeder.Config{
 		Target: seeder.TargetS3, Objects: objects, Preset: "small", Seed: 7,
 		Logger: zerolog.Nop(),
 	}, seeder.S3Config{
@@ -59,7 +59,7 @@ func TestUploadInventory_RoundTrip(t *testing.T) {
 	manifestKey := "inventory-data/synthetic-prod/inv-001/2026-05-14T12-00Z/manifest.json"
 	checksumKey := "inventory-data/synthetic-prod/inv-001/2026-05-14T12-00Z/manifest.checksum"
 	for _, key := range []string{manifestKey, checksumKey} {
-		_, err := client.HeadObject(context.Background(), &s3.HeadObjectInput{
+		_, err := client.HeadObject(t.Context(), &s3.HeadObjectInput{
 			Bucket: aws.String(bucket), Key: aws.String(key),
 		})
 		if err != nil {
@@ -92,7 +92,7 @@ func TestUploadInventory_DataFileURLPlaced(t *testing.T) {
 	client := newMinIOS3Client(t)
 	bucket := miniotest.Bucket(t, client)
 	stamp := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
-	_, err := seeder.UploadInventory(context.Background(), client, seeder.Config{
+	_, err := seeder.UploadInventory(t.Context(), client, seeder.Config{
 		Target: seeder.TargetS3, Objects: 10, Preset: "small", Seed: 1,
 		Logger: zerolog.Nop(),
 	}, seeder.S3Config{Bucket: bucket, SrcBucket: "src"}, 1, 1, stamp)
@@ -106,7 +106,7 @@ func TestUploadInventory_DataFileURLPlaced(t *testing.T) {
 	})
 	count := 0
 	for pages.HasMorePages() {
-		page, err := pages.NextPage(context.Background())
+		page, err := pages.NextPage(t.Context())
 		if err != nil {
 			t.Fatalf("list data dir: %v", err)
 		}
@@ -119,7 +119,7 @@ func TestUploadInventory_DataFileURLPlaced(t *testing.T) {
 
 func getManifest(t *testing.T, c *s3.Client, bucket, key string) map[string]any {
 	t.Helper()
-	resp, err := c.GetObject(context.Background(), &s3.GetObjectInput{
+	resp, err := c.GetObject(t.Context(), &s3.GetObjectInput{
 		Bucket: aws.String(bucket), Key: aws.String(key),
 	})
 	if err != nil {
@@ -136,7 +136,7 @@ func getManifest(t *testing.T, c *s3.Client, bucket, key string) map[string]any 
 
 func getCSVGzObjectCount(t *testing.T, c *s3.Client, bucket, key string) int {
 	t.Helper()
-	resp, err := c.GetObject(context.Background(), &s3.GetObjectInput{
+	resp, err := c.GetObject(t.Context(), &s3.GetObjectInput{
 		Bucket: aws.String(bucket), Key: aws.String(key),
 	})
 	if err != nil {

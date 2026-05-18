@@ -15,10 +15,12 @@ func TestClassify(t *testing.T) {
 		return map[string]indexread.TierBreakdown{"STANDARD": {TierName: "STANDARD", Bytes: bytes, ObjectCount: count}}
 	}
 	cases := []struct {
-		name       string
-		obj, bytes inventory.CompareNumeric
-		ta, tb     map[string]indexread.TierBreakdown
-		want       inventory.CompareStatus
+		ta    map[string]indexread.TierBreakdown
+		tb    map[string]indexread.TierBreakdown
+		name  string
+		obj   inventory.CompareNumeric
+		bytes inventory.CompareNumeric
+		want  inventory.CompareStatus
 	}{
 		{
 			name: "only after = added",
@@ -63,15 +65,16 @@ func TestClassify(t *testing.T) {
 
 func TestTierMapsEqual(t *testing.T) {
 	cases := []struct {
+		a    map[string]indexread.TierBreakdown
+		b    map[string]indexread.TierBreakdown
 		name string
-		a, b map[string]indexread.TierBreakdown
 		want bool
 	}{
-		{"both nil", nil, nil, true},
-		{"same content", map[string]indexread.TierBreakdown{"S": {Bytes: 1, ObjectCount: 1}}, map[string]indexread.TierBreakdown{"S": {Bytes: 1, ObjectCount: 1}}, true},
-		{"different bytes", map[string]indexread.TierBreakdown{"S": {Bytes: 1}}, map[string]indexread.TierBreakdown{"S": {Bytes: 2}}, false},
-		{"different keys", map[string]indexread.TierBreakdown{"S": {Bytes: 1}}, map[string]indexread.TierBreakdown{"G": {Bytes: 1}}, false},
-		{"length differs", map[string]indexread.TierBreakdown{"S": {Bytes: 1}}, map[string]indexread.TierBreakdown{}, false},
+		{name: "both nil", a: nil, b: nil, want: true},
+		{name: "same content", a: map[string]indexread.TierBreakdown{"S": {Bytes: 1, ObjectCount: 1}}, b: map[string]indexread.TierBreakdown{"S": {Bytes: 1, ObjectCount: 1}}, want: true},
+		{name: "different bytes", a: map[string]indexread.TierBreakdown{"S": {Bytes: 1}}, b: map[string]indexread.TierBreakdown{"S": {Bytes: 2}}, want: false},
+		{name: "different keys", a: map[string]indexread.TierBreakdown{"S": {Bytes: 1}}, b: map[string]indexread.TierBreakdown{"G": {Bytes: 1}}, want: false},
+		{name: "length differs", a: map[string]indexread.TierBreakdown{"S": {Bytes: 1}}, b: map[string]indexread.TierBreakdown{}, want: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -146,14 +149,14 @@ func TestNormalizeCompareSort(t *testing.T) {
 
 func TestCompareStatusString(t *testing.T) {
 	cases := []struct {
-		s    inventory.CompareStatus
 		want string
+		s    inventory.CompareStatus
 	}{
-		{inventory.CompareAdded, "added"},
-		{inventory.CompareRemoved, "removed"},
-		{inventory.CompareChanged, "changed"},
-		{inventory.CompareUnchanged, "unchanged"},
-		{inventory.CompareStatus(99), "unchanged"},
+		{s: inventory.CompareAdded, want: "added"},
+		{s: inventory.CompareRemoved, want: "removed"},
+		{s: inventory.CompareChanged, want: "changed"},
+		{s: inventory.CompareUnchanged, want: "unchanged"},
+		{s: inventory.CompareStatus(99), want: "unchanged"},
 	}
 	for _, tc := range cases {
 		if got := tc.s.String(); got != tc.want {
@@ -167,9 +170,6 @@ func TestStatusOrder_StableDistinctPerStatus(t *testing.T) {
 	seen := map[int]inventory.CompareStatus{}
 	for _, s := range statuses {
 		got := inventory.StatusOrder(s)
-		if got != inventory.StatusOrderForTest(s) {
-			t.Errorf("inventory.StatusOrder(%s)=%d disagrees with inventory.StatusOrderForTest(%s)=%d", s, got, s, inventory.StatusOrderForTest(s))
-		}
 		if prev, dup := seen[got]; dup {
 			t.Errorf("rank %d collides for %s and %s", got, prev, s)
 		}

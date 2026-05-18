@@ -28,22 +28,14 @@ const (
 	StateError     State = "error"      // last operation failed
 )
 
-// IsLoaded and its sibling predicates let templates avoid stringly-typed
-// {{eq (printf "%s" .State) "loaded"}} comparisons so a state rename
-// becomes a refactor that the compiler catches.
-func (s State) IsLoaded() bool { return s == StateLoaded }
-
-// IsNotLoaded reports whether the inventory is in the not-loaded state.
+// IsLoaded + siblings let templates avoid stringly-typed comparisons
+// so a state rename becomes a compiler-caught refactor.
+func (s State) IsLoaded() bool    { return s == StateLoaded }
 func (s State) IsNotLoaded() bool { return s == StateNotLoaded }
+func (s State) IsLoading() bool   { return s == StateLoading }
+func (s State) IsError() bool     { return s == StateError }
 
-// IsLoading reports whether the inventory's build pipeline is running.
-func (s State) IsLoading() bool { return s == StateLoading }
-
-// IsError reports whether the last operation on the inventory failed.
-func (s State) IsError() bool { return s == StateError }
-
-// CanLoad reports whether a Load is a legal next operation. Not-loaded
-// and Error inventories can both be (re)built.
+// CanLoad: Not-loaded and Error inventories can both be (re)built.
 func (s State) CanLoad() bool {
 	return s == StateNotLoaded || s == StateError
 }
@@ -97,40 +89,15 @@ func (id ID) ConfigID() string {
 // run. The discovery layer mints these from S3 listings; the Manager
 // tracks each one's lifecycle state via Info.
 type Inventory struct {
-	// SourceBucket is the bucket the inventory is *describing* (the
-	// segment S3 inserts between the destination prefix and the
-	// inventory-name).
-	SourceBucket string `json:"source_bucket"`
-
-	// InventoryName is the AWS S3 inventory configuration's Id (its
-	// slug). Named "InventoryName" so it doesn't shadow the ID type —
-	// the field is one segment of an ID, not the whole thing.
-	InventoryName string `json:"inventory_name"`
-
-	// Run is the timestamp folder name (e.g., "2026-05-13T03-02Z"). Empty
-	// when the configuration has been discovered but has no completed
-	// runs yet — in that case the entry is returned as a placeholder so
-	// the UI can surface "no runs yet".
-	Run string `json:"run"`
-
-	// ManifestKey is the S3 key of this run's manifest.json. Empty when
-	// Run is empty.
-	ManifestKey string `json:"manifest_key"`
-
-	// FileFormat reported by the manifest ("CSV", "Parquet").
-	FileFormat string `json:"file_format,omitempty"`
-
-	// FileCount is the number of data files referenced by the manifest.
-	// A coarse "size" signal for the UI before download.
-	FileCount int `json:"file_count,omitempty"`
-
-	// CreationTimestamp is the manifest's reported creation time
-	// (UnixMilli as a decimal string, exactly as S3 writes it).
+	SourceBucket      string `json:"source_bucket"`
+	Name              string `json:"inventory_name"`
+	Run               string `json:"run"`
+	ManifestKey       string `json:"manifest_key"`
+	FileFormat        string `json:"file_format,omitempty"`
 	CreationTimestamp string `json:"creation_timestamp,omitempty"`
-
-	// Error captures a non-fatal per-run failure (e.g. unreadable
-	// manifest). Empty on success.
-	Error string `json:"error,omitempty"`
+	Error             string `json:"error,omitempty"`
+	FileCount         int    `json:"file_count,omitempty"`
+	TotalBytes        int64  `json:"total_bytes,omitempty"`
 }
 
 // CompositeID returns the typed identifier the Manager uses as its
@@ -139,51 +106,33 @@ type Inventory struct {
 // loadable.
 func (i Inventory) CompositeID() ID {
 	if i.Run == "" {
-		return ID(i.SourceBucket + "/" + i.InventoryName)
+		return ID(i.SourceBucket + "/" + i.Name)
 	}
 
-	return ID(i.SourceBucket + "/" + i.InventoryName + "/" + i.Run)
+	return ID(i.SourceBucket + "/" + i.Name + "/" + i.Run)
 }
 
 // ConfigID returns "<source-bucket>/<inventory-name>" — the identifier
 // shared across every run of one inventory configuration.
 func (i Inventory) ConfigID() string {
-	return i.SourceBucket + "/" + i.InventoryName
+	return i.SourceBucket + "/" + i.Name
 }
 
 // Info contains metadata about a managed inventory.
 type Info struct {
-	ID          ID        `json:"id"`
-	Name        string    `json:"name"`
-	Path        string    `json:"path"`
-	State       State     `json:"state"`
-	Error       string    `json:"error,omitempty"`
-	NodeCount   uint64    `json:"node_count,omitempty"`
-	MaxDepth    uint32    `json:"max_depth,omitempty"`
-	LoadedAt    time.Time `json:"loaded_at,omitzero"`
-	HasTierData bool      `json:"has_tier_data"`
-
-	// Pinned runs are never auto-evicted. Manual Load sets this true;
-	// manual Unload sets it false.
-	Pinned bool `json:"pinned"`
-
-	// UserUnloadedAt is set when the user manually unloads a run. The
-	// auto-loader skips runs that have a non-zero UserUnloadedAt so a
-	// deliberate unload sticks across poll cycles. Cleared on the next
-	// manual Load.
-	UserUnloadedAt time.Time `json:"user_unloaded_at,omitzero"`
-
-	// IndexBytes is the on-disk size of the materialised index in bytes,
-	// measured after a successful Load. Zero for non-loaded runs.
-	IndexBytes uint64 `json:"index_bytes,omitempty"`
-
-	// AutoLoadFailureCount and AutoLoadBackoffUntil track per-run
-	// backoff state for the auto-loader; cleared on successful load.
-	AutoLoadFailureCount uint32    `json:"auto_load_failure_count,omitempty"`
+	LoadedAt             time.Time `json:"loaded_at,omitzero"`
+	LastAccessedAt       time.Time `json:"last_accessed_at,omitzero"`
 	AutoLoadBackoffUntil time.Time `json:"auto_load_backoff_until,omitzero"`
-
-	// LastAccessedAt is updated whenever a reader (WithIndex /
-	// WithTwoIndexes) touches the index. Drives the LRU tiebreak in
-	// eviction planning.
-	LastAccessedAt time.Time `json:"last_accessed_at,omitzero"`
+	UserUnloadedAt       time.Time `json:"user_unloaded_at,omitzero"`
+	Name                 string    `json:"name"`
+	Path                 string    `json:"path"`
+	State                State     `json:"state"`
+	Error                string    `json:"error,omitempty"`
+	ID                   ID        `json:"id"`
+	IndexBytes           uint64    `json:"index_bytes,omitempty"`
+	NodeCount            uint64    `json:"node_count,omitempty"`
+	MaxDepth             uint32    `json:"max_depth,omitempty"`
+	AutoLoadFailureCount uint32    `json:"auto_load_failure_count,omitempty"`
+	Pinned               bool      `json:"pinned"`
+	HasTierData          bool      `json:"has_tier_data"`
 }

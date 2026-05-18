@@ -10,8 +10,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/eunmann/s3-inv-db/pkg/benchutil"
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/rs/zerolog"
 )
@@ -27,8 +28,8 @@ var (
 // right default for synthetic data written into a developer-controlled
 // working directory.
 const (
-	outputDirMode   = 0o750
-	summaryFileMode = 0o600
+	outputDirMode   = format.DirPerm
+	summaryFileMode = format.FilePerm
 )
 
 // Target selects the seeder output sink.
@@ -43,21 +44,27 @@ const (
 
 // Config configures the seeder.
 type Config struct {
-	Target    Target
-	OutputDir string // TargetLocal: where indexes are written
-	S3        S3Config
-	Count     int
-	// RunsPerInventory is how many timestamped runs to publish per
-	// inventory configuration (TargetS3 only). Each run gets its own
-	// manifest folder under <src>/<inv>/<YYYY-MM-DDTHH-MM-SSZ>/. Runs
-	// are staggered backwards in time at RunStep intervals. Default 1.
+	Logger           zerolog.Logger
+	S3               S3Config
+	Target           Target
+	OutputDir        string
+	Preset           string
+	Count            int
 	RunsPerInventory int
-	// RunStep is how far apart consecutive runs are spaced. Default 24h.
-	RunStep time.Duration
-	Objects int
-	Preset  string
-	Seed    int64
-	Logger  zerolog.Logger
+	RunStep          time.Duration
+	Objects          int
+	// ObjectsPerConfig, when non-empty, overrides Objects for the i-th
+	// inventory; cycles modulo len.
+	ObjectsPerConfig []int
+	Seed             int64
+}
+
+func (c Config) objectsForConfig(i int) int {
+	if len(c.ObjectsPerConfig) == 0 {
+		return c.Objects
+	}
+
+	return c.ObjectsPerConfig[i%len(c.ObjectsPerConfig)]
 }
 
 // InventoryInfo describes a generated inventory.
@@ -183,12 +190,14 @@ func runS3(cfg Config, startTime time.Time) error {
 	totalRuns := 0
 	for i := range cfg.Count {
 		invSeed := cfg.Seed + int64(i+1)*1000
+		invCfg := cfg
+		invCfg.Objects = cfg.objectsForConfig(i)
 		for r := range cfg.RunsPerInventory {
 			runStamp := now.Add(-time.Duration(r) * cfg.RunStep)
 			// Deterministic per-(inv, run) seed so re-seeding produces
 			// the same data layout; otherwise re-runs would shuffle.
 			runSeed := invSeed + int64(r+1)
-			info, err := UploadInventory(ctx, client, cfg, cfg.S3, i+1, runSeed, runStamp)
+			info, err := UploadInventory(ctx, client, invCfg, invCfg.S3, i+1, runSeed, runStamp)
 			if err != nil {
 				return fmt.Errorf("upload inventory %d run %d: %w", i+1, r, err)
 			}
@@ -233,7 +242,7 @@ func generateInventory(cfg Config, index int, seed int64) (InventoryInfo, error)
 	rows := agg.Drain()
 	extsort.SortPrefixRows(rows)
 
-	builder, err := extsort.NewIndexBuilder(outDir, "", false)
+	builder, err := extsort.NewIndexBuilder(outDir, "")
 	if err != nil {
 		return InventoryInfo{}, fmt.Errorf("create index builder: %w", err)
 	}
@@ -285,6 +294,8 @@ func getGeneratorConfig(preset string, numObjects int) benchutil.GeneratorConfig
 		return cfg
 	case "realistic":
 		return benchutil.S3RealisticConfig(numObjects)
+	case "deep_pyramid", "deep-pyramid":
+		return benchutil.S3DeepPyramidConfig(numObjects)
 	default:
 		return benchutil.S3RealisticConfig(numObjects)
 	}

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
+	"strings"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -36,44 +38,43 @@ type ComparePickerOption struct {
 
 // ComparePageData is the typed page data for compare.html.
 type ComparePageData struct {
+	Partial     ComparePartialData
+	Level       *CompareLevelView
 	Title       string
-	Picker      ComparePicker
 	From        inventory.ID
 	To          inventory.ID
-	ConfigLabel string // "<src>/<inv>" when both IDs share the config
-	FromRun     string // formatted run timestamp (or empty)
-	ToRun       string // formatted run timestamp (or empty)
+	ConfigLabel string
+	FromRun     string
+	ToRun       string
 	Prefix      string
-	Breadcrumbs []BrowseCrumb // shared with Browse; same template idiom
-	Error       string        // user-facing setup error (empty when level is shown)
-	Level       *CompareLevelView
-	Partial     ComparePartialData // shape passed to the inner partial
+	Error       string
+	Picker      ComparePicker
+	Breadcrumbs []BrowseCrumb
 }
 
 // ComparePartialData carries the compare_level partial's inputs. Used for
 // both the htmx-driven swap and the initial full-page render so the
 // partial template has one stable shape.
 type ComparePartialData struct {
-	Prefix      string
-	Breadcrumbs []BrowseCrumb
-	From, To    inventory.ID
 	Level       *CompareLevelView
+	Prefix      string
+	From        inventory.ID
+	To          inventory.ID
+	Breadcrumbs []BrowseCrumb
 }
 
 // CompareLevelView is the rendered comparison at one prefix.
 type CompareLevelView struct {
-	Self CompareSelfView
-
+	SortLinks     map[string]inventory.BrowseSortLink
+	Sort          string
+	Dir           string
+	Self          CompareSelfView
 	Children      []CompareChildView
-	TotalChildren int // children before pagination, after hide-unchanged filter
-	Status        CompareStatusCounts
-	HideUnchanged bool // toggle state for the template
 	Pagination    BrowsePagination
-	NotFound      bool // prefix missing on both sides — empty state
-
-	Sort      string // current sort column (empty = default)
-	Dir       string // current direction (asc/desc)
-	SortLinks map[string]inventory.BrowseSortLink
+	Status        CompareStatusCounts
+	TotalChildren int
+	HideUnchanged bool
+	NotFound      bool
 }
 
 // CompareStatusCounts summarises the change set at this prefix.
@@ -83,51 +84,63 @@ type CompareStatusCounts struct {
 
 // CompareSelfView is the prefix-level summary card.
 type CompareSelfView struct {
-	Prefix string
-
-	ObjectsBeforeH, ObjectsAfterH, ObjectsDeltaH, ObjectsPct string
-	ObjectsSign                                              int
-
-	BytesBeforeH, BytesAfterH, BytesDeltaH, BytesPct string
-	BytesSign                                        int
-
-	HasCost                                      bool
-	CostBeforeH, CostAfterH, CostDeltaH, CostPct string
-	CostSign                                     int
-
-	// One-time PUT cost — the API charge to ingest the run's objects.
-	// Always populated (object counts are always known); the sign carries
-	// the direction of the move between runs.
-	APICostBeforeH, APICostAfterH, APICostDeltaH, APICostPct string
-	APICostSign                                              int
+	BytesDeltaH    string
+	BytesPct       string
+	ObjectsAfterH  string
+	ObjectsDeltaH  string
+	ObjectsPct     string
+	Prefix         string
+	BytesBeforeH   string
+	BytesAfterH    string
+	ObjectsBeforeH string
+	APICostPct     string
+	APICostBeforeH string
+	APICostDeltaH  string
+	CostBeforeH    string
+	CostAfterH     string
+	CostDeltaH     string
+	CostPct        string
+	APICostAfterH  string
+	ObjectsSign    int
+	CostSign       int
+	BytesSign      int
+	APICostSign    int
+	HasCost        bool
 }
 
 // CompareChildView is one row in the children table.
 type CompareChildView struct {
-	Segment, Prefix string
-	Status          string // human label — template runs compareStatusClass on it
-	StatusOrder     int    // stable rank for status-column sort
-	HasChildren     bool
-
-	ObjectsDelta                                             int64
-	ObjectsBeforeH, ObjectsAfterH, ObjectsDeltaH, ObjectsPct string
-	ObjectsSign                                              int
-
-	BytesDelta                                       int64
-	BytesBeforeH, BytesAfterH, BytesDeltaH, BytesPct string
-	BytesSign                                        int
-
-	HasCost                                      bool
-	CostDelta                                    int64
-	CostBeforeH, CostAfterH, CostDeltaH, CostPct string
-	CostSign                                     int
-
-	APICostDelta                                             int64
-	APICostBeforeH, APICostAfterH, APICostDeltaH, APICostPct string
-	APICostSign                                              int
-
-	// AbsByteDelta drives the default "biggest absolute mover" sort.
-	AbsByteDelta uint64
+	BytesDeltaH    string
+	CostPct        string
+	Status         string
+	APICostPct     string
+	APICostDeltaH  string
+	APICostAfterH  string
+	ObjectsBeforeH string
+	ObjectsAfterH  string
+	ObjectsDeltaH  string
+	ObjectsPct     string
+	APICostBeforeH string
+	Segment        string
+	BytesBeforeH   string
+	BytesAfterH    string
+	Prefix         string
+	CostDeltaH     string
+	CostAfterH     string
+	CostBeforeH    string
+	BytesPct       string
+	CostDelta      int64
+	BytesSign      int
+	BytesDelta     int64
+	CostSign       int
+	APICostDelta   int64
+	ObjectsSign    int
+	ObjectsDelta   int64
+	StatusOrder    int
+	APICostSign    int
+	AbsByteDelta   uint64
+	HasCost        bool
+	HasChildren    bool
 }
 
 // ComparePage renders the comparison page. Same URL serves the full page
@@ -162,11 +175,14 @@ func (h *Handlers) ComparePage(w http.ResponseWriter, r *http.Request) {
 // the inner render functions and computeCompareLevel don't drown in
 // positional parameters.
 type compareViewOptions struct {
-	from, to       inventory.ID
-	prefix         string
-	hideUnchanged  bool
-	page, pageSize int
-	sortBy, dir    string
+	from          inventory.ID
+	to            inventory.ID
+	prefix        string
+	sortBy        string
+	dir           string
+	page          int
+	pageSize      int
+	hideUnchanged bool
 }
 
 func (h *Handlers) renderCompareFullPage(w http.ResponseWriter, r *http.Request, opts compareViewOptions) {
@@ -209,11 +225,7 @@ func (h *Handlers) renderCompareFullPage(w http.ResponseWriter, r *http.Request,
 		}
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.renderer.Render(w, "compare.html", data); err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render compare page")
-		http.Error(w, "failed to render page", http.StatusInternalServerError)
-	}
+	h.renderHTML(w, r, "compare.html", "render compare page", data)
 }
 
 func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Request, opts compareViewOptions) {
@@ -241,7 +253,6 @@ func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Requ
 
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	view := ComparePartialData{
 		Prefix:      opts.prefix,
 		Breadcrumbs: inventory.Breadcrumbs(opts.prefix),
@@ -249,10 +260,7 @@ func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Requ
 		To:          opts.to,
 		Level:       level,
 	}
-	if err := h.renderer.RenderPartial(w, "compare_level.html", view); err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Msg("render compare level partial")
-		http.Error(w, "failed to render partial", http.StatusInternalServerError)
-	}
+	h.renderHTMLPartial(w, r, "compare_level.html", "render compare level partial", view)
 }
 
 // computeCompareLevel borrows both indexes and assembles the rendered view
@@ -520,8 +528,8 @@ func sameConfig(idA, idB inventory.ID) bool {
 	return a.OK && b.OK && a.Source == b.Source && a.Inventory == b.Inventory
 }
 
-// RunDescription is the parsed label/run pair produced by describeRun.
-type RunDescription struct {
+// runDescription is the parsed label/run pair produced by describeRun.
+type runDescription struct {
 	ConfigLabel string
 	RunLabel    string
 }
@@ -529,13 +537,13 @@ type RunDescription struct {
 // describeRun extracts the configuration label ("<src>/<inv>") and the
 // formatted run timestamp from an inventory ID. Returns ("", id) when
 // the ID isn't 3-part so the page still renders something sensible.
-func describeRun(id inventory.ID) RunDescription {
+func describeRun(id inventory.ID) runDescription {
 	p := id.Split()
 	if !p.OK {
-		return RunDescription{RunLabel: string(id)}
+		return runDescription{RunLabel: string(id)}
 	}
 
-	return RunDescription{ConfigLabel: p.Source + "/" + p.Inventory, RunLabel: humanfmt.RunTimestamp(p.Run)}
+	return runDescription{ConfigLabel: p.Source + "/" + p.Inventory, RunLabel: humanfmt.RunTimestamp(p.Run)}
 }
 
 // CompareLevelResponse is the JSON shape returned by CompareLevelAPI. Carries
@@ -543,66 +551,59 @@ func describeRun(id inventory.ID) RunDescription {
 // HTML-only fields and keeps raw int64 deltas so clients can format
 // however they like.
 type CompareLevelResponse struct {
-	From          inventory.ID            `json:"from"`
+	Sort          string                  `json:"sort"`
 	To            inventory.ID            `json:"to"`
 	Prefix        string                  `json:"prefix"`
-	Breadcrumbs   []BrowseCrumbJSON       `json:"breadcrumbs"`
-	Self          CompareSelfResponse     `json:"self"`
-	Children      []CompareChildResponse  `json:"children"`
-	StatusCounts  CompareStatusCountsJSON `json:"status_counts"`
-	TotalChildren int                     `json:"total_children"`
-	Sort          string                  `json:"sort"`
+	From          inventory.ID            `json:"from"`
 	Dir           string                  `json:"dir"`
+	Breadcrumbs   []BrowseCrumbJSON       `json:"breadcrumbs"`
+	Children      []CompareChildResponse  `json:"children"`
+	Self          CompareSelfResponse     `json:"self"`
+	StatusCounts  CompareStatusCountsJSON `json:"status_counts"`
 	Pagination    PaginationJSON          `json:"pagination"`
+	TotalChildren int                     `json:"total_children"`
 	HideUnchanged bool                    `json:"hide_unchanged"`
 	NotFound      bool                    `json:"not_found,omitempty"`
 }
 
 // CompareSelfResponse is the prefix-level before/after triple.
 type CompareSelfResponse struct {
-	ObjectsBefore uint64 `json:"objects_before"`
-	ObjectsAfter  uint64 `json:"objects_after"`
-	ObjectsDelta  int64  `json:"objects_delta"`
-	BytesBefore   uint64 `json:"bytes_before"`
-	BytesAfter    uint64 `json:"bytes_after"`
-	BytesDelta    int64  `json:"bytes_delta"`
-
-	HasCost                bool   `json:"has_cost"`
-	CostBeforeMicrodollars uint64 `json:"cost_before_microdollars,omitempty"`
-	CostAfterMicrodollars  uint64 `json:"cost_after_microdollars,omitempty"`
-	CostDeltaMicrodollars  int64  `json:"cost_delta_microdollars,omitempty"`
-
+	CostDeltaMicrodollars     int64  `json:"cost_delta_microdollars,omitempty"`
 	APICostBeforeMicrodollars uint64 `json:"api_cost_before_microdollars"`
-	APICostAfterMicrodollars  uint64 `json:"api_cost_after_microdollars"`
+	ObjectsDelta              int64  `json:"objects_delta"`
+	BytesBefore               uint64 `json:"bytes_before"`
+	BytesAfter                uint64 `json:"bytes_after"`
+	BytesDelta                int64  `json:"bytes_delta"`
+	ObjectsAfter              uint64 `json:"objects_after"`
+	CostAfterMicrodollars     uint64 `json:"cost_after_microdollars,omitempty"`
 	APICostDeltaMicrodollars  int64  `json:"api_cost_delta_microdollars"`
-
-	NotFoundInFrom bool `json:"not_found_in_from,omitempty"`
-	NotFoundInTo   bool `json:"not_found_in_to,omitempty"`
+	ObjectsBefore             uint64 `json:"objects_before"`
+	CostBeforeMicrodollars    uint64 `json:"cost_before_microdollars,omitempty"`
+	APICostAfterMicrodollars  uint64 `json:"api_cost_after_microdollars"`
+	HasCost                   bool   `json:"has_cost"`
+	NotFoundInFrom            bool   `json:"not_found_in_from,omitempty"`
+	NotFoundInTo              bool   `json:"not_found_in_to,omitempty"`
 }
 
 // CompareChildResponse is one row in the children comparison.
 type CompareChildResponse struct {
-	Segment     string `json:"segment"`
-	Prefix      string `json:"prefix"`
-	Status      string `json:"status"` // added / removed / changed / unchanged
-	HasChildren bool   `json:"has_children"`
-
-	ObjectsBefore uint64 `json:"objects_before"`
-	ObjectsAfter  uint64 `json:"objects_after"`
-	ObjectsDelta  int64  `json:"objects_delta"`
-
-	BytesBefore uint64 `json:"bytes_before"`
-	BytesAfter  uint64 `json:"bytes_after"`
-	BytesDelta  int64  `json:"bytes_delta"`
-
-	HasCost                bool   `json:"has_cost"`
-	CostBeforeMicrodollars uint64 `json:"cost_before_microdollars,omitempty"`
-	CostAfterMicrodollars  uint64 `json:"cost_after_microdollars,omitempty"`
-	CostDeltaMicrodollars  int64  `json:"cost_delta_microdollars,omitempty"`
-
-	APICostBeforeMicrodollars uint64 `json:"api_cost_before_microdollars"`
-	APICostAfterMicrodollars  uint64 `json:"api_cost_after_microdollars"`
+	Segment                   string `json:"segment"`
+	Prefix                    string `json:"prefix"`
+	Status                    string `json:"status"`
+	BytesAfter                uint64 `json:"bytes_after"`
+	CostDeltaMicrodollars     int64  `json:"cost_delta_microdollars,omitempty"`
+	ObjectsAfter              uint64 `json:"objects_after"`
+	ObjectsDelta              int64  `json:"objects_delta"`
+	BytesBefore               uint64 `json:"bytes_before"`
 	APICostDeltaMicrodollars  int64  `json:"api_cost_delta_microdollars"`
+	BytesDelta                int64  `json:"bytes_delta"`
+	APICostAfterMicrodollars  uint64 `json:"api_cost_after_microdollars"`
+	CostBeforeMicrodollars    uint64 `json:"cost_before_microdollars,omitempty"`
+	CostAfterMicrodollars     uint64 `json:"cost_after_microdollars,omitempty"`
+	ObjectsBefore             uint64 `json:"objects_before"`
+	APICostBeforeMicrodollars uint64 `json:"api_cost_before_microdollars"`
+	HasCost                   bool   `json:"has_cost"`
+	HasChildren               bool   `json:"has_children"`
 }
 
 // CompareStatusCountsJSON mirrors CompareStatusCounts with JSON tags.
@@ -867,7 +868,7 @@ func buildComparePicker(all []inventory.Info) ComparePicker {
 		sort.Slice(g.Options, func(i, j int) bool { return g.Options[i].Label > g.Options[j].Label })
 		out.Groups = append(out.Groups, *g)
 	}
-	sort.Slice(out.Groups, func(i, j int) bool { return out.Groups[i].ConfigLabel < out.Groups[j].ConfigLabel })
+	slices.SortFunc(out.Groups, func(a, b ComparePickerGroup) int { return strings.Compare(a.ConfigLabel, b.ConfigLabel) })
 
 	return out
 }

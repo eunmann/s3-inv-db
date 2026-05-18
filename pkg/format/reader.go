@@ -2,6 +2,7 @@ package format
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 
@@ -15,8 +16,33 @@ type MmapFile struct {
 	size int64
 }
 
-// OpenMmap opens a file and maps it into memory.
+// AccessHint advises the kernel about expected access pattern.
+// Used by OpenMmapWithHint so callers can split files by access shape:
+// MPHF arrays are random-access; depth/columnar arrays are sequential.
+type AccessHint int
+
+// Access hint values for OpenMmapWithHint. The default (AccessHintNone)
+// matches the kernel's own default behaviour — no madvise call.
+const (
+	AccessHintNone AccessHint = iota
+	AccessHintRandom
+	AccessHintSequential
+)
+
+// OpenMmap opens a file and maps it into memory with no access hint.
+// Equivalent to OpenMmapWithHint(path, AccessHintNone) — preserved for
+// callers that don't care to specify a pattern.
 func OpenMmap(path string) (*MmapFile, error) {
+	return OpenMmapWithHint(path, AccessHintNone)
+}
+
+// OpenMmapWithHint opens a file and mmap's it, optionally hinting the
+// kernel about the expected access pattern via posix_madvise. Random
+// hint is right for MPHF lookup arrays where each query touches one
+// page in an arbitrary location; sequential is right for depth /
+// columnar / blob scans during iteration. The wrong hint just costs a
+// little bit of extra readahead — never correctness.
+func OpenMmapWithHint(path string, hint AccessHint) (*MmapFile, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open file: %w", err)
@@ -36,6 +62,15 @@ func OpenMmap(path string) (*MmapFile, error) {
 	data, err := unix.Mmap(int(f.Fd()), 0, int(size), unix.PROT_READ, unix.MAP_SHARED)
 	if err != nil {
 		return nil, fmt.Errorf("mmap: %w", err)
+	}
+
+	switch hint {
+	case AccessHintRandom:
+		_ = unix.Madvise(data, unix.MADV_RANDOM)
+	case AccessHintSequential:
+		_ = unix.Madvise(data, unix.MADV_SEQUENTIAL)
+	case AccessHintNone:
+		// no advice — leave kernel default
 	}
 
 	return &MmapFile{
@@ -74,13 +109,23 @@ func (m *MmapFile) Size() int64 {
 // be called once, after all read operations have completed.
 type ArrayReader struct {
 	mmap   *MmapFile
-	header Header
 	data   []byte
+	header Header
 }
 
-// OpenArray opens a columnar array file.
+// OpenArray opens a columnar array file with no access hint. See
+// OpenArrayWithHint for the hinted form.
 func OpenArray(path string) (*ArrayReader, error) {
-	mmap, err := OpenMmap(path)
+	return OpenArrayWithHint(path, AccessHintNone)
+}
+
+// OpenArrayWithHint opens a columnar array file and applies the given
+// madvise hint to its mmap region. Use AccessHintRandom for arrays
+// indexed by hash position (MPHF fp / pos, per-prefix stats); use
+// AccessHintSequential for arrays scanned in ranges (depth posting
+// lists, segment dictionary).
+func OpenArrayWithHint(path string, hint AccessHint) (*ArrayReader, error) {
+	mmap, err := OpenMmapWithHint(path, hint)
 	if err != nil {
 		return nil, fmt.Errorf("mmap file: %w", err)
 	}
@@ -124,8 +169,12 @@ func OpenArray(path string) (*ArrayReader, error) {
 	}, nil
 }
 
-// Close releases the memory mapping.
+// Close releases the memory mapping. Idempotent and nil-safe.
 func (r *ArrayReader) Close() error {
+	if r == nil || r.mmap == nil {
+		return nil
+	}
+
 	return r.mmap.Close()
 }
 
@@ -139,7 +188,8 @@ func (r *ArrayReader) Width() uint32 {
 	return r.header.Width
 }
 
-// GetU32 returns the uint32 value at the given index.
+// GetU32 returns the uint32 value at the given index. Requires the
+// array to have been written with width=4.
 func (r *ArrayReader) GetU32(idx uint64) (uint32, error) {
 	if idx >= r.header.Count {
 		return 0, ErrBoundsCheck
@@ -165,47 +215,16 @@ func (r *ArrayReader) GetU64(idx uint64) (uint64, error) {
 	return binary.LittleEndian.Uint64(r.data[offset:]), nil
 }
 
-// GetU16 returns the uint16 value at the given index.
-func (r *ArrayReader) GetU16(idx uint64) (uint16, error) {
-	if idx >= r.header.Count {
-		return 0, ErrBoundsCheck
-	}
-	if r.header.Width != 2 {
-		return 0, fmt.Errorf("%w: expected 2, got %d", ErrWidthMismatch, r.header.Width)
-	}
-	offset := idx * 2
-
-	return binary.LittleEndian.Uint16(r.data[offset:]), nil
-}
-
-// UnsafeGetU32 returns the value without bounds checking.
-//
-// WARNING: This method performs NO bounds checking for performance.
-// Passing an idx >= Count() will cause undefined behavior (likely a panic
-// or memory corruption). Only use this in hot paths where the caller has
-// already validated the index. For safe access, use GetU32 instead.
+// UnsafeGetU32 returns the value without bounds checking. Caller must
+// have validated idx < Count(); out-of-range reads are undefined.
 func (r *ArrayReader) UnsafeGetU32(idx uint64) uint32 {
 	return binary.LittleEndian.Uint32(r.data[idx*4:])
 }
 
-// UnsafeGetU64 returns the value without bounds checking.
-//
-// WARNING: This method performs NO bounds checking for performance.
-// Passing an idx >= Count() will cause undefined behavior (likely a panic
-// or memory corruption). Only use this in hot paths where the caller has
-// already validated the index. For safe access, use GetU64 instead.
+// UnsafeGetU64 returns the value without bounds checking. Caller must
+// have validated idx < Count(); out-of-range reads are undefined.
 func (r *ArrayReader) UnsafeGetU64(idx uint64) uint64 {
 	return binary.LittleEndian.Uint64(r.data[idx*8:])
-}
-
-// UnsafeGetU16 returns the value without bounds checking.
-//
-// WARNING: This method performs NO bounds checking for performance.
-// Passing an idx >= Count() will cause undefined behavior (likely a panic
-// or memory corruption). Only use this in hot paths where the caller has
-// already validated the index. For safe access, use GetU16 instead.
-func (r *ArrayReader) UnsafeGetU16(idx uint64) uint16 {
-	return binary.LittleEndian.Uint16(r.data[idx*2:])
 }
 
 // BlobReader provides read access to prefix strings via mmap.
@@ -240,13 +259,7 @@ func OpenBlob(blobPath, offsetsPath string) (*BlobReader, error) {
 
 // Close releases resources.
 func (r *BlobReader) Close() error {
-	err1 := r.blobMmap.Close()
-	err2 := r.offsetsMmap.Close()
-	if err1 != nil {
-		return err1
-	}
-
-	return err2
+	return errors.Join(r.blobMmap.Close(), r.offsetsMmap.Close())
 }
 
 // Count returns the number of strings (N, not N+1).
@@ -281,12 +294,9 @@ func (r *BlobReader) Get(idx uint64) (string, error) {
 	return string(r.blobMmap.Data()[start:end]), nil
 }
 
-// UnsafeGet returns the string without bounds checking.
-//
-// WARNING: This method performs NO bounds checking for performance.
-// Passing an idx >= Count() will cause undefined behavior (likely a panic
-// or memory corruption). Only use this in hot paths where the caller has
-// already validated the index. For safe access, use Get instead.
+// UnsafeGet returns the string at idx without bounds checking. Caller
+// must have validated idx < Count(); out-of-range reads are
+// undefined.
 func (r *BlobReader) UnsafeGet(idx uint64) string {
 	start := r.offsetsMmap.UnsafeGetU64(idx)
 	end := r.offsetsMmap.UnsafeGetU64(idx + 1)
