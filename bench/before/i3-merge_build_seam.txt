@@ -1,8 +1,0 @@
-BenchmarkMergeBuildSeam/n=500000/runs=8-32         	       2	2069888867 ns/op	660316756 B/op	15054094 allocs/op
-BenchmarkMergeBuildSeam/n=500000/runs=8-32         	       2	2059772148 ns/op	656010544 B/op	15053996 allocs/op
-BenchmarkMergeBuildSeam/n=500000/runs=8-32         	       2	2043276446 ns/op	659867888 B/op	15053990 allocs/op
-BenchmarkMergeBuildSeam/n=1000000/runs=8-32        	       2	3974074398 ns/op	1205841424 B/op	29036403 allocs/op
-BenchmarkMergeBuildSeam/n=1000000/runs=8-32        	       2	3977397979 ns/op	1200660692 B/op	29036351 allocs/op
-BenchmarkMergeBuildSeam/n=1000000/runs=8-32        	       2	3962522874 ns/op	1199991172 B/op	29036337 allocs/op
-PASS
-PASS
