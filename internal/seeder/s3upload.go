@@ -137,27 +137,40 @@ func UploadMultiChunkInventory(ctx context.Context, client *s3.Client, cfg Confi
 	if numChunks < 1 {
 		numChunks = 1
 	}
+	if numChunks > cfg.Objects {
+		numChunks = cfg.Objects
+	}
 	invID := fmt.Sprintf("inv-%03d", index)
 	name := fmt.Sprintf("Seed Inventory %d (multi-chunk)", index)
 
 	genCfg := getGeneratorConfig(cfg.Preset, cfg.Objects)
 	genCfg.Seed = seed
 	gen := benchutil.NewGenerator(genCfg)
-	objects := gen.Generate()
-	if numChunks > len(objects) {
-		numChunks = len(objects)
-	}
 
 	stamp := runStamp.UTC().Format("2006-01-02T15-04Z")
 	manifestKey := fmt.Sprintf("%s%s/%s/%s/manifest.json", s3cfg.Prefix, s3cfg.SrcBucket, invID, stamp)
 	checksumKey := fmt.Sprintf("%s%s/%s/%s/manifest.checksum", s3cfg.Prefix, s3cfg.SrcBucket, invID, stamp)
 
 	files := make([]map[string]any, 0, numChunks)
-	chunkSize := (len(objects) + numChunks - 1) / numChunks
+	baseChunkSize := cfg.Objects / numChunks
+	remainder := cfg.Objects % numChunks
+	chunkBuf := make([]benchutil.FakeObject, 0, baseChunkSize+1)
 	for chunk := range numChunks {
-		start := chunk * chunkSize
-		end := min(start+chunkSize, len(objects))
-		payload, err := encodeCSVGz(s3cfg.SrcBucket, objects[start:end])
+		// Distribute the remainder across the first `remainder` chunks
+		// so chunks differ by at most 1 object — matches the prior
+		// (len+n-1)/n slicing without materialising the full slice.
+		thisChunkSize := baseChunkSize
+		if chunk < remainder {
+			thisChunkSize++
+		}
+		chunkBuf = chunkBuf[:0]
+		for range thisChunkSize {
+			// Hot loop — drive the generator directly per object so
+			// we never accumulate more than one chunk's objects in
+			// memory at a time.
+			chunkBuf = append(chunkBuf, gen.Next())
+		}
+		payload, err := encodeCSVGz(s3cfg.SrcBucket, chunkBuf)
 		if err != nil {
 			return InventoryInfo{}, fmt.Errorf("encode chunk %d: %w", chunk, err)
 		}

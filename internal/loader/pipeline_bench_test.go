@@ -10,6 +10,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/internal/testsupport/miniotest"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/rs/zerolog"
 )
 
@@ -34,9 +35,26 @@ import (
 //
 //	make docker-bench-pipeline   (not yet defined; see bench README)
 
-const (
-	pipelineBenchChunkCount = 8
-)
+// chunkCountFor scales the number of manifest chunks with the
+// object count so per-chunk size stays in a healthy range
+// (~125K-625K objects per chunk). Larger chunk counts let
+// Pipeline's ingest pool actually use more cores, but more workers
+// each hold their own aggregator + download/parse buffers, so the
+// count is capped to avoid pathological RAM use during ingest.
+// At 10M deep-pyramid, 32 ingest workers × per-worker download/
+// parse/aggregate state pushed RAM to swap on a 32 GB host.
+func chunkCountFor(numObjects int) int {
+	switch {
+	case numObjects >= 10_000_000:
+		return 16
+	case numObjects >= 5_000_000:
+		return 16
+	case numObjects >= 1_000_000:
+		return 16
+	default:
+		return 8
+	}
+}
 
 func BenchmarkPipeline_Realistic_500K_DictOff(b *testing.B) {
 	runPipelineBench(b, "realistic", 500_000, false, 0)
@@ -70,6 +88,22 @@ func BenchmarkPipeline_DeepPyramid_1M_DictOn(b *testing.B) {
 	runPipelineBench(b, "deep_pyramid", 1_000_000, true, 0)
 }
 
+func BenchmarkPipeline_Realistic_10M_DictOff(b *testing.B) {
+	runPipelineBench(b, "realistic", 10_000_000, false, 0)
+}
+
+func BenchmarkPipeline_Realistic_10M_DictOn(b *testing.B) {
+	runPipelineBench(b, "realistic", 10_000_000, true, 0)
+}
+
+func BenchmarkPipeline_DeepPyramid_10M_DictOff(b *testing.B) {
+	runPipelineBench(b, "deep_pyramid", 10_000_000, false, 0)
+}
+
+func BenchmarkPipeline_DeepPyramid_10M_DictOn(b *testing.B) {
+	runPipelineBench(b, "deep_pyramid", 10_000_000, true, 0)
+}
+
 // BenchmarkPipeline_AutoScale_DeepPyramid_1M_Mem* sweeps the
 // GOMEMLIMIT budget against the same fixture to show that
 // AggregatorCap scales with the configured limit — fewer spills and
@@ -101,17 +135,18 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, prefixDict bo
 	prefix := "bench-inv/"
 	stamp := time.Now().UTC().Truncate(time.Minute)
 
+	chunks := chunkCountFor(numObjects)
 	info, err := seeder.UploadMultiChunkInventory(
 		b.Context(), fc.Raw(),
 		seeder.Config{
 			Target:  seeder.TargetS3,
 			Objects: numObjects,
 			Preset:  preset,
-			Seed:    int64(numObjects ^ pipelineBenchChunkCount),
+			Seed:    int64(numObjects ^ chunks),
 			Logger:  zerolog.Nop(),
 		},
 		seeder.S3Config{Bucket: bucket, Prefix: prefix, SrcBucket: srcBucket},
-		1, int64(numObjects), stamp, pipelineBenchChunkCount,
+		1, int64(numObjects), stamp, chunks,
 	)
 	if err != nil {
 		b.Fatalf("UploadMultiChunkInventory: %v", err)
@@ -119,6 +154,8 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, prefixDict bo
 
 	var lastDiskBytes int64
 	var lastPeakHeap uint64
+	var lastPrefixCount uint64
+	var lastMaxDepth uint32
 
 	b.ResetTimer()
 	for range b.N {
@@ -161,9 +198,22 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, prefixDict bo
 			lastPeakHeap = delta
 		}
 		lastDiskBytes = dirBytesPipelineBench(b, outDir)
+		// Inspect the resulting index for the shape metrics: total
+		// distinct prefixes (the aggregator's deduped output) and
+		// max depth observed. These confirm the synthetic data
+		// produced the breadth + depth the bench claims, not just
+		// the right NumObjects count.
+		if idx, err := indexread.Open(outDir); err == nil {
+			lastPrefixCount = idx.Count()
+			lastMaxDepth = idx.MaxDepth()
+			_ = idx.Close()
+		}
 		b.StartTimer()
 	}
 
 	b.ReportMetric(float64(lastDiskBytes), "disk_B")
 	b.ReportMetric(float64(lastPeakHeap), "peak_heap_B")
+	b.ReportMetric(float64(lastPrefixCount), "prefixes")
+	b.ReportMetric(float64(lastMaxDepth), "max_depth")
+	b.ReportMetric(float64(chunkCountFor(numObjects)), "chunks")
 }

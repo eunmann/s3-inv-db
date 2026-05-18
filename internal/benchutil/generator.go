@@ -203,6 +203,14 @@ func (g *Generator) Stream(visit func(FakeObject)) {
 	}
 }
 
+// Next returns one synthetic object using the generator's RNG state.
+// Callers that need stream-style emission without the slice
+// materialisation Generate does (e.g. the seeder's chunked upload at
+// 10M+ objects) call Next per object inside their own loop.
+func (g *Generator) Next() FakeObject {
+	return g.generateObject()
+}
+
 func (g *Generator) generateObject() FakeObject {
 	return FakeObject{
 		Key:    g.generateKey(),

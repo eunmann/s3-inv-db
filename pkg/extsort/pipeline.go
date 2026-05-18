@@ -575,7 +575,7 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int,
 		}
 		publishBusy("processing_chunk")
 
-		if err := p.streamChunkIntoAggregator(ctx, job, agg, workerID); err != nil {
+		if err := p.streamChunkIntoAggregator(ctx, job, agg, workerID, numWorkers); err != nil {
 			return fmt.Errorf("chunk %d: %w", job.index, err)
 		}
 		p.chunksProcessed.Add(1)
@@ -596,7 +596,7 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int,
 // No intermediate slice — the per-chunk objectRecord buffer that the
 // old processChunkToBatch path materialised is eliminated, saving
 // chunk-size × N-workers of transient heap.
-func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, agg *Aggregator, workerID int) error {
+func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, agg *Aggregator, workerID, numWorkers int) error {
 	log := zerolog.Ctx(ctx)
 
 	body, dlResult, err := p.s3Client.DownloadObject(ctx, job.bucket, job.key)
@@ -621,12 +621,23 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 	}
 	defer reader.Close()
 
-	const ctxCheckInterval = 4096
+	const (
+		ctxCheckInterval = 4096
+		// Mid-chunk flush check cadence. ShouldWorkerFlush calls
+		// runtime.ReadMemStats so we can't afford to check every row,
+		// but the per-chunk check that was previously the only safety
+		// net let a single 600K-row chunk (10M objects / 16 chunks) grow
+		// the aggregator past 1 GB before getting a chance to spill —
+		// the deep-pyramid expansion factor (~6.5× prefixes per object)
+		// is what blew through the per-worker cap.
+		midChunkFlushInterval = 50_000
+	)
 	var (
 		rowsParsed int64
 		bytesAdded int64
 		i          int
 	)
+	memLimit := debug.SetMemoryLimit(-1)
 	for {
 		if i%ctxCheckInterval == 0 {
 			select {
@@ -650,6 +661,12 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 		agg.AddObject(row.Key, row.Size, tierID)
 		rowsParsed++
 		bytesAdded += int64(row.Size)
+		if rowsParsed%midChunkFlushInterval == 0 &&
+			ShouldWorkerFlush(uint64(agg.EstimatedMemoryUsage()), memLimit, numWorkers) {
+			if err := p.flushAggregator(ctx, agg, workerID); err != nil {
+				return fmt.Errorf("mid-chunk flush: %w", err)
+			}
+		}
 	}
 
 	p.objectsProcessed.Add(rowsParsed)
@@ -804,14 +821,7 @@ type mergeBuildResult struct {
 // lone run file directly. Multi-run case uses
 // ParallelMerger.MergeAllToIterator which avoids writing a final
 // merged file to disk (I3 win).
-//
-//nolint:ireturn // dispatches between single-run + K-way variants
-func (p *Pipeline) runMergePhase(
-	ctx context.Context,
-	log *zerolog.Logger,
-	numRunFiles, numWorkers, maxFanIn int,
-	perReaderBuffer int64,
-) (RowIterator, func() error, error) {
+func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRunFiles, numWorkers, maxFanIn int, perReaderBuffer int64) (RowIterator, func() error, error) { //nolint:ireturn // dispatches between single-run + K-way variants
 	if numRunFiles == 1 {
 		reader, err := OpenRunFileAuto(p.runFiles[0], int(perReaderBuffer))
 		if err != nil {
@@ -932,11 +942,19 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		}
 	}()
 
-	// Use prefix count if the iterator can report it; 0 means unknown
-	// and the builder grows incrementally.
+	// MergeIterator.Remaining sums the row counts of every spilled
+	// run file, which OVERESTIMATES the post-merge prefix count by
+	// the inter-spill duplication factor: a prefix touched in N
+	// run files is counted N times here but the K-way merge will
+	// collapse them to one row. At billion-prefix scale the multiplier
+	// is enough that a naive pre-allocation can size core_stats.bin
+	// many times larger than the final index. Use the count only as
+	// an upper bound for the *initial* mmap region, and let the
+	// IndexBuilder grow + final-truncate down to the real size at
+	// Finalize. 0 means "unknown — start small and grow".
 	prefixCount := mergeIter.Remaining()
 	log.Debug().
-		Uint64("prefix_count", prefixCount).
+		Uint64("merge_iter_remaining", prefixCount).
 		Msg("index build starting")
 
 	builder, err := NewIndexBuilderWithCapacity(outDir, p.config.TempDir, prefixCount)
