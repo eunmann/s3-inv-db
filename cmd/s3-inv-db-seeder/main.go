@@ -2,14 +2,23 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
+
+// errNonPositiveObjectCount rejects zero/negative entries in
+// --objects-per-config; the underlying generator panics on Count <= 0
+// in Go 1.22+ range-over-int, so catching it at parse-time gives a
+// clean CLI error.
+var errNonPositiveObjectCount = errors.New("objects-per-config value must be positive")
 
 // defaultObjectsPerRun is the default object count generated per
 // inventory run when --objects isn't supplied.
@@ -31,7 +40,8 @@ func run() error {
 	count := flag.Int("count", 3, "number of inventory configurations to generate")
 	runs := flag.Int("runs-per-inventory", 1, "number of timestamped runs per inventory (target=s3)")
 	runStep := flag.Duration("run-step", 24*time.Hour, "spacing between consecutive runs (target=s3)")
-	objects := flag.Int("objects", defaultObjectsPerRun, "objects per inventory run")
+	objects := flag.Int("objects", defaultObjectsPerRun, "objects per inventory run (overridden per-config by --objects-per-config when set)")
+	objectsPerConfig := flag.String("objects-per-config", "", "comma-separated object counts cycled across inventory configs (e.g. 5000,500000,5000000); overrides --objects when set")
 	preset := flag.String("preset", "realistic", "config preset (small/medium/large/realistic)")
 	seed := flag.Int64("seed", 0, "random seed (0 = use default seed)")
 	verbose := flag.Bool("verbose", false, "enable debug logging")
@@ -40,6 +50,11 @@ func run() error {
 	flag.Parse()
 
 	logger := logging.NewLogger(*verbose, *prettyLogs)
+
+	perConfig, err := parseObjectsPerConfig(*objectsPerConfig)
+	if err != nil {
+		return fmt.Errorf("--objects-per-config: %w", err)
+	}
 
 	cfg := seeder.Config{
 		Target:    seeder.Target(*target),
@@ -53,6 +68,7 @@ func run() error {
 		RunsPerInventory: *runs,
 		RunStep:          *runStep,
 		Objects:          *objects,
+		ObjectsPerConfig: perConfig,
 		Preset:           *preset,
 		Seed:             *seed,
 		Logger:           logger,
@@ -63,4 +79,28 @@ func run() error {
 	}
 
 	return nil
+}
+
+// parseObjectsPerConfig parses a comma-separated list of positive
+// integers. Empty input returns nil — the caller treats nil as
+// "fall back to --objects".
+func parseObjectsPerConfig(raw string) ([]int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		v, err := strconv.Atoi(strings.TrimSpace(p))
+		if err != nil {
+			return nil, fmt.Errorf("parse %q: %w", p, err)
+		}
+		if v <= 0 {
+			return nil, fmt.Errorf("%w, got %d", errNonPositiveObjectCount, v)
+		}
+		out = append(out, v)
+	}
+
+	return out, nil
 }

@@ -53,7 +53,24 @@ type Config struct {
 	RunsPerInventory int
 	RunStep          time.Duration
 	Objects          int
+	// ObjectsPerConfig overrides Objects per inventory configuration when
+	// non-empty. The slice cycles modulo Count, so a length of N <= Count
+	// produces a deterministic mix where inv-001 uses [0], inv-002 uses
+	// [1], etc. Used to seed a UI with a mix of fast- and slow-loading
+	// inventories without N separate seeder invocations.
+	ObjectsPerConfig []int
 	Seed             int64
+}
+
+// objectsForConfig returns the object count to use for the i-th
+// inventory configuration (0-indexed). Falls back to cfg.Objects when
+// ObjectsPerConfig is empty.
+func (c Config) objectsForConfig(i int) int {
+	if len(c.ObjectsPerConfig) == 0 {
+		return c.Objects
+	}
+
+	return c.ObjectsPerConfig[i%len(c.ObjectsPerConfig)]
 }
 
 // InventoryInfo describes a generated inventory.
@@ -179,12 +196,14 @@ func runS3(cfg Config, startTime time.Time) error {
 	totalRuns := 0
 	for i := range cfg.Count {
 		invSeed := cfg.Seed + int64(i+1)*1000
+		invCfg := cfg
+		invCfg.Objects = cfg.objectsForConfig(i)
 		for r := range cfg.RunsPerInventory {
 			runStamp := now.Add(-time.Duration(r) * cfg.RunStep)
 			// Deterministic per-(inv, run) seed so re-seeding produces
 			// the same data layout; otherwise re-runs would shuffle.
 			runSeed := invSeed + int64(r+1)
-			info, err := UploadInventory(ctx, client, cfg, cfg.S3, i+1, runSeed, runStamp)
+			info, err := UploadInventory(ctx, client, invCfg, invCfg.S3, i+1, runSeed, runStamp)
 			if err != nil {
 				return fmt.Errorf("upload inventory %d run %d: %w", i+1, r, err)
 			}
