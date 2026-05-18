@@ -23,7 +23,6 @@ s3-inv-db build --s3-manifest s3://bucket/inv/data/manifest.json --out ./my-inde
 | `--s3-manifest` | yes |  | S3 URI to `manifest.json` |
 | `--out` | yes |  | Output directory for index files |
 | `--max-depth` |  | 0 (unlimited) | Maximum prefix depth to retain |
-| `--segment-prefixes` |  | false | Dictionary-compress shared prefix segments |
 | `--config` |  |  | JSON config file (see above) |
 | `--verbose` |  | false | Debug-level logging |
 | `--pretty-logs` |  | false | Human-friendly console output |

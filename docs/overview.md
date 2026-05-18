@@ -120,8 +120,9 @@ The index tracks statistics for 13 S3 storage classes:
 `pkg/tiers.Resolve(id, size)` re-routes IT-Frequent objects below
 128 KiB into the synthetic `ITFrequentSmall` bucket at ingest time so
 cost estimates honour the AWS minimum-monitored-size rule exactly.
-Per-tier statistics live in `tier_stats/<file_prefix>_{bytes,count}.u64`
-beside the main index files.
+Per-tier statistics live in `tier_stats/tier_stats_row.bin` beside
+the main index files — one row-major file holding `(count, bytes)`
+slots for every tier per prefix; see `docs/index-format.md`.
 
 ## Server features
 

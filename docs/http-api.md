@@ -56,6 +56,7 @@ never auto-evicted.
 | `GET /help` | HTML | Built-in glossary + workflows |
 | `GET /healthz` | text/plain `ok` | Liveness probe (no auth, no S3) |
 | `GET /static/tailwind.css` | text/css | Embedded compiled stylesheet, ETag-revalidated |
+| `GET /static/help.js` | application/javascript | Embedded help-page JS (TOC active-link + filter), ETag-revalidated |
 
 ### HTMX partials
 
