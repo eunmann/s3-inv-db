@@ -97,9 +97,12 @@ func heapInuseBytes() uint64 {
 	return m.HeapInuse
 }
 
-// AbsoluteAggregatorCap is the hard ceiling on the combined in-memory
-// footprint of all worker aggregators before they're forced to spill.
-const AbsoluteAggregatorCap uint64 = 512 * 1024 * 1024
+// DefaultAggregatorCap is the combined-aggregator spill threshold used
+// when no real memory budget is available — e.g. a CLI invocation
+// without GOMEMLIMIT or a cgroup memory.max set. Servers should call
+// sysmem.ApplyMemoryLimit at startup so AggregatorCap can scale with
+// the actual machine; this constant is the conservative fallback.
+const DefaultAggregatorCap uint64 = 512 * 1024 * 1024
 
 // heapPressureRatio is the HeapInuse / GOMEMLIMIT fraction above which
 // any worker must spill regardless of its own size — the aggregator
@@ -107,23 +110,30 @@ const AbsoluteAggregatorCap uint64 = 512 * 1024 * 1024
 const heapPressureRatio = 0.85
 
 // AggregatorFractionOfLimit caps the combined aggregator footprint as
-// a share of GOMEMLIMIT so a multi-GiB limit doesn't dwarf other
-// working sets.
+// a share of GOMEMLIMIT so the aggregator can't cannibalise the heap
+// budget that download / parse / merge / IndexBuilder mmap also need.
 const AggregatorFractionOfLimit = 0.15
 
-// AggregatorCap returns the combined spill threshold for all workers,
-// the smaller of AbsoluteAggregatorCap and 15% of memoryLimit. Zero or
-// negative memoryLimit falls back to the absolute cap.
+// unsetMemoryLimit is the sentinel above which a memoryLimit value is
+// treated as "unset" — runtime/debug.SetMemoryLimit reports
+// math.MaxInt64 when GOMEMLIMIT has never been set, and that value
+// multiplied by AggregatorFractionOfLimit is nonsense. The threshold
+// is well above any reachable real cgroup or container limit.
+const unsetMemoryLimit int64 = 1 << 62
+
+// AggregatorCap returns the combined spill threshold for all workers.
+// When memoryLimit is configured (a positive value below the
+// unsetMemoryLimit sentinel) the cap scales with it via
+// AggregatorFractionOfLimit, so the algorithm uses the budget the
+// machine was provisioned for. When the runtime reports no real
+// limit (default Go behaviour, no cgroup), the cap falls back to
+// DefaultAggregatorCap so unconfigured invocations stay conservative.
 func AggregatorCap(memoryLimit int64) uint64 {
-	if memoryLimit <= 0 {
-		return AbsoluteAggregatorCap
-	}
-	fractional := uint64(float64(memoryLimit) * AggregatorFractionOfLimit)
-	if fractional < AbsoluteAggregatorCap {
-		return fractional
+	if memoryLimit <= 0 || memoryLimit >= unsetMemoryLimit {
+		return DefaultAggregatorCap
 	}
 
-	return AbsoluteAggregatorCap
+	return uint64(float64(memoryLimit) * AggregatorFractionOfLimit)
 }
 
 func perWorkerAggregatorCap(memoryLimit int64, numWorkers int) uint64 {
