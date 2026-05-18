@@ -887,6 +887,9 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		if err != nil {
 			return mergeBuildResult{}, fmt.Errorf("create index builder: %w", err)
 		}
+		if err := builder.SetPrefixDictionary(p.config.PrefixDictionary); err != nil {
+			return mergeBuildResult{}, fmt.Errorf("set prefix dictionary: %w", err)
+		}
 		if err := builder.FinalizeWithContext(ctx); err != nil {
 			return mergeBuildResult{}, fmt.Errorf("finalize empty index: %w", err)
 		}
@@ -939,6 +942,9 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	builder, err := NewIndexBuilderWithCapacity(outDir, p.config.TempDir, prefixCount)
 	if err != nil {
 		return mergeBuildResult{}, fmt.Errorf("create index builder: %w", err)
+	}
+	if err := builder.SetPrefixDictionary(p.config.PrefixDictionary); err != nil {
+		return mergeBuildResult{}, fmt.Errorf("set prefix dictionary: %w", err)
 	}
 
 	if err := builder.AddAllWithContext(ctx, mergeIter); err != nil {

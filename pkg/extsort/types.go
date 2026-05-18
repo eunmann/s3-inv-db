@@ -230,11 +230,19 @@ func (s *PrefixStats) ToPrefixRow(prefix string) *PrefixRow {
 // Config holds pipeline configuration. Grouped into substructs by
 // concern: S3 download, Merge concurrency, Observe (progress+events).
 type Config struct {
-	Observe  ObserveConfig
-	TempDir  string
-	Merge    MergeConfig
-	S3       S3Config
-	MaxDepth int
+	Observe ObserveConfig
+	TempDir string
+	Merge   MergeConfig
+	S3      S3Config
+	// PrefixDictionary toggles dictionary-encoded prefix storage.
+	// When true (default), prefix strings are deduplicated into a
+	// shared dictionary of path segments (split on "/") and each
+	// prefix is stored as a sequence of segment IDs. Shrinks
+	// prefix_blob bytes by typically 50-70% on inventories with
+	// shared path components, but adds ~3× warm prefix-string read
+	// latency. Set false to opt into the raw concatenated blob.
+	PrefixDictionary bool
+	MaxDepth         int
 }
 
 // S3Config tunes the S3 download manager.
@@ -286,8 +294,9 @@ func DefaultConfig() Config {
 	mergeWorkers := min(max(numCPU/2, 1), mergeWorkerCap)
 
 	return Config{
-		TempDir:  "",
-		MaxDepth: 0,
+		TempDir:          "",
+		MaxDepth:         0,
+		PrefixDictionary: true,
 		S3: S3Config{
 			DownloadPartConcurrency: partConcurrency,
 			DownloadPartSize:        16 * 1024 * 1024,

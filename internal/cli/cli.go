@@ -64,6 +64,7 @@ func runBuild(args []string) error {
 
 	// Concurrency tuning
 	maxDepth := fs.Int("max-depth", 0, "maximum prefix depth to track (0 = unlimited)")
+	prefixDictionary := fs.Bool("prefix-dictionary", true, "enable dictionary-encoded prefix storage (~50-70% smaller prefix blob, ~3× slower prefix-string reads)")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -97,11 +98,11 @@ func runBuild(args []string) error {
 		return ErrManifestRequire
 	}
 
-	return runBuildExtSort(*outDir, *s3Manifest, *maxDepth, baseLogger)
+	return runBuildExtSort(*outDir, *s3Manifest, *maxDepth, *prefixDictionary, baseLogger)
 }
 
 // runBuildExtSort runs the build using the external sort backend (pure Go, no CGO).
-func runBuildExtSort(outDir, s3Manifest string, maxDepth int, baseLogger zerolog.Logger) error {
+func runBuildExtSort(outDir, s3Manifest string, maxDepth int, prefixDictionary bool, baseLogger zerolog.Logger) error {
 	// Create a context that responds to OS signals (SIGINT, SIGTERM)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -120,10 +121,12 @@ func runBuildExtSort(outDir, s3Manifest string, maxDepth int, baseLogger zerolog
 	if maxDepth > 0 {
 		config.MaxDepth = maxDepth
 	}
+	config.PrefixDictionary = prefixDictionary
 
 	logger.Info().
 		Int("s3_part_concurrency", config.S3.DownloadPartConcurrency).
 		Int("max_depth", config.MaxDepth).
+		Bool("prefix_dictionary", config.PrefixDictionary).
 		Msg("pipeline configuration")
 
 	pipeline := extsort.NewPipeline(config, client)

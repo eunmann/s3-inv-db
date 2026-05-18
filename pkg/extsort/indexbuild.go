@@ -37,7 +37,12 @@ type IndexBuilder struct {
 	stack             []stackEntry
 	posCount          uint64
 	maxDepth          uint32
-	closed            bool
+	// prefixDictionary selects the dictionary-encoded prefix storage
+	// path on the underlying StreamingMPHFBuilder. Toggled via
+	// SetPrefixDictionary so the NewIndexBuilder constructor
+	// signature stays (outDir, tempDir).
+	prefixDictionary bool
+	closed           bool
 }
 
 // stackEntry tracks an open prefix on the stack.
@@ -102,6 +107,41 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 	}
 
 	return b, nil
+}
+
+// SetPrefixDictionary toggles dictionary-encoded prefix storage on
+// the underlying MPHF builder. Must be called before the first Add —
+// the builder rebuilds its MPHF backing object to apply the option,
+// which would discard any prefixes added before the call.
+//
+// Kept as a setter (rather than a constructor parameter) so the
+// NewIndexBuilder / NewIndexBuilderWithCapacity signatures stay
+// stable across the dictionary-prefix toggle.
+func (b *IndexBuilder) SetPrefixDictionary(enabled bool) error {
+	if b.prefixDictionary == enabled {
+		return nil
+	}
+	b.prefixDictionary = enabled
+
+	if b.mphfBuilder != nil {
+		// Close the existing builder (it's untouched — no Add calls
+		// have happened yet under contract) so its tempdir state is
+		// released, then create a fresh one with the right option.
+		_ = b.mphfBuilder.Close()
+		b.mphfBuilder = nil
+	}
+
+	var opts []format.StreamingMPHFOption
+	if enabled {
+		opts = append(opts, format.WithPrefixDictionary())
+	}
+	mphfBuilder, err := format.NewStreamingMPHFBuilder(b.tempDir, opts...)
+	if err != nil {
+		return fmt.Errorf("recreate MPHF builder: %w", err)
+	}
+	b.mphfBuilder = mphfBuilder
+
+	return nil
 }
 
 // cleanup closes and removes all partially created files on error.
