@@ -14,6 +14,8 @@ const (
 	MiB = 1024 * KiB
 	GiB = 1024 * MiB
 	TiB = 1024 * GiB
+	PiB = 1024 * TiB
+	EiB = 1024 * PiB
 )
 
 // Bytes formats a byte count using IEC binary units (KiB, MiB, GiB, TiB).
@@ -34,6 +36,10 @@ func BytesUint64(b uint64) string {
 
 func formatBytes(b uint64) string {
 	switch {
+	case b >= EiB:
+		return fmt.Sprintf("%.2f EiB", float64(b)/EiB)
+	case b >= PiB:
+		return fmt.Sprintf("%.2f PiB", float64(b)/PiB)
 	case b >= TiB:
 		return fmt.Sprintf("%.2f TiB", float64(b)/TiB)
 	case b >= GiB:
