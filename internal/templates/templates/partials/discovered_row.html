@@ -26,7 +26,8 @@
             {{end}}
         </div>
         {{if .MetaLine}}
-        <div class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-0.5">{{.MetaLine}}</div>
+        <div class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-0.5"
+             title="manifest = compressed total of S3 Inventory data files / number of chunk files; cache = on-disk index size; loaded in = wall-clock build time">{{.MetaLine}}</div>
         {{end}}
         <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono truncate max-w-md mt-0.5" title="{{.ManifestKey}}">{{.ManifestKey}}</div>
     </td>

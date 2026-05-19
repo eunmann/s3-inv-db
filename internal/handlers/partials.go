@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
@@ -237,6 +238,7 @@ type DiscoveredRowView struct {
 	LoadDurationH        string
 	RunLabel             string
 	MetaLine             string
+	LoadDuration         time.Duration
 	CacheBytes           int64
 	AutoLoadFailureCount uint32
 	Pinned               bool
@@ -254,20 +256,15 @@ func populateRowDerived(view *DiscoveredRowView) {
 
 // discoveredMetaLine joins the secondary facts about one run into a
 // single bullet-separated string. Empty pieces are omitted so the
-// result has no dangling separators.
+// result has no dangling separators. The manifest segment names what
+// each number is ("manifest 1.40 GiB / 24 chunks") so the compressed
+// total isn't mistaken for an individual chunk's size.
 func discoveredMetaLine(view *DiscoveredRowView) string {
 	parts := make([]string, 0, 4)
 	if view.FileFormat != "" {
 		parts = append(parts, view.FileFormat)
 	}
-	if view.FileCount > 0 {
-		seg := fmt.Sprintf("%d file", view.FileCount)
-		if view.FileCount != 1 {
-			seg += "s"
-		}
-		if view.TotalBytes > 0 {
-			seg += ", " + humanfmt.Bytes(view.TotalBytes)
-		}
+	if seg := manifestMetaSegment(view.FileCount, view.TotalBytes); seg != "" {
 		parts = append(parts, seg)
 	}
 	if view.CacheBytesH != "" {
@@ -278,6 +275,33 @@ func discoveredMetaLine(view *DiscoveredRowView) string {
 	}
 
 	return strings.Join(parts, " · ")
+}
+
+// manifestMetaSegment renders the "manifest <size> / <N> chunks" piece
+// of the meta line. Falls back gracefully when only one of the two
+// numbers is available; returns "" when neither is.
+func manifestMetaSegment(fileCount int, totalBytes int64) string {
+	chunks := ""
+	if fileCount > 0 {
+		chunks = fmt.Sprintf("%d chunk", fileCount)
+		if fileCount != 1 {
+			chunks += "s"
+		}
+	}
+	size := ""
+	if totalBytes > 0 {
+		size = humanfmt.Bytes(totalBytes)
+	}
+	switch {
+	case size != "" && chunks != "":
+		return "manifest " + size + " / " + chunks
+	case size != "":
+		return "manifest " + size
+	case chunks != "":
+		return "manifest " + chunks
+	}
+
+	return ""
 }
 
 // renderDiscoveredRowFrom renders a discovered_row using a pre-fetched
@@ -295,6 +319,7 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 		view.Pinned = info.Pinned
 		view.UserUnloaded = !info.UserUnloadedAt.IsZero()
 		view.AutoLoadFailureCount = info.AutoLoadFailureCount
+		view.LoadDuration = info.LoadDuration
 		if !info.AutoLoadBackoffUntil.IsZero() {
 			view.AutoLoadBackoffUntil = info.AutoLoadBackoffUntil.UTC().Format("15:04:05")
 		}
@@ -314,16 +339,21 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 	}
 	cs := h.measureCacheSize(r, disc)
 	view.CacheBytes, view.CacheBytesH = cs.Bytes, cs.Human
-	view.LoadDurationH = loadDurationLabel(view.LatestJob)
+	view.LoadDurationH = loadDurationLabel(view.LoadDuration, view.LatestJob)
 	populateRowDerived(&view)
 	h.renderHTMLPartial(w, r, "discovered_row.html", "render discovered row", view)
 }
 
-// loadDurationLabel renders the wall-clock build time for a finished
-// build job. Returns "" when there's no job, the job isn't a build, the
-// timestamps are missing, or the run hasn't finished — the caller's
-// template then falls back to a dash.
-func loadDurationLabel(j *jobs.Job) string {
+// loadDurationLabel renders the wall-clock load time of the most recent
+// successful load. Prefers Manager.Info.LoadDuration (populated for both
+// user-driven and auto-driven loads) and falls back to the LatestJob's
+// StartedAt/FinishedAt span — useful when Info.LoadDuration was reset
+// by a server restart but the JobStore still has the build's timestamps.
+// Returns "" when neither source has a usable duration.
+func loadDurationLabel(infoDuration time.Duration, j *jobs.Job) string {
+	if infoDuration > 0 {
+		return humanfmt.Duration(infoDuration)
+	}
 	if j == nil || j.Kind != jobs.KindBuild {
 		return ""
 	}

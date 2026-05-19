@@ -158,6 +158,7 @@ func (m *Manager) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 		inv.info.Pinned = true
 		inv.info.UserUnloadedAt = time.Time{}
 	}
+	loadStartedAt := time.Now()
 	_ = m.mirror(ctx, inv.info)
 	snapshot := inv.info
 	m.mu.Unlock()
@@ -223,6 +224,7 @@ func (m *Manager) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	inv.info.IndexBytes = bytes
 	inv.info.AutoLoadFailureCount = 0
 	inv.info.AutoLoadBackoffUntil = time.Time{}
+	inv.info.LoadDuration = inv.info.LoadedAt.Sub(loadStartedAt)
 	_ = m.mirror(ctx, inv.info)
 
 	return nil

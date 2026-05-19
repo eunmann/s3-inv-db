@@ -396,6 +396,7 @@ func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInvent
 		row.Pinned = info.Pinned
 		row.UserUnloaded = !info.UserUnloadedAt.IsZero()
 		row.AutoLoadFailureCount = info.AutoLoadFailureCount
+		row.LoadDuration = info.LoadDuration
 		if !info.AutoLoadBackoffUntil.IsZero() {
 			row.AutoLoadBackoffUntil = info.AutoLoadBackoffUntil.UTC().Format("15:04:05")
 		}
@@ -415,7 +416,7 @@ func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInvent
 	}
 	cs := h.measureCacheSize(r, v.Inventory)
 	row.CacheBytes, row.CacheBytesH = cs.Bytes, cs.Human
-	row.LoadDurationH = loadDurationLabel(row.LatestJob)
+	row.LoadDurationH = loadDurationLabel(row.LoadDuration, row.LatestJob)
 	populateRowDerived(&row)
 
 	return row

@@ -22,16 +22,16 @@ func TestDiscoveredMetaLine(t *testing.T) {
 				CacheBytesH:   "47 MiB",
 				LoadDurationH: "32.00s",
 			},
-			want: "csv · 24 files, 1.40 GiB · cache 47 MiB · loaded in 32.00s",
+			want: "csv · manifest 1.40 GiB / 24 chunks · cache 47 MiB · loaded in 32.00s",
 		},
 		{
-			name: "singular file, no bytes, no cache",
+			name: "singular chunk, no bytes, no cache",
 			view: handlers.DiscoveredRowView{
 				MergedInventory: inventory.MergedInventory{
 					Inventory: inventory.Inventory{FileFormat: "parquet", FileCount: 1},
 				},
 			},
-			want: "parquet · 1 file",
+			want: "parquet · manifest 1 chunk",
 		},
 		{
 			name: "only cache present",
