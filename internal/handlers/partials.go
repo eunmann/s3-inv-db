@@ -88,6 +88,17 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	}
 	composite := disc.CompositeID()
 
+	// Already loaded: the user clicked Load on a run the Manager already
+	// holds open (typical cause: their cached page reflected a stale
+	// discovery snapshot). Render the live row and skip the job so the
+	// inventory doesn't end up with a no-op build job whose terminal
+	// state may race the SSE subscriber and leave the row stuck.
+	if info, ok := h.manager.Get(composite); ok && info.State == inventory.StateLoaded {
+		h.renderDiscoveredRowFrom(w, r, disc)
+
+		return
+	}
+
 	// Reject double-submit: if a job is already queued or running for
 	// this inventory, render the row with its current state instead of
 	// spawning a duplicate that will fail with an InvalidState error.

@@ -6,11 +6,11 @@
     {{$pct = progressPct .LatestJob.BytesDone .LatestJob.BytesTotal}}
     {{$eta = formatETA .LatestJob.StartedAt .LatestJob.BytesDone .LatestJob.BytesTotal}}
 {{end}}
-<tr id="discovered-row-{{.SourceBucket}}-{{.Name}}-{{.Run}}"
-    class="{{stateBorderClass (printf "%s" .State)}}"
+<tbody id="discovered-row-{{.SourceBucket}}-{{.Name}}-{{.Run}}"
     {{if .Run}}hx-get="/partials/discovered/{{.SourceBucket}}/{{.Name}}/{{.Run}}"
     hx-trigger="sse:row-{{$composite}}"
     hx-swap="outerHTML"{{end}}>
+<tr class="{{stateBorderClass (printf "%s" .State)}}">
     <td class="px-6 py-4 align-top">
         <div class="flex items-baseline gap-2 flex-wrap">
             <span class="text-sm font-medium text-gray-900 dark:text-gray-100 font-mono">
@@ -63,7 +63,7 @@
         {{else if and .Run .State.CanLoad}}
         <button type="button"
             hx-post="/partials/discovered/{{.SourceBucket}}/{{.Name}}/{{.Run}}/load"
-            hx-target="closest tr"
+            hx-target="closest tbody"
             hx-swap="outerHTML"
             class="inline-flex items-center px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white">
             {{if $canRetry}}Retry{{else if .State.IsNotLoaded}}Load{{else}}Reload{{end}}
@@ -82,7 +82,7 @@
         <button type="button"
             hx-post="/partials/discovered/{{.SourceBucket}}/{{.Name}}/{{.Run}}/pin"
             {{if .Pinned}}hx-vals="{{hxValsJSON "pinned" "false"}}"{{else}}hx-vals="{{hxValsJSON "pinned" "true"}}"{{end}}
-            hx-target="closest tr"
+            hx-target="closest tbody"
             hx-swap="outerHTML"
             class="inline-flex items-center justify-center h-7 w-7 rounded {{if .Pinned}}text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50{{else}}text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700{{end}}"
             title="{{if .Pinned}}Unpin (allow auto-eviction){{else}}Pin (protect from auto-eviction){{end}}"
@@ -95,7 +95,7 @@
         </button>
         <button type="button"
             hx-post="/partials/discovered/{{.SourceBucket}}/{{.Name}}/{{.Run}}/unload"
-            hx-target="closest tr"
+            hx-target="closest tbody"
             hx-swap="outerHTML"
             class="inline-flex items-center justify-center h-7 w-7 rounded text-yellow-600 dark:text-yellow-400 hover:bg-yellow-50 dark:hover:bg-yellow-900/30"
             title="Unload (release the index and remove cached files)"
@@ -115,3 +115,4 @@
     </td>
 </tr>
 {{end}}
+</tbody>
