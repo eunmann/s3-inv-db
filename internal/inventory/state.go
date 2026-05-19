@@ -134,10 +134,11 @@ type Info struct {
 	MaxDepth             uint32    `json:"max_depth,omitempty"`
 	AutoLoadFailureCount uint32    `json:"auto_load_failure_count,omitempty"`
 	// LoadDuration is the wall-clock time of the most recent successful
-	// load (StateLoading → StateLoaded transition). In-memory only; not
-	// persisted, so a server restart resets it to zero until the next
-	// load completes. Surfaced to the UI so auto-loaded runs (which do
-	// not go through jobs.Manager) still show a load time.
+	// load (StateLoading → StateLoaded transition). Persisted to SQLite
+	// so a server restart preserves it for runs that are still in
+	// StateLoaded. Surfaced to the UI so auto-loaded runs (which do not
+	// go through jobs.Manager and therefore have no JobStore record)
+	// still show a load time.
 	LoadDuration time.Duration `json:"load_duration_ns,omitempty"`
 	Pinned       bool          `json:"pinned"`
 	HasTierData  bool          `json:"has_tier_data"`

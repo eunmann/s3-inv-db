@@ -1,0 +1,1 @@
+ALTER TABLE inventories ADD COLUMN load_duration_ns INTEGER NOT NULL DEFAULT 0;

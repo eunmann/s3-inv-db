@@ -48,6 +48,33 @@ func TestStore_UpsertRoundTrip(t *testing.T) {
 	}
 }
 
+// TestStore_LoadDurationPersists pins the regression: a run's
+// load duration must survive a Store round-trip so the inventories
+// page can show "loaded in …" after a server restart, even for
+// auto-loaded runs that bypass jobs.Manager and have no fallback in
+// the JobStore.
+func TestStore_LoadDurationPersists(t *testing.T) {
+	s := openStore(t)
+	want := inventory.Info{
+		ID:           "src/inv1/run1",
+		Name:         "src/inv1 @ run1",
+		Path:         "s3://src/manifest.json",
+		State:        inventory.StateLoaded,
+		LoadedAt:     time.Unix(1_700_000_000, 0),
+		LoadDuration: 1_234 * time.Millisecond,
+	}
+	if err := s.Upsert(t.Context(), want); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	got, err := s.Get(t.Context(), "src/inv1/run1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.LoadDuration != want.LoadDuration {
+		t.Errorf("LoadDuration = %s, want %s", got.LoadDuration, want.LoadDuration)
+	}
+}
+
 func TestStore_UpsertReplacesRow(t *testing.T) {
 	s := openStore(t)
 	first := inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StateNotLoaded}
