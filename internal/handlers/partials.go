@@ -259,6 +259,13 @@ func populateRowDerived(view *DiscoveredRowView) {
 // result has no dangling separators. The manifest segment names what
 // each number is ("manifest 1.40 GiB / 24 chunks") so the compressed
 // total isn't mistaken for an individual chunk's size.
+//
+// The cache and "loaded in" segments are only emitted when the run is
+// currently in StateLoaded — they describe the *current* on-disk index
+// and the most recent successful build, neither of which is meaningful
+// while the run is loading, unloaded, or in an error state. Without
+// this guard, Info.LoadDuration / CacheBytesH from a prior successful
+// load would leak into a busy or unloaded row's display.
 func discoveredMetaLine(view *DiscoveredRowView) string {
 	parts := make([]string, 0, 4)
 	if view.FileFormat != "" {
@@ -267,11 +274,13 @@ func discoveredMetaLine(view *DiscoveredRowView) string {
 	if seg := manifestMetaSegment(view.FileCount, view.TotalBytes); seg != "" {
 		parts = append(parts, seg)
 	}
-	if view.CacheBytesH != "" {
-		parts = append(parts, "cache "+view.CacheBytesH)
-	}
-	if view.LoadDurationH != "" {
-		parts = append(parts, "loaded in "+view.LoadDurationH)
+	if view.State == inventory.StateLoaded {
+		if view.CacheBytesH != "" {
+			parts = append(parts, "cache "+view.CacheBytesH)
+		}
+		if view.LoadDurationH != "" {
+			parts = append(parts, "loaded in "+view.LoadDurationH)
+		}
 	}
 
 	return strings.Join(parts, " · ")

@@ -1,6 +1,7 @@
 package handlers_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/handlers"
@@ -14,10 +15,11 @@ func TestDiscoveredMetaLine(t *testing.T) {
 		want string
 	}{
 		{
-			name: "all four fields joined",
+			name: "all four fields joined when loaded",
 			view: handlers.DiscoveredRowView{
 				MergedInventory: inventory.MergedInventory{
 					Inventory: inventory.Inventory{FileFormat: "csv", FileCount: 24, TotalBytes: 1_500_000_000},
+					State:     inventory.StateLoaded,
 				},
 				CacheBytesH:   "47 MiB",
 				LoadDurationH: "32.00s",
@@ -29,13 +31,28 @@ func TestDiscoveredMetaLine(t *testing.T) {
 			view: handlers.DiscoveredRowView{
 				MergedInventory: inventory.MergedInventory{
 					Inventory: inventory.Inventory{FileFormat: "parquet", FileCount: 1},
+					State:     inventory.StateNotLoaded,
 				},
 			},
 			want: "parquet · manifest 1 chunk",
 		},
 		{
-			name: "only cache present",
+			name: "cache+loaded-in suppressed when state is not loaded",
 			view: handlers.DiscoveredRowView{
+				MergedInventory: inventory.MergedInventory{
+					State: inventory.StateLoading,
+				},
+				CacheBytesH:   "12 MiB",
+				LoadDurationH: "5.00s",
+			},
+			want: "",
+		},
+		{
+			name: "cache present and loaded",
+			view: handlers.DiscoveredRowView{
+				MergedInventory: inventory.MergedInventory{
+					State: inventory.StateLoaded,
+				},
 				CacheBytesH: "12 MiB",
 			},
 			want: "cache 12 MiB",
@@ -50,6 +67,50 @@ func TestDiscoveredMetaLine(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := handlers.DiscoveredMetaLineForTest(&tt.view); got != tt.want {
 				t.Errorf("discoveredMetaLine = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDiscoveredMetaLine_StateGuard pins the regression for the
+// "stale loaded in" bug: the LoadDuration field can carry the previous
+// successful load's value into StateLoading / StateNotLoaded / StateError,
+// so the segments that describe an actively-loaded run must be suppressed
+// unless the run is currently loaded.
+func TestDiscoveredMetaLine_StateGuard(t *testing.T) {
+	base := handlers.DiscoveredRowView{
+		MergedInventory: inventory.MergedInventory{
+			Inventory: inventory.Inventory{FileFormat: "csv", FileCount: 24, TotalBytes: 1_500_000_000},
+		},
+		CacheBytesH:   "47 MiB",
+		LoadDurationH: "32.00s",
+	}
+
+	tests := []struct {
+		name            string
+		state           inventory.State
+		wantHasLoadedIn bool
+		wantHasCache    bool
+		wantHasManifest bool
+	}{
+		{"loaded shows everything", inventory.StateLoaded, true, true, true},
+		{"loading hides cache + loaded-in", inventory.StateLoading, false, false, true},
+		{"not_loaded hides cache + loaded-in", inventory.StateNotLoaded, false, false, true},
+		{"error hides cache + loaded-in", inventory.StateError, false, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := base
+			v.State = tt.state
+			got := handlers.DiscoveredMetaLineForTest(&v)
+			if has := strings.Contains(got, "loaded in"); has != tt.wantHasLoadedIn {
+				t.Errorf("loaded-in segment present=%v want=%v in %q", has, tt.wantHasLoadedIn, got)
+			}
+			if has := strings.Contains(got, "cache "); has != tt.wantHasCache {
+				t.Errorf("cache segment present=%v want=%v in %q", has, tt.wantHasCache, got)
+			}
+			if has := strings.Contains(got, "manifest "); has != tt.wantHasManifest {
+				t.Errorf("manifest segment present=%v want=%v in %q", has, tt.wantHasManifest, got)
 			}
 		})
 	}
