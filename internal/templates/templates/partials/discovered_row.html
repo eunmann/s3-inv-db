@@ -8,7 +8,12 @@
 {{end}}
 <tbody id="discovered-row-{{.SourceBucket}}-{{.Name}}-{{.Run}}"
     {{if .Run}}hx-get="/partials/discovered/{{.SourceBucket}}/{{.Name}}/{{.Run}}"
-    hx-trigger="sse:row-{{$composite}}"
+    {{/* Polling fallback while busy: builds can finish in ~70 ms, faster
+         than htmx-sse can attach the row's listener after the POST swap.
+         Re-fetching every 2s catches the terminal state event the SSE
+         path may have missed. Once the row re-renders into a non-busy
+         state the rebuilt trigger drops the poll. */}}
+    hx-trigger="sse:row-{{$composite}}{{if $busy}}, every 2s{{end}}"
     hx-swap="outerHTML"{{end}}>
 <tr class="{{stateBorderClass (printf "%s" .State)}}">
     <td class="px-6 py-4 align-top">
