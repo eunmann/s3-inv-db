@@ -79,8 +79,8 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	if !fetchedAt.IsZero() {
 		data.SnapshotAge = humanfmt.Duration(time.Since(fetchedAt))
-		if h.discoveryRefreshInt > 0 {
-			remaining := time.Until(fetchedAt.Add(h.discoveryRefreshInt))
+		if h.discoveryRefreshInterval > 0 {
+			remaining := time.Until(fetchedAt.Add(h.discoveryRefreshInterval))
 			if remaining <= 0 {
 				data.NextRefreshIn = "due now"
 			} else {
