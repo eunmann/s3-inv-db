@@ -80,7 +80,7 @@ Read-only:
 
 | Route | Notes |
 |---|---|
-| `GET /api/inventories/{id}` | One inventory's metadata |
+| `GET /api/inventories/{id}` | One inventory's metadata (includes `load_duration_ns`, the wall-clock time of the most recent successful load — present and non-zero only when `state == "loaded"`) |
 | `GET /api/inventories/{id}/stats?prefix=…` | Per-prefix stats |
 | `GET /api/inventories/{id}/descendants?prefix=…&depth=…` | Depth-walk descendants |
 | `GET /api/discovered` | List discovered inventories (when discovery configured) |
