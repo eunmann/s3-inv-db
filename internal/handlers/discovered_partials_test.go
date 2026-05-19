@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,9 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
+	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -163,6 +166,80 @@ func TestLoadDiscoveredRowPartial_AcceptsBuildError(t *testing.T) {
 	final := waitForJobInState(t, h.JobStoreForTest(), disc.CompositeID(), jobs.StateFailed)
 	if !strings.Contains(final.Error, "network broken") {
 		t.Errorf("job error = %q, want to contain 'network broken'", final.Error)
+	}
+}
+
+// buildMinimalIndex builds a real, loadable index in a tmpdir with a
+// single object, returning the index directory. Used to drive an
+// inventory into StateLoaded for the short-circuit test below.
+func buildMinimalIndex(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "index")
+
+	agg := extsort.NewAggregator(1, 0)
+	agg.AddObject("only/object.bin", 100, tiers.Standard)
+	rows := agg.Drain()
+	extsort.SortPrefixRows(rows)
+
+	builder, err := extsort.NewIndexBuilder(dir, "")
+	if err != nil {
+		t.Fatalf("NewIndexBuilder: %v", err)
+	}
+	for _, r := range rows {
+		if err := builder.Add(r); err != nil {
+			t.Fatalf("builder.Add: %v", err)
+		}
+	}
+	if err := builder.Finalize(); err != nil {
+		t.Fatalf("builder.Finalize: %v", err)
+	}
+
+	return dir
+}
+
+// TestLoadDiscoveredRowPartial_AlreadyLoadedShortCircuits pins the
+// defense-in-depth branch: when the live Manager already holds the run
+// in StateLoaded (typical cause: the page was rendered against a stale
+// discovery snapshot before my overlay fix), hitting Load must NOT
+// submit a job. Submitting one would race the SSE subscriber on the
+// way out and could leave the row stuck on "Loading…".
+func TestLoadDiscoveredRowPartial_AlreadyLoadedShortCircuits(t *testing.T) {
+	disc := inventory.Inventory{
+		SourceBucket: "b", Name: "i", Run: "2026-05-13T03-00Z",
+		ManifestKey: "k/2026-05-13T03-00Z/manifest.json",
+	}
+	h := newDiscoveredHandlers(t,
+		&fakeDiscoverer{findResp: disc, bucket: "dst"},
+		&fakeBuilder{},
+	)
+
+	// Hydrate the manager into a real StateLoaded by pointing it at a
+	// minimal built index. Anything less goes via the indexread.Open
+	// failure path and lands in StateError instead.
+	indexDir := buildMinimalIndex(t)
+	composite := disc.CompositeID()
+	if err := h.ManagerForTest().Hydrate(t.Context(), inventory.Info{
+		ID:    composite,
+		Name:  "b/i @ 2026-05-13T03-00Z",
+		Path:  "s3://b/k/2026-05-13T03-00Z/manifest.json",
+		State: inventory.StateLoaded,
+	}, indexDir); err != nil {
+		t.Fatalf("hydrate: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
+	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
+	w := httptest.NewRecorder()
+	h.LoadDiscoveredRowPartial(w, req)
+
+	// 200 (row rendered directly), not 202 (job accepted).
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (short-circuit, no job submitted); body=%s", w.Code, w.Body.String())
+	}
+	// And no build job should have been created.
+	_, err := h.JobStoreForTest().LatestForInventory(t.Context(), composite)
+	if !errors.Is(err, jobs.ErrStoreNotFound) {
+		t.Errorf("LatestForInventory err = %v, want ErrStoreNotFound (no job submitted)", err)
 	}
 }
 
