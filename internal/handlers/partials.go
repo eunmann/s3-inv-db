@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
@@ -86,6 +88,17 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	composite := disc.CompositeID()
+
+	// Already loaded: the user clicked Load on a run the Manager already
+	// holds open (typical cause: their cached page reflected a stale
+	// discovery snapshot). Render the live row and skip the job so the
+	// inventory doesn't end up with a no-op build job whose terminal
+	// state may race the SSE subscriber and leave the row stuck.
+	if info, ok := h.manager.Get(composite); ok && info.State == inventory.StateLoaded {
+		h.renderDiscoveredRowFrom(w, r, disc)
+
+		return
+	}
 
 	// Reject double-submit: if a job is already queued or running for
 	// this inventory, render the row with its current state instead of
@@ -222,10 +235,82 @@ type DiscoveredRowView struct {
 	LatestJob            *jobs.Job
 	CacheBytesH          string
 	AutoLoadBackoffUntil string
+	LoadDurationH        string
+	RunLabel             string
+	MetaLine             string
+	LoadDuration         time.Duration
 	CacheBytes           int64
 	AutoLoadFailureCount uint32
 	Pinned               bool
 	UserUnloaded         bool
+}
+
+// populateRowDerived fills the view fields that depend on the
+// already-populated raw data: a humanised run timestamp, and a one-line
+// "format · N files, X bytes · cache Y · loaded in Z" summary the
+// template renders under the run timestamp.
+func populateRowDerived(view *DiscoveredRowView) {
+	view.RunLabel = humanfmt.RunTimestamp(view.Run)
+	view.MetaLine = discoveredMetaLine(view)
+}
+
+// discoveredMetaLine joins the secondary facts about one run into a
+// single bullet-separated string. Empty pieces are omitted so the
+// result has no dangling separators. The manifest segment names what
+// each number is ("manifest 1.40 GiB / 24 chunks") so the compressed
+// total isn't mistaken for an individual chunk's size.
+//
+// The cache and "loaded in" segments are only emitted when the run is
+// currently in StateLoaded — they describe the *current* on-disk index
+// and the most recent successful build, neither of which is meaningful
+// while the run is loading, unloaded, or in an error state. Without
+// this guard, Info.LoadDuration / CacheBytesH from a prior successful
+// load would leak into a busy or unloaded row's display.
+func discoveredMetaLine(view *DiscoveredRowView) string {
+	parts := make([]string, 0, 4)
+	if view.FileFormat != "" {
+		parts = append(parts, view.FileFormat)
+	}
+	if seg := manifestMetaSegment(view.FileCount, view.TotalBytes); seg != "" {
+		parts = append(parts, seg)
+	}
+	if view.State == inventory.StateLoaded {
+		if view.CacheBytesH != "" {
+			parts = append(parts, "cache "+view.CacheBytesH)
+		}
+		if view.LoadDurationH != "" {
+			parts = append(parts, "loaded in "+view.LoadDurationH)
+		}
+	}
+
+	return strings.Join(parts, " · ")
+}
+
+// manifestMetaSegment renders the "manifest <size> / <N> chunks" piece
+// of the meta line. Falls back gracefully when only one of the two
+// numbers is available; returns "" when neither is.
+func manifestMetaSegment(fileCount int, totalBytes int64) string {
+	chunks := ""
+	if fileCount > 0 {
+		chunks = fmt.Sprintf("%d chunk", fileCount)
+		if fileCount != 1 {
+			chunks += "s"
+		}
+	}
+	size := ""
+	if totalBytes > 0 {
+		size = humanfmt.Bytes(totalBytes)
+	}
+	switch {
+	case size != "" && chunks != "":
+		return "manifest " + size + " / " + chunks
+	case size != "":
+		return "manifest " + size
+	case chunks != "":
+		return "manifest " + chunks
+	}
+
+	return ""
 }
 
 // renderDiscoveredRowFrom renders a discovered_row using a pre-fetched
@@ -243,6 +328,7 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 		view.Pinned = info.Pinned
 		view.UserUnloaded = !info.UserUnloadedAt.IsZero()
 		view.AutoLoadFailureCount = info.AutoLoadFailureCount
+		view.LoadDuration = info.LoadDuration
 		if !info.AutoLoadBackoffUntil.IsZero() {
 			view.AutoLoadBackoffUntil = info.AutoLoadBackoffUntil.UTC().Format("15:04:05")
 		}
@@ -262,7 +348,33 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 	}
 	cs := h.measureCacheSize(r, disc)
 	view.CacheBytes, view.CacheBytesH = cs.Bytes, cs.Human
+	view.LoadDurationH = loadDurationLabel(view.LoadDuration, view.LatestJob)
+	populateRowDerived(&view)
 	h.renderHTMLPartial(w, r, "discovered_row.html", "render discovered row", view)
+}
+
+// loadDurationLabel renders the wall-clock load time of the most recent
+// successful load. Prefers Manager.Info.LoadDuration (populated for both
+// user-driven and auto-driven loads) and falls back to the LatestJob's
+// StartedAt/FinishedAt span — useful when Info.LoadDuration was reset
+// by a server restart but the JobStore still has the build's timestamps.
+// Returns "" when neither source has a usable duration.
+func loadDurationLabel(infoDuration time.Duration, j *jobs.Job) string {
+	if infoDuration > 0 {
+		return humanfmt.Duration(infoDuration)
+	}
+	if j == nil || j.Kind != jobs.KindBuild {
+		return ""
+	}
+	if j.StartedAt.IsZero() || j.FinishedAt.IsZero() {
+		return ""
+	}
+	d := j.FinishedAt.Sub(j.StartedAt)
+	if d <= 0 {
+		return ""
+	}
+
+	return humanfmt.Duration(d)
 }
 
 // cacheSize is the raw-bytes / human-formatted pair returned by

@@ -50,6 +50,16 @@ Apply the `deep-research` skill steps 1-4, scoped to the PR's changed files. Rem
 
 Do not run steps 5-6 — `/review-pr` produces a review artifact, not code.
 
+### When fixes are requested after the review lands
+
+If the user then asks you to fix any of the findings (in this conversation or a follow-up), default to **TDD red-green-refactor** (use the `tdd` skill) for anything where the bug is observable from a test:
+
+- **Bug fixes** → write a failing regression test that reproduces the finding first, watch it fail, then fix.
+- **Missing-test findings** → the test you write IS the deliverable. Add it; if it passes immediately the behavior was already correct and the gap was just coverage.
+- **Pure style / rename / template-only nits** → TDD doesn't apply; just make the change.
+
+Surface this preference up front when transitioning from "review posted" to "now fix it" so the user can opt out for a single batch fix.
+
 ## 3. Synthesize the Review
 
 Build a prioritized issue list:

@@ -154,10 +154,16 @@ func (m *Manager) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	}
 	inv.info.State = StateLoading
 	inv.info.Error = ""
+	// LoadDuration belongs to the most recent successful load. Clear it
+	// on entry to StateLoading so a build that fails leaves the field
+	// at zero rather than carrying a previous run's value through Error
+	// state into JSON API responses.
+	inv.info.LoadDuration = 0
 	if pin {
 		inv.info.Pinned = true
 		inv.info.UserUnloadedAt = time.Time{}
 	}
+	loadStartedAt := time.Now()
 	_ = m.mirror(ctx, inv.info)
 	snapshot := inv.info
 	m.mu.Unlock()
@@ -223,6 +229,7 @@ func (m *Manager) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	inv.info.IndexBytes = bytes
 	inv.info.AutoLoadFailureCount = 0
 	inv.info.AutoLoadBackoffUntil = time.Time{}
+	inv.info.LoadDuration = inv.info.LoadedAt.Sub(loadStartedAt)
 	_ = m.mirror(ctx, inv.info)
 
 	return nil
@@ -304,6 +311,7 @@ func (m *Manager) unloadInternal(ctx context.Context, id ID, userInitiated bool)
 	inv.info.NodeCount = 0
 	inv.info.MaxDepth = 0
 	inv.info.LoadedAt = time.Time{}
+	inv.info.LoadDuration = 0
 	inv.info.IndexBytes = 0
 	if userInitiated {
 		inv.info.UserUnloadedAt = time.Now()

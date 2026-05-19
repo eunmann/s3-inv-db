@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -37,6 +38,12 @@ type ComparePickerOption struct {
 }
 
 // ComparePageData is the typed page data for compare.html.
+//
+// Picker drives the "from" dropdown and lists every loaded run. ToPicker
+// drives the "to" dropdown: when From is empty it mirrors Picker, but
+// once From is chosen it narrows to the runs belonging to the same
+// inventory configuration so the user can't pick a structurally
+// incompatible pair.
 type ComparePageData struct {
 	Partial     ComparePartialData
 	Level       *CompareLevelView
@@ -49,6 +56,7 @@ type ComparePageData struct {
 	Prefix      string
 	Error       string
 	Picker      ComparePicker
+	ToPicker    ComparePicker
 	Breadcrumbs []BrowseCrumb
 }
 
@@ -65,16 +73,17 @@ type ComparePartialData struct {
 
 // CompareLevelView is the rendered comparison at one prefix.
 type CompareLevelView struct {
-	SortLinks     map[string]inventory.BrowseSortLink
-	Sort          string
-	Dir           string
-	Self          CompareSelfView
-	Children      []CompareChildView
-	Pagination    BrowsePagination
-	Status        CompareStatusCounts
-	TotalChildren int
-	HideUnchanged bool
-	NotFound      bool
+	SortLinks      map[string]inventory.BrowseSortLink
+	Sort           string
+	Dir            string
+	QueryDurationH string
+	Self           CompareSelfView
+	Children       []CompareChildView
+	Pagination     BrowsePagination
+	Status         CompareStatusCounts
+	TotalChildren  int
+	HideUnchanged  bool
+	NotFound       bool
 }
 
 // CompareStatusCounts summarises the change set at this prefix.
@@ -186,9 +195,11 @@ type compareViewOptions struct {
 }
 
 func (h *Handlers) renderCompareFullPage(w http.ResponseWriter, r *http.Request, opts compareViewOptions) {
+	picker := buildComparePicker(h.manager.List())
 	data := ComparePageData{
 		Title:       "Compare runs",
-		Picker:      buildComparePicker(h.manager.List()),
+		Picker:      picker,
+		ToPicker:    filterComparePickerByConfig(picker, opts.from),
 		From:        opts.from,
 		To:          opts.to,
 		Prefix:      opts.prefix,
@@ -268,6 +279,7 @@ func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Requ
 // and paginates the children before returning so the caller doesn't
 // have to.
 func (h *Handlers) computeCompareLevel(_ context.Context, opts compareViewOptions) (*CompareLevelView, error) {
+	start := time.Now()
 	var view CompareLevelView
 	err := h.manager.WithTwoIndexes(opts.from, opts.to, func(a, b *indexread.Index) error {
 		data := inventory.CompareLevel(a, b, opts.prefix)
@@ -316,6 +328,7 @@ func (h *Handlers) computeCompareLevel(_ context.Context, opts compareViewOption
 	} else {
 		view.Children = nil
 	}
+	view.QueryDurationH = humanfmt.Duration(time.Since(start))
 
 	return &view, nil
 }
@@ -835,6 +848,28 @@ func paginationFromBrowse(p inventory.BrowsePagination, total int) PaginationJSO
 		Pages:    p.Pages,
 		Total:    total,
 	}
+}
+
+// filterComparePickerByConfig narrows a picker to runs whose ID belongs
+// to the same configuration as `from`. Returns the full picker when
+// `from` is empty or unparseable so the "to" dropdown still lists every
+// loadable run before the user picks a baseline.
+func filterComparePickerByConfig(picker ComparePicker, from inventory.ID) ComparePicker {
+	if from == "" {
+		return picker
+	}
+	p := from.Split()
+	if !p.OK {
+		return picker
+	}
+	wantLabel := p.Source + "/" + p.Inventory
+	for _, g := range picker.Groups {
+		if g.ConfigLabel == wantLabel {
+			return ComparePicker{Groups: []ComparePickerGroup{g}}
+		}
+	}
+
+	return ComparePicker{}
 }
 
 // buildComparePicker collects every StateLoaded inventory into per-config

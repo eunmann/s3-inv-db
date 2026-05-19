@@ -45,6 +45,9 @@
             <h2 class="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">
                 At {{if .Prefix}}<code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-2 py-1 rounded">{{.Prefix}}</code>{{else}}<span>the root</span>{{end}}
             </h2>
+            {{if .Level.QueryDurationH}}
+            <p class="mt-1 text-xs text-gray-400 dark:text-gray-500" title="Server-side compare time, excluding HTML template rendering.">Compared in {{.Level.QueryDurationH}}</p>
+            {{end}}
         </div>
         <dl class="border-t border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
             {{with .Level.Self}}

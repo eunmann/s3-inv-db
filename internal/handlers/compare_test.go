@@ -73,26 +73,70 @@ func TestComparePage_PartialBothLoadedRequired(t *testing.T) {
 	}
 }
 
+func TestFilterComparePickerByConfig(t *testing.T) {
+	full := handlers.BuildComparePickerForTest([]inventory.Info{
+		{ID: "srcA/invX/run-A", State: inventory.StateLoaded},
+		{ID: "srcA/invX/run-B", State: inventory.StateLoaded},
+		{ID: "src-a/inv-2/run-C", State: inventory.StateLoaded},
+		{ID: "src-b/inv-1/run-D", State: inventory.StateLoaded},
+	})
+
+	t.Run("empty from returns full picker", func(t *testing.T) {
+		got := handlers.FilterComparePickerByConfigForTest(full, "")
+		if len(got.Groups) != len(full.Groups) {
+			t.Errorf("groups = %d, want %d (full passthrough)", len(got.Groups), len(full.Groups))
+		}
+	})
+
+	t.Run("from narrows to matching config only", func(t *testing.T) {
+		got := handlers.FilterComparePickerByConfigForTest(full, "srcA/invX/run-A")
+		if len(got.Groups) != 1 {
+			t.Fatalf("groups = %d, want 1", len(got.Groups))
+		}
+		if got.Groups[0].ConfigLabel != "srcA/invX" {
+			t.Errorf("label = %q, want srcA/invX", got.Groups[0].ConfigLabel)
+		}
+		if len(got.Groups[0].Options) != 2 {
+			t.Errorf("options = %d, want 2 runs of srcA/invX", len(got.Groups[0].Options))
+		}
+	})
+
+	t.Run("unknown config yields empty picker", func(t *testing.T) {
+		got := handlers.FilterComparePickerByConfigForTest(full, "missing/config/run-X")
+		if len(got.Groups) != 0 {
+			t.Errorf("groups = %d, want 0", len(got.Groups))
+		}
+	})
+
+	t.Run("malformed from falls back to full picker", func(t *testing.T) {
+		got := handlers.FilterComparePickerByConfigForTest(full, "no-slashes")
+		if len(got.Groups) != len(full.Groups) {
+			t.Errorf("groups = %d, want %d", len(got.Groups), len(full.Groups))
+		}
+	})
+}
+
 func TestBuildComparePicker_OnlyLoadedAndThreePart(t *testing.T) {
+	const cfgOne = "src-a/inv-1"
 	in := []inventory.Info{
-		{ID: "src-a/inv-1/2026-05-13T03-00Z", State: inventory.StateLoaded},
-		{ID: "src-a/inv-1/2026-05-12T03-00Z", State: inventory.StateLoaded},
+		{ID: inventory.ID(cfgOne + "/2026-05-13T03-00Z"), State: inventory.StateLoaded},
+		{ID: inventory.ID(cfgOne + "/2026-05-12T03-00Z"), State: inventory.StateLoaded},
 		{ID: "src-a/inv-2/2026-05-13T03-00Z", State: inventory.StateLoaded},
 		{ID: "src-b/inv-1/2026-05-13T03-00Z", State: inventory.StateNotLoaded}, // filtered
 		{ID: "legacy-two-part", State: inventory.StateLoaded},                  // filtered (not 3-part)
 	}
 	got := handlers.BuildComparePickerForTest(in)
 	if len(got.Groups) != 2 {
-		t.Fatalf("groups = %d, want 2 (src-a/inv-1 and src-a/inv-2)", len(got.Groups))
+		t.Fatalf("groups = %d, want 2 (%s and src-a/inv-2)", len(got.Groups), cfgOne)
 	}
-	if got.Groups[0].ConfigLabel != "src-a/inv-1" || got.Groups[1].ConfigLabel != "src-a/inv-2" {
-		t.Errorf("group labels = %q, %q; want src-a/inv-1, src-a/inv-2", got.Groups[0].ConfigLabel, got.Groups[1].ConfigLabel)
+	if got.Groups[0].ConfigLabel != cfgOne || got.Groups[1].ConfigLabel != "src-a/inv-2" {
+		t.Errorf("group labels = %q, %q; want %s, src-a/inv-2", got.Groups[0].ConfigLabel, got.Groups[1].ConfigLabel, cfgOne)
 	}
 	if len(got.Groups[0].Options) != 2 {
-		t.Errorf("src-a/inv-1 options = %d, want 2 (both loaded runs)", len(got.Groups[0].Options))
+		t.Errorf("%s options = %d, want 2 (both loaded runs)", cfgOne, len(got.Groups[0].Options))
 	}
 	// Newest-first: 2026-05-13 before 2026-05-12.
-	if got.Groups[0].Options[0].ID != "src-a/inv-1/2026-05-13T03-00Z" {
+	if got.Groups[0].Options[0].ID != inventory.ID(cfgOne+"/2026-05-13T03-00Z") {
 		t.Errorf("newest run should be first: got %q", got.Groups[0].Options[0].ID)
 	}
 }

@@ -154,6 +154,14 @@ func (s *DiscoveryService) List(ctx context.Context) ([]MergedInventory, error) 
 // Subsequent calls always read the cache, even if a later Refresh
 // failed — the FetchedAt timestamp lets callers age out the result
 // themselves if they need fresher data.
+//
+// The S3 listing (what runs exist) comes from the cache, but the
+// per-run lifecycle state (State / Error / NodeCount / HasTierData)
+// is overlaid from the live Manager at call time so the page reflects
+// what just happened without waiting for the next discovery refresh.
+// A load that finishes between two refresh ticks would otherwise leave
+// the page rendering "not loaded" and let the user submit a duplicate
+// load that fails with ErrInvalidState.
 func (s *DiscoveryService) Snapshot(ctx context.Context) ([]MergedInventory, time.Time, error) {
 	if s.discoverer == nil {
 		return nil, time.Time{}, ErrDiscoveryDisabled
@@ -167,11 +175,20 @@ func (s *DiscoveryService) Snapshot(ctx context.Context) ([]MergedInventory, tim
 		}
 	}
 	s.cacheMu.RLock()
-	defer s.cacheMu.RUnlock()
 	out := make([]MergedInventory, len(s.cacheViews))
 	copy(out, s.cacheViews)
+	at := s.cacheAt
+	s.cacheMu.RUnlock()
+	for i := range out {
+		if info, ok := s.manager.Get(out[i].CompositeID()); ok {
+			out[i].State = info.State
+			out[i].Error = info.Error
+			out[i].NodeCount = info.NodeCount
+			out[i].HasTierData = info.HasTierData
+		}
+	}
 
-	return out, s.cacheAt, nil
+	return out, at, nil
 }
 
 // Refresh runs a live List and stores the result in the snapshot. The

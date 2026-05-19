@@ -241,6 +241,63 @@ func TestDiscoveryService_Snapshot_ColdStartLoadsLive(t *testing.T) {
 	}
 }
 
+// TestDiscoveryService_Snapshot_OverlaysLiveManagerState pins the
+// regression: after a Load completes the next Snapshot must reflect the
+// live Manager.State even though the cached views captured an earlier
+// "not loaded" state. Without the overlay the inventories page renders
+// stale "not loaded" until the next discovery Refresh tick and a user
+// click submits a no-op Load that fails with ErrInvalidState.
+func TestDiscoveryService_Snapshot_OverlaysLiveManagerState(t *testing.T) {
+	mgr := inventory.NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+	run := "2026-05-13T03-00Z"
+	disc := &fakeDiscoverer{
+		listResp: []inventory.Inventory{{
+			SourceBucket: "b", Name: "i", Run: run, ManifestKey: "k/" + run + "/manifest.json",
+		}},
+	}
+	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
+
+	// Prime the cache while the run is not loaded.
+	if _, _, err := s.Snapshot(t.Context()); err != nil {
+		t.Fatalf("seed Snapshot: %v", err)
+	}
+
+	// Flip the run to StateError in the live Manager *after* the cache
+	// was captured. StateError is convenient for the test because
+	// Hydrate doesn't need an indexDir to reach it; any state ≠ the
+	// cached StateNotLoaded proves the overlay.
+	composite := inventory.ID("b/i/" + run)
+	if err := mgr.Hydrate(t.Context(), inventory.Info{
+		ID:    composite,
+		Name:  "b/i @ " + run,
+		Path:  "s3://b/k/" + run + "/manifest.json",
+		State: inventory.StateError,
+		Error: "synthetic test error",
+	}, ""); err != nil {
+		t.Fatalf("hydrate: %v", err)
+	}
+
+	views, _, err := s.Snapshot(t.Context())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("views = %d, want 1", len(views))
+	}
+	if views[0].State != inventory.StateError {
+		t.Errorf("state = %q, want %q — cache must not mask live Manager state", views[0].State, inventory.StateError)
+	}
+	if views[0].Error != "synthetic test error" {
+		t.Errorf("error = %q, want %q", views[0].Error, "synthetic test error")
+	}
+	// Confirm we did not pay for a re-list to get this — the overlay
+	// must come from Manager.Get, not a fresh Discoverer call.
+	if got := disc.listCalls.Load(); got != 1 {
+		t.Errorf("listCalls = %d, want 1 (overlay must not re-fetch from S3)", got)
+	}
+}
+
 func TestDiscoveryService_Snapshot_ServesFromCache(t *testing.T) {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })

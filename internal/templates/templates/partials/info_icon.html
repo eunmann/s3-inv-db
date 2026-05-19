@@ -1,0 +1,10 @@
+{{/* Small inline info glyph. Pass the tooltip text as the data (".").
+     The inline SVG carries the role="img" + aria-label semantics; the
+     wrapping <span> is just a tooltip target. tabindex makes the icon
+     keyboard-focusable so screen-reader / keyboard users can reach the
+     tooltip the same way mouse users hover for it. */}}
+<span tabindex="0" title="{{.}}" class="inline-flex items-center justify-center align-middle ml-1 h-3.5 w-3.5 cursor-help select-none text-gray-400 dark:text-gray-500">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-3.5 w-3.5" role="img" aria-label="{{.}}" focusable="false">
+        <path fill-rule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm0-2.5a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11Zm.75-8.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm-.75 1.5a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3a.75.75 0 0 0-.75-.75Z" clip-rule="evenodd"/>
+    </svg>
+</span>
