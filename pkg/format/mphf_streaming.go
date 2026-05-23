@@ -225,7 +225,15 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 
 	bbhashStart := time.Now()
 	const bbhashGamma = 2.0
-	mph, err := bbhash.New(b.hashes.Slice(), bbhash.Gamma(bbhashGamma), bbhash.WithReverseMap())
+	// bbhash's per-partition build runs concurrently via errgroup; the
+	// default partitions=1 leaves it serial. Pinning to NumCPU lets all
+	// cores work the N×4M-key partitions in parallel. bbhash internally
+	// caps at maxPartitions=255 (uint8 partition index).
+	mph, err := bbhash.New(b.hashes.Slice(),
+		bbhash.Gamma(bbhashGamma),
+		bbhash.Partitions(runtime.NumCPU()),
+		bbhash.WithReverseMap(),
+	)
 	if err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
