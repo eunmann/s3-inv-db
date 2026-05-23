@@ -122,7 +122,8 @@ The index tracks statistics for 13 S3 storage classes:
 cost estimates honour the AWS minimum-monitored-size rule exactly.
 Per-tier statistics live in `tier_stats/tier_stats_row.bin` beside
 the main index files — one row-major file holding `(count, bytes)`
-slots for every tier per prefix; see `docs/index-format.md`.
+slots in `tiers.json` order for every tier that has data in this
+index; absent tiers consume no disk. See `docs/index-format.md`.
 
 ## Server features
 

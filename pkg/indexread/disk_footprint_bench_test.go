@@ -15,8 +15,8 @@ import (
 // compare disk footprint across format changes (hybrid tier-stats vs
 // dense, prefix dictionary on/off, etc).
 //
-// Run with: go test -bench=BenchmarkDiskFootprint -benchtime=1x \
-//	-run=^$ ./pkg/indexread/
+//	Run with: go test -bench=BenchmarkDiskFootprint -benchtime=1x \
+//		-run=^$ ./pkg/indexread/
 func BenchmarkDiskFootprint(b *testing.B) {
 	silenceZerolog(b)
 	for _, n := range []int{10000, 100000, 1000000} {
@@ -27,14 +27,14 @@ func BenchmarkDiskFootprint(b *testing.B) {
 			var total int64
 			if err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
-					return err
+					return fmt.Errorf("walk %q: %w", path, err)
 				}
 				if d.IsDir() {
 					return nil
 				}
 				info, err := d.Info()
 				if err != nil {
-					return err
+					return fmt.Errorf("stat %q: %w", path, err)
 				}
 				rel, _ := filepath.Rel(dir, path)
 				report[rel] = info.Size()
