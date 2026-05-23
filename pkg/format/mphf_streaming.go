@@ -16,7 +16,6 @@ import (
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/relab/bbhash"
-	"golang.org/x/sys/unix"
 )
 
 // StreamingMPHFBuilder builds a minimal perfect hash function for prefix strings
@@ -628,11 +627,14 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	return nil
 }
 
-// writeCombinedMmap materialises mph_fp_pos.u64 directly into an
-// mmap'd output file, bypassing the heap intermediate that
-// writeArraysParallel uses. For 1B prefixes the previous path
-// allocated two 8 GiB heap slices; this path allocates zero — the
-// scatter writes go straight into the page cache via the mmap.
+// writeCombinedMmap materialises mph_fp_pos.u64 by inverting the
+// permutation once, then having each worker fill a 1 MiB buffer in
+// slot order and pwrite it to a disjoint range of the output file.
+//
+// The previous version mmap'd the file and scattered random writes
+// indexed by hashPositions. On EBS gp3 that hit ~3× write amplification
+// — page-cache evict/reload churn (CPU profile showed 91% in
+// page-fault wait). Sequential writes touch each page exactly once.
 //
 // File layout matches the existing combined format: 20-byte header
 // (count = 2N, width = 8) followed by 2N×8 bytes of interleaved
@@ -666,46 +668,77 @@ func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []ui
 
 		return fmt.Errorf("write combined header: %w", err)
 	}
+
+	if n == 0 {
+		if err := f.Sync(); err != nil {
+			f.Close()
+			os.Remove(path)
+
+			return fmt.Errorf("sync combined: %w", err)
+		}
+
+		return f.Close()
+	}
+
+	// Invert hashPositions: invMap[slot] = source index. Lets each
+	// worker emit slots in order without lookups against random
+	// indices. uint32 indexing assumes n ≤ MaxUint32, which
+	// computeHashPositionsParallelSort already enforces upstream.
+	invMap := make([]uint32, n)
+	for i, slot := range hashPositions {
+		invMap[slot] = uint32(i)
+	}
+
+	const slotBytes = 16
+	const bufSlots = 1 << 16 // 1 MiB / 16 B
+	numWorkers := max(min(runtime.NumCPU(), n), 1)
+	slotsPerWorker := (n + numWorkers - 1) / numWorkers
+
+	errs := make([]error, numWorkers)
+	var wg sync.WaitGroup
+	for w := range numWorkers {
+		start := w * slotsPerWorker
+		end := min(start+slotsPerWorker, n)
+		if start >= end {
+			continue
+		}
+		wg.Add(1)
+		go func(w, start, end int) {
+			defer wg.Done()
+			buf := make([]byte, bufSlots*slotBytes)
+			for chunk := start; chunk < end; chunk += bufSlots {
+				cEnd := min(chunk+bufSlots, end)
+				for j := chunk; j < cEnd; j++ {
+					i := invMap[j]
+					off := (j - chunk) * slotBytes
+					binary.LittleEndian.PutUint64(buf[off:off+8], fps[i])
+					binary.LittleEndian.PutUint64(buf[off+8:off+slotBytes], poss[i])
+				}
+				blen := (cEnd - chunk) * slotBytes
+				fileOff := int64(HeaderSize) + int64(chunk)*slotBytes
+				if _, err := f.WriteAt(buf[:blen], fileOff); err != nil {
+					errs[w] = fmt.Errorf("write combined slot %d: %w", chunk, err)
+
+					return
+				}
+			}
+		}(w, start, end)
+	}
+	wg.Wait()
+	for _, werr := range errs {
+		if werr != nil {
+			f.Close()
+			os.Remove(path)
+
+			return werr
+		}
+	}
+
 	if err := f.Sync(); err != nil {
 		f.Close()
 		os.Remove(path)
 
-		return fmt.Errorf("sync header: %w", err)
-	}
-
-	data, err := unix.Mmap(int(f.Fd()), 0, int(totalBytes), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
-	if err != nil {
-		f.Close()
-		os.Remove(path)
-
-		return fmt.Errorf("mmap combined: %w", err)
-	}
-
-	// View the post-header data section as []uint64 of length 2N.
-	// Mmap is page-aligned and HeaderSize=20 means the data section
-	// starts at offset 20 — not 8-aligned! Need to write via
-	// binary.LittleEndian.PutUint64 into the raw bytes rather than
-	// via a misaligned []uint64 view.
-	slot := data[HeaderSize:]
-	for i, hashPos := range hashPositions {
-		// Each slot is 16 bytes: 8 for fp, 8 for pos.
-		off := 2 * hashPos * 8
-		binary.LittleEndian.PutUint64(slot[off:off+8], fps[i])
-		binary.LittleEndian.PutUint64(slot[off+8:off+16], poss[i])
-	}
-
-	if err := unix.Msync(data, unix.MS_SYNC); err != nil {
-		_ = unix.Munmap(data)
-		f.Close()
-		os.Remove(path)
-
-		return fmt.Errorf("msync combined: %w", err)
-	}
-	if err := unix.Munmap(data); err != nil {
-		f.Close()
-		os.Remove(path)
-
-		return fmt.Errorf("munmap combined: %w", err)
+		return fmt.Errorf("sync combined: %w", err)
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close combined: %w", err)
