@@ -421,9 +421,13 @@ func parallelRadixSortByHashByte(pairs []hashIdxPair) {
 	for i := range pairs {
 		counts[(pairs[i].hash>>topByteShift)&bucketIdxMask]++
 	}
-	var starts [radixBuckets + 1]int
-	for i := range radixBuckets {
-		starts[i+1] = starts[i] + counts[i]
+	// Cumulative sum: starts[i] = sum of counts[0..i). Bucket bkt spans
+	// [starts[bkt], starts[bkt] + counts[bkt]).
+	var starts [radixBuckets]int
+	sum := 0
+	for i, c := range &counts {
+		starts[i] = sum
+		sum += c
 	}
 
 	scratch := make([]hashIdxPair, n)
@@ -449,11 +453,12 @@ func parallelRadixSortByHashByte(pairs []hashIdxPair) {
 	numWorkers := runtime.NumCPU()
 	sem := make(chan struct{}, numWorkers)
 	var wg sync.WaitGroup
-	for bkt := range radixBuckets {
-		s, e := starts[bkt], starts[bkt+1]
-		if e-s < 2 {
+	for bkt, c := range &counts {
+		if c < 2 {
 			continue
 		}
+		s := starts[bkt]
+		e := s + c
 		sem <- struct{}{}
 		wg.Add(1)
 		go func(s, e int) {
