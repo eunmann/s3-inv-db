@@ -353,16 +353,7 @@ func (b *StreamingMPHFBuilder) computeHashPositionsParallelSort(mph *bbhash.BBHa
 	for i, h := range b.hashes.Slice() {
 		pairs[i] = hashIdxPair{hash: h, idx: uint32(i)}
 	}
-	slices.SortFunc(pairs, func(a, b hashIdxPair) int {
-		switch {
-		case a.hash < b.hash:
-			return -1
-		case a.hash > b.hash:
-			return 1
-		default:
-			return 0
-		}
-	})
+	parallelRadixSortByHashByte(pairs)
 
 	hashPositions := make([]int, n)
 	numWorkers := mphfWorkerCount(n)
@@ -410,6 +401,65 @@ func (b *StreamingMPHFBuilder) computeHashPositionsParallelSort(mph *bbhash.BBHa
 	}
 
 	return hashPositions, nil
+}
+
+// parallelRadixSortByHashByte sorts pairs by hash with one MSD pass on
+// the top byte (256 buckets) followed by parallel pdqsort within each
+// bucket. Beats single-threaded slices.SortFunc once n outgrows L3,
+// which is where the sort phase had been spending its time.
+func parallelRadixSortByHashByte(pairs []hashIdxPair) {
+	n := len(pairs)
+	if n < 2 {
+		return
+	}
+
+	var counts [256]int
+	for i := range pairs {
+		counts[pairs[i].hash>>56]++
+	}
+	var starts [257]int
+	for i := range 256 {
+		starts[i+1] = starts[i] + counts[i]
+	}
+
+	scratch := make([]hashIdxPair, n)
+	cursors := starts
+	for i := range pairs {
+		b := pairs[i].hash >> 56
+		scratch[cursors[b]] = pairs[i]
+		cursors[b]++
+	}
+	copy(pairs, scratch)
+	scratch = nil
+
+	cmp := func(a, b hashIdxPair) int {
+		switch {
+		case a.hash < b.hash:
+			return -1
+		case a.hash > b.hash:
+			return 1
+		default:
+			return 0
+		}
+	}
+
+	numWorkers := runtime.NumCPU()
+	sem := make(chan struct{}, numWorkers)
+	var wg sync.WaitGroup
+	for bkt := range 256 {
+		s, e := starts[bkt], starts[bkt+1]
+		if e-s < 2 {
+			continue
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(s, e int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			slices.SortFunc(pairs[s:e], cmp)
+		}(s, e)
+	}
+	wg.Wait()
 }
 
 // mphfWorkerCount caps parallelism at the smaller of NumCPU and the
