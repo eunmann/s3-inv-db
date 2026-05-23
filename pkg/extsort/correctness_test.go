@@ -10,6 +10,109 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
+// TestTierStatsRow_PackedStride pins the post-finalize stride to the
+// number of *present* tiers, not the compile-time NumTiers. Regressions
+// that drop the pack pass (or pick the wrong stride) would silently
+// inflate index size — the whole point of the hybrid layout.
+func TestTierStatsRow_PackedStride(t *testing.T) {
+	dir := t.TempDir()
+	outDir := filepath.Join(dir, "idx")
+	tempDir := filepath.Join(dir, "tmp")
+	if err := os.MkdirAll(tempDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	b, err := extsort.NewIndexBuilder(outDir, tempDir)
+	if err != nil {
+		t.Fatalf("NewIndexBuilder: %v", err)
+	}
+
+	// Use exactly 3 tiers: Standard, GlacierFR, DeepArchive.
+	rows := []*extsort.PrefixRow{
+		{Prefix: "a/", Depth: 1},
+		{Prefix: "b/", Depth: 1},
+		{Prefix: "c/", Depth: 1},
+		{Prefix: "d/", Depth: 1},
+	}
+	rows[0].TierCounts[tiers.Standard] = 1
+	rows[0].TierBytes[tiers.Standard] = 100
+	rows[1].TierCounts[tiers.GlacierFR] = 2
+	rows[1].TierBytes[tiers.GlacierFR] = 200
+	rows[2].TierCounts[tiers.DeepArchive] = 3
+	rows[2].TierBytes[tiers.DeepArchive] = 300
+	rows[3].TierCounts[tiers.Standard] = 4
+	rows[3].TierBytes[tiers.Standard] = 400
+
+	for _, r := range rows {
+		if err := b.Add(r); err != nil {
+			t.Fatalf("Add %q: %v", r.Prefix, err)
+		}
+	}
+	if err := b.FinalizeWithContext(t.Context()); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	rowFile := filepath.Join(outDir, "tier_stats", "tier_stats_row.bin")
+	info, err := os.Stat(rowFile)
+	if err != nil {
+		t.Fatalf("stat row file: %v", err)
+	}
+
+	const presentTiers = 3
+	wantSize := int64(format.HeaderSize) + int64(len(rows))*int64(presentTiers)*int64(format.TierStatsSlotBytes)
+	if info.Size() != wantSize {
+		t.Errorf("row file size = %d, want %d (Header + N=%d × presentTiers=%d × %d)",
+			info.Size(), wantSize, len(rows), presentTiers, format.TierStatsSlotBytes)
+	}
+
+	// Read header to confirm stride was rewritten.
+	f, err := os.Open(rowFile)
+	if err != nil {
+		t.Fatalf("open row file: %v", err)
+	}
+	defer f.Close()
+	hbuf := make([]byte, format.HeaderSize)
+	if _, err := f.ReadAt(hbuf, 0); err != nil {
+		t.Fatalf("read header: %v", err)
+	}
+	hdr, err := format.DecodeHeader(hbuf)
+	if err != nil {
+		t.Fatalf("decode header: %v", err)
+	}
+	wantStride := uint32(presentTiers * format.TierStatsSlotBytes)
+	if hdr.Width != wantStride {
+		t.Errorf("header.Width = %d, want %d", hdr.Width, wantStride)
+	}
+	if hdr.Count != uint64(len(rows)) {
+		t.Errorf("header.Count = %d, want %d", hdr.Count, len(rows))
+	}
+
+	// Round-trip through the reader: values must come back correct.
+	tsr, err := format.OpenTierStats(outDir)
+	if err != nil {
+		t.Fatalf("OpenTierStats: %v", err)
+	}
+	defer tsr.Close()
+
+	check := func(pos uint64, tier tiers.ID, wantCount, wantBytes uint64) {
+		t.Helper()
+		var gotCount, gotBytes uint64
+		for _, tb := range tsr.BreakdownAll(pos) {
+			if tb.TierID == tier {
+				gotCount, gotBytes = tb.ObjectCount, tb.Bytes
+			}
+		}
+		if gotCount != wantCount || gotBytes != wantBytes {
+			t.Errorf("pos %d tier %d: got (%d, %d), want (%d, %d)", pos, tier, gotCount, gotBytes, wantCount, wantBytes)
+		}
+	}
+	check(0, tiers.Standard, 1, 100)
+	check(1, tiers.GlacierFR, 2, 200)
+	check(2, tiers.DeepArchive, 3, 300)
+	check(3, tiers.Standard, 4, 400)
+	// Tiers not in any row's data must still appear in BreakdownAll with zeros.
+	check(0, tiers.GlacierFR, 0, 0)
+}
+
 // TestTierStatsRow_PreorderAlignment guards the invariant that the
 // row-major tier-stats file places each prefix's stats at exactly its
 // preorder position. The original per-tier writers required explicit

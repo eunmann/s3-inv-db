@@ -146,14 +146,16 @@ one map lookup per segment rather than a blob read.
 
 ## Tier Statistics (`tier_stats/tier_stats_row.bin`)
 
-A single row-major file that supersedes the per-tier-per-metric file pairs of the prior format. Each prefix gets one fixed-stride row covering every tier slot in tier-ID order, regardless of which tiers have data for that prefix.
+A single row-major file holding per-prefix `(count, bytes)` slots. Slot order matches `tiers.json` (sorted by tier ID); the on-disk stride is `presentTiers × 16` bytes, where `presentTiers` is the number of tier IDs that have non-zero data anywhere in the index.
 
-Stride = `NumTiers × 16` bytes (8 for count, 8 for bytes, per tier). Slot for tier `T` is at offset `T*16` within the row:
+Layout per row (variable stride):
 
 | Slot offset | Size | Field |
 |-------------|------|-------|
-| `T*16 + 0` | 8 | count for tier `T` |
-| `T*16 + 8` | 8 | bytes for tier `T` |
+| `i*16 + 0` | 8 | count for the i-th manifest tier |
+| `i*16 + 8` | 8 | bytes for the i-th manifest tier |
+
+To find tier `T`'s slot in a row, look up its position in `tiers.json`. Tier IDs absent from the manifest contributed no data in this index and are not stored.
 
 Tier IDs (0–12) map to S3 storage classes:
 
@@ -173,7 +175,11 @@ Tier IDs (0–12) map to S3 storage classes:
 | 11 | INTELLIGENT_TIERING (Deep Archive) |
 | 12 | INTELLIGENT_TIERING (Frequent, < 128 KiB) |
 
-The fixed stride trades disk space for branch-free per-prefix reads — empty slots are written as zeros rather than omitted. The `tiers.json` manifest records which tier IDs actually have data so callers can skip rendering empty columns.
+### Build-time layout
+
+During ingest the writer emits a dense intermediate with `NumTiers × 16` byte stride in tier-ID order (so the writer doesn't need to know the present-tier set until all rows are seen). At finalize, `PackTierStatsRow` rewrites the file to the packed stride above, dropping slots for tiers with zero data globally. The pack writes to `tier_stats_row.bin.tmp` + `rename`, then fsyncs the `tier_stats/` directory.
+
+The stride is recorded in the file header's `Width` field; readers cross-check `Width / 16 == len(manifest.Tiers)` on open and reject mismatched indexes rather than risk decoding rows at the wrong offsets.
 
 ## Manifest
 

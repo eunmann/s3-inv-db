@@ -35,6 +35,12 @@ func OpenTierStats(indexDir string) (*TierStatsReader, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open tier stats row: %w", err)
 	}
+	if rowReader.SlotCount() != len(manifest.Tiers) {
+		rowReader.Close()
+
+		return nil, fmt.Errorf("%w: row file has %d slots, manifest has %d tiers",
+			errTierStatsRowWidth, rowReader.SlotCount(), len(manifest.Tiers))
+	}
 
 	return &TierStatsReader{
 		manifest:  manifest,
@@ -71,8 +77,10 @@ func (r *TierStatsReader) breakdownAt(pos uint64, nonZeroOnly bool) []TierBreakd
 		return breakdown
 	}
 	row := r.rowReader.UnsafeRow(pos)
-	for _, tier := range r.manifest.Tiers {
-		off := int(tier.ID) * 16
+	// Slot order in the packed file is manifest order, not tier-ID
+	// order: slot i corresponds to manifest.Tiers[i].
+	for slotIdx, tier := range r.manifest.Tiers {
+		off := slotIdx * TierStatsSlotBytes
 		count := binary.LittleEndian.Uint64(row[off : off+8])
 		bytes := binary.LittleEndian.Uint64(row[off+8 : off+16])
 		if nonZeroOnly && bytes == 0 && count == 0 {

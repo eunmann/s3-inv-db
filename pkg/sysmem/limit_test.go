@@ -43,24 +43,26 @@ func TestApplyMemoryLimit_ApplysSysmemFractionWhenNothingElseSet(t *testing.T) {
 	}
 }
 
-func TestApplyMemoryLimit_PickSmallestWins(t *testing.T) {
-	// GOMEMLIMIT=10GiB env beats nothing, but if cgroup or sysmem
-	// reports a smaller value the smaller one must win. Hard to drive
-	// cgroup deterministically in a test, so this acts as a smoke check
-	// that the candidate aggregation prefers smaller values via the
-	// real ApplyMemoryLimit path.
+func TestApplyMemoryLimit_EnvOverridesSysmemFraction(t *testing.T) {
+	// Explicit GOMEMLIMIT bypasses the sysmem fraction so operators on
+	// dedicated hosts can opt into using more than the default
+	// fraction. The cgroup limit (when present) still caps it.
 	const tenGiB = 10 * 1024 * 1024 * 1024
 	t.Setenv("GOMEMLIMIT", "10GiB")
 	prev := debug.SetMemoryLimit(-1)
 	debug.SetMemoryLimit(prev)
 	t.Cleanup(func() { debug.SetMemoryLimit(prev) })
 
-	got := sysmem.ApplyMemoryLimit(0.001) // tiny fraction so sysmem candidate is small
+	got := sysmem.ApplyMemoryLimit(0.001) // tiny fraction; without override would dominate
 	if got.EnvBytes != tenGiB {
 		t.Errorf("EnvBytes = %d, want %d", got.EnvBytes, tenGiB)
 	}
-	if got.SysmemFractionBytes > 0 && got.Bytes > got.SysmemFractionBytes {
-		t.Errorf("Bytes = %d should not exceed SysmemFractionBytes = %d", got.Bytes, got.SysmemFractionBytes)
+	if got.CgroupBytes > 0 && got.Bytes > got.CgroupBytes {
+		t.Errorf("Bytes = %d should not exceed CgroupBytes = %d", got.Bytes, got.CgroupBytes)
+	}
+	// The sysmem fraction must NOT bind the env-set case.
+	if got.CgroupBytes == 0 && got.Bytes != tenGiB {
+		t.Errorf("Bytes = %d, want %d (env override should win without cgroup)", got.Bytes, tenGiB)
 	}
 }
 

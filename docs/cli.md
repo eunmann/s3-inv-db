@@ -29,11 +29,11 @@ s3-inv-db build --s3-manifest s3://bucket/inv/data/manifest.json --out ./my-inde
 | `--pretty-logs` |  | false | Human-friendly console output |
 
 Memory and concurrency are no longer tunable per-flag. Worker counts
-derive from `runtime.NumCPU()`; the process memory ceiling is
-`GOMEMLIMIT` (env var, cgroup `memory.max`, or 60% of detected RAM —
-whichever is smallest) installed at startup via
-`runtime/debug.SetMemoryLimit`. Set `GOMEMLIMIT=4GiB` to cap a build,
-or run under a constrained cgroup.
+derive from `runtime.NumCPU()`; the process memory ceiling is set via
+`runtime/debug.SetMemoryLimit` at startup. If `GOMEMLIMIT` is set
+explicitly it wins, capped only by the cgroup `memory.max`; otherwise
+the limit is `min(cgroup memory.max, 0.6 × detected RAM)`. Set
+`GOMEMLIMIT=4GiB` to cap a build, or run under a constrained cgroup.
 
 AWS credentials use the standard SDK chain: env vars → shared
 credentials file → IAM role. Required permissions: `s3:GetObject` on

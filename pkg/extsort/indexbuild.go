@@ -349,6 +349,20 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 		return err
 	}
 
+	log.Debug().
+		Int("present_tiers", len(b.presentTiers)).
+		Int("dense_tiers", int(tiers.NumTiers)).
+		Msg("index builder: packing tier_stats_row to present-tier stride")
+
+	packStart := time.Now()
+	presentTierList := slices.Sorted(maps.Keys(b.presentTiers))
+	if err := format.PackTierStatsRow(b.outDir, presentTierList); err != nil {
+		return fmt.Errorf("pack tier stats row: %w", err)
+	}
+	log.Debug().
+		Str("pack_duration", humanfmt.Duration(time.Since(packStart))).
+		Msg("index builder: tier_stats_row pack complete")
+
 	log.Debug().Msg("index builder: writing manifest")
 
 	if err := format.WriteManifest(b.outDir, b.posCount, b.maxDepth); err != nil {
