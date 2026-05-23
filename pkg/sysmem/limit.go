@@ -40,19 +40,19 @@ type MemoryLimitResult struct {
 var ErrUnknownMemSuffix = errors.New("unknown GOMEMLIMIT suffix")
 
 // ApplyMemoryLimit computes a soft process memory limit and installs
-// it via runtime/debug.SetMemoryLimit. The chosen value is the minimum
-// of three candidates:
-//   - GOMEMLIMIT env var, if set
-//   - cgroup v2 memory.max, if readable
-//   - fraction × Total() system RAM
+// it via runtime/debug.SetMemoryLimit. The chosen value is:
+//   - min(GOMEMLIMIT, cgroup) when GOMEMLIMIT is explicitly set — the
+//     operator's value wins over the sysmem fraction, capped only by
+//     the container limit so a too-permissive env can't bust the cgroup.
+//   - min(cgroup, fraction × Total RAM) otherwise.
 //
-// Taking the minimum (rather than respecting env unconditionally) means
-// a too-permissive GOMEMLIMIT can't override a tighter container cap.
 // Pass DefaultMemoryLimitFraction (0.6) unless you have a reason to deviate.
 func ApplyMemoryLimit(fraction float64) MemoryLimitResult {
 	out := MemoryLimitResult{Source: MemoryLimitSourceDefault}
 
+	envExplicit := false
 	if env := os.Getenv("GOMEMLIMIT"); env != "" {
+		envExplicit = true
 		if n, err := parseGoMemLimit(env); err == nil && n > 0 {
 			out.EnvBytes = n
 		}
@@ -64,7 +64,17 @@ func ApplyMemoryLimit(fraction float64) MemoryLimitResult {
 		out.SysmemFractionBytes = int64(float64(r.TotalBytes) * fraction)
 	}
 
-	out.Bytes, out.Source = pickSmallest(out)
+	// Operator override: an explicitly-set GOMEMLIMIT bypasses the
+	// sysmem fraction. Lets ops on dedicated hosts opt into using
+	// more than the fraction default, while the cgroup still caps.
+	if envExplicit && out.EnvBytes > 0 {
+		out.Bytes, out.Source = pickSmallest(MemoryLimitResult{
+			EnvBytes:    out.EnvBytes,
+			CgroupBytes: out.CgroupBytes,
+		})
+	} else {
+		out.Bytes, out.Source = pickSmallest(out)
+	}
 	if out.Bytes > 0 {
 		debug.SetMemoryLimit(out.Bytes)
 		// Tune GOGC down from the default 100 when the soft limit is
