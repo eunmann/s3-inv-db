@@ -407,29 +407,33 @@ func (b *StreamingMPHFBuilder) computeHashPositionsParallelSort(mph *bbhash.BBHa
 // bucket. Beats single-threaded slices.SortFunc once n outgrows L3,
 // which is where the sort phase had been spending its time.
 func parallelRadixSortByHashByte(pairs []hashIdxPair) {
+	const (
+		radixBuckets  = 256
+		topByteShift  = 56
+		bucketIdxMask = radixBuckets - 1
+	)
 	n := len(pairs)
 	if n < 2 {
 		return
 	}
 
-	var counts [256]int
+	var counts [radixBuckets]int
 	for i := range pairs {
-		counts[pairs[i].hash>>56]++
+		counts[(pairs[i].hash>>topByteShift)&bucketIdxMask]++
 	}
-	var starts [257]int
-	for i := range 256 {
+	var starts [radixBuckets + 1]int
+	for i := range radixBuckets {
 		starts[i+1] = starts[i] + counts[i]
 	}
 
 	scratch := make([]hashIdxPair, n)
 	cursors := starts
 	for i := range pairs {
-		b := pairs[i].hash >> 56
+		b := (pairs[i].hash >> topByteShift) & bucketIdxMask
 		scratch[cursors[b]] = pairs[i]
 		cursors[b]++
 	}
 	copy(pairs, scratch)
-	scratch = nil
 
 	cmp := func(a, b hashIdxPair) int {
 		switch {
@@ -445,7 +449,7 @@ func parallelRadixSortByHashByte(pairs []hashIdxPair) {
 	numWorkers := runtime.NumCPU()
 	sem := make(chan struct{}, numWorkers)
 	var wg sync.WaitGroup
-	for bkt := range 256 {
+	for bkt := range radixBuckets {
 		s, e := starts[bkt], starts[bkt+1]
 		if e-s < 2 {
 			continue
@@ -676,8 +680,11 @@ func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []ui
 
 			return fmt.Errorf("sync combined: %w", err)
 		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close combined: %w", err)
+		}
 
-		return f.Close()
+		return nil
 	}
 
 	// Invert hashPositions: invMap[slot] = source index. Lets each
