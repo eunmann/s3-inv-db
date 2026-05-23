@@ -222,11 +222,6 @@ func (r *TierStatsRowReader) Close() error {
 	return err
 }
 
-// errTierStatsRowAlreadyPacked indicates the dense intermediate is no
-// longer present (already packed or never written). Callers can treat
-// this as a no-op success when re-finalizing.
-var errTierStatsRowAlreadyPacked = errors.New("tier stats row already packed")
-
 // PackTierStatsRow rewrites tier_stats_row.bin from the dense
 // NumTiers-slot stride emitted during ingest to a packed stride that
 // holds only slots for tiers in presentTiers, in manifest order
@@ -257,29 +252,16 @@ func PackTierStatsRow(outDir string, presentTiers []tiers.ID) error {
 		return nil
 	}
 
-	src, err := os.Open(path)
+	src, header, err := openDenseTierStatsRow(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return errTierStatsRowAlreadyPacked
-		}
-
-		return fmt.Errorf("open dense tier stats row: %w", err)
+		return err
+	}
+	if src == nil {
+		// File is absent or already packed — no work to do.
+		return nil
 	}
 	defer src.Close()
 
-	headerBuf := make([]byte, HeaderSize)
-	if _, err := src.ReadAt(headerBuf, 0); err != nil {
-		return fmt.Errorf("read tier stats row header: %w", err)
-	}
-	header, err := DecodeHeader(headerBuf)
-	if err != nil {
-		return fmt.Errorf("decode tier stats row header: %w", err)
-	}
-	if int(header.Width) != denseTierStatsRowStride {
-		// Not in the expected dense form (already packed or written
-		// by a different version). Re-finalize on a packed file is a no-op.
-		return nil
-	}
 	if len(presentTiers) == int(tiers.NumTiers) {
 		// Dense file already covers every tier; packing is a no-op.
 		return nil
@@ -297,7 +279,61 @@ func PackTierStatsRow(outDir string, presentTiers []tiers.ID) error {
 		denseOffByPackedSlot[i] = int(id) * TierStatsSlotBytes
 	}
 
-	n := int64(header.Count)
+	if err := writePackedTierStatsRow(src, path, int64(header.Count), header.Count, packedStride, denseOffByPackedSlot); err != nil {
+		return err
+	}
+	// fsync the subdir so the rename dirent is durable. The outer
+	// SyncDir(outDir) at the end of Finalize covers the index root but
+	// not tier_stats/; without this, a crash after Finalize but before
+	// the next writeback could leave the dense file in place, then
+	// OpenTierStats would reject the index when SlotCount() mismatches
+	// the manifest tier count.
+	if err := SyncDir(filepath.Join(outDir, tierStatsDir)); err != nil {
+		return fmt.Errorf("sync tier_stats dir: %w", err)
+	}
+
+	return nil
+}
+
+// openDenseTierStatsRow opens path and validates its header is in the
+// dense pre-pack form. Returns (nil, _, nil) when the file is absent
+// (no-op for re-finalize) or already non-dense (already packed or
+// written by a different version) — caller treats either as nothing
+// to do. Caller is responsible for closing src when it is non-nil.
+func openDenseTierStatsRow(path string) (*os.File, Header, error) {
+	src, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, Header{}, nil
+		}
+
+		return nil, Header{}, fmt.Errorf("open dense tier stats row: %w", err)
+	}
+	headerBuf := make([]byte, HeaderSize)
+	if _, err := src.ReadAt(headerBuf, 0); err != nil {
+		src.Close()
+
+		return nil, Header{}, fmt.Errorf("read tier stats row header: %w", err)
+	}
+	header, err := DecodeHeader(headerBuf)
+	if err != nil {
+		src.Close()
+
+		return nil, Header{}, fmt.Errorf("decode tier stats row header: %w", err)
+	}
+	if int(header.Width) != denseTierStatsRowStride {
+		src.Close()
+
+		return nil, Header{}, nil
+	}
+
+	return src, header, nil
+}
+
+// writePackedTierStatsRow creates path+".tmp", writes the packed
+// header + n packed rows in parallel from src, fsyncs, closes src/dst,
+// and renames the tmp over path. On any error the .tmp is removed.
+func writePackedTierStatsRow(src *os.File, path string, n int64, count uint64, packedStride int, denseOffByPackedSlot []int) error {
 	tmpPath := path + ".tmp"
 	dst, err := os.Create(tmpPath)
 	if err != nil {
@@ -317,7 +353,7 @@ func PackTierStatsRow(outDir string, presentTiers []tiers.ID) error {
 	newHeader := EncodeHeader(Header{
 		Magic:   MagicNumber,
 		Version: Version,
-		Count:   header.Count,
+		Count:   count,
 
 		Width: uint32(packedStride),
 	})
