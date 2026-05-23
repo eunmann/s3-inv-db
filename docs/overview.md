@@ -55,7 +55,7 @@ S3 Inventory CSV/Parquet
 
 ### Memory Management
 
-The build uses GOMEMLIMIT (env var, cgroup `memory.max`, or 60% of detected RAM — whichever is smallest) installed at process startup. The aggregator spills when its footprint hits `0.15 × GOMEMLIMIT` divided across workers, or when overall heap pressure exceeds 85% of the limit, whichever fires first. After all inventory files are processed, a k-way merge combines the run files into the final sorted stream.
+The build sets a process memory ceiling via `runtime/debug.SetMemoryLimit` at startup. If `GOMEMLIMIT` is set explicitly it wins, capped only by the cgroup `memory.max`; otherwise the limit is `min(cgroup memory.max, 0.6 × detected RAM)`. The aggregator spills when its footprint hits `0.15 × GOMEMLIMIT` divided across workers, or when overall heap pressure exceeds 85% of the limit, whichever fires first. After all inventory files are processed, a k-way merge combines the run files into the final sorted stream.
 
 This allows indexing inventories of any size with bounded memory.
 

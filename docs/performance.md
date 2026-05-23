@@ -50,9 +50,11 @@ Build performance depends on:
 ### Memory limit
 
 The process memory ceiling is set via `runtime/debug.SetMemoryLimit`
-at startup. Resolution is `min(GOMEMLIMIT env, cgroup v2 memory.max,
-0.6 × detected RAM)` — whichever candidate is smallest binds, so a
-permissive `GOMEMLIMIT` can't override a tighter container cap.
+at startup. When `GOMEMLIMIT` is set explicitly it wins, capped only
+by the cgroup `memory.max` — operators on dedicated hosts can opt
+into using more than the default 60% of RAM. When `GOMEMLIMIT` is
+unset, the limit is `min(cgroup memory.max, 0.6 × detected RAM)`,
+so a tighter container cap still binds.
 
 Override the limit by exporting `GOMEMLIMIT=4GiB` (etc.) or running
 under a constrained cgroup. The aggregator's combined spill threshold
@@ -127,7 +129,7 @@ row-major formats use a fixed stride per prefix regardless of
 how many tier slots actually carry data, so size is predictable:
 
 - `core_stats.bin`: **28 B/prefix** (object_count + total_bytes + subtree_end + depth + max_depth_in_subtree).
-- `tier_stats/tier_stats_row.bin`: **`NumTiers × 16` B/prefix** — 208 B/prefix at the current 13 tiers — even when most slots are zero.
+- `tier_stats/tier_stats_row.bin`: **`presentTiers × 16` B/prefix** — final on-disk stride matches `tiers.json`, so an index with 5 of 13 tiers populated is 80 B/prefix (vs the 208 B/prefix upper bound at all 13). The build writes a dense 208 B/prefix intermediate and finalize repacks it to the packed stride.
 - `prefix_blob.bin` + `prefix_offsets.u64`: variable, dominated by prefix string lengths (avg ~30 B in typical workloads) + 8 B per offset.
 - MPHF (`mph.bin` + `mph_fp_pos.u64`): ~24 B/prefix (BBHash + interleaved fingerprint/position pair).
 - Depth index (`depth_offsets.u64` + `depth_positions.u64`): ~8 B/prefix.
@@ -138,9 +140,9 @@ At a 1M-prefix sample workload this comes out to roughly **300 B/prefix on disk*
 
 ### Build Phase
 
-Aggregators are sized off the process memory limit
-(`min(GOMEMLIMIT env, cgroup memory.max, 0.6 × detected RAM)` —
-applied at startup via `runtime/debug.SetMemoryLimit`). The combined
+Aggregators are sized off the process memory limit (set via
+`runtime/debug.SetMemoryLimit` at startup — see
+[Memory limit](#memory-limit) for the resolution). The combined
 worker aggregator footprint is capped at `0.15 × GOMEMLIMIT` (or a
 512 MiB fallback when no limit is configured) and split evenly across
 N chunk workers, so the cap auto-scales from a 4 GiB CI host up to a
