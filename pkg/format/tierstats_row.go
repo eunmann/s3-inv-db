@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"sync"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -14,17 +17,17 @@ import (
 // TierStatsRowFile is the row-major per-prefix tier-stats file.
 const TierStatsRowFile = "tier_stats_row.bin"
 
-// TierStatsRowStride is the byte stride per prefix row: every tier
-// gets a count (8B) + bytes (8B) slot. Slot index for tier T is T*16,
-// independent of the manifest. The manifest is read separately to
-// know which tier IDs actually have data.
-const TierStatsRowStride = int(tiers.NumTiers) * 16
+// TierStatsSlotBytes is the byte width of one (count, bytes) tier slot:
+// uint64 count + uint64 bytes.
+const TierStatsSlotBytes = 16
 
-// Sentinel errors for err113.
-var (
-	errTierStatsRowPosOOB = errors.New("tier stats row position out of range")
-	errTierStatsRowWidth  = errors.New("tier stats row width mismatch")
-)
+// denseTierStatsRowStride is the byte stride of the dense intermediate
+// written during ingest, before PackTierStatsRow rewrites the file
+// down to present-tier slots in manifest order.
+const denseTierStatsRowStride = int(tiers.NumTiers) * TierStatsSlotBytes
+
+// Sentinel error for err113.
+var errTierStatsRowWidth = errors.New("tier stats row width invalid")
 
 // writeBufSize is the buffered-writer size for the streaming
 // tier-stats row file. Sized big enough that fsync amortises across
@@ -61,7 +64,7 @@ func NewTierStatsRowWriter(outDir string) (*TierStatsRowWriter, error) {
 		Magic:   MagicNumber,
 		Version: Version,
 		Count:   0,
-		Width:   uint32(TierStatsRowStride),
+		Width:   uint32(denseTierStatsRowStride),
 	})
 	if _, err := w.Write(header); err != nil {
 		f.Close()
@@ -82,7 +85,7 @@ func NewTierStatsRowWriter(outDir string) (*TierStatsRowWriter, error) {
 // tier IDs out of [0, NumTiers) are not written. Counts[i] is the
 // object count for tier i; bytes[i] is the total bytes.
 func (w *TierStatsRowWriter) Add(counts, bytes *[tiers.NumTiers]uint64) error {
-	var row [TierStatsRowStride]byte
+	var row [denseTierStatsRowStride]byte
 	for id := range tiers.NumTiers {
 		off := int(id) * 16
 		binary.LittleEndian.PutUint64(row[off:off+8], counts[id])
@@ -116,7 +119,7 @@ func (w *TierStatsRowWriter) Close() error {
 		Magic:   MagicNumber,
 		Version: Version,
 		Count:   w.count,
-		Width:   uint32(TierStatsRowStride),
+		Width:   uint32(denseTierStatsRowStride),
 	})
 	if _, err := w.file.Write(header); err != nil {
 		w.file.Close()
@@ -169,10 +172,10 @@ func OpenTierStatsRow(indexDir string) (*TierStatsRowReader, error) {
 		return nil, ErrVersionMismatch
 	}
 	stride := int(header.Width)
-	if stride != TierStatsRowStride {
+	if stride <= 0 || stride%TierStatsSlotBytes != 0 {
 		mmap.Close()
 
-		return nil, fmt.Errorf("%w: got %d expected %d", errTierStatsRowWidth, stride, TierStatsRowStride)
+		return nil, fmt.Errorf("%w: stride %d not a positive multiple of %d", errTierStatsRowWidth, stride, TierStatsSlotBytes)
 	}
 	expected := int64(HeaderSize) + int64(header.Count)*int64(stride)
 	if mmap.Size() < expected {
@@ -192,28 +195,16 @@ func OpenTierStatsRow(indexDir string) (*TierStatsRowReader, error) {
 // Count returns the number of rows.
 func (r *TierStatsRowReader) Count() uint64 { return r.rowCount }
 
-// CountBytesAtTier returns (count, bytes) at the given position for
-// the given tier ID. Branchless inside the hot caller — no map
-// lookup, no slice search.
-//
-//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
-func (r *TierStatsRowReader) CountBytesAtTier(pos uint64, tier tiers.ID) (uint64, uint64, error) {
-	if pos >= r.rowCount {
-		return 0, 0, fmt.Errorf("%w: pos=%d count=%d", errTierStatsRowPosOOB, pos, r.rowCount)
-	}
-	rowStart := r.dataOff + int64(pos)*int64(r.stride)
-	slot := rowStart + int64(tier)*16
-	data := r.mmap.Data()
-
-	return binary.LittleEndian.Uint64(data[slot : slot+8]),
-		binary.LittleEndian.Uint64(data[slot+8 : slot+16]),
-		nil
-}
+// SlotCount returns the number of (count, bytes) slots per row —
+// equivalently, the number of present tiers recorded in this file's
+// manifest. Caller can cross-check against len(manifest.Tiers).
+func (r *TierStatsRowReader) SlotCount() int { return r.stride / TierStatsSlotBytes }
 
 // UnsafeRow returns the raw row bytes for pos as a slice aliased over
-// the mmap'd region. NumTiers consecutive (count, bytes) uint64 pairs
-// in tier-ID order. Caller MUST NOT mutate; the slice is invalid
-// after Close.
+// the mmap'd region. The row holds SlotCount() consecutive
+// (count, bytes) uint64 pairs in manifest order (NOT tier-ID order):
+// slot i corresponds to manifest.Tiers[i]. Caller MUST NOT mutate;
+// the slice is invalid after Close.
 func (r *TierStatsRowReader) UnsafeRow(pos uint64) []byte {
 	rowStart := r.dataOff + int64(pos)*int64(r.stride)
 
@@ -229,4 +220,197 @@ func (r *TierStatsRowReader) Close() error {
 	r.mmap = nil
 
 	return err
+}
+
+// errTierStatsRowAlreadyPacked indicates the dense intermediate is no
+// longer present (already packed or never written). Callers can treat
+// this as a no-op success when re-finalizing.
+var errTierStatsRowAlreadyPacked = errors.New("tier stats row already packed")
+
+// PackTierStatsRow rewrites tier_stats_row.bin from the dense
+// NumTiers-slot stride emitted during ingest to a packed stride that
+// holds only slots for tiers in presentTiers, in manifest order
+// (sorted by tier ID, same as tiers.WriteManifest).
+//
+// Implementation: writes the packed result to an adjacent .tmp file in
+// parallel, then renames over the dense file. An earlier attempt to
+// repack in place was unsafe — row r's packed-write region at byte
+// offset r×packedStride lies inside row 0's dense-read region at
+// [0, denseStride), so workers concurrently mid-pack could overwrite
+// dense bytes another worker hasn't read yet.
+//
+// Disk during finalize peaks at (1 + presentTiers/NumTiers) × dense
+// size; after rename, steady-state is presentTiers/NumTiers of dense.
+//
+// When len(presentTiers) == NumTiers the dense file is already optimal
+// and the function returns without I/O. When len(presentTiers) == 0
+// the file is removed (no tier data → OpenTierStats's manifest guard
+// already returns an empty reader in that case).
+func PackTierStatsRow(outDir string, presentTiers []tiers.ID) error {
+	path := filepath.Join(outDir, tierStatsDir, TierStatsRowFile)
+
+	if len(presentTiers) == 0 {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove tier stats row: %w", err)
+		}
+
+		return nil
+	}
+
+	src, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errTierStatsRowAlreadyPacked
+		}
+
+		return fmt.Errorf("open dense tier stats row: %w", err)
+	}
+	defer src.Close()
+
+	headerBuf := make([]byte, HeaderSize)
+	if _, err := src.ReadAt(headerBuf, 0); err != nil {
+		return fmt.Errorf("read tier stats row header: %w", err)
+	}
+	header, err := DecodeHeader(headerBuf)
+	if err != nil {
+		return fmt.Errorf("decode tier stats row header: %w", err)
+	}
+	if int(header.Width) != denseTierStatsRowStride {
+		// Not in the expected dense form (already packed or written
+		// by a different version). Re-finalize on a packed file is a no-op.
+		return nil
+	}
+	if len(presentTiers) == int(tiers.NumTiers) {
+		// Dense file already covers every tier; packing is a no-op.
+		return nil
+	}
+
+	// Sort present tiers so slot order is deterministic and matches the
+	// manifest writer (which also sorts by tier ID).
+	sortedTiers := slices.Clone(presentTiers)
+	slices.Sort(sortedTiers)
+	packedStride := len(sortedTiers) * TierStatsSlotBytes
+
+	// Map each output slot to its byte offset in a dense row.
+	denseOffByPackedSlot := make([]int, len(sortedTiers))
+	for i, id := range sortedTiers {
+		denseOffByPackedSlot[i] = int(id) * TierStatsSlotBytes
+	}
+
+	n := int64(header.Count)
+	tmpPath := path + ".tmp"
+	dst, err := os.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("create packed tier stats row: %w", err)
+	}
+	cleanupTmp := func() {
+		dst.Close()
+		os.Remove(tmpPath)
+	}
+
+	newSize := int64(HeaderSize) + n*int64(packedStride)
+	if err := dst.Truncate(newSize); err != nil {
+		cleanupTmp()
+
+		return fmt.Errorf("truncate packed tier stats row: %w", err)
+	}
+	newHeader := EncodeHeader(Header{
+		Magic:   MagicNumber,
+		Version: Version,
+		Count:   header.Count,
+
+		Width: uint32(packedStride),
+	})
+	if _, err := dst.WriteAt(newHeader, 0); err != nil {
+		cleanupTmp()
+
+		return fmt.Errorf("write packed tier stats row header: %w", err)
+	}
+
+	if n > 0 {
+		if err := packRowsParallel(src, dst, n, packedStride, denseOffByPackedSlot); err != nil {
+			cleanupTmp()
+
+			return err
+		}
+	}
+
+	if err := dst.Sync(); err != nil {
+		cleanupTmp()
+
+		return fmt.Errorf("sync packed tier stats row: %w", err)
+	}
+	if err := dst.Close(); err != nil {
+		os.Remove(tmpPath)
+
+		return fmt.Errorf("close packed tier stats row: %w", err)
+	}
+	if err := src.Close(); err != nil {
+		os.Remove(tmpPath)
+
+		return fmt.Errorf("close dense tier stats row: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+
+		return fmt.Errorf("rename packed tier stats row: %w", err)
+	}
+
+	return nil
+}
+
+// packRowsParallel reads dense rows from src and writes packed rows to
+// dst in parallel. Src and dst are disjoint files, so workers can
+// freely operate on their own row ranges without read/write hazards.
+func packRowsParallel(src, dst *os.File, n int64, packedStride int, denseOffByPackedSlot []int) error {
+	const rowsPerChunk = 1 << 14 // 16 K rows: ~3 MiB dense buf, ~512 KiB packed buf @ 5 tiers
+	numWorkers := max(min(runtime.NumCPU(), int(n)), 1)
+	rowsPerWorker := (n + int64(numWorkers) - 1) / int64(numWorkers)
+
+	errs := make([]error, numWorkers)
+	var wg sync.WaitGroup
+	for w := range numWorkers {
+		start := int64(w) * rowsPerWorker
+		end := min(start+rowsPerWorker, n)
+		if start >= end {
+			continue
+		}
+		wg.Add(1)
+		go func(w int, start, end int64) {
+			defer wg.Done()
+			denseBuf := make([]byte, rowsPerChunk*denseTierStatsRowStride)
+			packedBuf := make([]byte, rowsPerChunk*packedStride)
+			for chunk := start; chunk < end; chunk += rowsPerChunk {
+				cEnd := min(chunk+rowsPerChunk, end)
+				rows := int(cEnd - chunk)
+				dlen := rows * denseTierStatsRowStride
+				plen := rows * packedStride
+
+				denseOff := int64(HeaderSize) + chunk*int64(denseTierStatsRowStride)
+				if _, err := src.ReadAt(denseBuf[:dlen], denseOff); err != nil {
+					errs[w] = fmt.Errorf("read dense tier rows at %d: %w", chunk, err)
+
+					return
+				}
+				for r := range rows {
+					denseRow := denseBuf[r*denseTierStatsRowStride : (r+1)*denseTierStatsRowStride]
+					packedRow := packedBuf[r*packedStride : (r+1)*packedStride]
+					for slot, denseSlotOff := range denseOffByPackedSlot {
+						copy(packedRow[slot*TierStatsSlotBytes:(slot+1)*TierStatsSlotBytes],
+							denseRow[denseSlotOff:denseSlotOff+TierStatsSlotBytes])
+					}
+				}
+
+				packedOff := int64(HeaderSize) + chunk*int64(packedStride)
+				if _, err := dst.WriteAt(packedBuf[:plen], packedOff); err != nil {
+					errs[w] = fmt.Errorf("write packed tier rows at %d: %w", chunk, err)
+
+					return
+				}
+			}
+		}(w, start, end)
+	}
+	wg.Wait()
+
+	return errors.Join(errs...)
 }
