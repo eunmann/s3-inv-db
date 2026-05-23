@@ -36,7 +36,10 @@ func BenchmarkDiskFootprint(b *testing.B) {
 				if err != nil {
 					return fmt.Errorf("stat %q: %w", path, err)
 				}
-				rel, _ := filepath.Rel(dir, path)
+				rel, err := filepath.Rel(dir, path)
+				if err != nil {
+					return fmt.Errorf("rel %q under %q: %w", path, dir, err)
+				}
 				report[rel] = info.Size()
 				total += info.Size()
 
