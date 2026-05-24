@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -97,7 +98,7 @@ func (l *Loader) RemoveCache(srcBucket, invID, run string) error {
 func (l *Loader) CacheSizeBytes(srcBucket, invID, run string) (int64, error) {
 	dir := l.CacheDirFor(srcBucket, invID, run)
 	var total int64
-	err := filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
 				return nil
@@ -105,9 +106,18 @@ func (l *Loader) CacheSizeBytes(srcBucket, invID, run string) (int64, error) {
 
 			return err
 		}
-		if !info.IsDir() {
-			total += info.Size()
+		if d.IsDir() {
+			return nil
 		}
+		info, err := d.Info()
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+
+			return fmt.Errorf("stat entry: %w", err)
+		}
+		total += info.Size()
 
 		return nil
 	})

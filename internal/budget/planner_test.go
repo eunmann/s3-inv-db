@@ -2,6 +2,7 @@ package budget_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -110,11 +111,15 @@ func TestPlanner_RefusesWhenAllPinned(t *testing.T) {
 		All:           []inventory.Info{loaded("src/inv/runOld", 400, time.Unix(1, 0), time.Unix(1, 0), true)},
 	}
 	plan, err := p.Plan(t.Context(), in)
-	if err != nil {
-		t.Fatalf("Plan: %v", err)
+	var refused *budget.PlannerRefusedError
+	if !errors.As(err, &refused) {
+		t.Fatalf("expected PlannerRefusedError, got %v", err)
 	}
 	if plan.Fits() {
 		t.Errorf("expected refusal, got fit with evictions %v", plan.Evict)
+	}
+	if refused.Plan.Refusal == "" {
+		t.Error("refused error must carry plan with non-empty Refusal")
 	}
 }
 
@@ -126,8 +131,9 @@ func TestPlanner_RefusesWhenEstimateExceedsCap(t *testing.T) {
 		EstimateBytes: 600,
 	}
 	plan, err := p.Plan(t.Context(), in)
-	if err != nil {
-		t.Fatalf("Plan: %v", err)
+	var refused *budget.PlannerRefusedError
+	if !errors.As(err, &refused) {
+		t.Fatalf("expected PlannerRefusedError, got %v", err)
 	}
 	if plan.Fits() {
 		t.Error("estimate over cap must refuse")
@@ -158,7 +164,11 @@ func TestPlanner_SkipsRunsWithoutKnownSize(t *testing.T) {
 			loaded("src/inv/run1", 0, time.Unix(1, 0), time.Unix(1, 0), false), // unknown bytes, skip
 		},
 	}
-	plan, _ := p.Plan(t.Context(), in)
+	plan, err := p.Plan(t.Context(), in)
+	var refused *budget.PlannerRefusedError
+	if !errors.As(err, &refused) {
+		t.Fatalf("expected PlannerRefusedError, got %v", err)
+	}
 	if plan.Fits() {
 		t.Error("unknown-size eligible run should not be evicted blindly; expected refusal")
 	}
