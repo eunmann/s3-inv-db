@@ -78,5 +78,3 @@ func TestGate_Load_RefusalCarriesPlan(t *testing.T) {
 		t.Error("plan should not fit when estimate exceeds cap")
 	}
 }
-
-// Avoid unused import errors.
