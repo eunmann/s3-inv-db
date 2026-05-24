@@ -12,7 +12,7 @@ import (
 // always produce this layout; the legacy per-tier columnar layout
 // is no longer supported.
 type TierStatsReader struct {
-	manifest  *tiers.TierManifest
+	manifest  *tiers.Manifest
 	rowReader *TierStatsRowReader
 }
 
@@ -26,7 +26,7 @@ func OpenTierStats(indexDir string) (*TierStatsReader, error) {
 		return nil, fmt.Errorf("read tier manifest: %w", err)
 	}
 	if manifest == nil || len(manifest.Tiers) == 0 {
-		return &TierStatsReader{manifest: &tiers.TierManifest{}}, nil
+		return &TierStatsReader{manifest: &tiers.Manifest{}}, nil
 	}
 
 	rowReader, err := OpenTierStatsRow(indexDir)

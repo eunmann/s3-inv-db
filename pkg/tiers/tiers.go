@@ -150,15 +150,15 @@ func (m *Mapping) ByID(id ID) (Info, bool) {
 	return Info{}, false
 }
 
-// TierManifest is written to tiers.json in the index directory.
-type TierManifest struct {
+// Manifest is written to tiers.json in the index directory.
+type Manifest struct {
 	Tiers []Info `json:"tiers"`
 }
 
 // WriteManifest writes tiers.json with only the tiers that have data.
 func WriteManifest(dir string, presentTiers []ID) error {
 	mapping := NewMapping()
-	manifest := TierManifest{
+	manifest := Manifest{
 		Tiers: make([]Info, 0, len(presentTiers)),
 	}
 	for _, id := range presentTiers {
@@ -184,20 +184,20 @@ func WriteManifest(dir string, presentTiers []ID) error {
 }
 
 // ReadManifest reads tiers.json from the index directory. Returns an
-// empty TierManifest (zero Tiers) when the file is missing so callers
+// empty Manifest (zero Tiers) when the file is missing so callers
 // can dispatch on len(manifest.Tiers) rather than nil-checking.
-func ReadManifest(dir string) (*TierManifest, error) {
+func ReadManifest(dir string) (*Manifest, error) {
 	path := filepath.Join(dir, "tiers.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &TierManifest{}, nil
+			return &Manifest{}, nil
 		}
 
 		return nil, fmt.Errorf("read tier manifest: %w", err)
 	}
 
-	var manifest TierManifest
+	var manifest Manifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return nil, fmt.Errorf("parse tier manifest: %w", err)
 	}
