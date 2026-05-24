@@ -44,14 +44,17 @@ func DefaultParallelMergeConfig() ParallelMergeConfig {
 }
 
 // ParallelMerger coordinates parallel merging of sorted run files.
+// Statistics-tracking fields are stored as atomics so Statistics() is
+// safe to call from any goroutine without requiring the caller to
+// arrange a happens-before barrier against the merge driver.
 type ParallelMerger struct {
-	config            ParallelMergeConfig
-	tempDir           string
-	instanceID        string
-	runCount          atomic.Int64
-	totalMergeTime    time.Duration
-	totalBytesWritten int64
-	mergeRounds       int
+	config              ParallelMergeConfig
+	tempDir             string
+	instanceID          string
+	runCount            atomic.Int64
+	totalMergeTimeNanos atomic.Int64
+	totalBytesWritten   atomic.Int64
+	mergeRounds         atomic.Int64
 }
 
 // NewParallelMerger creates a new parallel merger with the given configuration.
@@ -146,7 +149,7 @@ func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []st
 		default:
 		}
 		round++
-		m.mergeRounds = round
+		m.mergeRounds.Store(int64(round))
 		nextPaths, err := m.mergeRound(ctx, finalPaths, round)
 		if err != nil {
 			removeFiles(append(intermediates, nextPaths...))
@@ -171,11 +174,12 @@ func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []st
 		return nil, nil, fmt.Errorf("open final merge iterator: %w", err)
 	}
 
-	m.totalMergeTime = time.Since(startTime)
+	totalMergeTime := time.Since(startTime)
+	m.totalMergeTimeNanos.Store(int64(totalMergeTime))
 	log.Info().
-		Int("rounds_count", m.mergeRounds).
+		Int64("rounds_count", m.mergeRounds.Load()).
 		Int("final_fan_in", len(finalPaths)).
-		Str("disk_rounds_duration", humanfmt.Duration(m.totalMergeTime)).
+		Str("disk_rounds_duration", humanfmt.Duration(totalMergeTime)).
 		Msg("parallel merge → streaming iterator")
 
 	cleanup := func() error {
@@ -216,7 +220,7 @@ func (m *ParallelMerger) MergeAll(ctx context.Context, inputPaths []string) (str
 		}
 
 		round++
-		m.mergeRounds = round
+		m.mergeRounds.Store(int64(round))
 
 		log.Info().
 			Int("round", round).
@@ -247,12 +251,13 @@ func (m *ParallelMerger) MergeAll(ctx context.Context, inputPaths []string) (str
 		}
 	}
 
-	m.totalMergeTime = time.Since(startTime)
+	totalMergeTime := time.Since(startTime)
+	m.totalMergeTimeNanos.Store(int64(totalMergeTime))
 
 	log.Info().
-		Int("rounds_count", m.mergeRounds).
-		Str("total_duration", humanfmt.Duration(m.totalMergeTime)).
-		Dur("total_duration_ms", m.totalMergeTime).
+		Int64("rounds_count", m.mergeRounds.Load()).
+		Str("total_duration", humanfmt.Duration(totalMergeTime)).
+		Dur("total_duration_ms", totalMergeTime).
 		Msg("parallel merge complete")
 
 	return currentPaths[0], nil
@@ -304,7 +309,7 @@ func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, ro
 			continue
 		}
 		outputPaths[result.jobIndex] = result.outputPath
-		m.totalBytesWritten += result.bytesWritten
+		m.totalBytesWritten.Add(result.bytesWritten)
 	}
 
 	if len(errs) > 0 {
@@ -700,15 +705,15 @@ type MergeStatistics struct {
 	BytesWritten   int64
 }
 
-// Statistics returns merge statistics. Must be called only after
-// MergeAll / MergeAllToIterator returns: the fields are written by
-// the merge caller goroutine and have no synchronisation barrier
-// against concurrent readers.
+// Statistics returns merge statistics. The fields are stored as atomics
+// so this method is safe to call from any goroutine, including before
+// MergeAll / MergeAllToIterator has returned (it will report whatever
+// has been accumulated so far).
 func (m *ParallelMerger) Statistics() MergeStatistics {
 	return MergeStatistics{
-		Rounds:         m.mergeRounds,
-		TotalMergeTime: m.totalMergeTime,
-		BytesWritten:   m.totalBytesWritten,
+		Rounds:         int(m.mergeRounds.Load()),
+		TotalMergeTime: time.Duration(m.totalMergeTimeNanos.Load()),
+		BytesWritten:   m.totalBytesWritten.Load(),
 	}
 }
 
