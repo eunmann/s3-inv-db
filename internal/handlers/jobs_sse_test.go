@@ -21,8 +21,9 @@ func newJobsHandlers(t *testing.T) (*handlers.Handlers, *jobs.Scheduler) {
 	if err := invMgr.Register(t.Context(), "src/inv1", "n", "p"); err != nil {
 		t.Fatal(err)
 	}
+	jobMgr := h.JobManagerForTest()
 
-	return h, h.JobManagerForTest()
+	return h, jobMgr
 }
 
 // TestJobsStream_PushesEvents subscribes via the SSE handler, submits
