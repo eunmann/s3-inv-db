@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"io"
 	"io/fs"
+	"maps"
 	"net/url"
 	"time"
 
@@ -166,8 +167,25 @@ func New() (*Renderer, error) {
 	return r, nil
 }
 
-// FuncMap returns the template function map.
+// FuncMap returns the template function map. Composed from per-domain
+// sub-maps so the single literal doesn't grow into an unreadable blob.
 func FuncMap() template.FuncMap {
+	out := template.FuncMap{}
+	for _, sub := range []template.FuncMap{
+		formatFuncs(),
+		stateFuncs(),
+		compareFuncs(),
+		arithFuncs(),
+		htmxFuncs(),
+	} {
+		maps.Copy(out, sub)
+	}
+
+	return out
+}
+
+// formatFuncs covers byte / count / time / cost / tier label rendering.
+func formatFuncs() template.FuncMap {
 	return template.FuncMap{
 		"formatBytes":      humanfmt.BytesUint64,
 		"formatBytesInt64": humanfmt.Bytes,
@@ -180,26 +198,19 @@ func FuncMap() template.FuncMap {
 
 			return t.Format(time.RFC3339)
 		},
-		"formatTimeRelative": func(t time.Time) string {
-			if t.IsZero() {
-				return "-"
-			}
-			since := time.Since(t)
-			switch {
-			case since < time.Minute:
-				return "just now"
-			case since < time.Hour:
-				return fmt.Sprintf("%d min ago", int(since.Minutes()))
-			case since < 24*time.Hour:
-				return fmt.Sprintf("%d hr ago", int(since.Hours()))
-			default:
-				return t.Format("Jan 2, 15:04")
-			}
-		},
-		"stateLabel":  stateLabel,
-		"stageLabel":  stageLabel,
-		"formatETA":   formatETA,
-		"progressPct": progressPct,
+		"formatTimeRelative": formatTimeRelative,
+		"formatETA":          formatETA,
+		"progressPct":        progressPct,
+		"tierLabel":          tierLabel,
+	}
+}
+
+// stateFuncs handles inventory state labels and the badge/border colors
+// the page renders alongside them.
+func stateFuncs() template.FuncMap {
+	return template.FuncMap{
+		"stateLabel": stateLabel,
+		"stageLabel": stageLabel,
 		"stateClass": func(state string) string {
 			switch state {
 			case stateLoaded:
@@ -228,7 +239,12 @@ func FuncMap() template.FuncMap {
 				return "border-l-4 border-gray-300 dark:border-gray-600"
 			}
 		},
-		"tierLabel": tierLabel,
+	}
+}
+
+// compareFuncs covers the compare-page row badges.
+func compareFuncs() template.FuncMap {
+	return template.FuncMap{
 		"compareStatusClass": func(status string) string {
 			switch status {
 			case "added":
@@ -241,17 +257,40 @@ func FuncMap() template.FuncMap {
 				return "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300"
 			}
 		},
-		"add": func(a, b int) int {
-			return a + b
-		},
-		"sub": func(a, b int) int {
-			return a - b
-		},
-		"mul": func(a, b int) int {
-			return a * b
-		},
+	}
+}
+
+// arithFuncs are pure template arithmetic helpers (pagination math etc).
+func arithFuncs() template.FuncMap {
+	return template.FuncMap{
+		"add": func(a, b int) int { return a + b },
+		"sub": func(a, b int) int { return a - b },
+		"mul": func(a, b int) int { return a * b },
+	}
+}
+
+// htmxFuncs covers the htmx-specific attribute helpers.
+func htmxFuncs() template.FuncMap {
+	return template.FuncMap{
 		"hxValsJSON": hxValsJSON,
 		"browseURL":  browseURL,
+	}
+}
+
+func formatTimeRelative(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	since := time.Since(t)
+	switch {
+	case since < time.Minute:
+		return "just now"
+	case since < time.Hour:
+		return fmt.Sprintf("%d min ago", int(since.Minutes()))
+	case since < 24*time.Hour:
+		return fmt.Sprintf("%d hr ago", int(since.Hours()))
+	default:
+		return t.Format("Jan 2, 15:04")
 	}
 }
 
