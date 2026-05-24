@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -197,8 +198,7 @@ func (b *IndexBuilder) findCommonAncestorDepth(prefix string) int {
 
 	for i := range len(b.stack) {
 		entry := &b.stack[i]
-		// Check if stack entry is a prefix of the new prefix
-		if len(entry.prefix) <= len(prefix) && prefix[:len(entry.prefix)] == entry.prefix {
+		if strings.HasPrefix(prefix, entry.prefix) {
 			commonDepth = i + 1
 		} else {
 			break

@@ -78,9 +78,7 @@ func (p *Pipeline) publish(ev events.Event) {
 	p.config.Observe.EventBus.Publish(ev)
 }
 
-// timedIngestPhase wraps runIngestPhase with start/end events and
-// returns the duration. Extracted from Run to keep that function
-// under the funlen ceiling now that pub-sub events bloat it.
+// timedIngestPhase wraps runIngestPhase with start/end events.
 func (p *Pipeline) timedIngestPhase(ctx context.Context, log *zerolog.Logger, manifestURI string) (time.Duration, error) {
 	p.setPhase("downloading")
 	p.publish(events.Event{Stage: events.StagePipeline, Type: events.EvtStageStart, Payload: events.StageTiming{Stage: events.StageDownload}})
@@ -107,8 +105,7 @@ func (p *Pipeline) timedIngestPhase(ctx context.Context, log *zerolog.Logger, ma
 	return d, nil
 }
 
-// timedMergeBuildPhase wraps runMergeBuildPhase with start/end
-// events; counterpart to timedIngestPhase.
+// timedMergeBuildPhase wraps runMergeBuildPhase with start/end events.
 func (p *Pipeline) timedMergeBuildPhase(ctx context.Context, log *zerolog.Logger, outDir string) (mergeBuildResult, time.Duration, error) {
 	p.setPhase("building")
 	p.publish(events.Event{Stage: events.StagePipeline, Type: events.EvtStageStart, Payload: events.StageTiming{Stage: events.StageMerge}})
@@ -168,7 +165,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	success := false
 	defer func() {
 		if !success {
-			p.cleanup()
+			p.cleanup(log)
 		}
 	}()
 
@@ -192,9 +189,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		return nil, err
 	}
 
-	// Force GC after ingest to release aggregator memory
-	runtime.GC()
-	p.memTracker.LogNow("post_ingest_gc")
+	p.memTracker.LogNow("post_ingest")
 
 	log.Info().
 		Int("run_files_count", len(p.runFiles)).
@@ -211,9 +206,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	}
 	prefixCount, maxDepth := mergeRes.PrefixCount, mergeRes.MaxDepth
 
-	// Force GC after merge
-	runtime.GC()
-	p.memTracker.LogNow("post_merge_gc")
+	p.memTracker.LogNow("post_merge")
 
 	log.Info().
 		Str("prefixes", humanfmt.CountUint64(prefixCount)).
@@ -223,7 +216,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Dur("duration_ms", mergeDuration).
 		Msg("merge phase complete")
 
-	p.cleanup()
+	p.cleanup(log)
 	success = true
 
 	duration := time.Since(p.startTime)
@@ -448,10 +441,14 @@ func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
 	close(errCh)
 	close(progressTicker)
 
+	var errs []error
 	for err := range errCh {
 		if err != nil {
-			return fmt.Errorf("chunk worker: %w", err)
+			errs = append(errs, err)
 		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("chunk worker: %w", errors.Join(errs...))
 	}
 
 	return nil
@@ -772,7 +769,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 		}
 	}
 	if err := writeAndCloseRun(writer, rows, runPath); err != nil {
-		_ = os.Remove(runPath)
+		logCleanupErr(log, "remove failed run", runPath, os.Remove(runPath))
 
 		return err
 	}
@@ -833,12 +830,11 @@ func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRu
 		}
 
 		return &singleRunIterator{reader: reader}, func() error {
-			if err := reader.Close(); err != nil {
-				os.Remove(p.runFiles[0])
-
-				return fmt.Errorf("close single run: %w", err)
+			closeErr := reader.Close()
+			logCleanupErr(log, "remove single run", p.runFiles[0], os.Remove(p.runFiles[0]))
+			if closeErr != nil {
+				return fmt.Errorf("close single run: %w", closeErr)
 			}
-			os.Remove(p.runFiles[0])
 
 			return nil
 		}, nil
@@ -875,7 +871,7 @@ func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRu
 	cleanup := func() error {
 		err := mergerCleanup()
 		for _, path := range p.runFiles {
-			os.Remove(path)
+			logCleanupErr(log, "remove run file", path, os.Remove(path))
 		}
 
 		return err
@@ -1008,12 +1004,11 @@ func (s *singleRunIterator) Close() error {
 }
 
 // cleanup removes temporary files.
-func (p *Pipeline) cleanup() {
+func (p *Pipeline) cleanup(log *zerolog.Logger) {
 	for _, path := range p.runFiles {
-		os.Remove(path)
+		logCleanupErr(log, "remove run file", path, os.Remove(path))
 	}
 	if p.tempDir != "" && p.config.TempDir == "" {
-		// Only remove if we created the temp dir
-		os.RemoveAll(p.tempDir)
+		logCleanupErr(log, "remove temp dir", p.tempDir, os.RemoveAll(p.tempDir))
 	}
 }

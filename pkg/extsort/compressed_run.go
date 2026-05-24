@@ -217,9 +217,8 @@ func (w *CompressedRunWriter) Close() error {
 		return fmt.Errorf("update header: %w", err)
 	}
 
-	// fsync before close — see RunFileWriter.Close. A crash between
-	// the write and the kernel flush would otherwise leave the
-	// compressed stream truncated and unreadable.
+	// fsync before close: a crash between write and kernel flush would
+	// leave the compressed stream truncated and unreadable.
 	if err := w.file.Sync(); err != nil {
 		w.file.Close()
 
