@@ -39,15 +39,15 @@ type MemoryLimitResult struct {
 // a GOMEMLIMIT value isn't one of the units Go's runtime documents.
 var ErrUnknownMemSuffix = errors.New("unknown GOMEMLIMIT suffix")
 
-// ApplyMemoryLimit computes a soft process memory limit and installs
-// it via runtime/debug.SetMemoryLimit. The chosen value is:
+// ComputeMemoryLimit resolves the soft process memory limit without
+// any debug.* side effects. The chosen value is:
 //   - min(GOMEMLIMIT, cgroup) when GOMEMLIMIT is explicitly set — the
 //     operator's value wins over the sysmem fraction, capped only by
 //     the container limit so a too-permissive env can't bust the cgroup.
 //   - min(cgroup, fraction × Total RAM) otherwise.
 //
 // Pass DefaultMemoryLimitFraction (0.6) unless you have a reason to deviate.
-func ApplyMemoryLimit(fraction float64) MemoryLimitResult {
+func ComputeMemoryLimit(fraction float64) MemoryLimitResult {
 	out := MemoryLimitResult{Source: MemoryLimitSourceDefault}
 
 	envExplicit := false
@@ -64,9 +64,6 @@ func ApplyMemoryLimit(fraction float64) MemoryLimitResult {
 		out.SysmemFractionBytes = int64(float64(r.TotalBytes) * fraction)
 	}
 
-	// Operator override: an explicitly-set GOMEMLIMIT bypasses the
-	// sysmem fraction. Lets ops on dedicated hosts opt into using
-	// more than the fraction default, while the cgroup still caps.
 	if envExplicit && out.EnvBytes > 0 {
 		out.Bytes, out.Source = pickSmallest(MemoryLimitResult{
 			EnvBytes:    out.EnvBytes,
@@ -75,24 +72,59 @@ func ApplyMemoryLimit(fraction float64) MemoryLimitResult {
 	} else {
 		out.Bytes, out.Source = pickSmallest(out)
 	}
-	if out.Bytes > 0 {
-		debug.SetMemoryLimit(out.Bytes)
-		// Tune GOGC down from the default 100 when the soft limit is
-		// tight. At GOGC=100 the runtime targets a 2× live-heap peak,
-		// which thrashes near GOMEMLIMIT. Sliding to 50 at small
-		// budgets trades a bit of CPU for steadier headroom; large
-		// budgets keep the default. Operators can still override via
-		// the GOGC env (which we don't read here) if they prefer.
-		const (
-			tightLimitBytes = 4 * 1024 * 1024 * 1024 // 4 GiB
-			tightGCPercent  = 50
-		)
-		if out.Bytes <= tightLimitBytes {
-			debug.SetGCPercent(tightGCPercent)
-		}
-	}
 
 	return out
+}
+
+// Apply installs the resolved memory limit via debug.SetMemoryLimit
+// and, when the limit is tight, lowers GOGC to keep headroom.
+//
+// GOGC env handling: if GOGC is set in the environment to a value the
+// runtime accepts (a decimal integer or "off"), Apply does NOT call
+// debug.SetGCPercent — the operator's choice wins. Otherwise Apply
+// may tune GOGC down from the default 100 to reduce thrash near
+// GOMEMLIMIT at small budgets.
+func Apply(result MemoryLimitResult) {
+	if result.Bytes <= 0 {
+		return
+	}
+	debug.SetMemoryLimit(result.Bytes)
+	const (
+		tightLimitBytes = 4 * 1024 * 1024 * 1024 // 4 GiB
+		tightGCPercent  = 50
+	)
+	if result.Bytes > tightLimitBytes {
+		return
+	}
+	if gogcEnvSet() {
+		return
+	}
+	debug.SetGCPercent(tightGCPercent)
+}
+
+// ApplyMemoryLimit composes ComputeMemoryLimit and Apply for callers
+// that want both in one step.
+func ApplyMemoryLimit(fraction float64) MemoryLimitResult {
+	result := ComputeMemoryLimit(fraction)
+	Apply(result)
+
+	return result
+}
+
+// gogcEnvSet reports whether GOGC is set to a value the Go runtime
+// would honor (decimal integer or "off"). Empty/unparseable values
+// are ignored so we don't yield to garbage env.
+func gogcEnvSet() bool {
+	v := strings.TrimSpace(os.Getenv("GOGC"))
+	if v == "" {
+		return false
+	}
+	if v == "off" {
+		return true
+	}
+	_, err := strconv.Atoi(v)
+
+	return err == nil
 }
 
 func pickSmallest(r MemoryLimitResult) (int64, MemoryLimitSource) {
