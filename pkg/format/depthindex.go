@@ -110,6 +110,20 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 		errs = append(errs, fmt.Errorf("close offsets: %w", err))
 	}
 
+	// If any step failed, the output files on disk are partial /
+	// corrupt — remove them so a later open can't misinterpret them as
+	// valid. The ArrayWriter.Close error paths already remove on Close
+	// failure; this catches the write-time errors that flow through to
+	// a successful Close on a partial file.
+	if len(errs) > 0 {
+		if err := removeIfErr(positionsPath); err != nil {
+			errs = append(errs, err)
+		}
+		if err := removeIfErr(offsetsPath); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
 	return errors.Join(errs...)
 }
 

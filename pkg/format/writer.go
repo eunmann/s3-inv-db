@@ -3,6 +3,7 @@ package format
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 )
@@ -11,6 +12,7 @@ import (
 type ArrayWriter struct {
 	file   *os.File
 	writer *bufio.Writer
+	path   string
 	count  uint64
 	width  uint32
 }
@@ -32,8 +34,8 @@ func NewArrayWriter(path string, width uint32) (*ArrayWriter, error) {
 		Width:   width,
 	})
 	if _, err := w.Write(header); err != nil {
-		f.Close()
-		os.Remove(path)
+		_ = f.Close()
+		_ = os.Remove(path)
 
 		return nil, fmt.Errorf("write header: %w", err)
 	}
@@ -41,6 +43,7 @@ func NewArrayWriter(path string, width uint32) (*ArrayWriter, error) {
 	return &ArrayWriter{
 		file:   f,
 		writer: w,
+		path:   path,
 		count:  0,
 		width:  width,
 	}, nil
@@ -78,20 +81,15 @@ func (w *ArrayWriter) WriteU64(val uint64) error {
 }
 
 // Close flushes, updates the header with the correct count, and closes.
+// On any error path the partial file is removed so the failure leaves
+// nothing on disk for a later mmap/open to misinterpret as valid data.
 func (w *ArrayWriter) Close() error {
 	if err := w.writer.Flush(); err != nil {
-		w.file.Close()
-
-		return fmt.Errorf("flush: %w", err)
+		return w.cleanupOnErr(fmt.Errorf("flush: %w", err))
 	}
-
-	// Seek back and update header with correct count
 	if _, err := w.file.Seek(0, 0); err != nil {
-		w.file.Close()
-
-		return fmt.Errorf("seek: %w", err)
+		return w.cleanupOnErr(fmt.Errorf("seek: %w", err))
 	}
-
 	header := EncodeHeader(Header{
 		Magic:   MagicNumber,
 		Version: Version,
@@ -99,13 +97,31 @@ func (w *ArrayWriter) Close() error {
 		Width:   w.width,
 	})
 	if _, err := w.file.Write(header); err != nil {
-		w.file.Close()
-
-		return fmt.Errorf("update header: %w", err)
+		return w.cleanupOnErr(fmt.Errorf("update header: %w", err))
+	}
+	if err := w.file.Close(); err != nil {
+		return errors.Join(fmt.Errorf("close file: %w", err), removeIfErr(w.path))
 	}
 
-	if err := w.file.Close(); err != nil {
-		return fmt.Errorf("close file: %w", err)
+	return nil
+}
+
+// cleanupOnErr closes the file and removes the partial output on
+// the failure path, joining any secondary errors into the returned
+// chain so munmap/remove failures aren't silently dropped.
+func (w *ArrayWriter) cleanupOnErr(primary error) error {
+	closeErr := w.file.Close()
+	removeErr := os.Remove(w.path)
+
+	return errors.Join(primary, closeErr, removeErr)
+}
+
+// removeIfErr removes a file and returns the error wrapped, or nil if
+// the path didn't exist. Used after a fatal Close error so the partial
+// output doesn't linger on disk.
+func removeIfErr(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove partial %s: %w", path, err)
 	}
 
 	return nil

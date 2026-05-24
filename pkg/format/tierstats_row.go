@@ -103,17 +103,14 @@ func (w *TierStatsRowWriter) Add(counts, bytes *[tiers.NumTiers]uint64) error {
 func (w *TierStatsRowWriter) Count() uint64 { return w.count }
 
 // Close flushes, rewrites the header with the final row count, and
-// closes the file.
+// closes the file. On any error path the partial file is removed so a
+// later mmap/open doesn't misinterpret it as valid data.
 func (w *TierStatsRowWriter) Close() error {
 	if err := w.writer.Flush(); err != nil {
-		w.file.Close()
-
-		return fmt.Errorf("flush tier stats row: %w", err)
+		return w.cleanupOnErr(fmt.Errorf("flush tier stats row: %w", err))
 	}
 	if _, err := w.file.Seek(0, 0); err != nil {
-		w.file.Close()
-
-		return fmt.Errorf("seek tier stats row: %w", err)
+		return w.cleanupOnErr(fmt.Errorf("seek tier stats row: %w", err))
 	}
 	header := EncodeHeader(Header{
 		Magic:   MagicNumber,
@@ -122,15 +119,20 @@ func (w *TierStatsRowWriter) Close() error {
 		Width:   uint32(denseTierStatsRowStride),
 	})
 	if _, err := w.file.Write(header); err != nil {
-		w.file.Close()
-
-		return fmt.Errorf("update tier stats row header: %w", err)
+		return w.cleanupOnErr(fmt.Errorf("update tier stats row header: %w", err))
 	}
 	if err := w.file.Close(); err != nil {
-		return fmt.Errorf("close tier stats row: %w", err)
+		return errors.Join(fmt.Errorf("close tier stats row: %w", err), removeIfErr(w.path))
 	}
 
 	return nil
+}
+
+func (w *TierStatsRowWriter) cleanupOnErr(primary error) error {
+	closeErr := w.file.Close()
+	removeErr := os.Remove(w.path)
+
+	return errors.Join(primary, closeErr, removeErr)
 }
 
 // TierStatsRowReader reads the row-major tier-stats file. One mmap'd
