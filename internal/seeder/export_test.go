@@ -24,7 +24,7 @@ func MD5Hex(b []byte) string { return md5Hex(b) }
 func RunStampUUID(stamp time.Time, index int) string { return runStampUUID(stamp, index) }
 
 // TierToS3Columns exposes tierToS3Columns for tests.
-func TierToS3Columns(m *tiers.Mapping, id tiers.ID) S3InventoryColumns {
+func TierToS3Columns(m *tiers.Mapping, id tiers.ID) (S3InventoryColumns, error) {
 	return tierToS3Columns(m, id)
 }
 
@@ -41,8 +41,8 @@ func EncodeCSVGz(srcBucket string, objects []benchutil.FakeObject) (CsvGzPayload
 func NewS3ClientForTest(ctx context.Context) (*s3.Client, error) { return newS3Client(ctx) }
 
 // GenerateInventory exposes generateInventory for tests.
-func GenerateInventory(cfg Config, index int, seed int64) (InventoryInfo, error) {
-	return generateInventory(cfg, index, seed)
+func GenerateInventory(ctx context.Context, cfg Config, index int, seed int64) (InventoryInfo, error) {
+	return generateInventory(ctx, cfg, index, seed)
 }
 
 // GetGeneratorConfig exposes getGeneratorConfig for tests.

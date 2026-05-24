@@ -231,7 +231,10 @@ func encodeCSVGz(srcBucket string, objects []benchutil.FakeObject) (csvGzPayload
 	etag := `"0000000000000000000000000000000000"`
 
 	for _, o := range objects {
-		cols := tierToS3Columns(mapping, o.TierID)
+		cols, err := tierToS3Columns(mapping, o.TierID)
+		if err != nil {
+			return csvGzPayload{}, fmt.Errorf("tier columns: %w", err)
+		}
 		// Real S3 Inventory URL-encodes Key values, but our consumer
 		// (pkg/inventory/reader.go) does not URL-decode them, so keep the
 		// keys raw to match what the build pipeline actually expects.
@@ -277,20 +280,20 @@ type S3InventoryColumns struct {
 // tierToS3Columns inverts tiers.Mapping.FromS3: split a tier ID back into
 // the (StorageClass, IntelligentTieringAccessTier) inventory columns AWS
 // would produce.
-func tierToS3Columns(m *tiers.Mapping, id tiers.ID) S3InventoryColumns {
+func tierToS3Columns(m *tiers.Mapping, id tiers.ID) (S3InventoryColumns, error) {
 	switch id {
 	case tiers.ITFrequent, tiers.ITFrequentSmall:
 		// Small IT_FREQUENT objects round-trip through the same S3 columns;
 		// the size-aware classifier on the read side reclassifies them.
-		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "FREQUENT_ACCESS"}
+		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "FREQUENT_ACCESS"}, nil
 	case tiers.ITInfrequent:
-		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "INFREQUENT_ACCESS"}
+		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "INFREQUENT_ACCESS"}, nil
 	case tiers.ITArchiveInstant:
-		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "ARCHIVE_INSTANT_ACCESS"}
+		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "ARCHIVE_INSTANT_ACCESS"}, nil
 	case tiers.ITArchive:
-		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "ARCHIVE_ACCESS"}
+		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "ARCHIVE_ACCESS"}, nil
 	case tiers.ITDeepArchive:
-		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "DEEP_ARCHIVE_ACCESS"}
+		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "DEEP_ARCHIVE_ACCESS"}, nil
 	case tiers.Standard, tiers.StandardIA, tiers.OneZoneIA,
 		tiers.GlacierIR, tiers.GlacierFR, tiers.DeepArchive,
 		tiers.ReducedRedundancy, tiers.NumTiers:
@@ -299,7 +302,12 @@ func tierToS3Columns(m *tiers.Mapping, id tiers.ID) S3InventoryColumns {
 		// defensively rather than letting exhaustive fall through.
 	}
 
-	return S3InventoryColumns{StorageClass: m.ByID(id).Name}
+	info, ok := m.ByID(id)
+	if !ok {
+		return S3InventoryColumns{}, fmt.Errorf("%w: %d", tiers.ErrUnknownTierID, id)
+	}
+
+	return S3InventoryColumns{StorageClass: info.Name}, nil
 }
 
 func putObject(ctx context.Context, client *s3.Client, bucket, key string, body []byte, contentType string) error {

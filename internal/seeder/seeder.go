@@ -86,7 +86,7 @@ type Summary struct {
 // Run executes the seeder, generating all inventories. Target selects
 // between writing pre-built indexes locally and uploading synthetic AWS S3
 // Inventory layouts (manifest + CSV.gz) to S3/MinIO.
-func Run(cfg Config) error {
+func Run(ctx context.Context, cfg Config) error {
 	startTime := time.Now()
 
 	if cfg.Target == "" {
@@ -120,28 +120,31 @@ func Run(cfg Config) error {
 
 	switch cfg.Target {
 	case TargetLocal:
-		return runLocal(cfg, startTime)
+		return runLocal(ctx, cfg, startTime)
 	case TargetS3:
-		return runS3(cfg, startTime)
+		return runS3(ctx, cfg, startTime)
 	default:
 		return fmt.Errorf("%w: %q", errUnknownTarget, cfg.Target)
 	}
 }
 
-func runLocal(cfg Config, startTime time.Time) error {
+func runLocal(ctx context.Context, cfg Config, startTime time.Time) error {
 	if err := os.MkdirAll(cfg.OutputDir, outputDirMode); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
 
 	inventories := make([]InventoryInfo, 0, cfg.Count)
 	for i := range cfg.Count {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("context: %w", err)
+		}
 		// Always offset per inventory so distinct inventories get distinct
 		// data, including when the user didn't pass --seed (cfg.Seed == 0).
 		// Adding 1 keeps invSeed non-zero so the generator never falls back
 		// to its built-in default seed.
 		invSeed := cfg.Seed + int64(i+1)*1000
 
-		info, err := generateInventory(cfg, i+1, invSeed)
+		info, err := generateInventory(ctx, cfg, i+1, invSeed)
 		if err != nil {
 			return fmt.Errorf("generate inventory %d: %w", i+1, err)
 		}
@@ -166,7 +169,7 @@ func runLocal(cfg Config, startTime time.Time) error {
 	return nil
 }
 
-func runS3(cfg Config, startTime time.Time) error {
+func runS3(ctx context.Context, cfg Config, startTime time.Time) error {
 	if err := cfg.S3.Validate(); err != nil {
 		return fmt.Errorf("invalid s3 config: %w", err)
 	}
@@ -177,7 +180,6 @@ func runS3(cfg Config, startTime time.Time) error {
 		cfg.RunStep = 24 * time.Hour
 	}
 
-	ctx := context.Background()
 	client, err := newS3Client(ctx)
 	if err != nil {
 		return fmt.Errorf("s3 client: %w", err)
@@ -222,11 +224,39 @@ func runS3(cfg Config, startTime time.Time) error {
 }
 
 // generateInventory generates a single inventory index directory.
-func generateInventory(cfg Config, index int, seed int64) (InventoryInfo, error) {
+func generateInventory(ctx context.Context, cfg Config, index int, seed int64) (InventoryInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return InventoryInfo{}, fmt.Errorf("context: %w", err)
+	}
 	id := fmt.Sprintf("inv-%03d", index)
 	name := fmt.Sprintf("Seed Inventory %d", index)
 	outDir := filepath.Join(cfg.OutputDir, id)
 
+	// extsort.IndexBuilder is a pure local-disk pipeline with no
+	// cancellation surface; ctx ends here for the local target.
+	prefixes, err := buildInventoryIndex(cfg, outDir, seed) //nolint:contextcheck // extsort.IndexBuilder has no ctx-aware API; local-disk pipeline.
+	if err != nil {
+		return InventoryInfo{}, err
+	}
+
+	absPath, err := filepath.Abs(outDir)
+	if err != nil {
+		absPath = outDir
+	}
+
+	return InventoryInfo{
+		ID:       id,
+		Name:     name,
+		Path:     absPath,
+		Objects:  cfg.Objects,
+		Prefixes: prefixes,
+	}, nil
+}
+
+// buildInventoryIndex builds the on-disk index for a single inventory.
+// It deliberately takes no context: the underlying extsort builder runs
+// purely against the local filesystem and exposes no cancellation hooks.
+func buildInventoryIndex(cfg Config, outDir string, seed int64) (int, error) {
 	genCfg := getGeneratorConfig(cfg.Preset, cfg.Objects)
 	if seed != 0 {
 		genCfg.Seed = seed
@@ -244,31 +274,20 @@ func generateInventory(cfg Config, index int, seed int64) (InventoryInfo, error)
 
 	builder, err := extsort.NewIndexBuilder(outDir, "")
 	if err != nil {
-		return InventoryInfo{}, fmt.Errorf("create index builder: %w", err)
+		return 0, fmt.Errorf("create index builder: %w", err)
 	}
 
 	for _, row := range rows {
 		if err := builder.Add(row); err != nil {
-			return InventoryInfo{}, fmt.Errorf("add row: %w", err)
+			return 0, fmt.Errorf("add row: %w", err)
 		}
 	}
 
 	if err := builder.Finalize(); err != nil {
-		return InventoryInfo{}, fmt.Errorf("finalize index: %w", err)
+		return 0, fmt.Errorf("finalize index: %w", err)
 	}
 
-	absPath, err := filepath.Abs(outDir)
-	if err != nil {
-		absPath = outDir
-	}
-
-	return InventoryInfo{
-		ID:       id,
-		Name:     name,
-		Path:     absPath,
-		Objects:  cfg.Objects,
-		Prefixes: int(builder.Count()),
-	}, nil
+	return int(builder.Count()), nil
 }
 
 // getGeneratorConfig returns a generator configuration for the given preset.

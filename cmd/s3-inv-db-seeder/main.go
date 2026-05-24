@@ -2,12 +2,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/seeder"
@@ -68,7 +71,10 @@ func run() error {
 		Logger:           logger,
 	}
 
-	if err := seeder.Run(cfg); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := seeder.Run(ctx, cfg); err != nil {
 		return fmt.Errorf("run seeder: %w", err)
 	}
 

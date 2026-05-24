@@ -87,7 +87,12 @@ func TestTierToS3Columns_IntelligentTiering(t *testing.T) {
 		{id: tiers.ITDeepArchive, wantClass: "INTELLIGENT_TIERING", wantTier: "DEEP_ARCHIVE_ACCESS"},
 	}
 	for _, c := range cases {
-		got := seeder.TierToS3Columns(m, c.id)
+		got, err := seeder.TierToS3Columns(m, c.id)
+		if err != nil {
+			t.Errorf("tierToS3Columns(%v): %v", c.id, err)
+
+			continue
+		}
 		if got.StorageClass != c.wantClass || got.AccessTier != c.wantTier {
 			t.Errorf("tierToS3Columns(%v) = (%q, %q), want (%q, %q)",
 				c.id, got.StorageClass, got.AccessTier, c.wantClass, c.wantTier)
@@ -98,7 +103,12 @@ func TestTierToS3Columns_IntelligentTiering(t *testing.T) {
 func TestTierToS3Columns_NonIntelligentLeavesAccessTierEmpty(t *testing.T) {
 	m := tiers.NewMapping()
 	for _, id := range []tiers.ID{tiers.Standard, tiers.StandardIA, tiers.GlacierFR} {
-		got := seeder.TierToS3Columns(m, id)
+		got, err := seeder.TierToS3Columns(m, id)
+		if err != nil {
+			t.Errorf("tierToS3Columns(%v): %v", id, err)
+
+			continue
+		}
 		if got.AccessTier != "" {
 			t.Errorf("non-IT tier %v produced AccessTier %q, want empty", id, got.AccessTier)
 		}
