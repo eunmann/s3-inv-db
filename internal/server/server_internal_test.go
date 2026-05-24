@@ -80,6 +80,64 @@ func TestServerAPIRoutes(t *testing.T) {
 	}
 }
 
+// TestServerHTTPTimeouts pins the slow-loris hardening: every long-lived
+// timeout knob must be set on the http.Server so a peer can't hold a
+// connection or header read open indefinitely.
+func TestServerHTTPTimeouts(t *testing.T) {
+	lc := &net.ListenConfig{}
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	cfg := Config{
+		Addr:       addr,
+		Logger:     zerolog.Nop(),
+		PriceTable: pricing.DefaultUSEast1Prices(),
+		DB:         testDB(t),
+	}
+
+	srv, err := New(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- srv.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for srv.server == nil && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if srv.server == nil {
+		t.Fatal("Run did not initialize http.Server within 2s")
+	}
+
+	if srv.server.ReadHeaderTimeout <= 0 {
+		t.Errorf("ReadHeaderTimeout = %v, want > 0", srv.server.ReadHeaderTimeout)
+	}
+	if srv.server.ReadTimeout <= 0 {
+		t.Errorf("ReadTimeout = %v, want > 0", srv.server.ReadTimeout)
+	}
+	if srv.server.IdleTimeout <= 0 {
+		t.Errorf("IdleTimeout = %v, want > 0", srv.server.IdleTimeout)
+	}
+	if srv.server.MaxHeaderBytes <= 0 {
+		t.Errorf("MaxHeaderBytes = %d, want > 0", srv.server.MaxHeaderBytes)
+	}
+
+	cancel()
+	select {
+	case <-runErr:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+}
+
 // TestServerGracefulShutdown verifies Run returns nil when ctx is cancelled,
 // so SIGINT/SIGTERM produce a clean exit, and that the inventory manager is
 // closed (cleared) afterward.

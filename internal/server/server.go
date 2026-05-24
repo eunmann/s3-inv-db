@@ -147,7 +147,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	h := handlers.New(mgr, renderer, cfg.PriceTable, jobMgr, jobStore, jobBus, configStore, tracker, hopts...)
 
 	var al *autoload.AutoLoader
-	if cfg.AutoLoad && discovery != nil && discovery.Enabled() {
+	if cfg.AutoLoad && discovery.Enabled() {
 		al = autoload.New(autoload.Config{
 			PollInterval:     cfg.PollInterval,
 			MaxConcurrency:   cfg.AutoLoadConcurrency,
@@ -295,6 +295,18 @@ var (
 // endpoint fails fast.
 const s3StartupTimeout = 30 * time.Second
 
+// HTTP server timeouts. WriteTimeout is intentionally omitted: SSE
+// endpoints (/api/jobs/stream) stream indefinitely. Slow-loris is
+// blocked by ReadHeaderTimeout + ReadTimeout instead.
+const (
+	readHeaderTimeout    = 10 * time.Second
+	readTimeout          = 30 * time.Second
+	idleTimeout          = 60 * time.Second
+	maxHeaderBytes       = 1 << 20 // 1 MiB
+	shutdownDrainTimeout = 10 * time.Second
+	resourceDrainTimeout = 5 * time.Second
+)
+
 // discoveryWiring bundles the three values newDiscoveryWiring builds so
 // callers don't end up with a 4-arity return that invites `_, _, _, err`.
 type discoveryWiring struct {
@@ -336,7 +348,10 @@ func (s *Server) Run(ctx context.Context) error {
 	s.server = &http.Server{
 		Addr:              s.config.Addr,
 		Handler:           s.router,
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
 	}
 
 	// On every exit path: cancel in-flight jobs (so goroutines don't
@@ -365,7 +380,7 @@ func (s *Server) Run(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		s.config.Logger.Info().Msg("shutting down HTTP server")
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownDrainTimeout)
 		defer cancel()
 
 		if err := s.server.Shutdown(shutdownCtx); err != nil {
@@ -388,7 +403,7 @@ func (s *Server) Run(ctx context.Context) error {
 // context.WithoutCancel(parent) so any values (logger, request id)
 // the parent carries are inherited while cancellation is dropped.
 func (s *Server) shutdownResources(ctx context.Context) {
-	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resourceDrainTimeout)
 	defer cancel()
 	if s.autoloader != nil {
 		s.autoloader.Stop()

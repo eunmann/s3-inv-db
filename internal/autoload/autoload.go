@@ -126,7 +126,7 @@ func (a *AutoLoader) run(ctx context.Context) {
 }
 
 func (a *AutoLoader) tick(ctx context.Context) {
-	if a.discovery == nil || !a.discovery.Enabled() {
+	if !a.discovery.Enabled() {
 		return
 	}
 	configs, err := a.configStore.List(ctx)

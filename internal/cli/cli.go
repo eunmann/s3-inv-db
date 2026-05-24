@@ -26,13 +26,13 @@ import (
 // Sentinel errors keep `err113` happy and let callers test for the
 // specific failure mode with errors.Is.
 var (
-	ErrUsage           = errors.New("usage: s3-inv-db <command> [options]\ncommands: build, query")
-	ErrUnknownCommand  = errors.New("unknown command")
-	ErrOutRequired     = errors.New("--out is required")
+	ErrUsage            = errors.New("usage: s3-inv-db <command> [options]\ncommands: build, query")
+	ErrUnknownCommand   = errors.New("unknown command")
+	ErrOutRequired      = errors.New("--out is required")
 	ErrManifestRequired = errors.New("--s3-manifest is required")
-	ErrIndexRequired   = errors.New("--index is required")
-	ErrPrefixRequired  = errors.New("--prefix is required")
-	ErrPrefixNotFound  = errors.New("prefix not found")
+	ErrIndexRequired    = errors.New("--index is required")
+	ErrPrefixRequired   = errors.New("--prefix is required")
+	ErrPrefixNotFound   = errors.New("prefix not found")
 )
 
 // Run executes the CLI with the given arguments.
