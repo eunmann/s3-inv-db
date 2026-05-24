@@ -205,7 +205,7 @@ func retentionLookup(store *inventory.ConfigStore, fallback uint32) budget.Reten
 // its on-disk size to the budget tracker so post-restart eviction
 // decisions see an accurate baseline.
 func (s *Server) backfillTracker(ctx context.Context, logger zerolog.Logger) {
-	if s.tracker == nil || s.bldr == nil {
+	if s.bldr == nil {
 		return
 	}
 	list := s.manager.List()
@@ -349,7 +349,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// shutdown trigger), we still need a few seconds to drain workers.
 	defer s.shutdownResources(ctx)
 
-	if s.discovery != nil && s.discovery.Enabled() {
+	if s.discovery.Enabled() {
 		s.discovery.Start(ctx, s.discoveryRefreshInterval(), &s.config.Logger)
 	}
 	if s.autoloader != nil {
@@ -396,9 +396,7 @@ func (s *Server) shutdownResources(ctx context.Context) {
 	if s.autoloader != nil {
 		s.autoloader.Stop()
 	}
-	if s.discovery != nil {
-		s.discovery.Stop()
-	}
+	s.discovery.Stop()
 	if err := s.jobMgr.Shutdown(shutdownCtx); err != nil {
 		s.config.Logger.Error().Err(err).Msg("shutdown job manager")
 	}
