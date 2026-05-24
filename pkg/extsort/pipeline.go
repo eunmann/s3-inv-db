@@ -147,9 +147,11 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	p.startTime = time.Now()
 	log := zerolog.Ctx(ctx)
 
-	// Start memory diagnostics
+	// Start memory diagnostics. Stop intentionally uses its own
+	// background context (with a bounded shutdown timeout) so pprof's
+	// HTTP drain isn't aborted when the pipeline's ctx is cancelled.
 	p.memTracker.Start()
-	defer p.memTracker.Stop()
+	defer p.memTracker.Stop() //nolint:contextcheck // own shutdown ctx by design
 	p.setPhase("initializing")
 
 	tempDir := p.config.TempDir

@@ -18,7 +18,8 @@ import (
 func TestTracker_StopShutsDownPprofServer(t *testing.T) {
 	// Bind to a free OS-picked port so parallel test runs can't collide
 	// and we don't depend on :6060 being free in CI.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("pick port: %v", err)
 	}
@@ -39,7 +40,8 @@ func TestTracker_StopShutsDownPprofServer(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		d := net.Dialer{Timeout: 100 * time.Millisecond}
+		c, err := d.DialContext(t.Context(), "tcp", addr)
 		if err == nil {
 			_ = c.Close()
 			lastErr = nil
@@ -57,7 +59,8 @@ func TestTracker_StopShutsDownPprofServer(t *testing.T) {
 
 	// After Stop the port must be free — Shutdown returned, so a new
 	// listener should bind without EADDRINUSE.
-	ln2, err := net.Listen("tcp", addr)
+	var lc3 net.ListenConfig
+	ln2, err := lc3.Listen(t.Context(), "tcp", addr)
 	if err != nil {
 		t.Fatalf("port still held after Stop (pprof Shutdown not wired): %v", err)
 	}
@@ -69,7 +72,7 @@ func TestTracker_StopShutsDownPprofServer(t *testing.T) {
 }
 
 // TestTracker_StopWithoutStartIsNoop verifies the early-return guard.
-func TestTracker_StopWithoutStartIsNoop(t *testing.T) {
+func TestTracker_StopWithoutStartIsNoop(_ *testing.T) {
 	tr := memdiag.NewTracker(memdiag.Config{Enabled: false})
 	tr.Stop()
 	tr.Stop() // must not panic
@@ -79,7 +82,8 @@ func TestTracker_StopWithoutStartIsNoop(t *testing.T) {
 // actually answer requests — guards against accidentally returning a
 // new mux that has no handlers wired in.
 func TestTracker_PprofServesDuringRun(t *testing.T) {
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	var lc2 net.ListenConfig
+	ln, _ := lc2.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	addr := ln.Addr().String()
 	_ = ln.Close()
 
