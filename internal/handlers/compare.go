@@ -670,24 +670,33 @@ func (h *Handlers) CompareLevelAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := h.buildCompareAPIResponse(from, to, prefix, sortBy, dir, hideUnchanged, page, pageSize, data)
+	resp := h.buildCompareAPIResponse(compareViewOptions{
+		from:          from,
+		to:            to,
+		prefix:        prefix,
+		sortBy:        sortBy,
+		dir:           dir,
+		page:          page,
+		pageSize:      pageSize,
+		hideUnchanged: hideUnchanged,
+	}, data)
 	WriteJSON(w, http.StatusOK, resp)
 }
 
 // buildCompareAPIResponse turns a CompareLevelData into the JSON payload,
 // applying the same filter→sort→paginate pipeline as the HTML view but
 // with raw numeric output.
-func (h *Handlers) buildCompareAPIResponse(from, to inventory.ID, prefix, sortBy, dir string, hideUnchanged bool, page, pageSize int, data inventory.CompareLevelData) CompareLevelResponse {
+func (h *Handlers) buildCompareAPIResponse(opts compareViewOptions, data inventory.CompareLevelData) CompareLevelResponse {
 	resp := CompareLevelResponse{
-		From:          from,
-		To:            to,
-		Prefix:        prefix,
-		Sort:          sortBy,
-		Dir:           dir,
-		HideUnchanged: hideUnchanged,
+		From:          opts.from,
+		To:            opts.to,
+		Prefix:        opts.prefix,
+		Sort:          opts.sortBy,
+		Dir:           opts.dir,
+		HideUnchanged: opts.hideUnchanged,
 		NotFound:      data.Self.NotFoundInA && data.Self.NotFoundInB,
 	}
-	for _, b := range inventory.Breadcrumbs(prefix) {
+	for _, b := range inventory.Breadcrumbs(opts.prefix) {
 		resp.Breadcrumbs = append(resp.Breadcrumbs, BrowseCrumbJSON{Label: b.Label, Prefix: b.Prefix})
 	}
 	resp.Self = h.buildCompareSelfJSON(data.Self)
@@ -728,7 +737,7 @@ func (h *Handlers) buildCompareAPIResponse(from, to inventory.ID, prefix, sortBy
 		}
 		rows = append(rows, row)
 	}
-	if hideUnchanged {
+	if opts.hideUnchanged {
 		filtered := rows[:0]
 		for i := range rows {
 			if rows[i].Status != inventory.CompareUnchanged.String() {
@@ -737,9 +746,9 @@ func (h *Handlers) buildCompareAPIResponse(from, to inventory.ID, prefix, sortBy
 		}
 		rows = filtered
 	}
-	sortCompareAPIChildren(rows, sortBy, dir)
+	sortCompareAPIChildren(rows, opts.sortBy, opts.dir)
 	resp.TotalChildren = len(rows)
-	p := inventory.Paginate(len(rows), page, pageSize)
+	p := inventory.Paginate(len(rows), opts.page, opts.pageSize)
 	resp.Pagination = paginationFromBrowse(p, len(rows))
 	if p.FirstRow > 0 {
 		resp.Children = rows[p.FirstRow-1 : p.LastRow]
