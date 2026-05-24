@@ -143,7 +143,7 @@ func run() error {
 	finalVerbose := pickBool(fileCfg, *f.verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
 	finalPretty := pickBool(fileCfg, *f.prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
 
-	logger := logging.NewLogger(finalVerbose, finalPretty)
+	logger := logging.NewLogger(logging.Options{Debug: finalVerbose, Human: finalPretty})
 	log.Logger = logger
 
 	memLimit := sysmem.ApplyMemoryLimit(sysmem.DefaultMemoryLimitFraction)

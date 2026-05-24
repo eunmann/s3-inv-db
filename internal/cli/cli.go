@@ -78,9 +78,9 @@ func runBuild(args []string) error {
 	finalVerbose := resolveBool(fileCfg, *verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
 	finalPretty := resolveBool(fileCfg, *prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
 
-	baseLogger := logging.NewLogger(finalVerbose, finalPretty)
+	baseLogger := logging.NewLogger(logging.Options{Debug: finalVerbose, Human: finalPretty})
 	log.Logger = baseLogger
-	logging.Init(finalVerbose, finalPretty)
+	logging.Init(logging.Options{Debug: finalVerbose, Human: finalPretty})
 
 	memLimit := sysmem.ApplyMemoryLimit(sysmem.DefaultMemoryLimitFraction)
 	baseLogger.Info().
@@ -170,7 +170,7 @@ func runQuery(args []string) error {
 	finalPretty := resolveBool(fileCfg, *prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
 	finalPriceTable := resolveString(fileCfg, *priceTablePath, explicit["price-table"], func(c *appconfig.Config) *string { return c.PriceTable })
 
-	logging.Init(finalVerbose, finalPretty)
+	logging.Init(logging.Options{Debug: finalVerbose, Human: finalPretty})
 	logger := logging.L()
 
 	if *indexDir == "" {

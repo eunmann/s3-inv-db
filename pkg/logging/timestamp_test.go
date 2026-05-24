@@ -19,7 +19,7 @@ var rfc3339Re = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}([Zz]|[+
 func TestNewLogger_EmitsRFC3339Timestamp(t *testing.T) {
 	// Touch the package so the lazy zerolog setup runs and pins
 	// TimeFieldFormat to RFC3339 before this test inspects it.
-	_ = logging.NewLogger(false, false)
+	_ = logging.NewLogger(logging.Options{})
 	if zerolog.TimeFieldFormat != time.RFC3339 {
 		t.Fatalf("zerolog.TimeFieldFormat = %q, want time.RFC3339", zerolog.TimeFieldFormat)
 	}

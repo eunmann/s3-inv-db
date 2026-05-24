@@ -46,7 +46,7 @@ func run() error {
 
 	flag.Parse()
 
-	logger := logging.NewLogger(*verbose, *prettyLogs)
+	logger := logging.NewLogger(logging.Options{Debug: *verbose, Human: *prettyLogs})
 
 	perConfig, err := parseObjectsPerConfig(*objectsPerConfig)
 	if err != nil {
