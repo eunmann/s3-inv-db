@@ -11,6 +11,36 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
+// TestComputeMonthlyCost_NegativePriceDoesNotWrap guards against a
+// uint64 wrap when a malformed price table feeds a negative price into
+// the float-to-microdollars conversion. Uint64(negative_float) wraps to
+// a value near math.MaxUint64 and used to surface as a wildly inflated
+// cost. Negative prices must clamp to zero, not explode.
+func TestComputeMonthlyCost_NegativePriceDoesNotWrap(t *testing.T) {
+	pt := pricing.PriceTable{
+		PerGBMonth: map[string]float64{
+			"STANDARD": -0.023, // corrupted price
+		},
+	}
+	breakdown := []format.TierBreakdown{
+		{
+			TierID:      tiers.Standard,
+			TierName:    "STANDARD",
+			Bytes:       1024 * 1024 * 1024,
+			ObjectCount: 10,
+		},
+	}
+
+	cost := pricing.ComputeMonthlyCost(breakdown, pt)
+
+	// 23 cents of "real" cost; a wrap would put the total near
+	// math.MaxUint64 (~1.8e19). Anything above ~1e18 is the wrap.
+	const wrapFloor = uint64(1) << 60
+	if cost.TotalMicrodollars >= wrapFloor {
+		t.Errorf("TotalMicrodollars = %d looks like a uint64 wrap (>=2^60); want clamped to 0", cost.TotalMicrodollars)
+	}
+}
+
 func TestComputeMonthlyCost_StandardStorage(t *testing.T) {
 	pt := pricing.DefaultUSEast1Prices()
 

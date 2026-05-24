@@ -200,7 +200,7 @@ func ComputeMonthlyCost(breakdown []format.TierBreakdown, pt PriceTable) CostRes
 
 		// Base storage cost.
 		gbFrac := float64(tb.Bytes) / float64(bytesPerGB)
-		storageMicrodollars := uint64(gbFrac * price * microdollarsPerDollar)
+		storageMicrodollars := microdollarsFromFloat(gbFrac * price)
 
 		// Average object size for this tier.
 		var avgObjectSize uint64
@@ -214,7 +214,7 @@ func ComputeMonthlyCost(breakdown []format.TierBreakdown, pt PriceTable) CostRes
 			// Each object is charged as 128 KiB.
 			additionalBytes := (minObjectSizeBytes - avgObjectSize) * tb.ObjectCount
 			additionalGB := float64(additionalBytes) / float64(bytesPerGB)
-			minSizePenalty = uint64(additionalGB * price * microdollarsPerDollar)
+			minSizePenalty = microdollarsFromFloat(additionalGB * price)
 			result.MinObjectSizeMicrodollars += minSizePenalty
 		}
 
@@ -224,7 +224,7 @@ func ComputeMonthlyCost(breakdown []format.TierBreakdown, pt PriceTable) CostRes
 		// ingest classifier and therefore never reach this branch.
 		var monitoringCost uint64
 		if TierHasMonitoringCost(tb.TierName) && pt.MonitoringPer1000Objects > 0 {
-			monitoringCost = uint64(float64(tb.ObjectCount) / requestsPerThousand * pt.MonitoringPer1000Objects * microdollarsPerDollar)
+			monitoringCost = microdollarsFromFloat(float64(tb.ObjectCount) / requestsPerThousand * pt.MonitoringPer1000Objects)
 			result.MonitoringMicrodollars += monitoringCost
 		}
 
@@ -233,11 +233,11 @@ func ComputeMonthlyCost(breakdown []format.TierBreakdown, pt PriceTable) CostRes
 		if TierHasGlacierOverhead(tb.TierName) && tb.ObjectCount > 0 {
 			// 32 KiB at Glacier rate per object.
 			glacierOverheadGB := float64(tb.ObjectCount*glacierMetadataOverheadBytes) / float64(bytesPerGB)
-			glacierOverhead = uint64(glacierOverheadGB * price * microdollarsPerDollar)
+			glacierOverhead = microdollarsFromFloat(glacierOverheadGB * price)
 
 			// 8 KiB at Standard rate per object.
 			indexOverheadGB := float64(tb.ObjectCount*glacierIndexOverheadBytes) / float64(bytesPerGB)
-			indexOverhead := uint64(indexOverheadGB * pt.StandardPricePerGB * microdollarsPerDollar)
+			indexOverhead := microdollarsFromFloat(indexOverheadGB * pt.StandardPricePerGB)
 			glacierOverhead += indexOverhead
 
 			result.GlacierOverheadMicrodollars += glacierOverhead
@@ -263,7 +263,7 @@ func ComputePutCost(objectCount uint64, pt PriceTable) uint64 {
 		return 0
 	}
 
-	return uint64(float64(objectCount) / requestsPerThousand * pt.PutPer1000Requests * microdollarsPerDollar)
+	return microdollarsFromFloat(float64(objectCount) / requestsPerThousand * pt.PutPer1000Requests)
 }
 
 // FormatCost formats a cost in microdollars for display.
@@ -313,4 +313,17 @@ func roundHalfAway(x float64, decimals int) float64 {
 	factor := math.Pow(10, float64(decimals))
 
 	return math.Round(x*factor) / factor
+}
+
+// microdollarsFromFloat converts a non-negative dollar amount to its
+// microdollar uint64 representation. Negative inputs — either from a
+// corrupted price table or from FP noise that produced a tiny-negative
+// intermediate — would otherwise wrap to a value near math.MaxUint64
+// when cast through uint64; clamp them to zero instead.
+func microdollarsFromFloat(dollars float64) uint64 {
+	if dollars <= 0 {
+		return 0
+	}
+
+	return uint64(dollars * microdollarsPerDollar)
 }
