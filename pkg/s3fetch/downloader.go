@@ -169,13 +169,15 @@ func (d *DownloadedObject) Read(p []byte) (int, error) {
 }
 
 func (d *DownloadedObject) Close() error {
-	err := d.file.Close()
-	os.Remove(d.path)
-	if err != nil {
-		return fmt.Errorf("close temp file: %w", err)
+	var errs []error
+	if err := d.file.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("close temp file: %w", err))
+	}
+	if err := os.Remove(d.path); err != nil {
+		errs = append(errs, fmt.Errorf("remove temp file: %w", err))
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 func (d *DownloadedObject) ReadAt(p []byte, off int64) (int, error) {
