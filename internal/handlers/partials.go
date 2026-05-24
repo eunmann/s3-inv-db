@@ -396,10 +396,10 @@ func (h *Handlers) measureCacheSize(r *http.Request, disc inventory.Inventory) c
 }
 
 // submitDiscoveredLoadJob registers a background build job for one
-// discovered run. The job context is owned by jobs.Manager and is
+// discovered run. The job context is owned by jobs.Scheduler and is
 // intentionally independent of any request context — a build outlives
 // the HTTP request that started it. The parent ctx only plumbs through
-// logger/values via context.WithoutCancel inside jobs.Manager.Submit.
+// logger/values via context.WithoutCancel inside jobs.Scheduler.Submit.
 func (h *Handlers) submitDiscoveredLoadJob(parent context.Context, composite inventory.ID, disc inventory.Inventory) (jobs.Job, error) {
 	job, err := h.jobMgr.Submit(parent, composite, jobs.KindBuild, func(ctx context.Context, report func(jobs.Update)) error {
 		return h.discovery.LoadWith(ctx, disc, func(stage string, done, total int64) {

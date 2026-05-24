@@ -70,7 +70,7 @@ type Server struct {
 	invStore    *inventory.Store
 	configStore *inventory.ConfigStore
 	jobStore    *jobs.Store
-	jobMgr      *jobs.Manager
+	jobMgr      *jobs.Scheduler
 	bldr        *loader.Loader
 	tracker     *budget.Tracker
 	autoloader  *autoload.AutoLoader
@@ -92,7 +92,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	configStore := inventory.NewConfigStore(cfg.DB)
 	jobStore := jobs.NewStore(cfg.DB)
 	jobBus := jobs.NewBus(64)
-	jobMgr := jobs.NewManager(jobStore, jobBus)
+	jobMgr := jobs.NewScheduler(jobStore, jobBus)
 	jobMgr.SetLogger(cfg.Logger)
 	mgr := inventory.NewManager()
 	mgr.SetStore(invStore)

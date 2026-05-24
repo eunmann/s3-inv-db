@@ -13,7 +13,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/jobs"
 )
 
-func newJobsHandlers(t *testing.T) (*handlers.Handlers, *jobs.Manager) {
+func newJobsHandlers(t *testing.T) (*handlers.Handlers, *jobs.Scheduler) {
 	t.Helper()
 	invMgr := inventory.NewManager()
 	t.Cleanup(func() { _ = invMgr.Close() })

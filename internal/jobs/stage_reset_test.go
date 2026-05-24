@@ -14,7 +14,7 @@ import (
 // "Building 10/10 · 0s remaining" (carried over from a just-finished
 // Downloading stage) until the next chunk update lands.
 func TestManager_ReportResetsProgressOnStageChange(t *testing.T) {
-	mgr, store, _ := newManager(t)
+	mgr, store, _ := newScheduler(t)
 
 	step := make(chan struct{})
 	done := make(chan struct{})

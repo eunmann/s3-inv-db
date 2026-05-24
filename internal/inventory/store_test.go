@@ -51,7 +51,7 @@ func TestStore_UpsertRoundTrip(t *testing.T) {
 // TestStore_LoadDurationPersists pins the regression: a run's
 // load duration must survive a Store round-trip so the inventories
 // page can show "loaded in …" after a server restart, even for
-// auto-loaded runs that bypass jobs.Manager and have no fallback in
+// auto-loaded runs that bypass jobs.Scheduler and have no fallback in
 // the JobStore.
 func TestStore_LoadDurationPersists(t *testing.T) {
 	s := openStore(t)

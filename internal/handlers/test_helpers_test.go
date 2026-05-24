@@ -33,7 +33,7 @@ func newWiredHandlers(t *testing.T, mgr *inventory.Manager, opts ...handlers.Opt
 	}
 	jobStore := jobs.NewStore(db)
 	jobBus := jobs.NewBus(8)
-	jobMgr := jobs.NewManager(jobStore, jobBus)
+	jobMgr := jobs.NewScheduler(jobStore, jobBus)
 	configStore := inventory.NewConfigStore(db)
 	tracker := budget.New(0, 0)
 

@@ -6,7 +6,7 @@ import "sync"
 type CancelFunc func()
 
 // Bus is a tiny fan-out for job snapshots. Publish is non-blocking — a
-// slow subscriber drops events rather than stalling Manager.
+// slow subscriber drops events rather than stalling Scheduler.
 type Bus struct {
 	subs    map[chan Job]struct{}
 	bufSize int

@@ -28,7 +28,7 @@ func (h *Handlers) RenderHTMLPartialForTest(w http.ResponseWriter, r *http.Reque
 }
 
 // JobManagerForTest returns the JobManager wired into the handler.
-func (h *Handlers) JobManagerForTest() *jobs.Manager { return h.jobMgr }
+func (h *Handlers) JobManagerForTest() *jobs.Scheduler { return h.jobMgr }
 
 // ManagerForTest returns the inventory Manager wired into the handler.
 func (h *Handlers) ManagerForTest() *inventory.Manager { return h.manager }

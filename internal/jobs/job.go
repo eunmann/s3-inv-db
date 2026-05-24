@@ -1,5 +1,5 @@
 // Package jobs runs inventory-load and inventory-build work
-// asynchronously. A Manager owns the in-memory registry of live jobs +
+// asynchronously. A Scheduler owns the in-memory registry of live jobs +
 // their cancel handles, a Store persists the latest snapshot of each
 // job for cross-restart visibility, and a Bus fans out state changes
 // to subscribers (the SSE handler today).

@@ -137,7 +137,7 @@ type Info struct {
 	// load (StateLoading → StateLoaded transition). Persisted to SQLite
 	// so a server restart preserves it for runs that are still in
 	// StateLoaded. Surfaced to the UI so auto-loaded runs (which do not
-	// go through jobs.Manager and therefore have no JobStore record)
+	// go through jobs.Scheduler and therefore have no JobStore record)
 	// still show a load time.
 	LoadDuration time.Duration `json:"load_duration_ns,omitempty"`
 	Pinned       bool          `json:"pinned"`

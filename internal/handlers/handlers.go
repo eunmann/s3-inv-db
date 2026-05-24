@@ -36,7 +36,7 @@ type Handlers struct {
 	configStore              *inventory.ConfigStore
 	tracker                  *budget.Tracker
 	renderer                 *templates.Renderer
-	jobMgr                   *jobs.Manager
+	jobMgr                   *jobs.Scheduler
 	jobStore                 *jobs.Store
 	jobBus                   *jobs.Bus
 	s3SourceURI              string
@@ -148,7 +148,7 @@ func New(
 	mgr *inventory.Manager,
 	renderer *templates.Renderer,
 	priceTable pricing.PriceTable,
-	jobMgr *jobs.Manager,
+	jobMgr *jobs.Scheduler,
 	jobStore *jobs.Store,
 	jobBus *jobs.Bus,
 	configStore *inventory.ConfigStore,
