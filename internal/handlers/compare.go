@@ -282,14 +282,14 @@ func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Requ
 // running through pagination on a discarded result.
 func (h *Handlers) computeCompareLevel(ctx context.Context, opts compareViewOptions) (*CompareLevelView, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("compare level: %w", err)
 	}
 	start := time.Now()
 	var view CompareLevelView
 	err := h.manager.WithTwoIndexes(ctx, opts.from, opts.to, func(a, b *indexread.Index) error {
 		data := inventory.CompareLevel(a, b, opts.prefix)
 		if err := ctx.Err(); err != nil {
-			return err
+			return fmt.Errorf("compare walk: %w", err)
 		}
 		view.NotFound = data.Self.NotFoundInA && data.Self.NotFoundInB
 		view.Self = h.buildCompareSelfView(data.Self)
@@ -298,7 +298,7 @@ func (h *Handlers) computeCompareLevel(ctx context.Context, opts compareViewOpti
 		for i := range data.Children {
 			if i%ctxCheckEvery == 0 {
 				if err := ctx.Err(); err != nil {
-					return err
+					return fmt.Errorf("compare view build: %w", err)
 				}
 			}
 			c := h.buildCompareChildView(&data.Children[i])

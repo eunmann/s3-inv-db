@@ -524,7 +524,7 @@ func (m *Catalog) WithIndex(id ID, fn func(*indexread.Index) error) error {
 // already cancelled.
 func (m *Catalog) WithTwoIndexes(ctx context.Context, idA, idB ID, fn func(a, b *indexread.Index) error) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return fmt.Errorf("with two indexes: %w", err)
 	}
 	m.mu.RLock()
 	invA, okA := m.inventories[idA]
