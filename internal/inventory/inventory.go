@@ -123,6 +123,7 @@ type Info struct {
 	LoadedAt             time.Time `json:"loaded_at,omitzero"`
 	LastAccessedAt       time.Time `json:"last_accessed_at,omitzero"`
 	AutoLoadBackoffUntil time.Time `json:"auto_load_backoff_until,omitzero"`
+	LastAutoLoadFailedAt time.Time `json:"last_auto_load_failed_at,omitzero"`
 	UserUnloadedAt       time.Time `json:"user_unloaded_at,omitzero"`
 	Name                 string    `json:"name"`
 	Path                 string    `json:"path"`

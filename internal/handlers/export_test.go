@@ -33,6 +33,9 @@ func (h *Handlers) JobManagerForTest() *jobs.Scheduler { return h.jobMgr }
 // ManagerForTest returns the inventory Manager wired into the handler.
 func (h *Handlers) ManagerForTest() *inventory.Catalog { return h.manager }
 
+// ConfigStoreForTest returns the ConfigStore wired into the handler.
+func (h *Handlers) ConfigStoreForTest() *inventory.ConfigStore { return h.configStore }
+
 // BuildCompareSelfViewForTest exposes buildCompareSelfView so external
 // tests can pin the formatted view shape without going through HTTP.
 func (h *Handlers) BuildCompareSelfViewForTest(self inventory.CompareSelf) CompareSelfView {

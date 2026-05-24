@@ -44,8 +44,9 @@ func TestManagerRecordAutoLoadFailure(t *testing.T) {
 	if err := m.Register(t.Context(), id, "n", "p"); err != nil {
 		t.Fatal(err)
 	}
-	retry := time.Now().Add(5 * time.Minute)
-	if err := m.RecordAutoLoadFailure(t.Context(), id, "boom", retry); err != nil {
+	failedAt := time.Now()
+	retry := failedAt.Add(5 * time.Minute)
+	if err := m.RecordAutoLoadFailure(t.Context(), id, "boom", failedAt, retry); err != nil {
 		t.Fatalf("RecordAutoLoadFailure: %v", err)
 	}
 	info, _ := m.Get(id)
@@ -58,9 +59,12 @@ func TestManagerRecordAutoLoadFailure(t *testing.T) {
 	if !info.AutoLoadBackoffUntil.Equal(retry) {
 		t.Errorf("BackoffUntil = %v, want %v", info.AutoLoadBackoffUntil, retry)
 	}
+	if !info.LastAutoLoadFailedAt.Equal(failedAt) {
+		t.Errorf("LastAutoLoadFailedAt = %v, want %v", info.LastAutoLoadFailedAt, failedAt)
+	}
 
 	// Subsequent failure increments, not doubles.
-	if err := m.RecordAutoLoadFailure(t.Context(), id, "again", retry); err != nil {
+	if err := m.RecordAutoLoadFailure(t.Context(), id, "again", failedAt, retry); err != nil {
 		t.Fatalf("second RecordAutoLoadFailure: %v", err)
 	}
 	if info, _ := m.Get(id); info.AutoLoadFailureCount != 2 {

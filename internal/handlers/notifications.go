@@ -54,7 +54,7 @@ func (h *Handlers) collectNotifications(ctx context.Context) []Notification {
 			Title:   title,
 			Message: info.Error,
 			Target:  string(info.ID),
-			At:      info.AutoLoadBackoffUntil,
+			At:      info.LastAutoLoadFailedAt,
 		})
 	}
 	slices.SortFunc(out, func(a, b Notification) int { return b.At.Compare(a.At) })

@@ -364,11 +364,12 @@ func (m *Catalog) SetPinned(ctx context.Context, id ID, pinned bool) error {
 	return m.mirror(ctx, inv.info)
 }
 
-// RecordAutoLoadFailure marks an auto-load attempt as failed and
-// stamps the next-eligible time. Used by the auto-loader to apply
-// exponential backoff without flipping state to StateError (which is
-// reserved for full-load failures).
-func (m *Catalog) RecordAutoLoadFailure(ctx context.Context, id ID, errStr string, retryAt time.Time) error {
+// RecordAutoLoadFailure marks an auto-load attempt as failed, stamping
+// both when it happened (failedAt) and when the next attempt is eligible
+// (retryAt). FailedAt is what notification ordering sorts by; retryAt
+// gates the next auto-load attempt. Pass time.Time{} for failedAt if the
+// caller doesn't have a meaningful timestamp (legacy callers).
+func (m *Catalog) RecordAutoLoadFailure(ctx context.Context, id ID, errStr string, failedAt, retryAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	inv, exists := m.inventories[id]
@@ -377,6 +378,7 @@ func (m *Catalog) RecordAutoLoadFailure(ctx context.Context, id ID, errStr strin
 	}
 	inv.info.AutoLoadFailureCount++
 	inv.info.AutoLoadBackoffUntil = retryAt
+	inv.info.LastAutoLoadFailedAt = failedAt
 	inv.info.Error = errStr
 
 	return m.mirror(ctx, inv.info)
