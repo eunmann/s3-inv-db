@@ -542,13 +542,20 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int,
 	const initialAggCapacity = 10_000
 	agg := NewAggregator(initialAggCapacity, p.config.MaxDepth)
 	defer func() {
-		if agg.PrefixCount() > 0 {
-			if err := p.flushAggregator(ctx, agg, workerID); err != nil {
-				zerolog.Ctx(ctx).Error().
-					Int("worker_id", workerID).
-					Err(err).
-					Msg("final flush failed")
-			}
+		if agg.PrefixCount() <= 0 {
+			return
+		}
+		// Final spill of accumulated rows must run to completion even
+		// when ctx has been cancelled. Without WithoutCancel, a
+		// cancellation racing with end-of-input would drop the residue
+		// silently — the aggregator memory is freed, but the rows
+		// never reach a run file.
+		flushCtx := context.WithoutCancel(ctx)
+		if err := p.flushAggregator(flushCtx, agg, workerID); err != nil {
+			zerolog.Ctx(ctx).Error().
+				Int("worker_id", workerID).
+				Err(err).
+				Msg("final flush failed")
 		}
 	}()
 
