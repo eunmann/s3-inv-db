@@ -520,7 +520,12 @@ func (m *Catalog) WithIndex(id ID, fn func(*indexread.Index) error) error {
 // the same pair in opposite directions cannot deadlock. When idA == idB
 // only one lock is taken and the same index pointer is passed in both
 // positions, letting callers treat self-compare as a degenerate case.
-func (m *Catalog) WithTwoIndexes(idA, idB ID, fn func(a, b *indexread.Index) error) error {
+// Returns ctx.Err() early without touching the catalog if ctx is
+// already cancelled.
+func (m *Catalog) WithTwoIndexes(ctx context.Context, idA, idB ID, fn func(a, b *indexread.Index) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.RLock()
 	invA, okA := m.inventories[idA]
 	invB, okB := m.inventories[idB]

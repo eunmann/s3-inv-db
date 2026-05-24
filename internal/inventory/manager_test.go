@@ -157,7 +157,7 @@ func TestManagerWithTwoIndexes_NotFound(t *testing.T) {
 	defer m.Close()
 	_ = m.Register(t.Context(), "a", "A", "/p")
 
-	err := m.WithTwoIndexes("a", "b", func(*indexread.Index, *indexread.Index) error { return nil })
+	err := m.WithTwoIndexes(t.Context(), "a", "b", func(*indexread.Index, *indexread.Index) error { return nil })
 	if !errors.Is(err, inventory.ErrNotFound) {
 		t.Errorf("WithTwoIndexes(a, missing) error = %v, want inventory.ErrNotFound", err)
 	}
@@ -169,7 +169,7 @@ func TestManagerWithTwoIndexes_NotLoaded(t *testing.T) {
 	_ = m.Register(t.Context(), "a", "A", "/p")
 	_ = m.Register(t.Context(), "b", "B", "/q")
 
-	err := m.WithTwoIndexes("a", "b", func(*indexread.Index, *indexread.Index) error { return nil })
+	err := m.WithTwoIndexes(t.Context(), "a", "b", func(*indexread.Index, *indexread.Index) error { return nil })
 	if !errors.Is(err, inventory.ErrNotLoaded) {
 		t.Errorf("WithTwoIndexes neither loaded error = %v, want inventory.ErrNotLoaded", err)
 	}

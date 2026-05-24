@@ -277,16 +277,30 @@ func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Requ
 // computeCompareLevel borrows both indexes and assembles the rendered view
 // with cost deltas, signs, and human-formatted numbers. Filters, sorts,
 // and paginates the children before returning so the caller doesn't
-// have to.
-func (h *Handlers) computeCompareLevel(_ context.Context, opts compareViewOptions) (*CompareLevelView, error) {
+// have to. Honors ctx at entry, after the index walk, and periodically
+// during view-construction so a cancelled request can bail without
+// running through pagination on a discarded result.
+func (h *Handlers) computeCompareLevel(ctx context.Context, opts compareViewOptions) (*CompareLevelView, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 	var view CompareLevelView
-	err := h.manager.WithTwoIndexes(opts.from, opts.to, func(a, b *indexread.Index) error {
+	err := h.manager.WithTwoIndexes(ctx, opts.from, opts.to, func(a, b *indexread.Index) error {
 		data := inventory.CompareLevel(a, b, opts.prefix)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		view.NotFound = data.Self.NotFoundInA && data.Self.NotFoundInB
 		view.Self = h.buildCompareSelfView(data.Self)
 		view.Children = make([]CompareChildView, 0, len(data.Children))
+		const ctxCheckEvery = 1024
 		for i := range data.Children {
+			if i%ctxCheckEvery == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
 			c := h.buildCompareChildView(&data.Children[i])
 			view.Children = append(view.Children, c)
 			switch data.Children[i].Status {
@@ -658,7 +672,7 @@ func (h *Handlers) CompareLevelAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var data inventory.CompareLevelData
-	err := h.manager.WithTwoIndexes(from, to, func(a, b *indexread.Index) error {
+	err := h.manager.WithTwoIndexes(r.Context(), from, to, func(a, b *indexread.Index) error {
 		data = inventory.CompareLevel(a, b, prefix)
 
 		return nil

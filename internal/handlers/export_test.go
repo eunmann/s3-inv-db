@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
@@ -35,6 +36,29 @@ func (h *Handlers) ManagerForTest() *inventory.Catalog { return h.manager }
 
 // ConfigStoreForTest returns the ConfigStore wired into the handler.
 func (h *Handlers) ConfigStoreForTest() *inventory.ConfigStore { return h.configStore }
+
+// CompareViewOptionsForTest builds an opaque options struct for tests
+// that need to drive ComputeCompareLevelForTest directly.
+type CompareViewOptionsForTest struct {
+	From, To, Prefix string
+	SortBy, Dir      string
+	Page, PageSize   int
+	HideUnchanged    bool
+}
+
+// ComputeCompareLevelForTest exposes computeCompareLevel for tests.
+func (h *Handlers) ComputeCompareLevelForTest(ctx context.Context, opts CompareViewOptionsForTest) (*CompareLevelView, error) {
+	return h.computeCompareLevel(ctx, compareViewOptions{
+		from:          inventory.ID(opts.From),
+		to:            inventory.ID(opts.To),
+		prefix:        opts.Prefix,
+		sortBy:        opts.SortBy,
+		dir:           opts.Dir,
+		page:          opts.Page,
+		pageSize:      opts.PageSize,
+		hideUnchanged: opts.HideUnchanged,
+	})
+}
 
 // BuildCompareSelfViewForTest exposes buildCompareSelfView so external
 // tests can pin the formatted view shape without going through HTTP.
