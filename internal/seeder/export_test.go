@@ -24,7 +24,7 @@ func MD5Hex(b []byte) string { return md5Hex(b) }
 func RunStampUUID(stamp time.Time, index int) string { return runStampUUID(stamp, index) }
 
 // TierToS3Columns exposes tierToS3Columns for tests.
-func TierToS3Columns(m *tiers.Mapping, id tiers.ID) S3InventoryColumns {
+func TierToS3Columns(m *tiers.Mapping, id tiers.ID) (S3InventoryColumns, error) {
 	return tierToS3Columns(m, id)
 }
 

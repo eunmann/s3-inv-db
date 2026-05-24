@@ -3,11 +3,16 @@ package tiers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// ErrUnknownTierID is returned when a caller looks up a tier id that
+// is outside the valid range.
+var ErrUnknownTierID = errors.New("unknown tier id")
 
 // ID represents a logical tier identifier.
 type ID uint8
@@ -136,13 +141,13 @@ func Resolve(id ID, size uint64) ID {
 	return id
 }
 
-// ByID returns tier info by ID.
-func (m *Mapping) ByID(id ID) Info {
+// ByID returns tier info by ID. The bool is false when id is out of range.
+func (m *Mapping) ByID(id ID) (Info, bool) {
 	if int(id) < len(m.Tiers) {
-		return m.Tiers[id]
+		return m.Tiers[id], true
 	}
 
-	return Info{ID: id, Name: "UNKNOWN", FilePrefix: "unknown"}
+	return Info{}, false
 }
 
 // TierManifest is written to tiers.json in the index directory.
@@ -157,7 +162,11 @@ func WriteManifest(dir string, presentTiers []ID) error {
 		Tiers: make([]Info, 0, len(presentTiers)),
 	}
 	for _, id := range presentTiers {
-		manifest.Tiers = append(manifest.Tiers, mapping.ByID(id))
+		info, ok := mapping.ByID(id)
+		if !ok {
+			return fmt.Errorf("%w: %d", ErrUnknownTierID, id)
+		}
+		manifest.Tiers = append(manifest.Tiers, info)
 	}
 
 	data, err := json.MarshalIndent(manifest, "", "  ")
