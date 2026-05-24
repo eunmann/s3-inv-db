@@ -3,12 +3,25 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/rs/zerolog"
 )
+
+// clientIPFromRequest returns the remote IP from RemoteAddr stripped
+// of its port. Best-effort: malformed inputs collapse to the literal
+// RemoteAddr so we never key on the empty string.
+func clientIPFromRequest(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+
+	return host
+}
 
 // jobEvent is the JSON envelope the SSE stream emits. Defined here
 // (rather than reusing jobs.Job directly) so the wire format is owned
@@ -63,6 +76,17 @@ func (h *Handlers) JobsStream(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+
+		return
+	}
+
+	// Per-IP cap: each subscriber holds a buffered channel inside the
+	// jobs.Bus; unbounded subscriptions per client are an OOM vector.
+	ip := clientIPFromRequest(r)
+	count := h.acquireSSESlot(ip)
+	defer h.releaseSSESlot(ip)
+	if count > int64(h.sseMaxConnsPerIP) {
+		http.Error(w, "too many SSE connections", http.StatusTooManyRequests)
 
 		return
 	}

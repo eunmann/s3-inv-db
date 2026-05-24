@@ -3,6 +3,8 @@ package handlers
 import (
 	"bytes"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/budget"
@@ -17,6 +19,14 @@ import (
 // passed. 15s is small enough to free a stalled SSE slot in well under
 // Chrome's ~60s TCP idle window, large enough to be cheap.
 const defaultSSEHeartbeat = 15 * time.Second
+
+// defaultSSEMaxConnsPerIP caps concurrent SSE subscribers from one
+// remote address. Each subscriber holds a 64-buffered channel allocated
+// by jobs.Bus.Subscribe, so the worst-case memory blast radius is
+// bounded by (clients × max-per-ip × buffer × per-event size). Browsers
+// rarely need more than one per tab; 8 keeps a few tabs working without
+// being a DoS amplifier.
+const defaultSSEMaxConnsPerIP = 8
 
 // CacheStore is the loader subset handlers actually use: cache size
 // for the dashboard + cache removal on unload. Narrower than
@@ -46,6 +56,12 @@ type Handlers struct {
 
 	discoverer inventory.Discoverer
 	indexBldr  inventory.IndexBuilder
+
+	sseMaxConnsPerIP int
+	// sseConnsByIP holds *atomic.Int64 keyed by remote IP. sync.Map is
+	// fine here: writes happen once per connection start/end, reads are
+	// rare, and the keyspace is bounded by the number of distinct IPs.
+	sseConnsByIP sync.Map
 }
 
 // Option configures optional Handlers fields. See WithLoader,
@@ -94,6 +110,38 @@ func WithSSEHeartbeat(d time.Duration) Option {
 			h.sseHeartbeat = d
 		}
 	}
+}
+
+// WithSSEMaxConnsPerIP caps how many concurrent SSE subscribers one
+// remote address may hold. Values <= 0 are ignored.
+func WithSSEMaxConnsPerIP(n int) Option {
+	return func(h *Handlers) {
+		if n > 0 {
+			h.sseMaxConnsPerIP = n
+		}
+	}
+}
+
+// acquireSSESlot atomically increments the per-IP counter and returns
+// the new count. Caller must invoke releaseSSESlot on the same ip when
+// the connection ends — even if the count exceeds the cap.
+func (h *Handlers) acquireSSESlot(ip string) int64 {
+	val, _ := h.sseConnsByIP.LoadOrStore(ip, &atomic.Int64{})
+	counter, _ := val.(*atomic.Int64)
+
+	return counter.Add(1)
+}
+
+// releaseSSESlot decrements the per-IP counter. Safe to call after
+// acquireSSESlot; mismatched calls would underflow but the counter is
+// signed so the system still recovers.
+func (h *Handlers) releaseSSESlot(ip string) {
+	val, ok := h.sseConnsByIP.Load(ip)
+	if !ok {
+		return
+	}
+	counter, _ := val.(*atomic.Int64)
+	counter.Add(-1)
 }
 
 // WithDiscoveryRefreshInterval sets the cadence the dashboard reports
@@ -167,15 +215,16 @@ func New(
 	opts ...Option,
 ) *Handlers {
 	h := &Handlers{
-		manager:      mgr,
-		renderer:     renderer,
-		priceTable:   priceTable,
-		jobMgr:       jobMgr,
-		jobStore:     jobStore,
-		jobBus:       jobBus,
-		configStore:  configStore,
-		tracker:      tracker,
-		sseHeartbeat: defaultSSEHeartbeat,
+		manager:          mgr,
+		renderer:         renderer,
+		priceTable:       priceTable,
+		jobMgr:           jobMgr,
+		jobStore:         jobStore,
+		jobBus:           jobBus,
+		configStore:      configStore,
+		tracker:          tracker,
+		sseHeartbeat:     defaultSSEHeartbeat,
+		sseMaxConnsPerIP: defaultSSEMaxConnsPerIP,
 	}
 	for _, opt := range opts {
 		opt(h)

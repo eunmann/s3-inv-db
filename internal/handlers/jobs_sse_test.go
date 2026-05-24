@@ -113,3 +113,41 @@ func newHandlersWithHeartbeat(t *testing.T, hb time.Duration) *handlers.Handlers
 
 	return newWiredHandlers(t, invMgr, handlers.WithSSEHeartbeat(hb))
 }
+
+// TestJobsStream_PerIPCap guards the SSE rate limit. Each subscriber
+// keeps a buffered channel in jobs.Bus alive for the lifetime of the
+// connection; without a cap one client can pin unbounded memory.
+func TestJobsStream_PerIPCap(t *testing.T) {
+	h := newWiredHandlers(t, nil, handlers.WithSSEMaxConnsPerIP(1))
+
+	srv := httptest.NewServer(http.HandlerFunc(h.JobsStream))
+	t.Cleanup(srv.Close)
+
+	// First connection: should succeed. Keep the body open to occupy a slot.
+	//nolint:noctx // streaming connection that intentionally has no deadline
+	resp1, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("first connect: %v", err)
+	}
+	t.Cleanup(func() { _ = resp1.Body.Close() })
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first connect status = %d, want 200", resp1.StatusCode)
+	}
+	// Wait until the first connection has actually been registered by
+	// the server. Reading a byte forces a roundtrip past acquireSSESlot.
+	buf := make([]byte, 1)
+	if _, err := resp1.Body.Read(buf); err != nil {
+		t.Fatalf("read first byte: %v", err)
+	}
+
+	// Second connection from same IP: must be refused with 429.
+	//nolint:noctx // test-local HTTP client, immediately closed below
+	resp2, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("second connect: %v", err)
+	}
+	defer func() { _ = resp2.Body.Close() }()
+	if resp2.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("second connect status = %d, want 429", resp2.StatusCode)
+	}
+}
