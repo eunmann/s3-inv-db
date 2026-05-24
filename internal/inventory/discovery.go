@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"golang.org/x/sync/singleflight"
 )
 
 // Discoverer is the subset of s3disco.Discoverer that DiscoveryService
@@ -76,12 +77,17 @@ type DiscoveryService struct {
 	bgStop        chan struct{}
 	bgClock       func() time.Time
 	cacheViews    []MergedInventory
+	refreshSF     singleflight.Group
 	bgWG          sync.WaitGroup
 	indexRatio    float64
 	cacheMu       sync.RWMutex
 	bgMu          sync.Mutex
 	cachePopulate bool
 }
+
+// refreshKey is the singleflight key for cold-start Refresh dedupe in
+// Snapshot. Constant because Refresh is process-global.
+const refreshKey = "discovery-refresh"
 
 // NewDiscoveryService constructs a service. The discoverer and builder
 // arguments may be nil, in which case Enabled() returns false.
@@ -170,8 +176,11 @@ func (s *DiscoveryService) Snapshot(ctx context.Context) ([]MergedInventory, tim
 	populated := s.cachePopulate
 	s.cacheMu.RUnlock()
 	if !populated {
-		if err := s.Refresh(ctx); err != nil {
-			return nil, time.Time{}, err
+		_, err, _ := s.refreshSF.Do(refreshKey, func() (any, error) {
+			return nil, s.Refresh(ctx)
+		})
+		if err != nil {
+			return nil, time.Time{}, fmt.Errorf("cold refresh: %w", err)
 		}
 	}
 	s.cacheMu.RLock()
