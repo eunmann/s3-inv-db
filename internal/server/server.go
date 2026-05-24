@@ -85,15 +85,10 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if cfg.DB == nil {
 		return nil, errNoDB
 	}
-	invStore, err := inventory.NewStore(cfg.DB)
+	stores, err := newStores(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("inventory store: %w", err)
+		return nil, err
 	}
-	configStore := inventory.NewConfigStore(cfg.DB)
-	jobStore := jobs.NewStore(cfg.DB)
-	jobBus := jobs.NewBus(64)
-	jobMgr := jobs.NewScheduler(jobStore, jobBus, jobs.WithLogger(cfg.Logger))
-	mgr := inventory.NewCatalog(invStore)
 
 	renderer, err := templates.New()
 	if err != nil {
@@ -101,34 +96,102 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	tracker := budget.New(cfg.MaxIndexDisk, cfg.IndexHeadroomBytes)
-	planner := budget.NewPlanner(tracker, retentionLookup(configStore, cfg.AutoLoadRetentionDefault))
-	gate := loadcontrol.New(mgr, tracker, planner)
+	planner := budget.NewPlanner(tracker, retentionLookup(stores.config, cfg.AutoLoadRetentionDefault))
+	gate := loadcontrol.New(stores.catalog, tracker, planner)
 
-	var discovery *inventory.Discovery
-	var bldr *loader.Loader
-	var s3Client *s3fetch.Client
-
-	if cfg.S3Source != "" {
-		wiring, err := newDiscoveryWiring(ctx, cfg)
-		if err != nil {
-			return nil, err
-		}
-		bldr = wiring.Loader
-		s3Client = wiring.Client
-		sizer := loadcontrol.NewManifestSizer(s3Client)
-		discovery = inventory.NewDiscovery(mgr,
-			inventory.WithBackend(wiring.Discoverer, wiring.Loader),
-			inventory.WithGate(gate.Load, sizer.ManifestSize, cfg.IndexRatio),
-		)
-		cfg.Logger.Info().
-			Str("s3_source", cfg.S3Source).
-			Str("cache_dir", cfg.CacheDir).
-			Uint64("max_index_disk_bytes", cfg.MaxIndexDisk).
-			Msg("discovery + budget configured")
-	} else {
-		discovery = inventory.NewDiscovery(mgr)
+	discovery, bldr, err := newDiscovery(ctx, cfg, stores.catalog, gate)
+	if err != nil {
+		return nil, err
 	}
 
+	h := handlers.New(
+		stores.catalog, renderer, cfg.PriceTable,
+		stores.jobs, stores.jobStore, stores.jobBus,
+		stores.config, tracker,
+		buildHandlerOptions(cfg, discovery, bldr)...,
+	)
+
+	s := &Server{
+		config:      cfg,
+		router:      chi.NewRouter(),
+		manager:     stores.catalog,
+		invStore:    stores.inv,
+		configStore: stores.config,
+		jobStore:    stores.jobStore,
+		jobMgr:      stores.jobs,
+		bldr:        bldr,
+		tracker:     tracker,
+		autoloader:  newAutoLoader(cfg, discovery, stores.config, stores.catalog),
+		discovery:   discovery,
+		handlers:    h,
+	}
+
+	s.setupRoutes()
+	// Startup-time recovery/backfill should complete even if the caller's
+	// ctx is later cancelled — context.WithoutCancel inherits any
+	// values (logger, request id) but drops cancellation.
+	startupCtx := context.WithoutCancel(ctx)
+	s.recover(startupCtx, cfg.Logger)
+	s.backfillTracker(startupCtx, cfg.Logger)
+
+	return s, nil
+}
+
+// serverStores bundles the persistence-backed singletons New constructs
+// from cfg.DB. Pulled out so New stays readable and the wiring is
+// testable in isolation.
+type serverStores struct {
+	inv      *inventory.Store
+	config   *inventory.ConfigStore
+	jobStore *jobs.Store
+	jobBus   *jobs.Bus
+	jobs     *jobs.Scheduler
+	catalog  *inventory.Catalog
+}
+
+func newStores(cfg Config) (serverStores, error) {
+	invStore, err := inventory.NewStore(cfg.DB)
+	if err != nil {
+		return serverStores{}, fmt.Errorf("inventory store: %w", err)
+	}
+	jobStore := jobs.NewStore(cfg.DB)
+	jobBus := jobs.NewBus(jobBusBuffer)
+
+	return serverStores{
+		inv:      invStore,
+		config:   inventory.NewConfigStore(cfg.DB),
+		jobStore: jobStore,
+		jobBus:   jobBus,
+		jobs:     jobs.NewScheduler(jobStore, jobBus, jobs.WithLogger(cfg.Logger)),
+		catalog:  inventory.NewCatalog(invStore),
+	}, nil
+}
+
+// newDiscovery wires the S3-side of the server. Returns a disabled
+// Discovery (and nil loader) when --s3-source is unset.
+func newDiscovery(ctx context.Context, cfg Config, catalog *inventory.Catalog, gate *loadcontrol.Gate) (*inventory.Discovery, *loader.Loader, error) {
+	if cfg.S3Source == "" {
+		return inventory.NewDiscovery(catalog), nil, nil
+	}
+	wiring, err := newDiscoveryWiring(ctx, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	sizer := loadcontrol.NewManifestSizer(wiring.Client)
+	disc := inventory.NewDiscovery(catalog,
+		inventory.WithBackend(wiring.Discoverer, wiring.Loader),
+		inventory.WithGate(gate.Load, sizer.ManifestSize, cfg.IndexRatio),
+	)
+	cfg.Logger.Info().
+		Str("s3_source", cfg.S3Source).
+		Str("cache_dir", cfg.CacheDir).
+		Uint64("max_index_disk_bytes", cfg.MaxIndexDisk).
+		Msg("discovery + budget configured")
+
+	return disc, wiring.Loader, nil
+}
+
+func buildHandlerOptions(cfg Config, discovery *inventory.Discovery, bldr *loader.Loader) []handlers.Option {
 	refreshInterval := cfg.DiscoveryRefreshInterval
 	if refreshInterval <= 0 {
 		refreshInterval = DefaultDiscoveryRefreshInterval
@@ -144,45 +207,28 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		hopts = append(hopts, handlers.WithS3Source(cfg.S3Source))
 	}
 
-	h := handlers.New(mgr, renderer, cfg.PriceTable, jobMgr, jobStore, jobBus, configStore, tracker, hopts...)
-
-	var al *autoload.AutoLoader
-	if cfg.AutoLoad && discovery.Enabled() {
-		al = autoload.New(autoload.Config{
-			PollInterval:     cfg.PollInterval,
-			MaxConcurrency:   cfg.AutoLoadConcurrency,
-			DefaultRetention: cfg.AutoLoadRetentionDefault,
-		}, discovery, func(c context.Context, d inventory.Inventory) error {
-			return discovery.AutoLoadWith(c, d, nil)
-		}, configStore, mgr, &cfg.Logger)
-		cfg.Logger.Info().Msg("auto-loader configured")
-	}
-
-	s := &Server{
-		config:      cfg,
-		router:      chi.NewRouter(),
-		manager:     mgr,
-		invStore:    invStore,
-		configStore: configStore,
-		jobStore:    jobStore,
-		jobMgr:      jobMgr,
-		bldr:        bldr,
-		tracker:     tracker,
-		autoloader:  al,
-		discovery:   discovery,
-		handlers:    h,
-	}
-
-	s.setupRoutes()
-	// Startup-time recovery/backfill should complete even if the caller's
-	// ctx is later cancelled — context.WithoutCancel inherits any
-	// values (logger, request id) but drops cancellation.
-	startupCtx := context.WithoutCancel(ctx)
-	s.recover(startupCtx, cfg.Logger)
-	s.backfillTracker(startupCtx, cfg.Logger)
-
-	return s, nil
+	return hopts
 }
+
+func newAutoLoader(cfg Config, discovery *inventory.Discovery, configStore *inventory.ConfigStore, catalog *inventory.Catalog) *autoload.AutoLoader {
+	if !cfg.AutoLoad || !discovery.Enabled() {
+		return nil
+	}
+	al := autoload.New(autoload.Config{
+		PollInterval:     cfg.PollInterval,
+		MaxConcurrency:   cfg.AutoLoadConcurrency,
+		DefaultRetention: cfg.AutoLoadRetentionDefault,
+	}, discovery, func(c context.Context, d inventory.Inventory) error {
+		return discovery.AutoLoadWith(c, d, nil)
+	}, configStore, catalog, &cfg.Logger)
+	cfg.Logger.Info().Msg("auto-loader configured")
+
+	return al
+}
+
+// jobBusBuffer is the capacity of the job-events bus the SSE handler
+// drains. Sized for headroom between successive UI ticks.
+const jobBusBuffer = 64
 
 // retentionLookup returns a budget.RetentionFunc that resolves
 // per-configuration retention from the ConfigStore, falling back to
