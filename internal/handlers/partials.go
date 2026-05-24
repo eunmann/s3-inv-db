@@ -42,8 +42,12 @@ func (h *Handlers) UnloadInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 	h.renderInventoryRow(w, r, id)
 }
 
-// DeleteInventoryRowPartial removes an inventory and returns an empty body
-// so htmx's outerHTML swap removes the row.
+// DeleteInventoryRowPartial removes an inventory and returns an empty
+// body so htmx's outerHTML swap removes the row. ErrNotFound is folded
+// into success on purpose: the user's intent is "make this row go
+// away", and the swap fires regardless of whether the backing record
+// existed — returning 404 would prevent the swap and leave the stale
+// row visible.
 func (h *Handlers) DeleteInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := h.manager.Remove(r.Context(), id); err != nil && !errors.Is(err, inventory.ErrNotFound) {
@@ -114,12 +118,9 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 
 		return
 	}
-	// Headers must commit BEFORE WriteHeader, otherwise the Set on
-	// Content-Type inside renderDiscoveredRowFrom is a no-op and the
-	// browser falls back to Go's body sniffing.
-	w.Header().Set("Content-Type", contentTypeHTML)
-	w.WriteHeader(http.StatusAccepted)
-	h.renderDiscoveredRowFrom(w, r, disc)
+	// Render to a buffer first via the *Status variant — a template
+	// failure must surface as a clean 500, not a 202 with an error body.
+	h.renderDiscoveredRowFromStatus(w, r, http.StatusAccepted, disc)
 }
 
 // CancelJob cancels an in-flight job by ID. 404 if not currently live.
@@ -304,9 +305,17 @@ func manifestMetaSegment(fileCount int, totalBytes int64) string {
 }
 
 // renderDiscoveredRowFrom renders a discovered_row using a pre-fetched
-// disc value. Looks up the latest job (if jobs are configured) so the
-// row can render progress / cancel / retry.
+// disc value with HTTP 200. Looks up the latest job (if jobs are
+// configured) so the row can render progress / cancel / retry.
 func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Request, disc inventory.Inventory) {
+	h.renderDiscoveredRowFromStatus(w, r, http.StatusOK, disc)
+}
+
+// renderDiscoveredRowFromStatus is renderDiscoveredRowFrom with an
+// explicit status code. The status only commits after the template
+// renders successfully — a render failure surfaces as 500, not a 5xx
+// body attached to a 2xx response.
+func (h *Handlers) renderDiscoveredRowFromStatus(w http.ResponseWriter, r *http.Request, status int, disc inventory.Inventory) {
 	view := DiscoveredRowView{
 		MergedInventory: inventory.MergedInventory{Inventory: disc, State: inventory.StateNotLoaded},
 	}
@@ -338,7 +347,7 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 	view.CacheBytes, view.CacheBytesH = cs.Bytes, cs.Human
 	view.LoadDurationH = loadDurationLabel(view.LoadDuration, view.LatestJob)
 	populateRowDerived(&view)
-	h.renderHTMLPartial(w, r, "discovered_row.html", "render discovered row", view)
+	h.renderHTMLPartialStatus(w, r, status, "discovered_row.html", "render discovered row", view)
 }
 
 // loadDurationLabel renders the wall-clock load time of the most recent

@@ -127,6 +127,14 @@ func (h *Handlers) renderHTML(w http.ResponseWriter, r *http.Request, name, logM
 
 // renderHTMLPartial is renderHTML for partial templates (htmx fragments).
 func (h *Handlers) renderHTMLPartial(w http.ResponseWriter, r *http.Request, name, logMsg string, data any) {
+	h.renderHTMLPartialStatus(w, r, http.StatusOK, name, logMsg, data)
+}
+
+// renderHTMLPartialStatus renders to a buffer first so a template
+// failure can surface as a clean 500 instead of corrupting an already-
+// committed 202/etc. Callers that need a non-200 status must use this
+// helper rather than calling WriteHeader before renderHTMLPartial.
+func (h *Handlers) renderHTMLPartialStatus(w http.ResponseWriter, r *http.Request, status int, name, logMsg string, data any) {
 	var buf bytes.Buffer
 	if err := h.renderer.RenderPartial(&buf, name, data); err != nil {
 		zerolog.Ctx(r.Context()).Error().Err(err).Msg(logMsg)
@@ -135,6 +143,9 @@ func (h *Handlers) renderHTMLPartial(w http.ResponseWriter, r *http.Request, nam
 		return
 	}
 	w.Header().Set("Content-Type", contentTypeHTML)
+	if status != http.StatusOK {
+		w.WriteHeader(status)
+	}
 	_, _ = buf.WriteTo(w)
 }
 
