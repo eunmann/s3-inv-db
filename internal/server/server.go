@@ -295,9 +295,6 @@ var (
 // endpoint fails fast.
 const s3StartupTimeout = 30 * time.Second
 
-// format.DirPerm is the directory mode used when ensuring the on-disk
-// inventory cache directory exists. 0o750 satisfies gosec G301.
-
 // discoveryWiring bundles the three values newDiscoveryWiring builds so
 // callers don't end up with a 4-arity return that invites `_, _, _, err`.
 type discoveryWiring struct {

@@ -29,7 +29,7 @@ var (
 	ErrUsage           = errors.New("usage: s3-inv-db <command> [options]\ncommands: build, query")
 	ErrUnknownCommand  = errors.New("unknown command")
 	ErrOutRequired     = errors.New("--out is required")
-	ErrManifestRequire = errors.New("--s3-manifest is required")
+	ErrManifestRequired = errors.New("--s3-manifest is required")
 	ErrIndexRequired   = errors.New("--index is required")
 	ErrPrefixRequired  = errors.New("--prefix is required")
 	ErrPrefixNotFound  = errors.New("prefix not found")
@@ -95,7 +95,7 @@ func runBuild(args []string) error {
 		return ErrOutRequired
 	}
 	if *s3Manifest == "" {
-		return ErrManifestRequire
+		return ErrManifestRequired
 	}
 
 	return runBuildExtSort(*outDir, *s3Manifest, *maxDepth, *prefixDictionary, baseLogger)

@@ -21,8 +21,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// ErrNegativeSize is returned when a human size string parses to a negative value.
-var ErrNegativeSize = errors.New("negative size")
+// errNegativeSize is returned when a human size string parses to a negative value.
+var errNegativeSize = errors.New("negative size")
 
 // Server-flag defaults split out as constants so the call-site reads
 // declaratively and `mnd` lint stops flagging the literals.
@@ -259,7 +259,7 @@ func parseSize(s string) (uint64, error) {
 		return 0, fmt.Errorf("parse %q: %w", s, err)
 	}
 	if n < 0 {
-		return 0, fmt.Errorf("%w %q", ErrNegativeSize, s)
+		return 0, fmt.Errorf("%w %q", errNegativeSize, s)
 	}
 
 	return uint64(n * float64(mult)), nil
