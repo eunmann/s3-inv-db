@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
+	"github.com/eunmann/s3-inv-db/internal/dbtest"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"

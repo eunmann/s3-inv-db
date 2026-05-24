@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/dbtest"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
 	"github.com/rs/zerolog"
 )
 

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/dbtest"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
 )
 
 func openStore(t *testing.T) *inventory.Store {

@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
+	"github.com/eunmann/s3-inv-db/internal/dbtest"
 )
 
 // openTestDB opens a fresh, migrated in-memory SQLite database for
