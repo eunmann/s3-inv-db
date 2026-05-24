@@ -33,7 +33,7 @@ func buildLoadedTestHandlers(t *testing.T) *handlers.Handlers {
 		t.Fatalf("seed: %v", err)
 	}
 
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog()
 	t.Cleanup(func() { _ = mgr.Close() })
 
 	h := newWiredHandlers(t, mgr)
@@ -250,7 +250,7 @@ func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 	}
 	indexPath := filepath.Join(tmp, "inv-001")
 
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog()
 	t.Cleanup(func() { _ = mgr.Close() })
 	h := newWiredHandlers(t, mgr)
 
@@ -337,7 +337,7 @@ func TestLoadInventoryAPI_AlreadyLoaded(t *testing.T) {
 // TestLoadInventoryAPI_BadPath verifies the error-state path: a bad
 // inventory path produces a 500, after which a follow-up reload works.
 func TestLoadInventoryAPI_BadPath(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog()
 	t.Cleanup(func() { _ = mgr.Close() })
 	h := newWiredHandlers(t, mgr)
 
@@ -381,7 +381,7 @@ func TestManagerWithIndex_NoUseAfterCloseUnderUnload(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog()
 	t.Cleanup(func() { _ = mgr.Close() })
 
 	const id = "racy"
@@ -477,7 +477,7 @@ func TestCompareLevelAPI_Integration_HappyPath(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog()
 	t.Cleanup(func() { _ = mgr.Close() })
 	h := newWiredHandlers(t, mgr)
 

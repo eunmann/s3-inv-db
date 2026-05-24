@@ -67,11 +67,11 @@ func (f *fakeLoader) AutoLoad(_ context.Context, disc inventory.Inventory) error
 	return nil
 }
 
-func newFakeStores(t *testing.T) (*inventory.ConfigStore, *inventory.Manager) {
+func newFakeStores(t *testing.T) (*inventory.ConfigStore, *inventory.Catalog) {
 	t.Helper()
 	db := openTestDB(t)
 	cs := inventory.NewConfigStore(db)
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog()
 	store, _ := inventory.NewStore(db)
 	mgr.SetStore(store)
 

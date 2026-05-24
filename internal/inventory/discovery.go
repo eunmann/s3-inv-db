@@ -29,7 +29,7 @@ type IndexBuilder interface {
 }
 
 // MergedInventory is one discovered inventory plus its live load state
-// from the local Manager. Handlers and templates consume this directly;
+// from the local Catalog. Handlers and templates consume this directly;
 // the join logic doesn't belong at the HTTP layer.
 type MergedInventory struct {
 	Inventory
@@ -60,7 +60,7 @@ type GatedLoadFunc func(ctx context.Context, id ID, build BuildFunc, opts GatedL
 type ManifestSizeFunc func(ctx context.Context, bucket, key string) (uint64, error)
 
 // DiscoveryService orchestrates the inventory use cases that span the
-// Manager (in-memory state), the Discoverer (S3 listing of available
+// Catalog (in-memory state), the Discoverer (S3 listing of available
 // inventories), and the IndexBuilder (on-disk index materialisation).
 //
 // When discovery is unconfigured (--s3-source unset) the service is
@@ -74,7 +74,7 @@ type DiscoveryService struct {
 	cacheLastErr  error
 	gate          GatedLoadFunc
 	sizer         ManifestSizeFunc
-	manager       *Manager
+	manager       *Catalog
 	bgStop        chan struct{}
 	bgClock       func() time.Time
 	cacheViews    []MergedInventory
@@ -116,7 +116,7 @@ const refreshKey = "discovery-refresh"
 // NewDiscoveryService constructs an enabled service. Both discoverer
 // and builder are required and must be non-nil; for the unconfigured
 // case use NewDisabledDiscoveryService.
-func NewDiscoveryService(mgr *Manager, discoverer Discoverer, builder IndexBuilder) *DiscoveryService {
+func NewDiscoveryService(mgr *Catalog, discoverer Discoverer, builder IndexBuilder) *DiscoveryService {
 	return &DiscoveryService{
 		manager:    mgr,
 		discoverer: discoverer,
@@ -131,7 +131,7 @@ func NewDiscoveryService(mgr *Manager, discoverer Discoverer, builder IndexBuild
 // short-circuit to ErrDiscoveryDisabled. Used when --s3-source is unset
 // so the rest of the wiring can treat DiscoveryService as a non-nil
 // dependency.
-func NewDisabledDiscoveryService(mgr *Manager) *DiscoveryService {
+func NewDisabledDiscoveryService(mgr *Catalog) *DiscoveryService {
 	return &DiscoveryService{
 		manager:    mgr,
 		discoverer: disabledDiscoverer{},
@@ -171,7 +171,7 @@ var ErrNoRun = errors.New("inventory has no run")
 func (s *DiscoveryService) Enabled() bool { return s.enabled }
 
 // List walks the configured S3 source and merges each discovered
-// inventory with its current Manager state. Returns nil and
+// inventory with its current Catalog state. Returns nil and
 // ErrDiscoveryDisabled when discovery is unconfigured.
 func (s *DiscoveryService) List(ctx context.Context) ([]MergedInventory, error) {
 	discovered, err := s.discoverer.List(ctx)
@@ -204,7 +204,7 @@ func (s *DiscoveryService) List(ctx context.Context) ([]MergedInventory, error) 
 //
 // The S3 listing (what runs exist) comes from the cache, but the
 // per-run lifecycle state (State / Error / NodeCount / HasTierData)
-// is overlaid from the live Manager at call time so the page reflects
+// is overlaid from the live Catalog at call time so the page reflects
 // what just happened without waiting for the next discovery refresh.
 // A load that finishes between two refresh ticks would otherwise leave
 // the page rendering "not loaded" and let the user submit a duplicate
@@ -353,7 +353,7 @@ func (s *DiscoveryService) Find(ctx context.Context, src, id, run string) (Inven
 }
 
 // PrepareDiscovered registers (if needed) one inventory run in the
-// Manager without performing a build. Each run gets its own composite
+// Catalog without performing a build. Each run gets its own composite
 // ID; multiple runs of the same configuration can coexist as independent
 // entries.
 func (s *DiscoveryService) PrepareDiscovered(ctx context.Context, disc Inventory) error {

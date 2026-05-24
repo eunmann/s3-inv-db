@@ -38,9 +38,9 @@ type managedInventory struct {
 	mu               sync.RWMutex
 }
 
-// mirrorStore is the persistence sink Manager mirrors state transitions
+// mirrorStore is the persistence sink Catalog mirrors state transitions
 // to. Defaulted to a no-op so callers that don't need durable storage
-// (tests, transient operations) can use Manager directly without nil
+// (tests, transient operations) can use Catalog directly without nil
 // checks at every mirror site.
 type mirrorStore interface {
 	Upsert(ctx context.Context, info Info) error
@@ -52,29 +52,29 @@ type noopMirrorStore struct{}
 func (noopMirrorStore) Upsert(context.Context, Info) error { return nil }
 func (noopMirrorStore) Delete(context.Context, ID) error   { return nil }
 
-// Manager manages multiple inventories with thread-safe access.
+// Catalog manages multiple inventories with thread-safe access.
 // Persistence is mirrored to a Store when one is attached via SetStore;
 // otherwise mirror calls are silently dropped.
-type Manager struct {
+type Catalog struct {
 	inventories map[ID]*managedInventory
 	store       mirrorStore
 	mu          sync.RWMutex
 }
 
-// NewManager creates a new inventory manager with no durable backing.
+// NewCatalog creates a new inventory manager with no durable backing.
 // Call SetStore to wire a real Store.
-func NewManager() *Manager {
-	return &Manager{
+func NewCatalog() *Catalog {
+	return &Catalog{
 		inventories: make(map[ID]*managedInventory),
 		store:       noopMirrorStore{},
 	}
 }
 
-// SetStore attaches a Store to the Manager. After this, every state
+// SetStore attaches a Store to the Catalog. After this, every state
 // transition (Register, Load, Unload, Remove, Hydrate) is mirrored to
 // the Store. Pass nil to detach. Safe to call once at startup; later
 // changes during operation are not synchronized.
-func (m *Manager) SetStore(s *Store) {
+func (m *Catalog) SetStore(s *Store) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s == nil {
@@ -85,7 +85,7 @@ func (m *Manager) SetStore(s *Store) {
 	m.store = s
 }
 
-func (m *Manager) mirror(ctx context.Context, info Info) error {
+func (m *Catalog) mirror(ctx context.Context, info Info) error {
 	if err := m.store.Upsert(ctx, info); err != nil {
 		return fmt.Errorf("mirror to store: %w", err)
 	}
@@ -93,7 +93,7 @@ func (m *Manager) mirror(ctx context.Context, info Info) error {
 	return nil
 }
 
-func (m *Manager) mirrorDelete(ctx context.Context, id ID) error {
+func (m *Catalog) mirrorDelete(ctx context.Context, id ID) error {
 	if err := m.store.Delete(ctx, id); err != nil && !errors.Is(err, ErrStoreNotFound) {
 		return fmt.Errorf("mirror delete: %w", err)
 	}
@@ -102,7 +102,7 @@ func (m *Manager) mirrorDelete(ctx context.Context, id ID) error {
 }
 
 // Register adds a new inventory in pending state.
-func (m *Manager) Register(ctx context.Context, id ID, name, path string) error {
+func (m *Catalog) Register(ctx context.Context, id ID, name, path string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -116,10 +116,10 @@ func (m *Manager) Register(ctx context.Context, id ID, name, path string) error 
 	return m.mirror(ctx, info)
 }
 
-// BuildFunc is the contract a Manager uses to materialise an on-disk index
+// BuildFunc is the contract a Catalog uses to materialise an on-disk index
 // before opening it. The returned path must be a directory acceptable to
 // indexread.Open. Implementations should be safe to call without holding
-// the Manager's lock — Load drops it during the build.
+// the Catalog's lock — Load drops it during the build.
 type BuildFunc func(ctx context.Context, info Info) (indexDir string, err error)
 
 // openLocalPath is the default BuildFunc: it treats inv.Path as a local
@@ -131,25 +131,25 @@ func openLocalPath(_ context.Context, info Info) (string, error) {
 // Load builds (if needed) and opens the inventory index, using the
 // default BuildFunc (interpret Path as a local directory). Marks the
 // run as Pinned so it's protected from auto-eviction.
-func (m *Manager) Load(ctx context.Context, id ID) error {
+func (m *Catalog) Load(ctx context.Context, id ID) error {
 	return m.LoadWith(ctx, id, openLocalPath)
 }
 
 // LoadWith calls build outside the manager lock to materialise an
 // on-disk index, then opens it. Marks the run as Pinned (manual intent)
 // and clears any prior UserUnloadedAt sentinel.
-func (m *Manager) LoadWith(ctx context.Context, id ID, build BuildFunc) error {
+func (m *Catalog) LoadWith(ctx context.Context, id ID, build BuildFunc) error {
 	return m.loadInternal(ctx, id, build, true /* pin */)
 }
 
 // AutoLoad performs a load on behalf of the background auto-loader.
 // Identical to LoadWith except the inventory is not pinned, so future
 // auto-eviction may unload it when retention or budget demands.
-func (m *Manager) AutoLoad(ctx context.Context, id ID, build BuildFunc) error {
+func (m *Catalog) AutoLoad(ctx context.Context, id ID, build BuildFunc) error {
 	return m.loadInternal(ctx, id, build, false /* pin */)
 }
 
-func (m *Manager) loadInternal(ctx context.Context, id ID, build BuildFunc, pin bool) error {
+func (m *Catalog) loadInternal(ctx context.Context, id ID, build BuildFunc, pin bool) error {
 	m.mu.Lock()
 	inv, exists := m.inventories[id]
 	if !exists {
@@ -292,7 +292,7 @@ func measureIndexDir(dir string) (uint64, error) {
 // auto-loader treats it as deliberately removed, and clears the pin.
 // It blocks until any in-flight WithIndex reader on this inventory has
 // returned.
-func (m *Manager) Unload(ctx context.Context, id ID) error {
+func (m *Catalog) Unload(ctx context.Context, id ID) error {
 	return m.unloadInternal(ctx, id, true /* userInitiated */)
 }
 
@@ -300,11 +300,11 @@ func (m *Manager) Unload(ctx context.Context, id ID) error {
 // eviction planner. Distinct from Unload because it does NOT stamp
 // UserUnloadedAt — the auto-loader is free to reload this run later if
 // a newer (or the same) run is discovered and there's budget.
-func (m *Manager) EvictForBudget(ctx context.Context, id ID) error {
+func (m *Catalog) EvictForBudget(ctx context.Context, id ID) error {
 	return m.unloadInternal(ctx, id, false /* userInitiated */)
 }
 
-func (m *Manager) unloadInternal(ctx context.Context, id ID, userInitiated bool) error {
+func (m *Catalog) unloadInternal(ctx context.Context, id ID, userInitiated bool) error {
 	m.mu.Lock()
 	inv, exists := m.inventories[id]
 	if !exists {
@@ -330,7 +330,7 @@ func (m *Manager) unloadInternal(ctx context.Context, id ID, userInitiated bool)
 	_ = m.mirror(ctx, inv.info)
 	m.mu.Unlock()
 
-	// Close the index outside the Manager lock so other inventories stay
+	// Close the index outside the Catalog lock so other inventories stay
 	// available; the per-inventory write lock drains in-flight readers.
 	inv.mu.Lock()
 	defer inv.mu.Unlock()
@@ -344,7 +344,7 @@ func (m *Manager) unloadInternal(ctx context.Context, id ID, userInitiated bool)
 
 // SetPinned flips the pin state of a managed inventory. Returns
 // ErrNotFound when id is unknown. Mirrors to the store.
-func (m *Manager) SetPinned(ctx context.Context, id ID, pinned bool) error {
+func (m *Catalog) SetPinned(ctx context.Context, id ID, pinned bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	inv, exists := m.inventories[id]
@@ -360,7 +360,7 @@ func (m *Manager) SetPinned(ctx context.Context, id ID, pinned bool) error {
 // stamps the next-eligible time. Used by the auto-loader to apply
 // exponential backoff without flipping state to StateError (which is
 // reserved for full-load failures).
-func (m *Manager) RecordAutoLoadFailure(ctx context.Context, id ID, errStr string, retryAt time.Time) error {
+func (m *Catalog) RecordAutoLoadFailure(ctx context.Context, id ID, errStr string, retryAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	inv, exists := m.inventories[id]
@@ -378,7 +378,7 @@ func (m *Manager) RecordAutoLoadFailure(ctx context.Context, id ID, errStr strin
 // atomic. Callers must hold either m.mu or inv.mu while reading the
 // rest of inv.info; this helper just patches in the atomic-tracked
 // access timestamp.
-func (m *Manager) touchedInfo(inv *managedInventory) Info {
+func (m *Catalog) touchedInfo(inv *managedInventory) Info {
 	out := inv.info
 	if nano := inv.lastAccessedNano.Load(); nano > 0 {
 		out.LastAccessedAt = time.Unix(0, nano)
@@ -390,7 +390,7 @@ func (m *Manager) touchedInfo(inv *managedInventory) Info {
 // TouchAccessed updates the in-memory LastAccessedAt used as the LRU
 // tiebreak in eviction. Not persisted — restart resets every entry's
 // access time, which is fine.
-func (m *Manager) TouchAccessed(id ID) {
+func (m *Catalog) TouchAccessed(id ID) {
 	// Only need a read lock to look up the inventory; the actual
 	// timestamp update is an atomic store. This keeps the read hot
 	// path (every WithIndex completion calls TouchAccessed) free of
@@ -405,7 +405,7 @@ func (m *Manager) TouchAccessed(id ID) {
 }
 
 // Get returns info about an inventory.
-func (m *Manager) Get(id ID) (Info, bool) {
+func (m *Catalog) Get(id ID) (Info, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -418,7 +418,7 @@ func (m *Manager) Get(id ID) (Info, bool) {
 }
 
 // List returns info about all inventories.
-func (m *Manager) List() []Info {
+func (m *Catalog) List() []Info {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -436,7 +436,7 @@ func (m *Manager) List() []Info {
 // in-memory state to StateError but the inventory is still registered
 // so the UI can show it (and the user can retry). For non-loaded
 // states, indexDir is ignored.
-func (m *Manager) Hydrate(ctx context.Context, info Info, indexDir string) error {
+func (m *Catalog) Hydrate(ctx context.Context, info Info, indexDir string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -479,7 +479,7 @@ func (m *Manager) Hydrate(ctx context.Context, info Info, indexDir string) error
 // the pointer or any slice/string derived from mmap-backed memory beyond
 // the call. Concurrent Unload/Remove/Close on the same inventory block
 // until fn returns.
-func (m *Manager) WithIndex(id ID, fn func(*indexread.Index) error) error {
+func (m *Catalog) WithIndex(id ID, fn func(*indexread.Index) error) error {
 	m.mu.RLock()
 	inv, exists := m.inventories[id]
 	if !exists {
@@ -510,7 +510,7 @@ func (m *Manager) WithIndex(id ID, fn func(*indexread.Index) error) error {
 // the same pair in opposite directions cannot deadlock. When idA == idB
 // only one lock is taken and the same index pointer is passed in both
 // positions, letting callers treat self-compare as a degenerate case.
-func (m *Manager) WithTwoIndexes(idA, idB ID, fn func(a, b *indexread.Index) error) error {
+func (m *Catalog) WithTwoIndexes(idA, idB ID, fn func(a, b *indexread.Index) error) error {
 	m.mu.RLock()
 	invA, okA := m.inventories[idA]
 	invB, okB := m.inventories[idB]
@@ -555,7 +555,7 @@ func (m *Manager) WithTwoIndexes(idA, idB ID, fn func(a, b *indexread.Index) err
 
 // Remove removes an inventory from the manager. It blocks until any
 // in-flight WithIndex reader on this inventory has returned.
-func (m *Manager) Remove(ctx context.Context, id ID) error {
+func (m *Catalog) Remove(ctx context.Context, id ID) error {
 	m.mu.Lock()
 	inv, exists := m.inventories[id]
 	if !exists {
@@ -579,7 +579,7 @@ func (m *Manager) Remove(ctx context.Context, id ID) error {
 
 // Close closes all loaded inventories and clears the manager. It blocks
 // until any in-flight WithIndex readers have returned.
-func (m *Manager) Close() error {
+func (m *Catalog) Close() error {
 	m.mu.Lock()
 	invs := m.inventories
 	m.inventories = make(map[ID]*managedInventory)

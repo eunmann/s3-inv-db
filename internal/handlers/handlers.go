@@ -31,7 +31,7 @@ type CacheStore interface {
 // request-scoped logger comes from zerolog.Ctx(r.Context()).
 type Handlers struct {
 	loader                   CacheStore
-	manager                  *inventory.Manager
+	manager                  *inventory.Catalog
 	discovery                *inventory.DiscoveryService
 	configStore              *inventory.ConfigStore
 	tracker                  *budget.Tracker
@@ -145,7 +145,7 @@ func (h *Handlers) renderHTMLPartial(w http.ResponseWriter, r *http.Request, nam
 // a disabled DiscoveryService is wired so handlers can call its
 // methods without nil-checking.
 func New(
-	mgr *inventory.Manager,
+	mgr *inventory.Catalog,
 	renderer *templates.Renderer,
 	priceTable pricing.PriceTable,
 	jobMgr *jobs.Scheduler,

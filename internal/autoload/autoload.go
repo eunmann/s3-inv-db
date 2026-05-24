@@ -44,7 +44,7 @@ type AutoLoader struct {
 	discovery   Discovery
 	loader      LoaderFunc
 	configStore *inventory.ConfigStore
-	manager     *inventory.Manager
+	manager     *inventory.Catalog
 	logger      *zerolog.Logger
 	now         func() time.Time
 	stop        chan struct{}
@@ -55,7 +55,7 @@ type AutoLoader struct {
 }
 
 // New constructs an AutoLoader; logger may be nil.
-func New(cfg Config, discovery Discovery, loader LoaderFunc, configStore *inventory.ConfigStore, manager *inventory.Manager, logger *zerolog.Logger) *AutoLoader {
+func New(cfg Config, discovery Discovery, loader LoaderFunc, configStore *inventory.ConfigStore, manager *inventory.Catalog, logger *zerolog.Logger) *AutoLoader {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = DefaultPollInterval
 	}

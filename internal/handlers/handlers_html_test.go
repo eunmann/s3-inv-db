@@ -16,12 +16,12 @@ import (
 // testFixture provides a test environment for HTML handler tests.
 type testFixture struct {
 	h   *handlers.Handlers
-	mgr *inventory.Manager
+	mgr *inventory.Catalog
 }
 
 func newTestFixture(t *testing.T) *testFixture {
 	t.Helper()
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog()
 	h := newWiredHandlers(t, mgr)
 
 	return &testFixture{h: h, mgr: mgr}

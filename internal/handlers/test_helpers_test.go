@@ -13,12 +13,12 @@ import (
 )
 
 // newWiredHandlers builds a Handlers backed by an in-memory SQLite DB.
-// Tests that need to inject their own inventory.Manager pass it via mgr;
+// Tests that need to inject their own inventory.Catalog pass it via mgr;
 // the rest of the required deps are constructed here.
-func newWiredHandlers(t *testing.T, mgr *inventory.Manager, opts ...handlers.Option) *handlers.Handlers {
+func newWiredHandlers(t *testing.T, mgr *inventory.Catalog, opts ...handlers.Option) *handlers.Handlers {
 	t.Helper()
 	if mgr == nil {
-		mgr = inventory.NewManager()
+		mgr = inventory.NewCatalog()
 		t.Cleanup(func() { _ = mgr.Close() })
 	}
 	db := dbtest.OpenMemDB(t)

@@ -30,12 +30,12 @@ func (e *BudgetRefusedError) Error() string {
 
 // Gate orchestrates one load lifecycle.
 type Gate struct {
-	manager *inventory.Manager
+	manager *inventory.Catalog
 	tracker *budget.Tracker
 	planner *budget.Planner
 }
 
-func New(manager *inventory.Manager, tracker *budget.Tracker, planner *budget.Planner) *Gate {
+func New(manager *inventory.Catalog, tracker *budget.Tracker, planner *budget.Planner) *Gate {
 	return &Gate{manager: manager, tracker: tracker, planner: planner}
 }
 

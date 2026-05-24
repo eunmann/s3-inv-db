@@ -12,8 +12,8 @@ import (
 
 var errBuildOnPurpose = errors.New("build err on purpose")
 
-func newTestGate(capBytes, headroom uint64) (*loadcontrol.Gate, *inventory.Manager, *budget.Tracker) {
-	mgr := inventory.NewManager()
+func newTestGate(capBytes, headroom uint64) (*loadcontrol.Gate, *inventory.Catalog, *budget.Tracker) {
+	mgr := inventory.NewCatalog()
 	tracker := budget.New(capBytes, headroom)
 	planner := budget.NewPlanner(tracker, nil)
 

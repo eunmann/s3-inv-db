@@ -31,7 +31,7 @@ func (h *Handlers) RenderHTMLPartialForTest(w http.ResponseWriter, r *http.Reque
 func (h *Handlers) JobManagerForTest() *jobs.Scheduler { return h.jobMgr }
 
 // ManagerForTest returns the inventory Manager wired into the handler.
-func (h *Handlers) ManagerForTest() *inventory.Manager { return h.manager }
+func (h *Handlers) ManagerForTest() *inventory.Catalog { return h.manager }
 
 // BuildCompareSelfViewForTest exposes buildCompareSelfView so external
 // tests can pin the formatted view shape without going through HTTP.

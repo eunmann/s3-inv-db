@@ -66,7 +66,7 @@ const DefaultDiscoveryRefreshInterval = time.Minute
 type Server struct {
 	config      Config
 	router      *chi.Mux
-	manager     *inventory.Manager
+	manager     *inventory.Catalog
 	invStore    *inventory.Store
 	configStore *inventory.ConfigStore
 	jobStore    *jobs.Store
@@ -94,7 +94,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	jobBus := jobs.NewBus(64)
 	jobMgr := jobs.NewScheduler(jobStore, jobBus)
 	jobMgr.SetLogger(cfg.Logger)
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog()
 	mgr.SetStore(invStore)
 
 	renderer, err := templates.New()
@@ -234,7 +234,7 @@ func (s *Server) backfillTracker(ctx context.Context, logger zerolog.Logger) {
 	}
 }
 
-// recover rehydrates the in-memory inventory.Manager from invStore and
+// recover rehydrates the in-memory inventory.Catalog from invStore and
 // marks any jobs left running/queued by the previous process as
 // aborted. Inventories left in the parsing state — meaning a load was
 // in flight when the previous process exited — get flipped to error so
