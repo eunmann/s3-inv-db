@@ -166,16 +166,6 @@ func NewDisabledDiscovery(mgr *Catalog) *Discovery {
 	return NewDiscovery(mgr)
 }
 
-// SetGate is the legacy late-wire entry point. New callers should use
-// WithGate at construction.
-func (s *Discovery) SetGate(gate GatedLoadFunc, sizer ManifestSizeFunc, indexRatio float64) {
-	s.gate = gate
-	s.sizer = sizer
-	if indexRatio > 0 {
-		s.indexRatio = indexRatio
-	}
-}
-
 // DefaultIndexRatio is the conservative seed ratio used to estimate
 // final index bytes from a manifest's compressed CSV total. The
 // expected per-load reservation is `manifest_total * indexRatio`.
