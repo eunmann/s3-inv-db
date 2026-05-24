@@ -38,20 +38,35 @@ type managedInventory struct {
 	mu               sync.RWMutex
 }
 
+// mirrorStore is the persistence sink Manager mirrors state transitions
+// to. Defaulted to a no-op so callers that don't need durable storage
+// (tests, transient operations) can use Manager directly without nil
+// checks at every mirror site.
+type mirrorStore interface {
+	Upsert(ctx context.Context, info Info) error
+	Delete(ctx context.Context, id ID) error
+}
+
+type noopMirrorStore struct{}
+
+func (noopMirrorStore) Upsert(context.Context, Info) error { return nil }
+func (noopMirrorStore) Delete(context.Context, ID) error   { return nil }
+
 // Manager manages multiple inventories with thread-safe access.
-// When a Store is attached via SetStore, every state-changing method
-// mirrors the new Info to durable storage so the server can rehydrate
-// after a restart.
+// Persistence is mirrored to a Store when one is attached via SetStore;
+// otherwise mirror calls are silently dropped.
 type Manager struct {
 	inventories map[ID]*managedInventory
-	store       *Store
+	store       mirrorStore
 	mu          sync.RWMutex
 }
 
-// NewManager creates a new inventory manager.
+// NewManager creates a new inventory manager with no durable backing.
+// Call SetStore to wire a real Store.
 func NewManager() *Manager {
 	return &Manager{
 		inventories: make(map[ID]*managedInventory),
+		store:       noopMirrorStore{},
 	}
 }
 
@@ -62,16 +77,15 @@ func NewManager() *Manager {
 func (m *Manager) SetStore(s *Store) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if s == nil {
+		m.store = noopMirrorStore{}
+
+		return
+	}
 	m.store = s
 }
 
-// mirror writes info to the attached store if one is configured. Errors
-// are returned to the caller — Manager methods choose whether to fail
-// the operation or log + continue.
 func (m *Manager) mirror(ctx context.Context, info Info) error {
-	if m.store == nil {
-		return nil
-	}
 	if err := m.store.Upsert(ctx, info); err != nil {
 		return fmt.Errorf("mirror to store: %w", err)
 	}
@@ -79,11 +93,7 @@ func (m *Manager) mirror(ctx context.Context, info Info) error {
 	return nil
 }
 
-// mirrorDelete removes id from the attached store, if one is configured.
 func (m *Manager) mirrorDelete(ctx context.Context, id ID) error {
-	if m.store == nil {
-		return nil
-	}
 	if err := m.store.Delete(ctx, id); err != nil && !errors.Is(err, ErrStoreNotFound) {
 		return fmt.Errorf("mirror delete: %w", err)
 	}
