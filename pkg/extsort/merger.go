@@ -195,24 +195,24 @@ func (m *MergeIterator) Remaining() uint64 {
 
 // Close closes all underlying run file readers.
 func (m *MergeIterator) Close() error {
-	var firstErr error
+	errs := make([]error, 0, len(m.readers))
 	for _, r := range m.readers {
-		if err := r.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := r.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
-	return firstErr
+	return errors.Join(errs...)
 }
 
 // RemoveAll closes all readers and removes their files.
 func (m *MergeIterator) RemoveAll() error {
-	var firstErr error
+	errs := make([]error, 0, len(m.readers))
 	for _, r := range m.readers {
-		if err := r.Remove(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := r.Remove(); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
-	return firstErr
+	return errors.Join(errs...)
 }

@@ -698,7 +698,10 @@ type MergeStatistics struct {
 	BytesWritten   int64
 }
 
-// Statistics returns merge statistics.
+// Statistics returns merge statistics. Must be called only after
+// MergeAll / MergeAllToIterator returns: the fields are written by
+// the merge caller goroutine and have no synchronisation barrier
+// against concurrent readers.
 func (m *ParallelMerger) Statistics() MergeStatistics {
 	return MergeStatistics{
 		Rounds:         m.mergeRounds,

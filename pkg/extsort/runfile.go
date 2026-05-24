@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/rs/zerolog"
 )
 
 // DefaultRunBufferSize is the default I/O buffer for run-file reader
@@ -65,6 +67,15 @@ func removeFiles(paths []string) {
 	for _, p := range paths {
 		_ = os.Remove(p)
 	}
+}
+
+// logCleanupErr logs a cleanup failure at Warn so a missed temp-file
+// delete is visible without masking the originating error.
+func logCleanupErr(log *zerolog.Logger, op, path string, err error) {
+	if err == nil || os.IsNotExist(err) {
+		return
+	}
+	log.Warn().Str("op", op).Str("path", path).Err(err).Msg("cleanup failed")
 }
 
 // runWriter is the shared shape between RunFileWriter and
