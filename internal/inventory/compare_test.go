@@ -202,7 +202,7 @@ func openSeededIndex(t *testing.T, seed int64, objects int) *indexread.Index {
 		Seed:      seed,
 		Logger:    zerolog.Nop(),
 	}
-	if err := seeder.Run(cfg); err != nil {
+	if err := seeder.Run(t.Context(), cfg); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	idx, err := indexread.Open(filepath.Join(tmp, "inv-001"))

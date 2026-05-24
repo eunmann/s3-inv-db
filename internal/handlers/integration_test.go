@@ -31,7 +31,7 @@ func buildLoadedTestHandlers(t *testing.T) *handlers.Handlers {
 		Seed:      42,
 		Logger:    zerolog.Nop(),
 	}
-	if err := seeder.Run(cfg); err != nil {
+	if err := seeder.Run(t.Context(), cfg); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -245,7 +245,7 @@ func TestBrowsePage_PartialSuccess(t *testing.T) {
 // through the HTTP handlers against a real index.
 func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 	tmp := t.TempDir()
-	if err := seeder.Run(seeder.Config{
+	if err := seeder.Run(t.Context(), seeder.Config{
 		OutputDir: tmp,
 		Count:     1,
 		Objects:   100,
@@ -385,7 +385,7 @@ func TestLoadInventoryAPI_BadPath(t *testing.T) {
 // data once it's been closed.
 func TestManagerWithIndex_NoUseAfterCloseUnderUnload(t *testing.T) {
 	tmp := t.TempDir()
-	if err := seeder.Run(seeder.Config{
+	if err := seeder.Run(t.Context(), seeder.Config{
 		OutputDir: tmp,
 		Count:     1,
 		Objects:   500,
@@ -486,7 +486,7 @@ func TestBrowseLevelAPI_Integration_HappyPath(t *testing.T) {
 // must still come out correctly.
 func TestCompareLevelAPI_Integration_HappyPath(t *testing.T) {
 	tmp := t.TempDir()
-	if err := seeder.Run(seeder.Config{
+	if err := seeder.Run(t.Context(), seeder.Config{
 		OutputDir: tmp, Count: 1, Objects: 200, Preset: "small",
 		Seed: 42, Logger: zerolog.Nop(),
 	}); err != nil {
