@@ -77,12 +77,14 @@ func NewCatalog(store *Store) *Catalog {
 	return c
 }
 
-// SetStore swaps the persistence sink. Test-fixture pattern: a Catalog
-// is constructed nil-store, then late-wired to an invStore that's
-// shared with peer dependencies (jobs, configStore). Production wires
-// via the ctor instead. Safe to call once before first state-changing
-// method.
-func (m *Catalog) SetStore(s *Store) {
+// AttachStoreForTest swaps the persistence sink. Test-only seam: a
+// Catalog is constructed nil-store via tests that pre-build state,
+// then late-wired to an invStore shared with peer dependencies (jobs,
+// configStore). Production wires via the constructor — never call this
+// from non-test code. The mutex makes the swap safe against concurrent
+// reads, but the function only exists so the test suite can keep its
+// pre-build-then-attach pattern.
+func (m *Catalog) AttachStoreForTest(s *Store) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s == nil {

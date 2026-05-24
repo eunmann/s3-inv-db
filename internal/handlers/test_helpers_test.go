@@ -26,7 +26,7 @@ func newWiredHandlers(t *testing.T, mgr *inventory.Catalog, opts ...handlers.Opt
 		mgr = inventory.NewCatalog(invStore)
 		t.Cleanup(func() { _ = mgr.Close() })
 	} else {
-		mgr.SetStore(invStore)
+		mgr.AttachStoreForTest(invStore)
 	}
 	renderer, err := templates.New()
 	if err != nil {
