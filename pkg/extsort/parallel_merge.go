@@ -121,7 +121,7 @@ type mergeResult struct {
 // The cleanup closure closes the iterator's underlying readers and
 // removes any intermediate files this call produced. It does NOT
 // remove the original input files; that remains the caller's job.
-func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []string) (RowIterator, func() error, error) { //nolint:ireturn // dispatches between single-run + K-way merge variants
+func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []string) (RowIterator, func() error, error) {
 	if len(inputPaths) == 0 {
 		return nil, func() error { return nil }, ErrNoInputPaths
 	}

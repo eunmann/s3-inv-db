@@ -214,21 +214,11 @@ func explicitFlags(fs *flag.FlagSet) map[string]bool {
 }
 
 func resolveBool(cfg *appconfig.Config, flagVal, explicit bool, get func(*appconfig.Config) *bool) bool {
-	var p *bool
-	if cfg != nil {
-		p = get(cfg)
-	}
-
-	return appconfig.Pick(flagVal, explicit, p)
+	return appconfig.Pick(flagVal, explicit, appconfig.FromFile(cfg, get))
 }
 
 func resolveString(cfg *appconfig.Config, flagVal string, explicit bool, get func(*appconfig.Config) *string) string {
-	var p *string
-	if cfg != nil {
-		p = get(cfg)
-	}
-
-	return appconfig.Pick(flagVal, explicit, p)
+	return appconfig.Pick(flagVal, explicit, appconfig.FromFile(cfg, get))
 }
 
 // printTierAndCostInfo handles tier breakdown and cost estimation output.

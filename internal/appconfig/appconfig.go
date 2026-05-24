@@ -89,3 +89,14 @@ func Pick[T any](flagVal T, explicit bool, configVal *T) T {
 
 	return flagVal
 }
+
+// FromFile returns get(cfg) when cfg is non-nil, otherwise nil. Lets
+// callers thread "config may be missing" without bespoke nil-guard
+// helpers per field type.
+func FromFile[T any](cfg *Config, get func(*Config) *T) *T {
+	if cfg == nil {
+		return nil
+	}
+
+	return get(cfg)
+}

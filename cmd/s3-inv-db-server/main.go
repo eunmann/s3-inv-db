@@ -78,15 +78,15 @@ func run() error {
 	finalCache := pickString(fileCfg, *cacheDir, explicit["cache-dir"], func(c *appconfig.Config) *string { return c.CacheDir })
 	finalState := pickString(fileCfg, *stateDB, explicit["state-db"], func(c *appconfig.Config) *string { return c.StateDB })
 	finalAuto := pickBool(fileCfg, *autoLoad, explicit["auto-load"], func(c *appconfig.Config) *bool { return c.AutoLoad })
-	finalConc := appconfig.Pick(*autoLoadConcurrency, explicit["max-auto-load-concurrency"], fileConfigInt(fileCfg, func(c *appconfig.Config) *int { return c.AutoLoadConcurrency }))
-	finalRet := appconfig.Pick(uint32(*autoLoadRetention), explicit["auto-load-retention-default"], fileConfigUint32(fileCfg, func(c *appconfig.Config) *uint32 { return c.AutoLoadRetentionDefault }))
-	finalRatio := appconfig.Pick(*indexRatio, explicit["index-ratio"], fileConfigFloat(fileCfg, func(c *appconfig.Config) *float64 { return c.IndexRatio }))
+	finalConc := appconfig.Pick(*autoLoadConcurrency, explicit["max-auto-load-concurrency"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *int { return c.AutoLoadConcurrency }))
+	finalRet := appconfig.Pick(uint32(*autoLoadRetention), explicit["auto-load-retention-default"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *uint32 { return c.AutoLoadRetentionDefault }))
+	finalRatio := appconfig.Pick(*indexRatio, explicit["index-ratio"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *float64 { return c.IndexRatio }))
 
-	finalInterval, err := resolveDuration(*pollInterval, explicit["auto-load-poll-interval"], fileConfigString(fileCfg, func(c *appconfig.Config) *string { return c.PollInterval }))
+	finalInterval, err := resolveDuration(*pollInterval, explicit["auto-load-poll-interval"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *string { return c.PollInterval }))
 	if err != nil {
 		return fmt.Errorf("auto_load_poll_interval: %w", err)
 	}
-	finalDiscoveryRefresh, err := resolveDuration(*discoveryRefresh, explicit["discovery-refresh-interval"], fileConfigString(fileCfg, func(c *appconfig.Config) *string { return c.DiscoveryRefreshInterval }))
+	finalDiscoveryRefresh, err := resolveDuration(*discoveryRefresh, explicit["discovery-refresh-interval"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *string { return c.DiscoveryRefreshInterval }))
 	if err != nil {
 		return fmt.Errorf("discovery_refresh_interval: %w", err)
 	}
@@ -159,38 +159,6 @@ func pickBool(cfg *appconfig.Config, flagVal, explicit bool, get func(*appconfig
 	}
 
 	return appconfig.Pick(flagVal, explicit, p)
-}
-
-func fileConfigInt(cfg *appconfig.Config, get func(*appconfig.Config) *int) *int {
-	if cfg == nil {
-		return nil
-	}
-
-	return get(cfg)
-}
-
-func fileConfigUint32(cfg *appconfig.Config, get func(*appconfig.Config) *uint32) *uint32 {
-	if cfg == nil {
-		return nil
-	}
-
-	return get(cfg)
-}
-
-func fileConfigFloat(cfg *appconfig.Config, get func(*appconfig.Config) *float64) *float64 {
-	if cfg == nil {
-		return nil
-	}
-
-	return get(cfg)
-}
-
-func fileConfigString(cfg *appconfig.Config, get func(*appconfig.Config) *string) *string {
-	if cfg == nil {
-		return nil
-	}
-
-	return get(cfg)
 }
 
 func resolveDuration(flagVal time.Duration, explicit bool, configVal *string) (time.Duration, error) {

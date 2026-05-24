@@ -822,7 +822,7 @@ type mergeBuildResult struct {
 // lone run file directly. Multi-run case uses
 // ParallelMerger.MergeAllToIterator which avoids writing a final
 // merged file to disk (I3 win).
-func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRunFiles, numWorkers, maxFanIn int, perReaderBuffer int64) (RowIterator, func() error, error) { //nolint:ireturn // dispatches between single-run + K-way variants
+func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRunFiles, numWorkers, maxFanIn int, perReaderBuffer int64) (RowIterator, func() error, error) {
 	if numRunFiles == 1 {
 		reader, err := OpenRunFileAuto(p.runFiles[0], int(perReaderBuffer))
 		if err != nil {
