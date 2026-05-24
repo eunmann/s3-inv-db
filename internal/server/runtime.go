@@ -178,7 +178,8 @@ func applyInventoryConfigs(ctx context.Context, store *inventory.ConfigStore, en
 	for i := range entries {
 		e := &entries[i]
 		existing, err := store.Get(ctx, e.Source, e.Name)
-		if err == nil {
+		switch {
+		case err == nil:
 			existing.AutoLoad = e.AutoLoad
 			if e.RetentionCount > 0 {
 				existing.RetentionCount = e.RetentionCount
@@ -188,6 +189,10 @@ func applyInventoryConfigs(ctx context.Context, store *inventory.ConfigStore, en
 			}
 
 			continue
+		case errors.Is(err, inventory.ErrStoreNotFound):
+			// fall through to insert path below
+		default:
+			return fmt.Errorf("get %s/%s: %w", e.Source, e.Name, err)
 		}
 		retention := e.RetentionCount
 		if retention == 0 {

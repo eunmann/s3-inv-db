@@ -122,7 +122,7 @@ type mergeResult struct {
 // removes any intermediate files this call produced. It does NOT
 // remove the original input files; that remains the caller's job.
 //
-//nolint:ireturn // RowIterator is the package's iterator contract; consumers don't need the concrete type.
+
 func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []string) (RowIterator, func() error, error) {
 	if len(inputPaths) == 0 {
 		return nil, func() error { return nil }, ErrNoInputPaths

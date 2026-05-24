@@ -823,7 +823,7 @@ type mergeBuildResult struct {
 // ParallelMerger.MergeAllToIterator which avoids writing a final
 // merged file to disk (I3 win).
 //
-//nolint:ireturn // RowIterator is the package's iterator contract; consumers don't need the concrete type.
+
 func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRunFiles, numWorkers, maxFanIn int, perReaderBuffer int64) (RowIterator, func() error, error) {
 	if numRunFiles == 1 {
 		reader, err := OpenRunFileAuto(p.runFiles[0], int(perReaderBuffer))

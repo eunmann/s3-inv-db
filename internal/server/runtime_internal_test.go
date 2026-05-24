@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
 	"github.com/rs/zerolog"
 )
 
@@ -87,6 +89,34 @@ func TestBootstrapAndRun_PropagatesBootstrapError(t *testing.T) {
 	err := BootstrapAndRun(t.Context(), opts)
 	if err == nil {
 		t.Fatal("BootstrapAndRun should surface a Bootstrap failure")
+	}
+}
+
+// TestApplyInventoryConfigs_DoesNotFallthroughOnTransientGetError
+// guards against the previous bug where any non-nil error from
+// ConfigStore.Get was treated as "not found" and the function fell
+// through to Upsert, which then succeeded silently or failed with a
+// confusing unique-key error. The store closes mid-call: Get must
+// return a real error (not ErrStoreNotFound), and applyInventoryConfigs
+// must surface it as a Get failure, not attempt an Upsert.
+func TestApplyInventoryConfigs_DoesNotFallthroughOnTransientGetError(t *testing.T) {
+	db := dbtest.OpenMemDB(t)
+	store := inventory.NewConfigStore(db)
+	// Close the DB so subsequent operations return "database is closed".
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	err := applyInventoryConfigs(t.Context(), store, []InventoryConfigEntry{
+		{Source: "src", Name: "name", AutoLoad: true},
+	})
+	if err == nil {
+		t.Fatal("applyInventoryConfigs should return an error when Get fails on a closed DB")
+	}
+	// The error must blame the Get-time read, not an attempted insert,
+	// confirming we did not fall through to Upsert on a transient error.
+	if !strings.Contains(err.Error(), "get ") && !strings.Contains(err.Error(), "lookup ") {
+		t.Errorf("error = %v; expected a Get/lookup error, not an Upsert error (fallthrough regression)", err)
 	}
 }
 
