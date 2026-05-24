@@ -62,9 +62,10 @@ type ManifestSizeFunc func(ctx context.Context, bucket, key string) (uint64, err
 // Manager (in-memory state), the Discoverer (S3 listing of available
 // inventories), and the IndexBuilder (on-disk index materialisation).
 //
-// Discoverer and IndexBuilder are optional — when discovery is disabled
-// (--s3-source unset) the service still exists; Enabled() reports that
-// state and the methods either short-circuit or return ErrDiscoveryDisabled.
+// When discovery is unconfigured (--s3-source unset) the service is
+// constructed via NewDisabledDiscoveryService — Enabled() reports false
+// and every method returns ErrDiscoveryDisabled via the disabled
+// discoverer/builder shims rather than via per-call nil checks.
 type DiscoveryService struct {
 	cacheAt       time.Time
 	discoverer    Discoverer
@@ -81,12 +82,58 @@ type DiscoveryService struct {
 	cacheMu       sync.RWMutex
 	bgMu          sync.Mutex
 	cachePopulate bool
+	enabled       bool
 }
 
-// NewDiscoveryService constructs a service. The discoverer and builder
-// arguments may be nil, in which case Enabled() returns false.
+// disabledDiscoverer is the placeholder Discoverer wired by
+// NewDisabledDiscoveryService. Every call returns ErrDiscoveryDisabled
+// so handlers don't need per-call nil checks on the service.
+type disabledDiscoverer struct{}
+
+func (disabledDiscoverer) List(context.Context) ([]Inventory, error) {
+	return nil, ErrDiscoveryDisabled
+}
+
+func (disabledDiscoverer) Find(context.Context, string, string, string) (Inventory, error) {
+	return Inventory{}, ErrDiscoveryDisabled
+}
+func (disabledDiscoverer) Bucket() string { return "" }
+
+type disabledBuilder struct{}
+
+func (disabledBuilder) BuildWith(context.Context, string, string, string, string, func(string, int64, int64)) (string, error) {
+	return "", ErrDiscoveryDisabled
+}
+func (disabledBuilder) RemoveCache(string, string, string) error             { return ErrDiscoveryDisabled }
+func (disabledBuilder) CacheSizeBytes(string, string, string) (int64, error) { return 0, nil }
+
+// NewDiscoveryService constructs an enabled service. Both discoverer
+// and builder are required and must be non-nil; for the unconfigured
+// case use NewDisabledDiscoveryService.
 func NewDiscoveryService(mgr *Manager, discoverer Discoverer, builder IndexBuilder) *DiscoveryService {
-	return &DiscoveryService{manager: mgr, discoverer: discoverer, builder: builder, indexRatio: DefaultIndexRatio}
+	return &DiscoveryService{
+		manager:    mgr,
+		discoverer: discoverer,
+		builder:    builder,
+		indexRatio: DefaultIndexRatio,
+		bgClock:    time.Now,
+		enabled:    true,
+	}
+}
+
+// NewDisabledDiscoveryService returns a service whose methods all
+// short-circuit to ErrDiscoveryDisabled. Used when --s3-source is unset
+// so the rest of the wiring can treat DiscoveryService as a non-nil
+// dependency.
+func NewDisabledDiscoveryService(mgr *Manager) *DiscoveryService {
+	return &DiscoveryService{
+		manager:    mgr,
+		discoverer: disabledDiscoverer{},
+		builder:    disabledBuilder{},
+		indexRatio: DefaultIndexRatio,
+		bgClock:    time.Now,
+		enabled:    false,
+	}
 }
 
 // SetGate attaches a GatedLoadFunc + ManifestSizeFunc. When both are set,
@@ -114,19 +161,13 @@ var ErrDiscoveryDisabled = errors.New("discovery not configured")
 // register or build. Callers wrap it with the config ID for context.
 var ErrNoRun = errors.New("inventory has no run")
 
-// Enabled reports whether discovery is configured. List, Find, and Load
-// require Enabled() == true.
-func (s *DiscoveryService) Enabled() bool {
-	return s.discoverer != nil && s.builder != nil
-}
+// Enabled reports whether discovery is configured.
+func (s *DiscoveryService) Enabled() bool { return s.enabled }
 
 // List walks the configured S3 source and merges each discovered
 // inventory with its current Manager state. Returns nil and
 // ErrDiscoveryDisabled when discovery is unconfigured.
 func (s *DiscoveryService) List(ctx context.Context) ([]MergedInventory, error) {
-	if s.discoverer == nil {
-		return nil, ErrDiscoveryDisabled
-	}
 	discovered, err := s.discoverer.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("discover: %w", err)
@@ -163,7 +204,7 @@ func (s *DiscoveryService) List(ctx context.Context) ([]MergedInventory, error) 
 // the page rendering "not loaded" and let the user submit a duplicate
 // load that fails with ErrInvalidState.
 func (s *DiscoveryService) Snapshot(ctx context.Context) ([]MergedInventory, time.Time, error) {
-	if s.discoverer == nil {
+	if !s.enabled {
 		return nil, time.Time{}, ErrDiscoveryDisabled
 	}
 	s.cacheMu.RLock()
@@ -196,7 +237,7 @@ func (s *DiscoveryService) Snapshot(ctx context.Context) ([]MergedInventory, tim
 // the last-known-good views instead of falling back to empty.
 // LastRefreshErr returns the most recent error, if any.
 func (s *DiscoveryService) Refresh(ctx context.Context) error {
-	if s.discoverer == nil {
+	if !s.enabled {
 		return ErrDiscoveryDisabled
 	}
 	views, err := s.List(ctx)
@@ -235,7 +276,7 @@ func (s *DiscoveryService) LastRefreshErr() error {
 // Start is a no-op when discovery is disabled. Calling Start a second
 // time without Stop in between is also a no-op.
 func (s *DiscoveryService) Start(ctx context.Context, interval time.Duration, logger *zerolog.Logger) {
-	if s.discoverer == nil || interval <= 0 {
+	if !s.enabled || interval <= 0 {
 		return
 	}
 	s.bgMu.Lock()
@@ -288,19 +329,12 @@ func (s *DiscoveryService) Stop() {
 }
 
 func (s *DiscoveryService) now() time.Time {
-	if s.bgClock != nil {
-		return s.bgClock()
-	}
-
-	return time.Now()
+	return s.bgClock()
 }
 
 // Find returns a single discovered inventory run by source bucket, ID,
 // and run timestamp.
 func (s *DiscoveryService) Find(ctx context.Context, src, id, run string) (Inventory, error) {
-	if s.discoverer == nil {
-		return Inventory{}, ErrDiscoveryDisabled
-	}
 	inv, err := s.discoverer.Find(ctx, src, id, run)
 	if err != nil {
 		return inv, fmt.Errorf("find: %w", err)

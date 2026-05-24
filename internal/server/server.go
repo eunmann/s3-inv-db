@@ -126,7 +126,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 			Uint64("max_index_disk_bytes", cfg.MaxIndexDisk).
 			Msg("discovery + budget configured")
 	} else {
-		discovery = inventory.NewDiscoveryService(mgr, nil, nil)
+		discovery = inventory.NewDisabledDiscoveryService(mgr)
 	}
 
 	refreshInterval := cfg.DiscoveryRefreshInterval

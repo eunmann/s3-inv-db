@@ -51,33 +51,20 @@ func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _, _ string, _ func(str
 func (f *fakeBuilder) RemoveCache(_, _, _ string) error             { return nil }
 func (f *fakeBuilder) CacheSizeBytes(_, _, _ string) (int64, error) { return 0, nil }
 
-func TestDiscoveryService_DisabledWithoutDeps(t *testing.T) {
+func TestDiscoveryService_EnabledReflectsConstructor(t *testing.T) {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
 
-	cases := []struct {
-		disc    inventory.Discoverer
-		builder inventory.IndexBuilder
-		name    string
-		enabled bool
-	}{
-		{name: "both nil", disc: nil, builder: nil, enabled: false},
-		{name: "discoverer only", disc: &fakeDiscoverer{}, builder: nil, enabled: false},
-		{name: "builder only", disc: nil, builder: &fakeBuilder{}, enabled: false},
-		{name: "both set", disc: &fakeDiscoverer{}, builder: &fakeBuilder{}, enabled: true},
+	if got := inventory.NewDisabledDiscoveryService(mgr).Enabled(); got {
+		t.Errorf("NewDisabledDiscoveryService Enabled() = true, want false")
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			s := inventory.NewDiscoveryService(mgr, c.disc, c.builder)
-			if got := s.Enabled(); got != c.enabled {
-				t.Errorf("Enabled() = %v, want %v", got, c.enabled)
-			}
-		})
+	if got := inventory.NewDiscoveryService(mgr, &fakeDiscoverer{}, &fakeBuilder{}).Enabled(); !got {
+		t.Errorf("NewDiscoveryService(mgr, d, b) Enabled() = false, want true")
 	}
 }
 
 func TestDiscoveryService_ListWhenDisabledReturnsErr(t *testing.T) {
-	s := inventory.NewDiscoveryService(inventory.NewManager(), nil, nil)
+	s := inventory.NewDisabledDiscoveryService(inventory.NewManager())
 	_, err := s.List(t.Context())
 	if !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("List() error = %v, want inventory.ErrDiscoveryDisabled", err)
@@ -85,7 +72,7 @@ func TestDiscoveryService_ListWhenDisabledReturnsErr(t *testing.T) {
 }
 
 func TestDiscoveryService_FindWhenDisabledReturnsErr(t *testing.T) {
-	s := inventory.NewDiscoveryService(inventory.NewManager(), nil, nil)
+	s := inventory.NewDisabledDiscoveryService(inventory.NewManager())
 	_, err := s.Find(t.Context(), "src", "id", "")
 	if !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("Find() error = %v, want inventory.ErrDiscoveryDisabled", err)
@@ -93,7 +80,7 @@ func TestDiscoveryService_FindWhenDisabledReturnsErr(t *testing.T) {
 }
 
 func TestDiscoveryService_LoadWhenDisabledReturnsErr(t *testing.T) {
-	s := inventory.NewDiscoveryService(inventory.NewManager(), &fakeDiscoverer{}, nil)
+	s := inventory.NewDisabledDiscoveryService(inventory.NewManager())
 	err := s.Load(t.Context(), inventory.Inventory{})
 	if !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("Load() error = %v, want inventory.ErrDiscoveryDisabled", err)
@@ -151,7 +138,7 @@ func TestDiscoveryService_ListPropagatesDiscovererError(t *testing.T) {
 }
 
 func TestDiscoveryService_PrepareDiscovered_DisabledReturnsErr(t *testing.T) {
-	s := inventory.NewDiscoveryService(inventory.NewManager(), nil, nil)
+	s := inventory.NewDisabledDiscoveryService(inventory.NewManager())
 	disc := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "r", ManifestKey: "k"}
 	if err := s.PrepareDiscovered(t.Context(), disc); !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("PrepareDiscovered err = %v, want inventory.ErrDiscoveryDisabled", err)
@@ -212,7 +199,7 @@ func TestDiscoveryService_PrepareDiscovered_AlreadyExistsIsIdempotent(t *testing
 }
 
 func TestDiscoveryService_Snapshot_DisabledReturnsErr(t *testing.T) {
-	s := inventory.NewDiscoveryService(inventory.NewManager(), nil, nil)
+	s := inventory.NewDisabledDiscoveryService(inventory.NewManager())
 	if _, _, err := s.Snapshot(t.Context()); !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("Snapshot err = %v, want ErrDiscoveryDisabled", err)
 	}
@@ -390,7 +377,7 @@ func TestDiscoveryService_Refresh_RecordsClockTimestamp(t *testing.T) {
 }
 
 func TestDiscoveryService_StartStop_NoopWhenDisabled(t *testing.T) {
-	s := inventory.NewDiscoveryService(inventory.NewManager(), nil, nil)
+	s := inventory.NewDisabledDiscoveryService(inventory.NewManager())
 	// Should not block, panic, or leak a goroutine.
 	s.Start(t.Context(), time.Millisecond, nil)
 	s.Stop()

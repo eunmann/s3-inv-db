@@ -157,7 +157,11 @@ func New(
 		opt(h)
 	}
 	if h.discovery == nil {
-		h.discovery = inventory.NewDiscoveryService(mgr, h.discoverer, h.indexBldr)
+		if h.discoverer != nil && h.indexBldr != nil {
+			h.discovery = inventory.NewDiscoveryService(mgr, h.discoverer, h.indexBldr)
+		} else {
+			h.discovery = inventory.NewDisabledDiscoveryService(mgr)
+		}
 	}
 
 	return h
