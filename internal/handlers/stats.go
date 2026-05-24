@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
@@ -130,51 +131,63 @@ func (h *Handlers) writeStatsForInventory(w http.ResponseWriter, r *http.Request
 	WriteJSON(w, http.StatusOK, resp)
 }
 
-// GetDescendantsAPI returns descendants at a specific depth.
-func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
-	inventoryID := inventory.ID(chi.URLParam(r, "id"))
-	q := r.URL.Query()
-	depthStr := q.Get("depth")
-	minCountStr := q.Get("min_count")
-	minBytesStr := q.Get("min_bytes")
+// descendantsParams bundles the request knobs GetDescendantsAPI parses
+// out of the query string.
+type descendantsParams struct {
+	prefix string
+	depth  int
+	filter indexread.Filter
+}
 
+// parseDescendantsParams reads the descendants-API query string and
+// returns a populated params struct. On invalid input it writes a 400
+// directly and returns ok=false; the caller should just return.
+func parseDescendantsParams(w http.ResponseWriter, q url.Values) (descendantsParams, bool) {
 	if !q.Has("prefix") {
 		WriteJSONError(w, http.StatusBadRequest, "prefix query parameter is required")
 
-		return
+		return descendantsParams{}, false
 	}
-	prefix := q.Get("prefix")
-
-	depth := 1
-	if depthStr != "" {
-		var err error
-		depth, err = strconv.Atoi(depthStr)
-		if err != nil || depth < 1 {
+	p := descendantsParams{prefix: q.Get("prefix"), depth: 1}
+	if v := q.Get("depth"); v != "" {
+		d, err := strconv.Atoi(v)
+		if err != nil || d < 1 {
 			WriteJSONError(w, http.StatusBadRequest, "invalid depth")
 
-			return
+			return descendantsParams{}, false
 		}
+		p.depth = d
 	}
-
-	var filter indexread.Filter
-	if minCountStr != "" {
-		v, err := strconv.ParseUint(minCountStr, 10, 64)
+	if v := q.Get("min_count"); v != "" {
+		n, err := strconv.ParseUint(v, 10, 64)
 		if err != nil {
 			WriteJSONError(w, http.StatusBadRequest, "invalid min_count")
 
-			return
+			return descendantsParams{}, false
 		}
-		filter.MinCount = v
+		p.filter.MinCount = n
 	}
-	if minBytesStr != "" {
-		v, err := strconv.ParseUint(minBytesStr, 10, 64)
+	if v := q.Get("min_bytes"); v != "" {
+		n, err := strconv.ParseUint(v, 10, 64)
 		if err != nil {
 			WriteJSONError(w, http.StatusBadRequest, "invalid min_bytes")
 
-			return
+			return descendantsParams{}, false
 		}
-		filter.MinBytes = v
+		p.filter.MinBytes = n
 	}
+
+	return p, true
+}
+
+// GetDescendantsAPI returns descendants at a specific depth.
+func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
+	inventoryID := inventory.ID(chi.URLParam(r, "id"))
+	params, ok := parseDescendantsParams(w, r.URL.Query())
+	if !ok {
+		return
+	}
+	prefix, depth, filter := params.prefix, params.depth, params.filter
 
 	logger := zerolog.Ctx(r.Context())
 	var descendants []DescendantInfo
