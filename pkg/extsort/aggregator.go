@@ -2,6 +2,7 @@ package extsort
 
 import (
 	"runtime"
+	"runtime/debug"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -112,6 +113,15 @@ const AggregatorFractionOfLimit = 0.15
 // unsetMemoryLimit treats debug.SetMemoryLimit's math.MaxInt64 sentinel
 // (no GOMEMLIMIT configured) as unset.
 const unsetMemoryLimit int64 = 1 << 62
+
+// readMemoryLimit returns the current GOMEMLIMIT (or runtime's sentinel
+// near math.MaxInt64 if unset). Debug.SetMemoryLimit(-1) is the
+// idiomatic but counterintuitive read-only form — passing -1 leaves
+// the limit unchanged and returns the prior value. Wrapping it makes
+// intent obvious at call sites.
+func readMemoryLimit() int64 {
+	return debug.SetMemoryLimit(-1)
+}
 
 // AggregatorCap returns the combined spill threshold for all workers.
 func AggregatorCap(memoryLimit int64) uint64 {

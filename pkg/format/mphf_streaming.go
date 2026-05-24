@@ -309,7 +309,6 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		return fmt.Errorf("close preorderPos: %w", err)
 	}
 	b.preorderPos = nil
-	runtime.GC()
 
 	log.Debug().Msg("MPHF: writing prefix blob")
 

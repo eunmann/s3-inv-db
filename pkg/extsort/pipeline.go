@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -172,11 +171,11 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	}()
 
 	// Auto-detect memory budget if caller hasn't installed one.
-	memoryLimit := debug.SetMemoryLimit(-1)
+	memoryLimit := readMemoryLimit()
 	memSource := "configured"
 	if memoryLimit >= unsetMemoryLimit {
 		res := sysmem.ApplyMemoryLimit(sysmem.DefaultMemoryLimitFraction)
-		memoryLimit = debug.SetMemoryLimit(-1)
+		memoryLimit = readMemoryLimit()
 		memSource = string(res.Source)
 	}
 	log.Info().
@@ -595,7 +594,7 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int,
 		}
 		p.chunksProcessed.Add(1)
 
-		if ShouldWorkerFlush(uint64(agg.EstimatedMemoryUsage()), debug.SetMemoryLimit(-1), numWorkers) {
+		if ShouldWorkerFlush(uint64(agg.EstimatedMemoryUsage()), readMemoryLimit(), numWorkers) {
 			p.memTracker.LogNow("pre_flush")
 			if err := p.flushAggregator(ctx, agg, workerID); err != nil {
 				return fmt.Errorf("worker %d flush: %w", workerID, err)
@@ -647,7 +646,7 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 		bytesAdded int64
 		i          int
 	)
-	memLimit := debug.SetMemoryLimit(-1)
+	memLimit := readMemoryLimit()
 	for {
 		if i%ctxCheckInterval == 0 {
 			select {
