@@ -199,6 +199,34 @@ func TestManager_SubmitAfterShutdown(t *testing.T) {
 	}
 }
 
+func TestManager_NilStoreIsNoop(t *testing.T) {
+	mgr := jobs.NewManager(nil, jobs.NewBus(8))
+	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Submit with nil store: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := mgr.Cancel(job.ID); errors.Is(err, jobs.ErrNotFound) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("job %s never finished", job.ID)
+}
+
+func TestManager_SetStoreNilDetaches(t *testing.T) {
+	mgr, _, _ := newManager(t)
+	mgr.SetStore(nil)
+	if _, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("Submit after SetStore(nil): %v", err)
+	}
+}
+
 func TestManager_ShutdownCancelsLiveJob(t *testing.T) {
 	mgr, store, _ := newManager(t)
 

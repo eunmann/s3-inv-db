@@ -25,12 +25,25 @@ var ErrNotFound = errors.New("job not found")
 // ErrShutdown is returned by Submit after Shutdown has been called.
 var ErrShutdown = errors.New("job manager is shut down")
 
+// jobStore is the persistence sink Manager writes job snapshots to.
+// Defaulted to a no-op so tests can construct a Manager without a
+// real database.
+type jobStore interface {
+	Upsert(ctx context.Context, j Job) error
+}
+
+type noopJobStore struct{}
+
+func (noopJobStore) Upsert(context.Context, Job) error { return nil }
+
 // Manager owns the in-memory registry of live jobs and their cancel
-// handles. Job snapshots are persisted to Store on every transition and
-// broadcast on Bus so the SSE handler can push updates to the UI.
+// handles. Job snapshots are persisted to the attached store on every
+// transition and broadcast on Bus so the SSE handler can push updates
+// to the UI. When no store is wired (via SetStore or NewManager's store
+// arg) persistence is silently dropped.
 type Manager struct {
 	logger   zerolog.Logger
-	store    *Store
+	store    jobStore
 	bus      *Bus
 	cancels  map[ID]context.CancelFunc
 	wg       sync.WaitGroup
@@ -38,16 +51,35 @@ type Manager struct {
 	shutdown bool
 }
 
-// NewManager wires a Store and a Bus. Logger is used for background
-// goroutine errors that can't surface to a caller; zerolog.Nop() if not
-// supplied via SetLogger.
+// NewManager wires a Store and a Bus. A nil store is replaced with a
+// no-op so tests don't need a SQLite handle. Logger is used for
+// background goroutine errors that can't surface to a caller;
+// zerolog.Nop() if not supplied via SetLogger.
 func NewManager(store *Store, bus *Bus) *Manager {
-	return &Manager{
-		store:   store,
+	m := &Manager{
 		bus:     bus,
 		cancels: make(map[ID]context.CancelFunc),
 		logger:  zerolog.Nop(),
+		store:   noopJobStore{},
 	}
+	if store != nil {
+		m.store = store
+	}
+
+	return m
+}
+
+// SetStore attaches a Store after construction. Pass nil to detach to
+// the no-op sink. Safe to call once at wiring time before any Submit.
+func (m *Manager) SetStore(s *Store) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s == nil {
+		m.store = noopJobStore{}
+
+		return
+	}
+	m.store = s
 }
 
 // SetLogger replaces the Manager's background logger. Safe to call once
