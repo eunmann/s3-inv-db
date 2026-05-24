@@ -52,6 +52,29 @@ func TestCSVInventoryReader(t *testing.T) {
 	}
 }
 
+func TestCSVInventoryReader_MalformedRowCount(t *testing.T) {
+	// Two malformed sizes ("abc", "") and one good row.
+	csvData := "k1,abc,STANDARD,\n" +
+		"k2,100,STANDARD,\n" +
+		"k3,not-a-number,GLACIER,\n"
+	r := s3inventory.NewCSVReader(bytes.NewReader([]byte(csvData)), s3inventory.CSVReaderConfig{
+		KeyCol: 0, SizeCol: 1, StorageCol: 2,
+	})
+	defer r.Close()
+
+	for i := range 3 {
+		row, err := r.Next()
+		if err != nil {
+			t.Fatalf("Next(%d): %v", i, err)
+		}
+		_ = row
+	}
+
+	if got := r.MalformedRowCount(); got != 2 {
+		t.Errorf("MalformedRowCount = %d, want 2", got)
+	}
+}
+
 func TestCSVInventoryReaderFromStream(t *testing.T) {
 	csv := "file.txt,1024,STANDARD,\n"
 
