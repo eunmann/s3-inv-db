@@ -217,16 +217,6 @@ func TestManager_NilStoreIsNoop(t *testing.T) {
 	t.Fatalf("job %s never finished", job.ID)
 }
 
-func TestManager_SetStoreNilDetaches(t *testing.T) {
-	sched, _, _ := newScheduler(t)
-	sched.SetStore(nil)
-	if _, err := sched.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
-		return nil
-	}); err != nil {
-		t.Fatalf("Submit after SetStore(nil): %v", err)
-	}
-}
-
 func TestManager_ShutdownCancelsLiveJob(t *testing.T) {
 	sched, store, _ := newScheduler(t)
 

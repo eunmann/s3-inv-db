@@ -55,7 +55,7 @@ func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _, _ string, _ func(str
 
 func newDiscoveredHandlers(t *testing.T, disc inventory.Discoverer, ldr inventory.IndexBuilder) *handlers.Handlers {
 	t.Helper()
-	mgr := inventory.NewCatalog()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 	opts := []handlers.Option{handlers.WithDiscoverer(disc)}
 	if ldr != nil {

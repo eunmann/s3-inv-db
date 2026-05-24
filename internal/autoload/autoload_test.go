@@ -71,9 +71,8 @@ func newFakeStores(t *testing.T) (*inventory.ConfigStore, *inventory.Catalog) {
 	t.Helper()
 	db := openTestDB(t)
 	cs := inventory.NewConfigStore(db)
-	mgr := inventory.NewCatalog()
 	store, _ := inventory.NewStore(db)
-	mgr.SetStore(store)
+	mgr := inventory.NewCatalog(store)
 
 	return cs, mgr
 }

@@ -92,10 +92,8 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	configStore := inventory.NewConfigStore(cfg.DB)
 	jobStore := jobs.NewStore(cfg.DB)
 	jobBus := jobs.NewBus(64)
-	jobMgr := jobs.NewScheduler(jobStore, jobBus)
-	jobMgr.SetLogger(cfg.Logger)
-	mgr := inventory.NewCatalog()
-	mgr.SetStore(invStore)
+	jobMgr := jobs.NewScheduler(jobStore, jobBus, jobs.WithLogger(cfg.Logger))
+	mgr := inventory.NewCatalog(invStore)
 
 	renderer, err := templates.New()
 	if err != nil {

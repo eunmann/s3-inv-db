@@ -61,19 +61,27 @@ type Catalog struct {
 	mu          sync.RWMutex
 }
 
-// NewCatalog creates a new inventory manager with no durable backing.
-// Call SetStore to wire a real Store.
-func NewCatalog() *Catalog {
-	return &Catalog{
+// NewCatalog wires a persistence sink. A nil store is replaced with a
+// no-op so tests don't need a SQLite handle. After construction every
+// state transition (Register, Load, Unload, Remove, Hydrate) is
+// mirrored to the store.
+func NewCatalog(store *Store) *Catalog {
+	c := &Catalog{
 		inventories: make(map[ID]*managedInventory),
 		store:       noopMirrorStore{},
 	}
+	if store != nil {
+		c.store = store
+	}
+
+	return c
 }
 
-// SetStore attaches a Store to the Catalog. After this, every state
-// transition (Register, Load, Unload, Remove, Hydrate) is mirrored to
-// the Store. Pass nil to detach. Safe to call once at startup; later
-// changes during operation are not synchronized.
+// SetStore swaps the persistence sink. Test-fixture pattern: a Catalog
+// is constructed nil-store, then late-wired to an invStore that's
+// shared with peer dependencies (jobs, configStore). Production wires
+// via the ctor instead. Safe to call once before first state-changing
+// method.
 func (m *Catalog) SetStore(s *Store) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

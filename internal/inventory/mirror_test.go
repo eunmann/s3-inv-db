@@ -16,8 +16,7 @@ func openManagerWithStore(t *testing.T) (*inventory.Catalog, *inventory.Store) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	mgr := inventory.NewCatalog()
-	mgr.SetStore(store)
+	mgr := inventory.NewCatalog(store)
 	t.Cleanup(func() { _ = mgr.Close() })
 
 	return mgr, store

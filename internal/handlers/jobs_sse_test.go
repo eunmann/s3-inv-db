@@ -15,7 +15,7 @@ import (
 
 func newJobsHandlers(t *testing.T) (*handlers.Handlers, *jobs.Scheduler) {
 	t.Helper()
-	invMgr := inventory.NewCatalog()
+	invMgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = invMgr.Close() })
 	h := newWiredHandlers(t, invMgr)
 	if err := invMgr.Register(t.Context(), "src/inv1", "n", "p"); err != nil {
@@ -105,7 +105,7 @@ func TestJobsStream_EmitsHeartbeat(t *testing.T) {
 // caller-chosen SSE heartbeat interval — exercises the configurable path.
 func newHandlersWithHeartbeat(t *testing.T, hb time.Duration) *handlers.Handlers {
 	t.Helper()
-	invMgr := inventory.NewCatalog()
+	invMgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = invMgr.Close() })
 	if err := invMgr.Register(t.Context(), "src/inv1", "n", "p"); err != nil {
 		t.Fatal(err)

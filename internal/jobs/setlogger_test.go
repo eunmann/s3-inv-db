@@ -8,10 +8,9 @@ import (
 	"github.com/rs/zerolog"
 )
 
-func TestManager_SetLogger(t *testing.T) {
+func TestScheduler_WithLogger(t *testing.T) {
 	_, store, _ := newScheduler(t)
-	sched := jobs.NewScheduler(store, jobs.NewBus(8))
-	sched.SetLogger(zerolog.Nop())
+	sched := jobs.NewScheduler(store, jobs.NewBus(8), jobs.WithLogger(zerolog.Nop()))
 	job, err := sched.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
 		return nil
 	})

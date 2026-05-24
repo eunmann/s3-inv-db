@@ -21,7 +21,7 @@ type testFixture struct {
 
 func newTestFixture(t *testing.T) *testFixture {
 	t.Helper()
-	mgr := inventory.NewCatalog()
+	mgr := inventory.NewCatalog(nil)
 	h := newWiredHandlers(t, mgr)
 
 	return &testFixture{h: h, mgr: mgr}

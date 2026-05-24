@@ -51,11 +51,19 @@ type Scheduler struct {
 	shutdown bool
 }
 
+// Option configures a Scheduler at construction. See WithLogger.
+type Option func(*Scheduler)
+
+// WithLogger installs the Scheduler's background logger; without it,
+// background goroutine errors that can't surface to a caller are
+// suppressed (zerolog.Nop()).
+func WithLogger(l zerolog.Logger) Option {
+	return func(s *Scheduler) { s.logger = l }
+}
+
 // NewScheduler wires a Store and a Bus. A nil store is replaced with a
-// no-op so tests don't need a SQLite handle. Logger is used for
-// background goroutine errors that can't surface to a caller;
-// zerolog.Nop() if not supplied via SetLogger.
-func NewScheduler(store *Store, bus *Bus) *Scheduler {
+// no-op so tests don't need a SQLite handle.
+func NewScheduler(store *Store, bus *Bus, opts ...Option) *Scheduler {
 	m := &Scheduler{
 		bus:     bus,
 		cancels: make(map[ID]context.CancelFunc),
@@ -65,26 +73,12 @@ func NewScheduler(store *Store, bus *Bus) *Scheduler {
 	if store != nil {
 		m.store = store
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
 
 	return m
 }
-
-// SetStore attaches a Store after construction. Pass nil to detach to
-// the no-op sink. Safe to call once at wiring time before any Submit.
-func (m *Scheduler) SetStore(s *Store) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if s == nil {
-		m.store = noopJobStore{}
-
-		return
-	}
-	m.store = s
-}
-
-// SetLogger replaces the Scheduler's background logger. Safe to call once
-// at wiring time before any Submit.
-func (m *Scheduler) SetLogger(l zerolog.Logger) { m.logger = l }
 
 // Submit creates a job in the queued state, kicks off work on a fresh
 // goroutine, and returns the initial snapshot. The cancel handle is

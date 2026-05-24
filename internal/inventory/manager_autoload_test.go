@@ -9,7 +9,7 @@ import (
 )
 
 func TestManagerSetPinned(t *testing.T) {
-	m := inventory.NewCatalog()
+	m := inventory.NewCatalog(nil)
 	const id = "src/inv/runA"
 	if err := m.Register(t.Context(), id, "n", "p"); err != nil {
 		t.Fatalf("register: %v", err)
@@ -32,14 +32,14 @@ func TestManagerSetPinned(t *testing.T) {
 }
 
 func TestManagerSetPinned_NotFound(t *testing.T) {
-	m := inventory.NewCatalog()
+	m := inventory.NewCatalog(nil)
 	if err := m.SetPinned(t.Context(), "nope", true); !errors.Is(err, inventory.ErrNotFound) {
 		t.Errorf("SetPinned on unknown id = %v, want inventory.ErrNotFound", err)
 	}
 }
 
 func TestManagerRecordAutoLoadFailure(t *testing.T) {
-	m := inventory.NewCatalog()
+	m := inventory.NewCatalog(nil)
 	const id = "src/inv/run1"
 	if err := m.Register(t.Context(), id, "n", "p"); err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestManagerRecordAutoLoadFailure(t *testing.T) {
 }
 
 func TestManagerTouchAccessed_InMemoryOnly(t *testing.T) {
-	m := inventory.NewCatalog()
+	m := inventory.NewCatalog(nil)
 	const id = "src/inv/run1"
 	if err := m.Register(t.Context(), id, "n", "p"); err != nil {
 		t.Fatal(err)
@@ -91,7 +91,7 @@ func TestManagerEvictForBudget_PreservesUserUnloadedAt(t *testing.T) {
 	// EvictForBudget must NOT stamp UserUnloadedAt — it represents
 	// budget eviction, not user intent. The auto-loader is free to
 	// reload the run later if a newer one appears.
-	m := inventory.NewCatalog()
+	m := inventory.NewCatalog(nil)
 	const id = "src/inv/run1"
 	if err := m.Hydrate(t.Context(), inventory.Info{
 		ID:         id,

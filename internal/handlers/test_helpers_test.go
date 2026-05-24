@@ -17,16 +17,17 @@ import (
 // the rest of the required deps are constructed here.
 func newWiredHandlers(t *testing.T, mgr *inventory.Catalog, opts ...handlers.Option) *handlers.Handlers {
 	t.Helper()
-	if mgr == nil {
-		mgr = inventory.NewCatalog()
-		t.Cleanup(func() { _ = mgr.Close() })
-	}
 	db := dbtest.OpenMemDB(t)
 	invStore, err := inventory.NewStore(db)
 	if err != nil {
 		t.Fatalf("inventory store: %v", err)
 	}
-	mgr.SetStore(invStore)
+	if mgr == nil {
+		mgr = inventory.NewCatalog(invStore)
+		t.Cleanup(func() { _ = mgr.Close() })
+	} else {
+		mgr.SetStore(invStore)
+	}
 	renderer, err := templates.New()
 	if err != nil {
 		t.Fatalf("renderer: %v", err)
