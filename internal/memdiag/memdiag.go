@@ -5,6 +5,7 @@
 package memdiag
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -33,6 +34,14 @@ const pprofAddr = ":6060"
 // ReadHeaderTimeout on every http.Server.
 const pprofServerTimeout = 30 * time.Second
 
+// pprofShutdownTimeout bounds how long Tracker.Stop waits for the pprof
+// server to drain in-flight requests before returning.
+const pprofShutdownTimeout = 5 * time.Second
+
+func contextWithShutdownTimeout() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), pprofShutdownTimeout)
+}
+
 // memoryDivergenceWarnRatio is the heap/budget ratio above which
 // LogWithBudget surfaces a warning that internal accounting has
 // drifted from the runtime's heap statistic.
@@ -49,6 +58,10 @@ type Config struct {
 
 	// PprofEnabled controls whether pprof server is started.
 	PprofEnabled bool
+
+	// PprofAddr overrides pprofAddr when set. Tests use ":0" to let the
+	// OS pick a free port; production leaves it empty for the default.
+	PprofAddr string
 
 	// LogInterval is the interval for periodic memory logging.
 	LogInterval time.Duration
@@ -130,8 +143,10 @@ type Tracker struct {
 	doneCh   chan struct{}
 	phase    string
 	config   Config
+	pprofSrv *http.Server
 	peakHeap uint64
 	mu       sync.Mutex
+	stopOnce sync.Once
 	started  atomic.Bool
 }
 
@@ -159,7 +174,7 @@ func (t *Tracker) Start() {
 	log.Info().Msg("memory diagnostics enabled")
 
 	if t.config.PprofEnabled {
-		startPprofServer(*log)
+		t.pprofSrv = startPprofServer(*log, t.config.PprofAddr)
 	}
 
 	go t.logLoop()
@@ -181,29 +196,46 @@ func pprofMux() *http.ServeMux {
 }
 
 // startPprofServer launches the diagnostics pprof endpoint with
-// explicit ReadHeaderTimeout (gosec G114). Runs in its own goroutine
-// so Tracker.Start returns immediately.
-func startPprofServer(log zerolog.Logger) {
+// explicit ReadHeaderTimeout (gosec G114). Returns the *http.Server so
+// Tracker.Stop can call Shutdown. Runs ListenAndServe in its own
+// goroutine so Tracker.Start returns immediately.
+func startPprofServer(log zerolog.Logger, addr string) *http.Server {
+	if addr == "" {
+		addr = pprofAddr
+	}
 	srv := &http.Server{
-		Addr:              pprofAddr,
+		Addr:              addr,
 		Handler:           pprofMux(),
 		ReadHeaderTimeout: pprofServerTimeout,
 	}
 	go func() {
-		log.Info().Str("addr", pprofAddr).Msg("starting pprof server")
+		log.Info().Str("addr", addr).Msg("starting pprof server")
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error().Err(err).Msg("pprof server failed")
 		}
 	}()
+
+	return srv
 }
 
-// Stop stops the tracker.
+// Stop stops the tracker, including the pprof server if one was
+// started. Idempotent — a second call is a no-op.
 func (t *Tracker) Stop() {
 	if !t.started.Load() {
 		return
 	}
-	close(t.stopCh)
-	<-t.doneCh
+	t.stopOnce.Do(func() {
+		close(t.stopCh)
+		<-t.doneCh
+		if t.pprofSrv != nil {
+			ctx, cancel := contextWithShutdownTimeout()
+			defer cancel()
+			if err := t.pprofSrv.Shutdown(ctx); err != nil {
+				logging.L().Warn().Err(err).Msg("pprof server shutdown")
+			}
+			t.pprofSrv = nil
+		}
+	})
 }
 
 // SetPhase sets the current phase for logging context.
