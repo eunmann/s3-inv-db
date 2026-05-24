@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/klauspost/pgzip"
+	"github.com/rs/zerolog/log"
 )
 
 // Row represents a single object from an S3 inventory file.
@@ -39,6 +40,7 @@ type CSVReader struct {
 	sizeCol       int
 	storageCol    int
 	accessTierCol int
+	malformedRows uint64
 }
 
 // CSVReaderConfig configures column indices for the CSV reader.
@@ -132,7 +134,12 @@ func (r *CSVReader) Next() (Row, error) {
 		sizeStr := strings.TrimSpace(fields[r.sizeCol])
 		size, err := strconv.ParseUint(sizeStr, 10, 64)
 		if err != nil {
-			// Treat invalid size as 0 (could be empty or malformed)
+			r.malformedRows++
+			log.Debug().
+				Str("key", key).
+				Str("size_field", sizeStr).
+				Err(err).
+				Msg("s3inventory: malformed size, defaulting to 0")
 			size = 0
 		}
 
@@ -150,6 +157,11 @@ func (r *CSVReader) Next() (Row, error) {
 
 		return row, nil
 	}
+}
+
+// MalformedRowCount returns the number of rows whose size field failed to parse.
+func (r *CSVReader) MalformedRowCount() uint64 {
+	return r.malformedRows
 }
 
 // Close releases resources.
