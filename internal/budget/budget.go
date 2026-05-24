@@ -45,19 +45,13 @@ func New(capBytes, headroomBytes uint64) *Tracker {
 	}
 }
 
-func (t *Tracker) Cap() uint64 {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+// Cap returns the configured byte cap. Set once in New and never
+// mutated; safe to read without the tracker mutex.
+func (t *Tracker) Cap() uint64 { return t.cap }
 
-	return t.cap
-}
-
-func (t *Tracker) Headroom() uint64 {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	return t.headroom
-}
+// Headroom returns the configured headroom. Set once in New and never
+// mutated; safe to read without the tracker mutex.
+func (t *Tracker) Headroom() uint64 { return t.headroom }
 
 func (t *Tracker) Used() uint64 {
 	t.mu.Lock()
