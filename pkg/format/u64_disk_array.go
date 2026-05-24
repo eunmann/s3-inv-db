@@ -1,3 +1,5 @@
+//go:build amd64 || arm64 || ppc64le || riscv64 || mips64le || loong64 || wasm
+
 package format
 
 import (
