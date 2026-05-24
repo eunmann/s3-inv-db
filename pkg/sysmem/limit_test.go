@@ -66,6 +66,67 @@ func TestApplyMemoryLimit_EnvOverridesSysmemFraction(t *testing.T) {
 	}
 }
 
+func TestComputeMemoryLimit_NoSideEffects(t *testing.T) {
+	t.Setenv("GOMEMLIMIT", "")
+	prev := debug.SetMemoryLimit(-1)
+	debug.SetMemoryLimit(prev)
+	t.Cleanup(func() { debug.SetMemoryLimit(prev) })
+
+	_ = sysmem.ComputeMemoryLimit(0.5)
+
+	after := debug.SetMemoryLimit(-1)
+	debug.SetMemoryLimit(after)
+	if after != prev {
+		t.Errorf("ComputeMemoryLimit mutated process memory limit: before=%d after=%d", prev, after)
+	}
+}
+
+func TestApply_RespectsGOGCEnv(t *testing.T) {
+	t.Setenv("GOMEMLIMIT", "")
+	t.Setenv("GOGC", "50")
+
+	prevLimit := debug.SetMemoryLimit(-1)
+	debug.SetMemoryLimit(prevLimit)
+	t.Cleanup(func() { debug.SetMemoryLimit(prevLimit) })
+
+	// SetGCPercent(-1) returns the previous value without changing it.
+	prevGC := debug.SetGCPercent(-1)
+	debug.SetGCPercent(prevGC)
+	t.Cleanup(func() { debug.SetGCPercent(prevGC) })
+
+	// Force a tight-limit path so Apply would otherwise call SetGCPercent.
+	tight := int64(1 * 1024 * 1024 * 1024) // 1 GiB
+	sysmem.Apply(sysmem.MemoryLimitResult{Bytes: tight, Source: sysmem.MemoryLimitSourceSysmem})
+
+	afterGC := debug.SetGCPercent(-1)
+	debug.SetGCPercent(afterGC)
+	if afterGC != prevGC {
+		t.Errorf("Apply mutated GOGC despite env override: before=%d after=%d", prevGC, afterGC)
+	}
+}
+
+func TestApply_TunesGOGCWhenEnvUnset(t *testing.T) {
+	t.Setenv("GOMEMLIMIT", "")
+	t.Setenv("GOGC", "")
+
+	prevLimit := debug.SetMemoryLimit(-1)
+	debug.SetMemoryLimit(prevLimit)
+	t.Cleanup(func() { debug.SetMemoryLimit(prevLimit) })
+
+	prevGC := debug.SetGCPercent(-1)
+	debug.SetGCPercent(prevGC)
+	t.Cleanup(func() { debug.SetGCPercent(prevGC) })
+
+	tight := int64(1 * 1024 * 1024 * 1024) // 1 GiB
+	sysmem.Apply(sysmem.MemoryLimitResult{Bytes: tight, Source: sysmem.MemoryLimitSourceSysmem})
+
+	afterGC := debug.SetGCPercent(-1)
+	debug.SetGCPercent(afterGC)
+	if afterGC != 50 {
+		t.Errorf("Apply did not tune GOGC to 50 with env unset: got %d", afterGC)
+	}
+}
+
 func TestParseGoMemLimit_RejectsUnknownSuffix(t *testing.T) {
 	// Exercises the parse path indirectly: set an invalid env, expect
 	// ApplyMemoryLimit to fall through to other candidates without
