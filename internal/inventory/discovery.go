@@ -113,26 +113,38 @@ func (disabledBuilder) CacheSizeBytes(string, string, string) (int64, error) { r
 // Snapshot. Constant because Refresh is process-global.
 const refreshKey = "discovery-refresh"
 
-// NewDiscovery constructs an enabled service. Both discoverer
-// and builder are required and must be non-nil; for the unconfigured
-// case use NewDisabledDiscovery.
-func NewDiscovery(mgr *Catalog, discoverer Discoverer, builder IndexBuilder) *Discovery {
-	return &Discovery{
-		manager:    mgr,
-		discoverer: discoverer,
-		builder:    builder,
-		indexRatio: DefaultIndexRatio,
-		bgClock:    time.Now,
-		enabled:    true,
+// DiscoveryOption configures a Discovery at construction.
+type DiscoveryOption func(*Discovery)
+
+// WithBackend enables the Discovery by wiring a Discoverer + IndexBuilder.
+// Without it, the Discovery is constructed with disabled stand-ins and
+// Enabled() reports false.
+func WithBackend(discoverer Discoverer, builder IndexBuilder) DiscoveryOption {
+	return func(d *Discovery) {
+		d.discoverer = discoverer
+		d.builder = builder
+		d.enabled = true
 	}
 }
 
-// NewDisabledDiscovery returns a service whose methods all
-// short-circuit to ErrDiscoveryDisabled. Used when --s3-source is unset
-// so the rest of the wiring can treat Discovery as a non-nil
-// dependency.
-func NewDisabledDiscovery(mgr *Catalog) *Discovery {
-	return &Discovery{
+// WithGate attaches a GatedLoadFunc + ManifestSizeFunc. When both are
+// set, LoadWith routes through the gate so disk-budget rules apply.
+// IndexRatio == 0 keeps the package default.
+func WithGate(gate GatedLoadFunc, sizer ManifestSizeFunc, indexRatio float64) DiscoveryOption {
+	return func(d *Discovery) {
+		d.gate = gate
+		d.sizer = sizer
+		if indexRatio > 0 {
+			d.indexRatio = indexRatio
+		}
+	}
+}
+
+// NewDiscovery constructs a Discovery. Without WithBackend, the service
+// is disabled (every method returns ErrDiscoveryDisabled) so callers
+// can treat Discovery as a non-nil dependency.
+func NewDiscovery(mgr *Catalog, opts ...DiscoveryOption) *Discovery {
+	d := &Discovery{
 		manager:    mgr,
 		discoverer: disabledDiscoverer{},
 		builder:    disabledBuilder{},
@@ -140,10 +152,22 @@ func NewDisabledDiscovery(mgr *Catalog) *Discovery {
 		bgClock:    time.Now,
 		enabled:    false,
 	}
+	for _, opt := range opts {
+		opt(d)
+	}
+
+	return d
 }
 
-// SetGate attaches a GatedLoadFunc + ManifestSizeFunc. When both are set,
-// LoadWith routes through the gate so disk-budget rules apply.
+// NewDisabledDiscovery returns a disabled Discovery. Equivalent to
+// NewDiscovery(mgr) — kept for migration; new callers should use
+// NewDiscovery directly.
+func NewDisabledDiscovery(mgr *Catalog) *Discovery {
+	return NewDiscovery(mgr)
+}
+
+// SetGate is the legacy late-wire entry point. New callers should use
+// WithGate at construction.
 func (s *Discovery) SetGate(gate GatedLoadFunc, sizer ManifestSizeFunc, indexRatio float64) {
 	s.gate = gate
 	s.sizer = sizer

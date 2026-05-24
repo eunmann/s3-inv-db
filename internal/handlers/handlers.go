@@ -171,9 +171,9 @@ func New(
 	}
 	if h.discovery == nil {
 		if h.discoverer != nil && h.indexBldr != nil {
-			h.discovery = inventory.NewDiscovery(mgr, h.discoverer, h.indexBldr)
+			h.discovery = inventory.NewDiscovery(mgr, inventory.WithBackend(h.discoverer, h.indexBldr))
 		} else {
-			h.discovery = inventory.NewDisabledDiscovery(mgr)
+			h.discovery = inventory.NewDiscovery(mgr)
 		}
 	}
 

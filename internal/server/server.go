@@ -115,16 +115,18 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		}
 		bldr = wiring.Loader
 		s3Client = wiring.Client
-		discovery = inventory.NewDiscovery(mgr, wiring.Discoverer, wiring.Loader)
 		sizer := loadcontrol.NewManifestSizer(s3Client)
-		discovery.SetGate(gate.Load, sizer.ManifestSize, cfg.IndexRatio)
+		discovery = inventory.NewDiscovery(mgr,
+			inventory.WithBackend(wiring.Discoverer, wiring.Loader),
+			inventory.WithGate(gate.Load, sizer.ManifestSize, cfg.IndexRatio),
+		)
 		cfg.Logger.Info().
 			Str("s3_source", cfg.S3Source).
 			Str("cache_dir", cfg.CacheDir).
 			Uint64("max_index_disk_bytes", cfg.MaxIndexDisk).
 			Msg("discovery + budget configured")
 	} else {
-		discovery = inventory.NewDisabledDiscovery(mgr)
+		discovery = inventory.NewDiscovery(mgr)
 	}
 
 	refreshInterval := cfg.DiscoveryRefreshInterval
