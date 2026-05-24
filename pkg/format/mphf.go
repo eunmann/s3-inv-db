@@ -41,7 +41,7 @@ type MPHF struct {
 
 // OpenMPHF opens an MPHF from the given directory.
 func OpenMPHF(outDir string) (*MPHF, error) {
-	mphPath := filepath.Join(outDir, "mph.bin")
+	mphPath := filepath.Join(outDir, MPHFile)
 	combinedPath := filepath.Join(outDir, CombinedMPHFArrayFile)
 
 	info, err := os.Stat(mphPath)
@@ -81,8 +81,8 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 		}
 		usePrefixDict = true
 	} else {
-		blobPath := filepath.Join(outDir, "prefix_blob.bin")
-		offsetsPath := filepath.Join(outDir, "prefix_offsets.u64")
+		blobPath := filepath.Join(outDir, PrefixBlobFile)
+		offsetsPath := filepath.Join(outDir, PrefixOffsetsFile)
 		if _, err := os.Stat(blobPath); err == nil {
 			prefixBlob, err = OpenBlob(blobPath, offsetsPath)
 			if err != nil {
