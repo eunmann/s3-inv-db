@@ -1,9 +1,9 @@
+//nolint:testpackage // intentional internal access for cleanup tests
+package format
+
 // Tests in this file need unexported access (w.file, removeIfErr) to
 // exercise the cleanup paths, so they live in the format package
 // rather than format_test.
-//
-//nolint:testpackage // intentional internal access for cleanup tests
-package format
 
 import (
 	"os"
