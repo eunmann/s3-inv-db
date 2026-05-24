@@ -11,7 +11,7 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// Discoverer is the subset of s3disco.Discoverer that DiscoveryService
+// Discoverer is the subset of s3disco.Discoverer that Discovery
 // uses. Defined here so the service can be unit-tested with a fake and
 // so this package doesn't import s3disco (the dependency runs the
 // other way: s3disco constructs Inventory values defined here).
@@ -21,7 +21,7 @@ type Discoverer interface {
 	Bucket() string
 }
 
-// IndexBuilder is the subset of loader.Loader that DiscoveryService uses.
+// IndexBuilder is the subset of loader.Loader that Discovery uses.
 type IndexBuilder interface {
 	BuildWith(ctx context.Context, srcBucket, invID, run, manifestURI string, onProgress func(stage string, done, total int64)) (string, error)
 	RemoveCache(srcBucket, invID, run string) error
@@ -41,7 +41,7 @@ type MergedInventory struct {
 }
 
 // GatedLoadOptions mirrors the fields of internal/loadcontrol.Options.
-// Duplicated here so DiscoveryService doesn't import the gate package
+// Duplicated here so Discovery doesn't import the gate package
 // (the gate already imports this one).
 type GatedLoadOptions struct {
 	EstimateBytes uint64
@@ -59,15 +59,15 @@ type GatedLoadFunc func(ctx context.Context, id ID, build BuildFunc, opts GatedL
 // before downloading anything.
 type ManifestSizeFunc func(ctx context.Context, bucket, key string) (uint64, error)
 
-// DiscoveryService orchestrates the inventory use cases that span the
+// Discovery orchestrates the inventory use cases that span the
 // Catalog (in-memory state), the Discoverer (S3 listing of available
 // inventories), and the IndexBuilder (on-disk index materialisation).
 //
 // When discovery is unconfigured (--s3-source unset) the service is
-// constructed via NewDisabledDiscoveryService — Enabled() reports false
+// constructed via NewDisabledDiscovery — Enabled() reports false
 // and every method returns ErrDiscoveryDisabled via the disabled
 // discoverer/builder shims rather than via per-call nil checks.
-type DiscoveryService struct {
+type Discovery struct {
 	cacheAt       time.Time
 	discoverer    Discoverer
 	builder       IndexBuilder
@@ -88,7 +88,7 @@ type DiscoveryService struct {
 }
 
 // disabledDiscoverer is the placeholder Discoverer wired by
-// NewDisabledDiscoveryService. Every call returns ErrDiscoveryDisabled
+// NewDisabledDiscovery. Every call returns ErrDiscoveryDisabled
 // so handlers don't need per-call nil checks on the service.
 type disabledDiscoverer struct{}
 
@@ -113,11 +113,11 @@ func (disabledBuilder) CacheSizeBytes(string, string, string) (int64, error) { r
 // Snapshot. Constant because Refresh is process-global.
 const refreshKey = "discovery-refresh"
 
-// NewDiscoveryService constructs an enabled service. Both discoverer
+// NewDiscovery constructs an enabled service. Both discoverer
 // and builder are required and must be non-nil; for the unconfigured
-// case use NewDisabledDiscoveryService.
-func NewDiscoveryService(mgr *Catalog, discoverer Discoverer, builder IndexBuilder) *DiscoveryService {
-	return &DiscoveryService{
+// case use NewDisabledDiscovery.
+func NewDiscovery(mgr *Catalog, discoverer Discoverer, builder IndexBuilder) *Discovery {
+	return &Discovery{
 		manager:    mgr,
 		discoverer: discoverer,
 		builder:    builder,
@@ -127,12 +127,12 @@ func NewDiscoveryService(mgr *Catalog, discoverer Discoverer, builder IndexBuild
 	}
 }
 
-// NewDisabledDiscoveryService returns a service whose methods all
+// NewDisabledDiscovery returns a service whose methods all
 // short-circuit to ErrDiscoveryDisabled. Used when --s3-source is unset
-// so the rest of the wiring can treat DiscoveryService as a non-nil
+// so the rest of the wiring can treat Discovery as a non-nil
 // dependency.
-func NewDisabledDiscoveryService(mgr *Catalog) *DiscoveryService {
-	return &DiscoveryService{
+func NewDisabledDiscovery(mgr *Catalog) *Discovery {
+	return &Discovery{
 		manager:    mgr,
 		discoverer: disabledDiscoverer{},
 		builder:    disabledBuilder{},
@@ -144,7 +144,7 @@ func NewDisabledDiscoveryService(mgr *Catalog) *DiscoveryService {
 
 // SetGate attaches a GatedLoadFunc + ManifestSizeFunc. When both are set,
 // LoadWith routes through the gate so disk-budget rules apply.
-func (s *DiscoveryService) SetGate(gate GatedLoadFunc, sizer ManifestSizeFunc, indexRatio float64) {
+func (s *Discovery) SetGate(gate GatedLoadFunc, sizer ManifestSizeFunc, indexRatio float64) {
 	s.gate = gate
 	s.sizer = sizer
 	if indexRatio > 0 {
@@ -168,12 +168,12 @@ var ErrDiscoveryDisabled = errors.New("discovery not configured")
 var ErrNoRun = errors.New("inventory has no run")
 
 // Enabled reports whether discovery is configured.
-func (s *DiscoveryService) Enabled() bool { return s.enabled }
+func (s *Discovery) Enabled() bool { return s.enabled }
 
 // List walks the configured S3 source and merges each discovered
 // inventory with its current Catalog state. Returns nil and
 // ErrDiscoveryDisabled when discovery is unconfigured.
-func (s *DiscoveryService) List(ctx context.Context) ([]MergedInventory, error) {
+func (s *Discovery) List(ctx context.Context) ([]MergedInventory, error) {
 	discovered, err := s.discoverer.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("discover: %w", err)
@@ -209,7 +209,7 @@ func (s *DiscoveryService) List(ctx context.Context) ([]MergedInventory, error) 
 // A load that finishes between two refresh ticks would otherwise leave
 // the page rendering "not loaded" and let the user submit a duplicate
 // load that fails with ErrInvalidState.
-func (s *DiscoveryService) Snapshot(ctx context.Context) ([]MergedInventory, time.Time, error) {
+func (s *Discovery) Snapshot(ctx context.Context) ([]MergedInventory, time.Time, error) {
 	if !s.enabled {
 		return nil, time.Time{}, ErrDiscoveryDisabled
 	}
@@ -245,7 +245,7 @@ func (s *DiscoveryService) Snapshot(ctx context.Context) ([]MergedInventory, tim
 // previous snapshot is preserved on error so consumers continue to see
 // the last-known-good views instead of falling back to empty.
 // LastRefreshErr returns the most recent error, if any.
-func (s *DiscoveryService) Refresh(ctx context.Context) error {
+func (s *Discovery) Refresh(ctx context.Context) error {
 	if !s.enabled {
 		return ErrDiscoveryDisabled
 	}
@@ -269,7 +269,7 @@ func (s *DiscoveryService) Refresh(ctx context.Context) error {
 
 // LastRefreshErr returns the error from the most recent Refresh, or nil
 // if the most recent Refresh succeeded (or none has run yet).
-func (s *DiscoveryService) LastRefreshErr() error {
+func (s *Discovery) LastRefreshErr() error {
 	s.cacheMu.RLock()
 	defer s.cacheMu.RUnlock()
 
@@ -284,7 +284,7 @@ func (s *DiscoveryService) LastRefreshErr() error {
 //
 // Start is a no-op when discovery is disabled. Calling Start a second
 // time without Stop in between is also a no-op.
-func (s *DiscoveryService) Start(ctx context.Context, interval time.Duration, logger *zerolog.Logger) {
+func (s *Discovery) Start(ctx context.Context, interval time.Duration, logger *zerolog.Logger) {
 	if !s.enabled || interval <= 0 {
 		return
 	}
@@ -305,7 +305,7 @@ func (s *DiscoveryService) Start(ctx context.Context, interval time.Duration, lo
 	go s.runRefresher(ctx, interval, stop, logger)
 }
 
-func (s *DiscoveryService) runRefresher(ctx context.Context, interval time.Duration, stop <-chan struct{}, logger *zerolog.Logger) {
+func (s *Discovery) runRefresher(ctx context.Context, interval time.Duration, stop <-chan struct{}, logger *zerolog.Logger) {
 	defer s.bgWG.Done()
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -325,7 +325,7 @@ func (s *DiscoveryService) runRefresher(ctx context.Context, interval time.Durat
 
 // Stop signals the background refresher to exit and waits for it. Safe
 // to call without a matching Start.
-func (s *DiscoveryService) Stop() {
+func (s *Discovery) Stop() {
 	s.bgMu.Lock()
 	stop := s.bgStop
 	s.bgStop = nil
@@ -337,13 +337,13 @@ func (s *DiscoveryService) Stop() {
 	s.bgWG.Wait()
 }
 
-func (s *DiscoveryService) now() time.Time {
+func (s *Discovery) now() time.Time {
 	return s.bgClock()
 }
 
 // Find returns a single discovered inventory run by source bucket, ID,
 // and run timestamp.
-func (s *DiscoveryService) Find(ctx context.Context, src, id, run string) (Inventory, error) {
+func (s *Discovery) Find(ctx context.Context, src, id, run string) (Inventory, error) {
 	inv, err := s.discoverer.Find(ctx, src, id, run)
 	if err != nil {
 		return inv, fmt.Errorf("find: %w", err)
@@ -356,7 +356,7 @@ func (s *DiscoveryService) Find(ctx context.Context, src, id, run string) (Inven
 // Catalog without performing a build. Each run gets its own composite
 // ID; multiple runs of the same configuration can coexist as independent
 // entries.
-func (s *DiscoveryService) PrepareDiscovered(ctx context.Context, disc Inventory) error {
+func (s *Discovery) PrepareDiscovered(ctx context.Context, disc Inventory) error {
 	if !s.Enabled() {
 		return ErrDiscoveryDisabled
 	}
@@ -375,7 +375,7 @@ func (s *DiscoveryService) PrepareDiscovered(ctx context.Context, disc Inventory
 }
 
 // Load is LoadWith with no progress callback.
-func (s *DiscoveryService) Load(ctx context.Context, disc Inventory) error {
+func (s *Discovery) Load(ctx context.Context, disc Inventory) error {
 	return s.LoadWith(ctx, disc, nil)
 }
 
@@ -386,18 +386,18 @@ func (s *DiscoveryService) Load(ctx context.Context, disc Inventory) error {
 // onProgress callback, if non-nil, receives stage transitions and
 // per-chunk quantitative progress. The ctx threads through to the
 // builder — cancellation kills the build.
-func (s *DiscoveryService) LoadWith(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64)) error {
+func (s *Discovery) LoadWith(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64)) error {
 	return s.loadInternal(ctx, disc, onProgress, false /* auto */)
 }
 
 // AutoLoadWith is LoadWith without the Pin flag — used by the
 // auto-loader so the discovered run remains eligible for future
 // eviction. Routes through the gate just like LoadWith.
-func (s *DiscoveryService) AutoLoadWith(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64)) error {
+func (s *Discovery) AutoLoadWith(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64)) error {
 	return s.loadInternal(ctx, disc, onProgress, true /* auto */)
 }
 
-func (s *DiscoveryService) loadInternal(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64), auto bool) error {
+func (s *Discovery) loadInternal(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64), auto bool) error {
 	if !s.Enabled() {
 		return ErrDiscoveryDisabled
 	}

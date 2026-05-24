@@ -20,7 +20,7 @@ const defaultSSEHeartbeat = 15 * time.Second
 
 // CacheStore is the loader subset handlers actually use: cache size
 // for the dashboard + cache removal on unload. Narrower than
-// inventory.IndexBuilder (which DiscoveryService needs for BuildWith)
+// inventory.IndexBuilder (which Discovery needs for BuildWith)
 // so the handlers don't see methods they don't call.
 type CacheStore interface {
 	RemoveCache(srcBucket, invID, run string) error
@@ -32,7 +32,7 @@ type CacheStore interface {
 type Handlers struct {
 	loader                   CacheStore
 	manager                  *inventory.Catalog
-	discovery                *inventory.DiscoveryService
+	discovery                *inventory.Discovery
 	configStore              *inventory.ConfigStore
 	tracker                  *budget.Tracker
 	renderer                 *templates.Renderer
@@ -53,7 +53,7 @@ type Handlers struct {
 // WithDiscoverer.
 type Option func(*Handlers)
 
-// WithLoader installs the IndexBuilder used by DiscoveryService for
+// WithLoader installs the IndexBuilder used by Discovery for
 // builds. Pair with WithCacheStore for the cache-side wiring; the two
 // concerns are kept separate so the handler-facing cache subset is
 // type-checked at the call site rather than via a runtime assertion.
@@ -68,15 +68,15 @@ func WithCacheStore(cs CacheStore) Option {
 	return func(h *Handlers) { h.loader = cs }
 }
 
-// WithDiscovery installs a pre-built DiscoveryService. When unset, a
-// disabled DiscoveryService is constructed from the discoverer and
+// WithDiscovery installs a pre-built Discovery. When unset, a
+// disabled Discovery is constructed from the discoverer and
 // builder passed via WithDiscoverer / WithLoader (or nil for both,
 // yielding a service whose Enabled() reports false).
-func WithDiscovery(d *inventory.DiscoveryService) Option {
+func WithDiscovery(d *inventory.Discovery) Option {
 	return func(h *Handlers) { h.discovery = d }
 }
 
-// WithDiscoverer installs the discoverer used by the DiscoveryService
+// WithDiscoverer installs the discoverer used by the Discovery
 // that NewHandlers constructs when WithDiscovery is not provided.
 func WithDiscoverer(d inventory.Discoverer) Option {
 	return func(h *Handlers) { h.discoverer = d }
@@ -102,7 +102,7 @@ func WithDiscoveryRefreshInterval(d time.Duration) Option {
 	return func(h *Handlers) { h.discoveryRefreshInterval = d }
 }
 
-// DiscoveryEnabled reports whether the wired DiscoveryService is usable.
+// DiscoveryEnabled reports whether the wired Discovery is usable.
 // Exposed so the server can gate discovery-dependent routes via middleware
 // rather than each handler duplicating the check.
 func (h *Handlers) DiscoveryEnabled() bool { return h.discovery.Enabled() }
@@ -142,7 +142,7 @@ func (h *Handlers) renderHTMLPartial(w http.ResponseWriter, r *http.Request, nam
 // caller's contract is that none is nil. Optional dependencies (loader,
 // discovery, S3 source URI, SSE heartbeat) are passed as Options. When
 // neither WithDiscovery nor WithDiscoverer/WithLoader is supplied,
-// a disabled DiscoveryService is wired so handlers can call its
+// a disabled Discovery is wired so handlers can call its
 // methods without nil-checking.
 func New(
 	mgr *inventory.Catalog,
@@ -171,9 +171,9 @@ func New(
 	}
 	if h.discovery == nil {
 		if h.discoverer != nil && h.indexBldr != nil {
-			h.discovery = inventory.NewDiscoveryService(mgr, h.discoverer, h.indexBldr)
+			h.discovery = inventory.NewDiscovery(mgr, h.discoverer, h.indexBldr)
 		} else {
-			h.discovery = inventory.NewDisabledDiscoveryService(mgr)
+			h.discovery = inventory.NewDisabledDiscovery(mgr)
 		}
 	}
 

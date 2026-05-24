@@ -36,7 +36,7 @@ type Discovery interface {
 }
 
 // LoaderFunc loads a single discovered inventory. Callers wire the
-// DiscoveryService.AutoLoadWith call (with nil progress) here.
+// Discovery.AutoLoadWith call (with nil progress) here.
 type LoaderFunc func(ctx context.Context, disc inventory.Inventory) error
 
 // AutoLoader polls Discovery on a ticker and feeds new runs into Loader.

@@ -16,7 +16,7 @@ import (
 )
 
 // The htmx-facing /partials/* routes mutate state via the inventory
-// Manager or DiscoveryService and return the updated row's HTML directly
+// Manager or Discovery and return the updated row's HTML directly
 // so the client can swap it into the DOM without a full page reload.
 
 // LoadInventoryRowPartial loads a (non-discovered) inventory and returns

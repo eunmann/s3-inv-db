@@ -74,7 +74,7 @@ type Server struct {
 	bldr        *loader.Loader
 	tracker     *budget.Tracker
 	autoloader  *autoload.AutoLoader
-	discovery   *inventory.DiscoveryService
+	discovery   *inventory.Discovery
 	handlers    *handlers.Handlers
 	server      *http.Server
 }
@@ -106,7 +106,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	planner := budget.NewPlanner(tracker, retentionLookup(configStore, cfg.AutoLoadRetentionDefault))
 	gate := loadcontrol.New(mgr, tracker, planner)
 
-	var discovery *inventory.DiscoveryService
+	var discovery *inventory.Discovery
 	var bldr *loader.Loader
 	var s3Client *s3fetch.Client
 
@@ -117,7 +117,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		}
 		bldr = wiring.Loader
 		s3Client = wiring.Client
-		discovery = inventory.NewDiscoveryService(mgr, wiring.Discoverer, wiring.Loader)
+		discovery = inventory.NewDiscovery(mgr, wiring.Discoverer, wiring.Loader)
 		sizer := loadcontrol.NewManifestSizer(s3Client)
 		discovery.SetGate(gate.Load, sizer.ManifestSize, cfg.IndexRatio)
 		cfg.Logger.Info().
@@ -126,7 +126,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 			Uint64("max_index_disk_bytes", cfg.MaxIndexDisk).
 			Msg("discovery + budget configured")
 	} else {
-		discovery = inventory.NewDisabledDiscoveryService(mgr)
+		discovery = inventory.NewDisabledDiscovery(mgr)
 	}
 
 	refreshInterval := cfg.DiscoveryRefreshInterval
