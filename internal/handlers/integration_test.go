@@ -11,9 +11,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
-	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
-	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/rs/zerolog"
 )
 
@@ -38,12 +36,7 @@ func buildLoadedTestHandlers(t *testing.T) *handlers.Handlers {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
 
-	renderer, err := templates.New()
-	if err != nil {
-		t.Fatalf("renderer: %v", err)
-	}
-
-	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	h := newWiredHandlers(t, mgr)
 
 	indexPath := filepath.Join(tmp, "inv-001")
 	if err := mgr.Register(t.Context(), "loaded", "Loaded", indexPath); err != nil {
@@ -259,11 +252,7 @@ func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
-	renderer, err := templates.New()
-	if err != nil {
-		t.Fatalf("renderer: %v", err)
-	}
-	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	h := newWiredHandlers(t, mgr)
 
 	// Register via handler.
 	body := `{"id":"life","name":"Life","path":"` + indexPath + `"}`
@@ -350,11 +339,7 @@ func TestLoadInventoryAPI_AlreadyLoaded(t *testing.T) {
 func TestLoadInventoryAPI_BadPath(t *testing.T) {
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
-	renderer, err := templates.New()
-	if err != nil {
-		t.Fatalf("renderer: %v", err)
-	}
-	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	h := newWiredHandlers(t, mgr)
 
 	if err := mgr.Register(t.Context(), "bad", "Bad", "/nonexistent/path/that/does/not/exist"); err != nil {
 		t.Fatalf("register: %v", err)
@@ -494,11 +479,7 @@ func TestCompareLevelAPI_Integration_HappyPath(t *testing.T) {
 	}
 	mgr := inventory.NewManager()
 	t.Cleanup(func() { _ = mgr.Close() })
-	renderer, err := templates.New()
-	if err != nil {
-		t.Fatalf("renderer: %v", err)
-	}
-	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	h := newWiredHandlers(t, mgr)
 
 	indexPath := filepath.Join(tmp, "inv-001")
 	for _, id := range []inventory.ID{"src/inv/runA", "src/inv/runB"} {

@@ -60,11 +60,6 @@ func jobToEvent(j jobs.Job) jobEvent {
 // swaps. Data is a JSON snapshot — clients are free to render however
 // they like.
 func (h *Handlers) JobsStream(w http.ResponseWriter, r *http.Request) {
-	if h.jobBus == nil {
-		http.Error(w, "jobs not configured", http.StatusServiceUnavailable)
-
-		return
-	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)

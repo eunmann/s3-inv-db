@@ -10,8 +10,6 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/templates"
-	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -24,11 +22,7 @@ type testFixture struct {
 func newTestFixture(t *testing.T) *testFixture {
 	t.Helper()
 	mgr := inventory.NewManager()
-	renderer, err := templates.New()
-	if err != nil {
-		t.Fatalf("failed to create renderer: %v", err)
-	}
-	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	h := newWiredHandlers(t, mgr)
 
 	return &testFixture{h: h, mgr: mgr}
 }

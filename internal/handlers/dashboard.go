@@ -134,7 +134,7 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) fillBudgetCounters(data *DashboardData) {
-	if h.tracker == nil || h.tracker.Cap() == 0 {
+	if h.tracker.Cap() == 0 {
 		return
 	}
 	capBytes := h.tracker.Cap()
@@ -149,15 +149,13 @@ func (h *Handlers) fillBudgetCounters(data *DashboardData) {
 }
 
 func (h *Handlers) fillAutoLoadCounters(ctx context.Context, data *DashboardData, views []inventory.MergedInventory) {
-	if h.configStore != nil {
-		if configs, err := h.configStore.List(ctx); err == nil {
-			for i := range configs {
-				if configs[i].AutoLoad {
-					data.AutoLoadConfigs++
-				}
-				if configs[i].LastPollError != "" {
-					data.PendingPollErrors++
-				}
+	if configs, err := h.configStore.List(ctx); err == nil {
+		for i := range configs {
+			if configs[i].AutoLoad {
+				data.AutoLoadConfigs++
+			}
+			if configs[i].LastPollError != "" {
+				data.PendingPollErrors++
 			}
 		}
 	}

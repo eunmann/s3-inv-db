@@ -76,11 +76,6 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 
 		return
 	}
-	if h.jobMgr == nil {
-		http.Error(w, "jobs not configured", http.StatusServiceUnavailable)
-
-		return
-	}
 
 	if err := h.discovery.PrepareDiscovered(r.Context(), disc); err != nil {
 		respondManagerError(w, r, err, "prepare discovered inventory")
@@ -129,11 +124,6 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 
 // CancelJob cancels an in-flight job by ID. 404 if not currently live.
 func (h *Handlers) CancelJob(w http.ResponseWriter, r *http.Request) {
-	if h.jobMgr == nil {
-		http.Error(w, "jobs not configured", http.StatusServiceUnavailable)
-
-		return
-	}
 	id := jobs.ID(chi.URLParam(r, "id"))
 	if err := h.jobMgr.Cancel(id); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -333,18 +323,16 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 			view.AutoLoadBackoffUntil = info.AutoLoadBackoffUntil.UTC().Format("15:04:05")
 		}
 	}
-	if h.jobStore != nil {
-		j, err := h.jobStore.LatestForInventory(r.Context(), disc.CompositeID())
-		switch {
-		case err == nil:
-			view.LatestJob = &j
-		case errors.Is(err, jobs.ErrStoreNotFound):
-			// No prior job — render the row without LatestJob.
-		default:
-			zerolog.Ctx(r.Context()).Warn().Err(err).
-				Stringer("composite", disc.CompositeID()).
-				Msg("look up latest job for row render")
-		}
+	j, err := h.jobStore.LatestForInventory(r.Context(), disc.CompositeID())
+	switch {
+	case err == nil:
+		view.LatestJob = &j
+	case errors.Is(err, jobs.ErrStoreNotFound):
+		// No prior job — render the row without LatestJob.
+	default:
+		zerolog.Ctx(r.Context()).Warn().Err(err).
+			Stringer("composite", disc.CompositeID()).
+			Msg("look up latest job for row render")
 	}
 	cs := h.measureCacheSize(r, disc)
 	view.CacheBytes, view.CacheBytesH = cs.Bytes, cs.Human

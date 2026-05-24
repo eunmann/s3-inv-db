@@ -2,7 +2,6 @@ package handlers_test
 
 import (
 	"context"
-	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,44 +11,19 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
-	"github.com/eunmann/s3-inv-db/internal/templates"
-	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
-	"github.com/eunmann/s3-inv-db/pkg/pricing"
 )
-
-func openJobsTestDB(t *testing.T) *sql.DB {
-	t.Helper()
-
-	return dbtest.OpenMemDB(t)
-}
 
 func newJobsHandlers(t *testing.T) (*handlers.Handlers, *jobs.Manager) {
 	t.Helper()
-	db := openJobsTestDB(t)
-	invStore, err := inventory.NewStore(db)
-	if err != nil {
+	invMgr := inventory.NewManager()
+	t.Cleanup(func() { _ = invMgr.Close() })
+	h := newWiredHandlers(t, invMgr)
+	if err := invMgr.Register(t.Context(), "src/inv1", "n", "p"); err != nil {
 		t.Fatal(err)
 	}
-	if err := invStore.Upsert(t.Context(), inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
-		t.Fatal(err)
-	}
-	jobStore := jobs.NewStore(db)
-	bus := jobs.NewBus(8)
-	mgr := jobs.NewManager(jobStore, bus)
-	renderer, err := templates.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := handlers.NewWithConfig(handlers.Config{
-		Manager:    inventory.NewManager(),
-		Renderer:   renderer,
-		PriceTable: pricing.DefaultUSEast1Prices(),
-		JobMgr:     mgr,
-		JobStore:   jobStore,
-		JobBus:     bus,
-	})
+	jobMgr := h.JobManagerForTest()
 
-	return h, mgr
+	return h, jobMgr
 }
 
 // TestJobsStream_PushesEvents subscribes via the SSE handler, submits
@@ -131,47 +105,11 @@ func TestJobsStream_EmitsHeartbeat(t *testing.T) {
 // caller-chosen SSE heartbeat interval — exercises the configurable path.
 func newHandlersWithHeartbeat(t *testing.T, hb time.Duration) *handlers.Handlers {
 	t.Helper()
-	db := openJobsTestDB(t)
-	invStore, err := inventory.NewStore(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := invStore.Upsert(t.Context(), inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
-		t.Fatal(err)
-	}
-	jobStore := jobs.NewStore(db)
-	bus := jobs.NewBus(8)
-	mgr := jobs.NewManager(jobStore, bus)
-	renderer, err := templates.New()
-	if err != nil {
+	invMgr := inventory.NewManager()
+	t.Cleanup(func() { _ = invMgr.Close() })
+	if err := invMgr.Register(t.Context(), "src/inv1", "n", "p"); err != nil {
 		t.Fatal(err)
 	}
 
-	return handlers.NewWithConfig(handlers.Config{
-		Manager:      inventory.NewManager(),
-		Renderer:     renderer,
-		PriceTable:   pricing.DefaultUSEast1Prices(),
-		JobMgr:       mgr,
-		JobStore:     jobStore,
-		JobBus:       bus,
-		SSEHeartbeat: hb,
-	})
-}
-
-func TestJobsStream_DisabledWhenJobBusMissing(t *testing.T) {
-	renderer, err := templates.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := handlers.NewWithConfig(handlers.Config{
-		Manager:    inventory.NewManager(),
-		Renderer:   renderer,
-		PriceTable: pricing.DefaultUSEast1Prices(),
-	})
-	req := httptest.NewRequest(http.MethodGet, "/api/jobs/stream", http.NoBody)
-	w := httptest.NewRecorder()
-	h.JobsStream(w, req)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want 503", w.Code)
-	}
+	return newWiredHandlers(t, invMgr, handlers.WithSSEHeartbeat(hb))
 }

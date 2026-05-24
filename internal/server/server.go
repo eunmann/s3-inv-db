@@ -129,27 +129,22 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		discovery = inventory.NewDiscoveryService(mgr, nil, nil)
 	}
 
-	hcfg := handlers.Config{
-		Manager:     mgr,
-		Renderer:    renderer,
-		PriceTable:  cfg.PriceTable,
-		JobMgr:      jobMgr,
-		JobStore:    jobStore,
-		JobBus:      jobBus,
-		Discovery:   discovery,
-		Loader:      bldr,
-		ConfigStore: configStore,
-		Tracker:     tracker,
+	refreshInterval := cfg.DiscoveryRefreshInterval
+	if refreshInterval <= 0 {
+		refreshInterval = DefaultDiscoveryRefreshInterval
 	}
-	hcfg.DiscoveryRefreshInterval = cfg.DiscoveryRefreshInterval
-	if hcfg.DiscoveryRefreshInterval <= 0 {
-		hcfg.DiscoveryRefreshInterval = DefaultDiscoveryRefreshInterval
+	hopts := []handlers.Option{
+		handlers.WithDiscovery(discovery),
+		handlers.WithDiscoveryRefreshInterval(refreshInterval),
+	}
+	if bldr != nil {
+		hopts = append(hopts, handlers.WithLoader(bldr))
 	}
 	if cfg.S3Source != "" {
-		hcfg.S3SourceURI = cfg.S3Source
+		hopts = append(hopts, handlers.WithS3Source(cfg.S3Source))
 	}
 
-	h := handlers.NewWithConfig(hcfg)
+	h := handlers.New(mgr, renderer, cfg.PriceTable, jobMgr, jobStore, jobBus, configStore, tracker, hopts...)
 
 	var al *autoload.AutoLoader
 	if cfg.AutoLoad && discovery != nil && discovery.Enabled() {

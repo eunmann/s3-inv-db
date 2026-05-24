@@ -12,8 +12,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// defaultSSEHeartbeat is the production cadence used when Config.SSEHeartbeat
-// is left zero. 15s is small enough to free a stalled SSE slot in well under
+// defaultSSEHeartbeat is the cadence used when WithSSEHeartbeat is not
+// passed. 15s is small enough to free a stalled SSE slot in well under
 // Chrome's ~60s TCP idle window, large enough to be cheap.
 const defaultSSEHeartbeat = 15 * time.Second
 
@@ -42,38 +42,60 @@ type Handlers struct {
 	priceTable               pricing.PriceTable
 	sseHeartbeat             time.Duration
 	discoveryRefreshInterval time.Duration
+
+	discoverer inventory.Discoverer
+	indexBldr  inventory.IndexBuilder
 }
 
-// Config gathers Handlers dependencies for NewWithConfig. Discoverer
-// and Loader take narrow interfaces so tests can wire fakes; production
-// passes *s3disco.Discoverer and *loader.Loader.
-type Config struct {
-	Discoverer   inventory.Discoverer
-	Loader       inventory.IndexBuilder
-	JobMgr       *jobs.Manager
-	Renderer     *templates.Renderer
-	Manager      *inventory.Manager
-	JobStore     *jobs.Store
-	JobBus       *jobs.Bus
-	Discovery    *inventory.DiscoveryService
-	ConfigStore  *inventory.ConfigStore
-	Tracker      *budget.Tracker
-	S3SourceURI  string
-	PriceTable   pricing.PriceTable
-	SSEHeartbeat time.Duration
-	// DiscoveryRefreshInterval is the cadence at which DiscoveryService
-	// rebuilds the cached snapshot. Surfaced to the dashboard so it can
-	// render a "next refresh in …" hint alongside the snapshot age.
-	DiscoveryRefreshInterval time.Duration
+// Option configures optional Handlers fields. See WithLoader,
+// WithDiscovery, WithS3Source, WithSSEHeartbeat, WithDiscoveryRefreshInterval,
+// WithDiscoverer.
+type Option func(*Handlers)
+
+// WithLoader installs the cache-aware loader used for unload cache
+// removal and the dashboard's on-disk size readout. Leaving it unset
+// puts the server in browse-only mode.
+func WithLoader(l inventory.IndexBuilder) Option {
+	return func(h *Handlers) {
+		if cs, ok := l.(CacheStore); ok {
+			h.loader = cs
+		}
+		h.indexBldr = l
+	}
 }
 
-// New creates a Handlers instance without discovery wiring. Tests use it.
-func New(mgr *inventory.Manager, renderer *templates.Renderer, priceTable pricing.PriceTable) *Handlers {
-	return NewWithConfig(Config{
-		Manager:    mgr,
-		Renderer:   renderer,
-		PriceTable: priceTable,
-	})
+// WithDiscovery installs a pre-built DiscoveryService. When unset, a
+// disabled DiscoveryService is constructed from the discoverer and
+// builder passed via WithDiscoverer / WithLoader (or nil for both,
+// yielding a service whose Enabled() reports false).
+func WithDiscovery(d *inventory.DiscoveryService) Option {
+	return func(h *Handlers) { h.discovery = d }
+}
+
+// WithDiscoverer installs the discoverer used by the DiscoveryService
+// that NewHandlers constructs when WithDiscovery is not provided.
+func WithDiscoverer(d inventory.Discoverer) Option {
+	return func(h *Handlers) { h.discoverer = d }
+}
+
+// WithS3Source sets the s3:// URI displayed on the dashboard.
+func WithS3Source(uri string) Option {
+	return func(h *Handlers) { h.s3SourceURI = uri }
+}
+
+// WithSSEHeartbeat overrides the SSE keepalive cadence.
+func WithSSEHeartbeat(d time.Duration) Option {
+	return func(h *Handlers) {
+		if d > 0 {
+			h.sseHeartbeat = d
+		}
+	}
+}
+
+// WithDiscoveryRefreshInterval sets the cadence the dashboard reports
+// for the discovery snapshot refresher.
+func WithDiscoveryRefreshInterval(d time.Duration) Option {
+	return func(h *Handlers) { h.discoveryRefreshInterval = d }
 }
 
 // DiscoveryEnabled reports whether the wired DiscoveryService is usable.
@@ -103,30 +125,40 @@ func (h *Handlers) renderHTMLPartial(w http.ResponseWriter, r *http.Request, nam
 	}
 }
 
-// NewWithConfig creates a Handlers wired with optional S3 discovery + loader.
-func NewWithConfig(cfg Config) *Handlers {
-	heartbeat := cfg.SSEHeartbeat
-	if heartbeat <= 0 {
-		heartbeat = defaultSSEHeartbeat
+// New builds a Handlers. All positional parameters are required; the
+// caller's contract is that none is nil. Optional dependencies (loader,
+// discovery, S3 source URI, SSE heartbeat) are passed as Options. When
+// neither WithDiscovery nor WithDiscoverer/WithLoader is supplied,
+// a disabled DiscoveryService is wired so handlers can call its
+// methods without nil-checking.
+func New(
+	mgr *inventory.Manager,
+	renderer *templates.Renderer,
+	priceTable pricing.PriceTable,
+	jobMgr *jobs.Manager,
+	jobStore *jobs.Store,
+	jobBus *jobs.Bus,
+	configStore *inventory.ConfigStore,
+	tracker *budget.Tracker,
+	opts ...Option,
+) *Handlers {
+	h := &Handlers{
+		manager:      mgr,
+		renderer:     renderer,
+		priceTable:   priceTable,
+		jobMgr:       jobMgr,
+		jobStore:     jobStore,
+		jobBus:       jobBus,
+		configStore:  configStore,
+		tracker:      tracker,
+		sseHeartbeat: defaultSSEHeartbeat,
 	}
-	discovery := cfg.Discovery
-	if discovery == nil {
-		discovery = inventory.NewDiscoveryService(cfg.Manager, cfg.Discoverer, cfg.Loader)
+	for _, opt := range opts {
+		opt(h)
+	}
+	if h.discovery == nil {
+		h.discovery = inventory.NewDiscoveryService(mgr, h.discoverer, h.indexBldr)
 	}
 
-	return &Handlers{
-		manager:                  cfg.Manager,
-		discovery:                discovery,
-		loader:                   cfg.Loader,
-		configStore:              cfg.ConfigStore,
-		tracker:                  cfg.Tracker,
-		renderer:                 cfg.Renderer,
-		priceTable:               cfg.PriceTable,
-		s3SourceURI:              cfg.S3SourceURI,
-		jobMgr:                   cfg.JobMgr,
-		jobStore:                 cfg.JobStore,
-		jobBus:                   cfg.JobBus,
-		sseHeartbeat:             heartbeat,
-		discoveryRefreshInterval: cfg.DiscoveryRefreshInterval,
-	}
+	return h
 }

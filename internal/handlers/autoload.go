@@ -18,11 +18,6 @@ type autoLoadToggleResponse struct {
 // SetAutoLoadConfigAPI sets auto_load and (optionally) retention for
 // one inventory configuration. Form body: auto_load, retention.
 func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) {
-	if h.configStore == nil {
-		WriteJSONError(w, http.StatusServiceUnavailable, "auto-load not configured")
-
-		return
-	}
 	src := chi.URLParam(r, "src")
 	name := chi.URLParam(r, "name")
 	if src == "" || name == "" {
@@ -98,15 +93,13 @@ type DiskBudgetResponse struct {
 
 // DiskBudgetAPI returns the current Tracker counters; zeros when no budget is set.
 func (h *Handlers) DiskBudgetAPI(w http.ResponseWriter, _ *http.Request) {
-	resp := DiskBudgetResponse{}
-	if h.tracker != nil {
-		resp.CapBytes = h.tracker.Cap()
-		resp.UsedBytes = h.tracker.Used()
-		resp.ReservedBytes = h.tracker.Reserved()
-		resp.HeadroomBytes = h.tracker.Headroom()
-		resp.AvailBytes = h.tracker.Available()
-	}
-	WriteJSON(w, http.StatusOK, resp)
+	WriteJSON(w, http.StatusOK, DiskBudgetResponse{
+		CapBytes:      h.tracker.Cap(),
+		UsedBytes:     h.tracker.Used(),
+		ReservedBytes: h.tracker.Reserved(),
+		HeadroomBytes: h.tracker.Headroom(),
+		AvailBytes:    h.tracker.Available(),
+	})
 }
 
 func parseBoolToggle(s string) bool {

@@ -16,6 +16,9 @@ import (
 // JobStoreForTest returns the JobStore wired into the handler.
 func (h *Handlers) JobStoreForTest() *jobs.Store { return h.jobStore }
 
+// JobManagerForTest returns the JobManager wired into the handler.
+func (h *Handlers) JobManagerForTest() *jobs.Manager { return h.jobMgr }
+
 // ManagerForTest returns the inventory Manager wired into the handler.
 func (h *Handlers) ManagerForTest() *inventory.Manager { return h.manager }
 
