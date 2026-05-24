@@ -18,6 +18,7 @@ require (
 	github.com/parquet-go/parquet-go v0.29.0
 	github.com/relab/bbhash v0.0.0-20250331135148-7358f69256fb
 	github.com/rs/zerolog v1.35.1
+	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.44.0
 	modernc.org/sqlite v1.50.1
 )
@@ -51,7 +52,6 @@ require (
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/twpayne/go-geom v1.6.1 // indirect
 	golang.org/x/net v0.52.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	google.golang.org/protobuf v1.36.7 // indirect
 	modernc.org/libc v1.72.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

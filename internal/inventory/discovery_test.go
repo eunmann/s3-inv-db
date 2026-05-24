@@ -3,6 +3,7 @@ package inventory_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ type fakeDiscoverer struct {
 	listErr   error
 	findErr   error
 	findResp  inventory.Inventory
+	listGate  chan struct{}
 	bucket    string
 	listResp  []inventory.Inventory
 	listCalls atomic.Int64
@@ -29,6 +31,9 @@ type fakeDiscoverer struct {
 
 func (f *fakeDiscoverer) List(context.Context) ([]inventory.Inventory, error) {
 	f.listCalls.Add(1)
+	if f.listGate != nil {
+		<-f.listGate
+	}
 
 	return f.listResp, f.listErr
 }
@@ -447,5 +452,56 @@ func TestDiscoveryService_Background_TickerFiresRefresh(t *testing.T) {
 
 	if got := disc.listCalls.Load(); got < 2 {
 		t.Errorf("listCalls = %d, want >= 2 (initial + at least one tick)", got)
+	}
+}
+
+// TestDiscoveryService_Snapshot_ColdStartDeduplicatesConcurrent pins
+// that concurrent first-callers on an empty cache trigger exactly one
+// Refresh — the singleflight dedupe. Without it both callers each fire
+// an S3 List.
+func TestDiscoveryService_Snapshot_ColdStartDeduplicatesConcurrent(t *testing.T) {
+	mgr := inventory.NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+	gate := make(chan struct{})
+	disc := &fakeDiscoverer{
+		listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}},
+		listGate: gate,
+	}
+	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
+
+	const callers = 4
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	errs := make([]error, callers)
+	for i := range callers {
+		go func(idx int) {
+			defer wg.Done()
+			_, _, err := s.Snapshot(t.Context())
+			errs[idx] = err
+		}(i)
+	}
+
+	// Give every goroutine time to reach the !populated branch and
+	// queue behind the singleflight key before releasing List.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if disc.listCalls.Load() >= 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Hold the gate a touch longer so the other callers definitely
+	// reach the singleflight wait before List returns.
+	time.Sleep(20 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("caller %d: Snapshot err = %v", i, err)
+		}
+	}
+	if got := disc.listCalls.Load(); got != 1 {
+		t.Errorf("listCalls = %d, want 1 (concurrent cold-start callers must dedupe)", got)
 	}
 }
