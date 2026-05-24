@@ -32,7 +32,7 @@ func NewDepthIndexBuilder(tempDir string) *DepthIndexBuilder {
 // order and Build relies on that order being already sorted.
 func (b *DepthIndexBuilder) Add(pos uint64, depth uint32) error {
 	for uint32(len(b.buckets)) <= depth {
-		a, err := newU64DiskArray(b.tempDir, fmt.Sprintf("depth_%02d", len(b.buckets)))
+		a, err := newU64DiskArray(b.tempDir, fmt.Sprintf(DepthBucketNameFmt, len(b.buckets)))
 		if err != nil {
 			return fmt.Errorf("create depth bucket %d: %w", len(b.buckets), err)
 		}
@@ -53,8 +53,8 @@ func (b *DepthIndexBuilder) Add(pos uint64, depth uint32) error {
 // depth order. Each bucket is read once and copied to the final
 // file. Per-bucket scratch is closed and removed as we go.
 func (b *DepthIndexBuilder) Build(outDir string) error {
-	offsetsPath := filepath.Join(outDir, "depth_offsets.u64")
-	positionsPath := filepath.Join(outDir, "depth_positions.u64")
+	offsetsPath := filepath.Join(outDir, DepthOffsetsFile)
+	positionsPath := filepath.Join(outDir, DepthPositionsFile)
 
 	offsetsWriter, err := NewArrayWriter(offsetsPath, 8)
 	if err != nil {
@@ -148,8 +148,8 @@ type DepthIndex struct {
 
 // OpenDepthIndex opens a depth index from files.
 func OpenDepthIndex(outDir string) (*DepthIndex, error) {
-	offsetsPath := filepath.Join(outDir, "depth_offsets.u64")
-	positionsPath := filepath.Join(outDir, "depth_positions.u64")
+	offsetsPath := filepath.Join(outDir, DepthOffsetsFile)
+	positionsPath := filepath.Join(outDir, DepthPositionsFile)
 
 	// Depth-index offsets are read at well-known indices (one per
 	// depth) then once per query; small enough that hint doesn't

@@ -7,8 +7,6 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-const tierStatsDir = "tier_stats"
-
 // TierStatsReader reads per-prefix tier breakdowns from the row-major
 // tier_stats_row.bin file. Production writers (TierStatsRowWriter)
 // always produce this layout; the legacy per-tier columnar layout

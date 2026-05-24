@@ -1,6 +1,7 @@
 package format
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"path/filepath"
@@ -280,11 +281,7 @@ func (w *DictPrefixWriter) Close() error {
 		errs = append(errs, fmt.Errorf("close offsets: %w", err))
 	}
 
-	if len(errs) > 0 {
-		return errs[0]
-	}
-
-	return nil
+	return errors.Join(errs...)
 }
 
 // SegmentCount returns the number of unique segments interned so far.

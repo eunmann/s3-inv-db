@@ -49,7 +49,7 @@ type TierStatsRowWriter struct {
 // NewTierStatsRowWriter creates a row-major tier-stats writer under
 // outDir/tier_stats/. The directory is created if missing.
 func NewTierStatsRowWriter(outDir string) (*TierStatsRowWriter, error) {
-	tierDir := filepath.Join(outDir, tierStatsDir)
+	tierDir := filepath.Join(outDir, TierStatsDir)
 	if err := os.MkdirAll(tierDir, DirPerm); err != nil {
 		return nil, fmt.Errorf("create tier_stats dir: %w", err)
 	}
@@ -145,7 +145,7 @@ type TierStatsRowReader struct {
 // OpenTierStatsRow opens the row-major tier stats file. Returns an
 // error if the file is missing or unreadable.
 func OpenTierStatsRow(indexDir string) (*TierStatsRowReader, error) {
-	path := filepath.Join(indexDir, tierStatsDir, TierStatsRowFile)
+	path := filepath.Join(indexDir, TierStatsDir, TierStatsRowFile)
 	mmap, err := OpenMmapWithHint(path, AccessHintRandom)
 	if err != nil {
 		return nil, fmt.Errorf("open tier stats row mmap: %w", err)
@@ -242,7 +242,7 @@ func (r *TierStatsRowReader) Close() error {
 // the file is removed (no tier data → OpenTierStats's manifest guard
 // already returns an empty reader in that case).
 func PackTierStatsRow(outDir string, presentTiers []tiers.ID) error {
-	path := filepath.Join(outDir, tierStatsDir, TierStatsRowFile)
+	path := filepath.Join(outDir, TierStatsDir, TierStatsRowFile)
 
 	if len(presentTiers) == 0 {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -288,7 +288,7 @@ func PackTierStatsRow(outDir string, presentTiers []tiers.ID) error {
 	// the next writeback could leave the dense file in place, then
 	// OpenTierStats would reject the index when SlotCount() mismatches
 	// the manifest tier count.
-	if err := SyncDir(filepath.Join(outDir, tierStatsDir)); err != nil {
+	if err := SyncDir(filepath.Join(outDir, TierStatsDir)); err != nil {
 		return fmt.Errorf("sync tier_stats dir: %w", err)
 	}
 

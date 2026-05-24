@@ -47,12 +47,12 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 	// manifest can be verified against an expected set rather than
 	// whatever happened to land on disk.
 	requiredTopLevel := []string{
-		"depth_offsets.u64",
-		"depth_positions.u64",
-		"mph.bin",
+		DepthOffsetsFile,
+		DepthPositionsFile,
+		MPHFile,
 		CombinedMPHFArrayFile,
-		"prefix_blob.bin",
-		"prefix_offsets.u64",
+		PrefixBlobFile,
+		PrefixOffsetsFile,
 		"tiers.json",
 		CoreStatsFile,
 	}
@@ -79,13 +79,13 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 	// Tier-stats files live in a subdirectory and are named by tier
 	// FilePrefix; enumerate the directory rather than hard-coding the
 	// list so a new tier added later is captured automatically.
-	tierDir := filepath.Join(dir, "tier_stats")
+	tierDir := filepath.Join(dir, TierStatsDir)
 	if entries, err := os.ReadDir(tierDir); err == nil {
 		for _, e := range entries {
 			if e.IsDir() || !e.Type().IsRegular() {
 				continue
 			}
-			name := filepath.Join("tier_stats", e.Name())
+			name := filepath.Join(TierStatsDir, e.Name())
 			if err := addFile(dir, name, manifest.Files); err != nil {
 				return err
 			}
@@ -94,7 +94,7 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		return fmt.Errorf("read tier_stats dir: %w", err)
 	}
 
-	manifestPath := filepath.Join(dir, "manifest.json")
+	manifestPath := filepath.Join(dir, ManifestFile)
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal manifest: %w", err)
@@ -142,7 +142,7 @@ func addFile(root, name string, dst map[string]FileInfo) error {
 
 // ReadManifest reads the manifest from the index directory.
 func ReadManifest(dir string) (*Manifest, error) {
-	path := filepath.Join(dir, "manifest.json")
+	path := filepath.Join(dir, ManifestFile)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
