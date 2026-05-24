@@ -16,6 +16,17 @@ import (
 // JobStoreForTest returns the JobStore wired into the handler.
 func (h *Handlers) JobStoreForTest() *jobs.Store { return h.jobStore }
 
+// RenderHTMLForTest exposes renderHTML so external tests can drive
+// render failures and assert the buffered-render contract.
+func (h *Handlers) RenderHTMLForTest(w http.ResponseWriter, r *http.Request, name, logMsg string, data any) {
+	h.renderHTML(w, r, name, logMsg, data)
+}
+
+// RenderHTMLPartialForTest exposes renderHTMLPartial.
+func (h *Handlers) RenderHTMLPartialForTest(w http.ResponseWriter, r *http.Request, name, logMsg string, data any) {
+	h.renderHTMLPartial(w, r, name, logMsg, data)
+}
+
 // JobManagerForTest returns the JobManager wired into the handler.
 func (h *Handlers) JobManagerForTest() *jobs.Manager { return h.jobMgr }
 

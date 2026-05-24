@@ -431,6 +431,47 @@ func TestBrowsePage_HistoryRestoreReturnsFullPage(t *testing.T) {
 	}
 }
 
+// brokenRenderData is a struct that doesn't match any template's
+// expected shape — drives ExecuteTemplate into a mid-stream error.
+type brokenRenderData struct{ Foo int }
+
+// TestRenderHTML_BufferedFailure verifies the buffered-render contract:
+// when the renderer errors mid-stream, headers are not yet committed,
+// so http.Error can cleanly emit 500 + text/plain instead of leaking
+// partial HTML with a stale 200 + text/html.
+func TestRenderHTML_BufferedFailure(t *testing.T) {
+	f := newTestFixture(t)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	w := httptest.NewRecorder()
+
+	f.h.RenderHTMLForTest(w, req, "inventories.html", "render fail", brokenRenderData{Foo: 1})
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusInternalServerError)
+	}
+	ct := w.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("Content-Type = %q, want text/plain prefix", ct)
+	}
+}
+
+// TestRenderHTMLPartial_BufferedFailure same contract for partial renders.
+func TestRenderHTMLPartial_BufferedFailure(t *testing.T) {
+	f := newTestFixture(t)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	w := httptest.NewRecorder()
+
+	f.h.RenderHTMLPartialForTest(w, req, "inventory_row.html", "render fail", brokenRenderData{Foo: 1})
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusInternalServerError)
+	}
+	ct := w.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("Content-Type = %q, want text/plain prefix", ct)
+	}
+}
+
 // State Badge Color Tests
 
 // withChiContext adds a chi URL param context with the given id.

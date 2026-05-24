@@ -138,7 +138,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		handlers.WithDiscoveryRefreshInterval(refreshInterval),
 	}
 	if bldr != nil {
-		hopts = append(hopts, handlers.WithLoader(bldr))
+		hopts = append(hopts, handlers.WithLoader(bldr), handlers.WithCacheStore(bldr))
 	}
 	if cfg.S3Source != "" {
 		hopts = append(hopts, handlers.WithS3Source(cfg.S3Source))

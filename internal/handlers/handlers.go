@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"net/http"
 	"time"
 
@@ -52,16 +53,19 @@ type Handlers struct {
 // WithDiscoverer.
 type Option func(*Handlers)
 
-// WithLoader installs the cache-aware loader used for unload cache
+// WithLoader installs the IndexBuilder used by DiscoveryService for
+// builds. Pair with WithCacheStore for the cache-side wiring; the two
+// concerns are kept separate so the handler-facing cache subset is
+// type-checked at the call site rather than via a runtime assertion.
+func WithLoader(l inventory.IndexBuilder) Option {
+	return func(h *Handlers) { h.indexBldr = l }
+}
+
+// WithCacheStore installs the cache-aware loader used for unload cache
 // removal and the dashboard's on-disk size readout. Leaving it unset
 // puts the server in browse-only mode.
-func WithLoader(l inventory.IndexBuilder) Option {
-	return func(h *Handlers) {
-		if cs, ok := l.(CacheStore); ok {
-			h.loader = cs
-		}
-		h.indexBldr = l
-	}
+func WithCacheStore(cs CacheStore) Option {
+	return func(h *Handlers) { h.loader = cs }
 }
 
 // WithDiscovery installs a pre-built DiscoveryService. When unset, a
@@ -107,22 +111,31 @@ func (h *Handlers) DiscoveryEnabled() bool { return h.discovery.Enabled() }
 const contentTypeHTML = "text/html; charset=utf-8"
 
 // renderHTML writes a full template, logging and returning HTTP 500 on
-// failure. LogMsg becomes the zerolog message for renderer errors.
+// failure. Renders into a buffer first so a mid-template error leaves
+// the response uncommitted and http.Error can emit a clean 500.
 func (h *Handlers) renderHTML(w http.ResponseWriter, r *http.Request, name, logMsg string, data any) {
-	w.Header().Set("Content-Type", contentTypeHTML)
-	if err := h.renderer.Render(w, name, data); err != nil {
+	var buf bytes.Buffer
+	if err := h.renderer.Render(&buf, name, data); err != nil {
 		zerolog.Ctx(r.Context()).Error().Err(err).Msg(logMsg)
 		http.Error(w, "failed to render page", http.StatusInternalServerError)
+
+		return
 	}
+	w.Header().Set("Content-Type", contentTypeHTML)
+	_, _ = buf.WriteTo(w)
 }
 
 // renderHTMLPartial is renderHTML for partial templates (htmx fragments).
 func (h *Handlers) renderHTMLPartial(w http.ResponseWriter, r *http.Request, name, logMsg string, data any) {
-	w.Header().Set("Content-Type", contentTypeHTML)
-	if err := h.renderer.RenderPartial(w, name, data); err != nil {
+	var buf bytes.Buffer
+	if err := h.renderer.RenderPartial(&buf, name, data); err != nil {
 		zerolog.Ctx(r.Context()).Error().Err(err).Msg(logMsg)
 		http.Error(w, "failed to render partial", http.StatusInternalServerError)
+
+		return
 	}
+	w.Header().Set("Content-Type", contentTypeHTML)
+	_, _ = buf.WriteTo(w)
 }
 
 // New builds a Handlers. All positional parameters are required; the
