@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"bufio"
+	"errors"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -10,6 +13,9 @@ import (
 
 // statusRecorder wraps http.ResponseWriter to capture the final HTTP
 // status; required because Go's stdlib doesn't expose it after WriteHeader.
+//
+// Flusher / Hijacker are forwarded so SSE and connection-upgrade
+// handlers keep working if this middleware is ever applied to them.
 type statusRecorder struct {
 	http.ResponseWriter
 
@@ -19,6 +25,30 @@ type statusRecorder struct {
 func (s *statusRecorder) WriteHeader(code int) {
 	s.status = code
 	s.ResponseWriter.WriteHeader(code)
+}
+
+// Flush forwards to the underlying ResponseWriter when it implements
+// http.Flusher (e.g. the SSE jobs stream). A no-op when not supported.
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// ErrHijackUnsupported is returned by Hijack when the wrapped
+// ResponseWriter does not implement http.Hijacker.
+var ErrHijackUnsupported = errors.New("statusRecorder: underlying ResponseWriter does not support hijacking")
+
+// Hijack forwards to the underlying ResponseWriter when it implements
+// http.Hijacker. Errors when not supported rather than panicking.
+//
+//nolint:wrapcheck // intentional passthrough — callers depend on the upstream error
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := s.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+
+	return nil, nil, ErrHijackUnsupported
 }
 
 // MetricsMiddleware records request count + duration into the handler's
