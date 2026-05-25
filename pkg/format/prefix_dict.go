@@ -442,19 +442,7 @@ func (r *DictPrefixReader) Count() uint64 {
 
 // Close releases resources.
 func (r *DictPrefixReader) Close() error {
-	var firstErr error
-
-	if err := r.dict.Close(); err != nil && firstErr == nil {
-		firstErr = err
-	}
-	if err := r.segIDs.Close(); err != nil && firstErr == nil {
-		firstErr = err
-	}
-	if err := r.offsets.Close(); err != nil && firstErr == nil {
-		firstErr = err
-	}
-
-	return firstErr
+	return errors.Join(r.dict.Close(), r.segIDs.Close(), r.offsets.Close())
 }
 
 // SplitPrefix splits a prefix into path segments by "/". Trailing
