@@ -35,6 +35,12 @@ type Config struct {
 	AutoLoadRetentionDefault *uint32  `json:"auto_load_retention_default,omitempty"`
 	IndexRatio               *float64 `json:"index_ratio,omitempty"`
 	DiscoveryRefreshInterval *string  `json:"discovery_refresh_interval,omitempty"` // Go duration string
+	AutoLoadDryRun           *bool    `json:"auto_load_dry_run,omitempty"`
+
+	MetricsEnabled *bool   `json:"metrics_enabled,omitempty"`
+	MetricsAddr    *string `json:"metrics_addr,omitempty"` // empty/unset = mount /metrics on main listener
+	BuildEventLog  *string `json:"build_event_log,omitempty"`
+	QueryBatchMax  *int    `json:"query_batch_max,omitempty"`
 
 	Inventories []InventoryEntry `json:"inventories,omitempty"`
 }
