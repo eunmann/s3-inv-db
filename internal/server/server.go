@@ -106,8 +106,13 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 
 	h := handlers.New(
 		stores.catalog, renderer, cfg.PriceTable,
-		stores.jobs, stores.jobStore, stores.jobBus,
-		stores.config, tracker,
+		handlers.Deps{
+			JobMgr:      stores.jobs,
+			JobStore:    stores.jobStore,
+			JobBus:      stores.jobBus,
+			ConfigStore: stores.config,
+			Tracker:     tracker,
+		},
 		buildHandlerOptions(cfg, discovery, bldr)...,
 	)
 

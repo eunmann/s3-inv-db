@@ -31,3 +31,14 @@ Follow this workflow for **every** change to this repo:
    - The merged **feature branch is deleted**.
 
 Always follow this workflow consistently for all changes.
+
+## Working style
+
+- **Never give time estimates.** No "this will take X hours/days/sessions," no "realistic for one session," no scoping language that anchors on duration. Quote the work, not the clock.
+- **Never claim work is too big.** Do not propose stopping, deferring, or splitting because of perceived scope. Execute the task as given.
+- **Do not short-circuit.** Do not stop mid-task list to ask for permission to continue, do not offer "checkpoint" off-ramps, do not summarize progress in lieu of doing the next item. When given a multi-task plan, run it to completion.
+
+## Package structure
+
+- **Domain-based, flat packages.** Name packages after the domain they own; keep the package tree shallow.
+- **Split only on a clean need.** A package divides when the boundary is forced by an API contract, a circular import, a build constraint, or a clear domain seam. Size, line counts, or "lots of files" are not reasons to split. When in doubt, leave it.

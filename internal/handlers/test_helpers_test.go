@@ -40,7 +40,13 @@ func newWiredHandlers(t *testing.T, mgr *inventory.Catalog, opts ...handlers.Opt
 
 	return handlers.New(
 		mgr, renderer, pricing.DefaultUSEast1Prices(),
-		jobMgr, jobStore, jobBus, configStore, tracker,
+		handlers.Deps{
+			JobMgr:      jobMgr,
+			JobStore:    jobStore,
+			JobBus:      jobBus,
+			ConfigStore: configStore,
+			Tracker:     tracker,
+		},
 		opts...,
 	)
 }

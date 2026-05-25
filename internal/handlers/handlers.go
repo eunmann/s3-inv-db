@@ -197,32 +197,39 @@ func (h *Handlers) renderHTMLPartialStatus(w http.ResponseWriter, r *http.Reques
 	_, _ = buf.WriteTo(w)
 }
 
-// New builds a Handlers. All positional parameters are required; the
-// caller's contract is that none is nil. Optional dependencies (loader,
-// discovery, S3 source URI, SSE heartbeat) are passed as Options. When
-// neither WithDiscovery nor WithDiscoverer/WithLoader is supplied,
-// a disabled Discovery is wired so handlers can call its
-// methods without nil-checking.
+// Deps groups the persistence + job-fan-out dependencies required by
+// New. All fields must be non-nil; the spine args (mgr, renderer,
+// priceTable) stay positional so swapping them is a compile error.
+type Deps struct {
+	JobMgr      *jobs.Scheduler
+	JobStore    *jobs.Store
+	JobBus      *jobs.Bus
+	ConfigStore *inventory.ConfigStore
+	Tracker     *budget.Tracker
+}
+
+// New builds a Handlers. Mgr/renderer/priceTable are the typed spine
+// of the request path; deps groups the job + persistence sinks. Optional
+// dependencies (loader, discovery, S3 source URI, SSE heartbeat) are
+// passed as Options. When neither WithDiscovery nor WithDiscoverer/
+// WithLoader is supplied, a disabled Discovery is wired so handlers
+// can call its methods without nil-checking.
 func New(
 	mgr *inventory.Catalog,
 	renderer *templates.Renderer,
 	priceTable pricing.PriceTable,
-	jobMgr *jobs.Scheduler,
-	jobStore *jobs.Store,
-	jobBus *jobs.Bus,
-	configStore *inventory.ConfigStore,
-	tracker *budget.Tracker,
+	deps Deps,
 	opts ...Option,
 ) *Handlers {
 	h := &Handlers{
 		manager:          mgr,
 		renderer:         renderer,
 		priceTable:       priceTable,
-		jobMgr:           jobMgr,
-		jobStore:         jobStore,
-		jobBus:           jobBus,
-		configStore:      configStore,
-		tracker:          tracker,
+		jobMgr:           deps.JobMgr,
+		jobStore:         deps.JobStore,
+		jobBus:           deps.JobBus,
+		configStore:      deps.ConfigStore,
+		tracker:          deps.Tracker,
 		sseHeartbeat:     defaultSSEHeartbeat,
 		sseMaxConnsPerIP: defaultSSEMaxConnsPerIP,
 	}
