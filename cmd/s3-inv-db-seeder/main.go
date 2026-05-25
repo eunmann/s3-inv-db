@@ -29,22 +29,25 @@ func main() {
 }
 
 func run() error {
-	target := flag.String("target", "local", "output target: local | s3")
-	out := flag.String("out", "./seed-data", "base output directory (target=local)")
-	s3Bucket := flag.String("s3-bucket", "", "S3 destination bucket (target=s3)")
-	s3Prefix := flag.String("s3-prefix", "inventory-data/", "key prefix under bucket; must end with / (target=s3)")
-	s3SrcBucket := flag.String("s3-src-bucket", "synthetic-prod", "simulated source bucket name written into the manifest (target=s3)")
-	count := flag.Int("count", 3, "number of inventory configurations to generate")
-	runs := flag.Int("runs-per-inventory", 1, "number of timestamped runs per inventory (target=s3)")
-	runStep := flag.Duration("run-step", 24*time.Hour, "spacing between consecutive runs (target=s3)")
-	objects := flag.Int("objects", defaultObjectsPerRun, "objects per inventory run (overridden per-config by --objects-per-config when set)")
-	objectsPerConfig := flag.String("objects-per-config", "", "comma-separated object counts cycled across inventory configs (e.g. 5000,500000,5000000); overrides --objects when set")
-	preset := flag.String("preset", "realistic", "config preset (small/medium/large/realistic)")
-	seed := flag.Int64("seed", 0, "random seed (0 = use default seed)")
-	verbose := flag.Bool("verbose", false, "enable debug logging")
-	prettyLogs := flag.Bool("pretty-logs", false, "use human-friendly console output")
+	fs := flag.NewFlagSet("s3-inv-db-seeder", flag.ExitOnError)
+	target := fs.String("target", "local", "output target: local | s3")
+	out := fs.String("out", "./seed-data", "base output directory (target=local)")
+	s3Bucket := fs.String("s3-bucket", "", "S3 destination bucket (target=s3)")
+	s3Prefix := fs.String("s3-prefix", "inventory-data/", "key prefix under bucket; must end with / (target=s3)")
+	s3SrcBucket := fs.String("s3-src-bucket", "synthetic-prod", "simulated source bucket name written into the manifest (target=s3)")
+	count := fs.Int("count", 3, "number of inventory configurations to generate")
+	runs := fs.Int("runs-per-inventory", 1, "number of timestamped runs per inventory (target=s3)")
+	runStep := fs.Duration("run-step", 24*time.Hour, "spacing between consecutive runs (target=s3)")
+	objects := fs.Int("objects", defaultObjectsPerRun, "objects per inventory run (overridden per-config by --objects-per-config when set)")
+	objectsPerConfig := fs.String("objects-per-config", "", "comma-separated object counts cycled across inventory configs (e.g. 5000,500000,5000000); overrides --objects when set")
+	preset := fs.String("preset", "realistic", "config preset (small/medium/large/realistic)")
+	seed := fs.Int64("seed", 0, "random seed (0 = use default seed)")
+	verbose := fs.Bool("verbose", false, "enable debug logging")
+	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
 
-	flag.Parse()
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		return fmt.Errorf("parse flags: %w", err)
+	}
 
 	logger := logging.NewLogger(logging.Options{Debug: *verbose, Human: *prettyLogs})
 

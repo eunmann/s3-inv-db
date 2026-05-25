@@ -66,24 +66,24 @@ type serverFlags struct {
 	indexRatio          *float64
 }
 
-func defineFlags() *serverFlags {
+func defineFlags(fs *flag.FlagSet) *serverFlags {
 	return &serverFlags{
-		configPath:          flag.String("config", appconfig.EnvOr("S3INV_CONFIG", ""), "path to JSON config file (overridden by explicit flags)"),
-		addr:                flag.String("addr", ":8080", "HTTP server address"),
-		verbose:             flag.Bool("verbose", false, "enable debug logging"),
-		prettyLogs:          flag.Bool("pretty-logs", false, "use human-friendly console output"),
-		priceTablePath:      flag.String("price-table", "", "path to custom price table JSON (default: US East 1 prices)"),
-		s3Source:            flag.String("s3-source", appconfig.EnvOr("S3INV_SOURCE", ""), "S3 URI to discover inventories under (e.g., s3://bucket/inventory-data/)"),
-		cacheDir:            flag.String("cache-dir", appconfig.EnvOr("S3INV_CACHE_DIR", "/var/cache/s3inv"), "local directory for built indexes downloaded from S3"),
-		stateDB:             flag.String("state-db", appconfig.EnvOr("S3INV_STATE_DB", ""), "SQLite path for persisted state (default: <cache-dir>/state.db)"),
-		autoLoad:            flag.Bool("auto-load", appconfig.EnvBool("S3INV_AUTO_LOAD", false), "enable background discovery + auto-load of new inventory runs; requires --max-index-disk"),
-		pollInterval:        flag.Duration("auto-load-poll-interval", appconfig.EnvDuration("S3INV_AUTO_LOAD_POLL_INTERVAL", autoload.DefaultPollInterval), "discovery polling interval"),
-		discoveryRefresh:    flag.Duration("discovery-refresh-interval", appconfig.EnvDuration("S3INV_DISCOVERY_REFRESH_INTERVAL", server.DefaultDiscoveryRefreshInterval), "interval at which the background discovery refresher updates the cached snapshot served by HTTP handlers"),
-		maxIndexDisk:        flag.String("max-index-disk", appconfig.EnvOr("S3INV_MAX_INDEX_DISK", ""), "max cumulative on-disk bytes for loaded indexes (e.g. 100GB); required with --auto-load"),
-		headroom:            flag.String("index-headroom", appconfig.EnvOr("S3INV_INDEX_HEADROOM", ""), "reserved unused space inside --max-index-disk; default 20% of the cap"),
-		autoLoadConcurrency: flag.Int("max-auto-load-concurrency", appconfig.EnvInt("S3INV_MAX_AUTO_LOAD_CONCURRENCY", 1), "max concurrent auto-loads"),
-		autoLoadRetention:   flag.Uint("auto-load-retention-default", uint(appconfig.EnvInt("S3INV_AUTO_LOAD_RETENTION_DEFAULT", defaultAutoLoadRetention)), "default per-config run-retention when a configuration sets none"),
-		indexRatio:          flag.Float64("index-ratio", appconfig.EnvFloat("S3INV_INDEX_RATIO", defaultIndexRatio), "estimate multiplier: final index bytes ≈ ratio × compressed manifest total"),
+		configPath:          fs.String("config", appconfig.EnvOr("S3INV_CONFIG", ""), "path to JSON config file (overridden by explicit flags)"),
+		addr:                fs.String("addr", ":8080", "HTTP server address"),
+		verbose:             fs.Bool("verbose", false, "enable debug logging"),
+		prettyLogs:          fs.Bool("pretty-logs", false, "use human-friendly console output"),
+		priceTablePath:      fs.String("price-table", "", "path to custom price table JSON (default: US East 1 prices)"),
+		s3Source:            fs.String("s3-source", appconfig.EnvOr("S3INV_SOURCE", ""), "S3 URI to discover inventories under (e.g., s3://bucket/inventory-data/)"),
+		cacheDir:            fs.String("cache-dir", appconfig.EnvOr("S3INV_CACHE_DIR", "/var/cache/s3inv"), "local directory for built indexes downloaded from S3"),
+		stateDB:             fs.String("state-db", appconfig.EnvOr("S3INV_STATE_DB", ""), "SQLite path for persisted state (default: <cache-dir>/state.db)"),
+		autoLoad:            fs.Bool("auto-load", appconfig.EnvBool("S3INV_AUTO_LOAD", false), "enable background discovery + auto-load of new inventory runs; requires --max-index-disk"),
+		pollInterval:        fs.Duration("auto-load-poll-interval", appconfig.EnvDuration("S3INV_AUTO_LOAD_POLL_INTERVAL", autoload.DefaultPollInterval), "discovery polling interval"),
+		discoveryRefresh:    fs.Duration("discovery-refresh-interval", appconfig.EnvDuration("S3INV_DISCOVERY_REFRESH_INTERVAL", server.DefaultDiscoveryRefreshInterval), "interval at which the background discovery refresher updates the cached snapshot served by HTTP handlers"),
+		maxIndexDisk:        fs.String("max-index-disk", appconfig.EnvOr("S3INV_MAX_INDEX_DISK", ""), "max cumulative on-disk bytes for loaded indexes (e.g. 100GB); required with --auto-load"),
+		headroom:            fs.String("index-headroom", appconfig.EnvOr("S3INV_INDEX_HEADROOM", ""), "reserved unused space inside --max-index-disk; default 20% of the cap"),
+		autoLoadConcurrency: fs.Int("max-auto-load-concurrency", appconfig.EnvInt("S3INV_MAX_AUTO_LOAD_CONCURRENCY", 1), "max concurrent auto-loads"),
+		autoLoadRetention:   fs.Uint("auto-load-retention-default", uint(appconfig.EnvInt("S3INV_AUTO_LOAD_RETENTION_DEFAULT", defaultAutoLoadRetention)), "default per-config run-retention when a configuration sets none"),
+		indexRatio:          fs.Float64("index-ratio", appconfig.EnvFloat("S3INV_INDEX_RATIO", defaultIndexRatio), "estimate multiplier: final index bytes ≈ ratio × compressed manifest total"),
 	}
 }
 
@@ -130,15 +130,18 @@ func resolveRuntimeOptions(f *serverFlags, fileCfg *appconfig.Config, explicit m
 }
 
 func run() error {
-	f := defineFlags()
-	flag.Parse()
+	fs := flag.NewFlagSet("s3-inv-db-server", flag.ExitOnError)
+	f := defineFlags(fs)
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		return fmt.Errorf("parse flags: %w", err)
+	}
 
 	fileCfg, err := appconfig.Load(*f.configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 	explicit := map[string]bool{}
-	flag.Visit(func(fl *flag.Flag) { explicit[fl.Name] = true })
+	fs.Visit(func(fl *flag.Flag) { explicit[fl.Name] = true })
 
 	finalVerbose := pickBool(fileCfg, *f.verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
 	finalPretty := pickBool(fileCfg, *f.prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
