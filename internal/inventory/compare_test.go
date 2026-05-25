@@ -156,7 +156,8 @@ func TestCompareStatusString(t *testing.T) {
 		{s: inventory.CompareRemoved, want: "removed"},
 		{s: inventory.CompareChanged, want: "changed"},
 		{s: inventory.CompareUnchanged, want: "unchanged"},
-		{s: inventory.CompareStatus(99), want: "unchanged"},
+		{s: inventory.CompareUnknown, want: "unknown"},
+		{s: inventory.CompareStatus(99), want: "unknown"},
 	}
 	for _, tc := range cases {
 		if got := tc.s.String(); got != tc.want {

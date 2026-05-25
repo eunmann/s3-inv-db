@@ -100,9 +100,14 @@ func CompareSortLinks(currentSort, currentDir string) map[string]BrowseSortLink 
 type CompareStatus uint8
 
 // Compare status constants. String values match the user-facing badge
-// labels in the template so a rename catches both ends.
+// labels in the template so a rename catches both ends. CompareUnknown
+// is the zero value: an unclassified row would otherwise default to
+// "unchanged" silently. The classifier always returns one of the four
+// real states; CompareUnknown only fires if a row is constructed
+// without classification, which surfaces immediately in the UI.
 const (
-	CompareUnchanged CompareStatus = iota
+	CompareUnknown CompareStatus = iota
+	CompareUnchanged
 	CompareAdded
 	CompareRemoved
 	CompareChanged
@@ -118,8 +123,10 @@ func (s CompareStatus) String() string {
 		return "removed"
 	case CompareChanged:
 		return "changed"
-	default:
+	case CompareUnchanged:
 		return "unchanged"
+	default:
+		return "unknown"
 	}
 }
 
