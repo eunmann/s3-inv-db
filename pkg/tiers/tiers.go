@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
 
 // ErrUnknownTierID is returned when a caller looks up a tier id that
@@ -115,7 +117,15 @@ func (m *Mapping) FromS3(storageClass, accessTier string) ID {
 		case "DEEP_ARCHIVE_ACCESS", "DEEP_ARCHIVE":
 			return ITDeepArchive
 		default:
-			// Default to Frequent if access tier is missing or unknown
+			// Default to Frequent if access tier is missing or unknown.
+			// Surface a non-empty unrecognised tier — silent
+			// misclassification would inflate Frequent counts.
+			if accessTier != "" {
+				logging.L().Warn().
+					Str("access_tier", accessTier).
+					Msg("tiers.FromS3: unknown Intelligent-Tiering access tier, defaulting to FREQUENT")
+			}
+
 			return ITFrequent
 		}
 	}
@@ -125,7 +135,12 @@ func (m *Mapping) FromS3(storageClass, accessTier string) ID {
 		return id
 	}
 
-	// Default to Standard for unknown classes
+	if storageClass != "" {
+		logging.L().Warn().
+			Str("storage_class", storageClass).
+			Msg("tiers.FromS3: unknown storage class, defaulting to STANDARD")
+	}
+
 	return Standard
 }
 
