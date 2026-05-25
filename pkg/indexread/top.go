@@ -2,15 +2,8 @@ package indexread
 
 import (
 	"container/heap"
-	"errors"
 	"fmt"
-	"sort"
 )
-
-// errTopHeapBadElement is returned if the heap yields a non-TopResult;
-// only reachable via a programming bug in this file, but err113 still
-// wants a sentinel rather than a one-shot dynamic error.
-var errTopHeapBadElement = errors.New("top heap: unexpected element type")
 
 // TopMetric selects which statistic ranks results in Top queries.
 type TopMetric int
@@ -81,18 +74,17 @@ func (idx *Index) top(prefixPos uint64, relDepth, limit int, metric TopMetric, f
 		heap.Fix(h, 0)
 	}
 
+	// heap.Pop yields the heap-min (smallest metric, with larger Pos
+	// preferred on ties — see less). Filling out from the tail forward
+	// puts the largest metric at index 0 and ties at the same metric
+	// land in ascending-position order, which is the contract.
+	//
+	// The type assertion is infallible: Push only accepts TopResult,
+	// so heap.Pop can return nothing else.
 	out := make([]TopResult, h.Len())
 	for i := len(out) - 1; i >= 0; i-- {
-		r, ok := heap.Pop(h).(TopResult)
-		if !ok {
-			return nil, errTopHeapBadElement
-		}
-		out[i] = r
+		out[i] = heap.Pop(h).(TopResult) //nolint:forcetypeassert // see comment above
 	}
-
-	sort.SliceStable(out, func(i, j int) bool {
-		return h.less(out[j], out[i])
-	})
 
 	return out, nil
 }
