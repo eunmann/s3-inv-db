@@ -88,14 +88,17 @@ func (t *buildTracker) start() {
 	}
 
 	sub := t.bus.Subscribe(1024)
-	t.subCtx = make(chan struct{})
+	stop := make(chan struct{})
+	t.subCtx = stop
 	t.subDone = make(chan struct{})
 
+	// Capture stop in the closures so they don't race with finish()
+	// setting t.subCtx to nil after closing.
 	go func() {
 		defer close(t.subDone)
 		for {
 			select {
-			case <-t.subCtx:
+			case <-stop:
 				// Cancel closes sub.C; the publisher uses a non-blocking
 				// send so it cannot deadlock on any remaining buffered
 				// values (they're simply dropped).
@@ -112,16 +115,18 @@ func (t *buildTracker) start() {
 	}()
 
 	// Background RSS poller updates peakAllocBytes during the build.
-	go t.pollRSS()
+	go t.pollRSS(stop)
 }
 
-// pollRSS samples runtime.MemStats every second until subCtx fires.
-func (t *buildTracker) pollRSS() {
+// pollRSS samples runtime.MemStats every second until stop closes. The
+// stop channel is passed by value so finish() nilling t.subCtx cannot
+// turn the select case into a wait-on-nil-channel.
+func (t *buildTracker) pollRSS(stop <-chan struct{}) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-t.subCtx:
+		case <-stop:
 			return
 		case <-ticker.C:
 			var ms runtime.MemStats

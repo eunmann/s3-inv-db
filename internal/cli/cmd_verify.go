@@ -14,6 +14,9 @@ var (
 	errVerifyIntegrity = errors.New("verify: integrity issues detected")
 	errMPHFLostPrefix  = errors.New("MPHF lost prefix")
 	errMPHFMismatch    = errors.New("MPHF roundtrip mismatch")
+	// ErrNegativeSample is returned when --sample is negative; the int→uint64
+	// cast would otherwise wrap to a huge positive bound.
+	ErrNegativeSample = errors.New("--sample must be >= 0")
 )
 
 type verifyOutput struct {
@@ -44,6 +47,9 @@ func runVerify(args []string) error {
 
 	if *indexDir == "" {
 		return ErrIndexRequired
+	}
+	if *sample < 0 {
+		return ErrNegativeSample
 	}
 
 	result := verifyOutput{Index: *indexDir}

@@ -86,3 +86,78 @@ func TestLoadPriceTable_MissingFile(t *testing.T) {
 		t.Errorf("error should wrap with context, got: %v", err)
 	}
 }
+
+// Missing-flag parity tests for the new subcommands. Each verifies the
+// flag-required error path so a future refactor that drops a check
+// breaks loudly.
+
+func TestTopMissingIndex(t *testing.T) {
+	err := cli.Run([]string{"top"})
+	if err == nil || !strings.Contains(err.Error(), "--index") {
+		t.Errorf("expected --index error, got: %v", err)
+	}
+}
+
+func TestTopBadBy(t *testing.T) {
+	err := cli.Run([]string{"top", "--index", "/i", "--by", "garbage"})
+	if err == nil || !strings.Contains(err.Error(), "--by") {
+		t.Errorf("expected --by error, got: %v", err)
+	}
+}
+
+func TestBrowseMissingIndex(t *testing.T) {
+	err := cli.Run([]string{"browse"})
+	if err == nil || !strings.Contains(err.Error(), "--index") {
+		t.Errorf("expected --index error, got: %v", err)
+	}
+}
+
+func TestCompareMissingFrom(t *testing.T) {
+	err := cli.Run([]string{"compare", "--to", "/b"})
+	if err == nil || !strings.Contains(err.Error(), "--from") {
+		t.Errorf("expected --from error, got: %v", err)
+	}
+}
+
+func TestCompareMissingTo(t *testing.T) {
+	err := cli.Run([]string{"compare", "--from", "/a"})
+	if err == nil || !strings.Contains(err.Error(), "--to") {
+		t.Errorf("expected --to error, got: %v", err)
+	}
+}
+
+func TestVerifyMissingIndex(t *testing.T) {
+	err := cli.Run([]string{"verify"})
+	if err == nil || !strings.Contains(err.Error(), "--index") {
+		t.Errorf("expected --index error, got: %v", err)
+	}
+}
+
+func TestVerifyRejectsNegativeSample(t *testing.T) {
+	err := cli.Run([]string{"verify", "--index", "/i", "--sample", "-1"})
+	if err == nil || !strings.Contains(err.Error(), "--sample") {
+		t.Errorf("expected --sample error, got: %v", err)
+	}
+}
+
+func TestStatsMissingIndex(t *testing.T) {
+	err := cli.Run([]string{"stats"})
+	if err == nil || !strings.Contains(err.Error(), "--index") {
+		t.Errorf("expected --index error, got: %v", err)
+	}
+}
+
+func TestSubcommandBadOutputFormat(t *testing.T) {
+	// One subcommand is enough; the validation is shared.
+	err := cli.Run([]string{"verify", "--index", "/i", "--output", "yaml"})
+	if err == nil || !strings.Contains(err.Error(), "--output") {
+		t.Errorf("expected --output error, got: %v", err)
+	}
+}
+
+func TestConfigCheckOnEmptyPath(t *testing.T) {
+	// Empty --config should succeed: an empty Config is valid.
+	if err := cli.Run([]string{"config-check"}); err != nil {
+		t.Errorf("config-check on empty path should succeed, got: %v", err)
+	}
+}
