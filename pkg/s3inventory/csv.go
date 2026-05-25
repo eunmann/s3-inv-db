@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/klauspost/pgzip"
-	"github.com/rs/zerolog/log"
 )
 
 // Row represents a single object from an S3 inventory file.
@@ -135,7 +135,7 @@ func (r *CSVReader) Next() (Row, error) {
 		size, err := strconv.ParseUint(sizeStr, 10, 64)
 		if err != nil {
 			r.malformedRows++
-			log.Debug().
+			logging.L().Debug().
 				Str("key", key).
 				Str("size_field", sizeStr).
 				Err(err).
