@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
+	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/rs/zerolog"
 )
 
@@ -314,9 +315,10 @@ func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, ro
 
 	if len(errs) > 0 {
 		// Clean up any successful outputs
+		log := logging.L()
 		for _, p := range outputPaths {
 			if p != "" {
-				os.Remove(p)
+				logCleanupErr(log, "remove abandoned merge output", p, os.Remove(p))
 			}
 		}
 
@@ -471,9 +473,10 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 
 	count, err := drainMerger(ctx, merger, outputWriter)
 	if err != nil {
+		log := logging.L()
 		outputWriter.Close()
 		merger.Close()
-		os.Remove(job.outputPath)
+		logCleanupErr(log, "remove failed merge output", job.outputPath, os.Remove(job.outputPath))
 		result.err = err
 
 		return result
@@ -482,7 +485,8 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 	merger.Close()
 
 	if err := outputWriter.Close(); err != nil {
-		os.Remove(job.outputPath)
+		log := logging.L()
+		logCleanupErr(log, "remove failed merge output", job.outputPath, os.Remove(job.outputPath))
 		result.err = fmt.Errorf("close output: %w", err)
 
 		return result

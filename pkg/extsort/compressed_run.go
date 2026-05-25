@@ -3,6 +3,7 @@ package extsort
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -175,35 +176,28 @@ func (w *CompressedRunWriter) Path() string {
 	return w.path
 }
 
-// Close flushes all buffers, finalizes compression, updates the header, and closes the file.
+// Close flushes all buffers, finalizes compression, updates the
+// header, and closes the file. Idempotent — a second call returns nil
+// even if the first call returned an error mid-way (the underlying
+// file is always closed exactly once via closeFile).
 func (w *CompressedRunWriter) Close() error {
 	if w.closed {
 		return nil
 	}
 	w.closed = true
 
-	// Flush the buffered writer
 	if err := w.writer.Flush(); err != nil {
-		w.compressor.Close()
-		w.file.Close()
-
-		return fmt.Errorf("flush buffer: %w", err)
+		return errors.Join(fmt.Errorf("flush buffer: %w", err), w.closeCompressor(), w.closeFile())
 	}
 
-	// Close the compressor (finalizes zstd stream) then return it to the pool.
 	if err := w.compressor.Close(); err != nil {
-		w.file.Close()
-
-		return fmt.Errorf("close compressor: %w", err)
+		return errors.Join(fmt.Errorf("close compressor: %w", err), w.closeFile())
 	}
 	releaseZstdEncoder(w.zstdLevel, w.compressor)
 	w.compressor = nil
 
-	// Update header with final count and uncompressed size
 	if _, err := w.file.Seek(compressedRunCountOffset, 0); err != nil {
-		w.file.Close()
-
-		return fmt.Errorf("seek to count: %w", err)
+		return errors.Join(fmt.Errorf("seek to count: %w", err), w.closeFile())
 	}
 
 	var headerUpdate [20]byte
@@ -212,21 +206,47 @@ func (w *CompressedRunWriter) Close() error {
 	// Reserved field (4 bytes) stays zero
 
 	if _, err := w.file.Write(headerUpdate[:]); err != nil {
-		w.file.Close()
-
-		return fmt.Errorf("update header: %w", err)
+		return errors.Join(fmt.Errorf("update header: %w", err), w.closeFile())
 	}
 
 	// fsync before close: a crash between write and kernel flush would
 	// leave the compressed stream truncated and unreadable.
 	if err := w.file.Sync(); err != nil {
-		w.file.Close()
-
-		return fmt.Errorf("fsync compressed run file: %w", err)
+		return errors.Join(fmt.Errorf("fsync compressed run file: %w", err), w.closeFile())
 	}
 
-	if err := w.file.Close(); err != nil {
+	if err := w.closeFile(); err != nil {
 		return fmt.Errorf("close file: %w", err)
+	}
+
+	return nil
+}
+
+// closeFile closes the backing file exactly once; nils the pointer so
+// repeat calls are no-ops.
+func (w *CompressedRunWriter) closeFile() error {
+	if w.file == nil {
+		return nil
+	}
+	f := w.file
+	w.file = nil
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("file close: %w", err)
+	}
+
+	return nil
+}
+
+// closeCompressor closes the encoder (if still open) and returns the
+// resulting error wrapped, or nil if already closed.
+func (w *CompressedRunWriter) closeCompressor() error {
+	if w.compressor == nil {
+		return nil
+	}
+	c := w.compressor
+	w.compressor = nil
+	if err := c.Close(); err != nil {
+		return fmt.Errorf("close compressor: %w", err)
 	}
 
 	return nil
@@ -459,9 +479,13 @@ var zstdEncoderPools = map[zstd.EncoderLevel]*typedPool[zstd.Encoder]{
 //nolint:gochecknoglobals // intentional package-level decoder pool
 var zstdDecoderPool = newTypedPool(func() *zstd.Decoder { return nil })
 
+// acquireZstdEncoder returns a pooled or freshly-built encoder at the
+// requested level. A nil pool (unknown level) or an empty pool both
+// fall through to NewWriter; that's by design — callers don't need to
+// pre-register every level they use, they just give up pooling at
+// other levels.
 func acquireZstdEncoder(level zstd.EncoderLevel) (*zstd.Encoder, error) {
-	pool := zstdEncoderPools[level]
-	if pool != nil {
+	if pool := zstdEncoderPools[level]; pool != nil {
 		if enc := pool.Get(); enc != nil {
 			return enc, nil
 		}
