@@ -32,6 +32,7 @@ type ParquetReader struct {
 	file          *parquet.File
 	rowGroups     []parquet.RowGroup
 	rowBuf        []parquet.Row
+	pendingErr    error
 	keyCol        int
 	accessTierCol int
 	currentRGIdx  int
@@ -229,6 +230,12 @@ func (r *ParquetReader) Next() (Row, error) {
 			if n > 0 {
 				r.bufIdx = 0
 				r.bufLen = n
+				// Stash a non-EOF error so it surfaces after the just-
+				// read rows are drained, instead of being lost on the
+				// next iteration's ReadRows call.
+				if err != nil && !errors.Is(err, io.EOF) {
+					r.pendingErr = fmt.Errorf("read parquet rows: %w", err)
+				}
 
 				continue
 			}
@@ -237,6 +244,12 @@ func (r *ParquetReader) Next() (Row, error) {
 			}
 			r.currentRows.Close()
 			r.currentRows = nil
+		}
+		if r.pendingErr != nil {
+			err := r.pendingErr
+			r.pendingErr = nil
+
+			return Row{}, err
 		}
 
 		r.currentRGIdx++
