@@ -3,15 +3,9 @@
 package budget
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"sync"
-
-	"github.com/eunmann/s3-inv-db/pkg/format"
 )
 
 // ErrOverBudget is returned by Reserve when the requested bytes won't fit.
@@ -142,46 +136,4 @@ func (t *Tracker) Release(token string) {
 		return
 	}
 	t.reserved -= bytes
-}
-
-// MeasureDir returns the on-disk size of an index directory, reading
-// manifest.json when present and falling back to a filesystem walk.
-func MeasureDir(ctx context.Context, root string) (uint64, error) {
-	if root == "" {
-		return 0, nil
-	}
-	if _, err := os.Stat(root); err != nil {
-		if os.IsNotExist(err) {
-			return 0, nil
-		}
-
-		return 0, fmt.Errorf("stat %s: %w", root, err)
-	}
-	if manifest, err := format.ReadManifest(root); err == nil && len(manifest.Files) > 0 {
-		return manifest.TotalBytes(), nil
-	}
-	var total uint64
-	err := filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return fmt.Errorf("walk entry: %w", err)
-		}
-		if ctx.Err() != nil {
-			return fmt.Errorf("walk cancelled: %w", ctx.Err())
-		}
-		if d.IsDir() || !d.Type().IsRegular() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return fmt.Errorf("stat entry: %w", err)
-		}
-		total += uint64(info.Size())
-
-		return nil
-	})
-	if err != nil {
-		return 0, fmt.Errorf("walk %s: %w", root, err)
-	}
-
-	return total, nil
 }

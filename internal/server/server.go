@@ -281,7 +281,7 @@ func (s *Server) backfillTracker(ctx context.Context, logger zerolog.Logger) {
 				InventoryID:  p.Inventory,
 				Run:          p.Run,
 			})
-			if measured, err := budget.MeasureDir(ctx, dir); err == nil {
+			if measured, err := inventory.MeasureDir(ctx, dir); err == nil {
 				bytes = measured
 				updated := *info
 				updated.IndexBytes = bytes

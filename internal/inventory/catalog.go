@@ -255,12 +255,13 @@ func (c *Catalog) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	return nil
 }
 
-// measureIndexDir returns the cumulative byte size of an index by
-// reading manifest.json — the build process records each file's size
-// there, so we avoid a directory walk. Falls back to walking when the
-// manifest is missing or unreadable (covers indexes built by older
-// code that didn't list every file).
-func measureIndexDir(dir string) (uint64, error) {
+// MeasureDir returns the cumulative byte size of an index by reading
+// manifest.json — the build process records each file's size there,
+// so we avoid a directory walk in the common case. Falls back to a
+// walk when the manifest is missing or unreadable (covers indexes
+// built by older code that didn't list every file). Honors ctx during
+// the walk fallback so a slow filesystem can be cancelled.
+func MeasureDir(ctx context.Context, dir string) (uint64, error) {
 	if dir == "" {
 		return 0, nil
 	}
@@ -279,6 +280,9 @@ func measureIndexDir(dir string) (uint64, error) {
 		if err != nil {
 			return fmt.Errorf("walk entry: %w", err)
 		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("walk cancelled: %w", ctx.Err())
+		}
 		if d.IsDir() || !d.Type().IsRegular() {
 			return nil
 		}
@@ -295,6 +299,13 @@ func measureIndexDir(dir string) (uint64, error) {
 	}
 
 	return total, nil
+}
+
+// measureIndexDir is the no-ctx convenience wrapper for in-flight
+// catalog operations that already hold the catalog lock — they want
+// the size now, not a cancellable walk.
+func measureIndexDir(dir string) (uint64, error) {
+	return MeasureDir(context.Background(), dir)
 }
 
 // Unload closes an inventory index and releases its resources. Used
