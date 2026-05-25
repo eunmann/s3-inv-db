@@ -1,5 +1,5 @@
 .PHONY: all build server seeder test test-race lint lint-check clean clean-seed seed \
-        css dev docker-build docker-prod docker-seed docker-down \
+        css dev dev-reset docker-build docker-prod docker-seed docker-down \
         cover cover-html cover-summary tidy
 
 GOLANGCI_LINT_VERSION := v2.9.0
@@ -117,6 +117,17 @@ docker-build:
 # binary path. Override port with S3INV_DEV_PORT=...
 dev:
 	$(COMPOSE) --profile dev up --build
+
+# Wipe the dev server's persistent state (state.db + downloaded indexes)
+# without nuking the MinIO bucket. Use when the schema gets wedged, the
+# auto-loader is stuck in a backoff loop, or you just want a clean slate.
+# Re-running `make dev` after this re-applies every migration from scratch
+# and rebuilds caches on demand.
+dev-reset:
+	$(COMPOSE) --profile dev stop server-dev
+	$(COMPOSE) --profile dev rm -f server-dev
+	docker volume rm -f infra_server-cache
+	@echo "dev state cleared — run 'make dev' to start fresh"
 
 # Slim production image (port 8081). Override with S3INV_PROD_PORT=...
 docker-prod:
