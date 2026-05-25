@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -434,9 +435,11 @@ func newDiscoveryWiring(ctx context.Context, cfg Config) (discoveryWiring, error
 	}, nil
 }
 
-// Run starts the HTTP server and blocks until the context is cancelled.
-func (s *Server) Run(ctx context.Context) error {
-	s.server = &http.Server{
+// newHTTPServer builds the *http.Server with the project-wide timeout
+// hardening. Extracted so tests can assert the timeout shape without
+// racing against Run's goroutine assignment to s.server.
+func (s *Server) newHTTPServer() *http.Server {
+	return &http.Server{
 		Addr:              s.config.Addr,
 		Handler:           s.router,
 		ReadHeaderTimeout: readHeaderTimeout,
@@ -444,8 +447,16 @@ func (s *Server) Run(ctx context.Context) error {
 		IdleTimeout:       idleTimeout,
 		MaxHeaderBytes:    maxHeaderBytes,
 	}
+}
 
-	metricsSrv := s.maybeStartMetricsListener()
+// Run starts the HTTP server and blocks until the context is cancelled.
+func (s *Server) Run(ctx context.Context) error {
+	s.server = s.newHTTPServer()
+
+	metricsSrv, err := s.maybeStartMetricsListener(ctx)
+	if err != nil {
+		return err
+	}
 	if metricsSrv != nil {
 		defer s.shutdownMetricsListener(ctx, metricsSrv)
 	}
@@ -538,11 +549,18 @@ func (s *Server) shutdownMetricsListener(ctx context.Context, srv *http.Server) 
 }
 
 // maybeStartMetricsListener binds /metrics on a separate listener when
-// MetricsAddr is set. Returns nil when /metrics is mounted on the main
-// router instead.
-func (s *Server) maybeStartMetricsListener() *http.Server {
+// MetricsAddr is set. Binds synchronously (net.ListenConfig.Listen) so
+// a port conflict aborts Run instead of silently disappearing into a
+// background goroutine. Returns (nil, nil) when /metrics is mounted
+// on the main router instead.
+func (s *Server) maybeStartMetricsListener(ctx context.Context) (*http.Server, error) {
 	if s.config.MetricsAddr == "" {
-		return nil
+		return nil, nil //nolint:nilnil // explicit "no listener configured" is the contract
+	}
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", s.config.MetricsAddr)
+	if err != nil {
+		return nil, fmt.Errorf("bind metrics listener %q: %w", s.config.MetricsAddr, err)
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", s.handlers.MetricsHandler)
@@ -556,10 +574,10 @@ func (s *Server) maybeStartMetricsListener() *http.Server {
 	}
 	go func() {
 		s.config.Logger.Info().Str("addr", s.config.MetricsAddr).Msg("starting /metrics listener")
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.config.Logger.Error().Err(err).Msg("metrics listener exited")
 		}
 	}()
 
-	return srv
+	return srv, nil
 }
