@@ -49,12 +49,12 @@ type fakeBuilder struct {
 	buildResp string
 }
 
-func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _, _ string, _ func(string, int64, int64)) (string, error) {
+func (f *fakeBuilder) BuildWith(_ context.Context, _ inventory.CacheKey, _ string, _ func(string, int64, int64)) (string, error) {
 	return f.buildResp, f.buildErr
 }
 
-func (f *fakeBuilder) RemoveCache(_, _, _ string) error             { return nil }
-func (f *fakeBuilder) CacheSizeBytes(_, _, _ string) (int64, error) { return 0, nil }
+func (f *fakeBuilder) RemoveCache(inventory.CacheKey) error             { return nil }
+func (f *fakeBuilder) CacheSizeBytes(inventory.CacheKey) (int64, error) { return 0, nil }
 
 func TestDiscoveryService_EnabledReflectsConstructor(t *testing.T) {
 	mgr := inventory.NewCatalog(nil)

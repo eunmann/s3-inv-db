@@ -148,7 +148,11 @@ func (h *Handlers) UnloadDiscoveredRowPartial(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if h.loader != nil {
-		if err := h.loader.RemoveCache(src, name, run); err != nil {
+		if err := h.loader.RemoveCache(inventory.CacheKey{
+			SourceBucket: src,
+			InventoryID:  name,
+			Run:          run,
+		}); err != nil {
 			// Don't fail the request — the memory side is already
 			// released; surface the disk error in logs so the operator
 			// can clean up.
@@ -387,7 +391,11 @@ func (h *Handlers) measureCacheSize(r *http.Request, disc inventory.Inventory) c
 	if h.loader == nil || disc.Run == "" {
 		return cacheSize{}
 	}
-	n, err := h.loader.CacheSizeBytes(disc.SourceBucket, disc.Name, disc.Run)
+	n, err := h.loader.CacheSizeBytes(inventory.CacheKey{
+		SourceBucket: disc.SourceBucket,
+		InventoryID:  disc.Name,
+		Run:          disc.Run,
+	})
 	if err != nil {
 		zerolog.Ctx(r.Context()).Warn().Err(err).
 			Str("src", disc.SourceBucket).

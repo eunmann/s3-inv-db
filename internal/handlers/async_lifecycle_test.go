@@ -27,11 +27,11 @@ type slowBuilder struct {
 	once      sync.Once
 }
 
-func (b *slowBuilder) Build(ctx context.Context, _, _, _, _ string) (string, error) {
-	return b.BuildWith(ctx, "", "", "", "", nil)
+func (b *slowBuilder) Build(ctx context.Context, _ inventory.CacheKey) (string, error) {
+	return b.BuildWith(ctx, inventory.CacheKey{}, "", nil)
 }
 
-func (b *slowBuilder) BuildWith(ctx context.Context, _, _, _, _ string, _ func(string, int64, int64)) (string, error) {
+func (b *slowBuilder) BuildWith(ctx context.Context, _ inventory.CacheKey, _ string, _ func(string, int64, int64)) (string, error) {
 	b.once.Do(func() { b.cancelled = make(chan struct{}) })
 	select {
 	case <-time.After(b.delay):
@@ -49,8 +49,8 @@ func (*slowBuilder) Evict(string, string) error { return nil }
 // returns 202 + queued, job moves through running, ends in failed (our
 // fake builder always fails after the delay).
 
-func (b *slowBuilder) RemoveCache(_, _, _ string) error             { return nil }
-func (b *slowBuilder) CacheSizeBytes(_, _, _ string) (int64, error) { return 0, nil }
+func (b *slowBuilder) RemoveCache(inventory.CacheKey) error             { return nil }
+func (b *slowBuilder) CacheSizeBytes(inventory.CacheKey) (int64, error) { return 0, nil }
 
 func TestAsyncLifecycle_LoadSucceeds(t *testing.T) {
 	disc := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}

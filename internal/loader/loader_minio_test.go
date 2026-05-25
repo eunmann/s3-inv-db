@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/loader"
 	"github.com/eunmann/s3-inv-db/internal/miniotest"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
@@ -42,14 +43,15 @@ func TestBuildWith_BuildsIndexFromSeededManifest(t *testing.T) {
 
 	run := stamp.Format("2006-01-02T15-04Z")
 	var stages []string
-	outDir, err := l.BuildWith(t.Context(), srcBucket, info.ID, run, info.Path,
+	ck := inventory.CacheKey{SourceBucket: srcBucket, InventoryID: info.ID, Run: run}
+	outDir, err := l.BuildWith(t.Context(), ck, info.Path,
 		func(stage string, _, _ int64) { stages = append(stages, stage) },
 	)
 	if err != nil {
 		t.Fatalf("BuildWith: %v", err)
 	}
-	if outDir != l.CacheDirFor(srcBucket, info.ID, run) {
-		t.Errorf("outDir = %q, want %q", outDir, l.CacheDirFor(srcBucket, info.ID, run))
+	if outDir != l.CacheDirFor(ck) {
+		t.Errorf("outDir = %q, want %q", outDir, l.CacheDirFor(ck))
 	}
 	for _, want := range []string{"preparing", "done"} {
 		found := slices.Contains(stages, want)
@@ -82,7 +84,7 @@ func TestBuild_FailsOnMissingManifest(t *testing.T) {
 
 	l := loader.New(t.TempDir(), fc)
 	bogus := fmt.Sprintf("s3://%s/does/not/exist/manifest.json", bucket)
-	_, err := l.BuildWith(t.Context(), "src", "inv", "run", bogus, nil)
+	_, err := l.BuildWith(t.Context(), inventory.CacheKey{SourceBucket: "src", InventoryID: "inv", Run: "run"}, bogus, nil)
 	if err == nil {
 		t.Fatal("Build with missing manifest returned nil error")
 	}

@@ -33,8 +33,8 @@ const defaultSSEMaxConnsPerIP = 8
 // inventory.IndexBuilder (which Discovery needs for BuildWith)
 // so the handlers don't see methods they don't call.
 type CacheStore interface {
-	RemoveCache(srcBucket, invID, run string) error
-	CacheSizeBytes(srcBucket, invID, run string) (int64, error)
+	RemoveCache(key inventory.CacheKey) error
+	CacheSizeBytes(key inventory.CacheKey) (int64, error)
 }
 
 // Handlers contains all HTTP handlers and their dependencies. The

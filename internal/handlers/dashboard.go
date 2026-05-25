@@ -260,7 +260,11 @@ func (h *Handlers) addLoadedStats(logger *zerolog.Logger, v *inventory.MergedInv
 	if h.loader == nil {
 		return
 	}
-	size, err := h.loader.CacheSizeBytes(v.SourceBucket, v.Name, v.Run)
+	size, err := h.loader.CacheSizeBytes(inventory.CacheKey{
+		SourceBucket: v.SourceBucket,
+		InventoryID:  v.Name,
+		Run:          v.Run,
+	})
 	if err != nil {
 		return
 	}

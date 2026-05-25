@@ -6,14 +6,19 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/loader"
 )
+
+func key(src, id, run string) inventory.CacheKey {
+	return inventory.CacheKey{SourceBucket: src, InventoryID: id, Run: run}
+}
 
 func TestNew_StoresCacheRoot(t *testing.T) {
 	root := t.TempDir()
 	l := loader.New(root, nil)
 	want := filepath.Join(root, "buck", "inv", "2026-01-01T00-00Z")
-	if got := l.CacheDirFor("buck", "inv", "2026-01-01T00-00Z"); got != want {
+	if got := l.CacheDirFor(key("buck", "inv", "2026-01-01T00-00Z")); got != want {
 		t.Errorf("CacheDirFor = %q, want %q", got, want)
 	}
 }
@@ -27,7 +32,7 @@ func TestCacheDirFor_NestsBySrcIDRun(t *testing.T) {
 		{"a", "b", "r", "/cache/a/b/r"},
 	}
 	for _, c := range cases {
-		if got := l.CacheDirFor(c.src, c.id, c.run); got != c.want {
+		if got := l.CacheDirFor(key(c.src, c.id, c.run)); got != c.want {
 			t.Errorf("CacheDirFor(%q,%q,%q) = %q, want %q", c.src, c.id, c.run, got, c.want)
 		}
 	}
@@ -51,7 +56,7 @@ func TestBuild_RejectsEmptyArgs(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := l.BuildWith(ctx, c.src, c.id, c.run, c.manifest, nil)
+			_, err := l.BuildWith(ctx, key(c.src, c.id, c.run), c.manifest, nil)
 			if !errors.Is(err, c.wantErr) {
 				t.Errorf("Build err = %v, want %v", err, c.wantErr)
 			}
@@ -62,7 +67,7 @@ func TestBuild_RejectsEmptyArgs(t *testing.T) {
 func TestBuildWith_ReportsPreparingStage(t *testing.T) {
 	l := loader.New(t.TempDir(), nil)
 	var stages []string
-	_, _ = l.BuildWith(t.Context(), "buck", "inv", "r", "not-s3-uri", func(name string, _, _ int64) {
+	_, _ = l.BuildWith(t.Context(), key("buck", "inv", "r"), "not-s3-uri", func(name string, _, _ int64) {
 		stages = append(stages, name)
 	})
 	if len(stages) == 0 || stages[0] != "preparing" {
@@ -72,7 +77,7 @@ func TestBuildWith_ReportsPreparingStage(t *testing.T) {
 
 func TestBuildWith_NilCallbackIsSafe(t *testing.T) {
 	l := loader.New(t.TempDir(), nil)
-	_, err := l.BuildWith(t.Context(), "", "inv", "r", "s3://b/m", nil)
+	_, err := l.BuildWith(t.Context(), key("", "inv", "r"), "s3://b/m", nil)
 	if !errors.Is(err, loader.ErrEmptyID) {
 		t.Errorf("err = %v, want errEmptyID", err)
 	}
@@ -90,7 +95,7 @@ func TestRemoveCache_RejectsEmptyArgs(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if err := l.RemoveCache(c.src, c.id, c.run); !errors.Is(err, loader.ErrEmptyID) {
+			if err := l.RemoveCache(key(c.src, c.id, c.run)); !errors.Is(err, loader.ErrEmptyID) {
 				t.Errorf("err = %v, want errEmptyID", err)
 			}
 		})
@@ -99,7 +104,7 @@ func TestRemoveCache_RejectsEmptyArgs(t *testing.T) {
 
 func TestRemoveCache_MissingDirIsNoOp(t *testing.T) {
 	l := loader.New(t.TempDir(), nil)
-	if err := l.RemoveCache("buck", "inv", "never-built"); err != nil {
+	if err := l.RemoveCache(key("buck", "inv", "never-built")); err != nil {
 		t.Errorf("RemoveCache(missing) = %v, want nil", err)
 	}
 }
@@ -107,14 +112,14 @@ func TestRemoveCache_MissingDirIsNoOp(t *testing.T) {
 func TestRemoveCache_DeletesExistingDir(t *testing.T) {
 	root := t.TempDir()
 	l := loader.New(root, nil)
-	dir := l.CacheDirFor("buck", "inv", "r")
+	dir := l.CacheDirFor(key("buck", "inv", "r"))
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "data.bin"), []byte("xxx"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if err := l.RemoveCache("buck", "inv", "r"); err != nil {
+	if err := l.RemoveCache(key("buck", "inv", "r")); err != nil {
 		t.Fatalf("RemoveCache: %v", err)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
@@ -124,7 +129,7 @@ func TestRemoveCache_DeletesExistingDir(t *testing.T) {
 
 func TestCacheSizeBytes_MissingDirReturnsZero(t *testing.T) {
 	l := loader.New(t.TempDir(), nil)
-	size, err := l.CacheSizeBytes("buck", "inv", "never-built")
+	size, err := l.CacheSizeBytes(key("buck", "inv", "never-built"))
 	if err != nil {
 		t.Fatalf("CacheSizeBytes: %v", err)
 	}
@@ -136,7 +141,7 @@ func TestCacheSizeBytes_MissingDirReturnsZero(t *testing.T) {
 func TestCacheSizeBytes_SumsAllFiles(t *testing.T) {
 	root := t.TempDir()
 	l := loader.New(root, nil)
-	dir := l.CacheDirFor("buck", "inv", "r")
+	dir := l.CacheDirFor(key("buck", "inv", "r"))
 	if err := os.MkdirAll(filepath.Join(dir, "nested"), 0o750); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -146,7 +151,7 @@ func TestCacheSizeBytes_SumsAllFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "nested", "b.bin"), make([]byte, 250), 0o600); err != nil {
 		t.Fatalf("write b: %v", err)
 	}
-	size, err := l.CacheSizeBytes("buck", "inv", "r")
+	size, err := l.CacheSizeBytes(key("buck", "inv", "r"))
 	if err != nil {
 		t.Fatalf("CacheSizeBytes: %v", err)
 	}

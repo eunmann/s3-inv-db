@@ -21,11 +21,27 @@ type Discoverer interface {
 	Bucket() string
 }
 
+// CacheKey identifies one inventory run's on-disk cache. The three
+// fields appear together in every cache-facing method; folding them
+// into a struct removes the silent-swap hazard of three adjacent
+// positional strings. Defined in the inventory package because
+// IndexBuilder lives here and is implemented by the loader.
+type CacheKey struct {
+	SourceBucket string
+	InventoryID  string
+	Run          string
+}
+
+// Valid reports whether the key's three identity fields are non-empty.
+func (k CacheKey) Valid() bool {
+	return k.SourceBucket != "" && k.InventoryID != "" && k.Run != ""
+}
+
 // IndexBuilder is the subset of loader.Loader that Discovery uses.
 type IndexBuilder interface {
-	BuildWith(ctx context.Context, srcBucket, invID, run, manifestURI string, onProgress func(stage string, done, total int64)) (string, error)
-	RemoveCache(srcBucket, invID, run string) error
-	CacheSizeBytes(srcBucket, invID, run string) (int64, error)
+	BuildWith(ctx context.Context, key CacheKey, manifestURI string, onProgress func(stage string, done, total int64)) (string, error)
+	RemoveCache(key CacheKey) error
+	CacheSizeBytes(key CacheKey) (int64, error)
 }
 
 // MergedInventory is one discovered inventory plus its live load state
@@ -103,11 +119,11 @@ func (disabledDiscoverer) Bucket() string { return "" }
 
 type disabledBuilder struct{}
 
-func (disabledBuilder) BuildWith(context.Context, string, string, string, string, func(string, int64, int64)) (string, error) {
+func (disabledBuilder) BuildWith(context.Context, CacheKey, string, func(string, int64, int64)) (string, error) {
 	return "", ErrDiscoveryDisabled
 }
-func (disabledBuilder) RemoveCache(string, string, string) error             { return ErrDiscoveryDisabled }
-func (disabledBuilder) CacheSizeBytes(string, string, string) (int64, error) { return 0, nil }
+func (disabledBuilder) RemoveCache(CacheKey) error             { return ErrDiscoveryDisabled }
+func (disabledBuilder) CacheSizeBytes(CacheKey) (int64, error) { return 0, nil }
 
 // refreshKey is the singleflight key for cold-start Refresh dedupe in
 // Snapshot. Constant because Refresh is process-global.
@@ -426,7 +442,11 @@ func (s *Discovery) loadInternal(ctx context.Context, disc Inventory, onProgress
 		return fmt.Errorf("register: %w", err)
 	}
 	build := func(c context.Context, _ Info) (string, error) {
-		return s.builder.BuildWith(c, disc.SourceBucket, disc.Name, disc.Run, manifestURI, onProgress)
+		return s.builder.BuildWith(c, CacheKey{
+			SourceBucket: disc.SourceBucket,
+			InventoryID:  disc.Name,
+			Run:          disc.Run,
+		}, manifestURI, onProgress)
 	}
 	if s.gate == nil {
 		// No budget — manager direct. Pin manual loads.

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
@@ -34,17 +35,17 @@ func New(cacheRoot string, s3Client *s3fetch.Client) *Loader {
 // index lives. The run timestamp keeps cache directories per-run, so
 // multiple runs of the same inventory configuration can be loaded
 // independently without clobbering each other.
-func (l *Loader) CacheDirFor(srcBucket, invID, run string) string {
-	return filepath.Join(l.cacheRoot, srcBucket, invID, run)
+func (l *Loader) CacheDirFor(key inventory.CacheKey) string {
+	return filepath.Join(l.cacheRoot, key.SourceBucket, key.InventoryID, key.Run)
 }
 
 // BuildWith downloads the inventory referenced by manifestURI and
-// produces a built index under CacheDirFor(srcBucket, invID, run). The
-// onProgress callback, if non-nil, receives stage transitions and
-// per-chunk quantitative progress for UI ETA. Partial builds are not
-// safe to resume — the cache dir is cleared first.
-func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, run, manifestURI string, onProgress func(stage string, done, total int64)) (string, error) {
-	if srcBucket == "" || invID == "" || run == "" {
+// produces a built index under CacheDirFor(key). The onProgress
+// callback, if non-nil, receives stage transitions and per-chunk
+// quantitative progress for UI ETA. Partial builds are not safe to
+// resume — the cache dir is cleared first.
+func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifestURI string, onProgress func(stage string, done, total int64)) (string, error) {
+	if !key.Valid() {
 		return "", errEmptyID
 	}
 	if manifestURI == "" {
@@ -55,7 +56,7 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, run, manifestU
 	}
 
 	onProgress("preparing", 0, 0)
-	outDir := l.CacheDirFor(srcBucket, invID, run)
+	outDir := l.CacheDirFor(key)
 	if err := os.RemoveAll(outDir); err != nil {
 		return "", fmt.Errorf("clear cache dir: %w", err)
 	}
@@ -80,11 +81,11 @@ func (l *Loader) BuildWith(ctx context.Context, srcBucket, invID, run, manifestU
 // RemoveCache deletes a run's on-disk cache. Used by Unload to free
 // disk after the in-memory index is released. Missing dirs are a no-op
 // — callers don't have to check existence.
-func (l *Loader) RemoveCache(srcBucket, invID, run string) error {
-	if srcBucket == "" || invID == "" || run == "" {
+func (l *Loader) RemoveCache(key inventory.CacheKey) error {
+	if !key.Valid() {
 		return errEmptyID
 	}
-	dir := l.CacheDirFor(srcBucket, invID, run)
+	dir := l.CacheDirFor(key)
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("remove cache dir %s: %w", dir, err)
 	}
@@ -95,8 +96,8 @@ func (l *Loader) RemoveCache(srcBucket, invID, run string) error {
 // CacheSizeBytes returns the total on-disk size of a run's cache dir.
 // Walks every file and sums sizes. Returns 0, nil when the dir doesn't
 // exist (not an error — the inventory simply has no cached index).
-func (l *Loader) CacheSizeBytes(srcBucket, invID, run string) (int64, error) {
-	dir := l.CacheDirFor(srcBucket, invID, run)
+func (l *Loader) CacheSizeBytes(key inventory.CacheKey) (int64, error) {
+	dir := l.CacheDirFor(key)
 	var total int64
 	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
 		if err != nil {

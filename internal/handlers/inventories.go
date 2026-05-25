@@ -104,7 +104,11 @@ func (h *Handlers) groupDiscoveredForAPI(_ *http.Request, views []inventory.Merg
 			run.LoadedAt = info.LoadedAt.UTC().Format(time.RFC3339)
 		}
 		if h.loader != nil && v.Run != "" {
-			if n, err := h.loader.CacheSizeBytes(v.SourceBucket, v.Name, v.Run); err == nil {
+			if n, err := h.loader.CacheSizeBytes(inventory.CacheKey{
+				SourceBucket: v.SourceBucket,
+				InventoryID:  v.Name,
+				Run:          v.Run,
+			}); err == nil {
 				run.CacheBytes = n
 			}
 		}
