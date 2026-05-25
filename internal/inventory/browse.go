@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -104,23 +105,28 @@ type SortParams struct {
 // Unknown column → segment. Unknown direction → segment uses asc,
 // others desc.
 func NormalizeSort(sortBy, dir string) SortParams {
-	var col string
-	switch sortBy {
-	case SortColObjects, SortColSize, SortColCost, SortColSegment:
+	return normalizeSortParams(sortBy, dir,
+		SortColSegment,
+		[]string{SortColObjects, SortColSize, SortColCost, SortColSegment},
+		[]string{SortColSegment},
+	)
+}
+
+// normalizeSortParams is the shared helper behind NormalizeSort and
+// NormalizeCompareSort. DefaultCol is returned when sortBy doesn't
+// match anything in allowed; ascCols lists columns whose default
+// direction is ascending (everything else defaults to descending).
+func normalizeSortParams(sortBy, dir, defaultCol string, allowed, ascCols []string) SortParams {
+	col := defaultCol
+	if slices.Contains(allowed, sortBy) {
 		col = sortBy
-	default:
-		col = SortColSegment
 	}
-	var direction string
-	switch dir {
-	case SortDirAsc, SortDirDesc:
-		direction = dir
-	default:
-		if col == SortColSegment {
-			direction = SortDirAsc
-		} else {
-			direction = SortDirDesc
-		}
+	if dir == SortDirAsc || dir == SortDirDesc {
+		return SortParams{Col: col, Dir: dir}
+	}
+	direction := SortDirDesc
+	if slices.Contains(ascCols, col) {
+		direction = SortDirAsc
 	}
 
 	return SortParams{Col: col, Dir: direction}
