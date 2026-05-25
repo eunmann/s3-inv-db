@@ -285,13 +285,6 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	}
 	b.hashes = nil
 
-	// =========================================================================
-	// OPTIMIZATION: scatter fingerprints + positions directly into an
-	// mmap'd output file. Previous path allocated two N-element heap
-	// slices, filled them, then handed them to writeArraysParallel
-	// which serialised to disk. With direct-mmap-write the scatter
-	// loop writes through the page cache: zero heap intermediate.
-	// =========================================================================
 	log.Debug().Msg("MPHF: writing combined fp+pos via mmap")
 	mapStart := time.Now()
 	if err := writeCombinedMmap(outDir, n, hashPositions, b.fingerprints.Slice(), b.preorderPos.Slice()); err != nil {
