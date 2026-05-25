@@ -457,7 +457,7 @@ func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
 // startIngestProgressLogger starts a background goroutine that logs
 // per-N-chunk progress based on the atomic counters. Returns a
 // channel that the caller closes to stop the logger.
-// startIngestProgressLogger launches a background ticker that emits a
+// StartIngestProgressLogger launches a background ticker that emits a
 // progress event roughly every 10% of total chunks. The goroutine
 // exits when ctx is cancelled — the caller doesn't need a separate
 // stop signal because the ingest loop's parent ctx is already cancelled

@@ -4,6 +4,7 @@ package pricing
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 
@@ -132,28 +133,35 @@ func TierHasGlacierOverhead(tier string) bool {
 }
 
 // DefaultUSEast1Prices returns the default pricing for US East 1 region (as of 2025).
+// DefaultUSEast1PerGB is the canonical PerGBMonth map. Kept as a
+// package var so DefaultUSEast1Prices can clone it instead of
+// allocating a fresh map literal on every call.
+//
+//nolint:gochecknoglobals // immutable default price table
+var defaultUSEast1PerGB = map[string]float64{
+	"STANDARD":           priceStandard,
+	"STANDARD_IA":        priceStandardIA,
+	"ONEZONE_IA":         priceOneZoneIA,
+	"REDUCED_REDUNDANCY": priceReducedRedundancy,
+
+	"GLACIER_IR":   priceGlacierIR,
+	"GLACIER":      priceGlacier,
+	"DEEP_ARCHIVE": priceDeepArchive,
+
+	"INTELLIGENT_TIERING_FREQUENT":        priceITFrequent,
+	"INTELLIGENT_TIERING_INFREQUENT":      priceITInfrequent,
+	"INTELLIGENT_TIERING_ARCHIVE_INSTANT": priceITArchiveInstant,
+	"INTELLIGENT_TIERING_ARCHIVE":         priceITArchive,
+	"INTELLIGENT_TIERING_DEEP_ARCHIVE":    priceITDeepArchive,
+	"INTELLIGENT_TIERING_FREQUENT_SMALL":  priceITFrequentSmall,
+}
+
 // Sources:
 // - https://aws.amazon.com/s3/pricing/
 // - https://aws.amazon.com/s3/storage-classes/intelligent-tiering/
 func DefaultUSEast1Prices() PriceTable {
 	return PriceTable{
-		PerGBMonth: map[string]float64{
-			"STANDARD":           priceStandard,
-			"STANDARD_IA":        priceStandardIA,
-			"ONEZONE_IA":         priceOneZoneIA,
-			"REDUCED_REDUNDANCY": priceReducedRedundancy,
-
-			"GLACIER_IR":   priceGlacierIR,
-			"GLACIER":      priceGlacier,
-			"DEEP_ARCHIVE": priceDeepArchive,
-
-			"INTELLIGENT_TIERING_FREQUENT":        priceITFrequent,
-			"INTELLIGENT_TIERING_INFREQUENT":      priceITInfrequent,
-			"INTELLIGENT_TIERING_ARCHIVE_INSTANT": priceITArchiveInstant,
-			"INTELLIGENT_TIERING_ARCHIVE":         priceITArchive,
-			"INTELLIGENT_TIERING_DEEP_ARCHIVE":    priceITDeepArchive,
-			"INTELLIGENT_TIERING_FREQUENT_SMALL":  priceITFrequentSmall,
-		},
+		PerGBMonth:               maps.Clone(defaultUSEast1PerGB),
 		MonitoringPer1000Objects: monitoringPer1000Objects,
 		PutPer1000Requests:       putPer1000Requests,
 		StandardPricePerGB:       priceStandard,

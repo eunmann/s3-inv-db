@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
@@ -50,25 +51,33 @@ type Info struct {
 	ID         ID     `json:"id"`
 }
 
+// allTiers is the canonical tier-ID-ordered list. Kept private so
+// callers can only see it via AllTiers, which returns a defensive
+// copy — preserves immutability without the per-call slice alloc that
+// the previous "return literal" form caused.
+//
+//nolint:gochecknoglobals // immutable tier table by design
+var allTiers = []Info{
+	{ID: Standard, Name: "STANDARD", FilePrefix: "standard"},
+	{ID: StandardIA, Name: "STANDARD_IA", FilePrefix: "standard_ia"},
+	{ID: OneZoneIA, Name: "ONEZONE_IA", FilePrefix: "onezone_ia"},
+	{ID: GlacierIR, Name: "GLACIER_IR", FilePrefix: "glacier_ir"},
+	{ID: GlacierFR, Name: "GLACIER", FilePrefix: "glacier_fr"},
+	{ID: DeepArchive, Name: "DEEP_ARCHIVE", FilePrefix: "deep_archive"},
+	{ID: ReducedRedundancy, Name: "REDUCED_REDUNDANCY", FilePrefix: "reduced_redundancy"},
+	{ID: ITFrequent, Name: "INTELLIGENT_TIERING_FREQUENT", FilePrefix: "it_frequent"},
+	{ID: ITInfrequent, Name: "INTELLIGENT_TIERING_INFREQUENT", FilePrefix: "it_infrequent"},
+	{ID: ITArchiveInstant, Name: "INTELLIGENT_TIERING_ARCHIVE_INSTANT", FilePrefix: "it_archive_instant"},
+	{ID: ITArchive, Name: "INTELLIGENT_TIERING_ARCHIVE", FilePrefix: "it_archive"},
+	{ID: ITDeepArchive, Name: "INTELLIGENT_TIERING_DEEP_ARCHIVE", FilePrefix: "it_deep_archive"},
+	{ID: ITFrequentSmall, Name: "INTELLIGENT_TIERING_FREQUENT_SMALL", FilePrefix: "it_frequent_small"},
+}
+
 // AllTiers returns information about all supported tiers in tier-ID
-// order. A function (rather than a package-level slice) keeps tier
-// data immutable from outside the package and avoids a global.
+// order. Returns a defensive copy so callers can't mutate the
+// canonical table.
 func AllTiers() []Info {
-	return []Info{
-		{ID: Standard, Name: "STANDARD", FilePrefix: "standard"},
-		{ID: StandardIA, Name: "STANDARD_IA", FilePrefix: "standard_ia"},
-		{ID: OneZoneIA, Name: "ONEZONE_IA", FilePrefix: "onezone_ia"},
-		{ID: GlacierIR, Name: "GLACIER_IR", FilePrefix: "glacier_ir"},
-		{ID: GlacierFR, Name: "GLACIER", FilePrefix: "glacier_fr"},
-		{ID: DeepArchive, Name: "DEEP_ARCHIVE", FilePrefix: "deep_archive"},
-		{ID: ReducedRedundancy, Name: "REDUCED_REDUNDANCY", FilePrefix: "reduced_redundancy"},
-		{ID: ITFrequent, Name: "INTELLIGENT_TIERING_FREQUENT", FilePrefix: "it_frequent"},
-		{ID: ITInfrequent, Name: "INTELLIGENT_TIERING_INFREQUENT", FilePrefix: "it_infrequent"},
-		{ID: ITArchiveInstant, Name: "INTELLIGENT_TIERING_ARCHIVE_INSTANT", FilePrefix: "it_archive_instant"},
-		{ID: ITArchive, Name: "INTELLIGENT_TIERING_ARCHIVE", FilePrefix: "it_archive"},
-		{ID: ITDeepArchive, Name: "INTELLIGENT_TIERING_DEEP_ARCHIVE", FilePrefix: "it_deep_archive"},
-		{ID: ITFrequentSmall, Name: "INTELLIGENT_TIERING_FREQUENT_SMALL", FilePrefix: "it_frequent_small"},
-	}
+	return slices.Clone(allTiers)
 }
 
 // Mapping provides tier lookup and metadata.
