@@ -198,21 +198,21 @@ var ErrDiscoveryDisabled = errors.New("discovery not configured")
 var ErrNoRun = errors.New("inventory has no run")
 
 // Enabled reports whether discovery is configured.
-func (s *Discovery) Enabled() bool { return s.enabled }
+func (d *Discovery) Enabled() bool { return d.enabled }
 
 // List walks the configured S3 source and merges each discovered
 // inventory with its current Catalog state. Returns nil and
 // ErrDiscoveryDisabled when discovery is unconfigured.
-func (s *Discovery) List(ctx context.Context) ([]MergedInventory, error) {
-	discovered, err := s.discoverer.List(ctx)
+func (d *Discovery) List(ctx context.Context) ([]MergedInventory, error) {
+	discovered, err := d.discoverer.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("discover: %w", err)
 	}
 	out := make([]MergedInventory, 0, len(discovered))
 	for i := range discovered {
-		d := &discovered[i]
-		m := MergedInventory{Inventory: *d, State: StateNotLoaded}
-		if info, ok := s.manager.Get(d.CompositeID()); ok {
+		inv := &discovered[i]
+		m := MergedInventory{Inventory: *inv, State: StateNotLoaded}
+		if info, ok := d.manager.Get(inv.CompositeID()); ok {
 			m.State = info.State
 			m.Error = info.Error
 			m.NodeCount = info.NodeCount
@@ -239,28 +239,28 @@ func (s *Discovery) List(ctx context.Context) ([]MergedInventory, error) {
 // A load that finishes between two refresh ticks would otherwise leave
 // the page rendering "not loaded" and let the user submit a duplicate
 // load that fails with ErrInvalidState.
-func (s *Discovery) Snapshot(ctx context.Context) ([]MergedInventory, time.Time, error) {
-	if !s.enabled {
+func (d *Discovery) Snapshot(ctx context.Context) ([]MergedInventory, time.Time, error) {
+	if !d.enabled {
 		return nil, time.Time{}, ErrDiscoveryDisabled
 	}
-	s.cacheMu.RLock()
-	populated := s.cachePopulate
-	s.cacheMu.RUnlock()
+	d.cacheMu.RLock()
+	populated := d.cachePopulate
+	d.cacheMu.RUnlock()
 	if !populated {
-		_, err, _ := s.refreshSF.Do(refreshKey, func() (any, error) {
-			return nil, s.Refresh(ctx)
+		_, err, _ := d.refreshSF.Do(refreshKey, func() (any, error) {
+			return nil, d.Refresh(ctx)
 		})
 		if err != nil {
 			return nil, time.Time{}, fmt.Errorf("cold refresh: %w", err)
 		}
 	}
-	s.cacheMu.RLock()
-	out := make([]MergedInventory, len(s.cacheViews))
-	copy(out, s.cacheViews)
-	at := s.cacheAt
-	s.cacheMu.RUnlock()
+	d.cacheMu.RLock()
+	out := make([]MergedInventory, len(d.cacheViews))
+	copy(out, d.cacheViews)
+	at := d.cacheAt
+	d.cacheMu.RUnlock()
 	for i := range out {
-		if info, ok := s.manager.Get(out[i].CompositeID()); ok {
+		if info, ok := d.manager.Get(out[i].CompositeID()); ok {
 			out[i].State = info.State
 			out[i].Error = info.Error
 			out[i].NodeCount = info.NodeCount
@@ -275,35 +275,35 @@ func (s *Discovery) Snapshot(ctx context.Context) ([]MergedInventory, time.Time,
 // previous snapshot is preserved on error so consumers continue to see
 // the last-known-good views instead of falling back to empty.
 // LastRefreshErr returns the most recent error, if any.
-func (s *Discovery) Refresh(ctx context.Context) error {
-	if !s.enabled {
+func (d *Discovery) Refresh(ctx context.Context) error {
+	if !d.enabled {
 		return ErrDiscoveryDisabled
 	}
-	views, err := s.List(ctx)
-	now := s.now()
-	s.cacheMu.Lock()
-	defer s.cacheMu.Unlock()
+	views, err := d.List(ctx)
+	now := d.now()
+	d.cacheMu.Lock()
+	defer d.cacheMu.Unlock()
 	if err != nil {
-		s.cacheLastErr = err
+		d.cacheLastErr = err
 		// Keep prior cacheViews / cachePopulate as-is so readers still
 		// get the last-known-good snapshot.
 		return err
 	}
-	s.cacheViews = views
-	s.cacheAt = now
-	s.cachePopulate = true
-	s.cacheLastErr = nil
+	d.cacheViews = views
+	d.cacheAt = now
+	d.cachePopulate = true
+	d.cacheLastErr = nil
 
 	return nil
 }
 
 // LastRefreshErr returns the error from the most recent Refresh, or nil
 // if the most recent Refresh succeeded (or none has run yet).
-func (s *Discovery) LastRefreshErr() error {
-	s.cacheMu.RLock()
-	defer s.cacheMu.RUnlock()
+func (d *Discovery) LastRefreshErr() error {
+	d.cacheMu.RLock()
+	defer d.cacheMu.RUnlock()
 
-	return s.cacheLastErr
+	return d.cacheLastErr
 }
 
 // Start launches a background goroutine that calls Refresh every
@@ -314,29 +314,29 @@ func (s *Discovery) LastRefreshErr() error {
 //
 // Start is a no-op when discovery is disabled. Calling Start a second
 // time without Stop in between is also a no-op.
-func (s *Discovery) Start(ctx context.Context, interval time.Duration, logger *zerolog.Logger) {
-	if !s.enabled || interval <= 0 {
+func (d *Discovery) Start(ctx context.Context, interval time.Duration, logger *zerolog.Logger) {
+	if !d.enabled || interval <= 0 {
 		return
 	}
-	s.bgMu.Lock()
-	if s.bgStop != nil {
-		s.bgMu.Unlock()
+	d.bgMu.Lock()
+	if d.bgStop != nil {
+		d.bgMu.Unlock()
 
 		return
 	}
 	stop := make(chan struct{})
-	s.bgStop = stop
-	s.bgMu.Unlock()
+	d.bgStop = stop
+	d.bgMu.Unlock()
 
-	if err := s.Refresh(ctx); err != nil && logger != nil {
+	if err := d.Refresh(ctx); err != nil && logger != nil {
 		logger.Warn().Err(err).Msg("discovery: initial refresh failed; serving empty snapshot until next tick")
 	}
-	s.bgWG.Add(1)
-	go s.runRefresher(ctx, interval, stop, logger)
+	d.bgWG.Add(1)
+	go d.runRefresher(ctx, interval, stop, logger)
 }
 
-func (s *Discovery) runRefresher(ctx context.Context, interval time.Duration, stop <-chan struct{}, logger *zerolog.Logger) {
-	defer s.bgWG.Done()
+func (d *Discovery) runRefresher(ctx context.Context, interval time.Duration, stop <-chan struct{}, logger *zerolog.Logger) {
+	defer d.bgWG.Done()
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -346,7 +346,7 @@ func (s *Discovery) runRefresher(ctx context.Context, interval time.Duration, st
 		case <-stop:
 			return
 		case <-t.C:
-			if err := s.Refresh(ctx); err != nil && logger != nil {
+			if err := d.Refresh(ctx); err != nil && logger != nil {
 				logger.Warn().Err(err).Msg("discovery: background refresh failed; serving last good snapshot")
 			}
 		}
@@ -355,26 +355,26 @@ func (s *Discovery) runRefresher(ctx context.Context, interval time.Duration, st
 
 // Stop signals the background refresher to exit and waits for it. Safe
 // to call without a matching Start.
-func (s *Discovery) Stop() {
-	s.bgMu.Lock()
-	stop := s.bgStop
-	s.bgStop = nil
-	s.bgMu.Unlock()
+func (d *Discovery) Stop() {
+	d.bgMu.Lock()
+	stop := d.bgStop
+	d.bgStop = nil
+	d.bgMu.Unlock()
 	if stop == nil {
 		return
 	}
 	close(stop)
-	s.bgWG.Wait()
+	d.bgWG.Wait()
 }
 
-func (s *Discovery) now() time.Time {
-	return s.bgClock()
+func (d *Discovery) now() time.Time {
+	return d.bgClock()
 }
 
 // Find returns a single discovered inventory run by source bucket, ID,
 // and run timestamp.
-func (s *Discovery) Find(ctx context.Context, src, id, run string) (Inventory, error) {
-	inv, err := s.discoverer.Find(ctx, src, id, run)
+func (d *Discovery) Find(ctx context.Context, src, id, run string) (Inventory, error) {
+	inv, err := d.discoverer.Find(ctx, src, id, run)
 	if err != nil {
 		return inv, fmt.Errorf("find: %w", err)
 	}
@@ -386,17 +386,17 @@ func (s *Discovery) Find(ctx context.Context, src, id, run string) (Inventory, e
 // Catalog without performing a build. Each run gets its own composite
 // ID; multiple runs of the same configuration can coexist as independent
 // entries.
-func (s *Discovery) PrepareDiscovered(ctx context.Context, disc Inventory) error {
-	if !s.Enabled() {
+func (d *Discovery) PrepareDiscovered(ctx context.Context, disc Inventory) error {
+	if !d.Enabled() {
 		return ErrDiscoveryDisabled
 	}
 	if disc.Run == "" {
 		return fmt.Errorf("prepare inventory %s: %w", disc.ConfigID(), ErrNoRun)
 	}
 	composite := disc.CompositeID()
-	manifestURI := fmt.Sprintf("s3://%s/%s", s.discoverer.Bucket(), disc.ManifestKey)
+	manifestURI := fmt.Sprintf("s3://%s/%s", d.discoverer.Bucket(), disc.ManifestKey)
 	displayName := fmt.Sprintf("%s/%s @ %s", disc.SourceBucket, disc.Name, disc.Run)
-	if err := s.manager.Register(ctx, composite, displayName, manifestURI); err != nil &&
+	if err := d.manager.Register(ctx, composite, displayName, manifestURI); err != nil &&
 		!errors.Is(err, ErrAlreadyExists) {
 		return fmt.Errorf("register: %w", err)
 	}
@@ -405,8 +405,8 @@ func (s *Discovery) PrepareDiscovered(ctx context.Context, disc Inventory) error
 }
 
 // Load is LoadWith with no progress callback.
-func (s *Discovery) Load(ctx context.Context, disc Inventory) error {
-	return s.LoadWith(ctx, disc, nil)
+func (d *Discovery) Load(ctx context.Context, disc Inventory) error {
+	return d.LoadWith(ctx, disc, nil)
 }
 
 // LoadWith registers (if not already) and triggers a build+open for a
@@ -416,58 +416,58 @@ func (s *Discovery) Load(ctx context.Context, disc Inventory) error {
 // onProgress callback, if non-nil, receives stage transitions and
 // per-chunk quantitative progress. The ctx threads through to the
 // builder — cancellation kills the build.
-func (s *Discovery) LoadWith(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64)) error {
-	return s.loadInternal(ctx, disc, onProgress, false /* auto */)
+func (d *Discovery) LoadWith(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64)) error {
+	return d.loadInternal(ctx, disc, onProgress, false /* auto */)
 }
 
 // AutoLoadWith is LoadWith without the Pin flag — used by the
 // auto-loader so the discovered run remains eligible for future
 // eviction. Routes through the gate just like LoadWith.
-func (s *Discovery) AutoLoadWith(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64)) error {
-	return s.loadInternal(ctx, disc, onProgress, true /* auto */)
+func (d *Discovery) AutoLoadWith(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64)) error {
+	return d.loadInternal(ctx, disc, onProgress, true /* auto */)
 }
 
-func (s *Discovery) loadInternal(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64), auto bool) error {
-	if !s.Enabled() {
+func (d *Discovery) loadInternal(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64), auto bool) error {
+	if !d.Enabled() {
 		return ErrDiscoveryDisabled
 	}
 	if disc.Run == "" {
 		return fmt.Errorf("load inventory %s: %w", disc.ConfigID(), ErrNoRun)
 	}
 	composite := disc.CompositeID()
-	manifestURI := fmt.Sprintf("s3://%s/%s", s.discoverer.Bucket(), disc.ManifestKey)
+	manifestURI := fmt.Sprintf("s3://%s/%s", d.discoverer.Bucket(), disc.ManifestKey)
 	displayName := fmt.Sprintf("%s/%s @ %s", disc.SourceBucket, disc.Name, disc.Run)
-	if err := s.manager.Register(ctx, composite, displayName, manifestURI); err != nil &&
+	if err := d.manager.Register(ctx, composite, displayName, manifestURI); err != nil &&
 		!errors.Is(err, ErrAlreadyExists) {
 		return fmt.Errorf("register: %w", err)
 	}
 	build := func(c context.Context, _ Info) (string, error) {
-		return s.builder.BuildWith(c, CacheKey{
+		return d.builder.BuildWith(c, CacheKey{
 			SourceBucket: disc.SourceBucket,
 			InventoryID:  disc.Name,
 			Run:          disc.Run,
 		}, manifestURI, onProgress)
 	}
-	if s.gate == nil {
+	if d.gate == nil {
 		// No budget — manager direct. Pin manual loads.
 		if auto {
-			return s.manager.AutoLoad(ctx, composite, build)
+			return d.manager.AutoLoad(ctx, composite, build)
 		}
 
-		return s.manager.LoadWith(ctx, composite, build)
+		return d.manager.LoadWith(ctx, composite, build)
 	}
 	opts := GatedLoadOptions{Pin: !auto}
-	if s.sizer != nil {
-		size, err := s.sizer(ctx, s.discoverer.Bucket(), disc.ManifestKey)
+	if d.sizer != nil {
+		size, err := d.sizer(ctx, d.discoverer.Bucket(), disc.ManifestKey)
 		if err == nil {
-			opts.EstimateBytes = uint64(float64(size) * s.indexRatio)
+			opts.EstimateBytes = uint64(float64(size) * d.indexRatio)
 		}
 		// On error we proceed with EstimateBytes=0, letting the planner
 		// reserve nothing — the load might still refuse later but at
 		// least we don't lose the manual-Load attempt to a transient
 		// manifest fetch hiccup.
 	}
-	if err := s.gate(ctx, composite, build, opts); err != nil {
+	if err := d.gate(ctx, composite, build, opts); err != nil {
 		return fmt.Errorf("gated load %s: %w", composite, err)
 	}
 
