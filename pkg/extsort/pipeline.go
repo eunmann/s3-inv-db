@@ -422,11 +422,11 @@ func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, cfg.numWorkers)
-	progressTicker := p.startIngestProgressLogger(ctx, log, totalChunks)
+	p.startIngestProgressLogger(ctx, log, totalChunks)
 
 	for workerID := range cfg.numWorkers {
 		wg.Go(func() {
-			if err := p.runChunkWorker(ctx, workerID, cfg.numWorkers, jobs, totalChunks); err != nil {
+			if err := p.runChunkWorker(ctx, workerID, cfg.numWorkers, jobs); err != nil {
 				select {
 				case errCh <- err:
 				default:
@@ -440,7 +440,6 @@ func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
 
 	wg.Wait()
 	close(errCh)
-	close(progressTicker)
 
 	var errs []error
 	for err := range errCh {
@@ -458,8 +457,13 @@ func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
 // startIngestProgressLogger starts a background goroutine that logs
 // per-N-chunk progress based on the atomic counters. Returns a
 // channel that the caller closes to stop the logger.
-func (p *Pipeline) startIngestProgressLogger(ctx context.Context, log *zerolog.Logger, totalChunks int) chan struct{} {
-	stop := make(chan struct{})
+// startIngestProgressLogger launches a background ticker that emits a
+// progress event roughly every 10% of total chunks. The goroutine
+// exits when ctx is cancelled — the caller doesn't need a separate
+// stop signal because the ingest loop's parent ctx is already cancelled
+// on function return (via the deferred cancel paired with the
+// errgroup).
+func (p *Pipeline) startIngestProgressLogger(ctx context.Context, log *zerolog.Logger, totalChunks int) {
 	progressInterval := max(totalChunks/10, 1)
 	go func() {
 		var lastLogged int
@@ -469,8 +473,6 @@ func (p *Pipeline) startIngestProgressLogger(ctx context.Context, log *zerolog.L
 		for {
 			select {
 			case <-ctx.Done():
-				return
-			case <-stop:
 				return
 			case <-ticker.C:
 				chunkNum := int(p.chunksProcessed.Load())
@@ -485,8 +487,6 @@ func (p *Pipeline) startIngestProgressLogger(ctx context.Context, log *zerolog.L
 			}
 		}
 	}()
-
-	return stop
 }
 
 // sendIngestJobs sends chunk jobs to workers.
@@ -537,7 +537,7 @@ func (p *Pipeline) logIngestProgress(log *zerolog.Logger, chunkNum, totalChunks 
 // a private run file when memory pressure hits. At end-of-input
 // (channel closed), flush the residual aggregator state to a final
 // run file.
-func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int, jobs <-chan chunkJob, totalChunks int) error {
+func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int, jobs <-chan chunkJob) error {
 	const initialAggCapacity = 10_000
 	agg := NewAggregator(initialAggCapacity, p.config.MaxDepth)
 	defer func() {
@@ -601,7 +601,6 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int,
 			}
 			p.memTracker.LogNow("post_flush")
 		}
-		_ = totalChunks
 	}
 }
 
