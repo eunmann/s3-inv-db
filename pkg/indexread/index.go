@@ -83,8 +83,11 @@ func (idx *Index) Lookup(prefix string) (uint64, bool) {
 }
 
 // Stats returns the per-prefix object count and total bytes at pos.
-// Returns zero-valued Stats when pos is out of bounds — use
-// StatsForPrefix to distinguish "not found" from "found with zero stats".
+// Fast path: pos is expected to be a valid position obtained from
+// Lookup, DescendantsAtDepth, or another *Index method. Out-of-bounds
+// pos returns zero-valued Stats as a non-fatal safety net; if the
+// caller has not validated pos, use StatsForPrefix to distinguish
+// "prefix missing" from "prefix present with zero stats".
 func (idx *Index) Stats(pos uint64) Stats {
 	if pos >= idx.count {
 		return Stats{}
