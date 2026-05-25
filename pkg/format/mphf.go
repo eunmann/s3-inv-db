@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"unsafe"
 
 	"github.com/relab/bbhash"
 )
@@ -224,15 +225,12 @@ func (m *MPHF) Count() uint64 {
 }
 
 // hashString computes a uint64 hash for a string to use as MPHF key.
+// Forwards to hashBytes via a zero-copy string-to-bytes conversion.
 func hashString(s string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte(s))
-
-	return h.Sum64()
+	return hashBytes(unsafe.Slice(unsafe.StringData(s), len(s)))
 }
 
 // hashBytes computes a uint64 hash for bytes to use as MPHF key.
-// This avoids the string allocation in hashString.
 func hashBytes(b []byte) uint64 {
 	h := fnv.New64a()
 	h.Write(b)
@@ -240,17 +238,14 @@ func hashBytes(b []byte) uint64 {
 	return h.Sum64()
 }
 
-// computeFingerprint computes a fingerprint for verification.
-// Uses a different hash function to reduce collision probability.
+// computeFingerprint computes a fingerprint for verification. Uses a
+// different hash function to reduce collision probability. Forwards
+// via zero-copy conversion to computeFingerprintBytes.
 func computeFingerprint(s string) uint64 {
-	h := fnv.New64()
-	h.Write([]byte(s))
-
-	return h.Sum64()
+	return computeFingerprintBytes(unsafe.Slice(unsafe.StringData(s), len(s)))
 }
 
 // computeFingerprintBytes computes a fingerprint from bytes.
-// This avoids the string allocation in computeFingerprint.
 func computeFingerprintBytes(b []byte) uint64 {
 	h := fnv.New64()
 	h.Write(b)
