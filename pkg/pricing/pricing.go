@@ -156,9 +156,10 @@ var defaultUSEast1PerGB = map[string]float64{
 	"INTELLIGENT_TIERING_FREQUENT_SMALL":  priceITFrequentSmall,
 }
 
-// Sources:
-// - https://aws.amazon.com/s3/pricing/
-// - https://aws.amazon.com/s3/storage-classes/intelligent-tiering/
+// DefaultUSEast1Prices returns the baked-in US-East-1 price table. The
+// per-tier rates and surcharges are sourced from:
+//   - https://aws.amazon.com/s3/pricing/
+//   - https://aws.amazon.com/s3/storage-classes/intelligent-tiering/
 func DefaultUSEast1Prices() PriceTable {
 	return PriceTable{
 		PerGBMonth:               maps.Clone(defaultUSEast1PerGB),

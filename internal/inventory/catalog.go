@@ -198,7 +198,7 @@ func (c *Catalog) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 
 	var bytes uint64
 	if openErr == nil && buildErr == nil && ctx.Err() == nil {
-		bytes, _ = measureIndexDir(indexDir)
+		bytes, _ = measureIndexDir(indexDir) //nolint:contextcheck // measureIndexDir intentionally uses background ctx; see its godoc
 	}
 
 	c.mu.Lock()
@@ -304,6 +304,8 @@ func MeasureDir(ctx context.Context, dir string) (uint64, error) {
 // measureIndexDir is the no-ctx convenience wrapper for in-flight
 // catalog operations that already hold the catalog lock — they want
 // the size now, not a cancellable walk.
+//
+
 func measureIndexDir(dir string) (uint64, error) {
 	return MeasureDir(context.Background(), dir)
 }

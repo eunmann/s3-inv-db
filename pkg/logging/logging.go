@@ -16,6 +16,8 @@ import (
 // Prior code mutated TimeFieldFormat / DurationFieldFormat from every
 // L() call, which races concurrent reads from goroutines that already
 // hold a logger reference.
+//
+//nolint:gochecknoglobals // sync.Once protecting a package-global zerolog mutation
 var configureOnce sync.Once
 
 // configureZerolog applies the project-wide zerolog defaults exactly
