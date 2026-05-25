@@ -387,8 +387,19 @@ type cacheSize struct {
 }
 
 // measureCacheSize returns the on-disk cache footprint of a single run.
+// Prefers the cached Info.IndexBytes (no filesystem walk) and falls
+// back to an on-the-fly CacheSizeBytes walk only when the manager
+// has no record of the run.
 func (h *Handlers) measureCacheSize(r *http.Request, disc inventory.Inventory) cacheSize {
-	if h.loader == nil || disc.Run == "" {
+	if disc.Run == "" {
+		return cacheSize{}
+	}
+	if info, ok := h.manager.Get(disc.CompositeID()); ok && info.IndexBytes > 0 {
+		bytes := int64(info.IndexBytes)
+
+		return cacheSize{Bytes: bytes, Human: humanfmt.Bytes(bytes)}
+	}
+	if h.loader == nil {
 		return cacheSize{}
 	}
 	n, err := h.loader.CacheSizeBytes(inventory.CacheKey{

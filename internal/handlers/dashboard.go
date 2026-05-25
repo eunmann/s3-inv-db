@@ -257,6 +257,16 @@ func (h *Handlers) addLoadedStats(logger *zerolog.Logger, v *inventory.MergedInv
 	if err != nil {
 		logger.Warn().Err(err).Stringer("id", v.CompositeID()).Msg("dashboard root stats")
 	}
+	// Disk size: prefer the cached Info.IndexBytes (set at load time);
+	// fall back to a live CacheSizeBytes walk only when the manager has
+	// no record yet, so the dashboard doesn't pay an N-row FS walk.
+	if info, ok := h.manager.Get(v.CompositeID()); ok && info.IndexBytes > 0 {
+		size := int64(info.IndexBytes)
+		totals.disk += size
+		c.DiskBytes += size
+
+		return
+	}
 	if h.loader == nil {
 		return
 	}

@@ -100,17 +100,14 @@ func (h *Handlers) groupDiscoveredForAPI(_ *http.Request, views []inventory.Merg
 			HasTierData: v.HasTierData,
 			ManifestKey: v.ManifestKey,
 		}
-		if info, ok := h.manager.Get(v.CompositeID()); ok && !info.LoadedAt.IsZero() {
-			run.LoadedAt = info.LoadedAt.UTC().Format(time.RFC3339)
-		}
-		if h.loader != nil && v.Run != "" {
-			if n, err := h.loader.CacheSizeBytes(inventory.CacheKey{
-				SourceBucket: v.SourceBucket,
-				InventoryID:  v.Name,
-				Run:          v.Run,
-			}); err == nil {
-				run.CacheBytes = n
+		if info, ok := h.manager.Get(v.CompositeID()); ok {
+			if !info.LoadedAt.IsZero() {
+				run.LoadedAt = info.LoadedAt.UTC().Format(time.RFC3339)
 			}
+			// Prefer Info.IndexBytes (cached at load time) over an
+			// on-the-fly cache dir walk: per-row CacheSizeBytes used to
+			// dominate page latency on slow filesystems.
+			run.CacheBytes = int64(info.IndexBytes)
 		}
 		out[idx].Runs = append(out[idx].Runs, run)
 	}
