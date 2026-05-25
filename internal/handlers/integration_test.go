@@ -17,7 +17,7 @@ import (
 
 // buildLoadedTestHandlers seeds a small synthetic index, registers and
 // loads it into a fresh Manager, and returns ready-to-query handlers.
-func buildLoadedTestHandlers(t *testing.T) *handlers.Handlers {
+func buildLoadedTestHandlers(t *testing.T, opts ...handlers.Option) *handlers.Handlers {
 	t.Helper()
 
 	tmp := t.TempDir()
@@ -36,7 +36,7 @@ func buildLoadedTestHandlers(t *testing.T) *handlers.Handlers {
 	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 
-	h := newWiredHandlers(t, mgr)
+	h := newWiredHandlers(t, mgr, opts...)
 
 	indexPath := filepath.Join(tmp, "inv-001")
 	if err := mgr.Register(t.Context(), "loaded", "Loaded", indexPath); err != nil {

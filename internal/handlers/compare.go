@@ -312,6 +312,9 @@ func (h *Handlers) computeCompareLevel(ctx context.Context, opts compareViewOpti
 				view.Status.Changed++
 			case inventory.CompareUnchanged:
 				view.Status.Unchanged++
+			case inventory.CompareUnknown:
+				// Unknown is the zero value emitted before comparison is
+				// computed; no counter to bump.
 			}
 		}
 
@@ -748,6 +751,8 @@ func (h *Handlers) buildCompareAPIResponse(opts compareViewOptions, data invento
 			resp.StatusCounts.Changed++
 		case inventory.CompareUnchanged:
 			resp.StatusCounts.Unchanged++
+		case inventory.CompareUnknown:
+			// Unknown is the zero value — no counter to bump.
 		}
 		rows = append(rows, row)
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/budget"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
+	"github.com/eunmann/s3-inv-db/internal/metrics"
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/rs/zerolog"
@@ -62,6 +63,15 @@ type Handlers struct {
 	// fine here: writes happen once per connection start/end, reads are
 	// rare, and the keyspace is bounded by the number of distinct IPs.
 	sseConnsByIP sync.Map
+
+	// queryBatchMax bounds the multi-prefix POST /api/stats request.
+	// Zero means use defaultQueryBatchMax.
+	queryBatchMax int
+
+	// reg is the metrics registry. Always non-nil — defaulted to an
+	// empty registry when not supplied so handlers can record
+	// unconditionally.
+	reg *metrics.Registry
 }
 
 // Option configures optional Handlers fields. See WithLoader,
@@ -150,6 +160,30 @@ func WithDiscoveryRefreshInterval(d time.Duration) Option {
 	return func(h *Handlers) { h.discoveryRefreshInterval = d }
 }
 
+// WithQueryBatchMax caps the number of prefixes accepted in a single
+// batch stats POST. Values <= 0 are ignored.
+func WithQueryBatchMax(n int) Option {
+	return func(h *Handlers) {
+		if n > 0 {
+			h.queryBatchMax = n
+		}
+	}
+}
+
+// WithMetricsRegistry replaces the default empty registry. Pass a
+// shared registry so external code can read the collected series.
+func WithMetricsRegistry(reg *metrics.Registry) Option {
+	return func(h *Handlers) {
+		if reg != nil {
+			h.reg = reg
+		}
+	}
+}
+
+// MetricsRegistry exposes the registry so the server can mount /metrics
+// against the same instance handlers record into.
+func (h *Handlers) MetricsRegistry() *metrics.Registry { return h.reg }
+
 // DiscoveryEnabled reports whether the wired Discovery is usable.
 // Exposed so the server can gate discovery-dependent routes via middleware
 // rather than each handler duplicating the check.
@@ -232,6 +266,7 @@ func New(
 		tracker:          deps.Tracker,
 		sseHeartbeat:     defaultSSEHeartbeat,
 		sseMaxConnsPerIP: defaultSSEMaxConnsPerIP,
+		reg:              metrics.New(),
 	}
 	for _, opt := range opts {
 		opt(h)
