@@ -223,9 +223,14 @@ func newAutoLoader(cfg Config, discovery *inventory.Discovery, configStore *inve
 		PollInterval:     cfg.PollInterval,
 		MaxConcurrency:   cfg.AutoLoadConcurrency,
 		DefaultRetention: cfg.AutoLoadRetentionDefault,
-	}, discovery, func(c context.Context, d inventory.Inventory) error {
-		return discovery.AutoLoadWith(c, d, nil)
-	}, configStore, catalog, &cfg.Logger)
+	}, autoload.Deps{
+		Discovery: discovery,
+		Loader: func(c context.Context, d inventory.Inventory) error {
+			return discovery.AutoLoadWith(c, d, nil)
+		},
+		ConfigStore: configStore,
+		Manager:     catalog,
+	}, &cfg.Logger)
 	cfg.Logger.Info().Msg("auto-loader configured")
 
 	return al

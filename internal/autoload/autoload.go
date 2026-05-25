@@ -54,8 +54,22 @@ type AutoLoader struct {
 	stopped     bool
 }
 
+// Deps groups the required collaborators for an AutoLoader. All
+// fields must be non-nil; nil values produce nil-deref panics on first
+// use rather than at construction.
+type Deps struct {
+	Discovery   Discovery
+	Loader      LoaderFunc
+	ConfigStore *inventory.ConfigStore
+	Manager     *inventory.Catalog
+}
+
 // New constructs an AutoLoader; logger may be nil.
-func New(cfg Config, discovery Discovery, loader LoaderFunc, configStore *inventory.ConfigStore, manager *inventory.Catalog, logger *zerolog.Logger) *AutoLoader {
+func New(cfg Config, deps Deps, logger *zerolog.Logger) *AutoLoader {
+	discovery := deps.Discovery
+	loader := deps.Loader
+	configStore := deps.ConfigStore
+	manager := deps.Manager
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = DefaultPollInterval
 	}
