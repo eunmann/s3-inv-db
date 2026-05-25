@@ -64,6 +64,9 @@ type serverFlags struct {
 	autoLoadConcurrency *int
 	autoLoadRetention   *uint
 	indexRatio          *float64
+	queryBatchMax       *int
+	metricsAddr         *string
+	autoLoadDryRun      *bool
 }
 
 func defineFlags(fs *flag.FlagSet) *serverFlags {
@@ -84,6 +87,9 @@ func defineFlags(fs *flag.FlagSet) *serverFlags {
 		autoLoadConcurrency: fs.Int("max-auto-load-concurrency", appconfig.EnvInt("S3INV_MAX_AUTO_LOAD_CONCURRENCY", 1), "max concurrent auto-loads"),
 		autoLoadRetention:   fs.Uint("auto-load-retention-default", uint(appconfig.EnvInt("S3INV_AUTO_LOAD_RETENTION_DEFAULT", defaultAutoLoadRetention)), "default per-config run-retention when a configuration sets none"),
 		indexRatio:          fs.Float64("index-ratio", appconfig.EnvFloat("S3INV_INDEX_RATIO", defaultIndexRatio), "estimate multiplier: final index bytes ≈ ratio × compressed manifest total"),
+		queryBatchMax:       fs.Int("query-batch-max", appconfig.EnvInt("S3INV_QUERY_BATCH_MAX", 0), "max prefixes per batch stats request (0 = handler default)"),
+		metricsAddr:         fs.String("metrics-addr", appconfig.EnvOr("S3INV_METRICS_ADDR", ""), "bind /metrics on this address; empty = mount on the main listener"),
+		autoLoadDryRun:      fs.Bool("auto-load-dry-run", appconfig.EnvBool("S3INV_AUTO_LOAD_DRY_RUN", false), "log autoload decisions instead of acting on them"),
 	}
 }
 
@@ -124,6 +130,9 @@ func resolveRuntimeOptions(f *serverFlags, fileCfg *appconfig.Config, explicit m
 		AutoLoadConcurrency:      appconfig.Pick(*f.autoLoadConcurrency, explicit["max-auto-load-concurrency"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *int { return c.AutoLoadConcurrency })),
 		AutoLoadRetentionDefault: appconfig.Pick(uint32(*f.autoLoadRetention), explicit["auto-load-retention-default"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *uint32 { return c.AutoLoadRetentionDefault })),
 		IndexRatio:               appconfig.Pick(*f.indexRatio, explicit["index-ratio"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *float64 { return c.IndexRatio })),
+		QueryBatchMax:            appconfig.Pick(*f.queryBatchMax, explicit["query-batch-max"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *int { return c.QueryBatchMax })),
+		MetricsAddr:              pickString(fileCfg, *f.metricsAddr, explicit["metrics-addr"], func(c *appconfig.Config) *string { return c.MetricsAddr }),
+		AutoLoadDryRun:           pickBool(fileCfg, *f.autoLoadDryRun, explicit["auto-load-dry-run"], func(c *appconfig.Config) *bool { return c.AutoLoadDryRun }),
 		InventoryConfigs:         inventoryConfigsFromFile(fileCfg),
 		Logger:                   logger,
 	}, nil

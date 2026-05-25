@@ -55,6 +55,18 @@ type Config struct {
 	// discovery refresher rebuilds the cached snapshot the HTTP
 	// handlers serve. Zero means use DefaultDiscoveryRefreshInterval.
 	DiscoveryRefreshInterval time.Duration
+
+	// QueryBatchMax caps the number of prefixes accepted in one batch
+	// stats request. Zero means use the handler default.
+	QueryBatchMax int
+
+	// MetricsAddr, when non-empty, binds /metrics on its own listener;
+	// otherwise /metrics is mounted on the main router.
+	MetricsAddr string
+
+	// AutoLoadDryRun, when true, logs eviction + load decisions instead
+	// of acting on them.
+	AutoLoadDryRun bool
 }
 
 // DefaultDiscoveryRefreshInterval is the fallback cadence for the
@@ -211,6 +223,9 @@ func buildHandlerOptions(cfg Config, discovery *inventory.Discovery, bldr *loade
 	if cfg.S3Source != "" {
 		hopts = append(hopts, handlers.WithS3Source(cfg.S3Source))
 	}
+	if cfg.QueryBatchMax > 0 {
+		hopts = append(hopts, handlers.WithQueryBatchMax(cfg.QueryBatchMax))
+	}
 
 	return hopts
 }
@@ -219,15 +234,27 @@ func newAutoLoader(cfg Config, discovery *inventory.Discovery, configStore *inve
 	if !cfg.AutoLoad || !discovery.Enabled() {
 		return nil
 	}
+	loadFn := func(c context.Context, d inventory.Inventory) error {
+		return discovery.AutoLoadWith(c, d, nil)
+	}
+	if cfg.AutoLoadDryRun {
+		// In dry-run we never call the real loader. Returning nil signals
+		// "load succeeded" so the autoload bookkeeping still records the
+		// attempt — operators can compare logs to actual load activity.
+		loadFn = func(_ context.Context, d inventory.Inventory) error {
+			cfg.Logger.Info().Stringer("id", d.CompositeID()).Msg("autoload: dry-run, skipping load")
+
+			return nil
+		}
+		cfg.Logger.Info().Msg("auto-loader dry-run enabled: load actions are logged, not performed")
+	}
 	al := autoload.New(autoload.Config{
 		PollInterval:     cfg.PollInterval,
 		MaxConcurrency:   cfg.AutoLoadConcurrency,
 		DefaultRetention: cfg.AutoLoadRetentionDefault,
 	}, autoload.Deps{
-		Discovery: discovery,
-		Loader: func(c context.Context, d inventory.Inventory) error {
-			return discovery.AutoLoadWith(c, d, nil)
-		},
+		Discovery:   discovery,
+		Loader:      loadFn,
 		ConfigStore: configStore,
 		Manager:     catalog,
 	}, &cfg.Logger)
@@ -418,6 +445,11 @@ func (s *Server) Run(ctx context.Context) error {
 		MaxHeaderBytes:    maxHeaderBytes,
 	}
 
+	metricsSrv := s.maybeStartMetricsListener()
+	if metricsSrv != nil {
+		defer s.shutdownMetricsListener(ctx, metricsSrv)
+	}
+
 	// On every exit path: cancel in-flight jobs (so goroutines don't
 	// outlive the DB they write to), then close the inventory manager
 	// so mmaps and file handles are released. The shutdown context is
@@ -495,4 +527,39 @@ func (s *Server) discoveryRefreshInterval() time.Duration {
 	}
 
 	return DefaultDiscoveryRefreshInterval
+}
+
+func (s *Server) shutdownMetricsListener(ctx context.Context, srv *http.Server) {
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resourceDrainTimeout)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		s.config.Logger.Error().Err(err).Msg("shutdown metrics server")
+	}
+}
+
+// maybeStartMetricsListener binds /metrics on a separate listener when
+// MetricsAddr is set. Returns nil when /metrics is mounted on the main
+// router instead.
+func (s *Server) maybeStartMetricsListener() *http.Server {
+	if s.config.MetricsAddr == "" {
+		return nil
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/metrics", s.handlers.MetricsHandler)
+	srv := &http.Server{
+		Addr:              s.config.MetricsAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
+	}
+	go func() {
+		s.config.Logger.Info().Str("addr", s.config.MetricsAddr).Msg("starting /metrics listener")
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.config.Logger.Error().Err(err).Msg("metrics listener exited")
+		}
+	}()
+
+	return srv
 }

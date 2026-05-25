@@ -76,6 +76,18 @@ type RuntimeOptions struct {
 	// serve. Zero falls back to the server's default (1 minute).
 	DiscoveryRefreshInterval time.Duration
 
+	// QueryBatchMax caps the prefix count accepted by the batch stats
+	// endpoint. Zero means use the handler default.
+	QueryBatchMax int
+
+	// MetricsAddr, when non-empty, binds /metrics on its own listener
+	// (e.g. ":9090") so operators can keep it off the public router.
+	MetricsAddr string
+
+	// AutoLoadDryRun replaces side-effecting autoload actions with log
+	// entries — operators can preview a policy change before flipping it.
+	AutoLoadDryRun bool
+
 	// InventoryConfigs declares per-configuration auto-load + retention
 	// settings to upsert at startup. Typically populated from the JSON
 	// config file.
@@ -156,6 +168,9 @@ func Bootstrap(ctx context.Context, opts RuntimeOptions) (*Server, func(), error
 		AutoLoadRetentionDefault: opts.AutoLoadRetentionDefault,
 		IndexRatio:               opts.IndexRatio,
 		DiscoveryRefreshInterval: opts.DiscoveryRefreshInterval,
+		QueryBatchMax:            opts.QueryBatchMax,
+		MetricsAddr:              opts.MetricsAddr,
+		AutoLoadDryRun:           opts.AutoLoadDryRun,
 	})
 	if err != nil {
 		cleanup()
