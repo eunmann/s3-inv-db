@@ -193,7 +193,10 @@ func selectByConfig(pool []inventory.Info, source, name string, retention uint32
 
 		return a.LoadedAt.Compare(b.LoadedAt)
 	})
-	drop := min(uint32(len(inConfig))-(retention-1), uint32(len(inConfig)))
+	// The early guard (uint32(len) < retention) ensures retention ≥ 1
+	// here, so retention-1 is a safe subtraction and drop is always
+	// in [1, len].
+	drop := uint32(len(inConfig)) - (retention - 1)
 
 	return inConfig[:drop]
 }
