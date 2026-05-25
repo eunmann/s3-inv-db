@@ -5,17 +5,26 @@ package logging
 
 import (
 	"os"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
 	zerologlog "github.com/rs/zerolog/log"
 )
 
-// configureZerolog applies the project-wide zerolog defaults.
-// Idempotent — every entry point calls it so the first caller wins.
+// configureOnce guards the one-time zerolog package-global mutation.
+// Prior code mutated TimeFieldFormat / DurationFieldFormat from every
+// L() call, which races concurrent reads from goroutines that already
+// hold a logger reference.
+var configureOnce sync.Once
+
+// configureZerolog applies the project-wide zerolog defaults exactly
+// once per process. Safe to call from any goroutine.
 func configureZerolog() {
-	zerolog.TimeFieldFormat = time.RFC3339
-	zerolog.DurationFieldFormat = zerolog.DurationFormatString
+	configureOnce.Do(func() {
+		zerolog.TimeFieldFormat = time.RFC3339
+		zerolog.DurationFieldFormat = zerolog.DurationFormatString
+	})
 }
 
 // Options configures the project-wide logger. Debug lowers the global
