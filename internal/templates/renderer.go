@@ -44,14 +44,16 @@ func stateLabel(state string) string {
 	}
 }
 
-// formatETA produces a human-readable remaining-time estimate. Returns
-// the empty string when an estimate isn't meaningful — no start time,
-// no progress yet, or already at/past completion.
-func formatETA(startedAt time.Time, done, total int64) string {
+// formatETAAt produces a human-readable remaining-time estimate
+// relative to the provided "now". Returns the empty string when an
+// estimate isn't meaningful — no start time, no progress yet, or
+// already at/past completion. The clock is parameterised so golden
+// tests can pin time.
+func formatETAAt(now, startedAt time.Time, done, total int64) string {
 	if startedAt.IsZero() || done <= 0 || total <= 0 || done >= total {
 		return ""
 	}
-	elapsed := time.Since(startedAt)
+	elapsed := now.Sub(startedAt)
 	if elapsed <= 0 {
 		return ""
 	}
@@ -151,6 +153,21 @@ type Renderer struct {
 	pages    map[string]*template.Template
 	partials *template.Template
 	funcMap  template.FuncMap
+	now      func() time.Time
+}
+
+// Option configures a Renderer at construction time.
+type Option func(*Renderer)
+
+// WithClock overrides the clock used by template helpers that compute
+// relative times (formatTimeRelative, formatETA). Defaults to time.Now.
+// Tests inject a fixed clock to make golden output deterministic.
+func WithClock(now func() time.Time) Option {
+	return func(r *Renderer) {
+		if now != nil {
+			r.now = now
+		}
+	}
 }
 
 // New creates a new template renderer with the embedded templates parsed.
@@ -158,8 +175,12 @@ type Renderer struct {
 // templates/*.html files (per .air.toml) — Air rebuilds the binary on
 // HTML change, which re-runs the embed.FS load on startup. There's no
 // in-process devMode-reload path because there doesn't need to be.
-func New() (*Renderer, error) {
-	r := &Renderer{funcMap: FuncMap()}
+func New(opts ...Option) (*Renderer, error) {
+	r := &Renderer{now: time.Now}
+	for _, opt := range opts {
+		opt(r)
+	}
+	r.funcMap = r.buildFuncMap()
 	if err := r.loadTemplates(); err != nil {
 		return nil, err
 	}
@@ -167,12 +188,12 @@ func New() (*Renderer, error) {
 	return r, nil
 }
 
-// FuncMap returns the template function map. Composed from per-domain
-// sub-maps so the single literal doesn't grow into an unreadable blob.
-func FuncMap() template.FuncMap {
+// buildFuncMap composes the per-domain func sub-maps and binds the
+// time-aware helpers to the renderer's clock.
+func (r *Renderer) buildFuncMap() template.FuncMap {
 	out := template.FuncMap{}
 	for _, sub := range []template.FuncMap{
-		formatFuncs(),
+		r.formatFuncs(),
 		stateFuncs(),
 		compareFuncs(),
 		arithFuncs(),
@@ -184,8 +205,33 @@ func FuncMap() template.FuncMap {
 	return out
 }
 
-// formatFuncs covers byte / count / time / cost / tier label rendering.
-func formatFuncs() template.FuncMap {
+// FuncMap returns a default-clock function map. Kept for tests and
+// callers that don't need the time-injection plumbing.
+func FuncMap() template.FuncMap {
+	out := template.FuncMap{}
+	for _, sub := range []template.FuncMap{
+		(&Renderer{now: time.Now}).formatFuncs(),
+		stateFuncs(),
+		compareFuncs(),
+		arithFuncs(),
+		htmxFuncs(),
+	} {
+		maps.Copy(out, sub)
+	}
+
+	return out
+}
+
+// formatFuncs covers byte / count / time / cost / tier label
+// rendering. Receiver-bound so the time helpers can read the
+// renderer's clock (defaults to time.Now; tests can inject a fixed
+// clock via WithClock).
+func (r *Renderer) formatFuncs() template.FuncMap {
+	now := r.now
+	if now == nil {
+		now = time.Now
+	}
+
 	return template.FuncMap{
 		"formatBytes":      humanfmt.BytesUint64,
 		"formatBytesInt64": humanfmt.Bytes,
@@ -198,10 +244,12 @@ func formatFuncs() template.FuncMap {
 
 			return t.Format(time.RFC3339)
 		},
-		"formatTimeRelative": formatTimeRelative,
-		"formatETA":          formatETA,
-		"progressPct":        progressPct,
-		"tierLabel":          tierLabel,
+		"formatTimeRelative": func(t time.Time) string { return formatTimeRelativeAt(now(), t) },
+		"formatETA": func(startedAt time.Time, done, total int64) string {
+			return formatETAAt(now(), startedAt, done, total)
+		},
+		"progressPct": progressPct,
+		"tierLabel":   tierLabel,
 	}
 }
 
@@ -277,11 +325,13 @@ func htmxFuncs() template.FuncMap {
 	}
 }
 
-func formatTimeRelative(t time.Time) string {
+// formatTimeRelativeAt is formatTimeRelative parameterised on "now"
+// so golden tests can pin time.
+func formatTimeRelativeAt(now, t time.Time) string {
 	if t.IsZero() {
 		return "-"
 	}
-	since := time.Since(t)
+	since := now.Sub(t)
 	switch {
 	case since < time.Minute:
 		return "just now"
