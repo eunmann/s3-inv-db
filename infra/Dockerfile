@@ -2,7 +2,7 @@
 # Stage 1 builds a static binary; stage 2 runs it from a minimal alpine base
 # with a non-root user.
 
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 # make + curl for the Tailwind CLI download in `make css`.
 RUN apk add --no-cache make curl

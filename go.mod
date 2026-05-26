@@ -1,6 +1,6 @@
 module github.com/eunmann/s3-inv-db
 
-go 1.25.2
+go 1.26.3
 
 require (
 	github.com/PuerkitoBio/goquery v1.12.0

@@ -22,7 +22,7 @@ The first thing every review pass does is reconcile the branch with the project'
 
 ### Build / dev tools
 
-- **Go 1.25+**, single module under `github.com/eunmann/s3-inv-db`.
+- **Go 1.26+**, single module under `github.com/eunmann/s3-inv-db`.
 - **Linter:** `golangci-lint v2` via `make lint`. Settings live in `.golangci.yml` — read it before flagging style.
 - **Hot reload:** `Air` (`.air.toml`). Air watches `go`, `html`, `tmpl` and rebuilds the server binary. **There is no in-process devMode template reload** — if you see one, it's redundant with Air and should be removed.
 - **Local dev stack:** `docker compose -f infra/docker-compose.yml` with profiles `dev` / `prod` / `seed`. Make targets: `make dev`, `make docker-prod`, `make docker-seed`, `make docker-down`.
