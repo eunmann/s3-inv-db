@@ -16,7 +16,7 @@ import (
 )
 
 // The htmx-facing /partials/* routes mutate state via the inventory
-// Manager or DiscoveryService and return the updated row's HTML directly
+// Manager or Discovery and return the updated row's HTML directly
 // so the client can swap it into the DOM without a full page reload.
 
 // LoadInventoryRowPartial loads a (non-discovered) inventory and returns
@@ -42,8 +42,12 @@ func (h *Handlers) UnloadInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 	h.renderInventoryRow(w, r, id)
 }
 
-// DeleteInventoryRowPartial removes an inventory and returns an empty body
-// so htmx's outerHTML swap removes the row.
+// DeleteInventoryRowPartial removes an inventory and returns an empty
+// body so htmx's outerHTML swap removes the row. ErrNotFound is folded
+// into success on purpose: the user's intent is "make this row go
+// away", and the swap fires regardless of whether the backing record
+// existed — returning 404 would prevent the swap and leave the stale
+// row visible.
 func (h *Handlers) DeleteInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
 	if err := h.manager.Remove(r.Context(), id); err != nil && !errors.Is(err, inventory.ErrNotFound) {
@@ -73,11 +77,6 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	}
 	if disc.ManifestKey == "" || disc.Run == "" {
 		http.Error(w, "no completed run for this inventory", http.StatusNotFound)
-
-		return
-	}
-	if h.jobMgr == nil {
-		http.Error(w, "jobs not configured", http.StatusServiceUnavailable)
 
 		return
 	}
@@ -119,21 +118,13 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 
 		return
 	}
-	// Headers must commit BEFORE WriteHeader, otherwise the Set on
-	// Content-Type inside renderDiscoveredRowFrom is a no-op and the
-	// browser falls back to Go's body sniffing.
-	w.Header().Set("Content-Type", contentTypeHTML)
-	w.WriteHeader(http.StatusAccepted)
-	h.renderDiscoveredRowFrom(w, r, disc)
+	// Render to a buffer first via the *Status variant — a template
+	// failure must surface as a clean 500, not a 202 with an error body.
+	h.renderDiscoveredRowFromStatus(w, r, http.StatusAccepted, disc)
 }
 
 // CancelJob cancels an in-flight job by ID. 404 if not currently live.
 func (h *Handlers) CancelJob(w http.ResponseWriter, r *http.Request) {
-	if h.jobMgr == nil {
-		http.Error(w, "jobs not configured", http.StatusServiceUnavailable)
-
-		return
-	}
 	id := jobs.ID(chi.URLParam(r, "id"))
 	if err := h.jobMgr.Cancel(id); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -157,7 +148,11 @@ func (h *Handlers) UnloadDiscoveredRowPartial(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if h.loader != nil {
-		if err := h.loader.RemoveCache(src, name, run); err != nil {
+		if err := h.loader.RemoveCache(inventory.CacheKey{
+			SourceBucket: src,
+			InventoryID:  name,
+			Run:          run,
+		}); err != nil {
 			// Don't fail the request — the memory side is already
 			// released; surface the disk error in logs so the operator
 			// can clean up.
@@ -314,9 +309,17 @@ func manifestMetaSegment(fileCount int, totalBytes int64) string {
 }
 
 // renderDiscoveredRowFrom renders a discovered_row using a pre-fetched
-// disc value. Looks up the latest job (if jobs are configured) so the
-// row can render progress / cancel / retry.
+// disc value with HTTP 200. Looks up the latest job (if jobs are
+// configured) so the row can render progress / cancel / retry.
 func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Request, disc inventory.Inventory) {
+	h.renderDiscoveredRowFromStatus(w, r, http.StatusOK, disc)
+}
+
+// renderDiscoveredRowFromStatus is renderDiscoveredRowFrom with an
+// explicit status code. The status only commits after the template
+// renders successfully — a render failure surfaces as 500, not a 5xx
+// body attached to a 2xx response.
+func (h *Handlers) renderDiscoveredRowFromStatus(w http.ResponseWriter, r *http.Request, status int, disc inventory.Inventory) {
 	view := DiscoveredRowView{
 		MergedInventory: inventory.MergedInventory{Inventory: disc, State: inventory.StateNotLoaded},
 	}
@@ -333,24 +336,22 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 			view.AutoLoadBackoffUntil = info.AutoLoadBackoffUntil.UTC().Format("15:04:05")
 		}
 	}
-	if h.jobStore != nil {
-		j, err := h.jobStore.LatestForInventory(r.Context(), disc.CompositeID())
-		switch {
-		case err == nil:
-			view.LatestJob = &j
-		case errors.Is(err, jobs.ErrStoreNotFound):
-			// No prior job — render the row without LatestJob.
-		default:
-			zerolog.Ctx(r.Context()).Warn().Err(err).
-				Stringer("composite", disc.CompositeID()).
-				Msg("look up latest job for row render")
-		}
+	j, err := h.jobStore.LatestForInventory(r.Context(), disc.CompositeID())
+	switch {
+	case err == nil:
+		view.LatestJob = &j
+	case errors.Is(err, jobs.ErrStoreNotFound):
+		// No prior job — render the row without LatestJob.
+	default:
+		zerolog.Ctx(r.Context()).Warn().Err(err).
+			Stringer("composite", disc.CompositeID()).
+			Msg("look up latest job for row render")
 	}
 	cs := h.measureCacheSize(r, disc)
 	view.CacheBytes, view.CacheBytesH = cs.Bytes, cs.Human
 	view.LoadDurationH = loadDurationLabel(view.LoadDuration, view.LatestJob)
 	populateRowDerived(&view)
-	h.renderHTMLPartial(w, r, "discovered_row.html", "render discovered row", view)
+	h.renderHTMLPartialStatus(w, r, status, "discovered_row.html", "render discovered row", view)
 }
 
 // loadDurationLabel renders the wall-clock load time of the most recent
@@ -386,11 +387,26 @@ type cacheSize struct {
 }
 
 // measureCacheSize returns the on-disk cache footprint of a single run.
+// Prefers the cached Info.IndexBytes (no filesystem walk) and falls
+// back to an on-the-fly CacheSizeBytes walk only when the manager
+// has no record of the run.
 func (h *Handlers) measureCacheSize(r *http.Request, disc inventory.Inventory) cacheSize {
-	if h.loader == nil || disc.Run == "" {
+	if disc.Run == "" {
 		return cacheSize{}
 	}
-	n, err := h.loader.CacheSizeBytes(disc.SourceBucket, disc.Name, disc.Run)
+	if info, ok := h.manager.Get(disc.CompositeID()); ok && info.IndexBytes > 0 {
+		bytes := int64(info.IndexBytes)
+
+		return cacheSize{Bytes: bytes, Human: humanfmt.Bytes(bytes)}
+	}
+	if h.loader == nil {
+		return cacheSize{}
+	}
+	n, err := h.loader.CacheSizeBytes(inventory.CacheKey{
+		SourceBucket: disc.SourceBucket,
+		InventoryID:  disc.Name,
+		Run:          disc.Run,
+	})
 	if err != nil {
 		zerolog.Ctx(r.Context()).Warn().Err(err).
 			Str("src", disc.SourceBucket).
@@ -408,10 +424,10 @@ func (h *Handlers) measureCacheSize(r *http.Request, disc inventory.Inventory) c
 }
 
 // submitDiscoveredLoadJob registers a background build job for one
-// discovered run. The job context is owned by jobs.Manager and is
+// discovered run. The job context is owned by jobs.Scheduler and is
 // intentionally independent of any request context — a build outlives
 // the HTTP request that started it. The parent ctx only plumbs through
-// logger/values via context.WithoutCancel inside jobs.Manager.Submit.
+// logger/values via context.WithoutCancel inside jobs.Scheduler.Submit.
 func (h *Handlers) submitDiscoveredLoadJob(parent context.Context, composite inventory.ID, disc inventory.Inventory) (jobs.Job, error) {
 	job, err := h.jobMgr.Submit(parent, composite, jobs.KindBuild, func(ctx context.Context, report func(jobs.Update)) error {
 		return h.discovery.LoadWith(ctx, disc, func(stage string, done, total int64) {

@@ -1,3 +1,5 @@
+//go:build amd64 || arm64 || ppc64le || riscv64 || mips64le || loong64 || wasm
+
 package format
 
 import (
@@ -118,26 +120,26 @@ func (a *u64DiskArray) Slice() []uint64 { return a.values }
 // Close releases the mmap (if any) and removes the backing file.
 // Idempotent.
 func (a *u64DiskArray) Close() error {
-	var firstErr error
+	var errs []error
 	if a.mmap != nil {
-		if err := unix.Munmap(a.mmap); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("u64 disk array munmap: %w", err)
+		if err := unix.Munmap(a.mmap); err != nil {
+			errs = append(errs, fmt.Errorf("u64 disk array munmap: %w", err))
 		}
 		a.mmap = nil
 		a.values = nil
 	}
 	if a.file != nil {
-		if err := a.file.Close(); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("u64 disk array close: %w", err)
+		if err := a.file.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("u64 disk array close: %w", err))
 		}
 		a.file = nil
 	}
 	if a.path != "" {
-		if err := os.Remove(a.path); err != nil && !os.IsNotExist(err) && firstErr == nil {
-			firstErr = fmt.Errorf("u64 disk array remove: %w", err)
+		if err := os.Remove(a.path); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("u64 disk array remove: %w", err))
 		}
 		a.path = ""
 	}
 
-	return firstErr
+	return errors.Join(errs...)
 }

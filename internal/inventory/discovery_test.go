@@ -3,6 +3,7 @@ package inventory_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,12 +17,13 @@ import (
 var errFakeS3Throttled = errors.New("s3: throttled")
 
 // fakeDiscoverer is a minimal stub for the inventory.Discoverer interface that
-// the DiscoveryService consumes. Each method has a single response to
+// the Discovery consumes. Each method has a single response to
 // keep tests simple; specialise per-test by setting fields directly.
 type fakeDiscoverer struct {
 	listErr   error
 	findErr   error
 	findResp  inventory.Inventory
+	listGate  chan struct{}
 	bucket    string
 	listResp  []inventory.Inventory
 	listCalls atomic.Int64
@@ -29,6 +31,9 @@ type fakeDiscoverer struct {
 
 func (f *fakeDiscoverer) List(context.Context) ([]inventory.Inventory, error) {
 	f.listCalls.Add(1)
+	if f.listGate != nil {
+		<-f.listGate
+	}
 
 	return f.listResp, f.listErr
 }
@@ -44,40 +49,27 @@ type fakeBuilder struct {
 	buildResp string
 }
 
-func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _, _ string, _ func(string, int64, int64)) (string, error) {
+func (f *fakeBuilder) BuildWith(_ context.Context, _ inventory.CacheKey, _ string, _ func(string, int64, int64)) (string, error) {
 	return f.buildResp, f.buildErr
 }
 
-func (f *fakeBuilder) RemoveCache(_, _, _ string) error             { return nil }
-func (f *fakeBuilder) CacheSizeBytes(_, _, _ string) (int64, error) { return 0, nil }
+func (f *fakeBuilder) RemoveCache(inventory.CacheKey) error             { return nil }
+func (f *fakeBuilder) CacheSizeBytes(inventory.CacheKey) (int64, error) { return 0, nil }
 
-func TestDiscoveryService_DisabledWithoutDeps(t *testing.T) {
-	mgr := inventory.NewManager()
+func TestDiscoveryService_EnabledReflectsConstructor(t *testing.T) {
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 
-	cases := []struct {
-		disc    inventory.Discoverer
-		builder inventory.IndexBuilder
-		name    string
-		enabled bool
-	}{
-		{name: "both nil", disc: nil, builder: nil, enabled: false},
-		{name: "discoverer only", disc: &fakeDiscoverer{}, builder: nil, enabled: false},
-		{name: "builder only", disc: nil, builder: &fakeBuilder{}, enabled: false},
-		{name: "both set", disc: &fakeDiscoverer{}, builder: &fakeBuilder{}, enabled: true},
+	if got := inventory.NewDisabledDiscovery(mgr).Enabled(); got {
+		t.Errorf("NewDisabledDiscovery Enabled() = true, want false")
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			s := inventory.NewDiscoveryService(mgr, c.disc, c.builder)
-			if got := s.Enabled(); got != c.enabled {
-				t.Errorf("Enabled() = %v, want %v", got, c.enabled)
-			}
-		})
+	if got := inventory.NewDiscovery(mgr, inventory.WithBackend(&fakeDiscoverer{}, &fakeBuilder{})).Enabled(); !got {
+		t.Errorf("NewDiscovery(mgr, d, b) Enabled() = false, want true")
 	}
 }
 
 func TestDiscoveryService_ListWhenDisabledReturnsErr(t *testing.T) {
-	s := inventory.NewDiscoveryService(inventory.NewManager(), nil, nil)
+	s := inventory.NewDisabledDiscovery(inventory.NewCatalog(nil))
 	_, err := s.List(t.Context())
 	if !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("List() error = %v, want inventory.ErrDiscoveryDisabled", err)
@@ -85,7 +77,7 @@ func TestDiscoveryService_ListWhenDisabledReturnsErr(t *testing.T) {
 }
 
 func TestDiscoveryService_FindWhenDisabledReturnsErr(t *testing.T) {
-	s := inventory.NewDiscoveryService(inventory.NewManager(), nil, nil)
+	s := inventory.NewDisabledDiscovery(inventory.NewCatalog(nil))
 	_, err := s.Find(t.Context(), "src", "id", "")
 	if !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("Find() error = %v, want inventory.ErrDiscoveryDisabled", err)
@@ -93,7 +85,7 @@ func TestDiscoveryService_FindWhenDisabledReturnsErr(t *testing.T) {
 }
 
 func TestDiscoveryService_LoadWhenDisabledReturnsErr(t *testing.T) {
-	s := inventory.NewDiscoveryService(inventory.NewManager(), &fakeDiscoverer{}, nil)
+	s := inventory.NewDisabledDiscovery(inventory.NewCatalog(nil))
 	err := s.Load(t.Context(), inventory.Inventory{})
 	if !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("Load() error = %v, want inventory.ErrDiscoveryDisabled", err)
@@ -101,7 +93,7 @@ func TestDiscoveryService_LoadWhenDisabledReturnsErr(t *testing.T) {
 }
 
 func TestDiscoveryService_ListMergesWithManagerState(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 
 	// Pre-load the manager with state for one of the inventories we'll
@@ -117,7 +109,7 @@ func TestDiscoveryService_ListMergesWithManagerState(t *testing.T) {
 			{SourceBucket: "bucket-a", Name: "inv-2"},
 		},
 	}
-	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(disc, &fakeBuilder{}))
 	views, err := s.List(t.Context())
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -133,17 +125,17 @@ func TestDiscoveryService_ListMergesWithManagerState(t *testing.T) {
 	if views[0].State != inventory.StateNotLoaded {
 		t.Errorf("views[0].State = %q, want %q", views[0].State, inventory.StateNotLoaded)
 	}
-	// inv-2 is not registered → also inventory.StateNotLoaded (DiscoveryService's default).
+	// inv-2 is not registered → also inventory.StateNotLoaded (Discovery's default).
 	if views[1].State != inventory.StateNotLoaded {
 		t.Errorf("views[1].State = %q, want %q", views[1].State, inventory.StateNotLoaded)
 	}
 }
 
 func TestDiscoveryService_ListPropagatesDiscovererError(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 	disc := &fakeDiscoverer{listErr: errFakeS3Throttled}
-	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(disc, &fakeBuilder{}))
 	_, err := s.List(t.Context())
 	if !errors.Is(err, errFakeS3Throttled) {
 		t.Errorf("List() error = %v, want %v wrapped", err, errFakeS3Throttled)
@@ -151,7 +143,7 @@ func TestDiscoveryService_ListPropagatesDiscovererError(t *testing.T) {
 }
 
 func TestDiscoveryService_PrepareDiscovered_DisabledReturnsErr(t *testing.T) {
-	s := inventory.NewDiscoveryService(inventory.NewManager(), nil, nil)
+	s := inventory.NewDisabledDiscovery(inventory.NewCatalog(nil))
 	disc := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "r", ManifestKey: "k"}
 	if err := s.PrepareDiscovered(t.Context(), disc); !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("PrepareDiscovered err = %v, want inventory.ErrDiscoveryDisabled", err)
@@ -159,9 +151,9 @@ func TestDiscoveryService_PrepareDiscovered_DisabledReturnsErr(t *testing.T) {
 }
 
 func TestDiscoveryService_PrepareDiscovered_NoRunRejects(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
-	s := inventory.NewDiscoveryService(mgr, &fakeDiscoverer{bucket: "dst"}, &fakeBuilder{})
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(&fakeDiscoverer{bucket: "dst"}, &fakeBuilder{}))
 	disc := inventory.Inventory{SourceBucket: "b", Name: "i"}
 	err := s.PrepareDiscovered(t.Context(), disc)
 	if err == nil {
@@ -173,9 +165,9 @@ func TestDiscoveryService_PrepareDiscovered_NoRunRejects(t *testing.T) {
 }
 
 func TestDiscoveryService_PrepareDiscovered_RegistersInManager(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
-	s := inventory.NewDiscoveryService(mgr, &fakeDiscoverer{bucket: "dst"}, &fakeBuilder{})
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(&fakeDiscoverer{bucket: "dst"}, &fakeBuilder{}))
 	disc := inventory.Inventory{
 		SourceBucket: "b", Name: "i", Run: "2026-05-13",
 		ManifestKey: "k/manifest.json",
@@ -196,9 +188,9 @@ func TestDiscoveryService_PrepareDiscovered_RegistersInManager(t *testing.T) {
 }
 
 func TestDiscoveryService_PrepareDiscovered_AlreadyExistsIsIdempotent(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
-	s := inventory.NewDiscoveryService(mgr, &fakeDiscoverer{bucket: "dst"}, &fakeBuilder{})
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(&fakeDiscoverer{bucket: "dst"}, &fakeBuilder{}))
 	disc := inventory.Inventory{
 		SourceBucket: "b", Name: "i", Run: "2026-05-13",
 		ManifestKey: "k/manifest.json",
@@ -212,19 +204,19 @@ func TestDiscoveryService_PrepareDiscovered_AlreadyExistsIsIdempotent(t *testing
 }
 
 func TestDiscoveryService_Snapshot_DisabledReturnsErr(t *testing.T) {
-	s := inventory.NewDiscoveryService(inventory.NewManager(), nil, nil)
+	s := inventory.NewDisabledDiscovery(inventory.NewCatalog(nil))
 	if _, _, err := s.Snapshot(t.Context()); !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("Snapshot err = %v, want ErrDiscoveryDisabled", err)
 	}
 }
 
 func TestDiscoveryService_Snapshot_ColdStartLoadsLive(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 	disc := &fakeDiscoverer{
 		listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}},
 	}
-	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(disc, &fakeBuilder{}))
 
 	views, at, err := s.Snapshot(t.Context())
 	if err != nil {
@@ -243,12 +235,12 @@ func TestDiscoveryService_Snapshot_ColdStartLoadsLive(t *testing.T) {
 
 // TestDiscoveryService_Snapshot_OverlaysLiveManagerState pins the
 // regression: after a Load completes the next Snapshot must reflect the
-// live Manager.State even though the cached views captured an earlier
+// live Catalog.State even though the cached views captured an earlier
 // "not loaded" state. Without the overlay the inventories page renders
 // stale "not loaded" until the next discovery Refresh tick and a user
 // click submits a no-op Load that fails with ErrInvalidState.
 func TestDiscoveryService_Snapshot_OverlaysLiveManagerState(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 	run := "2026-05-13T03-00Z"
 	disc := &fakeDiscoverer{
@@ -256,14 +248,14 @@ func TestDiscoveryService_Snapshot_OverlaysLiveManagerState(t *testing.T) {
 			SourceBucket: "b", Name: "i", Run: run, ManifestKey: "k/" + run + "/manifest.json",
 		}},
 	}
-	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(disc, &fakeBuilder{}))
 
 	// Prime the cache while the run is not loaded.
 	if _, _, err := s.Snapshot(t.Context()); err != nil {
 		t.Fatalf("seed Snapshot: %v", err)
 	}
 
-	// Flip the run to StateError in the live Manager *after* the cache
+	// Flip the run to StateError in the live Catalog *after* the cache
 	// was captured. StateError is convenient for the test because
 	// Hydrate doesn't need an indexDir to reach it; any state ≠ the
 	// cached StateNotLoaded proves the overlay.
@@ -286,23 +278,23 @@ func TestDiscoveryService_Snapshot_OverlaysLiveManagerState(t *testing.T) {
 		t.Fatalf("views = %d, want 1", len(views))
 	}
 	if views[0].State != inventory.StateError {
-		t.Errorf("state = %q, want %q — cache must not mask live Manager state", views[0].State, inventory.StateError)
+		t.Errorf("state = %q, want %q — cache must not mask live Catalog state", views[0].State, inventory.StateError)
 	}
 	if views[0].Error != "synthetic test error" {
 		t.Errorf("error = %q, want %q", views[0].Error, "synthetic test error")
 	}
 	// Confirm we did not pay for a re-list to get this — the overlay
-	// must come from Manager.Get, not a fresh Discoverer call.
+	// must come from Catalog.Get, not a fresh Discoverer call.
 	if got := disc.listCalls.Load(); got != 1 {
 		t.Errorf("listCalls = %d, want 1 (overlay must not re-fetch from S3)", got)
 	}
 }
 
 func TestDiscoveryService_Snapshot_ServesFromCache(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}}
-	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(disc, &fakeBuilder{}))
 
 	if _, _, err := s.Snapshot(t.Context()); err != nil {
 		t.Fatalf("first Snapshot: %v", err)
@@ -316,10 +308,10 @@ func TestDiscoveryService_Snapshot_ServesFromCache(t *testing.T) {
 }
 
 func TestDiscoveryService_Refresh_UpdatesSnapshot(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "first"}}}
-	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(disc, &fakeBuilder{}))
 
 	if err := s.Refresh(t.Context()); err != nil {
 		t.Fatalf("first Refresh: %v", err)
@@ -344,10 +336,10 @@ func TestDiscoveryService_Refresh_UpdatesSnapshot(t *testing.T) {
 }
 
 func TestDiscoveryService_Refresh_ErrorPreservesPriorSnapshot(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}}
-	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(disc, &fakeBuilder{}))
 
 	if err := s.Refresh(t.Context()); err != nil {
 		t.Fatalf("seed Refresh: %v", err)
@@ -370,10 +362,10 @@ func TestDiscoveryService_Refresh_ErrorPreservesPriorSnapshot(t *testing.T) {
 }
 
 func TestDiscoveryService_Refresh_RecordsClockTimestamp(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}}
-	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(disc, &fakeBuilder{}))
 	want := time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
 	s.SetClockForTest(func() time.Time { return want })
 
@@ -390,17 +382,17 @@ func TestDiscoveryService_Refresh_RecordsClockTimestamp(t *testing.T) {
 }
 
 func TestDiscoveryService_StartStop_NoopWhenDisabled(t *testing.T) {
-	s := inventory.NewDiscoveryService(inventory.NewManager(), nil, nil)
+	s := inventory.NewDisabledDiscovery(inventory.NewCatalog(nil))
 	// Should not block, panic, or leak a goroutine.
 	s.Start(t.Context(), time.Millisecond, nil)
 	s.Stop()
 }
 
 func TestDiscoveryService_Start_PerformsInitialRefresh(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}}
-	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(disc, &fakeBuilder{}))
 
 	// Long interval — the test only asserts that Start() warms the
 	// cache before returning, so background ticks shouldn't fire.
@@ -420,10 +412,10 @@ func TestDiscoveryService_Start_PerformsInitialRefresh(t *testing.T) {
 }
 
 func TestDiscoveryService_Start_DoubleStartIsNoop(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}}
-	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(disc, &fakeBuilder{}))
 
 	s.Start(t.Context(), time.Hour, nil)
 	t.Cleanup(s.Stop)
@@ -436,15 +428,15 @@ func TestDiscoveryService_Start_DoubleStartIsNoop(t *testing.T) {
 }
 
 func TestDiscoveryService_Stop_WithoutStartIsNoop(_ *testing.T) {
-	s := inventory.NewDiscoveryService(inventory.NewManager(), &fakeDiscoverer{}, &fakeBuilder{})
+	s := inventory.NewDiscovery(inventory.NewCatalog(nil), inventory.WithBackend(&fakeDiscoverer{}, &fakeBuilder{}))
 	s.Stop() // must not block or panic
 }
 
 func TestDiscoveryService_Background_TickerFiresRefresh(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 	disc := &fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}}
-	s := inventory.NewDiscoveryService(mgr, disc, &fakeBuilder{})
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(disc, &fakeBuilder{}))
 
 	// Very short interval — the ticker should fire at least once
 	// after the initial inline refresh before we stop.
@@ -460,5 +452,56 @@ func TestDiscoveryService_Background_TickerFiresRefresh(t *testing.T) {
 
 	if got := disc.listCalls.Load(); got < 2 {
 		t.Errorf("listCalls = %d, want >= 2 (initial + at least one tick)", got)
+	}
+}
+
+// TestDiscoveryService_Snapshot_ColdStartDeduplicatesConcurrent pins
+// that concurrent first-callers on an empty cache trigger exactly one
+// Refresh — the singleflight dedupe. Without it both callers each fire
+// an S3 List.
+func TestDiscoveryService_Snapshot_ColdStartDeduplicatesConcurrent(t *testing.T) {
+	mgr := inventory.NewCatalog(nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+	gate := make(chan struct{})
+	disc := &fakeDiscoverer{
+		listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}},
+		listGate: gate,
+	}
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(disc, &fakeBuilder{}))
+
+	const callers = 4
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	errs := make([]error, callers)
+	for i := range callers {
+		go func(idx int) {
+			defer wg.Done()
+			_, _, err := s.Snapshot(t.Context())
+			errs[idx] = err
+		}(i)
+	}
+
+	// Give every goroutine time to reach the !populated branch and
+	// queue behind the singleflight key before releasing List.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if disc.listCalls.Load() >= 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Hold the gate a touch longer so the other callers definitely
+	// reach the singleflight wait before List returns.
+	time.Sleep(20 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("caller %d: Snapshot err = %v", i, err)
+		}
+	}
+	if got := disc.listCalls.Load(); got != 1 {
+		t.Errorf("listCalls = %d, want 1 (concurrent cold-start callers must dedupe)", got)
 	}
 }

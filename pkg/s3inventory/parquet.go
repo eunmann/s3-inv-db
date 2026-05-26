@@ -19,6 +19,8 @@ var (
 	ErrMissingKeyColumn = errors.New("parquet schema missing 'key' column")
 	// ErrMissingSizeColumn indicates the parquet schema has no recognized size column.
 	ErrMissingSizeColumn = errors.New("parquet schema missing 'size' column")
+	// ErrDuplicateColumn indicates two parquet columns canonicalize to the same name.
+	ErrDuplicateColumn = errors.New("parquet schema has duplicate column")
 )
 
 // ParquetReader reads S3 inventory records from Parquet files.
@@ -30,6 +32,7 @@ type ParquetReader struct {
 	file          *parquet.File
 	rowGroups     []parquet.RowGroup
 	rowBuf        []parquet.Row
+	pendingErr    error
 	keyCol        int
 	accessTierCol int
 	currentRGIdx  int
@@ -154,8 +157,16 @@ func detectParquetSchema(schema *parquet.Schema) (ParquetReaderConfig, error) {
 		AccessTierCol: -1,
 	}
 
+	seen := make(map[string]string, len(schema.Fields()))
 	for i, field := range schema.Fields() {
-		switch canonicalColumnName(field.Name()) {
+		canon := canonicalColumnName(field.Name())
+		if prev, ok := seen[canon]; ok {
+			return cfg, fmt.Errorf("%w: %q and %q both canonicalize to %q",
+				ErrDuplicateColumn, prev, field.Name(), canon)
+		}
+		seen[canon] = field.Name()
+
+		switch canon {
 		case "key":
 			cfg.KeyCol = i
 		case "size":
@@ -219,6 +230,12 @@ func (r *ParquetReader) Next() (Row, error) {
 			if n > 0 {
 				r.bufIdx = 0
 				r.bufLen = n
+				// Stash a non-EOF error so it surfaces after the just-
+				// read rows are drained, instead of being lost on the
+				// next iteration's ReadRows call.
+				if err != nil && !errors.Is(err, io.EOF) {
+					r.pendingErr = fmt.Errorf("read parquet rows: %w", err)
+				}
 
 				continue
 			}
@@ -227,6 +244,12 @@ func (r *ParquetReader) Next() (Row, error) {
 			}
 			r.currentRows.Close()
 			r.currentRows = nil
+		}
+		if r.pendingErr != nil {
+			err := r.pendingErr
+			r.pendingErr = nil
+
+			return Row{}, err
 		}
 
 		r.currentRGIdx++
@@ -244,7 +267,7 @@ func (r *ParquetReader) toRow(row parquet.Row) Row {
 
 	for _, val := range row {
 		colIdx := val.Column()
-		if val.IsNull() {
+		if colIdx < 0 || val.IsNull() {
 			continue
 		}
 
@@ -254,13 +277,9 @@ func (r *ParquetReader) toRow(row parquet.Row) Row {
 		case r.sizeCol:
 			inv.Size = val.Uint64()
 		case r.storageCol:
-			if r.storageCol >= 0 {
-				inv.StorageClass = val.String()
-			}
+			inv.StorageClass = val.String()
 		case r.accessTierCol:
-			if r.accessTierCol >= 0 {
-				inv.AccessTier = val.String()
-			}
+			inv.AccessTier = val.String()
 		}
 	}
 
@@ -269,15 +288,22 @@ func (r *ParquetReader) toRow(row parquet.Row) Row {
 
 // Close releases resources.
 func (r *ParquetReader) Close() error {
+	var errs []error
 	if r.currentRows != nil {
-		r.currentRows.Close()
+		if err := r.currentRows.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close parquet rows: %w", err))
+		}
 	}
 
 	if r.tempFile != nil {
 		name := r.tempFile.Name()
-		r.tempFile.Close()
-		os.Remove(name)
+		if err := r.tempFile.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close temp file: %w", err))
+		}
+		if err := os.Remove(name); err != nil {
+			errs = append(errs, fmt.Errorf("remove temp file: %w", err))
+		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }

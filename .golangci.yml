@@ -136,6 +136,7 @@ linters:
         - github.com/eunmann/s3-inv-db/pkg/extsort\.RunReader
         - github.com/eunmann/s3-inv-db/pkg/extsort\.mergeOutputWriter
         - github.com/eunmann/s3-inv-db/pkg/indexread\.Iterator
+        - github.com/eunmann/s3-inv-db/pkg/extsort\.RowIterator
     testifylint:
       enable-all: true
     testpackage:
@@ -193,6 +194,13 @@ linters:
       # flags it as shadowing go/format, but renaming would break every
       # importer of pkg/format.
       - path: pkg/format/
+        linters:
+          - revive
+        text: "var-naming: avoid package names that conflict"
+      # Package "metrics" is the focused exporter. Naming it after the
+      # stdlib equivalent ("metric"/"telemetry"/"obs") was considered
+      # and rejected as less discoverable; the import path is unique.
+      - path: internal/metrics/
         linters:
           - revive
         text: "var-naming: avoid package names that conflict"

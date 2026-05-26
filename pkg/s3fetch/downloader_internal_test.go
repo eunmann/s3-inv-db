@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -122,6 +123,33 @@ func TestDownloadedObject(t *testing.T) {
 			t.Errorf("Size = %d, want %d", size, len(testData))
 		}
 	})
+}
+
+// TestDownloadedObject_CloseRemoveErrorPropagates ensures Close returns
+// the os.Remove error rather than swallowing it. We trip os.Remove by
+// pointing path at a non-existent file after closing the FD.
+func TestDownloadedObject_CloseRemoveErrorPropagates(t *testing.T) {
+	tmp := t.TempDir()
+	realPath := filepath.Join(tmp, "real.bin")
+	if err := os.WriteFile(realPath, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	f, err := os.Open(realPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	// path points at a sibling that doesn't exist, so os.Remove fails.
+	missing := filepath.Join(tmp, "missing.bin")
+	d := &DownloadedObject{file: f, path: missing}
+
+	err = d.Close()
+	if err == nil {
+		t.Fatal("Close: expected error from missing remove, got nil")
+	}
+	if !os.IsNotExist(errors.Unwrap(err)) && !strings.Contains(err.Error(), "remove temp file") {
+		t.Errorf("Close error = %v, want a remove-temp-file error", err)
+	}
 }
 
 func TestDownloaderConfig_Defaults(t *testing.T) {

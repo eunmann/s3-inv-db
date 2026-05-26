@@ -156,7 +156,8 @@ func TestCompareStatusString(t *testing.T) {
 		{s: inventory.CompareRemoved, want: "removed"},
 		{s: inventory.CompareChanged, want: "changed"},
 		{s: inventory.CompareUnchanged, want: "unchanged"},
-		{s: inventory.CompareStatus(99), want: "unchanged"},
+		{s: inventory.CompareUnknown, want: "unknown"},
+		{s: inventory.CompareStatus(99), want: "unknown"},
 	}
 	for _, tc := range cases {
 		if got := tc.s.String(); got != tc.want {
@@ -202,7 +203,7 @@ func openSeededIndex(t *testing.T, seed int64, objects int) *indexread.Index {
 		Seed:      seed,
 		Logger:    zerolog.Nop(),
 	}
-	if err := seeder.Run(cfg); err != nil {
+	if err := seeder.Run(t.Context(), cfg); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	idx, err := indexread.Open(filepath.Join(tmp, "inv-001"))

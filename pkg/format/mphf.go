@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"unsafe"
 
 	"github.com/relab/bbhash"
 )
@@ -41,7 +42,7 @@ type MPHF struct {
 
 // OpenMPHF opens an MPHF from the given directory.
 func OpenMPHF(outDir string) (*MPHF, error) {
-	mphPath := filepath.Join(outDir, "mph.bin")
+	mphPath := filepath.Join(outDir, MPHFile)
 	combinedPath := filepath.Join(outDir, CombinedMPHFArrayFile)
 
 	info, err := os.Stat(mphPath)
@@ -81,8 +82,8 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 		}
 		usePrefixDict = true
 	} else {
-		blobPath := filepath.Join(outDir, "prefix_blob.bin")
-		offsetsPath := filepath.Join(outDir, "prefix_offsets.u64")
+		blobPath := filepath.Join(outDir, PrefixBlobFile)
+		offsetsPath := filepath.Join(outDir, PrefixOffsetsFile)
 		if _, err := os.Stat(blobPath); err == nil {
 			prefixBlob, err = OpenBlob(blobPath, offsetsPath)
 			if err != nil {
@@ -224,15 +225,12 @@ func (m *MPHF) Count() uint64 {
 }
 
 // hashString computes a uint64 hash for a string to use as MPHF key.
+// Forwards to hashBytes via a zero-copy string-to-bytes conversion.
 func hashString(s string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte(s))
-
-	return h.Sum64()
+	return hashBytes(unsafe.Slice(unsafe.StringData(s), len(s)))
 }
 
 // hashBytes computes a uint64 hash for bytes to use as MPHF key.
-// This avoids the string allocation in hashString.
 func hashBytes(b []byte) uint64 {
 	h := fnv.New64a()
 	h.Write(b)
@@ -240,17 +238,14 @@ func hashBytes(b []byte) uint64 {
 	return h.Sum64()
 }
 
-// computeFingerprint computes a fingerprint for verification.
-// Uses a different hash function to reduce collision probability.
+// computeFingerprint computes a fingerprint for verification. Uses a
+// different hash function to reduce collision probability. Forwards
+// via zero-copy conversion to computeFingerprintBytes.
 func computeFingerprint(s string) uint64 {
-	h := fnv.New64()
-	h.Write([]byte(s))
-
-	return h.Sum64()
+	return computeFingerprintBytes(unsafe.Slice(unsafe.StringData(s), len(s)))
 }
 
 // computeFingerprintBytes computes a fingerprint from bytes.
-// This avoids the string allocation in computeFingerprint.
 func computeFingerprintBytes(b []byte) uint64 {
 	h := fnv.New64()
 	h.Write(b)

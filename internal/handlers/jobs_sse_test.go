@@ -2,7 +2,6 @@ package handlers_test
 
 import (
 	"context"
-	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,44 +11,19 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
-	"github.com/eunmann/s3-inv-db/internal/templates"
-	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
-	"github.com/eunmann/s3-inv-db/pkg/pricing"
 )
 
-func openJobsTestDB(t *testing.T) *sql.DB {
+func newJobsHandlers(t *testing.T) (*handlers.Handlers, *jobs.Scheduler) {
 	t.Helper()
-
-	return dbtest.OpenMemDB(t)
-}
-
-func newJobsHandlers(t *testing.T) (*handlers.Handlers, *jobs.Manager) {
-	t.Helper()
-	db := openJobsTestDB(t)
-	invStore, err := inventory.NewStore(db)
-	if err != nil {
+	invMgr := inventory.NewCatalog(nil)
+	t.Cleanup(func() { _ = invMgr.Close() })
+	h := newWiredHandlers(t, invMgr)
+	if err := invMgr.Register(t.Context(), "src/inv1", "n", "p"); err != nil {
 		t.Fatal(err)
 	}
-	if err := invStore.Upsert(t.Context(), inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
-		t.Fatal(err)
-	}
-	jobStore := jobs.NewStore(db)
-	bus := jobs.NewBus(8)
-	mgr := jobs.NewManager(jobStore, bus)
-	renderer, err := templates.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := handlers.NewWithConfig(handlers.Config{
-		Manager:    inventory.NewManager(),
-		Renderer:   renderer,
-		PriceTable: pricing.DefaultUSEast1Prices(),
-		JobMgr:     mgr,
-		JobStore:   jobStore,
-		JobBus:     bus,
-	})
+	jobMgr := h.JobManagerForTest()
 
-	return h, mgr
+	return h, jobMgr
 }
 
 // TestJobsStream_PushesEvents subscribes via the SSE handler, submits
@@ -131,47 +105,49 @@ func TestJobsStream_EmitsHeartbeat(t *testing.T) {
 // caller-chosen SSE heartbeat interval — exercises the configurable path.
 func newHandlersWithHeartbeat(t *testing.T, hb time.Duration) *handlers.Handlers {
 	t.Helper()
-	db := openJobsTestDB(t)
-	invStore, err := inventory.NewStore(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := invStore.Upsert(t.Context(), inventory.Info{ID: "src/inv1", Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
-		t.Fatal(err)
-	}
-	jobStore := jobs.NewStore(db)
-	bus := jobs.NewBus(8)
-	mgr := jobs.NewManager(jobStore, bus)
-	renderer, err := templates.New()
-	if err != nil {
+	invMgr := inventory.NewCatalog(nil)
+	t.Cleanup(func() { _ = invMgr.Close() })
+	if err := invMgr.Register(t.Context(), "src/inv1", "n", "p"); err != nil {
 		t.Fatal(err)
 	}
 
-	return handlers.NewWithConfig(handlers.Config{
-		Manager:      inventory.NewManager(),
-		Renderer:     renderer,
-		PriceTable:   pricing.DefaultUSEast1Prices(),
-		JobMgr:       mgr,
-		JobStore:     jobStore,
-		JobBus:       bus,
-		SSEHeartbeat: hb,
-	})
+	return newWiredHandlers(t, invMgr, handlers.WithSSEHeartbeat(hb))
 }
 
-func TestJobsStream_DisabledWhenJobBusMissing(t *testing.T) {
-	renderer, err := templates.New()
+// TestJobsStream_PerIPCap guards the SSE rate limit. Each subscriber
+// keeps a buffered channel in jobs.Bus alive for the lifetime of the
+// connection; without a cap one client can pin unbounded memory.
+func TestJobsStream_PerIPCap(t *testing.T) {
+	h := newWiredHandlers(t, nil, handlers.WithSSEMaxConnsPerIP(1))
+
+	srv := httptest.NewServer(http.HandlerFunc(h.JobsStream))
+	t.Cleanup(srv.Close)
+
+	// First connection: should succeed. Keep the body open to occupy a slot.
+	//nolint:noctx // streaming connection that intentionally has no deadline
+	resp1, err := http.Get(srv.URL)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("first connect: %v", err)
 	}
-	h := handlers.NewWithConfig(handlers.Config{
-		Manager:    inventory.NewManager(),
-		Renderer:   renderer,
-		PriceTable: pricing.DefaultUSEast1Prices(),
-	})
-	req := httptest.NewRequest(http.MethodGet, "/api/jobs/stream", http.NoBody)
-	w := httptest.NewRecorder()
-	h.JobsStream(w, req)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want 503", w.Code)
+	t.Cleanup(func() { _ = resp1.Body.Close() })
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first connect status = %d, want 200", resp1.StatusCode)
+	}
+	// Wait until the first connection has actually been registered by
+	// the server. Reading a byte forces a roundtrip past acquireSSESlot.
+	buf := make([]byte, 1)
+	if _, err := resp1.Body.Read(buf); err != nil {
+		t.Fatalf("read first byte: %v", err)
+	}
+
+	// Second connection from same IP: must be refused with 429.
+	//nolint:noctx // test-local HTTP client, immediately closed below
+	resp2, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("second connect: %v", err)
+	}
+	defer func() { _ = resp2.Body.Close() }()
+	if resp2.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("second connect status = %d, want 429", resp2.StatusCode)
 	}
 }

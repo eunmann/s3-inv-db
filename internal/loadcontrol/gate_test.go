@@ -12,8 +12,8 @@ import (
 
 var errBuildOnPurpose = errors.New("build err on purpose")
 
-func newTestGate(capBytes, headroom uint64) (*loadcontrol.Gate, *inventory.Manager, *budget.Tracker) {
-	mgr := inventory.NewManager()
+func newTestGate(capBytes, headroom uint64) (*loadcontrol.Gate, *inventory.Catalog, *budget.Tracker) {
+	mgr := inventory.NewCatalog(nil)
 	tracker := budget.New(capBytes, headroom)
 	planner := budget.NewPlanner(tracker, nil)
 
@@ -78,5 +78,3 @@ func TestGate_Load_RefusalCarriesPlan(t *testing.T) {
 		t.Error("plan should not fit when estimate exceeds cap")
 	}
 }
-
-// Avoid unused import errors.

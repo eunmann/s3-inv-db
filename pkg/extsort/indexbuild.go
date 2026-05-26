@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -105,11 +106,21 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 	return b, nil
 }
 
+// ErrPrefixDictionaryAfterAdd is returned when SetPrefixDictionary is
+// called after the first Add — the MPHF builder it recreates would
+// discard rows already streamed in.
+var ErrPrefixDictionaryAfterAdd = errors.New("SetPrefixDictionary must be called before the first Add")
+
 // SetPrefixDictionary toggles dictionary-encoded prefix storage.
-// Must be called before the first Add — recreates the MPHF builder.
+// Must be called before the first Add — recreates the MPHF builder,
+// which would silently drop any rows already added. Returns
+// ErrPrefixDictionaryAfterAdd if any Add has occurred.
 func (b *IndexBuilder) SetPrefixDictionary(enabled bool) error {
 	if b.prefixDictionary == enabled {
 		return nil
+	}
+	if b.posCount > 0 {
+		return ErrPrefixDictionaryAfterAdd
 	}
 	b.prefixDictionary = enabled
 
@@ -197,8 +208,7 @@ func (b *IndexBuilder) findCommonAncestorDepth(prefix string) int {
 
 	for i := range len(b.stack) {
 		entry := &b.stack[i]
-		// Check if stack entry is a prefix of the new prefix
-		if len(entry.prefix) <= len(prefix) && prefix[:len(entry.prefix)] == entry.prefix {
+		if strings.HasPrefix(prefix, entry.prefix) {
 			commonDepth = i + 1
 		} else {
 			break

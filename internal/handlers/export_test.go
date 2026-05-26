@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
@@ -16,8 +17,48 @@ import (
 // JobStoreForTest returns the JobStore wired into the handler.
 func (h *Handlers) JobStoreForTest() *jobs.Store { return h.jobStore }
 
+// RenderHTMLForTest exposes renderHTML so external tests can drive
+// render failures and assert the buffered-render contract.
+func (h *Handlers) RenderHTMLForTest(w http.ResponseWriter, r *http.Request, name, logMsg string, data any) {
+	h.renderHTML(w, r, name, logMsg, data)
+}
+
+// RenderHTMLPartialForTest exposes renderHTMLPartial.
+func (h *Handlers) RenderHTMLPartialForTest(w http.ResponseWriter, r *http.Request, name, logMsg string, data any) {
+	h.renderHTMLPartial(w, r, name, logMsg, data)
+}
+
+// JobManagerForTest returns the JobManager wired into the handler.
+func (h *Handlers) JobManagerForTest() *jobs.Scheduler { return h.jobMgr }
+
 // ManagerForTest returns the inventory Manager wired into the handler.
-func (h *Handlers) ManagerForTest() *inventory.Manager { return h.manager }
+func (h *Handlers) ManagerForTest() *inventory.Catalog { return h.manager }
+
+// ConfigStoreForTest returns the ConfigStore wired into the handler.
+func (h *Handlers) ConfigStoreForTest() *inventory.ConfigStore { return h.configStore }
+
+// CompareViewOptionsForTest builds an opaque options struct for tests
+// that need to drive ComputeCompareLevelForTest directly.
+type CompareViewOptionsForTest struct {
+	From, To, Prefix string
+	SortBy, Dir      string
+	Page, PageSize   int
+	HideUnchanged    bool
+}
+
+// ComputeCompareLevelForTest exposes computeCompareLevel for tests.
+func (h *Handlers) ComputeCompareLevelForTest(ctx context.Context, opts CompareViewOptionsForTest) (*CompareLevelView, error) {
+	return h.computeCompareLevel(ctx, compareViewOptions{
+		from:          inventory.ID(opts.From),
+		to:            inventory.ID(opts.To),
+		prefix:        opts.Prefix,
+		sortBy:        opts.SortBy,
+		dir:           opts.Dir,
+		page:          opts.Page,
+		pageSize:      opts.PageSize,
+		hideUnchanged: opts.HideUnchanged,
+	})
+}
 
 // BuildCompareSelfViewForTest exposes buildCompareSelfView so external
 // tests can pin the formatted view shape without going through HTTP.

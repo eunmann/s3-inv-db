@@ -11,7 +11,7 @@ import (
 )
 
 func TestManagerRegister(t *testing.T) {
-	m := inventory.NewManager()
+	m := inventory.NewCatalog(nil)
 	defer m.Close()
 
 	err := m.Register(t.Context(), "test-id", "Test Inventory", "/path/to/index")
@@ -39,7 +39,7 @@ func TestManagerRegister(t *testing.T) {
 }
 
 func TestManagerRegisterDuplicate(t *testing.T) {
-	m := inventory.NewManager()
+	m := inventory.NewCatalog(nil)
 	defer m.Close()
 
 	err := m.Register(t.Context(), "test-id", "Test Inventory", "/path/to/index")
@@ -54,7 +54,7 @@ func TestManagerRegisterDuplicate(t *testing.T) {
 }
 
 func TestManagerGetNotFound(t *testing.T) {
-	m := inventory.NewManager()
+	m := inventory.NewCatalog(nil)
 	defer m.Close()
 
 	_, ok := m.Get("nonexistent")
@@ -64,7 +64,7 @@ func TestManagerGetNotFound(t *testing.T) {
 }
 
 func TestManagerList(t *testing.T) {
-	m := inventory.NewManager()
+	m := inventory.NewCatalog(nil)
 	defer m.Close()
 
 	// Empty list
@@ -84,7 +84,7 @@ func TestManagerList(t *testing.T) {
 }
 
 func TestManagerLoadNotFound(t *testing.T) {
-	m := inventory.NewManager()
+	m := inventory.NewCatalog(nil)
 	defer m.Close()
 
 	err := m.Load(t.Context(), "nonexistent")
@@ -94,7 +94,7 @@ func TestManagerLoadNotFound(t *testing.T) {
 }
 
 func TestManagerUnloadNotFound(t *testing.T) {
-	m := inventory.NewManager()
+	m := inventory.NewCatalog(nil)
 	defer m.Close()
 
 	err := m.Unload(t.Context(), "nonexistent")
@@ -104,7 +104,7 @@ func TestManagerUnloadNotFound(t *testing.T) {
 }
 
 func TestManagerRemove(t *testing.T) {
-	m := inventory.NewManager()
+	m := inventory.NewCatalog(nil)
 	defer m.Close()
 
 	m.Register(t.Context(), "test-id", "Test Inventory", "/path/to/index")
@@ -121,7 +121,7 @@ func TestManagerRemove(t *testing.T) {
 }
 
 func TestManagerRemoveNotFound(t *testing.T) {
-	m := inventory.NewManager()
+	m := inventory.NewCatalog(nil)
 	defer m.Close()
 
 	err := m.Remove(t.Context(), "nonexistent")
@@ -131,7 +131,7 @@ func TestManagerRemoveNotFound(t *testing.T) {
 }
 
 func TestManagerWithIndexNotLoaded(t *testing.T) {
-	m := inventory.NewManager()
+	m := inventory.NewCatalog(nil)
 	defer m.Close()
 
 	_ = m.Register(t.Context(), "test-id", "Test Inventory", "/path/to/index")
@@ -143,7 +143,7 @@ func TestManagerWithIndexNotLoaded(t *testing.T) {
 }
 
 func TestManagerWithIndexNotFound(t *testing.T) {
-	m := inventory.NewManager()
+	m := inventory.NewCatalog(nil)
 	defer m.Close()
 
 	err := m.WithIndex("nonexistent", func(*indexread.Index) error { return nil })
@@ -153,35 +153,35 @@ func TestManagerWithIndexNotFound(t *testing.T) {
 }
 
 func TestManagerWithTwoIndexes_NotFound(t *testing.T) {
-	m := inventory.NewManager()
+	m := inventory.NewCatalog(nil)
 	defer m.Close()
 	_ = m.Register(t.Context(), "a", "A", "/p")
 
-	err := m.WithTwoIndexes("a", "b", func(*indexread.Index, *indexread.Index) error { return nil })
+	err := m.WithTwoIndexes(t.Context(), "a", "b", func(*indexread.Index, *indexread.Index) error { return nil })
 	if !errors.Is(err, inventory.ErrNotFound) {
 		t.Errorf("WithTwoIndexes(a, missing) error = %v, want inventory.ErrNotFound", err)
 	}
 }
 
 func TestManagerWithTwoIndexes_NotLoaded(t *testing.T) {
-	m := inventory.NewManager()
+	m := inventory.NewCatalog(nil)
 	defer m.Close()
 	_ = m.Register(t.Context(), "a", "A", "/p")
 	_ = m.Register(t.Context(), "b", "B", "/q")
 
-	err := m.WithTwoIndexes("a", "b", func(*indexread.Index, *indexread.Index) error { return nil })
+	err := m.WithTwoIndexes(t.Context(), "a", "b", func(*indexread.Index, *indexread.Index) error { return nil })
 	if !errors.Is(err, inventory.ErrNotLoaded) {
 		t.Errorf("WithTwoIndexes neither loaded error = %v, want inventory.ErrNotLoaded", err)
 	}
 }
 
 // TestManagerConcurrent_RegisterListRemove stress-tests concurrent
-// access to the Manager. With -race it asserts there is no data race
+// access to the Catalog. With -race it asserts there is no data race
 // between Register, List, Get, WithIndex, Unload, and Remove. Load
 // itself isn't exercised here because it requires a real index on
 // disk — see internal/handlers integration tests for that.
 func TestManagerConcurrent_RegisterListRemove(t *testing.T) {
-	m := inventory.NewManager()
+	m := inventory.NewCatalog(nil)
 	defer m.Close()
 
 	const workers = 16
@@ -211,11 +211,11 @@ func TestManagerConcurrent_RegisterListRemove(t *testing.T) {
 }
 
 // TestManagerConcurrent_LoadRemoveRace targets the specific window in
-// Manager.Load where the lock is released while indexread.Open runs.
+// Catalog.Load where the lock is released while indexread.Open runs.
 // A racing Remove during that window must not corrupt state and must
 // leave the loaded index closed.
 func TestManagerConcurrent_LoadRemoveRace(t *testing.T) {
-	m := inventory.NewManager()
+	m := inventory.NewCatalog(nil)
 	defer m.Close()
 
 	// Use a bogus path so Open fails quickly — we're testing the

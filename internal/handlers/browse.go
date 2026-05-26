@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -70,38 +71,54 @@ type BrowseLevel struct {
 
 // BrowsePage serves the full page and the inner level partial at the
 // same URL, dispatched via wantsHTMXPartial.
-func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	inventoryID := inventory.ID(q.Get("inventory_id"))
-	prefix := q.Get("prefix")
-	sortParams := inventory.NormalizeSort(q.Get("sort"), q.Get("dir"))
-	sortBy, dir := sortParams.Col, sortParams.Dir
-	pageParams := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
-	page, pageSize := pageParams.Page, pageParams.Size
+// BrowseViewOptions bundles the query-string knobs BrowsePage parses so
+// the inner render functions don't take 6-positional signatures.
+type browseViewOptions struct {
+	inventoryID inventory.ID
+	prefix      string
+	sortBy      string
+	dir         string
+	page        int
+	pageSize    int
+}
 
+func parseBrowseOptions(q url.Values) browseViewOptions {
+	sortParams := inventory.NormalizeSort(q.Get("sort"), q.Get("dir"))
+	pageParams := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
+
+	return browseViewOptions{
+		inventoryID: inventory.ID(q.Get("inventory_id")),
+		prefix:      q.Get("prefix"),
+		sortBy:      sortParams.Col,
+		dir:         sortParams.Dir,
+		page:        pageParams.Page,
+		pageSize:    pageParams.Size,
+	}
+}
+
+func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
+	opts := parseBrowseOptions(r.URL.Query())
 	if wantsHTMXPartial(r) {
-		h.renderBrowseLevelPartial(w, r, inventoryID, prefix, sortBy, dir, page, pageSize)
+		h.renderBrowseLevelPartial(w, r, opts)
 
 		return
 	}
-	h.renderBrowsePage(w, r, inventoryID, prefix, sortBy, dir, page, pageSize)
+	h.renderBrowsePage(w, r, opts)
 }
 
-func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request,
-	inventoryID inventory.ID, prefix, sortBy, dir string, page, pageSize int,
-) {
+func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request, opts browseViewOptions) {
 	data := map[string]any{
 		"Title":           "Browse",
 		"InventoryGroups": groupLoadedInventories(h.manager.List()),
-		"InventoryID":     inventoryID,
-		"Prefix":          prefix,
+		"InventoryID":     opts.inventoryID,
+		"Prefix":          opts.prefix,
 	}
-	if inventoryID != "" {
+	if opts.inventoryID != "" {
 		ctx := r.Context()
 		var level BrowseLevel
 		start := time.Now()
-		err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
-			level = h.buildBrowseLevel(ctx, idx, inventoryID, prefix, sortBy, dir, page, pageSize)
+		err := h.manager.WithIndex(opts.inventoryID, func(idx *indexread.Index) error {
+			level = h.buildBrowseLevel(ctx, idx, opts)
 
 			return nil
 		})
@@ -115,10 +132,8 @@ func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request,
 	h.renderHTML(w, r, "browse.html", "failed to render browse page", data)
 }
 
-func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Request,
-	inventoryID inventory.ID, prefix, sortBy, dir string, page, pageSize int,
-) {
-	if inventoryID == "" {
+func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Request, opts browseViewOptions) {
+	if opts.inventoryID == "" {
 		http.Error(w, "inventory_id is required", http.StatusBadRequest)
 
 		return
@@ -127,8 +142,8 @@ func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Reque
 	logger := zerolog.Ctx(ctx)
 	var level BrowseLevel
 	start := time.Now()
-	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
-		level = h.buildBrowseLevel(ctx, idx, inventoryID, prefix, sortBy, dir, page, pageSize)
+	err := h.manager.WithIndex(opts.inventoryID, func(idx *indexread.Index) error {
+		level = h.buildBrowseLevel(ctx, idx, opts)
 
 		return nil
 	})
@@ -153,7 +168,8 @@ func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Reque
 // stats/tier/cost annotations. Pure prefix math lives in the inventory
 // package; this method just plumbs index reads + price-table-aware cost
 // formatting into the render struct.
-func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, inventoryID inventory.ID, prefix, sortBy, dir string, page, pageSize int) BrowseLevel {
+func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, opts browseViewOptions) BrowseLevel {
+	inventoryID, prefix, sortBy, dir, page, pageSize := opts.inventoryID, opts.prefix, opts.sortBy, opts.dir, opts.page, opts.pageSize
 	level := BrowseLevel{
 		InventoryID: inventoryID,
 		Prefix:      prefix,
@@ -316,15 +332,8 @@ type PaginationJSON struct {
 // prefix, sort, dir, page, page_size. Returns 400 on missing inventory_id,
 // 404 when the inventory isn't registered, 409 when not loaded.
 func (h *Handlers) BrowseLevelAPI(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	inventoryID := inventory.ID(q.Get("inventory_id"))
-	prefix := q.Get("prefix")
-	sortParams := inventory.NormalizeSort(q.Get("sort"), q.Get("dir"))
-	sortBy, dir := sortParams.Col, sortParams.Dir
-	pageParams := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
-	page, pageSize := pageParams.Page, pageParams.Size
-
-	if inventoryID == "" {
+	opts := parseBrowseOptions(r.URL.Query())
+	if opts.inventoryID == "" {
 		WriteJSONError(w, http.StatusBadRequest, "inventory_id is required")
 
 		return
@@ -332,8 +341,8 @@ func (h *Handlers) BrowseLevelAPI(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	var level BrowseLevel
-	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
-		level = h.buildBrowseLevel(ctx, idx, inventoryID, prefix, sortBy, dir, page, pageSize)
+	err := h.manager.WithIndex(opts.inventoryID, func(idx *indexread.Index) error {
+		level = h.buildBrowseLevel(ctx, idx, opts)
 
 		return nil
 	})
@@ -345,10 +354,10 @@ func (h *Handlers) BrowseLevelAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := BrowseLevelResponse{
-		InventoryID:   inventoryID,
-		Prefix:        prefix,
-		Sort:          sortBy,
-		Dir:           dir,
+		InventoryID:   opts.inventoryID,
+		Prefix:        opts.prefix,
+		Sort:          opts.sortBy,
+		Dir:           opts.dir,
 		TotalChildren: level.TotalChildren,
 		NotFound:      level.NotFound,
 		Stats: PrefixStatsJSON{

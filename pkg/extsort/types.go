@@ -46,14 +46,10 @@ type PrefixRow struct {
 	Depth      uint16
 }
 
-// Reset clears the row for reuse via sync.Pool.
+// Reset clears the row for reuse via sync.Pool. Struct-zero assignment
+// is one statement and zeroes the embedded arrays in the same op.
 func (r *PrefixRow) Reset() {
-	r.Prefix = ""
-	r.Depth = 0
-	r.Count = 0
-	r.TotalBytes = 0
-	clear(r.TierCounts[:])
-	clear(r.TierBytes[:])
+	*r = PrefixRow{}
 }
 
 // Merge sums counts and bytes from other into r. Prefix and Depth

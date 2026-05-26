@@ -11,21 +11,13 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/templates"
-	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5"
 )
 
 func newTestHandlers(t *testing.T) *handlers.Handlers {
 	t.Helper()
 
-	mgr := inventory.NewManager()
-	renderer, err := templates.New()
-	if err != nil {
-		t.Fatalf("failed to create renderer: %v", err)
-	}
-
-	return handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	return newWiredHandlers(t, nil)
 }
 
 func TestRegisterInventoryAPI(t *testing.T) {

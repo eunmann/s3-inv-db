@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/dbtest"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
-	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
 )
 
 var errBoom = errors.New("boom")
@@ -24,7 +24,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func newManager(t *testing.T) (*jobs.Manager, *jobs.Store, *jobs.Bus) {
+func newScheduler(t *testing.T) (*jobs.Scheduler, *jobs.Store, *jobs.Bus) {
 	t.Helper()
 	db := openTestDB(t)
 	invStore, err := inventory.NewStore(db)
@@ -37,7 +37,7 @@ func newManager(t *testing.T) (*jobs.Manager, *jobs.Store, *jobs.Bus) {
 	store := jobs.NewStore(db)
 	bus := jobs.NewBus(16)
 
-	return jobs.NewManager(store, bus), store, bus
+	return jobs.NewScheduler(store, bus), store, bus
 }
 
 func waitForState(t *testing.T, store *jobs.Store, id jobs.ID, target jobs.State) jobs.Job {
@@ -56,8 +56,8 @@ func waitForState(t *testing.T, store *jobs.Store, id jobs.ID, target jobs.State
 }
 
 func TestManager_SubmitSucceeds(t *testing.T) {
-	mgr, store, _ := newManager(t)
-	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, report func(jobs.Update)) error {
+	sched, store, _ := newScheduler(t)
+	job, err := sched.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, report func(jobs.Update)) error {
 		report(jobs.Update{Stage: "fetch", Progress: 30})
 		report(jobs.Update{Stage: "extsort", Progress: 70})
 
@@ -77,8 +77,8 @@ func TestManager_SubmitSucceeds(t *testing.T) {
 }
 
 func TestManager_FailingWork(t *testing.T) {
-	mgr, store, _ := newManager(t)
-	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
+	sched, store, _ := newScheduler(t)
+	job, err := sched.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
 		return errBoom
 	})
 	if err != nil {
@@ -91,10 +91,10 @@ func TestManager_FailingWork(t *testing.T) {
 }
 
 func TestManager_Cancel(t *testing.T) {
-	mgr, store, _ := newManager(t)
+	sched, store, _ := newScheduler(t)
 
 	started := make(chan struct{})
-	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(ctx context.Context, _ func(jobs.Update)) error {
+	job, err := sched.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(ctx context.Context, _ func(jobs.Update)) error {
 		close(started)
 		<-ctx.Done()
 
@@ -105,7 +105,7 @@ func TestManager_Cancel(t *testing.T) {
 	}
 	<-started
 
-	if err := mgr.Cancel(job.ID); err != nil {
+	if err := sched.Cancel(job.ID); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
 	final := waitForState(t, store, job.ID, jobs.StateCancelled)
@@ -115,8 +115,8 @@ func TestManager_Cancel(t *testing.T) {
 }
 
 func TestManager_CancelUnknown(t *testing.T) {
-	mgr, _, _ := newManager(t)
-	if err := mgr.Cancel("no-such-job"); !errors.Is(err, jobs.ErrNotFound) {
+	sched, _, _ := newScheduler(t)
+	if err := sched.Cancel("no-such-job"); !errors.Is(err, jobs.ErrNotFound) {
 		t.Errorf("Cancel(unknown) error = %v, want ErrNotFound", err)
 	}
 }
@@ -183,15 +183,15 @@ func TestStore_MarkAborted(t *testing.T) {
 }
 
 func TestManager_SubmitAfterShutdown(t *testing.T) {
-	mgr, _, _ := newManager(t)
+	sched, _, _ := newScheduler(t)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	if err := mgr.Shutdown(ctx); err != nil {
+	if err := sched.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
 
-	_, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
+	_, err := sched.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
 		return nil
 	})
 	if !errors.Is(err, jobs.ErrShutdown) {
@@ -199,11 +199,29 @@ func TestManager_SubmitAfterShutdown(t *testing.T) {
 	}
 }
 
+func TestManager_NilStoreIsNoop(t *testing.T) {
+	sched := jobs.NewScheduler(nil, jobs.NewBus(8))
+	job, err := sched.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Submit with nil store: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := sched.Cancel(job.ID); errors.Is(err, jobs.ErrNotFound) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("job %s never finished", job.ID)
+}
+
 func TestManager_ShutdownCancelsLiveJob(t *testing.T) {
-	mgr, store, _ := newManager(t)
+	sched, store, _ := newScheduler(t)
 
 	started := make(chan struct{})
-	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(ctx context.Context, _ func(jobs.Update)) error {
+	job, err := sched.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(ctx context.Context, _ func(jobs.Update)) error {
 		close(started)
 		<-ctx.Done()
 
@@ -216,7 +234,7 @@ func TestManager_ShutdownCancelsLiveJob(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	if err := mgr.Shutdown(ctx); err != nil {
+	if err := sched.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
 

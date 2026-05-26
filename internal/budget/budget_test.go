@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/budget"
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
 func TestTracker_AddRemove(t *testing.T) {
@@ -112,7 +113,7 @@ func TestMeasureDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sub, "b.bin"), make([]byte, 512), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := budget.MeasureDir(t.Context(), root)
+	got, err := inventory.MeasureDir(t.Context(), root)
 	if err != nil {
 		t.Fatalf("MeasureDir: %v", err)
 	}
@@ -122,7 +123,7 @@ func TestMeasureDir(t *testing.T) {
 }
 
 func TestMeasureDir_MissingPathIsZero(t *testing.T) {
-	got, err := budget.MeasureDir(t.Context(), "/definitely/does/not/exist")
+	got, err := inventory.MeasureDir(t.Context(), "/definitely/does/not/exist")
 	if err != nil {
 		t.Fatalf("MeasureDir on missing path: %v", err)
 	}

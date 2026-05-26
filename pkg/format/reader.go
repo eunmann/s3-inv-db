@@ -80,12 +80,14 @@ func OpenMmapWithHint(path string, hint AccessHint) (*MmapFile, error) {
 	}, nil
 }
 
-// Close unmaps the file.
+// Close unmaps the file. Idempotent.
 func (m *MmapFile) Close() error {
 	if m.data == nil {
 		return nil
 	}
-	if err := unix.Munmap(m.data); err != nil {
+	data := m.data
+	m.data = nil
+	if err := unix.Munmap(data); err != nil {
 		return fmt.Errorf("munmap: %w", err)
 	}
 

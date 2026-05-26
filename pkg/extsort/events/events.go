@@ -11,7 +11,7 @@
 //	bus := events.NewBus()
 //	defer bus.Close()
 //
-//	sub := bus.Subscribe(events.StageAggregator, 1024)
+//	sub := bus.Subscribe(1024, events.StageAggregator)
 //	go func() {
 //	    for ev := range sub.C {
 //	        // ...

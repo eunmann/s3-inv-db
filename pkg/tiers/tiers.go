@@ -3,11 +3,19 @@ package tiers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+
+	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
+
+// ErrUnknownTierID is returned when a caller looks up a tier id that
+// is outside the valid range.
+var ErrUnknownTierID = errors.New("unknown tier id")
 
 // ID represents a logical tier identifier.
 type ID uint8
@@ -43,25 +51,33 @@ type Info struct {
 	ID         ID     `json:"id"`
 }
 
+// allTiers is the canonical tier-ID-ordered list. Kept private so
+// callers can only see it via AllTiers, which returns a defensive
+// copy — preserves immutability without the per-call slice alloc that
+// the previous "return literal" form caused.
+//
+//nolint:gochecknoglobals // immutable tier table by design
+var allTiers = []Info{
+	{ID: Standard, Name: "STANDARD", FilePrefix: "standard"},
+	{ID: StandardIA, Name: "STANDARD_IA", FilePrefix: "standard_ia"},
+	{ID: OneZoneIA, Name: "ONEZONE_IA", FilePrefix: "onezone_ia"},
+	{ID: GlacierIR, Name: "GLACIER_IR", FilePrefix: "glacier_ir"},
+	{ID: GlacierFR, Name: "GLACIER", FilePrefix: "glacier_fr"},
+	{ID: DeepArchive, Name: "DEEP_ARCHIVE", FilePrefix: "deep_archive"},
+	{ID: ReducedRedundancy, Name: "REDUCED_REDUNDANCY", FilePrefix: "reduced_redundancy"},
+	{ID: ITFrequent, Name: "INTELLIGENT_TIERING_FREQUENT", FilePrefix: "it_frequent"},
+	{ID: ITInfrequent, Name: "INTELLIGENT_TIERING_INFREQUENT", FilePrefix: "it_infrequent"},
+	{ID: ITArchiveInstant, Name: "INTELLIGENT_TIERING_ARCHIVE_INSTANT", FilePrefix: "it_archive_instant"},
+	{ID: ITArchive, Name: "INTELLIGENT_TIERING_ARCHIVE", FilePrefix: "it_archive"},
+	{ID: ITDeepArchive, Name: "INTELLIGENT_TIERING_DEEP_ARCHIVE", FilePrefix: "it_deep_archive"},
+	{ID: ITFrequentSmall, Name: "INTELLIGENT_TIERING_FREQUENT_SMALL", FilePrefix: "it_frequent_small"},
+}
+
 // AllTiers returns information about all supported tiers in tier-ID
-// order. A function (rather than a package-level slice) keeps tier
-// data immutable from outside the package and avoids a global.
+// order. Returns a defensive copy so callers can't mutate the
+// canonical table.
 func AllTiers() []Info {
-	return []Info{
-		{ID: Standard, Name: "STANDARD", FilePrefix: "standard"},
-		{ID: StandardIA, Name: "STANDARD_IA", FilePrefix: "standard_ia"},
-		{ID: OneZoneIA, Name: "ONEZONE_IA", FilePrefix: "onezone_ia"},
-		{ID: GlacierIR, Name: "GLACIER_IR", FilePrefix: "glacier_ir"},
-		{ID: GlacierFR, Name: "GLACIER", FilePrefix: "glacier_fr"},
-		{ID: DeepArchive, Name: "DEEP_ARCHIVE", FilePrefix: "deep_archive"},
-		{ID: ReducedRedundancy, Name: "REDUCED_REDUNDANCY", FilePrefix: "reduced_redundancy"},
-		{ID: ITFrequent, Name: "INTELLIGENT_TIERING_FREQUENT", FilePrefix: "it_frequent"},
-		{ID: ITInfrequent, Name: "INTELLIGENT_TIERING_INFREQUENT", FilePrefix: "it_infrequent"},
-		{ID: ITArchiveInstant, Name: "INTELLIGENT_TIERING_ARCHIVE_INSTANT", FilePrefix: "it_archive_instant"},
-		{ID: ITArchive, Name: "INTELLIGENT_TIERING_ARCHIVE", FilePrefix: "it_archive"},
-		{ID: ITDeepArchive, Name: "INTELLIGENT_TIERING_DEEP_ARCHIVE", FilePrefix: "it_deep_archive"},
-		{ID: ITFrequentSmall, Name: "INTELLIGENT_TIERING_FREQUENT_SMALL", FilePrefix: "it_frequent_small"},
-	}
+	return slices.Clone(allTiers)
 }
 
 // Mapping provides tier lookup and metadata.
@@ -110,7 +126,15 @@ func (m *Mapping) FromS3(storageClass, accessTier string) ID {
 		case "DEEP_ARCHIVE_ACCESS", "DEEP_ARCHIVE":
 			return ITDeepArchive
 		default:
-			// Default to Frequent if access tier is missing or unknown
+			// Default to Frequent if access tier is missing or unknown.
+			// Surface a non-empty unrecognised tier — silent
+			// misclassification would inflate Frequent counts.
+			if accessTier != "" {
+				logging.L().Warn().
+					Str("access_tier", accessTier).
+					Msg("tiers.FromS3: unknown Intelligent-Tiering access tier, defaulting to FREQUENT")
+			}
+
 			return ITFrequent
 		}
 	}
@@ -120,7 +144,12 @@ func (m *Mapping) FromS3(storageClass, accessTier string) ID {
 		return id
 	}
 
-	// Default to Standard for unknown classes
+	if storageClass != "" {
+		logging.L().Warn().
+			Str("storage_class", storageClass).
+			Msg("tiers.FromS3: unknown storage class, defaulting to STANDARD")
+	}
+
 	return Standard
 }
 
@@ -136,28 +165,32 @@ func Resolve(id ID, size uint64) ID {
 	return id
 }
 
-// ByID returns tier info by ID.
-func (m *Mapping) ByID(id ID) Info {
+// ByID returns tier info by ID. The bool is false when id is out of range.
+func (m *Mapping) ByID(id ID) (Info, bool) {
 	if int(id) < len(m.Tiers) {
-		return m.Tiers[id]
+		return m.Tiers[id], true
 	}
 
-	return Info{ID: id, Name: "UNKNOWN", FilePrefix: "unknown"}
+	return Info{}, false
 }
 
-// TierManifest is written to tiers.json in the index directory.
-type TierManifest struct {
+// Manifest is written to tiers.json in the index directory.
+type Manifest struct {
 	Tiers []Info `json:"tiers"`
 }
 
 // WriteManifest writes tiers.json with only the tiers that have data.
 func WriteManifest(dir string, presentTiers []ID) error {
 	mapping := NewMapping()
-	manifest := TierManifest{
+	manifest := Manifest{
 		Tiers: make([]Info, 0, len(presentTiers)),
 	}
 	for _, id := range presentTiers {
-		manifest.Tiers = append(manifest.Tiers, mapping.ByID(id))
+		info, ok := mapping.ByID(id)
+		if !ok {
+			return fmt.Errorf("%w: %d", ErrUnknownTierID, id)
+		}
+		manifest.Tiers = append(manifest.Tiers, info)
 	}
 
 	data, err := json.MarshalIndent(manifest, "", "  ")
@@ -175,20 +208,20 @@ func WriteManifest(dir string, presentTiers []ID) error {
 }
 
 // ReadManifest reads tiers.json from the index directory. Returns an
-// empty TierManifest (zero Tiers) when the file is missing so callers
+// empty Manifest (zero Tiers) when the file is missing so callers
 // can dispatch on len(manifest.Tiers) rather than nil-checking.
-func ReadManifest(dir string) (*TierManifest, error) {
+func ReadManifest(dir string) (*Manifest, error) {
 	path := filepath.Join(dir, "tiers.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &TierManifest{}, nil
+			return &Manifest{}, nil
 		}
 
 		return nil, fmt.Errorf("read tier manifest: %w", err)
 	}
 
-	var manifest TierManifest
+	var manifest Manifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return nil, fmt.Errorf("parse tier manifest: %w", err)
 	}

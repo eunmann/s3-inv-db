@@ -120,9 +120,25 @@ func (s *Server) setupRoutes() {
 		// the /partials/discovered/* routes and return HTML directly.
 		r.Get("/discovered", s.handlers.ListDiscoveredAPI)
 
-		// Stats queries
-		r.Get("/stats", s.handlers.GetStatsAPI)
-		r.Get("/inventories/{id}/stats", s.handlers.GetInventoryStatsAPI)
-		r.Get("/inventories/{id}/descendants", s.handlers.GetDescendantsAPI)
+		// Stats queries — instrumented so dashboards see request rate
+		// and latency per route.
+		r.With(s.handlers.MetricsMiddleware("stats")).Get("/stats", s.handlers.GetStatsAPI)
+		r.With(s.handlers.MetricsMiddleware("stats")).Get("/inventories/{id}/stats", s.handlers.GetInventoryStatsAPI)
+		r.With(s.handlers.MetricsMiddleware("descendants")).Get("/inventories/{id}/descendants", s.handlers.GetDescendantsAPI)
+
+		// Top-N by metric. Both /api/top (id in query) and
+		// /api/inventories/{id}/top (id in path) work the same way.
+		r.With(s.handlers.MetricsMiddleware("top")).Get("/top", s.handlers.GetTopAPI)
+		r.With(s.handlers.MetricsMiddleware("top")).Get("/inventories/{id}/top", s.handlers.GetTopAPI)
+
+		// Batch multi-prefix lookup. POST body carries the prefix list.
+		r.With(s.handlers.MetricsMiddleware("stats_batch")).Post("/inventories/{id}/stats:batch", s.handlers.PostBatchStatsAPI)
 	})
+
+	// /metrics is mounted on the main listener unless the server config
+	// directs it elsewhere (handled in server.Run when a separate addr is
+	// set). Mounting here keeps the default zero-config behaviour useful.
+	if s.config.MetricsAddr == "" {
+		r.Get("/metrics", s.handlers.MetricsHandler)
+	}
 }

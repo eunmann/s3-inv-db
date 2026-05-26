@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
+	"github.com/eunmann/s3-inv-db/internal/dbtest"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
@@ -77,6 +77,39 @@ func TestServerAPIRoutes(t *testing.T) {
 	contentType := w.Header().Get("Content-Type")
 	if contentType != "application/json" {
 		t.Errorf("Content-Type = %q, want %q", contentType, "application/json")
+	}
+}
+
+// TestServerHTTPTimeouts pins the slow-loris hardening: every long-lived
+// timeout knob must be set on the http.Server so a peer can't hold a
+// connection or header read open indefinitely. Inspects the helper
+// directly to avoid racing against Run's goroutine.
+func TestServerHTTPTimeouts(t *testing.T) {
+	cfg := Config{
+		Addr:       "127.0.0.1:0",
+		Logger:     zerolog.Nop(),
+		PriceTable: pricing.DefaultUSEast1Prices(),
+		DB:         testDB(t),
+	}
+
+	srv, err := New(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	httpSrv := srv.newHTTPServer()
+
+	if httpSrv.ReadHeaderTimeout <= 0 {
+		t.Errorf("ReadHeaderTimeout = %v, want > 0", httpSrv.ReadHeaderTimeout)
+	}
+	if httpSrv.ReadTimeout <= 0 {
+		t.Errorf("ReadTimeout = %v, want > 0", httpSrv.ReadTimeout)
+	}
+	if httpSrv.IdleTimeout <= 0 {
+		t.Errorf("IdleTimeout = %v, want > 0", httpSrv.IdleTimeout)
+	}
+	if httpSrv.MaxHeaderBytes <= 0 {
+		t.Errorf("MaxHeaderBytes = %d, want > 0", httpSrv.MaxHeaderBytes)
 	}
 }
 

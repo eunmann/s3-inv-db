@@ -112,7 +112,10 @@ func TestFromS3_Whitespace(t *testing.T) {
 func TestByID(t *testing.T) {
 	m := tiers.NewMapping()
 
-	info := m.ByID(tiers.Standard)
+	info, ok := m.ByID(tiers.Standard)
+	if !ok {
+		t.Fatal("ByID(Standard) returned ok=false")
+	}
 	if info.Name != "STANDARD" {
 		t.Errorf("ByID(Standard).Name = %q, want STANDARD", info.Name)
 	}
@@ -120,9 +123,16 @@ func TestByID(t *testing.T) {
 		t.Errorf("ByID(Standard).FilePrefix = %q, want standard", info.FilePrefix)
 	}
 
-	info = m.ByID(tiers.ITFrequent)
+	info, ok = m.ByID(tiers.ITFrequent)
+	if !ok {
+		t.Fatal("ByID(ITFrequent) returned ok=false")
+	}
 	if info.FilePrefix != "it_frequent" {
 		t.Errorf("ByID(ITFrequent).FilePrefix = %q, want it_frequent", info.FilePrefix)
+	}
+
+	if _, ok := m.ByID(tiers.NumTiers); ok {
+		t.Error("ByID(NumTiers) returned ok=true, want false for out-of-range id")
 	}
 }
 

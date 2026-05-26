@@ -13,6 +13,17 @@ import (
 // isn't the expected three-part "<source>/<inventory>/<run>" shape.
 var ErrTargetIDFormat = errors.New("target id is not a 3-part inventory ID")
 
+// PlannerRefusedError is returned by Plan when the resulting plan does
+// not fit. Plan.Refusal carries the human-readable reason (preserved
+// for callers that format it directly); Plan is the full verdict.
+type PlannerRefusedError struct {
+	Plan Plan
+}
+
+func (e *PlannerRefusedError) Error() string {
+	return "disk-budget planner refused: " + e.Plan.Refusal
+}
+
 // Plan is the eviction plan for a pending load.
 type Plan struct {
 	Refusal       string
@@ -124,6 +135,8 @@ func (p *Planner) Plan(ctx context.Context, in Input) (Plan, error) {
 				"need %d bytes but only %d available even after evicting every auto-loaded run; raise --max-index-disk",
 				in.EstimateBytes, p.tracker.Available()+plan.FreedBytes)
 		}
+
+		return plan, &PlannerRefusedError{Plan: plan}
 	}
 
 	return plan, nil
@@ -180,7 +193,10 @@ func selectByConfig(pool []inventory.Info, source, name string, retention uint32
 
 		return a.LoadedAt.Compare(b.LoadedAt)
 	})
-	drop := min(uint32(len(inConfig))-(retention-1), uint32(len(inConfig)))
+	// The early guard (uint32(len) < retention) ensures retention ≥ 1
+	// here, so retention-1 is a safe subtraction and drop is always
+	// in [1, len].
+	drop := uint32(len(inConfig)) - (retention - 1)
 
 	return inConfig[:drop]
 }

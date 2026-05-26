@@ -37,8 +37,8 @@ make seeder  # bin/s3-inv-db-seeder
 
 | Binary | Purpose |
 |---|---|
-| `s3-inv-db` | CLI for `build` / `query` on a single index |
-| `s3-inv-db-server` | HTTP server: discovery, load/unload, auto-load, compare, JSON API, HTML UI |
+| `s3-inv-db` | CLI: `build`, `query`, `top`, `browse`, `compare`, `verify`, `stats`, `config-check` (every subcommand supports `--output text\|json`) |
+| `s3-inv-db-server` | HTTP server: discovery, load/unload, auto-load, compare, JSON API, HTML UI, `/metrics` |
 | `s3-inv-db-seeder` | Synthetic-data generator (local dev + integration tests) |
 
 ## Configuration
@@ -64,6 +64,13 @@ default. Example:
 ```
 
 The `inventories[]` array declares per-configuration auto-load + retention; entries are upserted into the state DB at startup. Per-run pin state lives in the UI/API, not the file.
+
+Additional server keys (all optional):
+
+- `metrics_addr` — bind `/metrics` on its own listener (e.g. `":9090"`). Empty mounts on the main router.
+- `query_batch_max` — cap on `/api/inventories/{id}/stats:batch` prefix count (default 1000).
+- `auto_load_dry_run` — log autoload decisions instead of performing them.
+- `build_event_log` — when set, the `build` CLI also writes every pipeline event as JSONL to this path.
 
 ## Library usage
 

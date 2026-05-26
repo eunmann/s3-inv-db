@@ -36,7 +36,7 @@ type Discovery interface {
 }
 
 // LoaderFunc loads a single discovered inventory. Callers wire the
-// DiscoveryService.AutoLoadWith call (with nil progress) here.
+// Discovery.AutoLoadWith call (with nil progress) here.
 type LoaderFunc func(ctx context.Context, disc inventory.Inventory) error
 
 // AutoLoader polls Discovery on a ticker and feeds new runs into Loader.
@@ -44,7 +44,7 @@ type AutoLoader struct {
 	discovery   Discovery
 	loader      LoaderFunc
 	configStore *inventory.ConfigStore
-	manager     *inventory.Manager
+	manager     *inventory.Catalog
 	logger      *zerolog.Logger
 	now         func() time.Time
 	stop        chan struct{}
@@ -54,8 +54,22 @@ type AutoLoader struct {
 	stopped     bool
 }
 
+// Deps groups the required collaborators for an AutoLoader. All
+// fields must be non-nil; nil values produce nil-deref panics on first
+// use rather than at construction.
+type Deps struct {
+	Discovery   Discovery
+	Loader      LoaderFunc
+	ConfigStore *inventory.ConfigStore
+	Manager     *inventory.Catalog
+}
+
 // New constructs an AutoLoader; logger may be nil.
-func New(cfg Config, discovery Discovery, loader LoaderFunc, configStore *inventory.ConfigStore, manager *inventory.Manager, logger *zerolog.Logger) *AutoLoader {
+func New(cfg Config, deps Deps, logger *zerolog.Logger) *AutoLoader {
+	discovery := deps.Discovery
+	loader := deps.Loader
+	configStore := deps.ConfigStore
+	manager := deps.Manager
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = DefaultPollInterval
 	}
@@ -126,7 +140,7 @@ func (a *AutoLoader) run(ctx context.Context) {
 }
 
 func (a *AutoLoader) tick(ctx context.Context) {
-	if a.discovery == nil || !a.discovery.Enabled() {
+	if !a.discovery.Enabled() {
 		return
 	}
 	configs, err := a.configStore.List(ctx)
@@ -246,15 +260,16 @@ func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 		// Budget refusal: surface via Manager so the UI can show the
 		// reason next to the row. Don't apply backoff — we want to
 		// retry next tick if budget frees up.
-		_ = a.manager.RecordAutoLoadFailure(ctx, id, refused.Error(), time.Time{})
+		_ = a.manager.RecordAutoLoadFailure(ctx, id, refused.Error(), a.now(), time.Time{})
 		a.logger.Warn().Str("id", string(id)).Err(err).Msg("autoload: budget refused")
 
 		return
 	}
 	info, _ := a.manager.Get(id)
+	now := a.now()
 	delay := backoffDelay(a.cfg.MinBackoff, a.cfg.MaxBackoff, info.AutoLoadFailureCount)
-	retryAt := a.now().Add(delay)
-	_ = a.manager.RecordAutoLoadFailure(ctx, id, err.Error(), retryAt)
+	retryAt := now.Add(delay)
+	_ = a.manager.RecordAutoLoadFailure(ctx, id, err.Error(), now, retryAt)
 	a.logger.Error().Str("id", string(id)).Time("retry_at", retryAt).Err(err).Msg("autoload: failed; backing off")
 }
 

@@ -8,8 +8,8 @@ import (
 
 // SetClockForTest injects a clock used to timestamp Refresh()'s
 // snapshot. Lets tests assert on the timestamp deterministically.
-func (s *DiscoveryService) SetClockForTest(clock func() time.Time) {
-	s.bgClock = clock
+func (d *Discovery) SetClockForTest(clock func() time.Time) {
+	d.bgClock = clock
 }
 
 // Test-only exports of internal helpers so external _test packages can

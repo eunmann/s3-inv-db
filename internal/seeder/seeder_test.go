@@ -27,7 +27,7 @@ func TestRun_GeneratesValidIndexes(t *testing.T) {
 		Logger:    zerolog.Nop(),
 	}
 
-	if err := seeder.Run(cfg); err != nil {
+	if err := seeder.Run(t.Context(), cfg); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 
@@ -87,7 +87,7 @@ func TestRun_DistinctInventoriesWithDefaultSeed(t *testing.T) {
 		Logger:    zerolog.Nop(),
 	}
 
-	if err := seeder.Run(cfg); err != nil {
+	if err := seeder.Run(t.Context(), cfg); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 
@@ -156,12 +156,12 @@ func TestGenerateInventory_Deterministic(t *testing.T) {
 		Logger:    zerolog.Nop(),
 	}
 
-	info1, err := seeder.GenerateInventory(cfg1, 1, 12345)
+	info1, err := seeder.GenerateInventory(t.Context(), cfg1, 1, 12345)
 	if err != nil {
 		t.Fatalf("generate inventory 1: %v", err)
 	}
 
-	info2, err := seeder.GenerateInventory(cfg2, 1, 12345)
+	info2, err := seeder.GenerateInventory(t.Context(), cfg2, 1, 12345)
 	if err != nil {
 		t.Fatalf("generate inventory 2: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestGetGeneratorConfig_PresetValues(t *testing.T) {
 func TestRun_RejectsZeroAndNegativeCount(t *testing.T) {
 	for _, count := range []int{0, -1} {
 		t.Run(fmt.Sprintf("count=%d", count), func(t *testing.T) {
-			err := seeder.Run(seeder.Config{
+			err := seeder.Run(t.Context(), seeder.Config{
 				OutputDir: t.TempDir(),
 				Count:     count,
 				Objects:   10,
@@ -260,7 +260,7 @@ func TestRun_RejectsZeroAndNegativeCount(t *testing.T) {
 func TestRun_RejectsZeroAndNegativeObjects(t *testing.T) {
 	for _, objects := range []int{0, -1} {
 		t.Run(fmt.Sprintf("objects=%d", objects), func(t *testing.T) {
-			err := seeder.Run(seeder.Config{
+			err := seeder.Run(t.Context(), seeder.Config{
 				OutputDir: t.TempDir(),
 				Count:     1,
 				Objects:   objects,
@@ -278,7 +278,7 @@ func TestRun_DistinctInventoryHashAcrossAllPairs(t *testing.T) {
 	// Original test only checked adjacent pairs; this catches any
 	// coincidental periodicity in the seed math by comparing every pair.
 	tmpDir := t.TempDir()
-	if err := seeder.Run(seeder.Config{
+	if err := seeder.Run(t.Context(), seeder.Config{
 		OutputDir: tmpDir,
 		Count:     4,
 		Objects:   200,

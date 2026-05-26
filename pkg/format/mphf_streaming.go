@@ -243,7 +243,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		Msg("MPHF: bbhash.New complete")
 
 	// Write MPHF to disk
-	mphPath := filepath.Join(outDir, "mph.bin")
+	mphPath := filepath.Join(outDir, MPHFile)
 	mphFile, err := os.Create(mphPath)
 	if err != nil {
 		return fmt.Errorf("create mph file: %w", err)
@@ -285,13 +285,6 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	}
 	b.hashes = nil
 
-	// =========================================================================
-	// OPTIMIZATION: scatter fingerprints + positions directly into an
-	// mmap'd output file. Previous path allocated two N-element heap
-	// slices, filled them, then handed them to writeArraysParallel
-	// which serialised to disk. With direct-mmap-write the scatter
-	// loop writes through the page cache: zero heap intermediate.
-	// =========================================================================
 	log.Debug().Msg("MPHF: writing combined fp+pos via mmap")
 	mapStart := time.Now()
 	if err := writeCombinedMmap(outDir, n, hashPositions, b.fingerprints.Slice(), b.preorderPos.Slice()); err != nil {
@@ -309,7 +302,6 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		return fmt.Errorf("close preorderPos: %w", err)
 	}
 	b.preorderPos = nil
-	runtime.GC()
 
 	log.Debug().Msg("MPHF: writing prefix blob")
 
@@ -489,8 +481,8 @@ func mphfWorkerCount(n int) int {
 // writePrefixBlobPreorder writes prefixes in preorder (original Add order) for GetPrefix.
 // This reads from the temp file in sequence.
 func (b *StreamingMPHFBuilder) writePrefixBlobPreorder(outDir string) error {
-	blobPath := filepath.Join(outDir, "prefix_blob.bin")
-	offsetsPath := filepath.Join(outDir, "prefix_offsets.u64")
+	blobPath := filepath.Join(outDir, PrefixBlobFile)
+	offsetsPath := filepath.Join(outDir, PrefixOffsetsFile)
 
 	writer, err := NewBlobWriter(blobPath, offsetsPath)
 	if err != nil {
@@ -596,7 +588,7 @@ func (b *StreamingMPHFBuilder) writePrefixBlobDictionary(outDir string) error {
 
 func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	// Create empty mph file
-	mphPath := filepath.Join(outDir, "mph.bin")
+	mphPath := filepath.Join(outDir, MPHFile)
 	if err := os.WriteFile(mphPath, nil, FilePerm); err != nil {
 		return fmt.Errorf("write empty mph: %w", err)
 	}
@@ -623,8 +615,8 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 		return nil
 	}
 
-	blobPath := filepath.Join(outDir, "prefix_blob.bin")
-	offsetsPath := filepath.Join(outDir, "prefix_offsets.u64")
+	blobPath := filepath.Join(outDir, PrefixBlobFile)
+	offsetsPath := filepath.Join(outDir, PrefixOffsetsFile)
 	writer, err := NewBlobWriter(blobPath, offsetsPath)
 	if err != nil {
 		return fmt.Errorf("create empty blob writer: %w", err)

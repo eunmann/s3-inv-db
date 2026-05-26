@@ -123,6 +123,7 @@ type Info struct {
 	LoadedAt             time.Time `json:"loaded_at,omitzero"`
 	LastAccessedAt       time.Time `json:"last_accessed_at,omitzero"`
 	AutoLoadBackoffUntil time.Time `json:"auto_load_backoff_until,omitzero"`
+	LastAutoLoadFailedAt time.Time `json:"last_auto_load_failed_at,omitzero"`
 	UserUnloadedAt       time.Time `json:"user_unloaded_at,omitzero"`
 	Name                 string    `json:"name"`
 	Path                 string    `json:"path"`
@@ -137,7 +138,7 @@ type Info struct {
 	// load (StateLoading → StateLoaded transition). Persisted to SQLite
 	// so a server restart preserves it for runs that are still in
 	// StateLoaded. Surfaced to the UI so auto-loaded runs (which do not
-	// go through jobs.Manager and therefore have no JobStore record)
+	// go through jobs.Scheduler and therefore have no JobStore record)
 	// still show a load time.
 	LoadDuration time.Duration `json:"load_duration_ns,omitempty"`
 	Pinned       bool          `json:"pinned"`

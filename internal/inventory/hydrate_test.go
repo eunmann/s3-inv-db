@@ -7,7 +7,7 @@ import (
 )
 
 func TestHydrate_NonLoadedStateKeepsAsIs(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	info := inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StateNotLoaded}
 	if err := mgr.Hydrate(t.Context(), info, ""); err != nil {
 		t.Fatalf("Hydrate: %v", err)
@@ -22,7 +22,7 @@ func TestHydrate_NonLoadedStateKeepsAsIs(t *testing.T) {
 }
 
 func TestHydrate_LoadedStateOpenFailureBecomesError(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	info := inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StateLoaded}
 	// indexDir doesn't exist on disk → Open will fail.
 	if err := mgr.Hydrate(t.Context(), info, "/nonexistent/index-dir"); err != nil {
@@ -41,7 +41,7 @@ func TestHydrate_LoadedStateOpenFailureBecomesError(t *testing.T) {
 }
 
 func TestHydrate_DuplicateID(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	info := inventory.Info{ID: "id1", Name: "n", Path: "p", State: inventory.StateNotLoaded}
 	if err := mgr.Hydrate(t.Context(), info, ""); err != nil {
 		t.Fatal(err)

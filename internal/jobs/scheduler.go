@@ -25,12 +25,25 @@ var ErrNotFound = errors.New("job not found")
 // ErrShutdown is returned by Submit after Shutdown has been called.
 var ErrShutdown = errors.New("job manager is shut down")
 
-// Manager owns the in-memory registry of live jobs and their cancel
-// handles. Job snapshots are persisted to Store on every transition and
-// broadcast on Bus so the SSE handler can push updates to the UI.
-type Manager struct {
+// jobStore is the persistence sink Scheduler writes job snapshots to.
+// Defaulted to a no-op so tests can construct a Scheduler without a
+// real database.
+type jobStore interface {
+	Upsert(ctx context.Context, j Job) error
+}
+
+type noopJobStore struct{}
+
+func (noopJobStore) Upsert(context.Context, Job) error { return nil }
+
+// Scheduler owns the in-memory registry of live jobs and their cancel
+// handles. Job snapshots are persisted to the attached store on every
+// transition and broadcast on Bus so the SSE handler can push updates
+// to the UI. When no store is wired (via SetStore or NewScheduler's store
+// arg) persistence is silently dropped.
+type Scheduler struct {
 	logger   zerolog.Logger
-	store    *Store
+	store    jobStore
 	bus      *Bus
 	cancels  map[ID]context.CancelFunc
 	wg       sync.WaitGroup
@@ -38,21 +51,34 @@ type Manager struct {
 	shutdown bool
 }
 
-// NewManager wires a Store and a Bus. Logger is used for background
-// goroutine errors that can't surface to a caller; zerolog.Nop() if not
-// supplied via SetLogger.
-func NewManager(store *Store, bus *Bus) *Manager {
-	return &Manager{
-		store:   store,
+// Option configures a Scheduler at construction. See WithLogger.
+type Option func(*Scheduler)
+
+// WithLogger installs the Scheduler's background logger; without it,
+// background goroutine errors that can't surface to a caller are
+// suppressed (zerolog.Nop()).
+func WithLogger(l zerolog.Logger) Option {
+	return func(s *Scheduler) { s.logger = l }
+}
+
+// NewScheduler wires a Store and a Bus. A nil store is replaced with a
+// no-op so tests don't need a SQLite handle.
+func NewScheduler(store *Store, bus *Bus, opts ...Option) *Scheduler {
+	s := &Scheduler{
 		bus:     bus,
 		cancels: make(map[ID]context.CancelFunc),
 		logger:  zerolog.Nop(),
+		store:   noopJobStore{},
 	}
-}
+	if store != nil {
+		s.store = store
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
 
-// SetLogger replaces the Manager's background logger. Safe to call once
-// at wiring time before any Submit.
-func (m *Manager) SetLogger(l zerolog.Logger) { m.logger = l }
+	return s
+}
 
 // Submit creates a job in the queued state, kicks off work on a fresh
 // goroutine, and returns the initial snapshot. The cancel handle is
@@ -62,7 +88,7 @@ func (m *Manager) SetLogger(l zerolog.Logger) { m.logger = l }
 // The parent ctx is used only to plumb logger/values into the job (via
 // context.WithoutCancel) — the job's lifetime is decoupled from the
 // caller's so the work outlives its submitter (e.g. an HTTP request).
-func (m *Manager) Submit(parent context.Context, invID inventory.ID, kind Kind, work Work) (Job, error) {
+func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind, work Work) (Job, error) {
 	id, err := newJobID()
 	if err != nil {
 		return Job{}, fmt.Errorf("mint job id: %w", err)
@@ -72,9 +98,9 @@ func (m *Manager) Submit(parent context.Context, invID inventory.ID, kind Kind, 
 	// with the goroutine launch. That way Shutdown's wg.Wait can't miss
 	// a goroutine that was about to start.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
-	m.mu.Lock()
-	if m.shutdown {
-		m.mu.Unlock()
+	s.mu.Lock()
+	if s.shutdown {
+		s.mu.Unlock()
 		cancel()
 
 		return Job{}, ErrShutdown
@@ -86,28 +112,28 @@ func (m *Manager) Submit(parent context.Context, invID inventory.ID, kind Kind, 
 		Kind:        kind,
 		State:       StateQueued,
 	}
-	if err := m.store.Upsert(ctx, job); err != nil {
-		m.mu.Unlock()
+	if err := s.store.Upsert(ctx, job); err != nil {
+		s.mu.Unlock()
 		cancel()
 
 		return Job{}, fmt.Errorf("queue job %s: %w", job.ID, err)
 	}
-	m.cancels[job.ID] = cancel
-	m.wg.Add(1)
-	m.mu.Unlock()
+	s.cancels[job.ID] = cancel
+	s.wg.Add(1)
+	s.mu.Unlock()
 
-	m.bus.Publish(job)
-	go m.run(ctx, cancel, job, work)
+	s.bus.Publish(job)
+	go s.run(ctx, cancel, job, work)
 
 	return job, nil
 }
 
 // Cancel signals the cancel func associated with id. Returns ErrNotFound
 // if the job isn't currently live (already finished, or never existed).
-func (m *Manager) Cancel(id ID) error {
-	m.mu.Lock()
-	cancel, ok := m.cancels[id]
-	m.mu.Unlock()
+func (s *Scheduler) Cancel(id ID) error {
+	s.mu.Lock()
+	cancel, ok := s.cancels[id]
+	s.mu.Unlock()
 	if !ok {
 		return ErrNotFound
 	}
@@ -121,17 +147,17 @@ func (m *Manager) Cancel(id ID) error {
 // finish, up to ctx's deadline. Idempotent. Call from the server's
 // graceful shutdown path so in-flight builds don't outlive the
 // process.
-func (m *Manager) Shutdown(ctx context.Context) error {
-	m.mu.Lock()
-	m.shutdown = true
-	for _, cancel := range m.cancels {
+func (s *Scheduler) Shutdown(ctx context.Context) error {
+	s.mu.Lock()
+	s.shutdown = true
+	for _, cancel := range s.cancels {
 		cancel()
 	}
-	m.mu.Unlock()
+	s.mu.Unlock()
 
 	done := make(chan struct{})
 	go func() {
-		m.wg.Wait()
+		s.wg.Wait()
 		close(done)
 	}()
 	select {
@@ -142,18 +168,18 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (m *Manager) run(ctx context.Context, cancel context.CancelFunc, job Job, work Work) {
-	defer m.wg.Done()
+func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job, work Work) {
+	defer s.wg.Done()
 	defer func() {
-		m.mu.Lock()
-		delete(m.cancels, job.ID)
-		m.mu.Unlock()
+		s.mu.Lock()
+		delete(s.cancels, job.ID)
+		s.mu.Unlock()
 		cancel()
 	}()
 
 	job.State = StateRunning
 	job.StartedAt = time.Now()
-	m.persistAndPublish(ctx, &job)
+	s.persistAndPublish(ctx, &job)
 
 	// report applies a non-zero diff to the job and broadcasts. A stage
 	// transition resets quantitative progress so the UI doesn't show
@@ -175,7 +201,7 @@ func (m *Manager) run(ctx context.Context, cancel context.CancelFunc, job Job, w
 		if u.BytesDone > 0 {
 			job.BytesDone = u.BytesDone
 		}
-		m.persistAndPublish(ctx, &job)
+		s.persistAndPublish(ctx, &job)
 	}
 
 	err := work(ctx, report)
@@ -195,18 +221,18 @@ func (m *Manager) run(ctx context.Context, cancel context.CancelFunc, job Job, w
 	}
 	// Final persist must succeed even after ctx is cancelled — that's
 	// how the UI learns the job actually transitioned to cancelled/failed.
-	m.persistAndPublish(context.WithoutCancel(ctx), &job)
+	s.persistAndPublish(context.WithoutCancel(ctx), &job)
 }
 
-func (m *Manager) persistAndPublish(ctx context.Context, j *Job) {
-	if err := m.store.Upsert(ctx, *j); err != nil {
+func (s *Scheduler) persistAndPublish(ctx context.Context, j *Job) {
+	if err := s.store.Upsert(ctx, *j); err != nil {
 		// Storage failure shouldn't kill the worker, but the operator
 		// needs to know. The job continues; subscribers see the
 		// in-memory state via the bus.
-		m.logger.Error().Err(err).Stringer("job_id", j.ID).Str("state", string(j.State)).
+		s.logger.Error().Err(err).Stringer("job_id", j.ID).Str("state", string(j.State)).
 			Msg("persist job state")
 	}
-	m.bus.Publish(*j)
+	s.bus.Publish(*j)
 }
 
 func newJobID() (ID, error) {

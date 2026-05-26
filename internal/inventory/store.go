@@ -37,6 +37,7 @@ func (s *Store) Upsert(ctx context.Context, info Info) error {
 	loadedAt := unixOrZero(info.LoadedAt)
 	userUnloadedAt := unixOrZero(info.UserUnloadedAt)
 	backoffUntil := unixOrZero(info.AutoLoadBackoffUntil)
+	failedAt := unixOrZero(info.LastAutoLoadFailedAt)
 	lastAccessed := unixOrZero(info.LastAccessedAt)
 	_, err := s.db.ExecContext(ctx, `
         INSERT INTO inventories (
@@ -44,29 +45,31 @@ func (s *Store) Upsert(ctx context.Context, info Info) error {
             node_count, max_depth, has_tier_data,
             loaded_at, pinned, user_unloaded_at, index_bytes,
             auto_load_failure_count, auto_load_backoff_until,
+            last_auto_load_failed_at,
             last_accessed_at, load_duration_ns, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
-            name                    = excluded.name,
-            path                    = excluded.path,
-            state                   = excluded.state,
-            error                   = excluded.error,
-            node_count              = excluded.node_count,
-            max_depth               = excluded.max_depth,
-            has_tier_data           = excluded.has_tier_data,
-            loaded_at               = excluded.loaded_at,
-            pinned                  = excluded.pinned,
-            user_unloaded_at        = excluded.user_unloaded_at,
-            index_bytes             = excluded.index_bytes,
-            auto_load_failure_count = excluded.auto_load_failure_count,
-            auto_load_backoff_until = excluded.auto_load_backoff_until,
-            last_accessed_at        = excluded.last_accessed_at,
-            load_duration_ns        = excluded.load_duration_ns,
-            updated_at              = excluded.updated_at`,
+            name                     = excluded.name,
+            path                     = excluded.path,
+            state                    = excluded.state,
+            error                    = excluded.error,
+            node_count               = excluded.node_count,
+            max_depth                = excluded.max_depth,
+            has_tier_data            = excluded.has_tier_data,
+            loaded_at                = excluded.loaded_at,
+            pinned                   = excluded.pinned,
+            user_unloaded_at         = excluded.user_unloaded_at,
+            index_bytes              = excluded.index_bytes,
+            auto_load_failure_count  = excluded.auto_load_failure_count,
+            auto_load_backoff_until  = excluded.auto_load_backoff_until,
+            last_auto_load_failed_at = excluded.last_auto_load_failed_at,
+            last_accessed_at         = excluded.last_accessed_at,
+            load_duration_ns         = excluded.load_duration_ns,
+            updated_at               = excluded.updated_at`,
 		info.ID, info.Name, info.Path, string(info.State), info.Error,
 		info.NodeCount, info.MaxDepth, hasTier,
 		loadedAt, pinned, userUnloadedAt, info.IndexBytes,
-		info.AutoLoadFailureCount, backoffUntil,
+		info.AutoLoadFailureCount, backoffUntil, failedAt,
 		lastAccessed, int64(info.LoadDuration), time.Now().Unix(),
 	)
 	if err != nil {
@@ -81,6 +84,7 @@ const inventorySelectCols = `
     node_count, max_depth, has_tier_data, loaded_at,
     pinned, user_unloaded_at, index_bytes,
     auto_load_failure_count, auto_load_backoff_until,
+    last_auto_load_failed_at,
     last_accessed_at, load_duration_ns`
 
 // Get fetches one inventory by ID. Returns ErrStoreNotFound when the
@@ -148,12 +152,13 @@ func scanInfo(r rowScanner) (Info, error) {
 	var info Info
 	var state string
 	var hasTier, pinned int
-	var loadedAt, userUnloadedAt, backoffUntil, lastAccessed, loadDurationNs int64
+	var loadedAt, userUnloadedAt, backoffUntil, failedAt, lastAccessed, loadDurationNs int64
 	if err := r.Scan(
 		&info.ID, &info.Name, &info.Path, &state, &info.Error,
 		&info.NodeCount, &info.MaxDepth, &hasTier, &loadedAt,
 		&pinned, &userUnloadedAt, &info.IndexBytes,
-		&info.AutoLoadFailureCount, &backoffUntil, &lastAccessed, &loadDurationNs,
+		&info.AutoLoadFailureCount, &backoffUntil, &failedAt,
+		&lastAccessed, &loadDurationNs,
 	); err != nil {
 		return Info{}, fmt.Errorf("scan inventory: %w", err)
 	}
@@ -163,6 +168,7 @@ func scanInfo(r rowScanner) (Info, error) {
 	info.LoadedAt = timeFromUnix(loadedAt)
 	info.UserUnloadedAt = timeFromUnix(userUnloadedAt)
 	info.AutoLoadBackoffUntil = timeFromUnix(backoffUntil)
+	info.LastAutoLoadFailedAt = timeFromUnix(failedAt)
 	info.LastAccessedAt = timeFromUnix(lastAccessed)
 	info.LoadDuration = time.Duration(loadDurationNs)
 

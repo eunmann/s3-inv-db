@@ -99,6 +99,53 @@ func TestApply_RecoversFromDirtyState(t *testing.T) {
 	}
 }
 
+// TestApply_DirtyRecoveryReRunsFailedMigration guards against the
+// previous bug: when schema_migrations recorded (version=N, dirty=true)
+// because a migration aborted mid-way, Apply's recovery called
+// Force(N), which marks N as cleanly applied without re-running the
+// SQL — the migration's effects were silently lost. The correct
+// recovery rewinds to N-1 so the next Up retries N from scratch.
+func TestApply_DirtyRecoveryReRunsFailedMigration(t *testing.T) {
+	db := openMemDB(t)
+	if err := migrate.Apply(db); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	info, _ := migrate.Version(db)
+	if info.Version < 5 {
+		t.Skipf("repo has only %d migrations; this test needs >= 5", info.Version)
+	}
+
+	ctx := t.Context()
+	// Simulate a partial apply of the most recent migration: drop the
+	// column it added and mark the schema_migrations row dirty at the
+	// current version. Without the Force(N-1) fix, Apply would clear
+	// dirty and leave the schema permanently missing the column.
+	if _, err := db.ExecContext(ctx, `ALTER TABLE inventories DROP COLUMN last_auto_load_failed_at`); err != nil {
+		t.Fatalf("simulate partial apply (drop column): %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE schema_migrations SET dirty = 1`); err != nil {
+		t.Fatalf("seed dirty: %v", err)
+	}
+
+	if err := migrate.Apply(db); err != nil {
+		t.Fatalf("Apply with dirty + missing column: %v", err)
+	}
+
+	// Both invariants must hold post-recovery: dirty is cleared AND
+	// the dropped column is restored by the re-run.
+	info2, _ := migrate.Version(db)
+	if info2.Dirty {
+		t.Error("dirty flag still set after Apply")
+	}
+	var name string
+	err := db.QueryRowContext(ctx,
+		`SELECT name FROM pragma_table_info('inventories') WHERE name='last_auto_load_failed_at'`,
+	).Scan(&name)
+	if err != nil {
+		t.Errorf("last_auto_load_failed_at column missing after dirty recovery: %v", err)
+	}
+}
+
 func TestApply_TolerantOfPreExistingTables(t *testing.T) {
 	db := openMemDB(t)
 	ctx := t.Context()

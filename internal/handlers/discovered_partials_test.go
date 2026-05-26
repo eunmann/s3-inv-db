@@ -13,10 +13,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
-	"github.com/eunmann/s3-inv-db/internal/templates"
-	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
-	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/go-chi/chi/v5"
 )
@@ -52,39 +49,20 @@ type fakeBuilder struct {
 	buildResp string
 }
 
-func (f *fakeBuilder) BuildWith(_ context.Context, _, _, _, _ string, _ func(string, int64, int64)) (string, error) {
+func (f *fakeBuilder) BuildWith(_ context.Context, _ inventory.CacheKey, _ string, _ func(string, int64, int64)) (string, error) {
 	return f.buildResp, f.buildErr
 }
 
 func newDiscoveredHandlers(t *testing.T, disc inventory.Discoverer, ldr inventory.IndexBuilder) *handlers.Handlers {
 	t.Helper()
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
-	renderer, err := templates.New()
-	if err != nil {
-		t.Fatalf("renderer: %v", err)
+	opts := []handlers.Option{handlers.WithDiscoverer(disc)}
+	if ldr != nil {
+		opts = append(opts, handlers.WithLoader(ldr))
 	}
 
-	db := dbtest.OpenMemDB(t)
-	invStore, err := inventory.NewStore(db)
-	if err != nil {
-		t.Fatalf("inventory.NewStore: %v", err)
-	}
-	mgr.SetStore(invStore)
-	jobStore := jobs.NewStore(db)
-	bus := jobs.NewBus(8)
-	jobMgr := jobs.NewManager(jobStore, bus)
-
-	return handlers.NewWithConfig(handlers.Config{
-		Manager:    mgr,
-		Renderer:   renderer,
-		PriceTable: pricing.DefaultUSEast1Prices(),
-		Discoverer: disc,
-		Loader:     ldr,
-		JobMgr:     jobMgr,
-		JobStore:   jobStore,
-		JobBus:     bus,
-	})
+	return newWiredHandlers(t, mgr, opts...)
 }
 
 func waitForJobInState(t *testing.T, store *jobs.Store, invID inventory.ID, state jobs.State) jobs.Job {
@@ -115,8 +93,8 @@ func chiCtxWithParams(r *http.Request, pairs ...string) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }
 
-func (f *fakeBuilder) RemoveCache(_, _, _ string) error             { return nil }
-func (f *fakeBuilder) CacheSizeBytes(_, _, _ string) (int64, error) { return 0, nil }
+func (f *fakeBuilder) RemoveCache(inventory.CacheKey) error             { return nil }
+func (f *fakeBuilder) CacheSizeBytes(inventory.CacheKey) (int64, error) { return 0, nil }
 
 func TestLoadDiscoveredRowPartial_FindError(t *testing.T) {
 	h := newDiscoveredHandlers(t,

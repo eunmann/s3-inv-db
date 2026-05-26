@@ -1,6 +1,7 @@
 package format
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"path/filepath"
@@ -280,11 +281,7 @@ func (w *DictPrefixWriter) Close() error {
 		errs = append(errs, fmt.Errorf("close offsets: %w", err))
 	}
 
-	if len(errs) > 0 {
-		return errs[0]
-	}
-
-	return nil
+	return errors.Join(errs...)
 }
 
 // SegmentCount returns the number of unique segments interned so far.
@@ -445,19 +442,7 @@ func (r *DictPrefixReader) Count() uint64 {
 
 // Close releases resources.
 func (r *DictPrefixReader) Close() error {
-	var firstErr error
-
-	if err := r.dict.Close(); err != nil && firstErr == nil {
-		firstErr = err
-	}
-	if err := r.segIDs.Close(); err != nil && firstErr == nil {
-		firstErr = err
-	}
-	if err := r.offsets.Close(); err != nil && firstErr == nil {
-		firstErr = err
-	}
-
-	return firstErr
+	return errors.Join(r.dict.Close(), r.segIDs.Close(), r.offsets.Close())
 }
 
 // SplitPrefix splits a prefix into path segments by "/". Trailing

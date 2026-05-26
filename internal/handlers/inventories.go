@@ -100,13 +100,14 @@ func (h *Handlers) groupDiscoveredForAPI(_ *http.Request, views []inventory.Merg
 			HasTierData: v.HasTierData,
 			ManifestKey: v.ManifestKey,
 		}
-		if info, ok := h.manager.Get(v.CompositeID()); ok && !info.LoadedAt.IsZero() {
-			run.LoadedAt = info.LoadedAt.UTC().Format(time.RFC3339)
-		}
-		if h.loader != nil && v.Run != "" {
-			if n, err := h.loader.CacheSizeBytes(v.SourceBucket, v.Name, v.Run); err == nil {
-				run.CacheBytes = n
+		if info, ok := h.manager.Get(v.CompositeID()); ok {
+			if !info.LoadedAt.IsZero() {
+				run.LoadedAt = info.LoadedAt.UTC().Format(time.RFC3339)
 			}
+			// Prefer Info.IndexBytes (cached at load time) over an
+			// on-the-fly cache dir walk: per-row CacheSizeBytes used to
+			// dominate page latency on slow filesystems.
+			run.CacheBytes = int64(info.IndexBytes)
 		}
 		out[idx].Runs = append(out[idx].Runs, run)
 	}
@@ -401,18 +402,16 @@ func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInvent
 			row.AutoLoadBackoffUntil = info.AutoLoadBackoffUntil.UTC().Format("15:04:05")
 		}
 	}
-	if h.jobStore != nil {
-		j, err := h.jobStore.LatestForInventory(r.Context(), v.CompositeID())
-		switch {
-		case err == nil:
-			row.LatestJob = &j
-		case errors.Is(err, jobs.ErrStoreNotFound):
-			// no jobs yet — fine
-		default:
-			zerolog.Ctx(r.Context()).Warn().Err(err).
-				Stringer("composite", v.CompositeID()).
-				Msg("look up latest job for inventories page")
-		}
+	j, err := h.jobStore.LatestForInventory(r.Context(), v.CompositeID())
+	switch {
+	case err == nil:
+		row.LatestJob = &j
+	case errors.Is(err, jobs.ErrStoreNotFound):
+		// no jobs yet — fine
+	default:
+		zerolog.Ctx(r.Context()).Warn().Err(err).
+			Stringer("composite", v.CompositeID()).
+			Msg("look up latest job for inventories page")
 	}
 	cs := h.measureCacheSize(r, v.Inventory)
 	row.CacheBytes, row.CacheBytesH = cs.Bytes, cs.Human
@@ -423,9 +422,6 @@ func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInvent
 }
 
 func (h *Handlers) annotateGroupsFromConfig(ctx context.Context, groups []InventoryGroup) {
-	if h.configStore == nil {
-		return
-	}
 	for i := range groups {
 		g := &groups[i]
 		cfg, err := h.configStore.Get(ctx, g.SourceBucket, g.Name)

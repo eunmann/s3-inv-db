@@ -193,21 +193,21 @@ func (b *CoreStatsBuilder) Finalize() error {
 // Close releases the mmap and closes the file without finalizing.
 // Used for error paths; the caller should remove the file separately.
 func (b *CoreStatsBuilder) Close() error {
-	var firstErr error
+	var errs []error
 	if b.data != nil {
-		if err := unix.Munmap(b.data); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("core stats munmap: %w", err)
+		if err := unix.Munmap(b.data); err != nil {
+			errs = append(errs, fmt.Errorf("core stats munmap: %w", err))
 		}
 		b.data = nil
 	}
 	if b.file != nil {
-		if err := b.file.Close(); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("core stats close: %w", err)
+		if err := b.file.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("core stats close: %w", err))
 		}
 		b.file = nil
 	}
 
-	return firstErr
+	return errors.Join(errs...)
 }
 
 // CoreStatsReader reads the row-major core stats file. One mmap'd

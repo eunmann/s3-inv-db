@@ -5,39 +5,57 @@ package logging
 
 import (
 	"os"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
 	zerologlog "github.com/rs/zerolog/log"
 )
 
-// configureZerolog applies the project-wide zerolog defaults.
-// Idempotent — every entry point calls it so the first caller wins.
+// configureOnce guards the one-time zerolog package-global mutation.
+// Prior code mutated TimeFieldFormat / DurationFieldFormat from every
+// L() call, which races concurrent reads from goroutines that already
+// hold a logger reference.
+//
+//nolint:gochecknoglobals // sync.Once protecting a package-global zerolog mutation
+var configureOnce sync.Once
+
+// configureZerolog applies the project-wide zerolog defaults exactly
+// once per process. Safe to call from any goroutine.
 func configureZerolog() {
-	zerolog.TimeFieldFormat = time.RFC3339
-	zerolog.DurationFieldFormat = zerolog.DurationFormatString
+	configureOnce.Do(func() {
+		zerolog.TimeFieldFormat = time.RFC3339
+		zerolog.DurationFieldFormat = zerolog.DurationFormatString
+	})
 }
 
-// Init configures the global logger. Human=true selects a console
-// writer; debug=true lowers the global level to Debug.
-func Init(debug, human bool) {
+// Options configures the project-wide logger. Debug lowers the global
+// level to Debug; Human selects the console (timestamp-prefixed,
+// human-readable) writer instead of JSON.
+type Options struct {
+	Debug bool
+	Human bool
+}
+
+// Init configures the global logger using opts.
+func Init(opts Options) {
 	configureZerolog()
-	zerologlog.Logger = NewLogger(debug, human)
+	zerologlog.Logger = NewLogger(opts)
 }
 
 // NewLogger builds a configured zerolog.Logger for callers that prefer
 // passing a logger explicitly. Also sets zerolog's global level so
 // package-level zerolog calls share the same threshold.
-func NewLogger(debug, human bool) zerolog.Logger {
+func NewLogger(opts Options) zerolog.Logger {
 	configureZerolog()
 	level := zerolog.InfoLevel
-	if debug {
+	if opts.Debug {
 		level = zerolog.DebugLevel
 	}
 	zerolog.SetGlobalLevel(level)
 
 	var output zerolog.LevelWriter
-	if human {
+	if opts.Human {
 		output = zerolog.LevelWriterAdapter{Writer: zerolog.ConsoleWriter{
 			Out:        os.Stderr,
 			TimeFormat: time.RFC3339,

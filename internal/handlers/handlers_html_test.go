@@ -10,25 +10,19 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/templates"
-	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5"
 )
 
 // testFixture provides a test environment for HTML handler tests.
 type testFixture struct {
 	h   *handlers.Handlers
-	mgr *inventory.Manager
+	mgr *inventory.Catalog
 }
 
 func newTestFixture(t *testing.T) *testFixture {
 	t.Helper()
-	mgr := inventory.NewManager()
-	renderer, err := templates.New()
-	if err != nil {
-		t.Fatalf("failed to create renderer: %v", err)
-	}
-	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	mgr := inventory.NewCatalog(nil)
+	h := newWiredHandlers(t, mgr)
 
 	return &testFixture{h: h, mgr: mgr}
 }
@@ -434,6 +428,47 @@ func TestBrowsePage_HistoryRestoreReturnsFullPage(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "<title>") {
 		t.Error("history-restore /browse: response missing <title>")
+	}
+}
+
+// brokenRenderData is a struct that doesn't match any template's
+// expected shape — drives ExecuteTemplate into a mid-stream error.
+type brokenRenderData struct{ Foo int }
+
+// TestRenderHTML_BufferedFailure verifies the buffered-render contract:
+// when the renderer errors mid-stream, headers are not yet committed,
+// so http.Error can cleanly emit 500 + text/plain instead of leaking
+// partial HTML with a stale 200 + text/html.
+func TestRenderHTML_BufferedFailure(t *testing.T) {
+	f := newTestFixture(t)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	w := httptest.NewRecorder()
+
+	f.h.RenderHTMLForTest(w, req, "inventories.html", "render fail", brokenRenderData{Foo: 1})
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusInternalServerError)
+	}
+	ct := w.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("Content-Type = %q, want text/plain prefix", ct)
+	}
+}
+
+// TestRenderHTMLPartial_BufferedFailure same contract for partial renders.
+func TestRenderHTMLPartial_BufferedFailure(t *testing.T) {
+	f := newTestFixture(t)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	w := httptest.NewRecorder()
+
+	f.h.RenderHTMLPartialForTest(w, req, "inventory_row.html", "render fail", brokenRenderData{Foo: 1})
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusInternalServerError)
+	}
+	ct := w.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("Content-Type = %q, want text/plain prefix", ct)
 	}
 }
 

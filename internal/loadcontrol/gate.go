@@ -6,12 +6,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
+	"sync/atomic"
 
 	"github.com/eunmann/s3-inv-db/internal/budget"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
+
+// tokenCounter is incremented per Load to guarantee unique reservation
+// tokens even when two forced loads of the same id race within 1ns.
+//
+//nolint:gochecknoglobals // monotonic per-process counter; no shared state to leak across tests
+var tokenCounter atomic.Uint64
 
 // BudgetRefusedError carries the planner's verdict to the UI.
 type BudgetRefusedError struct {
@@ -24,12 +30,12 @@ func (e *BudgetRefusedError) Error() string {
 
 // Gate orchestrates one load lifecycle.
 type Gate struct {
-	manager *inventory.Manager
+	manager *inventory.Catalog
 	tracker *budget.Tracker
 	planner *budget.Planner
 }
 
-func New(manager *inventory.Manager, tracker *budget.Tracker, planner *budget.Planner) *Gate {
+func New(manager *inventory.Catalog, tracker *budget.Tracker, planner *budget.Planner) *Gate {
 	return &Gate{manager: manager, tracker: tracker, planner: planner}
 }
 
@@ -41,11 +47,13 @@ func (g *Gate) Load(ctx context.Context, id inventory.ID, build inventory.BuildF
 		EstimateBytes: opts.EstimateBytes,
 		All:           g.manager.List(),
 	})
-	if err != nil {
+	var refused *budget.PlannerRefusedError
+	if errors.As(err, &refused) {
+		if !opts.Force {
+			return &BudgetRefusedError{Plan: refused.Plan}
+		}
+	} else if err != nil {
 		return fmt.Errorf("plan: %w", err)
-	}
-	if !plan.Fits() && !opts.Force {
-		return &BudgetRefusedError{Plan: plan}
 	}
 
 	for _, victim := range plan.Evict {
@@ -60,7 +68,7 @@ func (g *Gate) Load(ctx context.Context, id inventory.ID, build inventory.BuildF
 		g.tracker.Remove(prevBytes)
 	}
 
-	token := fmt.Sprintf("%s-%d", id, time.Now().UnixNano())
+	token := fmt.Sprintf("%s-%d", id, tokenCounter.Add(1))
 	if err := g.tracker.Reserve(token, opts.EstimateBytes); err != nil {
 		if errors.Is(err, budget.ErrOverBudget) && !opts.Force {
 			return &BudgetRefusedError{Plan: plan}

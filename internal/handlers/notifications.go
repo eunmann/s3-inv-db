@@ -23,22 +23,20 @@ type NotificationsResponse struct {
 
 func (h *Handlers) collectNotifications(ctx context.Context) []Notification {
 	out := make([]Notification, 0, 8)
-	if h.configStore != nil {
-		configs, err := h.configStore.List(ctx)
-		if err == nil {
-			for i := range configs {
-				c := &configs[i]
-				if c.LastPollError == "" {
-					continue
-				}
-				out = append(out, Notification{
-					Kind:    "poll",
-					Title:   "Discovery poll failed",
-					Message: c.LastPollError,
-					Target:  c.Source + "/" + c.Name,
-					At:      c.LastPolledAt,
-				})
+	configs, err := h.configStore.List(ctx)
+	if err == nil {
+		for i := range configs {
+			c := &configs[i]
+			if c.LastPollError == "" {
+				continue
 			}
+			out = append(out, Notification{
+				Kind:    "poll",
+				Title:   "Discovery poll failed",
+				Message: c.LastPollError,
+				Target:  c.Source + "/" + c.Name,
+				At:      c.LastPolledAt,
+			})
 		}
 	}
 	infos := h.manager.List()
@@ -56,7 +54,7 @@ func (h *Handlers) collectNotifications(ctx context.Context) []Notification {
 			Title:   title,
 			Message: info.Error,
 			Target:  string(info.ID),
-			At:      info.AutoLoadBackoffUntil,
+			At:      info.LastAutoLoadFailedAt,
 		})
 	}
 	slices.SortFunc(out, func(a, b Notification) int { return b.At.Compare(a.At) })

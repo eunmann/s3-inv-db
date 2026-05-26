@@ -5,19 +5,18 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/dbtest"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
 )
 
-func openManagerWithStore(t *testing.T) (*inventory.Manager, *inventory.Store) {
+func openManagerWithStore(t *testing.T) (*inventory.Catalog, *inventory.Store) {
 	t.Helper()
 	db := dbtest.OpenMemDB(t)
 	store, err := inventory.NewStore(db)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	mgr := inventory.NewManager()
-	mgr.SetStore(store)
+	mgr := inventory.NewCatalog(store)
 	t.Cleanup(func() { _ = mgr.Close() })
 
 	return mgr, store

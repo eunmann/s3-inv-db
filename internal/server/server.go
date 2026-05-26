@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -55,6 +56,18 @@ type Config struct {
 	// discovery refresher rebuilds the cached snapshot the HTTP
 	// handlers serve. Zero means use DefaultDiscoveryRefreshInterval.
 	DiscoveryRefreshInterval time.Duration
+
+	// QueryBatchMax caps the number of prefixes accepted in one batch
+	// stats request. Zero means use the handler default.
+	QueryBatchMax int
+
+	// MetricsAddr, when non-empty, binds /metrics on its own listener;
+	// otherwise /metrics is mounted on the main router.
+	MetricsAddr string
+
+	// AutoLoadDryRun, when true, logs eviction + load decisions instead
+	// of acting on them.
+	AutoLoadDryRun bool
 }
 
 // DefaultDiscoveryRefreshInterval is the fallback cadence for the
@@ -66,15 +79,15 @@ const DefaultDiscoveryRefreshInterval = time.Minute
 type Server struct {
 	config      Config
 	router      *chi.Mux
-	manager     *inventory.Manager
+	manager     *inventory.Catalog
 	invStore    *inventory.Store
 	configStore *inventory.ConfigStore
 	jobStore    *jobs.Store
-	jobMgr      *jobs.Manager
+	jobMgr      *jobs.Scheduler
 	bldr        *loader.Loader
 	tracker     *budget.Tracker
 	autoloader  *autoload.AutoLoader
-	discovery   *inventory.DiscoveryService
+	discovery   *inventory.Discovery
 	handlers    *handlers.Handlers
 	server      *http.Server
 }
@@ -85,17 +98,10 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if cfg.DB == nil {
 		return nil, errNoDB
 	}
-	invStore, err := inventory.NewStore(cfg.DB)
+	stores, err := newStores(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("inventory store: %w", err)
+		return nil, err
 	}
-	configStore := inventory.NewConfigStore(cfg.DB)
-	jobStore := jobs.NewStore(cfg.DB)
-	jobBus := jobs.NewBus(64)
-	jobMgr := jobs.NewManager(jobStore, jobBus)
-	jobMgr.SetLogger(cfg.Logger)
-	mgr := inventory.NewManager()
-	mgr.SetStore(invStore)
 
 	renderer, err := templates.New()
 	if err != nil {
@@ -103,77 +109,37 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	tracker := budget.New(cfg.MaxIndexDisk, cfg.IndexHeadroomBytes)
-	planner := budget.NewPlanner(tracker, retentionLookup(configStore, cfg.AutoLoadRetentionDefault))
-	gate := loadcontrol.New(mgr, tracker, planner)
+	planner := budget.NewPlanner(tracker, retentionLookup(stores.config, cfg.AutoLoadRetentionDefault))
+	gate := loadcontrol.New(stores.catalog, tracker, planner)
 
-	var discovery *inventory.DiscoveryService
-	var bldr *loader.Loader
-	var s3Client *s3fetch.Client
-
-	if cfg.S3Source != "" {
-		wiring, err := newDiscoveryWiring(ctx, cfg)
-		if err != nil {
-			return nil, err
-		}
-		bldr = wiring.Loader
-		s3Client = wiring.Client
-		discovery = inventory.NewDiscoveryService(mgr, wiring.Discoverer, wiring.Loader)
-		sizer := loadcontrol.NewManifestSizer(s3Client)
-		discovery.SetGate(gate.Load, sizer.ManifestSize, cfg.IndexRatio)
-		cfg.Logger.Info().
-			Str("s3_source", cfg.S3Source).
-			Str("cache_dir", cfg.CacheDir).
-			Uint64("max_index_disk_bytes", cfg.MaxIndexDisk).
-			Msg("discovery + budget configured")
-	} else {
-		discovery = inventory.NewDiscoveryService(mgr, nil, nil)
+	discovery, bldr, err := newDiscovery(ctx, cfg, stores.catalog, gate)
+	if err != nil {
+		return nil, err
 	}
 
-	hcfg := handlers.Config{
-		Manager:     mgr,
-		Renderer:    renderer,
-		PriceTable:  cfg.PriceTable,
-		JobMgr:      jobMgr,
-		JobStore:    jobStore,
-		JobBus:      jobBus,
-		Discovery:   discovery,
-		Loader:      bldr,
-		ConfigStore: configStore,
-		Tracker:     tracker,
-	}
-	hcfg.DiscoveryRefreshInterval = cfg.DiscoveryRefreshInterval
-	if hcfg.DiscoveryRefreshInterval <= 0 {
-		hcfg.DiscoveryRefreshInterval = DefaultDiscoveryRefreshInterval
-	}
-	if cfg.S3Source != "" {
-		hcfg.S3SourceURI = cfg.S3Source
-	}
-
-	h := handlers.NewWithConfig(hcfg)
-
-	var al *autoload.AutoLoader
-	if cfg.AutoLoad && discovery != nil && discovery.Enabled() {
-		al = autoload.New(autoload.Config{
-			PollInterval:     cfg.PollInterval,
-			MaxConcurrency:   cfg.AutoLoadConcurrency,
-			DefaultRetention: cfg.AutoLoadRetentionDefault,
-		}, discovery, func(c context.Context, d inventory.Inventory) error {
-			return discovery.AutoLoadWith(c, d, nil)
-		}, configStore, mgr, &cfg.Logger)
-		cfg.Logger.Info().Msg("auto-loader configured")
-	}
+	h := handlers.New(
+		stores.catalog, renderer, cfg.PriceTable,
+		handlers.Deps{
+			JobMgr:      stores.jobs,
+			JobStore:    stores.jobStore,
+			JobBus:      stores.jobBus,
+			ConfigStore: stores.config,
+			Tracker:     tracker,
+		},
+		buildHandlerOptions(cfg, discovery, bldr)...,
+	)
 
 	s := &Server{
 		config:      cfg,
 		router:      chi.NewRouter(),
-		manager:     mgr,
-		invStore:    invStore,
-		configStore: configStore,
-		jobStore:    jobStore,
-		jobMgr:      jobMgr,
+		manager:     stores.catalog,
+		invStore:    stores.inv,
+		configStore: stores.config,
+		jobStore:    stores.jobStore,
+		jobMgr:      stores.jobs,
 		bldr:        bldr,
 		tracker:     tracker,
-		autoloader:  al,
+		autoloader:  newAutoLoader(cfg, discovery, stores.config, stores.catalog),
 		discovery:   discovery,
 		handlers:    h,
 	}
@@ -188,6 +154,119 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 
 	return s, nil
 }
+
+// serverStores bundles the persistence-backed singletons New constructs
+// from cfg.DB. Pulled out so New stays readable and the wiring is
+// testable in isolation.
+type serverStores struct {
+	inv      *inventory.Store
+	config   *inventory.ConfigStore
+	jobStore *jobs.Store
+	jobBus   *jobs.Bus
+	jobs     *jobs.Scheduler
+	catalog  *inventory.Catalog
+}
+
+func newStores(cfg Config) (serverStores, error) {
+	invStore, err := inventory.NewStore(cfg.DB)
+	if err != nil {
+		return serverStores{}, fmt.Errorf("inventory store: %w", err)
+	}
+	jobStore := jobs.NewStore(cfg.DB)
+	jobBus := jobs.NewBus(jobBusBuffer)
+
+	return serverStores{
+		inv:      invStore,
+		config:   inventory.NewConfigStore(cfg.DB),
+		jobStore: jobStore,
+		jobBus:   jobBus,
+		jobs:     jobs.NewScheduler(jobStore, jobBus, jobs.WithLogger(cfg.Logger)),
+		catalog:  inventory.NewCatalog(invStore),
+	}, nil
+}
+
+// newDiscovery wires the S3-side of the server. Returns a disabled
+// Discovery (and nil loader) when --s3-source is unset.
+func newDiscovery(ctx context.Context, cfg Config, catalog *inventory.Catalog, gate *loadcontrol.Gate) (*inventory.Discovery, *loader.Loader, error) {
+	if cfg.S3Source == "" {
+		return inventory.NewDiscovery(catalog), nil, nil
+	}
+	wiring, err := newDiscoveryWiring(ctx, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	sizer := loadcontrol.NewManifestSizer(wiring.Client)
+	disc := inventory.NewDiscovery(catalog,
+		inventory.WithBackend(wiring.Discoverer, wiring.Loader),
+		inventory.WithGate(gate.Load, sizer.ManifestSize, cfg.IndexRatio),
+	)
+	cfg.Logger.Info().
+		Str("s3_source", cfg.S3Source).
+		Str("cache_dir", cfg.CacheDir).
+		Uint64("max_index_disk_bytes", cfg.MaxIndexDisk).
+		Msg("discovery + budget configured")
+
+	return disc, wiring.Loader, nil
+}
+
+func buildHandlerOptions(cfg Config, discovery *inventory.Discovery, bldr *loader.Loader) []handlers.Option {
+	refreshInterval := cfg.DiscoveryRefreshInterval
+	if refreshInterval <= 0 {
+		refreshInterval = DefaultDiscoveryRefreshInterval
+	}
+	hopts := []handlers.Option{
+		handlers.WithDiscovery(discovery),
+		handlers.WithDiscoveryRefreshInterval(refreshInterval),
+	}
+	if bldr != nil {
+		hopts = append(hopts, handlers.WithLoader(bldr), handlers.WithCacheStore(bldr))
+	}
+	if cfg.S3Source != "" {
+		hopts = append(hopts, handlers.WithS3Source(cfg.S3Source))
+	}
+	if cfg.QueryBatchMax > 0 {
+		hopts = append(hopts, handlers.WithQueryBatchMax(cfg.QueryBatchMax))
+	}
+
+	return hopts
+}
+
+func newAutoLoader(cfg Config, discovery *inventory.Discovery, configStore *inventory.ConfigStore, catalog *inventory.Catalog) *autoload.AutoLoader {
+	if !cfg.AutoLoad || !discovery.Enabled() {
+		return nil
+	}
+	loadFn := func(c context.Context, d inventory.Inventory) error {
+		return discovery.AutoLoadWith(c, d, nil)
+	}
+	if cfg.AutoLoadDryRun {
+		// In dry-run we never call the real loader. Returning nil signals
+		// "load succeeded" so the autoload bookkeeping still records the
+		// attempt — operators can compare logs to actual load activity.
+		loadFn = func(_ context.Context, d inventory.Inventory) error {
+			cfg.Logger.Info().Stringer("id", d.CompositeID()).Msg("autoload: dry-run, skipping load")
+
+			return nil
+		}
+		cfg.Logger.Info().Msg("auto-loader dry-run enabled: load actions are logged, not performed")
+	}
+	al := autoload.New(autoload.Config{
+		PollInterval:     cfg.PollInterval,
+		MaxConcurrency:   cfg.AutoLoadConcurrency,
+		DefaultRetention: cfg.AutoLoadRetentionDefault,
+	}, autoload.Deps{
+		Discovery:   discovery,
+		Loader:      loadFn,
+		ConfigStore: configStore,
+		Manager:     catalog,
+	}, &cfg.Logger)
+	cfg.Logger.Info().Msg("auto-loader configured")
+
+	return al
+}
+
+// jobBusBuffer is the capacity of the job-events bus the SSE handler
+// drains. Sized for headroom between successive UI ticks.
+const jobBusBuffer = 64
 
 // retentionLookup returns a budget.RetentionFunc that resolves
 // per-configuration retention from the ConfigStore, falling back to
@@ -210,7 +289,7 @@ func retentionLookup(store *inventory.ConfigStore, fallback uint32) budget.Reten
 // its on-disk size to the budget tracker so post-restart eviction
 // decisions see an accurate baseline.
 func (s *Server) backfillTracker(ctx context.Context, logger zerolog.Logger) {
-	if s.tracker == nil || s.bldr == nil {
+	if s.bldr == nil {
 		return
 	}
 	list := s.manager.List()
@@ -225,8 +304,12 @@ func (s *Server) backfillTracker(ctx context.Context, logger zerolog.Logger) {
 			if !p.OK {
 				continue
 			}
-			dir := s.bldr.CacheDirFor(p.Source, p.Inventory, p.Run)
-			if measured, err := budget.MeasureDir(ctx, dir); err == nil {
+			dir := s.bldr.CacheDirFor(inventory.CacheKey{
+				SourceBucket: p.Source,
+				InventoryID:  p.Inventory,
+				Run:          p.Run,
+			})
+			if measured, err := inventory.MeasureDir(ctx, dir); err == nil {
 				bytes = measured
 				updated := *info
 				updated.IndexBytes = bytes
@@ -239,7 +322,7 @@ func (s *Server) backfillTracker(ctx context.Context, logger zerolog.Logger) {
 	}
 }
 
-// recover rehydrates the in-memory inventory.Manager from invStore and
+// recover rehydrates the in-memory inventory.Catalog from invStore and
 // marks any jobs left running/queued by the previous process as
 // aborted. Inventories left in the parsing state — meaning a load was
 // in flight when the previous process exited — get flipped to error so
@@ -272,7 +355,11 @@ func (s *Server) recover(ctx context.Context, logger zerolog.Logger) {
 			// segments; treat those as un-hydratable so the user sees
 			// the error and can rebuild.
 			if p := info.ID.Split(); p.OK {
-				indexDir = s.bldr.CacheDirFor(p.Source, p.Inventory, p.Run)
+				indexDir = s.bldr.CacheDirFor(inventory.CacheKey{
+					SourceBucket: p.Source,
+					InventoryID:  p.Inventory,
+					Run:          p.Run,
+				})
 			}
 		}
 		if err := s.manager.Hydrate(ctx, *info, indexDir); err != nil {
@@ -300,8 +387,17 @@ var (
 // endpoint fails fast.
 const s3StartupTimeout = 30 * time.Second
 
-// format.DirPerm is the directory mode used when ensuring the on-disk
-// inventory cache directory exists. 0o750 satisfies gosec G301.
+// HTTP server timeouts. WriteTimeout is intentionally omitted: SSE
+// endpoints (/api/jobs/stream) stream indefinitely. Slow-loris is
+// blocked by ReadHeaderTimeout + ReadTimeout instead.
+const (
+	readHeaderTimeout    = 10 * time.Second
+	readTimeout          = 30 * time.Second
+	idleTimeout          = 60 * time.Second
+	maxHeaderBytes       = 1 << 20 // 1 MiB
+	shutdownDrainTimeout = 10 * time.Second
+	resourceDrainTimeout = 5 * time.Second
+)
 
 // discoveryWiring bundles the three values newDiscoveryWiring builds so
 // callers don't end up with a 4-arity return that invites `_, _, _, err`.
@@ -339,12 +435,30 @@ func newDiscoveryWiring(ctx context.Context, cfg Config) (discoveryWiring, error
 	}, nil
 }
 
-// Run starts the HTTP server and blocks until the context is cancelled.
-func (s *Server) Run(ctx context.Context) error {
-	s.server = &http.Server{
+// newHTTPServer builds the *http.Server with the project-wide timeout
+// hardening. Extracted so tests can assert the timeout shape without
+// racing against Run's goroutine assignment to s.server.
+func (s *Server) newHTTPServer() *http.Server {
+	return &http.Server{
 		Addr:              s.config.Addr,
 		Handler:           s.router,
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
+	}
+}
+
+// Run starts the HTTP server and blocks until the context is cancelled.
+func (s *Server) Run(ctx context.Context) error {
+	s.server = s.newHTTPServer()
+
+	metricsSrv, err := s.maybeStartMetricsListener(ctx)
+	if err != nil {
+		return err
+	}
+	if metricsSrv != nil {
+		defer s.shutdownMetricsListener(ctx, metricsSrv)
 	}
 
 	// On every exit path: cancel in-flight jobs (so goroutines don't
@@ -354,7 +468,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// shutdown trigger), we still need a few seconds to drain workers.
 	defer s.shutdownResources(ctx)
 
-	if s.discovery != nil && s.discovery.Enabled() {
+	if s.discovery.Enabled() {
 		s.discovery.Start(ctx, s.discoveryRefreshInterval(), &s.config.Logger)
 	}
 	if s.autoloader != nil {
@@ -373,7 +487,7 @@ func (s *Server) Run(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		s.config.Logger.Info().Msg("shutting down HTTP server")
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownDrainTimeout)
 		defer cancel()
 
 		if err := s.server.Shutdown(shutdownCtx); err != nil {
@@ -396,14 +510,12 @@ func (s *Server) Run(ctx context.Context) error {
 // context.WithoutCancel(parent) so any values (logger, request id)
 // the parent carries are inherited while cancellation is dropped.
 func (s *Server) shutdownResources(ctx context.Context) {
-	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resourceDrainTimeout)
 	defer cancel()
 	if s.autoloader != nil {
 		s.autoloader.Stop()
 	}
-	if s.discovery != nil {
-		s.discovery.Stop()
-	}
+	s.discovery.Stop()
 	if err := s.jobMgr.Shutdown(shutdownCtx); err != nil {
 		s.config.Logger.Error().Err(err).Msg("shutdown job manager")
 	}
@@ -426,4 +538,46 @@ func (s *Server) discoveryRefreshInterval() time.Duration {
 	}
 
 	return DefaultDiscoveryRefreshInterval
+}
+
+func (s *Server) shutdownMetricsListener(ctx context.Context, srv *http.Server) {
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resourceDrainTimeout)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		s.config.Logger.Error().Err(err).Msg("shutdown metrics server")
+	}
+}
+
+// maybeStartMetricsListener binds /metrics on a separate listener when
+// MetricsAddr is set. Binds synchronously (net.ListenConfig.Listen) so
+// a port conflict aborts Run instead of silently disappearing into a
+// background goroutine. Returns (nil, nil) when /metrics is mounted
+// on the main router instead.
+func (s *Server) maybeStartMetricsListener(ctx context.Context) (*http.Server, error) {
+	if s.config.MetricsAddr == "" {
+		return nil, nil //nolint:nilnil // explicit "no listener configured" is the contract
+	}
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", s.config.MetricsAddr)
+	if err != nil {
+		return nil, fmt.Errorf("bind metrics listener %q: %w", s.config.MetricsAddr, err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/metrics", s.handlers.MetricsHandler)
+	srv := &http.Server{
+		Addr:              s.config.MetricsAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
+	}
+	go func() {
+		s.config.Logger.Info().Str("addr", s.config.MetricsAddr).Msg("starting /metrics listener")
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.config.Logger.Error().Err(err).Msg("metrics listener exited")
+		}
+	}()
+
+	return srv, nil
 }

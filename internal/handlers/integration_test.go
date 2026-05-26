@@ -11,15 +11,13 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
-	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
-	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/rs/zerolog"
 )
 
 // buildLoadedTestHandlers seeds a small synthetic index, registers and
 // loads it into a fresh Manager, and returns ready-to-query handlers.
-func buildLoadedTestHandlers(t *testing.T) *handlers.Handlers {
+func buildLoadedTestHandlers(t *testing.T, opts ...handlers.Option) *handlers.Handlers {
 	t.Helper()
 
 	tmp := t.TempDir()
@@ -31,19 +29,14 @@ func buildLoadedTestHandlers(t *testing.T) *handlers.Handlers {
 		Seed:      42,
 		Logger:    zerolog.Nop(),
 	}
-	if err := seeder.Run(cfg); err != nil {
+	if err := seeder.Run(t.Context(), cfg); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 
-	renderer, err := templates.New()
-	if err != nil {
-		t.Fatalf("renderer: %v", err)
-	}
-
-	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	h := newWiredHandlers(t, mgr, opts...)
 
 	indexPath := filepath.Join(tmp, "inv-001")
 	if err := mgr.Register(t.Context(), "loaded", "Loaded", indexPath); err != nil {
@@ -245,7 +238,7 @@ func TestBrowsePage_PartialSuccess(t *testing.T) {
 // through the HTTP handlers against a real index.
 func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 	tmp := t.TempDir()
-	if err := seeder.Run(seeder.Config{
+	if err := seeder.Run(t.Context(), seeder.Config{
 		OutputDir: tmp,
 		Count:     1,
 		Objects:   100,
@@ -257,13 +250,9 @@ func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 	}
 	indexPath := filepath.Join(tmp, "inv-001")
 
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
-	renderer, err := templates.New()
-	if err != nil {
-		t.Fatalf("renderer: %v", err)
-	}
-	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	h := newWiredHandlers(t, mgr)
 
 	// Register via handler.
 	body := `{"id":"life","name":"Life","path":"` + indexPath + `"}`
@@ -348,13 +337,9 @@ func TestLoadInventoryAPI_AlreadyLoaded(t *testing.T) {
 // TestLoadInventoryAPI_BadPath verifies the error-state path: a bad
 // inventory path produces a 500, after which a follow-up reload works.
 func TestLoadInventoryAPI_BadPath(t *testing.T) {
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
-	renderer, err := templates.New()
-	if err != nil {
-		t.Fatalf("renderer: %v", err)
-	}
-	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	h := newWiredHandlers(t, mgr)
 
 	if err := mgr.Register(t.Context(), "bad", "Bad", "/nonexistent/path/that/does/not/exist"); err != nil {
 		t.Fatalf("register: %v", err)
@@ -385,7 +370,7 @@ func TestLoadInventoryAPI_BadPath(t *testing.T) {
 // data once it's been closed.
 func TestManagerWithIndex_NoUseAfterCloseUnderUnload(t *testing.T) {
 	tmp := t.TempDir()
-	if err := seeder.Run(seeder.Config{
+	if err := seeder.Run(t.Context(), seeder.Config{
 		OutputDir: tmp,
 		Count:     1,
 		Objects:   500,
@@ -396,7 +381,7 @@ func TestManagerWithIndex_NoUseAfterCloseUnderUnload(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 
 	const id = "racy"
@@ -486,19 +471,15 @@ func TestBrowseLevelAPI_Integration_HappyPath(t *testing.T) {
 // must still come out correctly.
 func TestCompareLevelAPI_Integration_HappyPath(t *testing.T) {
 	tmp := t.TempDir()
-	if err := seeder.Run(seeder.Config{
+	if err := seeder.Run(t.Context(), seeder.Config{
 		OutputDir: tmp, Count: 1, Objects: 200, Preset: "small",
 		Seed: 42, Logger: zerolog.Nop(),
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	mgr := inventory.NewManager()
+	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
-	renderer, err := templates.New()
-	if err != nil {
-		t.Fatalf("renderer: %v", err)
-	}
-	h := handlers.New(mgr, renderer, pricing.DefaultUSEast1Prices())
+	h := newWiredHandlers(t, mgr)
 
 	indexPath := filepath.Join(tmp, "inv-001")
 	for _, id := range []inventory.ID{"src/inv/runA", "src/inv/runB"} {

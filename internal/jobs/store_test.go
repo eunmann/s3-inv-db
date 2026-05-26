@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/dbtest"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
-	"github.com/eunmann/s3-inv-db/internal/testsupport/dbtest"
 )
 
 func storeWithInventory(t *testing.T, invID inventory.ID) (*jobs.Store, *sql.DB) {

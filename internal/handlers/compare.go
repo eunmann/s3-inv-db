@@ -277,16 +277,30 @@ func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Requ
 // computeCompareLevel borrows both indexes and assembles the rendered view
 // with cost deltas, signs, and human-formatted numbers. Filters, sorts,
 // and paginates the children before returning so the caller doesn't
-// have to.
-func (h *Handlers) computeCompareLevel(_ context.Context, opts compareViewOptions) (*CompareLevelView, error) {
+// have to. Honors ctx at entry, after the index walk, and periodically
+// during view-construction so a cancelled request can bail without
+// running through pagination on a discarded result.
+func (h *Handlers) computeCompareLevel(ctx context.Context, opts compareViewOptions) (*CompareLevelView, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("compare level: %w", err)
+	}
 	start := time.Now()
 	var view CompareLevelView
-	err := h.manager.WithTwoIndexes(opts.from, opts.to, func(a, b *indexread.Index) error {
+	err := h.manager.WithTwoIndexes(ctx, opts.from, opts.to, func(a, b *indexread.Index) error {
 		data := inventory.CompareLevel(a, b, opts.prefix)
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("compare walk: %w", err)
+		}
 		view.NotFound = data.Self.NotFoundInA && data.Self.NotFoundInB
 		view.Self = h.buildCompareSelfView(data.Self)
 		view.Children = make([]CompareChildView, 0, len(data.Children))
+		const ctxCheckEvery = 1024
 		for i := range data.Children {
+			if i%ctxCheckEvery == 0 {
+				if err := ctx.Err(); err != nil {
+					return fmt.Errorf("compare view build: %w", err)
+				}
+			}
 			c := h.buildCompareChildView(&data.Children[i])
 			view.Children = append(view.Children, c)
 			switch data.Children[i].Status {
@@ -298,6 +312,9 @@ func (h *Handlers) computeCompareLevel(_ context.Context, opts compareViewOption
 				view.Status.Changed++
 			case inventory.CompareUnchanged:
 				view.Status.Unchanged++
+			case inventory.CompareUnknown:
+				// Unknown is the zero value emitted before comparison is
+				// computed; no counter to bump.
 			}
 		}
 
@@ -658,7 +675,7 @@ func (h *Handlers) CompareLevelAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var data inventory.CompareLevelData
-	err := h.manager.WithTwoIndexes(from, to, func(a, b *indexread.Index) error {
+	err := h.manager.WithTwoIndexes(r.Context(), from, to, func(a, b *indexread.Index) error {
 		data = inventory.CompareLevel(a, b, prefix)
 
 		return nil
@@ -670,24 +687,33 @@ func (h *Handlers) CompareLevelAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := h.buildCompareAPIResponse(from, to, prefix, sortBy, dir, hideUnchanged, page, pageSize, data)
+	resp := h.buildCompareAPIResponse(compareViewOptions{
+		from:          from,
+		to:            to,
+		prefix:        prefix,
+		sortBy:        sortBy,
+		dir:           dir,
+		page:          page,
+		pageSize:      pageSize,
+		hideUnchanged: hideUnchanged,
+	}, data)
 	WriteJSON(w, http.StatusOK, resp)
 }
 
 // buildCompareAPIResponse turns a CompareLevelData into the JSON payload,
 // applying the same filter→sort→paginate pipeline as the HTML view but
 // with raw numeric output.
-func (h *Handlers) buildCompareAPIResponse(from, to inventory.ID, prefix, sortBy, dir string, hideUnchanged bool, page, pageSize int, data inventory.CompareLevelData) CompareLevelResponse {
+func (h *Handlers) buildCompareAPIResponse(opts compareViewOptions, data inventory.CompareLevelData) CompareLevelResponse {
 	resp := CompareLevelResponse{
-		From:          from,
-		To:            to,
-		Prefix:        prefix,
-		Sort:          sortBy,
-		Dir:           dir,
-		HideUnchanged: hideUnchanged,
+		From:          opts.from,
+		To:            opts.to,
+		Prefix:        opts.prefix,
+		Sort:          opts.sortBy,
+		Dir:           opts.dir,
+		HideUnchanged: opts.hideUnchanged,
 		NotFound:      data.Self.NotFoundInA && data.Self.NotFoundInB,
 	}
-	for _, b := range inventory.Breadcrumbs(prefix) {
+	for _, b := range inventory.Breadcrumbs(opts.prefix) {
 		resp.Breadcrumbs = append(resp.Breadcrumbs, BrowseCrumbJSON{Label: b.Label, Prefix: b.Prefix})
 	}
 	resp.Self = h.buildCompareSelfJSON(data.Self)
@@ -725,10 +751,12 @@ func (h *Handlers) buildCompareAPIResponse(from, to inventory.ID, prefix, sortBy
 			resp.StatusCounts.Changed++
 		case inventory.CompareUnchanged:
 			resp.StatusCounts.Unchanged++
+		case inventory.CompareUnknown:
+			// Unknown is the zero value — no counter to bump.
 		}
 		rows = append(rows, row)
 	}
-	if hideUnchanged {
+	if opts.hideUnchanged {
 		filtered := rows[:0]
 		for i := range rows {
 			if rows[i].Status != inventory.CompareUnchanged.String() {
@@ -737,9 +765,9 @@ func (h *Handlers) buildCompareAPIResponse(from, to inventory.ID, prefix, sortBy
 		}
 		rows = filtered
 	}
-	sortCompareAPIChildren(rows, sortBy, dir)
+	sortCompareAPIChildren(rows, opts.sortBy, opts.dir)
 	resp.TotalChildren = len(rows)
-	p := inventory.Paginate(len(rows), page, pageSize)
+	p := inventory.Paginate(len(rows), opts.page, opts.pageSize)
 	resp.Pagination = paginationFromBrowse(p, len(rows))
 	if p.FirstRow > 0 {
 		resp.Children = rows[p.FirstRow-1 : p.LastRow]
