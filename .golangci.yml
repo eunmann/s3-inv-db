@@ -219,4 +219,4 @@ issues:
 run:
   timeout: 5m
   tests: true
-  go: "1.25"
+  go: "1.26"
