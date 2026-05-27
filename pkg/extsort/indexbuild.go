@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -32,13 +31,15 @@ type IndexBuilder struct {
 	tierStatsRowW     *format.TierStatsRowWriter
 	mphfBuilder       *format.StreamingMPHFBuilder
 	depthIndexBuilder *format.DepthIndexBuilder
-	presentTiers      map[tiers.ID]struct{}
+	declaredTiers     []tiers.ID
+	resolvedTiers     []tiers.ID
 	outDir            string
 	tempDir           string
 	stack             []stackEntry
 	posCount          uint64
 	maxDepth          uint32
 	prefixDictionary  bool
+	tiersDeclared     bool
 	closed            bool
 }
 
@@ -92,16 +93,11 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		mphfBuilder:       mphfBuilder,
 		depthIndexBuilder: format.NewDepthIndexBuilder(tempDir),
 		stack:             make([]stackEntry, 0, 32),
-		presentTiers:      make(map[tiers.ID]struct{}),
 	}
 
-	b.tierStatsRowW, err = format.NewTierStatsRowWriter(outDir)
-	if err != nil {
-		coreStatsW.Close()
-		mphfBuilder.Close()
-
-		return nil, fmt.Errorf("create tier stats row writer: %w", err)
-	}
+	// The tier-stats row writer is created lazily on the first Add, once
+	// the present-tier set is fixed (default or via SetPresentTiers), so
+	// its row stride can be sparse from the first byte.
 
 	return b, nil
 }
@@ -138,6 +134,47 @@ func (b *IndexBuilder) SetPrefixDictionary(enabled bool) error {
 		return fmt.Errorf("recreate MPHF builder: %w", err)
 	}
 	b.mphfBuilder = mphfBuilder
+
+	return nil
+}
+
+// ErrPresentTiersAfterAdd is returned when SetPresentTiers is called
+// after the first Add — the tier-stats row stride is fixed when the
+// writer is created on the first Add and cannot change mid-stream.
+var ErrPresentTiersAfterAdd = errors.New("SetPresentTiers must be called before the first Add")
+
+// SetPresentTiers declares which tiers carry data, so the tier-stats
+// rows are written at a stride of len(present) slots rather than the
+// dense all-tier stride. The set comes from the ingest tier mask. When
+// unset, the builder records all tiers (dense). Must be called before
+// the first Add.
+func (b *IndexBuilder) SetPresentTiers(present []tiers.ID) error {
+	if b.posCount > 0 {
+		return ErrPresentTiersAfterAdd
+	}
+	b.declaredTiers = slices.Compact(slices.Sorted(slices.Values(present)))
+	b.tiersDeclared = true
+
+	return nil
+}
+
+// ensureTierWriter lazily creates the tier-stats row writer on the
+// first Add, resolving the present-tier set (declared, else dense) so
+// the sparse stride is fixed for every row.
+func (b *IndexBuilder) ensureTierWriter() error {
+	if b.tierStatsRowW != nil {
+		return nil
+	}
+	present := b.declaredTiers
+	if !b.tiersDeclared {
+		present = tiers.AllTierIDs()
+	}
+	w, err := format.NewTierStatsRowWriter(b.outDir, present)
+	if err != nil {
+		return fmt.Errorf("create tier stats row writer: %w", err)
+	}
+	b.tierStatsRowW = w
+	b.resolvedTiers = present
 
 	return nil
 }
@@ -189,12 +226,9 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 		return fmt.Errorf("write core stats row: %w", err)
 	}
 
-	for tierID := range tiers.NumTiers {
-		if row.TierCounts[tierID] > 0 || row.TierBytes[tierID] > 0 {
-			b.presentTiers[tierID] = struct{}{}
-		}
+	if err := b.ensureTierWriter(); err != nil {
+		return err
 	}
-
 	if err := b.tierStatsRowW.Add(&row.TierCounts, &row.TierBytes); err != nil {
 		return fmt.Errorf("write tier stats row: %w", err)
 	}
@@ -359,20 +393,6 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 		return err
 	}
 
-	log.Debug().
-		Int("present_tiers", len(b.presentTiers)).
-		Int("dense_tiers", int(tiers.NumTiers)).
-		Msg("index builder: packing tier_stats_row to present-tier stride")
-
-	packStart := time.Now()
-	presentTierList := slices.Sorted(maps.Keys(b.presentTiers))
-	if err := format.PackTierStatsRow(b.outDir, presentTierList); err != nil {
-		return fmt.Errorf("pack tier stats row: %w", err)
-	}
-	log.Debug().
-		Str("pack_duration", humanfmt.Duration(time.Since(packStart))).
-		Msg("index builder: tier_stats_row pack complete")
-
 	log.Debug().Msg("index builder: writing manifest")
 
 	if err := format.WriteManifest(b.outDir, b.posCount, b.maxDepth); err != nil {
@@ -400,10 +420,15 @@ func (b *IndexBuilder) closeStreamingWriters() error {
 		return fmt.Errorf("finalize core stats: %w", err)
 	}
 	b.coreStatsW = nil
-	if err := b.tierStatsRowW.Close(); err != nil {
-		return fmt.Errorf("close tier stats row: %w", err)
+	// The tier writer is nil when no rows were added (empty index); such
+	// a build writes no tier file and no tier manifest (tiers.json). The
+	// index manifest is still written unconditionally in Finalize.
+	if b.tierStatsRowW != nil {
+		if err := b.tierStatsRowW.Close(); err != nil {
+			return fmt.Errorf("close tier stats row: %w", err)
+		}
+		b.tierStatsRowW = nil
 	}
-	b.tierStatsRowW = nil
 
 	return nil
 }
@@ -424,13 +449,15 @@ func (b *IndexBuilder) buildMPHF(ctx context.Context) error {
 	return nil
 }
 
-// writeTierManifest writes the tier manifest if tiers are present.
+// writeTierManifest writes the tier manifest listing the resolved
+// present tiers, in the same slot order the row writer used. Skipped
+// for an empty index (no rows, no tier writer), matching the reader's
+// "no manifest → empty tier reader" contract.
 func (b *IndexBuilder) writeTierManifest() error {
-	if len(b.presentTiers) == 0 {
+	if b.posCount == 0 || len(b.resolvedTiers) == 0 {
 		return nil
 	}
-	presentTierList := slices.Sorted(maps.Keys(b.presentTiers))
-	if err := tiers.WriteManifest(b.outDir, presentTierList); err != nil {
+	if err := tiers.WriteManifest(b.outDir, b.resolvedTiers); err != nil {
 		return fmt.Errorf("write tier manifest: %w", err)
 	}
 

@@ -37,7 +37,15 @@ type Pipeline struct {
 	objectsProcessed atomic.Int64
 	bytesProcessed   atomic.Int64
 	flushCount       atomic.Int64
+	presentTierMask  atomic.Uint32
 	runFilesMu       sync.Mutex
+}
+
+// presentTiers expands the tier mask accumulated across all ingest
+// workers into the ascending tier-ID list used to size the sparse
+// tier-stats rows. Empty when no objects were ingested.
+func (p *Pipeline) presentTiers() []tiers.ID {
+	return tierIDsFromMask(uint16(p.presentTierMask.Load()))
 }
 
 // Result holds the pipeline execution result.
@@ -733,6 +741,11 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	log := zerolog.Ctx(ctx)
 	start := time.Now()
 
+	// Fold this worker's tier mask into the pipeline-wide set. The mask
+	// survives Drain, so ORing on every flush captures the worker's full
+	// lifetime regardless of which flush is the last.
+	p.presentTierMask.Or(uint32(agg.TierMask()))
+
 	rows := agg.Drain()
 	if len(rows) == 0 {
 		return nil
@@ -909,6 +922,9 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		if err := builder.SetPrefixDictionary(p.config.PrefixDictionary); err != nil {
 			return mergeBuildResult{}, fmt.Errorf("set prefix dictionary: %w", err)
 		}
+		if err := builder.SetPresentTiers(p.presentTiers()); err != nil {
+			return mergeBuildResult{}, fmt.Errorf("set present tiers: %w", err)
+		}
 		if err := builder.FinalizeWithContext(ctx); err != nil {
 			return mergeBuildResult{}, fmt.Errorf("finalize empty index: %w", err)
 		}
@@ -965,6 +981,9 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	}
 	if err := builder.SetPrefixDictionary(p.config.PrefixDictionary); err != nil {
 		return mergeBuildResult{}, fmt.Errorf("set prefix dictionary: %w", err)
+	}
+	if err := builder.SetPresentTiers(p.presentTiers()); err != nil {
+		return mergeBuildResult{}, fmt.Errorf("set present tiers: %w", err)
 	}
 
 	if err := builder.AddAllWithContext(ctx, mergeIter); err != nil {

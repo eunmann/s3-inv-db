@@ -80,6 +80,18 @@ func AllTiers() []Info {
 	return slices.Clone(allTiers)
 }
 
+// AllTierIDs returns every tier ID in ascending order. Used as the
+// dense default when a builder records all tiers rather than a known
+// present subset.
+func AllTierIDs() []ID {
+	ids := make([]ID, NumTiers)
+	for i := range ids {
+		ids[i] = ID(i)
+	}
+
+	return ids
+}
+
 // Mapping provides tier lookup and metadata.
 type Mapping struct {
 	indexByS3Name map[string]ID

@@ -99,21 +99,19 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Reject double-submit: if a job is already queued or running for
-	// this inventory, render the row with its current state instead of
-	// spawning a duplicate that will fail with an InvalidState error.
-	if existing, err := h.jobStore.LatestForInventory(r.Context(), composite); err == nil && existing.State.IsLive() {
-		h.renderDiscoveredRowFrom(w, r, disc)
-
-		return
-	}
-
 	// The job context is intentionally independent of the request — a
 	// build outlives the HTTP request that started it. Submitting via a
 	// non-handler helper keeps contextcheck out of the trace from
-	// r.Context() to the job ctx.
+	// r.Context() to the job ctx. The scheduler dedups by inventory, so a
+	// build already queued/running comes back as ErrDuplicateInventory —
+	// render the row's current state instead of spawning a duplicate.
 	_, err = h.submitDiscoveredLoadJob(r.Context(), composite, disc)
-	if err != nil {
+	switch {
+	case errors.Is(err, jobs.ErrDuplicateInventory):
+		h.renderDiscoveredRowFrom(w, r, disc)
+
+		return
+	case err != nil:
 		respondManagerError(w, r, err, "submit load job")
 
 		return

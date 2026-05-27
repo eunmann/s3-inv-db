@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 // TestArrayWriter_CleanupRemovesPartialOnCloseError forces a write
@@ -55,7 +57,7 @@ func TestRemoveIfErr_AbsentPathReturnsNil(t *testing.T) {
 // a Close-time failure must not leave a corrupt file on disk.
 func TestTierStatsRowWriter_CleanupRemovesPartialOnCloseError(t *testing.T) {
 	dir := t.TempDir()
-	w, err := NewTierStatsRowWriter(dir)
+	w, err := NewTierStatsRowWriter(dir, []tiers.ID{tiers.Standard})
 	if err != nil {
 		t.Fatalf("NewTierStatsRowWriter: %v", err)
 	}

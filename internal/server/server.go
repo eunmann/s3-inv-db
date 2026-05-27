@@ -48,7 +48,7 @@ type Config struct {
 	PollInterval             time.Duration
 	MaxIndexDisk             uint64
 	IndexHeadroomBytes       uint64
-	AutoLoadConcurrency      int
+	MaxConcurrentJobs        int
 	AutoLoadRetentionDefault uint32
 	IndexRatio               float64
 
@@ -139,7 +139,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		jobMgr:      stores.jobs,
 		bldr:        bldr,
 		tracker:     tracker,
-		autoloader:  newAutoLoader(cfg, discovery, stores.config, stores.catalog),
+		autoloader:  newAutoLoader(cfg, discovery, stores.config, stores.catalog, stores.jobs),
 		discovery:   discovery,
 		handlers:    h,
 	}
@@ -180,7 +180,7 @@ func newStores(cfg Config) (serverStores, error) {
 		config:   inventory.NewConfigStore(cfg.DB),
 		jobStore: jobStore,
 		jobBus:   jobBus,
-		jobs:     jobs.NewScheduler(jobStore, jobBus, jobs.WithLogger(cfg.Logger)),
+		jobs:     jobs.NewScheduler(jobStore, jobBus, jobs.WithLogger(cfg.Logger), jobs.WithMaxConcurrency(cfg.MaxConcurrentJobs)),
 		catalog:  inventory.NewCatalog(invStore),
 	}, nil
 }
@@ -231,18 +231,18 @@ func buildHandlerOptions(cfg Config, discovery *inventory.Discovery, bldr *loade
 	return hopts
 }
 
-func newAutoLoader(cfg Config, discovery *inventory.Discovery, configStore *inventory.ConfigStore, catalog *inventory.Catalog) *autoload.AutoLoader {
+func newAutoLoader(cfg Config, discovery *inventory.Discovery, configStore *inventory.ConfigStore, catalog *inventory.Catalog, submitter autoload.Submitter) *autoload.AutoLoader {
 	if !cfg.AutoLoad || !discovery.Enabled() {
 		return nil
 	}
-	loadFn := func(c context.Context, d inventory.Inventory) error {
-		return discovery.AutoLoadWith(c, d, nil)
+	loadFn := func(c context.Context, d inventory.Inventory, onProgress func(stage string, done, total int64)) error {
+		return discovery.AutoLoadWith(c, d, onProgress)
 	}
 	if cfg.AutoLoadDryRun {
 		// In dry-run we never call the real loader. Returning nil signals
 		// "load succeeded" so the autoload bookkeeping still records the
 		// attempt — operators can compare logs to actual load activity.
-		loadFn = func(_ context.Context, d inventory.Inventory) error {
+		loadFn = func(_ context.Context, d inventory.Inventory, _ func(stage string, done, total int64)) error {
 			cfg.Logger.Info().Stringer("id", d.CompositeID()).Msg("autoload: dry-run, skipping load")
 
 			return nil
@@ -251,11 +251,11 @@ func newAutoLoader(cfg Config, discovery *inventory.Discovery, configStore *inve
 	}
 	al := autoload.New(autoload.Config{
 		PollInterval:     cfg.PollInterval,
-		MaxConcurrency:   cfg.AutoLoadConcurrency,
 		DefaultRetention: cfg.AutoLoadRetentionDefault,
 	}, autoload.Deps{
 		Discovery:   discovery,
 		Loader:      loadFn,
+		Submitter:   submitter,
 		ConfigStore: configStore,
 		Manager:     catalog,
 	}, &cfg.Logger)

@@ -9,7 +9,26 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/autoload"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/jobs"
 )
+
+// inlineSubmitter stands in for the jobs scheduler: it records the
+// submitted inventory IDs and, unless it returns an error, runs the
+// work closure synchronously so tests can assert on the load outcome.
+type inlineSubmitter struct {
+	err       error
+	submitted []inventory.ID
+}
+
+func (s *inlineSubmitter) Submit(ctx context.Context, invID inventory.ID, _ jobs.Kind, work jobs.Work) (jobs.Job, error) {
+	s.submitted = append(s.submitted, invID)
+	if s.err != nil {
+		return jobs.Job{}, s.err
+	}
+	_ = work(ctx, func(jobs.Update) {})
+
+	return jobs.Job{ID: "job", InventoryID: invID}, nil
+}
 
 // errBoom is the sentinel error used by tests that need to simulate a
 // discovery failure.
@@ -50,7 +69,7 @@ type fakeLoader struct {
 	failOnce  bool
 }
 
-func (f *fakeLoader) AutoLoad(_ context.Context, disc inventory.Inventory) error {
+func (f *fakeLoader) AutoLoad(_ context.Context, disc inventory.Inventory, _ func(stage string, done, total int64)) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := disc.CompositeID()
@@ -90,7 +109,8 @@ func TestAutoLoader_PicksNewestUnloadedRun(t *testing.T) {
 		},
 	}
 	ldr := &fakeLoader{}
-	a := autoload.New(autoload.Config{MaxConcurrency: 1, MinBackoff: time.Millisecond, MaxBackoff: time.Millisecond}, autoload.Deps{Discovery: disc, Loader: ldr.AutoLoad, ConfigStore: cs, Manager: mgr}, nil)
+	sub := &inlineSubmitter{}
+	a := autoload.New(autoload.Config{MinBackoff: time.Millisecond, MaxBackoff: time.Millisecond}, autoload.Deps{Discovery: disc, Loader: ldr.AutoLoad, Submitter: sub, ConfigStore: cs, Manager: mgr}, nil)
 	a.Tick(t.Context())
 
 	if len(ldr.loaded) != 1 {
@@ -98,6 +118,11 @@ func TestAutoLoader_PicksNewestUnloadedRun(t *testing.T) {
 	}
 	if got := ldr.loaded[0]; got != "bkt/inv/2026-01-03T00-00Z" {
 		t.Errorf("loaded %q, want newest run", got)
+	}
+	// The load must have been routed through the scheduler, not called
+	// directly — that's the whole point of the jobmgr integration.
+	if len(sub.submitted) != 1 || sub.submitted[0] != "bkt/inv/2026-01-03T00-00Z" {
+		t.Errorf("submitted = %v, want one job for the newest run", sub.submitted)
 	}
 }
 
@@ -112,7 +137,7 @@ func TestAutoLoader_SkipsConfigsWithAutoLoadOff(t *testing.T) {
 		},
 	}
 	ldr := &fakeLoader{}
-	a := autoload.New(autoload.Config{MaxConcurrency: 1}, autoload.Deps{Discovery: disc, Loader: ldr.AutoLoad, ConfigStore: cs, Manager: mgr}, nil)
+	a := autoload.New(autoload.Config{}, autoload.Deps{Discovery: disc, Loader: ldr.AutoLoad, Submitter: &inlineSubmitter{}, ConfigStore: cs, Manager: mgr}, nil)
 	a.Tick(t.Context())
 	if len(ldr.loaded) != 0 {
 		t.Errorf("expected 0 loads (auto-load off), got %d", len(ldr.loaded))
@@ -143,7 +168,7 @@ func TestAutoLoader_SkipsUserUnloadedRuns(t *testing.T) {
 		},
 	}
 	ldr := &fakeLoader{}
-	a := autoload.New(autoload.Config{MaxConcurrency: 1}, autoload.Deps{Discovery: disc, Loader: ldr.AutoLoad, ConfigStore: cs, Manager: mgr}, nil)
+	a := autoload.New(autoload.Config{}, autoload.Deps{Discovery: disc, Loader: ldr.AutoLoad, Submitter: &inlineSubmitter{}, ConfigStore: cs, Manager: mgr}, nil)
 	a.Tick(t.Context())
 	if len(ldr.loaded) != 0 {
 		t.Errorf("expected 0 loads (user-unloaded), got %d", len(ldr.loaded))
@@ -155,7 +180,7 @@ func TestAutoLoader_PollFailureSetsBackoff(t *testing.T) {
 	_ = cs.Upsert(t.Context(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: true})
 
 	disc := &fakeDiscovery{enabled: true, listErr: errBoom}
-	a := autoload.New(autoload.Config{MaxConcurrency: 1, MinBackoff: time.Minute, MaxBackoff: time.Hour}, autoload.Deps{Discovery: disc, Loader: (&fakeLoader{}).AutoLoad, ConfigStore: cs, Manager: mgr}, nil)
+	a := autoload.New(autoload.Config{MinBackoff: time.Minute, MaxBackoff: time.Hour}, autoload.Deps{Discovery: disc, Loader: (&fakeLoader{}).AutoLoad, Submitter: &inlineSubmitter{}, ConfigStore: cs, Manager: mgr}, nil)
 	a.Tick(t.Context())
 	cfg, err := cs.Get(t.Context(), "bkt", "inv")
 	if err != nil {
@@ -201,9 +226,63 @@ func TestAutoLoader_BackoffSuppressesPolling(t *testing.T) {
 	_ = cs.Upsert(t.Context(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: true, PollBackoffUntil: future})
 
 	disc := &fakeDiscovery{enabled: true}
-	a := autoload.New(autoload.Config{MaxConcurrency: 1}, autoload.Deps{Discovery: disc, Loader: (&fakeLoader{}).AutoLoad, ConfigStore: cs, Manager: mgr}, nil)
+	a := autoload.New(autoload.Config{}, autoload.Deps{Discovery: disc, Loader: (&fakeLoader{}).AutoLoad, Submitter: &inlineSubmitter{}, ConfigStore: cs, Manager: mgr}, nil)
 	a.Tick(t.Context())
 	if disc.listCall != 0 {
 		t.Errorf("Discovery.List should be skipped during backoff, got %d calls", disc.listCall)
+	}
+}
+
+func TestAutoLoader_SkipsDuplicateSubmission(t *testing.T) {
+	cs, mgr := newFakeStores(t)
+	_ = cs.Upsert(t.Context(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: true})
+
+	disc := &fakeDiscovery{
+		enabled: true,
+		views: []inventory.MergedInventory{
+			{Inventory: inventory.Inventory{SourceBucket: "bkt", Name: "inv", Run: "2026-01-01T00-00Z", ManifestKey: "k1"}, State: inventory.StateNotLoaded},
+		},
+	}
+	ldr := &fakeLoader{}
+	// Scheduler reports a live job already exists for this inventory.
+	sub := &inlineSubmitter{err: jobs.ErrDuplicateInventory}
+	a := autoload.New(autoload.Config{}, autoload.Deps{Discovery: disc, Loader: ldr.AutoLoad, Submitter: sub, ConfigStore: cs, Manager: mgr}, nil)
+	a.Tick(t.Context())
+
+	if len(sub.submitted) != 1 {
+		t.Fatalf("expected 1 submit attempt, got %d", len(sub.submitted))
+	}
+	if len(ldr.loaded) != 0 {
+		t.Errorf("loader must not run when the scheduler reports a duplicate, got %d", len(ldr.loaded))
+	}
+}
+
+func TestAutoLoader_LoadFailureRecordsBackoff(t *testing.T) {
+	cs, mgr := newFakeStores(t)
+	_ = cs.Upsert(t.Context(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: true})
+	id := inventory.ID("bkt/inv/2026-01-01T00-00Z")
+	if err := mgr.Hydrate(t.Context(), inventory.Info{ID: id, Name: "x", Path: "p", State: inventory.StateNotLoaded}, ""); err != nil {
+		t.Fatalf("hydrate: %v", err)
+	}
+
+	disc := &fakeDiscovery{
+		enabled: true,
+		views: []inventory.MergedInventory{
+			{Inventory: inventory.Inventory{SourceBucket: "bkt", Name: "inv", Run: "2026-01-01T00-00Z", ManifestKey: "k1"}, State: inventory.StateNotLoaded},
+		},
+	}
+	ldr := &fakeLoader{loadErr: errBoom}
+	a := autoload.New(autoload.Config{MinBackoff: time.Minute, MaxBackoff: time.Hour}, autoload.Deps{Discovery: disc, Loader: ldr.AutoLoad, Submitter: &inlineSubmitter{}, ConfigStore: cs, Manager: mgr}, nil)
+	a.Tick(t.Context())
+
+	info, ok := mgr.Get(id)
+	if !ok {
+		t.Fatal("inventory missing after failed load")
+	}
+	if info.AutoLoadFailureCount != 1 {
+		t.Errorf("AutoLoadFailureCount = %d, want 1", info.AutoLoadFailureCount)
+	}
+	if info.AutoLoadBackoffUntil.IsZero() {
+		t.Error("AutoLoadBackoffUntil should be set after a load failure")
 	}
 }

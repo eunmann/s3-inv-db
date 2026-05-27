@@ -71,7 +71,7 @@ func describeSetFields(c *appconfig.Config) map[string]any {
 	addIfSet(set, "auto_load_poll_interval", c.PollInterval)
 	addIfSet(set, "max_index_disk", c.MaxIndexDisk)
 	addIfSet(set, "index_headroom", c.IndexHeadroom)
-	addIfSet(set, "max_auto_load_concurrency", c.AutoLoadConcurrency)
+	addIfSet(set, "max_concurrent_jobs", c.MaxConcurrentJobs)
 	addIfSet(set, "auto_load_retention_default", c.AutoLoadRetentionDefault)
 	addIfSet(set, "index_ratio", c.IndexRatio)
 	addIfSet(set, "discovery_refresh_interval", c.DiscoveryRefreshInterval)

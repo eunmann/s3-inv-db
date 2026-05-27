@@ -150,3 +150,42 @@ func TestAsyncLifecycle_RowReflectsJobState(t *testing.T) {
 		t.Errorf("cancelled row missing Retry button:\n%s", rw2.Body.String())
 	}
 }
+
+// TestAsyncLifecycle_DuplicateSubmitSkipped verifies the handler's
+// dedup path: a second Load while a build is already live for the same
+// inventory must render the current row (200), not spawn a duplicate
+// job (202). The scheduler returns ErrDuplicateInventory; the handler
+// translates that to a plain row render.
+func TestAsyncLifecycle_DuplicateSubmitSkipped(t *testing.T) {
+	disc := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "2026-05-13T03-00Z", ManifestKey: "k/2026-05-13T03-00Z/manifest.json"}
+	h := newDiscoveredHandlers(t,
+		&fakeDiscoverer{findResp: disc, bucket: "dst"},
+		&slowBuilder{delay: 5 * time.Second}, // keep the first build live across the second submit
+	)
+
+	load := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
+		req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
+		w := httptest.NewRecorder()
+		h.LoadDiscoveredRowPartial(w, req)
+
+		return w
+	}
+
+	if w := load(); w.Code != http.StatusAccepted {
+		t.Fatalf("first load status = %d, want 202", w.Code)
+	}
+	waitForJobInState(t, h.JobStoreForTest(), disc.CompositeID(), jobs.StateRunning)
+
+	if w := load(); w.Code != http.StatusOK {
+		t.Fatalf("duplicate load status = %d, want 200 (deduped); body=%s", w.Code, w.Body.String())
+	}
+
+	js, err := h.JobStoreForTest().ListForInventory(t.Context(), disc.CompositeID())
+	if err != nil {
+		t.Fatalf("ListForInventory: %v", err)
+	}
+	if len(js) != 1 {
+		t.Errorf("job count = %d, want 1 (duplicate submit must not create a second job)", len(js))
+	}
+}

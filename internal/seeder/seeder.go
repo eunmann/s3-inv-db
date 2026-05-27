@@ -276,6 +276,9 @@ func buildInventoryIndex(cfg Config, outDir string, seed int64) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("create index builder: %w", err)
 	}
+	if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
+		return 0, fmt.Errorf("set present tiers: %w", err)
+	}
 
 	for _, row := range rows {
 		if err := builder.Add(row); err != nil {
