@@ -41,6 +41,9 @@ func runFinalizeSizeBench(b *testing.B, n int) {
 		if err != nil {
 			b.Fatalf("NewIndexBuilderWithCapacity: %v", err)
 		}
+		if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
+			b.Fatalf("SetPresentTiers: %v", err)
+		}
 		for _, row := range rows {
 			if err := builder.Add(row); err != nil {
 				b.Fatalf("Add: %v", err)
@@ -57,10 +60,9 @@ func runFinalizeSizeBench(b *testing.B, n int) {
 }
 
 // BenchmarkTierStats_Density measures index size when prefixes use
-// only a small fraction of the available tiers. Today the tier
-// arrays are dense (one slot per (tier, prefix) pair regardless of
-// whether the prefix has any objects in that tier), which wastes
-// space when a typical bucket is dominated by STANDARD.
+// only a small fraction of the available tiers. The tier-stats row
+// stride is len(present) slots, written directly from the ingest tier
+// mask, so a STANDARD-dominated bucket pays for one slot, not all 13.
 func BenchmarkTierStats_Density(b *testing.B) {
 	cases := []struct {
 		name      string
@@ -87,6 +89,9 @@ func BenchmarkTierStats_Density(b *testing.B) {
 				builder, err := NewIndexBuilderWithCapacity(dir, "", uint64(len(rows)))
 				if err != nil {
 					b.Fatalf("NewIndexBuilderWithCapacity: %v", err)
+				}
+				if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
+					b.Fatalf("SetPresentTiers: %v", err)
 				}
 				for _, row := range rows {
 					if err := builder.Add(row); err != nil {

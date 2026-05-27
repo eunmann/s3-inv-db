@@ -10,10 +10,11 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-// TestTierStatsRow_PackedStride pins the post-finalize stride to the
-// number of *present* tiers, not the compile-time NumTiers. Regressions
-// that drop the pack pass (or pick the wrong stride) would silently
-// inflate index size — the whole point of the hybrid layout.
+// TestTierStatsRow_PackedStride pins the row stride to the number of
+// *present* tiers declared via SetPresentTiers, not the compile-time
+// NumTiers. The sparse layout is written directly during construction;
+// a regression that ignored the declared set would silently inflate
+// index size — the whole point of the hybrid layout.
 func TestTierStatsRow_PackedStride(t *testing.T) {
 	dir := t.TempDir()
 	outDir := filepath.Join(dir, "idx")
@@ -24,6 +25,9 @@ func TestTierStatsRow_PackedStride(t *testing.T) {
 	b, err := extsort.NewIndexBuilder(outDir, tempDir)
 	if err != nil {
 		t.Fatalf("NewIndexBuilder: %v", err)
+	}
+	if err := b.SetPresentTiers([]tiers.ID{tiers.Standard, tiers.GlacierFR, tiers.DeepArchive}); err != nil {
+		t.Fatalf("SetPresentTiers: %v", err)
 	}
 
 	// Use exactly 3 tiers: Standard, GlacierFR, DeepArchive.

@@ -41,6 +41,9 @@ func setupIndex(tb testing.TB, numObjects int) *indexSetup {
 	if err != nil {
 		tb.Fatalf("NewIndexBuilder failed: %v", err)
 	}
+	if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
+		tb.Fatalf("SetPresentTiers failed: %v", err)
+	}
 
 	for _, row := range rows {
 		if err := builder.Add(row); err != nil {
@@ -81,6 +84,9 @@ func setupIndexFromKeys(tb testing.TB, keys []string) *indexSetup {
 	builder, err := extsort.NewIndexBuilder(indexDir, "")
 	if err != nil {
 		tb.Fatalf("NewIndexBuilder failed: %v", err)
+	}
+	if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
+		tb.Fatalf("SetPresentTiers failed: %v", err)
 	}
 
 	for _, row := range rows {

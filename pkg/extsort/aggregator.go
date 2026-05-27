@@ -18,6 +18,7 @@ type Aggregator struct {
 	maxDepth       int
 	objectCount    int64
 	bytesProcessed int64
+	tierMask       uint16
 }
 
 // NewAggregator creates a new prefix aggregator with the given initial capacity.
@@ -41,6 +42,7 @@ func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 	a.objectCount++
 	a.bytesProcessed += int64(size)
+	a.tierMask |= uint16(1) << tierID
 
 	a.accumulate("", 0, size, tierID)
 
@@ -78,6 +80,27 @@ func (a *Aggregator) ObjectCount() int64 {
 
 func (a *Aggregator) BytesProcessed() int64 {
 	return a.bytesProcessed
+}
+
+// TierMask returns the bitmask of tier IDs this aggregator has seen
+// data for. Bit i is set when an object in tier i was added. It is
+// accumulated across flushes (Drain does not reset it) so a worker's
+// mask reflects its whole lifetime.
+func (a *Aggregator) TierMask() uint16 { return a.tierMask }
+
+// PresentTiers returns the tier IDs this aggregator has seen, ascending.
+func (a *Aggregator) PresentTiers() []tiers.ID { return tierIDsFromMask(a.tierMask) }
+
+// tierIDsFromMask expands a tier bitmask to an ascending slice of IDs.
+func tierIDsFromMask(mask uint16) []tiers.ID {
+	ids := make([]tiers.ID, 0, tiers.NumTiers)
+	for id := range tiers.NumTiers {
+		if mask&(uint16(1)<<id) != 0 {
+			ids = append(ids, id)
+		}
+	}
+
+	return ids
 }
 
 // EstimatedMemoryUsage returns the per-worker aggregator's approximate
