@@ -25,6 +25,16 @@ var ErrNotFound = errors.New("job not found")
 // ErrShutdown is returned by Submit after Shutdown has been called.
 var ErrShutdown = errors.New("job manager is shut down")
 
+// ErrDuplicateInventory is returned by Submit when a live (queued or
+// running) job already exists for the inventory. The returned Job
+// carries the existing job's ID so callers can surface or join it.
+var ErrDuplicateInventory = errors.New("inventory already has a live job")
+
+// defaultMaxConcurrency bounds simultaneously-running jobs when no
+// WithMaxConcurrency option is given. Builds are CPU- and disk-heavy and
+// already parallelise internally, so serialising them is the safe default.
+const defaultMaxConcurrency = 1
+
 // jobStore is the persistence sink Scheduler writes job snapshots to.
 // Defaulted to a no-op so tests can construct a Scheduler without a
 // real database.
@@ -42,13 +52,16 @@ func (noopJobStore) Upsert(context.Context, Job) error { return nil }
 // to the UI. When no store is wired (via SetStore or NewScheduler's store
 // arg) persistence is silently dropped.
 type Scheduler struct {
-	logger   zerolog.Logger
-	store    jobStore
-	bus      *Bus
-	cancels  map[ID]context.CancelFunc
-	wg       sync.WaitGroup
-	mu       sync.Mutex
-	shutdown bool
+	logger          zerolog.Logger
+	store           jobStore
+	bus             *Bus
+	cancels         map[ID]context.CancelFunc
+	liveByInventory map[inventory.ID]ID
+	sem             chan struct{}
+	maxConcurrency  int
+	wg              sync.WaitGroup
+	mu              sync.Mutex
+	shutdown        bool
 }
 
 // Option configures a Scheduler at construction. See WithLogger.
@@ -61,14 +74,26 @@ func WithLogger(l zerolog.Logger) Option {
 	return func(s *Scheduler) { s.logger = l }
 }
 
+// WithMaxConcurrency caps how many jobs run work simultaneously. Excess
+// jobs stay queued until a slot frees. N <= 0 falls back to the default.
+func WithMaxConcurrency(n int) Option {
+	return func(s *Scheduler) {
+		if n > 0 {
+			s.maxConcurrency = n
+		}
+	}
+}
+
 // NewScheduler wires a Store and a Bus. A nil store is replaced with a
 // no-op so tests don't need a SQLite handle.
 func NewScheduler(store *Store, bus *Bus, opts ...Option) *Scheduler {
 	s := &Scheduler{
-		bus:     bus,
-		cancels: make(map[ID]context.CancelFunc),
-		logger:  zerolog.Nop(),
-		store:   noopJobStore{},
+		bus:             bus,
+		cancels:         make(map[ID]context.CancelFunc),
+		liveByInventory: make(map[inventory.ID]ID),
+		logger:          zerolog.Nop(),
+		store:           noopJobStore{},
+		maxConcurrency:  defaultMaxConcurrency,
 	}
 	if store != nil {
 		s.store = store
@@ -76,6 +101,7 @@ func NewScheduler(store *Store, bus *Bus, opts ...Option) *Scheduler {
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.sem = make(chan struct{}, s.maxConcurrency)
 
 	return s
 }
@@ -105,6 +131,15 @@ func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind
 
 		return Job{}, ErrShutdown
 	}
+	// Dedup by inventory: one live job per inventory. The in-memory map is
+	// authoritative — prior-process live jobs are marked aborted at boot,
+	// so it always reflects exactly the jobs this process is running.
+	if existing, ok := s.liveByInventory[invID]; ok {
+		s.mu.Unlock()
+		cancel()
+
+		return Job{ID: existing, InventoryID: invID}, ErrDuplicateInventory
+	}
 
 	job := Job{
 		ID:          id,
@@ -119,6 +154,7 @@ func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind
 		return Job{}, fmt.Errorf("queue job %s: %w", job.ID, err)
 	}
 	s.cancels[job.ID] = cancel
+	s.liveByInventory[invID] = job.ID
 	s.wg.Add(1)
 	s.mu.Unlock()
 
@@ -173,9 +209,26 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 	defer func() {
 		s.mu.Lock()
 		delete(s.cancels, job.ID)
+		if s.liveByInventory[job.InventoryID] == job.ID {
+			delete(s.liveByInventory, job.InventoryID)
+		}
 		s.mu.Unlock()
 		cancel()
 	}()
+
+	// Wait for a concurrency slot. A job cancelled or shut down while
+	// still queued never starts work — it transitions straight to
+	// cancelled so the UI doesn't show it stuck in queued.
+	select {
+	case s.sem <- struct{}{}:
+		defer func() { <-s.sem }()
+	case <-ctx.Done():
+		job.State = StateCancelled
+		job.FinishedAt = time.Now()
+		s.persistAndPublish(context.WithoutCancel(ctx), &job)
+
+		return
+	}
 
 	job.State = StateRunning
 	job.StartedAt = time.Now()

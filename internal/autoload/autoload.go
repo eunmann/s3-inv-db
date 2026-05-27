@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/internal/loadcontrol"
 	"github.com/rs/zerolog"
 )
@@ -21,10 +22,10 @@ import (
 const DefaultPollInterval = 15 * time.Minute
 
 // Config holds the AutoLoader's runtime knobs. Zero values pick
-// sensible defaults (15m poll, 1 concurrent load, 1m–1h backoff).
+// sensible defaults (15m poll, 1m–1h backoff). Concurrency is owned by
+// the jobs scheduler, not the AutoLoader.
 type Config struct {
 	PollInterval     time.Duration
-	MaxConcurrency   int
 	MinBackoff       time.Duration
 	MaxBackoff       time.Duration
 	DefaultRetention uint32
@@ -35,14 +36,21 @@ type Discovery interface {
 	List(ctx context.Context) ([]inventory.MergedInventory, error)
 }
 
-// LoaderFunc loads a single discovered inventory. Callers wire the
-// Discovery.AutoLoadWith call (with nil progress) here.
-type LoaderFunc func(ctx context.Context, disc inventory.Inventory) error
+// LoaderFunc loads a single discovered inventory, reporting progress.
+// Callers wire Discovery.AutoLoadWith here.
+type LoaderFunc func(ctx context.Context, disc inventory.Inventory, onProgress func(stage string, done, total int64)) error
 
-// AutoLoader polls Discovery on a ticker and feeds new runs into Loader.
+// Submitter routes a load through the jobs scheduler so auto-loads get
+// the same tracking, dedup, and concurrency limiting as manual builds.
+type Submitter interface {
+	Submit(ctx context.Context, invID inventory.ID, kind jobs.Kind, work jobs.Work) (jobs.Job, error)
+}
+
+// AutoLoader polls Discovery on a ticker and submits new runs as jobs.
 type AutoLoader struct {
 	discovery   Discovery
 	loader      LoaderFunc
+	submitter   Submitter
 	configStore *inventory.ConfigStore
 	manager     *inventory.Catalog
 	logger      *zerolog.Logger
@@ -60,21 +68,15 @@ type AutoLoader struct {
 type Deps struct {
 	Discovery   Discovery
 	Loader      LoaderFunc
+	Submitter   Submitter
 	ConfigStore *inventory.ConfigStore
 	Manager     *inventory.Catalog
 }
 
 // New constructs an AutoLoader; logger may be nil.
 func New(cfg Config, deps Deps, logger *zerolog.Logger) *AutoLoader {
-	discovery := deps.Discovery
-	loader := deps.Loader
-	configStore := deps.ConfigStore
-	manager := deps.Manager
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = DefaultPollInterval
-	}
-	if cfg.MaxConcurrency <= 0 {
-		cfg.MaxConcurrency = 1
 	}
 	if cfg.MinBackoff <= 0 {
 		cfg.MinBackoff = time.Minute
@@ -92,10 +94,11 @@ func New(cfg Config, deps Deps, logger *zerolog.Logger) *AutoLoader {
 
 	return &AutoLoader{
 		cfg:         cfg,
-		discovery:   discovery,
-		loader:      loader,
-		configStore: configStore,
-		manager:     manager,
+		discovery:   deps.Discovery,
+		loader:      deps.Loader,
+		submitter:   deps.Submitter,
+		configStore: deps.ConfigStore,
+		manager:     deps.Manager,
 		logger:      logger,
 		now:         time.Now,
 		stop:        make(chan struct{}),
@@ -222,39 +225,58 @@ func (a *AutoLoader) pickTargets(byConfig map[string][]inventory.MergedInventory
 	return queue
 }
 
+// runQueue submits each target as a build job. Submit returns
+// immediately; the scheduler owns concurrency limiting and dedup, so a
+// run already building (manually or from a prior tick) is rejected with
+// ErrDuplicateInventory and skipped.
 func (a *AutoLoader) runQueue(ctx context.Context, queue []inventory.Inventory) {
-	if len(queue) == 0 {
-		return
-	}
-	sem := make(chan struct{}, a.cfg.MaxConcurrency)
-	var wg sync.WaitGroup
 	for i := range queue {
-		target := &queue[i]
 		select {
 		case <-ctx.Done():
 			return
 		case <-a.stop:
 			return
-		case sem <- struct{}{}:
+		default:
 		}
-		wg.Add(1)
-		go func(target inventory.Inventory) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			a.loadOne(ctx, target)
-		}(*target)
+		a.loadOne(ctx, queue[i])
 	}
-	wg.Wait()
 }
 
 func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 	id := target.CompositeID()
-	err := a.loader(ctx, target)
-	if err == nil {
+	work := func(jobCtx context.Context, report func(jobs.Update)) error {
+		err := a.loader(jobCtx, target, func(stage string, done, total int64) {
+			report(jobs.Update{Stage: stage, BytesDone: done, BytesTotal: total})
+		})
+		if err != nil {
+			// A cancelled load (server shutdown) is not a load failure and
+			// must not consume the backoff budget.
+			if jobCtx.Err() == nil {
+				a.recordLoadFailure(jobCtx, id, err)
+			}
+
+			return err
+		}
 		a.logger.Info().Str("id", string(id)).Msg("autoload: loaded")
 
-		return
+		return nil
 	}
+
+	_, err := a.submitter.Submit(ctx, id, jobs.KindBuild, work)
+	switch {
+	case err == nil, errors.Is(err, jobs.ErrDuplicateInventory):
+		// Submitted, or already building — nothing more to do.
+	case errors.Is(err, jobs.ErrShutdown):
+		a.logger.Debug().Str("id", string(id)).Msg("autoload: scheduler shut down, skipping submit")
+	default:
+		a.logger.Error().Str("id", string(id)).Err(err).Msg("autoload: submit failed")
+	}
+}
+
+// recordLoadFailure applies the budget-refusal or exponential-backoff
+// bookkeeping for a failed auto-load. Runs inside the job's work
+// closure, where the load outcome is observed.
+func (a *AutoLoader) recordLoadFailure(ctx context.Context, id inventory.ID, err error) {
 	var refused *loadcontrol.BudgetRefusedError
 	if errors.As(err, &refused) {
 		// Budget refusal: surface via Manager so the UI can show the

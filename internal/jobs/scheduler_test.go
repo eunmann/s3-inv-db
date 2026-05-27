@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -118,6 +121,93 @@ func TestManager_CancelUnknown(t *testing.T) {
 	sched, _, _ := newScheduler(t)
 	if err := sched.Cancel("no-such-job"); !errors.Is(err, jobs.ErrNotFound) {
 		t.Errorf("Cancel(unknown) error = %v, want ErrNotFound", err)
+	}
+}
+
+// TestManager_DedupsLiveInventory verifies one live job per inventory:
+// a second Submit while the first is live returns ErrDuplicateInventory,
+// and once the first finishes a fresh Submit is accepted again.
+func TestManager_DedupsLiveInventory(t *testing.T) {
+	sched, store, _ := newScheduler(t)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	first, err := sched.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
+		close(started)
+		<-release
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("first submit: %v", err)
+	}
+	<-started
+
+	dup, err := sched.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
+		return nil
+	})
+	if !errors.Is(err, jobs.ErrDuplicateInventory) {
+		t.Fatalf("duplicate submit error = %v, want ErrDuplicateInventory", err)
+	}
+	if dup.ID != first.ID {
+		t.Errorf("duplicate submit returned job %s, want existing %s", dup.ID, first.ID)
+	}
+
+	close(release)
+	waitForState(t, store, first.ID, jobs.StateSucceeded)
+
+	// The inventory is no longer live, so a fresh build is allowed.
+	third, err := sched.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("submit after completion: %v", err)
+	}
+	waitForState(t, store, third.ID, jobs.StateSucceeded)
+}
+
+// TestManager_ConcurrencyLimitSerializes verifies WithMaxConcurrency(1)
+// runs at most one job's work at a time; the rest stay queued.
+func TestManager_ConcurrencyLimitSerializes(t *testing.T) {
+	sched := jobs.NewScheduler(nil, jobs.NewBus(16), jobs.WithMaxConcurrency(1))
+
+	var running, maxSeen atomic.Int32
+	started := make(chan struct{}, 3)
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(3)
+	work := func(_ context.Context, _ func(jobs.Update)) error {
+		n := running.Add(1)
+		for {
+			m := maxSeen.Load()
+			if n <= m || maxSeen.CompareAndSwap(m, n) {
+				break
+			}
+		}
+		started <- struct{}{}
+		<-release
+		running.Add(-1)
+		wg.Done()
+
+		return nil
+	}
+	for i := range 3 {
+		if _, err := sched.Submit(context.Background(), inventory.ID("src/inv"+strconv.Itoa(i)), jobs.KindBuild, work); err != nil {
+			t.Fatalf("submit %d: %v", i, err)
+		}
+	}
+
+	// Exactly one job can hold the single slot; the others block in run()
+	// before incrementing running, so this is deterministic, not timing.
+	<-started
+	if got := running.Load(); got != 1 {
+		t.Errorf("running = %d, want 1 under concurrency limit", got)
+	}
+
+	close(release)
+	wg.Wait()
+	if got := maxSeen.Load(); got != 1 {
+		t.Errorf("max concurrent = %d, want 1", got)
 	}
 }
 
