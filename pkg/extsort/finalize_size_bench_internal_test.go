@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
+	"github.com/rs/zerolog"
 )
 
 // BenchmarkIndexBuilder_FinalizeSize is more "report" than "bench" —
@@ -106,6 +107,53 @@ func BenchmarkTierStats_Density(b *testing.B) {
 				b.ReportMetric(float64(size)/float64(len(rows)), "bytes/prefix")
 			}
 		})
+	}
+}
+
+// BenchmarkTierStatsFinalize isolates the Finalize cost for a build
+// whose objects span only a few of the 13 tiers — the realistic shape.
+// The timer is stopped during ingest/Add, so only Finalize is measured.
+//
+// With sparse-direct writes, Add already emits the packed tier rows, so
+// Finalize is just MPHF + depth index — no tier I/O. The same bench on
+// main (dense Add + PackTierStatsRow) pays a full read-back + rewrite of
+// the tier file inside Finalize, so the delta is the eliminated
+// compaction round-trip.
+func BenchmarkTierStatsFinalize(b *testing.B) {
+	prevLevel := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.Disabled)
+	b.Cleanup(func() { zerolog.SetGlobalLevel(prevLevel) })
+
+	const n = 1_000_000
+	const tiersUsed = 3 // STANDARD-dominated bucket: 3 of 13 tiers present
+	keys := generateBenchKeys(n, 4)
+	b.ReportAllocs()
+	for range b.N {
+		b.StopTimer()
+		dir := b.TempDir()
+		agg := NewAggregator(0, 0)
+		for i, k := range keys {
+			agg.AddObject(k, 1024, tiers.ID(i%tiersUsed))
+		}
+		rows := agg.Drain()
+		SortPrefixRows(rows)
+		builder, err := NewIndexBuilderWithCapacity(dir, "", uint64(len(rows)))
+		if err != nil {
+			b.Fatalf("NewIndexBuilderWithCapacity: %v", err)
+		}
+		if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
+			b.Fatalf("SetPresentTiers: %v", err)
+		}
+		for _, row := range rows {
+			if err := builder.Add(row); err != nil {
+				b.Fatalf("Add: %v", err)
+			}
+		}
+		b.StartTimer()
+
+		if err := builder.Finalize(); err != nil {
+			b.Fatalf("Finalize: %v", err)
+		}
 	}
 }
 
