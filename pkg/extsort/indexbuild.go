@@ -421,7 +421,8 @@ func (b *IndexBuilder) closeStreamingWriters() error {
 	}
 	b.coreStatsW = nil
 	// The tier writer is nil when no rows were added (empty index); such
-	// a build writes no tier file and no manifest.
+	// a build writes no tier file and no tier manifest (tiers.json). The
+	// index manifest is still written unconditionally in Finalize.
 	if b.tierStatsRowW != nil {
 		if err := b.tierStatsRowW.Close(); err != nil {
 			return fmt.Errorf("close tier stats row: %w", err)
