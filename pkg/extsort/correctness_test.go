@@ -190,3 +190,32 @@ func TestTierStatsRow_PreorderAlignment(t *testing.T) {
 		}
 	}
 }
+
+// TestEmptyIndex_EmptyPresentTiers covers the empty-index path the
+// pipeline takes when there are no run files: SetPresentTiers is called
+// with an empty set and no rows are added. The lazy tier writer must
+// never be created (so NewTierStatsRowWriter's non-empty requirement is
+// not tripped), no manifest is written, and OpenTierStats returns a
+// usable empty reader.
+func TestEmptyIndex_EmptyPresentTiers(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "idx")
+	b, err := extsort.NewIndexBuilder(outDir, "")
+	if err != nil {
+		t.Fatalf("NewIndexBuilder: %v", err)
+	}
+	if err := b.SetPresentTiers(nil); err != nil {
+		t.Fatalf("SetPresentTiers(nil): %v", err)
+	}
+	if err := b.FinalizeWithContext(t.Context()); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	tsr, err := format.OpenTierStats(outDir)
+	if err != nil {
+		t.Fatalf("OpenTierStats: %v", err)
+	}
+	defer tsr.Close()
+	if tsr.HasTierData() {
+		t.Error("empty index should report no tier data")
+	}
+}
