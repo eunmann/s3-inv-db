@@ -42,7 +42,7 @@ func TestLoad_FullExample(t *testing.T) {
 		"auto_load": true,
 		"auto_load_poll_interval": "5m",
 		"max_index_disk": "200GB",
-		"max_auto_load_concurrency": 2,
+		"max_concurrent_jobs": 2,
 		"auto_load_retention_default": 3,
 		"index_ratio": 0.4,
 		"inventories": [
@@ -59,8 +59,8 @@ func TestLoad_FullExample(t *testing.T) {
 	if cfg.Verbose == nil || !*cfg.Verbose {
 		t.Errorf("Verbose: %+v", cfg.Verbose)
 	}
-	if cfg.AutoLoadConcurrency == nil || *cfg.AutoLoadConcurrency != 2 {
-		t.Errorf("AutoLoadConcurrency: %+v", cfg.AutoLoadConcurrency)
+	if cfg.MaxConcurrentJobs == nil || *cfg.MaxConcurrentJobs != 2 {
+		t.Errorf("MaxConcurrentJobs: %+v", cfg.MaxConcurrentJobs)
 	}
 	if len(cfg.Inventories) != 1 {
 		t.Fatalf("Inventories len = %d", len(cfg.Inventories))

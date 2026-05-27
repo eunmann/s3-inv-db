@@ -59,8 +59,9 @@ type RuntimeOptions struct {
 	// MaxIndexDisk when MaxIndexDisk is set.
 	IndexHeadroomBytes uint64
 
-	// AutoLoadConcurrency caps in-flight auto-loads. Default 1.
-	AutoLoadConcurrency int
+	// MaxConcurrentJobs caps how many jobs (auto-loads and manual
+	// builds) run at once; the rest queue. Default 1.
+	MaxConcurrentJobs int
 
 	// AutoLoadRetentionDefault is the per-config retention used when
 	// inventory_configs.retention_count is unset. Default 2.
@@ -164,7 +165,7 @@ func Bootstrap(ctx context.Context, opts RuntimeOptions) (*Server, func(), error
 		PollInterval:             opts.PollInterval,
 		MaxIndexDisk:             opts.MaxIndexDisk,
 		IndexHeadroomBytes:       opts.IndexHeadroomBytes,
-		AutoLoadConcurrency:      opts.AutoLoadConcurrency,
+		MaxConcurrentJobs:        opts.MaxConcurrentJobs,
 		AutoLoadRetentionDefault: opts.AutoLoadRetentionDefault,
 		IndexRatio:               opts.IndexRatio,
 		DiscoveryRefreshInterval: opts.DiscoveryRefreshInterval,

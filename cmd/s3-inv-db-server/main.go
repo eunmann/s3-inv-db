@@ -48,48 +48,48 @@ func main() {
 // defineFlags before flag.Parse; resolveRuntimeOptions merges them with
 // file/env config into the final server.RuntimeOptions.
 type serverFlags struct {
-	configPath          *string
-	addr                *string
-	verbose             *bool
-	prettyLogs          *bool
-	priceTablePath      *string
-	s3Source            *string
-	cacheDir            *string
-	stateDB             *string
-	autoLoad            *bool
-	pollInterval        *time.Duration
-	discoveryRefresh    *time.Duration
-	maxIndexDisk        *string
-	headroom            *string
-	autoLoadConcurrency *int
-	autoLoadRetention   *uint
-	indexRatio          *float64
-	queryBatchMax       *int
-	metricsAddr         *string
-	autoLoadDryRun      *bool
+	configPath        *string
+	addr              *string
+	verbose           *bool
+	prettyLogs        *bool
+	priceTablePath    *string
+	s3Source          *string
+	cacheDir          *string
+	stateDB           *string
+	autoLoad          *bool
+	pollInterval      *time.Duration
+	discoveryRefresh  *time.Duration
+	maxIndexDisk      *string
+	headroom          *string
+	maxConcurrentJobs *int
+	autoLoadRetention *uint
+	indexRatio        *float64
+	queryBatchMax     *int
+	metricsAddr       *string
+	autoLoadDryRun    *bool
 }
 
 func defineFlags(fs *flag.FlagSet) *serverFlags {
 	return &serverFlags{
-		configPath:          fs.String("config", appconfig.EnvOr("S3INV_CONFIG", ""), "path to JSON config file (overridden by explicit flags)"),
-		addr:                fs.String("addr", ":8080", "HTTP server address"),
-		verbose:             fs.Bool("verbose", false, "enable debug logging"),
-		prettyLogs:          fs.Bool("pretty-logs", false, "use human-friendly console output"),
-		priceTablePath:      fs.String("price-table", "", "path to custom price table JSON (default: US East 1 prices)"),
-		s3Source:            fs.String("s3-source", appconfig.EnvOr("S3INV_SOURCE", ""), "S3 URI to discover inventories under (e.g., s3://bucket/inventory-data/)"),
-		cacheDir:            fs.String("cache-dir", appconfig.EnvOr("S3INV_CACHE_DIR", "/var/cache/s3inv"), "local directory for built indexes downloaded from S3"),
-		stateDB:             fs.String("state-db", appconfig.EnvOr("S3INV_STATE_DB", ""), "SQLite path for persisted state (default: <cache-dir>/state.db)"),
-		autoLoad:            fs.Bool("auto-load", appconfig.EnvBool("S3INV_AUTO_LOAD", false), "enable background discovery + auto-load of new inventory runs; requires --max-index-disk"),
-		pollInterval:        fs.Duration("auto-load-poll-interval", appconfig.EnvDuration("S3INV_AUTO_LOAD_POLL_INTERVAL", autoload.DefaultPollInterval), "discovery polling interval"),
-		discoveryRefresh:    fs.Duration("discovery-refresh-interval", appconfig.EnvDuration("S3INV_DISCOVERY_REFRESH_INTERVAL", server.DefaultDiscoveryRefreshInterval), "interval at which the background discovery refresher updates the cached snapshot served by HTTP handlers"),
-		maxIndexDisk:        fs.String("max-index-disk", appconfig.EnvOr("S3INV_MAX_INDEX_DISK", ""), "max cumulative on-disk bytes for loaded indexes (e.g. 100GB); required with --auto-load"),
-		headroom:            fs.String("index-headroom", appconfig.EnvOr("S3INV_INDEX_HEADROOM", ""), "reserved unused space inside --max-index-disk; default 20% of the cap"),
-		autoLoadConcurrency: fs.Int("max-auto-load-concurrency", appconfig.EnvInt("S3INV_MAX_AUTO_LOAD_CONCURRENCY", 1), "max concurrent auto-loads"),
-		autoLoadRetention:   fs.Uint("auto-load-retention-default", uint(appconfig.EnvInt("S3INV_AUTO_LOAD_RETENTION_DEFAULT", defaultAutoLoadRetention)), "default per-config run-retention when a configuration sets none"),
-		indexRatio:          fs.Float64("index-ratio", appconfig.EnvFloat("S3INV_INDEX_RATIO", defaultIndexRatio), "estimate multiplier: final index bytes ≈ ratio × compressed manifest total"),
-		queryBatchMax:       fs.Int("query-batch-max", appconfig.EnvInt("S3INV_QUERY_BATCH_MAX", 0), "max prefixes per batch stats request (0 = handler default)"),
-		metricsAddr:         fs.String("metrics-addr", appconfig.EnvOr("S3INV_METRICS_ADDR", ""), "bind /metrics on this address; empty = mount on the main listener"),
-		autoLoadDryRun:      fs.Bool("auto-load-dry-run", appconfig.EnvBool("S3INV_AUTO_LOAD_DRY_RUN", false), "log autoload decisions instead of acting on them"),
+		configPath:        fs.String("config", appconfig.EnvOr("S3INV_CONFIG", ""), "path to JSON config file (overridden by explicit flags)"),
+		addr:              fs.String("addr", ":8080", "HTTP server address"),
+		verbose:           fs.Bool("verbose", false, "enable debug logging"),
+		prettyLogs:        fs.Bool("pretty-logs", false, "use human-friendly console output"),
+		priceTablePath:    fs.String("price-table", "", "path to custom price table JSON (default: US East 1 prices)"),
+		s3Source:          fs.String("s3-source", appconfig.EnvOr("S3INV_SOURCE", ""), "S3 URI to discover inventories under (e.g., s3://bucket/inventory-data/)"),
+		cacheDir:          fs.String("cache-dir", appconfig.EnvOr("S3INV_CACHE_DIR", "/var/cache/s3inv"), "local directory for built indexes downloaded from S3"),
+		stateDB:           fs.String("state-db", appconfig.EnvOr("S3INV_STATE_DB", ""), "SQLite path for persisted state (default: <cache-dir>/state.db)"),
+		autoLoad:          fs.Bool("auto-load", appconfig.EnvBool("S3INV_AUTO_LOAD", false), "enable background discovery + auto-load of new inventory runs; requires --max-index-disk"),
+		pollInterval:      fs.Duration("auto-load-poll-interval", appconfig.EnvDuration("S3INV_AUTO_LOAD_POLL_INTERVAL", autoload.DefaultPollInterval), "discovery polling interval"),
+		discoveryRefresh:  fs.Duration("discovery-refresh-interval", appconfig.EnvDuration("S3INV_DISCOVERY_REFRESH_INTERVAL", server.DefaultDiscoveryRefreshInterval), "interval at which the background discovery refresher updates the cached snapshot served by HTTP handlers"),
+		maxIndexDisk:      fs.String("max-index-disk", appconfig.EnvOr("S3INV_MAX_INDEX_DISK", ""), "max cumulative on-disk bytes for loaded indexes (e.g. 100GB); required with --auto-load"),
+		headroom:          fs.String("index-headroom", appconfig.EnvOr("S3INV_INDEX_HEADROOM", ""), "reserved unused space inside --max-index-disk; default 20% of the cap"),
+		maxConcurrentJobs: fs.Int("max-concurrent-jobs", appconfig.EnvInt("S3INV_MAX_CONCURRENT_JOBS", 1), "max jobs (auto-loads and manual builds) running at once"),
+		autoLoadRetention: fs.Uint("auto-load-retention-default", uint(appconfig.EnvInt("S3INV_AUTO_LOAD_RETENTION_DEFAULT", defaultAutoLoadRetention)), "default per-config run-retention when a configuration sets none"),
+		indexRatio:        fs.Float64("index-ratio", appconfig.EnvFloat("S3INV_INDEX_RATIO", defaultIndexRatio), "estimate multiplier: final index bytes ≈ ratio × compressed manifest total"),
+		queryBatchMax:     fs.Int("query-batch-max", appconfig.EnvInt("S3INV_QUERY_BATCH_MAX", 0), "max prefixes per batch stats request (0 = handler default)"),
+		metricsAddr:       fs.String("metrics-addr", appconfig.EnvOr("S3INV_METRICS_ADDR", ""), "bind /metrics on this address; empty = mount on the main listener"),
+		autoLoadDryRun:    fs.Bool("auto-load-dry-run", appconfig.EnvBool("S3INV_AUTO_LOAD_DRY_RUN", false), "log autoload decisions instead of acting on them"),
 	}
 }
 
@@ -127,7 +127,7 @@ func resolveRuntimeOptions(f *serverFlags, fileCfg *appconfig.Config, explicit m
 		DiscoveryRefreshInterval: finalDiscoveryRefresh,
 		MaxIndexDisk:             capBytes,
 		IndexHeadroomBytes:       headBytes,
-		AutoLoadConcurrency:      appconfig.Pick(*f.autoLoadConcurrency, explicit["max-auto-load-concurrency"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *int { return c.AutoLoadConcurrency })),
+		MaxConcurrentJobs:        appconfig.Pick(*f.maxConcurrentJobs, explicit["max-concurrent-jobs"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *int { return c.MaxConcurrentJobs })),
 		AutoLoadRetentionDefault: appconfig.Pick(uint32(*f.autoLoadRetention), explicit["auto-load-retention-default"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *uint32 { return c.AutoLoadRetentionDefault })),
 		IndexRatio:               appconfig.Pick(*f.indexRatio, explicit["index-ratio"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *float64 { return c.IndexRatio })),
 		QueryBatchMax:            appconfig.Pick(*f.queryBatchMax, explicit["query-batch-max"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *int { return c.QueryBatchMax })),

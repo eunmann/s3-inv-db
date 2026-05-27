@@ -48,7 +48,7 @@ type Config struct {
 	PollInterval             time.Duration
 	MaxIndexDisk             uint64
 	IndexHeadroomBytes       uint64
-	AutoLoadConcurrency      int
+	MaxConcurrentJobs        int
 	AutoLoadRetentionDefault uint32
 	IndexRatio               float64
 
@@ -180,7 +180,7 @@ func newStores(cfg Config) (serverStores, error) {
 		config:   inventory.NewConfigStore(cfg.DB),
 		jobStore: jobStore,
 		jobBus:   jobBus,
-		jobs:     jobs.NewScheduler(jobStore, jobBus, jobs.WithLogger(cfg.Logger), jobs.WithMaxConcurrency(cfg.AutoLoadConcurrency)),
+		jobs:     jobs.NewScheduler(jobStore, jobBus, jobs.WithLogger(cfg.Logger), jobs.WithMaxConcurrency(cfg.MaxConcurrentJobs)),
 		catalog:  inventory.NewCatalog(invStore),
 	}, nil
 }

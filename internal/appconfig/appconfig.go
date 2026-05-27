@@ -31,7 +31,7 @@ type Config struct {
 	PollInterval             *string  `json:"auto_load_poll_interval,omitempty"` // Go duration string
 	MaxIndexDisk             *string  `json:"max_index_disk,omitempty"`          // size string (e.g. "200GB")
 	IndexHeadroom            *string  `json:"index_headroom,omitempty"`
-	AutoLoadConcurrency      *int     `json:"max_auto_load_concurrency,omitempty"`
+	MaxConcurrentJobs        *int     `json:"max_concurrent_jobs,omitempty"`
 	AutoLoadRetentionDefault *uint32  `json:"auto_load_retention_default,omitempty"`
 	IndexRatio               *float64 `json:"index_ratio,omitempty"`
 	DiscoveryRefreshInterval *string  `json:"discovery_refresh_interval,omitempty"` // Go duration string
