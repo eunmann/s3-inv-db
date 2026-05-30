@@ -204,29 +204,41 @@ func (r *ArrayReader) GetU32(idx uint64) (uint32, error) {
 	return binary.LittleEndian.Uint32(r.data[offset:]), nil
 }
 
-// GetU64 returns the uint64 value at the given index.
+// GetU64 returns the uint64 value at the given index. Honours any
+// Header.Width in [1,8] by reading 8 bytes and masking to that width;
+// files with width < 8 carry an 8-byte tail pad so the load is in
+// bounds.
 func (r *ArrayReader) GetU64(idx uint64) (uint64, error) {
 	if idx >= r.header.Count {
 		return 0, ErrBoundsCheck
 	}
-	if r.header.Width != 8 {
-		return 0, fmt.Errorf("%w: expected 8, got %d", ErrWidthMismatch, r.header.Width)
+	if r.header.Width < 1 || r.header.Width > 8 {
+		return 0, fmt.Errorf("%w: expected 1..8, got %d", ErrWidthMismatch, r.header.Width)
 	}
-	offset := idx * 8
 
-	return binary.LittleEndian.Uint64(r.data[offset:]), nil
+	return r.UnsafeGetU64(idx), nil
 }
 
 // UnsafeGetU32 returns the value without bounds checking. Caller must
 // have validated idx < Count(); out-of-range reads are undefined.
+// Honours Header.Width in [1,4]; tail-padded files allow the 4-byte
+// load to be safe at the last element.
 func (r *ArrayReader) UnsafeGetU32(idx uint64) uint32 {
-	return binary.LittleEndian.Uint32(r.data[idx*4:])
+	off := idx * uint64(r.header.Width)
+	v := binary.LittleEndian.Uint32(r.data[off : off+4])
+
+	return v & uint32(widthMask[r.header.Width])
 }
 
 // UnsafeGetU64 returns the value without bounds checking. Caller must
 // have validated idx < Count(); out-of-range reads are undefined.
+// Honours Header.Width in [1,8]; tail-padded files allow the 8-byte
+// load to be safe at the last element.
 func (r *ArrayReader) UnsafeGetU64(idx uint64) uint64 {
-	return binary.LittleEndian.Uint64(r.data[idx*8:])
+	off := idx * uint64(r.header.Width)
+	v := binary.LittleEndian.Uint64(r.data[off : off+8])
+
+	return v & widthMask[r.header.Width]
 }
 
 // BlobReader provides read access to prefix strings via mmap.

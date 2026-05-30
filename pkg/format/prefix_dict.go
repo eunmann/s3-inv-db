@@ -323,6 +323,14 @@ func (w *DictPrefixWriter) Close() error {
 		return fmt.Errorf("remove scratch IDs: %w", err)
 	}
 
+	// Adaptive width on the per-prefix offsets file too: max value is
+	// the trailing sentinel = w.currentOffset (total segment-ID refs).
+	offsetsPath := filepath.Join(filepath.Dir(w.scratchPath), PrefixDictOffsetsPerPrefixFile)
+	offWidth := byteWidthOf(w.currentOffset)
+	if err := RepackArrayWidthU64(offsetsPath, offsetsPath, offWidth); err != nil {
+		return fmt.Errorf("repack prefix_off to width %d: %w", offWidth, err)
+	}
+
 	return nil
 }
 

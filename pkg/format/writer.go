@@ -132,6 +132,92 @@ func (w *ArrayWriter) Count() uint64 {
 	return w.count
 }
 
+// arrayTailPad is the number of zero bytes a width<8 (or width<4 for
+// u32 readers) array carries after the last element so a single LE
+// load + mask is always in bounds at the last index. 8 bytes is the
+// worst case (a u64 read on a width=1 array).
+const arrayTailPad = 8
+
+// RepackArrayWidthU64 streams srcPath (an ArrayWriter file at any
+// width 1..8) into dstPath at the chosen tight width, then writes
+// arrayTailPad zero bytes so a u64 mask-load at the last element is
+// safe. If srcPath == dstPath the source is overwritten atomically
+// via dstPath+".tmp" + rename.
+func RepackArrayWidthU64(srcPath, dstPath string, width uint8) error {
+	if width < 1 || width > 8 {
+		return fmt.Errorf("%w: width=%d", ErrWidthMismatch, width)
+	}
+	src, err := OpenArray(srcPath)
+	if err != nil {
+		return fmt.Errorf("open scratch: %w", err)
+	}
+	defer src.Close()
+	count := src.Count()
+
+	tmp := dstPath
+	if srcPath == dstPath {
+		tmp = dstPath + ".tmp"
+	}
+	dst, err := os.Create(tmp)
+	if err != nil {
+		return fmt.Errorf("create dst: %w", err)
+	}
+	if _, err := dst.Write(EncodeHeader(Header{
+		Magic:   MagicNumber,
+		Version: Version,
+		Count:   count,
+		Width:   uint32(width),
+	})); err != nil {
+		_ = dst.Close()
+		_ = os.Remove(tmp)
+
+		return fmt.Errorf("write header: %w", err)
+	}
+
+	bw := bufio.NewWriterSize(dst, 1<<20)
+	var buf [8]byte
+	for i := uint64(0); i < count; i++ {
+		v := src.UnsafeGetU64(i)
+		for b := uint8(0); b < width; b++ {
+			buf[b] = byte(v >> (8 * b))
+		}
+		if _, err := bw.Write(buf[:width]); err != nil {
+			_ = dst.Close()
+			_ = os.Remove(tmp)
+
+			return fmt.Errorf("write u64: %w", err)
+		}
+	}
+	pad := [arrayTailPad]byte{}
+	if _, err := bw.Write(pad[:]); err != nil {
+		_ = dst.Close()
+		_ = os.Remove(tmp)
+
+		return fmt.Errorf("write tail pad: %w", err)
+	}
+	if err := bw.Flush(); err != nil {
+		_ = dst.Close()
+		_ = os.Remove(tmp)
+
+		return fmt.Errorf("flush: %w", err)
+	}
+	if err := dst.Sync(); err != nil {
+		_ = dst.Close()
+
+		return fmt.Errorf("sync: %w", err)
+	}
+	if err := dst.Close(); err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
+	if tmp != dstPath {
+		if err := os.Rename(tmp, dstPath); err != nil {
+			return fmt.Errorf("rename: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // BlobWriter writes a prefix blob with offsets.
 type BlobWriter struct {
 	blobFile   *os.File
