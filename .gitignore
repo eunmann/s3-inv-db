@@ -16,6 +16,8 @@ bin/
 # Benchmark output
 benchmark_results.txt
 bench-results/
+# Working-set sweep dir; canonical snapshots belong in bench/{before,after,baselines}/
+bench/grid/
 
 # Dependency directories
 vendor/
