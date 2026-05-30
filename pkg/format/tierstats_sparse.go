@@ -73,20 +73,20 @@ const tierStatsSlotBytes64 = uint64(TierStatsSlotBytes)
 // into a sparse pair under tier_stats/ and removes the dense file on
 // success.
 //
-// Crash safety: the sparse rows file is renamed to its final name
-// LAST among the things a reader looks at, after the offsets file is
-// already in place. TierStatsSparsePresent only returns true once
-// the rows file is at the canonical path, and the only path through
-// OpenTierStats that selects sparse requires the rows file to be
-// present. The reader's invariant therefore holds even if the
-// process is killed at any point during conversion:
+// Crash safety: every file the reader can see is placed by atomic
+// os.Rename. RepackArrayWidthU64 is called against a scratch
+// destination, then renamed into place, so a crash mid-repack cannot
+// leave a half-written offsets file at the canonical path. The
+// reader's dispatch (tierStatsSparsePresent) requires both sparse
+// files to exist at their canonical paths before selecting sparse,
+// and the sparse rows file is the last rename to fire:
 //
-//	state                           reader chooses
-//	─────────────────────────────────────────────
-//	rows .tmp only                  dense (rows.bin missing)
-//	offsets final, rows .tmp        dense
-//	offsets final + rows final      sparse  ✓
-//	offsets final + rows final, no dense   sparse  ✓
+//	state                                          reader chooses
+//	─────────────────────────────────────────────────────────────
+//	any .tmp / .repack scratch files only          dense
+//	offsets final, rows still .tmp                 dense
+//	offsets final + rows final                     sparse  ✓
+//	offsets final + rows final, dense gone         sparse  ✓
 //
 // The dense file is only removed after the sparse pair is fully in
 // place; a crash before that step leaves an orphan dense file (the
@@ -101,45 +101,59 @@ func convertDenseToSparse(densePath string, slotCount int, n, populatedSum uint6
 	sparsePath := filepath.Join(tierDir, TierStatsSparseFile)
 	offsetsPath := filepath.Join(tierDir, TierStatsSparseOffsetsFile)
 	sparseTmp := sparsePath + ".tmp"
-	offsetsTmp := offsetsPath + ".tmp"
+	offsetsScratch := offsetsPath + ".scratch"
+	offsetsRepacked := offsetsPath + ".repack"
 
-	written, err := streamSparseFromDense(densePath, sparseTmp, offsetsTmp, slotCount, n)
+	written, err := streamSparseFromDense(densePath, sparseTmp, offsetsScratch, slotCount, n)
 	if err != nil {
 		_ = os.Remove(sparseTmp)
-		_ = os.Remove(offsetsTmp)
+		_ = os.Remove(offsetsScratch)
 
 		return err
 	}
 	expected := uint64(tierStatsSparseBitmapBytes)*n + tierStatsSlotBytes64*populatedSum
 	if written != expected {
 		_ = os.Remove(sparseTmp)
-		_ = os.Remove(offsetsTmp)
+		_ = os.Remove(offsetsScratch)
 
 		return fmt.Errorf("%w: wrote=%d expected=%d", errSparseSizeMismatch, written, expected)
 	}
 
-	// Step 1: repack offsets into the FINAL path. The sparse rows
-	// file is still at sparseTmp; tierStatsSparsePresent therefore
-	// returns false, and the reader keeps using dense.
+	// Step 1: repack offsets to a SEPARATE tmp path, not the final
+	// offsets path. RepackArrayWidthU64 writes directly to its dst
+	// when src != dst, so a crash mid-repack at the final path would
+	// leave a torn offsets file the next reader could see. Writing
+	// to .repack first keeps that file invisible to the dispatch.
 	offWidth := byteWidthOf(written)
-	if err := RepackArrayWidthU64(offsetsTmp, offsetsPath, offWidth); err != nil {
+	if err := RepackArrayWidthU64(offsetsScratch, offsetsRepacked, offWidth); err != nil {
 		_ = os.Remove(sparseTmp)
-		_ = os.Remove(offsetsTmp)
+		_ = os.Remove(offsetsScratch)
+		_ = os.Remove(offsetsRepacked)
 
 		return fmt.Errorf("repack offsets to width %d: %w", offWidth, err)
 	}
-	if err := os.Remove(offsetsTmp); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(offsetsScratch); err != nil && !os.IsNotExist(err) {
 		_ = os.Remove(sparseTmp)
-		_ = os.Remove(offsetsPath)
+		_ = os.Remove(offsetsRepacked)
 
 		return fmt.Errorf("remove offsets scratch: %w", err)
 	}
 
-	// Step 2: rename the rows file into its final path. This is the
-	// switch-over point — once it returns, tierStatsSparsePresent is
-	// true and the reader will route to the sparse path. The
-	// offsets file is already at its final path, so OpenTierStatsSparse
-	// has everything it needs.
+	// Step 2: atomically rename the repacked offsets into the final
+	// path. tierStatsSparsePresent requires BOTH files at the
+	// canonical paths and the rows file isn't there yet, so the
+	// reader still picks dense after this step.
+	if err := os.Rename(offsetsRepacked, offsetsPath); err != nil {
+		_ = os.Remove(sparseTmp)
+		_ = os.Remove(offsetsRepacked)
+
+		return fmt.Errorf("rename offsets: %w", err)
+	}
+
+	// Step 3: rename the rows file into its final path. Switch-over
+	// point — once both sparse files are at the canonical paths,
+	// tierStatsSparsePresent returns true and the reader routes to
+	// the sparse reader.
 	if err := os.Rename(sparseTmp, sparsePath); err != nil {
 		_ = os.Remove(sparseTmp)
 		_ = os.Remove(offsetsPath)
@@ -147,7 +161,7 @@ func convertDenseToSparse(densePath string, slotCount int, n, populatedSum uint6
 		return fmt.Errorf("rename sparse: %w", err)
 	}
 
-	// Step 3: drop the dense file. A crash here leaves an orphan
+	// Step 4: drop the dense file. A crash here leaves an orphan
 	// dense file but the reader correctly chooses sparse.
 	if err := os.Remove(densePath); err != nil {
 		return fmt.Errorf("remove dense: %w", err)
@@ -402,11 +416,16 @@ func (r *TierStatsSparseReader) Close() error {
 	return errors.Join(mmapErr, offsetsErr)
 }
 
-// tierStatsSparsePresent reports whether the sparse pair exists on
-// disk under indexDir/tier_stats/. Used by OpenTierStats to pick a
-// reader.
+// tierStatsSparsePresent reports whether BOTH halves of the sparse
+// pair exist on disk under indexDir/tier_stats/. Used by
+// OpenTierStats to pick a reader. Requiring both files lets a
+// half-state from disk corruption or manual recovery fall through to
+// dense rather than failing loudly in OpenTierStatsSparse.
 func tierStatsSparsePresent(indexDir string) bool {
-	_, err := os.Stat(filepath.Join(indexDir, TierStatsDir, TierStatsSparseFile))
+	if _, err := os.Stat(filepath.Join(indexDir, TierStatsDir, TierStatsSparseFile)); err != nil {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(indexDir, TierStatsDir, TierStatsSparseOffsetsFile))
 
 	return err == nil
 }
