@@ -1,0 +1,9 @@
+goos: linux
+goarch: amd64
+pkg: github.com/eunmann/s3-inv-db/pkg/indexread
+cpu: AMD Ryzen 9 5950X 16-Core Processor            
+BenchmarkDiskFootprint/n=10000-32         	       1	  95977648 ns/op	     30246 prefixes	   5323316 tier_row_B	       176.0 tier_row_B/prefix	       176.0 tier_row_stride_B	   6724984 total_B	       222.3 total_B/prefix
+BenchmarkDiskFootprint/n=100000-32        	       1	 830184903 ns/op	    266712 prefixes	  46941332 tier_row_B	       176.0 tier_row_B/prefix	       176.0 tier_row_stride_B	  59267604 total_B	       222.2 total_B/prefix
+BenchmarkDiskFootprint/n=1000000-32       	       1	8204188555 ns/op	   2374251 prefixes	 417868196 tier_row_B	       176.0 tier_row_B/prefix	       176.0 tier_row_stride_B	 527536055 total_B	       222.2 total_B/prefix
+PASS
+ok  	github.com/eunmann/s3-inv-db/pkg/indexread	9.311s

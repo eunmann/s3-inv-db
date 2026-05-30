@@ -1,0 +1,4 @@
+BenchmarkBrowse_PerCallVsBatched/n=100000/children=8892/per_call-32         	    2434	    238089 ns/op	  141392 B/op	    8892 allocs/op
+BenchmarkBrowse_PerCallVsBatched/n=100000/children=8892/batched-32          	    2419	    247524 ns/op	  288849 B/op	    8893 allocs/op
+BenchmarkBrowse_PerCallVsBatched/n=1000000/children=9260/per_call-32        	    1830	    309328 ns/op	  147280 B/op	    9260 allocs/op
+BenchmarkBrowse_PerCallVsBatched/n=1000000/children=9260/batched-32         	    1844	    310809 ns/op	  302929 B/op	    9261 allocs/op

@@ -197,6 +197,28 @@ func (m *MPHF) GetPrefix(pos uint64) (string, error) {
 	return s, nil
 }
 
+// GetPrefixesAscending reconstructs the prefixes at the given
+// positions (sorted ascending). For the FST backend this uses a
+// single iterator pass; for the classic backend it dispatches
+// per-position GetPrefix calls. Callers should prefer this over a
+// hand-rolled per-position loop when the position list is large
+// (e.g. a Browse subtree scan).
+func (m *MPHF) GetPrefixesAscending(positions []uint64) ([]string, error) {
+	if m.fstIdx != nil {
+		return m.fstIdx.GetPrefixesAscending(positions)
+	}
+	out := make([]string, len(positions))
+	for i, p := range positions {
+		s, err := m.GetPrefix(p)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = s
+	}
+
+	return out, nil
+}
+
 // LookupWithVerify returns the position and verifies the stored prefix
 // matches exactly, eliminating fingerprint-collision false positives.
 func (m *MPHF) LookupWithVerify(prefix string) (uint64, bool) {

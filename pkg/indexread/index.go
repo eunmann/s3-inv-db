@@ -140,6 +140,19 @@ func (idx *Index) PrefixString(pos uint64) (string, error) {
 	return s, nil
 }
 
+// PrefixStrings reconstructs the prefixes at positions, which must be
+// sorted ascending. Browse-shaped scans (children of a subtree, all in
+// preorder) get a single-pass walk on the FST backend; the classic
+// backend dispatches per-position lookups.
+func (idx *Index) PrefixStrings(positions []uint64) ([]string, error) {
+	out, err := idx.mphf.GetPrefixesAscending(positions)
+	if err != nil {
+		return nil, fmt.Errorf("get prefixes: %w", err)
+	}
+
+	return out, nil
+}
+
 func (idx *Index) Count() uint64    { return idx.count }
 func (idx *Index) MaxDepth() uint32 { return idx.maxDepth }
 

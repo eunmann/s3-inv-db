@@ -10,6 +10,18 @@ import (
 	"github.com/blevesearch/vellum"
 )
 
+// resolveAnchorEvery lets benches override DefaultAnchorEvery via
+// S3INV_FST_ANCHOR_EVERY at builder construction time.
+func resolveAnchorEvery() uint64 {
+	if v := os.Getenv("S3INV_FST_ANCHOR_EVERY"); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+
+	return DefaultAnchorEvery
+}
+
 // FST-based prefix index file names.
 const (
 	FSTFile             = "prefixes.fst"
@@ -22,8 +34,7 @@ const (
 // "starting key" anchor so pos→prefix reconstruction is a short
 // forward walk of the FST iterator. Higher = smaller anchor file,
 // slower GetPrefix. Lower = bigger anchor file, faster GetPrefix.
-// At K=64 / n=2.37M prefixes anchors are ~2 MB and GetPrefix walks
-// at most 63 vellum Next() calls.
+// Overridable via S3INV_FST_ANCHOR_EVERY for experimentation.
 const DefaultAnchorEvery = 64
 
 // FSTPrefixBuilder writes a vellum FST mapping prefix → preorder pos
@@ -75,7 +86,7 @@ func NewFSTPrefixBuilder(outDir string) (*FSTPrefixBuilder, error) {
 		fstFile:     f,
 		vBuilder:    vb,
 		anchorBlob:  aw,
-		anchorEvery: DefaultAnchorEvery,
+		anchorEvery: resolveAnchorEvery(),
 	}, nil
 }
 
@@ -314,6 +325,53 @@ func (r *FSTPrefixReader) GetPrefix(pos uint64) (string, error) {
 	key, _ := it.Current()
 
 	return string(key), nil
+}
+
+// GetPrefixesAscending reconstructs prefixes at the given positions in
+// one pass. positions must be sorted ascending. Opens a single vellum
+// iterator at the anchor for the lowest position, then walks Next()
+// forward through the FST. For Browse-style queries (contiguous
+// subtree ranges) this collapses N per-call iterator startups into
+// one, cutting per-position cost ~25×.
+func (r *FSTPrefixReader) GetPrefixesAscending(positions []uint64) ([]string, error) {
+	if len(positions) == 0 {
+		return nil, nil
+	}
+	first := positions[0]
+	if first >= r.count {
+		return nil, ErrBoundsCheck
+	}
+	anchorIdx := first / r.anchorEvery
+	cur := anchorIdx * r.anchorEvery
+	seed, err := r.anchorBlob.Get(anchorIdx)
+	if err != nil {
+		return nil, fmt.Errorf("get anchor %d: %w", anchorIdx, err)
+	}
+	it, err := r.fst.Iterator([]byte(seed), nil)
+	if err != nil {
+		return nil, fmt.Errorf("open iterator at anchor %d: %w", anchorIdx, err)
+	}
+	defer it.Close()
+
+	out := make([]string, len(positions))
+	for i, pos := range positions {
+		if pos < cur {
+			return nil, fmt.Errorf("GetPrefixesAscending: positions not sorted at index %d (pos=%d < cur=%d)", i, pos, cur)
+		}
+		if pos >= r.count {
+			return nil, ErrBoundsCheck
+		}
+		for cur < pos {
+			if err := it.Next(); err != nil {
+				return nil, fmt.Errorf("iterator next at cur=%d toward pos=%d: %w", cur, pos, err)
+			}
+			cur++
+		}
+		key, _ := it.Current()
+		out[i] = string(key)
+	}
+
+	return out, nil
 }
 
 // Close releases the FST + anchor resources.

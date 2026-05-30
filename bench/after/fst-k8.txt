@@ -1,0 +1,17 @@
+BenchmarkBrowse_Matrix/n=100000/warm-32       	     237	   1008791 ns/op	 1940787 B/op	   12836 allocs/op
+BenchmarkBrowse_Matrix/n=100000/cold-32       	     230	    899478 ns/op	 1895278 B/op	   12527 allocs/op
+BenchmarkBrowse_Matrix/n=1000000/warm-32      	     100	   7335633 ns/op	12883994 B/op	   84540 allocs/op
+BenchmarkBrowse_Matrix/n=1000000/cold-32      	     100	   6727615 ns/op	12883974 B/op	   84540 allocs/op
+BenchmarkQueryScale_StatsForPrefix_Cold/n=100000-32         	  199580	      1023 ns/op	     160 B/op	       1 allocs/op
+BenchmarkQueryScale_StatsForPrefix_Cold/n=1000000-32        	    9813	     20466 ns/op	     160 B/op	       1 allocs/op
+BenchmarkDiskFootprint/n=10000-32                           	1000000000	         0.08031 ns/op	     30246 prefixes	   5323316 tier_row_B	       176.0 tier_row_B/prefix	       176.0 tier_row_stride_B	   6835125 total_B	       226.0 total_B/prefix
+BenchmarkDiskFootprint/n=100000-32                          	       1	 802687987 ns/op	    266712 prefixes	  46941332 tier_row_B	       176.0 tier_row_B/prefix	       176.0 tier_row_stride_B	  60298723 total_B	       226.1 total_B/prefix
+BenchmarkDiskFootprint/n=1000000-32                         	       1	7974351246 ns/op	   2374251 prefixes	 417868196 tier_row_B	       176.0 tier_row_B/prefix	       176.0 tier_row_stride_B	 537144438 total_B	       226.2 total_B/prefix
+BenchmarkPrefixString_Matrix/n=100000/warm-32               	   40158	      6178 ns/op	   11569 B/op	      76 allocs/op
+BenchmarkPrefixString_Matrix/n=100000/cold-32               	   37587	      6270 ns/op	   11571 B/op	      76 allocs/op
+BenchmarkPrefixString_Matrix/n=1000000/warm-32              	   37852	      6012 ns/op	   11839 B/op	      77 allocs/op
+BenchmarkPrefixString_Matrix/n=1000000/cold-32              	   42056	      5752 ns/op	   11833 B/op	      77 allocs/op
+BenchmarkQueryScale_Lookup/n=100000-32                      	  330642	       626.1 ns/op	     160 B/op	       1 allocs/op
+BenchmarkQueryScale_Lookup/n=1000000-32                     	  284977	       856.6 ns/op	     160 B/op	       1 allocs/op
+BenchmarkQueryScale_StatsForPrefix/n=100000-32              	  286060	       719.5 ns/op	     160 B/op	       1 allocs/op
+BenchmarkQueryScale_StatsForPrefix/n=1000000-32             	  246607	       967.8 ns/op	     160 B/op	       1 allocs/op
