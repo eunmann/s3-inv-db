@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 
@@ -591,6 +590,3 @@ func (r *CoreStatsReader) Close() error {
 
 	return err
 }
-
-// silence unused import in case io isn't otherwise referenced.
-var _ = io.EOF
