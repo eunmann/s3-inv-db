@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/bits"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -116,33 +117,39 @@ func (r *TierStatsReader) breakdownAt(pos uint64, nonZeroOnly bool) []TierBreakd
 }
 
 // sparseBreakdownAt produces a TierBreakdown slice from the sparse
-// reader. For nonZeroOnly=false (BreakdownAll), absent slots are
-// emitted as zero-valued entries to match the dense path's contract.
+// reader. For nonZeroOnly=true (Breakdown), only populated slots are
+// returned. For nonZeroOnly=false (BreakdownAll), absent slots are
+// emitted as zero-valued entries in their dense position.
+//
+// Hot path makes a single allocation (the result slice). The bitmap
+// + populated cells are decoded into a fixed-size on-stack array,
+// matching the dense path's allocation profile.
 func (r *TierStatsReader) sparseBreakdownAt(pos uint64, nonZeroOnly bool) []TierBreakdown {
 	if pos >= r.sparseReader.Count() {
 		return make([]TierBreakdown, 0, len(r.manifest.Tiers))
 	}
-	// Materialize the row into per-slot (count, bytes); the visit
-	// callback fills only the populated ones.
-	type cb struct{ count, bytes uint64 }
-	scratch := make([]cb, len(r.manifest.Tiers))
-	r.sparseReader.VisitRow(pos, func(slotIdx int, count, bytesV uint64) {
-		if slotIdx < len(scratch) {
-			scratch[slotIdx] = cb{count: count, bytes: bytesV}
-		}
-	})
 
-	breakdown := make([]TierBreakdown, 0, len(r.manifest.Tiers))
+	// tierStatsSparseBitmapBytes*8 == 16, well above the project's
+	// 13-tier maximum, so this stack array always covers every slot.
+	const maxSlots = tierStatsSparseBitmapBytes * 8
+	var counts, bytesArr [maxSlots]uint64
+	bitmap := r.sparseReader.fillRow(pos, &counts, &bytesArr)
+
+	estCap := bits.OnesCount16(bitmap)
+	if !nonZeroOnly {
+		estCap = len(r.manifest.Tiers)
+	}
+	breakdown := make([]TierBreakdown, 0, estCap)
 	for slotIdx, tier := range r.manifest.Tiers {
-		s := scratch[slotIdx]
-		if nonZeroOnly && s.count == 0 && s.bytes == 0 {
+		populated := bitmap&(1<<slotIdx) != 0
+		if nonZeroOnly && !populated {
 			continue
 		}
 		breakdown = append(breakdown, TierBreakdown{
 			TierID:      tier.ID,
 			TierName:    tier.Name,
-			Bytes:       s.bytes,
-			ObjectCount: s.count,
+			Bytes:       bytesArr[slotIdx],
+			ObjectCount: counts[slotIdx],
 		})
 	}
 

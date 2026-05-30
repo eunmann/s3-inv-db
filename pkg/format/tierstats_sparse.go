@@ -324,26 +324,30 @@ func (r *TierStatsSparseReader) Count() uint64 { return r.rowCount }
 // SlotCount returns the configured manifest slot count.
 func (r *TierStatsSparseReader) SlotCount() int { return r.slotCount }
 
-// VisitRow yields each populated slot's (slotIdx, count, bytes) to
-// visit. Caller-supplied callback so the reader can decide how to
-// fold the row (e.g. into a TierBreakdown slice) without per-call
-// allocation. Returns immediately on bounds error.
-func (r *TierStatsSparseReader) VisitRow(pos uint64, visit func(slotIdx int, count, bytes uint64)) {
+// fillRow decodes the row at pos into the caller-supplied per-slot
+// arrays and returns the presence bitmap. Absent slots are left at
+// their zero value. counts and bytesArr must be large enough to hold
+// every present-tier slot — the reader's slotCount upper bound is
+// 8*tierStatsSparseBitmapBytes = 16, so a [16]uint64 on the caller
+// stack suffices.
+func (r *TierStatsSparseReader) fillRow(pos uint64, counts, bytesArr *[tierStatsSparseBitmapBytes * 8]uint64) uint16 {
 	if pos >= r.rowCount {
-		return
+		return 0
 	}
 	start := r.offsets.UnsafeGetU64(pos)
 	data := r.mmap.Data()[r.dataOff:]
 	bitmap := binary.LittleEndian.Uint16(data[start : start+tierStatsSparseBitmapBytes])
 	off := start + tierStatsSparseBitmapBytes
-	for bitmap != 0 {
-		slot := bits.TrailingZeros16(bitmap)
-		bitmap &= bitmap - 1
-		count := binary.LittleEndian.Uint64(data[off : off+8])
-		b := binary.LittleEndian.Uint64(data[off+8 : off+16])
-		visit(slot, count, b)
+	bm := bitmap
+	for bm != 0 {
+		slot := bits.TrailingZeros16(bm)
+		bm &= bm - 1
+		counts[slot] = binary.LittleEndian.Uint64(data[off : off+8])
+		bytesArr[slot] = binary.LittleEndian.Uint64(data[off+8 : off+16])
 		off += TierStatsSlotBytes
 	}
+
+	return bitmap
 }
 
 // Close releases mmap'd regions.
