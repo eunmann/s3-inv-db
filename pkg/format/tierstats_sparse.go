@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math/bits"
 	"os"
 	"path/filepath"
@@ -202,7 +203,7 @@ func streamSparseFromDense(densePath, sparseTmp, offsetsTmp string, slotCount in
 
 			return 0, fmt.Errorf("write offset row %d: %w", row, err)
 		}
-		if _, err := dense.Read(denseRow); err != nil {
+		if _, err := io.ReadFull(dense, denseRow); err != nil {
 			_ = sf.Close()
 			_ = ow.Close()
 
