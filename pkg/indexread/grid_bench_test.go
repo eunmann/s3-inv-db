@@ -381,6 +381,11 @@ func buildGridIndex(tb testing.TB, spec benchutil.GridSpec) string {
 			tb.Fatalf("SetPrefixDictionary: %v", err)
 		}
 	}
+	if os.Getenv("S3INV_FST") == "1" {
+		if err := builder.SetUseFST(true); err != nil {
+			tb.Fatalf("SetUseFST: %v", err)
+		}
+	}
 	if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
 		tb.Fatalf("SetPresentTiers: %v", err)
 	}
@@ -464,6 +469,7 @@ var gridReportedFiles = []gridFile{
 	{"prefix_dict.prefix_off.u64", "Bpp_poff", false},
 	{"depth_positions.u64", "Bpp_dpos", false},
 	{"prefix_blob.bin", "Bpp_pblob", false},
+	{"prefixes.fst", "Bpp_fst", false},
 }
 
 //nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them

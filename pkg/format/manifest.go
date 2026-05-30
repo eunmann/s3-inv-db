@@ -43,20 +43,29 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		Files:     make(map[string]FileInfo),
 	}
 
-	// Files always written by the current builder. Hard-coded so the
-	// manifest can be verified against an expected set rather than
-	// whatever happened to land on disk.
+	// Files unconditionally written by the current builder.
 	requiredTopLevel := []string{
 		DepthOffsetsFile,
 		DepthPositionsFile,
-		MPHFile,
-		CombinedMPHFArrayFile,
 		PrefixBlobFile,
 		PrefixOffsetsFile,
 		"tiers.json",
 		CoreStatsFile,
 	}
 	for _, name := range requiredTopLevel {
+		if err := addFile(dir, name, manifest.Files); err != nil {
+			return err
+		}
+	}
+
+	// Forward-lookup backend files. Exactly one of {MPHF, FST} is
+	// written; addFile silently skips the absent one.
+	forwardLookupFiles := []string{
+		MPHFile,
+		CombinedMPHFArrayFile,
+		FSTFile,
+	}
+	for _, name := range forwardLookupFiles {
 		if err := addFile(dir, name, manifest.Files); err != nil {
 			return err
 		}

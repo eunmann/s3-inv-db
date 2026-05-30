@@ -20,78 +20,94 @@ const (
 	FilePerm os.FileMode = 0o600
 )
 
-// MPHF provides read access to the minimal perfect hash function.
+// MPHF provides read access to a prefix → preorder-position index.
 //
-// Thread Safety: MPHF is safe for concurrent read access from
-// multiple goroutines. Close once, after all reads.
+// Thread Safety: safe for concurrent reads. Close once after all
+// reads.
 //
-// Exactly one of prefixBlob or dictPrefixes is non-nil; usePrefixDict
-// selects between them.
+// The struct may host one of two forward-lookup backends:
+//
+//   - The classic MPHF backend uses BBHash + an interleaved
+//     fingerprint+pos array (mph.bin + mph_fp_pos.u64).
+//   - The FST backend uses a vellum FST (prefixes.fst).
+//
+// fstIdx is non-nil iff prefixes.fst was found on disk; in that
+// case the MPHF arrays may be absent and Lookup routes through the
+// FST. The reverse path (GetPrefix) always uses prefix-blob /
+// prefix-dict regardless of which forward backend is active.
 type MPHF struct {
-	mph *bbhash.BBHash2
-	// combined holds the interleaved [fp, pos, fp, pos, ...] array.
-	// Lookup at hash position p reads combined.UnsafeGetU64(2p) for
-	// fp and combined.UnsafeGetU64(2p+1) for pos — adjacent words
-	// in the same cache line.
+	mph           *bbhash.BBHash2
 	combined      *ArrayReader
 	prefixBlob    *BlobReader
 	dictPrefixes  *DictPrefixReader
+	fstIdx        *FSTPrefixReader
 	count         uint64
 	usePrefixDict bool
 }
 
-// OpenMPHF opens an MPHF from the given directory.
+// OpenMPHF opens a prefix-lookup index from the given directory.
+// Detects which forward backend was written (FST if prefixes.fst is
+// present, otherwise the classic MPHF). The reverse path picks up
+// prefix_dict / prefix_blob via the same code in either case.
 func OpenMPHF(outDir string) (*MPHF, error) {
+	prefixBlob, dictPrefixes, usePrefixDict, err := openPrefixStorage(outDir)
+	if err != nil {
+		return nil, err
+	}
+
+	// FST backend: prefixes.fst exists. mph.bin / mph_fp_pos.u64 may
+	// or may not exist; we don't read them.
+	if FSTPresent(outDir) {
+		fst, fstErr := OpenFSTPrefixReader(outDir)
+		if fstErr != nil {
+			closePrefixStorage(prefixBlob, dictPrefixes)
+
+			return nil, fmt.Errorf("open fst prefix reader: %w", fstErr)
+		}
+
+		return &MPHF{
+			prefixBlob:    prefixBlob,
+			dictPrefixes:  dictPrefixes,
+			fstIdx:        fst,
+			count:         fst.Count(),
+			usePrefixDict: usePrefixDict,
+		}, nil
+	}
+
+	// Classic MPHF backend.
 	mphPath := filepath.Join(outDir, MPHFile)
 	combinedPath := filepath.Join(outDir, CombinedMPHFArrayFile)
 
-	info, err := os.Stat(mphPath)
-	if err != nil {
-		return nil, fmt.Errorf("stat mph file: %w", err)
+	info, statErr := os.Stat(mphPath)
+	if statErr != nil {
+		closePrefixStorage(prefixBlob, dictPrefixes)
+
+		return nil, fmt.Errorf("stat mph file: %w", statErr)
 	}
 	if info.Size() == 0 {
+		closePrefixStorage(prefixBlob, dictPrefixes)
+
 		return &MPHF{count: 0}, nil
 	}
 
-	mphData, err := os.ReadFile(mphPath)
-	if err != nil {
-		return nil, fmt.Errorf("read mph file: %w", err)
+	mphData, readErr := os.ReadFile(mphPath)
+	if readErr != nil {
+		closePrefixStorage(prefixBlob, dictPrefixes)
+
+		return nil, fmt.Errorf("read mph file: %w", readErr)
 	}
 	mph := &bbhash.BBHash2{}
 	if err := mph.UnmarshalBinary(mphData); err != nil {
+		closePrefixStorage(prefixBlob, dictPrefixes)
+
 		return nil, fmt.Errorf("unmarshal MPHF: %w", err)
 	}
 
-	combined, err := OpenArrayWithHint(combinedPath, AccessHintRandom)
-	if err != nil {
-		return nil, fmt.Errorf("open combined fp+pos: %w", err)
-	}
+	combined, openErr := OpenArrayWithHint(combinedPath, AccessHintRandom)
+	if openErr != nil {
+		closePrefixStorage(prefixBlob, dictPrefixes)
 
-	var (
-		prefixBlob    *BlobReader
-		dictPrefixes  *DictPrefixReader
-		usePrefixDict bool
-	)
-	dictBlobPath := filepath.Join(outDir, PrefixDictBlobFile)
-	if _, err := os.Stat(dictBlobPath); err == nil {
-		dictPrefixes, err = OpenDictPrefixReader(outDir)
-		if err != nil {
-			combined.Close()
-
-			return nil, fmt.Errorf("open dict prefixes: %w", err)
-		}
-		usePrefixDict = true
-	} else {
-		blobPath := filepath.Join(outDir, PrefixBlobFile)
-		offsetsPath := filepath.Join(outDir, PrefixOffsetsFile)
-		if _, err := os.Stat(blobPath); err == nil {
-			prefixBlob, err = OpenBlob(blobPath, offsetsPath)
-			if err != nil {
-				combined.Close()
-
-				return nil, fmt.Errorf("open prefix blob: %w", err)
-			}
-		}
+		return nil, fmt.Errorf("open combined fp+pos: %w", openErr)
 	}
 
 	return &MPHF{
@@ -104,9 +120,46 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 	}, nil
 }
 
+// openPrefixStorage opens prefix_dict.* if present, falling back to
+// prefix_blob.bin + prefix_offsets.u64. Used by both forward
+// backends — the reverse path is independent of which one's on disk.
+//
+//nolint:nonamedreturns // multi-result with clear names
+func openPrefixStorage(outDir string) (blob *BlobReader, dict *DictPrefixReader, usePrefixDict bool, err error) {
+	dictBlobPath := filepath.Join(outDir, PrefixDictBlobFile)
+	if _, statErr := os.Stat(dictBlobPath); statErr == nil {
+		dict, err = OpenDictPrefixReader(outDir)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("open dict prefixes: %w", err)
+		}
+
+		return nil, dict, true, nil
+	}
+
+	blobPath := filepath.Join(outDir, PrefixBlobFile)
+	offsetsPath := filepath.Join(outDir, PrefixOffsetsFile)
+	if _, statErr := os.Stat(blobPath); statErr == nil {
+		blob, err = OpenBlob(blobPath, offsetsPath)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("open prefix blob: %w", err)
+		}
+	}
+
+	return blob, nil, false, nil
+}
+
+func closePrefixStorage(blob *BlobReader, dict *DictPrefixReader) {
+	if blob != nil {
+		_ = blob.Close()
+	}
+	if dict != nil {
+		_ = dict.Close()
+	}
+}
+
 // Close releases resources.
 func (m *MPHF) Close() error {
-	var combinedErr, blobErr, dictErr error
+	var combinedErr, blobErr, dictErr, fstErr error
 	if m.combined != nil {
 		combinedErr = m.combined.Close()
 	}
@@ -116,12 +169,18 @@ func (m *MPHF) Close() error {
 	if m.dictPrefixes != nil {
 		dictErr = m.dictPrefixes.Close()
 	}
+	if m.fstIdx != nil {
+		fstErr = m.fstIdx.Close()
+	}
 
-	return errors.Join(combinedErr, blobErr, dictErr)
+	return errors.Join(combinedErr, blobErr, dictErr, fstErr)
 }
 
 // Lookup returns the preorder position for a prefix, or ok=false if not found.
 func (m *MPHF) Lookup(prefix string) (uint64, bool) {
+	if m.fstIdx != nil {
+		return m.fstIdx.Lookup(prefix)
+	}
 	if m.count == 0 || m.mph == nil {
 		return 0, false
 	}

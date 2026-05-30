@@ -30,6 +30,7 @@ type IndexBuilder struct {
 	coreStatsW        *format.CoreStatsBuilder
 	tierStatsRowW     *format.TierStatsRowWriter
 	mphfBuilder       *format.StreamingMPHFBuilder
+	fstBuilder        *format.FSTPrefixBuilder
 	depthIndexBuilder *format.DepthIndexBuilder
 	declaredTiers     []tiers.ID
 	resolvedTiers     []tiers.ID
@@ -39,6 +40,7 @@ type IndexBuilder struct {
 	posCount          uint64
 	maxDepth          uint32
 	prefixDictionary  bool
+	useFST            bool
 	tiersDeclared     bool
 	closed            bool
 }
@@ -107,6 +109,11 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 // discard rows already streamed in.
 var ErrPrefixDictionaryAfterAdd = errors.New("SetPrefixDictionary must be called before the first Add")
 
+// ErrUseFSTAfterAdd is returned when SetUseFST is called after the
+// first Add — the prefix sub-builder it recreates would silently
+// drop already-streamed rows.
+var ErrUseFSTAfterAdd = errors.New("SetUseFST must be called before the first Add")
+
 // SetPrefixDictionary toggles dictionary-encoded prefix storage.
 // Must be called before the first Add — recreates the MPHF builder,
 // which would silently drop any rows already added. Returns
@@ -120,18 +127,58 @@ func (b *IndexBuilder) SetPrefixDictionary(enabled bool) error {
 	}
 	b.prefixDictionary = enabled
 
+	return b.rebuildPrefixSubBuilders()
+}
+
+// SetUseFST switches forward-Lookup storage from the MPHF +
+// fp_pos pair to a vellum FST (Option A). The prefix-blob /
+// prefix-dict files still get written so reverse pos→prefix lookup
+// is unchanged. Must be called before the first Add.
+func (b *IndexBuilder) SetUseFST(enabled bool) error {
+	if b.useFST == enabled {
+		return nil
+	}
+	if b.posCount > 0 {
+		return ErrUseFSTAfterAdd
+	}
+	b.useFST = enabled
+
+	return b.rebuildPrefixSubBuilders()
+}
+
+// rebuildPrefixSubBuilders closes any open prefix sub-builders and
+// re-creates them to match the current prefixDictionary / useFST
+// flags. Called from the Set… methods.
+func (b *IndexBuilder) rebuildPrefixSubBuilders() error {
 	if b.mphfBuilder != nil {
 		_ = b.mphfBuilder.Close()
 		b.mphfBuilder = nil
 	}
+	if b.fstBuilder != nil {
+		_ = b.fstBuilder.Close()
+		b.fstBuilder = nil
+	}
 
 	var opts []format.StreamingMPHFOption
-	if enabled {
+	if b.prefixDictionary {
 		opts = append(opts, format.WithPrefixDictionary())
+	}
+	if b.useFST {
+		opts = append(opts, format.WithoutMPHF())
+		fst, err := format.NewFSTPrefixBuilder(b.outDir)
+		if err != nil {
+			return fmt.Errorf("create FST builder: %w", err)
+		}
+		b.fstBuilder = fst
 	}
 	mphfBuilder, err := format.NewStreamingMPHFBuilder(b.tempDir, opts...)
 	if err != nil {
-		return fmt.Errorf("recreate MPHF builder: %w", err)
+		if b.fstBuilder != nil {
+			_ = b.fstBuilder.Close()
+			b.fstBuilder = nil
+		}
+
+		return fmt.Errorf("recreate prefix builder: %w", err)
 	}
 	b.mphfBuilder = mphfBuilder
 
@@ -187,6 +234,9 @@ func (b *IndexBuilder) cleanup() {
 	if b.mphfBuilder != nil {
 		b.mphfBuilder.Close()
 	}
+	if b.fstBuilder != nil {
+		_ = b.fstBuilder.Close()
+	}
 	if b.tierStatsRowW != nil {
 		b.tierStatsRowW.Close()
 	}
@@ -220,6 +270,11 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	}
 	if err := b.mphfBuilder.Add(row.Prefix, pos); err != nil {
 		return fmt.Errorf("add to MPHF builder: %w", err)
+	}
+	if b.fstBuilder != nil {
+		if err := b.fstBuilder.Add(row.Prefix, pos); err != nil {
+			return fmt.Errorf("add to FST builder: %w", err)
+		}
 	}
 
 	if err := b.coreStatsW.Add(row.Count, row.TotalBytes, row.Depth); err != nil {
@@ -433,7 +488,8 @@ func (b *IndexBuilder) closeStreamingWriters() error {
 	return nil
 }
 
-// buildMPHF builds the MPHF and logs progress.
+// buildMPHF builds the MPHF (or, when FST mode is on, the prefix
+// storage half of the build) and logs progress.
 func (b *IndexBuilder) buildMPHF(ctx context.Context) error {
 	log := zerolog.Ctx(ctx)
 	mphfStart := time.Now()
@@ -441,6 +497,14 @@ func (b *IndexBuilder) buildMPHF(ctx context.Context) error {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
 	b.mphfBuilder.Close()
+
+	if b.fstBuilder != nil {
+		if err := b.fstBuilder.Build(b.outDir); err != nil {
+			return fmt.Errorf("build FST: %w", err)
+		}
+		_ = b.fstBuilder.Close()
+		log.Debug().Msg("index builder: FST sidecar built")
+	}
 
 	log.Debug().
 		Str("mphf_duration", humanfmt.Duration(time.Since(mphfStart))).

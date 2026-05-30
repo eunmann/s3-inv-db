@@ -60,6 +60,7 @@ type StreamingMPHFBuilder struct {
 	bufferSize int
 
 	usePrefixDict bool
+	skipMPHF      bool
 	built         bool
 }
 
@@ -80,44 +81,49 @@ func WithPrefixDictionary() StreamingMPHFOption {
 	}
 }
 
+// WithoutMPHF tells the builder to skip the BBHash + fp_pos write
+// path entirely. Add() still streams prefixes to the temp file, and
+// Build() still emits the prefix-blob / prefix-dict files, but no
+// hash / position / fingerprint arrays are accumulated and no
+// mph.bin / mph_fp_pos.u64 are written. Used by the IndexBuilder
+// when an FST sidecar is taking over forward Lookup (Option A) —
+// the prefix-blob / dict files remain the pos→prefix store.
+func WithoutMPHF() StreamingMPHFOption {
+	return func(b *StreamingMPHFBuilder) {
+		b.skipMPHF = true
+	}
+}
+
+// writePrefixStorage dispatches to the dict or raw-blob writer
+// based on usePrefixDict. Shared between the full-MPHF and the
+// WithoutMPHF Build paths.
+func (b *StreamingMPHFBuilder) writePrefixStorage(outDir string) error {
+	if b.usePrefixDict {
+		if err := b.writePrefixBlobDictionary(outDir); err != nil {
+			return fmt.Errorf("write dict prefix blob: %w", err)
+		}
+
+		return nil
+	}
+	if err := b.writePrefixBlobPreorder(outDir); err != nil {
+		return fmt.Errorf("write prefix blob: %w", err)
+	}
+
+	return nil
+}
+
 // NewStreamingMPHFBuilder creates a new streaming MPHF builder.
-// TempDir holds prefix strings plus the disk-backed u64 arrays.
+// TempDir holds prefix strings plus the disk-backed u64 arrays. When
+// WithoutMPHF is applied the u64 arrays are skipped — only the prefix
+// stream is captured for the eventual prefix-blob / prefix-dict write.
 func NewStreamingMPHFBuilder(tempDir string, opts ...StreamingMPHFOption) (*StreamingMPHFBuilder, error) {
 	tempFile, err := os.CreateTemp(tempDir, "mphf_prefixes_*.tmp")
 	if err != nil {
 		return nil, fmt.Errorf("create temp file: %w", err)
 	}
 
-	hashes, err := newU64DiskArray(tempDir, "mphf_hashes")
-	if err != nil {
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
-		return nil, err
-	}
-	preorderPos, err := newU64DiskArray(tempDir, "mphf_preorderpos")
-	if err != nil {
-		hashes.Close()
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
-		return nil, err
-	}
-	fingerprints, err := newU64DiskArray(tempDir, "mphf_fingerprints")
-	if err != nil {
-		preorderPos.Close()
-		hashes.Close()
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
-		return nil, err
-	}
-
 	enc, err := zstd.NewWriter(tempFile, zstd.WithEncoderLevel(zstd.SpeedFastest))
 	if err != nil {
-		fingerprints.Close()
-		preorderPos.Close()
-		hashes.Close()
 		tempFile.Close()
 		os.Remove(tempFile.Name())
 
@@ -125,18 +131,42 @@ func NewStreamingMPHFBuilder(tempDir string, opts ...StreamingMPHFOption) (*Stre
 	}
 
 	b := &StreamingMPHFBuilder{
-		hashes:       hashes,
-		preorderPos:  preorderPos,
-		fingerprints: fingerprints,
-		tempFile:     tempFile,
-		tempEncoder:  enc,
-		tempWriter:   bufio.NewWriterSize(enc, 1024*1024),
-		tempPath:     tempFile.Name(),
-		bufferSize:   1024 * 1024,
+		tempFile:    tempFile,
+		tempEncoder: enc,
+		tempWriter:  bufio.NewWriterSize(enc, 1024*1024),
+		tempPath:    tempFile.Name(),
+		bufferSize:  1024 * 1024,
 	}
 
 	for _, opt := range opts {
 		opt(b)
+	}
+
+	if !b.skipMPHF {
+		hashes, err := newU64DiskArray(tempDir, "mphf_hashes")
+		if err != nil {
+			_ = b.Close()
+
+			return nil, err
+		}
+		preorderPos, err := newU64DiskArray(tempDir, "mphf_preorderpos")
+		if err != nil {
+			hashes.Close()
+			_ = b.Close()
+
+			return nil, err
+		}
+		fingerprints, err := newU64DiskArray(tempDir, "mphf_fingerprints")
+		if err != nil {
+			preorderPos.Close()
+			hashes.Close()
+			_ = b.Close()
+
+			return nil, err
+		}
+		b.hashes = hashes
+		b.preorderPos = preorderPos
+		b.fingerprints = fingerprints
 	}
 
 	return b, nil
@@ -149,14 +179,20 @@ func NewStreamingMPHFBuilder(tempDir string, opts ...StreamingMPHFOption) (*Stre
 func (b *StreamingMPHFBuilder) Add(prefix string, pos uint64) error {
 	prefixBytes := []byte(prefix)
 
-	if err := b.hashes.Append(hashBytes(prefixBytes)); err != nil {
-		return fmt.Errorf("append hash: %w", err)
-	}
-	if err := b.preorderPos.Append(pos); err != nil {
-		return fmt.Errorf("append preorder pos: %w", err)
-	}
-	if err := b.fingerprints.Append(computeFingerprintBytes(prefixBytes)); err != nil {
-		return fmt.Errorf("append fingerprint: %w", err)
+	// When skipMPHF is set the hash/pos/fp arrays are never created,
+	// so the appends are skipped. The prefix bytes still flow to the
+	// temp file because Build() needs them to write the prefix-blob /
+	// prefix-dict output.
+	if !b.skipMPHF {
+		if err := b.hashes.Append(hashBytes(prefixBytes)); err != nil {
+			return fmt.Errorf("append hash: %w", err)
+		}
+		if err := b.preorderPos.Append(pos); err != nil {
+			return fmt.Errorf("append preorder pos: %w", err)
+		}
+		if err := b.fingerprints.Append(computeFingerprintBytes(prefixBytes)); err != nil {
+			return fmt.Errorf("append fingerprint: %w", err)
+		}
 	}
 
 	// Write prefix to temp file with length prefix.
@@ -244,6 +280,15 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 
 	if err := b.finalizePrefixWriter(); err != nil {
 		return err
+	}
+
+	// FST-sidecar mode (Option A): skip the MPHF + fp_pos write and
+	// jump directly to the prefix-blob / prefix-dict write. The FST
+	// file (written by FSTPrefixBuilder alongside) handles forward
+	// Lookup at read time; the prefix-blob / dict files handle the
+	// reverse pos→prefix walk.
+	if b.skipMPHF {
+		return b.writePrefixStorage(outDir)
 	}
 
 	// Freeze the disk-backed arrays so their backing files are mmap'd
@@ -345,16 +390,8 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	}
 	b.preorderPos = nil
 
-	log.Debug().Msg("MPHF: writing prefix blob")
-
-	if b.usePrefixDict {
-		if err := b.writePrefixBlobDictionary(outDir); err != nil {
-			return fmt.Errorf("write dict prefix blob: %w", err)
-		}
-	} else {
-		if err := b.writePrefixBlobPreorder(outDir); err != nil {
-			return fmt.Errorf("write prefix blob: %w", err)
-		}
+	if err := b.writePrefixStorage(outDir); err != nil {
+		return err
 	}
 
 	log.Debug().Msg("MPHF: build complete")
