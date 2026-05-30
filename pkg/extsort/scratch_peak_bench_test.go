@@ -38,15 +38,25 @@ import (
 //	finalize_us         Finalize() wall time
 //
 // Caveats:
-//   - The MPHF prefix temp file is fronted by a 1 MiB bufio.Writer;
-//     the on-disk size lags the in-buffer size by up to that much.
-//     The smallest scale here (100k prefixes ≈ 4-6 MiB of prefix
-//     bytes) is past that threshold, so the bias is small relative
-//     to the reported size.
-//   - Synthetic input uses S3RealisticConfig (benchutil seed 42).
-//     Compressibility numbers will track that distribution, not real
-//     production keys — treat absolute size as indicative, the
-//     before/after ratio as load-bearing.
+//   - **Sample-point undercount.** The metrics are sampled between
+//     the last Add() and the start of Finalize(). The intermediate
+//     writers (bufio + zstd encoder) have not been closed at that
+//     point, so anything still in the 1 MiB bufio buffer or the
+//     zstd encoder block buffer (~128 KiB at SpeedFastest) is not
+//     yet on disk and not counted. This bias is **symmetric**: the
+//     pre-compression baseline also uses a 1 MiB bufio in
+//     u64DiskArray, so before/after ratios at the same N are
+//     comparable. Absolute numbers are a lower bound.
+//   - **Small-N depth artifact.** At 100k objects the per-depth
+//     scratch comes out to ~32 KiB per bucket (positions × 8 B,
+//     spread across ~25 depths), entirely below the 1 MiB bufio
+//     flush threshold — so `depth_bytes` reports 0 in both branches
+//     and is not a regression introduced by compression. The 500k
+//     and 2M points are past the threshold and load-bearing.
+//   - **Synthetic input.** S3RealisticConfig with benchutil seed 42.
+//     Compressibility numbers will track that distribution, not
+//     real production keys — absolute size is indicative, the
+//     before/after ratio is what to trust.
 func BenchmarkScratchPeak(b *testing.B) {
 	silenceZerologForBench(b)
 	for _, n := range []int{100_000, 500_000, 2_000_000} {
