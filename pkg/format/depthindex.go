@@ -73,6 +73,7 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 	}
 
 	offset := uint64(0)
+	maxPos := uint64(0)
 	var errs []error
 	for d := uint32(0); d <= b.maxDepth; d++ {
 		if err := offsetsWriter.WriteU64(offset); err != nil {
@@ -91,6 +92,9 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 		if err := bucket.Iterate(func(p uint64) error {
 			if err := positionsWriter.WriteU64(p); err != nil {
 				return fmt.Errorf("write position depth %d: %w", d, err)
+			}
+			if p > maxPos {
+				maxPos = p
 			}
 			written++
 
@@ -117,11 +121,6 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 		errs = append(errs, fmt.Errorf("close offsets: %w", err))
 	}
 
-	// If any step failed, the output files on disk are partial /
-	// corrupt — remove them so a later open can't misinterpret them as
-	// valid. The ArrayWriter.Close error paths already remove on Close
-	// failure; this catches the write-time errors that flow through to
-	// a successful Close on a partial file.
 	if len(errs) > 0 {
 		if err := removeIfErr(positionsPath); err != nil {
 			errs = append(errs, err)
@@ -129,9 +128,23 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 		if err := removeIfErr(offsetsPath); err != nil {
 			errs = append(errs, err)
 		}
+
+		return errors.Join(errs...)
 	}
 
-	return errors.Join(errs...)
+	// Adaptive width on both files: positions cap at the observed max
+	// preorder pos; offsets cap at total positions (== offset). Both
+	// can be considerably narrower than the 8 B/elt build stride.
+	posWidth := byteWidthOf(maxPos)
+	if err := RepackArrayWidthU64(positionsPath, positionsPath, posWidth); err != nil {
+		return fmt.Errorf("repack depth_positions to width %d: %w", posWidth, err)
+	}
+	offWidth := byteWidthOf(offset)
+	if err := RepackArrayWidthU64(offsetsPath, offsetsPath, offWidth); err != nil {
+		return fmt.Errorf("repack depth_offsets to width %d: %w", offWidth, err)
+	}
+
+	return nil
 }
 
 // Close releases any open per-depth buckets without writing the
