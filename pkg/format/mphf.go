@@ -20,28 +20,45 @@ const (
 	FilePerm os.FileMode = 0o600
 )
 
-// MPHF provides read access to the minimal perfect hash function.
+// MPHF provides read access to a prefix → preorder-position index.
 //
-// Thread Safety: MPHF is safe for concurrent read access from
-// multiple goroutines. Close once, after all reads.
+// Thread Safety: safe for concurrent reads. Close once after all reads.
 //
-// Exactly one of prefixBlob or dictPrefixes is non-nil; usePrefixDict
-// selects between them.
+// The struct hosts two on-disk backends:
+//
+//   - The "classic" MPHF backend uses BBHash + an interleaved
+//     fingerprint+pos array (`mph.bin`, `mph_fp_pos.u64`) for the
+//     forward (prefix → pos) lookup, plus either a raw prefix blob
+//     or a segment dictionary for the reverse (pos → prefix) walk.
+//   - The "FST" backend uses a single vellum FST for the forward
+//     lookup plus a sparse anchor table for the reverse walk.
+//
+// fstIdx is non-nil iff the FST backend is in use. When it is, the
+// BBHash/dict fields are nil and all calls route through fstIdx.
 type MPHF struct {
-	mph *bbhash.BBHash2
-	// combined holds the interleaved [fp, pos, fp, pos, ...] array.
-	// Lookup at hash position p reads combined.UnsafeGetU64(2p) for
-	// fp and combined.UnsafeGetU64(2p+1) for pos — adjacent words
-	// in the same cache line.
-	combined      *ArrayReader
-	prefixBlob    *BlobReader
-	dictPrefixes  *DictPrefixReader
+	mph          *bbhash.BBHash2
+	combined     *ArrayReader
+	prefixBlob   *BlobReader
+	dictPrefixes *DictPrefixReader
+	fstIdx       *FSTPrefixReader
+
 	count         uint64
 	usePrefixDict bool
 }
 
-// OpenMPHF opens an MPHF from the given directory.
+// OpenMPHF opens a prefix index from the given directory. If an FST
+// backend file is present, it takes precedence and the classic MPHF
+// files are ignored.
 func OpenMPHF(outDir string) (*MPHF, error) {
+	if FSTPresent(outDir) {
+		fst, err := OpenFSTPrefixReader(outDir)
+		if err != nil {
+			return nil, fmt.Errorf("open fst prefix reader: %w", err)
+		}
+
+		return &MPHF{fstIdx: fst, count: fst.Count()}, nil
+	}
+
 	mphPath := filepath.Join(outDir, MPHFile)
 	combinedPath := filepath.Join(outDir, CombinedMPHFArrayFile)
 
@@ -106,6 +123,9 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 
 // Close releases resources.
 func (m *MPHF) Close() error {
+	if m.fstIdx != nil {
+		return m.fstIdx.Close()
+	}
 	var combinedErr, blobErr, dictErr error
 	if m.combined != nil {
 		combinedErr = m.combined.Close()
@@ -122,6 +142,9 @@ func (m *MPHF) Close() error {
 
 // Lookup returns the preorder position for a prefix, or ok=false if not found.
 func (m *MPHF) Lookup(prefix string) (uint64, bool) {
+	if m.fstIdx != nil {
+		return m.fstIdx.Lookup(prefix)
+	}
 	if m.count == 0 || m.mph == nil {
 		return 0, false
 	}
@@ -151,6 +174,9 @@ func (m *MPHF) Prefix(pos uint64) (string, error) {
 
 // GetPrefix returns the prefix string at the given position.
 func (m *MPHF) GetPrefix(pos uint64) (string, error) {
+	if m.fstIdx != nil {
+		return m.fstIdx.GetPrefix(pos)
+	}
 	if m.usePrefixDict {
 		s, err := m.dictPrefixes.GetPrefix(pos)
 		if err != nil {
@@ -197,7 +223,7 @@ func (m *MPHF) LookupWithVerify(prefix string) (uint64, bool) {
 // VerifyMPHF checks that every stored prefix round-trips: GetPrefix
 // at every position returns a string that Lookups back to that position.
 func VerifyMPHF(m *MPHF) error {
-	if m.prefixBlob == nil && m.dictPrefixes == nil {
+	if m.prefixBlob == nil && m.dictPrefixes == nil && m.fstIdx == nil {
 		return ErrNoPrefixStorage
 	}
 

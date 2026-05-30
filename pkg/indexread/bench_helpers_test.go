@@ -1,6 +1,7 @@
 package indexread_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -8,6 +9,23 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
+
+// applyExperimentToggles wires the S3INV_PREFIX_DICT / S3INV_FST env
+// flags into a freshly created IndexBuilder so the bench suite can run
+// against both backends without code edits.
+func applyExperimentToggles(tb testing.TB, builder *extsort.IndexBuilder) {
+	tb.Helper()
+	if os.Getenv("S3INV_PREFIX_DICT") == "1" {
+		if err := builder.SetPrefixDictionary(true); err != nil {
+			tb.Fatalf("SetPrefixDictionary: %v", err)
+		}
+	}
+	if os.Getenv("S3INV_FST") == "1" {
+		if err := builder.SetUseFST(true); err != nil {
+			tb.Fatalf("SetUseFST: %v", err)
+		}
+	}
+}
 
 // indexSetup holds a built index for benchmarking.
 type indexSetup struct {
@@ -41,6 +59,7 @@ func setupIndex(tb testing.TB, numObjects int) *indexSetup {
 	if err != nil {
 		tb.Fatalf("NewIndexBuilder failed: %v", err)
 	}
+	applyExperimentToggles(tb, builder)
 	if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
 		tb.Fatalf("SetPresentTiers failed: %v", err)
 	}
@@ -85,6 +104,7 @@ func setupIndexFromKeys(tb testing.TB, keys []string) *indexSetup {
 	if err != nil {
 		tb.Fatalf("NewIndexBuilder failed: %v", err)
 	}
+	applyExperimentToggles(tb, builder)
 	if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
 		tb.Fatalf("SetPresentTiers failed: %v", err)
 	}

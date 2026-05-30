@@ -26,10 +26,20 @@ import (
 // Memory usage is bounded: prefix strings are written to disk during construction
 // (via StreamingMPHFBuilder). Subtree arrays remain in memory (~12 bytes per prefix)
 // which is much smaller than storing all prefix strings (~50+ bytes each).
+// prefixIndexer is the small contract the IndexBuilder needs from the
+// prefix → preorder-pos sub-builder. Both the classic streaming MPHF
+// builder and the experimental FST builder implement it.
+type prefixIndexer interface {
+	Add(prefix string, pos uint64) error
+	Count() uint64
+	Build(outDir string) error
+	Close() error
+}
+
 type IndexBuilder struct {
 	coreStatsW        *format.CoreStatsBuilder
 	tierStatsRowW     *format.TierStatsRowWriter
-	mphfBuilder       *format.StreamingMPHFBuilder
+	prefixIdx         prefixIndexer
 	depthIndexBuilder *format.DepthIndexBuilder
 	declaredTiers     []tiers.ID
 	resolvedTiers     []tiers.ID
@@ -39,6 +49,7 @@ type IndexBuilder struct {
 	posCount          uint64
 	maxDepth          uint32
 	prefixDictionary  bool
+	useFST            bool
 	tiersDeclared     bool
 	closed            bool
 }
@@ -90,7 +101,7 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		outDir:            outDir,
 		tempDir:           tempDir,
 		coreStatsW:        coreStatsW,
-		mphfBuilder:       mphfBuilder,
+		prefixIdx:         mphfBuilder,
 		depthIndexBuilder: format.NewDepthIndexBuilder(tempDir),
 		stack:             make([]stackEntry, 0, 32),
 	}
@@ -107,6 +118,10 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 // discard rows already streamed in.
 var ErrPrefixDictionaryAfterAdd = errors.New("SetPrefixDictionary must be called before the first Add")
 
+// ErrUseFSTAfterAdd is returned when SetUseFST is called after rows
+// have been added — would silently drop them.
+var ErrUseFSTAfterAdd = errors.New("SetUseFST must be called before the first Add")
+
 // SetPrefixDictionary toggles dictionary-encoded prefix storage.
 // Must be called before the first Add — recreates the MPHF builder,
 // which would silently drop any rows already added. Returns
@@ -120,20 +135,52 @@ func (b *IndexBuilder) SetPrefixDictionary(enabled bool) error {
 	}
 	b.prefixDictionary = enabled
 
-	if b.mphfBuilder != nil {
-		_ = b.mphfBuilder.Close()
-		b.mphfBuilder = nil
+	return b.rebuildPrefixIndexer()
+}
+
+// SetUseFST swaps the prefix index for the experimental vellum-FST
+// backend (Option B). Removes mph.bin + mph_fp_pos.u64 + prefix-dict /
+// prefix-blob files from the output; writes prefixes.fst + a sparse
+// position-anchor blob instead. Must be called before the first Add.
+func (b *IndexBuilder) SetUseFST(enabled bool) error {
+	if b.useFST == enabled {
+		return nil
+	}
+	if b.posCount > 0 {
+		return ErrUseFSTAfterAdd
+	}
+	b.useFST = enabled
+
+	return b.rebuildPrefixIndexer()
+}
+
+// rebuildPrefixIndexer closes any existing prefix-indexer sub-builder
+// and creates a fresh one matching the current flags.
+func (b *IndexBuilder) rebuildPrefixIndexer() error {
+	if b.prefixIdx != nil {
+		_ = b.prefixIdx.Close()
+		b.prefixIdx = nil
+	}
+
+	if b.useFST {
+		fb, err := format.NewFSTPrefixBuilder(b.outDir)
+		if err != nil {
+			return fmt.Errorf("create FST prefix builder: %w", err)
+		}
+		b.prefixIdx = fb
+
+		return nil
 	}
 
 	var opts []format.StreamingMPHFOption
-	if enabled {
+	if b.prefixDictionary {
 		opts = append(opts, format.WithPrefixDictionary())
 	}
 	mphfBuilder, err := format.NewStreamingMPHFBuilder(b.tempDir, opts...)
 	if err != nil {
 		return fmt.Errorf("recreate MPHF builder: %w", err)
 	}
-	b.mphfBuilder = mphfBuilder
+	b.prefixIdx = mphfBuilder
 
 	return nil
 }
@@ -184,8 +231,8 @@ func (b *IndexBuilder) cleanup() {
 	if b.coreStatsW != nil {
 		b.coreStatsW.Close()
 	}
-	if b.mphfBuilder != nil {
-		b.mphfBuilder.Close()
+	if b.prefixIdx != nil {
+		b.prefixIdx.Close()
 	}
 	if b.tierStatsRowW != nil {
 		b.tierStatsRowW.Close()
@@ -218,7 +265,7 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	if err := b.depthIndexBuilder.Add(pos, uint32(row.Depth)); err != nil {
 		return fmt.Errorf("add to depth index: %w", err)
 	}
-	if err := b.mphfBuilder.Add(row.Prefix, pos); err != nil {
+	if err := b.prefixIdx.Add(row.Prefix, pos); err != nil {
 		return fmt.Errorf("add to MPHF builder: %w", err)
 	}
 
@@ -382,7 +429,7 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	}
 
 	log.Debug().
-		Uint64("prefix_count", b.mphfBuilder.Count()).
+		Uint64("prefix_count", b.prefixIdx.Count()).
 		Msg("index builder: building MPHF (this may take a while for large datasets)")
 
 	if err := b.buildMPHF(ctx); err != nil {
@@ -437,10 +484,10 @@ func (b *IndexBuilder) closeStreamingWriters() error {
 func (b *IndexBuilder) buildMPHF(ctx context.Context) error {
 	log := zerolog.Ctx(ctx)
 	mphfStart := time.Now()
-	if err := b.mphfBuilder.Build(b.outDir); err != nil {
+	if err := b.prefixIdx.Build(b.outDir); err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
-	b.mphfBuilder.Close()
+	b.prefixIdx.Close()
 
 	log.Debug().
 		Str("mphf_duration", humanfmt.Duration(time.Since(mphfStart))).

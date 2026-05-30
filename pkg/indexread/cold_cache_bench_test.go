@@ -146,11 +146,7 @@ func buildFixtureIndex(b *testing.B, n int) string {
 	if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
 		b.Fatalf("SetPresentTiers: %v", err)
 	}
-	if os.Getenv("S3INV_PREFIX_DICT") == "1" {
-		if err := builder.SetPrefixDictionary(true); err != nil {
-			b.Fatalf("SetPrefixDictionary: %v", err)
-		}
-	}
+	applyExperimentToggles(b, builder)
 	for _, row := range rows {
 		if err := builder.Add(row); err != nil {
 			b.Fatalf("Add: %v", err)

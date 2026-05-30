@@ -43,34 +43,40 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		Files:     make(map[string]FileInfo),
 	}
 
-	// Files always written by the current builder. Hard-coded so the
-	// manifest can be verified against an expected set rather than
-	// whatever happened to land on disk.
-	requiredTopLevel := []string{
+	// Always-present files. addFile is a no-op for missing files so the
+	// MPHF-vs-FST and raw-blob-vs-dict variants are both covered by the
+	// same list.
+	required := []string{
 		DepthOffsetsFile,
 		DepthPositionsFile,
-		MPHFile,
-		CombinedMPHFArrayFile,
-		PrefixBlobFile,
-		PrefixOffsetsFile,
 		"tiers.json",
 		CoreStatsFile,
 	}
-	for _, name := range requiredTopLevel {
+	for _, name := range required {
 		if err := addFile(dir, name, manifest.Files); err != nil {
 			return err
 		}
 	}
 
-	// Optional: only present when dictionary-encoded prefix storage
-	// was selected. addFile is a no-op for missing files.
-	optionalPrefixDict := []string{
+	// Prefix-index variants. Exactly one of {MPHF, FST} is written; for
+	// MPHF, exactly one of {raw blob, prefix-dict} is written. addFile
+	// silently skips files that aren't present so we can enumerate the
+	// full superset here.
+	prefixIndexFiles := []string{
+		MPHFile,
+		CombinedMPHFArrayFile,
+		PrefixBlobFile,
+		PrefixOffsetsFile,
 		PrefixDictBlobFile,
 		PrefixDictOffsetsFile,
 		PrefixDictIDsFile,
 		PrefixDictOffsetsPerPrefixFile,
+		FSTFile,
+		FSTAnchorBlobFile,
+		FSTAnchorOffsetFile,
+		FSTMetaFile,
 	}
-	for _, name := range optionalPrefixDict {
+	for _, name := range prefixIndexFiles {
 		if err := addFile(dir, name, manifest.Files); err != nil {
 			return err
 		}
