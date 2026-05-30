@@ -68,11 +68,29 @@ func (a *u64StreamArray) Append(v uint64) error {
 // Count returns the number of uint64 values appended so far.
 func (a *u64StreamArray) Count() uint64 { return a.count }
 
+// errU64StreamShortRead fires when the decoded byte stream contains
+// fewer u64 values than were Appended — symptom of a truncated zstd
+// frame (typically disk-full at encoder.Close time). Surfaced so the
+// caller can fail the build rather than silently produce a partial
+// depth index.
+var errU64StreamShortRead = errors.New("u64 stream array short read: decoded fewer values than appended")
+
+// errU64StreamReused fires when Iterate is called after a previous
+// Iterate or Close has already consumed the writer chain. The stream
+// is single-use by design; surface the misuse instead of nil-derefing.
+var errU64StreamReused = errors.New("u64 stream array Iterate called after writer was closed")
+
 // Iterate finalizes the writer, rewinds the file, opens a fresh zstd
-// decoder, and invokes cb for each value in append order. Must be
-// called at most once. Caller still owns Close to release the file
-// and remove it from disk.
+// decoder, and invokes cb for each value in append order. Single-use:
+// a second Iterate returns errU64StreamReused. Caller still owns
+// Close to release the file and remove it from disk. Verifies the
+// decoded count matches Count(); a short read returns
+// errU64StreamShortRead so a truncated frame can't silently produce a
+// partial depth index.
 func (a *u64StreamArray) Iterate(cb func(v uint64) error) error {
+	if a.writer == nil || a.encoder == nil {
+		return errU64StreamReused
+	}
 	if err := a.writer.Flush(); err != nil {
 		return fmt.Errorf("u64 stream array flush: %w", err)
 	}
@@ -92,9 +110,14 @@ func (a *u64StreamArray) Iterate(cb func(v uint64) error) error {
 
 	reader := bufio.NewReaderSize(dec, 1024*1024)
 	var buf [8]byte
+	consumed := uint64(0)
 	for {
 		_, err := io.ReadFull(reader, buf[:])
 		if errors.Is(err, io.EOF) {
+			if consumed != a.count {
+				return fmt.Errorf("%w: got %d want %d", errU64StreamShortRead, consumed, a.count)
+			}
+
 			return nil
 		}
 		if err != nil {
@@ -103,6 +126,7 @@ func (a *u64StreamArray) Iterate(cb func(v uint64) error) error {
 		if err := cb(binary.LittleEndian.Uint64(buf[:])); err != nil {
 			return err
 		}
+		consumed++
 	}
 }
 

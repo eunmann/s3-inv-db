@@ -19,7 +19,8 @@ import (
 //
 // The sample point is between the last Add() and the start of
 // Finalize() — that's the natural peak for mphf_prefixes_*.tmp and
-// every u64disk file the streaming MPHF + depth-index builders open.
+// the per-prefix u64 scratch files (mphf_*.u64disk for MPHF,
+// depth_*.u64stream for the depth index).
 //
 // Run with:
 //
@@ -31,7 +32,7 @@ import (
 //	hashes_bytes        size of mphf_hashes_*.u64disk
 //	preorderpos_bytes   size of mphf_preorderpos_*.u64disk
 //	fingerprints_bytes  size of mphf_fingerprints_*.u64disk
-//	depth_bytes         sum of depth_NN_*.u64disk files
+//	depth_bytes         sum of depth_NN_*.u64stream files
 //	scratch_total_bytes sum across the whole scratch dir
 //	add_us              Add() loop wall time
 //	finalize_us         Finalize() wall time
