@@ -1,9 +1,11 @@
 package format
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -201,10 +203,18 @@ func (c *PreloadedPrefixCache) Count() int {
 }
 
 // DictPrefixWriter writes prefixes as sequences of dictionary segment IDs.
+//
+// During the build segment IDs are appended to a wide-stride (4 B
+// per ID) scratch file. At Close, the writer chooses the smallest
+// byte width that holds the observed max segment ID and repacks the
+// scratch file into the final tight-width ids file. The Header.Width
+// of the final file is the chosen byte width; the reader honours it.
 type DictPrefixWriter struct {
 	interner      *PrefixSegmentInterner
 	segIDsWriter  *ArrayWriter
 	offsetsWriter *ArrayWriter
+	finalIDsPath  string
+	scratchPath   string
 	currentOffset uint64
 }
 
@@ -216,12 +226,13 @@ func NewDictPrefixWriter(outDir string) (*DictPrefixWriter, error) {
 		return nil, fmt.Errorf("create prefix segment interner: %w", err)
 	}
 
-	segIDsPath := filepath.Join(outDir, PrefixDictIDsFile)
-	segIDsWriter, err := NewArrayWriter(segIDsPath, 4)
+	finalIDsPath := filepath.Join(outDir, PrefixDictIDsFile)
+	scratchPath := finalIDsPath + ".wide"
+	segIDsWriter, err := NewArrayWriter(scratchPath, 4)
 	if err != nil {
 		interner.Close()
 
-		return nil, fmt.Errorf("create dict IDs writer: %w", err)
+		return nil, fmt.Errorf("create dict IDs scratch writer: %w", err)
 	}
 
 	offsetsPath := filepath.Join(outDir, PrefixDictOffsetsPerPrefixFile)
@@ -237,6 +248,8 @@ func NewDictPrefixWriter(outDir string) (*DictPrefixWriter, error) {
 		interner:      interner,
 		segIDsWriter:  segIDsWriter,
 		offsetsWriter: offsetsWriter,
+		finalIDsPath:  finalIDsPath,
+		scratchPath:   scratchPath,
 		currentOffset: 0,
 	}, nil
 }
@@ -264,10 +277,24 @@ func (w *DictPrefixWriter) WritePrefix(prefix string) error {
 	return nil
 }
 
+// dictIDsTailPad is the number of zero bytes appended to the final
+// ids file so a reader can do a single 4-byte LE load + mask at any
+// valid element offset (including the last) without faulting past
+// the mmap.
+const dictIDsTailPad = 4
+
 // Close finalizes all output files, writing the sentinel offset.
+// After the scratch wide ids file is closed, repacks it into the
+// final ids file at the smallest byte width that holds the observed
+// max segment ID.
 func (w *DictPrefixWriter) Close() error {
 	if err := w.offsetsWriter.WriteU64(w.currentOffset); err != nil {
 		return fmt.Errorf("write sentinel offset: %w", err)
+	}
+
+	maxSegmentID := uint32(0)
+	if w.interner.Count() > 0 {
+		maxSegmentID = w.interner.Count() - 1
 	}
 
 	var errs []error
@@ -275,13 +302,95 @@ func (w *DictPrefixWriter) Close() error {
 		errs = append(errs, fmt.Errorf("close interner: %w", err))
 	}
 	if err := w.segIDsWriter.Close(); err != nil {
-		errs = append(errs, fmt.Errorf("close dict IDs: %w", err))
+		errs = append(errs, fmt.Errorf("close scratch IDs: %w", err))
 	}
 	if err := w.offsetsWriter.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("close offsets: %w", err))
 	}
+	if len(errs) > 0 {
+		_ = os.Remove(w.scratchPath)
 
-	return errors.Join(errs...)
+		return errors.Join(errs...)
+	}
+
+	width := byteWidthOf(uint64(maxSegmentID))
+	if err := repackDictIDs(w.scratchPath, w.finalIDsPath, width); err != nil {
+		_ = os.Remove(w.scratchPath)
+
+		return fmt.Errorf("repack dict IDs to width %d: %w", width, err)
+	}
+	if err := os.Remove(w.scratchPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove scratch IDs: %w", err)
+	}
+
+	return nil
+}
+
+// repackDictIDs reads the wide-stride scratch file (Header.Width=4)
+// and writes the final ids file at the chosen byte width. Streams
+// the data so the in-memory cost stays at one bufio chunk.
+func repackDictIDs(srcPath, dstPath string, width uint8) error {
+	src, err := OpenArray(srcPath)
+	if err != nil {
+		return fmt.Errorf("open scratch: %w", err)
+	}
+	defer src.Close()
+	count := src.Count()
+
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		return fmt.Errorf("create final: %w", err)
+	}
+	if _, err := dst.Write(EncodeHeader(Header{
+		Magic:   MagicNumber,
+		Version: Version,
+		Count:   count,
+		Width:   uint32(width),
+	})); err != nil {
+		_ = dst.Close()
+		_ = os.Remove(dstPath)
+
+		return fmt.Errorf("write header: %w", err)
+	}
+
+	bw := bufio.NewWriterSize(dst, 1<<20)
+	var buf [4]byte
+	for i := uint64(0); i < count; i++ {
+		v := src.UnsafeGetU32(i)
+		for b := uint8(0); b < width; b++ {
+			buf[b] = byte(v >> (8 * b))
+		}
+		if _, err := bw.Write(buf[:width]); err != nil {
+			_ = dst.Close()
+			_ = os.Remove(dstPath)
+
+			return fmt.Errorf("write id: %w", err)
+		}
+	}
+	// Tail pad so the reader's 4-byte masked load is always in-bounds.
+	zero := [dictIDsTailPad]byte{}
+	if _, err := bw.Write(zero[:]); err != nil {
+		_ = dst.Close()
+		_ = os.Remove(dstPath)
+
+		return fmt.Errorf("write tail pad: %w", err)
+	}
+	if err := bw.Flush(); err != nil {
+		_ = dst.Close()
+		_ = os.Remove(dstPath)
+
+		return fmt.Errorf("flush: %w", err)
+	}
+	if err := dst.Sync(); err != nil {
+		_ = dst.Close()
+
+		return fmt.Errorf("sync: %w", err)
+	}
+	if err := dst.Close(); err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
+
+	return nil
 }
 
 // SegmentCount returns the number of unique segments interned so far.
@@ -295,12 +404,23 @@ func (w *DictPrefixWriter) PrefixCount() uint64 {
 }
 
 // DictPrefixReader reads prefixes from dictionary-encoded storage.
+//
+// The segment-ID array width is per-index: 1..4 bytes per ID,
+// determined at Close from the observed max segment ID. idsRaw is
+// the raw byte slice of the segIDs file body (after Header), and
+// idsWidth is the byte width per ID. The file is padded with 4
+// trailing zero bytes so a single LE-load + mask at any valid index
+// is always safe.
 type DictPrefixReader struct {
-	dict     *PrefixDictionary
-	cache    *PreloadedPrefixCache
-	segIDs   *ArrayReader
-	offsets  *ArrayReader
-	builders sync.Pool
+	dict      *PrefixDictionary
+	cache     *PreloadedPrefixCache
+	segIDs    *ArrayReader
+	offsets   *ArrayReader
+	idsRaw    []byte
+	builders  sync.Pool
+	idsWidth  uint64
+	idsMask   uint32
+	idsCount  uint64
 }
 
 // OpenDictPrefixReader opens a dictionary-encoded prefix reader from
@@ -325,6 +445,13 @@ func OpenDictPrefixReader(outDir string) (*DictPrefixReader, error) {
 
 		return nil, fmt.Errorf("open dict IDs: %w", err)
 	}
+	w := uint64(segIDs.Width())
+	if w < 1 || w > 4 {
+		dict.Close()
+		segIDs.Close()
+
+		return nil, fmt.Errorf("dict ids: %w: width=%d", ErrWidthMismatch, w)
+	}
 
 	offsetsPath := filepath.Join(outDir, PrefixDictOffsetsPerPrefixFile)
 	offsets, err := OpenArray(offsetsPath)
@@ -340,8 +467,25 @@ func OpenDictPrefixReader(outDir string) (*DictPrefixReader, error) {
 		cache:    cache,
 		segIDs:   segIDs,
 		offsets:  offsets,
+		idsRaw:   segIDs.mmap.Data()[HeaderSize:],
+		idsWidth: w,
+		idsMask:  uint32(widthMask[w]),
+		idsCount: segIDs.Count(),
 		builders: sync.Pool{New: func() any { return &strings.Builder{} }},
 	}, nil
+}
+
+// readSegID reads the segment ID at index i from the variable-width
+// segIDs file. The file is tail-padded so a 4-byte LE load is always
+// safe; the mask cuts the load to the actual byte width.
+func (r *DictPrefixReader) readSegID(i uint64) uint32 {
+	off := i * r.idsWidth
+	v := uint32(r.idsRaw[off]) |
+		uint32(r.idsRaw[off+1])<<8 |
+		uint32(r.idsRaw[off+2])<<16 |
+		uint32(r.idsRaw[off+3])<<24
+
+	return v & r.idsMask
 }
 
 // getBuilder fetches a reset strings.Builder from the per-reader pool.
@@ -386,12 +530,12 @@ func (r *DictPrefixReader) GetPrefix(pos uint64) (string, error) {
 	builder.Grow(numSegs * avgSegmentBytes)
 
 	for i := start; i < end; i++ {
-		segID, err := r.segIDs.GetU32(i)
-		if err != nil {
+		if i >= r.idsCount {
 			r.putBuilder(builder)
 
-			return "", fmt.Errorf("get segment ID at %d: %w", i, err)
+			return "", fmt.Errorf("get segment ID at %d: %w", i, ErrBoundsCheck)
 		}
+		segID := r.readSegID(i)
 		if i > start {
 			builder.WriteByte('/')
 		}
@@ -421,8 +565,7 @@ func (r *DictPrefixReader) UnsafeGetPrefix(pos uint64) string {
 		if i > start {
 			builder.WriteByte('/')
 		}
-		segID := r.segIDs.UnsafeGetU32(i)
-		builder.WriteString(r.cache.Get(segID))
+		builder.WriteString(r.cache.Get(r.readSegID(i)))
 	}
 
 	result := builder.String()
