@@ -55,39 +55,29 @@ func TestTierStatsRow_PackedStride(t *testing.T) {
 		t.Fatalf("Finalize: %v", err)
 	}
 
-	rowFile := filepath.Join(outDir, "tier_stats", "tier_stats_row.bin")
-	info, err := os.Stat(rowFile)
-	if err != nil {
-		t.Fatalf("stat row file: %v", err)
-	}
-
+	// The tier_stats writer may have picked dense or sparse layout
+	// based on the populated-slot cost model. Whichever it chose, the
+	// total bytes used by tier_stats/ must not exceed the dense upper
+	// bound (presentTiers × N × slot); that's the "no waste on absent
+	// tiers" invariant this test exists to pin.
 	const presentTiers = 3
-	wantSize := int64(format.HeaderSize) + int64(len(rows))*int64(presentTiers)*int64(format.TierStatsSlotBytes)
-	if info.Size() != wantSize {
-		t.Errorf("row file size = %d, want %d (Header + N=%d × presentTiers=%d × %d)",
-			info.Size(), wantSize, len(rows), presentTiers, format.TierStatsSlotBytes)
-	}
-
-	// Read header to confirm stride was rewritten.
-	f, err := os.Open(rowFile)
+	denseUpperBound := int64(format.HeaderSize) + int64(len(rows))*int64(presentTiers)*int64(format.TierStatsSlotBytes)
+	tierDir := filepath.Join(outDir, "tier_stats")
+	entries, err := os.ReadDir(tierDir)
 	if err != nil {
-		t.Fatalf("open row file: %v", err)
+		t.Fatalf("read tier_stats dir: %v", err)
 	}
-	defer f.Close()
-	hbuf := make([]byte, format.HeaderSize)
-	if _, err := f.ReadAt(hbuf, 0); err != nil {
-		t.Fatalf("read header: %v", err)
+	var totalSize int64
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			t.Fatalf("stat %s: %v", e.Name(), err)
+		}
+		totalSize += info.Size()
 	}
-	hdr, err := format.DecodeHeader(hbuf)
-	if err != nil {
-		t.Fatalf("decode header: %v", err)
-	}
-	wantStride := uint32(presentTiers * format.TierStatsSlotBytes)
-	if hdr.Width != wantStride {
-		t.Errorf("header.Width = %d, want %d", hdr.Width, wantStride)
-	}
-	if hdr.Count != uint64(len(rows)) {
-		t.Errorf("header.Count = %d, want %d", hdr.Count, len(rows))
+	if totalSize > denseUpperBound {
+		t.Errorf("tier_stats/ total bytes = %d, exceeds dense upper bound %d (N=%d × presentTiers=%d × %d + header)",
+			totalSize, denseUpperBound, len(rows), presentTiers, format.TierStatsSlotBytes)
 	}
 
 	// Round-trip through the reader: values must come back correct.

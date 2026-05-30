@@ -439,6 +439,19 @@ func reportFileMetrics(b *testing.B, files map[string]int64, nPx uint64) {
 	}
 	b.ReportMetric(float64(nPx), "n_prefixes")
 	b.ReportMetric(float64(total)/float64(nPx), "Bpp_total")
+
+	// Bpp_tier is the aggregate cost of tier_stats/ regardless of
+	// dense vs sparse layout — sums whichever tier files actually
+	// exist so the metric is comparable across runs that pick
+	// different formats.
+	var tierBytes int64
+	for name, sz := range files {
+		if filepath.Dir(name) == "tier_stats" {
+			tierBytes += sz
+		}
+	}
+	b.ReportMetric(float64(tierBytes)/float64(nPx), "Bpp_tier")
+
 	for _, e := range gridReportedFiles {
 		sz, ok := files[e.name]
 		if ok {
@@ -457,7 +470,9 @@ type gridFile struct {
 }
 
 var gridReportedFiles = []gridFile{
-	{"tier_stats/tier_stats_row.bin", "Bpp_tier", true},
+	{"tier_stats/tier_stats_row.bin", "Bpp_tier_dense", false},
+	{"tier_stats/tier_stats_sparse.bin", "Bpp_tier_sparse_rows", false},
+	{"tier_stats/tier_stats_sparse.off.u64", "Bpp_tier_sparse_off", false},
 	{"core_stats.bin", "Bpp_core", true},
 	{"mph_fp_pos.u64", "Bpp_fpp", false},
 	{"prefix_dict.ids.u32", "Bpp_ids", false},
