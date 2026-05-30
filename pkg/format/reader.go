@@ -219,22 +219,30 @@ func (r *ArrayReader) GetU64(idx uint64) (uint64, error) {
 	return r.UnsafeGetU64(idx), nil
 }
 
-// UnsafeGetU32 returns the value without bounds checking. Caller must
-// have validated idx < Count(); out-of-range reads are undefined.
-// Honours Header.Width in [1,4]; tail-padded files allow the 4-byte
-// load to be safe at the last element.
+// UnsafeGetU32 returns the value without bounds checking. Caller
+// must have validated idx < Count(); out-of-range reads are
+// undefined. Files of Header.Width==4 hit the original fast path
+// (no mask). Narrower files do a masked 4-byte LE load; they carry
+// a 4-byte tail pad so the load is always in-bounds.
 func (r *ArrayReader) UnsafeGetU32(idx uint64) uint32 {
+	if r.header.Width == 4 {
+		return binary.LittleEndian.Uint32(r.data[idx*4:])
+	}
 	off := idx * uint64(r.header.Width)
 	v := binary.LittleEndian.Uint32(r.data[off : off+4])
 
 	return v & uint32(widthMask[r.header.Width])
 }
 
-// UnsafeGetU64 returns the value without bounds checking. Caller must
-// have validated idx < Count(); out-of-range reads are undefined.
-// Honours Header.Width in [1,8]; tail-padded files allow the 8-byte
-// load to be safe at the last element.
+// UnsafeGetU64 returns the value without bounds checking. Caller
+// must have validated idx < Count(); out-of-range reads are
+// undefined. Files of Header.Width==8 hit the original fast path
+// (no mask). Narrower files do a masked 8-byte LE load; they carry
+// an 8-byte tail pad so the load is always in-bounds.
 func (r *ArrayReader) UnsafeGetU64(idx uint64) uint64 {
+	if r.header.Width == 8 {
+		return binary.LittleEndian.Uint64(r.data[idx*8:])
+	}
 	off := idx * uint64(r.header.Width)
 	v := binary.LittleEndian.Uint64(r.data[off : off+8])
 
