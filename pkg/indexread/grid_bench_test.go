@@ -146,6 +146,26 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 			_, _ = idx.StatsForPrefix(queries[i%len(queries)])
 		}
 	})
+	b.Run("stats_by_pos", func(b *testing.B) {
+		reportFileMetrics(b, files, nPx)
+		if len(positions) == 0 {
+			b.Skip("no positions")
+		}
+		b.ResetTimer()
+		for i := range b.N {
+			_ = idx.Stats(positions[i%len(positions)])
+		}
+	})
+	b.Run("descendants", func(b *testing.B) {
+		reportFileMetrics(b, files, nPx)
+		if len(positions) == 0 {
+			b.Skip("no positions")
+		}
+		b.ResetTimer()
+		for i := range b.N {
+			_, _ = idx.DescendantsAtDepth(positions[i%len(positions)], 1)
+		}
+	})
 	b.Run("prefix", func(b *testing.B) {
 		reportFileMetrics(b, files, nPx)
 		if len(positions) == 0 {
@@ -173,6 +193,106 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		}
 		b.ResetTimer()
 		for range b.N {
+			for _, pos := range kids {
+				_, _ = idx.PrefixString(pos)
+				_ = idx.Stats(pos)
+				_ = idx.TierBreakdown(pos)
+			}
+		}
+	})
+
+	// Cold sub-benches. Each evicts the index dir from page cache
+	// before a batch of `coldQueryBatch` ops and times the batch.
+	// Amortizes the dropPageCache cost — at coldQueryBatch=64 the
+	// reported ns/op is a fair per-call cold latency.
+	//
+	// DescendantsAtDepth is included separately from browse because
+	// it isolates the depth_positions binary-search cost, which c3
+	// targeted.
+	b.Run("cold/lookup", func(b *testing.B) {
+		reportFileMetrics(b, files, nPx)
+		b.ResetTimer()
+		for i := 0; i < b.N; i += coldQueryBatch {
+			b.StopTimer()
+			dropPageCache(b, dir)
+			b.StartTimer()
+			batch := min(coldQueryBatch, b.N-i)
+			for j := range batch {
+				_, _ = idx.Lookup(queries[(i+j)%len(queries)])
+			}
+		}
+	})
+	b.Run("cold/stats", func(b *testing.B) {
+		reportFileMetrics(b, files, nPx)
+		b.ResetTimer()
+		for i := 0; i < b.N; i += coldQueryBatch {
+			b.StopTimer()
+			dropPageCache(b, dir)
+			b.StartTimer()
+			batch := min(coldQueryBatch, b.N-i)
+			for j := range batch {
+				_, _ = idx.StatsForPrefix(queries[(i+j)%len(queries)])
+			}
+		}
+	})
+	b.Run("cold/prefix", func(b *testing.B) {
+		reportFileMetrics(b, files, nPx)
+		if len(positions) == 0 {
+			b.Skip("no positions")
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i += coldQueryBatch {
+			b.StopTimer()
+			dropPageCache(b, dir)
+			b.StartTimer()
+			batch := min(coldQueryBatch, b.N-i)
+			for j := range batch {
+				_, _ = idx.PrefixString(positions[(i+j)%len(positions)])
+			}
+		}
+	})
+	b.Run("cold/tierbd", func(b *testing.B) {
+		reportFileMetrics(b, files, nPx)
+		if len(positions) == 0 {
+			b.Skip("no positions")
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i += coldQueryBatch {
+			b.StopTimer()
+			dropPageCache(b, dir)
+			b.StartTimer()
+			batch := min(coldQueryBatch, b.N-i)
+			for j := range batch {
+				_ = idx.TierBreakdown(positions[(i+j)%len(positions)])
+			}
+		}
+	})
+	b.Run("cold/descendants", func(b *testing.B) {
+		reportFileMetrics(b, files, nPx)
+		if len(positions) == 0 {
+			b.Skip("no positions")
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i += coldQueryBatch {
+			b.StopTimer()
+			dropPageCache(b, dir)
+			b.StartTimer()
+			batch := min(coldQueryBatch, b.N-i)
+			for j := range batch {
+				_, _ = idx.DescendantsAtDepth(positions[(i+j)%len(positions)], 1)
+			}
+		}
+	})
+	b.Run(fmt.Sprintf("cold/browse/kids=%d", len(kids)), func(b *testing.B) {
+		reportFileMetrics(b, files, nPx)
+		if len(kids) == 0 {
+			b.Skip("no children")
+		}
+		b.ResetTimer()
+		for range b.N {
+			b.StopTimer()
+			dropPageCache(b, dir)
+			b.StartTimer()
 			for _, pos := range kids {
 				_, _ = idx.PrefixString(pos)
 				_ = idx.Stats(pos)
