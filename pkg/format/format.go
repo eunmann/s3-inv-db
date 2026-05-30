@@ -6,8 +6,12 @@ import "encoding/binary"
 const (
 	// MagicNumber identifies s3-inv-db files.
 	MagicNumber uint32 = 0x53334944 // "S3ID"
-	// Version is the current format version.
-	Version uint32 = 1
+	// Version is the current format version. Bumped from 1 to 2 by
+	// the adaptive-width work: core_stats.bin gained a stride
+	// descriptor after the Header; depth/prefix-dict u64/u32 files
+	// now carry per-index variable widths and an 8-byte tail pad.
+	// A Version-1 reader would silently mis-decode such a file.
+	Version uint32 = 2
 )
 
 // Header is the common header for all columnar files.

@@ -1,6 +1,7 @@
 package format
 
 import (
+	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -306,41 +307,23 @@ func byteWidth16(v uint16) uint8 {
 }
 
 // Finalize chooses a tight per-field stride from the observed maxes,
-// repacks rows into the final file (with the stride descriptor
-// written right after the header), msyncs, and closes.
+// streams the repacked rows into a fresh file at the same path
+// (Header + stride descriptor first), and closes both files. Memory
+// during the repack is bounded by the bufio buffer (1 MiB) — at the
+// project's stated 10B-prefix scale a per-row in-memory buffer would
+// be hundreds of GB.
 func (b *CoreStatsBuilder) Finalize() error {
 	stride := b.ObservedStride()
 	rowBytes := stride.RowBytes()
 
-	// Allocate a tight buffer for the repacked data. Memory cost is
-	// count * rowBytes plus the read tail pad.
-	out := make([]byte, b.count*rowBytes+coreStatsReadTailPad)
-	for i := range b.count {
-		src := b.buildRowSlice(i)
-		dst := out[i*rowBytes : (i+1)*rowBytes]
-		repackRow(dst, src, stride)
-	}
-
-	// Drop the build-stride file and write the final tight file in
-	// its place.
-	if err := unix.Msync(b.data, unix.MS_SYNC); err != nil {
-		return fmt.Errorf("core stats msync: %w", err)
-	}
-	if err := unix.Munmap(b.data); err != nil {
-		return fmt.Errorf("core stats munmap: %w", err)
-	}
-	b.data = nil
-	if err := b.file.Close(); err != nil {
-		return fmt.Errorf("core stats close (build): %w", err)
-	}
-	b.file = nil
-	if err := os.Remove(b.path); err != nil {
-		return fmt.Errorf("core stats remove build file: %w", err)
-	}
-
-	final, err := os.Create(b.path)
+	// Write the tight final file to a sibling tmp path, then rename
+	// over the build file. We keep the build mmap live throughout the
+	// row-streaming loop so each row read is a memory copy from
+	// page-cached pages.
+	tmp := b.path + ".tmp"
+	final, err := os.Create(tmp)
 	if err != nil {
-		return fmt.Errorf("core stats create final: %w", err)
+		return fmt.Errorf("core stats create tmp: %w", err)
 	}
 	header := EncodeHeader(Header{
 		Magic:   MagicNumber,
@@ -349,31 +332,71 @@ func (b *CoreStatsBuilder) Finalize() error {
 		Width:   uint32(rowBytes),
 	})
 	if _, err := final.Write(header); err != nil {
-		_ = final.Close()
-
-		return fmt.Errorf("core stats write final header: %w", err)
+		return cleanupTmp(final, tmp, fmt.Errorf("write final header: %w", err))
 	}
 	desc := stride.Encode()
 	if _, err := final.Write(desc[:]); err != nil {
-		_ = final.Close()
-
-		return fmt.Errorf("core stats write stride desc: %w", err)
+		return cleanupTmp(final, tmp, fmt.Errorf("write stride desc: %w", err))
 	}
-	if _, err := final.Write(out); err != nil {
-		_ = final.Close()
 
-		return fmt.Errorf("core stats write rows: %w", err)
+	bw := bufio.NewWriterSize(final, repackBufferSize)
+	rowBuf := make([]byte, rowBytes)
+	for i := range b.count {
+		repackRow(rowBuf, b.buildRowSlice(i), stride)
+		if _, err := bw.Write(rowBuf); err != nil {
+			return cleanupTmp(final, tmp, fmt.Errorf("write row %d: %w", i, err))
+		}
+	}
+	pad := [coreStatsReadTailPad]byte{}
+	if _, err := bw.Write(pad[:]); err != nil {
+		return cleanupTmp(final, tmp, fmt.Errorf("write tail pad: %w", err))
+	}
+	if err := bw.Flush(); err != nil {
+		return cleanupTmp(final, tmp, fmt.Errorf("flush: %w", err))
 	}
 	if err := final.Sync(); err != nil {
 		_ = final.Close()
+		_ = os.Remove(tmp)
 
-		return fmt.Errorf("core stats sync final: %w", err)
+		return fmt.Errorf("sync final: %w", err)
 	}
 	if err := final.Close(); err != nil {
-		return fmt.Errorf("core stats close final: %w", err)
+		_ = os.Remove(tmp)
+
+		return fmt.Errorf("close final: %w", err)
+	}
+
+	// Drop the build mmap before the rename so the file we replace
+	// has no live references.
+	if err := unix.Munmap(b.data); err != nil {
+		_ = os.Remove(tmp)
+
+		return fmt.Errorf("munmap build: %w", err)
+	}
+	b.data = nil
+	if err := b.file.Close(); err != nil {
+		_ = os.Remove(tmp)
+
+		return fmt.Errorf("close build: %w", err)
+	}
+	b.file = nil
+	if err := os.Rename(tmp, b.path); err != nil {
+		_ = os.Remove(tmp)
+
+		return fmt.Errorf("rename tmp into place: %w", err)
 	}
 
 	return nil
+}
+
+// cleanupTmp closes f and removes path, returning the wrapped err.
+// Used on every error branch inside Finalize so cleanup is uniform
+// and the partial file never lingers.
+func cleanupTmp(f *os.File, path string, err error) error {
+	_ = f.Close()
+	_ = os.Remove(path)
+
+	return err
 }
 
 // repackRow narrows the build-stride row into the tight stride.

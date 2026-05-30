@@ -216,6 +216,7 @@ type DictPrefixWriter struct {
 	offsetsWriter *ArrayWriter
 	finalIDsPath  string
 	scratchPath   string
+	offsetsPath   string
 	currentOffset uint64
 }
 
@@ -251,6 +252,7 @@ func NewDictPrefixWriter(outDir string) (*DictPrefixWriter, error) {
 		offsetsWriter: offsetsWriter,
 		finalIDsPath:  finalIDsPath,
 		scratchPath:   scratchPath,
+		offsetsPath:   offsetsPath,
 		currentOffset: 0,
 	}, nil
 }
@@ -326,9 +328,8 @@ func (w *DictPrefixWriter) Close() error {
 
 	// Adaptive width on the per-prefix offsets file too: max value is
 	// the trailing sentinel = w.currentOffset (total segment-ID refs).
-	offsetsPath := filepath.Join(filepath.Dir(w.scratchPath), PrefixDictOffsetsPerPrefixFile)
 	offWidth := byteWidthOf(w.currentOffset)
-	if err := RepackArrayWidthU64(offsetsPath, offsetsPath, offWidth); err != nil {
+	if err := RepackArrayWidthU64(w.offsetsPath, w.offsetsPath, offWidth); err != nil {
 		return fmt.Errorf("repack prefix_off to width %d: %w", offWidth, err)
 	}
 
