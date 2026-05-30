@@ -90,7 +90,10 @@ func runScratchPeakOne(b *testing.B, n int) {
 	}
 	addDur := time.Since(addStart)
 
-	sizes := bucketScratchSizes(tempDir)
+	sizes, err := bucketScratchSizes(tempDir)
+	if err != nil {
+		b.Fatalf("scratch sizes: %v", err)
+	}
 
 	finalizeStart := time.Now()
 	if err := builder.Finalize(); err != nil {
@@ -108,15 +111,18 @@ func runScratchPeakOne(b *testing.B, n int) {
 	b.ReportMetric(float64(finalizeDur.Microseconds()), "finalize_us")
 }
 
-func bucketScratchSizes(root string) map[string]int64 {
+func bucketScratchSizes(root string) (map[string]int64, error) {
 	sizes := map[string]int64{}
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !d.Type().IsRegular() {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("walk %s: %w", path, err)
+		}
+		if d.IsDir() || !d.Type().IsRegular() {
 			return nil
 		}
 		info, err := d.Info()
 		if err != nil {
-			return nil
+			return fmt.Errorf("stat %s: %w", path, err)
 		}
 		size := info.Size()
 		sizes["total"] += size
@@ -136,6 +142,9 @@ func bucketScratchSizes(root string) map[string]int64 {
 
 		return nil
 	})
+	if err != nil {
+		return nil, fmt.Errorf("walk scratch dir: %w", err)
+	}
 
-	return sizes
+	return sizes, nil
 }
