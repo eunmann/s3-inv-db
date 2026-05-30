@@ -201,6 +201,39 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		}
 	})
 
+	// Cold sub-benches come in two flavours:
+	//
+	//	cold/...        amortizes the dropPageCache cost across a
+	//	                batch of `coldQueryBatch=64` ops. Reflects
+	//	                bursty-related-query workloads.
+	//	coldsingle/...  drops the page cache before EVERY op. Each
+	//	                op pays the full first-touch latency. This
+	//	                is the access pattern that distinguishes
+	//	                random-hash MPHF lookups from clustered FST
+	//	                walks at scale — i.e. the worst-case shape
+	//	                FST Option A is supposed to fix.
+
+	b.Run("coldsingle/lookup", func(b *testing.B) {
+		reportFileMetrics(b, files, nPx)
+		b.ResetTimer()
+		for i := range b.N {
+			b.StopTimer()
+			dropPageCache(b, dir)
+			b.StartTimer()
+			_, _ = idx.Lookup(queries[i%len(queries)])
+		}
+	})
+	b.Run("coldsingle/stats", func(b *testing.B) {
+		reportFileMetrics(b, files, nPx)
+		b.ResetTimer()
+		for i := range b.N {
+			b.StopTimer()
+			dropPageCache(b, dir)
+			b.StartTimer()
+			_, _ = idx.StatsForPrefix(queries[i%len(queries)])
+		}
+	})
+
 	// Cold sub-benches. Each evicts the index dir from page cache
 	// before a batch of `coldQueryBatch` ops and times the batch.
 	// Amortizes the dropPageCache cost — at coldQueryBatch=64 the
