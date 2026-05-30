@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
+	"github.com/klauspost/compress/zstd"
 	"github.com/relab/bbhash"
 )
 
@@ -38,10 +39,20 @@ type StreamingMPHFBuilder struct {
 	preorderPos  *u64DiskArray
 	fingerprints *u64DiskArray
 
-	// Temp file for prefix strings
-	tempFile   *os.File
-	tempWriter *bufio.Writer
-	tempPath   string
+	// Temp file for prefix strings. The bytes flow:
+	//   Add() → tempWriter (bufio, batches per-Add lengths+payloads)
+	//         → tempEncoder (zstd, fastest level)
+	//         → tempFile
+	// On Build(), tempWriter.Flush + tempEncoder.Close finalize the
+	// zstd frame, then the read side opens a fresh decoder on the
+	// seeked file. Compression is on because the prefix stream is
+	// large (sum of all S3 key prefixes, ~50 GB at 1B prefixes) and
+	// highly compressible (shared path components, written then read
+	// exactly once sequentially — no mmap requirement).
+	tempFile    *os.File
+	tempEncoder *zstd.Encoder
+	tempWriter  *bufio.Writer
+	tempPath    string
 
 	// Stats
 	count      uint64
@@ -49,7 +60,15 @@ type StreamingMPHFBuilder struct {
 	bufferSize int
 
 	usePrefixDict bool
+	built         bool
 }
+
+// ErrMPHFAlreadyBuilt is returned when Build is called more than
+// once on the same StreamingMPHFBuilder. The writer chain is
+// finalized in the first call, so a second call would nil-deref on
+// the tempWriter flush. Surfaced as a named error so callers can
+// distinguish double-Build from other Build failures.
+var ErrMPHFAlreadyBuilt = errors.New("StreamingMPHFBuilder.Build already called")
 
 // StreamingMPHFOption configures a StreamingMPHFBuilder.
 type StreamingMPHFOption func(*StreamingMPHFBuilder)
@@ -94,12 +113,24 @@ func NewStreamingMPHFBuilder(tempDir string, opts ...StreamingMPHFOption) (*Stre
 		return nil, err
 	}
 
+	enc, err := zstd.NewWriter(tempFile, zstd.WithEncoderLevel(zstd.SpeedFastest))
+	if err != nil {
+		fingerprints.Close()
+		preorderPos.Close()
+		hashes.Close()
+		tempFile.Close()
+		os.Remove(tempFile.Name())
+
+		return nil, fmt.Errorf("create prefix zstd encoder: %w", err)
+	}
+
 	b := &StreamingMPHFBuilder{
 		hashes:       hashes,
 		preorderPos:  preorderPos,
 		fingerprints: fingerprints,
 		tempFile:     tempFile,
-		tempWriter:   bufio.NewWriterSize(tempFile, 1024*1024),
+		tempEncoder:  enc,
+		tempWriter:   bufio.NewWriterSize(enc, 1024*1024),
 		tempPath:     tempFile.Name(),
 		bufferSize:   1024 * 1024,
 	}
@@ -158,11 +189,19 @@ func (b *StreamingMPHFBuilder) Close() error {
 		if err := b.tempWriter.Flush(); err != nil {
 			errs = append(errs, fmt.Errorf("flush mphf tempfile: %w", err))
 		}
+		b.tempWriter = nil
+	}
+	if b.tempEncoder != nil {
+		if err := b.tempEncoder.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close mphf temp encoder: %w", err))
+		}
+		b.tempEncoder = nil
 	}
 	if b.tempFile != nil {
 		if err := b.tempFile.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("close mphf tempfile: %w", err))
 		}
+		b.tempFile = nil
 		if err := os.Remove(b.tempPath); err != nil && !os.IsNotExist(err) {
 			errs = append(errs, fmt.Errorf("remove mphf tempfile: %w", err))
 		}
@@ -191,6 +230,10 @@ func (b *StreamingMPHFBuilder) Close() error {
 //   - ReverseMap: Uses bbhash's ReverseMap to avoid expensive Find() calls (~17x faster).
 //   - Option 4: Uses pre-computed fingerprints from Add phase (no recomputation).
 func (b *StreamingMPHFBuilder) Build(outDir string) error {
+	if b.built {
+		return ErrMPHFAlreadyBuilt
+	}
+	b.built = true
 	log := logging.L()
 
 	if b.count == 0 {
@@ -199,9 +242,8 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		return b.writeEmpty(outDir)
 	}
 
-	// Flush and close temp writer
-	if err := b.tempWriter.Flush(); err != nil {
-		return fmt.Errorf("flush temp file: %w", err)
+	if err := b.finalizePrefixWriter(); err != nil {
+		return err
 	}
 
 	// Freeze the disk-backed arrays so their backing files are mmap'd
@@ -478,6 +520,37 @@ func mphfWorkerCount(n int) int {
 	return w
 }
 
+// finalizePrefixWriter flushes the bufio writer into the zstd encoder
+// and finalizes the frame so the read side can open a fresh decoder on
+// the seeked file. After this both tempWriter and tempEncoder are
+// spent; Close still owns closing/removing the underlying file.
+func (b *StreamingMPHFBuilder) finalizePrefixWriter() error {
+	if err := b.tempWriter.Flush(); err != nil {
+		return fmt.Errorf("flush temp file: %w", err)
+	}
+	b.tempWriter = nil
+	if err := b.tempEncoder.Close(); err != nil {
+		return fmt.Errorf("close prefix encoder: %w", err)
+	}
+	b.tempEncoder = nil
+
+	return nil
+}
+
+// openPrefixReader rewinds the prefix temp file and returns a buffered
+// reader over a fresh zstd decoder. Caller owns Close on the decoder.
+func (b *StreamingMPHFBuilder) openPrefixReader() (*bufio.Reader, *zstd.Decoder, error) {
+	if _, err := b.tempFile.Seek(0, 0); err != nil {
+		return nil, nil, fmt.Errorf("seek temp file: %w", err)
+	}
+	dec, err := zstd.NewReader(b.tempFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open prefix zstd reader: %w", err)
+	}
+
+	return bufio.NewReaderSize(dec, b.bufferSize), dec, nil
+}
+
 // writePrefixBlobPreorder writes prefixes in preorder (original Add order) for GetPrefix.
 // This reads from the temp file in sequence.
 func (b *StreamingMPHFBuilder) writePrefixBlobPreorder(outDir string) error {
@@ -489,13 +562,13 @@ func (b *StreamingMPHFBuilder) writePrefixBlobPreorder(outDir string) error {
 		return fmt.Errorf("create blob writer: %w", err)
 	}
 
-	// Seek to start of temp file
-	if _, err := b.tempFile.Seek(0, 0); err != nil {
+	reader, dec, err := b.openPrefixReader()
+	if err != nil {
 		writer.Close()
 
-		return fmt.Errorf("seek temp file: %w", err)
+		return err
 	}
-	reader := bufio.NewReaderSize(b.tempFile, b.bufferSize)
+	defer dec.Close()
 
 	// Read all prefixes in original (preorder) order and write to blob
 	var lenBuf [4]byte
@@ -545,12 +618,13 @@ func (b *StreamingMPHFBuilder) writePrefixBlobDictionary(outDir string) error {
 		return fmt.Errorf("create dict prefix writer: %w", err)
 	}
 
-	if _, err := b.tempFile.Seek(0, 0); err != nil {
+	reader, dec, err := b.openPrefixReader()
+	if err != nil {
 		writer.Close()
 
-		return fmt.Errorf("seek temp file: %w", err)
+		return err
 	}
-	reader := bufio.NewReaderSize(b.tempFile, b.bufferSize)
+	defer dec.Close()
 
 	var lenBuf [4]byte
 	n := int(b.count)

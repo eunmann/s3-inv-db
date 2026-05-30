@@ -8,14 +8,19 @@ import (
 
 // DepthIndexBuilder accumulates positions per depth and writes the
 // depth posting lists at Finalize. Storage is **disk-backed per
-// depth** via u64DiskArray: at billion-prefix scale the positions
-// would otherwise be ~8 GiB of heap (1B × 8 B). Each per-depth
-// array is append-only and grows monotonically because positions
-// are added in preorder (pos = 0, 1, 2, ...), so within any one
-// depth the values are already sorted — no post-add sort needed.
+// depth** via u64StreamArray (zstd-compressed): at billion-prefix
+// scale the positions would otherwise be ~8 GiB of heap (1B × 8 B).
+// Each per-depth array is append-only and grows monotonically because
+// positions are added in preorder (pos = 0, 1, 2, ...), so within any
+// one depth the values are already sorted — no post-add sort needed.
+//
+// The "monotonically increasing u64s in append order, read back once
+// sequentially" access pattern is what makes the compressed-stream
+// primitive the right fit here (vs the mmap-backed u64DiskArray the
+// MPHF builder needs).
 type DepthIndexBuilder struct {
 	tempDir  string
-	buckets  []*u64DiskArray // index = depth
+	buckets  []*u64StreamArray // index = depth
 	maxDepth uint32
 }
 
@@ -32,7 +37,7 @@ func NewDepthIndexBuilder(tempDir string) *DepthIndexBuilder {
 // order and Build relies on that order being already sorted.
 func (b *DepthIndexBuilder) Add(pos uint64, depth uint32) error {
 	for uint32(len(b.buckets)) <= depth {
-		a, err := newU64DiskArray(b.tempDir, fmt.Sprintf(DepthBucketNameFmt, len(b.buckets)))
+		a, err := newU64StreamArray(b.tempDir, fmt.Sprintf(DepthBucketNameFmt, len(b.buckets)))
 		if err != nil {
 			return fmt.Errorf("create depth bucket %d: %w", len(b.buckets), err)
 		}
@@ -75,27 +80,29 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 
 			break
 		}
-		var bucket *u64DiskArray
+		var bucket *u64StreamArray
 		if int(d) < len(b.buckets) {
 			bucket = b.buckets[d]
 		}
 		if bucket == nil {
 			continue
 		}
-		if err := bucket.Freeze(); err != nil {
-			errs = append(errs, fmt.Errorf("freeze depth %d: %w", d, err))
+		written := uint64(0)
+		if err := bucket.Iterate(func(p uint64) error {
+			if err := positionsWriter.WriteU64(p); err != nil {
+				return fmt.Errorf("write position depth %d: %w", d, err)
+			}
+			written++
+
+			return nil
+		}); err != nil {
+			errs = append(errs, fmt.Errorf("iterate depth %d: %w", d, err))
+			bucket.Close()
+			b.buckets[d] = nil
 
 			break
 		}
-		positions := bucket.Slice()
-		for _, p := range positions {
-			if err := positionsWriter.WriteU64(p); err != nil {
-				errs = append(errs, fmt.Errorf("write position depth %d: %w", d, err))
-
-				break
-			}
-		}
-		offset += uint64(len(positions))
+		offset += written
 		bucket.Close()
 		b.buckets[d] = nil
 	}

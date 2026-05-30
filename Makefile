@@ -1,6 +1,6 @@
 .PHONY: all build server seeder test test-race lint lint-check clean clean-seed seed \
         css dev dev-reset docker-build docker-prod docker-seed docker-down \
-        cover cover-html cover-summary tidy
+        cover cover-html cover-summary tidy compose-preflight
 
 GOLANGCI_LINT_VERSION := v2.9.0
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
@@ -49,13 +49,13 @@ server: css
 seeder:
 	go build -o bin/s3-inv-db-seeder ./cmd/s3-inv-db-seeder
 
-test:
+test: compose-preflight
 	@$(COMPOSE) --profile test run --rm test-runner go test ./...; \
 	rc=$$?; \
 	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
 	exit $$rc
 
-test-race:
+test-race: compose-preflight
 	@$(COMPOSE) --profile test run --rm test-runner go test -race ./...; \
 	rc=$$?; \
 	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
@@ -68,7 +68,7 @@ COVER_OUT := coverage.out
 
 cover: $(COVER_OUT)
 
-$(COVER_OUT):
+$(COVER_OUT): compose-preflight
 	@$(COMPOSE) --profile test run --rm test-runner \
 	    go test -covermode=atomic -coverpkg=./... -coverprofile=$(COVER_OUT) ./...; \
 	rc=$$?; \
@@ -109,13 +109,33 @@ seed: seeder
 
 # ----- docker compose ------------------------------------------------------
 
+# Detect compose containers whose attached network no longer exists, and tear
+# them down so the next `up` can recreate them. This is the standard failure
+# mode after `docker network prune`, a Docker daemon restart, or a host
+# reboot: containers survive with a dangling network reference, and the next
+# `compose up` fails with "network <id> not found". Named volumes are
+# preserved (no `-v`), so caches and minio data are kept.
+compose-preflight:
+	@stale=""; \
+	for c in $$($(COMPOSE) ps -aq 2>/dev/null); do \
+	    for net in $$(docker inspect -f '{{range $$k,$$v := .NetworkSettings.Networks}}{{$$k}} {{end}}' $$c 2>/dev/null); do \
+	        if ! docker network inspect "$$net" >/dev/null 2>&1; then \
+	            stale=1; break 2; \
+	        fi; \
+	    done; \
+	done; \
+	if [ -n "$$stale" ]; then \
+	    echo "compose-preflight: stale network reference detected — clearing containers (volumes preserved)"; \
+	    $(COMPOSE) --profile dev --profile prod --profile seed --profile test down --remove-orphans >/dev/null 2>&1 || true; \
+	fi
+
 # Build both dev and prod images.
 docker-build:
 	$(COMPOSE) --profile dev --profile prod build
 
 # Hot-reload server (port 8080). The only supported dev workflow — no host
 # binary path. Override port with S3INV_DEV_PORT=...
-dev:
+dev: compose-preflight
 	$(COMPOSE) --profile dev up --build
 
 # Wipe the dev server's persistent state (state.db + downloaded indexes)
@@ -130,13 +150,13 @@ dev-reset:
 	@echo "dev state cleared — run 'make dev' to start fresh"
 
 # Slim production image (port 8081). Override with S3INV_PROD_PORT=...
-docker-prod:
+docker-prod: compose-preflight
 	$(COMPOSE) --profile prod up --build
 
 # One-shot seeder: writes to ./seed-data on the host.
 # Override count/objects/preset with S3INV_SEED_COUNT, S3INV_SEED_OBJECTS,
 # S3INV_SEED_PRESET.
-docker-seed:
+docker-seed: compose-preflight
 	$(COMPOSE) --profile seed run --rm seeder
 
 # Stop everything and remove volumes (caches).
