@@ -31,23 +31,6 @@ func readHeaderCount(path string) uint64 {
 	return h.Count
 }
 
-func pickLargestDepthOneSubtree(idx *indexread.Index, candidates []string) []uint64 {
-	var best []uint64
-	for _, p := range candidates {
-		pos, ok := idx.Lookup(p)
-		if !ok {
-			continue
-		}
-		kids, err := idx.DescendantsAtDepth(pos, 1)
-		if err == nil && len(kids) > len(best) {
-			best = kids
-		}
-	}
-	if root, err := idx.DescendantsAtDepth(0, 1); err == nil && len(root) > len(best) {
-		best = root
-	}
-	return best
-}
 
 // BenchmarkGrid sweeps the (shape × tier_dist × size_dist) grid and
 // emits per-cell custom metrics so benchstat can diff disk and query
@@ -81,37 +64,64 @@ func pickLargestDepthOneSubtree(idx *indexread.Index, candidates []string) []uin
 //	S3INV_GRID_SHAPES    — comma-separated subset
 //	S3INV_GRID_TIERS     — comma-separated subset
 //	S3INV_GRID_SIZES     — comma-separated subset
-func BenchmarkGrid(b *testing.B) {
+// BenchmarkGridDisk emits only the per-file disk metrics. One build
+// per cell, no query setup — fast enough to iterate on format changes
+// (typically ~30s for the full 100-cell grid at n=100K).
+//
+//	go test -bench=BenchmarkGridDisk -benchtime=1x ./pkg/indexread/
+func BenchmarkGridDisk(b *testing.B) {
 	silenceZerolog(b)
 	n := envInt("S3INV_GRID_N", 100_000)
-
-	shapes := filterStr(benchutil.ShapesForGrid(), os.Getenv("S3INV_GRID_SHAPES"))
-	tiersDists := filterTier(benchutil.TierDistributions(), os.Getenv("S3INV_GRID_TIERS"))
-	sizeDists := filterSize(benchutil.SizeDistributions(), os.Getenv("S3INV_GRID_SIZES"))
-
-	for _, shape := range shapes {
-		for _, td := range tiersDists {
-			for _, sd := range sizeDists {
+	for _, shape := range filterStr(benchutil.ShapesForGrid(), os.Getenv("S3INV_GRID_SHAPES")) {
+		for _, td := range filterTier(benchutil.TierDistributions(), os.Getenv("S3INV_GRID_TIERS")) {
+			for _, sd := range filterSize(benchutil.SizeDistributions(), os.Getenv("S3INV_GRID_SIZES")) {
 				name := fmt.Sprintf("shape=%s/tier=%s/size=%s", shape, td.Name, sd.Name)
 				b.Run(name, func(b *testing.B) {
 					spec := benchutil.GridSpec{
 						Shape: shape, Tier: td, Size: sd, N: n, Seed: benchutil.BenchmarkSeed,
 					}
-					runGridCell(b, spec)
+					dir := buildGridIndex(b, spec)
+					defer os.RemoveAll(dir)
+					files := walkDirSizes(b, dir)
+					nPx := readPrefixCount(b, dir, files)
+					for range b.N {
+						reportFileMetrics(b, files, nPx)
+					}
 				})
 			}
 		}
 	}
 }
 
-func runGridCell(b *testing.B, spec benchutil.GridSpec) {
+// BenchmarkGridQuery emits per-cell query latencies (warm Lookup,
+// StatsForPrefix, PrefixString, TierBreakdown, Browse). Setup picks
+// only a small sample of queries to keep per-cell overhead bounded.
+//
+//	go test -bench=BenchmarkGridQuery -benchtime=20ms ./pkg/indexread/
+func BenchmarkGridQuery(b *testing.B) {
+	silenceZerolog(b)
+	n := envInt("S3INV_GRID_N", 100_000)
+	for _, shape := range filterStr(benchutil.ShapesForGrid(), os.Getenv("S3INV_GRID_SHAPES")) {
+		for _, td := range filterTier(benchutil.TierDistributions(), os.Getenv("S3INV_GRID_TIERS")) {
+			for _, sd := range filterSize(benchutil.SizeDistributions(), os.Getenv("S3INV_GRID_SIZES")) {
+				name := fmt.Sprintf("shape=%s/tier=%s/size=%s", shape, td.Name, sd.Name)
+				b.Run(name, func(b *testing.B) {
+					spec := benchutil.GridSpec{
+						Shape: shape, Tier: td, Size: sd, N: n, Seed: benchutil.BenchmarkSeed,
+					}
+					runGridQueryCell(b, spec)
+				})
+			}
+		}
+	}
+}
+
+func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 	b.Helper()
 	dir := buildGridIndex(b, spec)
 	defer os.RemoveAll(dir)
-
 	files := walkDirSizes(b, dir)
 	nPx := readPrefixCount(b, dir, files)
-	reportFileMetrics(b, files, nPx)
 
 	idx, err := indexread.Open(dir)
 	if err != nil {
@@ -119,16 +129,8 @@ func runGridCell(b *testing.B, spec benchutil.GridSpec) {
 	}
 	defer idx.Close()
 
-	queries, positions := pickGridQueries(b, idx, nPx)
-	kids := pickLargestDepthOneSubtree(idx, queries)
-
-	// One-shot "disk" sub-bench: makes the per-file metrics show up
-	// even when no query sub-bench is selected.
-	b.Run("disk", func(b *testing.B) {
-		reportFileMetrics(b, files, nPx)
-		for range b.N {
-		}
-	})
+	queries, positions := pickGridQueries(b, idx, nPx, 200)
+	kids := pickLargestDepthOneSubtreeCapped(idx, queries, 20)
 
 	b.Run("lookup", func(b *testing.B) {
 		reportFileMetrics(b, files, nPx)
@@ -137,7 +139,6 @@ func runGridCell(b *testing.B, spec benchutil.GridSpec) {
 			_, _ = idx.Lookup(queries[i%len(queries)])
 		}
 	})
-
 	b.Run("stats", func(b *testing.B) {
 		reportFileMetrics(b, files, nPx)
 		b.ResetTimer()
@@ -145,7 +146,6 @@ func runGridCell(b *testing.B, spec benchutil.GridSpec) {
 			_, _ = idx.StatsForPrefix(queries[i%len(queries)])
 		}
 	})
-
 	b.Run("prefix", func(b *testing.B) {
 		reportFileMetrics(b, files, nPx)
 		if len(positions) == 0 {
@@ -156,7 +156,6 @@ func runGridCell(b *testing.B, spec benchutil.GridSpec) {
 			_, _ = idx.PrefixString(positions[i%len(positions)])
 		}
 	})
-
 	b.Run("tierbd", func(b *testing.B) {
 		reportFileMetrics(b, files, nPx)
 		if len(positions) == 0 {
@@ -167,7 +166,6 @@ func runGridCell(b *testing.B, spec benchutil.GridSpec) {
 			_ = idx.TierBreakdown(positions[i%len(positions)])
 		}
 	})
-
 	b.Run(fmt.Sprintf("browse/kids=%d", len(kids)), func(b *testing.B) {
 		reportFileMetrics(b, files, nPx)
 		if len(kids) == 0 {
@@ -182,6 +180,29 @@ func runGridCell(b *testing.B, spec benchutil.GridSpec) {
 			}
 		}
 	})
+}
+
+func pickLargestDepthOneSubtreeCapped(idx *indexread.Index, candidates []string, maxScan int) []uint64 {
+	var best []uint64
+	scanned := 0
+	for _, p := range candidates {
+		if scanned >= maxScan {
+			break
+		}
+		scanned++
+		pos, ok := idx.Lookup(p)
+		if !ok {
+			continue
+		}
+		kids, err := idx.DescendantsAtDepth(pos, 1)
+		if err == nil && len(kids) > len(best) {
+			best = kids
+		}
+	}
+	if root, err := idx.DescendantsAtDepth(0, 1); err == nil && len(root) > len(best) {
+		best = root
+	}
+	return best
 }
 
 // buildGridIndex constructs an index for spec, honouring the same env
@@ -301,9 +322,8 @@ var gridReportedFiles = []gridFile{
 	{"prefixes.fst", "Bpp_fst", false},
 }
 
-func pickGridQueries(b *testing.B, idx *indexread.Index, nPx uint64) ([]string, []uint64) {
+func pickGridQueries(b *testing.B, idx *indexread.Index, nPx uint64, qmax int) ([]string, []uint64) {
 	b.Helper()
-	const qmax = 2000
 	if nPx == 0 {
 		return nil, nil
 	}
