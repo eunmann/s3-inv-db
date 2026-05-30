@@ -41,25 +41,27 @@ var (
 // tierStatsSparseShouldUse decides whether the sparse layout beats
 // the dense one for an inventory with the given totals.
 //
-// Dense cost: presentTiers * 16 * N
-// sparse cost: 2*N + 16*populatedSum + (N+1) * offsetWidth + bitmap_pad_for_reader
+//	dense cost:  presentTiers × 16 × N
+//	row body:    2 × N + 16 × populatedSum     (bitmap + populated cells)
+//	max offset:  row body bytes                 (sentinel at end)
+//	sparse cost: row body + (N+1) × byteWidthOf(row body)
 //
-// offsetWidth is the byte width of the largest row offset, which is
-// bounded above by the total sparse-rows file size. We use 8 here as
-// a conservative upper bound — the actual offsets file shrinks via
-// RepackArrayWidthU64 after the sparse file is written, so this is
-// only used to pick the format, not to size anything.
+// Using the EXACT offset width — RepackArrayWidthU64 will shrink the
+// offsets file to byteWidthOf(maxOffset) at Close, so the heuristic
+// should reflect what's actually going to land on disk. An earlier
+// version of this function used a conservative 8-byte offset width,
+// which biased the decision toward dense and left disk savings on
+// the table for shapes near the break-even line.
 func tierStatsSparseShouldUse(presentTiers int, n, populatedSum uint64) bool {
 	if presentTiers <= 1 {
 		// One-slot rows: dense has no waste, sparse adds ≥2B bitmap
 		// per row and an offsets file — always worse.
 		return false
 	}
-	const conservativeOffsetWidth = 8
+	rowBodyBytes := uint64(tierStatsSparseBitmapBytes)*n + tierStatsSlotBytes64*populatedSum
+	offsetWidth := uint64(byteWidthOf(rowBodyBytes))
 	denseCost := uint64(presentTiers) * tierStatsSlotBytes64 * n
-	sparseCost := uint64(tierStatsSparseBitmapBytes)*n +
-		tierStatsSlotBytes64*populatedSum +
-		(n+1)*conservativeOffsetWidth
+	sparseCost := rowBodyBytes + (n+1)*offsetWidth
 
 	return sparseCost < denseCost
 }
@@ -68,8 +70,27 @@ const tierStatsSlotBytes64 = uint64(TierStatsSlotBytes)
 
 // convertDenseToSparse streams the dense tier-stats file at densePath
 // into a sparse pair under tier_stats/ and removes the dense file on
-// success. Caller has already verified the format choice via
-// tierStatsSparseShouldUse.
+// success.
+//
+// Crash safety: the sparse rows file is renamed to its final name
+// LAST among the things a reader looks at, after the offsets file is
+// already in place. TierStatsSparsePresent only returns true once
+// the rows file is at the canonical path, and the only path through
+// OpenTierStats that selects sparse requires the rows file to be
+// present. The reader's invariant therefore holds even if the
+// process is killed at any point during conversion:
+//
+//	state                           reader chooses
+//	─────────────────────────────────────────────
+//	rows .tmp only                  dense (rows.bin missing)
+//	offsets final, rows .tmp        dense
+//	offsets final + rows final      sparse  ✓
+//	offsets final + rows final, no dense   sparse  ✓
+//
+// The dense file is only removed after the sparse pair is fully in
+// place; a crash before that step leaves an orphan dense file (the
+// reader still picks sparse, no correctness issue, just wasted bytes
+// the next build will overwrite).
 func convertDenseToSparse(densePath string, slotCount int, n, populatedSum uint64) error {
 	if slotCount > tierStatsSparseBitmapBytes*8 {
 		return fmt.Errorf("%w: %d slots", errSparseBitmapWidth, slotCount)
@@ -96,25 +117,37 @@ func convertDenseToSparse(densePath string, slotCount int, n, populatedSum uint6
 		return fmt.Errorf("%w: wrote=%d expected=%d", errSparseSizeMismatch, written, expected)
 	}
 
-	// Atomically place the sparse file at its final name.
-	if err := os.Rename(sparseTmp, sparsePath); err != nil {
-		_ = os.Remove(sparseTmp)
-		_ = os.Remove(offsetsTmp)
-
-		return fmt.Errorf("rename sparse: %w", err)
-	}
-	// Repack offsets to the smallest byte width that holds the
-	// largest offset; RepackArrayWidthU64 stages via .tmp + rename.
+	// Step 1: repack offsets into the FINAL path. The sparse rows
+	// file is still at sparseTmp; tierStatsSparsePresent therefore
+	// returns false, and the reader keeps using dense.
 	offWidth := byteWidthOf(written)
 	if err := RepackArrayWidthU64(offsetsTmp, offsetsPath, offWidth); err != nil {
-		_ = os.Remove(sparsePath)
+		_ = os.Remove(sparseTmp)
 		_ = os.Remove(offsetsTmp)
 
 		return fmt.Errorf("repack offsets to width %d: %w", offWidth, err)
 	}
 	if err := os.Remove(offsetsTmp); err != nil && !os.IsNotExist(err) {
+		_ = os.Remove(sparseTmp)
+		_ = os.Remove(offsetsPath)
+
 		return fmt.Errorf("remove offsets scratch: %w", err)
 	}
+
+	// Step 2: rename the rows file into its final path. This is the
+	// switch-over point — once it returns, tierStatsSparsePresent is
+	// true and the reader will route to the sparse path. The
+	// offsets file is already at its final path, so OpenTierStatsSparse
+	// has everything it needs.
+	if err := os.Rename(sparseTmp, sparsePath); err != nil {
+		_ = os.Remove(sparseTmp)
+		_ = os.Remove(offsetsPath)
+
+		return fmt.Errorf("rename sparse: %w", err)
+	}
+
+	// Step 3: drop the dense file. A crash here leaves an orphan
+	// dense file but the reader correctly chooses sparse.
 	if err := os.Remove(densePath); err != nil {
 		return fmt.Errorf("remove dense: %w", err)
 	}
@@ -326,7 +359,7 @@ func (r *TierStatsSparseReader) SlotCount() int { return r.slotCount }
 
 // fillRow decodes the row at pos into the caller-supplied per-slot
 // arrays and returns the presence bitmap. Absent slots are left at
-// their zero value. counts and bytesArr must be large enough to hold
+// their zero value. Counts and bytesArr must be large enough to hold
 // every present-tier slot — the reader's slotCount upper bound is
 // 8*tierStatsSparseBitmapBytes = 16, so a [16]uint64 on the caller
 // stack suffices.
