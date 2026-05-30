@@ -205,14 +205,19 @@ func RepackArrayWidthU64(srcPath, dstPath string, width uint8) error {
 	}
 	if err := dst.Sync(); err != nil {
 		_ = dst.Close()
+		_ = os.Remove(tmp)
 
 		return fmt.Errorf("sync: %w", err)
 	}
 	if err := dst.Close(); err != nil {
+		_ = os.Remove(tmp)
+
 		return fmt.Errorf("close: %w", err)
 	}
 	if tmp != dstPath {
 		if err := os.Rename(tmp, dstPath); err != nil {
+			_ = os.Remove(tmp)
+
 			return fmt.Errorf("rename: %w", err)
 		}
 	}
