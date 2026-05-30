@@ -60,7 +60,15 @@ type StreamingMPHFBuilder struct {
 	bufferSize int
 
 	usePrefixDict bool
+	built         bool
 }
+
+// ErrMPHFAlreadyBuilt is returned when Build is called more than
+// once on the same StreamingMPHFBuilder. The writer chain is
+// finalized in the first call, so a second call would nil-deref on
+// the tempWriter flush. Surfaced as a named error so callers can
+// distinguish double-Build from other Build failures.
+var ErrMPHFAlreadyBuilt = errors.New("StreamingMPHFBuilder.Build already called")
 
 // StreamingMPHFOption configures a StreamingMPHFBuilder.
 type StreamingMPHFOption func(*StreamingMPHFBuilder)
@@ -222,6 +230,10 @@ func (b *StreamingMPHFBuilder) Close() error {
 //   - ReverseMap: Uses bbhash's ReverseMap to avoid expensive Find() calls (~17x faster).
 //   - Option 4: Uses pre-computed fingerprints from Add phase (no recomputation).
 func (b *StreamingMPHFBuilder) Build(outDir string) error {
+	if b.built {
+		return ErrMPHFAlreadyBuilt
+	}
+	b.built = true
 	log := logging.L()
 
 	if b.count == 0 {
@@ -230,18 +242,9 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		return b.writeEmpty(outDir)
 	}
 
-	// Flush bufio into the encoder, then finalize the zstd frame so the
-	// read side can open a fresh decoder on the seeked file. After
-	// this both tempWriter and tempEncoder are spent; Close still owns
-	// closing/removing the underlying file.
-	if err := b.tempWriter.Flush(); err != nil {
-		return fmt.Errorf("flush temp file: %w", err)
+	if err := b.finalizePrefixWriter(); err != nil {
+		return err
 	}
-	b.tempWriter = nil
-	if err := b.tempEncoder.Close(); err != nil {
-		return fmt.Errorf("close prefix encoder: %w", err)
-	}
-	b.tempEncoder = nil
 
 	// Freeze the disk-backed arrays so their backing files are mmap'd
 	// and exposable as []uint64. bbhash reads the slice; the values
@@ -515,6 +518,23 @@ func mphfWorkerCount(n int) int {
 	}
 
 	return w
+}
+
+// finalizePrefixWriter flushes the bufio writer into the zstd encoder
+// and finalizes the frame so the read side can open a fresh decoder on
+// the seeked file. After this both tempWriter and tempEncoder are
+// spent; Close still owns closing/removing the underlying file.
+func (b *StreamingMPHFBuilder) finalizePrefixWriter() error {
+	if err := b.tempWriter.Flush(); err != nil {
+		return fmt.Errorf("flush temp file: %w", err)
+	}
+	b.tempWriter = nil
+	if err := b.tempEncoder.Close(); err != nil {
+		return fmt.Errorf("close prefix encoder: %w", err)
+	}
+	b.tempEncoder = nil
+
+	return nil
 }
 
 // openPrefixReader rewinds the prefix temp file and returns a buffered
