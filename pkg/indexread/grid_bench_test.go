@@ -31,7 +31,6 @@ func readHeaderCount(path string) uint64 {
 	return h.Count
 }
 
-
 // BenchmarkGrid sweeps the (shape × tier_dist × size_dist) grid and
 // emits per-cell custom metrics so benchstat can diff disk and query
 // effects of a format change across all cells in one pass.
@@ -64,6 +63,7 @@ func readHeaderCount(path string) uint64 {
 //	S3INV_GRID_SHAPES    — comma-separated subset
 //	S3INV_GRID_TIERS     — comma-separated subset
 //	S3INV_GRID_SIZES     — comma-separated subset
+//
 // BenchmarkGridDisk emits only the per-file disk metrics. One build
 // per cell, no query setup — fast enough to iterate on format changes
 // (typically ~30s for the full 100-cell grid at n=100K).
@@ -362,10 +362,7 @@ func pickLargestDepthOneSubtreeCapped(idx *indexread.Index, candidates []string,
 // toggles the legacy bench helpers use.
 func buildGridIndex(tb testing.TB, spec benchutil.GridSpec) string {
 	tb.Helper()
-	dir, err := os.MkdirTemp("", "grid-*")
-	if err != nil {
-		tb.Fatalf("mktmp: %v", err)
-	}
+	dir := tb.TempDir()
 
 	agg := extsort.NewAggregator(spec.N, 0)
 	gen := benchutil.NewGridGenerator(spec)
@@ -469,16 +466,15 @@ var gridReportedFiles = []gridFile{
 	{"prefix_blob.bin", "Bpp_pblob", false},
 }
 
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
 func pickGridQueries(b *testing.B, idx *indexread.Index, nPx uint64, qmax int) ([]string, []uint64) {
 	b.Helper()
 	if nPx == 0 {
 		return nil, nil
 	}
-	limit := int(nPx)
-	if limit > qmax {
-		limit = qmax
-	}
-	rng := rand.New(rand.NewSource(7))
+	limit := min(int(nPx), qmax)
+	const gridQuerySeed = 7
+	rng := rand.New(rand.NewSource(gridQuerySeed))
 	queries := make([]string, 0, limit)
 	positions := make([]uint64, 0, limit)
 	seen := map[uint64]struct{}{}
@@ -495,6 +491,7 @@ func pickGridQueries(b *testing.B, idx *indexread.Index, nPx uint64, qmax int) (
 		queries = append(queries, s)
 		positions = append(positions, p)
 	}
+
 	return queries, positions
 }
 

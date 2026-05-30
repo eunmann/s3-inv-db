@@ -85,7 +85,10 @@ func (s CoreStatsStride) validate() error {
 }
 
 // byteWidthOf returns the smallest n in [1,8] such that v < 2^(8n).
-// For v==0 returns 1.
+// For v==0 returns 1. The numeric returns are the byte widths
+// themselves — disable the magic-number check on this function only.
+//
+//nolint:mnd // each return is the literal byte width the case picks
 func byteWidthOf(v uint64) uint8 {
 	switch {
 	case v < 1<<8:
@@ -108,7 +111,10 @@ func byteWidthOf(v uint64) uint8 {
 }
 
 // widthMask masks off bytes above width n. Used by the reader to
-// extract a uint64 from a wider load.
+// extract a uint64 from a wider load. Const-like lookup table; Go
+// doesn't allow const arrays so it lives as a package-level var.
+//
+//nolint:gochecknoglobals // immutable lookup table
 var widthMask = [9]uint64{
 	0,
 	0xFF,

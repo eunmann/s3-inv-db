@@ -63,7 +63,7 @@ func NewGridGenerator(spec GridSpec) *GridGenerator {
 }
 
 // Stream emits N synthetic objects through visit without ever
-// materialising the slice. n is the spec.N captured at construction
+// materialising the slice. N is the spec.N captured at construction
 // time.
 func (g *GridGenerator) Stream(n int, visit func(FakeObject)) {
 	for i := range n {
@@ -125,7 +125,9 @@ func (g *GridGenerator) initKeyState(n int) {
 			numPrefixes:    max(n/filesPerPrefix, 1),
 		}
 	case "balanced":
-		g.keyState = &balancedState{branchFactor: 26, depth: 3}
+		const alphabetSize = 26
+		const balancedDepth = 3
+		g.keyState = &balancedState{branchFactor: alphabetSize, depth: balancedDepth}
 	case "wide_single_level":
 		g.keyState = &wideSingleLevelState{}
 	case "s3_dated":
@@ -161,12 +163,13 @@ func (g *GridGenerator) nextKey(i, n int) string {
 		// Compute a deterministic key by interpreting i in base 26 over depth digits.
 		var b strings.Builder
 		idx := i
-		for d := 0; d < s.depth; d++ {
+		for range s.depth {
 			b.WriteByte(byte('a' + idx%s.branchFactor))
 			b.WriteByte('/')
 			idx /= s.branchFactor
 		}
-		fmt.Fprintf(&b, "file%d.txt", i%5)
+		const filesPerLeaf = 5
+		fmt.Fprintf(&b, "file%d.txt", i%filesPerLeaf)
 		return b.String()
 	case *wideSingleLevelState:
 		return fmt.Sprintf("root/child%07d/file.txt", i)

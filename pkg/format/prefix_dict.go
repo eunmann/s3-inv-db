@@ -2,6 +2,7 @@ package format
 
 import (
 	"bufio"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -361,13 +362,10 @@ func repackDictIDs(srcPath, dstPath string, width uint8) error {
 		return fmt.Errorf("write header: %w", err)
 	}
 
-	bw := bufio.NewWriterSize(dst, 1<<20)
+	bw := bufio.NewWriterSize(dst, repackBufferSize)
 	var buf [4]byte
-	for i := uint64(0); i < count; i++ {
-		v := src.UnsafeGetU32(i)
-		for b := uint8(0); b < width; b++ {
-			buf[b] = byte(v >> (8 * b))
-		}
+	for i := range count {
+		binary.LittleEndian.PutUint32(buf[:], src.UnsafeGetU32(i))
 		if _, err := bw.Write(buf[:width]); err != nil {
 			_ = dst.Close()
 			_ = os.Remove(dstPath)
@@ -414,21 +412,21 @@ func (w *DictPrefixWriter) PrefixCount() uint64 {
 // DictPrefixReader reads prefixes from dictionary-encoded storage.
 //
 // The segment-ID array width is per-index: 1..4 bytes per ID,
-// determined at Close from the observed max segment ID. idsRaw is
+// determined at Close from the observed max segment ID. IdsRaw is
 // the raw byte slice of the segIDs file body (after Header), and
 // idsWidth is the byte width per ID. The file is padded with 4
 // trailing zero bytes so a single LE-load + mask at any valid index
 // is always safe.
 type DictPrefixReader struct {
-	dict      *PrefixDictionary
-	cache     *PreloadedPrefixCache
-	segIDs    *ArrayReader
-	offsets   *ArrayReader
-	idsRaw    []byte
-	builders  sync.Pool
-	idsWidth  uint64
-	idsMask   uint32
-	idsCount  uint64
+	dict     *PrefixDictionary
+	cache    *PreloadedPrefixCache
+	segIDs   *ArrayReader
+	offsets  *ArrayReader
+	idsRaw   []byte
+	builders sync.Pool
+	idsWidth uint64
+	idsMask  uint32
+	idsCount uint64
 }
 
 // OpenDictPrefixReader opens a dictionary-encoded prefix reader from

@@ -35,14 +35,34 @@ func SingleTier() TierDistribution {
 	}
 }
 
+// Probability mass for the named TierDistribution presets. Spelled
+// out so the lint forbidden-magic-numbers check stays happy and so
+// each preset's intent is reviewable in one place.
+const (
+	twoTierSkewedHot  = 0.95
+	twoTierSkewedCold = 0.05
+
+	paretoStandard   = 0.50
+	paretoStandardIA = 0.20
+	paretoGlacierIR  = 0.12
+	paretoGlacierFR  = 0.08
+	paretoDeepArch   = 0.06
+	paretoITFrequent = 0.04
+
+	uniformAllTierCount = 11
+
+	bimodalHot  = 0.5
+	bimodalCold = 0.5
+)
+
 // TwoTierSkewed: 95% STANDARD + 5% DEEP_ARCHIVE. Common lifecycle
 // shape.
 func TwoTierSkewed() TierDistribution {
 	return TierDistribution{
 		Name: "two_tier_skewed",
 		Probs: map[tiers.ID]float64{
-			tiers.Standard:    0.95,
-			tiers.DeepArchive: 0.05,
+			tiers.Standard:    twoTierSkewedHot,
+			tiers.DeepArchive: twoTierSkewedCold,
 		},
 	}
 }
@@ -53,12 +73,12 @@ func ParetoTiers() TierDistribution {
 	return TierDistribution{
 		Name: "pareto",
 		Probs: map[tiers.ID]float64{
-			tiers.Standard:    0.50,
-			tiers.StandardIA:  0.20,
-			tiers.GlacierIR:   0.12,
-			tiers.GlacierFR:   0.08,
-			tiers.DeepArchive: 0.06,
-			tiers.ITFrequent:  0.04,
+			tiers.Standard:    paretoStandard,
+			tiers.StandardIA:  paretoStandardIA,
+			tiers.GlacierIR:   paretoGlacierIR,
+			tiers.GlacierFR:   paretoGlacierFR,
+			tiers.DeepArchive: paretoDeepArch,
+			tiers.ITFrequent:  paretoITFrequent,
 		},
 	}
 }
@@ -66,7 +86,7 @@ func ParetoTiers() TierDistribution {
 // UniformAllTiers spreads mass evenly across all 11 tiers. Worst case
 // for sparse-tier encoding wins.
 func UniformAllTiers() TierDistribution {
-	p := 1.0 / 11.0
+	p := 1.0 / uniformAllTierCount
 	return TierDistribution{
 		Name: "uniform_all",
 		Probs: map[tiers.ID]float64{
@@ -90,8 +110,8 @@ func BimodalTiers() TierDistribution {
 	return TierDistribution{
 		Name: "bimodal",
 		Probs: map[tiers.ID]float64{
-			tiers.Standard:    0.5,
-			tiers.DeepArchive: 0.5,
+			tiers.Standard:    bimodalHot,
+			tiers.DeepArchive: bimodalCold,
 		},
 	}
 }
@@ -115,12 +135,16 @@ func SizeDistributions() []SizeDistribution {
 	}
 }
 
+// smallUniformMax is the upper bound for the SmallUniform sampler:
+// fits in 16 bits so per-prefix totals almost always fit in 32.
+const smallUniformMax = 65535
+
 // SmallUniform: every object is 1..65535 bytes. Per-prefix totals
 // almost always fit in 32 bits.
 func SmallUniform() SizeDistribution {
 	return SizeDistribution{
 		Name:   "small_uniform",
-		Sample: func(rng *rand.Rand) uint64 { return uint64(rng.Intn(65535) + 1) },
+		Sample: func(rng *rand.Rand) uint64 { return uint64(rng.Intn(smallUniformMax) + 1) },
 	}
 }
 
@@ -159,17 +183,25 @@ func samplePowerLawSize(rng *rand.Rand) uint64 {
 	}
 }
 
+// Bimodal sampler bucket boundaries.
+const (
+	bimodalBuckets   = 10
+	bimodalTinyShare = 9 // 0..tinyShare-1 → tiny; tinyShare..buckets-1 → huge
+	bimodalTinyMax   = 2048
+	bimodalHugeSpan  = 4 // GiB above bimodalGiB
+)
+
 // BimodalSize: 90% tiny (1 KiB ± 1024) + 10% huge (1..5 GiB). Stresses
 // any "small ints fit in N bytes" assumption.
 func BimodalSize() SizeDistribution {
 	return SizeDistribution{
 		Name: "bimodal",
 		Sample: func(rng *rand.Rand) uint64 {
-			if rng.Intn(10) < 9 {
-				return uint64(rng.Intn(2048) + 1)
+			if rng.Intn(bimodalBuckets) < bimodalTinyShare {
+				return uint64(rng.Intn(bimodalTinyMax) + 1)
 			}
 			const giB = uint64(1024 * 1024 * 1024)
-			return giB + uint64(rng.Int63n(int64(4*giB)))
+			return giB + uint64(rng.Int63n(int64(bimodalHugeSpan*giB)))
 		},
 	}
 }

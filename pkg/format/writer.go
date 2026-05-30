@@ -138,6 +138,11 @@ func (w *ArrayWriter) Count() uint64 {
 // worst case (a u64 read on a width=1 array).
 const arrayTailPad = 8
 
+// repackBufferSize is the bufio.Writer buffer used during the
+// streaming repack passes in this package. 1 MiB is large enough
+// to amortize syscalls without being conspicuous in RSS.
+const repackBufferSize = 1 << 20
+
 // RepackArrayWidthU64 streams srcPath (an ArrayWriter file at any
 // width 1..8) into dstPath at the chosen tight width, then writes
 // arrayTailPad zero bytes so a u64 mask-load at the last element is
@@ -174,13 +179,10 @@ func RepackArrayWidthU64(srcPath, dstPath string, width uint8) error {
 		return fmt.Errorf("write header: %w", err)
 	}
 
-	bw := bufio.NewWriterSize(dst, 1<<20)
+	bw := bufio.NewWriterSize(dst, repackBufferSize)
 	var buf [8]byte
-	for i := uint64(0); i < count; i++ {
-		v := src.UnsafeGetU64(i)
-		for b := uint8(0); b < width; b++ {
-			buf[b] = byte(v >> (8 * b))
-		}
+	for i := range count {
+		binary.LittleEndian.PutUint64(buf[:], src.UnsafeGetU64(i))
 		if _, err := bw.Write(buf[:width]); err != nil {
 			_ = dst.Close()
 			_ = os.Remove(tmp)
