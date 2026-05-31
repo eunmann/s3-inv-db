@@ -130,7 +130,7 @@ how many tier slots actually carry data, so size is predictable:
 
 - `core_stats.bin`: **28 B/prefix** (object_count + total_bytes + subtree_end + depth + max_depth_in_subtree).
 - `tier_stats/tier_stats_row.bin`: **`presentTiers × 16` B/prefix** — final on-disk stride matches `tiers.json`, so an index with 5 of 13 tiers populated is 80 B/prefix (vs the 208 B/prefix upper bound at all 13). The build writes a dense 208 B/prefix intermediate and finalize repacks it to the packed stride.
-- `prefix_blob.bin` + `prefix_offsets.u64`: variable, dominated by prefix string lengths (avg ~30 B in typical workloads) + 8 B per offset.
+- `prefix_dict.bin` + `prefix_dict.off.u64` + `prefix_dict.ids.u32` + `prefix_dict.prefix_off.u64`: dictionary-encoded prefix storage. Variable, dominated by the unique-segment blob (each "/"-delimited segment interned once, typical S3 hierarchies share top-level segments heavily) + 4 B per segment ID per prefix + 8 B per offset.
 - MPHF (`mph.bin` + `mph_fp_pos.u64`): ~24 B/prefix (BBHash + interleaved fingerprint/position pair).
 - Depth index (`depth_offsets.u64` + `depth_positions.u64`): ~8 B/prefix.
 

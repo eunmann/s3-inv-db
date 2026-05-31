@@ -56,6 +56,9 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile.dev
+    # Air rebuilds the binary on source changes; arguments after `--`
+    # are forwarded to the rebuilt server binary on every restart.
+    command: ["air", "-c", ".air.toml", "--", "--s3-source=s3://s3-inv/inventory-data/", "--cache-dir=/cache"]
     ports:
       - "${S3INV_DEV_PORT:-8080}:8080"
     volumes:
@@ -69,8 +72,6 @@ services:
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
       AWS_REGION: us-east-1
-      S3INV_SOURCE: s3://s3-inv/inventory-data/
-      S3INV_CACHE_DIR: /cache
     depends_on:
       minio:
         condition: service_healthy

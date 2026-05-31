@@ -13,7 +13,7 @@ import (
 
 // BenchmarkLoadDiskPeak measures the final on-disk index size against
 // the synthetic object count so operators can pick a sensible
-// --max-index-disk and --index-ratio for their corpus. Run with:
+// --max-index-disk for their corpus. Run with:
 //
 //	go test -run=^$ -bench=BenchmarkLoadDiskPeak ./pkg/extsort -benchtime=1x
 //
