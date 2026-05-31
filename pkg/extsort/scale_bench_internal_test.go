@@ -11,13 +11,6 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
 
-func skipUnlessScale(b *testing.B) {
-	b.Helper()
-	if os.Getenv("S3INV_SCALE_BENCH") == "" {
-		b.Skip("set S3INV_SCALE_BENCH=1 to run scale benches")
-	}
-}
-
 var realisticCache = make(map[int][]benchutil.FakeObject)
 
 func getRealistic(n int) []benchutil.FakeObject {
@@ -34,7 +27,7 @@ func getRealistic(n int) []benchutil.FakeObject {
 // BenchmarkPipelineScale_E2E exercises ingest → 8 flushes → merge → index
 // build at 1M and 10M realistic multi-tier objects. Reports per-phase ms.
 func BenchmarkPipelineScale_E2E(b *testing.B) {
-	skipUnlessScale(b)
+	benchutil.SkipIfNoLongBench(b)
 	for _, n := range []int{1_000_000, 10_000_000} {
 		const flushes = 8
 		b.Run(fmt.Sprintf("objects=%d", n), func(b *testing.B) {

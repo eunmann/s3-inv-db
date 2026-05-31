@@ -187,20 +187,3 @@ func TestAggregatorCap(t *testing.T) {
 		t.Errorf("AggregatorCap(100GiB) = %d, want fractional %d", got, wantHuge)
 	}
 }
-
-// BenchmarkAggregatorMemory benchmarks aggregator memory efficiency.
-func BenchmarkAggregatorMemory(b *testing.B) {
-	b.ReportAllocs()
-
-	for range b.N {
-		agg := extsort.NewAggregator(0, 0)
-
-		// Add 10K objects
-		for j := range 10000 {
-			key := fmt.Sprintf("bucket/path/%d/file.txt", j%100)
-			agg.AddObject(key, 1024, tiers.Standard)
-		}
-
-		agg.Drain()
-	}
-}

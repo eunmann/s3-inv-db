@@ -70,9 +70,9 @@ func readHeaderCount(path string) uint64 {
 //
 //	go test -bench=BenchmarkGridDisk -benchtime=1x ./pkg/indexread/
 func BenchmarkGridDisk(b *testing.B) {
-	silenceZerolog(b)
+	benchutil.SilenceZerolog(b)
 	n := envInt("S3INV_GRID_N", 100_000)
-	for _, shape := range filterStr(benchutil.ShapesForGrid(), os.Getenv("S3INV_GRID_SHAPES")) {
+	for _, shape := range filterStr(benchutil.TreeShapes(), os.Getenv("S3INV_GRID_SHAPES")) {
 		for _, td := range filterTier(benchutil.TierDistributions(), os.Getenv("S3INV_GRID_TIERS")) {
 			for _, sd := range filterSize(benchutil.SizeDistributions(), os.Getenv("S3INV_GRID_SIZES")) {
 				name := fmt.Sprintf("shape=%s/tier=%s/size=%s", shape, td.Name, sd.Name)
@@ -99,9 +99,9 @@ func BenchmarkGridDisk(b *testing.B) {
 //
 //	go test -bench=BenchmarkGridQuery -benchtime=20ms ./pkg/indexread/
 func BenchmarkGridQuery(b *testing.B) {
-	silenceZerolog(b)
+	benchutil.SilenceZerolog(b)
 	n := envInt("S3INV_GRID_N", 100_000)
-	for _, shape := range filterStr(benchutil.ShapesForGrid(), os.Getenv("S3INV_GRID_SHAPES")) {
+	for _, shape := range filterStr(benchutil.TreeShapes(), os.Getenv("S3INV_GRID_SHAPES")) {
 		for _, td := range filterTier(benchutil.TierDistributions(), os.Getenv("S3INV_GRID_TIERS")) {
 			for _, sd := range filterSize(benchutil.SizeDistributions(), os.Getenv("S3INV_GRID_SIZES")) {
 				name := fmt.Sprintf("shape=%s/tier=%s/size=%s", shape, td.Name, sd.Name)

@@ -8,64 +8,39 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
-	"github.com/rs/zerolog"
 )
 
-// BuildHarness benchmarks the build phases single-threaded
-// (flush-on-cap → spill → k-way-merge).
-
-func BenchmarkBuildHarness_Realistic_500K_DictOff(b *testing.B) {
-	runShapeHarness(b, benchutil.S3RealisticConfig(500_000), false)
-}
-
-func BenchmarkBuildHarness_Realistic_500K_DictOn(b *testing.B) {
-	runShapeHarness(b, benchutil.S3RealisticConfig(500_000), true)
-}
-
-func BenchmarkBuildHarness_Realistic_1M_DictOff(b *testing.B) {
-	runShapeHarness(b, benchutil.S3RealisticConfig(1_000_000), false)
-}
-
-func BenchmarkBuildHarness_Realistic_1M_DictOn(b *testing.B) {
-	runShapeHarness(b, benchutil.S3RealisticConfig(1_000_000), true)
-}
-
-func BenchmarkBuildHarness_Realistic_10M_DictOff(b *testing.B) {
-	runShapeHarness(b, benchutil.S3RealisticConfig(10_000_000), false)
-}
-
-func BenchmarkBuildHarness_Realistic_10M_DictOn(b *testing.B) {
-	runShapeHarness(b, benchutil.S3RealisticConfig(10_000_000), true)
-}
-
-func BenchmarkBuildHarness_DeepPyramid_500K_DictOff(b *testing.B) {
-	runShapeHarness(b, benchutil.S3DeepPyramidConfig(500_000), false)
-}
-
-func BenchmarkBuildHarness_DeepPyramid_500K_DictOn(b *testing.B) {
-	runShapeHarness(b, benchutil.S3DeepPyramidConfig(500_000), true)
-}
-
-func BenchmarkBuildHarness_DeepPyramid_1M_DictOff(b *testing.B) {
-	runShapeHarness(b, benchutil.S3DeepPyramidConfig(1_000_000), false)
-}
-
-func BenchmarkBuildHarness_DeepPyramid_1M_DictOn(b *testing.B) {
-	runShapeHarness(b, benchutil.S3DeepPyramidConfig(1_000_000), true)
-}
-
-func BenchmarkBuildHarness_DeepPyramid_10M_DictOff(b *testing.B) {
-	runShapeHarness(b, benchutil.S3DeepPyramidConfig(10_000_000), false)
-}
-
-func BenchmarkBuildHarness_DeepPyramid_10M_DictOn(b *testing.B) {
-	runShapeHarness(b, benchutil.S3DeepPyramidConfig(10_000_000), true)
+// BenchmarkBuildHarness sweeps shape × size × prefix-dictionary
+// through the single-threaded build phase chain
+// (flush-on-cap → spill → k-way-merge → finalize). For the full
+// S3-to-index path, see internal/loader BenchmarkPipeline.
+func BenchmarkBuildHarness(b *testing.B) {
+	sizes := []int{500_000, 1_000_000}
+	if benchutil.LongBenchEnabled() {
+		sizes = append(sizes, 10_000_000)
+	}
+	shapes := []struct {
+		name string
+		cfg  func(int) benchutil.GeneratorConfig
+	}{
+		{"realistic", benchutil.S3RealisticConfig},
+		{"deep_pyramid", benchutil.S3DeepPyramidConfig},
+	}
+	for _, shape := range shapes {
+		for _, n := range sizes {
+			for _, dict := range []bool{false, true} {
+				name := fmt.Sprintf("shape=%s/n=%d/dict=%v", shape.name, n, dict)
+				b.Run(name, func(b *testing.B) {
+					runShapeHarness(b, shape.cfg(n), dict)
+				})
+			}
+		}
+	}
 }
 
 const (
@@ -79,7 +54,7 @@ const (
 
 func runShapeHarness(b *testing.B, cfg benchutil.GeneratorConfig, prefixDict bool) {
 	b.Helper()
-	silenceZerologExtsort(b)
+	benchutil.SilenceZerolog(b)
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -98,28 +73,24 @@ func runShapeHarness(b *testing.B, cfg benchutil.GeneratorConfig, prefixDict boo
 		runtime.GC()
 		var msStart runtime.MemStats
 		runtime.ReadMemStats(&msStart)
-		samplerStop := make(chan struct{})
-		var samplerMax atomic.Uint64
-		go heapSampler(samplerStop, &samplerMax)
+		sampler := benchutil.StartHeapPeakSampler()
 		b.StartTimer()
 
 		result, err := buildIndexBounded(cfg, dir, tempDir, prefixDict)
 		if err != nil {
 			b.StopTimer()
-			close(samplerStop)
+			sampler.Stop()
 			b.Fatalf("buildIndexBounded: %v", err)
 		}
 		prefixCount = result.prefixCount
 		prefixSample = result.prefixSample
 
 		b.StopTimer()
-		close(samplerStop)
-		// Give the sampler a tick to drain.
-		time.Sleep(2 * time.Millisecond)
-		if delta := safeSubHarness(samplerMax.Load(), msStart.HeapAlloc); delta > peakHeap {
+		samplerMax := sampler.Stop()
+		if delta := benchutil.SafeSubU64(samplerMax, msStart.HeapAlloc); delta > peakHeap {
 			peakHeap = delta
 		}
-		lastSize = dirBytesHarness(b, dir)
+		lastSize = benchutil.DirBytes(b, dir)
 		lastNs = measureLookupHarnessSampled(b, dir, prefixSample)
 		b.StartTimer()
 	}
@@ -331,37 +302,6 @@ func (s *prefixSampler) observe(key string) {
 
 func (s *prefixSampler) prefixes() []string { return s.out }
 
-// heapSampler tracks the max HeapAlloc seen until stop closes.
-func heapSampler(stop <-chan struct{}, peak *atomic.Uint64) {
-	const interval = 5 * time.Millisecond
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	var ms runtime.MemStats
-	for {
-		select {
-		case <-stop:
-			return
-		case <-t.C:
-			runtime.ReadMemStats(&ms)
-			cur := ms.HeapAlloc
-			for {
-				old := peak.Load()
-				if cur <= old || peak.CompareAndSwap(old, cur) {
-					break
-				}
-			}
-		}
-	}
-}
-
-func safeSubHarness(a, b uint64) uint64 {
-	if a < b {
-		return 0
-	}
-
-	return a - b
-}
-
 func measureLookupHarnessSampled(b *testing.B, dir string, prefixes []string) float64 {
 	b.Helper()
 	if len(prefixes) == 0 {
@@ -386,31 +326,4 @@ func measureLookupHarnessSampled(b *testing.B, dir string, prefixes []string) fl
 	}
 
 	return float64(time.Since(start).Nanoseconds()) / float64(iters)
-}
-
-func dirBytesHarness(b *testing.B, dir string) int64 {
-	b.Helper()
-	var total int64
-	err := filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			total += info.Size()
-		}
-
-		return nil
-	})
-	if err != nil {
-		b.Fatalf("walk: %v", err)
-	}
-
-	return total
-}
-
-func silenceZerologExtsort(b *testing.B) {
-	b.Helper()
-	prev := zerolog.GlobalLevel()
-	zerolog.SetGlobalLevel(zerolog.Disabled)
-	b.Cleanup(func() { zerolog.SetGlobalLevel(prev) })
 }

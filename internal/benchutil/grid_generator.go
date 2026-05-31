@@ -43,7 +43,7 @@ type tierProb struct {
 func NewGridGenerator(spec GridSpec) *GridGenerator {
 	seed := spec.Seed
 	if seed == 0 {
-		seed = defaultBenchSeed
+		seed = BenchmarkSeed
 	}
 	rng := rand.New(rand.NewSource(seed))
 	probs := make([]tierProb, 0, len(spec.Tier.Probs))
@@ -106,7 +106,7 @@ type balancedState struct {
 
 type wideSingleLevelState struct{}
 
-type s3DatedState struct{}
+type s3RealisticState struct{}
 
 func (g *GridGenerator) initKeyState(n int) {
 	switch g.shape {
@@ -130,10 +130,10 @@ func (g *GridGenerator) initKeyState(n int) {
 		g.keyState = &balancedState{branchFactor: alphabetSize, depth: balancedDepth}
 	case "wide_single_level":
 		g.keyState = &wideSingleLevelState{}
-	case "s3_dated":
-		g.keyState = &s3DatedState{}
+	case "s3_realistic":
+		g.keyState = &s3RealisticState{}
 	default:
-		g.keyState = &s3DatedState{}
+		g.keyState = &s3RealisticState{}
 	}
 }
 
@@ -173,14 +173,14 @@ func (g *GridGenerator) nextKey(i, n int) string {
 		return b.String()
 	case *wideSingleLevelState:
 		return fmt.Sprintf("root/child%07d/file.txt", i)
-	case *s3DatedState:
-		return s3DatedKey(g.rng, i)
+	case *s3RealisticState:
+		return s3RealisticKey(g.rng)
 	}
 	_ = n // reserved for shapes that want total count
-	return s3DatedKey(g.rng, i)
+	return s3RealisticKey(g.rng)
 }
 
-func s3DatedKey(rng *rand.Rand, _ int) string {
+func s3RealisticKey(rng *rand.Rand) string {
 	prefixes := []string{"data", "logs", "backups", "exports", "uploads"}
 	years := []string{"2022", "2023", "2024"}
 	months := []string{"01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"}

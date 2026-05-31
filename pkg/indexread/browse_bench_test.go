@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
 
@@ -20,7 +21,7 @@ import (
 // Matrix: cache {warm, cold} × n {100K, 1M}. Reports per-call
 // ns/op + B/op + allocs/op.
 func BenchmarkBrowse_Matrix(b *testing.B) {
-	silenceZerolog(b)
+	benchutil.SilenceZerolog(b)
 	for _, n := range queryBenchSizes() {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			dir := buildFixtureIndex(b, n)

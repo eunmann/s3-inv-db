@@ -1,25 +1,20 @@
 package format
 
 import (
-	"bufio"
-	"encoding/binary"
 	"fmt"
-	"io"
-	"runtime"
 	"sync"
 
 	"github.com/relab/bbhash"
 )
 
 // This file collects alternative implementations of the MPHF
-// hash-position computation and the parallel fingerprint pipeline
-// that production no longer uses. They are kept only so the
-// comparative benchmarks in mphf_compute_positions_bench_internal_test.go
-// and mphf_fingerprints_bench_internal_test.go can keep proving why
+// hash-position computation that production no longer uses. They are
+// kept only so the comparative benchmarks in
+// mphf_compute_positions_bench_internal_test.go can keep proving why
 // the production path (computeHashPositionsParallelSort in
 // mphf_streaming.go) is the right choice.
 //
-// If those benches are ever retired, delete this whole file.
+// If that bench is ever retired, delete this whole file.
 
 // computeHashPositionsReverseMap is the reference implementation
 // using bbhash's ReverseMap. ~17× faster than per-key Find() but
@@ -94,157 +89,4 @@ func (b *StreamingMPHFBuilder) computeHashPositionsParallelMap(mph *bbhash.BBHas
 	}
 
 	return hashPositions, nil
-}
-
-// prefixChunkItem and prefixChunkReader implement chunked parallel
-// reads over the temp prefix file for the alternative
-// computeFingerprintsParallel implementation below. Production uses
-// a single-threaded read; this variant exists for bench comparison.
-
-type prefixChunkItem struct {
-	prefixBytes []byte
-	index       int
-	offset      uint64
-}
-
-type prefixChunkReader struct {
-	reader        io.Reader
-	n             int
-	chunkSize     int
-	processed     int
-	currentOffset uint64
-	lenBuf        [4]byte
-}
-
-func newPrefixChunkReader(reader io.Reader, n, chunkSize int) *prefixChunkReader {
-	return &prefixChunkReader{reader: reader, n: n, chunkSize: chunkSize}
-}
-
-func (r *prefixChunkReader) ReadChunk() ([]prefixChunkItem, error) {
-	if r.processed >= r.n {
-		return nil, nil
-	}
-	remaining := r.n - r.processed
-	thisChunk := min(remaining, r.chunkSize)
-	const estimatedAvgPrefixLen = 24
-	chunkBuffer := make([]byte, 0, thisChunk*estimatedAvgPrefixLen)
-	items := make([]prefixChunkItem, 0, thisChunk)
-
-	for range thisChunk {
-		if _, err := io.ReadFull(r.reader, r.lenBuf[:]); err != nil {
-			return nil, fmt.Errorf("read prefix length at %d: %w", r.processed, err)
-		}
-		prefixLen := binary.LittleEndian.Uint32(r.lenBuf[:])
-		start := len(chunkBuffer)
-		if cap(chunkBuffer)-start < int(prefixLen) {
-			newCap := cap(chunkBuffer)*2 + int(prefixLen)
-			newBuf := make([]byte, start, newCap)
-			copy(newBuf, chunkBuffer)
-			chunkBuffer = newBuf
-		}
-		chunkBuffer = chunkBuffer[:start+int(prefixLen)]
-		if _, err := io.ReadFull(r.reader, chunkBuffer[start:]); err != nil {
-			return nil, fmt.Errorf("read prefix at %d: %w", r.processed, err)
-		}
-		items = append(items, prefixChunkItem{
-			index:       r.processed,
-			prefixBytes: chunkBuffer[start : start+int(prefixLen)],
-			offset:      r.currentOffset,
-		})
-		r.currentOffset += uint64(4 + prefixLen)
-		r.processed++
-	}
-
-	return items, nil
-}
-
-// computeFingerprintsParallel is the alternative parallel-pipeline
-// fingerprint computation kept for bench comparison only.
-func (b *StreamingMPHFBuilder) computeFingerprintsParallel(
-	reader *bufio.Reader,
-	mph *bbhash.BBHash2,
-	n int,
-	fingerprints []uint64,
-	preorderPositions []uint64,
-	orderedPrefixOffsets []uint64,
-) error {
-	numWorkers := max(runtime.NumCPU(), 1)
-	const chunkSize = 50000
-	workChan := make(chan []prefixChunkItem, numWorkers*2)
-	errChan := make(chan error, numWorkers)
-
-	var wg sync.WaitGroup
-	for range numWorkers {
-		wg.Go(func() {
-			b.fingerprintWorker(workChan, errChan, mph, fingerprints, preorderPositions, orderedPrefixOffsets)
-		})
-	}
-
-	chunkReader := newPrefixChunkReader(reader, n, chunkSize)
-	if err := b.dispatchChunks(chunkReader, workChan, errChan, &wg); err != nil {
-		return err
-	}
-
-	select {
-	case err := <-errChan:
-		return err
-	default:
-	}
-
-	return nil
-}
-
-func (b *StreamingMPHFBuilder) fingerprintWorker(
-	workChan <-chan []prefixChunkItem,
-	errChan chan<- error,
-	mph *bbhash.BBHash2,
-	fingerprints []uint64,
-	preorderPositions []uint64,
-	orderedPrefixOffsets []uint64,
-) {
-	for items := range workChan {
-		for _, item := range items {
-			keyHash := hashBytes(item.prefixBytes)
-			hashVal := mph.Find(keyHash)
-			if hashVal == 0 {
-				select {
-				case errChan <- fmt.Errorf("%w at index %d", ErrMPHFLookupFailed, item.index):
-				default:
-				}
-
-				return
-			}
-			hashPos := int(hashVal - 1)
-			fingerprints[hashPos] = computeFingerprintBytes(item.prefixBytes)
-			preorderPositions[hashPos] = b.preorderPos.Slice()[item.index]
-			orderedPrefixOffsets[hashPos] = item.offset
-		}
-	}
-}
-
-func (b *StreamingMPHFBuilder) dispatchChunks(
-	chunkReader *prefixChunkReader,
-	workChan chan<- []prefixChunkItem,
-	errChan <-chan error,
-	wg *sync.WaitGroup,
-) error {
-	defer func() {
-		close(workChan)
-		wg.Wait()
-	}()
-	for {
-		items, err := chunkReader.ReadChunk()
-		if err != nil {
-			return err
-		}
-		if items == nil {
-			return nil
-		}
-		workChan <- items
-		select {
-		case err := <-errChan:
-			return err
-		default:
-		}
-	}
 }

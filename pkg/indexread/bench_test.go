@@ -1,88 +1,34 @@
 package indexread_test
 
 import (
-	"fmt"
-	"math/rand"
-	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
-	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-/*
-Benchmark Categories for Index Reading:
+// Indexread benchmark surface lives in three files:
+//   - bench_test.go       (this) — one-off probes for opens and the
+//                                  subtree-size axis.
+//   - grid_bench_test.go         — warm/cold query sweep across the
+//                                  full shape × tier × size grid.
+//   - cold_cache_bench_test.go   — cold-cache Open + concurrent-worker
+//                                  scaling.
 
-1. BenchmarkIndexOpen - Tests index loading from disk
-   - Measures: time to mmap files and setup in-memory structures
-   - Critical for cold-start performance
-
-2. BenchmarkLookup - Tests single-prefix lookups (MPHF + verify)
-   - Measures: ns/op for prefix→position resolution
-   - Tests sequential vs random access patterns
-
-3. BenchmarkStats - Tests stats retrieval (lookup + array access)
-   - Measures: ns/op for full prefix→stats path
-
-4. BenchmarkTierBreakdown - Tests per-tier statistics retrieval
-   - Measures: ns/op for tier data reads
-
-5. BenchmarkDescendantsAtDepth - Tests depth-limited queries
-   - Measures: performance of depth index binary search + iteration
-
-6. BenchmarkIterator - Tests iterator interface
-   - Measures: per-element iteration cost
-
-7. BenchmarkMixedWorkload - Simulates realistic query mix
-   - 50% single-prefix stats, 30% depth-1 queries, 20% deeper queries
-*/
-
-// Use shared constants from benchutil for consistency across packages.
-// benchutil.BenchmarkSeed, benchutil.TreeShapes(), benchutil.BenchmarkSizes()
-
-// benchIndex holds a pre-built index for benchmarking.
+// benchIndex holds a pre-built index and its prefix list for warm
+// query benchmarks.
 type benchIndex struct {
 	idx      *indexread.Index
 	prefixes []string
 	dir      string
 }
 
-// setupBenchIndex creates an index for benchmarking using extsort.
+// setupBenchIndex builds a fixture index from keys and opens it.
 func setupBenchIndex(b *testing.B, keys []string) *benchIndex {
 	b.Helper()
 
 	setup := setupIndexFromKeys(b, keys)
-
-	idx, err := indexread.Open(setup.IndexDir)
-	if err != nil {
-		b.Fatalf("Open failed: %v", err)
-	}
-
-	count := idx.Count()
-	prefixes := make([]string, 0, count)
-	for i := range count {
-		p, err := idx.PrefixString(i)
-		if err != nil {
-			b.Fatalf("PrefixString failed: %v", err)
-		}
-		prefixes = append(prefixes, p)
-	}
-
-	return &benchIndex{
-		idx:      idx,
-		prefixes: prefixes,
-		dir:      setup.IndexDir,
-	}
-}
-
-// setupBenchIndexWithTiers creates an index with mixed tier data.
-func setupBenchIndexWithTiers(b *testing.B, numObjects int) *benchIndex {
-	b.Helper()
-
-	setup := setupIndex(b, numObjects)
 
 	idx, err := indexread.Open(setup.IndexDir)
 	if err != nil {
@@ -112,256 +58,55 @@ func (bi *benchIndex) Close() {
 	}
 }
 
-// benchmarkIndexOp benchmarks an index operation with sequential and random access patterns.
-// The opFunc is called with a prefix and should perform the operation being benchmarked.
-func benchmarkIndexOp(b *testing.B, opFunc func(bi *benchIndex, prefix string)) {
-	b.Helper()
-	for _, shape := range benchutil.TreeShapes() {
-		for _, size := range benchutil.BenchmarkSizes() {
-			name := fmt.Sprintf("%s/size=%d", shape, size)
+// BenchmarkIndexOpen measures warm-cache Open latency on a small
+// fixture. For the cold-cache equivalent see
+// BenchmarkIndexOpen_ColdCache in cold_cache_bench_test.go.
+func BenchmarkIndexOpen(b *testing.B) {
+	const fixtureSize = 50_000
+	tmpDir := b.TempDir()
+	agg := extsort.NewAggregator(fixtureSize, 0)
+	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(fixtureSize))
+	gen.Stream(func(o benchutil.FakeObject) {
+		agg.AddObject(o.Key, o.Size, o.TierID)
+	})
+	rows := agg.Drain()
+	extsort.SortPrefixRows(rows)
 
-			b.Run(name+"/sequential", func(b *testing.B) {
-				keys := benchutil.GenerateKeys(size, shape)
-				bi := setupBenchIndex(b, keys)
-				defer bi.Close()
-
-				b.ResetTimer()
-				for i := range b.N {
-					prefix := bi.prefixes[i%len(bi.prefixes)]
-					opFunc(bi, prefix)
-				}
-			})
-
-			b.Run(name+"/random", func(b *testing.B) {
-				keys := benchutil.GenerateKeys(size, shape)
-				bi := setupBenchIndex(b, keys)
-				defer bi.Close()
-
-				rng := rand.New(rand.NewSource(benchutil.BenchmarkSeed))
-				randomIndices := make([]int, b.N)
-				for i := range randomIndices {
-					randomIndices[i] = rng.Intn(len(bi.prefixes))
-				}
-
-				b.ResetTimer()
-				for i := range b.N {
-					prefix := bi.prefixes[randomIndices[i]]
-					opFunc(bi, prefix)
-				}
-			})
+	builder, err := extsort.NewIndexBuilder(tmpDir, "")
+	if err != nil {
+		b.Fatalf("NewIndexBuilder: %v", err)
+	}
+	for _, row := range rows {
+		if err := builder.Add(row); err != nil {
+			b.Fatalf("Add: %v", err)
 		}
 	}
-}
-
-// benchmarkConcurrentOp benchmarks a concurrent index operation with random and sequential patterns.
-// The opFunc is called with a prefix and should perform the operation being benchmarked.
-func benchmarkConcurrentOp(b *testing.B, opFunc func(bi *benchIndex, prefix string)) {
-	b.Helper()
-	bi := setupBenchIndexWithTiers(b, 50000)
-	defer bi.Close()
-
-	prefixCount := len(bi.prefixes)
-
-	b.Run("parallel_random", func(b *testing.B) {
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			rng := rand.New(rand.NewSource(rand.Int63()))
-			for pb.Next() {
-				idx := rng.Intn(prefixCount)
-				opFunc(bi, bi.prefixes[idx])
-			}
-		})
-	})
-
-	b.Run("parallel_sequential", func(b *testing.B) {
-		var counter uint64
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			for pb.Next() {
-				i := int(atomic.AddUint64(&counter, 1) % uint64(prefixCount))
-				opFunc(bi, bi.prefixes[i])
-			}
-		})
-	})
-}
-
-// Shared fixture for index load benchmarks.
-var (
-	fixtureOnce sync.Once
-	fixtureDir  string
-)
-
-func setupFixtureIndex(b *testing.B) string {
-	b.Helper()
-
-	fixtureOnce.Do(func() {
-		tmpDir := b.TempDir()
-
-		// Use extsort aggregator
-		agg := extsort.NewAggregator(50000, 0)
-
-		gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(50000))
-		objects := gen.Generate()
-
-		for _, obj := range objects {
-			agg.AddObject(obj.Key, obj.Size, obj.TierID)
-		}
-
-		rows := agg.Drain()
-		extsort.SortPrefixRows(rows)
-
-		builder, err := extsort.NewIndexBuilder(tmpDir, "")
-		if err != nil {
-			b.Fatalf("NewIndexBuilder failed: %v", err)
-		}
-
-		for _, row := range rows {
-			if err := builder.Add(row); err != nil {
-				b.Fatalf("Add failed: %v", err)
-			}
-		}
-
-		if err := builder.Finalize(); err != nil {
-			b.Fatalf("Finalize failed: %v", err)
-		}
-
-		fixtureDir = tmpDir
-	})
-
-	return fixtureDir
-}
-
-// BenchmarkIndexOpen benchmarks the cost of opening an index from disk.
-func BenchmarkIndexOpen(b *testing.B) {
-	dir := setupFixtureIndex(b)
+	if err := builder.Finalize(); err != nil {
+		b.Fatalf("Finalize: %v", err)
+	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
-
-	for i := range b.N {
-		idx, err := indexread.Open(dir)
+	for range b.N {
+		idx, err := indexread.Open(tmpDir)
 		if err != nil {
-			b.Fatalf("Open failed: %v", err)
+			b.Fatalf("Open: %v", err)
 		}
-
-		if i == b.N-1 {
-			b.Logf("count=%d max_depth=%d has_tiers=%v",
-				idx.Count(), idx.MaxDepth(), idx.HasTierData())
-		}
-
 		idx.Close()
 	}
 }
 
-// BenchmarkLookup benchmarks prefix lookup performance.
-func BenchmarkLookup(b *testing.B) {
-	benchmarkIndexOp(b, func(bi *benchIndex, prefix string) {
-		_, _ = bi.idx.Lookup(prefix)
-	})
-}
-
-// BenchmarkStats benchmarks stats retrieval after lookup.
-func BenchmarkStats(b *testing.B) {
-	benchmarkIndexOp(b, func(bi *benchIndex, prefix string) {
-		_, _ = bi.idx.StatsForPrefix(prefix)
-	})
-}
-
-// BenchmarkTierBreakdown benchmarks per-tier statistics retrieval.
-func BenchmarkTierBreakdown(b *testing.B) {
-	sizes := []int{10000, 50000}
-
-	for _, size := range sizes {
-		b.Run(fmt.Sprintf("objects=%d/sequential", size), func(b *testing.B) {
-			bi := setupBenchIndexWithTiers(b, size)
-			defer bi.Close()
-
-			if !bi.idx.HasTierData() {
-				b.Skip("index has no tier data")
-			}
-
-			b.ResetTimer()
-			for i := range b.N {
-				pos := uint64(i % len(bi.prefixes))
-				_ = bi.idx.TierBreakdown(pos)
-			}
-		})
-
-		b.Run(fmt.Sprintf("objects=%d/random", size), func(b *testing.B) {
-			bi := setupBenchIndexWithTiers(b, size)
-			defer bi.Close()
-
-			if !bi.idx.HasTierData() {
-				b.Skip("index has no tier data")
-			}
-
-			rng := rand.New(rand.NewSource(benchutil.BenchmarkSeed))
-			randomPos := make([]uint64, b.N)
-			for i := range randomPos {
-				randomPos[i] = uint64(rng.Intn(len(bi.prefixes)))
-			}
-
-			b.ResetTimer()
-			for i := range b.N {
-				_ = bi.idx.TierBreakdown(randomPos[i])
-			}
-		})
-
-		b.Run(fmt.Sprintf("objects=%d/all_tiers", size), func(b *testing.B) {
-			bi := setupBenchIndexWithTiers(b, size)
-			defer bi.Close()
-
-			if !bi.idx.HasTierData() {
-				b.Skip("index has no tier data")
-			}
-
-			b.ResetTimer()
-			for i := range b.N {
-				pos := uint64(i % len(bi.prefixes))
-				_ = bi.idx.TierBreakdown(pos)
-			}
-		})
-	}
-}
-
-// BenchmarkDescendantsAtDepth benchmarks depth-based queries.
-func BenchmarkDescendantsAtDepth(b *testing.B) {
-	depths := []int{1, 2, 3, 5}
-
-	for _, shape := range benchutil.TreeShapes() {
-		for _, size := range benchutil.BenchmarkSizes() {
-			keys := benchutil.GenerateKeys(size, shape)
-			bi := setupBenchIndex(b, keys)
-
-			for _, depth := range depths {
-				if uint32(depth) > bi.idx.MaxDepth() {
-					continue
-				}
-
-				name := fmt.Sprintf("%s/size=%d/depth=%d", shape, size, depth)
-
-				b.Run(name+"/from_root", func(b *testing.B) {
-					rootPos, _ := bi.idx.Lookup("")
-					b.ResetTimer()
-					for range b.N {
-						_, _ = bi.idx.DescendantsAtDepth(rootPos, depth)
-					}
-				})
-			}
-
-			bi.Close()
-		}
-	}
-}
-
-// BenchmarkDescendantsSubtree benchmarks descendants queries on different subtree sizes.
+// BenchmarkDescendantsSubtree measures descendants queries against
+// subtrees of differing sizes — the only meaningful axis the warm
+// DescendantsAtDepth benchmark has (depth-from-root with fixed N
+// just measures len(children) iteration). Other call-shape coverage
+// lives in BenchmarkGridQuery.
 func BenchmarkDescendantsSubtree(b *testing.B) {
-	size := 50000
-	keys := benchutil.GenerateKeys(size, "s3_realistic")
+	const fixtureSize = 50_000
+	keys := benchutil.GenerateKeys(fixtureSize, "s3_realistic")
 	bi := setupBenchIndex(b, keys)
 	defer bi.Close()
 
-	// Find prefixes with different subtree sizes
 	var smallSubtreePrefix, largeSubtreePrefix string
 	var smallCount, largeCount int
 
@@ -408,297 +153,3 @@ func BenchmarkDescendantsSubtree(b *testing.B) {
 		}
 	})
 }
-
-// BenchmarkMixedWorkload simulates realistic mixed query patterns.
-func BenchmarkMixedWorkload(b *testing.B) {
-	for _, shape := range benchutil.TreeShapes() {
-		size := 10000
-		keys := benchutil.GenerateKeys(size, shape)
-		bi := setupBenchIndex(b, keys)
-
-		name := shape + "/mixed"
-
-		b.Run(name, func(b *testing.B) {
-			rng := rand.New(rand.NewSource(benchutil.BenchmarkSeed))
-			rootPos, _ := bi.idx.Lookup("")
-
-			b.ResetTimer()
-			for range b.N {
-				op := rng.Intn(100)
-				switch {
-				case op < 50:
-					prefix := bi.prefixes[rng.Intn(len(bi.prefixes))]
-					_, _ = bi.idx.StatsForPrefix(prefix)
-				case op < 80:
-					_, _ = bi.idx.DescendantsAtDepth(rootPos, 1)
-				case op < 95:
-					_, _ = bi.idx.DescendantsAtDepth(rootPos, 2)
-				default:
-					depth := rng.Intn(3) + 3
-					if uint32(depth) <= bi.idx.MaxDepth() {
-						_, _ = bi.idx.DescendantsAtDepth(rootPos, depth)
-					}
-				}
-			}
-		})
-
-		bi.Close()
-	}
-}
-
-// BenchmarkMixedWorkloadWithTiers includes tier breakdown queries.
-func BenchmarkMixedWorkloadWithTiers(b *testing.B) {
-	bi := setupBenchIndexWithTiers(b, 50000)
-	defer bi.Close()
-
-	if !bi.idx.HasTierData() {
-		b.Skip("index has no tier data")
-	}
-
-	rng := rand.New(rand.NewSource(benchutil.BenchmarkSeed))
-	rootPos, _ := bi.idx.Lookup("")
-
-	b.ResetTimer()
-	for range b.N {
-		op := rng.Intn(100)
-		switch {
-		case op < 40:
-			prefix := bi.prefixes[rng.Intn(len(bi.prefixes))]
-			_, _ = bi.idx.StatsForPrefix(prefix)
-		case op < 55:
-			pos := uint64(rng.Intn(len(bi.prefixes)))
-			_ = bi.idx.TierBreakdown(pos)
-		case op < 75:
-			_, _ = bi.idx.DescendantsAtDepth(rootPos, 1)
-		case op < 90:
-			_, _ = bi.idx.DescendantsAtDepth(rootPos, 2)
-		default:
-			depth := rng.Intn(3) + 3
-			if uint32(depth) <= bi.idx.MaxDepth() {
-				_, _ = bi.idx.DescendantsAtDepth(rootPos, depth)
-			}
-		}
-	}
-}
-
-// BenchmarkPrefixHeavy benchmarks many back-to-back prefix queries.
-func BenchmarkPrefixHeavy(b *testing.B) {
-	bi := setupBenchIndexWithTiers(b, 100000)
-	defer bi.Close()
-
-	rng := rand.New(rand.NewSource(benchutil.BenchmarkSeed))
-
-	// Pre-generate random indices
-	randomIndices := make([]int, b.N)
-	for i := range randomIndices {
-		randomIndices[i] = rng.Intn(len(bi.prefixes))
-	}
-
-	b.ResetTimer()
-	for i := range b.N {
-		prefix := bi.prefixes[randomIndices[i]]
-		pos, ok := bi.idx.Lookup(prefix)
-		if ok {
-			_ = bi.idx.Stats(pos)
-		}
-	}
-}
-
-// BenchmarkIndexOpen_Scaling runs larger scale load tests (gated).
-func BenchmarkIndexOpen_Scaling(b *testing.B) {
-	benchutil.SkipIfNoLongBench(b)
-
-	for _, size := range benchutil.ScalingSizes() {
-		b.Run(fmt.Sprintf("objects=%d", size), func(b *testing.B) {
-			bi := setupBenchIndexWithTiers(b, size)
-			bi.Close()
-
-			b.ResetTimer()
-			for range b.N {
-				idx, err := indexread.Open(bi.dir)
-				if err != nil {
-					b.Fatalf("Open failed: %v", err)
-				}
-				idx.Close()
-			}
-		})
-	}
-}
-
-// =============================================================================
-// Concurrent Query Benchmarks
-// =============================================================================
-// These benchmarks test query performance under concurrent load using
-// b.RunParallel. This simulates multi-goroutine access patterns.
-
-// BenchmarkConcurrentLookup tests concurrent prefix lookup performance.
-func BenchmarkConcurrentLookup(b *testing.B) {
-	benchmarkConcurrentOp(b, func(bi *benchIndex, prefix string) {
-		_, _ = bi.idx.Lookup(prefix)
-	})
-}
-
-// BenchmarkConcurrentStats tests concurrent stats retrieval performance.
-func BenchmarkConcurrentStats(b *testing.B) {
-	benchmarkConcurrentOp(b, func(bi *benchIndex, prefix string) {
-		_, _ = bi.idx.StatsForPrefix(prefix)
-	})
-}
-
-// BenchmarkConcurrentTierBreakdown tests concurrent tier data retrieval.
-func BenchmarkConcurrentTierBreakdown(b *testing.B) {
-	bi := setupBenchIndexWithTiers(b, 50000)
-	defer bi.Close()
-
-	if !bi.idx.HasTierData() {
-		b.Skip("index has no tier data")
-	}
-
-	prefixCount := uint64(len(bi.prefixes))
-
-	b.Run("parallel_random", func(b *testing.B) {
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			rng := rand.New(rand.NewSource(rand.Int63()))
-			for pb.Next() {
-				pos := uint64(rng.Int63()) % prefixCount
-				_ = bi.idx.TierBreakdown(pos)
-			}
-		})
-	})
-
-	b.Run("parallel_all_tiers", func(b *testing.B) {
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			rng := rand.New(rand.NewSource(rand.Int63()))
-			for pb.Next() {
-				pos := uint64(rng.Int63()) % prefixCount
-				_ = bi.idx.TierBreakdown(pos)
-			}
-		})
-	})
-}
-
-// BenchmarkConcurrentDescendants tests concurrent depth-based queries.
-func BenchmarkConcurrentDescendants(b *testing.B) {
-	bi := setupBenchIndexWithTiers(b, 50000)
-	defer bi.Close()
-
-	rootPos, _ := bi.idx.Lookup("")
-	prefixCount := len(bi.prefixes)
-
-	b.Run("parallel_depth1_root", func(b *testing.B) {
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			for pb.Next() {
-				_, _ = bi.idx.DescendantsAtDepth(rootPos, 1)
-			}
-		})
-	})
-
-	b.Run("parallel_depth2_root", func(b *testing.B) {
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			for pb.Next() {
-				_, _ = bi.idx.DescendantsAtDepth(rootPos, 2)
-			}
-		})
-	})
-
-	b.Run("parallel_random_prefix", func(b *testing.B) {
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			rng := rand.New(rand.NewSource(rand.Int63()))
-			for pb.Next() {
-				idx := rng.Intn(prefixCount)
-				pos, ok := bi.idx.Lookup(bi.prefixes[idx])
-				if ok {
-					_, _ = bi.idx.DescendantsAtDepth(pos, 1)
-				}
-			}
-		})
-	})
-}
-
-// BenchmarkConcurrentMixedWorkload simulates concurrent realistic query patterns.
-func BenchmarkConcurrentMixedWorkload(b *testing.B) {
-	bi := setupBenchIndexWithTiers(b, 50000)
-	defer bi.Close()
-
-	hasTiers := bi.idx.HasTierData()
-	rootPos, _ := bi.idx.Lookup("")
-	prefixCount := len(bi.prefixes)
-	maxDepth := bi.idx.MaxDepth()
-
-	b.Run("parallel_mixed", func(b *testing.B) {
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			rng := rand.New(rand.NewSource(rand.Int63()))
-			for pb.Next() {
-				op := rng.Intn(100)
-				switch {
-				case op < 35:
-					// Stats lookup (35%)
-					prefix := bi.prefixes[rng.Intn(prefixCount)]
-					_, _ = bi.idx.StatsForPrefix(prefix)
-				case op < 50 && hasTiers:
-					// Tier breakdown (15%)
-					pos := uint64(rng.Intn(prefixCount))
-					_ = bi.idx.TierBreakdown(pos)
-				case op < 70:
-					// Depth-1 descendants (20%)
-					_, _ = bi.idx.DescendantsAtDepth(rootPos, 1)
-				case op < 85:
-					// Depth-2 descendants (15%)
-					_, _ = bi.idx.DescendantsAtDepth(rootPos, 2)
-				default:
-					// Deeper descendants (15%)
-					depth := rng.Intn(3) + 3
-					if uint32(depth) <= maxDepth {
-						_, _ = bi.idx.DescendantsAtDepth(rootPos, depth)
-					}
-				}
-			}
-		})
-	})
-}
-
-// BenchmarkConcurrentContention tests high-contention scenarios.
-func BenchmarkConcurrentContention(b *testing.B) {
-	bi := setupBenchIndexWithTiers(b, 50000)
-	defer bi.Close()
-
-	// Find a prefix that all goroutines will query (hot spot)
-	hotPrefix := bi.prefixes[0]
-	hotPos, _ := bi.idx.Lookup(hotPrefix)
-
-	b.Run("parallel_same_prefix", func(b *testing.B) {
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			for pb.Next() {
-				_, _ = bi.idx.Lookup(hotPrefix)
-			}
-		})
-	})
-
-	b.Run("parallel_same_stats", func(b *testing.B) {
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			for pb.Next() {
-				_ = bi.idx.Stats(hotPos)
-			}
-		})
-	})
-
-	b.Run("parallel_same_descendants", func(b *testing.B) {
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			for pb.Next() {
-				_, _ = bi.idx.DescendantsAtDepth(hotPos, 1)
-			}
-		})
-	})
-}
-
-// Dummy variable to prevent unused import warning.
-var _ = tiers.Standard

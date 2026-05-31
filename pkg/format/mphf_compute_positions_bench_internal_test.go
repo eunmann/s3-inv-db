@@ -2,10 +2,10 @@ package format
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/relab/bbhash"
 )
 
@@ -39,7 +39,7 @@ func BenchmarkComputeHashPositions(b *testing.B) {
 	for _, n := range smallSizes {
 		runVariants(b, n)
 	}
-	if longBenchEnabled() {
+	if benchutil.LongBenchEnabled() {
 		for _, n := range longSizes {
 			runVariants(b, n)
 		}
@@ -126,10 +126,4 @@ func syntheticPrefix(i int) string {
 	b := i / fanout % fanout
 	c := i % fanout
 	return strconv.Itoa(a) + "/" + strconv.Itoa(b) + "/" + strconv.Itoa(c) + "/" + strconv.Itoa(i)
-}
-
-// longBenchEnabled mirrors pkg/benchutil's gate but is duplicated here
-// to avoid pulling benchutil into the format package's test deps.
-func longBenchEnabled() bool {
-	return os.Getenv("S3INV_LONG_BENCH") != ""
 }

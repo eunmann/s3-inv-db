@@ -58,7 +58,7 @@ import (
 //     real production keys — absolute size is indicative, the
 //     before/after ratio is what to trust.
 func BenchmarkScratchPeak(b *testing.B) {
-	silenceZerologForBench(b)
+	benchutil.SilenceZerolog(b)
 	for _, n := range []int{100_000, 500_000, 2_000_000} {
 		b.Run(fmt.Sprintf("objects=%d", n), func(b *testing.B) {
 			for range b.N {

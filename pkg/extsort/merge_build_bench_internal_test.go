@@ -22,7 +22,7 @@ import (
 // partitioning a synthetic input across them. Reports ns/op + disk-
 // bytes-written.
 func BenchmarkMergeBuildSeam(b *testing.B) {
-	silenceZerologExtsort(b)
+	benchutil.SilenceZerolog(b)
 	for _, n := range []int{500_000, 1_000_000} {
 		const runFiles = 8 // representative of post-N-1-round count
 		b.Run(fmt.Sprintf("n=%d/runs=%d/via_disk", n, runFiles), func(b *testing.B) {
