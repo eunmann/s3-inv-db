@@ -37,43 +37,39 @@
         <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono truncate max-w-md mt-0.5" title="{{.ManifestKey}}">{{.ManifestKey}}</div>
     </td>
     <td class="px-6 py-4 align-top whitespace-nowrap">
-        {{- /* The state badge fetches the drawer partial directly via
-               htmx. The handler sets HX-Push-Url so the address bar
-               picks up the #run=<id> hash without any JS. */ -}}
-        <button type="button"
-                hx-get="/partials/drawer/{{$composite}}"
-                hx-target="#run-drawer"
-                hx-swap="outerHTML"
-                class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass (printf "%s" .State)}} hover:ring-2 hover:ring-offset-1 hover:ring-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                title="Open run details drawer">
+        {{- /* The state badge is a passive status indicator; the
+               "View details" link below is the single, always-visible
+               drawer-open affordance. Errors surface inline (full text
+               in title=) so users don't have to hover or click to see
+               what went wrong. */ -}}
+        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass (printf "%s" .State)}}">
             {{stateLabel (printf "%s" .State)}}
-        </button>
+        </span>
         {{if $busy}}
-        <button type="button"
-                hx-get="/partials/drawer/{{$composite}}"
-                hx-target="#run-drawer"
-                hx-swap="outerHTML"
-                class="mt-1 block text-xs text-gray-600 dark:text-gray-300 text-left hover:text-indigo-600 dark:hover:text-indigo-400"
-                title="Open run details drawer">
+        <div class="mt-1 text-xs text-gray-600 dark:text-gray-300">
             {{if .LatestJob}}{{if .LatestJob.Stage}}{{stageLabel .LatestJob.Stage}}{{else}}Starting…{{end}}{{else}}Starting…{{end}}
             {{if gt $pct 0}}<span class="text-gray-400 dark:text-gray-500">· {{$pct}}%{{if $eta}} · ~{{$eta}}{{end}}</span>{{end}}
-        </button>
+        </div>
+        {{end}}
+        {{if and .Error (not $busy)}}
+        <div class="mt-1 text-xs text-red-700 dark:text-red-300 max-w-md whitespace-normal break-words" title="{{.Error}}">
+            {{truncate 140 (firstLine .Error)}}
+        </div>
         {{end}}
         {{if gt .AutoLoadFailureCount 0}}
         <div class="text-xs text-red-600 dark:text-red-400 mt-1" title="{{if .Error}}{{.Error}}{{else}}Auto-load failed{{end}}">
             Auto-load failed ({{.AutoLoadFailureCount}}× — retry after {{.AutoLoadBackoffUntil}})
         </div>
         {{end}}
-        {{if and .Error (not $busy)}}
-        <button type="button"
-                hx-get="/partials/drawer/{{$composite}}"
-                hx-target="#run-drawer"
-                hx-swap="outerHTML"
-                class="text-xs text-red-600 dark:text-red-400 mt-1 underline-offset-2 hover:underline"
-                title="{{.Error}}">
-            Error — view details
-        </button>
-        {{end}}
+        <div class="mt-1.5">
+            <a href="#"
+               hx-get="/partials/drawer/{{$composite}}"
+               hx-target="#run-drawer"
+               hx-swap="outerHTML"
+               class="inline-flex items-center gap-0.5 text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline underline-offset-2">
+                View details <span aria-hidden="true">→</span>
+            </a>
+        </div>
     </td>
     <td class="px-6 py-4 align-top whitespace-nowrap text-sm font-medium">
         <div class="flex items-center gap-2">

@@ -135,6 +135,34 @@ func elapsedSince(t time.Time) string {
 	return humanfmt.Duration(d)
 }
 
+// truncate clips s to the first n runes and appends "…" when it had
+// to drop anything. Returns s unchanged for n <= 0 or when s already
+// fits. Used by row templates to keep long error messages on one line.
+func truncate(n int, s string) string {
+	if n <= 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+
+	return string(runes[:n]) + "…"
+}
+
+// firstLine returns the substring of s up to the first newline (or
+// the whole string if there is none). Errors from build pipelines are
+// often multi-line stack traces; the row only wants the topmost.
+func firstLine(s string) string {
+	for i, r := range s {
+		if r == '\n' || r == '\r' {
+			return s[:i]
+		}
+	}
+
+	return s
+}
+
 // StageLabel exposes stageLabel to other packages (drawer view assembly).
 func StageLabel(stage string) string { return stageLabel(stage) }
 
@@ -289,6 +317,8 @@ func (r *Renderer) formatFuncs() template.FuncMap {
 		},
 		"progressPct": progressPct,
 		"tierLabel":   tierLabel,
+		"truncate":    truncate,
+		"firstLine":   firstLine,
 	}
 }
 
