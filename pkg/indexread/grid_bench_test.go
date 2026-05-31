@@ -58,8 +58,6 @@ func readHeaderCount(path string) uint64 {
 // Toggles:
 //
 //	S3INV_GRID_N         — objects per cell (default 100_000)
-//	S3INV_PREFIX_DICT=1  — build with prefix-dictionary (default off)
-//	S3INV_FST=1          — build with FST prefix backend
 //	S3INV_GRID_SHAPES    — comma-separated subset
 //	S3INV_GRID_TIERS     — comma-separated subset
 //	S3INV_GRID_SIZES     — comma-separated subset
@@ -240,8 +238,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 	// reported ns/op is a fair per-call cold latency.
 	//
 	// DescendantsAtDepth is included separately from browse because
-	// it isolates the depth_positions binary-search cost, which c3
-	// targeted.
+	// it isolates the depth_positions binary-search cost.
 	b.Run("cold/lookup", func(b *testing.B) {
 		reportFileMetrics(b, files, nPx)
 		b.ResetTimer()
