@@ -2,6 +2,27 @@
 
 The index uses a row-major file format optimized for memory-mapped access. Each prefix occupies the same byte position in every file, so `pos → all stats` is a single seek into a single mmap.
 
+## What's in the index — and what isn't
+
+The index is **prefix-aggregated only**. The smallest unit stored
+anywhere is a prefix; there is no per-object record. Each row in
+`core_stats.bin` carries the *sum* of `object_count` and `total_bytes`
+over every S3 object whose key sits under that prefix, and the
+per-tier file does the same per storage class.
+
+What this **rules out** without re-reading the source inventory:
+
+- The size or storage class of a specific object key.
+- "Largest 100 objects under this prefix" / per-object distributions.
+- Distinguishing a leaf-object key from a deeper prefix in the tree.
+
+This is a deliberate trade — keeping per-object rows would multiply
+on-disk size by orders of magnitude. UI and CLI surfaces should
+reinforce the prefix-tree mental model (text labels like "child
+prefix", "Browse", "Compare") and **avoid file-system or document
+metaphors** (folder/file/paper icons, the word "sub-folder") that
+imply per-object operations are possible.
+
 ## Directory Structure
 
 ```
