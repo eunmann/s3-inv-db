@@ -52,8 +52,8 @@ func (r *PrefixRow) Reset() {
 	*r = PrefixRow{}
 }
 
-// Merge sums counts and bytes from other into r. Prefix and Depth
-// are not modified — only the per-prefix stats accumulate.
+// Merge accumulates counts and bytes from other into r; Prefix and
+// Depth are left untouched.
 func (r *PrefixRow) Merge(other *PrefixRow) {
 	r.Count += other.Count
 	r.TotalBytes += other.TotalBytes

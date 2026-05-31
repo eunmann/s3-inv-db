@@ -79,7 +79,7 @@ func (s *ConfigStore) Upsert(ctx context.Context, c Config) error {
 	return nil
 }
 
-// Get fetches one config row. ErrStoreNotFound when missing.
+// Get returns ErrStoreNotFound when no row matches.
 func (s *ConfigStore) Get(ctx context.Context, source, name string) (Config, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+configSelectCols+` FROM inventory_configs WHERE source = ? AND name = ?`, source, name)
 	c, err := scanConfig(row)

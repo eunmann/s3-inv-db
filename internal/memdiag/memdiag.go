@@ -53,17 +53,10 @@ const budgetCheckMinBytes = 100 * 1024 * 1024
 
 // Config holds configuration for memory diagnostics.
 type Config struct {
-	// Enabled controls whether memory diagnostics are active.
-	Enabled bool
-
-	// PprofEnabled controls whether pprof server is started.
+	Enabled      bool
 	PprofEnabled bool
-
-	// PprofAddr overrides pprofAddr when set. Tests use ":0" to let the
-	// OS pick a free port; production leaves it empty for the default.
-	PprofAddr string
-
-	// LogInterval is the interval for periodic memory logging.
+	// PprofAddr ":0" lets the OS pick a free port (used by tests).
+	PprofAddr   string
 	LogInterval time.Duration
 }
 
@@ -112,7 +105,6 @@ type Stats struct {
 	GCCPUFraction float64
 }
 
-// Read reads current memory statistics.
 func Read() Stats {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)

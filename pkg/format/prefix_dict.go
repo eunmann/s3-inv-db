@@ -85,17 +85,14 @@ func (si *PrefixSegmentInterner) Intern(segment string) (uint32, error) {
 	return id, nil
 }
 
-// Count returns the number of unique segments interned.
 func (si *PrefixSegmentInterner) Count() uint32 {
 	return si.nextID
 }
 
-// Close finalizes the segment blob file.
 func (si *PrefixSegmentInterner) Close() error {
 	return si.blobWriter.Close()
 }
 
-// hashSegment computes an FNV hash for segment deduplication.
 func hashSegment(s string) uint64 {
 	h := fnv.New64a()
 	h.Write([]byte(s))
@@ -192,13 +189,11 @@ func (sd *PrefixDictionary) PreloadSegments() (*PreloadedPrefixCache, error) {
 	return &PreloadedPrefixCache{segments: segments}, nil
 }
 
-// Get returns the segment string for the given ID. Panics if id is
-// out of range.
+// Get panics if id is out of range.
 func (c *PreloadedPrefixCache) Get(id uint32) string {
 	return c.segments[id]
 }
 
-// Count returns the number of segments in the cache.
 func (c *PreloadedPrefixCache) Count() int {
 	return len(c.segments)
 }

@@ -208,12 +208,7 @@ func (b *StreamingMPHFBuilder) Close() error {
 	return errors.Join(errs...)
 }
 
-// Build constructs the MPHF and writes it to the output directory.
-// Memory usage during Build is bounded by buffer sizes, not by prefix count.
-//
-// Optimization notes:
-//   - ReverseMap: Uses bbhash's ReverseMap to avoid expensive Find() calls (~17x faster).
-//   - Option 4: Uses pre-computed fingerprints from Add phase (no recomputation).
+// Build's memory usage is bounded by buffer sizes, not by prefix count.
 func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	if b.built {
 		return ErrMPHFAlreadyBuilt

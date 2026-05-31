@@ -93,9 +93,7 @@ func (l *Loader) RemoveCache(key inventory.CacheKey) error {
 	return nil
 }
 
-// CacheSizeBytes returns the total on-disk size of a run's cache dir.
-// Walks every file and sums sizes. Returns 0, nil when the dir doesn't
-// exist (not an error — the inventory simply has no cached index).
+// CacheSizeBytes returns 0 (not an error) when the cache dir is absent.
 func (l *Loader) CacheSizeBytes(key inventory.CacheKey) (int64, error) {
 	dir := l.CacheDirFor(key)
 	var total int64
