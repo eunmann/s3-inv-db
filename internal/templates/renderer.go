@@ -159,17 +159,6 @@ type Renderer struct {
 // Option configures a Renderer at construction time.
 type Option func(*Renderer)
 
-// WithClock overrides the clock used by template helpers that compute
-// relative times (formatTimeRelative, formatETA). Defaults to time.Now.
-// Tests inject a fixed clock to make golden output deterministic.
-func WithClock(now func() time.Time) Option {
-	return func(r *Renderer) {
-		if now != nil {
-			r.now = now
-		}
-	}
-}
-
 // New creates a new template renderer with the embedded templates parsed.
 // HTML hot-reload during local development is handled by Air watching
 // templates/*.html files (per .air.toml) — Air rebuilds the binary on
@@ -224,8 +213,7 @@ func FuncMap() template.FuncMap {
 
 // formatFuncs covers byte / count / time / cost / tier label
 // rendering. Receiver-bound so the time helpers can read the
-// renderer's clock (defaults to time.Now; tests can inject a fixed
-// clock via WithClock).
+// renderer's clock (defaults to time.Now).
 func (r *Renderer) formatFuncs() template.FuncMap {
 	now := r.now
 	if now == nil {

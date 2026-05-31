@@ -155,16 +155,6 @@ func WithQueryBatchMax(n int) Option {
 	}
 }
 
-// WithMetricsRegistry replaces the default empty registry. Pass a
-// shared registry so external code can read the collected series.
-func WithMetricsRegistry(reg *metrics.Registry) Option {
-	return func(h *Handlers) {
-		if reg != nil {
-			h.reg = reg
-		}
-	}
-}
-
 // MetricsRegistry exposes the registry so the server can mount /metrics
 // against the same instance handlers record into.
 func (h *Handlers) MetricsRegistry() *metrics.Registry { return h.reg }

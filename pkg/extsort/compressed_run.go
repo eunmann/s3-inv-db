@@ -24,15 +24,13 @@ import (
 // Body: zstd compressed stream of records (same record format as uncompressed)
 //
 // Compression types:
-//   0: None (uncompressed, legacy compatibility)
-//   1: Zstd (default, best speed/ratio tradeoff)
+//   1: Zstd (only supported type)
 
 const (
 	compressedRunFileVersion = 2
 	compressedRunFileHeader  = 32
 
-	// Compression type flags (stored in bits 1-3 of flags field).
-	compressionTypeNone = 0
+	// Compression type flag (stored in bits 1-3 of flags field).
 	compressionTypeZstd = 1
 
 	// Flags field bit masks.
@@ -170,10 +168,6 @@ func (w *CompressedRunWriter) WriteSorted(rows []*PrefixRow) error {
 
 func (w *CompressedRunWriter) Count() uint64 {
 	return w.count
-}
-
-func (w *CompressedRunWriter) Path() string {
-	return w.path
 }
 
 // Close flushes all buffers, finalizes compression, updates the
@@ -376,10 +370,6 @@ func (r *CompressedRunReader) ReadCount() uint64 {
 	return r.read
 }
 
-func (r *CompressedRunReader) Path() string {
-	return r.path
-}
-
 // Close closes the compressed run file.
 func (r *CompressedRunReader) Close() error {
 	if r.closed {
@@ -417,7 +407,6 @@ type RunReader interface {
 	ReadInto(into *PrefixRow) error
 	Count() uint64
 	ReadCount() uint64
-	Path() string
 	Close() error
 	Remove() error
 }

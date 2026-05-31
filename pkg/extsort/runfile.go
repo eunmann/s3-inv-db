@@ -178,10 +178,6 @@ func (w *RunFileWriter) Count() uint64 {
 	return w.count
 }
 
-func (w *RunFileWriter) Path() string {
-	return w.path
-}
-
 // Close flushes the buffer, updates the header, and closes the file.
 func (w *RunFileWriter) Close() error {
 	if w.closed {
@@ -320,10 +316,6 @@ func (r *RunFileReader) Count() uint64 {
 
 func (r *RunFileReader) ReadCount() uint64 {
 	return r.read
-}
-
-func (r *RunFileReader) Path() string {
-	return r.path
 }
 
 // Close closes the run file.
