@@ -14,6 +14,7 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 )
 
+
 type queryOutput struct {
 	Prefix        string                 `json:"prefix"`
 	ObjectCount   uint64                 `json:"object_count"`
@@ -35,8 +36,7 @@ func runQuery(args []string) error {
 	showTiers := fs.Bool("show-tiers", false, "show per-tier breakdown")
 	estimateCost := fs.Bool("estimate-cost", false, "estimate monthly storage cost")
 	priceTablePath := fs.String("price-table", "", "path to price table JSON (default: US East 1 prices)")
-	verbose := fs.Bool("verbose", false, "enable debug level logging")
-	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
+	logFlags := addLoggingFlags(fs)
 	outputFlag := addOutputFlag(fs)
 
 	if err := fs.Parse(args); err != nil {
@@ -52,12 +52,9 @@ func runQuery(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	explicit := explicitFlags(fs)
-	finalVerbose := resolveBool(fileCfg, *verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
-	finalPretty := resolveBool(fileCfg, *prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
-	finalPriceTable := resolveString(fileCfg, *priceTablePath, explicit["price-table"], func(c *appconfig.Config) *string { return c.PriceTable })
+	initLogging(logFlags, fs, fileCfg)
+	finalPriceTable := resolveString(fileCfg, *priceTablePath, explicitFlags(fs)["price-table"], func(c *appconfig.Config) *string { return c.PriceTable })
 
-	logging.Init(logging.Options{Debug: finalVerbose, Human: finalPretty})
 	logger := logging.L()
 
 	if *indexDir == "" {

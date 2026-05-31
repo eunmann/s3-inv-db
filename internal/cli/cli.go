@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/eunmann/s3-inv-db/internal/appconfig"
+	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
 
 // Sentinel errors keep `err113` happy and let callers test for the
@@ -94,4 +95,34 @@ func resolveBool(cfg *appconfig.Config, flagVal, explicit bool, get func(*appcon
 
 func resolveString(cfg *appconfig.Config, flagVal string, explicit bool, get func(*appconfig.Config) *string) string {
 	return appconfig.Pick(flagVal, explicit, appconfig.FromFile(cfg, get))
+}
+
+// loggingFlags bundles the --verbose and --pretty-logs flags every
+// subcommand exposes. Registered via addLoggingFlags and resolved
+// against the JSON config via initLogging.
+type loggingFlags struct {
+	verbose    *bool
+	prettyLogs *bool
+}
+
+// addLoggingFlags registers --verbose and --pretty-logs on fs and
+// returns the bound destinations.
+func addLoggingFlags(fs *flag.FlagSet) *loggingFlags {
+	return &loggingFlags{
+		verbose:    fs.Bool("verbose", false, "enable debug level logging"),
+		prettyLogs: fs.Bool("pretty-logs", false, "use human-friendly console output"),
+	}
+}
+
+// initLogging resolves the logging flags against fileCfg (precedence:
+// explicit flag > file > default), initializes the global logger, and
+// returns the resolved (debug, human) values for callers that also
+// need a local logger.
+func initLogging(lf *loggingFlags, fs *flag.FlagSet, fileCfg *appconfig.Config) (debug, human bool) {
+	explicit := explicitFlags(fs)
+	debug = resolveBool(fileCfg, *lf.verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
+	human = resolveBool(fileCfg, *lf.prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
+	logging.Init(logging.Options{Debug: debug, Human: human})
+
+	return debug, human
 }

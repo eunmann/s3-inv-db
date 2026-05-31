@@ -15,7 +15,6 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/sysmem"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 func runBuild(args []string) error {
@@ -23,8 +22,7 @@ func runBuild(args []string) error {
 	configPath := fs.String("config", "", "path to JSON config file (overridden by explicit flags)")
 	outDir := fs.String("out", "", "output directory for index files")
 	s3Manifest := fs.String("s3-manifest", "", "S3 URI to inventory manifest.json (s3://bucket/path/manifest.json)")
-	verbose := fs.Bool("verbose", false, "enable debug level logging")
-	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
+	logFlags := addLoggingFlags(fs)
 	maxDepth := fs.Int("max-depth", 0, "maximum prefix depth to track (0 = unlimited)")
 	eventLogPath := fs.String("event-log", "", "append build events as JSONL to this path (overrides config)")
 
@@ -36,14 +34,10 @@ func runBuild(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	explicit := explicitFlags(fs)
-	finalVerbose := resolveBool(fileCfg, *verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
-	finalPretty := resolveBool(fileCfg, *prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
-	finalEventLog := resolveString(fileCfg, *eventLogPath, explicit["event-log"], func(c *appconfig.Config) *string { return c.BuildEventLog })
+	initLogging(logFlags, fs, fileCfg)
+	finalEventLog := resolveString(fileCfg, *eventLogPath, explicitFlags(fs)["event-log"], func(c *appconfig.Config) *string { return c.BuildEventLog })
 
-	baseLogger := logging.NewLogger(logging.Options{Debug: finalVerbose, Human: finalPretty})
-	log.Logger = baseLogger
-	logging.Init(logging.Options{Debug: finalVerbose, Human: finalPretty})
+	baseLogger := *logging.L()
 
 	memLimit := sysmem.ApplyMemoryLimit(sysmem.DefaultMemoryLimitFraction)
 	baseLogger.Info().
