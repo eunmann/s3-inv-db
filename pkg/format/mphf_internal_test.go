@@ -1,6 +1,8 @@
 package format
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -195,6 +197,37 @@ func TestMPHFUnicode(t *testing.T) {
 		if stored != p {
 			t.Errorf("GetPrefix returned %q, want %q", stored, p)
 		}
+	}
+}
+
+// TestOpenMPHF_MissingDictFiles asserts OpenMPHF surfaces an error
+// (not a panic) when the prefix dictionary files are absent. The old
+// raw-blob fallback is gone, so the dict files are the only prefix
+// storage; their absence must fail cleanly.
+func TestOpenMPHF_MissingDictFiles(t *testing.T) {
+	dir := t.TempDir()
+	b := newTestMPHFBuilder(t)
+	b.Add("a/", 0)
+	b.Add("b/", 1)
+	if err := b.Build(dir); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	for _, name := range []string{
+		PrefixDictBlobFile,
+		PrefixDictOffsetsFile,
+		PrefixDictIDsFile,
+		PrefixDictOffsetsPerPrefixFile,
+	} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("remove %s: %v", name, err)
+		}
+	}
+
+	m, err := OpenMPHF(dir)
+	if err == nil {
+		m.Close()
+		t.Fatal("OpenMPHF returned nil error when prefix dict files are missing")
 	}
 }
 

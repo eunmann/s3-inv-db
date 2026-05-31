@@ -470,7 +470,6 @@ var gridReportedFiles = []gridFile{
 	{"prefix_dict.ids.u32", "Bpp_ids", false},
 	{"prefix_dict.prefix_off.u64", "Bpp_poff", false},
 	{"depth_positions.u64", "Bpp_dpos", false},
-	{"prefix_blob.bin", "Bpp_pblob", false},
 }
 
 //nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
