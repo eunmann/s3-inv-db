@@ -174,13 +174,17 @@ func (g *GridGenerator) nextKey(i, n int) string {
 	case *wideSingleLevelState:
 		return fmt.Sprintf("root/child%07d/file.txt", i)
 	case *s3RealisticState:
-		return s3RealisticKey(g.rng)
+		return s3RealisticKey(g.rng, i)
 	}
 	_ = n // reserved for shapes that want total count
-	return s3RealisticKey(g.rng)
+	return s3RealisticKey(g.rng, i)
 }
 
-func s3RealisticKey(rng *rand.Rand) string {
+// s3RealisticKey embeds i into the file segment so keys stay unique
+// at the N values the grid sweeps. A pure rng.Uint32() filename
+// would collide via the birthday paradox around the low millions and
+// break consumers that require distinct keys (e.g. MPHF builders).
+func s3RealisticKey(rng *rand.Rand, i int) string {
 	prefixes := []string{"data", "logs", "backups", "exports", "uploads"}
 	years := []string{"2022", "2023", "2024"}
 	months := []string{"01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"}
@@ -191,7 +195,7 @@ func s3RealisticKey(rng *rand.Rand) string {
 	month := months[rng.Intn(len(months))]
 	day := fmt.Sprintf("%02d", rng.Intn(daysInMonth)+1)
 	user := fmt.Sprintf("user%05d", rng.Intn(1000))
-	file := fmt.Sprintf("file_%08x", rng.Uint32())
+	file := fmt.Sprintf("file_%08x_%010d", rng.Uint32(), i)
 	ext := exts[rng.Intn(len(exts))]
 	return fmt.Sprintf("%s/%s/%s/%s/%s/%s%s", prefix, year, month, day, user, file, ext)
 }

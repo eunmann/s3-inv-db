@@ -66,7 +66,7 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 		totalStart := time.Now()
 
 		phase1Start := time.Now()
-		agg := extsort.NewAggregator(100_000, 0)
+		agg := extsort.NewAggregator(numObjects, 0)
 		for _, obj := range objects {
 			agg.AddObject(obj.Key, obj.Size, obj.TierID)
 		}
