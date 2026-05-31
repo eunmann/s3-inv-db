@@ -3,6 +3,7 @@ package benchutil
 
 import (
 	"fmt"
+	"maps"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -10,23 +11,17 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-// Default tier mix probabilities used by DefaultConfig. Together they
-// sum to 1.0.
+// Tier mix probabilities. DefaultTierDist is the five-class mix used by
+// DefaultConfig; s3RealisticTierDist exercises all 11 storage classes
+// for S3RealisticConfig (legacy lifecycle tiers + the Intelligent-
+// Tiering family). Each map's values sum to 1.0.
 const (
 	defaultProbStandard   = 0.60
 	defaultProbStandardIA = 0.15
 	defaultProbGlacierIR  = 0.10
 	defaultProbITFrequent = 0.10
 	defaultProbITArchive  = 0.05
-)
 
-// S3-realistic tier mix probabilities used by S3RealisticConfig. All
-// 11 storage classes populated, modelling a typical enterprise bucket
-// that uses both legacy lifecycle tiers (Standard / IA / Glacier IR /
-// Glacier FR / Deep Archive) and the Intelligent-Tiering family
-// (split across its access sub-tiers, plus the small-object subset
-// which is billed at the Frequent rate). Probabilities sum to 1.0.
-const (
 	s3ProbStandard         = 0.25
 	s3ProbStandardIA       = 0.15
 	s3ProbGlacierIR        = 0.07
@@ -39,6 +34,30 @@ const (
 	s3ProbITDeepArchive    = 0.04
 	s3ProbITFrequentSmall  = 0.02
 )
+
+//nolint:gochecknoglobals // immutable benchmark tier distribution
+var defaultTierDist = map[tiers.ID]float64{
+	tiers.Standard:   defaultProbStandard,
+	tiers.StandardIA: defaultProbStandardIA,
+	tiers.GlacierIR:  defaultProbGlacierIR,
+	tiers.ITFrequent: defaultProbITFrequent,
+	tiers.ITArchive:  defaultProbITArchive,
+}
+
+//nolint:gochecknoglobals // immutable benchmark tier distribution
+var s3RealisticTierDist = map[tiers.ID]float64{
+	tiers.Standard:         s3ProbStandard,
+	tiers.StandardIA:       s3ProbStandardIA,
+	tiers.GlacierIR:        s3ProbGlacierIR,
+	tiers.GlacierFR:        s3ProbGlacierFR,
+	tiers.DeepArchive:      s3ProbDeepArchive,
+	tiers.ITFrequent:       s3ProbITFrequent,
+	tiers.ITInfrequent:     s3ProbITInfrequent,
+	tiers.ITArchiveInstant: s3ProbITArchiveInstant,
+	tiers.ITArchive:        s3ProbITArchive,
+	tiers.ITDeepArchive:    s3ProbITDeepArchive,
+	tiers.ITFrequentSmall:  s3ProbITFrequentSmall,
+}
 
 // Synthetic directory depth used by DefaultConfig.
 const defaultMaxDepth = 6
@@ -72,17 +91,11 @@ type GeneratorConfig struct {
 // DefaultConfig returns a reasonable default configuration.
 func DefaultConfig(numObjects int) GeneratorConfig {
 	return GeneratorConfig{
-		NumObjects:   numObjects,
-		PrefixFanout: 10,
-		MaxDepth:     defaultMaxDepth,
-		TierDistribution: map[tiers.ID]float64{
-			tiers.Standard:   defaultProbStandard,
-			tiers.StandardIA: defaultProbStandardIA,
-			tiers.GlacierIR:  defaultProbGlacierIR,
-			tiers.ITFrequent: defaultProbITFrequent,
-			tiers.ITArchive:  defaultProbITArchive,
-		},
-		Seed: BenchmarkSeed,
+		NumObjects:       numObjects,
+		PrefixFanout:     10,
+		MaxDepth:         defaultMaxDepth,
+		TierDistribution: cloneTierDist(defaultTierDist),
+		Seed:             BenchmarkSeed,
 	}
 }
 
@@ -96,24 +109,19 @@ func DefaultConfig(numObjects int) GeneratorConfig {
 // column, which matches the on-disk reality.
 func S3RealisticConfig(numObjects int) GeneratorConfig {
 	return GeneratorConfig{
-		NumObjects:   numObjects,
-		PrefixFanout: s3PrefixFanout,
-		MaxDepth:     s3MaxDepth,
-		TierDistribution: map[tiers.ID]float64{
-			tiers.Standard:         s3ProbStandard,
-			tiers.StandardIA:       s3ProbStandardIA,
-			tiers.GlacierIR:        s3ProbGlacierIR,
-			tiers.GlacierFR:        s3ProbGlacierFR,
-			tiers.DeepArchive:      s3ProbDeepArchive,
-			tiers.ITFrequent:       s3ProbITFrequent,
-			tiers.ITInfrequent:     s3ProbITInfrequent,
-			tiers.ITArchiveInstant: s3ProbITArchiveInstant,
-			tiers.ITArchive:        s3ProbITArchive,
-			tiers.ITDeepArchive:    s3ProbITDeepArchive,
-			tiers.ITFrequentSmall:  s3ProbITFrequentSmall,
-		},
-		Seed: BenchmarkSeed,
+		NumObjects:       numObjects,
+		PrefixFanout:     s3PrefixFanout,
+		MaxDepth:         s3MaxDepth,
+		TierDistribution: cloneTierDist(s3RealisticTierDist),
+		Seed:             BenchmarkSeed,
 	}
+}
+
+// cloneTierDist returns a copy of a canonical distribution so callers
+// can safely mutate per-config TierDistribution without leaking back to
+// the package-level table.
+func cloneTierDist(src map[tiers.ID]float64) map[tiers.ID]float64 {
+	return maps.Clone(src)
 }
 
 const (

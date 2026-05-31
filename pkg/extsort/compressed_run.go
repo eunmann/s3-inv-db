@@ -99,10 +99,7 @@ func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*Comp
 	// Count, UncompressedSize, Reserved will be updated on close
 
 	if _, err := f.Write(header); err != nil {
-		f.Close()
-		os.Remove(path)
-
-		return nil, fmt.Errorf("write header: %w", err)
+		return nil, errors.Join(fmt.Errorf("write header: %w", err), f.Close(), os.Remove(path))
 	}
 
 	// Create zstd encoder with specified level
@@ -118,10 +115,7 @@ func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*Comp
 
 	enc, err := acquireZstdEncoder(zstdLevel)
 	if err != nil {
-		f.Close()
-		os.Remove(path)
-
-		return nil, fmt.Errorf("acquire zstd encoder: %w", err)
+		return nil, errors.Join(fmt.Errorf("acquire zstd encoder: %w", err), f.Close(), os.Remove(path))
 	}
 	enc.Reset(f)
 

@@ -18,10 +18,19 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
 
-// RawClient returns an aws-sdk-go-v2 S3 client wired to the MinIO
-// endpoint in AWS_ENDPOINT_URL_S3. Fails the test loudly if the env
-// is missing so a misconfigured runner can't silently skip.
-func RawClient(tb testing.TB) *s3.Client {
+// minioConfig pairs the resolved aws.Config with the MinIO endpoint URL
+// loadMinIOConfig discovered. Returned together because every caller
+// needs both.
+type minioConfig struct {
+	cfg      aws.Config
+	endpoint string
+}
+
+// loadMinIOConfig builds the aws.Config used by both clients: us-east-1
+// region with the docker-compose MinIO static credentials. Fails the
+// test loudly if AWS_ENDPOINT_URL_S3 is missing so a misconfigured
+// runner can't silently skip.
+func loadMinIOConfig(tb testing.TB) minioConfig {
 	tb.Helper()
 	endpoint := os.Getenv(s3fetch.EnvEndpointURL)
 	if endpoint == "" {
@@ -35,28 +44,27 @@ func RawClient(tb testing.TB) *s3.Client {
 		tb.Fatalf("aws config: %v", err)
 	}
 
-	return s3.NewFromConfig(cfg, func(o *s3.Options) {
+	return minioConfig{cfg: cfg, endpoint: endpoint}
+}
+
+// RawClient returns an aws-sdk-go-v2 S3 client wired to the MinIO
+// endpoint in AWS_ENDPOINT_URL_S3.
+func RawClient(tb testing.TB) *s3.Client {
+	tb.Helper()
+	mc := loadMinIOConfig(tb)
+
+	return s3.NewFromConfig(mc.cfg, func(o *s3.Options) {
 		o.UsePathStyle = true
-		o.BaseEndpoint = aws.String(endpoint)
+		o.BaseEndpoint = aws.String(mc.endpoint)
 	})
 }
 
 // FetchClient is the project's *s3fetch.Client wired to MinIO.
 func FetchClient(tb testing.TB) *s3fetch.Client {
 	tb.Helper()
-	endpoint := os.Getenv(s3fetch.EnvEndpointURL)
-	if endpoint == "" {
-		tb.Fatal("AWS_ENDPOINT_URL_S3 not set — run `make test`")
-	}
-	cfg, err := config.LoadDefaultConfig(context.Background(),
-		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("minioadmin", "minioadmin", "")),
-	)
-	if err != nil {
-		tb.Fatalf("aws config: %v", err)
-	}
+	mc := loadMinIOConfig(tb)
 
-	return s3fetch.NewClientWithConfig(cfg)
+	return s3fetch.NewClientWithConfig(mc.cfg)
 }
 
 // Bucket creates a uniquely-named bucket and registers cleanup that

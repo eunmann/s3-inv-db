@@ -167,16 +167,16 @@ func RepackArrayWidthU64(srcPath, dstPath string, width uint8) error {
 	if err != nil {
 		return fmt.Errorf("create dst: %w", err)
 	}
+	cleanup := func(primary error) error {
+		return errors.Join(primary, dst.Close(), removeIfErr(tmp))
+	}
 	if _, err := dst.Write(EncodeHeader(Header{
 		Magic:   MagicNumber,
 		Version: Version,
 		Count:   count,
 		Width:   uint32(width),
 	})); err != nil {
-		_ = dst.Close()
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("write header: %w", err)
+		return cleanup(fmt.Errorf("write header: %w", err))
 	}
 
 	bw := bufio.NewWriterSize(dst, repackBufferSize)
@@ -184,41 +184,25 @@ func RepackArrayWidthU64(srcPath, dstPath string, width uint8) error {
 	for i := range count {
 		binary.LittleEndian.PutUint64(buf[:], src.UnsafeGetU64(i))
 		if _, err := bw.Write(buf[:width]); err != nil {
-			_ = dst.Close()
-			_ = os.Remove(tmp)
-
-			return fmt.Errorf("write u64: %w", err)
+			return cleanup(fmt.Errorf("write u64: %w", err))
 		}
 	}
 	pad := [arrayTailPad]byte{}
 	if _, err := bw.Write(pad[:]); err != nil {
-		_ = dst.Close()
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("write tail pad: %w", err)
+		return cleanup(fmt.Errorf("write tail pad: %w", err))
 	}
 	if err := bw.Flush(); err != nil {
-		_ = dst.Close()
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("flush: %w", err)
+		return cleanup(fmt.Errorf("flush: %w", err))
 	}
 	if err := dst.Sync(); err != nil {
-		_ = dst.Close()
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("sync: %w", err)
+		return cleanup(fmt.Errorf("sync: %w", err))
 	}
 	if err := dst.Close(); err != nil {
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("close: %w", err)
+		return errors.Join(fmt.Errorf("close: %w", err), removeIfErr(tmp))
 	}
 	if tmp != dstPath {
 		if err := os.Rename(tmp, dstPath); err != nil {
-			_ = os.Remove(tmp)
-
-			return fmt.Errorf("rename: %w", err)
+			return errors.Join(fmt.Errorf("rename: %w", err), removeIfErr(tmp))
 		}
 	}
 
@@ -291,33 +275,28 @@ func (w *BlobWriter) WriteBytes(b []byte) error {
 	return nil
 }
 
-// Close finalizes both files, writing a sentinel offset. On the
-// error path the cleanup calls are best-effort — we already have a
-// fatal error to return, so secondary close/flush failures during
-// cleanup are intentionally discarded via the leading underscores.
+// Close finalizes both files, writing a sentinel offset. Secondary
+// close/flush errors during cleanup are joined into the returned chain
+// so failures aren't silently dropped.
 func (w *BlobWriter) Close() error {
-	// Write sentinel offset (points past end)
 	if err := w.offsets.WriteU64(w.offset); err != nil {
-		_ = w.blobWriter.Flush()
-		_ = w.blobFile.Close()
-		_ = w.offsets.Close()
-
-		return fmt.Errorf("write sentinel offset: %w", err)
+		return errors.Join(
+			fmt.Errorf("write sentinel offset: %w", err),
+			w.blobWriter.Flush(),
+			w.blobFile.Close(),
+			w.offsets.Close(),
+		)
 	}
-
 	if err := w.blobWriter.Flush(); err != nil {
-		_ = w.blobFile.Close()
-		_ = w.offsets.Close()
-
-		return fmt.Errorf("flush blob: %w", err)
+		return errors.Join(
+			fmt.Errorf("flush blob: %w", err),
+			w.blobFile.Close(),
+			w.offsets.Close(),
+		)
 	}
-
 	if err := w.blobFile.Close(); err != nil {
-		_ = w.offsets.Close()
-
-		return fmt.Errorf("close blob: %w", err)
+		return errors.Join(fmt.Errorf("close blob: %w", err), w.offsets.Close())
 	}
-
 	if err := w.offsets.Close(); err != nil {
 		return fmt.Errorf("close offsets: %w", err)
 	}

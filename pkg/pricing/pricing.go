@@ -90,46 +90,50 @@ type PriceTable struct {
 	StandardPricePerGB float64 `json:"standard_price_per_gb"`
 }
 
-// TierHasMinObjectSize reports whether a tier bills objects smaller
-// than 128 KiB as if they were 128 KiB (Standard-IA, One Zone-IA,
-// Glacier Instant Retrieval).
-func TierHasMinObjectSize(tier string) bool {
-	switch tier {
-	case "STANDARD_IA", "ONEZONE_IA", "GLACIER_IR":
-		return true
-	}
+// tierFlags is a bit set of cost-relevant tier capabilities.
+type tierFlags uint8
 
-	return false
+const (
+	flagMinObjectSize tierFlags = 1 << iota
+	flagMonitoringCost
+	flagGlacierOverhead
+)
+
+// tierCapabilities is the single source of truth for which tiers
+// trigger which surcharges. A typo here surfaces in the tests for
+// TierHas* below (each predicate asserts the full positive set).
+//
+//nolint:gochecknoglobals // immutable capability table
+var tierCapabilities = map[string]tierFlags{
+	"STANDARD_IA":                         flagMinObjectSize,
+	"ONEZONE_IA":                          flagMinObjectSize,
+	"GLACIER_IR":                          flagMinObjectSize,
+	"GLACIER":                             flagGlacierOverhead,
+	"DEEP_ARCHIVE":                        flagGlacierOverhead,
+	"INTELLIGENT_TIERING_FREQUENT":        flagMonitoringCost,
+	"INTELLIGENT_TIERING_INFREQUENT":      flagMonitoringCost,
+	"INTELLIGENT_TIERING_ARCHIVE_INSTANT": flagMonitoringCost,
+	"INTELLIGENT_TIERING_ARCHIVE":         flagMonitoringCost | flagGlacierOverhead,
+	"INTELLIGENT_TIERING_DEEP_ARCHIVE":    flagMonitoringCost | flagGlacierOverhead,
+}
+
+// TierHasMinObjectSize reports whether a tier bills objects smaller
+// than 128 KiB as if they were 128 KiB.
+func TierHasMinObjectSize(tier string) bool {
+	return tierCapabilities[tier]&flagMinObjectSize != 0
 }
 
 // TierHasMonitoringCost reports whether a tier incurs the Intelligent-
 // Tiering per-object monitoring fee.
 func TierHasMonitoringCost(tier string) bool {
-	switch tier {
-	case "INTELLIGENT_TIERING_FREQUENT",
-		"INTELLIGENT_TIERING_INFREQUENT",
-		"INTELLIGENT_TIERING_ARCHIVE_INSTANT",
-		"INTELLIGENT_TIERING_ARCHIVE",
-		"INTELLIGENT_TIERING_DEEP_ARCHIVE":
-		return true
-	}
-
-	return false
+	return tierCapabilities[tier]&flagMonitoringCost != 0
 }
 
 // TierHasGlacierOverhead reports whether a tier carries per-object
 // Glacier metadata overhead: 32 KiB at the tier's own rate plus 8 KiB
 // at the Standard rate.
 func TierHasGlacierOverhead(tier string) bool {
-	switch tier {
-	case "GLACIER",
-		"DEEP_ARCHIVE",
-		"INTELLIGENT_TIERING_ARCHIVE",
-		"INTELLIGENT_TIERING_DEEP_ARCHIVE":
-		return true
-	}
-
-	return false
+	return tierCapabilities[tier]&flagGlacierOverhead != 0
 }
 
 // DefaultUSEast1Prices returns the default pricing for US East 1 region (as of 2025).

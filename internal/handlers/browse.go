@@ -190,16 +190,7 @@ func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, o
 
 	if idx.HasTierData() {
 		breakdown := idx.TierBreakdown(pos)
-		level.TierBreakdown = make([]TierStats, 0, len(breakdown))
-		for _, tb := range breakdown {
-			level.TierBreakdown = append(level.TierBreakdown, TierStats{
-				TierName:     tb.TierName,
-				ObjectCount:  tb.ObjectCount,
-				ObjectCountH: humanfmt.CountUint64(tb.ObjectCount),
-				Bytes:        tb.Bytes,
-				BytesH:       humanfmt.BytesUint64(tb.Bytes),
-			})
-		}
+		level.TierBreakdown = assembleTierStats(breakdown)
 		level.CostEstimate = h.computeCostEstimate(breakdown, true)
 	}
 

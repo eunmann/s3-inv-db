@@ -3,7 +3,6 @@ package handlers
 import (
 	"fmt"
 	"net/http"
-	"strconv"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -53,29 +52,20 @@ func (h *Handlers) GetTopAPI(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	prefix := q.Get("prefix")
 
-	depth := 1
-	if v := q.Get("depth"); v != "" {
-		d, err := strconv.Atoi(v)
-		if err != nil || d < 1 {
-			WriteJSONError(w, http.StatusBadRequest, "invalid depth")
+	depth, err := parsePositiveInt(q, "depth", 1)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, err.Error())
 
-			return
-		}
-		depth = d
+		return
 	}
+	limit, err := parsePositiveInt(q, "limit", defaultTopLimit)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, err.Error())
 
-	limit := defaultTopLimit
-	if v := q.Get("limit"); v != "" {
-		l, err := strconv.Atoi(v)
-		if err != nil || l < 1 {
-			WriteJSONError(w, http.StatusBadRequest, "invalid limit")
-
-			return
-		}
-		if l > maxTopLimit {
-			l = maxTopLimit
-		}
-		limit = l
+		return
+	}
+	if limit > maxTopLimit {
+		limit = maxTopLimit
 	}
 
 	by := q.Get("by")
@@ -94,14 +84,16 @@ func (h *Handlers) GetTopAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filter, ok := parseTopFilter(w, q)
-	if !ok {
+	filter, err := parseFilter(q)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, err.Error())
+
 		return
 	}
 
 	logger := zerolog.Ctx(r.Context())
 	var resp TopResponse
-	err := h.manager.WithIndex(id, func(idx *indexread.Index) error {
+	err = h.manager.WithIndex(id, func(idx *indexread.Index) error {
 		pos, found := idx.Lookup(prefix)
 		if !found {
 			return errPrefixNotFound
@@ -140,39 +132,6 @@ func (h *Handlers) GetTopAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteJSON(w, http.StatusOK, resp)
-}
-
-func parseTopFilter(w http.ResponseWriter, q map[string][]string) (indexread.Filter, bool) {
-	var filter indexread.Filter
-	if v := firstQ(q, "min_count"); v != "" {
-		n, err := strconv.ParseUint(v, 10, 64)
-		if err != nil {
-			WriteJSONError(w, http.StatusBadRequest, "invalid min_count")
-
-			return filter, false
-		}
-		filter.MinCount = n
-	}
-	if v := firstQ(q, "min_bytes"); v != "" {
-		n, err := strconv.ParseUint(v, 10, 64)
-		if err != nil {
-			WriteJSONError(w, http.StatusBadRequest, "invalid min_bytes")
-
-			return filter, false
-		}
-		filter.MinBytes = n
-	}
-
-	return filter, true
-}
-
-func firstQ(q map[string][]string, key string) string {
-	v, ok := q[key]
-	if !ok || len(v) == 0 {
-		return ""
-	}
-
-	return v[0]
 }
 
 const (

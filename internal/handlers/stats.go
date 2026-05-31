@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -33,6 +32,23 @@ type TierStats struct {
 	BytesH       string `json:"bytes_human"`
 	ObjectCount  uint64 `json:"object_count"`
 	Bytes        uint64 `json:"bytes"`
+}
+
+// assembleTierStats wraps a format.TierBreakdown slice into the
+// response-shaped TierStats slice, attaching humanfmt formatted values.
+func assembleTierStats(breakdown []format.TierBreakdown) []TierStats {
+	out := make([]TierStats, len(breakdown))
+	for i, tb := range breakdown {
+		out[i] = TierStats{
+			TierName:     tb.TierName,
+			ObjectCount:  tb.ObjectCount,
+			ObjectCountH: humanfmt.CountUint64(tb.ObjectCount),
+			Bytes:        tb.Bytes,
+			BytesH:       humanfmt.BytesUint64(tb.Bytes),
+		}
+	}
+
+	return out
 }
 
 // CostEstimate contains cost estimation details.
@@ -148,36 +164,20 @@ func parseDescendantsParams(w http.ResponseWriter, q url.Values) (descendantsPar
 
 		return descendantsParams{}, false
 	}
-	p := descendantsParams{prefix: q.Get("prefix"), depth: 1}
-	if v := q.Get("depth"); v != "" {
-		d, err := strconv.Atoi(v)
-		if err != nil || d < 1 {
-			WriteJSONError(w, http.StatusBadRequest, "invalid depth")
+	depth, err := parsePositiveInt(q, "depth", 1)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, err.Error())
 
-			return descendantsParams{}, false
-		}
-		p.depth = d
+		return descendantsParams{}, false
 	}
-	if v := q.Get("min_count"); v != "" {
-		n, err := strconv.ParseUint(v, 10, 64)
-		if err != nil {
-			WriteJSONError(w, http.StatusBadRequest, "invalid min_count")
+	filter, err := parseFilter(q)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, err.Error())
 
-			return descendantsParams{}, false
-		}
-		p.filter.MinCount = n
-	}
-	if v := q.Get("min_bytes"); v != "" {
-		n, err := strconv.ParseUint(v, 10, 64)
-		if err != nil {
-			WriteJSONError(w, http.StatusBadRequest, "invalid min_bytes")
-
-			return descendantsParams{}, false
-		}
-		p.filter.MinBytes = n
+		return descendantsParams{}, false
 	}
 
-	return p, true
+	return descendantsParams{prefix: q.Get("prefix"), depth: depth, filter: filter}, true
 }
 
 // GetDescendantsAPI returns descendants at a specific depth.
@@ -250,16 +250,7 @@ func (h *Handlers) buildStatsResponse(idx *indexread.Index, prefix string, showT
 
 	if showTiers && idx.HasTierData() {
 		breakdown := idx.TierBreakdown(pos)
-		resp.TierBreakdown = make([]TierStats, 0, len(breakdown))
-		for _, tb := range breakdown {
-			resp.TierBreakdown = append(resp.TierBreakdown, TierStats{
-				TierName:     tb.TierName,
-				ObjectCount:  tb.ObjectCount,
-				ObjectCountH: humanfmt.CountUint64(tb.ObjectCount),
-				Bytes:        tb.Bytes,
-				BytesH:       humanfmt.BytesUint64(tb.Bytes),
-			})
-		}
+		resp.TierBreakdown = assembleTierStats(breakdown)
 		if estimateCost {
 			resp.CostEstimate = h.computeCostEstimate(breakdown, true)
 		}

@@ -116,16 +116,7 @@ func (h *Handlers) lookupBatchRow(idx *indexread.Index, prefix string, showTiers
 	}
 	if showTiers && idx.HasTierData() {
 		breakdown := idx.TierBreakdown(pos)
-		row.TierBreakdown = make([]TierStats, 0, len(breakdown))
-		for _, tb := range breakdown {
-			row.TierBreakdown = append(row.TierBreakdown, TierStats{
-				TierName:     tb.TierName,
-				ObjectCount:  tb.ObjectCount,
-				ObjectCountH: humanfmt.CountUint64(tb.ObjectCount),
-				Bytes:        tb.Bytes,
-				BytesH:       humanfmt.BytesUint64(tb.Bytes),
-			})
-		}
+		row.TierBreakdown = assembleTierStats(breakdown)
 		if estimateCost {
 			row.CostEstimate = h.computeCostEstimate(breakdown, true)
 		}

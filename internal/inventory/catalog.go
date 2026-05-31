@@ -13,6 +13,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
+	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
 
 // ErrNotFound is returned when an inventory is not found.
@@ -275,6 +276,10 @@ func MeasureDir(ctx context.Context, dir string) (uint64, error) {
 	if manifest, err := format.ReadManifest(dir); err == nil && len(manifest.Files) > 0 {
 		return manifest.TotalBytes(), nil
 	}
+	// Manifest missing or empty — fall back to a filesystem walk. Logged at
+	// info so operators notice if it happens on the steady-state path
+	// (expected only for indexes built before the manifest size record landed).
+	logging.L().Info().Str("dir", dir).Msg("MeasureDir: manifest missing, falling back to walk")
 	var total uint64
 	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
 		if err != nil {
