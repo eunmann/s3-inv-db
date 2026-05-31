@@ -39,27 +39,14 @@ type Discoverer struct {
 // surface with only their run timestamp.
 const DefaultManifestFetches = 10
 
-// Option configures a Discoverer at construction time.
-type Option func(*Discoverer)
-
-// WithManifestFetches overrides the per-configuration manifest-fetch
-// cap. Pass 0 to fetch every run's manifest.
-func WithManifestFetches(n int) Option {
-	return func(d *Discoverer) { d.manifestFetches = n }
-}
-
 // New constructs a Discoverer from an s3.Client and a parsed bucket/prefix.
 // Prefix may be empty or end with "/"; callers should normalize.
-func New(client *s3.Client, bucket, prefix string, opts ...Option) *Discoverer {
+func New(client *s3.Client, bucket, prefix string) *Discoverer {
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
-	d := &Discoverer{client: client, bucket: bucket, prefix: prefix, manifestFetches: DefaultManifestFetches}
-	for _, opt := range opts {
-		opt(d)
-	}
 
-	return d
+	return &Discoverer{client: client, bucket: bucket, prefix: prefix, manifestFetches: DefaultManifestFetches}
 }
 
 // runFolderRE matches the two timestamp folder shapes S3 Inventory uses
@@ -70,13 +57,13 @@ var runFolderRE = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}(-\d{2})?Z$`
 
 // NewFromS3URI builds a Discoverer from an s3:// URI like
 // "s3://bucket/optional/prefix/".
-func NewFromS3URI(client *s3.Client, uri string, opts ...Option) (*Discoverer, error) {
+func NewFromS3URI(client *s3.Client, uri string) (*Discoverer, error) {
 	parsed, err := s3fetch.ParseS3URI(uri)
 	if err != nil {
 		return nil, fmt.Errorf("parse source URI %q: %w", uri, err)
 	}
 
-	return New(client, parsed.Bucket, parsed.Key, opts...), nil
+	return New(client, parsed.Bucket, parsed.Key), nil
 }
 
 // Bucket returns the destination bucket name being discovered.

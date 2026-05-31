@@ -9,7 +9,7 @@ import (
 
 func TestStreamingMPHFBuilder_CloseSurfacesErrors(t *testing.T) {
 	dir := t.TempDir()
-	b, err := NewStreamingMPHFBuilder(dir, false)
+	b, err := NewStreamingMPHFBuilder(dir)
 	if err != nil {
 		t.Fatalf("NewStreamingMPHFBuilder: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestStreamingMPHFBuilder_BuildTwiceRejected(t *testing.T) {
 	// previously have silently re-run writeEmpty — also guarded.
 	dir := t.TempDir()
 	outDir := t.TempDir()
-	b, err := NewStreamingMPHFBuilder(dir, false)
+	b, err := NewStreamingMPHFBuilder(dir)
 	if err != nil {
 		t.Fatalf("NewStreamingMPHFBuilder: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestStreamingMPHFBuilder_BuildTwiceRejected(t *testing.T) {
 func TestStreamingMPHFBuilder_BuildTwiceRejectedEmpty(t *testing.T) {
 	// Same guard, but on the count==0 fast path that writes empty
 	// index files via writeEmpty.
-	b, err := NewStreamingMPHFBuilder(t.TempDir(), false)
+	b, err := NewStreamingMPHFBuilder(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewStreamingMPHFBuilder: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestStreamingMPHFBuilder_BuildTwiceRejectedEmpty(t *testing.T) {
 
 func TestStreamingMPHFBuilder_CloseClean(t *testing.T) {
 	dir := t.TempDir()
-	b, err := NewStreamingMPHFBuilder(dir, false)
+	b, err := NewStreamingMPHFBuilder(dir)
 	if err != nil {
 		t.Fatalf("NewStreamingMPHFBuilder: %v", err)
 	}

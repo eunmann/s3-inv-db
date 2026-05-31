@@ -87,8 +87,7 @@ const inventorySelectCols = `
     last_auto_load_failed_at,
     last_accessed_at, load_duration_ns`
 
-// Get fetches one inventory by ID. Returns ErrStoreNotFound when the
-// row is missing.
+// Get returns ErrStoreNotFound when no row matches.
 func (s *Store) Get(ctx context.Context, id ID) (Info, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+inventorySelectCols+` FROM inventories WHERE id = ?`, id)
 	info, err := scanInfo(row)

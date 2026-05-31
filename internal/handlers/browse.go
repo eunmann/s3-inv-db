@@ -28,19 +28,14 @@ type (
 )
 
 // BrowseInventoryGroup is one (sourceBucket, inventoryID) configuration
-// with all of its loaded runs. The Browse page's inventory <select>
-// renders one <optgroup> per group so the user navigates configuration
-// first, then picks a run within it.
+// with all of its loaded runs.
 type BrowseInventoryGroup struct {
-	ConfigLabel string // "<src>/<inv>" — the group header
+	ConfigLabel string
 	Options     []BrowseInventoryOption
 }
 
 // BrowseInventoryOption is one loaded run inside a BrowseInventoryGroup.
-// Label is the full "<src>/<inv> · <run>" string and is what the closed
-// <select> displays once the user picks a value — native HTML doesn't
-// surface the surrounding <optgroup> in the chip, so the option text
-// has to be self-identifying.
+// Label is the self-identifying "<src>/<inv> · <run>" string.
 type BrowseInventoryOption struct {
 	ID    inventory.ID
 	Label string

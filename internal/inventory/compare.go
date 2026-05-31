@@ -52,8 +52,7 @@ func NormalizeCompareSort(sortBy, dir string) SortParams {
 }
 
 // CompareSortLinks builds the per-column {sort, dir, indicator} bundle
-// for the compare children table. Same shape as inventory.SortLinks so
-// the template can reuse the helper pattern.
+// for the compare children table.
 func CompareSortLinks(currentSort, currentDir string) map[string]BrowseSortLink {
 	cols := []struct {
 		key        string
@@ -84,10 +83,8 @@ func CompareSortLinks(currentSort, currentDir string) map[string]BrowseSortLink 
 }
 
 // Compare-view types and pure helpers. Two loaded indexes are compared at
-// one prefix to surface the deltas a user can act on: how the totals
-// moved, and which immediate-child segments grew, shrank, or appeared.
-// HTTP-shape concerns (cost formatting, sort links, pagination wiring)
-// live in the handler that composes these values.
+// one prefix to surface the deltas: how the totals moved, and which
+// immediate-child segments grew, shrank, or appeared.
 
 // CompareStatus classifies a child relative to the two runs.
 //

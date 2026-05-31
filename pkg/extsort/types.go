@@ -52,8 +52,8 @@ func (r *PrefixRow) Reset() {
 	*r = PrefixRow{}
 }
 
-// Merge sums counts and bytes from other into r. Prefix and Depth
-// are not modified — only the per-prefix stats accumulate.
+// Merge accumulates counts and bytes from other into r; Prefix and
+// Depth are left untouched.
 func (r *PrefixRow) Merge(other *PrefixRow) {
 	r.Count += other.Count
 	r.TotalBytes += other.TotalBytes
@@ -224,23 +224,12 @@ func (s *PrefixStats) ToPrefixRow(prefix string) *PrefixRow {
 }
 
 // Config holds pipeline configuration. Grouped into substructs by
-// concern: S3 download, Merge concurrency, Observe (progress+events).
+// concern: Merge concurrency, Observe (progress+events).
 type Config struct {
 	Observe  ObserveConfig
 	TempDir  string
 	Merge    MergeConfig
-	S3       S3Config
 	MaxDepth int
-}
-
-// S3Config tunes the S3 download manager.
-type S3Config struct {
-	// DownloadPartConcurrency: parallel range downloads per object.
-	// Default max(2, NumCPU/4).
-	DownloadPartConcurrency int
-
-	// DownloadPartSize per part. Default 16 MiB.
-	DownloadPartSize int64
 }
 
 // MergeConfig tunes the K-way merge phase.
@@ -273,18 +262,11 @@ type ObserveConfig struct {
 // process memory limit is governed by GOMEMLIMIT (see
 // sysmem.ApplyMemoryLimit) rather than a fractional partition here.
 func DefaultConfig() Config {
-	numCPU := runtime.NumCPU()
-	const minPartConcurrency = 2
-	partConcurrency := max(numCPU/4, minPartConcurrency)
-	mergeWorkers := max(numCPU/2, 1)
+	mergeWorkers := max(runtime.NumCPU()/2, 1)
 
 	return Config{
 		TempDir:  "",
 		MaxDepth: 0,
-		S3: S3Config{
-			DownloadPartConcurrency: partConcurrency,
-			DownloadPartSize:        16 * 1024 * 1024,
-		},
 		Merge: MergeConfig{
 			NumWorkers:        mergeWorkers,
 			MaxFanIn:          16,

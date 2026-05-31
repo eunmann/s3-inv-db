@@ -53,10 +53,6 @@ func (b *DepthIndexBuilder) Add(pos uint64, depth uint32) error {
 	return nil
 }
 
-// Build writes the depth index files (depth_offsets.u64 +
-// depth_positions.u64), concatenating per-depth disk buckets in
-// depth order. Each bucket is read once and copied to the final
-// file. Per-bucket scratch is closed and removed as we go.
 func (b *DepthIndexBuilder) Build(outDir string) error {
 	offsetsPath := filepath.Join(outDir, DepthOffsetsFile)
 	positionsPath := filepath.Join(outDir, DepthPositionsFile)

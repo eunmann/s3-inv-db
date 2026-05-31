@@ -47,9 +47,7 @@ type InventoryEntry struct {
 	RetentionCount uint32 `json:"retention_count,omitempty"`
 }
 
-// Load reads and parses the file at path. Returns an empty Config when
-// path is empty so callers don't need a separate nil check before
-// resolving precedence with CLI/env flags.
+// Load returns an empty Config (not nil) when path is empty.
 func Load(path string) (*Config, error) {
 	if path == "" {
 		return &Config{}, nil

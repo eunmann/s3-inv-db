@@ -190,20 +190,6 @@ func (r *ArrayReader) Width() uint32 {
 	return r.header.Width
 }
 
-// GetU32 returns the uint32 value at the given index. Requires the
-// array to have been written with width=4.
-func (r *ArrayReader) GetU32(idx uint64) (uint32, error) {
-	if idx >= r.header.Count {
-		return 0, ErrBoundsCheck
-	}
-	if r.header.Width != 4 {
-		return 0, fmt.Errorf("%w: expected 4, got %d", ErrWidthMismatch, r.header.Width)
-	}
-	offset := idx * 4
-
-	return binary.LittleEndian.Uint32(r.data[offset:]), nil
-}
-
 // GetU64 returns the uint64 value at the given index. Honours any
 // Header.Width in [1,8] by reading 8 bytes and masking to that width;
 // files with width < 8 carry an 8-byte tail pad so the load is in

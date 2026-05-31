@@ -25,8 +25,6 @@ var (
 	ErrMPHFAmbiguousKey = errors.New("MPHF key returned sentinel zero")
 	// ErrMPHFUnknownHash indicates the MPHF returned a hash not present in the input set.
 	ErrMPHFUnknownHash = errors.New("MPHF returned unknown hash")
-	// ErrPrefixBlobNotLoaded indicates no prefix blob (raw or segmented) is loaded.
-	ErrPrefixBlobNotLoaded = errors.New("prefix blob not loaded")
 	// ErrNoPrefixStorage indicates the MPHF has no prefix storage attached.
 	ErrNoPrefixStorage = errors.New("no prefix storage loaded")
 	// ErrLookupWrongPos indicates a verification lookup returned an unexpected position.

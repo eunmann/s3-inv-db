@@ -59,8 +59,7 @@ type StreamingMPHFBuilder struct {
 	totalBytes uint64
 	bufferSize int
 
-	usePrefixDict bool
-	built         bool
+	built bool
 }
 
 // ErrMPHFAlreadyBuilt is returned when Build is called more than
@@ -71,10 +70,8 @@ type StreamingMPHFBuilder struct {
 var ErrMPHFAlreadyBuilt = errors.New("StreamingMPHFBuilder.Build already called")
 
 // NewStreamingMPHFBuilder creates a new streaming MPHF builder. TempDir
-// holds prefix strings plus the disk-backed u64 arrays. When
-// usePrefixDict is true, the builder writes dictionary-encoded prefix
-// storage on Build; when false, it writes the legacy preorder blob.
-func NewStreamingMPHFBuilder(tempDir string, usePrefixDict bool) (*StreamingMPHFBuilder, error) {
+// holds prefix strings plus the disk-backed u64 arrays.
+func NewStreamingMPHFBuilder(tempDir string) (*StreamingMPHFBuilder, error) {
 	tempFile, err := os.CreateTemp(tempDir, "mphf_prefixes_*.tmp")
 	if err != nil {
 		return nil, fmt.Errorf("create temp file: %w", err)
@@ -117,15 +114,14 @@ func NewStreamingMPHFBuilder(tempDir string, usePrefixDict bool) (*StreamingMPHF
 	}
 
 	b := &StreamingMPHFBuilder{
-		hashes:        hashes,
-		preorderPos:   preorderPos,
-		fingerprints:  fingerprints,
-		tempFile:      tempFile,
-		tempEncoder:   enc,
-		tempWriter:    bufio.NewWriterSize(enc, 1024*1024),
-		tempPath:      tempFile.Name(),
-		bufferSize:    1024 * 1024,
-		usePrefixDict: usePrefixDict,
+		hashes:       hashes,
+		preorderPos:  preorderPos,
+		fingerprints: fingerprints,
+		tempFile:     tempFile,
+		tempEncoder:  enc,
+		tempWriter:   bufio.NewWriterSize(enc, 1024*1024),
+		tempPath:     tempFile.Name(),
+		bufferSize:   1024 * 1024,
 	}
 
 	return b, nil
@@ -212,12 +208,7 @@ func (b *StreamingMPHFBuilder) Close() error {
 	return errors.Join(errs...)
 }
 
-// Build constructs the MPHF and writes it to the output directory.
-// Memory usage during Build is bounded by buffer sizes, not by prefix count.
-//
-// Optimization notes:
-//   - ReverseMap: Uses bbhash's ReverseMap to avoid expensive Find() calls (~17x faster).
-//   - Option 4: Uses pre-computed fingerprints from Add phase (no recomputation).
+// Build's memory usage is bounded by buffer sizes, not by prefix count.
 func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	if b.built {
 		return ErrMPHFAlreadyBuilt
@@ -336,14 +327,8 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 
 	log.Debug().Msg("MPHF: writing prefix blob")
 
-	if b.usePrefixDict {
-		if err := b.writePrefixBlobDictionary(outDir); err != nil {
-			return fmt.Errorf("write dict prefix blob: %w", err)
-		}
-	} else {
-		if err := b.writePrefixBlobPreorder(outDir); err != nil {
-			return fmt.Errorf("write prefix blob: %w", err)
-		}
+	if err := b.writePrefixBlobDictionary(outDir); err != nil {
+		return fmt.Errorf("write dict prefix blob: %w", err)
 	}
 
 	log.Debug().Msg("MPHF: build complete")
@@ -540,65 +525,6 @@ func (b *StreamingMPHFBuilder) openPrefixReader() (*bufio.Reader, *zstd.Decoder,
 	return bufio.NewReaderSize(dec, b.bufferSize), dec, nil
 }
 
-// writePrefixBlobPreorder writes prefixes in preorder (original Add order) for GetPrefix.
-// This reads from the temp file in sequence.
-func (b *StreamingMPHFBuilder) writePrefixBlobPreorder(outDir string) error {
-	blobPath := filepath.Join(outDir, PrefixBlobFile)
-	offsetsPath := filepath.Join(outDir, PrefixOffsetsFile)
-
-	writer, err := NewBlobWriter(blobPath, offsetsPath)
-	if err != nil {
-		return fmt.Errorf("create blob writer: %w", err)
-	}
-
-	reader, dec, err := b.openPrefixReader()
-	if err != nil {
-		writer.Close()
-
-		return err
-	}
-	defer dec.Close()
-
-	// Read all prefixes in original (preorder) order and write to blob
-	var lenBuf [4]byte
-	n := int(b.count)
-
-	// Reusable buffer for reading prefixes
-	prefixBuf := make([]byte, 0, 256)
-
-	for i := range n {
-		// Read prefix length
-		if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
-			writer.Close()
-
-			return fmt.Errorf("read prefix length at %d: %w", i, err)
-		}
-		prefixLen := binary.LittleEndian.Uint32(lenBuf[:])
-
-		// Grow buffer if needed
-		if cap(prefixBuf) < int(prefixLen) {
-			prefixBuf = make([]byte, prefixLen)
-		}
-		prefixBuf = prefixBuf[:prefixLen]
-
-		// Read prefix
-		if _, err := io.ReadFull(reader, prefixBuf); err != nil {
-			writer.Close()
-
-			return fmt.Errorf("read prefix at %d: %w", i, err)
-		}
-
-		// Write to blob (WriteBytes avoids string conversion)
-		if err := writer.WriteBytes(prefixBuf); err != nil {
-			writer.Close()
-
-			return fmt.Errorf("write prefix %d to blob: %w", i, err)
-		}
-	}
-
-	return writer.Close()
-}
-
 // writePrefixBlobDictionary writes prefixes as dictionary-encoded
 // segment-ID sequences (prefix_dict.ids.u32 + prefix_dict.prefix_off.u64).
 func (b *StreamingMPHFBuilder) writePrefixBlobDictionary(outDir string) error {
@@ -666,26 +592,12 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 		return fmt.Errorf("close empty combined fp+pos writer: %w", err)
 	}
 
-	if b.usePrefixDict {
-		writer, err := NewDictPrefixWriter(outDir)
-		if err != nil {
-			return fmt.Errorf("create empty dict prefix writer: %w", err)
-		}
-		if err := writer.Close(); err != nil {
-			return fmt.Errorf("close empty dict prefix writer: %w", err)
-		}
-
-		return nil
-	}
-
-	blobPath := filepath.Join(outDir, PrefixBlobFile)
-	offsetsPath := filepath.Join(outDir, PrefixOffsetsFile)
-	writer, err := NewBlobWriter(blobPath, offsetsPath)
+	writer, err := NewDictPrefixWriter(outDir)
 	if err != nil {
-		return fmt.Errorf("create empty blob writer: %w", err)
+		return fmt.Errorf("create empty dict prefix writer: %w", err)
 	}
 	if err := writer.Close(); err != nil {
-		return fmt.Errorf("close empty blob writer: %w", err)
+		return fmt.Errorf("close empty dict prefix writer: %w", err)
 	}
 
 	return nil
@@ -822,7 +734,5 @@ var errMPHFArrayLengthMismatch = errors.New("mphf fingerprints/positions length 
 // CombinedMPHFArrayFile is the filename used for the combined
 // interleaved fingerprint+position table. Slot i holds the
 // fingerprint at offset 2i and the position at 2i+1, so a single
-// cache line covers both reads on a Lookup. Replaces the older
-// separate mph_fp.u64 / mph_pos.u64 files; openMPHFArrays falls back
-// to the separate format when this file isn't present.
+// cache line covers both reads on a Lookup.
 const CombinedMPHFArrayFile = "mph_fp_pos.u64"

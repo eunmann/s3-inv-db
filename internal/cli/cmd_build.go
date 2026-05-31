@@ -80,7 +80,6 @@ func runBuildExtSort(outDir, s3Manifest string, maxDepth int, eventLogPath strin
 	config.Observe = tracker.wire()
 
 	logger.Info().
-		Int("s3_part_concurrency", config.S3.DownloadPartConcurrency).
 		Int("max_depth", config.MaxDepth).
 		Msg("pipeline configuration")
 

@@ -70,7 +70,7 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		tempDir = os.TempDir()
 	}
 
-	mphfBuilder, err := format.NewStreamingMPHFBuilder(tempDir, true)
+	mphfBuilder, err := format.NewStreamingMPHFBuilder(tempDir)
 	if err != nil {
 		return nil, fmt.Errorf("create MPHF builder: %w", err)
 	}
