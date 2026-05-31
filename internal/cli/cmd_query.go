@@ -29,7 +29,7 @@ type queryCostEstimate struct {
 
 func runQuery(args []string) error {
 	fs := flag.NewFlagSet("query", flag.ContinueOnError)
-	configPath := fs.String("config", os.Getenv("S3INV_CONFIG"), "path to JSON config file (overridden by explicit flags)")
+	configPath := fs.String("config", "", "path to JSON config file (overridden by explicit flags)")
 	indexDir := fs.String("index", "", "index directory to query")
 	prefix := fs.String("prefix", "", "prefix to query")
 	showTiers := fs.Bool("show-tiers", false, "show per-tier breakdown")

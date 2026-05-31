@@ -24,7 +24,7 @@ type browseOutput struct {
 
 func runBrowse(args []string) error {
 	fs := flag.NewFlagSet("browse", flag.ContinueOnError)
-	configPath := fs.String("config", os.Getenv("S3INV_CONFIG"), "path to JSON config file")
+	configPath := fs.String("config", "", "path to JSON config file")
 	indexDir := fs.String("index", "", "index directory to query")
 	parent := fs.String("prefix", "", "prefix to browse (empty = root)")
 	depth := fs.Int("depth", 1, "relative depth below prefix")

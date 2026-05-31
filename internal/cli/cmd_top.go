@@ -31,7 +31,7 @@ var ErrBadTopBy = errors.New("--by must be 'bytes' or 'count'")
 
 func runTop(args []string) error {
 	fs := flag.NewFlagSet("top", flag.ContinueOnError)
-	configPath := fs.String("config", os.Getenv("S3INV_CONFIG"), "path to JSON config file")
+	configPath := fs.String("config", "", "path to JSON config file")
 	indexDir := fs.String("index", "", "index directory to query")
 	parent := fs.String("parent", "", "parent prefix to rank descendants under (empty = root)")
 	depth := fs.Int("depth", 1, "relative depth below parent")

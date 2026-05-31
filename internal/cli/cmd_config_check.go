@@ -22,7 +22,7 @@ type configCheckOutput struct {
 
 func runConfigCheck(args []string) error {
 	fs := flag.NewFlagSet("config-check", flag.ContinueOnError)
-	configPath := fs.String("config", os.Getenv("S3INV_CONFIG"), "path to JSON config file")
+	configPath := fs.String("config", "", "path to JSON config file")
 	outputFlag := addOutputFlag(fs)
 
 	if err := fs.Parse(args); err != nil {

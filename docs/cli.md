@@ -16,10 +16,10 @@ config-check  Validate a JSON config file and print set fields
 Every subcommand accepts `--output text|json` (default `text`) — pass
 `--output json` to emit a single JSON object on stdout for scripting.
 
-The `--config <path>` flag (or `S3INV_CONFIG`) loads a JSON file
-shared with the server. From the file the CLI honors `verbose`,
-`pretty_logs`, and `price_table` only. Other server-side keys are
-ignored. Explicit CLI flags always win over the file.
+The `--config <path>` flag loads a JSON file shared with the server.
+From the file the CLI honors `verbose`, `pretty_logs`, and
+`price_table` only. Other server-side keys are ignored. Explicit CLI
+flags always win over the file.
 
 ## `build`
 

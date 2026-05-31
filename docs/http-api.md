@@ -20,9 +20,8 @@ s3-inv-db-server \
   --auto-load \
   --max-index-disk 200GB
 
-# All flags can also come from a JSON file via --config (or
-# S3INV_CONFIG). Explicit flags override the file. See README for
-# the full schema.
+# All flags can also come from a JSON file via --config.
+# Explicit flags override the file. See README for the full schema.
 s3-inv-db-server --config /etc/s3inv/server.json
 ```
 

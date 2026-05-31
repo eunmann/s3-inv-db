@@ -33,7 +33,7 @@ type compareOutput struct {
 
 func runCompare(args []string) error {
 	fs := flag.NewFlagSet("compare", flag.ContinueOnError)
-	configPath := fs.String("config", os.Getenv("S3INV_CONFIG"), "path to JSON config file")
+	configPath := fs.String("config", "", "path to JSON config file")
 	fromIdx := fs.String("from", "", "baseline index directory")
 	toIdx := fs.String("to", "", "comparison index directory")
 	prefix := fs.String("prefix", "", "prefix at which to compare (empty = root)")

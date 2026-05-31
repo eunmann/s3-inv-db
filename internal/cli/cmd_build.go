@@ -20,7 +20,7 @@ import (
 
 func runBuild(args []string) error {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
-	configPath := fs.String("config", os.Getenv("S3INV_CONFIG"), "path to JSON config file (overridden by explicit flags)")
+	configPath := fs.String("config", "", "path to JSON config file (overridden by explicit flags)")
 	outDir := fs.String("out", "", "output directory for index files")
 	s3Manifest := fs.String("s3-manifest", "", "S3 URI to inventory manifest.json (s3://bucket/path/manifest.json)")
 	verbose := fs.Bool("verbose", false, "enable debug level logging")
