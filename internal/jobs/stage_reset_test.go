@@ -20,7 +20,7 @@ func TestManager_ReportResetsProgressOnStageChange(t *testing.T) {
 	done := make(chan struct{})
 	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, report func(jobs.Update)) error {
 		// Stage 1: downloading, 5/10 done.
-		report(jobs.Update{Stage: "downloading", BytesDone: 5, BytesTotal: 10})
+		report(jobs.Update{Stage: "downloading", StageDone: 5, StageTotal: 10})
 		<-step
 		// Stage 2: building, no quantitative progress yet. The previous
 		// 5/10 must NOT persist into this stage.
@@ -39,8 +39,8 @@ func TestManager_ReportResetsProgressOnStageChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get mid: %v", err)
 	}
-	if mid.BytesDone != 5 || mid.BytesTotal != 10 {
-		t.Errorf("downloading snapshot: BytesDone=%d BytesTotal=%d, want 5/10", mid.BytesDone, mid.BytesTotal)
+	if mid.StageDone != 5 || mid.StageTotal != 10 {
+		t.Errorf("downloading snapshot: BytesDone=%d BytesTotal=%d, want 5/10", mid.StageDone, mid.StageTotal)
 	}
 
 	close(step)
@@ -52,9 +52,9 @@ func TestManager_ReportResetsProgressOnStageChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get building: %v", err)
 	}
-	if building.BytesDone != 0 || building.BytesTotal != 0 {
+	if building.StageDone != 0 || building.StageTotal != 0 {
 		t.Errorf("building snapshot: BytesDone=%d BytesTotal=%d, want 0/0 (stale download progress leaked)",
-			building.BytesDone, building.BytesTotal)
+			building.StageDone, building.StageTotal)
 	}
 }
 

@@ -247,17 +247,17 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 		if u.Stage != "" && u.Stage != job.Stage {
 			job.Stage = u.Stage
 			job.Progress = 0
-			job.BytesDone = 0
-			job.BytesTotal = 0
+			job.StageDone = 0
+			job.StageTotal = 0
 		}
 		if u.Progress > 0 {
 			job.Progress = u.Progress
 		}
-		if u.BytesTotal > 0 {
-			job.BytesTotal = u.BytesTotal
+		if u.StageTotal > 0 {
+			job.StageTotal = u.StageTotal
 		}
-		if u.BytesDone > 0 {
-			job.BytesDone = u.BytesDone
+		if u.StageDone > 0 {
+			job.StageDone = u.StageDone
 		}
 		if u.Stages != nil {
 			job.Stages = u.Stages

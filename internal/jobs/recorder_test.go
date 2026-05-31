@@ -203,7 +203,13 @@ func TestRecorder_OnProgressAfterCloseIsNoop(t *testing.T) {
 	}
 }
 
-func TestRecorder_SpillCompletedAccumulatesIntoDownloadingStage(t *testing.T) {
+func TestRecorder_SpillCompletedDoesNotInflateRows(t *testing.T) {
+	// SpillCompleted carries the post-aggregation prefix-row count from
+	// an internal spill — adding it to the user-facing Rows would
+	// inflate "downloading: N rows" past the actual inventory-object
+	// count as soon as a real (spilling) inventory ran. The recorder
+	// deliberately ignores these events; the authoritative final
+	// objects count comes in via EvtStageEnd.
 	rep := &captureReporter{}
 	rec := jobs.NewRecorder(rep.report)
 	defer rec.Close()
@@ -226,19 +232,15 @@ func TestRecorder_SpillCompletedAccumulatesIntoDownloadingStage(t *testing.T) {
 		Time: time.Now(),
 	})
 
-	if !waitFor(50*time.Millisecond, func() bool {
-		s := rec.Snapshot()
-
-		return len(s) == 1 && s[0].Rows >= 750
-	}) {
-		t.Fatalf("spill events did not accumulate: %+v", rec.Snapshot())
-	}
+	// Give the drainer a moment so a stale +=Rows path would have
+	// surfaced; verify Rows stays at 0.
+	time.Sleep(50 * time.Millisecond)
 	stage := rec.Snapshot()[0]
 	if stage.Name != stageDownloading {
 		t.Errorf("stage[0].Name = %q, want %q", stage.Name, stageDownloading)
 	}
-	if stage.Rows != 750 {
-		t.Errorf("Rows after two spills = %d, want 750", stage.Rows)
+	if stage.Rows != 0 {
+		t.Errorf("Rows after two spills = %d, want 0 (spills do not contribute to Rows)", stage.Rows)
 	}
 }
 

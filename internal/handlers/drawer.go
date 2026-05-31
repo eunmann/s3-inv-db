@@ -246,8 +246,13 @@ func (h *Handlers) computeBaseline(r *http.Request, latest jobs.Job) baselineEst
 		return est
 	}
 	elapsed := time.Since(latest.StartedAt)
-	remaining := max(baseline-elapsed, 0)
-	est.OverallETA = humanfmt.Duration(remaining)
+	remaining := baseline - elapsed
+	// remaining <= 0 means we're already past the baseline; the build
+	// is overrunning. Leave OverallETA empty so the drawer doesn't
+	// render "~0ns left" — elapsed alone is more honest.
+	if remaining > 0 {
+		est.OverallETA = humanfmt.Duration(remaining)
+	}
 
 	return est
 }

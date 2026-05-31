@@ -59,9 +59,10 @@
 
     {{if .LatestJob}}
     {{- /* Overall progress + ETA block. Progress bar uses the current
-           stage's BytesDone/BytesTotal because the pipeline reports
-           per-stage units (chunks for download, runs for build). The
-           overall ETA is the baseline-projected remaining wall clock. */ -}}
+           stage's StageDone/StageTotal counter — units vary by stage
+           (chunks for download, run files for build) so it is opaque
+           progress, not bytes. The overall ETA is the baseline-projected
+           remaining wall clock from the prior successful build. */ -}}
     <section aria-label="Overall progress" class="space-y-1.5">
         <div class="flex items-end justify-between text-xs">
             <div class="text-gray-700 dark:text-gray-200 font-medium">
@@ -78,9 +79,22 @@
                 {{end}}
             </div>
         </div>
+        {{- /* Two bar styles: determinate (a width % when the stage
+               reports a meaningful done/total) and indeterminate (a
+               sliding chip when the build is live but the current stage
+               doesn't surface a numeric total — index-build phase,
+               between-stage gaps). Avoids a stuck-looking 5% bar. */ -}}
+        {{$pct := progressPct .LatestJob.StageDone .LatestJob.StageTotal}}
+        {{$succeeded := eq (printf "%s" .LatestJob.State) "succeeded"}}
+        {{$failed := eq (printf "%s" .LatestJob.State) "failed"}}
+        {{$cancelled := eq (printf "%s" .LatestJob.State) "cancelled"}}
         <div class="h-1.5 w-full bg-gray-100 dark:bg-gray-900/40 rounded overflow-hidden">
-            <div class="h-full {{if eq (printf "%s" .LatestJob.State) "failed"}}bg-red-500 dark:bg-red-400{{else if eq (printf "%s" .LatestJob.State) "cancelled"}}bg-yellow-500 dark:bg-yellow-400{{else if eq (printf "%s" .LatestJob.State) "succeeded"}}bg-green-500 dark:bg-green-400{{else}}bg-indigo-500 dark:bg-indigo-400{{end}} transition-all"
-                 style="width: {{if eq (printf "%s" .LatestJob.State) "succeeded"}}100{{else if gt (progressPct .LatestJob.BytesDone .LatestJob.BytesTotal) 0}}{{progressPct .LatestJob.BytesDone .LatestJob.BytesTotal}}{{else if .Live}}5{{else}}0{{end}}%"></div>
+            {{if and .Live (eq $pct 0)}}
+            <div class="h-full progress-indeterminate text-indigo-500 dark:text-indigo-400" aria-label="Working"></div>
+            {{else}}
+            <div class="h-full {{if $failed}}bg-red-500 dark:bg-red-400{{else if $cancelled}}bg-yellow-500 dark:bg-yellow-400{{else if $succeeded}}bg-green-500 dark:bg-green-400{{else}}bg-indigo-500 dark:bg-indigo-400{{end}} transition-all"
+                 style="width: {{if $succeeded}}100{{else if gt $pct 0}}{{$pct}}{{else}}0{{end}}%"></div>
+            {{end}}
         </div>
         {{if .BaselineH}}
         <p class="text-[11px] text-gray-400 dark:text-gray-500" title="Computed from the most recent successful build of the same inventory configuration">
@@ -111,9 +125,29 @@
                         <span class="font-medium text-gray-800 dark:text-gray-100">{{.Label}}</span>
                         {{if .DurationH}}<span class="text-gray-400 dark:text-gray-500 font-mono">{{.DurationH}}</span>{{end}}
                     </div>
-                    {{if or (gt .Bytes 0) (gt .Rows 0)}}
+                    {{- /* "Rows" means different things at different stages
+                           — relabel and selectively hide bytes so the meaning
+                           is unambiguous. Downloading counts inventory rows
+                           (= S3 objects) and their summed claimed sizes;
+                           building counts unique prefixes and has no
+                           meaningful byte total. */ -}}
+                    {{if eq .Name "downloading"}}
+                        {{if or (gt .Bytes 0) (gt .Rows 0)}}
+                        <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono">
+                            {{if gt .Rows 0}}{{formatCount .Rows}} objects{{end}}
+                            {{if and (gt .Rows 0) (gt .Bytes 0)}} · {{end}}
+                            {{if gt .Bytes 0}}{{formatBytes .Bytes}} total size{{end}}
+                        </div>
+                        {{end}}
+                    {{else if eq .Name "building"}}
+                        {{if gt .Rows 0}}
+                        <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono">
+                            {{formatCount .Rows}} prefixes
+                        </div>
+                        {{end}}
+                    {{else if or (gt .Bytes 0) (gt .Rows 0)}}
                     <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono">
-                        {{if gt .Rows 0}}{{formatCount .Rows}} rows{{end}}
+                        {{if gt .Rows 0}}{{formatCount .Rows}}{{end}}
                         {{if and (gt .Rows 0) (gt .Bytes 0)}} · {{end}}
                         {{if gt .Bytes 0}}{{formatBytes .Bytes}}{{end}}
                     </div>

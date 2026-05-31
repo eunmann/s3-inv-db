@@ -44,8 +44,8 @@ func (r *Recorder) OnProgress(stage string, done, total int64) {
 	r.applyStageLocked(stage, done, total)
 	r.report(Update{
 		Stage:      stage,
-		BytesDone:  done,
-		BytesTotal: total,
+		StageDone:  done,
+		StageTotal: total,
 		Stages:     snapshotStages(r.stages),
 	})
 }
@@ -118,18 +118,18 @@ func (r *Recorder) handleEvent(ev events.Event) {
 			return
 		}
 		changed = r.enrichOnStageEndLocked(ev, st)
-	case events.EvtSpillCompleted:
-		sc, ok := ev.Payload.(events.SpillCompleted)
-		if !ok {
-			return
-		}
-		changed = r.accumulateSpillLocked(sc)
 	case events.EvtBatchCommitted:
 		bc, ok := ev.Payload.(events.BatchCommitted)
 		if !ok {
 			return
 		}
 		changed = r.accumulateBatchLocked(ev.Stage, bc)
+	// EvtSpillCompleted is deliberately not consumed: SpillCompleted.Rows
+	// counts post-aggregation prefix-row writes (an internal pipeline
+	// metric, can be ~10× the inventory-row count for deep keys). Adding
+	// it onto the user-facing Rows would inflate "downloading: N rows"
+	// past the actual object count as soon as a real inventory spills.
+	// The authoritative final count arrives on EvtStageEnd.
 	default:
 		return
 	}
@@ -166,16 +166,6 @@ func (r *Recorder) enrichOnStageEndLocked(ev events.Event, st events.StageTiming
 	}
 
 	return false
-}
-
-func (r *Recorder) accumulateSpillLocked(sc events.SpillCompleted) bool {
-	idx := r.findInProgressIndexLocked("downloading")
-	if idx < 0 {
-		return false
-	}
-	r.stages[idx].Rows += sc.Rows
-
-	return true
 }
 
 func (r *Recorder) accumulateBatchLocked(stage events.Stage, bc events.BatchCommitted) bool {

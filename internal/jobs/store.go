@@ -25,6 +25,10 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
+// jobColumns is the shared column list for every Job CRUD statement.
+// The bytes_total / bytes_done columns store StageTotal / StageDone —
+// the names predate progress units becoming polymorphic (chunks for
+// download, run files for build, …). Kept to avoid a schema migration.
 const jobColumns = `id, inventory_id, kind, state, stage, progress,
                bytes_total, bytes_done, started_at, finished_at,
                error, updated_at, stages_json, attempt_count, prev_job_id`
@@ -56,7 +60,7 @@ func (s *Store) Upsert(ctx context.Context, j Job) error {
             attempt_count = excluded.attempt_count,
             prev_job_id   = excluded.prev_job_id`,
 		j.ID, j.InventoryID, string(j.Kind), string(j.State), j.Stage,
-		j.Progress, j.BytesTotal, j.BytesDone,
+		j.Progress, j.StageTotal, j.StageDone,
 		inventory.UnixOrZero(j.StartedAt), inventory.UnixOrZero(j.FinishedAt),
 		j.Error, time.Now().Unix(),
 		stagesJSON, attempt, string(j.PrevJobID),
@@ -165,7 +169,7 @@ func scanJob(r rowScanner) (Job, error) {
 	var attemptCount int
 	if err := r.Scan(
 		&j.ID, &j.InventoryID, &kind, &state, &j.Stage, &j.Progress,
-		&j.BytesTotal, &j.BytesDone, &startedAt, &finishedAt, &j.Error, &updatedAt,
+		&j.StageTotal, &j.StageDone, &startedAt, &finishedAt, &j.Error, &updatedAt,
 		&stagesJSON, &attemptCount, &prevJobID,
 	); err != nil {
 		return Job{}, fmt.Errorf("scan job: %w", err)

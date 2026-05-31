@@ -54,7 +54,10 @@ func TestBuildWith_BuildsIndexFromSeededManifest(t *testing.T) {
 	if outDir != l.CacheDirFor(ck) {
 		t.Errorf("outDir = %q, want %q", outDir, l.CacheDirFor(ck))
 	}
-	for _, want := range []string{"preparing", "done"} {
+	// Completion is signalled by the scheduler's terminal state flip,
+	// not a "done" stage sentinel — the loader deliberately doesn't
+	// emit one. Verify the real pipeline stages were reported.
+	for _, want := range []string{"preparing", "downloading", "building"} {
 		found := slices.Contains(stages, want)
 		if !found {
 			t.Errorf("stages = %v, missing %q", stages, want)

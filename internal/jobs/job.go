@@ -56,6 +56,14 @@ func (s State) IsLive() bool {
 }
 
 // Job is one unit of background work.
+//
+// StageDone / StageTotal hold the current stage's step count and step
+// total (e.g. chunks-parsed / chunks-total during downloading, merged
+// run-files / total run-files during building). The unit varies by
+// stage, so callers should treat them as opaque progress numbers, not
+// bytes. They are persisted in legacy SQL columns bytes_done /
+// bytes_total — those names predate the units becoming polymorphic
+// and are kept to avoid a schema migration.
 type Job struct {
 	StartedAt    time.Time
 	FinishedAt   time.Time
@@ -70,8 +78,8 @@ type Job struct {
 	Stages       []StageRecord
 	Progress     int
 	AttemptCount int
-	BytesTotal   int64
-	BytesDone    int64
+	StageTotal   int64
+	StageDone    int64
 }
 
 // StageRecord is one entry in the per-job pipeline timeline. EndedAt
@@ -91,10 +99,12 @@ func (r StageRecord) InProgress() bool { return r.EndedAt.IsZero() }
 
 // Update is the diff a Work function reports back during execution. Zero
 // fields are ignored so callers can update one dimension at a time.
+// StageDone/StageTotal carry the current stage's step counter — units
+// are stage-dependent (chunks, run files, …), not bytes.
 type Update struct {
 	Stage      string
 	Stages     []StageRecord
 	Progress   int
-	BytesTotal int64
-	BytesDone  int64
+	StageTotal int64
+	StageDone  int64
 }

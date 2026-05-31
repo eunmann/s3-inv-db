@@ -2,9 +2,9 @@
 {{$busy := or .State.IsLoading (and .LatestJob (eq (printf "%s" .LatestJob.State) "queued"))}}
 {{$canRetry := and .LatestJob (or (eq (printf "%s" .LatestJob.State) "failed") (eq (printf "%s" .LatestJob.State) "aborted") (eq (printf "%s" .LatestJob.State) "cancelled"))}}
 {{$pct := 0}}{{$eta := ""}}
-{{if and $busy .LatestJob (gt .LatestJob.BytesTotal 0)}}
-    {{$pct = progressPct .LatestJob.BytesDone .LatestJob.BytesTotal}}
-    {{$eta = formatETA .LatestJob.StartedAt .LatestJob.BytesDone .LatestJob.BytesTotal}}
+{{if and $busy .LatestJob (gt .LatestJob.StageTotal 0)}}
+    {{$pct = progressPct .LatestJob.StageDone .LatestJob.StageTotal}}
+    {{$eta = formatETA .LatestJob.StartedAt .LatestJob.StageDone .LatestJob.StageTotal}}
 {{end}}
 <tbody id="discovered-row-{{.SourceBucket}}-{{.Name}}-{{.Run}}"
     {{if .Run}}hx-get="/partials/discovered/{{.SourceBucket}}/{{.Name}}/{{.Run}}"

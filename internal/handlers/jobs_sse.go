@@ -41,8 +41,8 @@ type jobEvent struct {
 	Stages       []stageEvent `json:"Stages,omitempty"`
 	Progress     int          `json:"Progress"`
 	AttemptCount int          `json:"AttemptCount,omitempty"`
-	BytesTotal   int64        `json:"BytesTotal"`
-	BytesDone    int64        `json:"BytesDone"`
+	StageTotal   int64        `json:"StageTotal"`
+	StageDone    int64        `json:"StageDone"`
 }
 
 // stageEvent is the per-stage timeline entry inside jobEvent.Stages.
@@ -86,8 +86,8 @@ func jobToEvent(j jobs.Job) jobEvent {
 		State:        string(j.State),
 		Stage:        j.Stage,
 		Progress:     j.Progress,
-		BytesTotal:   j.BytesTotal,
-		BytesDone:    j.BytesDone,
+		StageTotal:   j.StageTotal,
+		StageDone:    j.StageDone,
 		Error:        j.Error,
 		AttemptCount: j.AttemptCount,
 		PrevJobID:    string(j.PrevJobID),

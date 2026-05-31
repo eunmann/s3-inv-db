@@ -77,7 +77,10 @@ func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifest
 		// Build call will RemoveAll it.
 		return "", fmt.Errorf("run pipeline: %w", err)
 	}
-	onProgress("done", 0, 0)
+	// Completion is signalled by the scheduler's terminal state flip
+	// (succeeded/failed/cancelled) and closeOpenStages; no "done"
+	// sentinel — emitting one here created a transient race where
+	// job.Stage = "done" while job.State was still Running.
 
 	return outDir, nil
 }
