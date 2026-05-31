@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -148,36 +147,20 @@ func parseDescendantsParams(w http.ResponseWriter, q url.Values) (descendantsPar
 
 		return descendantsParams{}, false
 	}
-	p := descendantsParams{prefix: q.Get("prefix"), depth: 1}
-	if v := q.Get("depth"); v != "" {
-		d, err := strconv.Atoi(v)
-		if err != nil || d < 1 {
-			WriteJSONError(w, http.StatusBadRequest, "invalid depth")
+	depth, err := parsePositiveInt(q, "depth", 1)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, err.Error())
 
-			return descendantsParams{}, false
-		}
-		p.depth = d
+		return descendantsParams{}, false
 	}
-	if v := q.Get("min_count"); v != "" {
-		n, err := strconv.ParseUint(v, 10, 64)
-		if err != nil {
-			WriteJSONError(w, http.StatusBadRequest, "invalid min_count")
+	filter, err := parseFilter(q)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, err.Error())
 
-			return descendantsParams{}, false
-		}
-		p.filter.MinCount = n
-	}
-	if v := q.Get("min_bytes"); v != "" {
-		n, err := strconv.ParseUint(v, 10, 64)
-		if err != nil {
-			WriteJSONError(w, http.StatusBadRequest, "invalid min_bytes")
-
-			return descendantsParams{}, false
-		}
-		p.filter.MinBytes = n
+		return descendantsParams{}, false
 	}
 
-	return p, true
+	return descendantsParams{prefix: q.Get("prefix"), depth: depth, filter: filter}, true
 }
 
 // GetDescendantsAPI returns descendants at a specific depth.

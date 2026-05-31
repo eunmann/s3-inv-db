@@ -156,22 +156,7 @@ type CompareChildView struct {
 // or the inner level partial dispatched via wantsHTMXPartial, matching
 // the Browse handler's pattern.
 func (h *Handlers) ComparePage(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	from := inventory.ID(q.Get("from"))
-	to := inventory.ID(q.Get("to"))
-	prefix := q.Get("prefix")
-	hideUnchanged := q.Get("show_unchanged") != trueLiteral
-	pageParams := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
-	page, pageSize := pageParams.Page, pageParams.Size
-	sortParams := inventory.NormalizeCompareSort(q.Get("sort"), q.Get("dir"))
-	sortBy, dir := sortParams.Col, sortParams.Dir
-
-	opts := compareViewOptions{
-		from: from, to: to, prefix: prefix,
-		hideUnchanged: hideUnchanged,
-		page:          page, pageSize: pageSize,
-		sortBy: sortBy, dir: dir,
-	}
+	opts := parseCompareOpts(r.URL.Query())
 	if wantsHTMXPartial(r) {
 		h.renderCompareLevelPartial(w, r, opts)
 
@@ -653,30 +638,21 @@ type CompareStatusCountsJSON struct {
 // than reusing the page's view types so the JSON carries raw uint64
 // counts and microdollar costs — no formatted strings to parse back.
 func (h *Handlers) CompareLevelAPI(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	from := inventory.ID(q.Get("from"))
-	to := inventory.ID(q.Get("to"))
-	prefix := q.Get("prefix")
-	hideUnchanged := q.Get("show_unchanged") != trueLiteral
-	pageParams := inventory.NormalizePage(q.Get("page"), q.Get("page_size"))
-	page, pageSize := pageParams.Page, pageParams.Size
-	sortParams := inventory.NormalizeCompareSort(q.Get("sort"), q.Get("dir"))
-	sortBy, dir := sortParams.Col, sortParams.Dir
-
-	if from == "" || to == "" {
+	opts := parseCompareOpts(r.URL.Query())
+	if opts.from == "" || opts.to == "" {
 		WriteJSONError(w, http.StatusBadRequest, "from and to are required")
 
 		return
 	}
-	if !sameConfig(from, to) {
+	if !sameConfig(opts.from, opts.to) {
 		WriteJSONError(w, http.StatusBadRequest, "from and to must belong to the same inventory configuration")
 
 		return
 	}
 
 	var data inventory.CompareLevelData
-	err := h.manager.WithTwoIndexes(r.Context(), from, to, func(a, b *indexread.Index) error {
-		data = inventory.CompareLevel(a, b, prefix)
+	err := h.manager.WithTwoIndexes(r.Context(), opts.from, opts.to, func(a, b *indexread.Index) error {
+		data = inventory.CompareLevel(a, b, opts.prefix)
 
 		return nil
 	})
@@ -687,17 +663,7 @@ func (h *Handlers) CompareLevelAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := h.buildCompareAPIResponse(compareViewOptions{
-		from:          from,
-		to:            to,
-		prefix:        prefix,
-		sortBy:        sortBy,
-		dir:           dir,
-		page:          page,
-		pageSize:      pageSize,
-		hideUnchanged: hideUnchanged,
-	}, data)
-	WriteJSON(w, http.StatusOK, resp)
+	WriteJSON(w, http.StatusOK, h.buildCompareAPIResponse(opts, data))
 }
 
 // buildCompareAPIResponse turns a CompareLevelData into the JSON payload,
