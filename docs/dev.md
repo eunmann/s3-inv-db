@@ -68,13 +68,6 @@ container exists to prevent.
 
 ## Local quality gates
 
-```bash
-make lint           # golangci-lint v2 (govet, staticcheck, errcheck, …)
-make test           # full suite, dockerised
-make test-race      # same with -race
-make cover-summary  # total coverage + 20 lowest-covered functions
-make tidy           # go mod tidy + go mod verify
-```
-
-The CI signal is `make lint && make test && make test-race`. See
-`.golangci.yml` for the enabled-linter list.
+`make lint`, `make test`, `make test-race`, `make cover-summary`, and
+`make tidy`. CI runs `make lint && make test && make test-race`. The
+linter set is in `.golangci.yml`.

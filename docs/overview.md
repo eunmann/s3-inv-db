@@ -1,137 +1,111 @@
 # Overview
 
-s3-inv-db transforms S3 inventory reports into a compact index optimized for prefix-based queries.
+s3-inv-db turns an S3 Inventory report (CSV or Parquet, often billions
+of rows) into a compact memory-mapped index that answers per-prefix
+size/count questions in microseconds.
 
-## Problem
+## Why an index
 
-S3 inventory reports can contain billions of objects. Answering questions like "how much data is under `logs/2024/`?" requires scanning the entire inventory—slow and expensive.
+An S3 Inventory report lists every object in a bucket. Answering
+"how much data is under `logs/2024/`?" by scanning the report costs
+minutes-to-hours per query and is wasted work every time. Building an
+index once collapses that to a constant-time mmap lookup; the index
+can then be reused for every query, every tier-cost estimate, and
+every diff between two inventory runs.
 
-## Solution
-
-Build an index once, query instantly:
-
-1. **Aggregate** object metadata by prefix during a streaming build
-2. **Store** prefix statistics in memory-mapped columnar files
-3. **Query** with O(1) prefix lookups via minimal perfect hashing
-
-## Build Pipeline
+## Build pipeline
 
 ```
 S3 Inventory CSV/Parquet
          │
          ▼
 ┌─────────────────────┐
-│   Parse & Extract   │  Extract key, size, storage class
-│     (streaming)     │  from each inventory row
+│   Parse & Extract   │  key, size, storage class — streamed
 └─────────────────────┘
          │
          ▼
 ┌─────────────────────┐
-│  Prefix Aggregation │  For each object, aggregate stats
-│   (bounded memory)  │  at every ancestor prefix
+│  Prefix Aggregation │  for each object, accumulate into every
+│   (bounded memory)  │  ancestor prefix; spill when memory fills
 └─────────────────────┘
          │
          ▼
 ┌─────────────────────┐
-│   External Sort     │  Sort prefix aggregates when
-│  (disk-backed)      │  memory threshold reached
+│   External Sort     │  disk-backed runs of sorted prefix rows
 └─────────────────────┘
          │
          ▼
 ┌─────────────────────┐
-│    K-Way Merge      │  Merge sorted runs, combining
-│                     │  duplicate prefixes
+│    K-Way Merge      │  combine duplicate prefixes across runs
 └─────────────────────┘
          │
          ▼
 ┌─────────────────────┐
-│   Index Build       │  Build MPHF, depth index,
-│   (streaming)       │  columnar arrays
+│   Index Build       │  MPHF + depth index + columnar arrays
 └─────────────────────┘
          │
          ▼
-    Index Files
+    Index files
 ```
 
-### Memory Management
+For an object key `data/2024/01/15/file.csv`, the aggregator emits a
+row at every ancestor depth (`data/`, `data/2024/`, `data/2024/01/`,
+`data/2024/01/15/`). The merge then combines duplicate prefixes across
+spill runs into one row per unique prefix.
 
-The build sets a process memory ceiling via `runtime/debug.SetMemoryLimit` at startup. If `GOMEMLIMIT` is set explicitly it wins, capped only by the cgroup `memory.max`; otherwise the limit is `min(cgroup memory.max, 0.6 × detected RAM)`. The aggregator spills when its footprint hits `0.15 × GOMEMLIMIT` divided across workers, or when overall heap pressure exceeds 85% of the limit, whichever fires first. After all inventory files are processed, a k-way merge combines the run files into the final sorted stream.
+Memory is bounded by `GOMEMLIMIT`; see
+[performance.md](performance.md#memory) for the exact spill rules.
 
-This allows indexing inventories of any size with bounded memory.
-
-### Prefix Extraction
-
-For an object key like `data/2024/01/15/file.csv`, the pipeline extracts prefixes at each depth:
-
-```
-data/
-data/2024/
-data/2024/01/
-data/2024/01/15/
-```
-
-Statistics (object count, total bytes, per-tier breakdown) accumulate at each prefix level.
-
-## Query Path
+## Query path
 
 ```
 Query: "data/2024/"
          │
          ▼
 ┌─────────────────────┐
-│   MPHF Lookup       │  Hash prefix → candidate position
-│      O(1)           │  Verify with fingerprint
+│   MPHF Lookup       │  hash → candidate position; verify
+│      O(1)           │  with a second-hash fingerprint
 └─────────────────────┘
          │
          ▼
 ┌─────────────────────┐
-│  Columnar Access    │  Read stats at position from
-│  (memory-mapped)    │  mmap'd arrays
+│  Columnar Access    │  read stats at that position from
+│  (memory-mapped)    │  the mmap'd row-major file
 └─────────────────────┘
          │
          ▼
-    Stats Result
+    Stats result
 ```
 
-### Subtree Queries
+Prefixes are stored in preorder traversal, so a prefix's descendants
+form a contiguous position range. Combined with a depth index, this
+makes "children at depth N" a binary search inside a range rather
+than a tree walk.
 
-The index stores prefixes in preorder traversal. A prefix's descendants form a contiguous range `[pos, subtree_end)`. Combined with the depth index, this enables efficient "children at depth N" queries without scanning.
+## Per-tier statistics
 
-## Storage Tiers
+The index tracks count and bytes per S3 storage class (13 classes plus
+one synthetic bucket for IT-Frequent objects under 128 KiB, which AWS
+bills at the Frequent rate but excludes from the monitoring fee).
+Tiers with no data in a given index consume no disk. The full
+storage-class list and file layout live in
+[index-format.md](index-format.md#tier-statistics).
 
-The index tracks statistics for 13 S3 storage classes:
+## Server behaviour
 
-| Tier ID | S3 name | Notes |
-|---|---|---|
-| Standard | `STANDARD` |  |
-| StandardIA | `STANDARD_IA` | 128 KiB minimum billable size |
-| OneZoneIA | `ONEZONE_IA` | 128 KiB minimum billable size |
-| GlacierIR | `GLACIER_IR` | 128 KiB minimum billable size |
-| GlacierFR | `GLACIER` | Per-object metadata overhead |
-| DeepArchive | `DEEP_ARCHIVE` | Per-object metadata overhead |
-| ReducedRedundancy | `REDUCED_REDUNDANCY` | Deprecated by AWS |
-| ITFrequent | `INTELLIGENT_TIERING_FREQUENT` | Monitored |
-| ITInfrequent | `INTELLIGENT_TIERING_INFREQUENT` | Monitored |
-| ITArchiveInstant | `INTELLIGENT_TIERING_ARCHIVE_INSTANT` | Monitored |
-| ITArchive | `INTELLIGENT_TIERING_ARCHIVE` | Monitored + Glacier overhead |
-| ITDeepArchive | `INTELLIGENT_TIERING_DEEP_ARCHIVE` | Monitored + Glacier overhead |
-| ITFrequentSmall | `INTELLIGENT_TIERING_FREQUENT_SMALL` | Synthetic bucket for IT-Frequent objects < 128 KiB; billed at Frequent rate but excluded from the monitoring fee |
+`s3-inv-db-server` adds three things on top of the read API:
 
-`pkg/tiers.Resolve(id, size)` re-routes IT-Frequent objects below
-128 KiB into the synthetic `ITFrequentSmall` bucket at ingest time so
-cost estimates honour the AWS minimum-monitored-size rule exactly.
-Per-tier statistics live in `tier_stats/tier_stats_row.bin` beside
-the main index files — one row-major file holding `(count, bytes)`
-slots in `tiers.json` order for every tier that has data in this
-index; absent tiers consume no disk. See `docs/index-format.md`.
+- **Discovery**: a poller lists configured S3 sources, registers new
+  inventory runs in the state DB, and surfaces them in the UI.
+- **Auto-load + budget**: when `--auto-load` is on, runs marked
+  `auto_load=true` are built into the local cache. The planner respects
+  a per-configuration retention count and a global `--max-index-disk`
+  byte cap; pinned runs are never auto-evicted.
+- **Async builds**: a Load click queues a job and returns 202; SSE
+  drives the UI to a live progress row until the build finishes or
+  fails. State + job history persist in `$CACHE_DIR/state.db` (SQLite,
+  WAL, pure-Go driver); jobs in flight at shutdown are flipped to
+  `aborted` on next boot so the UI never shows a forever-spinner.
 
-## Server features
-
-When the `s3-inv-db-server` binary is started with `--auto-load` and
-`--max-index-disk`, it runs a background poller that discovers new
-inventory runs, plans evictions against a per-config retention count
-and a global byte cap, and loads runs through a single-flight gate.
-Pinned runs are protected from auto-eviction. The dashboard surfaces
-the budget gauge; the inventories page exposes per-configuration
-toggles. See [HTTP API](http-api.md) for the routes and [README](../README.md#configuration)
-for the JSON config-file schema that drives all flags.
+Routes, JSON shapes, and the partial-HTML conventions are in
+[http-api.md](http-api.md).

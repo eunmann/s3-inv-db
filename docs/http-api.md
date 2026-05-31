@@ -1,46 +1,13 @@
 # HTTP API
 
-`s3-inv-db-server` exposes the same query surface as the CLI plus an
-HTMX-driven SSR web UI. Page actions (load/unload an inventory, drill
-into a prefix, compare runs) submit via `hx-post` / `hx-get`; the
-server returns HTML row/level partials that swap in place — no
-JSON-and-reload patterns.
+`s3-inv-db-server` exposes the index over JSON and an HTMX-driven SSR
+web UI. Page actions (load/unload, browse, compare) submit via
+`hx-post` / `hx-get` and the server returns HTML row/level partials
+that swap in place — there is no JSON-then-reload pattern.
 
-## Run
-
-```bash
-# Standalone, listening on :8080, no discovery configured
-s3-inv-db-server
-
-# With S3 discovery + auto-load + budget
-s3-inv-db-server \
-  --addr :8080 \
-  --s3-source s3://my-bucket/inventory-data/ \
-  --cache-dir /var/cache/s3inv \
-  --auto-load \
-  --max-index-disk 200GB
-
-# All flags can also come from a JSON file via --config.
-# Explicit flags override the file. See README for the full schema.
-s3-inv-db-server --config /etc/s3inv/server.json
-```
-
-## Auto-load + disk budget
-
-When `--auto-load` is enabled, a background poller (default every 15
-minutes) lists each configured S3 source, registers any new inventory
-runs, and queues loads for configurations whose `auto_load=true` is
-set in `inventory_configs`. The dashboard's **Auto-load** card and
-the top-of-page notifications banner surface poll failures and
-per-run load failures so the UI never silently swallows an error.
-
-`--max-index-disk` is required when `--auto-load` is on; the server
-refuses to start without it. The budget tracks both the on-disk size
-of loaded indexes and reservations for in-flight loads. When a new
-run would not fit, the planner evicts the oldest auto-loaded runs
-respecting per-config retention (default 2) and global LRU. Pinned
-runs (set via `/api/inventories/{id}/pin` or by manual Load) are
-never auto-evicted.
+For startup flags and the JSON config schema see the
+[README](../README.md#configuration). For why auto-load + budgeting
+exist, see [overview.md](overview.md#server-behaviour).
 
 ## Routes
 
@@ -117,37 +84,22 @@ route on every state change.
 
 ## Typed identifiers
 
-All IDs that flow through the API are stable strings. Two named
-types exist on the Go side for compile-time safety:
+Two named string types flow through the API for compile-time safety
+on the Go side; both serialise as plain JSON strings.
 
-- `inventory.ID` — formatted `<source-bucket>/<inventory-name>/<run-timestamp>`,
-  used as the primary key for one inventory run.
+- `inventory.ID` — `<source-bucket>/<inventory-name>/<run-timestamp>`,
+  primary key for one inventory run.
 - `jobs.ID` — random hex-encoded job identifier.
 
-Both serialise as plain JSON strings.
+## Async load contract
 
-## Async load flow
-
-A click on **Load** for a discovered inventory:
-
-1. `POST /partials/discovered/{src}/{id}/{run}/load` → **202** + the
-   row in `queued` state. No waiting for the build pipeline.
-2. The row's `hx-trigger="sse:row-<src>/<id>/<run>"` listens to
-   `/api/jobs/stream` and re-fetches itself on every state change.
-3. A spinner + stage label (`Downloading & parsing`) + progress bar
-   + ETA render alongside the row's State chip while the job is live.
-4. **Cancel** posts to `/api/jobs/{job-id}/cancel`; the build context
-   is signalled, the goroutine winds down, and the row swaps back
-   with a **Retry** button.
-
-## Persistence
-
-Inventory state + job history live in `$CACHE_DIR/state.db` (SQLite,
-WAL mode, pure-Go driver). On boot the server rehydrates the
-in-memory Manager from this file and marks any job left running by
-the previous process as `aborted`. Inventories caught mid-load get
-flipped to `error` so the UI shows Retry instead of a forever
-spinner.
+`POST /partials/discovered/{src}/{id}/{run}/load` returns **202** plus
+the row in `queued` state and starts a background build. The row's
+`hx-trigger="sse:row-<src>/<id>/<run>"` listens to `/api/jobs/stream`
+and re-fetches itself on every state change; the live row shows
+spinner, stage label, progress bar, and ETA. `POST /api/jobs/{id}/cancel`
+signals the build context — the row swaps back with a **Retry**
+button.
 
 ## Cross-origin policy
 

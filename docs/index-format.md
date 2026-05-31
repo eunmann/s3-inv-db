@@ -53,18 +53,21 @@ A single row-major file that supersedes the five per-column files of the prior f
 
 ### Preorder Positions
 
-Prefixes are stored in preorder traversal order. A prefix's descendants occupy contiguous positions `[pos, subtree_end)`, so subtree iteration is a range scan with no pointer chasing.
+Prefixes are stored in preorder traversal order. A prefix's subtree
+occupies contiguous positions `[pos, subtree_end]` — the **closed**
+interval ending on the last descendant inclusive. Subtree iteration
+is a range scan with no pointer chasing.
 
 ```
-Position 0: data/           (subtree_end=5)
-Position 1: data/2024/      (subtree_end=5)
-Position 2: data/2024/01/   (subtree_end=4)
-Position 3: data/2024/02/   (subtree_end=5)
-Position 4: logs/           (subtree_end=6)
-Position 5: logs/app/       (subtree_end=6)
+Position 0: data/           (subtree_end=3)
+Position 1: data/2024/      (subtree_end=3)
+Position 2: data/2024/01/   (subtree_end=2)
+Position 3: data/2024/02/   (subtree_end=3)
+Position 4: logs/           (subtree_end=5)
+Position 5: logs/app/       (subtree_end=5)
 ```
 
-To find all descendants of `data/` (position 0): iterate positions 1 through 4.
+To find all descendants of `data/` (position 0): iterate positions 1 through 3.
 
 ## Depth Index
 
@@ -140,21 +143,25 @@ To find tier `T`'s slot in a row, look up its position in `tiers.json`. Tier IDs
 
 Tier IDs (0–12) map to S3 storage classes:
 
-| ID | Storage Class |
-|----|---------------|
-| 0 | STANDARD |
-| 1 | STANDARD_IA |
-| 2 | ONEZONE_IA |
-| 3 | GLACIER_IR |
-| 4 | GLACIER |
-| 5 | DEEP_ARCHIVE |
-| 6 | REDUCED_REDUNDANCY |
-| 7 | INTELLIGENT_TIERING (Frequent) |
-| 8 | INTELLIGENT_TIERING (Infrequent) |
-| 9 | INTELLIGENT_TIERING (Archive Instant) |
-| 10 | INTELLIGENT_TIERING (Archive) |
-| 11 | INTELLIGENT_TIERING (Deep Archive) |
-| 12 | INTELLIGENT_TIERING (Frequent, < 128 KiB) |
+| ID | S3 name | Notes |
+|----|---|---|
+| 0 | `STANDARD` |  |
+| 1 | `STANDARD_IA` | 128 KiB minimum billable size |
+| 2 | `ONEZONE_IA` | 128 KiB minimum billable size |
+| 3 | `GLACIER_IR` | 128 KiB minimum billable size |
+| 4 | `GLACIER` | Per-object metadata overhead |
+| 5 | `DEEP_ARCHIVE` | Per-object metadata overhead |
+| 6 | `REDUCED_REDUNDANCY` | Deprecated by AWS |
+| 7 | `INTELLIGENT_TIERING_FREQUENT` | Monitored |
+| 8 | `INTELLIGENT_TIERING_INFREQUENT` | Monitored |
+| 9 | `INTELLIGENT_TIERING_ARCHIVE_INSTANT` | Monitored |
+| 10 | `INTELLIGENT_TIERING_ARCHIVE` | Monitored + Glacier overhead |
+| 11 | `INTELLIGENT_TIERING_DEEP_ARCHIVE` | Monitored + Glacier overhead |
+| 12 | `INTELLIGENT_TIERING_FREQUENT_SMALL` | Synthetic bucket for IT-Frequent objects < 128 KiB; billed at Frequent rate, excluded from the monitoring fee |
+
+`pkg/tiers.Resolve(id, size)` re-routes IT-Frequent objects below
+128 KiB into the synthetic `ITFrequentSmall` bucket at ingest time so
+cost estimates honour the AWS minimum-monitored-size rule exactly.
 
 ### Build-time layout
 
