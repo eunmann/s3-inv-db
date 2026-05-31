@@ -513,7 +513,7 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 // runReaderMergeIterator wraps RunReader interface for use with merge heap.
 type runReaderMergeIterator struct {
 	err     error
-	heap    *mergeHeap
+	heap    *typedMergeHeap
 	readers []RunReader
 }
 
@@ -545,7 +545,7 @@ func releaseMergeRow(r *PrefixRow) {
 func newMergeIteratorFromRunReaders(readers []RunReader) (*runReaderMergeIterator, error) {
 	m := &runReaderMergeIterator{
 		readers: readers,
-		heap:    &mergeHeap{items: make([]mergeItem, 0, len(readers))},
+		heap:    &typedMergeHeap{items: make([]mergeItem, 0, len(readers))},
 	}
 
 	for i, r := range readers {
@@ -565,7 +565,7 @@ func newMergeIteratorFromRunReaders(readers []RunReader) (*runReaderMergeIterato
 		m.heap.items = append(m.heap.items, mergeItem{row: row, readerIdx: i})
 	}
 
-	heapInit(m.heap)
+	m.heap.init()
 
 	return m, nil
 }
@@ -582,7 +582,7 @@ func (m *runReaderMergeIterator) Next() (*PrefixRow, error) {
 		return nil, io.EOF
 	}
 
-	item := heapPop(m.heap)
+	item := m.heap.pop()
 	result := item.row
 
 	if err := m.advanceReader(item.readerIdx); err != nil && !errors.Is(err, io.EOF) {
@@ -594,7 +594,7 @@ func (m *runReaderMergeIterator) Next() (*PrefixRow, error) {
 	// Merge duplicates. The duplicate rows are returned to the pool
 	// after their data is folded into result.
 	for m.heap.Len() > 0 && m.heap.items[0].row.Prefix == result.Prefix {
-		dup := heapPop(m.heap)
+		dup := m.heap.pop()
 		result.Merge(dup.row)
 		releaseMergeRow(dup.row)
 
@@ -631,7 +631,7 @@ func (m *runReaderMergeIterator) advanceReader(idx int) error {
 
 		return fmt.Errorf("advance reader %d: %w", idx, err)
 	}
-	heapPush(m.heap, mergeItem{row: row, readerIdx: idx})
+	m.heap.push(mergeItem{row: row, readerIdx: idx})
 
 	return nil
 }
@@ -646,60 +646,6 @@ func (m *runReaderMergeIterator) Close() error {
 	}
 
 	return errors.Join(errs...)
-}
-
-// Heap operations without using container/heap to avoid interface{} conversions
-
-func heapInit(h *mergeHeap) {
-	n := h.Len()
-	for i := n/2 - 1; i >= 0; i-- {
-		heapDown(h, i, n)
-	}
-}
-
-func heapPush(h *mergeHeap, item mergeItem) {
-	h.items = append(h.items, item)
-	heapUp(h, h.Len()-1)
-}
-
-func heapPop(h *mergeHeap) mergeItem {
-	n := h.Len() - 1
-	h.items[0], h.items[n] = h.items[n], h.items[0]
-	heapDown(h, 0, n)
-	item := h.items[n]
-	h.items = h.items[:n]
-
-	return item
-}
-
-func heapUp(h *mergeHeap, j int) {
-	for {
-		i := (j - 1) / 2 // parent
-		if i == j || !h.Less(j, i) {
-			break
-		}
-		h.Swap(i, j)
-		j = i
-	}
-}
-
-func heapDown(h *mergeHeap, i0, n int) {
-	i := i0
-	for {
-		j1 := 2*i + 1
-		if j1 >= n || j1 < 0 { // j1 < 0 after int overflow
-			break
-		}
-		j := j1 // left child
-		if j2 := j1 + 1; j2 < n && h.items[j2].row.Prefix < h.items[j1].row.Prefix {
-			j = j2 // = 2*i + 2  // right child
-		}
-		if h.items[i].row.Prefix <= h.items[j].row.Prefix {
-			break
-		}
-		h.Swap(i, j)
-		i = j
-	}
 }
 
 // MergeStatistics describes the work done by a ParallelMerger.

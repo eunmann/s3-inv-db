@@ -31,18 +31,15 @@ type typedMergeHeap struct {
 	items []mergeItem
 }
 
-// mergeHeap is an alias used by parallel_merge.go's heap helpers.
-type mergeHeap = typedMergeHeap
-
-func (h *typedMergeHeap) Less(i, j int) bool {
-	return h.items[i].row.Prefix < h.items[j].row.Prefix
-}
-
-func (h *typedMergeHeap) Swap(i, j int) {
-	h.items[i], h.items[j] = h.items[j], h.items[i]
-}
-
 func (h *typedMergeHeap) Len() int { return len(h.items) }
+
+// init turns an unordered items slice into a valid min-heap in O(n).
+// Use when seeding from a batch; push() is O(log n) per insert.
+func (h *typedMergeHeap) init() {
+	for i := h.Len()/2 - 1; i >= 0; i-- {
+		h.siftDown(i)
+	}
+}
 
 func (h *typedMergeHeap) push(it mergeItem) {
 	h.items = append(h.items, it)
