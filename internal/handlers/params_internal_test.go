@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -35,7 +36,7 @@ func TestParseFilter_InvalidMinCountWrapsSentinel(t *testing.T) {
 	if !errors.Is(err, ErrInvalidQueryParam) {
 		t.Errorf("parseFilter err = %v, want wrapped ErrInvalidQueryParam", err)
 	}
-	if !contains(err.Error(), "min_count") {
+	if !strings.Contains(err.Error(), "min_count") {
 		t.Errorf("err %q should mention min_count", err.Error())
 	}
 }
@@ -95,7 +96,7 @@ func TestParsePositiveInt_RejectsMalformed(t *testing.T) {
 	if err == nil {
 		t.Fatal("parsePositiveInt accepted abc")
 	}
-	if !contains(err.Error(), "depth") {
+	if !strings.Contains(err.Error(), "depth") {
 		t.Errorf("err %q should mention the offending key", err.Error())
 	}
 }
@@ -147,14 +148,4 @@ func TestParseCompareOpts_PreservesInventoryIDType(t *testing.T) {
 	if string(got.from) != "src/inv/run" {
 		t.Errorf("from = %q, want %q", string(got.from), "src/inv/run")
 	}
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-
-	return false
 }
