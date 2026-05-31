@@ -4,11 +4,11 @@ ARG AIR_VERSION=v1.61.7
 
 # Build air in a throwaway stage so its module cache doesn't bloat the
 # runtime image.
-FROM golang:1.26-alpine AS air
+FROM golang:1.26.3-alpine AS air
 ARG AIR_VERSION
 RUN go install github.com/air-verse/air@${AIR_VERSION}
 
-FROM golang:1.26-alpine
+FROM golang:1.26.3-alpine
 
 RUN apk add --no-cache git tini wget make curl gcc musl-dev
 
