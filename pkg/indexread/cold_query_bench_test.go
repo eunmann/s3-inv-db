@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
 
@@ -37,7 +38,7 @@ const coldQueryBatch = 64
 // time reflects the actual cold-query latency rather than the
 // eviction overhead.
 func BenchmarkQueryScale_StatsForPrefix_Cold(b *testing.B) {
-	silenceZerolog(b)
+	benchutil.SilenceZerolog(b)
 	for _, n := range queryBenchSizes() {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			dir := buildFixtureIndex(b, n)
@@ -74,7 +75,7 @@ func BenchmarkQueryScale_StatsForPrefix_Cold(b *testing.B) {
 // 22 page faults per call on a cold index. Target for Q1 row-major
 // tier_stats: 1 page fault.
 func BenchmarkQueryScale_TierBreakdown_Cold(b *testing.B) {
-	silenceZerolog(b)
+	benchutil.SilenceZerolog(b)
 	for _, n := range queryBenchSizes() {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			dir := buildFixtureIndex(b, n)
@@ -116,7 +117,7 @@ func BenchmarkQueryScale_TierBreakdown_Cold(b *testing.B) {
 // fans out). Target for Q2 row-major core stats: 1 page fault per
 // child, sequential within the core-stats file.
 func BenchmarkQueryScale_ChildrenIterate_Cold(b *testing.B) {
-	silenceZerolog(b)
+	benchutil.SilenceZerolog(b)
 	for _, n := range queryBenchSizes() {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			dir := buildFixtureIndex(b, n)

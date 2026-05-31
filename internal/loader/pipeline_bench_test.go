@@ -1,12 +1,14 @@
 package loader_test
 
 import (
+	"fmt"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"testing"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/internal/miniotest"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
@@ -35,73 +37,49 @@ func chunkCountFor(numObjects int) int {
 	return min(byFloor, byCPU)
 }
 
-func BenchmarkPipeline_Realistic_500K_DictOff(b *testing.B) {
-	runPipelineBench(b, "realistic", 500_000, false, 0)
+// pipelineSizes returns the size axis the pipeline benchmark sweeps.
+// 10M is gated behind the long-bench env to keep `make test` cheap.
+func pipelineSizes() []int {
+	sizes := []int{500_000, 1_000_000}
+	if benchutil.LongBenchEnabled() {
+		sizes = append(sizes, 10_000_000)
+	}
+	return sizes
 }
 
-func BenchmarkPipeline_Realistic_500K_DictOn(b *testing.B) {
-	runPipelineBench(b, "realistic", 500_000, true, 0)
+// BenchmarkPipeline sweeps shape × size × prefix-dictionary against
+// the full S3-to-index path.
+func BenchmarkPipeline(b *testing.B) {
+	for _, shape := range []string{"realistic", "deep_pyramid"} {
+		for _, n := range pipelineSizes() {
+			for _, dict := range []bool{false, true} {
+				name := fmt.Sprintf("shape=%s/n=%d/dict=%v", shape, n, dict)
+				b.Run(name, func(b *testing.B) {
+					runPipelineBench(b, shape, n, dict, 0)
+				})
+			}
+		}
+	}
 }
 
-func BenchmarkPipeline_Realistic_1M_DictOff(b *testing.B) {
-	runPipelineBench(b, "realistic", 1_000_000, false, 0)
-}
-
-func BenchmarkPipeline_Realistic_1M_DictOn(b *testing.B) {
-	runPipelineBench(b, "realistic", 1_000_000, true, 0)
-}
-
-func BenchmarkPipeline_DeepPyramid_500K_DictOff(b *testing.B) {
-	runPipelineBench(b, "deep_pyramid", 500_000, false, 0)
-}
-
-func BenchmarkPipeline_DeepPyramid_500K_DictOn(b *testing.B) {
-	runPipelineBench(b, "deep_pyramid", 500_000, true, 0)
-}
-
-func BenchmarkPipeline_DeepPyramid_1M_DictOff(b *testing.B) {
-	runPipelineBench(b, "deep_pyramid", 1_000_000, false, 0)
-}
-
-func BenchmarkPipeline_DeepPyramid_1M_DictOn(b *testing.B) {
-	runPipelineBench(b, "deep_pyramid", 1_000_000, true, 0)
-}
-
-func BenchmarkPipeline_Realistic_10M_DictOff(b *testing.B) {
-	runPipelineBench(b, "realistic", 10_000_000, false, 0)
-}
-
-func BenchmarkPipeline_Realistic_10M_DictOn(b *testing.B) {
-	runPipelineBench(b, "realistic", 10_000_000, true, 0)
-}
-
-func BenchmarkPipeline_DeepPyramid_10M_DictOff(b *testing.B) {
-	runPipelineBench(b, "deep_pyramid", 10_000_000, false, 0)
-}
-
-func BenchmarkPipeline_DeepPyramid_10M_DictOn(b *testing.B) {
-	runPipelineBench(b, "deep_pyramid", 10_000_000, true, 0)
-}
-
-// BenchmarkPipeline_AutoScale_DeepPyramid_1M_Mem* sweeps GOMEMLIMIT
-// against the same fixture; only the memory cap varies.
-func BenchmarkPipeline_AutoScale_DeepPyramid_1M_Mem2G(b *testing.B) {
-	runPipelineBench(b, "deep_pyramid", 1_000_000, true, 2<<30)
-}
-
-func BenchmarkPipeline_AutoScale_DeepPyramid_1M_Mem8G(b *testing.B) {
-	runPipelineBench(b, "deep_pyramid", 1_000_000, true, 8<<30)
-}
-
-func BenchmarkPipeline_AutoScale_DeepPyramid_1M_Mem16G(b *testing.B) {
-	runPipelineBench(b, "deep_pyramid", 1_000_000, true, 16<<30)
+// BenchmarkPipeline_GoMemLimit sweeps GOMEMLIMIT against the same
+// deep_pyramid 1M fixture; only the soft GC target varies. NOTE: the
+// limit is debug.SetMemoryLimit — a GC pacer hint, not a hard RSS
+// cap.
+func BenchmarkPipeline_GoMemLimit(b *testing.B) {
+	for _, mem := range []int64{2 << 30, 8 << 30, 16 << 30} {
+		name := fmt.Sprintf("mem=%dG", mem>>30)
+		b.Run(name, func(b *testing.B) {
+			runPipelineBench(b, "deep_pyramid", 1_000_000, true, mem)
+		})
+	}
 }
 
 // runPipelineBench is the shared body. MemLimit==0 leaves GOMEMLIMIT
 // unchanged.
 func runPipelineBench(b *testing.B, preset string, numObjects int, prefixDict bool, memLimit int64) {
 	b.Helper()
-	silenceZerologPipelineBench(b)
+	benchutil.SilenceZerolog(b)
 
 	fc := miniotest.FetchClient(b)
 	bucket := miniotest.Bucket(b, fc.Raw())
@@ -145,7 +123,7 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, prefixDict bo
 		runtime.GC()
 		var msStart runtime.MemStats
 		runtime.ReadMemStats(&msStart)
-		peak := atomicHeapSampler(b)
+		peak := benchutil.StartHeapPeakSampler()
 
 		cfg := extsort.DefaultConfig()
 		cfg.PrefixDictionary = prefixDict
@@ -155,7 +133,7 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, prefixDict bo
 		b.StartTimer()
 		if _, err := pipeline.Run(b.Context(), info.Path, outDir); err != nil {
 			b.StopTimer()
-			peak.stop()
+			peak.Stop()
 			if memLimit > 0 {
 				debug.SetMemoryLimit(prevLimit)
 			}
@@ -163,19 +141,21 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, prefixDict bo
 		}
 		b.StopTimer()
 
-		samplerMax := peak.stop()
+		samplerMax := peak.Stop()
 		if memLimit > 0 {
 			debug.SetMemoryLimit(prevLimit)
 		}
-		if delta := safeSubPipelineBench(samplerMax, msStart.HeapAlloc); delta > lastPeakHeap {
+		if delta := benchutil.SafeSubU64(samplerMax, msStart.HeapAlloc); delta > lastPeakHeap {
 			lastPeakHeap = delta
 		}
-		lastDiskBytes = dirBytesPipelineBench(b, outDir)
-		if idx, err := indexread.Open(outDir); err == nil {
-			lastPrefixCount = idx.Count()
-			lastMaxDepth = idx.MaxDepth()
-			_ = idx.Close()
+		lastDiskBytes = benchutil.DirBytes(b, outDir)
+		idx, err := indexread.Open(outDir)
+		if err != nil {
+			b.Fatalf("indexread.Open: %v", err)
 		}
+		lastPrefixCount = idx.Count()
+		lastMaxDepth = idx.MaxDepth()
+		_ = idx.Close()
 		b.StartTimer()
 	}
 
@@ -183,5 +163,5 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, prefixDict bo
 	b.ReportMetric(float64(lastPeakHeap), "peak_heap_B")
 	b.ReportMetric(float64(lastPrefixCount), "prefixes")
 	b.ReportMetric(float64(lastMaxDepth), "max_depth")
-	b.ReportMetric(float64(chunkCountFor(numObjects)), "chunks")
+	b.ReportMetric(float64(chunks), "chunks")
 }

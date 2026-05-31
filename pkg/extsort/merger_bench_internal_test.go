@@ -6,7 +6,9 @@ import (
 )
 
 // BenchmarkMergeHeap measures one push+pop cycle on the merge heap
-// across realistic heap sizes (k=8/32/64).
+// across realistic heap sizes (k=8/32/64). Rows are pre-allocated in
+// a ring outside the timed region so the measurement reflects heap
+// movement, not Sprintf+allocation.
 func BenchmarkMergeHeap(b *testing.B) {
 	for _, k := range []int{8, 32, 64} {
 		b.Run(fmt.Sprintf("k=%d", k), func(b *testing.B) {
@@ -16,14 +18,17 @@ func BenchmarkMergeHeap(b *testing.B) {
 				h.push(mergeItem{row: row, readerIdx: i})
 			}
 
-			next := 0
+			const ringSize = 1024
+			ring := make([]*PrefixRow, ringSize)
+			for i := range ring {
+				ring[i] = &PrefixRow{Prefix: fmt.Sprintf("zzzz-%08d", i)}
+			}
+
 			b.ReportAllocs()
 			b.ResetTimer()
-			for range b.N {
+			for i := range b.N {
 				top := h.pop()
-				next++
-				row := &PrefixRow{Prefix: fmt.Sprintf("zzzz-%08d", next)}
-				h.push(mergeItem{row: row, readerIdx: top.readerIdx})
+				h.push(mergeItem{row: ring[i%ringSize], readerIdx: top.readerIdx})
 			}
 		})
 	}

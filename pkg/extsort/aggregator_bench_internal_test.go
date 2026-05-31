@@ -2,10 +2,10 @@ package extsort
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
@@ -36,7 +36,7 @@ func BenchmarkAggregator_AddObject(b *testing.B) {
 		})
 	}
 
-	if os.Getenv("S3INV_LONG_BENCH") != "" {
+	if benchutil.LongBenchEnabled() {
 		long := []struct {
 			n     int
 			depth int

@@ -10,15 +10,18 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/s3inventory"
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/parquet-go/parquet-go"
 )
 
 // Test fixture keys shared between CSV and Parquet tests so changes
 // stay in sync; also satisfies goconst.
 const (
-	testKeyABC = "a/b/c.txt"
-	testKeyDE  = "d/e.txt"
+	testKeyABC      = "a/b/c.txt"
+	testKeyDE       = "d/e.txt"
+	storageStandard = "STANDARD"
 )
 
 func TestCSVInventoryReader(t *testing.T) {
@@ -34,7 +37,7 @@ func TestCSVInventoryReader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next failed: %v", err)
 	}
-	if row.Key != testKeyABC || row.Size != 100 || row.StorageClass != "STANDARD" {
+	if row.Key != testKeyABC || row.Size != 100 || row.StorageClass != storageStandard {
 		t.Errorf("got %+v, want {Key:%s Size:100 StorageClass:STANDARD}", row, testKeyABC)
 	}
 
@@ -146,7 +149,7 @@ func TestParquetInventoryReader(t *testing.T) {
 
 	// Create test Parquet file
 	rows := []S3InventoryRecord{
-		{Key: testKeyABC, Size: 100, StorageClass: "STANDARD"},
+		{Key: testKeyABC, Size: 100, StorageClass: storageStandard},
 		{Key: testKeyDE, Size: 200, StorageClass: "GLACIER"},
 		{Key: "f/g/h.txt", Size: 300, StorageClass: "STANDARD_IA"},
 	}
@@ -206,7 +209,7 @@ func TestParquetInventoryReaderFromStream(t *testing.T) {
 
 	// Create test Parquet file
 	rows := []S3InventoryRecord{
-		{Key: "file1.txt", Size: 100, StorageClass: "STANDARD"},
+		{Key: "file1.txt", Size: 100, StorageClass: storageStandard},
 		{Key: "file2.txt", Size: 200, StorageClass: "GLACIER"},
 	}
 
@@ -263,7 +266,7 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 		StorageClass string
 		Size         uint64
 	}{
-		{Key: "data/file1.txt", Size: 100, StorageClass: "STANDARD"},
+		{Key: "data/file1.txt", Size: 100, StorageClass: storageStandard},
 		{Key: "data/file2.txt", Size: 200, StorageClass: "GLACIER"},
 		{Key: "data/subfolder/file3.txt", Size: 300, StorageClass: "STANDARD_IA"},
 		{Key: "archive/old.zip", Size: 1000, StorageClass: "DEEP_ARCHIVE"},
@@ -377,7 +380,7 @@ func TestParquetInventoryReader_LargeRowGroups(t *testing.T) {
 		rows[i] = S3InventoryRecord{
 			Key:          "file" + string(rune('0'+i%10)) + ".txt",
 			Size:         int64(i * 100),
-			StorageClass: "STANDARD",
+			StorageClass: storageStandard,
 		}
 	}
 
@@ -432,7 +435,7 @@ func TestParquetInventoryReader_DetectsPascalCaseColumns(t *testing.T) {
 	dir := t.TempDir()
 	parquetPath := filepath.Join(dir, "pascal.parquet")
 	rows := []S3PascalCaseRecord{
-		{Key: testKeyABC, Size: 100, StorageClass: "STANDARD", IntelligentTieringAccessTier: "FREQUENT"},
+		{Key: testKeyABC, Size: 100, StorageClass: storageStandard, IntelligentTieringAccessTier: "FREQUENT"},
 		{Key: testKeyDE, Size: 200, StorageClass: "INTELLIGENT_TIERING", IntelligentTieringAccessTier: "INFREQUENT"},
 	}
 	if err := parquet.WriteFile(parquetPath, rows); err != nil {
@@ -495,7 +498,7 @@ func TestParquetInventoryReader_DetectsMixedCaseColumns(t *testing.T) {
 	dir := t.TempDir()
 	parquetPath := filepath.Join(dir, "mixed.parquet")
 	rows := []S3MixedCaseRecord{
-		{Key: testKeyABC, Size: 100, StorageClass: "STANDARD"},
+		{Key: testKeyABC, Size: 100, StorageClass: storageStandard},
 	}
 	if err := parquet.WriteFile(parquetPath, rows); err != nil {
 		t.Fatalf("WriteFile: %v", err)
@@ -516,101 +519,122 @@ func TestParquetInventoryReader_DetectsMixedCaseColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next: %v", err)
 	}
-	if row.Key != testKeyABC || row.Size != 100 || row.StorageClass != "STANDARD" {
+	if row.Key != testKeyABC || row.Size != 100 || row.StorageClass != storageStandard {
 		t.Errorf("row = %+v, want Key=%s Size=100 StorageClass=STANDARD", row, testKeyABC)
 	}
 }
 
-// Benchmark functions
+// Benchmark functions.
+//
+// Both readers are exercised against benchutil-generated S3-realistic
+// keys (mixed-depth date-partitioned paths, prefix cardinality close
+// to the production target) at a size grid set by
+// benchutil.BenchmarkSizes(). The previous toy fixture
+// (`data/folderN/subfolder/fileN.txt` × 10K rows, 100-cardinality
+// prefix segment) under-represented prefix work and gave misleading
+// throughput numbers.
+
+func benchInventoryRows(n int) []benchutil.FakeObject {
+	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(n))
+	return gen.Generate()
+}
+
+func tierName(tm *tiers.Mapping, id tiers.ID) string {
+	if info, ok := tm.ByID(id); ok {
+		return info.Name
+	}
+	return "STANDARD"
+}
+
+func benchCSVPayload(tm *tiers.Mapping, objs []benchutil.FakeObject) []byte {
+	var buf bytes.Buffer
+	for _, o := range objs {
+		fmt.Fprintf(&buf, "%s,%d,%s,\n", o.Key, o.Size, tierName(tm, o.TierID))
+	}
+	return buf.Bytes()
+}
 
 func BenchmarkCSVInventoryReader(b *testing.B) {
-	// Generate CSV data
-	numRows := 10000
-	var buf bytes.Buffer
-	for i := range numRows {
-		fmt.Fprintf(&buf, "data/folder%d/subfolder/file%d.txt,%d,STANDARD,\n", i%100, i, i*1000)
-	}
-	csvData := buf.Bytes()
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for range b.N {
-		reader := s3inventory.NewCSVReader(bytes.NewReader(csvData), s3inventory.CSVReaderConfig{
-			KeyCol: 0, SizeCol: 1, StorageCol: 2, AccessTierCol: 3,
+	tm := tiers.NewMapping()
+	for _, n := range benchutil.BenchmarkSizes() {
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			csvData := benchCSVPayload(tm, benchInventoryRows(n))
+			b.ResetTimer()
+			b.ReportAllocs()
+			for range b.N {
+				reader := s3inventory.NewCSVReader(bytes.NewReader(csvData), s3inventory.CSVReaderConfig{
+					KeyCol: 0, SizeCol: 1, StorageCol: 2, AccessTierCol: 3,
+				})
+				count := 0
+				for {
+					_, err := reader.Next()
+					if errors.Is(err, io.EOF) {
+						break
+					}
+					if err != nil {
+						b.Fatal(err)
+					}
+					count++
+				}
+				reader.Close()
+				if count != n {
+					b.Fatalf("got %d rows, want %d", count, n)
+				}
+			}
 		})
-
-		count := 0
-		for {
-			_, err := reader.Next()
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if err != nil {
-				b.Fatal(err)
-			}
-			count++
-		}
-		reader.Close()
-
-		if count != numRows {
-			b.Fatalf("got %d rows, want %d", count, numRows)
-		}
 	}
 }
 
 func BenchmarkParquetInventoryReader(b *testing.B) {
-	// Create temp Parquet file
-	dir := b.TempDir()
-	parquetPath := filepath.Join(dir, "bench.parquet")
+	tm := tiers.NewMapping()
+	for _, n := range benchutil.BenchmarkSizes() {
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			dir := b.TempDir()
+			parquetPath := filepath.Join(dir, "bench.parquet")
 
-	numRows := 10000
-	rows := make([]S3InventoryRecord, numRows)
-	for i := range numRows {
-		rows[i] = S3InventoryRecord{
-			Key:          fmt.Sprintf("data/folder%d/subfolder/file%d.txt", i%100, i),
-			Size:         int64(i * 1000),
-			StorageClass: "STANDARD",
-		}
-	}
-
-	if err := parquet.WriteFile(parquetPath, rows); err != nil {
-		b.Fatalf("WriteFile failed: %v", err)
-	}
-
-	// Read file content into memory for fair comparison
-	content, err := os.ReadFile(parquetPath)
-	if err != nil {
-		b.Fatalf("ReadFile failed: %v", err)
-	}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for range b.N {
-		reader, err := s3inventory.NewParquetReaderFromStream(
-			io.NopCloser(bytes.NewReader(content)),
-			int64(len(content)),
-		)
-		if err != nil {
-			b.Fatal(err)
-		}
-
-		count := 0
-		for {
-			_, err := reader.Next()
-			if errors.Is(err, io.EOF) {
-				break
+			objs := benchInventoryRows(n)
+			rows := make([]S3InventoryRecord, n)
+			for i, o := range objs {
+				rows[i] = S3InventoryRecord{
+					Key:          o.Key,
+					Size:         int64(o.Size),
+					StorageClass: tierName(tm, o.TierID),
+				}
 			}
+			if err := parquet.WriteFile(parquetPath, rows); err != nil {
+				b.Fatalf("WriteFile: %v", err)
+			}
+			content, err := os.ReadFile(parquetPath)
 			if err != nil {
-				b.Fatal(err)
+				b.Fatalf("ReadFile: %v", err)
 			}
-			count++
-		}
-		reader.Close()
 
-		if count != numRows {
-			b.Fatalf("got %d rows, want %d", count, numRows)
-		}
+			b.ResetTimer()
+			b.ReportAllocs()
+			for range b.N {
+				reader, err := s3inventory.NewParquetReaderFromStream(
+					io.NopCloser(bytes.NewReader(content)),
+					int64(len(content)),
+				)
+				if err != nil {
+					b.Fatal(err)
+				}
+				count := 0
+				for {
+					_, err := reader.Next()
+					if errors.Is(err, io.EOF) {
+						break
+					}
+					if err != nil {
+						b.Fatal(err)
+					}
+					count++
+				}
+				reader.Close()
+				if count != n {
+					b.Fatalf("got %d rows, want %d", count, n)
+				}
+			}
+		})
 	}
 }

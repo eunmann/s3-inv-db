@@ -4,11 +4,11 @@
 
 ### Lookup Latency
 
-Numbers below come from `BenchmarkLookup`, `BenchmarkStats`,
-`BenchmarkTierBreakdown`, `BenchmarkDescendantsAtDepth` on a warm
-mmap with a 1M-prefix fixture index. Cold-cache numbers are higher
-by roughly one page-fault per file touched; the cold-query suite
-(`pkg/indexread/cold_*_bench_test.go`) measures those separately.
+Numbers below come from `BenchmarkGridQuery` (lookup / stats /
+tierbd / descendants sub-benches) on a warm mmap. Cold-cache numbers
+are higher by roughly one page-fault per file touched; the cold-cache
+suite (`pkg/indexread/cold_*_bench_test.go`) and `BenchmarkGridQuery`'s
+`cold/*` and `coldsingle/*` sub-benches measure those separately.
 
 | Operation | Complexity | Typical warm latency |
 |-----------|------------|---------------------|
@@ -20,7 +20,7 @@ by roughly one page-fault per file touched; the cold-query suite
 Run the benches yourself for current numbers on your machine:
 
 ```bash
-go test -bench='Lookup|Stats|TierBreakdown|DescendantsAtDepth' -benchtime=2s -run=^$ ./pkg/indexread/
+go test -bench=BenchmarkGridQuery -benchtime=2s -run=^$ ./pkg/indexread/
 ```
 
 Lookup performance is dominated by:
@@ -94,8 +94,8 @@ linearly from a laptop to an ingest node without flags.
 # Run all indexread benchmarks
 go test -bench=. -benchmem ./pkg/indexread/
 
-# Run specific benchmark
-go test -bench=BenchmarkLookup -benchmem ./pkg/indexread/
+# Run specific benchmark (warm + cold query sweep across the shape grid)
+go test -bench=BenchmarkGridQuery -benchmem ./pkg/indexread/
 
 # Run with larger dataset (requires S3INV_LONG_BENCH=1)
 S3INV_LONG_BENCH=1 go test -bench=. -benchmem ./pkg/indexread/
@@ -110,15 +110,15 @@ go test -bench=BenchmarkMPHFBuild -benchmem ./pkg/format/
 # Query performance
 go test -bench=BenchmarkMPHFQuery -benchmem ./pkg/format/
 
-# Full pipeline benchmark
-go test -bench=BenchmarkFingerprintPipeline -benchmem ./pkg/format/
+# Isolated bbhash.New construction cost across sizes
+go test -bench=BenchmarkBBHashScaling -benchmem ./pkg/format/
 ```
 
 ### Memory Profiling
 
 ```bash
 # Profile memory allocations
-go test -bench=BenchmarkLookup -benchmem -memprofile=mem.out ./pkg/indexread/
+go test -bench=BenchmarkGridQuery -benchmem -memprofile=mem.out ./pkg/indexread/
 go tool pprof mem.out
 ```
 

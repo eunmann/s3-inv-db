@@ -10,10 +10,6 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-// defaultBenchSeed is the deterministic seed used when callers don't
-// specify one. Stable so benchmark runs reproduce.
-const defaultBenchSeed int64 = 42
-
 // Default tier mix probabilities used by DefaultConfig. Together they
 // sum to 1.0.
 const (
@@ -86,7 +82,7 @@ func DefaultConfig(numObjects int) GeneratorConfig {
 			tiers.ITFrequent: defaultProbITFrequent,
 			tiers.ITArchive:  defaultProbITArchive,
 		},
-		Seed: defaultBenchSeed,
+		Seed: BenchmarkSeed,
 	}
 }
 
@@ -116,7 +112,7 @@ func S3RealisticConfig(numObjects int) GeneratorConfig {
 			tiers.ITDeepArchive:    s3ProbITDeepArchive,
 			tiers.ITFrequentSmall:  s3ProbITFrequentSmall,
 		},
-		Seed: defaultBenchSeed,
+		Seed: BenchmarkSeed,
 	}
 }
 
@@ -156,7 +152,7 @@ type Generator struct {
 func NewGenerator(cfg GeneratorConfig) *Generator {
 	seed := cfg.Seed
 	if seed == 0 {
-		seed = defaultBenchSeed
+		seed = BenchmarkSeed
 	}
 
 	return &Generator{
@@ -353,39 +349,7 @@ func (g *Generator) generateFilename() string {
 }
 
 func (g *Generator) generateSize() uint64 {
-	const (
-		sizeBuckets       = 10
-		smallFileSpan     = 1024 * 1024
-		mediumFileSpan    = 100 * 1024 * 1024
-		largeFileSpan     = 900 * 1024 * 1024
-		veryLargeFileSpan = int64(4 * 1024 * 1024 * 1024)
-	)
-	// Log-normal-ish distribution: mostly small files, some large.
-	// Threshold layout (g.rng.Intn(sizeBuckets) < threshold) by bucket:
-	//   tiny [<1KB)            : 10%
-	//   small [1KB,1MB)        : 30%
-	//   medium [1MB,100MB)     : 40%
-	//   large [100MB,1GB)      : 10%
-	//   very large [1GB,5GB]   : 10%
-	const (
-		thresholdTiny   = 1
-		thresholdSmall  = thresholdTiny + 3  // 30% small
-		thresholdMedium = thresholdSmall + 4 // 40% medium
-		thresholdLarge  = thresholdMedium + 1
-	)
-	bucket := g.rng.Intn(sizeBuckets)
-	switch {
-	case bucket < thresholdTiny:
-		return uint64(g.rng.Intn(1024))
-	case bucket < thresholdSmall:
-		return uint64(1024 + g.rng.Intn(smallFileSpan))
-	case bucket < thresholdMedium:
-		return uint64(1024*1024 + g.rng.Intn(mediumFileSpan))
-	case bucket < thresholdLarge:
-		return uint64(100*1024*1024 + g.rng.Intn(largeFileSpan))
-	default:
-		return uint64(1024*1024*1024 + g.rng.Int63n(veryLargeFileSpan))
-	}
+	return samplePowerLawSize(g.rng)
 }
 
 func (g *Generator) generateTier() tiers.ID {
@@ -497,7 +461,7 @@ func generateBalancedKeys(size int) []string {
 
 func generateS3RealisticKeys(size int) []string {
 	const daysInMonth = 28
-	rng := rand.New(rand.NewSource(defaultBenchSeed))
+	rng := rand.New(rand.NewSource(BenchmarkSeed))
 	keys := make([]string, size)
 
 	prefixes := []string{"data", "logs", "backups", "exports", "uploads"}

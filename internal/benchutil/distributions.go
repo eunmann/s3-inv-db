@@ -218,15 +218,3 @@ func WideTailSize() SizeDistribution {
 		},
 	}
 }
-
-// ShapesForGrid returns the named shape preset list the grid sweep
-// uses. These cover the orthogonal "tree structure" axis.
-func ShapesForGrid() []string {
-	return []string{
-		"deep_narrow",
-		"wide_shallow",
-		"balanced",
-		"wide_single_level",
-		"s3_dated",
-	}
-}

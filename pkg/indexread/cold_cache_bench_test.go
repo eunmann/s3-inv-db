@@ -10,18 +10,8 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
-	"github.com/rs/zerolog"
 	"golang.org/x/sys/unix"
 )
-
-// silenceZerolog disables the global logger for the duration of the
-// bench so MPHF / pipeline debug lines don't shred bench output.
-func silenceZerolog(b *testing.B) {
-	b.Helper()
-	prev := zerolog.GlobalLevel()
-	zerolog.SetGlobalLevel(zerolog.Disabled)
-	b.Cleanup(func() { zerolog.SetGlobalLevel(prev) })
-}
 
 // BenchmarkIndexOpen_ColdCache measures Open() latency with the OS
 // page cache deliberately evicted between iterations. This is the
@@ -38,7 +28,7 @@ func BenchmarkIndexOpen_ColdCache(b *testing.B) {
 			runColdOpenBench(b, n)
 		})
 	}
-	if os.Getenv("S3INV_LONG_BENCH") != "" {
+	if benchutil.LongBenchEnabled() {
 		b.Run("n=10000000", func(b *testing.B) {
 			runColdOpenBench(b, 10_000_000)
 		})
@@ -47,7 +37,7 @@ func BenchmarkIndexOpen_ColdCache(b *testing.B) {
 
 func runColdOpenBench(b *testing.B, n int) {
 	b.Helper()
-	silenceZerolog(b)
+	benchutil.SilenceZerolog(b)
 	dir := buildFixtureIndex(b, n)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -72,7 +62,7 @@ func runColdOpenBench(b *testing.B, n int) {
 // manager.WithIndex closures, if callers use that wrapper). Sister to
 // BenchmarkConcurrentLookup but parameterised by worker count.
 func BenchmarkConcurrentLookup_Scaling(b *testing.B) {
-	silenceZerolog(b)
+	benchutil.SilenceZerolog(b)
 	dir := buildFixtureIndex(b, 100_000)
 	idx, err := indexread.Open(dir)
 	if err != nil {
@@ -95,29 +85,6 @@ func BenchmarkConcurrentLookup_Scaling(b *testing.B) {
 					i++
 				}
 			})
-		})
-	}
-}
-
-// BenchmarkMPHFLookup_Latency isolates the per-lookup cost on a hot
-// index. Sister to BenchmarkLookup but also reports a cold variant
-// that drops the page cache before the loop.
-func BenchmarkMPHFLookup_Latency(b *testing.B) {
-	silenceZerolog(b)
-	for _, n := range []int{100_000, 1_000_000} {
-		b.Run(fmt.Sprintf("n=%d/warm", n), func(b *testing.B) {
-			dir := buildFixtureIndex(b, n)
-			idx, err := indexread.Open(dir)
-			if err != nil {
-				b.Fatalf("Open: %v", err)
-			}
-			defer idx.Close()
-			prefixes := generateLookupPrefixes(n)
-			b.ResetTimer()
-			b.ReportAllocs()
-			for i := range b.N {
-				_, _ = idx.Lookup(prefixes[i%len(prefixes)])
-			}
 		})
 	}
 }

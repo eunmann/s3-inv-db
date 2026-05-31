@@ -113,27 +113,6 @@ func TestFormatWithCommas(t *testing.T) {
 	}
 }
 
-func BenchmarkBytes(b *testing.B) {
-	sizes := []int64{100, 1024, 1048576, 1073741824}
-	b.ResetTimer()
-	for i := range b.N {
-		_ = humanfmt.Bytes(sizes[i%len(sizes)])
-	}
-}
-
-func BenchmarkDuration(b *testing.B) {
-	durations := []time.Duration{
-		100 * time.Microsecond,
-		10 * time.Millisecond,
-		1500 * time.Millisecond,
-		90 * time.Second,
-	}
-	b.ResetTimer()
-	for i := range b.N {
-		_ = humanfmt.Duration(durations[i%len(durations)])
-	}
-}
-
 func TestBytesUint64_OverflowAbove2_63(t *testing.T) {
 	// 2^63 is above int64 max; the old int64-cast wrapper would have
 	// underflowed to a negative value and returned "-... B". The

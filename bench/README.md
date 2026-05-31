@@ -39,8 +39,9 @@ benchstat bench/before/<id>-<short>.txt bench/after/<id>-<short>.txt
 ## Reproducibility rules
 
 - RNG seeded (use `benchutil` defaults — seed 42)
-- Benches encode the shape × size × dict knob combination in the
-  function name (e.g. `BenchmarkBuildHarness_DeepPyramid_1M_DictOn`);
+- Benches encode the shape × size × dict knob combination as a
+  sub-bench path (e.g.
+  `BenchmarkBuildHarness/shape=deep_pyramid/n=1000000/dict=true`);
   pick a comparison directly with `-bench=<pattern>`
 - Use `-count` ≥ 3 for benchstat to compute variance
 - `-benchtime` chosen so per-iter cost > 1 ms to swamp setup overhead

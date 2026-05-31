@@ -10,15 +10,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
-	"github.com/rs/zerolog"
 )
-
-func silenceZerologForBench(b *testing.B) {
-	b.Helper()
-	prev := zerolog.GlobalLevel()
-	zerolog.SetGlobalLevel(zerolog.Disabled)
-	b.Cleanup(func() { zerolog.SetGlobalLevel(prev) })
-}
 
 // BenchmarkPhaseTimings exercises the event bus end-to-end against a
 // synthetic in-memory build and reports per-stage timings derived
@@ -41,7 +33,7 @@ func silenceZerologForBench(b *testing.B) {
 // pipeline-level start/end events DO fire when Pipeline.Run is
 // exercised — that path is bench B1.
 func BenchmarkPhaseTimings(b *testing.B) {
-	silenceZerologForBench(b)
+	benchutil.SilenceZerolog(b)
 	for _, n := range []int{500_000, 1_000_000} {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			runPhaseTimingsBench(b, n)
