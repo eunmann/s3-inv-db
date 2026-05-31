@@ -20,6 +20,8 @@ import (
 // free a stalled SSE slot in well under Chrome's ~60s TCP idle window,
 // large enough to be cheap. Package var (not const) so tests can shorten
 // it via SetSSEHeartbeatForTest.
+//
+//nolint:gochecknoglobals // mutable only via SetSSEHeartbeatForTest in export_test.go
 var sseHeartbeat = 15 * time.Second
 
 // sseMaxConnsPerIP caps concurrent SSE subscribers from one remote
@@ -29,6 +31,8 @@ var sseHeartbeat = 15 * time.Second
 // need more than one per tab; 8 keeps a few tabs working without being
 // a DoS amplifier. Package var so tests can tighten it via
 // SetSSEMaxConnsPerIPForTest.
+//
+//nolint:gochecknoglobals // mutable only via SetSSEMaxConnsPerIPForTest in export_test.go
 var sseMaxConnsPerIP = 8
 
 // CacheStore is the loader subset handlers actually use: cache size
@@ -237,12 +241,12 @@ func New(
 	opts ...Option,
 ) *Handlers {
 	h := &Handlers{
-		manager:          mgr,
-		renderer:         renderer,
-		priceTable:       priceTable,
-		jobMgr:           deps.JobMgr,
-		jobStore:         deps.JobStore,
-		jobBus:           deps.JobBus,
+		manager:     mgr,
+		renderer:    renderer,
+		priceTable:  priceTable,
+		jobMgr:      deps.JobMgr,
+		jobStore:    deps.JobStore,
+		jobBus:      deps.JobBus,
 		configStore: deps.ConfigStore,
 		tracker:     deps.Tracker,
 		reg:         metrics.New(),

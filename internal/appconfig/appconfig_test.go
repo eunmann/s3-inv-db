@@ -127,4 +127,3 @@ func TestPickFile_Bool_PrecedenceOrder(t *testing.T) {
 		t.Errorf("flag default true should win when no config, got %v", got)
 	}
 }
-

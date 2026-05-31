@@ -14,7 +14,6 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 )
 
-
 type queryOutput struct {
 	Prefix        string                 `json:"prefix"`
 	ObjectCount   uint64                 `json:"object_count"`

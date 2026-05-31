@@ -117,11 +117,11 @@ func NewStreamingMPHFBuilder(tempDir string, usePrefixDict bool) (*StreamingMPHF
 	}
 
 	b := &StreamingMPHFBuilder{
-		hashes:       hashes,
-		preorderPos:  preorderPos,
-		fingerprints: fingerprints,
-		tempFile:     tempFile,
-		tempEncoder:  enc,
+		hashes:        hashes,
+		preorderPos:   preorderPos,
+		fingerprints:  fingerprints,
+		tempFile:      tempFile,
+		tempEncoder:   enc,
 		tempWriter:    bufio.NewWriterSize(enc, 1024*1024),
 		tempPath:      tempFile.Name(),
 		bufferSize:    1024 * 1024,

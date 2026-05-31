@@ -510,4 +510,3 @@ func (s *Server) discoveryRefreshInterval() time.Duration {
 
 	return DefaultDiscoveryRefreshInterval
 }
-

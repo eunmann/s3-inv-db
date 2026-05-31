@@ -107,14 +107,10 @@ func addLoggingFlags(fs *flag.FlagSet) *loggingFlags {
 }
 
 // initLogging resolves the logging flags against fileCfg (precedence:
-// explicit flag > file > default), initializes the global logger, and
-// returns the resolved (debug, human) values for callers that also
-// need a local logger.
-func initLogging(lf *loggingFlags, fs *flag.FlagSet, fileCfg *appconfig.Config) (debug, human bool) {
+// explicit flag > file > default) and initializes the global logger.
+func initLogging(lf *loggingFlags, fs *flag.FlagSet, fileCfg *appconfig.Config) {
 	explicit := explicitFlags(fs)
-	debug = appconfig.PickFile(*lf.verbose, explicit["verbose"], fileCfg, func(c *appconfig.Config) *bool { return c.Verbose })
-	human = appconfig.PickFile(*lf.prettyLogs, explicit["pretty-logs"], fileCfg, func(c *appconfig.Config) *bool { return c.PrettyLogs })
+	debug := appconfig.PickFile(*lf.verbose, explicit["verbose"], fileCfg, func(c *appconfig.Config) *bool { return c.Verbose })
+	human := appconfig.PickFile(*lf.prettyLogs, explicit["pretty-logs"], fileCfg, func(c *appconfig.Config) *bool { return c.PrettyLogs })
 	logging.Init(logging.Options{Debug: debug, Human: human})
-
-	return debug, human
 }

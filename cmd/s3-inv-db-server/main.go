@@ -29,7 +29,7 @@ var errNegativeSize = errors.New("negative size")
 // declaratively and `mnd` lint stops flagging the literals.
 const (
 	defaultAutoLoadRetention = 2
-	// headroomDivisor: 1/headroomDivisor of MaxIndexDisk is reserved as
+	// HeadroomDivisor: 1/headroomDivisor of MaxIndexDisk is reserved as
 	// unused buffer so loads that exceed their size estimate have room.
 	headroomDivisor = 5
 	// Power-of-two byte multipliers for "KiB/MiB/GiB/TiB" suffixes.
