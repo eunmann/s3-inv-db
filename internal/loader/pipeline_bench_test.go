@@ -47,17 +47,14 @@ func pipelineSizes() []int {
 	return sizes
 }
 
-// BenchmarkPipeline sweeps shape × size × prefix-dictionary against
-// the full S3-to-index path.
+// BenchmarkPipeline sweeps shape × size against the full S3-to-index path.
 func BenchmarkPipeline(b *testing.B) {
 	for _, shape := range []string{"realistic", "deep_pyramid"} {
 		for _, n := range pipelineSizes() {
-			for _, dict := range []bool{false, true} {
-				name := fmt.Sprintf("shape=%s/n=%d/dict=%v", shape, n, dict)
-				b.Run(name, func(b *testing.B) {
-					runPipelineBench(b, shape, n, dict, 0)
-				})
-			}
+			name := fmt.Sprintf("shape=%s/n=%d", shape, n)
+			b.Run(name, func(b *testing.B) {
+				runPipelineBench(b, shape, n, 0)
+			})
 		}
 	}
 }
@@ -70,14 +67,14 @@ func BenchmarkPipeline_GoMemLimit(b *testing.B) {
 	for _, mem := range []int64{2 << 30, 8 << 30, 16 << 30} {
 		name := fmt.Sprintf("mem=%dG", mem>>30)
 		b.Run(name, func(b *testing.B) {
-			runPipelineBench(b, "deep_pyramid", 1_000_000, true, mem)
+			runPipelineBench(b, "deep_pyramid", 1_000_000, mem)
 		})
 	}
 }
 
 // runPipelineBench is the shared body. MemLimit==0 leaves GOMEMLIMIT
 // unchanged.
-func runPipelineBench(b *testing.B, preset string, numObjects int, prefixDict bool, memLimit int64) {
+func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int64) {
 	b.Helper()
 	benchutil.SilenceZerolog(b)
 
@@ -126,7 +123,6 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, prefixDict bo
 		peak := benchutil.StartHeapPeakSampler()
 
 		cfg := extsort.DefaultConfig()
-		cfg.PrefixDictionary = prefixDict
 		cfg.Observe.OnProgress = func(string, int64, int64) {}
 		pipeline := extsort.NewPipeline(cfg, fc)
 

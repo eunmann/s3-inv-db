@@ -83,7 +83,7 @@ Read-only:
 | `GET /api/inventories/{id}/stats?prefix=…` | Per-prefix stats |
 | `GET /api/inventories/{id}/descendants?prefix=…&depth=…` | Depth-walk descendants |
 | `GET /api/inventories/{id}/top?prefix=&depth=&limit=&by=bytes\|count` | Top-N descendants ranked by metric (also at `/api/top?inventory_id=…`) |
-| `GET /metrics` | Prometheus text format — request counters, latency histograms, queue counters. Mounted on the main router unless `--metrics-addr` is set, in which case `/metrics` only listens on that separate address. |
+| `GET /metrics` | Prometheus text format — request counters, latency histograms, queue counters. Mounted on the main router. |
 | `GET /api/discovered` | List discovered inventories (when discovery configured) |
 | `GET /api/stats?inventory_id=&prefix=` | Stats for one prefix in one inventory |
 | `GET /api/configurations` | Inventory configurations grouped by `<src>/<inv>` with their runs |

@@ -209,10 +209,10 @@ range of object counts; representative numbers from a single run:
 
 These scale near-linearly with prefix count, not object count, so
 realistic billion-object inventories with deep paths land closer to
-~430–510 bytes per object on disk. Use `--index-ratio` to refine the
-multiplier the planner applies to a manifest's compressed CSV total
-when estimating final index bytes (default `0.30` is a conservative
-seed — measure your own corpus). Builds use `os.TempDir()` for
+~430–510 bytes per object on disk. The planner applies a fixed
+`0.30` multiplier to a manifest's compressed CSV total when
+estimating final index bytes — a conservative seed; measure your own
+corpus if disk budgets are tight. Builds use `os.TempDir()` for
 intermediate run files; keep that volume sized to at least 2× the
 expected manifest-compressed-size of the largest inventory you intend
 to load.

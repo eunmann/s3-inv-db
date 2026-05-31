@@ -376,11 +376,6 @@ func buildGridIndex(tb testing.TB, spec benchutil.GridSpec) string {
 	if err != nil {
 		tb.Fatalf("NewIndexBuilder: %v", err)
 	}
-	if os.Getenv("S3INV_PREFIX_DICT") == "1" {
-		if err := builder.SetPrefixDictionary(true); err != nil {
-			tb.Fatalf("SetPrefixDictionary: %v", err)
-		}
-	}
 	if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
 		tb.Fatalf("SetPresentTiers: %v", err)
 	}

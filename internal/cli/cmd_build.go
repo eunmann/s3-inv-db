@@ -26,7 +26,6 @@ func runBuild(args []string) error {
 	verbose := fs.Bool("verbose", false, "enable debug level logging")
 	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
 	maxDepth := fs.Int("max-depth", 0, "maximum prefix depth to track (0 = unlimited)")
-	prefixDictionary := fs.Bool("prefix-dictionary", true, "enable dictionary-encoded prefix storage")
 	eventLogPath := fs.String("event-log", "", "append build events as JSONL to this path (overrides config)")
 
 	if err := fs.Parse(args); err != nil {
@@ -62,10 +61,10 @@ func runBuild(args []string) error {
 		return ErrManifestRequired
 	}
 
-	return runBuildExtSort(*outDir, *s3Manifest, *maxDepth, *prefixDictionary, finalEventLog, baseLogger)
+	return runBuildExtSort(*outDir, *s3Manifest, *maxDepth, finalEventLog, baseLogger)
 }
 
-func runBuildExtSort(outDir, s3Manifest string, maxDepth int, prefixDictionary bool, eventLogPath string, baseLogger zerolog.Logger) error {
+func runBuildExtSort(outDir, s3Manifest string, maxDepth int, eventLogPath string, baseLogger zerolog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -84,13 +83,11 @@ func runBuildExtSort(outDir, s3Manifest string, maxDepth int, prefixDictionary b
 	if maxDepth > 0 {
 		config.MaxDepth = maxDepth
 	}
-	config.PrefixDictionary = prefixDictionary
 	config.Observe = tracker.wire()
 
 	logger.Info().
 		Int("s3_part_concurrency", config.S3.DownloadPartConcurrency).
 		Int("max_depth", config.MaxDepth).
-		Bool("prefix_dictionary", config.PrefixDictionary).
 		Msg("pipeline configuration")
 
 	pipeline := extsort.NewPipeline(config, client)

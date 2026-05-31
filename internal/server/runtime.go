@@ -29,11 +29,6 @@ type RuntimeOptions struct {
 	S3Source string
 	CacheDir string
 
-	// StateDB is the SQLite path for persisted inventory + job state.
-	// Empty falls back to <CacheDir>/state.db; when CacheDir is also
-	// empty SQLite opens in-memory and state is lost on restart.
-	StateDB string
-
 	// PriceTablePath, when empty, falls back to
 	// pricing.DefaultUSEast1Prices.
 	PriceTablePath string
@@ -55,8 +50,8 @@ type RuntimeOptions struct {
 	MaxIndexDisk uint64
 
 	// IndexHeadroomBytes is reserved unused space inside MaxIndexDisk so
-	// a load that exceeds its estimate has room to grow. Default 20% of
-	// MaxIndexDisk when MaxIndexDisk is set.
+	// a load that exceeds its estimate has room to grow. Derived from
+	// MaxIndexDisk by the binary entry point (20% of the cap).
 	IndexHeadroomBytes uint64
 
 	// MaxConcurrentJobs caps how many jobs (auto-loads and manual
@@ -67,11 +62,6 @@ type RuntimeOptions struct {
 	// inventory_configs.retention_count is unset. Default 2.
 	AutoLoadRetentionDefault uint32
 
-	// IndexRatio is the multiplier applied to a manifest's total
-	// compressed size to estimate the final index bytes. Default
-	// inventory.DefaultIndexRatio.
-	IndexRatio float64
-
 	// DiscoveryRefreshInterval governs how often the background
 	// discovery refresher updates the cached snapshot HTTP handlers
 	// serve. Zero falls back to the server's default (1 minute).
@@ -80,14 +70,6 @@ type RuntimeOptions struct {
 	// QueryBatchMax caps the prefix count accepted by the batch stats
 	// endpoint. Zero means use the handler default.
 	QueryBatchMax int
-
-	// MetricsAddr, when non-empty, binds /metrics on its own listener
-	// (e.g. ":9090") so operators can keep it off the public router.
-	MetricsAddr string
-
-	// AutoLoadDryRun replaces side-effecting autoload actions with log
-	// entries — operators can preview a policy change before flipping it.
-	AutoLoadDryRun bool
 
 	// InventoryConfigs declares per-configuration auto-load + retention
 	// settings to upsert at startup. Typically populated from the JSON
@@ -122,7 +104,7 @@ func Bootstrap(ctx context.Context, opts RuntimeOptions) (*Server, func(), error
 		return nil, nil, err
 	}
 
-	dbPath := resolveStateDBPath(opts.StateDB, opts.CacheDir)
+	dbPath := resolveStateDBPath(opts.CacheDir)
 	if err := os.MkdirAll(filepath.Dir(dbPath), format.DirPerm); err != nil {
 		return nil, nil, fmt.Errorf("ensure state-db parent dir: %w", err)
 	}
@@ -167,11 +149,8 @@ func Bootstrap(ctx context.Context, opts RuntimeOptions) (*Server, func(), error
 		IndexHeadroomBytes:       opts.IndexHeadroomBytes,
 		MaxConcurrentJobs:        opts.MaxConcurrentJobs,
 		AutoLoadRetentionDefault: opts.AutoLoadRetentionDefault,
-		IndexRatio:               opts.IndexRatio,
 		DiscoveryRefreshInterval: opts.DiscoveryRefreshInterval,
 		QueryBatchMax:            opts.QueryBatchMax,
-		MetricsAddr:              opts.MetricsAddr,
-		AutoLoadDryRun:           opts.AutoLoadDryRun,
 	})
 	if err != nil {
 		cleanup()
@@ -257,16 +236,12 @@ func loadPriceTable(path string, logger zerolog.Logger) (pricing.PriceTable, err
 	return pt, nil
 }
 
-// resolveStateDBPath defaults the SQLite path to <cacheDir>/state.db
-// when StateDB is empty. Returning the resolved path makes the choice
-// inspectable in tests + logs.
-func resolveStateDBPath(stateDB, cacheDir string) string {
-	if stateDB != "" {
-		return stateDB
-	}
-	if cacheDir != "" {
-		return filepath.Join(cacheDir, "state.db")
+// resolveStateDBPath returns <cacheDir>/state.db, or empty when
+// cacheDir is unset (in which case OpenStateDB falls back to in-memory).
+func resolveStateDBPath(cacheDir string) string {
+	if cacheDir == "" {
+		return ""
 	}
 
-	return ""
+	return filepath.Join(cacheDir, "state.db")
 }

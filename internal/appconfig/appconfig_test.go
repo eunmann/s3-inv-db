@@ -44,7 +44,6 @@ func TestLoad_FullExample(t *testing.T) {
 		"max_index_disk": "200GB",
 		"max_concurrent_jobs": 2,
 		"auto_load_retention_default": 3,
-		"index_ratio": 0.4,
 		"inventories": [
 			{"source": "bkt", "name": "daily", "auto_load": true, "retention_count": 5}
 		]

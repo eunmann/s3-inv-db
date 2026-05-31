@@ -25,21 +25,16 @@ type Config struct {
 
 	S3Source *string `json:"s3_source,omitempty"`
 	CacheDir *string `json:"cache_dir,omitempty"`
-	StateDB  *string `json:"state_db,omitempty"`
 
-	AutoLoad                 *bool    `json:"auto_load,omitempty"`
-	PollInterval             *string  `json:"auto_load_poll_interval,omitempty"` // Go duration string
-	MaxIndexDisk             *string  `json:"max_index_disk,omitempty"`          // size string (e.g. "200GB")
-	IndexHeadroom            *string  `json:"index_headroom,omitempty"`
-	MaxConcurrentJobs        *int     `json:"max_concurrent_jobs,omitempty"`
-	AutoLoadRetentionDefault *uint32  `json:"auto_load_retention_default,omitempty"`
-	IndexRatio               *float64 `json:"index_ratio,omitempty"`
-	DiscoveryRefreshInterval *string  `json:"discovery_refresh_interval,omitempty"` // Go duration string
-	AutoLoadDryRun           *bool    `json:"auto_load_dry_run,omitempty"`
+	AutoLoad                 *bool   `json:"auto_load,omitempty"`
+	PollInterval             *string `json:"auto_load_poll_interval,omitempty"` // Go duration string
+	MaxIndexDisk             *string `json:"max_index_disk,omitempty"`          // size string (e.g. "200GB")
+	MaxConcurrentJobs        *int    `json:"max_concurrent_jobs,omitempty"`
+	AutoLoadRetentionDefault *uint32 `json:"auto_load_retention_default,omitempty"`
+	DiscoveryRefreshInterval *string `json:"discovery_refresh_interval,omitempty"` // Go duration string
 
-	MetricsAddr    *string `json:"metrics_addr,omitempty"` // empty/unset = mount /metrics on main listener
-	BuildEventLog  *string `json:"build_event_log,omitempty"`
-	QueryBatchMax  *int    `json:"query_batch_max,omitempty"`
+	BuildEventLog *string `json:"build_event_log,omitempty"`
+	QueryBatchMax *int    `json:"query_batch_max,omitempty"`
 
 	Inventories []InventoryEntry `json:"inventories,omitempty"`
 }

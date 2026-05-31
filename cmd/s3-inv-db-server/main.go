@@ -28,9 +28,10 @@ var errNegativeSize = errors.New("negative size")
 // Server-flag defaults split out as constants so the call-site reads
 // declaratively and `mnd` lint stops flagging the literals.
 const (
-	defaultIndexRatio        = 0.30
 	defaultAutoLoadRetention = 2
-	headroomDivisor          = 5
+	// headroomDivisor: 1/headroomDivisor of MaxIndexDisk is reserved as
+	// unused buffer so loads that exceed their size estimate have room.
+	headroomDivisor = 5
 	// Power-of-two byte multipliers for "KiB/MiB/GiB/TiB" suffixes.
 	bitsPerTebibyte = 40
 	bitsPerGibibyte = 30
@@ -46,7 +47,7 @@ func main() {
 
 // serverFlags collects the raw flag *values for run(). Filled by
 // defineFlags before flag.Parse; resolveRuntimeOptions merges them with
-// file/env config into the final server.RuntimeOptions.
+// file config into the final server.RuntimeOptions.
 type serverFlags struct {
 	configPath        *string
 	addr              *string
@@ -55,18 +56,13 @@ type serverFlags struct {
 	priceTablePath    *string
 	s3Source          *string
 	cacheDir          *string
-	stateDB           *string
 	autoLoad          *bool
 	pollInterval      *time.Duration
 	discoveryRefresh  *time.Duration
 	maxIndexDisk      *string
-	headroom          *string
 	maxConcurrentJobs *int
 	autoLoadRetention *uint
-	indexRatio        *float64
 	queryBatchMax     *int
-	metricsAddr       *string
-	autoLoadDryRun    *bool
 }
 
 func defineFlags(fs *flag.FlagSet) *serverFlags {
@@ -78,34 +74,21 @@ func defineFlags(fs *flag.FlagSet) *serverFlags {
 		priceTablePath:    fs.String("price-table", "", "path to custom price table JSON (default: US East 1 prices)"),
 		s3Source:          fs.String("s3-source", "", "S3 URI to discover inventories under (e.g., s3://bucket/inventory-data/)"),
 		cacheDir:          fs.String("cache-dir", "/var/cache/s3inv", "local directory for built indexes downloaded from S3"),
-		stateDB:           fs.String("state-db", "", "SQLite path for persisted state (default: <cache-dir>/state.db)"),
 		autoLoad:          fs.Bool("auto-load", false, "enable background discovery + auto-load of new inventory runs; requires --max-index-disk"),
 		pollInterval:      fs.Duration("auto-load-poll-interval", autoload.DefaultPollInterval, "discovery polling interval"),
 		discoveryRefresh:  fs.Duration("discovery-refresh-interval", server.DefaultDiscoveryRefreshInterval, "interval at which the background discovery refresher updates the cached snapshot served by HTTP handlers"),
 		maxIndexDisk:      fs.String("max-index-disk", "", "max cumulative on-disk bytes for loaded indexes (e.g. 100GB); required with --auto-load"),
-		headroom:          fs.String("index-headroom", "", "reserved unused space inside --max-index-disk; default 20% of the cap"),
 		maxConcurrentJobs: fs.Int("max-concurrent-jobs", 1, "max jobs (auto-loads and manual builds) running at once"),
 		autoLoadRetention: fs.Uint("auto-load-retention-default", defaultAutoLoadRetention, "default per-config run-retention when a configuration sets none"),
-		indexRatio:        fs.Float64("index-ratio", defaultIndexRatio, "estimate multiplier: final index bytes ≈ ratio × compressed manifest total"),
 		queryBatchMax:     fs.Int("query-batch-max", 0, "max prefixes per batch stats request (0 = handler default)"),
-		metricsAddr:       fs.String("metrics-addr", "", "bind /metrics on this address; empty = mount on the main listener"),
-		autoLoadDryRun:    fs.Bool("auto-load-dry-run", false, "log autoload decisions instead of acting on them"),
 	}
 }
 
 func resolveRuntimeOptions(f *serverFlags, fileCfg *appconfig.Config, explicit map[string]bool, logger zerolog.Logger) (server.RuntimeOptions, error) {
 	capStr := pickString(fileCfg, *f.maxIndexDisk, explicit["max-index-disk"], func(c *appconfig.Config) *string { return c.MaxIndexDisk })
-	headStr := pickString(fileCfg, *f.headroom, explicit["index-headroom"], func(c *appconfig.Config) *string { return c.IndexHeadroom })
 	capBytes, err := parseSize(capStr)
 	if err != nil {
 		return server.RuntimeOptions{}, fmt.Errorf("max_index_disk: %w", err)
-	}
-	headBytes, err := parseSize(headStr)
-	if err != nil {
-		return server.RuntimeOptions{}, fmt.Errorf("index_headroom: %w", err)
-	}
-	if capBytes > 0 && headBytes == 0 {
-		headBytes = capBytes / headroomDivisor
 	}
 	finalInterval, err := resolveDuration(*f.pollInterval, explicit["auto-load-poll-interval"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *string { return c.PollInterval }))
 	if err != nil {
@@ -120,19 +103,15 @@ func resolveRuntimeOptions(f *serverFlags, fileCfg *appconfig.Config, explicit m
 		Addr:                     pickString(fileCfg, *f.addr, explicit["addr"], func(c *appconfig.Config) *string { return c.Addr }),
 		S3Source:                 pickString(fileCfg, *f.s3Source, explicit["s3-source"], func(c *appconfig.Config) *string { return c.S3Source }),
 		CacheDir:                 pickString(fileCfg, *f.cacheDir, explicit["cache-dir"], func(c *appconfig.Config) *string { return c.CacheDir }),
-		StateDB:                  pickString(fileCfg, *f.stateDB, explicit["state-db"], func(c *appconfig.Config) *string { return c.StateDB }),
 		PriceTablePath:           pickString(fileCfg, *f.priceTablePath, explicit["price-table"], func(c *appconfig.Config) *string { return c.PriceTable }),
 		AutoLoad:                 pickBool(fileCfg, *f.autoLoad, explicit["auto-load"], func(c *appconfig.Config) *bool { return c.AutoLoad }),
 		PollInterval:             finalInterval,
 		DiscoveryRefreshInterval: finalDiscoveryRefresh,
 		MaxIndexDisk:             capBytes,
-		IndexHeadroomBytes:       headBytes,
+		IndexHeadroomBytes:       capBytes / headroomDivisor,
 		MaxConcurrentJobs:        appconfig.Pick(*f.maxConcurrentJobs, explicit["max-concurrent-jobs"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *int { return c.MaxConcurrentJobs })),
 		AutoLoadRetentionDefault: appconfig.Pick(uint32(*f.autoLoadRetention), explicit["auto-load-retention-default"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *uint32 { return c.AutoLoadRetentionDefault })),
-		IndexRatio:               appconfig.Pick(*f.indexRatio, explicit["index-ratio"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *float64 { return c.IndexRatio })),
 		QueryBatchMax:            appconfig.Pick(*f.queryBatchMax, explicit["query-batch-max"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *int { return c.QueryBatchMax })),
-		MetricsAddr:              pickString(fileCfg, *f.metricsAddr, explicit["metrics-addr"], func(c *appconfig.Config) *string { return c.MetricsAddr }),
-		AutoLoadDryRun:           pickBool(fileCfg, *f.autoLoadDryRun, explicit["auto-load-dry-run"], func(c *appconfig.Config) *bool { return c.AutoLoadDryRun }),
 		InventoryConfigs:         inventoryConfigsFromFile(fileCfg),
 		Logger:                   logger,
 	}, nil

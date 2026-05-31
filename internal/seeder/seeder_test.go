@@ -95,7 +95,7 @@ func TestRun_DistinctInventoriesWithDefaultSeed(t *testing.T) {
 	hashes := make(map[string]string, 3)
 	for i := 1; i <= 3; i++ {
 		id := fmt.Sprintf("inv-%03d", i)
-		blobPath := filepath.Join(tmpDir, id, "prefix_blob.bin")
+		blobPath := filepath.Join(tmpDir, id, "prefix_dict.bin")
 		data, err := os.ReadFile(blobPath)
 		if err != nil {
 			t.Fatalf("read %s: %v", blobPath, err)
@@ -291,7 +291,7 @@ func TestRun_DistinctInventoryHashAcrossAllPairs(t *testing.T) {
 	hashes := make([]string, 4)
 	for i := range hashes {
 		id := fmt.Sprintf("inv-%03d", i+1)
-		data, err := os.ReadFile(filepath.Join(tmpDir, id, "prefix_blob.bin"))
+		data, err := os.ReadFile(filepath.Join(tmpDir, id, "prefix_dict.bin"))
 		if err != nil {
 			t.Fatalf("read %s: %v", id, err)
 		}

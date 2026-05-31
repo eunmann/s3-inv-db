@@ -33,12 +33,10 @@ func BenchmarkBuildHarness(b *testing.B) {
 	}
 	for _, shape := range shapes {
 		for _, n := range sizes {
-			for _, dict := range []bool{false, true} {
-				name := fmt.Sprintf("shape=%s/n=%d/dict=%v", shape.name, n, dict)
-				b.Run(name, func(b *testing.B) {
-					runShapeHarness(b, shape.cfg(n), dict)
-				})
-			}
+			name := fmt.Sprintf("shape=%s/n=%d", shape.name, n)
+			b.Run(name, func(b *testing.B) {
+				runShapeHarness(b, shape.cfg(n))
+			})
 		}
 	}
 }
@@ -52,7 +50,7 @@ const (
 	harnessRunBufferSize      = DefaultRunBufferSize
 )
 
-func runShapeHarness(b *testing.B, cfg benchutil.GeneratorConfig, prefixDict bool) {
+func runShapeHarness(b *testing.B, cfg benchutil.GeneratorConfig) {
 	b.Helper()
 	benchutil.SilenceZerolog(b)
 
@@ -76,7 +74,7 @@ func runShapeHarness(b *testing.B, cfg benchutil.GeneratorConfig, prefixDict boo
 		sampler := benchutil.StartHeapPeakSampler()
 		b.StartTimer()
 
-		result, err := buildIndexBounded(cfg, dir, tempDir, prefixDict)
+		result, err := buildIndexBounded(cfg, dir, tempDir)
 		if err != nil {
 			b.StopTimer()
 			sampler.Stop()
@@ -111,7 +109,7 @@ type harnessResult struct {
 
 // buildIndexBounded streams objects through one aggregator that
 // spills on cap, then k-way-merges the spills into IndexBuilder.
-func buildIndexBounded(cfg benchutil.GeneratorConfig, outDir, tempDir string, prefixDict bool) (*harnessResult, error) {
+func buildIndexBounded(cfg benchutil.GeneratorConfig, outDir, tempDir string) (*harnessResult, error) {
 	agg := NewAggregator(cfg.NumObjects/harnessAggregatorChunkRatio, 0)
 	sample := newPrefixSampler(harnessPrefixSampleCap)
 	memLimit := debug.SetMemoryLimit(-1)
@@ -157,7 +155,7 @@ func buildIndexBounded(cfg benchutil.GeneratorConfig, outDir, tempDir string, pr
 	finalRows := agg.Drain()
 	SortPrefixRows(finalRows)
 
-	prefixCount, err := buildFromRuns(outDir, tempDir, runFiles, finalRows, prefixDict)
+	prefixCount, err := buildFromRuns(outDir, tempDir, runFiles, finalRows)
 	if err != nil {
 		removeFiles(runFiles)
 
@@ -191,15 +189,10 @@ func flushAggregatorToRun(agg *Aggregator, tempDir string, runIdx int) (string, 
 	return path, nil
 }
 
-func buildFromRuns(outDir, tempDir string, runFiles []string, finalRows []*PrefixRow, prefixDict bool) (uint64, error) {
+func buildFromRuns(outDir, tempDir string, runFiles []string, finalRows []*PrefixRow) (uint64, error) {
 	builder, err := NewIndexBuilderWithCapacity(outDir, tempDir, 0)
 	if err != nil {
 		return 0, fmt.Errorf("new builder: %w", err)
-	}
-	if prefixDict {
-		if err := builder.SetPrefixDictionary(true); err != nil {
-			return 0, fmt.Errorf("set prefix dictionary: %w", err)
-		}
 	}
 
 	switch {

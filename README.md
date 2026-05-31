@@ -66,9 +66,7 @@ The `inventories[]` array declares per-configuration auto-load + retention; entr
 
 Additional server keys (all optional):
 
-- `metrics_addr` — bind `/metrics` on its own listener (e.g. `":9090"`). Empty mounts on the main router.
 - `query_batch_max` — cap on `/api/inventories/{id}/stats:batch` prefix count (default 1000).
-- `auto_load_dry_run` — log autoload decisions instead of performing them.
 - `build_event_log` — when set, the `build` CLI also writes every pipeline event as JSONL to this path.
 
 ## Library usage
