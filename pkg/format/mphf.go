@@ -118,6 +118,9 @@ func (m *MPHF) Prefix(pos uint64) (string, error) {
 }
 
 func (m *MPHF) GetPrefix(pos uint64) (string, error) {
+	if m.dictPrefixes == nil {
+		return "", ErrNoPrefixStorage
+	}
 	s, err := m.dictPrefixes.GetPrefix(pos)
 	if err != nil {
 		return "", fmt.Errorf("get dict prefix at pos %d: %w", pos, err)

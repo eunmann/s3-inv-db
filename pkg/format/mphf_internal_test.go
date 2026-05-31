@@ -1,6 +1,7 @@
 package format
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -197,6 +198,27 @@ func TestMPHFUnicode(t *testing.T) {
 		if stored != p {
 			t.Errorf("GetPrefix returned %q, want %q", stored, p)
 		}
+	}
+}
+
+// TestEmptyMPHF_GetPrefixReturnsError asserts that GetPrefix on an
+// empty MPHF (the size-0 mph.bin fast path) returns ErrNoPrefixStorage
+// instead of nil-dereferencing the unset dictPrefixes field.
+func TestEmptyMPHF_GetPrefixReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	b := newTestMPHFBuilder(t)
+	if err := b.Build(dir); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	m, err := OpenMPHF(dir)
+	if err != nil {
+		t.Fatalf("OpenMPHF: %v", err)
+	}
+	defer m.Close()
+
+	if _, err := m.GetPrefix(0); !errors.Is(err, ErrNoPrefixStorage) {
+		t.Errorf("GetPrefix on empty MPHF = %v, want ErrNoPrefixStorage", err)
 	}
 }
 
