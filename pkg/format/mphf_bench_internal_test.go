@@ -30,7 +30,7 @@ func generateRealisticPrefixes(n int) []string {
 func buildMPHFForBench(b *testing.B, prefixes []string) string {
 	b.Helper()
 	dir := b.TempDir()
-	builder, err := NewStreamingMPHFBuilder(dir, false)
+	builder, err := NewStreamingMPHFBuilder(dir)
 	if err != nil {
 		b.Fatalf("NewStreamingMPHFBuilder: %v", err)
 	}

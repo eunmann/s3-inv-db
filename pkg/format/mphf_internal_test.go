@@ -223,7 +223,7 @@ type testMPHFBuilder struct {
 
 func newTestMPHFBuilder(tb testing.TB) *testMPHFBuilder {
 	tb.Helper()
-	sb, err := NewStreamingMPHFBuilder(tb.TempDir(), false)
+	sb, err := NewStreamingMPHFBuilder(tb.TempDir())
 	if err != nil {
 		tb.Fatalf("NewStreamingMPHFBuilder: %v", err)
 	}

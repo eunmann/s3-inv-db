@@ -24,20 +24,15 @@ const (
 //
 // Thread Safety: MPHF is safe for concurrent read access from
 // multiple goroutines. Close once, after all reads.
-//
-// Exactly one of prefixBlob or dictPrefixes is non-nil; usePrefixDict
-// selects between them.
 type MPHF struct {
 	mph *bbhash.BBHash2
 	// combined holds the interleaved [fp, pos, fp, pos, ...] array.
 	// Lookup at hash position p reads combined.UnsafeGetU64(2p) for
 	// fp and combined.UnsafeGetU64(2p+1) for pos — adjacent words
 	// in the same cache line.
-	combined      *ArrayReader
-	prefixBlob    *BlobReader
-	dictPrefixes  *DictPrefixReader
-	count         uint64
-	usePrefixDict bool
+	combined     *ArrayReader
+	dictPrefixes *DictPrefixReader
+	count        uint64
 }
 
 // OpenMPHF opens an MPHF from the given directory.
@@ -67,57 +62,32 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 		return nil, fmt.Errorf("open combined fp+pos: %w", err)
 	}
 
-	var (
-		prefixBlob    *BlobReader
-		dictPrefixes  *DictPrefixReader
-		usePrefixDict bool
-	)
-	dictBlobPath := filepath.Join(outDir, PrefixDictBlobFile)
-	if _, err := os.Stat(dictBlobPath); err == nil {
-		dictPrefixes, err = OpenDictPrefixReader(outDir)
-		if err != nil {
-			combined.Close()
+	dictPrefixes, err := OpenDictPrefixReader(outDir)
+	if err != nil {
+		combined.Close()
 
-			return nil, fmt.Errorf("open dict prefixes: %w", err)
-		}
-		usePrefixDict = true
-	} else {
-		blobPath := filepath.Join(outDir, PrefixBlobFile)
-		offsetsPath := filepath.Join(outDir, PrefixOffsetsFile)
-		if _, err := os.Stat(blobPath); err == nil {
-			prefixBlob, err = OpenBlob(blobPath, offsetsPath)
-			if err != nil {
-				combined.Close()
-
-				return nil, fmt.Errorf("open prefix blob: %w", err)
-			}
-		}
+		return nil, fmt.Errorf("open dict prefixes: %w", err)
 	}
 
 	return &MPHF{
-		mph:           mph,
-		combined:      combined,
-		prefixBlob:    prefixBlob,
-		dictPrefixes:  dictPrefixes,
-		count:         combined.Count() / 2,
-		usePrefixDict: usePrefixDict,
+		mph:          mph,
+		combined:     combined,
+		dictPrefixes: dictPrefixes,
+		count:        combined.Count() / 2,
 	}, nil
 }
 
 // Close releases resources.
 func (m *MPHF) Close() error {
-	var combinedErr, blobErr, dictErr error
+	var combinedErr, dictErr error
 	if m.combined != nil {
 		combinedErr = m.combined.Close()
-	}
-	if m.prefixBlob != nil {
-		blobErr = m.prefixBlob.Close()
 	}
 	if m.dictPrefixes != nil {
 		dictErr = m.dictPrefixes.Close()
 	}
 
-	return errors.Join(combinedErr, blobErr, dictErr)
+	return errors.Join(combinedErr, dictErr)
 }
 
 // Lookup returns the preorder position for a prefix, or ok=false if not found.
@@ -143,29 +113,14 @@ func (m *MPHF) Lookup(prefix string) (uint64, bool) {
 	return preorderPosVal, true
 }
 
-// Prefix returns the prefix string at the given position.
-// Requires the prefix blob to be loaded.
 func (m *MPHF) Prefix(pos uint64) (string, error) {
 	return m.GetPrefix(pos)
 }
 
-// GetPrefix returns the prefix string at the given position.
 func (m *MPHF) GetPrefix(pos uint64) (string, error) {
-	if m.usePrefixDict {
-		s, err := m.dictPrefixes.GetPrefix(pos)
-		if err != nil {
-			return "", fmt.Errorf("get dict prefix at pos %d: %w", pos, err)
-		}
-
-		return s, nil
-	}
-
-	if m.prefixBlob == nil {
-		return "", ErrPrefixBlobNotLoaded
-	}
-	s, err := m.prefixBlob.Get(pos)
+	s, err := m.dictPrefixes.GetPrefix(pos)
 	if err != nil {
-		return "", fmt.Errorf("get prefix at pos %d: %w", pos, err)
+		return "", fmt.Errorf("get dict prefix at pos %d: %w", pos, err)
 	}
 
 	return s, nil
@@ -178,14 +133,8 @@ func (m *MPHF) LookupWithVerify(prefix string) (uint64, bool) {
 	if !ok {
 		return 0, false
 	}
-
-	if m.usePrefixDict && m.dictPrefixes != nil {
+	if m.dictPrefixes != nil {
 		stored, err := m.dictPrefixes.GetPrefix(pos)
-		if err != nil || stored != prefix {
-			return 0, false
-		}
-	} else if m.prefixBlob != nil {
-		stored, err := m.prefixBlob.Get(pos)
 		if err != nil || stored != prefix {
 			return 0, false
 		}
@@ -197,7 +146,7 @@ func (m *MPHF) LookupWithVerify(prefix string) (uint64, bool) {
 // VerifyMPHF checks that every stored prefix round-trips: GetPrefix
 // at every position returns a string that Lookups back to that position.
 func VerifyMPHF(m *MPHF) error {
-	if m.prefixBlob == nil && m.dictPrefixes == nil {
+	if m.dictPrefixes == nil {
 		return ErrNoPrefixStorage
 	}
 

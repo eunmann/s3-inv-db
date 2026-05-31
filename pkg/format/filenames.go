@@ -4,8 +4,6 @@ package format
 // builders and readers stay in sync; manifest verification also reads
 // from this list.
 const (
-	PrefixBlobFile     = "prefix_blob.bin"
-	PrefixOffsetsFile  = "prefix_offsets.u64"
 	DepthOffsetsFile   = "depth_offsets.u64"
 	DepthPositionsFile = "depth_positions.u64"
 	MPHFile            = "mph.bin"
