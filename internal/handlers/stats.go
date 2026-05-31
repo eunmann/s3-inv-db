@@ -34,6 +34,23 @@ type TierStats struct {
 	Bytes        uint64 `json:"bytes"`
 }
 
+// assembleTierStats wraps a format.TierBreakdown slice into the
+// response-shaped TierStats slice, attaching humanfmt formatted values.
+func assembleTierStats(breakdown []format.TierBreakdown) []TierStats {
+	out := make([]TierStats, len(breakdown))
+	for i, tb := range breakdown {
+		out[i] = TierStats{
+			TierName:     tb.TierName,
+			ObjectCount:  tb.ObjectCount,
+			ObjectCountH: humanfmt.CountUint64(tb.ObjectCount),
+			Bytes:        tb.Bytes,
+			BytesH:       humanfmt.BytesUint64(tb.Bytes),
+		}
+	}
+
+	return out
+}
+
 // CostEstimate contains cost estimation details.
 type CostEstimate struct {
 	PerTierMicrodollars         map[string]uint64 `json:"per_tier_microdollars,omitempty"`
@@ -233,16 +250,7 @@ func (h *Handlers) buildStatsResponse(idx *indexread.Index, prefix string, showT
 
 	if showTiers && idx.HasTierData() {
 		breakdown := idx.TierBreakdown(pos)
-		resp.TierBreakdown = make([]TierStats, 0, len(breakdown))
-		for _, tb := range breakdown {
-			resp.TierBreakdown = append(resp.TierBreakdown, TierStats{
-				TierName:     tb.TierName,
-				ObjectCount:  tb.ObjectCount,
-				ObjectCountH: humanfmt.CountUint64(tb.ObjectCount),
-				Bytes:        tb.Bytes,
-				BytesH:       humanfmt.BytesUint64(tb.Bytes),
-			})
-		}
+		resp.TierBreakdown = assembleTierStats(breakdown)
 		if estimateCost {
 			resp.CostEstimate = h.computeCostEstimate(breakdown, true)
 		}
