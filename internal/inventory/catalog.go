@@ -510,10 +510,13 @@ func (c *Catalog) Hydrate(ctx context.Context, info Info, indexDir string) error
 // the call. Concurrent Unload/Remove/Close on the same inventory block
 // until fn returns.
 //
-// Fn must not call back into the Catalog (Load, Unload, Remove, Hydrate)
-// — those acquire the write lock c.mu, which deadlocks against the
-// read lock this call holds. Read-only calls (Get, List, WithIndex on
-// a different inventory) are safe.
+// Fn must not call back into the Catalog on a path that takes the
+// write lock (Load, Unload, Remove, Hydrate) — those would deadlock
+// against the read lock this call holds. Fn must also not recursively
+// invoke WithIndex on the *same* inventory: Go's sync.RWMutex prohibits
+// recursive RLock, and per-inventory locking would deadlock against any
+// pending writer. Read-only calls (Get, List, WithIndex on a *different*
+// inventory) are safe.
 func (c *Catalog) WithIndex(id ID, fn func(*indexread.Index) error) error {
 	c.mu.RLock()
 	inv, exists := c.inventories[id]
