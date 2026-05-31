@@ -11,36 +11,52 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-// defaultTierDist is the tier mix used by DefaultConfig — five-class
-// subset summing to 1.0.
-//
+// Tier mix probabilities. DefaultTierDist is the five-class mix used by
+// DefaultConfig; s3RealisticTierDist exercises all 11 storage classes
+// for S3RealisticConfig (legacy lifecycle tiers + the Intelligent-
+// Tiering family). Each map's values sum to 1.0.
+const (
+	defaultProbStandard   = 0.60
+	defaultProbStandardIA = 0.15
+	defaultProbGlacierIR  = 0.10
+	defaultProbITFrequent = 0.10
+	defaultProbITArchive  = 0.05
+
+	s3ProbStandard         = 0.25
+	s3ProbStandardIA       = 0.15
+	s3ProbGlacierIR        = 0.07
+	s3ProbGlacierFR        = 0.05
+	s3ProbDeepArchive      = 0.08
+	s3ProbITFrequent       = 0.12
+	s3ProbITInfrequent     = 0.10
+	s3ProbITArchiveInstant = 0.06
+	s3ProbITArchive        = 0.06
+	s3ProbITDeepArchive    = 0.04
+	s3ProbITFrequentSmall  = 0.02
+)
+
 //nolint:gochecknoglobals // immutable benchmark tier distribution
 var defaultTierDist = map[tiers.ID]float64{
-	tiers.Standard:   0.60,
-	tiers.StandardIA: 0.15,
-	tiers.GlacierIR:  0.10,
-	tiers.ITFrequent: 0.10,
-	tiers.ITArchive:  0.05,
+	tiers.Standard:   defaultProbStandard,
+	tiers.StandardIA: defaultProbStandardIA,
+	tiers.GlacierIR:  defaultProbGlacierIR,
+	tiers.ITFrequent: defaultProbITFrequent,
+	tiers.ITArchive:  defaultProbITArchive,
 }
 
-// s3RealisticTierDist is the S3-realistic tier mix used by
-// S3RealisticConfig. All 11 storage classes populated, modelling a
-// typical enterprise bucket that uses both legacy lifecycle tiers and
-// the Intelligent-Tiering family. Probabilities sum to 1.0.
-//
 //nolint:gochecknoglobals // immutable benchmark tier distribution
 var s3RealisticTierDist = map[tiers.ID]float64{
-	tiers.Standard:         0.25,
-	tiers.StandardIA:       0.15,
-	tiers.GlacierIR:        0.07,
-	tiers.GlacierFR:        0.05,
-	tiers.DeepArchive:      0.08,
-	tiers.ITFrequent:       0.12,
-	tiers.ITInfrequent:     0.10,
-	tiers.ITArchiveInstant: 0.06,
-	tiers.ITArchive:        0.06,
-	tiers.ITDeepArchive:    0.04,
-	tiers.ITFrequentSmall:  0.02,
+	tiers.Standard:         s3ProbStandard,
+	tiers.StandardIA:       s3ProbStandardIA,
+	tiers.GlacierIR:        s3ProbGlacierIR,
+	tiers.GlacierFR:        s3ProbGlacierFR,
+	tiers.DeepArchive:      s3ProbDeepArchive,
+	tiers.ITFrequent:       s3ProbITFrequent,
+	tiers.ITInfrequent:     s3ProbITInfrequent,
+	tiers.ITArchiveInstant: s3ProbITArchiveInstant,
+	tiers.ITArchive:        s3ProbITArchive,
+	tiers.ITDeepArchive:    s3ProbITDeepArchive,
+	tiers.ITFrequentSmall:  s3ProbITFrequentSmall,
 }
 
 // Synthetic directory depth used by DefaultConfig.

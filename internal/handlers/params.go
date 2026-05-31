@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -9,22 +10,27 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
 
+// ErrInvalidQueryParam is returned by the query-parsing helpers when a
+// value is present but malformed. Callers map it to a 400 with the
+// formatted error string as the body.
+var ErrInvalidQueryParam = errors.New("invalid query param")
+
 // parseFilter reads min_count and min_bytes from q. Missing keys are
-// zero. Returns an error naming the offending key on invalid input;
-// callers map this to a 400.
+// zero. Returns ErrInvalidQueryParam-wrapped error naming the offending
+// key on invalid input; callers map this to a 400.
 func parseFilter(q url.Values) (indexread.Filter, error) {
 	var f indexread.Filter
 	if v := q.Get("min_count"); v != "" {
 		n, err := strconv.ParseUint(v, 10, 64)
 		if err != nil {
-			return f, fmt.Errorf("invalid min_count")
+			return f, fmt.Errorf("%w: min_count", ErrInvalidQueryParam)
 		}
 		f.MinCount = n
 	}
 	if v := q.Get("min_bytes"); v != "" {
 		n, err := strconv.ParseUint(v, 10, 64)
 		if err != nil {
-			return f, fmt.Errorf("invalid min_bytes")
+			return f, fmt.Errorf("%w: min_bytes", ErrInvalidQueryParam)
 		}
 		f.MinBytes = n
 	}
@@ -33,7 +39,7 @@ func parseFilter(q url.Values) (indexread.Filter, error) {
 }
 
 // parsePositiveInt reads key from q as an int >= 1. Returns (def, nil)
-// when the key is absent. Returns an error message suitable for a 400
+// when the key is absent. Returns an ErrInvalidQueryParam-wrapped error
 // when the value is present but malformed or below 1.
 func parsePositiveInt(q url.Values, key string, def int) (int, error) {
 	v := q.Get(key)
@@ -42,7 +48,7 @@ func parsePositiveInt(q url.Values, key string, def int) (int, error) {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 1 {
-		return 0, fmt.Errorf("invalid %s", key)
+		return 0, fmt.Errorf("%w: %s", ErrInvalidQueryParam, key)
 	}
 
 	return n, nil
