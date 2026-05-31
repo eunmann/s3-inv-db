@@ -35,7 +35,7 @@ func runBuild(args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	initLogging(logFlags, fs, fileCfg)
-	finalEventLog := resolveString(fileCfg, *eventLogPath, explicitFlags(fs)["event-log"], func(c *appconfig.Config) *string { return c.BuildEventLog })
+	finalEventLog := appconfig.PickFile(*eventLogPath, explicitFlags(fs)["event-log"], fileCfg, func(c *appconfig.Config) *string { return c.BuildEventLog })
 
 	baseLogger := *logging.L()
 

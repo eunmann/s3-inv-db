@@ -74,29 +74,21 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
-// Pick returns flagVal if the flag was explicit, otherwise configVal
-// (when non-nil), otherwise flagVal (which is already the env-or-default
-// value). Generic over every type a CLI flag carries in this repo.
+// PickFile collapses the "flag > file > default" precedence: returns
+// flagVal when the flag was set explicitly, otherwise *get(cfg) when
+// cfg is non-nil and get returns non-nil, otherwise flagVal (which is
+// the flag's default).
 //
 //nolint:ireturn // T is the caller's concrete type, not an interface to satisfy
-func Pick[T any](flagVal T, explicit bool, configVal *T) T {
+func PickFile[T any](flagVal T, explicit bool, cfg *Config, get func(*Config) *T) T {
 	if explicit {
 		return flagVal
 	}
-	if configVal != nil {
-		return *configVal
+	if cfg != nil {
+		if p := get(cfg); p != nil {
+			return *p
+		}
 	}
 
 	return flagVal
-}
-
-// FromFile returns get(cfg) when cfg is non-nil, otherwise nil. Lets
-// callers thread "config may be missing" without bespoke nil-guard
-// helpers per field type.
-func FromFile[T any](cfg *Config, get func(*Config) *T) *T {
-	if cfg == nil {
-		return nil
-	}
-
-	return get(cfg)
 }

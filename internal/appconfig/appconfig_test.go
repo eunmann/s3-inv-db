@@ -87,38 +87,44 @@ func TestLoad_RejectsBlankInventoryKeys(t *testing.T) {
 	}
 }
 
-func TestPickString_PrecedenceOrder(t *testing.T) {
-	cfgVal := "from-config"
+func TestPickFile_String_PrecedenceOrder(t *testing.T) {
+	addr := "from-config"
+	cfgWithVal := &appconfig.Config{Addr: &addr}
 	cases := []struct {
 		name     string
 		flagVal  string
 		explicit bool
-		cfg      *string
+		cfg      *appconfig.Config
 		want     string
 	}{
-		{"explicit flag wins", "from-flag", true, &cfgVal, "from-flag"},
-		{"config beats env-default", "env-default", false, &cfgVal, "from-config"},
-		{"env-default when no config", "env-default", false, nil, "env-default"},
+		{"explicit flag wins", "from-flag", true, cfgWithVal, "from-flag"},
+		{"config beats flag default", "default", false, cfgWithVal, "from-config"},
+		{"flag default when no config", "default", false, nil, "default"},
+		{"flag default when config nil-field", "default", false, &appconfig.Config{}, "default"},
 	}
+	get := func(c *appconfig.Config) *string { return c.Addr }
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := appconfig.Pick(tc.flagVal, tc.explicit, tc.cfg)
+			got := appconfig.PickFile(tc.flagVal, tc.explicit, tc.cfg, get)
 			if got != tc.want {
-				t.Errorf("PickString = %q, want %q", got, tc.want)
+				t.Errorf("PickFile = %q, want %q", got, tc.want)
 			}
 		})
 	}
 }
 
-func TestPickBool_PrecedenceOrder(t *testing.T) {
+func TestPickFile_Bool_PrecedenceOrder(t *testing.T) {
+	get := func(c *appconfig.Config) *bool { return c.Verbose }
 	tr := true
-	if got := appconfig.Pick(false, true, &tr); got != false {
+	cfgTrue := &appconfig.Config{Verbose: &tr}
+	if got := appconfig.PickFile(false, true, cfgTrue, get); got != false {
 		t.Errorf("explicit false flag should override config true, got %v", got)
 	}
-	if got := appconfig.Pick(false, false, &tr); got != true {
+	if got := appconfig.PickFile(false, false, cfgTrue, get); got != true {
 		t.Errorf("non-explicit flag should pick up config true, got %v", got)
 	}
-	if got := appconfig.Pick(true, false, nil); got != true {
-		t.Errorf("env-default true should win when no config, got %v", got)
+	if got := appconfig.PickFile(true, false, nil, get); got != true {
+		t.Errorf("flag default true should win when no config, got %v", got)
 	}
 }
+

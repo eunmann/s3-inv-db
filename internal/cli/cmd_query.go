@@ -53,7 +53,7 @@ func runQuery(args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	initLogging(logFlags, fs, fileCfg)
-	finalPriceTable := resolveString(fileCfg, *priceTablePath, explicitFlags(fs)["price-table"], func(c *appconfig.Config) *string { return c.PriceTable })
+	finalPriceTable := appconfig.PickFile(*priceTablePath, explicitFlags(fs)["price-table"], fileCfg, func(c *appconfig.Config) *string { return c.PriceTable })
 
 	logger := logging.L()
 

@@ -85,33 +85,33 @@ func defineFlags(fs *flag.FlagSet) *serverFlags {
 }
 
 func resolveRuntimeOptions(f *serverFlags, fileCfg *appconfig.Config, explicit map[string]bool, logger zerolog.Logger) (server.RuntimeOptions, error) {
-	capStr := pickString(fileCfg, *f.maxIndexDisk, explicit["max-index-disk"], func(c *appconfig.Config) *string { return c.MaxIndexDisk })
+	capStr := appconfig.PickFile(*f.maxIndexDisk, explicit["max-index-disk"], fileCfg, func(c *appconfig.Config) *string { return c.MaxIndexDisk })
 	capBytes, err := parseSize(capStr)
 	if err != nil {
 		return server.RuntimeOptions{}, fmt.Errorf("max_index_disk: %w", err)
 	}
-	finalInterval, err := resolveDuration(*f.pollInterval, explicit["auto-load-poll-interval"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *string { return c.PollInterval }))
+	finalInterval, err := resolveDuration(*f.pollInterval, explicit["auto-load-poll-interval"], fileCfg, func(c *appconfig.Config) *string { return c.PollInterval })
 	if err != nil {
 		return server.RuntimeOptions{}, fmt.Errorf("auto_load_poll_interval: %w", err)
 	}
-	finalDiscoveryRefresh, err := resolveDuration(*f.discoveryRefresh, explicit["discovery-refresh-interval"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *string { return c.DiscoveryRefreshInterval }))
+	finalDiscoveryRefresh, err := resolveDuration(*f.discoveryRefresh, explicit["discovery-refresh-interval"], fileCfg, func(c *appconfig.Config) *string { return c.DiscoveryRefreshInterval })
 	if err != nil {
 		return server.RuntimeOptions{}, fmt.Errorf("discovery_refresh_interval: %w", err)
 	}
 
 	return server.RuntimeOptions{
-		Addr:                     pickString(fileCfg, *f.addr, explicit["addr"], func(c *appconfig.Config) *string { return c.Addr }),
-		S3Source:                 pickString(fileCfg, *f.s3Source, explicit["s3-source"], func(c *appconfig.Config) *string { return c.S3Source }),
-		CacheDir:                 pickString(fileCfg, *f.cacheDir, explicit["cache-dir"], func(c *appconfig.Config) *string { return c.CacheDir }),
-		PriceTablePath:           pickString(fileCfg, *f.priceTablePath, explicit["price-table"], func(c *appconfig.Config) *string { return c.PriceTable }),
-		AutoLoad:                 pickBool(fileCfg, *f.autoLoad, explicit["auto-load"], func(c *appconfig.Config) *bool { return c.AutoLoad }),
+		Addr:                     appconfig.PickFile(*f.addr, explicit["addr"], fileCfg, func(c *appconfig.Config) *string { return c.Addr }),
+		S3Source:                 appconfig.PickFile(*f.s3Source, explicit["s3-source"], fileCfg, func(c *appconfig.Config) *string { return c.S3Source }),
+		CacheDir:                 appconfig.PickFile(*f.cacheDir, explicit["cache-dir"], fileCfg, func(c *appconfig.Config) *string { return c.CacheDir }),
+		PriceTablePath:           appconfig.PickFile(*f.priceTablePath, explicit["price-table"], fileCfg, func(c *appconfig.Config) *string { return c.PriceTable }),
+		AutoLoad:                 appconfig.PickFile(*f.autoLoad, explicit["auto-load"], fileCfg, func(c *appconfig.Config) *bool { return c.AutoLoad }),
 		PollInterval:             finalInterval,
 		DiscoveryRefreshInterval: finalDiscoveryRefresh,
 		MaxIndexDisk:             capBytes,
 		IndexHeadroomBytes:       capBytes / headroomDivisor,
-		MaxConcurrentJobs:        appconfig.Pick(*f.maxConcurrentJobs, explicit["max-concurrent-jobs"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *int { return c.MaxConcurrentJobs })),
-		AutoLoadRetentionDefault: appconfig.Pick(uint32(*f.autoLoadRetention), explicit["auto-load-retention-default"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *uint32 { return c.AutoLoadRetentionDefault })),
-		QueryBatchMax:            appconfig.Pick(*f.queryBatchMax, explicit["query-batch-max"], appconfig.FromFile(fileCfg, func(c *appconfig.Config) *int { return c.QueryBatchMax })),
+		MaxConcurrentJobs:        appconfig.PickFile(*f.maxConcurrentJobs, explicit["max-concurrent-jobs"], fileCfg, func(c *appconfig.Config) *int { return c.MaxConcurrentJobs }),
+		AutoLoadRetentionDefault: appconfig.PickFile(uint32(*f.autoLoadRetention), explicit["auto-load-retention-default"], fileCfg, func(c *appconfig.Config) *uint32 { return c.AutoLoadRetentionDefault }),
+		QueryBatchMax:            appconfig.PickFile(*f.queryBatchMax, explicit["query-batch-max"], fileCfg, func(c *appconfig.Config) *int { return c.QueryBatchMax }),
 		InventoryConfigs:         inventoryConfigsFromFile(fileCfg),
 		Logger:                   logger,
 	}, nil
@@ -131,8 +131,8 @@ func run() error {
 	explicit := map[string]bool{}
 	fs.Visit(func(fl *flag.Flag) { explicit[fl.Name] = true })
 
-	finalVerbose := pickBool(fileCfg, *f.verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
-	finalPretty := pickBool(fileCfg, *f.prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
+	finalVerbose := appconfig.PickFile(*f.verbose, explicit["verbose"], fileCfg, func(c *appconfig.Config) *bool { return c.Verbose })
+	finalPretty := appconfig.PickFile(*f.prettyLogs, explicit["pretty-logs"], fileCfg, func(c *appconfig.Config) *bool { return c.PrettyLogs })
 
 	logger := logging.NewLogger(logging.Options{Debug: finalVerbose, Human: finalPretty})
 	log.Logger = logger
@@ -161,35 +161,19 @@ func run() error {
 	return nil
 }
 
-func pickString(cfg *appconfig.Config, flagVal string, explicit bool, get func(*appconfig.Config) *string) string {
-	var p *string
-	if cfg != nil {
-		p = get(cfg)
-	}
-
-	return appconfig.Pick(flagVal, explicit, p)
-}
-
-func pickBool(cfg *appconfig.Config, flagVal, explicit bool, get func(*appconfig.Config) *bool) bool {
-	var p *bool
-	if cfg != nil {
-		p = get(cfg)
-	}
-
-	return appconfig.Pick(flagVal, explicit, p)
-}
-
-func resolveDuration(flagVal time.Duration, explicit bool, configVal *string) (time.Duration, error) {
+func resolveDuration(flagVal time.Duration, explicit bool, cfg *appconfig.Config, get func(*appconfig.Config) *string) (time.Duration, error) {
 	if explicit {
 		return flagVal, nil
 	}
-	if configVal != nil {
-		d, err := time.ParseDuration(*configVal)
-		if err != nil {
-			return 0, fmt.Errorf("parse duration %q: %w", *configVal, err)
-		}
+	if cfg != nil {
+		if p := get(cfg); p != nil {
+			d, err := time.ParseDuration(*p)
+			if err != nil {
+				return 0, fmt.Errorf("parse duration %q: %w", *p, err)
+			}
 
-		return d, nil
+			return d, nil
+		}
 	}
 
 	return flagVal, nil

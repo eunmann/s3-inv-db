@@ -89,14 +89,6 @@ func explicitFlags(fs *flag.FlagSet) map[string]bool {
 	return out
 }
 
-func resolveBool(cfg *appconfig.Config, flagVal, explicit bool, get func(*appconfig.Config) *bool) bool {
-	return appconfig.Pick(flagVal, explicit, appconfig.FromFile(cfg, get))
-}
-
-func resolveString(cfg *appconfig.Config, flagVal string, explicit bool, get func(*appconfig.Config) *string) string {
-	return appconfig.Pick(flagVal, explicit, appconfig.FromFile(cfg, get))
-}
-
 // loggingFlags bundles the --verbose and --pretty-logs flags every
 // subcommand exposes. Registered via addLoggingFlags and resolved
 // against the JSON config via initLogging.
@@ -120,8 +112,8 @@ func addLoggingFlags(fs *flag.FlagSet) *loggingFlags {
 // need a local logger.
 func initLogging(lf *loggingFlags, fs *flag.FlagSet, fileCfg *appconfig.Config) (debug, human bool) {
 	explicit := explicitFlags(fs)
-	debug = resolveBool(fileCfg, *lf.verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
-	human = resolveBool(fileCfg, *lf.prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
+	debug = appconfig.PickFile(*lf.verbose, explicit["verbose"], fileCfg, func(c *appconfig.Config) *bool { return c.Verbose })
+	human = appconfig.PickFile(*lf.prettyLogs, explicit["pretty-logs"], fileCfg, func(c *appconfig.Config) *bool { return c.PrettyLogs })
 	logging.Init(logging.Options{Debug: debug, Human: human})
 
 	return debug, human
