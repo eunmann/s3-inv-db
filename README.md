@@ -43,8 +43,10 @@ make seeder  # bin/s3-inv-db-seeder
 
 ## Configuration
 
-All three binaries accept `--config <path>` pointing at a JSON file.
-Precedence: explicit CLI flag → config file → default. Example:
+`s3-inv-db` (every subcommand) and `s3-inv-db-server` accept
+`--config <path>` pointing at a JSON file. `s3-inv-db-seeder` is
+flag-only. Precedence: explicit CLI flag → config file → default.
+Example:
 
 ```json
 {

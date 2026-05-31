@@ -105,8 +105,13 @@ func Bootstrap(ctx context.Context, opts RuntimeOptions) (*Server, func(), error
 	}
 
 	dbPath := resolveStateDBPath(opts.CacheDir)
-	if err := os.MkdirAll(filepath.Dir(dbPath), format.DirPerm); err != nil {
-		return nil, nil, fmt.Errorf("ensure state-db parent dir: %w", err)
+	// Empty dbPath means OpenStateDB opens an in-memory SQLite — no
+	// parent directory exists or needs to be created. Skipping the
+	// mkdir keeps in-memory startup independent of the CWD.
+	if dbPath != "" {
+		if err := os.MkdirAll(filepath.Dir(dbPath), format.DirPerm); err != nil {
+			return nil, nil, fmt.Errorf("ensure state-db parent dir: %w", err)
+		}
 	}
 	// SQLite open + ping is fast and shouldn't be interrupted by a
 	// caller cancelling startup — context.WithoutCancel preserves any

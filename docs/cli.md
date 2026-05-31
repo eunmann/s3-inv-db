@@ -17,9 +17,10 @@ Every subcommand accepts `--output text|json` (default `text`) — pass
 `--output json` to emit a single JSON object on stdout for scripting.
 
 The `--config <path>` flag loads a JSON file shared with the server.
-From the file the CLI honors `verbose`, `pretty_logs`, and
-`price_table` only. Other server-side keys are ignored. Explicit CLI
-flags always win over the file.
+From the file the CLI honors `verbose`, `pretty_logs`, `price_table`,
+and `build_event_log` (the last is used only by `build`). Other
+server-side keys are ignored. Explicit CLI flags always win over the
+file.
 
 ## `build`
 
