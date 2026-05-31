@@ -7,7 +7,6 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/appconfig"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
-	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
 
 type browseChild struct {
@@ -24,12 +23,11 @@ type browseOutput struct {
 
 func runBrowse(args []string) error {
 	fs := flag.NewFlagSet("browse", flag.ContinueOnError)
-	configPath := fs.String("config", os.Getenv("S3INV_CONFIG"), "path to JSON config file")
+	configPath := fs.String("config", "", "path to JSON config file")
 	indexDir := fs.String("index", "", "index directory to query")
 	parent := fs.String("prefix", "", "prefix to browse (empty = root)")
 	depth := fs.Int("depth", 1, "relative depth below prefix")
-	verbose := fs.Bool("verbose", false, "enable debug level logging")
-	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
+	logFlags := addLoggingFlags(fs)
 	outputFlag := addOutputFlag(fs)
 
 	if err := fs.Parse(args); err != nil {
@@ -45,11 +43,7 @@ func runBrowse(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	explicit := explicitFlags(fs)
-	finalVerbose := resolveBool(fileCfg, *verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
-	finalPretty := resolveBool(fileCfg, *prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
-
-	logging.Init(logging.Options{Debug: finalVerbose, Human: finalPretty})
+	initLogging(logFlags, fs, fileCfg)
 
 	if *indexDir == "" {
 		return ErrIndexRequired

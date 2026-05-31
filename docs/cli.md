@@ -16,10 +16,11 @@ config-check  Validate a JSON config file and print set fields
 Every subcommand accepts `--output text|json` (default `text`) — pass
 `--output json` to emit a single JSON object on stdout for scripting.
 
-The `--config <path>` flag (or `S3INV_CONFIG`) loads a JSON file
-shared with the server. From the file the CLI honors `verbose`,
-`pretty_logs`, and `price_table` only. Other server-side keys are
-ignored. Explicit CLI flags always win over the file.
+The `--config <path>` flag loads a JSON file shared with the server.
+From the file the CLI honors `verbose`, `pretty_logs`, `price_table`,
+and `build_event_log` (the last is used only by `build`). Other
+server-side keys are ignored. Explicit CLI flags always win over the
+file.
 
 ## `build`
 
@@ -32,7 +33,6 @@ s3-inv-db build --s3-manifest s3://bucket/inv/data/manifest.json --out ./my-inde
 | `--s3-manifest` | yes |  | S3 URI to `manifest.json` |
 | `--out` | yes |  | Output directory for index files |
 | `--max-depth` |  | 0 (unlimited) | Maximum prefix depth to retain |
-| `--prefix-dictionary` |  | true | Store prefixes as a shared segment dictionary; set `=false` for the raw blob layout |
 | `--config` |  |  | JSON config file (see above) |
 | `--verbose` |  | false | Debug-level logging |
 | `--pretty-logs` |  | false | Human-friendly console output |

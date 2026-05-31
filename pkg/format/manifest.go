@@ -51,8 +51,6 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		DepthPositionsFile,
 		MPHFile,
 		CombinedMPHFArrayFile,
-		PrefixBlobFile,
-		PrefixOffsetsFile,
 		"tiers.json",
 		CoreStatsFile,
 	}
@@ -62,15 +60,21 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		}
 	}
 
-	// Optional: only present when dictionary-encoded prefix storage
-	// was selected. addFile is a no-op for missing files.
-	optionalPrefixDict := []string{
+	// Prefix-string storage: production builds always emit the
+	// dictionary-encoded layout; the legacy raw-blob files are only
+	// produced by internal tests that construct StreamingMPHFBuilder
+	// directly with usePrefixDict=false. addFile is a no-op for missing
+	// files, so listing both layouts here lets the manifest cover either
+	// shape without conditioning on the builder mode.
+	optionalPrefixFiles := []string{
 		PrefixDictBlobFile,
 		PrefixDictOffsetsFile,
 		PrefixDictIDsFile,
 		PrefixDictOffsetsPerPrefixFile,
+		PrefixBlobFile,
+		PrefixOffsetsFile,
 	}
-	for _, name := range optionalPrefixDict {
+	for _, name := range optionalPrefixFiles {
 		if err := addFile(dir, name, manifest.Files); err != nil {
 			return err
 		}

@@ -70,19 +70,11 @@ type StreamingMPHFBuilder struct {
 // distinguish double-Build from other Build failures.
 var ErrMPHFAlreadyBuilt = errors.New("StreamingMPHFBuilder.Build already called")
 
-// StreamingMPHFOption configures a StreamingMPHFBuilder.
-type StreamingMPHFOption func(*StreamingMPHFBuilder)
-
-// WithPrefixDictionary enables dictionary-encoded prefix storage.
-func WithPrefixDictionary() StreamingMPHFOption {
-	return func(b *StreamingMPHFBuilder) {
-		b.usePrefixDict = true
-	}
-}
-
-// NewStreamingMPHFBuilder creates a new streaming MPHF builder.
-// TempDir holds prefix strings plus the disk-backed u64 arrays.
-func NewStreamingMPHFBuilder(tempDir string, opts ...StreamingMPHFOption) (*StreamingMPHFBuilder, error) {
+// NewStreamingMPHFBuilder creates a new streaming MPHF builder. TempDir
+// holds prefix strings plus the disk-backed u64 arrays. When
+// usePrefixDict is true, the builder writes dictionary-encoded prefix
+// storage on Build; when false, it writes the legacy preorder blob.
+func NewStreamingMPHFBuilder(tempDir string, usePrefixDict bool) (*StreamingMPHFBuilder, error) {
 	tempFile, err := os.CreateTemp(tempDir, "mphf_prefixes_*.tmp")
 	if err != nil {
 		return nil, fmt.Errorf("create temp file: %w", err)
@@ -125,18 +117,15 @@ func NewStreamingMPHFBuilder(tempDir string, opts ...StreamingMPHFOption) (*Stre
 	}
 
 	b := &StreamingMPHFBuilder{
-		hashes:       hashes,
-		preorderPos:  preorderPos,
-		fingerprints: fingerprints,
-		tempFile:     tempFile,
-		tempEncoder:  enc,
-		tempWriter:   bufio.NewWriterSize(enc, 1024*1024),
-		tempPath:     tempFile.Name(),
-		bufferSize:   1024 * 1024,
-	}
-
-	for _, opt := range opts {
-		opt(b)
+		hashes:        hashes,
+		preorderPos:   preorderPos,
+		fingerprints:  fingerprints,
+		tempFile:      tempFile,
+		tempEncoder:   enc,
+		tempWriter:    bufio.NewWriterSize(enc, 1024*1024),
+		tempPath:      tempFile.Name(),
+		bufferSize:    1024 * 1024,
+		usePrefixDict: usePrefixDict,
 	}
 
 	return b, nil

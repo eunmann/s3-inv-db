@@ -102,23 +102,26 @@ func TestJobsStream_EmitsHeartbeat(t *testing.T) {
 }
 
 // newHandlersWithHeartbeat is the same as newJobsHandlers but with a
-// caller-chosen SSE heartbeat interval — exercises the configurable path.
+// caller-chosen SSE heartbeat interval — exercises the heartbeat
+// emission path on a short cadence so the test isn't slow.
 func newHandlersWithHeartbeat(t *testing.T, hb time.Duration) *handlers.Handlers {
 	t.Helper()
+	handlers.SetSSEHeartbeatForTest(t, hb)
 	invMgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = invMgr.Close() })
 	if err := invMgr.Register(t.Context(), "src/inv1", "n", "p"); err != nil {
 		t.Fatal(err)
 	}
 
-	return newWiredHandlers(t, invMgr, handlers.WithSSEHeartbeat(hb))
+	return newWiredHandlers(t, invMgr)
 }
 
 // TestJobsStream_PerIPCap guards the SSE rate limit. Each subscriber
 // keeps a buffered channel in jobs.Bus alive for the lifetime of the
 // connection; without a cap one client can pin unbounded memory.
 func TestJobsStream_PerIPCap(t *testing.T) {
-	h := newWiredHandlers(t, nil, handlers.WithSSEMaxConnsPerIP(1))
+	handlers.SetSSEMaxConnsPerIPForTest(t, 1)
+	h := newWiredHandlers(t, nil)
 
 	srv := httptest.NewServer(http.HandlerFunc(h.JobsStream))
 	t.Cleanup(srv.Close)

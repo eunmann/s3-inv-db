@@ -22,7 +22,7 @@ type configCheckOutput struct {
 
 func runConfigCheck(args []string) error {
 	fs := flag.NewFlagSet("config-check", flag.ContinueOnError)
-	configPath := fs.String("config", os.Getenv("S3INV_CONFIG"), "path to JSON config file")
+	configPath := fs.String("config", "", "path to JSON config file")
 	outputFlag := addOutputFlag(fs)
 
 	if err := fs.Parse(args); err != nil {
@@ -66,18 +66,12 @@ func describeSetFields(c *appconfig.Config) map[string]any {
 	addIfSet(set, "price_table", c.PriceTable)
 	addIfSet(set, "s3_source", c.S3Source)
 	addIfSet(set, "cache_dir", c.CacheDir)
-	addIfSet(set, "state_db", c.StateDB)
 	addIfSet(set, "auto_load", c.AutoLoad)
 	addIfSet(set, "auto_load_poll_interval", c.PollInterval)
 	addIfSet(set, "max_index_disk", c.MaxIndexDisk)
-	addIfSet(set, "index_headroom", c.IndexHeadroom)
 	addIfSet(set, "max_concurrent_jobs", c.MaxConcurrentJobs)
 	addIfSet(set, "auto_load_retention_default", c.AutoLoadRetentionDefault)
-	addIfSet(set, "index_ratio", c.IndexRatio)
 	addIfSet(set, "discovery_refresh_interval", c.DiscoveryRefreshInterval)
-	addIfSet(set, "auto_load_dry_run", c.AutoLoadDryRun)
-	addIfSet(set, "metrics_enabled", c.MetricsEnabled)
-	addIfSet(set, "metrics_addr", c.MetricsAddr)
 	addIfSet(set, "build_event_log", c.BuildEventLog)
 	addIfSet(set, "query_batch_max", c.QueryBatchMax)
 	if len(c.Inventories) > 0 {

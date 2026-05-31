@@ -43,9 +43,10 @@ make seeder  # bin/s3-inv-db-seeder
 
 ## Configuration
 
-All three binaries accept `--config <path>` (or `S3INV_CONFIG`) pointing
-at a JSON file. Precedence: explicit CLI flag → config file → env →
-default. Example:
+`s3-inv-db` (every subcommand) and `s3-inv-db-server` accept
+`--config <path>` pointing at a JSON file. `s3-inv-db-seeder` is
+flag-only. Precedence: explicit CLI flag → config file → default.
+Example:
 
 ```json
 {
@@ -67,9 +68,7 @@ The `inventories[]` array declares per-configuration auto-load + retention; entr
 
 Additional server keys (all optional):
 
-- `metrics_addr` — bind `/metrics` on its own listener (e.g. `":9090"`). Empty mounts on the main router.
 - `query_batch_max` — cap on `/api/inventories/{id}/stats:batch` prefix count (default 1000).
-- `auto_load_dry_run` — log autoload decisions instead of performing them.
 - `build_event_log` — when set, the `build` CLI also writes every pipeline event as JSONL to this path.
 
 ## Library usage

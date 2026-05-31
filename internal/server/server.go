@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"time"
@@ -50,7 +49,6 @@ type Config struct {
 	IndexHeadroomBytes       uint64
 	MaxConcurrentJobs        int
 	AutoLoadRetentionDefault uint32
-	IndexRatio               float64
 
 	// DiscoveryRefreshInterval governs how often the background
 	// discovery refresher rebuilds the cached snapshot the HTTP
@@ -60,14 +58,6 @@ type Config struct {
 	// QueryBatchMax caps the number of prefixes accepted in one batch
 	// stats request. Zero means use the handler default.
 	QueryBatchMax int
-
-	// MetricsAddr, when non-empty, binds /metrics on its own listener;
-	// otherwise /metrics is mounted on the main router.
-	MetricsAddr string
-
-	// AutoLoadDryRun, when true, logs eviction + load decisions instead
-	// of acting on them.
-	AutoLoadDryRun bool
 }
 
 // DefaultDiscoveryRefreshInterval is the fallback cadence for the
@@ -198,7 +188,7 @@ func newDiscovery(ctx context.Context, cfg Config, catalog *inventory.Catalog, g
 	sizer := loadcontrol.NewManifestSizer(wiring.Client)
 	disc := inventory.NewDiscovery(catalog,
 		inventory.WithBackend(wiring.Discoverer, wiring.Loader),
-		inventory.WithGate(gate.Load, sizer.ManifestSize, cfg.IndexRatio),
+		inventory.WithGate(gate.Load, sizer.ManifestSize, inventory.DefaultIndexRatio),
 	)
 	cfg.Logger.Info().
 		Str("s3_source", cfg.S3Source).
@@ -237,17 +227,6 @@ func newAutoLoader(cfg Config, discovery *inventory.Discovery, configStore *inve
 	}
 	loadFn := func(c context.Context, d inventory.Inventory, onProgress func(stage string, done, total int64)) error {
 		return discovery.AutoLoadWith(c, d, onProgress)
-	}
-	if cfg.AutoLoadDryRun {
-		// In dry-run we never call the real loader. Returning nil signals
-		// "load succeeded" so the autoload bookkeeping still records the
-		// attempt — operators can compare logs to actual load activity.
-		loadFn = func(_ context.Context, d inventory.Inventory, _ func(stage string, done, total int64)) error {
-			cfg.Logger.Info().Stringer("id", d.CompositeID()).Msg("autoload: dry-run, skipping load")
-
-			return nil
-		}
-		cfg.Logger.Info().Msg("auto-loader dry-run enabled: load actions are logged, not performed")
 	}
 	al := autoload.New(autoload.Config{
 		PollInterval:     cfg.PollInterval,
@@ -453,14 +432,6 @@ func (s *Server) newHTTPServer() *http.Server {
 func (s *Server) Run(ctx context.Context) error {
 	s.server = s.newHTTPServer()
 
-	metricsSrv, err := s.maybeStartMetricsListener(ctx)
-	if err != nil {
-		return err
-	}
-	if metricsSrv != nil {
-		defer s.shutdownMetricsListener(ctx, metricsSrv)
-	}
-
 	// On every exit path: cancel in-flight jobs (so goroutines don't
 	// outlive the DB they write to), then close the inventory manager
 	// so mmaps and file handles are released. The shutdown context is
@@ -538,46 +509,4 @@ func (s *Server) discoveryRefreshInterval() time.Duration {
 	}
 
 	return DefaultDiscoveryRefreshInterval
-}
-
-func (s *Server) shutdownMetricsListener(ctx context.Context, srv *http.Server) {
-	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resourceDrainTimeout)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		s.config.Logger.Error().Err(err).Msg("shutdown metrics server")
-	}
-}
-
-// maybeStartMetricsListener binds /metrics on a separate listener when
-// MetricsAddr is set. Binds synchronously (net.ListenConfig.Listen) so
-// a port conflict aborts Run instead of silently disappearing into a
-// background goroutine. Returns (nil, nil) when /metrics is mounted
-// on the main router instead.
-func (s *Server) maybeStartMetricsListener(ctx context.Context) (*http.Server, error) {
-	if s.config.MetricsAddr == "" {
-		return nil, nil //nolint:nilnil // explicit "no listener configured" is the contract
-	}
-	var lc net.ListenConfig
-	ln, err := lc.Listen(ctx, "tcp", s.config.MetricsAddr)
-	if err != nil {
-		return nil, fmt.Errorf("bind metrics listener %q: %w", s.config.MetricsAddr, err)
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/metrics", s.handlers.MetricsHandler)
-	srv := &http.Server{
-		Addr:              s.config.MetricsAddr,
-		Handler:           mux,
-		ReadHeaderTimeout: readHeaderTimeout,
-		ReadTimeout:       readTimeout,
-		IdleTimeout:       idleTimeout,
-		MaxHeaderBytes:    maxHeaderBytes,
-	}
-	go func() {
-		s.config.Logger.Info().Str("addr", s.config.MetricsAddr).Msg("starting /metrics listener")
-		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			s.config.Logger.Error().Err(err).Msg("metrics listener exited")
-		}
-	}()
-
-	return srv, nil
 }

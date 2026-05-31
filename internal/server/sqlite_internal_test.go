@@ -61,19 +61,18 @@ func TestBuildStateDSN_AppendsToExistingQuery(t *testing.T) {
 
 func TestResolveStateDBPath(t *testing.T) {
 	cases := []struct {
-		name              string
-		stateDB, cacheDir string
-		want              string
+		name     string
+		cacheDir string
+		want     string
 	}{
-		{"explicit state-db wins", "/srv/state.db", "/var/cache/s3inv", "/srv/state.db"},
-		{"defaults to cache-dir child", "", "/var/cache/s3inv", "/var/cache/s3inv/state.db"},
-		{"both empty stays empty", "", "", ""},
+		{"cache-dir provides location", "/var/cache/s3inv", "/var/cache/s3inv/state.db"},
+		{"empty cache-dir stays empty", "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := resolveStateDBPath(tc.stateDB, tc.cacheDir); got != tc.want {
-				t.Errorf("resolveStateDBPath(%q, %q) = %q, want %q",
-					tc.stateDB, tc.cacheDir, got, tc.want)
+			if got := resolveStateDBPath(tc.cacheDir); got != tc.want {
+				t.Errorf("resolveStateDBPath(%q) = %q, want %q",
+					tc.cacheDir, got, tc.want)
 			}
 		})
 	}

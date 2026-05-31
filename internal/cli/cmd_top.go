@@ -8,7 +8,6 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/appconfig"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
-	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
 
 type topEntry struct {
@@ -31,7 +30,7 @@ var ErrBadTopBy = errors.New("--by must be 'bytes' or 'count'")
 
 func runTop(args []string) error {
 	fs := flag.NewFlagSet("top", flag.ContinueOnError)
-	configPath := fs.String("config", os.Getenv("S3INV_CONFIG"), "path to JSON config file")
+	configPath := fs.String("config", "", "path to JSON config file")
 	indexDir := fs.String("index", "", "index directory to query")
 	parent := fs.String("parent", "", "parent prefix to rank descendants under (empty = root)")
 	depth := fs.Int("depth", 1, "relative depth below parent")
@@ -39,8 +38,7 @@ func runTop(args []string) error {
 	by := fs.String("by", "bytes", "rank metric: bytes or count")
 	minCount := fs.Uint64("min-count", 0, "filter: minimum object count")
 	minBytes := fs.Uint64("min-bytes", 0, "filter: minimum total bytes")
-	verbose := fs.Bool("verbose", false, "enable debug level logging")
-	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
+	logFlags := addLoggingFlags(fs)
 	outputFlag := addOutputFlag(fs)
 
 	if err := fs.Parse(args); err != nil {
@@ -66,11 +64,7 @@ func runTop(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	explicit := explicitFlags(fs)
-	finalVerbose := resolveBool(fileCfg, *verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
-	finalPretty := resolveBool(fileCfg, *prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
-
-	logging.Init(logging.Options{Debug: finalVerbose, Human: finalPretty})
+	initLogging(logFlags, fs, fileCfg)
 
 	if *indexDir == "" {
 		return ErrIndexRequired

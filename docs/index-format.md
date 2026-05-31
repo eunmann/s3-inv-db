@@ -13,19 +13,16 @@ index/
 ├── depth_positions.u64
 ├── mph.bin
 ├── mph_fp_pos.u64
-├── prefix_blob.bin              ◀── present only when --prefix-dictionary=false
-├── prefix_offsets.u64           ◀── present only when --prefix-dictionary=false
-├── prefix_dict.bin              ◀── present when --prefix-dictionary=true (default)
-├── prefix_dict.off.u64          ◀──    ″
-├── prefix_dict.ids.u32          ◀──    ″
-├── prefix_dict.prefix_off.u64   ◀──    ″
+├── prefix_dict.bin
+├── prefix_dict.off.u64
+├── prefix_dict.ids.u32
+├── prefix_dict.prefix_off.u64
 └── tier_stats/
     └── tier_stats_row.bin
 ```
 
-Prefix storage has two on-disk shapes; exactly one is written per
-build. See [Prefix Strings](#prefix-strings) below for the layout of
-each.
+Prefixes are stored in the dictionary-encoded layout described under
+[Prefix Strings](#prefix-strings) below.
 
 ## File Header
 
@@ -107,26 +104,10 @@ The two-hash design (FNV-1a for BBHash input, FNV-1 for verification) minimizes 
 
 ## Prefix Strings
 
-Two layouts; the build flag `--prefix-dictionary` selects between
-them. `OpenMPHF` auto-detects which is on disk and dispatches.
-
-### Raw blob (`--prefix-dictionary=false`)
-
-| File | Description |
-|------|-------------|
-| `prefix_blob.bin` | Concatenated prefix strings (no separators) |
-| `prefix_offsets.u64` | Byte offset for each prefix in the blob |
-
-To read prefix at position `i`:
-1. Read `prefix_offsets[i]` and `prefix_offsets[i+1]`
-2. Slice `prefix_blob[start:end]`
-
-### Dictionary-encoded (default)
-
-Each "/"-delimited segment is interned once into a shared blob; each
-prefix is then stored as a sequence of `uint32` segment IDs. Shared
-top-level segments on a deep S3 hierarchy can compress the
-prefix bytes substantially.
+Dictionary-encoded layout: each "/"-delimited segment is interned
+once into a shared blob; each prefix is then stored as a sequence of
+`uint32` segment IDs. Shared top-level segments on a deep S3
+hierarchy compress the prefix bytes substantially.
 
 | File | Description |
 |------|-------------|

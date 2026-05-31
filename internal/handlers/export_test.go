@@ -3,11 +3,31 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"testing"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/rs/zerolog"
 )
+
+// SetSSEHeartbeatForTest swaps the package-level SSE heartbeat for the
+// duration of one test, restoring it via t.Cleanup. Only the test
+// binary sees this seam — production code uses the package default.
+func SetSSEHeartbeatForTest(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := sseHeartbeat
+	sseHeartbeat = d
+	t.Cleanup(func() { sseHeartbeat = prev })
+}
+
+// SetSSEMaxConnsPerIPForTest swaps the SSE per-IP cap for one test.
+func SetSSEMaxConnsPerIPForTest(t *testing.T, n int) {
+	t.Helper()
+	prev := sseMaxConnsPerIP
+	sseMaxConnsPerIP = n
+	t.Cleanup(func() { sseMaxConnsPerIP = prev })
+}
 
 // Test accessors. Defined in *_test.go so they are only compiled into
 // the test binary — production callers cannot reach internal state via

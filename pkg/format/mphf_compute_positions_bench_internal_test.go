@@ -86,7 +86,7 @@ func runVariants(b *testing.B, n int) {
 func makeBuilderAndMPH(b *testing.B, n int) (*StreamingMPHFBuilder, *bbhash.BBHash2) {
 	b.Helper()
 	dir := b.TempDir()
-	builder, err := NewStreamingMPHFBuilder(dir)
+	builder, err := NewStreamingMPHFBuilder(dir, false)
 	if err != nil {
 		b.Fatalf("NewStreamingMPHFBuilder: %v", err)
 	}

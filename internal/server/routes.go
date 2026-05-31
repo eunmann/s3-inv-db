@@ -135,10 +135,6 @@ func (s *Server) setupRoutes() {
 		r.With(s.handlers.MetricsMiddleware("stats_batch")).Post("/inventories/{id}/stats:batch", s.handlers.PostBatchStatsAPI)
 	})
 
-	// /metrics is mounted on the main listener unless the server config
-	// directs it elsewhere (handled in server.Run when a separate addr is
-	// set). Mounting here keeps the default zero-config behaviour useful.
-	if s.config.MetricsAddr == "" {
-		r.Get("/metrics", s.handlers.MetricsHandler)
-	}
+	// /metrics is always mounted on the main listener.
+	r.Get("/metrics", s.handlers.MetricsHandler)
 }

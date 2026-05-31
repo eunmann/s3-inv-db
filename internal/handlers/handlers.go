@@ -16,18 +16,24 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// defaultSSEHeartbeat is the cadence used when WithSSEHeartbeat is not
-// passed. 15s is small enough to free a stalled SSE slot in well under
-// Chrome's ~60s TCP idle window, large enough to be cheap.
-const defaultSSEHeartbeat = 15 * time.Second
+// sseHeartbeat is the SSE keepalive cadence. 15s is small enough to
+// free a stalled SSE slot in well under Chrome's ~60s TCP idle window,
+// large enough to be cheap. Package var (not const) so tests can shorten
+// it via SetSSEHeartbeatForTest.
+//
+//nolint:gochecknoglobals // mutable only via SetSSEHeartbeatForTest in export_test.go
+var sseHeartbeat = 15 * time.Second
 
-// defaultSSEMaxConnsPerIP caps concurrent SSE subscribers from one
-// remote address. Each subscriber holds a 64-buffered channel allocated
-// by jobs.Bus.Subscribe, so the worst-case memory blast radius is
-// bounded by (clients × max-per-ip × buffer × per-event size). Browsers
-// rarely need more than one per tab; 8 keeps a few tabs working without
-// being a DoS amplifier.
-const defaultSSEMaxConnsPerIP = 8
+// sseMaxConnsPerIP caps concurrent SSE subscribers from one remote
+// address. Each subscriber holds a 64-buffered channel allocated by
+// jobs.Bus.Subscribe, so the worst-case memory blast radius is bounded
+// by (clients × max-per-ip × buffer × per-event size). Browsers rarely
+// need more than one per tab; 8 keeps a few tabs working without being
+// a DoS amplifier. Package var so tests can tighten it via
+// SetSSEMaxConnsPerIPForTest.
+//
+//nolint:gochecknoglobals // mutable only via SetSSEMaxConnsPerIPForTest in export_test.go
+var sseMaxConnsPerIP = 8
 
 // CacheStore is the loader subset handlers actually use: cache size
 // for the dashboard + cache removal on unload. Narrower than
@@ -52,13 +58,11 @@ type Handlers struct {
 	jobBus                   *jobs.Bus
 	s3SourceURI              string
 	priceTable               pricing.PriceTable
-	sseHeartbeat             time.Duration
 	discoveryRefreshInterval time.Duration
 
 	discoverer inventory.Discoverer
 	indexBldr  inventory.IndexBuilder
 
-	sseMaxConnsPerIP int
 	// sseConnsByIP holds *atomic.Int64 keyed by remote IP. sync.Map is
 	// fine here: writes happen once per connection start/end, reads are
 	// rare, and the keyspace is bounded by the number of distinct IPs.
@@ -75,7 +79,7 @@ type Handlers struct {
 }
 
 // Option configures optional Handlers fields. See WithLoader,
-// WithDiscovery, WithS3Source, WithSSEHeartbeat, WithDiscoveryRefreshInterval,
+// WithDiscovery, WithS3Source, WithDiscoveryRefreshInterval,
 // WithDiscoverer.
 type Option func(*Handlers)
 
@@ -111,25 +115,6 @@ func WithDiscoverer(d inventory.Discoverer) Option {
 // WithS3Source sets the s3:// URI displayed on the dashboard.
 func WithS3Source(uri string) Option {
 	return func(h *Handlers) { h.s3SourceURI = uri }
-}
-
-// WithSSEHeartbeat overrides the SSE keepalive cadence.
-func WithSSEHeartbeat(d time.Duration) Option {
-	return func(h *Handlers) {
-		if d > 0 {
-			h.sseHeartbeat = d
-		}
-	}
-}
-
-// WithSSEMaxConnsPerIP caps how many concurrent SSE subscribers one
-// remote address may hold. Values <= 0 are ignored.
-func WithSSEMaxConnsPerIP(n int) Option {
-	return func(h *Handlers) {
-		if n > 0 {
-			h.sseMaxConnsPerIP = n
-		}
-	}
 }
 
 // acquireSSESlot atomically increments the per-IP counter and returns
@@ -256,17 +241,15 @@ func New(
 	opts ...Option,
 ) *Handlers {
 	h := &Handlers{
-		manager:          mgr,
-		renderer:         renderer,
-		priceTable:       priceTable,
-		jobMgr:           deps.JobMgr,
-		jobStore:         deps.JobStore,
-		jobBus:           deps.JobBus,
-		configStore:      deps.ConfigStore,
-		tracker:          deps.Tracker,
-		sseHeartbeat:     defaultSSEHeartbeat,
-		sseMaxConnsPerIP: defaultSSEMaxConnsPerIP,
-		reg:              metrics.New(),
+		manager:     mgr,
+		renderer:    renderer,
+		priceTable:  priceTable,
+		jobMgr:      deps.JobMgr,
+		jobStore:    deps.JobStore,
+		jobBus:      deps.JobBus,
+		configStore: deps.ConfigStore,
+		tracker:     deps.Tracker,
+		reg:         metrics.New(),
 	}
 	for _, opt := range opts {
 		opt(h)

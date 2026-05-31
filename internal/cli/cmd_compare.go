@@ -9,7 +9,6 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/appconfig"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
-	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
 
 type compareRow struct {
@@ -33,13 +32,12 @@ type compareOutput struct {
 
 func runCompare(args []string) error {
 	fs := flag.NewFlagSet("compare", flag.ContinueOnError)
-	configPath := fs.String("config", os.Getenv("S3INV_CONFIG"), "path to JSON config file")
+	configPath := fs.String("config", "", "path to JSON config file")
 	fromIdx := fs.String("from", "", "baseline index directory")
 	toIdx := fs.String("to", "", "comparison index directory")
 	prefix := fs.String("prefix", "", "prefix at which to compare (empty = root)")
 	depth := fs.Int("depth", 1, "relative depth below prefix")
-	verbose := fs.Bool("verbose", false, "enable debug level logging")
-	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
+	logFlags := addLoggingFlags(fs)
 	outputFlag := addOutputFlag(fs)
 
 	if err := fs.Parse(args); err != nil {
@@ -62,10 +60,7 @@ func runCompare(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	explicit := explicitFlags(fs)
-	finalVerbose := resolveBool(fileCfg, *verbose, explicit["verbose"], func(c *appconfig.Config) *bool { return c.Verbose })
-	finalPretty := resolveBool(fileCfg, *prettyLogs, explicit["pretty-logs"], func(c *appconfig.Config) *bool { return c.PrettyLogs })
-	logging.Init(logging.Options{Debug: finalVerbose, Human: finalPretty})
+	initLogging(logFlags, fs, fileCfg)
 
 	from, err := indexread.Open(*fromIdx)
 	if err != nil {

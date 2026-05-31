@@ -38,7 +38,6 @@ type IndexBuilder struct {
 	stack             []stackEntry
 	posCount          uint64
 	maxDepth          uint32
-	prefixDictionary  bool
 	tiersDeclared     bool
 	closed            bool
 }
@@ -71,7 +70,7 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		tempDir = os.TempDir()
 	}
 
-	mphfBuilder, err := format.NewStreamingMPHFBuilder(tempDir)
+	mphfBuilder, err := format.NewStreamingMPHFBuilder(tempDir, true)
 	if err != nil {
 		return nil, fmt.Errorf("create MPHF builder: %w", err)
 	}
@@ -100,42 +99,6 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 	// its row stride can be sparse from the first byte.
 
 	return b, nil
-}
-
-// ErrPrefixDictionaryAfterAdd is returned when SetPrefixDictionary is
-// called after the first Add — the MPHF builder it recreates would
-// discard rows already streamed in.
-var ErrPrefixDictionaryAfterAdd = errors.New("SetPrefixDictionary must be called before the first Add")
-
-// SetPrefixDictionary toggles dictionary-encoded prefix storage.
-// Must be called before the first Add — recreates the MPHF builder,
-// which would silently drop any rows already added. Returns
-// ErrPrefixDictionaryAfterAdd if any Add has occurred.
-func (b *IndexBuilder) SetPrefixDictionary(enabled bool) error {
-	if b.prefixDictionary == enabled {
-		return nil
-	}
-	if b.posCount > 0 {
-		return ErrPrefixDictionaryAfterAdd
-	}
-	b.prefixDictionary = enabled
-
-	if b.mphfBuilder != nil {
-		_ = b.mphfBuilder.Close()
-		b.mphfBuilder = nil
-	}
-
-	var opts []format.StreamingMPHFOption
-	if enabled {
-		opts = append(opts, format.WithPrefixDictionary())
-	}
-	mphfBuilder, err := format.NewStreamingMPHFBuilder(b.tempDir, opts...)
-	if err != nil {
-		return fmt.Errorf("recreate MPHF builder: %w", err)
-	}
-	b.mphfBuilder = mphfBuilder
-
-	return nil
 }
 
 // ErrPresentTiersAfterAdd is returned when SetPresentTiers is called
