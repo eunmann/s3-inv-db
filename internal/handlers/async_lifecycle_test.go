@@ -13,6 +13,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 )
 
 // errSlowBuilderTimedOut is returned when the slow-builder fake's
@@ -28,10 +29,10 @@ type slowBuilder struct {
 }
 
 func (b *slowBuilder) Build(ctx context.Context, _ inventory.CacheKey) (string, error) {
-	return b.BuildWith(ctx, inventory.CacheKey{}, "", nil)
+	return b.BuildWith(ctx, inventory.CacheKey{}, "", nil, nil)
 }
 
-func (b *slowBuilder) BuildWith(ctx context.Context, _ inventory.CacheKey, _ string, _ func(string, int64, int64)) (string, error) {
+func (b *slowBuilder) BuildWith(ctx context.Context, _ inventory.CacheKey, _ string, _ func(string, int64, int64), _ *events.Bus) (string, error) {
 	b.once.Do(func() { b.cancelled = make(chan struct{}) })
 	select {
 	case <-time.After(b.delay):

@@ -10,6 +10,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/autoload"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 )
 
 // inlineSubmitter stands in for the jobs scheduler: it records the
@@ -69,7 +70,7 @@ type fakeLoader struct {
 	failOnce  bool
 }
 
-func (f *fakeLoader) AutoLoad(_ context.Context, disc inventory.Inventory, _ func(stage string, done, total int64)) error {
+func (f *fakeLoader) AutoLoad(_ context.Context, disc inventory.Inventory, _ func(stage string, done, total int64), _ *events.Bus) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := disc.CompositeID()

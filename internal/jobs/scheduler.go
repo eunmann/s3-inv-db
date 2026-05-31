@@ -237,8 +237,13 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 	// report applies a non-zero diff to the job and broadcasts. A stage
 	// transition resets quantitative progress so the UI doesn't show
 	// stale done/total from the previous stage (e.g. "downloading 10/10"
-	// while we've already moved on to "building").
+	// while we've already moved on to "building"). reportMu serialises
+	// mutation of `job` across the synchronous work callback and the
+	// async Recorder drain goroutine which also calls report.
+	var reportMu sync.Mutex
 	report := func(u Update) {
+		reportMu.Lock()
+		defer reportMu.Unlock()
 		if u.Stage != "" && u.Stage != job.Stage {
 			job.Stage = u.Stage
 			job.Progress = 0
@@ -254,10 +259,14 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 		if u.BytesDone > 0 {
 			job.BytesDone = u.BytesDone
 		}
+		if u.Stages != nil {
+			job.Stages = u.Stages
+		}
 		s.persistAndPublish(ctx, &job)
 	}
 
 	err := work(ctx, report)
+	reportMu.Lock()
 	job.FinishedAt = time.Now()
 	switch {
 	case errors.Is(ctx.Err(), context.Canceled):
@@ -272,9 +281,50 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 		job.State = StateSucceeded
 		job.Progress = 100
 	}
+	closeOpenStages(&job, job.FinishedAt, job.State, job.Error)
 	// Final persist must succeed even after ctx is cancelled — that's
 	// how the UI learns the job actually transitioned to cancelled/failed.
 	s.persistAndPublish(context.WithoutCancel(ctx), &job)
+	reportMu.Unlock()
+}
+
+// closeOpenStages stamps EndedAt/Duration on every in-progress stage
+// when the job hits a terminal state. Failed/cancelled/aborted stages
+// also get an Err so the drawer's per-stage rows surface the cause
+// instead of looking like an unfinished spinner. Clones the slice
+// before mutating so already-published snapshots stay immutable across
+// the SSE marshal.
+func closeOpenStages(j *Job, when time.Time, st State, jobErr string) {
+	if len(j.Stages) == 0 {
+		return
+	}
+	cloned := make([]StageRecord, len(j.Stages))
+	copy(cloned, j.Stages)
+	j.Stages = cloned
+	for i := range j.Stages {
+		s := &j.Stages[i]
+		if !s.InProgress() {
+			continue
+		}
+		s.EndedAt = when
+		s.Duration = when.Sub(s.StartedAt)
+		if s.Err != "" {
+			continue
+		}
+		switch st {
+		case StateFailed:
+			if jobErr != "" {
+				s.Err = jobErr
+			} else {
+				s.Err = "failed"
+			}
+		case StateCancelled:
+			s.Err = "cancelled"
+		case StateAborted:
+			s.Err = "aborted"
+		case StateQueued, StateRunning, StateSucceeded:
+		}
+	}
 }
 
 func (s *Scheduler) persistAndPublish(ctx context.Context, j *Job) {

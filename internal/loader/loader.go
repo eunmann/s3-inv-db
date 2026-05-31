@@ -12,6 +12,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
@@ -42,9 +43,11 @@ func (l *Loader) CacheDirFor(key inventory.CacheKey) string {
 // BuildWith downloads the inventory referenced by manifestURI and
 // produces a built index under CacheDirFor(key). The onProgress
 // callback, if non-nil, receives stage transitions and per-chunk
-// quantitative progress for UI ETA. Partial builds are not safe to
+// quantitative progress for UI ETA. The eventBus, if non-nil, is
+// plumbed to the pipeline so subscribers (e.g. jobs.Recorder) can
+// build a fine-grained stage timeline. Partial builds are not safe to
 // resume — the cache dir is cleared first.
-func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifestURI string, onProgress func(stage string, done, total int64)) (string, error) {
+func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifestURI string, onProgress func(stage string, done, total int64), eventBus *events.Bus) (string, error) {
 	if !key.Valid() {
 		return "", errEmptyID
 	}
@@ -66,6 +69,7 @@ func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifest
 
 	cfg := extsort.DefaultConfig()
 	cfg.Observe.OnProgress = onProgress
+	cfg.Observe.EventBus = eventBus
 
 	pipeline := extsort.NewPipeline(cfg, l.s3Client)
 	if _, err := pipeline.Run(ctx, manifestURI, outDir); err != nil {

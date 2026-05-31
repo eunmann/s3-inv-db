@@ -14,6 +14,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/go-chi/chi/v5"
 )
@@ -49,7 +50,7 @@ type fakeBuilder struct {
 	buildResp string
 }
 
-func (f *fakeBuilder) BuildWith(_ context.Context, _ inventory.CacheKey, _ string, _ func(string, int64, int64)) (string, error) {
+func (f *fakeBuilder) BuildWith(_ context.Context, _ inventory.CacheKey, _ string, _ func(string, int64, int64), _ *events.Bus) (string, error) {
 	return f.buildResp, f.buildErr
 }
 

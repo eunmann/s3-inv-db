@@ -13,6 +13,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/internal/loadcontrol"
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/rs/zerolog"
 )
 
@@ -43,8 +44,10 @@ type Discovery interface {
 }
 
 // LoaderFunc loads a single discovered inventory, reporting progress.
-// Callers wire Discovery.AutoLoadWith here.
-type LoaderFunc func(ctx context.Context, disc inventory.Inventory, onProgress func(stage string, done, total int64)) error
+// Callers wire Discovery.AutoLoadWith here. The eventBus, if non-nil,
+// is plumbed to the build pipeline so jobs.Recorder can collect a
+// per-stage timeline for the drawer.
+type LoaderFunc func(ctx context.Context, disc inventory.Inventory, onProgress func(stage string, done, total int64), eventBus *events.Bus) error
 
 // Submitter routes a load through the jobs scheduler so auto-loads get
 // the same tracking, dedup, and concurrency limiting as manual builds.
@@ -245,9 +248,12 @@ func (a *AutoLoader) runQueue(ctx context.Context, queue []inventory.Inventory) 
 func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 	id := target.CompositeID()
 	work := func(jobCtx context.Context, report func(jobs.Update)) error {
-		err := a.loader(jobCtx, target, func(stage string, done, total int64) {
-			report(jobs.Update{Stage: stage, BytesDone: done, BytesTotal: total})
-		})
+		// Recorder translates extsort pipeline events into Update.Stages so
+		// the drawer's per-stage timeline is populated for auto-loaded runs
+		// the same way it is for manual loads.
+		recorder := jobs.NewRecorder(report)
+		defer recorder.Close()
+		err := a.loader(jobCtx, target, recorder.OnProgress, recorder.Bus())
 		if err != nil {
 			// A cancelled load (server shutdown) is not a load failure and
 			// must not consume the backoff budget.

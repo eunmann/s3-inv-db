@@ -18,6 +18,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/loader"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/templates"
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
@@ -224,8 +225,8 @@ func newAutoLoader(cfg Config, discovery *inventory.Discovery, configStore *inve
 	if !cfg.AutoLoad || !discovery.Enabled() {
 		return nil
 	}
-	loadFn := func(c context.Context, d inventory.Inventory, onProgress func(stage string, done, total int64)) error {
-		return discovery.AutoLoadWith(c, d, onProgress)
+	loadFn := func(c context.Context, d inventory.Inventory, onProgress func(stage string, done, total int64), eventBus *events.Bus) error {
+		return discovery.AutoLoadWith(c, d, onProgress, eventBus)
 	}
 	al := autoload.New(autoload.Config{
 		PollInterval:     cfg.PollInterval,

@@ -428,9 +428,14 @@ func (h *Handlers) measureCacheSize(r *http.Request, disc inventory.Inventory) c
 // logger/values via context.WithoutCancel inside jobs.Scheduler.Submit.
 func (h *Handlers) submitDiscoveredLoadJob(parent context.Context, composite inventory.ID, disc inventory.Inventory) error {
 	_, err := h.jobMgr.Submit(parent, composite, jobs.KindBuild, func(ctx context.Context, report func(jobs.Update)) error {
-		return h.discovery.LoadWith(ctx, disc, func(stage string, done, total int64) {
-			report(jobs.Update{Stage: stage, BytesDone: done, BytesTotal: total})
-		})
+		// Recorder bridges extsort pipeline events to Update.Stages so
+		// the drawer's per-stage timeline populates in real time. Close
+		// drains the subscription before the work returns so the
+		// scheduler's terminal report can't race the drainer.
+		recorder := jobs.NewRecorder(report)
+		defer recorder.Close()
+
+		return h.discovery.LoadWith(ctx, disc, recorder.OnProgress, recorder.Bus())
 	})
 	if err != nil {
 		return fmt.Errorf("submit build job: %w", err)
