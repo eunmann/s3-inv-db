@@ -626,11 +626,11 @@ func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []ui
 	if err != nil {
 		return fmt.Errorf("create combined file: %w", err)
 	}
+	cleanup := func(primary error) error {
+		return errors.Join(primary, f.Close(), removeIfErr(path))
+	}
 	if err := f.Truncate(totalBytes); err != nil {
-		f.Close()
-		os.Remove(path)
-
-		return fmt.Errorf("truncate combined file: %w", err)
+		return cleanup(fmt.Errorf("truncate combined file: %w", err))
 	}
 
 	if _, err := f.Write(EncodeHeader(Header{
@@ -639,18 +639,12 @@ func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []ui
 		Count:   uint64(2 * n),
 		Width:   8,
 	})); err != nil {
-		f.Close()
-		os.Remove(path)
-
-		return fmt.Errorf("write combined header: %w", err)
+		return cleanup(fmt.Errorf("write combined header: %w", err))
 	}
 
 	if n == 0 {
 		if err := f.Sync(); err != nil {
-			f.Close()
-			os.Remove(path)
-
-			return fmt.Errorf("sync combined: %w", err)
+			return cleanup(fmt.Errorf("sync combined: %w", err))
 		}
 		if err := f.Close(); err != nil {
 			return fmt.Errorf("close combined: %w", err)
@@ -659,10 +653,9 @@ func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []ui
 		return nil
 	}
 
-	// Invert hashPositions: invMap[slot] = source index. Lets each
-	// worker emit slots in order without lookups against random
-	// indices. uint32 indexing assumes n ≤ MaxUint32, which
-	// computeHashPositionsParallelSort already enforces upstream.
+	// invMap[slot] = source index. Concurrent pwrite to disjoint ranges
+	// is POSIX-safe; each worker writes its own [start,end) slot range.
+	// uint32 assumes n ≤ MaxUint32, enforced upstream.
 	invMap := make([]uint32, n)
 	for i, slot := range hashPositions {
 		invMap[slot] = uint32(i)
@@ -706,18 +699,12 @@ func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []ui
 	wg.Wait()
 	for _, werr := range errs {
 		if werr != nil {
-			f.Close()
-			os.Remove(path)
-
-			return werr
+			return cleanup(werr)
 		}
 	}
 
 	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(path)
-
-		return fmt.Errorf("sync combined: %w", err)
+		return cleanup(fmt.Errorf("sync combined: %w", err))
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close combined: %w", err)
