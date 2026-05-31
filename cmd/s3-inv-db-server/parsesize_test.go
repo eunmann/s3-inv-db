@@ -40,14 +40,24 @@ func TestParseSize(t *testing.T) {
 	}
 }
 
-func TestParseSize_LongestSuffixWins(t *testing.T) {
-	// "TiB" must match before "B" — the loop is ordered longest-first.
-	got, err := parseSize("1TiB")
+func TestParseSize_BinaryVsDecimalSuffixDistinct(t *testing.T) {
+	// "TiB" must resolve to the binary multiplier (2^40), not the
+	// decimal one (10^12) — and "TB" must resolve to the decimal
+	// multiplier, not binary. The lookup table is ordered IB-suffixes
+	// before bare ones so a future bare "B" entry can't preempt them.
+	binGot, err := parseSize("1TiB")
 	if err != nil {
-		t.Fatalf("parseSize: %v", err)
+		t.Fatalf("parseSize(1TiB): %v", err)
 	}
-	if got != 1<<40 {
-		t.Errorf("parseSize(1TiB) = %d, want %d", got, uint64(1)<<40)
+	if binGot != 1<<40 {
+		t.Errorf("parseSize(1TiB) = %d, want %d (binary)", binGot, uint64(1)<<40)
+	}
+	decGot, err := parseSize("1TB")
+	if err != nil {
+		t.Fatalf("parseSize(1TB): %v", err)
+	}
+	if decGot != 1_000_000_000_000 {
+		t.Errorf("parseSize(1TB) = %d, want 1e12 (decimal)", decGot)
 	}
 }
 

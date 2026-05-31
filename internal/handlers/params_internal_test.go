@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
 func TestParseFilter_AbsentReturnsZero(t *testing.T) {
@@ -109,8 +111,9 @@ func TestParseCompareOpts_PopulatesAllFields(t *testing.T) {
 		"show_unchanged": {trueLiteral},
 		"page":           {"2"},
 		"page_size":      {"50"},
-		"sort":           {"bytes_delta"},
-		"dir":            {"desc"},
+		// "size" is a real compare sort column (inventory/compare.go).
+		"sort": {inventory.SortColSize},
+		"dir":  {inventory.SortDirAsc},
 	}
 	got := parseCompareOpts(q)
 	if got.from != "s/inv/r1" || got.to != "s/inv/r2" {
@@ -122,10 +125,17 @@ func TestParseCompareOpts_PopulatesAllFields(t *testing.T) {
 	if got.hideUnchanged {
 		t.Error("show_unchanged=true should set hideUnchanged=false")
 	}
-	// page/pageSize/sortBy/dir flow through inventory.Normalize*; assert
-	// they're non-zero and respect the inputs we provided.
-	if got.page < 1 || got.pageSize < 1 {
-		t.Errorf("page/pageSize = %d/%d", got.page, got.pageSize)
+	if got.page != 2 {
+		t.Errorf("page = %d, want 2", got.page)
+	}
+	if got.pageSize != 50 {
+		t.Errorf("pageSize = %d, want 50", got.pageSize)
+	}
+	if got.sortBy != inventory.SortColSize {
+		t.Errorf("sortBy = %q, want %q", got.sortBy, inventory.SortColSize)
+	}
+	if got.dir != inventory.SortDirAsc {
+		t.Errorf("dir = %q, want %q", got.dir, inventory.SortDirAsc)
 	}
 }
 
