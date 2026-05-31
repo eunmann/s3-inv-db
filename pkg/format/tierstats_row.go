@@ -45,9 +45,11 @@ type TierStatsRowWriter struct {
 	rowBuf []byte
 	// slotByTier maps a tier ID to its slot in the packed row, or -1
 	// when the tier is absent from the declared present set.
-	slotByTier [tiers.NumTiers]int
-	stride     int
-	count      uint64
+	slotByTier   [tiers.NumTiers]int
+	stride       int
+	slotCount    int
+	count        uint64
+	populatedSum uint64 // sum over all rows of the per-row populated-slot count
 }
 
 // NewTierStatsRowWriter creates a row-major tier-stats writer under
@@ -106,6 +108,7 @@ func NewTierStatsRowWriter(outDir string, present []tiers.ID) (*TierStatsRowWrit
 		rowBuf:     make([]byte, stride),
 		slotByTier: slotByTier,
 		stride:     stride,
+		slotCount:  len(sorted),
 	}, nil
 }
 
@@ -116,6 +119,7 @@ func NewTierStatsRowWriter(outDir string, present []tiers.ID) (*TierStatsRowWrit
 // errUndeclaredTierData rather than discarding it.
 func (w *TierStatsRowWriter) Add(counts, bytes *[tiers.NumTiers]uint64) error {
 	row := w.rowBuf
+	var populated uint64
 	for id := range tiers.NumTiers {
 		slot := w.slotByTier[id]
 		if slot < 0 {
@@ -125,6 +129,9 @@ func (w *TierStatsRowWriter) Add(counts, bytes *[tiers.NumTiers]uint64) error {
 
 			continue
 		}
+		if counts[id] != 0 || bytes[id] != 0 {
+			populated++
+		}
 		off := slot * TierStatsSlotBytes
 		binary.LittleEndian.PutUint64(row[off:off+8], counts[id])
 		binary.LittleEndian.PutUint64(row[off+8:off+16], bytes[id])
@@ -133,6 +140,7 @@ func (w *TierStatsRowWriter) Add(counts, bytes *[tiers.NumTiers]uint64) error {
 		return fmt.Errorf("write tier stats row: %w", err)
 	}
 	w.count++
+	w.populatedSum += populated
 
 	return nil
 }
@@ -140,9 +148,20 @@ func (w *TierStatsRowWriter) Add(counts, bytes *[tiers.NumTiers]uint64) error {
 // Count returns the number of rows written so far.
 func (w *TierStatsRowWriter) Count() uint64 { return w.count }
 
-// Close flushes, rewrites the header with the final row count, and
-// closes the file. On any error path the partial file is removed so a
-// later mmap/open doesn't misinterpret it as valid data.
+// Close flushes, rewrites the dense header with the final row count,
+// closes the file, and — if the sparse layout would be smaller for
+// the observed populated-slot distribution — converts the dense file
+// in place to the sparse pair (tier_stats_sparse.bin +
+// tier_stats_sparse.off.u64), removing the dense file on success.
+//
+// The decision is made by tierStatsSparseShouldUse from the observed
+// populatedSum. A single-present-tier inventory never picks sparse;
+// at the opposite extreme an inventory whose rows almost always
+// populate every present-tier slot also stays dense (the sparse
+// bitmap + offsets file would be larger).
+//
+// On any error path the partial files are removed so a later
+// mmap/open doesn't misinterpret them as valid data.
 func (w *TierStatsRowWriter) Close() error {
 	if err := w.writer.Flush(); err != nil {
 		return w.cleanupOnErr(fmt.Errorf("flush tier stats row: %w", err))
@@ -161,6 +180,12 @@ func (w *TierStatsRowWriter) Close() error {
 	}
 	if err := w.file.Close(); err != nil {
 		return errors.Join(fmt.Errorf("close tier stats row: %w", err), removeIfErr(w.path))
+	}
+
+	if w.count > 0 && tierStatsSparseShouldUse(w.slotCount, w.count, w.populatedSum) {
+		if err := convertDenseToSparse(w.path, w.slotCount, w.count, w.populatedSum); err != nil {
+			return fmt.Errorf("convert tier stats to sparse: %w", err)
+		}
 	}
 
 	return nil
