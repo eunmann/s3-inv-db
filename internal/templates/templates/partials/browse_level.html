@@ -168,12 +168,12 @@
                             hx-vals="{{hxValsJSON "inventory_id" $inv "prefix" .Prefix}}"
                             hx-target="#browse-target"
                             hx-push-url="true"
-                            class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline">
-                            📁 {{.Segment}}/
+                            class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline font-mono">
+                            {{.Segment}}/
                         </a>
                         {{else}}
-                        <span class="text-sm font-medium text-gray-700 dark:text-gray-200">
-                            📄 {{.Segment}}
+                        <span class="text-sm font-medium text-gray-700 dark:text-gray-200 font-mono">
+                            {{.Segment}}/
                         </span>
                         {{end}}
                     </td>
