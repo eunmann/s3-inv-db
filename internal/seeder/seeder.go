@@ -199,7 +199,7 @@ func runS3(ctx context.Context, cfg Config, startTime time.Time) error {
 			// Deterministic per-(inv, run) seed so re-seeding produces
 			// the same data layout; otherwise re-runs would shuffle.
 			runSeed := invSeed + int64(r+1)
-			info, err := UploadInventory(ctx, client, invCfg, invCfg.S3, i+1, runSeed, runStamp)
+			info, err := UploadMultiChunkInventory(ctx, client, invCfg, invCfg.S3, i+1, runSeed, runStamp, autoChunkCount(invCfg.Objects))
 			if err != nil {
 				return fmt.Errorf("upload inventory %d run %d: %w", i+1, r, err)
 			}
