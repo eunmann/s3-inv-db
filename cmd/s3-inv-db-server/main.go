@@ -197,6 +197,24 @@ func inventoryConfigsFromFile(cfg *appconfig.Config) []server.InventoryConfigEnt
 	return out
 }
 
+// sizeSuffixes maps human-size suffixes to their byte multipliers.
+// Ordered longest-first so HasSuffix matches "TiB" before "B".
+//
+//nolint:gochecknoglobals // immutable suffix table
+var sizeSuffixes = []struct {
+	suffix string
+	mult   uint64
+}{
+	{"TIB", 1 << bitsPerTebibyte},
+	{"GIB", 1 << bitsPerGibibyte},
+	{"MIB", 1 << bitsPerMebibyte},
+	{"KIB", 1 << 10},
+	{"TB", 1e12},
+	{"GB", 1e9},
+	{"MB", 1e6},
+	{"KB", 1e3},
+}
+
 // parseSize accepts "", a raw byte count, or a number with a suffix
 // (KB/MB/GB/TB and KiB/MiB/GiB/TiB) and returns bytes.
 func parseSize(s string) (uint64, error) {
@@ -206,23 +224,12 @@ func parseSize(s string) (uint64, error) {
 	}
 	var mult uint64 = 1
 	upper := strings.ToUpper(s)
-	switch {
-	case strings.HasSuffix(upper, "TIB"):
-		mult, s = 1<<bitsPerTebibyte, s[:len(s)-3]
-	case strings.HasSuffix(upper, "GIB"):
-		mult, s = 1<<bitsPerGibibyte, s[:len(s)-3]
-	case strings.HasSuffix(upper, "MIB"):
-		mult, s = 1<<bitsPerMebibyte, s[:len(s)-3]
-	case strings.HasSuffix(upper, "KIB"):
-		mult, s = 1<<10, s[:len(s)-3]
-	case strings.HasSuffix(upper, "TB"):
-		mult, s = 1e12, s[:len(s)-2]
-	case strings.HasSuffix(upper, "GB"):
-		mult, s = 1e9, s[:len(s)-2]
-	case strings.HasSuffix(upper, "MB"):
-		mult, s = 1e6, s[:len(s)-2]
-	case strings.HasSuffix(upper, "KB"):
-		mult, s = 1e3, s[:len(s)-2]
+	for _, sx := range sizeSuffixes {
+		if strings.HasSuffix(upper, sx.suffix) {
+			mult, s = sx.mult, s[:len(s)-len(sx.suffix)]
+
+			break
+		}
 	}
 	n, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
 	if err != nil {

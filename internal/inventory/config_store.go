@@ -69,7 +69,7 @@ func (s *ConfigStore) Upsert(ctx context.Context, c Config) error {
             last_poll_error    = excluded.last_poll_error,
             updated_at         = excluded.updated_at`,
 		c.Source, c.Name, autoLoad, c.RetentionCount,
-		c.PollFailureCount, unixOrZero(c.PollBackoffUntil), unixOrZero(c.LastPolledAt),
+		c.PollFailureCount, UnixOrZero(c.PollBackoffUntil), UnixOrZero(c.LastPolledAt),
 		c.LastPollError, time.Now().Unix(),
 	)
 	if err != nil {
@@ -143,8 +143,8 @@ func scanConfig(r rowScanner) (Config, error) {
 		return Config{}, fmt.Errorf("scan config: %w", err)
 	}
 	c.AutoLoad = autoLoad != 0
-	c.PollBackoffUntil = timeFromUnix(backoff)
-	c.LastPolledAt = timeFromUnix(polled)
+	c.PollBackoffUntil = TimeFromUnix(backoff)
+	c.LastPolledAt = TimeFromUnix(polled)
 
 	return c, nil
 }

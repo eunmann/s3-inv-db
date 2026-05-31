@@ -509,6 +509,11 @@ func (c *Catalog) Hydrate(ctx context.Context, info Info, indexDir string) error
 // the pointer or any slice/string derived from mmap-backed memory beyond
 // the call. Concurrent Unload/Remove/Close on the same inventory block
 // until fn returns.
+//
+// Fn must not call back into the Catalog (Load, Unload, Remove, Hydrate)
+// — those acquire the write lock c.mu, which deadlocks against the
+// read lock this call holds. Read-only calls (Get, List, WithIndex on
+// a different inventory) are safe.
 func (c *Catalog) WithIndex(id ID, fn func(*indexread.Index) error) error {
 	c.mu.RLock()
 	inv, exists := c.inventories[id]

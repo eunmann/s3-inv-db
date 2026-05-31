@@ -34,11 +34,11 @@ func (s *Store) Upsert(ctx context.Context, info Info) error {
 	if info.Pinned {
 		pinned = 1
 	}
-	loadedAt := unixOrZero(info.LoadedAt)
-	userUnloadedAt := unixOrZero(info.UserUnloadedAt)
-	backoffUntil := unixOrZero(info.AutoLoadBackoffUntil)
-	failedAt := unixOrZero(info.LastAutoLoadFailedAt)
-	lastAccessed := unixOrZero(info.LastAccessedAt)
+	loadedAt := UnixOrZero(info.LoadedAt)
+	userUnloadedAt := UnixOrZero(info.UserUnloadedAt)
+	backoffUntil := UnixOrZero(info.AutoLoadBackoffUntil)
+	failedAt := UnixOrZero(info.LastAutoLoadFailedAt)
+	lastAccessed := UnixOrZero(info.LastAccessedAt)
 	_, err := s.db.ExecContext(ctx, `
         INSERT INTO inventories (
             id, name, path, state, error,
@@ -164,17 +164,19 @@ func scanInfo(r rowScanner) (Info, error) {
 	info.State = State(state)
 	info.HasTierData = hasTier != 0
 	info.Pinned = pinned != 0
-	info.LoadedAt = timeFromUnix(loadedAt)
-	info.UserUnloadedAt = timeFromUnix(userUnloadedAt)
-	info.AutoLoadBackoffUntil = timeFromUnix(backoffUntil)
-	info.LastAutoLoadFailedAt = timeFromUnix(failedAt)
-	info.LastAccessedAt = timeFromUnix(lastAccessed)
+	info.LoadedAt = TimeFromUnix(loadedAt)
+	info.UserUnloadedAt = TimeFromUnix(userUnloadedAt)
+	info.AutoLoadBackoffUntil = TimeFromUnix(backoffUntil)
+	info.LastAutoLoadFailedAt = TimeFromUnix(failedAt)
+	info.LastAccessedAt = TimeFromUnix(lastAccessed)
 	info.LoadDuration = time.Duration(loadDurationNs)
 
 	return info, nil
 }
 
-func unixOrZero(t time.Time) int64 {
+// UnixOrZero converts t to a Unix-seconds int64, returning 0 for the
+// zero time so SQLite NULL-vs-epoch round-trips stay symmetric.
+func UnixOrZero(t time.Time) int64 {
 	if t.IsZero() {
 		return 0
 	}
@@ -182,7 +184,9 @@ func unixOrZero(t time.Time) int64 {
 	return t.Unix()
 }
 
-func timeFromUnix(sec int64) time.Time {
+// TimeFromUnix converts a Unix-seconds int64 back to a time.Time,
+// returning the zero time for 0 so it round-trips with UnixOrZero.
+func TimeFromUnix(sec int64) time.Time {
 	if sec == 0 {
 		return time.Time{}
 	}

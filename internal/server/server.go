@@ -208,15 +208,14 @@ func buildHandlerOptions(cfg Config, discovery *inventory.Discovery, bldr *loade
 		handlers.WithDiscovery(discovery),
 		handlers.WithDiscoveryRefreshInterval(refreshInterval),
 	}
-	if bldr != nil {
-		hopts = append(hopts, handlers.WithLoader(bldr), handlers.WithCacheStore(bldr))
+	addIf := func(cond bool, opts ...handlers.Option) {
+		if cond {
+			hopts = append(hopts, opts...)
+		}
 	}
-	if cfg.S3Source != "" {
-		hopts = append(hopts, handlers.WithS3Source(cfg.S3Source))
-	}
-	if cfg.QueryBatchMax > 0 {
-		hopts = append(hopts, handlers.WithQueryBatchMax(cfg.QueryBatchMax))
-	}
+	addIf(bldr != nil, handlers.WithLoader(bldr), handlers.WithCacheStore(bldr))
+	addIf(cfg.S3Source != "", handlers.WithS3Source(cfg.S3Source))
+	addIf(cfg.QueryBatchMax > 0, handlers.WithQueryBatchMax(cfg.QueryBatchMax))
 
 	return hopts
 }

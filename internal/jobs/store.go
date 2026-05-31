@@ -44,7 +44,7 @@ func (s *Store) Upsert(ctx context.Context, j Job) error {
             updated_at  = excluded.updated_at`,
 		j.ID, j.InventoryID, string(j.Kind), string(j.State), j.Stage,
 		j.Progress, j.BytesTotal, j.BytesDone,
-		unixOrZero(j.StartedAt), unixOrZero(j.FinishedAt),
+		inventory.UnixOrZero(j.StartedAt), inventory.UnixOrZero(j.FinishedAt),
 		j.Error, time.Now().Unix(),
 	)
 	if err != nil {
@@ -144,12 +144,8 @@ func scanJob(r rowScanner) (Job, error) {
 	}
 	j.Kind = Kind(kind)
 	j.State = State(state)
-	if startedAt != 0 {
-		j.StartedAt = time.Unix(startedAt, 0)
-	}
-	if finishedAt != 0 {
-		j.FinishedAt = time.Unix(finishedAt, 0)
-	}
+	j.StartedAt = inventory.TimeFromUnix(startedAt)
+	j.FinishedAt = inventory.TimeFromUnix(finishedAt)
 	j.UpdatedAt = time.Unix(updatedAt, 0)
 
 	return j, nil
@@ -173,12 +169,4 @@ func scanJobs(rows *sql.Rows) ([]Job, error) {
 
 type rowScanner interface {
 	Scan(dest ...any) error
-}
-
-func unixOrZero(t time.Time) int64 {
-	if t.IsZero() {
-		return 0
-	}
-
-	return t.Unix()
 }
