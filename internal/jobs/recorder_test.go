@@ -203,13 +203,10 @@ func TestRecorder_OnProgressAfterCloseIsNoop(t *testing.T) {
 	}
 }
 
-func TestRecorder_SpillCompletedDoesNotInflateRows(t *testing.T) {
-	// SpillCompleted carries the post-aggregation prefix-row count from
-	// an internal spill — adding it to the user-facing Rows would
-	// inflate "downloading: N rows" past the actual inventory-object
-	// count as soon as a real (spilling) inventory ran. The recorder
-	// deliberately ignores these events; the authoritative final
-	// objects count comes in via EvtStageEnd.
+func TestRecorder_SpillCompletedFeedsDiagnosticsNotStageRows(t *testing.T) {
+	// SpillCompleted.Rows is post-aggregation pipeline-internal — it
+	// must not pollute the user-facing stage Rows. It does count
+	// towards SpillCount/SpillBytes for the drawer's diagnostics line.
 	rep := &captureReporter{}
 	rec := jobs.NewRecorder(rep.report)
 	defer rec.Close()
@@ -232,15 +229,49 @@ func TestRecorder_SpillCompletedDoesNotInflateRows(t *testing.T) {
 		Time: time.Now(),
 	})
 
-	// Give the drainer a moment so a stale +=Rows path would have
-	// surfaced; verify Rows stays at 0.
-	time.Sleep(50 * time.Millisecond)
-	stage := rec.Snapshot()[0]
-	if stage.Name != stageDownloading {
-		t.Errorf("stage[0].Name = %q, want %q", stage.Name, stageDownloading)
+	if !waitFor(50*time.Millisecond, func() bool {
+		u := rep.last()
+
+		return u.SpillCount == 2 && u.SpillBytes == 6144
+	}) {
+		t.Fatalf("spill diagnostics did not converge: %+v", rep.last())
 	}
+	stage := rec.Snapshot()[0]
 	if stage.Rows != 0 {
 		t.Errorf("Rows after two spills = %d, want 0 (spills do not contribute to Rows)", stage.Rows)
+	}
+}
+
+func TestRecorder_MergeRoundsAndBytes(t *testing.T) {
+	rep := &captureReporter{}
+	rec := jobs.NewRecorder(rep.report)
+	defer rec.Close()
+
+	rec.OnProgress("building", 0, 0)
+	for i := range 3 {
+		rec.Bus().Publish(events.Event{
+			Stage:   events.StageMerge,
+			Type:    events.EvtRoundCompleted,
+			Payload: events.BatchCommitted{WorkerID: i},
+			Time:    time.Now(),
+		})
+	}
+	rec.Bus().Publish(events.Event{
+		Stage: events.StagePipeline,
+		Type:  events.EvtStageEnd,
+		Payload: events.StageTiming{
+			Stage: events.StageMerge, Duration: time.Second,
+			Rows: 1000, BytesWritten: 9_876_543,
+		},
+		Time: time.Now(),
+	})
+
+	if !waitFor(50*time.Millisecond, func() bool {
+		u := rep.last()
+
+		return u.MergeRounds == 3 && u.MergeBytes == 9_876_543
+	}) {
+		t.Fatalf("merge diagnostics did not converge: %+v", rep.last())
 	}
 }
 

@@ -8,15 +8,19 @@ import (
 )
 
 type Recorder struct {
-	bus      *events.Bus
-	report   func(Update)
-	sub      *events.Subscription
-	stages   []StageRecord
-	mu       sync.Mutex
-	closed   bool
-	wg       sync.WaitGroup
-	nowFn    func() time.Time
-	closedCh chan struct{}
+	bus         *events.Bus
+	report      func(Update)
+	sub         *events.Subscription
+	stages      []StageRecord
+	spillCount  int
+	spillBytes  int64
+	mergeRounds int
+	mergeBytes  int64
+	mu          sync.Mutex
+	closed      bool
+	wg          sync.WaitGroup
+	nowFn       func() time.Time
+	closedCh    chan struct{}
 }
 
 func NewRecorder(report func(Update)) *Recorder {
@@ -110,33 +114,54 @@ func (r *Recorder) handleEvent(ev events.Event) {
 	if r.closed {
 		return
 	}
-	var changed bool
+	var stagesChanged, diagChanged bool
 	switch ev.Type {
 	case events.EvtStageEnd:
 		st, ok := ev.Payload.(events.StageTiming)
 		if !ok {
 			return
 		}
-		changed = r.enrichOnStageEndLocked(ev, st)
+		stagesChanged = r.enrichOnStageEndLocked(ev, st)
+		if st.Stage == events.StageMerge && st.BytesWritten > 0 {
+			r.mergeBytes = st.BytesWritten
+			diagChanged = true
+		}
 	case events.EvtBatchCommitted:
 		bc, ok := ev.Payload.(events.BatchCommitted)
 		if !ok {
 			return
 		}
-		changed = r.accumulateBatchLocked(ev.Stage, bc)
-	// EvtSpillCompleted is deliberately not consumed: SpillCompleted.Rows
-	// counts post-aggregation prefix-row writes (an internal pipeline
-	// metric, can be ~10× the inventory-row count for deep keys). Adding
-	// it onto the user-facing Rows would inflate "downloading: N rows"
-	// past the actual object count as soon as a real inventory spills.
-	// The authoritative final count arrives on EvtStageEnd.
+		stagesChanged = r.accumulateBatchLocked(ev.Stage, bc)
+	case events.EvtSpillCompleted:
+		// SpillCompleted.Rows is post-aggregation prefix-row count and
+		// would inflate the user-facing stage Rows; keep counts/bytes as
+		// diagnostics only.
+		sc, ok := ev.Payload.(events.SpillCompleted)
+		if !ok {
+			return
+		}
+		r.spillCount++
+		r.spillBytes += sc.Bytes
+		diagChanged = true
+	case events.EvtRoundCompleted:
+		r.mergeRounds++
+		diagChanged = true
 	default:
 		return
 	}
-	if !changed {
+	if !stagesChanged && !diagChanged {
 		return
 	}
-	r.report(Update{Stages: snapshotStages(r.stages)})
+	u := Update{
+		SpillCount:  r.spillCount,
+		SpillBytes:  r.spillBytes,
+		MergeRounds: r.mergeRounds,
+		MergeBytes:  r.mergeBytes,
+	}
+	if stagesChanged {
+		u.Stages = snapshotStages(r.stages)
+	}
+	r.report(u)
 }
 
 func (r *Recorder) enrichOnStageEndLocked(ev events.Event, st events.StageTiming) bool {

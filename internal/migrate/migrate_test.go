@@ -116,13 +116,10 @@ func TestApply_DirtyRecoveryReRunsFailedMigration(t *testing.T) {
 	}
 
 	ctx := t.Context()
-	// Simulate a partial apply of the most recent migration: drop every
-	// column it added and mark the schema_migrations row dirty at the
-	// current version. Without the Force(N-1) fix, Apply would clear
-	// dirty and leave the schema permanently missing the columns.
-	// 0006_job_stages adds three columns to jobs; drop all three so the
-	// re-run isn't short-circuited by the alreadyAppliedErr path.
-	for _, col := range []string{"prev_job_id", "attempt_count", "stages_json"} {
+	// Drop every column from the most recent migration so the re-run
+	// isn't short-circuited by the alreadyAppliedErr path.
+	// 0007_job_diagnostics adds four columns to jobs.
+	for _, col := range []string{"merge_bytes", "merge_rounds", "spill_bytes", "spill_count"} {
 		if _, err := db.ExecContext(ctx, `ALTER TABLE jobs DROP COLUMN `+col); err != nil {
 			t.Fatalf("simulate partial apply (drop %s): %v", col, err)
 		}
@@ -135,18 +132,16 @@ func TestApply_DirtyRecoveryReRunsFailedMigration(t *testing.T) {
 		t.Fatalf("Apply with dirty + missing column: %v", err)
 	}
 
-	// Both invariants must hold post-recovery: dirty is cleared AND
-	// the dropped column is restored by the re-run.
 	info2, _ := migrate.Version(db)
 	if info2.Dirty {
 		t.Error("dirty flag still set after Apply")
 	}
 	var name string
 	err := db.QueryRowContext(ctx,
-		`SELECT name FROM pragma_table_info('jobs') WHERE name='prev_job_id'`,
+		`SELECT name FROM pragma_table_info('jobs') WHERE name='spill_count'`,
 	).Scan(&name)
 	if err != nil {
-		t.Errorf("prev_job_id column missing after dirty recovery: %v", err)
+		t.Errorf("spill_count column missing after dirty recovery: %v", err)
 	}
 }
 

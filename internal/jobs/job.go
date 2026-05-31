@@ -80,6 +80,10 @@ type Job struct {
 	AttemptCount int
 	StageTotal   int64
 	StageDone    int64
+	SpillCount   int
+	SpillBytes   int64
+	MergeRounds  int
+	MergeBytes   int64
 }
 
 // StageRecord is one entry in the per-job pipeline timeline. EndedAt
@@ -102,9 +106,13 @@ func (r StageRecord) InProgress() bool { return r.EndedAt.IsZero() }
 // StageDone/StageTotal carry the current stage's step counter — units
 // are stage-dependent (chunks, run files, …), not bytes.
 type Update struct {
-	Stage      string
-	Stages     []StageRecord
-	Progress   int
-	StageTotal int64
-	StageDone  int64
+	Stage       string
+	Stages      []StageRecord
+	Progress    int
+	StageTotal  int64
+	StageDone   int64
+	SpillCount  int
+	SpillBytes  int64
+	MergeRounds int
+	MergeBytes  int64
 }

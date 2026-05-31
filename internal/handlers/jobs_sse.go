@@ -43,6 +43,10 @@ type jobEvent struct {
 	AttemptCount int          `json:"AttemptCount,omitempty"`
 	StageTotal   int64        `json:"StageTotal"`
 	StageDone    int64        `json:"StageDone"`
+	SpillCount   int          `json:"SpillCount,omitempty"`
+	SpillBytes   int64        `json:"SpillBytes,omitempty"`
+	MergeRounds  int          `json:"MergeRounds,omitempty"`
+	MergeBytes   int64        `json:"MergeBytes,omitempty"`
 }
 
 // stageEvent is the per-stage timeline entry inside jobEvent.Stages.
@@ -91,6 +95,10 @@ func jobToEvent(j jobs.Job) jobEvent {
 		Error:        j.Error,
 		AttemptCount: j.AttemptCount,
 		PrevJobID:    string(j.PrevJobID),
+		SpillCount:   j.SpillCount,
+		SpillBytes:   j.SpillBytes,
+		MergeRounds:  j.MergeRounds,
+		MergeBytes:   j.MergeBytes,
 	}
 	if !j.StartedAt.IsZero() {
 		ev.StartedAt = j.StartedAt.Format(time.RFC3339Nano)

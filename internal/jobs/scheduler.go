@@ -262,6 +262,21 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 		if u.Stages != nil {
 			job.Stages = u.Stages
 		}
+		// Diagnostic counters are monotonic within a job; last-non-zero
+		// wins so the scheduler can ignore zero-value Updates that
+		// happen to omit them.
+		if u.SpillCount > job.SpillCount {
+			job.SpillCount = u.SpillCount
+		}
+		if u.SpillBytes > job.SpillBytes {
+			job.SpillBytes = u.SpillBytes
+		}
+		if u.MergeRounds > job.MergeRounds {
+			job.MergeRounds = u.MergeRounds
+		}
+		if u.MergeBytes > job.MergeBytes {
+			job.MergeBytes = u.MergeBytes
+		}
 		s.persistAndPublish(ctx, &job)
 	}
 

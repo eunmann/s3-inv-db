@@ -101,6 +101,13 @@
             Baseline from prior run: {{.BaselineH}}
         </p>
         {{end}}
+        {{if or (gt .LatestJob.SpillCount 0) (gt .LatestJob.MergeRounds 0)}}
+        <p class="text-[11px] text-gray-400 dark:text-gray-500 font-mono" title="Spills indicate memory pressure (raise GOMEMLIMIT); merge rounds scale with run-file count and fan-in.">
+            {{if gt .LatestJob.SpillCount 0}}{{.LatestJob.SpillCount}} spill{{if ne .LatestJob.SpillCount 1}}s{{end}} · {{formatBytesInt64 .LatestJob.SpillBytes}} spilled{{end}}
+            {{if and (gt .LatestJob.SpillCount 0) (gt .LatestJob.MergeRounds 0)}} · {{end}}
+            {{if gt .LatestJob.MergeRounds 0}}{{.LatestJob.MergeRounds}} merge round{{if ne .LatestJob.MergeRounds 1}}s{{end}}{{if gt .LatestJob.MergeBytes 0}}, {{formatBytesInt64 .LatestJob.MergeBytes}} written{{end}}{{end}}
+        </p>
+        {{end}}
     </section>
 
     {{- /* Per-stage timeline. Each row is one StageRecord. */ -}}
@@ -131,18 +138,20 @@
                            (= S3 objects) and their summed claimed sizes;
                            building counts unique prefixes and has no
                            meaningful byte total. */ -}}
+                    {{$rate := throughputRate .Rows .Duration}}
                     {{if eq .Name "downloading"}}
                         {{if or (gt .Bytes 0) (gt .Rows 0)}}
                         <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono">
                             {{if gt .Rows 0}}{{formatCount .Rows}} objects{{end}}
                             {{if and (gt .Rows 0) (gt .Bytes 0)}} · {{end}}
                             {{if gt .Bytes 0}}{{formatBytes .Bytes}} total size{{end}}
+                            {{if $rate}} · {{$rate}}{{end}}
                         </div>
                         {{end}}
                     {{else if eq .Name "building"}}
                         {{if gt .Rows 0}}
                         <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono">
-                            {{formatCount .Rows}} prefixes
+                            {{formatCount .Rows}} prefixes{{if $rate}} · {{$rate}}{{end}}
                         </div>
                         {{end}}
                     {{else if or (gt .Bytes 0) (gt .Rows 0)}}
@@ -150,6 +159,7 @@
                         {{if gt .Rows 0}}{{formatCount .Rows}}{{end}}
                         {{if and (gt .Rows 0) (gt .Bytes 0)}} · {{end}}
                         {{if gt .Bytes 0}}{{formatBytes .Bytes}}{{end}}
+                        {{if $rate}} · {{$rate}}{{end}}
                     </div>
                     {{end}}
                     {{if .Err}}

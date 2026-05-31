@@ -39,6 +39,7 @@ type DrawerStage struct {
 	Description string
 	DurationH   string
 	Err         string
+	Duration    time.Duration
 	Bytes       uint64
 	Rows        uint64
 	InProgress  bool
@@ -158,6 +159,7 @@ func drawerStagesFromJob(j jobs.Job) []DrawerStage {
 			Label:       templates.StageLabel(s.Name),
 			Description: templates.StageDescription(s.Name),
 			DurationH:   templates.DurationFromNs(s.Duration.Nanoseconds()),
+			Duration:    s.Duration,
 			Err:         s.Err,
 			Bytes:       s.Bytes,
 			Rows:        s.Rows,
@@ -168,6 +170,7 @@ func drawerStagesFromJob(j jobs.Job) []DrawerStage {
 			elapsed := time.Since(s.StartedAt)
 			if elapsed > 0 {
 				out[i].DurationH = humanfmt.Duration(elapsed)
+				out[i].Duration = elapsed
 			}
 		}
 	}

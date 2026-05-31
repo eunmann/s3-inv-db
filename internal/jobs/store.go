@@ -31,7 +31,8 @@ func NewStore(db *sql.DB) *Store {
 // download, run files for build, …). Kept to avoid a schema migration.
 const jobColumns = `id, inventory_id, kind, state, stage, progress,
                bytes_total, bytes_done, started_at, finished_at,
-               error, updated_at, stages_json, attempt_count, prev_job_id`
+               error, updated_at, stages_json, attempt_count, prev_job_id,
+               spill_count, spill_bytes, merge_rounds, merge_bytes`
 
 // Upsert writes j by primary key. UpdatedAt is set to time.Now().
 func (s *Store) Upsert(ctx context.Context, j Job) error {
@@ -45,7 +46,7 @@ func (s *Store) Upsert(ctx context.Context, j Job) error {
 	}
 	_, err = s.db.ExecContext(ctx, `
         INSERT INTO jobs (`+jobColumns+`)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             state         = excluded.state,
             stage         = excluded.stage,
@@ -58,12 +59,17 @@ func (s *Store) Upsert(ctx context.Context, j Job) error {
             updated_at    = excluded.updated_at,
             stages_json   = excluded.stages_json,
             attempt_count = excluded.attempt_count,
-            prev_job_id   = excluded.prev_job_id`,
+            prev_job_id   = excluded.prev_job_id,
+            spill_count   = excluded.spill_count,
+            spill_bytes   = excluded.spill_bytes,
+            merge_rounds  = excluded.merge_rounds,
+            merge_bytes   = excluded.merge_bytes`,
 		j.ID, j.InventoryID, string(j.Kind), string(j.State), j.Stage,
 		j.Progress, j.StageTotal, j.StageDone,
 		inventory.UnixOrZero(j.StartedAt), inventory.UnixOrZero(j.FinishedAt),
 		j.Error, time.Now().Unix(),
 		stagesJSON, attempt, string(j.PrevJobID),
+		j.SpillCount, j.SpillBytes, j.MergeRounds, j.MergeBytes,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert job %s: %w", j.ID, err)
@@ -171,6 +177,7 @@ func scanJob(r rowScanner) (Job, error) {
 		&j.ID, &j.InventoryID, &kind, &state, &j.Stage, &j.Progress,
 		&j.StageTotal, &j.StageDone, &startedAt, &finishedAt, &j.Error, &updatedAt,
 		&stagesJSON, &attemptCount, &prevJobID,
+		&j.SpillCount, &j.SpillBytes, &j.MergeRounds, &j.MergeBytes,
 	); err != nil {
 		return Job{}, fmt.Errorf("scan job: %w", err)
 	}

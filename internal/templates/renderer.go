@@ -86,6 +86,8 @@ func stageLabel(stage string) string {
 		return "Downloading & parsing"
 	case "building":
 		return "Building index"
+	case "finalizing":
+		return "Finalizing"
 	case "done":
 		return "Done"
 	default:
@@ -104,6 +106,8 @@ func stageDescription(stage string) string {
 		return "Streaming inventory chunks from S3 and aggregating prefixes in memory"
 	case "building":
 		return "Merging spilled run files and writing the on-disk index + MPHF"
+	case "finalizing":
+		return "Writing the MPHF, depth index, prefix dictionary, tier stats, and manifest checksums"
 	case "done":
 		return "Index materialised on disk and opened in memory"
 	default:
@@ -171,6 +175,18 @@ func StageDescription(stage string) string { return stageDescription(stage) }
 
 // DurationFromNs exposes durationFromNs to other packages.
 func DurationFromNs(ns int64) string { return durationFromNs(ns) }
+
+// throughputRate formats rows/duration as a humanised per-second rate.
+// Returns "" when either input is zero so callers can render conditionally
+// without an extra template guard.
+func throughputRate(rows uint64, d time.Duration) string {
+	if rows == 0 || d <= 0 {
+		return ""
+	}
+	rate := float64(rows) / d.Seconds()
+
+	return humanfmt.Count(int64(rate)) + "/s"
+}
 
 // tierLabel converts a raw S3 storage-class identifier (e.g.
 // "INTELLIGENT_TIERING_FREQUENT_SMALL") into a friendlier label
@@ -315,10 +331,11 @@ func (r *Renderer) formatFuncs() template.FuncMap {
 		"formatETA": func(startedAt time.Time, done, total int64) string {
 			return formatETAAt(now(), startedAt, done, total)
 		},
-		"progressPct": progressPct,
-		"tierLabel":   tierLabel,
-		"truncate":    truncate,
-		"firstLine":   firstLine,
+		"progressPct":    progressPct,
+		"tierLabel":      tierLabel,
+		"truncate":       truncate,
+		"firstLine":      firstLine,
+		"throughputRate": throughputRate,
 	}
 }
 
