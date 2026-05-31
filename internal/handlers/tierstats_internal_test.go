@@ -7,10 +7,15 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-func TestAssembleTierStats_EmptyReturnsEmptySlice(t *testing.T) {
+func TestAssembleTierStats_EmptyReturnsNonNilEmpty(t *testing.T) {
+	// The helper uses make([]TierStats, len(breakdown)), so a nil or
+	// zero-length input must yield a non-nil zero-length slice. Callers
+	// then assign to a struct field; JSON's omitempty drops both nil
+	// and empty, but in-process callers iterate the slice and must not
+	// nil-check.
 	got := assembleTierStats(nil)
 	if got == nil {
-		t.Fatal("assembleTierStats(nil) returned nil; JSON would omit the field — must be []")
+		t.Fatal("assembleTierStats(nil) returned nil; want non-nil empty slice")
 	}
 	if len(got) != 0 {
 		t.Errorf("len = %d, want 0", len(got))
