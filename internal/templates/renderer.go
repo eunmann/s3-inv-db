@@ -93,6 +93,57 @@ func stageLabel(stage string) string {
 	}
 }
 
+// stageDescription is the tooltip body for a pipeline phase.
+func stageDescription(stage string) string {
+	switch stage {
+	case "preparing":
+		return "Wiping any stale cache and reserving the build directory"
+	case "initializing":
+		return "Starting the build pipeline workers"
+	case "downloading":
+		return "Streaming inventory chunks from S3 and aggregating prefixes in memory"
+	case "building":
+		return "Merging spilled run files and writing the on-disk index + MPHF"
+	case "done":
+		return "Index materialised on disk and opened in memory"
+	default:
+		return ""
+	}
+}
+
+// durationFromNs renders a nanosecond count as a humanised duration.
+// Returns "" for non-positive inputs so templates can hide empty slots.
+func durationFromNs(ns int64) string {
+	if ns <= 0 {
+		return ""
+	}
+
+	return humanfmt.Duration(time.Duration(ns))
+}
+
+// elapsedSince renders time-since-t as a humanised duration. Returns ""
+// for zero times or negative deltas so templates can hide empty slots.
+func elapsedSince(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	if d <= 0 {
+		return ""
+	}
+
+	return humanfmt.Duration(d)
+}
+
+// StageLabel exposes stageLabel to other packages (drawer view assembly).
+func StageLabel(stage string) string { return stageLabel(stage) }
+
+// StageDescription exposes stageDescription to other packages.
+func StageDescription(stage string) string { return stageDescription(stage) }
+
+// DurationFromNs exposes durationFromNs to other packages.
+func DurationFromNs(ns int64) string { return durationFromNs(ns) }
+
 // tierLabel converts a raw S3 storage-class identifier (e.g.
 // "INTELLIGENT_TIERING_FREQUENT_SMALL") into a friendlier label
 // ("Intelligent-Tiering Frequent (< 128 KiB)") for UI rendering.
@@ -245,8 +296,10 @@ func (r *Renderer) formatFuncs() template.FuncMap {
 // the page renders alongside them.
 func stateFuncs() template.FuncMap {
 	return template.FuncMap{
-		"stateLabel": stateLabel,
-		"stageLabel": stageLabel,
+		"stateLabel":       stateLabel,
+		"stageLabel":       stageLabel,
+		"stageDescription": stageDescription,
+		"elapsedSince":     elapsedSince,
 		"stateClass": func(state string) string {
 			switch state {
 			case stateLoaded:

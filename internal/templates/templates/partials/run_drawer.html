@@ -1,0 +1,185 @@
+{{define "templates/partials/run_drawer.html"}}
+{{- /* Full drawer shell (open state). Returned whole by the handler
+       and swapped via hx-swap="outerHTML" so opening is purely a
+       server round-trip — no client-side state machine.
+
+       The aside itself carries the SSE refresh wiring: hx-trigger
+       "sse:row-<composite> from:body" re-fetches this same endpoint
+       whenever the server emits a state change for the open run.
+       Because the response is the entire aside, htmx automatically
+       re-attaches the SSE listener after each swap. */ -}}
+<aside id="run-drawer" data-open
+       hx-get="/partials/drawer/{{.CompositePath}}"
+       hx-trigger="sse:row-{{.InventoryID}} from:body"
+       hx-swap="outerHTML"
+       class="fixed top-16 right-0 h-[calc(100vh-4rem)] w-96 max-w-[90vw] bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 shadow-xl z-40 overflow-y-auto translate-x-0 transition-transform duration-200"
+       role="dialog" aria-label="Run details">
+<div class="px-5 py-4 space-y-4" data-inventory-id="{{.InventoryID}}">
+    <header class="space-y-1.5">
+        <div class="flex items-start gap-2">
+            <div class="flex-1 min-w-0">
+                <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100 break-words font-mono">{{.InventoryID}}</h2>
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Inventory run details</p>
+            </div>
+            <button type="button"
+                    data-drawer-close
+                    hx-get="/partials/drawer-close"
+                    hx-target="#run-drawer"
+                    hx-swap="outerHTML"
+                    aria-label="Close drawer"
+                    class="inline-flex items-center justify-center h-7 w-7 rounded text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-700 dark:hover:text-gray-200">
+                <svg viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4" aria-hidden="true"><path d="M5.3 4l-1.4 1.4L8.6 10l-4.7 4.6L5.3 16l4.7-4.7 4.6 4.7 1.4-1.4-4.7-4.6 4.7-4.6L14.6 4 10 8.6z"/></svg>
+            </button>
+        </div>
+        {{if .LatestJob}}
+        <div class="flex flex-wrap items-center gap-2 text-xs">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full font-semibold {{stateClass (printf "%s" .State)}}" title="{{stageDescription .LatestJob.Stage}}">
+                {{stateLabel (printf "%s" .State)}}
+            </span>
+            {{if gt .LatestJob.AttemptCount 1}}
+            <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-semibold rounded bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300" title="This is retry attempt {{.LatestJob.AttemptCount}}">
+                Attempt {{.LatestJob.AttemptCount}}
+            </span>
+            {{end}}
+            {{if .Live}}
+            <span class="text-gray-500 dark:text-gray-400">{{stageLabel .LatestJob.Stage}}{{if gt .LatestJob.Progress 0}} · {{.LatestJob.Progress}}%{{end}}</span>
+            {{else}}
+                {{if .LatestTookH}}
+                <span class="text-gray-700 dark:text-gray-200 font-mono" title="Total wall-clock from queue to finish">took {{.LatestTookH}}</span>
+                {{end}}
+                {{if .LatestJob.FinishedAt}}
+                <span class="text-gray-400 dark:text-gray-500" title="Finished {{formatTime .LatestJob.FinishedAt}}">· {{formatTimeRelative .LatestJob.FinishedAt}}</span>
+                {{end}}
+            {{end}}
+        </div>
+        {{else}}
+        <div class="text-xs text-gray-500 dark:text-gray-400">No build activity recorded yet.</div>
+        {{end}}
+    </header>
+
+    {{if .LatestJob}}
+    {{- /* Overall progress + ETA block. Progress bar uses the current
+           stage's BytesDone/BytesTotal because the pipeline reports
+           per-stage units (chunks for download, runs for build). The
+           overall ETA is the baseline-projected remaining wall clock. */ -}}
+    <section aria-label="Overall progress" class="space-y-1.5">
+        <div class="flex items-end justify-between text-xs">
+            <div class="text-gray-700 dark:text-gray-200 font-medium">
+                {{if .Live}}Progress{{else}}Result{{end}}
+            </div>
+            <div class="text-gray-500 dark:text-gray-400">
+                {{if .Live}}
+                    {{if .LatestJob.StartedAt}}elapsed {{elapsedSince .LatestJob.StartedAt}}{{end}}
+                    {{if .OverallETA}} · ~{{.OverallETA}} left{{end}}
+                {{else if .LatestTookH}}
+                    took {{.LatestTookH}}
+                {{else if .LatestJob.StartedAt}}
+                    started {{formatTimeRelative .LatestJob.StartedAt}}
+                {{end}}
+            </div>
+        </div>
+        <div class="h-1.5 w-full bg-gray-100 dark:bg-gray-900/40 rounded overflow-hidden">
+            <div class="h-full {{if eq (printf "%s" .LatestJob.State) "failed"}}bg-red-500 dark:bg-red-400{{else if eq (printf "%s" .LatestJob.State) "cancelled"}}bg-yellow-500 dark:bg-yellow-400{{else if eq (printf "%s" .LatestJob.State) "succeeded"}}bg-green-500 dark:bg-green-400{{else}}bg-indigo-500 dark:bg-indigo-400{{end}} transition-all"
+                 style="width: {{if eq (printf "%s" .LatestJob.State) "succeeded"}}100{{else if gt (progressPct .LatestJob.BytesDone .LatestJob.BytesTotal) 0}}{{progressPct .LatestJob.BytesDone .LatestJob.BytesTotal}}{{else if .Live}}5{{else}}0{{end}}%"></div>
+        </div>
+        {{if .BaselineH}}
+        <p class="text-[11px] text-gray-400 dark:text-gray-500" title="Computed from the most recent successful build of the same inventory configuration">
+            Baseline from prior run: {{.BaselineH}}
+        </p>
+        {{end}}
+    </section>
+
+    {{- /* Per-stage timeline. Each row is one StageRecord. */ -}}
+    <section aria-label="Pipeline timeline" class="space-y-1">
+        <h3 class="text-xs uppercase tracking-wider font-semibold text-gray-500 dark:text-gray-400">Timeline</h3>
+        {{if .Stages}}
+        <ol class="space-y-1">
+            {{range .Stages}}
+            <li class="flex items-start gap-2 text-xs"
+                title="{{.Description}}">
+                <span class="inline-flex flex-shrink-0 mt-0.5 h-4 w-4 items-center justify-center" aria-hidden="true">
+                    {{if .Err}}
+                        <svg viewBox="0 0 20 20" fill="currentColor" class="h-3.5 w-3.5 text-red-500 dark:text-red-400"><path d="M10 1.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17zM6.7 6.7l1.4-1.4L10 7.2l1.9-1.9 1.4 1.4L11.4 8.6l1.9 1.9-1.4 1.4L10 10l-1.9 1.9-1.4-1.4 1.9-1.9z"/></svg>
+                    {{else if .InProgress}}
+                        <svg viewBox="0 0 24 24" class="h-3.5 w-3.5 text-indigo-500 dark:text-indigo-400 animate-spin" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M21 12a9 9 0 0 0-9-9" stroke-linecap="round"/></svg>
+                    {{else}}
+                        <svg viewBox="0 0 20 20" fill="currentColor" class="h-3.5 w-3.5 text-green-500 dark:text-green-400"><path d="M16.7 5.3a1 1 0 0 0-1.4 0L8 12.6 4.7 9.3a1 1 0 1 0-1.4 1.4l4 4a1 1 0 0 0 1.4 0l8-8a1 1 0 0 0 0-1.4z"/></svg>
+                    {{end}}
+                </span>
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-baseline gap-2">
+                        <span class="font-medium text-gray-800 dark:text-gray-100">{{.Label}}</span>
+                        {{if .DurationH}}<span class="text-gray-400 dark:text-gray-500 font-mono">{{.DurationH}}</span>{{end}}
+                    </div>
+                    {{if or (gt .Bytes 0) (gt .Rows 0)}}
+                    <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono">
+                        {{if gt .Rows 0}}{{formatCount .Rows}} rows{{end}}
+                        {{if and (gt .Rows 0) (gt .Bytes 0)}} · {{end}}
+                        {{if gt .Bytes 0}}{{formatBytes .Bytes}}{{end}}
+                    </div>
+                    {{end}}
+                    {{if .Err}}
+                    <div class="text-[11px] text-red-600 dark:text-red-400 break-words">{{.Err}}</div>
+                    {{end}}
+                </div>
+            </li>
+            {{end}}
+        </ol>
+        {{else}}
+        <p class="text-xs text-gray-400 dark:text-gray-500">No stage data captured yet.</p>
+        {{end}}
+    </section>
+
+    {{- /* Action row: cancel mid-flight, retry from terminal failure. */ -}}
+    <section class="flex flex-wrap gap-2 pt-1">
+        {{if .Live}}
+        <button type="button"
+                hx-post="/api/jobs/{{.LatestJob.ID}}/cancel"
+                hx-swap="none"
+                class="inline-flex items-center px-2.5 py-1 rounded border border-yellow-300 dark:border-yellow-700 text-xs text-yellow-700 dark:text-yellow-300 hover:bg-yellow-50 dark:hover:bg-yellow-900/30">
+            Cancel build
+        </button>
+        {{else if or (eq (printf "%s" .LatestJob.State) "failed") (eq (printf "%s" .LatestJob.State) "cancelled") (eq (printf "%s" .LatestJob.State) "aborted")}}
+        <button type="button"
+                hx-post="/api/jobs/{{.LatestJob.ID}}/retry"
+                hx-swap="none"
+                class="inline-flex items-center px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white text-xs">
+            Retry build
+        </button>
+        {{end}}
+    </section>
+
+    {{if .LatestJob.Error}}
+    {{- /* The job-level error message — distinct from per-stage Err
+           shown inline above. Stays expanded because a failed build is
+           the user's primary debugging surface here. */ -}}
+    <section class="rounded border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 p-2.5">
+        <div class="text-[11px] uppercase tracking-wider font-semibold text-red-700 dark:text-red-300 mb-1">Error</div>
+        <pre class="text-xs text-red-900 dark:text-red-200 whitespace-pre-wrap break-words font-mono">{{.LatestJob.Error}}</pre>
+    </section>
+    {{end}}
+
+    {{if .PrevAttempts}}
+    <section aria-label="Previous attempts" class="space-y-1.5">
+        <h3 class="text-xs uppercase tracking-wider font-semibold text-gray-500 dark:text-gray-400">Previous attempts</h3>
+        <ol class="space-y-1.5">
+            {{range .PrevAttempts}}
+            <li class="text-xs border-l-2 {{if eq (printf "%s" .State) "succeeded"}}border-green-400 dark:border-green-500{{else if eq (printf "%s" .State) "failed"}}border-red-400 dark:border-red-500{{else}}border-gray-300 dark:border-gray-600{{end}} pl-2">
+                <div class="flex items-baseline gap-2">
+                    <span class="font-semibold text-gray-700 dark:text-gray-200">#{{.AttemptNum}}</span>
+                    <span class="text-gray-500 dark:text-gray-400">{{.State}}</span>
+                    {{if .DurationH}}<span class="text-gray-400 dark:text-gray-500 font-mono">· {{.DurationH}}</span>{{end}}
+                    {{if .FinishedAt}}<span class="text-gray-400 dark:text-gray-500 ml-auto font-mono">{{.FinishedAt}}</span>{{end}}
+                </div>
+                {{if .Error}}
+                <div class="text-[11px] text-red-600 dark:text-red-400 mt-0.5 break-words" title="{{.Error}}">{{.Error}}</div>
+                {{end}}
+            </li>
+            {{end}}
+        </ol>
+    </section>
+    {{end}}
+    {{end}}
+</div>
+</aside>
+{{end}}

@@ -116,12 +116,16 @@ func TestApply_DirtyRecoveryReRunsFailedMigration(t *testing.T) {
 	}
 
 	ctx := t.Context()
-	// Simulate a partial apply of the most recent migration: drop the
+	// Simulate a partial apply of the most recent migration: drop every
 	// column it added and mark the schema_migrations row dirty at the
 	// current version. Without the Force(N-1) fix, Apply would clear
-	// dirty and leave the schema permanently missing the column.
-	if _, err := db.ExecContext(ctx, `ALTER TABLE inventories DROP COLUMN last_auto_load_failed_at`); err != nil {
-		t.Fatalf("simulate partial apply (drop column): %v", err)
+	// dirty and leave the schema permanently missing the columns.
+	// 0006_job_stages adds three columns to jobs; drop all three so the
+	// re-run isn't short-circuited by the alreadyAppliedErr path.
+	for _, col := range []string{"prev_job_id", "attempt_count", "stages_json"} {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE jobs DROP COLUMN `+col); err != nil {
+			t.Fatalf("simulate partial apply (drop %s): %v", col, err)
+		}
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE schema_migrations SET dirty = 1`); err != nil {
 		t.Fatalf("seed dirty: %v", err)
@@ -139,10 +143,10 @@ func TestApply_DirtyRecoveryReRunsFailedMigration(t *testing.T) {
 	}
 	var name string
 	err := db.QueryRowContext(ctx,
-		`SELECT name FROM pragma_table_info('inventories') WHERE name='last_auto_load_failed_at'`,
+		`SELECT name FROM pragma_table_info('jobs') WHERE name='prev_job_id'`,
 	).Scan(&name)
 	if err != nil {
-		t.Errorf("last_auto_load_failed_at column missing after dirty recovery: %v", err)
+		t.Errorf("prev_job_id column missing after dirty recovery: %v", err)
 	}
 }
 

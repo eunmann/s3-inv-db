@@ -105,7 +105,7 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	// r.Context() to the job ctx. The scheduler dedups by inventory, so a
 	// build already queued/running comes back as ErrDuplicateInventory —
 	// render the row's current state instead of spawning a duplicate.
-	_, err = h.submitDiscoveredLoadJob(r.Context(), composite, disc)
+	err = h.submitDiscoveredLoadJob(r.Context(), composite, disc)
 	switch {
 	case errors.Is(err, jobs.ErrDuplicateInventory):
 		h.renderDiscoveredRowFrom(w, r, disc)
@@ -426,15 +426,15 @@ func (h *Handlers) measureCacheSize(r *http.Request, disc inventory.Inventory) c
 // intentionally independent of any request context — a build outlives
 // the HTTP request that started it. The parent ctx only plumbs through
 // logger/values via context.WithoutCancel inside jobs.Scheduler.Submit.
-func (h *Handlers) submitDiscoveredLoadJob(parent context.Context, composite inventory.ID, disc inventory.Inventory) (jobs.Job, error) {
-	job, err := h.jobMgr.Submit(parent, composite, jobs.KindBuild, func(ctx context.Context, report func(jobs.Update)) error {
+func (h *Handlers) submitDiscoveredLoadJob(parent context.Context, composite inventory.ID, disc inventory.Inventory) error {
+	_, err := h.jobMgr.Submit(parent, composite, jobs.KindBuild, func(ctx context.Context, report func(jobs.Update)) error {
 		return h.discovery.LoadWith(ctx, disc, func(stage string, done, total int64) {
 			report(jobs.Update{Stage: stage, BytesDone: done, BytesTotal: total})
 		})
 	})
 	if err != nil {
-		return job, fmt.Errorf("submit build job: %w", err)
+		return fmt.Errorf("submit build job: %w", err)
 	}
 
-	return job, nil
+	return nil
 }

@@ -37,14 +37,27 @@
         <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono truncate max-w-md mt-0.5" title="{{.ManifestKey}}">{{.ManifestKey}}</div>
     </td>
     <td class="px-6 py-4 align-top whitespace-nowrap">
-        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass (printf "%s" .State)}}">
+        {{- /* The state badge fetches the drawer partial directly via
+               htmx. The handler sets HX-Push-Url so the address bar
+               picks up the #run=<id> hash without any JS. */ -}}
+        <button type="button"
+                hx-get="/partials/drawer/{{$composite}}"
+                hx-target="#run-drawer"
+                hx-swap="outerHTML"
+                class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass (printf "%s" .State)}} hover:ring-2 hover:ring-offset-1 hover:ring-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                title="Open run details drawer">
             {{stateLabel (printf "%s" .State)}}
-        </span>
+        </button>
         {{if $busy}}
-        <div class="mt-1 text-xs text-gray-600 dark:text-gray-300">
+        <button type="button"
+                hx-get="/partials/drawer/{{$composite}}"
+                hx-target="#run-drawer"
+                hx-swap="outerHTML"
+                class="mt-1 block text-xs text-gray-600 dark:text-gray-300 text-left hover:text-indigo-600 dark:hover:text-indigo-400"
+                title="Open run details drawer">
             {{if .LatestJob}}{{if .LatestJob.Stage}}{{stageLabel .LatestJob.Stage}}{{else}}Starting…{{end}}{{else}}Starting…{{end}}
             {{if gt $pct 0}}<span class="text-gray-400 dark:text-gray-500">· {{$pct}}%{{if $eta}} · ~{{$eta}}{{end}}</span>{{end}}
-        </div>
+        </button>
         {{end}}
         {{if gt .AutoLoadFailureCount 0}}
         <div class="text-xs text-red-600 dark:text-red-400 mt-1" title="{{if .Error}}{{.Error}}{{else}}Auto-load failed{{end}}">
@@ -52,7 +65,14 @@
         </div>
         {{end}}
         {{if and .Error (not $busy)}}
-        <div class="text-xs text-red-600 dark:text-red-400 mt-1" title="{{.Error}}">Error</div>
+        <button type="button"
+                hx-get="/partials/drawer/{{$composite}}"
+                hx-target="#run-drawer"
+                hx-swap="outerHTML"
+                class="text-xs text-red-600 dark:text-red-400 mt-1 underline-offset-2 hover:underline"
+                title="{{.Error}}">
+            Error — view details
+        </button>
         {{end}}
     </td>
     <td class="px-6 py-4 align-top whitespace-nowrap text-sm font-medium">

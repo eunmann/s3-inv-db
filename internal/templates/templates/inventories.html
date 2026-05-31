@@ -25,8 +25,10 @@
     {{end}}
 
     <!-- Only the inventories page wires htmx-sse. Dashboard/Browse don't
-         have rows that listen and were wasting a per-origin TCP slot. -->
-    <div hx-ext="sse" sse-connect="/api/jobs/stream">
+         have rows that listen and were wasting a per-origin TCP slot.
+         The drawer aside lives inside this subtree so its
+         sse:row-<id> trigger fires on job updates. -->
+    <div hx-ext="sse" sse-connect="/api/jobs/stream" id="inventories-sse-root">
         {{if .Groups}}
         <div class="space-y-6">
             {{range .Groups}}
@@ -110,6 +112,46 @@
             {{end}}
         </div>
         {{end}}
+
+        {{- /* Initial drawer shell — closed. The server's
+               /partials/drawer/{id} response swaps this whole aside
+               with an open one; /partials/drawer-close swaps back to
+               this shape. No client-side state — htmx + the URL hash
+               are the source of truth. */ -}}
+        {{template "templates/partials/run_drawer_closed.html" .}}
     </div>
 </div>
+
+<script>
+    // Two tiny pieces of vanilla JS the drawer needs that htmx alone
+    // can't cover: ESC-to-close and re-opening from a URL hash on
+    // reload. Everything else (open, refresh, slide-in/out via CSS) is
+    // pure htmx.
+    (function () {
+        document.addEventListener('keydown', function (e) {
+            if (e.key !== 'Escape') return;
+            var aside = document.getElementById('run-drawer');
+            if (!aside || !aside.hasAttribute('data-open')) return;
+            var closer = aside.querySelector('[data-drawer-close]');
+            if (closer) closer.click();
+        });
+
+        function restoreFromHash() {
+            var hash = (location.hash || '').replace(/^#/, '');
+            if (hash.indexOf('run=') !== 0) return;
+            var id = decodeURIComponent(hash.slice(4));
+            if (!id || id.split('/').length !== 3) return;
+            if (!window.htmx) return;
+            window.htmx.ajax('GET', '/partials/drawer/' + id, {
+                target: '#run-drawer',
+                swap: 'outerHTML',
+            });
+        }
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', restoreFromHash);
+        } else {
+            restoreFromHash();
+        }
+    })();
+</script>
 {{end}}
