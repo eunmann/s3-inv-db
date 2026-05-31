@@ -485,12 +485,8 @@ func OpenDictPrefixReader(outDir string) (*DictPrefixReader, error) {
 // safe; the mask cuts the load to the actual byte width.
 func (r *DictPrefixReader) readSegID(i uint64) uint32 {
 	off := i * r.idsWidth
-	v := uint32(r.idsRaw[off]) |
-		uint32(r.idsRaw[off+1])<<8 |
-		uint32(r.idsRaw[off+2])<<16 |
-		uint32(r.idsRaw[off+3])<<24
 
-	return v & r.idsMask
+	return binary.LittleEndian.Uint32(r.idsRaw[off:off+4]) & r.idsMask
 }
 
 // getBuilder fetches a reset strings.Builder from the per-reader pool.
