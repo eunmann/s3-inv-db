@@ -15,7 +15,7 @@ func TestComputeHashPositions_VariantsAgree(t *testing.T) {
 	for _, n := range []int{1, 2, 8, 1024, 10000} {
 		t.Run(prefixesLabel(n), func(t *testing.T) {
 			dir := t.TempDir()
-			b, err := NewStreamingMPHFBuilder(dir)
+			b, err := NewStreamingMPHFBuilder(dir, false)
 			if err != nil {
 				t.Fatalf("NewStreamingMPHFBuilder: %v", err)
 			}

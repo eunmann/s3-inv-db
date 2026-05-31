@@ -320,7 +320,7 @@ func TestDictPrefixDeduplication(t *testing.T) {
 func TestStreamingMPHFWithPrefixDictionary(t *testing.T) {
 	dir := t.TempDir()
 
-	builder, err := NewStreamingMPHFBuilder(dir, WithPrefixDictionary())
+	builder, err := NewStreamingMPHFBuilder(dir, true)
 	if err != nil {
 		t.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestStreamingMPHFWithPrefixDictionary(t *testing.T) {
 func TestStreamingMPHFPrefixDictionaryEmpty(t *testing.T) {
 	dir := t.TempDir()
 
-	builder, err := NewStreamingMPHFBuilder(dir, WithPrefixDictionary())
+	builder, err := NewStreamingMPHFBuilder(dir, true)
 	if err != nil {
 		t.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
 	}
@@ -413,7 +413,7 @@ func TestStreamingMPHFPrefixDictionaryEmpty(t *testing.T) {
 func TestStreamingMPHFPrefixDictionaryLarge(t *testing.T) {
 	dir := t.TempDir()
 
-	builder, err := NewStreamingMPHFBuilder(dir, WithPrefixDictionary())
+	builder, err := NewStreamingMPHFBuilder(dir, true)
 	if err != nil {
 		t.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
 	}
@@ -452,7 +452,7 @@ func TestStreamingMPHFPrefixDictionaryLarge(t *testing.T) {
 func TestStreamingMPHFPrefixDictionaryUnicode(t *testing.T) {
 	dir := t.TempDir()
 
-	builder, err := NewStreamingMPHFBuilder(dir, WithPrefixDictionary())
+	builder, err := NewStreamingMPHFBuilder(dir, true)
 	if err != nil {
 		t.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
 	}
@@ -492,7 +492,7 @@ func TestStreamingMPHFPrefixDictionaryUnicode(t *testing.T) {
 func TestMPHFLookupWithVerifyPrefixDictionary(t *testing.T) {
 	dir := t.TempDir()
 
-	builder, err := NewStreamingMPHFBuilder(dir, WithPrefixDictionary())
+	builder, err := NewStreamingMPHFBuilder(dir, true)
 	if err != nil {
 		t.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
 	}

@@ -110,7 +110,7 @@ func TestAutoLoader_PicksNewestUnloadedRun(t *testing.T) {
 	}
 	ldr := &fakeLoader{}
 	sub := &inlineSubmitter{}
-	a := autoload.New(autoload.Config{MinBackoff: time.Millisecond, MaxBackoff: time.Millisecond}, autoload.Deps{Discovery: disc, Loader: ldr.AutoLoad, Submitter: sub, ConfigStore: cs, Manager: mgr}, nil)
+	a := autoload.New(autoload.Config{}, autoload.Deps{Discovery: disc, Loader: ldr.AutoLoad, Submitter: sub, ConfigStore: cs, Manager: mgr}, nil)
 	a.Tick(t.Context())
 
 	if len(ldr.loaded) != 1 {
@@ -180,7 +180,7 @@ func TestAutoLoader_PollFailureSetsBackoff(t *testing.T) {
 	_ = cs.Upsert(t.Context(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: true})
 
 	disc := &fakeDiscovery{enabled: true, listErr: errBoom}
-	a := autoload.New(autoload.Config{MinBackoff: time.Minute, MaxBackoff: time.Hour}, autoload.Deps{Discovery: disc, Loader: (&fakeLoader{}).AutoLoad, Submitter: &inlineSubmitter{}, ConfigStore: cs, Manager: mgr}, nil)
+	a := autoload.New(autoload.Config{}, autoload.Deps{Discovery: disc, Loader: (&fakeLoader{}).AutoLoad, Submitter: &inlineSubmitter{}, ConfigStore: cs, Manager: mgr}, nil)
 	a.Tick(t.Context())
 	cfg, err := cs.Get(t.Context(), "bkt", "inv")
 	if err != nil {
@@ -272,7 +272,7 @@ func TestAutoLoader_LoadFailureRecordsBackoff(t *testing.T) {
 		},
 	}
 	ldr := &fakeLoader{loadErr: errBoom}
-	a := autoload.New(autoload.Config{MinBackoff: time.Minute, MaxBackoff: time.Hour}, autoload.Deps{Discovery: disc, Loader: ldr.AutoLoad, Submitter: &inlineSubmitter{}, ConfigStore: cs, Manager: mgr}, nil)
+	a := autoload.New(autoload.Config{}, autoload.Deps{Discovery: disc, Loader: ldr.AutoLoad, Submitter: &inlineSubmitter{}, ConfigStore: cs, Manager: mgr}, nil)
 	a.Tick(t.Context())
 
 	info, ok := mgr.Get(id)

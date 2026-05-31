@@ -150,18 +150,9 @@ func benchmarkMPHFLookupEncoding(b *testing.B, useDict bool) {
 }
 
 func newBuilder(dir string, useDict bool) (*format.StreamingMPHFBuilder, error) {
-	if useDict {
-		b, err := format.NewStreamingMPHFBuilder(dir, format.WithPrefixDictionary())
-		if err != nil {
-			return nil, fmt.Errorf("new streaming mphf (dict): %w", err)
-		}
-
-		return b, nil
-	}
-
-	b, err := format.NewStreamingMPHFBuilder(dir)
+	b, err := format.NewStreamingMPHFBuilder(dir, useDict)
 	if err != nil {
-		return nil, fmt.Errorf("new streaming mphf (raw): %w", err)
+		return nil, fmt.Errorf("new streaming mphf: %w", err)
 	}
 
 	return b, nil
@@ -321,7 +312,7 @@ func TestSizeComparison(t *testing.T) {
 	}
 
 	rawDir := t.TempDir()
-	rawBuilder, err := format.NewStreamingMPHFBuilder(rawDir)
+	rawBuilder, err := format.NewStreamingMPHFBuilder(rawDir, false)
 	if err != nil {
 		t.Fatalf("format.NewStreamingMPHFBuilder (raw) failed: %v", err)
 	}
@@ -336,7 +327,7 @@ func TestSizeComparison(t *testing.T) {
 	rawBuilder.Close()
 
 	dictDir := t.TempDir()
-	dictBuilder, err := format.NewStreamingMPHFBuilder(dictDir, format.WithPrefixDictionary())
+	dictBuilder, err := format.NewStreamingMPHFBuilder(dictDir, true)
 	if err != nil {
 		t.Fatalf("format.NewStreamingMPHFBuilder (dict) failed: %v", err)
 	}

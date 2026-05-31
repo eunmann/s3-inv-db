@@ -21,13 +21,19 @@ import (
 // server binary's CLI flag default stays in sync.
 const DefaultPollInterval = 15 * time.Minute
 
+// Backoff bounds for failed polls and failed loads. Fixed: the only
+// callers that varied them were unit tests, and the curve (1m base,
+// 1h ceiling, doubling) suits the polling cadence regardless of deploy.
+const (
+	minBackoff = time.Minute
+	maxBackoff = time.Hour
+)
+
 // Config holds the AutoLoader's runtime knobs. Zero values pick
 // sensible defaults (15m poll, 1m–1h backoff). Concurrency is owned by
 // the jobs scheduler, not the AutoLoader.
 type Config struct {
 	PollInterval     time.Duration
-	MinBackoff       time.Duration
-	MaxBackoff       time.Duration
 	DefaultRetention uint32
 }
 
@@ -77,12 +83,6 @@ type Deps struct {
 func New(cfg Config, deps Deps, logger *zerolog.Logger) *AutoLoader {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = DefaultPollInterval
-	}
-	if cfg.MinBackoff <= 0 {
-		cfg.MinBackoff = time.Minute
-	}
-	if cfg.MaxBackoff <= 0 {
-		cfg.MaxBackoff = time.Hour
 	}
 	if cfg.DefaultRetention == 0 {
 		cfg.DefaultRetention = inventory.DefaultRetentionCount
@@ -289,7 +289,7 @@ func (a *AutoLoader) recordLoadFailure(ctx context.Context, id inventory.ID, err
 	}
 	info, _ := a.manager.Get(id)
 	now := a.now()
-	delay := backoffDelay(a.cfg.MinBackoff, a.cfg.MaxBackoff, info.AutoLoadFailureCount)
+	delay := backoffDelay(minBackoff, maxBackoff, info.AutoLoadFailureCount)
 	retryAt := now.Add(delay)
 	_ = a.manager.RecordAutoLoadFailure(ctx, id, err.Error(), now, retryAt)
 	a.logger.Error().Str("id", string(id)).Time("retry_at", retryAt).Err(err).Msg("autoload: failed; backing off")
@@ -299,7 +299,7 @@ func (a *AutoLoader) recordPollFailure(ctx context.Context, enabled map[string]i
 	for _, c := range enabled {
 		c.PollFailureCount++
 		c.LastPollError = msg
-		c.PollBackoffUntil = a.now().Add(backoffDelay(a.cfg.MinBackoff, a.cfg.MaxBackoff, c.PollFailureCount))
+		c.PollBackoffUntil = a.now().Add(backoffDelay(minBackoff, maxBackoff, c.PollFailureCount))
 		if err := a.configStore.Upsert(ctx, c); err != nil {
 			a.logger.Warn().Err(err).Str("config_id", c.ConfigID()).Msg("autoload: persist poll-failure state")
 		}

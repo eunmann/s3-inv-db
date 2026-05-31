@@ -71,7 +71,7 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		tempDir = os.TempDir()
 	}
 
-	mphfBuilder, err := format.NewStreamingMPHFBuilder(tempDir)
+	mphfBuilder, err := format.NewStreamingMPHFBuilder(tempDir, false)
 	if err != nil {
 		return nil, fmt.Errorf("create MPHF builder: %w", err)
 	}
@@ -125,11 +125,7 @@ func (b *IndexBuilder) SetPrefixDictionary(enabled bool) error {
 		b.mphfBuilder = nil
 	}
 
-	var opts []format.StreamingMPHFOption
-	if enabled {
-		opts = append(opts, format.WithPrefixDictionary())
-	}
-	mphfBuilder, err := format.NewStreamingMPHFBuilder(b.tempDir, opts...)
+	mphfBuilder, err := format.NewStreamingMPHFBuilder(b.tempDir, enabled)
 	if err != nil {
 		return fmt.Errorf("recreate MPHF builder: %w", err)
 	}

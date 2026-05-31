@@ -85,7 +85,7 @@ func (h *Handlers) JobsStream(w http.ResponseWriter, r *http.Request) {
 	ip := clientIPFromRequest(r)
 	count := h.acquireSSESlot(ip)
 	defer h.releaseSSESlot(ip)
-	if count > int64(h.sseMaxConnsPerIP) {
+	if count > int64(sseMaxConnsPerIP) {
 		http.Error(w, "too many SSE connections", http.StatusTooManyRequests)
 
 		return
@@ -112,7 +112,7 @@ func (h *Handlers) JobsStream(w http.ResponseWriter, r *http.Request) {
 	// Periodic keep-alive comment surfaces a dead client (browser
 	// navigated away, idle TCP socket Chrome will close in ~60s) via a
 	// write error well before the per-origin connection limit fills up.
-	heartbeat := time.NewTicker(h.sseHeartbeat)
+	heartbeat := time.NewTicker(sseHeartbeat)
 	defer heartbeat.Stop()
 
 	for {

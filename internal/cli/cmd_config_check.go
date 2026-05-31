@@ -76,7 +76,6 @@ func describeSetFields(c *appconfig.Config) map[string]any {
 	addIfSet(set, "index_ratio", c.IndexRatio)
 	addIfSet(set, "discovery_refresh_interval", c.DiscoveryRefreshInterval)
 	addIfSet(set, "auto_load_dry_run", c.AutoLoadDryRun)
-	addIfSet(set, "metrics_enabled", c.MetricsEnabled)
 	addIfSet(set, "metrics_addr", c.MetricsAddr)
 	addIfSet(set, "build_event_log", c.BuildEventLog)
 	addIfSet(set, "query_batch_max", c.QueryBatchMax)
