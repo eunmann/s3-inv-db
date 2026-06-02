@@ -20,15 +20,13 @@ type Recorder struct {
 	closing     bool
 	wg          sync.WaitGroup
 	nowFn       func() time.Time
-	closedCh    chan struct{}
 }
 
 func NewRecorder(report func(Update)) *Recorder {
 	r := &Recorder{
-		bus:      events.NewBus(),
-		report:   report,
-		nowFn:    time.Now,
-		closedCh: make(chan struct{}),
+		bus:    events.NewBus(),
+		report: report,
+		nowFn:  time.Now,
 	}
 	r.sub = r.bus.Subscribe(256)
 	r.wg.Add(1)
@@ -66,12 +64,12 @@ func (r *Recorder) Close() {
 	// + diagnostic events published just before the pipeline returned
 	// aren't dropped.
 	r.closing = true
-	close(r.closedCh)
 	r.mu.Unlock()
 
-	r.bus.Close()  // no new publishes
-	r.sub.Cancel() // closes r.sub.C after buffered events
-	r.wg.Wait()    // drain processes the buffered tail, then exits
+	// bus.Close stops further publishes and closes the subscription
+	// channel; drain consumes the buffered tail, then ranges to exit.
+	r.bus.Close()
+	r.wg.Wait()
 }
 
 func (r *Recorder) Snapshot() []StageRecord {
