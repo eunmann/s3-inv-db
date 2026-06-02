@@ -1,14 +1,14 @@
 # Performance
 
-## Query Performance
+This page is the canonical home for memory rules, build/query
+costs, on-disk size, and benchmarks.
 
-### Lookup Latency
+## Query
 
-Numbers below come from `BenchmarkGridQuery` (lookup / stats /
-tierbd / descendants sub-benches) on a warm mmap. Cold-cache numbers
-are higher by roughly one page-fault per file touched; the cold-cache
-suite (`pkg/indexread/cold_*_bench_test.go`) and `BenchmarkGridQuery`'s
-`cold/*` and `coldsingle/*` sub-benches measure those separately.
+Lookup is constant-time in index size: hash the prefix (FNV-1a),
+probe the MPHF, verify a second-hash fingerprint, then read one mmap
+slot. Tested up to ~10M prefixes with consistent sub-microsecond
+warm-cache lookups.
 
 | Operation | Complexity | Typical warm latency |
 |-----------|------------|---------------------|
@@ -17,189 +17,93 @@ suite (`pkg/indexread/cold_*_bench_test.go`) and `BenchmarkGridQuery`'s
 | `TierBreakdown` | O(tiers) | low single-digit µs |
 | `DescendantsAtDepth` | O(log n + k) | µs–tens of µs (depends on k) |
 
-Run the benches yourself for current numbers on your machine:
+Numbers come from `BenchmarkGridQuery` on a warm mmap; cold-cache
+numbers are higher by roughly one page-fault per file touched. Run
+the suite yourself:
 
 ```bash
 go test -bench=BenchmarkGridQuery -benchtime=2s -run=^$ ./pkg/indexread/
 ```
 
-Lookup performance is dominated by:
-1. Two hash computations (FNV-1a + FNV-1)
-2. BBHash query
-3. Fingerprint comparison
-4. Memory-mapped array access
+Reads are lock-free; throughput scales linearly with cores up to
+memory-bandwidth limits.
 
-### Scaling
+## Memory
 
-Query latency is largely independent of index size due to O(1) MPHF lookups. The memory-mapped design means working set depends on access patterns, not total index size.
+The process memory ceiling is set at startup via
+`runtime/debug.SetMemoryLimit`:
 
-Tested up to 10M prefixes with consistent sub-microsecond lookups.
+- If `GOMEMLIMIT` is set explicitly, it wins (capped only by the
+  cgroup `memory.max`).
+- Otherwise the limit is `min(cgroup memory.max, 0.6 × detected RAM)`.
 
-### Concurrent Access
+This lets an operator opt into more than 60% of RAM on a dedicated
+host while still being bounded by a tighter container cap.
 
-The `Index` type is lock-free for reads. Concurrent query throughput scales linearly with CPU cores up to memory bandwidth limits.
+The build aggregator spills when **any** of three thresholds fires:
 
-## Build Performance
+1. The combined per-worker aggregator footprint exceeds `0.15 × GOMEMLIMIT`
+   (or 512 MiB if no limit is configured), divided across N chunk workers.
+2. Overall `HeapInuse` crosses 85% of the limit — a safety valve for
+   when the per-worker estimate undercounts runtime reality.
+3. A mid-chunk check every 50K rows — so a single very large chunk
+   can't grow past the cap before its first spill opportunity.
 
-Build performance depends on:
-- S3 download bandwidth
-- CSV/Parquet parsing throughput
-- Memory budget (affects flush frequency)
-- Number of unique prefixes
-
-### Memory limit
-
-The process memory ceiling is set via `runtime/debug.SetMemoryLimit`
-at startup. When `GOMEMLIMIT` is set explicitly it wins, capped only
-by the cgroup `memory.max` — operators on dedicated hosts can opt
-into using more than the default 60% of RAM. When `GOMEMLIMIT` is
-unset, the limit is `min(cgroup memory.max, 0.6 × detected RAM)`,
-so a tighter container cap still binds.
-
-Override the limit by exporting `GOMEMLIMIT=4GiB` (etc.) or running
-under a constrained cgroup. The aggregator's combined spill threshold
-is `0.15 × GOMEMLIMIT` when a limit is configured, otherwise a 512 MiB
-fallback; that threshold is divided across the per-worker aggregators.
-A single worker also spills when overall heap-in-use exceeds 85% of
-the limit, and a mid-chunk safety check fires every 50K rows so a
-single very large chunk can't grow past the cap before spilling.
-
-### Tuning
+After all inventory files are processed, a k-way merge combines run
+files into the final sorted stream. Run-file write buffers
+(zstd-compressed by default), the merge heap, and the index-build
+streaming arrays each take bounded space outside the aggregator cap.
 
 ```bash
-# Cap a build at 4 GiB
-GOMEMLIMIT=4GiB s3-inv-db build ...
-
-# Limit depth to reduce prefix count
-s3-inv-db build --max-depth 5 ...
+GOMEMLIMIT=4GiB s3-inv-db build ...   # cap at 4 GiB
+s3-inv-db build --max-depth 5 ...     # limit prefix count
 ```
 
 Worker counts and S3 part concurrency derive from `runtime.NumCPU()`:
-parser + download workers each scale to `min(NumCPU, manifest_files)`,
+parser + download workers scale to `min(NumCPU, manifest_files)`,
 SDK part concurrency is `max(NumCPU/4, 2)`. The same binary scales
-linearly from a laptop to an ingest node without flags.
+from a laptop to an ingest node without flags.
 
-### Build Phases
+### Bottleneck checklist
 
-1. **Download & Parse**: Bottlenecked by S3 bandwidth and CPU for CSV parsing
-2. **Aggregation**: Bounded by memory budget, flushes when threshold reached
-3. **Merge**: I/O bound, reads/writes temporary files
-4. **Index Build**: CPU bound for MPHF construction
-
-## Running Benchmarks
-
-### Query Benchmarks
-
-```bash
-# Run all indexread benchmarks
-go test -bench=. -benchmem ./pkg/indexread/
-
-# Run specific benchmark (warm + cold query sweep across the shape grid)
-go test -bench=BenchmarkGridQuery -benchmem ./pkg/indexread/
-
-# Run with larger dataset (requires S3INV_LONG_BENCH=1)
-S3INV_LONG_BENCH=1 go test -bench=. -benchmem ./pkg/indexread/
-```
-
-### MPHF Benchmarks
-
-```bash
-# Build performance at different scales
-go test -bench=BenchmarkMPHFBuild -benchmem ./pkg/format/
-
-# Query performance
-go test -bench=BenchmarkMPHFQuery -benchmem ./pkg/format/
-
-# Isolated bbhash.New construction cost across sizes
-go test -bench=BenchmarkBBHashScaling -benchmem ./pkg/format/
-```
-
-### Memory Profiling
-
-```bash
-# Profile memory allocations
-go test -bench=BenchmarkGridQuery -benchmem -memprofile=mem.out ./pkg/indexread/
-go tool pprof mem.out
-```
-
-## Index Size
-
-Index size scales approximately linearly with prefix count. The
-row-major formats use a fixed stride per prefix regardless of
-how many tier slots actually carry data, so size is predictable:
-
-- `core_stats.bin`: **28 B/prefix** (object_count + total_bytes + subtree_end + depth + max_depth_in_subtree).
-- `tier_stats/tier_stats_row.bin`: **`presentTiers × 16` B/prefix** — final on-disk stride matches `tiers.json`, so an index with 5 of 13 tiers populated is 80 B/prefix (vs the 208 B/prefix upper bound at all 13). The build writes a dense 208 B/prefix intermediate and finalize repacks it to the packed stride.
-- `prefix_dict.bin` + `prefix_dict.off.u64` + `prefix_dict.ids.u32` + `prefix_dict.prefix_off.u64`: dictionary-encoded prefix storage. Variable, dominated by the unique-segment blob (each "/"-delimited segment interned once, typical S3 hierarchies share top-level segments heavily) + 4 B per segment ID per prefix + 8 B per offset.
-- MPHF (`mph.bin` + `mph_fp_pos.u64`): ~24 B/prefix (BBHash + interleaved fingerprint/position pair).
-- Depth index (`depth_offsets.u64` + `depth_positions.u64`): ~8 B/prefix.
-
-At a 1M-prefix sample workload this comes out to roughly **300 B/prefix on disk** end-to-end. See `docs/index-format.md` for the per-file layout.
-
-## Memory Usage
-
-### Build Phase
-
-Aggregators are sized off the process memory limit (set via
-`runtime/debug.SetMemoryLimit` at startup — see
-[Memory limit](#memory-limit) for the resolution). The combined
-worker aggregator footprint is capped at `0.15 × GOMEMLIMIT` (or a
-512 MiB fallback when no limit is configured) and split evenly across
-N chunk workers, so the cap auto-scales from a 4 GiB CI host up to a
-multi-hundred-GiB ingest box without flag tuning. Any worker also
-force-spills when overall HeapInuse crosses 85% of the limit — the
-safety valve for cases where the aggregator footprint estimate
-undercounts runtime reality. A mid-chunk check every 50K rows
-ensures a single very large chunk can't grow past the cap before
-getting its first spill opportunity.
-
-Run-file write buffers (zstd-compressed by default), the K-way
-merge heap, and the index-build streaming arrays each take
-bounded space outside the aggregator cap; they collectively fit
-under the remaining headroom even at multi-GiB limits.
-
-### Query Phase
-
-Query-time memory is minimal:
-- File descriptors for mmap'd files
-- OS page cache for accessed regions
-- Stack allocations for iterators
-
-The OS manages page cache automatically. Frequently accessed index regions stay resident; cold regions are paged out.
-
-## Bottleneck Analysis
-
-### Build Bottlenecks
-
-| Symptom | Likely Cause | Fix |
+| Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| Low CPU usage | S3 bandwidth limited | Run on a host with more vCPUs (workers scale with `NumCPU`) |
-| High memory, slow | Too many unique prefixes | Use `--max-depth` |
-| Lots of temp files | Aggregator spilling often under a tight `GOMEMLIMIT` | Raise the limit or run on a fatter host |
-| Slow final phase | Large MPHF build | Expected for >5M prefixes |
+| Low CPU during build | S3 bandwidth limited | Run on a host with more vCPUs |
+| Slow build, lots of temp files | Aggregator spilling under a tight `GOMEMLIMIT` | Raise the limit or run on a fatter host |
+| Slow final build phase | Large MPHF build | Expected for >5M prefixes |
+| First query slow | Cold page cache | Expected; subsequent queries fast |
+| Descendant queries slow | Large subtrees | Use `DescendantsAtDepthFiltered` with `MinCount` / `MinBytes` |
 
-### Query Bottlenecks
+Query-time RAM is just the OS page cache plus iterator stack frames;
+"high memory usage" on a warm process is page cache and is correct.
 
-| Symptom | Likely Cause | Fix |
-|---------|--------------|-----|
-| First query slow | Cold page cache | Expected, subsequent queries fast |
-| Descendant queries slow | Large subtrees | Apply a `Filter` (MinCount / MinBytes) via `DescendantsAtDepthFiltered` |
-| High memory usage | OS caching full index | Expected behavior, safe |
+## Index size
 
-## Best Practices
+Each prefix occupies a fixed stride per file regardless of how full
+its data is, so total size scales linearly with prefix count:
 
-1. **Let GOMEMLIMIT do the work**: the default 60% of detected RAM (or the cgroup `memory.max` when smaller) is usually right for a dedicated build host; override only when sharing the box.
-2. **Use `--max-depth` for large buckets**: Limits prefix explosion from deep hierarchies
-3. **Pre-warm for latency-sensitive queries**: Read index files sequentially to populate page cache
-4. **Filter descendant queries**: `DescendantsAtDepthFiltered` accepts a `MinCount` / `MinBytes` filter to avoid materialising irrelevant positions
-5. **Monitor temp disk usage**: External sort needs 2-3x index size in temp space
+- `core_stats.bin`: **28 B/prefix** (`object_count + total_bytes + subtree_end + depth + max_depth_in_subtree`).
+- `tier_stats/tier_stats_row.bin`: **`presentTiers × 16` B/prefix** —
+  e.g. an index with 5 of 13 tiers populated is 80 B/prefix (vs the
+  208 B/prefix upper bound at all 13). The build writes a dense
+  208 B/prefix intermediate and finalize repacks it to the packed
+  stride.
+- Prefix dictionary (`prefix_dict.*`): dictionary-encoded, dominated
+  by the unique-segment blob plus 4 B per segment ID per prefix plus
+  8 B per offset.
+- MPHF (`mph.bin` + `mph_fp_pos.u64`): ~24 B/prefix (BBHash +
+  interleaved fingerprint/position pair).
+- Depth index: ~8 B/prefix.
+
+A 1M-prefix sample comes out to roughly **300 B/prefix on disk**
+end-to-end. Per-file layout: [index-format.md](index-format.md).
 
 ## Server: sizing the disk budget
 
-When auto-load is enabled, `--max-index-disk` caps the total bytes the
-server will hold for materialised indexes. `BenchmarkLoadDiskPeak` in
-`pkg/extsort` measures the final index size and scratch peak for a
-range of object counts; representative numbers from a single run:
+When auto-load is enabled, `--max-index-disk` caps the total bytes
+the server will hold for materialised indexes.
+`BenchmarkLoadDiskPeak` in `pkg/extsort` measures the final index
+size and scratch peak for synthetic loads:
 
 | Synthetic objects | Final index bytes | Scratch peak |
 |---|---|---|
@@ -207,12 +111,24 @@ range of object counts; representative numbers from a single run:
 | 100 K | ~46 MB | ~69 MB |
 | 500 K | ~213 MB | ~318 MB |
 
-These scale near-linearly with prefix count, not object count, so
-realistic billion-object inventories with deep paths land closer to
-~430–510 bytes per object on disk. The planner applies a fixed
-`0.30` multiplier to a manifest's compressed CSV total when
-estimating final index bytes — a conservative seed; measure your own
-corpus if disk budgets are tight. Builds use `os.TempDir()` for
-intermediate run files; keep that volume sized to at least 2× the
-expected manifest-compressed-size of the largest inventory you intend
-to load.
+These scale near-linearly with prefix count, not object count. The
+planner applies a fixed `0.30` multiplier to a manifest's compressed
+CSV total when estimating final index bytes — conservative, but
+measure your own corpus if disk budgets are tight. Builds use
+`os.TempDir()` for intermediate run files; keep that volume sized
+to at least 2× the largest manifest-compressed-size you intend to
+load.
+
+## Running benchmarks
+
+```bash
+go test -bench=. -benchmem ./pkg/indexread/                          # all indexread benches
+go test -bench=BenchmarkMPHFBuild -benchmem ./pkg/format/             # MPHF build
+go test -bench=BenchmarkMPHFQuery -benchmem ./pkg/format/             # MPHF query
+go test -bench=BenchmarkBBHashScaling -benchmem ./pkg/format/         # isolated bbhash.New
+S3INV_LONG_BENCH=1 go test -bench=. -benchmem ./pkg/indexread/        # large dataset
+
+# Memory profile
+go test -bench=BenchmarkGridQuery -benchmem -memprofile=mem.out ./pkg/indexread/
+go tool pprof mem.out
+```

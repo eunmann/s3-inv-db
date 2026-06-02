@@ -25,6 +25,28 @@
     </script>
 
     <link rel="stylesheet" href="/static/tailwind.css">
+    <style>
+        /* Indeterminate progress bar — used by the run drawer when a
+           build is live but the current stage has no known total
+           (e.g. between stage transitions, or during the index-build
+           phase which doesn't report fractional progress). */
+        @keyframes indeterminate-slide {
+            0%   { transform: translateX(-100%); }
+            100% { transform: translateX(300%); }
+        }
+        .progress-indeterminate {
+            position: relative;
+            overflow: hidden;
+        }
+        .progress-indeterminate::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            width: 33%;
+            background: currentColor;
+            animation: indeterminate-slide 1.4s ease-in-out infinite;
+        }
+    </style>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
     <script>

@@ -56,26 +56,63 @@ func (s State) IsLive() bool {
 }
 
 // Job is one unit of background work.
+//
+// StageDone / StageTotal hold the current stage's step count and step
+// total (e.g. chunks-parsed / chunks-total during downloading, merged
+// run-files / total run-files during building). The unit varies by
+// stage, so callers should treat them as opaque progress numbers, not
+// bytes. They are persisted in legacy SQL columns bytes_done /
+// bytes_total — those names predate the units becoming polymorphic
+// and are kept to avoid a schema migration.
 type Job struct {
-	StartedAt   time.Time
-	FinishedAt  time.Time
-	UpdatedAt   time.Time
-	ID          ID
-	InventoryID inventory.ID
-	Kind        Kind
-	State       State
-	Stage       string
-	Error       string
-	Progress    int
-	BytesTotal  int64
-	BytesDone   int64
+	StartedAt    time.Time
+	FinishedAt   time.Time
+	UpdatedAt    time.Time
+	ID           ID
+	InventoryID  inventory.ID
+	Kind         Kind
+	State        State
+	Stage        string
+	Error        string
+	PrevJobID    ID
+	Stages       []StageRecord
+	Progress     int
+	AttemptCount int
+	StageTotal   int64
+	StageDone    int64
+	SpillCount   int
+	SpillBytes   int64
+	MergeRounds  int
+	MergeBytes   int64
 }
+
+// StageRecord is one entry in the per-job pipeline timeline. EndedAt
+// zero means the stage is still in flight.
+type StageRecord struct {
+	StartedAt time.Time     `json:"started_at,omitzero"`
+	EndedAt   time.Time     `json:"ended_at,omitzero"`
+	Name      string        `json:"name"`
+	Err       string        `json:"err,omitempty"`
+	Duration  time.Duration `json:"duration_ns,omitempty"`
+	Rows      uint64        `json:"rows,omitempty"`
+	Bytes     uint64        `json:"bytes,omitempty"`
+}
+
+// InProgress is true while the stage's EndedAt hasn't been stamped.
+func (r StageRecord) InProgress() bool { return r.EndedAt.IsZero() }
 
 // Update is the diff a Work function reports back during execution. Zero
 // fields are ignored so callers can update one dimension at a time.
+// StageDone/StageTotal carry the current stage's step counter — units
+// are stage-dependent (chunks, run files, …), not bytes.
 type Update struct {
-	Stage      string
-	Progress   int
-	BytesTotal int64
-	BytesDone  int64
+	Stage       string
+	Stages      []StageRecord
+	Progress    int
+	StageTotal  int64
+	StageDone   int64
+	SpillCount  int
+	SpillBytes  int64
+	MergeRounds int
+	MergeBytes  int64
 }

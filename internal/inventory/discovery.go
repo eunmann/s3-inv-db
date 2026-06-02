@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/singleflight"
 )
@@ -39,7 +40,7 @@ func (k CacheKey) Valid() bool {
 
 // IndexBuilder is the subset of loader.Loader that Discovery uses.
 type IndexBuilder interface {
-	BuildWith(ctx context.Context, key CacheKey, manifestURI string, onProgress func(stage string, done, total int64)) (string, error)
+	BuildWith(ctx context.Context, key CacheKey, manifestURI string, onProgress func(stage string, done, total int64), eventBus *events.Bus) (string, error)
 	RemoveCache(key CacheKey) error
 	CacheSizeBytes(key CacheKey) (int64, error)
 }
@@ -119,7 +120,7 @@ func (disabledDiscoverer) Bucket() string { return "" }
 
 type disabledBuilder struct{}
 
-func (disabledBuilder) BuildWith(context.Context, CacheKey, string, func(string, int64, int64)) (string, error) {
+func (disabledBuilder) BuildWith(context.Context, CacheKey, string, func(string, int64, int64), *events.Bus) (string, error) {
 	return "", ErrDiscoveryDisabled
 }
 func (disabledBuilder) RemoveCache(CacheKey) error             { return ErrDiscoveryDisabled }
@@ -404,9 +405,9 @@ func (d *Discovery) PrepareDiscovered(ctx context.Context, disc Inventory) error
 	return nil
 }
 
-// Load is LoadWith with no progress callback.
+// Load is LoadWith with no progress callback or event bus.
 func (d *Discovery) Load(ctx context.Context, disc Inventory) error {
-	return d.LoadWith(ctx, disc, nil)
+	return d.LoadWith(ctx, disc, nil, nil)
 }
 
 // LoadWith registers (if not already) and triggers a build+open for a
@@ -416,18 +417,18 @@ func (d *Discovery) Load(ctx context.Context, disc Inventory) error {
 // onProgress callback, if non-nil, receives stage transitions and
 // per-chunk quantitative progress. The ctx threads through to the
 // builder — cancellation kills the build.
-func (d *Discovery) LoadWith(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64)) error {
-	return d.loadInternal(ctx, disc, onProgress, false /* auto */)
+func (d *Discovery) LoadWith(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64), eventBus *events.Bus) error {
+	return d.loadInternal(ctx, disc, onProgress, eventBus, false /* auto */)
 }
 
 // AutoLoadWith is LoadWith without the Pin flag — used by the
 // auto-loader so the discovered run remains eligible for future
 // eviction. Routes through the gate just like LoadWith.
-func (d *Discovery) AutoLoadWith(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64)) error {
-	return d.loadInternal(ctx, disc, onProgress, true /* auto */)
+func (d *Discovery) AutoLoadWith(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64), eventBus *events.Bus) error {
+	return d.loadInternal(ctx, disc, onProgress, eventBus, true /* auto */)
 }
 
-func (d *Discovery) loadInternal(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64), auto bool) error {
+func (d *Discovery) loadInternal(ctx context.Context, disc Inventory, onProgress func(stage string, done, total int64), eventBus *events.Bus, auto bool) error {
 	if !d.Enabled() {
 		return ErrDiscoveryDisabled
 	}
@@ -446,7 +447,7 @@ func (d *Discovery) loadInternal(ctx context.Context, disc Inventory, onProgress
 			SourceBucket: disc.SourceBucket,
 			InventoryID:  disc.Name,
 			Run:          disc.Run,
-		}, manifestURI, onProgress)
+		}, manifestURI, onProgress, eventBus)
 	}
 	if d.gate == nil {
 		// No budget — manager direct. Pin manual loads.

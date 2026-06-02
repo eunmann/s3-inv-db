@@ -100,12 +100,14 @@ type WorkerState struct {
 	WorkerID int
 }
 
-// StageTiming reports a full stage start/end pair.
+// StageTiming reports a full stage start/end pair. BytesWritten is the
+// bytes the stage produced on disk; only StageMerge sets it today.
 type StageTiming struct {
-	Stage    Stage
-	Duration time.Duration
-	Rows     uint64
-	Bytes    uint64
+	Stage        Stage
+	Duration     time.Duration
+	Rows         uint64
+	Bytes        uint64
+	BytesWritten int64
 }
 
 // Subscription is a handle for a subscriber. Receive from C; check

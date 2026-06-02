@@ -56,7 +56,7 @@ func TestBuild_RejectsEmptyArgs(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := l.BuildWith(ctx, key(c.src, c.id, c.run), c.manifest, nil)
+			_, err := l.BuildWith(ctx, key(c.src, c.id, c.run), c.manifest, nil, nil)
 			if !errors.Is(err, c.wantErr) {
 				t.Errorf("Build err = %v, want %v", err, c.wantErr)
 			}
@@ -69,7 +69,7 @@ func TestBuildWith_ReportsPreparingStage(t *testing.T) {
 	var stages []string
 	_, _ = l.BuildWith(t.Context(), key("buck", "inv", "r"), "not-s3-uri", func(name string, _, _ int64) {
 		stages = append(stages, name)
-	})
+	}, nil)
 	if len(stages) == 0 || stages[0] != "preparing" {
 		t.Errorf("first stage = %v, want preparing as first entry", stages)
 	}
@@ -77,7 +77,7 @@ func TestBuildWith_ReportsPreparingStage(t *testing.T) {
 
 func TestBuildWith_NilCallbackIsSafe(t *testing.T) {
 	l := loader.New(t.TempDir(), nil)
-	_, err := l.BuildWith(t.Context(), key("", "inv", "r"), "s3://b/m", nil)
+	_, err := l.BuildWith(t.Context(), key("", "inv", "r"), "s3://b/m", nil, nil)
 	if !errors.Is(err, loader.ErrEmptyID) {
 		t.Errorf("err = %v, want errEmptyID", err)
 	}

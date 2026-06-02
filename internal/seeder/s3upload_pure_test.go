@@ -15,6 +15,28 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
+func TestAutoChunkCount(t *testing.T) {
+	cases := []struct {
+		objects int
+		want    int
+	}{
+		{0, 1},
+		{50_000, 1},
+		{99_999, 1},
+		{100_000, 1},
+		{100_001, 1},
+		{250_000, 2},
+		{500_000, 5},
+		{2_500_000, 16},
+		{100_000_000, 16},
+	}
+	for _, c := range cases {
+		if got := seeder.AutoChunkCount(c.objects); got != c.want {
+			t.Errorf("AutoChunkCount(%d) = %d, want %d", c.objects, got, c.want)
+		}
+	}
+}
+
 func TestS3Config_Validate(t *testing.T) {
 	cases := []struct {
 		want error

@@ -106,6 +106,20 @@ func NewScheduler(store *Store, bus *Bus, opts ...Option) *Scheduler {
 	return s
 }
 
+// SubmitOption seeds non-derived fields on a newly-created job before
+// it's persisted and run.
+type SubmitOption func(*Job)
+
+// WithFollowOn links a new job to the terminal prev it retries: it
+// carries prev's ID as PrevJobID and increments AttemptCount so the
+// drawer's attempt badge + previous-attempt chain populate.
+func WithFollowOn(prev Job) SubmitOption {
+	return func(j *Job) {
+		j.PrevJobID = prev.ID
+		j.AttemptCount = max(prev.AttemptCount, 1) + 1
+	}
+}
+
 // Submit creates a job in the queued state, kicks off work on a fresh
 // goroutine, and returns the initial snapshot. The cancel handle is
 // registered before the bus publish so a Cancel triggered by an
@@ -114,7 +128,7 @@ func NewScheduler(store *Store, bus *Bus, opts ...Option) *Scheduler {
 // The parent ctx is used only to plumb logger/values into the job (via
 // context.WithoutCancel) — the job's lifetime is decoupled from the
 // caller's so the work outlives its submitter (e.g. an HTTP request).
-func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind, work Work) (Job, error) {
+func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind, work Work, opts ...SubmitOption) (Job, error) {
 	id, err := newJobID()
 	if err != nil {
 		return Job{}, fmt.Errorf("mint job id: %w", err)
@@ -146,6 +160,9 @@ func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind
 		InventoryID: invID,
 		Kind:        kind,
 		State:       StateQueued,
+	}
+	for _, opt := range opts {
+		opt(&job)
 	}
 	if err := s.store.Upsert(ctx, job); err != nil {
 		s.mu.Unlock()
@@ -237,27 +254,51 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 	// report applies a non-zero diff to the job and broadcasts. A stage
 	// transition resets quantitative progress so the UI doesn't show
 	// stale done/total from the previous stage (e.g. "downloading 10/10"
-	// while we've already moved on to "building").
+	// while we've already moved on to "building"). reportMu serialises
+	// mutation of `job` across the synchronous work callback and the
+	// async Recorder drain goroutine which also calls report.
+	var reportMu sync.Mutex
 	report := func(u Update) {
+		reportMu.Lock()
+		defer reportMu.Unlock()
 		if u.Stage != "" && u.Stage != job.Stage {
 			job.Stage = u.Stage
 			job.Progress = 0
-			job.BytesDone = 0
-			job.BytesTotal = 0
+			job.StageDone = 0
+			job.StageTotal = 0
 		}
 		if u.Progress > 0 {
 			job.Progress = u.Progress
 		}
-		if u.BytesTotal > 0 {
-			job.BytesTotal = u.BytesTotal
+		if u.StageTotal > 0 {
+			job.StageTotal = u.StageTotal
 		}
-		if u.BytesDone > 0 {
-			job.BytesDone = u.BytesDone
+		if u.StageDone > 0 {
+			job.StageDone = u.StageDone
+		}
+		if u.Stages != nil {
+			job.Stages = u.Stages
+		}
+		// Diagnostic counters are monotonic within a job; last-non-zero
+		// wins so the scheduler can ignore zero-value Updates that
+		// happen to omit them.
+		if u.SpillCount > job.SpillCount {
+			job.SpillCount = u.SpillCount
+		}
+		if u.SpillBytes > job.SpillBytes {
+			job.SpillBytes = u.SpillBytes
+		}
+		if u.MergeRounds > job.MergeRounds {
+			job.MergeRounds = u.MergeRounds
+		}
+		if u.MergeBytes > job.MergeBytes {
+			job.MergeBytes = u.MergeBytes
 		}
 		s.persistAndPublish(ctx, &job)
 	}
 
 	err := work(ctx, report)
+	reportMu.Lock()
 	job.FinishedAt = time.Now()
 	switch {
 	case errors.Is(ctx.Err(), context.Canceled):
@@ -272,9 +313,50 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 		job.State = StateSucceeded
 		job.Progress = 100
 	}
+	closeOpenStages(&job, job.FinishedAt, job.State, job.Error)
 	// Final persist must succeed even after ctx is cancelled — that's
 	// how the UI learns the job actually transitioned to cancelled/failed.
 	s.persistAndPublish(context.WithoutCancel(ctx), &job)
+	reportMu.Unlock()
+}
+
+// closeOpenStages stamps EndedAt/Duration on every in-progress stage
+// when the job hits a terminal state. Failed/cancelled/aborted stages
+// also get an Err so the drawer's per-stage rows surface the cause
+// instead of looking like an unfinished spinner. Clones the slice
+// before mutating so already-published snapshots stay immutable across
+// the SSE marshal.
+func closeOpenStages(j *Job, when time.Time, st State, jobErr string) {
+	if len(j.Stages) == 0 {
+		return
+	}
+	cloned := make([]StageRecord, len(j.Stages))
+	copy(cloned, j.Stages)
+	j.Stages = cloned
+	for i := range j.Stages {
+		s := &j.Stages[i]
+		if !s.InProgress() {
+			continue
+		}
+		s.EndedAt = when
+		s.Duration = when.Sub(s.StartedAt)
+		if s.Err != "" {
+			continue
+		}
+		switch st {
+		case StateFailed:
+			if jobErr != "" {
+				s.Err = jobErr
+			} else {
+				s.Err = "failed"
+			}
+		case StateCancelled:
+			s.Err = "cancelled"
+		case StateAborted:
+			s.Err = "aborted"
+		case StateQueued, StateRunning, StateSucceeded:
+		}
+	}
 }
 
 func (s *Scheduler) persistAndPublish(ctx context.Context, j *Job) {

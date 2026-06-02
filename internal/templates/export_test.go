@@ -17,9 +17,6 @@ func FormatETAAt(now, startedAt time.Time, done, total int64) string {
 // ProgressPct exposes progressPct for tests.
 func ProgressPct(done, total int64) int { return progressPct(done, total) }
 
-// StageLabel exposes stageLabel for tests.
-func StageLabel(stage string) string { return stageLabel(stage) }
-
 // HxValsJSON exposes hxValsJSON for tests.
 func HxValsJSON(pairs ...any) (string, error) { return hxValsJSON(pairs...) }
 

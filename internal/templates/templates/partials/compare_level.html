@@ -215,11 +215,11 @@
                             hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" .Prefix}}"
                             hx-target="#compare-target"
                             hx-push-url="true"
-                            class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
-                            📁 {{.Segment}}/
+                            class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline font-mono">
+                            {{.Segment}}/
                         </button>
                         {{else}}
-                        <span class="text-sm font-medium text-gray-700 dark:text-gray-200">📄 {{.Segment}}</span>
+                        <span class="text-sm font-medium text-gray-700 dark:text-gray-200 font-mono">{{.Segment}}/</span>
                         {{end}}
                     </td>
                     <td class="px-4 py-3 sm:px-6 whitespace-nowrap font-mono text-gray-700 dark:text-gray-200">

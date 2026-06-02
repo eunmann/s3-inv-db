@@ -28,31 +28,77 @@ func clientIPFromRequest(r *http.Request) string {
 // by the HTTP layer — renames inside the jobs package can't accidentally
 // change what browsers see, and every field carries an explicit json tag.
 type jobEvent struct {
-	ID          string `json:"ID"`
-	InventoryID string `json:"InventoryID"`
-	Kind        string `json:"Kind"`
-	State       string `json:"State"`
-	Stage       string `json:"Stage"`
-	StartedAt   string `json:"StartedAt,omitempty"`
-	FinishedAt  string `json:"FinishedAt,omitempty"`
-	Error       string `json:"Error,omitempty"`
-	UpdatedAt   string `json:"UpdatedAt,omitempty"`
-	Progress    int    `json:"Progress"`
-	BytesTotal  int64  `json:"BytesTotal"`
-	BytesDone   int64  `json:"BytesDone"`
+	ID           string       `json:"ID"`
+	InventoryID  string       `json:"InventoryID"`
+	Kind         string       `json:"Kind"`
+	State        string       `json:"State"`
+	Stage        string       `json:"Stage"`
+	StartedAt    string       `json:"StartedAt,omitempty"`
+	FinishedAt   string       `json:"FinishedAt,omitempty"`
+	Error        string       `json:"Error,omitempty"`
+	UpdatedAt    string       `json:"UpdatedAt,omitempty"`
+	PrevJobID    string       `json:"PrevJobID,omitempty"`
+	Stages       []stageEvent `json:"Stages,omitempty"`
+	Progress     int          `json:"Progress"`
+	AttemptCount int          `json:"AttemptCount,omitempty"`
+	StageTotal   int64        `json:"StageTotal"`
+	StageDone    int64        `json:"StageDone"`
+	SpillCount   int          `json:"SpillCount,omitempty"`
+	SpillBytes   int64        `json:"SpillBytes,omitempty"`
+	MergeRounds  int          `json:"MergeRounds,omitempty"`
+	MergeBytes   int64        `json:"MergeBytes,omitempty"`
+}
+
+// stageEvent is the per-stage timeline entry inside jobEvent.Stages.
+// Short JSON field names because Stages ships on every progress update
+// and can carry 4–6 entries per frame.
+type stageEvent struct {
+	Name       string `json:"n"`
+	StartedAt  string `json:"s,omitempty"`
+	EndedAt    string `json:"e,omitempty"`
+	Err        string `json:"err,omitempty"`
+	DurationMs int64  `json:"d,omitempty"`
+	Bytes      uint64 `json:"b,omitempty"`
+	Rows       uint64 `json:"r,omitempty"`
+	InProgress bool   `json:"ip,omitempty"`
+}
+
+func stageRecordToEvent(s jobs.StageRecord) stageEvent {
+	out := stageEvent{
+		Name:       s.Name,
+		Err:        s.Err,
+		Bytes:      s.Bytes,
+		Rows:       s.Rows,
+		DurationMs: s.Duration.Milliseconds(),
+		InProgress: s.InProgress(),
+	}
+	if !s.StartedAt.IsZero() {
+		out.StartedAt = s.StartedAt.Format(time.RFC3339Nano)
+	}
+	if !s.EndedAt.IsZero() {
+		out.EndedAt = s.EndedAt.Format(time.RFC3339Nano)
+	}
+
+	return out
 }
 
 func jobToEvent(j jobs.Job) jobEvent {
 	ev := jobEvent{
-		ID:          string(j.ID),
-		InventoryID: string(j.InventoryID),
-		Kind:        string(j.Kind),
-		State:       string(j.State),
-		Stage:       j.Stage,
-		Progress:    j.Progress,
-		BytesTotal:  j.BytesTotal,
-		BytesDone:   j.BytesDone,
-		Error:       j.Error,
+		ID:           string(j.ID),
+		InventoryID:  string(j.InventoryID),
+		Kind:         string(j.Kind),
+		State:        string(j.State),
+		Stage:        j.Stage,
+		Progress:     j.Progress,
+		StageTotal:   j.StageTotal,
+		StageDone:    j.StageDone,
+		Error:        j.Error,
+		AttemptCount: j.AttemptCount,
+		PrevJobID:    string(j.PrevJobID),
+		SpillCount:   j.SpillCount,
+		SpillBytes:   j.SpillBytes,
+		MergeRounds:  j.MergeRounds,
+		MergeBytes:   j.MergeBytes,
 	}
 	if !j.StartedAt.IsZero() {
 		ev.StartedAt = j.StartedAt.Format(time.RFC3339Nano)
@@ -62,6 +108,12 @@ func jobToEvent(j jobs.Job) jobEvent {
 	}
 	if !j.UpdatedAt.IsZero() {
 		ev.UpdatedAt = j.UpdatedAt.Format(time.RFC3339Nano)
+	}
+	if len(j.Stages) > 0 {
+		ev.Stages = make([]stageEvent, len(j.Stages))
+		for i, s := range j.Stages {
+			ev.Stages[i] = stageRecordToEvent(s)
+		}
 	}
 
 	return ev

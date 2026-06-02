@@ -127,6 +127,25 @@ func UploadInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S
 	}, nil
 }
 
+// autoChunkCount picks a chunk count that gives synthetic inventories
+// the same multi-file shape real S3 inventories have (S3 caps each
+// .csv.gz data file around 1 GiB, so a billion-object bucket has 100+
+// chunks). One chunk per ~100K objects, capped at 16 so small runs
+// stay single-file and 2.5M-object runs land at ~16 chunks.
+func autoChunkCount(objects int) int {
+	const objectsPerChunk = 100_000
+	const maxChunks = 16
+	n := objects / objectsPerChunk
+	if n < 1 {
+		return 1
+	}
+	if n > maxChunks {
+		return maxChunks
+	}
+
+	return n
+}
+
 // UploadMultiChunkInventory generates `cfg.Objects` synthetic objects,
 // splits them into numChunks equal-ish slices, uploads each slice as
 // its own .csv.gz data file, and writes a manifest pointing at all of

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 )
 
 // errFakeS3Throttled is the sentinel returned by tests that simulate
@@ -49,7 +50,7 @@ type fakeBuilder struct {
 	buildResp string
 }
 
-func (f *fakeBuilder) BuildWith(_ context.Context, _ inventory.CacheKey, _ string, _ func(string, int64, int64)) (string, error) {
+func (f *fakeBuilder) BuildWith(_ context.Context, _ inventory.CacheKey, _ string, _ func(string, int64, int64), _ *events.Bus) (string, error) {
 	return f.buildResp, f.buildErr
 }
 

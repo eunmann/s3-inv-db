@@ -130,9 +130,10 @@ func (p *Pipeline) timedMergeBuildPhase(ctx context.Context, log *zerolog.Logger
 		Stage: events.StagePipeline,
 		Type:  events.EvtStageEnd,
 		Payload: events.StageTiming{
-			Stage:    events.StageMerge,
-			Duration: d,
-			Rows:     res.PrefixCount,
+			Stage:        events.StageMerge,
+			Duration:     d,
+			Rows:         res.PrefixCount,
+			BytesWritten: res.MergeBytesWritten,
 		},
 	})
 
@@ -833,8 +834,9 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 
 // mergeBuildResult is the output of runMergeBuildPhase.
 type mergeBuildResult struct {
-	PrefixCount uint64
-	MaxDepth    uint32
+	PrefixCount       uint64
+	MaxDepth          uint32
+	MergeBytesWritten int64
 }
 
 // runMergePhase returns a streaming RowIterator over the K-way merge
@@ -844,11 +846,11 @@ type mergeBuildResult struct {
 // merged file to disk (I3 win).
 //
 
-func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRunFiles, numWorkers, maxFanIn int, perReaderBuffer int64) (RowIterator, func() error, error) {
+func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRunFiles, numWorkers, maxFanIn int, perReaderBuffer int64) (RowIterator, func() error, MergeStatistics, error) {
 	if numRunFiles == 1 {
 		reader, err := OpenRunFileAuto(p.runFiles[0], int(perReaderBuffer))
 		if err != nil {
-			return nil, nil, fmt.Errorf("open single run: %w", err)
+			return nil, nil, MergeStatistics{}, fmt.Errorf("open single run: %w", err)
 		}
 
 		return &singleRunIterator{reader: reader}, func() error {
@@ -859,7 +861,7 @@ func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRu
 			}
 
 			return nil
-		}, nil
+		}, MergeStatistics{}, nil
 	}
 	parallelMerger := NewParallelMerger(ParallelMergeConfig{
 		NumWorkers:       numWorkers,
@@ -882,7 +884,7 @@ func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRu
 	})
 	iter, mergerCleanup, err := parallelMerger.MergeAllToIterator(ctx, p.runFiles)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parallel merge: %w", err)
+		return nil, nil, MergeStatistics{}, fmt.Errorf("parallel merge: %w", err)
 	}
 	stats := parallelMerger.Statistics()
 	log.Info().
@@ -899,7 +901,7 @@ func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRu
 		return err
 	}
 
-	return iter, cleanup, nil
+	return iter, cleanup, stats, nil
 }
 
 // runMergeBuildPhase merges run files and builds the index.
@@ -953,7 +955,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		Bool("compressed", p.config.Merge.UseCompressedRuns).
 		Msg("merge phase starting")
 
-	mergeIter, cleanupIntermediates, err := p.runMergePhase(ctx, log, numRunFiles, numWorkers, maxFanIn, perReaderBuffer)
+	mergeIter, cleanupIntermediates, mergeStats, err := p.runMergePhase(ctx, log, numRunFiles, numWorkers, maxFanIn, perReaderBuffer)
 	if err != nil {
 		return mergeBuildResult{}, err
 	}
@@ -980,18 +982,70 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		return mergeBuildResult{}, fmt.Errorf("set present tiers: %w", err)
 	}
 
-	if err := builder.AddAllWithContext(ctx, mergeIter); err != nil {
+	// Wrap the merge iterator so the IndexBuilder consumption emits
+	// "building" progress every ~131k rows. Without this the bar stays
+	// frozen at the start of the index-build phase (which is the
+	// dominant fraction of wall clock for large inventories) until the
+	// next merge round fires — sometimes never, if all run files merged
+	// in a single round. Power-of-two interval lets the AND short-circuit.
+	progressIter := &reportingIterator{
+		inner:       mergeIter,
+		total:       int64(prefixCount),
+		onProgress:  func(done, total int64) { p.reportProgress("building", done, total) },
+		reportEvery: indexBuildProgressInterval,
+	}
+	if err := builder.AddAllWithContext(ctx, progressIter); err != nil {
 		builder.cleanup()
 
 		return mergeBuildResult{}, fmt.Errorf("build index: %w", err)
 	}
 
+	p.reportProgress("finalizing", 0, 0)
 	if err := builder.FinalizeWithContext(ctx); err != nil {
 		return mergeBuildResult{}, fmt.Errorf("finalize index: %w", err)
 	}
 
-	return mergeBuildResult{PrefixCount: builder.Count(), MaxDepth: builder.MaxDepth()}, nil
+	return mergeBuildResult{
+		PrefixCount:       builder.Count(),
+		MaxDepth:          builder.MaxDepth(),
+		MergeBytesWritten: mergeStats.BytesWritten,
+	}, nil
 }
+
+// indexBuildProgressInterval is how often the index-build phase emits
+// progress updates while consuming the merged iterator. Power of two
+// (2^17 = 131072 rows) so the throttle check inside the per-row hot
+// loop is a single AND. A 1M-prefix build fires ≈8 updates; a 100M
+// build fires ≈800. Cheap either way; perceptible to the user.
+const indexBuildProgressInterval int64 = 1 << 17
+
+// reportingIterator wraps a RowIterator and fires onProgress every
+// reportEvery successful Next() calls (must be a power of two). Pass-
+// through on errors.
+type reportingIterator struct {
+	inner       RowIterator
+	onProgress  func(done, total int64)
+	done        int64
+	total       int64
+	reportEvery int64
+}
+
+func (p *reportingIterator) Next() (*PrefixRow, error) {
+	row, err := p.inner.Next()
+	if row != nil {
+		p.done++
+		if p.done&(p.reportEvery-1) == 0 {
+			p.onProgress(p.done, p.total)
+		}
+	}
+	if err != nil {
+		return row, fmt.Errorf("reporting iterator: %w", err)
+	}
+
+	return row, nil
+}
+
+func (p *reportingIterator) Remaining() uint64 { return p.inner.Remaining() }
 
 // singleRunIterator wraps a RunReader to implement the iterator interface expected by IndexBuilder.
 // Reuses one PrefixRow across all Next() calls — caller must consume the

@@ -86,11 +86,106 @@ func stageLabel(stage string) string {
 		return "Downloading & parsing"
 	case "building":
 		return "Building index"
+	case "finalizing":
+		return "Finalizing"
 	case "done":
 		return "Done"
 	default:
 		return stage
 	}
+}
+
+// stageDescription is the tooltip body for a pipeline phase.
+func stageDescription(stage string) string {
+	switch stage {
+	case "preparing":
+		return "Wiping any stale cache and reserving the build directory"
+	case "initializing":
+		return "Starting the build pipeline workers"
+	case "downloading":
+		return "Streaming inventory chunks from S3 and aggregating prefixes in memory"
+	case "building":
+		return "Merging spilled run files and writing the on-disk index + MPHF"
+	case "finalizing":
+		return "Writing the MPHF, depth index, prefix dictionary, tier stats, and manifest checksums"
+	case "done":
+		return "Index materialised on disk and opened in memory"
+	default:
+		return ""
+	}
+}
+
+// durationFromNs renders a nanosecond count as a humanised duration.
+// Returns "" for non-positive inputs so templates can hide empty slots.
+func durationFromNs(ns int64) string {
+	if ns <= 0 {
+		return ""
+	}
+
+	return humanfmt.Duration(time.Duration(ns))
+}
+
+// elapsedSince renders time-since-t as a humanised duration. Returns ""
+// for zero times or negative deltas so templates can hide empty slots.
+func elapsedSince(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	if d <= 0 {
+		return ""
+	}
+
+	return humanfmt.Duration(d)
+}
+
+// truncate clips s to the first n runes and appends "…" when it had
+// to drop anything. Returns s unchanged for n <= 0 or when s already
+// fits. Used by row templates to keep long error messages on one line.
+func truncate(n int, s string) string {
+	if n <= 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+
+	return string(runes[:n]) + "…"
+}
+
+// firstLine returns the substring of s up to the first newline (or
+// the whole string if there is none). Errors from build pipelines are
+// often multi-line stack traces; the row only wants the topmost.
+func firstLine(s string) string {
+	for i, r := range s {
+		if r == '\n' || r == '\r' {
+			return s[:i]
+		}
+	}
+
+	return s
+}
+
+// StageLabel exposes stageLabel to other packages (drawer view assembly).
+func StageLabel(stage string) string { return stageLabel(stage) }
+
+// StageDescription exposes stageDescription to other packages.
+func StageDescription(stage string) string { return stageDescription(stage) }
+
+// DurationFromNs exposes durationFromNs to other packages.
+func DurationFromNs(ns int64) string { return durationFromNs(ns) }
+
+// throughputRate formats rows/duration as a humanised per-second rate.
+// Returns "" when either input is zero so callers can render conditionally
+// without an extra template guard.
+func throughputRate(rows uint64, d time.Duration) string {
+	if rows == 0 || d <= 0 {
+		return ""
+	}
+	rate := float64(rows) / d.Seconds()
+
+	return humanfmt.Count(int64(rate)) + "/s"
 }
 
 // tierLabel converts a raw S3 storage-class identifier (e.g.
@@ -236,8 +331,11 @@ func (r *Renderer) formatFuncs() template.FuncMap {
 		"formatETA": func(startedAt time.Time, done, total int64) string {
 			return formatETAAt(now(), startedAt, done, total)
 		},
-		"progressPct": progressPct,
-		"tierLabel":   tierLabel,
+		"progressPct":    progressPct,
+		"tierLabel":      tierLabel,
+		"truncate":       truncate,
+		"firstLine":      firstLine,
+		"throughputRate": throughputRate,
 	}
 }
 
@@ -245,8 +343,10 @@ func (r *Renderer) formatFuncs() template.FuncMap {
 // the page renders alongside them.
 func stateFuncs() template.FuncMap {
 	return template.FuncMap{
-		"stateLabel": stateLabel,
-		"stageLabel": stageLabel,
+		"stateLabel":       stateLabel,
+		"stageLabel":       stageLabel,
+		"stageDescription": stageDescription,
+		"elapsedSince":     elapsedSince,
 		"stateClass": func(state string) string {
 			switch state {
 			case stateLoaded:

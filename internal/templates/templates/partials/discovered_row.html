@@ -2,9 +2,9 @@
 {{$busy := or .State.IsLoading (and .LatestJob (eq (printf "%s" .LatestJob.State) "queued"))}}
 {{$canRetry := and .LatestJob (or (eq (printf "%s" .LatestJob.State) "failed") (eq (printf "%s" .LatestJob.State) "aborted") (eq (printf "%s" .LatestJob.State) "cancelled"))}}
 {{$pct := 0}}{{$eta := ""}}
-{{if and $busy .LatestJob (gt .LatestJob.BytesTotal 0)}}
-    {{$pct = progressPct .LatestJob.BytesDone .LatestJob.BytesTotal}}
-    {{$eta = formatETA .LatestJob.StartedAt .LatestJob.BytesDone .LatestJob.BytesTotal}}
+{{if and $busy .LatestJob (gt .LatestJob.StageTotal 0)}}
+    {{$pct = progressPct .LatestJob.StageDone .LatestJob.StageTotal}}
+    {{$eta = formatETA .LatestJob.StartedAt .LatestJob.StageDone .LatestJob.StageTotal}}
 {{end}}
 <tbody id="discovered-row-{{.SourceBucket}}-{{.Name}}-{{.Run}}"
     {{if .Run}}hx-get="/partials/discovered/{{.SourceBucket}}/{{.Name}}/{{.Run}}"
@@ -37,6 +37,11 @@
         <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono truncate max-w-md mt-0.5" title="{{.ManifestKey}}">{{.ManifestKey}}</div>
     </td>
     <td class="px-6 py-4 align-top whitespace-nowrap">
+        {{- /* The state badge is a passive status indicator; the
+               "View details" link below is the single, always-visible
+               drawer-open affordance. Errors surface inline (full text
+               in title=) so users don't have to hover or click to see
+               what went wrong. */ -}}
         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass (printf "%s" .State)}}">
             {{stateLabel (printf "%s" .State)}}
         </span>
@@ -46,14 +51,25 @@
             {{if gt $pct 0}}<span class="text-gray-400 dark:text-gray-500">· {{$pct}}%{{if $eta}} · ~{{$eta}}{{end}}</span>{{end}}
         </div>
         {{end}}
+        {{if and .Error (not $busy)}}
+        <div class="mt-1 text-xs text-red-700 dark:text-red-300 max-w-md whitespace-normal break-words" title="{{.Error}}">
+            {{truncate 140 (firstLine .Error)}}
+        </div>
+        {{end}}
         {{if gt .AutoLoadFailureCount 0}}
         <div class="text-xs text-red-600 dark:text-red-400 mt-1" title="{{if .Error}}{{.Error}}{{else}}Auto-load failed{{end}}">
             Auto-load failed ({{.AutoLoadFailureCount}}× — retry after {{.AutoLoadBackoffUntil}})
         </div>
         {{end}}
-        {{if and .Error (not $busy)}}
-        <div class="text-xs text-red-600 dark:text-red-400 mt-1" title="{{.Error}}">Error</div>
-        {{end}}
+        <div class="mt-1.5">
+            <a href="#"
+               hx-get="/partials/drawer/{{$composite}}"
+               hx-target="#run-drawer"
+               hx-swap="outerHTML"
+               class="inline-flex items-center gap-0.5 text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline underline-offset-2">
+                View details <span aria-hidden="true">→</span>
+            </a>
+        </div>
     </td>
     <td class="px-6 py-4 align-top whitespace-nowrap text-sm font-medium">
         <div class="flex items-center gap-2">

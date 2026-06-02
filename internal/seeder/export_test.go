@@ -49,3 +49,6 @@ func GenerateInventory(ctx context.Context, cfg Config, index int, seed int64) (
 func GetGeneratorConfig(preset string, numObjects int) benchutil.GeneratorConfig {
 	return getGeneratorConfig(preset, numObjects)
 }
+
+// AutoChunkCount exposes autoChunkCount for tests.
+func AutoChunkCount(objects int) int { return autoChunkCount(objects) }

@@ -87,6 +87,8 @@ func (s *Server) setupRoutes() {
 		r.Post("/partials/discovered/{src}/{id}/{run}/load", s.handlers.LoadDiscoveredRowPartial)
 		r.Post("/partials/discovered/{src}/{id}/{run}/unload", s.handlers.UnloadDiscoveredRowPartial)
 		r.Post("/partials/discovered/{src}/{id}/{run}/pin", s.handlers.PinDiscoveredRowPartial)
+		r.Get("/partials/drawer/{src}/{id}/{run}", s.handlers.RunDrawer)
+		r.Get("/partials/drawer-close", s.handlers.RunDrawerClose)
 	})
 
 	// API routes
@@ -94,6 +96,7 @@ func (s *Server) setupRoutes() {
 		// Job stream — SSE, one event per job state change.
 		r.Get("/jobs/stream", s.handlers.JobsStream)
 		r.Post("/jobs/{id}/cancel", s.handlers.CancelJob)
+		r.Post("/jobs/{id}/retry", s.handlers.RetryJob)
 
 		// Inventory state (loaded/unloaded view). The POST endpoint is
 		// not surfaced in the UI; kept for tests and direct-path callers.

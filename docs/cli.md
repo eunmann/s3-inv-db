@@ -37,12 +37,10 @@ s3-inv-db build --s3-manifest s3://bucket/inv/data/manifest.json --out ./my-inde
 | `--verbose` |  | false | Debug-level logging |
 | `--pretty-logs` |  | false | Human-friendly console output |
 
-Memory and concurrency are no longer tunable per-flag. Worker counts
-derive from `runtime.NumCPU()`; the process memory ceiling is set via
-`runtime/debug.SetMemoryLimit` at startup. If `GOMEMLIMIT` is set
-explicitly it wins, capped only by the cgroup `memory.max`; otherwise
-the limit is `min(cgroup memory.max, 0.6 × detected RAM)`. Set
-`GOMEMLIMIT=4GiB` to cap a build, or run under a constrained cgroup.
+Worker counts and S3 part concurrency derive from `runtime.NumCPU()`;
+the process memory ceiling is `GOMEMLIMIT`. Both are intentionally
+flagless — see [performance.md#memory](performance.md#memory) for the
+exact resolution rule.
 
 AWS credentials use the standard SDK chain: env vars → shared
 credentials file → IAM role. Required permissions: `s3:GetObject` on
@@ -65,29 +63,12 @@ s3-inv-db query --index ./my-index --prefix "data/2024/"
 | `--verbose` |  | false | Debug-level logging |
 | `--pretty-logs` |  | false | Human-friendly console output |
 
-### Price-table JSON
-
-```json
-{
-  "per_gb_month": {
-    "STANDARD":     0.023,
-    "STANDARD_IA":  0.0125,
-    "GLACIER":      0.0036,
-    "DEEP_ARCHIVE": 0.00099,
-    "INTELLIGENT_TIERING_FREQUENT": 0.023,
-    "INTELLIGENT_TIERING_FREQUENT_SMALL": 0.023
-  },
-  "monitoring_per_1000_objects": 0.0025,
-  "put_per_1000_requests": 0.005,
-  "standard_price_per_gb": 0.023
-}
-```
-
-Prices are USD per GB-month for storage, USD per 1,000 objects for
-monitoring, and USD per 1,000 requests for PUTs. Defaults match
-us-east-1 as of 2026. See `pkg/pricing.DefaultUSEast1Prices` for the
-seed values; tier semantics (small-IT bucket, IA min-billable size,
-Glacier metadata overhead) are documented inline in `pkg/pricing`.
+`--price-table` points at a JSON file with per-GB-month storage rates,
+per-1,000-object monitoring rates, and per-1,000-request PUT rates.
+The schema, defaults (us-east-1, 2026), and tier semantics (IT-Frequent-Small
+bucket, IA minimum-billable size, Glacier metadata overhead) live in
+`pkg/pricing` — see `DefaultUSEast1Prices` for the seed values and the
+inline package docs for the field-by-field rules.
 
 ## `top`
 
