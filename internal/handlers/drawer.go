@@ -230,7 +230,7 @@ func (h *Handlers) computeBaseline(r *http.Request, latest jobs.Job) baselineEst
 		return baselineEstimate{}
 	}
 	configID := latest.InventoryID.ConfigID()
-	prev, err := h.jobStore.LatestSuccessfulBuildForConfig(r.Context(), configID)
+	prev, err := h.jobStore.LatestSuccessfulBuildForConfig(r.Context(), configID, latest.ID)
 	if err != nil {
 		return baselineEstimate{}
 	}

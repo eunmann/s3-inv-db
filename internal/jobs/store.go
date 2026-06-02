@@ -6,10 +6,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
+
+// likeEscape escapes the SQL LIKE metacharacters in s so it matches
+// literally. Pair with `ESCAPE '\'` in the query. Backslash is escaped
+// first so it doesn't double-escape the inserted escape chars.
+func likeEscape(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+
+	return s
+}
 
 // Store persists job snapshots so the UI can show jobs across restarts.
 type Store struct {
@@ -119,18 +131,24 @@ func (s *Store) LatestForInventory(ctx context.Context, invID inventory.ID) (Job
 }
 
 // LatestSuccessfulBuildForConfig returns the newest succeeded build job
-// for any run of a given inventory configuration ("<src>/<name>"). Used
-// by the drawer to project an ETA from a prior baseline. Empty configID
-// returns ErrStoreNotFound rather than matching every row.
-func (s *Store) LatestSuccessfulBuildForConfig(ctx context.Context, configID string) (Job, error) {
+// for any run of a given inventory configuration ("<src>/<name>"),
+// excluding excludeID so the caller's own just-succeeded job can't be
+// picked as its own baseline. Used by the drawer to project an ETA from
+// a prior baseline. Empty configID returns ErrStoreNotFound rather than
+// matching every row.
+func (s *Store) LatestSuccessfulBuildForConfig(ctx context.Context, configID string, excludeID ID) (Job, error) {
 	if configID == "" {
 		return Job{}, ErrStoreNotFound
 	}
+	// LIKE-escape configID so '_'/'%' in inventory names match literally
+	// rather than as wildcards, then append "/%" to match any run under
+	// the configuration. The escape char is '\' (declared via ESCAPE).
 	row := s.db.QueryRowContext(ctx, `SELECT `+jobColumns+`
           FROM jobs
-         WHERE inventory_id LIKE ? AND state = 'succeeded' AND kind = 'build'
+         WHERE inventory_id LIKE ? ESCAPE '\' AND id != ?
+              AND state = 'succeeded' AND kind = 'build'
               AND started_at > 0 AND finished_at > 0
-         ORDER BY finished_at DESC LIMIT 1`, configID+"/%")
+         ORDER BY finished_at DESC LIMIT 1`, likeEscape(configID)+"/%", string(excludeID))
 	j, err := scanJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, ErrStoreNotFound

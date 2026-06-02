@@ -21,7 +21,7 @@ type inlineSubmitter struct {
 	submitted []inventory.ID
 }
 
-func (s *inlineSubmitter) Submit(ctx context.Context, invID inventory.ID, _ jobs.Kind, work jobs.Work) (jobs.Job, error) {
+func (s *inlineSubmitter) Submit(ctx context.Context, invID inventory.ID, _ jobs.Kind, work jobs.Work, _ ...jobs.SubmitOption) (jobs.Job, error) {
 	s.submitted = append(s.submitted, invID)
 	if s.err != nil {
 		return jobs.Job{}, s.err

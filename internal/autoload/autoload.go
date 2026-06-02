@@ -52,7 +52,7 @@ type LoaderFunc func(ctx context.Context, disc inventory.Inventory, onProgress f
 // Submitter routes a load through the jobs scheduler so auto-loads get
 // the same tracking, dedup, and concurrency limiting as manual builds.
 type Submitter interface {
-	Submit(ctx context.Context, invID inventory.ID, kind jobs.Kind, work jobs.Work) (jobs.Job, error)
+	Submit(ctx context.Context, invID inventory.ID, kind jobs.Kind, work jobs.Work, opts ...jobs.SubmitOption) (jobs.Job, error)
 }
 
 // AutoLoader polls Discovery on a ticker and submits new runs as jobs.

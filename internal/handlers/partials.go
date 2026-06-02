@@ -426,7 +426,7 @@ func (h *Handlers) measureCacheSize(r *http.Request, disc inventory.Inventory) c
 // intentionally independent of any request context — a build outlives
 // the HTTP request that started it. The parent ctx only plumbs through
 // logger/values via context.WithoutCancel inside jobs.Scheduler.Submit.
-func (h *Handlers) submitDiscoveredLoadJob(parent context.Context, composite inventory.ID, disc inventory.Inventory) error {
+func (h *Handlers) submitDiscoveredLoadJob(parent context.Context, composite inventory.ID, disc inventory.Inventory, opts ...jobs.SubmitOption) error {
 	_, err := h.jobMgr.Submit(parent, composite, jobs.KindBuild, func(ctx context.Context, report func(jobs.Update)) error {
 		// Recorder bridges extsort pipeline events to Update.Stages so
 		// the drawer's per-stage timeline populates in real time. Close
@@ -436,7 +436,7 @@ func (h *Handlers) submitDiscoveredLoadJob(parent context.Context, composite inv
 		defer recorder.Close()
 
 		return h.discovery.LoadWith(ctx, disc, recorder.OnProgress, recorder.Bus())
-	})
+	}, opts...)
 	if err != nil {
 		return fmt.Errorf("submit build job: %w", err)
 	}

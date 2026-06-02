@@ -74,7 +74,7 @@ func (h *Handlers) RetryJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = h.submitDiscoveredLoadJob(r.Context(), composite, disc)
+	err = h.submitDiscoveredLoadJob(r.Context(), composite, disc, jobs.WithFollowOn(prev))
 	switch {
 	case errors.Is(err, jobs.ErrDuplicateInventory):
 		w.WriteHeader(http.StatusAccepted)

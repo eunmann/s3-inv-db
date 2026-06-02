@@ -305,6 +305,100 @@ func TestRecorder_BatchCommittedAccumulatesIntoStage(t *testing.T) {
 	}
 }
 
+func TestRecorder_OnProgressDoesNotClobberStageBytes(t *testing.T) {
+	// done/total are a chunk-index progress counter; they must not be
+	// written into the stage's byte total (which is the summed object
+	// size from BatchCommitted). Regression for the chunk-index clobber.
+	rep := &captureReporter{}
+	rec := jobs.NewRecorder(rep.report)
+	defer rec.Close()
+
+	rec.OnProgress(stageDownloading, 0, 0)
+	rec.Bus().Publish(events.Event{
+		Stage:   events.StageParse,
+		Type:    events.EvtBatchCommitted,
+		Payload: events.BatchCommitted{Rows: 100, Bytes: 8_000_000},
+		Time:    time.Now(),
+	})
+	if !waitFor(50*time.Millisecond, func() bool {
+		s := rec.Snapshot()
+
+		return len(s) == 1 && s[0].Bytes == 8_000_000
+	}) {
+		t.Fatalf("batch bytes did not land: %+v", rec.Snapshot())
+	}
+	// A later progress tick with a small chunk index must not overwrite
+	// the 8 MB byte total.
+	rec.OnProgress(stageDownloading, 3, 16)
+	time.Sleep(20 * time.Millisecond)
+	if got := rec.Snapshot()[0].Bytes; got != 8_000_000 {
+		t.Errorf("stage Bytes after progress tick = %d, want 8000000 (chunk index must not clobber)", got)
+	}
+}
+
+func TestRecorder_CloseDrainsBufferedEvents(t *testing.T) {
+	// Events published right before Close (the pipeline's final
+	// StageEnd / diagnostics) must still be drained, not dropped.
+	rep := &captureReporter{}
+	rec := jobs.NewRecorder(rep.report)
+
+	rec.OnProgress(stageDownloading, 0, 0)
+	rec.Bus().Publish(events.Event{
+		Stage: events.StagePipeline,
+		Type:  events.EvtStageEnd,
+		Payload: events.StageTiming{
+			Stage: events.StageDownload, Duration: 2 * time.Second,
+			Rows: 777, Bytes: 4242,
+		},
+		Time: time.Now(),
+	})
+	// Close immediately — the StageEnd is likely still buffered.
+	rec.Close()
+
+	s := rec.Snapshot()
+	if len(s) != 1 {
+		t.Fatalf("len(stages) = %d, want 1: %+v", len(s), s)
+	}
+	if s[0].Duration != 2*time.Second || s[0].Rows != 777 || s[0].Bytes != 4242 {
+		t.Errorf("buffered StageEnd dropped: stage = %+v", s[0])
+	}
+}
+
+func TestRecorder_MergeEndDoesNotReopenClosedBuilding(t *testing.T) {
+	// The StageMerge end-event fires after the pipeline has moved to
+	// "finalizing", which closed "building". Mapping merge timing back
+	// onto building must NOT overwrite its (earlier) end time — else
+	// finalize time is double-counted. Rows/Bytes still attach.
+	rep := &captureReporter{}
+	rec := jobs.NewRecorder(rep.report)
+	defer rec.Close()
+
+	rec.OnProgress("building", 0, 0)
+	rec.OnProgress("finalizing", 0, 0) // closes building via the transition
+	buildingEnd := rec.Snapshot()[0].EndedAt
+
+	rec.Bus().Publish(events.Event{
+		Stage: events.StagePipeline,
+		Type:  events.EvtStageEnd,
+		Payload: events.StageTiming{
+			Stage: events.StageMerge, Duration: 99 * time.Second, Rows: 5000,
+		},
+		Time: time.Now(),
+	})
+	if !waitFor(50*time.Millisecond, func() bool {
+		return rec.Snapshot()[0].Rows == 5000
+	}) {
+		t.Fatalf("merge end did not attach Rows: %+v", rec.Snapshot())
+	}
+	building := rec.Snapshot()[0]
+	if !building.EndedAt.Equal(buildingEnd) {
+		t.Errorf("building EndedAt was overwritten: got %v, want %v (pre-merge-end)", building.EndedAt, buildingEnd)
+	}
+	if building.Duration == 99*time.Second {
+		t.Error("building Duration was overwritten with the full merge-phase duration")
+	}
+}
+
 func waitFor(timeout time.Duration, cond func() bool) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {

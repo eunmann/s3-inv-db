@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
@@ -148,4 +149,35 @@ func TestRetryJob_FailedJobSubmitsFollowOn(t *testing.T) {
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202; body=%s", w.Code, w.Body.String())
 	}
+
+	// The follow-on job must link back to prev: PrevJobID set,
+	// AttemptCount incremented to 2. (fakeBuilder returns an empty index
+	// path, so the build itself fails — the linkage is set at submit
+	// time regardless of outcome.)
+	followOn := waitForFollowOn(t, h.JobStoreForTest(), composite, "prev-fail")
+	if followOn.AttemptCount != 2 {
+		t.Errorf("AttemptCount = %d, want 2", followOn.AttemptCount)
+	}
+}
+
+// waitForFollowOn polls until a job under invID with PrevJobID == prevID
+// appears, or fails the test.
+func waitForFollowOn(t *testing.T, store *jobs.Store, invID inventory.ID, prevID jobs.ID) jobs.Job {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		jobsList, err := store.ListForInventory(t.Context(), invID)
+		if err != nil {
+			t.Fatalf("ListForInventory: %v", err)
+		}
+		for i := range jobsList {
+			if jobsList[i].PrevJobID == prevID {
+				return jobsList[i]
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("no follow-on job with PrevJobID=%s appeared for %s", prevID, invID)
+
+	return jobs.Job{}
 }

@@ -106,6 +106,20 @@ func NewScheduler(store *Store, bus *Bus, opts ...Option) *Scheduler {
 	return s
 }
 
+// SubmitOption seeds non-derived fields on a newly-created job before
+// it's persisted and run.
+type SubmitOption func(*Job)
+
+// WithFollowOn links a new job to the terminal prev it retries: it
+// carries prev's ID as PrevJobID and increments AttemptCount so the
+// drawer's attempt badge + previous-attempt chain populate.
+func WithFollowOn(prev Job) SubmitOption {
+	return func(j *Job) {
+		j.PrevJobID = prev.ID
+		j.AttemptCount = max(prev.AttemptCount, 1) + 1
+	}
+}
+
 // Submit creates a job in the queued state, kicks off work on a fresh
 // goroutine, and returns the initial snapshot. The cancel handle is
 // registered before the bus publish so a Cancel triggered by an
@@ -114,7 +128,7 @@ func NewScheduler(store *Store, bus *Bus, opts ...Option) *Scheduler {
 // The parent ctx is used only to plumb logger/values into the job (via
 // context.WithoutCancel) — the job's lifetime is decoupled from the
 // caller's so the work outlives its submitter (e.g. an HTTP request).
-func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind, work Work) (Job, error) {
+func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind, work Work, opts ...SubmitOption) (Job, error) {
 	id, err := newJobID()
 	if err != nil {
 		return Job{}, fmt.Errorf("mint job id: %w", err)
@@ -146,6 +160,9 @@ func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind
 		InventoryID: invID,
 		Kind:        kind,
 		State:       StateQueued,
+	}
+	for _, opt := range opts {
+		opt(&job)
 	}
 	if err := s.store.Upsert(ctx, job); err != nil {
 		s.mu.Unlock()

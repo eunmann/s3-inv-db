@@ -17,7 +17,7 @@ type Recorder struct {
 	mergeRounds int
 	mergeBytes  int64
 	mu          sync.Mutex
-	closed      bool
+	closing     bool
 	wg          sync.WaitGroup
 	nowFn       func() time.Time
 	closedCh    chan struct{}
@@ -42,7 +42,7 @@ func (r *Recorder) Bus() *events.Bus { return r.bus }
 func (r *Recorder) OnProgress(stage string, done, total int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.closed {
+	if r.closing {
 		return
 	}
 	r.applyStageLocked(stage, done, total)
@@ -56,18 +56,22 @@ func (r *Recorder) OnProgress(stage string, done, total int64) {
 
 func (r *Recorder) Close() {
 	r.mu.Lock()
-	if r.closed {
+	if r.closing {
 		r.mu.Unlock()
 
 		return
 	}
-	r.closed = true
+	// closing blocks new OnProgress appends, but the drain goroutine
+	// keeps processing already-buffered events so the final stage-end
+	// + diagnostic events published just before the pipeline returned
+	// aren't dropped.
+	r.closing = true
 	close(r.closedCh)
 	r.mu.Unlock()
 
-	r.sub.Cancel()
-	r.bus.Close()
-	r.wg.Wait()
+	r.bus.Close()  // no new publishes
+	r.sub.Cancel() // closes r.sub.C after buffered events
+	r.wg.Wait()    // drain processes the buffered tail, then exits
 }
 
 func (r *Recorder) Snapshot() []StageRecord {
@@ -94,10 +98,11 @@ func (r *Recorder) applyStageLocked(stage string, done, total int64) {
 			StartedAt: now,
 		})
 	}
-	if done > 0 {
-		cur := &r.stages[len(r.stages)-1]
-		cur.Bytes = uint64(done)
-	}
+	// done/total are the current stage's progress counter (chunk index,
+	// merged-run count) — they flow to the UI via Update.StageDone/Total,
+	// NOT the stage's byte/row totals, which come from BatchCommitted +
+	// StageEnd events. Writing done here would clobber the real byte sum.
+	_ = done
 	_ = total
 }
 
@@ -111,9 +116,10 @@ func (r *Recorder) drain() {
 func (r *Recorder) handleEvent(ev events.Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.closed {
-		return
-	}
+	// No closing guard: Close() relies on the drain goroutine processing
+	// the buffered tail of events after closing is set. The report
+	// callback stays safe because Close() is called from inside the job's
+	// work function, before the scheduler writes the terminal state.
 	var stagesChanged, diagChanged bool
 	switch ev.Type {
 	case events.EvtStageEnd:
@@ -178,8 +184,17 @@ func (r *Recorder) enrichOnStageEndLocked(ev events.Event, st events.StageTiming
 			continue
 		}
 		s := &r.stages[i]
-		s.EndedAt = end
-		s.Duration = st.Duration
+		// Only stamp timing when the stage is still open. StageMerge's
+		// end-event fires after the pipeline has already moved on to the
+		// "finalizing" sub-stage, which closed "building" via the
+		// OnProgress transition. Overwriting here would extend building's
+		// duration through finalize, double-counting it in both rows.
+		// Rows/Bytes (prefix count, merge bytes) are still worth
+		// attaching either way.
+		if s.InProgress() {
+			s.EndedAt = end
+			s.Duration = st.Duration
+		}
 		if st.Bytes > 0 {
 			s.Bytes = st.Bytes
 		}
