@@ -70,11 +70,8 @@ func (a *u64DiskArray) Freeze() error {
 	if err := a.writer.Flush(); err != nil {
 		return fmt.Errorf("u64 disk array flush: %w", err)
 	}
-	// Sync so the mmap sees the bytes; otherwise on some kernels the
-	// page cache may lag and the mmap shows zeros.
-	if err := a.file.Sync(); err != nil {
-		return fmt.Errorf("u64 disk array sync: %w", err)
-	}
+	// No fsync: written bytes are in the page cache, which a shared
+	// mmap of the same file reads, and the array is scratch.
 	info, err := a.file.Stat()
 	if err != nil {
 		return fmt.Errorf("u64 disk array stat: %w", err)

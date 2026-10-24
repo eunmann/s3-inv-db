@@ -197,12 +197,8 @@ func (w *CompressedRunWriter) Close() error {
 		return errors.Join(fmt.Errorf("update header: %w", err), w.closeFile())
 	}
 
-	// fsync before close: a crash between write and kernel flush would
-	// leave the compressed stream truncated and unreadable.
-	if err := w.file.Sync(); err != nil {
-		return errors.Join(fmt.Errorf("fsync compressed run file: %w", err), w.closeFile())
-	}
-
+	// No fsync: a run is scratch for this build only, and a crash
+	// abandons the build, so durability would buy nothing.
 	if err := w.closeFile(); err != nil {
 		return fmt.Errorf("close file: %w", err)
 	}
