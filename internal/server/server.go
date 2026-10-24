@@ -457,6 +457,8 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.autoloader != nil {
 		s.autoloader.Start(ctx)
 	}
+	stopPruner := s.startJobPruner(ctx)
+	defer stopPruner()
 
 	errChan := make(chan error, 1)
 	go func() {
@@ -482,6 +484,51 @@ func (s *Server) Run(ctx context.Context) error {
 
 	case err := <-errChan:
 		return err
+	}
+}
+
+// jobPruneInterval is how often Run trims the jobs table after the
+// startup pass.
+const jobPruneInterval = 24 * time.Hour
+
+// startJobPruner prunes job history inline, then every
+// jobPruneInterval until ctx is cancelled or the returned stop func is
+// called. Stop waits for the goroutine so no prune outlives the DB.
+func (s *Server) startJobPruner(ctx context.Context) func() {
+	s.pruneJobs(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(jobPruneInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.pruneJobs(ctx)
+			}
+		}
+	}()
+
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func (s *Server) pruneJobs(ctx context.Context) {
+	n, err := s.jobStore.PruneTerminal(ctx, time.Now().Add(-jobs.RetentionWindow), jobs.RetentionKeepPerInventory)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.config.Logger.Error().Err(err).Msg("prune job history")
+		}
+
+		return
+	}
+	if n > 0 {
+		s.config.Logger.Info().Int64("count", n).Msg("pruned job history")
 	}
 }
 

@@ -106,6 +106,8 @@ storage-class list and file layout live in
   fails. State + job history persist in `$CACHE_DIR/state.db` (SQLite,
   WAL, pure-Go driver); jobs in flight at shutdown are flipped to
   `aborted` on next boot so the UI never shows a forever-spinner.
+  Finished jobs older than 30 days are pruned at startup and daily,
+  keeping the 20 most recent jobs per run.
 
 Routes, JSON shapes, and the partial-HTML conventions are in
 [http-api.md](http-api.md).

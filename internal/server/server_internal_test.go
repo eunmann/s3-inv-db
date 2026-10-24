@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/dbtest"
+	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/jobs"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
@@ -474,5 +477,41 @@ func TestClientIPMiddleware(t *testing.T) {
 				t.Errorf("client IP = %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// TestStartJobPruner_PrunesAtStartup pins that Run's pruner trims old
+// terminal jobs on its first pass rather than only after a day.
+func TestStartJobPruner_PrunesAtStartup(t *testing.T) {
+	db := testDB(t)
+	srv, err := New(t.Context(), Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: db})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	const invID = "src/inv/run"
+	if err := srv.invStore.Upsert(t.Context(), inventory.Info{ID: invID, Name: "n", Path: "p", State: inventory.StateNotLoaded}); err != nil {
+		t.Fatalf("seed inventory: %v", err)
+	}
+	old := time.Now().Add(-2 * jobs.RetentionWindow)
+	total := jobs.RetentionKeepPerInventory + 3
+	for i := range total {
+		id := jobs.ID(fmt.Sprintf("job-%02d", i))
+		if err := srv.jobStore.Upsert(t.Context(), jobs.Job{ID: id, InventoryID: invID, Kind: jobs.KindBuild, State: jobs.StateSucceeded}); err != nil {
+			t.Fatalf("Upsert %s: %v", id, err)
+		}
+		if _, err := db.ExecContext(t.Context(), `UPDATE jobs SET updated_at = ? WHERE id = ?`, old.Add(time.Duration(i)*time.Minute).Unix(), string(id)); err != nil {
+			t.Fatalf("backdate %s: %v", id, err)
+		}
+	}
+
+	stop := srv.startJobPruner(t.Context())
+	stop()
+
+	got, err := srv.jobStore.ListForInventory(t.Context(), invID)
+	if err != nil {
+		t.Fatalf("ListForInventory: %v", err)
+	}
+	if len(got) != jobs.RetentionKeepPerInventory {
+		t.Errorf("jobs after startup prune = %d, want %d", len(got), jobs.RetentionKeepPerInventory)
 	}
 }

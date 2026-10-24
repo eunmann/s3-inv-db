@@ -3,6 +3,7 @@ package jobs_test
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -205,5 +206,74 @@ func TestStore_GetRoundTripsAllFields(t *testing.T) {
 		got.StageTotal != want.StageTotal || got.StageDone != want.StageDone ||
 		!got.StartedAt.Equal(started) || !got.FinishedAt.Equal(finished) {
 		t.Errorf("round-trip mismatch:\n got=%+v\nwant=%+v", got, want)
+	}
+}
+
+func TestStore_PruneTerminal_KeepsRecentAndLiveJobs(t *testing.T) {
+	store, db := storeWithInventory(t, "src/inv/a")
+	seedInventoryRows(t, db, "src/inv/b")
+	ctx := t.Context()
+	now := time.Now()
+	old := now.Add(-2 * jobs.RetentionWindow)
+
+	// Inventory a: 25 old terminal jobs (cycling every terminal state)
+	// plus one old running job and one recent failed job.
+	terminal := []jobs.State{jobs.StateSucceeded, jobs.StateFailed, jobs.StateCancelled, jobs.StateAborted}
+	type row struct {
+		id    jobs.ID
+		inv   inventory.ID
+		state jobs.State
+		at    time.Time
+	}
+	rows := make([]row, 0, 28)
+	for i := range 25 {
+		rows = append(rows, row{jobs.ID(fmt.Sprintf("a-old-%02d", i)), "src/inv/a", terminal[i%len(terminal)], old.Add(time.Duration(i) * time.Minute)})
+	}
+	rows = append(rows,
+		row{"a-old-running", "src/inv/a", jobs.StateRunning, old.Add(-time.Hour)},
+		row{"a-recent", "src/inv/a", jobs.StateFailed, now},
+		row{"b-old", "src/inv/b", jobs.StateSucceeded, old},
+	)
+	for _, r := range rows {
+		if err := store.Upsert(ctx, jobs.Job{ID: r.id, InventoryID: r.inv, Kind: jobs.KindBuild, State: r.state}); err != nil {
+			t.Fatalf("Upsert %s: %v", r.id, err)
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE jobs SET updated_at = ? WHERE id = ?`, r.at.Unix(), string(r.id)); err != nil {
+			t.Fatalf("backdate %s: %v", r.id, err)
+		}
+	}
+
+	const keep = 20
+	n, err := store.PruneTerminal(ctx, now.Add(-jobs.RetentionWindow), keep)
+	if err != nil {
+		t.Fatalf("PruneTerminal: %v", err)
+	}
+	// Inventory a ranks a-recent first, then a-old-24..a-old-06 (19 more)
+	// fill the keep window; a-old-00..a-old-05 are beyond it. The running
+	// job is beyond it too but is never pruned.
+	if n != 6 {
+		t.Errorf("pruned = %d, want 6", n)
+	}
+
+	aJobs, err := store.ListForInventory(ctx, "src/inv/a")
+	if err != nil {
+		t.Fatalf("ListForInventory a: %v", err)
+	}
+	got := make(map[jobs.ID]bool, len(aJobs))
+	for _, j := range aJobs {
+		got[j.ID] = true
+	}
+	for i := range 6 {
+		if id := jobs.ID(fmt.Sprintf("a-old-%02d", i)); got[id] {
+			t.Errorf("%s survived, want pruned", id)
+		}
+	}
+	for _, id := range []jobs.ID{"a-old-06", "a-old-24", "a-recent", "a-old-running"} {
+		if !got[id] {
+			t.Errorf("%s pruned, want kept", id)
+		}
+	}
+	if _, err := store.Get(ctx, "b-old"); err != nil {
+		t.Errorf("b-old (only job of its inventory) pruned: %v", err)
 	}
 }
