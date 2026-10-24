@@ -43,7 +43,10 @@ exactly as it was and logs its summary; a successful one also writes
 that summary to `build.json` in the index. A directory holding anything
 other than an index is refused before any work starts. Hidden build
 directories left beside `--out` by a killed build are removed by the
-next build into the same `--out`.
+next build into the same `--out`. Concurrent builds into the same
+`--out` are not supported: a starting build removes every hidden build
+directory beside `--out`, including one a still-running build is
+writing, and that build then fails.
 
 Worker counts and S3 part concurrency derive from `runtime.NumCPU()`;
 the process memory ceiling is `GOMEMLIMIT`. Both are intentionally
