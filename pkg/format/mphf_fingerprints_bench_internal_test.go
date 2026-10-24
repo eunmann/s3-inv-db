@@ -90,7 +90,7 @@ func BenchmarkPerPrefixWork(b *testing.B) {
 
 	hashes := make([]uint64, n)
 	for i, p := range prefixes {
-		hashes[i] = hashString(p)
+		hashes[i] = hashString(p, 0)
 	}
 
 	mph, err := bbhash.New(hashes, bbhash.Gamma(2.0))
@@ -106,7 +106,7 @@ func BenchmarkPerPrefixWork(b *testing.B) {
 		for i := range b.N {
 			idx := i % n
 			pb := prefixBytes[idx]
-			keyHash := hashBytes(pb)
+			keyHash := hashBytes(pb, 0)
 			hashVal := mph.Find(keyHash)
 			hashPos := int(hashVal - 1)
 			fingerprints[hashPos] = computeFingerprintBytes(pb)
@@ -132,7 +132,7 @@ func BenchmarkPerPrefixWork(b *testing.B) {
 		for i := range b.N {
 			idx := i % n
 			pb := prefixBytes[idx]
-			keyHash := hashBytes(pb)
+			keyHash := hashBytes(pb, 0)
 			hashVal := mph.Find(keyHash)
 			hashPos := int(hashVal - 1)
 			positions[hashPos] = uint64(idx)
@@ -153,7 +153,7 @@ func BenchmarkBBHashScaling(b *testing.B) {
 			prefixes := generateRealisticPrefixes(n)
 			hashes := make([]uint64, n)
 			for i, p := range prefixes {
-				hashes[i] = hashString(p)
+				hashes[i] = hashString(p, 0)
 			}
 			b.ResetTimer()
 			b.ReportAllocs()

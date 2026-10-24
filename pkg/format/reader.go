@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 
 	"golang.org/x/sys/unix"
 )
@@ -127,6 +128,12 @@ func OpenArray(path string) (*ArrayReader, error) {
 // AccessHintSequential for arrays scanned in ranges (depth posting
 // lists, segment dictionary).
 func OpenArrayWithHint(path string, hint AccessHint) (*ArrayReader, error) {
+	return openArrayVersions(path, hint, Version)
+}
+
+// openArrayVersions is OpenArrayWithHint accepting any header version
+// in versions.
+func openArrayVersions(path string, hint AccessHint, versions ...uint32) (*ArrayReader, error) {
 	mmap, err := OpenMmapWithHint(path, hint)
 	if err != nil {
 		return nil, fmt.Errorf("mmap file: %w", err)
@@ -151,7 +158,7 @@ func OpenArrayWithHint(path string, hint AccessHint) (*ArrayReader, error) {
 		return nil, ErrMagicMismatch
 	}
 
-	if header.Version != Version {
+	if !slices.Contains(versions, header.Version) {
 		mmap.Close()
 
 		return nil, ErrVersionMismatch

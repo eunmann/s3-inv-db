@@ -12,6 +12,12 @@ const (
 	// now carry per-index variable widths and an 8-byte tail pad.
 	// A Version-1 reader would silently mis-decode such a file.
 	Version uint32 = 2
+	// VersionSeededMPHF marks an mph_fp_pos.u64 built with a non-zero
+	// key-hash seed (stored after the slots). Only that file carries
+	// it, and only when the seed is non-zero, so seed-0 indexes stay
+	// Version 2 and older readers refuse a seeded file instead of
+	// hashing queries with the wrong seed.
+	VersionSeededMPHF uint32 = 3
 )
 
 // Header is the common header for all columnar files.
