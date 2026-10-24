@@ -89,8 +89,8 @@ func explicitFlags(fs *flag.FlagSet) map[string]bool {
 	return out
 }
 
-// loggingFlags bundles the --verbose and --pretty-logs flags every
-// subcommand exposes. Registered via addLoggingFlags and resolved
+// loggingFlags bundles the --verbose and --pretty-logs flags of the
+// subcommands that log (not verify, stats or config-check). Registered via addLoggingFlags and resolved
 // against the JSON config via initLogging.
 type loggingFlags struct {
 	verbose    *bool
