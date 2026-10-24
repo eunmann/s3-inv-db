@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -90,11 +91,13 @@ func TestBuildTracker_SidecarLifecycle(t *testing.T) {
 	}
 }
 
-// TestBuildTracker_FailurePath verifies finish(nil, err) records a
-// failure outcome with the error message.
+// TestBuildTracker_FailurePath verifies finish(nil, err) logs a failure
+// outcome with the error message and writes nothing into the output
+// directory, which a failed build must leave as it was.
 func TestBuildTracker_FailurePath(t *testing.T) {
 	tmp := t.TempDir()
-	logger := zerolog.Nop()
+	var logBuf bytes.Buffer
+	logger := zerolog.New(&logBuf)
 
 	tr := newBuildTracker(tmp, "s3://b/inv/manifest.json", "", &logger)
 	defer tr.close()
@@ -102,18 +105,23 @@ func TestBuildTracker_FailurePath(t *testing.T) {
 	tr.start()
 	tr.finish(nil, errBoom)
 
-	data, err := os.ReadFile(filepath.Join(tmp, "build.json"))
+	entries, err := os.ReadDir(tmp)
 	if err != nil {
-		t.Fatalf("read build.json: %v", err)
+		t.Fatal(err)
 	}
-	var s buildSummary
-	if err := json.Unmarshal(data, &s); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	if len(entries) != 0 {
+		t.Errorf("failed build wrote into the output dir: %v", entries)
 	}
-	if s.Outcome != "failure" {
-		t.Errorf("Outcome = %q, want failure", s.Outcome)
+	var line struct {
+		Summary buildSummary `json:"build_summary"`
 	}
-	if s.Error == "" {
+	if err := json.Unmarshal(logBuf.Bytes(), &line); err != nil {
+		t.Fatalf("unmarshal log line %q: %v", logBuf.String(), err)
+	}
+	if line.Summary.Outcome != "failure" {
+		t.Errorf("Outcome = %q, want failure", line.Summary.Outcome)
+	}
+	if line.Summary.Error == "" {
 		t.Errorf("Error empty; want non-empty")
 	}
 }

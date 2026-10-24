@@ -39,8 +39,11 @@ s3-inv-db build --s3-manifest s3://bucket/inv/data/manifest.json --out ./my-inde
 
 The index is built in a hidden sibling of `--out` and renamed into
 place only when complete. A failed or cancelled build leaves `--out`
-exactly as it was; a directory holding anything other than an index is
-refused before any work starts.
+exactly as it was and logs its summary; a successful one also writes
+that summary to `build.json` in the index. A directory holding anything
+other than an index is refused before any work starts. Hidden build
+directories left beside `--out` by a killed build are removed by the
+next build into the same `--out`.
 
 Worker counts and S3 part concurrency derive from `runtime.NumCPU()`;
 the process memory ceiling is `GOMEMLIMIT`. Both are intentionally
