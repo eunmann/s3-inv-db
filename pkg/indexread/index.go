@@ -153,29 +153,37 @@ func (idx *Index) MaxDepth() uint32 { return idx.maxDepth }
 //
 // An empty slice indicates no descendants at that depth (valid but empty result).
 func (idx *Index) DescendantsAtDepth(prefixPos uint64, relDepth int) ([]uint64, error) {
-	if prefixPos >= idx.count {
-		return nil, nil
-	}
-	if relDepth < 0 {
-		return nil, nil
+	span, err := idx.descendantSpan(prefixPos, relDepth)
+	if err != nil || span.Len() == 0 {
+		return nil, err
 	}
 
-	baseDepth := idx.Depth(prefixPos)
-	targetDepth := baseDepth + uint32(relDepth)
-
-	if targetDepth > idx.maxDepth {
-		return nil, nil
-	}
-
-	subtreeStart := prefixPos
-	subtreeEnd := idx.SubtreeEnd(prefixPos)
-
-	positions, err := idx.depthIndex.PositionsInSubtree(targetDepth, subtreeStart, subtreeEnd)
-	if err != nil {
-		return nil, fmt.Errorf("get positions at depth %d: %w", targetDepth, err)
+	positions := make([]uint64, span.Len())
+	for i := range positions {
+		positions[i] = idx.depthIndex.PositionAt(span.Lo + uint64(i))
 	}
 
 	return positions, nil
+}
+
+// descendantSpan returns the depth-index span holding the descendants
+// of prefixPos at relDepth; it is empty when there are none or the
+// input is invalid (see DescendantsAtDepth).
+func (idx *Index) descendantSpan(prefixPos uint64, relDepth int) (format.Span, error) {
+	if prefixPos >= idx.count || relDepth < 0 {
+		return format.Span{}, nil
+	}
+	targetDepth := idx.Depth(prefixPos) + uint32(relDepth)
+	if targetDepth > idx.maxDepth {
+		return format.Span{}, nil
+	}
+
+	span, err := idx.depthIndex.SubtreeSpan(targetDepth, prefixPos, idx.SubtreeEnd(prefixPos))
+	if err != nil {
+		return format.Span{}, fmt.Errorf("get positions at depth %d: %w", targetDepth, err)
+	}
+
+	return span, nil
 }
 
 // Filter specifies criteria for filtering results.
@@ -205,6 +213,51 @@ func (idx *Index) DescendantsAtDepthFiltered(prefixPos uint64, relDepth int, fil
 	}
 
 	return filtered, nil
+}
+
+// Page is one window of descendant positions and the total number of
+// matches across all windows.
+type Page struct {
+	Positions []uint64
+	Total     int
+}
+
+// DescendantsPage returns the matches of DescendantsAtDepthFiltered
+// at [offset, offset+limit) together with the total match count,
+// holding only the page in memory. Without a filter the total is the
+// size of the depth-index span and only the page is read; with one,
+// every descendant's stats are read to count the matches.
+func (idx *Index) DescendantsPage(prefixPos uint64, relDepth int, filter Filter, offset, limit int) (Page, error) {
+	span, err := idx.descendantSpan(prefixPos, relDepth)
+	if err != nil {
+		return Page{}, fmt.Errorf("get descendants at depth %d: %w", relDepth, err)
+	}
+	offset, limit = max(offset, 0), max(limit, 0)
+	if filter.MinCount == 0 && filter.MinBytes == 0 {
+		total := int(span.Len())
+		start := min(offset, total)
+		page := Page{Positions: make([]uint64, min(limit, total-start)), Total: total}
+		for i := range page.Positions {
+			page.Positions[i] = idx.depthIndex.PositionAt(span.Lo + uint64(start+i))
+		}
+
+		return page, nil
+	}
+
+	var page Page
+	for i := span.Lo; i < span.Hi; i++ {
+		pos := idx.depthIndex.PositionAt(i)
+		stats := idx.Stats(pos)
+		if stats.ObjectCount < filter.MinCount || stats.TotalBytes < filter.MinBytes {
+			continue
+		}
+		if page.Total >= offset && len(page.Positions) < limit {
+			page.Positions = append(page.Positions, pos)
+		}
+		page.Total++
+	}
+
+	return page, nil
 }
 
 // TierBreakdown is an alias for format.TierBreakdown.

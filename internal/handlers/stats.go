@@ -109,8 +109,9 @@ type DescendantsResponse struct {
 	Offset      int              `json:"offset"`
 }
 
-// The descendants walk runs under the index read lock, so a page is
-// bounded even when depth=N from the root spans millions of prefixes.
+// Page size bounds for the descendants endpoint. Only the page is held
+// in memory; without min_count/min_bytes the total comes from the depth
+// index, with them every descendant's stats are read to count matches.
 const (
 	defaultDescendantsLimit = 1000
 	maxDescendantsLimit     = 10000
@@ -232,17 +233,15 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return errPrefixNotFound
 		}
-		positions, perr := idx.DescendantsAtDepthFiltered(pos, params.depth, params.filter)
+		page, perr := idx.DescendantsPage(pos, params.depth, params.filter, params.offset, params.limit)
 		if perr != nil {
 			logger.Error().Err(perr).Msg("failed to get descendants")
 
 			return fmt.Errorf("descendants at depth: %w", perr)
 		}
-		resp.Total = len(positions)
-		start := min(params.offset, len(positions))
-		page := positions[start:min(start+params.limit, len(positions))]
-		resp.Descendants = make([]DescendantInfo, 0, len(page))
-		for _, p := range page {
+		resp.Total = page.Total
+		resp.Descendants = make([]DescendantInfo, 0, len(page.Positions))
+		for _, p := range page.Positions {
 			prefixStr, pserr := idx.PrefixString(p)
 			if pserr != nil {
 				logger.Warn().Err(pserr).Uint64("pos", p).Msg("failed to get prefix string")
