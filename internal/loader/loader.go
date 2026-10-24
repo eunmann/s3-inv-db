@@ -73,8 +73,8 @@ func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifest
 
 	pipeline := extsort.NewPipeline(cfg, l.s3Client)
 	if _, err := pipeline.Run(ctx, manifestURI, outDir); err != nil {
-		// Leave the partial cache dir in place for diagnostics; the next
-		// Build call will RemoveAll it.
+		// The pipeline builds in a staging dir and removes it on
+		// failure, so no partial index is left at outDir.
 		return "", fmt.Errorf("run pipeline: %w", err)
 	}
 	// Completion is signalled by the scheduler's terminal state flip
