@@ -16,7 +16,13 @@ import (
 type Aggregator struct {
 	// prefixes holds the rows Drain returns, keyed by their own Prefix:
 	// a spill hands the rows out instead of copying them.
-	prefixes       map[string]*PrefixRow
+	prefixes map[string]*PrefixRow
+	// slabs back every row and drained is Drain's result slice; both
+	// are reused once the caller is done with a Drain, so a worker
+	// allocates rows only while its largest spill is still growing.
+	slabs          [][]PrefixRow
+	drained        []*PrefixRow
+	used           int
 	maxDepth       int
 	objectCount    int64
 	bytesProcessed int64
@@ -67,10 +73,27 @@ func (a *Aggregator) accumulate(prefix string, depth uint16, size uint64, tierID
 	row, ok := a.prefixes[prefix]
 	if !ok {
 		owned := strings.Clone(prefix)
-		row = &PrefixRow{Prefix: owned, Depth: depth}
+		row = a.newRow()
+		row.Prefix, row.Depth = owned, depth
 		a.prefixes[owned] = row
 	}
 	row.add(size, tierID)
+}
+
+// rowSlabLen is how many rows the aggregator allocates at a time.
+const rowSlabLen = 4096
+
+// newRow returns the next zeroed row from the slabs.
+func (a *Aggregator) newRow() *PrefixRow {
+	slab, i := a.used/rowSlabLen, a.used%rowSlabLen
+	if slab == len(a.slabs) {
+		a.slabs = append(a.slabs, make([]PrefixRow, rowSlabLen))
+	}
+	a.used++
+	row := &a.slabs[slab][i]
+	*row = PrefixRow{}
+
+	return row
 }
 
 func (a *Aggregator) PrefixCount() int {
@@ -190,18 +213,24 @@ func ShouldWorkerFlush(workerAggBytes uint64, memoryLimit int64, numWorkers int)
 }
 
 // Drain hands over every accumulated row (unsorted) and clears the
-// aggregator for reuse. The rows belong to the caller: nothing is copied.
+// aggregator for reuse. Nothing is copied: the rows and the slice stay
+// valid only until the aggregator is next used, when they are recycled.
 func (a *Aggregator) Drain() []*PrefixRow {
 	if len(a.prefixes) == 0 {
 		return nil
 	}
 
-	rows := make([]*PrefixRow, 0, len(a.prefixes))
+	rows := a.drained[:0]
+	if cap(rows) < len(a.prefixes) {
+		rows = make([]*PrefixRow, 0, len(a.prefixes))
+	}
 	for _, row := range a.prefixes {
 		rows = append(rows, row)
 	}
+	a.drained = rows
 
 	clear(a.prefixes)
+	a.used = 0
 
 	a.objectCount = 0
 	a.bytesProcessed = 0
