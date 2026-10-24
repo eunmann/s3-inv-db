@@ -201,7 +201,18 @@ func (m *ParallelMerger) planRound(paths []string) roundPlan {
 		return roundPlan{groups: splitEvenly(bySize[:merged], numGroups), kept: bySize[merged:]}
 	}
 
-	return roundPlan{groups: splitEvenly(paths, (len(paths)+fanIn-1)/fanIn)}
+	// With MaxFanIn 2 an odd count leaves one group of a single run,
+	// which would only be copied: it passes through instead.
+	var plan roundPlan
+	for _, g := range splitEvenly(paths, (len(paths)+fanIn-1)/fanIn) {
+		if len(g) == 1 {
+			plan.kept = append(plan.kept, g[0])
+		} else {
+			plan.groups = append(plan.groups, g)
+		}
+	}
+
+	return plan
 }
 
 // sortBySize returns paths ordered by file size, smallest first. A run
