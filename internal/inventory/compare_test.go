@@ -2,6 +2,7 @@ package inventory_test
 
 import (
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
@@ -384,5 +385,142 @@ func TestCompareLevel_StatusSort(t *testing.T) {
 	want := []string{"new", "gone", "obj", "tier", "same"}
 	if diff := cmp.Diff(want, compareOrder(t, before, after, inventory.SortColCompareStatus, inventory.SortDirAsc)); diff != "" {
 		t.Errorf("status order (-want +got):\n%s", diff)
+	}
+}
+
+type refCompareRow struct {
+	name                           string
+	status                         inventory.CompareStatus
+	objDelta, byteDelta, costDelta int64
+}
+
+// referenceCompare joins both sides' children by full prefix through maps
+// (no ordering assumptions), classifies, filters and sorts with the
+// pre-#26 comparator.
+func referenceCompare(a, b *indexread.Index, q inventory.CompareQuery, cost inventory.CompareCostFunc) ([]string, inventory.CompareStatusCounts) {
+	type side struct {
+		pos uint64
+		ok  bool
+	}
+	byName := map[string][2]side{}
+	for i, idx := range []*indexread.Index{a, b} {
+		root, _ := idx.Lookup("")
+		ps, _ := idx.DescendantsAtDepth(root, 1)
+		for _, p := range ps {
+			full, _ := idx.PrefixString(p)
+			e := byName[full]
+			e[i] = side{p, true}
+			byName[full] = e
+		}
+	}
+	var rows []refCompareRow
+	var counts inventory.CompareStatusCounts
+	for full, e := range byName {
+		var oa, ob, ba, bb, ca, cbb uint64
+		if e[0].ok {
+			st := a.Stats(e[0].pos)
+			oa, ba, ca = st.ObjectCount, st.TotalBytes, cost(a, e[0].pos)
+		}
+		if e[1].ok {
+			st := b.Stats(e[1].pos)
+			ob, bb, cbb = st.ObjectCount, st.TotalBytes, cost(b, e[1].pos)
+		}
+		r := refCompareRow{name: inventory.SegmentOf("", full), objDelta: int64(ob) - int64(oa), byteDelta: int64(bb) - int64(ba), costDelta: int64(cbb) - int64(ca)}
+		switch {
+		case !e[0].ok:
+			r.status = inventory.CompareAdded
+			counts.Added++
+		case !e[1].ok:
+			r.status = inventory.CompareRemoved
+			counts.Removed++
+		case r.objDelta != 0 || r.byteDelta != 0 || !cmp.Equal(a.TierBreakdownMap(e[0].pos), b.TierBreakdownMap(e[1].pos)):
+			r.status = inventory.CompareChanged
+			counts.Changed++
+		default:
+			r.status = inventory.CompareUnchanged
+			counts.Unchanged++
+		}
+		if q.HideUnchanged && r.status == inventory.CompareUnchanged {
+			continue
+		}
+		rows = append(rows, r)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].name < rows[j].name }) // deterministic base
+	desc := q.Dir == inventory.SortDirDesc
+	sort.SliceStable(rows, func(i, j int) bool {
+		x, y := rows[i], rows[j]
+		var primary, equal bool
+		switch q.SortBy {
+		case inventory.SortColCompareStatus:
+			primary, equal = inventory.StatusOrder(x.status) < inventory.StatusOrder(y.status), x.status == y.status
+		case inventory.SortColObjects:
+			primary, equal = x.objDelta < y.objDelta, x.objDelta == y.objDelta
+		case inventory.SortColSize:
+			primary, equal = x.byteDelta < y.byteDelta, x.byteDelta == y.byteDelta
+		case inventory.SortColCost:
+			primary, equal = x.costDelta < y.costDelta, x.costDelta == y.costDelta
+		case inventory.SortColSegment:
+			primary, equal = x.name < y.name, x.name == y.name
+		default:
+			ax, ay := abs64(x.byteDelta), abs64(y.byteDelta)
+			primary, equal = ax < ay, ax == ay
+			desc = true
+		}
+		if equal {
+			return x.name < y.name
+		}
+		if desc {
+			return !primary
+		}
+
+		return primary
+	})
+	names := make([]string, len(rows))
+	for i, r := range rows {
+		names[i] = r.name
+	}
+
+	return names, counts
+}
+
+func abs64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+
+	return v
+}
+
+func TestCompareLevel_MatchesMaterialisingReference(t *testing.T) {
+	cost := func(idx *indexread.Index, p uint64) uint64 { return idx.Stats(p).TotalBytes * 2 }
+	for trial := range 15 {
+		before := randomTieredIndex(t, int64(100+trial), 250, false)
+		after := randomTieredIndex(t, int64(100+trial), 250, true)
+		for _, sortBy := range []string{"", inventory.SortColCompareStatus, inventory.SortColSegment, inventory.SortColObjects, inventory.SortColSize, inventory.SortColCost} {
+			for _, dir := range []string{inventory.SortDirAsc, inventory.SortDirDesc} {
+				for _, hide := range []bool{false, true} {
+					q := inventory.CompareQuery{SortBy: sortBy, Dir: dir, HideUnchanged: hide, PageSize: 6}
+					want, wantCounts := referenceCompare(before, after, q, cost)
+					var got []string
+					var data inventory.CompareLevelData
+					for page := 1; ; page++ {
+						q.Page = page
+						data = inventory.CompareLevel(before, after, "", q, cost)
+						for _, c := range data.Children {
+							got = append(got, c.Segment)
+						}
+						if len(got) >= data.Total || len(data.Children) == 0 {
+							break
+						}
+					}
+					if data.Counts != wantCounts || data.Total != len(want) {
+						t.Fatalf("trial %d %q %s hide=%v: counts %+v total %d, want %+v total %d", trial, sortBy, dir, hide, data.Counts, data.Total, wantCounts, len(want))
+					}
+					if diff := cmp.Diff(want, got); diff != "" {
+						t.Fatalf("trial %d %q %s hide=%v (-reference +CompareLevel):\n%s", trial, sortBy, dir, hide, diff)
+					}
+				}
+			}
+		}
 	}
 }

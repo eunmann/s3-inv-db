@@ -1,7 +1,10 @@
 package inventory_test
 
 import (
+	"math/rand"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
@@ -123,5 +126,109 @@ func TestPageChildren_NameOrderAndPaging(t *testing.T) {
 	got := pageNames(t, idx, inventory.ChildQuery{SortBy: "segment", Dir: "asc", Page: 2, PageSize: 2}, nil)
 	if diff := cmp.Diff([]string{"2024-x", "2025"}, got); diff != "" {
 		t.Errorf("page 2 (-want +got):\n%s", diff)
+	}
+}
+
+// randomTieredIndex builds an index from n random keys whose first
+// segment mixes characters that sort just below and above '/'. The same
+// seed gives the same objects; with drift, some sizes change, some
+// objects are dropped and a few new ones are added, so a compare of the
+// two sides has every status.
+func randomTieredIndex(t *testing.T, seed int64, n int, drift bool) *indexread.Index {
+	t.Helper()
+	rng := rand.New(rand.NewSource(seed))
+	alphabet := []string{"a", "b", "a-", "a.", "a ", "a!", "a0", "ab", "a_", "b-x", "b.y"}
+	objs := make([]tieredObj, 0, n)
+	for range n {
+		name := alphabet[rng.Intn(len(alphabet))] + alphabet[rng.Intn(len(alphabet))]
+		size := uint64(rng.Intn(1000) + 1)
+		tier := tiers.Standard
+		if rng.Intn(4) == 0 {
+			tier = tiers.GlacierFR
+		}
+		file := "/f" + strconv.Itoa(rng.Intn(5))
+		switch r := rng.Intn(20); {
+		case drift && r == 0:
+			size += 7
+		case drift && r == 1:
+			continue
+		}
+		objs = append(objs, tieredObj{key: name + file, size: size, tier: tier})
+	}
+	if drift {
+		for i := range 5 {
+			objs = append(objs, tieredObj{key: "new" + alphabet[i] + "/x", size: 1, tier: tiers.Standard})
+		}
+	}
+
+	return openTieredIndex(t, objs...)
+}
+
+type refChild struct {
+	name                 string
+	objects, bytes, cost uint64
+}
+
+// referenceChildren materialises every child and sorts it the way the
+// pre-#26 code did: by the column, ties by name ascending.
+func referenceChildren(idx *indexread.Index, cost func(uint64) uint64, sortBy, dir string) []string {
+	root, _ := idx.Lookup("")
+	positions, _ := idx.DescendantsAtDepth(root, 1)
+	rows := make([]refChild, 0, len(positions))
+	for _, p := range positions {
+		full, _ := idx.PrefixString(p)
+		st := idx.Stats(p)
+		rows = append(rows, refChild{name: inventory.SegmentOf("", full), objects: st.ObjectCount, bytes: st.TotalBytes, cost: cost(p)})
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		var primary, equal bool
+		switch sortBy {
+		case inventory.SortColObjects:
+			primary, equal = a.objects < b.objects, a.objects == b.objects
+		case inventory.SortColSize:
+			primary, equal = a.bytes < b.bytes, a.bytes == b.bytes
+		case inventory.SortColCost:
+			primary, equal = a.cost < b.cost, a.cost == b.cost
+		default:
+			primary, equal = a.name < b.name, a.name == b.name
+		}
+		if equal {
+			return a.name < b.name
+		}
+		if dir == inventory.SortDirDesc {
+			return !primary
+		}
+
+		return primary
+	})
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = r.name
+	}
+
+	return out
+}
+
+func TestPageChildren_MatchesMaterialisingReference(t *testing.T) {
+	for trial := range 20 {
+		idx := randomTieredIndex(t, int64(trial), 300, false)
+		cost := func(p uint64) uint64 { return idx.Stats(p).TotalBytes*3 + uint64(len(idx.ChildSegment(p))) }
+		for _, sortBy := range []string{inventory.SortColSegment, inventory.SortColObjects, inventory.SortColSize, inventory.SortColCost} {
+			for _, dir := range []string{inventory.SortDirAsc, inventory.SortDirDesc} {
+				want := referenceChildren(idx, cost, sortBy, dir)
+				var got []string
+				for page := 1; ; page++ {
+					names := pageNames(t, idx, inventory.ChildQuery{SortBy: sortBy, Dir: dir, Page: page, PageSize: 7}, cost)
+					got = append(got, names...)
+					if len(got) >= len(want) || len(names) == 0 {
+						break
+					}
+				}
+				if diff := cmp.Diff(want, got); diff != "" {
+					t.Fatalf("trial %d sort %s %s (-reference +PageChildren):\n%s", trial, sortBy, dir, diff)
+				}
+			}
+		}
 	}
 }
