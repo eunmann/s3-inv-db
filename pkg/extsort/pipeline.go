@@ -997,8 +997,12 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	// dominant fraction of wall clock for large inventories) until the
 	// next merge round fires — sometimes never, if all run files merged
 	// in a single round. Power-of-two interval lets the AND short-circuit.
+	// Decode the merge a few batches ahead of the builder. Deferred
+	// after the cleanup, so it stops before the merge readers close.
+	prefetch := newPrefetchIterator(mergeIter)
+	defer prefetch.stop()
 	progressIter := &reportingIterator{
-		inner:       mergeIter,
+		inner:       prefetch,
 		total:       int64(prefixCount),
 		onProgress:  func(done, total int64) { p.reportProgress("building", done, total) },
 		reportEvery: indexBuildProgressInterval,
