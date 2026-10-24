@@ -120,10 +120,9 @@ The fingerprint+position pair is combined into one file so a lookup is a single 
 1. Hash the prefix string using FNV-1a (64-bit) with the offset basis XORed with the key seed
 2. Query the BBHash to get a candidate index
 3. Read the 16-byte slot at that index from `mph_fp_pos.u64`
-4. Compute the FNV-1 fingerprint of the query prefix; on mismatch the prefix doesn't exist
-5. Compare the query segment by segment with the prefix stored at the slot's position (see [Prefix Strings](#prefix-strings)); only an exact match returns the position
+4. Compute the FNV-1 fingerprint of the query prefix; if it matches the slot's, return the slot's position, otherwise the prefix doesn't exist
 
-The fingerprint is a cheap pre-filter, not proof: FNV-1 and FNV-1a are correlated, so step 5 is what makes a hit exact. It reads the prefix in place and does not allocate.
+A non-member query is misreported only if it lands on an occupied slot and its 64-bit fingerprint also matches (~2⁻⁶⁴ per lookup). Comparing the stored prefix as well would make hits exact, but costs ~9% per lookup, so lookups stay fingerprint-only.
 
 ### Key Seed
 

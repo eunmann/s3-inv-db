@@ -64,7 +64,7 @@ Query: "data/2024/"
          ▼
 ┌─────────────────────┐
 │   MPHF Lookup       │  hash → candidate position; verify
-│      O(1)           │  fingerprint, then stored prefix
+│      O(1)           │  with a second-hash fingerprint
 └─────────────────────┘
          │
          ▼

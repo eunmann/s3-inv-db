@@ -6,8 +6,8 @@ costs, on-disk size, and benchmarks.
 ## Query
 
 Lookup is constant-time in index size: hash the prefix (FNV-1a),
-probe the MPHF, check a second-hash fingerprint, confirm the stored
-prefix segment by segment, then read one mmap slot. Tested up to ~10M
+probe the MPHF, check a second-hash fingerprint, then read one mmap
+slot. Tested up to ~10M
 prefixes with consistent sub-microsecond warm-cache lookups.
 
 | Operation | Complexity | Typical warm latency |
