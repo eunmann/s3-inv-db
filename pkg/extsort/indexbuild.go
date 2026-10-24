@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"slices"
 	"strings"
@@ -40,6 +41,10 @@ type IndexBuilder struct {
 	maxDepth          uint32
 	tiersDeclared     bool
 	closed            bool
+	// createdOutDir is true when NewIndexBuilder created outDir, so
+	// cleanup may remove it. A directory that already existed is never
+	// removed: it may hold the caller's other files.
+	createdOutDir bool
 }
 
 // stackEntry tracks an open prefix on the stack.
@@ -62,6 +67,8 @@ func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
 // the approximate number of prefixes is known (e.g., from a run file header).
 // If capacityHint is 0, a small default capacity is used.
 func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*IndexBuilder, error) {
+	_, statErr := os.Stat(outDir)
+	createdOutDir := errors.Is(statErr, fs.ErrNotExist)
 	if err := os.MkdirAll(outDir, format.DirPerm); err != nil {
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
@@ -92,6 +99,7 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		mphfBuilder:       mphfBuilder,
 		depthIndexBuilder: format.NewDepthIndexBuilder(tempDir),
 		stack:             make([]stackEntry, 0, 32),
+		createdOutDir:     createdOutDir,
 	}
 
 	// The tier-stats row writer is created lazily on the first Add, once
@@ -142,7 +150,9 @@ func (b *IndexBuilder) ensureTierWriter() error {
 	return nil
 }
 
-// cleanup closes and removes all partially created files on error.
+// cleanup releases every writer and scratch file after a failed build,
+// and removes outDir if this builder created it. Safe after a partial
+// Finalize: each writer is nil-guarded or idempotent.
 func (b *IndexBuilder) cleanup() {
 	if b.coreStatsW != nil {
 		b.coreStatsW.Close()
@@ -156,7 +166,9 @@ func (b *IndexBuilder) cleanup() {
 	if b.depthIndexBuilder != nil {
 		b.depthIndexBuilder.Close()
 	}
-	os.RemoveAll(b.outDir)
+	if b.createdOutDir {
+		os.RemoveAll(b.outDir)
+	}
 }
 
 // Add processes a single PrefixRow from the sorted stream.

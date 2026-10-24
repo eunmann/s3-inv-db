@@ -28,7 +28,7 @@ const summaryFilePerm = 0o600
 
 // buildTracker captures pipeline events during a build, writes optional
 // JSONL event-log output, and emits a build.json sidecar next to the
-// index files.
+// files of a successfully built index.
 type buildTracker struct {
 	outDir       string
 	sourceURI    string
@@ -179,8 +179,9 @@ func (t *buildTracker) writeJSONL(ev events.Event) {
 	}
 }
 
-// finish stops the subscription, writes the build.json sidecar, and
-// closes the JSONL log if any. Safe to call once.
+// finish stops the subscription and records the build summary: a
+// build.json sidecar in the published index on success, a log entry on
+// failure. Safe to call once.
 func (t *buildTracker) finish(result *extsort.Result, runErr error) {
 	if t.subCtx == nil {
 		return
@@ -193,9 +194,26 @@ func (t *buildTracker) finish(result *extsort.Result, runErr error) {
 	<-t.subDone
 
 	summary := t.buildSummary(result, runErr)
+	if runErr != nil {
+		t.logSummary(summary)
+
+		return
+	}
 	if err := t.writeSummary(summary); err != nil {
 		t.logger.Warn().Err(err).Msg("build.json: write failed")
 	}
+}
+
+// logSummary reports a failed build's summary in the log. A failed
+// build leaves the output directory untouched, so it gets no build.json.
+func (t *buildTracker) logSummary(s buildSummary) {
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.logger.Warn().Err(err).Msg("build summary: marshal failed")
+
+		return
+	}
+	t.logger.Warn().RawJSON("build_summary", data).Msg("build failed")
 }
 
 // close releases the JSONL file. Idempotent.

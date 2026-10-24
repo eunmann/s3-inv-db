@@ -178,6 +178,17 @@ func (m *Manifest) AccessTierColumnIndex() int {
 	return idx
 }
 
+// DeleteMarkerColumnIndex returns the index of the IsDeleteMarker column,
+// present only in all-versions inventories. Returns -1 if absent.
+func (m *Manifest) DeleteMarkerColumnIndex() int {
+	idx, err := m.columnIndex("IsDeleteMarker")
+	if err != nil {
+		return -1
+	}
+
+	return idx
+}
+
 func (m *Manifest) columnIndex(name string) (int, error) {
 	cols := strings.Split(m.FileSchema, ",")
 	for i, col := range cols {

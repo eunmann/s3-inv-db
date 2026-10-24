@@ -162,6 +162,13 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	defer p.memTracker.Stop() //nolint:contextcheck // own shutdown ctx by design
 	p.setPhase("initializing")
 
+	if err := reclaimStaleDirs(log, outDir); err != nil {
+		return nil, err
+	}
+	if err := checkOutDir(outDir); err != nil {
+		return nil, err
+	}
+
 	tempDir := p.config.TempDir
 	if tempDir == "" {
 		var err error
@@ -172,10 +179,21 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	}
 	p.tempDir = tempDir
 
+	// The index is built in a staging sibling and renamed into place
+	// only after it is complete, so a failure or cancellation never
+	// leaves a partial index at outDir or touches what was there.
+	stage, err := newStagingDir(outDir)
+	if err != nil {
+		p.cleanup(log)
+
+		return nil, err
+	}
+
 	success := false
 	defer func() {
 		if !success {
 			p.cleanup(log)
+			logCleanupErr(log, "remove staging dir", stage, os.RemoveAll(stage))
 		}
 	}()
 
@@ -210,8 +228,11 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Dur("duration_ms", ingestDuration).
 		Msg("ingest phase complete")
 
-	mergeRes, mergeDuration, err := p.timedMergeBuildPhase(ctx, log, outDir)
+	mergeRes, mergeDuration, err := p.timedMergeBuildPhase(ctx, log, stage)
 	if err != nil {
+		return nil, err
+	}
+	if err := publishIndex(log, stage, outDir); err != nil {
 		return nil, err
 	}
 	prefixCount, maxDepth := mergeRes.PrefixCount, mergeRes.MaxDepth
@@ -252,13 +273,14 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 // chunkConfig holds configuration for processing a chunk.
 type chunkConfig struct {
-	tierMapping   *tiers.Mapping
-	format        s3fetch.InventoryFormat
-	keyCol        int
-	sizeCol       int
-	storageCol    int
-	accessTierCol int
-	fileSize      int64
+	tierMapping     *tiers.Mapping
+	format          s3fetch.InventoryFormat
+	keyCol          int
+	sizeCol         int
+	storageCol      int
+	accessTierCol   int
+	deleteMarkerCol int
+	fileSize        int64
 }
 
 // chunkJob represents a chunk to be processed by a worker.
@@ -278,15 +300,16 @@ type objectRecord struct {
 
 // ingestConfig holds configuration for the ingest phase.
 type ingestConfig struct {
-	manifest      *s3fetch.Manifest
-	tierMapping   *tiers.Mapping
-	destBucket    string
-	format        s3fetch.InventoryFormat
-	keyCol        int
-	sizeCol       int
-	storageCol    int
-	accessTierCol int
-	numWorkers    int
+	manifest        *s3fetch.Manifest
+	tierMapping     *tiers.Mapping
+	destBucket      string
+	format          s3fetch.InventoryFormat
+	keyCol          int
+	sizeCol         int
+	storageCol      int
+	accessTierCol   int
+	deleteMarkerCol int
+	numWorkers      int
 }
 
 // runIngestPhase streams S3 inventory and creates sorted run files.
@@ -348,15 +371,16 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 		Msg("ingest worker count derived from NumCPU")
 
 	return &ingestConfig{
-		manifest:      manifest,
-		format:        manifest.DetectFormat(),
-		destBucket:    destBucket,
-		keyCol:        keyCol,
-		sizeCol:       sizeCol,
-		storageCol:    manifest.StorageClassColumnIndex(),
-		accessTierCol: manifest.AccessTierColumnIndex(),
-		numWorkers:    numWorkers,
-		tierMapping:   tiers.NewMapping(),
+		manifest:        manifest,
+		format:          manifest.DetectFormat(),
+		destBucket:      destBucket,
+		keyCol:          keyCol,
+		sizeCol:         sizeCol,
+		storageCol:      manifest.StorageClassColumnIndex(),
+		accessTierCol:   manifest.AccessTierColumnIndex(),
+		deleteMarkerCol: manifest.DeleteMarkerColumnIndex(),
+		numWorkers:      numWorkers,
+		tierMapping:     tiers.NewMapping(),
 	}, nil
 }
 
@@ -450,17 +474,34 @@ func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
 	wg.Wait()
 	close(errCh)
 
-	var errs []error
-	for err := range errCh {
-		if err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if len(errs) > 0 {
-		return fmt.Errorf("chunk worker: %w", errors.Join(errs...))
+	if err := firstCause(errCh); err != nil {
+		return fmt.Errorf("chunk worker: %w", err)
 	}
 
 	return nil
+}
+
+// firstCause picks the error to report from the workers' errors. One
+// worker's failure cancels its siblings, which then report
+// context.Canceled; joining them all would make every failure look like
+// a cancellation (the CLI reports those as "cancelled by user"). The
+// first error that is not a cancellation is the cause; a cancellation is
+// returned only when every worker was cancelled.
+func firstCause(errs <-chan error) error {
+	var cancelled error
+	for err := range errs {
+		switch {
+		case err == nil:
+		case errors.Is(err, context.Canceled):
+			if cancelled == nil {
+				cancelled = err
+			}
+		default:
+			return err
+		}
+	}
+
+	return cancelled
 }
 
 // startIngestProgressLogger starts a background goroutine that logs
@@ -510,13 +551,14 @@ func (p *Pipeline) sendIngestJobs(ctx context.Context, cfg *ingestConfig, jobs c
 			bucket: cfg.destBucket,
 			key:    file.Key,
 			config: chunkConfig{
-				format:        cfg.format,
-				keyCol:        cfg.keyCol,
-				sizeCol:       cfg.sizeCol,
-				storageCol:    cfg.storageCol,
-				accessTierCol: cfg.accessTierCol,
-				tierMapping:   cfg.tierMapping,
-				fileSize:      file.Size,
+				format:          cfg.format,
+				keyCol:          cfg.keyCol,
+				sizeCol:         cfg.sizeCol,
+				storageCol:      cfg.storageCol,
+				accessTierCol:   cfg.accessTierCol,
+				deleteMarkerCol: cfg.deleteMarkerCol,
+				tierMapping:     cfg.tierMapping,
+				fileSize:        file.Size,
 			},
 		}:
 		}
@@ -546,24 +588,19 @@ func (p *Pipeline) logIngestProgress(log *zerolog.Logger, chunkNum, totalChunks 
 // a private run file when memory pressure hits. At end-of-input
 // (channel closed), flush the residual aggregator state to a final
 // run file.
-func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int, jobs <-chan chunkJob) error {
+func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int, jobs <-chan chunkJob) (err error) {
 	const initialAggCapacity = 10_000
 	agg := NewAggregator(initialAggCapacity, p.config.MaxDepth)
 	defer func() {
-		if agg.PrefixCount() <= 0 {
+		// The residue reaches a run file only when the worker finished
+		// cleanly; after any failure or cancellation the build is
+		// abandoned and the spill would be thrown away. A failed final
+		// spill fails the build: dropping it would lose those prefixes.
+		if err != nil || agg.PrefixCount() <= 0 {
 			return
 		}
-		// Final spill of accumulated rows must run to completion even
-		// when ctx has been cancelled. Without WithoutCancel, a
-		// cancellation racing with end-of-input would drop the residue
-		// silently — the aggregator memory is freed, but the rows
-		// never reach a run file.
-		flushCtx := context.WithoutCancel(ctx)
-		if err := p.flushAggregator(flushCtx, agg, workerID); err != nil {
-			zerolog.Ctx(ctx).Error().
-				Int("worker_id", workerID).
-				Err(err).
-				Msg("final flush failed")
+		if flushErr := p.flushAggregator(ctx, agg, workerID); flushErr != nil {
+			err = fmt.Errorf("worker %d final flush: %w", workerID, flushErr)
 		}
 	}()
 
@@ -627,16 +664,21 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 	}
 
 	parseStart := time.Now()
-	var reader s3inventory.Reader
+	var (
+		reader    s3inventory.Reader
+		csvReader *s3inventory.CSVReader
+	)
 	if job.config.format == s3fetch.InventoryFormatParquet {
 		reader, err = openParquetReader(body, job.config.fileSize)
 	} else {
-		reader, err = s3inventory.NewCSVReaderFromStream(body, job.key, s3inventory.CSVReaderConfig{
-			KeyCol:        job.config.keyCol,
-			SizeCol:       job.config.sizeCol,
-			StorageCol:    job.config.storageCol,
-			AccessTierCol: job.config.accessTierCol,
+		csvReader, err = s3inventory.NewCSVReaderFromStream(body, job.key, s3inventory.CSVReaderConfig{
+			KeyCol:          job.config.keyCol,
+			SizeCol:         job.config.sizeCol,
+			StorageCol:      job.config.storageCol,
+			AccessTierCol:   job.config.accessTierCol,
+			DeleteMarkerCol: job.config.deleteMarkerCol,
 		})
+		reader = csvReader
 	}
 	if err != nil {
 		return fmt.Errorf("open inventory reader: %w", err)
@@ -684,6 +726,14 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 				return fmt.Errorf("mid-chunk flush: %w", err)
 			}
 		}
+	}
+
+	if csvReader != nil && (csvReader.UndecodableKeyCount() > 0 || csvReader.MalformedRowCount() > 0) {
+		log.Warn().
+			Str("chunk", job.key).
+			Uint64("undecodable_keys", csvReader.UndecodableKeyCount()).
+			Uint64("malformed_sizes", csvReader.MalformedRowCount()).
+			Msg("inventory chunk: keys kept URL-encoded or sizes indexed as 0")
 	}
 
 	p.objectsProcessed.Add(rowsParsed)
@@ -917,15 +967,12 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 
 	if len(p.runFiles) == 0 {
 		log.Info().Msg("no run files to merge, creating empty index")
-		builder, err := NewIndexBuilder(outDir, p.config.TempDir)
+		builder, err := NewIndexBuilder(outDir, p.tempDir)
 		if err != nil {
 			return mergeBuildResult{}, fmt.Errorf("create index builder: %w", err)
 		}
-		if err := builder.SetPresentTiers(p.presentTiers()); err != nil {
-			return mergeBuildResult{}, fmt.Errorf("set present tiers: %w", err)
-		}
-		if err := builder.FinalizeWithContext(ctx); err != nil {
-			return mergeBuildResult{}, fmt.Errorf("finalize empty index: %w", err)
+		if err := p.buildIndex(ctx, builder, nil); err != nil {
+			return mergeBuildResult{}, err
 		}
 
 		return mergeBuildResult{}, nil
@@ -974,12 +1021,9 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		Uint64("merge_iter_remaining", prefixCount).
 		Msg("index build starting")
 
-	builder, err := NewIndexBuilderWithCapacity(outDir, p.config.TempDir, prefixCount)
+	builder, err := NewIndexBuilderWithCapacity(outDir, p.tempDir, prefixCount)
 	if err != nil {
 		return mergeBuildResult{}, fmt.Errorf("create index builder: %w", err)
-	}
-	if err := builder.SetPresentTiers(p.presentTiers()); err != nil {
-		return mergeBuildResult{}, fmt.Errorf("set present tiers: %w", err)
 	}
 
 	// Wrap the merge iterator so the IndexBuilder consumption emits
@@ -994,15 +1038,8 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		onProgress:  func(done, total int64) { p.reportProgress("building", done, total) },
 		reportEvery: indexBuildProgressInterval,
 	}
-	if err := builder.AddAllWithContext(ctx, progressIter); err != nil {
-		builder.cleanup()
-
-		return mergeBuildResult{}, fmt.Errorf("build index: %w", err)
-	}
-
-	p.reportProgress("finalizing", 0, 0)
-	if err := builder.FinalizeWithContext(ctx); err != nil {
-		return mergeBuildResult{}, fmt.Errorf("finalize index: %w", err)
+	if err := p.buildIndex(ctx, builder, progressIter); err != nil {
+		return mergeBuildResult{}, err
 	}
 
 	return mergeBuildResult{
@@ -1010,6 +1047,36 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		MaxDepth:          builder.MaxDepth(),
 		MergeBytesWritten: mergeStats.BytesWritten,
 	}, nil
+}
+
+// buildIndex feeds rows (nil for an empty index) into builder and
+// finalizes it. Every failure releases the builder's writers and scratch
+// files.
+func (p *Pipeline) buildIndex(ctx context.Context, builder *IndexBuilder, rows RowIterator) error {
+	if err := p.fillAndFinalize(ctx, builder, rows); err != nil {
+		builder.cleanup()
+
+		return err
+	}
+
+	return nil
+}
+
+func (p *Pipeline) fillAndFinalize(ctx context.Context, builder *IndexBuilder, rows RowIterator) error {
+	if err := builder.SetPresentTiers(p.presentTiers()); err != nil {
+		return fmt.Errorf("set present tiers: %w", err)
+	}
+	if rows != nil {
+		if err := builder.AddAllWithContext(ctx, rows); err != nil {
+			return fmt.Errorf("build index: %w", err)
+		}
+	}
+	p.reportProgress("finalizing", 0, 0)
+	if err := builder.FinalizeWithContext(ctx); err != nil {
+		return fmt.Errorf("finalize index: %w", err)
+	}
+
+	return nil
 }
 
 // indexBuildProgressInterval is how often the index-build phase emits
