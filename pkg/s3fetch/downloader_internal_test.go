@@ -23,6 +23,9 @@ func TestDefaultDownloaderConfig(t *testing.T) {
 	if cfg.PartSize != 16*1024*1024 {
 		t.Errorf("PartSize = %d, want 16MB", cfg.PartSize)
 	}
+	if cfg.MaxInFlightGETs < 32 || cfg.MaxInFlightGETs > 256 {
+		t.Errorf("MaxInFlightGETs = %d, want 32..256", cfg.MaxInFlightGETs)
+	}
 }
 
 func TestDownloadedObject(t *testing.T) {

@@ -62,10 +62,12 @@ GOMEMLIMIT=4GiB s3-inv-db build ...   # cap at 4 GiB
 s3-inv-db build --max-depth 5 ...     # limit prefix count
 ```
 
-Worker counts and S3 part concurrency derive from `runtime.NumCPU()`:
-parser + download workers scale to `min(NumCPU, manifest_files)`,
-SDK part concurrency is `max(NumCPU/4, 2)`. The same binary scales
-from a laptop to an ingest node without flags.
+Worker counts and S3 concurrency derive from `runtime.NumCPU()`:
+parser + download workers scale to `min(NumCPU, manifest_files)`, each
+download fetches up to `min(max(NumCPU, 4), 16)` 16 MiB parts at once,
+and GETs in flight across all downloads are capped at
+`min(max(4 × NumCPU, 32), 256)`. The same binary scales from a laptop
+to an ingest node without flags.
 
 ### Bottleneck checklist
 
