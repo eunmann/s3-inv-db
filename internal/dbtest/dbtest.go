@@ -1,6 +1,6 @@
 // Package dbtest provides shared SQLite setup helpers for tests
 // that need a fresh, migrated in-memory database. All resources
-// scope to the passed-in *testing.T and clean up automatically.
+// scope to the passed-in testing.TB and clean up automatically.
 package dbtest
 
 import (
@@ -13,15 +13,15 @@ import (
 
 // OpenMemDB returns an in-memory SQLite handle with the project's
 // migrations applied, registered for cleanup on test end.
-func OpenMemDB(t *testing.T) *sql.DB {
-	t.Helper()
+func OpenMemDB(tb testing.TB) *sql.DB {
+	tb.Helper()
 	db, err := sql.Open("sqlite", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
 	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
+		tb.Fatalf("sql.Open: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	tb.Cleanup(func() { _ = db.Close() })
 	if err := migrate.Apply(db); err != nil {
-		t.Fatalf("migrate.Apply: %v", err)
+		tb.Fatalf("migrate.Apply: %v", err)
 	}
 
 	return db

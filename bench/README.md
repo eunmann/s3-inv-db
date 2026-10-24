@@ -52,6 +52,8 @@ seeded inputs, so repeated rounds agree:
 - `pkg/indexread` `BenchmarkGate*`: 100k lookups, prefix
   reconstructions or tier breakdowns, or 1k children + top-10 queries
   per op, over one 1M-object multi-tier index.
+- `internal/handlers` `BenchmarkGate*`: one browse or compare API
+  request over a prefix with 200k children.
 
 When a change touches a hot path no entry covers, add a sizeable
 benchmark for it **in its own commit first**, then run the gate with that

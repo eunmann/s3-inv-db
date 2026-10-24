@@ -24,7 +24,7 @@ func newWiredHandlers(t *testing.T, mgr *inventory.Catalog, opts ...handlers.Opt
 
 // newWiredHandlersWithConfigs is newWiredHandlers that also returns the
 // config store, for tests asserting on persisted configuration.
-func newWiredHandlersWithConfigs(t *testing.T, mgr *inventory.Catalog, opts ...handlers.Option) (*handlers.Handlers, *inventory.ConfigStore) {
+func newWiredHandlersWithConfigs(t testing.TB, mgr *inventory.Catalog, opts ...handlers.Option) (*handlers.Handlers, *inventory.ConfigStore) {
 	t.Helper()
 	db := dbtest.OpenMemDB(t)
 	invStore, err := inventory.NewStore(db)
