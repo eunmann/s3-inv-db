@@ -41,10 +41,17 @@ The authoritative source is `.golangci.yml`. Notable rules:
 
 ## Make Targets
 
-- `make lint` — runs golangci-lint v2.1.2 across the module. Run first; commit any auto-fixes.
-- `make lint-fix` — same with `--fix`.
-- `make test` — fast unit tests.
-- `make test-race` — same with the race detector. Always use for concurrency changes.
+`make help` lists everything. The ones that matter while testing:
+
+- `make lint` — golangci-lint (version pinned in the Makefile) with `--fix`; `make lint-check` without fixes.
+- `make test-unit` — host unit tests, no Docker. `go test -race ./pkg/x/` for a focused concurrency check.
+- `make test` / `make test-race` — the full suite including `integration`-tagged S3 tests, in Docker against a local S3 server.
+- `make cover-check` — unit coverage must stay at or above `COVER_MIN` (a ratchet).
+
+## S3 integration tests
+
+- Tests that talk to S3 live in `*_s3_test.go` files with `//go:build integration` and use `internal/s3test` (`RawClient`, `FetchClient`, `Bucket`). `s3test` refuses to run unless `AWS_ENDPOINT_URL_S3` points at a non-AWS host, so a test can never touch a real account.
+- Never write a test that calls real AWS unconditionally.
 
 ## See Also
 

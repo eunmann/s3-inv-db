@@ -614,11 +614,6 @@ func (m *runReaderMergeIterator) Release(row *PrefixRow) {
 	releaseMergeRow(row)
 }
 
-// Remaining returns 0 — RunReaders don't surface a known total ahead
-// of time. Satisfies the RowIterator interface for the builder's
-// capacity hint.
-func (m *runReaderMergeIterator) Remaining() uint64 { return 0 }
-
 // advanceReader reads the next row from the given reader and pushes to heap.
 func (m *runReaderMergeIterator) advanceReader(idx int) error {
 	row := acquireMergeRow()

@@ -2,53 +2,56 @@
 #
 # Profiles:
 #   dev   - air-driven hot-reload server, source bind-mounted (port 8080).
-#           Pulls MinIO + minio-setup along for the ride so the server can
-#           discover and load inventories from a simulated S3.
+#           Pulls the local S3 server + s3-setup along for the ride so the
+#           server can discover and load inventories from a simulated S3.
 #   prod  - slim multi-stage image to validate production builds (port 8081
 #           so dev and prod can run side by side).
 #   seed  - one-shot inventory generator that uploads simulated S3 inventory
-#           layouts to MinIO. Invoke with:
+#           layouts to the local S3 server. Invoke with:
 #               docker compose -f infra/docker-compose.yml \
 #                 --profile seed run --rm seeder
-#   test  - go test ./... against an internal-only MinIO. No host ports,
-#           so it runs side-by-side with `dev` without collision. Invoke
-#           via `make docker-test` (or directly with the compose CLI).
+#   test  - the full suite (-tags integration) against an internal-only
+#           S3 server. No host ports, so it runs side-by-side with `dev`
+#           without collision. Invoke via `make test`.
+#
+# The local S3 server is versitygw (Apache-2.0) with its posix backend.
+# MinIO's images were withdrawn from Docker Hub, so nothing here depends
+# on them. Credentials are dev-only placeholders.
 
 services:
-  # MinIO simulates S3 for dev and integration tests. UsePathStyle=true is
-  # mandatory on the client side; the AWS SDK defaults to virtual-host style
-  # which MinIO rejects.
-  minio:
+  # Local S3 for dev and integration tests. UsePathStyle=true is mandatory
+  # on the client side; the AWS SDK defaults to virtual-host style, which
+  # local S3 servers reject.
+  s3:
     profiles: [dev, seed]
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+    image: &s3-image versity/versitygw:v1.10.0
+    command: &s3-command ["--port", ":9000", "--access", "devaccess", "--secret", "devsecret", "posix", "/data"]
     ports:
-      - "${S3INV_MINIO_PORT:-9000}:9000"
-      - "${S3INV_MINIO_CONSOLE_PORT:-9001}:9001"
+      - "${S3INV_S3_PORT:-9000}:9000"
     volumes:
-      - minio-data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
+      - s3-data:/data
+    healthcheck: &s3-healthcheck
+      # Any HTTP response (an unauthenticated request gets 403) means the
+      # gateway is serving; busybox wget prints the status line on error.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9000/ 2>&1 | grep -q HTTP/"]
+      interval: 2s
       timeout: 5s
-      retries: 5
-      start_period: 10s
+      retries: 15
 
-  minio-setup:
+  # Creates the dev bucket with a SigV4-signed PUT; 409 means it already
+  # exists from a previous run.
+  s3-setup:
     profiles: [dev, seed]
-    image: minio/mc:latest
+    image: curlimages/curl:8.23.0
     depends_on:
-      minio:
+      s3:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      mc alias set local http://minio:9000 minioadmin minioadmin;
-      mc mb --ignore-existing local/s3-inv;
-      echo 'bucket s3-inv ready';
-      exit 0;
+      code=$$(curl -s -o /dev/null -w '%{http_code}' -X PUT
+      --aws-sigv4 'aws:amz:us-east-1:s3' --user devaccess:devsecret
+      http://s3:9000/s3-inv);
+      case $$code in 200|409) echo 'bucket s3-inv ready';; *) echo \"create bucket: HTTP $$code\"; exit 1;; esac
       "
 
   server-dev:
@@ -68,14 +71,14 @@ services:
       - go-build-cache:/root/.cache/go-build
       - server-cache:/cache                    # built indexes downloaded from S3
     environment:
-      AWS_ENDPOINT_URL_S3: http://minio:9000
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_ENDPOINT_URL_S3: http://s3:9000
+      AWS_ACCESS_KEY_ID: devaccess
+      AWS_SECRET_ACCESS_KEY: devsecret
       AWS_REGION: us-east-1
     depends_on:
-      minio:
+      s3:
         condition: service_healthy
-      minio-setup:
+      s3-setup:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/healthz || exit 1"]
@@ -123,54 +126,45 @@ services:
       - --preset=${S3INV_SEED_PRESET:-realistic}
       - --pretty-logs
     environment:
-      AWS_ENDPOINT_URL_S3: http://minio:9000
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_ENDPOINT_URL_S3: http://s3:9000
+      AWS_ACCESS_KEY_ID: devaccess
+      AWS_SECRET_ACCESS_KEY: devsecret
       AWS_REGION: us-east-1
     volumes:
       - ..:/app
       - go-mod-cache:/go/pkg/mod
       - go-build-cache:/root/.cache/go-build
     depends_on:
-      minio:
+      s3:
         condition: service_healthy
-      minio-setup:
+      s3-setup:
         condition: service_completed_successfully
 
   # ----- test profile -----------------------------------------------------
-  # Internal-only MinIO for the integration test suite. No host port mapping
-  # so this can run alongside `dev` (or another local MinIO) without
-  # competing for 9000. Storage is a tmpfs — every `make docker-test` boots
-  # from an empty bucket namespace.
-  minio-test:
+  # Internal-only S3 server for the integration test suite. No host port
+  # mapping so this runs alongside `dev` without competing for 9000.
+  # Storage is a tmpfs — every `make test` boots from an empty namespace.
+  s3-test:
     profiles: [test]
-    image: minio/minio:latest
-    command: server /data
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+    image: *s3-image
+    command: *s3-command
     tmpfs:
       - /data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 2s
-      timeout: 5s
-      retries: 15
-      start_period: 5s
+    healthcheck: *s3-healthcheck
 
-  # Runs `go test ./...` against minio-test. AWS_ENDPOINT_URL_S3 unblocks
-  # the otherwise-skipped integration tests in internal/s3disco.
+  # Runs the full suite, including the `integration`-tagged tests, against
+  # s3-test.
   test-runner:
     profiles: [test]
     build:
       context: ..
       dockerfile: infra/Dockerfile.dev
     entrypoint: []
-    command: ["go", "test", "./..."]
+    command: ["go", "test", "-tags", "integration", "./..."]
     environment:
-      AWS_ENDPOINT_URL_S3: http://minio-test:9000
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_ENDPOINT_URL_S3: http://s3-test:9000
+      AWS_ACCESS_KEY_ID: devaccess
+      AWS_SECRET_ACCESS_KEY: devsecret
       AWS_REGION: us-east-1
       GOFLAGS: -count=1
     volumes:
@@ -178,11 +172,11 @@ services:
       - go-mod-cache:/go/pkg/mod
       - go-build-cache:/root/.cache/go-build
     depends_on:
-      minio-test:
+      s3-test:
         condition: service_healthy
 
 volumes:
   go-mod-cache:
   go-build-cache:
-  minio-data:
+  s3-data:
   server-cache:

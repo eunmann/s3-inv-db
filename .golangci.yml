@@ -18,6 +18,8 @@ linters:
     # Framework-specific linters not used here.
     - ginkgolinter     # Ginkgo/Gomega
     - promlinter       # Prometheus metric naming
+    # Deprecated in v2.12 in favour of gomodguard_v2 (enabled by default: all).
+    - gomodguard
   settings:
     cyclop:
       max-complexity: 25
@@ -171,6 +173,13 @@ linters:
           - dupl
           - gochecknoglobals
           - gosmopolitan
+          # Table-driven tests repeat literal inputs by design.
+          - goconst
+      # Synthetic-data vocabularies (path segments, extensions) are lists
+      # of literals, not repeated magic values.
+      - path: internal/benchutil/
+        linters:
+          - goconst
       # context.TODO is fine in tests.
       - path: _test\.go
         text: "context.TODO"
@@ -179,17 +188,6 @@ linters:
         linters:
           - revive
         text: "dot-imports"
-      # InventoryReader is the canonical public API name.
-      - path: pkg/inventory/unified\.go
-        linters:
-          - revive
-        text: "InventoryReader"
-      # Zstd encoder/decoder pools must live at package scope to be shared
-      # across all run-file writers/readers; that cross-instance reuse is
-      # the entire point of the pool.
-      - path: pkg/extsort/zstd_pool\.go
-        linters:
-          - gochecknoglobals
       # Package "format" is an established public API; the var-naming rule
       # flags it as shadowing go/format, but renaming would break every
       # importer of pkg/format.
@@ -219,4 +217,8 @@ issues:
 run:
   timeout: 5m
   tests: true
+  # The S3 integration tests and internal/s3test are tagged `integration`; lint
+  # them too so they can't rot between Docker runs.
+  build-tags:
+    - integration
   go: "1.26"

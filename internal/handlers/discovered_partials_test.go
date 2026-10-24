@@ -102,7 +102,7 @@ func TestLoadDiscoveredRowPartial_FindError(t *testing.T) {
 		&fakeDiscoverer{findErr: errFakeS3Throttled},
 		&fakeBuilder{},
 	)
-	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
 	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	w := httptest.NewRecorder()
 	h.LoadDiscoveredRowPartial(w, req)
@@ -116,7 +116,7 @@ func TestLoadDiscoveredRowPartial_NoCompletedRuns(t *testing.T) {
 		&fakeDiscoverer{findResp: inventory.Inventory{SourceBucket: "b", Name: "i"}},
 		&fakeBuilder{},
 	)
-	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
 	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	w := httptest.NewRecorder()
 	h.LoadDiscoveredRowPartial(w, req)
@@ -134,7 +134,7 @@ func TestLoadDiscoveredRowPartial_AcceptsBuildError(t *testing.T) {
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
 		&fakeBuilder{buildErr: errFakeNetwork},
 	)
-	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
 	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	w := httptest.NewRecorder()
 	h.LoadDiscoveredRowPartial(w, req)
@@ -206,7 +206,7 @@ func TestLoadDiscoveredRowPartial_AlreadyLoadedShortCircuits(t *testing.T) {
 		t.Fatalf("hydrate: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
 	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	w := httptest.NewRecorder()
 	h.LoadDiscoveredRowPartial(w, req)
@@ -230,7 +230,7 @@ func TestInventoriesPage_PlaceholderRowOmitsHTMXRefresh(t *testing.T) {
 		&fakeDiscoverer{listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}, bucket: "dst"},
 		&fakeBuilder{},
 	)
-	req := httptest.NewRequest(http.MethodGet, "/inventories", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/inventories", http.NoBody)
 	w := httptest.NewRecorder()
 	h.InventoriesPage(w, req)
 	if w.Code != http.StatusOK {
@@ -253,7 +253,7 @@ func TestInventoriesPage_PlaceholderRowOmitsHTMXRefresh(t *testing.T) {
 
 func TestUnloadDiscoveredRowPartial_NotFound(t *testing.T) {
 	h := newDiscoveredHandlers(t, &fakeDiscoverer{}, &fakeBuilder{})
-	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/unload", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/partials/discovered/b/i/unload", http.NoBody)
 	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	w := httptest.NewRecorder()
 	h.UnloadDiscoveredRowPartial(w, req)
@@ -269,7 +269,7 @@ func TestUnloadDiscoveredRowPartial_NotFound(t *testing.T) {
 // partial route is the one HTMX templates must call.
 func TestPinDiscoveredRowPartial_NotFound(t *testing.T) {
 	h := newDiscoveredHandlers(t, &fakeDiscoverer{}, &fakeBuilder{})
-	req := httptest.NewRequest(http.MethodPost,
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"/partials/discovered/b/i/2026-05-13T03-00Z/pin",
 		strings.NewReader("pinned=true"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -284,7 +284,7 @@ func TestPinDiscoveredRowPartial_NotFound(t *testing.T) {
 func TestPinDiscoveredRowPartial_BadForm(t *testing.T) {
 	h := newDiscoveredHandlers(t, &fakeDiscoverer{}, &fakeBuilder{})
 	// Send a malformed form body (invalid url-encoded sequence).
-	req := httptest.NewRequest(http.MethodPost,
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"/partials/discovered/b/i/run/pin",
 		strings.NewReader("%ZZ"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -309,7 +309,7 @@ func TestDiscoveryEnabled_ReflectsWiring(t *testing.T) {
 
 func TestListDiscoveredAPI_DisabledReturns503(t *testing.T) {
 	h := newTestHandlers(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/discovered", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/discovered", http.NoBody)
 	w := httptest.NewRecorder()
 	h.ListDiscoveredAPI(w, req)
 	if w.Code != http.StatusServiceUnavailable {
@@ -325,7 +325,7 @@ func TestListDiscoveredAPI_DiscovererErrorReturns502(t *testing.T) {
 		&fakeDiscoverer{listErr: errFakeS3Throttled},
 		&fakeBuilder{},
 	)
-	req := httptest.NewRequest(http.MethodGet, "/api/discovered", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/discovered", http.NoBody)
 	w := httptest.NewRecorder()
 	h.ListDiscoveredAPI(w, req)
 	if w.Code != http.StatusBadGateway {
@@ -344,7 +344,7 @@ func TestListDiscoveredAPI_SuccessReturnsJSON(t *testing.T) {
 		}},
 		&fakeBuilder{},
 	)
-	req := httptest.NewRequest(http.MethodGet, "/api/discovered", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/discovered", http.NoBody)
 	w := httptest.NewRecorder()
 	h.ListDiscoveredAPI(w, req)
 	if w.Code != http.StatusOK {

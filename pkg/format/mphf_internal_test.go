@@ -294,7 +294,6 @@ func (b *testMPHFBuilder) Add(prefix string, pos uint64) {
 }
 
 func (b *testMPHFBuilder) Build(dir string) error { return b.sb.Build(dir) }
-func (b *testMPHFBuilder) Count() int             { return int(b.sb.Count()) }
 
 // Helper function to create unique prefix strings.
 func prefixFromInt(i int) string {

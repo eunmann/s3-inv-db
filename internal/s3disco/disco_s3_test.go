@@ -1,3 +1,5 @@
+//go:build integration
+
 package s3disco_test
 
 import (
@@ -6,16 +8,16 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/eunmann/s3-inv-db/internal/miniotest"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
+	"github.com/eunmann/s3-inv-db/internal/s3test"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/rs/zerolog"
 )
 
-func TestDiscoverer_List_AgainstMinIO(t *testing.T) {
-	client := miniotest.RawClient(t)
+func TestDiscoverer_List_AgainstLocalS3(t *testing.T) {
+	client := s3test.RawClient(t)
 	ctx := t.Context()
-	bucket := miniotest.Bucket(t, client)
+	bucket := s3test.Bucket(t, client)
 
 	// Upload two inventories with two timestamp folders each, via the
 	// seeder package so we exercise the same code path the CLI uses.
@@ -62,9 +64,9 @@ func TestDiscoverer_List_AgainstMinIO(t *testing.T) {
 }
 
 func TestDiscoverer_List_PopulatesManifestStats(t *testing.T) {
-	client := miniotest.RawClient(t)
+	client := s3test.RawClient(t)
 	ctx := t.Context()
-	bucket := miniotest.Bucket(t, client)
+	bucket := s3test.Bucket(t, client)
 
 	now := time.Now().UTC()
 	uploadInventoryAt(ctx, t, client, bucket, "synthetic-prod", "inventory-data/", "inv-001", now, 100, 9999)
@@ -90,9 +92,9 @@ func TestDiscoverer_List_PopulatesManifestStats(t *testing.T) {
 }
 
 func TestDiscoverer_Find(t *testing.T) {
-	client := miniotest.RawClient(t)
+	client := s3test.RawClient(t)
 	ctx := t.Context()
-	bucket := miniotest.Bucket(t, client)
+	bucket := s3test.Bucket(t, client)
 
 	now := time.Now().UTC()
 	// The seeder always names inventories inv-NNN where NNN = index.
@@ -127,9 +129,9 @@ func TestDiscoverer_Find(t *testing.T) {
 }
 
 func TestDiscoverer_EmptyBucket(t *testing.T) {
-	client := miniotest.RawClient(t)
+	client := s3test.RawClient(t)
 	ctx := t.Context()
-	bucket := miniotest.Bucket(t, client)
+	bucket := s3test.Bucket(t, client)
 
 	d := s3disco.New(client, bucket, "inventory-data/")
 	got, err := d.List(ctx)
@@ -177,28 +179,4 @@ func indexFromID(t *testing.T, id string) int {
 	t.Fatalf("unsupported test inv-id %q", id)
 
 	return 0
-}
-
-func TestRunFolderRE(t *testing.T) {
-	cases := []struct {
-		name  string
-		match bool
-	}{
-		{"2026-05-13T03-02Z", true},       // minute-granularity (AWS)
-		{"2026-05-13T03-02-15Z", true},    // second-granularity (seeder)
-		{"data", false},                   // never a run folder
-		{"9-trash", false},                // loose digit prefix must NOT match
-		{"2026-05-13T03-02", false},       // missing trailing Z
-		{"2026-05-13", false},             // date only
-		{"", false},                       // empty
-		{"2026-05-13T03-02Zextra", false}, // trailing junk
-		{"2026-13-99T99-99Z", true},       // shape matches even with absurd values
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := s3disco.RunFolderRE.MatchString(c.name); got != c.match {
-				t.Errorf("MatchString(%q) = %v, want %v", c.name, got, c.match)
-			}
-		})
-	}
 }

@@ -12,7 +12,7 @@ import (
 func TestGetTopAPI_RanksByBytes(t *testing.T) {
 	h := buildLoadedTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories/loaded/top?prefix=&depth=1&limit=3&by=bytes", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/loaded/top?prefix=&depth=1&limit=3&by=bytes", http.NoBody)
 	req = withURLParam(req, "id", "loaded")
 	w := httptest.NewRecorder()
 	h.GetTopAPI(w, req)
@@ -41,7 +41,7 @@ func TestGetTopAPI_RanksByBytes(t *testing.T) {
 func TestGetTopAPI_LimitClampedAndBy(t *testing.T) {
 	h := buildLoadedTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories/loaded/top?prefix=&depth=1&limit=999999&by=count", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/loaded/top?prefix=&depth=1&limit=999999&by=count", http.NoBody)
 	req = withURLParam(req, "id", "loaded")
 	w := httptest.NewRecorder()
 	h.GetTopAPI(w, req)
@@ -67,7 +67,7 @@ func TestGetTopAPI_LimitClampedAndBy(t *testing.T) {
 func TestGetTopAPI_BadBy(t *testing.T) {
 	h := buildLoadedTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories/loaded/top?by=garbage", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/loaded/top?by=garbage", http.NoBody)
 	req = withURLParam(req, "id", "loaded")
 	w := httptest.NewRecorder()
 	h.GetTopAPI(w, req)

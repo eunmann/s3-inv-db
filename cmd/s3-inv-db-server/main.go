@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strconv"
@@ -63,6 +64,7 @@ type serverFlags struct {
 	maxConcurrentJobs *int
 	autoLoadRetention *uint
 	queryBatchMax     *int
+	trustedProxies    *string
 }
 
 func defineFlags(fs *flag.FlagSet) *serverFlags {
@@ -81,6 +83,7 @@ func defineFlags(fs *flag.FlagSet) *serverFlags {
 		maxConcurrentJobs: fs.Int("max-concurrent-jobs", 1, "max jobs (auto-loads and manual builds) running at once"),
 		autoLoadRetention: fs.Uint("auto-load-retention-default", defaultAutoLoadRetention, "default per-config run-retention when a configuration sets none"),
 		queryBatchMax:     fs.Int("query-batch-max", 0, "max prefixes per batch stats request (0 = handler default)"),
+		trustedProxies:    fs.String("trusted-proxies", "", "comma-separated CIDRs/IPs of reverse proxies whose X-Forwarded-For is trusted (default: none; the TCP peer is the client)"),
 	}
 }
 
@@ -98,6 +101,10 @@ func resolveRuntimeOptions(f *serverFlags, fileCfg *appconfig.Config, explicit m
 	if err != nil {
 		return server.RuntimeOptions{}, fmt.Errorf("discovery_refresh_interval: %w", err)
 	}
+	trustedProxies, err := resolveTrustedProxies(*f.trustedProxies, explicit["trusted-proxies"], fileCfg)
+	if err != nil {
+		return server.RuntimeOptions{}, fmt.Errorf("trusted_proxies: %w", err)
+	}
 
 	return server.RuntimeOptions{
 		Addr:                     appconfig.PickFile(*f.addr, explicit["addr"], fileCfg, func(c *appconfig.Config) *string { return c.Addr }),
@@ -112,6 +119,7 @@ func resolveRuntimeOptions(f *serverFlags, fileCfg *appconfig.Config, explicit m
 		MaxConcurrentJobs:        appconfig.PickFile(*f.maxConcurrentJobs, explicit["max-concurrent-jobs"], fileCfg, func(c *appconfig.Config) *int { return c.MaxConcurrentJobs }),
 		AutoLoadRetentionDefault: appconfig.PickFile(uint32(*f.autoLoadRetention), explicit["auto-load-retention-default"], fileCfg, func(c *appconfig.Config) *uint32 { return c.AutoLoadRetentionDefault }),
 		QueryBatchMax:            appconfig.PickFile(*f.queryBatchMax, explicit["query-batch-max"], fileCfg, func(c *appconfig.Config) *int { return c.QueryBatchMax }),
+		TrustedProxies:           trustedProxies,
 		InventoryConfigs:         inventoryConfigsFromFile(fileCfg),
 		Logger:                   logger,
 	}, nil
@@ -177,6 +185,21 @@ func resolveDuration(flagVal time.Duration, explicit bool, cfg *appconfig.Config
 	}
 
 	return flagVal, nil
+}
+
+// resolveTrustedProxies applies flag > file > none precedence to the
+// trusted reverse-proxy list.
+func resolveTrustedProxies(flagVal string, explicit bool, cfg *appconfig.Config) ([]netip.Prefix, error) {
+	entries := strings.Split(flagVal, ",")
+	if !explicit && cfg != nil {
+		entries = cfg.TrustedProxies
+	}
+	prefixes, err := appconfig.ParsePrefixes(entries)
+	if err != nil {
+		return nil, fmt.Errorf("parse: %w", err)
+	}
+
+	return prefixes, nil
 }
 
 func inventoryConfigsFromFile(cfg *appconfig.Config) []server.InventoryConfigEntry {

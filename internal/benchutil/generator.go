@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"math/rand"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -153,7 +154,11 @@ func S3DeepPyramidConfig(numObjects int) GeneratorConfig {
 // Generator generates synthetic S3 inventory data.
 type Generator struct {
 	rng *rand.Rand
-	cfg GeneratorConfig
+	// tierIDs are cfg.TierDistribution's keys in ID order: map iteration
+	// order is random, which would make a seeded generator assign
+	// different tiers on every run.
+	tierIDs []tiers.ID
+	cfg     GeneratorConfig
 }
 
 // NewGenerator creates a new data generator.
@@ -164,8 +169,9 @@ func NewGenerator(cfg GeneratorConfig) *Generator {
 	}
 
 	return &Generator{
-		cfg: cfg,
-		rng: rand.New(rand.NewSource(seed)),
+		cfg:     cfg,
+		rng:     rand.New(rand.NewSource(seed)),
+		tierIDs: slices.Sorted(maps.Keys(cfg.TierDistribution)),
 	}
 }
 
@@ -368,29 +374,28 @@ func (g *Generator) generateTier() tiers.ID {
 	r := g.rng.Float64()
 	cumulative := 0.0
 
-	for tierID, prob := range g.cfg.TierDistribution {
-		cumulative += prob
+	for _, tierID := range g.tierIDs {
+		cumulative += g.cfg.TierDistribution[tierID]
 		if r < cumulative {
 			return tierID
 		}
 	}
 
-	// Default fallback
 	return tiers.Standard
 }
 
 // GenerateKeys returns just the keys for trie-building benchmarks.
 func GenerateKeys(numObjects int, shape string) []string {
 	switch shape {
-	case "deep_narrow":
+	case ShapeDeepNarrow:
 		return generateDeepNarrowKeys(numObjects)
-	case "wide_shallow":
+	case ShapeWideShallow:
 		return generateWideShallowKeys(numObjects)
-	case "balanced":
+	case ShapeBalanced:
 		return generateBalancedKeys(numObjects)
-	case "s3_realistic":
+	case ShapeS3Realistic:
 		return generateS3RealisticKeys(numObjects)
-	case "wide_single_level":
+	case ShapeWideSingleLevel:
 		return generateWideSingleLevelKeys(numObjects)
 	default:
 		return generateS3RealisticKeys(numObjects)
@@ -410,7 +415,7 @@ func generateDeepNarrowKeys(size int) []string {
 		prefix := ""
 		var prefixBuilder strings.Builder
 		for range depth {
-			prefixBuilder.WriteString(fmt.Sprintf("%c/", 'a'+byte(branch)))
+			fmt.Fprintf(&prefixBuilder, "%c/", 'a'+byte(branch))
 		}
 		prefix += prefixBuilder.String()
 		for f := 0; idx < size && f < filesPerLeaf; f++ {

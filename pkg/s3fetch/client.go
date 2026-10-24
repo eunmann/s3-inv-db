@@ -45,7 +45,7 @@ func NewClient(ctx context.Context) (*Client, error) {
 }
 
 // NewClientWithConfig creates a new S3 client from an explicit AWS
-// config (test harnesses use it to point at MinIO).
+// config (test harnesses use it to point at a local S3 server).
 func NewClientWithConfig(cfg aws.Config) *Client {
 	s3Client := s3.NewFromConfig(cfg, s3ClientOptions()...)
 

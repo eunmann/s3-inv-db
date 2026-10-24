@@ -1,0 +1,13 @@
+# A/B gate suite for scripts/bench-ab.sh (make bench-ab BASE=<ref>).
+# <tags> <package> <bench regex> <benchtime>
+#
+# Every entry does milliseconds-to-seconds of work per op so results are
+# stable across rounds. Run this for changes that can move performance;
+# add an entry when a change touches a hot path no entry covers.
+
+# Build path end to end: S3 download, parse, aggregate, spill, merge,
+# index build (seconds per op, reports peak_heap_B and disk_B).
+integration internal/loader ^BenchmarkPipeline$/^shape=(realistic|deep_pyramid)$/^n=1000000$ 1x
+
+# Read path over a 1M-object index (100k lookups or 1k parents per op).
+- pkg/indexread ^BenchmarkGate 2s

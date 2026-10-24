@@ -8,13 +8,18 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/jobs"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
 )
 
-// clientIPFromRequest returns the remote IP from RemoteAddr stripped
-// of its port. Best-effort: malformed inputs collapse to the literal
-// RemoteAddr so we never key on the empty string.
+// clientIPFromRequest returns the client IP the server's client-IP
+// middleware resolved, falling back to RemoteAddr without its port when
+// the middleware isn't installed (handler tests). Malformed inputs
+// collapse to the literal RemoteAddr so we never key on "".
 func clientIPFromRequest(r *http.Request) string {
+	if ip := middleware.GetClientIP(r.Context()); ip != "" {
+		return ip
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

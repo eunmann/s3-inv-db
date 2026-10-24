@@ -1,3 +1,5 @@
+//go:build integration
+
 package seeder_test
 
 import (
@@ -12,13 +14,13 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/eunmann/s3-inv-db/internal/miniotest"
+	"github.com/eunmann/s3-inv-db/internal/s3test"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/rs/zerolog"
 )
 
-func newMinIOS3Client(t *testing.T) *s3.Client {
+func newLocalS3Client(t *testing.T) *s3.Client {
 	t.Helper()
 	if os.Getenv(s3fetch.EnvEndpointURL) == "" {
 		t.Fatal("AWS_ENDPOINT_URL_S3 not set — run `make test`")
@@ -32,8 +34,8 @@ func newMinIOS3Client(t *testing.T) *s3.Client {
 }
 
 func TestUploadInventory_RoundTrip(t *testing.T) {
-	client := newMinIOS3Client(t)
-	bucket := miniotest.Bucket(t, client)
+	client := newLocalS3Client(t)
+	bucket := s3test.Bucket(t, client)
 	srcBucket := "synthetic-prod"
 	prefix := "inventory-data/"
 	stamp := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
@@ -89,8 +91,8 @@ func TestUploadInventory_RoundTrip(t *testing.T) {
 }
 
 func TestUploadInventory_DataFileURLPlaced(t *testing.T) {
-	client := newMinIOS3Client(t)
-	bucket := miniotest.Bucket(t, client)
+	client := newLocalS3Client(t)
+	bucket := s3test.Bucket(t, client)
 	stamp := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	_, err := seeder.UploadInventory(t.Context(), client, seeder.Config{
 		Target: seeder.TargetS3, Objects: 10, Preset: "small", Seed: 1,

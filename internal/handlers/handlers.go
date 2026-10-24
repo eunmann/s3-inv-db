@@ -155,10 +155,6 @@ func WithQueryBatchMax(n int) Option {
 	}
 }
 
-// MetricsRegistry exposes the registry so the server can mount /metrics
-// against the same instance handlers record into.
-func (h *Handlers) MetricsRegistry() *metrics.Registry { return h.reg }
-
 // DiscoveryEnabled reports whether the wired Discovery is usable.
 // Exposed so the server can gate discovery-dependent routes via middleware
 // rather than each handler duplicating the check.

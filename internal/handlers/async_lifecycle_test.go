@@ -60,7 +60,7 @@ func TestAsyncLifecycle_LoadSucceeds(t *testing.T) {
 		&slowBuilder{delay: 20 * time.Millisecond},
 	)
 
-	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
 	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	w := httptest.NewRecorder()
 	h.LoadDiscoveredRowPartial(w, req)
@@ -83,7 +83,7 @@ func TestAsyncLifecycle_Cancel(t *testing.T) {
 		&slowBuilder{delay: 5 * time.Second}, // long enough that Cancel arrives mid-build
 	)
 
-	req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
 	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	w := httptest.NewRecorder()
 	h.LoadDiscoveredRowPartial(w, req)
@@ -94,7 +94,7 @@ func TestAsyncLifecycle_Cancel(t *testing.T) {
 	// Wait for the job to leave queued (running state) before cancelling.
 	running := waitForJobInState(t, h.JobStoreForTest(), disc.CompositeID(), jobs.StateRunning)
 
-	cancelReq := httptest.NewRequest(http.MethodPost, "/api/jobs/"+string(running.ID)+"/cancel", http.NoBody)
+	cancelReq := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/jobs/"+string(running.ID)+"/cancel", http.NoBody)
 	cancelReq = chiCtxWithParams(cancelReq, "id", string(running.ID))
 	cw := httptest.NewRecorder()
 	h.CancelJob(cw, cancelReq)
@@ -119,7 +119,7 @@ func TestAsyncLifecycle_RowReflectsJobState(t *testing.T) {
 		&slowBuilder{delay: 5 * time.Second},
 	)
 
-	loadReq := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
+	loadReq := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
 	loadReq = chiCtxWithParams(loadReq, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	lw := httptest.NewRecorder()
 	h.LoadDiscoveredRowPartial(lw, loadReq)
@@ -127,7 +127,7 @@ func TestAsyncLifecycle_RowReflectsJobState(t *testing.T) {
 	// Wait for running so the row should render with Cancel.
 	running := waitForJobInState(t, h.JobStoreForTest(), disc.CompositeID(), jobs.StateRunning)
 
-	rowReq := httptest.NewRequest(http.MethodGet, "/partials/discovered/b/i", http.NoBody)
+	rowReq := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/discovered/b/i", http.NoBody)
 	rowReq = chiCtxWithParams(rowReq, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 	rw := httptest.NewRecorder()
 	h.DiscoveredRowPartial(rw, rowReq)
@@ -140,7 +140,7 @@ func TestAsyncLifecycle_RowReflectsJobState(t *testing.T) {
 	}
 
 	// Cancel and re-render — expect Retry to appear.
-	cancelReq := httptest.NewRequest(http.MethodPost, "/api/jobs/"+string(running.ID)+"/cancel", http.NoBody)
+	cancelReq := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/jobs/"+string(running.ID)+"/cancel", http.NoBody)
 	cancelReq = chiCtxWithParams(cancelReq, "id", string(running.ID))
 	h.CancelJob(httptest.NewRecorder(), cancelReq)
 	waitForJobInState(t, h.JobStoreForTest(), disc.CompositeID(), jobs.StateCancelled)
@@ -165,7 +165,7 @@ func TestAsyncLifecycle_DuplicateSubmitSkipped(t *testing.T) {
 	)
 
 	load := func() *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/partials/discovered/b/i/load", http.NoBody)
 		req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "2026-05-13T03-00Z")
 		w := httptest.NewRecorder()
 		h.LoadDiscoveredRowPartial(w, req)

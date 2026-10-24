@@ -403,11 +403,6 @@ func (w *DictPrefixWriter) SegmentCount() uint32 {
 	return w.interner.Count()
 }
 
-// PrefixCount returns the number of prefixes written so far.
-func (w *DictPrefixWriter) PrefixCount() uint64 {
-	return w.offsetsWriter.Count()
-}
-
 // DictPrefixReader reads prefixes from dictionary-encoded storage.
 //
 // The segment-ID array width is per-index: 1..4 bytes per ID,

@@ -64,7 +64,7 @@ func decodeStatsResponse(t *testing.T, body []byte) *handlers.StatsResponse {
 func TestGetStatsAPI_Success_RootPrefix(t *testing.T) {
 	h := buildLoadedTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/stats?inventory_id=loaded&prefix=", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/stats?inventory_id=loaded&prefix=", http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetStatsAPI(w, req)
 
@@ -85,7 +85,7 @@ func TestGetStatsAPI_Success_WithTiersAndCost(t *testing.T) {
 	h := buildLoadedTestHandlers(t)
 
 	url := "/api/stats?inventory_id=loaded&prefix=&show_tiers=true&estimate_cost=true"
-	req := httptest.NewRequest(http.MethodGet, url, http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, url, http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetStatsAPI(w, req)
 
@@ -108,7 +108,7 @@ func TestGetStatsAPI_Success_WithTiersAndCost(t *testing.T) {
 func TestGetInventoryStatsAPI_Success(t *testing.T) {
 	h := buildLoadedTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories/loaded/stats?prefix=", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/loaded/stats?prefix=", http.NoBody)
 	req = withURLParam(req, "id", "loaded")
 	w := httptest.NewRecorder()
 	h.GetInventoryStatsAPI(w, req)
@@ -122,7 +122,7 @@ func TestGetInventoryStatsAPI_Success(t *testing.T) {
 func TestGetDescendantsAPI_Success(t *testing.T) {
 	h := buildLoadedTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories/loaded/descendants?prefix=&depth=1", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/loaded/descendants?prefix=&depth=1", http.NoBody)
 	req = withURLParam(req, "id", "loaded")
 	w := httptest.NewRecorder()
 	h.GetDescendantsAPI(w, req)
@@ -149,7 +149,7 @@ func TestGetDescendantsAPI_Filter(t *testing.T) {
 	h := buildLoadedTestHandlers(t)
 
 	// First get unfiltered to know what to expect under a min_count cutoff.
-	baseReq := httptest.NewRequest(http.MethodGet, "/api/inventories/loaded/descendants?prefix=&depth=1", http.NoBody)
+	baseReq := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/loaded/descendants?prefix=&depth=1", http.NoBody)
 	baseReq = withURLParam(baseReq, "id", "loaded")
 	baseW := httptest.NewRecorder()
 	h.GetDescendantsAPI(baseW, baseReq)
@@ -159,7 +159,7 @@ func TestGetDescendantsAPI_Filter(t *testing.T) {
 	}
 
 	// Apply a min_count filter that should drop all single-object entries.
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories/loaded/descendants?prefix=&depth=1&min_count=2", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/loaded/descendants?prefix=&depth=1&min_count=2", http.NoBody)
 	req = withURLParam(req, "id", "loaded")
 	w := httptest.NewRecorder()
 	h.GetDescendantsAPI(w, req)
@@ -186,7 +186,7 @@ func TestGetDescendantsAPI_Filter(t *testing.T) {
 func TestBrowsePage_FormReflectsURLParams(t *testing.T) {
 	h := buildLoadedTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/browse?inventory_id=loaded&prefix=data/2024/", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/browse?inventory_id=loaded&prefix=data/2024/", http.NoBody)
 	w := httptest.NewRecorder()
 	h.BrowsePage(w, req)
 
@@ -206,7 +206,7 @@ func TestBrowsePage_PartialSuccess(t *testing.T) {
 	h := buildLoadedTestHandlers(t)
 
 	// HX-Request flips /browse into partial mode.
-	req := httptest.NewRequest(http.MethodGet, "/browse?inventory_id=loaded&prefix=", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/browse?inventory_id=loaded&prefix=", http.NoBody)
 	req.Header.Set("HX-Request", "true")
 	w := httptest.NewRecorder()
 	h.BrowsePage(w, req)
@@ -256,7 +256,7 @@ func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 
 	// Register via handler.
 	body := `{"id":"life","name":"Life","path":"` + indexPath + `"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/inventories", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/inventories", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.RegisterInventoryAPI(w, req)
 	if w.Code != http.StatusCreated {
@@ -264,7 +264,7 @@ func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 	}
 
 	// Load.
-	req = httptest.NewRequest(http.MethodPost, "/api/inventories/life/load", http.NoBody)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/inventories/life/load", http.NoBody)
 	req = withURLParam(req, "id", "life")
 	w = httptest.NewRecorder()
 	h.LoadInventoryAPI(w, req)
@@ -273,7 +273,7 @@ func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 	}
 
 	// Stats while loaded.
-	req = httptest.NewRequest(http.MethodGet, "/api/stats?inventory_id=life&prefix=", http.NoBody)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/stats?inventory_id=life&prefix=", http.NoBody)
 	w = httptest.NewRecorder()
 	h.GetStatsAPI(w, req)
 	if w.Code != http.StatusOK {
@@ -281,7 +281,7 @@ func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 	}
 
 	// Unload.
-	req = httptest.NewRequest(http.MethodPost, "/api/inventories/life/unload", http.NoBody)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/inventories/life/unload", http.NoBody)
 	req = withURLParam(req, "id", "life")
 	w = httptest.NewRecorder()
 	h.UnloadInventoryAPI(w, req)
@@ -290,7 +290,7 @@ func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 	}
 
 	// Stats after unload should 409.
-	req = httptest.NewRequest(http.MethodGet, "/api/stats?inventory_id=life&prefix=", http.NoBody)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/stats?inventory_id=life&prefix=", http.NoBody)
 	w = httptest.NewRecorder()
 	h.GetStatsAPI(w, req)
 	if w.Code != http.StatusConflict {
@@ -298,7 +298,7 @@ func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 	}
 
 	// Reload from unloaded state.
-	req = httptest.NewRequest(http.MethodPost, "/api/inventories/life/load", http.NoBody)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/inventories/life/load", http.NoBody)
 	req = withURLParam(req, "id", "life")
 	w = httptest.NewRecorder()
 	h.LoadInventoryAPI(w, req)
@@ -307,7 +307,7 @@ func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 	}
 
 	// Inventory row partial should now reflect "loaded".
-	req = httptest.NewRequest(http.MethodGet, "/partials/inventory-row/life", http.NoBody)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/inventory-row/life", http.NoBody)
 	req = withURLParam(req, "id", "life")
 	w = httptest.NewRecorder()
 	h.InventoryRowPartial(w, req)
@@ -324,7 +324,7 @@ func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 func TestLoadInventoryAPI_AlreadyLoaded(t *testing.T) {
 	h := buildLoadedTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/inventories/loaded/load", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/inventories/loaded/load", http.NoBody)
 	req = withURLParam(req, "id", "loaded")
 	w := httptest.NewRecorder()
 	h.LoadInventoryAPI(w, req)
@@ -345,7 +345,7 @@ func TestLoadInventoryAPI_BadPath(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/inventories/bad/load", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/inventories/bad/load", http.NoBody)
 	req = withURLParam(req, "id", "bad")
 	w := httptest.NewRecorder()
 	h.LoadInventoryAPI(w, req)
@@ -439,7 +439,7 @@ func TestManagerWithIndex_NoUseAfterCloseUnderUnload(t *testing.T) {
 
 func TestBrowseLevelAPI_Integration_HappyPath(t *testing.T) {
 	h := buildLoadedTestHandlers(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/browse?inventory_id=loaded&prefix=", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/browse?inventory_id=loaded&prefix=", http.NoBody)
 	w := httptest.NewRecorder()
 	h.BrowseLevelAPI(w, req)
 	if w.Code != http.StatusOK {
@@ -491,7 +491,7 @@ func TestCompareLevelAPI_Integration_HappyPath(t *testing.T) {
 		}
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/compare?from=src/inv/runA&to=src/inv/runB&prefix=&show_unchanged=true", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/compare?from=src/inv/runA&to=src/inv/runB&prefix=&show_unchanged=true", http.NoBody)
 	w := httptest.NewRecorder()
 	h.CompareLevelAPI(w, req)
 	if w.Code != http.StatusOK {

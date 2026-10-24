@@ -33,20 +33,18 @@ Ask yourself:
 
 If anything is unclear, ask the user to clarify before proceeding. Do not guess.
 
-## Step 2: Deep Research
+## Step 2: Research
 
-Apply the `deep-research` skill scoped to this request. Work through steps 1-5: broad repo scan, exhaustive feature inventory, parallel sub-agent deep-dives (one per feature), synthesis, and a parallelizable task plan.
-
-Stop before step 6 (spawn implementation subagents) — the output of `/create-issue` is an issue body, not code.
+Apply the `repo-research` skill scoped to this request, steps 1-5 (orient, locate, read, synthesize, plan). Stop before step 6 — the output of `/create-issue` is an issue body, not code.
 
 Scoping reminders for this repo:
 
-- **Index pipeline changes** — touch any of `pkg/extsort`, `pkg/triebuild`, `pkg/indexread`? Deep-dive all three; the on-disk format is a shared contract.
-- **Server changes** — touch handlers, server routes, templates, or the inventory `Manager`? Deep-dive every consumer of the changed types.
+- **Index format changes** — touch the writers (`pkg/extsort`, `pkg/format` builders) or the readers (`pkg/format` readers, `pkg/indexread`)? Read both sides; the on-disk format and its version are a shared contract.
+- **Server changes** — touch handlers, server routes, templates, the `inventory.Catalog`, jobs, auto-load or the budget planner? Read every consumer of the changed types.
 - **Tier / price changes** — `pkg/tiers` or `pkg/pricing`? Trace every caller (CLI, handlers, cost-estimate code paths).
 - **Always include** `Makefile`, `.golangci.yml`, `.air.toml`, `infra/Dockerfile*`, `infra/docker-compose.yml`, `docs/`, `cmd/*`.
 
-The goal is to leave no stone unturned. A good issue captures the full blast radius of a change so the implementer isn't surprised.
+A good issue captures the full blast radius of a change so the implementer isn't surprised.
 
 ## Step 3: Challenge the User's Design
 
@@ -80,7 +78,7 @@ This is the most important step. Before writing the issue, present your findings
 - Offer alternatives with clear trade-offs. Don't just say "this is wrong" — say "here's a better approach and why."
 - Ask for decisions when there are genuine forks: "Do you want A (simpler but limited) or B (more complex but extensible)?"
 
-Wait for the user to respond before proceeding. Iterate if needed — go back to `deep-research` if the conversation reveals new areas to explore.
+Wait for the user to respond before proceeding. Iterate if needed — go back to `repo-research` if the conversation reveals new areas to explore.
 
 ## Step 4: Write the Solution Plan
 

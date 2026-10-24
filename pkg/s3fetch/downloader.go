@@ -173,6 +173,7 @@ func (d *DownloadedObject) Close() error {
 	if err := d.file.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("close temp file: %w", err))
 	}
+	//nolint:gosec // G703: d.path is the name os.CreateTemp returned, not external input
 	if err := os.Remove(d.path); err != nil {
 		errs = append(errs, fmt.Errorf("remove temp file: %w", err))
 	}

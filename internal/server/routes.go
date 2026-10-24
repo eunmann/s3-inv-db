@@ -36,7 +36,7 @@ func (s *Server) setupRoutes() {
 	// recovered panic still results in an access-log line. sameOrigin
 	// blocks cross-origin mutating browser requests (CSRF).
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	r.Use(clientIPMiddleware(s.config.TrustedProxies))
 	r.Use(middleware.Recoverer)
 	for _, mw := range hlogChain(s.config.Logger) {
 		r.Use(mw)

@@ -145,9 +145,6 @@ func (w *TierStatsRowWriter) Add(counts, bytes *[tiers.NumTiers]uint64) error {
 	return nil
 }
 
-// Count returns the number of rows written so far.
-func (w *TierStatsRowWriter) Count() uint64 { return w.count }
-
 // Close flushes, rewrites the dense header with the final row count,
 // closes the file, and — if the sparse layout would be smaller for
 // the observed populated-slot distribution — converts the dense file

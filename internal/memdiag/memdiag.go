@@ -42,15 +42,6 @@ func contextWithShutdownTimeout() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), pprofShutdownTimeout)
 }
 
-// memoryDivergenceWarnRatio is the heap/budget ratio above which
-// LogWithBudget surfaces a warning that internal accounting has
-// drifted from the runtime's heap statistic.
-const memoryDivergenceWarnRatio = 2.0
-
-// budgetCheckMinBytes guards the divergence warning so it only fires
-// once the tracked budget is large enough to make the ratio meaningful.
-const budgetCheckMinBytes = 100 * 1024 * 1024
-
 // Config holds configuration for memory diagnostics.
 type Config struct {
 	Enabled      bool
@@ -271,51 +262,6 @@ func (t *Tracker) LogNow(reason string) {
 		Uint32("num_gc", stats.NumGC).
 		Float64("gc_cpu_pct", stats.GCCPUFraction*100).
 		Msg("memory stats")
-}
-
-// LogWithBudget logs memory stats along with budget comparison.
-func (t *Tracker) LogWithBudget(reason string, budgetInUse, budgetTotal uint64) {
-	if !t.config.Enabled {
-		return
-	}
-
-	stats := Read()
-	log := logging.L()
-
-	t.mu.Lock()
-	phase := t.phase
-	if stats.HeapAlloc > t.peakHeap {
-		t.peakHeap = stats.HeapAlloc
-	}
-	peakHeap := t.peakHeap
-	t.mu.Unlock()
-
-	// Calculate divergence between budget tracking and actual heap.
-	var divergence float64
-	if budgetInUse > 0 {
-		divergence = float64(stats.HeapAlloc) / float64(budgetInUse)
-	}
-
-	log.Debug().
-		Str("reason", reason).
-		Str("phase", phase).
-		Str("heap_alloc", FormatMB(stats.HeapAlloc)).
-		Str("heap_sys", FormatMB(stats.HeapSys)).
-		Str("budget_inuse", FormatMB(budgetInUse)).
-		Str("budget_total", FormatMB(budgetTotal)).
-		Float64("heap_vs_budget_ratio", divergence).
-		Str("peak_heap", FormatMB(peakHeap)).
-		Uint32("num_gc", stats.NumGC).
-		Msg("memory stats with budget")
-
-	// Warn if heap is significantly larger than budget tracking.
-	if divergence > memoryDivergenceWarnRatio && budgetInUse > budgetCheckMinBytes {
-		log.Warn().
-			Str("heap_alloc", FormatMB(stats.HeapAlloc)).
-			Str("budget_inuse", FormatMB(budgetInUse)).
-			Float64("ratio", divergence).
-			Msg("MEMORY WARNING: heap usage significantly exceeds budget tracking")
-	}
 }
 
 // logLoop runs the periodic logging.

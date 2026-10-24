@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"slices"
 	"sync"
 	"time"
 
@@ -177,8 +178,8 @@ func (r *Recorder) enrichOnStageEndLocked(ev events.Event, st events.StageTiming
 	if end.IsZero() {
 		end = r.nowFn()
 	}
-	for i := len(r.stages) - 1; i >= 0; i-- {
-		if r.stages[i].Name != target {
+	for i, stage := range slices.Backward(r.stages) {
+		if stage.Name != target {
 			continue
 		}
 		s := &r.stages[i]
@@ -222,8 +223,8 @@ func (r *Recorder) accumulateBatchLocked(stage events.Stage, bc events.BatchComm
 }
 
 func (r *Recorder) findInProgressIndexLocked(name string) int {
-	for i := len(r.stages) - 1; i >= 0; i-- {
-		if r.stages[i].Name == name && r.stages[i].InProgress() {
+	for i, st := range slices.Backward(r.stages) {
+		if st.Name == name && st.InProgress() {
 			return i
 		}
 	}

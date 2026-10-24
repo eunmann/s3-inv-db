@@ -160,11 +160,6 @@ func (b *DepthIndexBuilder) Close() error {
 	return errors.Join(errs...)
 }
 
-// MaxDepth returns the maximum depth seen.
-func (b *DepthIndexBuilder) MaxDepth() uint32 {
-	return b.maxDepth
-}
-
 // DepthIndex provides read access to depth posting lists.
 //
 // Thread Safety: DepthIndex is safe for concurrent read access from multiple

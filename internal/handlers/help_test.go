@@ -12,7 +12,7 @@ import (
 // content reshuffle should still hit these.
 func TestHelpPage_Renders(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/help", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/help", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.HelpPage(w, req)
 
@@ -61,7 +61,7 @@ func TestHelpPage_Renders(t *testing.T) {
 // updates the help page automatically.
 func TestHelpPage_StateChipsUseHelpers(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/help", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/help", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.HelpPage(w, req)
 	body := w.Body.String()

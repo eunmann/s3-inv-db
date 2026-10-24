@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -40,7 +41,8 @@ func hlogChain(base zerolog.Logger) []func(http.Handler) http.Handler {
 					Int("status", status).
 					Dur("duration", dur).
 					Int("size", size).
-					Str("remote_addr", r.RemoteAddr)
+					Str("remote_addr", r.RemoteAddr).
+					Str("client_ip", middleware.GetClientIP(r.Context()))
 			}
 			switch {
 			case status >= http.StatusInternalServerError:
@@ -52,6 +54,52 @@ func hlogChain(base zerolog.Logger) []func(http.Handler) http.Handler {
 			}
 		}),
 	}
+}
+
+// clientIPMiddleware records the client IP for middleware.GetClientIP.
+// Forwarding headers are only believed when the TCP peer is a configured
+// proxy: anyone can send X-Forwarded-For, so trusting it otherwise would
+// let a client pick its own IP (and dodge per-IP limits). Chi's
+// ClientIPFromXFF walks the header without checking the peer, hence the
+// per-request dispatch.
+func clientIPMiddleware(trusted []netip.Prefix) func(http.Handler) http.Handler {
+	if len(trusted) == 0 {
+		return middleware.ClientIPFromRemoteAddr
+	}
+	cidrs := make([]string, len(trusted))
+	for i, p := range trusted {
+		cidrs[i] = p.String()
+	}
+	fromXFF := middleware.ClientIPFromXFF(cidrs...)
+
+	return func(next http.Handler) http.Handler {
+		viaProxy, direct := fromXFF(next), middleware.ClientIPFromRemoteAddr(next)
+
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if peerIn(r.RemoteAddr, trusted) {
+				viaProxy.ServeHTTP(w, r)
+
+				return
+			}
+			direct.ServeHTTP(w, r)
+		})
+	}
+}
+
+// peerIn reports whether the host part of remoteAddr is inside any prefix.
+func peerIn(remoteAddr string, prefixes []netip.Prefix) bool {
+	ap, err := netip.ParseAddrPort(remoteAddr)
+	if err != nil {
+		return false
+	}
+	addr := ap.Addr().Unmap()
+	for _, p := range prefixes {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // isMutating reports whether a method writes state. Read methods bypass

@@ -8,12 +8,6 @@ func FormatETA(startedAt time.Time, done, total int64) string {
 	return formatETAAt(time.Now(), startedAt, done, total)
 }
 
-// FormatETAAt exposes the now-parameterised ETA helper for golden
-// tests that need a fixed clock.
-func FormatETAAt(now, startedAt time.Time, done, total int64) string {
-	return formatETAAt(now, startedAt, done, total)
-}
-
 // ProgressPct exposes progressPct for tests.
 func ProgressPct(done, total int64) int { return progressPct(done, total) }
 

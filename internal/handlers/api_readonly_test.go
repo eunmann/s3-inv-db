@@ -22,7 +22,7 @@ func TestListConfigurationsAPI_DiscoveryDisabled(t *testing.T) {
 			t.Fatalf("register %s: %v", id, err)
 		}
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/configurations", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/configurations", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.ListConfigurationsAPI(w, req)
 	if w.Code != http.StatusOK {
@@ -53,7 +53,7 @@ func TestListConfigurationsAPI_DiscoveryDisabled(t *testing.T) {
 
 func TestBrowseLevelAPI_RequiresInventoryID(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/browse", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/browse", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.BrowseLevelAPI(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -66,7 +66,7 @@ func TestBrowseLevelAPI_RequiresInventoryID(t *testing.T) {
 
 func TestBrowseLevelAPI_NotFound(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/browse?inventory_id=missing", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/browse?inventory_id=missing", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.BrowseLevelAPI(w, req)
 	if w.Code != http.StatusNotFound {
@@ -79,7 +79,7 @@ func TestBrowseLevelAPI_NotLoaded(t *testing.T) {
 	if err := f.mgr.Register(t.Context(), "inv1", "n", "/p"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/browse?inventory_id=inv1", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/browse?inventory_id=inv1", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.BrowseLevelAPI(w, req)
 	if w.Code != http.StatusConflict {
@@ -89,7 +89,7 @@ func TestBrowseLevelAPI_NotLoaded(t *testing.T) {
 
 func TestCompareLevelAPI_RequiresFromAndTo(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/compare", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/compare", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.CompareLevelAPI(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -99,7 +99,7 @@ func TestCompareLevelAPI_RequiresFromAndTo(t *testing.T) {
 
 func TestCompareLevelAPI_MismatchedConfigurations(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/compare?from=a/b/c&to=x/y/z", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/compare?from=a/b/c&to=x/y/z", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.CompareLevelAPI(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -118,7 +118,7 @@ func TestCompareLevelAPI_NotLoaded(t *testing.T) {
 	if err := f.mgr.Register(t.Context(), "a/b/2", "n2", "/p2"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/compare?from=a/b/1&to=a/b/2", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/compare?from=a/b/1&to=a/b/2", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.CompareLevelAPI(w, req)
 	if w.Code != http.StatusConflict {

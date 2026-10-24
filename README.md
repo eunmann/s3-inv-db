@@ -24,12 +24,12 @@ probe. See [docs/overview.md](docs/overview.md) for the pipeline and
 ```bash
 git clone https://github.com/eunmann/s3-inv-db.git
 cd s3-inv-db
-make dev        # hot-reload server + MinIO at http://localhost:8080
+make dev        # hot-reload server + local S3 at http://localhost:8080
 ```
 
 `make dev` is the supported dev loop —
 [`infra/docker-compose.yml`](infra/docker-compose.yml) brings up the
-server under Air alongside a MinIO instance preloaded by the seeder.
+server under Air alongside a local S3 server (versitygw).
 Full details and the test workflow in [docs/dev.md](docs/dev.md).
 
 ## Binaries
@@ -63,6 +63,7 @@ CLI flag → config file → default**. The seeder is flag-only.
   "auto_load_retention_default": 3,
   "discovery_refresh_interval": "1m",
   "query_batch_max": 1000,
+  "trusted_proxies": ["10.0.0.0/8"],
   "build_event_log": "/var/log/s3inv-build.jsonl",
   "inventories": [
     {"source": "prod-bucket", "name": "daily-inventory", "auto_load": true, "retention_count": 5}
@@ -71,7 +72,10 @@ CLI flag → config file → default**. The seeder is flag-only.
 ```
 
 `inventories[]` declares per-configuration auto-load + retention;
-entries are upserted into the state DB at startup. Per-run pin state
+entries are upserted into the state DB at startup.
+`trusted_proxies` (flag `--trusted-proxies`) lists the reverse proxies
+whose `X-Forwarded-For` is believed; by default none is, and the
+client IP is the TCP peer. Per-run pin state
 lives in the UI/API, not the file. The authoritative field list is
 the `Config` struct in `internal/appconfig/appconfig.go`.
 
@@ -93,7 +97,7 @@ reference: [docs/library-api.md](docs/library-api.md).
 - [Overview](docs/overview.md) — system design, data flow, server behaviour
 - [HTTP API](docs/http-api.md) — routes, JSON shapes, SSE
 - [CLI](docs/cli.md) — every subcommand and its flags
-- [Dev workflow](docs/dev.md) — Docker compose, Air, MinIO, tests
+- [Dev workflow](docs/dev.md) — Docker compose, Air, local S3, tests
 - [Seeding](docs/seeding.md) — synthetic-data generation
 - [Index format](docs/index-format.md) — on-disk file layout
 - [Library API](docs/library-api.md) — Go package reference

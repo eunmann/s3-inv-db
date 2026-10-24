@@ -17,11 +17,6 @@ type GridSpec struct {
 	Seed  int64
 }
 
-// Name returns a stable cell identifier used in NDJSON output.
-func (s GridSpec) Name() string {
-	return fmt.Sprintf("shape=%s/tier=%s/size=%s/n=%d", s.Shape, s.Tier.Name, s.Size.Name, s.N)
-}
-
 // GridGenerator emits FakeObject instances for a grid cell. Unlike
 // the original Generator it picks Key from a named shape preset and
 // pulls Size + TierID from the requested distributions.
@@ -110,7 +105,7 @@ type s3RealisticState struct{}
 
 func (g *GridGenerator) initKeyState(n int) {
 	switch g.shape {
-	case "deep_narrow":
+	case ShapeDeepNarrow:
 		const depth = 20
 		const numBranches = 26
 		g.keyState = &deepNarrowState{
@@ -118,19 +113,19 @@ func (g *GridGenerator) initKeyState(n int) {
 			numBranches:  numBranches,
 			filesPerLeaf: max(n/numBranches, 1),
 		}
-	case "wide_shallow":
+	case ShapeWideShallow:
 		const filesPerPrefix = 5
 		g.keyState = &wideShallowState{
 			filesPerPrefix: filesPerPrefix,
 			numPrefixes:    max(n/filesPerPrefix, 1),
 		}
-	case "balanced":
+	case ShapeBalanced:
 		const alphabetSize = 26
 		const balancedDepth = 3
 		g.keyState = &balancedState{branchFactor: alphabetSize, depth: balancedDepth}
-	case "wide_single_level":
+	case ShapeWideSingleLevel:
 		g.keyState = &wideSingleLevelState{}
-	case "s3_realistic":
+	case ShapeS3Realistic:
 		g.keyState = &s3RealisticState{}
 	default:
 		g.keyState = &s3RealisticState{}

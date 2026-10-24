@@ -62,9 +62,6 @@ func (a *u64DiskArray) Append(v uint64) error {
 	return nil
 }
 
-// Count returns the number of uint64 values appended so far.
-func (a *u64DiskArray) Count() uint64 { return a.count }
-
 // Freeze flushes pending writes and mmap's the file read-only. After
 // Freeze the array is no longer appendable; Slice returns the values.
 // Caller must invoke Close to release the mmap and remove the file.

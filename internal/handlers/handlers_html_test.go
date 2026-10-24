@@ -114,7 +114,7 @@ func assertElementCount(t *testing.T, doc *goquery.Document, selector string, ex
 func TestDashboard_EmptyState(t *testing.T) {
 	f := newTestFixture(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.Dashboard(w, req)
 
@@ -139,7 +139,7 @@ func TestDashboard_EmptyState(t *testing.T) {
 func TestInventoriesPage_EmptyState(t *testing.T) {
 	f := newTestFixture(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/inventories", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/inventories", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.InventoriesPage(w, req)
 
@@ -156,7 +156,7 @@ func TestInventoriesPage_EmptyState(t *testing.T) {
 func TestInventoriesPage_NoDiscoveryMessage(t *testing.T) {
 	f := newTestFixture(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/inventories", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/inventories", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.InventoriesPage(w, req)
 
@@ -182,7 +182,7 @@ func TestInventoriesPage_NoDiscoveryMessage(t *testing.T) {
 func TestBrowsePage_NoLoadedInventories(t *testing.T) {
 	f := newTestFixture(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/browse", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/browse", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.BrowsePage(w, req)
 
@@ -203,7 +203,7 @@ func TestBrowsePage_NoLoadedInventories(t *testing.T) {
 func TestBrowsePage_FormStructure(t *testing.T) {
 	f := newTestFixture(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/browse", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/browse", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.BrowsePage(w, req)
 
@@ -222,7 +222,7 @@ func TestBrowsePage_WithPendingInventory(t *testing.T) {
 	f := newTestFixture(t)
 	f.registerInventory(t, "inv1", "Test Inventory", "/path")
 
-	req := httptest.NewRequest(http.MethodGet, "/browse", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/browse", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.BrowsePage(w, req)
 
@@ -244,7 +244,7 @@ func TestInventoryRowPartial_PendingState(t *testing.T) {
 	f := newTestFixture(t)
 	f.registerInventory(t, "inv1", "Test Inventory", "/path")
 
-	req := httptest.NewRequest(http.MethodGet, "/partials/inventory-row/inv1", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/inventory-row/inv1", http.NoBody)
 	req = withChiContext(req, "inv1")
 	w := httptest.NewRecorder()
 
@@ -279,7 +279,7 @@ func TestInventoryRowPartial_PendingState(t *testing.T) {
 func TestInventoryRowPartial_NotFound(t *testing.T) {
 	f := newTestFixture(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/partials/inventory-row/nonexistent", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/inventory-row/nonexistent", http.NoBody)
 	req = withChiContext(req, "nonexistent")
 	w := httptest.NewRecorder()
 
@@ -300,8 +300,9 @@ func TestInventoryRowPartial_NotFound(t *testing.T) {
 // Browse-level partial tests. /browse content-negotiates on the
 // HX-Request header — these tests pin the htmx-partial path.
 
-func newHXRequest(method, target string) *http.Request {
-	req := httptest.NewRequest(method, target, http.NoBody)
+func newHXRequest(tb testing.TB, method, target string) *http.Request {
+	tb.Helper()
+	req := httptest.NewRequestWithContext(tb.Context(), method, target, http.NoBody)
 	req.Header.Set("HX-Request", "true")
 
 	return req
@@ -309,7 +310,7 @@ func newHXRequest(method, target string) *http.Request {
 
 func TestBrowsePage_PartialRequiresInventoryID(t *testing.T) {
 	f := newTestFixture(t)
-	req := newHXRequest(http.MethodGet, "/browse?prefix=data/")
+	req := newHXRequest(t, http.MethodGet, "/browse?prefix=data/")
 	w := httptest.NewRecorder()
 
 	f.h.BrowsePage(w, req)
@@ -320,7 +321,7 @@ func TestBrowsePage_PartialRequiresInventoryID(t *testing.T) {
 
 func TestBrowsePage_PartialInventoryNotFound(t *testing.T) {
 	f := newTestFixture(t)
-	req := newHXRequest(http.MethodGet, "/browse?inventory_id=nonexistent&prefix=test/")
+	req := newHXRequest(t, http.MethodGet, "/browse?inventory_id=nonexistent&prefix=test/")
 	w := httptest.NewRecorder()
 
 	f.h.BrowsePage(w, req)
@@ -332,7 +333,7 @@ func TestBrowsePage_PartialInventoryNotFound(t *testing.T) {
 func TestBrowsePage_PartialNotLoaded(t *testing.T) {
 	f := newTestFixture(t)
 	f.registerInventory(t, "inv1", "Test", "/path")
-	req := newHXRequest(http.MethodGet, "/browse?inventory_id=inv1&prefix=test/")
+	req := newHXRequest(t, http.MethodGet, "/browse?inventory_id=inv1&prefix=test/")
 	w := httptest.NewRecorder()
 
 	f.h.BrowsePage(w, req)
@@ -347,7 +348,7 @@ func TestBrowsePage_FullPageWithoutHXRequest(t *testing.T) {
 	// not a bare partial — that's the whole point of content
 	// negotiation. We just check the response includes the layout
 	// shell (the <title> tag).
-	req := httptest.NewRequest(http.MethodGet, "/browse", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/browse", http.NoBody)
 	w := httptest.NewRecorder()
 
 	f.h.BrowsePage(w, req)
@@ -364,7 +365,7 @@ func TestBrowsePage_FullPageWithoutHXRequest(t *testing.T) {
 // and must get the full layout, not the partial branch's 400.
 func TestBrowsePage_BoostedNavReturnsFullPage(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/browse", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/browse", http.NoBody)
 	req.Header.Set("HX-Request", "true")
 	req.Header.Set("HX-Boosted", "true")
 	w := httptest.NewRecorder()
@@ -384,7 +385,7 @@ func TestBrowsePage_BoostedNavReturnsFullPage(t *testing.T) {
 // keep <select> and <input> state in sync with the URL.
 func TestBrowsePage_FormIsPlainHTML(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/browse", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/browse", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.BrowsePage(w, req)
 
@@ -417,7 +418,7 @@ func TestBrowsePage_FormIsPlainHTML(t *testing.T) {
 // from htmx back/forward must get the full layout, not a bare partial.
 func TestBrowsePage_HistoryRestoreReturnsFullPage(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/browse", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/browse", http.NoBody)
 	req.Header.Set("HX-Request", "true")
 	req.Header.Set("HX-History-Restore-Request", "true")
 	w := httptest.NewRecorder()
@@ -441,7 +442,7 @@ type brokenRenderData struct{ Foo int }
 // partial HTML with a stale 200 + text/html.
 func TestRenderHTML_BufferedFailure(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody)
 	w := httptest.NewRecorder()
 
 	f.h.RenderHTMLForTest(w, req, "inventories.html", "render fail", brokenRenderData{Foo: 1})
@@ -458,7 +459,7 @@ func TestRenderHTML_BufferedFailure(t *testing.T) {
 // TestRenderHTMLPartial_BufferedFailure same contract for partial renders.
 func TestRenderHTMLPartial_BufferedFailure(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody)
 	w := httptest.NewRecorder()
 
 	f.h.RenderHTMLPartialForTest(w, req, "inventory_row.html", "render fail", brokenRenderData{Foo: 1})

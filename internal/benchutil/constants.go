@@ -12,11 +12,14 @@ func BenchmarkSizes() []int {
 	return []int{1000, 10_000, 100_000}
 }
 
-// ScalingSizes returns larger sizes for comprehensive scaling tests.
-// Used with S3INV_LONG_BENCH=1 environment variable.
-func ScalingSizes() []int {
-	return []int{10_000, 50_000, 100_000, 250_000, 500_000}
-}
+// Tree shape names accepted by GenerateKeys and NewGridGenerator.
+const (
+	ShapeDeepNarrow      = "deep_narrow"
+	ShapeWideShallow     = "wide_shallow"
+	ShapeBalanced        = "balanced"
+	ShapeS3Realistic     = "s3_realistic"
+	ShapeWideSingleLevel = "wide_single_level"
+)
 
 // TreeShapes returns the standard tree structures for benchmarking.
 // Each shape has different characteristics:
@@ -27,10 +30,10 @@ func ScalingSizes() []int {
 //   - wide_single_level: All files under root/childN/
 func TreeShapes() []string {
 	return []string{
-		"deep_narrow",
-		"wide_shallow",
-		"balanced",
-		"s3_realistic",
-		"wide_single_level",
+		ShapeDeepNarrow,
+		ShapeWideShallow,
+		ShapeBalanced,
+		ShapeS3Realistic,
+		ShapeWideSingleLevel,
 	}
 }

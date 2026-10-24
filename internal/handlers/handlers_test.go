@@ -24,7 +24,7 @@ func TestRegisterInventoryAPI(t *testing.T) {
 	h := newTestHandlers(t)
 
 	body := `{"id":"test","name":"Test Inventory","path":"/path/to/index"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/inventories", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/inventories", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -66,7 +66,7 @@ func TestRegisterInventoryAPI_MissingFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/api/inventories", strings.NewReader(tt.body))
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/inventories", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
@@ -85,7 +85,7 @@ func TestRegisterInventoryAPI_Duplicate(t *testing.T) {
 	body := `{"id":"test","name":"Test Inventory","path":"/path/to/index"}`
 
 	// First registration
-	req := httptest.NewRequest(http.MethodPost, "/api/inventories", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/inventories", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.RegisterInventoryAPI(w, req)
@@ -95,7 +95,7 @@ func TestRegisterInventoryAPI_Duplicate(t *testing.T) {
 	}
 
 	// Second registration (duplicate)
-	req = httptest.NewRequest(http.MethodPost, "/api/inventories", strings.NewReader(body))
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/inventories", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	h.RegisterInventoryAPI(w, req)
@@ -108,7 +108,7 @@ func TestRegisterInventoryAPI_Duplicate(t *testing.T) {
 func TestGetInventoryAPI_NotFound(t *testing.T) {
 	h := newTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories/nonexistent", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/nonexistent", http.NoBody)
 	w := httptest.NewRecorder()
 
 	// Set up chi context with URL param
@@ -149,7 +149,7 @@ func withURLParam(r *http.Request, key, value string) *http.Request {
 func registerInventory(t *testing.T, h *handlers.Handlers, id, name, path string) {
 	t.Helper()
 	body := `{"id":"` + id + `","name":"` + name + `","path":"` + path + `"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/inventories", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/inventories", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.RegisterInventoryAPI(w, req)
@@ -161,7 +161,7 @@ func registerInventory(t *testing.T, h *handlers.Handlers, id, name, path string
 func TestLoadInventoryAPI_NotFound(t *testing.T) {
 	h := newTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/inventories/nonexistent/load", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/inventories/nonexistent/load", http.NoBody)
 	req = withURLParam(req, "id", "nonexistent")
 	w := httptest.NewRecorder()
 
@@ -184,7 +184,7 @@ func TestLoadInventoryAPI_InvalidState(t *testing.T) {
 	// Let's test the conflict response is proper when state doesn't allow loading.
 
 	// Load once (will fail with error state due to invalid path)
-	req := httptest.NewRequest(http.MethodPost, "/api/inventories/test/load", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/inventories/test/load", http.NoBody)
 	req = withURLParam(req, "id", "test")
 	w := httptest.NewRecorder()
 	h.LoadInventoryAPI(w, req)
@@ -199,7 +199,7 @@ func TestLoadInventoryAPI_InvalidState(t *testing.T) {
 func TestUnloadInventoryAPI_NotFound(t *testing.T) {
 	h := newTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/inventories/nonexistent/unload", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/inventories/nonexistent/unload", http.NoBody)
 	req = withURLParam(req, "id", "nonexistent")
 	w := httptest.NewRecorder()
 
@@ -215,7 +215,7 @@ func TestUnloadInventoryAPI_NotLoaded(t *testing.T) {
 	registerInventory(t, h, "test", "Test", "/path")
 
 	// Try to unload a pending inventory - should fail with conflict
-	req := httptest.NewRequest(http.MethodPost, "/api/inventories/test/unload", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/inventories/test/unload", http.NoBody)
 	req = withURLParam(req, "id", "test")
 	w := httptest.NewRecorder()
 
@@ -230,7 +230,7 @@ func TestDeleteInventoryAPI_Success(t *testing.T) {
 	h := newTestHandlers(t)
 	registerInventory(t, h, "test", "Test", "/path")
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/inventories/test", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/api/inventories/test", http.NoBody)
 	req = withURLParam(req, "id", "test")
 	w := httptest.NewRecorder()
 
@@ -241,7 +241,7 @@ func TestDeleteInventoryAPI_Success(t *testing.T) {
 	}
 
 	// Verify it's gone
-	req = httptest.NewRequest(http.MethodGet, "/api/inventories/test", http.NoBody)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/test", http.NoBody)
 	req = withURLParam(req, "id", "test")
 	w = httptest.NewRecorder()
 	h.GetInventoryAPI(w, req)
@@ -254,7 +254,7 @@ func TestDeleteInventoryAPI_Success(t *testing.T) {
 func TestDeleteInventoryAPI_NotFound(t *testing.T) {
 	h := newTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/inventories/nonexistent", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/api/inventories/nonexistent", http.NoBody)
 	req = withURLParam(req, "id", "nonexistent")
 	w := httptest.NewRecorder()
 
@@ -268,7 +268,7 @@ func TestDeleteInventoryAPI_NotFound(t *testing.T) {
 func TestGetStatsAPI_MissingInventoryID(t *testing.T) {
 	h := newTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/stats?prefix=test/", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/stats?prefix=test/", http.NoBody)
 	w := httptest.NewRecorder()
 
 	h.GetStatsAPI(w, req)
@@ -285,7 +285,7 @@ func TestGetStatsAPI_MissingInventoryID(t *testing.T) {
 func TestGetStatsAPI_MissingPrefix(t *testing.T) {
 	h := newTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/stats?inventory_id=test", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/stats?inventory_id=test", http.NoBody)
 	w := httptest.NewRecorder()
 
 	h.GetStatsAPI(w, req)
@@ -305,7 +305,7 @@ func TestGetStatsAPI_MissingPrefix(t *testing.T) {
 func TestGetStatsAPI_EmptyPrefixAccepted(t *testing.T) {
 	h := newTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/stats?inventory_id=nope&prefix=", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/stats?inventory_id=nope&prefix=", http.NoBody)
 	w := httptest.NewRecorder()
 
 	h.GetStatsAPI(w, req)
@@ -319,7 +319,7 @@ func TestGetInventoryStatsAPI_EmptyPrefixAccepted(t *testing.T) {
 	h := newTestHandlers(t)
 	registerInventory(t, h, "test", "Test", "/path")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories/test/stats?prefix=", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/test/stats?prefix=", http.NoBody)
 	req = withURLParam(req, "id", "test")
 	w := httptest.NewRecorder()
 
@@ -334,7 +334,7 @@ func TestGetDescendantsAPI_EmptyPrefixAccepted(t *testing.T) {
 	h := newTestHandlers(t)
 	registerInventory(t, h, "test", "Test", "/path")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories/test/descendants?prefix=", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/test/descendants?prefix=", http.NoBody)
 	req = withURLParam(req, "id", "test")
 	w := httptest.NewRecorder()
 
@@ -348,7 +348,7 @@ func TestGetDescendantsAPI_EmptyPrefixAccepted(t *testing.T) {
 func TestGetStatsAPI_NotFound(t *testing.T) {
 	h := newTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/stats?inventory_id=nonexistent&prefix=test/", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/stats?inventory_id=nonexistent&prefix=test/", http.NoBody)
 	w := httptest.NewRecorder()
 
 	h.GetStatsAPI(w, req)
@@ -362,7 +362,7 @@ func TestGetStatsAPI_NotLoaded(t *testing.T) {
 	h := newTestHandlers(t)
 	registerInventory(t, h, "test", "Test", "/path")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/stats?inventory_id=test&prefix=data/", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/stats?inventory_id=test&prefix=data/", http.NoBody)
 	w := httptest.NewRecorder()
 
 	h.GetStatsAPI(w, req)
@@ -380,7 +380,7 @@ func TestGetInventoryStatsAPI_MissingPrefix(t *testing.T) {
 	h := newTestHandlers(t)
 	registerInventory(t, h, "test", "Test", "/path")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories/test/stats", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/test/stats", http.NoBody)
 	req = withURLParam(req, "id", "test")
 	w := httptest.NewRecorder()
 
@@ -394,7 +394,7 @@ func TestGetInventoryStatsAPI_MissingPrefix(t *testing.T) {
 func TestGetInventoryStatsAPI_NotFound(t *testing.T) {
 	h := newTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories/nonexistent/stats?prefix=test/", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/nonexistent/stats?prefix=test/", http.NoBody)
 	req = withURLParam(req, "id", "nonexistent")
 	w := httptest.NewRecorder()
 
@@ -409,7 +409,7 @@ func TestGetInventoryStatsAPI_NotLoaded(t *testing.T) {
 	h := newTestHandlers(t)
 	registerInventory(t, h, "test", "Test", "/path")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories/test/stats?prefix=data/", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/test/stats?prefix=data/", http.NoBody)
 	req = withURLParam(req, "id", "test")
 	w := httptest.NewRecorder()
 
@@ -424,7 +424,7 @@ func TestGetDescendantsAPI_MissingPrefix(t *testing.T) {
 	h := newTestHandlers(t)
 	registerInventory(t, h, "test", "Test", "/path")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories/test/descendants", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/test/descendants", http.NoBody)
 	req = withURLParam(req, "id", "test")
 	w := httptest.NewRecorder()
 
@@ -450,7 +450,7 @@ func TestGetDescendantsAPI_InvalidDepth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/api/inventories/test/descendants?prefix=data/&depth="+tt.depth, http.NoBody)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/test/descendants?prefix=data/&depth="+tt.depth, http.NoBody)
 			req = withURLParam(req, "id", "test")
 			w := httptest.NewRecorder()
 
@@ -467,7 +467,7 @@ func TestGetDescendantsAPI_InvalidMinCount(t *testing.T) {
 	h := newTestHandlers(t)
 	registerInventory(t, h, "test", "Test", "/path")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories/test/descendants?prefix=data/&min_count=abc", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/test/descendants?prefix=data/&min_count=abc", http.NoBody)
 	req = withURLParam(req, "id", "test")
 	w := httptest.NewRecorder()
 
@@ -486,7 +486,7 @@ func TestGetDescendantsAPI_InvalidMinBytes(t *testing.T) {
 	h := newTestHandlers(t)
 	registerInventory(t, h, "test", "Test", "/path")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/inventories/test/descendants?prefix=data/&min_bytes=abc", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/test/descendants?prefix=data/&min_bytes=abc", http.NoBody)
 	req = withURLParam(req, "id", "test")
 	w := httptest.NewRecorder()
 
@@ -504,7 +504,7 @@ func TestDeleteInventoryRowPartial_RemovesAndReturnsEmpty(t *testing.T) {
 	h := newTestHandlers(t)
 	registerInventory(t, h, "test", "Test", "/path")
 
-	req := httptest.NewRequest(http.MethodDelete, "/partials/inventories/test", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/partials/inventories/test", http.NoBody)
 	req = withURLParam(req, "id", "test")
 	w := httptest.NewRecorder()
 
@@ -528,7 +528,7 @@ func TestUnloadInventoryRowPartial_NotLoadedReturnsConflict(t *testing.T) {
 	h := newTestHandlers(t)
 	registerInventory(t, h, "test", "Test", "/path")
 
-	req := httptest.NewRequest(http.MethodPost, "/partials/inventories/test/unload", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/partials/inventories/test/unload", http.NoBody)
 	req = withURLParam(req, "id", "test")
 	w := httptest.NewRecorder()
 
@@ -542,7 +542,7 @@ func TestUnloadInventoryRowPartial_NotLoadedReturnsConflict(t *testing.T) {
 func TestLoadInventoryRowPartial_NotFound(t *testing.T) {
 	h := newTestHandlers(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/partials/inventories/missing/load", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/partials/inventories/missing/load", http.NoBody)
 	req = withURLParam(req, "id", "missing")
 	w := httptest.NewRecorder()
 

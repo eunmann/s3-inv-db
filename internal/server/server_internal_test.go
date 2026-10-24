@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,7 +67,7 @@ func TestServerAPIRoutes(t *testing.T) {
 	}
 
 	// Test API routes return JSON
-	req := httptest.NewRequest(http.MethodGet, "/api/configurations", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/configurations", http.NoBody)
 	w := httptest.NewRecorder()
 
 	srv.Router().ServeHTTP(w, req)
@@ -221,7 +223,7 @@ func TestSameOriginMiddleware_RejectsCrossOriginMutation(t *testing.T) {
 	}
 
 	// POST with cross-origin Referer must be rejected.
-	req := httptest.NewRequest(http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
 	req.Host = localhostHost
 	req.Header.Set("Origin", "http://attacker.example")
 	w := httptest.NewRecorder()
@@ -238,7 +240,7 @@ func TestSameOriginMiddleware_AllowsSameOriginMutation(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
 	req.Host = localhostHost
 	req.Header.Set("Origin", "http://localhost")
 	w := httptest.NewRecorder()
@@ -258,7 +260,7 @@ func TestSameOriginMiddleware_AllowsNoOrigin(t *testing.T) {
 	}
 
 	// No Origin and no Referer — typical curl/script request, allowed.
-	req := httptest.NewRequest(http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
 	req.Host = localhostHost
 	w := httptest.NewRecorder()
 	srv.Router().ServeHTTP(w, req)
@@ -274,7 +276,7 @@ func TestSameOriginMiddleware_DoesNotBlockReads(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://localhost/api/configurations", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://localhost/api/configurations", http.NoBody)
 	req.Host = localhostHost
 	req.Header.Set("Origin", "http://attacker.example")
 	w := httptest.NewRecorder()
@@ -322,7 +324,7 @@ func TestSameOriginMiddleware_ReadsBypassOriginCheck(t *testing.T) {
 	// HEAD/OPTIONS aren't in our middleware's isMutating set; this
 	// pins the contract that only POST/PUT/PATCH/DELETE are blocked.
 	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
-		req := httptest.NewRequest(method, "http://localhost/healthz", http.NoBody)
+		req := httptest.NewRequestWithContext(t.Context(), method, "http://localhost/healthz", http.NoBody)
 		req.Host = localhostHost
 		req.Header.Set("Origin", "http://attacker.example")
 		w := httptest.NewRecorder()
@@ -346,11 +348,11 @@ func TestHlogChain_LogsAfterPanic(t *testing.T) {
 	})
 	handler = middleware.Recoverer(handler)
 	// Apply hlog chain in reverse order (innermost first).
-	for i := len(chain) - 1; i >= 0; i-- {
-		handler = chain[i](handler)
+	for _, mw := range slices.Backward(chain) {
+		handler = mw(handler)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://localhost/", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://localhost/", http.NoBody)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -366,3 +368,34 @@ func (w *writeBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 func (w *writeBuffer) String() string { return string(w.b) }
+
+func TestClientIPMiddleware(t *testing.T) {
+	cases := []struct {
+		name    string
+		trusted []netip.Prefix
+		remote  string
+		xff     string
+		want    string
+	}{
+		{"no_proxy_ignores_spoofed_xff", nil, "203.0.113.9:4000", "1.2.3.4", "203.0.113.9"},
+		{"untrusted_peer_ignores_xff", []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, "203.0.113.9:4000", "1.2.3.4", "203.0.113.9"},
+		{"mapped_v4_peer_is_trusted", []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, "[::ffff:10.0.0.5]:4000", "198.51.100.7", "198.51.100.7"},
+		{"trusted_proxy_uses_xff", []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, "10.0.0.5:4000", "198.51.100.7", "198.51.100.7"},
+		{"trusted_proxy_skips_trusted_hops", []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, "10.0.0.5:4000", "198.51.100.7, 10.0.0.6", "198.51.100.7"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var got string
+			h := clientIPMiddleware(c.trusted)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				got = middleware.GetClientIP(r.Context())
+			}))
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody)
+			req.RemoteAddr = c.remote
+			req.Header.Set("X-Forwarded-For", c.xff)
+			h.ServeHTTP(httptest.NewRecorder(), req)
+			if got != c.want {
+				t.Errorf("client IP = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

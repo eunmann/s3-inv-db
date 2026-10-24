@@ -1,10 +1,13 @@
-// Package miniotest provides shared helpers for tests that hit MinIO
-// via docker compose's test profile. Every helper creates resources
-// scoped to t and registers cleanup on t.Cleanup.
-package miniotest
+//go:build integration
+
+// Package s3test provides shared helpers for integration tests that hit
+// the local S3 server from docker compose's test profile. Every helper
+// creates resources scoped to t and registers cleanup on t.Cleanup.
+package s3test
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -18,40 +21,56 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
 
-// minioConfig pairs the resolved aws.Config with the MinIO endpoint URL
-// loadMinIOConfig discovered. Returned together because every caller
+// localConfig pairs the resolved aws.Config with the local S3 endpoint URL
+// loadLocalConfig discovered. Returned together because every caller
 // needs both.
-type minioConfig struct {
+type localConfig struct {
 	cfg      aws.Config
 	endpoint string
 }
 
-// loadMinIOConfig builds the aws.Config used by both clients: us-east-1
-// region with the docker-compose MinIO static credentials. Fails the
-// test loudly if AWS_ENDPOINT_URL_S3 is missing so a misconfigured
-// runner can't silently skip.
-func loadMinIOConfig(tb testing.TB) minioConfig {
+// localEndpoint returns AWS_ENDPOINT_URL_S3, failing the test when it is
+// unset or names a real AWS host. Clients built from the ambient AWS
+// config would otherwise create buckets in whatever account the
+// developer's credentials point at.
+func localEndpoint(tb testing.TB) string {
 	tb.Helper()
 	endpoint := os.Getenv(s3fetch.EnvEndpointURL)
 	if endpoint == "" {
 		tb.Fatal("AWS_ENDPOINT_URL_S3 not set — run `make test`")
 	}
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Hostname() == "" {
+		tb.Fatalf("AWS_ENDPOINT_URL_S3=%q is not a URL", endpoint)
+	}
+	if host := strings.ToLower(u.Hostname()); strings.HasSuffix(host, ".amazonaws.com") || strings.HasSuffix(host, ".amazonaws.com.cn") {
+		tb.Fatalf("AWS_ENDPOINT_URL_S3=%q points at real AWS; integration tests only run against a local S3 server", endpoint)
+	}
+
+	return endpoint
+}
+
+// loadLocalConfig builds the aws.Config used by both clients: us-east-1
+// region with the docker-compose dev credentials.
+func loadLocalConfig(tb testing.TB) localConfig {
+	tb.Helper()
+	endpoint := localEndpoint(tb)
 	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("minioadmin", "minioadmin", "")),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("devaccess", "devsecret", "")),
 	)
 	if err != nil {
 		tb.Fatalf("aws config: %v", err)
 	}
 
-	return minioConfig{cfg: cfg, endpoint: endpoint}
+	return localConfig{cfg: cfg, endpoint: endpoint}
 }
 
-// RawClient returns an aws-sdk-go-v2 S3 client wired to the MinIO
+// RawClient returns an aws-sdk-go-v2 S3 client wired to the local S3
 // endpoint in AWS_ENDPOINT_URL_S3.
 func RawClient(tb testing.TB) *s3.Client {
 	tb.Helper()
-	mc := loadMinIOConfig(tb)
+	mc := loadLocalConfig(tb)
 
 	return s3.NewFromConfig(mc.cfg, func(o *s3.Options) {
 		o.UsePathStyle = true
@@ -59,10 +78,10 @@ func RawClient(tb testing.TB) *s3.Client {
 	})
 }
 
-// FetchClient is the project's *s3fetch.Client wired to MinIO.
+// FetchClient is the project's *s3fetch.Client wired to the local S3 server.
 func FetchClient(tb testing.TB) *s3fetch.Client {
 	tb.Helper()
-	mc := loadMinIOConfig(tb)
+	mc := loadLocalConfig(tb)
 
 	return s3fetch.NewClientWithConfig(mc.cfg)
 }
@@ -70,9 +89,11 @@ func FetchClient(tb testing.TB) *s3fetch.Client {
 // Bucket creates a uniquely-named bucket and registers cleanup that
 // empties and deletes it on test exit. Names are derived from tb.Name()
 // so the bucket is identifiable mid-test, with a timestamp suffix to
-// avoid collisions on re-runs.
+// avoid collisions on re-runs. The client may come from the ambient AWS
+// config (s3fetch.NewClient), so the endpoint guard runs here too.
 func Bucket(tb testing.TB, c *s3.Client) string {
 	tb.Helper()
+	localEndpoint(tb)
 	name := bucketName(tb.Name())
 	if _, err := c.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: aws.String(name)}); err != nil {
 		tb.Fatalf("CreateBucket %s: %v", name, err)
