@@ -75,10 +75,6 @@ func validInventoryID(id string) bool {
 	return id != "." && id != ".." && inventoryIDRE.MatchString(id)
 }
 
-// ErrInvalidName is returned by Find when the source or inventory name
-// falls outside the AWS naming charsets.
-var ErrInvalidName = errors.New("invalid source or inventory name")
-
 // NewFromS3URI builds a Discoverer from an s3:// URI like
 // "s3://bucket/optional/prefix/".
 func NewFromS3URI(client *s3.Client, uri string) (*Discoverer, error) {
@@ -153,7 +149,7 @@ func (d *Discoverer) Find(ctx context.Context, srcBucket, invID, run string) (in
 		return inventory.Inventory{}, errEmptyID
 	}
 	if !validSourceName(srcBucket) || !validInventoryID(invID) {
-		return inventory.Inventory{}, fmt.Errorf("%w: %q/%q", ErrInvalidName, srcBucket, invID)
+		return inventory.Inventory{}, fmt.Errorf("%w: %q/%q", inventory.ErrInvalidName, srcBucket, invID)
 	}
 	invPrefix := d.prefix + srcBucket + "/" + invID + "/"
 	switch {
@@ -167,20 +163,16 @@ func (d *Discoverer) Find(ctx context.Context, srcBucket, invID, run string) (in
 		}
 		run = runs[0]
 	case !runFolderRE.MatchString(run):
-		return inventory.Inventory{}, fmt.Errorf("%w: %s/%s/%s", ErrRunNotFound, srcBucket, invID, run)
+		return inventory.Inventory{}, fmt.Errorf("%w: %s/%s/%s", inventory.ErrRunNotFound, srcBucket, invID, run)
 	}
 	entry := runEntry(srcBucket, invID, invPrefix, run)
 	err := d.describeRun(ctx, &entry)
 	if nsk := (*types.NoSuchKey)(nil); errors.As(err, &nsk) {
-		return inventory.Inventory{}, fmt.Errorf("%w: %s/%s/%s", ErrRunNotFound, srcBucket, invID, run)
+		return inventory.Inventory{}, fmt.Errorf("%w: %s/%s/%s", inventory.ErrRunNotFound, srcBucket, invID, run)
 	}
 
 	return entry, nil
 }
-
-// ErrRunNotFound is returned by Find when the requested run isn't
-// present under the (srcBucket, invID) configuration.
-var ErrRunNotFound = errors.New("run not found")
 
 var errEmptyID = errors.New("source bucket and inventory id are required")
 

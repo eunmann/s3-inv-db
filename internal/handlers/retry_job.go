@@ -52,8 +52,7 @@ func (h *Handlers) RetryJob(w http.ResponseWriter, r *http.Request) {
 	}
 	disc, err := h.discovery.Find(r.Context(), parts.Source, parts.Inventory, parts.Run)
 	if err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Stringer("inv", prev.InventoryID).Msg("rediscover inventory for retry")
-		http.Error(w, "rediscover inventory", http.StatusBadGateway)
+		respondFindError(w, r, err, prev.InventoryID.String(), "rediscover inventory")
 
 		return
 	}

@@ -3,6 +3,7 @@ package handlers_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -429,5 +430,50 @@ func TestDiscoveredRowPartial_RendersFromSnapshot(t *testing.T) {
 	render(newRun)
 	if got := fake.findCalls.Load(); got != 1 {
 		t.Errorf("Find calls for an uncached run = %d, want 1", got)
+	}
+}
+
+// A lookup refused for a bad name or a missing run is the client's
+// request, not an S3 failure: it was answered 502 and logged as an
+// error, which read like an outage.
+func TestDiscoveredFindErrors_MapToClientStatuses(t *testing.T) {
+	const run = "2026-05-13T03-00Z"
+	cases := []struct {
+		err  error
+		want int
+	}{
+		{fmt.Errorf("find: %w: %q/%q", inventory.ErrInvalidName, "Bad_Src", "i"), http.StatusBadRequest},
+		{fmt.Errorf("find: %w: b/i/%s", inventory.ErrRunNotFound, run), http.StatusNotFound},
+		{errFakeS3Throttled, http.StatusBadGateway},
+	}
+	for _, tc := range cases {
+		h := newDiscoveredHandlers(t, &fakeDiscoverer{findErr: tc.err, bucket: "dst"}, &fakeBuilder{})
+		calls := map[string]func(http.ResponseWriter, *http.Request){
+			"load":   h.LoadDiscoveredRowPartial,
+			"render": h.DiscoveredRowPartial,
+		}
+		for name, call := range calls {
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/partials/discovered/b/i/"+run, http.NoBody)
+			req = chiCtxWithParams(req, "src", "b", "id", "i", "run", run)
+			w := httptest.NewRecorder()
+			call(w, req)
+			if w.Code != tc.want {
+				t.Errorf("%s with %v: status = %d, want %d", name, tc.err, w.Code, tc.want)
+			}
+		}
+
+		composite := inventory.ID("b/i/" + run)
+		seedInventoryRow(t, h.ManagerForTest(), composite)
+		prev := jobs.Job{ID: "j-fail", InventoryID: composite, Kind: jobs.KindBuild, State: jobs.StateFailed}
+		if err := h.JobStoreForTest().Upsert(t.Context(), prev); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/jobs/j-fail/retry", http.NoBody)
+		req = chiCtxWithParams(req, "id", "j-fail")
+		w := httptest.NewRecorder()
+		h.RetryJob(w, req)
+		if w.Code != tc.want {
+			t.Errorf("retry with %v: status = %d, want %d", tc.err, w.Code, tc.want)
+		}
 	}
 }

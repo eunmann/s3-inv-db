@@ -11,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/s3test"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
@@ -157,10 +158,10 @@ func TestDiscoverer_Find(t *testing.T) {
 	if _, err := d.Find(ctx, "", "inv-001", ""); err == nil {
 		t.Error("Find with empty src should error")
 	}
-	if _, err := d.Find(ctx, "src-a", "inv-001", "2099-01-01T00-00Z"); !errors.Is(err, s3disco.ErrRunNotFound) {
+	if _, err := d.Find(ctx, "src-a", "inv-001", "2099-01-01T00-00Z"); !errors.Is(err, inventory.ErrRunNotFound) {
 		t.Errorf("Find with unknown run: err = %v, want ErrRunNotFound", err)
 	}
-	if _, err := d.Find(ctx, "src-a", "inv-001", "data"); !errors.Is(err, s3disco.ErrRunNotFound) {
+	if _, err := d.Find(ctx, "src-a", "inv-001", "data"); !errors.Is(err, inventory.ErrRunNotFound) {
 		t.Errorf("Find with non-run folder: err = %v, want ErrRunNotFound", err)
 	}
 }

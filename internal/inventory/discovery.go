@@ -193,6 +193,14 @@ const DefaultIndexRatio = 0.30
 // to be configured.
 var ErrDiscoveryDisabled = errors.New("discovery not configured")
 
+// ErrRunNotFound is returned by Discoverer.Find when the requested run
+// isn't present under the (source, inventory) configuration.
+var ErrRunNotFound = errors.New("run not found")
+
+// ErrInvalidName is returned by Discoverer.Find when the source or
+// inventory name falls outside the AWS naming charsets.
+var ErrInvalidName = errors.New("invalid source or inventory name")
+
 // ErrNoRun is returned by Prepare/Load when the supplied Inventory has
 // an empty Run — the operation needs a specific timestamped run to
 // register or build. Callers wrap it with the config ID for context.

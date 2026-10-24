@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
@@ -226,7 +227,7 @@ func TestFind_RejectsInvalidNamesWithoutListing(t *testing.T) {
 		{"src", "inv[alert(1)]"},
 		{"Src_Bad", "inv-001"},
 	} {
-		if _, err := d.Find(t.Context(), c.src, c.inv, ""); !errors.Is(err, s3disco.ErrInvalidName) {
+		if _, err := d.Find(t.Context(), c.src, c.inv, ""); !errors.Is(err, inventory.ErrInvalidName) {
 			t.Errorf("Find(%q, %q) err = %v, want ErrInvalidName", c.src, c.inv, err)
 		}
 	}
