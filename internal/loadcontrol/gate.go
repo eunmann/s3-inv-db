@@ -11,6 +11,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/budget"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
+	"github.com/rs/zerolog"
 )
 
 // tokenCounter is incremented per Load to guarantee unique reservation
@@ -28,15 +29,22 @@ func (e *BudgetRefusedError) Error() string {
 	return "load refused by disk-budget planner: " + e.Plan.Refusal
 }
 
+// CacheRemover deletes an evicted run's on-disk index. Nil when the
+// server has no cache (no --s3-source).
+type CacheRemover func(id inventory.ID) error
+
 // Gate orchestrates one load lifecycle.
 type Gate struct {
-	manager *inventory.Catalog
-	tracker *budget.Tracker
-	planner *budget.Planner
+	manager     *inventory.Catalog
+	tracker     *budget.Tracker
+	planner     *budget.Planner
+	removeCache CacheRemover
 }
 
-func New(manager *inventory.Catalog, tracker *budget.Tracker, planner *budget.Planner) *Gate {
-	return &Gate{manager: manager, tracker: tracker, planner: planner}
+// New constructs a Gate. The tracker's used bytes must come from the
+// catalog (Catalog.LoadedBytes); the gate never adjusts them itself.
+func New(manager *inventory.Catalog, tracker *budget.Tracker, planner *budget.Planner, removeCache CacheRemover) *Gate {
+	return &Gate{manager: manager, tracker: tracker, planner: planner, removeCache: removeCache}
 }
 
 // Load plans, evicts, reserves, builds, releases. Returns
@@ -57,15 +65,21 @@ func (g *Gate) Load(ctx context.Context, id inventory.ID, build inventory.BuildF
 	}
 
 	for _, victim := range plan.Evict {
-		info, ok := g.manager.Get(victim)
-		if !ok {
+		err := g.manager.EvictForBudget(ctx, victim)
+		switch {
+		case errors.Is(err, inventory.ErrInvalidState), errors.Is(err, inventory.ErrNotFound):
+			// Already unloaded or removed by someone else; nothing to free.
 			continue
-		}
-		prevBytes := info.IndexBytes
-		if err := g.manager.EvictForBudget(ctx, victim); err != nil && !errors.Is(err, inventory.ErrInvalidState) {
+		case err != nil:
 			return fmt.Errorf("evict %s: %w", victim, err)
 		}
-		g.tracker.Remove(prevBytes)
+		// The eviction only frees disk once the cache is gone; leaving it
+		// would let unloaded runs pile up outside the budget.
+		if g.removeCache != nil {
+			if err := g.removeCache(victim); err != nil {
+				zerolog.Ctx(ctx).Warn().Err(err).Stringer("id", victim).Msg("remove evicted run's cache")
+			}
+		}
 	}
 
 	token := fmt.Sprintf("%s-%d", id, tokenCounter.Add(1))
@@ -87,10 +101,6 @@ func (g *Gate) Load(ctx context.Context, id inventory.ID, build inventory.BuildF
 	}
 	if loadErr != nil {
 		return fmt.Errorf("load %s: %w", id, loadErr)
-	}
-
-	if info, ok := g.manager.Get(id); ok && info.IndexBytes > 0 {
-		g.tracker.Add(info.IndexBytes)
 	}
 
 	return nil

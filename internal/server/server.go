@@ -104,14 +104,18 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("create renderer: %w", err)
 	}
 
-	tracker := budget.New(cfg.MaxIndexDisk, cfg.IndexHeadroomBytes)
-	planner := budget.NewPlanner(tracker, retentionLookup(stores.config, cfg.AutoLoadRetentionDefault))
-	gate := loadcontrol.New(stores.catalog, tracker, planner)
-
-	discovery, bldr, err := newDiscovery(ctx, cfg, stores.catalog, gate)
-	if err != nil {
-		return nil, err
+	var wiring *discoveryWiring
+	if cfg.S3Source != "" {
+		w, err := newDiscoveryWiring(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		wiring = &w
 	}
+	tracker := budget.New(cfg.MaxIndexDisk, cfg.IndexHeadroomBytes, stores.catalog.LoadedBytes)
+	planner := budget.NewPlanner(tracker, retentionLookup(stores.config, cfg.AutoLoadRetentionDefault))
+	gate := loadcontrol.New(stores.catalog, tracker, planner, cacheRemover(wiring))
+	discovery, bldr := newDiscovery(cfg, stores.catalog, gate, wiring)
 
 	h := handlers.New(
 		stores.catalog, renderer, cfg.PriceTable,
@@ -146,7 +150,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	// values (logger, request id) but drops cancellation.
 	startupCtx := context.WithoutCancel(ctx)
 	s.recover(startupCtx, cfg.Logger)
-	s.backfillTracker(startupCtx, cfg.Logger)
+	s.backfillIndexSizes(startupCtx, cfg.Logger)
 
 	return s, nil
 }
@@ -183,13 +187,28 @@ func newStores(cfg Config) (serverStores, error) {
 
 // newDiscovery wires the S3-side of the server. Returns a disabled
 // Discovery (and nil loader) when --s3-source is unset.
-func newDiscovery(ctx context.Context, cfg Config, catalog *inventory.Catalog, gate *loadcontrol.Gate) (*inventory.Discovery, *loader.Loader, error) {
-	if cfg.S3Source == "" {
-		return inventory.NewDiscovery(catalog), nil, nil
+// CacheRemover deletes an evicted run's cache dir; nil without S3 wiring.
+func cacheRemover(wiring *discoveryWiring) loadcontrol.CacheRemover {
+	if wiring == nil {
+		return nil
 	}
-	wiring, err := newDiscoveryWiring(ctx, cfg)
-	if err != nil {
-		return nil, nil, err
+
+	return func(id inventory.ID) error {
+		p := id.Split()
+		if !p.OK {
+			return fmt.Errorf("%w: %q", errBadInventoryID, id)
+		}
+		if err := wiring.Loader.RemoveCache(inventory.CacheKey{SourceBucket: p.Source, InventoryID: p.Inventory, Run: p.Run}); err != nil {
+			return fmt.Errorf("remove cache: %w", err)
+		}
+
+		return nil
+	}
+}
+
+func newDiscovery(cfg Config, catalog *inventory.Catalog, gate *loadcontrol.Gate, wiring *discoveryWiring) (*inventory.Discovery, *loader.Loader) {
+	if wiring == nil {
+		return inventory.NewDiscovery(catalog), nil
 	}
 	sizer := loadcontrol.NewManifestSizer(wiring.Client)
 	disc := inventory.NewDiscovery(catalog,
@@ -202,7 +221,7 @@ func newDiscovery(ctx context.Context, cfg Config, catalog *inventory.Catalog, g
 		Uint64("max_index_disk_bytes", cfg.MaxIndexDisk).
 		Msg("discovery + budget configured")
 
-	return disc, wiring.Loader, nil
+	return disc, wiring.Loader
 }
 
 func buildHandlerOptions(cfg Config, discovery *inventory.Discovery, bldr *loader.Loader) []handlers.Option {
@@ -269,40 +288,38 @@ func retentionLookup(store *inventory.ConfigStore, fallback uint32) budget.Reten
 	}
 }
 
-// backfillTracker walks every currently-loaded inventory and attributes
-// its on-disk size to the budget tracker so post-restart eviction
-// decisions see an accurate baseline.
-func (s *Server) backfillTracker(ctx context.Context, logger zerolog.Logger) {
+// backfillIndexSizes records the on-disk size of loaded inventories
+// whose size was never measured (indexes from before sizes were
+// persisted), so the budget tracker — which sums loaded sizes from the
+// catalog — sees an accurate baseline after a restart.
+func (s *Server) backfillIndexSizes(ctx context.Context, logger zerolog.Logger) {
 	if s.bldr == nil {
 		return
 	}
 	list := s.manager.List()
 	for i := range list {
 		info := &list[i]
-		if info.State != inventory.StateLoaded {
+		if info.State != inventory.StateLoaded || info.IndexBytes > 0 {
 			continue
 		}
-		bytes := info.IndexBytes
-		if bytes == 0 {
-			p := info.ID.Split()
-			if !p.OK {
-				continue
-			}
-			dir := s.bldr.CacheDirFor(inventory.CacheKey{
-				SourceBucket: p.Source,
-				InventoryID:  p.Inventory,
-				Run:          p.Run,
-			})
-			if measured, err := inventory.MeasureDir(ctx, dir); err == nil {
-				bytes = measured
-				updated := *info
-				updated.IndexBytes = bytes
-				_ = s.invStore.Upsert(ctx, updated)
-			} else {
-				logger.Warn().Stringer("id", info.ID).Err(err).Msg("backfill index size")
-			}
+		p := info.ID.Split()
+		if !p.OK {
+			continue
 		}
-		s.tracker.Add(bytes)
+		dir := s.bldr.CacheDirFor(inventory.CacheKey{
+			SourceBucket: p.Source,
+			InventoryID:  p.Inventory,
+			Run:          p.Run,
+		})
+		measured, err := inventory.MeasureDir(ctx, dir)
+		if err != nil {
+			logger.Warn().Stringer("id", info.ID).Err(err).Msg("backfill index size")
+
+			continue
+		}
+		if err := s.manager.SetIndexBytes(ctx, info.ID, measured); err != nil {
+			logger.Warn().Stringer("id", info.ID).Err(err).Msg("record backfilled index size")
+		}
 	}
 }
 
@@ -361,8 +378,9 @@ func (s *Server) recover(ctx context.Context, logger zerolog.Logger) {
 }
 
 var (
-	errEmptyCacheDir = errors.New("CacheDir is required when S3Source is set")
-	errNoDB          = errors.New("server.Config.DB is required")
+	errEmptyCacheDir  = errors.New("CacheDir is required when S3Source is set")
+	errNoDB           = errors.New("server.Config.DB is required")
+	errBadInventoryID = errors.New("not a source/inventory/run id")
 )
 
 // s3StartupTimeout caps how long s3fetch.NewClient may spend doing

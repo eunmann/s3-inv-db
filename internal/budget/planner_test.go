@@ -28,8 +28,7 @@ func loaded(id string, bytes uint64, loadedAt, accessedAt time.Time, pinned bool
 }
 
 func TestPlanner_FitsWithoutEviction(t *testing.T) {
-	tr := budget.New(1000, 0)
-	tr.Add(100)
+	tr := budget.New(1000, 0, fixedUsed(100))
 	p := budget.NewPlanner(tr, nil)
 	in := budget.Input{
 		Target:        "src/inv/runC",
@@ -49,9 +48,7 @@ func TestPlanner_FitsWithoutEviction(t *testing.T) {
 }
 
 func TestPlanner_EvictsWithinConfigToRespectRetention(t *testing.T) {
-	tr := budget.New(1000, 0)
-	tr.Add(100)
-	tr.Add(100)
+	tr := budget.New(1000, 0, fixedUsed(200))
 	cfg := fakeConfig{"src/inv": 2}
 	p := budget.NewPlanner(tr, cfg.Retention)
 	in := budget.Input{
@@ -75,9 +72,7 @@ func TestPlanner_EvictsWithinConfigToRespectRetention(t *testing.T) {
 }
 
 func TestPlanner_GlobalLRUWhenStillOverBudget(t *testing.T) {
-	tr := budget.New(1000, 0)
-	tr.Add(400)
-	tr.Add(400)
+	tr := budget.New(1000, 0, fixedUsed(800))
 	cfg := fakeConfig{"alpha/inv": 5, "beta/inv": 5} // retention won't force eviction
 	p := budget.NewPlanner(tr, cfg.Retention)
 	in := budget.Input{
@@ -102,8 +97,7 @@ func TestPlanner_GlobalLRUWhenStillOverBudget(t *testing.T) {
 }
 
 func TestPlanner_RefusesWhenAllPinned(t *testing.T) {
-	tr := budget.New(500, 0)
-	tr.Add(400)
+	tr := budget.New(500, 0, fixedUsed(400))
 	p := budget.NewPlanner(tr, nil)
 	in := budget.Input{
 		Target:        "src/inv/runNew",
@@ -124,7 +118,7 @@ func TestPlanner_RefusesWhenAllPinned(t *testing.T) {
 }
 
 func TestPlanner_RefusesWhenEstimateExceedsCap(t *testing.T) {
-	tr := budget.New(500, 0)
+	tr := budget.New(500, 0, fixedUsed(0))
 	p := budget.NewPlanner(tr, nil)
 	in := budget.Input{
 		Target:        "src/inv/run1",
@@ -145,7 +139,7 @@ func TestPlanner_ZeroCapPassesThrough(t *testing.T) {
 	// anything. Otherwise manual loads break for every deployment that
 	// hasn't opted into the budget (the regression that prompted this
 	// test).
-	tr := budget.New(0, 0)
+	tr := budget.New(0, 0, fixedUsed(0))
 	p := budget.NewPlanner(tr, nil)
 	plan, _ := p.Plan(t.Context(), budget.Input{Target: "a/b/c", EstimateBytes: 1})
 	if !plan.Fits() {
@@ -154,8 +148,7 @@ func TestPlanner_ZeroCapPassesThrough(t *testing.T) {
 }
 
 func TestPlanner_SkipsRunsWithoutKnownSize(t *testing.T) {
-	tr := budget.New(1000, 0)
-	tr.Add(400) // accounted for elsewhere
+	tr := budget.New(1000, 0, fixedUsed(400)) // accounted for elsewhere
 	p := budget.NewPlanner(tr, nil)
 	in := budget.Input{
 		Target:        "src/inv/run2",
@@ -171,5 +164,28 @@ func TestPlanner_SkipsRunsWithoutKnownSize(t *testing.T) {
 	}
 	if plan.Fits() {
 		t.Error("unknown-size eligible run should not be evicted blindly; expected refusal")
+	}
+}
+
+// Retention keeps the newest runs. Evicting by load time removed a newer
+// run that happened to load first, and the auto-loader then reloaded it
+// on its next tick — an evict/rebuild loop.
+func TestPlanner_RetentionEvictsOldestRunNotOldestLoad(t *testing.T) {
+	tr := budget.New(1000, 0, fixedUsed(200))
+	p := budget.NewPlanner(tr, fakeConfig{"src/inv": 2}.Retention)
+	in := budget.Input{
+		Target:        "src/inv/2026-01-03T00-00Z",
+		EstimateBytes: 100,
+		All: []inventory.Info{
+			loaded("src/inv/2026-01-01T00-00Z", 100, time.Unix(5, 0), time.Unix(5, 0), false),
+			loaded("src/inv/2026-01-02T00-00Z", 100, time.Unix(1, 0), time.Unix(1, 0), false),
+		},
+	}
+	plan, err := p.Plan(t.Context(), in)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Evict) != 1 || plan.Evict[0] != "src/inv/2026-01-01T00-00Z" {
+		t.Errorf("evict = %v, want the oldest run 2026-01-01", plan.Evict)
 	}
 }

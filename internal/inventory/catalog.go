@@ -516,6 +516,27 @@ func (c *Catalog) Get(id ID) (Info, bool) {
 	return c.touchedInfo(inv), true
 }
 
+// LoadedBytes is the on-disk size of every loaded index: the disk-budget
+// tracker's "used" figure, derived from catalog state on each call so it
+// cannot drift as runs load, unload or get evicted.
+func (c *Catalog) LoadedBytes() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var total uint64
+	for _, inv := range c.inventories {
+		if inv.info.State == StateLoaded {
+			total += inv.info.IndexBytes
+		}
+	}
+
+	return total
+}
+
+// SetIndexBytes records an index's measured on-disk size.
+func (c *Catalog) SetIndexBytes(ctx context.Context, id ID, bytes uint64) error {
+	return c.update(ctx, id, func(info *Info) { info.IndexBytes = bytes })
+}
+
 // List returns info about all inventories.
 func (c *Catalog) List() []Info {
 	c.mu.RLock()

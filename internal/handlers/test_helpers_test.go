@@ -36,7 +36,7 @@ func newWiredHandlers(t *testing.T, mgr *inventory.Catalog, opts ...handlers.Opt
 	jobBus := jobs.NewBus(8)
 	jobMgr := jobs.NewScheduler(jobStore, jobBus)
 	configStore := inventory.NewConfigStore(db)
-	tracker := budget.New(0, 0)
+	tracker := budget.New(0, 0, mgr.LoadedBytes)
 
 	return handlers.New(
 		mgr, renderer, pricing.DefaultUSEast1Prices(),
