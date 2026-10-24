@@ -34,7 +34,7 @@ If all preflight checks pass, execute all tool calls in a single message. After 
 
 1. **Push** the branch: `git push -u origin $(git branch --show-current)`.
 
-2. **Create the PR** using `gh pr create`. Analyze all commits since main (not just the latest) to write the title and body. The title uses the commit header format (`type(scope): summary`), because the squash merge makes it the commit on `main`. The body states what changed and why — neutral and factual, no commentary on effort or size — and, for a performance change, the `make bench-ab` result:
+2. **Create the PR** using `gh pr create`. Analyze all commits since main (not just the latest) to write the title and body. The title uses the commit header format (`type(scope): summary`), because the squash merge makes it the commit on `main`. The body states what changed and why — neutral and factual, no commentary on effort or size. It always has a **Performance** section: when the branch ran `make bench-ingest` / `make bench-query`, the expected change per suite entry (before → after time, memory and allocations per op, plus peak heap / disk for the pipeline, with benchstat significance); otherwise one line saying no benchmark was needed and why. Put each closed issue on its own `Closes #N` line — GitHub closes only the first issue of a comma-separated `Closes #a, #b` list:
 
 ```
 gh pr create --title "<type(scope): summary, under 70 chars>" --body "$(cat <<'EOF'
@@ -42,6 +42,10 @@ gh pr create --title "<type(scope): summary, under 70 chars>" --body "$(cat <<'E
 - <what changed and why, 1-3 bullets>
 
 Closes #<issue>
+Closes #<another issue>
+
+## Performance
+- <suite entry>: <before> → <after> (<metric>, p=<p>), or "No benchmark needed: <reason>."
 
 ## Test Plan
 - [ ] <how to verify the changes>

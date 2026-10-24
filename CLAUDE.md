@@ -22,12 +22,13 @@ Follow this workflow for **every** change to this repo:
      - Ensure there are **benchmarks** covering the affected code.
      - Run those benchmarks **before and after** your changes.
      - Compare results and keep or improve performance; do not regress without explicit justification in the commit message.
-   - The comparison is `make bench-ab BASE=main`: base and head on the same machine, interleaved, judged by benchstat (see `bench/README.md`). Benchmarks run only for performance changes, never as routine CI.
+   - Benchmarks run **only** for changes to ingestion (`make bench-ingest BASE=main`) or to the index data structures / query code (`make bench-query BASE=main`), and only that area's suite — they take a long time. Not for dependency bumps, server, catalog, jobs, security, lifecycle, templates, docs or tooling. See `bench/README.md` "When to run".
+   - Every PR that ran a benchmark states the expected performance change in its description (**Performance** section: before → after time, memory and allocations per op for each suite entry); otherwise one line saying no benchmark was needed and why.
 
 5. **Final Checklist Before Merge**
    - `make lint` passes with **zero** unaddressed issues.
    - `make test` (or equivalent) passes.
-   - Relevant **benchmarks** have been run and compared when performance is affected.
+   - Relevant **benchmarks** have been run and compared when ingestion or query code changed, and the PR description reports them.
    - `/review-loop` has run on the branch, and PR Validation (its `Gate` job) is green on the final head.
    - The feature branch is merged cleanly into `main` (squash merge).
    - The merged **feature branch is deleted**.

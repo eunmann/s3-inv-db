@@ -37,7 +37,7 @@ State lives in `$(git rev-parse --git-dir)/review-loop/` (inside the git dir, so
 Only the fast checks run locally. PR Validation on GitHub is the full gate: lint, tidy, govulncheck, deadcode, actionlint, build, CSS freshness, the full suite with `-race` against a local S3 server, and the coverage floor.
 
 1. `make test-unit`, plus `make test` when the branch touched S3-facing code (`pkg/s3fetch`, `internal/s3disco`, `internal/loader`, `internal/seeder`).
-2. Performance-relevant changes (and any fix the fixer flagged): `make bench-ab BASE=main` (bench/README.md). A regression beyond the thresholds blocks the merge unless the commit message justifies it.
+2. Only if the branch (or a fixer's change) touched ingestion code: `make bench-ingest BASE=main`; index data structures or query code: `make bench-query BASE=main` (bench/README.md "When to run"). Nothing else is benchmarked. A regression beyond the thresholds blocks the merge unless justified; the numbers go in the PR's **Performance** section.
 3. Push; update the PR body if the loop changed what the PR does; delete `$(git rev-parse --git-dir)/review-loop/`.
 4. Merge only on a green PR Validation run on the final head. On a failure, read only the failing job's log tail (`gh run view <id> --log-failed | tail -n 100`).
 

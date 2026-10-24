@@ -18,13 +18,13 @@ Read the parts of `docs/overview.md`, `docs/index-format.md` and `docs/performan
 - **Read path:** `pkg/indexread` (the public library: `Lookup`, `Stats`, `DescendantsAtDepth`, `Top*`, `TierBreakdown`), `pkg/pricing`, `pkg/humanfmt`
 - **Server:** `internal/server` (routes, middleware, bootstrap), `internal/inventory` (catalog of loaded indexes, discovery snapshot, browse/compare domain logic, SQLite store), `internal/jobs` (scheduler, job store, progress recorder), `internal/autoload` + `internal/budget` + `internal/loadcontrol` (auto-load, retention, disk cap), `internal/s3disco` (S3 inventory discovery), `internal/loader` (S3 → index build for the server), `internal/handlers` (HTTP/HTMX/JSON + SSE), `internal/templates` (html/template + Tailwind), `internal/migrate` (SQLite migrations), `internal/metrics`
 - **Binaries and config:** `cmd/s3-inv-db` → `internal/cli`, `cmd/s3-inv-db-server`, `cmd/s3-inv-db-seeder` → `internal/seeder`; `internal/appconfig` (JSON config shared by CLI and server)
-- **Tests and tooling:** unit tests beside each package; `*_s3_test.go` behind the `integration` tag with `internal/s3test` (local S3 via compose or CI); `internal/benchutil` (seeded synthetic data); `bench/` + `scripts/bench-ab.sh` (A/B performance gate)
+- **Tests and tooling:** unit tests beside each package; `*_s3_test.go` behind the `integration` tag with `internal/s3test` (local S3 via compose or CI); `internal/benchutil` (seeded synthetic data); `bench/` + `scripts/bench-ab.sh` (A/B gate: `bench/suite/ingest.txt`, `bench/suite/query.txt`)
 
 ## 2. Locate
 
 Grep for the symbols, flags, config keys, JSON fields, SQL columns, file names and routes the task touches, and list each affected layer with one line on why. A change usually crosses a seam — index writer ↔ reader (`pkg/extsort`/`pkg/format` builders ↔ `pkg/format` readers/`pkg/indexread`), catalog ↔ handlers ↔ templates, Go structs ↔ `internal/migrate/migrations/*.sql`, `internal/appconfig` ↔ `cmd/*` flags ↔ `docs/` — so find both sides.
 
-Check, without reading them in full, whether the change needs: a format `Version` bump (any on-disk layout change), a new migration (never edit an applied one), a `make bench-ab` gate or a new suite entry (hot paths), an `integration`-tagged test (S3 behaviour), `make css` (new Tailwind classes in templates), or a docs update (`docs/*.md`, README config example).
+Check, without reading them in full, whether the change needs: a format `Version` bump (any on-disk layout change), a new migration (never edit an applied one), a `make bench-ingest` / `make bench-query` run or a new suite entry (ingestion or query code only), an `integration`-tagged test (S3 behaviour), `make css` (new Tailwind classes in templates), or a docs update (`docs/*.md`, README config example).
 
 ## 3. Read
 
@@ -40,7 +40,7 @@ Spawn an `Explore` subagent only for a subsystem whose files you would otherwise
 
 ## 5. Plan
 
-List the commits in dependency order (format writer before reader, migration before the code that uses it, domain logic before handlers and templates), each with its files, change and tests. Mark which are independent and which need `make bench-ab`.
+List the commits in dependency order (format writer before reader, migration before the code that uses it, domain logic before handlers and templates), each with its files, change and tests. Mark which are independent and which need `make bench-ingest` / `make bench-query`.
 
 For research-only commands (`/create-issue`), stop here.
 

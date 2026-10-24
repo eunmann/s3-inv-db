@@ -121,9 +121,10 @@ load.
 
 ## Running benchmarks
 
-Performance changes are gated by an A/B comparison against the base
-commit on the same machine — `make bench-ab BASE=main`; see
-[bench/README.md](../bench/README.md). The commands below are for
+Ingestion and query changes are gated by an A/B comparison against the
+base commit on the same machine — `make bench-ingest` / `make
+bench-query`; see [bench/README.md](../bench/README.md) for when to run
+which. The commands below are for
 exploration.
 
 ```bash
