@@ -24,10 +24,10 @@ func TestIndexBuilderContextCancellation(t *testing.T) {
 		}
 
 		// Create a run file with many rows
-		runFile := filepath.Join(dir, "run_0000.bin")
-		writer, err := NewRunFileWriter(runFile, 4096)
+		runFile := filepath.Join(dir, "run_0000.crun")
+		writer, err := NewCompressedRunWriter(runFile, CompressedRunWriterOptions{BufferSize: 4096})
 		if err != nil {
-			t.Fatalf("NewRunFileWriter: %v", err)
+			t.Fatalf("NewCompressedRunWriter: %v", err)
 		}
 
 		// Write 10000 rows to ensure we'd iterate for a while
@@ -68,10 +68,10 @@ func TestIndexBuilderContextCancellation(t *testing.T) {
 		dir := t.TempDir()
 
 		// Create a run file with many rows
-		runFile := filepath.Join(dir, "run_0000.bin")
-		writer, err := NewRunFileWriter(runFile, 4096)
+		runFile := filepath.Join(dir, "run_0000.crun")
+		writer, err := NewCompressedRunWriter(runFile, CompressedRunWriterOptions{BufferSize: 4096})
 		if err != nil {
-			t.Fatalf("NewRunFileWriter: %v", err)
+			t.Fatalf("NewCompressedRunWriter: %v", err)
 		}
 
 		// Write many rows - more than check interval

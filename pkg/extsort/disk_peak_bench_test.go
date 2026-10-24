@@ -61,8 +61,11 @@ func measureOne(b *testing.B, numObjects int) {
 		agg.AddObject(objects[i].Key, objects[i].Size, objects[i].TierID)
 	}
 	rows := agg.Drain()
-	runPath := filepath.Join(runDir, "run_0000.bin")
-	writer, err := extsort.NewRunFileWriter(runPath, 4*1024*1024)
+	runPath := filepath.Join(runDir, "run_0000.crun")
+	writer, err := extsort.NewCompressedRunWriter(runPath, extsort.CompressedRunWriterOptions{
+		BufferSize:       4 * 1024 * 1024,
+		CompressionLevel: extsort.CompressionFastest,
+	})
 	if err != nil {
 		b.Fatalf("run writer: %v", err)
 	}

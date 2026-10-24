@@ -118,10 +118,9 @@ func TestParallelMerger_TwoFiles(t *testing.T) {
 	path2 := createTestRunFile(t, tmpDir, "run2.crun", []string{"b/", "d/", "f/", "h/"}, 10)
 
 	merger := NewParallelMerger(ParallelMergeConfig{
-		NumWorkers:     2,
-		MaxFanIn:       4,
-		TempDir:        tmpDir,
-		UseCompression: true,
+		NumWorkers: 2,
+		MaxFanIn:   4,
+		TempDir:    tmpDir,
 	})
 
 	got := rowPrefixes(mergeAllRows(t, merger, []string{path1, path2}))
@@ -138,8 +137,7 @@ func TestParallelMerger_DuplicatePrefixes(t *testing.T) {
 	path2 := createTestRunFile(t, tmpDir, "run2.crun", []string{"b/", "c/", "d/"}, 10)
 
 	merger := NewParallelMerger(ParallelMergeConfig{
-		TempDir:        tmpDir,
-		UseCompression: true,
+		TempDir: tmpDir,
 	})
 
 	rows := mergeAllRows(t, merger, []string{path1, path2})
@@ -160,11 +158,10 @@ func TestParallelMerger_ManyFiles(t *testing.T) {
 	paths := createSpreadRuns(t, tmpDir, 20)
 
 	merger := NewParallelMerger(ParallelMergeConfig{
-		NumWorkers:     4,
-		MaxFanIn:       4,
-		FinalFanIn:     4,
-		TempDir:        tmpDir,
-		UseCompression: true,
+		NumWorkers: 4,
+		MaxFanIn:   4,
+		FinalFanIn: 4,
+		TempDir:    tmpDir,
 	})
 
 	rows := mergeAllRows(t, merger, paths)
@@ -325,58 +322,6 @@ func corruptRunBody(t *testing.T, path string) {
 	}
 }
 
-func TestParallelMerger_UncompressedOutput(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	paths := []string{
-		createTestRunFile(t, tmpDir, "run1.crun", []string{"a/", "d/"}, 0),
-		createTestRunFile(t, tmpDir, "run2.crun", []string{"b/", "e/"}, 0),
-		createTestRunFile(t, tmpDir, "run3.crun", []string{"c/", "f/"}, 0),
-	}
-
-	merger := NewParallelMerger(ParallelMergeConfig{
-		MaxFanIn:       2,
-		FinalFanIn:     2,
-		TempDir:        tmpDir,
-		UseCompression: false,
-	})
-
-	got := rowPrefixes(mergeAllRows(t, merger, paths))
-	if want := []string{"a/", "b/", "c/", "d/", "e/", "f/"}; !slices.Equal(got, want) {
-		t.Errorf("prefixes = %v, want %v", got, want)
-	}
-	if merger.Statistics().Rounds != 1 {
-		t.Errorf("rounds = %d, want 1", merger.Statistics().Rounds)
-	}
-}
-
-func TestParallelMerger_MixedInputFormats(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	compressedPath := filepath.Join(tmpDir, "compressed.crun")
-	uncompressedPath := filepath.Join(tmpDir, "uncompressed.run")
-
-	cw, _ := NewCompressedRunWriter(compressedPath, CompressedRunWriterOptions{})
-	cw.Write(&PrefixRow{Prefix: "a/", Count: 1})
-	cw.Write(&PrefixRow{Prefix: "c/", Count: 3})
-	cw.Close()
-
-	uw, _ := NewRunFileWriter(uncompressedPath, 0)
-	uw.Write(&PrefixRow{Prefix: "b/", Count: 2})
-	uw.Write(&PrefixRow{Prefix: "d/", Count: 4})
-	uw.Close()
-
-	merger := NewParallelMerger(ParallelMergeConfig{
-		TempDir:        tmpDir,
-		UseCompression: true,
-	})
-
-	got := rowPrefixes(mergeAllRows(t, merger, []string{compressedPath, uncompressedPath}))
-	if want := []string{"a/", "b/", "c/", "d/"}; !slices.Equal(got, want) {
-		t.Errorf("prefixes = %v, want %v", got, want)
-	}
-}
-
 func TestParallelMerger_TierDataPreserved(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -402,8 +347,7 @@ func TestParallelMerger_TierDataPreserved(t *testing.T) {
 	w2.Close()
 
 	merger := NewParallelMerger(ParallelMergeConfig{
-		TempDir:        tmpDir,
-		UseCompression: true,
+		TempDir: tmpDir,
 	})
 
 	rows := mergeAllRows(t, merger, []string{path1, path2})

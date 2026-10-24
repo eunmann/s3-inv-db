@@ -11,22 +11,32 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// Compressed run file format:
+// Run file format:
 //
 // Header (32 bytes):
 //   Magic:            4 bytes  (0x45585453 = "EXTS")
-//   Version:          4 bytes  (2 for compressed format)
+//   Version:          4 bytes  (2)
 //   Flags:            4 bytes  (bit 0: compressed, bits 1-3: compression type)
 //   Count:            8 bytes  (number of PrefixRows)
 //   UncompressedSize: 8 bytes  (total uncompressed data size, for buffer hints)
 //   Reserved:         4 bytes  (future use)
 //
-// Body: zstd compressed stream of records (same record format as uncompressed)
+// Body: zstd compressed stream of records, each:
+//   PrefixLen:  4 bytes (uint32, length of prefix string)
+//   Prefix:     N bytes (prefix string, no null terminator)
+//   Depth:      2 bytes (uint16)
+//   Count:      8 bytes (uint64)
+//   TotalBytes: 8 bytes (uint64)
+//   TierCounts: MaxTiers * 8 bytes (uint64 array)
+//   TierBytes:  MaxTiers * 8 bytes (uint64 array)
+//
+// Each record is: 4 + len(prefix) + 2 + 8 + 8 + 12*8 + 12*8 = 22 + len(prefix) + 192 = 214 + len(prefix) bytes
 //
 // Compression types:
 //   1: Zstd (only supported type)
 
 const (
+	runFileMagic             = 0x45585453 // "EXTS"
 	compressedRunFileVersion = 2
 	compressedRunFileHeader  = 32
 
@@ -248,8 +258,7 @@ type CompressedRunReader struct {
 	closed       bool
 }
 
-// OpenCompressedRunFile opens a compressed run file for reading.
-// It auto-detects whether the file is compressed or uncompressed based on the version.
+// OpenCompressedRunFile opens a run file for reading.
 func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, error) {
 	if bufferSize <= 0 {
 		bufferSize = DefaultRunBufferSize
@@ -260,7 +269,6 @@ func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, e
 		return nil, fmt.Errorf("open compressed run file: %w", err)
 	}
 
-	// Read header to determine format
 	header := make([]byte, compressedRunFileHeader)
 	if _, err := io.ReadFull(f, header); err != nil {
 		f.Close()
@@ -387,61 +395,6 @@ func (r *CompressedRunReader) Remove() error {
 	}
 
 	return nil
-}
-
-// RunReader is an interface that abstracts reading from either compressed or uncompressed run files.
-type RunReader interface {
-	Read() (*PrefixRow, error)
-	// ReadInto reads the next row into the caller-owned PrefixRow,
-	// avoiding the per-row allocation in Read.
-	ReadInto(into *PrefixRow) error
-	Count() uint64
-	ReadCount() uint64
-	Close() error
-	Remove() error
-}
-
-// Ensure both reader types implement RunReader interface.
-var (
-	_ RunReader = (*RunFileReader)(nil)
-	_ RunReader = (*CompressedRunReader)(nil)
-)
-
-// OpenRunFileAuto opens a run file, auto-detecting whether it's compressed or not.
-// Returns a RunReader interface that works with either format.
-func OpenRunFileAuto(path string, bufferSize int) (RunReader, error) {
-	if bufferSize <= 0 {
-		bufferSize = DefaultRunBufferSize
-	}
-
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open run file: %w", err)
-	}
-
-	// Read just enough to check magic and version
-	header := make([]byte, 8)
-	if _, err := io.ReadFull(f, header); err != nil {
-		f.Close()
-
-		return nil, fmt.Errorf("read header: %w", err)
-	}
-	f.Close()
-
-	magic := binary.LittleEndian.Uint32(header[0:4])
-	if magic != runFileMagic {
-		return nil, fmt.Errorf("%w: got %x, want %x", ErrInvalidMagic, magic, runFileMagic)
-	}
-
-	version := binary.LittleEndian.Uint32(header[4:8])
-	switch version {
-	case runFileVersion:
-		return OpenRunFile(path, bufferSize)
-	case compressedRunFileVersion:
-		return OpenCompressedRunFile(path, bufferSize)
-	default:
-		return nil, fmt.Errorf("%w: %d", ErrUnsupportedVersion, version)
-	}
 }
 
 // One typed pool per compression level. Zstd encoders allocate

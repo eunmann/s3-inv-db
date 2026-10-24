@@ -262,15 +262,16 @@ func TestCompressedRunFile(t *testing.T) {
 	})
 }
 
-func TestCompressedVsUncompressedSize(t *testing.T) {
-	tmpDir := t.TempDir()
-	uncompressedPath := filepath.Join(tmpDir, "uncompressed.run")
-	compressedPath := filepath.Join(tmpDir, "compressed.crun")
+// TestCompressedRunSize checks that the run body compresses at least 2x
+// against its raw record encoding.
+func TestCompressedRunSize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "compressed.crun")
 
 	const numRows = 5000
 
-	// Create test rows with realistic prefix data (highly compressible)
+	// Realistic prefix data (highly compressible).
 	rows := make([]*extsort.PrefixRow, numRows)
+	var rawSize int64
 	for i := range numRows {
 		rows[i] = &extsort.PrefixRow{
 			Prefix:     fmt.Sprintf("s3://my-bucket/data/year=2024/month=%02d/day=%02d/file_%08d.parquet", i%12+1, i%28+1, i),
@@ -280,108 +281,33 @@ func TestCompressedVsUncompressedSize(t *testing.T) {
 		}
 		rows[i].TierCounts[tiers.Standard] = uint64(i)
 		rows[i].TierBytes[tiers.Standard] = uint64(i * 1024)
+		// Length, prefix, depth, count, bytes, then both tier arrays.
+		rawSize += int64(4 + len(rows[i].Prefix) + 2 + 8 + 8 + extsort.MaxTiers*16)
 	}
 
-	// Write uncompressed
-	uWriter, err := extsort.NewRunFileWriter(uncompressedPath, 0)
-	if err != nil {
-		t.Fatalf("create uncompressed writer: %v", err)
-	}
-	for _, row := range rows {
-		if err := uWriter.Write(row); err != nil {
-			t.Fatalf("write uncompressed: %v", err)
-		}
-	}
-	if err := uWriter.Close(); err != nil {
-		t.Fatalf("close uncompressed: %v", err)
-	}
-
-	// Write compressed
-	cWriter, err := extsort.NewCompressedRunWriter(compressedPath, extsort.CompressedRunWriterOptions{})
+	writer, err := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{})
 	if err != nil {
 		t.Fatalf("create compressed writer: %v", err)
 	}
 	for _, row := range rows {
-		if err := cWriter.Write(row); err != nil {
+		if err := writer.Write(row); err != nil {
 			t.Fatalf("write compressed: %v", err)
 		}
 	}
-	if err := cWriter.Close(); err != nil {
+	if err := writer.Close(); err != nil {
 		t.Fatalf("close compressed: %v", err)
 	}
 
-	// Compare file sizes
-	uInfo, _ := os.Stat(uncompressedPath)
-	cInfo, _ := os.Stat(compressedPath)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	ratio := float64(rawSize) / float64(info.Size())
+	t.Logf("raw %d bytes, compressed %d bytes, ratio %.2fx", rawSize, info.Size(), ratio)
 
-	uSize := uInfo.Size()
-	cSize := cInfo.Size()
-	ratio := float64(uSize) / float64(cSize)
-
-	t.Logf("Uncompressed: %d bytes", uSize)
-	t.Logf("Compressed:   %d bytes", cSize)
-	t.Logf("Ratio:        %.2fx", ratio)
-
-	// Expect at least 2x compression for this type of data
 	if ratio < 2.0 {
 		t.Errorf("expected at least 2x compression, got %.2fx", ratio)
 	}
-}
-
-func TestRunReaderInterface(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	t.Run("auto-detect uncompressed", func(t *testing.T) {
-		path := filepath.Join(tmpDir, "uncompressed.run")
-
-		writer, _ := extsort.NewRunFileWriter(path, 0)
-		writer.Write(&extsort.PrefixRow{Prefix: "test/", Count: 42})
-		writer.Close()
-
-		reader, err := extsort.OpenRunFileAuto(path, 0)
-		if err != nil {
-			t.Fatalf("open auto: %v", err)
-		}
-		defer reader.Close()
-
-		if reader.Count() != 1 {
-			t.Errorf("expected count 1, got %d", reader.Count())
-		}
-
-		row, _ := reader.Read()
-		if row.Prefix != "test/" {
-			t.Errorf("expected prefix 'test/', got %q", row.Prefix)
-		}
-		if row.Count != 42 {
-			t.Errorf("expected count 42, got %d", row.Count)
-		}
-	})
-
-	t.Run("auto-detect compressed", func(t *testing.T) {
-		path := filepath.Join(tmpDir, "compressed.crun")
-
-		writer, _ := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{})
-		writer.Write(&extsort.PrefixRow{Prefix: "test/", Count: 42})
-		writer.Close()
-
-		reader, err := extsort.OpenRunFileAuto(path, 0)
-		if err != nil {
-			t.Fatalf("open auto: %v", err)
-		}
-		defer reader.Close()
-
-		if reader.Count() != 1 {
-			t.Errorf("expected count 1, got %d", reader.Count())
-		}
-
-		row, _ := reader.Read()
-		if row.Prefix != "test/" {
-			t.Errorf("expected prefix 'test/', got %q", row.Prefix)
-		}
-		if row.Count != 42 {
-			t.Errorf("expected count 42, got %d", row.Count)
-		}
-	})
 }
 
 func TestCompressedRunEmptyFile(t *testing.T) {

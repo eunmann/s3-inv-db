@@ -60,7 +60,6 @@ func runEquivalenceTest(t *testing.T, runCount, rowsPerRun, maxFanIn, finalFanIn
 		FinalFanIn:       finalFanIn,
 		BufferSize:       64 * 1024,
 		TempDir:          t.TempDir(),
-		UseCompression:   true,
 		CompressionLevel: CompressionFastest,
 	})
 	parallelOut := mergeAllRows(t, merger, paths)
@@ -80,11 +79,11 @@ func runEquivalenceTest(t *testing.T, runCount, rowsPerRun, maxFanIn, finalFanIn
 
 func drainSerial(t *testing.T, paths []string) []PrefixRow {
 	t.Helper()
-	readers := make([]RunReader, 0, len(paths))
+	readers := make([]*CompressedRunReader, 0, len(paths))
 	for _, p := range paths {
-		r, err := OpenRunFileAuto(p, 64*1024)
+		r, err := OpenCompressedRunFile(p, 64*1024)
 		if err != nil {
-			t.Fatalf("OpenRunFileAuto %s: %v", filepath.Base(p), err)
+			t.Fatalf("OpenCompressedRunFile %s: %v", filepath.Base(p), err)
 		}
 		readers = append(readers, r)
 	}

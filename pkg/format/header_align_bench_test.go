@@ -64,7 +64,7 @@ func BenchmarkArrayReaderU64(b *testing.B) {
 }
 
 // BenchmarkOpenMmap measures Open+Close overhead. Relevant to the
-// OpenRunFileAuto double-open critique and the no-madvise critique.
+// no-madvise critique.
 func BenchmarkOpenMmap(b *testing.B) {
 	dir := b.TempDir()
 	path := filepath.Join(dir, "bench.bin")

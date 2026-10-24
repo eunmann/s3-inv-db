@@ -77,8 +77,11 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 
 		phase2Start := time.Now()
 		rows := agg.Drain()
-		runPath := filepath.Join(runDir, "run_0000.bin")
-		writer, err := extsort.NewRunFileWriter(runPath, 4*1024*1024)
+		runPath := filepath.Join(runDir, "run_0000.crun")
+		writer, err := extsort.NewCompressedRunWriter(runPath, extsort.CompressedRunWriterOptions{
+			BufferSize:       4 * 1024 * 1024,
+			CompressionLevel: extsort.CompressionFastest,
+		})
 		if err != nil {
 			b.Fatalf("create run file: %v", err)
 		}
@@ -201,11 +204,10 @@ func BenchmarkParallelMerge(b *testing.B) {
 	runMerger := func(b *testing.B, tmpDir string, paths []string, workers, fanIn int) {
 		b.Helper()
 		merger := extsort.NewParallelMerger(extsort.ParallelMergeConfig{
-			NumWorkers:     workers,
-			MaxFanIn:       fanIn,
-			FinalFanIn:     fanIn,
-			TempDir:        tmpDir,
-			UseCompression: true,
+			NumWorkers: workers,
+			MaxFanIn:   fanIn,
+			FinalFanIn: fanIn,
+			TempDir:    tmpDir,
 		})
 		iter, cleanup, err := merger.MergeAllToIterator(b.Context(), paths)
 		if err != nil {

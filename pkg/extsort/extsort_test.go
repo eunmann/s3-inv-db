@@ -82,130 +82,21 @@ func TestAggregator(t *testing.T) {
 	})
 }
 
-func TestRunFile(t *testing.T) {
-	t.Run("write and read", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		path := filepath.Join(tmpDir, "test.run")
-
-		// Create test rows
-		rows := []*extsort.PrefixRow{
-			{Prefix: "", Depth: 0, Count: 10, TotalBytes: 1000},
-			{Prefix: "data/", Depth: 1, Count: 5, TotalBytes: 500},
-			{Prefix: "data/2024/", Depth: 2, Count: 3, TotalBytes: 300},
-		}
-		rows[0].TierCounts[tiers.Standard] = 7
-		rows[0].TierCounts[tiers.GlacierFR] = 3
-		rows[0].TierBytes[tiers.Standard] = 700
-		rows[0].TierBytes[tiers.GlacierFR] = 300
-
-		// Write
-		writer, err := extsort.NewRunFileWriter(path, 0)
-		if err != nil {
-			t.Fatalf("create writer: %v", err)
-		}
-		for _, row := range rows {
-			if err := writer.Write(row); err != nil {
-				t.Fatalf("write row: %v", err)
-			}
-		}
-		if err := writer.Close(); err != nil {
-			t.Fatalf("close writer: %v", err)
-		}
-
-		// Read
-		reader, err := extsort.OpenRunFile(path, 0)
-		if err != nil {
-			t.Fatalf("open reader: %v", err)
-		}
-		defer reader.Close()
-
-		if reader.Count() != 3 {
-			t.Errorf("expected count 3, got %d", reader.Count())
-		}
-
-		// Read all rows
-		for i := range 3 {
-			row, err := reader.Read()
-			if err != nil {
-				t.Fatalf("read row %d: %v", i, err)
-			}
-			if row.Prefix != rows[i].Prefix {
-				t.Errorf("row %d: expected prefix %q, got %q", i, rows[i].Prefix, row.Prefix)
-			}
-			if row.Count != rows[i].Count {
-				t.Errorf("row %d: expected count %d, got %d", i, rows[i].Count, row.Count)
-			}
-			if row.TotalBytes != rows[i].TotalBytes {
-				t.Errorf("row %d: expected bytes %d, got %d", i, rows[i].TotalBytes, row.TotalBytes)
-			}
-		}
-
-		// EOF
-		_, err = reader.Read()
-		if !errors.Is(err, io.EOF) {
-			t.Errorf("expected EOF, got %v", err)
-		}
-	})
-
-	t.Run("sorted write", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		path := filepath.Join(tmpDir, "sorted.run")
-
-		// Create unsorted rows
-		rows := []*extsort.PrefixRow{
-			{Prefix: "data/", Depth: 1, Count: 5, TotalBytes: 500},
-			{Prefix: "", Depth: 0, Count: 10, TotalBytes: 1000},
-			{Prefix: "zebra/", Depth: 1, Count: 2, TotalBytes: 200},
-			{Prefix: "alpha/", Depth: 1, Count: 3, TotalBytes: 300},
-		}
-
-		// Write sorted
-		writer, err := extsort.NewRunFileWriter(path, 0)
-		if err != nil {
-			t.Fatalf("create writer: %v", err)
-		}
-		if err := writer.WriteSorted(rows); err != nil {
-			t.Fatalf("write sorted: %v", err)
-		}
-		if err := writer.Close(); err != nil {
-			t.Fatalf("close writer: %v", err)
-		}
-
-		// Read and verify order
-		reader, err := extsort.OpenRunFile(path, 0)
-		if err != nil {
-			t.Fatalf("open reader: %v", err)
-		}
-		defer reader.Close()
-
-		expected := []string{"", "alpha/", "data/", "zebra/"}
-		for i, exp := range expected {
-			row, err := reader.Read()
-			if err != nil {
-				t.Fatalf("read row %d: %v", i, err)
-			}
-			if row.Prefix != exp {
-				t.Errorf("row %d: expected prefix %q, got %q", i, exp, row.Prefix)
-			}
-		}
-	})
-}
-
 func TestMerger(t *testing.T) {
 	t.Run("merge multiple run files", func(t *testing.T) {
 		tmpDir := t.TempDir()
 
 		// Create run file 1
-		path1 := filepath.Join(tmpDir, "run1.bin")
-		w1, _ := extsort.NewRunFileWriter(path1, 0)
+		path1 := filepath.Join(tmpDir, "run1.crun")
+		w1, _ := extsort.NewCompressedRunWriter(path1, extsort.CompressedRunWriterOptions{})
 		w1.Write(&extsort.PrefixRow{Prefix: "", Depth: 0, Count: 5, TotalBytes: 500})
 		w1.Write(&extsort.PrefixRow{Prefix: "alpha/", Depth: 1, Count: 2, TotalBytes: 200})
 		w1.Write(&extsort.PrefixRow{Prefix: "gamma/", Depth: 1, Count: 3, TotalBytes: 300})
 		w1.Close()
 
 		// Create run file 2
-		path2 := filepath.Join(tmpDir, "run2.bin")
-		w2, _ := extsort.NewRunFileWriter(path2, 0)
+		path2 := filepath.Join(tmpDir, "run2.crun")
+		w2, _ := extsort.NewCompressedRunWriter(path2, extsort.CompressedRunWriterOptions{})
 		w2.Write(&extsort.PrefixRow{Prefix: "", Depth: 0, Count: 7, TotalBytes: 700})
 		w2.Write(&extsort.PrefixRow{Prefix: "beta/", Depth: 1, Count: 4, TotalBytes: 400})
 		w2.Write(&extsort.PrefixRow{Prefix: "gamma/", Depth: 1, Count: 5, TotalBytes: 500})
@@ -349,8 +240,8 @@ func TestEndToEndWithAggregator(t *testing.T) {
 
 		// Flush to run file 1
 		rows1 := agg.Drain()
-		path1 := filepath.Join(tmpDir, "run1.bin")
-		w1, _ := extsort.NewRunFileWriter(path1, 0)
+		path1 := filepath.Join(tmpDir, "run1.crun")
+		w1, _ := extsort.NewCompressedRunWriter(path1, extsort.CompressedRunWriterOptions{})
 		w1.WriteSorted(rows1)
 		w1.Close()
 
@@ -360,8 +251,8 @@ func TestEndToEndWithAggregator(t *testing.T) {
 
 		// Flush to run file 2
 		rows2 := agg.Drain()
-		path2 := filepath.Join(tmpDir, "run2.bin")
-		w2, _ := extsort.NewRunFileWriter(path2, 0)
+		path2 := filepath.Join(tmpDir, "run2.crun")
+		w2, _ := extsort.NewCompressedRunWriter(path2, extsort.CompressedRunWriterOptions{})
 		w2.WriteSorted(rows2)
 		w2.Close()
 

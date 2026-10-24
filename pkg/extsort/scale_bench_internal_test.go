@@ -75,11 +75,10 @@ func BenchmarkPipelineScale_E2E(b *testing.B) {
 				// Merge + build.
 				mergeStart := time.Now()
 				merger := NewParallelMerger(ParallelMergeConfig{
-					NumWorkers:     4,
-					MaxFanIn:       8,
-					BufferSize:     DefaultRunBufferSize,
-					TempDir:        runDir,
-					UseCompression: true,
+					NumWorkers: 4,
+					MaxFanIn:   8,
+					BufferSize: DefaultRunBufferSize,
+					TempDir:    runDir,
 				})
 				it, cleanup, err := merger.MergeAllToIterator(b.Context(), runPaths)
 				if err != nil {

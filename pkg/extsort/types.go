@@ -154,9 +154,6 @@ func SortPrefixRows(rows []*PrefixRow) {
 // in place across many calls; the encoded byte length is returned so
 // callers can track uncompressed size or pass a partial slice to
 // the underlying writer.
-//
-// Both RunFileWriter and CompressedRunWriter delegate to this — the
-// binary format is identical and only the I/O layer differs.
 func encodePrefixRowRecord(buf *[]byte, row *PrefixRow) int {
 	prefixLen := len(row.Prefix)
 	recordSize := 4 + prefixLen + 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
@@ -217,9 +214,6 @@ type MergeConfig struct {
 	// MaxFanIn: runs merged per worker. Higher = fewer rounds, more
 	// memory per worker. Default 16.
 	MaxFanIn int
-
-	// UseCompressedRuns enables zstd on intermediate run files. Default true.
-	UseCompressedRuns bool
 }
 
 // ObserveConfig wires optional progress + event consumers.
@@ -245,9 +239,8 @@ func DefaultConfig() Config {
 		TempDir:  "",
 		MaxDepth: 0,
 		Merge: MergeConfig{
-			NumWorkers:        mergeWorkers,
-			MaxFanIn:          16,
-			UseCompressedRuns: true,
+			NumWorkers: mergeWorkers,
+			MaxFanIn:   16,
 		},
 	}
 }

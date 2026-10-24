@@ -47,7 +47,6 @@ func runMergeBuildSeamBench(b *testing.B, n, runFileCount int) {
 			MaxFanIn:         runFileCount,
 			BufferSize:       1 * 1024 * 1024,
 			TempDir:          runDir,
-			UseCompression:   true,
 			CompressionLevel: CompressionFastest,
 		})
 

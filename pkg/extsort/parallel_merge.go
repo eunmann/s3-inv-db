@@ -31,7 +31,6 @@ type ParallelMergeConfig struct {
 	FinalFanIn       int
 	BufferSize       int
 	CompressionLevel CompressionLevel
-	UseCompression   bool
 }
 
 // DefaultParallelMergeConfig returns sensible defaults for parallel merge.
@@ -45,7 +44,6 @@ func DefaultParallelMergeConfig() ParallelMergeConfig {
 		NumWorkers:       workers,
 		MaxFanIn:         16,              // Higher fan-in reduces merge rounds, each reader uses ~1MB
 		BufferSize:       1 * 1024 * 1024, // 1MB
-		UseCompression:   true,
 		CompressionLevel: CompressionFastest,
 	}
 }
@@ -328,19 +326,12 @@ func (m *ParallelMerger) mergeWorker(ctx context.Context, jobs <-chan mergeJob, 
 	}
 }
 
-// mergeOutputWriter is the minimal interface satisfied by both the
-// compressed and uncompressed run file writers.
-type mergeOutputWriter interface {
-	Write(row *PrefixRow) error
-	Close() error
-}
-
 // openInputReaders opens all input run files, closing any successfully
 // opened readers if one fails.
-func (m *ParallelMerger) openInputReaders(inputPaths []string) ([]RunReader, error) {
-	readers := make([]RunReader, 0, len(inputPaths))
+func (m *ParallelMerger) openInputReaders(inputPaths []string) ([]*CompressedRunReader, error) {
+	readers := make([]*CompressedRunReader, 0, len(inputPaths))
 	for _, path := range inputPaths {
-		reader, err := OpenRunFileAuto(path, m.config.BufferSize)
+		reader, err := OpenCompressedRunFile(path, m.config.BufferSize)
 		if err != nil {
 			for _, r := range readers {
 				r.Close()
@@ -354,21 +345,12 @@ func (m *ParallelMerger) openInputReaders(inputPaths []string) ([]RunReader, err
 	return readers, nil
 }
 
-// createMergeOutputWriter creates the appropriate output writer based on
-// the merger's compression configuration.
-func (m *ParallelMerger) createMergeOutputWriter(outputPath string) (mergeOutputWriter, error) {
-	if m.config.UseCompression {
-		w, err := NewCompressedRunWriter(outputPath, CompressedRunWriterOptions{
-			BufferSize:       m.config.BufferSize,
-			CompressionLevel: m.config.CompressionLevel,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("create output writer: %w", err)
-		}
-
-		return w, nil
-	}
-	w, err := NewRunFileWriter(outputPath, m.config.BufferSize)
+// createMergeOutputWriter creates the run writer for a merge job's output.
+func (m *ParallelMerger) createMergeOutputWriter(outputPath string) (*CompressedRunWriter, error) {
+	w, err := NewCompressedRunWriter(outputPath, CompressedRunWriterOptions{
+		BufferSize:       m.config.BufferSize,
+		CompressionLevel: m.config.CompressionLevel,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create output writer: %w", err)
 	}
@@ -379,7 +361,7 @@ func (m *ParallelMerger) createMergeOutputWriter(outputPath string) (mergeOutput
 // drainMerger pulls every row from merger and writes it to outputWriter,
 // aborting promptly when ctx is cancelled. The caller still owns merger
 // and outputWriter on return.
-func drainMerger(ctx context.Context, merger *MergeIterator, outputWriter mergeOutputWriter) (uint64, error) {
+func drainMerger(ctx context.Context, merger *MergeIterator, outputWriter *CompressedRunWriter) (uint64, error) {
 	var count uint64
 	for {
 		select {

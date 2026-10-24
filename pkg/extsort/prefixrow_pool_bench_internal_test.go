@@ -35,7 +35,7 @@ type runRecordEncoder struct {
 }
 
 func (e *runRecordEncoder) write(row *PrefixRow) {
-	// Hand-encode using the same layout as RunFileWriter.Write.
+	// Hand-encode using the run record layout (encodePrefixRowRecord).
 	prefixLen := len(row.Prefix)
 	e.buf.Write(u32le(uint32(prefixLen)))
 	e.buf.WriteString(row.Prefix)

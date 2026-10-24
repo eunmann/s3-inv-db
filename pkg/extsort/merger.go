@@ -10,13 +10,12 @@ import (
 // It reads from multiple run files and yields PrefixRows in globally sorted order,
 // automatically merging duplicates (same prefix from different runs).
 //
-// Readers use the RunReader interface so both compressed and raw run
-// files work uniformly. Rows are recycled through a per-iterator free
-// list: at most one row per reader plus the last result are live, so a
-// merge of any length allocates only those.
+// Rows are recycled through a per-iterator free list: at most one row
+// per reader plus the last result are live, so a merge of any length
+// allocates only those.
 type MergeIterator struct {
 	err     error
-	readers []RunReader
+	readers []*CompressedRunReader
 	heap    typedMergeHeap
 	free    []*PrefixRow
 	last    *PrefixRow
@@ -93,13 +92,12 @@ func (h *typedMergeHeap) siftDown(i int) {
 	}
 }
 
-// NewMergeIterator creates a merge iterator from multiple run file
-// paths, auto-detecting compressed vs raw via OpenRunFileAuto.
+// NewMergeIterator creates a merge iterator from multiple run file paths.
 // The caller is responsible for calling Close() to release resources.
 func NewMergeIterator(paths []string, bufferSize int) (*MergeIterator, error) {
-	readers := make([]RunReader, 0, len(paths))
+	readers := make([]*CompressedRunReader, 0, len(paths))
 	for _, path := range paths {
-		r, err := OpenRunFileAuto(path, bufferSize)
+		r, err := OpenCompressedRunFile(path, bufferSize)
 		if err != nil {
 			for _, opened := range readers {
 				opened.Close()
@@ -114,7 +112,7 @@ func NewMergeIterator(paths []string, bufferSize int) (*MergeIterator, error) {
 }
 
 // newMergeIterator merges already-open readers. On error it closes them.
-func newMergeIterator(readers []RunReader) (*MergeIterator, error) {
+func newMergeIterator(readers []*CompressedRunReader) (*MergeIterator, error) {
 	m := &MergeIterator{
 		readers: readers,
 		heap:    typedMergeHeap{items: make([]mergeItem, 0, len(readers))},
