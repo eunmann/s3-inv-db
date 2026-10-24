@@ -164,7 +164,8 @@ func TestJobsStream_PerIPCapKeysOnClientIP(t *testing.T) {
 	handlers.SetSSEMaxConnsPerIPForTest(t, 1)
 	h := newWiredHandlers(t, nil)
 
-	srv := httptest.NewServer(middleware.ClientIPFromXFF()(http.HandlerFunc(h.JobsStream)))
+	// The test client connects over loopback, so loopback is the trusted proxy.
+	srv := httptest.NewServer(middleware.ClientIPFromXFF("127.0.0.0/8", "::1/128")(http.HandlerFunc(h.JobsStream)))
 	t.Cleanup(srv.Close)
 
 	// open connects as client xff and returns the status; a 200 stream
