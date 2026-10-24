@@ -48,7 +48,7 @@ Read-only:
 |---|---|
 | `GET /api/inventories/{id}` | One inventory's metadata (includes `load_duration_ns`, the wall-clock time of the most recent successful load — present and non-zero only when `state == "loaded"`) |
 | `GET /api/inventories/{id}/stats?prefix=…` | Per-prefix stats |
-| `GET /api/inventories/{id}/descendants?prefix=…&depth=…` | Depth-walk descendants |
+| `GET /api/inventories/{id}/descendants?prefix=…&depth=…&limit=…&offset=…` | Depth-walk descendants, paged: `{"descendants":[…],"total":N,"limit":L,"offset":O}`. `limit` defaults to 1000 and is clamped to 10000; `offset` defaults to 0; `total` counts every match. Also accepts `min_count` / `min_bytes` |
 | `GET /api/inventories/{id}/top?prefix=&depth=&limit=&by=bytes\|count` | Top-N descendants ranked by metric (also at `/api/top?inventory_id=…`) |
 | `GET /metrics` | Prometheus text format — request counters, latency histograms, queue counters. Mounted on the main router. |
 | `GET /api/discovered` | List discovered inventories (when discovery configured) |

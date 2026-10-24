@@ -67,6 +67,22 @@ func parsePositiveInt(q url.Values, key string, def int) (int, error) {
 	return n, nil
 }
 
+// parseNonNegativeInt reads key from q as an int >= 0. Returns (def,
+// nil) when the key is absent and an ErrInvalidQueryParam-wrapped error
+// when the value is present but malformed or negative.
+func parseNonNegativeInt(q url.Values, key string, def int) (int, error) {
+	v := q.Get(key)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%w: %s", ErrInvalidQueryParam, key)
+	}
+
+	return n, nil
+}
+
 // parseCompareOpts parses the shared compare query string for both
 // ComparePage and CompareLevelAPI.
 func parseCompareOpts(q url.Values) compareViewOptions {
