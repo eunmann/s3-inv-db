@@ -61,7 +61,7 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 		return nil, fmt.Errorf("unmarshal MPHF: %w", err)
 	}
 
-	combined, err := openArrayVersions(combinedPath, AccessHintRandom, Version, VersionSeededMPHF)
+	combined, err := OpenArrayWithHint(combinedPath, AccessHintRandom)
 	if err != nil {
 		return nil, fmt.Errorf("open combined fp+pos: %w", err)
 	}
@@ -88,12 +88,8 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 	}, nil
 }
 
-// mphfSeedOf returns the key-hash seed of an opened fp/pos file: 0 for
-// Version 2, the trailing word after the slots for Version 3.
+// mphfSeedOf returns the key-hash seed stored after the fp/pos slots.
 func mphfSeedOf(combined *ArrayReader) (uint64, error) {
-	if combined.header.Version != VersionSeededMPHF {
-		return 0, nil
-	}
 	end := combined.header.Count * uint64(combined.header.Width)
 	if uint64(len(combined.data)) < end+mphfSeedBytes {
 		return 0, fmt.Errorf("read MPHF seed: %w", ErrFileTooSmall)

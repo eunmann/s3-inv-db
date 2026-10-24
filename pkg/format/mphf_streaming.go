@@ -710,21 +710,15 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 // page-fault wait). Sequential writes touch each page exactly once.
 //
 // File layout: 20-byte header (count = 2N, width = 8) followed by
-// 2N×8 bytes of interleaved (fp, pos, fp, pos, …) data. A non-zero
-// seed is appended as one more 8-byte word and the header says
-// VersionSeededMPHF, so a seed-0 file is byte-identical to Version 2.
+// 2N×8 bytes of interleaved (fp, pos, fp, pos, …) data, then the 8-byte
+// key-hash seed.
 func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []uint64, seed uint64) error {
 	if len(fps) != n || len(poss) != n {
 		return fmt.Errorf("%w: fps=%d poss=%d n=%d", errMPHFArrayLengthMismatch, len(fps), len(poss), n)
 	}
 	path := filepath.Join(outDir, CombinedMPHFArrayFile)
 	dataBytes := int64(2*n) * 8
-	totalBytes := int64(HeaderSize) + dataBytes
-	version := Version
-	if seed != 0 {
-		version = VersionSeededMPHF
-		totalBytes += mphfSeedBytes
-	}
+	totalBytes := int64(HeaderSize) + dataBytes + mphfSeedBytes
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("create combined file: %w", err)
@@ -738,7 +732,7 @@ func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []ui
 
 	if _, err := f.Write(EncodeHeader(Header{
 		Magic:   MagicNumber,
-		Version: version,
+		Version: Version,
 		Count:   uint64(2 * n),
 		Width:   8,
 	})); err != nil {
@@ -783,12 +777,10 @@ func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []ui
 			return cleanup(werr)
 		}
 	}
-	if seed != 0 {
-		var seedBuf [mphfSeedBytes]byte
-		binary.LittleEndian.PutUint64(seedBuf[:], seed)
-		if _, err := f.WriteAt(seedBuf[:], int64(HeaderSize)+dataBytes); err != nil {
-			return cleanup(fmt.Errorf("write combined seed: %w", err))
-		}
+	var seedBuf [mphfSeedBytes]byte
+	binary.LittleEndian.PutUint64(seedBuf[:], seed)
+	if _, err := f.WriteAt(seedBuf[:], int64(HeaderSize)+dataBytes); err != nil {
+		return cleanup(fmt.Errorf("write combined seed: %w", err))
 	}
 
 	if err := f.Sync(); err != nil {
@@ -836,6 +828,6 @@ var errMPHFArrayLengthMismatch = errors.New("mphf fingerprints/positions length 
 // cache line covers both reads on a Lookup.
 const CombinedMPHFArrayFile = "mph_fp_pos.u64"
 
-// mphfSeedBytes is the size of the seed word a VersionSeededMPHF
-// mph_fp_pos.u64 carries after its slots.
+// mphfSeedBytes is the size of the seed word mph_fp_pos.u64 carries
+// after its slots.
 const mphfSeedBytes = 8

@@ -414,14 +414,11 @@ func TestStreamingMPHFBuildSurvivesKeyHashCollision(t *testing.T) {
 	}
 
 	data, h := readCombined(t, dir)
-	if h.Version != VersionSeededMPHF {
-		t.Errorf("fp/pos Version = %d, want %d", h.Version, VersionSeededMPHF)
+	if h.Version != Version {
+		t.Errorf("fp/pos Version = %d, want %d", h.Version, Version)
 	}
 	if want := (HeaderSize + 16*len(prefixes) + mphfSeedBytes); len(data) != want {
 		t.Errorf("fp/pos size = %d, want %d", len(data), want)
-	}
-	if _, err := OpenArray(filepath.Join(dir, CombinedMPHFArrayFile)); !errors.Is(err, ErrVersionMismatch) {
-		t.Errorf("Version-2-only open of a seeded fp/pos = %v, want ErrVersionMismatch", err)
 	}
 
 	m, err := OpenMPHF(dir)
@@ -442,27 +439,6 @@ func TestStreamingMPHFBuildSurvivesKeyHashCollision(t *testing.T) {
 	}
 }
 
-func TestStreamingMPHFBuildSeedZeroStaysVersion2(t *testing.T) {
-	prefixes := []string{"", "a/", "a/b/", "b/"}
-	dir := buildTestMPHF(t, prefixes)
-
-	data, h := readCombined(t, dir)
-	if h.Version != Version {
-		t.Errorf("fp/pos Version = %d, want %d", h.Version, Version)
-	}
-	if want := (HeaderSize + 16*len(prefixes)); len(data) != want {
-		t.Errorf("fp/pos size = %d, want %d (no seed word)", len(data), want)
-	}
-	m, err := OpenMPHF(dir)
-	if err != nil {
-		t.Fatalf("OpenMPHF: %v", err)
-	}
-	defer m.Close()
-	if m.seed != 0 {
-		t.Errorf("seed = %#x, want 0", m.seed)
-	}
-}
-
 func TestStreamingMPHFBuildPersistentKeyCollisionFails(t *testing.T) {
 	b := newTestMPHFBuilder(t)
 	b.sb.keyHash = func(s string, seed uint64) uint64 {
@@ -480,7 +456,7 @@ func TestStreamingMPHFBuildPersistentKeyCollisionFails(t *testing.T) {
 	}
 }
 
-func TestOpenMPHFSeededMissingSeedWord(t *testing.T) {
+func TestOpenMPHFMissingSeedWord(t *testing.T) {
 	dir := t.TempDir()
 	b := newTestMPHFBuilder(t)
 	b.sb.keyHash = collidingKeyHash("a/", "b/")

@@ -127,7 +127,7 @@ The fingerprint is a cheap pre-filter, not proof: FNV-1 and FNV-1a are correlate
 
 ### Key Seed
 
-BBHash needs distinct keys. If two prefixes share a 64-bit key hash, the builder rehashes every prefix with a new non-zero seed (up to 8 tries). Seed 0 is plain FNV-1a and is not stored: the file stays Version 2. A non-zero seed is written after the slots and the header says Version 3, which readers predating the seed reject instead of hashing queries with the wrong seed.
+BBHash needs distinct keys. If two prefixes share a 64-bit key hash, the builder rehashes every prefix with a new non-zero seed (up to 8 tries). Seed 0 is plain FNV-1a. The seed is stored as one 8-byte word after the slots in `mph_fp_pos.u64`, and readers hash queries with it.
 
 ## Prefix Strings
 
@@ -211,4 +211,4 @@ The stride is recorded in the file header's `Width` field; readers cross-check `
 
 ## Versioning
 
-The format version in file headers lets a reader refuse files it would mis-decode. Version 2 is the current format; `mph_fp_pos.u64` is Version 3 only when it carries a non-zero key seed. Readers accept exactly the versions they understand.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 3 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
