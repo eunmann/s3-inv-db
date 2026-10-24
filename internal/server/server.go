@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -82,6 +83,7 @@ type Server struct {
 	jobMgr      *jobs.Scheduler
 	bldr        *loader.Loader
 	tracker     *budget.Tracker
+	gate        *loadcontrol.Gate
 	autoloader  *autoload.AutoLoader
 	discovery   *inventory.Discovery
 	handlers    *handlers.Handlers
@@ -104,14 +106,18 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("create renderer: %w", err)
 	}
 
-	tracker := budget.New(cfg.MaxIndexDisk, cfg.IndexHeadroomBytes)
-	planner := budget.NewPlanner(tracker, retentionLookup(stores.config, cfg.AutoLoadRetentionDefault))
-	gate := loadcontrol.New(stores.catalog, tracker, planner)
-
-	discovery, bldr, err := newDiscovery(ctx, cfg, stores.catalog, gate)
-	if err != nil {
-		return nil, err
+	var wiring *discoveryWiring
+	if cfg.S3Source != "" {
+		w, err := newDiscoveryWiring(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		wiring = &w
 	}
+	tracker := budget.New(cfg.MaxIndexDisk, cfg.IndexHeadroomBytes, stores.catalog.LoadedBytes)
+	planner := budget.NewPlanner(tracker, retentionLookup(stores.config, cfg.AutoLoadRetentionDefault))
+	gate := loadcontrol.New(stores.catalog, tracker, planner, cacheRemover(wiring))
+	discovery, bldr := newDiscovery(cfg, stores.catalog, gate, wiring)
 
 	h := handlers.New(
 		stores.catalog, renderer, cfg.PriceTable,
@@ -135,6 +141,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		jobMgr:      stores.jobs,
 		bldr:        bldr,
 		tracker:     tracker,
+		gate:        gate,
 		autoloader:  newAutoLoader(cfg, discovery, stores.config, stores.catalog, stores.jobs),
 		discovery:   discovery,
 		handlers:    h,
@@ -146,7 +153,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	// values (logger, request id) but drops cancellation.
 	startupCtx := context.WithoutCancel(ctx)
 	s.recover(startupCtx, cfg.Logger)
-	s.backfillTracker(startupCtx, cfg.Logger)
+	s.backfillIndexSizes(startupCtx, cfg.Logger)
 
 	return s, nil
 }
@@ -183,13 +190,28 @@ func newStores(cfg Config) (serverStores, error) {
 
 // newDiscovery wires the S3-side of the server. Returns a disabled
 // Discovery (and nil loader) when --s3-source is unset.
-func newDiscovery(ctx context.Context, cfg Config, catalog *inventory.Catalog, gate *loadcontrol.Gate) (*inventory.Discovery, *loader.Loader, error) {
-	if cfg.S3Source == "" {
-		return inventory.NewDiscovery(catalog), nil, nil
+// CacheRemover deletes an evicted run's cache dir; nil without S3 wiring.
+func cacheRemover(wiring *discoveryWiring) loadcontrol.CacheRemover {
+	if wiring == nil {
+		return nil
 	}
-	wiring, err := newDiscoveryWiring(ctx, cfg)
-	if err != nil {
-		return nil, nil, err
+
+	return func(id inventory.ID) error {
+		p := id.Split()
+		if !p.OK {
+			return fmt.Errorf("%w: %q", errBadInventoryID, id)
+		}
+		if err := wiring.Loader.RemoveCache(inventory.CacheKey{SourceBucket: p.Source, InventoryID: p.Inventory, Run: p.Run}); err != nil {
+			return fmt.Errorf("remove cache: %w", err)
+		}
+
+		return nil
+	}
+}
+
+func newDiscovery(cfg Config, catalog *inventory.Catalog, gate *loadcontrol.Gate, wiring *discoveryWiring) (*inventory.Discovery, *loader.Loader) {
+	if wiring == nil {
+		return inventory.NewDiscovery(catalog), nil
 	}
 	sizer := loadcontrol.NewManifestSizer(wiring.Client)
 	disc := inventory.NewDiscovery(catalog,
@@ -202,7 +224,7 @@ func newDiscovery(ctx context.Context, cfg Config, catalog *inventory.Catalog, g
 		Uint64("max_index_disk_bytes", cfg.MaxIndexDisk).
 		Msg("discovery + budget configured")
 
-	return disc, wiring.Loader, nil
+	return disc, wiring.Loader
 }
 
 func buildHandlerOptions(cfg Config, discovery *inventory.Discovery, bldr *loader.Loader) []handlers.Option {
@@ -269,40 +291,43 @@ func retentionLookup(store *inventory.ConfigStore, fallback uint32) budget.Reten
 	}
 }
 
-// backfillTracker walks every currently-loaded inventory and attributes
-// its on-disk size to the budget tracker so post-restart eviction
-// decisions see an accurate baseline.
-func (s *Server) backfillTracker(ctx context.Context, logger zerolog.Logger) {
+// backfillIndexSizes records the on-disk size of loaded inventories
+// whose size was never measured (indexes from before sizes were
+// persisted), so the budget tracker — which sums loaded sizes from the
+// catalog — sees an accurate baseline after a restart.
+func (s *Server) backfillIndexSizes(ctx context.Context, logger zerolog.Logger) {
 	if s.bldr == nil {
 		return
 	}
 	list := s.manager.List()
 	for i := range list {
 		info := &list[i]
-		if info.State != inventory.StateLoaded {
+		if info.State != inventory.StateLoaded || info.IndexBytes > 0 {
 			continue
 		}
-		bytes := info.IndexBytes
-		if bytes == 0 {
-			p := info.ID.Split()
-			if !p.OK {
-				continue
-			}
-			dir := s.bldr.CacheDirFor(inventory.CacheKey{
-				SourceBucket: p.Source,
-				InventoryID:  p.Inventory,
-				Run:          p.Run,
-			})
-			if measured, err := inventory.MeasureDir(ctx, dir); err == nil {
-				bytes = measured
-				updated := *info
-				updated.IndexBytes = bytes
-				_ = s.invStore.Upsert(ctx, updated)
-			} else {
-				logger.Warn().Stringer("id", info.ID).Err(err).Msg("backfill index size")
-			}
+		p := info.ID.Split()
+		if !p.OK {
+			continue
 		}
-		s.tracker.Add(bytes)
+		dir, err := s.bldr.CacheDirFor(inventory.CacheKey{
+			SourceBucket: p.Source,
+			InventoryID:  p.Inventory,
+			Run:          p.Run,
+		})
+		if err != nil {
+			logger.Warn().Stringer("id", info.ID).Err(err).Msg("resolve cache dir for backfill")
+
+			continue
+		}
+		measured, err := inventory.MeasureDir(ctx, dir)
+		if err != nil {
+			logger.Warn().Stringer("id", info.ID).Err(err).Msg("backfill index size")
+
+			continue
+		}
+		if err := s.manager.SetIndexBytes(ctx, info.ID, measured); err != nil {
+			logger.Warn().Stringer("id", info.ID).Err(err).Msg("record backfilled index size")
+		}
 	}
 }
 
@@ -339,11 +364,15 @@ func (s *Server) recover(ctx context.Context, logger zerolog.Logger) {
 			// segments; treat those as un-hydratable so the user sees
 			// the error and can rebuild.
 			if p := info.ID.Split(); p.OK {
-				indexDir = s.bldr.CacheDirFor(inventory.CacheKey{
+				dir, err := s.bldr.CacheDirFor(inventory.CacheKey{
 					SourceBucket: p.Source,
 					InventoryID:  p.Inventory,
 					Run:          p.Run,
 				})
+				if err != nil {
+					logger.Warn().Stringer("id", info.ID).Err(err).Msg("resolve cache dir for hydrate")
+				}
+				indexDir = dir
 			}
 		}
 		if err := s.manager.Hydrate(ctx, *info, indexDir); err != nil {
@@ -361,8 +390,9 @@ func (s *Server) recover(ctx context.Context, logger zerolog.Logger) {
 }
 
 var (
-	errEmptyCacheDir = errors.New("CacheDir is required when S3Source is set")
-	errNoDB          = errors.New("server.Config.DB is required")
+	errEmptyCacheDir  = errors.New("CacheDir is required when S3Source is set")
+	errNoDB           = errors.New("server.Config.DB is required")
+	errBadInventoryID = errors.New("not a source/inventory/run id")
 )
 
 // s3StartupTimeout caps how long s3fetch.NewClient may spend doing
@@ -421,11 +451,15 @@ func newDiscoveryWiring(ctx context.Context, cfg Config) (discoveryWiring, error
 
 // newHTTPServer builds the *http.Server with the project-wide timeout
 // hardening. Extracted so tests can assert the timeout shape without
-// racing against Run's goroutine assignment to s.server.
-func (s *Server) newHTTPServer() *http.Server {
+// racing against Run's goroutine assignment to s.server. Every request
+// context derives from baseCtx, so cancelling it is how long-lived
+// handlers (SSE) learn about shutdown: http.Server.Shutdown waits for
+// them but never cancels their contexts.
+func (s *Server) newHTTPServer(baseCtx context.Context) *http.Server {
 	return &http.Server{
 		Addr:              s.config.Addr,
 		Handler:           s.router,
+		BaseContext:       func(net.Listener) context.Context { return baseCtx },
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		IdleTimeout:       idleTimeout,
@@ -435,7 +469,9 @@ func (s *Server) newHTTPServer() *http.Server {
 
 // Run starts the HTTP server and blocks until the context is cancelled.
 func (s *Server) Run(ctx context.Context) error {
-	s.server = s.newHTTPServer()
+	baseCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelRequests()
+	s.server = s.newHTTPServer(baseCtx)
 
 	// On every exit path: cancel in-flight jobs (so goroutines don't
 	// outlive the DB they write to), then close the inventory manager
@@ -450,6 +486,8 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.autoloader != nil {
 		s.autoloader.Start(ctx)
 	}
+	stopPruner := s.startJobPruner(ctx)
+	defer stopPruner()
 
 	errChan := make(chan error, 1)
 	go func() {
@@ -466,6 +504,7 @@ func (s *Server) Run(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownDrainTimeout)
 		defer cancel()
 
+		cancelRequests()
 		if err := s.server.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("shutdown: %w", err)
 		}
@@ -474,6 +513,51 @@ func (s *Server) Run(ctx context.Context) error {
 
 	case err := <-errChan:
 		return err
+	}
+}
+
+// jobPruneInterval is how often Run trims the jobs table after the
+// startup pass.
+const jobPruneInterval = 24 * time.Hour
+
+// startJobPruner prunes job history inline, then every
+// jobPruneInterval until ctx is cancelled or the returned stop func is
+// called. Stop waits for the goroutine so no prune outlives the DB.
+func (s *Server) startJobPruner(ctx context.Context) func() {
+	s.pruneJobs(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(jobPruneInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.pruneJobs(ctx)
+			}
+		}
+	}()
+
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func (s *Server) pruneJobs(ctx context.Context) {
+	n, err := s.jobStore.PruneTerminal(ctx, time.Now().Add(-jobs.RetentionWindow), jobs.RetentionKeepPerInventory)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.config.Logger.Error().Err(err).Msg("prune job history")
+		}
+
+		return
+	}
+	if n > 0 {
+		s.config.Logger.Info().Int64("count", n).Msg("pruned job history")
 	}
 }
 

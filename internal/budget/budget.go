@@ -15,26 +15,34 @@ var ErrOverBudget = errors.New("over disk budget")
 // is already tracking an in-flight reservation.
 var ErrReservationActive = errors.New("reservation already active")
 
-// Tracker is the thread-safe budget accounting primitive.
+// Tracker is the thread-safe budget accounting primitive. It holds
+// reservations for in-flight loads; the bytes already on disk come from
+// the used function, derived from the catalog on every call, so there is
+// no second counter to drift out of step with what is actually loaded.
 type Tracker struct {
 	keys     map[string]uint64
+	used     func() uint64
 	capBytes uint64
 	headroom uint64
-	used     uint64
 	reserved uint64
 	mu       sync.Mutex
 }
 
-// New constructs a Tracker. Zero cap disables the budget — Reserve
-// becomes a no-op and Available reports 0.
-func New(capBytes, headroomBytes uint64) *Tracker {
+// New constructs a Tracker. Used reports the bytes of every index
+// currently held (nil means none). Zero cap disables the budget —
+// Reserve becomes a no-op and Available reports 0.
+func New(capBytes, headroomBytes uint64, used func() uint64) *Tracker {
 	if headroomBytes > capBytes {
 		headroomBytes = capBytes
+	}
+	if used == nil {
+		used = func() uint64 { return 0 }
 	}
 
 	return &Tracker{
 		capBytes: capBytes,
 		headroom: headroomBytes,
+		used:     used,
 		keys:     make(map[string]uint64),
 	}
 }
@@ -47,11 +55,9 @@ func (t *Tracker) Cap() uint64 { return t.capBytes }
 // mutated; safe to read without the tracker mutex.
 func (t *Tracker) Headroom() uint64 { return t.headroom }
 
+// Used returns the bytes of every index currently held.
 func (t *Tracker) Used() uint64 {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	return t.used
+	return t.used()
 }
 
 func (t *Tracker) Reserved() uint64 {
@@ -70,29 +76,12 @@ func (t *Tracker) Available() uint64 {
 }
 
 func (t *Tracker) availableLocked() uint64 {
-	committed := t.used + t.reserved + t.headroom
+	committed := t.used() + t.reserved + t.headroom
 	if committed >= t.capBytes {
 		return 0
 	}
 
 	return t.capBytes - committed
-}
-
-func (t *Tracker) Add(bytes uint64) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.used += bytes
-}
-
-func (t *Tracker) Remove(bytes uint64) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if bytes >= t.used {
-		t.used = 0
-
-		return
-	}
-	t.used -= bytes
 }
 
 // Reserve holds `bytes` against the cap. Must be paired with Release.

@@ -25,7 +25,13 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
 	if err := r.ParseForm(); err != nil {
+		if bodyTooLarge(err) {
+			WriteJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+
+			return
+		}
 		WriteJSONError(w, http.StatusBadRequest, "invalid form body")
 
 		return
@@ -39,8 +45,10 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 
 		return
 	}
-	if v := r.FormValue("auto_load"); v != "" {
-		cfg.AutoLoad = parseBoolToggle(v)
+	// The UI form sends a hidden auto_load=off before the checkbox, since
+	// an unchecked box sends nothing; the last value is the box's state.
+	if vs := r.Form["auto_load"]; len(vs) > 0 {
+		cfg.AutoLoad = parseBoolToggle(vs[len(vs)-1])
 	}
 	if v := r.FormValue("retention"); v != "" {
 		n, parseErr := strconv.ParseUint(strings.TrimSpace(v), 10, 32)
@@ -51,8 +59,8 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 		}
 		cfg.RetentionCount = uint32(n)
 	}
-	if err := h.configStore.Upsert(r.Context(), cfg); err != nil {
-		zerolog.Ctx(r.Context()).Error().Err(err).Msg("upsert config")
+	if err := h.configStore.SetPolicy(r.Context(), src, name, cfg.AutoLoad, cfg.RetentionCount); err != nil {
+		zerolog.Ctx(r.Context()).Error().Err(err).Msg("set config policy")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to save config")
 
 		return
@@ -63,7 +71,13 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 // SetPinAPI sets a run's pin state. Form body: pinned.
 func (h *Handlers) SetPinAPI(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
 	if err := r.ParseForm(); err != nil {
+		if bodyTooLarge(err) {
+			WriteJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+
+			return
+		}
 		WriteJSONError(w, http.StatusBadRequest, "invalid form body")
 
 		return

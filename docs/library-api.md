@@ -38,7 +38,9 @@ fmt.Printf("%d objects, %d bytes\n", stats.ObjectCount, stats.TotalBytes)
   `Count`, `MaxDepth`.
 - **Descendants**: `DescendantsAtDepth`, `DescendantsAtDepthFiltered`
   (apply a `Filter{MinCount, MinBytes}` to skip cheap nodes before
-  materialising positions).
+  materialising positions), `DescendantsPage` (one `[offset,
+  offset+limit)` window of the filtered matches plus their total,
+  holding only the page in memory).
 - **Top-N**: `TopByBytes`, `TopByCount`, `TopFiltered`.
 - **Per-tier**: `HasTierData`, `TierBreakdown`, `TierBreakdownMap`.
 
@@ -52,7 +54,7 @@ fmt.Printf("%d objects, %d bytes\n", stats.ObjectCount, stats.TotalBytes)
 - **Misses are not errors**: `Lookup` and `StatsForPrefix` return
   `ok=false` for an absent prefix. `Stats` on an out-of-range position
   returns the zero `Stats{}`. `DescendantsAt*` returns `(nil, nil)`
-  for out-of-bounds inputs. Only `PrefixString` and `Open` surface
+  and `DescendantsPage` an empty page for out-of-bounds inputs. Only `PrefixString` and `Open` surface
   errors.
 - **Subtree end is inclusive**: `SubtreeEnd(pos)` is the last
   descendant's position (the closed interval `[pos, SubtreeEnd(pos)]`),

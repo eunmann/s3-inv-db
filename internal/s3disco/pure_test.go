@@ -1,9 +1,12 @@
 package s3disco_test
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
@@ -150,5 +153,82 @@ func TestRunFolderRE(t *testing.T) {
 				t.Errorf("MatchString(%q) = %v, want %v", c.name, got, c.match)
 			}
 		})
+	}
+}
+
+func TestValidSourceName(t *testing.T) {
+	cases := []struct {
+		name string
+		ok   bool
+	}{
+		{"src", true},
+		{"my-bucket.logs", true},
+		{"synthetic-prod", true},
+		{"a1b", true},
+		{strings.Repeat("a", 63), true},
+		{"ab", false},
+		{strings.Repeat("a", 64), false},
+		{"", false},
+		{"..", false},
+		{"...", false},
+		{"-bucket", false},
+		{"bucket-", false},
+		{"Bucket", false},
+		{"my_bucket", false},
+		{"a/b/c", false},
+		{"row[alert(1)]", false},
+		{"a b", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := s3disco.ValidSourceName(c.name); got != c.ok {
+				t.Errorf("ValidSourceName(%q) = %v, want %v", c.name, got, c.ok)
+			}
+		})
+	}
+}
+
+func TestValidInventoryID(t *testing.T) {
+	cases := []struct {
+		name string
+		ok   bool
+	}{
+		{"inv-001", true},
+		{"Daily_Inventory.v2", true},
+		{"x", true},
+		{strings.Repeat("a", 64), true},
+		{"a..b", true},
+		{"", false},
+		{".", false},
+		{"..", false},
+		{strings.Repeat("a", 65), false},
+		{"a/b", false},
+		{`a\b`, false},
+		{"inv[x]", false},
+		{`inv"x`, false},
+		{"inv x", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := s3disco.ValidInventoryID(c.name); got != c.ok {
+				t.Errorf("ValidInventoryID(%q) = %v, want %v", c.name, got, c.ok)
+			}
+		})
+	}
+}
+
+func TestFind_RejectsInvalidNamesWithoutListing(t *testing.T) {
+	// A zero s3.Client panics if used, so a passing test proves the
+	// names are rejected before any S3 call.
+	d := s3disco.New(&s3.Client{}, "bucket", "data/")
+	for _, c := range []struct{ src, inv string }{
+		{"..", "inv-001"},
+		{"src", ".."},
+		{"src", "inv[alert(1)]"},
+		{"Src_Bad", "inv-001"},
+	} {
+		if _, err := d.Find(t.Context(), c.src, c.inv, ""); !errors.Is(err, inventory.ErrInvalidName) {
+			t.Errorf("Find(%q, %q) err = %v, want ErrInvalidName", c.src, c.inv, err)
+		}
 	}
 }

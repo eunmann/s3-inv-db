@@ -3,10 +3,12 @@ package handlers_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,18 +31,24 @@ var (
 )
 
 type fakeDiscoverer struct {
-	listErr  error
-	findErr  error
-	findResp inventory.Inventory
-	bucket   string
-	listResp []inventory.Inventory
+	listErr   error
+	findErr   error
+	findResp  inventory.Inventory
+	bucket    string
+	listResp  []inventory.Inventory
+	listCalls atomic.Int64
+	findCalls atomic.Int64
 }
 
 func (f *fakeDiscoverer) List(context.Context) ([]inventory.Inventory, error) {
+	f.listCalls.Add(1)
+
 	return f.listResp, f.listErr
 }
 
 func (f *fakeDiscoverer) Find(_ context.Context, _, _, _ string) (inventory.Inventory, error) {
+	f.findCalls.Add(1)
+
 	return f.findResp, f.findErr
 }
 func (f *fakeDiscoverer) Bucket() string { return f.bucket }
@@ -355,5 +363,117 @@ func TestListDiscoveredAPI_SuccessReturnsJSON(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"b1"`) {
 		t.Errorf("body missing expected source bucket: %s", w.Body.String())
+	}
+}
+
+// TestDiscoveredRowPartial_RendersFromSnapshot pins that the row refresh
+// htmx fires on every SSE row event reads the cached discovery snapshot
+// instead of re-listing S3, and only falls back to one targeted lookup
+// for a run the snapshot does not hold.
+func TestDiscoveredRowPartial_RendersFromSnapshot(t *testing.T) {
+	const cachedRun, newRun = "2026-05-13T03-00Z", "2026-05-14T03-00Z"
+	fake := &fakeDiscoverer{
+		bucket: "dst",
+		listResp: []inventory.Inventory{{
+			SourceBucket: "b", Name: "i", Run: cachedRun,
+			ManifestKey: "b/i/" + cachedRun + "/manifest.json",
+			FileFormat:  "CSV", FileCount: 3, TotalBytes: 4096,
+		}},
+		findResp: inventory.Inventory{
+			SourceBucket: "b", Name: "i", Run: newRun,
+			ManifestKey: "b/i/" + newRun + "/manifest.json",
+		},
+	}
+	mgr := inventory.NewCatalog(nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+	disc := inventory.NewDiscovery(mgr, inventory.WithBackend(fake, &fakeBuilder{}))
+	if err := disc.Refresh(t.Context()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	h := newWiredHandlers(t, mgr, handlers.WithDiscovery(disc))
+	if err := mgr.Register(t.Context(), inventory.ID("b/i/"+cachedRun), "row", "s3://dst/b/i/"+cachedRun+"/manifest.json"); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if err := mgr.SetPinned(t.Context(), inventory.ID("b/i/"+cachedRun), true); err != nil {
+		t.Fatalf("SetPinned: %v", err)
+	}
+
+	render := func(run string) string {
+		t.Helper()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/discovered/b/i/"+run, http.NoBody)
+		req = chiCtxWithParams(req, "src", "b", "id", "i", "run", run)
+		w := httptest.NewRecorder()
+		h.DiscoveredRowPartial(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("run %s: status = %d, want 200", run, w.Code)
+		}
+
+		return w.Body.String()
+	}
+
+	for range 5 {
+		body := render(cachedRun)
+		if !strings.Contains(body, "3 chunks") {
+			t.Fatalf("cached row lost snapshot manifest stats: %q", body)
+		}
+		if !strings.Contains(body, `aria-label="Pinned"`) {
+			t.Fatalf("cached row missing live catalog state: %q", body)
+		}
+	}
+	if got := fake.findCalls.Load(); got != 0 {
+		t.Errorf("Find calls for a cached run = %d, want 0", got)
+	}
+	if got := fake.listCalls.Load(); got != 1 {
+		t.Errorf("List calls = %d, want 1 (the explicit Refresh)", got)
+	}
+
+	render(newRun)
+	if got := fake.findCalls.Load(); got != 1 {
+		t.Errorf("Find calls for an uncached run = %d, want 1", got)
+	}
+}
+
+// A lookup refused for a bad name or a missing run is the client's
+// request, not an S3 failure: it was answered 502 and logged as an
+// error, which read like an outage.
+func TestDiscoveredFindErrors_MapToClientStatuses(t *testing.T) {
+	const run = "2026-05-13T03-00Z"
+	cases := []struct {
+		err  error
+		want int
+	}{
+		{fmt.Errorf("find: %w: %q/%q", inventory.ErrInvalidName, "Bad_Src", "i"), http.StatusBadRequest},
+		{fmt.Errorf("find: %w: b/i/%s", inventory.ErrRunNotFound, run), http.StatusNotFound},
+		{errFakeS3Throttled, http.StatusBadGateway},
+	}
+	for _, tc := range cases {
+		h := newDiscoveredHandlers(t, &fakeDiscoverer{findErr: tc.err, bucket: "dst"}, &fakeBuilder{})
+		calls := map[string]func(http.ResponseWriter, *http.Request){
+			"load":   h.LoadDiscoveredRowPartial,
+			"render": h.DiscoveredRowPartial,
+		}
+		for name, call := range calls {
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/partials/discovered/b/i/"+run, http.NoBody)
+			req = chiCtxWithParams(req, "src", "b", "id", "i", "run", run)
+			w := httptest.NewRecorder()
+			call(w, req)
+			if w.Code != tc.want {
+				t.Errorf("%s with %v: status = %d, want %d", name, tc.err, w.Code, tc.want)
+			}
+		}
+
+		composite := inventory.ID("b/i/" + run)
+		seedInventoryRow(t, h.ManagerForTest(), composite)
+		prev := jobs.Job{ID: "j-fail", InventoryID: composite, Kind: jobs.KindBuild, State: jobs.StateFailed}
+		if err := h.JobStoreForTest().Upsert(t.Context(), prev); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/jobs/j-fail/retry", http.NoBody)
+		req = chiCtxWithParams(req, "id", "j-fail")
+		w := httptest.NewRecorder()
+		h.RetryJob(w, req)
+		if w.Code != tc.want {
+			t.Errorf("retry with %v: status = %d, want %d", tc.err, w.Code, tc.want)
+		}
 	}
 }

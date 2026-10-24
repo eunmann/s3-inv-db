@@ -99,6 +99,24 @@ type DescendantInfo struct {
 	Depth        uint32 `json:"depth"`
 }
 
+// DescendantsResponse is one page of descendants. Total counts every
+// descendant matching the depth and filter; Limit and Offset are the
+// effective values after defaulting and clamping.
+type DescendantsResponse struct {
+	Descendants []DescendantInfo `json:"descendants"`
+	Total       int              `json:"total"`
+	Limit       int              `json:"limit"`
+	Offset      int              `json:"offset"`
+}
+
+// Page size bounds for the descendants endpoint. Only the page is held
+// in memory; without min_count/min_bytes the total comes from the depth
+// index, with them every descendant's stats are read to count matches.
+const (
+	defaultDescendantsLimit = 1000
+	maxDescendantsLimit     = 10000
+)
+
 // GetStatsAPI returns stats for a prefix. Inventory_id comes from the
 // query string (legacy / cross-inventory variant).
 func (h *Handlers) GetStatsAPI(w http.ResponseWriter, r *http.Request) {
@@ -152,6 +170,8 @@ func (h *Handlers) writeStatsForInventory(w http.ResponseWriter, r *http.Request
 type descendantsParams struct {
 	prefix string
 	depth  int
+	limit  int
+	offset int
 	filter indexread.Filter
 }
 
@@ -176,34 +196,52 @@ func parseDescendantsParams(w http.ResponseWriter, q url.Values) (descendantsPar
 
 		return descendantsParams{}, false
 	}
+	limit, err := parsePositiveInt(q, "limit", defaultDescendantsLimit)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, err.Error())
 
-	return descendantsParams{prefix: q.Get("prefix"), depth: depth, filter: filter}, true
+		return descendantsParams{}, false
+	}
+	offset, err := parseNonNegativeInt(q, "offset", 0)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, err.Error())
+
+		return descendantsParams{}, false
+	}
+
+	return descendantsParams{
+		prefix: q.Get("prefix"),
+		depth:  depth,
+		limit:  min(limit, maxDescendantsLimit),
+		offset: offset,
+		filter: filter,
+	}, true
 }
 
-// GetDescendantsAPI returns descendants at a specific depth.
+// GetDescendantsAPI returns one page of descendants at a specific depth.
 func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 	inventoryID := inventory.ID(chi.URLParam(r, "id"))
 	params, ok := parseDescendantsParams(w, r.URL.Query())
 	if !ok {
 		return
 	}
-	prefix, depth, filter := params.prefix, params.depth, params.filter
 
 	logger := zerolog.Ctx(r.Context())
-	var descendants []DescendantInfo
+	resp := DescendantsResponse{Limit: params.limit, Offset: params.offset}
 	err := h.manager.WithIndex(inventoryID, func(idx *indexread.Index) error {
-		pos, ok := idx.Lookup(prefix)
+		pos, ok := idx.Lookup(params.prefix)
 		if !ok {
 			return errPrefixNotFound
 		}
-		positions, perr := idx.DescendantsAtDepthFiltered(pos, depth, filter)
+		page, perr := idx.DescendantsPage(pos, params.depth, params.filter, params.offset, params.limit)
 		if perr != nil {
 			logger.Error().Err(perr).Msg("failed to get descendants")
 
 			return fmt.Errorf("descendants at depth: %w", perr)
 		}
-		descendants = make([]DescendantInfo, 0, len(positions))
-		for _, p := range positions {
+		resp.Total = page.Total
+		resp.Descendants = make([]DescendantInfo, 0, len(page.Positions))
+		for _, p := range page.Positions {
 			prefixStr, pserr := idx.PrefixString(p)
 			if pserr != nil {
 				logger.Warn().Err(pserr).Uint64("pos", p).Msg("failed to get prefix string")
@@ -211,7 +249,7 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			stats := idx.Stats(p)
-			descendants = append(descendants, DescendantInfo{
+			resp.Descendants = append(resp.Descendants, DescendantInfo{
 				Prefix:       prefixStr,
 				ObjectCount:  stats.ObjectCount,
 				ObjectCountH: humanfmt.CountUint64(stats.ObjectCount),
@@ -230,7 +268,7 @@ func (h *Handlers) GetDescendantsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WriteJSON(w, http.StatusOK, descendants)
+	WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handlers) buildStatsResponse(idx *indexread.Index, prefix string, showTiers, estimateCost bool) (*StatsResponse, error) {

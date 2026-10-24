@@ -66,12 +66,10 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 	src := chi.URLParam(r, "src")
 	id := chi.URLParam(r, "id")
 	run := chi.URLParam(r, "run")
-	logger := zerolog.Ctx(r.Context())
 
 	disc, err := h.discovery.Find(r.Context(), src, id, run)
 	if err != nil {
-		logger.Error().Err(err).Str("src", src).Str("id", id).Str("run", run).Msg("find discovered inventory")
-		http.Error(w, "failed to find inventory", http.StatusBadGateway)
+		respondFindError(w, r, err, src+"/"+id+"/"+run, "failed to find inventory")
 
 		return
 	}
@@ -169,7 +167,13 @@ func (h *Handlers) PinDiscoveredRowPartial(w http.ResponseWriter, r *http.Reques
 	name := chi.URLParam(r, "id")
 	run := chi.URLParam(r, "run")
 	composite := inventory.ID(src + "/" + name + "/" + run)
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
 	if err := r.ParseForm(); err != nil {
+		if bodyTooLarge(err) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+
+			return
+		}
 		http.Error(w, "invalid form body", http.StatusBadRequest)
 
 		return
@@ -207,11 +211,9 @@ func (h *Handlers) renderInventoryRow(w http.ResponseWriter, r *http.Request, id
 // renderDiscoveredRow re-fetches the discovery entry, merges in current
 // manager state, and renders the discovered_row.html partial.
 func (h *Handlers) renderDiscoveredRow(w http.ResponseWriter, r *http.Request, src, id, run string) {
-	logger := zerolog.Ctx(r.Context())
 	disc, err := h.discovery.Find(r.Context(), src, id, run)
 	if err != nil {
-		logger.Error().Err(err).Str("src", src).Str("id", id).Str("run", run).Msg("find discovered inventory for row render")
-		http.Error(w, "failed to render row", http.StatusBadGateway)
+		respondFindError(w, r, err, src+"/"+id+"/"+run, "failed to render row")
 
 		return
 	}

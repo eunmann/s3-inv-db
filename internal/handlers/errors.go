@@ -56,3 +56,22 @@ func respondManagerError(w http.ResponseWriter, r *http.Request, err error, op s
 	}
 	http.Error(w, resp.Message, resp.Status)
 }
+
+// respondFindError answers a failed discovery lookup for target. A name
+// outside the AWS charsets (400) or a missing run (404) is the client's
+// request, logged at Debug; anything else is an S3 failure, answered
+// 502 with upstreamMsg and logged at Error.
+func respondFindError(w http.ResponseWriter, r *http.Request, err error, target, upstreamMsg string) {
+	logger := zerolog.Ctx(r.Context())
+	switch {
+	case errors.Is(err, inventory.ErrInvalidName):
+		logger.Debug().Err(err).Str("inv", target).Msg("find discovered inventory")
+		http.Error(w, "invalid source or inventory name", http.StatusBadRequest)
+	case errors.Is(err, inventory.ErrRunNotFound):
+		logger.Debug().Err(err).Str("inv", target).Msg("find discovered inventory")
+		http.Error(w, "inventory run not found", http.StatusNotFound)
+	default:
+		logger.Error().Err(err).Str("inv", target).Msg("find discovered inventory")
+		http.Error(w, upstreamMsg, http.StatusBadGateway)
+	}
+}

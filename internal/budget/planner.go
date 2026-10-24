@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
@@ -171,7 +172,10 @@ func (p *Planner) candidates(in Input) ([]inventory.Info, bool) {
 }
 
 // selectByConfig returns the oldest runs in (source, name) that must
-// come out so the new run lands at exactly `retention`.
+// come out so the new run lands at exactly `retention`. "Oldest" is by
+// inventory run timestamp, not by when a run was loaded: evicting by
+// load time could remove a newer run just loaded to make room for an
+// older one, and the auto-loader would then reload it next tick.
 func selectByConfig(pool []inventory.Info, source, name string, retention uint32) []inventory.Info {
 	var inConfig []inventory.Info
 	for i := range pool {
@@ -187,11 +191,9 @@ func selectByConfig(pool []inventory.Info, source, name string, retention uint32
 		return nil
 	}
 	slices.SortStableFunc(inConfig, func(a, b inventory.Info) int {
-		if a.LoadedAt.Equal(b.LoadedAt) {
-			return a.LastAccessedAt.Compare(b.LastAccessedAt)
-		}
-
-		return a.LoadedAt.Compare(b.LoadedAt)
+		// Run names are UTC timestamps (YYYY-MM-DDTHH-MM[-SS]Z), so byte
+		// order is age order.
+		return strings.Compare(a.ID.Split().Run, b.ID.Split().Run)
 	})
 	// The early guard (uint32(len) < retention) ensures retention ≥ 1
 	// here, so retention-1 is a safe subtraction and drop is always

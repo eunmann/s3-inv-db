@@ -220,41 +220,58 @@ func (d *DepthIndex) MaxDepth() uint32 {
 // PositionsInSubtree returns positions at the given depth that fall within
 // the subtree [subtreeStart, subtreeEnd]. Uses binary search.
 func (d *DepthIndex) PositionsInSubtree(depth uint32, subtreeStart, subtreeEnd uint64) ([]uint64, error) {
+	span, err := d.SubtreeSpan(depth, subtreeStart, subtreeEnd)
+	if err != nil || span.Len() == 0 {
+		return nil, err
+	}
+
+	positions := make([]uint64, span.Len())
+	for i := range positions {
+		positions[i] = d.positions.UnsafeGetU64(span.Lo + uint64(i))
+	}
+
+	return positions, nil
+}
+
+// Span is a half-open range [Lo, Hi) of depth posting-list indices.
+type Span struct {
+	Lo, Hi uint64
+}
+
+// Len is the number of positions in the span.
+func (s Span) Len() uint64 { return s.Hi - s.Lo }
+
+// SubtreeSpan returns the posting-list indices whose positions at depth
+// fall within the subtree [subtreeStart, subtreeEnd], so callers can
+// count or window the matches without materialising them.
+func (d *DepthIndex) SubtreeSpan(depth uint32, subtreeStart, subtreeEnd uint64) (Span, error) {
 	if depth > d.maxDepth {
-		return nil, nil
+		return Span{}, nil
 	}
 
 	start, err := d.offsets.GetU64(uint64(depth))
 	if err != nil {
-		return nil, fmt.Errorf("get start offset for depth %d: %w", depth, err)
+		return Span{}, fmt.Errorf("get start offset for depth %d: %w", depth, err)
 	}
 
 	end, err := d.offsets.GetU64(uint64(depth + 1))
 	if err != nil {
-		return nil, fmt.Errorf("get end offset for depth %d: %w", depth, err)
+		return Span{}, fmt.Errorf("get end offset for depth %d: %w", depth, err)
 	}
 
 	if start >= end {
-		return nil, nil
+		return Span{}, nil
 	}
 
-	// Binary search for lower bound (first pos >= subtreeStart)
 	lo := d.binarySearchLower(start, end, subtreeStart)
 
-	// Binary search for upper bound (first pos > subtreeEnd)
-	hi := d.binarySearchUpper(lo, end, subtreeEnd)
+	return Span{Lo: lo, Hi: d.binarySearchUpper(lo, end, subtreeEnd)}, nil
+}
 
-	count := hi - lo
-	if count == 0 {
-		return nil, nil
-	}
-
-	positions := make([]uint64, count)
-	for i := range count {
-		positions[i] = d.positions.UnsafeGetU64(lo + i)
-	}
-
-	return positions, nil
+// PositionAt returns the position at posting-list index i. The index
+// must come from a SubtreeSpan range.
+func (d *DepthIndex) PositionAt(i uint64) uint64 {
+	return d.positions.UnsafeGetU64(i)
 }
 
 // binarySearchLower finds the first index where positions[idx] >= target.

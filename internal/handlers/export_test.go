@@ -180,3 +180,17 @@ var (
 	LoadDurationLabelForTest           = loadDurationLabel
 	DiscoveredMetaLineForTest          = discoveredMetaLine
 )
+
+// AcquireSSESlotForTest exposes acquireSSESlot.
+func (h *Handlers) AcquireSSESlotForTest(ip string) int64 { return h.acquireSSESlot(ip) }
+
+// ReleaseSSESlotForTest exposes releaseSSESlot.
+func (h *Handlers) ReleaseSSESlotForTest(ip string) { h.releaseSSESlot(ip) }
+
+// SSETrackedIPsForTest reports how many remote IPs hold a counter entry.
+func (h *Handlers) SSETrackedIPsForTest() int {
+	h.sseMu.Lock()
+	defer h.sseMu.Unlock()
+
+	return len(h.sseConnsByIP)
+}

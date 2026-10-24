@@ -79,6 +79,62 @@ func (s *ConfigStore) Upsert(ctx context.Context, c Config) error {
 	return nil
 }
 
+// SetPolicy writes the user-controlled columns (auto_load, retention)
+// and leaves the poller's columns alone, creating the row if needed.
+// Zero retention means DefaultRetentionCount.
+func (s *ConfigStore) SetPolicy(ctx context.Context, source, name string, autoLoad bool, retention uint32) error {
+	if retention == 0 {
+		retention = DefaultRetentionCount
+	}
+	flag := 0
+	if autoLoad {
+		flag = 1
+	}
+	_, err := s.db.ExecContext(ctx, `
+        INSERT INTO inventory_configs (source, name, auto_load, retention_count, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(source, name) DO UPDATE SET
+            auto_load       = excluded.auto_load,
+            retention_count = excluded.retention_count,
+            updated_at      = excluded.updated_at`,
+		source, name, flag, retention, time.Now().Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("set policy %s/%s: %w", source, name, err)
+	}
+
+	return nil
+}
+
+// PollState is the poller's bookkeeping for one configuration.
+type PollState struct {
+	LastPolledAt time.Time
+	BackoffUntil time.Time
+	LastError    string
+	FailureCount uint32
+}
+
+// RecordPoll writes only the poller's columns, so a poll that ran while
+// the user changed auto_load or retention never overwrites that change.
+func (s *ConfigStore) RecordPoll(ctx context.Context, source, name string, p PollState) error {
+	_, err := s.db.ExecContext(ctx, `
+        UPDATE inventory_configs SET
+            poll_failure_count = ?,
+            poll_backoff_until = ?,
+            last_polled_at     = ?,
+            last_poll_error    = ?,
+            updated_at         = ?
+        WHERE source = ? AND name = ?`,
+		p.FailureCount, UnixOrZero(p.BackoffUntil), UnixOrZero(p.LastPolledAt), p.LastError,
+		time.Now().Unix(), source, name,
+	)
+	if err != nil {
+		return fmt.Errorf("record poll %s/%s: %w", source, name, err)
+	}
+
+	return nil
+}
+
 // Get returns ErrStoreNotFound when no row matches.
 func (s *ConfigStore) Get(ctx context.Context, source, name string) (Config, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+configSelectCols+` FROM inventory_configs WHERE source = ? AND name = ?`, source, name)

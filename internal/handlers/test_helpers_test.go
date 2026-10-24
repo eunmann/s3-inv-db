@@ -17,6 +17,15 @@ import (
 // the rest of the required deps are constructed here.
 func newWiredHandlers(t *testing.T, mgr *inventory.Catalog, opts ...handlers.Option) *handlers.Handlers {
 	t.Helper()
+	h, _ := newWiredHandlersWithConfigs(t, mgr, opts...)
+
+	return h
+}
+
+// newWiredHandlersWithConfigs is newWiredHandlers that also returns the
+// config store, for tests asserting on persisted configuration.
+func newWiredHandlersWithConfigs(t *testing.T, mgr *inventory.Catalog, opts ...handlers.Option) (*handlers.Handlers, *inventory.ConfigStore) {
+	t.Helper()
 	db := dbtest.OpenMemDB(t)
 	invStore, err := inventory.NewStore(db)
 	if err != nil {
@@ -36,7 +45,7 @@ func newWiredHandlers(t *testing.T, mgr *inventory.Catalog, opts ...handlers.Opt
 	jobBus := jobs.NewBus(8)
 	jobMgr := jobs.NewScheduler(jobStore, jobBus)
 	configStore := inventory.NewConfigStore(db)
-	tracker := budget.New(0, 0)
+	tracker := budget.New(0, 0, mgr.LoadedBytes)
 
 	return handlers.New(
 		mgr, renderer, pricing.DefaultUSEast1Prices(),
@@ -48,5 +57,5 @@ func newWiredHandlers(t *testing.T, mgr *inventory.Catalog, opts ...handlers.Opt
 			Tracker:     tracker,
 		},
 		opts...,
-	)
+	), configStore
 }

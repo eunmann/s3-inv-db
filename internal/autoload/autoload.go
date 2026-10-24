@@ -179,31 +179,35 @@ func (a *AutoLoader) tick(ctx context.Context) {
 	queue := a.pickTargets(byConfig, enabled)
 	for k := range enabled {
 		c := enabled[k]
-		c.LastPolledAt = a.now()
-		c.PollFailureCount = 0
-		c.LastPollError = ""
-		c.PollBackoffUntil = time.Time{}
-		if err := a.configStore.Upsert(ctx, c); err != nil {
+		if err := a.configStore.RecordPoll(ctx, c.Source, c.Name, inventory.PollState{LastPolledAt: a.now()}); err != nil {
 			a.logger.Warn().Err(err).Str("config_id", c.ConfigID()).Msg("autoload: persist poll-success state")
 		}
 	}
 	a.runQueue(ctx, queue)
 }
 
+// pickTargets returns, per enabled configuration, the newest run that
+// should be loaded next. Only the newest `retention` runs are
+// candidates: once they are loaded (or deliberately unloaded, or backing
+// off) nothing older is loaded, otherwise loading an older run would
+// evict a newer one and the next tick would reload it, forever.
 func (a *AutoLoader) pickTargets(byConfig map[string][]inventory.MergedInventory, enabled map[string]inventory.Config) []inventory.Inventory {
 	var queue []inventory.Inventory
-	for cfgID := range enabled {
-		runs := byConfig[cfgID]
-		if len(runs) == 0 {
-			continue
-		}
+	for cfgID, cfg := range enabled {
+		runs := slices.DeleteFunc(slices.Clone(byConfig[cfgID]), func(r inventory.MergedInventory) bool {
+			return r.Run == "" || r.ManifestKey == ""
+		})
 		slices.SortStableFunc(runs, func(a, b inventory.MergedInventory) int { return strings.Compare(b.Run, a.Run) })
+		retention := cfg.RetentionCount
+		if retention == 0 {
+			retention = a.cfg.DefaultRetention
+		}
+		if uint32(len(runs)) > retention {
+			runs = runs[:retention]
+		}
 		var target inventory.Inventory
 		for i := range runs {
 			r := &runs[i]
-			if r.Run == "" || r.ManifestKey == "" {
-				continue
-			}
 			info, ok := a.manager.Get(r.CompositeID())
 			if ok {
 				if info.State == inventory.StateLoaded || info.State == inventory.StateLoading {
@@ -303,10 +307,14 @@ func (a *AutoLoader) recordLoadFailure(ctx context.Context, id inventory.ID, err
 
 func (a *AutoLoader) recordPollFailure(ctx context.Context, enabled map[string]inventory.Config, msg string) {
 	for _, c := range enabled {
-		c.PollFailureCount++
-		c.LastPollError = msg
-		c.PollBackoffUntil = a.now().Add(backoffDelay(minBackoff, maxBackoff, c.PollFailureCount))
-		if err := a.configStore.Upsert(ctx, c); err != nil {
+		failures := c.PollFailureCount + 1
+		state := inventory.PollState{
+			LastPolledAt: c.LastPolledAt,
+			BackoffUntil: a.now().Add(backoffDelay(minBackoff, maxBackoff, failures)),
+			LastError:    msg,
+			FailureCount: failures,
+		}
+		if err := a.configStore.RecordPoll(ctx, c.Source, c.Name, state); err != nil {
 			a.logger.Warn().Err(err).Str("config_id", c.ConfigID()).Msg("autoload: persist poll-failure state")
 		}
 	}

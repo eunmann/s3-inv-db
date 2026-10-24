@@ -186,6 +186,43 @@ func (s *Store) MarkAborted(ctx context.Context, reason string, fromStates ...St
 	return total, nil
 }
 
+// Job-history retention: terminal jobs last updated more than
+// RetentionWindow ago are pruned, except that each inventory always
+// keeps its RetentionKeepPerInventory most recent jobs so the drawer
+// and retry chain still have history for rarely-rebuilt runs.
+const (
+	RetentionWindow           = 30 * 24 * time.Hour
+	RetentionKeepPerInventory = 20
+)
+
+// PruneTerminal deletes terminal jobs last updated before cutoff that
+// fall outside their inventory's keep most recent jobs. Queued and
+// running jobs are never deleted. Returns the number of rows removed.
+func (s *Store) PruneTerminal(ctx context.Context, cutoff time.Time, keep int) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+        DELETE FROM jobs WHERE id IN (
+            SELECT id FROM (
+                SELECT id, state, updated_at,
+                       ROW_NUMBER() OVER (PARTITION BY inventory_id ORDER BY updated_at DESC, id DESC) AS rank
+                  FROM jobs
+            )
+             WHERE rank > ? AND updated_at < ?
+               AND state IN (?, ?, ?, ?)
+        )`,
+		keep, cutoff.Unix(),
+		string(StateSucceeded), string(StateFailed), string(StateCancelled), string(StateAborted),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("prune terminal jobs: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("prune terminal jobs: rows affected: %w", err)
+	}
+
+	return n, nil
+}
+
 func scanJob(r rowScanner) (Job, error) {
 	var j Job
 	var kind, state, stagesJSON, prevJobID string

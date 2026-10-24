@@ -10,30 +10,25 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 )
 
-func TestTracker_AddRemove(t *testing.T) {
-	tr := budget.New(1000, 0)
-	tr.Add(200)
-	tr.Add(300)
-	if got := tr.Used(); got != 500 {
-		t.Errorf("Used = %d, want 500", got)
-	}
-	tr.Remove(200)
-	if got := tr.Used(); got != 300 {
-		t.Errorf("Used after remove = %d, want 300", got)
-	}
-}
+// fixedUsed reports a constant number of loaded bytes.
+func fixedUsed(n uint64) func() uint64 { return func() uint64 { return n } }
 
-func TestTracker_RemoveClampsAtZero(t *testing.T) {
-	tr := budget.New(1000, 0)
-	tr.Add(100)
-	tr.Remove(9999)
-	if got := tr.Used(); got != 0 {
-		t.Errorf("Used should clamp at 0, got %d", got)
+// Used and Available follow the used function on every call: there is no
+// cached counter to drift when indexes load, unload or get evicted.
+func TestTracker_UsedFollowsSource(t *testing.T) {
+	var loaded uint64 = 200
+	tr := budget.New(1000, 0, func() uint64 { return loaded })
+	if got := tr.Available(); got != 800 {
+		t.Fatalf("Available = %d, want 800", got)
+	}
+	loaded = 700
+	if got, avail := tr.Used(), tr.Available(); got != 700 || avail != 300 {
+		t.Errorf("Used/Available = %d/%d, want 700/300", got, avail)
 	}
 }
 
 func TestTracker_ReserveRelease(t *testing.T) {
-	tr := budget.New(1000, 0)
+	tr := budget.New(1000, 0, fixedUsed(0))
 	if err := tr.Reserve("load-1", 400); err != nil {
 		t.Fatalf("Reserve: %v", err)
 	}
@@ -50,15 +45,14 @@ func TestTracker_ReserveRelease(t *testing.T) {
 }
 
 func TestTracker_OverBudget(t *testing.T) {
-	tr := budget.New(1000, 0)
-	tr.Add(800)
+	tr := budget.New(1000, 0, fixedUsed(800))
 	if err := tr.Reserve("load-1", 300); !errors.Is(err, budget.ErrOverBudget) {
 		t.Errorf("Reserve over budget = %v, want budget.ErrOverBudget", err)
 	}
 }
 
 func TestTracker_HeadroomShrinksAvailable(t *testing.T) {
-	tr := budget.New(1000, 200)
+	tr := budget.New(1000, 200, fixedUsed(0))
 	if got := tr.Available(); got != 800 {
 		t.Errorf("Available with 200 headroom = %d, want 800", got)
 	}
@@ -73,7 +67,7 @@ func TestTracker_HeadroomShrinksAvailable(t *testing.T) {
 func TestTracker_ZeroCapPassesThrough(t *testing.T) {
 	// No --max-index-disk: the tracker becomes a no-op so manual
 	// loads aren't blocked by an unconfigured budget.
-	tr := budget.New(0, 0)
+	tr := budget.New(0, 0, fixedUsed(0))
 	if err := tr.Reserve("anything", 1); err != nil {
 		t.Errorf("Zero-cap tracker should pass reservations through, got %v", err)
 	}
@@ -84,7 +78,7 @@ func TestTracker_ZeroCapPassesThrough(t *testing.T) {
 }
 
 func TestTracker_DuplicateReservationErrors(t *testing.T) {
-	tr := budget.New(1000, 0)
+	tr := budget.New(1000, 0, fixedUsed(0))
 	if err := tr.Reserve("dup", 100); err != nil {
 		t.Fatalf("first Reserve: %v", err)
 	}
@@ -94,7 +88,7 @@ func TestTracker_DuplicateReservationErrors(t *testing.T) {
 }
 
 func TestTracker_ReleaseUnknownTokenIsNoOp(t *testing.T) {
-	tr := budget.New(1000, 0)
+	tr := budget.New(1000, 0, fixedUsed(0))
 	tr.Release("not-a-thing") // must not panic
 	if got := tr.Reserved(); got != 0 {
 		t.Errorf("Reserved should remain 0, got %d", got)

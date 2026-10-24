@@ -25,3 +25,11 @@ func ClassifyForTest(objects, bytes CompareNumeric, tierBefore, tierAfter map[st
 func TierMapsEqualForTest(a, b map[string]indexread.TierBreakdown) bool {
 	return tierMapsEqual(a, b)
 }
+
+// SetMirrorForTest swaps the persistence sink for one the test controls
+// (e.g. a store that blocks, to prove readers don't wait on it).
+func (c *Catalog) SetMirrorForTest(m mirrorStore) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.store = m
+}

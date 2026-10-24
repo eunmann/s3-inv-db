@@ -1,0 +1,70 @@
+package handlers_test
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+
+	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/go-chi/chi/v5"
+)
+
+func postAutoLoad(t *testing.T, router http.Handler, form url.Values) {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/configurations/bkt/inv/auto-load", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The UI form sends a hidden auto_load=off before the checkbox; an
+// unchecked box sends nothing, so auto-load could never be turned off.
+// The last value is the checkbox's state.
+func TestSetAutoLoadConfigAPI_CheckboxOnAndOff(t *testing.T) {
+	h, configs := newWiredHandlersWithConfigs(t, nil)
+	router := chi.NewRouter()
+	router.Post("/api/configurations/{src}/{name}/auto-load", h.SetAutoLoadConfigAPI)
+
+	postAutoLoad(t, router, url.Values{"auto_load": {"off", "on"}, "retention": {"3"}})
+	cfg, err := configs.Get(t.Context(), "bkt", "inv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AutoLoad || cfg.RetentionCount != 3 {
+		t.Fatalf("after checking: %+v, want auto_load on, retention 3", cfg)
+	}
+
+	postAutoLoad(t, router, url.Values{"auto_load": {"off"}, "retention": {"3"}})
+	if cfg, _ = configs.Get(t.Context(), "bkt", "inv"); cfg.AutoLoad {
+		t.Error("unchecking the box left auto-load on")
+	}
+}
+
+// Saving the policy must not wipe the poller's state (and vice versa,
+// covered in the autoload tests).
+func TestSetAutoLoadConfigAPI_KeepsPollState(t *testing.T) {
+	h, configs := newWiredHandlersWithConfigs(t, nil)
+	router := chi.NewRouter()
+	router.Post("/api/configurations/{src}/{name}/auto-load", h.SetAutoLoadConfigAPI)
+	if err := configs.SetPolicy(t.Context(), "bkt", "inv", true, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := configs.RecordPoll(t.Context(), "bkt", "inv", inventory.PollState{LastError: "access denied", FailureCount: 2}); err != nil {
+		t.Fatal(err)
+	}
+
+	postAutoLoad(t, router, url.Values{"auto_load": {"off", "on"}, "retention": {"4"}})
+
+	cfg, err := configs.Get(t.Context(), "bkt", "inv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LastPollError != "access denied" || cfg.PollFailureCount != 2 {
+		t.Errorf("poll state lost on policy save: %+v", cfg)
+	}
+}

@@ -15,6 +15,14 @@ import (
 // is set. 1000 keeps a worst-case response within ~megabytes.
 const defaultBatchStatsMax = 1000
 
+// The batch body limit scales with the prefix cap so the count check
+// never runs on an unbounded decode. S3 keys are at most 1024 bytes and
+// JSON \u escaping expands a byte to at most six, plus quotes and comma.
+const (
+	batchBodyBytesPerPrefix = 6*1024 + 3
+	batchBodyEnvelopeBytes  = 1024
+)
+
 // BatchStatsRequest is the POST body for /api/inventories/{id}/stats:batch.
 type BatchStatsRequest struct {
 	Prefixes     []string `json:"prefixes"`
@@ -59,10 +67,20 @@ func (h *Handlers) PostBatchStatsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	maxBatch := h.queryBatchMax
+	if maxBatch <= 0 {
+		maxBatch = defaultBatchStatsMax
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, int64(maxBatch)*batchBodyBytesPerPrefix+batchBodyEnvelopeBytes)
 	var req BatchStatsRequest
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
+		if bodyTooLarge(err) {
+			WriteJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+
+			return
+		}
 		WriteJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
 
 		return
@@ -71,10 +89,6 @@ func (h *Handlers) PostBatchStatsAPI(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusBadRequest, "prefixes is required")
 
 		return
-	}
-	maxBatch := h.queryBatchMax
-	if maxBatch <= 0 {
-		maxBatch = defaultBatchStatsMax
 	}
 	if len(req.Prefixes) > maxBatch {
 		WriteJSONError(w, http.StatusBadRequest, fmt.Sprintf("too many prefixes: %d > %d", len(req.Prefixes), maxBatch))

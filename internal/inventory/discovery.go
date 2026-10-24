@@ -193,6 +193,14 @@ const DefaultIndexRatio = 0.30
 // to be configured.
 var ErrDiscoveryDisabled = errors.New("discovery not configured")
 
+// ErrRunNotFound is returned by Discoverer.Find when the requested run
+// isn't present under the (source, inventory) configuration.
+var ErrRunNotFound = errors.New("run not found")
+
+// ErrInvalidName is returned by Discoverer.Find when the source or
+// inventory name falls outside the AWS naming charsets.
+var ErrInvalidName = errors.New("invalid source or inventory name")
+
 // ErrNoRun is returned by Prepare/Load when the supplied Inventory has
 // an empty Run — the operation needs a specific timestamped run to
 // register or build. Callers wrap it with the config ID for context.
@@ -368,13 +376,42 @@ func (d *Discovery) Stop() {
 	d.bgWG.Wait()
 }
 
+func (d *Discovery) cachedRun(src, id, run string) (Inventory, bool) {
+	if run == "" {
+		return Inventory{}, false
+	}
+	d.cacheMu.RLock()
+	defer d.cacheMu.RUnlock()
+	for i := range d.cacheViews {
+		inv := &d.cacheViews[i].Inventory
+		if inv.SourceBucket != src || inv.Name != id || inv.Run != run {
+			continue
+		}
+		if inv.FileFormat == "" || inv.Error != "" {
+			return Inventory{}, false
+		}
+
+		return *inv, true
+	}
+
+	return Inventory{}, false
+}
+
 func (d *Discovery) now() time.Time {
 	return d.bgClock()
 }
 
 // Find returns a single discovered inventory run by source bucket, ID,
-// and run timestamp.
+// and run timestamp. A run the cached snapshot holds with its manifest
+// read is served from it: discovered rows re-render on every SSE row
+// event and every few seconds while busy, and each Discoverer lookup
+// costs S3 requests. Any other run (one the snapshot lacks, one whose
+// manifest the List did not fetch or failed to read, or an empty run,
+// meaning "latest") goes to the Discoverer.
 func (d *Discovery) Find(ctx context.Context, src, id, run string) (Inventory, error) {
+	if inv, ok := d.cachedRun(src, id, run); ok {
+		return inv, nil
+	}
 	inv, err := d.discoverer.Find(ctx, src, id, run)
 	if err != nil {
 		return inv, fmt.Errorf("find: %w", err)

@@ -28,6 +28,7 @@ type fakeDiscoverer struct {
 	bucket    string
 	listResp  []inventory.Inventory
 	listCalls atomic.Int64
+	findCalls atomic.Int64
 }
 
 func (f *fakeDiscoverer) List(context.Context) ([]inventory.Inventory, error) {
@@ -40,6 +41,8 @@ func (f *fakeDiscoverer) List(context.Context) ([]inventory.Inventory, error) {
 }
 
 func (f *fakeDiscoverer) Find(_ context.Context, _, _, _ string) (inventory.Inventory, error) {
+	f.findCalls.Add(1)
+
 	return f.findResp, f.findErr
 }
 func (f *fakeDiscoverer) Bucket() string { return f.bucket }
@@ -504,5 +507,37 @@ func TestDiscoveryService_Snapshot_ColdStartDeduplicatesConcurrent(t *testing.T)
 	}
 	if got := disc.listCalls.Load(); got != 1 {
 		t.Errorf("listCalls = %d, want 1 (concurrent cold-start callers must dedupe)", got)
+	}
+}
+
+// Find serves a run from the snapshot only when the List read its
+// manifest. Runs past the List's manifest-fetch cap, and runs whose
+// manifest read failed, have no stats in the snapshot and must be
+// looked up, or their rows never show a file count or size.
+func TestDiscovery_FindServesOnlyDescribedRunsFromSnapshot(t *testing.T) {
+	described := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "2026-01-03T00-00Z", FileFormat: "CSV", FileCount: 3}
+	undescribed := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "2026-01-02T00-00Z"}
+	failed := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "2026-01-01T00-00Z", FileFormat: "unknown", Error: "failed to read manifest"}
+	fake := &fakeDiscoverer{listResp: []inventory.Inventory{described, undescribed, failed}}
+	mgr := inventory.NewCatalog(nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+	disc := inventory.NewDiscovery(mgr, inventory.WithBackend(fake, &fakeBuilder{}))
+	if err := disc.Refresh(t.Context()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+
+	got, err := disc.Find(t.Context(), "b", "i", described.Run)
+	if err != nil || got.FileCount != 3 || fake.findCalls.Load() != 0 {
+		t.Fatalf("described run: got %+v err %v after %d lookups, want snapshot entry and no lookup", got, err, fake.findCalls.Load())
+	}
+	for _, run := range []inventory.Inventory{undescribed, failed} {
+		fresh := run
+		fresh.FileFormat, fresh.Error, fresh.FileCount = "CSV", "", 7
+		fake.findResp = fresh
+		before := fake.findCalls.Load()
+		got, err := disc.Find(t.Context(), "b", "i", run.Run)
+		if err != nil || got.FileCount != 7 || fake.findCalls.Load() != before+1 {
+			t.Errorf("run %s: got %+v err %v, want one lookup returning its stats", run.Run, got, err)
+		}
 	}
 }
