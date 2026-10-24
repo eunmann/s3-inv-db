@@ -55,9 +55,7 @@ func (w *ArrayWriter) WriteU32(val uint32) error {
 	if w.width != 4 {
 		return fmt.Errorf("%w: expected 4, got %d", ErrWidthMismatch, w.width)
 	}
-	var buf [4]byte
-	binary.LittleEndian.PutUint32(buf[:], val)
-	if _, err := w.writer.Write(buf[:]); err != nil {
+	if err := putU32(w.writer, val); err != nil {
 		return fmt.Errorf("write u32: %w", err)
 	}
 	w.count++
@@ -70,9 +68,7 @@ func (w *ArrayWriter) WriteU64(val uint64) error {
 	if w.width != 8 {
 		return fmt.Errorf("%w: expected 8, got %d", ErrWidthMismatch, w.width)
 	}
-	var buf [8]byte
-	binary.LittleEndian.PutUint64(buf[:], val)
-	if _, err := w.writer.Write(buf[:]); err != nil {
+	if err := putU64(w.writer, val); err != nil {
 		return fmt.Errorf("write u64: %w", err)
 	}
 	w.count++

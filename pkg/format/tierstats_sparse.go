@@ -274,9 +274,7 @@ func writeSparseRow(bw *bufio.Writer, denseRow []byte, slotCount int) (uint64, e
 			bitmap |= 1 << slot
 		}
 	}
-	var bitmapBuf [tierStatsSparseBitmapBytes]byte
-	binary.LittleEndian.PutUint16(bitmapBuf[:], bitmap)
-	if _, err := bw.Write(bitmapBuf[:]); err != nil {
+	if err := putU16(bw, bitmap); err != nil {
 		return 0, fmt.Errorf("bitmap: %w", err)
 	}
 	written := uint64(tierStatsSparseBitmapBytes)

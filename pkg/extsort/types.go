@@ -72,19 +72,31 @@ func readPrefixRowRecord(reader io.Reader, buf *[]byte) (*PrefixRow, error) {
 	return readPrefixRowRecordInto(reader, buf, nil)
 }
 
+// recordLenBytes is the uint32 prefix-length header of a run record;
+// recordScratchMin is the smallest scratch buffer worth allocating.
+const (
+	recordLenBytes   = 4
+	recordScratchMin = 512
+)
+
 // readPrefixRowRecordInto is like readPrefixRowRecord but reuses the given
 // PrefixRow when non-nil. Pass a row obtained from prefixRowPool to keep
 // the merge loop allocation-free.
 func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) (*PrefixRow, error) {
-	var lenBuf [4]byte
-	if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
+	// The length is read into the reusable scratch buffer: a local array
+	// passed to an io.Reader escapes, one allocation per row.
+	if len(*buf) < recordLenBytes {
+		*buf = make([]byte, recordScratchMin)
+	}
+	lenBuf := (*buf)[:recordLenBytes]
+	if _, err := io.ReadFull(reader, lenBuf); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
 
 		return nil, fmt.Errorf("read prefix length: %w", err)
 	}
-	prefixLen := int(binary.LittleEndian.Uint32(lenBuf[:]))
+	prefixLen := int(binary.LittleEndian.Uint32(lenBuf))
 
 	fixedSize := 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
 	recordSize := prefixLen + fixedSize
