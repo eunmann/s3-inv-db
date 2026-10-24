@@ -21,8 +21,8 @@ var (
 	ErrWidthMismatch = errors.New("width mismatch")
 	// ErrMPHFLookupFailed indicates a Find call into the MPHF returned no result for a known prefix.
 	ErrMPHFLookupFailed = errors.New("MPHF lookup failed")
-	// ErrMPHFAmbiguousKey indicates the MPHF returned 0 (ambiguous sentinel) for an existing key.
-	ErrMPHFAmbiguousKey = errors.New("MPHF key returned sentinel zero")
+	// ErrMPHFTooManyKeys indicates more prefixes than the MPHF build's uint32 slot index can address.
+	ErrMPHFTooManyKeys = errors.New("too many prefixes for the MPHF")
 	// ErrNoPrefixStorage indicates the MPHF has no prefix storage attached.
 	ErrNoPrefixStorage = errors.New("no prefix storage loaded")
 	// ErrLookupWrongPos indicates a verification lookup returned an unexpected position.

@@ -17,14 +17,13 @@ import (
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/klauspost/compress/zstd"
-	"github.com/relab/bbhash"
 )
 
 // StreamingMPHFBuilder builds a minimal perfect hash function for prefix strings
 // while keeping memory usage bounded by writing prefixes to disk during construction.
 //
 // Memory usage:
-// - ~8 bytes per prefix for hash keys (unavoidable for bbhash)
+// - ~8 bytes per prefix for hash keys (bbhash's input)
 // - ~8 bytes per prefix for preorder positions
 // - ~8 bytes per prefix for pre-computed fingerprints (optimization)
 // - Temporary buffers for I/O
@@ -248,9 +247,9 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	if err != nil {
 		return err
 	}
-	log.Debug().Dur("bbhash_ms", time.Since(bbhashStart)).Msg("MPHF: bbhash.New complete")
+	log.Debug().Dur("bbhash_ms", time.Since(bbhashStart)).Msg("MPHF: bbhash built")
 
-	if err := writeMPHFile(filepath.Join(outDir, MPHFile), mph); err != nil {
+	if err := mph.writeFile(filepath.Join(outDir, MPHFile)); err != nil {
 		return err
 	}
 
@@ -284,27 +283,10 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	return nil
 }
 
-// writeMPHFile serialises the MPHF to path.
-func writeMPHFile(path string, mph *bbhash.BBHash2) error {
-	data, err := mph.MarshalBinary()
-	if err != nil {
-		return fmt.Errorf("marshal MPHF: %w", err)
-	}
-	if err := os.WriteFile(path, data, FilePerm); err != nil {
-		return fmt.Errorf("write MPHF: %w", err)
-	}
-
-	return nil
-}
-
 // maxMPHFSeedAttempts bounds the rehashes after a key-hash collision.
 // Each fresh seed collides again with probability ~n²/2⁶⁵ (≈2.7% at
 // 1B prefixes), so eight in a row means something other than chance.
 const maxMPHFSeedAttempts = 8
-
-// bbhashGamma trades MPHF size for build speed; 2.0 is bbhash's
-// recommended default.
-const bbhashGamma = 2.0
 
 // buildBBHash builds the MPHF over the frozen key hashes, straight from
 // their disk-backed array: no reverse map and no sorted copy, so the
@@ -312,12 +294,10 @@ const bbhashGamma = 2.0
 // place two equal keys; only when it fails are the hashes checked for a
 // duplicate (one sorted copy), and then every prefix is rehashed with a
 // new seed. Seed 0 is the hash Add computed.
-func (b *StreamingMPHFBuilder) buildBBHash() (*bbhash.BBHash2, uint64, error) {
+func (b *StreamingMPHFBuilder) buildBBHash() (*bbhash, uint64, error) {
 	var seed uint64
 	for attempt := 1; ; attempt++ {
-		// bbhash's per-partition build runs concurrently; partitions =
-		// NumCPU keeps every core busy (bbhash caps it at 255).
-		mph, err := bbhash.New(b.hashes.Slice(), bbhash.Gamma(bbhashGamma), bbhash.Partitions(runtime.NumCPU()))
+		mph, err := newBBHash(b.hashes.Slice())
 		if err == nil {
 			return mph, seed, nil
 		}
@@ -535,7 +515,7 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 // File layout: 20-byte header (count = 2N, width = 8) followed by
 // 2N×8 bytes of interleaved (fp, pos, fp, pos, …) data, then the 8-byte
 // key-hash seed.
-func writeCombinedMmap(outDir string, n int, mph *bbhash.BBHash2, hashes, fps, poss []uint64, seed uint64) error {
+func writeCombinedMmap(outDir string, n int, mph *bbhash, hashes, fps, poss []uint64, seed uint64) error {
 	if len(fps) != n || len(poss) != n {
 		return fmt.Errorf("%w: fps=%d poss=%d n=%d", errMPHFArrayLengthMismatch, len(fps), len(poss), n)
 	}
@@ -618,10 +598,10 @@ func writeCombinedMmap(outDir string, n int, mph *bbhash.BBHash2, hashes, fps, p
 // slotOwners returns, for every MPHF slot, the index of the prefix whose
 // key hash lands there, found with parallel Find calls. The MPHF is a
 // bijection, so each slot is written by exactly one worker.
-func slotOwners(mph *bbhash.BBHash2, hashes []uint64) ([]uint32, error) {
+func slotOwners(mph *bbhash, hashes []uint64) ([]uint32, error) {
 	n := len(hashes)
 	if uint64(n) > math.MaxUint32 {
-		return nil, fmt.Errorf("%w: %d prefixes exceed the uint32 slot-owner index", ErrMPHFAmbiguousKey, n)
+		return nil, fmt.Errorf("%w: %d prefixes exceed the uint32 slot-owner index", ErrMPHFTooManyKeys, n)
 	}
 	owners := make([]uint32, n)
 	numWorkers := mphfWorkerCount(n)
@@ -635,13 +615,13 @@ func slotOwners(mph *bbhash.BBHash2, hashes []uint64) ([]uint32, error) {
 		}
 		wg.Go(func() {
 			for i := start; i < end; i++ {
-				slot := mph.Find(hashes[i])
-				if slot == 0 || slot > uint64(n) {
-					errs[w] = fmt.Errorf("%w: Find returned %d for prefix %d", ErrMPHFAmbiguousKey, slot, i)
+				slot, ok := mph.find(hashes[i])
+				if !ok || slot >= uint64(n) {
+					errs[w] = fmt.Errorf("%w: slot %d (found %t) for prefix %d", ErrMPHFLookupFailed, slot, ok, i)
 
 					return
 				}
-				owners[slot-1] = uint32(i)
+				owners[slot] = uint32(i)
 			}
 		})
 	}

@@ -94,8 +94,9 @@ its data is, so total size scales linearly with prefix count:
 - Prefix dictionary (`prefix_dict.*`): dictionary-encoded, dominated
   by the unique-segment blob plus 4 B per segment ID per prefix plus
   8 B per offset.
-- MPHF (`mph.bin` + `mph_fp_pos.u64`): ~24 B/prefix (BBHash +
-  interleaved fingerprint/position pair).
+- MPHF (`mph.bin` + `mph_fp_pos.u64`): ~16.5 B/prefix (BBHash at
+  ~3.7 bits/prefix with its rank directory, plus the interleaved
+  fingerprint/position pair).
 - Depth index: ~8 B/prefix.
 
 A 1M-prefix sample comes out to roughly **300 B/prefix on disk**
@@ -134,7 +135,7 @@ exploration.
 go test -bench=. -benchmem ./pkg/indexread/                          # all indexread benches
 go test -bench=BenchmarkMPHFBuild -benchmem ./pkg/format/             # MPHF build
 go test -bench=BenchmarkMPHFQuery -benchmem ./pkg/format/             # MPHF query
-go test -bench=BenchmarkBBHashScaling -benchmem ./pkg/format/         # isolated bbhash.New
+go test -bench=BenchmarkBBHash -benchmem ./pkg/format/               # BBHash build + find alone
 S3INV_LONG_BENCH=1 go test -bench=. -benchmem ./pkg/indexread/        # large dataset
 
 # Memory profile
