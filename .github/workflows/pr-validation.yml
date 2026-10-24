@@ -1,0 +1,159 @@
+name: PR Validation
+
+# The merge gate. Runs on every pull request (any base branch, so stacked
+# PRs are validated too) and on pushes to main, which seed the caches PR
+# runs restore. There is deliberately no `paths:` filter: a required check
+# that never reports blocks the PR forever. Docs-only changes are detected
+# by the `changes` job instead, and the heavy jobs skip themselves.
+#
+# Branch protection requires only the `Gate` job. It aggregates the others,
+# so adding or renaming a job never strands a required context.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GOLANGCI_LINT_VERSION: v2.12.2
+  # The local S3 server the integration tests run against; same image and
+  # dev credentials as the compose `test` profile.
+  S3_IMAGE: versity/versitygw:v1.10.0
+
+# Every heavy job carries:
+#   needs: changes
+#   if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
+# It skips only on a successful docs-only verdict; a FAILED `changes` job
+# runs everything rather than skipping (a skip would read as a pass).
+jobs:
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # Pushes to main always run everything (they seed caches).
+          if [ "$EVENT" != pull_request ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          # A pull_request checkout is the PR's merge commit; its first
+          # parent is the base tip. --no-renames: a code file moved into
+          # docs/ is still a code deletion.
+          git rev-parse -q --verify HEAD^2 >/dev/null || { echo "::error::HEAD is not the PR merge commit"; exit 1; }
+          git diff --name-only --no-renames -z HEAD^1 HEAD > "$RUNNER_TEMP/changed"
+          code=false
+          while IFS= read -r -d '' f; do
+            case "$f" in
+              *.md | docs/* | .claude/* | LICENSE) ;;
+              *) echo "code change: $f"; code=true ;;
+            esac
+          done < "$RUNNER_TEMP/changed"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  lint:
+    name: Lint
+    needs: changes
+    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go.mod / go.sum are tidy
+        run: make tidy-check
+      - name: No reachable known vulnerabilities
+        run: make vuln
+      # Only main saves the lint cache: a cancelled PR run can save a
+      # partial cache that later reports spurious issues.
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          skip-save-cache: ${{ github.event_name == 'pull_request' }}
+      - name: No unreachable functions
+        run: make deadcode
+      - name: Workflows are valid
+        run: make actionlint
+
+  build:
+    name: Build
+    needs: changes
+    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build all packages and binaries
+        run: go build ./... && make build server seeder
+      - name: Checked-in tailwind.css matches the templates
+        run: make css-check
+
+  test:
+    name: Tests (race, integration)
+    needs: changes
+    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AWS_ENDPOINT_URL_S3: http://127.0.0.1:9000
+      AWS_ACCESS_KEY_ID: devaccess
+      AWS_SECRET_ACCESS_KEY: devsecret
+      AWS_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      # GitHub service containers cannot pass command arguments, so the S3
+      # server is started directly.
+      - name: Start local S3 server
+        run: |
+          set -euo pipefail
+          docker run -d --name s3 -p 9000:9000 --tmpfs /data "$S3_IMAGE" \
+            --port :9000 --access devaccess --secret devsecret posix /data
+          for _ in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/ || true)
+            if [ "$code" != 000 ]; then echo "S3 server up (HTTP $code)"; exit 0; fi
+            sleep 1
+          done
+          docker logs s3; exit 1
+      - name: Full suite with -race (incl. integration tests)
+        run: go test -race -count=1 -tags integration ./...
+      - name: Unit-test coverage floor
+        run: make cover-check
+
+  gate:
+    name: Gate
+    needs: [changes, lint, build, test]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: All required jobs passed or were skipped as docs-only
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in success | skipped) ;; *) echo "::error::a required job ended with: $r"; exit 1 ;; esac
+          done

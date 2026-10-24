@@ -78,8 +78,10 @@ docker compose -f infra/docker-compose.yml --profile test run --rm test-runner \
 
 ## Local quality gates
 
-`make help` lists every target. The gates PR Validation runs, each
-callable locally:
+`make help` lists every target. PR Validation
+([`.github/workflows/pr-validation.yml`](../.github/workflows/pr-validation.yml))
+runs these on every PR; branch protection requires its `Gate` job.
+Each is callable locally:
 
 | Target | Checks |
 |---|---|
@@ -90,3 +92,7 @@ callable locally:
 | `make vuln` | govulncheck: no reachable known vulnerability |
 | `make tidy-check` | `go.mod`/`go.sum` are tidy |
 | `make css-check` | the checked-in `tailwind.css` matches the templates |
+| `make actionlint` | GitHub Actions workflows are valid |
+
+CI runs the test suite on the host against a `versitygw` container
+(`go test -race -tags integration ./...`) rather than through compose.

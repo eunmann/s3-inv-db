@@ -1,6 +1,6 @@
 .PHONY: help all build server seeder test test-unit test-race lint lint-check clean clean-seed seed \
         css css-check dev dev-reset docker-build docker-prod docker-seed docker-down \
-        cover cover-html cover-summary cover-check tidy tidy-check deadcode vuln compose-preflight
+        cover cover-html cover-summary cover-check tidy tidy-check deadcode vuln actionlint compose-preflight
 
 .DEFAULT_GOAL := help
 
@@ -8,6 +8,7 @@ GOLANGCI_LINT_VERSION := v2.12.2
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.39.0
 GOVULNCHECK := go run golang.org/x/vuln/cmd/govulncheck@v1.1.4
+ACTIONLINT := go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 
 # Unit-test coverage floor (host suite, no S3 server). Ratchet it up as
 # coverage grows; never lower it to make a change pass.
@@ -124,6 +125,9 @@ deadcode: ## Fail on functions unreachable from every binary and test
 
 vuln: ## govulncheck (reachable vulnerabilities only)
 	$(GOVULNCHECK) ./...
+
+actionlint: ## Lint GitHub Actions workflows
+	$(ACTIONLINT)
 
 # Default `lint` runs with --fix so iterative dev cleans up auto-fixable
 # issues (gofumpt/gci/goimports/some style). CI should call `lint-check`
