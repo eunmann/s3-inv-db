@@ -309,8 +309,8 @@ type childRec struct {
 }
 
 // segChildRec pairs a child's segment label with its record. Returned
-// from indexChildren in segment-sorted order so callers can do an
-// O(n+m) sorted merge across two indexes.
+// from indexChildren in full-prefix (preorder) byte order, so callers
+// merge two indexes on fullPrefix, not on seg.
 type segChildRec struct {
 	seg string
 	rec childRec
