@@ -10,8 +10,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -254,12 +256,9 @@ func encodeCSVGz(srcBucket string, objects []benchutil.FakeObject) (csvGzPayload
 		if err != nil {
 			return csvGzPayload{}, fmt.Errorf("tier columns: %w", err)
 		}
-		// Real S3 Inventory URL-encodes Key values, but our consumer
-		// (pkg/inventory/reader.go) does not URL-decode them, so keep the
-		// keys raw to match what the build pipeline actually expects.
 		row := []string{
 			srcBucket,
-			o.Key,
+			csvKey(o.Key),
 			strconv.FormatUint(o.Size, 10),
 			now,
 			etag,
@@ -352,4 +351,11 @@ func md5Hex(b []byte) string {
 // runStampUUID returns a deterministic synthetic UUID per (run, index).
 func runStampUUID(stamp time.Time, index int) string {
 	return fmt.Sprintf("%010x-%04x", stamp.Unix(), index)
+}
+
+// csvKey URL-encodes a key the way S3 Inventory does in CSV reports, so
+// seeded CSV inventories exercise the build's decode path. Slashes are
+// left readable; the decoder accepts either form.
+func csvKey(key string) string {
+	return strings.ReplaceAll(url.QueryEscape(key), "%2F", "/")
 }

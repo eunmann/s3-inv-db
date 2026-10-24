@@ -26,20 +26,21 @@ var (
 // ParquetReader reads S3 inventory records from Parquet files.
 // It implements streaming by iterating through row groups.
 type ParquetReader struct {
-	currentRows   parquet.Rows
-	tempFile      *os.File
-	schema        *parquet.Schema
-	file          *parquet.File
-	rowGroups     []parquet.RowGroup
-	rowBuf        []parquet.Row
-	pendingErr    error
-	keyCol        int
-	accessTierCol int
-	currentRGIdx  int
-	storageCol    int
-	sizeCol       int
-	bufIdx        int
-	bufLen        int
+	currentRows     parquet.Rows
+	tempFile        *os.File
+	schema          *parquet.Schema
+	file            *parquet.File
+	rowGroups       []parquet.RowGroup
+	rowBuf          []parquet.Row
+	pendingErr      error
+	keyCol          int
+	accessTierCol   int
+	deleteMarkerCol int
+	currentRGIdx    int
+	storageCol      int
+	sizeCol         int
+	bufIdx          int
+	bufLen          int
 }
 
 // ParquetReaderConfig configures the Parquet reader.
@@ -55,6 +56,10 @@ type ParquetReaderConfig struct {
 
 	// AccessTierCol is the column index for the access tier (-1 if not available).
 	AccessTierCol int
+
+	// DeleteMarkerCol is the column index for is_delete_marker (-1 if not
+	// available). Only all-versions inventories carry it.
+	DeleteMarkerCol int
 }
 
 // NewParquetReader creates a Parquet inventory reader from an io.ReaderAt.
@@ -151,10 +156,11 @@ func NewParquetReaderFromStream(r io.ReadCloser, size int64) (*ParquetReader, er
 // every tier bucket would collapse to "unknown" with no error surfaced.
 func detectParquetSchema(schema *parquet.Schema) (ParquetReaderConfig, error) {
 	cfg := ParquetReaderConfig{
-		KeyCol:        -1,
-		SizeCol:       -1,
-		StorageCol:    -1,
-		AccessTierCol: -1,
+		KeyCol:          -1,
+		SizeCol:         -1,
+		StorageCol:      -1,
+		AccessTierCol:   -1,
+		DeleteMarkerCol: -1,
 	}
 
 	seen := make(map[string]string, len(schema.Fields()))
@@ -175,6 +181,8 @@ func detectParquetSchema(schema *parquet.Schema) (ParquetReaderConfig, error) {
 			cfg.StorageCol = i
 		case "intelligenttieringaccesstier":
 			cfg.AccessTierCol = i
+		case "isdeletemarker":
+			cfg.DeleteMarkerCol = i
 		}
 	}
 
@@ -202,16 +210,17 @@ func newParquetReader(file *parquet.File, tempFile *os.File, cfg ParquetReaderCo
 	rowGroups := file.RowGroups()
 
 	return &ParquetReader{
-		file:          file,
-		tempFile:      tempFile,
-		schema:        file.Schema(),
-		keyCol:        cfg.KeyCol,
-		sizeCol:       cfg.SizeCol,
-		storageCol:    cfg.StorageCol,
-		accessTierCol: cfg.AccessTierCol,
-		rowGroups:     rowGroups,
-		currentRGIdx:  -1,
-		rowBuf:        make([]parquet.Row, 1024), // Buffer 1024 rows at a time
+		file:            file,
+		tempFile:        tempFile,
+		schema:          file.Schema(),
+		keyCol:          cfg.KeyCol,
+		sizeCol:         cfg.SizeCol,
+		storageCol:      cfg.StorageCol,
+		accessTierCol:   cfg.AccessTierCol,
+		deleteMarkerCol: cfg.DeleteMarkerCol,
+		rowGroups:       rowGroups,
+		currentRGIdx:    -1,
+		rowBuf:          make([]parquet.Row, 1024), // Buffer 1024 rows at a time
 	}
 }
 
@@ -221,8 +230,12 @@ func (r *ParquetReader) Next() (Row, error) {
 		if r.bufIdx < r.bufLen {
 			row := r.rowBuf[r.bufIdx]
 			r.bufIdx++
+			inv, deleteMarker := r.toRow(row)
+			if deleteMarker {
+				continue // a delete marker is not an object and stores no bytes
+			}
 
-			return r.toRow(row), nil
+			return inv, nil
 		}
 
 		if r.currentRows != nil {
@@ -261,10 +274,11 @@ func (r *ParquetReader) Next() (Row, error) {
 	}
 }
 
-// toRow projects a parquet.Row into the unified inventory.Row.
-func (r *ParquetReader) toRow(row parquet.Row) Row {
-	inv := Row{}
-
+// toRow projects a parquet.Row into the unified inventory.Row and
+// reports whether the row is a delete marker.
+func (r *ParquetReader) toRow(row parquet.Row) (Row, bool) {
+	var inv Row
+	deleteMarker := false
 	for _, val := range row {
 		colIdx := val.Column()
 		if colIdx < 0 || val.IsNull() {
@@ -280,10 +294,16 @@ func (r *ParquetReader) toRow(row parquet.Row) Row {
 			inv.StorageClass = val.String()
 		case r.accessTierCol:
 			inv.AccessTier = val.String()
+		case r.deleteMarkerCol:
+			if val.Kind() == parquet.Boolean {
+				deleteMarker = val.Boolean()
+			} else {
+				deleteMarker = isTrue(val.String())
+			}
 		}
 	}
 
-	return inv
+	return inv, deleteMarker
 }
 
 // Close releases resources.

@@ -270,13 +270,14 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 // chunkConfig holds configuration for processing a chunk.
 type chunkConfig struct {
-	tierMapping   *tiers.Mapping
-	format        s3fetch.InventoryFormat
-	keyCol        int
-	sizeCol       int
-	storageCol    int
-	accessTierCol int
-	fileSize      int64
+	tierMapping     *tiers.Mapping
+	format          s3fetch.InventoryFormat
+	keyCol          int
+	sizeCol         int
+	storageCol      int
+	accessTierCol   int
+	deleteMarkerCol int
+	fileSize        int64
 }
 
 // chunkJob represents a chunk to be processed by a worker.
@@ -296,15 +297,16 @@ type objectRecord struct {
 
 // ingestConfig holds configuration for the ingest phase.
 type ingestConfig struct {
-	manifest      *s3fetch.Manifest
-	tierMapping   *tiers.Mapping
-	destBucket    string
-	format        s3fetch.InventoryFormat
-	keyCol        int
-	sizeCol       int
-	storageCol    int
-	accessTierCol int
-	numWorkers    int
+	manifest        *s3fetch.Manifest
+	tierMapping     *tiers.Mapping
+	destBucket      string
+	format          s3fetch.InventoryFormat
+	keyCol          int
+	sizeCol         int
+	storageCol      int
+	accessTierCol   int
+	deleteMarkerCol int
+	numWorkers      int
 }
 
 // runIngestPhase streams S3 inventory and creates sorted run files.
@@ -366,15 +368,16 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 		Msg("ingest worker count derived from NumCPU")
 
 	return &ingestConfig{
-		manifest:      manifest,
-		format:        manifest.DetectFormat(),
-		destBucket:    destBucket,
-		keyCol:        keyCol,
-		sizeCol:       sizeCol,
-		storageCol:    manifest.StorageClassColumnIndex(),
-		accessTierCol: manifest.AccessTierColumnIndex(),
-		numWorkers:    numWorkers,
-		tierMapping:   tiers.NewMapping(),
+		manifest:        manifest,
+		format:          manifest.DetectFormat(),
+		destBucket:      destBucket,
+		keyCol:          keyCol,
+		sizeCol:         sizeCol,
+		storageCol:      manifest.StorageClassColumnIndex(),
+		accessTierCol:   manifest.AccessTierColumnIndex(),
+		deleteMarkerCol: manifest.DeleteMarkerColumnIndex(),
+		numWorkers:      numWorkers,
+		tierMapping:     tiers.NewMapping(),
 	}, nil
 }
 
@@ -545,13 +548,14 @@ func (p *Pipeline) sendIngestJobs(ctx context.Context, cfg *ingestConfig, jobs c
 			bucket: cfg.destBucket,
 			key:    file.Key,
 			config: chunkConfig{
-				format:        cfg.format,
-				keyCol:        cfg.keyCol,
-				sizeCol:       cfg.sizeCol,
-				storageCol:    cfg.storageCol,
-				accessTierCol: cfg.accessTierCol,
-				tierMapping:   cfg.tierMapping,
-				fileSize:      file.Size,
+				format:          cfg.format,
+				keyCol:          cfg.keyCol,
+				sizeCol:         cfg.sizeCol,
+				storageCol:      cfg.storageCol,
+				accessTierCol:   cfg.accessTierCol,
+				deleteMarkerCol: cfg.deleteMarkerCol,
+				tierMapping:     cfg.tierMapping,
+				fileSize:        file.Size,
 			},
 		}:
 		}
@@ -662,10 +666,11 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 		reader, err = openParquetReader(body, job.config.fileSize)
 	} else {
 		reader, err = s3inventory.NewCSVReaderFromStream(body, job.key, s3inventory.CSVReaderConfig{
-			KeyCol:        job.config.keyCol,
-			SizeCol:       job.config.sizeCol,
-			StorageCol:    job.config.storageCol,
-			AccessTierCol: job.config.accessTierCol,
+			KeyCol:          job.config.keyCol,
+			SizeCol:         job.config.sizeCol,
+			StorageCol:      job.config.storageCol,
+			AccessTierCol:   job.config.accessTierCol,
+			DeleteMarkerCol: job.config.deleteMarkerCol,
 		})
 	}
 	if err != nil {

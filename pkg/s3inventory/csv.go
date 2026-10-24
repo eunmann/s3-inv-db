@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,13 +36,15 @@ type Reader interface {
 
 // CSVReader reads S3 inventory records from CSV streams.
 type CSVReader struct {
-	csvReader     *csv.Reader
-	closers       []io.Closer
-	keyCol        int
-	sizeCol       int
-	storageCol    int
-	accessTierCol int
-	malformedRows uint64
+	csvReader       *csv.Reader
+	closers         []io.Closer
+	keyCol          int
+	sizeCol         int
+	storageCol      int
+	accessTierCol   int
+	deleteMarkerCol int
+	malformedRows   uint64
+	undecodableKeys uint64
 }
 
 // CSVReaderConfig configures column indices for the CSV reader.
@@ -57,6 +60,10 @@ type CSVReaderConfig struct {
 
 	// AccessTierCol is the column index for the access tier (-1 if not available).
 	AccessTierCol int
+
+	// DeleteMarkerCol is the column index for IsDeleteMarker (-1 if not
+	// available). Only all-versions inventories carry it.
+	DeleteMarkerCol int
 }
 
 // NewCSVReader creates a new CSV inventory reader from an io.Reader.
@@ -69,11 +76,12 @@ func NewCSVReader(r io.Reader, cfg CSVReaderConfig) *CSVReader {
 	csvr.LazyQuotes = true
 
 	return &CSVReader{
-		csvReader:     csvr,
-		keyCol:        cfg.KeyCol,
-		sizeCol:       cfg.SizeCol,
-		storageCol:    cfg.StorageCol,
-		accessTierCol: cfg.AccessTierCol,
+		csvReader:       csvr,
+		keyCol:          cfg.KeyCol,
+		sizeCol:         cfg.SizeCol,
+		storageCol:      cfg.StorageCol,
+		accessTierCol:   cfg.AccessTierCol,
+		deleteMarkerCol: cfg.DeleteMarkerCol,
 	}
 }
 
@@ -102,12 +110,13 @@ func NewCSVReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderConfig) (*
 	csvr.LazyQuotes = true
 
 	return &CSVReader{
-		csvReader:     csvr,
-		keyCol:        cfg.KeyCol,
-		sizeCol:       cfg.SizeCol,
-		storageCol:    cfg.StorageCol,
-		accessTierCol: cfg.AccessTierCol,
-		closers:       closers,
+		csvReader:       csvr,
+		keyCol:          cfg.KeyCol,
+		sizeCol:         cfg.SizeCol,
+		storageCol:      cfg.StorageCol,
+		accessTierCol:   cfg.AccessTierCol,
+		deleteMarkerCol: cfg.DeleteMarkerCol,
+		closers:         closers,
 	}, nil
 }
 
@@ -127,7 +136,11 @@ func (r *CSVReader) Next() (Row, error) {
 			continue
 		}
 
-		key := fields[r.keyCol]
+		if r.deleteMarkerCol >= 0 && len(fields) > r.deleteMarkerCol && isTrue(fields[r.deleteMarkerCol]) {
+			continue // a delete marker is not an object and stores no bytes
+		}
+
+		key := r.decodeKey(fields[r.keyCol])
 		if key == "" {
 			continue
 		}
@@ -158,6 +171,37 @@ func (r *CSVReader) Next() (Row, error) {
 
 		return row, nil
 	}
+}
+
+// decodeKey undoes the URL encoding S3 Inventory applies to keys in CSV
+// reports (Parquet keys are raw). It is form decoding — '+' is a space
+// and a literal '+' arrives as %2B — matching the url_decode AWS's
+// Athena guidance uses. Most keys contain neither '%' nor '+', so they
+// skip the decode and its allocation. A key that is not valid
+// encoding is kept as-is and counted.
+func (r *CSVReader) decodeKey(raw string) string {
+	if !strings.ContainsAny(raw, "%+") {
+		return raw
+	}
+	key, err := url.QueryUnescape(raw)
+	if err != nil {
+		r.undecodableKeys++
+
+		return raw
+	}
+
+	return key
+}
+
+// isTrue parses the boolean columns S3 Inventory writes ("true"/"TRUE").
+func isTrue(field string) bool {
+	return strings.EqualFold(strings.TrimSpace(field), "true")
+}
+
+// UndecodableKeyCount returns the number of keys that were not valid URL
+// encoding and were kept verbatim.
+func (r *CSVReader) UndecodableKeyCount() uint64 {
+	return r.undecodableKeys
 }
 
 // MalformedRowCount returns the number of rows whose size field failed to parse.

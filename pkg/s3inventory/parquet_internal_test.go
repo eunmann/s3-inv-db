@@ -19,16 +19,20 @@ import (
 // (== -1) that matches a sentinel value.
 func TestToRow_NegativeConfiguredColsDontMatchZeroValue(t *testing.T) {
 	r := &ParquetReader{
-		keyCol:        0,
-		sizeCol:       1,
-		storageCol:    -1,
-		accessTierCol: -1,
+		keyCol:          0,
+		sizeCol:         1,
+		storageCol:      -1,
+		accessTierCol:   -1,
+		deleteMarkerCol: -1,
 	}
 
 	keyVal := parquet.ValueOf("a/b/c.txt").Level(0, 0, 0)
 	sizeVal := parquet.ValueOf(int64(42)).Level(0, 0, 1)
 
-	inv := r.toRow(parquet.Row{keyVal, sizeVal})
+	inv, deleteMarker := r.toRow(parquet.Row{keyVal, sizeVal})
+	if deleteMarker {
+		t.Error("row without a delete-marker column reported as a delete marker")
+	}
 
 	if inv.Key != "a/b/c.txt" {
 		t.Errorf("Key = %q, want %q", inv.Key, "a/b/c.txt")
