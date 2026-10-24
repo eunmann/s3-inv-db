@@ -41,4 +41,3 @@ tmp/
 .claude/scheduled_tasks.lock
 .claude/worktrees/
 seed-data/
-/.claude/settings.json
