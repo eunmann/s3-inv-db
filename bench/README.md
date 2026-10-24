@@ -26,10 +26,16 @@ script fails on a statistically significant (p < 0.05) regression beyond:
 | `B/op`, `allocs/op`, `disk_B` | `BENCH_MEM_PCT` (default 5%) |
 | `peak_heap_B` (sampled, so noisier) | `BENCH_HEAP_PCT` (default 15%) |
 
+Exit status 1 is a regression. Exit status 2 means nothing was compared:
+a build or benchmark failed, a suite entry matched no benchmark on one
+side, or the S3 server did not come up. The script names the side and
+entry and prints the tail of the failing run.
+
 Results land in `bench/ab/<timestamp>/` (gitignored): raw `base.txt` /
-`head.txt`, `report.txt` and `report.csv`. Entries tagged `integration`
-need a local S3 server; the script starts one in Docker unless
-`AWS_ENDPOINT_URL_S3` is already set.
+`head.txt`, each side's full output in `base.log` / `head.log`,
+`report.txt` and `report.csv`. Entries tagged `integration` need a local
+S3 server; the script starts one in Docker unless `AWS_ENDPOINT_URL_S3`
+is already set.
 
 A regression is merged only with an explicit justification in the
 commit message (CLAUDE.md, Performance & Benchmarks).
