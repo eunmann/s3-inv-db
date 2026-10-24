@@ -22,15 +22,26 @@ Follow this workflow for **every** change to this repo:
      - Ensure there are **benchmarks** covering the affected code.
      - Run those benchmarks **before and after** your changes.
      - Compare results and keep or improve performance; do not regress without explicit justification in the commit message.
+   - The comparison is `make bench-ab BASE=main`: base and head on the same machine, interleaved, judged by benchstat (see `bench/README.md`). Benchmarks run only for performance changes, never as routine CI.
 
 5. **Final Checklist Before Merge**
    - `make lint` passes with **zero** unaddressed issues.
    - `make test` (or equivalent) passes.
    - Relevant **benchmarks** have been run and compared when performance is affected.
-   - The feature branch is merged cleanly into `main`.
+   - `/review-loop` has run on the branch, and PR Validation (its `Gate` job) is green on the final head.
+   - The feature branch is merged cleanly into `main` (squash merge).
    - The merged **feature branch is deleted**.
 
 Always follow this workflow consistently for all changes.
+
+## North star
+
+The correctness and performance bar every change and every review is judged against:
+
+1. **Exact answers.** Per-prefix object counts, bytes and per-tier stats equal what a direct scan of the inventory would give, for every supported format, key encoding and versioning mode. A build that cannot guarantee that fails loudly; it never reports success with missing data.
+2. **Bounded builds.** Build memory stays within `GOMEMLIMIT` by the documented spill rules, and scratch disk within a documented multiple of the input. Nothing on the build path allocates per object or per prefix without a bound.
+3. **Query cost independent of index size.** Lookups are O(1); listings are O(log n + the page shown), never O(all children) per page view.
+4. **Never destroy what the user had.** A failed or cancelled build leaves no partial index and never deletes data it did not create; the server never evicts, unloads or overwrites an index out from under a reader.
 
 ## Working style
 

@@ -25,20 +25,20 @@ Before writing the test, challenge the assumption that you understand the behavi
 
 1. Write the smallest test that expresses the next behavior.
 2. Table-driven with `t.Run`, standard `testing` package, `cmp.Diff` for structs.
-3. Run `make test`. Confirm it **fails for the expected reason**.
+3. Run the package's tests (`go test ./pkg/x/ -run TestName`). Confirm it **fails for the expected reason**.
 4. If the failure is unexpected (compile error, wrong assertion), fix the test first.
 
 ### Green — Make It Pass
 
 1. Write the **minimum** code to make the failing test pass.
 2. Do not add extra logic, optimizations, or unrelated fixes.
-3. Run `make test`. All tests pass.
+3. Run the package's tests. All pass.
 
 ### Refactor — Clean Up
 
 1. Improve naming, extract helpers, remove duplication — only in code you just touched.
 2. Run `make lint`. Stage any auto-fixes.
-3. Run `make test` (and `make test-race` if you touched concurrency). Still green.
+3. Run `make test-unit` (with `-race` on the package if you touched concurrency). Still green.
 4. Commit with a clear message describing the behavior added.
 
 ## Repeat

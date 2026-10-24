@@ -1,23 +1,17 @@
 ---
-description: Push branch, create a pull request, and request Copilot review. Use when your work is committed and ready for PR.
-allowed-tools: Bash(git push:*), Bash(gh pr create:*), Bash(gh pr edit:*), Bash(git log:*), Bash(git diff:*), Bash(git branch:*), Bash(git merge-base:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(git status:*), Bash(git add:*), Bash(git commit:*)
+description: Push branch, create a pull request, and optionally request a Copilot review. Use when your work is committed and ready for PR.
+allowed-tools: Bash(git push:*), Bash(gh pr create:*), Bash(gh pr edit:*), Bash(.claude/scripts/wait-copilot-review.sh:*), Bash(git log:*), Bash(git diff:*), Bash(git branch:*), Bash(git merge-base:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(git status:*), Bash(git add:*), Bash(git commit:*)
 ---
 
 # Create Pull Request
 
-Push the current branch, open a PR, and request a Copilot review.
+Push the current branch, open a PR, and optionally request a Copilot review.
 
 ## Current State
 
-- **Branch:** `$!git branch --show-current`
-- **Status:**
-```
-$!git status --short
-```
-- **Commits since main:**
-```
-$!git log --oneline main..HEAD 2>/dev/null || echo "(on main — nothing to PR)"
-```
+- **Branch:** !`git branch --show-current`
+- **Status:** !`git status --short`
+- **Commits since main:** !`git log --oneline main..HEAD 2>/dev/null || echo "(on main — nothing to PR)"`
 
 ## Preflight Checks
 
@@ -28,7 +22,7 @@ Before creating anything, validate:
    - If a **merged** PR exists for this branch, stop and tell the user the branch already has a merged PR.
    - If an **open** PR exists, stop and tell the user — offer to update it instead.
 3. **Uncommitted changes.** If there are staged or unstaged changes, commit them first:
-   - Review the diff to write an appropriate commit message.
+   - Review the diff to write the commit message in the `workflow` skill's Commit Messages format.
    - Stage and commit all relevant changes (exclude secrets, .env files).
 4. **Has commits ahead of main.** If `git log main..HEAD` is empty after handling uncommitted changes, stop and tell the user there is nothing to PR.
 
@@ -40,12 +34,14 @@ If all preflight checks pass, execute all tool calls in a single message. After 
 
 1. **Push** the branch: `git push -u origin $(git branch --show-current)`.
 
-2. **Create the PR** using `gh pr create`. Analyze all commits since main (not just the latest) to write the title and body:
+2. **Create the PR** using `gh pr create`. Analyze all commits since main (not just the latest) to write the title and body. The title uses the commit header format (`type(scope): summary`), because the squash merge makes it the commit on `main`. The body states what changed and why — neutral and factual, no commentary on effort or size — and, for a performance change, the `make bench-ab` result:
 
 ```
-gh pr create --title "<concise title, under 70 chars>" --body "$(cat <<'EOF'
+gh pr create --title "<type(scope): summary, under 70 chars>" --body "$(cat <<'EOF'
 ## Summary
 - <what changed and why, 1-3 bullets>
+
+Closes #<issue>
 
 ## Test Plan
 - [ ] <how to verify the changes>
@@ -55,6 +51,6 @@ EOF
 )"
 ```
 
-3. **Request Copilot review**: `gh pr edit --add-reviewer @copilot`.
+3. **Copilot review (optional)**: when the account has Copilot quota, run `.claude/scripts/wait-copilot-review.sh <pr>` in the background; when it reports, address the threads with `/address-pr-comments`. `/review-loop` is the required review.
 
 4. **Report** the PR URL to the user.

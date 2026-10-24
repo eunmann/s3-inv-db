@@ -9,7 +9,7 @@ description: "Reference: Go code quality standards — control flow, error handl
 
 - Read neighboring code before writing. Match the existing style, error handling, naming, and structure.
 - Evaluate whether existing code near your changes should be refactored for clarity, maintainability, or correctness.
-- Run `make` with no args (or read the `Makefile`) to see available targets.
+- Run `make help` to see available targets.
 
 ## Control Flow
 
@@ -61,7 +61,7 @@ description: "Reference: Go code quality standards — control flow, error handl
 - Pass `context.Context` as the first parameter. Never store it in a struct field (`containedctx` flags this).
 - Every channel must have a declared buffer size, or the goroutine lifecycle must guarantee no blocking.
 - If you can't diagram the concurrency on a napkin, simplify it.
-- Always run `make test-race` for changes touching concurrency.
+- Always run the touched packages with `-race` for changes touching concurrency (CI runs the whole suite with `-race`).
 
 ## Pointers and Unsafe
 

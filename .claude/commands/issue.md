@@ -54,7 +54,7 @@ If the issue appears resolved or outdated, explain why and ask the user before c
 
 ## 3. Plan
 
-Apply the `deep-research` skill to this issue. Work through all six steps: broad repo scan, exhaustive feature inventory, parallel sub-agent deep-dives, synthesis, a parallelizable task plan, and — once approved — spawn implementation subagents.
+Apply the `repo-research` skill to this issue: locate what it touches, read that, synthesize, and plan. Independent tasks may go to `implementer` subagents once the plan is approved.
 
 During steps 4-5 (synthesis and task plan), also:
 
@@ -85,23 +85,23 @@ For each step in the plan, follow the TDD cycle (see the `tdd` skill):
 1. **Write a failing test** — smallest test expressing the behavior. Table-driven with `t.Run`, standard `testing` package, `cmp.Diff` for structs.
 2. **Make it pass** — minimum code only.
 3. **Lint** — `make lint`. Stage any auto-fixes.
-4. **Test** — `make test` (and `make test-race` if concurrency was touched).
-5. **Commit** — one atomic commit per behavior. Message describes the what and why.
+4. **Test** — `make test-unit` (`make test` when S3-facing code changed); `-race` for concurrency changes.
+5. **Commit** — one atomic commit per behavior, in the `workflow` skill's Commit Messages format with `Task: impl #<issue>`.
 
-If the change touches a hot path (`pkg/extsort`, `pkg/indexread`, `pkg/triebuild`, or anything aggregated per object), run benchmarks before and after per `CLAUDE.md` rule 4.
+If the change can move performance (ingest, aggregation, merge, index build, the query path), gate it with `make bench-ab BASE=main` (bench/README.md) and cite the result.
 
 Keep commits focused: one logical change each, independently compilable and passing.
 
 ## 6. Review
 
-Run `/review-loop` to find and fix bugs, gaps, and quality issues iteratively until clean.
+Run `/review-loop`: one full review of the branch, then checks of its own fixes, at most three rounds.
 
 ## 7. Final Verification
 
 Before creating the PR:
 
-1. `make lint` — zero warnings.
-2. `make test-race` — all green.
+1. `make lint-check` — zero issues.
+2. `make test-unit` (and `make test` for S3-facing changes) — all green. PR Validation runs the full suite with `-race`.
 3. If the change touched docker or `.air.toml`, smoke-test `make dev` and/or `make docker-prod`.
 
 Do not proceed to the PR until these pass.
@@ -112,7 +112,7 @@ Do not proceed to the PR until these pass.
 2. Create the PR:
 
 ```
-gh pr create --title "<concise title>" --body "$(cat <<'EOF'
+gh pr create --title "<type(scope): summary>" --body "$(cat <<'EOF'
 Closes #<issue-number>
 
 ## Summary
@@ -124,5 +124,5 @@ EOF
 )"
 ```
 
-3. Request Copilot review: `gh pr edit --add-reviewer @copilot`.
-4. Report the PR URL to the user.
+3. Optional Copilot review: `.claude/scripts/wait-copilot-review.sh <pr>` in the background.
+4. Merge per the `workflow` skill's Before merging steps (squash), then report the PR URL.
