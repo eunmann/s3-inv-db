@@ -376,9 +376,14 @@ func (d *Discovery) cachedRun(src, id, run string) (Inventory, bool) {
 	defer d.cacheMu.RUnlock()
 	for i := range d.cacheViews {
 		inv := &d.cacheViews[i].Inventory
-		if inv.SourceBucket == src && inv.Name == id && inv.Run == run {
-			return *inv, true
+		if inv.SourceBucket != src || inv.Name != id || inv.Run != run {
+			continue
 		}
+		if inv.FileFormat == "" || inv.Error != "" {
+			return Inventory{}, false
+		}
+
+		return *inv, true
 	}
 
 	return Inventory{}, false
@@ -389,12 +394,12 @@ func (d *Discovery) now() time.Time {
 }
 
 // Find returns a single discovered inventory run by source bucket, ID,
-// and run timestamp. A run held by the cached snapshot is served from
-// it: discovered rows re-render on every SSE row event and every few
-// seconds while busy, and each Discoverer lookup costs S3 requests.
-// Manifest stats may therefore lag by up to one refresh interval. Only
-// a run the snapshot does not hold (or an empty run, meaning "latest")
-// goes to the Discoverer.
+// and run timestamp. A run the cached snapshot holds with its manifest
+// read is served from it: discovered rows re-render on every SSE row
+// event and every few seconds while busy, and each Discoverer lookup
+// costs S3 requests. Any other run (one the snapshot lacks, one whose
+// manifest the List did not fetch or failed to read, or an empty run,
+// meaning "latest") goes to the Discoverer.
 func (d *Discovery) Find(ctx context.Context, src, id, run string) (Inventory, error) {
 	if inv, ok := d.cachedRun(src, id, run); ok {
 		return inv, nil
