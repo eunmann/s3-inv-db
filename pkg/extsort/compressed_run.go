@@ -11,22 +11,33 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// Compressed run file format:
+// Run file format:
 //
 // Header (32 bytes):
 //   Magic:            4 bytes  (0x45585453 = "EXTS")
-//   Version:          4 bytes  (2 for compressed format)
+//   Version:          4 bytes  (2)
 //   Flags:            4 bytes  (bit 0: compressed, bits 1-3: compression type)
 //   Count:            8 bytes  (number of PrefixRows)
 //   UncompressedSize: 8 bytes  (total uncompressed data size, for buffer hints)
 //   Reserved:         4 bytes  (future use)
 //
-// Body: zstd compressed stream of records (same record format as uncompressed)
+// Body: zstd compressed stream of records, each:
+//   PrefixLen:  4 bytes (uint32, length of prefix string)
+//   Prefix:     N bytes (prefix string, no null terminator)
+//   Depth:      2 bytes (uint16)
+//   Count:      8 bytes (uint64)
+//   TotalBytes: 8 bytes (uint64)
+//   TierCounts: MaxTiers * 8 bytes (uint64 array)
+//   TierBytes:  MaxTiers * 8 bytes (uint64 array)
+//
+// Each record is 4 + len(prefix) + 2 + 8 + 8 + 2*MaxTiers*8 bytes; with
+// MaxTiers = tiers.NumTiers = 13 that is 230 + len(prefix).
 //
 // Compression types:
 //   1: Zstd (only supported type)
 
 const (
+	runFileMagic             = 0x45585453 // "EXTS"
 	compressedRunFileVersion = 2
 	compressedRunFileHeader  = 32
 
@@ -160,10 +171,6 @@ func (w *CompressedRunWriter) WriteSorted(rows []*PrefixRow) error {
 	return w.WriteAll(rows)
 }
 
-func (w *CompressedRunWriter) Count() uint64 {
-	return w.count
-}
-
 // Close flushes all buffers, finalizes compression, updates the
 // header, and closes the file. Idempotent — a second call returns nil
 // even if the first call returned an error mid-way (the underlying
@@ -197,12 +204,8 @@ func (w *CompressedRunWriter) Close() error {
 		return errors.Join(fmt.Errorf("update header: %w", err), w.closeFile())
 	}
 
-	// fsync before close: a crash between write and kernel flush would
-	// leave the compressed stream truncated and unreadable.
-	if err := w.file.Sync(); err != nil {
-		return errors.Join(fmt.Errorf("fsync compressed run file: %w", err), w.closeFile())
-	}
-
+	// No fsync: a run is scratch for this build only, and a crash
+	// abandons the build, so durability would buy nothing.
 	if err := w.closeFile(); err != nil {
 		return fmt.Errorf("close file: %w", err)
 	}
@@ -252,8 +255,7 @@ type CompressedRunReader struct {
 	closed       bool
 }
 
-// OpenCompressedRunFile opens a compressed run file for reading.
-// It auto-detects whether the file is compressed or uncompressed based on the version.
+// OpenCompressedRunFile opens a run file for reading.
 func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, error) {
 	if bufferSize <= 0 {
 		bufferSize = DefaultRunBufferSize
@@ -264,7 +266,6 @@ func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, e
 		return nil, fmt.Errorf("open compressed run file: %w", err)
 	}
 
-	// Read header to determine format
 	header := make([]byte, compressedRunFileHeader)
 	if _, err := io.ReadFull(f, header); err != nil {
 		f.Close()
@@ -326,29 +327,12 @@ func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, e
 	}, nil
 }
 
-// Read reads the next PrefixRow from the compressed run file.
-// Returns io.EOF when all records have been read.
-func (r *CompressedRunReader) Read() (*PrefixRow, error) {
-	if r.read >= r.count {
-		return nil, io.EOF
-	}
-
-	row, err := readPrefixRowRecord(r.reader, &r.buf)
-	if err != nil {
-		return nil, err
-	}
-
-	r.read++
-
-	return row, nil
-}
-
 // ReadInto reads the next row into the caller-owned PrefixRow.
 func (r *CompressedRunReader) ReadInto(into *PrefixRow) error {
 	if r.read >= r.count {
 		return io.EOF
 	}
-	if _, err := readPrefixRowRecordInto(r.reader, &r.buf, into); err != nil {
+	if err := readPrefixRowRecordInto(r.reader, &r.buf, into); err != nil {
 		return err
 	}
 	r.read++
@@ -393,61 +377,6 @@ func (r *CompressedRunReader) Remove() error {
 	return nil
 }
 
-// RunReader is an interface that abstracts reading from either compressed or uncompressed run files.
-type RunReader interface {
-	Read() (*PrefixRow, error)
-	// ReadInto reads the next row into the caller-owned PrefixRow,
-	// avoiding the per-row allocation in Read.
-	ReadInto(into *PrefixRow) error
-	Count() uint64
-	ReadCount() uint64
-	Close() error
-	Remove() error
-}
-
-// Ensure both reader types implement RunReader interface.
-var (
-	_ RunReader = (*RunFileReader)(nil)
-	_ RunReader = (*CompressedRunReader)(nil)
-)
-
-// OpenRunFileAuto opens a run file, auto-detecting whether it's compressed or not.
-// Returns a RunReader interface that works with either format.
-func OpenRunFileAuto(path string, bufferSize int) (RunReader, error) {
-	if bufferSize <= 0 {
-		bufferSize = DefaultRunBufferSize
-	}
-
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open run file: %w", err)
-	}
-
-	// Read just enough to check magic and version
-	header := make([]byte, 8)
-	if _, err := io.ReadFull(f, header); err != nil {
-		f.Close()
-
-		return nil, fmt.Errorf("read header: %w", err)
-	}
-	f.Close()
-
-	magic := binary.LittleEndian.Uint32(header[0:4])
-	if magic != runFileMagic {
-		return nil, fmt.Errorf("%w: got %x, want %x", ErrInvalidMagic, magic, runFileMagic)
-	}
-
-	version := binary.LittleEndian.Uint32(header[4:8])
-	switch version {
-	case runFileVersion:
-		return OpenRunFile(path, bufferSize)
-	case compressedRunFileVersion:
-		return OpenCompressedRunFile(path, bufferSize)
-	default:
-		return nil, fmt.Errorf("%w: %d", ErrUnsupportedVersion, version)
-	}
-}
-
 // One typed pool per compression level. Zstd encoders allocate
 // multi-MB window buffers; reusing them across run files cuts per-flush
 // allocations dramatically.
@@ -462,6 +391,26 @@ var zstdEncoderPools = map[zstd.EncoderLevel]*typedPool[zstd.Encoder]{
 //nolint:gochecknoglobals // intentional package-level decoder pool
 var zstdDecoderPool = newTypedPool(func() *zstd.Decoder { return nil })
 
+// zstdWindowSize bounds each run stream's match window. Run rows are
+// sorted, so most redundancy is between neighbouring rows; a 1 MiB
+// window keeps the ratio (run-file bytes are unchanged) at a fraction
+// of the default's buffers. Decoders keep their defaults: their
+// asynchronous block decoding keeps the serial final merge fed.
+const zstdWindowSize = 1 << 20
+
+// zstdEncoderOptions: one goroutine per stream. Every ingest worker and
+// every merge output already runs its own encoder, so the default
+// (GOMAXPROCS block encoders per stream) only multiplies buffers by the
+// core count.
+func zstdEncoderOptions(level zstd.EncoderLevel) []zstd.EOption {
+	return []zstd.EOption{
+		zstd.WithEncoderLevel(level),
+		zstd.WithEncoderConcurrency(1),
+		zstd.WithWindowSize(zstdWindowSize),
+		zstd.WithLowerEncoderMem(true),
+	}
+}
+
 // acquireZstdEncoder returns a pooled or freshly-built encoder at the
 // requested level. A nil pool (unknown level) or an empty pool both
 // fall through to NewWriter; that's by design — callers don't need to
@@ -473,7 +422,7 @@ func acquireZstdEncoder(level zstd.EncoderLevel) (*zstd.Encoder, error) {
 			return enc, nil
 		}
 	}
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level))
+	enc, err := zstd.NewWriter(nil, zstdEncoderOptions(level)...)
 	if err != nil {
 		return nil, fmt.Errorf("zstd new writer: %w", err)
 	}

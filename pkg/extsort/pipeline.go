@@ -687,8 +687,8 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 
 	const (
 		ctxCheckInterval = 4096
-		// ShouldWorkerFlush calls runtime.ReadMemStats; cadence the
-		// in-chunk check so big chunks can still spill before OOM.
+		// The in-chunk spill check lets a big chunk spill before it
+		// outgrows the cap; checking every row would only add overhead.
 		midChunkFlushInterval = 50_000
 	)
 	var (
@@ -807,37 +807,23 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 		Payload: events.WorkerState{WorkerID: workerID, Reason: "spilling"},
 	})
 
-	// Use compressed runs if configured (default: true)
-	ext := ".bin"
-	if p.config.Merge.UseCompressedRuns {
-		ext = ".crun"
-	}
 	p.runFilesMu.Lock()
 	runIdx := p.runCount
 	p.runCount++
 	p.runFilesMu.Unlock()
-	runPath := filepath.Join(p.tempDir, fmt.Sprintf("run_%04d%s", runIdx, ext))
+	runPath := filepath.Join(p.tempDir, fmt.Sprintf("run_%04d.crun", runIdx))
 
 	// Run file buffer: a fixed 4 MiB is well above the syscall sweet
 	// spot for sequential writes and bounded per-worker, so no need to
 	// derive it from a fractional memory partition.
 	const bufferSize = DefaultRunBufferSize
 
-	var writer runWriter
-	var err error
-	if p.config.Merge.UseCompressedRuns {
-		writer, err = NewCompressedRunWriter(runPath, CompressedRunWriterOptions{
-			BufferSize:       int(bufferSize),
-			CompressionLevel: CompressionFastest, // Optimize for write speed during ingest
-		})
-		if err != nil {
-			return fmt.Errorf("create compressed run file: %w", err)
-		}
-	} else {
-		writer, err = NewRunFileWriter(runPath, int(bufferSize))
-		if err != nil {
-			return fmt.Errorf("create run file: %w", err)
-		}
+	writer, err := NewCompressedRunWriter(runPath, CompressedRunWriterOptions{
+		BufferSize:       int(bufferSize),
+		CompressionLevel: CompressionFastest, // Optimize for write speed during ingest
+	})
+	if err != nil {
+		return fmt.Errorf("create run file: %w", err)
 	}
 	if err := writeAndCloseRun(writer, rows, runPath); err != nil {
 		logCleanupErr(log, "remove failed run", runPath, os.Remove(runPath))
@@ -849,6 +835,11 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	p.runFiles = append(p.runFiles, runPath)
 	p.runFilesMu.Unlock()
 	p.flushCount.Add(1)
+	// Under heap pressure the recycled rows are what holds the heap up:
+	// keeping them would force a spill on every later check.
+	if heapUnderPressure(readMemoryLimit()) {
+		agg.Release()
+	}
 
 	// Same estimate as Aggregator.EstimatedMemoryUsage — kept as a
 	// log-only post-drain footprint approximation.
@@ -874,7 +865,6 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 		Int("prefixes_count", len(rows)).
 		Str("aggregator_memory", humanfmt.Bytes(aggMemory)).
 		Str("buffer_size", humanfmt.Bytes(bufferSize)).
-		Bool("compressed", p.config.Merge.UseCompressedRuns).
 		Str("duration", humanfmt.Duration(flushDuration)).
 		Dur("duration_ms", flushDuration).
 		Msg("run file written")
@@ -892,13 +882,10 @@ type mergeBuildResult struct {
 // runMergePhase returns a streaming RowIterator over the K-way merge
 // of p.runFiles, plus a cleanup closure. Single-run case wraps the
 // lone run file directly. Multi-run case uses
-// ParallelMerger.MergeAllToIterator which avoids writing a final
-// merged file to disk (I3 win).
-//
-
+// ParallelMerger.MergeAllToIterator, which writes no final merged file.
 func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRunFiles, numWorkers, maxFanIn int, perReaderBuffer int64) (RowIterator, func() error, MergeStatistics, error) {
 	if numRunFiles == 1 {
-		reader, err := OpenRunFileAuto(p.runFiles[0], int(perReaderBuffer))
+		reader, err := OpenCompressedRunFile(p.runFiles[0], int(perReaderBuffer))
 		if err != nil {
 			return nil, nil, MergeStatistics{}, fmt.Errorf("open single run: %w", err)
 		}
@@ -918,7 +905,6 @@ func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRu
 		MaxFanIn:         maxFanIn,
 		BufferSize:       int(perReaderBuffer),
 		TempDir:          p.tempDir,
-		UseCompression:   p.config.Merge.UseCompressedRuns,
 		CompressionLevel: CompressionFastest,
 		OnRoundComplete: func(round, remaining int) {
 			p.reportProgress("building", int64(numRunFiles-remaining), int64(numRunFiles))
@@ -942,16 +928,8 @@ func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRu
 		Str("merge_duration", humanfmt.Duration(stats.TotalMergeTime)).
 		Str("bytes_written", humanfmt.Bytes(stats.BytesWritten)).
 		Msg("parallel merge → streaming iterator")
-	cleanup := func() error {
-		err := mergerCleanup()
-		for _, path := range p.runFiles {
-			logCleanupErr(log, "remove run file", path, os.Remove(path))
-		}
-
-		return err
-	}
-
-	return iter, cleanup, stats, nil
+	// The merger owns the run files from here and deletes them.
+	return iter, mergerCleanup, stats, nil
 }
 
 // runMergeBuildPhase merges run files and builds the index.
@@ -982,24 +960,16 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	// than a fraction of a budget — each reader's working set is
 	// dominated by its inflight prefix-row decode, not this buffer.
 	numRunFiles := len(p.runFiles)
-	const perReaderBuffer int64 = 1 * 1024 * 1024
+	const perReaderBuffer int64 = mergeReaderBufferSize
 
-	// Use parallel merge for multiple run files
-	numWorkers := p.config.Merge.NumWorkers
-	if numWorkers <= 0 {
-		numWorkers = 1
-	}
-	maxFanIn := p.config.Merge.MaxFanIn
-	if maxFanIn <= 1 {
-		maxFanIn = 8
-	}
+	merge := p.config.Merge.withDefaults()
+	numWorkers, maxFanIn := merge.NumWorkers, merge.MaxFanIn
 
 	log.Info().
 		Int("run_files_count", numRunFiles).
 		Int("merge_workers_count", numWorkers).
 		Int("max_fan_in", maxFanIn).
 		Int64("per_reader_buffer_kb", perReaderBuffer/1024).
-		Bool("compressed", p.config.Merge.UseCompressedRuns).
 		Msg("merge phase starting")
 
 	mergeIter, cleanupIntermediates, mergeStats, err := p.runMergePhase(ctx, log, numRunFiles, numWorkers, maxFanIn, perReaderBuffer)
@@ -1026,14 +996,18 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		return mergeBuildResult{}, fmt.Errorf("create index builder: %w", err)
 	}
 
-	// Wrap the merge iterator so the IndexBuilder consumption emits
+	// Decode the merge a few batches ahead of the builder. Deferred
+	// after the cleanup, so it stops before the merge readers close.
+	prefetch := newPrefetchIterator(mergeIter)
+	defer prefetch.stop()
+	// Wrap the prefetched merge so the IndexBuilder consumption emits
 	// "building" progress every ~131k rows. Without this the bar stays
 	// frozen at the start of the index-build phase (which is the
 	// dominant fraction of wall clock for large inventories) until the
 	// next merge round fires — sometimes never, if all run files merged
 	// in a single round. Power-of-two interval lets the AND short-circuit.
 	progressIter := &reportingIterator{
-		inner:       mergeIter,
+		inner:       prefetch,
 		total:       int64(prefixCount),
 		onProgress:  func(done, total int64) { p.reportProgress("building", done, total) },
 		reportEvery: indexBuildProgressInterval,
@@ -1067,7 +1041,7 @@ func (p *Pipeline) fillAndFinalize(ctx context.Context, builder *IndexBuilder, r
 		return fmt.Errorf("set present tiers: %w", err)
 	}
 	if rows != nil {
-		if err := builder.AddAllWithContext(ctx, rows); err != nil {
+		if err := builder.AddAll(ctx, rows); err != nil {
 			return fmt.Errorf("build index: %w", err)
 		}
 	}
@@ -1114,11 +1088,11 @@ func (p *reportingIterator) Next() (*PrefixRow, error) {
 
 func (p *reportingIterator) Remaining() uint64 { return p.inner.Remaining() }
 
-// singleRunIterator wraps a RunReader to implement the iterator interface expected by IndexBuilder.
+// singleRunIterator wraps a CompressedRunReader to implement the iterator interface expected by IndexBuilder.
 // Reuses one PrefixRow across all Next() calls — caller must consume the
 // returned row before calling Next again. IndexBuilder.Add does this.
 type singleRunIterator struct {
-	reader RunReader
+	reader *CompressedRunReader
 	row    PrefixRow
 }
 

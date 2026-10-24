@@ -30,35 +30,6 @@ func makePrefixRows(n int) []*extsort.PrefixRow {
 	return rows
 }
 
-// BenchmarkRunFileWriteUncompressed measures uncompressed run file write
-// throughput and on-disk size. With the current fat fixed-width format,
-// per-row overhead is ~214 + len(prefix) bytes regardless of tier sparsity.
-func BenchmarkRunFileWriteUncompressed(b *testing.B) {
-	const N = 50_000
-	rows := makePrefixRows(N)
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	var totalBytes int64
-	for i := range b.N {
-		path := filepath.Join(b.TempDir(), fmt.Sprintf("run_%d.bin", i))
-		w, err := extsort.NewRunFileWriter(path, 4*1024*1024)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if err := w.WriteAll(rows); err != nil {
-			b.Fatal(err)
-		}
-		if err := w.Close(); err != nil {
-			b.Fatal(err)
-		}
-		st, _ := os.Stat(path)
-		totalBytes += st.Size()
-	}
-	b.ReportMetric(float64(totalBytes)/float64(b.N), "bytes/file")
-	b.ReportMetric(float64(totalBytes)/float64(b.N*N), "bytes/row")
-}
-
 // BenchmarkRunFileWriteCompressed measures the compressed (zstd) path.
 func BenchmarkRunFileWriteCompressed(b *testing.B) {
 	const N = 50_000
@@ -116,9 +87,9 @@ func BenchmarkRunFileReadCompressed(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
+		var row extsort.PrefixRow
 		for {
-			_, err := r.Read()
-			if err != nil {
+			if err := r.ReadInto(&row); err != nil {
 				break
 			}
 		}

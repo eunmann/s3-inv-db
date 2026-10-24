@@ -4,12 +4,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"os"
 	"path/filepath"
 	"unsafe"
-
-	"github.com/relab/bbhash"
 )
 
 // DirPerm and FilePerm are the permission bits applied to every
@@ -26,7 +23,7 @@ const (
 // Thread Safety: MPHF is safe for concurrent read access from
 // multiple goroutines. Close once, after all reads.
 type MPHF struct {
-	mph *bbhash.BBHash2
+	mph *bbhash
 	// combined holds the interleaved [fp, pos, fp, pos, ...] array.
 	// Lookup at hash position p reads combined.UnsafeGetU64(2p) for
 	// fp and combined.UnsafeGetU64(2p+1) for pos — adjacent words
@@ -52,13 +49,9 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 		return &MPHF{count: 0}, nil
 	}
 
-	mphData, err := os.ReadFile(mphPath)
+	mph, err := readBBHash(mphPath)
 	if err != nil {
-		return nil, fmt.Errorf("read mph file: %w", err)
-	}
-	mph := &bbhash.BBHash2{}
-	if err := mph.UnmarshalBinary(mphData); err != nil {
-		return nil, fmt.Errorf("unmarshal MPHF: %w", err)
+		return nil, err
 	}
 
 	combined, err := OpenArrayWithHint(combinedPath, AccessHintRandom)
@@ -117,12 +110,8 @@ func (m *MPHF) Lookup(prefix string) (uint64, bool) {
 		return 0, false
 	}
 	keyHash := hashString(prefix, m.seed)
-	hashVal := m.mph.Find(keyHash)
-	if hashVal == 0 {
-		return 0, false
-	}
-	hashPos := hashVal - 1
-	if hashPos >= m.count {
+	hashPos, ok := m.mph.find(keyHash)
+	if !ok || hashPos >= m.count {
 		return 0, false
 	}
 	storedFP := m.combined.UnsafeGetU64(2 * hashPos)
@@ -228,10 +217,14 @@ func computeFingerprint(s string) uint64 {
 	return computeFingerprintBytes(unsafe.Slice(unsafe.StringData(s), len(s)))
 }
 
-// computeFingerprintBytes computes a fingerprint from bytes.
+// computeFingerprintBytes is 64-bit FNV-1 (multiply, then XOR),
+// written out so it allocates no hasher: it runs once per prefix.
 func computeFingerprintBytes(b []byte) uint64 {
-	h := fnv.New64()
-	h.Write(b)
+	h := fnvOffset64
+	for _, c := range b {
+		h *= fnvPrime64
+		h ^= uint64(c)
+	}
 
-	return h.Sum64()
+	return h
 }

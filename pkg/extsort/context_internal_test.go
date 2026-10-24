@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// TestIndexBuilderContextCancellation verifies that AddAllWithContext
-// respects context cancellation.
+// TestIndexBuilderContextCancellation verifies that AddAll respects
+// context cancellation.
 func TestIndexBuilderContextCancellation(t *testing.T) {
 	t.Run("immediate_cancellation", func(t *testing.T) {
 		// Create a cancelled context
@@ -24,10 +24,10 @@ func TestIndexBuilderContextCancellation(t *testing.T) {
 		}
 
 		// Create a run file with many rows
-		runFile := filepath.Join(dir, "run_0000.bin")
-		writer, err := NewRunFileWriter(runFile, 4096)
+		runFile := filepath.Join(dir, "run_0000.crun")
+		writer, err := NewCompressedRunWriter(runFile, CompressedRunWriterOptions{BufferSize: 4096})
 		if err != nil {
-			t.Fatalf("NewRunFileWriter: %v", err)
+			t.Fatalf("NewCompressedRunWriter: %v", err)
 		}
 
 		// Write 10000 rows to ensure we'd iterate for a while
@@ -51,7 +51,7 @@ func TestIndexBuilderContextCancellation(t *testing.T) {
 		}
 		defer iter.Close()
 
-		err = builder.AddAllWithContext(ctx, iter)
+		err = builder.AddAll(ctx, iter)
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("expected context.Canceled, got: %v", err)
 		}
@@ -68,10 +68,10 @@ func TestIndexBuilderContextCancellation(t *testing.T) {
 		dir := t.TempDir()
 
 		// Create a run file with many rows
-		runFile := filepath.Join(dir, "run_0000.bin")
-		writer, err := NewRunFileWriter(runFile, 4096)
+		runFile := filepath.Join(dir, "run_0000.crun")
+		writer, err := NewCompressedRunWriter(runFile, CompressedRunWriterOptions{BufferSize: 4096})
 		if err != nil {
-			t.Fatalf("NewRunFileWriter: %v", err)
+			t.Fatalf("NewCompressedRunWriter: %v", err)
 		}
 
 		// Write many rows - more than check interval
@@ -101,7 +101,7 @@ func TestIndexBuilderContextCancellation(t *testing.T) {
 			t.Fatalf("NewIndexBuilder: %v", err)
 		}
 
-		err = builder.AddAllWithContext(ctx, iter)
+		err = builder.AddAll(ctx, iter)
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("expected context.DeadlineExceeded, got: %v", err)
 		}
@@ -143,7 +143,7 @@ workerLoop:
 	if !exitedDueToCancel {
 		t.Error("worker did not exit on pre-cancelled context")
 	}
-	if agg.ObjectCount() > 5 {
-		t.Errorf("processed too many objects: %d (expected <= 5)", agg.ObjectCount())
+	if n := agg.PrefixCount(); n != 0 {
+		t.Errorf("aggregated %d prefixes after cancellation, want 0", n)
 	}
 }

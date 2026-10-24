@@ -64,8 +64,8 @@ func TestDiscoveryService_EnabledReflectsConstructor(t *testing.T) {
 	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
 
-	if got := inventory.NewDisabledDiscovery(mgr).Enabled(); got {
-		t.Errorf("NewDisabledDiscovery Enabled() = true, want false")
+	if got := inventory.NewDiscovery(mgr).Enabled(); got {
+		t.Errorf("NewDiscovery(mgr) Enabled() = true, want false")
 	}
 	if got := inventory.NewDiscovery(mgr, inventory.WithBackend(&fakeDiscoverer{}, &fakeBuilder{})).Enabled(); !got {
 		t.Errorf("NewDiscovery(mgr, d, b) Enabled() = false, want true")
@@ -73,7 +73,7 @@ func TestDiscoveryService_EnabledReflectsConstructor(t *testing.T) {
 }
 
 func TestDiscoveryService_ListWhenDisabledReturnsErr(t *testing.T) {
-	s := inventory.NewDisabledDiscovery(inventory.NewCatalog(nil))
+	s := inventory.NewDiscovery(inventory.NewCatalog(nil))
 	_, err := s.List(t.Context())
 	if !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("List() error = %v, want inventory.ErrDiscoveryDisabled", err)
@@ -81,7 +81,7 @@ func TestDiscoveryService_ListWhenDisabledReturnsErr(t *testing.T) {
 }
 
 func TestDiscoveryService_FindWhenDisabledReturnsErr(t *testing.T) {
-	s := inventory.NewDisabledDiscovery(inventory.NewCatalog(nil))
+	s := inventory.NewDiscovery(inventory.NewCatalog(nil))
 	_, err := s.Find(t.Context(), "src", "id", "")
 	if !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("Find() error = %v, want inventory.ErrDiscoveryDisabled", err)
@@ -89,7 +89,7 @@ func TestDiscoveryService_FindWhenDisabledReturnsErr(t *testing.T) {
 }
 
 func TestDiscoveryService_LoadWhenDisabledReturnsErr(t *testing.T) {
-	s := inventory.NewDisabledDiscovery(inventory.NewCatalog(nil))
+	s := inventory.NewDiscovery(inventory.NewCatalog(nil))
 	err := s.Load(t.Context(), inventory.Inventory{})
 	if !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("Load() error = %v, want inventory.ErrDiscoveryDisabled", err)
@@ -147,7 +147,7 @@ func TestDiscoveryService_ListPropagatesDiscovererError(t *testing.T) {
 }
 
 func TestDiscoveryService_PrepareDiscovered_DisabledReturnsErr(t *testing.T) {
-	s := inventory.NewDisabledDiscovery(inventory.NewCatalog(nil))
+	s := inventory.NewDiscovery(inventory.NewCatalog(nil))
 	disc := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "r", ManifestKey: "k"}
 	if err := s.PrepareDiscovered(t.Context(), disc); !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("PrepareDiscovered err = %v, want inventory.ErrDiscoveryDisabled", err)
@@ -208,7 +208,7 @@ func TestDiscoveryService_PrepareDiscovered_AlreadyExistsIsIdempotent(t *testing
 }
 
 func TestDiscoveryService_Snapshot_DisabledReturnsErr(t *testing.T) {
-	s := inventory.NewDisabledDiscovery(inventory.NewCatalog(nil))
+	s := inventory.NewDiscovery(inventory.NewCatalog(nil))
 	if _, _, err := s.Snapshot(t.Context()); !errors.Is(err, inventory.ErrDiscoveryDisabled) {
 		t.Errorf("Snapshot err = %v, want ErrDiscoveryDisabled", err)
 	}
@@ -386,7 +386,7 @@ func TestDiscoveryService_Refresh_RecordsClockTimestamp(t *testing.T) {
 }
 
 func TestDiscoveryService_StartStop_NoopWhenDisabled(t *testing.T) {
-	s := inventory.NewDisabledDiscovery(inventory.NewCatalog(nil))
+	s := inventory.NewDiscovery(inventory.NewCatalog(nil))
 	// Should not block, panic, or leak a goroutine.
 	s.Start(t.Context(), time.Millisecond, nil)
 	s.Stop()

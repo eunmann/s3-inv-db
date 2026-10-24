@@ -16,20 +16,27 @@ import (
 
 // DownloaderConfig configures the S3 Download Manager.
 type DownloaderConfig struct {
-	TempDir     string
+	TempDir string
+	// Concurrency is the ranged GETs one download runs at once.
 	Concurrency int
-	PartSize    int64
+	// MaxInFlightGETs caps the GETs in flight across every download
+	// sharing this Downloader.
+	MaxInFlightGETs int
+	PartSize        int64
 }
 
-// DefaultDownloaderConfig returns sensible defaults based on the current machine.
+// DefaultDownloaderConfig returns sensible defaults based on the current
+// machine: up to 16 parts per object, and 4 GETs per CPU (32 to 256)
+// across all downloads, where ingest workers × parts would otherwise
+// reach 16 per CPU.
 func DefaultDownloaderConfig() DownloaderConfig {
 	numCPU := runtime.NumCPU()
-	concurrency := min(max(numCPU, 4), 16)
 
 	return DownloaderConfig{
-		Concurrency: concurrency,
-		PartSize:    16 * 1024 * 1024, // 16MB
-		TempDir:     "",
+		Concurrency:     min(max(numCPU, 4), 16),
+		MaxInFlightGETs: min(max(4*numCPU, 32), 256),
+		PartSize:        16 * 1024 * 1024, // 16MB
+		TempDir:         "",
 	}
 }
 
@@ -47,8 +54,11 @@ func NewDownloader(s3Client *s3.Client, cfg DownloaderConfig) *Downloader {
 	if cfg.PartSize <= 0 {
 		cfg.PartSize = DefaultDownloaderConfig().PartSize
 	}
+	if cfg.MaxInFlightGETs <= 0 {
+		cfg.MaxInFlightGETs = DefaultDownloaderConfig().MaxInFlightGETs
+	}
 
-	mgr := transfermanager.New(s3Client, func(o *transfermanager.Options) {
+	mgr := transfermanager.New(newBoundedGets(s3Client, cfg.MaxInFlightGETs), func(o *transfermanager.Options) {
 		o.Concurrency = cfg.Concurrency
 		o.PartSizeBytes = cfg.PartSize
 	})

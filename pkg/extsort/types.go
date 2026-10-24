@@ -22,8 +22,8 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-// MaxTiers mirrors tiers.NumTiers as an int so PrefixRow / PrefixStats
-// can declare fixed-size arrays for tier data (avoids map allocs).
+// MaxTiers mirrors tiers.NumTiers as an int so PrefixRow can declare
+// fixed-size arrays for tier data (avoids map allocs).
 const MaxTiers = int(tiers.NumTiers)
 
 // RowIterator yields PrefixRows in sorted order; Next returns io.EOF
@@ -65,26 +65,31 @@ func (r *PrefixRow) Merge(other *PrefixRow) {
 	}
 }
 
-// readPrefixRowRecord reads a single PrefixRow from a reader using the common binary format.
-// The buf pointer is used for temporary storage and may be resized if needed.
-// Returns io.EOF when the source is exhausted.
-func readPrefixRowRecord(reader io.Reader, buf *[]byte) (*PrefixRow, error) {
-	return readPrefixRowRecordInto(reader, buf, nil)
-}
+// recordLenBytes is the uint32 prefix-length header of a run record;
+// recordScratchMin is the smallest scratch buffer worth allocating.
+const (
+	recordLenBytes   = 4
+	recordScratchMin = 512
+)
 
-// readPrefixRowRecordInto is like readPrefixRowRecord but reuses the given
-// PrefixRow when non-nil. Pass a row obtained from prefixRowPool to keep
-// the merge loop allocation-free.
-func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) (*PrefixRow, error) {
-	var lenBuf [4]byte
-	if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
+// readPrefixRowRecordInto reads one run record into row, keeping the
+// merge loop free of row allocations. Buf is scratch space, grown as
+// needed. Returns io.EOF when the source is exhausted.
+func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) error {
+	// The length is read into the reusable scratch buffer: a local array
+	// passed to an io.Reader escapes, one allocation per row.
+	if len(*buf) < recordLenBytes {
+		*buf = make([]byte, recordScratchMin)
+	}
+	lenBuf := (*buf)[:recordLenBytes]
+	if _, err := io.ReadFull(reader, lenBuf); err != nil {
 		if errors.Is(err, io.EOF) {
-			return nil, io.EOF
+			return io.EOF
 		}
 
-		return nil, fmt.Errorf("read prefix length: %w", err)
+		return fmt.Errorf("read prefix length: %w", err)
 	}
-	prefixLen := int(binary.LittleEndian.Uint32(lenBuf[:]))
+	prefixLen := int(binary.LittleEndian.Uint32(lenBuf))
 
 	fixedSize := 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
 	recordSize := prefixLen + fixedSize
@@ -94,14 +99,10 @@ func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) (*Pr
 	}
 
 	if _, err := io.ReadFull(reader, (*buf)[:recordSize]); err != nil {
-		return nil, fmt.Errorf("read record: %w", err)
+		return fmt.Errorf("read record: %w", err)
 	}
 
-	if row == nil {
-		row = &PrefixRow{}
-	} else {
-		row.Reset()
-	}
+	row.Reset()
 	offset := 0
 
 	row.Prefix = string((*buf)[offset : offset+prefixLen])
@@ -126,7 +127,7 @@ func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) (*Pr
 		offset += 8
 	}
 
-	return row, nil
+	return nil
 }
 
 // SortPrefixRows sorts a slice of PrefixRows by prefix in lexicographic order.
@@ -143,9 +144,6 @@ func SortPrefixRows(rows []*PrefixRow) {
 // in place across many calls; the encoded byte length is returned so
 // callers can track uncompressed size or pass a partial slice to
 // the underlying writer.
-//
-// Both RunFileWriter and CompressedRunWriter delegate to this — the
-// binary format is identical and only the I/O layer differs.
 func encodePrefixRowRecord(buf *[]byte, row *PrefixRow) int {
 	prefixLen := len(row.Prefix)
 	recordSize := 4 + prefixLen + 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
@@ -181,46 +179,12 @@ func encodePrefixRowRecord(buf *[]byte, row *PrefixRow) int {
 	return offset
 }
 
-// PrefixStats holds aggregated stats for one prefix during the
-// in-memory aggregation phase. Uint64 counters because a single tier
-// of the root prefix can exceed 2^32 at PB scale.
-type PrefixStats struct {
-	Count      uint64
-	TotalBytes uint64
-	TierCounts [MaxTiers]uint64
-	TierBytes  [MaxTiers]uint64
-	Depth      uint16
-}
-
-// Reset clears all fields of the PrefixStats for reuse.
-func (s *PrefixStats) Reset() {
-	s.Depth = 0
-	s.Count = 0
-	s.TotalBytes = 0
-	clear(s.TierCounts[:])
-	clear(s.TierBytes[:])
-}
-
-// Add accumulates statistics from a single object.
-func (s *PrefixStats) Add(size uint64, tierID tiers.ID) {
-	s.Count++
-	s.TotalBytes += size
-	s.TierCounts[tierID]++
-	s.TierBytes[tierID] += size
-}
-
-// ToPrefixRow creates a PrefixRow from this PrefixStats with the given prefix.
-func (s *PrefixStats) ToPrefixRow(prefix string) *PrefixRow {
-	row := &PrefixRow{
-		Prefix:     prefix,
-		Depth:      s.Depth,
-		Count:      s.Count,
-		TotalBytes: s.TotalBytes,
-	}
-	copy(row.TierCounts[:], s.TierCounts[:])
-	copy(row.TierBytes[:], s.TierBytes[:])
-
-	return row
+// add accumulates one object into the row.
+func (r *PrefixRow) add(size uint64, tierID tiers.ID) {
+	r.Count++
+	r.TotalBytes += size
+	r.TierCounts[tierID]++
+	r.TierBytes[tierID] += size
 }
 
 // Config holds pipeline configuration. Grouped into substructs by
@@ -240,9 +204,20 @@ type MergeConfig struct {
 	// MaxFanIn: runs merged per worker. Higher = fewer rounds, more
 	// memory per worker. Default 16.
 	MaxFanIn int
+}
 
-	// UseCompressedRuns enables zstd on intermediate run files. Default true.
-	UseCompressedRuns bool
+// withDefaults replaces unset (or, for MaxFanIn, unusable) fields with
+// DefaultConfig's.
+func (c MergeConfig) withDefaults() MergeConfig {
+	def := DefaultConfig().Merge
+	if c.NumWorkers <= 0 {
+		c.NumWorkers = def.NumWorkers
+	}
+	if c.MaxFanIn <= 1 {
+		c.MaxFanIn = def.MaxFanIn
+	}
+
+	return c
 }
 
 // ObserveConfig wires optional progress + event consumers.
@@ -268,9 +243,8 @@ func DefaultConfig() Config {
 		TempDir:  "",
 		MaxDepth: 0,
 		Merge: MergeConfig{
-			NumWorkers:        mergeWorkers,
-			MaxFanIn:          16,
-			UseCompressedRuns: true,
+			NumWorkers: mergeWorkers,
+			MaxFanIn:   16,
 		},
 	}
 }

@@ -75,32 +75,28 @@ func BenchmarkPipelineScale_E2E(b *testing.B) {
 				// Merge + build.
 				mergeStart := time.Now()
 				merger := NewParallelMerger(ParallelMergeConfig{
-					NumWorkers:     4,
-					MaxFanIn:       8,
-					BufferSize:     DefaultRunBufferSize,
-					TempDir:        runDir,
-					UseCompression: true,
+					NumWorkers: 4,
+					MaxFanIn:   8,
+					BufferSize: DefaultRunBufferSize,
+					TempDir:    runDir,
 				})
-				finalPath, err := merger.MergeAll(b.Context(), runPaths)
+				it, cleanup, err := merger.MergeAllToIterator(b.Context(), runPaths)
 				if err != nil {
 					b.Fatal(err)
 				}
-				reader, err := OpenRunFileAuto(finalPath, 4*1024*1024)
-				if err != nil {
-					b.Fatal(err)
-				}
-				it := &singleRunIterator{reader: reader}
 				builder, err := NewIndexBuilder(outDir, runDir)
 				if err != nil {
 					b.Fatal(err)
 				}
-				if err := builder.AddAll(it); err != nil {
+				if err := builder.AddAll(b.Context(), it); err != nil {
 					b.Fatal(err)
 				}
 				if err := builder.Finalize(); err != nil {
 					b.Fatal(err)
 				}
-				reader.Close()
+				if err := cleanup(); err != nil {
+					b.Fatal(err)
+				}
 				mergeMs := time.Since(mergeStart).Milliseconds()
 
 				total := time.Since(start)

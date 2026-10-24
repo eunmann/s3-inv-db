@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,9 +33,10 @@ const avgSegmentBytes = 12
 // path segment. The trailing empty segment after a "/" is preserved
 // so prefixes ("data/") stay distinguishable from keys ("data").
 type PrefixSegmentInterner struct {
-	segmentMap map[uint64]uint32
+	// ids is keyed by the segment itself: exact, so no hash collision
+	// can fail a build.
+	ids        map[string]uint32
 	blobWriter *BlobWriter
-	segments   []string
 	nextID     uint32
 }
 
@@ -52,35 +52,25 @@ func NewPrefixSegmentInterner(outDir string) (*PrefixSegmentInterner, error) {
 	}
 
 	return &PrefixSegmentInterner{
-		segmentMap: make(map[uint64]uint32),
-		segments:   make([]string, 0, 1024),
+		ids:        make(map[string]uint32, 1024),
 		blobWriter: writer,
-		nextID:     0,
 	}, nil
 }
 
 // Intern returns the ID for segment, assigning and writing a new one
-// on first occurrence.
-func (si *PrefixSegmentInterner) Intern(segment string) (uint32, error) {
-	h := hashSegment(segment)
-
-	if id, ok := si.segmentMap[h]; ok {
-		if si.segments[id] != segment {
-			return 0, fmt.Errorf("%w between %q and %q", ErrHashCollision, si.segments[id], segment)
-		}
-
+// on first occurrence. Looking up an existing segment does not allocate.
+func (si *PrefixSegmentInterner) Intern(segment []byte) (uint32, error) {
+	if id, ok := si.ids[string(segment)]; ok {
 		return id, nil
 	}
 
 	id := si.nextID
 	si.nextID++
-
-	if err := si.blobWriter.WriteString(segment); err != nil {
+	owned := string(segment)
+	if err := si.blobWriter.WriteString(owned); err != nil {
 		return 0, fmt.Errorf("write segment: %w", err)
 	}
-
-	si.segmentMap[h] = id
-	si.segments = append(si.segments, segment)
+	si.ids[owned] = id
 
 	return id, nil
 }
@@ -91,13 +81,6 @@ func (si *PrefixSegmentInterner) Count() uint32 {
 
 func (si *PrefixSegmentInterner) Close() error {
 	return si.blobWriter.Close()
-}
-
-func hashSegment(s string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte(s))
-
-	return h.Sum64()
 }
 
 // PrefixDictionary provides ID→segment lookup backed by an LRU cache.
@@ -254,14 +237,19 @@ func NewDictPrefixWriter(outDir string) (*DictPrefixWriter, error) {
 
 // WritePrefix splits a prefix into segments, interns each segment,
 // and writes the segment IDs to the output files.
-func (w *DictPrefixWriter) WritePrefix(prefix string) error {
+func (w *DictPrefixWriter) WritePrefix(prefix []byte) error {
 	if err := w.offsetsWriter.WriteU64(w.currentOffset); err != nil {
 		return fmt.Errorf("write prefix offset: %w", err)
 	}
 
-	segments := SplitPrefix(prefix)
-
-	for _, seg := range segments {
+	// Same segments as SplitPrefix ("a/b/" -> "a", "b", ""), walked in
+	// place instead of allocating a slice per prefix.
+	start := 0
+	for i := 0; i <= len(prefix); i++ {
+		if i < len(prefix) && prefix[i] != '/' {
+			continue
+		}
+		seg := prefix[start:i]
 		id, err := w.interner.Intern(seg)
 		if err != nil {
 			return fmt.Errorf("intern segment %q: %w", seg, err)
@@ -270,6 +258,7 @@ func (w *DictPrefixWriter) WritePrefix(prefix string) error {
 			return fmt.Errorf("write segment ID: %w", err)
 		}
 		w.currentOffset++
+		start = i + 1
 	}
 
 	return nil

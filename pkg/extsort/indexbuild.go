@@ -264,14 +264,9 @@ func (b *IndexBuilder) closeTopNode() error {
 	return nil
 }
 
-// AddAll processes all PrefixRows from an iterator.
-func (b *IndexBuilder) AddAll(iter RowIterator) error {
-	return b.AddAllWithContext(context.Background(), iter)
-}
-
-// AddAllWithContext processes all PrefixRows from an iterator with context support.
-// It periodically checks for context cancellation to allow graceful shutdown.
-func (b *IndexBuilder) AddAllWithContext(ctx context.Context, iter RowIterator) error {
+// AddAll processes all PrefixRows from an iterator, checking ctx for
+// cancellation periodically.
+func (b *IndexBuilder) AddAll(ctx context.Context, iter RowIterator) error {
 	const checkInterval = 1000 // Check context every N rows
 	const logInterval = 100000 // Log progress every N rows
 	log := zerolog.Ctx(ctx)
@@ -279,7 +274,7 @@ func (b *IndexBuilder) AddAllWithContext(ctx context.Context, iter RowIterator) 
 	startTime := time.Now()
 	lastLogTime := startTime
 
-	log.Debug().Msg("index builder: starting AddAllWithContext")
+	log.Debug().Msg("index builder: starting AddAll")
 
 	for {
 		// Periodic context check to avoid blocking forever
@@ -319,7 +314,7 @@ func (b *IndexBuilder) AddAllWithContext(ctx context.Context, iter RowIterator) 
 	log.Debug().
 		Int("total_prefixes", count).
 		Str("duration", humanfmt.Duration(time.Since(startTime))).
-		Msg("index builder: AddAllWithContext complete")
+		Msg("index builder: AddAll complete")
 
 	return nil
 }

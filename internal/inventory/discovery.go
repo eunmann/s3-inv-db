@@ -81,7 +81,7 @@ type ManifestSizeFunc func(ctx context.Context, bucket, key string) (uint64, err
 // inventories), and the IndexBuilder (on-disk index materialisation).
 //
 // When discovery is unconfigured (--s3-source unset) the service is
-// constructed via NewDisabledDiscovery — Enabled() reports false
+// constructed without WithBackend — Enabled() reports false
 // and every method returns ErrDiscoveryDisabled via the disabled
 // discoverer/builder shims rather than via per-call nil checks.
 type Discovery struct {
@@ -104,8 +104,8 @@ type Discovery struct {
 	enabled       bool
 }
 
-// disabledDiscoverer is the placeholder Discoverer wired by
-// NewDisabledDiscovery. Every call returns ErrDiscoveryDisabled
+// disabledDiscoverer is the placeholder Discoverer a Discovery holds
+// until WithBackend replaces it. Every call returns ErrDiscoveryDisabled
 // so handlers don't need per-call nil checks on the service.
 type disabledDiscoverer struct{}
 
@@ -174,13 +174,6 @@ func NewDiscovery(mgr *Catalog, opts ...DiscoveryOption) *Discovery {
 	}
 
 	return d
-}
-
-// NewDisabledDiscovery returns a disabled Discovery. Equivalent to
-// NewDiscovery(mgr) — kept for migration; new callers should use
-// NewDiscovery directly.
-func NewDisabledDiscovery(mgr *Catalog) *Discovery {
-	return NewDiscovery(mgr)
 }
 
 // DefaultIndexRatio is the conservative seed ratio used to estimate

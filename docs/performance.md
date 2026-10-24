@@ -35,7 +35,10 @@ The process memory ceiling is set at startup via
 
 - If `GOMEMLIMIT` is set explicitly, it wins (capped only by the
   cgroup `memory.max`).
-- Otherwise the limit is `min(cgroup memory.max, 0.6 × detected RAM)`.
+- Otherwise the limit is `min(0.85 × cgroup memory.max, 0.6 × detected RAM)`:
+  the cgroup also charges page cache, mmap'd pages and stacks the Go
+  limit doesn't count, so a soft limit at the hard cap invites the OOM
+  killer.
 
 This lets an operator opt into more than 60% of RAM on a dedicated
 host while still being bounded by a tighter container cap.
@@ -50,19 +53,26 @@ The build aggregator spills when **any** of three thresholds fires:
    can't grow past the cap before its first spill opportunity.
 
 After all inventory files are processed, a k-way merge combines run
-files into the final sorted stream. Run-file write buffers
-(zstd-compressed by default), the merge heap, and the index-build
-streaming arrays each take bounded space outside the aggregator cap.
+files (zstd-compressed) into the final sorted stream, which the index
+builder consumes directly. The final merge reads up to 64 runs at once.
+Only past that do disk rounds run, merging just the smallest runs needed
+in groups of up to 16, and each run is deleted as soon as it has been
+merged. The merge decodes a few 4096-row batches ahead of the index
+build on its own goroutine. Run-file buffers, the merge heap and the
+index-build streaming arrays each take bounded space outside the
+aggregator cap.
 
 ```bash
 GOMEMLIMIT=4GiB s3-inv-db build ...   # cap at 4 GiB
 s3-inv-db build --max-depth 5 ...     # limit prefix count
 ```
 
-Worker counts and S3 part concurrency derive from `runtime.NumCPU()`:
-parser + download workers scale to `min(NumCPU, manifest_files)`,
-SDK part concurrency is `max(NumCPU/4, 2)`. The same binary scales
-from a laptop to an ingest node without flags.
+Worker counts and S3 concurrency derive from `runtime.NumCPU()`:
+parser + download workers scale to `min(NumCPU, manifest_files)`, each
+download fetches up to `min(max(NumCPU, 4), 16)` 16 MiB parts at once,
+and GETs in flight across all downloads are capped at
+`min(max(4 × NumCPU, 32), 256)`. The same binary scales from a laptop
+to an ingest node without flags.
 
 ### Bottleneck checklist
 
@@ -91,8 +101,9 @@ its data is, so total size scales linearly with prefix count:
 - Prefix dictionary (`prefix_dict.*`): dictionary-encoded, dominated
   by the unique-segment blob plus 4 B per segment ID per prefix plus
   8 B per offset.
-- MPHF (`mph.bin` + `mph_fp_pos.u64`): ~24 B/prefix (BBHash +
-  interleaved fingerprint/position pair).
+- MPHF (`mph.bin` + `mph_fp_pos.u64`): ~16.5 B/prefix (BBHash at
+  ~3.7 bits/prefix with its rank directory, plus the interleaved
+  fingerprint/position pair).
 - Depth index: ~8 B/prefix.
 
 A 1M-prefix sample comes out to roughly **300 B/prefix on disk**
@@ -131,7 +142,7 @@ exploration.
 go test -bench=. -benchmem ./pkg/indexread/                          # all indexread benches
 go test -bench=BenchmarkMPHFBuild -benchmem ./pkg/format/             # MPHF build
 go test -bench=BenchmarkMPHFQuery -benchmem ./pkg/format/             # MPHF query
-go test -bench=BenchmarkBBHashScaling -benchmem ./pkg/format/         # isolated bbhash.New
+go test -bench=BenchmarkBBHash -benchmem ./pkg/format/               # BBHash build + find alone
 S3INV_LONG_BENCH=1 go test -bench=. -benchmem ./pkg/indexread/        # large dataset
 
 # Memory profile

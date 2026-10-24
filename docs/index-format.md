@@ -106,19 +106,23 @@ To find prefixes at depth 2:
 
 ## MPHF (Minimal Perfect Hash Function)
 
-The MPHF provides O(1) prefix-to-position lookups using [BBHash](https://github.com/rizkg/BBHash).
+The MPHF provides O(1) prefix-to-position lookups with BBHash (Limasset et al., 2017), implemented in `pkg/format/bbhash.go`.
 
 | File | Description |
 |------|-------------|
-| `mph.bin` | Serialized BBHash structure |
+| `mph.bin` | BBHash levels: the level count, each level's length in 64-bit words, then every level's bit vector (all little-endian `uint64`) |
 | `mph_fp_pos.u64` | Interleaved (fingerprint, position) pairs — 16 bytes per slot, fingerprint first, then the 8-byte key seed |
 
 The fingerprint+position pair is combined into one file so a lookup is a single mmap read instead of two.
 
+### BBHash
+
+Level 0 is a bit vector of about 2 bits per prefix (gamma 2). Each key hash sets the bit chosen by a splitmix64 mix of the hash and the level number. Bits that two keys share are cleared, and those keys move on to the next level, which is sized for them alone. A key's slot is the number of set bits before its own, across all levels. On load the reader builds a rank directory with one count per 512 bits, so that count takes at most eight popcounts. A lookup therefore costs O(levels) however many prefixes the index holds. With the directory the table is about 3.7 bits per prefix.
+
 ### Lookup Algorithm
 
 1. Hash the prefix string using FNV-1a (64-bit) with the offset basis XORed with the key seed
-2. Query the BBHash to get a candidate index
+2. Find the key hash's BBHash slot; a hash that sets no bit on any level is not in the index
 3. Read the 16-byte slot at that index from `mph_fp_pos.u64`
 4. Compute the FNV-1 fingerprint of the query prefix; if it matches the slot's, return the slot's position, otherwise the prefix doesn't exist
 
@@ -210,4 +214,4 @@ The stride is recorded in the file header's `Width` field; readers cross-check `
 
 ## Versioning
 
-The format version in file headers lets a reader refuse files it would mis-decode. Version 3 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 4 is the current format; readers accept only that version, and an index written by any other version is rebuilt.

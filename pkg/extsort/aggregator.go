@@ -1,8 +1,9 @@
 package extsort
 
 import (
-	"runtime"
 	"runtime/debug"
+	"runtime/metrics"
+	"strings"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -13,12 +14,17 @@ import (
 // The aggregator is NOT safe for concurrent use. For concurrent access,
 // use multiple aggregators or external synchronization.
 type Aggregator struct {
-	prefixes       map[string]*PrefixStats
-	statsPool      *typedPool[PrefixStats]
-	maxDepth       int
-	objectCount    int64
-	bytesProcessed int64
-	tierMask       uint16
+	// prefixes holds the rows Drain returns, keyed by their own Prefix:
+	// a spill hands the rows out instead of copying them.
+	prefixes map[string]*PrefixRow
+	// slabs back every row and drained is Drain's result slice; both
+	// are reused once the caller is done with a Drain, so a worker
+	// allocates rows only while its largest spill is still growing.
+	slabs    [][]PrefixRow
+	drained  []*PrefixRow
+	used     int
+	maxDepth int
+	tierMask uint16
 }
 
 // NewAggregator creates a new prefix aggregator with the given initial capacity.
@@ -26,22 +32,19 @@ type Aggregator struct {
 func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 	if initialCapacity <= 0 {
 		// Default to 10K - small enough to start but grows as needed
-		// Each prefix entry uses ~300 bytes (map overhead + PrefixStats)
+		// Each prefix entry uses ~300 bytes (map entry + slab PrefixRow)
 		initialCapacity = 10000
 	}
 
 	return &Aggregator{
-		prefixes:  make(map[string]*PrefixStats, initialCapacity),
-		statsPool: newTypedPool(func() *PrefixStats { return &PrefixStats{} }),
-		maxDepth:  maxDepth,
+		prefixes: make(map[string]*PrefixRow, initialCapacity),
+		maxDepth: maxDepth,
 	}
 }
 
 // AddObject adds an object's statistics to all its prefix ancestors.
 // The key should be the full S3 object key (e.g., "data/2024/01/file.csv").
 func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
-	a.objectCount++
-	a.bytesProcessed += int64(size)
 	a.tierMask |= uint16(1) << tierID
 
 	a.accumulate("", 0, size, tierID)
@@ -59,27 +62,38 @@ func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 	}
 }
 
-// accumulate updates the statistics for a single prefix.
+// accumulate updates the statistics for a single prefix. A new prefix
+// is cloned: the caller's key is usually a substring of a whole
+// inventory record, which the map would otherwise keep alive.
 func (a *Aggregator) accumulate(prefix string, depth uint16, size uint64, tierID tiers.ID) {
-	stats, ok := a.prefixes[prefix]
+	row, ok := a.prefixes[prefix]
 	if !ok {
-		stats = a.statsPool.Get()
-		stats.Depth = depth
-		a.prefixes[prefix] = stats
+		owned := strings.Clone(prefix)
+		row = a.newRow()
+		row.Prefix, row.Depth = owned, depth
+		a.prefixes[owned] = row
 	}
-	stats.Add(size, tierID)
+	row.add(size, tierID)
+}
+
+// rowSlabLen is how many rows the aggregator allocates at a time.
+const rowSlabLen = 4096
+
+// newRow returns the next zeroed row from the slabs.
+func (a *Aggregator) newRow() *PrefixRow {
+	slab, i := a.used/rowSlabLen, a.used%rowSlabLen
+	if slab == len(a.slabs) {
+		a.slabs = append(a.slabs, make([]PrefixRow, rowSlabLen))
+	}
+	a.used++
+	row := &a.slabs[slab][i]
+	*row = PrefixRow{}
+
+	return row
 }
 
 func (a *Aggregator) PrefixCount() int {
 	return len(a.prefixes)
-}
-
-func (a *Aggregator) ObjectCount() int64 {
-	return a.objectCount
-}
-
-func (a *Aggregator) BytesProcessed() int64 {
-	return a.bytesProcessed
 }
 
 // TierMask returns the bitmask of tier IDs this aggregator has seen
@@ -105,7 +119,7 @@ func tierIDsFromMask(mask uint16) []tiers.ID {
 
 // EstimatedMemoryUsage returns the per-worker aggregator's approximate
 // in-memory footprint in bytes (~288 B/entry covering map overhead +
-// avg prefix string + PrefixStats). Undercounts by 2-3× vs runtime
+// avg prefix string + its slab PrefixRow). Undercounts by 2-3× vs runtime
 // reality; the heap-pressure safety check in ShouldWorkerFlush catches
 // that case.
 func (a *Aggregator) EstimatedMemoryUsage() int64 {
@@ -114,11 +128,18 @@ func (a *Aggregator) EstimatedMemoryUsage() int64 {
 	return int64(len(a.prefixes)) * bytesPerPrefix
 }
 
+// heapInuseBytes returns the runtime's HeapInuse (live objects plus
+// fragmentation in in-use spans) through runtime/metrics, which unlike
+// runtime.ReadMemStats does not stop the world. Every ingest worker
+// checks it every few tens of thousands of rows.
 func heapInuseBytes() uint64 {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
+	samples := [2]metrics.Sample{
+		{Name: "/memory/classes/heap/objects:bytes"},
+		{Name: "/memory/classes/heap/unused:bytes"},
+	}
+	metrics.Read(samples[:])
 
-	return m.HeapInuse
+	return samples[0].Value.Uint64() + samples[1].Value.Uint64()
 }
 
 // DefaultAggregatorCap is the spill threshold when no GOMEMLIMIT is set.
@@ -171,37 +192,47 @@ func ShouldWorkerFlush(workerAggBytes uint64, memoryLimit int64, numWorkers int)
 	if workerAggBytes >= perWorkerAggregatorCap(memoryLimit, numWorkers) {
 		return true
 	}
+
+	return heapUnderPressure(memoryLimit)
+}
+
+// heapUnderPressure reports whether HeapInuse has reached
+// heapPressureRatio of memoryLimit; a limit <= 0 means none is set.
+func heapUnderPressure(memoryLimit int64) bool {
 	if memoryLimit <= 0 {
 		return false
 	}
-	heapPressure := uint64(float64(memoryLimit) * heapPressureRatio)
 
-	return heapInuseBytes() >= heapPressure
+	return heapInuseBytes() >= uint64(float64(memoryLimit)*heapPressureRatio)
 }
 
-// Drain extracts all prefixes from the aggregator and returns them as PrefixRows.
-// The aggregator is cleared and can be reused. The returned slice is sorted
-// by prefix in lexicographic order.
-//
-// This method returns PrefixStats structs to the pool, so the returned
-// PrefixRows must be used before the aggregator processes more objects.
+// Drain hands over every accumulated row (unsorted) and clears the
+// aggregator for reuse. Nothing is copied: the rows and the slice stay
+// valid only until the aggregator is next used, when they are recycled.
 func (a *Aggregator) Drain() []*PrefixRow {
 	if len(a.prefixes) == 0 {
 		return nil
 	}
 
-	rows := make([]*PrefixRow, 0, len(a.prefixes))
-	for prefix, stats := range a.prefixes {
-		row := stats.ToPrefixRow(prefix)
-		rows = append(rows, row)
-		stats.Reset()
-		a.statsPool.Put(stats)
+	rows := a.drained[:0]
+	if cap(rows) < len(a.prefixes) {
+		rows = make([]*PrefixRow, 0, len(a.prefixes))
 	}
+	for _, row := range a.prefixes {
+		rows = append(rows, row)
+	}
+	a.drained = rows
 
 	clear(a.prefixes)
-
-	a.objectCount = 0
-	a.bytesProcessed = 0
+	a.used = 0
 
 	return rows
+}
+
+// Release drops the drained aggregator's slabs, Drain slice and map
+// buckets so the GC can reclaim them once the caller is done with the
+// last Drain. Call it only on an empty (just drained) aggregator.
+func (a *Aggregator) Release() {
+	a.slabs, a.drained = nil, nil
+	a.prefixes = make(map[string]*PrefixRow)
 }

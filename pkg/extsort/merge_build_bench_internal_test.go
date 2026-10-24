@@ -10,31 +10,22 @@ import (
 )
 
 // BenchmarkMergeBuildSeam exercises the K-way merge → IndexBuilder
-// hand-off in isolation. Two variants run side by side:
-//
-//   - via_disk:   MergeAll → final file → OpenRunFileAuto → builder
-//     (the pre-I3 path; writes the full merged stream
-//     to disk and re-reads it)
-//   - streamed:   MergeAllToIterator → builder consumes directly
-//     (the post-I3 path; no final file written)
+// hand-off in isolation: MergeAllToIterator streams straight into the
+// builder.
 //
 // Setup creates `runFileCount` sorted run files locally (no S3) by
-// partitioning a synthetic input across them. Reports ns/op + disk-
-// bytes-written.
+// partitioning a synthetic input across them.
 func BenchmarkMergeBuildSeam(b *testing.B) {
 	benchutil.SilenceZerolog(b)
 	for _, n := range []int{500_000, 1_000_000} {
 		const runFiles = 8 // representative of post-N-1-round count
-		b.Run(fmt.Sprintf("n=%d/runs=%d/via_disk", n, runFiles), func(b *testing.B) {
-			runMergeBuildSeamBench(b, n, runFiles, false)
-		})
 		b.Run(fmt.Sprintf("n=%d/runs=%d/streamed", n, runFiles), func(b *testing.B) {
-			runMergeBuildSeamBench(b, n, runFiles, true)
+			runMergeBuildSeamBench(b, n, runFiles)
 		})
 	}
 }
 
-func runMergeBuildSeamBench(b *testing.B, n, runFileCount int, streamed bool) {
+func runMergeBuildSeamBench(b *testing.B, n, runFileCount int) {
 	b.Helper()
 	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(n))
 	objects := gen.Generate()
@@ -56,46 +47,27 @@ func runMergeBuildSeamBench(b *testing.B, n, runFileCount int, streamed bool) {
 			MaxFanIn:         runFileCount,
 			BufferSize:       1 * 1024 * 1024,
 			TempDir:          runDir,
-			UseCompression:   true,
 			CompressionLevel: CompressionFastest,
 		})
 
-		var iter RowIterator
-		var capacity uint64
-		var cleanup func()
-		if streamed {
-			it, c, err := merger.MergeAllToIterator(b.Context(), runPaths)
-			if err != nil {
-				b.Fatalf("MergeAllToIterator: %v", err)
-			}
-			iter = it
-			capacity = it.Remaining()
-			cleanup = func() { _ = c() }
-		} else {
-			finalPath, err := merger.MergeAll(b.Context(), runPaths)
-			if err != nil {
-				b.Fatalf("MergeAll: %v", err)
-			}
-			reader, err := OpenRunFileAuto(finalPath, 1*1024*1024)
-			if err != nil {
-				b.Fatalf("OpenRunFileAuto: %v", err)
-			}
-			iter = &singleRunIterator{reader: reader}
-			capacity = reader.Count()
-			cleanup = func() { reader.Close() }
+		iter, cleanup, err := merger.MergeAllToIterator(b.Context(), runPaths)
+		if err != nil {
+			b.Fatalf("MergeAllToIterator: %v", err)
 		}
 
-		builder, err := NewIndexBuilderWithCapacity(outDir, "", capacity)
+		builder, err := NewIndexBuilderWithCapacity(outDir, "", iter.Remaining())
 		if err != nil {
 			b.Fatalf("NewIndexBuilder: %v", err)
 		}
-		if err := builder.AddAllWithContext(b.Context(), iter); err != nil {
+		if err := builder.AddAll(b.Context(), iter); err != nil {
 			b.Fatalf("AddAll: %v", err)
 		}
 		if err := builder.FinalizeWithContext(b.Context()); err != nil {
 			b.Fatalf("Finalize: %v", err)
 		}
-		cleanup()
+		if err := cleanup(); err != nil {
+			b.Fatalf("cleanup: %v", err)
+		}
 	}
 }
 

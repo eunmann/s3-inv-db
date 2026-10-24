@@ -21,26 +21,49 @@ var (
 	ErrMissingSizeColumn = errors.New("parquet schema missing 'size' column")
 	// ErrDuplicateColumn indicates two parquet columns canonicalize to the same name.
 	ErrDuplicateColumn = errors.New("parquet schema has duplicate column")
+	// ErrColumnOutOfRange indicates a configured column index beyond the schema.
+	ErrColumnOutOfRange = errors.New("parquet column index out of range")
+	// ErrColumnsMisaligned indicates the read columns disagree on a row group's row count.
+	ErrColumnsMisaligned = errors.New("parquet columns hold different row counts")
 )
 
-// ParquetReader reads S3 inventory records from Parquet files.
-// It implements streaming by iterating through row groups.
+// ParquetReader reads S3 inventory records from Parquet files. It reads
+// only the column chunks it needs (key, size, storage class, access
+// tier, delete marker), a batch of values at a time per column, so the
+// other columns of an inventory (ETags, dates, owners, ACLs) are
+// never decoded.
 type ParquetReader struct {
-	currentRows     parquet.Rows
-	tempFile        *os.File
-	schema          *parquet.Schema
-	file            *parquet.File
-	rowGroups       []parquet.RowGroup
-	rowBuf          []parquet.Row
-	pendingErr      error
-	keyCol          int
-	accessTierCol   int
-	deleteMarkerCol int
-	currentRGIdx    int
-	storageCol      int
-	sizeCol         int
-	bufIdx          int
-	bufLen          int
+	tempFile     *os.File
+	file         *parquet.File
+	rowGroups    []parquet.RowGroup
+	pendingErr   error
+	cols         [numParquetColumns]parquetColumn
+	interned     map[string]string
+	currentRGIdx int
+	rgOpen       bool
+	bufIdx       int
+	bufLen       int
+}
+
+// The columns a ParquetReader reads, in parquetColumn order.
+const (
+	pqKey = iota
+	pqSize
+	pqStorage
+	pqAccessTier
+	pqDeleteMarker
+	numParquetColumns
+)
+
+// parquetBatchRows is how many values each column decodes per batch.
+const parquetBatchRows = 1024
+
+// parquetColumn reads one leaf column of the current row group.
+type parquetColumn struct {
+	pages  parquet.Pages
+	values parquet.ValueReader
+	buf    []parquet.Value
+	index  int // leaf column index in the file; -1 when absent
 }
 
 // ParquetReaderConfig configures the Parquet reader.
@@ -70,7 +93,7 @@ func NewParquetReader(r io.ReaderAt, size int64, cfg ParquetReaderConfig) (*Parq
 		return nil, fmt.Errorf("open parquet file: %w", err)
 	}
 
-	return newParquetReader(file, nil, cfg), nil
+	return newParquetReader(file, nil, cfg)
 }
 
 // NewParquetReaderFromReaderAt creates a Parquet inventory reader from an io.ReaderAt.
@@ -87,7 +110,7 @@ func NewParquetReaderFromReaderAt(r io.ReaderAt, size int64) (*ParquetReader, er
 		return nil, err
 	}
 
-	return newParquetReader(file, nil, cfg), nil
+	return newParquetReader(file, nil, cfg)
 }
 
 // NewParquetReaderFromStream creates a Parquet inventory reader from a stream.
@@ -134,14 +157,16 @@ func NewParquetReaderFromStream(r io.ReadCloser, size int64) (*ParquetReader, er
 	}
 
 	cfg, err := detectParquetSchema(file.Schema())
-	if err != nil {
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
-		return nil, err
+	if err == nil {
+		var r *ParquetReader
+		if r, err = newParquetReader(file, tempFile, cfg); err == nil {
+			return r, nil
+		}
 	}
+	tempFile.Close()
+	os.Remove(tempFile.Name())
 
-	return newParquetReader(file, tempFile, cfg), nil
+	return nil, err
 }
 
 // detectParquetSchema detects column indices from the Parquet schema.
@@ -206,57 +231,41 @@ func canonicalColumnName(name string) string {
 }
 
 // newParquetReader creates a ParquetReader from an open file.
-func newParquetReader(file *parquet.File, tempFile *os.File, cfg ParquetReaderConfig) *ParquetReader {
-	rowGroups := file.RowGroups()
-
-	return &ParquetReader{
-		file:            file,
-		tempFile:        tempFile,
-		schema:          file.Schema(),
-		keyCol:          cfg.KeyCol,
-		sizeCol:         cfg.SizeCol,
-		storageCol:      cfg.StorageCol,
-		accessTierCol:   cfg.AccessTierCol,
-		deleteMarkerCol: cfg.DeleteMarkerCol,
-		rowGroups:       rowGroups,
-		currentRGIdx:    -1,
-		rowBuf:          make([]parquet.Row, 1024), // Buffer 1024 rows at a time
+func newParquetReader(file *parquet.File, tempFile *os.File, cfg ParquetReaderConfig) (*ParquetReader, error) {
+	r := &ParquetReader{
+		file:         file,
+		tempFile:     tempFile,
+		rowGroups:    file.RowGroups(),
+		interned:     make(map[string]string, maxInterned),
+		currentRGIdx: -1,
 	}
+	numLeaves := len(file.Schema().Columns())
+	indexes := [numParquetColumns]int{cfg.KeyCol, cfg.SizeCol, cfg.StorageCol, cfg.AccessTierCol, cfg.DeleteMarkerCol}
+	for i, idx := range indexes {
+		if idx >= numLeaves {
+			return nil, fmt.Errorf("%w: column %d of %d", ErrColumnOutOfRange, idx, numLeaves)
+		}
+		r.cols[i].index = idx
+		if idx >= 0 {
+			r.cols[i].buf = make([]parquet.Value, parquetBatchRows)
+		}
+	}
+
+	return r, nil
 }
 
 // Next returns the next inventory row.
 func (r *ParquetReader) Next() (Row, error) {
 	for {
 		if r.bufIdx < r.bufLen {
-			row := r.rowBuf[r.bufIdx]
+			i := r.bufIdx
 			r.bufIdx++
-			inv, deleteMarker := r.toRow(row)
+			inv, deleteMarker := r.rowAt(i)
 			if deleteMarker {
 				continue // a delete marker is not an object and stores no bytes
 			}
 
 			return inv, nil
-		}
-
-		if r.currentRows != nil {
-			n, err := r.currentRows.ReadRows(r.rowBuf)
-			if n > 0 {
-				r.bufIdx = 0
-				r.bufLen = n
-				// Stash a non-EOF error so it surfaces after the just-
-				// read rows are drained, instead of being lost on the
-				// next iteration's ReadRows call.
-				if err != nil && !errors.Is(err, io.EOF) {
-					r.pendingErr = fmt.Errorf("read parquet rows: %w", err)
-				}
-
-				continue
-			}
-			if err != nil && !errors.Is(err, io.EOF) {
-				return Row{}, fmt.Errorf("read parquet rows: %w", err)
-			}
-			r.currentRows.Close()
-			r.currentRows = nil
 		}
 		if r.pendingErr != nil {
 			err := r.pendingErr
@@ -264,55 +273,188 @@ func (r *ParquetReader) Next() (Row, error) {
 
 			return Row{}, err
 		}
-
-		r.currentRGIdx++
-		if r.currentRGIdx >= len(r.rowGroups) {
-			return Row{}, io.EOF
+		if !r.rgOpen {
+			r.currentRGIdx++
+			if r.currentRGIdx >= len(r.rowGroups) {
+				return Row{}, io.EOF
+			}
+			r.openRowGroup(r.rowGroups[r.currentRGIdx])
 		}
 
-		r.currentRows = r.rowGroups[r.currentRGIdx].Rows()
+		n, err := r.readBatch()
+		if n > 0 {
+			r.bufIdx, r.bufLen = 0, n
+			// Surface a read error after the rows read before it.
+			if err != nil && !errors.Is(err, io.EOF) {
+				r.pendingErr = err
+			}
+
+			continue
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			return Row{}, err
+		}
+		if err := r.closeRowGroup(); err != nil {
+			return Row{}, err
+		}
 	}
 }
 
-// toRow projects a parquet.Row into the unified inventory.Row and
-// reports whether the row is a delete marker.
-func (r *ParquetReader) toRow(row parquet.Row) (Row, bool) {
-	var inv Row
-	deleteMarker := false
-	for _, val := range row {
-		colIdx := val.Column()
-		if colIdx < 0 || val.IsNull() {
+// openRowGroup starts reading the needed column chunks of rg.
+func (r *ParquetReader) openRowGroup(rg parquet.RowGroup) {
+	chunks := rg.ColumnChunks()
+	for i := range r.cols {
+		if c := &r.cols[i]; c.index >= 0 {
+			c.pages = chunks[c.index].Pages()
+		}
+	}
+	r.rgOpen = true
+}
+
+// closeRowGroup releases the current row group's page readers.
+func (r *ParquetReader) closeRowGroup() error {
+	var errs []error
+	for i := range r.cols {
+		c := &r.cols[i]
+		if c.pages != nil {
+			if err := c.pages.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close parquet pages: %w", err))
+			}
+		}
+		c.pages, c.values = nil, nil
+	}
+	r.rgOpen = false
+
+	return errors.Join(errs...)
+}
+
+// readBatch decodes the next batch of every read column and returns the
+// row count, which every column must agree on.
+func (r *ParquetReader) readBatch() (int, error) {
+	rows := -1
+	var readErr error
+	for i := range r.cols {
+		c := &r.cols[i]
+		if c.index < 0 {
 			continue
 		}
+		n, err := c.read()
+		if err != nil && !errors.Is(err, io.EOF) {
+			readErr = err
+		}
+		if rows >= 0 && n != rows {
+			return 0, fmt.Errorf("%w: column %d has %d, column %d has %d",
+				ErrColumnsMisaligned, r.cols[pqKey].index, rows, c.index, n)
+		}
+		rows = n
+	}
+	if readErr != nil {
+		return rows, readErr
+	}
+	if rows == 0 {
+		return 0, io.EOF
+	}
 
-		switch colIdx {
-		case r.keyCol:
-			inv.Key = val.String()
-		case r.sizeCol:
-			inv.Size = val.Uint64()
-		case r.storageCol:
-			inv.StorageClass = val.String()
-		case r.accessTierCol:
-			inv.AccessTier = val.String()
-		case r.deleteMarkerCol:
-			if val.Kind() == parquet.Boolean {
-				deleteMarker = val.Boolean()
-			} else {
-				deleteMarker = isTrue(val.String())
+	return rows, nil
+}
+
+// read fills buf with the column's next values, across pages, and
+// returns how many it read; io.EOF ends the row group.
+func (c *parquetColumn) read() (int, error) {
+	n := 0
+	for n < len(c.buf) {
+		if c.values == nil {
+			page, err := c.pages.ReadPage()
+			if errors.Is(err, io.EOF) {
+				return n, io.EOF
 			}
+			if err != nil {
+				return n, fmt.Errorf("read parquet page: %w", err)
+			}
+			c.values = page.Values()
+		}
+		k, err := c.values.ReadValues(c.buf[n:])
+		n += k
+		if errors.Is(err, io.EOF) {
+			c.values = nil
+
+			continue
+		}
+		if err != nil {
+			return n, fmt.Errorf("read parquet values: %w", err)
+		}
+	}
+
+	return n, nil
+}
+
+// rowAt assembles batch row i into an inventory row and reports
+// whether the row is a delete marker.
+func (r *ParquetReader) rowAt(i int) (Row, bool) {
+	var inv Row
+	if v, ok := r.value(pqKey, i); ok {
+		inv.Key = v.String()
+	}
+	if v, ok := r.value(pqSize, i); ok {
+		inv.Size = v.Uint64()
+	}
+	if v, ok := r.value(pqStorage, i); ok {
+		inv.StorageClass = r.intern(v)
+	}
+	if v, ok := r.value(pqAccessTier, i); ok {
+		inv.AccessTier = r.intern(v)
+	}
+	deleteMarker := false
+	if v, ok := r.value(pqDeleteMarker, i); ok {
+		if v.Kind() == parquet.Boolean {
+			deleteMarker = v.Boolean()
+		} else {
+			deleteMarker = isTrue(v.String())
 		}
 	}
 
 	return inv, deleteMarker
 }
 
+// maxInterned bounds the strings intern keeps: storage classes and
+// access tiers number a dozen or so, and a file with more distinct
+// values just allocates them.
+const maxInterned = 64
+
+// intern returns v as a string, shared across rows for the few distinct
+// values of a column such as storage class.
+func (r *ParquetReader) intern(v parquet.Value) string {
+	if v.Kind() != parquet.ByteArray {
+		return v.String()
+	}
+	b := v.ByteArray()
+	if s, ok := r.interned[string(b)]; ok {
+		return s
+	}
+	s := string(b)
+	if len(r.interned) < maxInterned {
+		r.interned[s] = s
+	}
+
+	return s
+}
+
+// value returns column col's value for batch row i, if the column is
+// read and the value is not null.
+func (r *ParquetReader) value(col, i int) (parquet.Value, bool) {
+	c := &r.cols[col]
+	if c.index < 0 || c.buf[i].IsNull() {
+		return parquet.Value{}, false
+	}
+
+	return c.buf[i], true
+}
+
 // Close releases resources.
 func (r *ParquetReader) Close() error {
 	var errs []error
-	if r.currentRows != nil {
-		if err := r.currentRows.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("close parquet rows: %w", err))
-		}
+	if err := r.closeRowGroup(); err != nil {
+		errs = append(errs, err)
 	}
 
 	if r.tempFile != nil {

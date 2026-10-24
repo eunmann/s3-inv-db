@@ -117,7 +117,7 @@ func TestDownloadObject_Missing(t *testing.T) {
 
 func TestDownloader_Config(t *testing.T) {
 	c := s3test.FetchClient(t)
-	want := s3fetch.DownloaderConfig{Concurrency: 7, PartSize: 1024}
+	want := s3fetch.DownloaderConfig{Concurrency: 7, MaxInFlightGETs: 3, PartSize: 1024}
 	d := s3fetch.NewDownloader(c.Raw(), want)
 	if got := d.Config(); got != want {
 		t.Errorf("Config = %+v, want %+v", got, want)

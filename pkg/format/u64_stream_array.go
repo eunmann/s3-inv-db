@@ -55,9 +55,7 @@ func newU64StreamArray(dir, namePrefix string) (*u64StreamArray, error) {
 // Append writes a single uint64 to the backing file. Cheap: 8 bytes
 // into a 1 MiB bufio that feeds the zstd encoder.
 func (a *u64StreamArray) Append(v uint64) error {
-	var buf [8]byte
-	binary.LittleEndian.PutUint64(buf[:], v)
-	if _, err := a.writer.Write(buf[:]); err != nil {
+	if err := putU64(a.writer, v); err != nil {
 		return fmt.Errorf("u64 stream array append: %w", err)
 	}
 	a.count++

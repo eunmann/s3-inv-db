@@ -9,45 +9,6 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
-// TestToRow_NegativeConfiguredColsDontMatchZeroValue locks in the
-// outer-guard refactor: when StorageCol/AccessTierCol are configured
-// as -1 (column absent from the schema), no parquet value — including
-// the default zero Value whose Column() is 0 — must populate those
-// fields. The prior code relied on an inner `>= 0` check; the refactor
-// hoists the guard before the switch. This test would fail if a future
-// edit drops the outer guard while leaving a `case r.storageCol`
-// (== -1) that matches a sentinel value.
-func TestToRow_NegativeConfiguredColsDontMatchZeroValue(t *testing.T) {
-	r := &ParquetReader{
-		keyCol:          0,
-		sizeCol:         1,
-		storageCol:      -1,
-		accessTierCol:   -1,
-		deleteMarkerCol: -1,
-	}
-
-	keyVal := parquet.ValueOf("a/b/c.txt").Level(0, 0, 0)
-	sizeVal := parquet.ValueOf(int64(42)).Level(0, 0, 1)
-
-	inv, deleteMarker := r.toRow(parquet.Row{keyVal, sizeVal})
-	if deleteMarker {
-		t.Error("row without a delete-marker column reported as a delete marker")
-	}
-
-	if inv.Key != "a/b/c.txt" {
-		t.Errorf("Key = %q, want %q", inv.Key, "a/b/c.txt")
-	}
-	if inv.Size != 42 {
-		t.Errorf("Size = %d, want 42", inv.Size)
-	}
-	if inv.StorageClass != "" {
-		t.Errorf("StorageClass = %q, want empty (storageCol=-1 must not populate)", inv.StorageClass)
-	}
-	if inv.AccessTier != "" {
-		t.Errorf("AccessTier = %q, want empty (accessTierCol=-1 must not populate)", inv.AccessTier)
-	}
-}
-
 // TestParquetReader_Close_PropagatesTempFileRemoveErr exercises the
 // errors.Join path: if the temp file no longer exists at remove time,
 // Close must surface that error rather than swallow it.

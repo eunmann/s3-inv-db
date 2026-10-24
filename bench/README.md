@@ -68,6 +68,9 @@ Ingestion (`bench/suite/ingest.txt`):
   deep-pyramid shapes): the real `Pipeline.Run` end to end through the
   local S3 server. Seconds per op; also reports `peak_heap_B` and
   `disk_B`.
+- `pkg/format` `BenchmarkMPHFBuild` at 1M prefixes: the MPHF finalize
+  step on its own, with `peak_heap_B`.
+
 Data structures / query (`bench/suite/query.txt`):
 
 - `pkg/indexread` `BenchmarkGate*`: 100k lookups, prefix
