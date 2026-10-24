@@ -228,19 +228,36 @@ func (h *bbhash) writeFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("create MPHF file: %w", err)
 	}
-	w := bufio.NewWriterSize(f, bbhashIOBuffer)
-	err = putU64(w, uint64(len(h.levels)))
-	for _, lv := range h.levels {
-		err = errors.Join(err, putU64(w, lv.words))
-	}
-	for _, word := range h.bits {
-		err = errors.Join(err, putU64(w, word))
-	}
-	if err = errors.Join(err, w.Flush()); err != nil {
+	if err := h.writeTo(f); err != nil {
 		return errors.Join(fmt.Errorf("write MPHF file: %w", err), f.Close(), os.Remove(path))
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close MPHF file: %w", err)
+	}
+
+	return nil
+}
+
+// writeTo encodes the table into dst, stopping at the first failed
+// write: a bufio.Writer error is sticky, so every later word would fail
+// too.
+func (h *bbhash) writeTo(dst io.Writer) error {
+	w := bufio.NewWriterSize(dst, bbhashIOBuffer)
+	if err := putU64(w, uint64(len(h.levels))); err != nil {
+		return err
+	}
+	for _, lv := range h.levels {
+		if err := putU64(w, lv.words); err != nil {
+			return err
+		}
+	}
+	for _, word := range h.bits {
+		if err := putU64(w, word); err != nil {
+			return err
+		}
+	}
+	if err := w.Flush(); err != nil {
+		return fmt.Errorf("flush: %w", err)
 	}
 
 	return nil

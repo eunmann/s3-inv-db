@@ -121,6 +121,45 @@ func TestBBHashFileRoundTrip(t *testing.T) {
 	}
 }
 
+var errDiskFull = errors.New("disk full")
+
+type fullWriter struct{}
+
+func (fullWriter) Write([]byte) (int, error) { return 0, errDiskFull }
+
+// errDepth is how deeply err nests wrapped and joined errors.
+func errDepth(err error) int {
+	{
+		var e interface{ Unwrap() []error }
+		var e1 interface{ Unwrap() error }
+		switch {
+		case errors.As(err, &e):
+			deepest := 0
+			for _, inner := range e.Unwrap() {
+				deepest = max(deepest, errDepth(inner))
+			}
+			return 1 + deepest
+		case errors.As(err, &e1):
+			return 1 + errDepth(e1.Unwrap())
+		default:
+			return 1
+		}
+	}
+}
+
+// A failed write must surface as one error, not one per remaining
+// word: a full disk mid-file must fail the build, not hang it.
+func TestBBHashWriteFailureReturnsOneError(t *testing.T) {
+	h := &bbhash{bits: make([]uint64, bbhashIOBuffer/8+1000), levels: []bbLevel{{words: 1}}}
+	err := h.writeTo(fullWriter{})
+	if !errors.Is(err, errDiskFull) {
+		t.Fatalf("writeTo err = %v, want %v", err, errDiskFull)
+	}
+	if d := errDepth(err); d > 3 {
+		t.Errorf("writeTo error nests %d deep, want at most 3", d)
+	}
+}
+
 func TestReadBBHashRejectsCorruptFiles(t *testing.T) {
 	h, err := newBBHash(randomKeys(1000, 5))
 	if err != nil {
