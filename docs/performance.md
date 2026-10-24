@@ -35,7 +35,10 @@ The process memory ceiling is set at startup via
 
 - If `GOMEMLIMIT` is set explicitly, it wins (capped only by the
   cgroup `memory.max`).
-- Otherwise the limit is `min(cgroup memory.max, 0.6 × detected RAM)`.
+- Otherwise the limit is `min(0.85 × cgroup memory.max, 0.6 × detected RAM)`:
+  the cgroup also charges page cache, mmap'd pages and stacks the Go
+  limit doesn't count, so a soft limit at the hard cap invites the OOM
+  killer.
 
 This lets an operator opt into more than 60% of RAM on a dedicated
 host while still being bounded by a tighter container cap.

@@ -15,6 +15,12 @@ import (
 // cache) the Go runtime does not account for.
 const DefaultMemoryLimitFraction = 0.6
 
+// CgroupHeadroomFraction is the share of a cgroup's memory.max an
+// automatic GOMEMLIMIT may use. The cgroup also charges page cache,
+// mmap'd index pages and goroutine stacks that GOMEMLIMIT does not
+// count; a soft limit at the hard cap invites the OOM killer.
+const CgroupHeadroomFraction = 0.85
+
 // MemoryLimitSource explains how the resolved limit was picked.
 type MemoryLimitSource string
 
@@ -44,7 +50,8 @@ var ErrUnknownMemSuffix = errors.New("unknown GOMEMLIMIT suffix")
 //   - min(GOMEMLIMIT, cgroup) when GOMEMLIMIT is explicitly set — the
 //     operator's value wins over the sysmem fraction, capped only by
 //     the container limit so a too-permissive env can't bust the cgroup.
-//   - min(cgroup, fraction × Total RAM) otherwise.
+//   - min(CgroupHeadroomFraction × cgroup, fraction × Total RAM)
+//     otherwise.
 //
 // Pass DefaultMemoryLimitFraction (0.6) unless you have a reason to deviate.
 func ComputeMemoryLimit(fraction float64) MemoryLimitResult {
@@ -64,16 +71,23 @@ func ComputeMemoryLimit(fraction float64) MemoryLimitResult {
 		out.SysmemFractionBytes = int64(float64(r.TotalBytes) * fraction)
 	}
 
-	if envExplicit && out.EnvBytes > 0 {
-		out.Bytes, out.Source = pickSmallest(MemoryLimitResult{
-			EnvBytes:    out.EnvBytes,
-			CgroupBytes: out.CgroupBytes,
-		})
-	} else {
-		out.Bytes, out.Source = pickSmallest(out)
-	}
+	out.Bytes, out.Source = resolveLimit(out, envExplicit && out.EnvBytes > 0)
 
 	return out
+}
+
+// resolveLimit picks the limit from the detected candidates. An explicit
+// GOMEMLIMIT is capped only by the raw cgroup limit; an automatic one
+// keeps CgroupHeadroomFraction of the cgroup.
+func resolveLimit(r MemoryLimitResult, envExplicit bool) (int64, MemoryLimitSource) {
+	if envExplicit {
+		return pickSmallest(MemoryLimitResult{EnvBytes: r.EnvBytes, CgroupBytes: r.CgroupBytes})
+	}
+	auto := r
+	auto.EnvBytes = 0
+	auto.CgroupBytes = int64(float64(r.CgroupBytes) * CgroupHeadroomFraction)
+
+	return pickSmallest(auto)
 }
 
 // Apply installs the resolved memory limit via debug.SetMemoryLimit
