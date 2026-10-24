@@ -1,0 +1,330 @@
+name: Release
+
+# Publishes a versioned release, only from a commit CI already validated.
+# Dispatch-only: pushing a tag by hand releases nothing. With dry_run
+# (the default) every artifact is built and nothing is published.
+#
+# Inputs reach scripts only through env:, never through ${{ }} in run:
+# text. No job restores a cache, so nothing another workflow wrote can
+# reach a release build.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, vX.Y.Z or vX.Y.Z-pre (a suffix marks a pre-release)
+        required: true
+        type: string
+      ref:
+        description: Branch, tag or SHA to release; must be the squash merge of a validated PR into main
+        required: false
+        default: main
+        type: string
+      notes:
+        description: Curated release notes (Markdown), shown above the generated changelog
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: Build every artifact but publish nothing
+        required: false
+        default: true
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate version and commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    outputs:
+      sha: ${{ steps.check.outputs.sha }}
+      date: ${{ steps.check.outputs.date }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - name: Commit is a validated squash merge and the tag is free
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+          REF: ${{ inputs.ref }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          WORKFLOW_REF: ${{ github.ref }}
+        # A real release must run this file as it is on main, so a branch
+        # cannot dispatch a copy with the checks removed by accident.
+        # The squash of a PR head that was up to date with main has the
+        # head's tree, so a PR Validation pass on the head covers exactly
+        # the tree being released.
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] ||
+            fail "version '$VERSION' is not vX.Y.Z or vX.Y.Z-pre"
+          [[ "$REF" =~ ^[0-9A-Za-z._/-]+$ && "$REF" != *..* ]] || fail "ref '$REF' is not a branch, tag or SHA"
+          if [ "$DRY_RUN" != true ] && [ "$WORKFLOW_REF" != refs/heads/main ]; then
+            fail "a release that publishes must be dispatched from main, not $WORKFLOW_REF"
+          fi
+
+          sha=$(gh api "repos/$REPO/commits/$REF" --jq .sha)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "ref '$REF' did not resolve to a commit"
+          echo "ref $REF is $sha"
+
+          tags=$(gh api "repos/$REPO/git/matching-refs/tags/$VERSION" --jq '.[].ref')
+          if grep -qxF "refs/tags/$VERSION" <<<"$tags"; then fail "tag $VERSION already exists"; fi
+
+          on_main=$(gh api "repos/$REPO/compare/$sha...main" --jq .status)
+          [[ "$on_main" == identical || "$on_main" == ahead ]] || fail "$sha is not on main"
+
+          gh api "repos/$REPO/commits/$sha/pulls?per_page=100" > "$RUNNER_TEMP/pulls.json"
+          match=$(jq -r --arg sha "$sha" '
+            [.[] | select(.merged_at != null and .base.ref == "main" and .merge_commit_sha == $sha)]
+            | if length == 1 then "\(.[0].number) \(.[0].head.sha)" else "" end' "$RUNNER_TEMP/pulls.json")
+          [ -n "$match" ] || fail "$sha is not the merge commit of a PR merged into main"
+          read -r pr head <<<"$match"
+          [[ "$head" =~ ^[0-9a-f]{40}$ ]] || fail "PR #$pr has no head commit"
+          echo "squash merge of #$pr, head $head"
+
+          parents=$(gh api "repos/$REPO/git/commits/$sha" --jq '.parents | length')
+          [ "$parents" = 1 ] || fail "$sha has $parents parents; only squash merges are released"
+          tree=$(gh api "repos/$REPO/git/commits/$sha" --jq .tree.sha)
+          head_tree=$(gh api "repos/$REPO/git/commits/$head" --jq .tree.sha)
+          [ "$tree" = "$head_tree" ] ||
+            fail "tree of $sha ($tree) differs from PR #$pr head $head ($head_tree): the PR was not up to date with main"
+
+          passed=$(gh api "repos/$REPO/actions/workflows/pr-validation.yml/runs?head_sha=$head&event=pull_request&status=success&per_page=1" --jq .total_count)
+          [ "$passed" -gt 0 ] || fail "PR #$pr head $head has no successful PR Validation run"
+
+          date=$(gh api "repos/$REPO/commits/$sha" --jq .commit.committer.date)
+          prerelease=false
+          if [[ "$VERSION" == *-* ]]; then prerelease=true; fi
+          {
+            echo "sha=$sha"
+            echo "date=$date"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Release $VERSION"
+            echo "- commit: \`$sha\` ($date), squash merge of #$pr"
+            echo "- PR Validation passed on head \`$head\`"
+            echo "- pre-release: $prerelease, dry run: $DRY_RUN"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # Regenerates the embedded stylesheet and fails if it differs from
+      # the checked-in one.
+      - name: Embedded tailwind.css matches the templates
+        run: make css-check
+      - name: Build the three binaries
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          VERSION: ${{ inputs.version }}
+          COMMIT: ${{ needs.validate.outputs.sha }}
+          DATE: ${{ needs.validate.outputs.date }}
+        run: make build server seeder VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE"
+      - name: Binaries report the release version
+        if: ${{ matrix.goos == 'linux' && matrix.goarch == 'amd64' }}
+        env:
+          VERSION: ${{ inputs.version }}
+          COMMIT: ${{ needs.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          for b in s3-inv-db s3-inv-db-server s3-inv-db-seeder; do
+            line=$("bin/$b" --version)
+            echo "$line"
+            [[ "$line" == "$b $VERSION (commit $COMMIT, "* ]] || { echo "::error::$b --version: $line"; exit 1; }
+          done
+      # Reproducible archive: fixed order, owner, mode and mtime (the commit
+      # time), and no gzip timestamp.
+      - name: Package
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ inputs.version }}
+          DATE: ${{ needs.validate.outputs.date }}
+        run: |
+          set -euo pipefail
+          name="s3-inv-db_${VERSION}_${GOOS}_${GOARCH}"
+          mkdir -p "dist/$name"
+          cp bin/s3-inv-db bin/s3-inv-db-server bin/s3-inv-db-seeder README.md "dist/$name/"
+          tar --owner=0 --group=0 --numeric-owner --mode=a+rX,go-w --mtime="@$(date -d "$DATE" +%s)" \
+            -C "dist/$name" -cf - s3-inv-db s3-inv-db-server s3-inv-db-seeder README.md |
+            gzip -9n > "dist/$name.tar.gz"
+          tar -tzvf "dist/$name.tar.gz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: archive-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  checksums:
+    name: Checksums
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: archive-*
+          path: dist
+          merge-multiple: true
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum -- *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          [ "$(wc -l < SHA256SUMS)" -eq 4 ] || { echo "::error::expected 4 archives"; exit 1; }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checksums
+          path: dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+  # Signed SLSA build provenance for every archive, verifiable with
+  # `gh attestation verify`. Publishing an attestation is a publish, so
+  # it is skipped on a dry run.
+  provenance:
+    name: Attest build provenance
+    needs: checksums
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: checksums
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: SHA256SUMS
+          create-storage-record: false
+
+  image:
+    name: Server image
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+      - name: Image tags
+        id: tags
+        env:
+          OWNER: ${{ github.repository_owner }}
+          VERSION: ${{ inputs.version }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${OWNER,,}/s3-inv-db-server"
+          tags="$image:$VERSION"
+          if [ "$PRERELEASE" != true ]; then tags="$tags,$image:latest"; fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      # The final stage's RUN executes on the target platform.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        if: ${{ !inputs.dry_run }}
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      # A path context, so the image is built from the validated checkout
+      # rather than the workflow's own ref.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: infra/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ inputs.version }}
+            COMMIT=${{ needs.validate.outputs.sha }}
+            DATE=${{ needs.validate.outputs.date }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ needs.validate.outputs.sha }}
+            org.opencontainers.image.licenses=MIT
+          tags: ${{ steps.tags.outputs.tags }}
+          push: ${{ !inputs.dry_run }}
+
+  release:
+    name: Publish GitHub release
+    needs: [validate, build, checksums, provenance, image]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Archives match SHA256SUMS
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      # The tag is created by the release, at the validated commit, only
+      # now that every artifact exists. gh uploads the assets to a draft
+      # and publishes it last, so a failed upload leaves no tag.
+      - name: Create the tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ needs.validate.outputs.sha }}
+          NOTES: ${{ inputs.notes }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          tags=$(gh api "repos/$REPO/git/matching-refs/tags/$VERSION" --jq '.[].ref')
+          if grep -qxF "refs/tags/$VERSION" <<<"$tags"; then echo "::error::tag $VERSION already exists"; exit 1; fi
+          args=(--repo "$REPO" --target "$SHA" --title "$VERSION" --generate-notes)
+          if [ -n "$NOTES" ]; then
+            printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+            args+=(--notes-file "$RUNNER_TEMP/notes.md")
+          fi
+          if [ "$PRERELEASE" = true ]; then args+=(--prerelease); fi
+          gh release create "$VERSION" "${args[@]}" dist/*.tar.gz dist/SHA256SUMS
