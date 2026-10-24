@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
+	"github.com/rs/zerolog"
 )
 
 func writeFile(t *testing.T, path, content string) {
@@ -19,6 +20,12 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+func nopLogger() *zerolog.Logger {
+	l := zerolog.Nop()
+
+	return &l
 }
 
 func readFile(t *testing.T, path string) string {
@@ -89,7 +96,7 @@ func TestPublishIndex_IntoMissingDir(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(stage, format.ManifestFile), "new")
 
-	if err := publishIndex(stage, outDir); err != nil {
+	if err := publishIndex(nopLogger(), stage, outDir); err != nil {
 		t.Fatalf("publishIndex: %v", err)
 	}
 	if got := readFile(t, filepath.Join(outDir, format.ManifestFile)); got != "new" {
@@ -110,7 +117,7 @@ func TestPublishIndex_ReplacesPreviousIndex(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(stage, format.ManifestFile), "new")
 
-	if err := publishIndex(stage, outDir); err != nil {
+	if err := publishIndex(nopLogger(), stage, outDir); err != nil {
 		t.Fatalf("publishIndex: %v", err)
 	}
 	if got := readFile(t, filepath.Join(outDir, format.ManifestFile)); got != "new" {
@@ -132,7 +139,7 @@ func TestPublishIndex_RefusesNonIndexDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := publishIndex(stage, outDir); !errors.Is(err, ErrOutDirNotIndex) {
+	if err := publishIndex(nopLogger(), stage, outDir); !errors.Is(err, ErrOutDirNotIndex) {
 		t.Fatalf("publishIndex err = %v, want ErrOutDirNotIndex", err)
 	}
 	if got := readFile(t, filepath.Join(outDir, "notes.txt")); got != "keep me" {
@@ -209,5 +216,102 @@ func TestFirstCause(t *testing.T) {
 				t.Errorf("firstCause = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+func TestPublishIndex_TrailingSlashOutDir(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "out")
+	writeFile(t, filepath.Join(outDir, format.ManifestFile), "old")
+	stage, err := newStagingDir(outDir + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := filepath.Dir(stage); got != root {
+		t.Fatalf("staging dir %s is not a sibling of %s", stage, outDir)
+	}
+	writeFile(t, filepath.Join(stage, format.ManifestFile), "new")
+
+	if err := publishIndex(nopLogger(), stage, outDir+"/"); err != nil {
+		t.Fatalf("publishIndex: %v", err)
+	}
+	if got := readFile(t, filepath.Join(outDir, format.ManifestFile)); got != "new" {
+		t.Errorf("manifest = %q, want new", got)
+	}
+	if got := siblings(t, outDir); len(got) != 1 {
+		t.Errorf("leftover siblings: %v", got)
+	}
+}
+
+func TestPublishIndex_PreviousIndexRemovalFailureKeepsNewIndex(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	outDir := filepath.Join(t.TempDir(), "out")
+	writeFile(t, filepath.Join(outDir, format.ManifestFile), "old")
+	locked := filepath.Join(outDir, "locked")
+	writeFile(t, filepath.Join(locked, "part.bin"), "old")
+	info, err := os.Stat(locked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Read-only without search permission: its file cannot be unlinked.
+	if err := os.Chmod(locked, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	stage, err := newStagingDir(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for _, name := range siblings(t, outDir) {
+			_ = os.Chmod(filepath.Join(filepath.Dir(outDir), name, "locked"), info.Mode().Perm())
+		}
+	})
+	writeFile(t, filepath.Join(stage, format.ManifestFile), "new")
+
+	if err := publishIndex(nopLogger(), stage, outDir); err != nil {
+		t.Fatalf("publishIndex = %v, want nil once the new index is in place", err)
+	}
+	if got := readFile(t, filepath.Join(outDir, format.ManifestFile)); got != "new" {
+		t.Errorf("manifest = %q, want new", got)
+	}
+}
+
+func TestReclaimStaleDirs_RemovesLeftovers(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "out")
+	writeFile(t, filepath.Join(outDir, format.ManifestFile), "current")
+	writeFile(t, filepath.Join(root, ".out.building-123", "core_stats.bin"), "partial")
+	writeFile(t, filepath.Join(root, ".out.replaced-456", format.ManifestFile), "old")
+	writeFile(t, filepath.Join(root, ".other.building-1", "keep"), "x")
+	writeFile(t, filepath.Join(root, "out2", "keep"), "x")
+
+	if err := reclaimStaleDirs(nopLogger(), outDir+"/"); err != nil {
+		t.Fatalf("reclaimStaleDirs: %v", err)
+	}
+	got := siblings(t, outDir)
+	want := []string{".other.building-1", "out", "out2"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("siblings = %v, want %v", got, want)
+	}
+	if got := readFile(t, filepath.Join(outDir, format.ManifestFile)); got != "current" {
+		t.Errorf("manifest = %q, want current", got)
+	}
+}
+
+func TestReclaimStaleDirs_RestoresInterruptedReplace(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "out")
+	writeFile(t, filepath.Join(root, ".out.replaced-456", format.ManifestFile), "old")
+
+	if err := reclaimStaleDirs(nopLogger(), outDir); err != nil {
+		t.Fatalf("reclaimStaleDirs: %v", err)
+	}
+	if got := readFile(t, filepath.Join(outDir, format.ManifestFile)); got != "old" {
+		t.Errorf("manifest = %q, want the restored previous index", got)
+	}
+	if got := siblings(t, outDir); len(got) != 1 {
+		t.Errorf("leftover siblings: %v", got)
 	}
 }

@@ -6,8 +6,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
+	"github.com/rs/zerolog"
 )
 
 // ErrOutDirNotIndex is returned when the output directory already holds
@@ -42,14 +44,24 @@ func checkOutDir(outDir string) error {
 	return nil
 }
 
+// Staging and replaced-index directories are hidden siblings of outDir
+// named ".<base><suffix><random>", so a build can find the ones an
+// earlier, killed build left behind.
+const (
+	stagingSuffix  = ".building-"
+	replacedSuffix = ".replaced-"
+)
+
 // newStagingDir creates the hidden sibling directory the index is built
 // in. Being a sibling keeps the final rename on one filesystem.
 func newStagingDir(outDir string) (string, error) {
-	parent := filepath.Dir(outDir)
+	// Cleaning keeps a trailing slash from making outDir its own parent.
+	outDir = filepath.Clean(outDir)
+	parent, base := filepath.Dir(outDir), filepath.Base(outDir)
 	if err := os.MkdirAll(parent, format.DirPerm); err != nil {
 		return "", fmt.Errorf("create output parent: %w", err)
 	}
-	dir, err := os.MkdirTemp(parent, "."+filepath.Base(outDir)+".building-")
+	dir, err := os.MkdirTemp(parent, "."+base+stagingSuffix)
 	if err != nil {
 		return "", fmt.Errorf("create staging dir: %w", err)
 	}
@@ -57,19 +69,58 @@ func newStagingDir(outDir string) (string, error) {
 	return dir, nil
 }
 
+// reclaimStaleDirs removes the staging and replaced-index directories a
+// killed build left beside outDir, since its own cleanup never ran. A
+// build killed between moving the previous index aside and publishing
+// the new one leaves outDir missing; that previous index is moved back
+// instead of removed. Builds into the same outDir must not overlap.
+func reclaimStaleDirs(log *zerolog.Logger, outDir string) error {
+	outDir = filepath.Clean(outDir)
+	parent, base := filepath.Dir(outDir), filepath.Base(outDir)
+	entries, err := os.ReadDir(parent)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read output parent: %w", err)
+	}
+	_, statErr := os.Stat(outDir)
+	outDirMissing := errors.Is(statErr, fs.ErrNotExist)
+	for _, e := range entries {
+		name := e.Name()
+		path := filepath.Join(parent, name)
+		switch {
+		case strings.HasPrefix(name, "."+base+replacedSuffix) && outDirMissing:
+			if err := os.Rename(path, outDir); err != nil {
+				return fmt.Errorf("restore previous index from %s: %w", path, err)
+			}
+			outDirMissing = false
+			log.Warn().Str("path", path).Msg("restored previous index left aside by an interrupted build")
+		case strings.HasPrefix(name, "."+base+replacedSuffix),
+			strings.HasPrefix(name, "."+base+stagingSuffix):
+			logCleanupErr(log, "remove stale build dir", path, os.RemoveAll(path))
+		}
+	}
+
+	return nil
+}
+
 // publishIndex moves a finished index from stage to outDir. A previous
 // index at outDir is replaced (moved aside, then removed once the new
 // one is in place); anything else at outDir is left alone and reported.
-func publishIndex(stage, outDir string) error {
+// Once the new index is in place the build has succeeded, so a failure
+// to sync or to remove the previous index is only logged.
+func publishIndex(log *zerolog.Logger, stage, outDir string) error {
 	if err := checkOutDir(outDir); err != nil {
 		return err
 	}
-	parent := filepath.Dir(outDir)
+	outDir = filepath.Clean(outDir)
+	parent, base := filepath.Dir(outDir), filepath.Base(outDir)
 	var old string
 	if _, err := os.Stat(outDir); err == nil {
 		// MkdirTemp picks a unique hidden name; os.Rename refuses to
 		// replace a directory, so the placeholder is removed first.
-		aside, err := os.MkdirTemp(parent, "."+filepath.Base(outDir)+".replaced-")
+		aside, err := os.MkdirTemp(parent, "."+base+replacedSuffix)
 		if err != nil {
 			return fmt.Errorf("reserve name for previous index: %w", err)
 		}
@@ -91,13 +142,9 @@ func publishIndex(stage, outDir string) error {
 
 		return fmt.Errorf("publish index: %w", err)
 	}
-	if err := format.SyncDir(parent); err != nil {
-		return fmt.Errorf("sync output parent: %w", err)
-	}
+	logCleanupErr(log, "sync output parent", parent, format.SyncDir(parent))
 	if old != "" {
-		if err := os.RemoveAll(old); err != nil {
-			return fmt.Errorf("remove previous index %s: %w", old, err)
-		}
+		logCleanupErr(log, "remove previous index", old, os.RemoveAll(old))
 	}
 
 	return nil

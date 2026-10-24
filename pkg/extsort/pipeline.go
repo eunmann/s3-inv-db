@@ -162,6 +162,9 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	defer p.memTracker.Stop() //nolint:contextcheck // own shutdown ctx by design
 	p.setPhase("initializing")
 
+	if err := reclaimStaleDirs(log, outDir); err != nil {
+		return nil, err
+	}
 	if err := checkOutDir(outDir); err != nil {
 		return nil, err
 	}
@@ -229,7 +232,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	if err != nil {
 		return nil, err
 	}
-	if err := publishIndex(stage, outDir); err != nil {
+	if err := publishIndex(log, stage, outDir); err != nil {
 		return nil, err
 	}
 	prefixCount, maxDepth := mergeRes.PrefixCount, mergeRes.MaxDepth
