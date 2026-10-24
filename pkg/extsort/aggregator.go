@@ -1,8 +1,8 @@
 package extsort
 
 import (
-	"runtime"
 	"runtime/debug"
+	"runtime/metrics"
 	"strings"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -117,11 +117,18 @@ func (a *Aggregator) EstimatedMemoryUsage() int64 {
 	return int64(len(a.prefixes)) * bytesPerPrefix
 }
 
+// heapInuseBytes returns the runtime's HeapInuse (live objects plus
+// fragmentation in in-use spans) through runtime/metrics, which unlike
+// runtime.ReadMemStats does not stop the world. Every ingest worker
+// checks it every few tens of thousands of rows.
 func heapInuseBytes() uint64 {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
+	samples := [2]metrics.Sample{
+		{Name: "/memory/classes/heap/objects:bytes"},
+		{Name: "/memory/classes/heap/unused:bytes"},
+	}
+	metrics.Read(samples[:])
 
-	return m.HeapInuse
+	return samples[0].Value.Uint64() + samples[1].Value.Uint64()
 }
 
 // DefaultAggregatorCap is the spill threshold when no GOMEMLIMIT is set.

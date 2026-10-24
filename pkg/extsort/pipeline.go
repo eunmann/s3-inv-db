@@ -687,8 +687,8 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 
 	const (
 		ctxCheckInterval = 4096
-		// ShouldWorkerFlush calls runtime.ReadMemStats; cadence the
-		// in-chunk check so big chunks can still spill before OOM.
+		// The in-chunk spill check lets a big chunk spill before it
+		// outgrows the cap; checking every row would only add overhead.
 		midChunkFlushInterval = 50_000
 	)
 	var (
