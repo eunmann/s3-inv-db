@@ -1,0 +1,37 @@
+version: 2
+updates:
+  # Go modules: minor/patch bumps arrive as one grouped PR a week; majors
+  # arrive individually so each gets its own review.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # Every action is pinned by commit SHA with a trailing `# vX.Y.Z`
+  # comment; Dependabot moves the SHA and the comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # Build and runtime images. A new Go minor is a deliberate upgrade that
+  # also moves go.mod's `go` line, so only patch bumps arrive here.
+  - package-ecosystem: docker
+    directory: /infra
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: golang
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  # docker-compose images (the local S3 server and the bucket bootstrap).
+  - package-ecosystem: docker-compose
+    directory: /infra
+    schedule:
+      interval: weekly

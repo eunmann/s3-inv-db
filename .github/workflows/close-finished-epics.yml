@@ -1,0 +1,38 @@
+name: Close finished epics
+
+# GitHub shows sub-issue progress but never closes a parent, so an epic
+# stays open after its last sub-issue closes unless something closes it.
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  issues: write
+
+jobs:
+  close-parents:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Close each parent whose sub-issues are all closed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CLOSED: ${{ github.event.issue.number }}
+        # A close made with GITHUB_TOKEN starts no new workflow run, so the
+        # loop walks up to grandparents itself. A parent closes only when
+        # at least one sub-issue was completed: an epic whose children were
+        # all closed as not planned is left for a person.
+        run: |
+          set -euo pipefail
+          child="$CLOSED"
+          while parent=$(gh api "repos/$REPO/issues/$child/parent" --jq .number 2>/dev/null); do
+            [ "$(gh api "repos/$REPO/issues/$parent" --jq .state)" = open ] || break
+            states=$(gh api --paginate "repos/$REPO/issues/$parent/sub_issues" --jq '.[] | .state + ":" + (.state_reason // "")')
+            if grep -q '^open:' <<<"$states" || ! grep -q ':completed$' <<<"$states"; then
+              break
+            fi
+            gh issue close "$parent" --repo "$REPO" --reason completed \
+              --comment "Closed automatically: every sub-issue is closed (last: #$child)."
+            child="$parent"
+          done
