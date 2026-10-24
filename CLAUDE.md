@@ -44,6 +44,10 @@ The correctness and performance bar every change and every review is judged agai
 3. **Query cost independent of index size.** Lookups are O(1); listings are O(log n + the page shown), never O(all children) per page view.
 4. **Never destroy what the user had.** A failed or cancelled build leaves no partial index and never deletes data it did not create; the server never evicts, unloads or overwrites an index out from under a reader.
 
+## Pre-release
+
+The project is pre-release: no backwards compatibility, API versioning or index-format migrations. Change formats and APIs freely (bump the single format `Version`; old indexes are rebuilt) and note breaking changes in the PR.
+
 ## Working style
 
 - **Never give time estimates.** No "this will take X hours/days/sessions," no "realistic for one session," no scoping language that anchors on duration. Quote the work, not the clock.
