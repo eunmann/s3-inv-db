@@ -139,10 +139,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      # Regenerates the embedded stylesheet and fails if it differs from
-      # the checked-in one.
-      - name: Embedded tailwind.css matches the templates
-        run: make css-check
+      # `-o css` embeds the checked-in tailwind.css, which PR Validation's
+      # css-check already proved current for this tree, so no downloaded
+      # tool runs before the build.
       - name: Build the three binaries
         env:
           GOOS: ${{ matrix.goos }}
@@ -151,7 +150,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           COMMIT: ${{ needs.validate.outputs.sha }}
           DATE: ${{ needs.validate.outputs.date }}
-        run: make build server seeder VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE"
+        run: make -o css build server seeder VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE"
       - name: Binaries report the release version
         if: ${{ matrix.goos == 'linux' && matrix.goarch == 'amd64' }}
         env:

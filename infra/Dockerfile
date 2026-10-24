@@ -6,21 +6,16 @@
 # multi-arch build never compiles Go under emulation.
 FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine AS builder
 
-# make + curl for the Tailwind CLI download in `make css`.
-RUN apk add --no-cache make curl
-
 WORKDIR /src
 
 COPY go.mod go.sum ./
 RUN go mod download
 
+# The binary embeds the checked-in tailwind.css (kept current by
+# `make css-check` in PR Validation; `make docker-build` and
+# `make docker-prod` regenerate it on the host first), so no downloaded
+# tool runs here.
 COPY . .
-
-# Regenerate Tailwind CSS so the embedded stylesheet matches the
-# templates in this image (not whatever was checked into the repo at
-# the time of clone). This guarantees the prod image always serves an
-# in-sync compiled stylesheet.
-RUN make css
 
 ARG TARGETOS=linux TARGETARCH
 # Version metadata for --version (internal/buildinfo). The build context
