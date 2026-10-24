@@ -409,7 +409,7 @@ func (m *ParallelMerger) createMergeOutputWriter(outputPath string) (mergeOutput
 // drainMerger pulls every row from merger and writes it to outputWriter,
 // aborting promptly when ctx is cancelled. The caller still owns merger
 // and outputWriter on return.
-func drainMerger(ctx context.Context, merger *runReaderMergeIterator, outputWriter mergeOutputWriter) (uint64, error) {
+func drainMerger(ctx context.Context, merger *MergeIterator, outputWriter mergeOutputWriter) (uint64, error) {
 	var count uint64
 	for {
 		select {
@@ -427,11 +427,8 @@ func drainMerger(ctx context.Context, merger *runReaderMergeIterator, outputWrit
 		}
 
 		if err := outputWriter.Write(row); err != nil {
-			merger.Release(row)
-
 			return count, fmt.Errorf("write to output: %w", err)
 		}
-		merger.Release(row)
 		count++
 	}
 }
@@ -453,7 +450,7 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 		return result
 	}
 
-	merger, err := newMergeIteratorFromRunReaders(readers)
+	merger, err := newMergeIterator(readers)
 	if err != nil {
 		result.err = fmt.Errorf("create merger: %w", err)
 		for _, r := range readers {
@@ -508,139 +505,6 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 		Msg("merge job complete")
 
 	return result
-}
-
-// runReaderMergeIterator wraps RunReader interface for use with merge heap.
-type runReaderMergeIterator struct {
-	err     error
-	heap    *typedMergeHeap
-	readers []RunReader
-}
-
-// mergeRowPool reuses PrefixRow allocations across the merge phase
-// (billion-row builds otherwise churn hundreds of GiB).
-//
-//nolint:gochecknoglobals // package-level pool, by design
-var mergeRowPool = newTypedPool(func() *PrefixRow { return &PrefixRow{} })
-
-func acquireMergeRow() *PrefixRow {
-	r := mergeRowPool.Get()
-	r.Reset()
-
-	return r
-}
-
-// releaseMergeRow returns a row to the pool. Callers of
-// runReaderMergeIterator.Next must release the returned row when
-// they're done with its data — the next call to Next may overwrite
-// it via the pool.
-func releaseMergeRow(r *PrefixRow) {
-	if r == nil {
-		return
-	}
-	mergeRowPool.Put(r)
-}
-
-// newMergeIteratorFromRunReaders creates a merge iterator from RunReader interfaces.
-func newMergeIteratorFromRunReaders(readers []RunReader) (*runReaderMergeIterator, error) {
-	m := &runReaderMergeIterator{
-		readers: readers,
-		heap:    &typedMergeHeap{items: make([]mergeItem, 0, len(readers))},
-	}
-
-	for i, r := range readers {
-		row := acquireMergeRow()
-		err := r.ReadInto(row)
-		if errors.Is(err, io.EOF) {
-			releaseMergeRow(row)
-
-			continue // empty reader
-		}
-		if err != nil {
-			releaseMergeRow(row)
-			m.Close()
-
-			return nil, fmt.Errorf("initial read from run %d: %w", i, err)
-		}
-		m.heap.items = append(m.heap.items, mergeItem{row: row, readerIdx: i})
-	}
-
-	m.heap.init()
-
-	return m, nil
-}
-
-// Next returns the next merged PrefixRow in sorted order. The caller
-// owns the returned row until it calls Release(row); after Release the
-// row may be handed to a future Next caller via the pool.
-func (m *runReaderMergeIterator) Next() (*PrefixRow, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-
-	if m.heap.Len() == 0 {
-		return nil, io.EOF
-	}
-
-	item := m.heap.pop()
-	result := item.row
-
-	if err := m.advanceReader(item.readerIdx); err != nil && !errors.Is(err, io.EOF) {
-		m.err = err
-
-		return nil, err
-	}
-
-	// Merge duplicates. The duplicate rows are returned to the pool
-	// after their data is folded into result.
-	for m.heap.Len() > 0 && m.heap.items[0].row.Prefix == result.Prefix {
-		dup := m.heap.pop()
-		result.Merge(dup.row)
-		releaseMergeRow(dup.row)
-
-		if err := m.advanceReader(dup.readerIdx); err != nil && !errors.Is(err, io.EOF) {
-			m.err = err
-
-			return nil, err
-		}
-	}
-
-	return result, nil
-}
-
-// Release returns a row received from Next back to the pool. Callers
-// must not retain the row after calling Release.
-func (m *runReaderMergeIterator) Release(row *PrefixRow) {
-	releaseMergeRow(row)
-}
-
-// advanceReader reads the next row from the given reader and pushes to heap.
-func (m *runReaderMergeIterator) advanceReader(idx int) error {
-	row := acquireMergeRow()
-	err := m.readers[idx].ReadInto(row)
-	if err != nil {
-		releaseMergeRow(row)
-		if errors.Is(err, io.EOF) {
-			return io.EOF
-		}
-
-		return fmt.Errorf("advance reader %d: %w", idx, err)
-	}
-	m.heap.push(mergeItem{row: row, readerIdx: idx})
-
-	return nil
-}
-
-// Close closes all underlying readers, joining any errors.
-func (m *runReaderMergeIterator) Close() error {
-	errs := make([]error, 0, len(m.readers))
-	for _, r := range m.readers {
-		if err := r.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	return errors.Join(errs...)
 }
 
 // MergeStatistics describes the work done by a ParallelMerger.

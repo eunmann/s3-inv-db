@@ -96,9 +96,9 @@ func drainSerial(t *testing.T, paths []string) []PrefixRow {
 		}
 		readers = append(readers, r)
 	}
-	iter, err := newMergeIteratorFromRunReaders(readers)
+	iter, err := newMergeIterator(readers)
 	if err != nil {
-		t.Fatalf("newMergeIteratorFromRunReaders: %v", err)
+		t.Fatalf("newMergeIterator: %v", err)
 	}
 	defer iter.Close()
 	var out []PrefixRow
@@ -111,7 +111,6 @@ func drainSerial(t *testing.T, paths []string) []PrefixRow {
 			t.Fatalf("serial Next: %v", err)
 		}
 		out = append(out, *row)
-		iter.Release(row)
 	}
 
 	return out

@@ -80,8 +80,7 @@ const (
 )
 
 // readPrefixRowRecordInto is like readPrefixRowRecord but reuses the given
-// PrefixRow when non-nil. Pass a row obtained from prefixRowPool to keep
-// the merge loop allocation-free.
+// PrefixRow when non-nil, keeping the merge loop free of row allocations.
 func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) (*PrefixRow, error) {
 	// The length is read into the reusable scratch buffer: a local array
 	// passed to an io.Reader escapes, one allocation per row.
