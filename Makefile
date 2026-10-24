@@ -50,13 +50,13 @@ seeder:
 	go build -o bin/s3-inv-db-seeder ./cmd/s3-inv-db-seeder
 
 test: compose-preflight
-	@$(COMPOSE) --profile test run --rm test-runner go test ./...; \
+	@$(COMPOSE) --profile test run --rm test-runner go test -tags integration ./...; \
 	rc=$$?; \
 	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
 	exit $$rc
 
 test-race: compose-preflight
-	@$(COMPOSE) --profile test run --rm test-runner go test -race ./...; \
+	@$(COMPOSE) --profile test run --rm test-runner go test -tags integration -race ./...; \
 	rc=$$?; \
 	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
 	exit $$rc
@@ -70,7 +70,7 @@ cover: $(COVER_OUT)
 
 $(COVER_OUT): compose-preflight
 	@$(COMPOSE) --profile test run --rm test-runner \
-	    go test -covermode=atomic -coverpkg=./... -coverprofile=$(COVER_OUT) ./...; \
+	    go test -tags integration -covermode=atomic -coverpkg=./... -coverprofile=$(COVER_OUT) ./...; \
 	rc=$$?; \
 	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
 	exit $$rc

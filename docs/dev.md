@@ -45,26 +45,30 @@ Open `http://localhost:8080` for the HTMX UI.
 ## Tests
 
 ```bash
-make test         # full suite in the docker test profile
+make test-unit    # host: go test ./... — no Docker, no network
+make test         # full suite, including MinIO integration tests, in Docker
 make test-race    # same with -race
 ```
 
-Both targets run inside the `test-runner` container with a dedicated
-`minio-test` MinIO instance — no host ports, runs side-by-side with
+Tests that need S3 live in `*_minio_test.go` files behind the
+`integration` build tag, so plain `go test ./...` on the host never
+makes an AWS call. `make test` and `make test-race` run inside the
+`test-runner` container with `-tags integration` against a dedicated
+`minio-test` instance — no host ports, runs side-by-side with
 `make dev`. The Makefile builds the test-runner image once (cached
 after first run), captures the test exit code, and tears the profile
 down on every exit.
+
+`internal/miniotest` refuses to run unless `AWS_ENDPOINT_URL_S3` is set
+to a non-AWS host, so a misconfigured run fails instead of creating
+buckets in a real account.
 
 To iterate on one package, drive compose directly:
 
 ```bash
 docker compose -f infra/docker-compose.yml --profile test run --rm test-runner \
-  go test -v ./internal/s3disco/...
+  go test -tags integration -v ./internal/s3disco/...
 ```
-
-Running `go test ./...` directly on the host bypasses MinIO and will
-fail the s3disco integration tests by design — that's the workflow the
-container exists to prevent.
 
 ## Local quality gates
 

@@ -158,15 +158,15 @@ services:
       retries: 15
       start_period: 5s
 
-  # Runs `go test ./...` against minio-test. AWS_ENDPOINT_URL_S3 unblocks
-  # the otherwise-skipped integration tests in internal/s3disco.
+  # Runs the full suite, including the `integration`-tagged MinIO tests,
+  # against minio-test.
   test-runner:
     profiles: [test]
     build:
       context: ..
       dockerfile: infra/Dockerfile.dev
     entrypoint: []
-    command: ["go", "test", "./..."]
+    command: ["go", "test", "-tags", "integration", "./..."]
     environment:
       AWS_ENDPOINT_URL_S3: http://minio-test:9000
       AWS_ACCESS_KEY_ID: minioadmin

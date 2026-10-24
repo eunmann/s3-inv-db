@@ -1,3 +1,5 @@
+//go:build integration
+
 package s3fetch_test
 
 import (
