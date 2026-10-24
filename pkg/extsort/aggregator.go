@@ -3,6 +3,7 @@ package extsort
 import (
 	"runtime"
 	"runtime/debug"
+	"strings"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -13,8 +14,9 @@ import (
 // The aggregator is NOT safe for concurrent use. For concurrent access,
 // use multiple aggregators or external synchronization.
 type Aggregator struct {
-	prefixes       map[string]*PrefixStats
-	statsPool      *typedPool[PrefixStats]
+	// prefixes holds the rows Drain returns, keyed by their own Prefix:
+	// a spill hands the rows out instead of copying them.
+	prefixes       map[string]*PrefixRow
 	maxDepth       int
 	objectCount    int64
 	bytesProcessed int64
@@ -31,9 +33,8 @@ func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 	}
 
 	return &Aggregator{
-		prefixes:  make(map[string]*PrefixStats, initialCapacity),
-		statsPool: newTypedPool(func() *PrefixStats { return &PrefixStats{} }),
-		maxDepth:  maxDepth,
+		prefixes: make(map[string]*PrefixRow, initialCapacity),
+		maxDepth: maxDepth,
 	}
 }
 
@@ -59,15 +60,17 @@ func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 	}
 }
 
-// accumulate updates the statistics for a single prefix.
+// accumulate updates the statistics for a single prefix. A new prefix
+// is cloned: the caller's key is usually a substring of a whole
+// inventory record, which the map would otherwise keep alive.
 func (a *Aggregator) accumulate(prefix string, depth uint16, size uint64, tierID tiers.ID) {
-	stats, ok := a.prefixes[prefix]
+	row, ok := a.prefixes[prefix]
 	if !ok {
-		stats = a.statsPool.Get()
-		stats.Depth = depth
-		a.prefixes[prefix] = stats
+		owned := strings.Clone(prefix)
+		row = &PrefixRow{Prefix: owned, Depth: depth}
+		a.prefixes[owned] = row
 	}
-	stats.Add(size, tierID)
+	row.add(size, tierID)
 }
 
 func (a *Aggregator) PrefixCount() int {
@@ -179,23 +182,16 @@ func ShouldWorkerFlush(workerAggBytes uint64, memoryLimit int64, numWorkers int)
 	return heapInuseBytes() >= heapPressure
 }
 
-// Drain extracts all prefixes from the aggregator and returns them as PrefixRows.
-// The aggregator is cleared and can be reused. The returned slice is sorted
-// by prefix in lexicographic order.
-//
-// This method returns PrefixStats structs to the pool, so the returned
-// PrefixRows must be used before the aggregator processes more objects.
+// Drain hands over every accumulated row (unsorted) and clears the
+// aggregator for reuse. The rows belong to the caller: nothing is copied.
 func (a *Aggregator) Drain() []*PrefixRow {
 	if len(a.prefixes) == 0 {
 		return nil
 	}
 
 	rows := make([]*PrefixRow, 0, len(a.prefixes))
-	for prefix, stats := range a.prefixes {
-		row := stats.ToPrefixRow(prefix)
+	for _, row := range a.prefixes {
 		rows = append(rows, row)
-		stats.Reset()
-		a.statsPool.Put(stats)
 	}
 
 	clear(a.prefixes)

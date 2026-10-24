@@ -181,46 +181,12 @@ func encodePrefixRowRecord(buf *[]byte, row *PrefixRow) int {
 	return offset
 }
 
-// PrefixStats holds aggregated stats for one prefix during the
-// in-memory aggregation phase. Uint64 counters because a single tier
-// of the root prefix can exceed 2^32 at PB scale.
-type PrefixStats struct {
-	Count      uint64
-	TotalBytes uint64
-	TierCounts [MaxTiers]uint64
-	TierBytes  [MaxTiers]uint64
-	Depth      uint16
-}
-
-// Reset clears all fields of the PrefixStats for reuse.
-func (s *PrefixStats) Reset() {
-	s.Depth = 0
-	s.Count = 0
-	s.TotalBytes = 0
-	clear(s.TierCounts[:])
-	clear(s.TierBytes[:])
-}
-
-// Add accumulates statistics from a single object.
-func (s *PrefixStats) Add(size uint64, tierID tiers.ID) {
-	s.Count++
-	s.TotalBytes += size
-	s.TierCounts[tierID]++
-	s.TierBytes[tierID] += size
-}
-
-// ToPrefixRow creates a PrefixRow from this PrefixStats with the given prefix.
-func (s *PrefixStats) ToPrefixRow(prefix string) *PrefixRow {
-	row := &PrefixRow{
-		Prefix:     prefix,
-		Depth:      s.Depth,
-		Count:      s.Count,
-		TotalBytes: s.TotalBytes,
-	}
-	copy(row.TierCounts[:], s.TierCounts[:])
-	copy(row.TierBytes[:], s.TierBytes[:])
-
-	return row
+// add accumulates one object into the row.
+func (r *PrefixRow) add(size uint64, tierID tiers.ID) {
+	r.Count++
+	r.TotalBytes += size
+	r.TierCounts[tierID]++
+	r.TierBytes[tierID] += size
 }
 
 // Config holds pipeline configuration. Grouped into substructs by

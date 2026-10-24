@@ -125,35 +125,6 @@ func TestIndexBuilderMemoryBounded(t *testing.T) {
 	}
 }
 
-// TestPrefixStatsMemoryLayout verifies the memory layout of extsort.PrefixStats.
-func TestPrefixStatsMemoryLayout(t *testing.T) {
-	// extsort.PrefixStats should be:
-	// - Depth: 2 bytes (uint16)
-	// - Count: 8 bytes (uint64)
-	// - TotalBytes: 8 bytes (uint64)
-	// - TierCounts: 12 * 8 = 96 bytes ([12]uint64)
-	// - TierBytes: 12 * 8 = 96 bytes ([12]uint64)
-	// Total: 2 + 8 + 8 + 96 + 96 = 210 bytes (but alignment may add padding)
-
-	stats := extsort.PrefixStats{}
-	size := prefixStatsSize(stats)
-
-	t.Logf("extsort.PrefixStats size: %d bytes", size)
-
-	// Should be around 210 bytes with alignment
-	if size < 200 || size > 256 {
-		t.Errorf("extsort.PrefixStats size unexpected: %d bytes (expected 200-256)", size)
-	}
-}
-
-// prefixStatsSize returns the known size of extsort.PrefixStats in bytes.
-// This avoids importing unsafe in tests while documenting the expected size.
-func prefixStatsSize(_ extsort.PrefixStats) int {
-	// Known size from struct definition:
-	// 2 (Depth) + 6 (padding) + 8 (Count) + 8 (TotalBytes) + 96 (TierCounts) + 96 (TierBytes) = 216 bytes
-	return 216
-}
-
 // currentHeapAlloc reads runtime.MemStats.HeapAlloc, used to feed
 // ShouldWorkerFlush in tests.
 func currentHeapAlloc() uint64 {
