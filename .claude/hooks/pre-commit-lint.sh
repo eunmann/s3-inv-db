@@ -4,15 +4,45 @@
 # rewrote, and block the commit (exit 2) on remaining findings. Uses the
 # golangci-lint version pinned in the Makefile; build tags come from
 # .golangci.yml (run.build-tags), so tag-gated tests are linted too.
+#
+# The commit may sit anywhere in a compound command and target another
+# checkout (a worktree): the hook lints the repository the commit runs in,
+# taken from `git -C <dir> commit`, else a preceding `cd <dir>`, else the
+# tool call's working directory.
 set -euo pipefail
 
 INPUT=$(cat)
 COMMAND=$(jq -r '.tool_input.command // empty' <<<"$INPUT" 2>/dev/null || true)
-if [[ -z "$COMMAND" ]] || ! grep -qE '^git commit' <<<"$COMMAND"; then
-    exit 0
-fi
+CWD=$(jq -r '.cwd // empty' <<<"$INPUT" 2>/dev/null || true)
+CWD=${CWD:-${CLAUDE_PROJECT_DIR:-.}}
 
-cd "${CLAUDE_PROJECT_DIR:-.}"
+SEP=$'(^|[;&|(\n][[:space:]]*)'
+COMMIT_RE="${SEP}git([[:space:]]+-C[[:space:]]+([^[:space:];&|]+))?[[:space:]]+commit([[:space:];&|)]|$)"
+CD_RE="${SEP}cd[[:space:]]+([^[:space:];&|]+)[[:space:]]*(&&|;|"$'\n'")"
+# resolve BASE PATH: PATH unquoted, ~-expanded and made absolute against BASE.
+resolve() {
+    local p=${2#[\"\']}
+    p=${p%[\"\']}
+    p=${p/#\~/$HOME}
+    [[ $p == /* ]] || p=$1/$p
+    echo "$p"
+}
+
+[[ $COMMAND =~ $COMMIT_RE ]] || exit 0
+GIT_C=${BASH_REMATCH[3]}
+REST=${COMMAND%%"${BASH_REMATCH[0]}"*}${BASH_REMATCH[1]}
+DIR=$CWD
+while [[ $REST =~ $CD_RE ]]; do
+    DIR=$(resolve "$DIR" "${BASH_REMATCH[2]}")
+    REST=${BASH_REMATCH[3]}${REST#*"${BASH_REMATCH[0]}"}
+done
+[[ -z $GIT_C ]] || DIR=$(resolve "$DIR" "$GIT_C")
+
+# A directory that doesn't exist or isn't a repository fails the commit
+# itself; there is nothing to lint.
+cd "$DIR" 2>/dev/null || exit 0
+TOP=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$TOP"
 
 STAGED=$(git diff --cached --name-only --diff-filter=ACM -- '*.go' 2>/dev/null || true)
 if [[ -z "$STAGED" ]]; then
