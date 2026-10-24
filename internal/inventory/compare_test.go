@@ -217,9 +217,9 @@ func openSeededIndex(t *testing.T, seed int64, objects int) *indexread.Index {
 	return idx
 }
 
-// openKeysIndex builds an index from explicit object keys (1 byte each,
-// STANDARD tier).
-func openKeysIndex(t *testing.T, keys ...string) *indexread.Index {
+// buildKeysIndexDir builds an index directory from explicit object keys
+// (1 byte each, STANDARD tier).
+func buildKeysIndexDir(t *testing.T, keys ...string) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "index")
 	agg := extsort.NewAggregator(len(keys), 0)
@@ -243,7 +243,14 @@ func openKeysIndex(t *testing.T, keys ...string) *indexread.Index {
 	if err := b.Finalize(); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
-	idx, err := indexread.Open(dir)
+
+	return dir
+}
+
+// openKeysIndex opens an index built from explicit object keys.
+func openKeysIndex(t *testing.T, keys ...string) *indexread.Index {
+	t.Helper()
+	idx, err := indexread.Open(buildKeysIndexDir(t, keys...))
 	if err != nil {
 		t.Fatalf("indexread.Open: %v", err)
 	}

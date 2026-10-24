@@ -60,6 +60,22 @@ type Catalog struct {
 	inventories map[ID]*managedInventory
 	store       mirrorStore
 	mu          sync.RWMutex
+	// seq numbers every state change, under mu, in the order it
+	// happened. Changes are persisted after mu is released (readers
+	// never wait on SQLite); persisted[id] holds the newest seq written
+	// for an inventory so an older snapshot that loses the race to
+	// persistMu is dropped instead of overwriting a newer one.
+	seq       uint64
+	persistMu sync.Mutex
+	persisted map[ID]uint64
+}
+
+// pendingWrite is one state change to persist, stamped with its
+// position in the catalog's mutation order.
+type pendingWrite struct {
+	info   Info
+	seq    uint64
+	delete bool
 }
 
 // NewCatalog wires a persistence sink. A nil store is replaced with a
@@ -70,6 +86,7 @@ func NewCatalog(store *Store) *Catalog {
 	c := &Catalog{
 		inventories: make(map[ID]*managedInventory),
 		store:       noopMirrorStore{},
+		persisted:   make(map[ID]uint64),
 	}
 	if store != nil {
 		c.store = store
@@ -96,6 +113,36 @@ func (c *Catalog) AttachStoreForTest(s *Store) {
 	c.store = s
 }
 
+// stageLocked records a state change for persistence. Caller holds c.mu.
+func (c *Catalog) stageLocked(info Info) pendingWrite {
+	c.seq++
+
+	return pendingWrite{info: info, seq: c.seq}
+}
+
+// stageDeleteLocked records a removal for persistence. Caller holds c.mu.
+func (c *Catalog) stageDeleteLocked(id ID) pendingWrite {
+	c.seq++
+
+	return pendingWrite{info: Info{ID: id}, seq: c.seq, delete: true}
+}
+
+// persist writes w to the store unless a newer change to the same
+// inventory already reached it. Called without c.mu held.
+func (c *Catalog) persist(ctx context.Context, w pendingWrite) error {
+	c.persistMu.Lock()
+	defer c.persistMu.Unlock()
+	if w.seq <= c.persisted[w.info.ID] {
+		return nil
+	}
+	c.persisted[w.info.ID] = w.seq
+	if w.delete {
+		return c.mirrorDelete(ctx, w.info.ID)
+	}
+
+	return c.mirror(ctx, w.info)
+}
+
 func (c *Catalog) mirror(ctx context.Context, info Info) error {
 	if err := c.store.Upsert(ctx, info); err != nil {
 		return fmt.Errorf("mirror to store: %w", err)
@@ -115,16 +162,18 @@ func (c *Catalog) mirrorDelete(ctx context.Context, id ID) error {
 // Register adds a new inventory in pending state.
 func (c *Catalog) Register(ctx context.Context, id ID, name, path string) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if _, exists := c.inventories[id]; exists {
+		c.mu.Unlock()
+
 		return ErrAlreadyExists
 	}
 
 	info := Info{ID: id, Name: name, Path: path, State: StateNotLoaded}
 	c.inventories[id] = &managedInventory{info: info}
+	w := c.stageLocked(info)
+	c.mu.Unlock()
 
-	return c.mirror(ctx, info)
+	return c.persist(ctx, w)
 }
 
 // BuildFunc is the contract a Catalog uses to materialise an on-disk index
@@ -185,9 +234,10 @@ func (c *Catalog) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 		inv.info.UserUnloadedAt = time.Time{}
 	}
 	loadStartedAt := time.Now()
-	_ = c.mirror(ctx, inv.info)
 	snapshot := inv.info
+	w := c.stageLocked(inv.info)
 	c.mu.Unlock()
+	_ = c.persist(ctx, w)
 
 	// Materialise the on-disk index outside the lock (can take a while).
 	indexDir, buildErr := build(ctx, snapshot)
@@ -203,42 +253,48 @@ func (c *Catalog) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	inv, exists = c.inventories[id]
+	w, err := c.finishLoadLocked(ctx, id, idx, buildErr, openErr, bytes, loadStartedAt)
+	c.mu.Unlock()
+	if w.seq != 0 {
+		// A fresh ctx: ctx may be cancelled, but the outcome must persist.
+		_ = c.persist(context.WithoutCancel(ctx), w)
+	}
+
+	return err
+}
+
+// finishLoadLocked records a load's outcome. Caller holds c.mu.
+func (c *Catalog) finishLoadLocked(ctx context.Context, id ID, idx *indexread.Index, buildErr, openErr error, bytes uint64, loadStartedAt time.Time) (pendingWrite, error) {
+	inv, exists := c.inventories[id]
 	if !exists {
 		if idx != nil {
 			idx.Close()
 		}
 
-		return ErrNotFound
+		return pendingWrite{}, ErrNotFound
 	}
 
 	switch {
 	case buildErr != nil:
 		inv.info.State = StateError
 		inv.info.Error = buildErr.Error()
-		// Use a fresh ctx for mirror — ctx may be cancelled, but we
-		// still need to persist the failure state.
-		_ = c.mirror(context.WithoutCancel(ctx), inv.info)
 
-		return fmt.Errorf("build index: %w", buildErr)
+		return c.stageLocked(inv.info), fmt.Errorf("build index: %w", buildErr)
 	case openErr != nil:
 		inv.info.State = StateError
 		inv.info.Error = openErr.Error()
-		_ = c.mirror(context.WithoutCancel(ctx), inv.info)
 
-		return fmt.Errorf("open index: %w", openErr)
+		return c.stageLocked(inv.info), fmt.Errorf("open index: %w", openErr)
 	case ctx.Err() != nil:
 		idx.Close()
 		inv.info.State = StateError
 		inv.info.Error = ctx.Err().Error()
-		_ = c.mirror(context.WithoutCancel(ctx), inv.info)
 
-		return fmt.Errorf("load cancelled: %w", ctx.Err())
+		return c.stageLocked(inv.info), fmt.Errorf("load cancelled: %w", ctx.Err())
 	}
 
-	// inv.index assignment is safe under c.mu.Lock — no readers can be
-	// inside WithIndex on this inventory because state was StateLoading.
+	// No reader can hold this inventory's index: state was StateLoading,
+	// and every write to inv.index happens under c.mu.
 	inv.index = idx
 	inv.info.State = StateLoaded
 	inv.info.NodeCount = idx.Count()
@@ -251,9 +307,8 @@ func (c *Catalog) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	inv.info.AutoLoadFailureCount = 0
 	inv.info.AutoLoadBackoffUntil = time.Time{}
 	inv.info.LoadDuration = inv.info.LoadedAt.Sub(loadStartedAt)
-	_ = c.mirror(ctx, inv.info)
 
-	return nil
+	return c.stageLocked(inv.info), nil
 }
 
 // MeasureDir returns the cumulative byte size of an index by reading
@@ -355,33 +410,53 @@ func (c *Catalog) unloadInternal(ctx context.Context, id ID, userInitiated bool)
 		inv.info.UserUnloadedAt = time.Now()
 		inv.info.Pinned = false
 	}
-	_ = c.mirror(ctx, inv.info)
+	// Take the index out under c.mu: a Load that starts once the state
+	// reads NotLoaded installs its own index, which this unload must
+	// neither close nor clear.
+	old := inv.index
+	inv.index = nil
+	w := c.stageLocked(inv.info)
 	c.mu.Unlock()
+	_ = c.persist(ctx, w)
 
-	// Close the index outside the Catalog lock so other inventories stay
-	// available; the per-inventory write lock drains in-flight readers.
-	inv.mu.Lock()
-	defer inv.mu.Unlock()
-	if inv.index != nil {
-		inv.index.Close()
-		inv.index = nil
-	}
+	closeDrained(inv, old)
 
 	return nil
+}
+
+// closeDrained closes idx once every WithIndex reader that borrowed it
+// has returned: readers hold inv.mu's read lock for the whole borrow.
+// Runs without c.mu so other inventories stay available meanwhile.
+func closeDrained(inv *managedInventory, idx *indexread.Index) {
+	if idx == nil {
+		return
+	}
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
+	idx.Close()
 }
 
 // SetPinned flips the pin state of a managed inventory. Returns
 // ErrNotFound when id is unknown. Mirrors to the store.
 func (c *Catalog) SetPinned(ctx context.Context, id ID, pinned bool) error {
+	return c.update(ctx, id, func(info *Info) { info.Pinned = pinned })
+}
+
+// update applies fn to an inventory's info under c.mu and persists the
+// result after releasing it.
+func (c *Catalog) update(ctx context.Context, id ID, fn func(*Info)) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	inv, exists := c.inventories[id]
 	if !exists {
+		c.mu.Unlock()
+
 		return ErrNotFound
 	}
-	inv.info.Pinned = pinned
+	fn(&inv.info)
+	w := c.stageLocked(inv.info)
+	c.mu.Unlock()
 
-	return c.mirror(ctx, inv.info)
+	return c.persist(ctx, w)
 }
 
 // RecordAutoLoadFailure marks an auto-load attempt as failed, stamping
@@ -390,18 +465,12 @@ func (c *Catalog) SetPinned(ctx context.Context, id ID, pinned bool) error {
 // gates the next auto-load attempt. Pass time.Time{} for failedAt if the
 // caller doesn't have a meaningful timestamp (legacy callers).
 func (c *Catalog) RecordAutoLoadFailure(ctx context.Context, id ID, errStr string, failedAt, retryAt time.Time) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	inv, exists := c.inventories[id]
-	if !exists {
-		return ErrNotFound
-	}
-	inv.info.AutoLoadFailureCount++
-	inv.info.AutoLoadBackoffUntil = retryAt
-	inv.info.LastAutoLoadFailedAt = failedAt
-	inv.info.Error = errStr
-
-	return c.mirror(ctx, inv.info)
+	return c.update(ctx, id, func(info *Info) {
+		info.AutoLoadFailureCount++
+		info.AutoLoadBackoffUntil = retryAt
+		info.LastAutoLoadFailedAt = failedAt
+		info.Error = errStr
+	})
 }
 
 // touchedInfo returns inv.info with LastAccessedAt overlaid from the
@@ -468,9 +537,9 @@ func (c *Catalog) List() []Info {
 // states, indexDir is ignored.
 func (c *Catalog) Hydrate(ctx context.Context, info Info, indexDir string) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if _, exists := c.inventories[info.ID]; exists {
+		c.mu.Unlock()
+
 		return ErrAlreadyExists
 	}
 	mi := &managedInventory{info: info}
@@ -499,7 +568,9 @@ func (c *Catalog) Hydrate(ctx context.Context, info Info, indexDir string) error
 		}
 	}
 	c.inventories[info.ID] = mi
-	_ = c.mirror(ctx, mi.info)
+	w := c.stageLocked(mi.info)
+	c.mu.Unlock()
+	_ = c.persist(ctx, w)
 
 	return nil
 }
@@ -607,15 +678,13 @@ func (c *Catalog) Remove(ctx context.Context, id ID) error {
 		return ErrNotFound
 	}
 	delete(c.inventories, id)
-	_ = c.mirrorDelete(ctx, id)
+	old := inv.index
+	inv.index = nil
+	w := c.stageDeleteLocked(id)
 	c.mu.Unlock()
+	_ = c.persist(ctx, w)
 
-	inv.mu.Lock()
-	defer inv.mu.Unlock()
-	if inv.index != nil {
-		inv.index.Close()
-		inv.index = nil
-	}
+	closeDrained(inv, old)
 
 	return nil
 }
@@ -635,7 +704,6 @@ func (c *Catalog) Close() error {
 			if err := inv.index.Close(); err != nil && firstErr == nil {
 				firstErr = err
 			}
-			inv.index = nil
 		}
 		inv.mu.Unlock()
 	}
