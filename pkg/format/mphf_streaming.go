@@ -150,9 +150,7 @@ func (b *StreamingMPHFBuilder) Add(prefix string, pos uint64) error {
 	}
 
 	// Write prefix to temp file with length prefix.
-	var lenBuf [4]byte
-	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(prefix)))
-	if _, err := b.tempWriter.Write(lenBuf[:]); err != nil {
+	if err := putU32(b.tempWriter, uint32(len(prefix))); err != nil {
 		return fmt.Errorf("write prefix length: %w", err)
 	}
 	if _, err := b.tempWriter.WriteString(prefix); err != nil {
@@ -245,87 +243,27 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	}
 
 	n := int(b.count)
-	pairs, seed, err := b.uniqueKeyHashes(n)
-	if err != nil {
-		return err
-	}
-
-	// Build MPHF with gamma=2.0 and ReverseMap for fast position lookup
-	log.Debug().
-		Uint64("hash_count", b.count).
-		Msg("MPHF: calling bbhash.New with ReverseMap")
-
 	bbhashStart := time.Now()
-	const bbhashGamma = 2.0
-	// bbhash's per-partition build runs concurrently via errgroup; the
-	// default partitions=1 leaves it serial. Pinning to NumCPU lets all
-	// cores work the N×4M-key partitions in parallel. bbhash internally
-	// caps at maxPartitions=255 (uint8 partition index).
-	mph, err := bbhash.New(b.hashes.Slice(),
-		bbhash.Gamma(bbhashGamma),
-		bbhash.Partitions(runtime.NumCPU()),
-		bbhash.WithReverseMap(),
-	)
-	if err != nil {
-		return fmt.Errorf("build MPHF: %w", err)
-	}
-	bbhashDuration := time.Since(bbhashStart)
-
-	log.Debug().
-		Dur("bbhash_ms", bbhashDuration).
-		Msg("MPHF: bbhash.New complete")
-
-	// Write MPHF to disk
-	mphPath := filepath.Join(outDir, MPHFile)
-	mphFile, err := os.Create(mphPath)
-	if err != nil {
-		return fmt.Errorf("create mph file: %w", err)
-	}
-
-	data, err := mph.MarshalBinary()
-	if err != nil {
-		mphFile.Close()
-		os.Remove(mphPath)
-
-		return fmt.Errorf("marshal MPHF: %w", err)
-	}
-	if _, err := mphFile.Write(data); err != nil {
-		mphFile.Close()
-		os.Remove(mphPath)
-
-		return fmt.Errorf("write MPHF: %w", err)
-	}
-	mphFile.Close()
-
-	// Compute hash positions using ReverseMap (avoids expensive Find() calls)
-	log.Debug().Msg("MPHF: computing hash positions via ReverseMap")
-	posStart := time.Now()
-
-	hashPositions, err := computeHashPositions(mph, pairs)
+	mph, seed, err := b.buildBBHash()
 	if err != nil {
 		return err
 	}
+	log.Debug().Dur("bbhash_ms", time.Since(bbhashStart)).Msg("MPHF: bbhash.New complete")
 
-	log.Debug().
-		Dur("pos_ms", time.Since(posStart)).
-		Msg("MPHF: hash positions computed")
+	if err := writeMPHFile(filepath.Join(outDir, MPHFile), mph); err != nil {
+		return err
+	}
 
-	// Free hashes now — bbhash + lookup are done with them. The
-	// underlying mmap stays around until builder.Close.
+	mapStart := time.Now()
+	if err := writeCombinedMmap(outDir, n, mph, b.hashes.Slice(), b.fingerprints.Slice(), b.preorderPos.Slice(), seed); err != nil {
+		return err
+	}
+	log.Debug().Dur("write_ms", time.Since(mapStart)).Msg("MPHF: combined fp+pos written")
+
 	if err := b.hashes.Close(); err != nil {
 		return fmt.Errorf("close hashes: %w", err)
 	}
 	b.hashes = nil
-
-	log.Debug().Msg("MPHF: writing combined fp+pos via mmap")
-	mapStart := time.Now()
-	if err := writeCombinedMmap(outDir, n, hashPositions, b.fingerprints.Slice(), b.preorderPos.Slice(), seed); err != nil {
-		return err
-	}
-	log.Debug().
-		Dur("write_ms", time.Since(mapStart)).
-		Msg("MPHF: combined fp+pos written")
-
 	if err := b.fingerprints.Close(); err != nil {
 		return fmt.Errorf("close fingerprints: %w", err)
 	}
@@ -346,12 +284,17 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	return nil
 }
 
-// hashIdxPair packs a (hash, original-index) tuple for the sorted-array
-// lookup variant. The 12-byte layout (vs Go's ~24-byte map entry) keeps
-// the table inside L3 for one more decade of input scale.
-type hashIdxPair struct {
-	hash uint64
-	idx  uint32
+// writeMPHFile serialises the MPHF to path.
+func writeMPHFile(path string, mph *bbhash.BBHash2) error {
+	data, err := mph.MarshalBinary()
+	if err != nil {
+		return fmt.Errorf("marshal MPHF: %w", err)
+	}
+	if err := os.WriteFile(path, data, FilePerm); err != nil {
+		return fmt.Errorf("write MPHF: %w", err)
+	}
+
+	return nil
 }
 
 // maxMPHFSeedAttempts bounds the rehashes after a key-hash collision.
@@ -359,27 +302,27 @@ type hashIdxPair struct {
 // 1B prefixes), so eight in a row means something other than chance.
 const maxMPHFSeedAttempts = 8
 
-// uniqueKeyHashes returns the key hashes as (hash, idx) pairs sorted
-// by hash, plus the seed that made them distinct. Bbhash cannot build
-// over duplicate keys, so when two prefixes share a hash every key is
-// rehashed with the next seed; seed 0 (no collision) keeps the hashes
-// Add computed.
-//
-// Uint32 indices cap input at ~4B prefixes; the build pipeline tracks
-// uint64 counts elsewhere but no realistic MPHF input approaches 2^32.
-func (b *StreamingMPHFBuilder) uniqueKeyHashes(n int) ([]hashIdxPair, uint64, error) {
-	if uint64(n) > math.MaxUint32 {
-		return nil, 0, fmt.Errorf("%w: %d prefixes exceeds uint32 index range used by the sorted-array variant", ErrMPHFAmbiguousKey, n)
-	}
-	pairs := make([]hashIdxPair, n)
+// bbhashGamma trades MPHF size for build speed; 2.0 is bbhash's
+// recommended default.
+const bbhashGamma = 2.0
+
+// buildBBHash builds the MPHF over the frozen key hashes, straight from
+// their disk-backed array: no reverse map and no sorted copy, so the
+// finalize holds little beyond bbhash's own bit vectors. Bbhash cannot
+// place two equal keys; only when it fails are the hashes checked for a
+// duplicate (one sorted copy), and then every prefix is rehashed with a
+// new seed. Seed 0 is the hash Add computed.
+func (b *StreamingMPHFBuilder) buildBBHash() (*bbhash.BBHash2, uint64, error) {
 	var seed uint64
 	for attempt := 1; ; attempt++ {
-		for i, h := range b.hashes.Slice() {
-			pairs[i] = hashIdxPair{hash: h, idx: uint32(i)}
+		// bbhash's per-partition build runs concurrently; partitions =
+		// NumCPU keeps every core busy (bbhash caps it at 255).
+		mph, err := bbhash.New(b.hashes.Slice(), bbhash.Gamma(bbhashGamma), bbhash.Partitions(runtime.NumCPU()))
+		if err == nil {
+			return mph, seed, nil
 		}
-		parallelRadixSortByHashByte(pairs)
-		if !hasDuplicateHash(pairs) {
-			return pairs, seed, nil
+		if !hasDuplicateHash(b.hashes.Slice()) {
+			return nil, 0, fmt.Errorf("build MPHF: %w", err)
 		}
 		if attempt > maxMPHFSeedAttempts {
 			return nil, 0, fmt.Errorf("%w: duplicates remain after %d seeds", ErrMPHFKeyCollision, maxMPHFSeedAttempts)
@@ -392,11 +335,13 @@ func (b *StreamingMPHFBuilder) uniqueKeyHashes(n int) ([]hashIdxPair, uint64, er
 	}
 }
 
-// hasDuplicateHash reports whether two adjacent pairs of a hash-sorted
-// slice share a hash.
-func hasDuplicateHash(pairs []hashIdxPair) bool {
-	for i := 1; i < len(pairs); i++ {
-		if pairs[i].hash == pairs[i-1].hash {
+// hasDuplicateHash reports whether two key hashes are equal. It sorts a
+// copy, so it runs only after bbhash has already failed.
+func hasDuplicateHash(hashes []uint64) bool {
+	sorted := slices.Clone(hashes)
+	slices.Sort(sorted)
+	for i := 1; i < len(sorted); i++ {
+		if sorted[i] == sorted[i-1] {
 			return true
 		}
 	}
@@ -447,128 +392,6 @@ func (b *StreamingMPHFBuilder) rehashKeys(seed uint64) error {
 	}
 
 	return nil
-}
-
-// computeHashPositions maps each prefix index to its MPHF slot by
-// walking the slots in parallel across runtime.NumCPU() workers and
-// binary-searching each slot's key in the hash-sorted pairs. The flat
-// sorted array beats a map once the map would exceed L3.
-func computeHashPositions(mph *bbhash.BBHash2, pairs []hashIdxPair) ([]int, error) {
-	n := len(pairs)
-	hashPositions := make([]int, n)
-	numWorkers := mphfWorkerCount(n)
-	chunkSize := (n + numWorkers - 1) / numWorkers
-	errs := make([]error, numWorkers)
-	var wg sync.WaitGroup
-	for w := range numWorkers {
-		start := uint64(w*chunkSize) + 1
-		end := min(uint64((w+1)*chunkSize)+1, uint64(n)+1)
-		if start >= end {
-			continue
-		}
-		wg.Go(func() {
-			for mphPos := start; mphPos < end; mphPos++ {
-				key := mph.Key(mphPos)
-				if key == 0 {
-					errs[w] = fmt.Errorf("%w: Key(%d) returned 0", ErrMPHFAmbiguousKey, mphPos)
-
-					return
-				}
-				pos, ok := slices.BinarySearchFunc(pairs, key, func(p hashIdxPair, target uint64) int {
-					switch {
-					case p.hash < target:
-						return -1
-					case p.hash > target:
-						return 1
-					default:
-						return 0
-					}
-				})
-				if !ok {
-					errs[w] = fmt.Errorf("%w: Key(%d) returned %d", ErrMPHFUnknownHash, mphPos, key)
-
-					return
-				}
-				hashPositions[pairs[pos].idx] = int(mphPos - 1)
-			}
-		})
-	}
-	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return hashPositions, nil
-}
-
-// parallelRadixSortByHashByte sorts pairs by hash with one MSD pass on
-// the top byte (256 buckets) followed by parallel pdqsort within each
-// bucket. Beats single-threaded slices.SortFunc once n outgrows L3,
-// which is where the sort phase had been spending its time.
-func parallelRadixSortByHashByte(pairs []hashIdxPair) {
-	const (
-		radixBuckets  = 256
-		topByteShift  = 56
-		bucketIdxMask = radixBuckets - 1
-	)
-	n := len(pairs)
-	if n < 2 {
-		return
-	}
-
-	var counts [radixBuckets]int
-	for i := range pairs {
-		counts[(pairs[i].hash>>topByteShift)&bucketIdxMask]++
-	}
-	// Cumulative sum: starts[i] = sum of counts[0..i). Bucket bkt spans
-	// [starts[bkt], starts[bkt] + counts[bkt]).
-	var starts [radixBuckets]int
-	sum := 0
-	for i, c := range &counts {
-		starts[i] = sum
-		sum += c
-	}
-
-	scratch := make([]hashIdxPair, n)
-	cursors := starts
-	for i := range pairs {
-		b := (pairs[i].hash >> topByteShift) & bucketIdxMask
-		scratch[cursors[b]] = pairs[i]
-		cursors[b]++
-	}
-	copy(pairs, scratch)
-
-	cmp := func(a, b hashIdxPair) int {
-		switch {
-		case a.hash < b.hash:
-			return -1
-		case a.hash > b.hash:
-			return 1
-		default:
-			return 0
-		}
-	}
-
-	numWorkers := runtime.NumCPU()
-	sem := make(chan struct{}, numWorkers)
-	var wg sync.WaitGroup
-	for bkt, c := range &counts {
-		if c < 2 {
-			continue
-		}
-		s := starts[bkt]
-		e := s + c
-		sem <- struct{}{}
-		wg.Add(1)
-		go func(s, e int) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			slices.SortFunc(pairs[s:e], cmp)
-		}(s, e)
-	}
-	wg.Wait()
 }
 
 // mphfWorkerCount caps parallelism at the smaller of NumCPU and the
@@ -657,7 +480,7 @@ func (b *StreamingMPHFBuilder) writePrefixBlobDictionary(outDir string) error {
 		return fmt.Errorf("create dict prefix writer: %w", err)
 	}
 	err = b.forEachPrefix(func(i int, prefix []byte) error {
-		if err := writer.WritePrefix(string(prefix)); err != nil {
+		if err := writer.WritePrefix(prefix); err != nil {
 			return fmt.Errorf("write prefix %d to dict blob: %w", i, err)
 		}
 
@@ -700,9 +523,9 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	return nil
 }
 
-// writeCombinedMmap materialises mph_fp_pos.u64 by inverting the
-// permutation once, then having each worker fill a 1 MiB buffer in
-// slot order and pwrite it to a disjoint range of the output file.
+// writeCombinedMmap materialises mph_fp_pos.u64: it maps every slot to
+// its prefix (slotOwners), then each worker fills a 1 MiB buffer in slot
+// order and pwrites it to a disjoint range of the output file.
 //
 // The previous version mmap'd the file and scattered random writes
 // indexed by hashPositions. On EBS gp3 that hit ~3× write amplification
@@ -712,7 +535,7 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 // File layout: 20-byte header (count = 2N, width = 8) followed by
 // 2N×8 bytes of interleaved (fp, pos, fp, pos, …) data, then the 8-byte
 // key-hash seed.
-func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []uint64, seed uint64) error {
+func writeCombinedMmap(outDir string, n int, mph *bbhash.BBHash2, hashes, fps, poss []uint64, seed uint64) error {
 	if len(fps) != n || len(poss) != n {
 		return fmt.Errorf("%w: fps=%d poss=%d n=%d", errMPHFArrayLengthMismatch, len(fps), len(poss), n)
 	}
@@ -750,12 +573,11 @@ func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []ui
 		return nil
 	}
 
-	// invMap[slot] = source index. Concurrent pwrite to disjoint ranges
-	// is POSIX-safe; each worker writes its own [start,end) slot range.
-	// uint32 assumes n ≤ MaxUint32, enforced upstream.
-	invMap := make([]uint32, n)
-	for i, slot := range hashPositions {
-		invMap[slot] = uint32(i)
+	// Concurrent pwrite to disjoint ranges is POSIX-safe; each worker
+	// writes its own [start,end) slot range.
+	invMap, err := slotOwners(mph, hashes)
+	if err != nil {
+		return cleanup(err)
 	}
 
 	numWorkers := max(min(runtime.NumCPU(), n), 1)
@@ -791,6 +613,41 @@ func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []ui
 	}
 
 	return nil
+}
+
+// slotOwners returns, for every MPHF slot, the index of the prefix whose
+// key hash lands there, found with parallel Find calls. The MPHF is a
+// bijection, so each slot is written by exactly one worker.
+func slotOwners(mph *bbhash.BBHash2, hashes []uint64) ([]uint32, error) {
+	n := len(hashes)
+	if uint64(n) > math.MaxUint32 {
+		return nil, fmt.Errorf("%w: %d prefixes exceed the uint32 slot-owner index", ErrMPHFAmbiguousKey, n)
+	}
+	owners := make([]uint32, n)
+	numWorkers := mphfWorkerCount(n)
+	chunk := (n + numWorkers - 1) / numWorkers
+	errs := make([]error, numWorkers)
+	var wg sync.WaitGroup
+	for w := range numWorkers {
+		start, end := w*chunk, min((w+1)*chunk, n)
+		if start >= end {
+			continue
+		}
+		wg.Go(func() {
+			for i := start; i < end; i++ {
+				slot := mph.Find(hashes[i])
+				if slot == 0 || slot > uint64(n) {
+					errs[w] = fmt.Errorf("%w: Find returned %d for prefix %d", ErrMPHFAmbiguousKey, slot, i)
+
+					return
+				}
+				owners[slot-1] = uint32(i)
+			}
+		})
+	}
+	wg.Wait()
+
+	return owners, errors.Join(errs...)
 }
 
 // writeCombinedSlots fills slots [start, end) of the combined file in

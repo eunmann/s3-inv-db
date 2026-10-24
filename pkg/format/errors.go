@@ -23,14 +23,10 @@ var (
 	ErrMPHFLookupFailed = errors.New("MPHF lookup failed")
 	// ErrMPHFAmbiguousKey indicates the MPHF returned 0 (ambiguous sentinel) for an existing key.
 	ErrMPHFAmbiguousKey = errors.New("MPHF key returned sentinel zero")
-	// ErrMPHFUnknownHash indicates the MPHF returned a hash not present in the input set.
-	ErrMPHFUnknownHash = errors.New("MPHF returned unknown hash")
 	// ErrNoPrefixStorage indicates the MPHF has no prefix storage attached.
 	ErrNoPrefixStorage = errors.New("no prefix storage loaded")
 	// ErrLookupWrongPos indicates a verification lookup returned an unexpected position.
 	ErrLookupWrongPos = errors.New("lookup returned wrong pos")
 	// ErrMPHFKeyCollision indicates distinct prefixes kept sharing an MPHF key hash under every seed tried.
 	ErrMPHFKeyCollision = errors.New("MPHF key hash collision")
-	// ErrHashCollision indicates two distinct segments hashed to the same value.
-	ErrHashCollision = errors.New("hash collision")
 )

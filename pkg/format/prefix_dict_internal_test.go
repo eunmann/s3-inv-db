@@ -41,7 +41,7 @@ func TestPrefixSegmentInternerBasic(t *testing.T) {
 		t.Fatalf("NewPrefixSegmentInterner failed: %v", err)
 	}
 
-	id1, err := interner.Intern("data")
+	id1, err := interner.Intern([]byte("data"))
 	if err != nil {
 		t.Fatalf("Intern(data) failed: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestPrefixSegmentInternerBasic(t *testing.T) {
 		t.Errorf("first ID = %d, want 0", id1)
 	}
 
-	id2, err := interner.Intern("2024")
+	id2, err := interner.Intern([]byte("2024"))
 	if err != nil {
 		t.Fatalf("Intern(2024) failed: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestPrefixSegmentInternerBasic(t *testing.T) {
 		t.Errorf("second ID = %d, want 1", id2)
 	}
 
-	id3, err := interner.Intern("data")
+	id3, err := interner.Intern([]byte("data"))
 	if err != nil {
 		t.Fatalf("Intern(data) second time failed: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestPrefixDictionaryRoundTrip(t *testing.T) {
 
 	segments := []string{"", "data", "2024", "01", "bucket"}
 	for _, seg := range segments {
-		if _, err := interner.Intern(seg); err != nil {
+		if _, err := interner.Intern([]byte(seg)); err != nil {
 			t.Fatalf("Intern(%q) failed: %v", seg, err)
 		}
 	}
@@ -134,7 +134,7 @@ func TestDictPrefixWriterReader(t *testing.T) {
 	}
 
 	for _, p := range prefixes {
-		if err := writer.WritePrefix(p); err != nil {
+		if err := writer.WritePrefix([]byte(p)); err != nil {
 			t.Fatalf("WritePrefix(%q) failed: %v", p, err)
 		}
 	}
@@ -176,7 +176,7 @@ func TestDictPrefixUnsafeGet(t *testing.T) {
 
 	prefixes := []string{"a/b/c/", "x/y/", "test/"}
 	for _, p := range prefixes {
-		if err := writer.WritePrefix(p); err != nil {
+		if err := writer.WritePrefix([]byte(p)); err != nil {
 			t.Fatalf("WritePrefix(%q) failed: %v", p, err)
 		}
 	}
@@ -238,7 +238,7 @@ func TestDictPrefixUnicode(t *testing.T) {
 	}
 
 	for _, p := range prefixes {
-		if err := writer.WritePrefix(p); err != nil {
+		if err := writer.WritePrefix([]byte(p)); err != nil {
 			t.Fatalf("WritePrefix(%q) failed: %v", p, err)
 		}
 	}
@@ -283,7 +283,7 @@ func TestDictPrefixDeduplication(t *testing.T) {
 	}
 
 	for _, p := range prefixes {
-		if err := writer.WritePrefix(p); err != nil {
+		if err := writer.WritePrefix([]byte(p)); err != nil {
 			t.Fatalf("WritePrefix(%q) failed: %v", p, err)
 		}
 	}
@@ -534,7 +534,7 @@ func TestPreloadedPrefixCache(t *testing.T) {
 
 	segments := []string{"", "data", "2024", "01", "bucket", "日本語"}
 	for _, seg := range segments {
-		if _, err := interner.Intern(seg); err != nil {
+		if _, err := interner.Intern([]byte(seg)); err != nil {
 			t.Fatalf("Intern(%q) failed: %v", seg, err)
 		}
 	}
