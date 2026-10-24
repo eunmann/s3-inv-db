@@ -9,7 +9,7 @@ const (
 	// Version is the current format version. Readers accept only this
 	// version; an index written by another version is rebuilt. 3: the
 	// MPHF fp/pos file ends with the key-hash seed word.
-	Version uint32 = 3
+	Version uint32 = 4
 )
 
 // Header is the common header for all columnar files.

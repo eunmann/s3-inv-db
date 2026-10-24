@@ -214,4 +214,4 @@ The stride is recorded in the file header's `Width` field; readers cross-check `
 
 ## Versioning
 
-The format version in file headers lets a reader refuse files it would mis-decode. Version 3 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 4 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
