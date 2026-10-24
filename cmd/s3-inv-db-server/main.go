@@ -16,6 +16,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/appconfig"
 	"github.com/eunmann/s3-inv-db/internal/autoload"
+	"github.com/eunmann/s3-inv-db/internal/buildinfo"
 	"github.com/eunmann/s3-inv-db/internal/server"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/eunmann/s3-inv-db/pkg/sysmem"
@@ -50,6 +51,7 @@ func main() {
 // defineFlags before flag.Parse; resolveRuntimeOptions merges them with
 // file config into the final server.RuntimeOptions.
 type serverFlags struct {
+	version           *bool
 	configPath        *string
 	addr              *string
 	verbose           *bool
@@ -69,6 +71,7 @@ type serverFlags struct {
 
 func defineFlags(fs *flag.FlagSet) *serverFlags {
 	return &serverFlags{
+		version:           fs.Bool("version", false, "print the version and exit"),
 		configPath:        fs.String("config", "", "path to JSON config file (overridden by explicit flags)"),
 		addr:              fs.String("addr", ":8080", "HTTP server address"),
 		verbose:           fs.Bool("verbose", false, "enable debug logging"),
@@ -130,6 +133,11 @@ func run() error {
 	f := defineFlags(fs)
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
+	}
+	if *f.version {
+		fmt.Println(buildinfo.Get().Line("s3-inv-db-server"))
+
+		return nil
 	}
 
 	fileCfg, err := appconfig.Load(*f.configPath)

@@ -16,9 +16,21 @@ COVER_MIN := 67.0
 
 COMPOSE := docker compose -f infra/docker-compose.yml
 
+# Version metadata stamped into every binary (see internal/buildinfo).
+# The release workflow overrides all three. DATE is the commit time, not
+# the build time, so rebuilding a commit gives the same binary. The go
+# command's own VCS stamp is not enough: it is absent in git worktrees.
+VERSION ?= $(shell git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null)
+COMMIT  ?= $(shell git describe --always --dirty --abbrev=40 --exclude='*' 2>/dev/null)
+DATE    ?= $(shell TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd 2>/dev/null)
+BUILDINFO := github.com/eunmann/s3-inv-db/internal/buildinfo
+LDFLAGS := -X $(BUILDINFO).version=$(VERSION) -X $(BUILDINFO).commit=$(COMMIT) -X $(BUILDINFO).date=$(DATE)
+GO_BUILD := go build -trimpath -ldflags "$(LDFLAGS)"
+
 # Tailwind CLI: use the standalone binary release so we don't pull in
 # Node.js for what's essentially a single tool. The binary is downloaded
-# on first use and cached under bin/. Detect OS/arch automatically.
+# on first use, checked against the pinned sha256 (the release's
+# sha256sums.txt) and cached under bin/. Detect OS/arch automatically.
 TAILWIND_VERSION := v3.4.17
 UNAME_S := $(shell uname -s | tr '[:upper:]' '[:lower:]')
 UNAME_M := $(shell uname -m)
@@ -26,6 +38,12 @@ TAILWIND_OS := $(if $(filter darwin,$(UNAME_S)),macos,linux)
 TAILWIND_ARCH := $(if $(filter arm64 aarch64,$(UNAME_M)),arm64,x64)
 TAILWIND_BIN := bin/tailwindcss-$(TAILWIND_VERSION)
 TAILWIND_URL := https://github.com/tailwindlabs/tailwindcss/releases/download/$(TAILWIND_VERSION)/tailwindcss-$(TAILWIND_OS)-$(TAILWIND_ARCH)
+TAILWIND_SHA256_linux-x64   := 7d24f7fa191d2193b78cd5f5a42a6093e14409521908529f42d80b11fde1f1d4
+TAILWIND_SHA256_linux-arm64 := 69b1378b8133192d7d2feb12a116fa12d035594f58db3eff215879e4ad8cf39b
+TAILWIND_SHA256_macos-x64   := 6cbdad74be776c087ffa5e9a057512c54898f9fe8828d3362212dfe32fc933a3
+TAILWIND_SHA256_macos-arm64 := a1d0c7985759accca0bf12e51ac1dcbf0f6cf2fffb62e6e0f62d091c477a10a3
+TAILWIND_SHA256 := $(TAILWIND_SHA256_$(TAILWIND_OS)-$(TAILWIND_ARCH))
+SHA256SUM := $(if $(filter darwin,$(UNAME_S)),shasum -a 256,sha256sum)
 
 CSS_INPUT  := internal/templates/styles/input.css
 CSS_OUTPUT := internal/templates/styles/tailwind.css
@@ -39,8 +57,9 @@ help: ## List targets
 all: css build server ## Build the CLI and server (regenerates CSS)
 
 # Build Tailwind CSS from input.css + the project's templates. The
-# generated tailwind.css is checked into the repo so production builds
-# (e.g. infra/Dockerfile) don't need to fetch the CLI.
+# generated tailwind.css is checked into the repo (PR Validation runs
+# css-check) so production builds (infra/Dockerfile, the release
+# workflow's `make -o css`) never fetch or run the CLI.
 css: $(CSS_OUTPUT) ## Regenerate tailwind.css from the templates
 
 css-check: ## Fail if the checked-in tailwind.css is stale
@@ -52,18 +71,19 @@ $(CSS_OUTPUT): $(CSS_INPUT) $(CSS_CONFIG) $(TEMPLATES) $(HELPERS) | $(TAILWIND_B
 
 $(TAILWIND_BIN):
 	@mkdir -p bin
-	curl -sSL -o $@.tmp "$(TAILWIND_URL)"
+	curl -fsSL -o $@.tmp "$(TAILWIND_URL)"
+	echo "$(TAILWIND_SHA256)  $@.tmp" | $(SHA256SUM) -c - || { rm -f $@.tmp; exit 1; }
 	chmod +x $@.tmp
 	mv $@.tmp $@
 
 build: ## Build bin/s3-inv-db
-	go build -o bin/s3-inv-db ./cmd/s3-inv-db
+	$(GO_BUILD) -o bin/s3-inv-db ./cmd/s3-inv-db
 
 server: css ## Build bin/s3-inv-db-server
-	go build -o bin/s3-inv-db-server ./cmd/s3-inv-db-server
+	$(GO_BUILD) -o bin/s3-inv-db-server ./cmd/s3-inv-db-server
 
 seeder: ## Build bin/s3-inv-db-seeder
-	go build -o bin/s3-inv-db-seeder ./cmd/s3-inv-db-seeder
+	$(GO_BUILD) -o bin/s3-inv-db-seeder ./cmd/s3-inv-db-seeder
 
 test-unit: ## Host unit tests (no Docker, no network)
 	go test ./...
@@ -184,7 +204,7 @@ compose-preflight:
 	fi
 
 # Build both dev and prod images.
-docker-build: ## Build dev + prod images
+docker-build: css ## Build dev + prod images
 	$(COMPOSE) --profile dev --profile prod build
 
 # Hot-reload server (port 8080). The only supported dev workflow — no host
@@ -204,7 +224,7 @@ dev-reset: ## Wipe the dev server's state volume
 	@echo "dev state cleared — run 'make dev' to start fresh"
 
 # Slim production image (port 8081). Override with S3INV_PROD_PORT=...
-docker-prod: compose-preflight ## Prod image on :8081
+docker-prod: css compose-preflight ## Prod image on :8081
 	$(COMPOSE) --profile prod up --build
 
 # One-shot seeder: writes to ./seed-data on the host.

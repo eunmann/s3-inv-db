@@ -20,7 +20,7 @@ description: "Reference: Testing conventions, lint rules, and make targets. Cons
 
 ## Concurrency
 
-- For anything touching shared state (the `Manager`, in-flight `Load`, channel-based code), add a `-race`-targeted stress test. See `TestManagerConcurrent_LoadRemoveRace` in `internal/inventory/manager_test.go`.
+- For anything touching shared state (the inventory `Catalog`, in-flight `Load`, channel-based code), add a `-race`-targeted stress test. See `TestManagerConcurrent_LoadRemoveRace` in `internal/inventory/manager_test.go`.
 - Run `make test-race` before declaring concurrency-related work done.
 
 ## HTTP handlers

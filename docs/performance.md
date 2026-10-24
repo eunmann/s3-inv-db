@@ -12,14 +12,16 @@ prefixes with consistent sub-microsecond warm-cache lookups.
 
 | Operation | Complexity | Typical warm latency |
 |-----------|------------|---------------------|
-| `Lookup` | O(1) | low single-digit µs |
-| `StatsForPrefix` | O(1) | low single-digit µs |
-| `TierBreakdown` | O(tiers) | low single-digit µs |
+| `Lookup` | O(1) | sub-µs |
+| `StatsForPrefix` | O(1) | sub-µs (~160 ns) |
+| `TierBreakdown` | O(tiers) | sub-µs (~70 ns) |
 | `DescendantsAtDepth` | O(log n + k) | µs–tens of µs (depends on k) |
 
-Numbers come from `BenchmarkGridQuery` on a warm mmap; cold-cache
-numbers are higher by roughly one page-fault per file touched. Run
-the suite yourself:
+The figures in parentheses come from `BenchmarkGateStatsForPrefix` and
+`BenchmarkGateTierBreakdown` on the 1M-object gate fixture (2.37M
+prefixes) on a warm mmap; `BenchmarkGridQuery` sweeps index sizes.
+Cold-cache numbers are higher by roughly one page-fault per file
+touched. Run the suite yourself:
 
 ```bash
 go test -bench=BenchmarkGridQuery -benchtime=2s -run=^$ ./pkg/indexread/
@@ -68,7 +70,8 @@ s3-inv-db build --max-depth 5 ...     # limit prefix count
 ```
 
 Worker counts and S3 concurrency derive from `runtime.NumCPU()`:
-parser + download workers scale to `min(NumCPU, manifest_files)`, each
+parser + download workers scale to `min(NumCPU, manifest_files)` (at
+least 2), each
 download fetches up to `min(max(NumCPU, 4), 16)` 16 MiB parts at once,
 and GETs in flight across all downloads are capped at
 `min(max(4 × NumCPU, 32), 256)`. The same binary scales from a laptop
@@ -89,25 +92,32 @@ Query-time RAM is just the OS page cache plus iterator stack frames;
 
 ## Index size
 
-Each prefix occupies a fixed stride per file regardless of how full
-its data is, so total size scales linearly with prefix count:
+Every per-prefix file except the sparse tier rows has a fixed stride
+per index, so total size scales linearly with prefix count. Strides adapt to the index: each
+`core_stats.bin` field and each offset or position array is stored at
+the narrowest byte width its largest value needs, and tier stats hold
+only the tiers present (sparse when that is smaller). Layouts:
+[index-format.md](index-format.md).
 
-- `core_stats.bin`: **28 B/prefix** (`object_count + total_bytes + subtree_end + depth + max_depth_in_subtree`).
-- `tier_stats/tier_stats_row.bin`: **`presentTiers × 16` B/prefix** —
-  e.g. an index with 5 of 13 tiers populated is 80 B/prefix (vs the
-  208 B/prefix upper bound at all 13). The build writes a dense
-  208 B/prefix intermediate and finalize repacks it to the packed
-  stride.
-- Prefix dictionary (`prefix_dict.*`): dictionary-encoded, dominated
-  by the unique-segment blob plus 4 B per segment ID per prefix plus
-  8 B per offset.
-- MPHF (`mph.bin` + `mph_fp_pos.u64`): ~16.5 B/prefix (BBHash at
-  ~3.7 bits/prefix with its rank directory, plus the interleaved
-  fingerprint/position pair).
-- Depth index: ~8 B/prefix.
+Measured on the S3-realistic 1M-object fixture
+(`benchutil.S3RealisticConfig(1_000_000)`, built through
+`extsort.NewAggregator` → `Drain` → `SortPrefixRows` → `IndexBuilder` the way
+`pkg/indexread`'s `BenchmarkGate*` fixture is): 2,374,251 prefixes,
+max depth 7, 11 of 13 tiers present.
 
-A 1M-prefix sample comes out to roughly **300 B/prefix on disk**
-end-to-end. Per-file layout: [index-format.md](index-format.md).
+| Component | Files | B/prefix |
+|---|---|---|
+| Core stats | `core_stats.bin` (15-byte rows: 3 + 7 + 3 + 1 + 1) | 15.0 |
+| Tier stats | `tier_stats/tier_stats_sparse.bin` + `.off.u64` (sparse; dense would be 11 × 16 = 176) | 23.9 |
+| MPHF | `mph_fp_pos.u64` (16) + `mph.bin` (BBHash, ~3.3 bits) | 16.4 |
+| Prefix dictionary | `prefix_dict.ids.u32` (~5 IDs × 2 B) + `prefix_dict.prefix_off.u64` (3 B) + segment blob | 13.2 |
+| Depth index | `depth_positions.u64` (3 B) + `depth_offsets.u64` | 3.0 |
+| **Total** | including `manifest.json` and `tiers.json` | **71.5** |
+
+The 16 B fingerprint/position slot is the same for every index. Tier
+stats depend on how many tiers each prefix holds. The other
+components grow by a byte per field as counts, sizes and prefix
+totals cross powers of 256.
 
 ## Server: sizing the disk budget
 
@@ -116,11 +126,16 @@ the server will hold for materialised indexes.
 `BenchmarkLoadDiskPeak` in `pkg/extsort` measures the final index
 size and scratch peak for synthetic loads:
 
-| Synthetic objects | Final index bytes | Scratch peak |
+| Synthetic objects | Final index bytes | Run-file scratch |
 |---|---|---|
-| 10 K | ~5 MB | ~7 MB |
-| 100 K | ~46 MB | ~69 MB |
-| 500 K | ~213 MB | ~318 MB |
+| 10 K | ~2.1 MB | ~0.6 MB |
+| 100 K | ~18.6 MB | ~5.6 MB |
+| 500 K | ~86.7 MB | ~26 MB |
+
+The scratch column is the compressed run files only, sampled before
+the merge. The index build also keeps temporary files in the same
+temp directory until it finishes (the MPHF builder alone holds three
+8-byte arrays per prefix), which the table does not count.
 
 These scale near-linearly with prefix count, not object count. The
 planner applies a fixed `0.30` multiplier to a manifest's compressed

@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/buildinfo"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
@@ -44,9 +45,15 @@ func run() error {
 	seed := fs.Int64("seed", 0, "random seed (0 = use default seed)")
 	verbose := fs.Bool("verbose", false, "enable debug logging")
 	prettyLogs := fs.Bool("pretty-logs", false, "use human-friendly console output")
+	version := fs.Bool("version", false, "print the version and exit")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
+	}
+	if *version {
+		fmt.Println(buildinfo.Get().Line("s3-inv-db-seeder"))
+
+		return nil
 	}
 
 	logger := logging.NewLogger(logging.Options{Debug: *verbose, Human: *prettyLogs})

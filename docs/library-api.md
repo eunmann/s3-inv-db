@@ -33,7 +33,10 @@ fmt.Printf("%d objects, %d bytes\n", stats.ObjectCount, stats.TotalBytes)
 
 ## Method surface (groups)
 
-- **Lookup**: `Lookup`, `StatsForPrefix`, `Stats`, `PrefixString`.
+- **Lookup**: `Lookup`, `StatsForPrefix`, `Stats`, `PrefixString`,
+  `ChildSegment` (the last segment of the prefix at a position, without
+  the trailing slash, for listing labels without building the full
+  string).
 - **Tree navigation**: `Depth`, `SubtreeEnd`, `MaxDepthInSubtree`,
   `Count`, `MaxDepth`.
 - **Descendants**: `DescendantsAtDepth`, `DescendantsAtDepthFiltered`
@@ -53,13 +56,17 @@ fmt.Printf("%d objects, %d bytes\n", stats.ObjectCount, stats.TotalBytes)
   reads. Call `Close` exactly once, after all readers have stopped.
 - **Misses are not errors**: `Lookup` and `StatsForPrefix` return
   `ok=false` for an absent prefix. `Stats` on an out-of-range position
-  returns the zero `Stats{}`. `DescendantsAt*` returns `(nil, nil)`
-  and `DescendantsPage` an empty page for out-of-bounds inputs. Only `PrefixString` and `Open` surface
-  errors.
+  returns the zero `Stats{}`. `DescendantsAt*` and `Top*` return
+  `(nil, nil)` and `DescendantsPage` an empty page for out-of-bounds
+  inputs. `Open`, `Close` and `PrefixString` are the methods that
+  surface errors in normal use; the `error` from `DescendantsAt*`,
+  `DescendantsPage` and `Top*` is non-nil only when the depth index on
+  disk is malformed.
 - **Subtree end is inclusive**: `SubtreeEnd(pos)` is the last
   descendant's position (the closed interval `[pos, SubtreeEnd(pos)]`),
   not a half-open upper bound. See
   [index-format.md](index-format.md#preorder-positions).
-- **Tier presence is per-index**: `HasTierData` is false when no
-  storage-class column was written for this index (very small or
-  legacy builds).
+- **Root and tier presence**: position 0 is the root prefix `""`.
+  `HasTierData` is false only for an index with no prefixes; a build
+  over an inventory without a storage-class column counts every object
+  as `STANDARD`.

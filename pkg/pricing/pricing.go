@@ -136,7 +136,6 @@ func TierHasGlacierOverhead(tier string) bool {
 	return tierCapabilities[tier]&flagGlacierOverhead != 0
 }
 
-// DefaultUSEast1Prices returns the default pricing for US East 1 region (as of 2025).
 // DefaultUSEast1PerGB is the canonical PerGBMonth map. Kept as a
 // package var so DefaultUSEast1Prices can clone it instead of
 // allocating a fresh map literal on every call.

@@ -1,0 +1,11 @@
+# Categories for the generated notes of a GitHub release (the release
+# workflow passes --generate-notes). A PR lands in the first category it
+# matches; "*" also matches unlabeled PRs.
+changelog:
+  categories:
+    - title: Changes
+      labels: ["*"]
+      exclude:
+        labels: [dependencies]
+    - title: Dependency updates
+      labels: [dependencies]
