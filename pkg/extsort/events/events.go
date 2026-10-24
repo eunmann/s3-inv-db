@@ -177,7 +177,13 @@ func (b *Bus) Subscribe(buffer int, stages ...Stage) *Subscription {
 		}
 	}
 	b.mu.Lock()
-	b.subs = append(b.subs, sub)
+	if b.closed.Load() {
+		// Subscribing to a closed bus yields an already-closed channel,
+		// so a `range sub.C` loop ends instead of blocking forever.
+		close(ch)
+	} else {
+		b.subs = append(b.subs, sub)
+	}
 	b.mu.Unlock()
 
 	return sub

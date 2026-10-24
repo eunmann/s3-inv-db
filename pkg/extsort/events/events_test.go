@@ -235,3 +235,18 @@ func BenchmarkBus_Publish(b *testing.B) {
 		}
 	})
 }
+
+func TestBus_SubscribeAfterCloseReturnsClosedChannel(t *testing.T) {
+	b := events.NewBus()
+	b.Close()
+	sub := b.Subscribe(1)
+	select {
+	case _, ok := <-sub.C:
+		if ok {
+			t.Fatal("received an event from a closed bus")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subscription to a closed bus never closed its channel")
+	}
+	sub.Cancel() // must not double-close
+}
