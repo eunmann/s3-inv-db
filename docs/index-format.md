@@ -52,7 +52,7 @@ All `.u64` files share a common header (the per-file `Header` struct in `pkg/for
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | Magic | `0x53334944` ("S3ID" in ASCII) |
-| 4 | 4 | Version | Format version (currently `2`; `3` only on a seeded `mph_fp_pos.u64`, see [MPHF](#mphf-minimal-perfect-hash-function)) |
+| 4 | 4 | Version | Format version (currently `3`) |
 | 8 | 8 | Count | Number of rows |
 | 16 | 4 | Width | Row stride in bytes |
 
@@ -111,7 +111,7 @@ The MPHF provides O(1) prefix-to-position lookups using [BBHash](https://github.
 | File | Description |
 |------|-------------|
 | `mph.bin` | Serialized BBHash structure |
-| `mph_fp_pos.u64` | Interleaved (fingerprint, position) pairs — 16 bytes per slot, fingerprint first; Version 3 appends the 8-byte key seed |
+| `mph_fp_pos.u64` | Interleaved (fingerprint, position) pairs — 16 bytes per slot, fingerprint first, then the 8-byte key seed |
 
 The fingerprint+position pair is combined into one file so a lookup is a single mmap read instead of two.
 
@@ -126,7 +126,7 @@ A non-member query is misreported only if it lands on an occupied slot and its 6
 
 ### Key Seed
 
-BBHash needs distinct keys. If two prefixes share a 64-bit key hash, the builder rehashes every prefix with a new non-zero seed (up to 8 tries). Seed 0 is plain FNV-1a. The seed is stored as one 8-byte word after the slots in `mph_fp_pos.u64`, and readers hash queries with it.
+BBHash needs distinct keys. If two prefixes share a 64-bit key hash, the builder rehashes every prefix with a new non-zero seed (up to 8 tries). Seed 0 is plain FNV-1a. The seed is always stored, even when it is 0, as one 8-byte word after the slots in `mph_fp_pos.u64`, and readers hash queries with it.
 
 ## Prefix Strings
 
