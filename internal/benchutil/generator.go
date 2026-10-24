@@ -154,7 +154,11 @@ func S3DeepPyramidConfig(numObjects int) GeneratorConfig {
 // Generator generates synthetic S3 inventory data.
 type Generator struct {
 	rng *rand.Rand
-	cfg GeneratorConfig
+	// tierIDs are cfg.TierDistribution's keys in ID order: map iteration
+	// order is random, which would make a seeded generator assign
+	// different tiers on every run.
+	tierIDs []tiers.ID
+	cfg     GeneratorConfig
 }
 
 // NewGenerator creates a new data generator.
@@ -165,8 +169,9 @@ func NewGenerator(cfg GeneratorConfig) *Generator {
 	}
 
 	return &Generator{
-		cfg: cfg,
-		rng: rand.New(rand.NewSource(seed)),
+		cfg:     cfg,
+		rng:     rand.New(rand.NewSource(seed)),
+		tierIDs: slices.Sorted(maps.Keys(cfg.TierDistribution)),
 	}
 }
 
@@ -369,9 +374,7 @@ func (g *Generator) generateTier() tiers.ID {
 	r := g.rng.Float64()
 	cumulative := 0.0
 
-	// Walk tiers in ID order: map iteration order is random, which would
-	// make a seeded generator assign different tiers on every run.
-	for _, tierID := range slices.Sorted(maps.Keys(g.cfg.TierDistribution)) {
+	for _, tierID := range g.tierIDs {
 		cumulative += g.cfg.TierDistribution[tierID]
 		if r < cumulative {
 			return tierID
