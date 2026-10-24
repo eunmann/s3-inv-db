@@ -87,9 +87,9 @@ func BenchmarkRunFileReadCompressed(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
+		var row extsort.PrefixRow
 		for {
-			_, err := r.Read()
-			if err != nil {
+			if err := r.ReadInto(&row); err != nil {
 				break
 			}
 		}

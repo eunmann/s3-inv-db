@@ -330,29 +330,12 @@ func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, e
 	}, nil
 }
 
-// Read reads the next PrefixRow from the compressed run file.
-// Returns io.EOF when all records have been read.
-func (r *CompressedRunReader) Read() (*PrefixRow, error) {
-	if r.read >= r.count {
-		return nil, io.EOF
-	}
-
-	row, err := readPrefixRowRecord(r.reader, &r.buf)
-	if err != nil {
-		return nil, err
-	}
-
-	r.read++
-
-	return row, nil
-}
-
 // ReadInto reads the next row into the caller-owned PrefixRow.
 func (r *CompressedRunReader) ReadInto(into *PrefixRow) error {
 	if r.read >= r.count {
 		return io.EOF
 	}
-	if _, err := readPrefixRowRecordInto(r.reader, &r.buf, into); err != nil {
+	if err := readPrefixRowRecordInto(r.reader, &r.buf, into); err != nil {
 		return err
 	}
 	r.read++

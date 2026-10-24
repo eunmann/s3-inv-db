@@ -65,13 +65,6 @@ func (r *PrefixRow) Merge(other *PrefixRow) {
 	}
 }
 
-// readPrefixRowRecord reads a single PrefixRow from a reader using the common binary format.
-// The buf pointer is used for temporary storage and may be resized if needed.
-// Returns io.EOF when the source is exhausted.
-func readPrefixRowRecord(reader io.Reader, buf *[]byte) (*PrefixRow, error) {
-	return readPrefixRowRecordInto(reader, buf, nil)
-}
-
 // recordLenBytes is the uint32 prefix-length header of a run record;
 // recordScratchMin is the smallest scratch buffer worth allocating.
 const (
@@ -79,9 +72,10 @@ const (
 	recordScratchMin = 512
 )
 
-// readPrefixRowRecordInto is like readPrefixRowRecord but reuses the given
-// PrefixRow when non-nil, keeping the merge loop free of row allocations.
-func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) (*PrefixRow, error) {
+// readPrefixRowRecordInto reads one run record into row, keeping the
+// merge loop free of row allocations. Buf is scratch space, grown as
+// needed. Returns io.EOF when the source is exhausted.
+func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) error {
 	// The length is read into the reusable scratch buffer: a local array
 	// passed to an io.Reader escapes, one allocation per row.
 	if len(*buf) < recordLenBytes {
@@ -90,10 +84,10 @@ func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) (*Pr
 	lenBuf := (*buf)[:recordLenBytes]
 	if _, err := io.ReadFull(reader, lenBuf); err != nil {
 		if errors.Is(err, io.EOF) {
-			return nil, io.EOF
+			return io.EOF
 		}
 
-		return nil, fmt.Errorf("read prefix length: %w", err)
+		return fmt.Errorf("read prefix length: %w", err)
 	}
 	prefixLen := int(binary.LittleEndian.Uint32(lenBuf))
 
@@ -105,14 +99,10 @@ func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) (*Pr
 	}
 
 	if _, err := io.ReadFull(reader, (*buf)[:recordSize]); err != nil {
-		return nil, fmt.Errorf("read record: %w", err)
+		return fmt.Errorf("read record: %w", err)
 	}
 
-	if row == nil {
-		row = &PrefixRow{}
-	} else {
-		row.Reset()
-	}
+	row.Reset()
 	offset := 0
 
 	row.Prefix = string((*buf)[offset : offset+prefixLen])
@@ -137,7 +127,7 @@ func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) (*Pr
 		offset += 8
 	}
 
-	return row, nil
+	return nil
 }
 
 // SortPrefixRows sorts a slice of PrefixRows by prefix in lexicographic order.

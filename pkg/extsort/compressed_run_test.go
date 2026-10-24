@@ -12,6 +12,23 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
+// readAllRows reads every remaining row of reader, copying each.
+func readAllRows(t *testing.T, reader *extsort.CompressedRunReader) []extsort.PrefixRow {
+	t.Helper()
+	var rows []extsort.PrefixRow
+	for {
+		var row extsort.PrefixRow
+		err := reader.ReadInto(&row)
+		if errors.Is(err, io.EOF) {
+			return rows
+		}
+		if err != nil {
+			t.Fatalf("read row %d: %v", len(rows), err)
+		}
+		rows = append(rows, row)
+	}
+}
+
 func TestCompressedRunFile(t *testing.T) {
 	t.Run("write and read", func(t *testing.T) {
 		tmpDir := t.TempDir()
@@ -53,12 +70,11 @@ func TestCompressedRunFile(t *testing.T) {
 			t.Errorf("expected count 3, got %d", reader.Count())
 		}
 
-		// Read all rows
-		for i := range 3 {
-			row, err := reader.Read()
-			if err != nil {
-				t.Fatalf("read row %d: %v", i, err)
-			}
+		got := readAllRows(t, reader)
+		if len(got) != len(rows) {
+			t.Fatalf("read %d rows, want %d", len(got), len(rows))
+		}
+		for i, row := range got {
 			if row.Prefix != rows[i].Prefix {
 				t.Errorf("row %d: expected prefix %q, got %q", i, rows[i].Prefix, row.Prefix)
 			}
@@ -73,26 +89,16 @@ func TestCompressedRunFile(t *testing.T) {
 			}
 		}
 
-		// Verify tier data on first row
-		row, _ := extsort.OpenCompressedRunFile(path, 0)
-		firstRow, _ := row.Read()
-		row.Close()
-		if firstRow.TierCounts[tiers.Standard] != 7 {
-			t.Errorf("expected 7 Standard tier count, got %d", firstRow.TierCounts[tiers.Standard])
+		if got[0].TierCounts[tiers.Standard] != 7 {
+			t.Errorf("expected 7 Standard tier count, got %d", got[0].TierCounts[tiers.Standard])
 		}
-		if firstRow.TierBytes[tiers.GlacierFR] != 300 {
-			t.Errorf("expected 300 GlacierFR bytes, got %d", firstRow.TierBytes[tiers.GlacierFR])
+		if got[0].TierBytes[tiers.GlacierFR] != 300 {
+			t.Errorf("expected 300 GlacierFR bytes, got %d", got[0].TierBytes[tiers.GlacierFR])
 		}
 
-		// EOF
-		reader2, _ := extsort.OpenCompressedRunFile(path, 0)
-		for range 3 {
-			reader2.Read()
-		}
-		_, err = reader2.Read()
-		reader2.Close()
-		if !errors.Is(err, io.EOF) {
-			t.Errorf("expected EOF, got %v", err)
+		var row extsort.PrefixRow
+		if err := reader.ReadInto(&row); !errors.Is(err, io.EOF) {
+			t.Errorf("expected EOF after the last row, got %v", err)
 		}
 	})
 
@@ -126,11 +132,11 @@ func TestCompressedRunFile(t *testing.T) {
 		defer reader.Close()
 
 		expectedOrder := []string{"a/", "m/", "z/"}
-		for i := range 3 {
-			row, err := reader.Read()
-			if err != nil {
-				t.Fatalf("read row %d: %v", i, err)
-			}
+		got := readAllRows(t, reader)
+		if len(got) != len(expectedOrder) {
+			t.Fatalf("read %d rows, want %d", len(got), len(expectedOrder))
+		}
+		for i, row := range got {
 			if row.Prefix != expectedOrder[i] {
 				t.Errorf("row %d: expected prefix %q, got %q", i, expectedOrder[i], row.Prefix)
 			}
@@ -174,12 +180,11 @@ func TestCompressedRunFile(t *testing.T) {
 			t.Errorf("expected count %d, got %d", numRows, reader.Count())
 		}
 
-		// Read all and verify
-		for i := range numRows {
-			row, err := reader.Read()
-			if err != nil {
-				t.Fatalf("read row %d: %v", i, err)
-			}
+		got := readAllRows(t, reader)
+		if len(got) != numRows {
+			t.Fatalf("read %d rows, want %d", len(got), numRows)
+		}
+		for i, row := range got {
 			expectedPrefix := fmt.Sprintf("prefix/%05d/", i)
 			if row.Prefix != expectedPrefix {
 				t.Errorf("row %d: expected prefix %q, got %q", i, expectedPrefix, row.Prefix)
@@ -332,8 +337,8 @@ func TestCompressedRunEmptyFile(t *testing.T) {
 		t.Errorf("expected count 0, got %d", reader.Count())
 	}
 
-	_, err = reader.Read()
-	if !errors.Is(err, io.EOF) {
+	var row extsort.PrefixRow
+	if err := reader.ReadInto(&row); !errors.Is(err, io.EOF) {
 		t.Errorf("expected EOF on empty file, got %v", err)
 	}
 }
