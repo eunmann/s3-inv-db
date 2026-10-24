@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"os"
 	"path/filepath"
 	"unsafe"
@@ -218,10 +217,14 @@ func computeFingerprint(s string) uint64 {
 	return computeFingerprintBytes(unsafe.Slice(unsafe.StringData(s), len(s)))
 }
 
-// computeFingerprintBytes computes a fingerprint from bytes.
+// computeFingerprintBytes is 64-bit FNV-1 (multiply, then XOR),
+// written out so it allocates no hasher: it runs once per prefix.
 func computeFingerprintBytes(b []byte) uint64 {
-	h := fnv.New64()
-	h.Write(b)
+	h := fnvOffset64
+	for _, c := range b {
+		h *= fnvPrime64
+		h ^= uint64(c)
+	}
 
-	return h.Sum64()
+	return h
 }

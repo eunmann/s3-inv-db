@@ -477,3 +477,14 @@ func TestOpenMPHFMissingSeedWord(t *testing.T) {
 		t.Fatalf("OpenMPHF = %v, want ErrFileTooSmall", err)
 	}
 }
+
+// The written-out fingerprint must stay hash/fnv's FNV-1: indexes store it.
+func TestComputeFingerprintMatchesFNV1(t *testing.T) {
+	for _, s := range []string{"", "a", "dir/sub/", "données/été/"} {
+		h := fnv.New64()
+		_, _ = h.Write([]byte(s))
+		if got, want := computeFingerprint(s), h.Sum64(); got != want {
+			t.Errorf("computeFingerprint(%q) = %#x, want %#x", s, got, want)
+		}
+	}
+}
