@@ -835,6 +835,11 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	p.runFiles = append(p.runFiles, runPath)
 	p.runFilesMu.Unlock()
 	p.flushCount.Add(1)
+	// Under heap pressure the recycled rows are what holds the heap up:
+	// keeping them would force a spill on every later check.
+	if heapUnderPressure(readMemoryLimit()) {
+		agg.Release()
+	}
 
 	// Same estimate as Aggregator.EstimatedMemoryUsage — kept as a
 	// log-only post-drain footprint approximation.

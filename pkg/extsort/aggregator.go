@@ -32,7 +32,7 @@ type Aggregator struct {
 func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 	if initialCapacity <= 0 {
 		// Default to 10K - small enough to start but grows as needed
-		// Each prefix entry uses ~300 bytes (map overhead + PrefixStats)
+		// Each prefix entry uses ~300 bytes (map entry + slab PrefixRow)
 		initialCapacity = 10000
 	}
 
@@ -119,7 +119,7 @@ func tierIDsFromMask(mask uint16) []tiers.ID {
 
 // EstimatedMemoryUsage returns the per-worker aggregator's approximate
 // in-memory footprint in bytes (~288 B/entry covering map overhead +
-// avg prefix string + PrefixStats). Undercounts by 2-3× vs runtime
+// avg prefix string + its slab PrefixRow). Undercounts by 2-3× vs runtime
 // reality; the heap-pressure safety check in ShouldWorkerFlush catches
 // that case.
 func (a *Aggregator) EstimatedMemoryUsage() int64 {
@@ -192,12 +192,18 @@ func ShouldWorkerFlush(workerAggBytes uint64, memoryLimit int64, numWorkers int)
 	if workerAggBytes >= perWorkerAggregatorCap(memoryLimit, numWorkers) {
 		return true
 	}
+
+	return heapUnderPressure(memoryLimit)
+}
+
+// heapUnderPressure reports whether HeapInuse has reached
+// heapPressureRatio of memoryLimit; a limit <= 0 means none is set.
+func heapUnderPressure(memoryLimit int64) bool {
 	if memoryLimit <= 0 {
 		return false
 	}
-	heapPressure := uint64(float64(memoryLimit) * heapPressureRatio)
 
-	return heapInuseBytes() >= heapPressure
+	return heapInuseBytes() >= uint64(float64(memoryLimit)*heapPressureRatio)
 }
 
 // Drain hands over every accumulated row (unsorted) and clears the
@@ -221,4 +227,12 @@ func (a *Aggregator) Drain() []*PrefixRow {
 	a.used = 0
 
 	return rows
+}
+
+// Release drops the drained aggregator's slabs, Drain slice and map
+// buckets so the GC can reclaim them once the caller is done with the
+// last Drain. Call it only on an empty (just drained) aggregator.
+func (a *Aggregator) Release() {
+	a.slabs, a.drained = nil, nil
+	a.prefixes = make(map[string]*PrefixRow)
 }

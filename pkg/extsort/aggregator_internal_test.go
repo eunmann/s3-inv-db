@@ -2,7 +2,9 @@ package extsort
 
 import (
 	"fmt"
+	"math"
 	"runtime"
+	"runtime/debug"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -51,5 +53,51 @@ func TestAggregatorDrainRecyclesRows(t *testing.T) {
 		if r.TierCounts[tiers.GlacierFR] != 0 || r.TierBytes[tiers.GlacierFR] != 0 {
 			t.Errorf("row %q kept tier stats from the previous spill", r.Prefix)
 		}
+	}
+}
+
+// A spill forced by heap pressure must leave the rows to the GC: kept
+// slabs would hold HeapInuse at the limit and force a spill on every
+// later check. Without pressure the slabs stay for the next spill.
+func TestFlushAggregatorReleasesRowsUnderHeapPressure(t *testing.T) {
+	prev := debug.SetMemoryLimit(math.MaxInt64)
+	t.Cleanup(func() { debug.SetMemoryLimit(prev) })
+
+	for _, tc := range []struct {
+		name      string
+		pressure  bool
+		wantSlabs bool
+	}{
+		{name: "no pressure", pressure: false, wantSlabs: true},
+		{name: "pressure", pressure: true, wantSlabs: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewPipeline(DefaultConfig(), nil)
+			p.tempDir = t.TempDir()
+			agg := NewAggregator(0, 0)
+			for i := range rowSlabLen + 10 {
+				agg.AddObject(fmt.Sprintf("a%d/x", i), 7, tiers.Standard)
+			}
+
+			limit := int64(math.MaxInt64)
+			if tc.pressure {
+				limit = 1 << 20
+			}
+			debug.SetMemoryLimit(limit)
+			err := p.flushAggregator(t.Context(), agg, 0)
+			debug.SetMemoryLimit(math.MaxInt64)
+			if err != nil {
+				t.Fatalf("flushAggregator: %v", err)
+			}
+
+			if got := len(agg.slabs) > 0; got != tc.wantSlabs {
+				t.Errorf("slabs kept = %v, want %v", got, tc.wantSlabs)
+			}
+			agg.AddObject("b/x", 5, tiers.Standard)
+			rows := agg.Drain()
+			if len(rows) != 2 {
+				t.Fatalf("drain after flush = %d rows, want 2", len(rows))
+			}
+		})
 	}
 }
