@@ -1,6 +1,10 @@
 package inventory
 
 import (
+	"cmp"
+	"slices"
+	"strings"
+
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
 
@@ -136,11 +140,6 @@ type CompareNumeric struct {
 	Delta  int64
 }
 
-// NewCompareNumeric computes the delta for a before/after pair.
-func NewCompareNumeric(before, after uint64) CompareNumeric {
-	return CompareNumeric{Before: before, After: after, Delta: int64(after) - int64(before)}
-}
-
 // CompareSelf is the prefix-level comparison: how the totals moved between runs
 // at this exact prefix. NotFoundInA/NotFoundInB report whether the
 // prefix exists in either side — when both are false the page renders
@@ -169,218 +168,315 @@ type CompareChild struct {
 	HasChildren bool
 }
 
-// CompareLevelData is the full set of inputs the template needs to render
-// one prefix's comparison.
-type CompareLevelData struct {
-	Self     CompareSelf
-	Children []CompareChild
+// CompareQuery selects the filter, order and page of one compare level.
+type CompareQuery struct {
+	SortBy        string
+	Dir           string
+	Page          int
+	PageSize      int
+	HideUnchanged bool
 }
 
-// CompareLevel compares two indexes at one prefix and returns the self-
-// delta plus a row per child segment present in either side. The
-// caller is responsible for filtering (e.g. hide-unchanged), sorting,
-// and pagination — keeps this helper pure and order-independent.
-func CompareLevel(a, b *indexread.Index, prefix string) CompareLevelData {
+// CompareCostFunc returns the monthly storage cost of pos in idx, in
+// microdollars. Used only to sort by cost.
+type CompareCostFunc func(idx *indexread.Index, pos uint64) uint64
+
+// CompareStatusCounts counts every child of the level by status, before
+// HideUnchanged filtering.
+type CompareStatusCounts struct {
+	Added, Removed, Changed, Unchanged int
+}
+
+// CompareLevelData is one compare level: the prefix's own deltas, the
+// requested page of children (fully built), and totals over all children.
+type CompareLevelData struct {
+	Self       CompareSelf
+	Children   []CompareChild
+	Pagination BrowsePagination
+	Counts     CompareStatusCounts
+	// Total is the number of children after HideUnchanged filtering.
+	Total int
+}
+
+// compareRow is one child as numbers only; strings and tier maps are
+// built for the visible page alone.
+type compareRow struct {
+	posA, posB uint64
+	objects    CompareNumeric
+	bytes      CompareNumeric
+	costDelta  int64
+	inA, inB   bool
+	status     CompareStatus
+}
+
+// CompareLevel compares two indexes at one prefix and returns the
+// self-delta plus the requested page of children present in either side.
+// Children are merged, classified, filtered and sorted from numbers and
+// cached segment names, so the cost of a page view does not include
+// building a string or tier map per child. Cost is used only when
+// sorting by cost.
+func CompareLevel(a, b *indexread.Index, prefix string, q CompareQuery, cost CompareCostFunc) CompareLevelData {
 	out := CompareLevelData{Self: CompareSelf{Prefix: prefix}}
 	posA, okA := a.Lookup(prefix)
 	posB, okB := b.Lookup(prefix)
-	out.Self.NotFoundInA = !okA
-	out.Self.NotFoundInB = !okB
+	out.Self = compareSelf(a, b, prefix, posA, okA, posB, okB)
 	if !okA && !okB {
 		return out
 	}
 
-	out.Self.HasTierDataA = a.HasTierData()
-	out.Self.HasTierDataB = b.HasTierData()
+	rows := mergeChildren(a, b, childPositions(a, posA, okA), childPositions(b, posB, okB))
+	for i := range rows {
+		r := &rows[i]
+		r.status = classifyRow(a, b, r)
+		out.Counts.add(r.status)
+		if q.SortBy == SortColCost && cost != nil {
+			r.costDelta = int64(rowCost(b, r.posB, r.inB, cost)) - int64(rowCost(a, r.posA, r.inA, cost))
+		}
+	}
+	if q.HideUnchanged {
+		rows = slices.DeleteFunc(rows, func(r compareRow) bool { return r.status == CompareUnchanged })
+	}
+	sortCompareRows(a, b, rows, q.SortBy, q.Dir)
+
+	out.Total = len(rows)
+	out.Pagination = Paginate(len(rows), q.Page, q.PageSize)
+	if p := out.Pagination; p.FirstRow > 0 {
+		out.Children = make([]CompareChild, 0, p.LastRow-p.FirstRow+1)
+		for i := range rows[p.FirstRow-1 : p.LastRow] {
+			if c, ok := buildCompareChild(a, b, &rows[p.FirstRow-1+i]); ok {
+				out.Children = append(out.Children, c)
+			}
+		}
+	}
+
+	return out
+}
+
+func compareSelf(a, b *indexread.Index, prefix string, posA uint64, okA bool, posB uint64, okB bool) CompareSelf {
+	self := CompareSelf{Prefix: prefix, NotFoundInA: !okA, NotFoundInB: !okB}
+	if !okA && !okB {
+		return self
+	}
+	self.HasTierDataA = a.HasTierData()
+	self.HasTierDataB = b.HasTierData()
 	if okA {
 		st := a.Stats(posA)
-		out.Self.Objects.Before = st.ObjectCount
-		out.Self.Bytes.Before = st.TotalBytes
-		if out.Self.HasTierDataA {
-			out.Self.TierBeforeMap = a.TierBreakdownMap(posA)
+		self.Objects.Before = st.ObjectCount
+		self.Bytes.Before = st.TotalBytes
+		if self.HasTierDataA {
+			self.TierBeforeMap = a.TierBreakdownMap(posA)
 		}
 	}
 	if okB {
 		st := b.Stats(posB)
-		out.Self.Objects.After = st.ObjectCount
-		out.Self.Bytes.After = st.TotalBytes
-		if out.Self.HasTierDataB {
-			out.Self.TierAfterMap = b.TierBreakdownMap(posB)
+		self.Objects.After = st.ObjectCount
+		self.Bytes.After = st.TotalBytes
+		if self.HasTierDataB {
+			self.TierAfterMap = b.TierBreakdownMap(posB)
 		}
 	}
-	out.Self.Objects.Delta = int64(out.Self.Objects.After) - int64(out.Self.Objects.Before)
-	out.Self.Bytes.Delta = int64(out.Self.Bytes.After) - int64(out.Self.Bytes.Before)
+	self.Objects.Delta = int64(self.Objects.After) - int64(self.Objects.Before)
+	self.Bytes.Delta = int64(self.Bytes.After) - int64(self.Bytes.Before)
 
-	childrenA := indexChildren(a, posA, okA, prefix)
-	childrenB := indexChildren(b, posB, okB, prefix)
-	out.Children = mergeChildren(childrenA, childrenB)
-
-	return out
+	return self
 }
 
-// mergeChildren performs an O(n+m) sorted merge of two child-record
-// slices in index (preorder) order, emitting one CompareChild per
-// distinct child. It compares full prefixes, the order the index stores
-// them in: "2024-x/" < "2024/" because '-' < '/', while the trimmed
-// segments order the other way.
-func mergeChildren(a, b []segChildRec) []CompareChild {
-	out := make([]CompareChild, 0, len(a)+len(b))
-	i, j := 0, 0
-	for i < len(a) && j < len(b) {
-		switch {
-		case a[i].rec.fullPrefix < b[j].rec.fullPrefix:
-			out = append(out, fromBefore(a[i]))
-			i++
-		case a[i].rec.fullPrefix > b[j].rec.fullPrefix:
-			out = append(out, fromAfter(b[j]))
-			j++
-		default:
-			out = append(out, fromBoth(a[i], b[j]))
-			i++
-			j++
-		}
+func (c *CompareStatusCounts) add(s CompareStatus) {
+	switch s {
+	case CompareAdded:
+		c.Added++
+	case CompareRemoved:
+		c.Removed++
+	case CompareChanged:
+		c.Changed++
+	case CompareUnchanged:
+		c.Unchanged++
+	case CompareUnknown:
 	}
-	for ; i < len(a); i++ {
-		out = append(out, fromBefore(a[i]))
-	}
-	for ; j < len(b); j++ {
-		out = append(out, fromAfter(b[j]))
-	}
-
-	return out
 }
 
-func fromBefore(r segChildRec) CompareChild {
-	c := CompareChild{
-		Segment:     r.seg,
-		Prefix:      r.rec.fullPrefix,
-		Objects:     CompareNumeric{Before: r.rec.stats.ObjectCount},
-		Bytes:       CompareNumeric{Before: r.rec.stats.TotalBytes},
-		HasChildren: r.rec.hasChildren,
-		TierBefore:  r.rec.tiers,
-	}
-	c.Objects.Delta = -int64(c.Objects.Before)
-	c.Bytes.Delta = -int64(c.Bytes.Before)
-	c.Status = classify(c.Objects, c.Bytes, c.TierBefore, c.TierAfter)
-
-	return c
-}
-
-func fromAfter(r segChildRec) CompareChild {
-	c := CompareChild{
-		Segment:     r.seg,
-		Prefix:      r.rec.fullPrefix,
-		Objects:     CompareNumeric{After: r.rec.stats.ObjectCount},
-		Bytes:       CompareNumeric{After: r.rec.stats.TotalBytes},
-		HasChildren: r.rec.hasChildren,
-		TierAfter:   r.rec.tiers,
-	}
-	c.Objects.Delta = int64(c.Objects.After)
-	c.Bytes.Delta = int64(c.Bytes.After)
-	c.Status = classify(c.Objects, c.Bytes, c.TierBefore, c.TierAfter)
-
-	return c
-}
-
-func fromBoth(a, b segChildRec) CompareChild {
-	c := CompareChild{
-		Segment: a.seg,
-		// Prefer A's fullPrefix; both are identical to a.seg for the
-		// same segment under the same parent.
-		Prefix:      a.rec.fullPrefix,
-		Objects:     CompareNumeric{Before: a.rec.stats.ObjectCount, After: b.rec.stats.ObjectCount},
-		Bytes:       CompareNumeric{Before: a.rec.stats.TotalBytes, After: b.rec.stats.TotalBytes},
-		HasChildren: a.rec.hasChildren || b.rec.hasChildren,
-		TierBefore:  a.rec.tiers,
-		TierAfter:   b.rec.tiers,
-	}
-	c.Objects.Delta = int64(c.Objects.After) - int64(c.Objects.Before)
-	c.Bytes.Delta = int64(c.Bytes.After) - int64(c.Bytes.Before)
-	c.Status = classify(c.Objects, c.Bytes, c.TierBefore, c.TierAfter)
-
-	return c
-}
-
-type childRec struct {
-	tiers       map[string]indexread.TierBreakdown
-	fullPrefix  string
-	stats       indexread.Stats
-	hasChildren bool
-}
-
-// segChildRec pairs a child's segment label with its record. Returned
-// from indexChildren in full-prefix (preorder) byte order, so callers
-// merge two indexes on fullPrefix, not on seg.
-type segChildRec struct {
-	seg string
-	rec childRec
-}
-
-// indexChildren returns the children of `parent` in index order:
-// DescendantsAtDepthFiltered returns positions in preorder, which is
-// byte order of the full prefix (not of the trimmed segment).
-func indexChildren(idx *indexread.Index, parent uint64, ok bool, prefix string) []segChildRec {
+func childPositions(idx *indexread.Index, parent uint64, ok bool) []uint64 {
 	if !ok {
 		return nil
 	}
-	positions, err := idx.DescendantsAtDepthFiltered(parent, 1, indexread.Filter{})
+	positions, err := idx.DescendantsAtDepth(parent, 1)
 	if err != nil {
 		return nil
 	}
-	hasTier := idx.HasTierData()
-	out := make([]segChildRec, 0, len(positions))
-	parentDepth := idx.Depth(parent)
-	for _, p := range positions {
-		full, err := idx.PrefixString(p)
-		if err != nil {
-			continue
+
+	return positions
+}
+
+// mergeChildren joins two child lists, each in index (preorder) order.
+// Preorder is byte order of the full prefix, i.e. of each name with its
+// trailing slash: "2024-x/" < "2024/" because '-' < '/'. Comparing the
+// bare names would split such siblings into an "added" and a "removed".
+func mergeChildren(a, b *indexread.Index, pa, pb []uint64) []compareRow {
+	out := make([]compareRow, 0, max(len(pa), len(pb)))
+	i, j := 0, 0
+	for i < len(pa) || j < len(pb) {
+		var c int
+		switch {
+		case i == len(pa):
+			c = 1
+		case j == len(pb):
+			c = -1
+		default:
+			c = compareSlashTerminated(a.ChildSegment(pa[i]), b.ChildSegment(pb[j]))
 		}
-		seg := SegmentOf(prefix, full)
-		rec := childRec{
-			fullPrefix:  full,
-			stats:       idx.Stats(p),
-			hasChildren: idx.MaxDepthInSubtree(p) > parentDepth+1,
+		var r compareRow
+		if c <= 0 {
+			r.posA, r.inA = pa[i], true
+			st := a.Stats(pa[i])
+			r.objects.Before, r.bytes.Before = st.ObjectCount, st.TotalBytes
+			i++
 		}
-		if hasTier {
-			rec.tiers = idx.TierBreakdownMap(p)
+		if c >= 0 {
+			r.posB, r.inB = pb[j], true
+			st := b.Stats(pb[j])
+			r.objects.After, r.bytes.After = st.ObjectCount, st.TotalBytes
+			j++
 		}
-		out = append(out, segChildRec{seg: seg, rec: rec})
+		r.objects.Delta = int64(r.objects.After) - int64(r.objects.Before)
+		r.bytes.Delta = int64(r.bytes.After) - int64(r.bytes.Before)
+		out = append(out, r)
 	}
 
 	return out
 }
 
-// classify decides the status of a child given its numeric deltas and
-// per-tier maps. A child present only on one side is Added/Removed.
-// One present on both is Changed if any measurable field — including
-// the tier mix — moved, otherwise Unchanged.
-func classify(objects, bytes CompareNumeric, tierBefore, tierAfter map[string]indexread.TierBreakdown) CompareStatus {
-	onlyAfter := objects.Before == 0 && bytes.Before == 0 && len(tierBefore) == 0 &&
-		(objects.After > 0 || bytes.After > 0 || len(tierAfter) > 0)
-	onlyBefore := objects.After == 0 && bytes.After == 0 && len(tierAfter) == 0 &&
-		(objects.Before > 0 || bytes.Before > 0 || len(tierBefore) > 0)
+// compareSlashTerminated compares x+"/" with y+"/" without building them.
+func compareSlashTerminated(x, y string) int {
+	n := min(len(x), len(y))
+	if c := strings.Compare(x[:n], y[:n]); c != 0 {
+		return c
+	}
 	switch {
-	case onlyAfter:
+	case len(x) == len(y):
+		return 0
+	case len(x) < len(y):
+		return cmp.Compare(byte('/'), y[n])
+	default:
+		return cmp.Compare(x[n], byte('/'))
+	}
+}
+
+// classifyRow: present on one side only is Added/Removed; present on
+// both is Changed if objects, bytes or the tier mix moved. The tier mix
+// is read only when objects and bytes are equal.
+func classifyRow(a, b *indexread.Index, r *compareRow) CompareStatus {
+	switch {
+	case !r.inA:
 		return CompareAdded
-	case onlyBefore:
+	case !r.inB:
 		return CompareRemoved
-	case objects.Delta != 0, bytes.Delta != 0, !tierMapsEqual(tierBefore, tierAfter):
+	case r.objects.Delta != 0, r.bytes.Delta != 0, !tiersEqual(a.TierBreakdown(r.posA), b.TierBreakdown(r.posB)):
 		return CompareChanged
 	default:
 		return CompareUnchanged
 	}
 }
 
-func tierMapsEqual(a, b map[string]indexread.TierBreakdown) bool {
-	if len(a) != len(b) {
-		return false
+// tiersEqual compares two non-zero tier breakdowns; both come in tier-ID
+// order, so a positional comparison is exact.
+func tiersEqual(x, y []indexread.TierBreakdown) bool {
+	return slices.EqualFunc(x, y, func(p, q indexread.TierBreakdown) bool {
+		return p.TierID == q.TierID && p.ObjectCount == q.ObjectCount && p.Bytes == q.Bytes
+	})
+}
+
+func rowCost(idx *indexread.Index, pos uint64, present bool, cost CompareCostFunc) uint64 {
+	if !present {
+		return 0
 	}
-	for k, va := range a {
-		vb, ok := b[k]
-		if !ok || va.Bytes != vb.Bytes || va.ObjectCount != vb.ObjectCount {
-			return false
+
+	return cost(idx, pos)
+}
+
+func rowName(a, b *indexread.Index, r *compareRow) string {
+	if r.inA {
+		return a.ChildSegment(r.posA)
+	}
+
+	return b.ChildSegment(r.posB)
+}
+
+// sortCompareRows orders rows for display. With no explicit column the
+// biggest absolute byte movers come first. Ties sort by name, ascending.
+func sortCompareRows(a, b *indexread.Index, rows []compareRow, sortBy, dir string) {
+	desc := dir == SortDirDesc
+	metric := func(r *compareRow) int64 {
+		switch sortBy {
+		case SortColCompareStatus:
+			return int64(StatusOrder(r.status))
+		case SortColObjects:
+			return r.objects.Delta
+		case SortColSize:
+			return r.bytes.Delta
+		case SortColCost:
+			return r.costDelta
+		case SortColSegment:
+			return 0
+		default:
+			desc = true
+
+			return int64(absDelta(r.bytes.Delta))
+		}
+	}
+	slices.SortStableFunc(rows, func(x, y compareRow) int {
+		c := cmp.Compare(metric(&x), metric(&y))
+		if sortBy == SortColSegment {
+			c = strings.Compare(rowName(a, b, &x), rowName(a, b, &y))
+		}
+		if desc {
+			c = -c
+		}
+		if c != 0 {
+			return c
+		}
+
+		return strings.Compare(rowName(a, b, &x), rowName(a, b, &y))
+	})
+}
+
+func absDelta(v int64) uint64 {
+	if v < 0 {
+		return uint64(-v)
+	}
+
+	return uint64(v)
+}
+
+// buildCompareChild materialises one visible row: its strings and tier
+// maps.
+func buildCompareChild(a, b *indexread.Index, r *compareRow) (CompareChild, bool) {
+	idx, pos := a, r.posA
+	if !r.inA {
+		idx, pos = b, r.posB
+	}
+	full, err := idx.PrefixString(pos)
+	if err != nil {
+		return CompareChild{}, false
+	}
+	c := CompareChild{
+		Segment: idx.ChildSegment(pos),
+		Prefix:  full,
+		Objects: r.objects,
+		Bytes:   r.bytes,
+		Status:  r.status,
+	}
+	if r.inA {
+		c.HasChildren = c.HasChildren || a.MaxDepthInSubtree(r.posA) > a.Depth(r.posA)
+		if a.HasTierData() {
+			c.TierBefore = a.TierBreakdownMap(r.posA)
+		}
+	}
+	if r.inB {
+		c.HasChildren = c.HasChildren || b.MaxDepthInSubtree(r.posB) > b.Depth(r.posB)
+		if b.HasTierData() {
+			c.TierAfter = b.TierBreakdownMap(r.posB)
 		}
 	}
 
-	return true
+	return c, true
 }

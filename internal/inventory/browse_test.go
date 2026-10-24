@@ -37,62 +37,6 @@ func TestNormalizeSort(t *testing.T) {
 	}
 }
 
-func TestSortChildren(t *testing.T) {
-	// Three children with deliberately misaligned orderings so we can tell
-	// which sort key was applied.
-	mkInput := func() []inventory.BrowseChild {
-		return []inventory.BrowseChild{
-			{Segment: "c", ObjectCount: 10, TotalBytes: 100, MonthlyCostMicrodollars: 300},
-			{Segment: "a", ObjectCount: 30, TotalBytes: 200, MonthlyCostMicrodollars: 100},
-			{Segment: "b", ObjectCount: 20, TotalBytes: 300, MonthlyCostMicrodollars: 200},
-		}
-	}
-
-	tests := []struct {
-		name        string
-		sortBy, dir string
-		wantOrder   []string // segments in expected order
-	}{
-		{"segment asc", "segment", "asc", []string{"a", "b", "c"}},
-		{"segment desc", "segment", "desc", []string{"c", "b", "a"}},
-		{"objects desc", "objects", "desc", []string{"a", "b", "c"}},
-		{"objects asc", "objects", "asc", []string{"c", "b", "a"}},
-		{"size desc", "size", "desc", []string{"b", "a", "c"}},
-		{"size asc", "size", "asc", []string{"c", "a", "b"}},
-		{"cost desc", "cost", "desc", []string{"c", "b", "a"}},
-		{"cost asc", "cost", "asc", []string{"a", "b", "c"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			children := mkInput()
-			inventory.SortChildren(children, tt.sortBy, tt.dir)
-			got := make([]string, len(children))
-			for i, c := range children {
-				got[i] = c.Segment
-			}
-			if diff := cmp.Diff(tt.wantOrder, got); diff != "" {
-				t.Errorf("order mismatch (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestSortChildren_TieBreakOnSegment(t *testing.T) {
-	// All three have the same ObjectCount — the tie-breaker should be
-	// alphabetical segment, regardless of direction.
-	children := []inventory.BrowseChild{
-		{Segment: "c", ObjectCount: 5},
-		{Segment: "a", ObjectCount: 5},
-		{Segment: "b", ObjectCount: 5},
-	}
-	inventory.SortChildren(children, "objects", "desc")
-	got := []string{children[0].Segment, children[1].Segment, children[2].Segment}
-	want := []string{"a", "b", "c"}
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("tie-break order (-want +got):\n%s", diff)
-	}
-}
-
 func TestSortLinks_IndicatorsAndToggles(t *testing.T) {
 	// Currently sorted by objects desc: that column shows ↓, clicking it
 	// would flip to asc; other columns offer their defaults with no indicator.
