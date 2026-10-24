@@ -22,9 +22,6 @@ concurrency:
 
 env:
   GOLANGCI_LINT_VERSION: v2.12.2
-  # The local S3 server the integration tests run against; same image and
-  # dev credentials as the compose `test` profile.
-  S3_IMAGE: versity/versitygw:v1.10.0
 
 # Every heavy job carries:
 #   needs: changes
@@ -125,11 +122,14 @@ jobs:
           go-version-file: go.mod
           cache: true
       # GitHub service containers cannot pass command arguments, so the S3
-      # server is started directly.
+      # server is started directly, from the image infra/docker-compose.yml
+      # pins (the one Dependabot bumps), with the compose dev credentials.
       - name: Start local S3 server
         run: |
           set -euo pipefail
-          docker run -d --name s3 -p 9000:9000 --tmpfs /data "$S3_IMAGE" \
+          image=$(sed -n 's/^ *image: &s3-image //p' infra/docker-compose.yml)
+          if [ -z "$image" ]; then echo "::error::no &s3-image in infra/docker-compose.yml"; exit 1; fi
+          docker run -d --name s3 -p 9000:9000 --tmpfs /data "$image" \
             --port :9000 --access devaccess --secret devsecret posix /data
           for _ in $(seq 1 30); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/ || true)
