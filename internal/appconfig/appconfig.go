@@ -8,12 +8,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
+	"strings"
 )
 
 // ErrInventoryKeysRequired is returned by validate when an inventory
 // entry has a blank source or name.
 var ErrInventoryKeysRequired = errors.New("inventories[]: source and name are required")
+
+// ErrInvalidPrefix is returned by ParsePrefixes for an entry that is
+// neither a CIDR nor an IP address.
+var ErrInvalidPrefix = errors.New("not a CIDR or IP address")
 
 // Config mirrors the JSON file shape. Pointer fields are nil when the
 // key was absent from the file.
@@ -35,6 +41,11 @@ type Config struct {
 
 	BuildEventLog *string `json:"build_event_log,omitempty"`
 	QueryBatchMax *int    `json:"query_batch_max,omitempty"`
+
+	// TrustedProxies lists the reverse proxies (CIDRs or bare IPs) whose
+	// X-Forwarded-For entries the server believes. Empty means no proxy
+	// is trusted and the client IP is the TCP peer address.
+	TrustedProxies []string `json:"trusted_proxies,omitempty"`
 
 	Inventories []InventoryEntry `json:"inventories,omitempty"`
 }
@@ -68,8 +79,35 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("validate config %s: %w", path, ErrInventoryKeysRequired)
 		}
 	}
+	if _, err := ParsePrefixes(c.TrustedProxies); err != nil {
+		return nil, fmt.Errorf("validate config %s: trusted_proxies: %w", path, err)
+	}
 
 	return &c, nil
+}
+
+// ParsePrefixes parses CIDRs ("10.0.0.0/8") and bare IPs ("10.1.2.3",
+// treated as a single-address prefix). Blank entries are skipped.
+func ParsePrefixes(ss []string) ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(ss))
+	for _, s := range ss {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if p, err := netip.ParsePrefix(s); err == nil {
+			out = append(out, p.Masked())
+
+			continue
+		}
+		addr, err := netip.ParseAddr(s)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %q", ErrInvalidPrefix, s)
+		}
+		out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+
+	return out, nil
 }
 
 // PickFile collapses the "flag > file > default" precedence: returns

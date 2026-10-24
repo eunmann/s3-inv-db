@@ -1,6 +1,7 @@
 package appconfig_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,5 +126,36 @@ func TestPickFile_Bool_PrecedenceOrder(t *testing.T) {
 	}
 	if got := appconfig.PickFile(true, false, nil, get); got != true {
 		t.Errorf("flag default true should win when no config, got %v", got)
+	}
+}
+
+func TestParsePrefixes_CIDRsAndBareIPs(t *testing.T) {
+	got, err := appconfig.ParsePrefixes([]string{"10.0.0.0/8", " 192.168.1.7 ", "", "2001:db8::/32", "10.1.2.3/8"})
+	if err != nil {
+		t.Fatalf("ParsePrefixes: %v", err)
+	}
+	want := []string{"10.0.0.0/8", "192.168.1.7/32", "2001:db8::/32", "10.0.0.0/8"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d prefixes %v, want %v", len(got), got, want)
+	}
+	for i := range want {
+		if got[i].String() != want[i] {
+			t.Errorf("prefix %d = %s, want %s", i, got[i], want[i])
+		}
+	}
+}
+
+func TestParsePrefixes_RejectsGarbage(t *testing.T) {
+	for _, bad := range []string{"proxy.internal", "10.0.0.0/33", "300.1.1.1"} {
+		if _, err := appconfig.ParsePrefixes([]string{bad}); !errors.Is(err, appconfig.ErrInvalidPrefix) {
+			t.Errorf("ParsePrefixes(%q) err = %v, want ErrInvalidPrefix", bad, err)
+		}
+	}
+}
+
+func TestLoad_RejectsInvalidTrustedProxies(t *testing.T) {
+	path := writeConfig(t, `{"trusted_proxies": ["not-an-ip"]}`)
+	if _, err := appconfig.Load(path); !errors.Is(err, appconfig.ErrInvalidPrefix) {
+		t.Fatalf("Load err = %v, want ErrInvalidPrefix", err)
 	}
 }

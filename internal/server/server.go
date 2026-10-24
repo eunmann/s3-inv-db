@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"os"
 	"time"
 
@@ -59,6 +60,10 @@ type Config struct {
 	// QueryBatchMax caps the number of prefixes accepted in one batch
 	// stats request. Zero means use the handler default.
 	QueryBatchMax int
+
+	// TrustedProxies are the reverse proxies whose X-Forwarded-For
+	// entries determine the client IP. Empty: the TCP peer is the client.
+	TrustedProxies []netip.Prefix
 }
 
 // DefaultDiscoveryRefreshInterval is the fallback cadence for the

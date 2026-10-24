@@ -63,6 +63,7 @@ CLI flag → config file → default**. The seeder is flag-only.
   "auto_load_retention_default": 3,
   "discovery_refresh_interval": "1m",
   "query_batch_max": 1000,
+  "trusted_proxies": ["10.0.0.0/8"],
   "build_event_log": "/var/log/s3inv-build.jsonl",
   "inventories": [
     {"source": "prod-bucket", "name": "daily-inventory", "auto_load": true, "retention_count": 5}
@@ -71,7 +72,10 @@ CLI flag → config file → default**. The seeder is flag-only.
 ```
 
 `inventories[]` declares per-configuration auto-load + retention;
-entries are upserted into the state DB at startup. Per-run pin state
+entries are upserted into the state DB at startup.
+`trusted_proxies` (flag `--trusted-proxies`) lists the reverse proxies
+whose `X-Forwarded-For` is believed; by default none is, and the
+client IP is the TCP peer. Per-run pin state
 lives in the UI/API, not the file. The authoritative field list is
 the `Config` struct in `internal/appconfig/appconfig.go`.
 

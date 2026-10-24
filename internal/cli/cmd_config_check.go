@@ -77,6 +77,9 @@ func describeSetFields(c *appconfig.Config) map[string]any {
 	if len(c.Inventories) > 0 {
 		set["inventories"] = c.Inventories
 	}
+	if len(c.TrustedProxies) > 0 {
+		set["trusted_proxies"] = c.TrustedProxies
+	}
 
 	return set
 }

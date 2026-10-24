@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
@@ -367,3 +368,34 @@ func (w *writeBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 func (w *writeBuffer) String() string { return string(w.b) }
+
+func TestClientIPMiddleware(t *testing.T) {
+	cases := []struct {
+		name    string
+		trusted []netip.Prefix
+		remote  string
+		xff     string
+		want    string
+	}{
+		{"no_proxy_ignores_spoofed_xff", nil, "203.0.113.9:4000", "1.2.3.4", "203.0.113.9"},
+		{"untrusted_peer_ignores_xff", []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, "203.0.113.9:4000", "1.2.3.4", "203.0.113.9"},
+		{"mapped_v4_peer_is_trusted", []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, "[::ffff:10.0.0.5]:4000", "198.51.100.7", "198.51.100.7"},
+		{"trusted_proxy_uses_xff", []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, "10.0.0.5:4000", "198.51.100.7", "198.51.100.7"},
+		{"trusted_proxy_skips_trusted_hops", []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, "10.0.0.5:4000", "198.51.100.7, 10.0.0.6", "198.51.100.7"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var got string
+			h := clientIPMiddleware(c.trusted)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				got = middleware.GetClientIP(r.Context())
+			}))
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody)
+			req.RemoteAddr = c.remote
+			req.Header.Set("X-Forwarded-For", c.xff)
+			h.ServeHTTP(httptest.NewRecorder(), req)
+			if got != c.want {
+				t.Errorf("client IP = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

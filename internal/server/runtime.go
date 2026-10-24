@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"time"
@@ -70,6 +71,10 @@ type RuntimeOptions struct {
 	// QueryBatchMax caps the prefix count accepted by the batch stats
 	// endpoint. Zero means use the handler default.
 	QueryBatchMax int
+
+	// TrustedProxies are the reverse proxies whose X-Forwarded-For
+	// entries determine the client IP. Empty: the TCP peer is the client.
+	TrustedProxies []netip.Prefix
 
 	// InventoryConfigs declares per-configuration auto-load + retention
 	// settings to upsert at startup. Typically populated from the JSON
@@ -156,6 +161,7 @@ func Bootstrap(ctx context.Context, opts RuntimeOptions) (*Server, func(), error
 		AutoLoadRetentionDefault: opts.AutoLoadRetentionDefault,
 		DiscoveryRefreshInterval: opts.DiscoveryRefreshInterval,
 		QueryBatchMax:            opts.QueryBatchMax,
+		TrustedProxies:           opts.TrustedProxies,
 	})
 	if err != nil {
 		cleanup()
