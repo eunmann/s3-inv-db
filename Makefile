@@ -1,9 +1,17 @@
-.PHONY: all build server seeder test test-race lint lint-check clean clean-seed seed \
-        css dev dev-reset docker-build docker-prod docker-seed docker-down \
-        cover cover-html cover-summary tidy compose-preflight
+.PHONY: help all build server seeder test test-unit test-race lint lint-check clean clean-seed seed \
+        css css-check dev dev-reset docker-build docker-prod docker-seed docker-down \
+        cover cover-html cover-summary cover-check tidy tidy-check deadcode vuln compose-preflight
+
+.DEFAULT_GOAL := help
 
 GOLANGCI_LINT_VERSION := v2.12.2
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.39.0
+GOVULNCHECK := go run golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+# Unit-test coverage floor (host suite, no MinIO). Ratchet it up as
+# coverage grows; never lower it to make a change pass.
+COVER_MIN := 67.0
 
 COMPOSE := docker compose -f infra/docker-compose.yml
 
@@ -24,12 +32,19 @@ CSS_CONFIG := tailwind.config.js
 TEMPLATES  := $(shell find internal/templates/templates -name '*.html' 2>/dev/null)
 HELPERS    := $(shell find internal/templates -maxdepth 1 -name '*.go' 2>/dev/null)
 
-all: css build server
+help: ## List targets
+	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+all: css build server ## Build the CLI and server (regenerates CSS)
 
 # Build Tailwind CSS from input.css + the project's templates. The
 # generated tailwind.css is checked into the repo so production builds
 # (e.g. infra/Dockerfile) don't need to fetch the CLI.
-css: $(CSS_OUTPUT)
+css: $(CSS_OUTPUT) ## Regenerate tailwind.css from the templates
+
+css-check: ## Fail if the checked-in tailwind.css is stale
+	@$(MAKE) --no-print-directory -B css >/dev/null 2>&1
+	@git diff --exit-code --stat -- $(CSS_OUTPUT) || { echo "tailwind.css is stale: run make css and commit it"; exit 1; }
 
 $(CSS_OUTPUT): $(CSS_INPUT) $(CSS_CONFIG) $(TEMPLATES) $(HELPERS) | $(TAILWIND_BIN)
 	$(TAILWIND_BIN) -c $(CSS_CONFIG) -i $(CSS_INPUT) -o $(CSS_OUTPUT) --minify
@@ -40,22 +55,25 @@ $(TAILWIND_BIN):
 	chmod +x $@.tmp
 	mv $@.tmp $@
 
-build:
+build: ## Build bin/s3-inv-db
 	go build -o bin/s3-inv-db ./cmd/s3-inv-db
 
-server: css
+server: css ## Build bin/s3-inv-db-server
 	go build -o bin/s3-inv-db-server ./cmd/s3-inv-db-server
 
-seeder:
+seeder: ## Build bin/s3-inv-db-seeder
 	go build -o bin/s3-inv-db-seeder ./cmd/s3-inv-db-seeder
 
-test: compose-preflight
+test-unit: ## Host unit tests (no Docker, no network)
+	go test ./...
+
+test: compose-preflight ## Full suite incl. MinIO integration tests, in Docker
 	@$(COMPOSE) --profile test run --rm test-runner go test -tags integration ./...; \
 	rc=$$?; \
 	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
 	exit $$rc
 
-test-race: compose-preflight
+test-race: compose-preflight ## Full suite with -race, in Docker
 	@$(COMPOSE) --profile test run --rm test-runner go test -tags integration -race ./...; \
 	rc=$$?; \
 	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
@@ -66,7 +84,7 @@ test-race: compose-preflight
 # or `make cover-html` to open the line-level browser view.
 COVER_OUT := coverage.out
 
-cover: $(COVER_OUT)
+cover: $(COVER_OUT) ## Full-suite coverage profile (Docker)
 
 $(COVER_OUT): compose-preflight
 	@$(COMPOSE) --profile test run --rm test-runner \
@@ -75,36 +93,54 @@ $(COVER_OUT): compose-preflight
 	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
 	exit $$rc
 
-cover-summary: $(COVER_OUT)
+cover-summary: $(COVER_OUT) ## Coverage total + 20 least-covered functions
 	@go tool cover -func=$(COVER_OUT) | tail -n 1
 	@echo "--- 20 lowest-covered functions (gaps to consider): ---"
 	@go tool cover -func=$(COVER_OUT) | awk '/^total:/ {next} {print}' | sort -k3 -n | head -20
 
-cover-html: $(COVER_OUT)
+cover-check: ## Fail if host unit-test coverage is below COVER_MIN
+	@mkdir -p tmp
+	@go test -count=1 -covermode=atomic -coverpkg=./... -coverprofile=tmp/cover-unit.out ./... >/dev/null
+	@go tool cover -func=tmp/cover-unit.out | awk -v min="$(COVER_MIN)" \
+		'END { gsub(/%/,"",$$3); if ($$3+0 < min+0) { printf "FAIL: coverage %s%% < COVER_MIN %s%%\n", $$3, min; exit 1 } \
+		printf "OK: coverage %s%% >= %s%%\n", $$3, min }'
+
+cover-html: $(COVER_OUT) ## Line-level coverage HTML
 	go tool cover -html=$(COVER_OUT) -o coverage.html
 	@echo "open coverage.html"
 
 # Keep go.mod tidy and verify no vendored drift snuck in.
-tidy:
+tidy: ## go mod tidy + verify
 	go mod tidy
 	go mod verify
+
+tidy-check: ## Fail if go.mod/go.sum are not tidy
+	go mod tidy
+	git diff --exit-code -- go.mod go.sum
+
+deadcode: ## Fail on functions unreachable from every binary and test
+	@out="$$($(DEADCODE) -test -tags integration ./...)"; \
+	if [ -n "$$out" ]; then echo "$$out"; echo "deadcode: unreachable functions found"; exit 1; fi
+
+vuln: ## govulncheck (reachable vulnerabilities only)
+	$(GOVULNCHECK) ./...
 
 # Default `lint` runs with --fix so iterative dev cleans up auto-fixable
 # issues (gofumpt/gci/goimports/some style). CI should call `lint-check`
 # instead so the build fails on anything --fix would have rewritten.
-lint:
+lint: ## golangci-lint with --fix
 	$(GOLANGCI_LINT) run --fix ./...
 
-lint-check:
+lint-check: ## golangci-lint without fixes (CI)
 	$(GOLANGCI_LINT) run ./...
 
-clean:
+clean: ## Remove build outputs
 	rm -rf bin/ tmp/ $(COVER_OUT) coverage.html
 
 clean-seed:
 	rm -rf seed-data/
 
-seed: seeder
+seed: seeder ## Generate local synthetic inventories
 	./bin/s3-inv-db-seeder --out ./seed-data --count 3 --objects 10000 --verbose --pretty-logs
 
 # ----- docker compose ------------------------------------------------------
@@ -130,12 +166,12 @@ compose-preflight:
 	fi
 
 # Build both dev and prod images.
-docker-build:
+docker-build: ## Build dev + prod images
 	$(COMPOSE) --profile dev --profile prod build
 
 # Hot-reload server (port 8080). The only supported dev workflow — no host
 # binary path. Override port with S3INV_DEV_PORT=...
-dev: compose-preflight
+dev: compose-preflight ## Hot-reload server + MinIO (the dev loop)
 	$(COMPOSE) --profile dev up --build
 
 # Wipe the dev server's persistent state (state.db + downloaded indexes)
@@ -143,22 +179,22 @@ dev: compose-preflight
 # auto-loader is stuck in a backoff loop, or you just want a clean slate.
 # Re-running `make dev` after this re-applies every migration from scratch
 # and rebuilds caches on demand.
-dev-reset:
+dev-reset: ## Wipe the dev server's state volume
 	$(COMPOSE) --profile dev stop server-dev
 	$(COMPOSE) --profile dev rm -f server-dev
 	docker volume rm -f infra_server-cache
 	@echo "dev state cleared — run 'make dev' to start fresh"
 
 # Slim production image (port 8081). Override with S3INV_PROD_PORT=...
-docker-prod: compose-preflight
+docker-prod: compose-preflight ## Prod image on :8081
 	$(COMPOSE) --profile prod up --build
 
 # One-shot seeder: writes to ./seed-data on the host.
 # Override count/objects/preset with S3INV_SEED_COUNT, S3INV_SEED_OBJECTS,
 # S3INV_SEED_PRESET.
-docker-seed: compose-preflight
+docker-seed: compose-preflight ## One-shot seeder into ./seed-data
 	$(COMPOSE) --profile seed run --rm seeder
 
 # Stop everything and remove volumes (caches).
-docker-down:
+docker-down: ## Stop all profiles and remove volumes
 	$(COMPOSE) --profile dev --profile prod --profile seed --profile test down -v

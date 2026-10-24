@@ -72,6 +72,15 @@ docker compose -f infra/docker-compose.yml --profile test run --rm test-runner \
 
 ## Local quality gates
 
-`make lint`, `make test`, `make test-race`, `make cover-summary`, and
-`make tidy`. CI runs `make lint && make test && make test-race`. The
-linter set is in `.golangci.yml`.
+`make help` lists every target. The gates PR Validation runs, each
+callable locally:
+
+| Target | Checks |
+|---|---|
+| `make lint-check` | golangci-lint (config in `.golangci.yml`, `integration` tag included); `make lint` applies auto-fixes |
+| `make test-unit` / `make test` / `make test-race` | host unit tests / full suite in Docker / full suite with `-race` |
+| `make cover-check` | host unit-test coverage ≥ `COVER_MIN` (a ratchet: raise it, never lower it) |
+| `make deadcode` | no function unreachable from every binary and test |
+| `make vuln` | govulncheck: no reachable known vulnerability |
+| `make tidy-check` | `go.mod`/`go.sum` are tidy |
+| `make css-check` | the checked-in `tailwind.css` matches the templates |
