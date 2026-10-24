@@ -21,6 +21,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/rs/zerolog"
@@ -144,9 +145,9 @@ func (d *Discoverer) List(ctx context.Context) ([]inventory.Inventory, error) {
 	return out, nil
 }
 
-// Find returns one Inventory by (srcBucket, invID, run). When run is
-// empty, returns the most recent run for the configuration — preserves
-// the old caller contract for code paths that just want "the latest".
+// Find returns one Inventory by (srcBucket, invID, run) with a single
+// manifest GET; an empty run costs one extra LIST to pick the most
+// recent run for the configuration.
 func (d *Discoverer) Find(ctx context.Context, srcBucket, invID, run string) (inventory.Inventory, error) {
 	if srcBucket == "" || invID == "" {
 		return inventory.Inventory{}, errEmptyID
@@ -155,24 +156,26 @@ func (d *Discoverer) Find(ctx context.Context, srcBucket, invID, run string) (in
 		return inventory.Inventory{}, fmt.Errorf("%w: %q/%q", ErrInvalidName, srcBucket, invID)
 	}
 	invPrefix := d.prefix + srcBucket + "/" + invID + "/"
-	runs, err := d.describeRuns(ctx, srcBucket, invID, invPrefix)
-	if err != nil {
-		return inventory.Inventory{}, err
-	}
-	if len(runs) == 0 {
-		return inventory.Inventory{SourceBucket: srcBucket, Name: invID}, nil
-	}
-	if run == "" {
-		// Newest first — caller wants "the latest".
-		return runs[0], nil
-	}
-	for i := range runs {
-		if runs[i].Run == run {
-			return runs[i], nil
+	switch {
+	case run == "":
+		runs, err := d.listRuns(ctx, invPrefix)
+		if err != nil {
+			return inventory.Inventory{}, err
 		}
+		if len(runs) == 0 {
+			return inventory.Inventory{SourceBucket: srcBucket, Name: invID}, nil
+		}
+		run = runs[0]
+	case !runFolderRE.MatchString(run):
+		return inventory.Inventory{}, fmt.Errorf("%w: %s/%s/%s", ErrRunNotFound, srcBucket, invID, run)
+	}
+	entry := runEntry(srcBucket, invID, invPrefix, run)
+	err := d.describeRun(ctx, &entry)
+	if nsk := (*types.NoSuchKey)(nil); errors.As(err, &nsk) {
+		return inventory.Inventory{}, fmt.Errorf("%w: %s/%s/%s", ErrRunNotFound, srcBucket, invID, run)
 	}
 
-	return inventory.Inventory{}, fmt.Errorf("%w: %s/%s/%s", ErrRunNotFound, srcBucket, invID, run)
+	return entry, nil
 }
 
 // ErrRunNotFound is returned by Find when the requested run isn't
@@ -182,15 +185,39 @@ var ErrRunNotFound = errors.New("run not found")
 var errEmptyID = errors.New("source bucket and inventory id are required")
 
 // describeRuns walks <prefix><src>/<inv>/ and returns one Inventory per
-// run folder, newest-first. Each entry has its own manifest fetched. A
-// configuration with no run folders returns a single placeholder.
+// run folder, newest-first. The newest manifestFetches runs have their
+// manifest fetched. A configuration with no run folders returns a
+// single placeholder.
 func (d *Discoverer) describeRuns(ctx context.Context, src, inv, invPrefix string) ([]inventory.Inventory, error) {
+	runs, err := d.listRuns(ctx, invPrefix)
+	if err != nil {
+		return nil, err
+	}
+	if len(runs) == 0 {
+		return []inventory.Inventory{{SourceBucket: src, Name: inv}}, nil
+	}
+
+	out := make([]inventory.Inventory, 0, len(runs))
+	limit := d.manifestFetches
+	for i, name := range runs {
+		entry := runEntry(src, inv, invPrefix, name)
+		if limit <= 0 || i < limit {
+			_ = d.describeRun(ctx, &entry)
+		}
+		out = append(out, entry)
+	}
+
+	return out, nil
+}
+
+// listRuns returns the run folder names under invPrefix, newest first.
+// Other directories (e.g. data/) are filtered out so they can't be
+// misread as runs.
+func (d *Discoverer) listRuns(ctx context.Context, invPrefix string) ([]string, error) {
 	folders, err := d.listCommonPrefixes(ctx, invPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("list runs: %w", err)
 	}
-
-	// Filter to legitimate run folders; sort newest first.
 	var runs []string
 	for _, r := range folders {
 		name := trimPrefix(r, invPrefix)
@@ -198,43 +225,40 @@ func (d *Discoverer) describeRuns(ctx context.Context, src, inv, invPrefix strin
 			runs = append(runs, name)
 		}
 	}
-	if len(runs) == 0 {
-		return []inventory.Inventory{{SourceBucket: src, Name: inv}}, nil
-	}
 	slices.SortFunc(runs, func(a, b string) int { return strings.Compare(b, a) })
 
-	out := make([]inventory.Inventory, 0, len(runs))
-	logger := zerolog.Ctx(ctx)
-	limit := d.manifestFetches
-	for i, name := range runs {
-		entry := inventory.Inventory{
-			SourceBucket: src,
-			Name:         inv,
-			Run:          name,
-			ManifestKey:  invPrefix + name + "/manifest.json",
-		}
-		if limit > 0 && i >= limit {
-			out = append(out, entry)
+	return runs, nil
+}
 
-			continue
-		}
-		manifest, err := d.fetchManifest(ctx, entry.ManifestKey)
-		if err != nil {
-			logger.Warn().Err(err).Str("src", src).Str("inv", inv).Str("run", name).Msg("fetch manifest")
-			entry.FileFormat = "unknown"
-			entry.Error = "failed to read manifest"
-			out = append(out, entry)
-
-			continue
-		}
-		entry.FileFormat = manifest.FileFormat
-		entry.FileCount = len(manifest.Files)
-		entry.TotalBytes = manifestTotalBytes(manifest)
-		entry.CreationTimestamp = manifest.CreationTimestamp
-		out = append(out, entry)
+func runEntry(src, inv, invPrefix, run string) inventory.Inventory {
+	return inventory.Inventory{
+		SourceBucket: src,
+		Name:         inv,
+		Run:          run,
+		ManifestKey:  invPrefix + run + "/manifest.json",
 	}
+}
 
-	return out, nil
+// describeRun fills entry's manifest stats. A fetch failure is logged
+// and recorded on the entry so the UI shows it; the error is returned
+// so callers can tell a missing run apart.
+func (d *Discoverer) describeRun(ctx context.Context, entry *inventory.Inventory) error {
+	manifest, err := d.fetchManifest(ctx, entry.ManifestKey)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).
+			Str("src", entry.SourceBucket).Str("inv", entry.Name).Str("run", entry.Run).
+			Msg("fetch manifest")
+		entry.FileFormat = "unknown"
+		entry.Error = "failed to read manifest"
+
+		return err
+	}
+	entry.FileFormat = manifest.FileFormat
+	entry.FileCount = len(manifest.Files)
+	entry.TotalBytes = manifestTotalBytes(manifest)
+	entry.CreationTimestamp = manifest.CreationTimestamp
+
+	return nil
 }
 
 // manifestTotalBytes sums the compressed sizes of every data file in
