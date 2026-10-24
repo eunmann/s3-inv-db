@@ -36,14 +36,6 @@ type typedMergeHeap struct {
 
 func (h *typedMergeHeap) Len() int { return len(h.items) }
 
-// init turns an unordered items slice into a valid min-heap in O(n).
-// Use when seeding from a batch; push() is O(log n) per insert.
-func (h *typedMergeHeap) init() {
-	for i := h.Len()/2 - 1; i >= 0; i-- {
-		h.siftDown(i)
-	}
-}
-
 func (h *typedMergeHeap) push(it mergeItem) {
 	h.items = append(h.items, it)
 	h.siftUp(len(h.items) - 1)

@@ -171,10 +171,6 @@ func (w *CompressedRunWriter) WriteSorted(rows []*PrefixRow) error {
 	return w.WriteAll(rows)
 }
 
-func (w *CompressedRunWriter) Count() uint64 {
-	return w.count
-}
-
 // Close flushes all buffers, finalizes compression, updates the
 // header, and closes the file. Idempotent — a second call returns nil
 // even if the first call returned an error mid-way (the underlying
