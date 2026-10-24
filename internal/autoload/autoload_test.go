@@ -37,6 +37,7 @@ var errBoom = errors.New("boom")
 
 type fakeDiscovery struct {
 	listErr  error
+	onList   func() // runs inside List, e.g. to model a user edit mid-poll
 	views    []inventory.MergedInventory
 	listCall int
 	mu       sync.Mutex
@@ -54,6 +55,9 @@ func (f *fakeDiscovery) List(_ context.Context) ([]inventory.MergedInventory, er
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.listCall++
+	if f.onList != nil {
+		f.onList()
+	}
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -285,5 +289,62 @@ func TestAutoLoader_LoadFailureRecordsBackoff(t *testing.T) {
 	}
 	if info.AutoLoadBackoffUntil.IsZero() {
 		t.Error("AutoLoadBackoffUntil should be set after a load failure")
+	}
+}
+
+func runView(run string) inventory.MergedInventory {
+	return inventory.MergedInventory{Inventory: inventory.Inventory{SourceBucket: "bkt", Name: "inv", Run: run, ManifestKey: "k-" + run}}
+}
+
+// With the newest `retention` runs loaded, an older run must not be
+// loaded: doing so evicts a newer run, which the next tick reloads —
+// an evict/rebuild loop costing a full S3 download per tick.
+func TestAutoLoader_NeverLoadsBeyondRetention(t *testing.T) {
+	cs, mgr := newFakeStores(t)
+	if err := cs.SetPolicy(t.Context(), "bkt", "inv", true, 2); err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range []string{"2026-01-02T00-00Z", "2026-01-03T00-00Z"} {
+		// Loading state stands in for loaded: both are skipped as targets.
+		if err := mgr.Hydrate(t.Context(), inventory.Info{ID: inventory.ID("bkt/inv/" + run), State: inventory.StateLoading}, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	disc := &fakeDiscovery{enabled: true, views: []inventory.MergedInventory{
+		runView("2026-01-01T00-00Z"), runView("2026-01-02T00-00Z"), runView("2026-01-03T00-00Z"),
+	}}
+	ldr := &fakeLoader{}
+	a := autoload.New(autoload.Config{}, autoload.Deps{Discovery: disc, Loader: ldr.AutoLoad, Submitter: &inlineSubmitter{}, ConfigStore: cs, Manager: mgr}, nil)
+	a.Tick(t.Context())
+
+	if len(ldr.loaded) != 0 {
+		t.Errorf("loaded %v, want nothing: the newest 2 runs are already held", ldr.loaded)
+	}
+}
+
+// A poll must not overwrite a policy change the user saved while the
+// poll's S3 listing was running.
+func TestAutoLoader_PollKeepsConcurrentPolicyChange(t *testing.T) {
+	cs, mgr := newFakeStores(t)
+	if err := cs.SetPolicy(t.Context(), "bkt", "inv", true, 2); err != nil {
+		t.Fatal(err)
+	}
+	disc := &fakeDiscovery{enabled: true, onList: func() {
+		if err := cs.SetPolicy(t.Context(), "bkt", "inv", false, 5); err != nil {
+			t.Error(err)
+		}
+	}}
+	a := autoload.New(autoload.Config{}, autoload.Deps{Discovery: disc, Loader: (&fakeLoader{}).AutoLoad, Submitter: &inlineSubmitter{}, ConfigStore: cs, Manager: mgr}, nil)
+	a.Tick(t.Context())
+
+	cfg, err := cs.Get(t.Context(), "bkt", "inv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AutoLoad || cfg.RetentionCount != 5 {
+		t.Errorf("config after poll = %+v, want the user's change (auto_load off, retention 5)", cfg)
+	}
+	if cfg.LastPolledAt.IsZero() {
+		t.Error("poll did not record LastPolledAt")
 	}
 }

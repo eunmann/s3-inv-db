@@ -49,6 +49,7 @@
                           hx-trigger="change"
                           hx-swap="none"
                           aria-label="Auto-load settings">
+                        <input type="hidden" name="auto_load" value="off">
                         <label class="inline-flex items-center gap-1.5 cursor-pointer">
                             <input type="checkbox" name="auto_load" value="on" class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500" {{if .AutoLoad}}checked{{end}}>
                             <span>Auto-load latest run</span>
