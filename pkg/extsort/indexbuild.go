@@ -153,6 +153,9 @@ func (b *IndexBuilder) cleanup() {
 	if b.tierStatsRowW != nil {
 		b.tierStatsRowW.Close()
 	}
+	if b.depthIndexBuilder != nil {
+		b.depthIndexBuilder.Close()
+	}
 	os.RemoveAll(b.outDir)
 }
 

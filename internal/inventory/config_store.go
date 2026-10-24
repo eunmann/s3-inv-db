@@ -115,23 +115,6 @@ func (s *ConfigStore) List(ctx context.Context) ([]Config, error) {
 	return out, nil
 }
 
-// Delete removes one config row.
-func (s *ConfigStore) Delete(ctx context.Context, source, name string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM inventory_configs WHERE source = ? AND name = ?`, source, name)
-	if err != nil {
-		return fmt.Errorf("delete config %s/%s: %w", source, name, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrStoreNotFound
-	}
-
-	return nil
-}
-
 func scanConfig(r rowScanner) (Config, error) {
 	var c Config
 	var autoLoad int

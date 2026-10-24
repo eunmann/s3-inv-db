@@ -127,11 +127,6 @@ func removeIfErr(path string) error {
 	return nil
 }
 
-// Count returns the number of elements written.
-func (w *ArrayWriter) Count() uint64 {
-	return w.count
-}
-
 // arrayTailPad is the number of zero bytes a width<8 (or width<4 for
 // u32 readers) array carries after the last element so a single LE
 // load + mask is always in bounds at the last index. 8 bytes is the
@@ -257,24 +252,6 @@ func (w *BlobWriter) WriteString(s string) error {
 	return nil
 }
 
-// WriteBytes writes prefix bytes and records its offset.
-// This avoids the string conversion overhead of WriteString.
-func (w *BlobWriter) WriteBytes(b []byte) error {
-	// Write offset first
-	if err := w.offsets.WriteU64(w.offset); err != nil {
-		return fmt.Errorf("write offset: %w", err)
-	}
-
-	// Write bytes
-	n, err := w.blobWriter.Write(b)
-	if err != nil {
-		return fmt.Errorf("write bytes: %w", err)
-	}
-	w.offset += uint64(n)
-
-	return nil
-}
-
 // Close finalizes both files, writing a sentinel offset. Secondary
 // close/flush errors during cleanup are joined into the returned chain
 // so failures aren't silently dropped.
@@ -302,14 +279,4 @@ func (w *BlobWriter) Close() error {
 	}
 
 	return nil
-}
-
-// Count returns the number of strings written.
-func (w *BlobWriter) Count() uint64 {
-	// Offsets count is N+1 due to sentinel
-	if w.offsets.Count() == 0 {
-		return 0
-	}
-
-	return w.offsets.Count() - 1
 }

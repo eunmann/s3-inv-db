@@ -12,12 +12,6 @@ func BenchmarkSizes() []int {
 	return []int{1000, 10_000, 100_000}
 }
 
-// ScalingSizes returns larger sizes for comprehensive scaling tests.
-// Used with S3INV_LONG_BENCH=1 environment variable.
-func ScalingSizes() []int {
-	return []int{10_000, 50_000, 100_000, 250_000, 500_000}
-}
-
 // Tree shape names accepted by GenerateKeys and NewGridGenerator.
 const (
 	ShapeDeepNarrow      = "deep_narrow"

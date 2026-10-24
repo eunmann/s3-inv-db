@@ -17,11 +17,6 @@ type GridSpec struct {
 	Seed  int64
 }
 
-// Name returns a stable cell identifier used in NDJSON output.
-func (s GridSpec) Name() string {
-	return fmt.Sprintf("shape=%s/tier=%s/size=%s/n=%d", s.Shape, s.Tier.Name, s.Size.Name, s.N)
-}
-
 // GridGenerator emits FakeObject instances for a grid cell. Unlike
 // the original Generator it picks Key from a named shape preset and
 // pulls Size + TierID from the requested distributions.
