@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"math/rand"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -368,14 +369,15 @@ func (g *Generator) generateTier() tiers.ID {
 	r := g.rng.Float64()
 	cumulative := 0.0
 
-	for tierID, prob := range g.cfg.TierDistribution {
-		cumulative += prob
+	// Walk tiers in ID order: map iteration order is random, which would
+	// make a seeded generator assign different tiers on every run.
+	for _, tierID := range slices.Sorted(maps.Keys(g.cfg.TierDistribution)) {
+		cumulative += g.cfg.TierDistribution[tierID]
 		if r < cumulative {
 			return tierID
 		}
 	}
 
-	// Default fallback
 	return tiers.Standard
 }
 
