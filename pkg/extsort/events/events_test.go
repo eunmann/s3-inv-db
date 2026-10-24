@@ -185,3 +185,53 @@ func TestBus_ConcurrentPublishersAndSubscribers(t *testing.T) {
 		}
 	}
 }
+
+// TestBus_PublishRacesCancelAndClose stresses Publish against Cancel
+// and Close. A Publish that sends to a channel Cancel or Close has
+// already closed panics with "send on closed channel".
+func TestBus_PublishRacesCancelAndClose(_ *testing.T) {
+	const rounds = 200
+	for range rounds {
+		bus := events.NewBus()
+		var wg sync.WaitGroup
+		stop := make(chan struct{})
+		for range 4 {
+			wg.Go(func() {
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+						bus.Publish(events.Event{Stage: events.StageParse, Type: events.EvtBatchCommitted})
+					}
+				}
+			})
+		}
+		for range 4 {
+			wg.Go(func() {
+				for range 20 {
+					sub := bus.Subscribe(1)
+					sub.Cancel()
+				}
+			})
+		}
+		bus.Subscribe(1)
+		bus.Close()
+		close(stop)
+		wg.Wait()
+	}
+}
+
+func BenchmarkBus_Publish(b *testing.B) {
+	bus := events.NewBus()
+	defer bus.Close()
+	sub := bus.Subscribe(1024, events.StageParse)
+	defer sub.Cancel()
+	ev := events.Event{Stage: events.StageParse, Type: events.EvtBatchCommitted}
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			bus.Publish(ev)
+		}
+	})
+}

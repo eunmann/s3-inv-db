@@ -24,8 +24,8 @@
 //	    Payload: events.BatchCommitted{Rows: 10_000, Bytes: 4_096_000},
 //	})
 //
-// Zero-cost when nobody is subscribed: Publish returns immediately
-// after a single atomic load + nil check.
+// Cheap when nobody is subscribed: Publish takes an uncontended read
+// lock and returns.
 package events
 
 import (
@@ -136,7 +136,7 @@ func (s *Subscription) Cancel() {
 // Bus is the shared event bus. Zero-value is unusable; call NewBus.
 type Bus struct {
 	subs   []*Subscription
-	mu     sync.Mutex
+	mu     sync.RWMutex
 	closed atomic.Bool
 }
 
@@ -195,21 +195,12 @@ func (b *Bus) Publish(ev Event) {
 	if ev.Time.IsZero() {
 		ev.Time = time.Now()
 	}
-	// Snapshot the subscriber list under the lock. We never call
-	// into a subscriber while holding the lock — a slow channel
-	// receive on send would deadlock with Cancel.
-	b.mu.Lock()
-	subs := b.subs
-	if len(subs) == 0 {
-		b.mu.Unlock()
-
-		return
-	}
-	snapshot := make([]*Subscription, len(subs))
-	copy(snapshot, subs)
-	b.mu.Unlock()
-
-	for _, sub := range snapshot {
+	// Sends happen under the read lock so Cancel and Close, which close
+	// channels under the write lock, cannot close one mid-send. The
+	// sends never block, so holding the lock cannot stall them.
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for _, sub := range b.subs {
 		if sub.stages != nil {
 			if _, ok := sub.stages[ev.Stage]; !ok {
 				continue
@@ -230,10 +221,9 @@ func (b *Bus) Close() {
 		return
 	}
 	b.mu.Lock()
-	subs := b.subs
-	b.subs = nil
-	b.mu.Unlock()
-	for _, sub := range subs {
+	defer b.mu.Unlock()
+	for _, sub := range b.subs {
 		close(sub.send)
 	}
+	b.subs = nil
 }
