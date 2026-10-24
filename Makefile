@@ -1,6 +1,6 @@
 .PHONY: help all build server seeder test test-unit test-race lint lint-check clean clean-seed seed \
         css css-check dev dev-reset docker-build docker-prod docker-seed docker-down \
-        cover cover-html cover-summary cover-check tidy tidy-check deadcode vuln actionlint compose-preflight
+        cover cover-html cover-summary cover-check tidy tidy-check deadcode vuln actionlint bench-ab compose-preflight
 
 .DEFAULT_GOAL := help
 
@@ -128,6 +128,14 @@ vuln: ## govulncheck (reachable vulnerabilities only)
 
 actionlint: ## Lint GitHub Actions workflows
 	$(ACTIONLINT)
+
+# A/B benchmark gate for performance changes: make bench-ab BASE=main
+# (ROUNDS=8, SUITE=bench/suite.txt). Not part of CI; see bench/README.md.
+BASE ?= main
+ROUNDS ?= 8
+SUITE ?= bench/suite.txt
+bench-ab: ## Compare benchmarks of BASE vs the working tree; fail on regressions
+	scripts/bench-ab.sh -n $(ROUNDS) -s $(SUITE) $(BASE)
 
 # Default `lint` runs with --fix so iterative dev cleans up auto-fixable
 # issues (gofumpt/gci/goimports/some style). CI should call `lint-check`

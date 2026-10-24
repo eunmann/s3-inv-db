@@ -41,3 +41,6 @@ tmp/
 .claude/scheduled_tasks.lock
 .claude/worktrees/
 seed-data/
+
+# A/B benchmark runs (scripts/bench-ab.sh)
+bench/ab/

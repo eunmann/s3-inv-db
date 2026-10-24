@@ -121,6 +121,11 @@ load.
 
 ## Running benchmarks
 
+Performance changes are gated by an A/B comparison against the base
+commit on the same machine — `make bench-ab BASE=main`; see
+[bench/README.md](../bench/README.md). The commands below are for
+exploration.
+
 ```bash
 go test -bench=. -benchmem ./pkg/indexread/                          # all indexread benches
 go test -bench=BenchmarkMPHFBuild -benchmem ./pkg/format/             # MPHF build
