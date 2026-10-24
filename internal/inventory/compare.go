@@ -218,20 +218,20 @@ func CompareLevel(a, b *indexread.Index, prefix string) CompareLevelData {
 	return out
 }
 
-// mergeChildren performs an O(n+m) sorted merge of two pre-sorted
-// child-record slices, emitting one CompareChild per distinct
-// segment. Replaces the previous map-based join (one map alloc per
-// child × two sides) which dominated allocation cost on wide
-// prefixes.
+// mergeChildren performs an O(n+m) sorted merge of two child-record
+// slices in index (preorder) order, emitting one CompareChild per
+// distinct child. It compares full prefixes, the order the index stores
+// them in: "2024-x/" < "2024/" because '-' < '/', while the trimmed
+// segments order the other way.
 func mergeChildren(a, b []segChildRec) []CompareChild {
 	out := make([]CompareChild, 0, len(a)+len(b))
 	i, j := 0, 0
 	for i < len(a) && j < len(b) {
 		switch {
-		case a[i].seg < b[j].seg:
+		case a[i].rec.fullPrefix < b[j].rec.fullPrefix:
 			out = append(out, fromBefore(a[i]))
 			i++
-		case a[i].seg > b[j].seg:
+		case a[i].rec.fullPrefix > b[j].rec.fullPrefix:
 			out = append(out, fromAfter(b[j]))
 			j++
 		default:
@@ -316,11 +316,9 @@ type segChildRec struct {
 	rec childRec
 }
 
-// indexChildren returns the children of `parent` as a slice sorted by
-// segment. Sortedness comes for free: DescendantsAtDepthFiltered
-// returns positions in subtree-preorder, and the underlying prefixes
-// are stored in preorder which is lex-sorted, so the derived
-// segments are already in order.
+// indexChildren returns the children of `parent` in index order:
+// DescendantsAtDepthFiltered returns positions in preorder, which is
+// byte order of the full prefix (not of the trimmed segment).
 func indexChildren(idx *indexread.Index, parent uint64, ok bool, prefix string) []segChildRec {
 	if !ok {
 		return nil

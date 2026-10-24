@@ -6,7 +6,9 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
+	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/rs/zerolog"
 )
 
@@ -213,4 +215,70 @@ func openSeededIndex(t *testing.T, seed int64, objects int) *indexread.Index {
 	t.Cleanup(func() { _ = idx.Close() })
 
 	return idx
+}
+
+// openKeysIndex builds an index from explicit object keys (1 byte each,
+// STANDARD tier).
+func openKeysIndex(t *testing.T, keys ...string) *indexread.Index {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "index")
+	agg := extsort.NewAggregator(len(keys), 0)
+	for _, k := range keys {
+		agg.AddObject(k, 1, tiers.Standard)
+	}
+	rows := agg.Drain()
+	extsort.SortPrefixRows(rows)
+	b, err := extsort.NewIndexBuilder(dir, t.TempDir())
+	if err != nil {
+		t.Fatalf("NewIndexBuilder: %v", err)
+	}
+	if err := b.SetPresentTiers(agg.PresentTiers()); err != nil {
+		t.Fatalf("SetPresentTiers: %v", err)
+	}
+	for _, r := range rows {
+		if err := b.Add(r); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+	}
+	if err := b.Finalize(); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	idx, err := indexread.Open(dir)
+	if err != nil {
+		t.Fatalf("indexread.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = idx.Close() })
+
+	return idx
+}
+
+// Prefixes are stored in byte order of the full prefix, where "2024-x/"
+// sorts before "2024/" ('-' < '/') even though segment "2024" sorts
+// before "2024-x". Merging on segments split such siblings.
+func TestCompareLevel_PunctuatedSiblingsMergeOnce(t *testing.T) {
+	before := openKeysIndex(t, "2024-archive/a", "2024/a", "2024.old/a", "2024 copy/a", "2024!/a")
+	after := openKeysIndex(t, "2024/a", "2024/b", "2024 copy/a", "2025/a")
+
+	got := inventory.CompareLevel(before, after, "")
+
+	want := map[string]inventory.CompareStatus{
+		"2024-archive": inventory.CompareRemoved,
+		"2024":         inventory.CompareChanged,
+		"2024.old":     inventory.CompareRemoved,
+		"2024 copy":    inventory.CompareUnchanged,
+		"2024!":        inventory.CompareRemoved,
+		"2025":         inventory.CompareAdded,
+	}
+	seen := map[string]int{}
+	for _, c := range got.Children {
+		seen[c.Segment]++
+		if w, ok := want[c.Segment]; !ok || c.Status != w {
+			t.Errorf("child %q status %s, want %s", c.Segment, c.Status, w)
+		}
+	}
+	for seg := range want {
+		if seen[seg] != 1 {
+			t.Errorf("child %q appears %d times, want once", seg, seen[seg])
+		}
+	}
 }
