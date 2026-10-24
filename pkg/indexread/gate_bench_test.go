@@ -1,6 +1,7 @@
 package indexread_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -30,30 +31,42 @@ type gateFixture struct {
 	parents   []uint64 // sampled positions that have children
 }
 
-//nolint:gochecknoglobals // one fixture per test binary, built on first use
 var (
 	gateOnce sync.Once
+	gateDir  string
 	gateFix  *gateFixture
-	gateErr  string
+	errGate  error
 )
+
+// TestMain removes the gate fixture, a full 1M-object index, once the
+// binary's tests and benchmarks are done.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if gateFix != nil {
+		_ = gateFix.idx.Close()
+	}
+	if gateDir != "" {
+		_ = os.RemoveAll(gateDir)
+	}
+	os.Exit(code)
+}
 
 func gate(b *testing.B) *gateFixture {
 	b.Helper()
-	gateOnce.Do(func() { gateFix, gateErr = buildGateFixture() })
+	gateOnce.Do(func() { gateFix, errGate = buildGateFixture() })
 	if gateFix == nil {
-		b.Fatalf("gate fixture: %s", gateErr)
+		b.Fatalf("gate fixture: %v", errGate)
 	}
 
 	return gateFix
 }
 
-func buildGateFixture() (*gateFixture, string) {
+func buildGateFixture() (*gateFixture, error) {
 	dir, err := os.MkdirTemp("", "s3inv-gate-")
 	if err != nil {
-		return nil, err.Error()
+		return nil, fmt.Errorf("mkdir temp: %w", err)
 	}
-	// The index stays mmap'd for the life of the binary; the directory is
-	// left for the OS temp cleaner rather than racing open mappings.
+	gateDir = dir
 	indexDir := filepath.Join(dir, "index")
 	objs := benchutil.NewGenerator(benchutil.S3RealisticConfig(gateObjects)).Generate()
 	agg := extsort.NewAggregator(len(objs), 0)
@@ -64,22 +77,22 @@ func buildGateFixture() (*gateFixture, string) {
 	extsort.SortPrefixRows(rows)
 	builder, err := extsort.NewIndexBuilder(indexDir, "")
 	if err != nil {
-		return nil, err.Error()
+		return nil, fmt.Errorf("new index builder: %w", err)
 	}
 	if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
-		return nil, err.Error()
+		return nil, fmt.Errorf("set present tiers: %w", err)
 	}
 	for _, row := range rows {
 		if err := builder.Add(row); err != nil {
-			return nil, err.Error()
+			return nil, fmt.Errorf("add row: %w", err)
 		}
 	}
 	if err := builder.Finalize(); err != nil {
-		return nil, err.Error()
+		return nil, fmt.Errorf("finalize index: %w", err)
 	}
 	idx, err := indexread.Open(indexDir)
 	if err != nil {
-		return nil, err.Error()
+		return nil, fmt.Errorf("open index: %w", err)
 	}
 
 	f := &gateFixture{idx: idx}
@@ -87,7 +100,7 @@ func buildGateFixture() (*gateFixture, string) {
 	for pos := uint64(0); pos < idx.Count() && len(f.positions) < gateSample; pos += step {
 		p, err := idx.PrefixString(pos)
 		if err != nil {
-			return nil, err.Error()
+			return nil, fmt.Errorf("prefix string: %w", err)
 		}
 		f.prefixes = append(f.prefixes, p)
 		f.positions = append(f.positions, pos)
@@ -96,7 +109,7 @@ func buildGateFixture() (*gateFixture, string) {
 		}
 	}
 
-	return f, ""
+	return f, nil
 }
 
 // BenchmarkGateStatsForPrefix: string → stats, the /api stats hot path.
