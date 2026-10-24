@@ -2,8 +2,10 @@ package format
 
 import (
 	"errors"
+	"hash/fnv"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -309,4 +311,169 @@ func prefixFromInt(i int) string {
 	}
 
 	return result
+}
+
+// buildTestMPHF builds an MPHF over prefixes (position = slice index)
+// into a fresh directory and returns it.
+func buildTestMPHF(t *testing.T, prefixes []string) string {
+	t.Helper()
+	dir := t.TempDir()
+	b := newTestMPHFBuilder(t)
+	for i, p := range prefixes {
+		b.Add(p, uint64(i))
+	}
+	if err := b.Build(dir); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	return dir
+}
+
+// TestMPHFLookupRoundTripsEdgePrefixes checks every stored prefix
+// looks up to its own position, including empty segments and
+// trailing-slash forms that the segment-wise verification must
+// reassemble exactly.
+func TestMPHFLookupRoundTripsEdgePrefixes(t *testing.T) {
+	prefixes := []string{"", "/", "//", "a", "a/", "a//", "a/b", "a/b/", "ab/", "/a", "日本語/x/", "emoji/🎉/"}
+	dir := buildTestMPHF(t, prefixes)
+
+	m, err := OpenMPHF(dir)
+	if err != nil {
+		t.Fatalf("OpenMPHF: %v", err)
+	}
+	defer m.Close()
+
+	for i, p := range prefixes {
+		pos, ok := m.Lookup(p)
+		if !ok || pos != uint64(i) {
+			t.Errorf("Lookup(%q) = %d, %v; want %d, true", p, pos, ok, i)
+		}
+	}
+	if err := VerifyMPHF(m); err != nil {
+		t.Errorf("VerifyMPHF: %v", err)
+	}
+	if allocs := testing.AllocsPerRun(100, func() { _, _ = m.Lookup("a/b/") }); allocs != 0 {
+		t.Errorf("Lookup allocs = %v, want 0", allocs)
+	}
+}
+
+// TestHashBytesSeedZeroIsFNV1a pins seed 0 to plain FNV-1a, the key
+// hash every pre-seed index was built with.
+func TestHashBytesSeedZeroIsFNV1a(t *testing.T) {
+	for _, s := range []string{"", "a", "data/2024/", "日本語/", strings.Repeat("x/", 100)} {
+		h := fnv.New64a()
+		_, _ = h.Write([]byte(s))
+		if got, want := hashString(s, 0), h.Sum64(); got != want {
+			t.Errorf("hashString(%q, 0) = %#x, want FNV-1a %#x", s, got, want)
+		}
+		if hashString(s, mphfSeed(1)) == hashString(s, 0) {
+			t.Errorf("hashString(%q) ignores the seed", s)
+		}
+	}
+}
+
+// collidingKeyHash makes a and b share a key hash under seed 0 only.
+func collidingKeyHash(a, b string) func(string, uint64) uint64 {
+	return func(s string, seed uint64) uint64 {
+		if seed == 0 && (s == a || s == b) {
+			return hashString(a, 0)
+		}
+
+		return hashString(s, seed)
+	}
+}
+
+// readCombined returns the raw mph_fp_pos.u64 bytes and its header.
+func readCombined(t *testing.T, dir string) ([]byte, Header) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, CombinedMPHFArrayFile))
+	if err != nil {
+		t.Fatalf("read fp/pos: %v", err)
+	}
+	h, err := DecodeHeader(data)
+	if err != nil {
+		t.Fatalf("decode fp/pos header: %v", err)
+	}
+
+	return data, h
+}
+
+func TestStreamingMPHFBuildSurvivesKeyHashCollision(t *testing.T) {
+	prefixes := make([]string, 2000)
+	for i := range prefixes {
+		prefixes[i] = prefixFromInt(i + 1)
+	}
+	dir := t.TempDir()
+	b := newTestMPHFBuilder(t)
+	b.sb.keyHash = collidingKeyHash(prefixes[3], prefixes[1500])
+	for i, p := range prefixes {
+		b.Add(p, uint64(i))
+	}
+	if err := b.Build(dir); err != nil {
+		t.Fatalf("Build with a seed-0 key collision: %v", err)
+	}
+
+	data, h := readCombined(t, dir)
+	if h.Version != Version {
+		t.Errorf("fp/pos Version = %d, want %d", h.Version, Version)
+	}
+	if want := (HeaderSize + 16*len(prefixes) + mphfSeedBytes); len(data) != want {
+		t.Errorf("fp/pos size = %d, want %d", len(data), want)
+	}
+
+	m, err := OpenMPHF(dir)
+	if err != nil {
+		t.Fatalf("OpenMPHF: %v", err)
+	}
+	defer m.Close()
+	if m.seed == 0 {
+		t.Fatal("seed = 0 after a seed-0 collision")
+	}
+	for i, p := range prefixes {
+		if pos, ok := m.Lookup(p); !ok || pos != uint64(i) {
+			t.Errorf("Lookup(%q) = %d, %v; want %d, true", p, pos, ok, i)
+		}
+	}
+	if err := VerifyMPHF(m); err != nil {
+		t.Errorf("VerifyMPHF: %v", err)
+	}
+}
+
+func TestStreamingMPHFBuildPersistentKeyCollisionFails(t *testing.T) {
+	b := newTestMPHFBuilder(t)
+	b.sb.keyHash = func(s string, seed uint64) uint64 {
+		if s == "a/" || s == "b/" {
+			return seed
+		}
+
+		return hashString(s, seed)
+	}
+	for i, p := range []string{"", "a/", "b/"} {
+		b.Add(p, uint64(i))
+	}
+	if err := b.Build(t.TempDir()); !errors.Is(err, ErrMPHFKeyCollision) {
+		t.Fatalf("Build = %v, want ErrMPHFKeyCollision", err)
+	}
+}
+
+func TestOpenMPHFMissingSeedWord(t *testing.T) {
+	dir := t.TempDir()
+	b := newTestMPHFBuilder(t)
+	b.sb.keyHash = collidingKeyHash("a/", "b/")
+	for i, p := range []string{"", "a/", "b/"} {
+		b.Add(p, uint64(i))
+	}
+	if err := b.Build(dir); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	path := filepath.Join(dir, CombinedMPHFArrayFile)
+	if err := os.Truncate(path, HeaderSize+16*3); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	if m, err := OpenMPHF(dir); !errors.Is(err, ErrFileTooSmall) {
+		if err == nil {
+			m.Close()
+		}
+		t.Fatalf("OpenMPHF = %v, want ErrFileTooSmall", err)
+	}
 }

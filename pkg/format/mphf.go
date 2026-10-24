@@ -1,6 +1,7 @@
 package format
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -33,6 +34,9 @@ type MPHF struct {
 	combined     *ArrayReader
 	dictPrefixes *DictPrefixReader
 	count        uint64
+	// seed is XORed into the key hash's offset basis; see
+	// writeCombinedMmap for where it is stored.
+	seed uint64
 }
 
 // OpenMPHF opens an MPHF from the given directory.
@@ -61,6 +65,12 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open combined fp+pos: %w", err)
 	}
+	seed, err := mphfSeedOf(combined)
+	if err != nil {
+		combined.Close()
+
+		return nil, err
+	}
 
 	dictPrefixes, err := OpenDictPrefixReader(outDir)
 	if err != nil {
@@ -74,7 +84,18 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 		combined:     combined,
 		dictPrefixes: dictPrefixes,
 		count:        combined.Count() / 2,
+		seed:         seed,
 	}, nil
+}
+
+// mphfSeedOf returns the key-hash seed stored after the fp/pos slots.
+func mphfSeedOf(combined *ArrayReader) (uint64, error) {
+	end := combined.header.Count * uint64(combined.header.Width)
+	if uint64(len(combined.data)) < end+mphfSeedBytes {
+		return 0, fmt.Errorf("read MPHF seed: %w", ErrFileTooSmall)
+	}
+
+	return binary.LittleEndian.Uint64(combined.data[end:]), nil
 }
 
 // Close releases resources.
@@ -95,7 +116,7 @@ func (m *MPHF) Lookup(prefix string) (uint64, bool) {
 	if m.count == 0 || m.mph == nil {
 		return 0, false
 	}
-	keyHash := hashString(prefix)
+	keyHash := hashString(prefix, m.seed)
 	hashVal := m.mph.Find(keyHash)
 	if hashVal == 0 {
 		return 0, false
@@ -176,18 +197,28 @@ func (m *MPHF) Count() uint64 {
 	return m.count
 }
 
-// hashString computes a uint64 hash for a string to use as MPHF key.
-// Forwards to hashBytes via a zero-copy string-to-bytes conversion.
-func hashString(s string) uint64 {
-	return hashBytes(unsafe.Slice(unsafe.StringData(s), len(s)))
+const (
+	fnvOffset64 uint64 = 14695981039346656037
+	fnvPrime64  uint64 = 1099511628211
+)
+
+// hashString computes the MPHF key hash of s. Forwards to hashBytes
+// via a zero-copy string-to-bytes conversion.
+func hashString(s string, seed uint64) uint64 {
+	return hashBytes(unsafe.Slice(unsafe.StringData(s), len(s)), seed)
 }
 
-// hashBytes computes a uint64 hash for bytes to use as MPHF key.
-func hashBytes(b []byte) uint64 {
-	h := fnv.New64a()
-	h.Write(b)
+// hashBytes is 64-bit FNV-1a with the offset basis XORed with seed,
+// so seed 0 is plain FNV-1a: the key hash of every index built before
+// seeds existed.
+func hashBytes(b []byte, seed uint64) uint64 {
+	h := fnvOffset64 ^ seed
+	for _, c := range b {
+		h ^= uint64(c)
+		h *= fnvPrime64
+	}
 
-	return h.Sum64()
+	return h
 }
 
 // computeFingerprint computes a fingerprint for verification. Uses a

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/klauspost/compress/zstd"
@@ -53,6 +54,10 @@ type StreamingMPHFBuilder struct {
 	tempEncoder *zstd.Encoder
 	tempWriter  *bufio.Writer
 	tempPath    string
+	tempDir     string
+
+	// keyHash is hashString; tests replace it to force key collisions.
+	keyHash func(prefix string, seed uint64) uint64
 
 	// Stats
 	count      uint64
@@ -121,6 +126,8 @@ func NewStreamingMPHFBuilder(tempDir string) (*StreamingMPHFBuilder, error) {
 		tempEncoder:  enc,
 		tempWriter:   bufio.NewWriterSize(enc, 1024*1024),
 		tempPath:     tempFile.Name(),
+		tempDir:      tempDir,
+		keyHash:      hashString,
 		bufferSize:   1024 * 1024,
 	}
 
@@ -132,25 +139,23 @@ func NewStreamingMPHFBuilder(tempDir string) (*StreamingMPHFBuilder, error) {
 // appended to disk-backed arrays rather than heap slices, so memory
 // usage during Add stays flat regardless of prefix count.
 func (b *StreamingMPHFBuilder) Add(prefix string, pos uint64) error {
-	prefixBytes := []byte(prefix)
-
-	if err := b.hashes.Append(hashBytes(prefixBytes)); err != nil {
+	if err := b.hashes.Append(b.keyHash(prefix, 0)); err != nil {
 		return fmt.Errorf("append hash: %w", err)
 	}
 	if err := b.preorderPos.Append(pos); err != nil {
 		return fmt.Errorf("append preorder pos: %w", err)
 	}
-	if err := b.fingerprints.Append(computeFingerprintBytes(prefixBytes)); err != nil {
+	if err := b.fingerprints.Append(computeFingerprint(prefix)); err != nil {
 		return fmt.Errorf("append fingerprint: %w", err)
 	}
 
 	// Write prefix to temp file with length prefix.
 	var lenBuf [4]byte
-	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(prefixBytes)))
+	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(prefix)))
 	if _, err := b.tempWriter.Write(lenBuf[:]); err != nil {
 		return fmt.Errorf("write prefix length: %w", err)
 	}
-	if _, err := b.tempWriter.Write(prefixBytes); err != nil {
+	if _, err := b.tempWriter.WriteString(prefix); err != nil {
 		return fmt.Errorf("write prefix: %w", err)
 	}
 
@@ -239,6 +244,12 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		return fmt.Errorf("freeze fingerprints: %w", err)
 	}
 
+	n := int(b.count)
+	pairs, seed, err := b.uniqueKeyHashes(n)
+	if err != nil {
+		return err
+	}
+
 	// Build MPHF with gamma=2.0 and ReverseMap for fast position lookup
 	log.Debug().
 		Uint64("hash_count", b.count).
@@ -290,8 +301,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	log.Debug().Msg("MPHF: computing hash positions via ReverseMap")
 	posStart := time.Now()
 
-	n := int(b.count)
-	hashPositions, err := b.computeHashPositionsParallelSort(mph, n)
+	hashPositions, err := computeHashPositions(mph, pairs)
 	if err != nil {
 		return err
 	}
@@ -309,7 +319,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 
 	log.Debug().Msg("MPHF: writing combined fp+pos via mmap")
 	mapStart := time.Now()
-	if err := writeCombinedMmap(outDir, n, hashPositions, b.fingerprints.Slice(), b.preorderPos.Slice()); err != nil {
+	if err := writeCombinedMmap(outDir, n, hashPositions, b.fingerprints.Slice(), b.preorderPos.Slice(), seed); err != nil {
 		return err
 	}
 	log.Debug().
@@ -344,24 +354,107 @@ type hashIdxPair struct {
 	idx  uint32
 }
 
-// computeHashPositionsParallelSort replaces the map with a sorted
-// (hash, idx) array and binary-searches it in parallel across
-// runtime.NumCPU() workers. Trades O(n) map build for O(n log n) sort,
-// betting that the cache-friendlier flat array plus parallelism wins
-// at scale where the map exceeds L3.
+// maxMPHFSeedAttempts bounds the rehashes after a key-hash collision.
+// Each fresh seed collides again with probability ~n²/2⁶⁵ (≈2.7% at
+// 1B prefixes), so eight in a row means something other than chance.
+const maxMPHFSeedAttempts = 8
+
+// uniqueKeyHashes returns the key hashes as (hash, idx) pairs sorted
+// by hash, plus the seed that made them distinct. Bbhash cannot build
+// over duplicate keys, so when two prefixes share a hash every key is
+// rehashed with the next seed; seed 0 (no collision) keeps the hashes
+// Add computed.
 //
 // Uint32 indices cap input at ~4B prefixes; the build pipeline tracks
 // uint64 counts elsewhere but no realistic MPHF input approaches 2^32.
-func (b *StreamingMPHFBuilder) computeHashPositionsParallelSort(mph *bbhash.BBHash2, n int) ([]int, error) {
+func (b *StreamingMPHFBuilder) uniqueKeyHashes(n int) ([]hashIdxPair, uint64, error) {
 	if uint64(n) > math.MaxUint32 {
-		return nil, fmt.Errorf("%w: %d prefixes exceeds uint32 index range used by the sorted-array variant", ErrMPHFAmbiguousKey, n)
+		return nil, 0, fmt.Errorf("%w: %d prefixes exceeds uint32 index range used by the sorted-array variant", ErrMPHFAmbiguousKey, n)
 	}
 	pairs := make([]hashIdxPair, n)
-	for i, h := range b.hashes.Slice() {
-		pairs[i] = hashIdxPair{hash: h, idx: uint32(i)}
+	var seed uint64
+	for attempt := 1; ; attempt++ {
+		for i, h := range b.hashes.Slice() {
+			pairs[i] = hashIdxPair{hash: h, idx: uint32(i)}
+		}
+		parallelRadixSortByHashByte(pairs)
+		if !hasDuplicateHash(pairs) {
+			return pairs, seed, nil
+		}
+		if attempt > maxMPHFSeedAttempts {
+			return nil, 0, fmt.Errorf("%w: duplicates remain after %d seeds", ErrMPHFKeyCollision, maxMPHFSeedAttempts)
+		}
+		seed = mphfSeed(uint64(attempt))
+		logging.L().Debug().Uint64("seed", seed).Msg("MPHF: duplicate key hash, rehashing with a new seed")
+		if err := b.rehashKeys(seed); err != nil {
+			return nil, 0, err
+		}
 	}
-	parallelRadixSortByHashByte(pairs)
+}
 
+// hasDuplicateHash reports whether two adjacent pairs of a hash-sorted
+// slice share a hash.
+func hasDuplicateHash(pairs []hashIdxPair) bool {
+	for i := 1; i < len(pairs); i++ {
+		if pairs[i].hash == pairs[i-1].hash {
+			return true
+		}
+	}
+
+	return false
+}
+
+// mphfSeed derives the seed for a retry with the splitmix64 finalizer
+// so every bit of the FNV offset basis changes, not just the low ones
+// a small counter would touch; low FNV-1a output bits depend only on
+// low basis bits.
+func mphfSeed(attempt uint64) uint64 {
+	const (
+		gamma  = 0x9e3779b97f4a7c15
+		mul1   = 0xbf58476d1ce4e5b9
+		mul2   = 0x94d049bb133111eb
+		shift1 = 30
+		shift2 = 27
+		shift3 = 31
+	)
+	z := attempt * gamma
+	z = (z ^ (z >> shift1)) * mul1
+	z = (z ^ (z >> shift2)) * mul2
+
+	return z ^ (z >> shift3)
+}
+
+// rehashKeys replaces the frozen key-hash array with the hashes of the
+// spooled prefixes under seed.
+func (b *StreamingMPHFBuilder) rehashKeys(seed uint64) error {
+	hashes, err := newU64DiskArray(b.tempDir, "mphf_hashes")
+	if err != nil {
+		return err
+	}
+	err = b.forEachPrefix(func(_ int, prefix []byte) error {
+		return hashes.Append(b.keyHash(unsafe.String(unsafe.SliceData(prefix), len(prefix)), seed))
+	})
+	if err == nil {
+		err = hashes.Freeze()
+	}
+	if err != nil {
+		return errors.Join(fmt.Errorf("rehash MPHF keys: %w", err), hashes.Close())
+	}
+	old := b.hashes
+	b.hashes = hashes
+	if err := old.Close(); err != nil {
+		return fmt.Errorf("close superseded hashes: %w", err)
+	}
+
+	return nil
+}
+
+// computeHashPositions maps each prefix index to its MPHF slot by
+// walking the slots in parallel across runtime.NumCPU() workers and
+// binary-searching each slot's key in the hash-sorted pairs. The flat
+// sorted array beats a map once the map would exceed L3.
+func computeHashPositions(mph *bbhash.BBHash2, pairs []hashIdxPair) ([]int, error) {
+	n := len(pairs)
 	hashPositions := make([]int, n)
 	numWorkers := mphfWorkerCount(n)
 	chunkSize := (n + numWorkers - 1) / numWorkers
@@ -525,6 +618,37 @@ func (b *StreamingMPHFBuilder) openPrefixReader() (*bufio.Reader, *zstd.Decoder,
 	return bufio.NewReaderSize(dec, b.bufferSize), dec, nil
 }
 
+// forEachPrefix streams the spooled prefixes in Add order. The slice
+// passed to fn is reused for the next prefix.
+func (b *StreamingMPHFBuilder) forEachPrefix(fn func(i int, prefix []byte) error) error {
+	reader, dec, err := b.openPrefixReader()
+	if err != nil {
+		return err
+	}
+	defer dec.Close()
+
+	var lenBuf [4]byte
+	prefixBuf := make([]byte, 0, 256)
+	for i := range int(b.count) {
+		if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
+			return fmt.Errorf("read prefix length at %d: %w", i, err)
+		}
+		prefixLen := binary.LittleEndian.Uint32(lenBuf[:])
+		if cap(prefixBuf) < int(prefixLen) {
+			prefixBuf = make([]byte, prefixLen)
+		}
+		prefixBuf = prefixBuf[:prefixLen]
+		if _, err := io.ReadFull(reader, prefixBuf); err != nil {
+			return fmt.Errorf("read prefix at %d: %w", i, err)
+		}
+		if err := fn(i, prefixBuf); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // writePrefixBlobDictionary writes prefixes as dictionary-encoded
 // segment-ID sequences (prefix_dict.ids.u32 + prefix_dict.prefix_off.u64).
 func (b *StreamingMPHFBuilder) writePrefixBlobDictionary(outDir string) error {
@@ -532,44 +656,17 @@ func (b *StreamingMPHFBuilder) writePrefixBlobDictionary(outDir string) error {
 	if err != nil {
 		return fmt.Errorf("create dict prefix writer: %w", err)
 	}
+	err = b.forEachPrefix(func(i int, prefix []byte) error {
+		if err := writer.WritePrefix(string(prefix)); err != nil {
+			return fmt.Errorf("write prefix %d to dict blob: %w", i, err)
+		}
 
-	reader, dec, err := b.openPrefixReader()
+		return nil
+	})
 	if err != nil {
 		writer.Close()
 
 		return err
-	}
-	defer dec.Close()
-
-	var lenBuf [4]byte
-	n := int(b.count)
-
-	prefixBuf := make([]byte, 0, 256)
-
-	for i := range n {
-		if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
-			writer.Close()
-
-			return fmt.Errorf("read prefix length at %d: %w", i, err)
-		}
-		prefixLen := binary.LittleEndian.Uint32(lenBuf[:])
-
-		if cap(prefixBuf) < int(prefixLen) {
-			prefixBuf = make([]byte, prefixLen)
-		}
-		prefixBuf = prefixBuf[:prefixLen]
-
-		if _, err := io.ReadFull(reader, prefixBuf); err != nil {
-			writer.Close()
-
-			return fmt.Errorf("read prefix at %d: %w", i, err)
-		}
-
-		if err := writer.WritePrefix(string(prefixBuf)); err != nil {
-			writer.Close()
-
-			return fmt.Errorf("write prefix %d to dict blob: %w", i, err)
-		}
 	}
 
 	return writer.Close()
@@ -612,16 +709,16 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 // — page-cache evict/reload churn (CPU profile showed 91% in
 // page-fault wait). Sequential writes touch each page exactly once.
 //
-// File layout matches the existing combined format: 20-byte header
-// (count = 2N, width = 8) followed by 2N×8 bytes of interleaved
-// (fp, pos, fp, pos, …) data.
-func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []uint64) error {
+// File layout: 20-byte header (count = 2N, width = 8) followed by
+// 2N×8 bytes of interleaved (fp, pos, fp, pos, …) data, then the 8-byte
+// key-hash seed.
+func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []uint64, seed uint64) error {
 	if len(fps) != n || len(poss) != n {
 		return fmt.Errorf("%w: fps=%d poss=%d n=%d", errMPHFArrayLengthMismatch, len(fps), len(poss), n)
 	}
 	path := filepath.Join(outDir, CombinedMPHFArrayFile)
 	dataBytes := int64(2*n) * 8
-	totalBytes := int64(HeaderSize) + dataBytes
+	totalBytes := int64(HeaderSize) + dataBytes + mphfSeedBytes
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("create combined file: %w", err)
@@ -661,8 +758,6 @@ func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []ui
 		invMap[slot] = uint32(i)
 	}
 
-	const slotBytes = 16
-	const bufSlots = 1 << 16 // 1 MiB / 16 B
 	numWorkers := max(min(runtime.NumCPU(), n), 1)
 	slotsPerWorker := (n + numWorkers - 1) / numWorkers
 
@@ -674,27 +769,7 @@ func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []ui
 		if start >= end {
 			continue
 		}
-		wg.Add(1)
-		go func(w, start, end int) {
-			defer wg.Done()
-			buf := make([]byte, bufSlots*slotBytes)
-			for chunk := start; chunk < end; chunk += bufSlots {
-				cEnd := min(chunk+bufSlots, end)
-				for j := chunk; j < cEnd; j++ {
-					i := invMap[j]
-					off := (j - chunk) * slotBytes
-					binary.LittleEndian.PutUint64(buf[off:off+8], fps[i])
-					binary.LittleEndian.PutUint64(buf[off+8:off+slotBytes], poss[i])
-				}
-				blen := (cEnd - chunk) * slotBytes
-				fileOff := int64(HeaderSize) + int64(chunk)*slotBytes
-				if _, err := f.WriteAt(buf[:blen], fileOff); err != nil {
-					errs[w] = fmt.Errorf("write combined slot %d: %w", chunk, err)
-
-					return
-				}
-			}
-		}(w, start, end)
+		wg.Go(func() { errs[w] = writeCombinedSlots(f, invMap, fps, poss, start, end) })
 	}
 	wg.Wait()
 	for _, werr := range errs {
@@ -702,12 +777,41 @@ func writeCombinedMmap(outDir string, n int, hashPositions []int, fps, poss []ui
 			return cleanup(werr)
 		}
 	}
+	var seedBuf [mphfSeedBytes]byte
+	binary.LittleEndian.PutUint64(seedBuf[:], seed)
+	if _, err := f.WriteAt(seedBuf[:], int64(HeaderSize)+dataBytes); err != nil {
+		return cleanup(fmt.Errorf("write combined seed: %w", err))
+	}
 
 	if err := f.Sync(); err != nil {
 		return cleanup(fmt.Errorf("sync combined: %w", err))
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close combined: %w", err)
+	}
+
+	return nil
+}
+
+// writeCombinedSlots fills slots [start, end) of the combined file in
+// 1 MiB buffers, each slot the (fp, pos) of the prefix invMap assigns.
+func writeCombinedSlots(f *os.File, invMap []uint32, fps, poss []uint64, start, end int) error {
+	const slotBytes = 16
+	const bufSlots = 1 << 16 // 1 MiB / 16 B
+	buf := make([]byte, bufSlots*slotBytes)
+	for chunk := start; chunk < end; chunk += bufSlots {
+		cEnd := min(chunk+bufSlots, end)
+		for j := chunk; j < cEnd; j++ {
+			i := invMap[j]
+			off := (j - chunk) * slotBytes
+			binary.LittleEndian.PutUint64(buf[off:off+8], fps[i])
+			binary.LittleEndian.PutUint64(buf[off+8:off+slotBytes], poss[i])
+		}
+		blen := (cEnd - chunk) * slotBytes
+		fileOff := int64(HeaderSize) + int64(chunk)*slotBytes
+		if _, err := f.WriteAt(buf[:blen], fileOff); err != nil {
+			return fmt.Errorf("write combined slot %d: %w", chunk, err)
+		}
 	}
 
 	return nil
@@ -723,3 +827,7 @@ var errMPHFArrayLengthMismatch = errors.New("mphf fingerprints/positions length 
 // fingerprint at offset 2i and the position at 2i+1, so a single
 // cache line covers both reads on a Lookup.
 const CombinedMPHFArrayFile = "mph_fp_pos.u64"
+
+// mphfSeedBytes is the size of the seed word mph_fp_pos.u64 carries
+// after its slots.
+const mphfSeedBytes = 8
