@@ -485,6 +485,45 @@ func TestStreamingMPHFPrefixDictionaryUnicode(t *testing.T) {
 	}
 }
 
+func TestMPHFLookupWithVerifyPrefixDictionary(t *testing.T) {
+	dir := t.TempDir()
+
+	builder, err := NewStreamingMPHFBuilder(dir)
+	if err != nil {
+		t.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
+	}
+
+	prefixes := []string{"", "x/", "y/", "z/"}
+	for i, p := range prefixes {
+		if err := builder.Add(p, uint64(i)); err != nil {
+			t.Fatalf("Add(%q) failed: %v", p, err)
+		}
+	}
+
+	if err := builder.Build(dir); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	builder.Close()
+
+	m, err := OpenMPHF(dir)
+	if err != nil {
+		t.Fatalf("OpenMPHF failed: %v", err)
+	}
+	defer m.Close()
+
+	for _, p := range prefixes {
+		pos, ok := m.LookupWithVerify(p)
+		if !ok {
+			t.Errorf("LookupWithVerify(%q) failed", p)
+		}
+		_ = pos
+	}
+
+	if _, ok := m.LookupWithVerify("missing/"); ok {
+		t.Error("LookupWithVerify(missing) should return false")
+	}
+}
+
 func TestPreloadedPrefixCache(t *testing.T) {
 	dir := t.TempDir()
 

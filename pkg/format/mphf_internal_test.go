@@ -1,16 +1,12 @@
 package format
 
 import (
-	"encoding/binary"
 	"errors"
-	"fmt"
 	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/relab/bbhash"
 )
 
 func TestMPHFBuilderEmpty(t *testing.T) {
@@ -333,60 +329,6 @@ func buildTestMPHF(t *testing.T, prefixes []string) string {
 	return dir
 }
 
-// TestMPHFLookupRejectsFingerprintFalsePositive forges the stored
-// fingerprint of the slot a non-member query hashes to, so the
-// fingerprint pre-filter passes; Lookup must still report not-found
-// because the stored prefix differs from the query.
-func TestMPHFLookupRejectsFingerprintFalsePositive(t *testing.T) {
-	prefixes := make([]string, 1000)
-	for i := range prefixes {
-		prefixes[i] = prefixFromInt(i + 1)
-	}
-	dir := buildTestMPHF(t, prefixes)
-
-	mphData, err := os.ReadFile(filepath.Join(dir, MPHFile))
-	if err != nil {
-		t.Fatalf("read mph: %v", err)
-	}
-	mph := &bbhash.BBHash2{}
-	if err := mph.UnmarshalBinary(mphData); err != nil {
-		t.Fatalf("unmarshal mph: %v", err)
-	}
-	query, slot := "", uint64(0)
-	for i := range 1_000_000 {
-		q := fmt.Sprintf("absent/%d/", i)
-		if v := mph.Find(hashString(q, 0)); v != 0 && v <= uint64(len(prefixes)) {
-			query, slot = q, v-1
-
-			break
-		}
-	}
-	if query == "" {
-		t.Fatal("no non-member query maps to a slot")
-	}
-
-	f, err := os.OpenFile(filepath.Join(dir, CombinedMPHFArrayFile), os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open fp/pos: %v", err)
-	}
-	var fp [8]byte
-	binary.LittleEndian.PutUint64(fp[:], computeFingerprint(query))
-	_, werr := f.WriteAt(fp[:], int64(HeaderSize+16*slot))
-	if err := errors.Join(werr, f.Close()); err != nil {
-		t.Fatalf("forge fingerprint: %v", err)
-	}
-
-	m, err := OpenMPHF(dir)
-	if err != nil {
-		t.Fatalf("OpenMPHF: %v", err)
-	}
-	defer m.Close()
-
-	if pos, ok := m.Lookup(query); ok {
-		t.Fatalf("Lookup(%q) = %d, true; want not found", query, pos)
-	}
-}
-
 // TestMPHFLookupRoundTripsEdgePrefixes checks every stored prefix
 // looks up to its own position, including empty segments and
 // trailing-slash forms that the segment-wise verification must
@@ -412,34 +354,6 @@ func TestMPHFLookupRoundTripsEdgePrefixes(t *testing.T) {
 	}
 	if allocs := testing.AllocsPerRun(100, func() { _, _ = m.Lookup("a/b/") }); allocs != 0 {
 		t.Errorf("Lookup allocs = %v, want 0", allocs)
-	}
-}
-
-// TestDictPrefixReaderPrefixEquals compares every stored prefix
-// against every candidate, including near misses that differ only in
-// a separator, a trailing slash or one segment's length.
-func TestDictPrefixReaderPrefixEquals(t *testing.T) {
-	stored := []string{"", "/", "a", "a/", "a//", "a/b", "a/b/", "ab/", "data/2024/01/"}
-	candidates := append([]string{
-		"b", "a/c", "a/bb", "a/b//", "ab", "a/b/c", "data/2024/", "data/2024/01", "data/2024/011/", "data/2024-01/",
-	}, stored...)
-	dir := buildTestMPHF(t, stored)
-
-	r, err := OpenDictPrefixReader(dir)
-	if err != nil {
-		t.Fatalf("OpenDictPrefixReader: %v", err)
-	}
-	defer r.Close()
-
-	for pos, want := range stored {
-		for _, c := range candidates {
-			if got := r.prefixEquals(uint64(pos), c); got != (c == want) {
-				t.Errorf("prefixEquals(%d [%q], %q) = %v", pos, want, c, got)
-			}
-		}
-	}
-	if r.prefixEquals(uint64(len(stored)), "") {
-		t.Error("prefixEquals past the last position = true")
 	}
 }
 

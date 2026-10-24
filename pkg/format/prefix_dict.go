@@ -570,35 +570,6 @@ func (r *DictPrefixReader) UnsafeGetPrefix(pos uint64) string {
 	return result
 }
 
-// prefixEquals reports whether the prefix stored at pos equals s,
-// comparing segment by segment in place so the lookup hot path does
-// not reconstruct (and allocate) the stored string.
-func (r *DictPrefixReader) prefixEquals(pos uint64, s string) bool {
-	if pos >= r.Count() {
-		return false
-	}
-	start := r.offsets.UnsafeGetU64(pos)
-	end := r.offsets.UnsafeGetU64(pos + 1)
-	if start > end || end > r.idsCount {
-		return false
-	}
-	for i := start; i < end; i++ {
-		if i > start {
-			if s == "" || s[0] != '/' {
-				return false
-			}
-			s = s[1:]
-		}
-		seg := r.cache.Get(r.readSegID(i))
-		if len(s) < len(seg) || s[:len(seg)] != seg {
-			return false
-		}
-		s = s[len(seg):]
-	}
-
-	return s == ""
-}
-
 // Count returns the number of prefixes (N, not N+1).
 func (r *DictPrefixReader) Count() uint64 {
 	if r.offsets.Count() == 0 {
