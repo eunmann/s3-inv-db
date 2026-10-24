@@ -9,3 +9,9 @@ func TrimPrefix(s, prefix string) string { return trimPrefix(s, prefix) }
 // ManifestTotalBytes exposes the unexported manifestTotalBytes helper
 // for tests.
 var ManifestTotalBytes = manifestTotalBytes
+
+// ValidSourceName exposes validSourceName for tests.
+var ValidSourceName = validSourceName
+
+// ValidInventoryID exposes validInventoryID for tests.
+var ValidInventoryID = validInventoryID

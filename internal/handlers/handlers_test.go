@@ -463,6 +463,23 @@ func TestGetDescendantsAPI_InvalidDepth(t *testing.T) {
 	}
 }
 
+func TestGetDescendantsAPI_InvalidPaging(t *testing.T) {
+	h := newTestHandlers(t)
+	registerInventory(t, h, "test", "Test", "/path")
+
+	for _, q := range []string{"limit=0", "limit=-5", "limit=abc", "offset=-1", "offset=abc"} {
+		t.Run(q, func(t *testing.T) {
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/test/descendants?prefix=data/&"+q, http.NoBody)
+			req = withURLParam(req, "id", "test")
+			w := httptest.NewRecorder()
+			h.GetDescendantsAPI(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", w.Code)
+			}
+		})
+	}
+}
+
 func TestGetDescendantsAPI_InvalidMinCount(t *testing.T) {
 	h := newTestHandlers(t)
 	registerInventory(t, h, "test", "Test", "/path")

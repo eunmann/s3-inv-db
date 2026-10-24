@@ -96,7 +96,12 @@ storage-class list and file layout live in
 `s3-inv-db-server` adds three things on top of the read API:
 
 - **Discovery**: a poller lists configured S3 sources, registers new
-  inventory runs in the state DB, and surfaces them in the UI.
+  inventory runs in the state DB, and surfaces them in the UI. Source
+  and inventory names come from S3 key segments, so discovery accepts
+  only the AWS charsets (source: S3 bucket naming, lowercase letters,
+  digits, `.`, `-`, 3–63 chars; inventory: letters, digits, `.`, `-`,
+  `_`, 1–64 chars, not `.`/`..`) and skips anything else with a
+  warning in the log.
 - **Auto-load + budget**: when `--auto-load` is on, runs marked
   `auto_load=true` are built into the local cache. The planner respects
   a per-configuration retention count and a global `--max-index-disk`

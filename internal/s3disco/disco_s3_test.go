@@ -4,9 +4,11 @@ package s3disco_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/s3test"
@@ -88,6 +90,37 @@ func TestDiscoverer_List_PopulatesManifestStats(t *testing.T) {
 	}
 	if entry.CreationTimestamp == "" {
 		t.Errorf("CreationTimestamp = empty, want manifest creation timestamp")
+	}
+}
+
+func TestDiscoverer_List_SkipsInvalidNames(t *testing.T) {
+	client := s3test.RawClient(t)
+	ctx := t.Context()
+	bucket := s3test.Bucket(t, client)
+
+	now := time.Now().UTC()
+	prefix := "inventory-data/"
+	uploadInventoryAt(ctx, t, client, bucket, "synthetic-prod", prefix, "inv-001", now, 50, 11)
+	stamp := now.Format("2006-01-02T15-04Z")
+	for _, key := range []string{
+		prefix + "Bad_Src/inv-001/" + stamp + "/manifest.json",
+		prefix + "synthetic-prod/inv[alert(1)]/" + stamp + "/manifest.json",
+	} {
+		if _, err := client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(key),
+			Body:   strings.NewReader("{}"),
+		}); err != nil {
+			t.Fatalf("put %s: %v", key, err)
+		}
+	}
+
+	got, err := s3disco.New(client, bucket, prefix).List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 || got[0].SourceBucket != "synthetic-prod" || got[0].Name != "inv-001" {
+		t.Errorf("List = %+v, want only synthetic-prod/inv-001", got)
 	}
 }
 

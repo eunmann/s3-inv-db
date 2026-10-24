@@ -53,8 +53,12 @@ func TestBuildWith_BuildsIndexFromSeededManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildWith: %v", err)
 	}
-	if outDir != l.CacheDirFor(ck) {
-		t.Errorf("outDir = %q, want %q", outDir, l.CacheDirFor(ck))
+	wantDir, err := l.CacheDirFor(ck)
+	if err != nil {
+		t.Fatalf("CacheDirFor: %v", err)
+	}
+	if outDir != wantDir {
+		t.Errorf("outDir = %q, want %q", outDir, wantDir)
 	}
 	// Completion is signalled by the scheduler's terminal state flip,
 	// not a "done" stage sentinel — the loader deliberately doesn't

@@ -25,7 +25,13 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
 	if err := r.ParseForm(); err != nil {
+		if bodyTooLarge(err) {
+			WriteJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+
+			return
+		}
 		WriteJSONError(w, http.StatusBadRequest, "invalid form body")
 
 		return
@@ -65,7 +71,13 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 // SetPinAPI sets a run's pin state. Form body: pinned.
 func (h *Handlers) SetPinAPI(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
 	if err := r.ParseForm(); err != nil {
+		if bodyTooLarge(err) {
+			WriteJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+
+			return
+		}
 		WriteJSONError(w, http.StatusBadRequest, "invalid form body")
 
 		return

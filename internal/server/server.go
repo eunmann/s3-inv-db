@@ -306,11 +306,16 @@ func (s *Server) backfillIndexSizes(ctx context.Context, logger zerolog.Logger) 
 		if !p.OK {
 			continue
 		}
-		dir := s.bldr.CacheDirFor(inventory.CacheKey{
+		dir, err := s.bldr.CacheDirFor(inventory.CacheKey{
 			SourceBucket: p.Source,
 			InventoryID:  p.Inventory,
 			Run:          p.Run,
 		})
+		if err != nil {
+			logger.Warn().Stringer("id", info.ID).Err(err).Msg("resolve cache dir for backfill")
+
+			continue
+		}
 		measured, err := inventory.MeasureDir(ctx, dir)
 		if err != nil {
 			logger.Warn().Stringer("id", info.ID).Err(err).Msg("backfill index size")
@@ -356,11 +361,15 @@ func (s *Server) recover(ctx context.Context, logger zerolog.Logger) {
 			// segments; treat those as un-hydratable so the user sees
 			// the error and can rebuild.
 			if p := info.ID.Split(); p.OK {
-				indexDir = s.bldr.CacheDirFor(inventory.CacheKey{
+				dir, err := s.bldr.CacheDirFor(inventory.CacheKey{
 					SourceBucket: p.Source,
 					InventoryID:  p.Inventory,
 					Run:          p.Run,
 				})
+				if err != nil {
+					logger.Warn().Stringer("id", info.ID).Err(err).Msg("resolve cache dir for hydrate")
+				}
+				indexDir = dir
 			}
 		}
 		if err := s.manager.Hydrate(ctx, *info, indexDir); err != nil {

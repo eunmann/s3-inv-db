@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/budget"
@@ -63,10 +62,12 @@ type Handlers struct {
 	discoverer inventory.Discoverer
 	indexBldr  inventory.IndexBuilder
 
-	// sseConnsByIP holds *atomic.Int64 keyed by remote IP. sync.Map is
-	// fine here: writes happen once per connection start/end, reads are
-	// rare, and the keyspace is bounded by the number of distinct IPs.
-	sseConnsByIP sync.Map
+	// sseConnsByIP counts open SSE connections per remote IP. An entry is
+	// deleted when its count returns to zero so the map tracks only IPs
+	// with live streams; the mutex makes that delete atomic with a
+	// concurrent increment for the same IP.
+	sseMu        sync.Mutex
+	sseConnsByIP map[string]int64
 
 	// queryBatchMax bounds the multi-prefix POST /api/stats request.
 	// Zero means use defaultQueryBatchMax.
@@ -121,22 +122,29 @@ func WithS3Source(uri string) Option {
 // the new count. Caller must invoke releaseSSESlot on the same ip when
 // the connection ends — even if the count exceeds the cap.
 func (h *Handlers) acquireSSESlot(ip string) int64 {
-	val, _ := h.sseConnsByIP.LoadOrStore(ip, &atomic.Int64{})
-	counter, _ := val.(*atomic.Int64)
+	h.sseMu.Lock()
+	defer h.sseMu.Unlock()
+	h.sseConnsByIP[ip]++
 
-	return counter.Add(1)
+	return h.sseConnsByIP[ip]
 }
 
-// releaseSSESlot decrements the per-IP counter. Safe to call after
-// acquireSSESlot; mismatched calls would underflow but the counter is
-// signed so the system still recovers.
+// releaseSSESlot decrements the per-IP counter and drops the entry once
+// no connection from that IP remains. A release without a matching
+// acquire is a no-op.
 func (h *Handlers) releaseSSESlot(ip string) {
-	val, ok := h.sseConnsByIP.Load(ip)
+	h.sseMu.Lock()
+	defer h.sseMu.Unlock()
+	n, ok := h.sseConnsByIP[ip]
 	if !ok {
 		return
 	}
-	counter, _ := val.(*atomic.Int64)
-	counter.Add(-1)
+	if n <= 1 {
+		delete(h.sseConnsByIP, ip)
+
+		return
+	}
+	h.sseConnsByIP[ip] = n - 1
 }
 
 // WithDiscoveryRefreshInterval sets the cadence the dashboard reports
@@ -236,6 +244,8 @@ func New(
 		configStore: deps.ConfigStore,
 		tracker:     deps.Tracker,
 		reg:         metrics.New(),
+
+		sseConnsByIP: make(map[string]int64),
 	}
 	for _, opt := range opts {
 		opt(h)

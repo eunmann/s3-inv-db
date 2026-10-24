@@ -2,6 +2,7 @@ package handlers_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -131,10 +132,11 @@ func TestGetDescendantsAPI_Success(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 
-	var descendants []handlers.DescendantInfo
-	if err := json.NewDecoder(w.Body).Decode(&descendants); err != nil {
+	var resp handlers.DescendantsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	descendants := resp.Descendants
 	if len(descendants) == 0 {
 		t.Errorf("descendants empty, want >=1")
 	}
@@ -168,14 +170,65 @@ func TestGetDescendantsAPI_Filter(t *testing.T) {
 		t.Fatalf("filtered status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 
-	var descendants []handlers.DescendantInfo
-	if err := json.NewDecoder(w.Body).Decode(&descendants); err != nil {
+	var resp handlers.DescendantsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, d := range descendants {
+	for _, d := range resp.Descendants {
 		if d.ObjectCount < 2 {
 			t.Errorf("min_count=2 filter returned entry with %d objects", d.ObjectCount)
 		}
+	}
+}
+
+func getDescendants(t *testing.T, h *handlers.Handlers, query string) handlers.DescendantsResponse {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/inventories/loaded/descendants?"+query, http.NoBody)
+	req = withURLParam(req, "id", "loaded")
+	w := httptest.NewRecorder()
+	h.GetDescendantsAPI(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET descendants?%s status = %d, want 200; body=%s", query, w.Code, w.Body.String())
+	}
+	var resp handlers.DescendantsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	return resp
+}
+
+func TestGetDescendantsAPI_Pagination(t *testing.T) {
+	h := buildLoadedTestHandlers(t)
+
+	all := getDescendants(t, h, "prefix=&depth=2")
+	if all.Limit != 1000 || all.Offset != 0 {
+		t.Errorf("default limit/offset = %d/%d, want 1000/0", all.Limit, all.Offset)
+	}
+	if all.Total != len(all.Descendants) || all.Total < 3 {
+		t.Fatalf("total = %d with %d rows; fixture needs >= 3 descendants returned in full", all.Total, len(all.Descendants))
+	}
+
+	page := getDescendants(t, h, "prefix=&depth=2&limit=2&offset=1")
+	if page.Total != all.Total || page.Limit != 2 || page.Offset != 1 {
+		t.Errorf("page total/limit/offset = %d/%d/%d, want %d/2/1", page.Total, page.Limit, page.Offset, all.Total)
+	}
+	if len(page.Descendants) != 2 {
+		t.Fatalf("page rows = %d, want 2", len(page.Descendants))
+	}
+	for i, d := range page.Descendants {
+		if d.Prefix != all.Descendants[i+1].Prefix {
+			t.Errorf("page[%d] = %q, want %q", i, d.Prefix, all.Descendants[i+1].Prefix)
+		}
+	}
+
+	past := getDescendants(t, h, fmt.Sprintf("prefix=&depth=2&offset=%d", all.Total+5))
+	if len(past.Descendants) != 0 || past.Total != all.Total {
+		t.Errorf("offset past end: rows=%d total=%d, want 0/%d", len(past.Descendants), past.Total, all.Total)
+	}
+
+	if got := getDescendants(t, h, "prefix=&depth=2&limit=50000"); got.Limit != 10000 {
+		t.Errorf("limit=50000 effective limit = %d, want clamp to 10000", got.Limit)
 	}
 }
 

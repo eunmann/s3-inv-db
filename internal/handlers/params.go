@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 
@@ -38,6 +39,18 @@ func parseFilter(q url.Values) (indexread.Filter, error) {
 	return f, nil
 }
 
+// maxFormBodyBytes caps the form-encoded toggle bodies (pinned,
+// auto_load, retention): a few short fields fit easily in 4 KiB.
+const maxFormBodyBytes = 4 * 1024
+
+// bodyTooLarge reports whether a decode or ParseForm error came from
+// an http.MaxBytesReader limit, which callers answer with 413.
+func bodyTooLarge(err error) bool {
+	var mbe *http.MaxBytesError
+
+	return errors.As(err, &mbe)
+}
+
 // parsePositiveInt reads key from q as an int >= 1. Returns (def, nil)
 // when the key is absent. Returns an ErrInvalidQueryParam-wrapped error
 // when the value is present but malformed or below 1.
@@ -48,6 +61,22 @@ func parsePositiveInt(q url.Values, key string, def int) (int, error) {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 1 {
+		return 0, fmt.Errorf("%w: %s", ErrInvalidQueryParam, key)
+	}
+
+	return n, nil
+}
+
+// parseNonNegativeInt reads key from q as an int >= 0. Returns (def,
+// nil) when the key is absent and an ErrInvalidQueryParam-wrapped error
+// when the value is present but malformed or negative.
+func parseNonNegativeInt(q url.Values, key string, def int) (int, error) {
+	v := q.Get(key)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
 		return 0, fmt.Errorf("%w: %s", ErrInvalidQueryParam, key)
 	}
 
