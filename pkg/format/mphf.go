@@ -90,7 +90,10 @@ func (m *MPHF) Close() error {
 	return errors.Join(combinedErr, dictErr)
 }
 
-// Lookup returns the preorder position for a prefix, or ok=false if not found.
+// Lookup returns the preorder position for a prefix, or ok=false if
+// not found. The fingerprint is only a cheap pre-filter: a match is
+// confirmed against the stored prefix, so a non-member query never
+// resolves to another prefix's position.
 func (m *MPHF) Lookup(prefix string) (uint64, bool) {
 	if m.count == 0 || m.mph == nil {
 		return 0, false
@@ -106,7 +109,7 @@ func (m *MPHF) Lookup(prefix string) (uint64, bool) {
 	}
 	storedFP := m.combined.UnsafeGetU64(2 * hashPos)
 	preorderPosVal := m.combined.UnsafeGetU64(2*hashPos + 1)
-	if storedFP != computeFingerprint(prefix) {
+	if storedFP != computeFingerprint(prefix) || !m.dictPrefixes.prefixEquals(preorderPosVal, prefix) {
 		return 0, false
 	}
 
@@ -127,23 +130,6 @@ func (m *MPHF) GetPrefix(pos uint64) (string, error) {
 	}
 
 	return s, nil
-}
-
-// LookupWithVerify returns the position and verifies the stored prefix
-// matches exactly, eliminating fingerprint-collision false positives.
-func (m *MPHF) LookupWithVerify(prefix string) (uint64, bool) {
-	pos, ok := m.Lookup(prefix)
-	if !ok {
-		return 0, false
-	}
-	if m.dictPrefixes != nil {
-		stored, err := m.dictPrefixes.GetPrefix(pos)
-		if err != nil || stored != prefix {
-			return 0, false
-		}
-	}
-
-	return pos, true
 }
 
 // VerifyMPHF checks that every stored prefix round-trips: GetPrefix
