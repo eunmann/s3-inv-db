@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
@@ -95,7 +96,11 @@ func AllTierIDs() []ID {
 // Mapping provides tier lookup and metadata.
 type Mapping struct {
 	indexByS3Name map[string]ID
-	Tiers         []Info
+	// warned records unknown storage classes / access tiers already
+	// logged, so a bucket full of an unknown class logs one line, not one
+	// per object. FromS3 runs on every ingest worker concurrently.
+	warned sync.Map
+	Tiers  []Info
 }
 
 // NewMapping creates a new tier mapping with all supported tiers.
@@ -142,9 +147,11 @@ func (m *Mapping) FromS3(storageClass, accessTier string) ID {
 			// Surface a non-empty unrecognised tier — silent
 			// misclassification would inflate Frequent counts.
 			if accessTier != "" {
-				logging.L().Warn().
-					Str("access_tier", accessTier).
-					Msg("tiers.FromS3: unknown Intelligent-Tiering access tier, defaulting to FREQUENT")
+				if _, seen := m.warned.LoadOrStore("access_tier:"+accessTier, struct{}{}); !seen {
+					logging.L().Warn().
+						Str("access_tier", accessTier).
+						Msg("tiers.FromS3: unknown Intelligent-Tiering access tier, counting as FREQUENT (logged once)")
+				}
 			}
 
 			return ITFrequent
@@ -157,9 +164,11 @@ func (m *Mapping) FromS3(storageClass, accessTier string) ID {
 	}
 
 	if storageClass != "" {
-		logging.L().Warn().
-			Str("storage_class", storageClass).
-			Msg("tiers.FromS3: unknown storage class, defaulting to STANDARD")
+		if _, seen := m.warned.LoadOrStore("storage_class:"+storageClass, struct{}{}); !seen {
+			logging.L().Warn().
+				Str("storage_class", storageClass).
+				Msg("tiers.FromS3: unknown storage class, counting as STANDARD (logged once)")
+		}
 	}
 
 	return Standard
