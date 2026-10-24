@@ -59,7 +59,7 @@ func runMergeBuildSeamBench(b *testing.B, n, runFileCount int) {
 		if err != nil {
 			b.Fatalf("NewIndexBuilder: %v", err)
 		}
-		if err := builder.AddAllWithContext(b.Context(), iter); err != nil {
+		if err := builder.AddAll(b.Context(), iter); err != nil {
 			b.Fatalf("AddAll: %v", err)
 		}
 		if err := builder.FinalizeWithContext(b.Context()); err != nil {

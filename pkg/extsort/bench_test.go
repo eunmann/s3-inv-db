@@ -111,7 +111,7 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 			b.Fatalf("create builder: %v", err)
 		}
 
-		if err := builder.AddAll(merger); err != nil {
+		if err := builder.AddAll(b.Context(), merger); err != nil {
 			b.Fatalf("add all: %v", err)
 		}
 		merger.Close()

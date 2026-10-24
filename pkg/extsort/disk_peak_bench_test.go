@@ -87,7 +87,7 @@ func measureOne(b *testing.B, numObjects int) {
 		merger.Close()
 		b.Fatalf("builder: %v", err)
 	}
-	if err := builder.AddAll(merger); err != nil {
+	if err := builder.AddAll(b.Context(), merger); err != nil {
 		merger.Close()
 		b.Fatalf("add all: %v", err)
 	}

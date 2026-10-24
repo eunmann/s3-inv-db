@@ -1039,7 +1039,7 @@ func (p *Pipeline) fillAndFinalize(ctx context.Context, builder *IndexBuilder, r
 		return fmt.Errorf("set present tiers: %w", err)
 	}
 	if rows != nil {
-		if err := builder.AddAllWithContext(ctx, rows); err != nil {
+		if err := builder.AddAll(ctx, rows); err != nil {
 			return fmt.Errorf("build index: %w", err)
 		}
 	}

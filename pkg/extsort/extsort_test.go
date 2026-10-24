@@ -269,7 +269,7 @@ func TestEndToEndWithAggregator(t *testing.T) {
 			t.Fatalf("create builder: %v", err)
 		}
 
-		if err := builder.AddAll(merger); err != nil {
+		if err := builder.AddAll(t.Context(), merger); err != nil {
 			t.Fatalf("add all: %v", err)
 		}
 		merger.Close()

@@ -88,7 +88,7 @@ func BenchmarkPipelineScale_E2E(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				if err := builder.AddAll(it); err != nil {
+				if err := builder.AddAll(b.Context(), it); err != nil {
 					b.Fatal(err)
 				}
 				if err := builder.Finalize(); err != nil {
