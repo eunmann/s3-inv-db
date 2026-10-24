@@ -17,10 +17,12 @@ config-check  Validate a JSON config file and print set fields
 one line and exits; `s3-inv-db-server` and `s3-inv-db-seeder` accept
 `--version` too.
 
-Every subcommand accepts `--output text|json` (default `text`) — pass
-`--output json` to emit a single JSON object on stdout for scripting.
+Every subcommand except `build` accepts `--output text|json` (default
+`text`) — pass `--output json` to emit a single JSON object on stdout
+for scripting.
 
-The `--config <path>` flag loads a JSON file shared with the server.
+The `--config <path>` flag (every subcommand except `verify` and
+`stats`) loads a JSON file shared with the server.
 From the file the CLI honors `verbose`, `pretty_logs`, `price_table`,
 and `build_event_log` (the last is used only by `build`). Other
 server-side keys are ignored. Explicit CLI flags always win over the
@@ -37,6 +39,7 @@ s3-inv-db build --s3-manifest s3://bucket/inv/data/manifest.json --out ./my-inde
 | `--s3-manifest` | yes |  | S3 URI to `manifest.json` |
 | `--out` | yes |  | Output directory for the index: missing, empty, or a previous index (which is replaced) |
 | `--max-depth` |  | 0 (unlimited) | Maximum prefix depth to retain |
+| `--event-log` |  |  | Append build events as JSONL to this path (overrides `build_event_log`) |
 | `--config` |  |  | JSON config file (see above) |
 | `--verbose` |  | false | Debug-level logging |
 | `--pretty-logs` |  | false | Human-friendly console output |
@@ -70,7 +73,7 @@ s3-inv-db query --index ./my-index --prefix "data/2024/"
 | Flag | Required | Default | Description |
 |---|---|---|---|
 | `--index` | yes |  | Index directory (built by `build`) |
-| `--prefix` | yes |  | Prefix to look up (use `""` for root) |
+| `--prefix` | yes |  | Prefix to look up; must be non-empty, so the root `""` cannot be queried |
 | `--show-tiers` |  | false | Print per-tier object count / bytes |
 | `--estimate-cost` |  | false | Add monthly cost per tier and total |
 | `--price-table` |  | us-east-1 built-in | Path to JSON price table |
@@ -80,7 +83,7 @@ s3-inv-db query --index ./my-index --prefix "data/2024/"
 
 `--price-table` points at a JSON file with per-GB-month storage rates,
 per-1,000-object monitoring rates, and per-1,000-request PUT rates.
-The schema, defaults (us-east-1, 2026), and tier semantics (IT-Frequent-Small
+The schema, defaults (us-east-1, 2025), and tier semantics (IT-Frequent-Small
 bucket, IA minimum-billable size, Glacier metadata overhead) live in
 `pkg/pricing` — see `DefaultUSEast1Prices` for the seed values and the
 inline package docs for the field-by-field rules.
@@ -102,17 +105,20 @@ filter before ranking.
 s3-inv-db browse --index ./my-index --prefix "data/2024/" --depth 1
 ```
 
-Lists the children at `--depth` below `--prefix` with per-child object
-count and total bytes. Equivalent to the HTTP `/api/browse` endpoint
+Lists the children at `--depth` (default 1) below `--prefix` (default
+`""`, the root) with per-child object count and total bytes. A prefix
+not in the index is an error. Equivalent to the HTTP `/api/browse` endpoint
 without the server.
 
 ## `compare`
 
 ```bash
-s3-inv-db compare --from ./old-index --to ./new-index --prefix ""
+s3-inv-db compare --from ./old-index --to ./new-index --prefix "" --depth 1
 ```
 
-Per-prefix diff of two indexes at the given parent. Each row reports
+Per-prefix diff of two indexes over the descendants at `--depth`
+(default 1) below `--prefix` (default `""`, the root). A prefix
+missing from one index contributes no rows from that side. Each row reports
 the from / to counts and bytes, the deltas, and a status of `added`,
 `removed`, `changed`, or `unchanged`.
 
@@ -125,7 +131,8 @@ s3-inv-db verify --index ./my-index
 Runs `format.VerifyManifest` against the index directory and an MPHF
 roundtrip (`Lookup(PrefixString(pos)) == pos`) for every prefix. Use
 `--sample N` to limit the roundtrip check to the first N positions
-for very large indexes. Exits non-zero on any failure.
+for very large indexes (0, the default, checks every prefix). Exits
+non-zero on any failure.
 
 ## `stats`
 
@@ -134,8 +141,8 @@ s3-inv-db stats --index ./my-index
 ```
 
 Prints node count, max depth, tier-data availability, total on-disk
-size, and per-file sizes (largest first). Reads the manifest, not the
-mmap.
+size, and per-file sizes (largest first). Counts and sizes come from
+the manifest; tier-data availability opens the index.
 
 ## `config-check`
 

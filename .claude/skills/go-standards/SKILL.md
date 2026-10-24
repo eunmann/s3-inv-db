@@ -52,7 +52,7 @@ description: "Reference: Go code quality standards — control flow, error handl
 - Declare variables at the smallest possible scope. Use `:=` and `if` initializers to confine variables.
 - Do not use package-level mutable variables. Inject dependencies through struct fields or function parameters.
 - Do not reuse a variable for multiple unrelated purposes.
-- Group a mutex and the state it protects into a struct. Do not expose the mutex — provide methods that lock internally. See `internal/inventory/manager.go` for the canonical local example.
+- Group a mutex and the state it protects into a struct. Do not expose the mutex — provide methods that lock internally. See `Catalog` in `internal/inventory/catalog.go` for the canonical local example.
 
 ## Concurrency
 
@@ -65,7 +65,7 @@ description: "Reference: Go code quality standards — control flow, error handl
 
 ## Pointers and Unsafe
 
-- Do not use `unsafe` unless absolutely necessary, isolated, and commented with justification. The mmap-backed `pkg/indexread` is the only place this is currently justified.
+- Do not use `unsafe` unless absolutely necessary, isolated, and commented with justification. It is currently justified only in `pkg/format` (mmap'd arrays reinterpreted as `[]uint64`, zero-copy string hashing) and the Windows memory probe in `pkg/sysmem`.
 - Do not use `reflect` in hot paths.
 - Avoid pointer-to-pointer indirection. If a function accesses its argument only as `*x`, pass the value directly.
 - Use pointer receivers when the method mutates the receiver or the struct is large; value receivers for small immutable types. Do not mix receiver types on a single struct.

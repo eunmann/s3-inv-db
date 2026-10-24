@@ -49,9 +49,10 @@ S3 Inventory CSV/Parquet
 ```
 
 For an object key `data/2024/01/15/file.csv`, the aggregator emits a
-row at every ancestor depth (`data/`, `data/2024/`, `data/2024/01/`,
-`data/2024/01/15/`). The merge then combines duplicate prefixes across
-spill runs into one row per unique prefix.
+row for the root prefix `""` and at every ancestor depth (`data/`,
+`data/2024/`, `data/2024/01/`, `data/2024/01/15/`). The merge then
+combines duplicate prefixes across spill runs into one row per unique
+prefix.
 
 Memory is bounded by `GOMEMLIMIT`; see
 [performance.md](performance.md#memory) for the exact spill rules.
@@ -84,9 +85,10 @@ than a tree walk.
 
 ## Per-tier statistics
 
-The index tracks count and bytes per S3 storage class (13 classes plus
-one synthetic bucket for IT-Frequent objects under 128 KiB, which AWS
-bills at the Frequent rate but excludes from the monitoring fee).
+The index tracks count and bytes per tier: 13 tiers, which are the 12
+S3 storage classes and Intelligent-Tiering access tiers plus one
+synthetic bucket for IT-Frequent objects under 128 KiB, which AWS
+bills at the Frequent rate but excludes from the monitoring fee.
 Tiers with no data in a given index consume no disk. The full
 storage-class list and file layout live in
 [index-format.md](index-format.md#tier-statistics).

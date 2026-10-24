@@ -14,7 +14,7 @@ HTMX HTTP server, a CLI, and a Go library.
 
 The build streams the inventory once, aggregates object count + bytes
 + per-storage-class stats at every prefix depth, and writes a columnar
-index where one prefix occupies the same byte offset in every file.
+index where one prefix occupies the same row in every per-prefix file.
 Lookups are a single mmap read after an O(1) minimal-perfect-hash
 probe. See [docs/overview.md](docs/overview.md) for the pipeline and
 [docs/index-format.md](docs/index-format.md) for the on-disk layout.
@@ -140,7 +140,7 @@ make seeder  # bin/s3-inv-db-seeder
 
 | Binary | Purpose |
 |---|---|
-| `s3-inv-db` | CLI: `build`, `query`, `top`, `browse`, `compare`, `verify`, `stats`, `config-check` (every subcommand supports `--output text\|json`) |
+| `s3-inv-db` | CLI: `build`, `query`, `top`, `browse`, `compare`, `verify`, `stats`, `config-check` (every subcommand but `build` supports `--output text\|json`) |
 | `s3-inv-db-server` | HTTP server: discovery, load/unload, auto-load, compare, JSON API, HTML UI, `/metrics` |
 | `s3-inv-db-seeder` | Synthetic-data generator for local dev and integration tests |
 

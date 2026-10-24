@@ -7,8 +7,8 @@ const (
 	// MagicNumber identifies s3-inv-db files.
 	MagicNumber uint32 = 0x53334944 // "S3ID"
 	// Version is the current format version. Readers accept only this
-	// version; an index written by another version is rebuilt. 3: the
-	// MPHF fp/pos file ends with the key-hash seed word.
+	// version; an index written by another version is rebuilt. 4: mph.bin
+	// holds the in-repo BBHash levels (see bbhash.go).
 	Version uint32 = 4
 )
 
