@@ -52,7 +52,7 @@ All `.u64` files share a common header (the per-file `Header` struct in `pkg/for
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | Magic | `0x53334944` ("S3ID" in ASCII) |
-| 4 | 4 | Version | Format version (currently `1`) |
+| 4 | 4 | Version | Format version (currently `3`) |
 | 8 | 8 | Count | Number of rows |
 | 16 | 4 | Width | Row stride in bytes |
 
@@ -111,20 +111,22 @@ The MPHF provides O(1) prefix-to-position lookups using [BBHash](https://github.
 | File | Description |
 |------|-------------|
 | `mph.bin` | Serialized BBHash structure |
-| `mph_fp_pos.u64` | Interleaved (fingerprint, position) pairs — 16 bytes per slot, fingerprint first |
+| `mph_fp_pos.u64` | Interleaved (fingerprint, position) pairs — 16 bytes per slot, fingerprint first, then the 8-byte key seed |
 
 The fingerprint+position pair is combined into one file so a lookup is a single mmap read instead of two.
 
 ### Lookup Algorithm
 
-1. Hash the prefix string using FNV-1a (64-bit)
+1. Hash the prefix string using FNV-1a (64-bit) with the offset basis XORed with the key seed
 2. Query the BBHash to get a candidate index
 3. Read the 16-byte slot at that index from `mph_fp_pos.u64`
-4. Compute FNV-1 fingerprint of the query prefix
-5. If fingerprints match, take the position from the same slot
-6. If fingerprints don't match, the prefix doesn't exist
+4. Compute the FNV-1 fingerprint of the query prefix; if it matches the slot's, return the slot's position, otherwise the prefix doesn't exist
 
-The two-hash design (FNV-1a for BBHash input, FNV-1 for verification) minimizes false positive collisions.
+A non-member query is misreported only if it lands on an occupied slot and its 64-bit fingerprint also matches (~2⁻⁶⁴ per lookup). Comparing the stored prefix as well would make hits exact, but costs ~9% per lookup, so lookups stay fingerprint-only.
+
+### Key Seed
+
+BBHash needs distinct keys. If two prefixes share a 64-bit key hash, the builder rehashes every prefix with a new non-zero seed (up to 8 tries). Seed 0 is plain FNV-1a. The seed is always stored, even when it is 0, as one 8-byte word after the slots in `mph_fp_pos.u64`, and readers hash queries with it.
 
 ## Prefix Strings
 
@@ -208,4 +210,4 @@ The stride is recorded in the file header's `Width` field; readers cross-check `
 
 ## Versioning
 
-The format version in file headers enables forward compatibility. Version 1 is the current format. Future versions may add new files or extend headers while maintaining backward-compatible readers.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 3 is the current format; readers accept only that version, and an index written by any other version is rebuilt.

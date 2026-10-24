@@ -6,9 +6,9 @@ costs, on-disk size, and benchmarks.
 ## Query
 
 Lookup is constant-time in index size: hash the prefix (FNV-1a),
-probe the MPHF, verify a second-hash fingerprint, then read one mmap
-slot. Tested up to ~10M prefixes with consistent sub-microsecond
-warm-cache lookups.
+probe the MPHF, check a second-hash fingerprint, then read one mmap
+slot. Tested up to ~10M
+prefixes with consistent sub-microsecond warm-cache lookups.
 
 | Operation | Complexity | Typical warm latency |
 |-----------|------------|---------------------|
@@ -121,9 +121,10 @@ load.
 
 ## Running benchmarks
 
-Performance changes are gated by an A/B comparison against the base
-commit on the same machine — `make bench-ab BASE=main`; see
-[bench/README.md](../bench/README.md). The commands below are for
+Ingestion and query changes are gated by an A/B comparison against the
+base commit on the same machine — `make bench-ingest` / `make
+bench-query`; see [bench/README.md](../bench/README.md) for when to run
+which. The commands below are for
 exploration.
 
 ```bash

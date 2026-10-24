@@ -164,7 +164,7 @@ func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Reque
 // package; this method just plumbs index reads + price-table-aware cost
 // formatting into the render struct.
 func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, opts browseViewOptions) BrowseLevel {
-	inventoryID, prefix, sortBy, dir, page, pageSize := opts.inventoryID, opts.prefix, opts.sortBy, opts.dir, opts.page, opts.pageSize
+	inventoryID, prefix, sortBy, dir, pageNum, pageSize := opts.inventoryID, opts.prefix, opts.sortBy, opts.dir, opts.page, opts.pageSize
 	level := BrowseLevel{
 		InventoryID: inventoryID,
 		Prefix:      prefix,
@@ -194,72 +194,59 @@ func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, o
 		level.CostEstimate = h.computeCostEstimate(breakdown, true)
 	}
 
-	all := h.buildChildren(ctx, idx, pos, prefix, sortBy == inventory.SortColCost)
-	inventory.SortChildren(all, sortBy, dir)
-	level.TotalChildren = len(all)
-	level.Pagination = inventory.Paginate(len(all), page, pageSize)
-
-	from, to := level.Pagination.FirstRow, level.Pagination.LastRow
-	if from > 0 {
-		level.Children = all[from-1 : to]
-		// When sortBy != cost, buildChildren skipped per-child cost to
-		// avoid TierBreakdown on the unpaginated set. Only the visible
-		// page needs cost numbers, so backfill them here.
-		if sortBy != inventory.SortColCost && idx.HasTierData() {
-			for i := range level.Children {
-				p, ok := idx.Lookup(level.Children[i].Prefix)
-				if !ok {
-					continue
-				}
-				est := h.computeCostEstimate(idx.TierBreakdown(p), false)
-				if est != nil {
-					level.Children[i].MonthlyCostMicrodollars = est.TotalMicrodollars
-					level.Children[i].MonthlyCostFormatted = est.TotalFormatted
-				}
+	var cost inventory.CostFunc
+	if level.HasTierData {
+		cost = func(p uint64) uint64 {
+			if est := h.computeCostEstimate(idx.TierBreakdown(p), false); est != nil {
+				return est.TotalMicrodollars
 			}
+
+			return 0
+		}
+	}
+	page, err := inventory.PageChildren(idx, pos, inventory.ChildQuery{SortBy: sortBy, Dir: dir, Page: pageNum, PageSize: pageSize}, cost)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("browse children")
+
+		return level
+	}
+	level.TotalChildren = page.Total
+	level.Pagination = page.Pagination
+	level.Children = make([]BrowseChild, 0, len(page.Positions))
+	for _, p := range page.Positions {
+		if child, ok := h.browseChild(idx, p, prefix); ok {
+			level.Children = append(level.Children, child)
 		}
 	}
 
 	return level
 }
 
-func (h *Handlers) buildChildren(ctx context.Context, idx *indexread.Index, pos uint64, prefix string, computeCost bool) []BrowseChild {
-	positions, err := idx.DescendantsAtDepthFiltered(pos, 1, indexread.Filter{})
+// browseChild builds the display row for one child; only rows on the
+// visible page are built.
+func (h *Handlers) browseChild(idx *indexread.Index, p uint64, parent string) (BrowseChild, bool) {
+	fullPrefix, err := idx.PrefixString(p)
 	if err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).Msg("descendants at depth 1")
-
-		return nil
+		return BrowseChild{}, false
 	}
-	hasTier := idx.HasTierData()
-	children := make([]BrowseChild, 0, len(positions))
-	for _, p := range positions {
-		fullPrefix, err := idx.PrefixString(p)
-		if err != nil {
-			continue
-		}
-		stats := idx.Stats(p)
-		child := BrowseChild{
-			Segment:      inventory.SegmentOf(prefix, fullPrefix),
-			Prefix:       fullPrefix,
-			ObjectCount:  stats.ObjectCount,
-			ObjectCountH: humanfmt.CountUint64(stats.ObjectCount),
-			TotalBytes:   stats.TotalBytes,
-			TotalBytesH:  humanfmt.BytesUint64(stats.TotalBytes),
-			HasChildren:  idx.MaxDepthInSubtree(p) > idx.Depth(p),
-		}
-		if hasTier && computeCost {
-			est := h.computeCostEstimate(idx.TierBreakdown(p), false)
-			if est != nil {
-				child.MonthlyCostMicrodollars = est.TotalMicrodollars
-				child.MonthlyCostFormatted = est.TotalFormatted
-			}
-		} else if !hasTier {
-			child.MonthlyCostFormatted = missingValueGlyph
-		}
-		children = append(children, child)
+	stats := idx.Stats(p)
+	child := BrowseChild{
+		Segment:      inventory.SegmentOf(parent, fullPrefix),
+		Prefix:       fullPrefix,
+		ObjectCount:  stats.ObjectCount,
+		ObjectCountH: humanfmt.CountUint64(stats.ObjectCount),
+		TotalBytes:   stats.TotalBytes,
+		TotalBytesH:  humanfmt.BytesUint64(stats.TotalBytes),
+		HasChildren:  idx.MaxDepthInSubtree(p) > idx.Depth(p),
+	}
+	if !idx.HasTierData() {
+		child.MonthlyCostFormatted = missingValueGlyph
+	} else if est := h.computeCostEstimate(idx.TierBreakdown(p), false); est != nil {
+		child.MonthlyCostMicrodollars = est.TotalMicrodollars
+		child.MonthlyCostFormatted = est.TotalFormatted
 	}
 
-	return children
+	return child, true
 }
 
 // BrowseLevelResponse is the JSON shape returned by BrowseLevelAPI.

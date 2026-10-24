@@ -21,7 +21,7 @@ The linter catches formatting, function length, magic numbers, doc comments, and
 [ ] Nothing derived from S3 keys or names reaches a file path, shell, SQL or HTML unvalidated/unescaped
 [ ] A failure or cancellation never deletes or corrupts data the user already had
 [ ] Memory stays bounded by the documented rules; no per-object or per-child allocation that grows with input on a hot path
-[ ] Performance-relevant changes gated with `make bench-ab BASE=main` and the result cited
+[ ] Ingestion changes ran `make bench-ingest`, data-structure/query changes ran `make bench-query` (nothing else is benchmarked), and the PR's Performance section reports the numbers
 [ ] Concurrency-touching changes run with -race
 ```
 

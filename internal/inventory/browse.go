@@ -2,7 +2,6 @@ package inventory
 
 import (
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -161,38 +160,6 @@ func Paginate(total, page, pageSize int) BrowsePagination {
 	}
 
 	return p
-}
-
-// SortChildren orders children in place. Ties resolve by segment-asc.
-func SortChildren(children []BrowseChild, sortBy, dir string) {
-	less := func(i, j int) bool {
-		a, b := &children[i], &children[j]
-		var primary bool
-		var equal bool
-		switch sortBy {
-		case SortColObjects:
-			primary = a.ObjectCount < b.ObjectCount
-			equal = a.ObjectCount == b.ObjectCount
-		case SortColSize:
-			primary = a.TotalBytes < b.TotalBytes
-			equal = a.TotalBytes == b.TotalBytes
-		case SortColCost:
-			primary = a.MonthlyCostMicrodollars < b.MonthlyCostMicrodollars
-			equal = a.MonthlyCostMicrodollars == b.MonthlyCostMicrodollars
-		default:
-			primary = a.Segment < b.Segment
-			equal = a.Segment == b.Segment
-		}
-		if equal {
-			return a.Segment < b.Segment
-		}
-		if dir == SortDirDesc {
-			return !primary
-		}
-
-		return primary
-	}
-	sort.SliceStable(children, less)
 }
 
 // SortLinks builds the per-column {sort, dir, indicator} bundle for the

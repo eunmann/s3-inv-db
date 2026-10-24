@@ -152,15 +152,6 @@ func TestGroupManagerForAPI_GroupsAndFallsBack(t *testing.T) {
 	}
 }
 
-func TestStatusRank(t *testing.T) {
-	cases := map[string]int{"added": 1, "removed": 2, "changed": 3, "unchanged": 4, "garbage": 5}
-	for s, want := range cases {
-		if got := handlers.StatusRankForTest(s); got != want {
-			t.Errorf("handlers.StatusRankForTest(%q) = %d, want %d", s, got, want)
-		}
-	}
-}
-
 func TestInventoryGroup_ConfigID(t *testing.T) {
 	g := handlers.InventoryGroup{SourceBucket: "src-a", Name: "inv-1"}
 	if got := g.ConfigID(); got != "src-a/inv-1" {

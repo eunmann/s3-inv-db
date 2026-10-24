@@ -1,0 +1,7 @@
+# Ingestion A/B suite (make bench-ingest BASE=<ref>): parsing,
+# aggregation, spill/merge and index build.
+# <tags> <package> <bench regex> <benchtime>
+
+# Build path end to end: S3 download, parse, aggregate, spill, merge,
+# index build (seconds per op, reports peak_heap_B and disk_B).
+integration internal/loader ^BenchmarkPipeline$/^shape=(realistic|deep_pyramid)$/^n=1000000$ 1x

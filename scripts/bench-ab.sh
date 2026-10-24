@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: scripts/bench-ab.sh [-n rounds] [-s suite] BASE_REF
+# Usage: scripts/bench-ab.sh [-n rounds] -s suite BASE_REF
 #
 # A/B benchmark gate for performance changes. Builds the test binaries
 # for BASE_REF (in a temporary worktree) and for the current working tree
@@ -15,7 +15,7 @@
 # It exits 2 when it cannot compare: bad usage, a build or benchmark
 # failure, a suite entry with no results on a side, or no S3 server.
 #
-# Suite lines (bench/suite.txt): `<tags> <package> <bench regex> <benchtime>`,
+# Suite lines (bench/suite/*.txt): `<tags> <package> <bench regex> <benchtime>`,
 # tags `-` for none. Entries tagged `integration` need a local S3 server;
 # when AWS_ENDPOINT_URL_S3 is unset the script starts one in Docker.
 # Results land in bench/ab/<timestamp>/ (gitignored); each side's full
@@ -33,7 +33,7 @@ usage() {
 }
 
 rounds=8
-suite=bench/suite.txt
+suite=
 while getopts "n:s:" opt; do
 	case $opt in
 		n) rounds=$OPTARG ;;
@@ -42,7 +42,7 @@ while getopts "n:s:" opt; do
 	esac
 done
 shift $((OPTIND - 1))
-[[ $# -eq 1 ]] || usage
+[[ $# -eq 1 && -n $suite ]] || usage
 base_ref=$1
 time_pct=${BENCH_TIME_PCT:-5}
 mem_pct=${BENCH_MEM_PCT:-5}

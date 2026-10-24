@@ -138,16 +138,10 @@ type CompareChildView struct {
 	CostAfterH     string
 	CostBeforeH    string
 	BytesPct       string
-	CostDelta      int64
 	BytesSign      int
-	BytesDelta     int64
 	CostSign       int
-	APICostDelta   int64
 	ObjectsSign    int
-	ObjectsDelta   int64
-	StatusOrder    int
 	APICostSign    int
-	AbsByteDelta   uint64
 	HasCost        bool
 	HasChildren    bool
 }
@@ -270,113 +264,43 @@ func (h *Handlers) computeCompareLevel(ctx context.Context, opts compareViewOpti
 		return nil, fmt.Errorf("compare level: %w", err)
 	}
 	start := time.Now()
-	var view CompareLevelView
+	var data inventory.CompareLevelData
 	err := h.manager.WithTwoIndexes(ctx, opts.from, opts.to, func(a, b *indexread.Index) error {
-		data := inventory.CompareLevel(a, b, opts.prefix)
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("compare walk: %w", err)
-		}
-		view.NotFound = data.Self.NotFoundInA && data.Self.NotFoundInB
-		view.Self = h.buildCompareSelfView(data.Self)
-		view.Children = make([]CompareChildView, 0, len(data.Children))
-		const ctxCheckEvery = 1024
-		for i := range data.Children {
-			if i%ctxCheckEvery == 0 {
-				if err := ctx.Err(); err != nil {
-					return fmt.Errorf("compare view build: %w", err)
-				}
-			}
-			c := h.buildCompareChildView(&data.Children[i])
-			view.Children = append(view.Children, c)
-			switch data.Children[i].Status {
-			case inventory.CompareAdded:
-				view.Status.Added++
-			case inventory.CompareRemoved:
-				view.Status.Removed++
-			case inventory.CompareChanged:
-				view.Status.Changed++
-			case inventory.CompareUnchanged:
-				view.Status.Unchanged++
-			case inventory.CompareUnknown:
-				// Unknown is the zero value emitted before comparison is
-				// computed; no counter to bump.
-			}
-		}
+		data = inventory.CompareLevel(a, b, opts.prefix, opts.query(), h.compareCost)
 
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("compute compare level: %w", err)
 	}
-	view.HideUnchanged = opts.hideUnchanged
-	if opts.hideUnchanged {
-		filtered := view.Children[:0]
-		for i := range view.Children {
-			if view.Children[i].Status != inventory.CompareUnchanged.String() {
-				filtered = append(filtered, view.Children[i])
-			}
-		}
-		view.Children = filtered
+	view := CompareLevelView{
+		NotFound:      data.Self.NotFoundInA && data.Self.NotFoundInB,
+		Self:          h.buildCompareSelfView(data.Self),
+		Status:        CompareStatusCounts(data.Counts),
+		HideUnchanged: opts.hideUnchanged,
+		Sort:          opts.sortBy,
+		Dir:           opts.dir,
+		SortLinks:     inventory.CompareSortLinks(opts.sortBy, opts.dir),
+		TotalChildren: data.Total,
+		Pagination:    data.Pagination,
+		Children:      make([]CompareChildView, 0, len(data.Children)),
 	}
-	view.Sort = opts.sortBy
-	view.Dir = opts.dir
-	view.SortLinks = inventory.CompareSortLinks(opts.sortBy, opts.dir)
-	sortCompareChildView(view.Children, opts.sortBy, opts.dir)
-	view.TotalChildren = len(view.Children)
-	view.Pagination = inventory.Paginate(view.TotalChildren, opts.page, opts.pageSize)
-	from1, to1 := view.Pagination.FirstRow, view.Pagination.LastRow
-	if from1 > 0 {
-		view.Children = view.Children[from1-1 : to1]
-	} else {
-		view.Children = nil
+	for i := range data.Children {
+		view.Children = append(view.Children, h.buildCompareChildView(&data.Children[i]))
 	}
 	view.QueryDurationH = humanfmt.Duration(time.Since(start))
 
 	return &view, nil
 }
 
-// sortCompareChildView orders the table rows in place. When sortBy is
-// empty the default "biggest absolute byte mover" applies — handy on
-// first visit because users mostly want to see what moved. Explicit
-// sorts use signed deltas so direction picks growers vs shrinkers.
-func sortCompareChildView(rows []CompareChildView, sortBy, dir string) {
-	desc := dir == inventory.SortDirDesc
-	less := func(i, j int) bool {
-		a, b := &rows[i], &rows[j]
-		var primary, equal bool
-		switch sortBy {
-		case inventory.SortColCompareStatus:
-			primary = a.StatusOrder < b.StatusOrder
-			equal = a.StatusOrder == b.StatusOrder
-		case inventory.SortColObjects:
-			primary = a.ObjectsDelta < b.ObjectsDelta
-			equal = a.ObjectsDelta == b.ObjectsDelta
-		case inventory.SortColSize:
-			primary = a.BytesDelta < b.BytesDelta
-			equal = a.BytesDelta == b.BytesDelta
-		case inventory.SortColCost:
-			primary = a.CostDelta < b.CostDelta
-			equal = a.CostDelta == b.CostDelta
-		case inventory.SortColSegment:
-			primary = a.Segment < b.Segment
-			equal = a.Segment == b.Segment
-		default:
-			// No explicit sort — default to biggest absolute byte
-			// delta first so the most interesting rows land on top.
-			primary = a.AbsByteDelta < b.AbsByteDelta
-			equal = a.AbsByteDelta == b.AbsByteDelta
-			desc = true
-		}
-		if equal {
-			return a.Segment < b.Segment
-		}
-		if desc {
-			return !primary
-		}
+// query is the domain form of the compare options.
+func (o compareViewOptions) query() inventory.CompareQuery {
+	return inventory.CompareQuery{SortBy: o.sortBy, Dir: o.dir, Page: o.page, PageSize: o.pageSize, HideUnchanged: o.hideUnchanged}
+}
 
-		return primary
-	}
-	sort.SliceStable(rows, less)
+// compareCost is a child's monthly storage cost, for sorting by cost.
+func (h *Handlers) compareCost(idx *indexread.Index, pos uint64) uint64 {
+	return pricing.ComputeMonthlyCost(idx.TierBreakdown(pos), h.priceTable).TotalMicrodollars
 }
 
 func (h *Handlers) buildCompareSelfView(self inventory.CompareSelf) CompareSelfView {
@@ -415,15 +339,11 @@ func (h *Handlers) buildCompareChildView(c *inventory.CompareChild) CompareChild
 		Segment:        c.Segment,
 		Prefix:         c.Prefix,
 		Status:         c.Status.String(),
-		StatusOrder:    inventory.StatusOrder(c.Status),
 		HasChildren:    c.HasChildren,
-		ObjectsDelta:   c.Objects.Delta,
-		BytesDelta:     c.Bytes.Delta,
 		ObjectsBeforeH: numericLabel(c.Objects.Before, c.Status == inventory.CompareAdded, humanfmt.CountUint64),
 		ObjectsAfterH:  numericLabel(c.Objects.After, c.Status == inventory.CompareRemoved, humanfmt.CountUint64),
 		BytesBeforeH:   numericLabel(c.Bytes.Before, c.Status == inventory.CompareAdded, humanfmt.BytesUint64),
 		BytesAfterH:    numericLabel(c.Bytes.After, c.Status == inventory.CompareRemoved, humanfmt.BytesUint64),
-		AbsByteDelta:   absInt64(c.Bytes.Delta),
 	}
 	objDelta := formatDelta(c.Objects.Before, c.Objects.After, c.Objects.Delta, humanfmt.CountUint64)
 	v.ObjectsDeltaH, v.ObjectsPct, v.ObjectsSign = objDelta.DeltaH, objDelta.Pct, objDelta.Sign
@@ -435,7 +355,6 @@ func (h *Handlers) buildCompareChildView(c *inventory.CompareChild) CompareChild
 		costAfter := tierMapCost(c.TierAfter, h.priceTable)
 		v.CostBeforeH = pricing.FormatCost(costBefore)
 		v.CostAfterH = pricing.FormatCost(costAfter)
-		v.CostDelta = int64(costAfter) - int64(costBefore)
 		cDelta := formatCostDelta(costBefore, costAfter)
 		v.CostDeltaH, v.CostPct, v.CostSign = cDelta.DeltaH, cDelta.Pct, cDelta.Sign
 	}
@@ -443,7 +362,6 @@ func (h *Handlers) buildCompareChildView(c *inventory.CompareChild) CompareChild
 	apiAfter := pricing.ComputePutCost(c.Objects.After, h.priceTable)
 	v.APICostBeforeH = pricing.FormatCost(apiBefore)
 	v.APICostAfterH = pricing.FormatCost(apiAfter)
-	v.APICostDelta = int64(apiAfter) - int64(apiBefore)
 	apiDelta := formatCostDelta(apiBefore, apiAfter)
 	v.APICostDeltaH, v.APICostPct, v.APICostSign = apiDelta.DeltaH, apiDelta.Pct, apiDelta.Sign
 
@@ -652,7 +570,7 @@ func (h *Handlers) CompareLevelAPI(w http.ResponseWriter, r *http.Request) {
 
 	var data inventory.CompareLevelData
 	err := h.manager.WithTwoIndexes(r.Context(), opts.from, opts.to, func(a, b *indexread.Index) error {
-		data = inventory.CompareLevel(a, b, opts.prefix)
+		data = inventory.CompareLevel(a, b, opts.prefix, opts.query(), h.compareCost)
 
 		return nil
 	})
@@ -666,9 +584,9 @@ func (h *Handlers) CompareLevelAPI(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, h.buildCompareAPIResponse(opts, data))
 }
 
-// buildCompareAPIResponse turns a CompareLevelData into the JSON payload,
-// applying the same filter→sort→paginate pipeline as the HTML view but
-// with raw numeric output.
+// buildCompareAPIResponse turns a CompareLevelData into the JSON payload;
+// filtering, sorting and paging already happened in inventory.CompareLevel,
+// shared with the HTML view.
 func (h *Handlers) buildCompareAPIResponse(opts compareViewOptions, data inventory.CompareLevelData) CompareLevelResponse {
 	resp := CompareLevelResponse{
 		From:          opts.from,
@@ -684,64 +602,41 @@ func (h *Handlers) buildCompareAPIResponse(opts compareViewOptions, data invento
 	}
 	resp.Self = h.buildCompareSelfJSON(data.Self)
 
-	rows := make([]CompareChildResponse, 0, len(data.Children))
+	resp.StatusCounts = CompareStatusCountsJSON(data.Counts)
+	resp.TotalChildren = data.Total
+	resp.Pagination = paginationFromBrowse(data.Pagination, data.Total)
+	resp.Children = make([]CompareChildResponse, 0, len(data.Children))
 	for i := range data.Children {
-		c := &data.Children[i]
-		row := CompareChildResponse{
-			Segment:       c.Segment,
-			Prefix:        c.Prefix,
-			Status:        c.Status.String(),
-			HasChildren:   c.HasChildren,
-			ObjectsBefore: c.Objects.Before,
-			ObjectsAfter:  c.Objects.After,
-			ObjectsDelta:  c.Objects.Delta,
-			BytesBefore:   c.Bytes.Before,
-			BytesAfter:    c.Bytes.After,
-			BytesDelta:    c.Bytes.Delta,
-		}
-		if len(c.TierBefore) > 0 || len(c.TierAfter) > 0 {
-			row.HasCost = true
-			row.CostBeforeMicrodollars = tierMapCost(c.TierBefore, h.priceTable)
-			row.CostAfterMicrodollars = tierMapCost(c.TierAfter, h.priceTable)
-			row.CostDeltaMicrodollars = int64(row.CostAfterMicrodollars) - int64(row.CostBeforeMicrodollars)
-		}
-		row.APICostBeforeMicrodollars = pricing.ComputePutCost(c.Objects.Before, h.priceTable)
-		row.APICostAfterMicrodollars = pricing.ComputePutCost(c.Objects.After, h.priceTable)
-		row.APICostDeltaMicrodollars = int64(row.APICostAfterMicrodollars) - int64(row.APICostBeforeMicrodollars)
-		switch c.Status {
-		case inventory.CompareAdded:
-			resp.StatusCounts.Added++
-		case inventory.CompareRemoved:
-			resp.StatusCounts.Removed++
-		case inventory.CompareChanged:
-			resp.StatusCounts.Changed++
-		case inventory.CompareUnchanged:
-			resp.StatusCounts.Unchanged++
-		case inventory.CompareUnknown:
-			// Unknown is the zero value — no counter to bump.
-		}
-		rows = append(rows, row)
-	}
-	if opts.hideUnchanged {
-		filtered := rows[:0]
-		for i := range rows {
-			if rows[i].Status != inventory.CompareUnchanged.String() {
-				filtered = append(filtered, rows[i])
-			}
-		}
-		rows = filtered
-	}
-	sortCompareAPIChildren(rows, opts.sortBy, opts.dir)
-	resp.TotalChildren = len(rows)
-	p := inventory.Paginate(len(rows), opts.page, opts.pageSize)
-	resp.Pagination = paginationFromBrowse(p, len(rows))
-	if p.FirstRow > 0 {
-		resp.Children = rows[p.FirstRow-1 : p.LastRow]
-	} else {
-		resp.Children = []CompareChildResponse{}
+		resp.Children = append(resp.Children, h.compareChildJSON(&data.Children[i]))
 	}
 
 	return resp
+}
+
+func (h *Handlers) compareChildJSON(c *inventory.CompareChild) CompareChildResponse {
+	row := CompareChildResponse{
+		Segment:       c.Segment,
+		Prefix:        c.Prefix,
+		Status:        c.Status.String(),
+		HasChildren:   c.HasChildren,
+		ObjectsBefore: c.Objects.Before,
+		ObjectsAfter:  c.Objects.After,
+		ObjectsDelta:  c.Objects.Delta,
+		BytesBefore:   c.Bytes.Before,
+		BytesAfter:    c.Bytes.After,
+		BytesDelta:    c.Bytes.Delta,
+	}
+	if len(c.TierBefore) > 0 || len(c.TierAfter) > 0 {
+		row.HasCost = true
+		row.CostBeforeMicrodollars = tierMapCost(c.TierBefore, h.priceTable)
+		row.CostAfterMicrodollars = tierMapCost(c.TierAfter, h.priceTable)
+		row.CostDeltaMicrodollars = int64(row.CostAfterMicrodollars) - int64(row.CostBeforeMicrodollars)
+	}
+	row.APICostBeforeMicrodollars = pricing.ComputePutCost(c.Objects.Before, h.priceTable)
+	row.APICostAfterMicrodollars = pricing.ComputePutCost(c.Objects.After, h.priceTable)
+	row.APICostDeltaMicrodollars = int64(row.APICostAfterMicrodollars) - int64(row.APICostBeforeMicrodollars)
+
+	return row
 }
 
 func (h *Handlers) buildCompareSelfJSON(self inventory.CompareSelf) CompareSelfResponse {
@@ -767,71 +662,6 @@ func (h *Handlers) buildCompareSelfJSON(self inventory.CompareSelf) CompareSelfR
 
 	return r
 }
-
-// sortCompareAPIChildren mirrors sortCompareChildView for the JSON row shape.
-// When sortBy is empty the default falls through to biggest |Δ bytes|.
-func sortCompareAPIChildren(rows []CompareChildResponse, sortBy, dir string) {
-	desc := dir == inventory.SortDirDesc
-	less := func(i, j int) bool {
-		a, b := &rows[i], &rows[j]
-		var primary, equal bool
-		switch sortBy {
-		case inventory.SortColCompareStatus:
-			oa, ob := statusRank(a.Status), statusRank(b.Status)
-			primary = oa < ob
-			equal = oa == ob
-		case inventory.SortColObjects:
-			primary = a.ObjectsDelta < b.ObjectsDelta
-			equal = a.ObjectsDelta == b.ObjectsDelta
-		case inventory.SortColSize:
-			primary = a.BytesDelta < b.BytesDelta
-			equal = a.BytesDelta == b.BytesDelta
-		case inventory.SortColCost:
-			primary = a.CostDeltaMicrodollars < b.CostDeltaMicrodollars
-			equal = a.CostDeltaMicrodollars == b.CostDeltaMicrodollars
-		case inventory.SortColSegment:
-			primary = a.Segment < b.Segment
-			equal = a.Segment == b.Segment
-		default:
-			ax, bx := absInt64(a.BytesDelta), absInt64(b.BytesDelta)
-			primary = ax < bx
-			equal = ax == bx
-			desc = true
-		}
-		if equal {
-			return a.Segment < b.Segment
-		}
-		if desc {
-			return !primary
-		}
-
-		return primary
-	}
-	sort.SliceStable(rows, less)
-}
-
-// statusRank mirrors inventory.StatusOrder for the JSON status strings.
-func statusRank(s string) int {
-	switch s {
-	case "added":
-		return 1
-	case "removed":
-		return 2
-	case statusChangedString:
-		return 3
-	case "unchanged":
-		return 4
-	}
-
-	return statusUnknownRank
-}
-
-// Status sort keys mirrored from the inventory package; lifted out as
-// constants so goconst and mnd don't flag the literals.
-const (
-	statusChangedString = "changed"
-	statusUnknownRank   = 5
-)
 
 // paginationFromBrowse converts the domain pagination into the JSON
 // shape — keeps the field names aligned with PaginationJSON.

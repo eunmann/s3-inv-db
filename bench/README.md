@@ -1,20 +1,37 @@
 # Benchmarks
 
-Benchmarks gate **performance changes**, not every PR. CI never runs
-them: shared runners are too noisy to judge a few percent, and most
-changes cannot move performance. Run the gate locally when a change
-touches a hot path (ingest, aggregation, spill/merge, index build, the
-query path) and cite its result in the commit or PR.
+## When to run
+
+Run the A/B gate **only** when a change touches one of two areas, and
+run **only that area's suite** — a full run takes a long time:
+
+| Change touches | Run |
+|---|---|
+| Ingestion: inventory parsing (`pkg/s3inventory`), aggregation, spill/merge and index build (`pkg/extsort`, `pkg/format` writers) | `make bench-ingest BASE=main` |
+| Index data structures or query code: `pkg/format` readers, `pkg/indexread`, browse/compare/stats paths (`internal/inventory`, `internal/handlers`) | `make bench-query BASE=main` |
+
+Everything else is **not** benchmarked: dependency bumps, server,
+catalog, auto-load, jobs, security and lifecycle code, templates, docs,
+tooling — and review fixes that stay outside those two areas. CI never
+runs benchmarks.
+
+Every PR that ran the gate reports the result in its description under
+**Performance**: per suite entry, before → after for time, memory and
+allocations per op (and peak heap / disk for the pipeline), so readers
+know what to expect. A PR that did not need the gate says so in one
+line.
 
 ## The A/B gate
 
 ```sh
-make bench-ab BASE=main            # ROUNDS=8 SUITE=bench/suite.txt
+make bench-ingest BASE=main        # or bench-query; ROUNDS=8 by default
+make bench-ab SUITE=<file> BASE=main   # a custom suite
 ```
 
 [`scripts/bench-ab.sh`](../scripts/bench-ab.sh) builds the test binaries
 for `BASE` (in a temporary worktree) and for the working tree, then runs
-every entry of [`suite.txt`](suite.txt) `ROUNDS` times, alternating which
+every entry of the suite file (`bench/suite/ingest.txt` or
+`bench/suite/query.txt`) `ROUNDS` times, alternating which
 side runs first so machine drift hits both sides equally. Base and head
 always run on the same machine in the same session, so no stored
 baseline can go stale with hardware. `benchstat` compares them, and the
@@ -40,22 +57,29 @@ is already set.
 A regression is merged only with an explicit justification in the
 commit message (CLAUDE.md, Performance & Benchmarks).
 
-## The suite
+## The suites
 
 Every entry does milliseconds to seconds of work per op on fixed,
-seeded inputs, so repeated rounds agree:
+seeded inputs, so repeated rounds agree.
+
+Ingestion (`bench/suite/ingest.txt`):
 
 - `internal/loader` `BenchmarkPipeline` at 1M objects (realistic and
   deep-pyramid shapes): the real `Pipeline.Run` end to end through the
   local S3 server. Seconds per op; also reports `peak_heap_B` and
   `disk_B`.
+Data structures / query (`bench/suite/query.txt`):
+
 - `pkg/indexread` `BenchmarkGate*`: 100k lookups, prefix
   reconstructions or tier breakdowns, or 1k children + top-10 queries
   per op, over one 1M-object multi-tier index.
+- `internal/handlers` `BenchmarkGate*`: one browse or compare API
+  request over a prefix with 200k children.
 
 When a change touches a hot path no entry covers, add a sizeable
-benchmark for it **in its own commit first**, then run the gate with that
-commit as `BASE` so both sides have it.
+benchmark for it **in its own commit first**, add it to the matching
+suite file, then run the gate with that commit as `BASE` so both sides
+have it.
 
 ## Exploratory benchmarks
 

@@ -15,7 +15,7 @@ Use the given PR, or the current branch's. `gh pr view <n> --json number,title,b
 
 ## 2. Find
 
-With `base=$(git merge-base refs/review/base-<n> refs/review/pr-<n>)`, run `.claude/scripts/review-scope.sh $base refs/review/pr-<n>`. Group the directories as `/review-loop` round 1 does: one group per ~1500 changed code lines, at most three. Spawn one `review-finder` agent per group in parallel, mode `full`, with the range `$base..refs/review/pr-<n>` and the group's paths. Also check the PR against its description and linked issue: does it do what it claims? For a performance claim, is a `make bench-ab` result cited?
+With `base=$(git merge-base refs/review/base-<n> refs/review/pr-<n>)`, run `.claude/scripts/review-scope.sh $base refs/review/pr-<n>`. Group the directories as `/review-loop` round 1 does: one group per ~1500 changed code lines, at most three. Spawn one `review-finder` agent per group in parallel, mode `full`, with the range `$base..refs/review/pr-<n>` and the group's paths. Also check the PR against its description and linked issue: does it do what it claims? Does its **Performance** section report `make bench-ingest` / `make bench-query` results for an ingestion or query change, or say in one line why no benchmark was needed?
 
 ## 3. Synthesize
 

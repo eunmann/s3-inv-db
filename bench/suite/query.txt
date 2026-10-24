@@ -1,0 +1,9 @@
+# Data-structure / query A/B suite (make bench-query BASE=<ref>): index
+# readers, lookups and the browse/compare/stats read path.
+# <tags> <package> <bench regex> <benchtime>
+
+# Read path over a 1M-object index (100k lookups or 1k parents per op).
+- pkg/indexread ^BenchmarkGate 2s
+
+# Browse/compare API over a 200k-child prefix (one request per op).
+- internal/handlers ^BenchmarkGate 2s

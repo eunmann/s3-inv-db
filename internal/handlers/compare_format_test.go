@@ -183,7 +183,7 @@ func TestBuildCompareSelfView_MissingSideRendersDash(t *testing.T) {
 	}
 }
 
-func TestBuildCompareChildView_StatusOrderMatchesPublicHelper(t *testing.T) {
+func TestBuildCompareChildView_ShrinkageSigns(t *testing.T) {
 	h := newTestHandlers(t)
 	child := inventory.CompareChild{
 		Segment: "logs/", Prefix: "data/logs/",
@@ -195,14 +195,8 @@ func TestBuildCompareChildView_StatusOrderMatchesPublicHelper(t *testing.T) {
 	if v.Status != "changed" {
 		t.Errorf("Status = %q, want changed", v.Status)
 	}
-	if v.StatusOrder != inventory.StatusOrder(inventory.CompareChanged) {
-		t.Errorf("StatusOrder = %d, want %d", v.StatusOrder, inventory.StatusOrder(inventory.CompareChanged))
-	}
 	if v.ObjectsSign != -1 || v.BytesSign != -1 {
 		t.Errorf("sign for shrinkage: objects=%d bytes=%d, want both -1", v.ObjectsSign, v.BytesSign)
-	}
-	if v.AbsByteDelta != 100 {
-		t.Errorf("AbsByteDelta = %d, want 100", v.AbsByteDelta)
 	}
 }
 

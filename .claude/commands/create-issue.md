@@ -192,7 +192,7 @@ gh issue create \
 - [ ] `make lint` passes with zero warnings
 - [ ] `make test` passes
 - [ ] `make test-race` passes (if concurrency touched)
-- [ ] Benchmarks run before/after for hot-path changes (per CLAUDE.md rule 4)
+- [ ] `make bench-ingest` / `make bench-query` run for ingestion / query changes (only), numbers in the PR's Performance section
 - [ ] <Manual verification steps>
 
 ## Risks

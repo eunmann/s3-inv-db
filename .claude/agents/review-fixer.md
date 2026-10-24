@@ -19,12 +19,12 @@ A finding is a claim. Read the cited lines and confirm the failure path executes
 - A `bug` fix ships with a test that fails without it; write it first and watch it fail. A `test-gap` fix is the test. A `cleanup` needs no test.
 - Preserve the happy path: keep the test that pins the function's intended behaviour green, or add one. If the intended behaviour is unclear (docs, tests and issue disagree or are silent), skip the finding and reply with the question and its two or three concrete answers.
 - A contract mismatch is fixed on both sides together: index writer and reader, Go struct and migration, handler and template, flag and config key and docs.
-- A fix on a hot path (ingest, aggregation, merge, index build, query path) names the `make bench-ab` entry the coordinator should run.
+- A fix to ingestion code or to the index data structures / query code names which suite the coordinator should run (`make bench-ingest` or `make bench-query`); other fixes need no benchmark.
 - Delete any comment you pass that restates its line, narrates an edit or is no longer true.
 - A further defect a fix reveals is fixed too if it is high or medium and in code the branch changed; otherwise mention it in the reply.
 
 ## Procedure
 
-1. Work in severity order. Make all edits, then run `make lint` once and the touched packages' tests once (`go test -race -count=1 ./internal/a/ ./pkg/b/`; add `-tags integration` with `AWS_ENDPOINT_URL_S3` set when the package has S3 tests). Never run `make bench-ab`; the coordinator does.
+1. Work in severity order. Make all edits, then run `make lint` once and the touched packages' tests once (`go test -race -count=1 ./internal/a/ ./pkg/b/`; add `-tags integration` with `AWS_ENDPOINT_URL_S3` set when the package has S3 tests). Never run benchmarks; the coordinator does.
 2. Commit one logical change at a time (related findings together) with `git add <explicit paths>`, in the `workflow` skill's Commit Messages format, labelled `Task: review R<round>`, ending with the trailer from the prompt. Never rewrite history.
 3. Finish with `git status --porcelain` empty. Reply briefly, since the coordinator reads only this: per finding `CONFIRMED <id> <sha>`, `REFUTED <id> <file:line reason>` or `SKIPPED <id> <question>`, and any benchmark the coordinator should run.

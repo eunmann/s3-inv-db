@@ -88,7 +88,7 @@ For each step in the plan, follow the TDD cycle (see the `tdd` skill):
 4. **Test** — `make test-unit` (`make test` when S3-facing code changed); `-race` for concurrency changes.
 5. **Commit** — one atomic commit per behavior, in the `workflow` skill's Commit Messages format with `Task: impl #<issue>`.
 
-If the change can move performance (ingest, aggregation, merge, index build, the query path), gate it with `make bench-ab BASE=main` (bench/README.md) and cite the result.
+If the change touches ingestion code, run `make bench-ingest BASE=main`; if it touches the index data structures or query code, `make bench-query BASE=main` (bench/README.md "When to run"). Nothing else is benchmarked. Put the result in the PR's **Performance** section.
 
 Keep commits focused: one logical change each, independently compilable and passing.
 
@@ -117,6 +117,9 @@ Closes #<issue-number>
 
 ## Summary
 - <what changed and why, 1-3 bullets>
+
+## Performance
+- <suite entry>: <before> → <after> per op, or "No benchmark needed: <reason>."
 
 ## Test Plan
 - <how to verify the changes>

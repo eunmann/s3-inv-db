@@ -1,6 +1,6 @@
 .PHONY: help all build server seeder test test-unit test-race lint lint-check clean clean-seed seed \
         css css-check dev dev-reset docker-build docker-prod docker-seed docker-down \
-        cover cover-html cover-summary cover-check tidy tidy-check deadcode vuln actionlint bench-ab compose-preflight
+        cover cover-html cover-summary cover-check tidy tidy-check deadcode vuln actionlint bench-ab bench-ingest bench-query compose-preflight
 
 .DEFAULT_GOAL := help
 
@@ -129,12 +129,18 @@ vuln: ## govulncheck (reachable vulnerabilities only)
 actionlint: ## Lint GitHub Actions workflows
 	$(ACTIONLINT)
 
-# A/B benchmark gate for performance changes: make bench-ab BASE=main
-# (ROUNDS=8, SUITE=bench/suite.txt). Not part of CI; see bench/README.md.
+# A/B benchmark gate. Run only for ingestion or data-structure/query
+# changes, and only that area's suite — see bench/README.md. Not in CI.
 BASE ?= main
 ROUNDS ?= 8
-SUITE ?= bench/suite.txt
-bench-ab: ## Compare benchmarks of BASE vs the working tree; fail on regressions
+bench-ingest: ## A/B the ingestion suite (BASE vs working tree)
+	scripts/bench-ab.sh -n $(ROUNDS) -s bench/suite/ingest.txt $(BASE)
+
+bench-query: ## A/B the data-structure/query suite (BASE vs working tree)
+	scripts/bench-ab.sh -n $(ROUNDS) -s bench/suite/query.txt $(BASE)
+
+bench-ab: ## A/B a custom suite: make bench-ab SUITE=<file> BASE=<ref>
+	@test -n "$(SUITE)" || { echo "SUITE is required (or use bench-ingest / bench-query)"; exit 2; }
 	scripts/bench-ab.sh -n $(ROUNDS) -s $(SUITE) $(BASE)
 
 # Default `lint` runs with --fix so iterative dev cleans up auto-fixable
