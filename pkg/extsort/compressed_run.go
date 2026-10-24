@@ -30,7 +30,8 @@ import (
 //   TierCounts: MaxTiers * 8 bytes (uint64 array)
 //   TierBytes:  MaxTiers * 8 bytes (uint64 array)
 //
-// Each record is: 4 + len(prefix) + 2 + 8 + 8 + 12*8 + 12*8 = 22 + len(prefix) + 192 = 214 + len(prefix) bytes
+// Each record is 4 + len(prefix) + 2 + 8 + 8 + 2*MaxTiers*8 bytes; with
+// MaxTiers = tiers.NumTiers = 13 that is 230 + len(prefix).
 //
 // Compression types:
 //   1: Zstd (only supported type)
