@@ -180,7 +180,7 @@ func TestParallelMerger_SingleFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := createTestRunFile(t, tmpDir, "single.crun", []string{"a/", "b/", "c/"}, 0)
 
-	merger := NewParallelMerger(DefaultParallelMergeConfig())
+	merger := NewParallelMerger(ParallelMergeConfig{})
 
 	got := rowPrefixes(mergeAllRows(t, merger, []string{path}))
 	if want := []string{"a/", "b/", "c/"}; !slices.Equal(got, want) {
@@ -192,7 +192,7 @@ func TestParallelMerger_SingleFile(t *testing.T) {
 }
 
 func TestParallelMerger_EmptyInput(t *testing.T) {
-	merger := NewParallelMerger(DefaultParallelMergeConfig())
+	merger := NewParallelMerger(ParallelMergeConfig{})
 
 	_, _, err := merger.MergeAllToIterator(t.Context(), []string{})
 	if !errors.Is(err, ErrNoInputPaths) {
@@ -373,5 +373,28 @@ func TestParallelMerger_TierDataPreserved(t *testing.T) {
 	}
 	if row.TierBytes[tiers.Standard] != 2000 { // 500 + 1500
 		t.Errorf("expected Standard tier bytes 2000, got %d", row.TierBytes[tiers.Standard])
+	}
+}
+
+func TestParallelMerger_DefaultsFromConfig(t *testing.T) {
+	def := DefaultConfig().Merge
+	for _, c := range []struct {
+		name string
+		in   ParallelMergeConfig
+		want MergeConfig
+	}{
+		{"zero", ParallelMergeConfig{}, def},
+		{"fan_in_one", ParallelMergeConfig{NumWorkers: 3, MaxFanIn: 1}, MergeConfig{NumWorkers: 3, MaxFanIn: def.MaxFanIn}},
+		{"set", ParallelMergeConfig{NumWorkers: 3, MaxFanIn: 5}, MergeConfig{NumWorkers: 3, MaxFanIn: 5}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := NewParallelMerger(c.in).config
+			if got := (MergeConfig{NumWorkers: cfg.NumWorkers, MaxFanIn: cfg.MaxFanIn}); got != c.want {
+				t.Errorf("merger config %+v, want %+v", got, c.want)
+			}
+			if cfg.BufferSize != mergeReaderBufferSize {
+				t.Errorf("buffer size %d, want %d", cfg.BufferSize, mergeReaderBufferSize)
+			}
+		})
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -19,7 +18,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// ParallelMergeConfig configures parallel merge operations.
+// ParallelMergeConfig configures parallel merge operations. Zero
+// NumWorkers and MaxFanIn take DefaultConfig's merge settings.
 type ParallelMergeConfig struct {
 	OnRoundComplete func(round, remainingFiles int)
 	TempDir         string
@@ -33,20 +33,8 @@ type ParallelMergeConfig struct {
 	CompressionLevel CompressionLevel
 }
 
-// DefaultParallelMergeConfig returns sensible defaults for parallel merge.
-func DefaultParallelMergeConfig() ParallelMergeConfig {
-	numCPU := runtime.NumCPU()
-	workers := min(max(numCPU/2, 1),
-		// Cap to avoid excessive parallelism
-		8)
-
-	return ParallelMergeConfig{
-		NumWorkers:       workers,
-		MaxFanIn:         16,              // Higher fan-in reduces merge rounds, each reader uses ~1MB
-		BufferSize:       1 * 1024 * 1024, // 1MB
-		CompressionLevel: CompressionFastest,
-	}
-}
+// mergeReaderBufferSize is each merge reader's and writer's I/O buffer.
+const mergeReaderBufferSize = 1 << 20
 
 // DefaultFinalFanIn is how many runs the final streaming merge reads
 // at once. An open run costs its read buffer plus a zstd decoder, a few
@@ -72,14 +60,10 @@ type ParallelMerger struct {
 
 // NewParallelMerger creates a new parallel merger with the given configuration.
 func NewParallelMerger(config ParallelMergeConfig) *ParallelMerger {
-	if config.NumWorkers <= 0 {
-		config.NumWorkers = DefaultParallelMergeConfig().NumWorkers
-	}
-	if config.MaxFanIn <= 1 {
-		config.MaxFanIn = DefaultParallelMergeConfig().MaxFanIn
-	}
+	merge := MergeConfig{NumWorkers: config.NumWorkers, MaxFanIn: config.MaxFanIn}.withDefaults()
+	config.NumWorkers, config.MaxFanIn = merge.NumWorkers, merge.MaxFanIn
 	if config.BufferSize <= 0 {
-		config.BufferSize = DefaultParallelMergeConfig().BufferSize
+		config.BufferSize = mergeReaderBufferSize
 	}
 	if config.FinalFanIn <= 0 {
 		config.FinalFanIn = DefaultFinalFanIn

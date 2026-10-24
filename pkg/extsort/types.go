@@ -206,6 +206,20 @@ type MergeConfig struct {
 	MaxFanIn int
 }
 
+// withDefaults replaces unset (or, for MaxFanIn, unusable) fields with
+// DefaultConfig's.
+func (c MergeConfig) withDefaults() MergeConfig {
+	def := DefaultConfig().Merge
+	if c.NumWorkers <= 0 {
+		c.NumWorkers = def.NumWorkers
+	}
+	if c.MaxFanIn <= 1 {
+		c.MaxFanIn = def.MaxFanIn
+	}
+
+	return c
+}
+
 // ObserveConfig wires optional progress + event consumers.
 type ObserveConfig struct {
 	// OnProgress fires on phase transitions and once per ingest chunk.

@@ -955,17 +955,10 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	// than a fraction of a budget — each reader's working set is
 	// dominated by its inflight prefix-row decode, not this buffer.
 	numRunFiles := len(p.runFiles)
-	const perReaderBuffer int64 = 1 * 1024 * 1024
+	const perReaderBuffer int64 = mergeReaderBufferSize
 
-	// Use parallel merge for multiple run files
-	numWorkers := p.config.Merge.NumWorkers
-	if numWorkers <= 0 {
-		numWorkers = 1
-	}
-	maxFanIn := p.config.Merge.MaxFanIn
-	if maxFanIn <= 1 {
-		maxFanIn = 8
-	}
+	merge := p.config.Merge.withDefaults()
+	numWorkers, maxFanIn := merge.NumWorkers, merge.MaxFanIn
 
 	log.Info().
 		Int("run_files_count", numRunFiles).
