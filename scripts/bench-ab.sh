@@ -107,17 +107,19 @@ done
 # whose regex matches nothing would otherwise drop out of the comparison
 # and the gate would pass without measuring it.
 run_side() {
-	local side=$1 round=$2 src=$root e tags pkg re bt status run=$out/run.log
+	local side=$1 round=$2 src=$root e tags pkg re bt status run=$out/run.log errlog=$out/run.stderr
 	[[ $side == base ]] && src=$work/base
 	for e in "${entries[@]}"; do
 		read -r tags pkg re bt <<<"$e"
 		status=0
+		# Results go to stdout; logs go to stderr, kept apart so a log
+		# line written mid-benchmark cannot split a result line.
 		(cd "$src/$pkg" && "$root/$out/bin/$side-$(tr '/.' '__' <<<"$pkg")-$tags.test" \
 			-test.run '^$' -test.bench "$re" -test.benchtime "$bt" -test.count 1 -test.benchmem) \
-			>"$run" 2>&1 || status=$?
-		cat "$run" >>"$out/$side.log"
+			>"$run" 2>"$errlog" || status=$?
+		cat "$run" "$errlog" >>"$out/$side.log"
 		if ((status != 0)); then
-			tail -n 30 "$run" >&2
+			tail -n 30 "$run" "$errlog" >&2
 			die "$side round $round: entry '$e' failed (exit $status); full output in $out/$side.log"
 		fi
 		grep -q '^Benchmark' "$run" ||
