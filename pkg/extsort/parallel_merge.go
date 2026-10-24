@@ -1,6 +1,7 @@
 package extsort
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,10 +21,14 @@ import (
 
 // ParallelMergeConfig configures parallel merge operations.
 type ParallelMergeConfig struct {
-	OnRoundComplete  func(round, remainingFiles int)
-	TempDir          string
-	NumWorkers       int
-	MaxFanIn         int
+	OnRoundComplete func(round, remainingFiles int)
+	TempDir         string
+	NumWorkers      int
+	// MaxFanIn caps the runs one disk-round merge job reads.
+	MaxFanIn int
+	// FinalFanIn caps the runs the final streaming merge reads; disk
+	// rounds run only while there are more. At least MaxFanIn.
+	FinalFanIn       int
 	BufferSize       int
 	CompressionLevel CompressionLevel
 	UseCompression   bool
@@ -43,6 +49,14 @@ func DefaultParallelMergeConfig() ParallelMergeConfig {
 		CompressionLevel: CompressionFastest,
 	}
 }
+
+// DefaultFinalFanIn is how many runs the final streaming merge reads
+// at once. An open run costs its read buffer plus a zstd decoder, a few
+// MiB, and the final merge runs after ingest has released its
+// aggregators, so it can take far more runs than a disk round: a build
+// whose every ingest worker spilled once (one run per CPU) merges
+// straight into the index with no disk round.
+const DefaultFinalFanIn = 64
 
 // ParallelMerger coordinates parallel merging of sorted run files.
 // Statistics-tracking fields are stored as atomics so Statistics() is
@@ -69,6 +83,10 @@ func NewParallelMerger(config ParallelMergeConfig) *ParallelMerger {
 	if config.BufferSize <= 0 {
 		config.BufferSize = DefaultParallelMergeConfig().BufferSize
 	}
+	if config.FinalFanIn <= 0 {
+		config.FinalFanIn = DefaultFinalFanIn
+	}
+	config.FinalFanIn = max(config.FinalFanIn, config.MaxFanIn)
 
 	tempDir := config.TempDir
 	if tempDir == "" {
@@ -115,18 +133,15 @@ type mergeResult struct {
 // streaming row iterator over the final sorted output, plus a
 // cleanup closure the caller must run when done.
 //
-// Unlike MergeAll, no final-merged file is written to disk: when the
-// remaining file count fits in MaxFanIn after the N-1 disk-backed
-// rounds, the last round is replaced by a live K-way MergeIterator
-// that the IndexBuilder consumes directly. At billion-prefix scale
-// this saves writing and re-reading the entire deduplicated prefix
-// set (hundreds of GB of avoidable I/O).
+// Disk rounds run only while there are more than FinalFanIn runs; the
+// final merge is a live K-way MergeIterator that the IndexBuilder
+// consumes directly, so the deduplicated prefix set is never written
+// out and read back.
 //
-// The cleanup closure closes the iterator's underlying readers and
-// removes any intermediate files this call produced. It does NOT
-// remove the original input files; that remains the caller's job.
-//
-
+// The merger owns the input files: each is deleted as soon as it has
+// been merged into a larger run, and the cleanup closure closes the
+// iterator and deletes the runs it read. On error every remaining run
+// is deleted.
 func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []string) (RowIterator, func() error, error) {
 	if len(inputPaths) == 0 {
 		return nil, func() error { return nil }, ErrNoInputPaths
@@ -135,42 +150,30 @@ func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []st
 	log := zerolog.Ctx(ctx)
 	startTime := time.Now()
 
-	finalPaths := inputPaths
-	round := 0
-	intermediates := []string{}
+	paths := slices.Clone(inputPaths)
+	for round := 1; len(paths) > m.config.FinalFanIn; round++ {
+		if err := ctx.Err(); err != nil {
+			removeFiles(paths)
 
-	// Disk-backed rounds while the file count exceeds MaxFanIn —
-	// each round shrinks the count by ~MaxFanIn×.
-	for len(finalPaths) > m.config.MaxFanIn {
-		select {
-		case <-ctx.Done():
-			removeFiles(intermediates)
-
-			return nil, nil, fmt.Errorf("merge cancelled: %w", ctx.Err())
-		default:
+			return nil, nil, fmt.Errorf("merge cancelled: %w", err)
 		}
-		round++
 		m.mergeRounds.Store(int64(round))
-		nextPaths, err := m.mergeRound(ctx, finalPaths, round)
+		plan := m.planRound(paths)
+		outputs, err := m.mergeRound(ctx, plan.groups, round)
 		if err != nil {
-			removeFiles(append(intermediates, nextPaths...))
+			removeFiles(paths)
 
 			return nil, nil, fmt.Errorf("merge round %d: %w", round, err)
 		}
-		if round > 1 {
-			removeFiles(finalPaths)
-		}
-		intermediates = append(intermediates, nextPaths...)
-		finalPaths = nextPaths
+		paths = slices.Concat(plan.kept, outputs)
 		if m.config.OnRoundComplete != nil {
-			m.config.OnRoundComplete(round, len(finalPaths))
+			m.config.OnRoundComplete(round, len(paths))
 		}
 	}
 
-	// Final round: stream the K-way merge directly, no file write.
-	iter, err := NewMergeIterator(finalPaths, m.config.BufferSize)
+	iter, err := NewMergeIterator(paths, m.config.BufferSize)
 	if err != nil {
-		removeFiles(intermediates)
+		removeFiles(paths)
 
 		return nil, nil, fmt.Errorf("open final merge iterator: %w", err)
 	}
@@ -179,13 +182,13 @@ func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []st
 	m.totalMergeTimeNanos.Store(int64(totalMergeTime))
 	log.Info().
 		Int64("rounds_count", m.mergeRounds.Load()).
-		Int("final_fan_in", len(finalPaths)).
+		Int("final_fan_in", len(paths)).
 		Str("disk_rounds_duration", humanfmt.Duration(totalMergeTime)).
 		Msg("parallel merge → streaming iterator")
 
 	cleanup := func() error {
 		err := iter.Close()
-		removeFiles(intermediates)
+		removeFiles(paths)
 
 		return err
 	}
@@ -193,83 +196,61 @@ func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []st
 	return iter, cleanup, nil
 }
 
-// MergeAll merges all input run files into a single sorted output.
-// Returns the path to the final merged run file.
-// The caller is responsible for cleaning up the output file when done.
-func (m *ParallelMerger) MergeAll(ctx context.Context, inputPaths []string) (string, error) {
-	if len(inputPaths) == 0 {
-		return "", ErrNoInputPaths
-	}
-
-	if len(inputPaths) == 1 {
-		// Nothing to merge, just return the single input
-		return inputPaths[0], nil
-	}
-
-	log := zerolog.Ctx(ctx)
-	startTime := time.Now()
-
-	currentPaths := inputPaths
-	round := 0
-
-	// Multi-round merge until we have a single file
-	for len(currentPaths) > 1 {
-		select {
-		case <-ctx.Done():
-			return "", fmt.Errorf("merge cancelled: %w", ctx.Err())
-		default:
-		}
-
-		round++
-		m.mergeRounds.Store(int64(round))
-
-		log.Info().
-			Int("round", round).
-			Int("input_files_count", len(currentPaths)).
-			Int("workers_count", m.config.NumWorkers).
-			Int("max_fan_in", m.config.MaxFanIn).
-			Msg("starting merge round")
-
-		nextPaths, err := m.mergeRound(ctx, currentPaths, round)
-		if err != nil {
-			removeFiles(nextPaths)
-
-			return "", fmt.Errorf("merge round %d: %w", round, err)
-		}
-
-		// Clean up input files from previous round (except original inputs on first round)
-		if round > 1 {
-			removeFiles(currentPaths)
-		}
-
-		currentPaths = nextPaths
-		log.Info().
-			Int("round", round).
-			Int("output_files_count", len(currentPaths)).
-			Msg("merge round complete")
-		if m.config.OnRoundComplete != nil {
-			m.config.OnRoundComplete(round, len(currentPaths))
-		}
-	}
-
-	totalMergeTime := time.Since(startTime)
-	m.totalMergeTimeNanos.Store(int64(totalMergeTime))
-
-	log.Info().
-		Int64("rounds_count", m.mergeRounds.Load()).
-		Str("total_duration", humanfmt.Duration(totalMergeTime)).
-		Dur("total_duration_ms", totalMergeTime).
-		Msg("parallel merge complete")
-
-	return currentPaths[0], nil
+// roundPlan is one disk round: the groups to merge, each into one new
+// run, and the runs left as they are.
+type roundPlan struct {
+	groups [][]string
+	kept   []string
 }
 
-// mergeRound performs one round of parallel merging.
-// Groups input paths by MaxFanIn and merges each group in parallel.
-func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, round int) ([]string, error) {
-	// Partition inputs into groups of MaxFanIn
-	groups := m.partitionPaths(inputPaths)
+// planRound picks a disk round's merges. When one round can bring the
+// run count down to FinalFanIn, it merges only the smallest runs that
+// takes, in as few groups as possible, and leaves the rest of the data
+// unwritten. Otherwise it merges every run, split evenly into groups of
+// at most MaxFanIn. Either way no group holds a single run.
+func (m *ParallelMerger) planRound(paths []string) roundPlan {
+	fanIn := m.config.MaxFanIn
+	// Merging a group of g runs into one removes g-1 of them.
+	excess := len(paths) - m.config.FinalFanIn
+	numGroups := (excess + fanIn - 2) / (fanIn - 1)
+	if merged := excess + numGroups; merged <= len(paths) {
+		bySize := sortBySize(paths)
 
+		return roundPlan{groups: splitEvenly(bySize[:merged], numGroups), kept: bySize[merged:]}
+	}
+
+	return roundPlan{groups: splitEvenly(paths, (len(paths)+fanIn-1)/fanIn)}
+}
+
+// sortBySize returns paths ordered by file size, smallest first. A run
+// that cannot be stat'd sorts first; opening it will report the error.
+func sortBySize(paths []string) []string {
+	sizes := make(map[string]int64, len(paths))
+	for _, p := range paths {
+		if info, err := os.Stat(p); err == nil {
+			sizes[p] = info.Size()
+		}
+	}
+	sorted := slices.Clone(paths)
+	slices.SortStableFunc(sorted, func(a, b string) int { return cmp.Compare(sizes[a], sizes[b]) })
+
+	return sorted
+}
+
+// splitEvenly splits paths into n groups whose sizes differ by at most one.
+func splitEvenly(paths []string, n int) [][]string {
+	groups := make([][]string, 0, n)
+	for i := range n {
+		groups = append(groups, paths[i*len(paths)/n:(i+1)*len(paths)/n])
+	}
+
+	return groups
+}
+
+// mergeRound merges each group into one new run, in parallel, and
+// returns the new runs in group order. A merged group's inputs are
+// deleted as soon as its output is complete.
+func (m *ParallelMerger) mergeRound(ctx context.Context, groups [][]string, round int) ([]string, error) {
 	// Create job channel and result channel
 	jobs := make(chan mergeJob, len(groups))
 	results := make(chan mergeResult, len(groups))
@@ -326,17 +307,6 @@ func (m *ParallelMerger) mergeRound(ctx context.Context, inputPaths []string, ro
 	}
 
 	return outputPaths, nil
-}
-
-// partitionPaths splits paths into groups of at most MaxFanIn.
-func (m *ParallelMerger) partitionPaths(paths []string) [][]string {
-	var groups [][]string
-	for i := 0; i < len(paths); i += m.config.MaxFanIn {
-		end := min(i+m.config.MaxFanIn, len(paths))
-		groups = append(groups, paths[i:end])
-	}
-
-	return groups
 }
 
 // mergeWorker processes merge jobs from the jobs channel.
@@ -492,6 +462,9 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 	if info, err := os.Stat(job.outputPath); err == nil {
 		result.bytesWritten = info.Size()
 	}
+	for _, p := range job.inputPaths {
+		logCleanupErr(log, "remove merged run", p, os.Remove(p))
+	}
 
 	result.recordCount = count
 	result.duration = time.Since(startTime)
@@ -516,33 +489,12 @@ type MergeStatistics struct {
 
 // Statistics returns merge statistics. The fields are stored as atomics
 // so this method is safe to call from any goroutine, including before
-// MergeAll / MergeAllToIterator has returned (it will report whatever
-// has been accumulated so far).
+// MergeAllToIterator has returned (it will report whatever has been
+// accumulated so far).
 func (m *ParallelMerger) Statistics() MergeStatistics {
 	return MergeStatistics{
 		Rounds:         int(m.mergeRounds.Load()),
 		TotalMergeTime: time.Duration(m.totalMergeTimeNanos.Load()),
 		BytesWritten:   m.totalBytesWritten.Load(),
 	}
-}
-
-// CleanupIntermediateFiles removes all intermediate merge files from the temp directory.
-// Call this after the final merge is complete and you've processed the output.
-func (m *ParallelMerger) CleanupIntermediateFiles() error {
-	// Glob only this merger instance's files so a concurrent merger
-	// in the same tempDir doesn't have its files swept by our cleanup.
-	pattern := filepath.Join(m.tempDir, fmt.Sprintf("merge_%s_r*_*.crun", m.instanceID))
-	matches, err := filepath.Glob(pattern)
-	if err != nil {
-		return fmt.Errorf("glob intermediate files: %w", err)
-	}
-
-	errs := make([]error, 0, len(matches))
-	for _, match := range matches {
-		if err := os.Remove(match); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	return errors.Join(errs...)
 }

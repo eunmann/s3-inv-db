@@ -892,10 +892,7 @@ type mergeBuildResult struct {
 // runMergePhase returns a streaming RowIterator over the K-way merge
 // of p.runFiles, plus a cleanup closure. Single-run case wraps the
 // lone run file directly. Multi-run case uses
-// ParallelMerger.MergeAllToIterator which avoids writing a final
-// merged file to disk (I3 win).
-//
-
+// ParallelMerger.MergeAllToIterator, which writes no final merged file.
 func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRunFiles, numWorkers, maxFanIn int, perReaderBuffer int64) (RowIterator, func() error, MergeStatistics, error) {
 	if numRunFiles == 1 {
 		reader, err := OpenRunFileAuto(p.runFiles[0], int(perReaderBuffer))
@@ -942,16 +939,8 @@ func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRu
 		Str("merge_duration", humanfmt.Duration(stats.TotalMergeTime)).
 		Str("bytes_written", humanfmt.Bytes(stats.BytesWritten)).
 		Msg("parallel merge → streaming iterator")
-	cleanup := func() error {
-		err := mergerCleanup()
-		for _, path := range p.runFiles {
-			logCleanupErr(log, "remove run file", path, os.Remove(path))
-		}
-
-		return err
-	}
-
-	return iter, cleanup, stats, nil
+	// The merger owns the run files from here and deletes them.
+	return iter, mergerCleanup, stats, nil
 }
 
 // runMergeBuildPhase merges run files and builds the index.

@@ -1,7 +1,9 @@
 package extsort_test
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -154,7 +156,8 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 	}
 }
 
-// BenchmarkParallelMerge compares merge worker counts and fan-in.
+// BenchmarkParallelMerge compares merge worker counts and fan-in. The
+// final fan-in equals the disk fan-in so the runs take disk rounds.
 func BenchmarkParallelMerge(b *testing.B) {
 	benchutil.SkipIfNoLongBench(b)
 
@@ -200,15 +203,26 @@ func BenchmarkParallelMerge(b *testing.B) {
 		merger := extsort.NewParallelMerger(extsort.ParallelMergeConfig{
 			NumWorkers:     workers,
 			MaxFanIn:       fanIn,
+			FinalFanIn:     fanIn,
 			TempDir:        tmpDir,
 			UseCompression: true,
 		})
-		outPath, err := merger.MergeAll(b.Context(), paths)
+		iter, cleanup, err := merger.MergeAllToIterator(b.Context(), paths)
 		if err != nil {
-			b.Fatalf("MergeAll: %v", err)
+			b.Fatalf("MergeAllToIterator: %v", err)
 		}
-		_ = os.Remove(outPath)
-		merger.CleanupIntermediateFiles()
+		for {
+			if _, err := iter.Next(); err != nil {
+				if !errors.Is(err, io.EOF) {
+					b.Fatalf("next: %v", err)
+				}
+
+				break
+			}
+		}
+		if err := cleanup(); err != nil {
+			b.Fatalf("cleanup: %v", err)
+		}
 	}
 
 	for _, workers := range []int{1, 2, 4, 8} {

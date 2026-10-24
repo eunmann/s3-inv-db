@@ -1,10 +1,12 @@
 package extsort
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -43,16 +45,77 @@ func createTestRunFile(t *testing.T, dir, name string, prefixes []string, countO
 	return path
 }
 
+// mergeAllRows merges paths with m, copies every row out of the
+// iterator, and runs the cleanup.
+func mergeAllRows(t *testing.T, m *ParallelMerger, paths []string) []PrefixRow {
+	t.Helper()
+	iter, cleanup, err := m.MergeAllToIterator(t.Context(), paths)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	var rows []PrefixRow
+	for {
+		row, err := iter.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			_ = cleanup()
+			t.Fatalf("next: %v", err)
+		}
+		rows = append(rows, *row)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+
+	return rows
+}
+
+func rowPrefixes(rows []PrefixRow) []string {
+	out := make([]string, len(rows))
+	for i := range rows {
+		out[i] = rows[i].Prefix
+	}
+
+	return out
+}
+
+// dirFiles lists the names of the files in dir.
+func dirFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+
+	return names
+}
+
+// createSpreadRuns writes n runs of 50 unique prefixes each to dir.
+func createSpreadRuns(t *testing.T, dir string, n int) []string {
+	t.Helper()
+	paths := make([]string, n)
+	for i := range n {
+		prefixes := make([]string, 50)
+		for j := range prefixes {
+			prefixes[j] = fmt.Sprintf("file%02d/prefix%04d/", i, j)
+		}
+		paths[i] = createTestRunFile(t, dir, fmt.Sprintf("run%02d.crun", i), prefixes, i*100)
+	}
+
+	return paths
+}
+
 func TestParallelMerger_TwoFiles(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx := t.Context()
 
-	// Create two sorted run files with interleaved prefixes
-	prefixes1 := []string{"a/", "c/", "e/", "g/"}
-	prefixes2 := []string{"b/", "d/", "f/", "h/"}
-
-	path1 := createTestRunFile(t, tmpDir, "run1.crun", prefixes1, 0)
-	path2 := createTestRunFile(t, tmpDir, "run2.crun", prefixes2, 10)
+	path1 := createTestRunFile(t, tmpDir, "run1.crun", []string{"a/", "c/", "e/", "g/"}, 0)
+	path2 := createTestRunFile(t, tmpDir, "run2.crun", []string{"b/", "d/", "f/", "h/"}, 10)
 
 	merger := NewParallelMerger(ParallelMergeConfig{
 		NumWorkers:     2,
@@ -61,193 +124,82 @@ func TestParallelMerger_TwoFiles(t *testing.T) {
 		UseCompression: true,
 	})
 
-	outputPath, err := merger.MergeAll(ctx, []string{path1, path2})
-	if err != nil {
-		t.Fatalf("merge: %v", err)
-	}
-
-	// Read and verify output
-	reader, err := OpenCompressedRunFile(outputPath, 0)
-	if err != nil {
-		t.Fatalf("open output: %v", err)
-	}
-	defer reader.Close()
-
-	expectedPrefixes := []string{"a/", "b/", "c/", "d/", "e/", "f/", "g/", "h/"}
-	if reader.Count() != uint64(len(expectedPrefixes)) {
-		t.Errorf("expected %d records, got %d", len(expectedPrefixes), reader.Count())
-	}
-
-	for i, expected := range expectedPrefixes {
-		row, err := reader.Read()
-		if err != nil {
-			t.Fatalf("read row %d: %v", i, err)
-		}
-		if row.Prefix != expected {
-			t.Errorf("row %d: expected prefix %q, got %q", i, expected, row.Prefix)
-		}
+	got := rowPrefixes(mergeAllRows(t, merger, []string{path1, path2}))
+	want := []string{"a/", "b/", "c/", "d/", "e/", "f/", "g/", "h/"}
+	if !slices.Equal(got, want) {
+		t.Errorf("prefixes = %v, want %v", got, want)
 	}
 }
 
 func TestParallelMerger_DuplicatePrefixes(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx := t.Context()
 
-	// Create two run files with overlapping prefixes
-	prefixes1 := []string{"a/", "b/", "c/"}
-	prefixes2 := []string{"b/", "c/", "d/"}
-
-	path1 := createTestRunFile(t, tmpDir, "run1.crun", prefixes1, 0)
-	path2 := createTestRunFile(t, tmpDir, "run2.crun", prefixes2, 10)
+	path1 := createTestRunFile(t, tmpDir, "run1.crun", []string{"a/", "b/", "c/"}, 0)
+	path2 := createTestRunFile(t, tmpDir, "run2.crun", []string{"b/", "c/", "d/"}, 10)
 
 	merger := NewParallelMerger(ParallelMergeConfig{
 		TempDir:        tmpDir,
 		UseCompression: true,
 	})
 
-	outputPath, err := merger.MergeAll(ctx, []string{path1, path2})
-	if err != nil {
-		t.Fatalf("merge: %v", err)
+	rows := mergeAllRows(t, merger, []string{path1, path2})
+	if got, want := rowPrefixes(rows), []string{"a/", "b/", "c/", "d/"}; !slices.Equal(got, want) {
+		t.Fatalf("prefixes = %v, want %v", got, want)
 	}
-
-	reader, err := OpenCompressedRunFile(outputPath, 0)
-	if err != nil {
-		t.Fatalf("open output: %v", err)
+	// b/: 2 (run1, idx 1) + 11 (run2, idx 0); c/: 3 + 12.
+	if rows[1].Count != 13 {
+		t.Errorf("b/ count = %d, want 13", rows[1].Count)
 	}
-	defer reader.Close()
-
-	// Should have 4 unique prefixes: a/, b/, c/, d/
-	if reader.Count() != 4 {
-		t.Errorf("expected 4 unique prefixes, got %d", reader.Count())
-	}
-
-	// Verify b/ and c/ have merged counts
-	var bRow, cRow *PrefixRow
-	for {
-		row, err := reader.Read()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if row.Prefix == "b/" {
-			bRow = row
-		}
-		if row.Prefix == "c/" {
-			cRow = row
-		}
-	}
-
-	// b/ appears in both files: countOffset=0,idx=1 -> 2 and countOffset=10,idx=0 -> 11, sum=13
-	if bRow != nil && bRow.Count != 13 {
-		t.Errorf("b/ expected merged count 13, got %d", bRow.Count)
-	}
-
-	// c/ appears in both files: countOffset=0,idx=2 -> 3 and countOffset=10,idx=1 -> 12, sum=15
-	if cRow != nil && cRow.Count != 15 {
-		t.Errorf("c/ expected merged count 15, got %d", cRow.Count)
+	if rows[2].Count != 15 {
+		t.Errorf("c/ count = %d, want 15", rows[2].Count)
 	}
 }
 
 func TestParallelMerger_ManyFiles(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx := t.Context()
-
-	const numFiles = 20
-	const prefixesPerFile = 50
-
-	paths := make([]string, 0, numFiles)
-	allPrefixes := make([]string, 0, numFiles*prefixesPerFile)
-
-	for i := range numFiles {
-		prefixes := make([]string, 0, prefixesPerFile)
-		for j := range prefixesPerFile {
-			prefix := fmt.Sprintf("file%02d/prefix%04d/", i, j)
-			prefixes = append(prefixes, prefix)
-			allPrefixes = append(allPrefixes, prefix)
-		}
-		path := createTestRunFile(t, tmpDir, fmt.Sprintf("run%02d.crun", i), prefixes, i*100)
-		paths = append(paths, path)
-	}
-
-	// Sort expected prefixes
-	slices.Sort(allPrefixes)
+	paths := createSpreadRuns(t, tmpDir, 20)
 
 	merger := NewParallelMerger(ParallelMergeConfig{
 		NumWorkers:     4,
 		MaxFanIn:       4,
+		FinalFanIn:     4,
 		TempDir:        tmpDir,
 		UseCompression: true,
 	})
 
-	outputPath, err := merger.MergeAll(ctx, paths)
-	if err != nil {
-		t.Fatalf("merge: %v", err)
+	rows := mergeAllRows(t, merger, paths)
+	if len(rows) != 20*50 {
+		t.Fatalf("got %d rows, want %d", len(rows), 20*50)
 	}
-	defer func() { merger.CleanupIntermediateFiles() }()
-
-	reader, err := OpenCompressedRunFile(outputPath, 0)
-	if err != nil {
-		t.Fatalf("open output: %v", err)
+	if !slices.IsSorted(rowPrefixes(rows)) {
+		t.Error("merged rows are not sorted")
 	}
-	defer reader.Close()
-
-	if reader.Count() != uint64(len(allPrefixes)) {
-		t.Errorf("expected %d records, got %d", len(allPrefixes), reader.Count())
-	}
-
-	// Verify sorted order
-	prevPrefix := ""
-	count := 0
-	for {
-		row, err := reader.Read()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatalf("read: %v", err)
-		}
-		if row.Prefix < prevPrefix {
-			t.Errorf("out of order: %q < %q", row.Prefix, prevPrefix)
-		}
-		prevPrefix = row.Prefix
-		count++
-	}
-
-	if count != len(allPrefixes) {
-		t.Errorf("read %d records, expected %d", count, len(allPrefixes))
-	}
-
-	// Verify statistics
-	stats := merger.Statistics()
-	if stats.Rounds < 2 {
-		t.Logf("Merge completed in %d rounds (20 files with fanIn=4 should need ~2 rounds)", stats.Rounds)
+	if rounds := merger.Statistics().Rounds; rounds < 2 {
+		t.Errorf("rounds = %d, want at least 2 for 20 runs at fan-in 4", rounds)
 	}
 }
 
 func TestParallelMerger_SingleFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx := t.Context()
-
 	path := createTestRunFile(t, tmpDir, "single.crun", []string{"a/", "b/", "c/"}, 0)
 
 	merger := NewParallelMerger(DefaultParallelMergeConfig())
 
-	outputPath, err := merger.MergeAll(ctx, []string{path})
-	if err != nil {
-		t.Fatalf("merge: %v", err)
+	got := rowPrefixes(mergeAllRows(t, merger, []string{path}))
+	if want := []string{"a/", "b/", "c/"}; !slices.Equal(got, want) {
+		t.Errorf("prefixes = %v, want %v", got, want)
 	}
-
-	// Single file should be returned as-is
-	if outputPath != path {
-		t.Errorf("expected same path for single file, got %q instead of %q", outputPath, path)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("input run still exists after cleanup (stat err %v)", err)
 	}
 }
 
 func TestParallelMerger_EmptyInput(t *testing.T) {
 	merger := NewParallelMerger(DefaultParallelMergeConfig())
 
-	_, err := merger.MergeAll(t.Context(), []string{})
-	if err == nil {
-		t.Error("expected error for empty input")
+	_, _, err := merger.MergeAllToIterator(t.Context(), []string{})
+	if !errors.Is(err, ErrNoInputPaths) {
+		t.Errorf("err = %v, want ErrNoInputPaths", err)
 	}
 }
 
@@ -255,77 +207,160 @@ func TestParallelMerger_ContextCancellation(t *testing.T) {
 	tmpDir := t.TempDir()
 	ctx, cancel := context.WithCancel(t.Context())
 
-	// Create enough files to ensure we have multiple rounds
-	const numFiles = 10
-	paths := make([]string, 0, numFiles)
-	for i := range numFiles {
-		prefixes := make([]string, 100)
-		for j := range prefixes {
-			prefixes[j] = fmt.Sprintf("prefix%05d/", i*100+j)
-		}
-		path := createTestRunFile(t, tmpDir, fmt.Sprintf("run%02d.crun", i), prefixes, 0)
-		paths = append(paths, path)
-	}
-
-	// Cancel immediately
+	paths := createSpreadRuns(t, tmpDir, 10)
 	cancel()
 
 	merger := NewParallelMerger(ParallelMergeConfig{
 		NumWorkers: 2,
 		MaxFanIn:   2,
+		FinalFanIn: 2,
 		TempDir:    tmpDir,
 	})
 
-	_, err := merger.MergeAll(ctx, paths)
-	if err == nil {
-		t.Error("expected error on cancelled context")
+	if _, _, err := merger.MergeAllToIterator(ctx, paths); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	if left := dirFiles(t, tmpDir); len(left) != 0 {
+		t.Errorf("cancelled merge left files: %v", left)
+	}
+}
+
+// TestParallelMerger_RemovesRunsAsMerged checks that a multi-round
+// merge deletes each run once it is merged into a larger one, and that
+// the cleanup leaves nothing behind.
+func TestParallelMerger_RemovesRunsAsMerged(t *testing.T) {
+	tmpDir := t.TempDir()
+	paths := createSpreadRuns(t, tmpDir, 20)
+
+	var onDisk []string
+	merger := NewParallelMerger(ParallelMergeConfig{
+		NumWorkers: 4,
+		MaxFanIn:   3,
+		FinalFanIn: 3,
+		TempDir:    tmpDir,
+		OnRoundComplete: func(round, remaining int) {
+			if n := len(dirFiles(t, tmpDir)); n != remaining {
+				onDisk = append(onDisk, fmt.Sprintf("round %d: %d files, %d runs remaining", round, n, remaining))
+			}
+		},
+	})
+
+	rows := mergeAllRows(t, merger, paths)
+	if len(rows) != 20*50 {
+		t.Errorf("got %d rows, want %d", len(rows), 20*50)
+	}
+	if rounds := merger.Statistics().Rounds; rounds < 2 {
+		t.Errorf("rounds = %d, want at least 2", rounds)
+	}
+	for _, msg := range onDisk {
+		t.Error(msg)
+	}
+	if left := dirFiles(t, tmpDir); len(left) != 0 {
+		t.Errorf("files left after cleanup: %v", left)
+	}
+}
+
+// TestParallelMerger_FailureRemovesRuns checks that a merge that fails
+// returns an error and deletes every run, inputs and intermediates.
+func TestParallelMerger_FailureRemovesRuns(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		runs       int
+		finalFanIn int
+		breakRun   func(t *testing.T, path string)
+	}{
+		{"missing_run_disk_round", 9, 2, func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"corrupt_body_disk_round", 9, 2, corruptRunBody},
+		{"bad_header_final_merge", 3, 0, func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(path, []byte("not a run file at all, not even close"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			paths := createSpreadRuns(t, tmpDir, c.runs)
+			c.breakRun(t, paths[c.runs/2])
+
+			merger := NewParallelMerger(ParallelMergeConfig{
+				NumWorkers: 4,
+				MaxFanIn:   2,
+				FinalFanIn: c.finalFanIn,
+				TempDir:    tmpDir,
+			})
+			if _, _, err := merger.MergeAllToIterator(t.Context(), paths); err == nil {
+				t.Fatal("merge succeeded with a broken run")
+			}
+			if left := dirFiles(t, tmpDir); len(left) != 0 {
+				t.Errorf("failed merge left files: %v", left)
+			}
+		})
+	}
+}
+
+// corruptRunBody overwrites a run's compressed body, keeping its header.
+func corruptRunBody(t *testing.T, path string) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	garbage := bytes.Repeat([]byte{0xA5}, int(info.Size())-compressedRunFileHeader)
+	if _, err := f.WriteAt(garbage, compressedRunFileHeader); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
 func TestParallelMerger_UncompressedOutput(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx := t.Context()
 
-	path1 := createTestRunFile(t, tmpDir, "run1.crun", []string{"a/", "c/"}, 0)
-	path2 := createTestRunFile(t, tmpDir, "run2.crun", []string{"b/", "d/"}, 0)
+	paths := []string{
+		createTestRunFile(t, tmpDir, "run1.crun", []string{"a/", "d/"}, 0),
+		createTestRunFile(t, tmpDir, "run2.crun", []string{"b/", "e/"}, 0),
+		createTestRunFile(t, tmpDir, "run3.crun", []string{"c/", "f/"}, 0),
+	}
 
 	merger := NewParallelMerger(ParallelMergeConfig{
+		MaxFanIn:       2,
+		FinalFanIn:     2,
 		TempDir:        tmpDir,
-		UseCompression: false, // Uncompressed output
+		UseCompression: false,
 	})
 
-	outputPath, err := merger.MergeAll(ctx, []string{path1, path2})
-	if err != nil {
-		t.Fatalf("merge: %v", err)
+	got := rowPrefixes(mergeAllRows(t, merger, paths))
+	if want := []string{"a/", "b/", "c/", "d/", "e/", "f/"}; !slices.Equal(got, want) {
+		t.Errorf("prefixes = %v, want %v", got, want)
 	}
-
-	// Read back with auto-detect (should work with uncompressed)
-	reader, err := OpenRunFileAuto(outputPath, 0)
-	if err != nil {
-		t.Fatalf("open output: %v", err)
-	}
-	defer reader.Close()
-
-	if reader.Count() != 4 {
-		t.Errorf("expected 4 records, got %d", reader.Count())
+	if merger.Statistics().Rounds != 1 {
+		t.Errorf("rounds = %d, want 1", merger.Statistics().Rounds)
 	}
 }
 
 func TestParallelMerger_MixedInputFormats(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx := t.Context()
 
-	// Create one compressed and one uncompressed run file
 	compressedPath := filepath.Join(tmpDir, "compressed.crun")
 	uncompressedPath := filepath.Join(tmpDir, "uncompressed.run")
 
-	// Compressed file
 	cw, _ := NewCompressedRunWriter(compressedPath, CompressedRunWriterOptions{})
 	cw.Write(&PrefixRow{Prefix: "a/", Count: 1})
 	cw.Write(&PrefixRow{Prefix: "c/", Count: 3})
 	cw.Close()
 
-	// Uncompressed file
 	uw, _ := NewRunFileWriter(uncompressedPath, 0)
 	uw.Write(&PrefixRow{Prefix: "b/", Count: 2})
 	uw.Write(&PrefixRow{Prefix: "d/", Count: 4})
@@ -336,34 +371,15 @@ func TestParallelMerger_MixedInputFormats(t *testing.T) {
 		UseCompression: true,
 	})
 
-	outputPath, err := merger.MergeAll(ctx, []string{compressedPath, uncompressedPath})
-	if err != nil {
-		t.Fatalf("merge: %v", err)
-	}
-
-	reader, err := OpenCompressedRunFile(outputPath, 0)
-	if err != nil {
-		t.Fatalf("open output: %v", err)
-	}
-	defer reader.Close()
-
-	expected := []string{"a/", "b/", "c/", "d/"}
-	for i, exp := range expected {
-		row, err := reader.Read()
-		if err != nil {
-			t.Fatalf("read %d: %v", i, err)
-		}
-		if row.Prefix != exp {
-			t.Errorf("row %d: expected %q, got %q", i, exp, row.Prefix)
-		}
+	got := rowPrefixes(mergeAllRows(t, merger, []string{compressedPath, uncompressedPath}))
+	if want := []string{"a/", "b/", "c/", "d/"}; !slices.Equal(got, want) {
+		t.Errorf("prefixes = %v, want %v", got, want)
 	}
 }
 
 func TestParallelMerger_TierDataPreserved(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx := t.Context()
 
-	// Create run files with tier data
 	path1 := filepath.Join(tmpDir, "run1.crun")
 	path2 := filepath.Join(tmpDir, "run2.crun")
 
@@ -390,28 +406,18 @@ func TestParallelMerger_TierDataPreserved(t *testing.T) {
 		UseCompression: true,
 	})
 
-	outputPath, err := merger.MergeAll(ctx, []string{path1, path2})
-	if err != nil {
-		t.Fatalf("merge: %v", err)
+	rows := mergeAllRows(t, merger, []string{path1, path2})
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
 	}
+	row := rows[0]
 
-	reader, err := OpenCompressedRunFile(outputPath, 0)
-	if err != nil {
-		t.Fatalf("open output: %v", err)
-	}
-	defer reader.Close()
-
-	row, _ := reader.Read()
-
-	// Verify merged counts
 	if row.Count != 30 {
 		t.Errorf("expected merged count 30, got %d", row.Count)
 	}
 	if row.TotalBytes != 3000 {
 		t.Errorf("expected merged bytes 3000, got %d", row.TotalBytes)
 	}
-
-	// Verify tier data merged correctly
 	if row.TierCounts[tiers.Standard] != 20 { // 5 + 15
 		t.Errorf("expected Standard tier count 20, got %d", row.TierCounts[tiers.Standard])
 	}
@@ -423,52 +429,5 @@ func TestParallelMerger_TierDataPreserved(t *testing.T) {
 	}
 	if row.TierBytes[tiers.Standard] != 2000 { // 500 + 1500
 		t.Errorf("expected Standard tier bytes 2000, got %d", row.TierBytes[tiers.Standard])
-	}
-}
-
-func TestPartitionPaths(t *testing.T) {
-	merger := NewParallelMerger(ParallelMergeConfig{
-		MaxFanIn: 4,
-	})
-
-	tests := []struct {
-		name     string
-		paths    []string
-		expected [][]string
-	}{
-		{
-			name:     "exact multiple",
-			paths:    []string{"a", "b", "c", "d", "e", "f", "g", "h"},
-			expected: [][]string{{"a", "b", "c", "d"}, {"e", "f", "g", "h"}},
-		},
-		{
-			name:     "with remainder",
-			paths:    []string{"a", "b", "c", "d", "e"},
-			expected: [][]string{{"a", "b", "c", "d"}, {"e"}},
-		},
-		{
-			name:     "less than fanIn",
-			paths:    []string{"a", "b"},
-			expected: [][]string{{"a", "b"}},
-		},
-		{
-			name:     "single",
-			paths:    []string{"a"},
-			expected: [][]string{{"a"}},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := merger.partitionPaths(tt.paths)
-			if len(result) != len(tt.expected) {
-				t.Fatalf("expected %d groups, got %d", len(tt.expected), len(result))
-			}
-			for i := range result {
-				if len(result[i]) != len(tt.expected[i]) {
-					t.Errorf("group %d: expected %d items, got %d", i, len(tt.expected[i]), len(result[i]))
-				}
-			}
-		})
 	}
 }
