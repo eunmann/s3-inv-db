@@ -34,8 +34,11 @@ RUN BUILDINFO=github.com/eunmann/s3-inv-db/internal/buildinfo && \
 
 FROM alpine:3.21
 
+# The default --cache-dir must be writable by the non-root user, and a
+# named volume mounted there inherits this ownership.
 RUN apk add --no-cache ca-certificates wget tini && \
-    adduser -D -u 1000 -h /home/app app
+    adduser -D -u 1000 -h /home/app app && \
+    install -d -o app -g app /var/cache/s3inv
 
 COPY --from=builder /out/s3-inv-db-server /usr/local/bin/s3-inv-db-server
 
