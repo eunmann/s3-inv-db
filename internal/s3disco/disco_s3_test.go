@@ -8,16 +8,16 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/eunmann/s3-inv-db/internal/miniotest"
+	"github.com/eunmann/s3-inv-db/internal/s3test"
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/rs/zerolog"
 )
 
-func TestDiscoverer_List_AgainstMinIO(t *testing.T) {
-	client := miniotest.RawClient(t)
+func TestDiscoverer_List_AgainstLocalS3(t *testing.T) {
+	client := s3test.RawClient(t)
 	ctx := t.Context()
-	bucket := miniotest.Bucket(t, client)
+	bucket := s3test.Bucket(t, client)
 
 	// Upload two inventories with two timestamp folders each, via the
 	// seeder package so we exercise the same code path the CLI uses.
@@ -64,9 +64,9 @@ func TestDiscoverer_List_AgainstMinIO(t *testing.T) {
 }
 
 func TestDiscoverer_List_PopulatesManifestStats(t *testing.T) {
-	client := miniotest.RawClient(t)
+	client := s3test.RawClient(t)
 	ctx := t.Context()
-	bucket := miniotest.Bucket(t, client)
+	bucket := s3test.Bucket(t, client)
 
 	now := time.Now().UTC()
 	uploadInventoryAt(ctx, t, client, bucket, "synthetic-prod", "inventory-data/", "inv-001", now, 100, 9999)
@@ -92,9 +92,9 @@ func TestDiscoverer_List_PopulatesManifestStats(t *testing.T) {
 }
 
 func TestDiscoverer_Find(t *testing.T) {
-	client := miniotest.RawClient(t)
+	client := s3test.RawClient(t)
 	ctx := t.Context()
-	bucket := miniotest.Bucket(t, client)
+	bucket := s3test.Bucket(t, client)
 
 	now := time.Now().UTC()
 	// The seeder always names inventories inv-NNN where NNN = index.
@@ -129,9 +129,9 @@ func TestDiscoverer_Find(t *testing.T) {
 }
 
 func TestDiscoverer_EmptyBucket(t *testing.T) {
-	client := miniotest.RawClient(t)
+	client := s3test.RawClient(t)
 	ctx := t.Context()
-	bucket := miniotest.Bucket(t, client)
+	bucket := s3test.Bucket(t, client)
 
 	d := s3disco.New(client, bucket, "inventory-data/")
 	got, err := d.List(ctx)

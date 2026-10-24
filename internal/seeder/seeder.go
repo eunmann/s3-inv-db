@@ -38,7 +38,7 @@ type Target string
 const (
 	// TargetLocal writes built indexes to a local directory.
 	TargetLocal Target = "local"
-	// TargetS3 uploads simulated S3 Inventory layouts (manifest + CSV.gz) to S3/MinIO.
+	// TargetS3 uploads simulated S3 Inventory layouts (manifest + CSV.gz) to S3 or a local S3-compatible server.
 	TargetS3 Target = "s3"
 )
 
@@ -85,7 +85,7 @@ type Summary struct {
 
 // Run executes the seeder, generating all inventories. Target selects
 // between writing pre-built indexes locally and uploading synthetic AWS S3
-// Inventory layouts (manifest + CSV.gz) to S3/MinIO.
+// Inventory layouts (manifest + CSV.gz) to S3 or a local S3-compatible server.
 func Run(ctx context.Context, cfg Config) error {
 	startTime := time.Now()
 

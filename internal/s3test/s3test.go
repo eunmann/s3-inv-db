@@ -1,9 +1,9 @@
 //go:build integration
 
-// Package miniotest provides shared helpers for tests that hit MinIO
-// via docker compose's test profile. Every helper creates resources
-// scoped to t and registers cleanup on t.Cleanup.
-package miniotest
+// Package s3test provides shared helpers for integration tests that hit
+// the local S3 server from docker compose's test profile. Every helper
+// creates resources scoped to t and registers cleanup on t.Cleanup.
+package s3test
 
 import (
 	"context"
@@ -21,10 +21,10 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 )
 
-// minioConfig pairs the resolved aws.Config with the MinIO endpoint URL
-// loadMinIOConfig discovered. Returned together because every caller
+// localConfig pairs the resolved aws.Config with the local S3 endpoint URL
+// loadLocalConfig discovered. Returned together because every caller
 // needs both.
-type minioConfig struct {
+type localConfig struct {
 	cfg      aws.Config
 	endpoint string
 }
@@ -44,33 +44,33 @@ func localEndpoint(tb testing.TB) string {
 		tb.Fatalf("AWS_ENDPOINT_URL_S3=%q is not a URL", endpoint)
 	}
 	if host := strings.ToLower(u.Hostname()); strings.HasSuffix(host, ".amazonaws.com") || strings.HasSuffix(host, ".amazonaws.com.cn") {
-		tb.Fatalf("AWS_ENDPOINT_URL_S3=%q points at real AWS; integration tests only run against MinIO", endpoint)
+		tb.Fatalf("AWS_ENDPOINT_URL_S3=%q points at real AWS; integration tests only run against a local S3 server", endpoint)
 	}
 
 	return endpoint
 }
 
-// loadMinIOConfig builds the aws.Config used by both clients: us-east-1
-// region with the docker-compose MinIO static credentials.
-func loadMinIOConfig(tb testing.TB) minioConfig {
+// loadLocalConfig builds the aws.Config used by both clients: us-east-1
+// region with the docker-compose dev credentials.
+func loadLocalConfig(tb testing.TB) localConfig {
 	tb.Helper()
 	endpoint := localEndpoint(tb)
 	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("minioadmin", "minioadmin", "")),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("devaccess", "devsecret", "")),
 	)
 	if err != nil {
 		tb.Fatalf("aws config: %v", err)
 	}
 
-	return minioConfig{cfg: cfg, endpoint: endpoint}
+	return localConfig{cfg: cfg, endpoint: endpoint}
 }
 
-// RawClient returns an aws-sdk-go-v2 S3 client wired to the MinIO
+// RawClient returns an aws-sdk-go-v2 S3 client wired to the local S3
 // endpoint in AWS_ENDPOINT_URL_S3.
 func RawClient(tb testing.TB) *s3.Client {
 	tb.Helper()
-	mc := loadMinIOConfig(tb)
+	mc := loadLocalConfig(tb)
 
 	return s3.NewFromConfig(mc.cfg, func(o *s3.Options) {
 		o.UsePathStyle = true
@@ -78,10 +78,10 @@ func RawClient(tb testing.TB) *s3.Client {
 	})
 }
 
-// FetchClient is the project's *s3fetch.Client wired to MinIO.
+// FetchClient is the project's *s3fetch.Client wired to the local S3 server.
 func FetchClient(tb testing.TB) *s3fetch.Client {
 	tb.Helper()
-	mc := loadMinIOConfig(tb)
+	mc := loadLocalConfig(tb)
 
 	return s3fetch.NewClientWithConfig(mc.cfg)
 }

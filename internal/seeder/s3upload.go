@@ -51,7 +51,7 @@ var (
 )
 
 // newS3Client builds an aws-sdk-go-v2 S3 client. When AWS_ENDPOINT_URL_S3
-// is set (the MinIO case) it forces path-style addressing.
+// is set (a local S3 server) it forces path-style addressing.
 func newS3Client(ctx context.Context) (*s3.Client, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
@@ -66,7 +66,7 @@ func newS3Client(ctx context.Context) (*s3.Client, error) {
 }
 
 // UploadInventory generates one synthetic S3 Inventory run and uploads
-// the manifest + manifest.checksum + a single CSV.gz data file to MinIO/S3.
+// the manifest + manifest.checksum + a single CSV.gz data file to S3.
 // The layout exactly mirrors what AWS S3 produces for a real inventory:
 //
 //	<bucket>/<prefix><src-bucket>/<inv-id>/<YYYY-MM-DDTHH-MMZ>/manifest.json

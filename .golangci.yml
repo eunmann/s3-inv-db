@@ -217,7 +217,7 @@ issues:
 run:
   timeout: 5m
   tests: true
-  # The MinIO tests and internal/miniotest are tagged `integration`; lint
+  # The S3 integration tests and internal/s3test are tagged `integration`; lint
   # them too so they can't rot between Docker runs.
   build-tags:
     - integration

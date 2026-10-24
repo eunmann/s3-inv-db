@@ -11,15 +11,15 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/loader"
-	"github.com/eunmann/s3-inv-db/internal/miniotest"
+	"github.com/eunmann/s3-inv-db/internal/s3test"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/rs/zerolog"
 )
 
 func TestBuildWith_BuildsIndexFromSeededManifest(t *testing.T) {
-	fc := miniotest.FetchClient(t)
-	bucket := miniotest.Bucket(t, fc.Raw())
+	fc := s3test.FetchClient(t)
+	bucket := s3test.Bucket(t, fc.Raw())
 
 	srcBucket := "synthetic-prod"
 	prefix := "inventory-data/"
@@ -85,8 +85,8 @@ func TestBuildWith_BuildsIndexFromSeededManifest(t *testing.T) {
 }
 
 func TestBuild_FailsOnMissingManifest(t *testing.T) {
-	fc := miniotest.FetchClient(t)
-	bucket := miniotest.Bucket(t, fc.Raw())
+	fc := s3test.FetchClient(t)
+	bucket := s3test.Bucket(t, fc.Raw())
 
 	l := loader.New(t.TempDir(), fc)
 	bogus := fmt.Sprintf("s3://%s/does/not/exist/manifest.json", bucket)

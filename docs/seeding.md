@@ -21,7 +21,7 @@ make seed
 Each invocation writes one directory per inventory and one
 manifest.json that mirrors the S3 inventory layout.
 
-## Upload to MinIO
+## Upload to S3
 
 ```bash
 make docker-seed                       # via the dev stack

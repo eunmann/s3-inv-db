@@ -11,19 +11,19 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/benchutil"
-	"github.com/eunmann/s3-inv-db/internal/miniotest"
+	"github.com/eunmann/s3-inv-db/internal/s3test"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/rs/zerolog"
 )
 
-// Pipeline integration benchmarks — full S3-to-index path against MinIO.
-// Requires AWS_ENDPOINT_URL_S3 pointing at a reachable MinIO (docker
+// Pipeline integration benchmarks — full S3-to-index path against the
+// local S3 server. Requires AWS_ENDPOINT_URL_S3 pointing at it (docker
 // compose `test` profile). Run:
 //
-//	go test -bench=BenchmarkPipeline -benchtime=1x -count=1 \
-//	  -run=^$ ./internal/loader/...
+//	go test -tags integration -bench=BenchmarkPipeline -benchtime=1x \
+//	  -count=1 -run=^$ ./internal/loader/...
 
 // chunkCountFor returns a chunk count that lets Pipeline's ingest pool
 // (sized as min(NumCPU, manifest_files)) saturate the host while
@@ -80,8 +80,8 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 	b.Helper()
 	benchutil.SilenceZerolog(b)
 
-	fc := miniotest.FetchClient(b)
-	bucket := miniotest.Bucket(b, fc.Raw())
+	fc := s3test.FetchClient(b)
+	bucket := s3test.Bucket(b, fc.Raw())
 
 	srcBucket := "bench-src"
 	prefix := "bench-inv/"

@@ -9,7 +9,7 @@ GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$
 DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.39.0
 GOVULNCHECK := go run golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
-# Unit-test coverage floor (host suite, no MinIO). Ratchet it up as
+# Unit-test coverage floor (host suite, no S3 server). Ratchet it up as
 # coverage grows; never lower it to make a change pass.
 COVER_MIN := 67.0
 
@@ -67,7 +67,7 @@ seeder: ## Build bin/s3-inv-db-seeder
 test-unit: ## Host unit tests (no Docker, no network)
 	go test ./...
 
-test: compose-preflight ## Full suite incl. MinIO integration tests, in Docker
+test: compose-preflight ## Full suite incl. S3 integration tests, in Docker
 	@$(COMPOSE) --profile test run --rm test-runner go test -tags integration ./...; \
 	rc=$$?; \
 	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
@@ -150,7 +150,7 @@ seed: seeder ## Generate local synthetic inventories
 # mode after `docker network prune`, a Docker daemon restart, or a host
 # reboot: containers survive with a dangling network reference, and the next
 # `compose up` fails with "network <id> not found". Named volumes are
-# preserved (no `-v`), so caches and minio data are kept.
+# preserved (no `-v`), so caches and local S3 data are kept.
 compose-preflight:
 	@stale=""; \
 	for c in $$($(COMPOSE) ps -aq 2>/dev/null); do \
@@ -171,11 +171,11 @@ docker-build: ## Build dev + prod images
 
 # Hot-reload server (port 8080). The only supported dev workflow — no host
 # binary path. Override port with S3INV_DEV_PORT=...
-dev: compose-preflight ## Hot-reload server + MinIO (the dev loop)
+dev: compose-preflight ## Hot-reload server + local S3 (the dev loop)
 	$(COMPOSE) --profile dev up --build
 
 # Wipe the dev server's persistent state (state.db + downloaded indexes)
-# without nuking the MinIO bucket. Use when the schema gets wedged, the
+# without wiping the local S3 bucket. Use when the schema gets wedged, the
 # auto-loader is stuck in a backoff loop, or you just want a clean slate.
 # Re-running `make dev` after this re-applies every migration from scratch
 # and rebuilds caches on demand.

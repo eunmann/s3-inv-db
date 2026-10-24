@@ -24,12 +24,12 @@ probe. See [docs/overview.md](docs/overview.md) for the pipeline and
 ```bash
 git clone https://github.com/eunmann/s3-inv-db.git
 cd s3-inv-db
-make dev        # hot-reload server + MinIO at http://localhost:8080
+make dev        # hot-reload server + local S3 at http://localhost:8080
 ```
 
 `make dev` is the supported dev loop —
 [`infra/docker-compose.yml`](infra/docker-compose.yml) brings up the
-server under Air alongside a MinIO instance preloaded by the seeder.
+server under Air alongside a local S3 server (versitygw).
 Full details and the test workflow in [docs/dev.md](docs/dev.md).
 
 ## Binaries
@@ -93,7 +93,7 @@ reference: [docs/library-api.md](docs/library-api.md).
 - [Overview](docs/overview.md) — system design, data flow, server behaviour
 - [HTTP API](docs/http-api.md) — routes, JSON shapes, SSE
 - [CLI](docs/cli.md) — every subcommand and its flags
-- [Dev workflow](docs/dev.md) — Docker compose, Air, MinIO, tests
+- [Dev workflow](docs/dev.md) — Docker compose, Air, local S3, tests
 - [Seeding](docs/seeding.md) — synthetic-data generation
 - [Index format](docs/index-format.md) — on-disk file layout
 - [Library API](docs/library-api.md) — Go package reference

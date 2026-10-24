@@ -7,13 +7,19 @@ four profiles: `dev`, `prod`, `seed`, and `test`.
 ## Boot the stack
 
 ```bash
-make dev        # hot-reload server on :8080 + MinIO + minio-setup
+make dev        # hot-reload server on :8080 + local S3 (versitygw) on :9000
 ```
 
 [Air](https://github.com/air-verse/air) watches `*.go`, `*.html`,
 and `*.tmpl` (see [`.air.toml`](../.air.toml)) and rebuilds the
 binary on save. There is no in-process template-reload path — Air
 covers it through the rebuild.
+
+The local S3 server is [versitygw](https://github.com/versity/versitygw)
+with its posix backend (dev credentials `devaccess` / `devsecret`);
+`s3-setup` creates the `s3-inv` bucket with a SigV4-signed `curl`.
+MinIO's images were withdrawn from Docker Hub, so the stack no longer
+uses them.
 
 ```bash
 make docker-prod  # slim production image on :8081
@@ -25,7 +31,7 @@ make docker-down  # tear everything down + remove volumes
 After `make dev` boots:
 
 ```bash
-# Generate synthetic inventories into MinIO
+# Generate synthetic inventories into the local S3 server
 make docker-seed
 
 # Browse discovered inventories
@@ -46,20 +52,20 @@ Open `http://localhost:8080` for the HTMX UI.
 
 ```bash
 make test-unit    # host: go test ./... — no Docker, no network
-make test         # full suite, including MinIO integration tests, in Docker
+make test         # full suite, including S3 integration tests, in Docker
 make test-race    # same with -race
 ```
 
-Tests that need S3 live in `*_minio_test.go` files behind the
+Tests that need S3 live in `*_s3_test.go` files behind the
 `integration` build tag, so plain `go test ./...` on the host never
 makes an AWS call. `make test` and `make test-race` run inside the
 `test-runner` container with `-tags integration` against a dedicated
-`minio-test` instance — no host ports, runs side-by-side with
+`s3-test` instance — no host ports, runs side-by-side with
 `make dev`. The Makefile builds the test-runner image once (cached
 after first run), captures the test exit code, and tears the profile
 down on every exit.
 
-`internal/miniotest` refuses to run unless `AWS_ENDPOINT_URL_S3` is set
+`internal/s3test` refuses to run unless `AWS_ENDPOINT_URL_S3` is set
 to a non-AWS host, so a misconfigured run fails instead of creating
 buckets in a real account.
 
