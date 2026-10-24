@@ -83,6 +83,7 @@ type Server struct {
 	jobMgr      *jobs.Scheduler
 	bldr        *loader.Loader
 	tracker     *budget.Tracker
+	gate        *loadcontrol.Gate
 	autoloader  *autoload.AutoLoader
 	discovery   *inventory.Discovery
 	handlers    *handlers.Handlers
@@ -140,6 +141,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		jobMgr:      stores.jobs,
 		bldr:        bldr,
 		tracker:     tracker,
+		gate:        gate,
 		autoloader:  newAutoLoader(cfg, discovery, stores.config, stores.catalog, stores.jobs),
 		discovery:   discovery,
 		handlers:    h,
