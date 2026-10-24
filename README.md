@@ -19,6 +19,105 @@ Lookups are a single mmap read after an O(1) minimal-perfect-hash
 probe. See [docs/overview.md](docs/overview.md) for the pipeline and
 [docs/index-format.md](docs/index-format.md) for the on-disk layout.
 
+## Install
+
+Releases are listed on the
+[releases page](https://github.com/eunmann/s3-inv-db/releases). Each
+one ships the three binaries (below) for Linux and macOS on amd64 and
+arm64, a `SHA256SUMS` file, and a multi-arch server image.
+
+### Release archive
+
+```bash
+VERSION=v0.1.0 OS=linux ARCH=amd64   # OS: linux|darwin, ARCH: amd64|arm64
+ARCHIVE="s3-inv-db_${VERSION}_${OS}_${ARCH}.tar.gz"
+BASE="https://github.com/eunmann/s3-inv-db/releases/download/$VERSION"
+curl -fL -O "$BASE/$ARCHIVE" -O "$BASE/SHA256SUMS"
+grep " $ARCHIVE\$" SHA256SUMS | sha256sum --check   # macOS: shasum -a 256 --check
+tar -xzf "$ARCHIVE"   # s3-inv-db, s3-inv-db-server, s3-inv-db-seeder, README.md
+./s3-inv-db --version
+```
+
+Every archive also has signed build provenance; with the GitHub CLI,
+`gh attestation verify "$ARCHIVE" --repo eunmann/s3-inv-db` checks that
+it was built by this repository's release workflow. The macOS binaries
+are not notarized: one downloaded with a browser needs
+`xattr -d com.apple.quarantine s3-inv-db*` before it runs.
+
+### Container image
+
+```bash
+docker run -d --name s3-inv-db -p 8080:8080 \
+  -v s3-inv-db-cache:/var/cache/s3inv \
+  -e AWS_REGION=us-east-1 -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
+  ghcr.io/eunmann/s3-inv-db-server:v0.1.0 \
+  --s3-source s3://my-inventory-bucket/inventory/
+```
+
+The image runs `s3-inv-db-server` as a non-root user, listening on
+`:8080` (its health check probes `/healthz` there). Built indexes and
+the state database live in `--cache-dir`, `/var/cache/s3inv` by
+default, so mount a volume there to keep them across restarts. `latest`
+tracks the newest release that is not a pre-release.
+
+### From source
+
+```bash
+go install github.com/eunmann/s3-inv-db/cmd/s3-inv-db@latest
+go install github.com/eunmann/s3-inv-db/cmd/s3-inv-db-server@latest
+# or, from a clone, into bin/:
+make all seeder
+```
+
+## Quick start with a real S3 inventory
+
+AWS writes each
+[inventory](https://docs.aws.amazon.com/AmazonS3/latest/userguide/configure-inventory.html)
+run to
+`s3://<destination-bucket>/<destination-prefix>/<source-bucket>/<inventory-id>/<YYYY-MM-DDTHH-MMZ>/manifest.json`.
+Both binaries use the standard AWS credential chain (environment,
+shared credentials file, IAM role) and need `s3:ListBucket` on the
+destination bucket and `s3:GetObject` on the inventory files. Set
+`AWS_REGION` to the destination bucket's region.
+
+Build an index from one run and query it with the CLI:
+
+```bash
+export AWS_REGION=us-east-1
+aws s3 ls s3://my-inventory-bucket/inventory/my-data-bucket/daily/   # pick a run
+./s3-inv-db build \
+  --s3-manifest s3://my-inventory-bucket/inventory/my-data-bucket/daily/2026-10-24T01-00Z/manifest.json \
+  --out ./my-index
+./s3-inv-db query --index ./my-index --prefix "logs/" --show-tiers --estimate-cost
+./s3-inv-db top --index ./my-index --depth 1 --limit 10 --by bytes
+```
+
+Or run the server over every inventory under the destination prefix,
+with a minimal config file:
+
+```json
+{
+  "s3_source": "s3://my-inventory-bucket/inventory/",
+  "cache_dir": "./s3inv-cache",
+  "auto_load": true,
+  "max_index_disk": "50GB",
+  "inventories": [
+    {"source": "my-data-bucket", "name": "daily", "auto_load": true}
+  ]
+}
+```
+
+```bash
+./s3-inv-db config-check --config config.json
+./s3-inv-db-server --config config.json   # http://localhost:8080
+```
+
+The server discovers every run under `s3_source`. With `auto_load`, it
+keeps the newest runs (two by default) of each inventory marked
+`auto_load` (here `my-data-bucket`/`daily`) built, within the
+`max_index_disk` budget; any other run loads from the Inventories page. Every key and flag is in
+[Configuration](#configuration) and [docs/cli.md](docs/cli.md).
+
 ## Quick start
 
 ```bash
@@ -102,6 +201,7 @@ reference: [docs/library-api.md](docs/library-api.md).
 - [Index format](docs/index-format.md) — on-disk file layout
 - [Library API](docs/library-api.md) — Go package reference
 - [Performance](docs/performance.md) — memory, benchmarks, sizing
+- [Releasing](docs/releasing.md) — dispatching a release or dry run
 
 ## Requirements
 
