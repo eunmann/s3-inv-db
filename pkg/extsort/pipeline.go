@@ -664,17 +664,21 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 	}
 
 	parseStart := time.Now()
-	var reader s3inventory.Reader
+	var (
+		reader    s3inventory.Reader
+		csvReader *s3inventory.CSVReader
+	)
 	if job.config.format == s3fetch.InventoryFormatParquet {
 		reader, err = openParquetReader(body, job.config.fileSize)
 	} else {
-		reader, err = s3inventory.NewCSVReaderFromStream(body, job.key, s3inventory.CSVReaderConfig{
+		csvReader, err = s3inventory.NewCSVReaderFromStream(body, job.key, s3inventory.CSVReaderConfig{
 			KeyCol:          job.config.keyCol,
 			SizeCol:         job.config.sizeCol,
 			StorageCol:      job.config.storageCol,
 			AccessTierCol:   job.config.accessTierCol,
 			DeleteMarkerCol: job.config.deleteMarkerCol,
 		})
+		reader = csvReader
 	}
 	if err != nil {
 		return fmt.Errorf("open inventory reader: %w", err)
@@ -722,6 +726,14 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 				return fmt.Errorf("mid-chunk flush: %w", err)
 			}
 		}
+	}
+
+	if csvReader != nil && (csvReader.UndecodableKeyCount() > 0 || csvReader.MalformedRowCount() > 0) {
+		log.Warn().
+			Str("chunk", job.key).
+			Uint64("undecodable_keys", csvReader.UndecodableKeyCount()).
+			Uint64("malformed_sizes", csvReader.MalformedRowCount()).
+			Msg("inventory chunk: keys kept URL-encoded or sizes indexed as 0")
 	}
 
 	p.objectsProcessed.Add(rowsParsed)
