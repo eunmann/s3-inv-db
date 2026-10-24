@@ -11,6 +11,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
+	"github.com/go-chi/chi/v5/middleware"
 )
 
 func newJobsHandlers(t *testing.T) (*handlers.Handlers, *jobs.Scheduler) {
@@ -152,5 +153,51 @@ func TestJobsStream_PerIPCap(t *testing.T) {
 	defer func() { _ = resp2.Body.Close() }()
 	if resp2.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("second connect status = %d, want 429", resp2.StatusCode)
+	}
+}
+
+// TestJobsStream_PerIPCapKeysOnClientIP guards that the cap counts the
+// client IP the server's client-IP middleware resolved, not RemoteAddr:
+// behind a trusted proxy every browser shares the proxy's RemoteAddr, so
+// keying on it would put all users in one slot bucket.
+func TestJobsStream_PerIPCapKeysOnClientIP(t *testing.T) {
+	handlers.SetSSEMaxConnsPerIPForTest(t, 1)
+	h := newWiredHandlers(t, nil)
+
+	srv := httptest.NewServer(middleware.ClientIPFromXFF()(http.HandlerFunc(h.JobsStream)))
+	t.Cleanup(srv.Close)
+
+	// open connects as client xff and returns the status; a 200 stream
+	// stays open, holding its slot, until the test ends.
+	open := func(xff string) int {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, http.NoBody)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Forwarded-For", xff)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("connect as %s: %v", xff, err)
+		}
+		t.Cleanup(func() { _ = resp.Body.Close() })
+		if resp.StatusCode == http.StatusOK {
+			// Reading a byte waits until the server holds the slot.
+			if _, err := resp.Body.Read(make([]byte, 1)); err != nil {
+				t.Fatalf("read first byte as %s: %v", xff, err)
+			}
+		}
+
+		return resp.StatusCode
+	}
+
+	if got := open("203.0.113.1"); got != http.StatusOK {
+		t.Fatalf("first client status = %d, want 200", got)
+	}
+	if got := open("203.0.113.2"); got != http.StatusOK {
+		t.Fatalf("second client behind the same proxy status = %d, want 200", got)
+	}
+	if got := open("203.0.113.1"); got != http.StatusTooManyRequests {
+		t.Fatalf("repeat of first client status = %d, want 429", got)
 	}
 }
