@@ -175,9 +175,9 @@ jobs:
           set -euo pipefail
           name="s3-inv-db_${VERSION}_${GOOS}_${GOARCH}"
           mkdir -p "dist/$name"
-          cp bin/s3-inv-db bin/s3-inv-db-server bin/s3-inv-db-seeder README.md "dist/$name/"
+          cp bin/s3-inv-db bin/s3-inv-db-server bin/s3-inv-db-seeder LICENSE README.md "dist/$name/"
           tar --owner=0 --group=0 --numeric-owner --mode=a+rX,go-w --mtime="@$(date -d "$DATE" +%s)" \
-            -C "dist/$name" -cf - s3-inv-db s3-inv-db-server s3-inv-db-seeder README.md |
+            -C "dist/$name" -cf - s3-inv-db s3-inv-db-server s3-inv-db-seeder LICENSE README.md |
             gzip -9n > "dist/$name.tar.gz"
           tar -tzvf "dist/$name.tar.gz"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

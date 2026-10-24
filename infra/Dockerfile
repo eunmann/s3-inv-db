@@ -36,6 +36,7 @@ RUN apk add --no-cache ca-certificates wget tini && \
     install -d -o app -g app /var/cache/s3inv
 
 COPY --from=builder /out/s3-inv-db-server /usr/local/bin/s3-inv-db-server
+COPY LICENSE /usr/share/licenses/s3-inv-db/LICENSE
 
 USER app
 WORKDIR /home/app

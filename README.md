@@ -210,4 +210,4 @@ dev/test stack.
 
 ## License
 
-MIT
+MIT, see [LICENSE](LICENSE).
