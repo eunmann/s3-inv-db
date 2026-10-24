@@ -18,7 +18,11 @@ func TestNew_StoresCacheRoot(t *testing.T) {
 	root := t.TempDir()
 	l := loader.New(root, nil)
 	want := filepath.Join(root, "buck", "inv", "2026-01-01T00-00Z")
-	if got := l.CacheDirFor(key("buck", "inv", "2026-01-01T00-00Z")); got != want {
+	got, err := l.CacheDirFor(key("buck", "inv", "2026-01-01T00-00Z"))
+	if err != nil {
+		t.Fatalf("CacheDirFor: %v", err)
+	}
+	if got != want {
 		t.Errorf("CacheDirFor = %q, want %q", got, want)
 	}
 }
@@ -32,9 +36,83 @@ func TestCacheDirFor_NestsBySrcIDRun(t *testing.T) {
 		{"a", "b", "r", "/cache/a/b/r"},
 	}
 	for _, c := range cases {
-		if got := l.CacheDirFor(key(c.src, c.id, c.run)); got != c.want {
+		got, err := l.CacheDirFor(key(c.src, c.id, c.run))
+		if err != nil {
+			t.Fatalf("CacheDirFor(%q,%q,%q): %v", c.src, c.id, c.run, err)
+		}
+		if got != c.want {
 			t.Errorf("CacheDirFor(%q,%q,%q) = %q, want %q", c.src, c.id, c.run, got, c.want)
 		}
+	}
+}
+
+// unsafeKeys are cache keys whose naive filepath.Join would land outside
+// <root>/<src>/<id>/ — at the root itself, a sibling, or above it.
+func unsafeKeys() map[string]inventory.CacheKey {
+	return map[string]inventory.CacheKey{
+		"dotdot src":        key("..", "inv", "r"),
+		"dotdot id":         key("buck", "..", "r"),
+		"dotdot run":        key("buck", "inv", ".."),
+		"collapse to root":  key("buck", "..", ".."),
+		"dot segment":       key("buck", ".", "r"),
+		"nested escape":     key("buck/../..", "inv", "r"),
+		"slash in id":       key("buck", "a/b", "r"),
+		"absolute src":      key("/etc", "inv", "r"),
+		"backslash in name": key("buck", `a\b`, "r"),
+	}
+}
+
+func TestCacheDirFor_RefusesPathsOutsideRoot(t *testing.T) {
+	l := loader.New(t.TempDir(), nil)
+	for name, k := range unsafeKeys() {
+		t.Run(name, func(t *testing.T) {
+			if dir, err := l.CacheDirFor(k); !errors.Is(err, loader.ErrUnsafeCacheKey) {
+				t.Errorf("CacheDirFor(%+v) = (%q, %v), want ErrUnsafeCacheKey", k, dir, err)
+			}
+		})
+	}
+}
+
+func TestRemoveCache_RefusesPathsOutsideRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "cache")
+	sentinel := filepath.Join(parent, "keep.txt")
+	if err := os.MkdirAll(filepath.Join(root, "buck", "r"), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(sentinel, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+	l := loader.New(root, nil)
+	for name, k := range unsafeKeys() {
+		t.Run(name, func(t *testing.T) {
+			if err := l.RemoveCache(k); !errors.Is(err, loader.ErrUnsafeCacheKey) {
+				t.Errorf("RemoveCache(%+v) = %v, want ErrUnsafeCacheKey", k, err)
+			}
+		})
+	}
+	for _, p := range []string{root, filepath.Join(root, "buck", "r"), sentinel} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s removed by an unsafe RemoveCache: %v", p, err)
+		}
+	}
+}
+
+func TestBuildWith_RefusesPathsOutsideRoot(t *testing.T) {
+	l := loader.New(t.TempDir(), nil)
+	for name, k := range unsafeKeys() {
+		t.Run(name, func(t *testing.T) {
+			if _, err := l.BuildWith(t.Context(), k, "s3://b/m", nil, nil); !errors.Is(err, loader.ErrUnsafeCacheKey) {
+				t.Errorf("BuildWith(%+v) err = %v, want ErrUnsafeCacheKey", k, err)
+			}
+		})
+	}
+}
+
+func TestCacheSizeBytes_RefusesPathsOutsideRoot(t *testing.T) {
+	l := loader.New(t.TempDir(), nil)
+	if _, err := l.CacheSizeBytes(key("buck", "..", "..")); !errors.Is(err, loader.ErrUnsafeCacheKey) {
+		t.Errorf("CacheSizeBytes err = %v, want ErrUnsafeCacheKey", err)
 	}
 }
 
@@ -112,7 +190,10 @@ func TestRemoveCache_MissingDirIsNoOp(t *testing.T) {
 func TestRemoveCache_DeletesExistingDir(t *testing.T) {
 	root := t.TempDir()
 	l := loader.New(root, nil)
-	dir := l.CacheDirFor(key("buck", "inv", "r"))
+	dir, err := l.CacheDirFor(key("buck", "inv", "r"))
+	if err != nil {
+		t.Fatalf("CacheDirFor: %v", err)
+	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -141,7 +222,10 @@ func TestCacheSizeBytes_MissingDirReturnsZero(t *testing.T) {
 func TestCacheSizeBytes_SumsAllFiles(t *testing.T) {
 	root := t.TempDir()
 	l := loader.New(root, nil)
-	dir := l.CacheDirFor(key("buck", "inv", "r"))
+	dir, err := l.CacheDirFor(key("buck", "inv", "r"))
+	if err != nil {
+		t.Fatalf("CacheDirFor: %v", err)
+	}
 	if err := os.MkdirAll(filepath.Join(dir, "nested"), 0o750); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

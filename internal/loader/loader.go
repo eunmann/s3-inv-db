@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
@@ -35,9 +36,20 @@ func New(cacheRoot string, s3Client *s3fetch.Client) *Loader {
 // CacheDirFor returns the on-disk path where an inventory run's built
 // index lives. The run timestamp keeps cache directories per-run, so
 // multiple runs of the same inventory configuration can be loaded
-// independently without clobbering each other.
-func (l *Loader) CacheDirFor(key inventory.CacheKey) string {
-	return filepath.Join(l.cacheRoot, key.SourceBucket, key.InventoryID, key.Run)
+// independently without clobbering each other. Callers RemoveAll the
+// result, so every key segment must be a single plain path element:
+// anything that would resolve outside <root>/<src>/<id>/ is refused.
+func (l *Loader) CacheDirFor(key inventory.CacheKey) (string, error) {
+	if !key.Valid() {
+		return "", errEmptyID
+	}
+	for _, seg := range []string{key.SourceBucket, key.InventoryID, key.Run} {
+		if seg == "." || seg == ".." || strings.ContainsAny(seg, `/\`) {
+			return "", fmt.Errorf("%w: %q", errUnsafeCacheKey, seg)
+		}
+	}
+
+	return filepath.Join(l.cacheRoot, key.SourceBucket, key.InventoryID, key.Run), nil
 }
 
 // BuildWith downloads the inventory referenced by manifestURI and
@@ -48,8 +60,9 @@ func (l *Loader) CacheDirFor(key inventory.CacheKey) string {
 // build a fine-grained stage timeline. Partial builds are not safe to
 // resume — the cache dir is cleared first.
 func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifestURI string, onProgress func(stage string, done, total int64), eventBus *events.Bus) (string, error) {
-	if !key.Valid() {
-		return "", errEmptyID
+	outDir, err := l.CacheDirFor(key)
+	if err != nil {
+		return "", err
 	}
 	if manifestURI == "" {
 		return "", errEmptyManifest
@@ -59,7 +72,6 @@ func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifest
 	}
 
 	onProgress("preparing", 0, 0)
-	outDir := l.CacheDirFor(key)
 	if err := os.RemoveAll(outDir); err != nil {
 		return "", fmt.Errorf("clear cache dir: %w", err)
 	}
@@ -89,10 +101,10 @@ func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifest
 // disk after the in-memory index is released. Missing dirs are a no-op
 // — callers don't have to check existence.
 func (l *Loader) RemoveCache(key inventory.CacheKey) error {
-	if !key.Valid() {
-		return errEmptyID
+	dir, err := l.CacheDirFor(key)
+	if err != nil {
+		return err
 	}
-	dir := l.CacheDirFor(key)
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("remove cache dir %s: %w", dir, err)
 	}
@@ -102,9 +114,12 @@ func (l *Loader) RemoveCache(key inventory.CacheKey) error {
 
 // CacheSizeBytes returns 0 (not an error) when the cache dir is absent.
 func (l *Loader) CacheSizeBytes(key inventory.CacheKey) (int64, error) {
-	dir := l.CacheDirFor(key)
+	dir, err := l.CacheDirFor(key)
+	if err != nil {
+		return 0, err
+	}
 	var total int64
-	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
 				return nil
@@ -135,6 +150,7 @@ func (l *Loader) CacheSizeBytes(key inventory.CacheKey) (int64, error) {
 }
 
 var (
-	errEmptyID       = errors.New("source bucket, inventory id, and run are required")
-	errEmptyManifest = errors.New("manifest URI is required")
+	errEmptyID        = errors.New("source bucket, inventory id, and run are required")
+	errEmptyManifest  = errors.New("manifest URI is required")
+	errUnsafeCacheKey = errors.New("cache key segment is not a plain path element")
 )

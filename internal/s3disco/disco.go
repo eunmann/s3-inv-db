@@ -55,6 +55,29 @@ func New(client *s3.Client, bucket, prefix string) *Discoverer {
 // can't be misread as a run.
 var runFolderRE = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}(-\d{2})?Z$`)
 
+// Source and inventory names come verbatim from S3 key segments that
+// anyone with write access to the inventory bucket controls. They end
+// up as cache-directory path segments and inside htmx attributes (where
+// "[...]" in hx-trigger is evaluated as JavaScript), so only the
+// charsets AWS itself allows are accepted: S3 bucket naming for the
+// source and the inventory-configuration ID charset for the inventory.
+var (
+	sourceNameRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
+	inventoryIDRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+)
+
+func validSourceName(name string) bool { return sourceNameRE.MatchString(name) }
+
+// validInventoryID additionally refuses "." and "..", which the AWS
+// charset admits but which are path navigation, not names.
+func validInventoryID(id string) bool {
+	return id != "." && id != ".." && inventoryIDRE.MatchString(id)
+}
+
+// ErrInvalidName is returned by Find when the source or inventory name
+// falls outside the AWS naming charsets.
+var ErrInvalidName = errors.New("invalid source or inventory name")
+
 // NewFromS3URI builds a Discoverer from an s3:// URI like
 // "s3://bucket/optional/prefix/".
 func NewFromS3URI(client *s3.Client, uri string) (*Discoverer, error) {
@@ -88,6 +111,11 @@ func (d *Discoverer) List(ctx context.Context) ([]inventory.Inventory, error) {
 	var out []inventory.Inventory
 	for _, src := range srcBuckets {
 		srcName := trimPrefix(src, d.prefix)
+		if !validSourceName(srcName) {
+			logger.Warn().Str("src", srcName).Msg("skip source with invalid S3 bucket name")
+
+			continue
+		}
 		invs, err := d.listCommonPrefixes(ctx, src)
 		if err != nil {
 			logger.Warn().Err(err).Str("src", srcName).Msg("list inventories under src")
@@ -97,6 +125,11 @@ func (d *Discoverer) List(ctx context.Context) ([]inventory.Inventory, error) {
 		}
 		for _, inv := range invs {
 			invName := trimPrefix(inv, src)
+			if !validInventoryID(invName) {
+				logger.Warn().Str("src", srcName).Str("inv", invName).Msg("skip inventory with invalid configuration ID")
+
+				continue
+			}
 			runs, err := d.describeRuns(ctx, srcName, invName, inv)
 			if err != nil {
 				logger.Warn().Err(err).Str("src", srcName).Str("inv", invName).Msg("describe runs")
@@ -117,6 +150,9 @@ func (d *Discoverer) List(ctx context.Context) ([]inventory.Inventory, error) {
 func (d *Discoverer) Find(ctx context.Context, srcBucket, invID, run string) (inventory.Inventory, error) {
 	if srcBucket == "" || invID == "" {
 		return inventory.Inventory{}, errEmptyID
+	}
+	if !validSourceName(srcBucket) || !validInventoryID(invID) {
+		return inventory.Inventory{}, fmt.Errorf("%w: %q/%q", ErrInvalidName, srcBucket, invID)
 	}
 	invPrefix := d.prefix + srcBucket + "/" + invID + "/"
 	runs, err := d.describeRuns(ctx, srcBucket, invID, invPrefix)
