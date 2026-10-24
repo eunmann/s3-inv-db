@@ -53,9 +53,14 @@ The build aggregator spills when **any** of three thresholds fires:
    can't grow past the cap before its first spill opportunity.
 
 After all inventory files are processed, a k-way merge combines run
-files into the final sorted stream. Run-file write buffers
-(zstd-compressed by default), the merge heap, and the index-build
-streaming arrays each take bounded space outside the aggregator cap.
+files (zstd-compressed) into the final sorted stream, which the index
+builder consumes directly. The final merge reads up to 64 runs at once.
+Only past that do disk rounds run, merging just the smallest runs needed
+in groups of up to 16, and each run is deleted as soon as it has been
+merged. The merge decodes a few 4096-row batches ahead of the index
+build on its own goroutine. Run-file buffers, the merge heap and the
+index-build streaming arrays each take bounded space outside the
+aggregator cap.
 
 ```bash
 GOMEMLIMIT=4GiB s3-inv-db build ...   # cap at 4 GiB
