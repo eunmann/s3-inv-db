@@ -8,7 +8,8 @@
 # The commit may sit anywhere in a compound command and target another
 # checkout (a worktree): the hook lints the repository the commit runs in,
 # taken from `git -C <dir> commit`, else a preceding `cd <dir>`, else the
-# tool call's working directory.
+# tool call's working directory. A directory it cannot resolve blocks the
+# commit.
 set -euo pipefail
 
 INPUT=$(cat)
@@ -38,9 +39,13 @@ while [[ $REST =~ $CD_RE ]]; do
 done
 [[ -z $GIT_C ]] || DIR=$(resolve "$DIR" "$GIT_C")
 
-# A directory that doesn't exist or isn't a repository fails the commit
-# itself; there is nothing to lint.
-cd "$DIR" 2>/dev/null || exit 0
+# The parse takes paths literally, so a variable, command substitution or
+# quoted space leaves DIR pointing nowhere while the shell still commits.
+if ! cd "$DIR" 2>/dev/null; then
+    echo "pre-commit lint: cannot resolve the commit's directory '$DIR'; use a literal path in cd or git -C." >&2
+    exit 2
+fi
+# An existing directory outside any repository fails the commit itself.
 TOP=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 cd "$TOP"
 
