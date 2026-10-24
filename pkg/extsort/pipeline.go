@@ -996,16 +996,16 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		return mergeBuildResult{}, fmt.Errorf("create index builder: %w", err)
 	}
 
-	// Wrap the merge iterator so the IndexBuilder consumption emits
+	// Decode the merge a few batches ahead of the builder. Deferred
+	// after the cleanup, so it stops before the merge readers close.
+	prefetch := newPrefetchIterator(mergeIter)
+	defer prefetch.stop()
+	// Wrap the prefetched merge so the IndexBuilder consumption emits
 	// "building" progress every ~131k rows. Without this the bar stays
 	// frozen at the start of the index-build phase (which is the
 	// dominant fraction of wall clock for large inventories) until the
 	// next merge round fires — sometimes never, if all run files merged
 	// in a single round. Power-of-two interval lets the AND short-circuit.
-	// Decode the merge a few batches ahead of the builder. Deferred
-	// after the cleanup, so it stops before the merge readers close.
-	prefetch := newPrefetchIterator(mergeIter)
-	defer prefetch.stop()
 	progressIter := &reportingIterator{
 		inner:       prefetch,
 		total:       int64(prefixCount),

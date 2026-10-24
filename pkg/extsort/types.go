@@ -22,8 +22,8 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-// MaxTiers mirrors tiers.NumTiers as an int so PrefixRow / PrefixStats
-// can declare fixed-size arrays for tier data (avoids map allocs).
+// MaxTiers mirrors tiers.NumTiers as an int so PrefixRow can declare
+// fixed-size arrays for tier data (avoids map allocs).
 const MaxTiers = int(tiers.NumTiers)
 
 // RowIterator yields PrefixRows in sorted order; Next returns io.EOF

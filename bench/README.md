@@ -70,6 +70,7 @@ Ingestion (`bench/suite/ingest.txt`):
   `disk_B`.
 - `pkg/format` `BenchmarkMPHFBuild` at 1M prefixes: the MPHF finalize
   step on its own, with `peak_heap_B`.
+
 Data structures / query (`bench/suite/query.txt`):
 
 - `pkg/indexread` `BenchmarkGate*`: 100k lookups, prefix
