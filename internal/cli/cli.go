@@ -5,15 +5,17 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 
 	"github.com/eunmann/s3-inv-db/internal/appconfig"
+	"github.com/eunmann/s3-inv-db/internal/buildinfo"
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
 
 // Sentinel errors keep `err113` happy and let callers test for the
 // specific failure mode with errors.Is.
 var (
-	ErrUsage = errors.New("usage: s3-inv-db <command> [options]\n" +
+	ErrUsage = errors.New("usage: s3-inv-db <command> [options] | s3-inv-db --version\n" +
 		"commands: build, query, top, browse, compare, verify, stats, config-check")
 	ErrUnknownCommand    = errors.New("unknown command")
 	ErrOutRequired       = errors.New("--out is required")
@@ -36,6 +38,10 @@ func Run(args []string) error {
 	cmdArgs := args[1:]
 
 	switch cmd {
+	case "--version", "-version":
+		fmt.Fprintln(os.Stdout, buildinfo.Get().Line("s3-inv-db"))
+
+		return nil
 	case "build":
 		return runBuild(cmdArgs)
 	case "query":

@@ -16,6 +16,17 @@ COVER_MIN := 67.0
 
 COMPOSE := docker compose -f infra/docker-compose.yml
 
+# Version metadata stamped into every binary (see internal/buildinfo).
+# The release workflow overrides all three. DATE is the commit time, not
+# the build time, so rebuilding a commit gives the same binary. The go
+# command's own VCS stamp is not enough: it is absent in git worktrees.
+VERSION ?= $(shell git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null)
+COMMIT  ?= $(shell git describe --always --dirty --abbrev=40 --exclude='*' 2>/dev/null)
+DATE    ?= $(shell TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd 2>/dev/null)
+BUILDINFO := github.com/eunmann/s3-inv-db/internal/buildinfo
+LDFLAGS := -X $(BUILDINFO).version=$(VERSION) -X $(BUILDINFO).commit=$(COMMIT) -X $(BUILDINFO).date=$(DATE)
+GO_BUILD := go build -trimpath -ldflags "$(LDFLAGS)"
+
 # Tailwind CLI: use the standalone binary release so we don't pull in
 # Node.js for what's essentially a single tool. The binary is downloaded
 # on first use and cached under bin/. Detect OS/arch automatically.
@@ -57,13 +68,13 @@ $(TAILWIND_BIN):
 	mv $@.tmp $@
 
 build: ## Build bin/s3-inv-db
-	go build -o bin/s3-inv-db ./cmd/s3-inv-db
+	$(GO_BUILD) -o bin/s3-inv-db ./cmd/s3-inv-db
 
 server: css ## Build bin/s3-inv-db-server
-	go build -o bin/s3-inv-db-server ./cmd/s3-inv-db-server
+	$(GO_BUILD) -o bin/s3-inv-db-server ./cmd/s3-inv-db-server
 
 seeder: ## Build bin/s3-inv-db-seeder
-	go build -o bin/s3-inv-db-seeder ./cmd/s3-inv-db-seeder
+	$(GO_BUILD) -o bin/s3-inv-db-seeder ./cmd/s3-inv-db-seeder
 
 test-unit: ## Host unit tests (no Docker, no network)
 	go test ./...

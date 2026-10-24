@@ -13,6 +13,10 @@ stats         Inspect index metadata + per-file sizes
 config-check  Validate a JSON config file and print set fields
 ```
 
+`s3-inv-db --version` prints the version, commit and commit date on
+one line and exits; `s3-inv-db-server` and `s3-inv-db-seeder` accept
+`--version` too.
+
 Every subcommand accepts `--output text|json` (default `text`) — pass
 `--output json` to emit a single JSON object on stdout for scripting.
 
