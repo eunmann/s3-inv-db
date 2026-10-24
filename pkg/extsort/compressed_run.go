@@ -462,6 +462,26 @@ var zstdEncoderPools = map[zstd.EncoderLevel]*typedPool[zstd.Encoder]{
 //nolint:gochecknoglobals // intentional package-level decoder pool
 var zstdDecoderPool = newTypedPool(func() *zstd.Decoder { return nil })
 
+// zstdWindowSize bounds each run stream's match window. Run rows are
+// sorted, so most redundancy is between neighbouring rows; a 1 MiB
+// window keeps the ratio (run-file bytes are unchanged) at a fraction
+// of the default's buffers. Decoders keep their defaults: their
+// asynchronous block decoding keeps the serial final merge fed.
+const zstdWindowSize = 1 << 20
+
+// zstdEncoderOptions: one goroutine per stream. Every ingest worker and
+// every merge output already runs its own encoder, so the default
+// (GOMAXPROCS block encoders per stream) only multiplies buffers by the
+// core count.
+func zstdEncoderOptions(level zstd.EncoderLevel) []zstd.EOption {
+	return []zstd.EOption{
+		zstd.WithEncoderLevel(level),
+		zstd.WithEncoderConcurrency(1),
+		zstd.WithWindowSize(zstdWindowSize),
+		zstd.WithLowerEncoderMem(true),
+	}
+}
+
 // acquireZstdEncoder returns a pooled or freshly-built encoder at the
 // requested level. A nil pool (unknown level) or an empty pool both
 // fall through to NewWriter; that's by design — callers don't need to
@@ -473,7 +493,7 @@ func acquireZstdEncoder(level zstd.EncoderLevel) (*zstd.Encoder, error) {
 			return enc, nil
 		}
 	}
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level))
+	enc, err := zstd.NewWriter(nil, zstdEncoderOptions(level)...)
 	if err != nil {
 		return nil, fmt.Errorf("zstd new writer: %w", err)
 	}
