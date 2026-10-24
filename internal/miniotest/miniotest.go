@@ -89,8 +89,8 @@ func FetchClient(tb testing.TB) *s3fetch.Client {
 // Bucket creates a uniquely-named bucket and registers cleanup that
 // empties and deletes it on test exit. Names are derived from tb.Name()
 // so the bucket is identifiable mid-test, with a timestamp suffix to
-// avoid collisions on re-runs. c may come from the ambient AWS config
-// (s3fetch.NewClient), so the endpoint guard runs here too.
+// avoid collisions on re-runs. The client may come from the ambient AWS
+// config (s3fetch.NewClient), so the endpoint guard runs here too.
 func Bucket(tb testing.TB, c *s3.Client) string {
 	tb.Helper()
 	localEndpoint(tb)

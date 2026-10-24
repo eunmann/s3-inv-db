@@ -16,7 +16,7 @@ func TestRetryJob_MissingJobReturns404(t *testing.T) {
 		&fakeDiscoverer{},
 		&fakeBuilder{},
 	)
-	req := httptest.NewRequest(http.MethodPost, "/api/jobs/does-not-exist/retry", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/jobs/does-not-exist/retry", http.NoBody)
 	req = chiCtxWithParams(req, "id", "does-not-exist")
 	w := httptest.NewRecorder()
 	h.RetryJob(w, req)
@@ -40,7 +40,7 @@ func TestRetryJob_NonBuildKindReturns409(t *testing.T) {
 	if err := h.JobStoreForTest().Upsert(t.Context(), prev); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/jobs/j-unload/retry", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/jobs/j-unload/retry", http.NoBody)
 	req = chiCtxWithParams(req, "id", "j-unload")
 	w := httptest.NewRecorder()
 	h.RetryJob(w, req)
@@ -67,7 +67,7 @@ func TestRetryJob_NonTerminalReturns409(t *testing.T) {
 	if err := h.JobStoreForTest().Upsert(t.Context(), prev); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/jobs/j-run/retry", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/jobs/j-run/retry", http.NoBody)
 	req = chiCtxWithParams(req, "id", "j-run")
 	w := httptest.NewRecorder()
 	h.RetryJob(w, req)
@@ -91,7 +91,7 @@ func TestRetryJob_SucceededReturns409(t *testing.T) {
 	if err := h.JobStoreForTest().Upsert(t.Context(), prev); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/jobs/j-ok/retry", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/jobs/j-ok/retry", http.NoBody)
 	req = chiCtxWithParams(req, "id", "j-ok")
 	w := httptest.NewRecorder()
 	h.RetryJob(w, req)
@@ -115,7 +115,7 @@ func TestRetryJob_MalformedInventoryIDReturns400(t *testing.T) {
 	if err := h.JobStoreForTest().Upsert(t.Context(), prev); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/jobs/j-bad/retry", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/jobs/j-bad/retry", http.NoBody)
 	req = chiCtxWithParams(req, "id", "j-bad")
 	w := httptest.NewRecorder()
 	h.RetryJob(w, req)
@@ -142,7 +142,7 @@ func TestRetryJob_FailedJobSubmitsFollowOn(t *testing.T) {
 	if err := h.JobStoreForTest().Upsert(t.Context(), prev); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/jobs/prev-fail/retry", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/jobs/prev-fail/retry", http.NoBody)
 	req = chiCtxWithParams(req, "id", "prev-fail")
 	w := httptest.NewRecorder()
 	h.RetryJob(w, req)

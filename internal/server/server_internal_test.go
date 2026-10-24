@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func TestServerAPIRoutes(t *testing.T) {
 	}
 
 	// Test API routes return JSON
-	req := httptest.NewRequest(http.MethodGet, "/api/configurations", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/configurations", http.NoBody)
 	w := httptest.NewRecorder()
 
 	srv.Router().ServeHTTP(w, req)
@@ -221,7 +222,7 @@ func TestSameOriginMiddleware_RejectsCrossOriginMutation(t *testing.T) {
 	}
 
 	// POST with cross-origin Referer must be rejected.
-	req := httptest.NewRequest(http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
 	req.Host = localhostHost
 	req.Header.Set("Origin", "http://attacker.example")
 	w := httptest.NewRecorder()
@@ -238,7 +239,7 @@ func TestSameOriginMiddleware_AllowsSameOriginMutation(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
 	req.Host = localhostHost
 	req.Header.Set("Origin", "http://localhost")
 	w := httptest.NewRecorder()
@@ -258,7 +259,7 @@ func TestSameOriginMiddleware_AllowsNoOrigin(t *testing.T) {
 	}
 
 	// No Origin and no Referer — typical curl/script request, allowed.
-	req := httptest.NewRequest(http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "http://localhost/api/inventories/foo", http.NoBody)
 	req.Host = localhostHost
 	w := httptest.NewRecorder()
 	srv.Router().ServeHTTP(w, req)
@@ -274,7 +275,7 @@ func TestSameOriginMiddleware_DoesNotBlockReads(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://localhost/api/configurations", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://localhost/api/configurations", http.NoBody)
 	req.Host = localhostHost
 	req.Header.Set("Origin", "http://attacker.example")
 	w := httptest.NewRecorder()
@@ -322,7 +323,7 @@ func TestSameOriginMiddleware_ReadsBypassOriginCheck(t *testing.T) {
 	// HEAD/OPTIONS aren't in our middleware's isMutating set; this
 	// pins the contract that only POST/PUT/PATCH/DELETE are blocked.
 	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
-		req := httptest.NewRequest(method, "http://localhost/healthz", http.NoBody)
+		req := httptest.NewRequestWithContext(t.Context(), method, "http://localhost/healthz", http.NoBody)
 		req.Host = localhostHost
 		req.Header.Set("Origin", "http://attacker.example")
 		w := httptest.NewRecorder()
@@ -346,11 +347,11 @@ func TestHlogChain_LogsAfterPanic(t *testing.T) {
 	})
 	handler = middleware.Recoverer(handler)
 	// Apply hlog chain in reverse order (innermost first).
-	for i := len(chain) - 1; i >= 0; i-- {
-		handler = chain[i](handler)
+	for _, mw := range slices.Backward(chain) {
+		handler = mw(handler)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://localhost/", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://localhost/", http.NoBody)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 

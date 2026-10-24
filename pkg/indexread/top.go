@@ -3,6 +3,7 @@ package indexread
 import (
 	"container/heap"
 	"fmt"
+	"slices"
 )
 
 // TopMetric selects which statistic ranks results in Top queries.
@@ -82,7 +83,7 @@ func (idx *Index) top(prefixPos uint64, relDepth, limit int, metric TopMetric, f
 	// The type assertion is infallible: Push only accepts TopResult,
 	// so heap.Pop can return nothing else.
 	out := make([]TopResult, h.Len())
-	for i := len(out) - 1; i >= 0; i-- {
+	for i := range slices.Backward(out) {
 		out[i] = heap.Pop(h).(TopResult) //nolint:forcetypeassert // see comment above
 	}
 

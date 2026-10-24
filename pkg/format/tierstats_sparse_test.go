@@ -104,9 +104,7 @@ func TestTierStatsSparse_DenseWinsOnSingleTier(t *testing.T) {
 	}
 	for i := range 100 {
 		var counts, bytes [tiers.NumTiers]uint64
-		//nolint:gosec // tiers.Standard is a typed enum < NumTiers
 		counts[tiers.Standard] = uint64(i + 1)
-		//nolint:gosec // tiers.Standard is a typed enum < NumTiers
 		bytes[tiers.Standard] = uint64((i + 1) * 100)
 		if err := w.Add(&counts, &bytes); err != nil {
 			t.Fatalf("Add: %v", err)

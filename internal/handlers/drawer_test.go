@@ -25,7 +25,7 @@ func TestRunDrawer_NoInventoryRendersEmpty(t *testing.T) {
 		&fakeDiscoverer{},
 		&fakeBuilder{},
 	)
-	req := httptest.NewRequest(http.MethodGet, "/partials/drawer/missing/foo/r", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/drawer/missing/foo/r", http.NoBody)
 	req = chiCtxWithParams(req, "src", "missing", "id", "foo", "run", "r")
 	w := httptest.NewRecorder()
 	h.RunDrawer(w, req)
@@ -63,7 +63,7 @@ func TestRunDrawer_RendersLatestJobAndStageTimeline(t *testing.T) {
 		t.Fatalf("Upsert job: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/partials/drawer/b/i/r", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/drawer/b/i/r", http.NoBody)
 	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "r")
 	w := httptest.NewRecorder()
 	h.RunDrawer(w, req)
@@ -108,7 +108,7 @@ func TestRunDrawer_FailedJobShowsRetryAndError(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/partials/drawer/b/i/r", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/drawer/b/i/r", http.NoBody)
 	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "r")
 	w := httptest.NewRecorder()
 	h.RunDrawer(w, req)
@@ -151,7 +151,7 @@ func TestRunDrawer_LiveJobShowsCancelButton(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/partials/drawer/b/i/r", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/drawer/b/i/r", http.NoBody)
 	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "r")
 	w := httptest.NewRecorder()
 	h.RunDrawer(w, req)
@@ -174,7 +174,7 @@ func TestRunDrawer_OpenShellHasSSEWiringAndPushURL(t *testing.T) {
 	composite := disc.CompositeID()
 	seedInventoryRow(t, h.ManagerForTest(), composite)
 
-	req := httptest.NewRequest(http.MethodGet, "/partials/drawer/b/i/r", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/drawer/b/i/r", http.NoBody)
 	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "r")
 	w := httptest.NewRecorder()
 	h.RunDrawer(w, req)
@@ -204,7 +204,7 @@ func TestRunDrawerClose_ReturnsClosedShellAndClearsHash(t *testing.T) {
 		&fakeDiscoverer{bucket: "dst"},
 		&fakeBuilder{},
 	)
-	req := httptest.NewRequest(http.MethodGet, "/partials/drawer-close", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/drawer-close", http.NoBody)
 	w := httptest.NewRecorder()
 	h.RunDrawerClose(w, req)
 	if w.Code != http.StatusOK {
@@ -256,7 +256,7 @@ func TestRunDrawer_PrefersInfoLoadDurationForTook(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/partials/drawer/b/i/r", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/drawer/b/i/r", http.NoBody)
 	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "r")
 	w := httptest.NewRecorder()
 	h.RunDrawer(w, req)
@@ -301,7 +301,7 @@ func TestRunDrawer_RendersPrevAttemptsChain(t *testing.T) {
 		time.Sleep(1100 * time.Millisecond)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/partials/drawer/b/i/r", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/drawer/b/i/r", http.NoBody)
 	req = chiCtxWithParams(req, "src", "b", "id", "i", "run", "r")
 	w := httptest.NewRecorder()
 	h.RunDrawer(w, req)

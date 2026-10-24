@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -168,8 +169,8 @@ func (r *CSVReader) MalformedRowCount() uint64 {
 func (r *CSVReader) Close() error {
 	var firstErr error
 	// Close in reverse order (gzip reader before underlying stream)
-	for i := len(r.closers) - 1; i >= 0; i-- {
-		if err := r.closers[i].Close(); err != nil && firstErr == nil {
+	for _, c := range slices.Backward(r.closers) {
+		if err := c.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

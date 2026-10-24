@@ -17,7 +17,7 @@ func TestMetricsMiddleware_RecordsAndExposes(t *testing.T) {
 		w.WriteHeader(http.StatusTeapot)
 	}))
 
-	reqIn := httptest.NewRequest(http.MethodGet, "/x", http.NoBody)
+	reqIn := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", http.NoBody)
 	wIn := httptest.NewRecorder()
 	inner.ServeHTTP(wIn, reqIn)
 
@@ -26,7 +26,7 @@ func TestMetricsMiddleware_RecordsAndExposes(t *testing.T) {
 	}
 
 	wM := httptest.NewRecorder()
-	h.MetricsHandler(wM, httptest.NewRequest(http.MethodGet, "/metrics", http.NoBody))
+	h.MetricsHandler(wM, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", http.NoBody))
 
 	body := wM.Body.String()
 	mustContain := []string{
@@ -53,10 +53,10 @@ func TestMetricsMiddleware_DefaultStatusIs200(t *testing.T) {
 		_, _ = w.Write([]byte("hi"))
 	}))
 
-	inner.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/x", http.NoBody))
+	inner.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", http.NoBody))
 
 	wM := httptest.NewRecorder()
-	h.MetricsHandler(wM, httptest.NewRequest(http.MethodGet, "/metrics", http.NoBody))
+	h.MetricsHandler(wM, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", http.NoBody))
 
 	if !strings.Contains(wM.Body.String(), `s3invdb_http_requests_total{route="implicit",status="200"} 1`) {
 		t.Errorf("expected status=200 counter; metrics:\n%s", wM.Body.String())

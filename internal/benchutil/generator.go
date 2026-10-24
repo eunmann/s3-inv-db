@@ -382,15 +382,15 @@ func (g *Generator) generateTier() tiers.ID {
 // GenerateKeys returns just the keys for trie-building benchmarks.
 func GenerateKeys(numObjects int, shape string) []string {
 	switch shape {
-	case "deep_narrow":
+	case ShapeDeepNarrow:
 		return generateDeepNarrowKeys(numObjects)
-	case "wide_shallow":
+	case ShapeWideShallow:
 		return generateWideShallowKeys(numObjects)
-	case "balanced":
+	case ShapeBalanced:
 		return generateBalancedKeys(numObjects)
-	case "s3_realistic":
+	case ShapeS3Realistic:
 		return generateS3RealisticKeys(numObjects)
-	case "wide_single_level":
+	case ShapeWideSingleLevel:
 		return generateWideSingleLevelKeys(numObjects)
 	default:
 		return generateS3RealisticKeys(numObjects)
@@ -410,7 +410,7 @@ func generateDeepNarrowKeys(size int) []string {
 		prefix := ""
 		var prefixBuilder strings.Builder
 		for range depth {
-			prefixBuilder.WriteString(fmt.Sprintf("%c/", 'a'+byte(branch)))
+			fmt.Fprintf(&prefixBuilder, "%c/", 'a'+byte(branch))
 		}
 		prefix += prefixBuilder.String()
 		for f := 0; idx < size && f < filesPerLeaf; f++ {

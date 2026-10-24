@@ -46,7 +46,7 @@ func TestNotifications_OrderedByFailureTimeNotFutureBackoff(t *testing.T) {
 		t.Fatalf("config upsert: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/notifications", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/notifications", http.NoBody)
 	w := httptest.NewRecorder()
 	h.NotificationsAPI(w, req)
 

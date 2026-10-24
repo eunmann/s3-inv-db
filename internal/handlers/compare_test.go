@@ -12,7 +12,7 @@ import (
 
 func TestComparePage_FirstVisitShowsPicker(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/compare", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/compare", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.ComparePage(w, req)
 	if w.Code != http.StatusOK {
@@ -32,7 +32,7 @@ func TestComparePage_FirstVisitShowsPicker(t *testing.T) {
 
 func TestComparePage_MismatchedConfigsExplains(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/compare?from=bucket-a/inv-1/run1&to=bucket-b/inv-1/run1", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/compare?from=bucket-a/inv-1/run1&to=bucket-b/inv-1/run1", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.ComparePage(w, req)
 	if w.Code != http.StatusOK {
@@ -46,7 +46,7 @@ func TestComparePage_MismatchedConfigsExplains(t *testing.T) {
 
 func TestComparePage_PartialMismatchedConfigsReturns400(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/compare?from=a/b/c&to=x/y/z", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/compare?from=a/b/c&to=x/y/z", http.NoBody)
 	req.Header.Set("HX-Request", "true")
 	w := httptest.NewRecorder()
 	f.h.ComparePage(w, req)
@@ -64,7 +64,7 @@ func TestComparePage_PartialBothLoadedRequired(t *testing.T) {
 	if err := f.mgr.Register(t.Context(), "bucket-a/inv-1/run2", "a r2", "/p2"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/compare?from=bucket-a/inv-1/run1&to=bucket-a/inv-1/run2", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/compare?from=bucket-a/inv-1/run1&to=bucket-a/inv-1/run2", http.NoBody)
 	req.Header.Set("HX-Request", "true")
 	w := httptest.NewRecorder()
 	f.h.ComparePage(w, req)
@@ -143,7 +143,7 @@ func TestBuildComparePicker_OnlyLoadedAndThreePart(t *testing.T) {
 
 func TestComparePage_PrefixInputPresentOnFirstVisit(t *testing.T) {
 	f := newTestFixture(t)
-	req := httptest.NewRequest(http.MethodGet, "/compare", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/compare", http.NoBody)
 	w := httptest.NewRecorder()
 	f.h.ComparePage(w, req)
 	if w.Code != http.StatusOK {

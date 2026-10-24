@@ -34,7 +34,7 @@ func TestJobsStream_PushesEvents(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	req := httptest.NewRequest(http.MethodGet, "/api/jobs/stream", http.NoBody).WithContext(ctx)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/jobs/stream", http.NoBody).WithContext(ctx)
 	w := httptest.NewRecorder()
 
 	streamDone := make(chan struct{})
@@ -88,7 +88,7 @@ func TestJobsStream_EmitsHeartbeat(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
-	req := httptest.NewRequest(http.MethodGet, "/api/jobs/stream", http.NoBody).WithContext(ctx)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/jobs/stream", http.NoBody).WithContext(ctx)
 	w := httptest.NewRecorder()
 	h.JobsStream(w, req)
 
