@@ -169,7 +169,13 @@ func (h *Handlers) PinDiscoveredRowPartial(w http.ResponseWriter, r *http.Reques
 	name := chi.URLParam(r, "id")
 	run := chi.URLParam(r, "run")
 	composite := inventory.ID(src + "/" + name + "/" + run)
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
 	if err := r.ParseForm(); err != nil {
+		if bodyTooLarge(err) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+
+			return
+		}
 		http.Error(w, "invalid form body", http.StatusBadRequest)
 
 		return

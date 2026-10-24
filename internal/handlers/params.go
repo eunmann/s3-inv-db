@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 
@@ -36,6 +37,18 @@ func parseFilter(q url.Values) (indexread.Filter, error) {
 	}
 
 	return f, nil
+}
+
+// maxFormBodyBytes caps the form-encoded toggle bodies (pinned,
+// auto_load, retention): a few short fields fit easily in 4 KiB.
+const maxFormBodyBytes = 4 * 1024
+
+// bodyTooLarge reports whether a decode or ParseForm error came from
+// an http.MaxBytesReader limit, which callers answer with 413.
+func bodyTooLarge(err error) bool {
+	var mbe *http.MaxBytesError
+
+	return errors.As(err, &mbe)
 }
 
 // parsePositiveInt reads key from q as an int >= 1. Returns (def, nil)

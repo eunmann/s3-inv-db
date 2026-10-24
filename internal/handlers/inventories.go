@@ -167,6 +167,11 @@ func (h *Handlers) RegisterInventoryAPI(w http.ResponseWriter, r *http.Request) 
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		zerolog.Ctx(r.Context()).Debug().Err(err).Msg("invalid register body")
+		if bodyTooLarge(err) {
+			WriteJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+
+			return
+		}
 		WriteJSONError(w, http.StatusBadRequest, "invalid JSON body")
 
 		return

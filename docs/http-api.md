@@ -101,6 +101,14 @@ spinner, stage label, progress bar, and ETA. `POST /api/jobs/{id}/cancel`
 signals the build context — the row swaps back with a **Retry**
 button.
 
+## Request body limits
+
+Every handler that reads a body caps it and answers **413** when it is
+exceeded: 4 KiB for `POST /api/inventories` and the form-encoded
+pin / auto-load toggles; for `stats:batch`, about 6 KiB per allowed
+prefix (`query_batch_max`, default 1000) — enough for the longest S3
+key fully JSON-escaped.
+
 ## Cross-origin policy
 
 Mutating requests (POST / PUT / PATCH / DELETE) are rejected by a
