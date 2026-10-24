@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -99,7 +100,7 @@ func TestServerHTTPTimeouts(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	httpSrv := srv.newHTTPServer()
+	httpSrv := srv.newHTTPServer(t.Context())
 
 	if httpSrv.ReadHeaderTimeout <= 0 {
 		t.Errorf("ReadHeaderTimeout = %v, want > 0", httpSrv.ReadHeaderTimeout)
@@ -165,6 +166,82 @@ func TestServerGracefulShutdown(t *testing.T) {
 
 	if got := len(srv.manager.List()); got != 0 {
 		t.Errorf("Manager.List() length = %d after Run, want 0 (manager not closed)", got)
+	}
+}
+
+// TestServerGracefulShutdown_OpenSSEStream pins that an open job stream
+// does not hold shutdown hostage: http.Server.Shutdown never cancels
+// request contexts, so the SSE loop only exits if Run cancels the
+// server's base context itself.
+func TestServerGracefulShutdown_OpenSSEStream(t *testing.T) {
+	lc := &net.ListenConfig{}
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	srv, err := New(t.Context(), Config{
+		Addr:       addr,
+		Logger:     zerolog.Nop(),
+		PriceTable: pricing.DefaultUSEast1Prices(),
+		DB:         testDB(t),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- srv.Run(ctx)
+	}()
+
+	resp := openSSEStream(t, "http://"+addr+"/api/jobs/stream")
+	defer resp.Body.Close()
+
+	start := time.Now()
+	cancel()
+
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Errorf("Run() returned %v with an open SSE stream, want nil", err)
+		}
+		if elapsed := time.Since(start); elapsed > shutdownDrainTimeout/2 {
+			t.Errorf("shutdown took %v, want well under %v", elapsed, shutdownDrainTimeout)
+		}
+	case <-time.After(shutdownDrainTimeout / 2):
+		t.Fatal("Run() did not return with an open SSE stream")
+	}
+}
+
+// openSSEStream retries until the server accepts, then reads the
+// ": connected" preamble so the handler is known to be in its loop.
+func openSSEStream(t *testing.T, url string) *http.Response {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, http.NoBody)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			buf := make([]byte, len(": connected"))
+			if _, err := io.ReadFull(resp.Body, buf); err != nil {
+				resp.Body.Close()
+				t.Fatalf("read SSE preamble: %v", err)
+			}
+
+			return resp
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("SSE stream never opened: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

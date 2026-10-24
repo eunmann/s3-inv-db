@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -421,11 +422,15 @@ func newDiscoveryWiring(ctx context.Context, cfg Config) (discoveryWiring, error
 
 // newHTTPServer builds the *http.Server with the project-wide timeout
 // hardening. Extracted so tests can assert the timeout shape without
-// racing against Run's goroutine assignment to s.server.
-func (s *Server) newHTTPServer() *http.Server {
+// racing against Run's goroutine assignment to s.server. Every request
+// context derives from baseCtx, so cancelling it is how long-lived
+// handlers (SSE) learn about shutdown: http.Server.Shutdown waits for
+// them but never cancels their contexts.
+func (s *Server) newHTTPServer(baseCtx context.Context) *http.Server {
 	return &http.Server{
 		Addr:              s.config.Addr,
 		Handler:           s.router,
+		BaseContext:       func(net.Listener) context.Context { return baseCtx },
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		IdleTimeout:       idleTimeout,
@@ -435,7 +440,9 @@ func (s *Server) newHTTPServer() *http.Server {
 
 // Run starts the HTTP server and blocks until the context is cancelled.
 func (s *Server) Run(ctx context.Context) error {
-	s.server = s.newHTTPServer()
+	baseCtx, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelRequests()
+	s.server = s.newHTTPServer(baseCtx)
 
 	// On every exit path: cancel in-flight jobs (so goroutines don't
 	// outlive the DB they write to), then close the inventory manager
@@ -466,6 +473,7 @@ func (s *Server) Run(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownDrainTimeout)
 		defer cancel()
 
+		cancelRequests()
 		if err := s.server.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("shutdown: %w", err)
 		}
