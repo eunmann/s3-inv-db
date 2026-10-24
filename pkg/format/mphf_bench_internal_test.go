@@ -3,6 +3,7 @@ package format
 import (
 	"fmt"
 	"math/rand/v2"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -62,9 +63,16 @@ func BenchmarkMPHFBuild(b *testing.B) {
 			prefixes := generateRealisticPrefixes(n)
 			b.ResetTimer()
 			b.ReportAllocs()
+			var peak uint64
 			for range b.N {
+				runtime.GC()
+				sampler := benchutil.StartHeapPeakSampler()
 				_ = buildMPHFForBench(b, prefixes)
+				peak = max(peak, sampler.Stop())
 			}
+			// Peak heap over Add + Build: the MPHF finalize is the part of
+			// an index build whose memory GOMEMLIMIT does not govern.
+			b.ReportMetric(float64(peak), "peak_heap_B")
 		})
 	}
 }

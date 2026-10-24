@@ -5,3 +5,7 @@
 # Build path end to end: S3 download, parse, aggregate, spill, merge,
 # index build (seconds per op, reports peak_heap_B and disk_B).
 integration internal/loader ^BenchmarkPipeline$/^shape=(realistic|deep_pyramid)$/^n=1000000$ 1x
+
+# MPHF build over 1M prefixes (Add + Build, ~1 s per op; reports
+# peak_heap_B): the finalize step's memory is not bounded by GOMEMLIMIT.
+- pkg/format ^BenchmarkMPHFBuild$/^n=1000000$ 1x
