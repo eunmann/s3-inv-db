@@ -143,7 +143,7 @@ workerLoop:
 	if !exitedDueToCancel {
 		t.Error("worker did not exit on pre-cancelled context")
 	}
-	if agg.ObjectCount() > 5 {
-		t.Errorf("processed too many objects: %d (expected <= 5)", agg.ObjectCount())
+	if n := agg.PrefixCount(); n != 0 {
+		t.Errorf("aggregated %d prefixes after cancellation, want 0", n)
 	}
 }

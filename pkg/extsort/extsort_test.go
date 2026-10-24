@@ -20,18 +20,21 @@ func TestAggregator(t *testing.T) {
 		agg.AddObject("data/2024/01/file2.txt", 200, tiers.Standard)
 		agg.AddObject("data/2024/02/file3.txt", 300, tiers.GlacierFR)
 
-		if agg.ObjectCount() != 3 {
-			t.Errorf("expected 3 objects, got %d", agg.ObjectCount())
-		}
-
-		if agg.BytesProcessed() != 600 {
-			t.Errorf("expected 600 bytes, got %d", agg.BytesProcessed())
-		}
-
-		// Drain and check prefixes
 		rows := agg.Drain()
 		if len(rows) != 5 { // root, data/, data/2024/, data/2024/01/, data/2024/02/
 			t.Errorf("expected 5 prefixes, got %d", len(rows))
+		}
+		var root *extsort.PrefixRow
+		for _, row := range rows {
+			if row.Prefix == "" {
+				root = row
+			}
+		}
+		if root == nil {
+			t.Fatal("root prefix missing from Drain")
+		}
+		if root.Count != 3 || root.TotalBytes != 600 {
+			t.Errorf("root = %d objects, %d bytes; want 3, 600", root.Count, root.TotalBytes)
 		}
 	})
 

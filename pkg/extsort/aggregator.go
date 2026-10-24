@@ -20,13 +20,11 @@ type Aggregator struct {
 	// slabs back every row and drained is Drain's result slice; both
 	// are reused once the caller is done with a Drain, so a worker
 	// allocates rows only while its largest spill is still growing.
-	slabs          [][]PrefixRow
-	drained        []*PrefixRow
-	used           int
-	maxDepth       int
-	objectCount    int64
-	bytesProcessed int64
-	tierMask       uint16
+	slabs    [][]PrefixRow
+	drained  []*PrefixRow
+	used     int
+	maxDepth int
+	tierMask uint16
 }
 
 // NewAggregator creates a new prefix aggregator with the given initial capacity.
@@ -47,8 +45,6 @@ func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 // AddObject adds an object's statistics to all its prefix ancestors.
 // The key should be the full S3 object key (e.g., "data/2024/01/file.csv").
 func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
-	a.objectCount++
-	a.bytesProcessed += int64(size)
 	a.tierMask |= uint16(1) << tierID
 
 	a.accumulate("", 0, size, tierID)
@@ -98,14 +94,6 @@ func (a *Aggregator) newRow() *PrefixRow {
 
 func (a *Aggregator) PrefixCount() int {
 	return len(a.prefixes)
-}
-
-func (a *Aggregator) ObjectCount() int64 {
-	return a.objectCount
-}
-
-func (a *Aggregator) BytesProcessed() int64 {
-	return a.bytesProcessed
 }
 
 // TierMask returns the bitmask of tier IDs this aggregator has seen
@@ -231,9 +219,6 @@ func (a *Aggregator) Drain() []*PrefixRow {
 
 	clear(a.prefixes)
 	a.used = 0
-
-	a.objectCount = 0
-	a.bytesProcessed = 0
 
 	return rows
 }
