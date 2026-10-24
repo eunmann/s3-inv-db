@@ -56,11 +56,6 @@ func Open(dir string) (*Index, error) {
 	}, nil
 }
 
-// ErrMissingCoreStats is returned by Open when the index directory
-// has no core_stats.bin (legacy per-column layout is no longer
-// supported; rebuild required).
-var ErrMissingCoreStats = errors.New("index missing core_stats.bin (rebuild required)")
-
 // Close releases all resources, joining any errors.
 func (idx *Index) Close() error {
 	return errors.Join(
