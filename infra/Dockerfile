@@ -2,7 +2,9 @@
 # Stage 1 builds a static binary; stage 2 runs it from a minimal alpine base
 # with a non-root user.
 
-FROM golang:1.26.10-alpine AS builder
+# The builder runs on the build host's platform and cross-compiles, so a
+# multi-arch build never compiles Go under emulation.
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine AS builder
 
 # make + curl for the Tailwind CLI download in `make css`.
 RUN apk add --no-cache make curl
@@ -20,8 +22,14 @@ COPY . .
 # in-sync compiled stylesheet.
 RUN make css
 
-RUN CGO_ENABLED=0 GOOS=linux \
-    go build -trimpath -ldflags="-s -w" \
+ARG TARGETOS=linux TARGETARCH
+# Version metadata for --version (internal/buildinfo). The build context
+# has no .git, so unset values report as dev/unknown.
+ARG VERSION COMMIT DATE
+RUN BUILDINFO=github.com/eunmann/s3-inv-db/internal/buildinfo && \
+    CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
+    go build -trimpath \
+        -ldflags="-s -w -X $BUILDINFO.version=$VERSION -X $BUILDINFO.commit=$COMMIT -X $BUILDINFO.date=$DATE" \
         -o /out/s3-inv-db-server ./cmd/s3-inv-db-server
 
 FROM alpine:3.21
