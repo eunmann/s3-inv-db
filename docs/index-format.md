@@ -155,8 +155,8 @@ data:
   bytes in an index with patch files) reads the exact value at
   `rank(pos)` in `core_patch.bin`; every other read is the plain load.
 
-On the 1M-object benchmark fixture the stride is 1 + 5 + 1 + 1 + 2 = 10
-bytes with 0.04% of rows patched, against 3 + 7 + 3 + 1 + 2 = 16 bytes
+On the 1M-object benchmark fixture the stride is 1 + 5 + 1 + 1 + 1 = 9
+bytes with 0.04% of rows patched, against 3 + 7 + 3 + 1 + 1 = 15 bytes
 unpatched.
 
 During the build the rows are written at a fixed 28-byte stride
