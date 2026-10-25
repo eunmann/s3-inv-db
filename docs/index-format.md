@@ -48,8 +48,9 @@ index/
 `tiers.json` and the `tier_stats/` files are absent from an index with
 no prefixes.
 
-Prefixes are stored in the dictionary-encoded layout described under
-[Prefix Strings](#prefix-strings) below.
+Each prefix is stored in `prefix_tree.bin` as its parent plus one
+dictionary segment, described under [Prefix Strings](#prefix-strings)
+below.
 
 ## File Header
 

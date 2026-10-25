@@ -20,8 +20,7 @@ const (
 const DefaultPrefixDictCacheSize = 10000
 
 // PrefixSegmentInterner assigns a sequential uint32 ID to each unique
-// path segment. The trailing empty segment after a "/" is preserved
-// so prefixes ("data/") stay distinguishable from keys ("data").
+// last segment of a prefix; prefix_tree.bin rows reference these IDs.
 type PrefixSegmentInterner struct {
 	// ids is keyed by the segment itself: exact, so no hash collision
 	// can fail a build.
