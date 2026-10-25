@@ -12,8 +12,15 @@ run **only that area's suite** — a full run takes a long time:
 
 Everything else is **not** benchmarked: dependency bumps, server,
 catalog, auto-load, jobs, security and lifecycle code, templates, docs,
-tooling — and review fixes that stay outside those two areas. CI never
-runs benchmarks.
+tooling — and review fixes that stay outside those two areas. CI runs
+only the weekly scale suite (below).
+
+Within those two areas, run the gate only when the change can
+plausibly move hot-path time, memory or allocations. A change that
+cannot (a correctness fix that adds a check, a cleanup call, error
+handling, validation, a log line, a rename) skips the gate and says so
+in its PR's **Performance** section in one line, naming why. When
+unsure, run it.
 
 Every PR that ran the gate reports the result in its description under
 **Performance**: per suite entry, before → after for time, memory and
@@ -52,20 +59,63 @@ Results land in `bench/ab/<timestamp>/` (gitignored): raw `base.txt` /
 `head.txt`, each side's full output in `base.log` / `head.log`,
 `report.txt` and `report.csv`. Entries tagged `integration` need a local
 S3 server; the script starts one in Docker unless `AWS_ENDPOINT_URL_S3`
-is already set.
+is already set. The pipeline benchmarks seed each inventory fixture
+(shape, size, chunk count) once per server and side, into a `fixture-*`
+bucket, and every later run of that side reuses it, so rounds don't
+re-upload. The script sets `S3INV_FIXTURE_TAG` to `base-<sha>` or `head`
+for each side's runs, so head always builds from its own seeder's
+inventory, even when the change under test is to the seeder. A server
+the script starts is thrown away with the run. Against your own server,
+delete the `fixture-*-head` buckets after changing the seeder.
 
 A regression is merged only with an explicit justification in the
 commit message (CLAUDE.md, Performance & Benchmarks).
 
-On a laptop, sustained back-to-back runs can trip power or thermal
-limits, and the lower clock can land on one side only. Interleaving
-doesn't cancel that: in #61, Go 1.27's runs dropped from ~3.5 to
-~3.1 GHz from round 9 onward while the interleaved 1.26 runs kept
-their clock, which showed up as a +3.4% `sec/op` "regression" with
-identical cycle and instruction counts. When `sec/op` moves with no
-matching change in `B/op` or `allocs/op`, rerun with
-`BENCH_COOLDOWN=20` (seconds slept before every run) before believing
-it.
+### Noise floor
+
+An A/A run (`make bench-ingest BASE=HEAD` on a clean tree: the same
+commit on both sides) shows what the gate reports when nothing changed.
+Calibrated in #142 at 12 pinned cores, 8 rounds:
+
+| Entry | Metric | A/A spread | Note |
+|---|---|---|---|
+| Pipeline (all shapes), PipelineSlowS3 | `sec/op` | ±1–4% | |
+| Pipeline (all shapes), PipelineSlowS3 | `peak_heap_B` | ±3–16% | sampled every 5 ms |
+| FinalMerge (all) | `sec/op` | ±1–5% | |
+| FinalMerge (all) | `peak_heap_B` | ±4–16% | where GC cycles land in the merge |
+| MPHFBuild | `sec/op` | ±1% at `10x` | ±12–15% at `1x`, hence `10x` |
+| Gate* (indexread, handlers) | `sec/op` | ±0–3% | |
+| OpenManySegments | `sec/op` | ±5–12% | one `Open` per op; its gate is `retained_heap_B` |
+| everything | `B/op`, `allocs/op`, `disk_B` | ±0–2% | |
+
+What this means for reading a report:
+
+- **Significant is not the same as real.** Across the four A/A runs, 2
+  of ~60 time and heap comparisons came out significant (`+3.1%`
+  peak heap, `+2.5%` time), both under the thresholds. A gate on #112
+  saw FinalMerge time `+1.6%` to `+3.2%` (p<0.05) on code the change
+  never runs. A sub-threshold move on an entry the change can't reach is
+  drift; on an entry it does reach, check that `B/op`/`allocs/op` or the
+  entry's own counters move with it before claiming it.
+- The thresholds sit above every A/A spread except the heap peaks,
+  which are why `BENCH_HEAP_PCT` is 15%. A heap move under ~15% on
+  FinalMerge or the pipeline is not evidence on its own; an A/B of the
+  binaries over more rounds is.
+
+**Cooldown.** `BENCH_COOLDOWN` (seconds slept before every run, default
+0) did not reduce noise on the calibration machine: ingest spreads at
+10 s and 2 s were the same, query at 3 s and 0 s too, and the cooldown
+was most of the gate's wall time (ingest 1100 s at 10 s, 592 s at 2 s;
+query 731 s at 3 s, 583 s at 0 s). Leave it at 0. It exists for
+machines that throttle: on a laptop, sustained back-to-back runs can
+trip power or thermal limits, and the lower clock can land on one side
+only, which interleaving doesn't cancel. In #61, Go 1.27's runs dropped
+from ~3.5 to ~3.1 GHz from round 9 onward while the interleaved 1.26
+runs kept their clock, a +3.4% `sec/op` "regression" with identical
+cycle and instruction counts. When `sec/op` moves with no matching
+change in `B/op` or `allocs/op` on such a machine, rerun with
+`BENCH_COOLDOWN=20` before believing it. Rerun the A/A whenever the
+machine or the suites change.
 
 A Go toolchain upgrade changes generated code everywhere, so it runs
 both gates with the old toolchain on the base side:
@@ -86,8 +136,14 @@ Ingestion (`bench/suite/ingest.txt`):
   op; also reports `peak_heap_B`, `disk_B`, `runs` (sorted runs the
   merge read, in memory or on disk) and `run_files` (runs written to
   disk).
+- `internal/loader` `BenchmarkPipelineSlowS3`: the same build against
+  S3 behind a slower link (20 ms to first byte, 8 MiB/s per GET), four
+  chunks per worker: the time a build waits on S3.
 - `pkg/format` `BenchmarkMPHFBuild` at 1M prefixes: the MPHF finalize
   step on its own, with `peak_heap_B`.
+- `pkg/extsort` `BenchmarkFinalMerge`: 48 or 128 spilled runs merged
+  under a 256 MiB or 1 GiB `GOMEMLIMIT`, heavy and light key overlap;
+  reports `peak_heap_B`, `rounds` and `round_bytes` (fan-in sizing).
 
 Data structures / query (`bench/suite/query.txt`):
 
@@ -101,6 +157,21 @@ Data structures / query (`bench/suite/query.txt`):
 - `internal/handlers` `BenchmarkGate*`: one browse or compare API
   request over a prefix with 200k children, sorted by name, size or
   cost (cost prices every child's tier mix).
+
+Scale (`bench/suite/scale.txt`, `make bench-scale BASE=<ref>`,
+`SCALE_ROUNDS=4` by default, `S3INV_LONG_BENCH=1` set for you):
+
+- `internal/loader` `BenchmarkPipeline` at 10M objects (realistic and
+  realistic_sorted).
+- `pkg/format` `BenchmarkMPHFBuild` at 5M prefixes.
+- `pkg/indexread` `BenchmarkBrowse_Matrix` warm, over a 10M-object index.
+
+It is too slow for every PR. Run it on demand for a decision the 1M
+fixtures can't settle: spills and merge rounds, peak heap, index size
+or query cost at scale. CI runs it weekly
+([`bench-scale.yml`](../.github/workflows/bench-scale.yml)), comparing
+main with main of a week earlier on one runner, and keeps the reports
+as an artifact. A regression fails that run but blocks no merge.
 
 When a change touches a hot path no entry covers, add a sizeable
 benchmark for it **in its own commit first**, add it to the matching

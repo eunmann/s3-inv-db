@@ -6,9 +6,10 @@
 # index build (seconds per op, reports peak_heap_B and disk_B).
 integration internal/loader ^BenchmarkPipeline$/^shape=(realistic|deep_pyramid|realistic_sorted)$/^n=1000000$ 1x
 
-# MPHF build over 1M prefixes (Add + Build, ~1 s per op; reports
+# MPHF build over 1M prefixes (Add + Build, ~60 ms per op; reports
 # peak_heap_B): the finalize step's memory is not bounded by GOMEMLIMIT.
-- pkg/format ^BenchmarkMPHFBuild$/^n=1000000$ 1x
+# Ten ops per sample: at 1x one op's scheduling noise spread runs ±13%.
+- pkg/format ^BenchmarkMPHFBuild$/^n=1000000$ 10x
 
 # Final merge of many spilled runs under a GOMEMLIMIT (reports
 # peak_heap_B, rounds, round_bytes): open-run cost and fan-in sizing.

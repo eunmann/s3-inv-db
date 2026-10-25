@@ -2,7 +2,8 @@
 
 // Package s3test provides shared helpers for integration tests that hit
 // the local S3 server from docker compose's test profile. Every helper
-// creates resources scoped to t and registers cleanup on t.Cleanup.
+// creates resources scoped to t and registers cleanup on t.Cleanup,
+// except FixtureBucket, whose bucket outlives the test on purpose.
 package s3test
 
 import (
@@ -102,6 +103,48 @@ func Bucket(tb testing.TB, c *s3.Client) string {
 
 	return name
 }
+
+// FixtureTagEnv names the env var scripts/bench-ab.sh sets to the side
+// (and, for base, the commit) a benchmark runs as. FixtureBucket appends
+// it to the bucket name, so the two sides of a gate never share a
+// fixture: each side's inventory comes from its own seeder.
+const FixtureTagEnv = "S3INV_FIXTURE_TAG"
+
+// FixtureBucket returns the bucket a benchmark keeps a seeded fixture
+// in, named after key and FixtureTagEnv. Unlike Bucket it is created
+// only when missing and never emptied, so later runs against the same
+// server reuse what an earlier run uploaded instead of seeding it again.
+// The A/B gate starts a fresh server per run unless AWS_ENDPOINT_URL_S3
+// is set, so fixtures there live for one gate.
+func FixtureBucket(tb testing.TB, c *s3.Client, key string) string {
+	tb.Helper()
+	localEndpoint(tb)
+	name := fixtureBucketName(key, os.Getenv(FixtureTagEnv))
+	if len(name) > maxBucketNameLen {
+		tb.Fatalf("fixture bucket name %q is longer than %d", name, maxBucketNameLen)
+	}
+	if _, err := c.HeadBucket(context.Background(), &s3.HeadBucketInput{Bucket: aws.String(name)}); err == nil {
+		return name
+	}
+	if _, err := c.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: aws.String(name)}); err != nil {
+		tb.Fatalf("CreateBucket %s: %v", name, err)
+	}
+
+	return name
+}
+
+// fixtureBucketName sanitises key, suffixed with tag when set, into a
+// "fixture-" bucket name.
+func fixtureBucketName(key, tag string) string {
+	if tag != "" {
+		key += "-" + tag
+	}
+
+	return "fixture-" + strings.Trim(bucketSanitizer.ReplaceAllString(strings.ToLower(key), "-"), "-")
+}
+
+// maxBucketNameLen is S3's limit on a bucket name.
+const maxBucketNameLen = 63
 
 func empty(tb testing.TB, c *s3.Client, bucket string) {
 	tb.Helper()

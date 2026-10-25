@@ -19,6 +19,8 @@
 # Suite lines (bench/suite/*.txt): `<tags> <package> <bench regex> <benchtime>`,
 # tags `-` for none. Entries tagged `integration` need a local S3 server;
 # when AWS_ENDPOINT_URL_S3 is unset the script starts one in Docker.
+# Each side runs with S3INV_FIXTURE_TAG set (head, or base-<sha>), so
+# seeded S3 fixtures are never shared between the sides.
 # BASE_GOTOOLCHAIN / HEAD_GOTOOLCHAIN (e.g. go1.26.10) build that side
 # with a given Go toolchain, to gate a toolchain upgrade; by default both
 # sides use the toolchain `go` resolves for their go.mod.
@@ -121,14 +123,18 @@ done
 # and the gate would pass without measuring it.
 run_side() {
 	local side=$1 round=$2 src=$root e tags pkg re bt status run=$out/run.log errlog=$out/run.stderr
-	[[ $side == base ]] && src=$work/base
+	local tag=head
+	if [[ $side == base ]]; then
+		src=$work/base
+		tag=base-${base_sha:0:12}
+	fi
 	for e in "${entries[@]}"; do
 		read -r tags pkg re bt <<<"$e"
 		status=0
 		((cooldown > 0)) && sleep "$cooldown"
 		# Results go to stdout; logs go to stderr, kept apart so a log
 		# line written mid-benchmark cannot split a result line.
-		(cd "$src/$pkg" && "$root/$out/bin/$side-$(tr '/.' '__' <<<"$pkg")-$tags.test" \
+		(cd "$src/$pkg" && S3INV_FIXTURE_TAG=$tag "$root/$out/bin/$side-$(tr '/.' '__' <<<"$pkg")-$tags.test" \
 			-test.run '^$' -test.bench "$re" -test.benchtime "$bt" -test.count 1 -test.benchmem) \
 			>"$run" 2>"$errlog" || status=$?
 		cat "$run" "$errlog" >>"$out/$side.log"

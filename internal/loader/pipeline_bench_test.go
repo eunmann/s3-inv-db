@@ -3,6 +3,8 @@
 package loader_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -11,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/internal/s3test"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
@@ -97,6 +101,57 @@ func BenchmarkPipelineSlowS3(b *testing.B) {
 	})
 }
 
+// fixtureInfoKey marks a seeded fixture complete; it holds the
+// seeder's InventoryInfo.
+const fixtureInfoKey = "fixture.json"
+
+// seededInventory returns the fixture inventory for preset, size and
+// chunk count, seeding it into the local S3 server only once per server
+// and A/B side: every later run of that side reads the same upload, and
+// each side builds from its own seeder's output. Seeding goes straight
+// to the local server, so a slow client's link only slows the build's
+// reads.
+func seededInventory(b *testing.B, preset string, numObjects, chunks int) seeder.InventoryInfo {
+	b.Helper()
+	raw := s3test.RawClient(b)
+	bucket := s3test.FixtureBucket(b, raw, fmt.Sprintf("%s-%d-%d", preset, numObjects, chunks))
+	if out, err := raw.GetObject(b.Context(), &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(fixtureInfoKey)}); err == nil {
+		var info seeder.InventoryInfo
+		decodeErr := json.NewDecoder(out.Body).Decode(&info)
+		_ = out.Body.Close()
+		if decodeErr == nil {
+			return info
+		}
+	}
+	info, err := seeder.UploadMultiChunkInventory(
+		b.Context(), raw,
+		seeder.Config{
+			Target:     seeder.TargetS3,
+			Objects:    numObjects,
+			Preset:     strings.TrimSuffix(preset, "_sorted"),
+			Seed:       int64(numObjects ^ chunks),
+			Logger:     zerolog.Nop(),
+			SortedKeys: strings.HasSuffix(preset, "_sorted"),
+		},
+		seeder.S3Config{Bucket: bucket, Prefix: "bench-inv/", SrcBucket: "bench-src"},
+		1, int64(numObjects), time.Now().UTC().Truncate(time.Minute), chunks,
+	)
+	if err != nil {
+		b.Fatalf("UploadMultiChunkInventory: %v", err)
+	}
+	marker, err := json.Marshal(info)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := raw.PutObject(b.Context(), &s3.PutObjectInput{
+		Bucket: aws.String(bucket), Key: aws.String(fixtureInfoKey), Body: bytes.NewReader(marker),
+	}); err != nil {
+		b.Fatalf("put %s: %v", fixtureInfoKey, err)
+	}
+
+	return info
+}
+
 // pipelineBench is one pipeline benchmark's setup. A zero memLimit
 // leaves GOMEMLIMIT unchanged, zero chunks takes chunkCountFor, and a
 // nil client is the local S3 server's.
@@ -124,35 +179,11 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 	if fc == nil {
 		fc = s3test.FetchClient(b)
 	}
-	// Seeding goes straight to the local server: only the build's reads
-	// cross the slow link.
-	bucket := s3test.Bucket(b, s3test.RawClient(b))
-
-	srcBucket := "bench-src"
-	prefix := "bench-inv/"
-	stamp := time.Now().UTC().Truncate(time.Minute)
-
 	chunks := pb.chunks
 	if chunks == 0 {
 		chunks = chunkCountFor(numObjects)
 	}
-	sorted := strings.HasSuffix(preset, "_sorted")
-	info, err := seeder.UploadMultiChunkInventory(
-		b.Context(), s3test.RawClient(b),
-		seeder.Config{
-			Target:     seeder.TargetS3,
-			Objects:    numObjects,
-			Preset:     strings.TrimSuffix(preset, "_sorted"),
-			Seed:       int64(numObjects ^ chunks),
-			Logger:     zerolog.Nop(),
-			SortedKeys: sorted,
-		},
-		seeder.S3Config{Bucket: bucket, Prefix: prefix, SrcBucket: srcBucket},
-		1, int64(numObjects), stamp, chunks,
-	)
-	if err != nil {
-		b.Fatalf("UploadMultiChunkInventory: %v", err)
-	}
+	info := seededInventory(b, preset, numObjects, chunks)
 
 	var lastDiskBytes int64
 	var lastPeakHeap uint64
