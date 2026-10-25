@@ -32,3 +32,29 @@ func TestChildSegment_MatchesTrimmedPrefix(t *testing.T) {
 		t.Errorf("ChildSegment allocates %.0f times per call, want 0", got)
 	}
 }
+
+func TestHasChildren_ParentsAndLeaves(t *testing.T) {
+	setup := setupIndexFromKeys(t, []string{"a/b/c.txt", "a/d.txt", "e/f.txt"})
+	idx, err := indexread.Open(setup.IndexDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	want := map[string]bool{"": true, "a/": true, "a/b/": false, "e/": false}
+	if got := idx.Count(); got != uint64(len(want)) {
+		t.Fatalf("Count() = %d, want %d", got, len(want))
+	}
+	for prefix, w := range want {
+		pos, ok := idx.Lookup(prefix)
+		if !ok {
+			t.Fatalf("Lookup(%q) not found", prefix)
+		}
+		if got := idx.HasChildren(pos); got != w {
+			t.Errorf("HasChildren(%q) = %v, want %v", prefix, got, w)
+		}
+	}
+	if idx.HasChildren(idx.Count()) {
+		t.Error("HasChildren(Count()) = true, want false")
+	}
+}
