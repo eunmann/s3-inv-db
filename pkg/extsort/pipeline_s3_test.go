@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -410,5 +411,55 @@ func TestPipelineRun_ScratchStaysBesideTheIndex(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Errorf("output parent holds %v, want only the index", names)
+	}
+}
+
+// TestPipelineRun_ResidualsInMemoryMatchSpilled: workers' last states
+// merged from memory build exactly the index they build when heap
+// pressure sends them to run files instead.
+func TestPipelineRun_ResidualsInMemoryMatchSpilled(t *testing.T) {
+	s := seedManifest(t)
+	build := func(memoryLimit int64) (*extsort.Result, string) {
+		t.Helper()
+		outDir := filepath.Join(t.TempDir(), "index")
+		if memoryLimit > 0 {
+			prev := debug.SetMemoryLimit(memoryLimit)
+			defer debug.SetMemoryLimit(prev)
+		}
+		res, err := extsort.NewPipeline(extsort.DefaultConfig(), s.client).Run(t.Context(), s.manifest, outDir)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		return res, outDir
+	}
+	inMemory, memDir := build(0)
+	if inMemory.MemoryRuns == 0 || inMemory.RunFilesCreated != 0 {
+		t.Fatalf("without pressure: %d memory runs, %d run files; want the last states in memory", inMemory.MemoryRuns, inMemory.RunFilesCreated)
+	}
+	spilled, fileDir := build(1) // every heap reading is pressure
+	if spilled.MemoryRuns != 0 || spilled.RunFilesCreated == 0 {
+		t.Fatalf("under pressure: %d memory runs, %d run files; want run files", spilled.MemoryRuns, spilled.RunFilesCreated)
+	}
+
+	a, err := indexread.Open(memDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := indexread.Open(fileDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if a.Count() != b.Count() || a.Count() == 0 {
+		t.Fatalf("prefix counts %d and %d", a.Count(), b.Count())
+	}
+	for pos := range a.Count() {
+		pa, errA := a.PrefixString(pos)
+		pb, errB := b.PrefixString(pos)
+		if errA != nil || errB != nil || pa != pb || a.Stats(pos) != b.Stats(pos) || !indexread.TiersEqual(a.TierBreakdown(pos), b.TierBreakdown(pos)) {
+			t.Fatalf("position %d: %q %+v vs %q %+v (%v, %v)", pos, pa, a.Stats(pos), pb, b.Stats(pos), errA, errB)
+		}
 	}
 }

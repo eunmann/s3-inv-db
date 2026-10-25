@@ -58,6 +58,7 @@ func TestBuildTracker_SidecarLifecycle(t *testing.T) {
 		PrefixCount:      400,
 		MaxDepth:         5,
 		RunFilesCreated:  1,
+		MemoryRuns:       2,
 		Duration:         60 * time.Millisecond,
 	}, nil)
 
@@ -79,6 +80,9 @@ func TestBuildTracker_SidecarLifecycle(t *testing.T) {
 	}
 	if s.RunFilesCreated != 1 {
 		t.Errorf("RunFilesCreated = %d, want 1", s.RunFilesCreated)
+	}
+	if s.MemoryRuns != 2 {
+		t.Errorf("MemoryRuns = %d, want 2", s.MemoryRuns)
 	}
 	if s.SpillsWritten != 1 {
 		t.Errorf("SpillsWritten = %d, want 1", s.SpillsWritten)

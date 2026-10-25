@@ -64,12 +64,22 @@ The build aggregator spills when **any** of three thresholds fires:
 3. A mid-chunk check every 50K rows — so a single very large chunk
    can't grow past the cap before its first spill opportunity.
 
-After all inventory files are processed, a k-way merge combines run
-files (zstd-compressed) into the final sorted stream, which the index
-builder consumes directly. The final merge reads up to 64 runs at once.
-Only past that do disk rounds run, merging just the smallest runs needed
-in groups of up to 16, and each run is deleted as soon as it has been
-merged. The merge decodes a few 4096-row batches ahead of the index
+When a chunk worker runs out of input, its last aggregator state is
+sorted and kept in memory for the merge instead of being spilled,
+unless the heap is under pressure (rule 2), in which case it goes to a
+run file like any other spill. These states, together up to the
+aggregator cap, stay live until the merge has read their last rows,
+near the end of the index stream (each is freed before the index is
+finalized); size `GOMEMLIMIT` with that share still held while the
+index streams.
+
+After all inventory files are processed, a k-way merge combines the
+run files (zstd-compressed) and the in-memory states into the final
+sorted stream, which the index builder consumes directly. The final
+merge reads up to 64 run files at once, plus every in-memory state.
+Only past 64 files do disk rounds run, merging just the smallest files
+needed in groups of up to 16, and each run file is deleted as soon as
+it has been merged. The merge decodes a few 4096-row batches ahead of the index
 build on its own goroutine. Run-file buffers, the merge heap and the
 index-build streaming arrays each take bounded space outside the
 aggregator cap.
