@@ -4,6 +4,7 @@ package indexread
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
 )
@@ -330,6 +331,15 @@ func (idx *Index) AppendTierBreakdown(dst []TierBreakdown, pos uint64) []TierBre
 	}
 
 	return idx.tierStats.AppendBreakdown(dst, pos)
+}
+
+// TiersEqual reports whether two tier breakdowns hold the same tiers with
+// the same counts and bytes. Breakdowns come in tier-ID order with zero
+// tiers omitted, so a positional comparison is exact.
+func TiersEqual(x, y []TierBreakdown) bool {
+	return slices.EqualFunc(x, y, func(p, q TierBreakdown) bool {
+		return p.TierID == q.TierID && p.ObjectCount == q.ObjectCount && p.Bytes == q.Bytes
+	})
 }
 
 // TierBreakdownMap returns the per-tier statistics as a map keyed by tier name.

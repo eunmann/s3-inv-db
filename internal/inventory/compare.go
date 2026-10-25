@@ -382,19 +382,11 @@ func classifyRow(a, b *indexread.Index, r *compareRow, tiers *tierScratch) Compa
 	}
 	tiers.a = a.AppendTierBreakdown(tiers.a[:0], r.posA)
 	tiers.b = b.AppendTierBreakdown(tiers.b[:0], r.posB)
-	if !tiersEqual(tiers.a, tiers.b) {
+	if !indexread.TiersEqual(tiers.a, tiers.b) {
 		return CompareChanged
 	}
 
 	return CompareUnchanged
-}
-
-// tiersEqual compares two non-zero tier breakdowns; both come in tier-ID
-// order, so a positional comparison is exact.
-func tiersEqual(x, y []indexread.TierBreakdown) bool {
-	return slices.EqualFunc(x, y, func(p, q indexread.TierBreakdown) bool {
-		return p.TierID == q.TierID && p.ObjectCount == q.ObjectCount && p.Bytes == q.Bytes
-	})
 }
 
 func rowCost(idx *indexread.Index, pos uint64, present bool, cost CompareCostFunc) uint64 {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/eunmann/s3-inv-db/internal/appconfig"
@@ -166,7 +165,7 @@ func diffLevels(from, to level) []compareRow {
 			} else {
 				tiersA = from.idx.AppendTierBreakdown(tiersA[:0], from.pos[i])
 				tiersB = to.idx.AppendTierBreakdown(tiersB[:0], to.pos[j])
-				if !slices.EqualFunc(tiersA, tiersB, sameTier) {
+				if !indexread.TiersEqual(tiersA, tiersB) {
 					row.Status = "changed"
 				}
 			}
@@ -181,10 +180,6 @@ func diffLevels(from, to level) []compareRow {
 	}
 
 	return rows
-}
-
-func sameTier(a, b indexread.TierBreakdown) bool {
-	return a.TierID == b.TierID && a.ObjectCount == b.ObjectCount && a.Bytes == b.Bytes
 }
 
 // safeDelta returns to - from as int64, clamping to int64 bounds to avoid
