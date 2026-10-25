@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
 
@@ -143,29 +144,33 @@ type CompareNumeric struct {
 // CompareSelf is the prefix-level comparison: how the totals moved between runs
 // at this exact prefix. NotFoundInA/NotFoundInB report whether the
 // prefix exists in either side — when both are false the page renders
-// the empty state.
+// the empty state. CostBefore/CostAfter are the monthly storage costs in
+// microdollars (zero without a cost function or tier data).
 type CompareSelf struct {
-	TierBeforeMap map[string]indexread.TierBreakdown
-	TierAfterMap  map[string]indexread.TierBreakdown
-	Prefix        string
-	Objects       CompareNumeric
-	Bytes         CompareNumeric
-	NotFoundInA   bool
-	NotFoundInB   bool
-	HasTierDataA  bool
-	HasTierDataB  bool
+	Prefix       string
+	Objects      CompareNumeric
+	Bytes        CompareNumeric
+	CostBefore   uint64
+	CostAfter    uint64
+	NotFoundInA  bool
+	NotFoundInB  bool
+	HasTierDataA bool
+	HasTierDataB bool
 }
 
-// CompareChild is one immediate-child segment comparison.
+// CompareChild is one immediate-child segment comparison. CostBefore and
+// CostAfter are its monthly storage costs in microdollars; HasCost is set
+// when either side has a tier breakdown to price.
 type CompareChild struct {
-	TierBefore  map[string]indexread.TierBreakdown
-	TierAfter   map[string]indexread.TierBreakdown
 	Segment     string
 	Prefix      string
 	Objects     CompareNumeric
 	Bytes       CompareNumeric
+	CostBefore  uint64
+	CostAfter   uint64
 	Status      CompareStatus
 	HasChildren bool
+	HasCost     bool
 }
 
 // CompareQuery selects the filter, order and page of one compare level.
@@ -178,7 +183,8 @@ type CompareQuery struct {
 }
 
 // CompareCostFunc returns the monthly storage cost of pos in idx, in
-// microdollars. Used only to sort by cost.
+// microdollars. CompareLevel prices every child with it when sorting by
+// cost, and otherwise only the prefix itself and the visible rows.
 type CompareCostFunc func(idx *indexread.Index, pos uint64) uint64
 
 // CompareStatusCounts counts every child of the level by status, before
@@ -198,53 +204,46 @@ type CompareLevelData struct {
 	Total int
 }
 
-// compareRow is one child as numbers only; strings and tier maps are
-// built for the visible page alone.
+// compareRow is one child as positions, its status and its sort key;
+// stats, strings and costs are re-read for the visible page alone.
 type compareRow struct {
 	posA, posB uint64
-	objects    CompareNumeric
-	bytes      CompareNumeric
-	costDelta  int64
-	inA, inB   bool
-	status     CompareStatus
+	// key orders rows by the sort column, ascending; see sortKey.
+	key      uint64
+	inA, inB bool
+	status   CompareStatus
 }
 
 // CompareLevel compares two indexes at one prefix and returns the
 // self-delta plus the requested page of children present in either side.
-// Children are merged, classified, filtered and sorted from numbers and
-// cached segment names, so the cost of a page view does not include
-// building a string or tier map per child. Cost is used only when
-// sorting by cost.
+// Both child lists are walked in place and merged into one slim row per
+// child, classified, filtered and keyed in the same pass, so the cost of
+// a page view does not include building a string, tier map or stats
+// copy per child. Cost prices every child only when sorting by cost.
 func CompareLevel(a, b *indexread.Index, prefix string, q CompareQuery, cost CompareCostFunc) CompareLevelData {
 	out := CompareLevelData{Self: CompareSelf{Prefix: prefix}}
 	posA, okA := a.Lookup(prefix)
 	posB, okB := b.Lookup(prefix)
-	out.Self = compareSelf(a, b, prefix, posA, okA, posB, okB)
+	out.Self = compareSelf(a, b, prefix, posA, okA, posB, okB, cost)
 	if !okA && !okB {
 		return out
 	}
 
-	rows := mergeChildren(a, b, childPositions(a, posA, okA), childPositions(b, posB, okB))
-	var tiers tierScratch
-	for i := range rows {
-		r := &rows[i]
-		r.status = classifyRow(a, b, r, &tiers)
-		out.Counts.add(r.status)
-		if q.SortBy == SortColCost && cost != nil {
-			r.costDelta = int64(rowCost(b, r.posB, r.inB, cost)) - int64(rowCost(a, r.posA, r.inA, cost))
-		}
+	m := levelMerge{a: a, b: b, q: q, cost: cost}
+	if q.SortBy != SortColCost {
+		m.cost = nil
 	}
-	if q.HideUnchanged {
-		rows = slices.DeleteFunc(rows, func(r compareRow) bool { return r.status == CompareUnchanged })
-	}
-	sortCompareRows(a, b, rows, q.SortBy, q.Dir)
+	rows := m.merge(childSpan(a, posA, okA), childSpan(b, posB, okB))
+	out.Counts = m.counts
+	sortCompareRows(rows, q.SortBy, q.Dir)
 
 	out.Total = len(rows)
 	out.Pagination = Paginate(len(rows), q.Page, q.PageSize)
 	if p := out.Pagination; p.FirstRow > 0 {
+		var tiers tierScratch
 		out.Children = make([]CompareChild, 0, p.LastRow-p.FirstRow+1)
 		for i := range rows[p.FirstRow-1 : p.LastRow] {
-			if c, ok := buildCompareChild(a, b, &rows[p.FirstRow-1+i]); ok {
+			if c, ok := buildCompareChild(a, b, &rows[p.FirstRow-1+i], cost, &tiers); ok {
 				out.Children = append(out.Children, c)
 			}
 		}
@@ -253,7 +252,7 @@ func CompareLevel(a, b *indexread.Index, prefix string, q CompareQuery, cost Com
 	return out
 }
 
-func compareSelf(a, b *indexread.Index, prefix string, posA uint64, okA bool, posB uint64, okB bool) CompareSelf {
+func compareSelf(a, b *indexread.Index, prefix string, posA uint64, okA bool, posB uint64, okB bool, cost CompareCostFunc) CompareSelf {
 	self := CompareSelf{Prefix: prefix, NotFoundInA: !okA, NotFoundInB: !okB}
 	if !okA && !okB {
 		return self
@@ -264,16 +263,16 @@ func compareSelf(a, b *indexread.Index, prefix string, posA uint64, okA bool, po
 		st := a.Stats(posA)
 		self.Objects.Before = st.ObjectCount
 		self.Bytes.Before = st.TotalBytes
-		if self.HasTierDataA {
-			self.TierBeforeMap = a.TierBreakdownMap(posA)
+		if self.HasTierDataA && cost != nil {
+			self.CostBefore = cost(a, posA)
 		}
 	}
 	if okB {
 		st := b.Stats(posB)
 		self.Objects.After = st.ObjectCount
 		self.Bytes.After = st.TotalBytes
-		if self.HasTierDataB {
-			self.TierAfterMap = b.TierBreakdownMap(posB)
+		if self.HasTierDataB && cost != nil {
+			self.CostAfter = cost(b, posB)
 		}
 	}
 	self.Objects.Delta = int64(self.Objects.After) - int64(self.Objects.Before)
@@ -296,55 +295,111 @@ func (c *CompareStatusCounts) add(s CompareStatus) {
 	}
 }
 
-func childPositions(idx *indexread.Index, parent uint64, ok bool) []uint64 {
+// childSpan is the depth-index span of parent's children; empty when the
+// prefix is missing on that side.
+func childSpan(idx *indexread.Index, parent uint64, ok bool) format.Span {
 	if !ok {
-		return nil
+		return format.Span{}
 	}
-	positions, err := idx.DescendantsAtDepth(parent, 1)
+	span, err := idx.DescendantSpan(parent, 1)
 	if err != nil {
-		return nil
+		return format.Span{}
 	}
 
-	return positions
+	return span
 }
 
-// mergeChildren joins two child lists, each in index (preorder) order.
-// Preorder is byte order of the full prefix, i.e. of each name with its
-// trailing slash: "2024-x/" < "2024/" because '-' < '/'. Comparing the
-// bare names would split such siblings into an "added" and a "removed".
-func mergeChildren(a, b *indexread.Index, pa, pb []uint64) []compareRow {
-	out := make([]compareRow, 0, max(len(pa), len(pb)))
-	i, j := 0, 0
-	for i < len(pa) || j < len(pb) {
+// levelMerge holds what one merge pass needs besides the two spans.
+type levelMerge struct {
+	a, b   *indexread.Index
+	q      CompareQuery
+	cost   CompareCostFunc // nil unless sorting by cost
+	tiers  tierScratch
+	counts CompareStatusCounts
+}
+
+// merge joins two child spans, each in index (preorder) order, into one
+// row per child name. Preorder is byte order of the full prefix, i.e. of
+// each name with its trailing slash: "2024-x/" < "2024/" because '-' <
+// '/'. Comparing the bare names would split such siblings into an
+// "added" and a "removed". Rows come out in that order; every row is
+// counted, and unchanged rows are dropped when the query hides them.
+func (m *levelMerge) merge(sa, sb format.Span) []compareRow {
+	a, b := m.a, m.b
+	na, nb := sa.Len(), sb.Len()
+	out := make([]compareRow, 0, max(na, nb))
+	var i, j uint64
+	for i < na || j < nb {
+		var pa, pb uint64
+		if i < na {
+			pa = a.SpanPosition(sa, i)
+		}
+		if j < nb {
+			pb = b.SpanPosition(sb, j)
+		}
 		var c int
 		switch {
-		case i == len(pa):
+		case i == na:
 			c = 1
-		case j == len(pb):
+		case j == nb:
 			c = -1
 		default:
-			c = compareSlashTerminated(a.ChildSegment(pa[i]), b.ChildSegment(pb[j]))
+			c = compareSlashTerminated(a.ChildSegment(pa), b.ChildSegment(pb))
 		}
 		var r compareRow
+		var stA, stB indexread.Stats
 		if c <= 0 {
-			r.posA, r.inA = pa[i], true
-			st := a.Stats(pa[i])
-			r.objects.Before, r.bytes.Before = st.ObjectCount, st.TotalBytes
+			r.posA, r.inA = pa, true
+			stA = a.Stats(pa)
 			i++
 		}
 		if c >= 0 {
-			r.posB, r.inB = pb[j], true
-			st := b.Stats(pb[j])
-			r.objects.After, r.bytes.After = st.ObjectCount, st.TotalBytes
+			r.posB, r.inB = pb, true
+			stB = b.Stats(pb)
 			j++
 		}
-		r.objects.Delta = int64(r.objects.After) - int64(r.objects.Before)
-		r.bytes.Delta = int64(r.bytes.After) - int64(r.bytes.Before)
+		objDelta := int64(stB.ObjectCount) - int64(stA.ObjectCount)
+		byteDelta := int64(stB.TotalBytes) - int64(stA.TotalBytes)
+		r.status = classifyRow(a, b, &r, objDelta, byteDelta, &m.tiers)
+		m.counts.add(r.status)
+		if m.q.HideUnchanged && r.status == CompareUnchanged {
+			continue
+		}
+		r.key = m.sortKey(&r, objDelta, byteDelta)
 		out = append(out, r)
 	}
 
 	return out
 }
+
+// sortKey maps the row's value in the sort column to a uint64 whose
+// ascending order is the column's ascending order: signed deltas are
+// offset by 2^63, the default column is the absolute byte delta.
+func (m *levelMerge) sortKey(r *compareRow, objDelta, byteDelta int64) uint64 {
+	switch m.q.SortBy {
+	case SortColCompareStatus:
+		return uint64(StatusOrder(r.status))
+	case SortColObjects:
+		return signedKey(objDelta)
+	case SortColSize:
+		return signedKey(byteDelta)
+	case SortColCost:
+		if m.cost == nil {
+			return signedKey(0)
+		}
+		after := rowCost(m.b, r.posB, r.inB, m.cost)
+		before := rowCost(m.a, r.posA, r.inA, m.cost)
+
+		return signedKey(int64(after) - int64(before))
+	case SortColSegment:
+		return 0
+	default:
+		return absDelta(byteDelta)
+	}
+}
+
+// signedKey maps int64 order onto uint64 order.
+func signedKey(v int64) uint64 { return uint64(v) ^ (1 << 63) }
 
 // compareSlashTerminated compares x+"/" with y+"/" without building them.
 func compareSlashTerminated(x, y string) int {
@@ -362,8 +417,8 @@ func compareSlashTerminated(x, y string) int {
 	}
 }
 
-// tierScratch holds the two tier breakdowns classifyRow compares,
-// reused across a level's rows so classifying allocates nothing per row.
+// tierScratch holds two reusable tier breakdowns, so classifying and
+// pricing rows allocates nothing per row.
 type tierScratch struct {
 	a, b []indexread.TierBreakdown
 }
@@ -371,13 +426,13 @@ type tierScratch struct {
 // classifyRow: present on one side only is Added/Removed; present on
 // both is Changed if objects, bytes or the tier mix moved. The tier mix
 // is read only when objects and bytes are equal.
-func classifyRow(a, b *indexread.Index, r *compareRow, tiers *tierScratch) CompareStatus {
+func classifyRow(a, b *indexread.Index, r *compareRow, objDelta, byteDelta int64, tiers *tierScratch) CompareStatus {
 	switch {
 	case !r.inA:
 		return CompareAdded
 	case !r.inB:
 		return CompareRemoved
-	case r.objects.Delta != 0, r.bytes.Delta != 0:
+	case objDelta != 0, byteDelta != 0:
 		return CompareChanged
 	}
 	tiers.a = a.AppendTierBreakdown(tiers.a[:0], r.posA)
@@ -397,50 +452,31 @@ func rowCost(idx *indexread.Index, pos uint64, present bool, cost CompareCostFun
 	return cost(idx, pos)
 }
 
-func rowName(a, b *indexread.Index, r *compareRow) string {
-	if r.inA {
-		return a.ChildSegment(r.posA)
-	}
-
-	return b.ChildSegment(r.posB)
-}
-
 // sortCompareRows orders rows for display. With no explicit column the
 // biggest absolute byte movers come first. Names, and ties in every
 // column, sort in S3 key order, ascending ("2024-01" before "2024").
-func sortCompareRows(a, b *indexread.Index, rows []compareRow, sortBy, dir string) {
+func sortCompareRows(rows []compareRow, sortBy, dir string) {
 	desc := dir == SortDirDesc
-	metric := func(r *compareRow) int64 {
-		switch sortBy {
-		case SortColCompareStatus:
-			return int64(StatusOrder(r.status))
-		case SortColObjects:
-			return r.objects.Delta
-		case SortColSize:
-			return r.bytes.Delta
-		case SortColCost:
-			return r.costDelta
-		case SortColSegment:
-			return 0
-		default:
-			desc = true
-
-			return int64(absDelta(r.bytes.Delta))
-		}
-	}
-	// rows arrive in merge order, S3 key order of the names (see
-	// mergeChildren), and the sort is stable: ties keep that order.
-	slices.SortStableFunc(rows, func(x, y compareRow) int {
-		c := cmp.Compare(metric(&x), metric(&y))
-		if sortBy == SortColSegment {
-			c = compareSlashTerminated(rowName(a, b, &x), rowName(a, b, &y))
-		}
+	switch sortBy {
+	case SortColSegment:
+		// rows arrive in S3 key order of their names (see merge), and
+		// names are distinct: ascending is that order, descending its
+		// reverse.
 		if desc {
-			c = -c
+			slices.Reverse(rows)
 		}
 
-		return c
-	})
+		return
+	case SortColCompareStatus, SortColObjects, SortColSize, SortColCost:
+	default:
+		desc = true
+	}
+	// The sort is stable, so ties keep merge order: name, ascending.
+	if desc {
+		slices.SortStableFunc(rows, func(x, y compareRow) int { return cmp.Compare(y.key, x.key) })
+	} else {
+		slices.SortStableFunc(rows, func(x, y compareRow) int { return cmp.Compare(x.key, y.key) })
+	}
 }
 
 func absDelta(v int64) uint64 {
@@ -451,9 +487,9 @@ func absDelta(v int64) uint64 {
 	return uint64(v)
 }
 
-// buildCompareChild materialises one visible row: its strings and tier
-// maps.
-func buildCompareChild(a, b *indexread.Index, r *compareRow) (CompareChild, bool) {
+// buildCompareChild materialises one visible row: its strings, stats and
+// costs.
+func buildCompareChild(a, b *indexread.Index, r *compareRow, cost CompareCostFunc, tiers *tierScratch) (CompareChild, bool) {
 	idx, pos := a, r.posA
 	if !r.inA {
 		idx, pos = b, r.posB
@@ -465,22 +501,30 @@ func buildCompareChild(a, b *indexread.Index, r *compareRow) (CompareChild, bool
 	c := CompareChild{
 		Segment: idx.ChildSegment(pos),
 		Prefix:  full,
-		Objects: r.objects,
-		Bytes:   r.bytes,
 		Status:  r.status,
 	}
 	if r.inA {
-		c.HasChildren = c.HasChildren || a.HasChildren(r.posA)
-		if a.HasTierData() {
-			c.TierBefore = a.TierBreakdownMap(r.posA)
+		st := a.Stats(r.posA)
+		c.Objects.Before, c.Bytes.Before = st.ObjectCount, st.TotalBytes
+		c.HasChildren = a.HasChildren(r.posA)
+		tiers.a = a.AppendTierBreakdown(tiers.a[:0], r.posA)
+		if len(tiers.a) > 0 && cost != nil {
+			c.HasCost = true
+			c.CostBefore = cost(a, r.posA)
 		}
 	}
 	if r.inB {
+		st := b.Stats(r.posB)
+		c.Objects.After, c.Bytes.After = st.ObjectCount, st.TotalBytes
 		c.HasChildren = c.HasChildren || b.HasChildren(r.posB)
-		if b.HasTierData() {
-			c.TierAfter = b.TierBreakdownMap(r.posB)
+		tiers.b = b.AppendTierBreakdown(tiers.b[:0], r.posB)
+		if len(tiers.b) > 0 && cost != nil {
+			c.HasCost = true
+			c.CostAfter = cost(b, r.posB)
 		}
 	}
+	c.Objects.Delta = int64(c.Objects.After) - int64(c.Objects.Before)
+	c.Bytes.Delta = int64(c.Bytes.After) - int64(c.Bytes.Before)
 
 	return c, true
 }
