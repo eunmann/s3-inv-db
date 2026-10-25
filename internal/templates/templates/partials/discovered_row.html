@@ -1,6 +1,6 @@
 {{$composite := printf "%s/%s/%s" .SourceBucket .Name .Run}}
 {{$busy := or .State.IsLoading (and .LatestJob .LatestJob.State.IsLive)}}
-{{$canRetry := and .LatestJob (or (eq (printf "%s" .LatestJob.State) "failed") (eq (printf "%s" .LatestJob.State) "aborted") (eq (printf "%s" .LatestJob.State) "cancelled"))}}
+{{$canRetry := .CanRetry}}
 {{$pct := 0}}{{$eta := ""}}
 {{if and $busy .LatestJob (gt .LatestJob.StageTotal 0)}}
     {{$pct = progressPct .LatestJob.StageDone .LatestJob.StageTotal}}
@@ -15,7 +15,7 @@
          state the rebuilt trigger drops the poll. */}}
     hx-trigger="sse:row-{{$composite}}{{if $busy}}, every 2s{{end}}"
     hx-swap="outerHTML"{{end}}>
-<tr class="{{stateBorderClass (printf "%s" .State)}}">
+<tr class="{{stateBorderClass .StateName}}">
     <td class="px-6 py-4 align-top">
         <div class="flex items-baseline gap-2 flex-wrap">
             <span class="text-sm font-medium text-gray-900 dark:text-gray-100 font-mono">
@@ -42,8 +42,8 @@
                drawer-open affordance. Errors surface inline (full text
                in title=) so users don't have to hover or click to see
                what went wrong. */ -}}
-        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass (printf "%s" .State)}}">
-            {{stateLabel (printf "%s" .State)}}
+        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass .StateName}}">
+            {{stateLabel .StateName}}
         </span>
         {{if $busy}}
         <div class="mt-1 text-xs text-gray-600 dark:text-gray-300">

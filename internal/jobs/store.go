@@ -115,10 +115,14 @@ func (s *Store) ListForInventory(ctx context.Context, invID inventory.ID) ([]Job
 	return scanJobs(rows)
 }
 
+// latestOrder orders an inventory's jobs newest first; rowid breaks
+// updated_at ties, so LatestForInventory and LatestByInventory agree.
+const latestOrder = `updated_at DESC, rowid DESC`
+
 // LatestForInventory returns the most recently updated job for an
 // inventory, or ErrStoreNotFound if none exist.
 func (s *Store) LatestForInventory(ctx context.Context, invID inventory.ID) (Job, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE inventory_id = ? ORDER BY updated_at DESC LIMIT 1`, invID)
+	row := s.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE inventory_id = ? ORDER BY `+latestOrder+` LIMIT 1`, invID)
 	j, err := scanJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, ErrStoreNotFound
@@ -128,6 +132,28 @@ func (s *Store) LatestForInventory(ctx context.Context, invID inventory.ID) (Job
 	}
 
 	return j, nil
+}
+
+// LatestByInventory returns every inventory's most recently updated job
+// in one query: what LatestForInventory returns, for all of them.
+func (s *Store) LatestByInventory(ctx context.Context) (map[inventory.ID]Job, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+` FROM (
+	    SELECT `+jobColumns+`, ROW_NUMBER() OVER (PARTITION BY inventory_id ORDER BY `+latestOrder+`) AS rn FROM jobs
+	) WHERE rn = 1`)
+	if err != nil {
+		return nil, fmt.Errorf("latest jobs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	js, err := scanJobs(rows)
+	if err != nil {
+		return nil, fmt.Errorf("latest jobs: %w", err)
+	}
+	out := make(map[inventory.ID]Job, len(js))
+	for i := range js {
+		out[js[i].InventoryID] = js[i]
+	}
+
+	return out, nil
 }
 
 // LatestSuccessfulBuildForConfig returns the newest succeeded build job
