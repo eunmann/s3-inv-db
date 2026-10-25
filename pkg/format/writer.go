@@ -259,6 +259,11 @@ func (w *BlobWriter) Close() error {
 	if err := w.offsets.Close(); err != nil {
 		return fmt.Errorf("close offsets: %w", err)
 	}
+	// The offsets file is written 8 bytes wide; keep the bytes the blob
+	// size needs, as the other offset arrays do.
+	if err := RepackArrayWidthU64(w.offsets.path, w.offsets.path, byteWidthOf(w.offset)); err != nil {
+		return fmt.Errorf("repack offsets: %w", err)
+	}
 
 	return nil
 }

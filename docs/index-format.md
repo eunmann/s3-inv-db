@@ -63,7 +63,7 @@ fields little-endian:
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | Magic | `0x53334944` ("S3ID" in ASCII) |
-| 4 | 4 | Version | Format version (currently `8`) |
+| 4 | 4 | Version | Format version (currently `9`) |
 | 8 | 8 | Count | Number of rows |
 | 16 | 4 | Width | Row stride in bytes |
 
@@ -83,7 +83,7 @@ and records it in `Width`:
 | `depth_positions.u64` | bytes for the largest position (1–8) |
 | `depth_offsets.u64` | bytes for the number of positions (1–8) |
 | `tier_stats/tier_multi.off.u64` | bytes for the number of stored tier slots (1–8) |
-| `prefix_dict.off.u64` | always 8 |
+| `prefix_dict.off.u64` | bytes for the segment blob's size (1–8) |
 
 A reader loads 8 bytes at `index × Width` and masks off the bytes
 above `Width`. So that this load stays inside the mmap at the last
@@ -380,4 +380,4 @@ from the file-header format version.
 
 ## Versioning
 
-The format version in file headers lets a reader refuse files it would mis-decode. Version 8 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 9 is the current format; readers accept only that version, and an index written by any other version is rebuilt.

@@ -525,7 +525,7 @@ type CoreStatsReader struct {
 // includes core_stats.bin.
 func OpenCoreStats(indexDir string) (*CoreStatsReader, error) {
 	path := filepath.Join(indexDir, CoreStatsFile)
-	mmap, err := OpenMmapWithHint(path, AccessHintNone)
+	mmap, err := OpenMmap(path)
 	if err != nil {
 		return nil, fmt.Errorf("open core stats mmap: %w", err)
 	}

@@ -1,6 +1,9 @@
 package format
 
 import (
+	"fmt"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -155,5 +158,74 @@ func TestPreloadedPrefixCache(t *testing.T) {
 		if got != expected {
 			t.Errorf("cache.Get(%d) = %q, want %q", i, got, expected)
 		}
+	}
+}
+
+// TestPreloadedSegmentsOutliveTheDictionary: segments are substrings of
+// one heap copy of the blob, so a name a listing kept stays valid after
+// the index closes and its files are unmapped.
+func TestPreloadedSegmentsOutliveTheDictionary(t *testing.T) {
+	dir := t.TempDir()
+	interner, err := NewPrefixSegmentInterner(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segments := []string{"alpha", "", "βeta", strings.Repeat("g", 300)}
+	for _, seg := range segments {
+		if _, err := interner.Intern(seg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := interner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dict, err := OpenPrefixDictionary(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache, err := dict.PreloadSegments()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := make([]string, len(segments))
+	for i := range segments {
+		kept[i] = cache.Get(uint32(i))
+	}
+	if err := dict.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range segments {
+		if kept[i] != want {
+			t.Errorf("segment %d after Close = %q, want %q", i, kept[i], want)
+		}
+	}
+	if got, want := cache.Bytes(), uint64(5+0+5+300); got != want {
+		t.Errorf("Bytes = %d, want %d", got, want)
+	}
+}
+
+// TestSegmentOffsetsAreNarrow: the segment offsets file takes the bytes
+// the blob's size needs, not 8.
+func TestSegmentOffsetsAreNarrow(t *testing.T) {
+	dir := t.TempDir()
+	interner, err := NewPrefixSegmentInterner(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 1000 { // 3890 blob bytes: 2-byte offsets
+		if _, err := interner.Intern(fmt.Sprintf("seg%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := interner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	offsets, err := OpenArray(filepath.Join(dir, PrefixDictOffsetsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer offsets.Close()
+	if offsets.Width() != 2 || offsets.Count() != 1001 {
+		t.Errorf("offsets width %d count %d, want 2, 1001", offsets.Width(), offsets.Count())
 	}
 }
