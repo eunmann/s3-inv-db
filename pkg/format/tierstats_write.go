@@ -38,8 +38,9 @@ const (
 	TierMultiOffsetsFile = "tier_multi.off.u64"
 	TierDenseFile        = "tier_dense.bin"
 
-	// Every prefix's full slots sit in tierScratchFile while the build
-	// streams; Close converts it to the chosen layout and removes it.
+	// Every prefix's slots sit in tierScratchFile while the build
+	// streams (its slot mask, then a uvarint count and bytes for each set
+	// slot); Close converts it to the chosen layout and removes it.
 	tierScratchFile = "tier_scratch.bin"
 )
 
@@ -54,8 +55,9 @@ const tierSlotDataOff = HeaderSize + tierSlotDescBytes
 // maxTierSlots is the most tier slots a mask can describe.
 const maxTierSlots = 16
 
-// scratchSlotBytes is one slot in the scratch file: two uint64s.
-const scratchSlotBytes = 16
+// maxScratchRowBytes bounds one scratch row: the mask and two uvarints
+// per slot.
+const maxScratchRowBytes = 2 + 2*maxTierSlots*binary.MaxVarintLen64
 
 // wordBits is the bits in one bit-vector word.
 const wordBits = 64
@@ -169,7 +171,7 @@ func NewTierStatsWriter(outDir string, present []tiers.ID) (*TierStatsWriter, er
 	}
 	w.scratch = f
 	w.w = bufio.NewWriterSize(f, writeBufSize)
-	w.rowBuf = make([]byte, w.slots*scratchSlotBytes)
+	w.rowBuf = make([]byte, 0, maxScratchRowBytes)
 
 	return w, nil
 }
@@ -224,12 +226,13 @@ func (w *TierStatsWriter) Add(counts, bytes *[tiers.NumTiers]uint64, totalCount,
 	for slot := range w.slots - 1 {
 		w.denseW = w.denseW.widened(slotCount[slot], slotBytes[slot])
 	}
-	for slot := range w.slots {
-		off := slot * scratchSlotBytes
-		binary.LittleEndian.PutUint64(w.rowBuf[off:], slotCount[slot])
-		binary.LittleEndian.PutUint64(w.rowBuf[off+8:], slotBytes[slot])
+	row := binary.LittleEndian.AppendUint16(w.rowBuf[:0], mask)
+	for set := mask; set != 0; set &= set - 1 {
+		slot := bits.TrailingZeros16(set)
+		row = binary.AppendUvarint(row, slotCount[slot])
+		row = binary.AppendUvarint(row, slotBytes[slot])
 	}
-	if _, err := w.w.Write(w.rowBuf); err != nil {
+	if _, err := w.w.Write(row); err != nil {
 		return 0, fmt.Errorf("write tier stats scratch: %w", err)
 	}
 
@@ -281,32 +284,47 @@ func (w *TierStatsWriter) Abort() error {
 	return errors.Join(err, removeIfErr(w.scratchPath))
 }
 
+// scratchRow is one prefix's slots read back from the scratch file:
+// mask holds its set slots, and the others' count and bytes are zero.
+type scratchRow struct {
+	count, bytes [maxTierSlots]uint64
+	mask         uint16
+}
+
 // scratchRows calls fn with each prefix's slots from the scratch file.
-func (w *TierStatsWriter) scratchRows(fn func(row []byte) error) error {
+func (w *TierStatsWriter) scratchRows(fn func(row *scratchRow) error) error {
 	f, err := os.Open(w.scratchPath)
 	if err != nil {
 		return fmt.Errorf("open tier stats scratch: %w", err)
 	}
 	defer f.Close()
 	r := bufio.NewReaderSize(f, writeBufSize)
-	row := make([]byte, w.slots*scratchSlotBytes)
+	var row scratchRow
+	var mask [2]byte
 	for range w.rows {
-		if _, err := io.ReadFull(r, row); err != nil {
+		for set := row.mask; set != 0; set &= set - 1 {
+			slot := bits.TrailingZeros16(set)
+			row.count[slot], row.bytes[slot] = 0, 0
+		}
+		if _, err := io.ReadFull(r, mask[:]); err != nil {
 			return fmt.Errorf("read tier stats scratch: %w", err)
 		}
-		if err := fn(row); err != nil {
+		row.mask = binary.LittleEndian.Uint16(mask[:])
+		for set := row.mask; set != 0; set &= set - 1 {
+			slot := bits.TrailingZeros16(set)
+			if row.count[slot], err = binary.ReadUvarint(r); err != nil {
+				return fmt.Errorf("read tier stats scratch: %w", err)
+			}
+			if row.bytes[slot], err = binary.ReadUvarint(r); err != nil {
+				return fmt.Errorf("read tier stats scratch: %w", err)
+			}
+		}
+		if err := fn(&row); err != nil {
 			return err
 		}
 	}
 
 	return nil
-}
-
-//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
-func scratchSlot(row []byte, slot int) (uint64, uint64) {
-	off := slot * scratchSlotBytes
-
-	return binary.LittleEndian.Uint64(row[off:]), binary.LittleEndian.Uint64(row[off+8:])
 }
 
 // slotFile writes a tier_multi.bin / tier_dense.bin: Header, slot-width
@@ -372,9 +390,9 @@ func (w *TierStatsWriter) writeDense() error {
 	if err != nil {
 		return err
 	}
-	err = w.scratchRows(func(row []byte) error {
+	err = w.scratchRows(func(row *scratchRow) error {
 		for slot := range w.slots - 1 {
-			if err := out.put(scratchSlot(row, slot)); err != nil {
+			if err := out.put(row.count[slot], row.bytes[slot]); err != nil {
 				return err
 			}
 		}
@@ -406,13 +424,8 @@ func (w *TierStatsWriter) writeMulti() error {
 		return errors.Join(err, out.abort(), offsets.abort())
 	}
 	var stored uint64
-	err = w.scratchRows(func(r []byte) error {
-		var mask uint16
-		for slot := range w.slots {
-			if c, b := scratchSlot(r, slot); c != 0 || b != 0 {
-				mask |= 1 << slot
-			}
-		}
+	err = w.scratchRows(func(r *scratchRow) error {
+		mask := r.mask
 		multi := bits.OnesCount16(mask) >= 2
 		if err := rowBits.add(multi); err != nil {
 			return err
@@ -425,7 +438,7 @@ func (w *TierStatsWriter) writeMulti() error {
 			for rest != 0 {
 				slot := bits.TrailingZeros16(rest)
 				rest &= rest - 1
-				if err := out.put(scratchSlot(r, slot)); err != nil {
+				if err := out.put(r.count[slot], r.bytes[slot]); err != nil {
 					return err
 				}
 				stored++
