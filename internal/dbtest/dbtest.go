@@ -5,17 +5,29 @@ package dbtest
 
 import (
 	"database/sql"
+	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/migrate"
 	_ "modernc.org/sqlite" // SQLite driver for the in-memory test DB.
 )
 
+// memDBSeq names each in-memory database.
+var memDBSeq atomic.Uint64
+
 // OpenMemDB returns an in-memory SQLite handle with the project's
 // migrations applied, registered for cleanup on test end.
+//
+// Each call gets its own named database. A single shared
+// "file::memory:" lives as long as any connection to it, so a test's
+// background job still persisting after its cleanup kept it alive and
+// wrote rows the next test then read (#75). The pool's connections
+// still share one database through cache=shared.
 func OpenMemDB(tb testing.TB) *sql.DB {
 	tb.Helper()
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
+	dsn := fmt.Sprintf("file:memdb%d?mode=memory&cache=shared&_pragma=foreign_keys(1)", memDBSeq.Add(1))
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		tb.Fatalf("sql.Open: %v", err)
 	}
