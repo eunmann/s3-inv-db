@@ -391,7 +391,7 @@ func measureIndexDir(dir string) (uint64, error) {
 // It blocks until any in-flight WithIndex reader on this inventory has
 // returned.
 func (c *Catalog) Unload(ctx context.Context, id ID) error {
-	return c.unloadInternal(ctx, id, true /* userInitiated */)
+	return c.unloadInternal(ctx, id, true /* userInitiated */, false /* keepPinned */)
 }
 
 // EvictForBudget closes an inventory index released by the auto-loader's
@@ -399,10 +399,21 @@ func (c *Catalog) Unload(ctx context.Context, id ID) error {
 // UserUnloadedAt — the auto-loader is free to reload this run later if
 // a newer (or the same) run is discovered and there's budget.
 func (c *Catalog) EvictForBudget(ctx context.Context, id ID) error {
-	return c.unloadInternal(ctx, id, false /* userInitiated */)
+	return c.unloadInternal(ctx, id, false /* userInitiated */, false /* keepPinned */)
 }
 
-func (c *Catalog) unloadInternal(ctx context.Context, id ID, userInitiated bool) error {
+// ErrPinned is returned by RetireUnlessPinned for a pinned run.
+var ErrPinned = errors.New("inventory is pinned")
+
+// RetireUnlessPinned is EvictForBudget for a run leaving because of
+// retention: it refuses (ErrPinned) a run the user pinned, checked in
+// the same critical section as the unload, so a pin that lands just
+// before it is never lost.
+func (c *Catalog) RetireUnlessPinned(ctx context.Context, id ID) error {
+	return c.unloadInternal(ctx, id, false /* userInitiated */, true /* keepPinned */)
+}
+
+func (c *Catalog) unloadInternal(ctx context.Context, id ID, userInitiated, keepPinned bool) error {
 	c.mu.Lock()
 	inv, exists := c.inventories[id]
 	if !exists {
@@ -414,6 +425,11 @@ func (c *Catalog) unloadInternal(ctx context.Context, id ID, userInitiated bool)
 		c.mu.Unlock()
 
 		return fmt.Errorf("%w: cannot unload from state %s", ErrInvalidState, inv.info.State)
+	}
+	if keepPinned && inv.info.Pinned {
+		c.mu.Unlock()
+
+		return ErrPinned
 	}
 	inv.info.State = StateNotLoaded
 	inv.info.NodeCount = 0

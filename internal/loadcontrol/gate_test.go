@@ -343,3 +343,37 @@ func TestGate_Load_ConcurrentLoadEvictsRetiringRunFirst(t *testing.T) {
 		t.Errorf("removed caches = %v, want only %s", removed, x1)
 	}
 }
+
+// RetireUnlessPinned checks the pin in the same critical section as the
+// unload: a pinned run is refused and stays loaded; an unpinned one goes.
+func TestCatalog_RetireUnlessPinned(t *testing.T) {
+	ctx := t.Context()
+	mgr := inventory.NewCatalog(nil)
+	defer mgr.Close()
+	tracker := budget.New(1<<30, 0, mgr.LoadedBytes)
+	gate := loadcontrol.New(mgr, tracker, budget.NewPlanner(tracker, nil), nil)
+	dir := buildIndexDir(t)
+	const id inventory.ID = "src/inv/2026-01-01T00-00Z"
+	if err := mgr.Register(ctx, id, "n", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.Load(ctx, id, func(context.Context, inventory.Info) (string, error) { return dir, nil },
+		inventory.GatedLoadOptions{EstimateBytes: 1, Pin: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RetireUnlessPinned(ctx, id); !errors.Is(err, inventory.ErrPinned) {
+		t.Fatalf("RetireUnlessPinned(pinned) = %v, want ErrPinned", err)
+	}
+	if info, _ := mgr.Get(id); info.State != inventory.StateLoaded {
+		t.Fatalf("pinned run state = %s, want loaded", info.State)
+	}
+	if err := mgr.SetPinned(ctx, id, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RetireUnlessPinned(ctx, id); err != nil {
+		t.Fatalf("RetireUnlessPinned(unpinned) = %v", err)
+	}
+	if info, _ := mgr.Get(id); info.State != inventory.StateNotLoaded {
+		t.Errorf("unpinned run state = %s, want not_loaded", info.State)
+	}
+}
