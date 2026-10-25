@@ -144,10 +144,8 @@ func (b *StreamingMPHFBuilder) Add(prefix string, pos uint64) error {
 	if err := b.preorderPos.Append(pos); err != nil {
 		return fmt.Errorf("append preorder pos: %w", err)
 	}
-	if mphfSlotFingerprints {
-		if err := b.fingerprints.Append(computeFingerprint(prefix)); err != nil {
-			return fmt.Errorf("append fingerprint: %w", err)
-		}
+	if err := b.fingerprints.Append(computeFingerprint(prefix)); err != nil {
+		return fmt.Errorf("append fingerprint: %w", err)
 	}
 
 	// Write prefix to temp file with length prefix.
@@ -463,20 +461,16 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 // Sequential writes touch each page once; scattered writes indexed by
 // hash position measured ~3x write amplification on EBS gp3.
 //
-// File layout: Header (Count = slots, Width = slot bytes), a 2-byte
-// descriptor (fingerprint width 0 or 8, position width), the slots
-// (fingerprint, then position), the 8-byte key-hash seed, and an
-// 8-byte zero tail pad for masked loads at the last slot.
+// File layout: Header (Count = slots, Width = slot bytes), a 1-byte
+// descriptor (position width), the slots (8-byte fingerprint, then the
+// position at that width), the 8-byte key-hash seed, and an 8-byte zero
+// tail pad for masked loads at the last slot.
 func writeSlots(outDir string, n int, mph *bbhash, hashes, fps, poss []uint64, seed uint64) error {
-	fpW := 0
-	if mphfSlotFingerprints {
-		fpW = mphfFingerprintBytes
-	}
-	if len(poss) != n || (fpW != 0 && len(fps) != n) {
+	if len(poss) != n || len(fps) != n {
 		return fmt.Errorf("%w: fps=%d poss=%d n=%d", errMPHFArrayLengthMismatch, len(fps), len(poss), n)
 	}
 	posW := int(byteWidthOf(uint64(max(n, 1) - 1)))
-	slotW := fpW + posW
+	slotW := mphfFingerprintBytes + posW
 	path := filepath.Join(outDir, MPHFSlotsFile)
 	dataBytes := int64(n) * int64(slotW)
 	f, err := os.Create(path)
@@ -490,7 +484,7 @@ func writeSlots(outDir string, n int, mph *bbhash, hashes, fps, poss []uint64, s
 		return cleanup(fmt.Errorf("truncate MPHF slots: %w", err))
 	}
 	head := EncodeHeader(Header{Magic: MagicNumber, Version: Version, Count: uint64(n), Width: uint32(slotW)})
-	if _, err := f.Write(append(head, byte(fpW), byte(posW))); err != nil {
+	if _, err := f.Write(append(head, byte(posW))); err != nil {
 		return cleanup(fmt.Errorf("write MPHF slots header: %w", err))
 	}
 
@@ -511,7 +505,7 @@ func writeSlots(outDir string, n int, mph *bbhash, hashes, fps, poss []uint64, s
 			if start >= end {
 				continue
 			}
-			wg.Go(func() { errs[w] = writeSlotRange(f, invMap, fps, poss, fpW, posW, start, end) })
+			wg.Go(func() { errs[w] = writeSlotRange(f, invMap, fps, poss, posW, start, end) })
 		}
 		wg.Wait()
 		if err := errors.Join(errs...); err != nil {
@@ -569,8 +563,8 @@ func slotOwners(mph *bbhash, hashes []uint64) ([]uint32, error) {
 }
 
 // writeSlotRange writes slots [start, end) of the slot file.
-func writeSlotRange(f *os.File, invMap []uint32, fps, poss []uint64, fpW, posW, start, end int) error {
-	slotW := fpW + posW
+func writeSlotRange(f *os.File, invMap []uint32, fps, poss []uint64, posW, start, end int) error {
+	slotW := mphfFingerprintBytes + posW
 	const bufBytes = 1 << 20
 	bufSlots := bufBytes / slotW
 	buf := make([]byte, bufSlots*slotW+8)
@@ -579,12 +573,10 @@ func writeSlotRange(f *os.File, invMap []uint32, fps, poss []uint64, fpW, posW, 
 		for j := chunk; j < cEnd; j++ {
 			i := invMap[j]
 			off := (j - chunk) * slotW
-			if fpW != 0 {
-				binary.LittleEndian.PutUint64(buf[off:], fps[i])
-			}
+			binary.LittleEndian.PutUint64(buf[off:], fps[i])
 			// An 8-byte store, overwritten by the next slot: only posW
 			// bytes are the slot's.
-			binary.LittleEndian.PutUint64(buf[off+fpW:], poss[i])
+			binary.LittleEndian.PutUint64(buf[off+mphfFingerprintBytes:], poss[i])
 		}
 		blen := (cEnd - chunk) * slotW
 		fileOff := int64(mphfSlotsDataOff) + int64(chunk)*int64(slotW)
@@ -601,20 +593,15 @@ func writeSlotRange(f *os.File, invMap []uint32, fps, poss []uint64, fpW, posW, 
 // must come from the same parallel-lookup pass.
 var errMPHFArrayLengthMismatch = errors.New("mphf fingerprints/positions length mismatch")
 
-// MPHFSlotsFile maps each MPHF slot to its prefix's preorder position,
-// and holds that prefix's fingerprint when the index keeps them.
+// MPHFSlotsFile maps each MPHF slot to its prefix's fingerprint and
+// preorder position.
 const MPHFSlotsFile = "mph_slots.bin"
 
 // mph_slots.bin layout constants (see writeSlots).
 const (
-	mphfSlotsDescBytes   = 2
+	mphfSlotsDescBytes   = 1
 	mphfSlotsDataOff     = HeaderSize + mphfSlotsDescBytes
 	mphfFingerprintBytes = 8
 	mphfSeedBytes        = 8
 	mphfSlotsTailPad     = 8
 )
-
-// mphfSlotFingerprints selects whether slots carry a 64-bit
-// fingerprint. Without one, lookups verify hits against the prefix
-// tree instead.
-const mphfSlotFingerprints = true

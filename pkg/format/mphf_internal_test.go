@@ -352,10 +352,7 @@ func TestStreamingMPHFBuildSurvivesKeyHashCollision(t *testing.T) {
 		t.Errorf("slots Version = %d, want %d", h.Version, Version)
 	}
 	// 2000 positions need 2 bytes.
-	slotW := 2
-	if mphfSlotFingerprints {
-		slotW += mphfFingerprintBytes
-	}
+	slotW := mphfFingerprintBytes + 2
 	if int(h.Width) != slotW {
 		t.Errorf("slot width = %d, want %d", h.Width, slotW)
 	}

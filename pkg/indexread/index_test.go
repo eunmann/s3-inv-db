@@ -653,9 +653,8 @@ func tierBreakdownForPrefixTest(idx *indexread.Index, prefix string) []indexread
 	return idx.TierBreakdown(pos)
 }
 
-// TestLookupRejectsNonMembers: a prefix that isn't in the index never
-// looks up, whether slots carry fingerprints or lookups verify hits
-// against the prefix tree.
+// TestLookupRejectsNonMembers: a prefix that isn't in the index doesn't
+// look up (its slot's fingerprint differs).
 func TestLookupRejectsNonMembers(t *testing.T) {
 	dir := t.TempDir()
 	keys := make([]string, 0, 2000)

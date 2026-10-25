@@ -28,9 +28,7 @@ type MPHF struct {
 	// seed is the key hash's seed; see writeSlots for where it is stored.
 	seed     uint64
 	slotW    uint64
-	fpW      uint8
 	posW     uint8
-	posOff   uint64
 	hasSlots bool
 }
 
@@ -78,12 +76,11 @@ func (m *MPHF) readSlotsHeader() error {
 	if header.Version != Version {
 		return ErrVersionMismatch
 	}
-	m.fpW, m.posW = data[HeaderSize], data[HeaderSize+1]
-	if (m.fpW != 0 && m.fpW != mphfFingerprintBytes) || m.posW < 1 || m.posW > 8 ||
-		header.Width != uint32(m.fpW)+uint32(m.posW) {
-		return fmt.Errorf("%w: MPHF slot widths %d+%d, slot %d", ErrWidthMismatch, m.fpW, m.posW, header.Width)
+	m.posW = data[HeaderSize]
+	if m.posW < 1 || m.posW > 8 || header.Width != mphfFingerprintBytes+uint32(m.posW) {
+		return fmt.Errorf("%w: MPHF position width %d, slot %d", ErrWidthMismatch, m.posW, header.Width)
 	}
-	m.count, m.slotW, m.posOff = header.Count, uint64(header.Width), uint64(m.fpW)
+	m.count, m.slotW = header.Count, uint64(header.Width)
 	end := uint64(mphfSlotsDataOff) + m.count*m.slotW
 	if uint64(len(data)) < end+mphfSeedBytes+mphfSlotsTailPad {
 		return fmt.Errorf("read MPHF seed: %w", ErrFileTooSmall)
@@ -102,15 +99,9 @@ func (m *MPHF) Close() error {
 	return m.slots.Close()
 }
 
-// Verified reports whether a Lookup hit is already checked against a
-// stored fingerprint. When false, the slots hold positions only and
-// the caller must confirm a hit against the stored prefix (indexread
-// does, through the prefix tree), which makes every answer exact.
-func (m *MPHF) Verified() bool { return m.fpW != 0 }
-
 // Lookup returns the preorder position for a prefix, or ok=false if not
-// found. Without fingerprints (see Verified) a prefix that is not in
-// the index can return the position of one that is.
+// found. A prefix not in the index is misreported only if it lands on a
+// slot whose 64-bit fingerprint it also matches (~2^-64 per query).
 func (m *MPHF) Lookup(prefix string) (uint64, bool) {
 	if m.count == 0 {
 		return 0, false
@@ -121,11 +112,11 @@ func (m *MPHF) Lookup(prefix string) (uint64, bool) {
 	}
 	data := m.slots.Data()
 	off := mphfSlotsDataOff + slot*m.slotW
-	if m.fpW != 0 && binary.LittleEndian.Uint64(data[off:]) != computeFingerprint(prefix) {
+	if binary.LittleEndian.Uint64(data[off:]) != computeFingerprint(prefix) {
 		return 0, false
 	}
 
-	return binary.LittleEndian.Uint64(data[off+m.posOff:]) & widthMask[m.posW], true
+	return binary.LittleEndian.Uint64(data[off+mphfFingerprintBytes:]) & widthMask[m.posW], true
 }
 
 // Count returns the number of entries in the MPHF.

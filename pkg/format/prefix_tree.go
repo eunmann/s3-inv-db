@@ -285,31 +285,6 @@ func (r *PrefixTreeReader) Prefix(pos uint64) (string, error) {
 	return unsafe.String(unsafe.SliceData(buf), len(buf)), nil
 }
 
-// Matches reports whether the prefix at pos is exactly prefix. It walks
-// to the root comparing each level's segment with the end of prefix,
-// so it reads one row per level and never builds a string.
-func (r *PrefixTreeReader) Matches(pos uint64, prefix string) bool {
-	if pos >= r.count {
-		return false
-	}
-	rest := prefix
-	for p := pos; p != 0; {
-		seg, dist := r.row(p)
-		if dist == 0 || dist > p {
-			return false
-		}
-		name := r.cache.Get(seg)
-		n := len(rest) - 1 - len(name)
-		if n < 0 || rest[len(rest)-1] != '/' || rest[n:len(rest)-1] != name {
-			return false
-		}
-		rest = rest[:n]
-		p -= dist
-	}
-
-	return rest == ""
-}
-
 // ChildSegment returns the name a listing shows for the prefix at pos:
 // its last segment before the trailing slash ("2024" for "data/2024/").
 // It reads one row and does not allocate. The root and out-of-range

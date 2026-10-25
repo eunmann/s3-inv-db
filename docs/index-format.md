@@ -33,7 +33,7 @@ index/
 ├── depth_offsets.u64
 ├── depth_positions.u64
 ├── mph.bin
-├── mph_fp_pos.u64
+├── mph_slots.bin
 ├── prefix_dict.bin
 ├── prefix_dict.off.u64
 ├── prefix_tree.bin
@@ -61,7 +61,7 @@ fields little-endian:
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | Magic | `0x53334944` ("S3ID" in ASCII) |
-| 4 | 4 | Version | Format version (currently `6`) |
+| 4 | 4 | Version | Format version (currently `7`) |
 | 8 | 8 | Count | Number of rows |
 | 16 | 4 | Width | Row stride in bytes |
 
@@ -81,7 +81,7 @@ and records it in `Width`:
 | `depth_positions.u64` | bytes for the largest position (1–8) |
 | `depth_offsets.u64` | bytes for the number of positions (1–8) |
 | `tier_stats/tier_multi.off.u64` | bytes for the number of stored tier slots (1–8) |
-| `prefix_dict.off.u64`, `mph_fp_pos.u64` | always 8 |
+| `prefix_dict.off.u64` | always 8 |
 
 A reader loads 8 bytes at `index × Width` and masks off the bytes
 above `Width`. So that this load stays inside the mmap at the last
@@ -178,9 +178,20 @@ The MPHF provides O(1) prefix-to-position lookups with BBHash (Limasset et al., 
 | File | Description |
 |------|-------------|
 | `mph.bin` | BBHash levels: the level count, each level's length in 64-bit words, then every level's bit vector (all little-endian `uint64`) |
-| `mph_fp_pos.u64` | Header (`Count` = 2 × prefixes, `Width` = 8), then interleaved (fingerprint, position) pairs — 16 bytes per slot, fingerprint first — then the 8-byte key seed |
+| `mph_slots.bin` | Per BBHash slot, the prefix's fingerprint and its preorder position |
 
-The fingerprint+position pair is combined into one file so a lookup is a single mmap read instead of two.
+`mph_slots.bin` layout:
+
+| Offset | Size | Content |
+|--------|------|---------|
+| 0 | 20 | Header (`Count` = slots, `Width` = 8 + position width) |
+| 20 | 1 | Position width in bytes (the bytes the largest position needs) |
+| 21 | `Count × Width` | Slots: 8-byte fingerprint, then the position |
+| end − 16 | 8 | Key seed |
+| end − 8 | 8 | Zero tail pad |
+
+The fingerprint and the position share a slot, so a lookup reads one
+place: 11 bytes per slot on the 2.4M-prefix benchmark fixture.
 
 ### BBHash
 
@@ -188,16 +199,21 @@ Level 0 is a bit vector of about 2 bits per prefix (gamma 2). Each key hash sets
 
 ### Lookup Algorithm
 
-1. Hash the prefix string using FNV-1a (64-bit) with the offset basis XORed with the key seed
+1. Hash the prefix with wyhash (final v4.3, `pkg/format/wyhash.go`) and the key seed
 2. Find the key hash's BBHash slot; a hash that sets no bit on any level is not in the index
-3. Read the 16-byte slot at that index from `mph_fp_pos.u64`
-4. Compute the FNV-1 fingerprint of the query prefix; if it matches the slot's, return the slot's position, otherwise the prefix doesn't exist
+3. Read that slot from `mph_slots.bin`
+4. Hash the prefix again with the fixed fingerprint seed; if it matches the slot's fingerprint, return the slot's position, otherwise the prefix doesn't exist
 
-A non-member query is misreported only if it lands on an occupied slot and its 64-bit fingerprint also matches (~2⁻⁶⁴ per lookup). Comparing the stored prefix as well would make hits exact, but costs ~9% per lookup, so lookups stay fingerprint-only.
+wyhash reads 8 bytes at a time; the byte-at-a-time FNV it replaced was
+about 30% of a warm lookup. A non-member query is misreported only if
+it lands on an occupied slot and its 64-bit fingerprint also matches
+(~2⁻⁶⁴ per lookup). Checking the stored prefix as well would make hits
+exact, but walking the prefix tree adds 51–90% LLC misses per lookup
+(measured, #53), so lookups stay fingerprint-only.
 
 ### Key Seed
 
-BBHash needs distinct keys. If two prefixes share a 64-bit key hash, the builder rehashes every prefix with a new non-zero seed (up to 8 tries). Seed 0 is plain FNV-1a. The seed is always stored, even when it is 0, as one 8-byte word after the slots in `mph_fp_pos.u64`, and readers hash queries with it.
+BBHash needs distinct keys. If two prefixes share a 64-bit key hash, the builder rehashes every prefix with a new seed (up to 8 tries). The seed is always stored, even when it is 0, as the 8-byte word after the slots in `mph_slots.bin`, and readers hash queries with it. The fingerprint uses its own fixed seed, which no retry can pick, so a retry never changes a fingerprint.
 
 ## Prefix Strings
 
@@ -337,4 +353,4 @@ from the file-header format version.
 
 ## Versioning
 
-The format version in file headers lets a reader refuse files it would mis-decode. Version 6 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 7 is the current format; readers accept only that version, and an index written by any other version is rebuilt.

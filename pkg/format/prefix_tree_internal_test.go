@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"unsafe"
@@ -223,23 +222,5 @@ func TestPrefixTreeAddDoesNotAllocate(t *testing.T) {
 	name := unsafe.String(&buf[0], 3) // defensive: Add must accept a name over a reused buffer
 	if allocs := testing.AllocsPerRun(1000, func() { _ = w.Add(0, name) }); allocs != 0 {
 		t.Errorf("Add of a known segment allocates %v times", allocs)
-	}
-}
-
-func TestPrefixTreeMatches(t *testing.T) {
-	prefixes := []string{"", "/", "a/", "a//", "a/b/", "ab/", "日本語/", "日本語/x/"}
-	r := openTree(t, writeTree(t, prefixes))
-	for pos, p := range prefixes {
-		for _, q := range append(slices.Clone(prefixes), "a", "a/b", "b/", "a/b/c/", "x/a/b/", "//") {
-			if got, want := r.Matches(uint64(pos), q), q == p; got != want {
-				t.Errorf("Matches(%d %q, %q) = %v, want %v", pos, p, q, got, want)
-			}
-		}
-	}
-	if r.Matches(r.Count(), "") {
-		t.Error("Matches(out of range) = true")
-	}
-	if allocs := testing.AllocsPerRun(100, func() { _ = r.Matches(7, "日本語/x/") }); allocs != 0 {
-		t.Errorf("Matches allocates %v times", allocs)
 	}
 }
