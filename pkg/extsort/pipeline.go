@@ -803,6 +803,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	// lifetime regardless of which flush is the last.
 	p.presentTierMask.Or(uint32(agg.TierMask()))
 
+	aggMemory := agg.EstimatedMemoryUsage()
 	rows := agg.Drain()
 	if len(rows) == 0 {
 		return nil
@@ -847,10 +848,6 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 		agg.Release()
 	}
 
-	// Same estimate as Aggregator.EstimatedMemoryUsage — kept as a
-	// log-only post-drain footprint approximation.
-	const bytesPerAggregatorEntry = 288
-	aggMemory := int64(len(rows)) * bytesPerAggregatorEntry
 	flushDuration := time.Since(start)
 
 	p.publish(events.Event{

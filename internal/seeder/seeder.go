@@ -57,6 +57,9 @@ type Config struct {
 	// inventory; cycles modulo len.
 	ObjectsPerConfig []int
 	Seed             int64
+	// SortedKeys has UploadMultiChunkInventory write the objects in key
+	// order across its chunks, as S3 Inventory lists them.
+	SortedKeys bool
 }
 
 func (c Config) objectsForConfig(i int) int {

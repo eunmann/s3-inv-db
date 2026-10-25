@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,8 +51,10 @@ func pipelineSizes() []int {
 }
 
 // BenchmarkPipeline sweeps shape × size against the full S3-to-index path.
+// Realistic_sorted is realistic with the keys in order across the
+// chunks, as S3 Inventory writes them; the others are in random order.
 func BenchmarkPipeline(b *testing.B) {
-	for _, shape := range []string{"realistic", "deep_pyramid"} {
+	for _, shape := range []string{"realistic", "deep_pyramid", "realistic_sorted"} {
 		for _, n := range pipelineSizes() {
 			name := fmt.Sprintf("shape=%s/n=%d", shape, n)
 			b.Run(name, func(b *testing.B) {
@@ -88,14 +91,16 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 	stamp := time.Now().UTC().Truncate(time.Minute)
 
 	chunks := chunkCountFor(numObjects)
+	sorted := strings.HasSuffix(preset, "_sorted")
 	info, err := seeder.UploadMultiChunkInventory(
 		b.Context(), fc.Raw(),
 		seeder.Config{
-			Target:  seeder.TargetS3,
-			Objects: numObjects,
-			Preset:  preset,
-			Seed:    int64(numObjects ^ chunks),
-			Logger:  zerolog.Nop(),
+			Target:     seeder.TargetS3,
+			Objects:    numObjects,
+			Preset:     strings.TrimSuffix(preset, "_sorted"),
+			Seed:       int64(numObjects ^ chunks),
+			Logger:     zerolog.Nop(),
+			SortedKeys: sorted,
 		},
 		seeder.S3Config{Bucket: bucket, Prefix: prefix, SrcBucket: srcBucket},
 		1, int64(numObjects), stamp, chunks,
@@ -108,6 +113,7 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 	var lastPeakHeap uint64
 	var lastPrefixCount uint64
 	var lastMaxDepth uint32
+	var lastRuns int
 
 	b.ResetTimer()
 	for range b.N {
@@ -129,7 +135,8 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 		pipeline := extsort.NewPipeline(cfg, fc)
 
 		b.StartTimer()
-		if _, err := pipeline.Run(b.Context(), info.Path, outDir); err != nil {
+		res, err := pipeline.Run(b.Context(), info.Path, outDir)
+		if err != nil {
 			b.StopTimer()
 			peak.Stop()
 			if memLimit > 0 {
@@ -138,6 +145,7 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 			b.Fatalf("pipeline.Run: %v", err)
 		}
 		b.StopTimer()
+		lastRuns = res.RunFilesCreated
 
 		samplerMax := peak.Stop()
 		if memLimit > 0 {
@@ -162,4 +170,6 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 	b.ReportMetric(float64(lastPrefixCount), "prefixes")
 	b.ReportMetric(float64(lastMaxDepth), "max_depth")
 	b.ReportMetric(float64(chunks), "chunks")
+	// Run files written: every spill plus each worker's final flush.
+	b.ReportMetric(float64(lastRuns), "runs")
 }

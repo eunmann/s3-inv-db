@@ -10,20 +10,68 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-// heapInuseBytes must report what runtime.ReadMemStats calls HeapInuse.
-func TestHeapInuseBytesMatchesMemStats(t *testing.T) {
+// heapReadings must report what runtime.ReadMemStats calls HeapInuse
+// and, right after a GC, the heap that GC found live (HeapAlloc then).
+func TestHeapReadingsMatchMemStats(t *testing.T) {
 	keep := make([][]byte, 0, 64)
 	for range 64 {
 		keep = append(keep, make([]byte, 1<<16))
 	}
+	runtime.GC()
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	got := heapInuseBytes()
+	live, inuse := heapReadings()
 	runtime.KeepAlive(keep)
 
-	lo, hi := m.HeapInuse*9/10, m.HeapInuse*11/10
-	if got < lo || got > hi {
-		t.Errorf("heapInuseBytes = %d, MemStats.HeapInuse = %d (want within 10%%)", got, m.HeapInuse)
+	if lo, hi := m.HeapInuse*9/10, m.HeapInuse*11/10; inuse < lo || inuse > hi {
+		t.Errorf("HeapInuse reading = %d, MemStats.HeapInuse = %d (want within 10%%)", inuse, m.HeapInuse)
+	}
+	if lo, hi := m.HeapAlloc*9/10, m.HeapAlloc*11/10; live < lo || live > hi {
+		t.Errorf("live heap reading = %d, HeapAlloc after GC = %d (want within 10%%)", live, m.HeapAlloc)
+	}
+}
+
+// Garbage below the HeapInuse backstop is not pressure: with GOMEMLIMIT
+// the heap grows toward the limit before each GC, so only the live heap
+// or a nearly full HeapInuse may force a spill.
+func TestHeapReadingsUnderPressure(t *testing.T) {
+	const limit int64 = 1000
+	for _, tc := range []struct {
+		name        string
+		live, inuse uint64
+		want        bool
+	}{
+		{name: "idle", live: 100, inuse: 200, want: false},
+		{name: "live 50% inuse 90% garbage", live: 500, inuse: 900, want: false},
+		{name: "live just below 70%", live: 699, inuse: 700, want: false},
+		{name: "live 70%", live: 700, inuse: 700, want: true},
+		{name: "inuse just below 95%", live: 100, inuse: 949, want: false},
+		{name: "inuse 95%", live: 100, inuse: 950, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := heapReadingsUnderPressure(tc.live, tc.inuse, limit); got != tc.want {
+				t.Errorf("heapReadingsUnderPressure(live=%d, inuse=%d, limit=%d) = %v, want %v",
+					tc.live, tc.inuse, limit, got, tc.want)
+			}
+		})
+	}
+}
+
+// EstimatedMemoryUsage counts each new prefix once, with its length,
+// and starts over at a Drain.
+func TestAggregatorEstimateCountsEachPrefix(t *testing.T) {
+	agg := NewAggregator(0, 0)
+	for _, k := range []string{"a/b/x", "a/b/y", "a/c/z", "top"} {
+		agg.AddObject(k, 1, tiers.Standard)
+	}
+	// "", "a/", "a/b/", "a/c/"
+	want := 4*aggregatorEntryBytes + int64(len("a/")+len("a/b/")+len("a/c/"))
+	if got := agg.EstimatedMemoryUsage(); got != want {
+		t.Fatalf("estimate = %d, want %d", got, want)
+	}
+	agg.Drain()
+	if got := agg.EstimatedMemoryUsage(); got != 0 {
+		t.Fatalf("estimate after Drain = %d, want 0", got)
 	}
 }
 

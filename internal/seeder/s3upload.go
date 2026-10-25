@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -172,6 +173,14 @@ func UploadMultiChunkInventory(ctx context.Context, client *s3.Client, cfg Confi
 	manifestKey := fmt.Sprintf("%s%s/%s/%s/manifest.json", s3cfg.Prefix, s3cfg.SrcBucket, invID, stamp)
 	checksumKey := fmt.Sprintf("%s%s/%s/%s/manifest.checksum", s3cfg.Prefix, s3cfg.SrcBucket, invID, stamp)
 
+	var sorted []benchutil.FakeObject
+	if cfg.SortedKeys {
+		sorted = make([]benchutil.FakeObject, cfg.Objects)
+		for i := range sorted {
+			sorted[i] = gen.Next()
+		}
+		slices.SortStableFunc(sorted, func(a, b benchutil.FakeObject) int { return strings.Compare(a.Key, b.Key) })
+	}
 	files := make([]map[string]any, 0, numChunks)
 	baseChunkSize := cfg.Objects / numChunks
 	remainder := cfg.Objects % numChunks
@@ -185,6 +194,12 @@ func UploadMultiChunkInventory(ctx context.Context, client *s3.Client, cfg Confi
 		}
 		chunkBuf = chunkBuf[:0]
 		for range thisChunkSize {
+			if sorted != nil {
+				chunkBuf = append(chunkBuf, sorted[0])
+				sorted = sorted[1:]
+
+				continue
+			}
 			chunkBuf = append(chunkBuf, gen.Next())
 		}
 		payload, err := encodeCSVGz(s3cfg.SrcBucket, chunkBuf)
