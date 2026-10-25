@@ -201,11 +201,26 @@ func decodeRunRecord(r runRecordSource, prev string, buf *[]byte, row *PrefixRow
 }
 
 // SortPrefixRows sorts a slice of PrefixRows by prefix in lexicographic order.
-// This is used to prepare rows for the streaming index builder.
+// This is used to prepare rows for the streaming index builder. It sorts
+// (prefix, row) pairs: comparing through the row pointers would load a
+// row from scattered slab memory for every comparison.
 func SortPrefixRows(rows []*PrefixRow) {
-	slices.SortFunc(rows, func(a, b *PrefixRow) int {
-		return strings.Compare(a.Prefix, b.Prefix)
+	keyed := make([]keyedRow, len(rows))
+	for i, r := range rows {
+		keyed[i] = keyedRow{prefix: r.Prefix, row: r}
+	}
+	slices.SortFunc(keyed, func(a, b keyedRow) int {
+		return strings.Compare(a.prefix, b.prefix)
 	})
+	for i := range keyed {
+		rows[i] = keyed[i].row
+	}
+}
+
+// keyedRow is a row with its prefix beside the pointer, for sorting.
+type keyedRow struct {
+	prefix string
+	row    *PrefixRow
 }
 
 // add accumulates one object into the row.
