@@ -21,6 +21,9 @@
 # BASE_GOTOOLCHAIN / HEAD_GOTOOLCHAIN (e.g. go1.26.10) build that side
 # with a given Go toolchain, to gate a toolchain upgrade; by default both
 # sides use the toolchain `go` resolves for their go.mod.
+# BENCH_COOLDOWN (seconds, default 0) sleeps before every run, so a
+# laptop's power or thermal limits can't settle on one side; use it when
+# sec/op moves with no matching change in B/op or allocs/op.
 # Results land in bench/ab/<timestamp>/ (gitignored); each side's full
 # benchmark output is in <side>.log.
 set -euo pipefail
@@ -50,6 +53,8 @@ base_ref=$1
 time_pct=${BENCH_TIME_PCT:-5}
 mem_pct=${BENCH_MEM_PCT:-5}
 heap_pct=${BENCH_HEAP_PCT:-15}
+cooldown=${BENCH_COOLDOWN:-0}
+[[ $cooldown =~ ^[0-9]+$ ]] || die "BENCH_COOLDOWN must be whole seconds, got '$cooldown'"
 
 root=$(git rev-parse --show-toplevel)
 cd "$root"
@@ -119,6 +124,7 @@ run_side() {
 	for e in "${entries[@]}"; do
 		read -r tags pkg re bt <<<"$e"
 		status=0
+		((cooldown > 0)) && sleep "$cooldown"
 		# Results go to stdout; logs go to stderr, kept apart so a log
 		# line written mid-benchmark cannot split a result line.
 		(cd "$src/$pkg" && "$root/$out/bin/$side-$(tr '/.' '__' <<<"$pkg")-$tags.test" \
