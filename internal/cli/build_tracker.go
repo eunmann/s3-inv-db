@@ -245,6 +245,7 @@ type buildSummary struct {
 	ChunksProcessed  int                `json:"chunks_processed"`
 	ObjectsProcessed int64              `json:"objects_processed"`
 	RunFilesCreated  int                `json:"run_files_created"`
+	MemoryRuns       int                `json:"memory_runs"`
 	SpillsWritten    int                `json:"spills_written"`
 	SpillRows        uint64             `json:"spill_rows"`
 	SpillBytes       int64              `json:"spill_bytes"`
@@ -300,6 +301,7 @@ func (t *buildTracker) buildSummary(result *extsort.Result, runErr error) buildS
 		s.ChunksProcessed = result.ChunksProcessed
 		s.ObjectsProcessed = result.ObjectsProcessed
 		s.RunFilesCreated = result.RunFilesCreated
+		s.MemoryRuns = result.MemoryRuns
 	}
 
 	return s

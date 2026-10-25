@@ -113,7 +113,7 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 	var lastPeakHeap uint64
 	var lastPrefixCount uint64
 	var lastMaxDepth uint32
-	var lastRuns int
+	var lastRuns, lastRunFiles int
 
 	b.ResetTimer()
 	for range b.N {
@@ -145,7 +145,8 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 			b.Fatalf("pipeline.Run: %v", err)
 		}
 		b.StopTimer()
-		lastRuns = res.RunFilesCreated
+		lastRuns = res.RunFilesCreated + res.MemoryRuns
+		lastRunFiles = res.RunFilesCreated
 
 		samplerMax := peak.Stop()
 		if memLimit > 0 {
@@ -170,6 +171,8 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 	b.ReportMetric(float64(lastPrefixCount), "prefixes")
 	b.ReportMetric(float64(lastMaxDepth), "max_depth")
 	b.ReportMetric(float64(chunks), "chunks")
-	// Run files written: every spill plus each worker's final flush.
+	// Sorted runs the merge read: every spill plus each worker's final
+	// state, whether kept in memory or flushed to a run file.
 	b.ReportMetric(float64(lastRuns), "runs")
+	b.ReportMetric(float64(lastRunFiles), "run_files")
 }

@@ -83,8 +83,9 @@ Ingestion (`bench/suite/ingest.txt`):
   deep-pyramid and realistic_sorted shapes; realistic_sorted keeps the
   keys in order across chunks, as S3 Inventory writes them): the real
   `Pipeline.Run` end to end through the local S3 server. Seconds per
-  op; also reports `peak_heap_B`, `disk_B` and `runs` (run files
-  spilled).
+  op; also reports `peak_heap_B`, `disk_B`, `runs` (sorted runs the
+  merge read, in memory or on disk) and `run_files` (runs written to
+  disk).
 - `pkg/format` `BenchmarkMPHFBuild` at 1M prefixes: the MPHF finalize
   step on its own, with `peak_heap_B`.
 
