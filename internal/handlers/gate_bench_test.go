@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -29,6 +30,13 @@ const (
 // against the unchanged index has a realistic mix of statuses.
 func buildWideIndex(b *testing.B, dir string, changed bool) {
 	b.Helper()
+	buildWideIndexKeys(b, dir, changed, "c%06d/a", "c%06d/b")
+}
+
+// buildWideIndexKeys is buildWideIndex with each child's two object
+// keys formatted from keyA and keyB.
+func buildWideIndexKeys(b *testing.B, dir string, changed bool, keyA, keyB string) {
+	b.Helper()
 	agg := extsort.NewAggregator(gateWideChildren*2, 0)
 	for i := range gateWideChildren {
 		size := uint64(i%977 + 1)
@@ -39,8 +47,8 @@ func buildWideIndex(b *testing.B, dir string, changed bool) {
 		if i%3 == 0 {
 			tier = tiers.GlacierFR
 		}
-		agg.AddObject(fmt.Sprintf("c%06d/a", i), size, tier)
-		agg.AddObject(fmt.Sprintf("c%06d/b", i), size*2, tiers.Standard)
+		agg.AddObject(fmt.Sprintf(keyA, i), size, tier)
+		agg.AddObject(fmt.Sprintf(keyB, i), size*2, tiers.Standard)
 	}
 	rows := agg.Drain()
 	extsort.SortPrefixRows(rows)
@@ -66,6 +74,24 @@ func buildWideIndex(b *testing.B, dir string, changed bool) {
 // outside the timed loop.
 func wideRouter(b *testing.B) http.Handler {
 	b.Helper()
+	h := wideHandlers(b)
+	r := chi.NewRouter()
+	r.Get("/api/browse", h.BrowseLevelAPI)
+	r.Get("/api/compare", h.CompareLevelAPI)
+
+	return r
+}
+
+// wideHandlers builds both runs and returns handlers serving them.
+func wideHandlers(b *testing.B) *handlers.Handlers {
+	b.Helper()
+
+	return wideHandlersWith(b, buildWideIndex)
+}
+
+// wideHandlersWith is wideHandlers with each run built by build.
+func wideHandlersWith(b *testing.B, build func(b *testing.B, dir string, changed bool)) *handlers.Handlers {
+	b.Helper()
 	mgr := inventory.NewCatalog(nil)
 	b.Cleanup(func() { _ = mgr.Close() })
 	for _, run := range []struct {
@@ -73,7 +99,7 @@ func wideRouter(b *testing.B) http.Handler {
 		changed bool
 	}{{gateFromID, false}, {gateToID, true}} {
 		dir := filepath.Join(b.TempDir(), "index")
-		buildWideIndex(b, dir, run.changed)
+		build(b, dir, run.changed)
 		if err := mgr.Register(b.Context(), run.id, "n", dir); err != nil {
 			b.Fatal(err)
 		}
@@ -82,11 +108,8 @@ func wideRouter(b *testing.B) http.Handler {
 		}
 	}
 	h, _ := newWiredHandlersWithConfigs(b, mgr)
-	r := chi.NewRouter()
-	r.Get("/api/browse", h.BrowseLevelAPI)
-	r.Get("/api/compare", h.CompareLevelAPI)
 
-	return r
+	return h
 }
 
 func benchGet(b *testing.B, router http.Handler, target string) {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
@@ -134,6 +135,7 @@ type CompareChildView struct {
 	BytesBeforeH   string
 	BytesAfterH    string
 	Prefix         string
+	HxVals         string // drill-down link's hx-vals, for rows with children
 	CostDeltaH     string
 	CostAfterH     string
 	CostBeforeH    string
@@ -286,7 +288,11 @@ func (h *Handlers) computeCompareLevel(ctx context.Context, opts compareViewOpti
 		Children:      make([]CompareChildView, 0, len(data.Children)),
 	}
 	for i := range data.Children {
-		view.Children = append(view.Children, h.buildCompareChildView(&data.Children[i]))
+		v := h.buildCompareChildView(&data.Children[i])
+		if v.HasChildren {
+			v.HxVals = templates.CompareLinkHxVals(string(opts.from), string(opts.to), v.Prefix)
+		}
+		view.Children = append(view.Children, v)
 	}
 	view.QueryDurationH = humanfmt.Duration(time.Since(start))
 

@@ -39,11 +39,15 @@ type BrowseCrumb struct {
 
 // BrowseChild is one immediate-child prefix shown in the explorer.
 type BrowseChild struct {
-	Segment                 string
-	Prefix                  string
-	ObjectCountH            string
-	TotalBytesH             string
-	MonthlyCostFormatted    string
+	Segment              string
+	Prefix               string
+	ObjectCountH         string
+	TotalBytesH          string
+	MonthlyCostFormatted string
+	// Href and HxVals are the drill-down link's attributes, set for
+	// rows with children on the HTML views only.
+	Href                    string
+	HxVals                  string
 	ObjectCount             uint64
 	TotalBytes              uint64
 	MonthlyCostMicrodollars uint64

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/rs/zerolog"
@@ -121,6 +122,7 @@ func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request, opts
 		// placeholder — the user can pick a different inventory.
 		if err == nil {
 			level.QueryDurationH = humanfmt.Duration(time.Since(start))
+			setBrowseLinks(&level)
 			data["InitialLevel"] = level
 		}
 	}
@@ -156,7 +158,18 @@ func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	level.QueryDurationH = humanfmt.Duration(time.Since(start))
+	setBrowseLinks(&level)
 	h.renderHTMLPartial(w, r, "browse_level.html", "failed to render browse level", level)
+}
+
+// setBrowseLinks sets the link attributes of each row with children;
+// only the HTML views render them.
+func setBrowseLinks(level *BrowseLevel) {
+	for i := range level.Children {
+		if c := &level.Children[i]; c.HasChildren {
+			c.Href, c.HxVals = templates.BrowseLink(string(level.InventoryID), c.Prefix)
+		}
+	}
 }
 
 // buildBrowseLevel composes the domain-level prefix view with HTTP-shape
