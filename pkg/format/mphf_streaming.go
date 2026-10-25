@@ -323,10 +323,8 @@ func hasDuplicateHash(hashes []uint64) bool {
 	return false
 }
 
-// mphfSeed derives the seed for a retry with the splitmix64 finalizer
-// so every bit of the FNV offset basis changes, not just the low ones
-// a small counter would touch; low FNV-1a output bits depend only on
-// low basis bits.
+// mphfSeed derives the key seed for a retry with the splitmix64
+// finalizer, so consecutive attempts get unrelated seeds.
 func mphfSeed(attempt uint64) uint64 {
 	const (
 		gamma  = 0x9e3779b97f4a7c15

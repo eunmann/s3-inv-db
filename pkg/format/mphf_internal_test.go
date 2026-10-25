@@ -2,7 +2,6 @@ package format
 
 import (
 	"errors"
-	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -285,17 +284,24 @@ func TestMPHFLookupRoundTripsEdgePrefixes(t *testing.T) {
 	}
 }
 
-// TestHashBytesSeedZeroIsFNV1a pins seed 0 to plain FNV-1a, the key
-// hash every pre-seed index was built with.
-func TestHashBytesSeedZeroIsFNV1a(t *testing.T) {
+// TestKeyHashSeeds: the key seed changes the hash, and no key seed a
+// retry can pick equals the fingerprint's seed.
+func TestKeyHashSeeds(t *testing.T) {
 	for _, s := range []string{"", "a", "data/2024/", "日本語/", strings.Repeat("x/", 100)} {
-		h := fnv.New64a()
-		_, _ = h.Write([]byte(s))
-		if got, want := hashString(s, 0), h.Sum64(); got != want {
-			t.Errorf("hashString(%q, 0) = %#x, want FNV-1a %#x", s, got, want)
-		}
 		if hashString(s, mphfSeed(1)) == hashString(s, 0) {
 			t.Errorf("hashString(%q) ignores the seed", s)
+		}
+		if hashString(s, 0) == computeFingerprint(s) {
+			t.Errorf("key hash and fingerprint of %q are equal", s)
+		}
+	}
+	for attempt := range uint64(maxMPHFSeedAttempts + 1) {
+		seed := uint64(0)
+		if attempt > 0 {
+			seed = mphfSeed(attempt)
+		}
+		if seed == fingerprintSeed {
+			t.Errorf("retry %d's key seed equals the fingerprint seed", attempt)
 		}
 	}
 }
@@ -400,16 +406,5 @@ func TestOpenMPHFMissingSeedWord(t *testing.T) {
 			m.Close()
 		}
 		t.Fatalf("OpenMPHF = %v, want ErrFileTooSmall", err)
-	}
-}
-
-// The written-out fingerprint must stay hash/fnv's FNV-1: indexes store it.
-func TestComputeFingerprintMatchesFNV1(t *testing.T) {
-	for _, s := range []string{"", "a", "dir/sub/", "données/été/"} {
-		h := fnv.New64()
-		_, _ = h.Write([]byte(s))
-		if got, want := computeFingerprint(s), h.Sum64(); got != want {
-			t.Errorf("computeFingerprint(%q) = %#x, want %#x", s, got, want)
-		}
 	}
 }

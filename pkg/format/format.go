@@ -7,9 +7,9 @@ const (
 	// MagicNumber identifies s3-inv-db files.
 	MagicNumber uint32 = 0x53334944 // "S3ID"
 	// Version is the current format version. Readers accept only this
-	// version; an index written by another version is rebuilt. 6: the
-	// prefix tree (prefix_tree.bin) replaces per-prefix segment lists.
-	Version uint32 = 6
+	// version; an index written by another version is rebuilt. 7: key
+	// hashes and fingerprints are wyhash.
+	Version uint32 = 7
 )
 
 // Header is the common header for all columnar files.

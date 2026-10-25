@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"unsafe"
 )
 
 // DirPerm and FilePerm are the permission bits applied to every
@@ -114,45 +113,19 @@ func (m *MPHF) Count() uint64 {
 	return m.count
 }
 
-const (
-	fnvOffset64 uint64 = 14695981039346656037
-	fnvPrime64  uint64 = 1099511628211
-)
-
-// hashString computes the MPHF key hash of s. Forwards to hashBytes
-// via a zero-copy string-to-bytes conversion.
+// hashString is the MPHF key hash of s: wyhash with the index's key
+// seed (0 unless a collision forced a retry; see mphfSeed).
 func hashString(s string, seed uint64) uint64 {
-	return hashBytes(unsafe.Slice(unsafe.StringData(s), len(s)), seed)
+	return wyhash(s, seed)
 }
 
-// hashBytes is 64-bit FNV-1a with the offset basis XORed with seed,
-// so seed 0 is plain FNV-1a: the key hash of every index built before
-// seeds existed.
-func hashBytes(b []byte, seed uint64) uint64 {
-	h := fnvOffset64 ^ seed
-	for _, c := range b {
-		h ^= uint64(c)
-		h *= fnvPrime64
-	}
+// fingerprintSeed seeds the slot fingerprint. It is fixed, so a key
+// seed retry never changes the fingerprint, and differs from every key
+// seed (a test pins this), so the fingerprint is independent of the
+// key hash that chose the slot.
+const fingerprintSeed = 0x6a09e667f3bcc909 // the first 64 bits of frac(sqrt(2))
 
-	return h
-}
-
-// computeFingerprint computes a fingerprint for verification. Uses a
-// different hash function to reduce collision probability. Forwards
-// via zero-copy conversion to computeFingerprintBytes.
+// computeFingerprint is the slot fingerprint of s.
 func computeFingerprint(s string) uint64 {
-	return computeFingerprintBytes(unsafe.Slice(unsafe.StringData(s), len(s)))
-}
-
-// computeFingerprintBytes is 64-bit FNV-1 (multiply, then XOR),
-// written out so it allocates no hasher: it runs once per prefix.
-func computeFingerprintBytes(b []byte) uint64 {
-	h := fnvOffset64
-	for _, c := range b {
-		h *= fnvPrime64
-		h ^= uint64(c)
-	}
-
-	return h
+	return wyhash(s, fingerprintSeed)
 }
