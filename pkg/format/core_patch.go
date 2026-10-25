@@ -87,14 +87,26 @@ func patchCost(rows uint64, wc, wb, ws uint8, exceptions uint64) uint64 {
 	return cost
 }
 
-// choosePatch returns the widths that minimise patchCost for rows rows.
-// Ties keep the wider widths, which have fewer exceptions to look up.
+// maxPatchRatePPM bounds the share of rows that are exceptions, in
+// parts per million. An exception costs a rank and a table read, and
+// exceptions sit on the rows listings read most (the upper levels): on
+// the benchmark fixture the smallest layout patched 3.4% of rows and
+// made top-N over children 31% slower; capped at 0.5% it patches 0.04%,
+// costs 0.15 B per prefix more and top-N is within 4% (#54).
+const maxPatchRatePPM = 5000
+
+// choosePatch returns the widths that minimise patchCost for rows
+// among those that keep exceptions under maxPatchRatePPM. Ties keep the
+// wider widths, which have fewer exceptions to look up.
 func (h *patchHistogram) choosePatch(rows uint64) patchChoice {
 	best := patchChoice{count: 8, bytes: 8, size: 8, cost: ^uint64(0)}
 	for wc := uint8(8); wc >= 1; wc-- {
 		for wb := uint8(8); wb >= 1; wb-- {
 			for ws := uint8(8); ws >= 1; ws-- {
 				e := h.exceptions(wc, wb, ws)
+				if e*1_000_000 > maxPatchRatePPM*rows {
+					continue
+				}
 				if cost := patchCost(rows, wc, wb, ws, e); cost < best.cost {
 					best = patchChoice{count: wc, bytes: wb, size: ws, exceptions: e, cost: cost}
 				}

@@ -111,12 +111,12 @@ max depth 7, 11 of 13 tiers present, 95% of prefixes holding one tier.
 
 | Component | Files | B/prefix |
 |---|---|---|
-| Core stats | `core_stats.bin` (9-byte rows: 1 + 4 + 1 + 1 + 2) + `core_patch.bin` / `core_patch.rows` (3.4% of rows patched) | 10.0 |
+| Core stats | `core_stats.bin` (10-byte rows: 1 + 5 + 1 + 1 + 2) + `core_patch.bin` / `core_patch.rows` (0.04% of rows patched) | 10.2 |
 | Tier stats | `tier_stats/tier_multi.*` (multi layout) | 1.4 |
 | MPHF | `mph_slots.bin` (8 B fingerprint + 3 B position) + `mph.bin` (BBHash, ~3.3 bits) | 11.4 |
 | Prefix strings | `prefix_tree.bin` (2 B segment ID + 3 B parent distance) + segment blob | 5.1 |
 | Depth index | `depth_positions.u64` (3 B) + `depth_offsets.u64` | 3.0 |
-| **Total** | including `manifest.json` and `tiers.json` | **30.8** |
+| **Total** | including `manifest.json` and `tiers.json` | **31.0** |
 
 The fingerprint is 8 B in every index; the position takes the bytes
 the largest position needs. Tier

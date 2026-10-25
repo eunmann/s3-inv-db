@@ -136,8 +136,11 @@ data:
 - At finalize it reads every row once and counts rows by the widths
   their three patched values need, then sizes every width combination
   exactly (rows × widths, plus the patch files for the rows that don't
-  fit) and keeps the smallest. When no narrower width pays for its
-  exceptions it uses plain widths and writes no patch files.
+  fit) and keeps the smallest whose exceptions are at most 0.5% of
+  rows. Exceptions cost a rank and a table read and sit on the upper
+  levels that listings read most, so the cap keeps reads fast (#54).
+  When no narrower width pays for its exceptions it uses plain widths
+  and writes no patch files.
 - A value that doesn't fit stores the field's all-ones sentinel (a
   value equal to it needs the next width). Its row's bit is set in
   `core_patch.rows`, a ranked bit vector (layout as in
@@ -148,8 +151,8 @@ data:
   bytes in an index with patch files) reads the exact value at
   `rank(pos)` in `core_patch.bin`; every other read is the plain load.
 
-On the 1M-object benchmark fixture the stride is 1 + 4 + 1 + 1 + 2 = 9
-bytes with 3.4% of rows patched, against 3 + 7 + 3 + 1 + 2 = 16 bytes
+On the 1M-object benchmark fixture the stride is 1 + 5 + 1 + 1 + 2 = 10
+bytes with 0.04% of rows patched, against 3 + 7 + 3 + 1 + 2 = 16 bytes
 unpatched.
 
 During the build the rows are written at a fixed 28-byte stride
