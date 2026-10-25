@@ -11,5 +11,4 @@ const (
 	ManifestFile       = "manifest.json"
 	TierStatsDir       = "tier_stats"
 	DepthBucketNameFmt = "depth_%02d"
-	DepthBlocksNameFmt = "depth_blocks_%02d"
 )

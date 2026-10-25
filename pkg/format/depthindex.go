@@ -10,9 +10,9 @@ import (
 // depth posting lists at Finalize. Storage is **disk-backed per
 // depth** via u64StreamArray (zstd-compressed): at billion-prefix
 // scale the positions would otherwise be ~8 GiB of heap (1B × 8 B).
-// Each per-depth array is append-only and grows monotonically because
-// positions are added in preorder (pos = 0, 1, 2, ...), so within any
-// one depth the values are already sorted — no post-add sort needed.
+// Each per-depth array is append-only and positions are added in
+// preorder (pos = 0, 1, 2, ...), so within any one depth they are
+// already sorted — no post-add sort needed.
 //
 // The "monotonically increasing u64s in append order, read back once
 // sequentially" access pattern is what makes the compressed-stream
@@ -20,12 +20,13 @@ import (
 // MPHF builder needs).
 //
 // Alongside the positions it bounds each depth's stats per block of
-// DepthBlockSize entries (BlockBounds), streamed to disk the same way,
-// so ranked and filtered queries can skip blocks that can't qualify.
+// DepthBlockSize entries (BlockBounds), so ranked and filtered queries
+// can skip blocks that can't qualify. A full block's packed bounds go
+// into the depth's stream right after its last position, so the bounds
+// cost no stream, file or encoder of their own; Build splits them out.
 type DepthIndexBuilder struct {
 	tempDir  string
 	buckets  []*u64StreamArray // index = depth
-	blocks   []*u64StreamArray // packed BlockBounds per full block, index = depth
 	open     []blockAcc        // each depth's block still filling
 	maxDepth uint32
 }
@@ -50,11 +51,6 @@ func (b *DepthIndexBuilder) Add(pos uint64, depth uint32, count, bytes uint64) e
 			return fmt.Errorf("create depth bucket %d: %w", d, err)
 		}
 		b.buckets = append(b.buckets, a)
-		blocks, err := newU64StreamArray(b.tempDir, fmt.Sprintf(DepthBlocksNameFmt, d))
-		if err != nil {
-			return fmt.Errorf("create depth blocks %d: %w", d, err)
-		}
-		b.blocks = append(b.blocks, blocks)
 		b.open = append(b.open, blockAcc{})
 	}
 	if err := b.buckets[depth].Append(pos); err != nil {
@@ -63,7 +59,7 @@ func (b *DepthIndexBuilder) Add(pos uint64, depth uint32, count, bytes uint64) e
 	acc := &b.open[depth]
 	acc.add(count, bytes)
 	if acc.n == DepthBlockSize {
-		if err := b.blocks[depth].Append(packBlockBounds(acc.bounds)); err != nil {
+		if err := b.buckets[depth].Append(packBlockBounds(acc.bounds)); err != nil {
 			return fmt.Errorf("append depth %d block: %w", depth, err)
 		}
 		*acc = blockAcc{}
@@ -107,10 +103,7 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 
 			break
 		}
-		written, top, err := b.writePositions(d, positionsWriter)
-		if err == nil {
-			err = b.writeBlocks(d, blocksWriter)
-		}
+		written, top, err := b.writeDepth(d, positionsWriter, blocksWriter)
 		if err != nil {
 			errs = append(errs, err)
 
@@ -162,9 +155,11 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 	return nil
 }
 
-// writePositions appends depth d's positions to w and releases the
-// depth's stream, returning how many it wrote and the largest.
-func (b *DepthIndexBuilder) writePositions(d uint32, w *ArrayWriter) (uint64, uint64, error) { //nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+// writeDepth splits depth d's stream into its positions, appended to
+// positions, and its block bounds, the last partial block's included,
+// appended to blocks. It releases the depth's stream and returns how
+// many positions it wrote and the largest.
+func (b *DepthIndexBuilder) writeDepth(d uint32, positions, blocks *ArrayWriter) (uint64, uint64, error) { //nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
 	if int(d) >= len(b.buckets) || b.buckets[d] == nil {
 		return 0, 0, nil
 	}
@@ -174,64 +169,48 @@ func (b *DepthIndexBuilder) writePositions(d uint32, w *ArrayWriter) (uint64, ui
 		b.buckets[d] = nil
 	}()
 	var written, top uint64
-	if err := bucket.Iterate(func(p uint64) error {
-		if err := w.WriteU64(p); err != nil {
+	inBlock := 0
+	if err := bucket.Iterate(func(v uint64) error {
+		if inBlock == DepthBlockSize {
+			inBlock = 0
+			if err := blocks.WriteU64(v); err != nil {
+				return fmt.Errorf("write block depth %d: %w", d, err)
+			}
+
+			return nil
+		}
+		if err := positions.WriteU64(v); err != nil {
 			return fmt.Errorf("write position depth %d: %w", d, err)
 		}
-		top = max(top, p)
+		inBlock++
+		top = max(top, v)
 		written++
 
 		return nil
 	}); err != nil {
 		return 0, 0, fmt.Errorf("iterate depth %d: %w", d, err)
 	}
+	if acc := b.open[d]; acc.n > 0 {
+		if err := blocks.WriteU64(packBlockBounds(acc.bounds)); err != nil {
+			return 0, 0, fmt.Errorf("write depth %d last block: %w", d, err)
+		}
+	}
 
 	return written, top, nil
-}
-
-// writeBlocks appends depth d's block bounds, its last partial block
-// included, to w and releases the depth's block stream.
-func (b *DepthIndexBuilder) writeBlocks(d uint32, w *ArrayWriter) error {
-	if int(d) >= len(b.blocks) || b.blocks[d] == nil {
-		return nil
-	}
-	blocks := b.blocks[d]
-	defer func() {
-		blocks.Close()
-		b.blocks[d] = nil
-	}()
-	if acc := b.open[d]; acc.n > 0 {
-		if err := blocks.Append(packBlockBounds(acc.bounds)); err != nil {
-			return fmt.Errorf("append depth %d last block: %w", d, err)
-		}
-	}
-	if err := blocks.Iterate(func(v uint64) error {
-		if err := w.WriteU64(v); err != nil {
-			return fmt.Errorf("write block depth %d: %w", d, err)
-		}
-
-		return nil
-	}); err != nil {
-		return fmt.Errorf("iterate depth %d blocks: %w", d, err)
-	}
-
-	return nil
 }
 
 // Close releases any open per-depth buckets without writing the
 // output. Used on the error path; idempotent.
 func (b *DepthIndexBuilder) Close() error {
 	var errs []error
-	for _, streams := range [][]*u64StreamArray{b.buckets, b.blocks} {
-		for i, s := range streams {
-			if s == nil {
-				continue
-			}
-			if err := s.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("close depth %d stream: %w", i, err))
-			}
-			streams[i] = nil
+	for i, s := range b.buckets {
+		if s == nil {
+			continue
 		}
+		if err := s.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close depth %d stream: %w", i, err))
+		}
+		b.buckets[i] = nil
 	}
 
 	return errors.Join(errs...)
