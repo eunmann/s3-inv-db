@@ -27,28 +27,28 @@ func TestCoreStatsAdaptiveWidths_RoundTrip(t *testing.T) {
 			count: 1, totalBytes: 1,
 			depth: 1, tierMask: 1,
 			subtreeEnd: 0,
-			wantStride: format.CoreStatsStride{Count: 1, Bytes: 1, SubtreeEnd: 1, Depth: 1, TierMask: 0},
+			wantStride: format.CoreStatsStride{Count: 1, Bytes: 1, SubtreeSize: 1, Depth: 1, TierMask: 0},
 		},
 		{
 			name:  "mid_range", // u16 for count/bytes, u24 for subtree_end
 			count: 0xFFFF, totalBytes: 0xFFFF,
 			depth: 1, tierMask: 0b101,
 			subtreeEnd: 0xFFFFFF,
-			wantStride: format.CoreStatsStride{Count: 2, Bytes: 2, SubtreeEnd: 3, Depth: 1, TierMask: 1},
+			wantStride: format.CoreStatsStride{Count: 2, Bytes: 2, SubtreeSize: 3, Depth: 1, TierMask: 1},
 		},
 		{
 			name:  "depth_overflows_u8", // depth=256 forces u16
 			count: 1, totalBytes: 1,
 			depth: 256, tierMask: 1 << 12,
 			subtreeEnd: 0,
-			wantStride: format.CoreStatsStride{Count: 1, Bytes: 1, SubtreeEnd: 1, Depth: 2, TierMask: 2},
+			wantStride: format.CoreStatsStride{Count: 1, Bytes: 1, SubtreeSize: 1, Depth: 2, TierMask: 2},
 		},
 		{
 			name:  "wide", // pessimal — all u64
 			count: 1 << 40, totalBytes: 1 << 50,
 			depth: 1, tierMask: 0b11,
 			subtreeEnd: 1 << 33,
-			wantStride: format.CoreStatsStride{Count: 6, Bytes: 7, SubtreeEnd: 5, Depth: 1, TierMask: 1},
+			wantStride: format.CoreStatsStride{Count: 6, Bytes: 7, SubtreeSize: 5, Depth: 1, TierMask: 1},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

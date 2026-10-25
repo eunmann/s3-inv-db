@@ -76,9 +76,6 @@ func (w *rankedBitsWriter) add(bit bool) error {
 	return nil
 }
 
-// ones returns the set bits added so far.
-func (w *rankedBitsWriter) ones() uint64 { return w.set }
-
 func (w *rankedBitsWriter) close() error {
 	err := w.finish()
 	if err != nil {

@@ -30,6 +30,8 @@ index/
 ├── manifest.json
 ├── tiers.json
 ├── core_stats.bin
+├── core_patch.bin                 (only when patching pays)
+├── core_patch.rows
 ├── depth_offsets.u64
 ├── depth_positions.u64
 ├── mph.bin
@@ -61,7 +63,7 @@ fields little-endian:
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | Magic | `0x53334944` ("S3ID" in ASCII) |
-| 4 | 4 | Version | Format version (currently `7`) |
+| 4 | 4 | Version | Format version (currently `8`) |
 | 8 | 8 | Count | Number of rows |
 | 16 | 4 | Width | Row stride in bytes |
 
@@ -90,9 +92,8 @@ element, each repacked file ends with an 8-byte zero tail pad.
 ## Core Stats (`core_stats.bin`)
 
 A single row-major file with one row per prefix at its preorder
-position. Each field is stored at the smallest byte width that holds
-its largest value in this index (`CoreStatsStride` in
-`pkg/format/core_stats.go`), so the row width varies per index.
+position, plus, when it pays, two patch files for the few values that
+don't fit their field (`pkg/format/core_stats.go`, `core_patch.go`).
 
 Layout:
 
@@ -107,9 +108,9 @@ Fields, in row order:
 
 | Field | Width (bytes) |
 |-------|---------------|
-| object_count | 1–8 |
-| total_bytes | 1–8 |
-| subtree_end | 1–8 |
+| object_count | 1–8, patched |
+| total_bytes | 1–8, patched |
+| subtree_size | 1–8, patched: `subtree_end − pos` |
 | depth | 1–2 |
 | tier_mask | 0–2 |
 
@@ -120,19 +121,42 @@ cache lines measured no faster. `tier_mask` bit *i* is set when
 tier slot *i* (the *i*-th tier in `tiers.json`) holds data in this
 prefix. Its width is 0 when no prefix has data outside slot 0; the mask
 is then slot 0 for a prefix with data. A prefix has children exactly
-when `subtree_end > pos`.
+when `subtree_size > 0`.
 
 A field read is one 8-byte little-endian load masked to the field's
 width; the tail pad keeps that load inside the mmap on the last row.
-On the 1M-object benchmark fixture the stride is 3 + 7 + 3 + 1 + 2 =
-16 bytes, 256 rows per 4 KiB page, so a stats lookup is one page fault
-on a cold index and zero on a warm one.
+
+### Patched fields
+
+The root and the top levels carry bucket-wide totals and subtrees, so
+a field sized for its largest value would make every row pay for a
+handful. Instead the builder picks each patched field's width from the
+data:
+
+- At finalize it reads every row once and counts rows by the widths
+  their three patched values need, then sizes every width combination
+  exactly (rows × widths, plus the patch files for the rows that don't
+  fit) and keeps the smallest. When no narrower width pays for its
+  exceptions it uses plain widths and writes no patch files.
+- A value that doesn't fit stores the field's all-ones sentinel (a
+  value equal to it needs the next width). Its row's bit is set in
+  `core_patch.rows`, a ranked bit vector (layout as in
+  `tier_multi.rows`), and the row's exact `object_count`,
+  `total_bytes` and `subtree_size` go to `core_patch.bin` (Header,
+  `Width` = 24, then three `uint64`s per exception in row order).
+- A reader that loads a sentinel from a patched field (one under 8
+  bytes in an index with patch files) reads the exact value at
+  `rank(pos)` in `core_patch.bin`; every other read is the plain load.
+
+On the 1M-object benchmark fixture the stride is 1 + 4 + 1 + 1 + 2 = 9
+bytes with 3.4% of rows patched, against 3 + 7 + 3 + 1 + 2 = 16 bytes
+unpatched.
 
 During the build the rows are written at a fixed 28-byte stride
 (8 + 8 + 8 + 2 + 2) into an mmap'd file. `object_count`, `total_bytes`,
-`depth` and `tier_mask` are written at `Add()` time; `subtree_end` is
-patched in place when the subtree closes. At finalize the builder
-streams the rows into `core_stats.bin.tmp` at the narrow stride and
+`depth` and `tier_mask` are written at `Add()` time; `subtree_size` is
+written in place when the subtree closes. At finalize the builder
+streams the rows into `core_stats.bin.tmp` at the chosen stride and
 renames it over the build file.
 
 ### Preorder Positions
@@ -353,4 +377,4 @@ from the file-header format version.
 
 ## Versioning
 
-The format version in file headers lets a reader refuse files it would mis-decode. Version 7 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 8 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
