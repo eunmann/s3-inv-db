@@ -221,11 +221,14 @@ type DiscoveredRowView struct {
 	LoadDurationH        string
 	RunLabel             string
 	MetaLine             string
+	StateName            string // State as the template's state helpers take it
 	LoadDuration         time.Duration
 	CacheBytes           int64
 	AutoLoadFailureCount uint32
 	Pinned               bool
 	UserUnloaded         bool
+	// CanRetry: the latest job ended failed, aborted or cancelled.
+	CanRetry bool
 }
 
 // populateRowDerived fills the view fields that depend on the
@@ -235,6 +238,14 @@ type DiscoveredRowView struct {
 func populateRowDerived(view *DiscoveredRowView) {
 	view.RunLabel = humanfmt.RunTimestamp(view.Run)
 	view.MetaLine = discoveredMetaLine(view)
+	view.StateName = string(view.State)
+	if j := view.LatestJob; j != nil {
+		switch j.State {
+		case jobs.StateFailed, jobs.StateAborted, jobs.StateCancelled:
+			view.CanRetry = true
+		case jobs.StateQueued, jobs.StateRunning, jobs.StateSucceeded:
+		}
+	}
 }
 
 // discoveredMetaLine joins the secondary facts about one run into a
