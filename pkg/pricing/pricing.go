@@ -205,59 +205,15 @@ func ComputeMonthlyCost(breakdown []format.TierBreakdown, pt PriceTable) CostRes
 	}
 
 	for _, tb := range breakdown {
-		price, ok := pt.PerGBMonth[tb.TierName]
+		c, ok := computeTierCost(tb, pt)
 		if !ok {
 			continue
 		}
-
-		// Base storage cost.
-		gbFrac := float64(tb.Bytes) / float64(bytesPerGB)
-		storageMicrodollars := microdollarsFromFloat(gbFrac * price)
-
-		// Average object size for this tier.
-		var avgObjectSize uint64
-		if tb.ObjectCount > 0 {
-			avgObjectSize = tb.Bytes / tb.ObjectCount
-		}
-
-		// Minimum object size penalty for applicable tiers.
-		var minSizePenalty uint64
-		if TierHasMinObjectSize(tb.TierName) && avgObjectSize < minObjectSizeBytes && avgObjectSize > 0 {
-			// Each object is charged as 128 KiB.
-			additionalBytes := (minObjectSizeBytes - avgObjectSize) * tb.ObjectCount
-			additionalGB := float64(additionalBytes) / float64(bytesPerGB)
-			minSizePenalty = microdollarsFromFloat(additionalGB * price)
-			result.MinObjectSizeMicrodollars += minSizePenalty
-		}
-
-		// Intelligent-Tiering monitoring cost. Every object in a
-		// monitored tier is billable; objects < 128 KiB are pre-
-		// segregated into INTELLIGENT_TIERING_FREQUENT_SMALL by the
-		// ingest classifier and therefore never reach this branch.
-		var monitoringCost uint64
-		if TierHasMonitoringCost(tb.TierName) && pt.MonitoringPer1000Objects > 0 {
-			monitoringCost = microdollarsFromFloat(float64(tb.ObjectCount) / requestsPerThousand * pt.MonitoringPer1000Objects)
-			result.MonitoringMicrodollars += monitoringCost
-		}
-
-		// Glacier metadata overhead.
-		var glacierOverhead uint64
-		if TierHasGlacierOverhead(tb.TierName) && tb.ObjectCount > 0 {
-			// 32 KiB at Glacier rate per object.
-			glacierOverheadGB := float64(tb.ObjectCount*glacierMetadataOverheadBytes) / float64(bytesPerGB)
-			glacierOverhead = microdollarsFromFloat(glacierOverheadGB * price)
-
-			// 8 KiB at Standard rate per object.
-			indexOverheadGB := float64(tb.ObjectCount*glacierIndexOverheadBytes) / float64(bytesPerGB)
-			indexOverhead := microdollarsFromFloat(indexOverheadGB * pt.StandardPricePerGB)
-			glacierOverhead += indexOverhead
-
-			result.GlacierOverheadMicrodollars += glacierOverhead
-		}
-
-		tierTotal := storageMicrodollars + minSizePenalty + glacierOverhead
-		result.PerTierMicrodollars[tb.TierName] = tierTotal
-		result.TotalMicrodollars += tierTotal
+		result.MinObjectSizeMicrodollars += c.minSize
+		result.MonitoringMicrodollars += c.monitoring
+		result.GlacierOverheadMicrodollars += c.glacier
+		result.PerTierMicrodollars[tb.TierName] = c.tierTotal
+		result.TotalMicrodollars += c.tierTotal
 	}
 
 	// Monitoring costs feed the global total, not the per-tier slice
@@ -265,6 +221,77 @@ func ComputeMonthlyCost(breakdown []format.TierBreakdown, pt PriceTable) CostRes
 	result.TotalMicrodollars += result.MonitoringMicrodollars
 
 	return result
+}
+
+// MonthlyTotalMicrodollars is ComputeMonthlyCost(breakdown, pt).TotalMicrodollars
+// without building the per-tier map, for callers that price many
+// prefixes and need only the total (sorting by cost).
+func MonthlyTotalMicrodollars(breakdown []format.TierBreakdown, pt PriceTable) uint64 {
+	var total uint64
+	for _, tb := range breakdown {
+		if c, ok := computeTierCost(tb, pt); ok {
+			total += c.tierTotal + c.monitoring
+		}
+	}
+
+	return total
+}
+
+// tierCost is one tier's share of a monthly cost. TierTotal is storage,
+// minimum-size penalty and Glacier overhead; monitoring is billed on
+// top of it.
+type tierCost struct {
+	tierTotal, minSize, monitoring, glacier uint64
+}
+
+// computeTierCost prices one tier; false when pt has no price for it.
+func computeTierCost(tb format.TierBreakdown, pt PriceTable) (tierCost, bool) {
+	price, ok := pt.PerGBMonth[tb.TierName]
+	if !ok {
+		return tierCost{}, false
+	}
+
+	// Base storage cost.
+	gbFrac := float64(tb.Bytes) / float64(bytesPerGB)
+	storageMicrodollars := microdollarsFromFloat(gbFrac * price)
+
+	// Average object size for this tier.
+	var avgObjectSize uint64
+	if tb.ObjectCount > 0 {
+		avgObjectSize = tb.Bytes / tb.ObjectCount
+	}
+
+	var c tierCost
+	// Minimum object size penalty for applicable tiers.
+	if TierHasMinObjectSize(tb.TierName) && avgObjectSize < minObjectSizeBytes && avgObjectSize > 0 {
+		// Each object is charged as 128 KiB.
+		additionalBytes := (minObjectSizeBytes - avgObjectSize) * tb.ObjectCount
+		additionalGB := float64(additionalBytes) / float64(bytesPerGB)
+		c.minSize = microdollarsFromFloat(additionalGB * price)
+	}
+
+	// Intelligent-Tiering monitoring cost. Every object in a
+	// monitored tier is billable; objects < 128 KiB are pre-
+	// segregated into INTELLIGENT_TIERING_FREQUENT_SMALL by the
+	// ingest classifier and therefore never reach this branch.
+	if TierHasMonitoringCost(tb.TierName) && pt.MonitoringPer1000Objects > 0 {
+		c.monitoring = microdollarsFromFloat(float64(tb.ObjectCount) / requestsPerThousand * pt.MonitoringPer1000Objects)
+	}
+
+	// Glacier metadata overhead.
+	if TierHasGlacierOverhead(tb.TierName) && tb.ObjectCount > 0 {
+		// 32 KiB at Glacier rate per object.
+		glacierOverheadGB := float64(tb.ObjectCount*glacierMetadataOverheadBytes) / float64(bytesPerGB)
+		c.glacier = microdollarsFromFloat(glacierOverheadGB * price)
+
+		// 8 KiB at Standard rate per object.
+		indexOverheadGB := float64(tb.ObjectCount*glacierIndexOverheadBytes) / float64(bytesPerGB)
+		c.glacier += microdollarsFromFloat(indexOverheadGB * pt.StandardPricePerGB)
+	}
+
+	c.tierTotal = storageMicrodollars + c.minSize + c.glacier
+
+	return c, true
 }
 
 // ComputePutCost returns the one-time PUT/COPY/POST charge for ingesting

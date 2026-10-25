@@ -13,6 +13,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
+	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/rs/zerolog"
 )
 
@@ -196,12 +197,12 @@ func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, o
 
 	var cost inventory.CostFunc
 	if level.HasTierData {
+		// One buffer for the request: sorting by cost prices every child.
+		var buf []indexread.TierBreakdown
 		cost = func(p uint64) uint64 {
-			if est := h.computeCostEstimate(idx.TierBreakdown(p), false); est != nil {
-				return est.TotalMicrodollars
-			}
+			buf = idx.AppendTierBreakdown(buf[:0], p)
 
-			return 0
+			return pricing.MonthlyTotalMicrodollars(buf, h.priceTable)
 		}
 	}
 	page, err := inventory.PageChildren(idx, pos, inventory.ChildQuery{SortBy: sortBy, Dir: dir, Page: pageNum, PageSize: pageSize}, cost)
