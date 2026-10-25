@@ -1,6 +1,6 @@
 # Index Format
 
-The index uses a row-major file format optimized for memory-mapped access. Each prefix has the same row index (its preorder position) in every per-prefix file, so `pos → all stats` is one row read in one mmap.
+The index uses a row-major file format optimized for memory-mapped access. Each prefix has the same row index (its position, in [level order](#level-order-positions)) in every per-prefix file, so `pos → all stats` is one row read in one mmap.
 
 ## What's in the index — and what isn't
 
@@ -33,7 +33,6 @@ index/
 ├── core_patch.bin                 (only when patching pays)
 ├── core_patch.rows
 ├── depth_offsets.u64
-├── depth_positions.u64
 ├── depth_blocks.u64
 ├── mph.bin
 ├── mph_slots.bin
@@ -65,7 +64,7 @@ fields little-endian:
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | Magic | `0x53334944` ("S3ID" in ASCII) |
-| 4 | 4 | Version | Format version (currently `12`) |
+| 4 | 4 | Version | Format version (currently `13`) |
 | 8 | 8 | Count | Number of rows |
 | 16 | 4 | Width | Row stride in bytes |
 
@@ -82,8 +81,7 @@ and records it in `Width`:
 
 | File | Width |
 |------|-------|
-| `depth_positions.u64` | bytes for the largest position (1–8) |
-| `depth_offsets.u64` | bytes for the number of positions (1–8) |
+| `depth_offsets.u64` | bytes for the number of rows (1–8) |
 | `tier_stats/tier_multi.off.u64` | bytes for the number of stored tier slots (1–8) |
 | `prefix_dict.off.u64` | bytes for the segment blob's size (1–8) |
 
@@ -93,8 +91,7 @@ element, each repacked file ends with an 8-byte zero tail pad.
 
 ## Core Stats (`core_stats.bin`)
 
-A single row-major file with one row per prefix at its preorder
-position, plus, when it pays, two patch files for the few values that
+A single row-major file with one row per prefix at its position, plus, when it pays, two patch files for the few values that
 don't fit their field (`pkg/format/core_stats.go`, `core_patch.go`).
 
 Layout:
@@ -102,8 +99,8 @@ Layout:
 | Offset | Size | Content |
 |--------|------|---------|
 | 0 | 20 | Header (`Width` = row width in bytes) |
-| 20 | 5 | Stride descriptor: one byte per field, its width in bytes |
-| 25 | `Count × Width` | Rows |
+| 20 | 4 | Stride descriptor: one byte per field, its width in bytes |
+| 24 | `Count × Width` | Rows |
 | end | 8 | Zero tail pad |
 
 Fields, in row order:
@@ -112,8 +109,7 @@ Fields, in row order:
 |-------|---------------|
 | object_count | 1–8, patched |
 | total_bytes | 1–8, patched |
-| subtree_size | 1–8, patched: `subtree_end − pos` |
-| depth | 1–2 |
+| child_start | 1–8, patched: the position of the prefix's first child |
 | tier_mask | 0–2 |
 
 A field's offset in the row is the sum of the widths before it. On
@@ -125,15 +121,17 @@ mask, in which bit *i* is set when tier slot *i* (the *i*-th tier in
 (see [Tier Statistics](#tier-statistics)): the mask itself, nothing
 for the dense layout, or past 8 tiers in the multi layout a 1-byte
 code. Its width is 0 when no prefix has data outside slot 0; the mask
-is then slot 0 for a prefix with data. A prefix has children exactly
-when `subtree_size > 0`.
+is then slot 0 for a prefix with data. A prefix's children are the
+positions `[child_start(pos), child_start(pos + 1))`, with
+`child_start(Count) = Count`; it has children exactly when that range
+is not empty.
 
 A field read is one 8-byte little-endian load masked to the field's
 width; the tail pad keeps that load inside the mmap on the last row.
 
 ### Patched fields
 
-The root and the top levels carry bucket-wide totals and subtrees, so
+The root and the top levels carry bucket-wide totals, so
 a field sized for its largest value would make every row pay for a
 handful. Instead the builder picks each patched field's width from the
 data:
@@ -150,69 +148,77 @@ data:
   value equal to it needs the next width). Its row's bit is set in
   `core_patch.rows`, a ranked bit vector (layout as in
   `tier_multi.rows`), and the row's exact `object_count`,
-  `total_bytes` and `subtree_size` go to `core_patch.bin` (Header,
+  `total_bytes` and `child_start` go to `core_patch.bin` (Header,
   `Width` = 24, then three `uint64`s per exception in row order).
 - A reader that loads a sentinel from a patched field (one under 8
   bytes in an index with patch files) reads the exact value at
   `rank(pos)` in `core_patch.bin`; every other read is the plain load.
 
-On the 1M-object benchmark fixture the stride is 1 + 5 + 1 + 1 + 1 = 9
-bytes with 0.04% of rows patched, against 3 + 7 + 3 + 1 + 1 = 15 bytes
+On the 1M-object benchmark fixture the stride is 1 + 5 + 3 + 1 = 10
+bytes with 0.02% of rows patched, against 3 + 7 + 3 + 1 = 14 bytes
 unpatched.
 
-During the build the rows are written at a fixed 28-byte stride
-(8 + 8 + 8 + 2 + 2) into an mmap'd file. `object_count`, `total_bytes`,
-`depth` and `tier_mask` are written at `Add()` time; `subtree_size` is
-written in place when the subtree closes. At finalize the builder
-streams the rows into `core_stats.bin.tmp` at the chosen stride and
-renames it over the build file.
+During the build the rows are written at a fixed 26-byte stride
+(8 + 8 + 8 + 2) into an mmap'd file, in position order (see below). At
+finalize the builder streams the rows into `core_stats.bin.tmp` at the
+chosen stride and renames it over the build file.
 
-### Preorder Positions
+### Level-order positions
 
-Prefixes are stored in preorder traversal order. A prefix's subtree
-occupies contiguous positions `[pos, subtree_end]` — the **closed**
-interval ending on the last descendant inclusive. Subtree iteration
-is a range scan with no pointer chasing.
-
-Position 0 is always the root prefix `""` (depth 0), whose subtree is
-the whole index.
+Positions number the prefixes level by level: the root `""` is 0, then
+every depth-1 prefix in key order, then every depth-2 prefix in key
+order, and so on. Each depth's prefixes are one contiguous range of
+positions, and within it siblings are adjacent and in S3 key order, so
+every prefix's children are one contiguous range too:
+`[child_start(pos), child_start(pos + 1))`.
 
 ```
-Position 0: ""              (subtree_end=6)
-Position 1: data/           (subtree_end=4)
-Position 2: data/2024/      (subtree_end=4)
-Position 3: data/2024/01/   (subtree_end=3)
-Position 4: data/2024/02/   (subtree_end=4)
-Position 5: logs/           (subtree_end=6)
-Position 6: logs/app/       (subtree_end=6)
+Key order          Position  child_start
+""                 0         1
+data/              1         3
+data/2024/         3         5
+data/2024/01/      5         7
+data/2024/02/      6         7
+logs/              2         4
+logs/app/          4         7
 ```
 
-To find all descendants of `data/` (position 1): iterate positions 2 through 4.
+The children of `data/` (position 1) are positions `[child_start(1),
+child_start(2)) = [3, 4)`: `data/2024/`. Descendants k levels down are
+the children of the children's range, k steps of two reads: the
+children of positions `[lo, hi)` are `[child_start(lo),
+child_start(hi))`. A listing, a filter or a ranking over one level
+reads its rows in sequence.
+
+Rows arrive in key order, which is not position order, so the builder
+spools each prefix by depth (one file per depth in its temp directory,
+about 40 B per prefix) and writes every per-row file at finalize,
+depth by depth: a prefix's first child is the number of rows already
+seen at the next depth when it arrives, and its parent is the last row
+seen at the depth above.
 
 ## Depth Index
 
-Two files enable efficient "find all prefixes at depth N" queries, and
-a third bounds their stats block by block:
+Rows are grouped by depth, so the depth index is where each depth
+starts, plus stats bounds per block of rows:
 
 | File | Description |
 |------|-------------|
-| `depth_offsets.u64` | `depth_offsets[d]` = starting index in `depth_positions` for depth `d`; a trailing sentinel holds the total |
-| `depth_positions.u64` | Sorted positions of all prefixes at each depth |
-| `depth_blocks.u64` | Per block of 64 consecutive `depth_positions` entries of one depth, bounds on their object counts and bytes |
+| `depth_offsets.u64` | `depth_offsets[d]` = the first position at depth `d`; a trailing sentinel holds the total |
+| `depth_blocks.u64` | Per block of 64 consecutive positions of one depth, bounds on their object counts and bytes |
 
-To find prefixes at depth 2:
-1. Read `depth_offsets[2]` and `depth_offsets[3]`
-2. Slice `depth_positions[start:end]`
-3. Binary search within a subtree range if needed
+The prefixes at depth 2 are positions `[depth_offsets[2],
+depth_offsets[3])`. A reader keeps the offsets in memory (one per
+depth) and finds a position's depth with a binary search over them.
 
 ### Block bounds (`depth_blocks.u64`)
 
-Each depth's posting list is cut into blocks of 64 entries from its
-first entry, the last block possibly shorter; blocks never span two
-depths. Depth `d` has `ceil((depth_offsets[d+1] − depth_offsets[d]) / 64)`
-blocks, stored depth after depth, so a reader finds depth `d`'s first
-block from the offsets alone and checks the file holds exactly the
-total on open. Each block is one 8-byte word of four 16-bit codes,
+Each depth's rows are cut into blocks of 64 from its first row, the
+last block possibly shorter; blocks never span two depths. Depth `d`
+has `ceil((depth_offsets[d+1] − depth_offsets[d]) / 64)` blocks, stored
+depth after depth, so a reader finds depth `d`'s first block from the
+offsets alone and checks the file holds exactly the total on open.
+Each block is one 8-byte word of four 16-bit codes,
 from the low end: minimum count, maximum count, minimum bytes, maximum
 bytes.
 
@@ -244,7 +250,7 @@ The MPHF provides O(1) prefix-to-position lookups with BBHash (Limasset et al., 
 | File | Description |
 |------|-------------|
 | `mph.bin` | BBHash levels and the fallback table (layout below) |
-| `mph_slots.bin` | Per BBHash slot, the prefix's fingerprint and its preorder position |
+| `mph_slots.bin` | Per BBHash slot, the prefix's fingerprint and its position |
 
 `mph.bin` layout, all little-endian `uint64`, with no file header:
 
@@ -308,7 +314,7 @@ row read per level.
 |------|-------------|
 | `prefix_dict.bin` | Every distinct segment once, concatenated (no separators) |
 | `prefix_dict.off.u64` | Byte offset for each segment in `prefix_dict.bin`; trailing sentinel marks the end |
-| `prefix_tree.bin` | Per prefix in preorder: its last segment's ID and the distance back to its parent's position |
+| `prefix_tree.bin` | Per prefix in position order: its last segment's ID and the distance back to its parent's position (a row of the level above) |
 
 `prefix_tree.bin` layout:
 
@@ -396,7 +402,7 @@ cost estimates honour the AWS minimum-monitored-size rule exactly.
 
 Header (`Count` = prefixes, `Width` = (T − 1) × slot width for T
 present tiers), the slot-width descriptor, then one row per prefix at
-its preorder position holding slots 0 … T − 2, zeros included. Slot
+its position holding slots 0 … T − 2, zeros included. Slot
 T − 1 is derived. Readers check the row count and width against the
 core stats and `tiers.json`. The slots give the mask (a slot holds data
 when its count or bytes is nonzero), so the core rows' `tier_mask` has
@@ -412,7 +418,7 @@ more, whose mask is in `tier_multi.mask`:
 
 | File | Content |
 |------|---------|
-| `tier_multi.bin` | Header (`Count` = stored slots, `Width` = slot width), slot-width descriptor, then for each such prefix in preorder the slots of every tier in its mask except the highest, in slot order |
+| `tier_multi.bin` | Header (`Count` = stored slots, `Width` = slot width), slot-width descriptor, then for each such prefix in position order the slots of every tier in its mask except the highest, in slot order |
 | `tier_multi.rows` | Header (`Count` = prefixes), a bit vector with bit *pos* set for each such prefix (little-endian `uint64` words), then a rank directory: for every 8 words, the set bits before them |
 | `tier_multi.off.u64` | A variable-width array (see above): for the *k*-th such prefix, the index of its first slot in `tier_multi.bin`, plus a trailing sentinel |
 | `tier_multi.mask` | Past 8 tiers only: a 2-byte array of the *k*-th such prefix's mask |
@@ -449,4 +455,4 @@ from the file-header format version.
 
 ## Versioning
 
-The format version in file headers lets a reader refuse files it would mis-decode. Version 12 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 13 is the current format; readers accept only that version, and an index written by any other version is rebuilt.

@@ -37,7 +37,7 @@ fmt.Printf("%d objects, %d bytes\n", stats.ObjectCount, stats.TotalBytes)
   `ChildSegment` (the last segment of the prefix at a position, without
   the trailing slash, for listing labels without building the full
   string).
-- **Tree navigation**: `Depth`, `SubtreeEnd`, `HasChildren`, `Count`,
+- **Tree navigation**: `Depth`, `HasChildren`, `Count`,
   `MaxDepth`.
 - **Descendants**: `DescendantsAtDepth`, `DescendantsAtDepthFiltered`
   (apply a `Filter{MinCount, MinBytes}` to skip cheap nodes before
@@ -64,10 +64,11 @@ fmt.Printf("%d objects, %d bytes\n", stats.ObjectCount, stats.TotalBytes)
   surface errors in normal use; the `error` from `DescendantsAt*`,
   `DescendantsPage` and `Top*` is non-nil only when the depth index on
   disk is malformed.
-- **Subtree end is inclusive**: `SubtreeEnd(pos)` is the last
-  descendant's position (the closed interval `[pos, SubtreeEnd(pos)]`),
-  not a half-open upper bound. See
-  [index-format.md](index-format.md#preorder-positions).
+- **Positions are in level order**: the root, then every depth-1
+  prefix, then every depth-2 prefix, each depth in key order. A
+  prefix's descendants at one depth are a contiguous range
+  (`DescendantSpan`), in key order. See
+  [index-format.md](index-format.md#level-order-positions).
 - **Root and tier presence**: position 0 is the root prefix `""`.
   `HasTierData` is false only for an index with no prefixes; a build
   over an inventory without a storage-class column counts every object

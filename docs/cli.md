@@ -154,7 +154,7 @@ independent of how the index stores it:
 - prefixes per depth, the number of leaves;
 - how many prefixes hold 1, 2, … tiers, and how many distinct tier
   combinations occur;
-- per value (object count, total bytes, subtree size, distance to the
+- per value (object count, total bytes, child start, distance to the
   parent, children, per-tier count and bytes), the bits it needs at the
   median, p99, p99.9 and maximum (the JSON form has the full histogram);
 - the segment dictionary's size.

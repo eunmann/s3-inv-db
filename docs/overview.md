@@ -79,10 +79,10 @@ Query: "data/2024/"
     Stats result
 ```
 
-Prefixes are stored in preorder traversal, so a prefix's descendants
-form a contiguous position range. Combined with a depth index, this
-makes "children at depth N" a binary search inside a range rather
-than a tree walk.
+Prefixes are stored level by level (the root, every depth-1 prefix,
+every depth-2 prefix, each level in key order), so a prefix's children
+are a contiguous range of positions that its row points to: listing
+them is two reads, and a scan of a level reads its rows in sequence.
 
 ## Per-tier statistics
 
