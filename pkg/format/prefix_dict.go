@@ -1,7 +1,9 @@
 package format
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 
@@ -46,6 +48,10 @@ func NewPrefixSegmentInterner(outDir string) (*PrefixSegmentInterner, error) {
 	}, nil
 }
 
+// ErrTooManySegments is returned when an index would need more
+// distinct segments than a segment ID can number.
+var ErrTooManySegments = errors.New("too many distinct prefix segments")
+
 // Intern returns the ID for segment, assigning and writing a new one
 // on first occurrence. Looking up an existing segment does not
 // allocate; a new one is copied, so segment may alias a buffer the
@@ -55,6 +61,9 @@ func (si *PrefixSegmentInterner) Intern(segment string) (uint32, error) {
 		return id, nil
 	}
 
+	if si.nextID == math.MaxUint32 {
+		return 0, fmt.Errorf("%w: more than %d distinct segments", ErrTooManySegments, uint64(math.MaxUint32))
+	}
 	id := si.nextID
 	si.nextID++
 	owned := strings.Clone(segment)

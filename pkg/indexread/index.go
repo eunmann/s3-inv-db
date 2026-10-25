@@ -54,7 +54,7 @@ func Open(dir string) (*Index, error) {
 		return nil, fmt.Errorf("open tier stats: %w", err)
 	}
 
-	return &Index{
+	idx := &Index{
 		coreStats:  coreStats,
 		depthIndex: depthIndex,
 		mphf:       mphf,
@@ -62,7 +62,39 @@ func Open(dir string) (*Index, error) {
 		tierStats:  tierStats,
 		count:      coreStats.Count(),
 		maxDepth:   depthIndex.MaxDepth(),
-	}, nil
+	}
+	if err := idx.checkCounts(); err != nil {
+		return nil, errors.Join(err, idx.Close())
+	}
+
+	return idx, nil
+}
+
+// ErrIndexInconsistent is returned by Open when the index's files
+// disagree on how many prefixes it holds: a mixed or damaged file set
+// would otherwise answer with zeros or wrong rows.
+var ErrIndexInconsistent = errors.New("index files disagree on the prefix count")
+
+// checkCounts requires every per-prefix structure to hold the same
+// number of prefixes. Each count is a header or an array length, so
+// this is O(1).
+func (idx *Index) checkCounts() error {
+	counts := []struct {
+		name string
+		n    uint64
+	}{
+		{"MPHF", idx.mphf.Count()},
+		{"prefix tree", idx.prefixes.Count()},
+		{"depth positions", idx.depthIndex.Count()},
+		{"depth offsets end", idx.depthIndex.End()},
+	}
+	for _, c := range counts {
+		if c.n != idx.count {
+			return fmt.Errorf("%w: core stats has %d, %s has %d", ErrIndexInconsistent, idx.count, c.name, c.n)
+		}
+	}
+
+	return nil
 }
 
 // Close releases all resources, joining any errors.
@@ -84,7 +116,12 @@ type Stats struct {
 
 // Lookup returns the preorder position for a prefix, or ok=false if not found.
 func (idx *Index) Lookup(prefix string) (uint64, bool) {
-	return idx.mphf.Lookup(prefix)
+	pos, ok := idx.mphf.Lookup(prefix)
+	if pos >= idx.count {
+		return 0, false // a damaged slot is a miss, not a zero row
+	}
+
+	return pos, ok
 }
 
 // Stats returns the per-prefix object count and total bytes at pos.

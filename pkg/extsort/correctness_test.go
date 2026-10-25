@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
@@ -258,7 +259,7 @@ func TestIndexBuilder_RejectsMissingParent(t *testing.T) {
 			}
 			var last error
 			for _, p := range tc.prefixes {
-				row := &extsort.PrefixRow{Prefix: p, Count: 1, TotalBytes: 1}
+				row := &extsort.PrefixRow{Prefix: p, Depth: uint16(strings.Count(p, "/")), Count: 1, TotalBytes: 1}
 				row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = 1, 1
 				if last = b.Add(row); last != nil {
 					break
@@ -294,7 +295,7 @@ func TestIndexBuilder_RejectsUnsortedInput(t *testing.T) {
 			}
 			var last error
 			for _, p := range tc.prefixes {
-				row := &extsort.PrefixRow{Prefix: p, Count: 1, TotalBytes: 1}
+				row := &extsort.PrefixRow{Prefix: p, Depth: uint16(strings.Count(p, "/")), Count: 1, TotalBytes: 1}
 				row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = 1, 1
 				if last = b.Add(row); last != nil {
 					break
@@ -304,5 +305,27 @@ func TestIndexBuilder_RejectsUnsortedInput(t *testing.T) {
 				t.Errorf("err = %v, want ErrUnsortedInput", last)
 			}
 		})
+	}
+}
+
+// TestIndexBuilder_RejectsDepthMismatch: a row's Depth must be the depth
+// its parent chain gives it, or it would land in the wrong depth list.
+func TestIndexBuilder_RejectsDepthMismatch(t *testing.T) {
+	b, err := extsort.NewIndexBuilder(filepath.Join(t.TempDir(), "idx"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var last error
+	for _, row := range []*extsort.PrefixRow{
+		{Prefix: "", Depth: 0, Count: 1, TotalBytes: 1},
+		{Prefix: "a/", Depth: 2, Count: 1, TotalBytes: 1}, // really depth 1
+	} {
+		row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = 1, 1
+		if last = b.Add(row); last != nil {
+			break
+		}
+	}
+	if !errors.Is(last, extsort.ErrDepthMismatch) {
+		t.Errorf("err = %v, want ErrDepthMismatch", last)
 	}
 }

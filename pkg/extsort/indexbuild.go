@@ -183,6 +183,10 @@ func (b *IndexBuilder) cleanup() {
 // prefix as its parent plus one segment.
 var ErrMissingParent = errors.New("prefix added without its parent")
 
+// ErrDepthMismatch is returned when a row's Depth disagrees with the
+// depth its parent chain gives it.
+var ErrDepthMismatch = errors.New("prefix depth disagrees with its parent chain")
+
 // ErrUnsortedInput is returned when a prefix doesn't sort strictly
 // after the one before it.
 var ErrUnsortedInput = errors.New("prefix out of order")
@@ -204,6 +208,12 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	}
 	if err := b.addToPrefixTree(row.Prefix); err != nil {
 		return err
+	}
+	// The parent check proves the prefix's depth is the stack depth; a
+	// row that says otherwise would land in the wrong depth list.
+	if int(row.Depth) != len(b.stack) {
+		return fmt.Errorf("%w: %q has depth %d, its place in the tree says %d",
+			ErrDepthMismatch, row.Prefix, row.Depth, len(b.stack))
 	}
 
 	pos := b.posCount
@@ -259,20 +269,18 @@ func (b *IndexBuilder) addToPrefixTree(prefix string) error {
 	return nil
 }
 
-// findCommonAncestorDepth finds the depth of the deepest common ancestor.
+// findCommonAncestorDepth finds the depth of the deepest common
+// ancestor. The stack is a chain of ancestors, so the entries that are
+// prefixes of the new row form its bottom run: scanning from the top
+// stops at the first match, about one comparison per row amortized.
 func (b *IndexBuilder) findCommonAncestorDepth(prefix string) int {
-	commonDepth := 0
-
-	for i := range len(b.stack) {
-		entry := &b.stack[i]
-		if strings.HasPrefix(prefix, entry.prefix) {
-			commonDepth = i + 1
-		} else {
-			break
+	for i, v := range slices.Backward(b.stack) {
+		if strings.HasPrefix(prefix, v.prefix) {
+			return i + 1
 		}
 	}
 
-	return commonDepth
+	return 0
 }
 
 // closeNodesAbove closes all stack nodes with depth > targetDepth.
