@@ -86,8 +86,8 @@ func (w *PrefixTreeWriter) AddRoot() error {
 }
 
 // Add adds the next prefix: the prefix at parentPos, then name, then a
-// slash.
-func (w *PrefixTreeWriter) Add(parentPos uint64, name []byte) error {
+// slash. Name may alias a buffer the caller reuses.
+func (w *PrefixTreeWriter) Add(parentPos uint64, name string) error {
 	if w.count == 0 || parentPos >= w.count {
 		return fmt.Errorf("%w: parent %d for position %d", errPrefixTreeOrder, parentPos, w.count)
 	}

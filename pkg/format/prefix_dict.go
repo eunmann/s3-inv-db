@@ -47,15 +47,17 @@ func NewPrefixSegmentInterner(outDir string) (*PrefixSegmentInterner, error) {
 }
 
 // Intern returns the ID for segment, assigning and writing a new one
-// on first occurrence. Looking up an existing segment does not allocate.
-func (si *PrefixSegmentInterner) Intern(segment []byte) (uint32, error) {
-	if id, ok := si.ids[string(segment)]; ok {
+// on first occurrence. Looking up an existing segment does not
+// allocate; a new one is copied, so segment may alias a buffer the
+// caller reuses.
+func (si *PrefixSegmentInterner) Intern(segment string) (uint32, error) {
+	if id, ok := si.ids[segment]; ok {
 		return id, nil
 	}
 
 	id := si.nextID
 	si.nextID++
-	owned := string(segment)
+	owned := strings.Clone(segment)
 	if err := si.blobWriter.WriteString(owned); err != nil {
 		return 0, fmt.Errorf("write segment: %w", err)
 	}

@@ -242,7 +242,7 @@ func (b *IndexBuilder) addToPrefixTree(prefix string) error {
 	if !ok || strings.Contains(name, "/") {
 		return fmt.Errorf("%w: %q after %q", ErrMissingParent, prefix, parent.prefix)
 	}
-	if err := b.prefixTreeW.Add(parent.pos, []byte(name)); err != nil {
+	if err := b.prefixTreeW.Add(parent.pos, name); err != nil {
 		return fmt.Errorf("prefix %q: %w", prefix, err)
 	}
 

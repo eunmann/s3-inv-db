@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 // writeTree writes a prefix tree for prefixes (in preorder, root first,
@@ -35,7 +36,7 @@ func writeTree(t *testing.T, prefixes []string) string {
 		} else {
 			parent := stack[len(stack)-1]
 			name := strings.TrimSuffix(strings.TrimPrefix(p, parent.prefix), "/")
-			if err := w.Add(parent.pos, []byte(name)); err != nil {
+			if err := w.Add(parent.pos, name); err != nil {
 				t.Fatalf("Add(%q): %v", p, err)
 			}
 		}
@@ -152,7 +153,7 @@ func TestPrefixTreeWriterRejectsBadOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Abort()
-	if err := w.Add(0, []byte("a")); !errors.Is(err, errPrefixTreeOrder) {
+	if err := w.Add(0, "a"); !errors.Is(err, errPrefixTreeOrder) {
 		t.Errorf("Add before the root: err = %v", err)
 	}
 	if err := w.AddRoot(); err != nil {
@@ -161,7 +162,7 @@ func TestPrefixTreeWriterRejectsBadOrder(t *testing.T) {
 	if err := w.AddRoot(); !errors.Is(err, errPrefixTreeOrder) {
 		t.Errorf("second root: err = %v", err)
 	}
-	if err := w.Add(1, []byte("a")); !errors.Is(err, errPrefixTreeOrder) {
+	if err := w.Add(1, "a"); !errors.Is(err, errPrefixTreeOrder) {
 		t.Errorf("parent at or after the new position: err = %v", err)
 	}
 }
@@ -200,5 +201,26 @@ func TestOpenPrefixTreeReaderMissingFiles(t *testing.T) {
 			r.Close()
 			t.Errorf("OpenPrefixTreeReader without %s succeeded", name)
 		}
+	}
+}
+
+// TestPrefixTreeAddDoesNotAllocate: the builder adds one row per prefix,
+// so a known segment must cost no allocation.
+func TestPrefixTreeAddDoesNotAllocate(t *testing.T) {
+	w, err := NewPrefixTreeWriter(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Abort()
+	if err := w.AddRoot(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Add(0, "seg"); err != nil {
+		t.Fatal(err)
+	}
+	buf := []byte("seg/")
+	name := unsafe.String(&buf[0], 3) // aliases a reused buffer, as rows do
+	if allocs := testing.AllocsPerRun(1000, func() { _ = w.Add(0, name) }); allocs != 0 {
+		t.Errorf("Add of a known segment allocates %v times", allocs)
 	}
 }
