@@ -984,8 +984,8 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	}()
 
 	// Upper bound: sums every spilled run's row count, so a prefix
-	// touched in N runs is counted N times. IndexBuilder uses this
-	// only to size the initial mmap and truncates down at Finalize.
+	// touched in N runs is counted N times. IndexBuilder uses it only
+	// as a capped hint for the initial build-file size.
 	prefixCount := mergeIter.Remaining()
 	log.Debug().
 		Uint64("merge_iter_remaining", prefixCount).

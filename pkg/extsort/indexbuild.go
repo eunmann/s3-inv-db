@@ -62,9 +62,9 @@ func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
 }
 
 // NewIndexBuilderWithCapacity creates a streaming index builder with a capacity hint.
-// The capacityHint is used to pre-size internal arrays, reducing allocations when
-// the approximate number of prefixes is known (e.g., from a run file header).
-// If capacityHint is 0, a small default capacity is used.
+// The capacityHint, an upper bound on the prefix count, pre-sizes the core
+// stats build file (capped by format.NewCoreStatsBuilder). If capacityHint
+// is 0, a small default capacity is used.
 func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*IndexBuilder, error) {
 	_, statErr := os.Stat(outDir)
 	createdOutDir := errors.Is(statErr, fs.ErrNotExist)
@@ -81,7 +81,6 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		return nil, fmt.Errorf("create MPHF builder: %w", err)
 	}
 
-	// Use capacity hint for arrays, with a minimum of 1024
 	arrayCap := max(capacityHint, uint64(1024))
 
 	coreStatsW, err := format.NewCoreStatsBuilder(outDir, arrayCap)

@@ -74,3 +74,23 @@ func TestCoreStatsBuildFileIsAllocated(t *testing.T) {
 		t.Errorf("build file is %d bytes with %d allocated", st.Size, st.Blocks*512)
 	}
 }
+
+// TestCoreStatsBuildFileIgnoresOversizedHint: the capacity hint is an
+// over-counted upper bound, so the build file reserves no more than
+// coreStatsMaxInitialRows up front; Add grows it as rows arrive.
+func TestCoreStatsBuildFileIgnoresOversizedHint(t *testing.T) {
+	dir := t.TempDir()
+	b, err := NewCoreStatsBuilder(dir, 16*coreStatsMaxInitialRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	var st unix.Stat_t
+	if err := unix.Stat(filepath.Join(dir, CoreStatsFile), &st); err != nil {
+		t.Fatal(err)
+	}
+	limit := int64(HeaderSize) + coreStatsMaxInitialRows*coreStatsBuildStride
+	if st.Size > limit || st.Blocks*512 > limit+int64(unix.Getpagesize()) {
+		t.Errorf("empty build file is %d bytes with %d allocated, want at most %d", st.Size, st.Blocks*512, limit)
+	}
+}

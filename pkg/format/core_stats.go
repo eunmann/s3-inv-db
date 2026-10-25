@@ -27,6 +27,12 @@ const CoreStatsFile = "core_stats.bin"
 //	offset 26: tier_mask              uint16
 const coreStatsBuildStride = 28
 
+// coreStatsMaxInitialRows caps the rows a CoreStatsBuilder reserves
+// before any are added. The capacity hint can over-count many times
+// and every reserved block is allocated on disk, so the file starts no
+// larger than this and doubles as rows arrive.
+const coreStatsMaxInitialRows = 1 << 16
+
 const (
 	bldOffCount       = 0
 	bldOffBytes       = 8
@@ -175,7 +181,8 @@ type CoreStatsBuilder struct {
 }
 
 // NewCoreStatsBuilder creates a core stats file at outDir/core_stats.bin
-// sized to fit capacity rows (grown on demand if exceeded). The header
+// sized to fit capacity rows, at most coreStatsMaxInitialRows (grown on
+// demand if exceeded). The header
 // is written at the build-stride placeholder; Finalize rewrites it to
 // the final tight stride.
 func NewCoreStatsBuilder(outDir string, capacity uint64) (*CoreStatsBuilder, error) {
@@ -189,7 +196,7 @@ func NewCoreStatsBuilder(outDir string, capacity uint64) (*CoreStatsBuilder, err
 		file:    f,
 		dataOff: HeaderSize,
 	}
-	initial := max(int64(HeaderSize)+int64(capacity)*int64(coreStatsBuildStride), int64(unix.Getpagesize()))
+	initial := max(int64(HeaderSize)+int64(min(capacity, coreStatsMaxInitialRows))*int64(coreStatsBuildStride), int64(unix.Getpagesize()))
 	if err := b.grow(initial); err != nil {
 		_ = b.Close()
 		os.Remove(path)
