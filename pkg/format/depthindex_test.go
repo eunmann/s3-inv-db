@@ -18,12 +18,12 @@ func TestDepthIndexSubtreeQuery(t *testing.T) {
 	// 3: a/y/ (subtree 3)
 	// 4: b/   (subtree 4-5)
 	// 5: b/z/ (subtree 5)
-	b.Add(0, 0)
-	b.Add(1, 1)
-	b.Add(2, 2)
-	b.Add(3, 2)
-	b.Add(4, 1)
-	b.Add(5, 2)
+	b.Add(0, 0, 1, 1)
+	b.Add(1, 1, 1, 1)
+	b.Add(2, 2, 1, 1)
+	b.Add(3, 2, 1, 1)
+	b.Add(4, 1, 1, 1)
+	b.Add(5, 2, 1, 1)
 
 	if err := b.Build(dir); err != nil {
 		t.Fatalf("Build failed: %v", err)
@@ -71,7 +71,7 @@ func TestDepthIndexLarge(t *testing.T) {
 	for d := range uint32(10) {
 		for p := range uint64(100) {
 			pos := uint64(d)*100 + p
-			b.Add(pos, d)
+			b.Add(pos, d, 1, 1)
 		}
 	}
 
@@ -113,7 +113,7 @@ func TestDepthIndexBinarySearch(t *testing.T) {
 	// Add sparse positions at depth 1
 	// Positions: 10, 20, 30, 40, 50
 	for _, p := range []uint64{10, 20, 30, 40, 50} {
-		b.Add(p, 1)
+		b.Add(p, 1, 1, 1)
 	}
 
 	if err := b.Build(dir); err != nil {

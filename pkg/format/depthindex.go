@@ -18,9 +18,15 @@ import (
 // sequentially" access pattern is what makes the compressed-stream
 // primitive the right fit here (vs the mmap-backed u64DiskArray the
 // MPHF builder needs).
+//
+// Alongside the positions it bounds each depth's stats per block of
+// DepthBlockSize entries (BlockBounds), streamed to disk the same way,
+// so ranked and filtered queries can skip blocks that can't qualify.
 type DepthIndexBuilder struct {
 	tempDir  string
 	buckets  []*u64StreamArray // index = depth
+	blocks   []*u64StreamArray // packed BlockBounds per full block, index = depth
+	open     []blockAcc        // each depth's block still filling
 	maxDepth uint32
 }
 
@@ -32,19 +38,35 @@ func NewDepthIndexBuilder(tempDir string) *DepthIndexBuilder {
 	return &DepthIndexBuilder{tempDir: tempDir}
 }
 
-// Add appends pos to the per-depth posting list. Caller must add
-// in pos order — positions within a depth are written in arrival
-// order and Build relies on that order being already sorted.
-func (b *DepthIndexBuilder) Add(pos uint64, depth uint32) error {
+// Add appends pos, a prefix with count objects of bytes total, to the
+// per-depth posting list. Caller must add in pos order — positions
+// within a depth are written in arrival order and Build relies on that
+// order being already sorted.
+func (b *DepthIndexBuilder) Add(pos uint64, depth uint32, count, bytes uint64) error {
 	for uint32(len(b.buckets)) <= depth {
-		a, err := newU64StreamArray(b.tempDir, fmt.Sprintf(DepthBucketNameFmt, len(b.buckets)))
+		d := len(b.buckets)
+		a, err := newU64StreamArray(b.tempDir, fmt.Sprintf(DepthBucketNameFmt, d))
 		if err != nil {
-			return fmt.Errorf("create depth bucket %d: %w", len(b.buckets), err)
+			return fmt.Errorf("create depth bucket %d: %w", d, err)
 		}
 		b.buckets = append(b.buckets, a)
+		blocks, err := newU64StreamArray(b.tempDir, fmt.Sprintf(DepthBlocksNameFmt, d))
+		if err != nil {
+			return fmt.Errorf("create depth blocks %d: %w", d, err)
+		}
+		b.blocks = append(b.blocks, blocks)
+		b.open = append(b.open, blockAcc{})
 	}
 	if err := b.buckets[depth].Append(pos); err != nil {
 		return fmt.Errorf("append depth %d pos: %w", depth, err)
+	}
+	acc := &b.open[depth]
+	acc.add(count, bytes)
+	if acc.n == DepthBlockSize {
+		if err := b.blocks[depth].Append(packBlockBounds(acc.bounds)); err != nil {
+			return fmt.Errorf("append depth %d block: %w", depth, err)
+		}
+		*acc = blockAcc{}
 	}
 	if depth > b.maxDepth {
 		b.maxDepth = depth
@@ -56,6 +78,7 @@ func (b *DepthIndexBuilder) Add(pos uint64, depth uint32) error {
 func (b *DepthIndexBuilder) Build(outDir string) error {
 	offsetsPath := filepath.Join(outDir, DepthOffsetsFile)
 	positionsPath := filepath.Join(outDir, DepthPositionsFile)
+	blocksPath := filepath.Join(outDir, DepthBlocksFile)
 
 	offsetsWriter, err := NewArrayWriter(offsetsPath, 8)
 	if err != nil {
@@ -67,6 +90,13 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 
 		return fmt.Errorf("create positions writer: %w", err)
 	}
+	blocksWriter, err := NewArrayWriter(blocksPath, 8)
+	if err != nil {
+		offsetsWriter.Close()
+		positionsWriter.Close()
+
+		return fmt.Errorf("create blocks writer: %w", err)
+	}
 
 	offset := uint64(0)
 	maxPos := uint64(0)
@@ -77,34 +107,17 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 
 			break
 		}
-		var bucket *u64StreamArray
-		if int(d) < len(b.buckets) {
-			bucket = b.buckets[d]
+		written, top, err := b.writePositions(d, positionsWriter)
+		if err == nil {
+			err = b.writeBlocks(d, blocksWriter)
 		}
-		if bucket == nil {
-			continue
-		}
-		written := uint64(0)
-		if err := bucket.Iterate(func(p uint64) error {
-			if err := positionsWriter.WriteU64(p); err != nil {
-				return fmt.Errorf("write position depth %d: %w", d, err)
-			}
-			if p > maxPos {
-				maxPos = p
-			}
-			written++
-
-			return nil
-		}); err != nil {
-			errs = append(errs, fmt.Errorf("iterate depth %d: %w", d, err))
-			bucket.Close()
-			b.buckets[d] = nil
+		if err != nil {
+			errs = append(errs, err)
 
 			break
 		}
 		offset += written
-		bucket.Close()
-		b.buckets[d] = nil
+		maxPos = max(maxPos, top)
 	}
 
 	if err := offsetsWriter.WriteU64(offset); err != nil {
@@ -112,6 +125,9 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 	}
 	if err := positionsWriter.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("close positions: %w", err))
+	}
+	if err := blocksWriter.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("close blocks: %w", err))
 	}
 	if err := offsetsWriter.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("close offsets: %w", err))
@@ -122,6 +138,9 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 			errs = append(errs, err)
 		}
 		if err := removeIfErr(offsetsPath); err != nil {
+			errs = append(errs, err)
+		}
+		if err := removeIfErr(blocksPath); err != nil {
 			errs = append(errs, err)
 		}
 
@@ -143,18 +162,76 @@ func (b *DepthIndexBuilder) Build(outDir string) error {
 	return nil
 }
 
+// writePositions appends depth d's positions to w and releases the
+// depth's stream, returning how many it wrote and the largest.
+func (b *DepthIndexBuilder) writePositions(d uint32, w *ArrayWriter) (uint64, uint64, error) { //nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+	if int(d) >= len(b.buckets) || b.buckets[d] == nil {
+		return 0, 0, nil
+	}
+	bucket := b.buckets[d]
+	defer func() {
+		bucket.Close()
+		b.buckets[d] = nil
+	}()
+	var written, top uint64
+	if err := bucket.Iterate(func(p uint64) error {
+		if err := w.WriteU64(p); err != nil {
+			return fmt.Errorf("write position depth %d: %w", d, err)
+		}
+		top = max(top, p)
+		written++
+
+		return nil
+	}); err != nil {
+		return 0, 0, fmt.Errorf("iterate depth %d: %w", d, err)
+	}
+
+	return written, top, nil
+}
+
+// writeBlocks appends depth d's block bounds, its last partial block
+// included, to w and releases the depth's block stream.
+func (b *DepthIndexBuilder) writeBlocks(d uint32, w *ArrayWriter) error {
+	if int(d) >= len(b.blocks) || b.blocks[d] == nil {
+		return nil
+	}
+	blocks := b.blocks[d]
+	defer func() {
+		blocks.Close()
+		b.blocks[d] = nil
+	}()
+	if acc := b.open[d]; acc.n > 0 {
+		if err := blocks.Append(packBlockBounds(acc.bounds)); err != nil {
+			return fmt.Errorf("append depth %d last block: %w", d, err)
+		}
+	}
+	if err := blocks.Iterate(func(v uint64) error {
+		if err := w.WriteU64(v); err != nil {
+			return fmt.Errorf("write block depth %d: %w", d, err)
+		}
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("iterate depth %d blocks: %w", d, err)
+	}
+
+	return nil
+}
+
 // Close releases any open per-depth buckets without writing the
 // output. Used on the error path; idempotent.
 func (b *DepthIndexBuilder) Close() error {
 	var errs []error
-	for i, bucket := range b.buckets {
-		if bucket == nil {
-			continue
+	for _, streams := range [][]*u64StreamArray{b.buckets, b.blocks} {
+		for i, s := range streams {
+			if s == nil {
+				continue
+			}
+			if err := s.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close depth %d stream: %w", i, err))
+			}
+			streams[i] = nil
 		}
-		if err := bucket.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("close depth %d bucket: %w", i, err))
-		}
-		b.buckets[i] = nil
 	}
 
 	return errors.Join(errs...)
@@ -168,6 +245,8 @@ func (b *DepthIndexBuilder) Close() error {
 type DepthIndex struct {
 	offsets   *ArrayReader
 	positions *ArrayReader
+	blocks    *ArrayReader
+	blockBase []uint64 // each depth's first block in blocks; one past the last depth holds the total
 	maxDepth  uint32
 }
 
@@ -189,17 +268,57 @@ func OpenDepthIndex(outDir string) (*DepthIndex, error) {
 		return nil, fmt.Errorf("open positions: %w", err)
 	}
 
+	blocks, err := OpenArray(filepath.Join(outDir, DepthBlocksFile))
+	if err != nil {
+		_ = errors.Join(offsets.Close(), positions.Close())
+
+		return nil, fmt.Errorf("open blocks: %w", err)
+	}
+
 	// maxDepth = number of offsets - 2 (because we have maxDepth+2 entries)
 	maxDepth := uint32(0)
 	if offsets.Count() > 1 {
 		maxDepth = uint32(offsets.Count() - 2)
 	}
 
-	return &DepthIndex{
+	d := &DepthIndex{
 		offsets:   offsets,
 		positions: positions,
+		blocks:    blocks,
 		maxDepth:  maxDepth,
-	}, nil
+	}
+	if err := d.indexBlocks(); err != nil {
+		return nil, errors.Join(err, d.Close())
+	}
+
+	return d, nil
+}
+
+// indexBlocks sets each depth's first block and checks the blocks file
+// holds exactly one entry per block. The offsets are one per depth,
+// so this is O(depths).
+func (d *DepthIndex) indexBlocks() error {
+	n := d.offsets.Count()
+	if n < 2 {
+		if d.blocks.Count() != 0 {
+			return fmt.Errorf("%w: %d depth blocks for an empty depth index", ErrSizeMismatch, d.blocks.Count())
+		}
+
+		return nil
+	}
+	d.blockBase = make([]uint64, n)
+	for i := uint64(1); i < n; i++ {
+		lo, hi := d.offsets.UnsafeGetU64(i-1), d.offsets.UnsafeGetU64(i)
+		if hi < lo {
+			return fmt.Errorf("%w: depth %d offsets go backwards (%d after %d)", ErrSizeMismatch, i-1, hi, lo)
+		}
+		d.blockBase[i] = d.blockBase[i-1] + (hi-lo+DepthBlockSize-1)/DepthBlockSize
+	}
+	if want := d.blockBase[n-1]; d.blocks.Count() != want {
+		return fmt.Errorf("%w: %d depth blocks, the offsets need %d", ErrSizeMismatch, d.blocks.Count(), want)
+	}
+
+	return nil
 }
 
 // Count is the number of positions the index holds across all depths.
@@ -217,7 +336,7 @@ func (d *DepthIndex) End() uint64 {
 
 // Close releases resources.
 func (d *DepthIndex) Close() error {
-	return errors.Join(d.offsets.Close(), d.positions.Close())
+	return errors.Join(d.offsets.Close(), d.positions.Close(), d.blocks.Close())
 }
 
 // MaxDepth returns the maximum depth in the index.

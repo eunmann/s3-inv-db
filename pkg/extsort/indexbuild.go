@@ -225,7 +225,7 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 		b.maxDepth = uint32(row.Depth)
 	}
 
-	if err := b.depthIndexBuilder.Add(pos, uint32(row.Depth)); err != nil {
+	if err := b.depthIndexBuilder.Add(pos, uint32(row.Depth), row.Count, row.TotalBytes); err != nil {
 		return fmt.Errorf("add to depth index: %w", err)
 	}
 	// The MPHF numbers prefixes in the order they are added: preorder.
