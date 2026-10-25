@@ -82,6 +82,13 @@ func wideRouter(b *testing.B) http.Handler {
 	return r
 }
 
+// pagedRouter is the router the Paged entries page through.
+func pagedRouter(b *testing.B) http.Handler {
+	b.Helper()
+
+	return wideRouter(b)
+}
+
 // wideHandlers builds both runs and returns handlers serving them.
 func wideHandlers(b *testing.B) *handlers.Handlers {
 	b.Helper()
@@ -142,4 +149,36 @@ func BenchmarkGateBrowseWideByCost(b *testing.B) {
 
 func BenchmarkGateCompareWideByCost(b *testing.B) {
 	benchGet(b, wideRouter(b), "/api/compare?from="+gateFromID+"&to="+gateToID+"&sort=cost&dir=desc")
+}
+
+// BenchmarkGate*Paged: a user paging through one wide level on one
+// server: each iteration views page 1, then a later page, of the same
+// order. The other gate entries time a level's first view.
+func benchPaged(b *testing.B, router http.Handler, targets ...string) {
+	b.Helper()
+	b.ReportAllocs()
+	for b.Loop() {
+		for _, target := range targets {
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequestWithContext(b.Context(), http.MethodGet, target, http.NoBody))
+			if rec.Code != http.StatusOK {
+				b.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+			}
+		}
+	}
+}
+
+func BenchmarkGateBrowseWideBySizePaged(b *testing.B) {
+	const q = "/api/browse?inventory_id=" + gateFromID + "&sort=size&dir=desc"
+	benchPaged(b, pagedRouter(b), q, q+"&page=50")
+}
+
+func BenchmarkGateBrowseWideByCostPaged(b *testing.B) {
+	const q = "/api/browse?inventory_id=" + gateFromID + "&sort=cost&dir=desc"
+	benchPaged(b, pagedRouter(b), q, q+"&page=50")
+}
+
+func BenchmarkGateCompareWidePaged(b *testing.B) {
+	const q = "/api/compare?from=" + gateFromID + "&to=" + gateToID
+	benchPaged(b, pagedRouter(b), q, q+"&page=50")
 }
