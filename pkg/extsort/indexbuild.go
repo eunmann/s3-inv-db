@@ -183,10 +183,21 @@ func (b *IndexBuilder) cleanup() {
 // prefix as its parent plus one segment.
 var ErrMissingParent = errors.New("prefix added without its parent")
 
+// ErrUnsortedInput is returned when a prefix doesn't sort strictly
+// after the one before it.
+var ErrUnsortedInput = errors.New("prefix out of order")
+
 // Add processes a single PrefixRow from the sorted stream.
 // Prefixes must be added in lexicographic (sorted) order, the root ""
 // first and every other prefix after its parent.
 func (b *IndexBuilder) Add(row *PrefixRow) error {
+	// The previous row is still on top of the stack. Readers rely on
+	// siblings sitting in byte order of their full prefixes (compare
+	// merges two indexes' children by it), so check it rather than
+	// trust the input.
+	if n := len(b.stack); n > 0 && row.Prefix <= b.stack[n-1].prefix {
+		return fmt.Errorf("%w: %q after %q", ErrUnsortedInput, row.Prefix, b.stack[n-1].prefix)
+	}
 	commonDepth := b.findCommonAncestorDepth(row.Prefix)
 	if err := b.closeNodesAbove(commonDepth); err != nil {
 		return err

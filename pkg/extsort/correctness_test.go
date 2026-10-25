@@ -250,7 +250,6 @@ func TestIndexBuilder_RejectsMissingParent(t *testing.T) {
 		{"no root", []string{"a/"}},
 		{"skipped level", []string{"", "a/b/"}},
 		{"not slash-terminated", []string{"", "a"}},
-		{"second root", []string{"", ""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, err := extsort.NewIndexBuilder(filepath.Join(t.TempDir(), "idx"), "")
@@ -267,6 +266,42 @@ func TestIndexBuilder_RejectsMissingParent(t *testing.T) {
 			}
 			if !errors.Is(last, extsort.ErrMissingParent) {
 				t.Errorf("err = %v, want ErrMissingParent", last)
+			}
+		})
+	}
+}
+
+// TestIndexBuilder_RejectsUnsortedInput: prefixes must arrive in
+// strictly increasing byte order. Positions are assigned in arrival
+// order and readers rely on siblings being in that order (compare
+// merges two indexes' children by it), so a duplicate or an
+// out-of-order row fails the build instead of storing a wrong order.
+func TestIndexBuilder_RejectsUnsortedInput(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		prefixes []string
+	}{
+		{"second root", []string{"", ""}},
+		{"duplicate", []string{"", "a/", "a/"}},
+		{"siblings reversed", []string{"", "b/", "a/"}},
+		// "a-b/" < "a/" because '-' < '/': it belongs before "a/".
+		{"sibling after a subtree it sorts before", []string{"", "a/", "a/x/", "a-b/"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := extsort.NewIndexBuilder(filepath.Join(t.TempDir(), "idx"), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var last error
+			for _, p := range tc.prefixes {
+				row := &extsort.PrefixRow{Prefix: p, Count: 1, TotalBytes: 1}
+				row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = 1, 1
+				if last = b.Add(row); last != nil {
+					break
+				}
+			}
+			if !errors.Is(last, extsort.ErrUnsortedInput) {
+				t.Errorf("err = %v, want ErrUnsortedInput", last)
 			}
 		})
 	}
