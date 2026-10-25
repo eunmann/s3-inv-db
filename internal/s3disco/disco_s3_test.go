@@ -5,7 +5,9 @@ package s3disco_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/s3test"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
+	"github.com/google/go-cmp/cmp"
 	"github.com/rs/zerolog"
 )
 
@@ -217,4 +220,66 @@ func indexFromID(t *testing.T, id string) int {
 	t.Fatalf("unsupported test inv-id %q", id)
 
 	return 0
+}
+
+// countingHTTP counts object GETs (GETs that are not listings).
+type countingHTTP struct {
+	inner s3.HTTPClient
+	gets  atomic.Int64
+}
+
+func (c *countingHTTP) Do(r *http.Request) (*http.Response, error) {
+	if r.Method == http.MethodGet && !r.URL.Query().Has("list-type") {
+		c.gets.Add(1)
+	}
+
+	return c.inner.Do(r) //nolint:wrapcheck // a transport passes the inner client's result through
+}
+
+// TestDiscoverer_ManifestsReadOnce: a run's manifest is read once; later
+// Lists and Finds of that run reuse it and return the same entries.
+func TestDiscoverer_ManifestsReadOnce(t *testing.T) {
+	client := s3test.RawClient(t)
+	ctx := t.Context()
+	bucket := s3test.Bucket(t, client)
+	now := time.Now().UTC()
+	uploadInventoryAt(ctx, t, client, bucket, "src-a", "inv/", "inv-001", now.Add(-time.Hour), 50, 1)
+	uploadInventoryAt(ctx, t, client, bucket, "src-a", "inv/", "inv-001", now, 50, 2)
+	uploadInventoryAt(ctx, t, client, bucket, "src-a", "inv/", "inv-002", now, 50, 3)
+
+	counter := &countingHTTP{}
+	counted := s3.New(client.Options(), func(o *s3.Options) {
+		counter.inner = o.HTTPClient
+		o.HTTPClient = counter
+	})
+	d := s3disco.New(counted, bucket, "inv/")
+	first, err := d.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := counter.gets.Load(); n != 3 {
+		t.Fatalf("first List read %d manifests, want 3", n)
+	}
+	second, err := d.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := counter.gets.Load(); n != 3 {
+		t.Fatalf("second List read %d more manifests, want 0", n-3)
+	}
+	if diff := cmp.Diff(first, second); diff != "" {
+		t.Fatalf("second List differs (-first +second):\n%s", diff)
+	}
+	for _, inv := range first {
+		got, err := d.Find(ctx, inv.SourceBucket, inv.Name, inv.Run)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(inv, got); diff != "" {
+			t.Errorf("Find %s differs from List (-list +find):\n%s", inv.Run, diff)
+		}
+	}
+	if n := counter.gets.Load(); n != 3 {
+		t.Fatalf("Finds of listed runs read %d more manifests, want 0", n-3)
+	}
 }
