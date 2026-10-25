@@ -60,8 +60,11 @@ const rankBlockMin = 8
 // whose bounds let them place: a first pass over the bounds of the
 // blocks inside the span finds a value limit blocks are sure to reach,
 // and the scan skips any block whose bound falls short of it or of the
-// limit-th result so far. On any data that is at most about limit
-// blocks of stats, plus one bound per block of the span.
+// limit-th result so far. That is at most about limit blocks of stats,
+// plus one bound per block of the span, unless many blocks' maximums
+// lie within the bounds' rounding (none below 2048, else up to 0.1%)
+// of the limit-th result: the bounds can't rule those out, so they are
+// scanned too, up to the whole span.
 func (idx *Index) RankDescendants(prefixPos uint64, relDepth, limit int, metric TopMetric, asc bool, filter Filter) ([]TopResult, error) {
 	if limit <= 0 {
 		return nil, nil

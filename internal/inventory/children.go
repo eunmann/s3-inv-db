@@ -119,8 +119,8 @@ func (c *LevelCache) PageChildren(idx *indexread.Index, parentPos uint64, q Chil
 }
 
 // rankedPage serves an early page by size or objects from the index's
-// depth-block bounds (indexread.RankDescendants), reading about a page's
-// worth of blocks instead of every child. It reports false for the
+// depth-block bounds (indexread.RankDescendants), usually reading about
+// a page's worth of blocks instead of every child. It reports false for the
 // other columns and for pages deep enough that ordering every child
 // costs about the same.
 func rankedPage(idx *indexread.Index, parentPos uint64, span format.Span, q ChildQuery, desc bool) (ChildPage, bool, error) {

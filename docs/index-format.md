@@ -228,8 +228,11 @@ contribute. A ranking first finds a value k whole blocks are sure to
 reach (the k-th largest of each block's guaranteed best), then scans
 blocks in position order, skipping any block whose bound falls below
 that value or, with k results held, at or below the k-th (a later
-position loses the tie). That reads about k blocks of stats on any
-data, plus one bound per block of the span. A filtered page skips
+position loses the tie). That reads about k blocks of stats, plus one
+bound per block of the span, unless many blocks' maximums lie within
+the bounds' rounding (none below 2048, else up to 0.1%) of the k-th
+result: the bounds can't rule those out, so they are scanned too, up to
+the whole span (O(d)). A filtered page skips
 blocks whose maximums fail the filter and counts blocks whose minimums
 pass it without reading them. See [`pkg/format/depthblocks.go`](../pkg/format/depthblocks.go)
 and [`pkg/indexread/top.go`](../pkg/indexread/top.go).
