@@ -60,7 +60,11 @@ func (l *Loader) CacheDirFor(key inventory.CacheKey) (string, error) {
 // plumbed to the pipeline so subscribers (e.g. jobs.Recorder) can
 // build a fine-grained stage timeline. A previous index in the cache
 // dir stays until the new one replaces it (the pipeline publishes by
-// rename), so a failed or cancelled rebuild keeps it.
+// rename), so a failed or cancelled rebuild keeps it. Only a run that
+// isn't served is built (inventory.State.CanLoad), so that index has
+// no reader and isn't reused; while the rebuild runs it holds disk the
+// load's budget reservation doesn't count, and the startup reconcile
+// removes it if the run never loads.
 func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifestURI string, onProgress func(stage string, done, total int64), eventBus *events.Bus) (string, error) {
 	outDir, err := l.CacheDirFor(key)
 	if err != nil {
