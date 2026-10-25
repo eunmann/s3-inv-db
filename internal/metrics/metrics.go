@@ -7,6 +7,7 @@
 package metrics
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"sort"
@@ -270,25 +271,38 @@ func (r *Registry) registerSpec(name, help string, kind metricKind, labels []Lab
 	r.specBy[name] = &r.specs[len(r.specs)-1]
 }
 
-// WriteTo emits the registry contents in Prometheus text format.
+// WriteTo emits the registry contents in Prometheus text format. It
+// renders into memory under the registry lock and writes after
+// releasing it, so a slow scraper can't hold up every request that
+// registers a new series.
 func (r *Registry) WriteTo(w io.Writer) (int64, error) {
+	var buf bytes.Buffer
+	if err := r.render(&buf); err != nil {
+		return 0, err
+	}
+	n, err := buf.WriteTo(w)
+	if err != nil {
+		return n, fmt.Errorf("write metrics: %w", err)
+	}
+
+	return n, nil
+}
+
+// render writes every family into buf under the registry lock.
+func (r *Registry) render(buf *bytes.Buffer) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	var written int64
 	specs := make([]metricSpec, len(r.specs))
 	copy(specs, r.specs)
 	sort.Slice(specs, func(i, j int) bool { return specs[i].name < specs[j].name })
-
 	for _, spec := range specs {
-		n, err := r.writeFamily(w, spec)
-		written += n
-		if err != nil {
-			return written, err
+		if _, err := r.writeFamily(buf, spec); err != nil {
+			return err
 		}
 	}
 
-	return written, nil
+	return nil
 }
 
 func (r *Registry) writeFamily(w io.Writer, spec metricSpec) (int64, error) {
