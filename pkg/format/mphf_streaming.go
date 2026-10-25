@@ -144,8 +144,10 @@ func (b *StreamingMPHFBuilder) Add(prefix string, pos uint64) error {
 	if err := b.preorderPos.Append(pos); err != nil {
 		return fmt.Errorf("append preorder pos: %w", err)
 	}
-	if err := b.fingerprints.Append(computeFingerprint(prefix)); err != nil {
-		return fmt.Errorf("append fingerprint: %w", err)
+	if mphfSlotFingerprints {
+		if err := b.fingerprints.Append(computeFingerprint(prefix)); err != nil {
+			return fmt.Errorf("append fingerprint: %w", err)
+		}
 	}
 
 	// Write prefix to temp file with length prefix.
