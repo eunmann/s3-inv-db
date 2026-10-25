@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -36,7 +37,7 @@ func captureStdout(t *testing.T, fn func() error) []byte {
 	return out
 }
 
-func TestStatsProfileJSON(t *testing.T) {
+func TestStatsProfile(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "index")
 	agg := extsort.NewAggregator(2, 0)
 	agg.AddObject("a/x.txt", 10, tiers.Standard)
@@ -84,5 +85,26 @@ func TestStatsProfileJSON(t *testing.T) {
 	})
 	if json.Valid(plain) {
 		t.Error("text output parsed as JSON")
+	}
+	if bytes.Contains(plain, []byte("Profile:")) {
+		t.Errorf("text output without --profile has a profile:\n%s", plain)
+	}
+
+	text := captureStdout(t, func() error {
+		return cli.Run([]string{"stats", "--index", dir, "--profile"})
+	})
+	// Object counts 2, 2 and 1 need 2, 2 and 1 bits; tier bytes 10, 300,
+	// 10, 300 and 300 need 4, 9, 4, 9 and 9.
+	for _, want := range []string{
+		"Profile: 3 prefixes, 1 leaves,",
+		"  prefixes per depth: [1 1 1]\n",
+		"  prefixes by tiers held: [0 1 2 ",
+		"  bits per value (p50 / p99 / p99.9 / max):\n",
+		"    object_count      2 /  2 /  2 /  2  (3 values)\n",
+		"    tier_bytes        9 /  9 /  9 /  9  (5 values)\n",
+	} {
+		if !bytes.Contains(text, []byte(want)) {
+			t.Errorf("text profile lacks %q:\n%s", want, text)
+		}
 	}
 }

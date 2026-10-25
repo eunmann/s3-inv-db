@@ -1,6 +1,7 @@
 package indexread
 
 import (
+	"math"
 	"math/bits"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -72,7 +73,7 @@ func (f *FieldProfile) MaxBits() int {
 // QuantileBits is the smallest bit length that holds at least the
 // fraction q of the values.
 func (f *FieldProfile) QuantileBits(q float64) int {
-	need := uint64(q * float64(f.Values))
+	need := uint64(math.Ceil(q * float64(f.Values)))
 	var seen uint64
 	for b, n := range &f.Bits {
 		seen += n
