@@ -11,6 +11,7 @@ linters:
     - tagliatelle      # struct-tag case
     - paralleltest     # not every test wants t.Parallel()
     - exhaustruct      # struct-field exhaustive init is too strict
+    - exhaustruct_v5   # its v2.15 successor; same reason
     - canonicalheader  # HTTP header canonicalisation noise
     - noinlineerr      # idiomatic Go uses inline `if err := ...; err != nil`
     - funcorder        # method ordering
@@ -221,4 +222,4 @@ run:
   # them too so they can't rot between Docker runs.
   build-tags:
     - integration
-  go: "1.26"
+  go: "1.27"
