@@ -21,6 +21,6 @@ var (
 	ErrWidthMismatch = errors.New("width mismatch")
 	// ErrMPHFLookupFailed indicates a Find call into the MPHF returned no result for a known prefix.
 	ErrMPHFLookupFailed = errors.New("MPHF lookup failed")
-	// ErrMPHFKeyCollision indicates distinct prefixes kept sharing an MPHF key hash under every seed tried.
+	// ErrMPHFKeyCollision indicates two distinct prefixes share both the MPHF key hash and the fingerprint.
 	ErrMPHFKeyCollision = errors.New("MPHF key hash collision")
 )

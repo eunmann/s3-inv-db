@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -316,37 +317,41 @@ func TestMPHFLookupRoundTripsEdgePrefixes(t *testing.T) {
 	}
 }
 
-// TestKeyHashSeeds: the key seed changes the hash, and no key seed a
-// retry can pick equals the fingerprint's seed.
-func TestKeyHashSeeds(t *testing.T) {
+// TestKeyHashDiffersFromFingerprint: the key hash and the fingerprint
+// use different seeds, so keys that share a key hash still differ in
+// the fingerprint.
+func TestKeyHashDiffersFromFingerprint(t *testing.T) {
 	for _, s := range []string{"", "a", "data/2024/", "日本語/", strings.Repeat("x/", 100)} {
-		if hashString(s, mphfSeed(1)) == hashString(s, 0) {
-			t.Errorf("hashString(%q) ignores the seed", s)
-		}
-		if hashString(s, 0) == computeFingerprint(s) {
+		if hashString(s) == computeFingerprint(s) {
 			t.Errorf("key hash and fingerprint of %q are equal", s)
-		}
-	}
-	for attempt := range uint64(maxMPHFSeedAttempts + 1) {
-		seed := uint64(0)
-		if attempt > 0 {
-			seed = mphfSeed(attempt)
-		}
-		if seed == fingerprintSeed {
-			t.Errorf("retry %d's key seed equals the fingerprint seed", attempt)
 		}
 	}
 }
 
-// collidingKeyHash makes a and b share a key hash under seed 0 only.
-func collidingKeyHash(a, b string) func(string, uint64) uint64 {
-	return func(s string, seed uint64) uint64 {
-		if seed == 0 && (s == a || s == b) {
-			return hashString(a, 0)
+// collidingKeyHash gives every prefix in group the real key hash of
+// group[0], so Lookup(group[0]) still reaches it.
+func collidingKeyHash(group ...string) func(string) uint64 {
+	return func(s string) uint64 {
+		if slices.Contains(group, s) {
+			return hashString(group[0])
 		}
 
-		return hashString(s, seed)
+		return hashString(s)
 	}
+}
+
+// lookupAs is Lookup with keyHash standing in for hashString, to reach
+// prefixes whose key hash a test replaced.
+func lookupAs(m *MPHF, keyHash func(string) uint64, prefix string) (uint64, bool) {
+	if m.count == 0 {
+		return 0, false
+	}
+	key := keyHash(prefix)
+	if slot, ok := m.mph.find(key); ok {
+		return m.slotPosition(slot, computeFingerprint(prefix))
+	}
+
+	return m.lookupFallback(prefix, key)
 }
 
 // readSlots returns the raw mph_slots.bin bytes and its header.
@@ -364,20 +369,74 @@ func readSlots(t *testing.T, dir string) ([]byte, Header) {
 	return data, h
 }
 
-func TestStreamingMPHFBuildSurvivesKeyHashCollision(t *testing.T) {
-	prefixes := make([]string, 2000)
-	for i := range prefixes {
-		prefixes[i] = prefixFromInt(i + 1)
-	}
-	dir := t.TempDir()
+// buildWithKeyHash builds an MPHF in dir over prefixes (position =
+// slice index) whose key hashes come from keyHash, and opens it.
+func buildWithKeyHash(t *testing.T, dir string, prefixes []string, keyHash func(string) uint64) *MPHF {
+	t.Helper()
 	b := newTestMPHFBuilder(t)
-	b.sb.keyHash = collidingKeyHash(prefixes[3], prefixes[1500])
+	b.sb.keyHash = keyHash
 	for i, p := range prefixes {
 		b.Add(p, uint64(i))
 	}
 	if err := b.Build(dir); err != nil {
-		t.Fatalf("Build with a seed-0 key collision: %v", err)
+		t.Fatalf("Build: %v", err)
 	}
+	m, err := OpenMPHF(dir)
+	if err != nil {
+		t.Fatalf("OpenMPHF: %v", err)
+	}
+	t.Cleanup(func() { m.Close() })
+
+	return m
+}
+
+// assertLookups checks every prefix resolves to its index under keyHash
+// and that non-members miss, through the fallback as well as the levels.
+func assertLookups(t *testing.T, m *MPHF, keyHash func(string) uint64, prefixes []string) {
+	t.Helper()
+	for i, p := range prefixes {
+		if pos, ok := lookupAs(m, keyHash, p); !ok || pos != uint64(i) {
+			t.Errorf("lookup(%q) = %d, %v; want %d, true", p, pos, ok, i)
+		}
+	}
+	for _, p := range []string{"absent/", "zz/zz/zz/", prefixes[0] + "x"} {
+		if pos, ok := m.Lookup(p); ok {
+			t.Errorf("Lookup(%q) = %d for a non-member", p, pos)
+		}
+		// A non-member that shares the fallback keys' hash must still
+		// miss on the fingerprint.
+		if len(m.mph.fallback) > 0 {
+			if pos, ok := m.lookupFallback(p, m.mph.fallback[0].hash); ok {
+				t.Errorf("fallback lookup(%q) = %d for a non-member", p, pos)
+			}
+		}
+	}
+}
+
+// Distinct prefixes that share one 64-bit key hash all go to the
+// fallback table, and the levels place the rest.
+func TestStreamingMPHFBuildKeyHashCollisionMixed(t *testing.T) {
+	prefixes := make([]string, 2000)
+	for i := range prefixes {
+		prefixes[i] = prefixFromInt(i + 1)
+	}
+	group := []string{prefixes[3], prefixes[700], prefixes[1500], prefixes[1999]}
+	keyHash := collidingKeyHash(group...)
+	dir := t.TempDir()
+	m := buildWithKeyHash(t, dir, prefixes, keyHash)
+
+	if got := len(m.mph.fallback); got != len(group) {
+		t.Fatalf("fallback holds %d keys, want %d", got, len(group))
+	}
+	if m.mph.placed != uint64(len(prefixes)-len(group)) || m.Count() != uint64(len(prefixes)) {
+		t.Fatalf("placed = %d, count = %d; want %d, %d", m.mph.placed, m.Count(), len(prefixes)-len(group), len(prefixes))
+	}
+	// Group[0]'s stand-in hash is its real one, so the public Lookup
+	// reaches it through the fallback.
+	if pos, ok := m.Lookup(group[0]); !ok || pos != 3 {
+		t.Errorf("Lookup(%q) = %d, %v; want 3, true", group[0], pos, ok)
+	}
+	assertLookups(t, m, keyHash, prefixes)
 
 	data, h := readSlots(t, dir)
 	if h.Version != Version {
@@ -388,35 +447,36 @@ func TestStreamingMPHFBuildSurvivesKeyHashCollision(t *testing.T) {
 	if int(h.Width) != slotW {
 		t.Errorf("slot width = %d, want %d", h.Width, slotW)
 	}
-	if want := mphfSlotsDataOff + slotW*len(prefixes) + mphfSeedBytes + mphfSlotsTailPad; len(data) != want {
+	if want := mphfSlotsDataOff + slotW*len(prefixes) + mphfSlotsTailPad; len(data) != want {
 		t.Errorf("slots size = %d, want %d", len(data), want)
-	}
-
-	m, err := OpenMPHF(dir)
-	if err != nil {
-		t.Fatalf("OpenMPHF: %v", err)
-	}
-	defer m.Close()
-	if m.seed == 0 {
-		t.Fatal("seed = 0 after a seed-0 collision")
-	}
-	for i, p := range prefixes {
-		if pos, ok := m.Lookup(p); !ok || pos != uint64(i) {
-			t.Errorf("Lookup(%q) = %d, %v; want %d, true", p, pos, ok, i)
-		}
 	}
 }
 
-func TestStreamingMPHFBuildPersistentKeyCollisionFails(t *testing.T) {
+// When every prefix shares one key hash, the levels hold nothing and
+// the whole MPHF is the fallback table.
+func TestStreamingMPHFBuildAllKeysCollide(t *testing.T) {
+	prefixes := []string{"", "a/", "a/b/", "b/", "c/d/"}
+	keyHash := func(string) uint64 { return hashString(prefixes[0]) }
+	m := buildWithKeyHash(t, t.TempDir(), prefixes, keyHash)
+	if len(m.mph.levels) != 0 || len(m.mph.fallback) != len(prefixes) {
+		t.Fatalf("levels = %d, fallback = %d; want 0, %d", len(m.mph.levels), len(m.mph.fallback), len(prefixes))
+	}
+	assertLookups(t, m, keyHash, prefixes)
+}
+
+// Two prefixes equal in both the key hash and the fingerprint cannot
+// be told apart, so the build fails rather than drop one.
+func TestStreamingMPHFBuildFullCollisionFails(t *testing.T) {
 	b := newTestMPHFBuilder(t)
-	b.sb.keyHash = func(s string, seed uint64) uint64 {
-		if s == "a/" || s == "b/" {
-			return seed
+	b.sb.keyHash = collidingKeyHash("a/", "b/")
+	b.sb.fingerprint = func(s string) uint64 {
+		if s == "b/" {
+			return computeFingerprint("a/")
 		}
 
-		return hashString(s, seed)
+		return computeFingerprint(s)
 	}
-	for i, p := range []string{"", "a/", "b/"} {
+	for i, p := range []string{"", "a/", "b/", "c/"} {
 		b.Add(p, uint64(i))
 	}
 	if err := b.Build(t.TempDir()); !errors.Is(err, ErrMPHFKeyCollision) {
@@ -424,16 +484,26 @@ func TestStreamingMPHFBuildPersistentKeyCollisionFails(t *testing.T) {
 	}
 }
 
-func TestOpenMPHFMissingSeedWord(t *testing.T) {
-	dir := t.TempDir()
-	b := newTestMPHFBuilder(t)
-	b.sb.keyHash = collidingKeyHash("a/", "b/")
-	for i, p := range []string{"", "a/", "b/"} {
-		b.Add(p, uint64(i))
+// A large build with no forced collision leaves the fallback empty.
+func TestStreamingMPHFBuildLargeNoFallback(t *testing.T) {
+	const n = 200_000
+	prefixes := make([]string, n)
+	for i := range prefixes {
+		prefixes[i] = prefixFromInt(i + 1)
 	}
-	if err := b.Build(dir); err != nil {
-		t.Fatalf("Build: %v", err)
+	m := buildWithKeyHash(t, t.TempDir(), prefixes, hashString)
+	if len(m.mph.fallback) != 0 || m.mph.placed != n {
+		t.Fatalf("fallback = %d, placed = %d; want 0, %d", len(m.mph.fallback), m.mph.placed, n)
 	}
+	for i, p := range prefixes {
+		if pos, ok := m.Lookup(p); !ok || pos != uint64(i) {
+			t.Fatalf("Lookup(%q) = %d, %v; want %d, true", p, pos, ok, i)
+		}
+	}
+}
+
+func TestOpenMPHFTruncatedSlots(t *testing.T) {
+	dir := buildTestMPHF(t, []string{"", "a/", "b/"})
 	path := filepath.Join(dir, MPHFSlotsFile)
 	_, h := readSlots(t, dir)
 	if err := os.Truncate(path, int64(mphfSlotsDataOff)+int64(h.Width)*3); err != nil {
@@ -444,6 +514,20 @@ func TestOpenMPHFMissingSeedWord(t *testing.T) {
 			m.Close()
 		}
 		t.Fatalf("OpenMPHF = %v, want ErrFileTooSmall", err)
+	}
+}
+
+// mph.bin and mph_slots.bin must agree on the key count.
+func TestOpenMPHFCountMismatch(t *testing.T) {
+	dir := buildTestMPHF(t, []string{"", "a/", "b/"})
+	if err := mustBBHash(t, randomKeys(4, 1)).writeFile(filepath.Join(dir, MPHFile)); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := OpenMPHF(dir); !errors.Is(err, ErrSizeMismatch) {
+		if err == nil {
+			m.Close()
+		}
+		t.Fatalf("OpenMPHF = %v, want ErrSizeMismatch", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package format
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"math"
 	"math/bits"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -22,11 +24,22 @@ import (
 // number of set bits before that bit across all levels. A rank
 // directory holding one count per 512-bit block bounds that count to a
 // few popcounts, so a lookup costs O(levels) whatever the key count.
+//
+// Keys the levels cannot place (equal 64-bit hashes always collide)
+// live in a fallback table after the levels' slots.
 type bbhash struct {
-	bits   []uint64 // every level's bit vector, back to back
-	ranks  []uint64 // ranks[b] = set bits in bits[:b*rankBlockWords]
-	levels []bbLevel
-	count  uint64 // keys placed: every set bit
+	bits     []uint64 // every level's bit vector, back to back
+	ranks    []uint64 // ranks[b] = set bits in bits[:b*rankBlockWords]
+	levels   []bbLevel
+	fallback []bbFallback // sorted by compareFallback; entry j owns slot placed+j
+	placed   uint64       // keys placed in the levels: every set bit
+	count    uint64       // placed plus the fallback entries
+}
+
+// bbFallback is a key the levels left unplaced. The fingerprint tells
+// apart keys that share a hash, so the pair is the lookup key.
+type bbFallback struct {
+	hash, fp uint64
 }
 
 // bbLevel locates one level's bit vector inside bbhash.bits.
@@ -41,7 +54,8 @@ const (
 	rankBlockWords = 8
 	// MaxBBHashLevels bounds the build. At gamma 2 about 39% of a
 	// level's keys collide, so distinct keys are placed within ~30
-	// levels even at 2^40 keys; keys still unplaced here are duplicates.
+	// levels even at 2^40 keys; keys still unplaced here go to the
+	// fallback table.
 	maxBBHashLevels = 64
 	// BbhashGamma is the bits per key of each level: smaller tables
 	// for more levels and slower builds; 2.0 is the paper's default.
@@ -61,38 +75,54 @@ const (
 	splitmixShift3 = 31
 )
 
-var (
-	// ErrBBHashUnplaced means some keys collided on every level, which
-	// in practice means they are equal.
-	errBBHashUnplaced = errors.New("bbhash: keys left unplaced")
-	// ErrBBHashCorrupt means mph.bin does not describe a valid table.
-	errBBHashCorrupt = errors.New("bbhash: corrupt MPHF file")
-)
+// ErrBBHashCorrupt means mph.bin does not describe a valid table.
+var errBBHashCorrupt = errors.New("bbhash: corrupt MPHF file")
 
-// newBBHash builds the table over keys, which must be distinct. It
-// reads keys in place (they may be an mmap) and copies only the keys
-// that collide on a level into the next one.
-func newBBHash(keys []uint64) (*bbhash, error) {
+// newBBHash builds the table over keys. Equal keys collide on every
+// level, so the build stops at the first level that places no key
+// rather than add levels that cannot help, and passes the keys still
+// unplaced to fallback, whose entries (sorted by compareFallback) become
+// the fallback table. It reads keys in place (they may be a read-only
+// mmap) and copies only the keys that collide on a level into the next
+// one, so the leftovers never alias keys.
+func newBBHash(keys []uint64, fallback func(leftovers []uint64) ([]bbFallback, error)) (*bbhash, error) {
 	firstWords := levelWords(len(keys))
 	// The levels after the first hold ~65% as many bits again.
 	h := &bbhash{bits: make([]uint64, 0, firstWords*7/4+maxBBHashLevels)}
-	for level := 0; len(keys) > 0; level++ {
-		if level == maxBBHashLevels {
-			return nil, fmt.Errorf("%w: %d keys after %d levels", errBBHashUnplaced, len(keys), level)
-		}
+	for level := 0; len(keys) > 0 && level < maxBBHashLevels; level++ {
 		words := levelWords(len(keys))
 		set, collided := make([]uint64, words), make([]uint64, words)
 		markLevel(keys, level, set, collided)
+		next := collidedKeys(keys, level, words, collided)
+		placedAny := len(next) < len(keys)
+		keys = next
+		if !placedAny {
+			break
+		}
 		for w := range set {
 			set[w] &^= collided[w]
 		}
-		keys = collidedKeys(keys, level, words, collided)
 		h.levels = append(h.levels, bbLevel{offset: uint64(len(h.bits)), words: words})
 		h.bits = append(h.bits, set...)
+	}
+	if len(keys) > 0 {
+		var err error
+		if h.fallback, err = fallback(keys); err != nil {
+			return nil, err
+		}
 	}
 	h.buildRanks()
 
 	return h, nil
+}
+
+// compareFallback orders fallback entries by hash, then fingerprint.
+func compareFallback(a, b bbFallback) int {
+	if c := cmp.Compare(a.hash, b.hash); c != 0 {
+		return c
+	}
+
+	return cmp.Compare(a.fp, b.fp)
 }
 
 // levelWords sizes a level for n keys: gamma bits per key, at least one word.
@@ -182,8 +212,9 @@ func bbPosition(key uint64, level int, words uint64) uint64 {
 	return i
 }
 
-// find returns key's slot in [0, count) and true. A key outside the
-// build set either misses (false) or lands on some other key's slot.
+// find returns the slot in [0, placed) of a key the levels placed. A
+// fallback key misses here; a key outside the build set either misses
+// or lands on some other key's slot.
 func (h *bbhash) find(key uint64) (uint64, bool) {
 	for level, lv := range h.levels {
 		i := bbPosition(key, level, lv.words)
@@ -194,6 +225,16 @@ func (h *bbhash) find(key uint64) (uint64, bool) {
 	}
 
 	return 0, false
+}
+
+// findFallback returns the slot of the fallback entry (key, fp).
+func (h *bbhash) findFallback(key, fp uint64) (uint64, bool) {
+	j, ok := slices.BinarySearchFunc(h.fallback, bbFallback{hash: key, fp: fp}, compareFallback)
+	if !ok {
+		return 0, false
+	}
+
+	return h.placed + uint64(j), true
 }
 
 // rank counts the set bits before bit in word w.
@@ -207,7 +248,7 @@ func (h *bbhash) rank(w, bit uint64) uint64 {
 	return r + uint64(bits.OnesCount64(h.bits[w]&(bit-1)))
 }
 
-// buildRanks fills the rank directory and the key count.
+// buildRanks fills the rank directory and the key counts.
 func (h *bbhash) buildRanks() {
 	h.ranks = make([]uint64, (len(h.bits)+rankBlockWords-1)/rankBlockWords)
 	var r uint64
@@ -217,12 +258,15 @@ func (h *bbhash) buildRanks() {
 		}
 		r += uint64(bits.OnesCount64(w))
 	}
-	h.count = r
+	h.placed = r
+	h.count = r + uint64(len(h.fallback))
 }
 
 // writeFile stores the table as mph.bin: the level count, each level's
-// word count, then every level's words, all little-endian uint64. The
-// rank directory is rebuilt on load.
+// word count, every level's words, then the fallback entry count and
+// each entry's hash and fingerprint, all little-endian uint64. An
+// entry's slot is implied by its index. The rank directory is rebuilt
+// on load.
 func (h *bbhash) writeFile(path string) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -256,6 +300,17 @@ func (h *bbhash) writeTo(dst io.Writer) error {
 			return err
 		}
 	}
+	if err := putU64(w, uint64(len(h.fallback))); err != nil {
+		return err
+	}
+	for _, e := range h.fallback {
+		if err := putU64(w, e.hash); err != nil {
+			return err
+		}
+		if err := putU64(w, e.fp); err != nil {
+			return err
+		}
+	}
 	if err := w.Flush(); err != nil {
 		return fmt.Errorf("flush: %w", err)
 	}
@@ -284,13 +339,14 @@ func readBBHash(path string) (*bbhash, error) {
 	if err != nil {
 		return nil, err
 	}
-	if numLevels == 0 || numLevels > maxBBHashLevels {
+	if numLevels > maxBBHashLevels {
 		return nil, fmt.Errorf("%w: %d levels", errBBHashCorrupt, numLevels)
 	}
 	info, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat MPHF file: %w", err)
 	}
+	size := uint64(info.Size())
 	h := &bbhash{levels: make([]bbLevel, numLevels)}
 	var total uint64
 	for i := range h.levels {
@@ -300,12 +356,13 @@ func readBBHash(path string) (*bbhash, error) {
 		}
 		h.levels[i] = bbLevel{offset: total, words: words}
 		total += words
-		if words == 0 || total > uint64(info.Size())/8 {
+		if words == 0 || total > size/8 {
 			return nil, fmt.Errorf("%w: level %d has %d words", errBBHashCorrupt, i, words)
 		}
 	}
-	if want := 8 * (1 + numLevels + total); uint64(info.Size()) != want {
-		return nil, fmt.Errorf("%w: %d bytes, want %d", errBBHashCorrupt, info.Size(), want)
+	bitsEnd := 8 * (1 + numLevels + total)
+	if size < bitsEnd+8 {
+		return nil, fmt.Errorf("%w: %d bytes, want at least %d", errBBHashCorrupt, size, bitsEnd+8)
 	}
 
 	// Read straight into the words' memory, then decode in place: a
@@ -318,7 +375,41 @@ func readBBHash(path string) (*bbhash, error) {
 	for i := range h.bits {
 		h.bits[i] = binary.LittleEndian.Uint64(raw[i*8:])
 	}
+	if err := h.readFallback(readU64, size-bitsEnd-8); err != nil {
+		return nil, err
+	}
+	if numLevels == 0 && len(h.fallback) == 0 {
+		return nil, fmt.Errorf("%w: no keys", errBBHashCorrupt)
+	}
 	h.buildRanks()
 
 	return h, nil
+}
+
+// readFallback reads the fallback entry count and the entries. They
+// must fill the file's remaining rest bytes exactly and be strictly
+// sorted, since lookups binary-search them.
+func (h *bbhash) readFallback(readU64 func() (uint64, error), rest uint64) error {
+	n, err := readU64()
+	if err != nil {
+		return err
+	}
+	if n > rest/16 || rest != 16*n {
+		return fmt.Errorf("%w: %d fallback entries in %d bytes", errBBHashCorrupt, n, rest)
+	}
+	h.fallback = make([]bbFallback, n)
+	for j := range h.fallback {
+		e := &h.fallback[j]
+		if e.hash, err = readU64(); err != nil {
+			return err
+		}
+		if e.fp, err = readU64(); err != nil {
+			return err
+		}
+		if j > 0 && compareFallback(h.fallback[j-1], *e) >= 0 {
+			return fmt.Errorf("%w: fallback entry %d out of order", errBBHashCorrupt, j)
+		}
+	}
+
+	return nil
 }

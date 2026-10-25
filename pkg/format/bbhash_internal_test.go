@@ -27,6 +27,35 @@ func randomKeys(n int, seed uint64) []uint64 {
 	return keys
 }
 
+var errUnexpectedLeftovers = errors.New("distinct keys left unplaced")
+
+// noFallback is the fallback for distinct keys, which the levels must
+// all place.
+func noFallback(leftovers []uint64) ([]bbFallback, error) {
+	return nil, fmt.Errorf("%w: %d", errUnexpectedLeftovers, len(leftovers))
+}
+
+// mustBBHash builds the table over distinct keys.
+func mustBBHash(tb testing.TB, keys []uint64) *bbhash {
+	tb.Helper()
+	h, err := newBBHash(keys, noFallback)
+	if err != nil {
+		tb.Fatalf("newBBHash: %v", err)
+	}
+
+	return h
+}
+
+// keepLeftovers is a fallback that stores the keys the levels left
+// unplaced in dst and adds no fallback entries.
+func keepLeftovers(dst *[]uint64) func([]uint64) ([]bbFallback, error) {
+	return func(leftovers []uint64) ([]bbFallback, error) {
+		*dst = leftovers
+
+		return nil, nil
+	}
+}
+
 // assertMinimalPerfect checks that the keys map one-to-one onto [0, n).
 func assertMinimalPerfect(t *testing.T, h *bbhash, keys []uint64) {
 	t.Helper()
@@ -53,11 +82,7 @@ func TestBBHashIsMinimalPerfect(t *testing.T) {
 	for _, n := range []int{1, 2, 63, 64, 65, 1000, 100_000} {
 		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
 			keys := randomKeys(n, uint64(n))
-			h, err := newBBHash(keys)
-			if err != nil {
-				t.Fatalf("newBBHash: %v", err)
-			}
-			assertMinimalPerfect(t, h, keys)
+			assertMinimalPerfect(t, mustBBHash(t, keys), keys)
 		})
 	}
 }
@@ -69,31 +94,56 @@ func TestBBHashSequentialKeys(t *testing.T) {
 	for i := range keys {
 		keys[i] = uint64(i) << 20
 	}
-	h, err := newBBHash(keys)
-	if err != nil {
-		t.Fatalf("newBBHash: %v", err)
-	}
-	assertMinimalPerfect(t, h, keys)
+	assertMinimalPerfect(t, mustBBHash(t, keys), keys)
 }
 
-func TestBBHashRejectsDuplicateKeys(t *testing.T) {
-	keys := append(randomKeys(10_000, 7), 42, 42)
-	if _, err := newBBHash(keys); !errors.Is(err, errBBHashUnplaced) {
-		t.Fatalf("err = %v, want errBBHashUnplaced", err)
+// Equal keys collide on every level: the build stops at the first level
+// that places nothing, without appending it, and returns them; every
+// other key is placed on its own slot.
+func TestBBHashLeavesEqualKeysOver(t *testing.T) {
+	distinct := randomKeys(10_000, 7)
+	keys := append(slices.Clone(distinct), 42, 42, 42)
+	var leftovers []uint64
+	h, err := newBBHash(keys, keepLeftovers(&leftovers))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(leftovers, []uint64{42, 42, 42}) {
+		t.Fatalf("leftovers = %v, want three 42s", leftovers)
+	}
+	if h.placed != uint64(len(distinct)) || h.count != h.placed {
+		t.Fatalf("placed = %d, count = %d; want %d", h.placed, h.count, len(distinct))
+	}
+	if len(h.levels) >= maxBBHashLevels {
+		t.Errorf("built %d levels; the build must stop once a level places nothing", len(h.levels))
+	}
+	last := h.levels[len(h.levels)-1]
+	if !slices.ContainsFunc(h.bits[last.offset:last.offset+last.words], func(w uint64) bool { return w != 0 }) {
+		t.Error("the last level places no key")
+	}
+	if _, ok := h.find(42); ok {
+		t.Error("an unplaced key hits a level")
+	}
+	assertMinimalPerfect(t, h, distinct)
+}
+
+// Keys that all share one hash leave no level at all: the whole table is
+// the fallback.
+func TestBBHashAllKeysEqual(t *testing.T) {
+	var leftovers []uint64
+	h, err := newBBHash([]uint64{7, 7}, keepLeftovers(&leftovers))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.levels) != 0 || h.placed != 0 || len(leftovers) != 2 {
+		t.Fatalf("levels = %d, placed = %d, leftovers = %v; want 0, 0, two keys", len(h.levels), h.placed, leftovers)
 	}
 }
 
 // The parallel build must not depend on worker scheduling.
 func TestBBHashBuildIsDeterministic(t *testing.T) {
 	keys := randomKeys(200_000, 3)
-	a, err := newBBHash(keys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := newBBHash(keys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	a, b := mustBBHash(t, keys), mustBBHash(t, keys)
 	if !slices.Equal(a.bits, b.bits) || !slices.Equal(a.levels, b.levels) {
 		t.Fatal("two builds over the same keys differ")
 	}
@@ -101,10 +151,22 @@ func TestBBHashBuildIsDeterministic(t *testing.T) {
 
 func TestBBHashFileRoundTrip(t *testing.T) {
 	keys := randomKeys(30_000, 11)
-	h, err := newBBHash(keys)
-	if err != nil {
-		t.Fatal(err)
+	h := mustBBHash(t, keys)
+	got := roundTripBBHash(t, h)
+	for i, k := range keys {
+		want, _ := h.find(k)
+		if slot, ok := got.find(k); !ok || slot != want {
+			t.Fatalf("key %d: loaded slot %d (found %t), built %d", i, slot, ok, want)
+		}
 	}
+	if len(got.fallback) != 0 || got.count != uint64(len(keys)) {
+		t.Fatalf("loaded %d fallback entries, count %d; want 0, %d", len(got.fallback), got.count, len(keys))
+	}
+}
+
+// roundTripBBHash writes h as mph.bin and reads it back.
+func roundTripBBHash(t *testing.T, h *bbhash) *bbhash {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), MPHFile)
 	if err := h.writeFile(path); err != nil {
 		t.Fatalf("writeFile: %v", err)
@@ -113,10 +175,54 @@ func TestBBHashFileRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readBBHash: %v", err)
 	}
-	for i, k := range keys {
-		want, _ := h.find(k)
-		if slot, ok := got.find(k); !ok || slot != want {
-			t.Fatalf("key %d: loaded slot %d (found %t), built %d", i, slot, ok, want)
+
+	return got
+}
+
+// withFallback builds a table over distinct keys plus the fallback
+// entries, as the MPHF builder does for keys that share a hash.
+func withFallback(t *testing.T, keys []uint64, entries []bbFallback) *bbhash {
+	t.Helper()
+	all := slices.Clone(keys)
+	for _, e := range entries {
+		all = append(all, e.hash)
+	}
+	h, err := newBBHash(all, func(leftovers []uint64) ([]bbFallback, error) {
+		if len(leftovers) != len(entries) {
+			t.Fatalf("leftovers = %d, want %d", len(leftovers), len(entries))
+		}
+		slices.SortFunc(entries, compareFallback)
+
+		return entries, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return h
+}
+
+// The fallback round-trips through mph.bin, and its entries take the
+// slots after the levels', each its own.
+func TestBBHashFallbackRoundTrip(t *testing.T) {
+	keys := randomKeys(5000, 13)
+	entries := []bbFallback{{hash: 9, fp: 3}, {hash: 9, fp: 1}, {hash: 9, fp: 2}, {hash: 5, fp: 8}, {hash: 5, fp: 4}}
+	h := withFallback(t, keys, slices.Clone(entries))
+	got := roundTripBBHash(t, h)
+	if got.count != uint64(len(keys)+len(entries)) || got.placed != uint64(len(keys)) {
+		t.Fatalf("count = %d, placed = %d; want %d, %d", got.count, got.placed, len(keys)+len(entries), len(keys))
+	}
+	seen := make(map[uint64]bool)
+	for _, e := range entries {
+		slot, ok := got.findFallback(e.hash, e.fp)
+		if !ok || slot < got.placed || slot >= got.count || seen[slot] {
+			t.Fatalf("fallback %+v: slot %d (found %t), want a free slot in [%d, %d)", e, slot, ok, got.placed, got.count)
+		}
+		seen[slot] = true
+	}
+	for _, miss := range []bbFallback{{hash: 9, fp: 4}, {hash: 6, fp: 1}, {hash: 0, fp: 0}} {
+		if slot, ok := got.findFallback(miss.hash, miss.fp); ok {
+			t.Errorf("non-member %+v found slot %d", miss, slot)
 		}
 	}
 }
@@ -160,32 +266,50 @@ func TestBBHashWriteFailureReturnsOneError(t *testing.T) {
 	}
 }
 
+// encodeBBHash returns h's mph.bin bytes.
+func encodeBBHash(t *testing.T, h *bbhash) []byte {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), MPHFile)
+	if err := h.writeFile(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return data
+}
+
 func TestReadBBHashRejectsCorruptFiles(t *testing.T) {
-	h, err := newBBHash(randomKeys(1000, 5))
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	good := filepath.Join(dir, "good")
-	if err := h.writeFile(good); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(good)
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := encodeBBHash(t, mustBBHash(t, randomKeys(1000, 5)))
 	zeroLevels := slices.Clone(data)
 	clear(zeroLevels[:8])
 	hugeLevel := slices.Clone(data)
 	hugeLevel[8+7] = 0xff // first level's word count
 
+	fb := encodeBBHash(t, withFallback(t, randomKeys(1000, 6), []bbFallback{{hash: 3, fp: 1}, {hash: 3, fp: 2}}))
+	unsorted := slices.Clone(fb)
+	// Swap the low bytes of the two entries' fingerprints.
+	unsorted[len(fb)-24], unsorted[len(fb)-8] = unsorted[len(fb)-8], unsorted[len(fb)-24]
+	hugeFallback := slices.Clone(fb)
+	hugeFallback[len(fb)-32-1] = 0xff // the fallback entry count's top byte
+	noKeys := make([]byte, 16)        // zero levels, zero fallback entries
+
 	cases := map[string][]byte{
-		"empty_header":   data[:4],
-		"truncated_bits": data[:len(data)-8],
-		"trailing_bytes": append(slices.Clone(data), 0, 0, 0, 0, 0, 0, 0, 0),
-		"zero_levels":    zeroLevels,
-		"huge_level":     hugeLevel,
+		"empty_header":       data[:4],
+		"truncated_bits":     data[:len(data)-16],
+		"no_fallback_count":  data[:len(data)-8],
+		"trailing_bytes":     append(slices.Clone(data), 0, 0, 0, 0, 0, 0, 0, 0),
+		"zero_levels":        zeroLevels,
+		"huge_level":         hugeLevel,
+		"truncated_fallback": fb[:len(fb)-8],
+		"half_entry":         fb[:len(fb)-16],
+		"unsorted_fallback":  unsorted,
+		"huge_fallback":      hugeFallback,
+		"no_keys":            noKeys,
 	}
+	dir := t.TempDir()
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(dir, name)
@@ -202,10 +326,7 @@ func TestReadBBHashRejectsCorruptFiles(t *testing.T) {
 // Keys outside the build set must miss or land in range, never panic.
 func TestBBHashForeignKeysStayInRange(t *testing.T) {
 	keys := randomKeys(5000, 9)
-	h, err := newBBHash(keys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	h := mustBBHash(t, keys)
 	for _, k := range randomKeys(50_000, 10) {
 		if slot, ok := h.find(k); ok && slot >= uint64(len(keys)) {
 			t.Fatalf("foreign key %#x: slot %d out of range", k, slot)
@@ -226,19 +347,13 @@ func BenchmarkBBHash(b *testing.B) {
 			b.ReportAllocs()
 			var h *bbhash
 			for range b.N {
-				var err error
-				if h, err = newBBHash(keys); err != nil {
-					b.Fatal(err)
-				}
+				h = mustBBHash(b, keys)
 			}
 			// Table size including the rank directory.
 			b.ReportMetric(float64(len(h.bits)+len(h.ranks))*64/float64(n), "bits/key")
 		})
 		b.Run(fmt.Sprintf("op=find/n=%d", n), func(b *testing.B) {
-			h, err := newBBHash(keys)
-			if err != nil {
-				b.Fatal(err)
-			}
+			h := mustBBHash(b, keys)
 			b.ResetTimer()
 			var sink uint64
 			for i := range b.N {
