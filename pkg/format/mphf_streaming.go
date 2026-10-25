@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"golang.org/x/sys/unix"
@@ -18,15 +19,15 @@ import (
 
 // StreamingMPHFBuilder builds a minimal perfect hash function for prefix
 // strings with memory bounded whatever the prefix count: each prefix's
-// key hash, preorder position and fingerprint go to disk-backed arrays,
-// 8 bytes apiece, and the prefix strings themselves are not kept.
+// key hash and fingerprint go to disk-backed arrays, 8 bytes apiece, and
+// the prefix strings themselves are not kept. A prefix's position is the
+// order it was added in: the index builder adds them in preorder.
 type StreamingMPHFBuilder struct {
-	// Disk-backed: hashes, positions, fingerprints. At billion-prefix
-	// scale these would otherwise be ~24 GiB of heap. Backed by mmap'd
+	// Disk-backed: hashes, fingerprints. At billion-prefix scale these
+	// would otherwise be ~16 GiB of heap. Backed by mmap'd
 	// files in tempDir; bbhash receives the mmap'd slice directly via
 	// unsafe.Slice so there's no copy to heap during construction.
 	hashes       *u64DiskArray
-	preorderPos  *u64DiskArray
 	fingerprints *u64DiskArray
 	tempDir      string
 
@@ -53,18 +54,13 @@ func NewStreamingMPHFBuilder(tempDir string) (*StreamingMPHFBuilder, error) {
 	if err != nil {
 		return nil, err
 	}
-	preorderPos, err := newU64DiskArray(tempDir, "mphf_preorderpos")
-	if err != nil {
-		return nil, errors.Join(err, hashes.Close())
-	}
 	fingerprints, err := newU64DiskArray(tempDir, "mphf_fingerprints")
 	if err != nil {
-		return nil, errors.Join(err, preorderPos.Close(), hashes.Close())
+		return nil, errors.Join(err, hashes.Close())
 	}
 
 	return &StreamingMPHFBuilder{
 		hashes:       hashes,
-		preorderPos:  preorderPos,
 		fingerprints: fingerprints,
 		tempDir:      tempDir,
 		keyHash:      hashString,
@@ -72,16 +68,13 @@ func NewStreamingMPHFBuilder(tempDir string) (*StreamingMPHFBuilder, error) {
 	}, nil
 }
 
-// Add adds a prefix at the given preorder position. All three
-// per-prefix uint64 values (hash / preorderPos / fingerprint) are
-// appended to disk-backed arrays rather than heap slices, so memory
-// usage during Add stays flat regardless of prefix count.
-func (b *StreamingMPHFBuilder) Add(prefix string, pos uint64) error {
+// Add adds the next prefix; its position is the number of prefixes
+// added before it. Its hash and fingerprint are appended to disk-backed
+// arrays rather than heap slices, so memory usage during Add stays flat
+// regardless of prefix count.
+func (b *StreamingMPHFBuilder) Add(prefix string) error {
 	if err := b.hashes.Append(b.keyHash(prefix)); err != nil {
 		return fmt.Errorf("append hash: %w", err)
-	}
-	if err := b.preorderPos.Append(pos); err != nil {
-		return fmt.Errorf("append preorder pos: %w", err)
 	}
 	if err := b.fingerprints.Append(b.fingerprint(prefix)); err != nil {
 		return fmt.Errorf("append fingerprint: %w", err)
@@ -103,7 +96,7 @@ func (b *StreamingMPHFBuilder) Close() error {
 	var errs []error
 	// Disk-backed arrays may have been already closed during a
 	// successful Build; nil-guard so Close stays idempotent.
-	for _, a := range []*u64DiskArray{b.hashes, b.preorderPos, b.fingerprints} {
+	for _, a := range []*u64DiskArray{b.hashes, b.fingerprints} {
 		if a == nil {
 			continue
 		}
@@ -112,7 +105,6 @@ func (b *StreamingMPHFBuilder) Close() error {
 		}
 	}
 	b.hashes = nil
-	b.preorderPos = nil
 	b.fingerprints = nil
 
 	return errors.Join(errs...)
@@ -138,9 +130,6 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	if err := b.hashes.Freeze(); err != nil {
 		return fmt.Errorf("freeze hashes: %w", err)
 	}
-	if err := b.preorderPos.Freeze(); err != nil {
-		return fmt.Errorf("freeze preorderPos: %w", err)
-	}
 	if err := b.fingerprints.Freeze(); err != nil {
 		return fmt.Errorf("freeze fingerprints: %w", err)
 	}
@@ -158,7 +147,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	}
 
 	mapStart := time.Now()
-	if err := writeSlots(outDir, b.tempDir, n, mph, b.hashes.Slice(), b.fingerprints.Slice(), b.preorderPos.Slice()); err != nil {
+	if err := writeSlots(outDir, b.tempDir, n, mph, b.hashes.Slice(), b.fingerprints.Slice()); err != nil {
 		return err
 	}
 	log.Debug().Dur("write_ms", time.Since(mapStart)).Msg("MPHF: slots written")
@@ -171,10 +160,6 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		return fmt.Errorf("close fingerprints: %w", err)
 	}
 	b.fingerprints = nil
-	if err := b.preorderPos.Close(); err != nil {
-		return fmt.Errorf("close preorderPos: %w", err)
-	}
-	b.preorderPos = nil
 
 	log.Debug().Msg("MPHF: build complete")
 
@@ -188,7 +173,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 // the fallback table.
 func (b *StreamingMPHFBuilder) buildBBHash() (*bbhash, error) {
 	hashes, fps := b.hashes.Slice(), b.fingerprints.Slice()
-	mph, err := newBBHash(hashes, func(leftovers []uint64) ([]bbFallback, error) {
+	mph, err := newBBHashWith(hashes, b.scratchKeys, func(leftovers []uint64) ([]bbFallback, error) {
 		return fallbackEntries(leftovers, hashes, fps)
 	})
 	if err != nil {
@@ -203,6 +188,28 @@ func (b *StreamingMPHFBuilder) buildBBHash() (*bbhash, error) {
 	}
 
 	return mph, nil
+}
+
+// scratchKeysMinBytes is the smallest level key buffer kept in a
+// scratch file rather than on the heap.
+const scratchKeysMinBytes = 1 << 20
+
+// scratchKeys is the bbhash build's keyBuffer: the keys that collide on
+// a level (~39% of the level's) go to an mmapped scratch file in the
+// build's temp dir, so the build's heap doesn't grow with the prefix
+// count; small levels stay on the heap.
+func (b *StreamingMPHFBuilder) scratchKeys(n int) ([]uint64, func() error, error) {
+	if n*8 < scratchKeysMinBytes {
+		return heapKeys(n)
+	}
+	m, err := mapScratchFile(b.tempDir, "mphf_level_keys_*.tmp", n*8)
+	if err != nil {
+		return nil, nil, fmt.Errorf("level keys: %w", err)
+	}
+
+	keys := unsafe.Slice((*uint64)(unsafe.Pointer(unsafe.SliceData(m.data))), n)
+
+	return keys, m.close, nil
 }
 
 // fallbackEntries returns the (hash, fingerprint) of every key whose
@@ -257,7 +264,7 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	}
 
 	// An empty slot file keeps the index's file set the same at any size.
-	return writeSlots(outDir, b.tempDir, 0, nil, nil, nil, nil)
+	return writeSlots(outDir, b.tempDir, 0, nil, nil, nil)
 }
 
 // writeSlots materialises mph_slots.bin: it maps every slot to its
@@ -270,15 +277,12 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 // descriptor (position width), the slots (8-byte fingerprint, then the
 // position at that width), and an 8-byte zero tail pad for masked loads
 // at the last slot.
-func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps, poss []uint64) error {
-	if len(poss) != n || len(fps) != n {
-		return fmt.Errorf("%w: fps=%d poss=%d n=%d", errMPHFArrayLengthMismatch, len(fps), len(poss), n)
+func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps []uint64) error {
+	if len(fps) != n {
+		return fmt.Errorf("%w: fps=%d n=%d", errMPHFArrayLengthMismatch, len(fps), n)
 	}
-	var maxPos uint64
-	if n > 0 {
-		maxPos = slices.Max(poss)
-	}
-	posW := int(byteWidthOf(maxPos))
+	// Prefix i is at position i, so positions run to n-1.
+	posW := int(byteWidthOf(uint64(max(n, 1) - 1)))
 	slotW := mphfFingerprintBytes + posW
 	path := filepath.Join(outDir, MPHFSlotsFile)
 	dataBytes := int64(n) * int64(slotW)
@@ -314,7 +318,7 @@ func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps, poss []
 			if start >= end {
 				continue
 			}
-			wg.Go(func() { errs[w] = writeSlotRange(f, owners, fps, poss, posW, start, end) })
+			wg.Go(func() { errs[w] = writeSlotRange(f, owners, fps, posW, start, end) })
 		}
 		wg.Wait()
 		if err := errors.Join(errors.Join(errs...), owners.close()); err != nil {
@@ -440,17 +444,22 @@ func (o *slotOwners) get(slot int) uint64 {
 
 // close unmaps and removes the scratch file.
 func (o *slotOwners) close() error {
+	return o.scratchMapping.close()
+}
+
+// close unmaps the scratch file and removes it.
+func (m *scratchMapping) close() error {
 	var err error
-	if o.data != nil {
-		err = unix.Munmap(o.data)
-		o.data = nil
+	if m.data != nil {
+		err = unix.Munmap(m.data)
+		m.data = nil
 	}
 
-	return errors.Join(err, removeIfErr(o.path))
+	return errors.Join(err, removeIfErr(m.path))
 }
 
 // writeSlotRange writes slots [start, end) of the slot file.
-func writeSlotRange(f *os.File, owners *slotOwners, fps, poss []uint64, posW, start, end int) error {
+func writeSlotRange(f *os.File, owners *slotOwners, fps []uint64, posW, start, end int) error {
 	slotW := mphfFingerprintBytes + posW
 	const bufBytes = 1 << 20
 	bufSlots := bufBytes / slotW
@@ -463,7 +472,7 @@ func writeSlotRange(f *os.File, owners *slotOwners, fps, poss []uint64, posW, st
 			binary.LittleEndian.PutUint64(buf[off:], fps[i])
 			// An 8-byte store, overwritten by the next slot: only posW
 			// bytes are the slot's.
-			binary.LittleEndian.PutUint64(buf[off+mphfFingerprintBytes:], poss[i])
+			binary.LittleEndian.PutUint64(buf[off+mphfFingerprintBytes:], uint64(i))
 		}
 		blen := (cEnd - chunk) * slotW
 		fileOff := int64(mphfSlotsDataOff) + int64(chunk)*int64(slotW)
@@ -476,8 +485,7 @@ func writeSlotRange(f *os.File, owners *slotOwners, fps, poss []uint64, posW, st
 }
 
 // errMPHFArrayLengthMismatch fires when the writer's fingerprints and
-// positions slices have differing lengths — a programming bug; both
-// must come from the same parallel-lookup pass.
+// the prefix count differ — a programming bug.
 var errMPHFArrayLengthMismatch = errors.New("mphf fingerprints/positions length mismatch")
 
 // MPHFSlotsFile maps each MPHF slot to its prefix's fingerprint and

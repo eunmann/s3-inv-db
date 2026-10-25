@@ -228,7 +228,8 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	if err := b.depthIndexBuilder.Add(pos, uint32(row.Depth)); err != nil {
 		return fmt.Errorf("add to depth index: %w", err)
 	}
-	if err := b.mphfBuilder.Add(row.Prefix, pos); err != nil {
+	// The MPHF numbers prefixes in the order they are added: preorder.
+	if err := b.mphfBuilder.Add(row.Prefix); err != nil {
 		return fmt.Errorf("add to MPHF builder: %w", err)
 	}
 

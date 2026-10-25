@@ -86,14 +86,39 @@ var errBBHashCorrupt = errors.New("bbhash: corrupt MPHF file")
 // mmap) and copies only the keys that collide on a level into the next
 // one, so the leftovers never alias keys.
 func newBBHash(keys []uint64, fallback func(leftovers []uint64) ([]bbFallback, error)) (*bbhash, error) {
+	return newBBHashWith(keys, heapKeys, fallback)
+}
+
+// keyBuffer returns room for n keys and a function releasing it.
+type keyBuffer func(n int) ([]uint64, func() error, error)
+
+// heapKeys is the keyBuffer of a build that keeps every level's keys on
+// the heap.
+func heapKeys(n int) ([]uint64, func() error, error) {
+	return make([]uint64, n), func() error { return nil }, nil
+}
+
+// newBBHashWith is newBBHash taking each level's colliding keys from
+// keyBuf, so a large build can keep them off the heap; a level's keys
+// are released once the next level is built.
+func newBBHashWith(keys []uint64, keyBuf keyBuffer, fallback func(leftovers []uint64) ([]bbFallback, error)) (h *bbhash, err error) {
+	release := func() error { return nil }
+	defer func() { err = errors.Join(err, release()) }()
 	firstWords := levelWords(len(keys))
 	// The levels after the first hold ~65% as many bits again.
-	h := &bbhash{bits: make([]uint64, 0, firstWords*7/4+maxBBHashLevels)}
+	h = &bbhash{bits: make([]uint64, 0, firstWords*7/4+maxBBHashLevels)}
 	for level := 0; len(keys) > 0 && level < maxBBHashLevels; level++ {
 		words := levelWords(len(keys))
 		set, collided := make([]uint64, words), make([]uint64, words)
 		markLevel(keys, level, set, collided)
-		next := collidedKeys(keys, level, words, collided)
+		next, nextRelease, err := collidedKeys(keys, level, words, collided, keyBuf)
+		if err != nil {
+			return nil, err
+		}
+		if err := release(); err != nil {
+			return nil, errors.Join(err, nextRelease())
+		}
+		release = nextRelease
 		placedAny := len(next) < len(keys)
 		keys = next
 		if !placedAny {
@@ -148,7 +173,7 @@ func markLevel(keys []uint64, level int, set, collided []uint64) {
 
 // collidedKeys returns the keys whose bit collided, in input order:
 // one pass counts each chunk's share, a second copies into place.
-func collidedKeys(keys []uint64, level int, words uint64, collided []uint64) []uint64 {
+func collidedKeys(keys []uint64, level int, words uint64, collided []uint64, keyBuf keyBuffer) ([]uint64, func() error, error) {
 	isCollided := func(k uint64) bool {
 		i := bbPosition(k, level, words)
 
@@ -167,7 +192,10 @@ func collidedKeys(keys []uint64, level int, words uint64, collided []uint64) []u
 		counts[c] = total
 		total += n
 	}
-	next := make([]uint64, total)
+	next, release, err := keyBuf(total)
+	if err != nil {
+		return nil, nil, err
+	}
 	forChunks(len(keys), func(c, lo, hi int) {
 		at := counts[c]
 		for _, k := range keys[lo:hi] {
@@ -178,7 +206,7 @@ func collidedKeys(keys []uint64, level int, words uint64, collided []uint64) []u
 		}
 	})
 
-	return next
+	return next, release, nil
 }
 
 // forChunks splits [0, n) into mphfWorkerCount(n) contiguous chunks and

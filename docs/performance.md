@@ -198,10 +198,15 @@ size and scratch peak for synthetic loads:
 
 The scratch column is the compressed run files only, sampled before
 the merge. The index build also keeps temporary files in the same
-temp directory until it finishes (while it writes slots, the MPHF
-builder alone holds three 8-byte arrays per prefix plus a slot-owner
-map of 4 bytes per prefix, 8 past 2^32 prefixes), which the table does
-not count.
+temp directory until it finishes, which the table does not count:
+while it writes slots the MPHF builder holds two 8-byte arrays per
+prefix (hashes and fingerprints), a slot-owner map of 4 bytes per
+prefix (8 past 2^32 prefixes) and, during construction, the keys that
+collide at each level (8 bytes each, at most the previous level's
+count). The tier-stats writer stages each prefix's set tiers in the
+output directory, a 2-byte mask plus a varint count and byte total per
+set tier: about 7 bytes per prefix on the synthetic benchmark's tier
+mix, and nothing when the bucket uses a single tier.
 
 These scale near-linearly with prefix count, not object count. The
 planner applies a fixed `0.30` multiplier to a manifest's compressed

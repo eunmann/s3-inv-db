@@ -188,15 +188,15 @@ func TestMPHFUnicode(t *testing.T) {
 	}
 }
 
-// TestMPHFSparsePositions pins that the slot position width fits the
-// largest position, not the prefix count: 200 prefixes at positions
-// past 255 must not be truncated to one byte.
-func TestMPHFSparsePositions(t *testing.T) {
+// TestMPHFPositionsPastOneByte pins that the slot position width fits
+// the largest position: 300 prefixes put positions past 255, which a
+// one-byte width would truncate.
+func TestMPHFPositionsPastOneByte(t *testing.T) {
 	dir := t.TempDir()
 	b := newTestMPHFBuilder(t)
 
-	const n = 200
-	posOf := func(i int) uint64 { return uint64(i)*1000 + 1<<20 }
+	const n = 300
+	posOf := func(i int) uint64 { return uint64(i) }
 	for i := range n {
 		b.Add(prefixFromInt(i+1), posOf(i))
 	}
@@ -251,9 +251,14 @@ func newTestMPHFBuilder(tb testing.TB) *testMPHFBuilder {
 	return &testMPHFBuilder{tb: tb, sb: sb}
 }
 
+// Add adds prefix, which must be at position pos: the builder numbers
+// prefixes in the order they are added.
 func (b *testMPHFBuilder) Add(prefix string, pos uint64) {
 	b.tb.Helper()
-	if err := b.sb.Add(prefix, pos); err != nil {
+	if pos != b.sb.Count() {
+		b.tb.Fatalf("Add(%q, %d): the builder's next position is %d", prefix, pos, b.sb.Count())
+	}
+	if err := b.sb.Add(prefix); err != nil {
 		b.tb.Fatalf("Add(%q, %d): %v", prefix, pos, err)
 	}
 }
@@ -568,8 +573,8 @@ func TestSlotOwnersLeaveNoScratch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer b.Close()
-	for i, p := range []string{"", "a/", "b/", "c/"} {
-		if err := b.Add(p, uint64(i)); err != nil {
+	for _, p := range []string{"", "a/", "b/", "c/"} {
+		if err := b.Add(p); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -636,5 +641,39 @@ func TestWriteZerosFillsFile(t *testing.T) {
 	}
 	if allocated := st.Blocks * 512; allocated < size {
 		t.Errorf("allocated %d bytes on disk, want at least %d", allocated, size)
+	}
+}
+
+// TestMPHFLevelKeysInScratch: a build large enough that its first
+// level's colliding keys go to a scratch file looks up every prefix
+// exactly, and leaves no scratch file behind.
+func TestMPHFLevelKeysInScratch(t *testing.T) {
+	tmp, dir := t.TempDir(), t.TempDir()
+	b, err := NewStreamingMPHFBuilder(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	const n = 400_000 // ~39% collide on level 0: ~1.2 MiB of keys
+	for i := range n {
+		if err := b.Add(prefixFromInt(i + 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Build(dir); err != nil {
+		t.Fatal(err)
+	}
+	if entries, err := os.ReadDir(tmp); err != nil || len(entries) != 0 {
+		t.Fatalf("temp dir after Build: %v (%v)", entries, err)
+	}
+	m, err := OpenMPHF(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	for i := range n {
+		if pos, ok := m.Lookup(prefixFromInt(i + 1)); !ok || pos != uint64(i) {
+			t.Fatalf("prefix %d: position %d (found %v)", i, pos, ok)
+		}
 	}
 }

@@ -30,7 +30,6 @@ import (
 // Per-iteration metrics reported (bytes / wall time):
 //
 //	hashes_bytes        size of mphf_hashes_*.u64disk
-//	preorderpos_bytes   size of mphf_preorderpos_*.u64disk
 //	fingerprints_bytes  size of mphf_fingerprints_*.u64disk
 //	depth_bytes         sum of depth_NN_*.u64stream files
 //	scratch_total_bytes sum across the whole scratch dir
@@ -116,7 +115,6 @@ func runScratchPeakOne(b *testing.B, n int) {
 	finalizeDur := time.Since(finalizeStart)
 
 	b.ReportMetric(float64(sizes["hashes"]), "hashes_bytes")
-	b.ReportMetric(float64(sizes["preorderpos"]), "preorderpos_bytes")
 	b.ReportMetric(float64(sizes["fingerprints"]), "fingerprints_bytes")
 	b.ReportMetric(float64(sizes["depth"]), "depth_bytes")
 	b.ReportMetric(float64(sizes["total"]), "scratch_total_bytes")
@@ -144,8 +142,6 @@ func bucketScratchSizes(root string) (map[string]int64, error) {
 		switch {
 		case strings.HasPrefix(name, "mphf_hashes_"):
 			sizes["hashes"] += size
-		case strings.HasPrefix(name, "mphf_preorderpos_"):
-			sizes["preorderpos"] += size
 		case strings.HasPrefix(name, "mphf_fingerprints_"):
 			sizes["fingerprints"] += size
 		case strings.HasPrefix(name, "depth_"):
