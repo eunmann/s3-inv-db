@@ -9,3 +9,7 @@ integration internal/loader ^BenchmarkPipeline$/^shape=(realistic|deep_pyramid|r
 # MPHF build over 1M prefixes (Add + Build, ~1 s per op; reports
 # peak_heap_B): the finalize step's memory is not bounded by GOMEMLIMIT.
 - pkg/format ^BenchmarkMPHFBuild$/^n=1000000$ 1x
+
+# Final merge of many spilled runs under a GOMEMLIMIT (reports
+# peak_heap_B, rounds, round_bytes): open-run cost and fan-in sizing.
+- pkg/extsort ^BenchmarkFinalMerge$ 1x
