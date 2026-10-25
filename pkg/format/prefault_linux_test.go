@@ -43,14 +43,17 @@ func residentPages(t *testing.T, path string) (int, int) {
 	return n, len(vec)
 }
 
-func TestPrefaultReadsEveryFile(t *testing.T) {
+func TestPrefaultReadsManifestFiles(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, TierStatsDir)
 	if err := os.MkdirAll(sub, DirPerm); err != nil {
 		t.Fatal(err)
 	}
-	paths := []string{filepath.Join(dir, CoreStatsFile), filepath.Join(sub, TierDenseFile)}
-	for _, p := range paths {
+	listed := []string{CoreStatsFile, filepath.Join(TierStatsDir, TierDenseFile)}
+	extra := "extra.bin"
+	m := &Manifest{Files: map[string]FileInfo{}}
+	for _, name := range append([]string{extra}, listed...) {
+		p := filepath.Join(dir, name)
 		if err := os.WriteFile(p, make([]byte, 4<<20), FilePerm); err != nil {
 			t.Fatal(err)
 		}
@@ -61,16 +64,22 @@ func TestPrefaultReadsEveryFile(t *testing.T) {
 		_ = f.Sync()
 		_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
 		f.Close()
+		if name != extra {
+			m.Files[name] = FileInfo{Size: 4 << 20}
+		}
 	}
-	if got, all := residentPages(t, paths[0]); got == all {
+	if got, all := residentPages(t, filepath.Join(dir, extra)); got == all {
 		t.Skip("the kernel kept the evicted pages; nothing to measure")
 	}
-	if err := Prefault(dir); err != nil {
+	if err := Prefault(dir, m); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range paths {
-		if got, all := residentPages(t, p); got != all {
-			t.Errorf("%s: %d of %d pages resident after Prefault", filepath.Base(p), got, all)
+	for _, name := range listed {
+		if got, all := residentPages(t, filepath.Join(dir, name)); got != all {
+			t.Errorf("%s: %d of %d pages resident after Prefault", name, got, all)
 		}
+	}
+	if got, all := residentPages(t, filepath.Join(dir, extra)); got == all {
+		t.Errorf("%s is not in the manifest but Prefault read all %d of its pages", extra, all)
 	}
 }

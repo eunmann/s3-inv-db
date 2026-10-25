@@ -5,14 +5,15 @@ package format
 import (
 	"errors"
 	"fmt"
-	"io/fs"
+	"maps"
 	"os"
+	"slices"
 
 	"golang.org/x/sys/unix"
 )
 
-// Prefault reads every file of the index in dir into the page cache
-// before the index serves queries. Each file is mapped, populated
+// Prefault reads the files m lists for the index in dir into the page
+// cache before the index serves queries. Each file is mapped, populated
 // (MADV_POPULATE_READ, one sequential read) and unmapped; the reader's
 // own mappings then take only minor faults. On the benchmark fixture it
 // cut opening an evicted index plus its first 1000 lookups by 53%; the
@@ -20,24 +21,20 @@ import (
 // index, so callers use it only for indexes that fit in memory with
 // room to spare. On a kernel without MADV_POPULATE_READ (before 5.14) it
 // does nothing.
-func Prefault(dir string) error {
+func Prefault(dir string, m *Manifest) error {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return fmt.Errorf("prefault: %w", err)
 	}
 	defer root.Close()
-	err = fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil || !d.Type().IsRegular() {
-			return err
+	for _, name := range slices.Sorted(maps.Keys(m.Files)) {
+		err := prefaultFile(root, name)
+		if errors.Is(err, unix.EINVAL) {
+			return nil
 		}
-
-		return prefaultFile(root, path)
-	})
-	if errors.Is(err, unix.EINVAL) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("prefault: %w", err)
+		if err != nil {
+			return fmt.Errorf("prefault: %w", err)
+		}
 	}
 
 	return nil

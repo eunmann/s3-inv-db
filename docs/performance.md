@@ -84,7 +84,7 @@ to an ingest node without flags.
 | Low CPU during build | S3 bandwidth limited | Run on a host with more vCPUs |
 | Slow build, lots of temp files | Aggregator spilling under a tight `GOMEMLIMIT` | Raise the limit or run on a fatter host |
 | Slow final build phase | Large MPHF build | Expected for >5M prefixes |
-| First query slow | Cold page cache | The server prefaults an index that fits in 1/8 of memory when it loads it; a larger one, or the CLI, reads pages as queries touch them |
+| First query slow | Cold page cache | The server prefaults loaded indexes up to 1/8 of its memory together; past that, and in the CLI, pages are read as queries touch them |
 | Descendant queries slow | Large subtrees | Use `DescendantsAtDepthFiltered` with `MinCount` / `MinBytes` |
 
 Query-time RAM is just the OS page cache plus iterator stack frames;
@@ -99,12 +99,17 @@ per cold lookup, and `MADV_RANDOM` everywhere doubled cold latency
 it.
 
 When the server loads an index (a fresh build or a restart), it reads
-the whole index into the page cache first if it takes at most 1/8 of
-system memory (`format.Prefault`, `MADV_POPULATE_READ`): opening an
-evicted 2.4M-prefix index plus its first 1000 lookups took 36 ms
-instead of 77 ms. The asynchronous `MADV_WILLNEED` measured no gain.
-CLI commands open without it: a one-off query shouldn't read a whole
-index (#55).
+the files its manifest lists into the page cache first
+(`format.Prefault`, `MADV_POPULATE_READ`) if the index fits in what is
+left of 1/8 of the server's memory (host RAM, or the cgroup
+`memory.max` when lower) after the loaded indexes it already
+prefaulted. So a restart reads at most that 1/8 before it serves, and
+one index's prefault doesn't push the others out of the page cache.
+Opening an evicted 2.4M-prefix index plus its first 1000 lookups took
+36 ms instead of 77 ms. The asynchronous `MADV_WILLNEED` measured no
+gain. A prefault that fails only logs a warning; the index opens
+without it. CLI commands open without it: a one-off query shouldn't
+read a whole index (#55).
 
 ## Index size
 
