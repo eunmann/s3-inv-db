@@ -541,6 +541,10 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		close(errChan)
 	}()
+	// Restored indexes already serve (restore opened them without
+	// reading them in); warm them while requests are answered. It stops
+	// between indexes once ctx ends.
+	go s.manager.PrefaultRestored(ctx)
 
 	select {
 	case <-ctx.Done():

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,7 +19,10 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/dbtest"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
+	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
 )
@@ -536,4 +540,79 @@ func TestNew_LevelCacheBudgetReachesHandlers(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestServerRun_PrefaultsRestoredIndexes pins that Run warms the
+// indexes restore opened without reading them in; without it a
+// restarted server's indexes stay cold.
+func TestServerRun_PrefaultsRestoredIndexes(t *testing.T) {
+	lc := &net.ListenConfig{}
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	srv, err := New(t.Context(), Config{
+		Addr:       addr,
+		Logger:     zerolog.Nop(),
+		PriceTable: pricing.DefaultUSEast1Prices(),
+		DB:         testDB(t),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	dir := buildIndex(t)
+	if err := srv.manager.Hydrate(t.Context(), inventory.Info{ID: "probe", Name: "Probe", State: inventory.StateLoaded}, dir); err != nil {
+		t.Fatalf("hydrate: %v", err)
+	}
+	prefaulted := make(chan string, 1)
+	srv.manager.SetPrefaultForTest(func(dir string, _ *format.Manifest) error {
+		prefaulted <- dir
+
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- srv.Run(ctx)
+	}()
+	select {
+	case got := <-prefaulted:
+		if got != dir {
+			t.Errorf("prefaulted %s, want the restored %s", got, dir)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("Run did not prefault the restored index within 5s")
+	}
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Errorf("Run() = %v, want nil", err)
+	}
+}
+
+// buildIndex builds a loadable single-object index and returns its dir.
+func buildIndex(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "index")
+	agg := extsort.NewAggregator(1, 0)
+	agg.AddObject("only/object.bin", 100, tiers.Standard)
+	rows := agg.Drain()
+	extsort.SortPrefixRows(rows)
+	builder, err := extsort.NewIndexBuilder(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if err := builder.Add(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := builder.Finalize(); err != nil {
+		t.Fatal(err)
+	}
+
+	return dir
 }

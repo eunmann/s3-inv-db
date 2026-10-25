@@ -106,11 +106,52 @@ func TestPlanPrefaultWithoutManifest(t *testing.T) {
 func TestOpenServedSurvivesPrefaultError(t *testing.T) {
 	dir, m := buildServedIndex(t)
 	m.Files["missing.bin"] = format.FileInfo{Size: 1}
-	idx, err := openServed(dir, m)
+	idx, err := NewCatalog(nil).openServed(dir, m)
 	if err != nil {
 		t.Fatalf("openServed failed on a prefault error: %v", err)
 	}
 	if err := idx.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestHydratePrefaultsAfterwards: a restart opens a loaded index without
+// reading it in, so the server can listen at once; PrefaultRestored
+// then warms it, but not one unloaded in the meantime.
+func TestHydratePrefaultsAfterwards(t *testing.T) {
+	dirA, _ := buildServedIndex(t)
+	dirB, _ := buildServedIndex(t)
+	c := NewCatalog(nil)
+	t.Cleanup(func() { _ = c.Close() })
+	c.prefaultLimit = 1 << 40
+	var prefaulted []string
+	c.prefault = func(dir string, _ *format.Manifest) error {
+		prefaulted = append(prefaulted, dir)
+
+		return nil
+	}
+	for id, dir := range map[ID]string{"a": dirA, "b": dirB} {
+		if err := c.Hydrate(t.Context(), Info{ID: id, State: StateLoaded}, dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(prefaulted) != 0 {
+		t.Fatalf("Hydrate prefaulted %v; it must open without reading in", prefaulted)
+	}
+	for _, id := range []ID{"a", "b"} {
+		if info, ok := c.Get(id); !ok || info.State != StateLoaded {
+			t.Fatalf("%s not served after Hydrate: %+v", id, info)
+		}
+	}
+	if err := c.Unload(t.Context(), "b"); err != nil {
+		t.Fatal(err)
+	}
+	c.PrefaultRestored(t.Context())
+	if len(prefaulted) != 1 || prefaulted[0] != dirA {
+		t.Fatalf("prefaulted %v, want only the still-loaded %s", prefaulted, dirA)
+	}
+	c.PrefaultRestored(t.Context())
+	if len(prefaulted) != 1 {
+		t.Fatalf("a second PrefaultRestored prefaulted again: %v", prefaulted)
 	}
 }

@@ -308,11 +308,12 @@ func (d *Discovery) LastRefreshErr() error {
 	return d.cacheLastErr
 }
 
-// Start launches a background goroutine that calls Refresh every
-// `interval`. The very first refresh runs inline so Snapshot returns
-// fresh data immediately after Start returns. Subsequent refreshes run
-// asynchronously; ticker drift is acceptable. Refresh errors are
-// logged at warn level via the supplied logger (nil disables logging).
+// Start launches a background goroutine that refreshes at once and then
+// every `interval`, so the server can listen while S3 is walked. A
+// Snapshot that comes before the first refresh finishes shares it (the
+// cold path joins the same refresh). Ticker drift is acceptable.
+// Refresh errors are logged at warn level via the supplied logger (nil
+// disables logging).
 //
 // Start is a no-op when discovery is disabled. Calling Start a second
 // time without Stop in between is also a no-op.
@@ -330,15 +331,18 @@ func (d *Discovery) Start(ctx context.Context, interval time.Duration, logger *z
 	d.bgStop = stop
 	d.bgMu.Unlock()
 
-	if err := d.Refresh(ctx); err != nil && logger != nil {
-		logger.Warn().Err(err).Msg("discovery: initial refresh failed; serving empty snapshot until next tick")
-	}
 	d.bgWG.Add(1)
 	go d.runRefresher(ctx, interval, stop, logger)
 }
 
 func (d *Discovery) runRefresher(ctx context.Context, interval time.Duration, stop <-chan struct{}, logger *zerolog.Logger) {
 	defer d.bgWG.Done()
+	_, err, _ := d.refreshSF.Do(refreshKey, func() (any, error) {
+		return nil, d.Refresh(ctx)
+	})
+	if err != nil && logger != nil {
+		logger.Warn().Err(err).Msg("discovery: initial refresh failed; serving empty snapshot until next tick")
+	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -488,7 +492,12 @@ func (d *Discovery) loadInternal(ctx context.Context, disc Inventory, onProgress
 		return d.manager.LoadWith(ctx, composite, build)
 	}
 	opts := GatedLoadOptions{Pin: !auto}
-	if d.sizer != nil {
+	switch {
+	case disc.FileFormat != "" && disc.Error == "" && disc.TotalBytes > 0:
+		// Discovery already read this run's manifest: its total is what
+		// the sizer would fetch the manifest again to compute.
+		opts.EstimateBytes = uint64(float64(disc.TotalBytes) * d.indexRatio)
+	case d.sizer != nil:
 		size, err := d.sizer(ctx, d.discoverer.Bucket(), disc.ManifestKey)
 		if err == nil {
 			opts.EstimateBytes = uint64(float64(size) * d.indexRatio)

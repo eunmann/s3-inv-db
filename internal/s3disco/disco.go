@@ -18,6 +18,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -33,7 +35,25 @@ type Discoverer struct {
 	bucket          string
 	prefix          string
 	manifestFetches int
+
+	// manifests holds the summary of every manifest read so far, by key.
+	// S3 Inventory writes a run's manifest.json once, when the run
+	// completes, so a summary never goes stale; only successful reads
+	// are kept, and List drops keys whose run is gone.
+	manifestsMu sync.Mutex
+	manifests   map[string]manifestSummary
 }
+
+// manifestSummary is what discovery shows of one manifest.
+type manifestSummary struct {
+	fileFormat        string
+	fileCount         int
+	totalBytes        int64
+	creationTimestamp string
+}
+
+// listConcurrency bounds the configurations List describes at once.
+const listConcurrency = 8
 
 // DefaultManifestFetches is the per-configuration cap on how many of
 // the newest run manifests are fetched per discovery pass. Older runs
@@ -47,7 +67,10 @@ func New(client *s3.Client, bucket, prefix string) *Discoverer {
 		prefix += "/"
 	}
 
-	return &Discoverer{client: client, bucket: bucket, prefix: prefix, manifestFetches: DefaultManifestFetches}
+	return &Discoverer{
+		client: client, bucket: bucket, prefix: prefix, manifestFetches: DefaultManifestFetches,
+		manifests: make(map[string]manifestSummary),
+	}
 }
 
 // runFolderRE matches the two timestamp folder shapes S3 Inventory uses
@@ -105,7 +128,12 @@ func (d *Discoverer) List(ctx context.Context) ([]inventory.Inventory, error) {
 	}
 
 	logger := zerolog.Ctx(ctx)
-	var out []inventory.Inventory
+	// One slot per source or configuration, in walk order; the
+	// configurations are described concurrently and fill their slots.
+	var slots []*[]inventory.Inventory
+	var partial atomic.Bool
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, listConcurrency)
 	for _, src := range srcBuckets {
 		srcName := trimPrefix(src, d.prefix)
 		if !validSourceName(srcName) {
@@ -116,7 +144,8 @@ func (d *Discoverer) List(ctx context.Context) ([]inventory.Inventory, error) {
 		invs, err := d.listCommonPrefixes(ctx, src)
 		if err != nil {
 			logger.Warn().Err(err).Str("src", srcName).Msg("list inventories under src")
-			out = append(out, inventory.Inventory{SourceBucket: srcName, Error: "failed to list inventories under source bucket"})
+			slots = append(slots, &[]inventory.Inventory{{SourceBucket: srcName, Error: "failed to list inventories under source bucket"}})
+			partial.Store(true)
 
 			continue
 		}
@@ -127,23 +156,57 @@ func (d *Discoverer) List(ctx context.Context) ([]inventory.Inventory, error) {
 
 				continue
 			}
-			runs, err := d.describeRuns(ctx, srcName, invName, inv)
-			if err != nil {
-				logger.Warn().Err(err).Str("src", srcName).Str("inv", invName).Msg("describe runs")
-				out = append(out, inventory.Inventory{SourceBucket: srcName, Name: invName, Error: "failed to describe inventory"})
-
-				continue
-			}
-			out = append(out, runs...)
+			slot := new([]inventory.Inventory)
+			slots = append(slots, slot)
+			sem <- struct{}{}
+			wg.Go(func() {
+				defer func() { <-sem }()
+				runs, err := d.describeRuns(ctx, srcName, invName, inv)
+				if err != nil {
+					logger.Warn().Err(err).Str("src", srcName).Str("inv", invName).Msg("describe runs")
+					runs = []inventory.Inventory{{SourceBucket: srcName, Name: invName, Error: "failed to describe inventory"}}
+					partial.Store(true)
+				}
+				*slot = runs
+			})
 		}
+	}
+	wg.Wait()
+
+	var out []inventory.Inventory
+	for _, runs := range slots {
+		out = append(out, *runs...)
+	}
+	if !partial.Load() {
+		d.keepManifests(out)
 	}
 
 	return out, nil
 }
 
-// Find returns one Inventory by (srcBucket, invID, run) with a single
-// manifest GET; an empty run costs one extra LIST to pick the most
-// recent run for the configuration.
+// keepManifests drops cached summaries of runs a complete listing no
+// longer shows. List skips it when a source or configuration failed to
+// list, so a transient error doesn't cost those runs' manifests again.
+func (d *Discoverer) keepManifests(listed []inventory.Inventory) {
+	keep := make(map[string]struct{}, len(listed))
+	for i := range listed {
+		if listed[i].ManifestKey != "" {
+			keep[listed[i].ManifestKey] = struct{}{}
+		}
+	}
+	d.manifestsMu.Lock()
+	defer d.manifestsMu.Unlock()
+	for key := range d.manifests {
+		if _, ok := keep[key]; !ok {
+			delete(d.manifests, key)
+		}
+	}
+}
+
+// Find returns one Inventory by (srcBucket, invID, run) with at most
+// one manifest GET, none when the run's manifest was already read; an
+// empty run costs one extra LIST to pick the most recent run for the
+// configuration.
 func (d *Discoverer) Find(ctx context.Context, srcBucket, invID, run string) (inventory.Inventory, error) {
 	if srcBucket == "" || invID == "" {
 		return inventory.Inventory{}, errEmptyID
@@ -235,6 +298,14 @@ func runEntry(src, inv, invPrefix, run string) inventory.Inventory {
 // and recorded on the entry so the UI shows it; the error is returned
 // so callers can tell a missing run apart.
 func (d *Discoverer) describeRun(ctx context.Context, entry *inventory.Inventory) error {
+	d.manifestsMu.Lock()
+	sum, ok := d.manifests[entry.ManifestKey]
+	d.manifestsMu.Unlock()
+	if ok {
+		sum.fill(entry)
+
+		return nil
+	}
 	manifest, err := d.fetchManifest(ctx, entry.ManifestKey)
 	if err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).
@@ -245,12 +316,25 @@ func (d *Discoverer) describeRun(ctx context.Context, entry *inventory.Inventory
 
 		return err
 	}
-	entry.FileFormat = manifest.FileFormat
-	entry.FileCount = len(manifest.Files)
-	entry.TotalBytes = manifestTotalBytes(manifest)
-	entry.CreationTimestamp = manifest.CreationTimestamp
+	sum = manifestSummary{
+		fileFormat:        manifest.FileFormat,
+		fileCount:         len(manifest.Files),
+		totalBytes:        manifestTotalBytes(manifest),
+		creationTimestamp: manifest.CreationTimestamp,
+	}
+	d.manifestsMu.Lock()
+	d.manifests[entry.ManifestKey] = sum
+	d.manifestsMu.Unlock()
+	sum.fill(entry)
 
 	return nil
+}
+
+func (s manifestSummary) fill(entry *inventory.Inventory) {
+	entry.FileFormat = s.fileFormat
+	entry.FileCount = s.fileCount
+	entry.TotalBytes = s.totalBytes
+	entry.CreationTimestamp = s.creationTimestamp
 }
 
 // manifestTotalBytes sums the compressed sizes of every data file in
