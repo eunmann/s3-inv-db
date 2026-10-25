@@ -122,6 +122,9 @@ Per-prefix diff of two indexes over the descendants at `--depth`
 missing from one index contributes no rows from that side. Each row reports
 the from / to counts and bytes, the deltas, and a status of `added`,
 `removed`, `changed`, or `unchanged`.
+A prefix present in both is `changed` when its object count, bytes or
+per-tier breakdown differ, so a row whose objects only moved between
+storage classes is `changed` with zero count and byte deltas.
 
 ## `verify`
 
