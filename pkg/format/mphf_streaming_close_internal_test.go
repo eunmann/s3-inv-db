@@ -17,32 +17,26 @@ func TestStreamingMPHFBuilder_CloseSurfacesErrors(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	// Close the tempfile out from under the builder so the deferred
-	// Flush+Close inside Close() returns errors that the old impl would
-	// have silently swallowed. After this, every cleanup call should
-	// fail, and Close must report something.
-	if err := b.tempFile.Close(); err != nil {
-		t.Fatalf("preempt tempFile.Close: %v", err)
+	// Close an array's file out from under the builder: Close must
+	// report the failure rather than swallow it.
+	if err := b.hashes.file.Close(); err != nil {
+		t.Fatalf("preempt hashes file close: %v", err)
 	}
 
 	err = b.Close()
 	if err == nil {
-		t.Fatal("Close() returned nil after preempting tempfile; expected aggregated cleanup error")
+		t.Fatal("Close() returned nil after preempting an array's file; expected an aggregated cleanup error")
 	}
-	// The aggregated message should mention at least one of the
-	// cleanup phases so operators have a starting point.
-	got := err.Error()
-	if !strings.Contains(got, "mphf tempfile") {
-		t.Errorf("Close error = %q; expected mention of mphf tempfile", got)
+	if got := err.Error(); !strings.Contains(got, "u64 disk array close") {
+		t.Errorf("Close error = %q; expected mention of the array close", got)
 	}
 }
 
 func TestStreamingMPHFBuilder_BuildTwiceRejected(t *testing.T) {
-	// Build finalizes the prefix writer chain on its first call; a
-	// second call would have nil-derefed b.tempWriter.Flush. Surface
-	// ErrMPHFAlreadyBuilt instead. Empty-count path goes through
-	// writeEmpty without nilling the writer chain, so it would
-	// previously have silently re-run writeEmpty — also guarded.
+	// Build consumes the disk-backed arrays on its first call; a
+	// second call would nil-deref them. The empty-count path goes
+	// through writeEmpty without touching the arrays, so it would
+	// silently re-run writeEmpty; both are guarded.
 	dir := t.TempDir()
 	outDir := t.TempDir()
 	b, err := NewStreamingMPHFBuilder(dir)
@@ -94,7 +88,11 @@ func TestStreamingMPHFBuilder_CloseClean(t *testing.T) {
 	if err := b.Close(); err != nil {
 		t.Fatalf("Close on a healthy builder returned %v", err)
 	}
-	if _, err := os.Stat(b.tempPath); !os.IsNotExist(err) {
-		t.Errorf("tempfile %s not removed: %v", b.tempPath, err)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("temp files left after Close: %v", entries)
 	}
 }

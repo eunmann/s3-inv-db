@@ -1,7 +1,6 @@
 package format
 
 import (
-	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -14,21 +13,13 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
-	"github.com/klauspost/compress/zstd"
 	"golang.org/x/sys/unix"
 )
 
-// StreamingMPHFBuilder builds a minimal perfect hash function for prefix strings
-// while keeping memory usage bounded by writing prefixes to disk during construction.
-//
-// Memory usage:
-// - ~8 bytes per prefix for hash keys (bbhash's input)
-// - ~8 bytes per prefix for preorder positions
-// - ~8 bytes per prefix for pre-computed fingerprints (optimization)
-// - Temporary buffers for I/O
-//
-// This is much more memory efficient than MPHFBuilder which stores all
-// prefix strings in memory (~50+ bytes per prefix average).
+// StreamingMPHFBuilder builds a minimal perfect hash function for prefix
+// strings with memory bounded whatever the prefix count: each prefix's
+// key hash, preorder position and fingerprint go to disk-backed arrays,
+// 8 bytes apiece, and the prefix strings themselves are not kept.
 type StreamingMPHFBuilder struct {
 	// Disk-backed: hashes, positions, fingerprints. At billion-prefix
 	// scale these would otherwise be ~24 GiB of heap. Backed by mmap'd
@@ -37,102 +28,48 @@ type StreamingMPHFBuilder struct {
 	hashes       *u64DiskArray
 	preorderPos  *u64DiskArray
 	fingerprints *u64DiskArray
-
-	// Temp file for prefix strings. The bytes flow:
-	//   Add() → tempWriter (bufio, batches per-Add lengths+payloads)
-	//         → tempEncoder (zstd, fastest level)
-	//         → tempFile
-	// On Build(), tempWriter.Flush + tempEncoder.Close finalize the
-	// zstd frame, then the read side opens a fresh decoder on the
-	// seeked file. Compression is on because the prefix stream is
-	// large (sum of all S3 key prefixes, ~50 GB at 1B prefixes) and
-	// highly compressible (shared path components, written then read
-	// exactly once sequentially — no mmap requirement).
-	tempFile    *os.File
-	tempEncoder *zstd.Encoder
-	tempWriter  *bufio.Writer
-	tempPath    string
-	tempDir     string
+	tempDir      string
 
 	// keyHash and fingerprint are hashString and computeFingerprint;
 	// tests replace them to force collisions.
 	keyHash     func(prefix string) uint64
 	fingerprint func(prefix string) uint64
 
-	// Stats
-	count      uint64
-	totalBytes uint64
-	bufferSize int
-
+	count uint64
 	built bool
 }
 
 // ErrMPHFAlreadyBuilt is returned when Build is called more than
-// once on the same StreamingMPHFBuilder. The writer chain is
-// finalized in the first call, so a second call would nil-deref on
-// the tempWriter flush. Surfaced as a named error so callers can
-// distinguish double-Build from other Build failures.
+// once on the same StreamingMPHFBuilder. The first call consumes the
+// disk-backed arrays, so a second would nil-deref on them. Surfaced as
+// a named error so callers can distinguish double-Build from other
+// Build failures.
 var ErrMPHFAlreadyBuilt = errors.New("StreamingMPHFBuilder.Build already called")
 
 // NewStreamingMPHFBuilder creates a new streaming MPHF builder. TempDir
-// holds prefix strings plus the disk-backed u64 arrays.
+// holds the disk-backed u64 arrays.
 func NewStreamingMPHFBuilder(tempDir string) (*StreamingMPHFBuilder, error) {
-	tempFile, err := os.CreateTemp(tempDir, "mphf_prefixes_*.tmp")
-	if err != nil {
-		return nil, fmt.Errorf("create temp file: %w", err)
-	}
-
 	hashes, err := newU64DiskArray(tempDir, "mphf_hashes")
 	if err != nil {
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
 		return nil, err
 	}
 	preorderPos, err := newU64DiskArray(tempDir, "mphf_preorderpos")
 	if err != nil {
-		hashes.Close()
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
-		return nil, err
+		return nil, errors.Join(err, hashes.Close())
 	}
 	fingerprints, err := newU64DiskArray(tempDir, "mphf_fingerprints")
 	if err != nil {
-		preorderPos.Close()
-		hashes.Close()
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
-		return nil, err
+		return nil, errors.Join(err, preorderPos.Close(), hashes.Close())
 	}
 
-	enc, err := zstd.NewWriter(tempFile, zstd.WithEncoderLevel(zstd.SpeedFastest))
-	if err != nil {
-		fingerprints.Close()
-		preorderPos.Close()
-		hashes.Close()
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
-		return nil, fmt.Errorf("create prefix zstd encoder: %w", err)
-	}
-
-	b := &StreamingMPHFBuilder{
+	return &StreamingMPHFBuilder{
 		hashes:       hashes,
 		preorderPos:  preorderPos,
 		fingerprints: fingerprints,
-		tempFile:     tempFile,
-		tempEncoder:  enc,
-		tempWriter:   bufio.NewWriterSize(enc, 1024*1024),
-		tempPath:     tempFile.Name(),
 		tempDir:      tempDir,
 		keyHash:      hashString,
 		fingerprint:  computeFingerprint,
-		bufferSize:   1024 * 1024,
-	}
-
-	return b, nil
+	}, nil
 }
 
 // Add adds a prefix at the given preorder position. All three
@@ -149,17 +86,7 @@ func (b *StreamingMPHFBuilder) Add(prefix string, pos uint64) error {
 	if err := b.fingerprints.Append(b.fingerprint(prefix)); err != nil {
 		return fmt.Errorf("append fingerprint: %w", err)
 	}
-
-	// Write prefix to temp file with length prefix.
-	if err := putU32(b.tempWriter, uint32(len(prefix))); err != nil {
-		return fmt.Errorf("write prefix length: %w", err)
-	}
-	if _, err := b.tempWriter.WriteString(prefix); err != nil {
-		return fmt.Errorf("write prefix: %w", err)
-	}
-
 	b.count++
-	b.totalBytes += uint64(len(prefix))
 
 	return nil
 }
@@ -169,32 +96,11 @@ func (b *StreamingMPHFBuilder) Count() uint64 {
 	return b.count
 }
 
-// Close closes the builder and removes temporary files. Aggregates
-// the cleanup errors so callers don't lose visibility when the
-// tempfile flush or close fails (typical on disk-full mid-build).
+// Close closes the builder and removes its temporary files, joining
+// every array's cleanup error so a failed close or removal (typical on
+// a full disk mid-build) still surfaces.
 func (b *StreamingMPHFBuilder) Close() error {
 	var errs []error
-	if b.tempWriter != nil {
-		if err := b.tempWriter.Flush(); err != nil {
-			errs = append(errs, fmt.Errorf("flush mphf tempfile: %w", err))
-		}
-		b.tempWriter = nil
-	}
-	if b.tempEncoder != nil {
-		if err := b.tempEncoder.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("close mphf temp encoder: %w", err))
-		}
-		b.tempEncoder = nil
-	}
-	if b.tempFile != nil {
-		if err := b.tempFile.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("close mphf tempfile: %w", err))
-		}
-		b.tempFile = nil
-		if err := os.Remove(b.tempPath); err != nil && !os.IsNotExist(err) {
-			errs = append(errs, fmt.Errorf("remove mphf tempfile: %w", err))
-		}
-	}
 	// Disk-backed arrays may have been already closed during a
 	// successful Build; nil-guard so Close stays idempotent.
 	for _, a := range []*u64DiskArray{b.hashes, b.preorderPos, b.fingerprints} {
@@ -224,10 +130,6 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		log.Debug().Msg("MPHF: writing empty (zero prefixes)")
 
 		return b.writeEmpty(outDir)
-	}
-
-	if err := b.finalizePrefixWriter(); err != nil {
-		return err
 	}
 
 	// Freeze the disk-backed arrays so their backing files are mmap'd
@@ -345,23 +247,6 @@ func mphfWorkerCount(n int) int {
 	}
 
 	return w
-}
-
-// finalizePrefixWriter flushes the bufio writer into the zstd encoder
-// and finalizes the frame so the read side can open a fresh decoder on
-// the seeked file. After this both tempWriter and tempEncoder are
-// spent; Close still owns closing/removing the underlying file.
-func (b *StreamingMPHFBuilder) finalizePrefixWriter() error {
-	if err := b.tempWriter.Flush(); err != nil {
-		return fmt.Errorf("flush temp file: %w", err)
-	}
-	b.tempWriter = nil
-	if err := b.tempEncoder.Close(); err != nil {
-		return fmt.Errorf("close prefix encoder: %w", err)
-	}
-	b.tempEncoder = nil
-
-	return nil
 }
 
 func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
