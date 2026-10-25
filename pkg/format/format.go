@@ -7,9 +7,10 @@ const (
 	// MagicNumber identifies s3-inv-db files.
 	MagicNumber uint32 = 0x53334944 // "S3ID"
 	// Version is the current format version. Readers accept only this
-	// version; an index written by another version is rebuilt. 8: core
-	// fields are patched (core_patch.go), and the subtree field is a size.
-	Version uint32 = 8
+	// version; an index written by another version is rebuilt. 9: the
+	// segment offsets (prefix_dict.off.u64) take the width their data
+	// needs.
+	Version uint32 = 9
 )
 
 // Header is the common header for all columnar files.
