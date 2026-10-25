@@ -206,6 +206,27 @@ func (idx *Index) DescendantsAtDepth(prefixPos uint64, relDepth int) ([]uint64, 
 	return positions, nil
 }
 
+// DescendantSpan returns the depth-index span holding prefixPos's
+// descendants at relDepth, in index order: Len() of them, read with
+// PositionsInSpan. It is the search DescendantsAtDepth starts with, for
+// callers that need the count before choosing which positions to read.
+func (idx *Index) DescendantSpan(prefixPos uint64, relDepth int) (format.Span, error) {
+	return idx.descendantSpan(prefixPos, relDepth)
+}
+
+// PositionsInSpan returns the positions of span's entries
+// [offset, offset+limit), clamped to the span.
+func (idx *Index) PositionsInSpan(span format.Span, offset, limit int) []uint64 {
+	total := int(span.Len())
+	start := min(max(offset, 0), total)
+	positions := make([]uint64, min(max(limit, 0), total-start))
+	for i := range positions {
+		positions[i] = idx.depthIndex.PositionAt(span.Lo + uint64(start+i))
+	}
+
+	return positions
+}
+
 // descendantSpan returns the depth-index span holding the descendants
 // of prefixPos at relDepth; it is empty when there are none or the
 // input is invalid (see DescendantsAtDepth).
@@ -274,14 +295,7 @@ func (idx *Index) DescendantsPage(prefixPos uint64, relDepth int, filter Filter,
 	}
 	offset, limit = max(offset, 0), max(limit, 0)
 	if filter.MinCount == 0 && filter.MinBytes == 0 {
-		total := int(span.Len())
-		start := min(offset, total)
-		page := Page{Positions: make([]uint64, min(limit, total-start)), Total: total}
-		for i := range page.Positions {
-			page.Positions[i] = idx.depthIndex.PositionAt(span.Lo + uint64(start+i))
-		}
-
-		return page, nil
+		return Page{Positions: idx.PositionsInSpan(span, offset, limit), Total: int(span.Len())}, nil
 	}
 
 	var page Page

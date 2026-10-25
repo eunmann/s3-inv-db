@@ -272,8 +272,15 @@ func (d *DepthIndex) SubtreeSpan(depth uint32, subtreeStart, subtreeEnd uint64) 
 	}
 
 	lo := d.binarySearchLower(start, end, subtreeStart)
+	// Positions strictly increase, so the subtree holds at most
+	// subtreeEnd-subtreeStart+1 of this level's entries: search only
+	// those, not the rest of the level.
+	hi := end
+	if span := subtreeEnd - subtreeStart + 1; subtreeEnd >= subtreeStart && lo+span < end {
+		hi = lo + span
+	}
 
-	return Span{Lo: lo, Hi: d.binarySearchUpper(lo, end, subtreeEnd)}, nil
+	return Span{Lo: lo, Hi: d.binarySearchUpper(lo, hi, subtreeEnd)}, nil
 }
 
 // PositionAt returns the position at posting-list index i. The index

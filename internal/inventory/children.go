@@ -137,27 +137,24 @@ func siftDownMax[T any](h []T, i int, order func(a, b T) int) {
 // index's child order: the window itself ascending, or the mirrored
 // window reversed descending.
 func pageChildrenByName(idx *indexread.Index, parentPos uint64, q ChildQuery) (ChildPage, error) {
-	all, err := idx.DescendantsPage(parentPos, 1, indexread.Filter{}, 0, 0)
+	span, err := idx.DescendantSpan(parentPos, 1)
 	if err != nil {
 		return ChildPage{}, fmt.Errorf("children: %w", err)
 	}
-	p := Paginate(all.Total, q.Page, q.PageSize)
-	page := ChildPage{Pagination: p, Total: all.Total}
+	total := int(span.Len())
+	p := Paginate(total, q.Page, q.PageSize)
+	page := ChildPage{Pagination: p, Total: total}
 	if p.FirstRow == 0 {
 		return page, nil
 	}
 	offset := p.FirstRow - 1
 	if q.Dir == SortDirDesc {
-		offset = all.Total - p.LastRow
+		offset = total - p.LastRow
 	}
-	window, err := idx.DescendantsPage(parentPos, 1, indexread.Filter{}, offset, p.LastRow-p.FirstRow+1)
-	if err != nil {
-		return ChildPage{}, fmt.Errorf("children: %w", err)
-	}
+	page.Positions = idx.PositionsInSpan(span, offset, p.LastRow-p.FirstRow+1)
 	if q.Dir == SortDirDesc {
-		slices.Reverse(window.Positions)
+		slices.Reverse(page.Positions)
 	}
-	page.Positions = window.Positions
 
 	return page, nil
 }
