@@ -275,8 +275,13 @@ segment) is the segment of its own row.
 
 Because the builder writes each prefix as its parent plus one segment,
 it requires the root first and every prefix after its parent;
-`IndexBuilder.Add` rejects anything else with `ErrMissingParent`. The
-aggregator always emits every ancestor.
+`IndexBuilder.Add` rejects a prefix that arrives without its parent
+with `ErrMissingParent`. Prefixes must also arrive in strictly
+increasing byte order, since readers rely on siblings sitting in byte
+order of their full prefixes (compare merges two indexes' children by
+it); `Add` rejects a duplicate or out-of-order prefix with
+`ErrUnsortedInput`. The aggregator always emits every ancestor, in
+sorted order.
 
 On Open, all segments are preloaded into an in-memory cache (unique
 segments are few next to prefixes: 9,262 segments for 2.37M prefixes
