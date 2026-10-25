@@ -149,8 +149,10 @@ size and scratch peak for synthetic loads:
 
 The scratch column is the compressed run files only, sampled before
 the merge. The index build also keeps temporary files in the same
-temp directory until it finishes (the MPHF builder alone holds three
-8-byte arrays per prefix), which the table does not count.
+temp directory until it finishes (while it writes slots, the MPHF
+builder alone holds three 8-byte arrays per prefix plus a slot-owner
+map of 4 bytes per prefix, 8 past 2^32 prefixes), which the table does
+not count.
 
 These scale near-linearly with prefix count, not object count. The
 planner applies a fixed `0.30` multiplier to a manifest's compressed
