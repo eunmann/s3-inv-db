@@ -304,9 +304,9 @@ func (o compareViewOptions) query() inventory.CompareQuery {
 	return inventory.CompareQuery{SortBy: o.sortBy, Dir: o.dir, Page: o.page, PageSize: o.pageSize, HideUnchanged: o.hideUnchanged}
 }
 
-// compareCost returns a child's monthly storage cost function, for
-// sorting by cost. Each call gets its own tier buffer, reused across
-// the level's children.
+// compareCost returns the monthly storage cost function CompareLevel
+// prices the prefix, the visible rows and (sorting by cost) every child
+// with. Each call gets its own tier buffer, reused across the level.
 func (h *Handlers) compareCost() inventory.CompareCostFunc {
 	var buf []indexread.TierBreakdown
 
@@ -331,8 +331,7 @@ func (h *Handlers) buildCompareSelfView(self inventory.CompareSelf) CompareSelfV
 	v.BytesDeltaH, v.BytesPct, v.BytesSign = bDelta.DeltaH, bDelta.Pct, bDelta.Sign
 	if self.HasTierDataA || self.HasTierDataB {
 		v.HasCost = true
-		costBefore := tierMapCost(self.TierBeforeMap, h.priceTable)
-		costAfter := tierMapCost(self.TierAfterMap, h.priceTable)
+		costBefore, costAfter := self.CostBefore, self.CostAfter
 		v.CostBeforeH = pricing.FormatCost(costBefore)
 		v.CostAfterH = pricing.FormatCost(costAfter)
 		cDelta := formatCostDelta(costBefore, costAfter)
@@ -363,10 +362,9 @@ func (h *Handlers) buildCompareChildView(c *inventory.CompareChild) CompareChild
 	v.ObjectsDeltaH, v.ObjectsPct, v.ObjectsSign = objDelta.DeltaH, objDelta.Pct, objDelta.Sign
 	bDelta := formatDelta(c.Bytes.Before, c.Bytes.After, c.Bytes.Delta, humanfmt.BytesUint64)
 	v.BytesDeltaH, v.BytesPct, v.BytesSign = bDelta.DeltaH, bDelta.Pct, bDelta.Sign
-	if len(c.TierBefore) > 0 || len(c.TierAfter) > 0 {
+	if c.HasCost {
 		v.HasCost = true
-		costBefore := tierMapCost(c.TierBefore, h.priceTable)
-		costAfter := tierMapCost(c.TierAfter, h.priceTable)
+		costBefore, costAfter := c.CostBefore, c.CostAfter
 		v.CostBeforeH = pricing.FormatCost(costBefore)
 		v.CostAfterH = pricing.FormatCost(costAfter)
 		cDelta := formatCostDelta(costBefore, costAfter)
@@ -450,20 +448,6 @@ func absInt64(v int64) uint64 {
 	}
 
 	return uint64(v)
-}
-
-// tierMapCost flattens a map keyed by tier name back into the price
-// engine's slice form so we can reuse pricing.ComputeMonthlyCost.
-func tierMapCost(m map[string]indexread.TierBreakdown, prices pricing.PriceTable) uint64 {
-	if len(m) == 0 {
-		return 0
-	}
-	breakdown := make([]indexread.TierBreakdown, 0, len(m))
-	for _, v := range m {
-		breakdown = append(breakdown, v)
-	}
-
-	return pricing.ComputeMonthlyCost(breakdown, prices).TotalMicrodollars
 }
 
 // sameConfig reports whether two inventory IDs share their first two
@@ -640,10 +624,10 @@ func (h *Handlers) compareChildJSON(c *inventory.CompareChild) CompareChildRespo
 		BytesAfter:    c.Bytes.After,
 		BytesDelta:    c.Bytes.Delta,
 	}
-	if len(c.TierBefore) > 0 || len(c.TierAfter) > 0 {
+	if c.HasCost {
 		row.HasCost = true
-		row.CostBeforeMicrodollars = tierMapCost(c.TierBefore, h.priceTable)
-		row.CostAfterMicrodollars = tierMapCost(c.TierAfter, h.priceTable)
+		row.CostBeforeMicrodollars = c.CostBefore
+		row.CostAfterMicrodollars = c.CostAfter
 		row.CostDeltaMicrodollars = int64(row.CostAfterMicrodollars) - int64(row.CostBeforeMicrodollars)
 	}
 	row.APICostBeforeMicrodollars = pricing.ComputePutCost(c.Objects.Before, h.priceTable)
@@ -666,8 +650,8 @@ func (h *Handlers) buildCompareSelfJSON(self inventory.CompareSelf) CompareSelfR
 	}
 	if self.HasTierDataA || self.HasTierDataB {
 		r.HasCost = true
-		r.CostBeforeMicrodollars = tierMapCost(self.TierBeforeMap, h.priceTable)
-		r.CostAfterMicrodollars = tierMapCost(self.TierAfterMap, h.priceTable)
+		r.CostBeforeMicrodollars = self.CostBefore
+		r.CostAfterMicrodollars = self.CostAfter
 		r.CostDeltaMicrodollars = int64(r.CostAfterMicrodollars) - int64(r.CostBeforeMicrodollars)
 	}
 	r.APICostBeforeMicrodollars = pricing.ComputePutCost(self.Objects.Before, h.priceTable)

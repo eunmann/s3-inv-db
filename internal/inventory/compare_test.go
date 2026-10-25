@@ -161,7 +161,9 @@ func TestCompareLevel_AgainstSeededIndexes(t *testing.T) {
 		if c.Status == inventory.CompareUnchanged {
 			continue // ok
 		}
-		if c.Objects.Delta == 0 && c.Bytes.Delta == 0 && cmp.Equal(c.TierBefore, c.TierAfter) {
+		pa, _ := a.Lookup(c.Prefix)
+		pb, _ := b.Lookup(c.Prefix)
+		if c.Objects.Delta == 0 && c.Bytes.Delta == 0 && cmp.Equal(a.TierBreakdownMap(pa), b.TierBreakdownMap(pb)) {
 			t.Errorf("child %q classified %s but all deltas are zero", c.Segment, c.Status)
 		}
 	}
@@ -392,12 +394,29 @@ type refCompareRow struct {
 	name                           string
 	status                         inventory.CompareStatus
 	objDelta, byteDelta, costDelta int64
+	child                          inventory.CompareChild
+}
+
+// referenceSelf is the root's self-delta read straight from both sides'
+// stats and the cost function.
+func referenceSelf(a, b *indexread.Index, cost inventory.CompareCostFunc) inventory.CompareSelf {
+	rootA, _ := a.Lookup("")
+	rootB, _ := b.Lookup("")
+	sa, sb := a.Stats(rootA), b.Stats(rootB)
+	return inventory.CompareSelf{
+		Objects:      inventory.CompareNumeric{Before: sa.ObjectCount, After: sb.ObjectCount, Delta: int64(sb.ObjectCount) - int64(sa.ObjectCount)},
+		Bytes:        inventory.CompareNumeric{Before: sa.TotalBytes, After: sb.TotalBytes, Delta: int64(sb.TotalBytes) - int64(sa.TotalBytes)},
+		CostBefore:   cost(a, rootA),
+		CostAfter:    cost(b, rootB),
+		HasTierDataA: true,
+		HasTierDataB: true,
+	}
 }
 
 // referenceCompare joins both sides' children by full prefix through maps
 // (no ordering assumptions), classifies, filters and sorts with the
 // pre-#26 comparator.
-func referenceCompare(a, b *indexread.Index, q inventory.CompareQuery, cost inventory.CompareCostFunc) ([]string, inventory.CompareStatusCounts) {
+func referenceCompare(a, b *indexread.Index, q inventory.CompareQuery, cost inventory.CompareCostFunc) ([]inventory.CompareChild, inventory.CompareStatusCounts) {
 	type side struct {
 		pos uint64
 		ok  bool
@@ -417,15 +436,34 @@ func referenceCompare(a, b *indexread.Index, q inventory.CompareQuery, cost inve
 	var counts inventory.CompareStatusCounts
 	for full, e := range byName {
 		var oa, ob, ba, bb, ca, cbb uint64
+		var hasChildren, pricedA, pricedB bool
 		if e[0].ok {
 			st := a.Stats(e[0].pos)
 			oa, ba, ca = st.ObjectCount, st.TotalBytes, cost(a, e[0].pos)
+			hasChildren = a.HasChildren(e[0].pos)
+			pricedA = len(a.TierBreakdown(e[0].pos)) > 0
 		}
 		if e[1].ok {
 			st := b.Stats(e[1].pos)
 			ob, bb, cbb = st.ObjectCount, st.TotalBytes, cost(b, e[1].pos)
+			hasChildren = hasChildren || b.HasChildren(e[1].pos)
+			pricedB = len(b.TierBreakdown(e[1].pos)) > 0
 		}
 		r := refCompareRow{name: inventory.SegmentOf("", full), objDelta: int64(ob) - int64(oa), byteDelta: int64(bb) - int64(ba), costDelta: int64(cbb) - int64(ca)}
+		r.child = inventory.CompareChild{
+			Segment:     r.name,
+			Prefix:      full,
+			Objects:     inventory.CompareNumeric{Before: oa, After: ob, Delta: r.objDelta},
+			Bytes:       inventory.CompareNumeric{Before: ba, After: bb, Delta: r.byteDelta},
+			HasChildren: hasChildren,
+			HasCost:     pricedA || pricedB,
+		}
+		if pricedA {
+			r.child.CostBefore = ca
+		}
+		if pricedB {
+			r.child.CostAfter = cbb
+		}
 		switch {
 		case !e[0].ok:
 			r.status = inventory.CompareAdded
@@ -443,6 +481,7 @@ func referenceCompare(a, b *indexread.Index, q inventory.CompareQuery, cost inve
 		if q.HideUnchanged && r.status == inventory.CompareUnchanged {
 			continue
 		}
+		r.child.Status = r.status
 		rows = append(rows, r)
 	}
 	sort.Slice(rows, func(i, j int) bool { return s3Less(rows[i].name, rows[j].name) }) // deterministic base
@@ -475,12 +514,12 @@ func referenceCompare(a, b *indexread.Index, q inventory.CompareQuery, cost inve
 
 		return primary
 	})
-	names := make([]string, len(rows))
-	for i, r := range rows {
-		names[i] = r.name
+	children := make([]inventory.CompareChild, len(rows))
+	for i := range rows {
+		children[i] = rows[i].child
 	}
 
-	return names, counts
+	return children, counts
 }
 
 func abs64(v int64) int64 {
@@ -501,14 +540,12 @@ func TestCompareLevel_MatchesMaterialisingReference(t *testing.T) {
 				for _, hide := range []bool{false, true} {
 					q := inventory.CompareQuery{SortBy: sortBy, Dir: dir, HideUnchanged: hide, PageSize: 6}
 					want, wantCounts := referenceCompare(before, after, q, cost)
-					var got []string
+					var got []inventory.CompareChild
 					var data inventory.CompareLevelData
 					for page := 1; ; page++ {
 						q.Page = page
 						data = inventory.CompareLevel(before, after, "", q, cost)
-						for _, c := range data.Children {
-							got = append(got, c.Segment)
-						}
+						got = append(got, data.Children...)
 						if len(got) >= data.Total || len(data.Children) == 0 {
 							break
 						}
@@ -518,6 +555,9 @@ func TestCompareLevel_MatchesMaterialisingReference(t *testing.T) {
 					}
 					if diff := cmp.Diff(want, got); diff != "" {
 						t.Fatalf("trial %d %q %s hide=%v (-reference +CompareLevel):\n%s", trial, sortBy, dir, hide, diff)
+					}
+					if diff := cmp.Diff(referenceSelf(before, after, cost), data.Self); diff != "" {
+						t.Fatalf("trial %d %q %s hide=%v self (-reference +CompareLevel):\n%s", trial, sortBy, dir, hide, diff)
 					}
 				}
 			}

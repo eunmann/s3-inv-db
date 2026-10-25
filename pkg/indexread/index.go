@@ -214,6 +214,12 @@ func (idx *Index) DescendantSpan(prefixPos uint64, relDepth int) (format.Span, e
 	return idx.descendantSpan(prefixPos, relDepth)
 }
 
+// SpanPosition returns the position of span's i-th entry, for walking a
+// span in place; i must be below span.Len().
+func (idx *Index) SpanPosition(span format.Span, i uint64) uint64 {
+	return idx.depthIndex.PositionAt(span.Lo + i)
+}
+
 // PositionsInSpan returns the positions of span's entries
 // [offset, offset+limit), clamped to the span.
 func (idx *Index) PositionsInSpan(span format.Span, offset, limit int) []uint64 {

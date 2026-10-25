@@ -47,16 +47,17 @@ func (idx *Index) top(prefixPos uint64, relDepth, limit int, metric TopMetric, f
 		return nil, nil
 	}
 
-	positions, err := idx.DescendantsAtDepth(prefixPos, relDepth)
+	span, err := idx.descendantSpan(prefixPos, relDepth)
 	if err != nil {
 		return nil, fmt.Errorf("descendants for top: %w", err)
 	}
-	if len(positions) == 0 {
+	if span.Len() == 0 {
 		return nil, nil
 	}
 
-	h := &topHeap{metric: metric, items: make([]TopResult, 0, min(limit, len(positions)))}
-	for _, pos := range positions {
+	h := &topHeap{metric: metric, items: make([]TopResult, 0, min(uint64(limit), span.Len()))}
+	for i := range span.Len() {
+		pos := idx.SpanPosition(span, i)
 		s := idx.Stats(pos)
 		if s.ObjectCount < filter.MinCount || s.TotalBytes < filter.MinBytes {
 			continue

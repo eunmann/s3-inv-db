@@ -47,12 +47,13 @@ func PageChildren(idx *indexread.Index, parentPos uint64, q ChildQuery, cost Cos
 	if q.SortBy == SortColSegment || q.SortBy == "" {
 		return pageChildrenByName(idx, parentPos, q)
 	}
-	positions, err := idx.DescendantsAtDepth(parentPos, 1)
+	span, err := idx.DescendantSpan(parentPos, 1)
 	if err != nil {
 		return ChildPage{}, fmt.Errorf("children: %w", err)
 	}
-	keys := make([]childKey, len(positions))
-	for i, pos := range positions {
+	keys := make([]childKey, span.Len())
+	for i := range keys {
+		pos := idx.SpanPosition(span, uint64(i))
 		keys[i] = childKey{pos: pos, metric: childMetric(idx, pos, q.SortBy, cost)}
 	}
 	desc := q.Dir == SortDirDesc
