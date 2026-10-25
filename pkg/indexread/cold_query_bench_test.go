@@ -9,8 +9,9 @@ import (
 )
 
 // Cold-cache query benches. Each iteration:
-//  1. evict every index file (including tier_stats/) from the page cache
-//  2. issue one query against the still-open index
+//  1. close the index, evict every index file from the page cache and
+//     reopen it (untimed; see reopenCold)
+//  2. issue the queries
 //  3. measure the latency including the resulting page faults
 //
 // This isolates the structural query-cost — how many independent
@@ -23,17 +24,16 @@ import (
 // each query pays disk I/O; benchstat over -count=N gives noise.
 
 // coldQueryBatch is the number of queries we run after each cache
-// eviction, so the fixed cost of dropPageCache (which walks every
-// file under the index directory and FADV_DONTNEEDs each one — at
-// 11-tier scale that's a 200+ MB walk) amortises across many
-// per-query measurements. Each batched query touches a distinct
+// eviction, so the fixed cost of reopenCold (which walks every file
+// under the index directory and FADV_DONTNEEDs each one, then reopens
+// the index) amortises across many per-query measurements. Each batched query touches a distinct
 // prefix, so the *first-page-fault-per-query* cost still dominates
 // the reported per-op time.
 const coldQueryBatch = 64
 
 // BenchmarkQueryScale_StatsForPrefix_Cold measures the round-trip
 // "give me objCount+totalBytes for this prefix string" against a
-// freshly-evicted page cache. The dropPageCache cost is amortised
+// freshly-evicted page cache. The reopenCold cost is amortised
 // across coldQueryBatch queries per eviction, so the reported per-op
 // time reflects the actual cold-query latency rather than the
 // eviction overhead.
@@ -46,7 +46,7 @@ func BenchmarkQueryScale_StatsForPrefix_Cold(b *testing.B) {
 			if err != nil {
 				b.Fatalf("Open: %v", err)
 			}
-			defer idx.Close()
+			defer func() { _ = idx.Close() }()
 			prefixes := generateLookupPrefixes(n)
 			if len(prefixes) == 0 {
 				b.Skip("no prefixes")
@@ -55,7 +55,7 @@ func BenchmarkQueryScale_StatsForPrefix_Cold(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i += coldQueryBatch {
 				b.StopTimer()
-				benchutil.DropPageCache(b, dir)
+				idx = reopenCold(b, idx, dir)
 				b.StartTimer()
 				batch := coldQueryBatch
 				if i+batch > b.N {
@@ -83,7 +83,7 @@ func BenchmarkQueryScale_TierBreakdown_Cold(b *testing.B) {
 			if err != nil {
 				b.Fatalf("Open: %v", err)
 			}
-			defer idx.Close()
+			defer func() { _ = idx.Close() }()
 			if !idx.HasTierData() {
 				b.Skip("no tier data")
 			}
@@ -95,7 +95,7 @@ func BenchmarkQueryScale_TierBreakdown_Cold(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i += coldQueryBatch {
 				b.StopTimer()
-				benchutil.DropPageCache(b, dir)
+				idx = reopenCold(b, idx, dir)
 				b.StartTimer()
 				batch := coldQueryBatch
 				if i+batch > b.N {
@@ -125,7 +125,7 @@ func BenchmarkQueryScale_ChildrenIterate_Cold(b *testing.B) {
 			if err != nil {
 				b.Fatalf("Open: %v", err)
 			}
-			defer idx.Close()
+			defer func() { _ = idx.Close() }()
 			positions := resolvePositions(b, idx, generateLookupPrefixes(n))
 			parents := pickParentPositions(idx, positions, 64)
 			if len(parents) == 0 {
@@ -136,7 +136,7 @@ func BenchmarkQueryScale_ChildrenIterate_Cold(b *testing.B) {
 			for i := range b.N {
 				p := parents[i%len(parents)]
 				b.StopTimer()
-				benchutil.DropPageCache(b, dir)
+				idx = reopenCold(b, idx, dir)
 				b.StartTimer()
 				end := idx.SubtreeEnd(p)
 				for c := p + 1; c <= end; c++ {

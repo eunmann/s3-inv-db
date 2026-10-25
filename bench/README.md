@@ -95,8 +95,9 @@ storage reads a query costs, which warm ns/op hides. Measure those with:
   numbers, ideally on a real index, never from what the generator emits.
 - **`pkg/indexread` `BenchmarkCache*`** (lookup, tier breakdown, prefix
   string, a 50-row browse page), each with uniform and Zipf-skewed keys,
-  `state=warm` and `state=cold` (index reopened and evicted from the
-  page cache before every op). `S3INV_LONG_BENCH=1` adds a ~10M-prefix
+  `state=warm` and `state=cold` (index closed, evicted from the page
+  cache and reopened before every op; Linux keeps pages a mapping holds,
+  so the drop has to come after the close). `S3INV_LONG_BENCH=1` adds a ~10M-prefix
   index. Per query they report:
 
   | Metric | Source | Meaning |
@@ -104,7 +105,7 @@ storage reads a query costs, which warm ns/op hides. Measure those with:
   | `ns/q` | timer | latency |
   | `minflt/q`, `majflt/q` | `getrusage` | pages mapped from the page cache / read from storage |
   | `ioKiB/q` | `/proc/self/io` `read_bytes` | storage read, readahead included |
-  | `<file>KiB/q` (cold) | `/proc/self/smaps` `Rss` | how much of each structure the queries mapped in |
+  | `<file>KiB/q` (cold) | `/proc/self/smaps` `Rss` | how much of each structure the queries mapped in, beyond what `Open` mapped |
   | `cycles/q`, `instr/q`, `IPC`, `L1Dmiss/q`, `LLCmiss/q`, `dTLBmiss/q` | `perf_event_open` | CPU cache and TLB behaviour |
 
   Run them pinned to the performance cores and A/B them like any suite:

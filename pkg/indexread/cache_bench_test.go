@@ -19,18 +19,20 @@ import (
 //   - state=warm: the index stays open and its pages stay cached; ns/q
 //     is then dominated by CPU-cache and TLB misses.
 //   - state=cold: before every op the index is closed, its files are
-//     evicted from the page cache and it is reopened (untimed); the op
-//     then runs cacheColdQueries queries. majflt/q and ioKiB/q are what
-//     the layout makes each query read from storage, and <file>KiB/q is
-//     how much of each file the queries mapped in.
+//     evicted from the page cache and it is reopened (untimed, see
+//     reopenCold); the op then runs cacheColdQueries queries. majflt/q
+//     and ioKiB/q are what the layout makes each query read from
+//     storage, and <file>KiB/q is how much of each file the queries
+//     mapped in beyond what Open itself did.
 //
 // Keys come from a seeded sample of positions in random order, either
 // uniform or Zipf-skewed (a few hot prefixes, as a dashboard sees).
 //
-// A cold op reopens the index so its mappings start empty: smaps Rss
-// then counts only the pages that op's queries mapped in. The fixture
-// is cacheObjects objects (~2.4M prefixes); S3INV_LONG_BENCH adds one
-// of ~10M prefixes, past the CPU caches and the TLB's reach.
+// Open maps some pages itself (it preloads the segment dictionary), so
+// a cold op takes its smaps Rss baseline after Open and counts only the
+// pages its queries added. The fixture is cacheObjects objects (~2.4M
+// prefixes); S3INV_LONG_BENCH adds one of ~10M prefixes, past the CPU
+// caches and the TLB's reach.
 
 const (
 	cacheObjects     = 1_000_000
@@ -235,17 +237,19 @@ func runCold(b *testing.B, f *cacheFixture, dist string, q cacheQuery) {
 	b.Helper()
 	var stats benchutil.PageStats
 	mapped := map[string]int64{}
+	idx, err := indexread.Open(f.dir)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = idx.Close() }()
 	hw := benchutil.NewHWCounters(b)
 	defer hw.Close()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
 		b.StopTimer()
-		benchutil.DropPageCache(b, f.dir)
-		idx, err := indexread.Open(f.dir)
-		if err != nil {
-			b.Fatal(err)
-		}
+		idx = reopenCold(b, idx, f.dir)
+		opened := benchutil.MappedBytes(b, f.dir)
 		before := benchutil.ReadPageStats(b)
 		b.StartTimer()
 		hw.Start()
@@ -259,10 +263,7 @@ func runCold(b *testing.B, f *cacheFixture, dist string, q cacheQuery) {
 		stats.MajorFaults += d.MajorFaults
 		stats.ReadBytes += d.ReadBytes
 		for file, n := range benchutil.MappedBytes(b, f.dir) {
-			mapped[fileGroup(file)] += n
-		}
-		if err := idx.Close(); err != nil {
-			b.Fatal(err)
+			mapped[fileGroup(file)] += n - opened[file]
 		}
 		b.StartTimer()
 	}

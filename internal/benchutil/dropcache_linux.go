@@ -12,8 +12,8 @@ import (
 )
 
 // DropPageCache evicts every regular file under dir from the page
-// cache, so the next read pays storage latency. Clean pages go even
-// while a process has them mapped; the mapping then faults them back in.
+// cache, so the next read pays storage latency. Linux skips a page any
+// mapping still holds, so unmap the files (close the index) first.
 func DropPageCache(tb testing.TB, dir string) {
 	tb.Helper()
 	root, err := os.OpenRoot(dir)

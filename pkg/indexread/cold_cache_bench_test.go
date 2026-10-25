@@ -122,6 +122,24 @@ func buildFixtureIndex(b *testing.B, n int) string {
 	return dir
 }
 
+// reopenCold closes idx, evicts dir from the page cache and opens the
+// index again. The drop has to follow Close: Linux keeps a page cached
+// while any mapping holds it, so dropping under an open index leaves
+// every page it already touched warm. Call it with the timer stopped.
+func reopenCold(b *testing.B, idx *indexread.Index, dir string) *indexread.Index {
+	b.Helper()
+	if err := idx.Close(); err != nil {
+		b.Fatalf("Close: %v", err)
+	}
+	benchutil.DropPageCache(b, dir)
+	idx, err := indexread.Open(dir)
+	if err != nil {
+		b.Fatalf("Open: %v", err)
+	}
+
+	return idx
+}
+
 // generateLookupPrefixes produces a representative set of prefixes a
 // browse workload would query — root, top-level dirs, deep paths.
 func generateLookupPrefixes(n int) []string {
