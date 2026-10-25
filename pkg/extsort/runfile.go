@@ -51,16 +51,15 @@ func logCleanupErr(log *zerolog.Logger, op, path string, err error) {
 	log.Warn().Str("op", op).Str("path", path).Err(err).Msg("cleanup failed")
 }
 
-// writeAndCloseRun writes rows, already sorted by prefix, through w; on
-// a write error it closes w and deletes runPath before returning. On
-// success it returns the close result so the caller can react to a
-// close-only failure.
+// writeAndCloseRun writes rows through w; on a write error it closes w
+// and deletes runPath before returning. On success it returns the
+// close result so the caller can react to a close-only failure.
 func writeAndCloseRun(w *CompressedRunWriter, rows []*PrefixRow, runPath string) error {
-	if err := w.WriteAll(rows); err != nil {
+	if err := w.WriteSorted(rows); err != nil {
 		_ = w.Close()
 		_ = os.Remove(runPath)
 
-		return fmt.Errorf("write run: %w", err)
+		return fmt.Errorf("write sorted: %w", err)
 	}
 	if err := w.Close(); err != nil {
 		return fmt.Errorf("close run writer: %w", err)

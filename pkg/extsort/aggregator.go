@@ -23,8 +23,6 @@ type Aggregator struct {
 	// allocates rows only while its largest spill is still growing.
 	slabs   [][]PrefixRow
 	drained []*PrefixRow
-	// sortScratch is DrainSorted's sort buffer, reused the same way.
-	sortScratch []keyedRow
 	// path holds the rows of the previous key's prefixes by depth
 	// (path[0] is the root's): the next key reuses the ones whose
 	// prefix it starts with and looks up only the levels below. Keys
@@ -287,20 +285,10 @@ func (a *Aggregator) Drain() []*PrefixRow {
 	return rows
 }
 
-// DrainSorted is Drain with the rows sorted by prefix, through a sort
-// buffer the aggregator keeps for the next spill.
-func (a *Aggregator) DrainSorted() []*PrefixRow {
-	rows := a.Drain()
-	a.sortScratch = sortPrefixRows(rows, a.sortScratch)
-
-	return rows
-}
-
-// Release drops the drained aggregator's slabs, Drain slice, sort
-// buffer and map buckets so the GC can reclaim them once the caller is
-// done with the last Drain. Call it only on an empty (just drained)
-// aggregator.
+// Release drops the drained aggregator's slabs, Drain slice and map
+// buckets so the GC can reclaim them once the caller is done with the
+// last Drain. Call it only on an empty (just drained) aggregator.
 func (a *Aggregator) Release() {
-	a.slabs, a.drained, a.sortScratch, a.path = nil, nil, nil, nil
+	a.slabs, a.drained, a.path = nil, nil, nil
 	a.prefixes = make(map[string]*PrefixRow)
 }

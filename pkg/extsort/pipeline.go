@@ -804,7 +804,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	p.presentTierMask.Or(uint32(agg.TierMask()))
 
 	aggMemory := agg.EstimatedMemoryUsage()
-	rows := agg.DrainSorted()
+	rows := agg.Drain()
 	if len(rows) == 0 {
 		return nil
 	}

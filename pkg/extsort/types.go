@@ -167,19 +167,13 @@ func decodeRunRecord(r runRecordSource, prev string, buf *[]byte, row *PrefixRow
 	prefix.Write(suffix)
 	row.Prefix = prefix.String()
 	depth, err := binary.ReadUvarint(r)
-	if err != nil {
-		return fmt.Errorf("%w: depth: %w", errRunRecordCorrupt, err)
-	}
-	if depth > math.MaxUint16 {
-		return fmt.Errorf("%w: depth %d", errRunRecordCorrupt, depth)
+	if err != nil || depth > math.MaxUint16 {
+		return fmt.Errorf("%w: depth %d: %w", errRunRecordCorrupt, depth, err)
 	}
 	row.Depth = uint16(depth)
 	mask, err := binary.ReadUvarint(r)
-	if err != nil {
-		return fmt.Errorf("%w: tier mask: %w", errRunRecordCorrupt, err)
-	}
-	if mask&^(1<<MaxTiers-1|runRecordTotals) != 0 {
-		return fmt.Errorf("%w: tier mask %#x", errRunRecordCorrupt, mask)
+	if err != nil || mask&^(1<<MaxTiers-1|runRecordTotals) != 0 {
+		return fmt.Errorf("%w: tier mask %#x: %w", errRunRecordCorrupt, mask, err)
 	}
 	for t := range MaxTiers {
 		if mask&(1<<t) == 0 {
@@ -207,20 +201,11 @@ func decodeRunRecord(r runRecordSource, prev string, buf *[]byte, row *PrefixRow
 }
 
 // SortPrefixRows sorts a slice of PrefixRows by prefix in lexicographic order.
-// This is used to prepare rows for the streaming index builder.
+// This is used to prepare rows for the streaming index builder. It sorts
+// (prefix, row) pairs: comparing through the row pointers would load a
+// row from scattered slab memory for every comparison.
 func SortPrefixRows(rows []*PrefixRow) {
-	sortPrefixRows(rows, nil)
-}
-
-// sortPrefixRows sorts rows by prefix through (prefix, row) pairs in
-// scratch, grown as needed and returned for reuse: comparing through
-// the row pointers would load a row from scattered slab memory for
-// every comparison. The returned scratch holds no references.
-func sortPrefixRows(rows []*PrefixRow, scratch []keyedRow) []keyedRow {
-	if cap(scratch) < len(rows) {
-		scratch = make([]keyedRow, len(rows))
-	}
-	keyed := scratch[:len(rows)]
+	keyed := make([]keyedRow, len(rows))
 	for i, r := range rows {
 		keyed[i] = keyedRow{prefix: r.Prefix, row: r}
 	}
@@ -230,9 +215,6 @@ func sortPrefixRows(rows []*PrefixRow, scratch []keyedRow) []keyedRow {
 	for i := range keyed {
 		rows[i] = keyed[i].row
 	}
-	clear(keyed)
-
-	return scratch[:0]
 }
 
 // keyedRow is a row with its prefix beside the pointer, for sorting.
