@@ -200,13 +200,15 @@ func fastBrowseURL(pairs []any) (string, bool) {
 // template funcs return for ("inventory_id", inventoryID, "prefix",
 // prefix). Handlers set it per row, so a table row costs no template
 // func calls for its link.
-func BrowseLink(inventoryID, prefix string) (href, hxVals string) {
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func BrowseLink(inventoryID, prefix string) (string, string) {
 	var buf [256]byte
 	dst := append(buf[:0], `{"inventory_id":`...)
 	dst = appendJSONString(dst, inventoryID)
 	dst = append(dst, `,"prefix":`...)
 	dst = appendJSONString(dst, prefix)
-	hxVals = string(append(dst, '}'))
+	hxVals := string(append(dst, '}'))
 
 	dst = append(buf[:0], "/browse"...)
 	sep := byte('?')

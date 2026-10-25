@@ -29,7 +29,7 @@ var adversarialValues = []string{
 }
 
 func parityCases() [][]any {
-	cases := [][]any{
+	fixed := [][]any{
 		{},
 		{"inventory_id", "inv-1", "prefix", "a/b/"},
 		{"from", namedID("src/a"), "to", namedID("src/b"), "prefix", "x/"},
@@ -45,6 +45,8 @@ func parityCases() [][]any {
 		{"k1", "1", "k2", "2", "k3", "3", "k4", "4", "k5", "5", "k6", "6", "k7", "7", "k8", "8", "k9", "9"},
 		{"", "empty key"},
 	}
+	cases := make([][]any, 0, len(fixed)+3*len(adversarialValues))
+	cases = append(cases, fixed...)
 	for _, v := range adversarialValues {
 		cases = append(cases,
 			[]any{"prefix", v, "inventory_id", "inv"},
