@@ -35,3 +35,21 @@ func Total() Result {
 		Reliable:   true,
 	}
 }
+
+// Available returns the memory the process can use: total system
+// memory, capped by the cgroup v2 memory.max when one is set. In a
+// container that is the container's limit, not the host's RAM.
+func Available() Result {
+	limit, ok := cgroupMemoryMax()
+
+	return capByCgroup(Total(), limit, ok)
+}
+
+// capByCgroup lowers total to a set cgroup limit below it.
+func capByCgroup(total Result, limit uint64, ok bool) Result {
+	if !ok || limit >= total.TotalBytes {
+		return total
+	}
+
+	return Result{TotalBytes: limit, Reliable: true}
+}
