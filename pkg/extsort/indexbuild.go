@@ -119,15 +119,15 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		createdOutDir: createdOutDir,
 	}
 
-	// The tier-stats writer is created lazily on the first Add, once
-	// the present-tier set is fixed (default or via SetPresentTiers).
+	// The tier-stats writer is created at Finalize, when the rows are
+	// replayed; the present-tier set it uses is frozen at the first Add.
 
 	return b, nil
 }
 
 // ErrPresentTiersAfterAdd is returned when SetPresentTiers is called
-// after the first Add — the tier slots are fixed when the writer is
-// created on the first Add and cannot change mid-stream.
+// after the first Add: the tier set is frozen there, and the tier
+// writer Finalize creates gives slots to exactly that set.
 var ErrPresentTiersAfterAdd = errors.New("SetPresentTiers must be called before the first Add")
 
 // SetPresentTiers declares which tiers carry data, so only they get a
@@ -143,8 +143,8 @@ func (b *IndexBuilder) SetPresentTiers(present []tiers.ID) error {
 	return nil
 }
 
-// ensureTierWriter lazily creates the tier-stats writer on the first
-// Add, resolving the present-tier set (declared, else every tier).
+// ensureTierWriter creates the tier-stats writer at Finalize, resolving
+// the present-tier set (declared, else every tier).
 func (b *IndexBuilder) ensureTierWriter() error {
 	if b.tierStatsW != nil {
 		return nil

@@ -42,7 +42,8 @@ func readHeaderCount(path string) uint64 {
 //	Bpp_core                 — per-prefix bytes for core_stats.bin
 //	Bpp_fpp                  — per-prefix bytes for mph_slots.bin
 //	Bpp_prefix_tree          — per-prefix bytes for prefix_tree.bin
-//	Bpp_dpos                 — per-prefix bytes for depth_positions.u64
+//	Bpp_depth_offsets        — per-prefix bytes for depth_offsets.u64
+//	Bpp_depth_blocks         — per-prefix bytes for depth_blocks.u64
 //	n_prefixes               — total prefix count after aggregation
 //
 // Inner sub-benchmarks time each query path on the same built index:
@@ -238,7 +239,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 	// reported ns/op is a fair per-call cold latency.
 	//
 	// DescendantsAtDepth is included separately from browse because
-	// it isolates the depth_positions binary-search cost.
+	// it isolates the child-range walk through core_stats.
 	b.Run("cold/lookup", func(b *testing.B) {
 		reportFileMetrics(b, files, nPx)
 		b.ResetTimer()
@@ -409,7 +410,7 @@ func readPrefixCount(tb testing.TB, dir string, files map[string]int64) uint64 {
 	tb.Helper()
 	// core_stats.bin is the most reliable count source; fall back to
 	// any other header-bearing file.
-	for _, name := range []string{"core_stats.bin", "depth_positions.u64", format.MPHFSlotsFile} {
+	for _, name := range []string{"core_stats.bin", format.MPHFSlotsFile} {
 		if _, ok := files[name]; !ok {
 			continue
 		}
@@ -471,7 +472,8 @@ var gridReportedFiles = []gridFile{
 	{format.CorePatchRowsFile, "Bpp_core_patch_rows", false},
 	{format.MPHFSlotsFile, "Bpp_fpp", true},
 	{"prefix_tree.bin", "Bpp_prefix_tree", false},
-	{"depth_positions.u64", "Bpp_dpos", false},
+	{format.DepthOffsetsFile, "Bpp_depth_offsets", false},
+	{format.DepthBlocksFile, "Bpp_depth_blocks", false},
 }
 
 //nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them

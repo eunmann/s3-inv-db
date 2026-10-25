@@ -104,7 +104,7 @@ func (a *blockAcc) add(count, bytes uint64) {
 }
 
 // SpanBlocks is the run of depth blocks covering one span of a depth's
-// posting list, numbered from 0 at the span's first block.
+// rows, numbered from 0 at the span's first block.
 type SpanBlocks struct {
 	d     *DepthIndex
 	span  Span

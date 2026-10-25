@@ -16,10 +16,11 @@ import (
 // levelSpool holds the build's prefixes by depth until Finalize. Rows
 // arrive in key order (preorder) but the index stores them in level
 // order: every depth-0 row, then every depth-1 row, each depth in key
-// order. Each depth's records stream to their own zstd file; Finalize
-// reads the depths back in turn and writes the index files in level
-// order, removing each depth's file once read. Memory is one encoder
-// and buffer per depth, whatever the prefix count.
+// order. Each depth's records stream uncompressed to their own file
+// through a levelSpoolBufSize bufio writer; Finalize reads the depths
+// back in turn and writes the index files in level order, removing
+// each depth's file once read. Memory is one buffer per depth,
+// whatever the prefix count.
 type levelSpool struct {
 	dir    string
 	depths []*spoolFile // index = depth
@@ -33,7 +34,7 @@ type spoolFile struct {
 	bw   *bufio.Writer
 }
 
-// levelSpoolBufSize buffers each depth's records ahead of its encoder.
+// levelSpoolBufSize buffers each depth's records ahead of its file.
 const levelSpoolBufSize = 256 << 10
 
 // spoolRecord is one prefix as Finalize needs it. Child and parent are
@@ -230,7 +231,7 @@ func truncated(err error) error {
 	return err
 }
 
-// close releases every depth's encoder and removes the files: after a
+// close closes every depth's file and removes it: after a
 // failed build, or what read left behind. Idempotent.
 func (s *levelSpool) close() error {
 	var errs []error
