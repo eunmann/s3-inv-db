@@ -90,11 +90,15 @@ type DownloadResult struct {
 //
 // This method uses the AWS S3 Download Manager for parallel range downloads,
 // which significantly improves throughput for large objects.
-func (d *Downloader) DownloadToReader(ctx context.Context, bucket, key string) (*DownloadedObject, *DownloadResult, error) {
+// The temp file goes in dir, else the configured TempDir, else
+// os.TempDir.
+func (d *Downloader) DownloadToReader(ctx context.Context, bucket, key, dir string) (*DownloadedObject, *DownloadResult, error) {
 	startTime := time.Now()
 
-	// Create temp file for download
-	tempDir := d.config.TempDir
+	tempDir := dir
+	if tempDir == "" {
+		tempDir = d.config.TempDir
+	}
 	if tempDir == "" {
 		tempDir = os.TempDir()
 	}

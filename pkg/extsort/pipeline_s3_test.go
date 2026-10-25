@@ -292,3 +292,32 @@ func splitS3URI(t *testing.T, uri string) (string, string) {
 
 	return bucket, key
 }
+
+// A build keeps its scratch (downloads, run files, MPHF scratch) beside
+// the output, never in os.TempDir: TMPDIR here is read-only, and the
+// output's parent holds only the index afterwards.
+func TestPipelineRun_ScratchStaysBesideTheIndex(t *testing.T) {
+	s := seedManifest(t)
+	readOnly := t.TempDir()
+	if err := os.Chmod(readOnly, 0o500); err != nil { //nolint:gosec // the test needs a directory nothing can write to
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(readOnly, 0o700) }) //nolint:gosec // restore so t.TempDir can clean up
+	t.Setenv("TMPDIR", readOnly)
+
+	outDir := filepath.Join(t.TempDir(), "index")
+	if _, err := extsort.NewPipeline(extsort.DefaultConfig(), s.client).Run(t.Context(), s.manifest, outDir); err != nil {
+		t.Fatalf("Run with a read-only TMPDIR: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(outDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "index" {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("output parent holds %v, want only the index", names)
+	}
+}

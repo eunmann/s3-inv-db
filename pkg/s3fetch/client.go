@@ -79,7 +79,13 @@ func (c *Client) FetchManifest(ctx context.Context, bucket, key string) (*Manife
 // Size + auto-cleanup on Close) so callers can pick streaming or
 // random-access without re-buffering.
 func (c *Client) DownloadObject(ctx context.Context, bucket, key string) (*DownloadedObject, *DownloadResult, error) {
-	return c.downloader.DownloadToReader(ctx, bucket, key)
+	return c.downloader.DownloadToReader(ctx, bucket, key, "")
+}
+
+// DownloadObjectTo is DownloadObject with the temp file in dir instead
+// of the downloader's configured TempDir.
+func (c *Client) DownloadObjectTo(ctx context.Context, bucket, key, dir string) (*DownloadedObject, *DownloadResult, error) {
+	return c.downloader.DownloadToReader(ctx, bucket, key, dir)
 }
 
 // DownloaderConfig returns the current downloader configuration.
