@@ -1,6 +1,8 @@
 package s3inventory
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/klauspost/pgzip"
@@ -16,6 +19,8 @@ import (
 
 // Row represents a single object from an S3 inventory file.
 // This is the unified representation used by both CSV and Parquet readers.
+// Its strings are valid only until the reader's next Next: they may view
+// the reader's buffer.
 type Row struct {
 	Key          string
 	StorageClass string
@@ -65,8 +70,17 @@ func (a Anomalies) String() string {
 		a.ShortRows, a.MissingKeys, a.BadSizes, a.UndecodableKeys)
 }
 
-// CSVReader reads S3 inventory records from CSV streams.
+// CSVReader reads S3 inventory records from CSV streams. S3 writes each
+// record on one line with every field plain or quoted, and keys are URL
+// encoded, so no field holds a quote, comma or newline: such lines are
+// split in place, the fields viewing the line. The first line that is
+// not of that shape (an escaped or stray quote, a quoted field running
+// over the line end, a line longer than the buffer) hands that line
+// and everything after it to encoding/csv, configured as before, so the
+// records are what encoding/csv alone would return.
 type CSVReader struct {
+	lines           *bufio.Reader // nil once encoding/csv took over
+	fields          []string
 	csvReader       *csv.Reader
 	closers         []io.Closer
 	keyCol          int
@@ -100,13 +114,8 @@ type CSVReaderConfig struct {
 // The reader should provide the raw CSV data (already decompressed if needed).
 // Use NewCSVReaderFromStream for automatic gzip handling.
 func NewCSVReader(r io.Reader, cfg CSVReaderConfig) *CSVReader {
-	csvr := csv.NewReader(r)
-	csvr.ReuseRecord = true
-	csvr.FieldsPerRecord = -1
-	csvr.LazyQuotes = true
-
 	return &CSVReader{
-		csvReader:       csvr,
+		lines:           bufio.NewReaderSize(r, csvLineBuffer),
 		keyCol:          cfg.KeyCol,
 		sizeCol:         cfg.SizeCol,
 		storageCol:      cfg.StorageCol,
@@ -124,7 +133,8 @@ func NewCSVReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderConfig) (*
 	if strings.HasSuffix(strings.ToLower(key), ".gz") {
 		// Use parallel gzip for faster decompression on multi-core systems.
 		// pgzip automatically uses multiple goroutines for decompression.
-		gzr, err := pgzip.NewReader(r)
+		// It reads its input through a 4 KiB buffer unless given one.
+		gzr, err := pgzip.NewReader(bufio.NewReaderSize(r, gzipInputBuffer))
 		if err != nil {
 			r.Close()
 
@@ -134,13 +144,8 @@ func NewCSVReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderConfig) (*
 		reader = gzr
 	}
 
-	csvr := csv.NewReader(reader)
-	csvr.ReuseRecord = true
-	csvr.FieldsPerRecord = -1
-	csvr.LazyQuotes = true
-
 	return &CSVReader{
-		csvReader:       csvr,
+		lines:           bufio.NewReaderSize(reader, csvLineBuffer),
 		keyCol:          cfg.KeyCol,
 		sizeCol:         cfg.SizeCol,
 		storageCol:      cfg.StorageCol,
@@ -150,10 +155,119 @@ func NewCSVReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderConfig) (*
 	}, nil
 }
 
-// Next returns the next inventory row.
+// Buffer sizes: the CSV line buffer bounds the lines split in place
+// (longer ones go to encoding/csv), and the gzip input buffer saves
+// pgzip a read per 4 KiB.
+const (
+	csvLineBuffer   = 64 << 10
+	gzipInputBuffer = 1 << 20
+)
+
+// newFallbackCSV is the encoding/csv reader the CSVReader has always
+// used, reading r.
+func newFallbackCSV(r io.Reader) *csv.Reader {
+	csvr := csv.NewReader(r)
+	csvr.ReuseRecord = true
+	csvr.FieldsPerRecord = -1
+	csvr.LazyQuotes = true
+
+	return csvr
+}
+
+// record returns the next record's fields, valid until the next call.
+func (r *CSVReader) record() ([]string, error) {
+	if r.csvReader != nil {
+		return r.csvReader.Read() //nolint:wrapcheck // Next wraps it
+	}
+	for {
+		line, err := r.lines.ReadSlice('\n')
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) {
+			return nil, err //nolint:wrapcheck // Next wraps it
+		}
+		if len(line) == 0 && errors.Is(err, io.EOF) {
+			return nil, io.EOF
+		}
+		if err == nil || errors.Is(err, io.EOF) {
+			body := trimLineEnd(line)
+			if len(body) == 0 {
+				// encoding/csv skips empty lines.
+				continue
+			}
+			if fields, ok := splitPlainCSV(body, r.fields[:0]); ok {
+				r.fields = fields
+
+				return fields, nil
+			}
+		}
+		// Not a plain line: encoding/csv reads it and the rest.
+		r.csvReader = newFallbackCSV(io.MultiReader(bytes.NewReader(slices.Clone(line)), r.lines))
+		r.lines = nil
+
+		return r.csvReader.Read() //nolint:wrapcheck // Next wraps it
+	}
+}
+
+// trimLineEnd drops a line's "\n" or "\r\n", and the "\r" of a last line
+// without "\n", as encoding/csv does.
+func trimLineEnd(line []byte) []byte {
+	line = bytes.TrimSuffix(line, []byte{'\n'})
+
+	return bytes.TrimSuffix(line, []byte{'\r'})
+}
+
+// splitPlainCSV splits a line whose fields are each either plain
+// (no '"') or wholly quoted with no '"' inside, appending the fields to
+// dst as views of line; it reports false for any other line.
+func splitPlainCSV(line []byte, dst []string) ([]string, bool) {
+	for start := 0; ; {
+		if start < len(line) && line[start] == '"' {
+			end := bytes.IndexByte(line[start+1:], '"')
+			if end < 0 {
+				return nil, false
+			}
+			end += start + 1
+			if end+1 < len(line) && line[end+1] != ',' {
+				return nil, false
+			}
+			dst = append(dst, bytesView(line[start+1:end]))
+			if end+1 >= len(line) {
+				return dst, true
+			}
+			start = end + 2
+
+			continue
+		}
+		field := line[start:]
+		comma := bytes.IndexByte(field, ',')
+		if comma >= 0 {
+			field = field[:comma]
+		}
+		if bytes.IndexByte(field, '"') >= 0 {
+			return nil, false
+		}
+		dst = append(dst, bytesView(field))
+		if comma < 0 {
+			return dst, true
+		}
+		start += comma + 1
+	}
+}
+
+// bytesView returns b as a string without copying; it is valid while b
+// is not overwritten.
+func bytesView(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+
+	return unsafe.String(unsafe.SliceData(b), len(b))
+}
+
+// Next returns the next inventory row. Its strings are valid until the
+// next call.
 func (r *CSVReader) Next() (Row, error) {
 	for {
-		fields, err := r.csvReader.Read()
+		fields, err := r.record()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return Row{}, io.EOF
