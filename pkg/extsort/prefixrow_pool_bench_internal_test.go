@@ -11,56 +11,31 @@ import (
 )
 
 // serializeRunBody returns a binary blob shaped like the body of a run
-// file — N concatenated records in the format readPrefixRowRecordInto
-// understands.
+// file: n records in sorted order, as decodeRunRecord reads them.
 func serializeRunBody(n int) []byte {
-	buf := new(bytes.Buffer)
-	w := &runRecordEncoder{buf: buf}
-	for i := range n {
-		w.write(&PrefixRow{
-			Prefix:     fmt.Sprintf("tenant-%05d/year=2024/month=%02d/file.parquet", i%1000, (i%12)+1),
+	rows := make([]PrefixRow, n)
+	for i := range rows {
+		rows[i] = PrefixRow{
+			Prefix:     fmt.Sprintf("tenant-%05d/year=2024/month=%02d/file.parquet", i/12, (i%12)+1),
 			Depth:      3,
 			Count:      uint64(i),
 			TotalBytes: uint64(i * 4096),
 			TierCounts: [MaxTiers]uint64{tiers.Standard: uint64(i)},
 			TierBytes:  [MaxTiers]uint64{tiers.Standard: uint64(i) * 4096},
-		})
+		}
+	}
+	var out []byte
+	prev := ""
+	for i := range rows {
+		out = encodeRunRecord(out, prev, &rows[i])
+		prev = rows[i].Prefix
 	}
 
-	return buf.Bytes()
+	return out
 }
 
-type runRecordEncoder struct {
-	buf *bytes.Buffer
-}
-
-func (e *runRecordEncoder) write(row *PrefixRow) {
-	// Hand-encode using the run record layout (encodePrefixRowRecord).
-	prefixLen := len(row.Prefix)
-	e.buf.Write(u32le(uint32(prefixLen)))
-	e.buf.WriteString(row.Prefix)
-	e.buf.Write(u16le(row.Depth))
-	e.buf.Write(u64le(row.Count))
-	e.buf.Write(u64le(row.TotalBytes))
-	for _, v := range row.TierCounts {
-		e.buf.Write(u64le(v))
-	}
-	for _, v := range row.TierBytes {
-		e.buf.Write(u64le(v))
-	}
-}
-
-func u16le(v uint16) []byte { return []byte{byte(v), byte(v >> 8)} }
-func u32le(v uint32) []byte { return []byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24)} }
-func u64le(v uint64) []byte {
-	return []byte{
-		byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24),
-		byte(v >> 32), byte(v >> 40), byte(v >> 48), byte(v >> 56),
-	}
-}
-
-// BenchmarkReadPrefixRowReused reads run-file records via ReadInto into
-// a caller-owned PrefixRow.
+// BenchmarkReadPrefixRowReused decodes run-file records into a
+// caller-owned PrefixRow.
 func BenchmarkReadPrefixRowReused(b *testing.B) {
 	const N = 10_000
 	body := serializeRunBody(N)
@@ -68,16 +43,18 @@ func BenchmarkReadPrefixRowReused(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		r := bytes.NewReader(body)
-		buf := make([]byte, 1024)
+		var buf []byte
 		row := &PrefixRow{}
+		prev := ""
 		for {
-			err := readPrefixRowRecordInto(r, &buf, row)
+			err := decodeRunRecord(r, prev, &buf, row)
 			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {
 				b.Fatal(err)
 			}
+			prev = row.Prefix
 		}
 	}
 }

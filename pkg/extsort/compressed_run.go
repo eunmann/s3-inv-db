@@ -21,24 +21,17 @@ import (
 //   UncompressedSize: 8 bytes  (total uncompressed data size, for buffer hints)
 //   Reserved:         4 bytes  (future use)
 //
-// Body: zstd compressed stream of records, each:
-//   PrefixLen:  4 bytes (uint32, length of prefix string)
-//   Prefix:     N bytes (prefix string, no null terminator)
-//   Depth:      2 bytes (uint16)
-//   Count:      8 bytes (uint64)
-//   TotalBytes: 8 bytes (uint64)
-//   TierCounts: MaxTiers * 8 bytes (uint64 array)
-//   TierBytes:  MaxTiers * 8 bytes (uint64 array)
-//
-// Each record is 4 + len(prefix) + 2 + 8 + 8 + 2*MaxTiers*8 bytes; with
-// MaxTiers = tiers.NumTiers = 13 that is 230 + len(prefix).
+// Body: zstd compressed stream of records in sorted order, each in the
+// varint layout encodeRunRecord writes (types.go): the prefix front-coded
+// against the previous record's, the depth, and a count and byte total
+// for each tier present only.
 //
 // Compression types:
 //   1: Zstd (only supported type)
 
 const (
 	runFileMagic             = 0x45585453 // "EXTS"
-	compressedRunFileVersion = 2
+	compressedRunFileVersion = 3
 	compressedRunFileHeader  = 32
 
 	// Compression type flag (stored in bits 1-3 of flags field).
@@ -72,6 +65,7 @@ type CompressedRunWriter struct {
 	writer           *bufio.Writer
 	path             string
 	buf              []byte
+	prev             string // the last prefix written
 	zstdLevel        zstd.EncoderLevel
 	count            uint64
 	uncompressedSize uint64
@@ -136,19 +130,20 @@ func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*Comp
 		zstdLevel:  zstdLevel,
 		writer:     bufio.NewWriterSize(enc, opts.BufferSize),
 		path:       path,
-		buf:        make([]byte, 1024),
+		buf:        make([]byte, 0, 1024),
 		level:      opts.CompressionLevel,
 	}, nil
 }
 
 // Write writes a single PrefixRow to the compressed run file.
 func (w *CompressedRunWriter) Write(row *PrefixRow) error {
-	n := encodePrefixRowRecord(&w.buf, row)
-	if _, err := w.writer.Write(w.buf[:n]); err != nil {
+	w.buf = encodeRunRecord(w.buf[:0], w.prev, row)
+	if _, err := w.writer.Write(w.buf); err != nil {
 		return fmt.Errorf("write record: %w", err)
 	}
+	w.prev = row.Prefix
 	w.count++
-	w.uncompressedSize += uint64(n)
+	w.uncompressedSize += uint64(len(w.buf))
 
 	return nil
 }
@@ -250,6 +245,7 @@ type CompressedRunReader struct {
 	reader       *bufio.Reader
 	path         string
 	buf          []byte
+	prev         string // the last prefix read
 	count        uint64
 	read         uint64
 	closed       bool
@@ -332,9 +328,10 @@ func (r *CompressedRunReader) ReadInto(into *PrefixRow) error {
 	if r.read >= r.count {
 		return io.EOF
 	}
-	if err := readPrefixRowRecordInto(r.reader, &r.buf, into); err != nil {
+	if err := decodeRunRecord(r.reader, r.prev, &r.buf, into); err != nil {
 		return err
 	}
+	r.prev = into.Prefix
 	r.read++
 
 	return nil
