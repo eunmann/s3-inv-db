@@ -92,7 +92,8 @@ Data structures / query (`bench/suite/query.txt`):
   reconstructions or tier breakdowns, or 1k children + top-10 queries
   per op, over one 1M-object multi-tier index.
 - `internal/handlers` `BenchmarkGate*`: one browse or compare API
-  request over a prefix with 200k children.
+  request over a prefix with 200k children, sorted by name, size or
+  cost (cost prices every child's tier mix).
 
 When a change touches a hot path no entry covers, add a sizeable
 benchmark for it **in its own commit first**, add it to the matching

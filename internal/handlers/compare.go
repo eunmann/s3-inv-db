@@ -266,7 +266,7 @@ func (h *Handlers) computeCompareLevel(ctx context.Context, opts compareViewOpti
 	start := time.Now()
 	var data inventory.CompareLevelData
 	err := h.manager.WithTwoIndexes(ctx, opts.from, opts.to, func(a, b *indexread.Index) error {
-		data = inventory.CompareLevel(a, b, opts.prefix, opts.query(), h.compareCost)
+		data = inventory.CompareLevel(a, b, opts.prefix, opts.query(), h.compareCost())
 
 		return nil
 	})
@@ -298,9 +298,17 @@ func (o compareViewOptions) query() inventory.CompareQuery {
 	return inventory.CompareQuery{SortBy: o.sortBy, Dir: o.dir, Page: o.page, PageSize: o.pageSize, HideUnchanged: o.hideUnchanged}
 }
 
-// compareCost is a child's monthly storage cost, for sorting by cost.
-func (h *Handlers) compareCost(idx *indexread.Index, pos uint64) uint64 {
-	return pricing.ComputeMonthlyCost(idx.TierBreakdown(pos), h.priceTable).TotalMicrodollars
+// compareCost returns a child's monthly storage cost function, for
+// sorting by cost. Each call gets its own tier buffer, reused across
+// the level's children.
+func (h *Handlers) compareCost() inventory.CompareCostFunc {
+	var buf []indexread.TierBreakdown
+
+	return func(idx *indexread.Index, pos uint64) uint64 {
+		buf = idx.AppendTierBreakdown(buf[:0], pos)
+
+		return pricing.MonthlyTotalMicrodollars(buf, h.priceTable)
+	}
 }
 
 func (h *Handlers) buildCompareSelfView(self inventory.CompareSelf) CompareSelfView {
@@ -570,7 +578,7 @@ func (h *Handlers) CompareLevelAPI(w http.ResponseWriter, r *http.Request) {
 
 	var data inventory.CompareLevelData
 	err := h.manager.WithTwoIndexes(r.Context(), opts.from, opts.to, func(a, b *indexread.Index) error {
-		data = inventory.CompareLevel(a, b, opts.prefix, opts.query(), h.compareCost)
+		data = inventory.CompareLevel(a, b, opts.prefix, opts.query(), h.compareCost())
 
 		return nil
 	})
