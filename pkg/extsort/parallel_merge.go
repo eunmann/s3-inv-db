@@ -27,22 +27,75 @@ type ParallelMergeConfig struct {
 	// MaxFanIn caps the runs one disk-round merge job reads.
 	MaxFanIn int
 	// FinalFanIn caps the runs the final streaming merge reads; disk
-	// rounds run only while there are more. At least MaxFanIn.
-	FinalFanIn       int
+	// rounds run only while there are more. At least MaxFanIn. Zero
+	// sizes it from GOMEMLIMIT (finalFanInFor).
+	FinalFanIn int
+	// BufferSize is each run reader's buffer.
 	BufferSize       int
 	CompressionLevel CompressionLevel
 }
 
-// mergeReaderBufferSize is each merge reader's and writer's I/O buffer.
-const mergeReaderBufferSize = 1 << 20
+// mergeReaderBufferSize is each merge reader's buffer. The zstd decoder
+// already reads ahead, so a larger buffer only adds heap per open run:
+// 1 MiB merged no faster than 16 KiB.
+const mergeReaderBufferSize = 64 << 10
 
-// DefaultFinalFanIn is how many runs the final streaming merge reads
-// at once. An open run costs its read buffer plus a zstd decoder, a few
-// MiB, and the final merge runs after ingest has released its
-// aggregators, so it can take far more runs than a disk round: a build
-// whose every ingest worker spilled once (one run per CPU) merges
-// straight into the index with no disk round.
+// mergeWriterBufferSize is each disk-round output's write buffer.
+const mergeWriterBufferSize = 1 << 20
+
+// DefaultFinalFanIn is the most runs the final streaming merge reads
+// at once; fewer when GOMEMLIMIT's open-run budget can't hold that many.
+// A larger limit doesn't raise it: a 128-way final merge measured ~20%
+// slower than a disk round plus a 64-way merge when spills overlap
+// heavily (the round deduplicates them in parallel), and only ~8%
+// faster when they don't.
 const DefaultFinalFanIn = 64
+
+// openRunHeapBytes is the heap one open run reader holds: its decoder's
+// block buffers and window history plus the read buffer, measured at
+// ~2.1 MB and rounded up.
+const openRunHeapBytes = 5 << 19
+
+// OpenRunsFractionOfLimit is the share of GOMEMLIMIT the open run
+// readers of a merge may hold. The final merge runs after ingest
+// released its aggregators; beside it sit the workers' last in-memory
+// runs (within the aggregators' share) and the index build.
+const OpenRunsFractionOfLimit = 0.25
+
+// openRunBudget is how many run readers a merge may hold open under
+// memoryLimit, and false when the limit is unset.
+func openRunBudget(memoryLimit int64) (int, bool) {
+	if memoryLimit <= 0 || memoryLimit >= unsetMemoryLimit {
+		return 0, false
+	}
+
+	return int(float64(memoryLimit) * OpenRunsFractionOfLimit / openRunHeapBytes), true
+}
+
+// finalFanInFor sizes the final merge's fan-in: DefaultFinalFanIn, or
+// as many runs as the memory limit's open-run budget holds when that is
+// fewer, and at least maxFanIn. A small limit takes disk rounds rather
+// than outgrow it.
+func finalFanInFor(memoryLimit int64, maxFanIn int) int {
+	fanIn := DefaultFinalFanIn
+	if budget, ok := openRunBudget(memoryLimit); ok {
+		fanIn = min(fanIn, budget)
+	}
+
+	return max(fanIn, maxFanIn)
+}
+
+// roundWorkersFor caps a disk round's concurrent jobs so their open
+// readers, maxFanIn each, fit the open-run budget. An unset limit
+// keeps numWorkers.
+func roundWorkersFor(memoryLimit int64, numWorkers, maxFanIn int) int {
+	budget, ok := openRunBudget(memoryLimit)
+	if !ok {
+		return numWorkers
+	}
+
+	return min(numWorkers, max(budget/maxFanIn, 1))
+}
 
 // ParallelMerger coordinates parallel merging of sorted run files.
 // Statistics-tracking fields are stored as atomics so Statistics() is
@@ -65,8 +118,10 @@ func NewParallelMerger(config ParallelMergeConfig) *ParallelMerger {
 	if config.BufferSize <= 0 {
 		config.BufferSize = mergeReaderBufferSize
 	}
+	limit := readMemoryLimit()
+	config.NumWorkers = roundWorkersFor(limit, config.NumWorkers, config.MaxFanIn)
 	if config.FinalFanIn <= 0 {
-		config.FinalFanIn = DefaultFinalFanIn
+		config.FinalFanIn = finalFanInFor(limit, config.MaxFanIn)
 	}
 	config.FinalFanIn = max(config.FinalFanIn, config.MaxFanIn)
 
@@ -372,7 +427,7 @@ func (m *ParallelMerger) openInputReaders(inputPaths []string) ([]*CompressedRun
 // createMergeOutputWriter creates the run writer for a merge job's output.
 func (m *ParallelMerger) createMergeOutputWriter(outputPath string) (*CompressedRunWriter, error) {
 	w, err := NewCompressedRunWriter(outputPath, CompressedRunWriterOptions{
-		BufferSize:       m.config.BufferSize,
+		BufferSize:       mergeWriterBufferSize,
 		CompressionLevel: m.config.CompressionLevel,
 	})
 	if err != nil {

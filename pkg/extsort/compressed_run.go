@@ -391,9 +391,14 @@ var zstdDecoderPool = newTypedPool(func() *zstd.Decoder { return nil })
 // zstdWindowSize bounds each run stream's match window. Run rows are
 // sorted, so most redundancy is between neighbouring rows; a 1 MiB
 // window keeps the ratio (run-file bytes are unchanged) at a fraction
-// of the default's buffers. Decoders keep their defaults: their
-// asynchronous block decoding keeps the serial final merge fed.
+// of the default's buffers.
 const zstdWindowSize = 1 << 20
+
+// zstdDecoderConcurrency keeps each run decoder asynchronous, decoding
+// ahead of the serial final merge, with the fewest block decoders that
+// does: 2 merged as fast as the default 4 at ~0.7 MB less heap per open
+// run, and 1 (synchronous) merged ~9% slower.
+const zstdDecoderConcurrency = 2
 
 // zstdEncoderOptions: one goroutine per stream. Every ingest worker and
 // every merge output already runs its own encoder, so the default
@@ -445,7 +450,7 @@ func acquireZstdDecoder() (*zstd.Decoder, error) {
 	if dec := zstdDecoderPool.Get(); dec != nil {
 		return dec, nil
 	}
-	dec, err := zstd.NewReader(nil)
+	dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(zstdDecoderConcurrency))
 	if err != nil {
 		return nil, fmt.Errorf("zstd new reader: %w", err)
 	}
