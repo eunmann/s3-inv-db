@@ -172,9 +172,9 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	tempDir := p.config.TempDir
 	if tempDir == "" {
 		var err error
-		tempDir, err = os.MkdirTemp("", "extsort-*")
+		tempDir, err = newScratchDir(outDir)
 		if err != nil {
-			return nil, fmt.Errorf("create temp dir: %w", err)
+			return nil, err
 		}
 	}
 	p.tempDir = tempDir
@@ -663,7 +663,7 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int,
 func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, agg *Aggregator, workerID, numWorkers int) error {
 	log := zerolog.Ctx(ctx)
 
-	body, dlResult, err := p.s3Client.DownloadObject(ctx, job.bucket, job.key)
+	body, dlResult, err := p.s3Client.DownloadObjectTo(ctx, job.bucket, job.key, p.tempDir)
 	if err != nil {
 		return fmt.Errorf("download object: %w", err)
 	}
@@ -677,7 +677,7 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 	parseStart := time.Now()
 	var reader s3inventory.Reader
 	if job.config.format == s3fetch.InventoryFormatParquet {
-		reader, err = openParquetReader(body, job.config.fileSize)
+		reader, err = openParquetReader(body, job.config.fileSize, p.tempDir)
 	} else {
 		reader, err = s3inventory.NewCSVReaderFromStream(body, job.key, s3inventory.CSVReaderConfig{
 			KeyCol:          job.config.keyCol,
@@ -770,7 +770,7 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 // avoiding a second temp-file copy. Falls back to stream-based open
 // only when Size() reports an error (in practice impossible — the
 // file was just written).
-func openParquetReader(obj *s3fetch.DownloadedObject, fileSize int64) (*s3inventory.ParquetReader, error) {
+func openParquetReader(obj *s3fetch.DownloadedObject, fileSize int64, tempDir string) (*s3inventory.ParquetReader, error) {
 	if size, err := obj.Size(); err == nil {
 		r, openErr := s3inventory.NewParquetReaderFromReaderAt(obj, size)
 		if openErr != nil {
@@ -779,7 +779,7 @@ func openParquetReader(obj *s3fetch.DownloadedObject, fileSize int64) (*s3invent
 
 		return r, nil
 	}
-	r, err := s3inventory.NewParquetReaderFromStream(obj, fileSize)
+	r, err := s3inventory.NewParquetReaderFromStream(obj, fileSize, tempDir)
 	if err != nil {
 		return nil, fmt.Errorf("parquet reader from stream: %w", err)
 	}

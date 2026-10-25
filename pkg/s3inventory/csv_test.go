@@ -227,6 +227,7 @@ func TestParquetInventoryReaderFromStream(t *testing.T) {
 	reader, err := s3inventory.NewParquetReaderFromStream(
 		io.NopCloser(bytes.NewReader(content)),
 		int64(len(content)),
+		t.TempDir(),
 	)
 	if err != nil {
 		t.Fatalf("NewParquetReaderFromStream failed: %v", err)
@@ -615,6 +616,7 @@ func BenchmarkParquetInventoryReader(b *testing.B) {
 				reader, err := s3inventory.NewParquetReaderFromStream(
 					io.NopCloser(bytes.NewReader(content)),
 					int64(len(content)),
+					b.TempDir(),
 				)
 				if err != nil {
 					b.Fatal(err)

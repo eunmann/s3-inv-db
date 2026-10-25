@@ -193,10 +193,15 @@ not count.
 These scale near-linearly with prefix count, not object count. The
 planner applies a fixed `0.30` multiplier to a manifest's compressed
 CSV total when estimating final index bytes — conservative, but
-measure your own corpus if disk budgets are tight. Builds use
-`os.TempDir()` for intermediate run files; keep that volume sized
-to at least 2× the largest manifest-compressed-size you intend to
-load.
+measure your own corpus if disk budgets are tight. A build keeps its
+scratch (downloaded chunks, run files, MPHF scratch) in a hidden
+directory beside its output (`.<out>.scratch-*`), not in
+`os.TempDir()`: on hosts where `/tmp` is tmpfs that would be RAM the Go
+memory limit can't see. For the server that is its cache volume; keep
+it sized to at least 2× the largest manifest-compressed-size you
+intend to load, on top of the indexes. A killed build's scratch is
+reclaimed by the next build of that output and by the server's startup
+reconcile.
 
 ## Running benchmarks
 

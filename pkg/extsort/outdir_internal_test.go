@@ -284,6 +284,7 @@ func TestReclaimStaleDirs_RemovesLeftovers(t *testing.T) {
 	writeFile(t, filepath.Join(outDir, format.ManifestFile), "current")
 	writeFile(t, filepath.Join(root, ".out.building-123", "core_stats.bin"), "partial")
 	writeFile(t, filepath.Join(root, ".out.replaced-456", format.ManifestFile), "old")
+	writeFile(t, filepath.Join(root, ".out.scratch-789", "run-0001.zst"), "spill")
 	writeFile(t, filepath.Join(root, ".other.building-1", "keep"), "x")
 	writeFile(t, filepath.Join(root, "out2", "keep"), "x")
 

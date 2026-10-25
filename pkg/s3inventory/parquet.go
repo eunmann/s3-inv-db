@@ -115,10 +115,11 @@ func NewParquetReaderFromReaderAt(r io.ReaderAt, size int64) (*ParquetReader, er
 }
 
 // NewParquetReaderFromStream creates a Parquet inventory reader from a stream.
-// Since Parquet requires random access, this buffers the entire stream to a temp file.
+// Since Parquet requires random access, this buffers the entire stream to a temp file
+// in tempDir (os.TempDir when empty).
 // The size parameter is used for validation (if non-zero) but the full stream is read regardless.
-func NewParquetReaderFromStream(r io.ReadCloser, size int64) (*ParquetReader, error) {
-	tempFile, err := os.CreateTemp("", "parquet-inventory-*.parquet")
+func NewParquetReaderFromStream(r io.ReadCloser, size int64, tempDir string) (*ParquetReader, error) {
+	tempFile, err := os.CreateTemp(tempDir, "parquet-inventory-*.parquet")
 	if err != nil {
 		r.Close()
 

@@ -50,6 +50,7 @@ func checkOutDir(outDir string) error {
 const (
 	stagingSuffix  = ".building-"
 	replacedSuffix = ".replaced-"
+	scratchSuffix  = ".scratch-"
 )
 
 // LeftoverBase reports whether name is a staging or replaced-index
@@ -60,7 +61,7 @@ func LeftoverBase(name string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	for _, suffix := range []string{stagingSuffix, replacedSuffix} {
+	for _, suffix := range []string{stagingSuffix, replacedSuffix, scratchSuffix} {
 		if i := strings.LastIndex(rest, suffix); i > 0 {
 			return rest[:i], true
 		}
@@ -74,6 +75,25 @@ func LeftoverBase(name string) (string, bool) {
 // previous index back when outDir is missing.
 func ReclaimStaleDirs(log *zerolog.Logger, outDir string) error {
 	return reclaimStaleDirs(log, outDir)
+}
+
+// newScratchDir creates the hidden sibling directory a build's
+// downloads, run files and MPHF scratch live in. Beside the output it
+// shares the filesystem the operator sized for indexes (the server's
+// cache volume), rather than os.TempDir: often tmpfs, so RAM the Go
+// memory limit can't see, and outside the server's disk budget.
+func newScratchDir(outDir string) (string, error) {
+	outDir = filepath.Clean(outDir)
+	parent, base := filepath.Dir(outDir), filepath.Base(outDir)
+	if err := os.MkdirAll(parent, format.DirPerm); err != nil {
+		return "", fmt.Errorf("create output parent: %w", err)
+	}
+	dir, err := os.MkdirTemp(parent, "."+base+scratchSuffix)
+	if err != nil {
+		return "", fmt.Errorf("create scratch dir: %w", err)
+	}
+
+	return dir, nil
 }
 
 // newStagingDir creates the hidden sibling directory the index is built
@@ -121,7 +141,8 @@ func reclaimStaleDirs(log *zerolog.Logger, outDir string) error {
 			outDirMissing = false
 			log.Warn().Str("path", path).Msg("restored previous index left aside by an interrupted build")
 		case strings.HasPrefix(name, "."+base+replacedSuffix),
-			strings.HasPrefix(name, "."+base+stagingSuffix):
+			strings.HasPrefix(name, "."+base+stagingSuffix),
+			strings.HasPrefix(name, "."+base+scratchSuffix):
 			logCleanupErr(log, "remove stale build dir", path, os.RemoveAll(path))
 		}
 	}
