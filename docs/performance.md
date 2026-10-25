@@ -94,8 +94,10 @@ s3-inv-db build --max-depth 5 ...     # limit prefix count
 ```
 
 Worker counts and S3 concurrency derive from `runtime.NumCPU()`:
-parser + download workers scale to `min(NumCPU, manifest_files)` (at
-least 2), each
+parse workers scale to `min(NumCPU, manifest_files)` (at least 2), with
+as many download fetchers running a chunk ahead of them, so a worker's
+next chunk downloads while it parses the current one. Scratch then holds
+at most two chunk files per worker. Each
 download fetches up to `min(max(NumCPU, 4), 16)` 16 MiB parts at once,
 and GETs in flight across all downloads are capped at
 `min(max(4 × NumCPU, 32), 256)`. The same binary scales from a laptop

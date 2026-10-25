@@ -298,6 +298,15 @@ type chunkJob struct {
 	index  int
 }
 
+// fetchedChunk is a chunk downloaded ahead of its parse, or the error
+// that stopped the download.
+type fetchedChunk struct {
+	err    error
+	body   *s3fetch.DownloadedObject
+	result *s3fetch.DownloadResult
+	job    chunkJob
+}
+
 // objectRecord holds a single object's data for aggregation.
 type objectRecord struct {
 	key    string
@@ -488,17 +497,29 @@ func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
 	totalChunks := len(cfg.manifest.Files)
 
 	jobs := make(chan chunkJob, cfg.numWorkers)
+	// Unbuffered: a fetcher holding a downloaded chunk waits for a free
+	// worker before it downloads another, so at most two chunk files per
+	// worker sit in scratch, one parsing and one downloaded or
+	// downloading.
+	ready := make(chan fetchedChunk)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var wg sync.WaitGroup
+	var fetchers, wg sync.WaitGroup
 	errCh := make(chan error, cfg.numWorkers)
 	p.startIngestProgressLogger(ctx, log, totalChunks)
 
+	for range cfg.numWorkers {
+		fetchers.Go(func() { p.runChunkFetcher(ctx, jobs, ready) })
+	}
+	go func() {
+		fetchers.Wait()
+		close(ready)
+	}()
 	for workerID := range cfg.numWorkers {
 		wg.Go(func() {
-			if err := p.runChunkWorker(ctx, workerID, cfg.numWorkers, jobs); err != nil {
+			if err := p.runChunkWorker(ctx, workerID, cfg.numWorkers, ready); err != nil {
 				select {
 				case errCh <- err:
 				default:
@@ -604,6 +625,44 @@ func (p *Pipeline) sendIngestJobs(ctx context.Context, cfg *ingestConfig, jobs c
 	}
 }
 
+// runChunkFetcher downloads chunks ahead of the workers, so a worker's
+// next chunk downloads while it parses the current one. A downloaded
+// chunk that no worker takes before cancellation is removed.
+func (p *Pipeline) runChunkFetcher(ctx context.Context, jobs <-chan chunkJob, ready chan<- fetchedChunk) {
+	for job := range jobs {
+		if ctx.Err() != nil {
+			return
+		}
+		fetched := p.fetchChunk(ctx, job)
+		select {
+		case ready <- fetched:
+		case <-ctx.Done():
+			if fetched.body != nil {
+				_ = fetched.body.Close()
+			}
+
+			return
+		}
+	}
+}
+
+// fetchChunk downloads one chunk to scratch and checks its size against
+// the manifest.
+func (p *Pipeline) fetchChunk(ctx context.Context, job chunkJob) fetchedChunk {
+	body, result, err := p.s3Client.DownloadObjectTo(ctx, job.bucket, job.key, p.tempDir)
+	if err != nil {
+		return fetchedChunk{job: job, err: fmt.Errorf("download object: %w", err)}
+	}
+	if job.config.fileSize > 0 && result.BytesDownloaded != job.config.fileSize {
+		_ = body.Close()
+
+		return fetchedChunk{job: job, err: fmt.Errorf("%w: %s is %d bytes, the manifest says %d",
+			ErrChunkSizeMismatch, job.key, result.BytesDownloaded, job.config.fileSize)}
+	}
+
+	return fetchedChunk{job: job, body: body, result: result}
+}
+
 // logIngestProgress logs progress information.
 func (p *Pipeline) logIngestProgress(log *zerolog.Logger, chunkNum, totalChunks int) {
 	elapsed := time.Since(p.startTime)
@@ -628,7 +687,7 @@ func (p *Pipeline) logIngestProgress(log *zerolog.Logger, chunkNum, totalChunks 
 // (channel closed), keep the residual aggregator state in memory for
 // the final merge, or flush it to a final run file if the heap is
 // under pressure.
-func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int, jobs <-chan chunkJob) (err error) {
+func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int, ready <-chan fetchedChunk) (err error) {
 	const initialAggCapacity = 10_000
 	agg := NewAggregator(initialAggCapacity, p.config.MaxDepth)
 	defer func() {
@@ -668,20 +727,23 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int,
 
 	for {
 		publishIdle("waiting_jobs")
-		var job chunkJob
+		var fetched fetchedChunk
 		var ok bool
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("worker %d cancelled: %w", workerID, ctx.Err())
-		case job, ok = <-jobs:
+		case fetched, ok = <-ready:
 			if !ok {
 				return nil
 			}
 		}
+		if fetched.err != nil {
+			return fmt.Errorf("chunk %d: %w", fetched.job.index, fetched.err)
+		}
 		publishBusy("processing_chunk")
 
-		if err := p.streamChunkIntoAggregator(ctx, job, agg, workerID, numWorkers); err != nil {
-			return fmt.Errorf("chunk %d: %w", job.index, err)
+		if err := p.streamChunkIntoAggregator(ctx, fetched, agg, workerID, numWorkers); err != nil {
+			return fmt.Errorf("chunk %d: %w", fetched.job.index, err)
 		}
 		p.chunksProcessed.Add(1)
 
@@ -695,24 +757,14 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int,
 	}
 }
 
-// streamChunkIntoAggregator downloads one chunk and pumps rows
-// directly from the parquet/CSV reader into the worker's aggregator.
-// No intermediate slice — the per-chunk objectRecord buffer that the
-// old processChunkToBatch path materialised is eliminated, saving
+// streamChunkIntoAggregator pumps a downloaded chunk's rows directly
+// from the parquet/CSV reader into the worker's aggregator. No
+// intermediate slice — the per-chunk objectRecord buffer that the old
+// processChunkToBatch path materialised is eliminated, saving
 // chunk-size × N-workers of transient heap.
-func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, agg *Aggregator, workerID, numWorkers int) error {
+func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, fetched fetchedChunk, agg *Aggregator, workerID, numWorkers int) error {
 	log := zerolog.Ctx(ctx)
-
-	body, dlResult, err := p.s3Client.DownloadObjectTo(ctx, job.bucket, job.key, p.tempDir)
-	if err != nil {
-		return fmt.Errorf("download object: %w", err)
-	}
-	if job.config.fileSize > 0 && dlResult.BytesDownloaded != job.config.fileSize {
-		_ = body.Close()
-
-		return fmt.Errorf("%w: %s is %d bytes, the manifest says %d",
-			ErrChunkSizeMismatch, job.key, dlResult.BytesDownloaded, job.config.fileSize)
-	}
+	job, body, dlResult := fetched.job, fetched.body, fetched.result
 
 	// The Parquet reader reads the file through ReaderAt and never closes
 	// it; closing here removes every chunk from scratch once parsed. The
@@ -720,6 +772,7 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 	defer func() { _ = body.Close() }()
 
 	parseStart := time.Now()
+	var err error
 	var reader s3inventory.Reader
 	if job.config.format == s3fetch.InventoryFormatParquet {
 		reader, err = openParquetReader(body, job.config.fileSize, p.tempDir)
