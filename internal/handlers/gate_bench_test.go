@@ -112,3 +112,11 @@ func BenchmarkGateBrowseWideByName(b *testing.B) {
 func BenchmarkGateCompareWide(b *testing.B) {
 	benchGet(b, wideRouter(b), "/api/compare?from="+gateFromID+"&to="+gateToID)
 }
+
+func BenchmarkGateBrowseWideByCost(b *testing.B) {
+	benchGet(b, wideRouter(b), "/api/browse?inventory_id="+gateFromID+"&sort=cost&dir=desc")
+}
+
+func BenchmarkGateCompareWideByCost(b *testing.B) {
+	benchGet(b, wideRouter(b), "/api/compare?from="+gateFromID+"&to="+gateToID+"&sort=cost&dir=desc")
+}
