@@ -52,6 +52,30 @@ const (
 	replacedSuffix = ".replaced-"
 )
 
+// LeftoverBase reports whether name is a staging or replaced-index
+// directory this package creates beside an output directory, and the
+// output directory's base name if so.
+func LeftoverBase(name string) (string, bool) {
+	rest, ok := strings.CutPrefix(name, ".")
+	if !ok {
+		return "", false
+	}
+	for _, suffix := range []string{stagingSuffix, replacedSuffix} {
+		if i := strings.LastIndex(rest, suffix); i > 0 {
+			return rest[:i], true
+		}
+	}
+
+	return "", false
+}
+
+// ReclaimStaleDirs is reclaimStaleDirs for callers outside a build:
+// it removes the leftovers of killed builds beside outDir, moving a
+// previous index back when outDir is missing.
+func ReclaimStaleDirs(log *zerolog.Logger, outDir string) error {
+	return reclaimStaleDirs(log, outDir)
+}
+
 // newStagingDir creates the hidden sibling directory the index is built
 // in. Being a sibling keeps the final rename on one filesystem.
 func newStagingDir(outDir string) (string, error) {

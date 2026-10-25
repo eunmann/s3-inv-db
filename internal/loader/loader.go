@@ -16,6 +16,7 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
+	"github.com/rs/zerolog"
 )
 
 //nolint:gochecknoglobals // shared no-op closure so BuildWith doesn't allocate per call
@@ -57,8 +58,9 @@ func (l *Loader) CacheDirFor(key inventory.CacheKey) (string, error) {
 // callback, if non-nil, receives stage transitions and per-chunk
 // quantitative progress for UI ETA. The eventBus, if non-nil, is
 // plumbed to the pipeline so subscribers (e.g. jobs.Recorder) can
-// build a fine-grained stage timeline. Partial builds are not safe to
-// resume — the cache dir is cleared first.
+// build a fine-grained stage timeline. A previous index in the cache
+// dir stays until the new one replaces it (the pipeline publishes by
+// rename), so a failed or cancelled rebuild keeps it.
 func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifestURI string, onProgress func(stage string, done, total int64), eventBus *events.Bus) (string, error) {
 	outDir, err := l.CacheDirFor(key)
 	if err != nil {
@@ -72,8 +74,8 @@ func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifest
 	}
 
 	onProgress("preparing", 0, 0)
-	if err := os.RemoveAll(outDir); err != nil {
-		return "", fmt.Errorf("clear cache dir: %w", err)
+	if err := clearNonIndex(outDir); err != nil {
+		return "", err
 	}
 	if err := os.MkdirAll(filepath.Dir(outDir), format.DirPerm); err != nil {
 		return "", fmt.Errorf("ensure cache parent: %w", err)
@@ -95,6 +97,21 @@ func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifest
 	// job.Stage = "done" while job.State was still Running.
 
 	return outDir, nil
+}
+
+// clearNonIndex removes outDir when it exists but holds no index (no
+// manifest), so the pipeline, which only ever replaces an index, can
+// publish there. A complete previous index is left for the pipeline to
+// replace atomically.
+func clearNonIndex(outDir string) error {
+	if _, err := os.Stat(filepath.Join(outDir, format.ManifestFile)); err == nil {
+		return nil
+	}
+	if err := os.RemoveAll(outDir); err != nil {
+		return fmt.Errorf("clear cache dir: %w", err)
+	}
+
+	return nil
 }
 
 // RemoveCache deletes a run's on-disk cache. Used by Unload to free
@@ -154,3 +171,103 @@ var (
 	errEmptyManifest  = errors.New("manifest URI is required")
 	errUnsafeCacheKey = errors.New("cache key segment is not a plain path element")
 )
+
+// Reconcile cleans the cache root at startup, removing only what the
+// server provably created: the leftovers of killed builds (handled as
+// a build would, so a previous index moved aside is restored rather
+// than lost), and run directories holding an index (their manifest
+// parses) for runs keep reports false. Anything else under the root is
+// left alone, so a cache root pointed at a directory with other content
+// loses nothing. It returns the run directories it removed.
+func (l *Loader) Reconcile(log *zerolog.Logger, keep func(inventory.CacheKey) bool) ([]string, error) {
+	var removed []string
+	sources, err := readDirs(l.cacheRoot)
+	if err != nil {
+		return nil, err
+	}
+	for _, src := range sources {
+		invs, err := readDirs(filepath.Join(l.cacheRoot, src))
+		if err != nil {
+			return removed, err
+		}
+		for _, inv := range invs {
+			invDir := filepath.Join(l.cacheRoot, src, inv)
+			if err := reclaimLeftovers(log, invDir); err != nil {
+				return removed, err
+			}
+			runs, err := readDirs(invDir)
+			if err != nil {
+				return removed, err
+			}
+			for _, run := range runs {
+				dir := filepath.Join(invDir, run)
+				if strings.HasPrefix(run, ".") || keep(inventory.CacheKey{SourceBucket: src, InventoryID: inv, Run: run}) {
+					continue
+				}
+				if !isIndexDir(dir) {
+					continue // not an index this server wrote
+				}
+				if err := os.RemoveAll(dir); err != nil {
+					return removed, fmt.Errorf("remove %s: %w", dir, err)
+				}
+				removed = append(removed, dir)
+			}
+		}
+	}
+
+	return removed, nil
+}
+
+// isIndexDir reports whether dir holds an index this project wrote: a
+// manifest that parses and lists the core stats file. Any format
+// version qualifies; an unrelated manifest.json does not.
+func isIndexDir(dir string) bool {
+	m, err := format.ReadManifest(dir)
+	if err != nil {
+		return false
+	}
+	_, ok := m.Files[format.CoreStatsFile]
+
+	return ok
+}
+
+// reclaimLeftovers runs the pipeline's own stale-directory reclaim for
+// every run in invDir that has build leftovers beside it.
+func reclaimLeftovers(log *zerolog.Logger, invDir string) error {
+	names, err := readDirs(invDir)
+	if err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, name := range names {
+		base, ok := extsort.LeftoverBase(name)
+		if !ok || seen[base] {
+			continue
+		}
+		seen[base] = true
+		if err := extsort.ReclaimStaleDirs(log, filepath.Join(invDir, base)); err != nil {
+			return fmt.Errorf("reclaim build leftovers in %s: %w", invDir, err)
+		}
+	}
+
+	return nil
+}
+
+// readDirs lists the subdirectory names of dir; a missing dir has none.
+func readDirs(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", dir, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+
+	return names, nil
+}

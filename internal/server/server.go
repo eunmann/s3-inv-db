@@ -153,6 +153,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	// values (logger, request id) but drops cancellation.
 	startupCtx := context.WithoutCancel(ctx)
 	s.recover(startupCtx, cfg.Logger)
+	s.reconcileCache(cfg.Logger)
 	s.backfillIndexSizes(startupCtx, cfg.Logger)
 
 	return s, nil
@@ -386,6 +387,27 @@ func (s *Server) recover(ctx context.Context, logger zerolog.Logger) {
 		// so no explicit Upsert is required here — but for the
 		// StateLoading→StateError flip we performed above the input,
 		// Hydrate's mirror already wrote the corrected state.
+	}
+}
+
+// reconcileCache removes, after recover, the cache directories of runs
+// that aren't loaded and the leftovers of killed builds, so disk use
+// matches what the budget counts. See loader.Reconcile for what it may
+// remove. Best-effort: failures are logged.
+func (s *Server) reconcileCache(logger zerolog.Logger) {
+	if s.bldr == nil {
+		return
+	}
+	removed, err := s.bldr.Reconcile(&logger, func(key inventory.CacheKey) bool {
+		info, ok := s.manager.Get(inventory.ID(key.SourceBucket + "/" + key.InventoryID + "/" + key.Run))
+
+		return ok && info.State == inventory.StateLoaded
+	})
+	if err != nil {
+		logger.Error().Err(err).Msg("reconcile cache dir")
+	}
+	for _, dir := range removed {
+		logger.Info().Str("dir", dir).Msg("removed cache of a run that isn't loaded")
 	}
 }
 
