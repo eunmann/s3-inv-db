@@ -264,7 +264,9 @@ func encodeCSVGz(srcBucket string, objects []benchutil.FakeObject) (csvGzPayload
 
 	mapping := tiers.NewMapping()
 	now := time.Now().UTC().Format(time.RFC3339)
-	etag := `"0000000000000000000000000000000000"`
+	// S3 Inventory writes the ETag's hex without the quotes the HTTP
+	// header carries.
+	etag := "00000000000000000000000000000000"
 
 	for _, o := range objects {
 		cols, err := tierToS3Columns(mapping, o.TierID)
