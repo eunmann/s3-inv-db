@@ -28,7 +28,6 @@ type ChildPage struct {
 type CostFunc func(pos uint64) uint64
 
 type childKey struct {
-	name   string // the child's segment, read once, when sorting by name
 	pos    uint64
 	metric uint64
 }
@@ -44,15 +43,9 @@ func PageChildren(idx *indexread.Index, parentPos uint64, q ChildQuery, cost Cos
 	if err != nil {
 		return ChildPage{}, fmt.Errorf("children: %w", err)
 	}
-	byNameOnly := q.SortBy == SortColSegment || q.SortBy == ""
 	keys := make([]childKey, len(positions))
 	for i, pos := range positions {
 		keys[i] = childKey{pos: pos, metric: childMetric(idx, pos, q.SortBy, cost)}
-		if byNameOnly {
-			// Every comparison needs both names: read each once rather
-			// than twice per comparison (c log c reads).
-			keys[i].name = idx.ChildSegment(pos)
-		}
 	}
 	desc := q.Dir == SortDirDesc
 	slices.SortStableFunc(keys, func(a, b childKey) int {
@@ -65,13 +58,8 @@ func PageChildren(idx *indexread.Index, parentPos uint64, q ChildQuery, cost Cos
 		if c != 0 {
 			return c
 		}
-		var byName int
-		if byNameOnly {
-			byName = cmp.Compare(a.name, b.name)
-		} else { // ties on a metric are rare: read their names on demand
-			byName = cmp.Compare(idx.ChildSegment(a.pos), idx.ChildSegment(b.pos))
-		}
-		if byNameOnly && desc {
+		byName := cmp.Compare(idx.ChildSegment(a.pos), idx.ChildSegment(b.pos))
+		if (q.SortBy == SortColSegment || q.SortBy == "") && desc {
 			return -byName
 		}
 
