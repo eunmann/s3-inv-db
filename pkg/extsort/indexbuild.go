@@ -17,41 +17,47 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// IndexBuilder builds index files directly from a sorted stream of PrefixRows.
-// It processes prefixes in a single streaming pass, computing preorder positions
-// and subtree ranges on the fly without building an in-memory trie.
+// IndexBuilder builds index files from a sorted stream of PrefixRows.
 //
-// The builder uses a depth stack to track ancestors and close subtrees as
-// prefixes are processed in sorted (preorder) order.
+// Rows arrive in key order (preorder); the index numbers them in level
+// order: the root, every depth-1 prefix, every depth-2 prefix, each
+// depth in key order. A depth's rows are then contiguous, so a
+// prefix's children are the rows from its child start to the next
+// row's, and scans of a level read its rows in sequence. Add checks
+// each row against its ancestors (a depth stack) and spools it by
+// depth (levelSpool); Finalize replays the depths in order into the
+// index writers.
 //
-// Memory usage is bounded: prefix strings are written to disk during construction
-// (via StreamingMPHFBuilder). Subtree arrays remain in memory (~12 bytes per prefix)
-// which is much smaller than storing all prefix strings (~50+ bytes each).
+// Memory is bounded: rows and prefix hashes go to disk, and the stack
+// holds one entry per depth.
 type IndexBuilder struct {
-	coreStatsW        *format.CoreStatsBuilder
-	tierStatsW        *format.TierStatsWriter
-	mphfBuilder       *format.StreamingMPHFBuilder
-	prefixTreeW       *format.PrefixTreeWriter
-	depthIndexBuilder *format.DepthIndexBuilder
-	declaredTiers     []tiers.ID
-	resolvedTiers     []tiers.ID
-	outDir            string
-	tempDir           string
-	stack             []stackEntry
-	posCount          uint64
-	maxDepth          uint32
-	tiersDeclared     bool
-	closed            bool
+	coreStatsW    *format.CoreStatsBuilder
+	tierStatsW    *format.TierStatsWriter
+	mphfBuilder   *format.StreamingMPHFBuilder
+	prefixTreeW   *format.PrefixTreeWriter
+	spool         *levelSpool
+	levelRows     []uint64 // rows seen so far at each depth
+	declaredTiers []tiers.ID
+	resolvedTiers []tiers.ID
+	outDir        string
+	tempDir       string
+	stack         []stackEntry
+	rec           spoolRecord
+	posCount      uint64
+	maxDepth      uint32
+	tiersDeclared bool
+	closed        bool
 	// createdOutDir is true when NewIndexBuilder created outDir, so
 	// cleanup may remove it. A directory that already existed is never
 	// removed: it may hold the caller's other files.
 	createdOutDir bool
 }
 
-// stackEntry tracks an open prefix on the stack.
+// stackEntry tracks an open prefix on the stack: its index within its
+// depth.
 type stackEntry struct {
 	prefix string
-	pos    uint64
+	local  uint64
 }
 
 // NewIndexBuilder creates a streaming index builder.
@@ -76,9 +82,13 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		tempDir = os.TempDir()
 	}
 
+	spoolDir, err := os.MkdirTemp(tempDir, "level-spool-")
+	if err != nil {
+		return nil, fmt.Errorf("create level spool dir: %w", err)
+	}
 	mphfBuilder, err := format.NewStreamingMPHFBuilder(tempDir)
 	if err != nil {
-		return nil, fmt.Errorf("create MPHF builder: %w", err)
+		return nil, errors.Join(fmt.Errorf("create MPHF builder: %w", err), os.RemoveAll(spoolDir))
 	}
 
 	arrayCap := max(capacityHint, uint64(1024))
@@ -87,7 +97,7 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 	if err != nil {
 		mphfBuilder.Close()
 
-		return nil, fmt.Errorf("create core stats builder: %w", err)
+		return nil, errors.Join(fmt.Errorf("create core stats builder: %w", err), os.RemoveAll(spoolDir))
 	}
 
 	prefixTreeW, err := format.NewPrefixTreeWriter(outDir)
@@ -95,18 +105,18 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		mphfBuilder.Close()
 		coreStatsW.Close()
 
-		return nil, fmt.Errorf("create prefix tree writer: %w", err)
+		return nil, errors.Join(fmt.Errorf("create prefix tree writer: %w", err), os.RemoveAll(spoolDir))
 	}
 
 	b := &IndexBuilder{
-		outDir:            outDir,
-		tempDir:           tempDir,
-		coreStatsW:        coreStatsW,
-		mphfBuilder:       mphfBuilder,
-		prefixTreeW:       prefixTreeW,
-		depthIndexBuilder: format.NewDepthIndexBuilder(tempDir),
-		stack:             make([]stackEntry, 0, 32),
-		createdOutDir:     createdOutDir,
+		outDir:        outDir,
+		tempDir:       tempDir,
+		coreStatsW:    coreStatsW,
+		mphfBuilder:   mphfBuilder,
+		prefixTreeW:   prefixTreeW,
+		spool:         &levelSpool{dir: spoolDir},
+		stack:         make([]stackEntry, 0, 32),
+		createdOutDir: createdOutDir,
 	}
 
 	// The tier-stats writer is created lazily on the first Add, once
@@ -169,8 +179,9 @@ func (b *IndexBuilder) cleanup() {
 	if b.tierStatsW != nil {
 		_ = b.tierStatsW.Abort()
 	}
-	if b.depthIndexBuilder != nil {
-		b.depthIndexBuilder.Close()
+	if b.spool != nil {
+		_ = b.spool.close()
+		_ = os.RemoveAll(b.spool.dir)
 	}
 	if b.createdOutDir {
 		os.RemoveAll(b.outDir)
@@ -203,71 +214,64 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 		return fmt.Errorf("%w: %q after %q", ErrUnsortedInput, row.Prefix, b.stack[n-1].prefix)
 	}
 	commonDepth := b.findCommonAncestorDepth(row.Prefix)
-	if err := b.closeNodesAbove(commonDepth); err != nil {
-		return err
-	}
-	if err := b.addToPrefixTree(row.Prefix); err != nil {
+	b.closeNodesAbove(commonDepth)
+	name, err := b.segmentOf(row.Prefix)
+	if err != nil {
 		return err
 	}
 	// The parent check proves the prefix's depth is the stack depth; a
-	// row that says otherwise would land in the wrong depth list.
+	// row that says otherwise would land in the wrong level.
 	if int(row.Depth) != len(b.stack) {
 		return fmt.Errorf("%w: %q has depth %d, its place in the tree says %d",
 			ErrDepthMismatch, row.Prefix, row.Depth, len(b.stack))
 	}
 
-	pos := b.posCount
-	b.posCount++
-
-	b.stack = append(b.stack, stackEntry{prefix: row.Prefix, pos: pos})
-
-	if uint32(row.Depth) > b.maxDepth {
-		b.maxDepth = uint32(row.Depth)
+	depth := len(b.stack)
+	for len(b.levelRows) <= depth+1 {
+		b.levelRows = append(b.levelRows, 0)
 	}
-
-	if err := b.depthIndexBuilder.Add(pos, uint32(row.Depth), row.Count, row.TotalBytes); err != nil {
-		return fmt.Errorf("add to depth index: %w", err)
+	r := &b.rec
+	r.count, r.bytes = row.Count, row.TotalBytes
+	// Every row of the next depth so far belongs to an earlier prefix,
+	// so this prefix's children start where they end.
+	r.childLocal = b.levelRows[depth+1]
+	r.parentLocal = 0
+	if depth > 0 {
+		r.parentLocal = b.stack[depth-1].local
 	}
-	// The MPHF numbers prefixes in the order they are added: preorder.
-	if err := b.mphfBuilder.Add(row.Prefix); err != nil {
-		return fmt.Errorf("add to MPHF builder: %w", err)
-	}
-
-	if err := b.ensureTierWriter(); err != nil {
+	r.keyHash, r.fp = b.mphfBuilder.KeyHashes(row.Prefix)
+	r.name = append(r.name[:0], name...)
+	r.tierCounts, r.tierBytes = row.TierCounts, row.TierBytes
+	if err := b.spool.add(depth, r); err != nil {
 		return err
 	}
-	mask, err := b.tierStatsW.Add(&row.TierCounts, &row.TierBytes, row.Count, row.TotalBytes)
-	if err != nil {
-		return fmt.Errorf("prefix %q: write tier stats: %w", row.Prefix, err)
-	}
-	if err := b.coreStatsW.Add(row.Count, row.TotalBytes, row.Depth, mask); err != nil {
-		return fmt.Errorf("write core stats row: %w", err)
-	}
+
+	b.stack = append(b.stack, stackEntry{prefix: row.Prefix, local: b.levelRows[depth]})
+	b.levelRows[depth]++
+	b.posCount++
+	b.maxDepth = max(b.maxDepth, uint32(depth))
 
 	return nil
 }
 
-// addToPrefixTree adds prefix as the open prefix at the top of the
-// stack plus one segment and a slash, or as the root when it comes
-// first.
-func (b *IndexBuilder) addToPrefixTree(prefix string) error {
+// segmentOf returns prefix's last segment, without its slash: prefix
+// must be the open prefix at the top of the stack plus that segment
+// and a slash, or the root when it comes first.
+func (b *IndexBuilder) segmentOf(prefix string) (string, error) {
 	if len(b.stack) == 0 {
 		if prefix != "" || b.posCount != 0 {
-			return fmt.Errorf("%w: %q", ErrMissingParent, prefix)
+			return "", fmt.Errorf("%w: %q", ErrMissingParent, prefix)
 		}
 
-		return b.prefixTreeW.AddRoot() //nolint:wrapcheck // the writer's errors carry their own context
+		return "", nil
 	}
 	parent := b.stack[len(b.stack)-1]
 	name, ok := strings.CutSuffix(strings.TrimPrefix(prefix, parent.prefix), "/")
 	if !ok || strings.Contains(name, "/") {
-		return fmt.Errorf("%w: %q after %q", ErrMissingParent, prefix, parent.prefix)
-	}
-	if err := b.prefixTreeW.Add(parent.pos, name); err != nil {
-		return fmt.Errorf("prefix %q: %w", prefix, err)
+		return "", fmt.Errorf("%w: %q after %q", ErrMissingParent, prefix, parent.prefix)
 	}
 
-	return nil
+	return name, nil
 }
 
 // findCommonAncestorDepth finds the depth of the deepest common
@@ -285,30 +289,8 @@ func (b *IndexBuilder) findCommonAncestorDepth(prefix string) int {
 }
 
 // closeNodesAbove closes all stack nodes with depth > targetDepth.
-func (b *IndexBuilder) closeNodesAbove(targetDepth int) error {
-	for len(b.stack) > targetDepth {
-		if err := b.closeTopNode(); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// closeTopNode closes the node at the top of the stack.
-func (b *IndexBuilder) closeTopNode() error {
-	if len(b.stack) == 0 {
-		return nil
-	}
-
-	top := b.stack[len(b.stack)-1]
-	b.stack = b.stack[:len(b.stack)-1]
-
-	if err := b.coreStatsW.SetSubtree(top.pos, b.posCount-1); err != nil {
-		return fmt.Errorf("set subtree_end: %w", err)
-	}
-
-	return nil
+func (b *IndexBuilder) closeNodesAbove(targetDepth int) {
+	b.stack = b.stack[:min(len(b.stack), targetDepth)]
 }
 
 // AddAll processes all PrefixRows from an iterator, checking ctx for
@@ -383,8 +365,12 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 
 	log.Debug().Msg("index builder: starting Finalize")
 
-	if err := b.closeNodesAbove(0); err != nil {
-		return fmt.Errorf("close remaining nodes: %w", err)
+	b.closeNodesAbove(0)
+
+	log.Debug().Uint64("prefix_count", b.posCount).Msg("index builder: writing rows in level order")
+
+	if err := b.writeLevels(); err != nil {
+		return err
 	}
 
 	log.Debug().
@@ -393,12 +379,6 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 
 	if err := b.closeStreamingWriters(); err != nil {
 		return err
-	}
-
-	log.Debug().Msg("index builder: building depth index")
-
-	if err := b.depthIndexBuilder.Build(b.outDir); err != nil {
-		return fmt.Errorf("build depth index: %w", err)
 	}
 
 	log.Debug().
@@ -428,6 +408,69 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	log.Debug().
 		Str("total_duration", humanfmt.Duration(time.Since(startTime))).
 		Msg("index builder: Finalize complete")
+
+	return nil
+}
+
+// writeLevels replays the spooled rows depth by depth into the index
+// writers, so every per-row file is in level order. A row's child start
+// and parent become rows once every depth's size is known: the first
+// row of a depth is the number of rows above it.
+func (b *IndexBuilder) writeLevels() error {
+	if err := b.spool.finish(); err != nil {
+		return err
+	}
+	depthW, err := format.NewDepthIndexWriter(b.outDir)
+	if err != nil {
+		return fmt.Errorf("create depth index: %w", err)
+	}
+	starts := make([]uint64, len(b.levelRows)+1)
+	for d, n := range b.levelRows {
+		starts[d+1] = starts[d] + n
+	}
+	if b.posCount > 0 {
+		if err := b.ensureTierWriter(); err != nil {
+			return errors.Join(err, depthW.Abort())
+		}
+	}
+	for depth := range len(b.spool.depths) {
+		err := b.spool.read(depth, func(r *spoolRecord) error {
+			return b.writeRow(depthW, starts, depth, r)
+		})
+		if err != nil {
+			return errors.Join(err, depthW.Abort())
+		}
+	}
+	if err := depthW.Close(); err != nil {
+		return fmt.Errorf("write depth index: %w", err)
+	}
+
+	return os.RemoveAll(b.spool.dir) //nolint:wrapcheck // the path is in the error
+}
+
+// writeRow writes one spooled row, the next in level order.
+func (b *IndexBuilder) writeRow(depthW *format.DepthIndexWriter, starts []uint64, depth int, r *spoolRecord) error {
+	mask, err := b.tierStatsW.Add(&r.tierCounts, &r.tierBytes, r.count, r.bytes)
+	if err != nil {
+		return fmt.Errorf("prefix segment %q at depth %d: write tier stats: %w", r.name, depth, err)
+	}
+	if err := b.coreStatsW.Add(r.count, r.bytes, starts[depth+1]+r.childLocal, mask); err != nil {
+		return fmt.Errorf("write core stats row: %w", err)
+	}
+	if depth == 0 {
+		err = b.prefixTreeW.AddRoot()
+	} else {
+		err = b.prefixTreeW.Add(starts[depth-1]+r.parentLocal, string(r.name))
+	}
+	if err != nil {
+		return fmt.Errorf("prefix segment %q at depth %d: %w", r.name, depth, err)
+	}
+	if err := b.mphfBuilder.AddHashed(r.keyHash, r.fp); err != nil {
+		return fmt.Errorf("add to MPHF builder: %w", err)
+	}
+	if err := depthW.Add(uint32(depth), r.count, r.bytes); err != nil {
+		return fmt.Errorf("add to depth index: %w", err)
+	}
 
 	return nil
 }

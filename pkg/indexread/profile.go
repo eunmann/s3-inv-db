@@ -37,7 +37,7 @@ type Profile struct {
 const (
 	FieldObjectCount    = "object_count"
 	FieldTotalBytes     = "total_bytes"
-	FieldSubtreeSize    = "subtree_size"
+	FieldChildStart     = "child_start"
 	FieldParentDistance = "parent_distance"
 	FieldChildren       = "children"
 	FieldTierCount      = "tier_count"
@@ -95,7 +95,7 @@ func (idx *Index) Profile() *Profile {
 		Fields:         map[string]*FieldProfile{},
 	}
 	for _, name := range []string{
-		FieldObjectCount, FieldTotalBytes, FieldSubtreeSize,
+		FieldObjectCount, FieldTotalBytes, FieldChildStart,
 		FieldParentDistance, FieldChildren, FieldTierCount, FieldTierBytes,
 	} {
 		p.Fields[name] = &FieldProfile{}
@@ -104,38 +104,23 @@ func (idx *Index) Profile() *Profile {
 	p.Segments, p.SegmentBytes = seg.Count, seg.Bytes
 
 	tierSets := map[uint16]struct{}{}
-	// ancestors holds the open path from the root; children counts the
-	// child prefixes of each entry.
-	type open struct{ pos, children uint64 }
-	var ancestors []open
-	closeTo := func(depth int) {
-		for len(ancestors) > depth {
-			top := ancestors[len(ancestors)-1]
-			if top.children > 0 {
-				p.Fields[FieldChildren].add(top.children)
-			}
-			ancestors = ancestors[:len(ancestors)-1]
-		}
-	}
 	for pos := range idx.count {
 		st := idx.Stats(pos)
 		p.Fields[FieldObjectCount].add(st.ObjectCount)
 		p.Fields[FieldTotalBytes].add(st.TotalBytes)
-		end := idx.SubtreeEnd(pos)
-		p.Fields[FieldSubtreeSize].add(end - pos)
-		if end == pos {
+		p.Depths[idx.Depth(pos)]++
+		// Rows are in level order: pos's children are the rows from its
+		// child start to the next row's.
+		first, end := idx.coreStats.UnsafeChildStart(pos), idx.coreStats.UnsafeChildStart(pos+1)
+		p.Fields[FieldChildStart].add(first)
+		if end == first {
 			p.Leaves++
+		} else {
+			p.Fields[FieldChildren].add(end - first)
 		}
-		depth := idx.Depth(pos)
-		p.Depths[depth]++
-
-		closeTo(int(depth))
-		if len(ancestors) > 0 {
-			parent := &ancestors[len(ancestors)-1]
-			parent.children++
-			p.Fields[FieldParentDistance].add(pos - parent.pos)
+		for c := first; c < end; c++ {
+			p.Fields[FieldParentDistance].add(c - pos)
 		}
-		ancestors = append(ancestors, open{pos: pos})
 
 		var set uint16
 		for _, t := range idx.TierBreakdown(pos) {
@@ -149,7 +134,6 @@ func (idx *Index) Profile() *Profile {
 		p.TiersPerPrefix[bits.OnesCount16(set)]++
 		tierSets[set] = struct{}{}
 	}
-	closeTo(0)
 	p.TierSets = len(tierSets)
 
 	return p

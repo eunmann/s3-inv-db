@@ -115,7 +115,11 @@ func BenchmarkDescendantsSubtree(b *testing.B) {
 		if !ok {
 			continue
 		}
-		subtreeSize := bi.idx.SubtreeEnd(pos) - pos
+		children, err := bi.idx.DescendantSpan(pos, 1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		subtreeSize := children.Len()
 		if subtreeSize > 5 && subtreeSize < 50 && smallSubtreePrefix == "" {
 			smallSubtreePrefix = p
 			smallCount = int(subtreeSize)

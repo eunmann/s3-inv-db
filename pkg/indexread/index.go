@@ -98,8 +98,7 @@ func (idx *Index) checkCounts() error {
 	}{
 		{"MPHF", idx.mphf.Count()},
 		{"prefix tree", idx.prefixes.Count()},
-		{"depth positions", idx.depthIndex.Count()},
-		{"depth offsets end", idx.depthIndex.End()},
+		{"depth offsets end", idx.depthIndex.Count()},
 	}
 	for _, c := range counts {
 		if c.n != idx.count {
@@ -127,7 +126,9 @@ type Stats struct {
 	TotalBytes  uint64
 }
 
-// Lookup returns the preorder position for a prefix, or ok=false if not found.
+// Lookup returns the position (row) of a prefix, or ok=false if not
+// found. Rows are in level order: the root, then every depth-1 prefix,
+// then every depth-2 prefix, each depth in key order.
 func (idx *Index) Lookup(prefix string) (uint64, bool) {
 	pos, ok := idx.mphf.Lookup(prefix)
 	if pos >= idx.count {
@@ -162,25 +163,18 @@ func (idx *Index) StatsForPrefix(prefix string) (Stats, bool) {
 	return idx.Stats(pos), true
 }
 
+// Depth returns the depth of the prefix at pos: 0 for the root.
 func (idx *Index) Depth(pos uint64) uint32 {
 	if pos >= idx.count {
 		return 0
 	}
 
-	return idx.coreStats.UnsafeDepth(pos)
-}
-
-func (idx *Index) SubtreeEnd(pos uint64) uint64 {
-	if pos >= idx.count {
-		return 0
-	}
-
-	return idx.coreStats.UnsafeSubtreeEnd(pos)
+	return idx.depthIndex.DepthOf(pos)
 }
 
 // HasChildren reports whether the prefix at pos has a child prefix.
 func (idx *Index) HasChildren(pos uint64) bool {
-	return pos < idx.count && idx.coreStats.UnsafeSubtreeEnd(pos) > pos
+	return pos < idx.count && idx.coreStats.UnsafeChildStart(pos+1) > idx.coreStats.UnsafeChildStart(pos)
 }
 
 func (idx *Index) PrefixString(pos uint64) (string, error) {
@@ -205,31 +199,31 @@ func (idx *Index) MaxDepth() uint32 { return idx.maxDepth }
 //
 // An empty slice indicates no descendants at that depth (valid but empty result).
 func (idx *Index) DescendantsAtDepth(prefixPos uint64, relDepth int) ([]uint64, error) {
-	span, err := idx.descendantSpan(prefixPos, relDepth)
-	if err != nil || span.Len() == 0 {
-		return nil, err
+	span := idx.descendantSpan(prefixPos, relDepth)
+	if span.Len() == 0 {
+		return nil, nil
 	}
 
 	positions := make([]uint64, span.Len())
 	for i := range positions {
-		positions[i] = idx.depthIndex.PositionAt(span.Lo + uint64(i))
+		positions[i] = span.Lo + uint64(i)
 	}
 
 	return positions, nil
 }
 
-// DescendantSpan returns the depth-index span holding prefixPos's
-// descendants at relDepth, in index order: Len() of them, read with
-// PositionsInSpan. It is the search DescendantsAtDepth starts with, for
-// callers that need the count before choosing which positions to read.
+// DescendantSpan returns the rows of prefixPos's descendants at
+// relDepth, in key order: Len() of them, read with PositionsInSpan. It
+// is what DescendantsAtDepth starts with, for callers that need the
+// count before choosing which positions to read.
 func (idx *Index) DescendantSpan(prefixPos uint64, relDepth int) (format.Span, error) {
-	return idx.descendantSpan(prefixPos, relDepth)
+	return idx.descendantSpan(prefixPos, relDepth), nil
 }
 
 // SpanPosition returns the position of span's i-th entry, for walking a
 // span in place; i must be below span.Len().
 func (idx *Index) SpanPosition(span format.Span, i uint64) uint64 {
-	return idx.depthIndex.PositionAt(span.Lo + i)
+	return span.Lo + i
 }
 
 // PositionsInSpan returns the positions of span's entries
@@ -239,37 +233,42 @@ func (idx *Index) PositionsInSpan(span format.Span, offset, limit int) []uint64 
 	start := min(max(offset, 0), total)
 	positions := make([]uint64, min(max(limit, 0), total-start))
 	for i := range positions {
-		positions[i] = idx.depthIndex.PositionAt(span.Lo + uint64(start+i))
+		positions[i] = span.Lo + uint64(start+i)
 	}
 
 	return positions
 }
 
-// descendantSpan returns the depth-index span holding the descendants
-// of prefixPos at relDepth; it is empty when there are none or the
-// input is invalid (see DescendantsAtDepth).
-func (idx *Index) descendantSpan(prefixPos uint64, relDepth int) (format.Span, error) {
-	span, _, err := idx.descendantSpanAt(prefixPos, relDepth)
+// descendantSpan returns the rows of prefixPos's descendants at
+// relDepth; it is empty when there are none or the input is invalid
+// (see DescendantsAtDepth).
+func (idx *Index) descendantSpan(prefixPos uint64, relDepth int) format.Span {
+	span, _ := idx.descendantSpanAt(prefixPos, relDepth)
 
-	return span, err
+	return span
 }
 
 // descendantSpanAt is descendantSpan with the depth the span lies at.
-func (idx *Index) descendantSpanAt(prefixPos uint64, relDepth int) (format.Span, uint32, error) {
+func (idx *Index) descendantSpanAt(prefixPos uint64, relDepth int) (format.Span, uint32) { //nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
 	if prefixPos >= idx.count || relDepth < 0 {
-		return format.Span{}, 0, nil
+		return format.Span{}, 0
 	}
 	targetDepth := idx.Depth(prefixPos) + uint32(relDepth)
 	if targetDepth > idx.maxDepth {
-		return format.Span{}, 0, nil
+		return format.Span{}, 0
 	}
 
-	span, err := idx.depthIndex.SubtreeSpan(targetDepth, prefixPos, idx.SubtreeEnd(prefixPos))
-	if err != nil {
-		return format.Span{}, 0, fmt.Errorf("get positions at depth %d: %w", targetDepth, err)
+	// Level order keeps each level's descendants contiguous: the
+	// children of rows [lo, hi) are rows [childStart(lo), childStart(hi)).
+	span := format.Span{Lo: prefixPos, Hi: prefixPos + 1}
+	for range relDepth {
+		span = format.Span{Lo: idx.coreStats.UnsafeChildStart(span.Lo), Hi: idx.coreStats.UnsafeChildStart(span.Hi)}
+		if span.Len() == 0 {
+			return format.Span{}, targetDepth
+		}
 	}
 
-	return span, targetDepth, nil
+	return span, targetDepth
 }
 
 // Filter specifies criteria for filtering results.
@@ -316,10 +315,7 @@ type Page struct {
 // a block matches, or all of it does) and the rest are read entry by
 // entry.
 func (idx *Index) DescendantsPage(prefixPos uint64, relDepth int, filter Filter, offset, limit int) (Page, error) {
-	span, depth, err := idx.descendantSpanAt(prefixPos, relDepth)
-	if err != nil {
-		return Page{}, fmt.Errorf("get descendants at depth %d: %w", relDepth, err)
-	}
+	span, depth := idx.descendantSpanAt(prefixPos, relDepth)
 	offset, limit = max(offset, 0), max(limit, 0)
 	if filter.MinCount == 0 && filter.MinBytes == 0 {
 		return Page{Positions: idx.PositionsInSpan(span, offset, limit), Total: int(span.Len())}, nil
@@ -341,7 +337,7 @@ func (idx *Index) DescendantsPage(prefixPos uint64, relDepth int, filter Filter,
 			from := max(offset, page.Total)
 			to := min(offset+limit, page.Total+int(e.Len()))
 			for k := from; k < to; k++ {
-				page.Positions = append(page.Positions, idx.depthIndex.PositionAt(e.Lo+uint64(k-page.Total)))
+				page.Positions = append(page.Positions, e.Lo+uint64(k-page.Total))
 			}
 			page.Total += int(e.Len())
 		default:
@@ -356,7 +352,7 @@ func (idx *Index) DescendantsPage(prefixPos uint64, relDepth int, filter Filter,
 // those at match index [offset, offset+limit).
 func (idx *Index) filterInto(page *Page, span format.Span, filter Filter, offset, limit int) {
 	for i := span.Lo; i < span.Hi; i++ {
-		pos := idx.depthIndex.PositionAt(i)
+		pos := i
 		stats := idx.Stats(pos)
 		if stats.ObjectCount < filter.MinCount || stats.TotalBytes < filter.MinBytes {
 			continue

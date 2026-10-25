@@ -4,11 +4,9 @@ package format
 // builders and readers stay in sync; manifest verification also reads
 // from this list.
 const (
-	DepthOffsetsFile   = "depth_offsets.u64"
-	DepthPositionsFile = "depth_positions.u64"
-	DepthBlocksFile    = "depth_blocks.u64"
-	MPHFile            = "mph.bin"
-	ManifestFile       = "manifest.json"
-	TierStatsDir       = "tier_stats"
-	DepthBucketNameFmt = "depth_%02d"
+	DepthOffsetsFile = "depth_offsets.u64"
+	DepthBlocksFile  = "depth_blocks.u64"
+	MPHFile          = "mph.bin"
+	ManifestFile     = "manifest.json"
+	TierStatsDir     = "tier_stats"
 )

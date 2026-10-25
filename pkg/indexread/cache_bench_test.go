@@ -118,7 +118,7 @@ func sampleCacheKeys(dir string) (*cacheFixture, error) {
 			if strs[i], err = idx.PrefixString(pos); err != nil {
 				return nil, fmt.Errorf("prefix string: %w", err)
 			}
-			if len(f.parents[dist]) < cacheParents && idx.SubtreeEnd(pos) > pos {
+			if len(f.parents[dist]) < cacheParents && idx.HasChildren(pos) {
 				f.parents[dist] = append(f.parents[dist], pos)
 			}
 		}

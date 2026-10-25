@@ -14,14 +14,14 @@ import (
 // bucket-wide totals that would otherwise widen every row. A value that
 // doesn't fit its field is stored as the field's all-ones sentinel, the
 // row's bit is set in core_patch.rows, and its exact count, bytes and
-// subtree size go to core_patch.bin at the rank of that bit. The builder
+// child start go to core_patch.bin at the rank of that bit. The builder
 // picks the widths that make the core files smallest; when no narrower
 // width pays for its exceptions, there are none and no patch files.
 const (
 	CorePatchFile     = "core_patch.bin"
 	CorePatchRowsFile = "core_patch.rows"
 
-	// Each exception is three uint64s: count, bytes, subtree size.
+	// Each exception is three uint64s: count, bytes, child start.
 	corePatchRowBytes = 24
 )
 
@@ -42,7 +42,7 @@ func fieldNeed(v uint64) uint8 {
 }
 
 // patchHistogram counts rows by the widths their count, bytes and
-// subtree size need: hist[c][b][s] for widths 1..8 (index 0 unused).
+// child start need: hist[c][b][s] for widths 1..8 (index 0 unused).
 type patchHistogram [9][9][9]uint64
 
 func (h *patchHistogram) add(count, bytes, size uint64) {
@@ -57,7 +57,7 @@ type patchChoice struct {
 	cost               uint64
 }
 
-// exceptions counts the rows whose count, bytes or subtree size need
+// exceptions counts the rows whose count, bytes or child start need
 // more than the given widths.
 func (h *patchHistogram) exceptions(wc, wb, ws uint8) uint64 {
 	var e uint64
@@ -246,7 +246,7 @@ func (p *corePatch) check(rowCount uint64) error {
 	return nil
 }
 
-// value returns field f (0 count, 1 bytes, 2 subtree size) of the
+// value returns field f (0 count, 1 bytes, 2 child start) of the
 // exception at row pos, whose bit must be set.
 func (p *corePatch) value(pos uint64, f int) uint64 {
 	off := HeaderSize + p.rows.rank(pos)*corePatchRowBytes + uint64(f)*8

@@ -53,25 +53,29 @@ func TestBoundCodes(t *testing.T) {
 	}
 }
 
-// TestDepthBlocksBoundEveryEntry builds a depth index over random stats
-// and checks every block bounds each of its entries, and SpanBlocks
-// covers any span exactly.
+// TestDepthBlocksBoundEveryEntry writes a depth index over random
+// stats and checks every block bounds each of its rows, and SpanBlocks
+// covers any span of one depth exactly.
 func TestDepthBlocksBoundEveryEntry(t *testing.T) {
 	rng := rand.New(rand.NewPCG(3, 4))
-	const n = 5_000
 	type entry struct{ count, bytes uint64 }
-	stats := make([]entry, n)
-	depths := make([]uint32, n)
-	b := NewDepthIndexBuilder(t.TempDir())
-	for pos := range uint64(n) {
-		depths[pos] = uint32(rng.IntN(4))
-		stats[pos] = entry{rng.Uint64() >> rng.UintN(64), rng.Uint64() >> rng.UintN(64)}
-		if err := b.Add(pos, depths[pos], stats[pos].count, stats[pos].bytes); err != nil {
-			t.Fatal(err)
+	sizes := []int{1, 200, 64, 1500, 777}
+	var stats []entry
+	dir := t.TempDir()
+	w, err := NewDepthIndexWriter(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for depth, n := range sizes {
+		for range n {
+			e := entry{rng.Uint64() >> rng.UintN(64), rng.Uint64() >> rng.UintN(64)}
+			stats = append(stats, e)
+			if err := w.Add(uint32(depth), e.count, e.bytes); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	dir := t.TempDir()
-	if err := b.Build(dir); err != nil {
+	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 	d, err := OpenDepthIndex(dir)
@@ -79,10 +83,18 @@ func TestDepthBlocksBoundEveryEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	for depth := range uint32(4) {
-		full, err := d.SubtreeSpan(depth, 0, n-1)
-		if err != nil {
-			t.Fatal(err)
+	if d.Count() != uint64(len(stats)) || d.MaxDepth() != uint32(len(sizes)-1) {
+		t.Fatalf("count %d max depth %d, want %d and %d", d.Count(), d.MaxDepth(), len(stats), len(sizes)-1)
+	}
+	for depth := range uint32(len(sizes)) {
+		full := Span{Lo: d.Start(depth), Hi: d.Start(depth + 1)}
+		if full.Len() != uint64(sizes[depth]) {
+			t.Fatalf("depth %d has %d rows, want %d", depth, full.Len(), sizes[depth])
+		}
+		for row := full.Lo; row < full.Hi; row++ {
+			if got := d.DepthOf(row); got != depth {
+				t.Fatalf("DepthOf(%d) = %d, want %d", row, got, depth)
+			}
 		}
 		for range 50 {
 			lo := full.Lo + rng.Uint64N(full.Len())
@@ -97,9 +109,9 @@ func TestDepthBlocksBoundEveryEntry(t *testing.T) {
 				next = e.Hi
 				bb := blocks.Bounds(i)
 				for j := e.Lo; j < e.Hi; j++ {
-					s := stats[d.PositionAt(j)]
+					s := stats[j]
 					if s.count < bb.MinCount || s.count > bb.MaxCount || s.bytes < bb.MinBytes || s.bytes > bb.MaxBytes {
-						t.Fatalf("depth %d entry %d stats %+v outside block bounds %+v", depth, j, s, bb)
+						t.Fatalf("depth %d row %d stats %+v outside block bounds %+v", depth, j, s, bb)
 					}
 				}
 			}
@@ -111,31 +123,37 @@ func TestDepthBlocksBoundEveryEntry(t *testing.T) {
 }
 
 func TestOpenDepthIndexRejectsWrongBlockCount(t *testing.T) {
-	b := NewDepthIndexBuilder(t.TempDir())
-	for pos := range uint64(200) {
-		if err := b.Add(pos, 0, 1, 1); err != nil {
-			t.Fatal(err)
-		}
-	}
 	dir := t.TempDir()
-	if err := b.Build(dir); err != nil {
-		t.Fatal(err)
-	}
-	// One block too few: 200 entries need 4.
-	w, err := NewArrayWriter(filepath.Join(dir, DepthBlocksFile), 8)
+	w, err := NewDepthIndexWriter(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range 3 {
-		if err := w.WriteU64(0); err != nil {
+	if err := w.Add(0, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	for range 199 {
+		if err := w.Add(1, 1, 1); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// One block too few: 1 + 199 rows need 1 + 4.
+	bw, err := NewArrayWriter(filepath.Join(dir, DepthBlocksFile), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 4 {
+		if err := bw.WriteU64(0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := bw.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if d, err := OpenDepthIndex(dir); err == nil {
 		d.Close()
-		t.Fatal("OpenDepthIndex accepted 3 blocks for 200 entries")
+		t.Fatal("OpenDepthIndex accepted 4 blocks for depths of 1 and 199 rows")
 	}
 }

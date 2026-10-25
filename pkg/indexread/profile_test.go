@@ -39,7 +39,7 @@ func TestProfile(t *testing.T) {
 	}
 	defer idx.Close()
 
-	// Prefixes in preorder: "" (3 objects), "a/" (2), "a/b/" (1), "c/" (1).
+	// Prefixes in level order: "" (3 objects), "a/" (2), "c/" (1), "a/b/" (1).
 	p := idx.Profile()
 	if p.Prefixes != 4 || p.Leaves != 2 {
 		t.Errorf("prefixes, leaves = %d, %d; want 4, 2", p.Prefixes, p.Leaves)
@@ -68,10 +68,10 @@ func TestProfile(t *testing.T) {
 			t.Errorf("%s: Values = %d, want %d", field, f.Values, total)
 		}
 	}
-	checkBits(indexread.FieldObjectCount, map[int]uint64{2: 2, 1: 2})    // 3, 2, 1, 1
-	checkBits(indexread.FieldParentDistance, map[int]uint64{1: 2, 2: 1}) // 1, 1, 3
-	checkBits(indexread.FieldChildren, map[int]uint64{2: 1, 1: 1})       // "" has 2, "a/" has 1
-	checkBits(indexread.FieldSubtreeSize, map[int]uint64{2: 1, 1: 1, 0: 2})
+	checkBits(indexread.FieldObjectCount, map[int]uint64{2: 2, 1: 2})      // 3, 2, 1, 1
+	checkBits(indexread.FieldParentDistance, map[int]uint64{1: 1, 2: 2})   // 1, 2, 2
+	checkBits(indexread.FieldChildren, map[int]uint64{2: 1, 1: 1})         // "" has 2, "a/" has 1
+	checkBits(indexread.FieldChildStart, map[int]uint64{1: 1, 2: 1, 3: 2}) // 1, 3, 4, 4
 	// Tier bytes: "" 15 + 300, "a/" 10 + 300, "a/b/" 300, "c/" 5.
 	checkBits(indexread.FieldTierBytes, map[int]uint64{4: 2, 9: 3, 3: 1})
 }
