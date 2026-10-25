@@ -11,8 +11,8 @@ import (
 // preallocateChunk is the zero buffer size writeZeros fills a file with.
 const preallocateChunk = 1 << 20
 
-// preallocate grows f from to bytes with every new block
-// allocated on disk, so later writes through a mapping cannot fail for
+// preallocate grows f from `from` bytes to `to` bytes with every new
+// block allocated on disk, so later writes through a mapping cannot fail for
 // lack of space (a sparse block written through a mapping on a full
 // volume is a SIGBUS, not an error). [0, from) must already be f's
 // allocated contents; it is left untouched.
