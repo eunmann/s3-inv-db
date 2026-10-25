@@ -397,6 +397,22 @@ type refCompareRow struct {
 	child                          inventory.CompareChild
 }
 
+// referenceSelf is the root's self-delta read straight from both sides'
+// stats and the cost function.
+func referenceSelf(a, b *indexread.Index, cost inventory.CompareCostFunc) inventory.CompareSelf {
+	rootA, _ := a.Lookup("")
+	rootB, _ := b.Lookup("")
+	sa, sb := a.Stats(rootA), b.Stats(rootB)
+	return inventory.CompareSelf{
+		Objects:      inventory.CompareNumeric{Before: sa.ObjectCount, After: sb.ObjectCount, Delta: int64(sb.ObjectCount) - int64(sa.ObjectCount)},
+		Bytes:        inventory.CompareNumeric{Before: sa.TotalBytes, After: sb.TotalBytes, Delta: int64(sb.TotalBytes) - int64(sa.TotalBytes)},
+		CostBefore:   cost(a, rootA),
+		CostAfter:    cost(b, rootB),
+		HasTierDataA: true,
+		HasTierDataB: true,
+	}
+}
+
 // referenceCompare joins both sides' children by full prefix through maps
 // (no ordering assumptions), classifies, filters and sorts with the
 // pre-#26 comparator.
@@ -499,8 +515,8 @@ func referenceCompare(a, b *indexread.Index, q inventory.CompareQuery, cost inve
 		return primary
 	})
 	children := make([]inventory.CompareChild, len(rows))
-	for i, r := range rows {
-		children[i] = r.child
+	for i := range rows {
+		children[i] = rows[i].child
 	}
 
 	return children, counts
@@ -539,6 +555,9 @@ func TestCompareLevel_MatchesMaterialisingReference(t *testing.T) {
 					}
 					if diff := cmp.Diff(want, got); diff != "" {
 						t.Fatalf("trial %d %q %s hide=%v (-reference +CompareLevel):\n%s", trial, sortBy, dir, hide, diff)
+					}
+					if diff := cmp.Diff(referenceSelf(before, after, cost), data.Self); diff != "" {
+						t.Fatalf("trial %d %q %s hide=%v self (-reference +CompareLevel):\n%s", trial, sortBy, dir, hide, diff)
 					}
 				}
 			}
