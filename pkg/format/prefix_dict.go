@@ -152,13 +152,15 @@ func (sd *PrefixDictionary) Close() error {
 }
 
 // PreloadedPrefixCache holds every segment in memory: one copy of the
-// whole segment blob, and each segment a substring of it. That is two
-// allocations however many distinct segments an index has, not one per
-// segment, and a Get is one slice index. Segments are heap strings, so
-// they stay valid after the index closes.
+// whole segment blob and the segments' offsets into it. The offsets are
+// pointer-free, so the garbage collector scans none of them however
+// many distinct segments an index has (a []string would hold a pointer
+// per segment, each marked every cycle, at 16 bytes instead of 8).
+// Segments are substrings of a heap string, so they stay valid after
+// the index closes.
 type PreloadedPrefixCache struct {
-	segments []string
-	bytes    uint64
+	data string
+	offs []uint64 // segment id's bytes are data[offs[id]:offs[id+1]]
 }
 
 // PreloadSegments copies the segment blob into memory.
@@ -173,34 +175,32 @@ func (sd *PrefixDictionary) PreloadSegments() (*PreloadedPrefixCache, error) {
 	if end > uint64(len(blob)) {
 		return nil, fmt.Errorf("%w: segment blob ends at %d of %d bytes", ErrBoundsCheck, end, len(blob))
 	}
-	data := string(blob[:end])
-	segments := make([]string, n)
-	prev := offsets.UnsafeGetU64(0)
+	offs := make([]uint64, n+1)
+	offs[0] = offsets.UnsafeGetU64(0)
 	for i := range n {
 		next := offsets.UnsafeGetU64(i + 1)
-		if next < prev || next > end {
+		if next < offs[i] || next > end {
 			return nil, fmt.Errorf("%w: segment offset %d at %d", ErrBoundsCheck, next, i+1)
 		}
-		segments[i] = data[prev:next]
-		prev = next
+		offs[i+1] = next
 	}
 
-	return &PreloadedPrefixCache{segments: segments, bytes: end}, nil
+	return &PreloadedPrefixCache{data: string(blob[:end]), offs: offs}, nil
 }
 
 // Get returns segment id. It panics if id is out of range.
 func (c *PreloadedPrefixCache) Get(id uint32) string {
-	return c.segments[id]
+	return c.data[c.offs[id]:c.offs[id+1]]
 }
 
 // Count returns the number of segments.
 func (c *PreloadedPrefixCache) Count() int {
-	return len(c.segments)
+	return len(c.offs) - 1
 }
 
 // Bytes returns the segments' total length.
 func (c *PreloadedPrefixCache) Bytes() uint64 {
-	return c.bytes
+	return uint64(len(c.data))
 }
 
 // SplitPrefix splits a prefix into path segments by "/". Trailing
