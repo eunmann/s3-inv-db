@@ -213,10 +213,14 @@ func TestTop_MatchesSortedReference(t *testing.T) {
 		top    func(pos uint64, limit int) ([]indexread.TopResult, error)
 		metric func(indexread.Stats) uint64
 	}{
-		{"bytes", func(p uint64, n int) ([]indexread.TopResult, error) { return idx.TopByBytes(p, 1, n) },
-			func(s indexread.Stats) uint64 { return s.TotalBytes }},
-		{"count", func(p uint64, n int) ([]indexread.TopResult, error) { return idx.TopByCount(p, 1, n) },
-			func(s indexread.Stats) uint64 { return s.ObjectCount }},
+		{
+			"bytes", func(p uint64, n int) ([]indexread.TopResult, error) { return idx.TopByBytes(p, 1, n) },
+			func(s indexread.Stats) uint64 { return s.TotalBytes },
+		},
+		{
+			"count", func(p uint64, n int) ([]indexread.TopResult, error) { return idx.TopByCount(p, 1, n) },
+			func(s indexread.Stats) uint64 { return s.ObjectCount },
+		},
 	} {
 		want := make([]indexread.TopResult, 0, len(children))
 		for _, pos := range children {
