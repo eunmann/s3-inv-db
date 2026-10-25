@@ -179,7 +179,7 @@ func OpenDepthIndex(outDir string) (*DepthIndex, error) {
 	// Depth-index offsets are read at well-known indices (one per
 	// depth) then once per query; small enough that hint doesn't
 	// matter, but keep sequential for symmetry with positions.
-	offsets, err := OpenArrayWithHint(offsetsPath, AccessHintSequential)
+	offsets, err := OpenArray(offsetsPath)
 	if err != nil {
 		return nil, fmt.Errorf("open offsets: %w", err)
 	}
@@ -187,7 +187,7 @@ func OpenDepthIndex(outDir string) (*DepthIndex, error) {
 	// Depth positions are scanned in contiguous ranges during browse
 	// iteration — every prefix at a given depth in subtree order.
 	// Sequential hint enables kernel readahead.
-	positions, err := OpenArrayWithHint(positionsPath, AccessHintSequential)
+	positions, err := OpenArray(positionsPath)
 	if err != nil {
 		offsets.Close()
 

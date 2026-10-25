@@ -90,6 +90,14 @@ to an ingest node without flags.
 Query-time RAM is just the OS page cache plus iterator stack frames;
 "high memory usage" on a warm process is page cache and is correct.
 
+Index files are mapped with the kernel's default readahead. On NVMe a
+fault that reads a little more costs less than more faults: on the
+benchmark fixture, cold lookups were 33% faster than with
+`MADV_RANDOM` on the MPHF slots, at the cost of ~20 KiB more page cache
+per cold lookup, and `MADV_RANDOM` everywhere doubled cold latency
+(#50). A server holding many indexes in little memory evicts sooner for
+it.
+
 ## Index size
 
 Every per-prefix file has a fixed stride per index, except the

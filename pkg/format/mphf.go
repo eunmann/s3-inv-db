@@ -48,7 +48,7 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 	if err != nil {
 		return nil, err
 	}
-	slots, err := OpenMmapWithHint(filepath.Join(outDir, MPHFSlotsFile), AccessHintRandom)
+	slots, err := OpenMmap(filepath.Join(outDir, MPHFSlotsFile))
 	if err != nil {
 		return nil, fmt.Errorf("open MPHF slots: %w", err)
 	}
