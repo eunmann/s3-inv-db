@@ -88,7 +88,7 @@ func (idx *Index) Identity() *Identity { return idx.identity }
 // queries when a row's child range leaves the next depth's rows. A
 // mixed or damaged file set would otherwise answer with zeros or wrong
 // rows, or panic.
-var ErrIndexInconsistent = errors.New("index files disagree on the prefix count")
+var ErrIndexInconsistent = errors.New("index files are inconsistent")
 
 // checkCounts requires every per-prefix structure to hold the same
 // number of prefixes. Each count is a header or an array length, so
@@ -104,7 +104,7 @@ func (idx *Index) checkCounts() error {
 	}
 	for _, c := range counts {
 		if c.n != idx.count {
-			return fmt.Errorf("%w: core stats has %d, %s has %d", ErrIndexInconsistent, idx.count, c.name, c.n)
+			return fmt.Errorf("%w: prefix counts differ, core stats has %d, %s has %d", ErrIndexInconsistent, idx.count, c.name, c.n)
 		}
 	}
 
