@@ -14,6 +14,7 @@ type Index struct {
 	coreStats  *format.CoreStatsReader
 	depthIndex *format.DepthIndex
 	mphf       *format.MPHF
+	prefixes   *format.PrefixTreeReader
 	tierStats  *format.TierStatsReader
 	count      uint64
 	maxDepth   uint32
@@ -39,9 +40,16 @@ func Open(dir string) (*Index, error) {
 		return nil, fmt.Errorf("open MPHF: %w", err)
 	}
 
-	tierStats, err := format.OpenTierStats(dir, coreStats)
+	prefixes, err := format.OpenPrefixTreeReader(dir)
 	if err != nil {
 		_ = errors.Join(coreStats.Close(), depthIndex.Close(), mphf.Close())
+
+		return nil, fmt.Errorf("open prefix tree: %w", err)
+	}
+
+	tierStats, err := format.OpenTierStats(dir, coreStats)
+	if err != nil {
+		_ = errors.Join(coreStats.Close(), depthIndex.Close(), mphf.Close(), prefixes.Close())
 
 		return nil, fmt.Errorf("open tier stats: %w", err)
 	}
@@ -50,6 +58,7 @@ func Open(dir string) (*Index, error) {
 		coreStats:  coreStats,
 		depthIndex: depthIndex,
 		mphf:       mphf,
+		prefixes:   prefixes,
 		tierStats:  tierStats,
 		count:      coreStats.Count(),
 		maxDepth:   depthIndex.MaxDepth(),
@@ -62,6 +71,7 @@ func (idx *Index) Close() error {
 		idx.coreStats.Close(),
 		idx.depthIndex.Close(),
 		idx.mphf.Close(),
+		idx.prefixes.Close(),
 		idx.tierStats.Close(),
 	)
 }
@@ -124,7 +134,7 @@ func (idx *Index) HasChildren(pos uint64) bool {
 }
 
 func (idx *Index) PrefixString(pos uint64) (string, error) {
-	s, err := idx.mphf.Prefix(pos)
+	s, err := idx.prefixes.Prefix(pos)
 	if err != nil {
 		return "", fmt.Errorf("get prefix for pos %d: %w", pos, err)
 	}

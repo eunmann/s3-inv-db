@@ -1,6 +1,7 @@
 package extsort_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -20,6 +21,20 @@ func withTotals(r *extsort.PrefixRow) *extsort.PrefixRow {
 	}
 
 	return r
+}
+
+// withRoot returns rows behind a root row whose tier stats are their
+// sum: the builder takes the root "" first, before its children.
+func withRoot(rows ...*extsort.PrefixRow) []*extsort.PrefixRow {
+	root := &extsort.PrefixRow{Prefix: ""}
+	for _, r := range rows {
+		for id := range tiers.NumTiers {
+			root.TierCounts[id] += r.TierCounts[id]
+			root.TierBytes[id] += r.TierBytes[id]
+		}
+	}
+
+	return append([]*extsort.PrefixRow{root}, rows...)
 }
 
 // openTiers opens the core and tier stats of the index in dir.
@@ -74,6 +89,7 @@ func TestTierStats_PresentTiersOnly(t *testing.T) {
 	rows[3].TierCounts[tiers.Standard] = 4
 	rows[3].TierBytes[tiers.Standard] = 400
 
+	rows = withRoot(rows...)
 	for _, r := range rows {
 		if err := b.Add(withTotals(r)); err != nil {
 			t.Fatalf("Add %q: %v", r.Prefix, err)
@@ -121,12 +137,14 @@ func TestTierStats_PresentTiersOnly(t *testing.T) {
 			t.Errorf("pos %d tier %d: got (%d, %d), want (%d, %d)", pos, tier, gotCount, gotBytes, wantCount, wantBytes)
 		}
 	}
-	check(0, tiers.Standard, 1, 100)
-	check(1, tiers.GlacierFR, 2, 200)
-	check(2, tiers.DeepArchive, 3, 300)
-	check(3, tiers.Standard, 4, 400)
-	// Tiers not in any row's data must still appear in BreakdownAll with zeros.
-	check(0, tiers.GlacierFR, 0, 0)
+	// Position 0 is the root, holding every row's tiers.
+	check(0, tiers.Standard, 5, 500)
+	check(1, tiers.Standard, 1, 100)
+	check(2, tiers.GlacierFR, 2, 200)
+	check(3, tiers.DeepArchive, 3, 300)
+	check(4, tiers.Standard, 4, 400)
+	// Tiers not in a row's data still appear in BreakdownAll with zeros.
+	check(1, tiers.GlacierFR, 0, 0)
 }
 
 // TestTierStats_PreorderAlignment guards the invariant that each
@@ -159,7 +177,7 @@ func TestTierStats_PreorderAlignment(t *testing.T) {
 	row3.TierCounts[tiers.Standard] = 1
 	row3.TierBytes[tiers.Standard] = 400
 
-	for _, r := range []*extsort.PrefixRow{row0, row1, row2, row3} {
+	for _, r := range withRoot(row0, row1, row2, row3) {
 		if err := b.Add(withTotals(r)); err != nil {
 			t.Fatalf("Add %q: %v", r.Prefix, err)
 		}
@@ -170,12 +188,13 @@ func TestTierStats_PreorderAlignment(t *testing.T) {
 
 	tsr := openTiers(t, outDir)
 
-	wantStd := []uint64{1, 1, 0, 1}
-	wantStdBytes := []uint64{100, 200, 0, 400}
-	wantGl := []uint64{0, 0, 1, 0}
-	wantGlBytes := []uint64{0, 0, 300, 0}
+	// Position 0 is the root, holding every row's tiers.
+	wantStd := []uint64{3, 1, 1, 0, 1}
+	wantStdBytes := []uint64{700, 100, 200, 0, 400}
+	wantGl := []uint64{1, 0, 0, 1, 0}
+	wantGlBytes := []uint64{300, 0, 0, 300, 0}
 
-	for pos := range uint64(4) {
+	for pos := range uint64(5) {
 		breakdown := tsr.BreakdownAll(pos)
 		gotStd, gotStdBytes, gotGl, gotGlBytes := uint64(0), uint64(0), uint64(0), uint64(0)
 		for _, tb := range breakdown {
@@ -217,5 +236,38 @@ func TestEmptyIndex_EmptyPresentTiers(t *testing.T) {
 	tsr := openTiers(t, outDir)
 	if tsr.HasTierData() {
 		t.Error("empty index should report no tier data")
+	}
+}
+
+// TestIndexBuilder_RejectsMissingParent: the index stores each prefix
+// as its parent plus one segment, so the root comes first and no
+// prefix may skip a level.
+func TestIndexBuilder_RejectsMissingParent(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		prefixes []string
+	}{
+		{"no root", []string{"a/"}},
+		{"skipped level", []string{"", "a/b/"}},
+		{"not slash-terminated", []string{"", "a"}},
+		{"second root", []string{"", ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := extsort.NewIndexBuilder(filepath.Join(t.TempDir(), "idx"), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var last error
+			for _, p := range tc.prefixes {
+				row := &extsort.PrefixRow{Prefix: p, Count: 1, TotalBytes: 1}
+				row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = 1, 1
+				if last = b.Add(row); last != nil {
+					break
+				}
+			}
+			if !errors.Is(last, extsort.ErrMissingParent) {
+				t.Errorf("err = %v, want ErrMissingParent", last)
+			}
+		})
 	}
 }

@@ -57,21 +57,11 @@ func TestMPHFBuilderSimple(t *testing.T) {
 		t.Errorf("Count = %d, want %d", m.Count(), len(prefixes))
 	}
 
-	// Test lookup of all prefixes
-	for _, p := range prefixes {
+	// Every prefix looks up to the position it was added at.
+	for i, p := range prefixes {
 		pos, ok := m.Lookup(p)
-		if !ok {
-			t.Errorf("Lookup(%q) failed", p)
-
-			continue
-		}
-		// Verify we can get the prefix back
-		stored, err := m.Prefix(pos)
-		if err != nil {
-			t.Errorf("GetPrefix(%d) failed: %v", pos, err)
-		}
-		if stored != p {
-			t.Errorf("GetPrefix(%d) = %q, want %q", pos, stored, p)
+		if !ok || pos != uint64(i) {
+			t.Errorf("Lookup(%q) = %d, %v; want %d, true", p, pos, ok, i)
 		}
 	}
 
@@ -189,69 +179,10 @@ func TestMPHFUnicode(t *testing.T) {
 	}
 	defer m.Close()
 
-	for _, p := range prefixes {
-		pos, ok := m.Lookup(p)
-		if !ok {
-			t.Errorf("Lookup(%q) failed", p)
-
-			continue
+	for i, p := range prefixes {
+		if pos, ok := m.Lookup(p); !ok || pos != uint64(i) {
+			t.Errorf("Lookup(%q) = %d, %v; want %d, true", p, pos, ok, i)
 		}
-		stored, _ := m.Prefix(pos)
-		if stored != p {
-			t.Errorf("GetPrefix returned %q, want %q", stored, p)
-		}
-	}
-}
-
-// TestEmptyMPHF_GetPrefixReturnsError asserts that GetPrefix on an
-// empty MPHF (the size-0 mph.bin fast path) returns ErrNoPrefixStorage
-// instead of nil-dereferencing the unset dictPrefixes field.
-func TestEmptyMPHF_GetPrefixReturnsError(t *testing.T) {
-	dir := t.TempDir()
-	b := newTestMPHFBuilder(t)
-	if err := b.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	m, err := OpenMPHF(dir)
-	if err != nil {
-		t.Fatalf("OpenMPHF: %v", err)
-	}
-	defer m.Close()
-
-	if _, err := m.GetPrefix(0); !errors.Is(err, ErrNoPrefixStorage) {
-		t.Errorf("GetPrefix on empty MPHF = %v, want ErrNoPrefixStorage", err)
-	}
-}
-
-// TestOpenMPHF_MissingDictFiles asserts OpenMPHF surfaces an error
-// (not a panic) when the prefix dictionary files are absent. The old
-// raw-blob fallback is gone, so the dict files are the only prefix
-// storage; their absence must fail cleanly.
-func TestOpenMPHF_MissingDictFiles(t *testing.T) {
-	dir := t.TempDir()
-	b := newTestMPHFBuilder(t)
-	b.Add("a/", 0)
-	b.Add("b/", 1)
-	if err := b.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	for _, name := range []string{
-		PrefixDictBlobFile,
-		PrefixDictOffsetsFile,
-		PrefixDictIDsFile,
-		PrefixDictOffsetsPerPrefixFile,
-	} {
-		if err := os.Remove(filepath.Join(dir, name)); err != nil {
-			t.Fatalf("remove %s: %v", name, err)
-		}
-	}
-
-	m, err := OpenMPHF(dir)
-	if err == nil {
-		m.Close()
-		t.Fatal("OpenMPHF returned nil error when prefix dict files are missing")
 	}
 }
 
@@ -349,9 +280,6 @@ func TestMPHFLookupRoundTripsEdgePrefixes(t *testing.T) {
 			t.Errorf("Lookup(%q) = %d, %v; want %d, true", p, pos, ok, i)
 		}
 	}
-	if err := VerifyMPHF(m); err != nil {
-		t.Errorf("VerifyMPHF: %v", err)
-	}
 	if allocs := testing.AllocsPerRun(100, func() { _, _ = m.Lookup("a/b/") }); allocs != 0 {
 		t.Errorf("Lookup allocs = %v, want 0", allocs)
 	}
@@ -433,9 +361,6 @@ func TestStreamingMPHFBuildSurvivesKeyHashCollision(t *testing.T) {
 		if pos, ok := m.Lookup(p); !ok || pos != uint64(i) {
 			t.Errorf("Lookup(%q) = %d, %v; want %d, true", p, pos, ok, i)
 		}
-	}
-	if err := VerifyMPHF(m); err != nil {
-		t.Errorf("VerifyMPHF: %v", err)
 	}
 }
 

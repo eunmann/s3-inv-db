@@ -5,5 +5,5 @@ package indexread
 // allocating. Sorting children by name through it avoids building every
 // child's full prefix string. The root returns "".
 func (idx *Index) ChildSegment(pos uint64) string {
-	return idx.mphf.ChildSegment(pos)
+	return idx.prefixes.ChildSegment(pos)
 }

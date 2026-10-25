@@ -76,7 +76,15 @@ func TestIndexBuilderMemoryBounded(t *testing.T) {
 		t.Fatalf("create builder: %v", err)
 	}
 
-	// Add many unique prefixes (sorted order required by builder)
+	// Add many unique prefixes (sorted order required by builder), after
+	// their ancestors "" and "data/".
+	for depth, prefix := range []string{"", "data/"} {
+		row := &extsort.PrefixRow{Prefix: prefix, Depth: uint16(depth), Count: 1, TotalBytes: 1}
+		row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = 1, 1
+		if err := builder.Add(row); err != nil {
+			t.Fatalf("add %q: %v", prefix, err)
+		}
+	}
 	const numPrefixes = 10000
 	for i := range numPrefixes {
 		// Create unique sorted prefixes
