@@ -49,6 +49,23 @@ func TestDiscoveredRowPartial_PollingFallbackTrigger(t *testing.T) {
 			wantPollEvery: true,
 		},
 		{
+			// The job store marks the job running before the catalog
+			// flips the inventory to loading; the row must already be
+			// busy in that window.
+			name: "running job on a not-loaded row polls",
+			view: handlers.DiscoveredRowView{
+				MergedInventory: inventory.MergedInventory{
+					Inventory: inventory.Inventory{
+						SourceBucket: "b", Name: "i", Run: "2026-05-13T03-00Z",
+						ManifestKey: "k/2026-05-13T03-00Z/manifest.json",
+					},
+					State: inventory.StateNotLoaded,
+				},
+				LatestJob: &jobs.Job{Kind: jobs.KindBuild, State: jobs.StateRunning},
+			},
+			wantPollEvery: true,
+		},
+		{
 			name: "loaded row drops the poll",
 			view: handlers.DiscoveredRowView{
 				MergedInventory: inventory.MergedInventory{
@@ -103,6 +120,9 @@ func TestDiscoveredRowPartial_PollingFallbackTrigger(t *testing.T) {
 			hasPoll := strings.Contains(body, "every 2s")
 			if hasPoll != tt.wantPollEvery {
 				t.Errorf("every 2s present=%v want=%v\n%s", hasPoll, tt.wantPollEvery, body)
+			}
+			if tt.wantPollEvery && tt.view.LatestJob != nil && !strings.Contains(body, "Cancel") {
+				t.Errorf("busy row with a live job missing Cancel\n%s", body)
 			}
 		})
 	}
