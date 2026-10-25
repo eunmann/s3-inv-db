@@ -228,8 +228,9 @@ func perWorkerAggregatorCap(memoryLimit int64, numWorkers int) uint64 {
 
 // ShouldWorkerFlush decides whether one worker's aggregator should
 // spill, given its own footprint, GOMEMLIMIT, and total worker count.
-// Each worker decides independently (no flush stampedes); a HeapInuse-
-// vs-limit pressure check is the safety valve.
+// Each worker decides independently (no flush stampedes); the safety
+// valve is heapUnderPressure: the live heap as of the last GC, with a
+// HeapInuse backstop between GCs.
 func ShouldWorkerFlush(workerAggBytes uint64, memoryLimit int64, numWorkers int) bool {
 	if workerAggBytes >= perWorkerAggregatorCap(memoryLimit, numWorkers) {
 		return true
@@ -245,6 +246,13 @@ func heapUnderPressure(memoryLimit int64) bool {
 		return false
 	}
 	live, inuse := heapReadings()
+
+	return heapReadingsUnderPressure(live, inuse, memoryLimit)
+}
+
+// heapReadingsUnderPressure applies the pressure rule to a live-heap
+// and HeapInuse reading against a positive memory limit.
+func heapReadingsUnderPressure(live, inuse uint64, memoryLimit int64) bool {
 	limit := float64(memoryLimit)
 
 	return live >= uint64(limit*liveHeapPressureRatio) || inuse >= uint64(limit*heapInuseBackstopRatio)

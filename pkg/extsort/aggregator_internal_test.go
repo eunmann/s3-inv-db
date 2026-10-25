@@ -31,6 +31,32 @@ func TestHeapReadingsMatchMemStats(t *testing.T) {
 	}
 }
 
+// Garbage below the HeapInuse backstop is not pressure: with GOMEMLIMIT
+// the heap grows toward the limit before each GC, so only the live heap
+// or a nearly full HeapInuse may force a spill.
+func TestHeapReadingsUnderPressure(t *testing.T) {
+	const limit int64 = 1000
+	for _, tc := range []struct {
+		name        string
+		live, inuse uint64
+		want        bool
+	}{
+		{name: "idle", live: 100, inuse: 200, want: false},
+		{name: "live 50% inuse 90% garbage", live: 500, inuse: 900, want: false},
+		{name: "live just below 70%", live: 699, inuse: 700, want: false},
+		{name: "live 70%", live: 700, inuse: 700, want: true},
+		{name: "inuse just below 95%", live: 100, inuse: 949, want: false},
+		{name: "inuse 95%", live: 100, inuse: 950, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := heapReadingsUnderPressure(tc.live, tc.inuse, limit); got != tc.want {
+				t.Errorf("heapReadingsUnderPressure(live=%d, inuse=%d, limit=%d) = %v, want %v",
+					tc.live, tc.inuse, limit, got, tc.want)
+			}
+		})
+	}
+}
+
 // EstimatedMemoryUsage counts each new prefix once, with its length,
 // and starts over at a Drain.
 func TestAggregatorEstimateCountsEachPrefix(t *testing.T) {
