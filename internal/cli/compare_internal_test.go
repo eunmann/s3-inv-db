@@ -73,9 +73,10 @@ func TestDiffLevels_StatusesMatchTheServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rows := diffLevels(fromLevel, toLevel)
 	got := map[string]string{}
-	var order []string
-	for _, r := range diffLevels(fromLevel, toLevel) {
+	order := make([]string, 0, len(rows))
+	for _, r := range rows {
 		got[r.Prefix] = r.Status
 		order = append(order, r.Prefix)
 	}

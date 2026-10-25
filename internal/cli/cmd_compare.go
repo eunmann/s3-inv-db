@@ -138,7 +138,7 @@ func diffLevels(from, to level) []compareRow {
 	var tiersA, tiersB []indexread.TierBreakdown
 	i, j := 0, 0
 	for i < len(from.pos) || j < len(to.pos) {
-		c := 0
+		var c int
 		switch {
 		case i == len(from.pos):
 			c = 1
