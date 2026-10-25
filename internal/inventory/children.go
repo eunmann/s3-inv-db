@@ -40,7 +40,8 @@ type childKey struct {
 // index's own order (the build rejects any other, #81), so a name-sorted
 // page is read straight from the depth index: O(log n + page) however
 // many children there are. The other columns read one number per child
-// and sort stably, so ties keep that name order, ascending. Cost is
+// and order only the rows up to the page's last; ties sort by name,
+// ascending. Cost is
 // called once per child, and only when sorting by cost.
 func PageChildren(idx *indexread.Index, parentPos uint64, q ChildQuery, cost CostFunc) (ChildPage, error) {
 	if q.SortBy == SortColSegment || q.SortBy == "" {
@@ -55,24 +56,81 @@ func PageChildren(idx *indexread.Index, parentPos uint64, q ChildQuery, cost Cos
 		keys[i] = childKey{pos: pos, metric: childMetric(idx, pos, q.SortBy, cost)}
 	}
 	desc := q.Dir == SortDirDesc
-	slices.SortStableFunc(keys, func(a, b childKey) int {
+	// Ties break by position, which is name order: the order is total,
+	// so ordering only part of it is exact.
+	order := func(a, b childKey) int {
+		c := cmp.Compare(a.metric, b.metric)
 		if desc {
-			return cmp.Compare(b.metric, a.metric)
+			c = -c
+		}
+		if c != 0 {
+			return c
 		}
 
-		return cmp.Compare(a.metric, b.metric)
-	})
+		return cmp.Compare(a.pos, b.pos)
+	}
 
 	p := Paginate(len(keys), q.Page, q.PageSize)
 	page := ChildPage{Pagination: p, Total: len(keys)}
 	if p.FirstRow > 0 {
+		// Only the rows up to the page's last are ordered.
+		sorted := firstSorted(keys, p.LastRow, order)
 		page.Positions = make([]uint64, 0, p.LastRow-p.FirstRow+1)
-		for _, k := range keys[p.FirstRow-1 : p.LastRow] {
+		for _, k := range sorted[p.FirstRow-1 : p.LastRow] {
 			page.Positions = append(page.Positions, k.pos)
 		}
 	}
 
 	return page, nil
+}
+
+// firstSorted returns the first k elements of s in order, reordering s
+// in place. When k is small next to len(s) it keeps the k best in a
+// bounded max-heap at the front of s, O(n log k), so an early page
+// doesn't pay for sorting every row; otherwise it sorts all of s. Order
+// must be total (no two elements equal) for the result to be exact.
+func firstSorted[T any](s []T, k int, order func(a, b T) int) []T {
+	k = min(max(k, 0), len(s))
+	if k*8 > len(s) {
+		slices.SortFunc(s, order)
+
+		return s[:k]
+	}
+	if k == 0 {
+		return s[:0]
+	}
+	heap := s[:k]
+	for i := k/2 - 1; i >= 0; i-- {
+		siftDownMax(heap, i, order)
+	}
+	for i := k; i < len(s); i++ {
+		if order(s[i], heap[0]) < 0 {
+			heap[0], s[i] = s[i], heap[0]
+			siftDownMax(heap, 0, order)
+		}
+	}
+	slices.SortFunc(heap, order)
+
+	return heap
+}
+
+// siftDownMax restores the max-heap property (the element that sorts
+// last at the root) below i.
+func siftDownMax[T any](h []T, i int, order func(a, b T) int) {
+	for {
+		largest, left := i, 2*i+1
+		if left < len(h) && order(h[left], h[largest]) > 0 {
+			largest = left
+		}
+		if right := left + 1; right < len(h) && order(h[right], h[largest]) > 0 {
+			largest = right
+		}
+		if largest == i {
+			return
+		}
+		h[i], h[largest] = h[largest], h[i]
+		i = largest
+	}
 }
 
 // pageChildrenByName returns a name-sorted page straight from the

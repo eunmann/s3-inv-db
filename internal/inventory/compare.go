@@ -202,11 +202,14 @@ type CompareLevelData struct {
 // built for the visible page alone.
 type compareRow struct {
 	posA, posB uint64
-	objects    CompareNumeric
-	bytes      CompareNumeric
-	costDelta  int64
-	inA, inB   bool
-	status     CompareStatus
+	// seq is the row's place in merge order, S3 key order of the names:
+	// the tie-break that makes every display order total.
+	seq       int
+	objects   CompareNumeric
+	bytes     CompareNumeric
+	costDelta int64
+	inA, inB  bool
+	status    CompareStatus
 }
 
 // CompareLevel compares two indexes at one prefix and returns the
@@ -237,14 +240,14 @@ func CompareLevel(a, b *indexread.Index, prefix string, q CompareQuery, cost Com
 	if q.HideUnchanged {
 		rows = slices.DeleteFunc(rows, func(r compareRow) bool { return r.status == CompareUnchanged })
 	}
-	sortCompareRows(a, b, rows, q.SortBy, q.Dir)
-
 	out.Total = len(rows)
 	out.Pagination = Paginate(len(rows), q.Page, q.PageSize)
 	if p := out.Pagination; p.FirstRow > 0 {
+		// Only the rows up to the page's last are ordered.
+		sorted := firstSorted(rows, p.LastRow, compareRowOrder(q.SortBy, q.Dir))
 		out.Children = make([]CompareChild, 0, p.LastRow-p.FirstRow+1)
-		for i := range rows[p.FirstRow-1 : p.LastRow] {
-			if c, ok := buildCompareChild(a, b, &rows[p.FirstRow-1+i]); ok {
+		for i := range sorted[p.FirstRow-1 : p.LastRow] {
+			if c, ok := buildCompareChild(a, b, &sorted[p.FirstRow-1+i]); ok {
 				out.Children = append(out.Children, c)
 			}
 		}
@@ -340,6 +343,7 @@ func mergeChildren(a, b *indexread.Index, pa, pb []uint64) []compareRow {
 		}
 		r.objects.Delta = int64(r.objects.After) - int64(r.objects.Before)
 		r.bytes.Delta = int64(r.bytes.After) - int64(r.bytes.Before)
+		r.seq = len(out)
 		out = append(out, r)
 	}
 
@@ -405,19 +409,17 @@ func rowCost(idx *indexread.Index, pos uint64, present bool, cost CompareCostFun
 	return cost(idx, pos)
 }
 
-func rowName(a, b *indexread.Index, r *compareRow) string {
-	if r.inA {
-		return a.ChildSegment(r.posA)
-	}
-
-	return b.ChildSegment(r.posB)
-}
-
-// sortCompareRows orders rows for display. With no explicit column the
+// compareRowOrder orders rows for display. With no explicit column the
 // biggest absolute byte movers come first. Names, and ties in every
-// column, sort in S3 key order, ascending ("2024-01" before "2024").
-func sortCompareRows(a, b *indexread.Index, rows []compareRow, sortBy, dir string) {
+// column, sort in S3 key order, ascending ("2024-01" before "2024"),
+// through the rows' merge sequence; the order is total.
+func compareRowOrder(sortBy, dir string) func(x, y compareRow) int {
 	desc := dir == SortDirDesc
+	switch sortBy {
+	case SortColCompareStatus, SortColObjects, SortColSize, SortColCost, SortColSegment:
+	default:
+		desc = true // the biggest movers first, whatever dir says
+	}
 	metric := func(r *compareRow) int64 {
 		switch sortBy {
 		case SortColCompareStatus:
@@ -431,24 +433,24 @@ func sortCompareRows(a, b *indexread.Index, rows []compareRow, sortBy, dir strin
 		case SortColSegment:
 			return 0
 		default:
-			desc = true
-
 			return int64(absDelta(r.bytes.Delta))
 		}
 	}
-	// rows arrive in merge order, S3 key order of the names (see
-	// mergeChildren), and the sort is stable: ties keep that order.
-	slices.SortStableFunc(rows, func(x, y compareRow) int {
+
+	return func(x, y compareRow) int {
 		c := cmp.Compare(metric(&x), metric(&y))
 		if sortBy == SortColSegment {
-			c = compareSlashTerminated(rowName(a, b, &x), rowName(a, b, &y))
+			c = cmp.Compare(x.seq, y.seq)
 		}
 		if desc {
 			c = -c
 		}
+		if c != 0 {
+			return c
+		}
 
-		return c
-	})
+		return cmp.Compare(x.seq, y.seq)
+	}
 }
 
 func absDelta(v int64) uint64 {
