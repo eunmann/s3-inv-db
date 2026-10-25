@@ -314,9 +314,10 @@ func tierMaskWidth(maxMask uint16) uint8 {
 
 // Finalize chooses a tight per-field stride from the observed maxes,
 // streams the repacked rows into a fresh file at the same path
-// (Header + stride descriptor first), and closes both files. Memory during the repack is bounded by the
-// bufio buffer (1 MiB) — at the project's stated 10B-prefix scale a
-// per-row in-memory buffer would be hundreds of GB.
+// (Header + stride descriptor first), and closes both files. Memory
+// during the repack is bounded by the bufio buffer (1 MiB) — at the
+// project's stated 10B-prefix scale a per-row in-memory buffer would
+// be hundreds of GB.
 func (b *CoreStatsBuilder) Finalize() error {
 	desc := b.ObservedStride()
 	stride := desc.RowBytes()

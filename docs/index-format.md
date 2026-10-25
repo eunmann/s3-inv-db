@@ -308,7 +308,7 @@ checksum, plus the prefix count and maximum depth. `verify` and
 {
   "created_at": "2026-01-02T03:04:05Z",
   "files": {
-    "core_stats.bin": {"checksum": "9f2c…", "size": 38011320},
+    "core_stats.bin": {"checksum": "9f2c…", "size": 37988049},
     "tier_stats/tier_multi.bin": {"checksum": "…", "size": 2567019},
     "...": {"checksum": "…", "size": 0}
   },

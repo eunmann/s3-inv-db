@@ -116,8 +116,7 @@ func TestIndexBuilderMemoryBounded(t *testing.T) {
 	t.Logf("Heap growth after finalize: %.2f MB", heapGrowthMB)
 
 	// With streaming MPHF, memory should be ~16 bytes/prefix for hashes/positions
-	// plus ~12 bytes/prefix for subtreeEnds/maxDepthInSubtrees
-	// = ~28 bytes/prefix = ~0.28 MB for 10K prefixes
+	// (~0.16 MB for 10K prefixes) plus the prefix stack, bounded by the depth
 	// Allow generous margin for test overhead and GC
 	expectedMaxMB := float64(5) // 5 MB max for 10K prefixes
 	if heapGrowthMB > expectedMaxMB {

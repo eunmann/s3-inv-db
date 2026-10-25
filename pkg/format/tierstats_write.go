@@ -38,7 +38,7 @@ const (
 	TierMultiOffsetsFile = "tier_multi.off.u64"
 	TierDenseFile        = "tier_dense.bin"
 
-	// TierScratchFile holds every prefix's full slots while the build
+	// Every prefix's full slots sit in tierScratchFile while the build
 	// streams; Close converts it to the chosen layout and removes it.
 	tierScratchFile = "tier_scratch.bin"
 )
