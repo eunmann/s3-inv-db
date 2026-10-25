@@ -158,10 +158,19 @@ func TestManager_DedupsLiveInventory(t *testing.T) {
 	close(release)
 	waitForState(t, store, first.ID, jobs.StateSucceeded)
 
-	// The inventory is no longer live, so a fresh build is allowed.
-	third, err := sched.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
-		return nil
-	})
+	// The inventory stops being live just after its terminal state is
+	// written, so a fresh build is allowed once that settles.
+	var third jobs.Job
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		third, err = sched.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
+			return nil
+		})
+		if !errors.Is(err, jobs.ErrDuplicateInventory) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if err != nil {
 		t.Fatalf("submit after completion: %v", err)
 	}
