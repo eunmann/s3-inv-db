@@ -95,9 +95,11 @@ Query-time RAM is just the OS page cache plus iterator stack frames;
 Every per-prefix file has a fixed stride per index, except the
 multi-tier slots, which only prefixes with two or more tiers store, so
 total size scales linearly with prefix count. Strides adapt to the
-index: each `core_stats.bin` field, tier slot and offset or position
-array is stored at the narrowest byte width its largest value needs.
-Tier stats store only what a prefix's totals and tier mask don't give,
+index: `object_count`, `total_bytes` and subtree size take the core
+widths that make the core files smallest, with the few rows that don't
+fit (the root and top levels) patched exactly in `core_patch.*`; every
+other core field, tier slot and offset or position array is stored at
+the narrowest byte width its largest value needs. Tier stats store only what a prefix's totals and tier mask don't give,
 in whichever of two layouts is smaller for the index. Layouts:
 [index-format.md](index-format.md).
 
@@ -109,12 +111,12 @@ max depth 7, 11 of 13 tiers present, 95% of prefixes holding one tier.
 
 | Component | Files | B/prefix |
 |---|---|---|
-| Core stats | `core_stats.bin` (16-byte rows: 3 + 7 + 3 + 1 + 2) | 16.0 |
+| Core stats | `core_stats.bin` (9-byte rows: 1 + 4 + 1 + 1 + 2) + `core_patch.bin` / `core_patch.rows` (3.4% of rows patched) | 10.0 |
 | Tier stats | `tier_stats/tier_multi.*` (multi layout) | 1.4 |
 | MPHF | `mph_slots.bin` (8 B fingerprint + 3 B position) + `mph.bin` (BBHash, ~3.3 bits) | 11.4 |
 | Prefix strings | `prefix_tree.bin` (2 B segment ID + 3 B parent distance) + segment blob | 5.1 |
 | Depth index | `depth_positions.u64` (3 B) + `depth_offsets.u64` | 3.0 |
-| **Total** | including `manifest.json` and `tiers.json` | **36.8** |
+| **Total** | including `manifest.json` and `tiers.json` | **30.8** |
 
 The fingerprint is 8 B in every index; the position takes the bytes
 the largest position needs. Tier
