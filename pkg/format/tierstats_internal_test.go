@@ -54,6 +54,7 @@ func buildTierIndex(t *testing.T, present []tiers.ID, rows []tierTestRow, force 
 			t.Fatal(err)
 		}
 	}
+	core.SetTierMaskEncoding(tw.MaskEncoding())
 	if err := tw.Close(); err != nil {
 		t.Fatalf("Close tier writer: %v", err)
 	}
@@ -218,19 +219,24 @@ func TestTierStatsLayoutsRoundTrip(t *testing.T) {
 }
 
 // TestTierStatsChoosesSmallerLayout checks the size model against the
-// files each layout actually writes, and that auto picks the smaller.
+// files each layout actually writes plus the core rows' tier field, and
+// that auto picks the smaller, with the plain mask and past 8 tiers.
 func TestTierStatsChoosesSmallerLayout(t *testing.T) {
-	present := []tiers.ID{tiers.Standard, tiers.StandardIA, tiers.GlacierIR, tiers.DeepArchive}
-	for _, p := range []float64{0.05, 0.3, 0.95} {
-		r := rand.New(rand.NewPCG(7, uint64(p*100)))
-		rows := randomTierRows(r, present, 2000, p, 10, 30)
-		sizes := map[tierLayout]int64{}
-		for _, force := range []tierLayout{tierLayoutDense, tierLayoutMulti, tierLayoutAuto} {
-			cr, _ := buildTierIndex(t, present, rows, force)
-			sizes[force] = tierDirBytes(t, filepath.Join(filepath.Dir(cr.mmap.path), TierStatsDir))
-		}
-		if want := min(sizes[tierLayoutDense], sizes[tierLayoutMulti]); sizes[tierLayoutAuto] != want {
-			t.Errorf("p=%.2f: auto wrote %d bytes, dense %d, multi %d", p, sizes[tierLayoutAuto], sizes[tierLayoutDense], sizes[tierLayoutMulti])
+	four := []tiers.ID{tiers.Standard, tiers.StandardIA, tiers.GlacierIR, tiers.DeepArchive}
+	for _, present := range [][]tiers.ID{four, tiers.AllTierIDs()} {
+		for _, p := range []float64{0.05, 0.3, 0.95} {
+			r := rand.New(rand.NewPCG(7, uint64(p*100)))
+			rows := randomTierRows(r, present, 2000, p, 10, 30)
+			sizes := map[tierLayout]int64{}
+			for _, force := range []tierLayout{tierLayoutDense, tierLayoutMulti, tierLayoutAuto} {
+				cr, _ := buildTierIndex(t, present, rows, force)
+				sizes[force] = tierDirBytes(t, filepath.Join(filepath.Dir(cr.mmap.path), TierStatsDir)) +
+					int64(len(rows))*int64(cr.Stride().TierMask)
+			}
+			if want := min(sizes[tierLayoutDense], sizes[tierLayoutMulti]); sizes[tierLayoutAuto] != want {
+				t.Errorf("%d tiers, p=%.2f: auto stored %d bytes, dense %d, multi %d",
+					len(present), p, sizes[tierLayoutAuto], sizes[tierLayoutDense], sizes[tierLayoutMulti])
+			}
 		}
 	}
 }
@@ -305,19 +311,26 @@ func TestTierStatsWriterRejectsInconsistentRows(t *testing.T) {
 	}
 }
 
+// TestTierStatsMaskMatchesData: every layout and tier-field encoding
+// decodes each row's mask to the slots holding data.
 func TestTierStatsMaskMatchesData(t *testing.T) {
-	present := []tiers.ID{tiers.Standard, tiers.StandardIA, tiers.GlacierIR}
-	rows := randomTierRows(rand.New(rand.NewPCG(9, 9)), present, 500, 0.5, 8, 20)
-	cr, _ := buildTierIndex(t, present, rows, tierLayoutAuto)
-	for pos := range rows {
-		var want uint16
-		for slot, id := range present {
-			if rows[pos].counts[id] != 0 || rows[pos].bytes[id] != 0 {
-				want |= 1 << slot
+	three := []tiers.ID{tiers.Standard, tiers.StandardIA, tiers.GlacierIR}
+	for _, present := range [][]tiers.ID{three, tiers.AllTierIDs()} {
+		for _, force := range []tierLayout{tierLayoutDense, tierLayoutMulti} {
+			rows := randomTierRows(rand.New(rand.NewPCG(9, 9)), present, 500, 0.3, 8, 20)
+			_, tr := buildTierIndex(t, present, rows, force)
+			for pos := range rows {
+				var want uint16
+				for slot, id := range present {
+					if rows[pos].counts[id] != 0 || rows[pos].bytes[id] != 0 {
+						want |= 1 << slot
+					}
+				}
+				var counts, bytesArr [maxTierSlots]uint64
+				if got := tr.fill(uint64(pos), &counts, &bytesArr); got != want {
+					t.Fatalf("%d tiers, layout %d, row %d: mask %b, want %b", len(present), force, pos, got, want)
+				}
 			}
-		}
-		if got := cr.UnsafeTierMask(uint64(pos)); got != want {
-			t.Fatalf("row %d: mask %b, want %b", pos, got, want)
 		}
 	}
 }

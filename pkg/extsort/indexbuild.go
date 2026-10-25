@@ -435,6 +435,9 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 // closeStreamingWriters finalizes the row-major core stats and tier
 // stats files in the index dir.
 func (b *IndexBuilder) closeStreamingWriters() error {
+	if b.tierStatsW != nil {
+		b.coreStatsW.SetTierMaskEncoding(b.tierStatsW.MaskEncoding())
+	}
 	if err := b.coreStatsW.Finalize(); err != nil {
 		return fmt.Errorf("finalize core stats: %w", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/bits"
 	"os"
 	"path/filepath"
 
@@ -178,6 +179,8 @@ type CoreStatsBuilder struct {
 	// Observed maxes — drive the tight per-field schema at Finalize.
 	maxDepth    uint16
 	maxTierMask uint16
+	// tierEnc is how the tier field encodes the mask (SetTierMaskEncoding).
+	tierEnc TierMaskEncoding
 }
 
 // NewCoreStatsBuilder creates a core stats file at outDir/core_stats.bin
@@ -269,6 +272,12 @@ func (b *CoreStatsBuilder) Add(objectCount, totalBytes uint64, depth, tierMask u
 	return nil
 }
 
+// SetTierMaskEncoding sets how Finalize stores each row's tier mask: the
+// tier stats writer's MaskEncoding for the layout it writes.
+func (b *CoreStatsBuilder) SetTierMaskEncoding(enc TierMaskEncoding) {
+	b.tierEnc = enc
+}
+
 // SetSubtree records the subtree of the row at position pos as ending
 // at subtreeEnd (inclusive; >= pos). Pos must be < Count().
 func (b *CoreStatsBuilder) SetSubtree(pos, subtreeEnd uint64) error {
@@ -313,7 +322,7 @@ func (b *CoreStatsBuilder) chooseStride() (CoreStatsStride, patchChoice) {
 		Bytes:       choice.bytes,
 		SubtreeSize: choice.size,
 		Depth:       byteWidth16(b.maxDepth),
-		TierMask:    tierMaskWidth(b.maxTierMask),
+		TierMask:    tierFieldWidth(b.maxTierMask, b.tierEnc),
 	}, choice
 }
 
@@ -324,6 +333,33 @@ func byteWidth16(v uint16) uint8 {
 	}
 
 	return 2
+}
+
+// tierFieldWidth is the tier field's width under enc.
+func tierFieldWidth(maxMask uint16, enc TierMaskEncoding) uint8 {
+	switch enc {
+	case TierMaskDerived:
+		return 0
+	case TierMaskCode:
+		return 1
+	default:
+		return tierMaskWidth(maxMask)
+	}
+}
+
+// encodeTierField is the tier field's value for mask under enc.
+func encodeTierField(mask uint16, enc TierMaskEncoding) uint64 {
+	if enc != TierMaskCode {
+		return uint64(mask)
+	}
+	switch bits.OnesCount16(mask) {
+	case 0:
+		return 0
+	case 1:
+		return uint64(bits.TrailingZeros16(mask)) + 1
+	default:
+		return tierCodeSeveral
+	}
 }
 
 // tierMaskWidth is 0 when every mask is 0 or slot 0 alone (implied by
@@ -386,7 +422,7 @@ func (b *CoreStatsBuilder) Finalize() error {
 	bw := bufio.NewWriterSize(final, repackBufferSize)
 	rowBuf := make([]byte, stride)
 	for i := range b.count {
-		exception := repackRow(rowBuf, b.buildRowSlice(i), desc)
+		exception := repackRow(rowBuf, b.buildRowSlice(i), desc, b.tierEnc)
 		if _, err := bw.Write(rowBuf); err != nil {
 			return abortPatch(cleanupTmp(final, tmp, fmt.Errorf("write row %d: %w", i, err)))
 		}
@@ -459,7 +495,7 @@ func cleanupTmp(f *os.File, path string, err error) error {
 // repackRow narrows the build-stride row into the tight stride. A
 // patched field whose value doesn't fit stores its sentinel; repackRow
 // reports whether any did, so the row's exact values go to the patch.
-func repackRow(dst, src []byte, s CoreStatsStride) bool {
+func repackRow(dst, src []byte, s CoreStatsStride, enc TierMaskEncoding) bool {
 	exception := false
 	off := 0
 	for _, f := range [patchedFields]struct {
@@ -475,7 +511,7 @@ func repackRow(dst, src []byte, s CoreStatsStride) bool {
 	}
 	writeLE(dst[off:], uint64(binary.LittleEndian.Uint16(src[bldOffDepth:])), int(s.Depth))
 	off += int(s.Depth)
-	writeLE(dst[off:], uint64(binary.LittleEndian.Uint16(src[bldOffTierMask:])), int(s.TierMask))
+	writeLE(dst[off:], encodeTierField(binary.LittleEndian.Uint16(src[bldOffTierMask:]), enc), int(s.TierMask))
 
 	return exception
 }
@@ -653,10 +689,11 @@ func (r *CoreStatsReader) UnsafeDepth(pos uint64) uint32 {
 	return uint32(r.field(pos, r.offDepth, r.desc.Depth))
 }
 
-// UnsafeTierMask returns the tier slots holding data at pos (bit i =
-// slot i). With a zero-width mask field it is slot 0 for a row with
-// data and 0 otherwise. No bounds check.
-func (r *CoreStatsReader) UnsafeTierMask(pos uint64) uint16 {
+// UnsafeTierField returns pos's tier field, which the tier stats reader
+// decodes by the index's TierMaskEncoding (as a plain mask, bit i is
+// slot i holding data). A zero-width field reads 1 for a row with data
+// and 0 otherwise. No bounds check.
+func (r *CoreStatsReader) UnsafeTierField(pos uint64) uint16 {
 	if r.desc.TierMask == 0 {
 		cnt, bv := r.UnsafeStats(pos)
 		if cnt == 0 && bv == 0 {

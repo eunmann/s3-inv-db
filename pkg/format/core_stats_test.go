@@ -79,7 +79,7 @@ func TestCoreStatsAdaptiveWidths_RoundTrip(t *testing.T) {
 			if got := r.UnsafeDepth(0); got != uint32(tc.depth) {
 				t.Errorf("depth = %d, want %d", got, tc.depth)
 			}
-			if got := r.UnsafeTierMask(0); got != tc.tierMask {
+			if got := r.UnsafeTierField(0); got != tc.tierMask {
 				t.Errorf("tier_mask = %#b, want %#b", got, tc.tierMask)
 			}
 		})
