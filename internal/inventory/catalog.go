@@ -516,17 +516,18 @@ func (c *Catalog) touchedInfo(inv *managedInventory) Info {
 // tiebreak in eviction. Not persisted — restart resets every entry's
 // access time, which is fine.
 func (c *Catalog) TouchAccessed(id ID) {
-	// Only need a read lock to look up the inventory; the actual
-	// timestamp update is an atomic store. This keeps the read hot
-	// path (every WithIndex completion calls TouchAccessed) free of
-	// the manager-wide write lock that previously serialised every
-	// concurrent reader.
 	c.mu.RLock()
 	inv, ok := c.inventories[id]
 	c.mu.RUnlock()
 	if ok {
-		inv.lastAccessedNano.Store(time.Now().UnixNano())
+		inv.touch()
 	}
+}
+
+// touch records a use of inv's index. It's an atomic store, so readers
+// that already hold inv (WithIndex) record it without the catalog lock.
+func (inv *managedInventory) touch() {
+	inv.lastAccessedNano.Store(time.Now().UnixNano())
 }
 
 // Get returns info about an inventory.
@@ -636,6 +637,17 @@ func (c *Catalog) Hydrate(ctx context.Context, info Info, indexDir string) error
 // pending writer. Read-only calls (Get, List, WithIndex on a *different*
 // inventory) are safe.
 func (c *Catalog) WithIndex(id ID, fn func(*indexread.Index) error) error {
+	return c.withIndex(id, fn, true)
+}
+
+// Peek is WithIndex without counting as a use: the last-access time
+// that orders evictions stays as it was. For reads the user didn't ask
+// for, like the dashboard's totals across every loaded run.
+func (c *Catalog) Peek(id ID, fn func(*indexread.Index) error) error {
+	return c.withIndex(id, fn, false)
+}
+
+func (c *Catalog) withIndex(id ID, fn func(*indexread.Index) error, touch bool) error {
 	c.mu.RLock()
 	inv, exists := c.inventories[id]
 	if !exists {
@@ -655,7 +667,9 @@ func (c *Catalog) WithIndex(id ID, fn func(*indexread.Index) error) error {
 	inv.mu.RLock()
 	c.mu.RUnlock()
 	defer inv.mu.RUnlock()
-	defer c.TouchAccessed(id)
+	if touch {
+		defer inv.touch()
+	}
 
 	return fn(idx)
 }
@@ -692,7 +706,7 @@ func (c *Catalog) WithTwoIndexes(ctx context.Context, idA, idB ID, fn func(a, b 
 		invA.mu.RLock()
 		c.mu.RUnlock()
 		defer invA.mu.RUnlock()
-		defer c.TouchAccessed(idA)
+		defer invA.touch()
 
 		return fn(idxA, idxA)
 	}
@@ -707,8 +721,8 @@ func (c *Catalog) WithTwoIndexes(ctx context.Context, idA, idB ID, fn func(a, b 
 	defer second.mu.RUnlock()
 	defer first.mu.RUnlock()
 	defer func() {
-		c.TouchAccessed(idA)
-		c.TouchAccessed(idB)
+		invA.touch()
+		invB.touch()
 	}()
 
 	return fn(idxA, idxB)

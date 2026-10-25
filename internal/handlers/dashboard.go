@@ -245,7 +245,9 @@ func (h *Handlers) tallyView(logger *zerolog.Logger, v *inventory.MergedInventor
 }
 
 func (h *Handlers) addLoadedStats(logger *zerolog.Logger, v *inventory.MergedInventory, c *dashConfAgg, totals *dashTotals) {
-	err := h.manager.WithIndex(v.CompositeID(), func(idx *indexread.Index) error {
+	// Peek, not WithIndex: rendering the dashboard isn't a use of every
+	// run, and touching each would reorder the eviction LRU.
+	err := h.manager.Peek(v.CompositeID(), func(idx *indexread.Index) error {
 		if pos, ok := idx.Lookup(""); ok {
 			stats := idx.Stats(pos)
 			totals.objects += stats.ObjectCount
