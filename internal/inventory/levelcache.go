@@ -79,18 +79,6 @@ func NewLevelCache(maxBytes int64) *LevelCache {
 	}
 }
 
-// Purge drops every entry.
-func (c *LevelCache) Purge() {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.lru.Init()
-	clear(c.entries)
-	c.used = 0
-}
-
 // MaxBytes returns the cache's byte budget; zero for a nil cache.
 func (c *LevelCache) MaxBytes() int64 {
 	if c == nil {
