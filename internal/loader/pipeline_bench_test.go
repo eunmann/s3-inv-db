@@ -113,6 +113,7 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 	var lastPeakHeap uint64
 	var lastPrefixCount uint64
 	var lastMaxDepth uint32
+	var lastRuns int
 
 	b.ResetTimer()
 	for range b.N {
@@ -134,7 +135,8 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 		pipeline := extsort.NewPipeline(cfg, fc)
 
 		b.StartTimer()
-		if _, err := pipeline.Run(b.Context(), info.Path, outDir); err != nil {
+		res, err := pipeline.Run(b.Context(), info.Path, outDir)
+		if err != nil {
 			b.StopTimer()
 			peak.Stop()
 			if memLimit > 0 {
@@ -143,6 +145,7 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 			b.Fatalf("pipeline.Run: %v", err)
 		}
 		b.StopTimer()
+		lastRuns = res.RunFilesCreated
 
 		samplerMax := peak.Stop()
 		if memLimit > 0 {
@@ -167,4 +170,6 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 	b.ReportMetric(float64(lastPrefixCount), "prefixes")
 	b.ReportMetric(float64(lastMaxDepth), "max_depth")
 	b.ReportMetric(float64(chunks), "chunks")
+	// Run files written: every spill plus each worker's final flush.
+	b.ReportMetric(float64(lastRuns), "runs")
 }
