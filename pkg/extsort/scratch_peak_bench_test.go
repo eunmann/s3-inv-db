@@ -11,6 +11,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/format"
 )
 
 // BenchmarkScratchPeak measures the on-disk footprint of every
@@ -29,10 +30,10 @@ import (
 // Per-iteration metrics reported (bytes / wall time):
 //
 //	hashes_bytes        size of mphf_hashes_*.u64disk
-//	preorderpos_bytes   size of mphf_preorderpos_*.u64disk
 //	fingerprints_bytes  size of mphf_fingerprints_*.u64disk
 //	depth_bytes         sum of depth_NN_*.u64stream files
 //	scratch_total_bytes sum across the whole scratch dir
+//	tier_scratch_bytes  size of out/tier_stats/tier_scratch.bin
 //	add_us              Add() loop wall time
 //	finalize_us         Finalize() wall time
 //
@@ -102,6 +103,10 @@ func runScratchPeakOne(b *testing.B, n int) {
 	if err != nil {
 		b.Fatalf("scratch sizes: %v", err)
 	}
+	tierScratch, err := os.Stat(filepath.Join(outDir, format.TierStatsDir, "tier_scratch.bin"))
+	if err != nil {
+		b.Fatalf("tier scratch: %v", err)
+	}
 
 	finalizeStart := time.Now()
 	if err := builder.Finalize(); err != nil {
@@ -110,10 +115,10 @@ func runScratchPeakOne(b *testing.B, n int) {
 	finalizeDur := time.Since(finalizeStart)
 
 	b.ReportMetric(float64(sizes["hashes"]), "hashes_bytes")
-	b.ReportMetric(float64(sizes["preorderpos"]), "preorderpos_bytes")
 	b.ReportMetric(float64(sizes["fingerprints"]), "fingerprints_bytes")
 	b.ReportMetric(float64(sizes["depth"]), "depth_bytes")
 	b.ReportMetric(float64(sizes["total"]), "scratch_total_bytes")
+	b.ReportMetric(float64(tierScratch.Size()), "tier_scratch_bytes")
 	b.ReportMetric(float64(addDur.Microseconds()), "add_us")
 	b.ReportMetric(float64(finalizeDur.Microseconds()), "finalize_us")
 }
@@ -137,8 +142,6 @@ func bucketScratchSizes(root string) (map[string]int64, error) {
 		switch {
 		case strings.HasPrefix(name, "mphf_hashes_"):
 			sizes["hashes"] += size
-		case strings.HasPrefix(name, "mphf_preorderpos_"):
-			sizes["preorderpos"] += size
 		case strings.HasPrefix(name, "mphf_fingerprints_"):
 			sizes["fingerprints"] += size
 		case strings.HasPrefix(name, "depth_"):

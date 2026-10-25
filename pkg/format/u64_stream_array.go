@@ -18,7 +18,7 @@ import (
 // added in preorder (monotonically increasing within a depth) and
 // read back exactly once during Build's concatenation pass.
 //
-// The MPHF builder's hashes / preorderpos / fingerprints arrays
+// The MPHF builder's hashes and fingerprints arrays
 // require Slice() (mmap-backed random access for bbhash and the
 // scatter-write inversion) and therefore stay on u64DiskArray —
 // those values are also pseudo-random, so compression would not

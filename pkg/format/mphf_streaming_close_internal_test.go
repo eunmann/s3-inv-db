@@ -13,7 +13,7 @@ func TestStreamingMPHFBuilder_CloseSurfacesErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStreamingMPHFBuilder: %v", err)
 	}
-	if err := b.Add("a/", 1); err != nil {
+	if err := b.Add("a/"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -45,7 +45,7 @@ func TestStreamingMPHFBuilder_BuildTwiceRejected(t *testing.T) {
 	}
 	defer b.Close()
 
-	if err := b.Add("a/", 0); err != nil {
+	if err := b.Add("a/"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if err := b.Build(outDir); err != nil {
@@ -82,7 +82,7 @@ func TestStreamingMPHFBuilder_CloseClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStreamingMPHFBuilder: %v", err)
 	}
-	if err := b.Add("a/", 1); err != nil {
+	if err := b.Add("a/"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if err := b.Close(); err != nil {

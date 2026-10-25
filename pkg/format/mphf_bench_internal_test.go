@@ -35,8 +35,8 @@ func buildMPHFForBench(b *testing.B, prefixes []string) string {
 	if err != nil {
 		b.Fatalf("NewStreamingMPHFBuilder: %v", err)
 	}
-	for i, p := range prefixes {
-		if err := builder.Add(p, uint64(i)); err != nil {
+	for _, p := range prefixes {
+		if err := builder.Add(p); err != nil {
 			builder.Close()
 			b.Fatalf("Add: %v", err)
 		}
