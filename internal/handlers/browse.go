@@ -14,6 +14,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
+	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/rs/zerolog"
 )
 
@@ -226,26 +227,25 @@ func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, o
 	level.TotalChildren = page.Total
 	level.Pagination = page.Pagination
 	level.Children = make([]BrowseChild, 0, len(page.Positions))
+	var tiers []indexread.TierBreakdown
 	for _, p := range page.Positions {
-		if child, ok := h.browseChild(idx, p, prefix); ok {
-			level.Children = append(level.Children, child)
-		}
+		level.Children = append(level.Children, h.browseChild(idx, p, prefix, &tiers))
 	}
 
 	return level
 }
 
 // browseChild builds the display row for one child; only rows on the
-// visible page are built.
-func (h *Handlers) browseChild(idx *indexread.Index, p uint64, parent string) (BrowseChild, bool) {
-	fullPrefix, err := idx.PrefixString(p)
-	if err != nil {
-		return BrowseChild{}, false
-	}
+// visible page are built. A child's prefix is its parent's plus its
+// segment and a slash (the parent is the prefix the page looked up), and
+// its cost is priced from tiers, a buffer reused across the page, with
+// the compiled price table.
+func (h *Handlers) browseChild(idx *indexread.Index, p uint64, parent string, tiers *[]indexread.TierBreakdown) BrowseChild {
+	segment := idx.ChildSegment(p)
 	stats := idx.Stats(p)
 	child := BrowseChild{
-		Segment:      inventory.SegmentOf(parent, fullPrefix),
-		Prefix:       fullPrefix,
+		Segment:      segment,
+		Prefix:       parent + segment + "/",
 		ObjectCount:  stats.ObjectCount,
 		ObjectCountH: humanfmt.CountUint64(stats.ObjectCount),
 		TotalBytes:   stats.TotalBytes,
@@ -254,12 +254,16 @@ func (h *Handlers) browseChild(idx *indexread.Index, p uint64, parent string) (B
 	}
 	if !idx.HasTierData() {
 		child.MonthlyCostFormatted = missingValueGlyph
-	} else if est := h.computeCostEstimate(idx.TierBreakdown(p), false); est != nil {
-		child.MonthlyCostMicrodollars = est.TotalMicrodollars
-		child.MonthlyCostFormatted = est.TotalFormatted
+
+		return child
+	}
+	*tiers = idx.AppendTierBreakdown((*tiers)[:0], p)
+	if len(*tiers) > 0 {
+		child.MonthlyCostMicrodollars = h.prices.MonthlyTotal(*tiers)
+		child.MonthlyCostFormatted = pricing.FormatCost(child.MonthlyCostMicrodollars)
 	}
 
-	return child, true
+	return child
 }
 
 // BrowseLevelResponse is the JSON shape returned by BrowseLevelAPI.
