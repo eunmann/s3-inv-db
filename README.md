@@ -205,7 +205,7 @@ reference: [docs/library-api.md](docs/library-api.md).
 
 ## Requirements
 
-Go 1.26+, AWS credentials for build-time S3 access, Docker for the
+Go 1.27+, AWS credentials for build-time S3 access, Docker for the
 dev/test stack.
 
 ## License

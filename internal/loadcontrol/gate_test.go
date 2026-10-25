@@ -35,8 +35,7 @@ func TestGate_Load_RefusesWhenEstimateOverBudget(t *testing.T) {
 		return "", nil
 	}
 	err := gate.Load(t.Context(), id, build, inventory.GatedLoadOptions{EstimateBytes: 500, Pin: true})
-	var refused *loadcontrol.BudgetRefusedError
-	if !errors.As(err, &refused) {
+	if _, ok := errors.AsType[*loadcontrol.BudgetRefusedError](err); !ok {
 		t.Errorf("expected BudgetRefusedError, got %v", err)
 	}
 }

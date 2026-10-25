@@ -55,8 +55,7 @@ func (g *Gate) Load(ctx context.Context, id inventory.ID, build inventory.BuildF
 		EstimateBytes: opts.EstimateBytes,
 		All:           g.manager.List(),
 	})
-	var refused *budget.PlannerRefusedError
-	if errors.As(err, &refused) {
+	if refused, ok := errors.AsType[*budget.PlannerRefusedError](err); ok {
 		if !opts.Force {
 			return &BudgetRefusedError{Plan: refused.Plan}
 		}

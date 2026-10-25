@@ -18,6 +18,9 @@
 # Suite lines (bench/suite/*.txt): `<tags> <package> <bench regex> <benchtime>`,
 # tags `-` for none. Entries tagged `integration` need a local S3 server;
 # when AWS_ENDPOINT_URL_S3 is unset the script starts one in Docker.
+# BASE_GOTOOLCHAIN / HEAD_GOTOOLCHAIN (e.g. go1.26.10) build that side
+# with a given Go toolchain, to gate a toolchain upgrade; by default both
+# sides use the toolchain `go` resolves for their go.mod.
 # Results land in bench/ab/<timestamp>/ (gitignored); each side's full
 # benchmark output is in <side>.log.
 set -euo pipefail
@@ -99,7 +102,11 @@ for side in base head; do
 		[[ -x $bin ]] && continue
 		tagflag=()
 		[[ $tags != - ]] && tagflag=(-tags "$tags")
-		(cd "$src" && go test -c "${tagflag[@]}" -o "$root/$bin" "./$pkg") || die "cannot build $side $pkg"
+		toolchain=BASE_GOTOOLCHAIN
+		[[ $side == head ]] && toolchain=HEAD_GOTOOLCHAIN
+		toolchain=${!toolchain:-}
+		(cd "$src" && GOTOOLCHAIN=${toolchain:-${GOTOOLCHAIN:-auto}} go test -c "${tagflag[@]}" -o "$root/$bin" "./$pkg") ||
+			die "cannot build $side $pkg"
 	done
 done
 

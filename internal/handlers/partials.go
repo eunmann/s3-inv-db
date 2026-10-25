@@ -321,7 +321,7 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 // body attached to a 2xx response.
 func (h *Handlers) renderDiscoveredRowFromStatus(w http.ResponseWriter, r *http.Request, status int, disc inventory.Inventory) {
 	view := DiscoveredRowView{
-		MergedInventory: inventory.MergedInventory{Inventory: disc, State: inventory.StateNotLoaded},
+		Inventory: disc, State: inventory.StateNotLoaded,
 	}
 	if info, ok := h.manager.Get(disc.CompositeID()); ok {
 		view.State = info.State

@@ -103,7 +103,7 @@ func TestBus_Cancel_ClosesChannel(t *testing.T) {
 	// terminate promptly.
 	done := make(chan struct{})
 	go func() {
-		for range sub.C { //nolint:revive // explicit drain
+		for range sub.C {
 		}
 		close(done)
 	}()
@@ -121,7 +121,7 @@ func TestBus_Close_DisablesPublishAndClosesSubscribers(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		for range sub.C { //nolint:revive // explicit drain until close
+		for range sub.C {
 		}
 		close(done)
 	}()

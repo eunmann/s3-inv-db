@@ -57,6 +57,11 @@ is already set.
 A regression is merged only with an explicit justification in the
 commit message (CLAUDE.md, Performance & Benchmarks).
 
+A Go toolchain upgrade changes generated code everywhere, so it runs
+both gates with the old toolchain on the base side:
+`BASE_GOTOOLCHAIN=go1.26.10 make bench-query BASE=main`. Without it,
+`GOTOOLCHAIN=auto` builds both sides with the newest local toolchain.
+
 ## The suites
 
 Every entry does milliseconds to seconds of work per op on fixed,

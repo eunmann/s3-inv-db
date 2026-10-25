@@ -4,7 +4,7 @@
 
 # The builder runs on the build host's platform and cross-compiles, so a
 # multi-arch build never compiles Go under emulation.
-FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine AS builder
 
 WORKDIR /src
 

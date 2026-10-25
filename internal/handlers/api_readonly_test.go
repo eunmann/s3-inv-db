@@ -162,9 +162,9 @@ func TestInventoryGroup_ConfigID(t *testing.T) {
 func TestGroupDiscoveredForAPI_GroupsRunsByConfig(t *testing.T) {
 	f := newTestFixture(t)
 	views := []inventory.MergedInventory{
-		{Inventory: inventory.Inventory{SourceBucket: "b1", Name: "i1", Run: "2026-05-13T03-00Z", ManifestKey: "k1/2026-05-13T03-00Z/manifest.json"}, State: inventory.StateNotLoaded},
-		{Inventory: inventory.Inventory{SourceBucket: "b1", Name: "i1", Run: "2026-05-12T03-00Z", ManifestKey: "k1/2026-05-12T03-00Z/manifest.json"}, State: inventory.StateNotLoaded},
-		{Inventory: inventory.Inventory{SourceBucket: "b1", Name: "i2", Run: "2026-05-13T03-00Z", ManifestKey: "k2/2026-05-13T03-00Z/manifest.json"}, State: inventory.StateNotLoaded},
+		{SourceBucket: "b1", Name: "i1", Run: "2026-05-13T03-00Z", ManifestKey: "k1/2026-05-13T03-00Z/manifest.json", State: inventory.StateNotLoaded},
+		{SourceBucket: "b1", Name: "i1", Run: "2026-05-12T03-00Z", ManifestKey: "k1/2026-05-12T03-00Z/manifest.json", State: inventory.StateNotLoaded},
+		{SourceBucket: "b1", Name: "i2", Run: "2026-05-13T03-00Z", ManifestKey: "k2/2026-05-13T03-00Z/manifest.json", State: inventory.StateNotLoaded},
 	}
 	groups := f.h.GroupDiscoveredForAPIForTest(nil, views)
 	if len(groups) != 2 {
