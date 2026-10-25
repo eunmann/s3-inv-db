@@ -187,6 +187,13 @@ func TestAsyncLifecycle_DuplicateSubmitSkipped(t *testing.T) {
 		t.Fatalf("ListForInventory: %v", err)
 	}
 	if len(js) != 1 {
+		// Intermittent in CI and not reproduced locally: record what the
+		// rows were so the next failure says which path made the second.
+		for _, j := range js {
+			t.Logf("job %s kind=%s state=%s started=%s finished=%s updated=%s error=%q",
+				j.ID, j.Kind, j.State, j.StartedAt.Format(time.RFC3339Nano),
+				j.FinishedAt.Format(time.RFC3339Nano), j.UpdatedAt.Format(time.RFC3339Nano), j.Error)
+		}
 		t.Errorf("job count = %d, want 1 (duplicate submit must not create a second job)", len(js))
 	}
 }
