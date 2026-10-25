@@ -10,7 +10,8 @@
 #
 #   sec/op                       > BENCH_TIME_PCT (default 5)
 #   B/op, allocs/op, disk_B      > BENCH_MEM_PCT  (default 5)
-#   peak_heap_B (sampled, noisy) > BENCH_HEAP_PCT (default 15)
+#   peak_heap_B (sampled, noisy),
+#   retained_heap_B, gc_scan_heap_B > BENCH_HEAP_PCT (default 15)
 #
 # It exits 2 when it cannot compare: bad usage, a build or benchmark
 # failure, a suite entry with no results on a side, or no S3 server.
@@ -160,8 +161,8 @@ awk -F, -v tp="$time_pct" -v mp="$mem_pct" -v hp="$heap_pct" '
 	{
 		delta = $6; sub(/%$/, "", delta); delta += 0
 		split($7, pv, /[= ]/); p = pv[2] + 0
-		limit = (unit == "sec/op") ? tp : (unit == "peak_heap_B") ? hp : mp
-		if (unit !~ /^(sec\/op|B\/op|allocs\/op|peak_heap_B|disk_B)$/) next
+		limit = (unit == "sec/op") ? tp : (unit ~ /^(peak_heap_B|retained_heap_B|gc_scan_heap_B)$/) ? hp : mp
+		if (unit !~ /^(sec\/op|B\/op|allocs\/op|peak_heap_B|retained_heap_B|gc_scan_heap_B|disk_B)$/) next
 		if (p < 0.05 && delta > limit) {
 			printf "REGRESSION %s %s: %+.2f%% (limit %s%%, p=%s)\n", $1, unit, delta, limit, p
 			bad = 1
