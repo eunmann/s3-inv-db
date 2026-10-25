@@ -255,7 +255,12 @@ func (h *Handlers) LoadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) UnloadInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
 	h.runInventoryOp(w, r, id, "unload", func(ctx context.Context) error {
-		return h.manager.Unload(ctx, id)
+		if err := h.manager.Unload(ctx, id); err != nil {
+			return err //nolint:wrapcheck // runInventoryOp maps the manager's sentinel errors
+		}
+		h.freeRunCache(ctx, id)
+
+		return nil
 	})
 }
 
@@ -291,16 +296,19 @@ func (h *Handlers) DeleteInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
 
 	if err := h.manager.Remove(r.Context(), id); err != nil {
-		if errors.Is(err, inventory.ErrNotFound) {
+		switch {
+		case errors.Is(err, inventory.ErrNotFound):
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
-
-			return
+		case errors.Is(err, inventory.ErrInvalidState):
+			WriteJSONError(w, http.StatusConflict, err.Error())
+		default:
+			zerolog.Ctx(r.Context()).Error().Err(err).Stringer("id", id).Msg("failed to delete inventory")
+			WriteJSONError(w, http.StatusInternalServerError, "failed to delete inventory")
 		}
-		zerolog.Ctx(r.Context()).Error().Err(err).Stringer("id", id).Msg("failed to delete inventory")
-		WriteJSONError(w, http.StatusInternalServerError, "failed to delete inventory")
 
 		return
 	}
+	h.freeRunCache(r.Context(), id)
 
 	WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }

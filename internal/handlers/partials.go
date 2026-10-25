@@ -39,6 +39,7 @@ func (h *Handlers) UnloadInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 
 		return
 	}
+	h.freeRunCache(r.Context(), id)
 	h.renderInventoryRow(w, r, id)
 }
 
@@ -55,6 +56,7 @@ func (h *Handlers) DeleteInventoryRowPartial(w http.ResponseWriter, r *http.Requ
 
 		return
 	}
+	h.freeRunCache(r.Context(), id)
 	w.Header().Set("Content-Type", contentTypeHTML)
 	w.WriteHeader(http.StatusOK)
 }
@@ -137,26 +139,12 @@ func (h *Handlers) UnloadDiscoveredRowPartial(w http.ResponseWriter, r *http.Req
 	name := chi.URLParam(r, "id")
 	run := chi.URLParam(r, "run")
 	composite := inventory.ID(src + "/" + name + "/" + run)
-	logger := zerolog.Ctx(r.Context())
 	if err := h.manager.Unload(r.Context(), composite); err != nil {
 		respondManagerError(w, r, err, "unload inventory")
 
 		return
 	}
-	if h.loader != nil {
-		if err := h.loader.RemoveCache(inventory.CacheKey{
-			SourceBucket: src,
-			InventoryID:  name,
-			Run:          run,
-		}); err != nil {
-			// Don't fail the request — the memory side is already
-			// released; surface the disk error in logs so the operator
-			// can clean up.
-			logger.Warn().Err(err).
-				Str("src", src).Str("id", name).Str("run", run).
-				Msg("remove cache dir after unload")
-		}
-	}
+	h.freeRunCache(r.Context(), composite)
 	h.renderDiscoveredRow(w, r, src, name, run)
 }
 
@@ -444,4 +432,20 @@ func (h *Handlers) submitDiscoveredLoadJob(parent context.Context, composite inv
 	}
 
 	return nil
+}
+
+// freeRunCache deletes the on-disk cache of a discovered run after it
+// was unloaded or removed, so an unloaded run never holds disk outside
+// the budget. Only composite source/inventory/run IDs have a cache, and
+// it lives under the loader's cache root: an inventory registered from
+// a local path keeps its directory. A failure is logged, not returned:
+// the memory side is already released.
+func (h *Handlers) freeRunCache(ctx context.Context, id inventory.ID) {
+	p := id.Split()
+	if h.loader == nil || !p.OK {
+		return
+	}
+	if err := h.loader.RemoveCache(inventory.CacheKey{SourceBucket: p.Source, InventoryID: p.Inventory, Run: p.Run}); err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Stringer("id", id).Msg("remove cache dir after unload")
+	}
 }

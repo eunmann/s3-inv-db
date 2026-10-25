@@ -152,7 +152,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	// ctx is later cancelled — context.WithoutCancel inherits any
 	// values (logger, request id) but drops cancellation.
 	startupCtx := context.WithoutCancel(ctx)
-	s.recover(startupCtx, cfg.Logger)
+	s.restore(startupCtx, cfg.Logger)
 	s.backfillIndexSizes(startupCtx, cfg.Logger)
 
 	return s, nil
@@ -331,12 +331,27 @@ func (s *Server) backfillIndexSizes(ctx context.Context, logger zerolog.Logger) 
 	}
 }
 
+// restore rebuilds the catalog from the previous process's state, then
+// reconciles the cache root against it. Reconciling against a catalog
+// that wasn't rebuilt would delete every loaded run's index, so a
+// failed rebuild skips it.
+func (s *Server) restore(ctx context.Context, logger zerolog.Logger) {
+	if !s.recover(ctx, logger) {
+		logger.Warn().Msg("catalog not restored; cache reconcile skipped")
+
+		return
+	}
+	s.reconcileCache(logger)
+}
+
 // recover rehydrates the in-memory inventory.Catalog from invStore and
 // marks any jobs left running/queued by the previous process as
 // aborted. Inventories left in the parsing state — meaning a load was
 // in flight when the previous process exited — get flipped to error so
-// the UI shows a Retry. Best-effort: failures are logged, not returned.
-func (s *Server) recover(ctx context.Context, logger zerolog.Logger) {
+// the UI shows a Retry. Best-effort: failures are logged; it reports
+// whether the inventories could be read, i.e. whether the catalog
+// reflects the store.
+func (s *Server) recover(ctx context.Context, logger zerolog.Logger) bool {
 	n, err := s.jobStore.MarkAborted(ctx, "server restart", jobs.StateQueued, jobs.StateRunning)
 	if err != nil {
 		logger.Error().Err(err).Msg("mark stale jobs aborted")
@@ -348,7 +363,7 @@ func (s *Server) recover(ctx context.Context, logger zerolog.Logger) {
 	if err != nil {
 		logger.Error().Err(err).Msg("list inventories at startup")
 
-		return
+		return false
 	}
 	for i := range infos {
 		info := &infos[i]
@@ -386,6 +401,29 @@ func (s *Server) recover(ctx context.Context, logger zerolog.Logger) {
 		// so no explicit Upsert is required here — but for the
 		// StateLoading→StateError flip we performed above the input,
 		// Hydrate's mirror already wrote the corrected state.
+	}
+
+	return true
+}
+
+// reconcileCache removes, after recover, the cache directories of runs
+// that aren't loaded and the leftovers of killed builds, so disk use
+// matches what the budget counts. See loader.Reconcile for what it may
+// remove. Best-effort: failures are logged.
+func (s *Server) reconcileCache(logger zerolog.Logger) {
+	if s.bldr == nil {
+		return
+	}
+	removed, err := s.bldr.Reconcile(&logger, func(key inventory.CacheKey) bool {
+		info, ok := s.manager.Get(inventory.ID(key.SourceBucket + "/" + key.InventoryID + "/" + key.Run))
+
+		return ok && info.State == inventory.StateLoaded
+	})
+	if err != nil {
+		logger.Error().Err(err).Msg("reconcile cache dir")
+	}
+	for _, dir := range removed {
+		logger.Info().Str("dir", dir).Msg("removed cache of a run that isn't loaded")
 	}
 }
 

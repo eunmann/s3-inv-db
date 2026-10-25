@@ -65,8 +65,8 @@ Mutating:
 |---|---|---|
 | `/api/inventories` | POST | Register a non-discovered inventory |
 | `/api/inventories/{id}/load` | POST | Synchronous load |
-| `/api/inventories/{id}/unload` | POST | Unload |
-| `/api/inventories/{id}` | DELETE | Remove |
+| `/api/inventories/{id}/unload` | POST | Unload; a discovered run's cache dir is deleted |
+| `/api/inventories/{id}` | DELETE | Remove; a discovered run's cache dir is deleted. **409** while the run is loading (cancel its job first) |
 | `/api/inventories/{id}/stats:batch` | POST | Body: `{"prefixes":[...],"show_tiers":bool,"estimate_cost":bool}`. Returns one row per prefix with `found=false` for misses. Cap defaults to 1000; override with `query_batch_max`. |
 | `/api/inventories/{id}/pin` | POST | Toggle pin state (`pinned=true|false`); pinned runs are never auto-evicted |
 | `/api/configurations/{src}/{name}/auto-load` | POST | Set auto-load + retention for a configuration (`auto_load=on|off`, `retention=N`) |
