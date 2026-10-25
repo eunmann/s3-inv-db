@@ -439,37 +439,66 @@ func TestTierHasGlacierOverhead(t *testing.T) {
 }
 
 // TestMonthlyTotalMatchesComputeMonthlyCost pins MonthlyTotalMicrodollars
-// to ComputeMonthlyCost's total over random breakdowns of every tier,
-// including tiers the table has no price for and small objects that
-// pay the minimum-size penalty.
+// and Compiled.MonthlyTotal to ComputeMonthlyCost's total over random
+// breakdowns of every tier, including tier IDs past the table, tiers a
+// custom table leaves out, and small objects that pay the minimum-size
+// penalty.
 func TestMonthlyTotalMatchesComputeMonthlyCost(t *testing.T) {
-	pt := pricing.DefaultUSEast1Prices()
-	all := tiers.AllTiers()
-	r := rand.New(rand.NewPCG(1, 2))
-	for i := range 2000 {
-		var breakdown []format.TierBreakdown
-		for _, tier := range all {
-			if r.IntN(3) != 0 {
-				continue
-			}
-			breakdown = append(breakdown, format.TierBreakdown{
-				TierID:      tier.ID,
-				TierName:    tier.Name,
-				ObjectCount: r.Uint64N(1 << 20),
-				Bytes:       r.Uint64N(1 << (10 + r.IntN(31))), // small averages hit the minimum-size penalty
-			})
-		}
-		if i%7 == 0 {
-			breakdown = append(breakdown, format.TierBreakdown{TierName: "UNPRICED", ObjectCount: 5, Bytes: 5 << 30})
-		}
-		want := pricing.ComputeMonthlyCost(breakdown, pt).TotalMicrodollars
-		if got := pricing.MonthlyTotalMicrodollars(breakdown, pt); got != want {
-			t.Fatalf("case %d %+v: MonthlyTotalMicrodollars = %d, ComputeMonthlyCost total = %d", i, breakdown, got, want)
-		}
+	partial := pricing.DefaultUSEast1Prices()
+	// Surcharge-bearing tiers: pricing them at 0 would still add
+	// monitoring and the Standard-rate Glacier index overhead.
+	for _, name := range []string{"GLACIER", "INTELLIGENT_TIERING_ARCHIVE", "INTELLIGENT_TIERING_FREQUENT", "STANDARD_IA"} {
+		delete(partial.PerGBMonth, name)
 	}
+	tables := []struct {
+		name string
+		pt   pricing.PriceTable
+	}{
+		{"default", pricing.DefaultUSEast1Prices()},
+		{"partial", partial},
+	}
+	all := tiers.AllTiers()
+	for _, tc := range tables {
+		t.Run(tc.name, func(t *testing.T) {
+			compiled := pricing.Compile(tc.pt)
+			r := rand.New(rand.NewPCG(1, 2))
+			for i := range 2000 {
+				var breakdown []format.TierBreakdown
+				for _, tier := range all {
+					if r.IntN(3) != 0 {
+						continue
+					}
+					breakdown = append(breakdown, format.TierBreakdown{
+						TierID:      tier.ID,
+						TierName:    tier.Name,
+						ObjectCount: r.Uint64N(1 << 20),
+						Bytes:       r.Uint64N(1 << (10 + r.IntN(31))), // small averages hit the minimum-size penalty
+					})
+				}
+				if i%7 == 0 {
+					breakdown = append(breakdown, format.TierBreakdown{TierID: tiers.NumTiers, TierName: "UNPRICED", ObjectCount: 5, Bytes: 5 << 30})
+				}
+				want := pricing.ComputeMonthlyCost(breakdown, tc.pt).TotalMicrodollars
+				if got := pricing.MonthlyTotalMicrodollars(breakdown, tc.pt); got != want {
+					t.Fatalf("case %d %+v: MonthlyTotalMicrodollars = %d, ComputeMonthlyCost total = %d", i, breakdown, got, want)
+				}
+				if got := compiled.MonthlyTotal(breakdown); got != want {
+					t.Fatalf("case %d %+v: Compiled.MonthlyTotal = %d, ComputeMonthlyCost total = %d", i, breakdown, got, want)
+				}
+			}
+		})
+	}
+	pt := pricing.DefaultUSEast1Prices()
+	compiled := pricing.Compile(pt)
+	standard := []format.TierBreakdown{{TierID: tiers.Standard, TierName: "STANDARD", ObjectCount: 1, Bytes: 1 << 30}}
 	if allocs := testing.AllocsPerRun(10, func() {
-		pricing.MonthlyTotalMicrodollars([]format.TierBreakdown{{TierName: "STANDARD", ObjectCount: 1, Bytes: 1 << 30}}, pt)
+		pricing.MonthlyTotalMicrodollars(standard, pt)
 	}); allocs != 0 {
 		t.Errorf("MonthlyTotalMicrodollars: %v allocs, want 0", allocs)
+	}
+	if allocs := testing.AllocsPerRun(10, func() {
+		compiled.MonthlyTotal(standard)
+	}); allocs != 0 {
+		t.Errorf("Compiled.MonthlyTotal: %v allocs, want 0", allocs)
 	}
 }

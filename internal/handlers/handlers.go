@@ -46,17 +46,20 @@ type CacheStore interface {
 // Handlers contains all HTTP handlers and their dependencies. The
 // request-scoped logger comes from zerolog.Ctx(r.Context()).
 type Handlers struct {
-	loader                   CacheStore
-	manager                  *inventory.Catalog
-	discovery                *inventory.Discovery
-	configStore              *inventory.ConfigStore
-	tracker                  *budget.Tracker
-	renderer                 *templates.Renderer
-	jobMgr                   *jobs.Scheduler
-	jobStore                 *jobs.Store
-	jobBus                   *jobs.Bus
-	s3SourceURI              string
-	priceTable               pricing.PriceTable
+	loader      CacheStore
+	manager     *inventory.Catalog
+	discovery   *inventory.Discovery
+	configStore *inventory.ConfigStore
+	tracker     *budget.Tracker
+	renderer    *templates.Renderer
+	jobMgr      *jobs.Scheduler
+	jobStore    *jobs.Store
+	jobBus      *jobs.Bus
+	s3SourceURI string
+	priceTable  pricing.PriceTable
+	// prices is priceTable compiled per tier ID, for pricing every child
+	// of a level when sorting by cost.
+	prices                   *pricing.Compiled
 	discoveryRefreshInterval time.Duration
 
 	discoverer inventory.Discoverer
@@ -238,6 +241,7 @@ func New(
 		manager:     mgr,
 		renderer:    renderer,
 		priceTable:  priceTable,
+		prices:      pricing.Compile(priceTable),
 		jobMgr:      deps.JobMgr,
 		jobStore:    deps.JobStore,
 		jobBus:      deps.JobBus,

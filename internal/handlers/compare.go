@@ -307,7 +307,7 @@ func (h *Handlers) compareCost() inventory.CompareCostFunc {
 	return func(idx *indexread.Index, pos uint64) uint64 {
 		buf = idx.AppendTierBreakdown(buf[:0], pos)
 
-		return pricing.MonthlyTotalMicrodollars(buf, h.priceTable)
+		return h.prices.MonthlyTotal(buf)
 	}
 }
 
