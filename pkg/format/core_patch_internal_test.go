@@ -108,8 +108,9 @@ func TestCoreWithoutExceptionsWritesNoPatch(t *testing.T) {
 	}
 }
 
-// TestChoosePatchIsSmallest: no other width set costs less than the
-// chosen one, and patching beats plain widths on a pyramid.
+// TestChoosePatchIsSmallest: no other width set within the exception
+// cap costs less than the chosen one, and patching beats plain widths on
+// a pyramid.
 func TestChoosePatchIsSmallest(t *testing.T) {
 	rows := pyramidRows(3000, 7)
 	var hist patchHistogram
@@ -129,6 +130,26 @@ func TestChoosePatchIsSmallest(t *testing.T) {
 	}
 	if bestSize >= int64(len(rows))*(3+8+2+1) {
 		t.Errorf("patched core files %d bytes are not smaller than plain widths", bestSize)
+	}
+}
+
+// TestChoosePatchCapsExceptions: when the smallest layout patches more
+// than maxPatchRatePPM of rows, choosePatch takes a wider one within it.
+func TestChoosePatchCapsExceptions(t *testing.T) {
+	const rows = 10_000
+	wide := uint64(rows / 50) // 2% of rows need a 5th bytes byte
+	var hist patchHistogram
+	hist[1][4][1] = rows - wide
+	hist[1][5][1] = wide
+	if narrow, full := patchCost(rows, 1, 4, 1, wide), patchCost(rows, 1, 5, 1, 0); narrow >= full {
+		t.Fatalf("fixture: 4-byte bytes cost %d does not beat 5-byte %d, so the cap would not bind", narrow, full)
+	}
+	got := hist.choosePatch(rows)
+	if got.count != 1 || got.bytes != 5 || got.size != 1 {
+		t.Errorf("choosePatch = %+v, want widths 1/5/1", got)
+	}
+	if got.exceptions*1_000_000 > maxPatchRatePPM*rows {
+		t.Errorf("choosePatch exceptions = %d, over the cap of %d per million of %d rows", got.exceptions, maxPatchRatePPM, rows)
 	}
 }
 
