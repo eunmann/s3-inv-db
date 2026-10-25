@@ -398,8 +398,11 @@ func (m *levelMerge) sortKey(r *compareRow, objDelta, byteDelta int64) uint64 {
 	}
 }
 
+// signBit is the int64 sign bit as a uint64.
+const signBit = uint64(1) << 63
+
 // signedKey maps int64 order onto uint64 order.
-func signedKey(v int64) uint64 { return uint64(v) ^ (1 << 63) }
+func signedKey(v int64) uint64 { return uint64(v) ^ signBit }
 
 // compareSlashTerminated compares x+"/" with y+"/" without building them.
 func compareSlashTerminated(x, y string) int {
