@@ -5,9 +5,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/eunmann/s3-inv-db/internal/handlers"
+	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -65,5 +68,55 @@ func TestBrowseLevelAPI_RowsMatchIndex(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestBrowsePartial_RowsShowFormattedNumbers: the HTML rows render each
+// child's formatted count, size and cost, which only the HTML path
+// builds.
+func TestBrowsePartial_RowsShowFormattedNumbers(t *testing.T) {
+	const id = "src/inv/2026-01-01T00-00Z"
+	mgr := loadCostIndex(t, id, []costObj{
+		{"a/x", 3 * gib, tiers.Standard},
+		{"b/x", 1 * gib, tiers.GlacierFR},
+		{"b/y", 5, tiers.Standard},
+		{"c/d/x", 7 * gib, tiers.StandardIA},
+	})
+	h := newWiredHandlers(t, mgr)
+	w := httptest.NewRecorder()
+	h.BrowsePage(w, newHXRequest(t, http.MethodGet, "/browse?inventory_id="+url.QueryEscape(id)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	rows := parseHTMLFragment(t, w.Body.String()).Find("table").Last().Find("tbody tr") // the children table follows the tier table
+	if rows.Length() != 3 {
+		t.Fatalf("rows = %d, want 3", rows.Length())
+	}
+	prices := pricing.DefaultUSEast1Prices()
+	err := mgr.WithIndex(id, func(idx *indexread.Index) error {
+		rows.Each(func(_ int, tr *goquery.Selection) {
+			cells := tr.Find("td")
+			seg := strings.TrimSuffix(strings.TrimSpace(cells.Eq(0).Text()), "/")
+			pos, ok := idx.Lookup(seg + "/")
+			if !ok {
+				t.Fatalf("row %q not in index", seg)
+			}
+			st := idx.Stats(pos)
+			want := []string{
+				humanfmt.CountUint64(st.ObjectCount),
+				humanfmt.BytesUint64(st.TotalBytes),
+				pricing.FormatCost(pricing.ComputeMonthlyCost(idx.TierBreakdown(pos), prices).TotalMicrodollars),
+			}
+			for i, w := range want {
+				if got := strings.TrimSpace(cells.Eq(i + 1).Text()); got != w {
+					t.Errorf("row %q cell %d = %q, want %q", seg, i+1, got, w)
+				}
+			}
+		})
+
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

@@ -52,6 +52,8 @@ type BrowseChild struct {
 	TotalBytes              uint64
 	MonthlyCostMicrodollars uint64
 	HasChildren             bool
+	// Priced is set when the row has a tier breakdown to price.
+	Priced bool
 }
 
 // BrowseSortLink carries the {sort, dir, indicator} bundle a column

@@ -123,7 +123,7 @@ func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request, opts
 		// placeholder — the user can pick a different inventory.
 		if err == nil {
 			level.QueryDurationH = humanfmt.Duration(time.Since(start))
-			setBrowseLinks(&level)
+			finishBrowseRowsHTML(&level)
 			data["InitialLevel"] = level
 		}
 	}
@@ -159,15 +159,25 @@ func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	level.QueryDurationH = humanfmt.Duration(time.Since(start))
-	setBrowseLinks(&level)
+	finishBrowseRowsHTML(&level)
 	h.renderHTMLPartial(w, r, "browse_level.html", "failed to render browse level", level)
 }
 
-// setBrowseLinks sets the link attributes of each row with children;
-// only the HTML views render them.
-func setBrowseLinks(level *BrowseLevel) {
+// finishBrowseRowsHTML sets what only the HTML views render: each row's
+// formatted numbers and cost, and the link of each row with children.
+// The JSON API returns the numbers alone.
+func finishBrowseRowsHTML(level *BrowseLevel) {
 	for i := range level.Children {
-		if c := &level.Children[i]; c.HasChildren {
+		c := &level.Children[i]
+		c.ObjectCountH = humanfmt.CountUint64(c.ObjectCount)
+		c.TotalBytesH = humanfmt.BytesUint64(c.TotalBytes)
+		switch {
+		case !level.HasTierData:
+			c.MonthlyCostFormatted = missingValueGlyph
+		case c.Priced:
+			c.MonthlyCostFormatted = pricing.FormatCost(c.MonthlyCostMicrodollars)
+		}
+		if c.HasChildren {
 			c.Href, c.HxVals = templates.BrowseLink(string(level.InventoryID), c.Prefix)
 		}
 	}
@@ -235,8 +245,8 @@ func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, o
 	return level
 }
 
-// browseChild builds the display row for one child; only rows on the
-// visible page are built. A child's prefix is its parent's plus its
+// browseChild builds the row for one child (numbers only; see
+// finishBrowseRowsHTML); only rows on the visible page are built. A child's prefix is its parent's plus its
 // segment and a slash (the parent is the prefix the page looked up), and
 // its cost is priced from tiers, a buffer reused across the page, with
 // the compiled price table.
@@ -244,23 +254,19 @@ func (h *Handlers) browseChild(idx *indexread.Index, p uint64, parent string, ti
 	segment := idx.ChildSegment(p)
 	stats := idx.Stats(p)
 	child := BrowseChild{
-		Segment:      segment,
-		Prefix:       parent + segment + "/",
-		ObjectCount:  stats.ObjectCount,
-		ObjectCountH: humanfmt.CountUint64(stats.ObjectCount),
-		TotalBytes:   stats.TotalBytes,
-		TotalBytesH:  humanfmt.BytesUint64(stats.TotalBytes),
-		HasChildren:  idx.HasChildren(p),
+		Segment:     segment,
+		Prefix:      parent + segment + "/",
+		ObjectCount: stats.ObjectCount,
+		TotalBytes:  stats.TotalBytes,
+		HasChildren: idx.HasChildren(p),
 	}
 	if !idx.HasTierData() {
-		child.MonthlyCostFormatted = missingValueGlyph
-
 		return child
 	}
 	*tiers = idx.AppendTierBreakdown((*tiers)[:0], p)
 	if len(*tiers) > 0 {
+		child.Priced = true
 		child.MonthlyCostMicrodollars = h.prices.MonthlyTotal(*tiers)
-		child.MonthlyCostFormatted = pricing.FormatCost(child.MonthlyCostMicrodollars)
 	}
 
 	return child
