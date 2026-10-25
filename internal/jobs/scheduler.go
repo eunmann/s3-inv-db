@@ -47,9 +47,10 @@ type noopJobStore struct{}
 func (noopJobStore) Upsert(context.Context, Job) error { return nil }
 
 // Scheduler owns the in-memory registry of live jobs and their cancel
-// handles. Job snapshots are persisted to the attached store on every
-// transition and broadcast on Bus so the SSE handler can push updates
-// to the UI. When no store is wired (via SetStore or NewScheduler's store
+// handles. Job snapshots are broadcast on Bus as they change, so the
+// SSE handler can push updates to the UI, and persisted to the attached
+// store: every state transition synchronously, running progress at most
+// once per progressPersistEvery. When no store is wired (via SetStore or NewScheduler's store
 // arg) persistence is silently dropped.
 type Scheduler struct {
 	logger          zerolog.Logger
@@ -59,9 +60,12 @@ type Scheduler struct {
 	liveByInventory map[inventory.ID]ID
 	sem             chan struct{}
 	maxConcurrency  int
-	wg              sync.WaitGroup
-	mu              sync.Mutex
-	shutdown        bool
+	// progressPersistEvery spaces out progress writes to the store; see
+	// progressPersister.
+	progressPersistEvery time.Duration
+	wg                   sync.WaitGroup
+	mu                   sync.Mutex
+	shutdown             bool
 }
 
 // Option configures a Scheduler at construction. See WithLogger.
@@ -94,6 +98,8 @@ func NewScheduler(store *Store, bus *Bus, opts ...Option) *Scheduler {
 		logger:          zerolog.Nop(),
 		store:           noopJobStore{},
 		maxConcurrency:  defaultMaxConcurrency,
+
+		progressPersistEvery: defaultProgressPersistEvery,
 	}
 	if store != nil {
 		s.store = store
@@ -251,6 +257,10 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 	job.StartedAt = time.Now()
 	s.persistAndPublish(ctx, &job)
 
+	// Progress writes outlive a cancel the way the final write does: the
+	// job is still running until work returns.
+	progress := s.newProgressPersister(context.WithoutCancel(ctx))
+
 	// report applies a non-zero diff to the job and broadcasts. A stage
 	// transition resets quantitative progress so the UI doesn't show
 	// stale done/total from the previous stage (e.g. "downloading 10/10"
@@ -294,10 +304,14 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 		if u.MergeBytes > job.MergeBytes {
 			job.MergeBytes = u.MergeBytes
 		}
-		s.persistAndPublish(ctx, &job)
+		s.bus.Publish(job)
+		progress.offer(job)
 	}
 
 	err := work(ctx, report)
+	// The terminal state below is written last: no progress write may
+	// land after it.
+	progress.stop()
 	reportMu.Lock()
 	job.FinishedAt = time.Now()
 	switch {
@@ -359,7 +373,66 @@ func closeOpenStages(j *Job, when time.Time, st State, jobErr string) {
 	}
 }
 
-func (s *Scheduler) persistAndPublish(ctx context.Context, j *Job) {
+// defaultProgressPersistEvery is how often a running job's progress
+// reaches the store at most. The bus carries every update as it happens;
+// the store only has to survive a restart.
+const defaultProgressPersistEvery = time.Second
+
+// progressPersister writes a running job's progress to the store at most
+// once per interval, from its own goroutine, so a slow or busy SQLite
+// never stalls the job reporting progress. State transitions don't go
+// through it: they are written synchronously.
+type progressPersister struct {
+	s       *Scheduler
+	ctx     context.Context //nolint:containedctx // the job's context, for the store writes of its lifetime
+	mu      sync.Mutex
+	pending *Job
+	quit    chan struct{}
+	done    chan struct{}
+}
+
+func (s *Scheduler) newProgressPersister(ctx context.Context) *progressPersister {
+	p := &progressPersister{s: s, ctx: ctx, quit: make(chan struct{}), done: make(chan struct{})}
+	go p.run(s.progressPersistEvery)
+
+	return p
+}
+
+// offer records j as the latest progress to write.
+func (p *progressPersister) offer(j Job) {
+	p.mu.Lock()
+	p.pending = &j
+	p.mu.Unlock()
+}
+
+func (p *progressPersister) run(every time.Duration) {
+	defer close(p.done)
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-p.quit:
+			return
+		case <-t.C:
+			p.mu.Lock()
+			j := p.pending
+			p.pending = nil
+			p.mu.Unlock()
+			if j != nil {
+				p.s.persist(p.ctx, j)
+			}
+		}
+	}
+}
+
+// stop ends the persister and waits for an in-flight write; progress not
+// yet written is dropped, since the caller writes the final state next.
+func (p *progressPersister) stop() {
+	close(p.quit)
+	<-p.done
+}
+
+func (s *Scheduler) persist(ctx context.Context, j *Job) {
 	if err := s.store.Upsert(ctx, *j); err != nil {
 		// Storage failure shouldn't kill the worker, but the operator
 		// needs to know. The job continues; subscribers see the
@@ -367,6 +440,10 @@ func (s *Scheduler) persistAndPublish(ctx context.Context, j *Job) {
 		s.logger.Error().Err(err).Stringer("job_id", j.ID).Str("state", string(j.State)).
 			Msg("persist job state")
 	}
+}
+
+func (s *Scheduler) persistAndPublish(ctx context.Context, j *Job) {
+	s.persist(ctx, j)
 	s.bus.Publish(*j)
 }
 
