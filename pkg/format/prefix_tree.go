@@ -310,12 +310,7 @@ type SegmentStats struct {
 
 // SegmentStats returns the size of the segment dictionary.
 func (r *PrefixTreeReader) SegmentStats() SegmentStats {
-	st := SegmentStats{Count: uint64(len(r.cache.segments))}
-	for _, s := range r.cache.segments {
-		st.Bytes += uint64(len(s))
-	}
-
-	return st
+	return SegmentStats{Count: uint64(r.cache.Count()), Bytes: r.cache.Bytes()}
 }
 
 // Close releases the mapped files.

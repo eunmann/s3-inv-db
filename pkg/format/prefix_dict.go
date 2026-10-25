@@ -142,34 +142,53 @@ func (sd *PrefixDictionary) Close() error {
 	return sd.blob.Close()
 }
 
-// PreloadedPrefixCache holds every segment in memory for direct
-// slice-index lookup, avoiding the LRU.
+// PreloadedPrefixCache holds every segment in memory: one copy of the
+// whole segment blob, with each segment a substring of it. That is one
+// allocation and nothing per segment for the GC to scan, however many
+// distinct segments an index has; the offsets stay in the mapped file.
+// Segments are heap strings, so they stay valid after the index closes.
 type PreloadedPrefixCache struct {
-	segments []string
+	data    string
+	offsets *ArrayReader
 }
 
-// PreloadSegments loads all segments into memory for fast lookups.
+// PreloadSegments copies the segment blob into memory.
 func (sd *PrefixDictionary) PreloadSegments() (*PreloadedPrefixCache, error) {
-	count := sd.Count()
-	segments := make([]string, count)
-	for i := range count {
-		seg, err := sd.blob.Get(i)
-		if err != nil {
-			return nil, fmt.Errorf("preload segment %d: %w", i, err)
+	n := sd.Count()
+	offsets := sd.blob.offsetsMmap
+	if offsets.Count() != n+1 {
+		return nil, fmt.Errorf("%w: %d segment offsets for %d segments", ErrBoundsCheck, offsets.Count(), n)
+	}
+	end := offsets.UnsafeGetU64(n)
+	blob := sd.blob.blobMmap.Data()
+	if end > uint64(len(blob)) {
+		return nil, fmt.Errorf("%w: segment blob ends at %d of %d bytes", ErrBoundsCheck, end, len(blob))
+	}
+	prev := uint64(0)
+	for i := range n + 1 {
+		off := offsets.UnsafeGetU64(i)
+		if off < prev || off > end {
+			return nil, fmt.Errorf("%w: segment offset %d at %d", ErrBoundsCheck, off, i)
 		}
-		segments[i] = seg
+		prev = off
 	}
 
-	return &PreloadedPrefixCache{segments: segments}, nil
+	return &PreloadedPrefixCache{data: string(blob[:end]), offsets: offsets}, nil
 }
 
-// Get panics if id is out of range.
+// Get returns segment id. It panics if id is out of range.
 func (c *PreloadedPrefixCache) Get(id uint32) string {
-	return c.segments[id]
+	return c.data[c.offsets.UnsafeGetU64(uint64(id)):c.offsets.UnsafeGetU64(uint64(id)+1)]
 }
 
+// Count returns the number of segments.
 func (c *PreloadedPrefixCache) Count() int {
-	return len(c.segments)
+	return int(c.offsets.Count() - 1)
+}
+
+// Bytes returns the segments' total length.
+func (c *PreloadedPrefixCache) Bytes() uint64 {
+	return uint64(len(c.data))
 }
 
 // SplitPrefix splits a prefix into path segments by "/". Trailing
