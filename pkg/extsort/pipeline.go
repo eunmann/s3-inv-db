@@ -598,16 +598,17 @@ func (p *Pipeline) logIngestProgress(log *zerolog.Logger, chunkNum, totalChunks 
 // pull chunks off the jobs channel, stream-parse each chunk row-by-row
 // directly into the local aggregator (no intermediate slice), flush to
 // a private run file when memory pressure hits. At end-of-input
-// (channel closed), flush the residual aggregator state to a final
-// run file.
+// (channel closed), keep the residual aggregator state in memory for
+// the final merge, or flush it to a final run file if the heap is
+// under pressure.
 func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int, jobs <-chan chunkJob) (err error) {
 	const initialAggCapacity = 10_000
 	agg := NewAggregator(initialAggCapacity, p.config.MaxDepth)
 	defer func() {
-		// The residue reaches a run file only when the worker finished
+		// The residue is kept or spilled only when the worker finished
 		// cleanly; after any failure or cancellation the build is
-		// abandoned and the spill would be thrown away. A failed final
-		// spill fails the build: dropping it would lose those prefixes.
+		// abandoned and it would be thrown away. A failed final spill
+		// fails the build: dropping it would lose those prefixes.
 		if err != nil || agg.PrefixCount() <= 0 {
 			return
 		}
@@ -912,9 +913,9 @@ type mergeBuildResult struct {
 }
 
 // runMergePhase returns a streaming RowIterator over the K-way merge
-// of p.runFiles, plus a cleanup closure. Single-run case wraps the
-// lone run file directly. Multi-run case uses
-// ParallelMerger.MergeAllToIterator, which writes no final merged file.
+// of p.runFiles and p.memRuns, plus a cleanup closure. A lone run,
+// in memory or on disk, is wrapped directly. Otherwise the parallel
+// merger merges both kinds and writes no final merged file.
 func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRunFiles, numWorkers, maxFanIn int, perReaderBuffer int64) (RowIterator, func() error, MergeStatistics, error) {
 	if numRunFiles == 0 && len(p.memRuns) == 1 {
 		run := p.memRuns[0]

@@ -31,7 +31,8 @@ S3 Inventory CSV/Parquet
          │
          ▼
 ┌─────────────────────┐
-│   External Sort     │  disk-backed runs of sorted prefix rows
+│   External Sort     │  sorted runs of prefix rows: spilled to
+│                     │  disk; each worker's last one in memory
 └─────────────────────┘
          │
          ▼
