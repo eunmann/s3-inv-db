@@ -185,6 +185,36 @@ func TestMPHFUnicode(t *testing.T) {
 	}
 }
 
+// TestMPHFSparsePositions pins that the slot position width fits the
+// largest position, not the prefix count: 200 prefixes at positions
+// past 255 must not be truncated to one byte.
+func TestMPHFSparsePositions(t *testing.T) {
+	dir := t.TempDir()
+	b := newTestMPHFBuilder(t)
+
+	const n = 200
+	posOf := func(i int) uint64 { return uint64(i)*1000 + 1<<20 }
+	for i := range n {
+		b.Add(prefixFromInt(i+1), posOf(i))
+	}
+	if err := b.Build(dir); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	m, err := OpenMPHF(dir)
+	if err != nil {
+		t.Fatalf("OpenMPHF failed: %v", err)
+	}
+	defer m.Close()
+
+	for i := range n {
+		p := prefixFromInt(i + 1)
+		if pos, ok := m.Lookup(p); !ok || pos != posOf(i) {
+			t.Errorf("Lookup(%q) = %d, %v; want %d, true", p, pos, ok, posOf(i))
+		}
+	}
+}
+
 func TestComputeFingerprint(t *testing.T) {
 	// Same input should give same fingerprint
 	fp1 := computeFingerprint("test")

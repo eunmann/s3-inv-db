@@ -469,7 +469,11 @@ func writeSlots(outDir string, n int, mph *bbhash, hashes, fps, poss []uint64, s
 	if len(poss) != n || len(fps) != n {
 		return fmt.Errorf("%w: fps=%d poss=%d n=%d", errMPHFArrayLengthMismatch, len(fps), len(poss), n)
 	}
-	posW := int(byteWidthOf(uint64(max(n, 1) - 1)))
+	var maxPos uint64
+	if n > 0 {
+		maxPos = slices.Max(poss)
+	}
+	posW := int(byteWidthOf(maxPos))
 	slotW := mphfFingerprintBytes + posW
 	path := filepath.Join(outDir, MPHFSlotsFile)
 	dataBytes := int64(n) * int64(slotW)
