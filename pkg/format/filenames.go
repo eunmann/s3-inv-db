@@ -6,6 +6,7 @@ package format
 const (
 	DepthOffsetsFile   = "depth_offsets.u64"
 	DepthPositionsFile = "depth_positions.u64"
+	DepthBlocksFile    = "depth_blocks.u64"
 	MPHFile            = "mph.bin"
 	ManifestFile       = "manifest.json"
 	TierStatsDir       = "tier_stats"

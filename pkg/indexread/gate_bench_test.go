@@ -187,3 +187,37 @@ func BenchmarkGateChildren(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkGateTopDeep: the /api/top read pattern far below the root,
+// top 25 by bytes over the root's 368k depth-2 descendants and by
+// count over its 573k depth-3 ones.
+func BenchmarkGateTopDeep(b *testing.B) {
+	f := gate(b)
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := f.idx.TopByBytes(0, 2, 25); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := f.idx.TopByCount(0, 3, 25); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkGateDescendantsFiltered: the /api/stats descendants page
+// with a size filter: the first 50 of the root's depth-2 descendants
+// holding at least 2 GiB, and how many there are.
+func BenchmarkGateDescendantsFiltered(b *testing.B) {
+	f := gate(b)
+	filter := indexread.Filter{MinBytes: 2 << 30}
+	b.ReportAllocs()
+	for b.Loop() {
+		page, err := f.idx.DescendantsPage(0, 2, filter, 0, 50)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if page.Total == 0 {
+			b.Fatal("no descendants pass the filter")
+		}
+	}
+}

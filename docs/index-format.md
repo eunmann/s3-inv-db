@@ -34,6 +34,7 @@ index/
 ├── core_patch.rows
 ├── depth_offsets.u64
 ├── depth_positions.u64
+├── depth_blocks.u64
 ├── mph.bin
 ├── mph_slots.bin
 ├── prefix_dict.bin
@@ -64,7 +65,7 @@ fields little-endian:
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | Magic | `0x53334944` ("S3ID" in ASCII) |
-| 4 | 4 | Version | Format version (currently `11`) |
+| 4 | 4 | Version | Format version (currently `12`) |
 | 8 | 8 | Count | Number of rows |
 | 16 | 4 | Width | Row stride in bytes |
 
@@ -190,17 +191,51 @@ To find all descendants of `data/` (position 1): iterate positions 2 through 4.
 
 ## Depth Index
 
-Two files enable efficient "find all prefixes at depth N" queries:
+Two files enable efficient "find all prefixes at depth N" queries, and
+a third bounds their stats block by block:
 
 | File | Description |
 |------|-------------|
 | `depth_offsets.u64` | `depth_offsets[d]` = starting index in `depth_positions` for depth `d`; a trailing sentinel holds the total |
 | `depth_positions.u64` | Sorted positions of all prefixes at each depth |
+| `depth_blocks.u64` | Per block of 64 consecutive `depth_positions` entries of one depth, bounds on their object counts and bytes |
 
 To find prefixes at depth 2:
 1. Read `depth_offsets[2]` and `depth_offsets[3]`
 2. Slice `depth_positions[start:end]`
 3. Binary search within a subtree range if needed
+
+### Block bounds (`depth_blocks.u64`)
+
+Each depth's posting list is cut into blocks of 64 entries from its
+first entry, the last block possibly shorter; blocks never span two
+depths. Depth `d` has `ceil((depth_offsets[d+1] − depth_offsets[d]) / 64)`
+blocks, stored depth after depth, so a reader finds depth `d`'s first
+block from the offsets alone and checks the file holds exactly the
+total on open. Each block is one 8-byte word of four 16-bit codes,
+from the low end: minimum count, maximum count, minimum bytes, maximum
+bytes.
+
+A code is a small float: below 1024 it is the value itself; above, its
+top 6 bits are an exponent `e ≥ 1` and the value is
+`(1024 | low 10 bits) << (e − 1)`, saturating at `2^64 − 1`. Minimums
+round down and maximums up, so a block's bounds hold every entry, at
+most 0.1% wider than its true extremes. 0.125 B per prefix.
+
+Ranked queries (top-N, early size and objects pages) and filtered
+descendant pages read the bounds first and skip blocks that can't
+contribute. A ranking first finds a value k whole blocks are sure to
+reach (the k-th largest of each block's guaranteed best), then scans
+blocks in position order, skipping any block whose bound falls below
+that value or, with k results held, at or below the k-th (a later
+position loses the tie). That reads about k blocks of stats, plus one
+bound per block of the span, unless many blocks' maximums lie within
+the bounds' rounding (none below 2048, else up to 0.1%) of the k-th
+result: the bounds can't rule those out, so they are scanned too, up to
+the whole span (O(d)). A filtered page skips
+blocks whose maximums fail the filter and counts blocks whose minimums
+pass it without reading them. See [`pkg/format/depthblocks.go`](../pkg/format/depthblocks.go)
+and [`pkg/indexread/top.go`](../pkg/indexread/top.go).
 
 ## MPHF (Minimal Perfect Hash Function)
 
@@ -414,4 +449,4 @@ from the file-header format version.
 
 ## Versioning
 
-The format version in file headers lets a reader refuse files it would mis-decode. Version 11 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 12 is the current format; readers accept only that version, and an index written by any other version is rebuilt.

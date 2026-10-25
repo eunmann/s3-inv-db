@@ -14,9 +14,9 @@ import (
 // u64StreamArray is an append-only stream of uint64 values backed by a
 // zstd-compressed temp file. Unlike u64DiskArray it is never mmap'd
 // and exposes only sequential read access via Iterate. Used for the
-// per-depth posting lists in DepthIndexBuilder where positions are
-// added in preorder (monotonically increasing within a depth) and
-// read back exactly once during Build's concatenation pass.
+// per-depth posting lists in DepthIndexBuilder where positions (and
+// each full block's bounds) are added in preorder and read back
+// exactly once during Build's concatenation pass.
 //
 // The MPHF builder's hashes and fingerprints arrays
 // require Slice() (mmap-backed random access for bbhash and the

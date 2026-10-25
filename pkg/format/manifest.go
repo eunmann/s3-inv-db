@@ -50,6 +50,7 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 	requiredTopLevel := []string{
 		DepthOffsetsFile,
 		DepthPositionsFile,
+		DepthBlocksFile,
 		MPHFile,
 		MPHFSlotsFile,
 		"tiers.json",
