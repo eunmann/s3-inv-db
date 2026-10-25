@@ -467,6 +467,8 @@ var gridReportedFiles = []gridFile{
 	{"tier_stats/tier_multi.rows", "Bpp_tier_multi_rows", false},
 	{"tier_stats/tier_multi.off.u64", "Bpp_tier_multi_off", false},
 	{"core_stats.bin", "Bpp_core", true},
+	{format.CorePatchFile, "Bpp_core_patch", false},
+	{format.CorePatchRowsFile, "Bpp_core_patch_rows", false},
 	{format.MPHFSlotsFile, "Bpp_fpp", true},
 	{"prefix_tree.bin", "Bpp_prefix_tree", false},
 	{"depth_positions.u64", "Bpp_dpos", false},
