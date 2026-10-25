@@ -125,7 +125,8 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 	if err != nil {
 		b.Fatalf("open: %v", err)
 	}
-	defer idx.Close()
+	// The cold sub-benchmarks replace idx with a reopened index.
+	defer func() { _ = idx.Close() }()
 
 	queries, positions := pickGridQueries(b, idx, nPx, 200)
 	kids := pickLargestDepthOneSubtreeCapped(idx, queries, 20)
@@ -201,7 +202,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 
 	// Cold sub-benches come in two flavours:
 	//
-	//	cold/...        amortizes the dropPageCache cost across a
+	//	cold/...        amortizes the reopenCold cost across a
 	//	                batch of `coldQueryBatch=64` ops. Reflects
 	//	                bursty-related-query workloads.
 	//	coldsingle/...  drops the page cache before EVERY op. Each
@@ -216,7 +217,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for i := range b.N {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			idx = reopenCold(b, idx, dir)
 			b.StartTimer()
 			_, _ = idx.Lookup(queries[i%len(queries)])
 		}
@@ -226,7 +227,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for i := range b.N {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			idx = reopenCold(b, idx, dir)
 			b.StartTimer()
 			_, _ = idx.StatsForPrefix(queries[i%len(queries)])
 		}
@@ -234,7 +235,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 
 	// Cold sub-benches. Each evicts the index dir from page cache
 	// before a batch of `coldQueryBatch` ops and times the batch.
-	// Amortizes the dropPageCache cost — at coldQueryBatch=64 the
+	// Amortizes the reopenCold cost — at coldQueryBatch=64 the
 	// reported ns/op is a fair per-call cold latency.
 	//
 	// DescendantsAtDepth is included separately from browse because
@@ -244,7 +245,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i += coldQueryBatch {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			idx = reopenCold(b, idx, dir)
 			b.StartTimer()
 			batch := min(coldQueryBatch, b.N-i)
 			for j := range batch {
@@ -257,7 +258,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i += coldQueryBatch {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			idx = reopenCold(b, idx, dir)
 			b.StartTimer()
 			batch := min(coldQueryBatch, b.N-i)
 			for j := range batch {
@@ -273,7 +274,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i += coldQueryBatch {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			idx = reopenCold(b, idx, dir)
 			b.StartTimer()
 			batch := min(coldQueryBatch, b.N-i)
 			for j := range batch {
@@ -289,7 +290,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i += coldQueryBatch {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			idx = reopenCold(b, idx, dir)
 			b.StartTimer()
 			batch := min(coldQueryBatch, b.N-i)
 			for j := range batch {
@@ -305,7 +306,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i += coldQueryBatch {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			idx = reopenCold(b, idx, dir)
 			b.StartTimer()
 			batch := min(coldQueryBatch, b.N-i)
 			for j := range batch {
@@ -321,7 +322,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for range b.N {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			idx = reopenCold(b, idx, dir)
 			b.StartTimer()
 			for _, pos := range kids {
 				_, _ = idx.PrefixString(pos)

@@ -29,7 +29,7 @@ func BenchmarkBrowse_Matrix(b *testing.B) {
 			if err != nil {
 				b.Fatalf("Open: %v", err)
 			}
-			defer idx.Close()
+			defer func() { _ = idx.Close() }()
 			parents := pickBrowseParents(b, idx, 32)
 			if len(parents) == 0 {
 				b.Skip("no browseable parents")
@@ -38,7 +38,7 @@ func BenchmarkBrowse_Matrix(b *testing.B) {
 				runBrowseLoop(b, idx, parents)
 			})
 			b.Run("cold", func(b *testing.B) {
-				runBrowseColdLoop(b, idx, dir, parents)
+				idx = runBrowseColdLoop(b, idx, dir, parents)
 			})
 		})
 	}
@@ -53,13 +53,15 @@ func runBrowseLoop(b *testing.B, idx *indexread.Index, parents []uint64) {
 	}
 }
 
-func runBrowseColdLoop(b *testing.B, idx *indexread.Index, dir string, parents []uint64) {
+// runBrowseColdLoop reopens idx cold before every batch and returns the
+// index left open.
+func runBrowseColdLoop(b *testing.B, idx *indexread.Index, dir string, parents []uint64) *indexread.Index {
 	b.Helper()
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i += coldQueryBatch {
 		b.StopTimer()
-		dropPageCache(b, dir)
+		idx = reopenCold(b, idx, dir)
 		b.StartTimer()
 		batch := coldQueryBatch
 		if i+batch > b.N {
@@ -69,6 +71,8 @@ func runBrowseColdLoop(b *testing.B, idx *indexread.Index, dir string, parents [
 			browseOnce(idx, parents[(i+j)%len(parents)])
 		}
 	}
+
+	return idx
 }
 
 // browseOnce simulates one "show me this parent's children" handler

@@ -144,6 +144,20 @@ Prints node count, max depth, tier-data availability, total on-disk
 size, and per-file sizes (largest first). Counts and sizes come from
 the manifest; tier-data availability opens the index.
 
+`--profile` also scans every prefix and reports the shape of the data,
+independent of how the index stores it:
+
+- prefixes per depth, the number of leaves;
+- how many prefixes hold 1, 2, … tiers, and how many distinct tier
+  combinations occur;
+- per value (object count, total bytes, subtree size, distance to the
+  parent, children, per-tier count and bytes), the bits it needs at the
+  median, p99, p99.9 and maximum (the JSON form has the full histogram);
+- the segment dictionary's size.
+
+The scan reads the whole index. Use it to see what a real inventory
+looks like before changing a layout (see `bench/README.md`).
+
 ## `config-check`
 
 ```bash

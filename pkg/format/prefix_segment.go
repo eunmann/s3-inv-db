@@ -28,3 +28,24 @@ func (m *MPHF) ChildSegment(pos uint64) string {
 
 	return m.dictPrefixes.ChildSegment(pos)
 }
+
+// SegmentStats describes the segment dictionary.
+type SegmentStats struct {
+	// Count is the number of distinct segments, Bytes their total length.
+	Count uint64
+	Bytes uint64
+}
+
+// SegmentStats returns the size of the segment dictionary.
+func (m *MPHF) SegmentStats() SegmentStats {
+	var st SegmentStats
+	if m.dictPrefixes == nil {
+		return st
+	}
+	for _, s := range m.dictPrefixes.cache.segments {
+		st.Bytes += uint64(len(s))
+	}
+	st.Count = uint64(len(m.dictPrefixes.cache.segments))
+
+	return st
+}
