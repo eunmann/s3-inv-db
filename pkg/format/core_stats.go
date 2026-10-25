@@ -151,13 +151,14 @@ var (
 // CoreStatsBuilder writes the row-major core stats file in-place
 // during a build. Each prefix gets one row at its preorder position:
 // object_count, total_bytes, depth and tier_mask are known at Add()
-// time; subtree_end is filled in later when the subtree closes (an
+// time; subtree_size is filled in later when the subtree closes (an
 // out-of-preorder random write).
 //
 // During the build the file uses a safe-wide stride
-// (coreStatsBuildStride); at Finalize the observed maxes determine a
-// tight per-field schema and the rows are repacked into the final
-// file with a CoreStatsStride descriptor recorded after the Header.
+// (coreStatsBuildStride); at Finalize the rows' widths determine a
+// tight per-field schema (see Finalize) and the rows are repacked into
+// the final file with a CoreStatsStride descriptor recorded after the
+// Header.
 type CoreStatsBuilder struct {
 	path    string
 	file    *os.File
@@ -237,7 +238,7 @@ func (b *CoreStatsBuilder) buildRowSlice(idx int) []byte {
 
 // Add appends one row for the next prefix position with the fields
 // known at Add time. SetSubtree must be called later (during subtree
-// close) to fill in subtree_end.
+// close) to fill in subtree_size.
 func (b *CoreStatsBuilder) Add(objectCount, totalBytes uint64, depth, tierMask uint16) error {
 	needed := int64(b.dataOff + (b.count+1)*coreStatsBuildStride)
 	if needed > b.size {
@@ -251,7 +252,6 @@ func (b *CoreStatsBuilder) Add(objectCount, totalBytes uint64, depth, tierMask u
 	binary.LittleEndian.PutUint64(row[bldOffBytes:], totalBytes)
 	binary.LittleEndian.PutUint16(row[bldOffDepth:], depth)
 	binary.LittleEndian.PutUint16(row[bldOffTierMask:], tierMask)
-	// subtree_end stays zero until SetSubtree.
 
 	b.maxDepth = max(b.maxDepth, depth)
 	b.maxTierMask = max(b.maxTierMask, tierMask)
@@ -327,9 +327,11 @@ func tierMaskWidth(maxMask uint16) uint8 {
 	return byteWidth16(maxMask)
 }
 
-// Finalize chooses a tight per-field stride from the observed maxes,
-// streams the repacked rows into a fresh file at the same path
-// (Header + stride descriptor first), and closes both files. Memory
+// Finalize chooses the stride (count, bytes and subtree size from the
+// width histogram, with patch files for the rows that don't fit; depth
+// and tier mask from their maxes), streams the repacked rows into a
+// fresh file at the same path (Header + stride descriptor first), and
+// closes both files. Memory
 // during the repack is bounded by the bufio buffer (1 MiB) — at the
 // project's stated 10B-prefix scale a per-row in-memory buffer would
 // be hundreds of GB.

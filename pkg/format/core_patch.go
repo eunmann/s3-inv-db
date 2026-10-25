@@ -21,7 +21,7 @@ const (
 	CorePatchFile     = "core_patch.bin"
 	CorePatchRowsFile = "core_patch.rows"
 
-	// CorePatchRowBytes is one exception: count, bytes, subtree size.
+	// Each exception is three uint64s: count, bytes, subtree size.
 	corePatchRowBytes = 24
 )
 
