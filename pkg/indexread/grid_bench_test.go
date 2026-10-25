@@ -216,7 +216,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for i := range b.N {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			benchutil.DropPageCache(b, dir)
 			b.StartTimer()
 			_, _ = idx.Lookup(queries[i%len(queries)])
 		}
@@ -226,7 +226,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for i := range b.N {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			benchutil.DropPageCache(b, dir)
 			b.StartTimer()
 			_, _ = idx.StatsForPrefix(queries[i%len(queries)])
 		}
@@ -244,7 +244,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i += coldQueryBatch {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			benchutil.DropPageCache(b, dir)
 			b.StartTimer()
 			batch := min(coldQueryBatch, b.N-i)
 			for j := range batch {
@@ -257,7 +257,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i += coldQueryBatch {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			benchutil.DropPageCache(b, dir)
 			b.StartTimer()
 			batch := min(coldQueryBatch, b.N-i)
 			for j := range batch {
@@ -273,7 +273,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i += coldQueryBatch {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			benchutil.DropPageCache(b, dir)
 			b.StartTimer()
 			batch := min(coldQueryBatch, b.N-i)
 			for j := range batch {
@@ -289,7 +289,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i += coldQueryBatch {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			benchutil.DropPageCache(b, dir)
 			b.StartTimer()
 			batch := min(coldQueryBatch, b.N-i)
 			for j := range batch {
@@ -305,7 +305,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i += coldQueryBatch {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			benchutil.DropPageCache(b, dir)
 			b.StartTimer()
 			batch := min(coldQueryBatch, b.N-i)
 			for j := range batch {
@@ -321,7 +321,7 @@ func runGridQueryCell(b *testing.B, spec benchutil.GridSpec) {
 		b.ResetTimer()
 		for range b.N {
 			b.StopTimer()
-			dropPageCache(b, dir)
+			benchutil.DropPageCache(b, dir)
 			b.StartTimer()
 			for _, pos := range kids {
 				_, _ = idx.PrefixString(pos)

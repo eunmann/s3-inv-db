@@ -59,7 +59,7 @@ func runBrowseColdLoop(b *testing.B, idx *indexread.Index, dir string, parents [
 	b.ReportAllocs()
 	for i := 0; i < b.N; i += coldQueryBatch {
 		b.StopTimer()
-		dropPageCache(b, dir)
+		benchutil.DropPageCache(b, dir)
 		b.StartTimer()
 		batch := coldQueryBatch
 		if i+batch > b.N {

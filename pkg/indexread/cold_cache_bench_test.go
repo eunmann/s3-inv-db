@@ -2,15 +2,12 @@ package indexread_test
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"runtime"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
-	"golang.org/x/sys/unix"
 )
 
 // BenchmarkIndexOpen_ColdCache measures Open() latency with the OS
@@ -43,7 +40,7 @@ func runColdOpenBench(b *testing.B, n int) {
 	b.ResetTimer()
 	for range b.N {
 		b.StopTimer()
-		dropPageCache(b, dir)
+		benchutil.DropPageCache(b, dir)
 		b.StartTimer()
 
 		idx, err := indexread.Open(dir)
@@ -123,43 +120,6 @@ func buildFixtureIndex(b *testing.B, n int) string {
 	}
 
 	return dir
-}
-
-// dropPageCache recursively evicts every regular file under dir from
-// the page cache so the next access pays cold-page-fault costs. Walks
-// subdirectories (notably tier_stats/) — a flat ReadDir would miss
-// most of the index byte volume at 11-tier scale.
-func dropPageCache(b *testing.B, dir string) {
-	b.Helper()
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		dropFileFromCache(b, path)
-
-		return nil
-	})
-	if err != nil {
-		b.Fatalf("walk: %v", err)
-	}
-}
-
-func dropFileFromCache(b *testing.B, path string) {
-	b.Helper()
-	f, err := os.Open(path)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil || st.Size() == 0 {
-		return
-	}
-	// POSIX_FADV_DONTNEED hints the kernel to evict pages.
-	_ = unix.Fadvise(int(f.Fd()), 0, st.Size(), unix.FADV_DONTNEED)
 }
 
 // generateLookupPrefixes produces a representative set of prefixes a

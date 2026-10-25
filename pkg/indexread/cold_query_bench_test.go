@@ -55,7 +55,7 @@ func BenchmarkQueryScale_StatsForPrefix_Cold(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i += coldQueryBatch {
 				b.StopTimer()
-				dropPageCache(b, dir)
+				benchutil.DropPageCache(b, dir)
 				b.StartTimer()
 				batch := coldQueryBatch
 				if i+batch > b.N {
@@ -95,7 +95,7 @@ func BenchmarkQueryScale_TierBreakdown_Cold(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i += coldQueryBatch {
 				b.StopTimer()
-				dropPageCache(b, dir)
+				benchutil.DropPageCache(b, dir)
 				b.StartTimer()
 				batch := coldQueryBatch
 				if i+batch > b.N {
@@ -136,7 +136,7 @@ func BenchmarkQueryScale_ChildrenIterate_Cold(b *testing.B) {
 			for i := range b.N {
 				p := parents[i%len(parents)]
 				b.StopTimer()
-				dropPageCache(b, dir)
+				benchutil.DropPageCache(b, dir)
 				b.StartTimer()
 				end := idx.SubtreeEnd(p)
 				for c := p + 1; c <= end; c++ {
