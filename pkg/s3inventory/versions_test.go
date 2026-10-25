@@ -88,8 +88,8 @@ func TestCSVReader_KeepsUndecodableKeyVerbatim(t *testing.T) {
 	if len(rows) != 2 || rows[0].Key != "bad%zz/key" || rows[1].Key != "ok key" {
 		t.Fatalf("rows = %+v", rows)
 	}
-	if got := r.UndecodableKeyCount(); got != 1 {
-		t.Errorf("UndecodableKeyCount = %d, want 1", got)
+	if got := r.Anomalies().UndecodableKeys; got != 1 {
+		t.Errorf("Anomalies().UndecodableKeys = %d, want 1", got)
 	}
 }
 
@@ -108,8 +108,8 @@ func TestCSVReader_SkipsDeleteMarkers(t *testing.T) {
 	if len(rows) != 2 || rows[0].Key != "a/live.txt" || rows[1].Key != "a/old.txt" {
 		t.Fatalf("rows = %+v, want the two stored versions only", rows)
 	}
-	if r.MalformedRowCount() != 0 {
-		t.Errorf("delete markers counted as malformed rows: %d", r.MalformedRowCount())
+	if a := r.Anomalies(); a.Total() != 0 {
+		t.Errorf("delete markers counted as anomalies: %s", a)
 	}
 }
 
@@ -128,6 +128,8 @@ func openParquet(t *testing.T, rows any) *s3inventory.ParquetReader {
 	case []versionedRecord:
 		err = parquet.WriteFile(path, v)
 	case []S3InventoryRecord:
+		err = parquet.WriteFile(path, v)
+	case []nullableRecord:
 		err = parquet.WriteFile(path, v)
 	}
 	if err != nil {
@@ -184,5 +186,58 @@ func TestCSVAndParquet_SameKeysForSpecialCharacters(t *testing.T) {
 		if csvRows[i].Key != pqRows[i].Key || csvRows[i].Size != pqRows[i].Size {
 			t.Errorf("row %d: CSV %+v, Parquet %+v", i, csvRows[i], pqRows[i])
 		}
+	}
+}
+
+// TestCSVReader_CountsEveryAnomaly: a short row and an empty key are
+// skipped, a bad size is indexed as 0, and each is counted.
+func TestCSVReader_CountsEveryAnomaly(t *testing.T) {
+	data := csvBytes(t, [][]string{
+		{"a/ok.txt", "10"},
+		{"a/short.txt"},
+		{"", "5"},
+		{"a/bad-size.txt", "12x"},
+	})
+	r := s3inventory.NewCSVReader(bytes.NewReader(data),
+		s3inventory.CSVReaderConfig{KeyCol: 0, SizeCol: 1, StorageCol: -1, AccessTierCol: -1, DeleteMarkerCol: -1})
+
+	rows := readAllRows(t, r)
+	if len(rows) != 2 || rows[0].Key != "a/ok.txt" || rows[1].Key != "a/bad-size.txt" || rows[1].Size != 0 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	want := s3inventory.Anomalies{ShortRows: 1, MissingKeys: 1, BadSizes: 1}
+	if got := r.Anomalies(); got != want {
+		t.Errorf("Anomalies() = %+v, want %+v", got, want)
+	}
+}
+
+// nullableRecord writes truly null keys and sizes (pointer fields).
+type nullableRecord struct {
+	Key            *string `parquet:"key,optional"`
+	Size           *int64  `parquet:"size,optional"`
+	IsDeleteMarker bool    `parquet:"is_delete_marker"`
+}
+
+// TestParquetReader_CountsNullKeysAndSizes: a null key is skipped and a
+// null size indexed as 0, each counted; a delete marker's null size is
+// not an anomaly.
+func TestParquetReader_CountsNullKeysAndSizes(t *testing.T) {
+	str := func(s string) *string { return &s }
+	i64 := func(n int64) *int64 { return &n }
+	r := openParquet(t, []nullableRecord{
+		{Key: str("a/ok.txt"), Size: i64(10)},
+		{Key: nil, Size: i64(5)},
+		{Key: str("a/no-size.txt"), Size: nil},
+		{Key: str("a/gone.txt"), Size: nil, IsDeleteMarker: true},
+		{Key: str("a/empty.txt"), Size: i64(0)},
+	})
+
+	rows := readAllRows(t, r)
+	if len(rows) != 3 || rows[0].Key != "a/ok.txt" || rows[1].Key != "a/no-size.txt" || rows[2].Key != "a/empty.txt" {
+		t.Fatalf("rows = %+v", rows)
+	}
+	want := s3inventory.Anomalies{MissingKeys: 1, BadSizes: 1}
+	if got := r.Anomalies(); got != want {
+		t.Errorf("Anomalies() = %+v, want %+v", got, want)
 	}
 }

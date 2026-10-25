@@ -1,6 +1,7 @@
 package s3fetch_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -429,14 +430,16 @@ func TestManifestDetectFormat(t *testing.T) {
 		fileFormat string
 		fileKey    string
 		wantFormat s3fetch.InventoryFormat
+		wantErr    bool
 	}{
-		{"explicit CSV format", "CSV", "file.csv.gz", s3fetch.InventoryFormatCSV},
-		{"explicit Parquet format", "Parquet", "file.parquet", s3fetch.InventoryFormatParquet},
-		{"explicit PARQUET format uppercase", "PARQUET", "file.parquet", s3fetch.InventoryFormatParquet},
-		{"detect from .parquet extension", "", "inventory/data/file.parquet", s3fetch.InventoryFormatParquet},
-		{"detect from .csv.gz extension", "", "inventory/data/file.csv.gz", s3fetch.InventoryFormatCSV},
-		{"detect from .csv extension", "", "file.csv", s3fetch.InventoryFormatCSV},
-		{"default to CSV when unknown", "", "file.unknown", s3fetch.InventoryFormatCSV},
+		{"explicit CSV format", "CSV", "file.csv.gz", s3fetch.InventoryFormatCSV, false},
+		{"explicit Parquet format", "Parquet", "file.parquet", s3fetch.InventoryFormatParquet, false},
+		{"explicit PARQUET format uppercase", "PARQUET", "file.parquet", s3fetch.InventoryFormatParquet, false},
+		{"detect from .parquet extension", "", "inventory/data/file.parquet", s3fetch.InventoryFormatParquet, false},
+		{"detect from .csv.gz extension", "", "inventory/data/file.csv.gz", s3fetch.InventoryFormatCSV, false},
+		{"detect from .csv extension", "", "file.csv", s3fetch.InventoryFormatCSV, false},
+		{"unknown extension is an error, not CSV", "", "file.unknown", 0, true},
+		{"ORC is an error, not CSV", "ORC", "file.orc", 0, true},
 	}
 
 	for _, tt := range tests {
@@ -448,8 +451,16 @@ func TestManifestDetectFormat(t *testing.T) {
 				Files:             []s3fetch.ManifestFile{{Key: tt.fileKey, Size: 100}},
 			}
 
-			if got := m.DetectFormat(); got != tt.wantFormat {
-				t.Errorf("DetectFormat() = %v, want %v", got, tt.wantFormat)
+			got, err := m.DetectFormat()
+			if tt.wantErr {
+				if !errors.Is(err, s3fetch.ErrUnknownInventoryFormat) {
+					t.Errorf("DetectFormat() error = %v, want ErrUnknownInventoryFormat", err)
+				}
+
+				return
+			}
+			if err != nil || got != tt.wantFormat {
+				t.Errorf("DetectFormat() = %v, %v, want %v", got, err, tt.wantFormat)
 			}
 		})
 	}

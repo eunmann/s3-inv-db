@@ -113,30 +113,43 @@ func (m *Manifest) validate() error {
 	return nil
 }
 
+// ErrUnknownInventoryFormat is returned when a manifest names a format
+// this project can't read, or names none and its files' extensions
+// don't tell.
+var ErrUnknownInventoryFormat = errors.New("unknown inventory format")
+
 // DetectFormat determines the inventory format based on the manifest's fileFormat
 // field and file extensions. Priority:
 //  1. Explicit fileFormat field ("CSV" or "Parquet")
 //  2. File extension detection (.parquet, .csv, .csv.gz)
-func (m *Manifest) DetectFormat() InventoryFormat {
+//
+// Anything else (an ORC inventory, or no format and an unknown
+// extension) is ErrUnknownInventoryFormat: guessing CSV would parse
+// binary data as rows.
+func (m *Manifest) DetectFormat() (InventoryFormat, error) {
 	switch strings.ToUpper(m.FileFormat) {
 	case "CSV":
-		return InventoryFormatCSV
+		return InventoryFormatCSV, nil
 	case "PARQUET":
-		return InventoryFormatParquet
+		return InventoryFormatParquet, nil
+	case "":
+	default:
+		return 0, fmt.Errorf("%w: fileFormat %q", ErrUnknownInventoryFormat, m.FileFormat)
 	}
 
 	if len(m.Files) > 0 {
 		key := strings.ToLower(m.Files[0].Key)
 		if strings.HasSuffix(key, ".parquet") {
-			return InventoryFormatParquet
+			return InventoryFormatParquet, nil
 		}
 		if strings.HasSuffix(key, ".csv") || strings.HasSuffix(key, ".csv.gz") {
-			return InventoryFormatCSV
+			return InventoryFormatCSV, nil
 		}
+
+		return 0, fmt.Errorf("%w: no fileFormat and file %q", ErrUnknownInventoryFormat, m.Files[0].Key)
 	}
 
-	// Default to CSV for backwards compatibility.
-	return InventoryFormatCSV
+	return 0, fmt.Errorf("%w: no fileFormat and no files", ErrUnknownInventoryFormat)
 }
 
 // DestinationBucketName returns the normalized bucket name from the DestinationBucket field.

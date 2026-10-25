@@ -40,6 +40,7 @@ type ParquetReader struct {
 	cols         [numParquetColumns]parquetColumn
 	interned     map[string]string
 	currentRGIdx int
+	anomalies    Anomalies
 	rgOpen       bool
 	bufIdx       int
 	bufLen       int
@@ -260,9 +261,17 @@ func (r *ParquetReader) Next() (Row, error) {
 		if r.bufIdx < r.bufLen {
 			i := r.bufIdx
 			r.bufIdx++
-			inv, deleteMarker := r.rowAt(i)
+			inv, deleteMarker, hasSize := r.rowAt(i)
 			if deleteMarker {
 				continue // a delete marker is not an object and stores no bytes
+			}
+			if inv.Key == "" {
+				r.anomalies.MissingKeys++
+
+				continue
+			}
+			if !hasSize {
+				r.anomalies.BadSizes++
 			}
 
 			return inv, nil
@@ -389,13 +398,14 @@ func (c *parquetColumn) read() (int, error) {
 }
 
 // rowAt assembles batch row i into an inventory row and reports
-// whether the row is a delete marker.
-func (r *ParquetReader) rowAt(i int) (Row, bool) {
+// whether the row is a delete marker and whether it has a size.
+func (r *ParquetReader) rowAt(i int) (Row, bool, bool) {
 	var inv Row
 	if v, ok := r.value(pqKey, i); ok {
 		inv.Key = v.String()
 	}
-	if v, ok := r.value(pqSize, i); ok {
+	v, hasSize := r.value(pqSize, i)
+	if hasSize {
 		inv.Size = v.Uint64()
 	}
 	if v, ok := r.value(pqStorage, i); ok {
@@ -413,8 +423,11 @@ func (r *ParquetReader) rowAt(i int) (Row, bool) {
 		}
 	}
 
-	return inv, deleteMarker
+	return inv, deleteMarker, hasSize
 }
+
+// Anomalies counts the rows read so far that could not be read exactly.
+func (r *ParquetReader) Anomalies() Anomalies { return r.anomalies }
 
 // maxInterned bounds the strings intern keeps: storage classes and
 // access tiers number a dozen or so, and a file with more distinct

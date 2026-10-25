@@ -194,7 +194,21 @@ type Config struct {
 	TempDir  string
 	Merge    MergeConfig
 	MaxDepth int
+	// AllowAnomalies builds even when inventory rows can't be read
+	// exactly (s3inventory.Anomalies): they are skipped or indexed with
+	// size 0 and logged. Off by default: such a build would report
+	// numbers that differ from a direct scan of the inventory.
+	AllowAnomalies bool
 }
+
+// ErrInventoryAnomalies is returned when an inventory chunk has rows
+// that can't be read exactly and Config.AllowAnomalies is off.
+var ErrInventoryAnomalies = errors.New("inventory rows can't be read exactly")
+
+// ErrChunkSizeMismatch is returned when a downloaded inventory chunk's
+// size differs from the size its manifest lists: a truncated or
+// replaced file would silently drop or change rows.
+var ErrChunkSizeMismatch = errors.New("inventory chunk size differs from its manifest")
 
 // MergeConfig tunes the K-way merge phase.
 type MergeConfig struct {

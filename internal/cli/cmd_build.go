@@ -24,6 +24,7 @@ func runBuild(args []string) error {
 	s3Manifest := fs.String("s3-manifest", "", "S3 URI to inventory manifest.json (s3://bucket/path/manifest.json)")
 	logFlags := addLoggingFlags(fs)
 	maxDepth := fs.Int("max-depth", 0, "maximum prefix depth to track (0 = unlimited)")
+	allowMalformed := fs.Bool("allow-malformed-rows", false, "build even when inventory rows can't be read exactly (they're skipped or indexed with size 0; totals then differ from the inventory)")
 	eventLogPath := fs.String("event-log", "", "append build events as JSONL to this path (overrides config)")
 
 	if err := fs.Parse(args); err != nil {
@@ -55,10 +56,10 @@ func runBuild(args []string) error {
 		return ErrManifestRequired
 	}
 
-	return runBuildExtSort(*outDir, *s3Manifest, *maxDepth, finalEventLog, baseLogger)
+	return runBuildExtSort(*outDir, *s3Manifest, *maxDepth, *allowMalformed, finalEventLog, baseLogger)
 }
 
-func runBuildExtSort(outDir, s3Manifest string, maxDepth int, eventLogPath string, baseLogger zerolog.Logger) error {
+func runBuildExtSort(outDir, s3Manifest string, maxDepth int, allowMalformed bool, eventLogPath string, baseLogger zerolog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -77,6 +78,7 @@ func runBuildExtSort(outDir, s3Manifest string, maxDepth int, eventLogPath strin
 	if maxDepth > 0 {
 		config.MaxDepth = maxDepth
 	}
+	config.AllowAnomalies = allowMalformed
 	config.Observe = tracker.wire()
 
 	logger.Info().

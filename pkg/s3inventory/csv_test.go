@@ -73,8 +73,8 @@ func TestCSVInventoryReader_MalformedRowCount(t *testing.T) {
 		_ = row
 	}
 
-	if got := r.MalformedRowCount(); got != 2 {
-		t.Errorf("MalformedRowCount = %d, want 2", got)
+	if got := r.Anomalies().BadSizes; got != 2 {
+		t.Errorf("Anomalies().BadSizes = %d, want 2", got)
 	}
 }
 

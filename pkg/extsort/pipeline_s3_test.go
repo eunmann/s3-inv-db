@@ -7,8 +7,10 @@ import (
 	"compress/gzip"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,4 +213,82 @@ func TestPipelineRun_CSVEncodedKeysAndVersions(t *testing.T) {
 	if _, ok := idx.StatsForPrefix("my+folder/"); ok {
 		t.Error("undecoded prefix my+folder/ present in the index")
 	}
+}
+
+// A row that can't be read exactly fails the build (exact answers):
+// here a size that doesn't parse. AllowAnomalies accepts it, indexed as 0.
+func TestPipelineRun_FailsOnAnomalousRows(t *testing.T) {
+	fc := s3test.FetchClient(t)
+	manifest := uploadCSVInventory(t, fc, "Bucket, Key, Size",
+		[][]string{
+			{"src", "a/ok.txt", "100"},
+			{"src", "a/bad.txt", "12x"},
+		})
+
+	_, err := extsort.NewPipeline(extsort.DefaultConfig(), fc).Run(t.Context(), manifest, filepath.Join(t.TempDir(), "index"))
+	if !errors.Is(err, extsort.ErrInventoryAnomalies) {
+		t.Fatalf("Run error = %v, want ErrInventoryAnomalies", err)
+	}
+
+	cfg := extsort.DefaultConfig()
+	cfg.AllowAnomalies = true
+	outDir := filepath.Join(t.TempDir(), "index")
+	if _, err := extsort.NewPipeline(cfg, fc).Run(t.Context(), manifest, outDir); err != nil {
+		t.Fatalf("Run with AllowAnomalies: %v", err)
+	}
+	idx, err := indexread.Open(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	if st, ok := idx.StatsForPrefix("a/"); !ok || st.ObjectCount != 2 || st.TotalBytes != 100 {
+		t.Errorf("a/ = %+v, %v; want 2 objects, 100 bytes", st, ok)
+	}
+}
+
+// A downloaded chunk whose size differs from its manifest entry (a
+// truncated or replaced file) fails the build.
+func TestPipelineRun_FailsOnChunkSizeMismatch(t *testing.T) {
+	fc := s3test.FetchClient(t)
+	manifest := uploadCSVInventory(t, fc, "Bucket, Key, Size", [][]string{{"src", "a/ok.txt", "100"}})
+	bucket, key := splitS3URI(t, manifest)
+	out, err := fc.Raw().GetObject(t.Context(), &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.NewDecoder(out.Body).Decode(&m); err != nil {
+		t.Fatal(err)
+	}
+	_ = out.Body.Close()
+	file := m["files"].([]any)[0].(map[string]any) //nolint:forcetypeassert // our own fixture
+	file["size"] = file["size"].(float64) + 1      //nolint:forcetypeassert // our own fixture
+	body, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fc.Raw().PutObject(t.Context(), &s3.PutObjectInput{
+		Bucket: aws.String(bucket), Key: aws.String(key), Body: bytes.NewReader(body),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = extsort.NewPipeline(extsort.DefaultConfig(), fc).Run(t.Context(), manifest, filepath.Join(t.TempDir(), "index"))
+	if !errors.Is(err, extsort.ErrChunkSizeMismatch) {
+		t.Fatalf("Run error = %v, want ErrChunkSizeMismatch", err)
+	}
+}
+
+// splitS3URI splits "s3://bucket/key" into bucket and key.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func splitS3URI(t *testing.T, uri string) (string, string) {
+	t.Helper()
+	rest, ok := strings.CutPrefix(uri, "s3://")
+	bucket, key, found := strings.Cut(rest, "/")
+	if !ok || !found {
+		t.Fatalf("not an s3 URI: %q", uri)
+	}
+
+	return bucket, key
 }
