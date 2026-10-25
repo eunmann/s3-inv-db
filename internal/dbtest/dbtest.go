@@ -4,6 +4,7 @@
 package dbtest
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"testing"
 
@@ -13,9 +14,16 @@ import (
 
 // OpenMemDB returns an in-memory SQLite handle with the project's
 // migrations applied, registered for cleanup on test end.
+//
+// Each call gets its own randomly named database. A single shared
+// "file::memory:" lives as long as any connection to it, so a test's
+// background job still persisting after its cleanup kept it alive and
+// wrote rows the next test then read (#75). The pool's connections
+// still share one database through cache=shared.
 func OpenMemDB(tb testing.TB) *sql.DB {
 	tb.Helper()
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
+	dsn := "file:memdb-" + rand.Text() + "?mode=memory&cache=shared&_pragma=foreign_keys(1)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		tb.Fatalf("sql.Open: %v", err)
 	}
