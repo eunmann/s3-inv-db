@@ -541,11 +541,15 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 	return result
 }
 
-// MergeStatistics describes the work done by a ParallelMerger.
+// MergeStatistics describes the work done by a ParallelMerger and the
+// effective worker count and final fan-in it runs with after the
+// GOMEMLIMIT caps.
 type MergeStatistics struct {
 	Rounds         int
 	TotalMergeTime time.Duration
 	BytesWritten   int64
+	Workers        int
+	FinalFanIn     int
 }
 
 // Statistics returns merge statistics. The fields are stored as atomics
@@ -557,5 +561,7 @@ func (m *ParallelMerger) Statistics() MergeStatistics {
 		Rounds:         int(m.mergeRounds.Load()),
 		TotalMergeTime: time.Duration(m.totalMergeTimeNanos.Load()),
 		BytesWritten:   m.totalBytesWritten.Load(),
+		Workers:        m.config.NumWorkers,
+		FinalFanIn:     m.config.FinalFanIn,
 	}
 }

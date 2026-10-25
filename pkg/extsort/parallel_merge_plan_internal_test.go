@@ -2,8 +2,10 @@ package extsort
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"testing"
 )
@@ -109,6 +111,29 @@ func TestFinalFanInFitsMemoryLimit(t *testing.T) {
 				if open := roundWorkersFor(c.limit, 32, 16) * 16; open > budget {
 					t.Errorf("round holds %d readers, budget %d", open, budget)
 				}
+			}
+		})
+	}
+}
+
+func TestNewParallelMergerAppliesMemoryLimit(t *testing.T) {
+	cases := []struct {
+		name           string
+		limit          int64
+		wantWorkers    int
+		wantFinalFanIn int
+	}{
+		{name: "256MiB", limit: 256 << 20, wantWorkers: 1, wantFinalFanIn: 25},
+		{name: "unset", limit: math.MaxInt64, wantWorkers: 32, wantFinalFanIn: DefaultFinalFanIn},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			prev := debug.SetMemoryLimit(c.limit)
+			t.Cleanup(func() { debug.SetMemoryLimit(prev) })
+
+			stats := NewParallelMerger(ParallelMergeConfig{NumWorkers: 32, MaxFanIn: 16, TempDir: t.TempDir()}).Statistics()
+			if stats.Workers != c.wantWorkers || stats.FinalFanIn != c.wantFinalFanIn {
+				t.Fatalf("workers %d final fan-in %d, want %d and %d", stats.Workers, stats.FinalFanIn, c.wantWorkers, c.wantFinalFanIn)
 			}
 		})
 	}
