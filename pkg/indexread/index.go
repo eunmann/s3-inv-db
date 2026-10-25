@@ -20,8 +20,28 @@ type Index struct {
 	maxDepth   uint32
 }
 
+// Options tune how an index is opened.
+type Options struct {
+	// Prefault reads every index file into the page cache before Open
+	// returns (format.Prefault): slower to open, but the first queries
+	// don't wait on storage. For a server loading an index it will
+	// serve; a one-off query opens without it.
+	Prefault bool
+}
+
 // Open opens an index from the given directory.
 func Open(dir string) (*Index, error) {
+	return OpenWith(dir, Options{})
+}
+
+// OpenWith opens an index from the given directory with options.
+func OpenWith(dir string, opts Options) (*Index, error) {
+	if opts.Prefault {
+		if err := format.Prefault(dir); err != nil {
+			return nil, fmt.Errorf("prefault index: %w", err)
+		}
+	}
+
 	coreStats, err := format.OpenCoreStats(dir)
 	if err != nil {
 		return nil, fmt.Errorf("open core stats: %w", err)

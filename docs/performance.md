@@ -84,7 +84,7 @@ to an ingest node without flags.
 | Low CPU during build | S3 bandwidth limited | Run on a host with more vCPUs |
 | Slow build, lots of temp files | Aggregator spilling under a tight `GOMEMLIMIT` | Raise the limit or run on a fatter host |
 | Slow final build phase | Large MPHF build | Expected for >5M prefixes |
-| First query slow | Cold page cache | Expected; subsequent queries fast |
+| First query slow | Cold page cache | The server prefaults an index that fits in 1/8 of memory when it loads it; a larger one, or the CLI, reads pages as queries touch them |
 | Descendant queries slow | Large subtrees | Use `DescendantsAtDepthFiltered` with `MinCount` / `MinBytes` |
 
 Query-time RAM is just the OS page cache plus iterator stack frames;
@@ -97,6 +97,14 @@ benchmark fixture, cold lookups were 33% faster than with
 per cold lookup, and `MADV_RANDOM` everywhere doubled cold latency
 (#50). A server holding many indexes in little memory evicts sooner for
 it.
+
+When the server loads an index (a fresh build or a restart), it reads
+the whole index into the page cache first if it takes at most 1/8 of
+system memory (`format.Prefault`, `MADV_POPULATE_READ`): opening an
+evicted 2.4M-prefix index plus its first 1000 lookups took 36 ms
+instead of 77 ms. The asynchronous `MADV_WILLNEED` measured no gain.
+CLI commands open without it: a one-off query shouldn't read a whole
+index (#55).
 
 ## Index size
 

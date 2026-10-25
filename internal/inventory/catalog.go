@@ -244,7 +244,7 @@ func (c *Catalog) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	var idx *indexread.Index
 	var openErr error
 	if buildErr == nil {
-		idx, openErr = indexread.Open(indexDir)
+		idx, openErr = openServed(indexDir)
 	}
 
 	var bytes uint64
@@ -572,7 +572,7 @@ func (c *Catalog) Hydrate(ctx context.Context, info Info, indexDir string) error
 			mi.info.MaxDepth = 0
 			mi.info.HasTierData = false
 		} else {
-			idx, err := indexread.Open(indexDir)
+			idx, err := openServed(indexDir)
 			switch {
 			case err != nil:
 				mi.info.State = StateError
