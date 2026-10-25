@@ -16,3 +16,9 @@ func HxValsJSON(pairs ...any) (string, error) { return hxValsJSON(pairs...) }
 
 // BrowseURL exposes browseURL for tests.
 func BrowseURL(pairs ...any) (string, error) { return browseURL(pairs...) }
+
+// HxValsJSONGeneral and BrowseURLGeneral expose the general encoders the
+// fast paths must match byte for byte.
+func HxValsJSONGeneral(pairs ...any) (string, error) { return marshalHxVals(pairs) }
+
+func BrowseURLGeneral(pairs ...any) string { return encodeBrowseURL(pairs) }

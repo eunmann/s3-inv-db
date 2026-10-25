@@ -449,13 +449,24 @@ func hxValsJSON(pairs ...any) (string, error) {
 	if len(pairs)%2 != 0 {
 		return "", errHxValsOddPairs
 	}
-	m := make(map[string]any, len(pairs)/2)
 	for i := 0; i < len(pairs); i += 2 {
-		key, ok := pairs[i].(string)
-		if !ok {
+		if _, ok := pairs[i].(string); !ok {
 			return "", fmt.Errorf("%w (position %d)", errHxValsKeyType, i)
 		}
-		m[key] = pairs[i+1]
+	}
+	if s, ok := fastHxValsJSON(pairs); ok {
+		return s, nil
+	}
+
+	return marshalHxVals(pairs)
+}
+
+// marshalHxVals is hxValsJSON's general encoder; it defines the output
+// fastHxValsJSON reproduces. Every key must be a string.
+func marshalHxVals(pairs []any) (string, error) {
+	m := make(map[string]any, len(pairs)/2)
+	for i := 0; i < len(pairs); i += 2 {
+		m[pairs[i].(string)] = pairs[i+1] //nolint:forcetypeassert // checked above
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
@@ -474,13 +485,25 @@ func browseURL(pairs ...any) (string, error) {
 	if len(pairs)%2 != 0 {
 		return "", errBrowseURLOddPairs
 	}
+	for i := 0; i < len(pairs); i += 2 {
+		if _, ok := pairs[i].(string); !ok {
+			return "", fmt.Errorf("%w (position %d)", errBrowseURLKeyType, i)
+		}
+	}
+	if s, ok := fastBrowseURL(pairs); ok {
+		return s, nil
+	}
+
+	return encodeBrowseURL(pairs), nil
+}
+
+// encodeBrowseURL is browseURL's general encoder; it defines the output
+// fastBrowseURL reproduces. Every key must be a string.
+func encodeBrowseURL(pairs []any) string {
 	u := url.URL{Path: "/browse"}
 	q := u.Query()
 	for i := 0; i < len(pairs); i += 2 {
-		key, ok := pairs[i].(string)
-		if !ok {
-			return "", fmt.Errorf("%w (position %d)", errBrowseURLKeyType, i)
-		}
+		key := pairs[i].(string) //nolint:forcetypeassert // checked above
 		v := fmt.Sprint(pairs[i+1])
 		if v == "" {
 			continue
@@ -489,7 +512,7 @@ func browseURL(pairs ...any) (string, error) {
 	}
 	u.RawQuery = q.Encode()
 
-	return u.String(), nil
+	return u.String()
 }
 
 func (r *Renderer) loadTemplates() error {
