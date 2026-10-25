@@ -540,7 +540,7 @@ func TestWriteZerosFillsFile(t *testing.T) {
 	}
 	defer f.Close()
 	const size = preallocateChunk + 4097
-	if err := writeZeros(f, size); err != nil {
+	if err := writeZeros(f, 0, size); err != nil {
 		t.Fatal(err)
 	}
 	var st unix.Stat_t
