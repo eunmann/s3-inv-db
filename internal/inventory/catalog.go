@@ -394,22 +394,17 @@ func (c *Catalog) Unload(ctx context.Context, id ID) error {
 	return c.unloadInternal(ctx, id, true /* userInitiated */, false /* keepPinned */)
 }
 
-// EvictForBudget closes an inventory index released by the auto-loader's
-// eviction planner. Distinct from Unload because it does NOT stamp
-// UserUnloadedAt — the auto-loader is free to reload this run later if
-// a newer (or the same) run is discovered and there's budget.
-func (c *Catalog) EvictForBudget(ctx context.Context, id ID) error {
-	return c.unloadInternal(ctx, id, false /* userInitiated */, false /* keepPinned */)
-}
-
-// ErrPinned is returned by RetireUnlessPinned for a pinned run.
+// ErrPinned is returned by EvictForBudget for a pinned run.
 var ErrPinned = errors.New("inventory is pinned")
 
-// RetireUnlessPinned is EvictForBudget for a run leaving because of
-// retention: it refuses (ErrPinned) a run the user pinned, checked in
-// the same critical section as the unload, so a pin that lands just
-// before it is never lost.
-func (c *Catalog) RetireUnlessPinned(ctx context.Context, id ID) error {
+// EvictForBudget closes an inventory index the load gate evicts for disk
+// or retention. Distinct from Unload because it does NOT stamp
+// UserUnloadedAt — the auto-loader is free to reload this run later if
+// a newer (or the same) run is discovered and there's budget. Pinned
+// runs are never auto-evicted: it refuses (ErrPinned) a pinned run,
+// checked in the same critical section as the unload, so a pin that
+// lands after the gate planned is never lost.
+func (c *Catalog) EvictForBudget(ctx context.Context, id ID) error {
 	return c.unloadInternal(ctx, id, false /* userInitiated */, true /* keepPinned */)
 }
 

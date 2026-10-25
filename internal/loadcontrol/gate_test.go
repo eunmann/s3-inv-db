@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/budget"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/loadcontrol"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
@@ -344,9 +346,9 @@ func TestGate_Load_ConcurrentLoadEvictsRetiringRunFirst(t *testing.T) {
 	}
 }
 
-// RetireUnlessPinned checks the pin in the same critical section as the
+// EvictForBudget checks the pin in the same critical section as the
 // unload: a pinned run is refused and stays loaded; an unpinned one goes.
-func TestCatalog_RetireUnlessPinned(t *testing.T) {
+func TestCatalog_EvictForBudgetRefusesPinned(t *testing.T) {
 	ctx := t.Context()
 	mgr := inventory.NewCatalog(nil)
 	defer mgr.Close()
@@ -361,8 +363,8 @@ func TestCatalog_RetireUnlessPinned(t *testing.T) {
 		inventory.GatedLoadOptions{EstimateBytes: 1, Pin: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.RetireUnlessPinned(ctx, id); !errors.Is(err, inventory.ErrPinned) {
-		t.Fatalf("RetireUnlessPinned(pinned) = %v, want ErrPinned", err)
+	if err := mgr.EvictForBudget(ctx, id); !errors.Is(err, inventory.ErrPinned) {
+		t.Fatalf("EvictForBudget(pinned) = %v, want ErrPinned", err)
 	}
 	if info, _ := mgr.Get(id); info.State != inventory.StateLoaded {
 		t.Fatalf("pinned run state = %s, want loaded", info.State)
@@ -370,10 +372,177 @@ func TestCatalog_RetireUnlessPinned(t *testing.T) {
 	if err := mgr.SetPinned(ctx, id, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.RetireUnlessPinned(ctx, id); err != nil {
-		t.Fatalf("RetireUnlessPinned(unpinned) = %v", err)
+	if err := mgr.EvictForBudget(ctx, id); err != nil {
+		t.Fatalf("EvictForBudget(unpinned) = %v", err)
 	}
 	if info, _ := mgr.Get(id); info.State != inventory.StateNotLoaded {
 		t.Errorf("unpinned run state = %s, want not_loaded", info.State)
+	}
+}
+
+// holdReaders holds a WithIndex reader on each of ids until the returned
+// release is called, so unloading any of them blocks until then.
+func holdReaders(t *testing.T, mgr *inventory.Catalog, ids ...inventory.ID) func() {
+	t.Helper()
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		held := make(chan struct{})
+		wg.Go(func() {
+			err := mgr.WithIndex(id, func(*indexread.Index) error {
+				close(held)
+				<-done
+
+				return nil
+			})
+			if err != nil {
+				t.Errorf("hold reader on %s: %v", id, err)
+				close(held)
+			}
+		})
+		<-held
+	}
+
+	return func() {
+		close(done)
+		wg.Wait()
+	}
+}
+
+// awaitFirstUnloaded returns which of ids leaves the loaded state first.
+func awaitFirstUnloaded(t *testing.T, mgr *inventory.Catalog, ids ...inventory.ID) inventory.ID {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, id := range ids {
+			if info, _ := mgr.Get(id); info.State != inventory.StateLoaded {
+				return id
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("none of %v was unloaded", ids)
+
+	return ""
+}
+
+// pinSecondVictim starts load, waits until its first eviction of ids is
+// blocked on a reader, pins the other run, then lets the load finish. It
+// returns the pinned run and the load's error.
+func pinSecondVictim(t *testing.T, mgr *inventory.Catalog, load func() error, ids [2]inventory.ID) (inventory.ID, error) {
+	t.Helper()
+	release := holdReaders(t, mgr, ids[0], ids[1])
+	loadErr := make(chan error, 1)
+	go func() { loadErr <- load() }()
+	pinned := ids[0]
+	if awaitFirstUnloaded(t, mgr, ids[0], ids[1]) == ids[0] {
+		pinned = ids[1]
+	}
+	if err := mgr.SetPinned(t.Context(), pinned, true); err != nil {
+		t.Fatal(err)
+	}
+	release()
+
+	return pinned, <-loadErr
+}
+
+// A run the user pins after the gate planned to evict it for disk stays
+// loaded with its cache, and the load is refused for the space it then
+// lacks.
+func TestGate_Load_PinnedAfterPlanningSkipsDiskEviction(t *testing.T) {
+	ctx := t.Context()
+	mgr := inventory.NewCatalog(nil)
+	defer mgr.Close()
+	dir := buildIndexDir(t)
+	ok := func(context.Context, inventory.Info) (string, error) { return dir, nil }
+	a := inventory.ID("a/inv/2026-01-01T00-00Z")
+	b := inventory.ID("b/inv/2026-01-01T00-00Z")
+	c := inventory.ID("c/inv/2026-01-01T00-00Z")
+	for _, id := range []inventory.ID{a, b, c} {
+		if err := mgr.Register(ctx, id, "n", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setup := budget.New(0, 0, mgr.LoadedBytes)
+	setupGate := loadcontrol.New(mgr, setup, budget.NewPlanner(setup, nil), nil)
+	for _, id := range []inventory.ID{a, b} {
+		if err := setupGate.Load(ctx, id, ok, inventory.GatedLoadOptions{EstimateBytes: 1}); err != nil {
+			t.Fatalf("load %s: %v", id, err)
+		}
+	}
+	info, _ := mgr.Get(a)
+	size := info.IndexBytes
+
+	// c needs the disk of both a and b.
+	tracker := budget.New(2*size, 0, mgr.LoadedBytes)
+	var removed []inventory.ID
+	var removedMu sync.Mutex
+	gate := loadcontrol.New(mgr, tracker, budget.NewPlanner(tracker, nil), func(id inventory.ID) error {
+		removedMu.Lock()
+		defer removedMu.Unlock()
+		removed = append(removed, id)
+
+		return nil
+	})
+	pinned, err := pinSecondVictim(t, mgr, func() error {
+		return gate.Load(ctx, c, ok, inventory.GatedLoadOptions{EstimateBytes: 2 * size})
+	}, [2]inventory.ID{a, b})
+
+	if _, refused := errors.AsType[*loadcontrol.BudgetRefusedError](err); !refused {
+		t.Errorf("load %s = %v, want BudgetRefusedError", c, err)
+	}
+	if got, _ := mgr.Get(pinned); got.State != inventory.StateLoaded {
+		t.Errorf("pinned %s state = %s, want loaded", pinned, got.State)
+	}
+	for _, id := range removed {
+		if id == pinned {
+			t.Errorf("removed caches = %v, want not the pinned %s", removed, pinned)
+		}
+	}
+}
+
+// A run the user pins after the gate planned to retire it stays loaded
+// with its cache once the load succeeds.
+func TestGate_Load_PinnedAfterPlanningSkipsRetirement(t *testing.T) {
+	ctx := t.Context()
+	mgr := inventory.NewCatalog(nil)
+	defer mgr.Close()
+	dir := buildIndexDir(t)
+	ok := func(context.Context, inventory.Info) (string, error) { return dir, nil }
+	runs := []inventory.ID{"src/inv/2026-01-01T00-00Z", "src/inv/2026-01-02T00-00Z", "src/inv/2026-01-03T00-00Z"}
+	for _, id := range runs {
+		if err := mgr.Register(ctx, id, "n", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Two runs loaded with no budget, so neither is retired yet.
+	setup := budget.New(0, 0, mgr.LoadedBytes)
+	setupGate := loadcontrol.New(mgr, setup, budget.NewPlanner(setup, nil), nil)
+	for _, id := range runs[:2] {
+		if err := setupGate.Load(ctx, id, ok, inventory.GatedLoadOptions{EstimateBytes: 1}); err != nil {
+			t.Fatalf("load %s: %v", id, err)
+		}
+	}
+
+	// Retention 1: loading runs[2] retires both older runs after its build.
+	tracker := budget.New(1<<30, 0, mgr.LoadedBytes)
+	retention := func(context.Context, string, string) uint32 { return 1 }
+	var removed []inventory.ID
+	gate := loadcontrol.New(mgr, tracker, budget.NewPlanner(tracker, retention), func(id inventory.ID) error {
+		removed = append(removed, id)
+
+		return nil
+	})
+	pinned, err := pinSecondVictim(t, mgr, func() error {
+		return gate.Load(ctx, runs[2], ok, inventory.GatedLoadOptions{EstimateBytes: 1})
+	}, [2]inventory.ID{runs[0], runs[1]})
+	if err != nil {
+		t.Fatalf("load %s: %v", runs[2], err)
+	}
+	if got, _ := mgr.Get(pinned); got.State != inventory.StateLoaded {
+		t.Errorf("pinned %s state = %s, want loaded", pinned, got.State)
+	}
+	if len(removed) != 1 || removed[0] == pinned {
+		t.Errorf("removed caches = %v, want only the unpinned run", removed)
 	}
 }

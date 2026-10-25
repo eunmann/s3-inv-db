@@ -84,9 +84,7 @@ func (g *Gate) Load(ctx context.Context, id inventory.ID, build inventory.BuildF
 	// Retention evictions wait for a successful load, so a failed build
 	// never leaves the configuration a run short.
 	for _, victim := range plan.AfterLoad {
-		// A run pinned since planning stays: the catalog checks the pin
-		// under the same lock as the unload.
-		if err := g.unloadAndFree(ctx, victim, g.manager.RetireUnlessPinned); err != nil {
+		if err := g.evict(ctx, victim); err != nil {
 			zerolog.Ctx(ctx).Warn().Err(err).Stringer("id", victim).Msg("retire run past retention")
 		}
 	}
@@ -155,16 +153,12 @@ func (g *Gate) unmarkRetiring(victims []inventory.ID) {
 	}
 }
 
-// evict unloads victim for the disk a load needs and deletes its cache.
+// evict unloads victim and deletes its cache. A run already unloaded or
+// removed by someone else, or pinned since planning, frees nothing and
+// isn't an error: the reservation that follows refuses a load the space
+// is then short for.
 func (g *Gate) evict(ctx context.Context, victim inventory.ID) error {
-	return g.unloadAndFree(ctx, victim, g.manager.EvictForBudget)
-}
-
-// unloadAndFree unloads victim with unload and deletes its cache. A run
-// already unloaded or removed by someone else, or pinned (for a
-// retirement), frees nothing and isn't an error.
-func (g *Gate) unloadAndFree(ctx context.Context, victim inventory.ID, unload func(context.Context, inventory.ID) error) error {
-	err := unload(ctx, victim)
+	err := g.manager.EvictForBudget(ctx, victim)
 	switch {
 	case errors.Is(err, inventory.ErrInvalidState), errors.Is(err, inventory.ErrNotFound), errors.Is(err, inventory.ErrPinned):
 		return nil
