@@ -98,6 +98,22 @@ per cold lookup, and `MADV_RANDOM` everywhere doubled cold latency
 (#50). A server holding many indexes in little memory evicts sooner for
 it.
 
+The trade depends on how many queries share a cold period more than on
+index size. `MADV_RANDOM` on the lookup files (MPHF slots, core and tier
+stats) makes the first queries after an eviction cheaper, but readahead
+warms the cache faster for everything after them. Measured from 1M to
+8M objects (#77):
+
+| queries per cold period | 2M objects | 8M objects |
+|---|---|---|
+| 100 | hint −23% | hint −34% |
+| 1,000 | hint +8% | hint −26% |
+| 10,000 | hint +124% | hint +26% |
+
+A server answers many queries per load, so the default stays. Re-measure
+before adding a hint for a workload of a few queries per cold period on
+slow storage.
+
 When the server loads an index (a fresh build or a restart), it reads
 the files its manifest lists into the page cache first
 (`format.Prefault`, `MADV_POPULATE_READ`) if the index fits in what is
