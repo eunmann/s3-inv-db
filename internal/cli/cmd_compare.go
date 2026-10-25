@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"sort"
+	"slices"
+	"strings"
 
 	"github.com/eunmann/s3-inv-db/internal/appconfig"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
@@ -74,16 +75,16 @@ func runCompare(args []string) error {
 	}
 	defer to.Close()
 
-	fromChildren, err := childrenStats(from, *prefix, *depth)
+	fromLevel, err := levelAt(from, *prefix, *depth)
 	if err != nil {
-		return fmt.Errorf("from children: %w", err)
+		return fmt.Errorf("from: %w", err)
 	}
-	toChildren, err := childrenStats(to, *prefix, *depth)
+	toLevel, err := levelAt(to, *prefix, *depth)
 	if err != nil {
-		return fmt.Errorf("to children: %w", err)
+		return fmt.Errorf("to: %w", err)
 	}
 
-	rows := diffChildren(fromChildren, toChildren)
+	rows := diffLevels(fromLevel, toLevel)
 
 	resp := compareOutput{From: *fromIdx, To: *toIdx, Prefix: *prefix, Depth: *depth, Rows: rows}
 
@@ -100,67 +101,90 @@ func runCompare(args []string) error {
 	return nil
 }
 
-func childrenStats(idx *indexread.Index, prefix string, depth int) (map[string]indexread.Stats, error) {
+// level is one index's prefixes at the compared depth, in index
+// (preorder) order, which is byte order of the full prefix strings.
+type level struct {
+	idx   *indexread.Index
+	pos   []uint64
+	names []string
+}
+
+func levelAt(idx *indexread.Index, prefix string, depth int) (level, error) {
+	l := level{idx: idx}
 	pos, ok := idx.Lookup(prefix)
 	if !ok {
-		return map[string]indexread.Stats{}, nil
+		return l, nil
 	}
 	positions, err := idx.DescendantsAtDepth(pos, depth)
 	if err != nil {
-		return nil, fmt.Errorf("descendants: %w", err)
+		return l, fmt.Errorf("descendants: %w", err)
 	}
-	out := make(map[string]indexread.Stats, len(positions))
-	for _, p := range positions {
-		name, err := idx.PrefixString(p)
-		if err != nil {
-			return nil, fmt.Errorf("prefix string: %w", err)
+	l.pos = positions
+	l.names = make([]string, len(positions))
+	for i, p := range positions {
+		if l.names[i], err = idx.PrefixString(p); err != nil {
+			return l, fmt.Errorf("prefix string: %w", err)
 		}
-		out[name] = idx.Stats(p)
 	}
 
-	return out, nil
+	return l, nil
 }
 
-func diffChildren(from, to map[string]indexread.Stats) []compareRow {
-	names := make(map[string]struct{}, len(from)+len(to))
-	for k := range from {
-		names[k] = struct{}{}
-	}
-	for k := range to {
-		names[k] = struct{}{}
-	}
-	keys := make([]string, 0, len(names))
-	for k := range names {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	rows := make([]compareRow, 0, len(keys))
-	for _, k := range keys {
-		f, fok := from[k]
-		t, tok := to[k]
-		status := "changed"
+// diffLevels merges the two sorted levels. A prefix in both is changed
+// when its objects, bytes or tier mix differ, as in the server's
+// compare view.
+func diffLevels(from, to level) []compareRow {
+	rows := make([]compareRow, 0, max(len(from.pos), len(to.pos)))
+	var tiersA, tiersB []indexread.TierBreakdown
+	i, j := 0, 0
+	for i < len(from.pos) || j < len(to.pos) {
+		c := 0
 		switch {
-		case !fok:
-			status = "added"
-		case !tok:
-			status = "removed"
-		case f == t:
-			status = "unchanged"
+		case i == len(from.pos):
+			c = 1
+		case j == len(to.pos):
+			c = -1
+		default:
+			c = strings.Compare(from.names[i], to.names[j])
 		}
-		rows = append(rows, compareRow{
-			Prefix:     k,
-			FromCount:  f.ObjectCount,
-			FromBytes:  f.TotalBytes,
-			ToCount:    t.ObjectCount,
-			ToBytes:    t.TotalBytes,
-			DeltaCount: safeDelta(t.ObjectCount, f.ObjectCount),
-			DeltaBytes: safeDelta(t.TotalBytes, f.TotalBytes),
-			Status:     status,
-		})
+		var f, t indexread.Stats
+		row := compareRow{}
+		switch {
+		case c < 0:
+			f = from.idx.Stats(from.pos[i])
+			row.Prefix, row.Status = from.names[i], "removed"
+			i++
+		case c > 0:
+			t = to.idx.Stats(to.pos[j])
+			row.Prefix, row.Status = to.names[j], "added"
+			j++
+		default:
+			f, t = from.idx.Stats(from.pos[i]), to.idx.Stats(to.pos[j])
+			row.Prefix, row.Status = from.names[i], "unchanged"
+			if f != t {
+				row.Status = "changed"
+			} else {
+				tiersA = from.idx.AppendTierBreakdown(tiersA[:0], from.pos[i])
+				tiersB = to.idx.AppendTierBreakdown(tiersB[:0], to.pos[j])
+				if !slices.EqualFunc(tiersA, tiersB, sameTier) {
+					row.Status = "changed"
+				}
+			}
+			i++
+			j++
+		}
+		row.FromCount, row.FromBytes = f.ObjectCount, f.TotalBytes
+		row.ToCount, row.ToBytes = t.ObjectCount, t.TotalBytes
+		row.DeltaCount = safeDelta(t.ObjectCount, f.ObjectCount)
+		row.DeltaBytes = safeDelta(t.TotalBytes, f.TotalBytes)
+		rows = append(rows, row)
 	}
 
 	return rows
+}
+
+func sameTier(a, b indexread.TierBreakdown) bool {
+	return a.TierID == b.TierID && a.ObjectCount == b.ObjectCount && a.Bytes == b.Bytes
 }
 
 // safeDelta returns to - from as int64, clamping to int64 bounds to avoid
