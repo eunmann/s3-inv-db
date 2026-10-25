@@ -44,18 +44,18 @@ func checkOutDir(outDir string) error {
 	return nil
 }
 
-// Staging and replaced-index directories are hidden siblings of outDir
-// named ".<base><suffix><random>", so a build can find the ones an
-// earlier, killed build left behind.
+// Staging, replaced-index and scratch directories are hidden siblings
+// of outDir named ".<base><suffix><random>", so a build can find the
+// ones an earlier, killed build left behind.
 const (
 	stagingSuffix  = ".building-"
 	replacedSuffix = ".replaced-"
 	scratchSuffix  = ".scratch-"
 )
 
-// LeftoverBase reports whether name is a staging or replaced-index
-// directory this package creates beside an output directory, and the
-// output directory's base name if so.
+// LeftoverBase reports whether name is a staging, replaced-index or
+// scratch directory this package creates beside an output directory,
+// and the output directory's base name if so.
 func LeftoverBase(name string) (string, bool) {
 	rest, ok := strings.CutPrefix(name, ".")
 	if !ok {

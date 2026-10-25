@@ -37,9 +37,10 @@ func exists(path string) bool {
 }
 
 // TestReconcile_RemovesOnlyWhatTheServerOwns: orphaned indexes and
-// staging leftovers go; the kept run, a directory that isn't an index,
-// one with an unrelated manifest, and a stray file stay; a previous
-// index moved aside by a killed build is restored, not lost.
+// staging and scratch leftovers go; the kept run, a directory that
+// isn't an index, one with an unrelated manifest, and a stray file
+// stay; a previous index moved aside by a killed build is restored,
+// not lost.
 func TestReconcile_RemovesOnlyWhatTheServerOwns(t *testing.T) {
 	root := t.TempDir()
 	inv := filepath.Join(root, "src", "inv")
@@ -58,9 +59,16 @@ func TestReconcile_RemovesOnlyWhatTheServerOwns(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A build of "kept" killed mid-way left a staging dir; a build of
-	// "moved" was killed after moving its previous index aside.
+	// "moved" was killed after moving its previous index aside; a build
+	// of "fresh" was killed while sorting, leaving only its scratch.
 	writeIndexDir(t, filepath.Join(inv, ".kept.building-123"))
 	writeIndexDir(t, filepath.Join(inv, ".moved.replaced-456"))
+	if err := os.MkdirAll(filepath.Join(inv, ".fresh.scratch-789"), format.DirPerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inv, ".fresh.scratch-789", "run-0001.zst"), []byte("spill"), format.FilePerm); err != nil {
+		t.Fatal(err)
+	}
 
 	l := loader.New(root, nil)
 	logger := zerolog.Nop()
@@ -78,7 +86,7 @@ func TestReconcile_RemovesOnlyWhatTheServerOwns(t *testing.T) {
 			t.Errorf("%s was removed", keep)
 		}
 	}
-	for _, gone := range []string{"orphan", ".kept.building-123", ".moved.replaced-456"} {
+	for _, gone := range []string{"orphan", ".kept.building-123", ".moved.replaced-456", ".fresh.scratch-789"} {
 		if exists(filepath.Join(inv, gone)) {
 			t.Errorf("%s survived", gone)
 		}
