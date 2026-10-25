@@ -6,8 +6,28 @@ import (
 	"io"
 )
 
-// MergeIterator provides a k-way merge of sorted run files.
-// It reads from multiple run files and yields PrefixRows in globally sorted order,
+// runSource is one sorted input of a merge: a run file, or a run held in
+// memory (memRun).
+type runSource interface {
+	// ReadInto reads the next row into into; io.EOF after the last.
+	ReadInto(into *PrefixRow) error
+	Count() uint64
+	ReadCount() uint64
+	Close() error
+}
+
+// fileSources returns readers as merge sources.
+func fileSources(readers []*CompressedRunReader) []runSource {
+	out := make([]runSource, len(readers))
+	for i, r := range readers {
+		out[i] = r
+	}
+
+	return out
+}
+
+// MergeIterator provides a k-way merge of sorted runs.
+// It reads from multiple runs and yields PrefixRows in globally sorted order,
 // automatically merging duplicates (same prefix from different runs).
 //
 // Rows are recycled through a per-iterator free list: at most one row
@@ -15,7 +35,7 @@ import (
 // allocates only those.
 type MergeIterator struct {
 	err     error
-	readers []*CompressedRunReader
+	readers []runSource
 	heap    typedMergeHeap
 	free    []*PrefixRow
 	last    *PrefixRow
@@ -100,11 +120,11 @@ func NewMergeIterator(paths []string, bufferSize int) (*MergeIterator, error) {
 		readers = append(readers, r)
 	}
 
-	return newMergeIterator(readers)
+	return newMergeIterator(fileSources(readers))
 }
 
-// newMergeIterator merges already-open readers. On error it closes them.
-func newMergeIterator(readers []*CompressedRunReader) (*MergeIterator, error) {
+// newMergeIterator merges already-open sources. On error it closes them.
+func newMergeIterator(readers []runSource) (*MergeIterator, error) {
 	m := &MergeIterator{
 		readers: readers,
 		heap:    typedMergeHeap{items: make([]mergeItem, 0, len(readers))},

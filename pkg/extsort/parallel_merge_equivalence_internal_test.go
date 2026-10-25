@@ -87,7 +87,7 @@ func drainSerial(t *testing.T, paths []string) []PrefixRow {
 		}
 		readers = append(readers, r)
 	}
-	iter, err := newMergeIterator(readers)
+	iter, err := newMergeIterator(fileSources(readers))
 	if err != nil {
 		t.Fatalf("newMergeIterator: %v", err)
 	}

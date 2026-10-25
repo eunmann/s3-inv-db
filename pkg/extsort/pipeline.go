@@ -26,12 +26,15 @@ import (
 // It streams S3 inventory data, aggregates in bounded memory,
 // spills to sorted run files, and merges to build the final index.
 type Pipeline struct {
-	config           Config
-	startTime        time.Time
-	s3Client         *s3fetch.Client
-	memTracker       *memdiag.Tracker
-	tempDir          string
-	runFiles         []string
+	config     Config
+	startTime  time.Time
+	s3Client   *s3fetch.Client
+	memTracker *memdiag.Tracker
+	tempDir    string
+	runFiles   []string
+	// memRuns are workers' last aggregator states, sorted and kept in
+	// memory for the final merge (see keepResidual).
+	memRuns          []*memRun
 	runCount         int
 	chunksProcessed  atomic.Int64
 	objectsProcessed atomic.Int64
@@ -55,7 +58,10 @@ type Result struct {
 	PrefixCount      uint64
 	MaxDepth         uint32
 	RunFilesCreated  int
-	Duration         time.Duration
+	// MemoryRuns counts the workers' final states merged from memory
+	// instead of run files.
+	MemoryRuns int
+	Duration   time.Duration
 }
 
 // setPhase notifies the memory tracker and the OnProgress callback
@@ -267,6 +273,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		PrefixCount:      prefixCount,
 		MaxDepth:         maxDepth,
 		RunFilesCreated:  len(p.runFiles),
+		MemoryRuns:       len(p.memRuns),
 		Duration:         duration,
 	}, nil
 }
@@ -604,6 +611,11 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int,
 		if err != nil || agg.PrefixCount() <= 0 {
 			return
 		}
+		if !heapUnderPressure(readMemoryLimit()) {
+			p.keepResidual(agg)
+
+			return
+		}
 		if flushErr := p.flushAggregator(ctx, agg, workerID); flushErr != nil {
 			err = fmt.Errorf("worker %d final flush: %w", workerID, flushErr)
 		}
@@ -875,6 +887,23 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	return nil
 }
 
+// keepResidual keeps a finished worker's last aggregator state, sorted,
+// for the final merge to read in place: the rows are already in memory,
+// and writing them to a run file only to read them back is most of a
+// build's spill work when workers rarely spill before their last flush.
+// They stay until the merge has read them, which is before the index is
+// finalized; under heap pressure the worker spills them instead.
+func (p *Pipeline) keepResidual(agg *Aggregator) {
+	p.presentTierMask.Or(uint32(agg.TierMask()))
+	rows := agg.DrainSorted()
+	if len(rows) == 0 {
+		return
+	}
+	p.runFilesMu.Lock()
+	p.memRuns = append(p.memRuns, newMemRun(rows))
+	p.runFilesMu.Unlock()
+}
+
 // mergeBuildResult is the output of runMergeBuildPhase.
 type mergeBuildResult struct {
 	PrefixCount       uint64
@@ -887,7 +916,12 @@ type mergeBuildResult struct {
 // lone run file directly. Multi-run case uses
 // ParallelMerger.MergeAllToIterator, which writes no final merged file.
 func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRunFiles, numWorkers, maxFanIn int, perReaderBuffer int64) (RowIterator, func() error, MergeStatistics, error) {
-	if numRunFiles == 1 {
+	if numRunFiles == 0 && len(p.memRuns) == 1 {
+		run := p.memRuns[0]
+
+		return &singleRunIterator{reader: run}, run.Close, MergeStatistics{}, nil
+	}
+	if numRunFiles == 1 && len(p.memRuns) == 0 {
 		reader, err := OpenCompressedRunFile(p.runFiles[0], int(perReaderBuffer))
 		if err != nil {
 			return nil, nil, MergeStatistics{}, fmt.Errorf("open single run: %w", err)
@@ -921,7 +955,7 @@ func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRu
 			})
 		},
 	})
-	iter, mergerCleanup, err := parallelMerger.MergeAllToIterator(ctx, p.runFiles)
+	iter, mergerCleanup, err := parallelMerger.mergeAllToIterator(ctx, p.runFiles, p.memRuns)
 	if err != nil {
 		return nil, nil, MergeStatistics{}, fmt.Errorf("parallel merge: %w", err)
 	}
@@ -946,7 +980,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	default:
 	}
 
-	if len(p.runFiles) == 0 {
+	if len(p.runFiles) == 0 && len(p.memRuns) == 0 {
 		log.Info().Msg("no run files to merge, creating empty index")
 		builder, err := NewIndexBuilder(outDir, p.tempDir)
 		if err != nil {
@@ -970,6 +1004,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 
 	log.Info().
 		Int("run_files_count", numRunFiles).
+		Int("memory_runs_count", len(p.memRuns)).
 		Int("merge_workers_count", numWorkers).
 		Int("max_fan_in", maxFanIn).
 		Int64("per_reader_buffer_kb", perReaderBuffer/1024).
@@ -1095,7 +1130,7 @@ func (p *reportingIterator) Remaining() uint64 { return p.inner.Remaining() }
 // Reuses one PrefixRow across all Next() calls — caller must consume the
 // returned row before calling Next again. IndexBuilder.Add does this.
 type singleRunIterator struct {
-	reader *CompressedRunReader
+	reader runSource
 	row    PrefixRow
 }
 

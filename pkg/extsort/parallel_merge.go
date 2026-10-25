@@ -125,7 +125,14 @@ type mergeResult struct {
 // iterator and deletes the runs it read. On error every remaining run
 // is deleted.
 func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []string) (RowIterator, func() error, error) {
-	if len(inputPaths) == 0 {
+	return m.mergeAllToIterator(ctx, inputPaths, nil)
+}
+
+// mergeAllToIterator is MergeAllToIterator with sorted runs held in
+// memory joining the final merge beside the files. They need no read
+// buffer or decoder, so they don't count toward FinalFanIn.
+func (m *ParallelMerger) mergeAllToIterator(ctx context.Context, inputPaths []string, inMemory []*memRun) (RowIterator, func() error, error) {
+	if len(inputPaths) == 0 && len(inMemory) == 0 {
 		return nil, func() error { return nil }, ErrNoInputPaths
 	}
 
@@ -153,7 +160,7 @@ func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []st
 		}
 	}
 
-	iter, err := NewMergeIterator(paths, m.config.BufferSize)
+	iter, err := m.finalIterator(paths, inMemory)
 	if err != nil {
 		removeFiles(paths)
 
@@ -176,6 +183,28 @@ func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []st
 	}
 
 	return iter, cleanup, nil
+}
+
+// finalIterator opens the final merge over the files and the in-memory
+// runs.
+func (m *ParallelMerger) finalIterator(paths []string, inMemory []*memRun) (*MergeIterator, error) {
+	sources := make([]runSource, 0, len(paths)+len(inMemory))
+	for _, path := range paths {
+		r, err := OpenCompressedRunFile(path, m.config.BufferSize)
+		if err != nil {
+			for _, opened := range sources {
+				_ = opened.Close()
+			}
+
+			return nil, err
+		}
+		sources = append(sources, r)
+	}
+	for _, run := range inMemory {
+		sources = append(sources, run)
+	}
+
+	return newMergeIterator(sources)
 }
 
 // roundPlan is one disk round: the groups to merge, each into one new
@@ -397,7 +426,7 @@ func (m *ParallelMerger) executeMerge(ctx context.Context, job mergeJob) mergeRe
 		return result
 	}
 
-	merger, err := newMergeIterator(readers)
+	merger, err := newMergeIterator(fileSources(readers))
 	if err != nil {
 		result.err = fmt.Errorf("create merger: %w", err)
 		for _, r := range readers {
