@@ -17,6 +17,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
 	"github.com/klauspost/compress/zstd"
+	"golang.org/x/sys/unix"
 )
 
 // StreamingMPHFBuilder builds a minimal perfect hash function for prefix strings
@@ -254,7 +255,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	}
 
 	mapStart := time.Now()
-	if err := writeSlots(outDir, n, mph, b.hashes.Slice(), b.fingerprints.Slice(), b.preorderPos.Slice(), seed); err != nil {
+	if err := writeSlots(outDir, b.tempDir, n, mph, b.hashes.Slice(), b.fingerprints.Slice(), b.preorderPos.Slice(), seed); err != nil {
 		return err
 	}
 	log.Debug().Dur("write_ms", time.Since(mapStart)).Msg("MPHF: slots written")
@@ -452,7 +453,7 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	}
 
 	// An empty slot file keeps the index's file set the same at any size.
-	return writeSlots(outDir, 0, nil, nil, nil, nil, 0)
+	return writeSlots(outDir, b.tempDir, 0, nil, nil, nil, nil, 0)
 }
 
 // writeSlots materialises mph_slots.bin: it maps every slot to its
@@ -465,7 +466,7 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 // descriptor (position width), the slots (8-byte fingerprint, then the
 // position at that width), the 8-byte key-hash seed, and an 8-byte zero
 // tail pad for masked loads at the last slot.
-func writeSlots(outDir string, n int, mph *bbhash, hashes, fps, poss []uint64, seed uint64) error {
+func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps, poss []uint64, seed uint64) error {
 	if len(poss) != n || len(fps) != n {
 		return fmt.Errorf("%w: fps=%d poss=%d n=%d", errMPHFArrayLengthMismatch, len(fps), len(poss), n)
 	}
@@ -495,7 +496,7 @@ func writeSlots(outDir string, n int, mph *bbhash, hashes, fps, poss []uint64, s
 	if n > 0 {
 		// Concurrent pwrite to disjoint ranges is POSIX-safe; each worker
 		// writes its own [start,end) slot range.
-		invMap, err := slotOwners(mph, hashes)
+		owners, err := newSlotOwners(tempDir, mph, hashes)
 		if err != nil {
 			return cleanup(err)
 		}
@@ -509,10 +510,10 @@ func writeSlots(outDir string, n int, mph *bbhash, hashes, fps, poss []uint64, s
 			if start >= end {
 				continue
 			}
-			wg.Go(func() { errs[w] = writeSlotRange(f, invMap, fps, poss, posW, start, end) })
+			wg.Go(func() { errs[w] = writeSlotRange(f, owners, fps, poss, posW, start, end) })
 		}
 		wg.Wait()
-		if err := errors.Join(errs...); err != nil {
+		if err := errors.Join(errors.Join(errs...), owners.close()); err != nil {
 			return cleanup(err)
 		}
 	}
@@ -531,15 +532,38 @@ func writeSlots(outDir string, n int, mph *bbhash, hashes, fps, poss []uint64, s
 	return nil
 }
 
-// slotOwners returns, for every MPHF slot, the index of the prefix whose
-// key hash lands there, found with parallel Find calls. The MPHF is a
-// bijection, so each slot is written by exactly one worker.
-func slotOwners(mph *bbhash, hashes []uint64) ([]uint32, error) {
+// slotOwners maps every MPHF slot to the index of the prefix whose key
+// hash lands there, so the slot file can be written in slot order. It
+// lives in an mmapped scratch file in the build's temp dir, not the
+// heap: at a billion prefixes it is gigabytes, which the page cache can
+// hold or evict under the build's memory limit. Entries are 4 bytes up
+// to 2^32 prefixes, 8 beyond.
+type slotOwners struct {
+	scratchMapping
+
+	width int
+}
+
+// scratchMapping is a writable mapping of a scratch file.
+type scratchMapping struct {
+	path string
+	data []byte
+}
+
+// newSlotOwners fills the map with parallel bbhash lookups. The MPHF is
+// a bijection, so every slot is written by exactly one lookup.
+func newSlotOwners(tempDir string, mph *bbhash, hashes []uint64) (*slotOwners, error) {
 	n := len(hashes)
+	o := &slotOwners{width: 4}
 	if uint64(n) > math.MaxUint32 {
-		return nil, fmt.Errorf("%w: %d prefixes exceed the uint32 slot-owner index", ErrMPHFTooManyKeys, n)
+		o.width = 8
 	}
-	owners := make([]uint32, n)
+	var err error
+	o.scratchMapping, err = mapScratchFile(tempDir, "mphf_slot_owners_*.tmp", n*o.width)
+	if err != nil {
+		return nil, fmt.Errorf("slot owners: %w", err)
+	}
+
 	numWorkers := mphfWorkerCount(n)
 	chunk := (n + numWorkers - 1) / numWorkers
 	errs := make([]error, numWorkers)
@@ -557,17 +581,73 @@ func slotOwners(mph *bbhash, hashes []uint64) ([]uint32, error) {
 
 					return
 				}
-				owners[slot] = uint32(i)
+				o.set(int(slot), uint64(i))
 			}
 		})
 	}
 	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return nil, errors.Join(err, o.close())
+	}
 
-	return owners, errors.Join(errs...)
+	return o, nil
+}
+
+// mapScratchFile creates a temp file of size bytes in dir and maps it
+// writable. The file's blocks are reserved first: a write to an
+// unbacked page of a sparse mapping on a full volume is a SIGBUS that
+// kills the process, where a failed reservation is an error the build
+// cleans up after.
+func mapScratchFile(dir, pattern string, size int) (scratchMapping, error) {
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return scratchMapping{}, fmt.Errorf("create scratch: %w", err)
+	}
+	m := scratchMapping{path: f.Name()}
+	err = preallocate(f, int64(size))
+	if err == nil {
+		m.data, err = unix.Mmap(int(f.Fd()), 0, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return scratchMapping{}, errors.Join(fmt.Errorf("map scratch %s: %w", m.path, err), removeIfErr(m.path))
+	}
+
+	return m, nil
+}
+
+func (o *slotOwners) set(slot int, owner uint64) {
+	if o.width == 4 {
+		binary.LittleEndian.PutUint32(o.data[slot*4:], uint32(owner))
+
+		return
+	}
+	binary.LittleEndian.PutUint64(o.data[slot*8:], owner)
+}
+
+func (o *slotOwners) get(slot int) uint64 {
+	if o.width == 4 {
+		return uint64(binary.LittleEndian.Uint32(o.data[slot*4:]))
+	}
+
+	return binary.LittleEndian.Uint64(o.data[slot*8:])
+}
+
+// close unmaps and removes the scratch file.
+func (o *slotOwners) close() error {
+	var err error
+	if o.data != nil {
+		err = unix.Munmap(o.data)
+		o.data = nil
+	}
+
+	return errors.Join(err, removeIfErr(o.path))
 }
 
 // writeSlotRange writes slots [start, end) of the slot file.
-func writeSlotRange(f *os.File, invMap []uint32, fps, poss []uint64, posW, start, end int) error {
+func writeSlotRange(f *os.File, owners *slotOwners, fps, poss []uint64, posW, start, end int) error {
 	slotW := mphfFingerprintBytes + posW
 	const bufBytes = 1 << 20
 	bufSlots := bufBytes / slotW
@@ -575,7 +655,7 @@ func writeSlotRange(f *os.File, invMap []uint32, fps, poss []uint64, posW, start
 	for chunk := start; chunk < end; chunk += bufSlots {
 		cEnd := min(chunk+bufSlots, end)
 		for j := chunk; j < cEnd; j++ {
-			i := invMap[j]
+			i := owners.get(j)
 			off := (j - chunk) * slotW
 			binary.LittleEndian.PutUint64(buf[off:], fps[i])
 			// An 8-byte store, overwritten by the next slot: only posW

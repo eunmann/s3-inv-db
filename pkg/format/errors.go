@@ -21,8 +21,6 @@ var (
 	ErrWidthMismatch = errors.New("width mismatch")
 	// ErrMPHFLookupFailed indicates a Find call into the MPHF returned no result for a known prefix.
 	ErrMPHFLookupFailed = errors.New("MPHF lookup failed")
-	// ErrMPHFTooManyKeys indicates more prefixes than the MPHF build's uint32 slot index can address.
-	ErrMPHFTooManyKeys = errors.New("too many prefixes for the MPHF")
 	// ErrMPHFKeyCollision indicates distinct prefixes kept sharing an MPHF key hash under every seed tried.
 	ErrMPHFKeyCollision = errors.New("MPHF key hash collision")
 )
