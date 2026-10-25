@@ -414,7 +414,8 @@ func rowName(a, b *indexread.Index, r *compareRow) string {
 }
 
 // sortCompareRows orders rows for display. With no explicit column the
-// biggest absolute byte movers come first. Ties sort by name, ascending.
+// biggest absolute byte movers come first. Names, and ties in every
+// column, sort in S3 key order, ascending ("2024-01" before "2024").
 func sortCompareRows(a, b *indexread.Index, rows []compareRow, sortBy, dir string) {
 	desc := dir == SortDirDesc
 	metric := func(r *compareRow) int64 {
@@ -435,19 +436,18 @@ func sortCompareRows(a, b *indexread.Index, rows []compareRow, sortBy, dir strin
 			return int64(absDelta(r.bytes.Delta))
 		}
 	}
+	// rows arrive in merge order, S3 key order of the names (see
+	// mergeChildren), and the sort is stable: ties keep that order.
 	slices.SortStableFunc(rows, func(x, y compareRow) int {
 		c := cmp.Compare(metric(&x), metric(&y))
 		if sortBy == SortColSegment {
-			c = strings.Compare(rowName(a, b, &x), rowName(a, b, &y))
+			c = compareSlashTerminated(rowName(a, b, &x), rowName(a, b, &y))
 		}
 		if desc {
 			c = -c
 		}
-		if c != 0 {
-			return c
-		}
 
-		return strings.Compare(rowName(a, b, &x), rowName(a, b, &y))
+		return c
 	})
 }
 

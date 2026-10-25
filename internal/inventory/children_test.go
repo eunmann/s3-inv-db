@@ -119,13 +119,25 @@ func TestPageChildren_TiesBreakByNameAscending(t *testing.T) {
 	}
 }
 
-// Name order is by segment ("2024" < "2024-x"), not by the index's
-// full-prefix order ("2024-x/" < "2024/"), and only the page is returned.
+// Name order is S3 key order: each name with its trailing slash, as S3
+// lists them ("2024-x/" < "2024/" because '-' < '/'). It is the index's
+// own order, so only the page is read.
 func TestPageChildren_NameOrderAndPaging(t *testing.T) {
 	idx := openChildrenIndex(t, []childSpec{{"2024-x", 1, 1, 0}, {"2024", 1, 1, 0}, {"2025", 1, 1, 0}, {"2023", 1, 1, 0}})
-	got := pageNames(t, idx, inventory.ChildQuery{SortBy: "segment", Dir: "asc", Page: 2, PageSize: 2}, nil)
-	if diff := cmp.Diff([]string{"2024-x", "2025"}, got); diff != "" {
-		t.Errorf("page 2 (-want +got):\n%s", diff)
+	for _, tc := range []struct {
+		dir  string
+		page int
+		want []string
+	}{
+		{"asc", 1, []string{"2023", "2024-x"}},
+		{"asc", 2, []string{"2024", "2025"}},
+		{"desc", 1, []string{"2025", "2024"}},
+		{"desc", 2, []string{"2024-x", "2023"}},
+	} {
+		got := pageNames(t, idx, inventory.ChildQuery{SortBy: "segment", Dir: tc.dir, Page: tc.page, PageSize: 2}, nil)
+		if diff := cmp.Diff(tc.want, got); diff != "" {
+			t.Errorf("%s page %d (-want +got):\n%s", tc.dir, tc.page, diff)
+		}
 	}
 }
 
@@ -169,8 +181,12 @@ type refChild struct {
 	objects, bytes, cost uint64
 }
 
-// referenceChildren materialises every child and sorts it the way the
-// pre-#26 code did: by the column, ties by name ascending.
+// s3Less orders names the way S3 lists keys: each with its trailing
+// slash, so "2024-x" sorts before "2024".
+func s3Less(a, b string) bool { return a+"/" < b+"/" }
+
+// referenceChildren materialises every child and sorts it by the
+// column, ties by name ascending in S3 key order.
 func referenceChildren(idx *indexread.Index, cost func(uint64) uint64, sortBy, dir string) []string {
 	root, _ := idx.Lookup("")
 	positions, _ := idx.DescendantsAtDepth(root, 1)
@@ -191,10 +207,10 @@ func referenceChildren(idx *indexread.Index, cost func(uint64) uint64, sortBy, d
 		case inventory.SortColCost:
 			primary, equal = a.cost < b.cost, a.cost == b.cost
 		default:
-			primary, equal = a.name < b.name, a.name == b.name
+			primary, equal = s3Less(a.name, b.name), a.name == b.name
 		}
 		if equal {
-			return a.name < b.name
+			return s3Less(a.name, b.name)
 		}
 		if dir == inventory.SortDirDesc {
 			return !primary

@@ -16,6 +16,13 @@ prefixes with consistent sub-microsecond warm-cache lookups.
 | `StatsForPrefix` | O(1) | sub-µs (~80 ns warm, 2.4M prefixes) |
 | `TierBreakdown` | O(tiers) | sub-µs (~70 ns) |
 | `DescendantsAtDepth` | O(log n + k) | µs–tens of µs (depends on k) |
+| Browse page, by name | O(log n + page) | tens of µs, whatever the child count |
+| Browse page, by size, objects or cost | O(c log c), c = children | ms at 200k children |
+
+A name-sorted page reads only the page: the index stores siblings in S3
+key order (each name with its trailing slash, so "2024-01/" lists
+before "2024/", as in S3 itself), and that is the order the listing
+shows. Sorting by a number reads one value per child.
 
 The figures in parentheses come from `BenchmarkGateStatsForPrefix` and
 `BenchmarkGateTierBreakdown` on the 1M-object gate fixture (2.37M
