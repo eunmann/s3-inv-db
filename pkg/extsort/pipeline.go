@@ -963,6 +963,8 @@ func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRu
 	stats := parallelMerger.Statistics()
 	log.Info().
 		Int("merge_rounds", stats.Rounds).
+		Int("merge_workers_count", stats.Workers).
+		Int("final_fan_in", stats.FinalFanIn).
 		Str("merge_duration", humanfmt.Duration(stats.TotalMergeTime)).
 		Str("bytes_written", humanfmt.Bytes(stats.BytesWritten)).
 		Msg("parallel merge → streaming iterator")
@@ -1006,7 +1008,6 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	log.Info().
 		Int("run_files_count", numRunFiles).
 		Int("memory_runs_count", len(p.memRuns)).
-		Int("merge_workers_count", numWorkers).
 		Int("max_fan_in", maxFanIn).
 		Int64("per_reader_buffer_kb", perReaderBuffer/1024).
 		Msg("merge phase starting")

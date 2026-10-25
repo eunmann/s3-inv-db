@@ -275,6 +275,8 @@ var ErrChunkSizeMismatch = errors.New("inventory chunk size differs from its man
 // MergeConfig tunes the K-way merge phase.
 type MergeConfig struct {
 	// NumWorkers: concurrent merge workers. Default max(NumCPU/2, 1).
+	// Under GOMEMLIMIT the merger lowers it so every disk round's open
+	// readers fit the same budget as the final merge's.
 	NumWorkers int
 
 	// MaxFanIn: runs merged per worker. Higher = fewer rounds, more

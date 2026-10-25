@@ -2,8 +2,10 @@ package extsort
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"testing"
 )
@@ -75,6 +77,63 @@ func TestPlanRound(t *testing.T) {
 			after := len(plan.kept) + len(plan.groups)
 			if c.partial && after != c.finalFan {
 				t.Errorf("partial round leaves %d runs, want exactly %d", after, c.finalFan)
+			}
+		})
+	}
+}
+
+func TestFinalFanInFitsMemoryLimit(t *testing.T) {
+	const gib = int64(1) << 30
+	cases := []struct {
+		name        string
+		limit       int64
+		wantFanIn   int
+		wantWorkers int
+	}{
+		{name: "unset", limit: unsetMemoryLimit, wantFanIn: DefaultFinalFanIn, wantWorkers: 32},
+		{name: "1GiB", limit: gib, wantFanIn: 64, wantWorkers: 6},
+		{name: "4GiB", limit: 4 * gib, wantFanIn: 64, wantWorkers: 25},
+		{name: "256MiB shrinks", limit: gib / 4, wantFanIn: 25, wantWorkers: 1},
+		{name: "tiny floors at MaxFanIn", limit: 1, wantFanIn: 16, wantWorkers: 1},
+		{name: "huge", limit: 1024 * gib, wantFanIn: DefaultFinalFanIn, wantWorkers: 32},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := finalFanInFor(c.limit, 16); got != c.wantFanIn {
+				t.Errorf("finalFanInFor = %d, want %d", got, c.wantFanIn)
+			}
+			if got := roundWorkersFor(c.limit, 32, 16); got != c.wantWorkers {
+				t.Errorf("roundWorkersFor = %d, want %d", got, c.wantWorkers)
+			}
+			// Every disk round's readers fit the same budget the final
+			// merge's do.
+			if budget, ok := openRunBudget(c.limit); ok && budget >= 16 {
+				if open := roundWorkersFor(c.limit, 32, 16) * 16; open > budget {
+					t.Errorf("round holds %d readers, budget %d", open, budget)
+				}
+			}
+		})
+	}
+}
+
+func TestNewParallelMergerAppliesMemoryLimit(t *testing.T) {
+	cases := []struct {
+		name           string
+		limit          int64
+		wantWorkers    int
+		wantFinalFanIn int
+	}{
+		{name: "256MiB", limit: 256 << 20, wantWorkers: 1, wantFinalFanIn: 25},
+		{name: "unset", limit: math.MaxInt64, wantWorkers: 32, wantFinalFanIn: DefaultFinalFanIn},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			prev := debug.SetMemoryLimit(c.limit)
+			t.Cleanup(func() { debug.SetMemoryLimit(prev) })
+
+			stats := NewParallelMerger(ParallelMergeConfig{NumWorkers: 32, MaxFanIn: 16, TempDir: t.TempDir()}).Statistics()
+			if stats.Workers != c.wantWorkers || stats.FinalFanIn != c.wantFinalFanIn {
+				t.Fatalf("workers %d final fan-in %d, want %d and %d", stats.Workers, stats.FinalFanIn, c.wantWorkers, c.wantFinalFanIn)
 			}
 		})
 	}

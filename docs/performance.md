@@ -75,11 +75,15 @@ index streams.
 
 After all inventory files are processed, a k-way merge combines the
 run files (zstd-compressed) and the in-memory states into the final
-sorted stream, which the index builder consumes directly. The final
-merge reads up to 64 run files at once, plus every in-memory state.
-Only past 64 files do disk rounds run, merging just the smallest files
-needed in groups of up to 16, and each run file is deleted as soon as
-it has been merged. The merge decodes a few 4096-row batches ahead of the index
+sorted stream, which the index builder consumes directly. An open run
+file costs ~2.5 MB of heap (its zstd decoder and read buffer), and the
+open readers of a merge may take `0.25 × GOMEMLIMIT`: the final merge
+reads up to 64 run files at once, fewer when that budget holds fewer
+(25 at 256 MiB; at least 16), plus every in-memory state. Only past
+that do disk rounds run, merging just the smallest files
+needed in groups of up to 16, with only as many groups at once as the
+same budget holds, and each run file is deleted as soon as it has been
+merged. The merge decodes a few 4096-row batches ahead of the index
 build on its own goroutine. Run-file buffers, the merge heap and the
 index-build streaming arrays each take bounded space outside the
 aggregator cap.
