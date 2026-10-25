@@ -675,21 +675,17 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 	}
 
 	parseStart := time.Now()
-	var (
-		reader    s3inventory.Reader
-		csvReader *s3inventory.CSVReader
-	)
+	var reader s3inventory.Reader
 	if job.config.format == s3fetch.InventoryFormatParquet {
 		reader, err = openParquetReader(body, job.config.fileSize)
 	} else {
-		csvReader, err = s3inventory.NewCSVReaderFromStream(body, job.key, s3inventory.CSVReaderConfig{
+		reader, err = s3inventory.NewCSVReaderFromStream(body, job.key, s3inventory.CSVReaderConfig{
 			KeyCol:          job.config.keyCol,
 			SizeCol:         job.config.sizeCol,
 			StorageCol:      job.config.storageCol,
 			AccessTierCol:   job.config.accessTierCol,
 			DeleteMarkerCol: job.config.deleteMarkerCol,
 		})
-		reader = csvReader
 	}
 	if err != nil {
 		return fmt.Errorf("open inventory reader: %w", err)
