@@ -1,6 +1,7 @@
 package inventory_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -120,6 +121,41 @@ func TestManagerRemove(t *testing.T) {
 	}
 }
 
+// TestManagerRemoveWhileLoading: a run whose build is in flight can't
+// be removed, since the build would publish an index nobody owns; once
+// the load ends it can.
+func TestManagerRemoveWhileLoading(t *testing.T) {
+	m := inventory.NewCatalog(nil)
+	defer m.Close()
+	if err := m.Register(t.Context(), "test-id", "Test Inventory", "/path/to/index"); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- m.LoadWith(t.Context(), "test-id", func(context.Context, inventory.Info) (string, error) {
+			close(started)
+			<-release
+
+			return "", errFakeBuildBroke
+		})
+	}()
+	<-started
+
+	err := m.Remove(t.Context(), "test-id")
+	close(release)
+	if !errors.Is(err, inventory.ErrInvalidState) {
+		t.Errorf("Remove while loading error = %v, want %v", err, inventory.ErrInvalidState)
+	}
+	if err := <-done; !errors.Is(err, errFakeBuildBroke) {
+		t.Fatalf("LoadWith error = %v, want %v", err, errFakeBuildBroke)
+	}
+	if err := m.Remove(t.Context(), "test-id"); err != nil {
+		t.Errorf("Remove after the load ended: %v", err)
+	}
+}
+
 func TestManagerRemoveNotFound(t *testing.T) {
 	m := inventory.NewCatalog(nil)
 	defer m.Close()
@@ -212,8 +248,9 @@ func TestManagerConcurrent_RegisterListRemove(t *testing.T) {
 
 // TestManagerConcurrent_LoadRemoveRace targets the specific window in
 // Catalog.Load where the lock is released while indexread.Open runs.
-// A racing Remove during that window must not corrupt state and must
-// leave the loaded index closed.
+// A racing Remove during that window must not corrupt state: it either
+// removes the run before the load starts, or is refused while the run
+// is loading and succeeds once the load has ended.
 func TestManagerConcurrent_LoadRemoveRace(t *testing.T) {
 	m := inventory.NewCatalog(nil)
 	defer m.Close()
@@ -227,6 +264,7 @@ func TestManagerConcurrent_LoadRemoveRace(t *testing.T) {
 		}
 
 		var wg sync.WaitGroup
+		var removeErr error
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
@@ -234,13 +272,20 @@ func TestManagerConcurrent_LoadRemoveRace(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			_ = m.Remove(t.Context(), id)
+			removeErr = m.Remove(t.Context(), id)
 		}()
 		wg.Wait()
 
-		// Remove always succeeds (the entry exists when it acquires the
-		// lock; Load never deletes), so the inventory must be gone once
-		// both goroutines have joined. If it's still present, Remove was
+		switch {
+		case errors.Is(removeErr, inventory.ErrInvalidState):
+			if err := m.Remove(t.Context(), id); err != nil {
+				t.Fatalf("Remove after the load ended: %v", err)
+			}
+		case removeErr != nil:
+			t.Fatalf("Remove: %v", removeErr)
+		}
+		// Load never deletes and a refused Remove was retried, so the
+		// inventory must be gone. If it's still present, Remove was
 		// somehow undone — that's a real bug.
 		if _, ok := m.Get(id); ok {
 			info, _ := m.Get(id)

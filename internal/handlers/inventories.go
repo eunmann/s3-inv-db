@@ -296,13 +296,15 @@ func (h *Handlers) DeleteInventoryAPI(w http.ResponseWriter, r *http.Request) {
 	id := inventory.ID(chi.URLParam(r, "id"))
 
 	if err := h.manager.Remove(r.Context(), id); err != nil {
-		if errors.Is(err, inventory.ErrNotFound) {
+		switch {
+		case errors.Is(err, inventory.ErrNotFound):
 			WriteJSONError(w, http.StatusNotFound, "inventory not found")
-
-			return
+		case errors.Is(err, inventory.ErrInvalidState):
+			WriteJSONError(w, http.StatusConflict, err.Error())
+		default:
+			zerolog.Ctx(r.Context()).Error().Err(err).Stringer("id", id).Msg("failed to delete inventory")
+			WriteJSONError(w, http.StatusInternalServerError, "failed to delete inventory")
 		}
-		zerolog.Ctx(r.Context()).Error().Err(err).Stringer("id", id).Msg("failed to delete inventory")
-		WriteJSONError(w, http.StatusInternalServerError, "failed to delete inventory")
 
 		return
 	}

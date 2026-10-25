@@ -704,7 +704,9 @@ func (c *Catalog) WithTwoIndexes(ctx context.Context, idA, idB ID, fn func(a, b 
 }
 
 // Remove removes an inventory from the manager. It blocks until any
-// in-flight WithIndex reader on this inventory has returned.
+// in-flight WithIndex reader on this inventory has returned. A run
+// that is loading can't be removed: its build would publish an index
+// after the caller freed the run's cache, and nothing would own it.
 func (c *Catalog) Remove(ctx context.Context, id ID) error {
 	c.mu.Lock()
 	inv, exists := c.inventories[id]
@@ -712,6 +714,11 @@ func (c *Catalog) Remove(ctx context.Context, id ID) error {
 		c.mu.Unlock()
 
 		return ErrNotFound
+	}
+	if inv.info.State == StateLoading {
+		c.mu.Unlock()
+
+		return fmt.Errorf("%w: cannot remove from state %s", ErrInvalidState, StateLoading)
 	}
 	delete(c.inventories, id)
 	old := inv.index

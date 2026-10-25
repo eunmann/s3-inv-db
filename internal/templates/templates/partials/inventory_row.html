@@ -49,6 +49,7 @@
             Reload
         </button>
         {{end}}
+        {{if not .State.IsLoading}}
         <button type="button"
             hx-delete="/partials/inventories/{{.ID}}"
             hx-target="closest tr"
@@ -57,6 +58,7 @@
             class="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-200">
             Delete
         </button>
+        {{end}}
         <span id="spinner-{{.ID}}" class="htmx-indicator text-xs text-gray-400 dark:text-gray-500" role="status">
             <span aria-hidden="true">…</span><span class="sr-only">Working</span>
         </span>
