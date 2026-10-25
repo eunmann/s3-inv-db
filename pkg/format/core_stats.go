@@ -15,22 +15,24 @@ import (
 const CoreStatsFile = "core_stats.bin"
 
 // coreStatsBuildStride is the fixed safe stride used during the
-// build, before per-field widths are known. At Finalize the file is
-// repacked to a smaller stride if observed maxes allow.
+// build, before per-field widths are known. Finalize repacks the rows
+// to the stride it chooses: count, bytes and subtree size from the
+// width histogram (rows that don't fit go to patch files), depth and
+// tier mask from their maxes.
 //
 //	offset  0: object_count           uint64
 //	offset  8: total_bytes            uint64
-//	offset 16: subtree_end            uint64
+//	offset 16: subtree_size           uint64 (subtree_end - pos)
 //	offset 24: depth                  uint16
 //	offset 26: tier_mask              uint16
 const coreStatsBuildStride = 28
 
 const (
-	bldOffCount      = 0
-	bldOffBytes      = 8
-	bldOffSubtreeEnd = 16
-	bldOffDepth      = 24
-	bldOffTierMask   = 26
+	bldOffCount       = 0
+	bldOffBytes       = 8
+	bldOffSubtreeSize = 16
+	bldOffDepth       = 24
+	bldOffTierMask    = 26
 )
 
 // coreStatsDataOff is where the first row starts in the final file,
@@ -43,10 +45,10 @@ const coreStatsDataOff = HeaderSize + CoreStatsStrideBytes
 // number of bytes that field occupies in the row. Fields are written
 // in this fixed order; field offset in a row is the running sum.
 type CoreStatsStride struct {
-	Count      uint8 // 1..8
-	Bytes      uint8 // 1..8
-	SubtreeEnd uint8 // 1..8
-	Depth      uint8 // 1..2
+	Count       uint8 // 1..8
+	Bytes       uint8 // 1..8
+	SubtreeSize uint8 // 1..8; the field holds subtree_end - pos
+	Depth       uint8 // 1..2
 	// TierMask is 0 when no row has data outside tier slot 0, so the
 	// mask is implied (slot 0 for a row with data), else 1..2. Bit i is
 	// tier slot i (tiers.json order) holding data in this row.
@@ -59,12 +61,12 @@ const CoreStatsStrideBytes = 5
 
 // RowBytes is the total width of a row at this stride.
 func (s CoreStatsStride) RowBytes() int {
-	return int(s.Count) + int(s.Bytes) + int(s.SubtreeEnd) + int(s.Depth) + int(s.TierMask)
+	return int(s.Count) + int(s.Bytes) + int(s.SubtreeSize) + int(s.Depth) + int(s.TierMask)
 }
 
 // Encode serialises the descriptor to 5 raw bytes.
 func (s CoreStatsStride) Encode() [CoreStatsStrideBytes]byte {
-	return [CoreStatsStrideBytes]byte{s.Count, s.Bytes, s.SubtreeEnd, s.Depth, s.TierMask}
+	return [CoreStatsStrideBytes]byte{s.Count, s.Bytes, s.SubtreeSize, s.Depth, s.TierMask}
 }
 
 // DecodeCoreStatsStride parses the 5-byte descriptor.
@@ -72,7 +74,7 @@ func DecodeCoreStatsStride(buf []byte) (CoreStatsStride, error) {
 	if len(buf) < CoreStatsStrideBytes {
 		return CoreStatsStride{}, ErrInvalidHeader
 	}
-	s := CoreStatsStride{Count: buf[0], Bytes: buf[1], SubtreeEnd: buf[2], Depth: buf[3], TierMask: buf[4]}
+	s := CoreStatsStride{Count: buf[0], Bytes: buf[1], SubtreeSize: buf[2], Depth: buf[3], TierMask: buf[4]}
 	if err := s.validate(); err != nil {
 		return CoreStatsStride{}, err
 	}
@@ -83,7 +85,7 @@ func DecodeCoreStatsStride(buf []byte) (CoreStatsStride, error) {
 func (s CoreStatsStride) validate() error {
 	if s.Count < 1 || s.Count > 8 ||
 		s.Bytes < 1 || s.Bytes > 8 ||
-		s.SubtreeEnd < 1 || s.SubtreeEnd > 8 ||
+		s.SubtreeSize < 1 || s.SubtreeSize > 8 ||
 		s.Depth < 1 || s.Depth > 2 ||
 		s.TierMask > 2 {
 		return errCoreStatsStrideInvalid
@@ -151,13 +153,14 @@ var (
 // CoreStatsBuilder writes the row-major core stats file in-place
 // during a build. Each prefix gets one row at its preorder position:
 // object_count, total_bytes, depth and tier_mask are known at Add()
-// time; subtree_end is filled in later when the subtree closes (an
+// time; subtree_size is filled in later when the subtree closes (an
 // out-of-preorder random write).
 //
 // During the build the file uses a safe-wide stride
-// (coreStatsBuildStride); at Finalize the observed maxes determine a
-// tight per-field schema and the rows are repacked into the final
-// file with a CoreStatsStride descriptor recorded after the Header.
+// (coreStatsBuildStride); at Finalize the rows' widths determine a
+// tight per-field schema (see Finalize) and the rows are repacked into
+// the final file with a CoreStatsStride descriptor recorded after the
+// Header.
 type CoreStatsBuilder struct {
 	path    string
 	file    *os.File
@@ -167,11 +170,8 @@ type CoreStatsBuilder struct {
 	count   int    // number of rows committed (Add calls)
 
 	// Observed maxes — drive the tight per-field schema at Finalize.
-	maxCount      uint64
-	maxBytes      uint64
-	maxSubtreeEnd uint64
-	maxDepth      uint16
-	maxTierMask   uint16
+	maxDepth    uint16
+	maxTierMask uint16
 }
 
 // NewCoreStatsBuilder creates a core stats file at outDir/core_stats.bin
@@ -240,7 +240,7 @@ func (b *CoreStatsBuilder) buildRowSlice(idx int) []byte {
 
 // Add appends one row for the next prefix position with the fields
 // known at Add time. SetSubtree must be called later (during subtree
-// close) to fill in subtree_end.
+// close) to fill in subtree_size.
 func (b *CoreStatsBuilder) Add(objectCount, totalBytes uint64, depth, tierMask uint16) error {
 	needed := int64(b.dataOff + (b.count+1)*coreStatsBuildStride)
 	if needed > b.size {
@@ -254,10 +254,7 @@ func (b *CoreStatsBuilder) Add(objectCount, totalBytes uint64, depth, tierMask u
 	binary.LittleEndian.PutUint64(row[bldOffBytes:], totalBytes)
 	binary.LittleEndian.PutUint16(row[bldOffDepth:], depth)
 	binary.LittleEndian.PutUint16(row[bldOffTierMask:], tierMask)
-	// subtree_end stays zero until SetSubtree.
 
-	b.maxCount = max(b.maxCount, objectCount)
-	b.maxBytes = max(b.maxBytes, totalBytes)
 	b.maxDepth = max(b.maxDepth, depth)
 	b.maxTierMask = max(b.maxTierMask, tierMask)
 	b.count++
@@ -265,15 +262,14 @@ func (b *CoreStatsBuilder) Add(objectCount, totalBytes uint64, depth, tierMask u
 	return nil
 }
 
-// SetSubtree fills in subtree_end at the row for position pos. Pos
-// must be < Count().
+// SetSubtree records the subtree of the row at position pos as ending
+// at subtreeEnd (inclusive; >= pos). Pos must be < Count().
 func (b *CoreStatsBuilder) SetSubtree(pos, subtreeEnd uint64) error {
-	if pos >= uint64(b.count) {
-		return fmt.Errorf("%w: pos=%d count=%d", errCoreStatsRowPosOOB, pos, b.count)
+	if pos >= uint64(b.count) || subtreeEnd < pos {
+		return fmt.Errorf("%w: pos=%d end=%d count=%d", errCoreStatsRowPosOOB, pos, subtreeEnd, b.count)
 	}
 	row := b.buildRowSlice(int(pos))
-	binary.LittleEndian.PutUint64(row[bldOffSubtreeEnd:], subtreeEnd)
-	b.maxSubtreeEnd = max(b.maxSubtreeEnd, subtreeEnd)
+	binary.LittleEndian.PutUint64(row[bldOffSubtreeSize:], subtreeEnd-pos)
 
 	return nil
 }
@@ -281,16 +277,37 @@ func (b *CoreStatsBuilder) SetSubtree(pos, subtreeEnd uint64) error {
 // Count returns the number of rows committed.
 func (b *CoreStatsBuilder) Count() int { return b.count }
 
-// ObservedStride returns the per-field byte widths derived from the
-// observed maxes. Exposed for tests + visibility benches.
-func (b *CoreStatsBuilder) ObservedStride() CoreStatsStride {
-	return CoreStatsStride{
-		Count:      byteWidthOf(b.maxCount),
-		Bytes:      byteWidthOf(b.maxBytes),
-		SubtreeEnd: byteWidthOf(b.maxSubtreeEnd),
-		Depth:      byteWidth16(b.maxDepth),
-		TierMask:   tierMaskWidth(b.maxTierMask),
+// chooseStride picks the row widths: the patched fields from the joint
+// distribution of the widths each row needs (see choosePatch), depth
+// and tier mask from their maxes. It reads every build row once.
+func (b *CoreStatsBuilder) chooseStride() (CoreStatsStride, patchChoice) {
+	var hist patchHistogram
+	var maxCount, maxBytes, maxSize uint64
+	for i := range b.count {
+		row := b.buildRowSlice(i)
+		c, by, sz := binary.LittleEndian.Uint64(row[bldOffCount:]),
+			binary.LittleEndian.Uint64(row[bldOffBytes:]),
+			binary.LittleEndian.Uint64(row[bldOffSubtreeSize:])
+		hist.add(c, by, sz)
+		maxCount, maxBytes, maxSize = max(maxCount, c), max(maxBytes, by), max(maxSize, sz)
 	}
+	// Without exceptions there are no sentinels, so every field can take
+	// the plain width of its largest value, all-ones included: one byte
+	// narrower than choosePatch allows when a maximum is all ones.
+	plain := patchChoice{count: byteWidthOf(maxCount), bytes: byteWidthOf(maxBytes), size: byteWidthOf(maxSize)}
+	plain.cost = uint64(b.count) * uint64(plain.count+plain.bytes+plain.size)
+	choice := hist.choosePatch(uint64(b.count))
+	if choice.exceptions == 0 || plain.cost <= choice.cost {
+		choice = plain
+	}
+
+	return CoreStatsStride{
+		Count:       choice.count,
+		Bytes:       choice.bytes,
+		SubtreeSize: choice.size,
+		Depth:       byteWidth16(b.maxDepth),
+		TierMask:    tierMaskWidth(b.maxTierMask),
+	}, choice
 }
 
 // byteWidth16 returns 1 for v < 256 else 2.
@@ -312,15 +329,30 @@ func tierMaskWidth(maxMask uint16) uint8 {
 	return byteWidth16(maxMask)
 }
 
-// Finalize chooses a tight per-field stride from the observed maxes,
-// streams the repacked rows into a fresh file at the same path
-// (Header + stride descriptor first), and closes both files. Memory
-// during the repack is bounded by the bufio buffer (1 MiB) — at the
-// project's stated 10B-prefix scale a per-row in-memory buffer would
-// be hundreds of GB.
+// Finalize chooses the stride (count, bytes and subtree size from the
+// width histogram, with patch files for the rows that don't fit; depth
+// and tier mask from their maxes), streams the repacked rows into a
+// fresh file at the same path (Header + stride descriptor first), and
+// closes both files. Memory during the repack is bounded by the bufio
+// buffer (1 MiB) — at the project's stated 10B-prefix scale a per-row
+// in-memory buffer would be hundreds of GB.
 func (b *CoreStatsBuilder) Finalize() error {
-	desc := b.ObservedStride()
+	desc, choice := b.chooseStride()
 	stride := desc.RowBytes()
+	var patch *patchWriter
+	if choice.exceptions > 0 {
+		var err error
+		if patch, err = newPatchWriter(filepath.Dir(b.path)); err != nil {
+			return err
+		}
+	}
+	abortPatch := func(err error) error {
+		if patch != nil {
+			return errors.Join(err, patch.abort())
+		}
+
+		return err
+	}
 
 	// Write the tight final file to a sibling tmp path, then rename
 	// over the build file. We keep the build mmap live throughout the
@@ -329,7 +361,7 @@ func (b *CoreStatsBuilder) Finalize() error {
 	tmp := b.path + ".tmp"
 	final, err := os.Create(tmp)
 	if err != nil {
-		return fmt.Errorf("core stats create tmp: %w", err)
+		return abortPatch(fmt.Errorf("core stats create tmp: %w", err))
 	}
 	var head [coreStatsDataOff]byte
 	copy(head[:], EncodeHeader(Header{
@@ -341,15 +373,28 @@ func (b *CoreStatsBuilder) Finalize() error {
 	enc := desc.Encode()
 	copy(head[HeaderSize:], enc[:])
 	if _, err := final.Write(head[:]); err != nil {
-		return cleanupTmp(final, tmp, fmt.Errorf("write header: %w", err))
+		return abortPatch(cleanupTmp(final, tmp, fmt.Errorf("write header: %w", err)))
 	}
 
 	bw := bufio.NewWriterSize(final, repackBufferSize)
 	rowBuf := make([]byte, stride)
 	for i := range b.count {
-		repackRow(rowBuf, b.buildRowSlice(i), desc)
+		exception := repackRow(rowBuf, b.buildRowSlice(i), desc)
 		if _, err := bw.Write(rowBuf); err != nil {
-			return cleanupTmp(final, tmp, fmt.Errorf("write row %d: %w", i, err))
+			return abortPatch(cleanupTmp(final, tmp, fmt.Errorf("write row %d: %w", i, err)))
+		}
+		if patch != nil {
+			row := b.buildRowSlice(i)
+			err := patch.add(exception, binary.LittleEndian.Uint64(row[bldOffCount:]),
+				binary.LittleEndian.Uint64(row[bldOffBytes:]), binary.LittleEndian.Uint64(row[bldOffSubtreeSize:]))
+			if err != nil {
+				return abortPatch(cleanupTmp(final, tmp, err))
+			}
+		}
+	}
+	if patch != nil {
+		if err := patch.close(); err != nil {
+			return cleanupTmp(final, tmp, err)
 		}
 	}
 	pad := [coreStatsReadTailPad]byte{}
@@ -404,18 +449,28 @@ func cleanupTmp(f *os.File, path string, err error) error {
 	return err
 }
 
-// repackRow narrows the build-stride row into the tight stride.
-func repackRow(dst, src []byte, s CoreStatsStride) {
+// repackRow narrows the build-stride row into the tight stride. A
+// patched field whose value doesn't fit stores its sentinel; repackRow
+// reports whether any did, so the row's exact values go to the patch.
+func repackRow(dst, src []byte, s CoreStatsStride) bool {
+	exception := false
 	off := 0
-	writeLE(dst[off:], binary.LittleEndian.Uint64(src[bldOffCount:]), int(s.Count))
-	off += int(s.Count)
-	writeLE(dst[off:], binary.LittleEndian.Uint64(src[bldOffBytes:]), int(s.Bytes))
-	off += int(s.Bytes)
-	writeLE(dst[off:], binary.LittleEndian.Uint64(src[bldOffSubtreeEnd:]), int(s.SubtreeEnd))
-	off += int(s.SubtreeEnd)
+	for _, f := range [patchedFields]struct {
+		at    int
+		width uint8
+	}{{bldOffCount, s.Count}, {bldOffBytes, s.Bytes}, {bldOffSubtreeSize, s.SubtreeSize}} {
+		v := binary.LittleEndian.Uint64(src[f.at:])
+		if fieldNeed(v) > f.width {
+			v, exception = widthMask[f.width], true
+		}
+		writeLE(dst[off:], v, int(f.width))
+		off += int(f.width)
+	}
 	writeLE(dst[off:], uint64(binary.LittleEndian.Uint16(src[bldOffDepth:])), int(s.Depth))
 	off += int(s.Depth)
 	writeLE(dst[off:], uint64(binary.LittleEndian.Uint16(src[bldOffTierMask:])), int(s.TierMask))
+
+	return exception
 }
 
 // writeLE writes the low n bytes of v at dst[0..n].
@@ -450,15 +505,19 @@ func (b *CoreStatsBuilder) Close() error {
 // at Open so the hot accessors are branch-free LE loads + masks.
 type CoreStatsReader struct {
 	mmap     *MmapFile
+	patch    *corePatch
 	rowCount uint64
 	stride   int
 	desc     CoreStatsStride
 
-	offCount      int
-	offBytes      int
-	offSubtreeEnd int
-	offDepth      int
-	offTierMask   int
+	offCount       int
+	offBytes       int
+	offSubtreeSize int
+	offDepth       int
+	offTierMask    int
+	// patched[f] is set when field f (count, bytes, subtree size) can
+	// hold its sentinel: the index has exceptions and f is under 8 bytes.
+	patched [patchedFields]bool
 }
 
 // OpenCoreStats opens the row-major core stats file. Returns an
@@ -475,6 +534,16 @@ func OpenCoreStats(indexDir string) (*CoreStatsReader, error) {
 		mmap.Close()
 
 		return nil, err
+	}
+	if r.patch, err = openCorePatch(indexDir, r.rowCount); err != nil {
+		mmap.Close()
+
+		return nil, err
+	}
+	if r.patch != nil {
+		for f, w := range [patchedFields]uint8{r.desc.Count, r.desc.Bytes, r.desc.SubtreeSize} {
+			r.patched[f] = w < 8
+		}
 	}
 
 	return r, nil
@@ -515,8 +584,8 @@ func newCoreStatsReader(mmap *MmapFile) (*CoreStatsReader, error) {
 	}
 	r.offCount = coreStatsDataOff
 	r.offBytes = r.offCount + int(desc.Count)
-	r.offSubtreeEnd = r.offBytes + int(desc.Bytes)
-	r.offDepth = r.offSubtreeEnd + int(desc.SubtreeEnd)
+	r.offSubtreeSize = r.offBytes + int(desc.Bytes)
+	r.offDepth = r.offSubtreeSize + int(desc.SubtreeSize)
 	r.offTierMask = r.offDepth + int(desc.Depth)
 
 	return r, nil
@@ -539,19 +608,37 @@ func (r *CoreStatsReader) field(pos uint64, fieldOff int, n uint8) uint64 {
 	return v & widthMask[n]
 }
 
+// Patched field indexes, in corePatch row order.
+const (
+	patchCount = iota
+	patchBytes
+	patchSize
+)
+
+// patchedField reads patched field f at fieldOff: the stored value, or
+// the exact one from the patch when the field holds its sentinel.
+func (r *CoreStatsReader) patchedField(pos uint64, f, fieldOff int, n uint8) uint64 {
+	v := r.field(pos, fieldOff, n)
+	if r.patched[f] && v == widthMask[n] {
+		return r.patch.value(pos, f)
+	}
+
+	return v
+}
+
 // UnsafeObjectCount returns the object count at pos. No bounds check.
 func (r *CoreStatsReader) UnsafeObjectCount(pos uint64) uint64 {
-	return r.field(pos, r.offCount, r.desc.Count)
+	return r.patchedField(pos, patchCount, r.offCount, r.desc.Count)
 }
 
 // UnsafeTotalBytes returns the total bytes at pos. No bounds check.
 func (r *CoreStatsReader) UnsafeTotalBytes(pos uint64) uint64 {
-	return r.field(pos, r.offBytes, r.desc.Bytes)
+	return r.patchedField(pos, patchBytes, r.offBytes, r.desc.Bytes)
 }
 
 // UnsafeSubtreeEnd returns the subtree end position at pos. No bounds check.
 func (r *CoreStatsReader) UnsafeSubtreeEnd(pos uint64) uint64 {
-	return r.field(pos, r.offSubtreeEnd, r.desc.SubtreeEnd)
+	return pos + r.patchedField(pos, patchSize, r.offSubtreeSize, r.desc.SubtreeSize)
 }
 
 // UnsafeDepth returns the depth at pos as uint32. No bounds check.
@@ -584,6 +671,12 @@ func (r *CoreStatsReader) UnsafeStats(pos uint64) (uint64, uint64) {
 	data := r.mmap.Data()
 	cnt := binary.LittleEndian.Uint64(data[base+r.offCount:base+r.offCount+8]) & widthMask[r.desc.Count]
 	bv := binary.LittleEndian.Uint64(data[base+r.offBytes:base+r.offBytes+8]) & widthMask[r.desc.Bytes]
+	if r.patched[patchCount] && cnt == widthMask[r.desc.Count] {
+		cnt = r.patch.value(pos, patchCount)
+	}
+	if r.patched[patchBytes] && bv == widthMask[r.desc.Bytes] {
+		bv = r.patch.value(pos, patchBytes)
+	}
 
 	return cnt, bv
 }
@@ -593,8 +686,8 @@ func (r *CoreStatsReader) Close() error {
 	if r == nil || r.mmap == nil {
 		return nil
 	}
-	err := r.mmap.Close()
-	r.mmap = nil
+	err := errors.Join(r.mmap.Close(), r.patch.close())
+	r.mmap, r.patch = nil, nil
 
 	return err
 }

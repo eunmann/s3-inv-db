@@ -2,7 +2,6 @@ package format
 
 import (
 	"errors"
-	"math/bits"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -332,17 +331,25 @@ func TestTierStatsCloseFailureLeavesNothing(t *testing.T) {
 }
 
 func TestRankedBits(t *testing.T) {
-	for _, n := range []uint64{1, 63, 64, 65, 511, 512, 513, 5000} {
+	for _, n := range []uint64{0, 1, 63, 64, 65, 511, 512, 513, 5000} {
 		r := rand.New(rand.NewPCG(n, 1))
-		words := make([]uint64, (n+63)/64)
-		for i := range n {
-			if r.IntN(3) == 0 {
-				words[i/64] |= 1 << (i % 64)
+		set := make([]bool, n)
+		path := filepath.Join(t.TempDir(), "bits")
+		w, err := newRankedBitsWriter(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range set {
+			set[i] = r.IntN(3) == 0
+			if err := w.add(set[i]); err != nil {
+				t.Fatal(err)
 			}
 		}
-		path := filepath.Join(t.TempDir(), "bits")
-		if err := writeRankedBits(path, words, n); err != nil {
+		if err := w.close(); err != nil {
 			t.Fatal(err)
+		}
+		if _, err := os.Stat(path + ".dir"); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("n=%d: rank directory scratch left behind: %v", n, err)
 		}
 		rb, err := openRankedBits(path)
 		if err != nil {
@@ -354,7 +361,12 @@ func TestRankedBits(t *testing.T) {
 				t.Fatalf("n=%d: rank(%d) = %d, want %d", n, i, got, want)
 			}
 			if i < n {
-				want += uint64(bits.OnesCount64(words[i/64] >> (i % 64) & 1))
+				if rb.get(i) != set[i] {
+					t.Fatalf("n=%d: get(%d) = %v, want %v", n, i, rb.get(i), set[i])
+				}
+				if set[i] {
+					want++
+				}
 			}
 		}
 		rb.close()

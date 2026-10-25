@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -58,6 +59,15 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		PrefixTreeFile,
 	}
 	for _, name := range requiredTopLevel {
+		if err := addFile(dir, name, manifest.Files); err != nil {
+			return err
+		}
+	}
+	// Written only when the index needs them.
+	for _, name := range []string{CorePatchFile, CorePatchRowsFile} {
+		if _, err := os.Stat(filepath.Join(dir, name)); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err := addFile(dir, name, manifest.Files); err != nil {
 			return err
 		}
