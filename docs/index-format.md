@@ -102,10 +102,9 @@ Layout:
 
 | Offset | Size | Content |
 |--------|------|---------|
-| 0 | 20 | Header (`Width` = row stride in bytes) |
+| 0 | 20 | Header (`Width` = row width in bytes) |
 | 20 | 5 | Stride descriptor: one byte per field, its width in bytes |
-| 25 | 39 | Zero padding, so rows start on a 64-byte cache line |
-| 64 | `Count × Width` | Rows |
+| 25 | `Count × Width` | Rows |
 | end | 8 | Zero tail pad |
 
 Fields, in row order:
@@ -118,8 +117,10 @@ Fields, in row order:
 | depth | 1–2 |
 | tier_mask | 0–2 |
 
-A field's offset in the row is the sum of the widths before it; the
-stride (`Width`) is at least their sum. `tier_mask` bit *i* is set when
+A field's offset in the row is the sum of the widths before it. On
+open the reader checks that the descriptor's widths sum to the
+header's `Width`. Rows are packed with no padding: aligning them to
+cache lines measured no faster. `tier_mask` bit *i* is set when
 tier slot *i* (the *i*-th tier in `tiers.json`) holds data in this
 prefix. Its width is 0 when no prefix has data outside slot 0; the mask
 is then slot 0 for a prefix with data. A prefix has children exactly

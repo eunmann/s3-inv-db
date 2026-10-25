@@ -112,10 +112,9 @@ func writeOneRow(outDir string, count, totalBytes uint64, depth, tierMask uint16
 	return nil
 }
 
-// TestCoreStatsRowsStartOnACacheLine pins the data offset: rows start
-// at byte 64 whatever the field widths, and the file is exactly the
-// header block, the rows and the tail pad.
-func TestCoreStatsRowsStartOnACacheLine(t *testing.T) {
+// TestCoreStatsFileSize pins the layout: the file is exactly the
+// header, the stride descriptor, the packed rows and the tail pad.
+func TestCoreStatsFileSize(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "idx")
 	if err := writeOneRow(outDir, 3, 300, 1, 0b11, 0); err != nil {
 		t.Fatal(err)
@@ -129,7 +128,7 @@ func TestCoreStatsRowsStartOnACacheLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := int64(64 + r.Stride().RowBytes() + 8); info.Size() != want {
+	if want := int64(format.HeaderSize + format.CoreStatsStrideBytes + r.Stride().RowBytes() + 8); info.Size() != want {
 		t.Errorf("file size = %d, want %d", info.Size(), want)
 	}
 }

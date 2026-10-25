@@ -33,10 +33,10 @@ const (
 	bldOffTierMask   = 26
 )
 
-// coreStatsDataOff is where the first row starts in the final file:
-// the Header and the stride descriptor, zero-padded to a cache line,
-// so a row whose stride divides 64 never spans two cache lines.
-const coreStatsDataOff = 64
+// coreStatsDataOff is where the first row starts in the final file,
+// after the Header and the stride descriptor. Rows are packed: padding
+// them to cache-line boundaries measured no faster (#51).
+const coreStatsDataOff = HeaderSize + CoreStatsStrideBytes
 
 // CoreStatsStride is the per-index field-width schema decided at
 // Finalize from the observed value ranges. Each field stores the
@@ -57,8 +57,7 @@ type CoreStatsStride struct {
 // descriptor that follows the file Header.
 const CoreStatsStrideBytes = 5
 
-// RowBytes is the total width of a row's fields at this stride. The
-// row stride in the file (Header.Width) may be wider; see rowStride.
+// RowBytes is the total width of a row at this stride.
 func (s CoreStatsStride) RowBytes() int {
 	return int(s.Count) + int(s.Bytes) + int(s.SubtreeEnd) + int(s.Depth) + int(s.TierMask)
 }
@@ -92,10 +91,6 @@ func (s CoreStatsStride) validate() error {
 
 	return nil
 }
-
-// rowStride is the stride rows are written at for fields totalling
-// rowBytes: the fields packed with no padding.
-func rowStride(rowBytes int) int { return rowBytes }
 
 // byteWidthOf returns the smallest n in [1,8] such that v < 2^(8n).
 // For v==0 returns 1. The numeric returns are the byte widths
@@ -319,13 +314,12 @@ func tierMaskWidth(maxMask uint16) uint8 {
 
 // Finalize chooses a tight per-field stride from the observed maxes,
 // streams the repacked rows into a fresh file at the same path
-// (Header + stride descriptor + padding to coreStatsDataOff first),
-// and closes both files. Memory during the repack is bounded by the
+// (Header + stride descriptor first), and closes both files. Memory during the repack is bounded by the
 // bufio buffer (1 MiB) — at the project's stated 10B-prefix scale a
 // per-row in-memory buffer would be hundreds of GB.
 func (b *CoreStatsBuilder) Finalize() error {
 	desc := b.ObservedStride()
-	stride := rowStride(desc.RowBytes())
+	stride := desc.RowBytes()
 
 	// Write the tight final file to a sibling tmp path, then rename
 	// over the build file. We keep the build mmap live throughout the
@@ -409,8 +403,7 @@ func cleanupTmp(f *os.File, path string, err error) error {
 	return err
 }
 
-// repackRow narrows the build-stride row into the tight stride; bytes
-// past the fields stay zero.
+// repackRow narrows the build-stride row into the tight stride.
 func repackRow(dst, src []byte, s CoreStatsStride) {
 	off := 0
 	writeLE(dst[off:], binary.LittleEndian.Uint64(src[bldOffCount:]), int(s.Count))
@@ -504,9 +497,9 @@ func newCoreStatsReader(mmap *MmapFile) (*CoreStatsReader, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode core stats stride: %w", err)
 	}
-	stride := int(header.Width)
-	if desc.RowBytes() > stride {
-		return nil, fmt.Errorf("%w: header.Width=%d fields=%d", errCoreStatsRowWidth, header.Width, desc.RowBytes())
+	stride := desc.RowBytes()
+	if stride != int(header.Width) {
+		return nil, fmt.Errorf("%w: header.Width=%d sum=%d", errCoreStatsRowWidth, header.Width, stride)
 	}
 	expected := int64(coreStatsDataOff) + int64(header.Count)*int64(stride) + coreStatsReadTailPad
 	if mmap.Size() < expected {
