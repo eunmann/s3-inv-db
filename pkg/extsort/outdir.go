@@ -113,11 +113,12 @@ func newStagingDir(outDir string) (string, error) {
 	return dir, nil
 }
 
-// reclaimStaleDirs removes the staging and replaced-index directories a
-// killed build left beside outDir, since its own cleanup never ran. A
-// build killed between moving the previous index aside and publishing
-// the new one leaves outDir missing; that previous index is moved back
-// instead of removed. Builds into the same outDir must not overlap.
+// reclaimStaleDirs removes the staging, replaced-index and scratch
+// directories a killed build left beside outDir, since its own cleanup
+// never ran. A build killed between moving the previous index aside and
+// publishing the new one leaves outDir missing; that previous index is
+// moved back instead of removed. Builds into the same outDir must not
+// overlap.
 func reclaimStaleDirs(log *zerolog.Logger, outDir string) error {
 	outDir = filepath.Clean(outDir)
 	parent, base := filepath.Dir(outDir), filepath.Base(outDir)
