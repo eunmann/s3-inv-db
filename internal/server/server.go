@@ -134,6 +134,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		},
 		buildHandlerOptions(cfg, discovery, bldr)...,
 	)
+	cfg.Logger.Info().Int64("level_cache_bytes", h.LevelCacheBytes()).Msg("level cache configured")
 
 	s := &Server{
 		config:      cfg,

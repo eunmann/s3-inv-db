@@ -168,6 +168,10 @@ func WithLevelCacheBytes(n int64) Option {
 	return func(h *Handlers) { h.levels = inventory.NewLevelCache(n) }
 }
 
+// LevelCacheBytes returns the level-order cache's byte budget; zero
+// when the cache is off.
+func (h *Handlers) LevelCacheBytes() int64 { return h.levels.MaxBytes() }
+
 // WithQueryBatchMax caps the number of prefixes accepted in a single
 // batch stats POST. Values <= 0 are ignored.
 func WithQueryBatchMax(n int) Option {

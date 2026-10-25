@@ -88,7 +88,7 @@ func defineFlags(fs *flag.FlagSet) *serverFlags {
 		maxConcurrentJobs: fs.Int("max-concurrent-jobs", 1, "max jobs (auto-loads and manual builds) running at once"),
 		autoLoadRetention: fs.Uint("auto-load-retention-default", defaultAutoLoadRetention, "default per-config run-retention when a configuration sets none"),
 		queryBatchMax:     fs.Int("query-batch-max", 0, "max prefixes per batch stats request (0 = handler default)"),
-		levelCache:        fs.String("level-cache", "64MB", "memory for the order of large browse/compare levels, so paging through one is O(page) (0 = off)"),
+		levelCache:        fs.String("level-cache", "64MiB", "memory for the order of large browse/compare levels, so paging through one is O(page) (0 = off)"),
 		trustedProxies:    fs.String("trusted-proxies", "", "comma-separated CIDRs/IPs of reverse proxies whose X-Forwarded-For is trusted (default: none; the TCP peer is the client)"),
 	}
 }

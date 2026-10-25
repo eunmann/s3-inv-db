@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -513,5 +514,26 @@ func TestStartJobPruner_PrunesAtStartup(t *testing.T) {
 	}
 	if len(got) != jobs.RetentionKeepPerInventory {
 		t.Errorf("jobs after startup prune = %d, want %d", len(got), jobs.RetentionKeepPerInventory)
+	}
+}
+
+// TestNew_LevelCacheBudgetReachesHandlers: the configured level-cache
+// budget is the one the handlers use, and zero turns the cache off.
+func TestNew_LevelCacheBudgetReachesHandlers(t *testing.T) {
+	for _, budget := range []int64{0, 12_345_678} {
+		t.Run(strconv.FormatInt(budget, 10), func(t *testing.T) {
+			srv, err := New(t.Context(), Config{
+				Logger:          zerolog.Nop(),
+				PriceTable:      pricing.DefaultUSEast1Prices(),
+				DB:              testDB(t),
+				LevelCacheBytes: budget,
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if got := srv.handlers.LevelCacheBytes(); got != budget {
+				t.Errorf("handlers level cache = %d bytes, want %d", got, budget)
+			}
+		})
 	}
 }

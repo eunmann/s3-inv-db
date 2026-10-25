@@ -48,8 +48,9 @@ type levelKey struct {
 }
 
 // levelEntry is one cached level. A browse entry starts as a marker
-// (order nil, seen): the first view orders only its page, and a second
-// view orders the whole level once and keeps it.
+// with a nil order, costing only levelEntryOverhead bytes: the first
+// view orders only its page, and a second view orders the whole level
+// once and keeps it.
 type levelEntry struct {
 	key    levelKey
 	order  []uint32 // browse: span offsets in display order
@@ -88,6 +89,15 @@ func (c *LevelCache) Purge() {
 	c.lru.Init()
 	clear(c.entries)
 	c.used = 0
+}
+
+// MaxBytes returns the cache's byte budget; zero for a nil cache.
+func (c *LevelCache) MaxBytes() int64 {
+	if c == nil {
+		return 0
+	}
+
+	return c.maxBytes
 }
 
 // Bytes returns the bytes the cache holds.

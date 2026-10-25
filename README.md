@@ -162,7 +162,7 @@ CLI flag → config file → default**. The seeder is flag-only.
   "auto_load_retention_default": 3,
   "discovery_refresh_interval": "1m",
   "query_batch_max": 1000,
-  "level_cache": "64MB",
+  "level_cache": "64MiB",
   "trusted_proxies": ["10.0.0.0/8"],
   "build_event_log": "/var/log/s3inv-build.jsonl",
   "inventories": [
@@ -176,7 +176,7 @@ entries are upserted into the state DB at startup.
 `trusted_proxies` (flag `--trusted-proxies`) lists the reverse proxies
 whose `X-Forwarded-For` is believed; by default none is, and the
 client IP is the TCP peer. `level_cache` (flag `--level-cache`,
-default 64MB, `0` turns it off) holds the full order of large levels
+default 64MiB, `0` turns it off) holds the full order of large levels
 (4096+ children): a compare level from its first view, a browse level
 sorted by size, objects or cost from its second, so paging through one
 doesn't re-read every child per page. Per-run pin state
