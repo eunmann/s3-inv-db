@@ -268,7 +268,7 @@ func (h *Handlers) computeCompareLevel(ctx context.Context, opts compareViewOpti
 	start := time.Now()
 	var data inventory.CompareLevelData
 	err := h.manager.WithTwoIndexes(ctx, opts.from, opts.to, func(a, b *indexread.Index) error {
-		data = inventory.CompareLevel(a, b, opts.prefix, opts.query(), h.compareCost())
+		data = h.levels.CompareLevel(a, b, opts.prefix, opts.query(), h.compareCost())
 
 		return nil
 	})
@@ -568,7 +568,7 @@ func (h *Handlers) CompareLevelAPI(w http.ResponseWriter, r *http.Request) {
 
 	var data inventory.CompareLevelData
 	err := h.manager.WithTwoIndexes(r.Context(), opts.from, opts.to, func(a, b *indexread.Index) error {
-		data = inventory.CompareLevel(a, b, opts.prefix, opts.query(), h.compareCost())
+		data = h.levels.CompareLevel(a, b, opts.prefix, opts.query(), h.compareCost())
 
 		return nil
 	})

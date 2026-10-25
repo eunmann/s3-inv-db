@@ -62,6 +62,10 @@ type Config struct {
 	// stats request. Zero means use the handler default.
 	QueryBatchMax int
 
+	// LevelCacheBytes is the level-order cache's budget; zero turns it
+	// off.
+	LevelCacheBytes int64
+
 	// TrustedProxies are the reverse proxies whose X-Forwarded-For
 	// entries determine the client IP. Empty: the TCP peer is the client.
 	TrustedProxies []netip.Prefix
@@ -244,6 +248,7 @@ func buildHandlerOptions(cfg Config, discovery *inventory.Discovery, bldr *loade
 	addIf(bldr != nil, handlers.WithLoader(bldr), handlers.WithCacheStore(bldr))
 	addIf(cfg.S3Source != "", handlers.WithS3Source(cfg.S3Source))
 	addIf(cfg.QueryBatchMax > 0, handlers.WithQueryBatchMax(cfg.QueryBatchMax))
+	hopts = append(hopts, handlers.WithLevelCacheBytes(cfg.LevelCacheBytes))
 
 	return hopts
 }

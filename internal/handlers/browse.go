@@ -228,7 +228,7 @@ func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, o
 			return h.prices.MonthlyTotal(buf)
 		}
 	}
-	page, err := inventory.PageChildren(idx, pos, inventory.ChildQuery{SortBy: sortBy, Dir: dir, Page: pageNum, PageSize: pageSize}, cost)
+	page, err := h.levels.PageChildren(idx, pos, inventory.ChildQuery{SortBy: sortBy, Dir: dir, Page: pageNum, PageSize: pageSize}, cost)
 	if err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("browse children")
 

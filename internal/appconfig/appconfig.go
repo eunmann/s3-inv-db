@@ -41,6 +41,7 @@ type Config struct {
 
 	BuildEventLog *string `json:"build_event_log,omitempty"`
 	QueryBatchMax *int    `json:"query_batch_max,omitempty"`
+	LevelCache    *string `json:"level_cache,omitempty"` // size string (e.g. "64MB"); "0" turns it off
 
 	// TrustedProxies lists the reverse proxies (CIDRs or bare IPs) whose
 	// X-Forwarded-For entries the server believes. Empty means no proxy

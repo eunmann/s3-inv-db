@@ -59,7 +59,10 @@ type Handlers struct {
 	priceTable  pricing.PriceTable
 	// prices is priceTable compiled per tier ID, for pricing every child
 	// of a level when sorting by cost.
-	prices                   *pricing.Compiled
+	prices *pricing.Compiled
+	// levels keeps the order of large browse and compare levels across
+	// page views; nil caches nothing. Its cost orders use prices.
+	levels                   *inventory.LevelCache
 	discoveryRefreshInterval time.Duration
 
 	discoverer inventory.Discoverer
@@ -156,6 +159,15 @@ func WithDiscoveryRefreshInterval(d time.Duration) Option {
 	return func(h *Handlers) { h.discoveryRefreshInterval = d }
 }
 
+// DefaultLevelCacheBytes is the default budget of the level-order cache.
+const DefaultLevelCacheBytes = 64 << 20
+
+// WithLevelCacheBytes sets the level-order cache's byte budget (see
+// inventory.LevelCache); zero or less turns the cache off.
+func WithLevelCacheBytes(n int64) Option {
+	return func(h *Handlers) { h.levels = inventory.NewLevelCache(n) }
+}
+
 // WithQueryBatchMax caps the number of prefixes accepted in a single
 // batch stats POST. Values <= 0 are ignored.
 func WithQueryBatchMax(n int) Option {
@@ -242,6 +254,7 @@ func New(
 		renderer:    renderer,
 		priceTable:  priceTable,
 		prices:      pricing.Compile(priceTable),
+		levels:      inventory.NewLevelCache(DefaultLevelCacheBytes),
 		jobMgr:      deps.JobMgr,
 		jobStore:    deps.JobStore,
 		jobBus:      deps.JobBus,

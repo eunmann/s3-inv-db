@@ -74,6 +74,7 @@ func describeSetFields(c *appconfig.Config) map[string]any {
 	addIfSet(set, "discovery_refresh_interval", c.DiscoveryRefreshInterval)
 	addIfSet(set, "build_event_log", c.BuildEventLog)
 	addIfSet(set, "query_batch_max", c.QueryBatchMax)
+	addIfSet(set, "level_cache", c.LevelCache)
 	if len(c.Inventories) > 0 {
 		set["inventories"] = c.Inventories
 	}

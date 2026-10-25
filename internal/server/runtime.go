@@ -72,6 +72,10 @@ type RuntimeOptions struct {
 	// endpoint. Zero means use the handler default.
 	QueryBatchMax int
 
+	// LevelCacheBytes is the level-order cache's budget; zero turns it
+	// off (see handlers.WithLevelCacheBytes).
+	LevelCacheBytes int64
+
 	// TrustedProxies are the reverse proxies whose X-Forwarded-For
 	// entries determine the client IP. Empty: the TCP peer is the client.
 	TrustedProxies []netip.Prefix
@@ -161,6 +165,7 @@ func Bootstrap(ctx context.Context, opts RuntimeOptions) (*Server, func(), error
 		AutoLoadRetentionDefault: opts.AutoLoadRetentionDefault,
 		DiscoveryRefreshInterval: opts.DiscoveryRefreshInterval,
 		QueryBatchMax:            opts.QueryBatchMax,
+		LevelCacheBytes:          opts.LevelCacheBytes,
 		TrustedProxies:           opts.TrustedProxies,
 	})
 	if err != nil {
