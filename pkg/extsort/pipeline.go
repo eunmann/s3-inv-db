@@ -338,6 +338,38 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 	return p.runIngestLoop(ctx, cfg)
 }
 
+// csvColumns are a CSV inventory's column indexes from its manifest's
+// schema; -1 for a column it lacks.
+type csvColumns struct {
+	key, size, storage, accessTier, deleteMarker int
+}
+
+// manifestColumns reads the column indexes a CSV inventory's rows need
+// from its manifest. A Parquet manifest's fileSchema is a Parquet message,
+// not a column list, and its reader takes the columns from each file's
+// own schema, so it has none here.
+func manifestColumns(manifest *s3fetch.Manifest, format s3fetch.InventoryFormat) (csvColumns, error) {
+	if format != s3fetch.InventoryFormatCSV {
+		return csvColumns{key: -1, size: -1, storage: -1, accessTier: -1, deleteMarker: -1}, nil
+	}
+	key, err := manifest.KeyColumnIndex()
+	if err != nil {
+		return csvColumns{}, fmt.Errorf("get key column: %w", err)
+	}
+	size, err := manifest.SizeColumnIndex()
+	if err != nil {
+		return csvColumns{}, fmt.Errorf("get size column: %w", err)
+	}
+
+	return csvColumns{
+		key:          key,
+		size:         size,
+		storage:      manifest.StorageClassColumnIndex(),
+		accessTier:   manifest.AccessTierColumnIndex(),
+		deleteMarker: manifest.DeleteMarkerColumnIndex(),
+	}, nil
+}
+
 // setupIngestConfig parses the manifest and computes configuration.
 func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*ingestConfig, error) {
 	log := zerolog.Ctx(ctx)
@@ -352,13 +384,13 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 		return nil, fmt.Errorf("fetch manifest: %w", err)
 	}
 
-	keyCol, err := manifest.KeyColumnIndex()
+	format, err := manifest.DetectFormat()
 	if err != nil {
-		return nil, fmt.Errorf("get key column: %w", err)
+		return nil, fmt.Errorf("inventory format: %w", err)
 	}
-	sizeCol, err := manifest.SizeColumnIndex()
+	cols, err := manifestColumns(manifest, format)
 	if err != nil {
-		return nil, fmt.Errorf("get size column: %w", err)
+		return nil, err
 	}
 
 	destBucket, err := manifest.DestinationBucketName()
@@ -377,20 +409,15 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 		Int("ingest_workers", numWorkers).
 		Msg("ingest worker count derived from NumCPU")
 
-	format, err := manifest.DetectFormat()
-	if err != nil {
-		return nil, fmt.Errorf("inventory format: %w", err)
-	}
-
 	return &ingestConfig{
 		manifest:        manifest,
 		format:          format,
 		destBucket:      destBucket,
-		keyCol:          keyCol,
-		sizeCol:         sizeCol,
-		storageCol:      manifest.StorageClassColumnIndex(),
-		accessTierCol:   manifest.AccessTierColumnIndex(),
-		deleteMarkerCol: manifest.DeleteMarkerColumnIndex(),
+		keyCol:          cols.key,
+		sizeCol:         cols.size,
+		storageCol:      cols.storage,
+		accessTierCol:   cols.accessTier,
+		deleteMarkerCol: cols.deleteMarker,
 		numWorkers:      numWorkers,
 		tierMapping:     tiers.NewMapping(),
 	}, nil
@@ -686,6 +713,11 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 		return fmt.Errorf("%w: %s is %d bytes, the manifest says %d",
 			ErrChunkSizeMismatch, job.key, dlResult.BytesDownloaded, job.config.fileSize)
 	}
+
+	// The Parquet reader reads the file through ReaderAt and never closes
+	// it; closing here removes every chunk from scratch once parsed. The
+	// CSV reader closes it first, and a second Close is a no-op.
+	defer func() { _ = body.Close() }()
 
 	parseStart := time.Now()
 	var reader s3inventory.Reader
