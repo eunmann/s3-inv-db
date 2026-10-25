@@ -20,8 +20,13 @@ type Aggregator struct {
 	// slabs back every row and drained is Drain's result slice; both
 	// are reused once the caller is done with a Drain, so a worker
 	// allocates rows only while its largest spill is still growing.
-	slabs    [][]PrefixRow
-	drained  []*PrefixRow
+	slabs   [][]PrefixRow
+	drained []*PrefixRow
+	// path holds the rows of the previous key's prefixes by depth
+	// (path[0] is the root's): the next key reuses the ones whose
+	// prefix it starts with and looks up only the levels below. Keys
+	// in order (as S3 Inventory lists them) share most of their path.
+	path     []*PrefixRow
 	used     int
 	maxDepth int
 	tierMask uint16
@@ -47,25 +52,43 @@ func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 	a.tierMask |= uint16(1) << tierID
 
-	a.accumulate("", 0, size, tierID)
-
-	depth := uint16(1)
-	for i := range len(key) {
-		if key[i] == '/' {
-			if a.maxDepth > 0 && int(depth) > a.maxDepth {
-				break
-			}
-			prefix := key[:i+1]
-			a.accumulate(prefix, depth, size, tierID)
-			depth++
-		}
+	path := a.path
+	if len(path) == 0 {
+		path = append(path, a.row("", 0))
 	}
+	path[0].add(size, tierID)
+	// Reuse the previous key's rows while this key starts with their
+	// prefixes; each level adds one segment, so only it is compared.
+	d := 1
+	for ; d < len(path); d++ {
+		prev, p := len(path[d-1].Prefix), path[d].Prefix
+		if len(key) < len(p) || key[prev:len(p)] != p[prev:] {
+			break
+		}
+		path[d].add(size, tierID)
+	}
+	path = path[:d]
+
+	depth := uint16(d)
+	for i := len(path[d-1].Prefix); i < len(key); i++ {
+		if key[i] != '/' {
+			continue
+		}
+		if a.maxDepth > 0 && int(depth) > a.maxDepth {
+			break
+		}
+		row := a.row(key[:i+1], depth)
+		row.add(size, tierID)
+		path = append(path, row)
+		depth++
+	}
+	a.path = path
 }
 
-// accumulate updates the statistics for a single prefix. A new prefix
-// is cloned: the caller's key is usually a substring of a whole
-// inventory record, which the map would otherwise keep alive.
-func (a *Aggregator) accumulate(prefix string, depth uint16, size uint64, tierID tiers.ID) {
+// row returns prefix's row, creating it on first use. A new prefix is
+// cloned: the caller's key is usually a substring of a whole inventory
+// record, which the map would otherwise keep alive.
+func (a *Aggregator) row(prefix string, depth uint16) *PrefixRow {
 	row, ok := a.prefixes[prefix]
 	if !ok {
 		owned := strings.Clone(prefix)
@@ -73,7 +96,8 @@ func (a *Aggregator) accumulate(prefix string, depth uint16, size uint64, tierID
 		row.Prefix, row.Depth = owned, depth
 		a.prefixes[owned] = row
 	}
-	row.add(size, tierID)
+
+	return row
 }
 
 // rowSlabLen is how many rows the aggregator allocates at a time.
@@ -225,6 +249,9 @@ func (a *Aggregator) Drain() []*PrefixRow {
 
 	clear(a.prefixes)
 	a.used = 0
+	// The cached path points at rows the next use recycles.
+	clear(a.path)
+	a.path = a.path[:0]
 
 	return rows
 }
@@ -233,6 +260,6 @@ func (a *Aggregator) Drain() []*PrefixRow {
 // buckets so the GC can reclaim them once the caller is done with the
 // last Drain. Call it only on an empty (just drained) aggregator.
 func (a *Aggregator) Release() {
-	a.slabs, a.drained = nil, nil
+	a.slabs, a.drained, a.path = nil, nil, nil
 	a.prefixes = make(map[string]*PrefixRow)
 }
