@@ -39,7 +39,7 @@ func Open(dir string) (*Index, error) {
 		return nil, fmt.Errorf("open MPHF: %w", err)
 	}
 
-	tierStats, err := format.OpenTierStats(dir)
+	tierStats, err := format.OpenTierStats(dir, coreStats)
 	if err != nil {
 		_ = errors.Join(coreStats.Close(), depthIndex.Close(), mphf.Close())
 
@@ -118,12 +118,9 @@ func (idx *Index) SubtreeEnd(pos uint64) uint64 {
 	return idx.coreStats.UnsafeSubtreeEnd(pos)
 }
 
-func (idx *Index) MaxDepthInSubtree(pos uint64) uint32 {
-	if pos >= idx.count {
-		return 0
-	}
-
-	return idx.coreStats.UnsafeMaxDepth(pos)
+// HasChildren reports whether the prefix at pos has a child prefix.
+func (idx *Index) HasChildren(pos uint64) bool {
+	return pos < idx.count && idx.coreStats.UnsafeSubtreeEnd(pos) > pos
 }
 
 func (idx *Index) PrefixString(pos uint64) (string, error) {

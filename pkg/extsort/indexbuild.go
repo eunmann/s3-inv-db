@@ -29,7 +29,7 @@ import (
 // which is much smaller than storing all prefix strings (~50+ bytes each).
 type IndexBuilder struct {
 	coreStatsW        *format.CoreStatsBuilder
-	tierStatsRowW     *format.TierStatsRowWriter
+	tierStatsW        *format.TierStatsWriter
 	mphfBuilder       *format.StreamingMPHFBuilder
 	depthIndexBuilder *format.DepthIndexBuilder
 	declaredTiers     []tiers.ID
@@ -49,10 +49,8 @@ type IndexBuilder struct {
 
 // stackEntry tracks an open prefix on the stack.
 type stackEntry struct {
-	prefix            string
-	pos               uint64
-	depth             uint32
-	maxDepthInSubtree uint32
+	prefix string
+	pos    uint64
 }
 
 // NewIndexBuilder creates a streaming index builder.
@@ -102,23 +100,20 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		createdOutDir:     createdOutDir,
 	}
 
-	// The tier-stats row writer is created lazily on the first Add, once
-	// the present-tier set is fixed (default or via SetPresentTiers), so
-	// its row stride can be sparse from the first byte.
+	// The tier-stats writer is created lazily on the first Add, once
+	// the present-tier set is fixed (default or via SetPresentTiers).
 
 	return b, nil
 }
 
 // ErrPresentTiersAfterAdd is returned when SetPresentTiers is called
-// after the first Add — the tier-stats row stride is fixed when the
-// writer is created on the first Add and cannot change mid-stream.
+// after the first Add — the tier slots are fixed when the writer is
+// created on the first Add and cannot change mid-stream.
 var ErrPresentTiersAfterAdd = errors.New("SetPresentTiers must be called before the first Add")
 
-// SetPresentTiers declares which tiers carry data, so the tier-stats
-// rows are written at a stride of len(present) slots rather than the
-// dense all-tier stride. The set comes from the ingest tier mask. When
-// unset, the builder records all tiers (dense). Must be called before
-// the first Add.
+// SetPresentTiers declares which tiers carry data, so only they get a
+// tier slot. The set comes from the ingest tier mask. When unset, the
+// builder gives every tier a slot. Must be called before the first Add.
 func (b *IndexBuilder) SetPresentTiers(present []tiers.ID) error {
 	if b.posCount > 0 {
 		return ErrPresentTiersAfterAdd
@@ -129,22 +124,21 @@ func (b *IndexBuilder) SetPresentTiers(present []tiers.ID) error {
 	return nil
 }
 
-// ensureTierWriter lazily creates the tier-stats row writer on the
-// first Add, resolving the present-tier set (declared, else dense) so
-// the sparse stride is fixed for every row.
+// ensureTierWriter lazily creates the tier-stats writer on the first
+// Add, resolving the present-tier set (declared, else every tier).
 func (b *IndexBuilder) ensureTierWriter() error {
-	if b.tierStatsRowW != nil {
+	if b.tierStatsW != nil {
 		return nil
 	}
 	present := b.declaredTiers
 	if !b.tiersDeclared {
 		present = tiers.AllTierIDs()
 	}
-	w, err := format.NewTierStatsRowWriter(b.outDir, present)
+	w, err := format.NewTierStatsWriter(b.outDir, present)
 	if err != nil {
-		return fmt.Errorf("create tier stats row writer: %w", err)
+		return fmt.Errorf("create tier stats writer: %w", err)
 	}
-	b.tierStatsRowW = w
+	b.tierStatsW = w
 	b.resolvedTiers = present
 
 	return nil
@@ -160,8 +154,8 @@ func (b *IndexBuilder) cleanup() {
 	if b.mphfBuilder != nil {
 		b.mphfBuilder.Close()
 	}
-	if b.tierStatsRowW != nil {
-		b.tierStatsRowW.Close()
+	if b.tierStatsW != nil {
+		_ = b.tierStatsW.Abort()
 	}
 	if b.depthIndexBuilder != nil {
 		b.depthIndexBuilder.Close()
@@ -182,12 +176,7 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	pos := b.posCount
 	b.posCount++
 
-	b.stack = append(b.stack, stackEntry{
-		prefix:            row.Prefix,
-		pos:               pos,
-		depth:             uint32(row.Depth),
-		maxDepthInSubtree: uint32(row.Depth),
-	})
+	b.stack = append(b.stack, stackEntry{prefix: row.Prefix, pos: pos})
 
 	if uint32(row.Depth) > b.maxDepth {
 		b.maxDepth = uint32(row.Depth)
@@ -200,15 +189,15 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 		return fmt.Errorf("add to MPHF builder: %w", err)
 	}
 
-	if err := b.coreStatsW.Add(row.Count, row.TotalBytes, row.Depth); err != nil {
-		return fmt.Errorf("write core stats row: %w", err)
-	}
-
 	if err := b.ensureTierWriter(); err != nil {
 		return err
 	}
-	if err := b.tierStatsRowW.Add(&row.TierCounts, &row.TierBytes); err != nil {
-		return fmt.Errorf("write tier stats row: %w", err)
+	mask, err := b.tierStatsW.Add(&row.TierCounts, &row.TierBytes, row.Count, row.TotalBytes)
+	if err != nil {
+		return fmt.Errorf("prefix %q: write tier stats: %w", row.Prefix, err)
+	}
+	if err := b.coreStatsW.Add(row.Count, row.TotalBytes, row.Depth, mask); err != nil {
+		return fmt.Errorf("write core stats row: %w", err)
 	}
 
 	return nil
@@ -250,15 +239,8 @@ func (b *IndexBuilder) closeTopNode() error {
 	top := b.stack[len(b.stack)-1]
 	b.stack = b.stack[:len(b.stack)-1]
 
-	subtreeEnd := b.posCount - 1
-	if err := b.coreStatsW.SetSubtree(top.pos, subtreeEnd, uint16(top.maxDepthInSubtree)); err != nil {
+	if err := b.coreStatsW.SetSubtree(top.pos, b.posCount-1); err != nil {
 		return fmt.Errorf("set subtree_end: %w", err)
-	}
-
-	if len(b.stack) > 0 {
-		if top.maxDepthInSubtree > b.stack[len(b.stack)-1].maxDepthInSubtree {
-			b.stack[len(b.stack)-1].maxDepthInSubtree = top.maxDepthInSubtree
-		}
 	}
 
 	return nil
@@ -385,9 +367,8 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	return nil
 }
 
-// closeStreamingWriters finalizes the row-major core stats + tier
-// stats files. Both leave their final files in place at the index
-// dir; no rename / temp-promote dance.
+// closeStreamingWriters finalizes the row-major core stats and tier
+// stats files in the index dir.
 func (b *IndexBuilder) closeStreamingWriters() error {
 	if err := b.coreStatsW.Finalize(); err != nil {
 		return fmt.Errorf("finalize core stats: %w", err)
@@ -396,11 +377,11 @@ func (b *IndexBuilder) closeStreamingWriters() error {
 	// The tier writer is nil when no rows were added (empty index); such
 	// a build writes no tier file and no tier manifest (tiers.json). The
 	// index manifest is still written unconditionally in Finalize.
-	if b.tierStatsRowW != nil {
-		if err := b.tierStatsRowW.Close(); err != nil {
-			return fmt.Errorf("close tier stats row: %w", err)
+	if b.tierStatsW != nil {
+		if err := b.tierStatsW.Close(); err != nil {
+			return fmt.Errorf("close tier stats: %w", err)
 		}
-		b.tierStatsRowW = nil
+		b.tierStatsW = nil
 	}
 
 	return nil

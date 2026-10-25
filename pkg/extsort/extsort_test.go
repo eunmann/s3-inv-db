@@ -170,6 +170,7 @@ func TestIndexBuilder(t *testing.T) {
 		}
 
 		for _, row := range rows {
+			row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = row.Count, row.TotalBytes
 			if err := builder.Add(row); err != nil {
 				t.Fatalf("add row: %v", err)
 			}

@@ -114,11 +114,8 @@ func BenchmarkTierStats_Density(b *testing.B) {
 // whose objects span only a few of the 13 tiers — the realistic shape.
 // The timer is stopped during ingest/Add, so only Finalize is measured.
 //
-// With sparse-direct writes, Add already emits the packed tier rows, so
-// Finalize is just MPHF + depth index — no tier I/O. The same bench on
-// main (dense Add + PackTierStatsRow) pays a full read-back + rewrite of
-// the tier file inside Finalize, so the delta is the eliminated
-// compaction round-trip.
+// Finalize includes the tier writer's conversion of its scratch rows
+// into the chosen layout, alongside the MPHF and depth index.
 func BenchmarkTierStatsFinalize(b *testing.B) {
 	prevLevel := zerolog.GlobalLevel()
 	zerolog.SetGlobalLevel(zerolog.Disabled)

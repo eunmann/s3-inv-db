@@ -38,7 +38,7 @@ func readHeaderCount(path string) uint64 {
 // Per cell custom metrics:
 //
 //	bytes_per_prefix         — sum of every file under the index dir
-//	tier_stats_Bpp           — per-prefix bytes for tier_stats_row.bin
+//	Bpp_tier_*               — per-prefix bytes for each tier_stats/ file
 //	core_stats_Bpp           — per-prefix bytes for core_stats.bin
 //	mph_fp_pos_Bpp           — per-prefix bytes for mph_fp_pos.u64
 //	prefix_dict_ids_Bpp      — per-prefix bytes for prefix_dict.ids.u32
@@ -463,9 +463,10 @@ type gridFile struct {
 }
 
 var gridReportedFiles = []gridFile{
-	{"tier_stats/tier_stats_row.bin", "Bpp_tier_dense", false},
-	{"tier_stats/tier_stats_sparse.bin", "Bpp_tier_sparse_rows", false},
-	{"tier_stats/tier_stats_sparse.off.u64", "Bpp_tier_sparse_off", false},
+	{"tier_stats/tier_dense.bin", "Bpp_tier_dense", false},
+	{"tier_stats/tier_multi.bin", "Bpp_tier_multi", false},
+	{"tier_stats/tier_multi.rows", "Bpp_tier_multi_rows", false},
+	{"tier_stats/tier_multi.off.u64", "Bpp_tier_multi_off", false},
 	{"core_stats.bin", "Bpp_core", true},
 	{"mph_fp_pos.u64", "Bpp_fpp", false},
 	{"prefix_dict.ids.u32", "Bpp_ids", false},

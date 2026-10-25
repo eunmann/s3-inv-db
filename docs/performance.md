@@ -92,32 +92,36 @@ Query-time RAM is just the OS page cache plus iterator stack frames;
 
 ## Index size
 
-Every per-prefix file except the sparse tier rows has a fixed stride
-per index, so total size scales linearly with prefix count. Strides adapt to the index: each
-`core_stats.bin` field and each offset or position array is stored at
-the narrowest byte width its largest value needs, and tier stats hold
-only the tiers present (sparse when that is smaller). Layouts:
+Every per-prefix file has a fixed stride per index, except the
+multi-tier slots, which only prefixes with two or more tiers store, so
+total size scales linearly with prefix count. Strides adapt to the
+index: each `core_stats.bin` field, tier slot and offset or position
+array is stored at the narrowest byte width its largest value needs.
+Tier stats store only what a prefix's totals and tier mask don't give,
+in whichever of two layouts is smaller for the index. Layouts:
 [index-format.md](index-format.md).
 
 Measured on the S3-realistic 1M-object fixture
 (`benchutil.S3RealisticConfig(1_000_000)`, built through
 `extsort.NewAggregator` → `Drain` → `SortPrefixRows` → `IndexBuilder` the way
 `pkg/indexread`'s `BenchmarkGate*` fixture is): 2,374,251 prefixes,
-max depth 7, 11 of 13 tiers present.
+max depth 7, 11 of 13 tiers present, 95% of prefixes holding one tier.
 
 | Component | Files | B/prefix |
 |---|---|---|
-| Core stats | `core_stats.bin` (15-byte rows: 3 + 7 + 3 + 1 + 1) | 15.0 |
-| Tier stats | `tier_stats/tier_stats_sparse.bin` + `.off.u64` (sparse; dense would be 11 × 16 = 176) | 23.9 |
+| Core stats | `core_stats.bin` (16-byte rows: 3 + 7 + 3 + 1 + 2) | 16.0 |
+| Tier stats | `tier_stats/tier_multi.*` (multi layout) | 1.4 |
 | MPHF | `mph_fp_pos.u64` (16) + `mph.bin` (BBHash, ~3.3 bits) | 16.4 |
 | Prefix dictionary | `prefix_dict.ids.u32` (~5 IDs × 2 B) + `prefix_dict.prefix_off.u64` (3 B) + segment blob | 13.2 |
 | Depth index | `depth_positions.u64` (3 B) + `depth_offsets.u64` | 3.0 |
-| **Total** | including `manifest.json` and `tiers.json` | **71.5** |
+| **Total** | including `manifest.json` and `tiers.json` | **49.9** |
 
 The 16 B fingerprint/position slot is the same for every index. Tier
-stats depend on how many tiers each prefix holds. The other
-components grow by a byte per field as counts, sizes and prefix
-totals cross powers of 256.
+stats depend on how many tiers each prefix holds: nothing for an index
+with one tier, up to (T − 1) slots per prefix when every prefix holds
+all T tiers. The other components grow by a byte per field as counts,
+sizes and prefix totals cross powers of 256. `s3-inv-db stats --profile`
+shows those distributions for an index.
 
 ## Server: sizing the disk budget
 

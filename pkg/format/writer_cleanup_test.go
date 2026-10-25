@@ -9,8 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 // TestArrayWriter_CleanupRemovesPartialOnCloseError forces a write
@@ -49,29 +47,5 @@ func TestArrayWriter_CleanupRemovesPartialOnCloseError(t *testing.T) {
 func TestRemoveIfErr_AbsentPathReturnsNil(t *testing.T) {
 	if err := removeIfErr(filepath.Join(t.TempDir(), "never-existed")); err != nil {
 		t.Errorf("removeIfErr on missing path = %v, want nil", err)
-	}
-}
-
-// TestTierStatsRowWriter_CleanupRemovesPartialOnCloseError mirrors the
-// ArrayWriter cleanup contract for the row-major tier-stats writer:
-// a Close-time failure must not leave a corrupt file on disk.
-func TestTierStatsRowWriter_CleanupRemovesPartialOnCloseError(t *testing.T) {
-	dir := t.TempDir()
-	w, err := NewTierStatsRowWriter(dir, []tiers.ID{tiers.Standard})
-	if err != nil {
-		t.Fatalf("NewTierStatsRowWriter: %v", err)
-	}
-
-	// Close the underlying file under the writer; the next Flush fails.
-	if err := w.file.Close(); err != nil {
-		t.Fatalf("pre-close underlying: %v", err)
-	}
-
-	if err := w.Close(); err == nil {
-		t.Fatal("Close should fail with the underlying file closed")
-	}
-
-	if _, err := os.Stat(w.path); !os.IsNotExist(err) {
-		t.Fatalf("partial tier-stats file still present: stat err=%v", err)
 	}
 }
