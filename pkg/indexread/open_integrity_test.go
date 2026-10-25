@@ -48,3 +48,67 @@ func TestOpen_RejectsFilesThatDisagreeOnCount(t *testing.T) {
 		t.Fatalf("Open(mixed files) err = %v, want ErrIndexInconsistent", err)
 	}
 }
+
+// TestLookup_OutOfRangeSlotPositionIsMiss: an MPHF slot whose
+// fingerprint matches but whose stored position is past the prefix
+// count (a damaged mph_slots.bin) is reported as a miss, not as a row.
+func TestLookup_OutOfRangeSlotPositionIsMiss(t *testing.T) {
+	dir := setupTestIndex(t)
+	if err := buildIndexFromCSV(t, dir, "Key,Size\na/x,1\nb/y,2\n"); err != nil {
+		t.Fatal(err)
+	}
+	prefixes := []string{"", "a/", "b/"}
+	intact, err := indexread.Open(dir)
+	if err != nil {
+		t.Fatalf("Open(intact index): %v", err)
+	}
+	for _, p := range prefixes {
+		if _, ok := intact.Lookup(p); !ok {
+			t.Errorf("intact Lookup(%q) missed", p)
+		}
+	}
+	if err := intact.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	data, err := root.ReadFile(format.MPHFSlotsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := format.DecodeHeader(data[:format.HeaderSize])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// mph_slots.bin: header, 1-byte position width, then Count slots of
+	// an 8-byte fingerprint followed by the position.
+	const fingerprintBytes = 8
+	dataOff := uint64(format.HeaderSize + 1)
+	for slot := range header.Count {
+		off := dataOff + slot*uint64(header.Width)
+		for i := off + fingerprintBytes; i < off+uint64(header.Width); i++ {
+			data[i] = 0xFF
+		}
+	}
+	if err := root.WriteFile(format.MPHFSlotsFile, data, format.FilePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	idx, err := indexread.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer idx.Close()
+	for _, p := range prefixes {
+		if pos, ok := idx.Lookup(p); ok {
+			t.Errorf("Lookup(%q) = %d, true; want miss (count %d)", p, pos, idx.Count())
+		}
+		if s, ok := idx.StatsForPrefix(p); ok {
+			t.Errorf("StatsForPrefix(%q) = %+v, true; want miss", p, s)
+		}
+	}
+}
