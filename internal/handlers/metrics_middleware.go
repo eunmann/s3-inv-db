@@ -62,7 +62,8 @@ func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // The route's series are resolved here, once, not per request: the
 // registry lookup takes its lock and builds a label key, which on a
 // sub-microsecond query would cost more than the query and serialize
-// every core. A request does two atomic adds and an atomic load.
+// every core. A request does four atomic adds (three for the histogram,
+// one for the counter) and one atomic load.
 func (h *Handlers) MetricsMiddleware(route string) func(http.Handler) http.Handler {
 	duration := h.reg.Histogram(
 		"s3invdb_http_request_seconds",
