@@ -15,8 +15,10 @@ import (
 const CoreStatsFile = "core_stats.bin"
 
 // coreStatsBuildStride is the fixed safe stride used during the
-// build, before per-field widths are known. At Finalize the file is
-// repacked to a smaller stride if observed maxes allow.
+// build, before per-field widths are known. Finalize repacks the rows
+// to the stride it chooses: count, bytes and subtree size from the
+// width histogram (rows that don't fit go to patch files), depth and
+// tier mask from their maxes.
 //
 //	offset  0: object_count           uint64
 //	offset  8: total_bytes            uint64
@@ -331,10 +333,9 @@ func tierMaskWidth(maxMask uint16) uint8 {
 // width histogram, with patch files for the rows that don't fit; depth
 // and tier mask from their maxes), streams the repacked rows into a
 // fresh file at the same path (Header + stride descriptor first), and
-// closes both files. Memory
-// during the repack is bounded by the bufio buffer (1 MiB) — at the
-// project's stated 10B-prefix scale a per-row in-memory buffer would
-// be hundreds of GB.
+// closes both files. Memory during the repack is bounded by the bufio
+// buffer (1 MiB) — at the project's stated 10B-prefix scale a per-row
+// in-memory buffer would be hundreds of GB.
 func (b *CoreStatsBuilder) Finalize() error {
 	desc, choice := b.chooseStride()
 	stride := desc.RowBytes()
