@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -275,5 +276,45 @@ func TestStore_PruneTerminal_KeepsRecentAndLiveJobs(t *testing.T) {
 	}
 	if _, err := store.Get(ctx, "b-old"); err != nil {
 		t.Errorf("b-old (only job of its inventory) pruned: %v", err)
+	}
+}
+
+// TestStore_LatestByInventoryMatchesLatestForInventory: the one-query
+// map holds, for every inventory with jobs, exactly the job
+// LatestForInventory returns, ties in updated_at included.
+func TestStore_LatestByInventoryMatchesLatestForInventory(t *testing.T) {
+	ids := []inventory.ID{"src/a/r1", "src/a/r2", "src/b/r1", "src/empty/r1"}
+	store, db := storeWithInventory(t, ids[0])
+	seedInventoryRows(t, db, ids[1:]...)
+	stamps := []int64{100, 300, 300, 200} // a tie at 300 for each inventory with jobs
+	for i, id := range ids[:3] {
+		for k, ts := range stamps {
+			jid := jobs.ID(fmt.Sprintf("j-%d-%d", i, k))
+			if err := store.Upsert(t.Context(), jobs.Job{ID: jid, InventoryID: id, Kind: jobs.KindBuild, State: jobs.StateSucceeded}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.ExecContext(t.Context(), `UPDATE jobs SET updated_at = ? WHERE id = ?`, ts+int64(i), string(jid)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	got, err := store.LatestByInventory(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d inventories, want 3 (one has no jobs)", len(got))
+	}
+	for _, id := range ids[:3] {
+		want, err := store.LatestForInventory(t.Context(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got[id].ID != want.ID {
+			t.Errorf("%s: LatestByInventory %s, LatestForInventory %s", id, got[id].ID, want.ID)
+		}
+		if want.ID != jobs.ID(fmt.Sprintf("j-%d-2", slices.Index(ids, id))) {
+			t.Errorf("%s: latest %s, want the later-inserted of the two at the newest time", id, want.ID)
+		}
 	}
 }

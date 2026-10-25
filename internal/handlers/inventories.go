@@ -379,10 +379,15 @@ func (h *Handlers) InventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 // InventoriesPage. Extracted so the page handler stays under the
 // cognitive-complexity budget; the same shape was inlined before.
 func (h *Handlers) buildInventoryGroups(r *http.Request, views []inventory.MergedInventory) []InventoryGroup {
+	// One query for every run's latest job, not one per run.
+	latest, err := h.jobStore.LatestByInventory(r.Context())
+	if err != nil {
+		zerolog.Ctx(r.Context()).Warn().Err(err).Msg("look up latest jobs for inventories page")
+	}
 	groupIdx := map[string]int{}
 	groups := make([]InventoryGroup, 0, len(views))
 	for i := range views {
-		row := h.buildDiscoveredRow(r, &views[i])
+		row := h.buildDiscoveredRow(r, &views[i], latest)
 		key := views[i].ConfigID()
 		if idx, ok := groupIdx[key]; ok {
 			groups[idx].Runs = append(groups[idx].Runs, row)
@@ -404,7 +409,9 @@ func (h *Handlers) buildInventoryGroups(r *http.Request, views []inventory.Merge
 	return groups
 }
 
-func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInventory) DiscoveredRowView {
+// buildDiscoveredRow builds one run's row; latest holds every run's
+// latest job (LatestByInventory).
+func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInventory, latest map[inventory.ID]jobs.Job) DiscoveredRowView {
 	row := DiscoveredRowView{MergedInventory: *v}
 	if info, ok := h.manager.Get(v.CompositeID()); ok {
 		row.Pinned = info.Pinned
@@ -415,16 +422,8 @@ func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInvent
 			row.AutoLoadBackoffUntil = info.AutoLoadBackoffUntil.UTC().Format("15:04:05")
 		}
 	}
-	j, err := h.jobStore.LatestForInventory(r.Context(), v.CompositeID())
-	switch {
-	case err == nil:
+	if j, ok := latest[v.CompositeID()]; ok {
 		row.LatestJob = &j
-	case errors.Is(err, jobs.ErrStoreNotFound):
-		// no jobs yet — fine
-	default:
-		zerolog.Ctx(r.Context()).Warn().Err(err).
-			Stringer("composite", v.CompositeID()).
-			Msg("look up latest job for inventories page")
 	}
 	cs := h.measureCacheSize(r, v.Inventory)
 	row.CacheBytes, row.CacheBytesH = cs.Bytes, cs.Human
@@ -435,10 +434,22 @@ func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInvent
 }
 
 func (h *Handlers) annotateGroupsFromConfig(ctx context.Context, groups []InventoryGroup) {
+	// One query for every configuration, not one per group.
+	cfgs, err := h.configStore.List(ctx)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("list configurations for inventories page")
+
+		return
+	}
+	type configKey struct{ source, name string }
+	byKey := make(map[configKey]*inventory.Config, len(cfgs))
+	for i := range cfgs {
+		byKey[configKey{cfgs[i].Source, cfgs[i].Name}] = &cfgs[i]
+	}
 	for i := range groups {
 		g := &groups[i]
-		cfg, err := h.configStore.Get(ctx, g.SourceBucket, g.Name)
-		if err != nil {
+		cfg, ok := byKey[configKey{g.SourceBucket, g.Name}]
+		if !ok {
 			continue
 		}
 		g.AutoLoad = cfg.AutoLoad
