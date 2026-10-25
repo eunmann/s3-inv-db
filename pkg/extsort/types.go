@@ -167,13 +167,19 @@ func decodeRunRecord(r runRecordSource, prev string, buf *[]byte, row *PrefixRow
 	prefix.Write(suffix)
 	row.Prefix = prefix.String()
 	depth, err := binary.ReadUvarint(r)
-	if err != nil || depth > math.MaxUint16 {
-		return fmt.Errorf("%w: depth %d: %w", errRunRecordCorrupt, depth, err)
+	if err != nil {
+		return fmt.Errorf("%w: depth: %w", errRunRecordCorrupt, err)
+	}
+	if depth > math.MaxUint16 {
+		return fmt.Errorf("%w: depth %d", errRunRecordCorrupt, depth)
 	}
 	row.Depth = uint16(depth)
 	mask, err := binary.ReadUvarint(r)
-	if err != nil || mask&^(1<<MaxTiers-1|runRecordTotals) != 0 {
-		return fmt.Errorf("%w: tier mask %#x: %w", errRunRecordCorrupt, mask, err)
+	if err != nil {
+		return fmt.Errorf("%w: tier mask: %w", errRunRecordCorrupt, err)
+	}
+	if mask&^(1<<MaxTiers-1|runRecordTotals) != 0 {
+		return fmt.Errorf("%w: tier mask %#x", errRunRecordCorrupt, mask)
 	}
 	for t := range MaxTiers {
 		if mask&(1<<t) == 0 {
