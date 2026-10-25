@@ -84,6 +84,46 @@ benchmark for it **in its own commit first**, add it to the matching
 suite file, then run the gate with that commit as `BASE` so both sides
 have it.
 
+## Cache, page and storage costs
+
+The gate suites time warm queries. Layout changes (index format, field
+widths, madvise hints) also change how many cache lines, pages and
+storage reads a query costs, which warm ns/op hides. Measure those with:
+
+- **`s3-inv-db stats --index <dir> --profile`**: the data's shape (tiers
+  per prefix, value bit widths, tree shape). Decide layouts from these
+  numbers, ideally on a real index, never from what the generator emits.
+- **`pkg/indexread` `BenchmarkCache*`** (lookup, tier breakdown, prefix
+  string, a 50-row browse page), each with uniform and Zipf-skewed keys,
+  `state=warm` and `state=cold` (index reopened and evicted from the
+  page cache before every op). `S3INV_LONG_BENCH=1` adds a ~10M-prefix
+  index. Per query they report:
+
+  | Metric | Source | Meaning |
+  |---|---|---|
+  | `ns/q` | timer | latency |
+  | `minflt/q`, `majflt/q` | `getrusage` | pages mapped from the page cache / read from storage |
+  | `ioKiB/q` | `/proc/self/io` `read_bytes` | storage read, readahead included |
+  | `<file>KiB/q` (cold) | `/proc/self/smaps` `Rss` | how much of each structure the queries mapped in |
+  | `cycles/q`, `instr/q`, `IPC`, `L1Dmiss/q`, `LLCmiss/q`, `dTLBmiss/q` | `perf_event_open` | CPU cache and TLB behaviour |
+
+  Run them pinned to the performance cores and A/B them like any suite:
+
+  ```sh
+  go test -c -o /tmp/indexread.test ./pkg/indexread
+  taskset -c 0-11 /tmp/indexread.test -test.run '^$' -test.bench '^BenchmarkCache' -test.benchtime 20x -test.count 6 2>/dev/null
+  ```
+
+The hardware counters need `kernel.perf_event_paranoid` ≤ 2 (`sudo
+sysctl kernel.perf_event_paranoid=2`; Ubuntu defaults to 4). Without
+it those metrics are left out and the rest still run. They count the
+benchmark's own thread around the measured loop only, so the fixture
+build is excluded, which `perf stat` on the whole binary would not do.
+For where in the code the misses happen, use `perf record -e
+<event>` or `perf mem` on the test binary; Go's own profilers (`pprof`,
+`go tool trace`) show CPU time and allocations but no cache, TLB or
+page-fault events.
+
 ## Exploratory benchmarks
 
 The other `Benchmark*` functions (grid sweeps, per-component micro

@@ -33,22 +33,38 @@ type gateFixture struct {
 
 var (
 	gateOnce sync.Once
-	gateDir  string
 	gateFix  *gateFixture
 	errGate  error
+
+	benchRootOnce sync.Once
+	benchRoot     string
 )
 
-// TestMain removes the gate fixture, a full 1M-object index, once the
-// binary's tests and benchmarks are done.
+// TestMain removes the benchmark fixtures, full 1M-object indexes, once
+// the binary's tests and benchmarks are done.
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if gateFix != nil {
 		_ = gateFix.idx.Close()
 	}
-	if gateDir != "" {
-		_ = os.RemoveAll(gateDir)
+	if benchRoot != "" {
+		_ = os.RemoveAll(benchRoot)
 	}
 	os.Exit(code)
+}
+
+// gateTempRoot is the directory every benchmark fixture of this binary
+// is built under; TestMain removes it.
+func gateTempRoot() string {
+	benchRootOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "s3inv-gate-")
+		if err != nil {
+			panic(fmt.Sprintf("mkdir temp: %v", err))
+		}
+		benchRoot = dir
+	})
+
+	return benchRoot
 }
 
 func gate(b *testing.B) *gateFixture {
@@ -62,33 +78,9 @@ func gate(b *testing.B) *gateFixture {
 }
 
 func buildGateFixture() (*gateFixture, error) {
-	dir, err := os.MkdirTemp("", "s3inv-gate-")
-	if err != nil {
-		return nil, fmt.Errorf("mkdir temp: %w", err)
-	}
-	gateDir = dir
-	indexDir := filepath.Join(dir, "index")
-	objs := benchutil.NewGenerator(benchutil.S3RealisticConfig(gateObjects)).Generate()
-	agg := extsort.NewAggregator(len(objs), 0)
-	for _, o := range objs {
-		agg.AddObject(o.Key, o.Size, o.TierID)
-	}
-	rows := agg.Drain()
-	extsort.SortPrefixRows(rows)
-	builder, err := extsort.NewIndexBuilder(indexDir, "")
-	if err != nil {
-		return nil, fmt.Errorf("new index builder: %w", err)
-	}
-	if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
-		return nil, fmt.Errorf("set present tiers: %w", err)
-	}
-	for _, row := range rows {
-		if err := builder.Add(row); err != nil {
-			return nil, fmt.Errorf("add row: %w", err)
-		}
-	}
-	if err := builder.Finalize(); err != nil {
-		return nil, fmt.Errorf("finalize index: %w", err)
+	indexDir := filepath.Join(gateTempRoot(), "index")
+	if err := buildIndexAt(indexDir, gateObjects); err != nil {
+		return nil, err
 	}
 	idx, err := indexread.Open(indexDir)
 	if err != nil {
@@ -110,6 +102,35 @@ func buildGateFixture() (*gateFixture, error) {
 	}
 
 	return f, nil
+}
+
+// buildIndexAt builds an index of objects S3-realistic, multi-tier
+// objects in indexDir.
+func buildIndexAt(indexDir string, objects int) error {
+	objs := benchutil.NewGenerator(benchutil.S3RealisticConfig(objects)).Generate()
+	agg := extsort.NewAggregator(len(objs), 0)
+	for _, o := range objs {
+		agg.AddObject(o.Key, o.Size, o.TierID)
+	}
+	rows := agg.Drain()
+	extsort.SortPrefixRows(rows)
+	builder, err := extsort.NewIndexBuilder(indexDir, "")
+	if err != nil {
+		return fmt.Errorf("new index builder: %w", err)
+	}
+	if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
+		return fmt.Errorf("set present tiers: %w", err)
+	}
+	for _, row := range rows {
+		if err := builder.Add(row); err != nil {
+			return fmt.Errorf("add row: %w", err)
+		}
+	}
+	if err := builder.Finalize(); err != nil {
+		return fmt.Errorf("finalize index: %w", err)
+	}
+
+	return nil
 }
 
 // BenchmarkGateStatsForPrefix: string → stats, the /api stats hot path.
