@@ -15,7 +15,7 @@ import (
 func BenchmarkMetricsMiddlewareParallel(b *testing.B) {
 	h, _ := newWiredHandlersWithConfigs(b, inventory.NewCatalog(nil))
 	handler := h.MetricsMiddleware("stats")(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	req := httptest.NewRequest(http.MethodGet, "/api/stats", http.NoBody)
+	req := httptest.NewRequestWithContext(b.Context(), http.MethodGet, "/api/stats", http.NoBody)
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		w := httptest.NewRecorder()
