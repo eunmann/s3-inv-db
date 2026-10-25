@@ -445,7 +445,7 @@ func referenceCompare(a, b *indexread.Index, q inventory.CompareQuery, cost inve
 		}
 		rows = append(rows, r)
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].name < rows[j].name }) // deterministic base
+	sort.Slice(rows, func(i, j int) bool { return s3Less(rows[i].name, rows[j].name) }) // deterministic base
 	desc := q.Dir == inventory.SortDirDesc
 	sort.SliceStable(rows, func(i, j int) bool {
 		x, y := rows[i], rows[j]
@@ -460,14 +460,14 @@ func referenceCompare(a, b *indexread.Index, q inventory.CompareQuery, cost inve
 		case inventory.SortColCost:
 			primary, equal = x.costDelta < y.costDelta, x.costDelta == y.costDelta
 		case inventory.SortColSegment:
-			primary, equal = x.name < y.name, x.name == y.name
+			primary, equal = s3Less(x.name, y.name), x.name == y.name
 		default:
 			ax, ay := abs64(x.byteDelta), abs64(y.byteDelta)
 			primary, equal = ax < ay, ax == ay
 			desc = true
 		}
 		if equal {
-			return x.name < y.name
+			return s3Less(x.name, y.name)
 		}
 		if desc {
 			return !primary
