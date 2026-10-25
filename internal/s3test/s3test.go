@@ -103,6 +103,31 @@ func Bucket(tb testing.TB, c *s3.Client) string {
 	return name
 }
 
+// FixtureBucket returns the bucket a benchmark keeps a seeded fixture
+// in, named after key. Unlike Bucket it is created only when missing and
+// never emptied, so later runs against the same server reuse what an
+// earlier run uploaded instead of seeding it again. The A/B gate starts
+// a fresh server per run, so fixtures never outlive it there.
+func FixtureBucket(tb testing.TB, c *s3.Client, key string) string {
+	tb.Helper()
+	localEndpoint(tb)
+	name := "fixture-" + strings.Trim(bucketSanitizer.ReplaceAllString(strings.ToLower(key), "-"), "-")
+	if len(name) > maxBucketNameLen {
+		tb.Fatalf("fixture key %q makes a bucket name longer than %d", key, maxBucketNameLen)
+	}
+	if _, err := c.HeadBucket(context.Background(), &s3.HeadBucketInput{Bucket: aws.String(name)}); err == nil {
+		return name
+	}
+	if _, err := c.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: aws.String(name)}); err != nil {
+		tb.Fatalf("CreateBucket %s: %v", name, err)
+	}
+
+	return name
+}
+
+// maxBucketNameLen is S3's limit on a bucket name.
+const maxBucketNameLen = 63
+
 func empty(tb testing.TB, c *s3.Client, bucket string) {
 	tb.Helper()
 	ctx := context.Background()
