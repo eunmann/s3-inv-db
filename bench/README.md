@@ -117,13 +117,20 @@ storage reads a query costs, which warm ns/op hides. Measure those with:
 
 The hardware counters need `kernel.perf_event_paranoid` ≤ 2 (`sudo
 sysctl kernel.perf_event_paranoid=2`; Ubuntu defaults to 4). Without
-it those metrics are left out and the rest still run. They count the
-benchmark's own thread around the measured loop only, so the fixture
-build is excluded, which `perf stat` on the whole binary would not do.
-For where in the code the misses happen, use `perf record -e
-<event>` or `perf mem` on the test binary; Go's own profilers (`pprof`,
-`go tool trace`) show CPU time and allocations but no cache, TLB or
-page-fault events.
+it those metrics are left out and the rest still run. Go has no
+built-in access to these counters: `pprof` and `go tool trace` show CPU
+time, allocations and scheduling, but no cache, TLB or page-fault
+events. Linux's `perf` is the standard tool, and the in-process
+counters open the same `perf_event_open` events. `perf stat` can scope
+counting to a region (`--delay=-1 --control fd:...` starts with the
+counters disabled and the program enables them), but it reports one
+total per run. The in-process counters count the benchmark's own thread
+around each sub-benchmark's measured loop and report per query through
+`b.ReportMetric`, so `benchstat` compares them entry by entry. `perf
+stat -e <event>` on the test binary with one `-test.bench` entry
+cross-checks them, counting the fixture build and setup too. For where
+in the code the misses happen, use `perf record -e <event>` or `perf
+mem` on the test binary.
 
 ## Exploratory benchmarks
 
