@@ -491,7 +491,9 @@ func (c *ingestConfig) formatString() string {
 //     (only mutated at flush time, never on the hot AddObject path)
 //   - Atomic counters for cross-worker progress (objectsProcessed,
 //     chunksProcessed, bytesProcessed, flushCount)
-//   - Errgroup for error propagation; first error cancels the rest
+//   - First worker error cancels the rest; the loop returns only after
+//     every worker and fetcher has, so no download is still writing to
+//     scratch when Run removes it
 func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
 	log := zerolog.Ctx(ctx)
 	totalChunks := len(cfg.manifest.Files)
@@ -532,6 +534,8 @@ func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
 	go p.sendIngestJobs(ctx, cfg, jobs)
 
 	wg.Wait()
+	cancel()
+	fetchers.Wait()
 	close(errCh)
 
 	if err := firstCause(errCh); err != nil {
