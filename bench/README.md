@@ -57,6 +57,16 @@ is already set.
 A regression is merged only with an explicit justification in the
 commit message (CLAUDE.md, Performance & Benchmarks).
 
+On a laptop, sustained back-to-back runs can trip power or thermal
+limits, and the lower clock can land on one side only. Interleaving
+doesn't cancel that: in #61, Go 1.27's runs dropped from ~3.5 to
+~3.1 GHz from round 9 onward while the interleaved 1.26 runs kept
+their clock, which showed up as a +3.4% `sec/op` "regression" with
+identical cycle and instruction counts. When `sec/op` moves with no
+matching change in `B/op` or `allocs/op`, rerun with
+`BENCH_COOLDOWN=20` (seconds slept before every run) before believing
+it.
+
 A Go toolchain upgrade changes generated code everywhere, so it runs
 both gates with the old toolchain on the base side:
 `BASE_GOTOOLCHAIN=go1.26.10 make bench-query BASE=main`. Without it,
