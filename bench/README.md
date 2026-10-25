@@ -60,10 +60,13 @@ Results land in `bench/ab/<timestamp>/` (gitignored): raw `base.txt` /
 `report.txt` and `report.csv`. Entries tagged `integration` need a local
 S3 server; the script starts one in Docker unless `AWS_ENDPOINT_URL_S3`
 is already set. The pipeline benchmarks seed each inventory fixture
-(shape, size, chunk count) once per server, into a `fixture-*` bucket,
-and every later run reuses it, so rounds don't re-upload. A server the
-script starts is thrown away with the run. Against your own server,
-delete the `fixture-*` buckets after changing the seeder.
+(shape, size, chunk count) once per server and side, into a `fixture-*`
+bucket, and every later run of that side reuses it, so rounds don't
+re-upload. The script sets `S3INV_FIXTURE_TAG` to `base-<sha>` or `head`
+for each side's runs, so head always builds from its own seeder's
+inventory, even when the change under test is to the seeder. A server
+the script starts is thrown away with the run. Against your own server,
+delete the `fixture-*-head` buckets after changing the seeder.
 
 A regression is merged only with an explicit justification in the
 commit message (CLAUDE.md, Performance & Benchmarks).

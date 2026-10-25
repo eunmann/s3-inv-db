@@ -106,10 +106,11 @@ func BenchmarkPipelineSlowS3(b *testing.B) {
 const fixtureInfoKey = "fixture.json"
 
 // seededInventory returns the fixture inventory for preset, size and
-// chunk count, seeding it into the local S3 server only once per server:
-// every later run, either side of an A/B gate included, reads the same
-// upload. Seeding goes straight to the local server, so a slow client's
-// link only slows the build's reads.
+// chunk count, seeding it into the local S3 server only once per server
+// and A/B side: every later run of that side reads the same upload, and
+// each side builds from its own seeder's output. Seeding goes straight
+// to the local server, so a slow client's link only slows the build's
+// reads.
 func seededInventory(b *testing.B, preset string, numObjects, chunks int) seeder.InventoryInfo {
 	b.Helper()
 	raw := s3test.RawClient(b)
