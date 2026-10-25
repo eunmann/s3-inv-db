@@ -237,7 +237,7 @@ func (h *Handlers) browseChild(idx *indexread.Index, p uint64, parent string) (B
 		ObjectCountH: humanfmt.CountUint64(stats.ObjectCount),
 		TotalBytes:   stats.TotalBytes,
 		TotalBytesH:  humanfmt.BytesUint64(stats.TotalBytes),
-		HasChildren:  idx.MaxDepthInSubtree(p) > idx.Depth(p),
+		HasChildren:  idx.HasChildren(p),
 	}
 	if !idx.HasTierData() {
 		child.MonthlyCostFormatted = missingValueGlyph

@@ -96,7 +96,7 @@ func buildGateFixture() (*gateFixture, error) {
 		}
 		f.prefixes = append(f.prefixes, p)
 		f.positions = append(f.positions, pos)
-		if len(f.parents) < gateParents && idx.MaxDepthInSubtree(pos) > idx.Depth(pos) {
+		if len(f.parents) < gateParents && idx.HasChildren(pos) {
 			f.parents = append(f.parents, pos)
 		}
 	}

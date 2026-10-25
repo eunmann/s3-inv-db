@@ -5,25 +5,31 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
+	"os"
+	"path/filepath"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-// TierStatsReader reads per-prefix tier breakdowns from either the
-// dense tier_stats_row.bin or the sparse pair (tier_stats_sparse.bin
-// + tier_stats_sparse.off.u64). Exactly one is on disk per index;
-// OpenTierStats picks based on file presence.
+// TierStatsReader reads per-prefix tier breakdowns. It derives what
+// the layout doesn't store (see tierstats_write.go) from the prefix's
+// core row: its totals and tier mask.
 type TierStatsReader struct {
-	manifest     *tiers.Manifest
-	rowReader    *TierStatsRowReader
-	sparseReader *TierStatsSparseReader
+	manifest *tiers.Manifest
+	core     *CoreStatsReader
+	// One of: nothing (a single tier), dense, or multi + rows + offsets.
+	dense   *slotFileReader
+	multi   *slotFileReader
+	rows    *rankedBitsReader
+	offsets *ArrayReader
+	slots   int
 }
 
-// OpenTierStats opens the tier-stats file from an index directory.
-// Returns an empty reader (manifest with zero tiers) when no tier
-// data exists, so callers can dispatch on
-// (*TierStatsReader).HasTierData() rather than nil-checking.
-func OpenTierStats(indexDir string) (*TierStatsReader, error) {
+// OpenTierStats opens the tier stats of the index in indexDir, whose
+// core stats core is already open (the reader keeps using it). Returns
+// an empty reader (no tiers) when the index has no tier data, so
+// callers can dispatch on HasTierData rather than nil-checking.
+func OpenTierStats(indexDir string, core *CoreStatsReader) (*TierStatsReader, error) {
 	manifest, err := tiers.ReadManifest(indexDir)
 	if err != nil {
 		return nil, fmt.Errorf("read tier manifest: %w", err)
@@ -31,34 +37,65 @@ func OpenTierStats(indexDir string) (*TierStatsReader, error) {
 	if manifest == nil || len(manifest.Tiers) == 0 {
 		return &TierStatsReader{manifest: &tiers.Manifest{}}, nil
 	}
-
-	if tierStatsSparsePresent(indexDir) {
-		sparse, err := OpenTierStatsSparse(indexDir, len(manifest.Tiers))
+	r := &TierStatsReader{manifest: manifest, core: core, slots: len(manifest.Tiers)}
+	if r.slots > maxTierSlots {
+		return nil, fmt.Errorf("%w: %d tiers", errTierStatsLayout, r.slots)
+	}
+	if r.slots == 1 {
+		return r, nil
+	}
+	dir := filepath.Join(indexDir, TierStatsDir)
+	if _, err := os.Stat(filepath.Join(dir, TierDenseFile)); err == nil {
+		r.dense, err = openSlotFile(filepath.Join(dir, TierDenseFile))
 		if err != nil {
-			return nil, fmt.Errorf("open tier stats sparse: %w", err)
+			return nil, err
+		}
+		if err := r.checkDense(); err != nil {
+			return nil, errors.Join(err, r.Close())
 		}
 
-		return &TierStatsReader{
-			manifest:     manifest,
-			sparseReader: sparse,
-		}, nil
+		return r, nil
+	}
+	if err := r.openMulti(dir); err != nil {
+		return nil, errors.Join(err, r.Close())
 	}
 
-	rowReader, err := OpenTierStatsRow(indexDir)
-	if err != nil {
-		return nil, fmt.Errorf("open tier stats row: %w", err)
-	}
-	if rowReader.SlotCount() != len(manifest.Tiers) {
-		rowReader.Close()
+	return r, nil
+}
 
-		return nil, fmt.Errorf("%w: row file has %d slots, manifest has %d tiers",
-			errTierStatsRowWidth, rowReader.SlotCount(), len(manifest.Tiers))
+func (r *TierStatsReader) checkDense() error {
+	wantRow := (r.slots - 1) * r.dense.width.slotBytes()
+	if r.dense.count != r.core.Count() || r.dense.rowWidth != wantRow {
+		return fmt.Errorf("%w: dense has %d rows of %d bytes, want %d of %d",
+			errTierStatsLayout, r.dense.count, r.dense.rowWidth, r.core.Count(), wantRow)
 	}
 
-	return &TierStatsReader{
-		manifest:  manifest,
-		rowReader: rowReader,
-	}, nil
+	return nil
+}
+
+func (r *TierStatsReader) openMulti(dir string) error {
+	var err error
+	if r.multi, err = openSlotFile(filepath.Join(dir, TierMultiFile)); err != nil {
+		return err
+	}
+	if r.rows, err = openRankedBits(filepath.Join(dir, TierMultiRowsFile)); err != nil {
+		return err
+	}
+	if r.offsets, err = OpenArray(filepath.Join(dir, TierMultiOffsetsFile)); err != nil {
+		return fmt.Errorf("open %s: %w", TierMultiOffsetsFile, err)
+	}
+	if r.rows.n != r.core.Count() {
+		return fmt.Errorf("%w: %s has %d rows, index has %d", errTierStatsLayout, TierMultiRowsFile, r.rows.n, r.core.Count())
+	}
+	multiRows := r.rows.rank(r.rows.n)
+	if r.offsets.Count() != multiRows+1 {
+		return fmt.Errorf("%w: %d offsets for %d multi-tier rows", errTierStatsLayout, r.offsets.Count(), multiRows)
+	}
+	if last := r.offsets.UnsafeGetU64(multiRows); last != r.multi.count {
+		return fmt.Errorf("%w: offsets end at slot %d of %d", errTierStatsLayout, last, r.multi.count)
+	}
+
+	return nil
 }
 
 // TierBreakdown represents statistics for a single tier.
@@ -81,79 +118,71 @@ func (r *TierStatsReader) BreakdownAll(pos uint64) []TierBreakdown {
 	return r.breakdownAt(pos, false)
 }
 
+// breakdownAt makes one allocation, the result slice; the slots decode
+// into arrays on the stack.
 func (r *TierStatsReader) breakdownAt(pos uint64, nonZeroOnly bool) []TierBreakdown {
-	if r == nil || r.manifest == nil {
+	if !r.HasTierData() {
 		return nil
 	}
-	if r.sparseReader != nil {
-		return r.sparseBreakdownAt(pos, nonZeroOnly)
+	if pos >= r.core.Count() {
+		return make([]TierBreakdown, 0, r.slots)
 	}
-	if r.rowReader == nil {
-		return nil
+	var counts, bytesArr [maxTierSlots]uint64
+	mask := r.fill(pos, &counts, &bytesArr)
+	n := r.slots
+	if nonZeroOnly {
+		n = bits.OnesCount16(mask)
 	}
-	breakdown := make([]TierBreakdown, 0, len(r.manifest.Tiers))
-	if pos >= r.rowReader.Count() {
-		return breakdown
-	}
-	row := r.rowReader.UnsafeRow(pos)
-	// Slot order in the packed file is manifest order, not tier-ID
-	// order: slot i corresponds to manifest.Tiers[i].
-	for slotIdx, tier := range r.manifest.Tiers {
-		off := slotIdx * TierStatsSlotBytes
-		count := binary.LittleEndian.Uint64(row[off : off+8])
-		bytes := binary.LittleEndian.Uint64(row[off+8 : off+16])
-		if nonZeroOnly && bytes == 0 && count == 0 {
+	breakdown := make([]TierBreakdown, 0, n)
+	for slot, tier := range r.manifest.Tiers {
+		if nonZeroOnly && mask&(1<<slot) == 0 {
 			continue
 		}
 		breakdown = append(breakdown, TierBreakdown{
 			TierID:      tier.ID,
 			TierName:    tier.Name,
-			Bytes:       bytes,
-			ObjectCount: count,
+			Bytes:       bytesArr[slot],
+			ObjectCount: counts[slot],
 		})
 	}
 
 	return breakdown
 }
 
-// sparseBreakdownAt produces a TierBreakdown slice from the sparse
-// reader. For nonZeroOnly=true (Breakdown), only populated slots are
-// returned. For nonZeroOnly=false (BreakdownAll), absent slots are
-// emitted as zero-valued entries in their dense position.
-//
-// Hot path makes a single allocation (the result slice). The bitmap
-// + populated cells are decoded into a fixed-size on-stack array,
-// matching the dense path's allocation profile.
-func (r *TierStatsReader) sparseBreakdownAt(pos uint64, nonZeroOnly bool) []TierBreakdown {
-	if pos >= r.sparseReader.Count() {
-		return make([]TierBreakdown, 0, len(r.manifest.Tiers))
+// fill decodes pos's per-slot stats and returns its tier mask.
+func (r *TierStatsReader) fill(pos uint64, counts, bytesArr *[maxTierSlots]uint64) uint16 {
+	mask := r.core.UnsafeTierMask(pos)
+	if mask == 0 {
+		return 0
 	}
-
-	// tierStatsSparseBitmapBytes*8 == 16, well above the project's
-	// 13-tier maximum, so this stack array always covers every slot.
-	const maxSlots = tierStatsSparseBitmapBytes * 8
-	var counts, bytesArr [maxSlots]uint64
-	bitmap := r.sparseReader.fillRow(pos, &counts, &bytesArr)
-
-	estCap := bits.OnesCount16(bitmap)
-	if !nonZeroOnly {
-		estCap = len(r.manifest.Tiers)
-	}
-	breakdown := make([]TierBreakdown, 0, estCap)
-	for slotIdx, tier := range r.manifest.Tiers {
-		populated := bitmap&(1<<slotIdx) != 0
-		if nonZeroOnly && !populated {
-			continue
+	totalCount, totalBytes := r.core.UnsafeStats(pos)
+	derived := bits.Len16(mask) - 1
+	var sumCount, sumBytes uint64
+	switch {
+	case r.dense != nil:
+		derived = r.slots - 1
+		for slot := range r.slots - 1 {
+			c, b := r.dense.slot(pos*uint64(r.dense.rowWidth) + uint64(slot*r.dense.width.slotBytes()))
+			counts[slot], bytesArr[slot] = c, b
+			sumCount += c
+			sumBytes += b
 		}
-		breakdown = append(breakdown, TierBreakdown{
-			TierID:      tier.ID,
-			TierName:    tier.Name,
-			Bytes:       bytesArr[slotIdx],
-			ObjectCount: counts[slotIdx],
-		})
+	case bits.OnesCount16(mask) >= 2:
+		i := r.offsets.UnsafeGetU64(r.rows.rank(pos))
+		stored := mask &^ (1 << derived)
+		for stored != 0 {
+			slot := bits.TrailingZeros16(stored)
+			stored &= stored - 1
+			c, b := r.multi.slot(i * uint64(r.multi.width.slotBytes()))
+			counts[slot], bytesArr[slot] = c, b
+			sumCount += c
+			sumBytes += b
+			i++
+		}
 	}
+	counts[derived], bytesArr[derived] = totalCount-sumCount, totalBytes-sumBytes
 
-	return breakdown
+	return mask
 }
 
 // HasTierData reports whether any tier data is available.
@@ -161,20 +190,157 @@ func (r *TierStatsReader) HasTierData() bool {
 	return r != nil && r.manifest != nil && len(r.manifest.Tiers) > 0
 }
 
-// Close releases the mmap'd row / sparse files.
+// Close releases the mapped files. The core stats reader is the
+// caller's to close.
 func (r *TierStatsReader) Close() error {
 	if r == nil {
 		return nil
 	}
-	var rowErr, sparseErr error
-	if r.rowReader != nil {
-		rowErr = r.rowReader.Close()
-		r.rowReader = nil
+	err := errors.Join(r.dense.close(), r.multi.close(), r.rows.close(), r.offsets.Close())
+	r.dense, r.multi, r.rows, r.offsets = nil, nil, nil, nil
+
+	return err
+}
+
+// slotFileReader reads tier_dense.bin or tier_multi.bin.
+type slotFileReader struct {
+	mmap     *MmapFile
+	count    uint64 // rows (dense) or slots (multi)
+	rowWidth int
+	width    tierSlotWidths
+}
+
+func openSlotFile(path string) (*slotFileReader, error) {
+	name := filepath.Base(path)
+	mmap, err := OpenMmap(path)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", name, err)
 	}
-	if r.sparseReader != nil {
-		sparseErr = r.sparseReader.Close()
-		r.sparseReader = nil
+	r, err := newSlotFileReader(mmap)
+	if err != nil {
+		mmap.Close()
+
+		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 
-	return errors.Join(rowErr, sparseErr)
+	return r, nil
+}
+
+func newSlotFileReader(mmap *MmapFile) (*slotFileReader, error) {
+	data := mmap.Data()
+	if len(data) < tierSlotDataOff {
+		return nil, ErrInvalidHeader
+	}
+	header, err := DecodeHeader(data[:HeaderSize])
+	if err != nil {
+		return nil, fmt.Errorf("decode header: %w", err)
+	}
+	if header.Magic != MagicNumber {
+		return nil, ErrMagicMismatch
+	}
+	if header.Version != Version {
+		return nil, ErrVersionMismatch
+	}
+	w := tierSlotWidths{count: data[HeaderSize], bytes: data[HeaderSize+1]}
+	if w.count < 1 || w.count > 8 || w.bytes < 1 || w.bytes > 8 {
+		return nil, fmt.Errorf("%w: slot widths %d, %d", errTierStatsLayout, w.count, w.bytes)
+	}
+	want := int64(tierSlotDataOff) + int64(header.Count)*int64(header.Width) + coreStatsReadTailPad
+	if int64(len(data)) < want {
+		return nil, fmt.Errorf("%w: %d < %d", ErrFileTooSmall, len(data), want)
+	}
+
+	return &slotFileReader{mmap: mmap, count: header.Count, rowWidth: int(header.Width), width: w}, nil
+}
+
+// slot decodes the slot at byte offset off of the slot data.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func (r *slotFileReader) slot(off uint64) (uint64, uint64) {
+	data := r.mmap.Data()[tierSlotDataOff+off:]
+	c := binary.LittleEndian.Uint64(data) & widthMask[r.width.count]
+	b := binary.LittleEndian.Uint64(data[r.width.count:]) & widthMask[r.width.bytes]
+
+	return c, b
+}
+
+func (r *slotFileReader) close() error {
+	if r == nil {
+		return nil
+	}
+
+	return r.mmap.Close()
+}
+
+// rankedBitsReader reads a bit vector written by writeRankedBits.
+type rankedBitsReader struct {
+	mmap  *MmapFile
+	n     uint64
+	words uint64
+}
+
+func openRankedBits(path string) (*rankedBitsReader, error) {
+	name := filepath.Base(path)
+	mmap, err := OpenMmap(path)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", name, err)
+	}
+	data := mmap.Data()
+	fail := func(err error) (*rankedBitsReader, error) {
+		mmap.Close()
+
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if len(data) < HeaderSize {
+		return fail(ErrInvalidHeader)
+	}
+	header, err := DecodeHeader(data[:HeaderSize])
+	if err != nil {
+		return fail(fmt.Errorf("decode header: %w", err))
+	}
+	if header.Magic != MagicNumber {
+		return fail(ErrMagicMismatch)
+	}
+	if header.Version != Version {
+		return fail(ErrVersionMismatch)
+	}
+	words := bitWords(header.Count)
+	want := uint64(HeaderSize) + 8*words + 8*((words+rankBlockWords-1)/rankBlockWords)
+	if uint64(len(data)) < want {
+		return fail(fmt.Errorf("%w: %d < %d", ErrFileTooSmall, len(data), want))
+	}
+
+	return &rankedBitsReader{mmap: mmap, n: header.Count, words: words}, nil
+}
+
+func (r *rankedBitsReader) word(i uint64) uint64 {
+	return binary.LittleEndian.Uint64(r.mmap.Data()[HeaderSize+8*i:])
+}
+
+// rank returns the set bits before bit i, for i in [0, n].
+func (r *rankedBitsReader) rank(i uint64) uint64 {
+	if r.words == 0 {
+		return 0
+	}
+	w := i / 64
+	// i == n on a block boundary is past the last directory entry;
+	// count on from the last block instead.
+	block := min(w/rankBlockWords, (r.words-1)/rankBlockWords)
+	count := binary.LittleEndian.Uint64(r.mmap.Data()[HeaderSize+8*(r.words+block):])
+	for j := block * rankBlockWords; j < w; j++ {
+		count += uint64(bits.OnesCount64(r.word(j)))
+	}
+	if bit := i % 64; bit != 0 {
+		count += uint64(bits.OnesCount64(r.word(w) & (1<<bit - 1)))
+	}
+
+	return count
+}
+
+func (r *rankedBitsReader) close() error {
+	if r == nil {
+		return nil
+	}
+
+	return r.mmap.Close()
 }

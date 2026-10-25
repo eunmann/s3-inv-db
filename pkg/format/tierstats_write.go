@@ -1,0 +1,541 @@
+package format
+
+import (
+	"bufio"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"math/bits"
+	"os"
+	"path/filepath"
+	"slices"
+
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
+)
+
+// Tier stats store only what a prefix's core row doesn't already give.
+// The core row carries the prefix's totals and its tier mask (the tier
+// slots holding data), and every prefix's per-tier counts and bytes sum
+// to its totals. So a prefix with one tier needs nothing more, and in a
+// prefix with several, the last tier is the totals minus the others.
+// The builder picks the smaller of two layouts for the rest, from exact
+// sizes computed over the whole index:
+//
+//   - multi (tier_multi.bin + .rows + .off.u64): for every prefix with
+//     two or more tiers, the slots of every tier in its mask except the
+//     highest, in slot order. A bit vector marks those prefixes; its
+//     rank locates a prefix's run of slots through the offsets array.
+//   - dense (tier_dense.bin): every prefix stores slots 0..T-2 of the T
+//     present tiers, zeros included; slot T-1 is derived.
+//
+// An index with one present tier writes no tier files. Each stored slot
+// is a count then bytes, little-endian, at the widths the layout's
+// largest stored values need, recorded in a 2-byte descriptor.
+const (
+	TierMultiFile        = "tier_multi.bin"
+	TierMultiRowsFile    = "tier_multi.rows"
+	TierMultiOffsetsFile = "tier_multi.off.u64"
+	TierDenseFile        = "tier_dense.bin"
+
+	// TierScratchFile holds every prefix's full slots while the build
+	// streams; Close converts it to the chosen layout and removes it.
+	tierScratchFile = "tier_scratch.bin"
+)
+
+// tierSlotDescBytes is the slot-width descriptor after the Header of
+// tier_multi.bin and tier_dense.bin: the count width, then the bytes
+// width.
+const tierSlotDescBytes = 2
+
+// tierSlotDataOff is where slot data starts in those files.
+const tierSlotDataOff = HeaderSize + tierSlotDescBytes
+
+// maxTierSlots is the most tier slots a mask can describe.
+const maxTierSlots = 16
+
+// scratchSlotBytes is one slot in the scratch file: two uint64s.
+const scratchSlotBytes = 16
+
+// wordBits is the bits in one bit-vector word.
+const wordBits = 64
+
+// bitWords is the uint64 words a bit vector of n bits takes.
+func bitWords(n uint64) uint64 { return (n + wordBits - 1) / wordBits }
+
+// Sentinel errors.
+var (
+	errTierStatsLayout    = errors.New("tier stats layout invalid")
+	errNoTiersDeclared    = errors.New("tier stats writer requires at least one present tier")
+	errUndeclaredTierData = errors.New("prefix has data for a tier absent from the declared present set")
+	errTierSumMismatch    = errors.New("prefix tier stats don't sum to its totals")
+)
+
+// tierSlotWidths is the byte width of a stored slot's count and bytes.
+type tierSlotWidths struct{ count, bytes uint8 }
+
+func (w tierSlotWidths) slotBytes() int { return int(w.count) + int(w.bytes) }
+
+// widened returns the widths grown to hold one more stored slot.
+func (w tierSlotWidths) widened(count, bytes uint64) tierSlotWidths {
+	return tierSlotWidths{
+		count: max(w.count, byteWidthOf(count)),
+		bytes: max(w.bytes, byteWidthOf(bytes)),
+	}
+}
+
+// TierStatsWriter streams per-prefix tier stats during a build and, on
+// Close, writes them in the smaller layout. Add returns the prefix's
+// tier mask for its core row.
+type TierStatsWriter struct {
+	dir         string
+	scratchPath string
+	scratch     *os.File
+	w           *bufio.Writer
+	rowBuf      []byte
+	// slotByTier maps a tier ID to its slot, or -1 when the tier is
+	// absent from the declared present set.
+	slotByTier [tiers.NumTiers]int
+	slots      int
+	rows       uint64
+	// For the multi layout: prefixes with two or more tiers, and the
+	// slots they store.
+	multiRows  uint64
+	multiSlots uint64
+	multiW     tierSlotWidths
+	denseW     tierSlotWidths
+	// force overrides the size-based choice; tests only.
+	force tierLayout
+}
+
+// tierLayout names a stored layout.
+type tierLayout int
+
+const (
+	tierLayoutAuto tierLayout = iota
+	tierLayoutDense
+	tierLayoutMulti
+)
+
+// choose returns the smaller layout; dense on a tie (no indirection).
+func (w *TierStatsWriter) choose() tierLayout {
+	if w.force != tierLayoutAuto {
+		return w.force
+	}
+	if w.denseSize() <= w.multiSize() {
+		return tierLayoutDense
+	}
+
+	return tierLayoutMulti
+}
+
+// NewTierStatsWriter creates a writer for the given present tiers (the
+// tiers with data anywhere in the index), which become tier slots in
+// tier-ID order. With one present tier nothing is written to disk.
+func NewTierStatsWriter(outDir string, present []tiers.ID) (*TierStatsWriter, error) {
+	if len(present) == 0 {
+		return nil, errNoTiersDeclared
+	}
+	sorted := slices.Compact(slices.Sorted(slices.Values(present)))
+	if len(sorted) > maxTierSlots {
+		return nil, fmt.Errorf("%w: %d tiers", errTierStatsLayout, len(sorted))
+	}
+	for _, id := range sorted {
+		if int(id) >= int(tiers.NumTiers) {
+			return nil, fmt.Errorf("%w: tier id %d out of range", errTierStatsLayout, id)
+		}
+	}
+	w := &TierStatsWriter{
+		dir:   filepath.Join(outDir, TierStatsDir),
+		slots: len(sorted),
+		// A field is at least one byte wide, even when every stored value
+		// is zero (or nothing is stored).
+		multiW: tierSlotWidths{count: 1, bytes: 1},
+		denseW: tierSlotWidths{count: 1, bytes: 1},
+	}
+	for tid := range w.slotByTier {
+		w.slotByTier[tid] = slices.Index(sorted, tiers.ID(tid))
+	}
+	if w.slots == 1 {
+		return w, nil
+	}
+	if err := os.MkdirAll(w.dir, DirPerm); err != nil {
+		return nil, fmt.Errorf("create tier_stats dir: %w", err)
+	}
+	w.scratchPath = filepath.Join(w.dir, tierScratchFile)
+	f, err := os.Create(w.scratchPath)
+	if err != nil {
+		return nil, fmt.Errorf("create tier stats scratch: %w", err)
+	}
+	w.scratch = f
+	w.w = bufio.NewWriterSize(f, writeBufSize)
+	w.rowBuf = make([]byte, w.slots*scratchSlotBytes)
+
+	return w, nil
+}
+
+// writeBufSize is the buffered-writer size for the scratch file.
+const writeBufSize = 1 << 20
+
+// Add records the next prefix's tier stats, indexed by tier ID, and
+// returns its tier mask. It fails when a tier outside the declared set
+// has data (the counts would be lost) or when the tiers don't sum to
+// the prefix's totals (a derived tier would be wrong).
+func (w *TierStatsWriter) Add(counts, bytes *[tiers.NumTiers]uint64, totalCount, totalBytes uint64) (uint16, error) {
+	var mask uint16
+	var slotCount, slotBytes [maxTierSlots]uint64
+	var sumCount, sumBytes, carryCount, carryBytes uint64
+	for id := range tiers.NumTiers {
+		c, b := counts[id], bytes[id]
+		if c == 0 && b == 0 {
+			continue
+		}
+		slot := w.slotByTier[id]
+		if slot < 0 {
+			return 0, fmt.Errorf("%w: tier %d", errUndeclaredTierData, id)
+		}
+		mask |= 1 << slot
+		slotCount[slot], slotBytes[slot] = c, b
+		var cc, cb uint64
+		sumCount, cc = bits.Add64(sumCount, c, 0)
+		sumBytes, cb = bits.Add64(sumBytes, b, 0)
+		carryCount |= cc
+		carryBytes |= cb
+	}
+	if carryCount != 0 || carryBytes != 0 || sumCount != totalCount || sumBytes != totalBytes {
+		return 0, fmt.Errorf("%w: tiers %d objects / %d bytes, totals %d / %d",
+			errTierSumMismatch, sumCount, sumBytes, totalCount, totalBytes)
+	}
+	w.rows++
+	if w.slots == 1 {
+		return mask, nil
+	}
+
+	if n := bits.OnesCount16(mask); n >= 2 {
+		w.multiRows++
+		w.multiSlots += uint64(n - 1)
+		stored := mask &^ (1 << (bits.Len16(mask) - 1))
+		for stored != 0 {
+			slot := bits.TrailingZeros16(stored)
+			stored &= stored - 1
+			w.multiW = w.multiW.widened(slotCount[slot], slotBytes[slot])
+		}
+	}
+	for slot := range w.slots - 1 {
+		w.denseW = w.denseW.widened(slotCount[slot], slotBytes[slot])
+	}
+	for slot := range w.slots {
+		off := slot * scratchSlotBytes
+		binary.LittleEndian.PutUint64(w.rowBuf[off:], slotCount[slot])
+		binary.LittleEndian.PutUint64(w.rowBuf[off+8:], slotBytes[slot])
+	}
+	if _, err := w.w.Write(w.rowBuf); err != nil {
+		return 0, fmt.Errorf("write tier stats scratch: %w", err)
+	}
+
+	return mask, nil
+}
+
+// multiSize and denseSize are the exact on-disk sizes of each layout.
+func (w *TierStatsWriter) multiSize() uint64 {
+	slotsFile := uint64(tierSlotDataOff) + w.multiSlots*uint64(w.multiW.slotBytes()) + coreStatsReadTailPad
+	words := bitWords(w.rows)
+	rowsFile := uint64(HeaderSize) + 8*words + 8*((words+rankBlockWords-1)/rankBlockWords)
+	offsetsFile := uint64(HeaderSize) + (w.multiRows+1)*uint64(byteWidthOf(w.multiSlots)) + arrayTailPad
+
+	return slotsFile + rowsFile + offsetsFile
+}
+
+func (w *TierStatsWriter) denseSize() uint64 {
+	return uint64(tierSlotDataOff) + w.rows*uint64(w.slots-1)*uint64(w.denseW.slotBytes()) + coreStatsReadTailPad
+}
+
+// Close writes the smaller layout and removes the scratch file. On an
+// error every file it started is removed.
+func (w *TierStatsWriter) Close() error {
+	if w.scratch == nil {
+		return nil
+	}
+	err := w.w.Flush()
+	err = errors.Join(err, w.scratch.Close())
+	w.scratch = nil
+	if err == nil {
+		if w.choose() == tierLayoutDense {
+			err = w.writeDense()
+		} else {
+			err = w.writeMulti()
+		}
+	}
+
+	return errors.Join(err, removeIfErr(w.scratchPath))
+}
+
+// Abort removes the scratch file without writing a layout.
+func (w *TierStatsWriter) Abort() error {
+	if w.scratch == nil {
+		return nil
+	}
+	err := w.scratch.Close()
+	w.scratch = nil
+
+	return errors.Join(err, removeIfErr(w.scratchPath))
+}
+
+// scratchRows calls fn with each prefix's slots from the scratch file.
+func (w *TierStatsWriter) scratchRows(fn func(row []byte) error) error {
+	f, err := os.Open(w.scratchPath)
+	if err != nil {
+		return fmt.Errorf("open tier stats scratch: %w", err)
+	}
+	defer f.Close()
+	r := bufio.NewReaderSize(f, writeBufSize)
+	row := make([]byte, w.slots*scratchSlotBytes)
+	for range w.rows {
+		if _, err := io.ReadFull(r, row); err != nil {
+			return fmt.Errorf("read tier stats scratch: %w", err)
+		}
+		if err := fn(row); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func scratchSlot(row []byte, slot int) (uint64, uint64) {
+	off := slot * scratchSlotBytes
+
+	return binary.LittleEndian.Uint64(row[off:]), binary.LittleEndian.Uint64(row[off+8:])
+}
+
+// slotFile writes a tier_multi.bin / tier_dense.bin: Header, slot-width
+// descriptor, slots, tail pad.
+type slotFile struct {
+	path  string
+	f     *os.File
+	bw    *bufio.Writer
+	width tierSlotWidths
+	buf   []byte
+}
+
+func createSlotFile(path string, count uint64, rowWidth int, width tierSlotWidths) (*slotFile, error) {
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, fmt.Errorf("create %s: %w", filepath.Base(path), err)
+	}
+	s := &slotFile{path: path, f: f, bw: bufio.NewWriterSize(f, writeBufSize), width: width, buf: make([]byte, 8)}
+	head := EncodeHeader(Header{Magic: MagicNumber, Version: Version, Count: count, Width: uint32(rowWidth)})
+	head = append(head, width.count, width.bytes)
+	if _, err := s.bw.Write(head); err != nil {
+		return nil, errors.Join(fmt.Errorf("write %s header: %w", filepath.Base(path), err), s.abort())
+	}
+
+	return s, nil
+}
+
+func (s *slotFile) put(count, bytes uint64) error {
+	binary.LittleEndian.PutUint64(s.buf, count)
+	if _, err := s.bw.Write(s.buf[:s.width.count]); err != nil {
+		return fmt.Errorf("write slot: %w", err)
+	}
+	binary.LittleEndian.PutUint64(s.buf, bytes)
+	if _, err := s.bw.Write(s.buf[:s.width.bytes]); err != nil {
+		return fmt.Errorf("write slot: %w", err)
+	}
+
+	return nil
+}
+
+func (s *slotFile) close() error {
+	var pad [coreStatsReadTailPad]byte
+	if _, err := s.bw.Write(pad[:]); err != nil {
+		return errors.Join(fmt.Errorf("write tail pad: %w", err), s.abort())
+	}
+	if err := s.bw.Flush(); err != nil {
+		return errors.Join(fmt.Errorf("flush %s: %w", filepath.Base(s.path), err), s.abort())
+	}
+	if err := s.f.Close(); err != nil {
+		return errors.Join(fmt.Errorf("close %s: %w", filepath.Base(s.path), err), removeIfErr(s.path))
+	}
+
+	return nil
+}
+
+func (s *slotFile) abort() error {
+	return errors.Join(s.f.Close(), removeIfErr(s.path))
+}
+
+func (w *TierStatsWriter) writeDense() error {
+	path := filepath.Join(w.dir, TierDenseFile)
+	out, err := createSlotFile(path, w.rows, (w.slots-1)*w.denseW.slotBytes(), w.denseW)
+	if err != nil {
+		return err
+	}
+	err = w.scratchRows(func(row []byte) error {
+		for slot := range w.slots - 1 {
+			if err := out.put(scratchSlot(row, slot)); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return errors.Join(err, out.abort())
+	}
+
+	return out.close()
+}
+
+func (w *TierStatsWriter) writeMulti() error {
+	slotsPath := filepath.Join(w.dir, TierMultiFile)
+	out, err := createSlotFile(slotsPath, w.multiSlots, w.multiW.slotBytes(), w.multiW)
+	if err != nil {
+		return err
+	}
+	offsetsPath := filepath.Join(w.dir, TierMultiOffsetsFile)
+	offW := byteWidthOf(w.multiSlots)
+	offsets, err := newNarrowArrayWriter(offsetsPath, offW)
+	if err != nil {
+		return errors.Join(err, out.abort())
+	}
+	rowBits := make([]uint64, bitWords(w.rows))
+	var row, stored uint64
+	err = w.scratchRows(func(r []byte) error {
+		var mask uint16
+		for slot := range w.slots {
+			if c, b := scratchSlot(r, slot); c != 0 || b != 0 {
+				mask |= 1 << slot
+			}
+		}
+		if bits.OnesCount16(mask) >= 2 {
+			rowBits[row/wordBits] |= 1 << (row % wordBits)
+			if err := offsets.put(stored); err != nil {
+				return err
+			}
+			rest := mask &^ (1 << (bits.Len16(mask) - 1))
+			for rest != 0 {
+				slot := bits.TrailingZeros16(rest)
+				rest &= rest - 1
+				if err := out.put(scratchSlot(r, slot)); err != nil {
+					return err
+				}
+				stored++
+			}
+		}
+		row++
+
+		return nil
+	})
+	if err == nil {
+		err = offsets.put(stored)
+	}
+	if err != nil {
+		return errors.Join(err, out.abort(), offsets.abort())
+	}
+	if err := errors.Join(out.close(), offsets.close()); err != nil {
+		return errors.Join(err, removeIfErr(slotsPath), removeIfErr(offsetsPath))
+	}
+	if err := writeRankedBits(filepath.Join(w.dir, TierMultiRowsFile), rowBits, w.rows); err != nil {
+		return errors.Join(err, removeIfErr(slotsPath), removeIfErr(offsetsPath))
+	}
+
+	return nil
+}
+
+// writeRankedBits writes a bit vector of n bits followed by its rank
+// directory: for every rankBlockWords words, the set bits before them.
+func writeRankedBits(path string, words []uint64, n uint64) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Base(path), err)
+	}
+	bw := bufio.NewWriterSize(f, writeBufSize)
+	fail := func(err error) error {
+		return errors.Join(fmt.Errorf("write %s: %w", filepath.Base(path), err), f.Close(), removeIfErr(path))
+	}
+	if _, err := bw.Write(EncodeHeader(Header{Magic: MagicNumber, Version: Version, Count: n, Width: 8})); err != nil {
+		return fail(err)
+	}
+	for _, word := range words {
+		if err := putU64(bw, word); err != nil {
+			return fail(err)
+		}
+	}
+	var r uint64
+	for i, word := range words {
+		if i%rankBlockWords == 0 {
+			if err := putU64(bw, r); err != nil {
+				return fail(err)
+			}
+		}
+		r += uint64(bits.OnesCount64(word))
+	}
+	if err := bw.Flush(); err != nil {
+		return fail(err)
+	}
+	if err := f.Close(); err != nil {
+		return errors.Join(fmt.Errorf("close %s: %w", filepath.Base(path), err), removeIfErr(path))
+	}
+
+	return nil
+}
+
+// narrowArrayWriter writes an array file of unsigned values at a fixed
+// width of 1..8 bytes, with the tail pad readers need.
+type narrowArrayWriter struct {
+	path  string
+	f     *os.File
+	bw    *bufio.Writer
+	count uint64
+	width uint8
+	buf   [8]byte
+}
+
+func newNarrowArrayWriter(path string, width uint8) (*narrowArrayWriter, error) {
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, fmt.Errorf("create %s: %w", filepath.Base(path), err)
+	}
+	w := &narrowArrayWriter{path: path, f: f, bw: bufio.NewWriterSize(f, writeBufSize), width: width}
+	// Placeholder header; close rewrites it with the count.
+	if _, err := w.bw.Write(make([]byte, HeaderSize)); err != nil {
+		return nil, errors.Join(fmt.Errorf("write header: %w", err), w.abort())
+	}
+
+	return w, nil
+}
+
+func (w *narrowArrayWriter) put(v uint64) error {
+	binary.LittleEndian.PutUint64(w.buf[:], v)
+	if _, err := w.bw.Write(w.buf[:w.width]); err != nil {
+		return fmt.Errorf("write %s: %w", filepath.Base(w.path), err)
+	}
+	w.count++
+
+	return nil
+}
+
+func (w *narrowArrayWriter) close() error {
+	var pad [arrayTailPad]byte
+	if _, err := w.bw.Write(pad[:]); err != nil {
+		return errors.Join(fmt.Errorf("write tail pad: %w", err), w.abort())
+	}
+	if err := w.bw.Flush(); err != nil {
+		return errors.Join(fmt.Errorf("flush %s: %w", filepath.Base(w.path), err), w.abort())
+	}
+	head := EncodeHeader(Header{Magic: MagicNumber, Version: Version, Count: w.count, Width: uint32(w.width)})
+	if _, err := w.f.WriteAt(head, 0); err != nil {
+		return errors.Join(fmt.Errorf("write header: %w", err), w.abort())
+	}
+	if err := w.f.Close(); err != nil {
+		return errors.Join(fmt.Errorf("close %s: %w", filepath.Base(w.path), err), removeIfErr(w.path))
+	}
+
+	return nil
+}
+
+func (w *narrowArrayWriter) abort() error {
+	return errors.Join(w.f.Close(), removeIfErr(w.path))
+}

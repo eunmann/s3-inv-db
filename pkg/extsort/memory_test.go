@@ -87,6 +87,7 @@ func TestIndexBuilderMemoryBounded(t *testing.T) {
 			Count:      uint64(i + 1),
 			TotalBytes: uint64((i + 1) * 1024),
 		}
+		row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = row.Count, row.TotalBytes
 		if err := builder.Add(row); err != nil {
 			t.Fatalf("add row %d: %v", i, err)
 		}

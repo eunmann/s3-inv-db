@@ -10,12 +10,40 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-// TestTierStatsRow_PackedStride pins the row stride to the number of
-// *present* tiers declared via SetPresentTiers, not the compile-time
-// NumTiers. The sparse layout is written directly during construction;
-// a regression that ignored the declared set would silently inflate
-// index size — the whole point of the hybrid layout.
-func TestTierStatsRow_PackedStride(t *testing.T) {
+// withTotals sets a row's totals to the sum of its tiers, as the
+// aggregator does.
+func withTotals(r *extsort.PrefixRow) *extsort.PrefixRow {
+	r.Count, r.TotalBytes = 0, 0
+	for id := range tiers.NumTiers {
+		r.Count += r.TierCounts[id]
+		r.TotalBytes += r.TierBytes[id]
+	}
+
+	return r
+}
+
+// openTiers opens the core and tier stats of the index in dir.
+func openTiers(t *testing.T, dir string) *format.TierStatsReader {
+	t.Helper()
+	core, err := format.OpenCoreStats(dir)
+	if err != nil {
+		t.Fatalf("OpenCoreStats: %v", err)
+	}
+	t.Cleanup(func() { core.Close() })
+	tsr, err := format.OpenTierStats(dir, core)
+	if err != nil {
+		t.Fatalf("OpenTierStats: %v", err)
+	}
+	t.Cleanup(func() { tsr.Close() })
+
+	return tsr
+}
+
+// TestTierStats_PresentTiersOnly pins the tier slots to the tiers
+// declared via SetPresentTiers, not the compile-time NumTiers: a
+// regression that ignored the declared set would silently inflate index
+// size.
+func TestTierStats_PresentTiersOnly(t *testing.T) {
 	dir := t.TempDir()
 	outDir := filepath.Join(dir, "idx")
 	tempDir := filepath.Join(dir, "tmp")
@@ -47,7 +75,7 @@ func TestTierStatsRow_PackedStride(t *testing.T) {
 	rows[3].TierBytes[tiers.Standard] = 400
 
 	for _, r := range rows {
-		if err := b.Add(r); err != nil {
+		if err := b.Add(withTotals(r)); err != nil {
 			t.Fatalf("Add %q: %v", r.Prefix, err)
 		}
 	}
@@ -55,13 +83,11 @@ func TestTierStatsRow_PackedStride(t *testing.T) {
 		t.Fatalf("Finalize: %v", err)
 	}
 
-	// The tier_stats writer may have picked dense or sparse layout
-	// based on the populated-slot cost model. Whichever it chose, the
-	// total bytes used by tier_stats/ must not exceed the dense upper
-	// bound (presentTiers × N × slot); that's the "no waste on absent
-	// tiers" invariant this test exists to pin.
-	const presentTiers = 3
-	denseUpperBound := int64(format.HeaderSize) + int64(len(rows))*int64(presentTiers)*int64(format.TierStatsSlotBytes)
+	// Whichever layout the writer picked, tier_stats/ must stay within
+	// version 4's dense bound for the declared tiers (presentTiers × N ×
+	// a 16-byte slot): the "no waste on absent tiers" invariant.
+	const presentTiers, v4SlotBytes = 3, 16
+	denseUpperBound := int64(format.HeaderSize) + int64(len(rows))*int64(presentTiers)*v4SlotBytes
 	tierDir := filepath.Join(outDir, "tier_stats")
 	entries, err := os.ReadDir(tierDir)
 	if err != nil {
@@ -77,15 +103,11 @@ func TestTierStatsRow_PackedStride(t *testing.T) {
 	}
 	if totalSize > denseUpperBound {
 		t.Errorf("tier_stats/ total bytes = %d, exceeds dense upper bound %d (N=%d × presentTiers=%d × %d + header)",
-			totalSize, denseUpperBound, len(rows), presentTiers, format.TierStatsSlotBytes)
+			totalSize, denseUpperBound, len(rows), presentTiers, v4SlotBytes)
 	}
 
 	// Round-trip through the reader: values must come back correct.
-	tsr, err := format.OpenTierStats(outDir)
-	if err != nil {
-		t.Fatalf("OpenTierStats: %v", err)
-	}
-	defer tsr.Close()
+	tsr := openTiers(t, outDir)
 
 	check := func(pos uint64, tier tiers.ID, wantCount, wantBytes uint64) {
 		t.Helper()
@@ -107,15 +129,11 @@ func TestTierStatsRow_PackedStride(t *testing.T) {
 	check(0, tiers.GlacierFR, 0, 0)
 }
 
-// TestTierStatsRow_PreorderAlignment guards the invariant that the
-// row-major tier-stats file places each prefix's stats at exactly its
-// preorder position. The original per-tier writers required explicit
-// backfill when a tier first appeared partway through a build; the
-// row-major writer always emits all NumTiers slots so no backfill is
-// needed, but a regression that dropped or duplicated a row would
-// silently misalign tier data with prefix positions — exactly the
-// failure mode this test is here to catch.
-func TestTierStatsRow_PreorderAlignment(t *testing.T) {
+// TestTierStats_PreorderAlignment guards the invariant that each
+// prefix's tier stats sit at exactly its preorder position: a
+// regression that dropped or duplicated a row would silently misalign
+// tier data with prefix positions.
+func TestTierStats_PreorderAlignment(t *testing.T) {
 	dir := t.TempDir()
 	outDir := filepath.Join(dir, "idx")
 	tempDir := filepath.Join(dir, "tmp")
@@ -142,7 +160,7 @@ func TestTierStatsRow_PreorderAlignment(t *testing.T) {
 	row3.TierBytes[tiers.Standard] = 400
 
 	for _, r := range []*extsort.PrefixRow{row0, row1, row2, row3} {
-		if err := b.Add(r); err != nil {
+		if err := b.Add(withTotals(r)); err != nil {
 			t.Fatalf("Add %q: %v", r.Prefix, err)
 		}
 	}
@@ -150,11 +168,7 @@ func TestTierStatsRow_PreorderAlignment(t *testing.T) {
 		t.Fatalf("Finalize: %v", err)
 	}
 
-	tsr, err := format.OpenTierStats(outDir)
-	if err != nil {
-		t.Fatalf("OpenTierStats: %v", err)
-	}
-	defer tsr.Close()
+	tsr := openTiers(t, outDir)
 
 	wantStd := []uint64{1, 1, 0, 1}
 	wantStdBytes := []uint64{100, 200, 0, 400}
@@ -184,7 +198,7 @@ func TestTierStatsRow_PreorderAlignment(t *testing.T) {
 // TestEmptyIndex_EmptyPresentTiers covers the empty-index path the
 // pipeline takes when there are no run files: SetPresentTiers is called
 // with an empty set and no rows are added. The lazy tier writer must
-// never be created (so NewTierStatsRowWriter's non-empty requirement is
+// never be created (so NewTierStatsWriter's non-empty requirement is
 // not tripped), no manifest is written, and OpenTierStats returns a
 // usable empty reader.
 func TestEmptyIndex_EmptyPresentTiers(t *testing.T) {
@@ -200,11 +214,7 @@ func TestEmptyIndex_EmptyPresentTiers(t *testing.T) {
 		t.Fatalf("Finalize: %v", err)
 	}
 
-	tsr, err := format.OpenTierStats(outDir)
-	if err != nil {
-		t.Fatalf("OpenTierStats: %v", err)
-	}
-	defer tsr.Close()
+	tsr := openTiers(t, outDir)
 	if tsr.HasTierData() {
 		t.Error("empty index should report no tier data")
 	}

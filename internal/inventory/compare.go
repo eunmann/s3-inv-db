@@ -466,13 +466,13 @@ func buildCompareChild(a, b *indexread.Index, r *compareRow) (CompareChild, bool
 		Status:  r.status,
 	}
 	if r.inA {
-		c.HasChildren = c.HasChildren || a.MaxDepthInSubtree(r.posA) > a.Depth(r.posA)
+		c.HasChildren = c.HasChildren || a.HasChildren(r.posA)
 		if a.HasTierData() {
 			c.TierBefore = a.TierBreakdownMap(r.posA)
 		}
 	}
 	if r.inB {
-		c.HasChildren = c.HasChildren || b.MaxDepthInSubtree(r.posB) > b.Depth(r.posB)
+		c.HasChildren = c.HasChildren || b.HasChildren(r.posB)
 		if b.HasTierData() {
 			c.TierAfter = b.TierBreakdownMap(r.posB)
 		}
