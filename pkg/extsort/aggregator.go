@@ -4,6 +4,7 @@ import (
 	"runtime/debug"
 	"runtime/metrics"
 	"strings"
+	"unsafe"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -29,8 +30,17 @@ type Aggregator struct {
 	path     []*PrefixRow
 	used     int
 	maxDepth int
+	// bytes is the heap the rows since the last Drain take: each row,
+	// its prefix string and its map entry (EstimatedMemoryUsage).
+	bytes    int64
 	tierMask uint16
 }
+
+// aggregatorEntryBytes is a prefix's heap cost besides its string: its
+// PrefixRow and its map entry (key header, value pointer, control byte
+// and load-factor slack). Measured: 328 B/prefix for 29 B prefixes and
+// 475 B/prefix for 185 B ones, both within 2% of this plus the length.
+const aggregatorEntryBytes = int64(unsafe.Sizeof(PrefixRow{})) + 48
 
 // NewAggregator creates a new prefix aggregator with the given initial capacity.
 // Use maxDepth=0 for unlimited depth.
@@ -95,6 +105,7 @@ func (a *Aggregator) row(prefix string, depth uint16) *PrefixRow {
 		row = a.newRow()
 		row.Prefix, row.Depth = owned, depth
 		a.prefixes[owned] = row
+		a.bytes += aggregatorEntryBytes + int64(len(owned))
 	}
 
 	return row
@@ -141,38 +152,45 @@ func tierIDsFromMask(mask uint16) []tiers.ID {
 	return ids
 }
 
-// EstimatedMemoryUsage returns the per-worker aggregator's approximate
-// in-memory footprint in bytes (~288 B/entry covering map overhead +
-// avg prefix string + its slab PrefixRow). Undercounts by 2-3× vs runtime
-// reality; the heap-pressure safety check in ShouldWorkerFlush catches
-// that case.
+// EstimatedMemoryUsage returns the heap the aggregator's rows take
+// since the last Drain: each row, its prefix string and its map entry,
+// counted as they are created.
 func (a *Aggregator) EstimatedMemoryUsage() int64 {
-	const bytesPerPrefix = 288
-
-	return int64(len(a.prefixes)) * bytesPerPrefix
+	return a.bytes
 }
 
-// heapInuseBytes returns the runtime's HeapInuse (live objects plus
-// fragmentation in in-use spans) through runtime/metrics, which unlike
-// runtime.ReadMemStats does not stop the world. Every ingest worker
-// checks it every few tens of thousands of rows.
-func heapInuseBytes() uint64 {
-	samples := [2]metrics.Sample{
+// heapReadings returns the live heap as of the last GC and HeapInuse
+// (live and dead objects plus fragmentation in in-use spans), through
+// runtime/metrics, which unlike runtime.ReadMemStats does not stop the
+// world. Every ingest worker checks them every few tens of thousands of
+// rows.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func heapReadings() (uint64, uint64) {
+	samples := [3]metrics.Sample{
+		{Name: "/gc/heap/live:bytes"},
 		{Name: "/memory/classes/heap/objects:bytes"},
 		{Name: "/memory/classes/heap/unused:bytes"},
 	}
 	metrics.Read(samples[:])
 
-	return samples[0].Value.Uint64() + samples[1].Value.Uint64()
+	return samples[0].Value.Uint64(), samples[1].Value.Uint64() + samples[2].Value.Uint64()
 }
 
 // DefaultAggregatorCap is the spill threshold when no GOMEMLIMIT is set.
 const DefaultAggregatorCap uint64 = 512 * 1024 * 1024
 
-// heapPressureRatio is the HeapInuse / GOMEMLIMIT fraction above which
-// any worker must spill regardless of its own size — the aggregator
-// is the pipeline's only flush valve.
-const heapPressureRatio = 0.85
+// Heap pressure makes any worker spill regardless of its own size: the
+// aggregator is the pipeline's only flush valve. It is the live heap
+// (as of the last GC) reaching liveHeapPressureRatio of GOMEMLIMIT, or,
+// as a backstop between GCs, HeapInuse reaching heapInuseBackstopRatio.
+// HeapInuse alone counts garbage not yet collected: with GOMEMLIMIT the
+// heap grows to the limit before each GC, so it read as pressure once
+// the live heap passed ~40% of the limit, and every check spilled.
+const (
+	liveHeapPressureRatio  = 0.70
+	heapInuseBackstopRatio = 0.95
+)
 
 // AggregatorFractionOfLimit caps the aggregator share of GOMEMLIMIT;
 // the remainder is left for download / parse / merge / mmap.
@@ -220,14 +238,16 @@ func ShouldWorkerFlush(workerAggBytes uint64, memoryLimit int64, numWorkers int)
 	return heapUnderPressure(memoryLimit)
 }
 
-// heapUnderPressure reports whether HeapInuse has reached
-// heapPressureRatio of memoryLimit; a limit <= 0 means none is set.
+// heapUnderPressure reports whether the heap is under pressure (see
+// liveHeapPressureRatio); a limit <= 0 means none is set.
 func heapUnderPressure(memoryLimit int64) bool {
 	if memoryLimit <= 0 {
 		return false
 	}
+	live, inuse := heapReadings()
+	limit := float64(memoryLimit)
 
-	return heapInuseBytes() >= uint64(float64(memoryLimit)*heapPressureRatio)
+	return live >= uint64(limit*liveHeapPressureRatio) || inuse >= uint64(limit*heapInuseBackstopRatio)
 }
 
 // Drain hands over every accumulated row (unsorted) and clears the
@@ -249,6 +269,7 @@ func (a *Aggregator) Drain() []*PrefixRow {
 
 	clear(a.prefixes)
 	a.used = 0
+	a.bytes = 0
 	// The cached path points at rows the next use recycles.
 	clear(a.path)
 	a.path = a.path[:0]

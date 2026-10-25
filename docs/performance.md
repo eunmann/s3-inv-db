@@ -56,8 +56,11 @@ The build aggregator spills when **any** of three thresholds fires:
 
 1. The combined per-worker aggregator footprint exceeds `0.15 × GOMEMLIMIT`
    (or 512 MiB if no limit is configured), divided across N chunk workers.
-2. Overall `HeapInuse` crosses 85% of the limit — a safety valve for
-   when the per-worker estimate undercounts runtime reality.
+   Each aggregator counts its footprint exactly as it grows: every row,
+   its prefix string and its map entry.
+2. The heap is under pressure: the live heap as of the last GC reaches
+   70% of the limit, or `HeapInuse` (which also counts garbage not yet
+   collected) reaches 95% between GCs.
 3. A mid-chunk check every 50K rows — so a single very large chunk
    can't grow past the cap before its first spill opportunity.
 

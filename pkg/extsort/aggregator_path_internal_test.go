@@ -8,9 +8,8 @@ import (
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
-	"github.com/google/go-cmp/cmp/cmpopts"
-
 	gocmp "github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 // referenceAggregate sums every object into each of its prefix
