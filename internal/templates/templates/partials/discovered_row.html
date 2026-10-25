@@ -1,5 +1,5 @@
 {{$composite := printf "%s/%s/%s" .SourceBucket .Name .Run}}
-{{$busy := or .State.IsLoading (and .LatestJob (eq (printf "%s" .LatestJob.State) "queued"))}}
+{{$busy := or .State.IsLoading (and .LatestJob (or (eq (printf "%s" .LatestJob.State) "queued") (eq (printf "%s" .LatestJob.State) "running")))}}
 {{$canRetry := and .LatestJob (or (eq (printf "%s" .LatestJob.State) "failed") (eq (printf "%s" .LatestJob.State) "aborted") (eq (printf "%s" .LatestJob.State) "cancelled"))}}
 {{$pct := 0}}{{$eta := ""}}
 {{if and $busy .LatestJob (gt .LatestJob.StageTotal 0)}}
