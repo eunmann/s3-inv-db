@@ -555,34 +555,53 @@ func benchCSVPayload(tm *tiers.Mapping, objs []benchutil.FakeObject) []byte {
 	return buf.Bytes()
 }
 
+// benchQuotedCSVPayload writes the rows as S3 Inventory does: every
+// field quoted, the bucket first.
+func benchQuotedCSVPayload(tm *tiers.Mapping, objs []benchutil.FakeObject) []byte {
+	var buf bytes.Buffer
+	for _, o := range objs {
+		fmt.Fprintf(&buf, "\"bucket\",\"%s\",\"%d\",\"%s\",\"\"\n", o.Key, o.Size, tierName(tm, o.TierID))
+	}
+	return buf.Bytes()
+}
+
 func BenchmarkCSVInventoryReader(b *testing.B) {
 	tm := tiers.NewMapping()
 	for _, n := range benchutil.BenchmarkSizes() {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
-			csvData := benchCSVPayload(tm, benchInventoryRows(n))
-			b.ResetTimer()
-			b.ReportAllocs()
-			for range b.N {
-				reader := s3inventory.NewCSVReader(bytes.NewReader(csvData), s3inventory.CSVReaderConfig{
-					KeyCol: 0, SizeCol: 1, StorageCol: 2, AccessTierCol: 3,
-				})
-				count := 0
-				for {
-					_, err := reader.Next()
-					if errors.Is(err, io.EOF) {
-						break
-					}
-					if err != nil {
-						b.Fatal(err)
-					}
-					count++
-				}
-				reader.Close()
-				if count != n {
-					b.Fatalf("got %d rows, want %d", count, n)
-				}
-			}
+			benchCSVReader(b, benchCSVPayload(tm, benchInventoryRows(n)), n, s3inventory.CSVReaderConfig{
+				KeyCol: 0, SizeCol: 1, StorageCol: 2, AccessTierCol: 3,
+			})
 		})
+		b.Run(fmt.Sprintf("n=%d/quoted", n), func(b *testing.B) {
+			benchCSVReader(b, benchQuotedCSVPayload(tm, benchInventoryRows(n)), n, s3inventory.CSVReaderConfig{
+				KeyCol: 1, SizeCol: 2, StorageCol: 3, AccessTierCol: 4,
+			})
+		})
+	}
+}
+
+func benchCSVReader(b *testing.B, csvData []byte, n int, cfg s3inventory.CSVReaderConfig) {
+	b.Helper()
+	b.ResetTimer()
+	b.ReportAllocs()
+	for range b.N {
+		reader := s3inventory.NewCSVReader(bytes.NewReader(csvData), cfg)
+		count := 0
+		for {
+			_, err := reader.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				b.Fatal(err)
+			}
+			count++
+		}
+		reader.Close()
+		if count != n {
+			b.Fatalf("got %d rows, want %d", count, n)
+		}
 	}
 }
 

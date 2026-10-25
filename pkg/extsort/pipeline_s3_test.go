@@ -8,6 +8,8 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +24,7 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/rs/zerolog"
 )
 
@@ -212,6 +215,94 @@ func TestPipelineRun_CSVEncodedKeysAndVersions(t *testing.T) {
 	}
 	if _, ok := idx.StatsForPrefix("my+folder/"); ok {
 		t.Error("undecoded prefix my+folder/ present in the index")
+	}
+}
+
+// A CSV chunk many times the reader's 64 KiB line buffer, whose rows
+// switch storage class / access tier every few rows, gets per-tier stats
+// equal to a direct count. Every line has the same length and its storage
+// class at the same offset, and GLACIER_IR and ONEZONE_IA are the same
+// length, so a tier cache that kept a view of the buffer after a refill
+// would read another row's class and match the wrong pair.
+func TestPipelineRun_CSVTierStatsAcrossBufferRefills(t *testing.T) {
+	const (
+		rows     = 60_000
+		prefixes = 7
+		lineLen  = 96
+	)
+	type pair struct{ class, access string }
+	pairs := []pair{
+		{"GLACIER_IR", ""},
+		{"ONEZONE_IA", ""},
+		{"GLACIER_IR", ""},
+		{"ONEZONE_IA", ""},
+		{"STANDARD", ""},
+		{"GLACIER", ""},
+		{"INTELLIGENT_TIERING", "FREQUENT"},
+		{"INTELLIGENT_TIERING", "INFREQUENT"},
+		{"INTELLIGENT_TIERING", "ARCHIVE_INSTANT_ACCESS"},
+	}
+	mapping := tiers.NewMapping()
+	type tierKey struct {
+		prefix string
+		tier   tiers.ID
+	}
+	want := map[tierKey]format.TierBreakdown{}
+	rng := rand.New(rand.NewPCG(1, 2))
+	records := make([][]string, 0, rows)
+	var p pair
+	for i := range rows {
+		if i == 0 || rng.IntN(3) == 0 {
+			p = pairs[rng.IntN(len(pairs))]
+		}
+		size := rng.Uint64N(2 * tiers.SmallObjectThresholdBytes)
+		dir := fmt.Sprintf("d%d/", i%prefixes)
+		head := fmt.Sprintf("src,%s,%s,%010d,", p.class, p.access, size)
+		key := dir + fmt.Sprintf("k%06d-", i)
+		key += strings.Repeat("x", lineLen-1-len(head)-len(key))
+		records = append(records, []string{"src", p.class, p.access, fmt.Sprintf("%010d", size), key})
+
+		tier := tiers.Resolve(mapping.FromS3(p.class, p.access), size)
+		for _, prefix := range []string{"", dir} {
+			tb := want[tierKey{prefix, tier}]
+			tb.ObjectCount++
+			tb.Bytes += size
+			want[tierKey{prefix, tier}] = tb
+		}
+	}
+	fc := s3test.FetchClient(t)
+	manifest := uploadCSVInventory(t, fc, "Bucket, StorageClass, IntelligentTieringAccessTier, Size, Key", records)
+	outDir := filepath.Join(t.TempDir(), "index")
+	if _, err := extsort.NewPipeline(extsort.DefaultConfig(), fc).Run(t.Context(), manifest, outDir); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	idx, err := indexread.Open(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	got := map[tierKey]format.TierBreakdown{}
+	for i := range prefixes {
+		for _, prefix := range []string{"", fmt.Sprintf("d%d/", i)} {
+			pos, ok := idx.Lookup(prefix)
+			if !ok {
+				t.Fatalf("prefix %q missing", prefix)
+			}
+			for _, tb := range idx.TierBreakdown(pos) {
+				got[tierKey{prefix, tb.TierID}] = format.TierBreakdown{ObjectCount: tb.ObjectCount, Bytes: tb.Bytes}
+			}
+		}
+	}
+	for k, w := range want {
+		if g := got[k]; g != w {
+			t.Errorf("prefix %q tier %d = %d objects / %d bytes, want %d / %d", k.prefix, k.tier, g.ObjectCount, g.Bytes, w.ObjectCount, w.Bytes)
+		}
+	}
+	for k := range got {
+		if _, ok := want[k]; !ok {
+			t.Errorf("prefix %q has unexpected tier %d", k.prefix, k.tier)
+		}
 	}
 }
 
