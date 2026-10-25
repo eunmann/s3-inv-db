@@ -112,3 +112,83 @@ func TestLookup_OutOfRangeSlotPositionIsMiss(t *testing.T) {
 		}
 	}
 }
+
+// TestDescendants_RejectChildStartOutsideItsDepth: a damaged child_start
+// in core_stats.bin (past the row count, or outside the next depth's
+// rows) makes every descendant query return ErrIndexInconsistent
+// instead of panicking, scanning a wrapped-around span or answering
+// with rows from another depth.
+func TestDescendants_RejectChildStartOutsideItsDepth(t *testing.T) {
+	// Rows in level order: 0 "", 1 a/, 2 b/, 3 a/x/, 4 a/y/, 5 b/z/.
+	const csv = "Key,Size\na/x/1,1\na/y/2,2\nb/z/3,3\n"
+	tests := []struct {
+		name     string
+		row      uint64
+		value    uint64
+		pos      uint64
+		relDepth int
+	}{
+		{"children end past the row count", 2, 9, 1, 1},
+		{"children start before their depth", 1, 0, 1, 1},
+		{"grandchildren start before their depth", 1, 0, 0, 2},
+		{"root children start past the row count", 0, 200, 0, 2},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := setupTestIndex(t)
+			if err := buildIndexFromCSV(t, dir, csv); err != nil {
+				t.Fatal(err)
+			}
+			setChildStart(t, dir, tc.row, tc.value)
+			idx, err := indexread.Open(dir)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer idx.Close()
+
+			if span, err := idx.DescendantSpan(tc.pos, tc.relDepth); !errors.Is(err, indexread.ErrIndexInconsistent) {
+				t.Fatalf("DescendantSpan = %+v, %v; want ErrIndexInconsistent", span, err)
+			}
+			if got, err := idx.DescendantsAtDepth(tc.pos, tc.relDepth); !errors.Is(err, indexread.ErrIndexInconsistent) {
+				t.Errorf("DescendantsAtDepth = %v, %v; want ErrIndexInconsistent", got, err)
+			}
+			for _, f := range []indexread.Filter{{}, {MinCount: 1}} {
+				if page, err := idx.DescendantsPage(tc.pos, tc.relDepth, f, 0, 10); !errors.Is(err, indexread.ErrIndexInconsistent) {
+					t.Errorf("DescendantsPage(filter %+v) = %+v, %v; want ErrIndexInconsistent", f, page, err)
+				}
+			}
+			if got, err := idx.TopByBytes(tc.pos, tc.relDepth, 10); !errors.Is(err, indexread.ErrIndexInconsistent) {
+				t.Errorf("TopByBytes = %v, %v; want ErrIndexInconsistent", got, err)
+			}
+		})
+	}
+}
+
+// setChildStart overwrites row's child_start in dir's core_stats.bin.
+func setChildStart(t *testing.T, dir string, row, value uint64) {
+	t.Helper()
+	r, err := format.OpenCoreStats(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stride := r.Stride()
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	data, err := root.ReadFile(format.CoreStatsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	off := uint64(format.HeaderSize+format.CoreStatsStrideBytes) + row*uint64(stride.RowBytes()) + uint64(stride.Count) + uint64(stride.Bytes)
+	for i := range uint64(stride.ChildStart) {
+		data[off+i] = byte(value >> (8 * i))
+	}
+	if err := root.WriteFile(format.CoreStatsFile, data, format.FilePerm); err != nil {
+		t.Fatal(err)
+	}
+}

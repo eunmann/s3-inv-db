@@ -68,9 +68,9 @@ func (idx *Index) RankDescendants(prefixPos uint64, relDepth, limit int, metric 
 	if limit <= 0 {
 		return nil, nil
 	}
-	span, depth := idx.descendantSpanAt(prefixPos, relDepth)
-	if span.Len() == 0 {
-		return nil, nil
+	span, depth, err := idx.descendantSpanAt(prefixPos, relDepth)
+	if err != nil || span.Len() == 0 {
+		return nil, err
 	}
 
 	o := rankOrder{metric: metric, asc: asc}

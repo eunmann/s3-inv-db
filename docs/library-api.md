@@ -61,9 +61,11 @@ fmt.Printf("%d objects, %d bytes\n", stats.ObjectCount, stats.TotalBytes)
   returns the zero `Stats{}`. `DescendantsAt*` and `Top*` return
   `(nil, nil)` and `DescendantsPage` an empty page for out-of-bounds
   inputs. `Open`, `Close` and `PrefixString` are the methods that
-  surface errors in normal use; the `error` from `DescendantsAt*`,
-  `DescendantsPage` and `Top*` is non-nil only when the depth index on
-  disk is malformed.
+  surface errors in normal use. A malformed depth index fails `Open`;
+  the `error` from `DescendantsAt*`, `DescendantSpan`,
+  `DescendantsPage` and `Top*` is non-nil only when a prefix's child
+  range on disk leaves its depth (`ErrIndexInconsistent`, a damaged
+  `core_stats.bin`).
 - **Positions are in level order**: the root, then every depth-1
   prefix, then every depth-2 prefix, each depth in key order. A
   prefix's descendants at one depth are a contiguous range
