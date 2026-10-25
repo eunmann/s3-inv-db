@@ -39,10 +39,11 @@ index/
 ├── prefix_dict.ids.u32
 ├── prefix_dict.prefix_off.u64
 ├── build.json                     (CLI builds only; not in the manifest)
-└── tier_stats/
-    ├── tier_stats_row.bin         (dense layout), or
-    ├── tier_stats_sparse.bin      (sparse layout)
-    └── tier_stats_sparse.off.u64
+└── tier_stats/                    (absent with one present tier)
+    ├── tier_dense.bin             (dense layout), or
+    ├── tier_multi.bin             (multi layout)
+    ├── tier_multi.rows
+    └── tier_multi.off.u64
 ```
 
 `tiers.json` and the `tier_stats/` files are absent from an index with
@@ -60,12 +61,13 @@ fields little-endian:
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | Magic | `0x53334944` ("S3ID" in ASCII) |
-| 4 | 4 | Version | Format version (currently `4`) |
+| 4 | 4 | Version | Format version (currently `5`) |
 | 8 | 8 | Count | Number of rows |
 | 16 | 4 | Width | Row stride in bytes |
 
-Data follows as a packed array of fixed-stride rows (`core_stats.bin`
-puts a 5-byte stride descriptor first; see below).
+Data follows as a packed array of fixed-stride rows (`core_stats.bin`,
+`tier_dense.bin` and `tier_multi.bin` put a field-width descriptor
+first; see below).
 
 ### Variable-width arrays
 
@@ -80,7 +82,7 @@ and records it in `Width`:
 | `depth_offsets.u64` | bytes for the number of positions (1–8) |
 | `prefix_dict.prefix_off.u64` | bytes for the number of segment-ID references (1–8) |
 | `prefix_dict.ids.u32` | bytes for the largest segment ID (1–4) |
-| `tier_stats/tier_stats_sparse.off.u64` | bytes for the total sparse row length (1–8) |
+| `tier_stats/tier_multi.off.u64` | bytes for the number of stored tier slots (1–8) |
 | `prefix_dict.off.u64`, `mph_fp_pos.u64` | always 8 |
 
 A reader loads 8 bytes (4 for `prefix_dict.ids.u32`) at
@@ -100,9 +102,10 @@ Layout:
 
 | Offset | Size | Content |
 |--------|------|---------|
-| 0 | 20 | Header (`Width` = row width in bytes) |
+| 0 | 20 | Header (`Width` = row stride in bytes) |
 | 20 | 5 | Stride descriptor: one byte per field, its width in bytes |
-| 25 | `Count × Width` | Rows |
+| 25 | 39 | Zero padding, so rows start on a 64-byte cache line |
+| 64 | `Count × Width` | Rows |
 | end | 8 | Zero tail pad |
 
 Fields, in row order:
@@ -113,22 +116,27 @@ Fields, in row order:
 | total_bytes | 1–8 |
 | subtree_end | 1–8 |
 | depth | 1–2 |
-| max_depth_in_subtree | 1–2 |
+| tier_mask | 0–2 |
 
-A field's offset in the row is the sum of the widths before it. On
-open the reader checks that the descriptor's widths sum to the
-header's `Width`. A field read is one 8-byte little-endian load masked
-to the field's width; the tail pad keeps that load inside the mmap on
-the last row. On the 1M-object benchmark fixture the stride is
-3 + 7 + 3 + 1 + 1 = 15 bytes, about 270 rows per 4 KiB page, so a
-stats lookup is one page fault on a cold index and zero on a warm one.
+A field's offset in the row is the sum of the widths before it; the
+stride (`Width`) is at least their sum. `tier_mask` bit *i* is set when
+tier slot *i* (the *i*-th tier in `tiers.json`) holds data in this
+prefix. Its width is 0 when no prefix has data outside slot 0; the mask
+is then slot 0 for a prefix with data. A prefix has children exactly
+when `subtree_end > pos`.
+
+A field read is one 8-byte little-endian load masked to the field's
+width; the tail pad keeps that load inside the mmap on the last row.
+On the 1M-object benchmark fixture the stride is 3 + 7 + 3 + 1 + 2 =
+16 bytes, 256 rows per 4 KiB page, so a stats lookup is one page fault
+on a cold index and zero on a warm one.
 
 During the build the rows are written at a fixed 28-byte stride
 (8 + 8 + 8 + 2 + 2) into an mmap'd file. `object_count`, `total_bytes`,
-and `depth` are written at `Add()` time; `subtree_end` and
-`max_depth_in_subtree` are patched in place when the subtree closes.
-At finalize the builder streams the rows into `core_stats.bin.tmp` at
-the narrow stride and renames it over the build file.
+`depth` and `tier_mask` are written at `Add()` time; `subtree_end` is
+patched in place when the subtree closes. At finalize the builder
+streams the rows into `core_stats.bin.tmp` at the narrow stride and
+renames it over the build file.
 
 ### Preorder Positions
 
@@ -222,21 +230,29 @@ cache lookup per segment rather than a blob read.
 
 ## Tier Statistics
 
-The files under `tier_stats/` hold per-prefix `(count, bytes)` pairs,
-one slot per tier listed in `tiers.json`. Slot order matches
-`tiers.json` (sorted by tier ID).
-The pipeline declares the present tiers (those with data anywhere in
-the inventory) before the first row, so tiers with no data get no
+Tier stats give each prefix's `(count, bytes)` per tier listed in
+`tiers.json`; tier slot *i* is the *i*-th tier there (ascending tier
+ID). The pipeline declares the present tiers (those with data anywhere
+in the inventory) before the first row, so tiers with no data get no
 slot. A builder that declares none records all 13 tiers.
 
-Each slot is 16 bytes:
+Every prefix's per-tier counts and bytes sum exactly to its
+`object_count` and `total_bytes`; the builder checks this for every row
+and fails the build otherwise. So the files store only what the core
+row doesn't already give:
 
-| Slot offset | Size | Field |
-|-------------|------|-------|
-| `0` | 8 | count (uint64) |
-| `8` | 8 | bytes (uint64) |
+- a prefix whose `tier_mask` has one bit holds all its objects in that
+  tier: its totals are the tier's stats;
+- in a prefix with several, the highest tier in the mask is the totals
+  minus the other tiers.
 
-To find tier `T`'s slot, look up its position in `tiers.json`.
+An index with one present tier writes no tier files at all. Otherwise
+the builder computes the exact size of both layouts below at finalize
+and writes the smaller (dense on a tie). Each stored slot is a count
+then bytes, little-endian, at the widths the layout's largest stored
+values need (1–8 bytes each), recorded in a 2-byte descriptor (count
+width, bytes width) after the header of `tier_dense.bin` and
+`tier_multi.bin`. Both files end with an 8-byte zero tail pad.
 
 Tier IDs (0–12) map to S3 storage classes:
 
@@ -260,39 +276,26 @@ Tier IDs (0–12) map to S3 storage classes:
 128 KiB into the synthetic `ITFrequentSmall` bucket at ingest time so
 cost estimates honour the AWS minimum-monitored-size rule exactly.
 
-An index holds exactly one of two layouts. The builder writes the
-dense file first and, at finalize, converts it to the sparse pair when
-that is smaller on disk.
+### Dense (`tier_dense.bin`)
 
-### Dense (`tier_stats_row.bin`)
+Header (`Count` = prefixes, `Width` = (T − 1) × slot width for T
+present tiers), the slot-width descriptor, then one row per prefix at
+its preorder position holding slots 0 … T − 2, zeros included. Slot
+T − 1 is derived. Readers check the row count and width against the
+core stats and `tiers.json`.
 
-Header, then one row per prefix at its preorder position. A row is
-`presentTiers × 16` bytes holding every slot, zeros included; the
-stride is the header's `Width`. Readers check
-`Width / 16 == len(tiers.json tiers)` on open and reject a mismatched
-index rather than decode rows at the wrong offsets.
+### Multi (`tier_multi.bin`, `tier_multi.rows`, `tier_multi.off.u64`)
 
-### Sparse (`tier_stats_sparse.bin` + `tier_stats_sparse.off.u64`)
+Only prefixes with two or more tiers store anything:
 
-`tier_stats_sparse.bin` is a header (`Count` = prefixes, `Width` = 0)
-followed by variable-length rows:
+| File | Content |
+|------|---------|
+| `tier_multi.bin` | Header (`Count` = stored slots, `Width` = slot width), slot-width descriptor, then for each such prefix in preorder the slots of every tier in its mask except the highest, in slot order |
+| `tier_multi.rows` | Header (`Count` = prefixes), a bit vector with bit *pos* set for each such prefix (little-endian `uint64` words), then a rank directory: for every 8 words, the set bits before them |
+| `tier_multi.off.u64` | A variable-width array (see above): for the *k*-th such prefix, the index of its first slot in `tier_multi.bin`, plus a trailing sentinel |
 
-| Size | Field |
-|------|-------|
-| 2 | Presence bitmap (uint16): bit `i` set ⇒ slot `i` is non-zero in this row |
-| `16 × popcount(bitmap)` | The non-zero slots only, in slot order |
-
-`tier_stats_sparse.off.u64` holds `Count + 1` byte offsets into the
-row data (after the header): row `i` spans `[off[i], off[i+1])`. It is
-a variable-width array (see above).
-
-The builder picks sparse when
-`2·N + 16·populated + (N+1)·offsetWidth < presentTiers·16·N`, where
-`N` is the prefix count and `populated` the number of non-zero slots
-across all rows. A single-tier index always stays dense. The reader
-uses the sparse pair only when both files exist. The conversion
-renames the offsets file into place first and the rows file last,
-then deletes the dense file.
+To read prefix *pos*: `rank(pos)` (a directory entry plus at most eight
+popcounts) gives *k*; its slots start at `off[k]`.
 
 ## Manifest
 
@@ -304,8 +307,8 @@ checksum, plus the prefix count and maximum depth. `verify` and
 {
   "created_at": "2026-01-02T03:04:05Z",
   "files": {
-    "core_stats.bin": {"checksum": "9f2c…", "size": 35613798},
-    "tier_stats/tier_stats_sparse.bin": {"checksum": "…", "size": 47241450},
+    "core_stats.bin": {"checksum": "9f2c…", "size": 38011320},
+    "tier_stats/tier_multi.bin": {"checksum": "…", "size": 2567019},
     "...": {"checksum": "…", "size": 0}
   },
   "version": 1,
@@ -322,4 +325,4 @@ from the file-header format version.
 
 ## Versioning
 
-The format version in file headers lets a reader refuse files it would mis-decode. Version 4 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 5 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
