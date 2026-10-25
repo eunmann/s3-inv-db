@@ -37,12 +37,12 @@ func readHeaderCount(path string) uint64 {
 //
 // Per cell custom metrics:
 //
-//	bytes_per_prefix         — sum of every file under the index dir
-//	Bpp_tier_*               — per-prefix bytes for each tier_stats/ file
-//	core_stats_Bpp           — per-prefix bytes for core_stats.bin
-//	mph_fp_pos_Bpp           — per-prefix bytes for mph_fp_pos.u64
+//	Bpp_total                — sum of every file under the index dir
+//	Bpp_tier, Bpp_tier_*     — per-prefix bytes for all / each tier_stats/ file
+//	Bpp_core                 — per-prefix bytes for core_stats.bin
+//	Bpp_fpp                  — per-prefix bytes for mph_slots.bin
 //	Bpp_prefix_tree          — per-prefix bytes for prefix_tree.bin
-//	depth_positions_Bpp      — per-prefix bytes for depth_positions.u64
+//	Bpp_dpos                 — per-prefix bytes for depth_positions.u64
 //	n_prefixes               — total prefix count after aggregation
 //
 // Inner sub-benchmarks time each query path on the same built index:
@@ -409,7 +409,7 @@ func readPrefixCount(tb testing.TB, dir string, files map[string]int64) uint64 {
 	tb.Helper()
 	// core_stats.bin is the most reliable count source; fall back to
 	// any other header-bearing file.
-	for _, name := range []string{"core_stats.bin", "depth_positions.u64", "mph_fp_pos.u64"} {
+	for _, name := range []string{"core_stats.bin", "depth_positions.u64", format.MPHFSlotsFile} {
 		if _, ok := files[name]; !ok {
 			continue
 		}
@@ -467,7 +467,7 @@ var gridReportedFiles = []gridFile{
 	{"tier_stats/tier_multi.rows", "Bpp_tier_multi_rows", false},
 	{"tier_stats/tier_multi.off.u64", "Bpp_tier_multi_off", false},
 	{"core_stats.bin", "Bpp_core", true},
-	{"mph_fp_pos.u64", "Bpp_fpp", false},
+	{format.MPHFSlotsFile, "Bpp_fpp", true},
 	{"prefix_tree.bin", "Bpp_prefix_tree", false},
 	{"depth_positions.u64", "Bpp_dpos", false},
 }
