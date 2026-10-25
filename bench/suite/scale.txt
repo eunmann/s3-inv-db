@@ -1,0 +1,15 @@
+# Scale A/B suite (make bench-scale BASE=<ref>): sizes the per-PR
+# suites can't afford. Runs with S3INV_LONG_BENCH=1, on demand and
+# weekly on main in CI (.github/workflows/bench-scale.yml).
+# <tags> <package> <bench regex> <benchtime>
+
+# Build path end to end at 10M objects: spills, merge rounds, peak heap
+# and index size at a size where they matter.
+integration internal/loader ^BenchmarkPipeline$/^shape=(realistic|realistic_sorted)$/^n=10000000$ 1x
+
+# MPHF build over 5M prefixes.
+- pkg/format ^BenchmarkMPHFBuild$/^n=5000000$ 3x
+
+# Warm browse (children + their stats and tier breakdowns) over a
+# 10M-object index.
+- pkg/indexread ^BenchmarkBrowse_Matrix$/^n=10000000$/^warm$ 2s
