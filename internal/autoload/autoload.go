@@ -287,8 +287,7 @@ func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 // bookkeeping for a failed auto-load. Runs inside the job's work
 // closure, where the load outcome is observed.
 func (a *AutoLoader) recordLoadFailure(ctx context.Context, id inventory.ID, err error) {
-	var refused *loadcontrol.BudgetRefusedError
-	if errors.As(err, &refused) {
+	if refused, ok := errors.AsType[*loadcontrol.BudgetRefusedError](err); ok {
 		// Budget refusal: surface via Manager so the UI can show the
 		// reason next to the row. Don't apply backoff — we want to
 		// retry next tick if budget frees up.

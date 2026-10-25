@@ -79,9 +79,7 @@ func TestDiscoveredMetaLine(t *testing.T) {
 // unless the run is currently loaded.
 func TestDiscoveredMetaLine_StateGuard(t *testing.T) {
 	base := handlers.DiscoveredRowView{
-		MergedInventory: inventory.MergedInventory{
-			Inventory: inventory.Inventory{FileFormat: "csv", FileCount: 24, TotalBytes: 1_500_000_000},
-		},
+		FileFormat: "csv", FileCount: 24, TotalBytes: 1_500_000_000,
 		CacheBytesH:   "47 MiB",
 		LoadDurationH: "32.00s",
 	}

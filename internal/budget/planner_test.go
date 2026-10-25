@@ -125,8 +125,7 @@ func TestPlanner_RefusesWhenEstimateExceedsCap(t *testing.T) {
 		EstimateBytes: 600,
 	}
 	plan, err := p.Plan(t.Context(), in)
-	var refused *budget.PlannerRefusedError
-	if !errors.As(err, &refused) {
+	if _, ok := errors.AsType[*budget.PlannerRefusedError](err); !ok {
 		t.Fatalf("expected PlannerRefusedError, got %v", err)
 	}
 	if plan.Fits() {
@@ -158,8 +157,7 @@ func TestPlanner_SkipsRunsWithoutKnownSize(t *testing.T) {
 		},
 	}
 	plan, err := p.Plan(t.Context(), in)
-	var refused *budget.PlannerRefusedError
-	if !errors.As(err, &refused) {
+	if _, ok := errors.AsType[*budget.PlannerRefusedError](err); !ok {
 		t.Fatalf("expected PlannerRefusedError, got %v", err)
 	}
 	if plan.Fits() {
