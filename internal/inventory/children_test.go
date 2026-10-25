@@ -1,6 +1,7 @@
 package inventory_test
 
 import (
+	"fmt"
 	"math/rand"
 	"path/filepath"
 	"sort"
@@ -243,6 +244,34 @@ func TestPageChildren_MatchesMaterialisingReference(t *testing.T) {
 				}
 				if diff := cmp.Diff(want, got); diff != "" {
 					t.Fatalf("trial %d sort %s %s (-reference +PageChildren):\n%s", trial, sortBy, dir, diff)
+				}
+			}
+		}
+	}
+}
+
+// TestPageChildren_WideLevelEarlyPagesMatchReference covers the early
+// size and objects pages RankDescendants serves from depth-block
+// bounds: a level wide enough to have them, values tied often enough
+// that names decide most ranks.
+func TestPageChildren_WideLevelEarlyPagesMatchReference(t *testing.T) {
+	rng := rand.New(rand.NewSource(17))
+	objs := make([]tieredObj, 0, 6000)
+	for c := range 3000 {
+		for f := range 1 + rng.Intn(3) {
+			objs = append(objs, tieredObj{key: fmt.Sprintf("c%05d/f%d", c, f), size: uint64(1 + rng.Intn(20)), tier: tiers.Standard})
+		}
+	}
+	idx := openTieredIndex(t, objs...)
+	cost := func(p uint64) uint64 { return idx.Stats(p).TotalBytes }
+	const pageSize = 50
+	for _, sortBy := range []string{inventory.SortColObjects, inventory.SortColSize} {
+		for _, dir := range []string{inventory.SortDirAsc, inventory.SortDirDesc} {
+			want := referenceChildren(idx, cost, sortBy, dir)
+			for page := 1; page <= 4; page++ {
+				got := pageNames(t, idx, inventory.ChildQuery{SortBy: sortBy, Dir: dir, Page: page, PageSize: pageSize}, cost)
+				if diff := cmp.Diff(want[(page-1)*pageSize:page*pageSize], got); diff != "" {
+					t.Fatalf("sort %s %s page %d (-reference +PageChildren):\n%s", sortBy, dir, page, diff)
 				}
 			}
 		}

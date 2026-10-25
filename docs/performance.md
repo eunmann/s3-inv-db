@@ -17,12 +17,19 @@ prefixes with consistent sub-microsecond warm-cache lookups.
 | `TierBreakdown` | O(tiers) | sub-µs (~70 ns) |
 | `DescendantsAtDepth` | O(log n + k) | µs–tens of µs (depends on k) |
 | Browse page, by name | O(log n + page) | tens of µs, whatever the child count |
-| Browse page, by size, objects or cost | O(c log c), c = children | ms at 200k children |
+| Browse page, by size or objects (early pages) | O(c/64 + page × 64), c = children | ~180 µs at 200k children |
+| Browse page, by cost; later pages by size or objects | O(c log c) on first view, O(log n + page) once the level is cached | ms at 200k children |
+| Top k (`TopByBytes`, `TopByCount`) | O(d/64 + k × 64), d = descendants at the depth | ~100 µs over 368k descendants |
+| Filtered descendants page | O(d) at worst; whole blocks skipped or counted unread | 2 ms over 368k (p91 filter), 0.1–0.3 ms (p99+) |
 
 A name-sorted page reads only the page: the index stores siblings in S3
 key order (each name with its trailing slash, so "2024-01/" lists
 before "2024/", as in S3 itself), and that is the order the listing
-shows. Sorting by a number reads one value per child.
+shows. Sorting or ranking by size or objects reads the depth index's
+block bounds (one per 64 entries) and then only the blocks that can
+place: about k blocks for the top k, whatever the distribution
+([index-format.md](index-format.md#block-bounds-depth_blocksu64)).
+Sorting by cost reads one value per child.
 
 The figures in parentheses come from `BenchmarkGateStatsForPrefix` and
 `BenchmarkGateTierBreakdown` on the 1M-object gate fixture (2.37M
@@ -178,8 +185,8 @@ max depth 7, 11 of 13 tiers present, 95% of prefixes holding one tier.
 | Tier stats | `tier_stats/tier_multi.*` (multi layout, including `tier_multi.mask`) | 1.5 |
 | MPHF | `mph_slots.bin` (8 B fingerprint + 3 B position) + `mph.bin` (BBHash, ~3.3 bits) | 11.4 |
 | Prefix strings | `prefix_tree.bin` (2 B segment ID + 3 B parent distance) + segment blob | 5.1 |
-| Depth index | `depth_positions.u64` (3 B) + `depth_offsets.u64` | 3.0 |
-| **Total** | including `manifest.json` and `tiers.json` | **30.1** |
+| Depth index | `depth_positions.u64` (3 B) + `depth_blocks.u64` (0.125 B) + `depth_offsets.u64` | 3.1 |
+| **Total** | including `manifest.json` and `tiers.json` | **30.2** |
 
 The fingerprint is 8 B in every index; the position takes the bytes
 the largest position needs. Tier

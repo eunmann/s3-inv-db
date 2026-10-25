@@ -85,6 +85,10 @@ func (c *LevelCache) PageChildren(idx *indexread.Index, parentPos uint64, q Chil
 		return page, nil
 	}
 
+	if page, ok, err := rankedPage(idx, parentPos, span, q, desc); ok || err != nil {
+		return page, err
+	}
+
 	keys := childKeys(idx, span, q.SortBy, cost, false)
 	// Ties break by position, which is name order: the order is total,
 	// so ordering only part of it is exact.
@@ -112,6 +116,42 @@ func (c *LevelCache) PageChildren(idx *indexread.Index, parentPos uint64, q Chil
 	}
 
 	return page, nil
+}
+
+// rankedPage serves an early page by size or objects from the index's
+// depth-block bounds (indexread.RankDescendants), reading about a page's
+// worth of blocks instead of every child. It reports false for the
+// other columns and for pages deep enough that ordering every child
+// costs about the same.
+func rankedPage(idx *indexread.Index, parentPos uint64, span format.Span, q ChildQuery, desc bool) (ChildPage, bool, error) {
+	var metric indexread.TopMetric
+	switch q.SortBy {
+	case SortColSize:
+		metric = indexread.TopByBytesMetric
+	case SortColObjects:
+		metric = indexread.TopByCountMetric
+	default:
+		return ChildPage{}, false, nil
+	}
+	total := int(span.Len())
+	p := Paginate(total, q.Page, q.PageSize)
+	if p.LastRow*8 > total {
+		return ChildPage{}, false, nil
+	}
+	page := ChildPage{Pagination: p, Total: total}
+	if p.FirstRow == 0 {
+		return page, true, nil
+	}
+	ranked, err := idx.RankDescendants(parentPos, 1, p.LastRow, metric, !desc, indexread.Filter{})
+	if err != nil {
+		return ChildPage{}, false, fmt.Errorf("children: %w", err)
+	}
+	page.Positions = make([]uint64, 0, p.LastRow-p.FirstRow+1)
+	for _, r := range ranked[p.FirstRow-1:] {
+		page.Positions = append(page.Positions, r.Pos)
+	}
+
+	return page, true, nil
 }
 
 // childKeys reads the sort metric of every child in span. Keys carry
