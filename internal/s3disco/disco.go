@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -130,6 +131,7 @@ func (d *Discoverer) List(ctx context.Context) ([]inventory.Inventory, error) {
 	// One slot per source or configuration, in walk order; the
 	// configurations are described concurrently and fill their slots.
 	var slots []*[]inventory.Inventory
+	var partial atomic.Bool
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, listConcurrency)
 	for _, src := range srcBuckets {
@@ -143,6 +145,7 @@ func (d *Discoverer) List(ctx context.Context) ([]inventory.Inventory, error) {
 		if err != nil {
 			logger.Warn().Err(err).Str("src", srcName).Msg("list inventories under src")
 			slots = append(slots, &[]inventory.Inventory{{SourceBucket: srcName, Error: "failed to list inventories under source bucket"}})
+			partial.Store(true)
 
 			continue
 		}
@@ -162,6 +165,7 @@ func (d *Discoverer) List(ctx context.Context) ([]inventory.Inventory, error) {
 				if err != nil {
 					logger.Warn().Err(err).Str("src", srcName).Str("inv", invName).Msg("describe runs")
 					runs = []inventory.Inventory{{SourceBucket: srcName, Name: invName, Error: "failed to describe inventory"}}
+					partial.Store(true)
 				}
 				*slot = runs
 			})
@@ -173,13 +177,16 @@ func (d *Discoverer) List(ctx context.Context) ([]inventory.Inventory, error) {
 	for _, runs := range slots {
 		out = append(out, *runs...)
 	}
-	d.keepManifests(out)
+	if !partial.Load() {
+		d.keepManifests(out)
+	}
 
 	return out, nil
 }
 
 // keepManifests drops cached summaries of runs a complete listing no
-// longer shows.
+// longer shows. List skips it when a source or configuration failed to
+// list, so a transient error doesn't cost those runs' manifests again.
 func (d *Discoverer) keepManifests(listed []inventory.Inventory) {
 	keep := make(map[string]struct{}, len(listed))
 	for i := range listed {
@@ -196,9 +203,10 @@ func (d *Discoverer) keepManifests(listed []inventory.Inventory) {
 	}
 }
 
-// Find returns one Inventory by (srcBucket, invID, run) with a single
-// manifest GET; an empty run costs one extra LIST to pick the most
-// recent run for the configuration.
+// Find returns one Inventory by (srcBucket, invID, run) with at most
+// one manifest GET, none when the run's manifest was already read; an
+// empty run costs one extra LIST to pick the most recent run for the
+// configuration.
 func (d *Discoverer) Find(ctx context.Context, srcBucket, invID, run string) (inventory.Inventory, error) {
 	if srcBucket == "" || invID == "" {
 		return inventory.Inventory{}, errEmptyID
