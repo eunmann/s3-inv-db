@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -54,9 +55,9 @@ func (c *Catalog) planPrefaultLocked(inv *managedInventory, dir string) *format.
 // the first 1000 lookups -53% on the benchmark fixture, #55).
 // Prefaulting only warms the cache: when it fails, the index opens as
 // usual and its pages fault in as queries touch them.
-func openServed(dir string, m *format.Manifest) (*indexread.Index, error) {
+func (c *Catalog) openServed(dir string, m *format.Manifest) (*indexread.Index, error) {
 	if m != nil {
-		if err := format.Prefault(dir, m); err != nil {
+		if err := c.prefault(dir, m); err != nil {
 			logging.L().Warn().Err(err).Str("dir", dir).Msg("prefault index; opening without it")
 		}
 	}
@@ -66,4 +67,32 @@ func openServed(dir string, m *format.Manifest) (*indexread.Index, error) {
 	}
 
 	return idx, nil
+}
+
+// PrefaultRestored reads the indexes Hydrate restored into the page
+// cache, one at a time, skipping any no longer served (unloaded or
+// replaced since). The server runs it once it is listening, so a
+// restart answers queries right away; until an index is warmed, its
+// pages fault in as queries touch them, as they would without
+// prefaulting.
+func (c *Catalog) PrefaultRestored(ctx context.Context) {
+	c.mu.Lock()
+	pending := c.restored
+	c.restored = nil
+	c.mu.Unlock()
+	for _, r := range pending {
+		if ctx.Err() != nil {
+			return
+		}
+		c.mu.RLock()
+		cur, ok := c.inventories[r.inv.info.ID]
+		served := ok && cur == r.inv && cur.index == r.index
+		c.mu.RUnlock()
+		if !served {
+			continue
+		}
+		if err := c.prefault(r.dir, r.manifest); err != nil {
+			logging.L().Warn().Err(err).Str("dir", r.dir).Msg("prefault restored index")
+		}
+	}
 }

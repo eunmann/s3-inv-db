@@ -75,6 +75,20 @@ type Catalog struct {
 	// prefaultLimit bounds the bytes of the indexes the catalog
 	// prefaults together (planPrefaultLocked).
 	prefaultLimit uint64
+	// prefault reads an index's files into the page cache
+	// (format.Prefault; tests observe it).
+	prefault func(dir string, m *format.Manifest) error
+	// restored lists the indexes Hydrate opened without prefaulting;
+	// PrefaultRestored warms them. Guarded by mu.
+	restored []restoredIndex
+}
+
+// restoredIndex is one index Hydrate opened and planned to prefault.
+type restoredIndex struct {
+	inv      *managedInventory
+	index    *indexread.Index
+	dir      string
+	manifest *format.Manifest
 }
 
 // pendingWrite is one state change to persist, stamped with its
@@ -95,6 +109,7 @@ func NewCatalog(store *Store) *Catalog {
 		store:         noopMirrorStore{},
 		persisted:     make(map[ID]uint64),
 		prefaultLimit: prefaultLimit(),
+		prefault:      format.Prefault,
 	}
 	if store != nil {
 		c.store = store
@@ -259,7 +274,7 @@ func (c *Catalog) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 			m = c.planPrefaultLocked(inv, indexDir)
 		}
 		c.mu.Unlock()
-		idx, openErr = openServed(indexDir, m)
+		idx, openErr = c.openServed(indexDir, m)
 	}
 
 	var bytes uint64
@@ -599,7 +614,11 @@ func (c *Catalog) Hydrate(ctx context.Context, info Info, indexDir string) error
 			mi.info.MaxDepth = 0
 			mi.info.HasTierData = false
 		} else {
-			idx, err := openServed(indexDir, c.planPrefaultLocked(mi, indexDir))
+			// Opened without prefaulting: a restart serves at once and
+			// PrefaultRestored warms the index afterwards, under the
+			// same budget this plan reserves.
+			m := c.planPrefaultLocked(mi, indexDir)
+			idx, err := c.openServed(indexDir, nil)
 			switch {
 			case err != nil:
 				mi.info.State = StateError
@@ -612,6 +631,9 @@ func (c *Catalog) Hydrate(ctx context.Context, info Info, indexDir string) error
 				mi.info.NodeCount = idx.Count()
 				mi.info.MaxDepth = idx.MaxDepth()
 				mi.info.HasTierData = idx.HasTierData()
+				if m != nil {
+					c.restored = append(c.restored, restoredIndex{inv: mi, index: idx, dir: indexDir, manifest: m})
+				}
 			}
 		}
 	}
