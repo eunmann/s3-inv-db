@@ -114,9 +114,6 @@ func (w *PrefixTreeWriter) writeRow(segID uint32, dist uint64) error {
 	return nil
 }
 
-// Count returns the prefixes added.
-func (w *PrefixTreeWriter) Count() uint64 { return w.count }
-
 // Close writes the final tree file and the segment dictionary and
 // removes the scratch file.
 func (w *PrefixTreeWriter) Close() error {
