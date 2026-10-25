@@ -249,20 +249,27 @@ func (idx *Index) PositionsInSpan(span format.Span, offset, limit int) []uint64 
 // of prefixPos at relDepth; it is empty when there are none or the
 // input is invalid (see DescendantsAtDepth).
 func (idx *Index) descendantSpan(prefixPos uint64, relDepth int) (format.Span, error) {
+	span, _, err := idx.descendantSpanAt(prefixPos, relDepth)
+
+	return span, err
+}
+
+// descendantSpanAt is descendantSpan with the depth the span lies at.
+func (idx *Index) descendantSpanAt(prefixPos uint64, relDepth int) (format.Span, uint32, error) {
 	if prefixPos >= idx.count || relDepth < 0 {
-		return format.Span{}, nil
+		return format.Span{}, 0, nil
 	}
 	targetDepth := idx.Depth(prefixPos) + uint32(relDepth)
 	if targetDepth > idx.maxDepth {
-		return format.Span{}, nil
+		return format.Span{}, 0, nil
 	}
 
 	span, err := idx.depthIndex.SubtreeSpan(targetDepth, prefixPos, idx.SubtreeEnd(prefixPos))
 	if err != nil {
-		return format.Span{}, fmt.Errorf("get positions at depth %d: %w", targetDepth, err)
+		return format.Span{}, 0, fmt.Errorf("get positions at depth %d: %w", targetDepth, err)
 	}
 
-	return span, nil
+	return span, targetDepth, nil
 }
 
 // Filter specifies criteria for filtering results.
@@ -304,10 +311,12 @@ type Page struct {
 // DescendantsPage returns the matches of DescendantsAtDepthFiltered
 // at [offset, offset+limit) together with the total match count,
 // holding only the page in memory. Without a filter the total is the
-// size of the depth-index span and only the page is read; with one,
-// every descendant's stats are read to count the matches.
+// size of the depth-index span and only the page is read. With one,
+// the depth-block bounds settle whole blocks where they can (none of
+// a block matches, or all of it does) and the rest are read entry by
+// entry.
 func (idx *Index) DescendantsPage(prefixPos uint64, relDepth int, filter Filter, offset, limit int) (Page, error) {
-	span, err := idx.descendantSpan(prefixPos, relDepth)
+	span, depth, err := idx.descendantSpanAt(prefixPos, relDepth)
 	if err != nil {
 		return Page{}, fmt.Errorf("get descendants at depth %d: %w", relDepth, err)
 	}
@@ -317,6 +326,35 @@ func (idx *Index) DescendantsPage(prefixPos uint64, relDepth int, filter Filter,
 	}
 
 	var page Page
+	blocks := idx.depthIndex.SpanBlocks(depth, span)
+	if blocks.Len() < rankBlockMin {
+		idx.filterInto(&page, span, filter, offset, limit)
+
+		return page, nil
+	}
+	for i := range blocks.Len() {
+		b, e := blocks.Bounds(i), blocks.Entries(i)
+		switch {
+		case b.MaxCount < filter.MinCount || b.MaxBytes < filter.MinBytes:
+		case b.MinCount >= filter.MinCount && b.MinBytes >= filter.MinBytes:
+			// Every entry matches: read only those the window takes.
+			from := max(offset, page.Total)
+			to := min(offset+limit, page.Total+int(e.Len()))
+			for k := from; k < to; k++ {
+				page.Positions = append(page.Positions, idx.depthIndex.PositionAt(e.Lo+uint64(k-page.Total)))
+			}
+			page.Total += int(e.Len())
+		default:
+			idx.filterInto(&page, e, filter, offset, limit)
+		}
+	}
+
+	return page, nil
+}
+
+// filterInto counts span's entries that pass filter into page, keeping
+// those at match index [offset, offset+limit).
+func (idx *Index) filterInto(page *Page, span format.Span, filter Filter, offset, limit int) {
 	for i := span.Lo; i < span.Hi; i++ {
 		pos := idx.depthIndex.PositionAt(i)
 		stats := idx.Stats(pos)
@@ -328,8 +366,6 @@ func (idx *Index) DescendantsPage(prefixPos uint64, relDepth int, filter Filter,
 		}
 		page.Total++
 	}
-
-	return page, nil
 }
 
 // TierBreakdown is an alias for format.TierBreakdown.

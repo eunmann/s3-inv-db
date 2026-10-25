@@ -44,7 +44,9 @@ fmt.Printf("%d objects, %d bytes\n", stats.ObjectCount, stats.TotalBytes)
   materialising positions), `DescendantsPage` (one `[offset,
   offset+limit)` window of the filtered matches plus their total,
   holding only the page in memory).
-- **Top-N**: `TopByBytes`, `TopByCount`, `TopFiltered`.
+- **Top-N**: `TopByBytes`, `TopByCount`, `TopFiltered`, and
+  `RankDescendants` (either direction: largest or smallest first). They
+  read the depth-block bounds and then about k blocks of stats.
 - **Per-tier**: `HasTierData`, `TierBreakdown`, `TierBreakdownMap`.
 
 ## Non-obvious invariants
