@@ -13,3 +13,7 @@ integration internal/loader ^BenchmarkPipeline$/^shape=(realistic|deep_pyramid|r
 # Final merge of many spilled runs under a GOMEMLIMIT (reports
 # peak_heap_B, rounds, round_bytes): open-run cost and fan-in sizing.
 - pkg/extsort ^BenchmarkFinalMerge$ 1x
+
+# Build path against S3 behind a slower link (20 ms first byte, 8 MiB/s
+# per GET), four chunks per worker: the time a build waits on S3.
+integration internal/loader ^BenchmarkPipelineSlowS3$ 1x

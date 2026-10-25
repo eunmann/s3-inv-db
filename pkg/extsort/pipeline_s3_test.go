@@ -5,6 +5,7 @@ package extsort_test
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"testing"
@@ -461,5 +463,100 @@ func TestPipelineRun_ResidualsInMemoryMatchSpilled(t *testing.T) {
 		if errA != nil || errB != nil || pa != pb || a.Stats(pos) != b.Stats(pos) || !indexread.TiersEqual(a.TierBreakdown(pos), b.TierBreakdown(pos)) {
 			t.Fatalf("position %d: %q %+v vs %q %+v (%v, %v)", pos, pa, a.Stats(pos), pb, b.Stats(pos), errA, errB)
 		}
+	}
+}
+
+// A build cancelled while chunks are downloading ahead of the workers
+// leaves no downloaded chunk in scratch: a fetcher holding one when the
+// build stops removes it.
+func TestPipelineRun_CancelledIngestLeavesNoChunks(t *testing.T) {
+	raw := s3test.RawClient(t)
+	bucket := s3test.Bucket(t, raw)
+	info, err := seeder.UploadMultiChunkInventory(t.Context(), raw, seeder.Config{
+		Target:  seeder.TargetS3,
+		Objects: 20_000,
+		Preset:  "small",
+		Seed:    11,
+		Logger:  zerolog.Nop(),
+	}, seeder.S3Config{Bucket: bucket, Prefix: "inv/", SrcBucket: "src"}, 1, 11, time.Now().UTC().Truncate(time.Minute), 4*runtime.NumCPU())
+	if err != nil {
+		t.Fatalf("UploadMultiChunkInventory: %v", err)
+	}
+
+	scratch := t.TempDir()
+	cfg := extsort.DefaultConfig()
+	cfg.TempDir = scratch
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		// Cancel once downloads are under way.
+		for ctx.Err() == nil {
+			if matches, _ := filepath.Glob(filepath.Join(scratch, "s3download-*.tmp")); len(matches) > 0 {
+				time.Sleep(20 * time.Millisecond)
+				cancel()
+
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	fc := s3test.SlowFetchClient(t, 5*time.Millisecond, 512<<10)
+	if _, err := extsort.NewPipeline(cfg, fc).Run(ctx, info.Path, filepath.Join(t.TempDir(), "index")); err == nil {
+		t.Fatal("Run succeeded although it was cancelled mid-ingest")
+	}
+	if left, _ := filepath.Glob(filepath.Join(scratch, "s3download-*.tmp")); len(left) != 0 {
+		t.Errorf("%d downloaded chunks left in scratch after the cancelled build", len(left))
+	}
+}
+
+// TestPipelineRun_CancelWaitsForDownloads cancels a build while a chunk
+// download is stalled and checks Run returns only after the downloads
+// have unwound and removed their files, never while one may still
+// write to scratch.
+func TestPipelineRun_CancelWaitsForDownloads(t *testing.T) {
+	raw := s3test.RawClient(t)
+	bucket := s3test.Bucket(t, raw)
+	info, err := seeder.UploadMultiChunkInventory(t.Context(), raw, seeder.Config{
+		Target:  seeder.TargetS3,
+		Objects: 2_000,
+		Preset:  "small",
+		Seed:    12,
+		Logger:  zerolog.Nop(),
+	}, seeder.S3Config{Bucket: bucket, Prefix: "inv/", SrcBucket: "src"}, 1, 12, time.Now().UTC().Truncate(time.Minute), 4)
+	if err != nil {
+		t.Fatalf("UploadMultiChunkInventory: %v", err)
+	}
+
+	scratch := t.TempDir()
+	cfg := extsort.DefaultConfig()
+	cfg.TempDir = scratch
+	fc, gate := s3test.GatedFetchClient(t, "/data/")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, runErr := extsort.NewPipeline(cfg, fc).Run(ctx, info.Path, filepath.Join(t.TempDir(), "index"))
+		done <- runErr
+	}()
+
+	select {
+	case <-gate.Stalled():
+	case runErr := <-done:
+		t.Fatalf("Run returned before any chunk download started: %v", runErr)
+	}
+	cancel()
+
+	const grace = 300 * time.Millisecond
+	select {
+	case <-done:
+		t.Fatal("Run returned while a chunk download was still in flight")
+	case <-time.After(grace):
+	}
+	gate.Open()
+	if runErr := <-done; runErr == nil {
+		t.Fatal("Run succeeded although it was cancelled mid-ingest")
+	}
+	if left, _ := filepath.Glob(filepath.Join(scratch, "s3download-*.tmp")); len(left) != 0 {
+		t.Errorf("%d downloaded chunks left in scratch after the cancelled build", len(left))
 	}
 }
