@@ -69,8 +69,8 @@ func buildMPHFForBench(b *testing.B, prefixes []string) string {
 
 // BenchmarkMPHFBuild sweeps the full streaming MPHF build path
 // (Add → Build → fingerprint compute → on-disk write). Default sizes
-// stress the small-cache and L3-spill regimes; the long-bench gate
-// adds a 5M point that runs ~1–2 min per iter.
+// stress the small-cache and L3-spill regimes (~60 ms per op at 1M);
+// the long-bench gate adds a 5M point.
 func BenchmarkMPHFBuild(b *testing.B) {
 	sizes := []int{100_000, 1_000_000}
 	if benchutil.LongBenchEnabled() {
