@@ -202,14 +202,16 @@ type CompareLevelData struct {
 // built for the visible page alone.
 type compareRow struct {
 	posA, posB uint64
+	objects    CompareNumeric
+	bytes      CompareNumeric
+	costDelta  int64
+	inA, inB   bool
+	status     CompareStatus
 	// seq is the row's place in merge order, S3 key order of the names:
-	// the tie-break that makes every display order total.
-	seq       int
-	objects   CompareNumeric
-	bytes     CompareNumeric
-	costDelta int64
-	inA, inB  bool
-	status    CompareStatus
+	// the tie-break that makes every display order total. uint32 fits in
+	// the padding after status (the row stays 80 bytes); 2^32 children
+	// of one prefix would need over 340 GB of rows first.
+	seq uint32
 }
 
 // CompareLevel compares two indexes at one prefix and returns the
@@ -343,7 +345,7 @@ func mergeChildren(a, b *indexread.Index, pa, pb []uint64) []compareRow {
 		}
 		r.objects.Delta = int64(r.objects.After) - int64(r.objects.Before)
 		r.bytes.Delta = int64(r.bytes.After) - int64(r.bytes.Before)
-		r.seq = len(out)
+		r.seq = uint32(len(out))
 		out = append(out, r)
 	}
 
