@@ -36,8 +36,7 @@ index/
 ├── mph_fp_pos.u64
 ├── prefix_dict.bin
 ├── prefix_dict.off.u64
-├── prefix_dict.ids.u32
-├── prefix_dict.prefix_off.u64
+├── prefix_tree.bin
 ├── build.json                     (CLI builds only; not in the manifest)
 └── tier_stats/                    (absent with one present tier)
     ├── tier_dense.bin             (dense layout), or
@@ -61,7 +60,7 @@ fields little-endian:
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | Magic | `0x53334944` ("S3ID" in ASCII) |
-| 4 | 4 | Version | Format version (currently `5`) |
+| 4 | 4 | Version | Format version (currently `6`) |
 | 8 | 8 | Count | Number of rows |
 | 16 | 4 | Width | Row stride in bytes |
 
@@ -80,16 +79,12 @@ and records it in `Width`:
 |------|-------|
 | `depth_positions.u64` | bytes for the largest position (1–8) |
 | `depth_offsets.u64` | bytes for the number of positions (1–8) |
-| `prefix_dict.prefix_off.u64` | bytes for the number of segment-ID references (1–8) |
-| `prefix_dict.ids.u32` | bytes for the largest segment ID (1–4) |
 | `tier_stats/tier_multi.off.u64` | bytes for the number of stored tier slots (1–8) |
 | `prefix_dict.off.u64`, `mph_fp_pos.u64` | always 8 |
 
-A reader loads 8 bytes (4 for `prefix_dict.ids.u32`) at
-`index × Width` and masks off the bytes above `Width`. So that this
-load stays inside the mmap at the last element, each repacked file
-ends with a zero tail pad: 8 bytes for the `.u64` arrays, 4 bytes for
-`prefix_dict.ids.u32`.
+A reader loads 8 bytes at `index × Width` and masks off the bytes
+above `Width`. So that this load stays inside the mmap at the last
+element, each repacked file ends with an 8-byte zero tail pad.
 
 ## Core Stats (`core_stats.bin`)
 
@@ -205,24 +200,39 @@ BBHash needs distinct keys. If two prefixes share a 64-bit key hash, the builder
 
 ## Prefix Strings
 
-Dictionary-encoded layout: each "/"-delimited segment is interned
-once into a shared blob; each prefix is then stored as a sequence of
-segment IDs. A prefix ending in `/` has a trailing empty segment, so
-`data/2024/` is the three segments `data`, `2024` and `""`. Shared
-top-level segments on a deep S3 hierarchy compress the prefix bytes
-substantially.
+Every non-root prefix is its parent prefix, one segment, then a slash:
+`data/2024/` is `data/` + `2024` + `/`. The prefix tree stores exactly
+that, so naming a child is one row read and rebuilding a prefix is one
+row read per level.
 
 | File | Description |
 |------|-------------|
-| `prefix_dict.bin` | Concatenated segment strings (no separators) |
+| `prefix_dict.bin` | Every distinct segment once, concatenated (no separators) |
 | `prefix_dict.off.u64` | Byte offset for each segment in `prefix_dict.bin`; trailing sentinel marks the end |
-| `prefix_dict.ids.u32` | Per-prefix concatenated segment-ID streams, at the width of the largest segment ID |
-| `prefix_dict.prefix_off.u64` | Start offset (into `prefix_dict.ids.u32`) for each prefix; trailing sentinel marks the end |
+| `prefix_tree.bin` | Per prefix in preorder: its last segment's ID and the distance back to its parent's position |
 
-To read prefix at position `i`:
-1. Read `prefix_off[i]` and `prefix_off[i+1]` — the segment-ID range
-2. For each ID in `ids[start:end]`, look up the segment string via `prefix_dict.bin` + `prefix_dict.off.u64`
-3. Join with `/`
+`prefix_tree.bin` layout:
+
+| Offset | Size | Content |
+|--------|------|---------|
+| 0 | 20 | Header (`Count` = prefixes, `Width` = row bytes) |
+| 20 | 2 | Descriptor: segment ID width (1–4), parent distance width (1–8) |
+| 22 | `Count × Width` | Rows: segment ID, then parent distance |
+| end | 8 | Zero tail pad |
+
+Both widths come from the largest value in this index. The root `""`
+is position 0 and its row is zero; every other row has a distance of at
+least 1.
+
+To read the prefix at position `p`, walk to the root collecting segment
+IDs (`p -= distance` until `p == 0`), then join their segments in
+reverse, each followed by `/`. The listing name of `p` (its last
+segment) is the segment of its own row.
+
+Because the builder writes each prefix as its parent plus one segment,
+it requires the root first and every prefix after its parent;
+`IndexBuilder.Add` rejects anything else with `ErrMissingParent`. The
+aggregator always emits every ancestor.
 
 On Open, all segments are preloaded into an in-memory cache (unique
 segments are few next to prefixes: 9,262 segments for 2.37M prefixes
@@ -326,4 +336,4 @@ from the file-header format version.
 
 ## Versioning
 
-The format version in file headers lets a reader refuse files it would mis-decode. Version 5 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 6 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
