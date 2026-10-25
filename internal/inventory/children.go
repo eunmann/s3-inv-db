@@ -3,8 +3,10 @@ package inventory
 import (
 	"cmp"
 	"fmt"
+	"math"
 	"slices"
 
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 )
 
@@ -44,6 +46,13 @@ type childKey struct {
 // ascending. Cost is
 // called once per child, and only when sorting by cost.
 func PageChildren(idx *indexread.Index, parentPos uint64, q ChildQuery, cost CostFunc) (ChildPage, error) {
+	return (*LevelCache)(nil).PageChildren(idx, parentPos, q, cost)
+}
+
+// PageChildren is the package PageChildren, keeping the full order of a
+// large level once it is viewed a second time (see LevelCache), so
+// later pages of it are O(log n + page).
+func (c *LevelCache) PageChildren(idx *indexread.Index, parentPos uint64, q ChildQuery, cost CostFunc) (ChildPage, error) {
 	if q.SortBy == SortColSegment || q.SortBy == "" {
 		return pageChildrenByName(idx, parentPos, q)
 	}
@@ -51,12 +60,32 @@ func PageChildren(idx *indexread.Index, parentPos uint64, q ChildQuery, cost Cos
 	if err != nil {
 		return ChildPage{}, fmt.Errorf("children: %w", err)
 	}
-	keys := make([]childKey, span.Len())
-	for i := range keys {
-		pos := idx.SpanPosition(span, uint64(i))
-		keys[i] = childKey{pos: pos, metric: childMetric(idx, pos, q.SortBy, cost)}
-	}
 	desc := q.Dir == SortDirDesc
+	key := levelKey{a: idx.Identity(), posA: parentPos, okA: true, sortBy: q.SortBy, dir: q.Dir}
+	cached, ok := c.browseOrder(key, span.Len(), func() []uint32 {
+		keys := childKeys(idx, span, q.SortBy, cost, true)
+		radixSortKeys(keys, desc)
+		order := make([]uint32, len(keys))
+		for i, k := range keys {
+			order[i] = uint32(k.pos)
+		}
+
+		return order
+	})
+	if ok {
+		p := Paginate(len(cached), q.Page, q.PageSize)
+		page := ChildPage{Pagination: p, Total: len(cached)}
+		if p.FirstRow > 0 {
+			page.Positions = make([]uint64, 0, p.LastRow-p.FirstRow+1)
+			for _, off := range cached[p.FirstRow-1 : p.LastRow] {
+				page.Positions = append(page.Positions, idx.SpanPosition(span, uint64(off)))
+			}
+		}
+
+		return page, nil
+	}
+
+	keys := childKeys(idx, span, q.SortBy, cost, false)
 	// Ties break by position, which is name order: the order is total,
 	// so ordering only part of it is exact.
 	order := func(a, b childKey) int {
@@ -83,6 +112,67 @@ func PageChildren(idx *indexread.Index, parentPos uint64, q ChildQuery, cost Cos
 	}
 
 	return page, nil
+}
+
+// childKeys reads the sort metric of every child in span. Keys carry
+// the child's position, or its offset in the span when offsets is set;
+// either way they are in name order.
+func childKeys(idx *indexread.Index, span format.Span, sortBy string, cost CostFunc, offsets bool) []childKey {
+	keys := make([]childKey, span.Len())
+	for i := range keys {
+		pos := idx.SpanPosition(span, uint64(i))
+		keys[i] = childKey{pos: pos, metric: childMetric(idx, pos, sortBy, cost)}
+		if offsets {
+			keys[i].pos = uint64(i)
+		}
+	}
+
+	return keys
+}
+
+// radixSortKeys orders keys by metric (descending when desc), keeping
+// equal metrics in their current order: a stable LSD radix sort with one
+// pass per byte that differs between keys. Keys arrive in name order, so
+// ties stay in name order, as the comparison sort's position tiebreak
+// orders them.
+func radixSortKeys(keys []childKey, desc bool) {
+	if len(keys) < 2 {
+		return
+	}
+	var flip uint64
+	if desc {
+		flip = math.MaxUint64
+	}
+	anyBits, allBits := uint64(0), uint64(math.MaxUint64)
+	for _, k := range keys {
+		m := k.metric ^ flip
+		anyBits |= m
+		allBits &= m
+	}
+	varying := anyBits ^ allBits
+	src, dst := keys, make([]childKey, len(keys))
+	for shift := uint(0); shift < 64; shift += 8 {
+		if (varying>>shift)&0xff == 0 {
+			continue
+		}
+		var start [256]int
+		for _, k := range src {
+			start[byte((k.metric^flip)>>shift)]++
+		}
+		sum := 0
+		for i := range start {
+			start[i], sum = sum, sum+start[i]
+		}
+		for _, k := range src {
+			b := byte((k.metric ^ flip) >> shift)
+			dst[start[b]] = k
+			start[b]++
+		}
+		src, dst = dst, src
+	}
+	if &src[0] != &keys[0] {
+		copy(keys, src)
+	}
 }
 
 // firstSorted returns the first k elements of s in order, reordering s

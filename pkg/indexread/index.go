@@ -19,6 +19,7 @@ type Index struct {
 	tierStats  *format.TierStatsReader
 	count      uint64
 	maxDepth   uint32
+	identity   *Identity
 }
 
 // Open opens an index from the given directory.
@@ -56,6 +57,7 @@ func Open(dir string) (*Index, error) {
 	}
 
 	idx := &Index{
+		identity:   new(Identity),
 		coreStats:  coreStats,
 		depthIndex: depthIndex,
 		mphf:       mphf,
@@ -70,6 +72,16 @@ func Open(dir string) (*Index, error) {
 
 	return idx, nil
 }
+
+// Identity is a token unique to one opened index. A cache keyed by it
+// can't mistake one index for another: while the cache holds the token
+// it can't be freed, so no later Open can be handed the same address.
+// It holds nothing else, so it doesn't keep a closed index's memory
+// alive.
+type Identity struct{ _ byte }
+
+// Identity returns the index's identity token.
+func (idx *Index) Identity() *Identity { return idx.identity }
 
 // ErrIndexInconsistent is returned by Open when the index's files
 // disagree on how many prefixes it holds: a mixed or damaged file set

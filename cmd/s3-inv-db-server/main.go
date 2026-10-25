@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -66,6 +67,7 @@ type serverFlags struct {
 	maxConcurrentJobs *int
 	autoLoadRetention *uint
 	queryBatchMax     *int
+	levelCache        *string
 	trustedProxies    *string
 }
 
@@ -86,6 +88,7 @@ func defineFlags(fs *flag.FlagSet) *serverFlags {
 		maxConcurrentJobs: fs.Int("max-concurrent-jobs", 1, "max jobs (auto-loads and manual builds) running at once"),
 		autoLoadRetention: fs.Uint("auto-load-retention-default", defaultAutoLoadRetention, "default per-config run-retention when a configuration sets none"),
 		queryBatchMax:     fs.Int("query-batch-max", 0, "max prefixes per batch stats request (0 = handler default)"),
+		levelCache:        fs.String("level-cache", "64MiB", "memory for the order of large browse/compare levels, so paging through one is O(page) (0 = off)"),
 		trustedProxies:    fs.String("trusted-proxies", "", "comma-separated CIDRs/IPs of reverse proxies whose X-Forwarded-For is trusted (default: none; the TCP peer is the client)"),
 	}
 }
@@ -103,6 +106,11 @@ func resolveRuntimeOptions(f *serverFlags, fileCfg *appconfig.Config, explicit m
 	finalDiscoveryRefresh, err := resolveDuration(*f.discoveryRefresh, explicit["discovery-refresh-interval"], fileCfg, func(c *appconfig.Config) *string { return c.DiscoveryRefreshInterval })
 	if err != nil {
 		return server.RuntimeOptions{}, fmt.Errorf("discovery_refresh_interval: %w", err)
+	}
+	levelCacheStr := appconfig.PickFile(*f.levelCache, explicit["level-cache"], fileCfg, func(c *appconfig.Config) *string { return c.LevelCache })
+	levelCacheBytes, err := parseSize(levelCacheStr)
+	if err != nil {
+		return server.RuntimeOptions{}, fmt.Errorf("level_cache: %w", err)
 	}
 	trustedProxies, err := resolveTrustedProxies(*f.trustedProxies, explicit["trusted-proxies"], fileCfg)
 	if err != nil {
@@ -122,6 +130,7 @@ func resolveRuntimeOptions(f *serverFlags, fileCfg *appconfig.Config, explicit m
 		MaxConcurrentJobs:        appconfig.PickFile(*f.maxConcurrentJobs, explicit["max-concurrent-jobs"], fileCfg, func(c *appconfig.Config) *int { return c.MaxConcurrentJobs }),
 		AutoLoadRetentionDefault: appconfig.PickFile(uint32(*f.autoLoadRetention), explicit["auto-load-retention-default"], fileCfg, func(c *appconfig.Config) *uint32 { return c.AutoLoadRetentionDefault }),
 		QueryBatchMax:            appconfig.PickFile(*f.queryBatchMax, explicit["query-batch-max"], fileCfg, func(c *appconfig.Config) *int { return c.QueryBatchMax }),
+		LevelCacheBytes:          int64(min(levelCacheBytes, math.MaxInt64)),
 		TrustedProxies:           trustedProxies,
 		InventoryConfigs:         inventoryConfigsFromFile(fileCfg),
 		Logger:                   logger,

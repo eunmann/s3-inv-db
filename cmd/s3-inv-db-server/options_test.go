@@ -2,9 +2,12 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/appconfig"
+	"github.com/eunmann/s3-inv-db/internal/handlers"
+	"github.com/rs/zerolog"
 )
 
 func TestParseSize(t *testing.T) {
@@ -119,5 +122,53 @@ func TestResolveTrustedProxies_Precedence(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestResolveRuntimeOptions_LevelCache: --level-cache wins over the
+// file's level_cache, which wins over the default; "0" turns it off.
+func TestResolveRuntimeOptions_LevelCache(t *testing.T) {
+	str := func(s string) *string { return &s }
+	cases := []struct {
+		name string
+		args []string
+		file *appconfig.Config
+		want int64
+	}{
+		{"default", nil, nil, handlers.DefaultLevelCacheBytes},
+		{"file without key", nil, &appconfig.Config{}, handlers.DefaultLevelCacheBytes},
+		{"file sets size", nil, &appconfig.Config{LevelCache: str("1GB")}, 1_000_000_000},
+		{"file turns off", nil, &appconfig.Config{LevelCache: str("0")}, 0},
+		{"flag sets size", []string{"--level-cache=32MiB"}, nil, 32 << 20},
+		{"flag over file", []string{"--level-cache=32MiB"}, &appconfig.Config{LevelCache: str("0")}, 32 << 20},
+		{"flag turns off over file", []string{"--level-cache=0"}, &appconfig.Config{LevelCache: str("1GB")}, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			f := defineFlags(fs)
+			if err := fs.Parse(c.args); err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			explicit := map[string]bool{}
+			fs.Visit(func(fl *flag.Flag) { explicit[fl.Name] = true })
+			opts, err := resolveRuntimeOptions(f, c.file, explicit, zerolog.Nop())
+			if err != nil {
+				t.Fatalf("resolveRuntimeOptions: %v", err)
+			}
+			if opts.LevelCacheBytes != c.want {
+				t.Errorf("LevelCacheBytes = %d, want %d", opts.LevelCacheBytes, c.want)
+			}
+		})
+	}
+}
+
+func TestResolveRuntimeOptions_LevelCacheRejectsBadSize(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	f := defineFlags(fs)
+	bad := "lots"
+	_, err := resolveRuntimeOptions(f, &appconfig.Config{LevelCache: &bad}, map[string]bool{}, zerolog.Nop())
+	if err == nil {
+		t.Fatal("resolveRuntimeOptions accepted level_cache \"lots\"")
 	}
 }

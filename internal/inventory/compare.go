@@ -221,6 +221,13 @@ type compareRow struct {
 // a page view does not include building a string, tier map or stats
 // copy per child. Cost prices every child only when sorting by cost.
 func CompareLevel(a, b *indexread.Index, prefix string, q CompareQuery, cost CompareCostFunc) CompareLevelData {
+	return (*LevelCache)(nil).CompareLevel(a, b, prefix, q, cost)
+}
+
+// CompareLevel is the package CompareLevel, keeping the ordered rows of
+// a large level (see LevelCache), so later pages of it, and views of it
+// again, are O(log n + page). The rows are shared and never modified.
+func (c *LevelCache) CompareLevel(a, b *indexread.Index, prefix string, q CompareQuery, cost CompareCostFunc) CompareLevelData {
 	out := CompareLevelData{Self: CompareSelf{Prefix: prefix}}
 	posA, okA := a.Lookup(prefix)
 	posB, okB := b.Lookup(prefix)
@@ -229,13 +236,21 @@ func CompareLevel(a, b *indexread.Index, prefix string, q CompareQuery, cost Com
 		return out
 	}
 
-	m := levelMerge{a: a, b: b, q: q, cost: cost}
-	if q.SortBy != SortColCost {
-		m.cost = nil
+	key := levelKey{
+		a: a.Identity(), b: b.Identity(), posA: posA, posB: posB, okA: okA, okB: okB,
+		sortBy: q.SortBy, dir: q.Dir, hideUnchanged: q.HideUnchanged,
 	}
-	rows := m.merge(childSpan(a, posA, okA), childSpan(b, posB, okB))
-	out.Counts = m.counts
-	sortCompareRows(rows, q.SortBy, q.Dir)
+	rows, counts := c.compareRows(key, func() ([]compareRow, CompareStatusCounts) {
+		m := levelMerge{a: a, b: b, q: q, cost: cost}
+		if q.SortBy != SortColCost {
+			m.cost = nil
+		}
+		rows := m.merge(childSpan(a, posA, okA), childSpan(b, posB, okB))
+		sortCompareRows(rows, q.SortBy, q.Dir)
+
+		return rows, m.counts
+	})
+	out.Counts = counts
 
 	out.Total = len(rows)
 	out.Pagination = Paginate(len(rows), q.Page, q.PageSize)

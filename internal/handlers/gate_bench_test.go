@@ -70,16 +70,29 @@ func buildWideIndexKeys(b *testing.B, dir string, changed bool, keyA, keyB strin
 }
 
 // wideRouter builds both runs and a router serving the browse and
-// compare APIs. Built per benchmark: with b.Loop the setup runs once,
+// compare APIs, without the level cache: every request is a level's
+// first view. Built per benchmark: with b.Loop the setup runs once,
 // outside the timed loop.
 func wideRouter(b *testing.B) http.Handler {
 	b.Helper()
-	h := wideHandlers(b)
+
+	return apiRouter(wideHandlersWith(b, buildWideIndex, handlers.WithLevelCacheBytes(0)))
+}
+
+func apiRouter(h *handlers.Handlers) http.Handler {
 	r := chi.NewRouter()
 	r.Get("/api/browse", h.BrowseLevelAPI)
 	r.Get("/api/compare", h.CompareLevelAPI)
 
 	return r
+}
+
+// pagedRouter is the router the Paged entries page through, with the
+// default level cache.
+func pagedRouter(b *testing.B) http.Handler {
+	b.Helper()
+
+	return apiRouter(wideHandlers(b))
 }
 
 // wideHandlers builds both runs and returns handlers serving them.
@@ -90,7 +103,7 @@ func wideHandlers(b *testing.B) *handlers.Handlers {
 }
 
 // wideHandlersWith is wideHandlers with each run built by build.
-func wideHandlersWith(b *testing.B, build func(b *testing.B, dir string, changed bool)) *handlers.Handlers {
+func wideHandlersWith(b *testing.B, build func(b *testing.B, dir string, changed bool), opts ...handlers.Option) *handlers.Handlers {
 	b.Helper()
 	mgr := inventory.NewCatalog(nil)
 	b.Cleanup(func() { _ = mgr.Close() })
@@ -107,7 +120,7 @@ func wideHandlersWith(b *testing.B, build func(b *testing.B, dir string, changed
 			b.Fatal(err)
 		}
 	}
-	h, _ := newWiredHandlersWithConfigs(b, mgr)
+	h, _ := newWiredHandlersWithConfigs(b, mgr, opts...)
 
 	return h
 }
@@ -142,4 +155,36 @@ func BenchmarkGateBrowseWideByCost(b *testing.B) {
 
 func BenchmarkGateCompareWideByCost(b *testing.B) {
 	benchGet(b, wideRouter(b), "/api/compare?from="+gateFromID+"&to="+gateToID+"&sort=cost&dir=desc")
+}
+
+// BenchmarkGate*Paged: a user paging through one wide level on one
+// server: each iteration views page 1, then a later page, of the same
+// order. The other gate entries time a level's first view.
+func benchPaged(b *testing.B, router http.Handler, targets ...string) {
+	b.Helper()
+	b.ReportAllocs()
+	for b.Loop() {
+		for _, target := range targets {
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequestWithContext(b.Context(), http.MethodGet, target, http.NoBody))
+			if rec.Code != http.StatusOK {
+				b.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+			}
+		}
+	}
+}
+
+func BenchmarkGateBrowseWideBySizePaged(b *testing.B) {
+	const q = "/api/browse?inventory_id=" + gateFromID + "&sort=size&dir=desc"
+	benchPaged(b, pagedRouter(b), q, q+"&page=50")
+}
+
+func BenchmarkGateBrowseWideByCostPaged(b *testing.B) {
+	const q = "/api/browse?inventory_id=" + gateFromID + "&sort=cost&dir=desc"
+	benchPaged(b, pagedRouter(b), q, q+"&page=50")
+}
+
+func BenchmarkGateCompareWidePaged(b *testing.B) {
+	const q = "/api/compare?from=" + gateFromID + "&to=" + gateToID
+	benchPaged(b, pagedRouter(b), q, q+"&page=50")
 }
