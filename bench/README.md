@@ -79,10 +79,12 @@ seeded inputs, so repeated rounds agree.
 
 Ingestion (`bench/suite/ingest.txt`):
 
-- `internal/loader` `BenchmarkPipeline` at 1M objects (realistic and
-  deep-pyramid shapes): the real `Pipeline.Run` end to end through the
-  local S3 server. Seconds per op; also reports `peak_heap_B` and
-  `disk_B`.
+- `internal/loader` `BenchmarkPipeline` at 1M objects (realistic,
+  deep-pyramid and realistic_sorted shapes; realistic_sorted keeps the
+  keys in order across chunks, as S3 Inventory writes them): the real
+  `Pipeline.Run` end to end through the local S3 server. Seconds per
+  op; also reports `peak_heap_B`, `disk_B` and `runs` (run files
+  spilled).
 - `pkg/format` `BenchmarkMPHFBuild` at 1M prefixes: the MPHF finalize
   step on its own, with `peak_heap_B`.
 
