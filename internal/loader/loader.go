@@ -58,13 +58,12 @@ func (l *Loader) CacheDirFor(key inventory.CacheKey) (string, error) {
 // callback, if non-nil, receives stage transitions and per-chunk
 // quantitative progress for UI ETA. The eventBus, if non-nil, is
 // plumbed to the pipeline so subscribers (e.g. jobs.Recorder) can
-// build a fine-grained stage timeline. A previous index in the cache
-// dir stays until the new one replaces it (the pipeline publishes by
-// rename), so a failed or cancelled rebuild keeps it. Only a run that
-// isn't served is built (inventory.State.CanLoad), so that index has
-// no reader and isn't reused; while the rebuild runs it holds disk the
-// load's budget reservation doesn't count, and the startup reconcile
-// removes it if the run never loads.
+// build a fine-grained stage timeline. The run's cache dir is cleared
+// first: only a run that isn't served is built (inventory.State.CanLoad)
+// and a load always rebuilds, so a previous index there has no reader
+// and would only hold disk the budget doesn't count, twice over during
+// the rebuild. Keeping it would pay off only with reuse, which would
+// need the index to record the code that built it.
 func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifestURI string, onProgress func(stage string, done, total int64), eventBus *events.Bus) (string, error) {
 	outDir, err := l.CacheDirFor(key)
 	if err != nil {
@@ -78,8 +77,8 @@ func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifest
 	}
 
 	onProgress("preparing", 0, 0)
-	if err := clearNonIndex(outDir); err != nil {
-		return "", err
+	if err := os.RemoveAll(outDir); err != nil {
+		return "", fmt.Errorf("clear cache dir: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(outDir), format.DirPerm); err != nil {
 		return "", fmt.Errorf("ensure cache parent: %w", err)
@@ -101,21 +100,6 @@ func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifest
 	// job.Stage = "done" while job.State was still Running.
 
 	return outDir, nil
-}
-
-// clearNonIndex removes outDir when it exists but holds no index (no
-// manifest), so the pipeline, which only ever replaces an index, can
-// publish there. A complete previous index is left for the pipeline to
-// replace atomically.
-func clearNonIndex(outDir string) error {
-	if _, err := os.Stat(filepath.Join(outDir, format.ManifestFile)); err == nil {
-		return nil
-	}
-	if err := os.RemoveAll(outDir); err != nil {
-		return fmt.Errorf("clear cache dir: %w", err)
-	}
-
-	return nil
 }
 
 // RemoveCache deletes a run's on-disk cache. Used by Unload to free

@@ -87,21 +87,3 @@ func TestReconcile_RemovesOnlyWhatTheServerOwns(t *testing.T) {
 		t.Error("the index moved aside by a killed build wasn't restored")
 	}
 }
-
-// TestBuildWith_KeepsPreviousIndexOnFailure: a rebuild that fails
-// before publishing leaves the run's previous index in place.
-func TestBuildWith_KeepsPreviousIndexOnFailure(t *testing.T) {
-	root := t.TempDir()
-	l := loader.New(root, nil)
-	dir, err := l.CacheDirFor(key("buck", "inv", "r"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeIndexDir(t, dir)
-	if _, err := l.BuildWith(t.Context(), key("buck", "inv", "r"), "not-s3-uri", nil, nil); err == nil {
-		t.Fatal("BuildWith with a bad manifest URI succeeded")
-	}
-	if !exists(filepath.Join(dir, format.ManifestFile)) {
-		t.Error("a failed rebuild removed the previous index")
-	}
-}
