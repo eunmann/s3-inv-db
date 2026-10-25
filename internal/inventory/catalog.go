@@ -136,6 +136,15 @@ func (c *Catalog) AttachStoreForTest(s *Store) {
 	c.store = s
 }
 
+// SetPrefaultForTest replaces how the catalog reads an index into the
+// page cache, so tests outside the package can observe which indexes
+// are prefaulted. Test-only seam; never call it from non-test code.
+func (c *Catalog) SetPrefaultForTest(prefault func(dir string, m *format.Manifest) error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.prefault = prefault
+}
+
 // stageLocked records a state change for persistence. Caller holds c.mu.
 func (c *Catalog) stageLocked(info Info) pendingWrite {
 	c.seq++

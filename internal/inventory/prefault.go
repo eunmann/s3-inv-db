@@ -13,8 +13,9 @@ import (
 // prefaultMemoryShare is how much of the memory the server can use
 // (sysmem.Available: host RAM, or the container's limit) the indexes it
 // prefaulted may take together: at most 1/8, so reading one in doesn't
-// push the other loaded indexes out of the page cache, and a restart
-// reads at most that much before it serves.
+// push the other loaded indexes out of the page cache. A restart serves
+// at once and PrefaultRestored warms the restored indexes afterwards
+// under the same budget.
 const prefaultMemoryShare = 8
 
 // prefaultLimit is the catalog's prefault budget in bytes.
@@ -51,8 +52,9 @@ func (c *Catalog) planPrefaultLocked(inv *managedInventory, dir string) *format.
 
 // openServed opens an index the server will serve, after reading the
 // files m lists into the page cache when m is non-nil, so the first
-// queries after a load or a restart don't wait on storage (open plus
-// the first 1000 lookups -53% on the benchmark fixture, #55).
+// queries after a load don't wait on storage (open plus the first 1000
+// lookups -53% on the benchmark fixture, #55). A restart passes nil and
+// PrefaultRestored warms the index once the server listens.
 // Prefaulting only warms the cache: when it fails, the index opens as
 // usual and its pages fault in as queries touch them.
 func (c *Catalog) openServed(dir string, m *format.Manifest) (*indexread.Index, error) {
