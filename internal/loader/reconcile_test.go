@@ -87,3 +87,21 @@ func TestReconcile_RemovesOnlyWhatTheServerOwns(t *testing.T) {
 		t.Error("the index moved aside by a killed build wasn't restored")
 	}
 }
+
+// TestBuildWith_ClearsPreviousIndex: a rebuild clears the run's cache
+// dir first, so a previous index never holds disk the budget doesn't
+// count, even when the rebuild then fails.
+func TestBuildWith_ClearsPreviousIndex(t *testing.T) {
+	l := loader.New(t.TempDir(), nil)
+	dir, err := l.CacheDirFor(key("buck", "inv", "r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeIndexDir(t, dir)
+	if _, err := l.BuildWith(t.Context(), key("buck", "inv", "r"), "not-s3-uri", nil, nil); err == nil {
+		t.Fatal("BuildWith with a bad manifest URI succeeded")
+	}
+	if exists(filepath.Join(dir, format.ManifestFile)) {
+		t.Error("BuildWith kept the run's previous index")
+	}
+}
