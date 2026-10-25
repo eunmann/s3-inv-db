@@ -444,6 +444,7 @@ func TestTierHasGlacierOverhead(t *testing.T) {
 // pay the minimum-size penalty.
 func TestMonthlyTotalMatchesComputeMonthlyCost(t *testing.T) {
 	pt := pricing.DefaultUSEast1Prices()
+	compiled := pricing.Compile(pt)
 	all := tiers.AllTiers()
 	r := rand.New(rand.NewPCG(1, 2))
 	for i := range 2000 {
@@ -460,11 +461,15 @@ func TestMonthlyTotalMatchesComputeMonthlyCost(t *testing.T) {
 			})
 		}
 		if i%7 == 0 {
-			breakdown = append(breakdown, format.TierBreakdown{TierName: "UNPRICED", ObjectCount: 5, Bytes: 5 << 30})
+			// A tier the table doesn't price: an unknown ID past the table.
+			breakdown = append(breakdown, format.TierBreakdown{TierID: tiers.NumTiers, TierName: "UNPRICED", ObjectCount: 5, Bytes: 5 << 30})
 		}
 		want := pricing.ComputeMonthlyCost(breakdown, pt).TotalMicrodollars
 		if got := pricing.MonthlyTotalMicrodollars(breakdown, pt); got != want {
 			t.Fatalf("case %d %+v: MonthlyTotalMicrodollars = %d, ComputeMonthlyCost total = %d", i, breakdown, got, want)
+		}
+		if got := compiled.MonthlyTotal(breakdown); got != want {
+			t.Fatalf("case %d %+v: Compiled.MonthlyTotal = %d, ComputeMonthlyCost total = %d", i, breakdown, got, want)
 		}
 	}
 	if allocs := testing.AllocsPerRun(10, func() {

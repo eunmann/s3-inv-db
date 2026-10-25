@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 const (
@@ -251,6 +252,13 @@ func computeTierCost(tb format.TierBreakdown, pt PriceTable) (tierCost, bool) {
 		return tierCost{}, false
 	}
 
+	return priceTier(tb, price, tierCapabilities[tb.TierName], pt.MonitoringPer1000Objects, pt.StandardPricePerGB), true
+}
+
+// priceTier is one tier's cost at price (per GB-month) with the given
+// surcharge flags. ComputeMonthlyCost and Compiled share it, so they
+// return bit-identical totals.
+func priceTier(tb format.TierBreakdown, price float64, flags tierFlags, monitoringPer1000, standardPerGB float64) tierCost {
 	// Base storage cost.
 	gbFrac := float64(tb.Bytes) / float64(bytesPerGB)
 	storageMicrodollars := microdollarsFromFloat(gbFrac * price)
@@ -263,7 +271,7 @@ func computeTierCost(tb format.TierBreakdown, pt PriceTable) (tierCost, bool) {
 
 	var c tierCost
 	// Minimum object size penalty for applicable tiers.
-	if TierHasMinObjectSize(tb.TierName) && avgObjectSize < minObjectSizeBytes && avgObjectSize > 0 {
+	if flags&flagMinObjectSize != 0 && avgObjectSize < minObjectSizeBytes && avgObjectSize > 0 {
 		// Each object is charged as 128 KiB.
 		additionalBytes := (minObjectSizeBytes - avgObjectSize) * tb.ObjectCount
 		additionalGB := float64(additionalBytes) / float64(bytesPerGB)
@@ -274,24 +282,75 @@ func computeTierCost(tb format.TierBreakdown, pt PriceTable) (tierCost, bool) {
 	// monitored tier is billable; objects < 128 KiB are pre-
 	// segregated into INTELLIGENT_TIERING_FREQUENT_SMALL by the
 	// ingest classifier and therefore never reach this branch.
-	if TierHasMonitoringCost(tb.TierName) && pt.MonitoringPer1000Objects > 0 {
-		c.monitoring = microdollarsFromFloat(float64(tb.ObjectCount) / requestsPerThousand * pt.MonitoringPer1000Objects)
+	if flags&flagMonitoringCost != 0 && monitoringPer1000 > 0 {
+		c.monitoring = microdollarsFromFloat(float64(tb.ObjectCount) / requestsPerThousand * monitoringPer1000)
 	}
 
 	// Glacier metadata overhead.
-	if TierHasGlacierOverhead(tb.TierName) && tb.ObjectCount > 0 {
+	if flags&flagGlacierOverhead != 0 && tb.ObjectCount > 0 {
 		// 32 KiB at Glacier rate per object.
 		glacierOverheadGB := float64(tb.ObjectCount*glacierMetadataOverheadBytes) / float64(bytesPerGB)
 		c.glacier = microdollarsFromFloat(glacierOverheadGB * price)
 
 		// 8 KiB at Standard rate per object.
 		indexOverheadGB := float64(tb.ObjectCount*glacierIndexOverheadBytes) / float64(bytesPerGB)
-		c.glacier += microdollarsFromFloat(indexOverheadGB * pt.StandardPricePerGB)
+		c.glacier += microdollarsFromFloat(indexOverheadGB * standardPerGB)
 	}
 
 	c.tierTotal = storageMicrodollars + c.minSize + c.glacier
 
-	return c, true
+	return c
+}
+
+// Compiled is a PriceTable resolved per tier ID once, so pricing a
+// breakdown indexes an array instead of hashing each tier's name into
+// the price and surcharge maps: sorting by cost prices every child of a
+// level.
+type Compiled struct {
+	tiers             [tiers.NumTiers]compiledTier
+	monitoringPer1000 float64
+	standardPerGB     float64
+}
+
+type compiledTier struct {
+	price float64
+	flags tierFlags
+	ok    bool
+}
+
+// Compile resolves pt for every tier ID. A breakdown's tier names are
+// the tiers package's canonical names for their IDs (an index's tier
+// manifest is written from it), so pricing by ID equals pricing by name.
+func Compile(pt PriceTable) *Compiled {
+	c := &Compiled{monitoringPer1000: pt.MonitoringPer1000Objects, standardPerGB: pt.StandardPricePerGB}
+	for _, info := range tiers.AllTiers() {
+		if int(info.ID) >= len(c.tiers) {
+			continue
+		}
+		price, ok := pt.PerGBMonth[info.Name]
+		c.tiers[info.ID] = compiledTier{price: price, flags: tierCapabilities[info.Name], ok: ok}
+	}
+
+	return c
+}
+
+// MonthlyTotal is MonthlyTotalMicrodollars(breakdown, pt) for the
+// table c was compiled from, without a map lookup per tier.
+func (c *Compiled) MonthlyTotal(breakdown []format.TierBreakdown) uint64 {
+	var total uint64
+	for _, tb := range breakdown {
+		if int(tb.TierID) >= len(c.tiers) {
+			continue
+		}
+		t := &c.tiers[tb.TierID]
+		if !t.ok {
+			continue
+		}
+		cost := priceTier(tb, t.price, t.flags, c.monitoringPer1000, c.standardPerGB)
+		total += cost.tierTotal + cost.monitoring
+	}
+
+	return total
 }
 
 // ComputePutCost returns the one-time PUT/COPY/POST charge for ingesting
