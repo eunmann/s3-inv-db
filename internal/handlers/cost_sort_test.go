@@ -26,6 +26,17 @@ type costObj struct {
 // under id.
 func loadCostIndex(t *testing.T, id inventory.ID, objs []costObj) *inventory.Catalog {
 	t.Helper()
+	mgr := inventory.NewCatalog(nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+	registerCostIndex(t, mgr, id, objs)
+
+	return mgr
+}
+
+// registerCostIndex builds an index from objs and loads it into mgr
+// under id.
+func registerCostIndex(t *testing.T, mgr *inventory.Catalog, id inventory.ID, objs []costObj) {
+	t.Helper()
 	agg := extsort.NewAggregator(len(objs)*4, 0)
 	for _, o := range objs {
 		agg.AddObject(o.key, o.size, o.tier)
@@ -48,16 +59,12 @@ func loadCostIndex(t *testing.T, id inventory.ID, objs []costObj) *inventory.Cat
 	if err := builder.Finalize(); err != nil {
 		t.Fatal(err)
 	}
-	mgr := inventory.NewCatalog(nil)
-	t.Cleanup(func() { _ = mgr.Close() })
 	if err := mgr.Register(t.Context(), id, "n", dir); err != nil {
 		t.Fatal(err)
 	}
 	if err := mgr.Load(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-
-	return mgr
 }
 
 // TestBrowseLevelAPI_SortByCost: sorting by cost orders children by

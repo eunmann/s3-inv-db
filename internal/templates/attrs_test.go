@@ -88,11 +88,44 @@ func TestBrowseURLMatchesGeneralEncoder(t *testing.T) {
 	}
 }
 
+func TestRowLinksMatchGeneralEncoders(t *testing.T) {
+	for _, a := range adversarialValues {
+		for _, b := range adversarialValues {
+			checkRowLinks(t, a, b, a+b)
+		}
+	}
+}
+
+// checkRowLinks checks BrowseLink and CompareLinkHxVals against the
+// general encoders the template funcs fall back to.
+func checkRowLinks(t *testing.T, id, other, prefix string) {
+	t.Helper()
+	href, hxVals := templates.BrowseLink(id, prefix)
+	if want := templates.BrowseURLGeneral("inventory_id", id, "prefix", prefix); href != want {
+		t.Fatalf("BrowseLink(%q, %q) href\n got %q\nwant %q", id, prefix, href, want)
+	}
+	want, err := templates.HxValsJSONGeneral("inventory_id", id, "prefix", prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hxVals != want {
+		t.Fatalf("BrowseLink(%q, %q) hx-vals\n got %q\nwant %q", id, prefix, hxVals, want)
+	}
+	want, err = templates.HxValsJSONGeneral("from", id, "to", other, "prefix", prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := templates.CompareLinkHxVals(id, other, prefix); got != want {
+		t.Fatalf("CompareLinkHxVals(%q, %q, %q)\n got %q\nwant %q", id, other, prefix, got, want)
+	}
+}
+
 func FuzzAttrEncodersMatchGeneral(f *testing.F) {
 	for _, v := range adversarialValues {
 		f.Add("prefix", v, "inventory_id", v, 3)
 	}
 	f.Fuzz(func(t *testing.T, k1, v1, k2, v2 string, n int) {
+		checkRowLinks(t, v1, v2, k1)
 		for _, pairs := range [][]any{
 			{k1, v1, k2, v2},
 			{k1, v1, k2, n},

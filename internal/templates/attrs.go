@@ -194,3 +194,47 @@ func fastBrowseURL(pairs []any) (string, bool) {
 
 	return string(dst), true
 }
+
+// BrowseLink returns the href and hx-vals of a drill-down link to
+// prefix in inventory inventoryID: what the browseURL and hxValsJSON
+// template funcs return for ("inventory_id", inventoryID, "prefix",
+// prefix). Handlers set it per row, so a table row costs no template
+// func calls for its link.
+func BrowseLink(inventoryID, prefix string) (href, hxVals string) {
+	var buf [256]byte
+	dst := append(buf[:0], `{"inventory_id":`...)
+	dst = appendJSONString(dst, inventoryID)
+	dst = append(dst, `,"prefix":`...)
+	dst = appendJSONString(dst, prefix)
+	hxVals = string(append(dst, '}'))
+
+	dst = append(buf[:0], "/browse"...)
+	sep := byte('?')
+	for _, kv := range [...][2]string{{"inventory_id", inventoryID}, {"prefix", prefix}} {
+		if kv[1] == "" {
+			continue
+		}
+		dst = append(dst, sep)
+		sep = '&'
+		dst = append(dst, kv[0]...)
+		dst = append(dst, '=')
+		dst = append(dst, url.QueryEscape(kv[1])...)
+	}
+
+	return string(dst), hxVals
+}
+
+// CompareLinkHxVals returns the hx-vals of a compare drill-down link:
+// what hxValsJSON returns for ("from", from, "to", to, "prefix",
+// prefix).
+func CompareLinkHxVals(from, to, prefix string) string {
+	var buf [256]byte
+	dst := append(buf[:0], `{"from":`...)
+	dst = appendJSONString(dst, from)
+	dst = append(dst, `,"prefix":`...)
+	dst = appendJSONString(dst, prefix)
+	dst = append(dst, `,"to":`...)
+	dst = appendJSONString(dst, to)
+
+	return string(append(dst, '}'))
+}

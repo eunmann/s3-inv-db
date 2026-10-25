@@ -163,9 +163,9 @@
                     <td class="px-6 py-3 whitespace-nowrap">
                         {{if .HasChildren}}
                         <a
-                            href="{{browseURL "inventory_id" $inv "prefix" .Prefix}}"
+                            href="{{.Href}}"
                             hx-get="/browse"
-                            hx-vals="{{hxValsJSON "inventory_id" $inv "prefix" .Prefix}}"
+                            hx-vals="{{.HxVals}}"
                             hx-target="#browse-target"
                             hx-push-url="true"
                             class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline font-mono">

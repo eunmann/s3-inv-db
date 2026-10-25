@@ -212,7 +212,7 @@
                         {{if .HasChildren}}
                         <button type="button"
                             hx-get="/compare"
-                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" .Prefix}}"
+                            hx-vals="{{.HxVals}}"
                             hx-target="#compare-target"
                             hx-push-url="true"
                             class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline font-mono">
