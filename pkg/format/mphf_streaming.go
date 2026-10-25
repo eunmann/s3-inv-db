@@ -272,12 +272,6 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	}
 	b.preorderPos = nil
 
-	log.Debug().Msg("MPHF: writing prefix blob")
-
-	if err := b.writePrefixBlobDictionary(outDir); err != nil {
-		return fmt.Errorf("write dict prefix blob: %w", err)
-	}
-
 	log.Debug().Msg("MPHF: build complete")
 
 	return nil
@@ -452,29 +446,6 @@ func (b *StreamingMPHFBuilder) forEachPrefix(fn func(i int, prefix []byte) error
 	return nil
 }
 
-// writePrefixBlobDictionary writes prefixes as dictionary-encoded
-// segment-ID sequences (prefix_dict.ids.u32 + prefix_dict.prefix_off.u64).
-func (b *StreamingMPHFBuilder) writePrefixBlobDictionary(outDir string) error {
-	writer, err := NewDictPrefixWriter(outDir)
-	if err != nil {
-		return fmt.Errorf("create dict prefix writer: %w", err)
-	}
-	err = b.forEachPrefix(func(i int, prefix []byte) error {
-		if err := writer.WritePrefix(prefix); err != nil {
-			return fmt.Errorf("write prefix %d to dict blob: %w", i, err)
-		}
-
-		return nil
-	})
-	if err != nil {
-		writer.Close()
-
-		return err
-	}
-
-	return writer.Close()
-}
-
 func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	// Create empty mph file
 	mphPath := filepath.Join(outDir, MPHFile)
@@ -490,14 +461,6 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	}
 	if err := combinedWriter.Close(); err != nil {
 		return fmt.Errorf("close empty combined fp+pos writer: %w", err)
-	}
-
-	writer, err := NewDictPrefixWriter(outDir)
-	if err != nil {
-		return fmt.Errorf("create empty dict prefix writer: %w", err)
-	}
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("close empty dict prefix writer: %w", err)
 	}
 
 	return nil

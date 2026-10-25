@@ -23,10 +23,6 @@ var (
 	ErrMPHFLookupFailed = errors.New("MPHF lookup failed")
 	// ErrMPHFTooManyKeys indicates more prefixes than the MPHF build's uint32 slot index can address.
 	ErrMPHFTooManyKeys = errors.New("too many prefixes for the MPHF")
-	// ErrNoPrefixStorage indicates the MPHF has no prefix storage attached.
-	ErrNoPrefixStorage = errors.New("no prefix storage loaded")
-	// ErrLookupWrongPos indicates a verification lookup returned an unexpected position.
-	ErrLookupWrongPos = errors.New("lookup returned wrong pos")
 	// ErrMPHFKeyCollision indicates distinct prefixes kept sharing an MPHF key hash under every seed tried.
 	ErrMPHFKeyCollision = errors.New("MPHF key hash collision")
 )

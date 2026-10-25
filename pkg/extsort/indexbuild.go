@@ -31,6 +31,7 @@ type IndexBuilder struct {
 	coreStatsW        *format.CoreStatsBuilder
 	tierStatsW        *format.TierStatsWriter
 	mphfBuilder       *format.StreamingMPHFBuilder
+	prefixTreeW       *format.PrefixTreeWriter
 	depthIndexBuilder *format.DepthIndexBuilder
 	declaredTiers     []tiers.ID
 	resolvedTiers     []tiers.ID
@@ -90,11 +91,20 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		return nil, fmt.Errorf("create core stats builder: %w", err)
 	}
 
+	prefixTreeW, err := format.NewPrefixTreeWriter(outDir)
+	if err != nil {
+		mphfBuilder.Close()
+		coreStatsW.Close()
+
+		return nil, fmt.Errorf("create prefix tree writer: %w", err)
+	}
+
 	b := &IndexBuilder{
 		outDir:            outDir,
 		tempDir:           tempDir,
 		coreStatsW:        coreStatsW,
 		mphfBuilder:       mphfBuilder,
+		prefixTreeW:       prefixTreeW,
 		depthIndexBuilder: format.NewDepthIndexBuilder(tempDir),
 		stack:             make([]stackEntry, 0, 32),
 		createdOutDir:     createdOutDir,
@@ -154,6 +164,9 @@ func (b *IndexBuilder) cleanup() {
 	if b.mphfBuilder != nil {
 		b.mphfBuilder.Close()
 	}
+	if b.prefixTreeW != nil {
+		_ = b.prefixTreeW.Abort()
+	}
 	if b.tierStatsW != nil {
 		_ = b.tierStatsW.Abort()
 	}
@@ -165,11 +178,21 @@ func (b *IndexBuilder) cleanup() {
 	}
 }
 
+// ErrMissingParent is returned when a prefix arrives without its
+// parent before it: the root "" first, then every "a/b/" after "a/".
+// The aggregator always emits every ancestor; the index stores each
+// prefix as its parent plus one segment.
+var ErrMissingParent = errors.New("prefix added without its parent")
+
 // Add processes a single PrefixRow from the sorted stream.
-// Prefixes must be added in lexicographic (sorted) order.
+// Prefixes must be added in lexicographic (sorted) order, the root ""
+// first and every other prefix after its parent.
 func (b *IndexBuilder) Add(row *PrefixRow) error {
 	commonDepth := b.findCommonAncestorDepth(row.Prefix)
 	if err := b.closeNodesAbove(commonDepth); err != nil {
+		return err
+	}
+	if err := b.addToPrefixTree(row.Prefix); err != nil {
 		return err
 	}
 
@@ -198,6 +221,29 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	}
 	if err := b.coreStatsW.Add(row.Count, row.TotalBytes, row.Depth, mask); err != nil {
 		return fmt.Errorf("write core stats row: %w", err)
+	}
+
+	return nil
+}
+
+// addToPrefixTree adds prefix as the open prefix at the top of the
+// stack plus one segment and a slash, or as the root when it comes
+// first.
+func (b *IndexBuilder) addToPrefixTree(prefix string) error {
+	if len(b.stack) == 0 {
+		if prefix != "" || b.posCount != 0 {
+			return fmt.Errorf("%w: %q", ErrMissingParent, prefix)
+		}
+
+		return b.prefixTreeW.AddRoot() //nolint:wrapcheck // the writer's errors carry their own context
+	}
+	parent := b.stack[len(b.stack)-1]
+	name, ok := strings.CutSuffix(strings.TrimPrefix(prefix, parent.prefix), "/")
+	if !ok || strings.Contains(name, "/") {
+		return fmt.Errorf("%w: %q after %q", ErrMissingParent, prefix, parent.prefix)
+	}
+	if err := b.prefixTreeW.Add(parent.pos, name); err != nil {
+		return fmt.Errorf("prefix %q: %w", prefix, err)
 	}
 
 	return nil
@@ -374,6 +420,10 @@ func (b *IndexBuilder) closeStreamingWriters() error {
 		return fmt.Errorf("finalize core stats: %w", err)
 	}
 	b.coreStatsW = nil
+	if err := b.prefixTreeW.Close(); err != nil {
+		return fmt.Errorf("finalize prefix tree: %w", err)
+	}
+	b.prefixTreeW = nil
 	// The tier writer is nil when no rows were added (empty index); such
 	// a build writes no tier file and no tier manifest (tiers.json). The
 	// index manifest is still written unconditionally in Finalize.

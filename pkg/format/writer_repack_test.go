@@ -8,7 +8,7 @@ import (
 )
 
 // TestRepackArrayWidthU64_RoundTrip exercises the adaptive-width
-// repack helper used by DepthIndexBuilder and DictPrefixWriter.
+// repack helper used by DepthIndexBuilder.
 // Confirms that every input value survives the round-trip at the
 // chosen target width and that the reader honours Header.Width via
 // the mask-load path.

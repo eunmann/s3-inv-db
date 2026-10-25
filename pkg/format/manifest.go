@@ -55,8 +55,7 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		CoreStatsFile,
 		PrefixDictBlobFile,
 		PrefixDictOffsetsFile,
-		PrefixDictIDsFile,
-		PrefixDictOffsetsPerPrefixFile,
+		PrefixTreeFile,
 	}
 	for _, name := range requiredTopLevel {
 		if err := addFile(dir, name, manifest.Files); err != nil {

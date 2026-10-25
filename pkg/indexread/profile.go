@@ -100,7 +100,7 @@ func (idx *Index) Profile() *Profile {
 	} {
 		p.Fields[name] = &FieldProfile{}
 	}
-	seg := idx.mphf.SegmentStats()
+	seg := idx.prefixes.SegmentStats()
 	p.Segments, p.SegmentBytes = seg.Count, seg.Bytes
 
 	tierSets := map[uint16]struct{}{}

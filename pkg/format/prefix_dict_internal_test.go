@@ -41,7 +41,7 @@ func TestPrefixSegmentInternerBasic(t *testing.T) {
 		t.Fatalf("NewPrefixSegmentInterner failed: %v", err)
 	}
 
-	id1, err := interner.Intern([]byte("data"))
+	id1, err := interner.Intern("data")
 	if err != nil {
 		t.Fatalf("Intern(data) failed: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestPrefixSegmentInternerBasic(t *testing.T) {
 		t.Errorf("first ID = %d, want 0", id1)
 	}
 
-	id2, err := interner.Intern([]byte("2024"))
+	id2, err := interner.Intern("2024")
 	if err != nil {
 		t.Fatalf("Intern(2024) failed: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestPrefixSegmentInternerBasic(t *testing.T) {
 		t.Errorf("second ID = %d, want 1", id2)
 	}
 
-	id3, err := interner.Intern([]byte("data"))
+	id3, err := interner.Intern("data")
 	if err != nil {
 		t.Fatalf("Intern(data) second time failed: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestPrefixDictionaryRoundTrip(t *testing.T) {
 
 	segments := []string{"", "data", "2024", "01", "bucket"}
 	for _, seg := range segments {
-		if _, err := interner.Intern([]byte(seg)); err != nil {
+		if _, err := interner.Intern(seg); err != nil {
 			t.Fatalf("Intern(%q) failed: %v", seg, err)
 		}
 	}
@@ -116,414 +116,6 @@ func TestPrefixDictionaryRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDictPrefixWriterReader(t *testing.T) {
-	dir := t.TempDir()
-
-	writer, err := NewDictPrefixWriter(dir)
-	if err != nil {
-		t.Fatalf("NewDictPrefixWriter failed: %v", err)
-	}
-
-	prefixes := []string{
-		"",
-		"data/",
-		"data/2024/",
-		"data/2025/",
-		"logs/",
-		"logs/2024/",
-	}
-
-	for _, p := range prefixes {
-		if err := writer.WritePrefix([]byte(p)); err != nil {
-			t.Fatalf("WritePrefix(%q) failed: %v", p, err)
-		}
-	}
-
-	if err := writer.Close(); err != nil {
-		t.Fatalf("writer.Close failed: %v", err)
-	}
-
-	reader, err := OpenDictPrefixReader(dir)
-	if err != nil {
-		t.Fatalf("OpenDictPrefixReader failed: %v", err)
-	}
-	defer reader.Close()
-
-	if reader.Count() != uint64(len(prefixes)) {
-		t.Errorf("reader.Count() = %d, want %d", reader.Count(), len(prefixes))
-	}
-
-	for i, expected := range prefixes {
-		got, err := reader.GetPrefix(uint64(i))
-		if err != nil {
-			t.Errorf("GetPrefix(%d) failed: %v", i, err)
-
-			continue
-		}
-		if got != expected {
-			t.Errorf("GetPrefix(%d) = %q, want %q", i, got, expected)
-		}
-	}
-}
-
-func TestDictPrefixUnsafeGet(t *testing.T) {
-	dir := t.TempDir()
-
-	writer, err := NewDictPrefixWriter(dir)
-	if err != nil {
-		t.Fatalf("NewDictPrefixWriter failed: %v", err)
-	}
-
-	prefixes := []string{"a/b/c/", "x/y/", "test/"}
-	for _, p := range prefixes {
-		if err := writer.WritePrefix([]byte(p)); err != nil {
-			t.Fatalf("WritePrefix(%q) failed: %v", p, err)
-		}
-	}
-
-	if err := writer.Close(); err != nil {
-		t.Fatalf("writer.Close failed: %v", err)
-	}
-
-	reader, err := OpenDictPrefixReader(dir)
-	if err != nil {
-		t.Fatalf("OpenDictPrefixReader failed: %v", err)
-	}
-	defer reader.Close()
-
-	for i, expected := range prefixes {
-		got := reader.UnsafeGetPrefix(uint64(i))
-		if got != expected {
-			t.Errorf("UnsafeGetPrefix(%d) = %q, want %q", i, got, expected)
-		}
-	}
-}
-
-func TestDictPrefixEmpty(t *testing.T) {
-	dir := t.TempDir()
-
-	writer, err := NewDictPrefixWriter(dir)
-	if err != nil {
-		t.Fatalf("NewDictPrefixWriter failed: %v", err)
-	}
-
-	if err := writer.Close(); err != nil {
-		t.Fatalf("writer.Close failed: %v", err)
-	}
-
-	reader, err := OpenDictPrefixReader(dir)
-	if err != nil {
-		t.Fatalf("OpenDictPrefixReader failed: %v", err)
-	}
-	defer reader.Close()
-
-	if reader.Count() != 0 {
-		t.Errorf("reader.Count() = %d, want 0", reader.Count())
-	}
-}
-
-func TestDictPrefixUnicode(t *testing.T) {
-	dir := t.TempDir()
-
-	writer, err := NewDictPrefixWriter(dir)
-	if err != nil {
-		t.Fatalf("NewDictPrefixWriter failed: %v", err)
-	}
-
-	prefixes := []string{
-		"日本語/パス/",
-		"한국어/경로/",
-		"emoji/🎉/🚀/",
-		"mixed/日本/english/",
-	}
-
-	for _, p := range prefixes {
-		if err := writer.WritePrefix([]byte(p)); err != nil {
-			t.Fatalf("WritePrefix(%q) failed: %v", p, err)
-		}
-	}
-
-	if err := writer.Close(); err != nil {
-		t.Fatalf("writer.Close failed: %v", err)
-	}
-
-	reader, err := OpenDictPrefixReader(dir)
-	if err != nil {
-		t.Fatalf("OpenDictPrefixReader failed: %v", err)
-	}
-	defer reader.Close()
-
-	for i, expected := range prefixes {
-		got, err := reader.GetPrefix(uint64(i))
-		if err != nil {
-			t.Errorf("GetPrefix(%d) failed: %v", i, err)
-
-			continue
-		}
-		if got != expected {
-			t.Errorf("GetPrefix(%d) = %q, want %q", i, got, expected)
-		}
-	}
-}
-
-func TestDictPrefixDeduplication(t *testing.T) {
-	dir := t.TempDir()
-
-	writer, err := NewDictPrefixWriter(dir)
-	if err != nil {
-		t.Fatalf("NewDictPrefixWriter failed: %v", err)
-	}
-
-	prefixes := []string{
-		"bucket/year/month/day/",
-		"bucket/year/month/",
-		"bucket/year/",
-		"bucket/",
-		"bucket/year/month/day/hour/",
-	}
-
-	for _, p := range prefixes {
-		if err := writer.WritePrefix([]byte(p)); err != nil {
-			t.Fatalf("WritePrefix(%q) failed: %v", p, err)
-		}
-	}
-
-	// Unique segments: bucket, year, month, day, hour, "" (trailing slash).
-	expectedSegments := uint32(6)
-	if writer.SegmentCount() != expectedSegments {
-		t.Errorf("SegmentCount() = %d, want %d", writer.SegmentCount(), expectedSegments)
-	}
-
-	if err := writer.Close(); err != nil {
-		t.Fatalf("writer.Close failed: %v", err)
-	}
-
-	reader, err := OpenDictPrefixReader(dir)
-	if err != nil {
-		t.Fatalf("OpenDictPrefixReader failed: %v", err)
-	}
-	defer reader.Close()
-
-	for i, expected := range prefixes {
-		got, err := reader.GetPrefix(uint64(i))
-		if err != nil {
-			t.Errorf("GetPrefix(%d) failed: %v", i, err)
-
-			continue
-		}
-		if got != expected {
-			t.Errorf("GetPrefix(%d) = %q, want %q", i, got, expected)
-		}
-	}
-}
-
-func TestStreamingMPHFWithPrefixDictionary(t *testing.T) {
-	dir := t.TempDir()
-
-	builder, err := NewStreamingMPHFBuilder(dir)
-	if err != nil {
-		t.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
-	}
-
-	prefixes := []string{
-		"",
-		"data/",
-		"data/2024/",
-		"data/2024/01/",
-		"logs/",
-		"logs/2024/",
-	}
-
-	for i, p := range prefixes {
-		if err := builder.Add(p, uint64(i)); err != nil {
-			t.Fatalf("Add(%q) failed: %v", p, err)
-		}
-	}
-
-	if err := builder.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-	builder.Close()
-
-	m, err := OpenMPHF(dir)
-	if err != nil {
-		t.Fatalf("OpenMPHF failed: %v", err)
-	}
-	defer m.Close()
-
-	if m.Count() != uint64(len(prefixes)) {
-		t.Errorf("Count = %d, want %d", m.Count(), len(prefixes))
-	}
-
-	for i, p := range prefixes {
-		pos, ok := m.Lookup(p)
-		if !ok {
-			t.Errorf("Lookup(%q) failed", p)
-
-			continue
-		}
-		if pos != uint64(i) {
-			t.Errorf("Lookup(%q) = %d, want %d", p, pos, i)
-		}
-
-		stored, err := m.GetPrefix(pos)
-		if err != nil {
-			t.Errorf("GetPrefix(%d) failed: %v", pos, err)
-
-			continue
-		}
-		if stored != p {
-			t.Errorf("GetPrefix(%d) = %q, want %q", pos, stored, p)
-		}
-	}
-
-	if err := VerifyMPHF(m); err != nil {
-		t.Errorf("VerifyMPHF failed: %v", err)
-	}
-}
-
-func TestStreamingMPHFPrefixDictionaryEmpty(t *testing.T) {
-	dir := t.TempDir()
-
-	builder, err := NewStreamingMPHFBuilder(dir)
-	if err != nil {
-		t.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
-	}
-
-	if err := builder.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-	builder.Close()
-
-	m, err := OpenMPHF(dir)
-	if err != nil {
-		t.Fatalf("OpenMPHF failed: %v", err)
-	}
-	defer m.Close()
-
-	if m.Count() != 0 {
-		t.Errorf("Count = %d, want 0", m.Count())
-	}
-}
-
-func TestStreamingMPHFPrefixDictionaryLarge(t *testing.T) {
-	dir := t.TempDir()
-
-	builder, err := NewStreamingMPHFBuilder(dir)
-	if err != nil {
-		t.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
-	}
-
-	prefixes := make([]string, 1000)
-	for i := range 1000 {
-		prefixes[i] = prefixFromInt(i)
-	}
-
-	for i, p := range prefixes {
-		if err := builder.Add(p, uint64(i)); err != nil {
-			t.Fatalf("Add(%q) failed: %v", p, err)
-		}
-	}
-
-	if err := builder.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-	builder.Close()
-
-	m, err := OpenMPHF(dir)
-	if err != nil {
-		t.Fatalf("OpenMPHF failed: %v", err)
-	}
-	defer m.Close()
-
-	if m.Count() != 1000 {
-		t.Errorf("Count = %d, want 1000", m.Count())
-	}
-
-	if err := VerifyMPHF(m); err != nil {
-		t.Errorf("VerifyMPHF failed: %v", err)
-	}
-}
-
-func TestStreamingMPHFPrefixDictionaryUnicode(t *testing.T) {
-	dir := t.TempDir()
-
-	builder, err := NewStreamingMPHFBuilder(dir)
-	if err != nil {
-		t.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
-	}
-
-	prefixes := []string{"", "日本語/", "한국어/", "emoji/🎉/"}
-	for i, p := range prefixes {
-		if err := builder.Add(p, uint64(i)); err != nil {
-			t.Fatalf("Add(%q) failed: %v", p, err)
-		}
-	}
-
-	if err := builder.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-	builder.Close()
-
-	m, err := OpenMPHF(dir)
-	if err != nil {
-		t.Fatalf("OpenMPHF failed: %v", err)
-	}
-	defer m.Close()
-
-	for _, p := range prefixes {
-		pos, ok := m.Lookup(p)
-		if !ok {
-			t.Errorf("Lookup(%q) failed", p)
-
-			continue
-		}
-		stored, _ := m.GetPrefix(pos)
-		if stored != p {
-			t.Errorf("GetPrefix returned %q, want %q", stored, p)
-		}
-	}
-}
-
-func TestMPHFLookupWithVerifyPrefixDictionary(t *testing.T) {
-	dir := t.TempDir()
-
-	builder, err := NewStreamingMPHFBuilder(dir)
-	if err != nil {
-		t.Fatalf("NewStreamingMPHFBuilder failed: %v", err)
-	}
-
-	prefixes := []string{"", "x/", "y/", "z/"}
-	for i, p := range prefixes {
-		if err := builder.Add(p, uint64(i)); err != nil {
-			t.Fatalf("Add(%q) failed: %v", p, err)
-		}
-	}
-
-	if err := builder.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-	builder.Close()
-
-	m, err := OpenMPHF(dir)
-	if err != nil {
-		t.Fatalf("OpenMPHF failed: %v", err)
-	}
-	defer m.Close()
-
-	for _, p := range prefixes {
-		pos, ok := m.LookupWithVerify(p)
-		if !ok {
-			t.Errorf("LookupWithVerify(%q) failed", p)
-		}
-		_ = pos
-	}
-
-	if _, ok := m.LookupWithVerify("missing/"); ok {
-		t.Error("LookupWithVerify(missing) should return false")
-	}
-}
-
 func TestPreloadedPrefixCache(t *testing.T) {
 	dir := t.TempDir()
 
@@ -534,7 +126,7 @@ func TestPreloadedPrefixCache(t *testing.T) {
 
 	segments := []string{"", "data", "2024", "01", "bucket", "日本語"}
 	for _, seg := range segments {
-		if _, err := interner.Intern([]byte(seg)); err != nil {
+		if _, err := interner.Intern(seg); err != nil {
 			t.Fatalf("Intern(%q) failed: %v", seg, err)
 		}
 	}

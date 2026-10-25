@@ -2,7 +2,6 @@ package format
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,9 +27,8 @@ type MPHF struct {
 	// Lookup at hash position p reads combined.UnsafeGetU64(2p) for
 	// fp and combined.UnsafeGetU64(2p+1) for pos — adjacent words
 	// in the same cache line.
-	combined     *ArrayReader
-	dictPrefixes *DictPrefixReader
-	count        uint64
+	combined *ArrayReader
+	count    uint64
 	// seed is XORed into the key hash's offset basis; see
 	// writeCombinedMmap for where it is stored.
 	seed uint64
@@ -65,19 +63,11 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 		return nil, err
 	}
 
-	dictPrefixes, err := OpenDictPrefixReader(outDir)
-	if err != nil {
-		combined.Close()
-
-		return nil, fmt.Errorf("open dict prefixes: %w", err)
-	}
-
 	return &MPHF{
-		mph:          mph,
-		combined:     combined,
-		dictPrefixes: dictPrefixes,
-		count:        combined.Count() / 2,
-		seed:         seed,
+		mph:      mph,
+		combined: combined,
+		count:    combined.Count() / 2,
+		seed:     seed,
 	}, nil
 }
 
@@ -93,15 +83,11 @@ func mphfSeedOf(combined *ArrayReader) (uint64, error) {
 
 // Close releases resources.
 func (m *MPHF) Close() error {
-	var combinedErr, dictErr error
-	if m.combined != nil {
-		combinedErr = m.combined.Close()
-	}
-	if m.dictPrefixes != nil {
-		dictErr = m.dictPrefixes.Close()
+	if m.combined == nil {
+		return nil
 	}
 
-	return errors.Join(combinedErr, dictErr)
+	return m.combined.Close()
 }
 
 // Lookup returns the preorder position for a prefix, or ok=false if not found.
@@ -121,64 +107,6 @@ func (m *MPHF) Lookup(prefix string) (uint64, bool) {
 	}
 
 	return preorderPosVal, true
-}
-
-func (m *MPHF) Prefix(pos uint64) (string, error) {
-	return m.GetPrefix(pos)
-}
-
-func (m *MPHF) GetPrefix(pos uint64) (string, error) {
-	if m.dictPrefixes == nil {
-		return "", ErrNoPrefixStorage
-	}
-	s, err := m.dictPrefixes.GetPrefix(pos)
-	if err != nil {
-		return "", fmt.Errorf("get dict prefix at pos %d: %w", pos, err)
-	}
-
-	return s, nil
-}
-
-// LookupWithVerify returns the position and verifies the stored prefix
-// matches exactly, eliminating fingerprint-collision false positives.
-func (m *MPHF) LookupWithVerify(prefix string) (uint64, bool) {
-	pos, ok := m.Lookup(prefix)
-	if !ok {
-		return 0, false
-	}
-	if m.dictPrefixes != nil {
-		stored, err := m.dictPrefixes.GetPrefix(pos)
-		if err != nil || stored != prefix {
-			return 0, false
-		}
-	}
-
-	return pos, true
-}
-
-// VerifyMPHF checks that every stored prefix round-trips: GetPrefix
-// at every position returns a string that Lookups back to that position.
-func VerifyMPHF(m *MPHF) error {
-	if m.dictPrefixes == nil {
-		return ErrNoPrefixStorage
-	}
-
-	for i := range m.count {
-		prefix, err := m.GetPrefix(i)
-		if err != nil {
-			return fmt.Errorf("get prefix %d: %w", i, err)
-		}
-
-		pos, ok := m.Lookup(prefix)
-		if !ok {
-			return fmt.Errorf("%w for prefix %q at pos %d", ErrMPHFLookupFailed, prefix, i)
-		}
-		if pos != i {
-			return fmt.Errorf("%w for %q: got %d, want %d", ErrLookupWrongPos, prefix, pos, i)
-		}
-	}
-
-	return nil
 }
 
 // Count returns the number of entries in the MPHF.

@@ -41,8 +41,7 @@ func readHeaderCount(path string) uint64 {
 //	Bpp_tier_*               — per-prefix bytes for each tier_stats/ file
 //	core_stats_Bpp           — per-prefix bytes for core_stats.bin
 //	mph_fp_pos_Bpp           — per-prefix bytes for mph_fp_pos.u64
-//	prefix_dict_ids_Bpp      — per-prefix bytes for prefix_dict.ids.u32
-//	prefix_off_Bpp           — per-prefix bytes for prefix_dict.prefix_off.u64
+//	Bpp_prefix_tree          — per-prefix bytes for prefix_tree.bin
 //	depth_positions_Bpp      — per-prefix bytes for depth_positions.u64
 //	n_prefixes               — total prefix count after aggregation
 //
@@ -469,8 +468,7 @@ var gridReportedFiles = []gridFile{
 	{"tier_stats/tier_multi.off.u64", "Bpp_tier_multi_off", false},
 	{"core_stats.bin", "Bpp_core", true},
 	{"mph_fp_pos.u64", "Bpp_fpp", false},
-	{"prefix_dict.ids.u32", "Bpp_ids", false},
-	{"prefix_dict.prefix_off.u64", "Bpp_poff", false},
+	{"prefix_tree.bin", "Bpp_prefix_tree", false},
 	{"depth_positions.u64", "Bpp_dpos", false},
 }
 

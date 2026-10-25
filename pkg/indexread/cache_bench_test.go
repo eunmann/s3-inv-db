@@ -284,7 +284,7 @@ func fileGroup(file string) string {
 		return "tiers"
 	case strings.HasPrefix(file, "mph"):
 		return "mphf"
-	case strings.HasPrefix(file, "prefix_dict"):
+	case strings.HasPrefix(file, "prefix_"):
 		return "prefix"
 	case strings.HasPrefix(file, "depth"):
 		return "depth"
