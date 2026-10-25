@@ -40,7 +40,9 @@ func newScheduler(t *testing.T) (*jobs.Scheduler, *jobs.Store, *jobs.Bus) {
 	store := jobs.NewStore(db)
 	bus := jobs.NewBus(16)
 
-	return jobs.NewScheduler(store, bus), store, bus
+	// A short progress interval so a test reading running progress back
+	// from the store doesn't wait out the one-second default.
+	return jobs.NewSchedulerForTest(store, bus, 10*time.Millisecond), store, bus
 }
 
 func waitForState(t *testing.T, store *jobs.Store, id jobs.ID, target jobs.State) jobs.Job {
