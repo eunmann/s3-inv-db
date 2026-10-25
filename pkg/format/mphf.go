@@ -2,6 +2,7 @@ package format
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,22 +22,21 @@ const (
 // Thread Safety: MPHF is safe for concurrent read access from
 // multiple goroutines. Close once, after all reads.
 type MPHF struct {
-	mph *bbhash
-	// combined holds the interleaved [fp, pos, fp, pos, ...] array.
-	// Lookup at hash position p reads combined.UnsafeGetU64(2p) for
-	// fp and combined.UnsafeGetU64(2p+1) for pos — adjacent words
-	// in the same cache line.
-	combined *ArrayReader
-	count    uint64
-	// seed is XORed into the key hash's offset basis; see
-	// writeCombinedMmap for where it is stored.
-	seed uint64
+	mph   *bbhash
+	slots *MmapFile
+	count uint64
+	// seed is the key hash's seed; see writeSlots for where it is stored.
+	seed     uint64
+	slotW    uint64
+	fpW      uint8
+	posW     uint8
+	posOff   uint64
+	hasSlots bool
 }
 
 // OpenMPHF opens an MPHF from the given directory.
 func OpenMPHF(outDir string) (*MPHF, error) {
 	mphPath := filepath.Join(outDir, MPHFile)
-	combinedPath := filepath.Join(outDir, CombinedMPHFArrayFile)
 
 	info, err := os.Stat(mphPath)
 	if err != nil {
@@ -50,62 +50,82 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	combined, err := OpenArrayWithHint(combinedPath, AccessHintRandom)
+	slots, err := OpenMmapWithHint(filepath.Join(outDir, MPHFSlotsFile), AccessHintRandom)
 	if err != nil {
-		return nil, fmt.Errorf("open combined fp+pos: %w", err)
+		return nil, fmt.Errorf("open MPHF slots: %w", err)
 	}
-	seed, err := mphfSeedOf(combined)
-	if err != nil {
-		combined.Close()
-
-		return nil, err
+	m := &MPHF{mph: mph, slots: slots, hasSlots: true}
+	if err := m.readSlotsHeader(); err != nil {
+		return nil, errors.Join(err, slots.Close())
 	}
 
-	return &MPHF{
-		mph:      mph,
-		combined: combined,
-		count:    combined.Count() / 2,
-		seed:     seed,
-	}, nil
+	return m, nil
 }
 
-// mphfSeedOf returns the key-hash seed stored after the fp/pos slots.
-func mphfSeedOf(combined *ArrayReader) (uint64, error) {
-	end := combined.header.Count * uint64(combined.header.Width)
-	if uint64(len(combined.data)) < end+mphfSeedBytes {
-		return 0, fmt.Errorf("read MPHF seed: %w", ErrFileTooSmall)
+// readSlotsHeader validates mph_slots.bin and reads its layout and seed.
+func (m *MPHF) readSlotsHeader() error {
+	data := m.slots.Data()
+	if len(data) < mphfSlotsDataOff {
+		return fmt.Errorf("MPHF slots: %w", ErrInvalidHeader)
 	}
+	header, err := DecodeHeader(data[:HeaderSize])
+	if err != nil {
+		return fmt.Errorf("decode MPHF slots header: %w", err)
+	}
+	if header.Magic != MagicNumber {
+		return ErrMagicMismatch
+	}
+	if header.Version != Version {
+		return ErrVersionMismatch
+	}
+	m.fpW, m.posW = data[HeaderSize], data[HeaderSize+1]
+	if (m.fpW != 0 && m.fpW != mphfFingerprintBytes) || m.posW < 1 || m.posW > 8 ||
+		header.Width != uint32(m.fpW)+uint32(m.posW) {
+		return fmt.Errorf("%w: MPHF slot widths %d+%d, slot %d", ErrWidthMismatch, m.fpW, m.posW, header.Width)
+	}
+	m.count, m.slotW, m.posOff = header.Count, uint64(header.Width), uint64(m.fpW)
+	end := uint64(mphfSlotsDataOff) + m.count*m.slotW
+	if uint64(len(data)) < end+mphfSeedBytes+mphfSlotsTailPad {
+		return fmt.Errorf("read MPHF seed: %w", ErrFileTooSmall)
+	}
+	m.seed = binary.LittleEndian.Uint64(data[end:])
 
-	return binary.LittleEndian.Uint64(combined.data[end:]), nil
+	return nil
 }
 
 // Close releases resources.
 func (m *MPHF) Close() error {
-	if m.combined == nil {
+	if !m.hasSlots {
 		return nil
 	}
 
-	return m.combined.Close()
+	return m.slots.Close()
 }
 
-// Lookup returns the preorder position for a prefix, or ok=false if not found.
+// Verified reports whether a Lookup hit is already checked against a
+// stored fingerprint. When false, the slots hold positions only and
+// the caller must confirm a hit against the stored prefix (indexread
+// does, through the prefix tree), which makes every answer exact.
+func (m *MPHF) Verified() bool { return m.fpW != 0 }
+
+// Lookup returns the preorder position for a prefix, or ok=false if not
+// found. Without fingerprints (see Verified) a prefix that is not in
+// the index can return the position of one that is.
 func (m *MPHF) Lookup(prefix string) (uint64, bool) {
-	if m.count == 0 || m.mph == nil {
+	if m.count == 0 {
 		return 0, false
 	}
-	keyHash := hashString(prefix, m.seed)
-	hashPos, ok := m.mph.find(keyHash)
-	if !ok || hashPos >= m.count {
+	slot, ok := m.mph.find(hashString(prefix, m.seed))
+	if !ok || slot >= m.count {
 		return 0, false
 	}
-	storedFP := m.combined.UnsafeGetU64(2 * hashPos)
-	preorderPosVal := m.combined.UnsafeGetU64(2*hashPos + 1)
-	if storedFP != computeFingerprint(prefix) {
+	data := m.slots.Data()
+	off := mphfSlotsDataOff + slot*m.slotW
+	if m.fpW != 0 && binary.LittleEndian.Uint64(data[off:]) != computeFingerprint(prefix) {
 		return 0, false
 	}
 
-	return preorderPosVal, true
+	return binary.LittleEndian.Uint64(data[off+m.posOff:]) & widthMask[m.posW], true
 }
 
 // Count returns the number of entries in the MPHF.

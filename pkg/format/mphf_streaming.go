@@ -254,10 +254,10 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	}
 
 	mapStart := time.Now()
-	if err := writeCombinedMmap(outDir, n, mph, b.hashes.Slice(), b.fingerprints.Slice(), b.preorderPos.Slice(), seed); err != nil {
+	if err := writeSlots(outDir, n, mph, b.hashes.Slice(), b.fingerprints.Slice(), b.preorderPos.Slice(), seed); err != nil {
 		return err
 	}
-	log.Debug().Dur("write_ms", time.Since(mapStart)).Msg("MPHF: combined fp+pos written")
+	log.Debug().Dur("write_ms", time.Since(mapStart)).Msg("MPHF: slots written")
 
 	if err := b.hashes.Close(); err != nil {
 		return fmt.Errorf("close hashes: %w", err)
@@ -451,106 +451,81 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 		return fmt.Errorf("write empty mph: %w", err)
 	}
 
-	// Create empty combined fp+pos array (new format).
-	combinedPath := filepath.Join(outDir, CombinedMPHFArrayFile)
-	combinedWriter, err := NewArrayWriter(combinedPath, 8)
-	if err != nil {
-		return fmt.Errorf("create empty combined fp+pos writer: %w", err)
-	}
-	if err := combinedWriter.Close(); err != nil {
-		return fmt.Errorf("close empty combined fp+pos writer: %w", err)
-	}
-
-	return nil
+	// An empty slot file keeps the index's file set the same at any size.
+	return writeSlots(outDir, 0, nil, nil, nil, nil, 0)
 }
 
-// writeCombinedMmap materialises mph_fp_pos.u64: it maps every slot to
-// its prefix (slotOwners), then each worker fills a 1 MiB buffer in slot
+// writeSlots materialises mph_slots.bin: it maps every slot to its
+// prefix (slotOwners), then each worker fills a 1 MiB buffer in slot
 // order and pwrites it to a disjoint range of the output file.
+// Sequential writes touch each page once; scattered writes indexed by
+// hash position measured ~3x write amplification on EBS gp3.
 //
-// The previous version mmap'd the file and scattered random writes
-// indexed by hashPositions. On EBS gp3 that hit ~3× write amplification
-// — page-cache evict/reload churn (CPU profile showed 91% in
-// page-fault wait). Sequential writes touch each page exactly once.
-//
-// File layout: 20-byte header (count = 2N, width = 8) followed by
-// 2N×8 bytes of interleaved (fp, pos, fp, pos, …) data, then the 8-byte
-// key-hash seed.
-func writeCombinedMmap(outDir string, n int, mph *bbhash, hashes, fps, poss []uint64, seed uint64) error {
-	if len(fps) != n || len(poss) != n {
+// File layout: Header (Count = slots, Width = slot bytes), a 2-byte
+// descriptor (fingerprint width 0 or 8, position width), the slots
+// (fingerprint, then position), the 8-byte key-hash seed, and an
+// 8-byte zero tail pad for masked loads at the last slot.
+func writeSlots(outDir string, n int, mph *bbhash, hashes, fps, poss []uint64, seed uint64) error {
+	fpW := 0
+	if mphfSlotFingerprints {
+		fpW = mphfFingerprintBytes
+	}
+	if len(poss) != n || (fpW != 0 && len(fps) != n) {
 		return fmt.Errorf("%w: fps=%d poss=%d n=%d", errMPHFArrayLengthMismatch, len(fps), len(poss), n)
 	}
-	path := filepath.Join(outDir, CombinedMPHFArrayFile)
-	dataBytes := int64(2*n) * 8
-	totalBytes := int64(HeaderSize) + dataBytes + mphfSeedBytes
+	posW := int(byteWidthOf(uint64(max(n, 1) - 1)))
+	slotW := fpW + posW
+	path := filepath.Join(outDir, MPHFSlotsFile)
+	dataBytes := int64(n) * int64(slotW)
 	f, err := os.Create(path)
 	if err != nil {
-		return fmt.Errorf("create combined file: %w", err)
+		return fmt.Errorf("create MPHF slots: %w", err)
 	}
 	cleanup := func(primary error) error {
 		return errors.Join(primary, f.Close(), removeIfErr(path))
 	}
-	if err := f.Truncate(totalBytes); err != nil {
-		return cleanup(fmt.Errorf("truncate combined file: %w", err))
+	if err := f.Truncate(int64(mphfSlotsDataOff) + dataBytes + mphfSeedBytes + mphfSlotsTailPad); err != nil {
+		return cleanup(fmt.Errorf("truncate MPHF slots: %w", err))
+	}
+	head := EncodeHeader(Header{Magic: MagicNumber, Version: Version, Count: uint64(n), Width: uint32(slotW)})
+	if _, err := f.Write(append(head, byte(fpW), byte(posW))); err != nil {
+		return cleanup(fmt.Errorf("write MPHF slots header: %w", err))
 	}
 
-	if _, err := f.Write(EncodeHeader(Header{
-		Magic:   MagicNumber,
-		Version: Version,
-		Count:   uint64(2 * n),
-		Width:   8,
-	})); err != nil {
-		return cleanup(fmt.Errorf("write combined header: %w", err))
-	}
-
-	if n == 0 {
-		if err := f.Sync(); err != nil {
-			return cleanup(fmt.Errorf("sync combined: %w", err))
+	if n > 0 {
+		// Concurrent pwrite to disjoint ranges is POSIX-safe; each worker
+		// writes its own [start,end) slot range.
+		invMap, err := slotOwners(mph, hashes)
+		if err != nil {
+			return cleanup(err)
 		}
-		if err := f.Close(); err != nil {
-			return fmt.Errorf("close combined: %w", err)
+		numWorkers := max(min(runtime.NumCPU(), n), 1)
+		slotsPerWorker := (n + numWorkers - 1) / numWorkers
+		errs := make([]error, numWorkers)
+		var wg sync.WaitGroup
+		for w := range numWorkers {
+			start := w * slotsPerWorker
+			end := min(start+slotsPerWorker, n)
+			if start >= end {
+				continue
+			}
+			wg.Go(func() { errs[w] = writeSlotRange(f, invMap, fps, poss, fpW, posW, start, end) })
 		}
-
-		return nil
-	}
-
-	// Concurrent pwrite to disjoint ranges is POSIX-safe; each worker
-	// writes its own [start,end) slot range.
-	invMap, err := slotOwners(mph, hashes)
-	if err != nil {
-		return cleanup(err)
-	}
-
-	numWorkers := max(min(runtime.NumCPU(), n), 1)
-	slotsPerWorker := (n + numWorkers - 1) / numWorkers
-
-	errs := make([]error, numWorkers)
-	var wg sync.WaitGroup
-	for w := range numWorkers {
-		start := w * slotsPerWorker
-		end := min(start+slotsPerWorker, n)
-		if start >= end {
-			continue
-		}
-		wg.Go(func() { errs[w] = writeCombinedSlots(f, invMap, fps, poss, start, end) })
-	}
-	wg.Wait()
-	for _, werr := range errs {
-		if werr != nil {
-			return cleanup(werr)
+		wg.Wait()
+		if err := errors.Join(errs...); err != nil {
+			return cleanup(err)
 		}
 	}
 	var seedBuf [mphfSeedBytes]byte
 	binary.LittleEndian.PutUint64(seedBuf[:], seed)
-	if _, err := f.WriteAt(seedBuf[:], int64(HeaderSize)+dataBytes); err != nil {
-		return cleanup(fmt.Errorf("write combined seed: %w", err))
+	if _, err := f.WriteAt(seedBuf[:], int64(mphfSlotsDataOff)+dataBytes); err != nil {
+		return cleanup(fmt.Errorf("write MPHF seed: %w", err))
 	}
-
 	if err := f.Sync(); err != nil {
-		return cleanup(fmt.Errorf("sync combined: %w", err))
+		return cleanup(fmt.Errorf("sync MPHF slots: %w", err))
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("close combined: %w", err)
+		return fmt.Errorf("close MPHF slots: %w", err)
 	}
 
 	return nil
@@ -591,24 +566,28 @@ func slotOwners(mph *bbhash, hashes []uint64) ([]uint32, error) {
 	return owners, errors.Join(errs...)
 }
 
-// writeCombinedSlots fills slots [start, end) of the combined file in
-// 1 MiB buffers, each slot the (fp, pos) of the prefix invMap assigns.
-func writeCombinedSlots(f *os.File, invMap []uint32, fps, poss []uint64, start, end int) error {
-	const slotBytes = 16
-	const bufSlots = 1 << 16 // 1 MiB / 16 B
-	buf := make([]byte, bufSlots*slotBytes)
+// writeSlotRange writes slots [start, end) of the slot file.
+func writeSlotRange(f *os.File, invMap []uint32, fps, poss []uint64, fpW, posW, start, end int) error {
+	slotW := fpW + posW
+	const bufBytes = 1 << 20
+	bufSlots := bufBytes / slotW
+	buf := make([]byte, bufSlots*slotW+8)
 	for chunk := start; chunk < end; chunk += bufSlots {
 		cEnd := min(chunk+bufSlots, end)
 		for j := chunk; j < cEnd; j++ {
 			i := invMap[j]
-			off := (j - chunk) * slotBytes
-			binary.LittleEndian.PutUint64(buf[off:off+8], fps[i])
-			binary.LittleEndian.PutUint64(buf[off+8:off+slotBytes], poss[i])
+			off := (j - chunk) * slotW
+			if fpW != 0 {
+				binary.LittleEndian.PutUint64(buf[off:], fps[i])
+			}
+			// An 8-byte store, overwritten by the next slot: only posW
+			// bytes are the slot's.
+			binary.LittleEndian.PutUint64(buf[off+fpW:], poss[i])
 		}
-		blen := (cEnd - chunk) * slotBytes
-		fileOff := int64(HeaderSize) + int64(chunk)*slotBytes
+		blen := (cEnd - chunk) * slotW
+		fileOff := int64(mphfSlotsDataOff) + int64(chunk)*int64(slotW)
 		if _, err := f.WriteAt(buf[:blen], fileOff); err != nil {
-			return fmt.Errorf("write combined slot %d: %w", chunk, err)
+			return fmt.Errorf("write MPHF slot %d: %w", chunk, err)
 		}
 	}
 
@@ -620,12 +599,20 @@ func writeCombinedSlots(f *os.File, invMap []uint32, fps, poss []uint64, start, 
 // must come from the same parallel-lookup pass.
 var errMPHFArrayLengthMismatch = errors.New("mphf fingerprints/positions length mismatch")
 
-// CombinedMPHFArrayFile is the filename used for the combined
-// interleaved fingerprint+position table. Slot i holds the
-// fingerprint at offset 2i and the position at 2i+1, so a single
-// cache line covers both reads on a Lookup.
-const CombinedMPHFArrayFile = "mph_fp_pos.u64"
+// MPHFSlotsFile maps each MPHF slot to its prefix's preorder position,
+// and holds that prefix's fingerprint when the index keeps them.
+const MPHFSlotsFile = "mph_slots.bin"
 
-// mphfSeedBytes is the size of the seed word mph_fp_pos.u64 carries
-// after its slots.
-const mphfSeedBytes = 8
+// mph_slots.bin layout constants (see writeSlots).
+const (
+	mphfSlotsDescBytes   = 2
+	mphfSlotsDataOff     = HeaderSize + mphfSlotsDescBytes
+	mphfFingerprintBytes = 8
+	mphfSeedBytes        = 8
+	mphfSlotsTailPad     = 8
+)
+
+// mphfSlotFingerprints selects whether slots carry a 64-bit
+// fingerprint. Without one, lookups verify hits against the prefix
+// tree instead.
+const mphfSlotFingerprints = true

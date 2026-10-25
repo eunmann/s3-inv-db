@@ -13,8 +13,8 @@ func TestWriteAndReadManifest(t *testing.T) {
 	// Create the two artifact files the manifest enumerator always
 	// includes; their names must match requiredTopLevel.
 	testFiles := map[string][]byte{
-		CoreStatsFile:         []byte("test data 1"),
-		CombinedMPHFArrayFile: []byte("test data 2"),
+		CoreStatsFile: []byte("test data 1"),
+		MPHFSlotsFile: []byte("test data 2"),
 	}
 
 	for name, data := range testFiles {

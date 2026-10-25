@@ -82,9 +82,16 @@ type Stats struct {
 	TotalBytes  uint64
 }
 
-// Lookup returns the preorder position for a prefix, or ok=false if not found.
+// Lookup returns the preorder position for a prefix, or ok=false if not
+// found. Without slot fingerprints the hit is checked against the
+// stored prefix, so the answer is exact.
 func (idx *Index) Lookup(prefix string) (uint64, bool) {
-	return idx.mphf.Lookup(prefix)
+	pos, ok := idx.mphf.Lookup(prefix)
+	if !ok || idx.mphf.Verified() || idx.prefixes.Matches(pos, prefix) {
+		return pos, ok
+	}
+
+	return 0, false
 }
 
 // Stats returns the per-prefix object count and total bytes at pos.

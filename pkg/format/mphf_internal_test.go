@@ -317,16 +317,16 @@ func collidingKeyHash(a, b string) func(string, uint64) uint64 {
 	}
 }
 
-// readCombined returns the raw mph_fp_pos.u64 bytes and its header.
-func readCombined(t *testing.T, dir string) ([]byte, Header) {
+// readSlots returns the raw mph_slots.bin bytes and its header.
+func readSlots(t *testing.T, dir string) ([]byte, Header) {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(dir, CombinedMPHFArrayFile))
+	data, err := os.ReadFile(filepath.Join(dir, MPHFSlotsFile))
 	if err != nil {
-		t.Fatalf("read fp/pos: %v", err)
+		t.Fatalf("read slots: %v", err)
 	}
 	h, err := DecodeHeader(data)
 	if err != nil {
-		t.Fatalf("decode fp/pos header: %v", err)
+		t.Fatalf("decode slots header: %v", err)
 	}
 
 	return data, h
@@ -347,12 +347,20 @@ func TestStreamingMPHFBuildSurvivesKeyHashCollision(t *testing.T) {
 		t.Fatalf("Build with a seed-0 key collision: %v", err)
 	}
 
-	data, h := readCombined(t, dir)
+	data, h := readSlots(t, dir)
 	if h.Version != Version {
-		t.Errorf("fp/pos Version = %d, want %d", h.Version, Version)
+		t.Errorf("slots Version = %d, want %d", h.Version, Version)
 	}
-	if want := (HeaderSize + 16*len(prefixes) + mphfSeedBytes); len(data) != want {
-		t.Errorf("fp/pos size = %d, want %d", len(data), want)
+	// 2000 positions need 2 bytes.
+	slotW := 2
+	if mphfSlotFingerprints {
+		slotW += mphfFingerprintBytes
+	}
+	if int(h.Width) != slotW {
+		t.Errorf("slot width = %d, want %d", h.Width, slotW)
+	}
+	if want := mphfSlotsDataOff + slotW*len(prefixes) + mphfSeedBytes + mphfSlotsTailPad; len(data) != want {
+		t.Errorf("slots size = %d, want %d", len(data), want)
 	}
 
 	m, err := OpenMPHF(dir)
@@ -397,8 +405,9 @@ func TestOpenMPHFMissingSeedWord(t *testing.T) {
 	if err := b.Build(dir); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	path := filepath.Join(dir, CombinedMPHFArrayFile)
-	if err := os.Truncate(path, HeaderSize+16*3); err != nil {
+	path := filepath.Join(dir, MPHFSlotsFile)
+	_, h := readSlots(t, dir)
+	if err := os.Truncate(path, int64(mphfSlotsDataOff)+int64(h.Width)*3); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	if m, err := OpenMPHF(dir); !errors.Is(err, ErrFileTooSmall) {
