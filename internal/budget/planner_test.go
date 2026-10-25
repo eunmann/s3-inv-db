@@ -235,3 +235,28 @@ func TestPlanner_PinnedLoadDoesNotRetire(t *testing.T) {
 		t.Errorf("Evict = %v, AfterLoad = %v; want nothing for a pinned load that fits", plan.Evict, plan.AfterLoad)
 	}
 }
+
+// A run another in-flight load retires once it finishes is the first to
+// go for disk: it leaves anyway, so no run worth keeping is evicted in
+// its place.
+func TestPlanner_RetiringRunsGoBeforeLRU(t *testing.T) {
+	tr := budget.New(1000, 0, fixedUsed(1000))
+	p := budget.NewPlanner(tr, nil)
+	in := budget.Input{
+		Target:        "y/inv/2026-01-01T00-00Z",
+		EstimateBytes: 100,
+		All: []inventory.Info{
+			loaded("z/inv/2026-01-01T00-00Z", 100, time.Unix(1, 0), time.Unix(1, 0), false),
+			loaded("x/inv/2026-01-01T00-00Z", 100, time.Unix(5, 0), time.Unix(5, 0), false),
+			loaded("x/inv/2026-01-02T00-00Z", 100, time.Unix(6, 0), time.Unix(6, 0), false),
+		},
+		Retiring: map[inventory.ID]bool{"x/inv/2026-01-01T00-00Z": true},
+	}
+	plan, err := p.Plan(t.Context(), in)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Evict) != 1 || plan.Evict[0] != "x/inv/2026-01-01T00-00Z" {
+		t.Errorf("Evict = %v, want the run another load retires", plan.Evict)
+	}
+}

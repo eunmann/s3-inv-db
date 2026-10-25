@@ -3,7 +3,9 @@ package loadcontrol_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/budget"
@@ -217,5 +219,127 @@ func TestGate_Load_PinnedLoadDoesNotRetire(t *testing.T) {
 		if info, _ := mgr.Get(id); info.State != inventory.StateLoaded {
 			t.Errorf("%s state = %s, want loaded", id, info.State)
 		}
+	}
+}
+
+// A run pinned while a newer run builds is not retired after the build:
+// pinned runs are never auto-evicted.
+func TestGate_Load_PinnedDuringBuildSkipsRetirement(t *testing.T) {
+	ctx := t.Context()
+	mgr := inventory.NewCatalog(nil)
+	defer mgr.Close()
+	tracker := budget.New(1<<30, 0, mgr.LoadedBytes)
+	var removed []inventory.ID
+	gate := loadcontrol.New(mgr, tracker, budget.NewPlanner(tracker, nil), func(id inventory.ID) error {
+		removed = append(removed, id)
+
+		return nil
+	})
+	dir := buildIndexDir(t)
+	ok := func(context.Context, inventory.Info) (string, error) { return dir, nil }
+	runs := []inventory.ID{"src/inv/2026-01-01T00-00Z", "src/inv/2026-01-02T00-00Z", "src/inv/2026-01-03T00-00Z"}
+	for _, id := range runs {
+		if err := mgr.Register(ctx, id, "n", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range runs[:2] {
+		if err := gate.Load(ctx, id, ok, inventory.GatedLoadOptions{EstimateBytes: 1}); err != nil {
+			t.Fatalf("load %s: %v", id, err)
+		}
+	}
+	pinOldest := func(ctx context.Context, _ inventory.Info) (string, error) {
+		if err := mgr.SetPinned(ctx, runs[0], true); err != nil {
+			return "", fmt.Errorf("pin: %w", err)
+		}
+
+		return dir, nil
+	}
+	if err := gate.Load(ctx, runs[2], pinOldest, inventory.GatedLoadOptions{EstimateBytes: 1}); err != nil {
+		t.Fatalf("load %s: %v", runs[2], err)
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed caches = %v, want none: the oldest run was pinned during the build", removed)
+	}
+	for _, id := range runs {
+		if info, _ := mgr.Get(id); info.State != inventory.StateLoaded {
+			t.Errorf("%s state = %s, want loaded", id, info.State)
+		}
+	}
+}
+
+// A load that needs disk while another load's build is in flight evicts
+// the run that build retires once it finishes, not another
+// configuration's run worth keeping.
+func TestGate_Load_ConcurrentLoadEvictsRetiringRunFirst(t *testing.T) {
+	ctx := t.Context()
+	mgr := inventory.NewCatalog(nil)
+	defer mgr.Close()
+	dir := buildIndexDir(t)
+	ok := func(context.Context, inventory.Info) (string, error) { return dir, nil }
+
+	z1 := inventory.ID("z/inv/2026-01-01T00-00Z")
+	x1 := inventory.ID("x/inv/2026-01-01T00-00Z")
+	x2 := inventory.ID("x/inv/2026-01-02T00-00Z")
+	x3 := inventory.ID("x/inv/2026-01-03T00-00Z")
+	y1 := inventory.ID("y/inv/2026-01-01T00-00Z")
+	for _, id := range []inventory.ID{z1, x1, x2, x3, y1} {
+		if err := mgr.Register(ctx, id, "n", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Load z1, x1 and x2 without a budget to learn the index size.
+	setup := budget.New(0, 0, mgr.LoadedBytes)
+	setupGate := loadcontrol.New(mgr, setup, budget.NewPlanner(setup, nil), nil)
+	for _, id := range []inventory.ID{z1, x1, x2} {
+		if err := setupGate.Load(ctx, id, ok, inventory.GatedLoadOptions{EstimateBytes: 1}); err != nil {
+			t.Fatalf("load %s: %v", id, err)
+		}
+	}
+	info, _ := mgr.Get(z1)
+	size := info.IndexBytes
+
+	// Room for one more index: x3 fits and retires x1 after its build;
+	// y1, admitted while x3 builds, must evict one run.
+	tracker := budget.New(4*size, 0, mgr.LoadedBytes)
+	var removed []inventory.ID
+	var removedMu sync.Mutex
+	gate := loadcontrol.New(mgr, tracker, budget.NewPlanner(tracker, nil), func(id inventory.ID) error {
+		removedMu.Lock()
+		defer removedMu.Unlock()
+		removed = append(removed, id)
+
+		return nil
+	})
+	building := make(chan struct{})
+	finish := make(chan struct{})
+	slow := func(context.Context, inventory.Info) (string, error) {
+		close(building)
+		<-finish
+
+		return dir, nil
+	}
+	x3Err := make(chan error, 1)
+	go func() {
+		x3Err <- gate.Load(ctx, x3, slow, inventory.GatedLoadOptions{EstimateBytes: size})
+	}()
+	<-building
+	y1Err := gate.Load(ctx, y1, ok, inventory.GatedLoadOptions{EstimateBytes: size})
+	close(finish)
+	if err := <-x3Err; err != nil {
+		t.Fatalf("load %s: %v", x3, err)
+	}
+	if y1Err != nil {
+		t.Fatalf("load %s: %v", y1, y1Err)
+	}
+
+	if got, _ := mgr.Get(z1); got.State != inventory.StateLoaded {
+		t.Errorf("%s state = %s, want loaded: it isn't past retention", z1, got.State)
+	}
+	if got, _ := mgr.Get(x1); got.State != inventory.StateNotLoaded {
+		t.Errorf("%s state = %s, want not_loaded", x1, got.State)
+	}
+	if len(removed) != 1 || removed[0] != x1 {
+		t.Errorf("removed caches = %v, want only %s", removed, x1)
 	}
 }

@@ -44,12 +44,21 @@ type Gate struct {
 	// loads never plan against the same free space and evict for a
 	// reservation one of them then can't get.
 	admit sync.Mutex
+	// retiring counts, per run, the in-flight loads that retire it once
+	// they succeed. Guarded by admit.
+	retiring map[inventory.ID]int
 }
 
 // New constructs a Gate. The tracker's used bytes must come from the
 // catalog (Catalog.LoadedBytes); the gate never adjusts them itself.
 func New(manager *inventory.Catalog, tracker *budget.Tracker, planner *budget.Planner, removeCache CacheRemover) *Gate {
-	return &Gate{manager: manager, tracker: tracker, planner: planner, removeCache: removeCache}
+	return &Gate{
+		manager:     manager,
+		tracker:     tracker,
+		planner:     planner,
+		removeCache: removeCache,
+		retiring:    make(map[inventory.ID]int),
+	}
 }
 
 // Load plans, evicts, reserves, builds, releases, then retires the
@@ -61,6 +70,7 @@ func (g *Gate) Load(ctx context.Context, id inventory.ID, build inventory.BuildF
 		return err
 	}
 	defer g.tracker.Release(token)
+	defer g.unmarkRetiring(plan.AfterLoad)
 
 	var loadErr error
 	if opts.Pin {
@@ -92,11 +102,16 @@ func (g *Gate) admitLoad(ctx context.Context, id inventory.ID, opts inventory.Ga
 	g.admit.Lock()
 	defer g.admit.Unlock()
 
+	retiring := make(map[inventory.ID]bool, len(g.retiring))
+	for victim := range g.retiring {
+		retiring[victim] = true
+	}
 	plan, err := g.planner.Plan(ctx, budget.Input{
 		Target:        id,
 		EstimateBytes: opts.EstimateBytes,
 		All:           g.manager.List(),
 		Pinned:        opts.Pin,
+		Retiring:      retiring,
 	})
 	if refused, ok := errors.AsType[*budget.PlannerRefusedError](err); ok {
 		if !opts.Force {
@@ -122,7 +137,23 @@ func (g *Gate) admitLoad(ctx context.Context, id inventory.ID, opts inventory.Ga
 		}
 	}
 
+	for _, victim := range plan.AfterLoad {
+		g.retiring[victim]++
+	}
+
 	return plan, token, nil
+}
+
+// unmarkRetiring drops one in-flight load's claim on its AfterLoad runs.
+func (g *Gate) unmarkRetiring(victims []inventory.ID) {
+	g.admit.Lock()
+	defer g.admit.Unlock()
+	for _, victim := range victims {
+		g.retiring[victim]--
+		if g.retiring[victim] <= 0 {
+			delete(g.retiring, victim)
+		}
+	}
 }
 
 // evict unloads victim and deletes its cache; one already unloaded or

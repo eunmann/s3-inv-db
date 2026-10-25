@@ -76,6 +76,10 @@ type Input struct {
 	// auto-loaded run for retention would make the auto-loader rebuild
 	// it on its next tick.
 	Pinned bool
+	// Retiring marks runs other in-flight loads retire once they
+	// succeed. They leave anyway, so they are the first to go for disk
+	// before any run worth keeping.
+	Retiring map[inventory.ID]bool
 }
 
 // Plan computes the eviction plan for in. Ctx is threaded into the
@@ -128,15 +132,10 @@ func (p *Planner) Plan(ctx context.Context, in Input) (Plan, error) {
 		take(&retire[i])
 	}
 
-	// If still short, evict across configs in LRU order.
+	// If still short, evict across configs: runs other loads retire
+	// first, then in LRU order.
 	if need > 0 {
-		slices.SortStableFunc(candidates, func(a, b inventory.Info) int {
-			if a.LastAccessedAt.Equal(b.LastAccessedAt) {
-				return a.LoadedAt.Compare(b.LoadedAt)
-			}
-
-			return a.LastAccessedAt.Compare(b.LastAccessedAt)
-		})
+		sortForEviction(candidates, in.Retiring)
 		for i := range candidates {
 			if need == 0 {
 				break
@@ -221,6 +220,25 @@ func selectByConfig(pool []inventory.Info, source, name string, retention uint32
 	drop := uint32(len(inConfig)) - (retention - 1)
 
 	return inConfig[:drop]
+}
+
+// sortForEviction orders candidates for cross-config eviction: runs
+// other loads retire first, then least recently used.
+func sortForEviction(candidates []inventory.Info, retiring map[inventory.ID]bool) {
+	slices.SortStableFunc(candidates, func(a, b inventory.Info) int {
+		if ra, rb := retiring[a.ID], retiring[b.ID]; ra != rb {
+			if ra {
+				return -1
+			}
+
+			return 1
+		}
+		if a.LastAccessedAt.Equal(b.LastAccessedAt) {
+			return a.LoadedAt.Compare(b.LoadedAt)
+		}
+
+		return a.LastAccessedAt.Compare(b.LastAccessedAt)
+	})
 }
 
 func drop(pool []inventory.Info, id inventory.ID) []inventory.Info {
