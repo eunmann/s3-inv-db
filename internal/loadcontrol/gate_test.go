@@ -15,6 +15,8 @@ import (
 
 var errBuildOnPurpose = errors.New("build err on purpose")
 
+var errBuildFailed = errors.New("build failed")
+
 func newTestGate(capBytes, headroom uint64) (*loadcontrol.Gate, *inventory.Catalog, *budget.Tracker) {
 	mgr := inventory.NewCatalog(nil)
 	tracker := budget.New(capBytes, headroom, mgr.LoadedBytes)
@@ -144,5 +146,76 @@ func TestGate_Load_RetentionEvictionRemovesCache(t *testing.T) {
 	info, _ := mgr.Get(runs[2])
 	if got, want := tracker.Used(), 2*info.IndexBytes; got != want || want == 0 {
 		t.Errorf("Used = %d, want %d (two loaded runs)", got, want)
+	}
+}
+
+// A failed build leaves the run past retention loaded, with its cache:
+// retention evictions wait for a successful load.
+func TestGate_Load_FailedBuildKeepsRetentionVictim(t *testing.T) {
+	ctx := t.Context()
+	mgr := inventory.NewCatalog(nil)
+	defer mgr.Close()
+	tracker := budget.New(1<<30, 0, mgr.LoadedBytes)
+	var removed []inventory.ID
+	gate := loadcontrol.New(mgr, tracker, budget.NewPlanner(tracker, nil), func(id inventory.ID) error {
+		removed = append(removed, id)
+
+		return nil
+	})
+	dir := buildIndexDir(t)
+	ok := func(context.Context, inventory.Info) (string, error) { return dir, nil }
+	fail := func(context.Context, inventory.Info) (string, error) { return "", errBuildFailed }
+	runs := []inventory.ID{"src/inv/2026-01-01T00-00Z", "src/inv/2026-01-02T00-00Z", "src/inv/2026-01-03T00-00Z"}
+	for _, id := range runs {
+		if err := mgr.Register(ctx, id, "n", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range runs[:2] {
+		if err := gate.Load(ctx, id, ok, inventory.GatedLoadOptions{EstimateBytes: 1}); err != nil {
+			t.Fatalf("load %s: %v", id, err)
+		}
+	}
+	if err := gate.Load(ctx, runs[2], fail, inventory.GatedLoadOptions{EstimateBytes: 1}); err == nil {
+		t.Fatal("failing build reported success")
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed caches = %v, want none after a failed build", removed)
+	}
+	for _, id := range runs[:2] {
+		if info, _ := mgr.Get(id); info.State != inventory.StateLoaded {
+			t.Errorf("%s state = %s, want loaded", id, info.State)
+		}
+	}
+}
+
+// A pinned load of an older run retires nothing: pinned runs don't count
+// toward retention, and the auto-loader would rebuild a retired run.
+func TestGate_Load_PinnedLoadDoesNotRetire(t *testing.T) {
+	ctx := t.Context()
+	mgr := inventory.NewCatalog(nil)
+	defer mgr.Close()
+	tracker := budget.New(1<<30, 0, mgr.LoadedBytes)
+	gate := loadcontrol.New(mgr, tracker, budget.NewPlanner(tracker, nil), func(inventory.ID) error { return nil })
+	dir := buildIndexDir(t)
+	build := func(context.Context, inventory.Info) (string, error) { return dir, nil }
+	runs := []inventory.ID{"src/inv/2026-01-01T00-00Z", "src/inv/2026-01-02T00-00Z", "src/inv/2025-12-31T00-00Z"}
+	for _, id := range runs {
+		if err := mgr.Register(ctx, id, "n", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range runs[:2] {
+		if err := gate.Load(ctx, id, build, inventory.GatedLoadOptions{EstimateBytes: 1}); err != nil {
+			t.Fatalf("load %s: %v", id, err)
+		}
+	}
+	if err := gate.Load(ctx, runs[2], build, inventory.GatedLoadOptions{EstimateBytes: 1, Pin: true}); err != nil {
+		t.Fatalf("pinned load: %v", err)
+	}
+	for _, id := range runs {
+		if info, _ := mgr.Get(id); info.State != inventory.StateLoaded {
+			t.Errorf("%s state = %s, want loaded", id, info.State)
+		}
 	}
 }

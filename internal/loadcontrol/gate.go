@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/eunmann/s3-inv-db/internal/budget"
@@ -39,6 +40,10 @@ type Gate struct {
 	tracker     *budget.Tracker
 	planner     *budget.Planner
 	removeCache CacheRemover
+	// admit serializes plan, evict and reserve (not the build), so two
+	// loads never plan against the same free space and evict for a
+	// reservation one of them then can't get.
+	admit sync.Mutex
 }
 
 // New constructs a Gate. The tracker's used bytes must come from the
@@ -47,48 +52,13 @@ func New(manager *inventory.Catalog, tracker *budget.Tracker, planner *budget.Pl
 	return &Gate{manager: manager, tracker: tracker, planner: planner, removeCache: removeCache}
 }
 
-// Load plans, evicts, reserves, builds, releases. Returns
+// Load plans, evicts, reserves, builds, releases, then retires the
+// runs past retention the load didn't need the disk of. Returns
 // *BudgetRefusedError when the planner refuses and opts.Force is false.
 func (g *Gate) Load(ctx context.Context, id inventory.ID, build inventory.BuildFunc, opts inventory.GatedLoadOptions) error {
-	plan, err := g.planner.Plan(ctx, budget.Input{
-		Target:        id,
-		EstimateBytes: opts.EstimateBytes,
-		All:           g.manager.List(),
-	})
-	if refused, ok := errors.AsType[*budget.PlannerRefusedError](err); ok {
-		if !opts.Force {
-			return &BudgetRefusedError{Plan: refused.Plan}
-		}
-	} else if err != nil {
-		return fmt.Errorf("plan: %w", err)
-	}
-
-	for _, victim := range plan.Evict {
-		err := g.manager.EvictForBudget(ctx, victim)
-		switch {
-		case errors.Is(err, inventory.ErrInvalidState), errors.Is(err, inventory.ErrNotFound):
-			// Already unloaded or removed by someone else; nothing to free.
-			continue
-		case err != nil:
-			return fmt.Errorf("evict %s: %w", victim, err)
-		}
-		// The eviction only frees disk once the cache is gone; leaving it
-		// would let unloaded runs pile up outside the budget.
-		if g.removeCache != nil {
-			if err := g.removeCache(victim); err != nil {
-				zerolog.Ctx(ctx).Warn().Err(err).Stringer("id", victim).Msg("remove evicted run's cache")
-			}
-		}
-	}
-
-	token := fmt.Sprintf("%s-%d", id, tokenCounter.Add(1))
-	if err := g.tracker.Reserve(token, opts.EstimateBytes); err != nil {
-		if errors.Is(err, budget.ErrOverBudget) && !opts.Force {
-			return &BudgetRefusedError{Plan: plan}
-		}
-		if !opts.Force {
-			return fmt.Errorf("reserve: %w", err)
-		}
+	plan, token, err := g.admitLoad(ctx, id, opts)
+	if err != nil {
+		return err
 	}
 	defer g.tracker.Release(token)
 
@@ -100,6 +70,77 @@ func (g *Gate) Load(ctx context.Context, id inventory.ID, build inventory.BuildF
 	}
 	if loadErr != nil {
 		return fmt.Errorf("load %s: %w", id, loadErr)
+	}
+	// Retention evictions wait for a successful load, so a failed build
+	// never leaves the configuration a run short.
+	for _, victim := range plan.AfterLoad {
+		if info, ok := g.manager.Get(victim); !ok || info.Pinned {
+			continue // pinned since planning: the user wants it kept
+		}
+		if err := g.evict(ctx, victim); err != nil {
+			zerolog.Ctx(ctx).Warn().Err(err).Stringer("id", victim).Msg("retire run past retention")
+		}
+	}
+
+	return nil
+}
+
+// admitLoad plans, evicts what the load needs the disk of, and
+// reserves the estimate, all under one lock. It returns the plan and
+// the reservation token to release after the build.
+func (g *Gate) admitLoad(ctx context.Context, id inventory.ID, opts inventory.GatedLoadOptions) (budget.Plan, string, error) {
+	g.admit.Lock()
+	defer g.admit.Unlock()
+
+	plan, err := g.planner.Plan(ctx, budget.Input{
+		Target:        id,
+		EstimateBytes: opts.EstimateBytes,
+		All:           g.manager.List(),
+		Pinned:        opts.Pin,
+	})
+	if refused, ok := errors.AsType[*budget.PlannerRefusedError](err); ok {
+		if !opts.Force {
+			return plan, "", &BudgetRefusedError{Plan: refused.Plan}
+		}
+	} else if err != nil {
+		return plan, "", fmt.Errorf("plan: %w", err)
+	}
+
+	for _, victim := range plan.Evict {
+		if err := g.evict(ctx, victim); err != nil {
+			return plan, "", err
+		}
+	}
+
+	token := fmt.Sprintf("%s-%d", id, tokenCounter.Add(1))
+	if err := g.tracker.Reserve(token, opts.EstimateBytes); err != nil {
+		if errors.Is(err, budget.ErrOverBudget) && !opts.Force {
+			return plan, "", &BudgetRefusedError{Plan: plan}
+		}
+		if !opts.Force {
+			return plan, "", fmt.Errorf("reserve: %w", err)
+		}
+	}
+
+	return plan, token, nil
+}
+
+// evict unloads victim and deletes its cache; one already unloaded or
+// removed by someone else frees nothing and isn't an error.
+func (g *Gate) evict(ctx context.Context, victim inventory.ID) error {
+	err := g.manager.EvictForBudget(ctx, victim)
+	switch {
+	case errors.Is(err, inventory.ErrInvalidState), errors.Is(err, inventory.ErrNotFound):
+		return nil
+	case err != nil:
+		return fmt.Errorf("evict %s: %w", victim, err)
+	}
+	// The eviction only frees disk once the cache is gone; leaving it
+	// would let unloaded runs pile up outside the budget.
+	if g.removeCache != nil {
+		if err := g.removeCache(victim); err != nil {
+			zerolog.Ctx(ctx).Warn().Err(err).Stringer("id", victim).Msg("remove evicted run's cache")
+		}
 	}
 
 	return nil

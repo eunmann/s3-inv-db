@@ -27,8 +27,16 @@ func (e *PlannerRefusedError) Error() string {
 
 // Plan is the eviction plan for a pending load.
 type Plan struct {
-	Refusal       string
-	Evict         []inventory.ID
+	Refusal string
+	// Evict comes out before the build: the disk the load needs. Runs
+	// past the configuration's retention go first, since they leave
+	// anyway, then the least recently used.
+	Evict []inventory.ID
+	// AfterLoad comes out only once the load succeeded: runs past the
+	// configuration's retention whose disk the build doesn't need. A
+	// failed build leaves them loaded.
+	AfterLoad []inventory.ID
+	// FreedBytes is what Evict frees.
 	FreedBytes    uint64
 	EstimateBytes uint64
 }
@@ -63,6 +71,11 @@ type Input struct {
 	Target        inventory.ID
 	All           []inventory.Info
 	EstimateBytes uint64
+	// Pinned marks a manual load. Pinned runs don't count toward
+	// retention, so a pinned load evicts for disk only: evicting an
+	// auto-loaded run for retention would make the auto-loader rebuild
+	// it on its next tick.
+	Pinned bool
 }
 
 // Plan computes the eviction plan for in. Ctx is threaded into the
@@ -90,18 +103,32 @@ func (p *Planner) Plan(ctx context.Context, in Input) (Plan, error) {
 
 	candidates, pinnedPresent := p.candidates(in)
 
-	// Per-config retention: trim oldest within this configuration first.
+	// Runs past this configuration's retention leave either way: first
+	// for any disk the load needs now, the rest once it succeeded.
+	var retire []inventory.Info
+	if !in.Pinned {
+		retire = selectByConfig(candidates, targetSource, targetName, retention)
+		for i := range retire {
+			candidates = drop(candidates, retire[i].ID)
+		}
+	}
 	plan := Plan{EstimateBytes: in.EstimateBytes}
-	configEvict := selectByConfig(candidates, targetSource, targetName, retention)
-	for i := range configEvict {
-		c := &configEvict[i]
+	need := requiredBytes(in.EstimateBytes, p.tracker.Available(), 0)
+	take := func(c *inventory.Info) {
 		plan.Evict = append(plan.Evict, c.ID)
 		plan.FreedBytes += c.IndexBytes
-		candidates = drop(candidates, c.ID)
+		need -= min(need, c.IndexBytes)
+	}
+	for i := range retire {
+		if need == 0 {
+			plan.AfterLoad = append(plan.AfterLoad, retire[i].ID)
+
+			continue
+		}
+		take(&retire[i])
 	}
 
 	// If still short, evict across configs in LRU order.
-	need := requiredBytes(in.EstimateBytes, p.tracker.Available(), plan.FreedBytes)
 	if need > 0 {
 		slices.SortStableFunc(candidates, func(a, b inventory.Info) int {
 			if a.LastAccessedAt.Equal(b.LastAccessedAt) {
@@ -114,14 +141,7 @@ func (p *Planner) Plan(ctx context.Context, in Input) (Plan, error) {
 			if need == 0 {
 				break
 			}
-			c := &candidates[i]
-			plan.Evict = append(plan.Evict, c.ID)
-			plan.FreedBytes += c.IndexBytes
-			if c.IndexBytes >= need {
-				need = 0
-			} else {
-				need -= c.IndexBytes
-			}
+			take(&candidates[i])
 		}
 	}
 

@@ -66,8 +66,9 @@ func TestPlanner_EvictsWithinConfigToRespectRetention(t *testing.T) {
 	if !plan.Fits() {
 		t.Fatalf("expected fit, got %s", plan.Refusal)
 	}
-	if len(plan.Evict) != 1 || plan.Evict[0] != "src/inv/runA" {
-		t.Errorf("expected to evict runA, got %v", plan.Evict)
+	// The load fits, so the run past retention waits for it to succeed.
+	if len(plan.Evict) != 0 || len(plan.AfterLoad) != 1 || plan.AfterLoad[0] != "src/inv/runA" {
+		t.Errorf("Evict = %v, AfterLoad = %v; want runA after the load", plan.Evict, plan.AfterLoad)
 	}
 }
 
@@ -183,7 +184,54 @@ func TestPlanner_RetentionEvictsOldestRunNotOldestLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if len(plan.Evict) != 1 || plan.Evict[0] != "src/inv/2026-01-01T00-00Z" {
-		t.Errorf("evict = %v, want the oldest run 2026-01-01", plan.Evict)
+	if len(plan.AfterLoad) != 1 || plan.AfterLoad[0] != "src/inv/2026-01-01T00-00Z" {
+		t.Errorf("AfterLoad = %v, want the oldest run 2026-01-01", plan.AfterLoad)
+	}
+}
+
+// A run past retention is the first to go when the load needs disk now:
+// it leaves anyway, so no other configuration's run is evicted for it.
+func TestPlanner_RetentionVictimCoversDiskNeedFirst(t *testing.T) {
+	tr := budget.New(1000, 0, fixedUsed(950))
+	p := budget.NewPlanner(tr, fakeConfig{"src/inv": 2}.Retention)
+	in := budget.Input{
+		Target:        "src/inv/2026-01-03T00-00Z",
+		EstimateBytes: 100,
+		All: []inventory.Info{
+			loaded("other/inv/2026-01-01T00-00Z", 750, time.Unix(1, 0), time.Unix(1, 0), false),
+			loaded("src/inv/2026-01-01T00-00Z", 100, time.Unix(5, 0), time.Unix(5, 0), false),
+			loaded("src/inv/2026-01-02T00-00Z", 100, time.Unix(6, 0), time.Unix(6, 0), false),
+		},
+	}
+	plan, err := p.Plan(t.Context(), in)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Evict) != 1 || plan.Evict[0] != "src/inv/2026-01-01T00-00Z" || len(plan.AfterLoad) != 0 {
+		t.Errorf("Evict = %v, AfterLoad = %v; want the run past retention evicted before the build", plan.Evict, plan.AfterLoad)
+	}
+}
+
+// A pinned (manual) load evicts for disk only: pinned runs don't count
+// toward retention, so retiring an auto-loaded run would only make the
+// auto-loader rebuild it.
+func TestPlanner_PinnedLoadDoesNotRetire(t *testing.T) {
+	tr := budget.New(1000, 0, fixedUsed(200))
+	p := budget.NewPlanner(tr, fakeConfig{"src/inv": 2}.Retention)
+	in := budget.Input{
+		Target:        "src/inv/2025-12-31T00-00Z",
+		EstimateBytes: 100,
+		Pinned:        true,
+		All: []inventory.Info{
+			loaded("src/inv/2026-01-01T00-00Z", 100, time.Unix(5, 0), time.Unix(5, 0), false),
+			loaded("src/inv/2026-01-02T00-00Z", 100, time.Unix(6, 0), time.Unix(6, 0), false),
+		},
+	}
+	plan, err := p.Plan(t.Context(), in)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Evict) != 0 || len(plan.AfterLoad) != 0 {
+		t.Errorf("Evict = %v, AfterLoad = %v; want nothing for a pinned load that fits", plan.Evict, plan.AfterLoad)
 	}
 }
