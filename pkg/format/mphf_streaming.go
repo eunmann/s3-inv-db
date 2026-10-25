@@ -539,9 +539,15 @@ func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps, poss []
 // hold or evict under the build's memory limit. Entries are 4 bytes up
 // to 2^32 prefixes, 8 beyond.
 type slotOwners struct {
-	path  string
-	data  []byte
+	scratchMapping
+
 	width int
+}
+
+// scratchMapping is a writable mapping of a scratch file.
+type scratchMapping struct {
+	path string
+	data []byte
 }
 
 // newSlotOwners fills the map with parallel bbhash lookups. The MPHF is
@@ -552,21 +558,10 @@ func newSlotOwners(tempDir string, mph *bbhash, hashes []uint64) (*slotOwners, e
 	if uint64(n) > math.MaxUint32 {
 		o.width = 8
 	}
-	f, err := os.CreateTemp(tempDir, "mphf_slot_owners_*.tmp")
+	var err error
+	o.scratchMapping, err = mapScratchFile(tempDir, "mphf_slot_owners_*.tmp", n*o.width)
 	if err != nil {
-		return nil, fmt.Errorf("create slot owners: %w", err)
-	}
-	o.path = f.Name()
-	size := n * o.width
-	err = f.Truncate(int64(size))
-	if err == nil {
-		o.data, err = unix.Mmap(int(f.Fd()), 0, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("map slot owners: %w", err), removeIfErr(o.path))
+		return nil, fmt.Errorf("slot owners: %w", err)
 	}
 
 	numWorkers := mphfWorkerCount(n)
@@ -596,6 +591,31 @@ func newSlotOwners(tempDir string, mph *bbhash, hashes []uint64) (*slotOwners, e
 	}
 
 	return o, nil
+}
+
+// mapScratchFile creates a temp file of size bytes in dir and maps it
+// writable. The file's blocks are reserved first: a write to an
+// unbacked page of a sparse mapping on a full volume is a SIGBUS that
+// kills the process, where a failed reservation is an error the build
+// cleans up after.
+func mapScratchFile(dir, pattern string, size int) (scratchMapping, error) {
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return scratchMapping{}, fmt.Errorf("create scratch: %w", err)
+	}
+	m := scratchMapping{path: f.Name()}
+	err = preallocate(f, int64(size))
+	if err == nil {
+		m.data, err = unix.Mmap(int(f.Fd()), 0, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return scratchMapping{}, errors.Join(fmt.Errorf("map scratch %s: %w", m.path, err), removeIfErr(m.path))
+	}
+
+	return m, nil
 }
 
 func (o *slotOwners) set(slot int, owner uint64) {

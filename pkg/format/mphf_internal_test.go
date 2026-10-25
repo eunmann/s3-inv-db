@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestMPHFBuilderEmpty(t *testing.T) {
@@ -454,7 +456,7 @@ func TestSlotOwnersWidths(t *testing.T) {
 		if err := os.WriteFile(path, nil, FilePerm); err != nil {
 			t.Fatal(err)
 		}
-		o := &slotOwners{path: path, width: width, data: make([]byte, 100*width)}
+		o := &slotOwners{path: path, data: make([]byte, 100*width), width: width}
 		for slot := range 100 {
 			o.set(slot, uint64(99-slot)<<(8*(width-4)))
 		}
@@ -496,5 +498,59 @@ func TestSlotOwnersLeaveNoScratch(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Errorf("slot owner scratch left in the temp dir: %v", matches)
+	}
+}
+
+// TestMapScratchFileReservesBlocks: the scratch map's disk blocks are
+// allocated before it is mapped, so a full temp volume fails the build
+// with an error rather than a SIGBUS on the first write to a page.
+func TestMapScratchFileReservesBlocks(t *testing.T) {
+	const size = 1 << 20
+	m, err := mapScratchFile(t.TempDir(), "scratch_*.tmp", size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := unix.Munmap(m.data); err != nil {
+			t.Error(err)
+		}
+	}()
+	if len(m.data) != size {
+		t.Fatalf("mapped %d bytes, want %d", len(m.data), size)
+	}
+	var st unix.Stat_t
+	if err := unix.Stat(m.path, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Size != size {
+		t.Errorf("file size = %d, want %d", st.Size, size)
+	}
+	if allocated := st.Blocks * 512; allocated < size {
+		t.Errorf("allocated %d bytes on disk, want at least %d", allocated, size)
+	}
+}
+
+// TestWriteZerosFillsFile: the fallback for filesystems with no block
+// reservation call writes the whole range, including a partial last
+// chunk.
+func TestWriteZerosFillsFile(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "zeros_*.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	const size = preallocateChunk + 4097
+	if err := writeZeros(f, size); err != nil {
+		t.Fatal(err)
+	}
+	var st unix.Stat_t
+	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Size != size {
+		t.Errorf("file size = %d, want %d", st.Size, size)
+	}
+	if allocated := st.Blocks * 512; allocated < size {
+		t.Errorf("allocated %d bytes on disk, want at least %d", allocated, size)
 	}
 }
