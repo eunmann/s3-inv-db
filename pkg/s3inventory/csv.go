@@ -31,8 +31,8 @@ type Row struct {
 // Reader is the unified interface for reading S3 inventory files.
 // CSV and Parquet implementations live in this package.
 type Reader interface {
-	// Next returns the next inventory row.
-	// Returns io.EOF when all rows have been read.
+	// Next returns the next inventory row, whose strings are valid only
+	// until the next call. Returns io.EOF when all rows have been read.
 	Next() (Row, error)
 
 	// Anomalies counts the rows read so far that could not be turned
