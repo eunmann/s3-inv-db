@@ -17,6 +17,11 @@ func generateRealisticPrefixes(n int) []string {
 	for i := range n {
 		depth := 1 + (i % 5)
 		var sb strings.Builder
+		// The segments repeat every million; a leading block segment
+		// keeps larger sets unique and leaves the first million as is.
+		if block := i / 1_000_000; block > 0 {
+			fmt.Fprintf(&sb, "r%d/", block)
+		}
 		for d := range depth {
 			segmentNum := (i*7 + d*13) % 1000000
 			fmt.Fprintf(&sb, "seg%d/", segmentNum)
@@ -24,6 +29,19 @@ func generateRealisticPrefixes(n int) []string {
 		prefixes[i] = sb.String()
 	}
 	return prefixes
+}
+
+// TestGenerateRealisticPrefixesUniquePastAMillion guards the long
+// benchmarks' fixtures: the segments repeat every million, so without
+// the block segment prefix i and i+1M would be the same string.
+func TestGenerateRealisticPrefixesUniquePastAMillion(t *testing.T) {
+	const tail = 10
+	prefixes := generateRealisticPrefixes(1_000_000 + tail)
+	for i := range tail {
+		if prefixes[i] == prefixes[1_000_000+i] {
+			t.Fatalf("prefix %d repeats prefix %d: %q", 1_000_000+i, i, prefixes[i])
+		}
+	}
 }
 
 // buildMPHFForBench builds an on-disk MPHF over the given prefixes and
