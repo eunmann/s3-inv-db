@@ -202,6 +202,19 @@ func OpenDepthIndex(outDir string) (*DepthIndex, error) {
 	}, nil
 }
 
+// Count is the number of positions the index holds across all depths.
+func (d *DepthIndex) Count() uint64 { return d.positions.Count() }
+
+// End is the last offset: where the deepest level's positions end. It
+// equals Count for a well-formed index.
+func (d *DepthIndex) End() uint64 {
+	if d.offsets.Count() == 0 {
+		return 0
+	}
+
+	return d.offsets.UnsafeGetU64(d.offsets.Count() - 1)
+}
+
 // Close releases resources.
 func (d *DepthIndex) Close() error {
 	return errors.Join(d.offsets.Close(), d.positions.Close())
