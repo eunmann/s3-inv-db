@@ -283,6 +283,18 @@ func (idx *Index) TierBreakdown(pos uint64) []TierBreakdown {
 	return idx.tierStats.Breakdown(pos)
 }
 
+// AppendTierBreakdown appends TierBreakdown(pos) to dst and returns
+// the extended slice; dst is returned unchanged when the index has no
+// tier data. Reusing dst across positions avoids an allocation per
+// position.
+func (idx *Index) AppendTierBreakdown(dst []TierBreakdown, pos uint64) []TierBreakdown {
+	if !idx.HasTierData() {
+		return dst
+	}
+
+	return idx.tierStats.AppendBreakdown(dst, pos)
+}
+
 // TierBreakdownMap returns the per-tier statistics as a map keyed by tier name.
 // Returns nil if no tier data was collected during index build.
 // Use HasTierData to check if tier data is available.

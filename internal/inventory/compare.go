@@ -225,9 +225,10 @@ func CompareLevel(a, b *indexread.Index, prefix string, q CompareQuery, cost Com
 	}
 
 	rows := mergeChildren(a, b, childPositions(a, posA, okA), childPositions(b, posB, okB))
+	var tiers tierScratch
 	for i := range rows {
 		r := &rows[i]
-		r.status = classifyRow(a, b, r)
+		r.status = classifyRow(a, b, r, &tiers)
 		out.Counts.add(r.status)
 		if q.SortBy == SortColCost && cost != nil {
 			r.costDelta = int64(rowCost(b, r.posB, r.inB, cost)) - int64(rowCost(a, r.posA, r.inA, cost))
@@ -361,20 +362,31 @@ func compareSlashTerminated(x, y string) int {
 	}
 }
 
+// tierScratch holds the two tier breakdowns classifyRow compares,
+// reused across a level's rows so classifying allocates nothing per row.
+type tierScratch struct {
+	a, b []indexread.TierBreakdown
+}
+
 // classifyRow: present on one side only is Added/Removed; present on
 // both is Changed if objects, bytes or the tier mix moved. The tier mix
 // is read only when objects and bytes are equal.
-func classifyRow(a, b *indexread.Index, r *compareRow) CompareStatus {
+func classifyRow(a, b *indexread.Index, r *compareRow, tiers *tierScratch) CompareStatus {
 	switch {
 	case !r.inA:
 		return CompareAdded
 	case !r.inB:
 		return CompareRemoved
-	case r.objects.Delta != 0, r.bytes.Delta != 0, !tiersEqual(a.TierBreakdown(r.posA), b.TierBreakdown(r.posB)):
+	case r.objects.Delta != 0, r.bytes.Delta != 0:
 		return CompareChanged
-	default:
-		return CompareUnchanged
 	}
+	tiers.a = a.AppendTierBreakdown(tiers.a[:0], r.posA)
+	tiers.b = b.AppendTierBreakdown(tiers.b[:0], r.posB)
+	if !tiersEqual(tiers.a, tiers.b) {
+		return CompareChanged
+	}
+
+	return CompareUnchanged
 }
 
 // tiersEqual compares two non-zero tier breakdowns; both come in tier-ID
