@@ -32,10 +32,17 @@ import (
 // An index with one present tier writes no tier files. Each stored slot
 // is a count then bytes, little-endian, at the widths the layout's
 // largest stored values need, recorded in a 2-byte descriptor.
+//
+// The core row's tier field follows from the layout (TierMaskEncoding):
+// the dense layout gives the mask itself, so the field is empty; the
+// multi layout stores the mask, or past 8 slots, where the mask takes 2
+// bytes, a 1-byte code with the masks of the multi-tier prefixes in
+// tier_multi.mask.
 const (
 	TierMultiFile        = "tier_multi.bin"
 	TierMultiRowsFile    = "tier_multi.rows"
 	TierMultiOffsetsFile = "tier_multi.off.u64"
+	TierMultiMaskFile    = "tier_multi.mask"
 	TierDenseFile        = "tier_dense.bin"
 
 	// Every prefix's slots sit in tierScratchFile while the build
@@ -43,6 +50,31 @@ const (
 	// slot); Close converts it to the chosen layout and removes it.
 	tierScratchFile = "tier_scratch.bin"
 )
+
+// TierMaskEncoding is how a core row's tier field holds the prefix's
+// tier mask.
+type TierMaskEncoding uint8
+
+const (
+	// TierMaskPlain stores the mask: bit i is slot i holding data.
+	TierMaskPlain TierMaskEncoding = iota
+	// TierMaskDerived stores nothing: the dense layout's slots give it.
+	TierMaskDerived
+	// TierMaskCode stores one byte: 0 for no data, slot+1 for a prefix
+	// with one tier, tierCodeSeveral for two or more, whose mask is at
+	// the prefix's rank in tier_multi.mask.
+	TierMaskCode
+)
+
+// tierCodeSeveral is the TierMaskCode value of a multi-tier prefix.
+const tierCodeSeveral = 0xFF
+
+// tierCodeMinSlots is the fewest slots that take TierMaskCode: below it
+// the plain mask fits one byte.
+const tierCodeMinSlots = 9
+
+// tierMultiMaskWidth is a tier_multi.mask entry's width.
+const tierMultiMaskWidth = 2
 
 // tierSlotDescBytes is the slot-width descriptor after the Header of
 // tier_multi.bin and tier_dense.bin: the count width, then the bytes
@@ -106,6 +138,7 @@ type TierStatsWriter struct {
 	multiSlots uint64
 	multiW     tierSlotWidths
 	denseW     tierSlotWidths
+	maxMask    uint16
 	// force overrides the size-based choice; tests only.
 	force tierLayout
 }
@@ -119,16 +152,42 @@ const (
 	tierLayoutMulti
 )
 
-// choose returns the smaller layout; dense on a tie (no indirection).
+// choose returns the layout whose files and core tier fields together
+// are smaller; dense on a tie (no indirection).
 func (w *TierStatsWriter) choose() tierLayout {
 	if w.force != tierLayoutAuto {
 		return w.force
 	}
-	if w.denseSize() <= w.multiSize() {
+	if w.denseSize() <= w.multiSize()+w.multiMaskSize() {
 		return tierLayoutDense
 	}
 
 	return tierLayoutMulti
+}
+
+// MaskEncoding returns how the core rows' tier field encodes the mask
+// for the layout Close will write. Call it after the last Add.
+func (w *TierStatsWriter) MaskEncoding() TierMaskEncoding {
+	switch {
+	case w.slots <= 1:
+		return TierMaskPlain
+	case w.choose() == tierLayoutDense:
+		return TierMaskDerived
+	case w.slots >= tierCodeMinSlots:
+		return TierMaskCode
+	default:
+		return TierMaskPlain
+	}
+}
+
+// multiMaskSize is what the multi layout's masks cost: every core row's
+// tier field, plus tier_multi.mask when the field is a code.
+func (w *TierStatsWriter) multiMaskSize() uint64 {
+	if w.slots < tierCodeMinSlots {
+		return w.rows * uint64(tierMaskWidth(w.maxMask))
+	}
+
+	return w.rows + uint64(HeaderSize) + w.multiRows*tierMultiMaskWidth + arrayTailPad
 }
 
 // NewTierStatsWriter creates a writer for the given present tiers (the
@@ -212,6 +271,7 @@ func (w *TierStatsWriter) Add(counts, bytes *[tiers.NumTiers]uint64, totalCount,
 	if w.slots == 1 {
 		return mask, nil
 	}
+	w.maxMask = max(w.maxMask, mask)
 
 	if n := bits.OnesCount16(mask); n >= 2 {
 		w.multiRows++
@@ -423,6 +483,13 @@ func (w *TierStatsWriter) writeMulti() error {
 	if err != nil {
 		return errors.Join(err, out.abort(), offsets.abort())
 	}
+	masksPath := filepath.Join(w.dir, TierMultiMaskFile)
+	var masks *narrowArrayWriter
+	if w.slots >= tierCodeMinSlots {
+		if masks, err = newNarrowArrayWriter(masksPath, tierMultiMaskWidth); err != nil {
+			return errors.Join(err, out.abort(), offsets.abort(), rowBits.abort())
+		}
+	}
 	var stored uint64
 	err = w.scratchRows(func(r *scratchRow) error {
 		mask := r.mask
@@ -433,6 +500,11 @@ func (w *TierStatsWriter) writeMulti() error {
 		if multi {
 			if err := offsets.put(stored); err != nil {
 				return err
+			}
+			if masks != nil {
+				if err := masks.put(uint64(mask)); err != nil {
+					return err
+				}
 			}
 			rest := mask &^ (1 << (bits.Len16(mask) - 1))
 			for rest != 0 {
@@ -451,10 +523,10 @@ func (w *TierStatsWriter) writeMulti() error {
 		err = offsets.put(stored)
 	}
 	if err != nil {
-		return errors.Join(err, out.abort(), offsets.abort(), rowBits.abort())
+		return errors.Join(err, out.abort(), offsets.abort(), rowBits.abort(), masks.abort())
 	}
-	if err := errors.Join(out.close(), offsets.close(), rowBits.close()); err != nil {
-		return errors.Join(err, removeIfErr(slotsPath), removeIfErr(offsetsPath), removeIfErr(rowsPath))
+	if err := errors.Join(out.close(), offsets.close(), rowBits.close(), masks.close()); err != nil {
+		return errors.Join(err, removeIfErr(slotsPath), removeIfErr(offsetsPath), removeIfErr(rowsPath), removeIfErr(masksPath))
 	}
 
 	return nil
@@ -495,7 +567,11 @@ func (w *narrowArrayWriter) put(v uint64) error {
 	return nil
 }
 
+// close is a no-op on a nil writer, as is abort.
 func (w *narrowArrayWriter) close() error {
+	if w == nil {
+		return nil
+	}
 	var pad [arrayTailPad]byte
 	if _, err := w.bw.Write(pad[:]); err != nil {
 		return errors.Join(fmt.Errorf("write tail pad: %w", err), w.abort())
@@ -515,5 +591,9 @@ func (w *narrowArrayWriter) close() error {
 }
 
 func (w *narrowArrayWriter) abort() error {
+	if w == nil {
+		return nil
+	}
+
 	return errors.Join(w.f.Close(), removeIfErr(w.path))
 }

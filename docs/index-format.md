@@ -44,7 +44,8 @@ index/
     ├── tier_dense.bin             (dense layout), or
     ├── tier_multi.bin             (multi layout)
     ├── tier_multi.rows
-    └── tier_multi.off.u64
+    ├── tier_multi.off.u64
+    └── tier_multi.mask            (multi layout, past 8 tiers)
 ```
 
 `tiers.json` and the `tier_stats/` files are absent from an index with
@@ -63,7 +64,7 @@ fields little-endian:
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | Magic | `0x53334944` ("S3ID" in ASCII) |
-| 4 | 4 | Version | Format version (currently `10`) |
+| 4 | 4 | Version | Format version (currently `11`) |
 | 8 | 8 | Count | Number of rows |
 | 16 | 4 | Width | Row stride in bytes |
 
@@ -117,9 +118,12 @@ Fields, in row order:
 A field's offset in the row is the sum of the widths before it. On
 open the reader checks that the descriptor's widths sum to the
 header's `Width`. Rows are packed with no padding: aligning them to
-cache lines measured no faster. `tier_mask` bit *i* is set when
-tier slot *i* (the *i*-th tier in `tiers.json`) holds data in this
-prefix. Its width is 0 when no prefix has data outside slot 0; the mask
+cache lines measured no faster. `tier_mask` holds the prefix's tier
+mask, in which bit *i* is set when tier slot *i* (the *i*-th tier in
+`tiers.json`) holds data in this prefix, encoded by the tier layout
+(see [Tier Statistics](#tier-statistics)): the mask itself, nothing
+for the dense layout, or past 8 tiers in the multi layout a 1-byte
+code. Its width is 0 when no prefix has data outside slot 0; the mask
 is then slot 0 for a prefix with data. A prefix has children exactly
 when `subtree_size > 0`.
 
@@ -151,8 +155,8 @@ data:
   bytes in an index with patch files) reads the exact value at
   `rank(pos)` in `core_patch.bin`; every other read is the plain load.
 
-On the 1M-object benchmark fixture the stride is 1 + 5 + 1 + 1 + 2 = 10
-bytes with 0.04% of rows patched, against 3 + 7 + 3 + 1 + 2 = 16 bytes
+On the 1M-object benchmark fixture the stride is 1 + 5 + 1 + 1 + 1 = 9
+bytes with 0.04% of rows patched, against 3 + 7 + 3 + 1 + 1 = 15 bytes
 unpatched.
 
 During the build the rows are written at a fixed 28-byte stride
@@ -317,14 +321,15 @@ Every prefix's per-tier counts and bytes sum exactly to its
 and fails the build otherwise. So the files store only what the core
 row doesn't already give:
 
-- a prefix whose `tier_mask` has one bit holds all its objects in that
+- a prefix whose tier mask has one bit holds all its objects in that
   tier: its totals are the tier's stats;
 - in a prefix with several, the highest tier in the mask is the totals
   minus the other tiers.
 
 An index with one present tier writes no tier files at all. Otherwise
-the builder computes the exact size of both layouts below at finalize
-and writes the smaller (dense on a tie). Each stored slot is a count
+the builder computes the exact size of both layouts below at finalize,
+each with the core `tier_mask` bytes it needs, and writes the smaller
+(dense on a tie). Each stored slot is a count
 then bytes, little-endian, at the widths the layout's largest stored
 values need (1–8 bytes each), recorded in a 2-byte descriptor (count
 width, bytes width) after the header of `tier_dense.bin` and
@@ -358,20 +363,28 @@ Header (`Count` = prefixes, `Width` = (T − 1) × slot width for T
 present tiers), the slot-width descriptor, then one row per prefix at
 its preorder position holding slots 0 … T − 2, zeros included. Slot
 T − 1 is derived. Readers check the row count and width against the
-core stats and `tiers.json`.
+core stats and `tiers.json`. The slots give the mask (a slot holds data
+when its count or bytes is nonzero), so the core rows' `tier_mask` has
+width 0 and reads 1 for a prefix with data.
 
-### Multi (`tier_multi.bin`, `tier_multi.rows`, `tier_multi.off.u64`)
+### Multi (`tier_multi.bin`, `tier_multi.rows`, `tier_multi.off.u64`, `tier_multi.mask`)
 
-Only prefixes with two or more tiers store anything:
+Only prefixes with two or more tiers store anything. With up to 8
+tiers the core `tier_mask` is the mask (1 byte). Past 8 the mask would
+take 2 bytes in every row, so `tier_mask` is a 1-byte code instead: 0
+for no data, *slot* + 1 for a prefix with one tier, `0xFF` for two or
+more, whose mask is in `tier_multi.mask`:
 
 | File | Content |
 |------|---------|
 | `tier_multi.bin` | Header (`Count` = stored slots, `Width` = slot width), slot-width descriptor, then for each such prefix in preorder the slots of every tier in its mask except the highest, in slot order |
 | `tier_multi.rows` | Header (`Count` = prefixes), a bit vector with bit *pos* set for each such prefix (little-endian `uint64` words), then a rank directory: for every 8 words, the set bits before them |
 | `tier_multi.off.u64` | A variable-width array (see above): for the *k*-th such prefix, the index of its first slot in `tier_multi.bin`, plus a trailing sentinel |
+| `tier_multi.mask` | Past 8 tiers only: a 2-byte array of the *k*-th such prefix's mask |
 
 To read prefix *pos*: `rank(pos)` (a directory entry plus at most eight
-popcounts) gives *k*; its slots start at `off[k]`.
+popcounts) gives *k*; its slots start at `off[k]`, and past 8 tiers its
+mask is `mask[k]`.
 
 ## Manifest
 
@@ -401,4 +414,4 @@ from the file-header format version.
 
 ## Versioning
 
-The format version in file headers lets a reader refuse files it would mis-decode. Version 10 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 11 is the current format; readers accept only that version, and an index written by any other version is rebuilt.

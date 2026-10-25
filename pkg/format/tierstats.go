@@ -22,7 +22,11 @@ type TierStatsReader struct {
 	multi   *slotFileReader
 	rows    *rankedBitsReader
 	offsets *ArrayReader
-	slots   int
+	// masks holds the multi-tier prefixes' masks when the core tier
+	// field is a code (TierMaskCode).
+	masks *ArrayReader
+	slots int
+	enc   TierMaskEncoding
 }
 
 // OpenTierStats opens the tier stats of the index in indexDir, whose
@@ -50,13 +54,21 @@ func OpenTierStats(indexDir string, core *CoreStatsReader) (*TierStatsReader, er
 		if err != nil {
 			return nil, err
 		}
+		r.enc = TierMaskDerived
 		if err := r.checkDense(); err != nil {
+			return nil, errors.Join(err, r.Close())
+		}
+
+		if err := r.checkTierField(); err != nil {
 			return nil, errors.Join(err, r.Close())
 		}
 
 		return r, nil
 	}
 	if err := r.openMulti(dir); err != nil {
+		return nil, errors.Join(err, r.Close())
+	}
+	if err := r.checkTierField(); err != nil {
 		return nil, errors.Join(err, r.Close())
 	}
 
@@ -73,8 +85,25 @@ func (r *TierStatsReader) checkDense() error {
 	return nil
 }
 
+// checkTierField checks that the core rows' tier field has the width
+// the layout's encoding writes.
+func (r *TierStatsReader) checkTierField() error {
+	width := r.core.Stride().TierMask
+	if (r.enc == TierMaskDerived && width != 0) || (r.enc == TierMaskCode && width != 1) {
+		return fmt.Errorf("%w: a %d-byte core tier field for encoding %d", errTierStatsLayout, width, r.enc)
+	}
+
+	return nil
+}
+
 func (r *TierStatsReader) openMulti(dir string) error {
 	var err error
+	if r.slots >= tierCodeMinSlots {
+		r.enc = TierMaskCode
+		if r.masks, err = OpenArray(filepath.Join(dir, TierMultiMaskFile)); err != nil {
+			return fmt.Errorf("open %s: %w", TierMultiMaskFile, err)
+		}
+	}
 	if r.multi, err = openSlotFile(filepath.Join(dir, TierMultiFile)); err != nil {
 		return err
 	}
@@ -93,6 +122,9 @@ func (r *TierStatsReader) openMulti(dir string) error {
 	}
 	if last := r.offsets.UnsafeGetU64(multiRows); last != r.multi.count {
 		return fmt.Errorf("%w: offsets end at slot %d of %d", errTierStatsLayout, last, r.multi.count)
+	}
+	if r.masks != nil && r.masks.Count() != multiRows {
+		return fmt.Errorf("%w: %d masks for %d multi-tier rows", errTierStatsLayout, r.masks.Count(), multiRows)
 	}
 
 	return nil
@@ -165,24 +197,30 @@ func (r *TierStatsReader) appendBreakdown(dst []TierBreakdown, pos uint64, nonZe
 
 // fill decodes pos's per-slot stats and returns its tier mask.
 func (r *TierStatsReader) fill(pos uint64, counts, bytesArr *[maxTierSlots]uint64) uint16 {
-	mask := r.core.UnsafeTierMask(pos)
-	if mask == 0 {
+	field := r.core.UnsafeTierField(pos)
+	if field == 0 {
 		return 0
 	}
+	if r.dense != nil {
+		return r.fillDense(pos, counts, bytesArr)
+	}
 	totalCount, totalBytes := r.core.UnsafeStats(pos)
+	mask, rank, ranked := field, uint64(0), false
+	if r.enc == TierMaskCode {
+		if field != tierCodeSeveral {
+			mask = 1 << (field - 1)
+		} else {
+			rank, ranked = r.rows.rank(pos), true
+			mask = uint16(r.masks.UnsafeGetU64(rank))
+		}
+	}
 	derived := bits.Len16(mask) - 1
 	var sumCount, sumBytes uint64
-	switch {
-	case r.dense != nil:
-		derived = r.slots - 1
-		for slot := range r.slots - 1 {
-			c, b := r.dense.slot(pos*uint64(r.dense.rowWidth) + uint64(slot*r.dense.width.slotBytes()))
-			counts[slot], bytesArr[slot] = c, b
-			sumCount += c
-			sumBytes += b
+	if bits.OnesCount16(mask) >= 2 {
+		if !ranked {
+			rank = r.rows.rank(pos)
 		}
-	case bits.OnesCount16(mask) >= 2:
-		i := r.offsets.UnsafeGetU64(r.rows.rank(pos))
+		i := r.offsets.UnsafeGetU64(rank)
 		stored := mask &^ (1 << derived)
 		for stored != 0 {
 			slot := bits.TrailingZeros16(stored)
@@ -199,6 +237,29 @@ func (r *TierStatsReader) fill(pos uint64, counts, bytesArr *[maxTierSlots]uint6
 	return mask
 }
 
+// fillDense decodes a dense row, whose mask is the slots holding data.
+func (r *TierStatsReader) fillDense(pos uint64, counts, bytesArr *[maxTierSlots]uint64) uint16 {
+	totalCount, totalBytes := r.core.UnsafeStats(pos)
+	var mask uint16
+	var sumCount, sumBytes uint64
+	last := r.slots - 1
+	for slot := range last {
+		c, b := r.dense.slot(pos*uint64(r.dense.rowWidth) + uint64(slot*r.dense.width.slotBytes()))
+		counts[slot], bytesArr[slot] = c, b
+		if c != 0 || b != 0 {
+			mask |= 1 << slot
+		}
+		sumCount += c
+		sumBytes += b
+	}
+	counts[last], bytesArr[last] = totalCount-sumCount, totalBytes-sumBytes
+	if counts[last] != 0 || bytesArr[last] != 0 {
+		mask |= 1 << last
+	}
+
+	return mask
+}
+
 // HasTierData reports whether any tier data is available.
 func (r *TierStatsReader) HasTierData() bool {
 	return r != nil && r.manifest != nil && len(r.manifest.Tiers) > 0
@@ -210,8 +271,8 @@ func (r *TierStatsReader) Close() error {
 	if r == nil {
 		return nil
 	}
-	err := errors.Join(r.dense.close(), r.multi.close(), r.rows.close(), r.offsets.Close())
-	r.dense, r.multi, r.rows, r.offsets = nil, nil, nil, nil
+	err := errors.Join(r.dense.close(), r.multi.close(), r.rows.close(), r.offsets.Close(), r.masks.Close())
+	r.dense, r.multi, r.rows, r.offsets, r.masks = nil, nil, nil, nil, nil
 
 	return err
 }
