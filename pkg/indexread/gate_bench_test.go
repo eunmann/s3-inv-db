@@ -2,6 +2,7 @@ package indexread_test
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"sync"
@@ -88,8 +89,12 @@ func buildGateFixture() (*gateFixture, error) {
 	}
 
 	f := &gateFixture{idx: idx}
-	step := max(idx.Count()/gateSample, 1)
-	for pos := uint64(0); pos < idx.Count() && len(f.positions) < gateSample; pos += step {
+	// Sample in key order, walked through the API, so the sample is the
+	// same prefixes whatever order the index numbers them in.
+	keyOrder := keyOrderPositions(idx)
+	step := max(uint64(len(keyOrder))/gateSample, 1)
+	for i := uint64(0); i < uint64(len(keyOrder)) && len(f.positions) < gateSample; i += step {
+		pos := keyOrder[i]
 		p, err := idx.PrefixString(pos)
 		if err != nil {
 			return nil, fmt.Errorf("prefix string: %w", err)
@@ -101,7 +106,38 @@ func buildGateFixture() (*gateFixture, error) {
 		}
 	}
 
+	// Visit them in a fixed shuffled order: lookups arrive in no
+	// particular order, and key order would favour whichever layout
+	// stores prefixes in key order (sequential reads).
+	r := rand.New(rand.NewPCG(5, 7))
+	r.Shuffle(len(f.prefixes), func(i, j int) {
+		f.prefixes[i], f.prefixes[j] = f.prefixes[j], f.prefixes[i]
+		f.positions[i], f.positions[j] = f.positions[j], f.positions[i]
+	})
+	r.Shuffle(len(f.parents), func(i, j int) { f.parents[i], f.parents[j] = f.parents[j], f.parents[i] })
+
 	return f, nil
+}
+
+// keyOrderPositions returns every position in key order (the root,
+// then each prefix before its children), walking children spans.
+func keyOrderPositions(idx *indexread.Index) []uint64 {
+	out := make([]uint64, 0, idx.Count())
+	stack := []uint64{0}
+	for len(stack) > 0 {
+		pos := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		out = append(out, pos)
+		children, err := idx.DescendantSpan(pos, 1)
+		if err != nil {
+			panic(fmt.Sprintf("children of %d: %v", pos, err))
+		}
+		for i := children.Len(); i > 0; i-- {
+			stack = append(stack, idx.SpanPosition(children, i-1))
+		}
+	}
+
+	return out
 }
 
 // buildIndexAt builds an index of objects S3-realistic, multi-tier
