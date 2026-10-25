@@ -444,3 +444,57 @@ func TestOpenMPHFMissingSeedWord(t *testing.T) {
 		t.Fatalf("OpenMPHF = %v, want ErrFileTooSmall", err)
 	}
 }
+
+// TestSlotOwnersWidths: the owner map round-trips at both entry widths
+// (8 bytes is what indexes past 2^32 prefixes use), and the scratch
+// file is removed on close.
+func TestSlotOwnersWidths(t *testing.T) {
+	for _, width := range []int{4, 8} {
+		path := filepath.Join(t.TempDir(), "owners")
+		if err := os.WriteFile(path, nil, FilePerm); err != nil {
+			t.Fatal(err)
+		}
+		o := &slotOwners{path: path, width: width, data: make([]byte, 100*width)}
+		for slot := range 100 {
+			o.set(slot, uint64(99-slot)<<(8*(width-4)))
+		}
+		for slot := range 100 {
+			if got, want := o.get(slot), uint64(99-slot)<<(8*(width-4)); got != want {
+				t.Fatalf("width %d slot %d = %d, want %d", width, slot, got, want)
+			}
+		}
+		o.data = nil // a heap slice, not a mapping: nothing to unmap
+		if err := o.close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("width %d: scratch file left behind: %v", width, err)
+		}
+	}
+}
+
+// TestSlotOwnersLeaveNoScratch: a build removes the owner map's scratch
+// file from the temp dir.
+func TestSlotOwnersLeaveNoScratch(t *testing.T) {
+	tmp := t.TempDir()
+	b, err := NewStreamingMPHFBuilder(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	for i, p := range []string{"", "a/", "b/", "c/"} {
+		if err := b.Add(p, uint64(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Build(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := filepath.Glob(filepath.Join(tmp, "mphf_slot_owners_*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("slot owner scratch left in the temp dir: %v", matches)
+	}
+}
