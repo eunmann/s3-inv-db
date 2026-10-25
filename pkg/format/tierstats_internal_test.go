@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -98,6 +99,8 @@ func randomTierRows(r *rand.Rand, present []tiers.ID, n int, p float64, countBit
 
 func checkBreakdowns(t *testing.T, present []tiers.ID, rows []tierTestRow, tr *TierStatsReader) {
 	t.Helper()
+	sentinel := TierBreakdown{TierName: "sentinel", Bytes: 1, ObjectCount: 1}
+	var buf []TierBreakdown
 	for pos := range rows {
 		all := tr.BreakdownAll(uint64(pos))
 		if len(all) != len(present) {
@@ -114,8 +117,21 @@ func checkBreakdowns(t *testing.T, present []tiers.ID, rows []tierTestRow, tr *T
 				nonZero++
 			}
 		}
-		if got := len(tr.Breakdown(uint64(pos))); got != nonZero {
+		want := tr.Breakdown(uint64(pos))
+		if got := len(want); got != nonZero {
 			t.Fatalf("row %d: Breakdown has %d tiers, want %d", pos, got, nonZero)
+		}
+		// AppendBreakdown keeps what dst holds and appends Breakdown.
+		buf = append(buf[:0], sentinel)
+		buf = tr.AppendBreakdown(buf, uint64(pos))
+		if len(buf) != 1+len(want) || buf[0] != sentinel || !slices.Equal(buf[1:], want) {
+			t.Fatalf("row %d: AppendBreakdown = %v, want %v after the sentinel", pos, buf, want)
+		}
+	}
+	if len(rows) > 0 {
+		buf = make([]TierBreakdown, 0, maxTierSlots)
+		if allocs := testing.AllocsPerRun(10, func() { buf = tr.AppendBreakdown(buf[:0], 0) }); allocs != 0 {
+			t.Errorf("AppendBreakdown into a sized buffer: %v allocs, want 0", allocs)
 		}
 	}
 }

@@ -109,36 +109,50 @@ type TierBreakdown struct {
 // Breakdown returns the tier breakdown for the given preorder
 // position, including only tiers with non-zero data.
 func (r *TierStatsReader) Breakdown(pos uint64) []TierBreakdown {
-	return r.breakdownAt(pos, true)
+	return r.appendBreakdown(nil, pos, true)
+}
+
+// AppendBreakdown appends Breakdown(pos) to dst and returns the
+// extended slice, so a caller reading many positions can reuse one
+// buffer instead of allocating per position.
+func (r *TierStatsReader) AppendBreakdown(dst []TierBreakdown, pos uint64) []TierBreakdown {
+	return r.appendBreakdown(dst, pos, true)
 }
 
 // BreakdownAll returns the tier breakdown for all present tiers
 // at the given preorder position, including zeros.
 func (r *TierStatsReader) BreakdownAll(pos uint64) []TierBreakdown {
-	return r.breakdownAt(pos, false)
+	return r.appendBreakdown(nil, pos, false)
 }
 
-// breakdownAt makes one allocation, the result slice; the slots decode
-// into arrays on the stack.
-func (r *TierStatsReader) breakdownAt(pos uint64, nonZeroOnly bool) []TierBreakdown {
+// appendBreakdown appends pos's tiers to dst. A nil dst gets one
+// allocation of the exact size; the slots decode into arrays on the
+// stack.
+func (r *TierStatsReader) appendBreakdown(dst []TierBreakdown, pos uint64, nonZeroOnly bool) []TierBreakdown {
 	if !r.HasTierData() {
-		return nil
+		return dst
 	}
 	if pos >= r.core.Count() {
-		return make([]TierBreakdown, 0, r.slots)
+		if dst == nil {
+			dst = make([]TierBreakdown, 0, r.slots)
+		}
+
+		return dst
 	}
 	var counts, bytesArr [maxTierSlots]uint64
 	mask := r.fill(pos, &counts, &bytesArr)
-	n := r.slots
-	if nonZeroOnly {
-		n = bits.OnesCount16(mask)
+	if dst == nil {
+		n := r.slots
+		if nonZeroOnly {
+			n = bits.OnesCount16(mask)
+		}
+		dst = make([]TierBreakdown, 0, n)
 	}
-	breakdown := make([]TierBreakdown, 0, n)
 	for slot, tier := range r.manifest.Tiers {
 		if nonZeroOnly && mask&(1<<slot) == 0 {
 			continue
 		}
-		breakdown = append(breakdown, TierBreakdown{
+		dst = append(dst, TierBreakdown{
 			TierID:      tier.ID,
 			TierName:    tier.Name,
 			Bytes:       bytesArr[slot],
@@ -146,7 +160,7 @@ func (r *TierStatsReader) breakdownAt(pos uint64, nonZeroOnly bool) []TierBreakd
 		})
 	}
 
-	return breakdown
+	return dst
 }
 
 // fill decodes pos's per-slot stats and returns its tier mask.
