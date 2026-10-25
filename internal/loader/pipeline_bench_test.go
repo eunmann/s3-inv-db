@@ -16,6 +16,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
+	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/rs/zerolog"
 )
 
@@ -77,23 +78,67 @@ func BenchmarkPipeline_GoMemLimit(b *testing.B) {
 	}
 }
 
+// BenchmarkPipelineSlowS3 runs the build against S3 behind a slower
+// link (first-byte latency, a bandwidth cap per GET), with four chunks
+// per ingest worker so a worker has a next chunk to fetch while it
+// parses one. The local server alone answers instantly and can't show
+// the time a build spends waiting on S3.
+func BenchmarkPipelineSlowS3(b *testing.B) {
+	const (
+		latency     = 20 * time.Millisecond
+		bytesPerSec = 8 << 20
+	)
+	fc := s3test.SlowFetchClient(b, latency, bytesPerSec)
+	runPipelineBenchWith(b, pipelineBench{
+		preset:     "realistic_sorted",
+		numObjects: 1_000_000,
+		chunks:     4 * runtime.NumCPU(),
+		client:     fc,
+	})
+}
+
+// pipelineBench is one pipeline benchmark's setup. A zero memLimit
+// leaves GOMEMLIMIT unchanged, zero chunks takes chunkCountFor, and a
+// nil client is the local S3 server's.
+type pipelineBench struct {
+	client     *s3fetch.Client
+	preset     string
+	numObjects int
+	memLimit   int64
+	chunks     int
+}
+
 // runPipelineBench is the shared body. MemLimit==0 leaves GOMEMLIMIT
 // unchanged.
 func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int64) {
 	b.Helper()
-	benchutil.SilenceZerolog(b)
+	runPipelineBenchWith(b, pipelineBench{preset: preset, numObjects: numObjects, memLimit: memLimit})
+}
 
-	fc := s3test.FetchClient(b)
-	bucket := s3test.Bucket(b, fc.Raw())
+func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
+	b.Helper()
+	benchutil.SilenceZerolog(b)
+	preset, numObjects, memLimit := pb.preset, pb.numObjects, pb.memLimit
+
+	fc := pb.client
+	if fc == nil {
+		fc = s3test.FetchClient(b)
+	}
+	// Seeding goes straight to the local server: only the build's reads
+	// cross the slow link.
+	bucket := s3test.Bucket(b, s3test.RawClient(b))
 
 	srcBucket := "bench-src"
 	prefix := "bench-inv/"
 	stamp := time.Now().UTC().Truncate(time.Minute)
 
-	chunks := chunkCountFor(numObjects)
+	chunks := pb.chunks
+	if chunks == 0 {
+		chunks = chunkCountFor(numObjects)
+	}
 	sorted := strings.HasSuffix(preset, "_sorted")
 	info, err := seeder.UploadMultiChunkInventory(
-		b.Context(), fc.Raw(),
+		b.Context(), s3test.RawClient(b),
 		seeder.Config{
 			Target:     seeder.TargetS3,
 			Objects:    numObjects,
