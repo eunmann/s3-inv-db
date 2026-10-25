@@ -36,7 +36,11 @@ type managedInventory struct {
 	info             Info
 	index            *indexread.Index
 	lastAccessedNano atomic.Int64
-	mu               sync.RWMutex
+	// prefaultBytes is how much of the catalog's prefault budget this
+	// inventory's index took; it counts while the index is open or
+	// loading. Guarded by Catalog.mu.
+	prefaultBytes uint64
+	mu            sync.RWMutex
 }
 
 // mirrorStore is the persistence sink Catalog mirrors state transitions
@@ -68,6 +72,9 @@ type Catalog struct {
 	seq       uint64
 	persistMu sync.Mutex
 	persisted map[ID]uint64
+	// prefaultLimit bounds the bytes of the indexes the catalog
+	// prefaults together (planPrefaultLocked).
+	prefaultLimit uint64
 }
 
 // pendingWrite is one state change to persist, stamped with its
@@ -84,9 +91,10 @@ type pendingWrite struct {
 // mirrored to the store.
 func NewCatalog(store *Store) *Catalog {
 	c := &Catalog{
-		inventories: make(map[ID]*managedInventory),
-		store:       noopMirrorStore{},
-		persisted:   make(map[ID]uint64),
+		inventories:   make(map[ID]*managedInventory),
+		store:         noopMirrorStore{},
+		persisted:     make(map[ID]uint64),
+		prefaultLimit: prefaultLimit(),
 	}
 	if store != nil {
 		c.store = store
@@ -229,6 +237,7 @@ func (c *Catalog) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	// at zero rather than carrying a previous run's value through Error
 	// state into JSON API responses.
 	inv.info.LoadDuration = 0
+	inv.prefaultBytes = 0
 	if pin {
 		inv.info.Pinned = true
 		inv.info.UserUnloadedAt = time.Time{}
@@ -244,7 +253,13 @@ func (c *Catalog) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	var idx *indexread.Index
 	var openErr error
 	if buildErr == nil {
-		idx, openErr = indexread.Open(indexDir)
+		var m *format.Manifest
+		c.mu.Lock()
+		if cur, ok := c.inventories[id]; ok && cur == inv {
+			m = c.planPrefaultLocked(inv, indexDir)
+		}
+		c.mu.Unlock()
+		idx, openErr = openServed(indexDir, m)
 	}
 
 	var bytes uint64
@@ -572,7 +587,7 @@ func (c *Catalog) Hydrate(ctx context.Context, info Info, indexDir string) error
 			mi.info.MaxDepth = 0
 			mi.info.HasTierData = false
 		} else {
-			idx, err := indexread.Open(indexDir)
+			idx, err := openServed(indexDir, c.planPrefaultLocked(mi, indexDir))
 			switch {
 			case err != nil:
 				mi.info.State = StateError
