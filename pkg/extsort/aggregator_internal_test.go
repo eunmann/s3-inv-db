@@ -5,6 +5,8 @@ import (
 	"math"
 	"runtime"
 	"runtime/debug"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -147,5 +149,32 @@ func TestFlushAggregatorReleasesRowsUnderHeapPressure(t *testing.T) {
 				t.Fatalf("drain after flush = %d rows, want 2", len(rows))
 			}
 		})
+	}
+}
+
+// DrainSorted hands the rows out in prefix order, and a later spill no
+// larger than the biggest so far sorts without allocating.
+func TestAggregatorDrainSortedReusesSortBuffer(t *testing.T) {
+	agg := NewAggregator(0, 0)
+	for i := range 500 {
+		agg.AddObject(fmt.Sprintf("p%03d/x", 499-i), 1, tiers.Standard)
+	}
+	rows := agg.DrainSorted()
+	if len(rows) != 501 {
+		t.Fatalf("drain = %d rows, want 501", len(rows))
+	}
+	if !slices.IsSortedFunc(rows, func(a, b *PrefixRow) int { return strings.Compare(a.Prefix, b.Prefix) }) {
+		t.Fatal("DrainSorted rows are not in prefix order")
+	}
+	for _, k := range agg.sortScratch[:cap(agg.sortScratch)] {
+		if k.row != nil || k.prefix != "" {
+			t.Fatal("sort buffer keeps references to drained rows")
+		}
+	}
+
+	if allocs := testing.AllocsPerRun(10, func() {
+		agg.sortScratch = sortPrefixRows(rows, agg.sortScratch)
+	}); allocs != 0 {
+		t.Errorf("sorting a spill no larger than the last = %v allocs, want 0", allocs)
 	}
 }
