@@ -2,7 +2,6 @@ package format
 
 import (
 	"errors"
-	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -186,6 +185,36 @@ func TestMPHFUnicode(t *testing.T) {
 	}
 }
 
+// TestMPHFSparsePositions pins that the slot position width fits the
+// largest position, not the prefix count: 200 prefixes at positions
+// past 255 must not be truncated to one byte.
+func TestMPHFSparsePositions(t *testing.T) {
+	dir := t.TempDir()
+	b := newTestMPHFBuilder(t)
+
+	const n = 200
+	posOf := func(i int) uint64 { return uint64(i)*1000 + 1<<20 }
+	for i := range n {
+		b.Add(prefixFromInt(i+1), posOf(i))
+	}
+	if err := b.Build(dir); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	m, err := OpenMPHF(dir)
+	if err != nil {
+		t.Fatalf("OpenMPHF failed: %v", err)
+	}
+	defer m.Close()
+
+	for i := range n {
+		p := prefixFromInt(i + 1)
+		if pos, ok := m.Lookup(p); !ok || pos != posOf(i) {
+			t.Errorf("Lookup(%q) = %d, %v; want %d, true", p, pos, ok, posOf(i))
+		}
+	}
+}
+
 func TestComputeFingerprint(t *testing.T) {
 	// Same input should give same fingerprint
 	fp1 := computeFingerprint("test")
@@ -285,17 +314,24 @@ func TestMPHFLookupRoundTripsEdgePrefixes(t *testing.T) {
 	}
 }
 
-// TestHashBytesSeedZeroIsFNV1a pins seed 0 to plain FNV-1a, the key
-// hash every pre-seed index was built with.
-func TestHashBytesSeedZeroIsFNV1a(t *testing.T) {
+// TestKeyHashSeeds: the key seed changes the hash, and no key seed a
+// retry can pick equals the fingerprint's seed.
+func TestKeyHashSeeds(t *testing.T) {
 	for _, s := range []string{"", "a", "data/2024/", "日本語/", strings.Repeat("x/", 100)} {
-		h := fnv.New64a()
-		_, _ = h.Write([]byte(s))
-		if got, want := hashString(s, 0), h.Sum64(); got != want {
-			t.Errorf("hashString(%q, 0) = %#x, want FNV-1a %#x", s, got, want)
-		}
 		if hashString(s, mphfSeed(1)) == hashString(s, 0) {
 			t.Errorf("hashString(%q) ignores the seed", s)
+		}
+		if hashString(s, 0) == computeFingerprint(s) {
+			t.Errorf("key hash and fingerprint of %q are equal", s)
+		}
+	}
+	for attempt := range uint64(maxMPHFSeedAttempts + 1) {
+		seed := uint64(0)
+		if attempt > 0 {
+			seed = mphfSeed(attempt)
+		}
+		if seed == fingerprintSeed {
+			t.Errorf("retry %d's key seed equals the fingerprint seed", attempt)
 		}
 	}
 }
@@ -311,16 +347,16 @@ func collidingKeyHash(a, b string) func(string, uint64) uint64 {
 	}
 }
 
-// readCombined returns the raw mph_fp_pos.u64 bytes and its header.
-func readCombined(t *testing.T, dir string) ([]byte, Header) {
+// readSlots returns the raw mph_slots.bin bytes and its header.
+func readSlots(t *testing.T, dir string) ([]byte, Header) {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(dir, CombinedMPHFArrayFile))
+	data, err := os.ReadFile(filepath.Join(dir, MPHFSlotsFile))
 	if err != nil {
-		t.Fatalf("read fp/pos: %v", err)
+		t.Fatalf("read slots: %v", err)
 	}
 	h, err := DecodeHeader(data)
 	if err != nil {
-		t.Fatalf("decode fp/pos header: %v", err)
+		t.Fatalf("decode slots header: %v", err)
 	}
 
 	return data, h
@@ -341,12 +377,17 @@ func TestStreamingMPHFBuildSurvivesKeyHashCollision(t *testing.T) {
 		t.Fatalf("Build with a seed-0 key collision: %v", err)
 	}
 
-	data, h := readCombined(t, dir)
+	data, h := readSlots(t, dir)
 	if h.Version != Version {
-		t.Errorf("fp/pos Version = %d, want %d", h.Version, Version)
+		t.Errorf("slots Version = %d, want %d", h.Version, Version)
 	}
-	if want := (HeaderSize + 16*len(prefixes) + mphfSeedBytes); len(data) != want {
-		t.Errorf("fp/pos size = %d, want %d", len(data), want)
+	// 2000 positions need 2 bytes.
+	slotW := mphfFingerprintBytes + 2
+	if int(h.Width) != slotW {
+		t.Errorf("slot width = %d, want %d", h.Width, slotW)
+	}
+	if want := mphfSlotsDataOff + slotW*len(prefixes) + mphfSeedBytes + mphfSlotsTailPad; len(data) != want {
+		t.Errorf("slots size = %d, want %d", len(data), want)
 	}
 
 	m, err := OpenMPHF(dir)
@@ -391,8 +432,9 @@ func TestOpenMPHFMissingSeedWord(t *testing.T) {
 	if err := b.Build(dir); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	path := filepath.Join(dir, CombinedMPHFArrayFile)
-	if err := os.Truncate(path, HeaderSize+16*3); err != nil {
+	path := filepath.Join(dir, MPHFSlotsFile)
+	_, h := readSlots(t, dir)
+	if err := os.Truncate(path, int64(mphfSlotsDataOff)+int64(h.Width)*3); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	if m, err := OpenMPHF(dir); !errors.Is(err, ErrFileTooSmall) {
@@ -400,16 +442,5 @@ func TestOpenMPHFMissingSeedWord(t *testing.T) {
 			m.Close()
 		}
 		t.Fatalf("OpenMPHF = %v, want ErrFileTooSmall", err)
-	}
-}
-
-// The written-out fingerprint must stay hash/fnv's FNV-1: indexes store it.
-func TestComputeFingerprintMatchesFNV1(t *testing.T) {
-	for _, s := range []string{"", "a", "dir/sub/", "données/été/"} {
-		h := fnv.New64()
-		_, _ = h.Write([]byte(s))
-		if got, want := computeFingerprint(s), h.Sum64(); got != want {
-			t.Errorf("computeFingerprint(%q) = %#x, want %#x", s, got, want)
-		}
 	}
 }

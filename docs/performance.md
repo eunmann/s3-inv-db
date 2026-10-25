@@ -5,15 +5,15 @@ costs, on-disk size, and benchmarks.
 
 ## Query
 
-Lookup is constant-time in index size: hash the prefix (FNV-1a),
-probe the MPHF, check a second-hash fingerprint, then read one mmap
-slot. Tested up to ~10M
+Lookup is constant-time in index size: hash the prefix (wyhash),
+probe the MPHF, check the slot's fingerprint (a second wyhash with its
+own seed), then read the core row. Tested up to ~10M
 prefixes with consistent sub-microsecond warm-cache lookups.
 
 | Operation | Complexity | Typical warm latency |
 |-----------|------------|---------------------|
 | `Lookup` | O(1) | sub-µs |
-| `StatsForPrefix` | O(1) | sub-µs (~160 ns) |
+| `StatsForPrefix` | O(1) | sub-µs (~80 ns warm, 2.4M prefixes) |
 | `TierBreakdown` | O(tiers) | sub-µs (~70 ns) |
 | `DescendantsAtDepth` | O(log n + k) | µs–tens of µs (depends on k) |
 
@@ -111,12 +111,13 @@ max depth 7, 11 of 13 tiers present, 95% of prefixes holding one tier.
 |---|---|---|
 | Core stats | `core_stats.bin` (16-byte rows: 3 + 7 + 3 + 1 + 2) | 16.0 |
 | Tier stats | `tier_stats/tier_multi.*` (multi layout) | 1.4 |
-| MPHF | `mph_fp_pos.u64` (16) + `mph.bin` (BBHash, ~3.3 bits) | 16.4 |
+| MPHF | `mph_slots.bin` (8 B fingerprint + 3 B position) + `mph.bin` (BBHash, ~3.3 bits) | 11.4 |
 | Prefix strings | `prefix_tree.bin` (2 B segment ID + 3 B parent distance) + segment blob | 5.1 |
 | Depth index | `depth_positions.u64` (3 B) + `depth_offsets.u64` | 3.0 |
-| **Total** | including `manifest.json` and `tiers.json` | **41.9** |
+| **Total** | including `manifest.json` and `tiers.json` | **36.8** |
 
-The 16 B fingerprint/position slot is the same for every index. Tier
+The fingerprint is 8 B in every index; the position takes the bytes
+the largest position needs. Tier
 stats depend on how many tiers each prefix holds: nothing for an index
 with one tier, up to (T − 1) slots per prefix when every prefix holds
 all T tiers. The other components grow by a byte per field as counts,

@@ -50,7 +50,7 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		DepthOffsetsFile,
 		DepthPositionsFile,
 		MPHFile,
-		CombinedMPHFArrayFile,
+		MPHFSlotsFile,
 		"tiers.json",
 		CoreStatsFile,
 		PrefixDictBlobFile,

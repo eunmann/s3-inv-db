@@ -1,6 +1,7 @@
 package indexread_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -650,4 +651,38 @@ func tierBreakdownForPrefixTest(idx *indexread.Index, prefix string) []indexread
 		return nil
 	}
 	return idx.TierBreakdown(pos)
+}
+
+// TestLookupRejectsNonMembers: a prefix that isn't in the index doesn't
+// look up (its slot's fingerprint differs).
+func TestLookupRejectsNonMembers(t *testing.T) {
+	dir := t.TempDir()
+	keys := make([]string, 0, 2000)
+	for i := range 2000 {
+		keys = append(keys, fmt.Sprintf("dir%03d/sub%d/file.txt", i%400, i))
+	}
+	if err := buildIndexFromKeys(t, dir, keys); err != nil {
+		t.Fatal(err)
+	}
+	idx, err := indexread.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	for pos := range idx.Count() {
+		p, err := idx.PrefixString(pos)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := idx.Lookup(p); !ok || got != pos {
+			t.Fatalf("Lookup(%q) = %d, %v; want %d", p, got, ok, pos)
+		}
+	}
+	for i := range 10_000 {
+		for _, q := range []string{fmt.Sprintf("dir%03d/nope%d/", i%400, i), fmt.Sprintf("x%d/", i), fmt.Sprintf("dir%03d/sub%d", i%400, i)} {
+			if pos, ok := idx.Lookup(q); ok {
+				t.Fatalf("Lookup(%q) = %d, true for a prefix not in the index", q, pos)
+			}
+		}
+	}
 }
