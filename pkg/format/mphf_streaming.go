@@ -1,11 +1,9 @@
 package format
 
 import (
-	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -13,24 +11,15 @@ import (
 	"slices"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
-	"github.com/klauspost/compress/zstd"
 	"golang.org/x/sys/unix"
 )
 
-// StreamingMPHFBuilder builds a minimal perfect hash function for prefix strings
-// while keeping memory usage bounded by writing prefixes to disk during construction.
-//
-// Memory usage:
-// - ~8 bytes per prefix for hash keys (bbhash's input)
-// - ~8 bytes per prefix for preorder positions
-// - ~8 bytes per prefix for pre-computed fingerprints (optimization)
-// - Temporary buffers for I/O
-//
-// This is much more memory efficient than MPHFBuilder which stores all
-// prefix strings in memory (~50+ bytes per prefix average).
+// StreamingMPHFBuilder builds a minimal perfect hash function for prefix
+// strings with memory bounded whatever the prefix count: each prefix's
+// key hash, preorder position and fingerprint go to disk-backed arrays,
+// 8 bytes apiece, and the prefix strings themselves are not kept.
 type StreamingMPHFBuilder struct {
 	// Disk-backed: hashes, positions, fingerprints. At billion-prefix
 	// scale these would otherwise be ~24 GiB of heap. Backed by mmap'd
@@ -39,99 +28,48 @@ type StreamingMPHFBuilder struct {
 	hashes       *u64DiskArray
 	preorderPos  *u64DiskArray
 	fingerprints *u64DiskArray
+	tempDir      string
 
-	// Temp file for prefix strings. The bytes flow:
-	//   Add() → tempWriter (bufio, batches per-Add lengths+payloads)
-	//         → tempEncoder (zstd, fastest level)
-	//         → tempFile
-	// On Build(), tempWriter.Flush + tempEncoder.Close finalize the
-	// zstd frame, then the read side opens a fresh decoder on the
-	// seeked file. Compression is on because the prefix stream is
-	// large (sum of all S3 key prefixes, ~50 GB at 1B prefixes) and
-	// highly compressible (shared path components, written then read
-	// exactly once sequentially — no mmap requirement).
-	tempFile    *os.File
-	tempEncoder *zstd.Encoder
-	tempWriter  *bufio.Writer
-	tempPath    string
-	tempDir     string
+	// keyHash and fingerprint are hashString and computeFingerprint;
+	// tests replace them to force collisions.
+	keyHash     func(prefix string) uint64
+	fingerprint func(prefix string) uint64
 
-	// keyHash is hashString; tests replace it to force key collisions.
-	keyHash func(prefix string, seed uint64) uint64
-
-	// Stats
-	count      uint64
-	totalBytes uint64
-	bufferSize int
-
+	count uint64
 	built bool
 }
 
 // ErrMPHFAlreadyBuilt is returned when Build is called more than
-// once on the same StreamingMPHFBuilder. The writer chain is
-// finalized in the first call, so a second call would nil-deref on
-// the tempWriter flush. Surfaced as a named error so callers can
-// distinguish double-Build from other Build failures.
+// once on the same StreamingMPHFBuilder. The first call consumes the
+// disk-backed arrays, so a second would nil-deref on them. Surfaced as
+// a named error so callers can distinguish double-Build from other
+// Build failures.
 var ErrMPHFAlreadyBuilt = errors.New("StreamingMPHFBuilder.Build already called")
 
 // NewStreamingMPHFBuilder creates a new streaming MPHF builder. TempDir
-// holds prefix strings plus the disk-backed u64 arrays.
+// holds the disk-backed u64 arrays.
 func NewStreamingMPHFBuilder(tempDir string) (*StreamingMPHFBuilder, error) {
-	tempFile, err := os.CreateTemp(tempDir, "mphf_prefixes_*.tmp")
-	if err != nil {
-		return nil, fmt.Errorf("create temp file: %w", err)
-	}
-
 	hashes, err := newU64DiskArray(tempDir, "mphf_hashes")
 	if err != nil {
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
 		return nil, err
 	}
 	preorderPos, err := newU64DiskArray(tempDir, "mphf_preorderpos")
 	if err != nil {
-		hashes.Close()
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
-		return nil, err
+		return nil, errors.Join(err, hashes.Close())
 	}
 	fingerprints, err := newU64DiskArray(tempDir, "mphf_fingerprints")
 	if err != nil {
-		preorderPos.Close()
-		hashes.Close()
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
-		return nil, err
+		return nil, errors.Join(err, preorderPos.Close(), hashes.Close())
 	}
 
-	enc, err := zstd.NewWriter(tempFile, zstd.WithEncoderLevel(zstd.SpeedFastest))
-	if err != nil {
-		fingerprints.Close()
-		preorderPos.Close()
-		hashes.Close()
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-
-		return nil, fmt.Errorf("create prefix zstd encoder: %w", err)
-	}
-
-	b := &StreamingMPHFBuilder{
+	return &StreamingMPHFBuilder{
 		hashes:       hashes,
 		preorderPos:  preorderPos,
 		fingerprints: fingerprints,
-		tempFile:     tempFile,
-		tempEncoder:  enc,
-		tempWriter:   bufio.NewWriterSize(enc, 1024*1024),
-		tempPath:     tempFile.Name(),
 		tempDir:      tempDir,
 		keyHash:      hashString,
-		bufferSize:   1024 * 1024,
-	}
-
-	return b, nil
+		fingerprint:  computeFingerprint,
+	}, nil
 }
 
 // Add adds a prefix at the given preorder position. All three
@@ -139,26 +77,16 @@ func NewStreamingMPHFBuilder(tempDir string) (*StreamingMPHFBuilder, error) {
 // appended to disk-backed arrays rather than heap slices, so memory
 // usage during Add stays flat regardless of prefix count.
 func (b *StreamingMPHFBuilder) Add(prefix string, pos uint64) error {
-	if err := b.hashes.Append(b.keyHash(prefix, 0)); err != nil {
+	if err := b.hashes.Append(b.keyHash(prefix)); err != nil {
 		return fmt.Errorf("append hash: %w", err)
 	}
 	if err := b.preorderPos.Append(pos); err != nil {
 		return fmt.Errorf("append preorder pos: %w", err)
 	}
-	if err := b.fingerprints.Append(computeFingerprint(prefix)); err != nil {
+	if err := b.fingerprints.Append(b.fingerprint(prefix)); err != nil {
 		return fmt.Errorf("append fingerprint: %w", err)
 	}
-
-	// Write prefix to temp file with length prefix.
-	if err := putU32(b.tempWriter, uint32(len(prefix))); err != nil {
-		return fmt.Errorf("write prefix length: %w", err)
-	}
-	if _, err := b.tempWriter.WriteString(prefix); err != nil {
-		return fmt.Errorf("write prefix: %w", err)
-	}
-
 	b.count++
-	b.totalBytes += uint64(len(prefix))
 
 	return nil
 }
@@ -168,32 +96,11 @@ func (b *StreamingMPHFBuilder) Count() uint64 {
 	return b.count
 }
 
-// Close closes the builder and removes temporary files. Aggregates
-// the cleanup errors so callers don't lose visibility when the
-// tempfile flush or close fails (typical on disk-full mid-build).
+// Close closes the builder and removes its temporary files, joining
+// every array's cleanup error so a failed close or removal (typical on
+// a full disk mid-build) still surfaces.
 func (b *StreamingMPHFBuilder) Close() error {
 	var errs []error
-	if b.tempWriter != nil {
-		if err := b.tempWriter.Flush(); err != nil {
-			errs = append(errs, fmt.Errorf("flush mphf tempfile: %w", err))
-		}
-		b.tempWriter = nil
-	}
-	if b.tempEncoder != nil {
-		if err := b.tempEncoder.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("close mphf temp encoder: %w", err))
-		}
-		b.tempEncoder = nil
-	}
-	if b.tempFile != nil {
-		if err := b.tempFile.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("close mphf tempfile: %w", err))
-		}
-		b.tempFile = nil
-		if err := os.Remove(b.tempPath); err != nil && !os.IsNotExist(err) {
-			errs = append(errs, fmt.Errorf("remove mphf tempfile: %w", err))
-		}
-	}
 	// Disk-backed arrays may have been already closed during a
 	// successful Build; nil-guard so Close stays idempotent.
 	for _, a := range []*u64DiskArray{b.hashes, b.preorderPos, b.fingerprints} {
@@ -225,10 +132,6 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		return b.writeEmpty(outDir)
 	}
 
-	if err := b.finalizePrefixWriter(); err != nil {
-		return err
-	}
-
 	// Freeze the disk-backed arrays so their backing files are mmap'd
 	// and exposable as []uint64. bbhash reads the slice; the values
 	// live in the page cache, not the Go heap.
@@ -244,7 +147,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 
 	n := int(b.count)
 	bbhashStart := time.Now()
-	mph, seed, err := b.buildBBHash()
+	mph, err := b.buildBBHash()
 	if err != nil {
 		return err
 	}
@@ -255,7 +158,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	}
 
 	mapStart := time.Now()
-	if err := writeSlots(outDir, b.tempDir, n, mph, b.hashes.Slice(), b.fingerprints.Slice(), b.preorderPos.Slice(), seed); err != nil {
+	if err := writeSlots(outDir, b.tempDir, n, mph, b.hashes.Slice(), b.fingerprints.Slice(), b.preorderPos.Slice()); err != nil {
 		return err
 	}
 	log.Debug().Dur("write_ms", time.Since(mapStart)).Msg("MPHF: slots written")
@@ -278,93 +181,56 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	return nil
 }
 
-// maxMPHFSeedAttempts bounds the rehashes after a key-hash collision.
-// Each fresh seed collides again with probability ~n²/2⁶⁵ (≈2.7% at
-// 1B prefixes), so eight in a row means something other than chance.
-const maxMPHFSeedAttempts = 8
-
 // buildBBHash builds the MPHF over the frozen key hashes, straight from
 // their disk-backed array: no reverse map and no sorted copy, so the
-// finalize holds little beyond bbhash's own bit vectors. Bbhash cannot
-// place two equal keys; only when it fails are the hashes checked for a
-// duplicate (one sorted copy), and then every prefix is rehashed with a
-// new seed. Seed 0 is the hash Add computed.
-func (b *StreamingMPHFBuilder) buildBBHash() (*bbhash, uint64, error) {
-	var seed uint64
-	for attempt := 1; ; attempt++ {
-		mph, err := newBBHash(b.hashes.Slice())
-		if err == nil {
-			return mph, seed, nil
-		}
-		if !hasDuplicateHash(b.hashes.Slice()) {
-			return nil, 0, fmt.Errorf("build MPHF: %w", err)
-		}
-		if attempt > maxMPHFSeedAttempts {
-			return nil, 0, fmt.Errorf("%w: duplicates remain after %d seeds", ErrMPHFKeyCollision, maxMPHFSeedAttempts)
-		}
-		seed = mphfSeed(uint64(attempt))
-		logging.L().Debug().Uint64("seed", seed).Msg("MPHF: duplicate key hash, rehashing with a new seed")
-		if err := b.rehashKeys(seed); err != nil {
-			return nil, 0, err
-		}
-	}
-}
-
-// hasDuplicateHash reports whether two key hashes are equal. It sorts a
-// copy, so it runs only after bbhash has already failed.
-func hasDuplicateHash(hashes []uint64) bool {
-	sorted := slices.Clone(hashes)
-	slices.Sort(sorted)
-	for i := 1; i < len(sorted); i++ {
-		if sorted[i] == sorted[i-1] {
-			return true
-		}
-	}
-
-	return false
-}
-
-// mphfSeed derives the key seed for a retry with the splitmix64
-// finalizer, so consecutive attempts get unrelated seeds.
-func mphfSeed(attempt uint64) uint64 {
-	const (
-		gamma  = 0x9e3779b97f4a7c15
-		mul1   = 0xbf58476d1ce4e5b9
-		mul2   = 0x94d049bb133111eb
-		shift1 = 30
-		shift2 = 27
-		shift3 = 31
-	)
-	z := attempt * gamma
-	z = (z ^ (z >> shift1)) * mul1
-	z = (z ^ (z >> shift2)) * mul2
-
-	return z ^ (z >> shift3)
-}
-
-// rehashKeys replaces the frozen key-hash array with the hashes of the
-// spooled prefixes under seed.
-func (b *StreamingMPHFBuilder) rehashKeys(seed uint64) error {
-	hashes, err := newU64DiskArray(b.tempDir, "mphf_hashes")
-	if err != nil {
-		return err
-	}
-	err = b.forEachPrefix(func(_ int, prefix []byte) error {
-		return hashes.Append(b.keyHash(unsafe.String(unsafe.SliceData(prefix), len(prefix)), seed))
+// finalize holds little beyond bbhash's own bit vectors. Keys the levels
+// leave unplaced, chiefly prefixes that share a 64-bit key hash, go to
+// the fallback table.
+func (b *StreamingMPHFBuilder) buildBBHash() (*bbhash, error) {
+	hashes, fps := b.hashes.Slice(), b.fingerprints.Slice()
+	mph, err := newBBHash(hashes, func(leftovers []uint64) ([]bbFallback, error) {
+		return fallbackEntries(leftovers, hashes, fps)
 	})
-	if err == nil {
-		err = hashes.Freeze()
-	}
 	if err != nil {
-		return errors.Join(fmt.Errorf("rehash MPHF keys: %w", err), hashes.Close())
+		return nil, err
 	}
-	old := b.hashes
-	b.hashes = hashes
-	if err := old.Close(); err != nil {
-		return fmt.Errorf("close superseded hashes: %w", err)
+	if len(mph.fallback) > 0 {
+		logging.L().Debug().Int("fallback_keys", len(mph.fallback)).Msg("MPHF: keys in the fallback table")
+	}
+	if mph.count != uint64(len(hashes)) {
+		return nil, fmt.Errorf("%w: %d keys in the levels and %d in the fallback, %d added",
+			ErrMPHFLookupFailed, mph.placed, len(mph.fallback), len(hashes))
 	}
 
-	return nil
+	return mph, nil
+}
+
+// fallbackEntries returns the (hash, fingerprint) of every key whose
+// hash is a leftover, sorted, from one parallel pass over the key
+// arrays. Every key with a leftover hash is unplaced: keys sharing a
+// hash take the same position on every level. Two keys equal in both
+// hashes cannot be told apart by any lookup, so they fail the build.
+func fallbackEntries(leftovers, hashes, fps []uint64) ([]bbFallback, error) {
+	slices.Sort(leftovers)
+	leftovers = slices.Compact(leftovers)
+	chunks := make([][]bbFallback, mphfWorkerCount(len(hashes)))
+	forChunks(len(hashes), func(c, lo, hi int) {
+		for i := lo; i < hi; i++ {
+			if _, found := slices.BinarySearch(leftovers, hashes[i]); found {
+				chunks[c] = append(chunks[c], bbFallback{hash: hashes[i], fp: fps[i]})
+			}
+		}
+	})
+	entries := slices.Concat(chunks...)
+	slices.SortFunc(entries, compareFallback)
+	for j := 1; j < len(entries); j++ {
+		if entries[j] == entries[j-1] {
+			return nil, fmt.Errorf("%w: two prefixes share key hash %#x and fingerprint %#x",
+				ErrMPHFKeyCollision, entries[j].hash, entries[j].fp)
+		}
+	}
+
+	return entries, nil
 }
 
 // mphfWorkerCount caps parallelism at the smaller of NumCPU and the
@@ -383,68 +249,6 @@ func mphfWorkerCount(n int) int {
 	return w
 }
 
-// finalizePrefixWriter flushes the bufio writer into the zstd encoder
-// and finalizes the frame so the read side can open a fresh decoder on
-// the seeked file. After this both tempWriter and tempEncoder are
-// spent; Close still owns closing/removing the underlying file.
-func (b *StreamingMPHFBuilder) finalizePrefixWriter() error {
-	if err := b.tempWriter.Flush(); err != nil {
-		return fmt.Errorf("flush temp file: %w", err)
-	}
-	b.tempWriter = nil
-	if err := b.tempEncoder.Close(); err != nil {
-		return fmt.Errorf("close prefix encoder: %w", err)
-	}
-	b.tempEncoder = nil
-
-	return nil
-}
-
-// openPrefixReader rewinds the prefix temp file and returns a buffered
-// reader over a fresh zstd decoder. Caller owns Close on the decoder.
-func (b *StreamingMPHFBuilder) openPrefixReader() (*bufio.Reader, *zstd.Decoder, error) {
-	if _, err := b.tempFile.Seek(0, 0); err != nil {
-		return nil, nil, fmt.Errorf("seek temp file: %w", err)
-	}
-	dec, err := zstd.NewReader(b.tempFile)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open prefix zstd reader: %w", err)
-	}
-
-	return bufio.NewReaderSize(dec, b.bufferSize), dec, nil
-}
-
-// forEachPrefix streams the spooled prefixes in Add order. The slice
-// passed to fn is reused for the next prefix.
-func (b *StreamingMPHFBuilder) forEachPrefix(fn func(i int, prefix []byte) error) error {
-	reader, dec, err := b.openPrefixReader()
-	if err != nil {
-		return err
-	}
-	defer dec.Close()
-
-	var lenBuf [4]byte
-	prefixBuf := make([]byte, 0, 256)
-	for i := range int(b.count) {
-		if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
-			return fmt.Errorf("read prefix length at %d: %w", i, err)
-		}
-		prefixLen := binary.LittleEndian.Uint32(lenBuf[:])
-		if cap(prefixBuf) < int(prefixLen) {
-			prefixBuf = make([]byte, prefixLen)
-		}
-		prefixBuf = prefixBuf[:prefixLen]
-		if _, err := io.ReadFull(reader, prefixBuf); err != nil {
-			return fmt.Errorf("read prefix at %d: %w", i, err)
-		}
-		if err := fn(i, prefixBuf); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	// Create empty mph file
 	mphPath := filepath.Join(outDir, MPHFile)
@@ -453,7 +257,7 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	}
 
 	// An empty slot file keeps the index's file set the same at any size.
-	return writeSlots(outDir, b.tempDir, 0, nil, nil, nil, nil, 0)
+	return writeSlots(outDir, b.tempDir, 0, nil, nil, nil, nil)
 }
 
 // writeSlots materialises mph_slots.bin: it maps every slot to its
@@ -464,9 +268,9 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 //
 // File layout: Header (Count = slots, Width = slot bytes), a 1-byte
 // descriptor (position width), the slots (8-byte fingerprint, then the
-// position at that width), the 8-byte key-hash seed, and an 8-byte zero
-// tail pad for masked loads at the last slot.
-func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps, poss []uint64, seed uint64) error {
+// position at that width), and an 8-byte zero tail pad for masked loads
+// at the last slot.
+func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps, poss []uint64) error {
 	if len(poss) != n || len(fps) != n {
 		return fmt.Errorf("%w: fps=%d poss=%d n=%d", errMPHFArrayLengthMismatch, len(fps), len(poss), n)
 	}
@@ -485,7 +289,7 @@ func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps, poss []
 	cleanup := func(primary error) error {
 		return errors.Join(primary, f.Close(), removeIfErr(path))
 	}
-	if err := f.Truncate(int64(mphfSlotsDataOff) + dataBytes + mphfSeedBytes + mphfSlotsTailPad); err != nil {
+	if err := f.Truncate(int64(mphfSlotsDataOff) + dataBytes + mphfSlotsTailPad); err != nil {
 		return cleanup(fmt.Errorf("truncate MPHF slots: %w", err))
 	}
 	head := EncodeHeader(Header{Magic: MagicNumber, Version: Version, Count: uint64(n), Width: uint32(slotW)})
@@ -496,7 +300,7 @@ func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps, poss []
 	if n > 0 {
 		// Concurrent pwrite to disjoint ranges is POSIX-safe; each worker
 		// writes its own [start,end) slot range.
-		owners, err := newSlotOwners(tempDir, mph, hashes)
+		owners, err := newSlotOwners(tempDir, mph, hashes, fps)
 		if err != nil {
 			return cleanup(err)
 		}
@@ -516,11 +320,6 @@ func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps, poss []
 		if err := errors.Join(errors.Join(errs...), owners.close()); err != nil {
 			return cleanup(err)
 		}
-	}
-	var seedBuf [mphfSeedBytes]byte
-	binary.LittleEndian.PutUint64(seedBuf[:], seed)
-	if _, err := f.WriteAt(seedBuf[:], int64(mphfSlotsDataOff)+dataBytes); err != nil {
-		return cleanup(fmt.Errorf("write MPHF seed: %w", err))
 	}
 	if err := f.Sync(); err != nil {
 		return cleanup(fmt.Errorf("sync MPHF slots: %w", err))
@@ -550,9 +349,10 @@ type scratchMapping struct {
 	data []byte
 }
 
-// newSlotOwners fills the map with parallel bbhash lookups. The MPHF is
-// a bijection, so every slot is written by exactly one lookup.
-func newSlotOwners(tempDir string, mph *bbhash, hashes []uint64) (*slotOwners, error) {
+// newSlotOwners fills the map with parallel bbhash lookups, through the
+// fallback table for keys the levels miss. The MPHF is a bijection, so
+// every slot is written by exactly one lookup.
+func newSlotOwners(tempDir string, mph *bbhash, hashes, fps []uint64) (*slotOwners, error) {
 	n := len(hashes)
 	o := &slotOwners{width: 4}
 	if uint64(n) > math.MaxUint32 {
@@ -576,6 +376,9 @@ func newSlotOwners(tempDir string, mph *bbhash, hashes []uint64) (*slotOwners, e
 		wg.Go(func() {
 			for i := start; i < end; i++ {
 				slot, ok := mph.find(hashes[i])
+				if !ok {
+					slot, ok = mph.findFallback(hashes[i], fps[i])
+				}
 				if !ok || slot >= uint64(n) {
 					errs[w] = fmt.Errorf("%w: slot %d (found %t) for prefix %d", ErrMPHFLookupFailed, slot, ok, i)
 
@@ -686,6 +489,5 @@ const (
 	mphfSlotsDescBytes   = 1
 	mphfSlotsDataOff     = HeaderSize + mphfSlotsDescBytes
 	mphfFingerprintBytes = 8
-	mphfSeedBytes        = 8
 	mphfSlotsTailPad     = 8
 )

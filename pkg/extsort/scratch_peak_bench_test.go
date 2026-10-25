@@ -18,9 +18,9 @@ import (
 // filename prefix, and the wall time of the Add() loop vs Finalize.
 //
 // The sample point is between the last Add() and the start of
-// Finalize() — that's the natural peak for mphf_prefixes_*.tmp and
-// the per-prefix u64 scratch files (mphf_*.u64disk for MPHF,
-// depth_*.u64stream for the depth index).
+// Finalize() — that's the natural peak for the per-prefix u64 scratch
+// files (mphf_*.u64disk for MPHF, depth_*.u64stream for the depth
+// index).
 //
 // Run with:
 //
@@ -28,7 +28,6 @@ import (
 //
 // Per-iteration metrics reported (bytes / wall time):
 //
-//	prefix_bytes        size of mphf_prefixes_*.tmp
 //	hashes_bytes        size of mphf_hashes_*.u64disk
 //	preorderpos_bytes   size of mphf_preorderpos_*.u64disk
 //	fingerprints_bytes  size of mphf_fingerprints_*.u64disk
@@ -39,14 +38,12 @@ import (
 //
 // Caveats:
 //   - **Sample-point undercount.** The metrics are sampled between
-//     the last Add() and the start of Finalize(). The intermediate
-//     writers (bufio + zstd encoder) have not been closed at that
-//     point, so anything still in the 1 MiB bufio buffer or the
-//     zstd encoder block buffer (~128 KiB at SpeedFastest) is not
-//     yet on disk and not counted. This bias is **symmetric**: the
-//     pre-compression baseline also uses a 1 MiB bufio in
-//     u64DiskArray, so before/after ratios at the same N are
-//     comparable. Absolute numbers are a lower bound.
+//     the last Add() and the start of Finalize(). The writers have
+//     not been flushed at that point, so anything still in a 1 MiB
+//     bufio buffer (or a depth stream's zstd encoder block buffer)
+//     is not yet on disk and not counted. The bias is the same on
+//     both sides of a before/after comparison at the same N, so
+//     ratios are comparable; absolute numbers are a lower bound.
 //   - **Small-N depth artifact.** At 100k objects the per-depth
 //     scratch comes out to ~32 KiB per bucket (positions × 8 B,
 //     spread across ~25 depths), entirely below the 1 MiB bufio
@@ -112,7 +109,6 @@ func runScratchPeakOne(b *testing.B, n int) {
 	}
 	finalizeDur := time.Since(finalizeStart)
 
-	b.ReportMetric(float64(sizes["prefix"]), "prefix_bytes")
 	b.ReportMetric(float64(sizes["hashes"]), "hashes_bytes")
 	b.ReportMetric(float64(sizes["preorderpos"]), "preorderpos_bytes")
 	b.ReportMetric(float64(sizes["fingerprints"]), "fingerprints_bytes")
@@ -139,8 +135,6 @@ func bucketScratchSizes(root string) (map[string]int64, error) {
 		sizes["total"] += size
 		name := filepath.Base(path)
 		switch {
-		case strings.HasPrefix(name, "mphf_prefixes_"):
-			sizes["prefix"] += size
 		case strings.HasPrefix(name, "mphf_hashes_"):
 			sizes["hashes"] += size
 		case strings.HasPrefix(name, "mphf_preorderpos_"):

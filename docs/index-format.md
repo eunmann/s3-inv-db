@@ -63,7 +63,7 @@ fields little-endian:
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | Magic | `0x53334944` ("S3ID" in ASCII) |
-| 4 | 4 | Version | Format version (currently `9`) |
+| 4 | 4 | Version | Format version (currently `10`) |
 | 8 | 8 | Count | Number of rows |
 | 16 | 4 | Width | Row stride in bytes |
 
@@ -204,8 +204,23 @@ The MPHF provides O(1) prefix-to-position lookups with BBHash (Limasset et al., 
 
 | File | Description |
 |------|-------------|
-| `mph.bin` | BBHash levels: the level count, each level's length in 64-bit words, then every level's bit vector (all little-endian `uint64`) |
+| `mph.bin` | BBHash levels and the fallback table (layout below) |
 | `mph_slots.bin` | Per BBHash slot, the prefix's fingerprint and its preorder position |
+
+`mph.bin` layout, all little-endian `uint64`, with no file header:
+
+| Words | Content |
+|-------|---------|
+| 1 | Level count `L` (0 when every key is in the fallback table) |
+| `L` | Each level's length in 64-bit words |
+| sum of the lengths | Every level's bit vector, back to back |
+| 1 | Fallback entry count `F` |
+| `2F` | Each fallback entry's key hash, then its fingerprint, sorted by (hash, fingerprint) |
+
+The file is exactly that long; a reader rejects any other size, a level
+or fallback count the file cannot hold, and fallback entries out of
+order. `mph.bin` and `mph_slots.bin` must agree on the key count: the
+bits set across the levels plus `F`.
 
 `mph_slots.bin` layout:
 
@@ -214,7 +229,6 @@ The MPHF provides O(1) prefix-to-position lookups with BBHash (Limasset et al., 
 | 0 | 20 | Header (`Count` = slots, `Width` = 8 + position width) |
 | 20 | 1 | Position width in bytes (the bytes the largest position needs) |
 | 21 | `Count × Width` | Slots: 8-byte fingerprint, then the position |
-| end − 16 | 8 | Key seed |
 | end − 8 | 8 | Zero tail pad |
 
 The fingerprint and the position share a slot, so a lookup reads one
@@ -226,10 +240,10 @@ Level 0 is a bit vector of about 2 bits per prefix (gamma 2). Each key hash sets
 
 ### Lookup Algorithm
 
-1. Hash the prefix with wyhash (final v4.3, `pkg/format/wyhash.go`) and the key seed
-2. Find the key hash's BBHash slot; a hash that sets no bit on any level is not in the index
+1. Hash the prefix with wyhash (final v4.3, `pkg/format/wyhash.go`) and seed 0
+2. Find the key hash's BBHash slot. A hash that sets no bit on any level is looked up in the fallback table by (key hash, fingerprint) when the table is non-empty; a miss there means the prefix is not in the index
 3. Read that slot from `mph_slots.bin`
-4. Hash the prefix again with the fixed fingerprint seed; if it matches the slot's fingerprint, return the slot's position, otherwise the prefix doesn't exist
+4. Hash the prefix again with the fixed fingerprint seed (computed once, reused from step 2 on the fallback path); if it matches the slot's fingerprint, return the slot's position, otherwise the prefix doesn't exist
 
 wyhash reads 8 bytes at a time; the byte-at-a-time FNV it replaced was
 about 30% of a warm lookup. A non-member query is misreported only if
@@ -238,9 +252,11 @@ it lands on an occupied slot and its 64-bit fingerprint also matches
 exact, but walking the prefix tree adds 51–90% LLC misses per lookup
 (measured, #53), so lookups stay fingerprint-only.
 
-### Key Seed
+### Fallback Table
 
-BBHash needs distinct keys. If two prefixes share a 64-bit key hash, the builder rehashes every prefix with a new seed (up to 8 tries). The seed is always stored, even when it is 0, as the 8-byte word after the slots in `mph_slots.bin`, and readers hash queries with it. The fingerprint uses its own fixed seed, which no retry can pick, so a retry never changes a fingerprint.
+BBHash cannot place two keys with equal 64-bit hashes: they take the same bit on every level. The chance that some two of n prefixes share a hash is 1 − e^(−n²/2⁶⁵), 39% at 4.3 billion prefixes and 93% at 10 billion, so the build expects it. It stops adding levels at the first level that places no key, and the keys still unplaced go to the fallback table, keyed by (key hash, fingerprint). The levels own the first slots, and fallback entry j owns the j-th slot after them. The fingerprint uses its own fixed seed, so prefixes that share a key hash still differ in it. Two prefixes equal in both 64-bit hashes cannot be told apart by a lookup, so the build fails with `ErrMPHFKeyCollision`.
+
+Finding the entries costs one parallel pass over the build's key-hash and fingerprint arrays, checking each hash against the sorted leftover hashes. It runs only when some key is left over. The table is almost always empty or a handful of entries, and a lookup that hits a level never reads it.
 
 ## Prefix Strings
 
@@ -385,4 +401,4 @@ from the file-header format version.
 
 ## Versioning
 
-The format version in file headers lets a reader refuse files it would mis-decode. Version 9 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 10 is the current format; readers accept only that version, and an index written by any other version is rebuilt.

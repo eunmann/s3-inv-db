@@ -22,11 +22,9 @@ const (
 // Thread Safety: MPHF is safe for concurrent read access from
 // multiple goroutines. Close once, after all reads.
 type MPHF struct {
-	mph   *bbhash
-	slots *MmapFile
-	count uint64
-	// seed is the key hash's seed; see writeSlots for where it is stored.
-	seed     uint64
+	mph      *bbhash
+	slots    *MmapFile
+	count    uint64
 	slotW    uint64
 	posW     uint8
 	hasSlots bool
@@ -56,11 +54,15 @@ func OpenMPHF(outDir string) (*MPHF, error) {
 	if err := m.readSlotsHeader(); err != nil {
 		return nil, errors.Join(err, slots.Close())
 	}
+	if mph.count != m.count {
+		return nil, errors.Join(fmt.Errorf("%w: %s holds %d keys, %s %d slots",
+			ErrSizeMismatch, MPHFile, mph.count, MPHFSlotsFile, m.count), slots.Close())
+	}
 
 	return m, nil
 }
 
-// readSlotsHeader validates mph_slots.bin and reads its layout and seed.
+// readSlotsHeader validates mph_slots.bin and reads its layout.
 func (m *MPHF) readSlotsHeader() error {
 	data := m.slots.Data()
 	if len(data) < mphfSlotsDataOff {
@@ -82,10 +84,9 @@ func (m *MPHF) readSlotsHeader() error {
 	}
 	m.count, m.slotW = header.Count, uint64(header.Width)
 	end := uint64(mphfSlotsDataOff) + m.count*m.slotW
-	if uint64(len(data)) < end+mphfSeedBytes+mphfSlotsTailPad {
-		return fmt.Errorf("read MPHF seed: %w", ErrFileTooSmall)
+	if uint64(len(data)) < end+mphfSlotsTailPad {
+		return fmt.Errorf("MPHF slots: %w", ErrFileTooSmall)
 	}
-	m.seed = binary.LittleEndian.Uint64(data[end:])
 
 	return nil
 }
@@ -106,13 +107,39 @@ func (m *MPHF) Lookup(prefix string) (uint64, bool) {
 	if m.count == 0 {
 		return 0, false
 	}
-	slot, ok := m.mph.find(hashString(prefix, m.seed))
-	if !ok || slot >= m.count {
+	key := hashString(prefix)
+	slot, ok := m.mph.find(key)
+	if !ok {
+		if len(m.mph.fallback) == 0 {
+			return 0, false
+		}
+
+		return m.lookupFallback(prefix, key)
+	}
+
+	return m.slotPosition(slot, computeFingerprint(prefix))
+}
+
+// lookupFallback resolves a key the levels miss through the fallback
+// table, which is empty in almost every index.
+func (m *MPHF) lookupFallback(prefix string, key uint64) (uint64, bool) {
+	fp := computeFingerprint(prefix)
+	slot, ok := m.mph.findFallback(key, fp)
+	if !ok {
+		return 0, false
+	}
+
+	return m.slotPosition(slot, fp)
+}
+
+// slotPosition returns the position in slot if its fingerprint is fp.
+func (m *MPHF) slotPosition(slot, fp uint64) (uint64, bool) {
+	if slot >= m.count {
 		return 0, false
 	}
 	data := m.slots.Data()
 	off := mphfSlotsDataOff + slot*m.slotW
-	if binary.LittleEndian.Uint64(data[off:]) != computeFingerprint(prefix) {
+	if binary.LittleEndian.Uint64(data[off:]) != fp {
 		return 0, false
 	}
 
@@ -124,16 +151,14 @@ func (m *MPHF) Count() uint64 {
 	return m.count
 }
 
-// hashString is the MPHF key hash of s: wyhash with the index's key
-// seed (0 unless a collision forced a retry; see mphfSeed).
-func hashString(s string, seed uint64) uint64 {
-	return wyhash(s, seed)
+// hashString is the MPHF key hash of s: wyhash with seed 0.
+func hashString(s string) uint64 {
+	return wyhash(s, 0)
 }
 
-// fingerprintSeed seeds the slot fingerprint. It is fixed, so a key
-// seed retry never changes the fingerprint, and differs from every key
-// seed (a test pins this), so the fingerprint is independent of the
-// key hash that chose the slot.
+// fingerprintSeed seeds the slot fingerprint. It differs from the key
+// hash's seed, so the fingerprint is independent of the key hash that
+// chose the slot, and keys that share a key hash still differ in it.
 const fingerprintSeed = 0x6a09e667f3bcc909 // the first 64 bits of frac(sqrt(2))
 
 // computeFingerprint is the slot fingerprint of s.
