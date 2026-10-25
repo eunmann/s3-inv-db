@@ -41,7 +41,7 @@ script fails on a statistically significant (p < 0.05) regression beyond:
 |---|---|
 | `sec/op` | `BENCH_TIME_PCT` (default 5%) |
 | `B/op`, `allocs/op`, `disk_B` | `BENCH_MEM_PCT` (default 5%) |
-| `peak_heap_B` (sampled, so noisier) | `BENCH_HEAP_PCT` (default 15%) |
+| `peak_heap_B` (sampled, so noisier), `retained_heap_B`, `gc_scan_heap_B` | `BENCH_HEAP_PCT` (default 15%) |
 
 Exit status 1 is a regression. Exit status 2 means nothing was compared:
 a build or benchmark failed, a suite entry matched no benchmark on one
@@ -91,6 +91,10 @@ Data structures / query (`bench/suite/query.txt`):
 - `pkg/indexread` `BenchmarkGate*`: 100k lookups, prefix
   reconstructions or tier breakdowns, or 1k children + top-10 queries
   per op, over one 1M-object multi-tier index.
+- `pkg/indexread` `BenchmarkOpenManySegments`: `Open` of an index with
+  500k distinct path segments; reports what the open index holds on the
+  Go heap after a GC (`retained_heap_B`) and how much of the heap the
+  collector scans (`gc_scan_heap_B`).
 - `internal/handlers` `BenchmarkGate*`: one browse or compare API
   request over a prefix with 200k children, sorted by name, size or
   cost (cost prices every child's tier mix).
