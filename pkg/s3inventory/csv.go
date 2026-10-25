@@ -30,8 +30,39 @@ type Reader interface {
 	// Returns io.EOF when all rows have been read.
 	Next() (Row, error)
 
+	// Anomalies counts the rows read so far that could not be turned
+	// into an exact inventory row.
+	Anomalies() Anomalies
+
 	// Close releases resources associated with the reader.
 	Close() error
+}
+
+// Anomalies counts inventory rows a reader could not read exactly. A
+// build that indexes them would report numbers that differ from a
+// direct scan of the inventory, so the pipeline fails on any of them
+// unless told to accept them.
+type Anomalies struct {
+	// ShortRows: CSV rows without the key or size column. Skipped.
+	ShortRows uint64
+	// MissingKeys: rows whose key is empty (CSV) or null (Parquet). Skipped.
+	MissingKeys uint64
+	// BadSizes: sizes that don't parse (CSV) or are null (Parquet).
+	// Indexed as 0.
+	BadSizes uint64
+	// UndecodableKeys: CSV keys that aren't valid URL encoding. Kept
+	// encoded, so their prefixes are wrong.
+	UndecodableKeys uint64
+}
+
+// Total is the number of anomalous rows.
+func (a Anomalies) Total() uint64 {
+	return a.ShortRows + a.MissingKeys + a.BadSizes + a.UndecodableKeys
+}
+
+func (a Anomalies) String() string {
+	return fmt.Sprintf("%d short rows, %d missing keys, %d bad sizes, %d undecodable keys",
+		a.ShortRows, a.MissingKeys, a.BadSizes, a.UndecodableKeys)
 }
 
 // CSVReader reads S3 inventory records from CSV streams.
@@ -43,8 +74,7 @@ type CSVReader struct {
 	storageCol      int
 	accessTierCol   int
 	deleteMarkerCol int
-	malformedRows   uint64
-	undecodableKeys uint64
+	anomalies       Anomalies
 }
 
 // CSVReaderConfig configures column indices for the CSV reader.
@@ -133,6 +163,8 @@ func (r *CSVReader) Next() (Row, error) {
 		}
 
 		if len(fields) <= r.keyCol || len(fields) <= r.sizeCol {
+			r.anomalies.ShortRows++
+
 			continue
 		}
 
@@ -142,13 +174,15 @@ func (r *CSVReader) Next() (Row, error) {
 
 		key := r.decodeKey(fields[r.keyCol])
 		if key == "" {
+			r.anomalies.MissingKeys++
+
 			continue
 		}
 
 		sizeStr := strings.TrimSpace(fields[r.sizeCol])
 		size, err := strconv.ParseUint(sizeStr, 10, 64)
 		if err != nil {
-			r.malformedRows++
+			r.anomalies.BadSizes++
 			logging.L().Debug().
 				Str("key", key).
 				Str("size_field", sizeStr).
@@ -185,7 +219,7 @@ func (r *CSVReader) decodeKey(raw string) string {
 	}
 	key, err := url.QueryUnescape(raw)
 	if err != nil {
-		r.undecodableKeys++
+		r.anomalies.UndecodableKeys++
 
 		return raw
 	}
@@ -198,16 +232,8 @@ func isTrue(field string) bool {
 	return strings.EqualFold(strings.TrimSpace(field), "true")
 }
 
-// UndecodableKeyCount returns the number of keys that were not valid URL
-// encoding and were kept verbatim.
-func (r *CSVReader) UndecodableKeyCount() uint64 {
-	return r.undecodableKeys
-}
-
-// MalformedRowCount returns the number of rows whose size field failed to parse.
-func (r *CSVReader) MalformedRowCount() uint64 {
-	return r.malformedRows
-}
+// Anomalies counts the rows read so far that could not be read exactly.
+func (r *CSVReader) Anomalies() Anomalies { return r.anomalies }
 
 // Close releases resources.
 func (r *CSVReader) Close() error {

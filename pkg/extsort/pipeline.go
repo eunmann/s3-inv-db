@@ -370,9 +370,14 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 		Int("ingest_workers", numWorkers).
 		Msg("ingest worker count derived from NumCPU")
 
+	format, err := manifest.DetectFormat()
+	if err != nil {
+		return nil, fmt.Errorf("inventory format: %w", err)
+	}
+
 	return &ingestConfig{
 		manifest:        manifest,
-		format:          manifest.DetectFormat(),
+		format:          format,
 		destBucket:      destBucket,
 		keyCol:          keyCol,
 		sizeCol:         sizeCol,
@@ -662,6 +667,12 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 	if err != nil {
 		return fmt.Errorf("download object: %w", err)
 	}
+	if job.config.fileSize > 0 && dlResult.BytesDownloaded != job.config.fileSize {
+		_ = body.Close()
+
+		return fmt.Errorf("%w: %s is %d bytes, the manifest says %d",
+			ErrChunkSizeMismatch, job.key, dlResult.BytesDownloaded, job.config.fileSize)
+	}
 
 	parseStart := time.Now()
 	var (
@@ -713,9 +724,6 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 		if err != nil {
 			return fmt.Errorf("read inventory row: %w", err)
 		}
-		if row.Key == "" {
-			continue
-		}
 		tierID := tiers.Resolve(job.config.tierMapping.FromS3(row.StorageClass, row.AccessTier), row.Size)
 		agg.AddObject(row.Key, row.Size, tierID)
 		rowsParsed++
@@ -728,12 +736,14 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, job chunkJob, 
 		}
 	}
 
-	if csvReader != nil && (csvReader.UndecodableKeyCount() > 0 || csvReader.MalformedRowCount() > 0) {
+	if a := reader.Anomalies(); a.Total() > 0 {
+		if !p.config.AllowAnomalies {
+			return fmt.Errorf("%w in %s: %s", ErrInventoryAnomalies, job.key, a)
+		}
 		log.Warn().
 			Str("chunk", job.key).
-			Uint64("undecodable_keys", csvReader.UndecodableKeyCount()).
-			Uint64("malformed_sizes", csvReader.MalformedRowCount()).
-			Msg("inventory chunk: keys kept URL-encoded or sizes indexed as 0")
+			Stringer("anomalies", a).
+			Msg("inventory chunk: anomalous rows accepted (AllowAnomalies); totals differ from a direct scan")
 	}
 
 	p.objectsProcessed.Add(rowsParsed)
