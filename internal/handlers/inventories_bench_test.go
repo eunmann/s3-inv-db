@@ -17,7 +17,7 @@ import (
 // per-run lookups dominate it.
 func BenchmarkInventoriesPage(b *testing.B) {
 	const configs, runs = 200, 10
-	var list []inventory.Inventory
+	list := make([]inventory.Inventory, 0, configs*runs)
 	for c := range configs {
 		for r := range runs {
 			run := time.Date(2026, 1, 1+r, 3, 0, 0, 0, time.UTC).Format("2006-01-02T15-04Z")
@@ -33,7 +33,8 @@ func BenchmarkInventoriesPage(b *testing.B) {
 		handlers.WithDiscoverer(&fakeDiscoverer{listResp: list, bucket: "dst"}),
 		handlers.WithLoader(&fakeBuilder{}))
 	store := h.JobStoreForTest()
-	for i, inv := range list {
+	for i := range list {
+		inv := &list[i]
 		if err := mgr.Register(b.Context(), inv.CompositeID(), inv.Name, b.TempDir()); err != nil {
 			b.Fatal(err)
 		}

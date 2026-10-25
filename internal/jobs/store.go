@@ -138,7 +138,7 @@ func (s *Store) LatestForInventory(ctx context.Context, invID inventory.ID) (Job
 // in one query: what LatestForInventory returns, for all of them.
 func (s *Store) LatestByInventory(ctx context.Context) (map[inventory.ID]Job, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+` FROM (
-	    SELECT *, ROW_NUMBER() OVER (PARTITION BY inventory_id ORDER BY `+latestOrder+`) AS rn FROM jobs
+	    SELECT `+jobColumns+`, ROW_NUMBER() OVER (PARTITION BY inventory_id ORDER BY `+latestOrder+`) AS rn FROM jobs
 	) WHERE rn = 1`)
 	if err != nil {
 		return nil, fmt.Errorf("latest jobs: %w", err)
@@ -149,8 +149,8 @@ func (s *Store) LatestByInventory(ctx context.Context) (map[inventory.ID]Job, er
 		return nil, fmt.Errorf("latest jobs: %w", err)
 	}
 	out := make(map[inventory.ID]Job, len(js))
-	for _, j := range js {
-		out[j.InventoryID] = j
+	for i := range js {
+		out[js[i].InventoryID] = js[i]
 	}
 
 	return out, nil
