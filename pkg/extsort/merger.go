@@ -140,25 +140,21 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 		return nil, io.EOF
 	}
 
-	item := m.heap.pop()
-	result := item.row
-
-	if err := m.advanceReader(item.readerIdx); err != nil && !errors.Is(err, io.EOF) {
+	result, err := m.takeTop()
+	if err != nil {
 		m.err = err
 
 		return nil, err
 	}
-
 	for m.heap.Len() > 0 && m.heap.items[0].row.Prefix == result.Prefix {
-		dup := m.heap.pop()
-		result.Merge(dup.row)
-		m.free = append(m.free, dup.row)
-
-		if err := m.advanceReader(dup.readerIdx); err != nil && !errors.Is(err, io.EOF) {
+		dup, err := m.takeTop()
+		if err != nil {
 			m.err = err
 
 			return nil, err
 		}
+		result.Merge(dup)
+		m.free = append(m.free, dup)
 	}
 
 	m.last = result
@@ -166,15 +162,44 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 	return result, nil
 }
 
+// takeTop returns the heap's smallest row and puts its reader's next row
+// in its place with one sift down, instead of a pop's sift and a push's;
+// a finished reader's item is popped.
+func (m *MergeIterator) takeTop() (*PrefixRow, error) {
+	top := m.heap.items[0]
+	row := m.freeRow()
+	err := m.readers[top.readerIdx].ReadInto(row)
+	switch {
+	case err == nil:
+		m.heap.items[0].row = row
+		m.heap.siftDown(0)
+	case errors.Is(err, io.EOF):
+		m.free = append(m.free, row)
+		m.heap.pop()
+	default:
+		m.free = append(m.free, row)
+
+		return nil, fmt.Errorf("advance reader %d: %w", top.readerIdx, err)
+	}
+
+	return top.row, nil
+}
+
+// freeRow returns a row to read into: a recycled one when there is one.
+func (m *MergeIterator) freeRow() *PrefixRow {
+	if n := len(m.free); n > 0 {
+		row := m.free[n-1]
+		m.free = m.free[:n-1]
+
+		return row
+	}
+
+	return &PrefixRow{}
+}
+
 // advanceReader reads the next row from the given reader and pushes to heap.
 func (m *MergeIterator) advanceReader(idx int) error {
-	var row *PrefixRow
-	if n := len(m.free); n > 0 {
-		row = m.free[n-1]
-		m.free = m.free[:n-1]
-	} else {
-		row = &PrefixRow{}
-	}
+	row := m.freeRow()
 	if err := m.readers[idx].ReadInto(row); err != nil {
 		m.free = append(m.free, row)
 		if errors.Is(err, io.EOF) {

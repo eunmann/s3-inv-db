@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"runtime"
 	"slices"
 	"strings"
@@ -65,66 +66,141 @@ func (r *PrefixRow) Merge(other *PrefixRow) {
 	}
 }
 
-// recordLenBytes is the uint32 prefix-length header of a run record;
-// recordScratchMin is the smallest scratch buffer worth allocating.
-const (
-	recordLenBytes   = 4
-	recordScratchMin = 512
-)
+// A run record is the row in varints, its prefix front-coded against the
+// previous record of the same run:
+//
+//	shared    uvarint  bytes of the previous prefix this one starts with
+//	suffixLen uvarint
+//	suffix    suffixLen bytes
+//	depth     uvarint
+//	tierMask  uvarint  bit t set for each tier with a count or bytes;
+//	                   runRecordTotals set if the totals follow
+//	per set tier, ascending: count uvarint, bytes uvarint
+//	[count uvarint, bytes uvarint]  only with runRecordTotals
+//
+// Every object adds to its row's totals and to exactly one tier, so
+// Count and TotalBytes are the sums of the tier counts and bytes and are
+// not stored; a row where they differ stores them, so any row reads
+// back exactly.
 
-// readPrefixRowRecordInto reads one run record into row, keeping the
-// merge loop free of row allocations. Buf is scratch space, grown as
-// needed. Returns io.EOF when the source is exhausted.
-func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) error {
-	// The length is read into the reusable scratch buffer: a local array
-	// passed to an io.Reader escapes, one allocation per row.
-	if len(*buf) < recordLenBytes {
-		*buf = make([]byte, recordScratchMin)
-	}
-	lenBuf := (*buf)[:recordLenBytes]
-	if _, err := io.ReadFull(reader, lenBuf); err != nil {
-		if errors.Is(err, io.EOF) {
-			return io.EOF
+// runRecordTotals is the tier-mask flag of a record that stores its
+// totals.
+const runRecordTotals = 1 << 15
+
+// errRunRecordCorrupt means a run record cannot be decoded.
+var errRunRecordCorrupt = errors.New("corrupt run record")
+
+// encodeRunRecord appends row's record, front-coded against prev, to dst.
+func encodeRunRecord(dst []byte, prev string, row *PrefixRow) []byte {
+	var count, bytes uint64
+	var mask uint64
+	for t := range MaxTiers {
+		count += row.TierCounts[t]
+		bytes += row.TierBytes[t]
+		if row.TierCounts[t]|row.TierBytes[t] != 0 {
+			mask |= 1 << t
 		}
-
-		return fmt.Errorf("read prefix length: %w", err)
 	}
-	prefixLen := int(binary.LittleEndian.Uint32(lenBuf))
-
-	fixedSize := 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
-	recordSize := prefixLen + fixedSize
-
-	if len(*buf) < recordSize {
-		*buf = make([]byte, recordSize*2)
+	explicit := count != row.Count || bytes != row.TotalBytes
+	if explicit {
+		mask |= runRecordTotals
+	}
+	shared := 0
+	for n := min(len(prev), len(row.Prefix)); shared < n && prev[shared] == row.Prefix[shared]; {
+		shared++
+	}
+	dst = binary.AppendUvarint(dst, uint64(shared))
+	dst = binary.AppendUvarint(dst, uint64(len(row.Prefix)-shared))
+	dst = append(dst, row.Prefix[shared:]...)
+	dst = binary.AppendUvarint(dst, uint64(row.Depth))
+	dst = binary.AppendUvarint(dst, mask)
+	for t := range MaxTiers {
+		if mask&(1<<t) != 0 {
+			dst = binary.AppendUvarint(dst, row.TierCounts[t])
+			dst = binary.AppendUvarint(dst, row.TierBytes[t])
+		}
+	}
+	if explicit {
+		dst = binary.AppendUvarint(dst, row.Count)
+		dst = binary.AppendUvarint(dst, row.TotalBytes)
 	}
 
-	if _, err := io.ReadFull(reader, (*buf)[:recordSize]); err != nil {
-		return fmt.Errorf("read record: %w", err)
-	}
+	return dst
+}
 
+// runRecordSource is what records are read from: a buffered stream.
+type runRecordSource interface {
+	io.Reader
+	io.ByteReader
+}
+
+// decodeRunRecord reads the next record, front-coded against prev, into
+// row, keeping the merge loop free of row allocations besides the
+// prefix string. Buf is scratch space for the suffix, grown as needed.
+// Returns io.EOF when the source ends before a record.
+func decodeRunRecord(r runRecordSource, prev string, buf *[]byte, row *PrefixRow) error {
+	shared, err := binary.ReadUvarint(r)
+	if errors.Is(err, io.EOF) {
+		return io.EOF
+	}
+	if err != nil {
+		return fmt.Errorf("read run record: %w", err)
+	}
+	suffixLen, err := binary.ReadUvarint(r)
+	if err != nil {
+		return fmt.Errorf("%w: suffix length: %w", errRunRecordCorrupt, err)
+	}
+	if shared > uint64(len(prev)) || suffixLen > math.MaxInt32 {
+		return fmt.Errorf("%w: %d shared of %d bytes, suffix %d", errRunRecordCorrupt, shared, len(prev), suffixLen)
+	}
+	if uint64(cap(*buf)) < suffixLen {
+		*buf = make([]byte, suffixLen)
+	}
+	suffix := (*buf)[:suffixLen]
+	if _, err := io.ReadFull(r, suffix); err != nil {
+		return fmt.Errorf("%w: suffix: %w", errRunRecordCorrupt, err)
+	}
 	row.Reset()
-	offset := 0
-
-	row.Prefix = string((*buf)[offset : offset+prefixLen])
-	offset += prefixLen
-
-	row.Depth = binary.LittleEndian.Uint16((*buf)[offset:])
-	offset += 2
-
-	row.Count = binary.LittleEndian.Uint64((*buf)[offset:])
-	offset += 8
-
-	row.TotalBytes = binary.LittleEndian.Uint64((*buf)[offset:])
-	offset += 8
-
-	for i := range MaxTiers {
-		row.TierCounts[i] = binary.LittleEndian.Uint64((*buf)[offset:])
-		offset += 8
+	var prefix strings.Builder
+	prefix.Grow(int(shared) + len(suffix))
+	prefix.WriteString(prev[:shared])
+	prefix.Write(suffix)
+	row.Prefix = prefix.String()
+	depth, err := binary.ReadUvarint(r)
+	if err != nil {
+		return fmt.Errorf("%w: depth: %w", errRunRecordCorrupt, err)
 	}
-
-	for i := range MaxTiers {
-		row.TierBytes[i] = binary.LittleEndian.Uint64((*buf)[offset:])
-		offset += 8
+	if depth > math.MaxUint16 {
+		return fmt.Errorf("%w: depth %d", errRunRecordCorrupt, depth)
+	}
+	row.Depth = uint16(depth)
+	mask, err := binary.ReadUvarint(r)
+	if err != nil {
+		return fmt.Errorf("%w: tier mask: %w", errRunRecordCorrupt, err)
+	}
+	if mask&^(1<<MaxTiers-1|runRecordTotals) != 0 {
+		return fmt.Errorf("%w: tier mask %#x", errRunRecordCorrupt, mask)
+	}
+	for t := range MaxTiers {
+		if mask&(1<<t) == 0 {
+			continue
+		}
+		if row.TierCounts[t], err = binary.ReadUvarint(r); err != nil {
+			return fmt.Errorf("%w: tier %d count: %w", errRunRecordCorrupt, t, err)
+		}
+		if row.TierBytes[t], err = binary.ReadUvarint(r); err != nil {
+			return fmt.Errorf("%w: tier %d bytes: %w", errRunRecordCorrupt, t, err)
+		}
+		row.Count += row.TierCounts[t]
+		row.TotalBytes += row.TierBytes[t]
+	}
+	if mask&runRecordTotals != 0 {
+		if row.Count, err = binary.ReadUvarint(r); err != nil {
+			return fmt.Errorf("%w: count: %w", errRunRecordCorrupt, err)
+		}
+		if row.TotalBytes, err = binary.ReadUvarint(r); err != nil {
+			return fmt.Errorf("%w: bytes: %w", errRunRecordCorrupt, err)
+		}
 	}
 
 	return nil
@@ -133,50 +209,36 @@ func readPrefixRowRecordInto(reader io.Reader, buf *[]byte, row *PrefixRow) erro
 // SortPrefixRows sorts a slice of PrefixRows by prefix in lexicographic order.
 // This is used to prepare rows for the streaming index builder.
 func SortPrefixRows(rows []*PrefixRow) {
-	slices.SortFunc(rows, func(a, b *PrefixRow) int {
-		return strings.Compare(a.Prefix, b.Prefix)
-	})
+	sortPrefixRows(rows, nil)
 }
 
-// encodePrefixRowRecord serialises one PrefixRow into buf using the
-// shared on-the-wire layout (length-prefixed string + fixed fields +
-// tier arrays). The caller passes &buf so the slice can be grown
-// in place across many calls; the encoded byte length is returned so
-// callers can track uncompressed size or pass a partial slice to
-// the underlying writer.
-func encodePrefixRowRecord(buf *[]byte, row *PrefixRow) int {
-	prefixLen := len(row.Prefix)
-	recordSize := 4 + prefixLen + 2 + 8 + 8 + MaxTiers*8 + MaxTiers*8
-	if len(*buf) < recordSize {
-		*buf = make([]byte, recordSize*2)
+// sortPrefixRows sorts rows by prefix through (prefix, row) pairs in
+// scratch, grown as needed and returned for reuse: comparing through
+// the row pointers would load a row from scattered slab memory for
+// every comparison. The returned scratch holds no references.
+func sortPrefixRows(rows []*PrefixRow, scratch []keyedRow) []keyedRow {
+	if cap(scratch) < len(rows) {
+		scratch = make([]keyedRow, len(rows))
 	}
-	b := *buf
-	offset := 0
-
-	binary.LittleEndian.PutUint32(b[offset:], uint32(prefixLen))
-	offset += 4
-	copy(b[offset:], row.Prefix)
-	offset += prefixLen
-
-	binary.LittleEndian.PutUint16(b[offset:], row.Depth)
-	offset += 2
-
-	binary.LittleEndian.PutUint64(b[offset:], row.Count)
-	offset += 8
-
-	binary.LittleEndian.PutUint64(b[offset:], row.TotalBytes)
-	offset += 8
-
-	for i := range MaxTiers {
-		binary.LittleEndian.PutUint64(b[offset:], row.TierCounts[i])
-		offset += 8
+	keyed := scratch[:len(rows)]
+	for i, r := range rows {
+		keyed[i] = keyedRow{prefix: r.Prefix, row: r}
 	}
-	for i := range MaxTiers {
-		binary.LittleEndian.PutUint64(b[offset:], row.TierBytes[i])
-		offset += 8
+	slices.SortFunc(keyed, func(a, b keyedRow) int {
+		return strings.Compare(a.prefix, b.prefix)
+	})
+	for i := range keyed {
+		rows[i] = keyed[i].row
 	}
+	clear(keyed)
 
-	return offset
+	return scratch[:0]
+}
+
+// keyedRow is a row with its prefix beside the pointer, for sorting.
+type keyedRow struct {
+	prefix string
+	row    *PrefixRow
 }
 
 // add accumulates one object into the row.
