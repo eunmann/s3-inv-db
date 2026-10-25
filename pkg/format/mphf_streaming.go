@@ -604,7 +604,7 @@ func mapScratchFile(dir, pattern string, size int) (scratchMapping, error) {
 		return scratchMapping{}, fmt.Errorf("create scratch: %w", err)
 	}
 	m := scratchMapping{path: f.Name()}
-	err = preallocate(f, int64(size))
+	err = preallocate(f, 0, int64(size))
 	if err == nil {
 		m.data, err = unix.Mmap(int(f.Fd()), 0, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
 	}

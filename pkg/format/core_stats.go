@@ -217,8 +217,8 @@ func (b *CoreStatsBuilder) grow(newSize int64) error {
 		}
 		b.data = nil
 	}
-	if err := b.file.Truncate(newSize); err != nil {
-		return fmt.Errorf("core stats truncate: %w", err)
+	if err := preallocate(b.file, b.size, newSize); err != nil {
+		return fmt.Errorf("core stats grow: %w", err)
 	}
 	data, err := unix.Mmap(int(b.file.Fd()), 0, int(newSize), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
 	if err != nil {
