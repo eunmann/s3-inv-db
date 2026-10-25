@@ -400,8 +400,12 @@ func (w *TierStatsWriter) writeMulti() error {
 	if err != nil {
 		return errors.Join(err, out.abort())
 	}
-	rowBits := make([]uint64, bitWords(w.rows))
-	var row, stored uint64
+	rowsPath := filepath.Join(w.dir, TierMultiRowsFile)
+	rowBits, err := newRankedBitsWriter(rowsPath)
+	if err != nil {
+		return errors.Join(err, out.abort(), offsets.abort())
+	}
+	var stored uint64
 	err = w.scratchRows(func(r []byte) error {
 		var mask uint16
 		for slot := range w.slots {
@@ -409,8 +413,11 @@ func (w *TierStatsWriter) writeMulti() error {
 				mask |= 1 << slot
 			}
 		}
-		if bits.OnesCount16(mask) >= 2 {
-			rowBits[row/wordBits] |= 1 << (row % wordBits)
+		multi := bits.OnesCount16(mask) >= 2
+		if err := rowBits.add(multi); err != nil {
+			return err
+		}
+		if multi {
 			if err := offsets.put(stored); err != nil {
 				return err
 			}
@@ -424,7 +431,6 @@ func (w *TierStatsWriter) writeMulti() error {
 				stored++
 			}
 		}
-		row++
 
 		return nil
 	})
@@ -432,51 +438,10 @@ func (w *TierStatsWriter) writeMulti() error {
 		err = offsets.put(stored)
 	}
 	if err != nil {
-		return errors.Join(err, out.abort(), offsets.abort())
+		return errors.Join(err, out.abort(), offsets.abort(), rowBits.abort())
 	}
-	if err := errors.Join(out.close(), offsets.close()); err != nil {
-		return errors.Join(err, removeIfErr(slotsPath), removeIfErr(offsetsPath))
-	}
-	if err := writeRankedBits(filepath.Join(w.dir, TierMultiRowsFile), rowBits, w.rows); err != nil {
-		return errors.Join(err, removeIfErr(slotsPath), removeIfErr(offsetsPath))
-	}
-
-	return nil
-}
-
-// writeRankedBits writes a bit vector of n bits followed by its rank
-// directory: for every rankBlockWords words, the set bits before them.
-func writeRankedBits(path string, words []uint64, n uint64) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", filepath.Base(path), err)
-	}
-	bw := bufio.NewWriterSize(f, writeBufSize)
-	fail := func(err error) error {
-		return errors.Join(fmt.Errorf("write %s: %w", filepath.Base(path), err), f.Close(), removeIfErr(path))
-	}
-	if _, err := bw.Write(EncodeHeader(Header{Magic: MagicNumber, Version: Version, Count: n, Width: 8})); err != nil {
-		return fail(err)
-	}
-	for _, word := range words {
-		if err := putU64(bw, word); err != nil {
-			return fail(err)
-		}
-	}
-	var r uint64
-	for i, word := range words {
-		if i%rankBlockWords == 0 {
-			if err := putU64(bw, r); err != nil {
-				return fail(err)
-			}
-		}
-		r += uint64(bits.OnesCount64(word))
-	}
-	if err := bw.Flush(); err != nil {
-		return fail(err)
-	}
-	if err := f.Close(); err != nil {
-		return errors.Join(fmt.Errorf("close %s: %w", filepath.Base(path), err), removeIfErr(path))
+	if err := errors.Join(out.close(), offsets.close(), rowBits.close()); err != nil {
+		return errors.Join(err, removeIfErr(slotsPath), removeIfErr(offsetsPath), removeIfErr(rowsPath))
 	}
 
 	return nil
