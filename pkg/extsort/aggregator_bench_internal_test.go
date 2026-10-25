@@ -2,7 +2,9 @@ package extsort
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/benchutil"
@@ -32,7 +34,22 @@ func BenchmarkAggregator_AddObject(b *testing.B) {
 	}
 	for _, c := range cases {
 		b.Run(fmt.Sprintf("n=%d/depth=%d", c.n, c.depth), func(b *testing.B) {
-			runAggregatorAddBench(b, c.n, c.depth)
+			runAggregatorAddBench(b, generateBenchKeys(c.n, c.depth))
+		})
+		// The same keys in order, as S3 Inventory lists them.
+		b.Run(fmt.Sprintf("n=%d/depth=%d/sorted", c.n, c.depth), func(b *testing.B) {
+			keys := generateBenchKeys(c.n, c.depth)
+			slices.Sort(keys)
+			runAggregatorAddBench(b, keys)
+		})
+	}
+	// 100 objects per deepest directory, in key order: most objects
+	// add to prefixes that already exist, as in real inventories.
+	for _, depth := range []int{4, 8} {
+		b.Run(fmt.Sprintf("n=1000000/depth=%d/dense/sorted", depth), func(b *testing.B) {
+			keys := generateDenseKeys(1_000_000, depth, 100)
+			slices.Sort(keys)
+			runAggregatorAddBench(b, keys)
 		})
 	}
 
@@ -46,16 +63,15 @@ func BenchmarkAggregator_AddObject(b *testing.B) {
 		}
 		for _, c := range long {
 			b.Run(fmt.Sprintf("n=%d/depth=%d", c.n, c.depth), func(b *testing.B) {
-				runAggregatorAddBench(b, c.n, c.depth)
+				runAggregatorAddBench(b, generateBenchKeys(c.n, c.depth))
 			})
 		}
 	}
 }
 
-func runAggregatorAddBench(b *testing.B, n, depth int) {
+func runAggregatorAddBench(b *testing.B, keys []string) {
 	b.Helper()
 	b.ReportAllocs()
-	keys := generateBenchKeys(n, depth)
 	b.ResetTimer()
 	for range b.N {
 		agg := NewAggregator(0, 0)
@@ -70,22 +86,33 @@ func runAggregatorAddBench(b *testing.B, n, depth int) {
 // depth. Keeps fanout per level small so the aggregator's distinct
 // prefix count stays in a realistic ratio (~5-10% of object count).
 func generateBenchKeys(n, depth int) []string {
-	const fanout = 64
 	keys := make([]string, n)
 	for i := range n {
-		var k string
-		v := i
-		for d := range depth {
-			seg := strconv.Itoa(v % fanout)
-			if d == 0 {
-				k = seg
-			} else {
-				k = k + "/" + seg
-			}
-			v /= fanout
-		}
-		k += "/file" + strconv.Itoa(i)
-		keys[i] = k
+		keys[i] = benchDir(i, depth) + "/file" + strconv.Itoa(i)
+	}
+
+	return keys
+}
+
+// benchDir is generateBenchKeys' directory for index i: depth segments,
+// the first varying fastest.
+func benchDir(i, depth int) string {
+	const fanout = 64
+	segs := make([]string, depth)
+	for d := range depth {
+		segs[d] = strconv.Itoa(i % fanout)
+		i /= fanout
+	}
+
+	return strings.Join(segs, "/")
+}
+
+// generateDenseKeys is generateBenchKeys with perDir objects in each
+// deepest directory.
+func generateDenseKeys(n, depth, perDir int) []string {
+	keys := make([]string, n)
+	for i := range n {
+		keys[i] = benchDir(i/perDir, depth) + "/obj" + strconv.Itoa(i)
 	}
 
 	return keys
