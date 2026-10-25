@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"testing"
 
@@ -50,6 +51,9 @@ func benchFinalMerge(b *testing.B, runs int, limit int64, heavy bool) {
 		b.StopTimer()
 		dir := b.TempDir()
 		paths := writeOverlappingRuns(b, dir, runs, rowsPerRun, heavy)
+		// Collect the run writers' garbage first, so the peak is the
+		// merge's own and not whatever the GC had yet to free.
+		runtime.GC()
 		b.StartTimer()
 
 		sampler := benchutil.StartHeapPeakSampler()
