@@ -37,8 +37,8 @@ fmt.Printf("%d objects, %d bytes\n", stats.ObjectCount, stats.TotalBytes)
   `ChildSegment` (the last segment of the prefix at a position, without
   the trailing slash, for listing labels without building the full
   string).
-- **Tree navigation**: `Depth`, `SubtreeEnd`, `MaxDepthInSubtree`,
-  `Count`, `MaxDepth`.
+- **Tree navigation**: `Depth`, `SubtreeEnd`, `HasChildren`, `Count`,
+  `MaxDepth`.
 - **Descendants**: `DescendantsAtDepth`, `DescendantsAtDepthFiltered`
   (apply a `Filter{MinCount, MinBytes}` to skip cheap nodes before
   materialising positions), `DescendantsPage` (one `[offset,
