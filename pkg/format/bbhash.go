@@ -94,6 +94,8 @@ type keyBuffer func(n int) ([]uint64, func() error, error)
 
 // heapKeys is the keyBuffer of a build that keeps every level's keys on
 // the heap.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
 func heapKeys(n int) ([]uint64, func() error, error) {
 	return make([]uint64, n), func() error { return nil }, nil
 }
@@ -101,12 +103,22 @@ func heapKeys(n int) ([]uint64, func() error, error) {
 // newBBHashWith is newBBHash taking each level's colliding keys from
 // keyBuf, so a large build can keep them off the heap; a level's keys
 // are released once the next level is built.
-func newBBHashWith(keys []uint64, keyBuf keyBuffer, fallback func(leftovers []uint64) ([]bbFallback, error)) (h *bbhash, err error) {
+func newBBHashWith(keys []uint64, keyBuf keyBuffer, fallback func(leftovers []uint64) ([]bbFallback, error)) (*bbhash, error) {
 	release := func() error { return nil }
-	defer func() { err = errors.Join(err, release()) }()
+	h, buildErr := buildBBHashLevels(keys, keyBuf, fallback, &release)
+	if err := errors.Join(buildErr, release()); err != nil {
+		return nil, err
+	}
+
+	return h, nil
+}
+
+// buildBBHashLevels builds the levels and the fallback; *release frees
+// the keys of the level built last, which the caller releases.
+func buildBBHashLevels(keys []uint64, keyBuf keyBuffer, fallback func(leftovers []uint64) ([]bbFallback, error), release *func() error) (*bbhash, error) {
 	firstWords := levelWords(len(keys))
 	// The levels after the first hold ~65% as many bits again.
-	h = &bbhash{bits: make([]uint64, 0, firstWords*7/4+maxBBHashLevels)}
+	h := &bbhash{bits: make([]uint64, 0, firstWords*7/4+maxBBHashLevels)}
 	for level := 0; len(keys) > 0 && level < maxBBHashLevels; level++ {
 		words := levelWords(len(keys))
 		set, collided := make([]uint64, words), make([]uint64, words)
@@ -115,10 +127,10 @@ func newBBHashWith(keys []uint64, keyBuf keyBuffer, fallback func(leftovers []ui
 		if err != nil {
 			return nil, err
 		}
-		if err := release(); err != nil {
+		if err := (*release)(); err != nil {
 			return nil, errors.Join(err, nextRelease())
 		}
-		release = nextRelease
+		*release = nextRelease
 		placedAny := len(next) < len(keys)
 		keys = next
 		if !placedAny {
@@ -173,6 +185,8 @@ func markLevel(keys []uint64, level int, set, collided []uint64) {
 
 // collidedKeys returns the keys whose bit collided, in input order:
 // one pass counts each chunk's share, a second copies into place.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
 func collidedKeys(keys []uint64, level int, words uint64, collided []uint64, keyBuf keyBuffer) ([]uint64, func() error, error) {
 	isCollided := func(k uint64) bool {
 		i := bbPosition(k, level, words)

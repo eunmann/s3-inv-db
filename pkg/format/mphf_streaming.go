@@ -198,6 +198,8 @@ const scratchKeysMinBytes = 1 << 20
 // a level (~39% of the level's) go to an mmapped scratch file in the
 // build's temp dir, so the build's heap doesn't grow with the prefix
 // count; small levels stay on the heap.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
 func (b *StreamingMPHFBuilder) scratchKeys(n int) ([]uint64, func() error, error) {
 	if n*8 < scratchKeysMinBytes {
 		return heapKeys(n)
@@ -472,7 +474,7 @@ func writeSlotRange(f *os.File, owners *slotOwners, fps []uint64, posW, start, e
 			binary.LittleEndian.PutUint64(buf[off:], fps[i])
 			// An 8-byte store, overwritten by the next slot: only posW
 			// bytes are the slot's.
-			binary.LittleEndian.PutUint64(buf[off+mphfFingerprintBytes:], uint64(i))
+			binary.LittleEndian.PutUint64(buf[off+mphfFingerprintBytes:], i)
 		}
 		blen := (cEnd - chunk) * slotW
 		fileOff := int64(mphfSlotsDataOff) + int64(chunk)*int64(slotW)
