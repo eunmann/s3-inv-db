@@ -164,9 +164,12 @@ func (d *Downloader) Config() DownloaderConfig {
 // temp file that is removed on Close. Supports streaming (Read),
 // random access (ReadAt), and length (Size) so callers can choose the
 // access pattern that fits their parser (e.g. Parquet needs ReadAt).
+// Close is idempotent, so the owner can always close it even after a
+// reader that took it closed it too.
 type DownloadedObject struct {
-	file *os.File
-	path string
+	file   *os.File
+	path   string
+	closed bool
 }
 
 func (d *DownloadedObject) Read(p []byte) (int, error) {
@@ -183,6 +186,10 @@ func (d *DownloadedObject) Read(p []byte) (int, error) {
 }
 
 func (d *DownloadedObject) Close() error {
+	if d.closed {
+		return nil
+	}
+	d.closed = true
 	var errs []error
 	if err := d.file.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("close temp file: %w", err))

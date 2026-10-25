@@ -75,6 +75,9 @@ func TestDownloadedObject(t *testing.T) {
 		if _, err := os.Stat(testPath); !os.IsNotExist(err) {
 			t.Error("file should have been deleted on close")
 		}
+		if err := reader.Close(); err != nil {
+			t.Errorf("second close: %v, want a no-op", err)
+		}
 	})
 
 	if err := os.WriteFile(testPath, testData, 0o600); err != nil {
