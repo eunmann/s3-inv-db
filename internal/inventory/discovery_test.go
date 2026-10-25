@@ -3,6 +3,7 @@ package inventory_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -399,19 +400,73 @@ func TestDiscoveryService_Start_PerformsInitialRefresh(t *testing.T) {
 	s := inventory.NewDiscovery(mgr, inventory.WithBackend(disc, &fakeBuilder{}))
 
 	// Long interval — the test only asserts that Start() warms the
-	// cache before returning, so background ticks shouldn't fire.
+	// cache at once, so background ticks shouldn't fire.
 	s.Start(t.Context(), time.Hour, nil)
 	t.Cleanup(s.Stop)
 
-	if got := disc.listCalls.Load(); got != 1 {
-		t.Errorf("listCalls after Start = %d, want 1 (initial refresh)", got)
-	}
+	waitForListCalls(t, disc, 1)
 	views, _, err := s.Snapshot(t.Context())
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	if len(views) != 1 {
 		t.Errorf("snapshot len = %d, want 1", len(views))
+	}
+	if got := disc.listCalls.Load(); got != 1 {
+		t.Errorf("listCalls = %d, want 1 (Snapshot reuses the initial refresh)", got)
+	}
+}
+
+// waitForListCalls waits until the discoverer has been listed n times.
+func waitForListCalls(t *testing.T, disc *fakeDiscoverer, n int64) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for disc.listCalls.Load() < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("listCalls = %d, want %d", disc.listCalls.Load(), n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// TestDiscoveryService_Start_DoesNotWaitForS3: Start returns while the
+// first walk is still running, so the server can listen meanwhile; a
+// Snapshot taken during that walk waits for it rather than walking again.
+func TestDiscoveryService_Start_DoesNotWaitForS3(t *testing.T) {
+	mgr := inventory.NewCatalog(nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+	gate := make(chan struct{})
+	disc := &fakeDiscoverer{listGate: gate, listResp: []inventory.Inventory{{SourceBucket: "b", Name: "i"}}}
+	s := inventory.NewDiscovery(mgr, inventory.WithBackend(disc, &fakeBuilder{}))
+
+	started := make(chan struct{})
+	go func() {
+		s.Start(t.Context(), time.Hour, nil)
+		close(started)
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start blocked on the first discovery walk")
+	}
+	t.Cleanup(s.Stop)
+	waitForListCalls(t, disc, 1)
+
+	got := make(chan int, 1)
+	go func() {
+		views, _, err := s.Snapshot(t.Context())
+		if err != nil {
+			t.Error(err)
+		}
+		got <- len(views)
+	}()
+	time.Sleep(20 * time.Millisecond) // the Snapshot joins the walk in flight
+	close(gate)
+	if n := <-got; n != 1 {
+		t.Fatalf("snapshot len = %d, want 1", n)
+	}
+	if calls := disc.listCalls.Load(); calls != 1 {
+		t.Fatalf("listCalls = %d, want 1", calls)
 	}
 }
 
@@ -426,6 +481,8 @@ func TestDiscoveryService_Start_DoubleStartIsNoop(t *testing.T) {
 	// Second Start with an active background loop must not launch a
 	// second goroutine — listCalls should still be 1 after.
 	s.Start(t.Context(), time.Hour, nil)
+	waitForListCalls(t, disc, 1)
+	time.Sleep(20 * time.Millisecond) // a second loop would list by now
 	if got := disc.listCalls.Load(); got != 1 {
 		t.Errorf("listCalls after double Start = %d, want 1", got)
 	}
@@ -539,5 +596,41 @@ func TestDiscovery_FindServesOnlyDescribedRunsFromSnapshot(t *testing.T) {
 		if err != nil || got.FileCount != 7 || fake.findCalls.Load() != before+1 {
 			t.Errorf("run %s: got %+v err %v, want one lookup returning its stats", run.Run, got, err)
 		}
+	}
+}
+
+// TestDiscovery_LoadSizesFromDiscoveredManifest: a run whose manifest
+// discovery already read is sized from it; only a run without one asks
+// the sizer, which fetches the manifest.
+func TestDiscovery_LoadSizesFromDiscoveredManifest(t *testing.T) {
+	mgr := inventory.NewCatalog(nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+	var sizerCalls atomic.Int64
+	var estimates []uint64
+	gate := func(_ context.Context, _ inventory.ID, _ inventory.BuildFunc, opts inventory.GatedLoadOptions) error {
+		estimates = append(estimates, opts.EstimateBytes)
+
+		return nil
+	}
+	sizer := func(context.Context, string, string) (uint64, error) {
+		sizerCalls.Add(1)
+
+		return 1000, nil
+	}
+	d := inventory.NewDiscovery(mgr,
+		inventory.WithBackend(&fakeDiscoverer{bucket: "dst"}, &fakeBuilder{}),
+		inventory.WithGate(gate, sizer, 2))
+	described := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "2026-01-01T00-00Z", ManifestKey: "k1", FileFormat: "CSV", TotalBytes: 300}
+	bare := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "2026-01-02T00-00Z", ManifestKey: "k2"}
+	for _, disc := range []inventory.Inventory{described, bare} {
+		if err := d.Load(t.Context(), disc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := sizerCalls.Load(); n != 1 {
+		t.Fatalf("sizer called %d times, want 1 (only the run without a read manifest)", n)
+	}
+	if want := []uint64{600, 2000}; !slices.Equal(estimates, want) {
+		t.Fatalf("estimates %v, want %v", estimates, want)
 	}
 }
