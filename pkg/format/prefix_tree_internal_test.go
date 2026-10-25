@@ -219,7 +219,7 @@ func TestPrefixTreeAddDoesNotAllocate(t *testing.T) {
 		t.Fatal(err)
 	}
 	buf := []byte("seg/")
-	name := unsafe.String(&buf[0], 3) // aliases a reused buffer, as rows do
+	name := unsafe.String(&buf[0], 3) // defensive: Add must accept a name over a reused buffer
 	if allocs := testing.AllocsPerRun(1000, func() { _ = w.Add(0, name) }); allocs != 0 {
 		t.Errorf("Add of a known segment allocates %v times", allocs)
 	}
