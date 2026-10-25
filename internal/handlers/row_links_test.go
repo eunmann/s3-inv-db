@@ -52,33 +52,50 @@ func wantHxVals(t *testing.T, m map[string]string) string {
 	return string(b)
 }
 
-func TestBrowsePartial_RowLinksEscapeEveryLayer(t *testing.T) {
+func TestBrowse_RowLinksEscapeEveryLayer(t *testing.T) {
 	mgr := loadCostIndex(t, linkFromID, linkObjs)
 	h := newWiredHandlers(t, mgr)
-	w := httptest.NewRecorder()
-	h.BrowsePage(w, newHXRequest(t, http.MethodGet, "/browse?inventory_id="+url.QueryEscape(string(linkFromID))))
-	if w.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	target := "/browse?inventory_id=" + url.QueryEscape(string(linkFromID))
+	requests := map[string]func(t *testing.T) *http.Request{
+		"partial": func(t *testing.T) *http.Request {
+			t.Helper()
+
+			return newHXRequest(t, http.MethodGet, target)
+		},
+		"full page": func(t *testing.T) *http.Request {
+			t.Helper()
+
+			return httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
+		},
 	}
-	links := rowLinks(t, w.Body.String(), "/browse")
-	if _, ok := links["leaf"]; ok || len(links) != 3 {
-		t.Fatalf("linked rows = %d (leaf linked: %v), want the 3 with children", len(links), ok)
-	}
-	for _, o := range linkObjs[:3] {
-		seg, _, _ := strings.Cut(o.key, "/")
-		s, ok := links[seg]
-		if !ok {
-			t.Fatalf("no link for %q", seg)
-		}
-		prefix := seg + "/"
-		wantHref := "/browse?" + url.Values{"inventory_id": {string(linkFromID)}, "prefix": {prefix}}.Encode()
-		if got, _ := s.Attr("href"); got != wantHref {
-			t.Errorf("%q href\n got %q\nwant %q", seg, got, wantHref)
-		}
-		want := wantHxVals(t, map[string]string{"inventory_id": string(linkFromID), "prefix": prefix})
-		if got, _ := s.Attr("hx-vals"); got != want {
-			t.Errorf("%q hx-vals\n got %q\nwant %q", seg, got, want)
-		}
+	for name, newReq := range requests {
+		t.Run(name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			h.BrowsePage(w, newReq(t))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status %d: %s", w.Code, w.Body.String())
+			}
+			links := rowLinks(t, w.Body.String(), "/browse")
+			if _, ok := links["leaf"]; ok || len(links) != 3 {
+				t.Fatalf("linked rows = %d (leaf linked: %v), want the 3 with children", len(links), ok)
+			}
+			for _, o := range linkObjs[:3] {
+				seg, _, _ := strings.Cut(o.key, "/")
+				s, ok := links[seg]
+				if !ok {
+					t.Fatalf("no link for %q", seg)
+				}
+				prefix := seg + "/"
+				wantHref := "/browse?" + url.Values{"inventory_id": {string(linkFromID)}, "prefix": {prefix}}.Encode()
+				if got, _ := s.Attr("href"); got != wantHref {
+					t.Errorf("%q href\n got %q\nwant %q", seg, got, wantHref)
+				}
+				want := wantHxVals(t, map[string]string{"inventory_id": string(linkFromID), "prefix": prefix})
+				if got, _ := s.Attr("hx-vals"); got != want {
+					t.Errorf("%q hx-vals\n got %q\nwant %q", seg, got, want)
+				}
+			}
+		})
 	}
 }
 
