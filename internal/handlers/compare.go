@@ -435,11 +435,20 @@ func pctChange(before, after uint64) string {
 		return ""
 	}
 	pct := float64(int64(after)-int64(before)) / float64(before) * 100
-	if pct > 0 {
+	// A change that rounds to 0% still changed: say "<1%", never "-0%".
+	// The minus is U+2212, as in the deltas beside it.
+	switch {
+	case pct >= 0.5:
 		return fmt.Sprintf("+%.0f%%", pct)
+	case pct > 0:
+		return "+<1%"
+	case pct <= -0.5:
+		return fmt.Sprintf("−%.0f%%", -pct)
+	case pct < 0:
+		return "−<1%"
 	}
 
-	return fmt.Sprintf("%.0f%%", pct)
+	return "0%"
 }
 
 func absInt64(v int64) uint64 {
