@@ -23,6 +23,7 @@ exist, see [operations](operations.md).
 | `GET /healthz` | text/plain `ok` | Liveness probe (no auth, no S3) |
 | `GET /static/tailwind.css` | text/css | Embedded compiled stylesheet, ETag-revalidated |
 | `GET /static/help.js` | application/javascript | Embedded help-page JS (TOC active-link + filter), ETag-revalidated |
+| `GET /static/htmx.min.js` | application/javascript | Embedded htmx 1.9.10, so pages load no third-party script; ETag-revalidated |
 
 ### HTMX partials
 

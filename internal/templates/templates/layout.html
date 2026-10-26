@@ -26,7 +26,11 @@
     </script>
 
     <link rel="stylesheet" href="{{assetURL "tailwind.css"}}">
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    {{- /* historyCacheSize 0: Back and Forward refetch the page (the
+           server answers HX-History-Restore-Request with the full page)
+           rather than restore a snapshot of live-updated rows. */}}
+    <meta name="htmx-config" content='{"selfRequestsOnly":true,"allowEval":false,"historyCacheSize":0}'>
+    <script src="{{assetURL "htmx.min.js"}}"></script>
     <script src="{{assetURL "live.js"}}" defer></script>
     <script>
         // Prefix-input sync for browse + compare: after an in-page htmx

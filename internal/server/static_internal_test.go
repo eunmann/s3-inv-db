@@ -1,10 +1,40 @@
 package server
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/internal/templates"
+	"github.com/eunmann/s3-inv-db/pkg/pricing"
+	"github.com/rs/zerolog"
 )
+
+// TestRoutes_ServeVendoredHtmx: the server serves the embedded htmx at
+// the versioned URL the layout links, cached for good.
+func TestRoutes_ServeVendoredHtmx(t *testing.T) {
+	srv, err := New(t.Context(), Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: testDB(t)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://localhost/static/htmx.min.js?v="+templates.AssetVersion("htmx.min.js"), http.NoBody)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if !bytes.Equal(w.Body.Bytes(), templates.HtmxJS()) {
+		t.Error("body is not the embedded htmx")
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/javascript; charset=utf-8" {
+		t.Errorf("Content-Type = %q", got)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Errorf("Cache-Control = %q, want immutable", got)
+	}
+}
 
 // TestStaticAsset_Caching: the URL pages link (?v=<this build's content
 // hash>) is cached for good; a bare URL, or one naming another build's

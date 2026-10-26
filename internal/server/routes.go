@@ -101,6 +101,7 @@ func (s *Server) setupRoutes() {
 	r.Get("/static/tailwind.css", staticAsset("text/css; charset=utf-8", templates.TailwindCSS(), templates.AssetVersion("tailwind.css")))
 	r.Get("/static/help.js", staticAsset("application/javascript; charset=utf-8", templates.HelpJS(), templates.AssetVersion("help.js")))
 	r.Get("/static/live.js", staticAsset("application/javascript; charset=utf-8", templates.LiveJS(), templates.AssetVersion("live.js")))
+	r.Get("/static/htmx.min.js", staticAsset("application/javascript; charset=utf-8", templates.HtmxJS(), templates.AssetVersion("htmx.min.js")))
 
 	// HTML pages
 	r.Get("/", s.handlers.Dashboard)
