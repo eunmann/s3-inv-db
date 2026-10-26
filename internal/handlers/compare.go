@@ -382,7 +382,7 @@ func (h *Handlers) computeCompareLevel(ctx context.Context, opts compareViewOpti
 	q := opts.levelQuery()
 	view.Nav = buildLevelNav(q, rootLabel(opts.from), view.SortLinks, sortLabel, view.Pagination)
 	toggle := q
-	toggle.keep = url.Values{"from": {string(opts.from)}, "to": {string(opts.to)}}
+	toggle.keep = url.Values{paramFrom: {string(opts.from)}, paramTo: {string(opts.to)}}
 	if !showUnchanged {
 		toggle.keep.Set("show_unchanged", trueLiteral)
 	}
@@ -395,7 +395,7 @@ func (h *Handlers) computeCompareLevel(ctx context.Context, opts compareViewOpti
 // levelQuery is the query of this compare view, for its links. The
 // show_unchanged filter carries over to every link.
 func (o compareViewOptions) levelQuery() levelQuery {
-	keep := url.Values{"from": {string(o.from)}, "to": {string(o.to)}}
+	keep := url.Values{paramFrom: {string(o.from)}, paramTo: {string(o.to)}}
 	if !o.hideUnchanged {
 		keep.Set("show_unchanged", trueLiteral)
 	}

@@ -103,9 +103,9 @@ func browseHref(id inventory.ID) string {
 // compareHref compares from with to; an empty to opens Compare with
 // only from chosen.
 func compareHref(from, to inventory.ID) string {
-	q := url.Values{"from": {string(from)}}
+	q := url.Values{paramFrom: {string(from)}}
 	if to != "" {
-		q.Set("to", string(to))
+		q.Set(paramTo, string(to))
 	}
 
 	return "/compare?" + q.Encode()
