@@ -169,7 +169,9 @@ func ParseManifest(data []byte) (*format.Manifest, error) {
 
 // Fetch downloads the committed index under prefix into dir, which
 // must be empty or not exist yet, and verifies every file against the
-// manifest. On any error dir is removed, so it holds a verified index
+// manifest. Every file and directory is fsynced, as a built index's
+// are, so the index survives a crash once the caller renames it into
+// place. On any error dir is removed, so it holds a verified index
 // or nothing. The onFile callback, if non-nil, gets the bytes fetched
 // so far and the total after each file.
 func (s *Store) Fetch(ctx context.Context, prefix, dir string, onFile func(done, total uint64)) (err error) {
@@ -186,10 +188,13 @@ func (s *Store) Fetch(ctx context.Context, prefix, dir string, onFile func(done,
 		}
 	}()
 	total, done := m.TotalBytes(), uint64(0)
+	dirs := map[string]struct{}{dir: {}}
 	for _, name := range sortedNames(m) {
-		if err := s.download(ctx, prefix+name, filepath.Join(dir, filepath.FromSlash(name))); err != nil {
+		local := filepath.Join(dir, filepath.FromSlash(name))
+		if err := s.download(ctx, prefix+name, local); err != nil {
 			return err
 		}
+		dirs[filepath.Dir(local)] = struct{}{}
 		done += uint64(m.Files[name].Size)
 		if onFile != nil {
 			onFile(done, total)
@@ -199,8 +204,13 @@ func (s *Store) Fetch(ctx context.Context, prefix, dir string, onFile func(done,
 	if err != nil {
 		return fmt.Errorf("encode manifest: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, format.ManifestFile), data, format.FilePerm); err != nil {
+	if err := format.WriteFileSync(filepath.Join(dir, format.ManifestFile), data); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
+	}
+	for d := range dirs {
+		if err := format.SyncDir(d); err != nil {
+			return fmt.Errorf("sync %s: %w", d, err)
+		}
 	}
 	if err := format.VerifyManifest(dir, m); err != nil {
 		return fmt.Errorf("verify s3://%s/%s: %w", s.bucket, prefix, err)
@@ -222,8 +232,14 @@ func (s *Store) download(ctx context.Context, key, local string) error {
 	}); err != nil {
 		return errors.Join(fmt.Errorf("download s3://%s/%s: %w", s.bucket, key, err), f.Close())
 	}
+	if err := f.Sync(); err != nil {
+		return errors.Join(fmt.Errorf("sync %s: %w", local, err), f.Close())
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", local, err)
+	}
 
-	return f.Close() //nolint:wrapcheck // the path is in the caller's context
+	return nil
 }
 
 // checkNames refuses a manifest whose file names would land outside the
