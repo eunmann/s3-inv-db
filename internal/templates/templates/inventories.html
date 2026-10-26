@@ -251,7 +251,7 @@
         // reload, Back or Forward. Each segment must look like a bucket,
         // configuration or run name; refresh=1 keeps the server from
         // pushing the URL the page already has onto the history again.
-        var segment = /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,254}$/;
+        var segment = /^[A-Za-z0-9_][A-Za-z0-9._:+-]{0,254}$/;
         function restoreFromHash() {
             var hash = (location.hash || '').replace(/^#/, '');
             if (hash.indexOf('run=') !== 0 || !window.htmx) return;
