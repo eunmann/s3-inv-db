@@ -98,3 +98,45 @@ func TestSummarizeBuildError_CapsALongCause(t *testing.T) {
 		t.Errorf("summary of a 500-rune cause is %d runes: %q", n, got)
 	}
 }
+
+// TestSummarizePollError: a discovery poll lists and reads manifests,
+// it builds nothing, so its summary never gives a build's advice.
+func TestSummarizePollError(t *testing.T) {
+	tests := []struct {
+		name, raw, want string
+	}{
+		{
+			name: "missing bucket",
+			raw:  "list runs s3://gone-bucket/inv/: operation error S3: ListObjectsV2, https response error StatusCode: 404, RequestID: X, HostID: Y, api error NoSuchBucket: The specified bucket does not exist",
+			want: "Nothing found in S3 at s3://gone-bucket/inv/. Check that the inventory's bucket and prefix still exist.",
+		},
+		{
+			name: "missing without a URI",
+			raw:  "list runs: operation error S3: ListObjectsV2, https response error StatusCode: 404, api error NoSuchBucket: The specified bucket does not exist",
+			want: "The inventory's bucket or prefix was not found in S3. Check that it still exists.",
+		},
+		{
+			name: "access denied",
+			raw:  "list runs: operation error S3: ListObjectsV2, https response error StatusCode: 403, RequestID: X, HostID: Y, api error AccessDenied: Access Denied",
+			want: "Access denied reading from S3. Check the server's S3 permissions.",
+		},
+		{
+			name: "manifest checksum",
+			raw:  "poll src/inv: read manifest s3://dst/src/inv/2026-10-25T20-50Z/manifest.json: manifest checksum mismatch",
+			want: "The inventory's manifest could not be used: manifest checksum mismatch.",
+		},
+		{
+			name: "no space on a poll is just the cause",
+			raw:  "poll src/inv: write state: no space left on device",
+			want: "No space left on device.",
+		},
+		{name: "none", raw: "", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := handlers.SummarizePollErrorForTest(tt.raw); got != tt.want {
+				t.Errorf("summary\n got %q\nwant %q", got, tt.want)
+			}
+		})
+	}
+}

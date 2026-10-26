@@ -36,7 +36,7 @@ func (h *Handlers) collectNotifications(ctx context.Context) []Notification {
 				Kind:    "poll",
 				Title:   "Discovery poll failed",
 				Message: c.LastPollError,
-				Summary: summarizeBuildError(c.LastPollError),
+				Summary: summarizePollError(c.LastPollError),
 				Target:  c.Source + "/" + c.Name,
 				At:      c.LastPolledAt,
 			})

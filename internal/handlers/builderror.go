@@ -37,12 +37,8 @@ func summarizeBuildError(raw string) string {
 		}
 
 		return "An inventory data file is missing from S3. The inventory may have been deleted or moved."
-	case containsAny(lower, "accessdenied", "statuscode: 403"):
-		if uri := s3URIIn(raw); uri != "" {
-			return "Access denied reading " + uri + ". Check the server's S3 permissions."
-		}
-
-		return "Access denied reading from S3. Check the server's S3 permissions."
+	case isAccessDenied(lower):
+		return accessDeniedSummary(raw)
 	case containsAny(lower, "disk-budget", "disk budget"):
 		return "Not enough room in the index disk budget. Unload or unpin a run, or raise --max-index-disk."
 	case containsAny(lower, "no space left", "enospc"):
@@ -50,10 +46,51 @@ func summarizeBuildError(raw string) string {
 	case strings.Contains(lower, "checksum"):
 		return "A file failed its checksum check and may be corrupt. Load it again to rebuild it."
 	case strings.Contains(lower, "manifest"):
-		return "The inventory's manifest could not be used: " + strings.TrimRight(innermostError(raw), ".") + "."
+		return manifestSummary(raw)
 	}
 
 	return sentence(innermostError(raw))
+}
+
+// summarizePollError turns a discovery poll's error into a sentence. A
+// poll lists runs and reads manifests and builds nothing, so it gets
+// none of a build's advice.
+func summarizePollError(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	lower := strings.ToLower(raw)
+	switch {
+	case containsAny(lower, "nosuchbucket", "nosuchkey", "statuscode: 404"):
+		if uri := s3URIIn(raw); uri != "" {
+			return "Nothing found in S3 at " + uri + ". Check that the inventory's bucket and prefix still exist."
+		}
+
+		return "The inventory's bucket or prefix was not found in S3. Check that it still exists."
+	case isAccessDenied(lower):
+		return accessDeniedSummary(raw)
+	case strings.Contains(lower, "manifest"):
+		return manifestSummary(raw)
+	}
+
+	return sentence(innermostError(raw))
+}
+
+func isAccessDenied(lower string) bool {
+	return containsAny(lower, "accessdenied", "statuscode: 403")
+}
+
+func accessDeniedSummary(raw string) string {
+	if uri := s3URIIn(raw); uri != "" {
+		return "Access denied reading " + uri + ". Check the server's S3 permissions."
+	}
+
+	return "Access denied reading from S3. Check the server's S3 permissions."
+}
+
+func manifestSummary(raw string) string {
+	return "The inventory's manifest could not be used: " + strings.TrimRight(innermostError(raw), ".") + "."
 }
 
 func containsAny(s string, subs ...string) bool {

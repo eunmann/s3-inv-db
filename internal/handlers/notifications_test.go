@@ -105,3 +105,26 @@ func TestNotificationsPartial_SummarizesFailures(t *testing.T) {
 		t.Errorf("API notification %+v", resp.Notifications)
 	}
 }
+
+// TestNotifications_PollFailureSummary: a failed discovery poll reads as
+// a poll problem, not as a build's missing data file.
+func TestNotifications_PollFailureSummary(t *testing.T) {
+	h := newTestHandlers(t)
+	if err := h.ConfigStoreForTest().Upsert(t.Context(), inventory.Config{
+		Source:        "src1",
+		Name:          "inv1",
+		LastPolledAt:  time.Now(),
+		LastPollError: "list runs: operation error S3: ListObjectsV2, https response error StatusCode: 404, api error NoSuchBucket: The specified bucket does not exist",
+	}); err != nil {
+		t.Fatalf("config upsert: %v", err)
+	}
+	w := httptest.NewRecorder()
+	h.NotificationsAPI(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/notifications", http.NoBody))
+	var resp handlers.NotificationsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Notifications) != 1 || !strings.HasPrefix(resp.Notifications[0].Summary, "The inventory's bucket or prefix was not found") {
+		t.Errorf("poll notification %+v", resp.Notifications)
+	}
+}

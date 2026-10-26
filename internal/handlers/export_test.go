@@ -122,6 +122,7 @@ var (
 	SummarizeBuildErrorForTest         = summarizeBuildError
 	DomIDForTest                       = domID
 	RunDateLabelForTest                = runDateLabel
+	SummarizePollErrorForTest          = summarizePollError
 )
 
 // AcquireSSESlotForTest exposes acquireSSESlot.
