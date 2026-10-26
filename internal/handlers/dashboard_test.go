@@ -59,7 +59,7 @@ func TestDashboard_LeadsWithEachBucket(t *testing.T) {
 	text := squash(src.Text())
 	for _, want := range []string{
 		"Objects 2", "Size " + humanfmt.BytesUint64(3*gib), "Est. cost $",
-		"+" + humanfmt.BytesUint64(2*gib) + " · +$", "/mo since Oct 23",
+		"+" + humanfmt.BytesUint64(2*gib) + " · +1 object · +$", "/mo since Oct 23",
 		"A newer run from Oct 27 is available.",
 	} {
 		if !strings.Contains(text, want) {
@@ -233,12 +233,38 @@ func TestRunDateLabelAndDelta(t *testing.T) {
 			t.Errorf("runDateLabel(%q) = %q, want %q", in, got, want)
 		}
 	}
-	d := handlers.RunDelta{BytesH: "+12.4 GiB", CostH: "+$3.10/mo", SinceH: "Oct 25", Changed: true}
+	d := handlers.RunDelta{BytesH: "+12.4 GiB", CostH: "+$3.10/mo", SinceH: "Oct 25"}
 	if got, want := d.Line(), "+12.4 GiB · +$3.10/mo since Oct 25"; got != want {
 		t.Errorf("delta Line = %q, want %q", got, want)
 	}
 	if got, want := (handlers.RunDelta{SinceH: "Oct 25"}).Line(), "No change since Oct 25"; got != want {
 		t.Errorf("unchanged delta Line = %q, want %q", got, want)
+	}
+}
+
+// TestNewRunDelta: the dashboard's change line names each total that
+// moved, so a run whose object count changed while its bytes and cost
+// stayed put never reads "No change".
+func TestNewRunDelta(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	priced := func(objects, bytes, costMicro uint64) handlers.RunStats {
+		return handlers.RunStats{Objects: objects, Bytes: bytes, CostMicro: costMicro, CostH: "priced"}
+	}
+	for _, tc := range []struct {
+		name      string
+		prev, cur handlers.RunStats
+		want      string
+	}{
+		{"nothing moved", priced(10, 100, 5), priced(10, 100, 5), "No change since Oct 25"},
+		{"only objects moved", priced(10, 100, 5), priced(12, 100, 5), "+2 objects since Oct 25"},
+		{"one object fewer", priced(10, 100, 5), priced(9, 100, 5), "−1 object since Oct 25"},
+		{"only bytes moved", priced(10, 100, 5), priced(10, 2148, 5), "+2.00 KiB since Oct 25"},
+		{"everything moved", priced(12, 2148, 0), priced(10, 100, 2_000_000), "−2.00 KiB · −2 objects · +$2.00/mo since Oct 25"},
+		{"cost without prices", handlers.RunStats{Objects: 1, Bytes: 1, CostMicro: 1}, handlers.RunStats{Objects: 1, Bytes: 1, CostMicro: 2}, "No change since Oct 25"},
+	} {
+		if got := handlers.NewRunDeltaForTest(tc.prev, tc.cur, "2026-10-25T20-50Z", now).Line(); got != tc.want {
+			t.Errorf("%s: Line = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

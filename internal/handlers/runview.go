@@ -141,38 +141,47 @@ func linkRuns(runs []DiscoveredRowView) {
 }
 
 // RunDelta is the change between two loaded runs of one configuration.
+// Each total's change is "" when that total didn't move.
 type RunDelta struct {
-	BytesH  string // "+12.4 GiB"
-	CostH   string // "+$3.10/mo"; "" unless both runs are priced
-	SinceH  string // the older run's date, "Oct 25"
-	Changed bool
+	BytesH   string // "+12.4 GiB"
+	ObjectsH string // "+1.2K objects"
+	CostH    string // "+$3.10/mo"; "" unless both runs are priced
+	SinceH   string // the older run's date, "Oct 25"
 }
 
 func newRunDelta(prev, cur RunStats, prevRun string, now time.Time) RunDelta {
-	d := RunDelta{
-		SinceH:  runDateLabel(prevRun, now),
-		Changed: prev.Bytes != cur.Bytes || prev.CostMicro != cur.CostMicro,
+	d := RunDelta{SinceH: runDateLabel(prevRun, now)}
+	if prev.Bytes != cur.Bytes {
+		d.BytesH = formatDelta(prev.Bytes, cur.Bytes, int64(cur.Bytes)-int64(prev.Bytes), humanfmt.BytesUint64).DeltaH
 	}
-	d.BytesH = formatDelta(prev.Bytes, cur.Bytes, int64(cur.Bytes)-int64(prev.Bytes), humanfmt.BytesUint64).DeltaH
-	if prev.CostH != "" && cur.CostH != "" {
+	if prev.Objects != cur.Objects {
+		diff := int64(cur.Objects) - int64(prev.Objects)
+		d.ObjectsH = formatDelta(prev.Objects, cur.Objects, diff, humanfmt.CountUint64).DeltaH + " objects"
+		if diff == 1 || diff == -1 {
+			d.ObjectsH = strings.TrimSuffix(d.ObjectsH, "s")
+		}
+	}
+	if prev.CostH != "" && cur.CostH != "" && prev.CostMicro != cur.CostMicro {
 		d.CostH = formatCostDelta(prev.CostMicro, cur.CostMicro).DeltaH + "/mo"
 	}
 
 	return d
 }
 
-// Line is "+12.4 GiB · +$3.10/mo since Oct 25", or "No change since
-// Oct 25".
+// Line is "+12.4 GiB · +1.2K objects · +$3.10/mo since Oct 25" with
+// only the totals that moved, or "No change since Oct 25".
 func (d RunDelta) Line() string {
-	if !d.Changed {
+	parts := make([]string, 0, 3)
+	for _, p := range []string{d.BytesH, d.ObjectsH, d.CostH} {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	if len(parts) == 0 {
 		return "No change since " + d.SinceH
 	}
-	line := d.BytesH
-	if d.CostH != "" {
-		line += " · " + d.CostH
-	}
 
-	return line + " since " + d.SinceH
+	return strings.Join(parts, " · ") + " since " + d.SinceH
 }
 
 // runDateLabel is a run folder name as a short date, "Oct 25", with the
