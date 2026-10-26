@@ -148,13 +148,32 @@
         var idx = order.indexOf(job.Stage);
         var counted = true;
         if (job.Stage === 'merging') { idx = 1; counted = false; }
+        var fill = counted ? stageFill(job) : 0;
         return order.map(function (name, i) {
             if (job.State === 'succeeded') return { fill: 100, active: false };
             if (idx < 0) return { fill: 0, active: i === 0 && job.State === 'running' };
             if (i < idx) return { fill: 100, active: false };
             if (i > idx) return { fill: 0, active: false };
-            return { fill: counted ? pct(job) : 0, active: LIVE[job.State] === true };
+            return { fill: fill, active: LIVE[job.State] === true };
         });
+    }
+
+    // stageFill is how full the current stage's segment is. A stage with
+    // steps (finalizing) restarts its counter at every step, and how
+    // many steps are left is unknown, so each step fills half of what
+    // the stage has left: the segment only ever grows, reaches the end
+    // only when the stage does, and a new step never empties it.
+    var stepFill = {}; // job id -> {stage, step, base}
+    function stageFill(job) {
+        if (!job.Step) return pct(job);
+        var st = stepFill[job.ID];
+        if (!st || st.stage !== job.Stage) {
+            st = stepFill[job.ID] = { stage: job.Stage, step: job.Step, base: 0 };
+        } else if (st.step !== job.Step) {
+            st.base += (1 - st.base) / 2;
+            st.step = job.Step;
+        }
+        return Math.floor(100 * (st.base + (1 - st.base) / 2 * pct(job) / 100));
     }
 
     function renderBar(bar, job) {
