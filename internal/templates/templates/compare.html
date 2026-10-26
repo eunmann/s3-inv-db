@@ -65,11 +65,9 @@
                         ⇄ Swap direction
                     </a>
                 </div>
-                {{else if .Picker.Groups}}
-                <p class="text-sm text-gray-500 dark:text-gray-400">Pick a baseline and a comparison run above.</p>
-                {{else}}
-                <p class="text-sm text-gray-500 dark:text-gray-400">No inventories are loaded. <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:underline">Load two runs of the same configuration</a> to enable comparison.</p>
                 {{end}}
+                {{with .Note}}<p class="text-sm text-gray-600 dark:text-gray-300">{{.}}</p>{{end}}
+                {{if .SingleRun}}<p class="text-sm text-gray-600 dark:text-gray-300">This is the only loaded run of its configuration. <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:underline">Load another run</a> to compare it.</p>{{end}}
             </form>
         </div>
     </div>
@@ -83,6 +81,30 @@
     <div id="compare-target" hx-indicator="#compare-target">
         {{if .Level}}
             {{template "templates/partials/compare_level.html" .Partial}}
+        {{else if not (or .From .To)}}
+        {{if .Suggestions}}
+        <section aria-labelledby="compare-suggestions-title" class="bg-white dark:bg-gray-800 shadow sm:rounded-lg">
+            <div class="px-4 py-4 sm:px-6 border-b border-gray-200 dark:border-gray-700">
+                <h2 id="compare-suggestions-title" class="text-md font-medium text-gray-900 dark:text-gray-100">Latest changes</h2>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Each configuration's two newest loaded runs, or pick any two above.</p>
+            </div>
+            <ul class="divide-y divide-gray-200 dark:divide-gray-700">
+                {{range .Suggestions}}
+                <li>
+                    <a href="{{.Href}}" class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-4 py-3 sm:px-6 hover:bg-gray-50 dark:hover:bg-gray-700">
+                        <span class="text-sm font-semibold text-gray-900 dark:text-gray-100 font-mono break-all">{{.ConfigLabel}}</span>
+                        <span class="text-sm font-medium text-indigo-600 dark:text-indigo-400">Compare {{.FromRun}} → {{.ToRun}}</span>
+                    </a>
+                </li>
+                {{end}}
+            </ul>
+        </section>
+        {{else}}
+        <div class="text-center py-12 text-sm text-gray-500 dark:text-gray-400">
+            Comparing needs two loaded runs of one configuration{{if .Picker.Groups}}, and no configuration has two yet{{end}}.
+            <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:underline">Load runs on the Inventories page</a>.
+        </div>
+        {{end}}
         {{end}}
     </div>
 </div>

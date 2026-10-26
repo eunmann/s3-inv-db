@@ -58,8 +58,100 @@ type ComparePageData struct {
 	ToRun       string
 	Prefix      string
 	Error       string
+	// Note says which run was picked for the side the request left
+	// out, when that wasn't the obvious neighbour.
+	Note string
+	// Suggestions are the one-click comparisons the empty page offers.
+	Suggestions []CompareSuggestion
 	Picker      ComparePicker
 	ToPicker    ComparePicker
+	// SingleRun is set when the run named has no other loaded run of its
+	// configuration to compare with.
+	SingleRun bool
+}
+
+// CompareSuggestion is a comparison of a configuration's two latest
+// loaded runs.
+type CompareSuggestion struct {
+	ConfigLabel string
+	FromRun     string
+	ToRun       string
+	Href        string
+}
+
+// compareSides is the pair of runs a compare page shows; see
+// resolveCompareSides.
+type compareSides struct {
+	from, to  inventory.ID
+	note      string
+	singleRun bool
+}
+
+// resolveCompareSides fills in the side a request left out with the
+// adjacent loaded run of the same configuration: a baseline (from)
+// alone is compared with the next newer run, a run to compare (to)
+// alone with the next older one. When there is no run on that side,
+// the run named moves to the other side and the note says so. A run
+// that isn't loaded, or a request naming both or neither, is returned
+// as it came.
+func resolveCompareSides(picker ComparePicker, from, to inventory.ID) compareSides {
+	s := compareSides{from: from, to: to}
+	given := from
+	if given == "" {
+		given = to
+	}
+	if (from == "") == (to == "") {
+		return s
+	}
+	runs := filterComparePickerByConfig(picker, given).Groups
+	if len(runs) != 1 {
+		return s
+	}
+	opts := runs[0].Options // newest first
+	i := slices.IndexFunc(opts, func(o ComparePickerOption) bool { return o.ID == given })
+	switch {
+	case i < 0:
+		return s
+	case len(opts) < 2:
+		s.singleRun = true
+
+		return s
+	}
+	run := describeRun(given).RunLabel
+	switch {
+	case from != "" && i > 0:
+		s.to = opts[i-1].ID
+	case from != "":
+		s.from, s.to = opts[1].ID, given
+		s.note = run + " is the newest loaded run, so it is compared with the run before it."
+	case i < len(opts)-1:
+		s.from = opts[i+1].ID
+	default:
+		s.from, s.to = given, opts[i-1].ID
+		s.note = run + " is the oldest loaded run, so it is the baseline for the run after it."
+	}
+
+	return s
+}
+
+// compareSuggestions offers, for each configuration with at least two
+// loaded runs, the comparison of its latest two.
+func compareSuggestions(picker ComparePicker) []CompareSuggestion {
+	var out []CompareSuggestion
+	for _, g := range picker.Groups {
+		if len(g.Options) < 2 {
+			continue
+		}
+		from, to := g.Options[1].ID, g.Options[0].ID
+		out = append(out, CompareSuggestion{
+			ConfigLabel: g.ConfigLabel,
+			FromRun:     describeRun(from).RunLabel,
+			ToRun:       describeRun(to).RunLabel,
+			Href:        templates.CompareLink(string(from), string(to), "", false),
+		})
+	}
+
+	return out
 }
 
 // ComparePartialData carries the compare_level partial's inputs. Used for
@@ -170,18 +262,24 @@ type compareViewOptions struct {
 
 func (h *Handlers) renderCompareFullPage(w http.ResponseWriter, r *http.Request, opts compareViewOptions) {
 	picker := buildComparePicker(h.manager.List())
+	sides := resolveCompareSides(picker, opts.from, opts.to)
+	opts.from, opts.to = sides.from, sides.to
 	data := ComparePageData{
-		Title:    "Compare runs",
-		Picker:   picker,
-		ToPicker: filterComparePickerByConfig(picker, opts.from),
-		From:     opts.from,
-		To:       opts.to,
-		Prefix:   opts.prefix,
+		Title:     "Compare runs",
+		Picker:    picker,
+		ToPicker:  filterComparePickerByConfig(picker, opts.from),
+		From:      opts.from,
+		To:        opts.to,
+		Prefix:    opts.prefix,
+		Note:      sides.note,
+		SingleRun: sides.singleRun,
 	}
 
 	switch {
+	case opts.from == "" && opts.to == "":
+		data.Suggestions = compareSuggestions(picker)
 	case opts.from == "" || opts.to == "":
-		// First visit — no validation error, just the picker.
+		// One side named and no run to pair it with: the picker explains.
 	case !sameConfig(opts.from, opts.to):
 		data.Error = "Both runs must belong to the same inventory configuration."
 	default:
