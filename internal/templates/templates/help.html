@@ -16,20 +16,19 @@
     .helpdoc [data-search-target].hidden-by-search { display: none; }
 </style>
 
+{{- /* Shared classes: body text, links, inline code, kbd. */ -}}
 <div class="helpdoc max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
 
-    <!-- Page header -->
     <header class="mb-10 max-w-3xl">
         <p class="text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Documentation</p>
         <h1 class="mt-1 text-3xl sm:text-4xl font-bold text-gray-900 dark:text-gray-100">Help</h1>
         <p class="mt-3 text-base text-gray-600 dark:text-gray-300">
-            A walkthrough of every page, button, and behavior on this site. Skim the sidebar, jump to what you need.
+            How to see what your S3 buckets hold, where the space and cost are, and what changed between inventory runs.
         </p>
     </header>
 
     <div class="lg:grid lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-12">
 
-        <!-- Sticky TOC -->
         <aside class="hidden lg:block">
             <nav aria-label="Contents" class="toc sticky top-20 text-sm">
                 <p class="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">On this page</p>
@@ -40,20 +39,23 @@
                             <li><a href="#p-dashboard"   class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Dashboard</a></li>
                             <li><a href="#p-inventories" class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Inventories</a></li>
                             <li><a href="#p-browse"      class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Browse</a></li>
+                            <li><a href="#p-compare"     class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Compare</a></li>
                         </ul>
                     </li>
                     <li><a href="#workflows"       class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Workflows</a>
                         <ul class="mt-1 space-y-1 ml-2 text-[13px]">
-                            <li><a href="#workflow-load"    class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Load an inventory</a></li>
-                            <li><a href="#workflow-browse"  class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Browse a prefix tree</a></li>
-                            <li><a href="#workflow-recover" class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Recover from errors</a></li>
+                            <li><a href="#workflow-load"    class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Load a run</a></li>
+                            <li><a href="#workflow-browse"  class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Find where the space is</a></li>
+                            <li><a href="#workflow-compare" class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">See what changed</a></li>
+                            <li><a href="#workflow-recover" class="block pl-4 -ml-px border-l border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">Recover from a failed build</a></li>
                         </ul>
                     </li>
-                    <li><a href="#cost-model"      class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Cost model</a></li>
+                    <li><a href="#cost-model"      class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Cost estimates</a></li>
                     <li><a href="#chips"           class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">State chips</a></li>
                     <li><a href="#buttons"         class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Action buttons</a></li>
-                    <li><a href="#progress"        class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Progress &amp; ETA</a></li>
-                    <li><a href="#sharing"         class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Sharing URLs</a></li>
+                    <li><a href="#progress"        class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Progress &amp; time left</a></li>
+                    <li><a href="#auto-load"       class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Auto-load, pins &amp; disk</a></li>
+                    <li><a href="#sharing"         class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Links &amp; history</a></li>
                     <li><a href="#dark-mode"       class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Dark mode</a></li>
                     <li><a href="#restarts"        class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Restarts &amp; saved state</a></li>
                     <li><a href="#shortcuts"       class="block pl-4 -ml-px border-l border-transparent text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">Keyboard</a></li>
@@ -63,171 +65,167 @@
             </nav>
         </aside>
 
-        <main class="min-w-0 max-w-3xl space-y-12">
+        <main class="min-w-0 max-w-3xl space-y-12 text-gray-700 dark:text-gray-200">
 
-            <!-- Overview -->
             <section id="overview">
                 <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Overview</h2>
-                <p class="text-gray-700 dark:text-gray-200">
-                    This site lets you turn an S3 Inventory report into a queryable index and then explore it by prefix —
-                    object counts, sizes, and per-tier cost estimates, all in milliseconds.
+                <p>
+                    AWS writes an S3 Inventory report for a bucket every day or week: a list of every object with its
+                    size and storage class. This site turns one report (a <em>run</em>) into a small local index, then
+                    answers questions about the bucket in milliseconds: how big each folder (prefix) is, how many
+                    objects it holds, what it costs per month, and how all of that changed since an earlier run.
                 </p>
-                <p class="mt-3 text-gray-700 dark:text-gray-200">
-                    There are three pages: <a href="/" class="text-indigo-600 dark:text-indigo-400 hover:underline">Dashboard</a> for an at-a-glance overview,
-                    <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:underline">Inventories</a> for loading and managing builds,
-                    and <a href="/browse" class="text-indigo-600 dark:text-indigo-400 hover:underline">Browse</a> for exploring a loaded inventory.
+                <p class="mt-3">To get started:</p>
+                <ol class="mt-2 list-decimal pl-5 space-y-1">
+                    <li>On the <a href="/" class="text-indigo-600 dark:text-indigo-400 hover:underline">Dashboard</a> or
+                        <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:underline">Inventories</a>, click
+                        <strong>Load</strong> on a bucket's latest run. Building the index takes seconds to minutes.</li>
+                    <li>Click <strong>Browse</strong> to see where the space is, largest folders first.</li>
+                    <li>Load a second run of the same inventory and click <strong>Compare with previous</strong> to see what grew or shrank.</li>
+                </ol>
+                <p class="mt-3">
+                    The index holds totals per prefix, not individual objects, so you can't look up a single file here.
                 </p>
             </section>
 
-            <!-- Pages -->
             <section id="pages">
                 <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Pages</h2>
 
                 <h3 id="p-dashboard" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">
                     <a href="/" class="hover:text-indigo-600 dark:hover:text-indigo-400">Dashboard</a>
                 </h3>
-                <p class="text-gray-700 dark:text-gray-200">
-                    The landing page. Counters at the top show how many inventories the server knows about and
-                    how many are loaded, not loaded, or in an error state. A list underneath shows every inventory.
-                    Read-only — use it to spot which inventories are ready to query.
+                <p>
+                    One card per inventory, bucket name first, showing its latest loaded run: objects, total size and
+                    estimated monthly cost, plus the change since the previous loaded run when there is one. From a card
+                    you can <strong>Browse</strong> the run, <strong>Compare with previous</strong>, or <strong>Load</strong>
+                    the latest run if nothing is loaded yet (or a newer run has arrived). Below the cards, a short status
+                    section shows running and failed builds (each failure links to its run), whether auto-load is on,
+                    and how much of the index disk is used.
                 </p>
 
                 <h3 id="p-inventories" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">
                     <a href="/inventories" class="hover:text-indigo-600 dark:hover:text-indigo-400">Inventories</a>
                 </h3>
-                <p class="text-gray-700 dark:text-gray-200">
-                    One section per S3 inventory configuration, with one row per published run inside. Runs
-                    are listed newest-first so the most recent snapshot is at the top of each section. This
-                    is the only page where you <strong>Load</strong>, <strong>Retry</strong>,
-                    <strong>Unload</strong>, or <strong>Cancel</strong> a build.
-                    Each row updates live while a job is in flight — no refresh needed. Different runs of the
-                    same inventory configuration are independent — loading one doesn't affect the others, so
-                    you can keep multiple snapshots in memory at once and compare them on Browse.
+                <p>
+                    One card per inventory with its runs, newest first. The latest run and any run that is loaded,
+                    building or failed are always shown; older runs fold away under <em>Show N older runs</em>. A loaded
+                    run shows its objects, size and monthly cost. This is where you load, cancel, retry, pin and unload
+                    runs. Rows update by themselves while a build runs. <strong>View details</strong> opens a side panel
+                    with the run's totals, storage-class breakdown, where its report came from, and the build's
+                    step-by-step timeline. <strong>Refresh</strong> checks S3 for new runs right away instead of waiting
+                    for the next scheduled check.
                 </p>
 
                 <h3 id="p-browse" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">
                     <a href="/browse" class="hover:text-indigo-600 dark:hover:text-indigo-400">Browse</a>
                 </h3>
-                <p class="text-gray-700 dark:text-gray-200">
-                    A prefix-tree explorer over one <em>loaded</em> inventory. Pick an inventory in the dropdown,
-                    type a prefix or click into a child prefix, see aggregated object count, size, and per-tier
-                    cost at that level. Individual object metadata is not stored — the index aggregates by prefix
-                    only. The address bar always reflects the view — copy the URL to share or bookmark it.
+                <p>
+                    Explore one loaded run as a folder tree. The top shows the current prefix's size, objects and
+                    monthly cost, with the storage-class breakdown and each class's share of the size. Below, its
+                    children are listed largest first, each with its share of the parent. Click a child to go into it;
+                    the breadcrumbs take you back up. Click a column header to sort by name, size, objects or cost.
+                    Type a prefix to jump straight to it. "Queried in …" shows how long the answer took.
+                </p>
+
+                <h3 id="p-compare" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">
+                    <a href="/compare" class="hover:text-indigo-600 dark:hover:text-indigo-400">Compare</a>
+                </h3>
+                <p>
+                    Put two loaded runs of the same inventory side by side. The top shows how much the size, the monthly
+                    cost and the object count changed; children are listed by the size of their change. Red means grew,
+                    green means shrank; <em>Added</em> and <em>Removed</em> mark prefixes that exist in only one run.
+                    Pick one run and the other side is filled in with its neighbouring loaded run. Unchanged prefixes are
+                    hidden until you click <strong>Show unchanged</strong>.
                 </p>
             </section>
 
-            <!-- Workflows -->
             <section id="workflows">
                 <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Workflows</h2>
 
-                <h3 id="workflow-load" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">Load an inventory</h3>
-                <ol class="list-decimal pl-5 text-gray-700 dark:text-gray-200 space-y-1.5">
-                    <li>Open <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:underline">Inventories</a>.</li>
-                    <li>Find the row. Click <strong>Load</strong> (or <strong>Retry</strong> if it's in an error state).</li>
-                    <li>The chip flips to <em>Loading…</em> and the line under it shows the current build stage:
-                        Preparing → Initializing → Downloading &amp; parsing → Merging spilled runs (large
-                        inventories only) → Building index → Finalizing → Done, with the stage's percent and
-                        time left once it can tell. The bar below has one segment per stage (download, build,
-                        finalize) and fills each in turn. With another build running, it waits as
-                        <em>Queued</em> first.</li>
-                    <li>When the build finishes, the chip becomes <em>Loaded</em>. The node count fills in.</li>
-                    <li>Open Browse to query it.</li>
+                <h3 id="workflow-load" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">Load a run</h3>
+                <ol class="list-decimal pl-5 space-y-1.5">
+                    <li>Click <strong>Load</strong> on a run (Dashboard or Inventories). If another build is running it waits as <em>Queued</em>.</li>
+                    <li>The row shows the stage, its percent and the time left, over a bar with one segment per stage. See <a href="#progress" class="text-indigo-600 dark:text-indigo-400 hover:underline">Progress &amp; time left</a>.</li>
+                    <li>When it finishes the chip turns <em>Loaded</em> and the row shows the run's objects, size and cost.</li>
                 </ol>
-                <p class="mt-3 text-gray-700 dark:text-gray-200">
-                    You can navigate away while the build is running — closing the page does not cancel it.
-                    Come back to Inventories any time and the row reflects the latest state.
+                <p class="mt-3">
+                    The build runs on the server: you can leave the page or close the tab, and the row shows the latest
+                    state when you come back.
                 </p>
 
-                <h3 id="workflow-browse" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">Browse a prefix tree</h3>
-                <ol class="list-decimal pl-5 text-gray-700 dark:text-gray-200 space-y-1.5">
-                    <li>Open <a href="/browse" class="text-indigo-600 dark:text-indigo-400 hover:underline">Browse</a> and pick a loaded inventory.</li>
-                    <li>Empty prefix = the bucket root. Type a prefix and press <strong>Enter</strong> to jump straight there.</li>
-                    <li>Click a child prefix (the indigo link) to drill in. The breadcrumbs at the top navigate up. Rows in muted gray are leaf prefixes — no deeper children to drill into.</li>
-                    <li>Click a column header — Segment / Objects / Size / Est. Cost — to sort the children.</li>
-                    <li>Expand the <strong>Storage tier breakdown</strong> panel to see per-storage-class counts and the monthly cost estimate.</li>
+                <h3 id="workflow-browse" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">Find where the space is</h3>
+                <ol class="list-decimal pl-5 space-y-1.5">
+                    <li>Click <strong>Browse</strong> on a loaded run.</li>
+                    <li>The largest child is at the top; the <em>% of parent</em> column shows how much of the total it holds.</li>
+                    <li>Click into it and repeat until you reach the prefixes worth acting on. The storage-class breakdown at each level shows whether the space is in cheap or expensive classes.</li>
                 </ol>
 
-                <h3 id="workflow-recover" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">Recover from errors</h3>
-                <ul class="list-disc pl-5 text-gray-700 dark:text-gray-200 space-y-1.5">
-                    <li><strong>Build failed.</strong> Hover the small "Error" label under the chip for the message, then click <strong>Retry</strong>.</li>
-                    <li><strong>Build stuck.</strong> If the ETA stops moving, click <strong>Cancel</strong>, then <strong>Retry</strong>.</li>
-                    <li><strong>Row shows "interrupted by server restart".</strong> A build was running when the server stopped. Click <strong>Retry</strong>.</li>
-                    <li><strong>Wrong inventory loaded.</strong> Click <strong>Unload</strong> to drop it from memory and disk, then click <strong>Load</strong> on the run you actually want.</li>
+                <h3 id="workflow-compare" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">See what changed</h3>
+                <ol class="list-decimal pl-5 space-y-1.5">
+                    <li>Load two runs of the same inventory, for example today's and last week's.</li>
+                    <li>Click <strong>Compare with previous</strong> on the newer run, or pick both runs on the <a href="/compare" class="text-indigo-600 dark:text-indigo-400 hover:underline">Compare</a> page.</li>
+                    <li>The biggest changes are at the top. Click a prefix to see which of its children changed.</li>
+                </ol>
+
+                <h3 id="workflow-recover" class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">Recover from a failed build</h3>
+                <ul class="list-disc pl-5 space-y-1.5">
+                    <li>A failed run shows a one-line reason in red. <strong>View details</strong> has the full error under <em>Technical details</em>.</li>
+                    <li>Fix the cause if it's on the S3 side (a missing report file, missing permissions), then click <strong>Retry</strong>.</li>
+                    <li>A build that seems stuck can be stopped with <strong>Cancel</strong>; the run goes back to <em>Not loaded</em> and you can load it again.</li>
+                    <li>If an action can't be done (for example the run changed state in the meantime), a message appears at the top of the page saying why.</li>
                 </ul>
             </section>
 
-            <!-- Cost model -->
             <section id="cost-model">
-                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Cost model</h2>
-                <p class="text-gray-700 dark:text-gray-200">
-                    All cost figures come from a single
-                    <a href="https://aws.amazon.com/s3/pricing/" class="text-indigo-600 dark:text-indigo-400 hover:underline" target="_blank" rel="noopener">us-east-1 price table</a>.
-                    Numbers are estimates — the goal is to make tier and run comparisons meaningful, not to reproduce your bill to the cent.
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Cost estimates</h2>
+                <p>
+                    Monthly costs are estimates of storage only, from one price table (us-east-1). They are meant to make
+                    prefixes, storage classes and runs comparable, not to reproduce your bill. For each storage class
+                    present at a prefix:
                 </p>
-
-                <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">Monthly storage</h3>
-                <p class="text-gray-700 dark:text-gray-200">For each tier present at a prefix:</p>
-                <ul class="mt-2 list-disc pl-5 text-gray-700 dark:text-gray-200 space-y-1">
-                    <li>Base: <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">bytes ÷ GB × $/GB-month</code> at that tier's rate.</li>
-                    <li>Standard-IA, One Zone-IA, and Glacier Instant Retrieval bill every object as if it were at least 128 KiB. Smaller objects pay the difference.</li>
-                    <li>Glacier and Deep Archive add per-object metadata overhead (32 KiB at the Glacier rate plus 8 KiB at the Standard rate).</li>
-                    <li>Monitored Intelligent-Tiering tiers add the per-object monitoring &amp; automation fee.</li>
+                <ul class="mt-2 list-disc pl-5 space-y-1">
+                    <li>Size × that class's price per GB-month.</li>
+                    <li>Standard-IA, One Zone-IA and Glacier Instant Retrieval bill each object as at least 128 KiB.</li>
+                    <li>Glacier Flexible Retrieval and Deep Archive add per-object metadata (32 KiB at the Glacier rate plus 8 KiB at the Standard rate).</li>
+                    <li>Intelligent-Tiering adds its per-object monitoring fee for the tiers it monitors. Objects under 128 KiB aren't monitored or moved by AWS, so they are counted separately at the Frequent rate without the fee.</li>
                 </ul>
-
-                <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">PUT API cost (Compare only)</h3>
-                <p class="text-gray-700 dark:text-gray-200">
-                    The <a href="/compare" class="text-indigo-600 dark:text-indigo-400 hover:underline">Compare</a> page surfaces a one-time PUT API charge alongside monthly storage, so you can see what it cost to land the run's objects in S3 in the first place:
-                    <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">objectCount ÷ 1000 × $0.005</code>.
-                    PUTs/COPYs/POSTs are billed at $0.005 per 1,000 requests in us-east-1.
-                </p>
-
-                <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mt-6 mb-2">Storage tiers</h3>
-                <p class="text-gray-700 dark:text-gray-200">
-                    Standard, Standard-IA, One Zone-IA, Glacier Instant Retrieval, Glacier Flexible Retrieval, and Deep Archive each have a fixed monthly rate.
-                    Intelligent-Tiering objects are bucketed by access tier — Frequent, Infrequent, Archive Instant, Archive, and Deep Archive — and the monitored tiers add the per-object monitoring fee.
-                    Reduced Redundancy is deprecated by AWS but still costed when present.
-                </p>
-                <p class="mt-3 text-gray-700 dark:text-gray-200">
-                    <strong>Intelligent-Tiering Frequent (&lt; 128 KiB).</strong> AWS does not monitor or auto-tier Intelligent-Tiering objects smaller than 128 KiB — see
-                    <a href="https://aws.amazon.com/s3/storage-classes/intelligent-tiering/" class="text-indigo-600 dark:text-indigo-400 hover:underline" target="_blank" rel="noopener">S3 Intelligent-Tiering</a>.
-                    These objects are split into their own bucket at ingest so the storage cost stays at the Frequent rate and they don't accrue the monitoring fee.
+                <p class="mt-3">
+                    Requests, retrievals and data transfer are not included. If an inventory doesn't report storage
+                    classes, only sizes and object counts are shown.
                 </p>
             </section>
 
-            <!-- State chips -->
             <section id="chips">
                 <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">State chips</h2>
-                <p class="text-gray-700 dark:text-gray-200 mb-4">
-                    Every inventory row has a colored chip showing its current state.
-                </p>
+                <p class="mb-4">Each run shows its state as a coloured chip.</p>
                 <div class="overflow-x-auto -mx-4 sm:mx-0">
                     <table class="min-w-full text-sm">
                         <thead class="border-b border-gray-200 dark:border-gray-700">
                             <tr class="text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
                                 <th class="py-2 pr-6 font-medium">Chip</th>
                                 <th class="py-2 pr-6 font-medium">Meaning</th>
-                                <th class="py-2 font-medium">Available action</th>
+                                <th class="py-2 font-medium">What you can do</th>
                             </tr>
                         </thead>
-                        <tbody class="divide-y divide-gray-100 dark:divide-gray-800 text-gray-700 dark:text-gray-200">
+                        <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
                             <tr>
                                 <td class="py-2.5 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "not_loaded"}}">{{stateLabel "not_loaded"}}</span></td>
-                                <td class="py-2.5 pr-6">Discovered in S3, never built.</td>
+                                <td class="py-2.5 pr-6">Found in S3; no index on this server (never built, unloaded, or the build was cancelled).</td>
                                 <td class="py-2.5">Load</td>
                             </tr>
                             <tr>
                                 <td class="py-2.5 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "loading"}}">{{stateLabel "loading"}}</span></td>
-                                <td class="py-2.5 pr-6">A build is running. Stage and ETA appear below the chip.</td>
+                                <td class="py-2.5 pr-6">Queued or building. The stage and time left show next to it.</td>
                                 <td class="py-2.5">Cancel</td>
                             </tr>
                             <tr>
                                 <td class="py-2.5 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "loaded"}}">{{stateLabel "loaded"}}</span></td>
-                                <td class="py-2.5 pr-6">The index is ready; the inventory shows up on Browse.</td>
-                                <td class="py-2.5">Unload</td>
+                                <td class="py-2.5 pr-6">Ready to browse and compare.</td>
+                                <td class="py-2.5">Browse, Compare, Pin, Unload</td>
                             </tr>
                             <tr>
                                 <td class="py-2.5 pr-6"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "error"}}">{{stateLabel "error"}}</span></td>
-                                <td class="py-2.5 pr-6">Last build failed or was interrupted. Hover the small Error label for the message.</td>
+                                <td class="py-2.5 pr-6">The last build failed. The reason shows under the chip.</td>
                                 <td class="py-2.5">Retry</td>
                             </tr>
                         </tbody>
@@ -235,187 +233,161 @@
                 </div>
             </section>
 
-            <!-- Action buttons -->
             <section id="buttons">
                 <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Action buttons</h2>
-                <p class="text-gray-700 dark:text-gray-200 mb-4">
-                    Only the buttons that are valid in the current state appear on each row.
-                </p>
-                <div class="overflow-x-auto -mx-4 sm:mx-0">
-                    <table class="min-w-full text-sm">
-                        <thead class="border-b border-gray-200 dark:border-gray-700">
-                            <tr class="text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                                <th class="py-2 pr-6 font-medium">Button</th>
-                                <th class="py-2 pr-6 font-medium">Shown when</th>
-                                <th class="py-2 font-medium">What it does</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-gray-100 dark:divide-gray-800 text-gray-700 dark:text-gray-200">
-                            <tr>
-                                <td class="py-2.5 pr-6 font-medium text-indigo-600 dark:text-indigo-400">Load</td>
-                                <td class="py-2.5 pr-6">State is Not loaded</td>
-                                <td class="py-2.5">Kicks off a fresh build of the index.</td>
-                            </tr>
-                            <tr>
-                                <td class="py-2.5 pr-6 font-medium text-indigo-600 dark:text-indigo-400">Retry</td>
-                                <td class="py-2.5 pr-6">State is Error</td>
-                                <td class="py-2.5">Same as Load — wipes any partial files and starts a new build.</td>
-                            </tr>
-                            <tr>
-                                <td class="py-2.5 pr-6 font-medium text-yellow-600 dark:text-yellow-400">Unload</td>
-                                <td class="py-2.5 pr-6">State is Loaded</td>
-                                <td class="py-2.5">Releases the inventory from memory <em>and</em> removes its on-disk cache. The row returns to Not loaded.</td>
-                            </tr>
-                            <tr>
-                                <td class="py-2.5 pr-6 font-medium text-yellow-600 dark:text-yellow-400">Cancel</td>
-                                <td class="py-2.5 pr-6">A build is running</td>
-                                <td class="py-2.5">Stops the in-flight build. The row flips to Error and you can click Retry.</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
+                <p class="mb-4">A run only shows the actions that make sense in its current state.</p>
+                <dl class="divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+                    <div class="grid sm:grid-cols-[11rem_1fr] gap-x-6 py-3"><dt class="font-medium text-gray-900 dark:text-gray-100">Load</dt><dd>Builds the run's index. A run you load by hand is also pinned.</dd></div>
+                    <div class="grid sm:grid-cols-[11rem_1fr] gap-x-6 py-3"><dt class="font-medium text-gray-900 dark:text-gray-100">Cancel</dt><dd>Stops a queued or running build. The run goes back to <em>Not loaded</em>.</dd></div>
+                    <div class="grid sm:grid-cols-[11rem_1fr] gap-x-6 py-3"><dt class="font-medium text-gray-900 dark:text-gray-100">Retry</dt><dd>Starts a failed build again from scratch.</dd></div>
+                    <div class="grid sm:grid-cols-[11rem_1fr] gap-x-6 py-3"><dt class="font-medium text-gray-900 dark:text-gray-100">Browse</dt><dd>Opens the run on the Browse page at the bucket root.</dd></div>
+                    <div class="grid sm:grid-cols-[11rem_1fr] gap-x-6 py-3"><dt class="font-medium text-gray-900 dark:text-gray-100">Compare with previous</dt><dd>Compares the run with the previous loaded run of the same inventory. When there is none, <strong>Compare</strong> opens the Compare page with this run picked.</dd></div>
+                    <div class="grid sm:grid-cols-[11rem_1fr] gap-x-6 py-3"><dt class="font-medium text-gray-900 dark:text-gray-100">Pin / Unpin</dt><dd>A pinned run is never removed automatically to free disk space or by auto-load's retention. See <a href="#auto-load" class="text-indigo-600 dark:text-indigo-400 hover:underline">Auto-load, pins &amp; disk</a>.</dd></div>
+                    <div class="grid sm:grid-cols-[11rem_1fr] gap-x-6 py-3"><dt class="font-medium text-gray-900 dark:text-gray-100">Unload</dt><dd>Deletes the run's index from this server after asking you to confirm. Nothing in S3 is touched; loading it again rebuilds the index.</dd></div>
+                </dl>
             </section>
 
-            <!-- Progress -->
             <section id="progress">
-                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Progress &amp; ETA</h2>
-                <p class="text-gray-700 dark:text-gray-200">
-                    While an inventory is loading, the row shows the current stage, its percent and an estimated
-                    time left, over a bar with one segment per stage (Download, Build, Finalize) that fills left
-                    to right. Updates stream in a few times a second while the page is open; come back later and
-                    the row shows the latest state. The build runs on the server, not in your browser, so
-                    closing the tab doesn't stop it. <strong>View details</strong> adds the per-stage timeline
-                    (objects read, rate, merge rounds) and, when the configuration built before, the overall
-                    time left at the last build's pace.
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Progress &amp; time left</h2>
+                <p>
+                    A build goes through these stages: <em>Downloading &amp; parsing</em> the report, <em>Merging</em>
+                    (large inventories only), <em>Building index</em>, and <em>Finalizing</em>, which has its own steps
+                    such as writing the hash table and checksumming the files. The row shows the current stage, its
+                    percent and the time left; the bar has one segment per stage and only moves forward.
                 </p>
-                <p class="mt-3 text-gray-700 dark:text-gray-200">
-                    The time left projects the current stage's rate so far onto the rest of that stage. It is
-                    shown once a stage is a few percent in, is smoothed so one fast or slow update doesn't swing
-                    it, and counts down between updates. A stage with no measure of its progress yet (merging
-                    spilled runs, the start of a stage) shows a moving segment instead of a percentage.
+                <p class="mt-3">
+                    The time left is estimated from the current stage's pace so far and smoothed so it doesn't jump. A
+                    stage that can't measure its progress yet shows a moving segment instead of a percent.
+                    <strong>View details</strong> shows each stage's duration once the build is done.
                 </p>
             </section>
 
-            <!-- Sharing -->
+            <section id="auto-load">
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Auto-load, pins &amp; disk</h2>
+                <p>
+                    When the server runs with auto-load on, each inventory card on Inventories has
+                    <strong>Auto-load latest run</strong> and <strong>Keep last N runs</strong>. With auto-load ticked, the
+                    server loads each new run on its own and keeps the newest N runs loaded. When auto-load is off on the
+                    server, the page says so and these settings are hidden. Settings fixed by the server's configuration
+                    file are shown but can't be changed here.
+                </p>
+                <p class="mt-3">
+                    The server has a disk limit for indexes. To make room for a new run it first removes runs past an
+                    inventory's retention, then the runs used least recently. It never removes a pinned run or one that
+                    is being read. A run you unload by hand is skipped by auto-load until a newer run appears.
+                </p>
+            </section>
+
             <section id="sharing">
-                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Sharing URLs</h2>
-                <p class="text-gray-700 dark:text-gray-200">
-                    Browse is fully reflected in the address bar — every drill-down, sort header, and page change
-                    updates the URL. Copy the address at any point and send it to a teammate: opening that link
-                    lands them in the exact same view (assuming the inventory is also loaded on their session).
-                </p>
-                <p class="mt-3 text-gray-700 dark:text-gray-200">
-                    Browser <strong>back</strong> and <strong>forward</strong> work as you'd expect: each click into a child
-                    prefix is a history entry. The Inventory dropdown and Prefix input always reflect the URL
-                    you're on, so navigating back to the root resets them too.
+                <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Links &amp; history</h2>
+                <p>
+                    Browse and Compare keep the address bar in step with what you see: the run, the prefix, the sort and
+                    the page. Copy the address to share a view; anyone with access to this server sees the same view as
+                    long as the run is still loaded. Every link opens in a new tab with a middle-click, and the browser's
+                    Back and Forward buttons step through the prefixes you visited. Opening a run's details on
+                    Inventories adds <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">#run=…</code>
+                    to the address, so a link can open that panel directly.
                 </p>
             </section>
 
-            <!-- Dark mode -->
             <section id="dark-mode">
                 <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Dark mode</h2>
-                <p class="text-gray-700 dark:text-gray-200">
-                    The sun / moon button in the top-right of every page toggles dark mode. Your choice is stored
-                    locally in this browser and applied before the first paint, so there's no light-mode flash
-                    when you reload. If you've never set a preference, the site follows your OS-level setting.
+                <p>
+                    The sun/moon button at the top right switches between light and dark. Your choice is remembered in
+                    this browser; until you choose, the site follows your system setting.
                 </p>
             </section>
 
-            <!-- Restarts -->
             <section id="restarts">
                 <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Restarts &amp; saved state</h2>
-                <p class="text-gray-700 dark:text-gray-200">
-                    The server remembers which inventories you've loaded across restarts. When the server comes
-                    back up:
-                </p>
-                <ul class="mt-3 list-disc pl-5 text-gray-700 dark:text-gray-200 space-y-1">
-                    <li>Inventories that were <em>Loaded</em> are reopened from the cache — no rebuild, ready to query.</li>
-                    <li>Inventories that were mid-build flip to <em>Error</em> with the message
-                        <em>"interrupted by server restart"</em>. Builds can't safely resume from a partial cache,
-                        so the recovery is honest about it and asks you to Retry.</li>
-                    <li>Inventories that were idle (Not loaded, Unloaded) stay in the same state.</li>
+                <ul class="list-disc pl-5 space-y-1.5">
+                    <li>Loaded runs stay loaded across server restarts: they reopen from disk without a rebuild.</li>
+                    <li>A build running when the server shuts down stops and shows <em>Build interrupted by a server restart</em>. Builds can't safely resume halfway, so load the run again.</li>
+                    <li>Pins, auto-load settings and recent build history are kept.</li>
                 </ul>
             </section>
 
-            <!-- Keyboard -->
             <section id="shortcuts">
                 <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Keyboard</h2>
-                <ul class="list-disc pl-5 text-gray-700 dark:text-gray-200 space-y-1">
-                    <li><kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Tab</kbd> walks every page in reading order.</li>
-                    <li><kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Enter</kbd> or <kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Space</kbd> activates any button.</li>
-                    <li><kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Enter</kbd> in the Prefix input on Browse jumps directly to that prefix.</li>
-                    <li>Child prefix links on Browse are real anchors — middle-click or <kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Ctrl</kbd>+click opens them in a new tab.</li>
+                <ul class="list-disc pl-5 space-y-1.5">
+                    <li><kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Tab</kbd> moves through every link and button in reading order; <kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Enter</kbd> or <kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Space</kbd> activates it.</li>
+                    <li><kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Enter</kbd> in the Prefix box on Browse or Compare jumps to that prefix.</li>
+                    <li><kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Esc</kbd> closes the run details panel.</li>
+                    <li>A screen reader announces when a build finishes, fails or is cancelled.</li>
                 </ul>
             </section>
 
-            <!-- Troubleshooting -->
             <section id="troubleshooting">
                 <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Troubleshooting</h2>
                 <input id="ts-filter" type="search" placeholder="Filter…" aria-label="Filter troubleshooting"
-                       class="mb-4 block w-full max-w-xs px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-
-                <dl class="divide-y divide-gray-200 dark:divide-gray-700 text-sm">
-                    <div class="py-4" data-search-target="stuck ETA progress">
-                        <dt class="font-semibold text-gray-900 dark:text-gray-100">A build is stuck and the ETA isn't moving.</dt>
-                        <dd class="mt-1 text-gray-700 dark:text-gray-200">Click <strong>Cancel</strong>. The build stops at the next safe checkpoint and the row goes back to Not loaded, saying the build was cancelled. Then click <strong>Retry</strong>.</dd>
+                       class="mb-4 w-full sm:w-80 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-3 py-1.5 text-sm">
+                <dl class="divide-y divide-gray-200 dark:divide-gray-700">
+                    <div class="py-4" data-search-target="failed missing file s3 deleted moved">
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">A build failed: "An inventory data file is missing from S3".</dt>
+                        <dd class="mt-1">A file the run's report lists is gone from S3, usually because the report was deleted or expired. Load a newer run instead.</dd>
+                    </div>
+                    <div class="py-4" data-search-target="failed access denied permissions">
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">A build failed: "Access denied".</dt>
+                        <dd class="mt-1">The server can't read the inventory files. Ask whoever runs it to check its S3 permissions, then click Retry.</dd>
+                    </div>
+                    <div class="py-4" data-search-target="disk space full load refused">
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">A load is refused for lack of disk space.</dt>
+                        <dd class="mt-1">The index disk is full of runs that can't be removed (pinned or in use). Unpin or unload runs you no longer need, then load again.</dd>
+                    </div>
+                    <div class="py-4" data-search-target="stuck time left progress slow">
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">A build looks stuck.</dt>
+                        <dd class="mt-1">Large inventories spend minutes in some steps; <strong>View details</strong> shows which step is running. If nothing moves for a long time, click <strong>Cancel</strong> and load it again.</dd>
                     </div>
                     <div class="py-4" data-search-target="interrupted by server restart">
-                        <dt class="font-semibold text-gray-900 dark:text-gray-100">Row shows "interrupted by server restart".</dt>
-                        <dd class="mt-1 text-gray-700 dark:text-gray-200">Expected — a build was running when the server stopped, and partial builds can't safely resume. Click <strong>Retry</strong> to rerun cleanly.</dd>
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">A run shows "Build interrupted by a server restart".</dt>
+                        <dd class="mt-1">The server stopped during the build. Load the run again.</dd>
                     </div>
-                    <div class="py-4" data-search-target="inventories list empty">
-                        <dt class="font-semibold text-gray-900 dark:text-gray-100">The Inventories list is empty.</dt>
-                        <dd class="mt-1 text-gray-700 dark:text-gray-200">
-                            {{if .HasDiscovery}}
-                            No S3 inventory configurations were found at the configured location. Make sure at least one inventory has published a completed run.
-                            {{else}}
-                            S3 discovery isn't configured for this server. The operator needs to start the server pointing at a source location for inventories to appear.
-                            {{end}}
-                        </dd>
+                    <div class="py-4" data-search-target="inventories list empty no runs">
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">The Inventories page lists nothing.</dt>
+                        <dd class="mt-1">No inventory report has been published at the location the server watches yet. AWS writes the first report within 48 hours of setting up an inventory. Click <strong>Refresh</strong> to check again.</dd>
                     </div>
-                    <div class="py-4" data-search-target="browse dropdown select loaded">
-                        <dt class="font-semibold text-gray-900 dark:text-gray-100">Browse dropdown says "Select a loaded inventory" but I just loaded one.</dt>
-                        <dd class="mt-1 text-gray-700 dark:text-gray-200">The dropdown only lists inventories currently in the <em>Loaded</em> state. If yours is <em>Loading…</em>, wait for the build to finish. If it's <em>Not loaded</em> or <em>Error</em>, click Load / Retry on the Inventories page first.</dd>
+                    <div class="py-4" data-search-target="browse compare run missing not listed select">
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">A run isn't listed on Browse or Compare.</dt>
+                        <dd class="mt-1">Only loaded runs are listed. Load it on Inventories first; Compare also needs two loaded runs of the same inventory.</dd>
                     </div>
-                    <div class="py-4" data-search-target="page hangs navigation slow">
-                        <dt class="font-semibold text-gray-900 dark:text-gray-100">Pages feel slow after a lot of navigation.</dt>
-                        <dd class="mt-1 text-gray-700 dark:text-gray-200">If clicks stop responding for a while, hard-reload the page (<kbd class="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 font-mono text-xs">Cmd/Ctrl+Shift+R</kbd>) to drop any stale background connections. Things should be snappy again.</dd>
+                    <div class="py-4" data-search-target="live updates disconnected reconnecting">
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">"Live updates are disconnected".</dt>
+                        <dd class="mt-1">The page lost its connection to the server and is reconnecting by itself. Running builds still refresh every few seconds until it's back.</dd>
                     </div>
-                    <div class="py-4" data-search-target="storage tier breakdown missing">
-                        <dt class="font-semibold text-gray-900 dark:text-gray-100">Browse doesn't show a storage tier breakdown for an inventory.</dt>
-                        <dd class="mt-1 text-gray-700 dark:text-gray-200">Some S3 inventory configurations don't include the storage-class column. Without that column the per-tier breakdown and cost estimate can't be computed — only total counts and bytes are shown.</dd>
+                    <div class="py-4" data-search-target="storage class tier breakdown cost missing">
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">No storage-class breakdown or cost.</dt>
+                        <dd class="mt-1">The inventory doesn't include the storage class field. Add it to the inventory's configuration in AWS; new runs will then show the breakdown and cost.</dd>
                     </div>
                 </dl>
                 <p id="ts-empty" class="hidden text-sm text-gray-500 dark:text-gray-400 italic">No items match.</p>
             </section>
 
-            <!-- Glossary -->
             <section id="glossary">
                 <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Glossary</h2>
                 <dl class="divide-y divide-gray-200 dark:divide-gray-700 text-sm">
                     <div class="grid sm:grid-cols-[10rem_1fr] gap-x-6 py-3">
                         <dt class="font-medium text-gray-900 dark:text-gray-100">Inventory</dt>
-                        <dd class="text-gray-700 dark:text-gray-200">An S3 Inventory configuration — a periodic report listing every object in a source bucket.</dd>
+                        <dd>An S3 Inventory configuration on a bucket: AWS writes a report of every object in it on a schedule.</dd>
                     </div>
                     <div class="grid sm:grid-cols-[10rem_1fr] gap-x-6 py-3">
                         <dt class="font-medium text-gray-900 dark:text-gray-100">Run</dt>
-                        <dd class="text-gray-700 dark:text-gray-200">One snapshot produced by an inventory configuration. The site uses only the latest run per inventory.</dd>
+                        <dd>One of those reports, a snapshot of the bucket on one day. You can load several runs of the same inventory and compare them.</dd>
                     </div>
                     <div class="grid sm:grid-cols-[10rem_1fr] gap-x-6 py-3">
                         <dt class="font-medium text-gray-900 dark:text-gray-100">Index</dt>
-                        <dd class="text-gray-700 dark:text-gray-200">The compact, queryable form built from an inventory. Lets Browse answer prefix questions in milliseconds.</dd>
+                        <dd>The compact, queryable form of a run this server builds when you load it.</dd>
                     </div>
                     <div class="grid sm:grid-cols-[10rem_1fr] gap-x-6 py-3">
                         <dt class="font-medium text-gray-900 dark:text-gray-100">Prefix</dt>
-                        <dd class="text-gray-700 dark:text-gray-200">A path inside the source bucket — e.g. <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">data/2024/</code>. Browse navigates the prefix tree.</dd>
+                        <dd>A folder-like path inside the bucket, e.g. <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">data/2024/</code>. Its totals include everything below it.</dd>
                     </div>
                     <div class="grid sm:grid-cols-[10rem_1fr] gap-x-6 py-3">
-                        <dt class="font-medium text-gray-900 dark:text-gray-100">Tier</dt>
-                        <dd class="text-gray-700 dark:text-gray-200">The S3 storage class — Standard, Standard-IA, Glacier Instant, and so on.</dd>
+                        <dt class="font-medium text-gray-900 dark:text-gray-100">Storage class</dt>
+                        <dd>Where AWS keeps an object and how it's priced: Standard, Standard-IA, Glacier, Intelligent-Tiering and so on.</dd>
                     </div>
                     <div class="grid sm:grid-cols-[10rem_1fr] gap-x-6 py-3">
-                        <dt class="font-medium text-gray-900 dark:text-gray-100">Cost estimate</dt>
-                        <dd class="text-gray-700 dark:text-gray-200">Monthly $ figure computed from the per-tier object counts and sizes using S3's US-East-1 prices.</dd>
+                        <dt class="font-medium text-gray-900 dark:text-gray-100">Pinned</dt>
+                        <dd>A loaded run that is never removed automatically.</dd>
                     </div>
                 </dl>
             </section>
