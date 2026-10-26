@@ -252,7 +252,7 @@ func (d *Discoverer) Find(ctx context.Context, srcBucket, invID, run string) (in
 	}
 	entry := runEntry(srcBucket, invID, invPrefix, run)
 	err := d.describeRun(ctx, &entry)
-	if nsk := (*types.NoSuchKey)(nil); errors.As(err, &nsk) {
+	if _, missing := errors.AsType[*types.NoSuchKey](err); missing || d.unpublished(err) {
 		return inventory.Inventory{}, fmt.Errorf("%w: %s/%s/%s", inventory.ErrRunNotFound, srcBucket, invID, run)
 	}
 
@@ -279,10 +279,7 @@ func (d *Discoverer) describeRuns(ctx context.Context, src, inv, invPrefix strin
 	for i, name := range runs {
 		entry := runEntry(src, inv, invPrefix, name)
 		if limit <= 0 || i < limit {
-			err := d.describeRun(ctx, &entry)
-			// An index run without its manifest is still uploading (the
-			// manifest is written last): not a run yet.
-			if _, missing := errors.AsType[*types.NoSuchKey](err); missing && d.indexes {
+			if err := d.describeRun(ctx, &entry); d.unpublished(err) {
 				continue
 			}
 		}
@@ -321,9 +318,23 @@ func runEntry(src, inv, invPrefix, run string) inventory.Inventory {
 	}
 }
 
-// describeRun fills entry's manifest stats. A fetch failure is logged
-// and recorded on the entry so the UI shows it; the error is returned
-// so callers can tell a missing run apart.
+// unpublished reports whether err, from describing an index run, means
+// the run has no committed index of this version: its manifest is
+// missing because it is still uploading (the manifest is written last),
+// or is of another version. Such a run is not listed.
+func (d *Discoverer) unpublished(err error) bool {
+	if !d.indexes || err == nil {
+		return false
+	}
+	_, missing := errors.AsType[*types.NoSuchKey](err)
+
+	return missing || errors.Is(err, indexstore.ErrNotPublished)
+}
+
+// describeRun fills entry's manifest stats. A fetch failure is recorded
+// on the entry so the UI shows it, and logged unless the run is
+// unpublished; the error is returned so callers can tell a missing run
+// apart.
 func (d *Discoverer) describeRun(ctx context.Context, entry *inventory.Inventory) error {
 	if !d.indexes {
 		d.manifestsMu.Lock()
@@ -337,9 +348,11 @@ func (d *Discoverer) describeRun(ctx context.Context, entry *inventory.Inventory
 	}
 	sum, err := d.summarize(ctx, entry.ManifestKey)
 	if err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).
-			Str("src", entry.SourceBucket).Str("inv", entry.Name).Str("run", entry.Run).
-			Msg("fetch manifest")
+		if !d.unpublished(err) {
+			zerolog.Ctx(ctx).Warn().Err(err).
+				Str("src", entry.SourceBucket).Str("inv", entry.Name).Str("run", entry.Run).
+				Msg("fetch manifest")
+		}
 		entry.FileFormat = "unknown"
 		entry.Error = "failed to read manifest"
 
