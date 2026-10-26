@@ -63,6 +63,11 @@
         // Failed requests: htmx swaps nothing for a 4xx or 5xx and says
         // nothing, so show the server's reason in [data-error-toast].
         // Elements that report their own failures carry data-own-errors.
+        // Polls and live-refresh targets carry data-background-refresh:
+        // they fail every few seconds while the server is down, and
+        // live.js already reports a lost stream. Only the requesting
+        // element is checked, so buttons inside a refreshed row or
+        // drawer still raise the toast.
         (function () {
             var hideTimer = null;
             function toast() { return document.querySelector('[data-error-toast]'); }
@@ -94,7 +99,8 @@
             }
             function ownErrors(e) {
                 var elt = e.detail && e.detail.elt;
-                return !!(elt && elt.closest && elt.closest('[data-own-errors]'));
+                if (!elt || !elt.closest) return false;
+                return elt.hasAttribute('data-background-refresh') || !!elt.closest('[data-own-errors]');
             }
             document.addEventListener('htmx:responseError', function (e) {
                 if (!ownErrors(e)) show(reason(e.detail.xhr));
@@ -174,7 +180,7 @@
         </div>
     </nav>
 
-    <div id="notifications-banner"
+    <div id="notifications-banner" data-background-refresh
          hx-get="/partials/notifications"
          hx-trigger="load, every 30s"
          hx-swap="innerHTML"></div>

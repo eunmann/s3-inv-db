@@ -21,6 +21,7 @@
     data-job-state="{{if .LatestJob}}{{.LatestJob.State}}{{end}}"
     hx-get="/partials/discovered/{{.SourceBucket}}/{{.Name}}/{{.Run}}"
     hx-trigger="live-refresh"
+    data-background-refresh
     hx-sync="this:queue last"
     hx-swap="outerHTML"{{end}}>
 {{- /* A queued or running job shows as loading even before the catalog

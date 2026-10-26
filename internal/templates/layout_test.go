@@ -82,12 +82,38 @@ func TestLayout_ErrorToast(t *testing.T) {
 	if script == "" {
 		t.Fatal("no head script drives the toast")
 	}
-	for _, want := range []string{"htmx:responseError", "htmx:sendError", "[data-own-errors]", "textContent"} {
+	for _, want := range []string{"htmx:responseError", "htmx:sendError", "[data-own-errors]", "hasAttribute('data-background-refresh')", "textContent"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("toast script missing %q", want)
 		}
 	}
 	if strings.Contains(script, "innerHTML") {
 		t.Error("toast script must write messages with textContent, not innerHTML")
+	}
+}
+
+// TestLayout_BackgroundRefreshesSkipToast: requests the user did not
+// start (polls and live-refresh) repeat every few seconds while the
+// server is down, so their elements opt out of the error toast.
+func TestLayout_BackgroundRefreshesSkipToast(t *testing.T) {
+	doc := renderLayoutPage(t)
+
+	refreshers := doc.Find("[hx-trigger]").FilterFunction(func(_ int, s *goquery.Selection) bool {
+		trigger, _ := s.Attr("hx-trigger")
+
+		return strings.Contains(trigger, "every ") || strings.Contains(trigger, "live-refresh")
+	})
+	ids := map[string]bool{}
+	refreshers.Each(func(_ int, s *goquery.Selection) {
+		id, _ := s.Attr("id")
+		ids[id] = true
+		if _, ok := s.Attr("data-background-refresh"); !ok {
+			t.Errorf("#%s refreshes in the background but lacks data-background-refresh", id)
+		}
+	})
+	for _, id := range []string{"notifications-banner", "dashboard-live"} {
+		if !ids[id] {
+			t.Errorf("#%s is not a background refresher", id)
+		}
 	}
 }

@@ -112,6 +112,7 @@ func TestDiscoveredRowPartial_LiveWiring(t *testing.T) {
 				`data-live-inv="b/i/2026-05-13T03-00Z"`,
 				`hx-trigger="live-refresh"`,
 				`hx-sync="this:queue last"`,
+				`data-background-refresh`,
 			}, tt.want...) {
 				if !strings.Contains(body, want) {
 					t.Errorf("row missing %q\n%s", want, body)
