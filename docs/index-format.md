@@ -452,9 +452,15 @@ mask is `mask[k]`.
 
 ## Manifest
 
-`manifest.json` lists every index file with its size and hex SHA-256
-checksum, plus the prefix count and maximum depth. `verify` and
+`manifest.json` lists every index file with its size and checksum,
+plus the prefix count and maximum depth. `verify` and
 `format.VerifyManifest` check each file's size and checksum against it.
+
+A file's checksum is the hex SHA-256 of the SHA-256 digests of its
+64 MiB pieces, concatenated in order (one empty piece for an empty
+file). The pieces of every file are hashed in parallel, so writing or
+verifying a manifest uses every core instead of one thread reading the
+whole index.
 
 ```json
 {
@@ -464,7 +470,7 @@ checksum, plus the prefix count and maximum depth. `verify` and
     "tier_stats/tier_multi.bin": {"checksum": "…", "size": 2567019},
     "...": {"checksum": "…", "size": 0}
   },
-  "version": 1,
+  "version": 2,
   "node_count": 2374251,
   "max_depth": 7
 }

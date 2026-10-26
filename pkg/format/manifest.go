@@ -1,18 +1,17 @@
 package format
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
 )
 
-// ManifestVersion is the current manifest format version.
-const ManifestVersion = 1
+// ManifestVersion is the current manifest format version. Version 2
+// checksums a file by its pieces (see checksumFiles).
+const ManifestVersion = 2
 
 // Manifest describes the contents of an index directory.
 type Manifest struct {
@@ -61,16 +60,21 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32, progress StepP
 		manifest.Files[name] = FileInfo{Size: info.Size()}
 		total += info.Size()
 	}
-	hashed := newStepCounter(progress, StepChecksum, total)
+	sizes := make(map[string]int64, len(manifest.Files))
 	for name, fi := range manifest.Files {
-		checksum, err := checksumFile(filepath.Join(dir, name), hashed)
-		if err != nil {
-			return fmt.Errorf("checksum %s: %w", name, err)
-		}
-		fi.Checksum = checksum
-		manifest.Files[name] = fi
+		sizes[name] = fi.Size
+	}
+	hashed := newStepCounter(progress, StepChecksum, total)
+	sums, err := checksumFiles(dir, sizes, hashed)
+	if err != nil {
+		return err
 	}
 	hashed.finish()
+	for name, sum := range sums {
+		fi := manifest.Files[name]
+		fi.Checksum = sum
+		manifest.Files[name] = fi
+	}
 
 	manifestPath := filepath.Join(dir, ManifestFile)
 	data, err := json.MarshalIndent(manifest, "", "  ")
@@ -153,61 +157,38 @@ func ReadManifest(dir string) (*Manifest, error) {
 	return &manifest, nil
 }
 
-// VerifyManifest checks that all files match their checksums.
-func VerifyManifest(dir string, manifest *Manifest) error {
-	for name, info := range manifest.Files {
-		path := filepath.Join(dir, name)
+// ErrManifestVersion is returned for a manifest of another version,
+// whose checksums this build computes differently.
+var ErrManifestVersion = errors.New("unsupported manifest version")
 
-		// Check file exists
-		stat, err := os.Stat(path)
+// VerifyManifest checks that all files match their sizes and checksums.
+func VerifyManifest(dir string, manifest *Manifest) error {
+	if manifest.Version != ManifestVersion {
+		return fmt.Errorf("%w: %d, want %d", ErrManifestVersion, manifest.Version, ManifestVersion)
+	}
+	sizes := make(map[string]int64, len(manifest.Files))
+	for name, info := range manifest.Files {
+		stat, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
 			return fmt.Errorf("file %s: %w", name, err)
 		}
-
-		// Check size
 		if stat.Size() != info.Size {
 			return fmt.Errorf("file %s: %w (got %d, want %d)",
 				name, ErrSizeMismatch, stat.Size(), info.Size)
 		}
-
-		// Check checksum
-		checksum, err := checksumFile(path, nil)
-		if err != nil {
-			return fmt.Errorf("checksum %s: %w", name, err)
-		}
-
-		if checksum != info.Checksum {
+		sizes[name] = info.Size
+	}
+	sums, err := checksumFiles(dir, sizes, nil)
+	if err != nil {
+		return err
+	}
+	for name, info := range manifest.Files {
+		if sums[name] != info.Checksum {
 			return fmt.Errorf("file %s: %w", name, ErrChecksumMismatch)
 		}
 	}
 
 	return nil
-}
-
-// checksumFile computes the SHA-256 checksum of a file, counting the
-// bytes it hashes on hashed.
-func checksumFile(path string, hashed *stepCounter) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("open file: %w", err)
-	}
-	defer f.Close()
-
-	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(h, stepWriter{hashed}), f); err != nil {
-		return "", fmt.Errorf("read file: %w", err)
-	}
-
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// stepWriter counts the bytes written to it on a step counter.
-type stepWriter struct{ c *stepCounter }
-
-func (w stepWriter) Write(p []byte) (int, error) {
-	w.c.add(len(p))
-
-	return len(p), nil
 }
 
 // WriteFileSync writes data to a file and fsyncs it.
