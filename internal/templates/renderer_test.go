@@ -2,6 +2,7 @@ package templates_test
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -68,6 +69,35 @@ func TestRenderer_Inventories(t *testing.T) {
 	html := buf.String()
 	if !strings.Contains(html, "Inventories") {
 		t.Error("rendered output doesn't contain 'Inventories'")
+	}
+}
+
+// TestRenderer_InventoriesRunHashSegments: the #run= check that reopens
+// a drawer on reload accepts every bucket, configuration and run name
+// the server links to, and rejects path tricks.
+func TestRenderer_InventoriesRunHashSegments(t *testing.T) {
+	renderer, err := templates.New()
+	if err != nil {
+		t.Fatalf("failed to create renderer: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := renderer.Render(&buf, "inventories.html", map[string]any{"Title": "Inventories"}); err != nil {
+		t.Fatalf("failed to render inventories: %v", err)
+	}
+	m := regexp.MustCompile(`var segment = /(.+)/;`).FindStringSubmatch(buf.String())
+	if m == nil {
+		t.Fatal("inventories page has no #run= segment pattern")
+	}
+	segment := regexp.MustCompile(m[1])
+	for _, ok := range []string{"my-bucket.example", "daily_inventory", "_inv", "Inv-01", "2026-10-01T01-00Z"} {
+		if !segment.MatchString(ok) {
+			t.Errorf("segment pattern rejects %q", ok)
+		}
+	}
+	for _, bad := range []string{"", ".", "..", "a/b", "a b", "a?b"} {
+		if segment.MatchString(bad) {
+			t.Errorf("segment pattern accepts %q", bad)
+		}
 	}
 }
 
@@ -262,5 +292,39 @@ func TestHxValsJSON_HTMLSpecialCharsInValueAreSafe(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("output %q missing JSON unicode escape %q", got, want)
 		}
+	}
+}
+
+// The drawer body re-renders while a build runs. Only sections the user
+// clicked keep their open state across a swap; the rest take the server's
+// default, so Build details folds once the build ends.
+func TestRenderer_InventoriesDrawerKeepsOnlyTouchedSections(t *testing.T) {
+	renderer, err := templates.New()
+	if err != nil {
+		t.Fatalf("failed to create renderer: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := renderer.Render(&buf, "inventories.html", map[string]any{"Title": "Inventories"}); err != nil {
+		t.Fatalf("failed to render inventories: %v", err)
+	}
+	var handler string
+	for _, m := range regexp.MustCompile(`(?s)addEventListener\('htmx:beforeSwap', function \(e\) \{(.*?)\n\s*\}\);`).FindAllStringSubmatch(buf.String(), -1) {
+		if strings.Contains(m[1], "'run-drawer-body'") {
+			handler = m[1]
+		}
+	}
+	if handler == "" {
+		t.Fatal("inventories page has no htmx:beforeSwap handler for the drawer body")
+	}
+	for _, want := range []string{
+		"!body._touched) return;",
+		"if (body._touched[d.id]) open[d.id] = d.open;",
+	} {
+		if !strings.Contains(handler, want) {
+			t.Errorf("beforeSwap handler missing %q; untouched sections would override the server default\n%s", want, handler)
+		}
+	}
+	if !strings.Contains(buf.String(), "(body._touched = body._touched || {})[summary.parentElement.id] = true;") {
+		t.Error("inventories page no longer records which drawer sections the user clicked")
 	}
 }

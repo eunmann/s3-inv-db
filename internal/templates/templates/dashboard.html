@@ -3,21 +3,22 @@
 {{define "content"}}
 {{- /* Live: a job starting or finishing, or a run loading or being
        evicted, re-renders this block (scripts/live.js, data-live-any).
-       "while-visible": a hidden dashboard tab closes its stream and
-       re-renders on return, so it doesn't hold a connection. */ -}}
+       A build's progress line and bar inside are kept current in place
+       (data-live-inv); when that build changes state its live-refresh
+       bubbles up to this block. "while-visible": a hidden dashboard tab
+       closes its stream and re-renders on return, so it doesn't hold a
+       connection. hx-disinherit keeps hx-select and the rest of the
+       refresh off the Load buttons inside. */ -}}
 <div id="dashboard-live" class="px-4 py-6 sm:px-0 max-w-7xl mx-auto"
      data-live-jobs="while-visible" data-live-any data-background-refresh
-     hx-get="/" hx-select="#dashboard-live" hx-trigger="live-refresh" hx-swap="outerHTML">
+     hx-get="/" hx-select="#dashboard-live" hx-trigger="live-refresh" hx-swap="outerHTML"
+     hx-sync="this:queue last" hx-disinherit="*">
 
-    <header class="flex flex-wrap items-end justify-between gap-4 mb-8">
+    <header class="flex flex-wrap items-end justify-between gap-4 mb-6">
         <div>
             <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Dashboard</h1>
             {{if .HasDiscovery}}
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                Source: <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">{{.S3Source}}</code>
-                {{if .SnapshotAge}}<span class="ml-2 text-xs">Snapshot refreshed {{.SnapshotAge}} ago</span>{{end}}
-                {{if .NextRefreshIn}}<span class="ml-2 text-xs" title="Time until the background poller rebuilds the dashboard snapshot from S3.">· next refresh in {{.NextRefreshIn}}</span>{{end}}
-            </p>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">What each bucket holds and costs, from its latest loaded inventory run.</p>
             {{else}}
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Discovery disabled — start the server with <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--s3-source</code> or <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--index-source</code> to populate this page.
@@ -25,11 +26,9 @@
             {{end}}
         </div>
         <div class="flex items-center gap-2 text-sm">
-            <a href="/inventories" class="inline-flex items-center px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">Manage inventories</a>
+            <a href="/inventories" class="inline-flex items-center px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">All runs</a>
             {{if .LoadedRuns}}
             <a href="/browse" class="inline-flex items-center px-3 py-1.5 border border-transparent rounded-md bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white font-medium">Open Browse</a>
-            {{else}}
-            <span class="inline-flex items-center px-3 py-1.5 border border-transparent rounded-md bg-indigo-600 text-white font-medium opacity-50 cursor-not-allowed" aria-disabled="true" title="Load an inventory first">Open Browse</span>
             {{end}}
         </div>
     </header>
@@ -40,117 +39,66 @@
     </div>
     {{end}}
 
-    <!-- Stat cards -->
-    <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
-        <div class="bg-white dark:bg-gray-800 shadow rounded-lg px-5 py-4">
-            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Configurations{{template "templates/partials/info_icon.html" "Distinct (source bucket, inventory name) pairs discovered under --s3-source or --index-source."}}</dt>
-            <dd class="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100">{{.Configurations}}</dd>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{.TotalRuns}} run{{if ne .TotalRuns 1}}s{{end}} discovered</p>
-        </div>
-
-        <div class="bg-white dark:bg-gray-800 shadow rounded-lg px-5 py-4">
-            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Loaded{{template "templates/partials/info_icon.html" "Runs whose index is built on disk and open in memory, ready to browse/compare."}}</dt>
-            <dd class="mt-1 text-2xl font-semibold text-green-600 dark:text-green-400">{{.LoadedRuns}}</dd>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {{if .TotalObjectsH}}{{.TotalObjectsH}} objects · {{.TotalBytesH}}{{else}}—{{end}}
-            </p>
-        </div>
-
-        <div class="bg-white dark:bg-gray-800 shadow rounded-lg px-5 py-4">
-            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">In progress{{template "templates/partials/info_icon.html" "Runs whose build pipeline is downloading, parsing, or indexing right now."}}</dt>
-            <dd class="mt-1 text-2xl font-semibold {{if .LoadingRuns}}text-blue-600 dark:text-blue-400{{else}}text-gray-900 dark:text-gray-100{{end}}">{{.LoadingRuns}}</dd>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {{if .ErrorRuns}}<span class="text-red-600 dark:text-red-400">{{.ErrorRuns}} in error</span>{{else}}—{{end}}
-            </p>
-        </div>
-
-        <div class="bg-white dark:bg-gray-800 shadow rounded-lg px-5 py-4">
-            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Manifest data{{template "templates/partials/info_icon.html" "Total chunk files (and compressed bytes) across every discovered manifest — the raw S3-Inventory payload size."}}</dt>
-            <dd class="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100">{{if .ManifestFiles}}{{.ManifestFiles}}{{else}}—{{end}}</dd>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {{if .ManifestBytesH}}{{.ManifestBytesH}} compressed{{else}}chunk files{{end}}
-            </p>
-        </div>
-
-        <div class="bg-white dark:bg-gray-800 shadow rounded-lg px-5 py-4">
-            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Auto-load{{template "templates/partials/info_icon.html" "Configurations opted in to the background poller that loads each newest run automatically."}}</dt>
-            <dd class="mt-1 text-2xl font-semibold {{if .AutoLoadConfigs}}text-indigo-600 dark:text-indigo-400{{else}}text-gray-900 dark:text-gray-100{{end}}">{{.AutoLoadConfigs}}</dd>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {{if or .AutoLoadFailures .PendingPollErrors}}
-                <span class="text-red-600 dark:text-red-400">{{add .AutoLoadFailures .PendingPollErrors}} active issue{{if ne (add .AutoLoadFailures .PendingPollErrors) 1}}s{{end}}</span>
-                {{else}}config{{if ne .AutoLoadConfigs 1}}s{{end}} opted in{{end}}
-            </p>
-        </div>
-    </div>
-
-    {{if .BudgetActive}}
-    <section class="bg-white dark:bg-gray-800 shadow rounded-lg px-5 py-4 mb-8" aria-labelledby="budget-heading">
-        <div class="flex items-baseline justify-between gap-4 flex-wrap">
-            <h2 id="budget-heading" class="text-sm font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Index disk budget</h2>
-            <p class="text-xs text-gray-500 dark:text-gray-400 font-mono">
-                <span class="text-gray-900 dark:text-gray-100">{{.BudgetUsedH}}</span> used
-                + <span class="text-yellow-700 dark:text-yellow-400">{{.BudgetReservedH}}</span> reserved
-                of <span class="text-gray-900 dark:text-gray-100">{{.BudgetCapH}}</span>
-                ({{.BudgetAvailH}} available · {{.BudgetHeadroomH}} headroom)
-            </p>
-        </div>
-        <div class="mt-3 h-2 w-full bg-gray-200 dark:bg-gray-700 rounded overflow-hidden">
-            <div class="h-2 {{if ge .BudgetUsedPct 90}}bg-red-500{{else if ge .BudgetUsedPct 75}}bg-yellow-500{{else}}bg-indigo-500{{end}} transition-all"
-                 style="width:{{.BudgetUsedPct}}%"
-                 aria-valuenow="{{.BudgetUsedPct}}" aria-valuemin="0" aria-valuemax="100"
-                 role="progressbar"></div>
-        </div>
+    {{if and .Configs (not .LoadedRuns)}}
+    <section aria-labelledby="start-heading" class="mb-6 rounded-lg border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50 dark:bg-indigo-950/40 px-5 py-4">
+        <h2 id="start-heading" class="text-sm font-semibold text-indigo-900 dark:text-indigo-200">Start here</h2>
+        <p class="mt-1 text-sm text-indigo-900/80 dark:text-indigo-200/80">Load a run to see its size, cost and prefix tree. Loading builds a local index; it takes seconds to minutes.</p>
     </section>
     {{end}}
 
-    <!-- Per-configuration summary -->
+    {{with .Total}}{{if gt .Configs 1}}
+    <p class="mb-4 text-sm text-gray-600 dark:text-gray-300 tabular-nums" title="The sum of each inventory's latest loaded run; older runs of the same inventory aren't added again">
+        {{.Label}}: <span class="font-medium text-gray-900 dark:text-gray-100">{{.ObjectsH}} objects · {{.BytesH}}{{if .CostH}} · est. {{.CostH}}/mo{{end}}</span>
+    </p>
+    {{end}}{{end}}
+
     {{if .Configs}}
-    <section class="bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-lg">
-        <header class="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-baseline justify-between gap-4">
-            <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">Inventory configurations</h2>
-            <a href="/inventories" class="text-sm text-indigo-600 dark:text-indigo-400 hover:underline">Manage →</a>
-        </header>
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-                <thead class="bg-gray-50 dark:bg-gray-900/30">
-                    <tr>
-                        <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Inventory{{template "templates/partials/info_icon.html" "Source bucket and inventory configuration name."}}</th>
-                        <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Latest run{{template "templates/partials/info_icon.html" "Newest discovered run timestamp for this configuration."}}</th>
-                        <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Latest state{{template "templates/partials/info_icon.html" "Lifecycle state of the latest run: not loaded, loading, loaded, or error."}}</th>
-                        <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Loaded / Runs{{template "templates/partials/info_icon.html" "Runs currently loaded into memory vs total runs discovered for this configuration."}}</th>
-                        <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Manifest{{template "templates/partials/info_icon.html" "Latest run's chunk file count and total compressed manifest bytes."}}</th>
-                        <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Cache{{template "templates/partials/info_icon.html" "On-disk index footprint across all loaded runs of this configuration."}}</th>
-                    </tr>
-                </thead>
-                <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                    {{range .Configs}}
-                    <tr>
-                        <td class="px-6 py-3 whitespace-nowrap">
-                            <div class="text-sm font-medium text-gray-900 dark:text-gray-100">{{.Name}}</div>
-                            <div class="text-xs text-gray-500 dark:text-gray-400">{{.SourceBucket}}</div>
-                        </td>
-                        <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-700 dark:text-gray-200 font-mono">{{if .LatestRun}}{{.LatestRun}}{{else}}<span class="text-gray-400 dark:text-gray-500">—</span>{{end}}</td>
-                        <td class="px-6 py-3 whitespace-nowrap">
-                            {{if .LatestRun}}
-                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass (printf "%s" .LatestState)}}">
-                                {{stateLabel (printf "%s" .LatestState)}}
-                            </span>
-                            {{else}}<span class="text-xs text-gray-400 dark:text-gray-500">no runs yet</span>{{end}}
-                        </td>
-                        <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-700 dark:text-gray-200 font-mono">{{.LoadedRuns}} / {{.TotalRuns}}</td>
-                        <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-700 dark:text-gray-200 font-mono">
-                            {{if .LatestFiles}}
-                            {{.LatestFiles}} file{{if ne .LatestFiles 1}}s{{end}}{{if .LatestBytesH}} · {{.LatestBytesH}}{{end}}
-                            {{if .LatestFormat}}<span class="ml-1 text-xs uppercase text-gray-500 dark:text-gray-400">{{.LatestFormat}}</span>{{end}}
-                            {{else}}<span class="text-gray-400 dark:text-gray-500">—</span>{{end}}
-                        </td>
-                        <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-700 dark:text-gray-200 font-mono">{{if .DiskBytesH}}{{.DiskBytesH}}{{else}}—{{end}}</td>
-                    </tr>
-                    {{end}}
-                </tbody>
-            </table>
-        </div>
-    </section>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {{range .Configs}}
+        {{$cfg := .}}
+        <article class="bg-white dark:bg-gray-800 shadow rounded-lg px-5 py-4 flex flex-col gap-3" aria-labelledby="cfg-{{.DomID}}">
+            <header class="min-w-0">
+                <h2 id="cfg-{{.DomID}}" class="break-words">
+                    <span class="text-lg font-semibold text-gray-900 dark:text-gray-100">{{.SourceBucket}}</span>
+                    <span class="ml-1 text-sm text-gray-500 dark:text-gray-400">{{.Name}}</span>
+                </h2>
+            </header>
+            {{with .Loaded}}
+            <dl class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <div>
+                    <dt class="text-xs text-gray-500 dark:text-gray-400">Objects</dt>
+                    <dd class="text-lg sm:text-xl font-semibold text-gray-900 dark:text-gray-100 tabular-nums whitespace-nowrap">{{.Stats.ObjectsH}}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs text-gray-500 dark:text-gray-400">Size</dt>
+                    <dd class="text-lg sm:text-xl font-semibold text-gray-900 dark:text-gray-100 tabular-nums whitespace-nowrap">{{.Stats.BytesH}}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs text-gray-500 dark:text-gray-400">Est. cost</dt>
+                    <dd class="text-lg sm:text-xl font-semibold text-gray-900 dark:text-gray-100 tabular-nums whitespace-nowrap">{{if .Stats.CostH}}{{.Stats.CostH}}<span class="text-sm font-normal text-gray-500 dark:text-gray-400">/mo</span>{{else}}<span class="text-sm font-normal text-gray-500 dark:text-gray-400" title="This run's inventory has no storage-class column">—</span>{{end}}</dd>
+                </div>
+            </dl>
+            <p class="text-xs text-gray-500 dark:text-gray-400 tabular-nums">
+                Run of <span title="{{.RunLabel}}">{{$cfg.LoadedDateH}}</span>{{with $cfg.Delta}} · <span class="text-gray-700 dark:text-gray-200">{{.Line}}</span>{{end}}
+            </p>
+            <div class="flex flex-wrap items-center gap-2 text-sm">
+                <a href="{{.BrowseHref}}" class="inline-flex items-center px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white font-medium">Browse</a>
+                {{if .PrevLoaded}}
+                <a href="{{.CompareHref}}" class="inline-flex items-center px-2.5 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">Compare with previous</a>
+                {{end}}
+            </div>
+            {{if $cfg.NewerRun}}
+            <div class="border-t border-gray-100 dark:border-gray-700 pt-3">{{template "dash_latest" $cfg}}</div>
+            {{end}}
+            {{else}}
+            <p class="text-sm"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass "not_loaded"}}">Not loaded</span>
+                {{if .Latest.Run}}<span class="ml-1 text-gray-500 dark:text-gray-400">Latest run: <span title="{{.Latest.RunLabel}}">{{.LatestDateH}}</span></span>{{else}}<span class="ml-1 text-gray-500 dark:text-gray-400">No completed run yet</span>{{end}}
+            </p>
+            {{template "dash_latest" $cfg}}
+            {{end}}
+        </article>
+        {{end}}
+    </div>
     {{else}}
     <div class="bg-white dark:bg-gray-800 shadow sm:rounded-lg p-10 text-center">
         <svg class="mx-auto h-10 w-10 text-gray-400 dark:text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
@@ -164,5 +112,110 @@
         {{end}}
     </div>
     {{end}}
+
+    {{- /* The system's state, secondary to what the buckets hold. */ -}}
+    <section aria-labelledby="status-heading" class="mt-10 border-t border-gray-200 dark:border-gray-700 pt-5">
+        <h2 id="status-heading" class="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">System status</h2>
+        <dl class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+            <div>
+                <dt class="text-xs text-gray-500 dark:text-gray-400">Runs discovered</dt>
+                <dd class="text-gray-900 dark:text-gray-100 tabular-nums">{{.TotalRuns}}</dd>
+            </div>
+            <div>
+                <dt class="text-xs text-gray-500 dark:text-gray-400">Builds in progress</dt>
+                <dd class="{{if .BuildingRuns}}text-blue-700 dark:text-blue-300{{else}}text-gray-900 dark:text-gray-100{{end}} tabular-nums">{{.BuildingRuns}}</dd>
+            </div>
+            <div>
+                <dt class="text-xs text-gray-500 dark:text-gray-400">Failed builds</dt>
+                <dd class="{{if .FailedCount}}text-red-700 dark:text-red-300{{else}}text-gray-900 dark:text-gray-100{{end}} tabular-nums">{{.FailedCount}}</dd>
+            </div>
+            <div>
+                <dt class="text-xs text-gray-500 dark:text-gray-400">Auto-load</dt>
+                <dd class="text-gray-900 dark:text-gray-100">
+                    {{if .AutoLoadRunning}}On · {{.AutoLoadConfigs}} configuration{{if ne .AutoLoadConfigs 1}}s{{end}} opted in{{else}}Off{{end}}
+                    {{if .AutoLoadIssues}}<span class="block text-xs text-red-700 dark:text-red-300">{{.AutoLoadIssues}} issue{{if ne .AutoLoadIssues 1}}s{{end}}</span>{{end}}
+                </dd>
+            </div>
+        </dl>
+
+        {{if .FailedRuns}}
+        <div role="alert" class="mt-4 rounded-md border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm">
+            <p class="font-medium text-red-800 dark:text-red-200">{{.FailedCount}} build{{if ne .FailedCount 1}}s{{end}} failed</p>
+            <ul class="mt-1 space-y-1">
+                {{range .FailedRuns}}
+                <li class="text-red-800 dark:text-red-200">
+                    <a href="/inventories#run={{.CompositeID}}" class="font-medium underline underline-offset-2 hover:text-red-900 dark:hover:text-red-100">{{.SourceBucket}} / {{.Name}} · {{.RunLabel}}</a>
+                    <span class="text-red-700 dark:text-red-300">{{.ErrorSummary}}</span>
+                </li>
+                {{end}}
+            </ul>
+            {{if gt .MoreFailed 0}}<p class="mt-1"><a href="/inventories" class="text-red-800 dark:text-red-200 underline underline-offset-2">and {{.MoreFailed}} more</a></p>{{end}}
+        </div>
+        {{end}}
+
+        {{with .Budget}}
+        <div class="mt-4" title="{{.Detail}}">
+            <p class="text-xs text-gray-600 dark:text-gray-300 tabular-nums">Index disk: {{.UsedH}} of {{.CapH}} used</p>
+            <div class="mt-1 h-1.5 w-full max-w-md bg-gray-200 dark:bg-gray-700 rounded overflow-hidden">
+                <div class="h-1.5 {{if ge .Pct 90}}bg-red-500{{else if ge .Pct 75}}bg-yellow-500{{else}}bg-indigo-500{{end}}"
+                     style="width:{{.Pct}}%"
+                     role="progressbar" aria-label="Index disk used" aria-valuenow="{{.Pct}}" aria-valuemin="0" aria-valuemax="100"></div>
+            </div>
+        </div>
+        {{end}}
+
+        {{if .HasDiscovery}}
+        <p class="mt-4 text-xs text-gray-500 dark:text-gray-400">
+            Source <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1 py-0.5 rounded">{{.S3Source}}</code>
+            {{if .SnapshotAge}}· listed {{.SnapshotAge}} ago{{end}}
+            {{if .NextRefreshIn}}<span title="When the server next lists the source for new runs">· next listing in {{.NextRefreshIn}}</span>{{end}}
+        </p>
+        {{end}}
+    </section>
 </div>
+{{end}}
+
+{{- /* The configuration's newest run when it isn't loaded: its build's
+       progress (kept current by live.js), why it failed, or a Load
+       button. The button swaps nothing: the job's start re-renders the
+       dashboard. Takes a DashboardConfig. */ -}}
+{{define "dash_latest"}}
+{{$r := .Latest}}
+{{$id := .DomID}}
+{{if $r.Busy}}
+<div id="dash-{{$id}}-progress" class="space-y-1"
+     data-live-inv="{{$r.CompositeID}}"
+     data-job-id="{{if $r.LatestJob}}{{$r.LatestJob.ID}}{{end}}"
+     data-job-state="{{if $r.LatestJob}}{{$r.LatestJob.State}}{{end}}">
+    <p class="text-xs text-gray-600 dark:text-gray-300">{{if .Loaded}}Loading the newer run from {{.LatestDateH}}{{else}}Loading the run from {{.LatestDateH}}{{end}}</p>
+    <div class="text-xs text-gray-700 dark:text-gray-200 tabular-nums truncate" data-live-text>
+        {{- if not $r.LatestJob}}Starting…
+        {{- else if eq (printf "%s" $r.LatestJob.State) "queued"}}Queued — waiting for a free build slot
+        {{- else}}{{if $r.LatestJob.Stage}}{{stageLabel $r.LatestJob.Stage}}{{else}}Starting…{{end}}
+        {{- end -}}
+    </div>
+    {{if $r.LatestJob}}<div class="h-1.5 w-full max-w-xs">{{template "live_bar" $r.LatestJob}}</div>{{end}}
+</div>
+{{else if $r.Failed}}
+<div class="text-sm space-y-2">
+    <p class="text-red-700 dark:text-red-300">{{if .Loaded}}The newer run from {{.LatestDateH}} failed to load.{{else}}The latest run failed to load.{{end}} {{$r.ErrorSummary}}</p>
+    <div class="flex flex-wrap items-center gap-3">
+        <button type="button" id="dash-{{$id}}-load"
+                hx-post="/partials/discovered/{{$r.SourceBucket}}/{{$r.Name}}/{{$r.Run}}/load"
+                hx-swap="none"
+                hx-disabled-elt="this"
+                class="inline-flex items-center px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white disabled:opacity-60">Retry</button>
+        <a href="/inventories#run={{$r.CompositeID}}" class="text-xs text-indigo-600 dark:text-indigo-400 hover:underline underline-offset-2">Details</a>
+    </div>
+</div>
+{{else if and $r.Run $r.State.CanLoad}}
+<div class="flex flex-wrap items-center gap-3 text-sm">
+    {{if .Loaded}}<p class="text-gray-600 dark:text-gray-300">A newer run from {{.LatestDateH}} is available.</p>{{end}}
+    <button type="button" id="dash-{{$id}}-load"
+            hx-post="/partials/discovered/{{$r.SourceBucket}}/{{$r.Name}}/{{$r.Run}}/load"
+            hx-swap="none"
+            hx-disabled-elt="this"
+            class="inline-flex items-center px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white disabled:opacity-60">{{if .Loaded}}Load{{else}}Load latest run{{end}}</button>
+</div>
+{{end}}
 {{end}}

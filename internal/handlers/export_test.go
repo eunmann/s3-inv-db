@@ -8,7 +8,6 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
-	"github.com/rs/zerolog"
 )
 
 // SetSSEHeartbeatForTest swaps the package-level SSE heartbeat for the
@@ -107,72 +106,6 @@ func (h *Handlers) GroupDiscoveredForAPIForTest(r *http.Request, views []invento
 	return h.groupDiscoveredForAPI(r, views)
 }
 
-// AggregateForTest is the test-facing copy of dashAggregate using
-// exported fields so handlers_test code can read them directly.
-type AggregateForTest struct {
-	Confs  map[string]DashConfAggForTest
-	Order  []string
-	Totals DashTotalsForTest
-}
-
-// AggregateDashboardForTest exposes aggregateDashboard for tests.
-func (h *Handlers) AggregateDashboardForTest(logger *zerolog.Logger, views []inventory.MergedInventory, data *DashboardData) AggregateForTest {
-	agg := h.aggregateDashboard(logger, views, data)
-	out := make(map[string]DashConfAggForTest, len(agg.Confs))
-	for k, v := range agg.Confs {
-		out[k] = DashConfAggForTest{
-			Src: v.Src, ID: v.ID,
-			TotalRuns: v.TotalRuns, LoadedRuns: v.LoadedRuns,
-			LatestRun: v.LatestRun, LatestState: v.LatestState,
-			DiskBytes:    v.DiskBytes,
-			LatestFiles:  v.LatestFiles,
-			LatestBytes:  v.LatestBytes,
-			LatestFormat: v.LatestFormat,
-		}
-	}
-
-	return AggregateForTest{Confs: out, Order: agg.Order, Totals: DashTotalsForTest{
-		Objects:       agg.Totals.objects,
-		Bytes:         agg.Totals.bytes,
-		Disk:          agg.Totals.disk,
-		ManifestFiles: agg.Totals.manifestFiles,
-		ManifestBytes: agg.Totals.manifestBytes,
-	}}
-}
-
-// AddLoadedStatsForTest exposes addLoadedStats for tests.
-func (h *Handlers) AddLoadedStatsForTest(logger *zerolog.Logger, v *inventory.MergedInventory, totals *DashTotalsForTest) {
-	c := &dashConfAgg{Src: v.SourceBucket, ID: v.Name}
-	t := dashTotals{objects: totals.Objects, bytes: totals.Bytes, disk: totals.Disk}
-	h.addLoadedStats(logger, v, c, &t)
-	totals.Objects = t.objects
-	totals.Bytes = t.bytes
-	totals.Disk = t.disk
-}
-
-// DashConfAggForTest mirrors dashConfAgg with exported fields for tests.
-type DashConfAggForTest struct {
-	Src          string
-	ID           string
-	LatestRun    string
-	LatestState  inventory.State
-	LatestFormat string
-	TotalRuns    int
-	LoadedRuns   int
-	DiskBytes    int64
-	LatestFiles  int
-	LatestBytes  int64
-}
-
-// DashTotalsForTest mirrors dashTotals with exported fields for tests.
-type DashTotalsForTest struct {
-	Objects       uint64
-	Bytes         uint64
-	Disk          int64
-	ManifestFiles int
-	ManifestBytes int64
-}
-
 // Exported aliases for unexported helpers used by external tests.
 var (
 	NumericLabelForTest                = numericLabel
@@ -186,8 +119,11 @@ var (
 	BuildComparePickerForTest          = buildComparePicker
 	SameConfigForTest                  = sameConfig
 	FilterComparePickerByConfigForTest = filterComparePickerByConfig
-	LoadDurationLabelForTest           = loadDurationLabel
-	DiscoveredMetaLineForTest          = discoveredMetaLine
+	SummarizeBuildErrorForTest         = summarizeBuildError
+	DomIDForTest                       = domID
+	RunDateLabelForTest                = runDateLabel
+	NewRunDeltaForTest                 = newRunDelta
+	SummarizePollErrorForTest          = summarizePollError
 )
 
 // AcquireSSESlotForTest exposes acquireSSESlot.

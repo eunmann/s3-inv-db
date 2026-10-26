@@ -394,8 +394,8 @@ func TestDiscoveredRowPartial_RendersFromSnapshot(t *testing.T) {
 	if err := mgr.Register(t.Context(), inventory.ID("b/i/"+cachedRun), "row", "s3://dst/b/i/"+cachedRun+"/manifest.json"); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if err := mgr.SetPinned(t.Context(), inventory.ID("b/i/"+cachedRun), true); err != nil {
-		t.Fatalf("SetPinned: %v", err)
+	if err := mgr.RecordAutoLoadFailure(t.Context(), inventory.ID("b/i/"+cachedRun), "boom", time.Now(), time.Time{}); err != nil {
+		t.Fatalf("RecordAutoLoadFailure: %v", err)
 	}
 
 	render := func(run string) string {
@@ -413,10 +413,10 @@ func TestDiscoveredRowPartial_RendersFromSnapshot(t *testing.T) {
 
 	for range 5 {
 		body := render(cachedRun)
-		if !strings.Contains(body, "3 chunks") {
-			t.Fatalf("cached row lost snapshot manifest stats: %q", body)
+		if !strings.Contains(body, ">Latest<") {
+			t.Fatalf("cached row lost its place among the snapshot's runs: %q", body)
 		}
-		if !strings.Contains(body, `aria-label="Pinned"`) {
+		if !strings.Contains(body, "Auto-load failed") {
 			t.Fatalf("cached row missing live catalog state: %q", body)
 		}
 	}

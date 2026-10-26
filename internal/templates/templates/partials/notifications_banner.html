@@ -12,7 +12,13 @@
             {{range .Notifications}}
             <li class="text-xs text-red-900 dark:text-red-200 border-l-2 border-red-300 dark:border-red-700 pl-3 py-1">
                 <div class="font-medium">{{.Title}}{{if .Target}} · <code class="font-mono text-red-700 dark:text-red-300">{{.Target}}</code>{{end}}</div>
-                <div class="mt-0.5 break-words">{{.Message}}</div>
+                <div class="mt-0.5 break-words">{{if .Summary}}{{.Summary}}{{else}}{{.Message}}{{end}}</div>
+                {{if and .Summary (ne .Summary .Message)}}
+                <details class="mt-0.5">
+                    <summary class="cursor-pointer text-red-700 dark:text-red-300">Technical details</summary>
+                    <pre class="mt-0.5 text-[11px] whitespace-pre-wrap break-words font-mono">{{.Message}}</pre>
+                </details>
+                {{end}}
             </li>
             {{end}}
         </ul>

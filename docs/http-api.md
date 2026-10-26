@@ -15,8 +15,8 @@ exist, see [operations](operations.md).
 
 | Route | Returns | Notes |
 |---|---|---|
-| `GET /` | HTML | Dashboard — counters, disk-budget gauge, auto-load summary |
-| `GET /inventories` | HTML | Discovery list with per-config auto-load toggle + retention input |
+| `GET /` | HTML | Dashboard — each configuration's latest loaded run: objects, size, est. cost and change since the previous loaded run; then system status (builds, failures, auto-load, disk budget) |
+| `GET /inventories` | HTML | Runs per configuration: what each loaded run holds, load/unload/pin, per-config auto-load settings when the server runs `--auto-load` |
 | `GET /browse` | HTML or row partial | Prefix explorer; content-negotiated on `HX-Request` |
 | `GET /compare` | HTML or level partial | Compare two runs at one prefix |
 | `GET /help` | HTML | Built-in glossary + workflows |
@@ -54,7 +54,7 @@ Read-only:
 | `GET /api/browse?inventory_id=&prefix=&sort=&dir=&page=&page_size=` | Browse one prefix in one run |
 | `GET /api/compare?from=&to=&prefix=&sort=&dir=&page=&page_size=&show_unchanged=` | Compare two runs at one prefix (includes PUT API one-time costs) |
 | `GET /api/disk-budget` | Tracker counters: cap, used, reserved, available, headroom |
-| `GET /api/notifications` | Aggregated poll-failure + auto-load-failure list |
+| `GET /api/notifications` | Aggregated poll-failure + auto-load-failure list; each has the raw `message` and a one-sentence `summary` |
 
 Mutating:
 
@@ -66,8 +66,8 @@ Mutating:
 | `/api/inventories/{id}` | DELETE | Remove; a discovered run's cache dir is deleted. **409** while the run is loading (cancel its job first) |
 | `/api/inventories/{id}/stats:batch` | POST | Body: `{"prefixes":[...],"show_tiers":bool,"estimate_cost":bool}`. Returns one row per prefix with `found=false` for misses. Cap defaults to 1000; override with `query_batch_max`. |
 | `/api/inventories/{id}/pin` | POST | Toggle pin state (`pinned=true|false`); pinned runs are never auto-evicted |
-| `/api/configurations/{src}/{name}/auto-load` | POST | Set auto-load + retention for a configuration (`auto_load=on|off`, `retention=N`). **409** when the request changes a setting the config file's `inventories[]` entry sets |
-| `/api/indexes/refresh` | POST | List the inventory or index source now and start an auto-load poll, instead of waiting for the next interval. Returns `{"auto_load": bool}`; 503 with no source configured |
+| `/api/configurations/{src}/{name}/auto-load` | POST | Set auto-load + retention for a configuration (`auto_load=on|off`, `retention=N`). **409** when the request changes a setting the config file's `inventories[]` entry sets. Returns JSON, except a non-htmx request whose `Accept` includes `text/html` (a script-free form submit) gets a 303 to `/inventories` on success and a plain-text error otherwise |
+| `/api/indexes/refresh` | POST | List the inventory or index source now and start an auto-load poll, instead of waiting for the next interval. Returns `{"auto_load": bool}`, plus `HX-Refresh: true` for an htmx request (the inventories page's Refresh); 503 with no source configured |
 | `/api/jobs/{id}/cancel` | POST | Cancel an in-flight job |
 
 ### Server-Sent Events

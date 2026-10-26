@@ -21,18 +21,18 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 	src := chi.URLParam(r, "src")
 	name := chi.URLParam(r, "name")
 	if src == "" || name == "" {
-		WriteJSONError(w, http.StatusBadRequest, "source and name are required")
+		configError(w, r, http.StatusBadRequest, "source and name are required")
 
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
 	if err := r.ParseForm(); err != nil {
 		if bodyTooLarge(err) {
-			WriteJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			configError(w, r, http.StatusRequestEntityTooLarge, "request body too large")
 
 			return
 		}
-		WriteJSONError(w, http.StatusBadRequest, "invalid form body")
+		configError(w, r, http.StatusBadRequest, "invalid form body")
 
 		return
 	}
@@ -41,7 +41,7 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 		cfg = inventory.Config{Source: src, Name: name, RetentionCount: h.configStore.DefaultRetention()}
 	} else if err != nil {
 		zerolog.Ctx(r.Context()).Error().Err(err).Msg("get config")
-		WriteJSONError(w, http.StatusInternalServerError, "failed to read config")
+		configError(w, r, http.StatusInternalServerError, "failed to read config")
 
 		return
 	}
@@ -51,7 +51,7 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 	if vs := r.Form["auto_load"]; len(vs) > 0 {
 		v := parseBoolToggle(vs[len(vs)-1])
 		if managed.AutoLoad && v != cfg.AutoLoad {
-			WriteJSONError(w, http.StatusConflict, "auto-load for "+cfg.ConfigID()+" is set in the config file")
+			configError(w, r, http.StatusConflict, "auto-load for "+cfg.ConfigID()+" is set in the config file")
 
 			return
 		}
@@ -60,12 +60,12 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 	if v := r.FormValue("retention"); v != "" {
 		n, parseErr := strconv.ParseUint(strings.TrimSpace(v), 10, 32)
 		if parseErr != nil || n == 0 {
-			WriteJSONError(w, http.StatusBadRequest, "retention must be a positive integer")
+			configError(w, r, http.StatusBadRequest, "retention must be a positive integer")
 
 			return
 		}
 		if managed.Retention && n != uint64(cfg.RetentionCount) {
-			WriteJSONError(w, http.StatusConflict, "retention for "+cfg.ConfigID()+" is set in the config file")
+			configError(w, r, http.StatusConflict, "retention for "+cfg.ConfigID()+" is set in the config file")
 
 			return
 		}
@@ -73,11 +73,34 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := h.configStore.SetPolicy(r.Context(), src, name, cfg.AutoLoad, cfg.RetentionCount); err != nil {
 		zerolog.Ctx(r.Context()).Error().Err(err).Msg("set config policy")
-		WriteJSONError(w, http.StatusInternalServerError, "failed to save config")
+		configError(w, r, http.StatusInternalServerError, "failed to save config")
+
+		return
+	}
+	if formNavigation(r) {
+		http.Redirect(w, r, "/inventories", http.StatusSeeOther)
 
 		return
 	}
 	WriteJSON(w, http.StatusOK, autoLoadToggleResponse{OK: true})
+}
+
+// formNavigation: a browser submitted the inventories page's auto-load
+// form itself, without htmx (scripts off, Enter in the retention box),
+// so it navigates to the response and needs a page, not JSON.
+func formNavigation(r *http.Request) bool {
+	return r.Header.Get("HX-Request") == "" && strings.Contains(r.Header.Get("Accept"), "text/html")
+}
+
+// configError answers a refused auto-load setting: as text a browser
+// shows for a form navigation, else as the API's JSON error.
+func configError(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	if formNavigation(r) {
+		http.Error(w, "Not saved: "+msg, status)
+
+		return
+	}
+	WriteJSONError(w, status, msg)
 }
 
 // SetPinAPI sets a run's pin state. Form body: pinned.

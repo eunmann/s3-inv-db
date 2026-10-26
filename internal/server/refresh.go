@@ -38,5 +38,10 @@ func (s *Server) refreshIndexes(w http.ResponseWriter, r *http.Request) {
 		s.autoloader.PollNow()
 		resp.AutoLoad = true
 	}
+	// The inventories page's Refresh button: reload it to show the new
+	// listing.
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("HX-Refresh", "true")
+	}
 	handlers.WriteJSON(w, http.StatusOK, resp)
 }

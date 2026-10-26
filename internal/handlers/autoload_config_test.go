@@ -167,7 +167,8 @@ func TestInventoriesPage_ManagedConfigsDisableTheirControls(t *testing.T) {
 	h := newWiredHandlers(t, nil,
 		handlers.WithDiscoverer(&fakeDiscoverer{listResp: list, bucket: "dst"}),
 		handlers.WithLoader(&fakeBuilder{}),
-		handlers.WithManagedConfigs(inventory.ManagedConfigs{"src/inv": {AutoLoad: true, Retention: true}}))
+		handlers.WithManagedConfigs(inventory.ManagedConfigs{"src/inv": {AutoLoad: true, Retention: true}}),
+		handlers.WithAutoLoad(true))
 	w := httptest.NewRecorder()
 	h.InventoriesPage(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/inventories", http.NoBody))
 	if w.Code != http.StatusOK {
@@ -200,7 +201,7 @@ func TestInventoriesPage_ManagedSettingsAreReadOnly(t *testing.T) {
 	render := func(g handlers.InventoryGroup) string {
 		t.Helper()
 		var buf bytes.Buffer
-		data := handlers.InventoriesData{Title: "Inventories", HasDiscovery: true, Groups: []handlers.InventoryGroup{g}}
+		data := handlers.InventoriesData{Title: "Inventories", HasDiscovery: true, AutoLoadRunning: true, Groups: []handlers.InventoryGroup{g}}
 		if err := r.Render(&buf, "inventories.html", data); err != nil {
 			t.Fatal(err)
 		}
@@ -217,5 +218,45 @@ func TestInventoriesPage_ManagedSettingsAreReadOnly(t *testing.T) {
 	free := render(handlers.InventoryGroup{SourceBucket: "bkt", Name: "inv"})
 	if !strings.Contains(free, `name="auto_load" value="off"`) || strings.Contains(free, "Set in the config file") {
 		t.Error("unmanaged settings lost their hidden field or gained the managed label")
+	}
+}
+
+// TestSetAutoLoadConfigAPI_FormFallback: with scripts off the browser
+// submits the auto-load form itself; it gets the inventories page back
+// on success and a readable refusal, while htmx and API callers keep
+// the JSON answer.
+func TestSetAutoLoadConfigAPI_FormFallback(t *testing.T) {
+	h, configs := newWiredHandlersWithConfigs(t, nil)
+	router := chi.NewRouter()
+	router.Post("/api/configurations/{src}/{name}/auto-load", h.SetAutoLoadConfigAPI)
+	post := func(form url.Values, headers map[string]string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/configurations/bkt/inv/auto-load", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		return rec
+	}
+	browser := map[string]string{"Accept": "text/html,application/xhtml+xml"}
+
+	rec := post(url.Values{"auto_load": {"off", "on"}, "retention": {"3"}}, browser)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/inventories" {
+		t.Fatalf("form submit: %d to %q, want 303 to /inventories", rec.Code, rec.Header().Get("Location"))
+	}
+	if cfg, err := configs.Get(t.Context(), "bkt", "inv"); err != nil || !cfg.AutoLoad || cfg.RetentionCount != 3 {
+		t.Errorf("form submit saved %+v (%v)", cfg, err)
+	}
+
+	rec = post(url.Values{"retention": {"0"}}, browser)
+	if rec.Code != http.StatusBadRequest || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") || !strings.Contains(rec.Body.String(), "Not saved: retention") {
+		t.Errorf("refused form submit: %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
+	}
+
+	rec = post(url.Values{"retention": {"4"}}, map[string]string{"Accept": "*/*", "HX-Request": "true"})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ok":true`) {
+		t.Errorf("htmx submit: %d %s", rec.Code, rec.Body.String())
 	}
 }

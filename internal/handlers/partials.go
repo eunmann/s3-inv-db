@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
-	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
@@ -154,108 +152,180 @@ func (h *Handlers) renderDiscoveredRow(w http.ResponseWriter, r *http.Request, s
 	h.renderDiscoveredRowFrom(w, r, disc)
 }
 
-// DiscoveredRowView extends the merged inventory with the latest job
-// for the same composite ID and the on-disk size of its cache. The
-// template surfaces progress and renders Retry/Cancel buttons based on
-// the job's state.
+// DiscoveredRowView is one run's row: its discovery entry merged with
+// the catalog's state, its latest job, and for a loaded run what it
+// holds. The handlers set Stats, IsLatest and PrevLoaded from the run's
+// place among its configuration's runs.
 type DiscoveredRowView struct {
 	inventory.MergedInventory
 
 	LatestJob            *jobs.Job
-	CacheBytesH          string
+	Stats                *RunStats
 	AutoLoadBackoffUntil string
-	LoadDurationH        string
-	RunLabel             string
-	MetaLine             string
-	StateName            string // State as the template's state helpers take it
-	LoadDuration         time.Duration
-	CacheBytes           int64
+	// PrevLoaded is the loaded run of the same configuration just
+	// before this one: what "Compare with previous" diffs against.
+	PrevLoaded           inventory.ID
 	AutoLoadFailureCount uint32
 	Pinned               bool
 	UserUnloaded         bool
-	// CanRetry: the latest job ended failed, aborted or cancelled.
-	CanRetry bool
+	IsLatest             bool
 }
 
-// populateRowDerived fills the view fields that depend on the
-// already-populated raw data: a humanised run timestamp, and a one-line
-// "format · N files, X bytes · cache Y · loaded in Z" summary the
-// template renders under the run timestamp.
-func populateRowDerived(view *DiscoveredRowView) {
-	view.RunLabel = humanfmt.RunTimestamp(view.Run)
-	view.MetaLine = discoveredMetaLine(view)
-	view.StateName = string(view.State)
-	if j := view.LatestJob; j != nil {
-		switch j.State {
-		case jobs.StateFailed, jobs.StateAborted, jobs.StateCancelled:
-			view.CanRetry = true
-		case jobs.StateQueued, jobs.StateRunning, jobs.StateSucceeded:
-		}
-	}
+// RunLabel is the run's timestamp as people read it.
+func (v DiscoveredRowView) RunLabel() string { return humanfmt.RunTimestamp(v.Run) }
+
+// StateName is State as the template's state helpers take it.
+func (v DiscoveredRowView) StateName() string { return string(v.State) }
+
+// DomID is the run's id made safe for HTML ids, so each action button
+// keeps one id across swaps and focus survives them.
+func (v DiscoveredRowView) DomID() string { return domID(string(v.CompositeID())) }
+
+// Busy: a build is queued or running. A live job counts before the
+// catalog flips the run to loading.
+func (v DiscoveredRowView) Busy() bool {
+	return v.State.IsLoading() || (v.LatestJob != nil && v.LatestJob.State.IsLive())
 }
 
-// discoveredMetaLine joins the secondary facts about one run into a
-// single bullet-separated string. Empty pieces are omitted so the
-// result has no dangling separators. The manifest segment names what
-// each number is ("manifest 1.40 GiB / 24 chunks") so the compressed
-// total isn't mistaken for an individual chunk's size.
-//
-// The cache and "loaded in" segments are only emitted when the run is
-// currently in StateLoaded — they describe the *current* on-disk index
-// and the most recent successful build, neither of which is meaningful
-// while the run is loading, unloaded, or in an error state. Without
-// this guard, Info.LoadDuration / CacheBytesH from a prior successful
-// load would leak into a busy or unloaded row's display.
-func discoveredMetaLine(view *DiscoveredRowView) string {
-	parts := make([]string, 0, 4)
-	if view.FileFormat != "" {
-		parts = append(parts, view.FileFormat)
+// CanRetry: the latest job ended failed, aborted or cancelled.
+func (v DiscoveredRowView) CanRetry() bool {
+	if v.LatestJob == nil {
+		return false
 	}
-	if seg := manifestMetaSegment(view.FileCount, view.TotalBytes); seg != "" {
-		parts = append(parts, seg)
-	}
-	if view.State == inventory.StateLoaded {
-		if view.CacheBytesH != "" {
-			parts = append(parts, "cache "+view.CacheBytesH)
-		}
-		if view.LoadDurationH != "" {
-			parts = append(parts, "loaded in "+view.LoadDurationH)
-		}
+	switch v.LatestJob.State {
+	case jobs.StateFailed, jobs.StateAborted, jobs.StateCancelled:
+		return true
+	case jobs.StateQueued, jobs.StateRunning, jobs.StateSucceeded:
 	}
 
-	return strings.Join(parts, " · ")
+	return false
 }
 
-// manifestMetaSegment renders the "manifest <size> / <N> chunks" piece
-// of the meta line. Falls back gracefully when only one of the two
-// numbers is available; returns "" when neither is.
-func manifestMetaSegment(fileCount int, totalBytes int64) string {
-	chunks := ""
-	if fileCount > 0 {
-		chunks = fmt.Sprintf("%d chunk", fileCount)
-		if fileCount != 1 {
-			chunks += "s"
-		}
+// ErrorText is why the run's last load failed, raw: the catalog's error,
+// else the latest job's when it failed or was interrupted.
+func (v DiscoveredRowView) ErrorText() string {
+	if v.Busy() || v.State.IsLoaded() {
+		return ""
 	}
-	size := ""
-	if totalBytes > 0 {
-		size = humanfmt.Bytes(totalBytes)
+	if v.Error != "" {
+		return v.Error
 	}
-	switch {
-	case size != "" && chunks != "":
-		return "manifest " + size + " / " + chunks
-	case size != "":
-		return "manifest " + size
-	case chunks != "":
-		return "manifest " + chunks
+	if j := v.LatestJob; j != nil && (j.State == jobs.StateFailed || j.State == jobs.StateAborted) {
+		return j.Error
 	}
 
 	return ""
 }
 
+// ErrorSummary is ErrorText as one sentence.
+func (v DiscoveredRowView) ErrorSummary() string { return summarizeBuildError(v.ErrorText()) }
+
+// Failed: the run isn't loaded or building because its last load failed.
+func (v DiscoveredRowView) Failed() bool {
+	if v.Busy() || v.State.IsLoaded() {
+		return false
+	}
+
+	return v.State.IsError() || (v.LatestJob != nil && (v.LatestJob.State == jobs.StateFailed || v.LatestJob.State == jobs.StateAborted))
+}
+
+// prominent rows stay visible on the inventories page; the rest of a
+// configuration's runs collapse under "Show N older runs".
+func (v DiscoveredRowView) prominent() bool {
+	return v.Run == "" || v.IsLatest || v.State.IsLoaded() || v.Busy() || v.Failed()
+}
+
+// BrowseHref opens the run in Browse.
+func (v DiscoveredRowView) BrowseHref() string { return browseHref(v.CompositeID()) }
+
+// CompareHref compares the run with the loaded run before it, or opens
+// Compare with this run chosen when there is none.
+func (v DiscoveredRowView) CompareHref() string {
+	if v.PrevLoaded != "" {
+		return compareHref(v.PrevLoaded, v.CompositeID())
+	}
+
+	return compareHref(v.CompositeID(), "")
+}
+
+// rowView builds one run's row from its discovery entry, the catalog's
+// live state and its latest job (nil when it never had one).
+func (h *Handlers) rowView(v inventory.MergedInventory, job *jobs.Job) DiscoveredRowView {
+	row := DiscoveredRowView{MergedInventory: v, LatestJob: job}
+	if row.State == "" {
+		row.State = inventory.StateNotLoaded
+	}
+	info, ok := h.manager.Get(v.CompositeID())
+	if !ok {
+		return row
+	}
+	row.State = info.State
+	row.Error = info.Error
+	row.NodeCount = info.NodeCount
+	row.HasTierData = info.HasTierData
+	row.Pinned = info.Pinned
+	row.UserUnloaded = !info.UserUnloadedAt.IsZero()
+	row.AutoLoadFailureCount = info.AutoLoadFailureCount
+	if !info.AutoLoadBackoffUntil.IsZero() {
+		row.AutoLoadBackoffUntil = info.AutoLoadBackoffUntil.UTC().Format("15:04:05")
+	}
+
+	return row
+}
+
+// addStats reads a loaded row's root totals. A run evicted since its
+// state was read shows none.
+func (h *Handlers) addStats(ctx context.Context, row *DiscoveredRowView) {
+	if row.Run == "" || !row.State.IsLoaded() {
+		return
+	}
+	s, err := h.runStats(row.CompositeID(), false)
+	if err != nil {
+		if !errors.Is(err, inventory.ErrNotLoaded) && !errors.Is(err, inventory.ErrNotFound) {
+			zerolog.Ctx(ctx).Warn().Err(err).Stringer("id", row.CompositeID()).Msg("read run totals")
+		}
+
+		return
+	}
+	row.Stats = &s
+}
+
+// placeRow sets what the row's place among its configuration's runs
+// decides (the Latest mark, Compare with previous), from the discovery
+// snapshot.
+func (h *Handlers) placeRow(ctx context.Context, row *DiscoveredRowView) {
+	views, _, err := h.discovery.Snapshot(ctx)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("snapshot for row placement")
+
+		return
+	}
+	placeRowAmong(views, row)
+}
+
+// placeRowAmong is placeRow against an already-read snapshot.
+func placeRowAmong(views []inventory.MergedInventory, row *DiscoveredRowView) {
+	cfg := row.ConfigID()
+	runs := make([]DiscoveredRowView, 0, 8)
+	runs = append(runs, *row)
+	for i := range views {
+		if views[i].Run != row.Run && views[i].ConfigID() == cfg {
+			runs = append(runs, DiscoveredRowView{MergedInventory: views[i]})
+		}
+	}
+	sortRunsNewestFirst(runs)
+	linkRuns(runs)
+	for i := range runs {
+		if runs[i].Run == row.Run {
+			row.IsLatest, row.PrevLoaded = runs[i].IsLatest, runs[i].PrevLoaded
+
+			return
+		}
+	}
+}
+
 // renderDiscoveredRowFrom renders a discovered_row using a pre-fetched
-// disc value with HTTP 200. Looks up the latest job (if jobs are
-// configured) so the row can render progress / cancel / retry.
+// disc value with HTTP 200.
 func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Request, disc inventory.Inventory) {
 	h.renderDiscoveredRowFromStatus(w, r, http.StatusOK, disc)
 }
@@ -265,38 +335,25 @@ func (h *Handlers) renderDiscoveredRowFrom(w http.ResponseWriter, r *http.Reques
 // renders successfully — a render failure surfaces as 500, not a 5xx
 // body attached to a 2xx response.
 func (h *Handlers) renderDiscoveredRowFromStatus(w http.ResponseWriter, r *http.Request, status int, disc inventory.Inventory) {
-	view := DiscoveredRowView{
-		Inventory: disc, State: inventory.StateNotLoaded,
-	}
-	if info, ok := h.manager.Get(disc.CompositeID()); ok {
-		view.State = info.State
-		view.Error = info.Error
-		view.NodeCount = info.NodeCount
-		view.HasTierData = info.HasTierData
-		view.Pinned = info.Pinned
-		view.UserUnloaded = !info.UserUnloadedAt.IsZero()
-		view.AutoLoadFailureCount = info.AutoLoadFailureCount
-		view.LoadDuration = info.LoadDuration
-		if !info.AutoLoadBackoffUntil.IsZero() {
-			view.AutoLoadBackoffUntil = info.AutoLoadBackoffUntil.UTC().Format("15:04:05")
-		}
-	}
-	j, err := h.latestJob(r.Context(), disc.CompositeID())
+	view := h.rowView(inventory.MergedInventory{Inventory: disc}, h.latestJobOrNil(r.Context(), disc.CompositeID()))
+	h.placeRow(r.Context(), &view)
+	h.addStats(r.Context(), &view)
+	h.renderHTMLPartialStatus(w, r, status, "discovered_row.html", "render discovered row", view)
+}
+
+// latestJobOrNil is latestJob with no job, or a failed lookup (logged),
+// as nil.
+func (h *Handlers) latestJobOrNil(ctx context.Context, inv inventory.ID) *jobs.Job {
+	j, err := h.latestJob(ctx, inv)
 	switch {
 	case err == nil:
-		view.LatestJob = &j
+		return &j
 	case errors.Is(err, jobs.ErrStoreNotFound):
-		// No prior job — render the row without LatestJob.
 	default:
-		zerolog.Ctx(r.Context()).Warn().Err(err).
-			Stringer("composite", disc.CompositeID()).
-			Msg("look up latest job for row render")
+		zerolog.Ctx(ctx).Warn().Err(err).Stringer("composite", inv).Msg("look up latest job")
 	}
-	cs := h.measureCacheSize(r, disc)
-	view.CacheBytes, view.CacheBytesH = cs.Bytes, cs.Human
-	view.LoadDurationH = loadDurationLabel(view.LoadDuration, view.LatestJob)
-	populateRowDerived(&view)
-	h.renderHTMLPartialStatus(w, r, status, "discovered_row.html", "render discovered row", view)
+
+	return nil
 }
 
 // latestJob returns inv's newest job: the scheduler's in-memory snapshot
@@ -330,75 +387,6 @@ func (h *Handlers) latestJobs(ctx context.Context) (map[inventory.ID]jobs.Job, e
 	}
 
 	return latest, nil
-}
-
-// loadDurationLabel renders the wall-clock load time of the most recent
-// successful load. Prefers Manager.Info.LoadDuration (populated for both
-// user-driven and auto-driven loads) and falls back to the LatestJob's
-// StartedAt/FinishedAt span — useful when Info.LoadDuration was reset
-// by a server restart but the JobStore still has the build's timestamps.
-// Returns "" when neither source has a usable duration.
-func loadDurationLabel(infoDuration time.Duration, j *jobs.Job) string {
-	if infoDuration > 0 {
-		return humanfmt.Duration(infoDuration)
-	}
-	if j == nil || j.Kind != jobs.KindBuild {
-		return ""
-	}
-	if j.StartedAt.IsZero() || j.FinishedAt.IsZero() {
-		return ""
-	}
-	d := j.FinishedAt.Sub(j.StartedAt)
-	if d <= 0 {
-		return ""
-	}
-
-	return humanfmt.Duration(d)
-}
-
-// cacheSize is the raw-bytes / human-formatted pair returned by
-// measureCacheSize. Zero / empty when there's no loader wired, the
-// dir is missing, or the measurement failed.
-type cacheSize struct {
-	Human string
-	Bytes int64
-}
-
-// measureCacheSize returns the on-disk cache footprint of a single run.
-// Prefers the cached Info.IndexBytes (no filesystem walk) and falls
-// back to an on-the-fly CacheSizeBytes walk only when the manager
-// has no record of the run.
-func (h *Handlers) measureCacheSize(r *http.Request, disc inventory.Inventory) cacheSize {
-	if disc.Run == "" {
-		return cacheSize{}
-	}
-	if info, ok := h.manager.Get(disc.CompositeID()); ok && info.IndexBytes > 0 {
-		bytes := int64(info.IndexBytes)
-
-		return cacheSize{Bytes: bytes, Human: humanfmt.Bytes(bytes)}
-	}
-	if h.loader == nil {
-		return cacheSize{}
-	}
-	n, err := h.loader.CacheSizeBytes(inventory.CacheKey{
-		SourceBucket: disc.SourceBucket,
-		InventoryID:  disc.Name,
-		Run:          disc.Run,
-	})
-	if err != nil {
-		zerolog.Ctx(r.Context()).Warn().Err(err).
-			Str("src", disc.SourceBucket).
-			Str("name", disc.Name).
-			Str("run", disc.Run).
-			Msg("measure cache size")
-
-		return cacheSize{}
-	}
-	if n <= 0 {
-		return cacheSize{}
-	}
-
-	return cacheSize{Bytes: n, Human: humanfmt.BytesUint64(uint64(n))}
 }
 
 // submitDiscoveredLoadJob registers a background build job for one

@@ -4,18 +4,22 @@
        server round-trip — no client-side state machine.
 
        Refreshes swap only #run-drawer-body (hx-select), so the aside,
-       its scroll position and focus survive them, and send refresh=1
-       so the handler doesn't push another history entry. live.js
-       updates the bar, progress line and clocks in place and fires
-       live-refresh when the job changes state or stage; while it runs,
-       a 3s poll keeps the timeline's counters current. hx-disinherit
-       keeps those refresh attributes off the buttons inside: inherited,
-       hx-select would filter Close's response down to nothing and
-       remove the drawer. */ -}}
+       its scroll position and focus survive them (every button has a
+       fixed id), and send refresh=1 so the handler doesn't push another
+       history entry. live.js updates the bar, progress line and clocks
+       in place and fires live-refresh when the job changes state or
+       stage; while it runs, a 3s poll keeps the timeline's counters
+       current. hx-disinherit keeps those refresh attributes off the
+       buttons inside: inherited, hx-select would filter Close's
+       response down to nothing and remove the drawer. */ -}}
+{{$run := .Run}}
+{{$busy := .Run.Busy}}
+{{$badge := .Run.StateName}}{{if $busy}}{{$badge = "loading"}}{{end}}
 <aside id="run-drawer" data-open
        class="fixed top-0 sm:top-16 right-0 h-full sm:h-[calc(100vh-4rem)] w-96 max-w-[92vw] bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 shadow-xl z-50 sm:z-40 overflow-y-auto overscroll-contain translate-x-0 transition-transform duration-200"
        role="dialog" aria-labelledby="run-drawer-title">
-<div id="run-drawer-body" class="px-5 py-4 space-y-4"
+<div id="run-drawer-body" class="px-5 py-4 space-y-5"
+     data-background-refresh
      data-live-inv="{{.InventoryID}}"
      data-job-id="{{if .LatestJob}}{{.LatestJob.ID}}{{end}}"
      data-job-state="{{if .LatestJob}}{{.LatestJob.State}}{{end}}"
@@ -23,17 +27,16 @@
      hx-get="/partials/drawer/{{.CompositePath}}?refresh=1"
      hx-select="#run-drawer-body"
      hx-trigger="live-refresh{{if .Live}}, every 3s{{end}}"
-     data-background-refresh
      hx-sync="this:queue last"
      hx-disinherit="*"
      hx-swap="outerHTML">
-    <header class="space-y-1.5">
+    <header class="space-y-2">
         <div class="flex items-start gap-2">
             <div class="flex-1 min-w-0">
-                <h2 id="run-drawer-title" class="text-sm font-semibold text-gray-900 dark:text-gray-100 break-words font-mono">{{.InventoryID}}</h2>
-                <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Inventory run details</p>
+                <p class="text-xs text-gray-500 dark:text-gray-400 break-words">{{$run.SourceBucket}} <span class="text-gray-300 dark:text-gray-600">/</span> {{$run.Name}}</p>
+                <h2 id="run-drawer-title" class="text-base font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{{$run.RunLabel}}</h2>
             </div>
-            <button type="button"
+            <button type="button" id="drawer-close"
                     data-drawer-close
                     hx-get="/partials/drawer-close"
                     hx-target="#run-drawer"
@@ -43,50 +46,83 @@
                 <svg viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4" aria-hidden="true"><path d="M5.3 4l-1.4 1.4L8.6 10l-4.7 4.6L5.3 16l4.7-4.7 4.6 4.7 1.4-1.4-4.7-4.6 4.7-4.6L14.6 4 10 8.6z"/></svg>
             </button>
         </div>
-        {{if .LatestJob}}
         <div class="flex flex-wrap items-center gap-2 text-xs">
-            {{$badge := printf "%s" .State}}{{if .Live}}{{$badge = "loading"}}{{end}}
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full font-semibold {{stateClass $badge}}" title="{{stageDescription .LatestJob.Stage}}">
-                {{stateLabel $badge}}
-            </span>
-            {{if gt .LatestJob.AttemptCount 1}}
-            <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-semibold rounded bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300" title="This is retry attempt {{.LatestJob.AttemptCount}}">
-                Attempt {{.LatestJob.AttemptCount}}
-            </span>
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full font-semibold {{stateClass $badge}}">{{stateLabel $badge}}</span>
+            {{if $run.IsLatest}}<span class="inline-flex items-center px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-semibold rounded bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300">Latest</span>{{end}}
+            {{if $run.Pinned}}<span class="inline-flex items-center px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-semibold rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300" title="Pinned: never unloaded automatically to free disk space">Pinned</span>{{end}}
+            {{if and .LatestJob (gt .LatestJob.AttemptCount 1)}}
+            <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-semibold rounded bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300" title="This is retry attempt {{.LatestJob.AttemptCount}}">Attempt {{.LatestJob.AttemptCount}}</span>
             {{end}}
-            {{if not .Live}}
-                {{if .LatestTookH}}
-                <span class="text-gray-700 dark:text-gray-200 font-mono" title="Total wall-clock from queue to finish">took {{.LatestTookH}}</span>
-                {{end}}
-                {{if .LatestJob.FinishedAt}}
-                <span class="text-gray-400 dark:text-gray-500" title="Finished {{formatTime .LatestJob.FinishedAt}}">· {{formatTimeRelative .LatestJob.FinishedAt}}</span>
-                {{end}}
+            {{if and (not .Live) .LatestTookH}}
+            <span class="text-gray-500 dark:text-gray-400" title="How long the last build took">took {{.LatestTookH}}</span>
             {{end}}
         </div>
-        {{else}}
-        <div class="text-xs text-gray-500 dark:text-gray-400">No build activity recorded yet.</div>
-        {{end}}
     </header>
 
-    {{if .LatestJob}}
+    {{with .Stats}}
+    <section aria-label="What this run holds" class="space-y-3">
+        <dl class="grid grid-cols-2 gap-x-4 gap-y-3">
+            <div>
+                <dt class="text-xs text-gray-500 dark:text-gray-400">Objects</dt>
+                <dd class="text-lg font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{{.ObjectsH}}</dd>
+            </div>
+            <div>
+                <dt class="text-xs text-gray-500 dark:text-gray-400">Size</dt>
+                <dd class="text-lg font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{{.BytesH}}</dd>
+            </div>
+            <div>
+                <dt class="text-xs text-gray-500 dark:text-gray-400">Est. cost per month</dt>
+                <dd class="text-lg font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{{if .CostH}}{{.CostH}}{{else}}<span class="text-sm font-normal text-gray-500 dark:text-gray-400" title="This run's inventory has no storage-class column">—</span>{{end}}</dd>
+            </div>
+            <div>
+                <dt class="text-xs text-gray-500 dark:text-gray-400">Prefixes</dt>
+                <dd class="text-lg font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{{.PrefixesH}}</dd>
+            </div>
+        </dl>
+        {{if .Tiers}}
+        {{$est := .CostEstimate}}
+        <table class="w-full text-xs">
+            <caption class="sr-only">Storage classes</caption>
+            <thead>
+                <tr class="text-left text-gray-500 dark:text-gray-400">
+                    <th class="py-1 pr-2 font-medium">Storage class</th>
+                    <th class="py-1 pl-3 font-medium text-right whitespace-nowrap">Size</th>
+                    <th class="py-1 pl-3 font-medium text-right whitespace-nowrap">Objects</th>
+                    {{if $est}}<th class="py-1 pl-3 font-medium text-right whitespace-nowrap">$/mo</th>{{end}}
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                {{range .Tiers}}
+                <tr>
+                    <td class="py-1 pr-2 align-top break-words text-gray-800 dark:text-gray-100" title="{{.TierName}}">{{tierLabel .TierName}}</td>
+                    <td class="py-1 pl-3 align-top text-right tabular-nums whitespace-nowrap text-gray-700 dark:text-gray-200">{{.BytesH}}</td>
+                    <td class="py-1 pl-3 align-top text-right tabular-nums whitespace-nowrap text-gray-500 dark:text-gray-400">{{.ObjectCountH}}</td>
+                    {{if $est}}<td class="py-1 pl-3 align-top text-right tabular-nums whitespace-nowrap text-gray-500 dark:text-gray-400">{{index $est.PerTierFormatted .TierName}}</td>{{end}}
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{end}}
+    </section>
+    {{end}}
+
+    {{if and $busy .LatestJob}}
     {{- /* Progress: the current stage, its percent and time left (the
            counter's units vary by stage, so it is opaque progress, not
            bytes), a bar with one segment per stage, and the overall time
            left projected from the last successful build. live.js keeps
            the line, the bar and both clocks current between renders. */ -}}
     {{$pct := progressPct .LatestJob.StageDone .LatestJob.StageTotal}}
-    {{$state := printf "%s" .LatestJob.State}}
     <section aria-label="Progress" class="space-y-1.5">
-        {{if .Live}}
         <div class="flex items-baseline justify-between gap-3 text-xs">
             <div class="min-w-0 truncate text-gray-800 dark:text-gray-100 font-medium tabular-nums" data-live-text>
-                {{- if eq $state "queued"}}Queued — waiting for a free build slot
+                {{- if eq (printf "%s" .LatestJob.State) "queued"}}Queued — waiting for a free build slot
                 {{- else}}{{if .LatestJob.Stage}}{{stageLabel .LatestJob.Stage}}{{if .LatestJob.Step}} · {{.LatestJob.Step}}{{end}}{{else}}Starting…{{end}}{{if gt $pct 0}} · {{$pct}}%{{end}}
                 {{- end -}}
             </div>
-            {{- /* elapsedSince returns "" for a zero StartedAt (queued,
-                   not yet running); time.Time is always truthy in
-                   templates, so guard on the rendered value. */ -}}
+            {{- /* clock returns "" for a zero StartedAt (queued, not yet
+                   running); time.Time is always truthy in templates, so
+                   guard on the rendered value. */ -}}
             {{$elapsed := clock .LatestJob.StartedAt}}
             {{if $elapsed}}
             <div class="flex-shrink-0 text-gray-500 dark:text-gray-400 tabular-nums" title="Time since the build started">
@@ -108,22 +144,120 @@
             The last build took {{.BaselineH}}{{if $elapsed}}; this one is past that{{end}}
         </p>
         {{end}}
-        {{else}}
-        <div class="flex items-end justify-between text-xs">
-            <div class="text-gray-700 dark:text-gray-200 font-medium">Result</div>
-            <div class="text-gray-500 dark:text-gray-400">
-                {{if .LatestTookH}}took {{.LatestTookH}}{{else if .LatestJob.StartedAt}}started {{formatTimeRelative .LatestJob.StartedAt}}{{end}}
-            </div>
-        </div>
-        <div class="h-1.5 w-full bg-gray-100 dark:bg-gray-900/40 rounded-full overflow-hidden">
-            <div class="h-full rounded-full {{if eq $state "failed"}}bg-red-500 dark:bg-red-400{{else if eq $state "succeeded"}}bg-green-500 dark:bg-green-400{{else}}bg-yellow-500 dark:bg-yellow-400{{end}}"
-                 style="width: {{if eq $state "succeeded"}}100{{else if gt $pct 0}}{{$pct}}{{else}}100{{end}}%"></div>
-        </div>
-        {{if .BaselineH}}
-        <p class="text-[11px] text-gray-400 dark:text-gray-500" title="Computed from the most recent successful build of the same inventory configuration">
-            Previous successful build: {{.BaselineH}}
-        </p>
+    </section>
+    {{end}}
+
+    {{with $run.ErrorSummary}}
+    <section class="rounded border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 p-2.5 space-y-1.5">
+        <p class="text-sm text-red-800 dark:text-red-200 break-words">{{.}}</p>
+        <details id="drawer-technical" class="text-xs">
+            <summary class="cursor-pointer text-red-700 dark:text-red-300">Technical details</summary>
+            <pre class="mt-1 text-[11px] text-red-900 dark:text-red-200 whitespace-pre-wrap break-words font-mono">{{$run.ErrorText}}</pre>
+        </details>
+    </section>
+    {{end}}
+    {{if and .LatestJob (eq (printf "%s" .LatestJob.State) "cancelled") (not $busy) (not $run.State.IsLoaded)}}
+    <p class="text-xs text-gray-500 dark:text-gray-400">The build was cancelled{{if not .LatestJob.FinishedAt.IsZero}} {{formatTimeRelative .LatestJob.FinishedAt}}{{end}}. Nothing was kept from it; Retry builds the run again.</p>
+    {{end}}
+
+    {{- /* Actions: the same ones, in the same two lines, as the run's
+           row. They swap nothing: the job stream and catalog events
+           refresh the drawer and the row. */ -}}
+    <section aria-label="Actions" class="space-y-1.5 text-sm">
+        <div class="flex flex-wrap items-center gap-2 whitespace-nowrap">
+        {{if $busy}}
+            {{if .LatestJob}}
+            <button type="button" id="drawer-cancel"
+                    hx-post="/api/jobs/{{.LatestJob.ID}}/cancel"
+                    hx-swap="none"
+                    hx-disabled-elt="this"
+                    class="inline-flex items-center px-2.5 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-60">
+                Cancel build
+            </button>
+            {{end}}
+        {{else if $run.State.IsLoaded}}
+            <a href="{{$run.BrowseHref}}" class="inline-flex items-center px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white">Browse</a>
+            <a href="{{$run.CompareHref}}" class="inline-flex items-center px-2.5 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">{{if $run.PrevLoaded}}Compare with previous{{else}}Compare{{end}}</a>
+        {{else if and .LatestJob $run.CanRetry}}
+            <button type="button" id="drawer-retry"
+                    hx-post="/api/jobs/{{.LatestJob.ID}}/retry"
+                    hx-swap="none"
+                    hx-disabled-elt="this"
+                    class="inline-flex items-center px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white disabled:opacity-60">
+                Retry build
+            </button>
+        {{else if and $run.Run $run.State.CanLoad}}
+            <button type="button" id="drawer-load"
+                    hx-post="/partials/discovered/{{$run.SourceBucket}}/{{$run.Name}}/{{$run.Run}}/load"
+                    hx-swap="none"
+                    hx-disabled-elt="this"
+                    class="inline-flex items-center px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white disabled:opacity-60">
+                {{if $run.State.IsError}}Retry{{else}}Load{{end}}
+            </button>
         {{end}}
+        </div>
+        {{if and $run.State.IsLoaded (not $busy)}}
+        <div class="flex items-center gap-4 text-xs">
+            <button type="button" id="drawer-pin"
+                    hx-post="/partials/discovered/{{$run.SourceBucket}}/{{$run.Name}}/{{$run.Run}}/pin"
+                    {{if $run.Pinned}}hx-vals="{{hxValsJSON "pinned" "false"}}"{{else}}hx-vals="{{hxValsJSON "pinned" "true"}}"{{end}}
+                    hx-swap="none"
+                    hx-disabled-elt="this"
+                    class="text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:underline underline-offset-2 disabled:opacity-60"
+                    title="{{if $run.Pinned}}Unpin: allow this run to be unloaded automatically to free disk space{{else}}Pin: never unload this run automatically to free disk space{{end}}">
+                {{if $run.Pinned}}Unpin{{else}}Pin{{end}}
+            </button>
+            <button type="button" id="drawer-unload"
+                    hx-post="/partials/discovered/{{$run.SourceBucket}}/{{$run.Name}}/{{$run.Run}}/unload"
+                    hx-confirm="Unload this run? Its index is deleted from disk; loading it again rebuilds it."
+                    hx-swap="none"
+                    hx-disabled-elt="this"
+                    class="text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:underline underline-offset-2 disabled:opacity-60">
+                Unload
+            </button>
+        </div>
+        {{end}}
+    </section>
+
+    {{if or $run.ManifestKey .IndexBytesH .LatestTookH}}
+    <section aria-labelledby="drawer-source" class="space-y-1.5">
+        <h3 id="drawer-source" class="text-xs uppercase tracking-wider font-semibold text-gray-500 dark:text-gray-400">Source</h3>
+        <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+            {{if $run.ManifestKey}}<dt class="text-gray-500 dark:text-gray-400">Manifest</dt><dd class="text-gray-800 dark:text-gray-100 font-mono break-all">{{$run.ManifestKey}}</dd>{{end}}
+            {{if $run.FileFormat}}<dt class="text-gray-500 dark:text-gray-400">Format</dt><dd class="text-gray-800 dark:text-gray-100">{{$run.FileFormat}}</dd>{{end}}
+            {{if $run.FileCount}}<dt class="text-gray-500 dark:text-gray-400">Files</dt><dd class="text-gray-800 dark:text-gray-100 tabular-nums">{{$run.FileCount}}{{if .ManifestH}} · {{.ManifestH}} compressed{{end}}</dd>{{end}}
+            {{if .IndexBytesH}}<dt class="text-gray-500 dark:text-gray-400">Index on disk</dt><dd class="text-gray-800 dark:text-gray-100 tabular-nums">{{.IndexBytesH}}</dd>{{end}}
+            {{if .LatestTookH}}<dt class="text-gray-500 dark:text-gray-400">Build time</dt><dd class="text-gray-800 dark:text-gray-100 tabular-nums">{{.LatestTookH}}</dd>{{end}}
+        </dl>
+    </section>
+    {{end}}
+
+    {{- /* Build details: open while a build runs, folded once it ended
+           (inventories.html keeps the user's choice across refreshes). */ -}}
+    <details id="drawer-build" class="group"{{if .Live}} open{{end}}>
+        <summary class="cursor-pointer text-xs uppercase tracking-wider font-semibold text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Build details</summary>
+        <div class="mt-2 space-y-4">
+        {{if .LatestJob}}
+        {{$state := printf "%s" .LatestJob.State}}
+        {{if not .Live}}
+        <div class="space-y-1">
+            <div class="flex items-end justify-between text-xs">
+                <div class="text-gray-700 dark:text-gray-200 font-medium">Last build</div>
+                <div class="text-gray-500 dark:text-gray-400">
+                    {{if .LatestTookH}}took {{.LatestTookH}}{{else if .LatestJob.StartedAt}}started {{formatTimeRelative .LatestJob.StartedAt}}{{end}}{{if not .LatestJob.FinishedAt.IsZero}} · <span title="Finished {{formatTime .LatestJob.FinishedAt}}">{{formatTimeRelative .LatestJob.FinishedAt}}</span>{{end}}
+                </div>
+            </div>
+            {{$pct := progressPct .LatestJob.StageDone .LatestJob.StageTotal}}
+            <div class="h-1.5 w-full bg-gray-100 dark:bg-gray-900/40 rounded-full overflow-hidden">
+                <div class="h-full rounded-full {{if eq $state "failed"}}bg-red-500 dark:bg-red-400{{else if eq $state "succeeded"}}bg-green-500 dark:bg-green-400{{else}}bg-yellow-500 dark:bg-yellow-400{{end}}"
+                     style="width: {{if eq $state "succeeded"}}100{{else if gt $pct 0}}{{$pct}}{{else}}100{{end}}%"></div>
+            </div>
+            {{if .BaselineH}}
+            <p class="text-[11px] text-gray-400 dark:text-gray-500" title="Computed from the most recent successful build of the same inventory configuration">
+                Previous successful build: {{.BaselineH}}
+            </p>
+            {{end}}
+        </div>
         {{end}}
         {{if or (gt .LatestJob.SpillCount 0) (gt .LatestJob.MergeRounds 0)}}
         <p class="text-[11px] text-gray-400 dark:text-gray-500 font-mono" title="Spills indicate memory pressure (raise GOMEMLIMIT); merge rounds scale with run-file count and fan-in.">
@@ -132,124 +266,94 @@
             {{if gt .LatestJob.MergeRounds 0}}{{.LatestJob.MergeRounds}} merge round{{if ne .LatestJob.MergeRounds 1}}s{{end}}{{if gt .LatestJob.MergeBytes 0}}, {{formatBytesInt64 .LatestJob.MergeBytes}} written{{end}}{{end}}
         </p>
         {{end}}
-    </section>
 
-    {{- /* Per-stage timeline. Each row is one StageRecord. */ -}}
-    <section aria-label="Pipeline timeline" class="space-y-1">
-        <h3 class="text-xs uppercase tracking-wider font-semibold text-gray-500 dark:text-gray-400">Timeline</h3>
-        {{if .Stages}}
-        <ol class="space-y-1">
-            {{range .Stages}}
-            <li class="flex items-start gap-2 text-xs"
-                title="{{.Description}}">
-                <span class="inline-flex flex-shrink-0 mt-0.5 h-4 w-4 items-center justify-center" aria-hidden="true">
-                    {{if .Err}}
-                        <svg viewBox="0 0 20 20" fill="currentColor" class="h-3.5 w-3.5 text-red-500 dark:text-red-400"><path d="M10 1.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17zM6.7 6.7l1.4-1.4L10 7.2l1.9-1.9 1.4 1.4L11.4 8.6l1.9 1.9-1.4 1.4L10 10l-1.9 1.9-1.4-1.4 1.9-1.9z"/></svg>
-                    {{else if .InProgress}}
-                        <svg viewBox="0 0 24 24" class="h-3.5 w-3.5 text-indigo-500 dark:text-indigo-400 animate-spin" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M21 12a9 9 0 0 0-9-9" stroke-linecap="round"/></svg>
-                    {{else}}
-                        <svg viewBox="0 0 20 20" fill="currentColor" class="h-3.5 w-3.5 text-green-500 dark:text-green-400"><path d="M16.7 5.3a1 1 0 0 0-1.4 0L8 12.6 4.7 9.3a1 1 0 1 0-1.4 1.4l4 4a1 1 0 0 0 1.4 0l8-8a1 1 0 0 0 0-1.4z"/></svg>
-                    {{end}}
-                </span>
-                <div class="flex-1 min-w-0">
-                    <div class="flex items-baseline gap-2">
-                        <span class="font-medium text-gray-800 dark:text-gray-100">{{.Label}}</span>
-                        {{if .DurationH}}<span class="text-gray-400 dark:text-gray-500 font-mono tabular-nums"{{if and .InProgress (not .StartedAt.IsZero)}} data-elapsed-since="{{rfc3339 .StartedAt}}"{{end}}>{{.DurationH}}</span>{{end}}
-                    </div>
-                    {{- /* "Rows" means different things at different stages
-                           — relabel and selectively hide bytes so the meaning
-                           is unambiguous. Downloading counts inventory rows
-                           (= S3 objects) and their summed claimed sizes;
-                           building counts unique prefixes and has no
-                           meaningful byte total. */ -}}
-                    {{$rate := throughputRate .Rows .Duration}}
-                    {{if eq .Name "downloading"}}
-                        {{if or (gt .Bytes 0) (gt .Rows 0)}}
+        {{- /* Per-stage timeline. Each row is one StageRecord. */ -}}
+        <section aria-label="Pipeline timeline" class="space-y-1">
+            <h3 class="text-xs uppercase tracking-wider font-semibold text-gray-500 dark:text-gray-400">Timeline</h3>
+            {{if .Stages}}
+            <ol class="space-y-1">
+                {{range .Stages}}
+                <li class="flex items-start gap-2 text-xs"
+                    title="{{.Description}}">
+                    <span class="inline-flex flex-shrink-0 mt-0.5 h-4 w-4 items-center justify-center" aria-hidden="true">
+                        {{if .Failed}}
+                            <svg viewBox="0 0 20 20" fill="currentColor" class="h-3.5 w-3.5 text-red-500 dark:text-red-400"><path d="M10 1.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17zM6.7 6.7l1.4-1.4L10 7.2l1.9-1.9 1.4 1.4L11.4 8.6l1.9 1.9-1.4 1.4L10 10l-1.9 1.9-1.4-1.4 1.9-1.9z"/></svg>
+                        {{else if .InProgress}}
+                            <svg viewBox="0 0 24 24" class="h-3.5 w-3.5 text-indigo-500 dark:text-indigo-400 animate-spin" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M21 12a9 9 0 0 0-9-9" stroke-linecap="round"/></svg>
+                        {{else}}
+                            <svg viewBox="0 0 20 20" fill="currentColor" class="h-3.5 w-3.5 text-green-500 dark:text-green-400"><path d="M16.7 5.3a1 1 0 0 0-1.4 0L8 12.6 4.7 9.3a1 1 0 1 0-1.4 1.4l4 4a1 1 0 0 0 1.4 0l8-8a1 1 0 0 0 0-1.4z"/></svg>
+                        {{end}}
+                    </span>
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-baseline gap-2">
+                            <span class="font-medium text-gray-800 dark:text-gray-100">{{.Label}}</span>
+                            {{if .Failed}}<span class="text-red-600 dark:text-red-400">failed</span>{{end}}
+                            {{if .DurationH}}<span class="text-gray-400 dark:text-gray-500 font-mono tabular-nums"{{if and .InProgress (not .StartedAt.IsZero)}} data-elapsed-since="{{rfc3339 .StartedAt}}"{{end}}>{{.DurationH}}</span>{{end}}
+                        </div>
+                        {{- /* "Rows" means different things at different stages
+                               — relabel and selectively hide bytes so the meaning
+                               is unambiguous. Downloading counts inventory rows
+                               (= S3 objects) and their summed claimed sizes;
+                               building counts unique prefixes and has no
+                               meaningful byte total. */ -}}
+                        {{$rate := throughputRate .Rows .Duration}}
+                        {{if eq .Name "downloading"}}
+                            {{if or (gt .Bytes 0) (gt .Rows 0)}}
+                            <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono">
+                                {{if gt .Rows 0}}{{formatCount .Rows}} objects{{end}}
+                                {{if and (gt .Rows 0) (gt .Bytes 0)}} · {{end}}
+                                {{if gt .Bytes 0}}{{formatBytes .Bytes}} total size{{end}}
+                                {{if $rate}} · {{$rate}}{{end}}
+                            </div>
+                            {{end}}
+                        {{else if eq .Name "building"}}
+                            {{if gt .Rows 0}}
+                            <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono">
+                                {{formatCount .Rows}} prefixes{{if $rate}} · {{$rate}}{{end}}
+                            </div>
+                            {{end}}
+                        {{else if or (gt .Bytes 0) (gt .Rows 0)}}
                         <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono">
-                            {{if gt .Rows 0}}{{formatCount .Rows}} objects{{end}}
+                            {{if gt .Rows 0}}{{formatCount .Rows}}{{end}}
                             {{if and (gt .Rows 0) (gt .Bytes 0)}} · {{end}}
-                            {{if gt .Bytes 0}}{{formatBytes .Bytes}} total size{{end}}
+                            {{if gt .Bytes 0}}{{formatBytes .Bytes}}{{end}}
                             {{if $rate}} · {{$rate}}{{end}}
                         </div>
                         {{end}}
-                    {{else if eq .Name "building"}}
-                        {{if gt .Rows 0}}
-                        <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono">
-                            {{formatCount .Rows}} prefixes{{if $rate}} · {{$rate}}{{end}}
-                        </div>
-                        {{end}}
-                    {{else if or (gt .Bytes 0) (gt .Rows 0)}}
-                    <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono">
-                        {{if gt .Rows 0}}{{formatCount .Rows}}{{end}}
-                        {{if and (gt .Rows 0) (gt .Bytes 0)}} · {{end}}
-                        {{if gt .Bytes 0}}{{formatBytes .Bytes}}{{end}}
-                        {{if $rate}} · {{$rate}}{{end}}
                     </div>
-                    {{end}}
-                    {{if .Err}}
-                    <div class="text-[11px] text-red-600 dark:text-red-400 break-words">{{.Err}}</div>
-                    {{end}}
-                </div>
-            </li>
-            {{end}}
-        </ol>
-        {{else}}
-        <p class="text-xs text-gray-400 dark:text-gray-500">No stage data captured yet.</p>
-        {{end}}
-    </section>
-
-    {{- /* Action row: cancel mid-flight, retry from terminal failure. */ -}}
-    <section class="flex flex-wrap gap-2 pt-1">
-        {{if .Live}}
-        <button type="button"
-                hx-post="/api/jobs/{{.LatestJob.ID}}/cancel"
-                hx-swap="none"
-                class="inline-flex items-center px-2.5 py-1 rounded border border-yellow-300 dark:border-yellow-700 text-xs text-yellow-700 dark:text-yellow-300 hover:bg-yellow-50 dark:hover:bg-yellow-900/30">
-            Cancel build
-        </button>
-        {{else if or (eq (printf "%s" .LatestJob.State) "failed") (eq (printf "%s" .LatestJob.State) "cancelled") (eq (printf "%s" .LatestJob.State) "aborted")}}
-        <button type="button"
-                hx-post="/api/jobs/{{.LatestJob.ID}}/retry"
-                hx-swap="none"
-                class="inline-flex items-center px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white text-xs">
-            Retry build
-        </button>
-        {{end}}
-    </section>
-
-    {{if and .LatestJob.Error (ne $state "cancelled")}}
-    {{- /* The job-level error message — distinct from per-stage Err
-           shown inline above. Stays expanded because a failed build is
-           the user's primary debugging surface here. */ -}}
-    <section class="rounded border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 p-2.5">
-        <div class="text-[11px] uppercase tracking-wider font-semibold text-red-700 dark:text-red-300 mb-1">Error</div>
-        <pre class="text-xs text-red-900 dark:text-red-200 whitespace-pre-wrap break-words font-mono">{{.LatestJob.Error}}</pre>
-    </section>
-    {{else if eq $state "cancelled"}}
-    <p class="text-xs text-gray-500 dark:text-gray-400">The build was cancelled{{if not .LatestJob.FinishedAt.IsZero}} {{formatTimeRelative .LatestJob.FinishedAt}}{{end}}. Nothing was kept from it; Retry builds the run again.</p>
-    {{end}}
-
-    {{if .PrevAttempts}}
-    <section aria-label="Previous attempts" class="space-y-1.5">
-        <h3 class="text-xs uppercase tracking-wider font-semibold text-gray-500 dark:text-gray-400">Previous attempts</h3>
-        <ol class="space-y-1.5">
-            {{range .PrevAttempts}}
-            <li class="text-xs border-l-2 {{if eq (printf "%s" .State) "succeeded"}}border-green-400 dark:border-green-500{{else if eq (printf "%s" .State) "failed"}}border-red-400 dark:border-red-500{{else}}border-gray-300 dark:border-gray-600{{end}} pl-2">
-                <div class="flex items-baseline gap-2">
-                    <span class="font-semibold text-gray-700 dark:text-gray-200">#{{.AttemptNum}}</span>
-                    <span class="text-gray-500 dark:text-gray-400">{{.State}}</span>
-                    {{if .DurationH}}<span class="text-gray-400 dark:text-gray-500 font-mono">· {{.DurationH}}</span>{{end}}
-                    {{if .FinishedAt}}<span class="text-gray-400 dark:text-gray-500 ml-auto font-mono">{{.FinishedAt}}</span>{{end}}
-                </div>
-                {{if .Error}}
-                <div class="text-[11px] text-red-600 dark:text-red-400 mt-0.5 break-words" title="{{.Error}}">{{.Error}}</div>
+                </li>
                 {{end}}
-            </li>
+            </ol>
+            {{else}}
+            <p class="text-xs text-gray-400 dark:text-gray-500">No stage data captured yet.</p>
             {{end}}
-        </ol>
-    </section>
-    {{end}}
-    {{end}}
+        </section>
+
+        {{if .PrevAttempts}}
+        <section aria-label="Previous attempts" class="space-y-1.5">
+            <h3 class="text-xs uppercase tracking-wider font-semibold text-gray-500 dark:text-gray-400">Previous attempts</h3>
+            <ol class="space-y-1.5">
+                {{range .PrevAttempts}}
+                <li class="text-xs border-l-2 {{if eq (printf "%s" .State) "succeeded"}}border-green-400 dark:border-green-500{{else if eq (printf "%s" .State) "failed"}}border-red-400 dark:border-red-500{{else}}border-gray-300 dark:border-gray-600{{end}} pl-2">
+                    <div class="flex items-baseline gap-2">
+                        <span class="font-semibold text-gray-700 dark:text-gray-200">#{{.AttemptNum}}</span>
+                        <span class="text-gray-500 dark:text-gray-400">{{.State}}</span>
+                        {{if .DurationH}}<span class="text-gray-400 dark:text-gray-500 font-mono">· {{.DurationH}}</span>{{end}}
+                        {{if .FinishedAt}}<span class="text-gray-400 dark:text-gray-500 ml-auto font-mono">{{.FinishedAt}}</span>{{end}}
+                    </div>
+                    {{if .Summary}}
+                    <div class="text-[11px] text-red-600 dark:text-red-400 mt-0.5 break-words">{{.Summary}}</div>
+                    {{end}}
+                </li>
+                {{end}}
+            </ol>
+        </section>
+        {{end}}
+        {{else}}
+        <p class="text-xs text-gray-500 dark:text-gray-400">No build activity recorded yet.</p>
+        {{end}}
+        </div>
+    </details>
 </div>
 </aside>
 {{end}}

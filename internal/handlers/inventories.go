@@ -325,34 +325,50 @@ type InventoriesData struct {
 	AutoLoadRunning bool
 }
 
+// SummarySelectors lists every group header's summary, for the one
+// background refresh that keeps them current as runs load and unload.
+func (d InventoriesData) SummarySelectors() string {
+	sels := make([]string, len(d.Groups))
+	for i := range d.Groups {
+		sels[i] = "#" + d.Groups[i].SummaryID()
+	}
+
+	return strings.Join(sels, ",")
+}
+
 // InventoryGroup pins one inventory configuration (SourceBucket +
 // Name) to all of its discovered runs.
 type InventoryGroup struct {
+	// Loaded is the newest loaded run, which the header summarizes.
+	Loaded           *DiscoveredRowView
 	SourceBucket     string
 	Name             string
 	LastPollAt       string
 	LastPollError    string
 	PollBackoffUntil string
-	Runs             []DiscoveredRowView
-	VisibleRuns      int
-	Retention        uint32
-	AutoLoad         bool
+	// Runs are shown: the latest run and every run that is loaded,
+	// building or failed. Older holds the rest, collapsed.
+	Runs      []DiscoveredRowView
+	Older     []DiscoveredRowView
+	Retention uint32
+	AutoLoad  bool
 	// AutoLoadManaged and RetentionManaged mark settings the config file
 	// sets: shown, but not editable here.
 	AutoLoadManaged  bool
 	RetentionManaged bool
 }
 
-// DefaultVisibleRuns caps how many runs in a configuration render in
-// the inventories page above the fold. Older ones collapse into a
-// <details> block.
-const DefaultVisibleRuns = 5
-
 // ConfigID returns the "<src>/<inv>" identifier shared by every run in
 // the group — handy as a stable HTML id / aria label.
 func (g InventoryGroup) ConfigID() string {
 	return g.SourceBucket + "/" + g.Name
 }
+
+// SummaryID is the id of the header's summary line.
+func (g InventoryGroup) SummaryID() string { return "grp-sum-" + domID(g.ConfigID()) }
+
+// TotalRuns counts every discovered run of the configuration.
+func (g InventoryGroup) TotalRuns() int { return len(g.Runs) + len(g.Older) }
 
 // InventoriesPage renders the inventories HTML page. The page is
 // discovery-centric: when --s3-source or --index-source is set, it lists S3-discovered
@@ -372,68 +388,69 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 			zerolog.Ctx(r.Context()).Error().Err(err).Msg("discover for inventories page")
 			data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
 		}
-		data.Groups = h.buildInventoryGroups(r, views)
+		data.Groups = h.buildInventoryGroups(r.Context(), views)
 	}
 
 	h.renderHTML(w, r, "inventories.html", "failed to render inventories page", data)
 }
 
-// buildInventoryGroups composes the per-configuration row groups for
-// InventoriesPage. Extracted so the page handler stays under the
-// cognitive-complexity budget; the same shape was inlined before.
-func (h *Handlers) buildInventoryGroups(r *http.Request, views []inventory.MergedInventory) []InventoryGroup {
+// groupRuns builds every run's row and groups them by configuration, in
+// discovery order, each group's runs newest first and linked (Latest,
+// Compare with previous).
+func (h *Handlers) groupRuns(ctx context.Context, views []inventory.MergedInventory) [][]DiscoveredRowView {
 	// One query for every run's latest job, not one per run.
-	latest, err := h.latestJobs(r.Context())
+	latest, err := h.latestJobs(ctx)
 	if err != nil {
-		zerolog.Ctx(r.Context()).Warn().Err(err).Msg("look up latest jobs for inventories page")
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("look up latest jobs")
 	}
 	groupIdx := map[string]int{}
-	groups := make([]InventoryGroup, 0, len(views))
+	groups := make([][]DiscoveredRowView, 0, len(views))
 	for i := range views {
-		row := h.buildDiscoveredRow(r, &views[i], latest)
+		var job *jobs.Job
+		if j, ok := latest[views[i].CompositeID()]; ok {
+			job = &j
+		}
+		row := h.rowView(views[i], job)
 		key := views[i].ConfigID()
 		if idx, ok := groupIdx[key]; ok {
-			groups[idx].Runs = append(groups[idx].Runs, row)
+			groups[idx] = append(groups[idx], row)
 
 			continue
 		}
 		groupIdx[key] = len(groups)
-		groups = append(groups, InventoryGroup{
-			SourceBucket: views[i].SourceBucket,
-			Name:         views[i].Name,
-			Runs:         []DiscoveredRowView{row},
-		})
+		groups = append(groups, []DiscoveredRowView{row})
 	}
-	for i := range groups {
-		groups[i].VisibleRuns = min(DefaultVisibleRuns, len(groups[i].Runs))
+	for _, runs := range groups {
+		sortRunsNewestFirst(runs)
+		linkRuns(runs)
 	}
-	h.annotateGroupsFromConfig(r.Context(), groups)
 
 	return groups
 }
 
-// buildDiscoveredRow builds one run's row; latest holds every run's
-// latest job (LatestByInventory).
-func (h *Handlers) buildDiscoveredRow(r *http.Request, v *inventory.MergedInventory, latest map[inventory.ID]jobs.Job) DiscoveredRowView {
-	row := DiscoveredRowView{MergedInventory: *v}
-	if info, ok := h.manager.Get(v.CompositeID()); ok {
-		row.Pinned = info.Pinned
-		row.UserUnloaded = !info.UserUnloadedAt.IsZero()
-		row.AutoLoadFailureCount = info.AutoLoadFailureCount
-		row.LoadDuration = info.LoadDuration
-		if !info.AutoLoadBackoffUntil.IsZero() {
-			row.AutoLoadBackoffUntil = info.AutoLoadBackoffUntil.UTC().Format("15:04:05")
+// buildInventoryGroups composes the per-configuration row groups for
+// InventoriesPage.
+func (h *Handlers) buildInventoryGroups(ctx context.Context, views []inventory.MergedInventory) []InventoryGroup {
+	runGroups := h.groupRuns(ctx, views)
+	groups := make([]InventoryGroup, 0, len(runGroups))
+	for _, runs := range runGroups {
+		g := InventoryGroup{SourceBucket: runs[0].SourceBucket, Name: runs[0].Name}
+		for i := range runs {
+			h.addStats(ctx, &runs[i])
+			if g.Loaded == nil && runs[i].Stats != nil {
+				g.Loaded = &runs[i]
+			}
+			if runs[i].prominent() {
+				g.Runs = append(g.Runs, runs[i])
+			} else {
+				g.Older = append(g.Older, runs[i])
+			}
 		}
+		groups = append(groups, g)
 	}
-	if j, ok := latest[v.CompositeID()]; ok {
-		row.LatestJob = &j
-	}
-	cs := h.measureCacheSize(r, v.Inventory)
-	row.CacheBytes, row.CacheBytesH = cs.Bytes, cs.Human
-	row.LoadDurationH = loadDurationLabel(row.LoadDuration, row.LatestJob)
-	populateRowDerived(&row)
+	h.annotateGroupsFromConfig(ctx, groups)
 
-	return row
+	return groups
 }
 
 func (h *Handlers) annotateGroupsFromConfig(ctx context.Context, groups []InventoryGroup) {

@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"errors"
 	"net/http"
 	"time"
 
@@ -16,11 +15,19 @@ import (
 // Caps the PrevJobID chain walk so a circular link can't run forever.
 const drawerMaxAttempts = 10
 
+// RunDrawerView is the run drawer: what the run is and holds first,
+// then where it came from, then how its builds went.
 type RunDrawerView struct {
-	InventoryID  inventory.ID
-	State        inventory.State
-	StateError   string
+	// Run is the run as its inventories row sees it: state, place among
+	// its configuration's runs, failure and the actions it offers.
+	Run DiscoveredRowView
+	// Stats, for a loaded run, adds prefixes and the per-tier breakdown
+	// and costs Browse shows at the root.
+	Stats        *RunStats
 	LatestJob    *jobs.Job
+	InventoryID  inventory.ID
+	IndexBytesH  string
+	ManifestH    string
 	PrevAttempts []DrawerAttempt
 	OverallETA   string
 	// OverallDeadline is when OverallETA runs out, for the countdown.
@@ -30,7 +37,6 @@ type RunDrawerView struct {
 	BaselineMs      int64
 	Stages          []DrawerStage
 	Live            bool
-	HasInventory    bool
 }
 
 func (v RunDrawerView) CompositePath() string { return string(v.InventoryID) }
@@ -41,12 +47,12 @@ type DrawerStage struct {
 	Label       string
 	Description string
 	DurationH   string
-	Err         string
 	Duration    time.Duration
 	Bytes       uint64
 	Rows        uint64
 	InProgress  bool
 	Final       bool
+	Failed      bool
 }
 
 type DrawerAttempt struct {
@@ -54,65 +60,81 @@ type DrawerAttempt struct {
 	State      jobs.State
 	Stage      string
 	DurationH  string
-	Error      string
+	Summary    string
 	AttemptNum int
 	FinishedAt string
 	WasRetried bool
 }
 
 func (h *Handlers) RunDrawer(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	src := chi.URLParam(r, "src")
 	name := chi.URLParam(r, "id")
 	run := chi.URLParam(r, "run")
 	composite := inventory.ID(src + "/" + name + "/" + run)
 	view := RunDrawerView{InventoryID: composite}
 
-	// Info.LoadDuration is the canonical "took N" — keeps drawer + row in sync (per-stage sum excludes manager bookkeeping).
-	var infoLoadDuration time.Duration
-	if info, ok := h.manager.Get(composite); ok {
-		view.HasInventory = true
-		view.State = info.State
-		view.StateError = info.Error
-		infoLoadDuration = info.LoadDuration
-	}
-
-	// A refresh of the open drawer must not add a history entry per
-	// update; only opening it does.
+	// Only opening the drawer from a row adds a history entry: a refresh
+	// of the open drawer, or reopening it from the URL's #run= on a
+	// reload, Back or Forward, asks with refresh=1.
 	if r.URL.Query().Get("refresh") == "" {
 		w.Header().Set("HX-Push-Url", "/inventories#run="+string(composite))
 	}
 
-	if h.jobStore == nil {
-		h.renderHTMLPartial(w, r, "run_drawer.html", "render drawer", view)
+	view.LatestJob = h.latestJobOrNil(ctx, composite)
+	views, _, err := h.discovery.Snapshot(ctx)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("snapshot for drawer")
+	}
+	merged := inventory.MergedInventory{SourceBucket: src, Name: name, Run: run}
+	for i := range views {
+		if views[i].CompositeID() == composite {
+			merged = views[i]
 
-		return
+			break
+		}
+	}
+	view.Run = h.rowView(merged, view.LatestJob)
+	placeRowAmong(views, &view.Run)
+	if merged.TotalBytes > 0 {
+		view.ManifestH = humanfmt.Bytes(merged.TotalBytes)
 	}
 
-	latest, err := h.latestJob(r.Context(), composite)
-	switch {
-	case err == nil:
-		view.LatestJob = &latest
+	// Info.LoadDuration is the canonical "took N" — keeps drawer + row in sync (per-stage sum excludes manager bookkeeping).
+	var infoLoadDuration time.Duration
+	if info, ok := h.manager.Get(composite); ok {
+		infoLoadDuration = info.LoadDuration
+		if info.State == inventory.StateLoaded && info.IndexBytes > 0 {
+			view.IndexBytesH = humanfmt.BytesUint64(info.IndexBytes)
+		}
+	}
+	if view.Run.State.IsLoaded() {
+		if s, err := h.runStats(composite, true); err == nil {
+			view.Stats = &s
+		}
+	}
+
+	if latest := view.LatestJob; latest != nil {
 		view.Live = latest.State.IsLive()
-		view.Stages = drawerStagesFromJob(latest)
-		view.PrevAttempts = h.collectPrevAttempts(r, latest)
-		est := h.computeBaseline(r, latest)
+		view.Stages = drawerStagesFromJob(*latest)
+		view.PrevAttempts = h.collectPrevAttempts(r, *latest)
+		est := h.computeBaseline(r, *latest)
 		view.BaselineMs = est.BaselineMs
 		view.BaselineH = est.HumanBaseline
 		view.OverallETA = est.OverallETA
 		view.OverallDeadline = est.Deadline
-		view.LatestTookH = pickTookDuration(infoLoadDuration, latest)
-	case errors.Is(err, jobs.ErrStoreNotFound):
-	default:
-		zerolog.Ctx(r.Context()).Warn().Err(err).
-			Stringer("composite", composite).
-			Msg("look up latest job for drawer")
+		view.LatestTookH = pickTookDuration(infoLoadDuration, *latest)
+	} else if infoLoadDuration > 0 {
+		view.LatestTookH = humanfmt.Duration(infoLoadDuration)
 	}
 
 	h.renderHTMLPartial(w, r, "run_drawer.html", "render drawer", view)
 }
 
+// RunDrawerClose replaces the drawer's history entry rather than adding
+// one, so opening and closing it doesn't pile up entries for Back.
 func (h *Handlers) RunDrawerClose(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("HX-Push-Url", "/inventories")
+	w.Header().Set("HX-Replace-Url", "/inventories")
 	h.renderHTMLPartial(w, r, "run_drawer_closed.html", "render drawer closed", nil)
 }
 
@@ -169,7 +191,7 @@ func drawerStagesFromJob(j jobs.Job) []DrawerStage {
 			Description: templates.StageDescription(s.Name),
 			DurationH:   templates.DurationFromNs(s.Duration.Nanoseconds()),
 			Duration:    s.Duration,
-			Err:         s.Err,
+			Failed:      s.Err != "",
 			Bytes:       s.Bytes,
 			Rows:        s.Rows,
 			InProgress:  s.InProgress(),
@@ -219,7 +241,7 @@ func (h *Handlers) collectPrevAttempts(r *http.Request, latest jobs.Job) []Drawe
 			State:      prev.State,
 			Stage:      prev.Stage,
 			DurationH:  dur,
-			Error:      prev.Error,
+			Summary:    summarizeBuildError(prev.Error),
 			FinishedAt: finished,
 			WasRetried: prev.State == jobs.StateFailed || prev.State == jobs.StateCancelled || prev.State == jobs.StateAborted,
 		})
