@@ -61,6 +61,22 @@ func TestRunDrawer_LeadsWithWhatTheRunHolds(t *testing.T) {
 		t.Error("drawer Unload has no confirmation")
 	}
 	assertTwoActionLines(t, actions, "#drawer-pin", "#drawer-unload")
+	// Numbers in the storage-class table stay on one line, right-aligned
+	// and spaced from their neighbours; only the class name wraps.
+	tiers := holds.Find("table")
+	tiers.Find("tr").Each(func(_ int, tr *goquery.Selection) {
+		tr.Children().Slice(1, goquery.ToEnd).Each(func(_ int, cell *goquery.Selection) {
+			class := " " + cell.AttrOr("class", "") + " "
+			for _, want := range []string{" text-right ", " whitespace-nowrap ", " pl-3 "} {
+				if !strings.Contains(class, want) {
+					t.Errorf("tier table cell %q lacks %s", squash(cell.Text()), want)
+				}
+			}
+			if goquery.NodeName(cell) == "td" && !strings.Contains(class, " tabular-nums ") {
+				t.Errorf("tier number %q isn't tabular", squash(cell.Text()))
+			}
+		})
+	})
 	source := strings.Join(strings.Fields(doc.Find(`section[aria-labelledby="drawer-source"]`).Text()), " ")
 	if !strings.Contains(source, "src/inv/2026-10-26T03-00Z/manifest.json") || !strings.Contains(source, "CSV") || !strings.Contains(source, "80") {
 		t.Errorf("source section %q lacks the manifest, format or file count", source)

@@ -85,19 +85,19 @@
             <caption class="sr-only">Storage classes</caption>
             <thead>
                 <tr class="text-left text-gray-500 dark:text-gray-400">
-                    <th class="py-1 font-medium">Storage class</th>
-                    <th class="py-1 font-medium text-right">Size</th>
-                    <th class="py-1 font-medium text-right">Objects</th>
-                    {{if $est}}<th class="py-1 font-medium text-right">$/mo</th>{{end}}
+                    <th class="py-1 pr-2 font-medium">Storage class</th>
+                    <th class="py-1 pl-3 font-medium text-right whitespace-nowrap">Size</th>
+                    <th class="py-1 pl-3 font-medium text-right whitespace-nowrap">Objects</th>
+                    {{if $est}}<th class="py-1 pl-3 font-medium text-right whitespace-nowrap">$/mo</th>{{end}}
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
                 {{range .Tiers}}
                 <tr>
-                    <td class="py-1 text-gray-800 dark:text-gray-100" title="{{.TierName}}">{{tierLabel .TierName}}</td>
-                    <td class="py-1 text-right tabular-nums text-gray-700 dark:text-gray-200">{{.BytesH}}</td>
-                    <td class="py-1 text-right tabular-nums text-gray-500 dark:text-gray-400">{{.ObjectCountH}}</td>
-                    {{if $est}}<td class="py-1 text-right tabular-nums text-gray-500 dark:text-gray-400">{{index $est.PerTierFormatted .TierName}}</td>{{end}}
+                    <td class="py-1 pr-2 align-top break-words text-gray-800 dark:text-gray-100" title="{{.TierName}}">{{tierLabel .TierName}}</td>
+                    <td class="py-1 pl-3 align-top text-right tabular-nums whitespace-nowrap text-gray-700 dark:text-gray-200">{{.BytesH}}</td>
+                    <td class="py-1 pl-3 align-top text-right tabular-nums whitespace-nowrap text-gray-500 dark:text-gray-400">{{.ObjectCountH}}</td>
+                    {{if $est}}<td class="py-1 pl-3 align-top text-right tabular-nums whitespace-nowrap text-gray-500 dark:text-gray-400">{{index $est.PerTierFormatted .TierName}}</td>{{end}}
                 </tr>
                 {{end}}
             </tbody>
