@@ -200,7 +200,8 @@ func newStores(cfg Config) (serverStores, error) {
 }
 
 // newDiscovery wires the S3-side of the server. Returns a disabled
-// Discovery (and nil loader) when --s3-source is unset.
+// Discovery (and nil loader) when neither --s3-source nor --index-source
+// is set.
 // CacheRemover deletes an evicted run's cache dir; nil without S3 wiring.
 func cacheRemover(wiring *discoveryWiring) loadcontrol.CacheRemover {
 	if wiring == nil {
@@ -259,7 +260,7 @@ func buildHandlerOptions(cfg Config, discovery *inventory.Discovery, bldr *loade
 		}
 	}
 	addIf(bldr != nil, handlers.WithLoader(bldr), handlers.WithCacheStore(bldr))
-	addIf(cfg.S3Source != "", handlers.WithS3Source(cfg.S3Source))
+	addIf(cfg.discoveryRoot() != "", handlers.WithS3Source(cfg.discoveryRoot()))
 	addIf(cfg.QueryBatchMax > 0, handlers.WithQueryBatchMax(cfg.QueryBatchMax))
 	hopts = append(hopts, handlers.WithLevelCacheBytes(cfg.LevelCacheBytes))
 
@@ -481,9 +482,20 @@ type discoveryWiring struct {
 	IndexesOnly bool
 }
 
+// discoveryRoot is the s3:// URI discovery lists runs under: the
+// inventories, or the published indexes when only index_source is set.
+func (c Config) discoveryRoot() string {
+	if c.S3Source != "" {
+		return c.S3Source
+	}
+
+	return c.IndexSource
+}
+
 // newDiscoveryWiring constructs the S3 client, discoverer, and loader
-// for a server configured with --s3-source. Extracted from New so the
-// happy path stays readable and so the wiring is testable in isolation.
+// for a server configured with --s3-source or --index-source.
+// Extracted from New so the happy path stays readable and so the
+// wiring is testable in isolation.
 func newDiscoveryWiring(ctx context.Context, cfg Config) (discoveryWiring, error) {
 	if cfg.CacheDir == "" {
 		return discoveryWiring{}, errEmptyCacheDir
@@ -495,10 +507,7 @@ func newDiscoveryWiring(ctx context.Context, cfg Config) (discoveryWiring, error
 		return discoveryWiring{}, fmt.Errorf("s3 client: %w", err)
 	}
 	indexesOnly := cfg.S3Source == ""
-	root := cfg.S3Source
-	if indexesOnly {
-		root = cfg.IndexSource
-	}
+	root := cfg.discoveryRoot()
 	disco, err := s3disco.NewFromS3URI(s3Client.Raw(), root)
 	if err != nil {
 		return discoveryWiring{}, fmt.Errorf("discovery from %q: %w", root, err)

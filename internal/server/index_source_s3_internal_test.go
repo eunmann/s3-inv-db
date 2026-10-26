@@ -3,6 +3,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,8 +12,10 @@ import (
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/loadcontrol"
 	"github.com/eunmann/s3-inv-db/internal/s3test"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/indexstore"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
@@ -72,6 +75,72 @@ func TestIndexSource_DiscoversDownloadsAndServesAPublishedRun(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestIndexSource_SizesAnUnlistedRunFromItsManifest: a run the listing
+// did not summarize is sized by its published manifest, exactly, so a
+// budget one byte short refuses it and one that fits admits it.
+func TestIndexSource_SizesAnUnlistedRunFromItsManifest(t *testing.T) {
+	raw := s3test.RawClient(t)
+	bucket := s3test.Bucket(t, raw)
+	run := indexstore.Run{Source: "src-bucket", Inventory: "daily", Run: "2026-10-24T01-00Z"}
+	dir := smallIndex(t)
+	m, err := format.ReadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := indexstore.New(raw, bucket).Publish(t.Context(), dir, run.Prefix("idx/")); err != nil {
+		t.Fatal(err)
+	}
+	unlisted := inventory.Inventory{
+		SourceBucket: run.Source, Name: run.Inventory, Run: run.Run,
+		ManifestKey: run.Prefix("idx/") + format.ManifestFile,
+	}
+	newServer := func(maxDisk uint64) *Server {
+		t.Helper()
+		srv, err := New(t.Context(), Config{
+			Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: testDB(t),
+			CacheDir: t.TempDir(), IndexSource: "s3://" + bucket + "/idx/", MaxIndexDisk: maxDisk,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = srv.manager.Close() })
+
+		return srv
+	}
+
+	err = newServer(m.TotalBytes()-1).discovery.Load(t.Context(), unlisted)
+	if _, refused := errors.AsType[*loadcontrol.BudgetRefusedError](err); !refused {
+		t.Errorf("load into a budget one byte short err = %v, want a budget refusal", err)
+	}
+	if err := newServer(m.TotalBytes()).discovery.Load(t.Context(), unlisted); err != nil {
+		t.Errorf("load into a budget that fits: %v", err)
+	}
+}
+
+// TestIndexSource_PagesNameTheSource: with only an index source, the
+// dashboard and inventories pages say where runs are discovered from.
+func TestIndexSource_PagesNameTheSource(t *testing.T) {
+	raw := s3test.RawClient(t)
+	source := "s3://" + s3test.Bucket(t, raw) + "/idx/"
+	srv, err := New(t.Context(), Config{
+		Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: testDB(t),
+		CacheDir: t.TempDir(), IndexSource: source, MaxIndexDisk: 1 << 30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.manager.Close() })
+
+	for _, page := range []string{"/", "/inventories"} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://localhost"+page, http.NoBody)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), source) {
+			t.Errorf("GET %s: %d, body lacks %q", page, w.Code, source)
+		}
 	}
 }
 
