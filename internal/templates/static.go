@@ -20,6 +20,13 @@ var helpJS []byte
 //go:embed scripts/live.js
 var liveJS []byte
 
+// htmxJS is htmx 1.9.10's dist/htmx.min.js byte for byte as published
+// on npm (sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC),
+// served from the binary so pages load no script from another origin.
+//
+//go:embed scripts/htmx.min.js
+var htmxJS []byte
+
 // TailwindCSS returns the embedded compiled stylesheet.
 func TailwindCSS() []byte { return tailwindCSS }
 
@@ -29,9 +36,13 @@ func HelpJS() []byte { return helpJS }
 // LiveJS returns the embedded live job-update script (scripts/live.js).
 func LiveJS() []byte { return liveJS }
 
+// HtmxJS returns the embedded htmx library (scripts/htmx.min.js).
+func HtmxJS() []byte { return htmxJS }
+
 // AssetVersion is the content hash of the embedded asset name
-// ("tailwind.css", "help.js", "live.js"): the ?v= its URL carries and
-// the value of its weak ETag. It is empty for an unknown name.
+// ("tailwind.css", "help.js", "live.js", "htmx.min.js"): the ?v= its
+// URL carries and the value of its weak ETag. It is empty for an
+// unknown name.
 func AssetVersion(name string) string { return assetVersions()[name] }
 
 // assetVersions hashes each embedded asset once; the content never
@@ -39,12 +50,14 @@ func AssetVersion(name string) string { return assetVersions()[name] }
 //
 //nolint:gochecknoglobals // computed once from embedded, immutable content
 var assetVersions = sync.OnceValue(func() map[string]string {
-	out := make(map[string]string, 3)
-	for name, content := range map[string][]byte{
+	assets := map[string][]byte{
 		"tailwind.css": tailwindCSS,
 		"help.js":      helpJS,
 		"live.js":      liveJS,
-	} {
+		"htmx.min.js":  htmxJS,
+	}
+	out := make(map[string]string, len(assets))
+	for name, content := range assets {
 		h := sha256.Sum256(content)
 		out[name] = hex.EncodeToString(h[:8])
 	}

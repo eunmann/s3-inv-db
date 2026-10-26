@@ -85,8 +85,6 @@ func cacheOps() []struct {
 	}{
 		{"UnloadInventoryAPI", func(h *handlers.Handlers) http.HandlerFunc { return h.UnloadInventoryAPI }, http.MethodPost, idParams, false},
 		{"DeleteInventoryAPI", func(h *handlers.Handlers) http.HandlerFunc { return h.DeleteInventoryAPI }, http.MethodDelete, idParams, true},
-		{"UnloadInventoryRowPartial", func(h *handlers.Handlers) http.HandlerFunc { return h.UnloadInventoryRowPartial }, http.MethodPost, idParams, false},
-		{"DeleteInventoryRowPartial", func(h *handlers.Handlers) http.HandlerFunc { return h.DeleteInventoryRowPartial }, http.MethodDelete, idParams, true},
 		{"UnloadDiscoveredRowPartial", func(h *handlers.Handlers) http.HandlerFunc { return h.UnloadDiscoveredRowPartial }, http.MethodPost, []string{"src", cacheRunSrc, "id", cacheRunInv, "run", cacheRunRun}, false},
 	}
 }

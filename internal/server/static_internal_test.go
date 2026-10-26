@@ -1,10 +1,40 @@
 package server
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/internal/templates"
+	"github.com/eunmann/s3-inv-db/pkg/pricing"
+	"github.com/rs/zerolog"
 )
+
+// TestRoutes_ServeVendoredHtmx: the server serves the embedded htmx at
+// the versioned URL the layout links, cached for good.
+func TestRoutes_ServeVendoredHtmx(t *testing.T) {
+	srv, err := New(t.Context(), Config{Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: testDB(t)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://localhost/static/htmx.min.js?v="+templates.AssetVersion("htmx.min.js"), http.NoBody)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if !bytes.Equal(w.Body.Bytes(), templates.HtmxJS()) {
+		t.Error("body is not the embedded htmx")
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/javascript; charset=utf-8" {
+		t.Errorf("Content-Type = %q", got)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Errorf("Cache-Control = %q, want immutable", got)
+	}
+}
 
 // TestStaticAsset_Caching: the URL pages link (?v=<this build's content
 // hash>) is cached for good; a bare URL, or one naming another build's
@@ -27,11 +57,60 @@ func TestStaticAsset_Caching(t *testing.T) {
 			t.Errorf("%s: ETag = %q, want %q", c.url, got, `W/"abc"`)
 		}
 	}
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/static/live.js", http.NoBody)
-	req.Header.Set("If-None-Match", `W/"abc"`)
-	w := httptest.NewRecorder()
-	h(w, req)
-	if w.Code != http.StatusNotModified {
-		t.Errorf("matching If-None-Match: status %d, want 304", w.Code)
+}
+
+// TestStaticAsset_NotModified: a revalidation that names this build's
+// tag gets a bodiless 304 that still carries the ETag and the
+// Cache-Control of its URL, so the browser's copy keeps its lifetime.
+func TestStaticAsset_NotModified(t *testing.T) {
+	h := staticAsset("text/plain", []byte("x"), "abc")
+	cases := []struct{ url, cacheControl string }{
+		{"/static/live.js?v=abc", "public, max-age=31536000, immutable"},
+		{"/static/live.js", "no-cache"},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, c.url, http.NoBody)
+		req.Header.Set("If-None-Match", `W/"abc"`)
+		w := httptest.NewRecorder()
+		h(w, req)
+		if w.Code != http.StatusNotModified {
+			t.Fatalf("%s: status %d, want 304", c.url, w.Code)
+		}
+		if w.Body.Len() != 0 {
+			t.Errorf("%s: 304 has a %d-byte body", c.url, w.Body.Len())
+		}
+		if got := w.Header().Get("ETag"); got != `W/"abc"` {
+			t.Errorf("%s: 304 ETag = %q, want %q", c.url, got, `W/"abc"`)
+		}
+		if got := w.Header().Get("Cache-Control"); got != c.cacheControl {
+			t.Errorf("%s: 304 Cache-Control = %q, want %q", c.url, got, c.cacheControl)
+		}
+	}
+}
+
+func TestNoneMatch(t *testing.T) {
+	cases := []struct {
+		name   string
+		fields []string
+		want   bool
+	}{
+		{"absent", nil, false},
+		{"weak", []string{`W/"abc"`}, true},
+		{"strong form compares weakly", []string{`"abc"`}, true},
+		{"other tag", []string{`W/"old"`}, false},
+		{"list", []string{`W/"old", W/"abc"`}, true},
+		{"list without spaces", []string{`"old","abc"`}, true},
+		{"list of others", []string{`W/"old", "older"`}, false},
+		{"repeated field", []string{`W/"old"`, `W/"abc"`}, true},
+		{"star", []string{"*"}, true},
+		{"prefix of tag", []string{`W/"ab"`}, false},
+		{"unquoted", []string{`abc`}, false},
+		{"unterminated", []string{`W/"abc`}, false},
+		{"empty", []string{""}, false},
+	}
+	for _, c := range cases {
+		if got := noneMatch(c.fields, "abc"); got != c.want {
+			t.Errorf("%s: noneMatch(%q) = %v, want %v", c.name, c.fields, got, c.want)
+		}
 	}
 }

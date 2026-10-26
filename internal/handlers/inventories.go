@@ -378,11 +378,6 @@ func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 	h.renderHTML(w, r, "inventories.html", "failed to render inventories page", data)
 }
 
-// InventoryRowPartial renders the row for one inventory ID.
-func (h *Handlers) InventoryRowPartial(w http.ResponseWriter, r *http.Request) {
-	h.renderInventoryRow(w, r, inventory.ID(chi.URLParam(r, "id")))
-}
-
 // buildInventoryGroups composes the per-configuration row groups for
 // InventoriesPage. Extracted so the page handler stays under the
 // cognitive-complexity budget; the same shape was inlined before.

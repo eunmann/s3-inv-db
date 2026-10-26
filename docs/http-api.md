@@ -23,6 +23,7 @@ exist, see [operations](operations.md).
 | `GET /healthz` | text/plain `ok` | Liveness probe (no auth, no S3) |
 | `GET /static/tailwind.css` | text/css | Embedded compiled stylesheet, ETag-revalidated |
 | `GET /static/help.js` | application/javascript | Embedded help-page JS (TOC active-link + filter), ETag-revalidated |
+| `GET /static/htmx.min.js` | application/javascript | Embedded htmx 1.9.10, so pages load no third-party script; ETag-revalidated |
 
 ### HTMX partials
 
@@ -30,10 +31,6 @@ These mutate state and return HTML for the swapped row.
 
 | Route | Method | Notes |
 |---|---|---|
-| `/partials/inventory-row/{id}` | GET | Single row of the (non-discovered) inventory list |
-| `/partials/inventories/{id}/load` | POST | Loads + returns updated row |
-| `/partials/inventories/{id}/unload` | POST | Unloads + returns updated row |
-| `/partials/inventories/{id}` | DELETE | Deletes (htmx outerHTML removes row) |
 | `/partials/discovered/{src}/{id}/{run}` | GET | Latest state of one discovered run (used by SSE refresh) |
 | `/partials/discovered/{src}/{id}/{run}/load` | POST | Submits an async build job; returns 202 + the row in `queued` state |
 | `/partials/discovered/{src}/{id}/{run}/unload` | POST | Unload + wipe on-disk cache |

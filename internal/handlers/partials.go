@@ -19,48 +19,6 @@ import (
 // Manager or Discovery and return the updated row's HTML directly
 // so the client can swap it into the DOM without a full page reload.
 
-// LoadInventoryRowPartial loads a (non-discovered) inventory and returns
-// its updated row.
-func (h *Handlers) LoadInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
-	id := inventory.ID(chi.URLParam(r, "id"))
-	if err := h.manager.Load(context.WithoutCancel(r.Context()), id); err != nil {
-		respondManagerError(w, r, err, "load inventory")
-
-		return
-	}
-	h.renderInventoryRow(w, r, id)
-}
-
-// UnloadInventoryRowPartial unloads an inventory and returns its updated row.
-func (h *Handlers) UnloadInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
-	id := inventory.ID(chi.URLParam(r, "id"))
-	if err := h.manager.Unload(r.Context(), id); err != nil {
-		respondManagerError(w, r, err, "unload inventory")
-
-		return
-	}
-	h.freeRunCache(r.Context(), id)
-	h.renderInventoryRow(w, r, id)
-}
-
-// DeleteInventoryRowPartial removes an inventory and returns an empty
-// body so htmx's outerHTML swap removes the row. ErrNotFound is folded
-// into success on purpose: the user's intent is "make this row go
-// away", and the swap fires regardless of whether the backing record
-// existed — returning 404 would prevent the swap and leave the stale
-// row visible.
-func (h *Handlers) DeleteInventoryRowPartial(w http.ResponseWriter, r *http.Request) {
-	id := inventory.ID(chi.URLParam(r, "id"))
-	if err := h.manager.Remove(r.Context(), id); err != nil && !errors.Is(err, inventory.ErrNotFound) {
-		respondManagerError(w, r, err, "delete inventory")
-
-		return
-	}
-	h.freeRunCache(r.Context(), id)
-	w.Header().Set("Content-Type", contentTypeHTML)
-	w.WriteHeader(http.StatusOK)
-}
-
 // LoadDiscoveredRowPartial submits a background build job and returns
 // the row in queued state with HTTP 202 immediately. The UI watches the
 // SSE stream for state transitions and swaps the row when the job moves.
@@ -125,7 +83,7 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 func (h *Handlers) CancelJob(w http.ResponseWriter, r *http.Request) {
 	id := jobs.ID(chi.URLParam(r, "id"))
 	if err := h.jobMgr.Cancel(id); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, "this job is no longer running", http.StatusNotFound)
 
 		return
 	}
@@ -182,18 +140,6 @@ func (h *Handlers) DiscoveredRowPartial(w http.ResponseWriter, r *http.Request) 
 	id := chi.URLParam(r, "id")
 	run := chi.URLParam(r, "run")
 	h.renderDiscoveredRow(w, r, src, id, run)
-}
-
-// renderInventoryRow looks up the inventory in the manager and writes the
-// inventory_row.html partial. Used by the htmx-facing partial handlers.
-func (h *Handlers) renderInventoryRow(w http.ResponseWriter, r *http.Request, id inventory.ID) {
-	info, ok := h.manager.Get(id)
-	if !ok {
-		http.Error(w, "inventory not found", http.StatusNotFound)
-
-		return
-	}
-	h.renderHTMLPartial(w, r, "inventory_row.html", "render inventory row", info)
 }
 
 // renderDiscoveredRow re-fetches the discovery entry, merges in current

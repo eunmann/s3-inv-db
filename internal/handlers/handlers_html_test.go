@@ -1,7 +1,6 @@
 package handlers_test
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,7 +9,6 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
-	"github.com/go-chi/chi/v5"
 )
 
 // testFixture provides a test environment for HTML handler tests.
@@ -238,65 +236,6 @@ func TestBrowsePage_WithPendingInventory(t *testing.T) {
 	}
 }
 
-// Inventory Row Partial Tests
-
-func TestInventoryRowPartial_PendingState(t *testing.T) {
-	f := newTestFixture(t)
-	f.registerInventory(t, "inv1", "Test Inventory", "/path")
-
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/inventory-row/inv1", http.NoBody)
-	req = withChiContext(req, "inv1")
-	w := httptest.NewRecorder()
-
-	f.h.InventoryRowPartial(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
-	}
-
-	body := w.Body.String()
-
-	// Use fragment parser for partial (tr elements need wrapping)
-	doc := parseHTMLFragment(t, body)
-
-	// Verify row structure
-	assertElementExists(t, doc, "tr")
-
-	// Verify inventory name
-	assertElementContainsText(t, doc, "td", "Test Inventory")
-
-	// Verify pending state badge
-	badge := doc.Find("span.px-2").First()
-	classAttr, _ := badge.Attr("class")
-	if !strings.Contains(classAttr, "bg-gray-100") {
-		t.Errorf("expected pending state badge, got class=%q", classAttr)
-	}
-
-	// Verify Load button exists
-	assertElementContainsText(t, doc, "button", "Load")
-}
-
-func TestInventoryRowPartial_NotFound(t *testing.T) {
-	f := newTestFixture(t)
-
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/inventory-row/nonexistent", http.NoBody)
-	req = withChiContext(req, "nonexistent")
-	w := httptest.NewRecorder()
-
-	f.h.InventoryRowPartial(w, req)
-
-	if w.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
-	}
-
-	// Partial routes must not return JSON; HTMX would swap the literal
-	// JSON body into the DOM.
-	ct := w.Header().Get("Content-Type")
-	if strings.Contains(ct, "application/json") {
-		t.Errorf("Content-Type = %q, must not be JSON for an HTML partial route", ct)
-	}
-}
-
 // Browse-level partial tests. /browse content-negotiates on the
 // HX-Request header — these tests pin the htmx-partial path.
 
@@ -462,7 +401,7 @@ func TestRenderHTMLPartial_BufferedFailure(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody)
 	w := httptest.NewRecorder()
 
-	f.h.RenderHTMLPartialForTest(w, req, "inventory_row.html", "render fail", brokenRenderData{Foo: 1})
+	f.h.RenderHTMLPartialForTest(w, req, "discovered_row.html", "render fail", brokenRenderData{Foo: 1})
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusInternalServerError)
@@ -471,14 +410,4 @@ func TestRenderHTMLPartial_BufferedFailure(t *testing.T) {
 	if !strings.HasPrefix(ct, "text/plain") {
 		t.Errorf("Content-Type = %q, want text/plain prefix", ct)
 	}
-}
-
-// State Badge Color Tests
-
-// withChiContext adds a chi URL param context with the given id.
-func withChiContext(r *http.Request, id string) *http.Request {
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("id", id)
-
-	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }

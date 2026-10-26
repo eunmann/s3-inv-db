@@ -359,16 +359,12 @@ func TestLifecycle_LoadStatsUnloadReload(t *testing.T) {
 		t.Fatalf("reload: status = %d, body=%s", w.Code, w.Body.String())
 	}
 
-	// Inventory row partial should now reflect "loaded".
-	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/inventory-row/life", http.NoBody)
-	req = withURLParam(req, "id", "life")
+	// Stats answer again once reloaded.
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/stats?inventory_id=life&prefix=", http.NoBody)
 	w = httptest.NewRecorder()
-	h.InventoryRowPartial(w, req)
+	h.GetStatsAPI(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("partial: status = %d", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "bg-green-100") {
-		t.Errorf("loaded row partial missing green badge class")
+		t.Errorf("post-reload stats: status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 }
 

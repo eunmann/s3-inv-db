@@ -23,6 +23,7 @@
      hx-get="/partials/drawer/{{.CompositePath}}?refresh=1"
      hx-select="#run-drawer-body"
      hx-trigger="live-refresh{{if .Live}}, every 3s{{end}}"
+     data-background-refresh
      hx-sync="this:queue last"
      hx-disinherit="*"
      hx-swap="outerHTML">

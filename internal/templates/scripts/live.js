@@ -11,7 +11,9 @@
 //   - after a reconnect, refreshes elements that still show a live job
 //     the server no longer has (it finished while we were away);
 //   - polls live elements while the stream is down, and after a few
-//     seconds down shows [data-live-status] (layout.html).
+//     seconds down shows [data-live-status] (layout.html);
+//   - tells screen readers, through [data-live-announce] (layout.html),
+//     when a build it watched ends.
 //
 // A page marked data-live-jobs="while-visible" closes its stream while
 // the tab is hidden, so background tabs don't hold one of the
@@ -234,6 +236,36 @@
             else apply(el, job, now);
         });
         if (!prev || prev.ID !== job.ID || prev.State !== job.State) refreshAny();
+        announceEnd(job);
+    }
+
+    // The connect snapshot carries only queued and running jobs, so a
+    // build seen in an end state ended while this page watched it.
+    var ENDS = { succeeded: 'Build finished', failed: 'Build failed', cancelled: 'Build cancelled' };
+    var announced = {}; // job id -> its end was announced
+    var pendingNews = [];
+    function announceEnd(job) {
+        var what = job.Kind === 'build' && ENDS[job.State];
+        if (!what || announced[job.ID]) return;
+        announced[job.ID] = true;
+        pendingNews.push(what + ': ' + runName(job.InventoryID));
+        if (pendingNews.length > 1) return;
+        // Builds ending together are read as one message.
+        setTimeout(function () {
+            var region = document.querySelector('[data-live-announce]');
+            if (region) region.textContent = pendingNews.join('. ');
+            pendingNews = [];
+        }, 100);
+    }
+
+    // runName is "<source>/<inventory> <run>", the run as the pages
+    // show it (humanfmt.RunTimestamp): 2026-01-02T03-04Z reads
+    // "2026-01-02 03:04 UTC".
+    function runName(inv) {
+        var parts = String(inv).split('/');
+        if (parts.length !== 3) return String(inv);
+        var m = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})(?:-\d{2})?Z$/.exec(parts[2]);
+        return parts[0] + '/' + parts[1] + ' ' + (m ? m[1] + ' ' + m[2] + ':' + m[3] + ' UTC' : parts[2]);
     }
 
     function refreshAny() {
@@ -358,7 +390,9 @@
         tickElapsed(document, now);
     }
     document.body.addEventListener('htmx:afterSwap', reconcile);
-    window.htmx.onLoad(reconcile);
+    // Back and Forward refetch the page and swap it in without an
+    // afterSwap.
+    document.body.addEventListener('htmx:historyRestore', reconcile);
 
     function tickElapsed(root, now) {
         (root || document).querySelectorAll('[data-elapsed-since]').forEach(function (el) {
@@ -404,6 +438,7 @@
             else if (paused) resume();
         });
     }
+    reconcile();
     if (whileVisible && document.hidden) pause();
     else connect();
 })();
