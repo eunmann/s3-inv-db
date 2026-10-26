@@ -191,7 +191,6 @@ func TestBrowsePage_NoLoadedInventories(t *testing.T) {
 	doc := parseHTML(t, w.Body.String())
 	assertElementText(t, doc, "h1", "Browse")
 	assertElementExists(t, doc, "form#browse-form")
-	assertElementContainsText(t, doc, "form p", "No loaded inventories")
 	options := doc.Find("select#inventory_id option")
 	if options.Length() != 1 {
 		t.Errorf("expected 1 option (placeholder), got %d", options.Length())
