@@ -55,6 +55,29 @@ Each prefix is stored in `prefix_tree.bin` as its parent plus one
 dictionary segment, described under [Prefix Strings](#prefix-strings)
 below.
 
+### How a position ties the files together
+
+A prefix's position is its row in every per-prefix file. The MPHF maps
+a prefix string to it; the depth index maps a depth to its rows; each
+core row points at its children's rows.
+
+```mermaid
+flowchart LR
+    P["prefix string"] -->|wyhash| MPH["mph.bin<br/>BBHash levels + fallback"]
+    MPH -->|slot| SL["mph_slots.bin<br/>fingerprint + position"]
+    SL -->|position| CS["core_stats.bin row<br/>count, bytes, child_start, tier field"]
+    CS -. "sentinel value" .-> CP["core_patch.bin<br/>(rank in core_patch.rows)"]
+    CS -->|"tier field + position"| TS["tier_stats/<br/>dense row, or multi slots<br/>(rank in tier_multi.rows)"]
+    SL -->|position| PT["prefix_tree.bin row<br/>segment ID + parent distance"]
+    PT -->|segment ID| PD["prefix_dict.bin / .off.u64"]
+    PT -->|parent| PT
+    CS -->|"child_start(pos) .. child_start(pos+1)"| CS
+    DO["depth_offsets.u64"] -->|"rows of depth d"| CS
+    DB["depth_blocks.u64<br/>bounds per 64 rows"] -.->|"skip blocks"| CS
+```
+
+Why each structure was chosen: [how it works](how-it-works.md#data-structures).
+
 ## File Header
 
 Every binary file except `mph.bin` and `prefix_dict.bin` starts with

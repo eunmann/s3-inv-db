@@ -58,8 +58,8 @@ writing, and that build then fails.
 
 Worker counts and S3 part concurrency derive from `runtime.NumCPU()`;
 the process memory ceiling is `GOMEMLIMIT`. Both are intentionally
-flagless — see [performance.md#memory](performance.md#memory) for the
-exact resolution rule.
+flagless: see [how it works](how-it-works.md#building) and
+[operations](operations.md#memory).
 
 AWS credentials use the standard SDK chain: env vars → shared
 credentials file → IAM role. Required permissions: `s3:GetObject` on
@@ -169,8 +169,11 @@ s3-inv-db config-check --config ./config.json
 ```
 
 Validates the JSON config (rejects unknown fields, enforces inventory
-entry shape) and prints every set field. Empty `--config` succeeds —
-an empty config is valid.
+entry shape, checks `trusted_proxies`) and prints every set field.
+Empty `--config` succeeds: an empty config is valid. It does not parse
+sizes or durations, or catch `auto_load` without `max_index_disk`;
+those fail when the server starts. See
+[configuration](configuration.md) for every key.
 
 ## Exit codes
 
