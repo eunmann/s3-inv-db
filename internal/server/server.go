@@ -22,6 +22,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/format"
+	"github.com/eunmann/s3-inv-db/pkg/indexstore"
 	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/go-chi/chi/v5"
@@ -37,8 +38,13 @@ type Config struct {
 	// When empty, the discovery API returns an empty list and the
 	// /api/discovered routes still work (just with nothing to show).
 	S3Source string
+	// IndexSource is the s3:// URI builds publish indexes under
+	// (s3-inv-db build --out s3://...). When set, a load downloads the
+	// run's published index if there is one. Without S3Source, the
+	// server lists runs from here and never builds in-process.
+	IndexSource string
 	// CacheDir is the local directory where built indexes are written.
-	// Required when S3Source is set.
+	// Required when S3Source or IndexSource is set.
 	CacheDir string
 	// DB is the shared SQLite handle for domain Stores. Each domain
 	// (inventory, jobs) constructs its Store from this.
@@ -111,7 +117,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	var wiring *discoveryWiring
-	if cfg.S3Source != "" {
+	if cfg.S3Source != "" || cfg.IndexSource != "" {
 		w, err := newDiscoveryWiring(ctx, cfg)
 		if err != nil {
 			return nil, err
@@ -219,12 +225,18 @@ func newDiscovery(cfg Config, catalog *inventory.Catalog, gate *loadcontrol.Gate
 		return inventory.NewDiscovery(catalog), nil
 	}
 	sizer := loadcontrol.NewManifestSizer(wiring.Client)
+	size, ratio := sizer.ManifestSize, inventory.DefaultIndexRatio
+	if wiring.IndexesOnly {
+		// A published index's manifest gives its exact size.
+		size, ratio = sizer.IndexSize, 1
+	}
 	disc := inventory.NewDiscovery(catalog,
 		inventory.WithBackend(wiring.Discoverer, wiring.Loader),
-		inventory.WithGate(gate.Load, sizer.ManifestSize, inventory.DefaultIndexRatio),
+		inventory.WithGate(gate.Load, size, ratio),
 	)
 	cfg.Logger.Info().
 		Str("s3_source", cfg.S3Source).
+		Str("index_source", cfg.IndexSource).
 		Str("cache_dir", cfg.CacheDir).
 		Uint64("max_index_disk_bytes", cfg.MaxIndexDisk).
 		Msg("discovery + budget configured")
@@ -434,7 +446,7 @@ func (s *Server) reconcileCache(logger zerolog.Logger) {
 }
 
 var (
-	errEmptyCacheDir  = errors.New("CacheDir is required when S3Source is set")
+	errEmptyCacheDir  = errors.New("CacheDir is required when S3Source or IndexSource is set")
 	errNoDB           = errors.New("server.Config.DB is required")
 	errBadInventoryID = errors.New("not a source/inventory/run id")
 )
@@ -463,6 +475,10 @@ type discoveryWiring struct {
 	Discoverer *s3disco.Discoverer
 	Loader     *loader.Loader
 	Client     *s3fetch.Client
+	// IndexesOnly is set when the server lists published indexes
+	// (IndexSource without S3Source): a run's discovered size is its
+	// index size, not its inventory's.
+	IndexesOnly bool
 }
 
 // newDiscoveryWiring constructs the S3 client, discoverer, and loader
@@ -478,18 +494,35 @@ func newDiscoveryWiring(ctx context.Context, cfg Config) (discoveryWiring, error
 	if err != nil {
 		return discoveryWiring{}, fmt.Errorf("s3 client: %w", err)
 	}
-	disco, err := s3disco.NewFromS3URI(s3Client.Raw(), cfg.S3Source)
+	indexesOnly := cfg.S3Source == ""
+	root := cfg.S3Source
+	if indexesOnly {
+		root = cfg.IndexSource
+	}
+	disco, err := s3disco.NewFromS3URI(s3Client.Raw(), root)
 	if err != nil {
-		return discoveryWiring{}, fmt.Errorf("discovery from %q: %w", cfg.S3Source, err)
+		return discoveryWiring{}, fmt.Errorf("discovery from %q: %w", root, err)
+	}
+	if indexesOnly {
+		disco.ListIndexes()
+	}
+	var loaderOpts []loader.Option
+	if cfg.IndexSource != "" {
+		src, err := s3fetch.ParseS3URI(cfg.IndexSource)
+		if err != nil {
+			return discoveryWiring{}, fmt.Errorf("index source %q: %w", cfg.IndexSource, err)
+		}
+		loaderOpts = append(loaderOpts, loader.WithIndexSource(indexstore.New(s3Client.Raw(), src.Bucket), src.Key, !indexesOnly))
 	}
 	if err := os.MkdirAll(cfg.CacheDir, format.DirPerm); err != nil {
 		return discoveryWiring{}, fmt.Errorf("ensure cache dir %s: %w", cfg.CacheDir, err)
 	}
 
 	return discoveryWiring{
-		Discoverer: disco,
-		Loader:     loader.New(cfg.CacheDir, s3Client),
-		Client:     s3Client,
+		Discoverer:  disco,
+		Loader:      loader.New(cfg.CacheDir, s3Client, loaderOpts...),
+		Client:      s3Client,
+		IndexesOnly: indexesOnly,
 	}, nil
 }
 

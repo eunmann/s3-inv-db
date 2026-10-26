@@ -283,3 +283,37 @@ func TestDiscoverer_ManifestsReadOnce(t *testing.T) {
 		t.Fatalf("Finds of listed runs read %d more manifests, want 0", n-3)
 	}
 }
+
+// TestDiscoverer_ListIndexes: an index source lists committed runs with
+// their index size, and skips a run still uploading (files, no
+// manifest).
+func TestDiscoverer_ListIndexes(t *testing.T) {
+	client := s3test.RawClient(t)
+	ctx := t.Context()
+	bucket := s3test.Bucket(t, client)
+	put := func(key, body string) {
+		t.Helper()
+		if _, err := client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(key), Body: strings.NewReader(body)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("idx/src-bucket/daily/2026-10-24T01-00Z/core_stats.bin", "abc")
+	put("idx/src-bucket/daily/2026-10-24T01-00Z/manifest.json",
+		`{"version":1,"created_at":"2026-10-24T02:00:00Z","node_count":3,"files":{"core_stats.bin":{"size":300,"checksum":"x"},"mph.bin":{"size":40,"checksum":"y"}}}`)
+	put("idx/src-bucket/daily/2026-10-25T01-00Z/core_stats.bin", "uploading")
+
+	d := s3disco.New(client, bucket, "idx/").ListIndexes()
+	got, err := d.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("List = %+v, want only the committed run", got)
+	}
+	if e := got[0]; e.Run != "2026-10-24T01-00Z" || e.FileFormat != "index" || e.TotalBytes != 340 || e.FileCount != 2 {
+		t.Errorf("entry = %+v, want run 2026-10-24T01-00Z, format index, 340 bytes in 2 files", e)
+	}
+	if _, err := d.Find(ctx, "src-bucket", "daily", "2026-10-25T01-00Z"); !errors.Is(err, inventory.ErrRunNotFound) {
+		t.Errorf("Find of the uploading run err = %v, want ErrRunNotFound", err)
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
 	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/format"
+	"github.com/eunmann/s3-inv-db/pkg/indexstore"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/rs/zerolog"
 )
@@ -22,16 +23,39 @@ import (
 //nolint:gochecknoglobals // shared no-op closure so BuildWith doesn't allocate per call
 var noopProgress = func(string, int64, int64) {}
 
-// Loader runs the S3-inventory → on-disk-index build pipeline into a
-// per-inventory subdirectory of the configured cache root.
+// Loader materialises an inventory run's index in a per-run
+// subdirectory of the configured cache root: by downloading the index
+// a build published to the index source, or by running the
+// S3-inventory → index build pipeline itself.
 type Loader struct {
 	s3Client  *s3fetch.Client
+	published *indexstore.Store
 	cacheRoot string
+	pubBase   string
+	noBuild   bool
+}
+
+// Option configures a Loader.
+type Option func(*Loader)
+
+// WithIndexSource makes the loader fetch a run's index from store under
+// base when one is published there. Without build, a run that isn't
+// published fails instead of being built in-process: the server has
+// only an index source to read.
+func WithIndexSource(store *indexstore.Store, base string, build bool) Option {
+	return func(l *Loader) {
+		l.published, l.pubBase, l.noBuild = store, base, !build
+	}
 }
 
 // New constructs a Loader. CacheRoot must already exist and be writable.
-func New(cacheRoot string, s3Client *s3fetch.Client) *Loader {
-	return &Loader{cacheRoot: cacheRoot, s3Client: s3Client}
+func New(cacheRoot string, s3Client *s3fetch.Client, opts ...Option) *Loader {
+	l := &Loader{cacheRoot: cacheRoot, s3Client: s3Client}
+	for _, opt := range opts {
+		opt(l)
+	}
+
+	return l
 }
 
 // CacheDirFor returns the on-disk path where an inventory run's built
@@ -53,8 +77,9 @@ func (l *Loader) CacheDirFor(key inventory.CacheKey) (string, error) {
 	return filepath.Join(l.cacheRoot, key.SourceBucket, key.InventoryID, key.Run), nil
 }
 
-// BuildWith downloads the inventory referenced by manifestURI and
-// produces a built index under CacheDirFor(key). The onProgress
+// BuildWith produces the run's index under CacheDirFor(key): fetched
+// from the index source when a build published it there, otherwise
+// built from the inventory referenced by manifestURI. The onProgress
 // callback, if non-nil, receives stage transitions and per-chunk
 // quantitative progress for UI ETA. The eventBus, if non-nil, is
 // plumbed to the pipeline so subscribers (e.g. jobs.Recorder) can
@@ -84,6 +109,16 @@ func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifest
 		return "", fmt.Errorf("ensure cache parent: %w", err)
 	}
 
+	if l.published != nil {
+		err := l.fetchPublished(ctx, key, outDir, onProgress)
+		switch {
+		case err == nil:
+			return outDir, nil
+		case !errors.Is(err, indexstore.ErrNotPublished) || l.noBuild:
+			return "", err
+		}
+	}
+
 	cfg := extsort.DefaultConfig()
 	cfg.Observe.OnProgress = onProgress
 	cfg.Observe.EventBus = eventBus
@@ -100,6 +135,29 @@ func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifest
 	// job.Stage = "done" while job.State was still Running.
 
 	return outDir, nil
+}
+
+// fetchPublished downloads the run's published index into a staging
+// directory beside outDir, verifies it against its manifest and moves
+// it into place. It returns ErrNotPublished when the run has none.
+func (l *Loader) fetchPublished(ctx context.Context, key inventory.CacheKey, outDir string, onProgress func(stage string, done, total int64)) error {
+	prefix := indexstore.Run{Source: key.SourceBucket, Inventory: key.InventoryID, Run: key.Run}.Prefix(l.pubBase)
+	stage, err := extsort.NewStagingDir(outDir)
+	if err != nil {
+		return fmt.Errorf("stage published index: %w", err)
+	}
+	onProgress("downloading", 0, 0)
+	err = l.published.Fetch(ctx, prefix, stage, func(done, total uint64) {
+		onProgress("downloading", int64(done), int64(total))
+	})
+	if err != nil {
+		return errors.Join(err, os.RemoveAll(stage))
+	}
+	if err := extsort.PublishIndex(zerolog.Ctx(ctx), stage, outDir); err != nil {
+		return errors.Join(fmt.Errorf("move fetched index into place: %w", err), os.RemoveAll(stage))
+	}
+
+	return nil
 }
 
 // RemoveCache deletes a run's on-disk cache. Used by Unload to free
