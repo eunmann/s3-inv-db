@@ -60,6 +60,7 @@ func TestRunDrawer_LeadsWithWhatTheRunHolds(t *testing.T) {
 	if !strings.HasPrefix(actions.Find("#drawer-unload").AttrOr("hx-confirm", ""), "Unload this run?") {
 		t.Error("drawer Unload has no confirmation")
 	}
+	assertTwoActionLines(t, actions, "#drawer-pin", "#drawer-unload")
 	source := strings.Join(strings.Fields(doc.Find(`section[aria-labelledby="drawer-source"]`).Text()), " ")
 	if !strings.Contains(source, "src/inv/2026-10-26T03-00Z/manifest.json") || !strings.Contains(source, "CSV") || !strings.Contains(source, "80") {
 		t.Errorf("source section %q lacks the manifest, format or file count", source)

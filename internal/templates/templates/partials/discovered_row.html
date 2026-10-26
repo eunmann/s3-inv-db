@@ -92,9 +92,12 @@
         {{end}}
     </td>
     <td class="block sm:table-cell px-4 sm:px-6 pt-1 pb-4 sm:py-4 align-top text-sm font-medium sm:w-72">
-        {{- /* User actions replace any background refresh of the row in
-               flight (hx-sync), so a refresh can't swallow a click. */ -}}
-        <div class="flex flex-wrap items-center gap-2">
+        {{- /* Two lines: the primary actions, then for a loaded run the
+               secondary ones as small text buttons. User actions replace
+               any background refresh of the row in flight (hx-sync), so a
+               refresh can't swallow a click. */ -}}
+        <div class="space-y-1.5">
+        <div class="flex flex-wrap items-center gap-2 whitespace-nowrap">
         {{if $busy}}
             {{if .LatestJob}}
             <button type="button" id="run-{{$id}}-cancel"
@@ -125,6 +128,10 @@
            class="inline-flex items-center px-2.5 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">
             {{if .PrevLoaded}}Compare with previous{{else}}Compare{{end}}
         </a>
+        {{end}}
+        </div>
+        {{if and .State.IsLoaded (not $busy)}}
+        <div class="flex items-center gap-4 text-xs font-normal">
         <button type="button" id="run-{{$id}}-pin"
             hx-post="/partials/discovered/{{.SourceBucket}}/{{.Name}}/{{.Run}}/pin"
             {{if .Pinned}}hx-vals="{{hxValsJSON "pinned" "false"}}"{{else}}hx-vals="{{hxValsJSON "pinned" "true"}}"{{end}}
@@ -132,7 +139,7 @@
             hx-swap="outerHTML"
             hx-sync="closest tbody:replace"
             hx-disabled-elt="this"
-            class="px-1 py-1 text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline underline-offset-2 disabled:opacity-60"
+            class="text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:underline underline-offset-2 disabled:opacity-60"
             title="{{if .Pinned}}Unpin: allow this run to be unloaded automatically to free disk space{{else}}Pin: never unload this run automatically to free disk space{{end}}">
             {{if .Pinned}}Unpin{{else}}Pin{{end}}
         </button>
@@ -143,9 +150,10 @@
             hx-swap="outerHTML"
             hx-sync="closest tbody:replace"
             hx-disabled-elt="this"
-            class="px-1 py-1 text-gray-600 dark:text-gray-300 hover:text-red-700 dark:hover:text-red-300 hover:underline underline-offset-2 disabled:opacity-60">
+            class="text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:underline underline-offset-2 disabled:opacity-60">
             Unload
         </button>
+        </div>
         {{end}}
         </div>
     </td>

@@ -83,6 +83,27 @@ func newOverviewHandlers(t *testing.T, extra ...extraRun) *handlers.Handlers {
 
 func rowSel(run string) string { return "#discovered-row-src-inv-" + run }
 
+// assertTwoActionLines: a loaded run's actions are two lines, Browse
+// and Compare on the first, Pin/Unpin and Unload on the second, styled
+// alike.
+func assertTwoActionLines(t *testing.T, scope *goquery.Selection, pinSel, unloadSel string) {
+	t.Helper()
+	browse := scope.Find(`a[href^="/browse"]`)
+	pin, unload := scope.Find(pinSel), scope.Find(unloadSel)
+	if browse.Length() != 1 || pin.Length() != 1 || unload.Length() != 1 {
+		t.Fatalf("actions: %d Browse, %d pin, %d unload", browse.Length(), pin.Length(), unload.Length())
+	}
+	if !browse.Parent().IsSelection(scope.Find(`a[href^="/compare"]`).Parent()) {
+		t.Error("Browse and Compare aren't on one line")
+	}
+	if !pin.Parent().IsSelection(unload.Parent()) || pin.Parent().IsSelection(browse.Parent()) {
+		t.Error("Pin and Unload aren't together on their own line")
+	}
+	if pin.AttrOr("class", "") != unload.AttrOr("class", "") {
+		t.Errorf("Pin and Unload styled differently: %q vs %q", pin.AttrOr("class", ""), unload.AttrOr("class", ""))
+	}
+}
+
 // TestInventoriesPage_ShowsWhatEachRunHolds: a configuration's card
 // leads with its newest loaded run's totals; its rows are the latest
 // run and every loaded or failed one, the rest folded away; a loaded
@@ -143,6 +164,7 @@ func TestInventoriesPage_ShowsWhatEachRunHolds(t *testing.T) {
 	}
 
 	newerID := handlers.DomIDForTest(string(runID(overviewRuns[1])))
+	assertTwoActionLines(t, newer, "#run-"+newerID+"-pin", "#run-"+newerID+"-unload")
 	unload := newer.Find("#run-" + newerID + "-unload")
 	if !strings.HasPrefix(unload.AttrOr("hx-confirm", ""), "Unload this run?") {
 		t.Errorf("Unload has no confirmation: %q", unload.AttrOr("hx-confirm", ""))

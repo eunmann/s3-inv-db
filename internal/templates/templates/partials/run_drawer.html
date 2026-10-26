@@ -160,10 +160,11 @@
     <p class="text-xs text-gray-500 dark:text-gray-400">The build was cancelled{{if not .LatestJob.FinishedAt.IsZero}} {{formatTimeRelative .LatestJob.FinishedAt}}{{end}}. Nothing was kept from it; Retry builds the run again.</p>
     {{end}}
 
-    {{- /* Actions: the same ones the run's row offers. They swap
-           nothing: the job stream and catalog events refresh the drawer
-           and the row. */ -}}
-    <section aria-label="Actions" class="flex flex-wrap items-center gap-2 text-sm">
+    {{- /* Actions: the same ones, in the same two lines, as the run's
+           row. They swap nothing: the job stream and catalog events
+           refresh the drawer and the row. */ -}}
+    <section aria-label="Actions" class="space-y-1.5 text-sm">
+        <div class="flex flex-wrap items-center gap-2 whitespace-nowrap">
         {{if $busy}}
             {{if .LatestJob}}
             <button type="button" id="drawer-cancel"
@@ -177,14 +178,6 @@
         {{else if $run.State.IsLoaded}}
             <a href="{{$run.BrowseHref}}" class="inline-flex items-center px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white">Browse</a>
             <a href="{{$run.CompareHref}}" class="inline-flex items-center px-2.5 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">{{if $run.PrevLoaded}}Compare with previous{{else}}Compare{{end}}</a>
-            <button type="button" id="drawer-unload"
-                    hx-post="/partials/discovered/{{$run.SourceBucket}}/{{$run.Name}}/{{$run.Run}}/unload"
-                    hx-confirm="Unload this run? Its index is deleted from disk; loading it again rebuilds it."
-                    hx-swap="none"
-                    hx-disabled-elt="this"
-                    class="px-1 py-1 text-gray-600 dark:text-gray-300 hover:text-red-700 dark:hover:text-red-300 hover:underline underline-offset-2 disabled:opacity-60">
-                Unload
-            </button>
         {{else if and .LatestJob $run.CanRetry}}
             <button type="button" id="drawer-retry"
                     hx-post="/api/jobs/{{.LatestJob.ID}}/retry"
@@ -201,6 +194,28 @@
                     class="inline-flex items-center px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white disabled:opacity-60">
                 {{if $run.State.IsError}}Retry{{else}}Load{{end}}
             </button>
+        {{end}}
+        </div>
+        {{if and $run.State.IsLoaded (not $busy)}}
+        <div class="flex items-center gap-4 text-xs">
+            <button type="button" id="drawer-pin"
+                    hx-post="/partials/discovered/{{$run.SourceBucket}}/{{$run.Name}}/{{$run.Run}}/pin"
+                    {{if $run.Pinned}}hx-vals="{{hxValsJSON "pinned" "false"}}"{{else}}hx-vals="{{hxValsJSON "pinned" "true"}}"{{end}}
+                    hx-swap="none"
+                    hx-disabled-elt="this"
+                    class="text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:underline underline-offset-2 disabled:opacity-60"
+                    title="{{if $run.Pinned}}Unpin: allow this run to be unloaded automatically to free disk space{{else}}Pin: never unload this run automatically to free disk space{{end}}">
+                {{if $run.Pinned}}Unpin{{else}}Pin{{end}}
+            </button>
+            <button type="button" id="drawer-unload"
+                    hx-post="/partials/discovered/{{$run.SourceBucket}}/{{$run.Name}}/{{$run.Run}}/unload"
+                    hx-confirm="Unload this run? Its index is deleted from disk; loading it again rebuilds it."
+                    hx-swap="none"
+                    hx-disabled-elt="this"
+                    class="text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:underline underline-offset-2 disabled:opacity-60">
+                Unload
+            </button>
+        </div>
         {{end}}
     </section>
 
