@@ -1,15 +1,12 @@
 package format
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sync"
 	"time"
 	"unsafe"
 
@@ -141,6 +138,33 @@ func (b *StreamingMPHFBuilder) Close() error {
 	return errors.Join(errs...)
 }
 
+// closeArrays unmaps and removes the key arrays.
+func (b *StreamingMPHFBuilder) closeArrays() error {
+	if err := b.hashes.Close(); err != nil {
+		return fmt.Errorf("close hashes: %w", err)
+	}
+	b.hashes = nil
+	if err := b.fingerprints.Close(); err != nil {
+		return fmt.Errorf("close fingerprints: %w", err)
+	}
+	b.fingerprints = nil
+
+	return nil
+}
+
+// freezeArrays mmaps the disk-backed arrays so the build reads them as
+// []uint64 whose values live in the page cache, not the Go heap.
+func (b *StreamingMPHFBuilder) freezeArrays() error {
+	if err := b.hashes.Freeze(); err != nil {
+		return fmt.Errorf("freeze hashes: %w", err)
+	}
+	if err := b.fingerprints.Freeze(); err != nil {
+		return fmt.Errorf("freeze fingerprints: %w", err)
+	}
+
+	return nil
+}
+
 // Build's memory usage is bounded by buffer sizes, not by prefix count.
 func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	if b.built {
@@ -155,14 +179,8 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		return b.writeEmpty(outDir)
 	}
 
-	// Freeze the disk-backed arrays so their backing files are mmap'd
-	// and exposable as []uint64. bbhash reads the slice; the values
-	// live in the page cache, not the Go heap.
-	if err := b.hashes.Freeze(); err != nil {
-		return fmt.Errorf("freeze hashes: %w", err)
-	}
-	if err := b.fingerprints.Freeze(); err != nil {
-		return fmt.Errorf("freeze fingerprints: %w", err)
+	if err := b.freezeArrays(); err != nil {
+		return err
 	}
 
 	n := int(b.count)
@@ -180,19 +198,10 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	}
 
 	mapStart := time.Now()
-	if err := writeSlots(outDir, b.tempDir, n, mph, b.hashes.Slice(), b.fingerprints.Slice(), b.progress); err != nil {
+	if err := writeSlots(outDir, b.tempDir, n, mph, b.hashes.Slice(), b.fingerprints.Slice(), b.closeArrays, b.progress); err != nil {
 		return err
 	}
 	log.Debug().Dur("write_ms", time.Since(mapStart)).Msg("MPHF: slots written")
-
-	if err := b.hashes.Close(); err != nil {
-		return fmt.Errorf("close hashes: %w", err)
-	}
-	b.hashes = nil
-	if err := b.fingerprints.Close(); err != nil {
-		return fmt.Errorf("close fingerprints: %w", err)
-	}
-	b.fingerprints = nil
 
 	log.Debug().Msg("MPHF: build complete")
 
@@ -299,21 +308,21 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	}
 
 	// An empty slot file keeps the index's file set the same at any size.
-	return writeSlots(outDir, b.tempDir, 0, nil, nil, nil, nil)
+	return writeSlots(outDir, b.tempDir, 0, nil, nil, nil, nil, nil)
 }
 
-// writeSlots materialises mph_slots.bin: it maps every slot to its
-// prefix (slotOwners), then each worker fills a 1 MiB buffer in slot
-// order and pwrites it to a disjoint range of the output file.
-// Sequential writes touch each page once; scattered writes indexed by
-// hash position measured ~3x write amplification on EBS gp3.
+// writeSlots materialises mph_slots.bin from slot buckets (see
+// slotBuckets): one pass in position order buckets every prefix's record
+// by slot range, release frees the key arrays, which nothing reads
+// after that, and the buckets are laid out and written in slot order.
+// Every read and write is sequential.
 //
 // File layout: Header (Count = slots, Width = slot bytes), a 1-byte
 // descriptor (position width), the slots (8-byte fingerprint, then the
 // position at that width), and an 8-byte zero tail pad for masked loads
 // at the last slot. Progress, when non-nil, receives the StepPlaceSlots
 // and StepSlotFile steps.
-func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps []uint64, progress StepProgress) error {
+func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps []uint64, release func() error, progress StepProgress) error {
 	if len(fps) != n {
 		return fmt.Errorf("%w: fps=%d n=%d", errMPHFArrayLengthMismatch, len(fps), n)
 	}
@@ -338,32 +347,9 @@ func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps []uint64
 	}
 
 	if n > 0 {
-		// Concurrent pwrite to disjoint ranges is POSIX-safe; each worker
-		// writes its own [start,end) slot range.
-		placed := newStepCounter(progress, StepPlaceSlots, int64(n))
-		owners, err := newSlotOwners(tempDir, mph, hashes, fps, placed)
-		if err != nil {
+		if err := fillSlots(f, tempDir, n, posW, mph, hashes, fps, release, progress); err != nil {
 			return cleanup(err)
 		}
-		placed.finish()
-		written := newStepCounter(progress, StepSlotFile, int64(n))
-		numWorkers := max(min(runtime.NumCPU(), n), 1)
-		slotsPerWorker := (n + numWorkers - 1) / numWorkers
-		errs := make([]error, numWorkers)
-		var wg sync.WaitGroup
-		for w := range numWorkers {
-			start := w * slotsPerWorker
-			end := min(start+slotsPerWorker, n)
-			if start >= end {
-				continue
-			}
-			wg.Go(func() { errs[w] = writeSlotRange(f, owners, fps, posW, start, end, written) })
-		}
-		wg.Wait()
-		if err := errors.Join(errors.Join(errs...), owners.close()); err != nil {
-			return cleanup(err)
-		}
-		written.finish()
 	}
 	if err := f.Sync(); err != nil {
 		return cleanup(fmt.Errorf("sync MPHF slots: %w", err))
@@ -375,74 +361,33 @@ func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps []uint64
 	return nil
 }
 
-// slotOwners maps every MPHF slot to the index of the prefix whose key
-// hash lands there, so the slot file can be written in slot order. It
-// lives in an mmapped scratch file in the build's temp dir, not the
-// heap: at a billion prefixes it is gigabytes, which the page cache can
-// hold or evict under the build's memory limit. Entries are 4 bytes up
-// to 2^32 prefixes, 8 beyond.
-type slotOwners struct {
-	scratchMapping
+// fillSlots writes the n slots of f through slot buckets, calling
+// release once every prefix is placed.
+func fillSlots(f *os.File, tempDir string, n, posW int, mph *bbhash, hashes, fps []uint64, release func() error, progress StepProgress) error {
+	buckets, err := newSlotBuckets(tempDir, n, mphfFingerprintBytes+posW)
+	if err != nil {
+		return err
+	}
+	placed := newStepCounter(progress, StepPlaceSlots, int64(n))
+	err = buckets.place(mph, hashes, fps, placed)
+	if err == nil {
+		placed.finish()
+		err = release()
+	}
+	if err == nil {
+		written := newStepCounter(progress, StepSlotFile, int64(n))
+		if err = buckets.write(f, posW, written); err == nil {
+			written.finish()
+		}
+	}
 
-	width int
+	return errors.Join(err, buckets.close())
 }
 
 // scratchMapping is a writable mapping of a scratch file.
 type scratchMapping struct {
 	path string
 	data []byte
-}
-
-// newSlotOwners fills the map with parallel bbhash lookups, through the
-// fallback table for keys the levels miss. The MPHF is a bijection, so
-// every slot is written by exactly one lookup. Placed counts the
-// prefixes looked up.
-func newSlotOwners(tempDir string, mph *bbhash, hashes, fps []uint64, placed *stepCounter) (*slotOwners, error) {
-	n := len(hashes)
-	o := &slotOwners{width: 4}
-	if uint64(n) > math.MaxUint32 {
-		o.width = 8
-	}
-	var err error
-	o.scratchMapping, err = mapScratchFile(tempDir, "mphf_slot_owners_*.tmp", n*o.width)
-	if err != nil {
-		return nil, fmt.Errorf("slot owners: %w", err)
-	}
-
-	numWorkers := mphfWorkerCount(n)
-	chunk := (n + numWorkers - 1) / numWorkers
-	errs := make([]error, numWorkers)
-	var wg sync.WaitGroup
-	for w := range numWorkers {
-		start, end := w*chunk, min((w+1)*chunk, n)
-		if start >= end {
-			continue
-		}
-		wg.Go(func() {
-			for i := start; i < end; i++ {
-				slot, ok := mph.find(hashes[i])
-				if !ok {
-					slot, ok = mph.findFallback(hashes[i], fps[i])
-				}
-				if !ok || slot >= uint64(n) {
-					errs[w] = fmt.Errorf("%w: slot %d (found %t) for prefix %d", ErrMPHFLookupFailed, slot, ok, i)
-
-					return
-				}
-				o.set(int(slot), uint64(i))
-				if (i-start+1)%progressBlock == 0 {
-					placed.add(progressBlock)
-				}
-			}
-			placed.add((end - start) % progressBlock)
-		})
-	}
-	wg.Wait()
-	if err := errors.Join(errs...); err != nil {
-		return nil, errors.Join(err, o.close())
-	}
-
-	return o, nil
 }
 
 // mapScratchFile creates a temp file of size bytes in dir and maps it
@@ -470,28 +415,6 @@ func mapScratchFile(dir, pattern string, size int) (scratchMapping, error) {
 	return m, nil
 }
 
-func (o *slotOwners) set(slot int, owner uint64) {
-	if o.width == 4 {
-		binary.LittleEndian.PutUint32(o.data[slot*4:], uint32(owner))
-
-		return
-	}
-	binary.LittleEndian.PutUint64(o.data[slot*8:], owner)
-}
-
-func (o *slotOwners) get(slot int) uint64 {
-	if o.width == 4 {
-		return uint64(binary.LittleEndian.Uint32(o.data[slot*4:]))
-	}
-
-	return binary.LittleEndian.Uint64(o.data[slot*8:])
-}
-
-// close unmaps and removes the scratch file.
-func (o *slotOwners) close() error {
-	return o.scratchMapping.close()
-}
-
 // close unmaps the scratch file and removes it.
 func (m *scratchMapping) close() error {
 	var err error
@@ -501,34 +424,6 @@ func (m *scratchMapping) close() error {
 	}
 
 	return errors.Join(err, removeIfErr(m.path))
-}
-
-// writeSlotRange writes slots [start, end) of the slot file, counting
-// them on written.
-func writeSlotRange(f *os.File, owners *slotOwners, fps []uint64, posW, start, end int, written *stepCounter) error {
-	slotW := mphfFingerprintBytes + posW
-	const bufBytes = 1 << 20
-	bufSlots := bufBytes / slotW
-	buf := make([]byte, bufSlots*slotW+8)
-	for chunk := start; chunk < end; chunk += bufSlots {
-		cEnd := min(chunk+bufSlots, end)
-		for j := chunk; j < cEnd; j++ {
-			i := owners.get(j)
-			off := (j - chunk) * slotW
-			binary.LittleEndian.PutUint64(buf[off:], fps[i])
-			// An 8-byte store, overwritten by the next slot: only posW
-			// bytes are the slot's.
-			binary.LittleEndian.PutUint64(buf[off+mphfFingerprintBytes:], i)
-		}
-		blen := (cEnd - chunk) * slotW
-		fileOff := int64(mphfSlotsDataOff) + int64(chunk)*int64(slotW)
-		if _, err := f.WriteAt(buf[:blen], fileOff); err != nil {
-			return fmt.Errorf("write MPHF slot %d: %w", chunk, err)
-		}
-		written.add(cEnd - chunk)
-	}
-
-	return nil
 }
 
 // errMPHFArrayLengthMismatch fires when the writer's fingerprints and

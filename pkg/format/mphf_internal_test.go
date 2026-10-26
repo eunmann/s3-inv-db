@@ -1,6 +1,7 @@
 package format
 
 import (
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -536,57 +537,118 @@ func TestOpenMPHFCountMismatch(t *testing.T) {
 	}
 }
 
-// TestSlotOwnersWidths: the owner map round-trips at both entry widths
-// (8 bytes is what indexes past 2^32 prefixes use), and the scratch
-// file is removed on close.
-func TestSlotOwnersWidths(t *testing.T) {
-	for _, width := range []int{4, 8} {
-		path := filepath.Join(t.TempDir(), "owners")
-		if err := os.WriteFile(path, nil, FilePerm); err != nil {
-			t.Fatal(err)
-		}
-		o := &slotOwners{path: path, data: make([]byte, 100*width), width: width}
-		for slot := range 100 {
-			o.set(slot, uint64(99-slot)<<(8*(width-4)))
-		}
-		for slot := range 100 {
-			if got, want := o.get(slot), uint64(99-slot)<<(8*(width-4)); got != want {
-				t.Fatalf("width %d slot %d = %d, want %d", width, slot, got, want)
-			}
-		}
-		o.data = nil // a heap slice, not a mapping: nothing to unmap
-		if err := o.close(); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("width %d: scratch file left behind: %v", width, err)
-		}
-	}
-}
-
-// TestSlotOwnersLeaveNoScratch: a build removes the owner map's scratch
-// file from the temp dir.
-func TestSlotOwnersLeaveNoScratch(t *testing.T) {
-	tmp := t.TempDir()
+// TestSlotBucketsManyBuckets: a build whose slots span several buckets,
+// the last one partial, looks up every prefix exactly and leaves no
+// scratch file behind.
+func TestSlotBucketsManyBuckets(t *testing.T) {
+	tmp, dir := t.TempDir(), t.TempDir()
 	b, err := NewStreamingMPHFBuilder(tmp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer b.Close()
-	for _, p := range []string{"", "a/", "b/", "c/"} {
-		if err := b.Add(p); err != nil {
+	const n = 1_000_000 // ~2.6 buckets of 4 MiB at 11-byte slots
+	for i := range n {
+		if err := b.Add(prefixFromInt(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := b.Build(t.TempDir()); err != nil {
-		t.Fatal(err)
+	if err := b.Build(dir); err != nil {
+		t.Fatalf("Build: %v", err)
 	}
-	matches, err := filepath.Glob(filepath.Join(tmp, "mphf_slot_owners_*"))
+	m, err := OpenMPHF(dir)
+	if err != nil {
+		t.Fatalf("OpenMPHF: %v", err)
+	}
+	defer m.Close()
+	for i := range n {
+		if pos, ok := m.Lookup(prefixFromInt(i)); !ok || pos != uint64(i) {
+			t.Fatalf("Lookup(%q) = %d, %t; want %d", prefixFromInt(i), pos, ok, i)
+		}
+	}
+	matches, err := filepath.Glob(filepath.Join(tmp, "mphf_slot_buckets_*"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(matches) != 0 {
-		t.Errorf("slot owner scratch left in the temp dir: %v", matches)
+		t.Errorf("slot bucket scratch left in the temp dir: %v", matches)
+	}
+}
+
+// testSlotFile returns a slot file sized for n slots of slotW bytes.
+func testSlotFile(t *testing.T, n, slotW int) *os.File {
+	t.Helper()
+	f, err := os.Create(filepath.Join(t.TempDir(), MPHFSlotsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	if err := f.Truncate(int64(mphfSlotsDataOff + n*slotW + mphfSlotsTailPad)); err != nil {
+		t.Fatal(err)
+	}
+
+	return f
+}
+
+// TestSlotBucketsWidePositions: records with 8-byte positions, as past
+// 2^32 prefixes, lay out each slot's fingerprint and position.
+func TestSlotBucketsWidePositions(t *testing.T) {
+	const n, posW = 10, 5
+	slotW := mphfFingerprintBytes + posW
+	s, err := newSlotBuckets(t.TempDir(), n, slotW)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	s.posBytes = 8
+	s.recW = 4 + mphfFingerprintBytes + 8
+	var buf []byte
+	for slot := range n {
+		buf = s.appendRecord(buf, slot, uint64(1000+slot), uint64(1)<<36+uint64(slot))
+	}
+	if err := s.appendRecords(0, buf); err != nil {
+		t.Fatal(err)
+	}
+	f := testSlotFile(t, n, slotW)
+	if err := s.write(f, posW, nil); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, n*slotW)
+	if _, err := f.ReadAt(got, mphfSlotsDataOff); err != nil {
+		t.Fatal(err)
+	}
+	for slot := range n {
+		fp := binary.LittleEndian.Uint64(got[slot*slotW:])
+		var pos [8]byte
+		copy(pos[:], got[slot*slotW+mphfFingerprintBytes:(slot+1)*slotW])
+		if fp != uint64(1000+slot) || binary.LittleEndian.Uint64(pos[:]) != uint64(1)<<36+uint64(slot) {
+			t.Errorf("slot %d = fp %d pos %#x", slot, fp, binary.LittleEndian.Uint64(pos[:]))
+		}
+	}
+}
+
+// TestSlotBucketsRejectMiscounts: a bucket that receives more records
+// than it has slots, or fewer, fails the build rather than write a slot
+// file with stale or missing slots.
+func TestSlotBucketsRejectMiscounts(t *testing.T) {
+	const n = 4
+	s, err := newSlotBuckets(t.TempDir(), n, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	var buf []byte
+	for slot := range n - 1 {
+		buf = s.appendRecord(buf, slot, 1, uint64(slot))
+	}
+	if err := s.appendRecords(0, buf); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.write(testSlotFile(t, n, 12), 4, nil); !errors.Is(err, ErrMPHFLookupFailed) {
+		t.Errorf("write with a short bucket = %v, want ErrMPHFLookupFailed", err)
+	}
+	if err := s.appendRecords(0, buf); !errors.Is(err, ErrMPHFLookupFailed) {
+		t.Errorf("overfilling a bucket = %v, want ErrMPHFLookupFailed", err)
 	}
 }
 

@@ -62,6 +62,9 @@ func (a *u64DiskArray) Append(v uint64) error {
 // Freeze flushes pending writes and mmap's the file read-only. After
 // Freeze the array is no longer appendable; Slice returns the values.
 // Caller must invoke Close to release the mmap and remove the file.
+// The mapping keeps the kernel's default readahead: the build reads
+// these arrays front to back, and without readahead a scan of an array
+// that misses the page cache faults one 4 KiB page at a time.
 func (a *u64DiskArray) Freeze() error {
 	if a.values != nil {
 		// Idempotent.
@@ -89,9 +92,6 @@ func (a *u64DiskArray) Freeze() error {
 	if err != nil {
 		return fmt.Errorf("u64 disk array mmap: %w", err)
 	}
-	// bbhash and the lookup loops read these arrays at random hash
-	// positions — pages aren't accessed sequentially.
-	_ = unix.Madvise(data, unix.MADV_RANDOM)
 	a.mmap = data
 	// Re-interpret the mmap'd bytes as a []uint64. Safe because the
 	// region is naturally 8-aligned (mmap pages always are) and we've
