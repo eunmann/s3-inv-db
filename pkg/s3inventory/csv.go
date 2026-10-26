@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -89,6 +88,7 @@ type CSVReader struct {
 	accessTierCol   int
 	deleteMarkerCol int
 	anomalies       Anomalies
+	keyBuf          []byte // decoded key; Next's key views it
 }
 
 // CSVReaderConfig configures column indices for the CSV reader.
@@ -324,22 +324,97 @@ func (r *CSVReader) Next() (Row, error) {
 // decodeKey undoes the URL encoding S3 Inventory applies to keys in CSV
 // reports (Parquet keys are raw). It is form decoding — '+' is a space
 // and a literal '+' arrives as %2B — matching the url_decode AWS's
-// Athena guidance uses. Most keys contain neither '%' nor '+', so they
-// skip the decode and its allocation. A key that is not valid
+// Athena guidance uses. A key with neither '%' nor '+' is returned as
+// is; any other decodes into the reader's key buffer, which the
+// returned string views until the next call. A key that is not valid
 // encoding is kept as-is and counted.
 func (r *CSVReader) decodeKey(raw string) string {
-	if !strings.ContainsAny(raw, "%+") {
+	if !hasEscape(raw) {
 		return raw
 	}
-	key, err := url.QueryUnescape(raw)
-	if err != nil {
+	var ok bool
+	r.keyBuf, ok = appendUnescape(r.keyBuf[:0], raw)
+	if !ok {
 		r.anomalies.UndecodableKeys++
 
 		return raw
 	}
 
-	return key
+	return bytesView(r.keyBuf)
 }
+
+// hasEscape reports whether s holds '%' or '+'. Two IndexByte scans
+// (vectorized) beat one strings.ContainsAny, which checks byte by byte.
+func hasEscape(s string) bool {
+	return strings.IndexByte(s, '%') >= 0 || strings.IndexByte(s, '+') >= 0
+}
+
+// appendUnescape appends the form-decoded s to dst, copying the runs
+// between escapes in bulk: what url.QueryUnescape returns, without its
+// second pass, per-byte writes and allocation. It reports false when s
+// holds a '%' not followed by two hex digits.
+func appendUnescape(dst []byte, s string) ([]byte, bool) {
+	for {
+		i := nextEscape(s)
+		if i < 0 {
+			return append(dst, s...), true
+		}
+		dst = append(dst, s[:i]...)
+		if s[i] == '+' {
+			dst = append(dst, ' ')
+			s = s[i+1:]
+
+			continue
+		}
+		if i+2 >= len(s) {
+			return dst, false
+		}
+		hi, lo := unhex[s[i+1]], unhex[s[i+2]]
+		if hi|lo == invalidHex {
+			return dst, false
+		}
+		dst = append(dst, hi<<4|lo)
+		s = s[i+3:]
+	}
+}
+
+// nextEscape returns the index of the first '%' or '+' in s, or -1.
+func nextEscape(s string) int {
+	pct := strings.IndexByte(s, '%')
+	end := len(s)
+	if pct >= 0 {
+		end = pct
+	}
+	if plus := strings.IndexByte(s[:end], '+'); plus >= 0 {
+		return plus
+	}
+
+	return pct
+}
+
+// invalidHex marks a byte that is not a hex digit in unhex. Valid
+// digits are below 16, so OR-ing two lookups is invalidHex only when
+// one of them is.
+const invalidHex = 0xff
+
+// unhex maps a hex digit to its value and anything else to invalidHex.
+//
+//nolint:gochecknoglobals // immutable lookup table
+var unhex = func() [256]byte {
+	var t [256]byte
+	for i := range t {
+		t[i] = invalidHex
+	}
+	for c := byte('0'); c <= '9'; c++ {
+		t[c] = c - '0'
+	}
+	for c := byte('a'); c <= 'f'; c++ {
+		t[c] = c - 'a' + 10
+		t[c-'a'+'A'] = c - 'a' + 10
+	}
+
+	return t
+}()
 
 // isTrue parses the boolean columns S3 Inventory writes ("true"/"TRUE").
 func isTrue(field string) bool {
