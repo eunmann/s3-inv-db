@@ -6,6 +6,10 @@
 # index build (seconds per op, reports peak_heap_B and disk_B).
 integration internal/loader ^BenchmarkPipeline$/^shape=(realistic|deep_pyramid|realistic_sorted)$/^n=1000000$ 1x
 
+# CSV parsing per key shape (200K rows per op, reports ns/row): line
+# splitting and URL-decoding keys, without download or gunzip.
+- pkg/s3inventory ^BenchmarkCSVReader$ 10x
+
 # MPHF build over 1M prefixes (Add + Build, ~60 ms per op; reports
 # peak_heap_B): the finalize step's memory is not bounded by GOMEMLIMIT.
 # Ten ops per sample: at 1x one op's scheduling noise spread runs ±13%.
