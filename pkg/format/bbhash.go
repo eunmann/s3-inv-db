@@ -253,10 +253,12 @@ func forChunks(n int, progress *stepCounter, fn func(chunk, lo, hi int)) {
 			continue
 		}
 		wg.Go(func() {
-			for ; lo < hi; lo += progressBlock {
-				end := min(lo+progressBlock, hi)
-				fn(c, lo, end)
-				progress.add(end - lo)
+			// A new variable, not lo: a closure that advanced lo would
+			// move it to the heap, one allocation per worker and pass.
+			for from := lo; from < hi; from += progressBlock {
+				to := min(from+progressBlock, hi)
+				fn(c, from, to)
+				progress.add(to - from)
 			}
 		})
 	}

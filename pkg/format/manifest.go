@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -185,9 +184,6 @@ func VerifyManifest(dir string, manifest *Manifest) error {
 	return nil
 }
 
-// checksumBuffer is checksumFile's read size.
-const checksumBuffer = 1 << 20
-
 // checksumFile computes the SHA-256 checksum of a file, counting the
 // bytes it hashes on hashed.
 func checksumFile(path string, hashed *stepCounter) (string, error) {
@@ -198,20 +194,20 @@ func checksumFile(path string, hashed *stepCounter) (string, error) {
 	defer f.Close()
 
 	h := sha256.New()
-	buf := make([]byte, checksumBuffer)
-	for {
-		n, err := f.Read(buf)
-		h.Write(buf[:n])
-		hashed.add(n)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return "", fmt.Errorf("read file: %w", err)
-		}
+	if _, err := io.Copy(io.MultiWriter(h, stepWriter{hashed}), f); err != nil {
+		return "", fmt.Errorf("read file: %w", err)
 	}
 
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// stepWriter counts the bytes written to it on a step counter.
+type stepWriter struct{ c *stepCounter }
+
+func (w stepWriter) Write(p []byte) (int, error) {
+	w.c.add(len(p))
+
+	return len(p), nil
 }
 
 // WriteFileSync writes data to a file and fsyncs it.
