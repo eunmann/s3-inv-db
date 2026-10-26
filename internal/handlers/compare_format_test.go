@@ -46,7 +46,7 @@ func TestFormatDelta(t *testing.T) {
 		wantSign   int
 	}{
 		{name: "positive growth", before: 100, after: 120, delta: 20, wantDeltaH: "+x", wantPct: "+20%", wantSign: 1},
-		{name: "shrink", before: 100, after: 80, delta: -20, wantDeltaH: "−x", wantPct: "-20%", wantSign: -1},
+		{name: "shrink", before: 100, after: 80, delta: -20, wantDeltaH: "−x", wantPct: "−20%", wantSign: -1},
 		{name: "zero delta", before: 100, after: 100, delta: 0, wantDeltaH: "±0", wantPct: "", wantSign: 0},
 		{name: "new (zero before)", before: 0, after: 50, delta: 50, wantDeltaH: "+x", wantPct: "new", wantSign: 1},
 		{name: "gone (zero after)", before: 50, after: 0, delta: -50, wantDeltaH: "−x", wantPct: "gone", wantSign: -1},
@@ -97,7 +97,13 @@ func TestPctChange(t *testing.T) {
 		{name: "gone (after=0)", before: 100, after: 0, want: "gone"},
 		{name: "both zero", before: 0, after: 0, want: ""},
 		{name: "+20%", before: 100, after: 120, want: "+20%"},
-		{name: "-50%", before: 200, after: 100, want: "-50%"},
+		{name: "-50%", before: 200, after: 100, want: "−50%"},
+		{name: "tiny growth", before: 100000, after: 100001, want: "+<1%"},
+		{name: "tiny shrink", before: 100000, after: 99999, want: "−<1%"},
+		{name: "half-percent growth", before: 200, after: 201, want: "+1%"},
+		{name: "half-percent shrink", before: 200, after: 199, want: "−1%"},
+		{name: "just under half-percent growth", before: 1000, after: 1004, want: "+<1%"},
+		{name: "unchanged", before: 100, after: 100, want: "0%"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

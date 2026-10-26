@@ -320,6 +320,9 @@ type InventoriesData struct {
 	DiscoveryError string
 	Groups         []InventoryGroup
 	HasDiscovery   bool
+	// AutoLoadRunning: the server runs the auto-load poller, so the
+	// per-configuration toggle has an effect.
+	AutoLoadRunning bool
 }
 
 // InventoryGroup pins one inventory configuration (SourceBucket +
@@ -358,9 +361,10 @@ func (g InventoryGroup) ConfigID() string {
 // the Dashboard (which shows the Manager's local list directly).
 func (h *Handlers) InventoriesPage(w http.ResponseWriter, r *http.Request) {
 	data := InventoriesData{
-		Title:        "Inventories",
-		S3Source:     h.s3SourceURI,
-		HasDiscovery: h.discovery.Enabled(),
+		Title:           "Inventories",
+		S3Source:        h.s3SourceURI,
+		HasDiscovery:    h.discovery.Enabled(),
+		AutoLoadRunning: h.autoLoadRunning,
 	}
 	if data.HasDiscovery {
 		views, _, err := h.discovery.Snapshot(r.Context())

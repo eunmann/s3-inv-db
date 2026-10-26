@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/rs/zerolog"
@@ -78,13 +79,13 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 		data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
 	}
 	if !fetchedAt.IsZero() {
-		data.SnapshotAge = humanfmt.Duration(time.Since(fetchedAt))
+		data.SnapshotAge = templates.Span(time.Since(fetchedAt))
 		if h.discoveryRefreshInterval > 0 {
 			remaining := time.Until(fetchedAt.Add(h.discoveryRefreshInterval))
 			if remaining <= 0 {
 				data.NextRefreshIn = "due now"
 			} else {
-				data.NextRefreshIn = humanfmt.Duration(remaining.Round(time.Second))
+				data.NextRefreshIn = templates.Span(remaining.Round(time.Second))
 			}
 		}
 	}
@@ -116,7 +117,7 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 			Name:         c.ID,
 			TotalRuns:    c.TotalRuns,
 			LoadedRuns:   c.LoadedRuns,
-			LatestRun:    c.LatestRun,
+			LatestRun:    humanfmt.RunTimestamp(c.LatestRun),
 			LatestState:  c.LatestState,
 			LatestFiles:  c.LatestFiles,
 			LatestFormat: c.LatestFormat,

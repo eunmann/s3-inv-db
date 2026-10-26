@@ -53,7 +53,7 @@ func TestInventoriesPage_RowsShowStateAndRetry(t *testing.T) {
 		}
 		html, _ := row.Html()
 		text := row.Text()
-		if !strings.Contains(text, "Not loaded") || !strings.Contains(html, "border-yellow-400") {
+		if !strings.Contains(text, "Not loaded") || !strings.Contains(html, "border-gray-300") {
 			t.Errorf("%s: row missing its not-loaded label or border", run)
 		}
 		wantRetry := state != jobs.StateSucceeded
@@ -122,5 +122,33 @@ func TestInventoriesPage_GroupsShowTheirConfig(t *testing.T) {
 	}
 	if strings.Contains(plain.Text(), "Last poll failed") {
 		t.Error("src/plain: shows another source's poll error")
+	}
+}
+
+// TestInventoriesPage_NavAndAutoLoadHint: the page marks its own nav
+// link current, and the auto-load settings say when the server's
+// auto-loader is off, since toggling them then does nothing.
+func TestInventoriesPage_NavAndAutoLoadHint(t *testing.T) {
+	list := []inventory.Inventory{{SourceBucket: "src", Name: "inv", Run: "2026-01-01T03-00Z", ManifestKey: "k/manifest.json"}}
+	for _, running := range []bool{false, true} {
+		mgr := inventory.NewCatalog(nil)
+		t.Cleanup(func() { _ = mgr.Close() })
+		h := newWiredHandlers(t, mgr,
+			handlers.WithDiscoverer(&fakeDiscoverer{listResp: list, bucket: "dst"}),
+			handlers.WithLoader(&fakeBuilder{}),
+			handlers.WithAutoLoad(running))
+		w := httptest.NewRecorder()
+		h.InventoriesPage(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/inventories", http.NoBody))
+		doc := parseHTML(t, w.Body.String())
+		if got := doc.Find(`nav a[aria-current="page"]`).First().AttrOr("href", ""); got != "/inventories" {
+			t.Errorf("current nav link = %q, want /inventories", got)
+		}
+		if doc.Find(`nav a[aria-current="page"]`).Length() != 2 {
+			t.Errorf("want the link marked in both the wide and the narrow nav")
+		}
+		hint := strings.Contains(w.Body.String(), "auto-loader is off")
+		if hint == running {
+			t.Errorf("auto-loader running=%v: hint shown=%v", running, hint)
+		}
 	}
 }

@@ -80,7 +80,7 @@
     </div>
     {{end}}
 
-    <div id="compare-target">
+    <div id="compare-target" hx-indicator="#compare-target">
         {{if .Level}}
             {{template "templates/partials/compare_level.html" .Partial}}
         {{end}}

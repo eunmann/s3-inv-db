@@ -83,6 +83,18 @@ func TestDiscoveredRowPartial_LiveWiring(t *testing.T) {
 			want: []string{"Build interrupted by a server restart"},
 		},
 		{
+			// A budget refusal has no backoff: say when it tries again
+			// instead of "retry after )".
+			name: "auto-load refused without backoff",
+			view: func() handlers.DiscoveredRowView {
+				v := row(inventory.StateNotLoaded, nil)
+				v.AutoLoadFailureCount = 3
+
+				return v
+			}(),
+			want: []string{"Auto-load failed 3 times · tries again at the next poll"},
+		},
+		{
 			name: "never-built run",
 			view: row(inventory.StateNotLoaded, nil),
 			want: []string{`data-job-id=""`, `data-job-state=""`},

@@ -128,7 +128,8 @@
                         Preparing → Initializing → Downloading &amp; parsing → Merging spilled runs (large
                         inventories only) → Building index → Finalizing → Done, with the stage's percent and
                         time left once it can tell. The bar below has one segment per stage (download, build,
-                        finalize) and fills each in turn.</li>
+                        finalize) and fills each in turn. With another build running, it waits as
+                        <em>Queued</em> first.</li>
                     <li>When the build finishes, the chip becomes <em>Loaded</em>. The node count fills in.</li>
                     <li>Open Browse to query it.</li>
                 </ol>
@@ -279,15 +280,19 @@
             <section id="progress">
                 <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Progress &amp; ETA</h2>
                 <p class="text-gray-700 dark:text-gray-200">
-                    While an inventory is loading, the row shows the current build stage, a progress bar, and an
-                    estimated time remaining. Updates come through automatically — leave the page open and the
-                    bar moves, or come back later and see the latest state. The build runs on the server, not in
-                    your browser, so closing the tab doesn't stop it.
+                    While an inventory is loading, the row shows the current stage, its percent and an estimated
+                    time left, over a bar with one segment per stage (Download, Build, Finalize) that fills left
+                    to right. Updates stream in a few times a second while the page is open; come back later and
+                    the row shows the latest state. The build runs on the server, not in your browser, so
+                    closing the tab doesn't stop it. <strong>View details</strong> adds the per-stage timeline
+                    (objects read, rate, merge rounds) and, when the configuration built before, the overall
+                    time left at the last build's pace.
                 </p>
                 <p class="mt-3 text-gray-700 dark:text-gray-200">
-                    The ETA is a simple linear projection: it watches how long the work has taken so far and
-                    assumes the rest will take roughly the same per unit. It's noisy at the very start and
-                    settles to within ~10% once a few chunks have been ingested.
+                    The time left projects the current stage's rate so far onto the rest of that stage. It is
+                    shown once a stage is a few percent in, is smoothed so one fast or slow update doesn't swing
+                    it, and counts down between updates. A stage with no measure of its progress yet (merging
+                    spilled runs, the start of a stage) shows a moving segment instead of a percentage.
                 </p>
             </section>
 
@@ -352,7 +357,7 @@
                 <dl class="divide-y divide-gray-200 dark:divide-gray-700 text-sm">
                     <div class="py-4" data-search-target="stuck ETA progress">
                         <dt class="font-semibold text-gray-900 dark:text-gray-100">A build is stuck and the ETA isn't moving.</dt>
-                        <dd class="mt-1 text-gray-700 dark:text-gray-200">Click <strong>Cancel</strong>. The build stops at the next safe checkpoint and the row flips to Error. Then click <strong>Retry</strong>.</dd>
+                        <dd class="mt-1 text-gray-700 dark:text-gray-200">Click <strong>Cancel</strong>. The build stops at the next safe checkpoint and the row goes back to Not loaded, saying the build was cancelled. Then click <strong>Retry</strong>.</dd>
                     </div>
                     <div class="py-4" data-search-target="interrupted by server restart">
                         <dt class="font-semibold text-gray-900 dark:text-gray-100">Row shows "interrupted by server restart".</dt>

@@ -270,7 +270,9 @@ func buildHandlerOptions(cfg Config, discovery *inventory.Discovery, bldr *loade
 	addIf(cfg.discoveryRoot() != "", handlers.WithS3Source(cfg.discoveryRoot()))
 	addIf(cfg.QueryBatchMax > 0, handlers.WithQueryBatchMax(cfg.QueryBatchMax))
 	addIf(len(cfg.ManagedConfigs) > 0, handlers.WithManagedConfigs(cfg.ManagedConfigs))
-	hopts = append(hopts, handlers.WithLevelCacheBytes(cfg.LevelCacheBytes))
+	hopts = append(hopts,
+		handlers.WithLevelCacheBytes(cfg.LevelCacheBytes),
+		handlers.WithAutoLoad(cfg.AutoLoad && discovery.Enabled()))
 
 	return hopts
 }
