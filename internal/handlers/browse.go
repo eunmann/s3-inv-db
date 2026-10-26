@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
 	"net/url"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,6 +61,7 @@ type BrowseLevel struct {
 	Breadcrumbs    []BrowseCrumb
 	Children       []BrowseChild
 	TierBreakdown  []TierStats
+	TierRows       []BrowseTierRow
 	Pagination     BrowsePagination
 	TotalChildren  int
 	ObjectCount    uint64
@@ -187,10 +190,12 @@ func finishBrowseHTML(level *BrowseLevel, opts browseViewOptions) {
 		pageSize: opts.pageSize,
 	}
 	level.Nav = buildLevelNav(q, rootLabel(opts.inventoryID), level.SortLinks, browseSortLabel, level.Pagination)
+	level.TierRows = browseTierRows(level.TierBreakdown, level.CostEstimate, level.TotalBytes)
 	for i := range level.Children {
 		c := &level.Children[i]
 		c.ObjectCountH = humanfmt.CountUint64(c.ObjectCount)
 		c.TotalBytesH = humanfmt.BytesUint64(c.TotalBytes)
+		c.ShareH, c.ShareWidth = shareOf(c.TotalBytes, level.TotalBytes)
 		switch {
 		case !level.HasTierData:
 			c.MonthlyCostFormatted = missingValueGlyph
@@ -201,6 +206,60 @@ func finishBrowseHTML(level *BrowseLevel, opts browseViewOptions) {
 			c.Href = templates.BrowseLink(string(level.InventoryID), c.Prefix)
 		}
 	}
+}
+
+// BrowseTierRow is one storage tier of the level's tier breakdown, as
+// the HTML view shows it: largest share first.
+type BrowseTierRow struct {
+	Name         string
+	ObjectCountH string
+	BytesH       string
+	CostH        string
+	ShareH       string
+	ShareWidth   string
+	bytes        uint64
+}
+
+// browseTierRows orders the level's tiers by bytes, largest first, each
+// with its share of total and, when priced, its cost.
+func browseTierRows(tiers []TierStats, cost *CostEstimate, total uint64) []BrowseTierRow {
+	rows := make([]BrowseTierRow, 0, len(tiers))
+	for _, t := range tiers {
+		row := BrowseTierRow{Name: t.TierName, ObjectCountH: t.ObjectCountH, BytesH: t.BytesH, bytes: t.Bytes}
+		row.ShareH, row.ShareWidth = shareOf(t.Bytes, total)
+		if cost != nil {
+			row.CostH = cost.PerTierFormatted[t.TierName]
+		}
+		rows = append(rows, row)
+	}
+	slices.SortStableFunc(rows, func(a, b BrowseTierRow) int { return cmp.Compare(b.bytes, a.bytes) })
+
+	return rows
+}
+
+// shareOf formats part as a share of whole: a label ("42.1%", "<0.1%")
+// and a bar width in percent. A share of an empty whole is undefined,
+// labelled with missingValueGlyph and drawn as no bar.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func shareOf(part, whole uint64) (string, string) {
+	switch {
+	case whole == 0:
+		return missingValueGlyph, "0"
+	case part >= whole:
+		return "100%", "100"
+	case part == 0:
+		return "0%", "0"
+	}
+	width := strconv.FormatFloat(float64(part)/float64(whole)*100, 'f', 1, 64)
+	switch width {
+	case "0.0":
+		return "<0.1%", width
+	case "100.0":
+		return ">99.9%", width
+	}
+
+	return width + "%", width
 }
 
 // buildBrowseLevel composes the domain-level prefix view with HTTP-shape

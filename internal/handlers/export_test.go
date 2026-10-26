@@ -116,6 +116,7 @@ var (
 	DescribeRunForTest                 = describeRun
 	GroupManagerForAPIForTest          = groupManagerForAPI
 	GroupLoadedInventoriesForTst       = groupLoadedInventories
+	ShareOfForTest                     = shareOf
 	BuildComparePickerForTest          = buildComparePicker
 	SameConfigForTest                  = sameConfig
 	FilterComparePickerByConfigForTest = filterComparePickerByConfig

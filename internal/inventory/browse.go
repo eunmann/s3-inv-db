@@ -46,7 +46,12 @@ type BrowseChild struct {
 	MonthlyCostFormatted string
 	// Href is the drill-down link's URL, set for rows with children on
 	// the HTML views only.
-	Href                    string
+	Href string
+	// ShareH and ShareWidth are the row's bytes as a share of the
+	// level's, as a label ("42.1%") and a bar width in percent ("42.1");
+	// HTML views only.
+	ShareH                  string
+	ShareWidth              string
 	ObjectCount             uint64
 	TotalBytes              uint64
 	MonthlyCostMicrodollars uint64

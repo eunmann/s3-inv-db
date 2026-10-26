@@ -1,7 +1,8 @@
-{{- /* Navigation shared by the Browse and Compare levels; each takes a
-       handlers.LevelNav (level_sort: one of its NavSort). Every link is a
-       real anchor whose href is also its hx-get, so it works without
-       htmx, opens in a new tab and pushes the URL it shows. */ -}}
+{{- /* Markup shared by the Browse and Compare levels. The navigation
+       defines each take a handlers.LevelNav (level_sort: one of its
+       NavSort). Every link is a real anchor whose href is also its
+       hx-get, so it works without htmx, opens in a new tab and pushes
+       the URL it shows. */ -}}
 
 {{define "level_breadcrumbs"}}
 {{- if gt (len .Crumbs) 1}}
@@ -44,6 +45,10 @@
 {{end}}
 
 {{define "level_sort"}}<a href="{{.URL}}" hx-get="{{.URL}}" hx-target="{{.Target}}" hx-push-url="true" class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">{{.Label}}{{with .Indicator}} <span aria-hidden="true">{{.}}</span>{{end}}</a>{{end}}
+
+{{- /* A share of a whole: the label is the content; the bar only
+       illustrates it. Takes anything with ShareH and ShareWidth. */}}
+{{define "share_bar"}}<div class="flex items-center justify-end gap-2"><span class="w-12 text-right tabular-nums text-gray-700 dark:text-gray-200">{{.ShareH}}</span><span class="block h-1.5 w-10 sm:w-24 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700" aria-hidden="true"><span class="block h-full rounded-full bg-indigo-500 dark:bg-indigo-400" style="width:{{.ShareWidth}}%"></span></span></div>{{end}}
 
 {{- /* Marks the Browse/Compare results container aria-busy while htmx
        loads a level into it. afterRequest reaches the container even when

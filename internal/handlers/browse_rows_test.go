@@ -2,6 +2,7 @@ package handlers_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -126,6 +127,8 @@ func TestBrowsePartial_RowsShowFormattedNumbers(t *testing.T) {
 	}
 	prices := pricing.DefaultUSEast1Prices()
 	err := mgr.WithIndex(id, func(idx *indexread.Index) error {
+		root, _ := idx.Lookup("")
+		rootBytes := idx.Stats(root).TotalBytes
 		rows.Each(func(_ int, tr *goquery.Selection) {
 			cells := tr.Find("td")
 			seg := strings.TrimSuffix(strings.TrimSpace(cells.Eq(0).Text()), "/")
@@ -134,9 +137,11 @@ func TestBrowsePartial_RowsShowFormattedNumbers(t *testing.T) {
 				t.Fatalf("row %q not in index", seg)
 			}
 			st := idx.Stats(pos)
+			// Segment, Size, % of parent, Objects, Est. cost.
 			want := []string{
-				humanfmt.CountUint64(st.ObjectCount),
 				humanfmt.BytesUint64(st.TotalBytes),
+				fmt.Sprintf("%.1f%%", float64(st.TotalBytes)/float64(rootBytes)*100),
+				humanfmt.CountUint64(st.ObjectCount),
 				pricing.FormatCost(pricing.ComputeMonthlyCost(idx.TierBreakdown(pos), prices).TotalMicrodollars),
 			}
 			for i, w := range want {
