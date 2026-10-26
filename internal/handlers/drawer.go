@@ -81,7 +81,7 @@ func (h *Handlers) RunDrawer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	latest, err := h.jobStore.LatestForInventory(r.Context(), composite)
+	latest, err := h.latestJob(r.Context(), composite)
 	switch {
 	case err == nil:
 		view.LatestJob = &latest

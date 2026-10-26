@@ -335,7 +335,7 @@ func (h *Handlers) renderDiscoveredRowFromStatus(w http.ResponseWriter, r *http.
 			view.AutoLoadBackoffUntil = info.AutoLoadBackoffUntil.UTC().Format("15:04:05")
 		}
 	}
-	j, err := h.jobStore.LatestForInventory(r.Context(), disc.CompositeID())
+	j, err := h.latestJob(r.Context(), disc.CompositeID())
 	switch {
 	case err == nil:
 		view.LatestJob = &j
@@ -351,6 +351,38 @@ func (h *Handlers) renderDiscoveredRowFromStatus(w http.ResponseWriter, r *http.
 	view.LoadDurationH = loadDurationLabel(view.LoadDuration, view.LatestJob)
 	populateRowDerived(&view)
 	h.renderHTMLPartialStatus(w, r, status, "discovered_row.html", "render discovered row", view)
+}
+
+// latestJob returns inv's newest job: the scheduler's in-memory snapshot
+// while one is queued or running, since the store's copy trails live
+// progress by up to a second, else the stored one.
+func (h *Handlers) latestJob(ctx context.Context, inv inventory.ID) (jobs.Job, error) {
+	if j, ok := h.jobMgr.LiveForInventory(inv); ok {
+		return j, nil
+	}
+	j, err := h.jobStore.LatestForInventory(ctx, inv)
+	if err != nil {
+		return jobs.Job{}, fmt.Errorf("latest job for %s: %w", inv, err)
+	}
+
+	return j, nil
+}
+
+// latestJobs is latestJob for every inventory at once: one store query,
+// overlaid with the live snapshots.
+func (h *Handlers) latestJobs(ctx context.Context) (map[inventory.ID]jobs.Job, error) {
+	latest, err := h.jobStore.LatestByInventory(ctx)
+	if latest == nil {
+		latest = make(map[inventory.ID]jobs.Job)
+	}
+	for _, j := range h.jobMgr.Live() {
+		latest[j.InventoryID] = j
+	}
+	if err != nil {
+		return latest, fmt.Errorf("latest jobs: %w", err)
+	}
+
+	return latest, nil
 }
 
 // loadDurationLabel renders the wall-clock load time of the most recent
