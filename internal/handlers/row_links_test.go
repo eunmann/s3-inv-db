@@ -210,3 +210,42 @@ func TestCompare_NavigationIsRealLinks(t *testing.T) {
 		}
 	}
 }
+
+// TestCompare_UnchangedToggleFlipsFilter: the show/hide unchanged link
+// opens the same level, order and page size with the filter flipped.
+func TestCompare_UnchangedToggleFlipsFilter(t *testing.T) {
+	mgr := inventory.NewCatalog(nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+	registerCostIndex(t, mgr, linkFromID, navObjs)
+	registerCostIndex(t, mgr, linkToID, append([]costObj{{"a/b/w/o", 9, tiers.Standard}}, navObjs...))
+	h := newWiredHandlers(t, mgr)
+	for _, shown := range []bool{true, false} {
+		q := url.Values{"from": {string(linkFromID)}, "to": {string(linkToID)}, "prefix": {"a/b/"}, "sort": {"objects"}, "dir": {"asc"}, "page_size": {"1"}}
+		label := "Show unchanged"
+		if shown {
+			q.Set("show_unchanged", "true")
+			label = "Hide unchanged"
+		}
+		w := httptest.NewRecorder()
+		h.ComparePage(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/compare?"+q.Encode(), http.NoBody))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		}
+		var href string
+		parseHTMLFragment(t, w.Body.String()).Find("#compare-target a").Each(func(_ int, s *goquery.Selection) {
+			if strings.TrimSpace(s.Text()) == label {
+				href, _ = s.Attr("href")
+			}
+		})
+		if href == "" {
+			t.Fatalf("show_unchanged=%v: no %q link", shown, label)
+		}
+		want := url.Values{"from": {string(linkFromID)}, "to": {string(linkToID)}, "prefix": {"a/b/"}, "sort": {"objects"}, "dir": {"asc"}, "page_size": {"1"}}
+		if !shown {
+			want.Set("show_unchanged", "true")
+		}
+		if wantHref := "/compare?" + want.Encode(); href != wantHref {
+			t.Errorf("show_unchanged=%v: %q link\n got %q\nwant %q", shown, label, href, wantHref)
+		}
+	}
+}

@@ -81,3 +81,31 @@ func TestBrowsePage_EmptyStateWithNothingLoaded(t *testing.T) {
 		t.Errorf("empty state link = %q, want /inventories", href)
 	}
 }
+
+// TestBrowsePage_UnavailableRunListsLoadedRuns: a link to a run that
+// isn't loaded says so above the loaded runs, each with its totals.
+func TestBrowsePage_UnavailableRunListsLoadedRuns(t *testing.T) {
+	mgr := inventory.NewCatalog(nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+	const loaded inventory.ID = "bucket-a/inv/2026-01-02T00-00Z"
+	registerCostIndex(t, mgr, loaded, []costObj{{"a/x", 3 * gib, tiers.Standard}, {"b/x", 1, tiers.Standard}})
+	h := newWiredHandlers(t, mgr)
+	q := url.Values{"inventory_id": {"bucket-a/inv/2026-01-01T00-00Z"}, "prefix": {"a/"}}
+	w := httptest.NewRecorder()
+	h.BrowsePage(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/browse?"+q.Encode(), http.NoBody))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	target := parseHTMLFragment(t, w.Body.String()).Find("#browse-target")
+	if !strings.Contains(target.Text(), "That run isn't loaded") {
+		t.Errorf("results = %q, want the run-not-loaded warning", strings.Join(strings.Fields(target.Text()), " "))
+	}
+	runs := target.Find(`section[aria-labelledby="browse-runs-title"] li a`)
+	if runs.Length() != 1 {
+		t.Fatalf("runs listed = %d, want 1", runs.Length())
+	}
+	want := humanfmt.RunTimestamp(loaded.Split().Run) + " " + humanfmt.BytesUint64(3*gib+1) + " · 2 objects"
+	if text := strings.Join(strings.Fields(runs.Text()), " "); text != want {
+		t.Errorf("run = %q, want %q", text, want)
+	}
+}
