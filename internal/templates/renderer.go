@@ -84,6 +84,8 @@ func stageLabel(stage string) string {
 		return "Initializing"
 	case "downloading":
 		return "Downloading & parsing"
+	case "fetching":
+		return "Fetching published index"
 	case "building":
 		return "Building index"
 	case "finalizing":
@@ -104,6 +106,8 @@ func stageDescription(stage string) string {
 		return "Starting the build pipeline workers"
 	case "downloading":
 		return "Streaming inventory chunks from S3 and aggregating prefixes in memory"
+	case "fetching":
+		return "Copying a published index from S3 and verifying its checksums"
 	case "building":
 		return "Merging spilled run files and writing the on-disk index + MPHF"
 	case "finalizing":

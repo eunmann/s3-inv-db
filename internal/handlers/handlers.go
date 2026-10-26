@@ -119,7 +119,8 @@ func WithDiscoverer(d inventory.Discoverer) Option {
 	return func(h *Handlers) { h.discoverer = d }
 }
 
-// WithS3Source sets the s3:// URI displayed on the dashboard.
+// WithS3Source sets the s3:// URI discovery lists runs under, shown on
+// the dashboard and inventories pages.
 func WithS3Source(uri string) Option {
 	return func(h *Handlers) { h.s3SourceURI = uri }
 }

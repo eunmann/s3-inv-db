@@ -28,7 +28,9 @@ var ErrAutoLoadWithoutBudget = errors.New("--auto-load requires --max-index-disk
 type RuntimeOptions struct {
 	Addr     string
 	S3Source string
-	CacheDir string
+	// IndexSource is where builds publish indexes; see Config.IndexSource.
+	IndexSource string
+	CacheDir    string
 
 	// PriceTablePath, when empty, falls back to
 	// pricing.DefaultUSEast1Prices.
@@ -156,6 +158,7 @@ func Bootstrap(ctx context.Context, opts RuntimeOptions) (*Server, func(), error
 		Logger:                   opts.Logger,
 		PriceTable:               priceTable,
 		S3Source:                 opts.S3Source,
+		IndexSource:              opts.IndexSource,
 		CacheDir:                 opts.CacheDir,
 		DB:                       db,
 		AutoLoad:                 opts.AutoLoad,

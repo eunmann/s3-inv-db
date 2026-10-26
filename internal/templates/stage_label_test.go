@@ -14,6 +14,7 @@ func TestStageLabel(t *testing.T) {
 		{"preparing", "Preparing"},
 		{"initializing", "Initializing"},
 		{"downloading", "Downloading & parsing"},
+		{"fetching", "Fetching published index"},
 		{"building", "Building index"},
 		{"done", "Done"},
 		{"unknown-future-stage", "unknown-future-stage"},

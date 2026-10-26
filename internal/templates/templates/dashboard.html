@@ -14,7 +14,7 @@
             </p>
             {{else}}
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                Discovery disabled — start the server with <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--s3-source</code> to populate this page.
+                Discovery disabled — start the server with <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--s3-source</code> or <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--index-source</code> to populate this page.
             </p>
             {{end}}
         </div>
@@ -37,7 +37,7 @@
     <!-- Stat cards -->
     <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
         <div class="bg-white dark:bg-gray-800 shadow rounded-lg px-5 py-4">
-            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Configurations{{template "templates/partials/info_icon.html" "Distinct (source bucket, inventory name) pairs discovered under --s3-source."}}</dt>
+            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Configurations{{template "templates/partials/info_icon.html" "Distinct (source bucket, inventory name) pairs discovered under --s3-source or --index-source."}}</dt>
             <dd class="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100">{{.Configurations}}</dd>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{.TotalRuns}} run{{if ne .TotalRuns 1}}s{{end}} discovered</p>
         </div>
@@ -154,7 +154,7 @@
         {{if .HasDiscovery}}
         <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">No inventory configurations are present under the configured source. Publish one to S3 and refresh.</p>
         {{else}}
-        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Start the server with <code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-xs">--s3-source s3://bucket/prefix/</code> to populate this page.</p>
+        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Start the server with <code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-xs">--s3-source s3://bucket/prefix/</code> (inventories) or <code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-xs">--index-source s3://bucket/prefix/</code> (published indexes) to populate this page.</p>
         {{end}}
     </div>
     {{end}}

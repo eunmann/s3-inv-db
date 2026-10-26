@@ -15,16 +15,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/pkg/indexstore"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/rs/zerolog"
 )
@@ -35,11 +38,18 @@ type Discoverer struct {
 	bucket          string
 	prefix          string
 	manifestFetches int
+	// indexes is set when the root holds published indexes
+	// (pkg/indexstore) rather than inventory reports: each run's
+	// manifest.json is an index manifest.
+	indexes bool
 
-	// manifests holds the summary of every manifest read so far, by key.
-	// S3 Inventory writes a run's manifest.json once, when the run
-	// completes, so a summary never goes stale; only successful reads
-	// are kept, and List drops keys whose run is gone.
+	// manifests holds the summary of every inventory manifest read so
+	// far, by key. S3 Inventory writes a run's manifest.json once, when
+	// the run completes, so a summary never goes stale; only successful
+	// reads are kept, and List drops keys whose run is gone. Index
+	// manifests are not cached: republishing a run rewrites its
+	// manifest at the same key, and deletes it while the new files
+	// upload.
 	manifestsMu sync.Mutex
 	manifests   map[string]manifestSummary
 }
@@ -107,6 +117,17 @@ func NewFromS3URI(client *s3.Client, uri string) (*Discoverer, error) {
 	}
 
 	return New(client, parsed.Bucket, parsed.Key), nil
+}
+
+// ListIndexes makes the discoverer read each run's manifest.json as a
+// published index's manifest (pkg/indexstore) instead of an inventory
+// report's: the root is an index source, laid out like an inventory
+// destination. A run shows its index size; one without a manifest isn't
+// committed yet.
+func (d *Discoverer) ListIndexes() *Discoverer {
+	d.indexes = true
+
+	return d
 }
 
 // Bucket returns the destination bucket name being discovered.
@@ -204,7 +225,8 @@ func (d *Discoverer) keepManifests(listed []inventory.Inventory) {
 }
 
 // Find returns one Inventory by (srcBucket, invID, run) with at most
-// one manifest GET, none when the run's manifest was already read; an
+// one manifest GET, none when an inventory run's manifest was already
+// read; an
 // empty run costs one extra LIST to pick the most recent run for the
 // configuration.
 func (d *Discoverer) Find(ctx context.Context, srcBucket, invID, run string) (inventory.Inventory, error) {
@@ -257,7 +279,12 @@ func (d *Discoverer) describeRuns(ctx context.Context, src, inv, invPrefix strin
 	for i, name := range runs {
 		entry := runEntry(src, inv, invPrefix, name)
 		if limit <= 0 || i < limit {
-			_ = d.describeRun(ctx, &entry)
+			err := d.describeRun(ctx, &entry)
+			// An index run without its manifest is still uploading (the
+			// manifest is written last): not a run yet.
+			if _, missing := errors.AsType[*types.NoSuchKey](err); missing && d.indexes {
+				continue
+			}
 		}
 		out = append(out, entry)
 	}
@@ -298,15 +325,17 @@ func runEntry(src, inv, invPrefix, run string) inventory.Inventory {
 // and recorded on the entry so the UI shows it; the error is returned
 // so callers can tell a missing run apart.
 func (d *Discoverer) describeRun(ctx context.Context, entry *inventory.Inventory) error {
-	d.manifestsMu.Lock()
-	sum, ok := d.manifests[entry.ManifestKey]
-	d.manifestsMu.Unlock()
-	if ok {
-		sum.fill(entry)
+	if !d.indexes {
+		d.manifestsMu.Lock()
+		sum, ok := d.manifests[entry.ManifestKey]
+		d.manifestsMu.Unlock()
+		if ok {
+			sum.fill(entry)
 
-		return nil
+			return nil
+		}
 	}
-	manifest, err := d.fetchManifest(ctx, entry.ManifestKey)
+	sum, err := d.summarize(ctx, entry.ManifestKey)
 	if err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).
 			Str("src", entry.SourceBucket).Str("inv", entry.Name).Str("run", entry.Run).
@@ -316,18 +345,61 @@ func (d *Discoverer) describeRun(ctx context.Context, entry *inventory.Inventory
 
 		return err
 	}
-	sum = manifestSummary{
+	if !d.indexes {
+		d.manifestsMu.Lock()
+		d.manifests[entry.ManifestKey] = sum
+		d.manifestsMu.Unlock()
+	}
+	sum.fill(entry)
+
+	return nil
+}
+
+// summarize reads the manifest at key: an inventory report's, or a
+// published index's when the discoverer lists indexes.
+func (d *Discoverer) summarize(ctx context.Context, key string) (manifestSummary, error) {
+	if d.indexes {
+		return d.indexSummary(ctx, key)
+	}
+	manifest, err := d.fetchManifest(ctx, key)
+	if err != nil {
+		return manifestSummary{}, err
+	}
+
+	return manifestSummary{
 		fileFormat:        manifest.FileFormat,
 		fileCount:         len(manifest.Files),
 		totalBytes:        manifestTotalBytes(manifest),
 		creationTimestamp: manifest.CreationTimestamp,
-	}
-	d.manifestsMu.Lock()
-	d.manifests[entry.ManifestKey] = sum
-	d.manifestsMu.Unlock()
-	sum.fill(entry)
+	}, nil
+}
 
-	return nil
+// indexFormat is the file format discovery shows for a published index.
+const indexFormat = "index"
+
+// indexSummary reads a published index's manifest: its file count and
+// on-disk size, which is what loading it costs.
+func (d *Discoverer) indexSummary(ctx context.Context, key string) (manifestSummary, error) {
+	resp, err := d.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(d.bucket), Key: aws.String(key)})
+	if err != nil {
+		return manifestSummary{}, fmt.Errorf("get s3://%s/%s: %w", d.bucket, key, err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return manifestSummary{}, fmt.Errorf("read s3://%s/%s: %w", d.bucket, key, err)
+	}
+	m, err := indexstore.ParseManifest(data)
+	if err != nil {
+		return manifestSummary{}, fmt.Errorf("parse s3://%s/%s: %w", d.bucket, key, err)
+	}
+
+	return manifestSummary{
+		fileFormat:        indexFormat,
+		fileCount:         len(m.Files),
+		totalBytes:        int64(m.TotalBytes()),
+		creationTimestamp: m.CreatedAt.UTC().Format(time.RFC3339),
+	}, nil
 }
 
 func (s manifestSummary) fill(entry *inventory.Inventory) {

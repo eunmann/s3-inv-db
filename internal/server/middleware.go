@@ -94,7 +94,7 @@ func requireDiscoveryMiddleware(enabled func() bool) func(http.Handler) http.Han
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !enabled() {
-				http.Error(w, "discovery not configured (start the server with --s3-source)", http.StatusServiceUnavailable)
+				http.Error(w, "discovery not configured (start the server with --s3-source or --index-source)", http.StatusServiceUnavailable)
 
 				return
 			}

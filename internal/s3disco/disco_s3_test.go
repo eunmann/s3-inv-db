@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -281,5 +282,80 @@ func TestDiscoverer_ManifestsReadOnce(t *testing.T) {
 	}
 	if n := counter.gets.Load(); n != 3 {
 		t.Fatalf("Finds of listed runs read %d more manifests, want 0", n-3)
+	}
+}
+
+// TestDiscoverer_ListIndexes: an index source lists committed runs with
+// their index size, and skips a run still uploading (files, no
+// manifest).
+func TestDiscoverer_ListIndexes(t *testing.T) {
+	client := s3test.RawClient(t)
+	ctx := t.Context()
+	bucket := s3test.Bucket(t, client)
+	put := func(key, body string) {
+		t.Helper()
+		if _, err := client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(key), Body: strings.NewReader(body)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("idx/src-bucket/daily/2026-10-24T01-00Z/core_stats.bin", "abc")
+	put("idx/src-bucket/daily/2026-10-24T01-00Z/manifest.json",
+		`{"version":1,"created_at":"2026-10-24T02:00:00Z","node_count":3,"files":{"core_stats.bin":{"size":300,"checksum":"x"},"mph.bin":{"size":40,"checksum":"y"}}}`)
+	put("idx/src-bucket/daily/2026-10-25T01-00Z/core_stats.bin", "uploading")
+
+	d := s3disco.New(client, bucket, "idx/").ListIndexes()
+	got, err := d.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("List = %+v, want only the committed run", got)
+	}
+	if e := got[0]; e.Run != "2026-10-24T01-00Z" || e.FileFormat != "index" || e.TotalBytes != 340 || e.FileCount != 2 {
+		t.Errorf("entry = %+v, want run 2026-10-24T01-00Z, format index, 340 bytes in 2 files", e)
+	}
+	if _, err := d.Find(ctx, "src-bucket", "daily", "2026-10-25T01-00Z"); !errors.Is(err, inventory.ErrRunNotFound) {
+		t.Errorf("Find of the uploading run err = %v, want ErrRunNotFound", err)
+	}
+}
+
+// TestDiscoverer_ListIndexes_SeesRepublishedRun: republishing a run
+// rewrites its manifest at the same key, and deletes it while the new
+// files upload. Listings and Find show the current manifest, and hide
+// the run while it has none.
+func TestDiscoverer_ListIndexes_SeesRepublishedRun(t *testing.T) {
+	client := s3test.RawClient(t)
+	ctx := t.Context()
+	bucket := s3test.Bucket(t, client)
+	const key = "idx/src-bucket/daily/2026-10-24T01-00Z/manifest.json"
+	putManifest := func(size int) {
+		t.Helper()
+		body := `{"version":1,"created_at":"2026-10-24T02:00:00Z","node_count":3,"files":{"core_stats.bin":{"size":` +
+			strconv.Itoa(size) + `,"checksum":"x"}}}`
+		if _, err := client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(key), Body: strings.NewReader(body)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	putManifest(300)
+	d := s3disco.New(client, bucket, "idx/").ListIndexes()
+	if got, err := d.List(ctx); err != nil || len(got) != 1 || got[0].TotalBytes != 300 {
+		t.Fatalf("List = %+v, %v; want one run of 300 bytes", got, err)
+	}
+
+	if _, err := client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Find(ctx, "src-bucket", "daily", "2026-10-24T01-00Z"); !errors.Is(err, inventory.ErrRunNotFound) {
+		t.Errorf("Find while unpublished err = %v, want ErrRunNotFound", err)
+	}
+
+	putManifest(900)
+	got, err := d.List(ctx)
+	if err != nil || len(got) != 1 || got[0].TotalBytes != 900 {
+		t.Fatalf("List after republish = %+v, %v; want one run of 900 bytes", got, err)
+	}
+	found, err := d.Find(ctx, "src-bucket", "daily", "2026-10-24T01-00Z")
+	if err != nil || found.TotalBytes != 900 {
+		t.Errorf("Find after republish = %+v, %v; want 900 bytes", found, err)
 	}
 }

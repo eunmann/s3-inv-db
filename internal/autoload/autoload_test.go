@@ -348,3 +348,34 @@ func TestAutoLoader_PollKeepsConcurrentPolicyChange(t *testing.T) {
 		t.Error("poll did not record LastPolledAt")
 	}
 }
+
+// TestAutoLoader_PollNowTicksBeforeTheInterval: PollNow runs a poll
+// right away instead of at the next interval (POST /api/indexes/refresh).
+func TestAutoLoader_PollNowTicksBeforeTheInterval(t *testing.T) {
+	cs, mgr := newFakeStores(t)
+	_ = cs.Upsert(t.Context(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: true, RetentionCount: 2})
+	disc := &fakeDiscovery{enabled: true}
+	a := autoload.New(autoload.Config{PollInterval: time.Hour},
+		autoload.Deps{Discovery: disc, Loader: (&fakeLoader{}).AutoLoad, Submitter: &inlineSubmitter{}, ConfigStore: cs, Manager: mgr}, nil)
+	calls := func() int {
+		disc.mu.Lock()
+		defer disc.mu.Unlock()
+
+		return disc.listCall
+	}
+	waitFor := func(n int) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for calls() < n {
+			if time.Now().After(deadline) {
+				t.Fatalf("polls = %d, want %d", calls(), n)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	a.Start(t.Context())
+	defer a.Stop()
+	waitFor(1) // the poll at start
+	a.PollNow()
+	waitFor(2)
+}

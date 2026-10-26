@@ -59,6 +59,7 @@ type serverFlags struct {
 	prettyLogs        *bool
 	priceTablePath    *string
 	s3Source          *string
+	indexSource       *string
 	cacheDir          *string
 	autoLoad          *bool
 	pollInterval      *time.Duration
@@ -80,6 +81,7 @@ func defineFlags(fs *flag.FlagSet) *serverFlags {
 		prettyLogs:        fs.Bool("pretty-logs", false, "use human-friendly console output"),
 		priceTablePath:    fs.String("price-table", "", "path to custom price table JSON (default: US East 1 prices)"),
 		s3Source:          fs.String("s3-source", "", "S3 URI to discover inventories under (e.g., s3://bucket/inventory-data/)"),
+		indexSource:       fs.String("index-source", "", "S3 URI builds publish indexes under (s3-inv-db build --out s3://...); loads download a published run's index instead of building it"),
 		cacheDir:          fs.String("cache-dir", "/var/cache/s3inv", "local directory for built indexes downloaded from S3"),
 		autoLoad:          fs.Bool("auto-load", false, "enable background discovery + auto-load of new inventory runs; requires --max-index-disk"),
 		pollInterval:      fs.Duration("auto-load-poll-interval", autoload.DefaultPollInterval, "discovery polling interval"),
@@ -120,6 +122,7 @@ func resolveRuntimeOptions(f *serverFlags, fileCfg *appconfig.Config, explicit m
 	return server.RuntimeOptions{
 		Addr:                     appconfig.PickFile(*f.addr, explicit["addr"], fileCfg, func(c *appconfig.Config) *string { return c.Addr }),
 		S3Source:                 appconfig.PickFile(*f.s3Source, explicit["s3-source"], fileCfg, func(c *appconfig.Config) *string { return c.S3Source }),
+		IndexSource:              appconfig.PickFile(*f.indexSource, explicit["index-source"], fileCfg, func(c *appconfig.Config) *string { return c.IndexSource }),
 		CacheDir:                 appconfig.PickFile(*f.cacheDir, explicit["cache-dir"], fileCfg, func(c *appconfig.Config) *string { return c.CacheDir }),
 		PriceTablePath:           appconfig.PickFile(*f.priceTablePath, explicit["price-table"], fileCfg, func(c *appconfig.Config) *string { return c.PriceTable }),
 		AutoLoad:                 appconfig.PickFile(*f.autoLoad, explicit["auto-load"], fileCfg, func(c *appconfig.Config) *bool { return c.AutoLoad }),

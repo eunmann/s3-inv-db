@@ -145,8 +145,8 @@ func TestWriteFileSync(t *testing.T) {
 	path := filepath.Join(dir, "test.bin")
 
 	data := []byte("test data")
-	if err := writeFileSync(path, data); err != nil {
-		t.Fatalf("writeFileSync failed: %v", err)
+	if err := WriteFileSync(path, data); err != nil {
+		t.Fatalf("WriteFileSync failed: %v", err)
 	}
 
 	// Read back

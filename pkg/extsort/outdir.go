@@ -77,6 +77,16 @@ func ReclaimStaleDirs(log *zerolog.Logger, outDir string) error {
 	return reclaimStaleDirs(log, outDir)
 }
 
+// NewStagingDir is newStagingDir for callers that fill an output
+// directory without a build, such as fetching a published index: the
+// staging directory is reclaimed like a killed build's.
+func NewStagingDir(outDir string) (string, error) { return newStagingDir(outDir) }
+
+// PublishIndex is publishIndex for those callers.
+func PublishIndex(log *zerolog.Logger, stage, outDir string) error {
+	return publishIndex(log, stage, outDir)
+}
+
 // newScratchDir creates the hidden sibling directory a build's
 // downloads, run files and MPHF scratch live in. Beside the output it
 // shares the filesystem the operator sized for indexes (the server's

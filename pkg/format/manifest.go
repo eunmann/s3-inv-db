@@ -97,7 +97,7 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		return fmt.Errorf("marshal manifest: %w", err)
 	}
 
-	if err := writeFileSync(manifestPath, data); err != nil {
+	if err := WriteFileSync(manifestPath, data); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
 
@@ -200,8 +200,8 @@ func checksumFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// writeFileSync writes data to a file and fsyncs it.
-func writeFileSync(path string, data []byte) error {
+// WriteFileSync writes data to a file and fsyncs it.
+func WriteFileSync(path string, data []byte) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)

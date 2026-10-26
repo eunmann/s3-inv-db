@@ -50,7 +50,7 @@
 //
 // [RuntimeOptions] mirrors the binary's flag set (suitable for callers
 // who want to expose the same surface) while [Config] holds the wired
-// dependencies. S3Source is optional: when empty, discovery is disabled
-// and the /partials/discovered/* routes return 503; the rest of the
+// dependencies. S3Source and IndexSource are optional: with neither,
+// discovery is disabled and the /partials/discovered/* routes return 503; the rest of the
 // server runs normally against whatever's already in the state DB.
 package server

@@ -6,11 +6,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/eunmann/s3-inv-db/internal/budget"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
+	"github.com/eunmann/s3-inv-db/pkg/format"
+	"github.com/eunmann/s3-inv-db/pkg/indexstore"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/rs/zerolog"
 )
@@ -31,7 +34,7 @@ func (e *BudgetRefusedError) Error() string {
 }
 
 // CacheRemover deletes an evicted run's on-disk index. Nil when the
-// server has no cache (no --s3-source).
+// server has no cache (no --s3-source or --index-source).
 type CacheRemover func(id inventory.ID) error
 
 // Gate orchestrates one load lifecycle.
@@ -187,6 +190,25 @@ type ManifestSizer struct {
 func NewManifestSizer(client *s3fetch.Client) *ManifestSizer {
 	return &ManifestSizer{client: client}
 }
+
+// IndexSize returns the on-disk size of the published index whose
+// manifest is at key: what loading it takes, exactly.
+func (s *ManifestSizer) IndexSize(ctx context.Context, bucket, key string) (uint64, error) {
+	prefix, ok := strings.CutSuffix(key, format.ManifestFile)
+	if !ok {
+		return 0, fmt.Errorf("%w: %q is not a manifest key", errNotManifestKey, key)
+	}
+	m, err := indexstore.New(s.client.Raw(), bucket).ReadManifest(ctx, prefix)
+	if err != nil {
+		return 0, fmt.Errorf("read index manifest: %w", err)
+	}
+
+	return m.TotalBytes(), nil
+}
+
+// errNotManifestKey is returned for a key that doesn't end in
+// manifest.json.
+var errNotManifestKey = errors.New("not a manifest key")
 
 // ManifestSize returns the sum of the manifest's data-file sizes — the
 // total compressed bytes the load pipeline will pull from S3. The gate

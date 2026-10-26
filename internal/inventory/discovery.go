@@ -80,10 +80,11 @@ type ManifestSizeFunc func(ctx context.Context, bucket, key string) (uint64, err
 // Catalog (in-memory state), the Discoverer (S3 listing of available
 // inventories), and the IndexBuilder (on-disk index materialisation).
 //
-// When discovery is unconfigured (--s3-source unset) the service is
-// constructed without WithBackend — Enabled() reports false
-// and every method returns ErrDiscoveryDisabled via the disabled
-// discoverer/builder shims rather than via per-call nil checks.
+// When discovery is unconfigured (--s3-source and --index-source
+// unset) the service is constructed without WithBackend — Enabled()
+// reports false and every method returns ErrDiscoveryDisabled via the
+// disabled discoverer/builder shims rather than via per-call nil
+// checks.
 type Discovery struct {
 	cacheAt       time.Time
 	discoverer    Discoverer
