@@ -44,10 +44,10 @@ func TestRecorder_StageTransitionsAppendRecords(t *testing.T) {
 	rec := jobs.NewRecorder(rep.report)
 	defer rec.Close()
 
-	rec.OnProgress("preparing", 0, 0)
-	rec.OnProgress(stageDownloading, 0, 0)
-	rec.OnProgress("building", 0, 0)
-	rec.OnProgress("done", 0, 0)
+	rec.OnProgress(events.Progress{Stage: "preparing"})
+	rec.OnProgress(events.Progress{Stage: stageDownloading})
+	rec.OnProgress(events.Progress{Stage: "building"})
+	rec.OnProgress(events.Progress{Stage: "done"})
 
 	stages := rec.Snapshot()
 	if len(stages) != 4 {
@@ -76,7 +76,7 @@ func TestRecorder_StageEndEventOverridesDurationAndBytes(t *testing.T) {
 	rec := jobs.NewRecorder(rep.report)
 	defer rec.Close()
 
-	rec.OnProgress(stageDownloading, 0, 0)
+	rec.OnProgress(events.Progress{Stage: stageDownloading})
 	want := events.StageTiming{
 		Stage:    events.StageDownload,
 		Duration: 1234 * time.Millisecond,
@@ -119,8 +119,8 @@ func TestRecorder_MergeStageEndAttachesToBuilding(t *testing.T) {
 	rec := jobs.NewRecorder(rep.report)
 	defer rec.Close()
 
-	rec.OnProgress(stageDownloading, 0, 0)
-	rec.OnProgress("building", 0, 0)
+	rec.OnProgress(events.Progress{Stage: stageDownloading})
+	rec.OnProgress(events.Progress{Stage: "building"})
 	rec.Bus().Publish(events.Event{
 		Stage: events.StagePipeline,
 		Type:  events.EvtStageEnd,
@@ -150,8 +150,8 @@ func TestRecorder_ReportFiresOnEveryProgressAndEvent(t *testing.T) {
 	rec := jobs.NewRecorder(rep.report)
 	defer rec.Close()
 
-	rec.OnProgress(stageDownloading, 0, 0)
-	rec.OnProgress(stageDownloading, 3, 10)
+	rec.OnProgress(events.Progress{Stage: stageDownloading})
+	rec.OnProgress(events.Progress{Stage: stageDownloading, Done: 3, Total: 10})
 	rec.Bus().Publish(events.Event{
 		Stage: events.StagePipeline,
 		Type:  events.EvtStageEnd,
@@ -176,7 +176,7 @@ func TestRecorder_CloseIsIdempotentAndStopsDrainer(t *testing.T) {
 	rep := &captureReporter{}
 	rec := jobs.NewRecorder(rep.report)
 
-	rec.OnProgress(stageDownloading, 0, 0)
+	rec.OnProgress(events.Progress{Stage: stageDownloading})
 	rec.Close()
 	rec.Close()
 
@@ -194,10 +194,10 @@ func TestRecorder_CloseIsIdempotentAndStopsDrainer(t *testing.T) {
 func TestRecorder_OnProgressAfterCloseIsNoop(t *testing.T) {
 	rep := &captureReporter{}
 	rec := jobs.NewRecorder(rep.report)
-	rec.OnProgress(stageDownloading, 0, 0)
+	rec.OnProgress(events.Progress{Stage: stageDownloading})
 	before := rep.count()
 	rec.Close()
-	rec.OnProgress("building", 0, 0)
+	rec.OnProgress(events.Progress{Stage: "building"})
 	if rep.count() != before {
 		t.Errorf("post-close OnProgress should not emit; before=%d after=%d", before, rep.count())
 	}
@@ -211,7 +211,7 @@ func TestRecorder_SpillCompletedFeedsDiagnosticsNotStageRows(t *testing.T) {
 	rec := jobs.NewRecorder(rep.report)
 	defer rec.Close()
 
-	rec.OnProgress(stageDownloading, 0, 0)
+	rec.OnProgress(events.Progress{Stage: stageDownloading})
 	rec.Bus().Publish(events.Event{
 		Stage: events.StageSpill,
 		Type:  events.EvtSpillCompleted,
@@ -247,7 +247,7 @@ func TestRecorder_MergeRoundsAndBytes(t *testing.T) {
 	rec := jobs.NewRecorder(rep.report)
 	defer rec.Close()
 
-	rec.OnProgress("building", 0, 0)
+	rec.OnProgress(events.Progress{Stage: "building"})
 	for i := range 3 {
 		rec.Bus().Publish(events.Event{
 			Stage:   events.StageMerge,
@@ -280,7 +280,7 @@ func TestRecorder_BatchCommittedAccumulatesIntoStage(t *testing.T) {
 	rec := jobs.NewRecorder(rep.report)
 	defer rec.Close()
 
-	rec.OnProgress(stageDownloading, 0, 0)
+	rec.OnProgress(events.Progress{Stage: stageDownloading})
 	for range 3 {
 		rec.Bus().Publish(events.Event{
 			Stage: events.StageParse,
@@ -313,7 +313,7 @@ func TestRecorder_OnProgressDoesNotClobberStageBytes(t *testing.T) {
 	rec := jobs.NewRecorder(rep.report)
 	defer rec.Close()
 
-	rec.OnProgress(stageDownloading, 0, 0)
+	rec.OnProgress(events.Progress{Stage: stageDownloading})
 	rec.Bus().Publish(events.Event{
 		Stage:   events.StageParse,
 		Type:    events.EvtBatchCommitted,
@@ -329,7 +329,7 @@ func TestRecorder_OnProgressDoesNotClobberStageBytes(t *testing.T) {
 	}
 	// A later progress tick with a small chunk index must not overwrite
 	// the 8 MB byte total.
-	rec.OnProgress(stageDownloading, 3, 16)
+	rec.OnProgress(events.Progress{Stage: stageDownloading, Done: 3, Total: 16})
 	time.Sleep(20 * time.Millisecond)
 	if got := rec.Snapshot()[0].Bytes; got != 8_000_000 {
 		t.Errorf("stage Bytes after progress tick = %d, want 8000000 (chunk index must not clobber)", got)
@@ -342,7 +342,7 @@ func TestRecorder_CloseDrainsBufferedEvents(t *testing.T) {
 	rep := &captureReporter{}
 	rec := jobs.NewRecorder(rep.report)
 
-	rec.OnProgress(stageDownloading, 0, 0)
+	rec.OnProgress(events.Progress{Stage: stageDownloading})
 	rec.Bus().Publish(events.Event{
 		Stage: events.StagePipeline,
 		Type:  events.EvtStageEnd,
@@ -373,8 +373,8 @@ func TestRecorder_MergeEndDoesNotReopenClosedBuilding(t *testing.T) {
 	rec := jobs.NewRecorder(rep.report)
 	defer rec.Close()
 
-	rec.OnProgress("building", 0, 0)
-	rec.OnProgress("finalizing", 0, 0) // closes building via the transition
+	rec.OnProgress(events.Progress{Stage: "building"})
+	rec.OnProgress(events.Progress{Stage: "finalizing"}) // closes building via the transition
 	buildingEnd := rec.Snapshot()[0].EndedAt
 
 	rec.Bus().Publish(events.Event{
@@ -409,4 +409,23 @@ func waitFor(timeout time.Duration, cond func() bool) bool {
 	}
 
 	return cond()
+}
+
+// TestRecorder_ForwardsStep checks that a step's progress reaches the
+// job with its step name, without opening a timeline stage of its own.
+func TestRecorder_ForwardsStep(t *testing.T) {
+	rep := &captureReporter{}
+	rec := jobs.NewRecorder(rep.report)
+	defer rec.Close()
+
+	rec.OnProgress(events.Progress{Stage: "finalizing"})
+	rec.OnProgress(events.Progress{Stage: "finalizing", Step: "Writing hash slots", Done: 4, Total: 9})
+
+	last := rep.last()
+	if last.Stage != "finalizing" || last.Step != "Writing hash slots" || last.StageDone != 4 || last.StageTotal != 9 {
+		t.Errorf("last update = %+v", last)
+	}
+	if len(last.Stages) != 1 || last.Stages[0].Name != "finalizing" {
+		t.Errorf("timeline = %+v, want the finalizing stage only", last.Stages)
+	}
 }

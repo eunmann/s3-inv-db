@@ -193,8 +193,8 @@ func TestStore_GetRoundTripsAllFields(t *testing.T) {
 	want := jobs.Job{
 		ID: "j1", InventoryID: "src/inv1", Kind: jobs.KindUnload,
 		State: jobs.StateSucceeded, Stage: "indexing", Progress: 100,
-		StageTotal: 12345, StageDone: 12345,
-		StartedAt: started, FinishedAt: finished, Error: "",
+		Step: "Writing hash slots", StageTotal: 12345, StageDone: 12345,
+		StartedAt: started, FinishedAt: finished, StepStartedAt: started.Add(time.Minute), Error: "",
 	}
 	if err := store.Upsert(t.Context(), want); err != nil {
 		t.Fatalf("Upsert: %v", err)
@@ -205,7 +205,8 @@ func TestStore_GetRoundTripsAllFields(t *testing.T) {
 	}
 	if got.Stage != want.Stage || got.Progress != want.Progress ||
 		got.StageTotal != want.StageTotal || got.StageDone != want.StageDone ||
-		!got.StartedAt.Equal(started) || !got.FinishedAt.Equal(finished) {
+		!got.StartedAt.Equal(started) || !got.FinishedAt.Equal(finished) ||
+		got.Step != want.Step || !got.StepStartedAt.Equal(want.StepStartedAt) {
 		t.Errorf("round-trip mismatch:\n got=%+v\nwant=%+v", got, want)
 	}
 }

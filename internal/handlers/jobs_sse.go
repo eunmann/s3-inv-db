@@ -33,25 +33,27 @@ func clientIPFromRequest(r *http.Request) string {
 // by the HTTP layer — renames inside the jobs package can't accidentally
 // change what browsers see, and every field carries an explicit json tag.
 type jobEvent struct {
-	ID           string       `json:"ID"`
-	InventoryID  string       `json:"InventoryID"`
-	Kind         string       `json:"Kind"`
-	State        string       `json:"State"`
-	Stage        string       `json:"Stage"`
-	StartedAt    string       `json:"StartedAt,omitempty"`
-	FinishedAt   string       `json:"FinishedAt,omitempty"`
-	Error        string       `json:"Error,omitempty"`
-	UpdatedAt    string       `json:"UpdatedAt,omitempty"`
-	PrevJobID    string       `json:"PrevJobID,omitempty"`
-	Stages       []stageEvent `json:"Stages,omitempty"`
-	Progress     int          `json:"Progress"`
-	AttemptCount int          `json:"AttemptCount,omitempty"`
-	StageTotal   int64        `json:"StageTotal"`
-	StageDone    int64        `json:"StageDone"`
-	SpillCount   int          `json:"SpillCount,omitempty"`
-	SpillBytes   int64        `json:"SpillBytes,omitempty"`
-	MergeRounds  int          `json:"MergeRounds,omitempty"`
-	MergeBytes   int64        `json:"MergeBytes,omitempty"`
+	ID            string       `json:"ID"`
+	InventoryID   string       `json:"InventoryID"`
+	Kind          string       `json:"Kind"`
+	State         string       `json:"State"`
+	Stage         string       `json:"Stage"`
+	Step          string       `json:"Step,omitempty"`
+	StepStartedAt string       `json:"StepStartedAt,omitempty"`
+	StartedAt     string       `json:"StartedAt,omitempty"`
+	FinishedAt    string       `json:"FinishedAt,omitempty"`
+	Error         string       `json:"Error,omitempty"`
+	UpdatedAt     string       `json:"UpdatedAt,omitempty"`
+	PrevJobID     string       `json:"PrevJobID,omitempty"`
+	Stages        []stageEvent `json:"Stages,omitempty"`
+	Progress      int          `json:"Progress"`
+	AttemptCount  int          `json:"AttemptCount,omitempty"`
+	StageTotal    int64        `json:"StageTotal"`
+	StageDone     int64        `json:"StageDone"`
+	SpillCount    int          `json:"SpillCount,omitempty"`
+	SpillBytes    int64        `json:"SpillBytes,omitempty"`
+	MergeRounds   int          `json:"MergeRounds,omitempty"`
+	MergeBytes    int64        `json:"MergeBytes,omitempty"`
 }
 
 // stageEvent is the per-stage timeline entry inside jobEvent.Stages.
@@ -94,6 +96,7 @@ func jobToEvent(j jobs.Job) jobEvent {
 		Kind:         string(j.Kind),
 		State:        string(j.State),
 		Stage:        j.Stage,
+		Step:         j.Step,
 		Progress:     j.Progress,
 		StageTotal:   j.StageTotal,
 		StageDone:    j.StageDone,
@@ -110,6 +113,9 @@ func jobToEvent(j jobs.Job) jobEvent {
 	}
 	if !j.FinishedAt.IsZero() {
 		ev.FinishedAt = j.FinishedAt.Format(time.RFC3339Nano)
+	}
+	if !j.StepStartedAt.IsZero() {
+		ev.StepStartedAt = j.StepStartedAt.Format(time.RFC3339Nano)
 	}
 	if !j.UpdatedAt.IsZero() {
 		ev.UpdatedAt = j.UpdatedAt.Format(time.RFC3339Nano)

@@ -21,7 +21,7 @@ import (
 )
 
 //nolint:gochecknoglobals // shared no-op closure so BuildWith doesn't allocate per call
-var noopProgress = func(string, int64, int64) {}
+var noopProgress = func(events.Progress) {}
 
 // Loader materialises an inventory run's index in a per-run
 // subdirectory of the configured cache root: by downloading the index
@@ -89,7 +89,7 @@ func (l *Loader) CacheDirFor(key inventory.CacheKey) (string, error) {
 // and would only hold disk the budget doesn't count, twice over during
 // the rebuild. Keeping it would pay off only with reuse, which would
 // need the index to record the code that built it.
-func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifestURI string, onProgress func(stage string, done, total int64), eventBus *events.Bus) (string, error) {
+func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifestURI string, onProgress events.ProgressFunc, eventBus *events.Bus) (string, error) {
 	outDir, err := l.CacheDirFor(key)
 	if err != nil {
 		return "", err
@@ -101,7 +101,7 @@ func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifest
 		onProgress = noopProgress
 	}
 
-	onProgress("preparing", 0, 0)
+	onProgress(events.Progress{Stage: "preparing"})
 	if err := os.RemoveAll(outDir); err != nil {
 		return "", fmt.Errorf("clear cache dir: %w", err)
 	}
@@ -140,15 +140,15 @@ func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifest
 // fetchPublished downloads the run's published index into a staging
 // directory beside outDir, verifies it against its manifest and moves
 // it into place. It returns ErrNotPublished when the run has none.
-func (l *Loader) fetchPublished(ctx context.Context, key inventory.CacheKey, outDir string, onProgress func(stage string, done, total int64)) error {
+func (l *Loader) fetchPublished(ctx context.Context, key inventory.CacheKey, outDir string, onProgress events.ProgressFunc) error {
 	prefix := indexstore.Run{Source: key.SourceBucket, Inventory: key.InventoryID, Run: key.Run}.Prefix(l.pubBase)
 	stage, err := extsort.NewStagingDir(outDir)
 	if err != nil {
 		return fmt.Errorf("stage published index: %w", err)
 	}
-	onProgress("fetching", 0, 0)
+	onProgress(events.Progress{Stage: "fetching"})
 	err = l.published.Fetch(ctx, prefix, stage, func(done, total uint64) {
-		onProgress("fetching", int64(done), int64(total))
+		onProgress(events.Progress{Stage: "fetching", Done: int64(done), Total: int64(total)})
 	})
 	if err != nil {
 		return errors.Join(err, os.RemoveAll(stage))

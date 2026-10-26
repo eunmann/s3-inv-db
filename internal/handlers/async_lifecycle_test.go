@@ -32,7 +32,7 @@ func (b *slowBuilder) Build(ctx context.Context, _ inventory.CacheKey) (string, 
 	return b.BuildWith(ctx, inventory.CacheKey{}, "", nil, nil)
 }
 
-func (b *slowBuilder) BuildWith(ctx context.Context, _ inventory.CacheKey, _ string, _ func(string, int64, int64), _ *events.Bus) (string, error) {
+func (b *slowBuilder) BuildWith(ctx context.Context, _ inventory.CacheKey, _ string, _ events.ProgressFunc, _ *events.Bus) (string, error) {
 	b.once.Do(func() { b.cancelled = make(chan struct{}) })
 	select {
 	case <-time.After(b.delay):

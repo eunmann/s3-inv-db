@@ -38,17 +38,20 @@ func NewRecorder(report func(Update)) *Recorder {
 
 func (r *Recorder) Bus() *events.Bus { return r.bus }
 
-func (r *Recorder) OnProgress(stage string, done, total int64) {
+// OnProgress is the build's events.ProgressFunc: it opens a timeline
+// stage on a stage transition and reports the current counter.
+func (r *Recorder) OnProgress(p events.Progress) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closing {
 		return
 	}
-	r.applyStageLocked(stage, done, total)
+	r.applyStageLocked(p.Stage)
 	r.report(Update{
-		Stage:      stage,
-		StageDone:  done,
-		StageTotal: total,
+		Stage:      p.Stage,
+		Step:       p.Step,
+		StageDone:  p.Done,
+		StageTotal: p.Total,
 		Stages:     snapshotStages(r.stages),
 	})
 }
@@ -80,7 +83,7 @@ func (r *Recorder) Snapshot() []StageRecord {
 	return snapshotStages(r.stages)
 }
 
-func (r *Recorder) applyStageLocked(stage string, done, total int64) {
+func (r *Recorder) applyStageLocked(stage string) {
 	now := r.nowFn()
 	if stage == "" {
 		return
@@ -97,12 +100,9 @@ func (r *Recorder) applyStageLocked(stage string, done, total int64) {
 			StartedAt: now,
 		})
 	}
-	// done/total are the current stage's progress counter (chunk index,
-	// merged-run count) — they flow to the UI via Update.StageDone/Total,
-	// NOT the stage's byte/row totals, which come from BatchCommitted +
-	// StageEnd events. Writing done here would clobber the real byte sum.
-	_ = done
-	_ = total
+	// The progress counter (chunk index, merged-run count) flows to the
+	// UI via Update.StageDone/Total, NOT into the stage's byte/row
+	// totals, which come from BatchCommitted + StageEnd events.
 }
 
 func (r *Recorder) drain() {

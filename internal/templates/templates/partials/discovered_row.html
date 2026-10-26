@@ -47,7 +47,7 @@
         </span>
         {{if $busy}}
         <div class="mt-1 text-xs text-gray-600 dark:text-gray-300">
-            {{if .LatestJob}}{{if .LatestJob.Stage}}{{stageLabel .LatestJob.Stage}}{{else}}Starting…{{end}}{{else}}Starting…{{end}}
+            {{if .LatestJob}}{{if .LatestJob.Stage}}{{stageLabel .LatestJob.Stage}}{{if .LatestJob.Step}} · {{.LatestJob.Step}}{{end}}{{else}}Starting…{{end}}{{else}}Starting…{{end}}
             {{if gt $pct 0}}<span class="text-gray-400 dark:text-gray-500">· {{$pct}}%{{if $eta}} · ~{{$eta}}{{end}}</span>{{end}}
         </div>
         {{end}}

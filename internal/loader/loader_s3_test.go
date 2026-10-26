@@ -13,6 +13,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/loader"
 	"github.com/eunmann/s3-inv-db/internal/s3test"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/rs/zerolog"
 )
@@ -47,7 +48,7 @@ func TestBuildWith_BuildsIndexFromSeededManifest(t *testing.T) {
 	var stages []string
 	ck := inventory.CacheKey{SourceBucket: srcBucket, InventoryID: info.ID, Run: run}
 	outDir, err := l.BuildWith(t.Context(), ck, info.Path,
-		func(stage string, _, _ int64) { stages = append(stages, stage) },
+		func(p events.Progress) { stages = append(stages, p.Stage) },
 		nil,
 	)
 	if err != nil {

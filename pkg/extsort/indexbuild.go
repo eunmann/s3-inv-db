@@ -12,6 +12,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -46,6 +47,10 @@ type IndexBuilder struct {
 	rec           spoolRecord
 	posCount      uint64
 	maxDepth      uint32
+	// onProgress receives Finalize's steps (SetProgress); stepProgress
+	// is the step reporter Finalize hands its writers.
+	onProgress    events.ProgressFunc
+	stepProgress  format.StepProgress
 	tiersDeclared bool
 	closed        bool
 	// createdOutDir is true when NewIndexBuilder created outDir, so
@@ -354,7 +359,13 @@ func (b *IndexBuilder) Finalize() error {
 	return b.FinalizeWithContext(context.Background())
 }
 
-// FinalizeWithContext closes all remaining stack nodes and writes final files with logging.
+// SetProgress makes Finalize report its steps, and each step's
+// progress, as the finalizing stage's. Call it before Finalize.
+func (b *IndexBuilder) SetProgress(fn events.ProgressFunc) { b.onProgress = fn }
+
+// FinalizeWithContext closes all remaining stack nodes and writes final
+// files. Each step is reported to the SetProgress callback and logged
+// at info level with its duration and storage waits.
 func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	if b.closed {
 		return nil
@@ -363,6 +374,9 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 
 	log := zerolog.Ctx(ctx)
 	startTime := time.Now()
+	steps := newFinalizeSteps(log, b.onProgress)
+	b.stepProgress = steps.report
+	b.mphfBuilder.SetProgress(b.stepProgress)
 
 	log.Debug().Msg("index builder: starting Finalize")
 
@@ -394,7 +408,7 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 
 	log.Debug().Msg("index builder: writing manifest")
 
-	if err := format.WriteManifest(b.outDir, b.posCount, b.maxDepth); err != nil {
+	if err := format.WriteManifest(b.outDir, b.posCount, b.maxDepth, b.stepProgress); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
 
@@ -404,12 +418,17 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 		return fmt.Errorf("sync dir: %w", err)
 	}
 
+	steps.end()
 	log.Debug().
 		Str("total_duration", humanfmt.Duration(time.Since(startTime))).
 		Msg("index builder: Finalize complete")
 
 	return nil
 }
+
+// levelsProgressEvery is how many rows writeLevels writes between
+// progress reports: a power of two, so the check is a mask.
+const levelsProgressEvery = 1 << 17
 
 // writeLevels replays the spooled rows depth by depth into the index
 // writers, so every per-row file is in level order. A row's child start
@@ -432,15 +451,26 @@ func (b *IndexBuilder) writeLevels() error {
 			return errors.Join(err, depthW.Abort())
 		}
 	}
+	total := int64(b.posCount)
+	var written int64
+	b.stepProgress(stepWriteLevels, 0, total)
 	for depth := range len(b.spool.depths) {
 		// Two groups of writers share nothing (stats rows on one side,
 		// names and MPHF keys on the other), so each reads the depth's
-		// records itself and they write side by side.
+		// records itself and they write side by side. The stats side
+		// counts the rows.
 		names := make(chan error, 1)
 		go func() {
 			names <- b.spool.read(depth, func(r *spoolRecord) error { return b.writeNameRow(starts, depth, r) })
 		}()
-		err := b.spool.read(depth, func(r *spoolRecord) error { return b.writeStatsRow(depthW, starts, depth, r) })
+		err := b.spool.read(depth, func(r *spoolRecord) error {
+			written++
+			if written%levelsProgressEvery == 0 {
+				b.stepProgress(stepWriteLevels, written, total)
+			}
+
+			return b.writeStatsRow(depthW, starts, depth, r)
+		})
 		if err = errors.Join(err, <-names); err == nil {
 			err = b.spool.remove(depth)
 		}
@@ -451,6 +481,7 @@ func (b *IndexBuilder) writeLevels() error {
 	if err := depthW.Close(); err != nil {
 		return fmt.Errorf("write depth index: %w", err)
 	}
+	b.stepProgress(stepWriteLevels, total, total)
 
 	return os.RemoveAll(b.spool.dir) //nolint:wrapcheck // the path is in the error
 }

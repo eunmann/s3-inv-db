@@ -8,6 +8,7 @@ import (
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/loader"
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 )
 
 func key(src, id, run string) inventory.CacheKey {
@@ -145,8 +146,8 @@ func TestBuild_RejectsEmptyArgs(t *testing.T) {
 func TestBuildWith_ReportsPreparingStage(t *testing.T) {
 	l := loader.New(t.TempDir(), nil)
 	var stages []string
-	_, _ = l.BuildWith(t.Context(), key("buck", "inv", "r"), "not-s3-uri", func(name string, _, _ int64) {
-		stages = append(stages, name)
+	_, _ = l.BuildWith(t.Context(), key("buck", "inv", "r"), "not-s3-uri", func(p events.Progress) {
+		stages = append(stages, p.Stage)
 	}, nil)
 	if len(stages) == 0 || stages[0] != "preparing" {
 		t.Errorf("first stage = %v, want preparing as first entry", stages)

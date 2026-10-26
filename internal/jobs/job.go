@@ -57,33 +57,38 @@ func (s State) IsLive() bool {
 
 // Job is one unit of background work.
 //
-// StageDone / StageTotal hold the current stage's step count and step
-// total (e.g. chunks-parsed / chunks-total during downloading, merged
-// run-files / total run-files during building). The unit varies by
-// stage, so callers should treat them as opaque progress numbers, not
-// bytes. They are persisted in legacy SQL columns bytes_done /
+// StageDone / StageTotal hold the current counter's done and total
+// (e.g. chunks-parsed / chunks-total during downloading, merged
+// run-files / total run-files during building, slots written during
+// finalizing's "writing hash slots" step). The unit varies by stage and
+// step, so callers should treat them as opaque progress numbers, not
+// bytes. Step names the step within Stage that the counter belongs to,
+// when the stage has steps, and StepStartedAt is when that counter
+// started: an ETA extrapolates from it, not from StartedAt. They are persisted in legacy SQL columns bytes_done /
 // bytes_total — those names predate the units becoming polymorphic
 // and are kept to avoid a schema migration.
 type Job struct {
-	StartedAt    time.Time
-	FinishedAt   time.Time
-	UpdatedAt    time.Time
-	ID           ID
-	InventoryID  inventory.ID
-	Kind         Kind
-	State        State
-	Stage        string
-	Error        string
-	PrevJobID    ID
-	Stages       []StageRecord
-	Progress     int
-	AttemptCount int
-	StageTotal   int64
-	StageDone    int64
-	SpillCount   int
-	SpillBytes   int64
-	MergeRounds  int
-	MergeBytes   int64
+	StartedAt     time.Time
+	FinishedAt    time.Time
+	UpdatedAt     time.Time
+	ID            ID
+	InventoryID   inventory.ID
+	Kind          Kind
+	State         State
+	Stage         string
+	Step          string
+	StepStartedAt time.Time
+	Error         string
+	PrevJobID     ID
+	Stages        []StageRecord
+	Progress      int
+	AttemptCount  int
+	StageTotal    int64
+	StageDone     int64
+	SpillCount    int
+	SpillBytes    int64
+	MergeRounds   int
+	MergeBytes    int64
 }
 
 // StageRecord is one entry in the per-job pipeline timeline. EndedAt
@@ -107,6 +112,7 @@ func (r StageRecord) InProgress() bool { return r.EndedAt.IsZero() }
 // are stage-dependent (chunks, run files, …), not bytes.
 type Update struct {
 	Stage       string
+	Step        string
 	Stages      []StageRecord
 	Progress    int
 	StageTotal  int64

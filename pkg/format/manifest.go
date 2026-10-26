@@ -35,7 +35,9 @@ type FileInfo struct {
 // tier_stats subdirectory) with size + checksum so consumers can verify
 // integrity and so callers can compute on-disk size by summing
 // manifest.Files[*].Size — no directory walk needed.
-func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
+//
+// Progress, when non-nil, receives the StepChecksum step.
+func WriteManifest(dir string, nodeCount uint64, maxDepth uint32, progress StepProgress) error {
 	manifest := Manifest{
 		Version:   ManifestVersion,
 		CreatedAt: time.Now().UTC(),
@@ -43,53 +45,33 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 		MaxDepth:  maxDepth,
 		Files:     make(map[string]FileInfo),
 	}
-
-	// Files always written by the current builder. Hard-coded so the
-	// manifest can be verified against an expected set rather than
-	// whatever happened to land on disk.
-	requiredTopLevel := []string{
-		DepthOffsetsFile,
-		DepthBlocksFile,
-		MPHFile,
-		MPHFSlotsFile,
-		"tiers.json",
-		CoreStatsFile,
-		PrefixDictBlobFile,
-		PrefixDictOffsetsFile,
-		PrefixTreeFile,
+	names, err := manifestFileNames(dir)
+	if err != nil {
+		return err
 	}
-	for _, name := range requiredTopLevel {
-		if err := addFile(dir, name, manifest.Files); err != nil {
-			return err
-		}
-	}
-	// Written only when the index needs them.
-	for _, name := range []string{CorePatchFile, CorePatchRowsFile} {
-		if _, err := os.Stat(filepath.Join(dir, name)); errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err := addFile(dir, name, manifest.Files); err != nil {
-			return err
-		}
-	}
-
-	// Tier-stats files live in a subdirectory and are named by tier
-	// FilePrefix; enumerate the directory rather than hard-coding the
-	// list so a new tier added later is captured automatically.
-	tierDir := filepath.Join(dir, TierStatsDir)
-	if entries, err := os.ReadDir(tierDir); err == nil {
-		for _, e := range entries {
-			if e.IsDir() || !e.Type().IsRegular() {
+	var total int64
+	for _, name := range names {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			if os.IsNotExist(err) {
 				continue
 			}
-			name := filepath.Join(TierStatsDir, e.Name())
-			if err := addFile(dir, name, manifest.Files); err != nil {
-				return err
-			}
+
+			return fmt.Errorf("stat %s: %w", name, err)
 		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read tier_stats dir: %w", err)
+		manifest.Files[name] = FileInfo{Size: info.Size()}
+		total += info.Size()
 	}
+	hashed := newStepCounter(progress, StepChecksum, total)
+	for name, fi := range manifest.Files {
+		checksum, err := checksumFile(filepath.Join(dir, name), hashed)
+		if err != nil {
+			return fmt.Errorf("checksum %s: %w", name, err)
+		}
+		fi.Checksum = checksum
+		manifest.Files[name] = fi
+	}
+	hashed.finish()
 
 	manifestPath := filepath.Join(dir, ManifestFile)
 	data, err := json.MarshalIndent(manifest, "", "  ")
@@ -118,23 +100,42 @@ func (m *Manifest) TotalBytes() uint64 {
 	return total
 }
 
-func addFile(root, name string, dst map[string]FileInfo) error {
-	path := filepath.Join(root, name)
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+// StepChecksum is WriteManifest's step: it counts the bytes hashed.
+const StepChecksum = "Checksumming files"
+
+// manifestFileNames lists the files a manifest covers. The top-level
+// files are hard-coded, so the manifest can be verified against an
+// expected set rather than whatever happened to land on disk; a file
+// the build did not write is skipped when stat finds it missing.
+// Tier-stats files live in a subdirectory and are named by tier
+// FilePrefix, so the directory is listed: a new tier is captured
+// automatically.
+func manifestFileNames(dir string) ([]string, error) {
+	names := []string{
+		DepthOffsetsFile,
+		DepthBlocksFile,
+		MPHFile,
+		MPHFSlotsFile,
+		"tiers.json",
+		CoreStatsFile,
+		PrefixDictBlobFile,
+		PrefixDictOffsetsFile,
+		PrefixTreeFile,
+		// Written only when the index needs them.
+		CorePatchFile,
+		CorePatchRowsFile,
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, TierStatsDir))
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read tier_stats dir: %w", err)
+	}
+	for _, e := range entries {
+		if e.Type().IsRegular() {
+			names = append(names, filepath.Join(TierStatsDir, e.Name()))
 		}
-
-		return fmt.Errorf("stat %s: %w", name, err)
 	}
-	checksum, err := checksumFile(path)
-	if err != nil {
-		return fmt.Errorf("checksum %s: %w", name, err)
-	}
-	dst[name] = FileInfo{Size: info.Size(), Checksum: checksum}
 
-	return nil
+	return names, nil
 }
 
 // ReadManifest reads the manifest from the index directory.
@@ -171,7 +172,7 @@ func VerifyManifest(dir string, manifest *Manifest) error {
 		}
 
 		// Check checksum
-		checksum, err := checksumFile(path)
+		checksum, err := checksumFile(path, nil)
 		if err != nil {
 			return fmt.Errorf("checksum %s: %w", name, err)
 		}
@@ -184,8 +185,12 @@ func VerifyManifest(dir string, manifest *Manifest) error {
 	return nil
 }
 
-// checksumFile computes the SHA-256 checksum of a file.
-func checksumFile(path string) (string, error) {
+// checksumBuffer is checksumFile's read size.
+const checksumBuffer = 1 << 20
+
+// checksumFile computes the SHA-256 checksum of a file, counting the
+// bytes it hashes on hashed.
+func checksumFile(path string, hashed *stepCounter) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("open file: %w", err)
@@ -193,8 +198,17 @@ func checksumFile(path string) (string, error) {
 	defer f.Close()
 
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", fmt.Errorf("read file: %w", err)
+	buf := make([]byte, checksumBuffer)
+	for {
+		n, err := f.Read(buf)
+		h.Write(buf[:n])
+		hashed.add(n)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("read file: %w", err)
+		}
 	}
 
 	return hex.EncodeToString(h.Sum(nil)), nil

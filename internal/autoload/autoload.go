@@ -47,7 +47,7 @@ type Discovery interface {
 // Callers wire Discovery.AutoLoadWith here. The eventBus, if non-nil,
 // is plumbed to the build pipeline so jobs.Recorder can collect a
 // per-stage timeline for the drawer.
-type LoaderFunc func(ctx context.Context, disc inventory.Inventory, onProgress func(stage string, done, total int64), eventBus *events.Bus) error
+type LoaderFunc func(ctx context.Context, disc inventory.Inventory, onProgress events.ProgressFunc, eventBus *events.Bus) error
 
 // Submitter routes a load through the jobs scheduler so auto-loads get
 // the same tracking, dedup, and concurrency limiting as manual builds.

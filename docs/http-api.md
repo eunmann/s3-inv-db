@@ -77,7 +77,7 @@ Mutating:
 
 | Route | Notes |
 |---|---|
-| `GET /api/jobs/stream` | One frame per job state change, with a `: ping` heartbeat every 15s |
+| `GET /api/jobs/stream` | One frame per job state change, with a `: ping` heartbeat every 15s. A frame is the job: its state, `Stage`, `Step` (the step within the stage, when it has steps, such as finalizing's), the current counter's `StageDone`/`StageTotal`, and `StepStartedAt`, when that counter started. |
 
 The UI's discovered-row partial listens for `sse:row-<src>/<inv>/<run>`
 events and re-fetches itself through the `/partials/discovered/…`

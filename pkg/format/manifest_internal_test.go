@@ -25,7 +25,7 @@ func TestWriteAndReadManifest(t *testing.T) {
 	}
 
 	// Write manifest
-	if err := WriteManifest(dir, 100, 5); err != nil {
+	if err := WriteManifest(dir, 100, 5, nil); err != nil {
 		t.Fatalf("WriteManifest failed: %v", err)
 	}
 
@@ -74,7 +74,7 @@ func TestVerifyManifest(t *testing.T) {
 	}
 
 	// Write manifest
-	if err := WriteManifest(dir, 50, 3); err != nil {
+	if err := WriteManifest(dir, 50, 3, nil); err != nil {
 		t.Fatalf("WriteManifest failed: %v", err)
 	}
 
@@ -110,13 +110,13 @@ func TestChecksumFile(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	checksum1, err := checksumFile(path)
+	checksum1, err := checksumFile(path, nil)
 	if err != nil {
 		t.Fatalf("checksumFile failed: %v", err)
 	}
 
 	// Same data should give same checksum
-	checksum2, err := checksumFile(path)
+	checksum2, err := checksumFile(path, nil)
 	if err != nil {
 		t.Fatalf("checksumFile failed: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestChecksumFile(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	checksum3, err := checksumFile(path)
+	checksum3, err := checksumFile(path, nil)
 	if err != nil {
 		t.Fatalf("checksumFile failed: %v", err)
 	}

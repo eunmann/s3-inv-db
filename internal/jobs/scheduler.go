@@ -255,6 +255,7 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 
 	job.State = StateRunning
 	job.StartedAt = time.Now()
+	job.StepStartedAt = job.StartedAt
 	s.persistAndPublish(ctx, &job)
 
 	// Progress writes outlive a cancel the way the final write does: the
@@ -262,17 +263,22 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 	progress := s.newProgressPersister(context.WithoutCancel(ctx))
 
 	// report applies a non-zero diff to the job and broadcasts. A stage
-	// transition resets quantitative progress so the UI doesn't show
-	// stale done/total from the previous stage (e.g. "downloading 10/10"
-	// while we've already moved on to "building"). reportMu serialises
+	// or step transition resets quantitative progress so the UI doesn't
+	// show stale done/total from the previous counter (e.g.
+	// "downloading 10/10" while we've already moved on to "building"),
+	// and restarts the clock the counter's ETA extrapolates from. An
+	// update without a Stage (the recorder's event-driven timeline
+	// updates) leaves the counter alone. reportMu serialises
 	// mutation of `job` across the synchronous work callback and the
 	// async Recorder drain goroutine which also calls report.
 	var reportMu sync.Mutex
 	report := func(u Update) {
 		reportMu.Lock()
 		defer reportMu.Unlock()
-		if u.Stage != "" && u.Stage != job.Stage {
+		if u.Stage != "" && (u.Stage != job.Stage || u.Step != job.Step) {
 			job.Stage = u.Stage
+			job.Step = u.Step
+			job.StepStartedAt = time.Now()
 			job.Progress = 0
 			job.StageDone = 0
 			job.StageTotal = 0

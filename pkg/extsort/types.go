@@ -300,9 +300,9 @@ func (c MergeConfig) withDefaults() MergeConfig {
 
 // ObserveConfig wires optional progress + event consumers.
 type ObserveConfig struct {
-	// OnProgress fires on phase transitions and once per ingest chunk.
-	// done/total are zero on transitions.
-	OnProgress func(stage string, done, total int64)
+	// OnProgress fires on phase transitions, once per ingest chunk, and
+	// as the finalize steps advance. Done/Total are zero on transitions.
+	OnProgress events.ProgressFunc
 
 	// EventBus, when non-nil, receives structured events. Caller owns
 	// its lifecycle; the pipeline does not Close it.

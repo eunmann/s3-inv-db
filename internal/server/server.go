@@ -275,7 +275,7 @@ func newAutoLoader(cfg Config, discovery *inventory.Discovery, configStore *inve
 	if !cfg.AutoLoad || !discovery.Enabled() {
 		return nil
 	}
-	loadFn := func(c context.Context, d inventory.Inventory, onProgress func(stage string, done, total int64), eventBus *events.Bus) error {
+	loadFn := func(c context.Context, d inventory.Inventory, onProgress events.ProgressFunc, eventBus *events.Bus) error {
 		return discovery.AutoLoadWith(c, d, onProgress, eventBus)
 	}
 	al := autoload.New(autoload.Config{

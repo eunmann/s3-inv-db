@@ -86,7 +86,7 @@ var errBBHashCorrupt = errors.New("bbhash: corrupt MPHF file")
 // mmap) and copies only the keys that collide on a level into the next
 // one, so the leftovers never alias keys.
 func newBBHash(keys []uint64, fallback func(leftovers []uint64) ([]bbFallback, error)) (*bbhash, error) {
-	return newBBHashWith(keys, heapKeys, fallback)
+	return newBBHashWith(keys, heapKeys, fallback, nil)
 }
 
 // keyBuffer returns room for n keys and a function releasing it.
@@ -102,10 +102,11 @@ func heapKeys(n int) ([]uint64, func() error, error) {
 
 // newBBHashWith is newBBHash taking each level's colliding keys from
 // keyBuf, so a large build can keep them off the heap; a level's keys
-// are released once the next level is built.
-func newBBHashWith(keys []uint64, keyBuf keyBuffer, fallback func(leftovers []uint64) ([]bbFallback, error)) (*bbhash, error) {
+// are released once the next level is built. Scan, when non-nil,
+// counts the keys each pass reads (see bbhashScanEstimate).
+func newBBHashWith(keys []uint64, keyBuf keyBuffer, fallback func(leftovers []uint64) ([]bbFallback, error), scan *stepCounter) (*bbhash, error) {
 	release := func() error { return nil }
-	h, buildErr := buildBBHashLevels(keys, keyBuf, fallback, &release)
+	h, buildErr := buildBBHashLevels(keys, keyBuf, fallback, &release, scan)
 	if err := errors.Join(buildErr, release()); err != nil {
 		return nil, err
 	}
@@ -115,15 +116,15 @@ func newBBHashWith(keys []uint64, keyBuf keyBuffer, fallback func(leftovers []ui
 
 // buildBBHashLevels builds the levels and the fallback; *release frees
 // the keys of the level built last, which the caller releases.
-func buildBBHashLevels(keys []uint64, keyBuf keyBuffer, fallback func(leftovers []uint64) ([]bbFallback, error), release *func() error) (*bbhash, error) {
+func buildBBHashLevels(keys []uint64, keyBuf keyBuffer, fallback func(leftovers []uint64) ([]bbFallback, error), release *func() error, scan *stepCounter) (*bbhash, error) {
 	firstWords := levelWords(len(keys))
 	// The levels after the first hold ~65% as many bits again.
 	h := &bbhash{bits: make([]uint64, 0, firstWords*7/4+maxBBHashLevels)}
 	for level := 0; len(keys) > 0 && level < maxBBHashLevels; level++ {
 		words := levelWords(len(keys))
 		set, collided := make([]uint64, words), make([]uint64, words)
-		markLevel(keys, level, set, collided)
-		next, nextRelease, err := collidedKeys(keys, level, words, collided, keyBuf)
+		markLevel(keys, level, set, collided, scan)
+		next, nextRelease, err := collidedKeys(keys, level, words, collided, keyBuf, scan)
 		if err != nil {
 			return nil, err
 		}
@@ -167,12 +168,24 @@ func levelWords(n int) uint64 {
 	return max(1, uint64(math.Ceil(bbhashGamma*float64(n)/64)))
 }
 
+// bbhashPassesPerLevel is how many times a level reads its keys: once
+// to mark their bits, twice to collect the colliding ones.
+const bbhashPassesPerLevel = 3
+
+// bbhashScanEstimate is about how many key reads building n keys takes,
+// the total of its progress. A key collides on a level with probability
+// 1-e^(-1/gamma), so the levels read n·e^(1/gamma) keys in all, each
+// bbhashPassesPerLevel times.
+func bbhashScanEstimate(n int) int64 {
+	return int64(math.Ceil(float64(n) * bbhashPassesPerLevel * math.Exp(1/bbhashGamma)))
+}
+
 // markLevel sets each key's bit in set, and in collided when another
 // key already set it. Atomic ORs make the result independent of the
 // order the workers run in.
-func markLevel(keys []uint64, level int, set, collided []uint64) {
+func markLevel(keys []uint64, level int, set, collided []uint64, scan *stepCounter) {
 	words := uint64(len(set))
-	forChunks(len(keys), func(_, lo, hi int) {
+	forChunks(len(keys), scan, func(_, lo, hi int) {
 		for _, k := range keys[lo:hi] {
 			i := bbPosition(k, level, words)
 			w, bit := i/64, uint64(1)<<(i%64)
@@ -187,14 +200,14 @@ func markLevel(keys []uint64, level int, set, collided []uint64) {
 // one pass counts each chunk's share, a second copies into place.
 //
 //nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
-func collidedKeys(keys []uint64, level int, words uint64, collided []uint64, keyBuf keyBuffer) ([]uint64, func() error, error) {
+func collidedKeys(keys []uint64, level int, words uint64, collided []uint64, keyBuf keyBuffer, scan *stepCounter) ([]uint64, func() error, error) {
 	isCollided := func(k uint64) bool {
 		i := bbPosition(k, level, words)
 
 		return collided[i/64]&(1<<(i%64)) != 0
 	}
 	counts := make([]int, mphfWorkerCount(len(keys)))
-	forChunks(len(keys), func(c, lo, hi int) {
+	forChunks(len(keys), scan, func(c, lo, hi int) {
 		for _, k := range keys[lo:hi] {
 			if isCollided(k) {
 				counts[c]++
@@ -210,7 +223,9 @@ func collidedKeys(keys []uint64, level int, words uint64, collided []uint64, key
 	if err != nil {
 		return nil, nil, err
 	}
-	forChunks(len(keys), func(c, lo, hi int) {
+	// counts[c] is chunk c's next write position: forChunks calls fn
+	// once per block of the chunk, in order.
+	forChunks(len(keys), scan, func(c, lo, hi int) {
 		at := counts[c]
 		for _, k := range keys[lo:hi] {
 			if isCollided(k) {
@@ -218,14 +233,17 @@ func collidedKeys(keys []uint64, level int, words uint64, collided []uint64, key
 				at++
 			}
 		}
+		counts[c] = at
 	})
 
 	return next, release, nil
 }
 
 // forChunks splits [0, n) into mphfWorkerCount(n) contiguous chunks and
-// runs fn on each concurrently.
-func forChunks(n int, fn func(chunk, lo, hi int)) {
+// runs them concurrently. Each chunk's worker calls fn on the chunk's
+// blocks of up to progressBlock items, in order, and counts each block
+// on progress.
+func forChunks(n int, progress *stepCounter, fn func(chunk, lo, hi int)) {
 	workers := mphfWorkerCount(n)
 	size := (n + workers - 1) / workers
 	var wg sync.WaitGroup
@@ -234,7 +252,13 @@ func forChunks(n int, fn func(chunk, lo, hi int)) {
 		if lo >= hi {
 			continue
 		}
-		wg.Go(func() { fn(c, lo, hi) })
+		wg.Go(func() {
+			for ; lo < hi; lo += progressBlock {
+				end := min(lo+progressBlock, hi)
+				fn(c, lo, end)
+				progress.add(end - lo)
+			}
+		})
 	}
 	wg.Wait()
 }
