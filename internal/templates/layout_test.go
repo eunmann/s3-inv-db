@@ -27,6 +27,24 @@ func renderLayoutPage(t *testing.T) *goquery.Document {
 	return doc
 }
 
+// TestLayout_LiveAnnounceRegion: live.js writes build endings into one
+// polite, visually hidden live region on every page.
+func TestLayout_LiveAnnounceRegion(t *testing.T) {
+	region := renderLayoutPage(t).Find("[data-live-announce]")
+	if region.Length() != 1 {
+		t.Fatalf("found %d [data-live-announce], want 1", region.Length())
+	}
+	if got, _ := region.Attr("aria-live"); got != "polite" {
+		t.Errorf("aria-live = %q, want polite", got)
+	}
+	if !region.HasClass("sr-only") {
+		t.Error("announce region must be visually hidden (sr-only)")
+	}
+	if _, hidden := region.Attr("hidden"); hidden {
+		t.Error("a hidden live region announces nothing")
+	}
+}
+
 // TestLayout_ErrorToast: every page has one dismissible alert for
 // failed htmx requests, hidden until a request fails, inside an alert
 // region that stays rendered so its message is announced.
