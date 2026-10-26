@@ -17,6 +17,10 @@ const finalizingStage = "finalizing"
 // depth by depth into the index files. It counts rows.
 const stepWriteLevels = "Ordering rows by depth"
 
+// stepFinishRows is the wait, after the MPHF build, for the row files'
+// repacks that run beside it, plus the tier manifest. It counts 0 then 1.
+const stepFinishRows = "Finishing row files"
+
 // stepReportInterval is the least time between two forwarded reports of
 // one step; a step change and a step's completion always go through.
 const stepReportInterval = 250 * time.Millisecond

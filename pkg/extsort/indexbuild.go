@@ -375,6 +375,7 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	log := zerolog.Ctx(ctx)
 	startTime := time.Now()
 	steps := newFinalizeSteps(log, b.onProgress)
+	defer steps.end()
 	b.stepProgress = steps.report
 	b.mphfBuilder.SetProgress(b.stepProgress)
 
@@ -398,6 +399,7 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	rowsDone := make(chan error, 1)
 	go func() { rowsDone <- b.closeStreamingWriters() }()
 	mphfErr := b.buildMPHF(ctx)
+	b.stepProgress(stepFinishRows, 0, 1)
 	if err := errors.Join(<-rowsDone, mphfErr); err != nil {
 		return err
 	}
@@ -405,6 +407,7 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	if err := b.writeTierManifest(); err != nil {
 		return err
 	}
+	b.stepProgress(stepFinishRows, 1, 1)
 
 	log.Debug().Msg("index builder: writing manifest")
 
@@ -418,7 +421,6 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 		return fmt.Errorf("sync dir: %w", err)
 	}
 
-	steps.end()
 	log.Debug().
 		Str("total_duration", humanfmt.Duration(time.Since(startTime))).
 		Msg("index builder: Finalize complete")

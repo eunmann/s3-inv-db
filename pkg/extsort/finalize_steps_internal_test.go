@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"slices"
 	"sync"
 	"testing"
@@ -54,7 +55,7 @@ func TestFinalizeReportsEachStep(t *testing.T) {
 		t.Fatalf("Finalize: %v", err)
 	}
 
-	wantSteps := []string{stepWriteLevels, format.StepBuildHash, format.StepPlaceSlots, format.StepSlotFile, format.StepChecksum}
+	wantSteps := []string{stepWriteLevels, format.StepBuildHash, format.StepPlaceSlots, format.StepSlotFile, stepFinishRows, format.StepChecksum}
 	var steps []string
 	last := map[string]events.Progress{}
 	for _, p := range rec.got {
@@ -100,6 +101,38 @@ func TestFinalizeReportsEachStep(t *testing.T) {
 	}
 	if !slices.Equal(logged, wantSteps) {
 		t.Errorf("logged steps = %q, want %q", logged, wantSteps)
+	}
+}
+
+// TestFinalizeLogsFailedStep checks that a Finalize that fails still
+// logs the step it failed in.
+func TestFinalizeLogsFailedStep(t *testing.T) {
+	outDir := t.TempDir()
+	b, err := NewIndexBuilder(outDir, t.TempDir())
+	if err != nil {
+		t.Fatalf("NewIndexBuilder: %v", err)
+	}
+	root := &PrefixRow{Prefix: "", Count: 1}
+	root.TierCounts[0] = 1
+	if err := b.Add(root); err != nil {
+		t.Fatalf("Add root: %v", err)
+	}
+	var logs bytes.Buffer
+	ctx := zerolog.New(&logs).WithContext(t.Context())
+	var removed bool
+	b.SetProgress(func(p events.Progress) {
+		if p.Step == format.StepChecksum && !removed {
+			removed = true
+			if err := os.RemoveAll(outDir); err != nil {
+				t.Errorf("remove out dir: %v", err)
+			}
+		}
+	})
+	if err := b.FinalizeWithContext(ctx); err == nil {
+		t.Fatal("Finalize succeeded without its output directory")
+	}
+	if !bytes.Contains(logs.Bytes(), []byte(`"step":"`+format.StepChecksum+`"`)) {
+		t.Errorf("no log line for the failed step %q in:\n%s", format.StepChecksum, logs.String())
 	}
 }
 
