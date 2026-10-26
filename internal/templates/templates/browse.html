@@ -43,7 +43,9 @@
         </div>
     </div>
 
-    <div id="browse-target">
+    {{- /* hx-indicator is inherited: every level request below marks
+           this element busy, which dims it (styles/input.css). */}}
+    <div id="browse-target" hx-indicator="#browse-target">
         {{if .InitialLevel}}
             {{template "templates/partials/browse_level.html" .InitialLevel}}
         {{else}}
@@ -53,12 +55,5 @@
         {{end}}
     </div>
 
-    <div id="browse-loading" class="htmx-indicator text-center py-4" role="status">
-        <svg aria-hidden="true" class="animate-spin h-6 w-6 text-indigo-600 dark:text-indigo-400 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-        </svg>
-        <span class="sr-only">Loading</span>
-    </div>
 </div>
 {{end}}

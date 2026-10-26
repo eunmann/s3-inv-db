@@ -71,7 +71,7 @@ func TestHelpPage_StateChipsUseHelpers(t *testing.T) {
 			t.Errorf("chip reference missing label %q", label)
 		}
 	}
-	for _, cls := range []string{"bg-green-100", "bg-yellow-100", "bg-blue-100", "bg-red-100"} {
+	for _, cls := range []string{"bg-green-100", "bg-gray-100", "bg-blue-100", "bg-red-100"} {
 		if !strings.Contains(body, cls) {
 			t.Errorf("chip reference missing class %q (helper changed?)", cls)
 		}

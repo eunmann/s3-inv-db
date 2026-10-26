@@ -43,14 +43,15 @@
                 <summary class="px-4 py-3 sm:px-6 text-sm text-gray-700 dark:text-gray-200 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 select-none">
                     Storage tier breakdown{{if .CostEstimate}} · est. <span class="font-semibold">{{.CostEstimate.TotalFormatted}}/month</span>{{end}}
                 </summary>
+                <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
                     <thead class="bg-gray-50 dark:bg-gray-900/30">
                         <tr>
                             <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Tier</th>
-                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Objects</th>
-                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Size</th>
+                            <th class="px-6 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Objects</th>
+                            <th class="px-6 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Size</th>
                             {{if .CostEstimate.PerTierFormatted}}
-                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Est. Cost</th>
+                            <th class="px-6 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Est. Cost</th>
                             {{end}}
                         </tr>
                     </thead>
@@ -58,15 +59,16 @@
                         {{range .TierBreakdown}}
                         <tr>
                             <td class="px-6 py-2 whitespace-nowrap text-gray-900 dark:text-gray-100 font-medium" title="{{.TierName}}">{{tierLabel .TierName}}</td>
-                            <td class="px-6 py-2 whitespace-nowrap text-gray-500 dark:text-gray-400">{{.ObjectCountH}}</td>
-                            <td class="px-6 py-2 whitespace-nowrap text-gray-500 dark:text-gray-400">{{.BytesH}}</td>
+                            <td class="px-6 py-2 whitespace-nowrap text-right tabular-nums text-gray-500 dark:text-gray-400">{{.ObjectCountH}}</td>
+                            <td class="px-6 py-2 whitespace-nowrap text-right tabular-nums text-gray-500 dark:text-gray-400">{{.BytesH}}</td>
                             {{if $.CostEstimate.PerTierFormatted}}
-                            <td class="px-6 py-2 whitespace-nowrap text-gray-500 dark:text-gray-400">{{index $.CostEstimate.PerTierFormatted .TierName}}</td>
+                            <td class="px-6 py-2 whitespace-nowrap text-right tabular-nums text-gray-500 dark:text-gray-400">{{index $.CostEstimate.PerTierFormatted .TierName}}</td>
                             {{end}}
                         </tr>
                         {{end}}
                     </tbody>
                 </table>
+                </div>
             </details>
         </div>
         {{end}}
@@ -111,6 +113,7 @@
             {{end}}
         </div>
         {{if .Children}}
+        <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
             <thead class="bg-gray-50 dark:bg-gray-900/30">
                 <tr>
@@ -124,7 +127,7 @@
                             Segment {{$segLink.Indicator}}
                         </button>
                     </th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
                             hx-get="/browse"
                             hx-vals="{{hxValsJSON "inventory_id" $inv "prefix" $.Prefix "sort" $objLink.Sort "dir" $objLink.Dir}}"
@@ -134,7 +137,7 @@
                             Objects {{$objLink.Indicator}}
                         </button>
                     </th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
                             hx-get="/browse"
                             hx-vals="{{hxValsJSON "inventory_id" $inv "prefix" $.Prefix "sort" $sizeLink.Sort "dir" $sizeLink.Dir}}"
@@ -144,7 +147,7 @@
                             Size {{$sizeLink.Indicator}}
                         </button>
                     </th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         <button type="button"
                             hx-get="/browse"
                             hx-vals="{{hxValsJSON "inventory_id" $inv "prefix" $.Prefix "sort" $costLink.Sort "dir" $costLink.Dir}}"
@@ -177,9 +180,9 @@
                         </span>
                         {{end}}
                     </td>
-                    <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{{.ObjectCountH}}</td>
-                    <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{{.TotalBytesH}}</td>
-                    <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{{.MonthlyCostFormatted}}</td>
+                    <td class="px-6 py-3 whitespace-nowrap text-right tabular-nums text-sm text-gray-500 dark:text-gray-400">{{.ObjectCountH}}</td>
+                    <td class="px-6 py-3 whitespace-nowrap text-right tabular-nums text-sm text-gray-500 dark:text-gray-400">{{.TotalBytesH}}</td>
+                    <td class="px-6 py-3 whitespace-nowrap text-right tabular-nums text-sm text-gray-500 dark:text-gray-400">{{.MonthlyCostFormatted}}</td>
                     <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-400 dark:text-gray-500 text-right" aria-hidden="true">
                         {{if .HasChildren}}→{{end}}
                     </td>
@@ -187,6 +190,7 @@
                 {{end}}
             </tbody>
         </table>
+        </div>
         {{end}}
     </div>
 

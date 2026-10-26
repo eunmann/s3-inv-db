@@ -34,6 +34,19 @@
     }
 }
 
+/* With the run drawer open on a wide screen, make room for it rather
+   than covering the rows' Actions column. */
+@media (min-width: 1024px) {
+    body:has(#run-drawer[data-open]) #main-content { margin-right: 24rem; }
+}
+
+/* Browse and compare: dim the level being replaced while its request
+   runs, after a short delay so fast queries don't flicker. */
+#browse-target.htmx-request, #compare-target.htmx-request {
+    opacity: 0.55;
+    transition: opacity 0.15s ease 0.15s;
+}
+
 /* Live progress bar (scripts/live.js): one segment per pipeline stage,
    finished stages full, the current one filling, so the bar never
    moves backwards when a stage starts. Plain CSS, outside @layer, so

@@ -1,11 +1,12 @@
 {{if .Notifications}}
-<div class="bg-red-50 dark:bg-red-900/30 border-b border-red-200 dark:border-red-900/50">
-    <details class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <summary class="py-2.5 text-sm text-red-800 dark:text-red-300 cursor-pointer flex items-center justify-between gap-3">
-            <span class="font-medium">
-                ⚠ {{len .Notifications}} active issue{{if ne (len .Notifications) 1}}s{{end}}
+<section class="bg-red-50 dark:bg-red-900/30 border-b border-red-200 dark:border-red-900/50" aria-label="Active issues">
+    <details class="group max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <summary class="py-2.5 text-sm text-red-800 dark:text-red-300 cursor-pointer flex items-center justify-between gap-3 list-none">
+            <span class="font-medium inline-flex items-center gap-2">
+                <svg class="h-4 w-4 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M8.26 2.6c.77-1.33 2.7-1.33 3.48 0l6.13 10.6c.77 1.34-.19 3-1.74 3H3.87c-1.55 0-2.51-1.66-1.74-3L8.26 2.6zM10 7a1 1 0 0 0-1 1v3a1 1 0 1 0 2 0V8a1 1 0 0 0-1-1zm0 8a1 1 0 1 0 0-2 1 1 0 0 0 0 2z" clip-rule="evenodd"/></svg>
+                {{len .Notifications}} active issue{{if ne (len .Notifications) 1}}s{{end}}
             </span>
-            <span class="text-xs text-red-700 dark:text-red-400 hover:underline">expand</span>
+            <span class="text-xs text-red-700 dark:text-red-400 underline-offset-2 hover:underline"><span class="group-open:hidden">Show</span><span class="hidden group-open:inline">Hide</span></span>
         </summary>
         <ul class="pb-3 space-y-2">
             {{range .Notifications}}
@@ -16,5 +17,5 @@
             {{end}}
         </ul>
     </details>
-</div>
+</section>
 {{end}}

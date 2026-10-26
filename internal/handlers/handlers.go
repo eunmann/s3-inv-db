@@ -75,6 +75,8 @@ type Handlers struct {
 	// page views; nil caches nothing. Its cost orders use prices.
 	levels                   *inventory.LevelCache
 	discoveryRefreshInterval time.Duration
+	// autoLoadRunning: the server runs the auto-load poller (WithAutoLoad).
+	autoLoadRunning bool
 
 	discoverer inventory.Discoverer
 	indexBldr  inventory.IndexBuilder
@@ -169,6 +171,12 @@ func (h *Handlers) releaseSSESlot(ip string) {
 		return
 	}
 	h.sseConnsByIP[ip] = n - 1
+}
+
+// WithAutoLoad tells the handlers whether the server runs the auto-load
+// poller, so the inventories page can say when the toggle is inert.
+func WithAutoLoad(running bool) Option {
+	return func(h *Handlers) { h.autoLoadRunning = running }
 }
 
 // WithDiscoveryRefreshInterval sets the cadence the dashboard reports

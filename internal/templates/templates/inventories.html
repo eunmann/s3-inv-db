@@ -12,9 +12,16 @@
             {{end}}
         </div>
         {{if .HasDiscovery}}
-        <a href="/inventories" class="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">
-            Refresh
-        </a>
+        {{- /* Lists the source now (the page otherwise shows the snapshot
+               the background refresher took), then reloads. */}}
+        <div class="flex items-center gap-3">
+            <span data-refresh-status role="status" class="text-xs text-red-700 dark:text-red-300"></span>
+            <button type="button" data-refresh-now
+                    class="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-60 disabled:cursor-wait">
+                <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M15.3 4.7A7 7 0 0 0 3.1 9H1l3 3.5L7 9H5.1a5 5 0 0 1 8.8-2.9l1.4-1.4zM16 8l-3 3.5h1.9a5 5 0 0 1-8.8 2.9l-1.4 1.4A7 7 0 0 0 16.9 11H19l-3-3z" clip-rule="evenodd"/></svg>
+                <span>Refresh</span>
+            </button>
+        </div>
         {{end}}
     </div>
 
@@ -40,13 +47,14 @@
                     <span class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">{{len .Runs}} run{{if ne (len .Runs) 1}}s{{end}}</span>
                 </header>
                 <div class="px-6 py-3 bg-gray-50 dark:bg-gray-900/30 border-b border-gray-200 dark:border-gray-700">
-                    <form class="flex items-center gap-5 text-xs text-gray-600 dark:text-gray-300 flex-wrap"
+                    <form class="flex items-center gap-x-5 gap-y-2 text-xs text-gray-600 dark:text-gray-300 flex-wrap"
+                          data-autoload-form
                           action="/api/configurations/{{.SourceBucket}}/{{.Name}}/auto-load"
                           method="post"
                           hx-post="/api/configurations/{{.SourceBucket}}/{{.Name}}/auto-load"
                           hx-trigger="change"
                           hx-swap="none"
-                          aria-label="Auto-load settings">
+                          aria-label="Auto-load settings for {{.SourceBucket}}/{{.Name}}">
                         {{if not .AutoLoadManaged}}<input type="hidden" name="auto_load" value="off">{{end}}
                         <label class="inline-flex items-center gap-1.5 {{if .AutoLoadManaged}}opacity-60{{else}}cursor-pointer{{end}}"{{if .AutoLoadManaged}} title="Set in the config file"{{end}}>
                             <input type="checkbox" name="auto_load" value="on" class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500" {{if .AutoLoad}}checked{{end}} {{if .AutoLoadManaged}}disabled{{end}}>
@@ -59,6 +67,8 @@
                             <span>runs</span>
                         </label>
                         {{if or .AutoLoadManaged .RetentionManaged}}<span class="text-gray-500 dark:text-gray-400">Set in the config file</span>{{end}}
+                        {{if not $.AutoLoadRunning}}<span class="text-gray-500 dark:text-gray-400" title="Start the server with --auto-load and --max-index-disk for these settings to load and evict runs.">The server's auto-loader is off</span>{{end}}
+                        <span data-autoload-status role="status"></span>
                     </form>
                 </div>
                 {{if .LastPollError}}
@@ -66,12 +76,13 @@
                     Last poll failed: {{.LastPollError}}{{if .PollBackoffUntil}} (next attempt after {{.PollBackoffUntil}}){{end}}
                 </div>
                 {{end}}
-                <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                <div class="overflow-x-auto">
+                <table class="min-w-full sm:table-fixed divide-y divide-gray-200 dark:divide-gray-700">
                     <thead class="bg-gray-50 dark:bg-gray-900/30">
                         <tr>
                             <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Run{{template "templates/partials/info_icon.html" "Inventory run timestamp (UTC). The secondary line shows format, chunk-file count, on-disk cache size, and how long the latest build took; the third line is the discovered manifest key."}}</th>
-                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-72">State{{template "templates/partials/info_icon.html" "Lifecycle state: not loaded, loading, loaded, or error. A build in progress shows its stage, percent and time left, and a bar with one segment per stage: download, build, finalize. The row's left border carries the state color."}}</th>
-                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions{{template "templates/partials/info_icon.html" "Per-run actions: Load builds the index; Browse opens the prefix tree; Compare picks a baseline; the icon buttons pin and unload."}}</th>
+                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider sm:w-72">State{{template "templates/partials/info_icon.html" "Lifecycle state: not loaded, loading, loaded, or error. A build in progress shows its stage, percent and time left, and a bar with one segment per stage: download, build, finalize. The row's left border carries the state color."}}</th>
+                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider sm:w-72">Actions{{template "templates/partials/info_icon.html" "Per-run actions: Load builds the index; Browse opens the prefix tree; Compare picks a baseline; the icon buttons pin and unload."}}</th>
                         </tr>
                     </thead>
                     {{$visible := .VisibleRuns}}
@@ -81,12 +92,14 @@
                         {{end}}
                     {{end}}
                 </table>
+                </div>
                 {{if lt .VisibleRuns (len .Runs)}}
                 <details class="bg-gray-50 dark:bg-gray-900/30">
                     <summary class="px-6 py-2.5 text-sm text-indigo-600 dark:text-indigo-400 cursor-pointer hover:text-indigo-800 dark:hover:text-indigo-300">
                         Show {{sub (len .Runs) .VisibleRuns}} older runs
                     </summary>
-                    <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                    <div class="overflow-x-auto">
+                    <table class="min-w-full sm:table-fixed divide-y divide-gray-200 dark:divide-gray-700">
                         {{$visible := .VisibleRuns}}
                         {{range $i, $r := .Runs}}
                             {{if ge $i $visible}}
@@ -94,6 +107,7 @@
                             {{end}}
                         {{end}}
                     </table>
+                    </div>
                 </details>
                 {{end}}
             </section>
@@ -163,6 +177,59 @@
             if (back) back.focus();
             opener = openerRun = null;
         });
+
+        // Auto-load settings save on change: say so, and on a refusal
+        // (a config-file setting, a bad retention) show why and put the
+        // control back to its saved value.
+        document.body.addEventListener('htmx:afterRequest', function (e) {
+            var form = e.detail.elt;
+            if (!form || !form.matches || !form.matches('[data-autoload-form]')) return;
+            var status = form.querySelector('[data-autoload-status]');
+            if (!status) return;
+            clearTimeout(status._t);
+            if (e.detail.successful) {
+                status.className = 'text-green-700 dark:text-green-400';
+                status.textContent = 'Saved';
+                status._t = setTimeout(function () { status.textContent = ''; }, 2000);
+                form.querySelectorAll('input').forEach(function (i) { i.defaultValue = i.value; i.defaultChecked = i.checked; });
+                return;
+            }
+            var msg = 'Not saved';
+            try { msg = 'Not saved: ' + JSON.parse(e.detail.xhr.responseText).error; } catch (_) { /* keep generic */ }
+            status.className = 'text-red-700 dark:text-red-300';
+            status.textContent = msg;
+            form.reset();
+        });
+
+        // A value the browser rejects (retention 0) never reaches the
+        // server: say why instead of leaving it looking saved.
+        document.body.addEventListener('htmx:validation:halted', function (e) {
+            var form = e.detail.elt;
+            if (!form || !form.matches || !form.matches('[data-autoload-form]')) return;
+            var status = form.querySelector('[data-autoload-status]');
+            var bad = form.querySelector(':invalid');
+            clearTimeout(status._t);
+            status.className = 'text-red-700 dark:text-red-300';
+            status.textContent = 'Not saved' + (bad ? ': ' + bad.validationMessage : '');
+            form.reset();
+        });
+
+        var refreshBtn = document.querySelector('[data-refresh-now]');
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', function () {
+                var status = document.querySelector('[data-refresh-status]');
+                refreshBtn.disabled = true;
+                refreshBtn.querySelector('span').textContent = 'Listing…';
+                fetch('/api/indexes/refresh', { method: 'POST' }).then(function (r) {
+                    if (r.ok) { location.reload(); return null; }
+                    return r.json().then(function (b) { throw new Error(b.error || r.statusText); });
+                }).catch(function (err) {
+                    refreshBtn.disabled = false;
+                    refreshBtn.querySelector('span').textContent = 'Refresh';
+                    if (status) status.textContent = 'Refresh failed: ' + err.message;
+                });
+            });
+        }
 
         function restoreFromHash() {
             var hash = (location.hash || '').replace(/^#/, '');

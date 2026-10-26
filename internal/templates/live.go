@@ -84,7 +84,14 @@ func clockSince(now, t time.Time) string {
 	if t.IsZero() || !now.After(t) {
 		return ""
 	}
-	d := now.Sub(t).Truncate(time.Second)
+
+	return span(now.Sub(t))
+}
+
+// span renders d in whole units, as clockSince does: "45s", "1m5s",
+// "2h3m".
+func span(d time.Duration) string {
+	d = d.Truncate(time.Second)
 	unit := func(n time.Duration, suffix string) string { return strconv.FormatInt(int64(n), 10) + suffix }
 	switch {
 	case d < time.Minute:
@@ -103,6 +110,25 @@ func clockSince(now, t time.Time) string {
 		}
 
 		return out
+	}
+}
+
+// NavLink is one primary navigation entry. Page is the Title the page's
+// handler renders with, which marks the link current.
+type NavLink struct {
+	Href  string
+	Label string
+	Page  string
+}
+
+// navLinks lists the primary navigation, in order.
+func navLinks() []NavLink {
+	return []NavLink{
+		{Href: "/", Label: "Dashboard", Page: "Dashboard"},
+		{Href: "/inventories", Label: "Inventories", Page: "Inventories"},
+		{Href: "/browse", Label: "Browse", Page: "Browse"},
+		{Href: "/compare", Label: "Compare", Page: "Compare runs"},
+		{Href: "/help", Label: "Help", Page: "Help"},
 	}
 }
 

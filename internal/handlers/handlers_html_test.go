@@ -268,7 +268,7 @@ func TestInventoryRowPartial_PendingState(t *testing.T) {
 	// Verify pending state badge
 	badge := doc.Find("span.px-2").First()
 	classAttr, _ := badge.Attr("class")
-	if !strings.Contains(classAttr, "bg-yellow-100") {
+	if !strings.Contains(classAttr, "bg-gray-100") {
 		t.Errorf("expected pending state badge, got class=%q", classAttr)
 	}
 

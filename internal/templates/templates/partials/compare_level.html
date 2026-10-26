@@ -145,6 +145,7 @@
         {{$objLink := index .Level.SortLinks "objects"}}
         {{$sizeLink := index .Level.SortLinks "size"}}
         {{$costLink := index .Level.SortLinks "cost"}}
+        <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
             <thead class="bg-gray-50 dark:bg-gray-900/30">
                 <tr>
@@ -247,6 +248,7 @@
                 {{end}}
             </tbody>
         </table>
+        </div>
         {{else}}
         <div class="px-4 py-8 sm:px-6 text-sm text-gray-500 dark:text-gray-400 text-center">
             {{if .Level.HideUnchanged}}No changes at this prefix. Toggle "Show unchanged" to see all children.{{else}}No children under this prefix.{{end}}

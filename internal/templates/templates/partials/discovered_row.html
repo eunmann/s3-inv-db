@@ -23,7 +23,10 @@
     hx-trigger="live-refresh"
     hx-sync="this:queue last"
     hx-swap="outerHTML"{{end}}>
-<tr class="{{stateBorderClass .StateName}}">
+{{- /* A queued or running job shows as loading even before the catalog
+       flips the run's state. */}}
+{{$badge := .StateName}}{{if $busy}}{{$badge = "loading"}}{{end}}
+<tr class="{{stateBorderClass $badge}}">
     <td class="px-6 py-4 align-top">
         <div class="flex items-baseline gap-2 flex-wrap">
             <span class="text-sm font-medium text-gray-900 dark:text-gray-100 font-mono">
@@ -42,17 +45,14 @@
         <div class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-0.5"
              title="manifest = compressed total of S3 Inventory data files / number of chunk files; cache = on-disk index size; loaded in = wall-clock build time">{{.MetaLine}}</div>
         {{end}}
-        <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono truncate max-w-md mt-0.5" title="{{.ManifestKey}}">{{.ManifestKey}}</div>
+        <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono truncate max-w-[14rem] sm:max-w-none mt-0.5" title="{{.ManifestKey}}">{{.ManifestKey}}</div>
     </td>
-    <td class="px-6 py-4 align-top whitespace-nowrap w-72 max-w-[18rem]">
+    <td class="px-4 sm:px-6 py-4 align-top whitespace-nowrap sm:w-72 sm:max-w-[18rem]">
         {{- /* The state badge is a passive status indicator; the
                "View details" link below is the single, always-visible
                drawer-open affordance. Errors surface inline (full text
                in title=) so users don't have to hover or click to see
                what went wrong. */ -}}
-        {{- /* A queued or running job shows as loading even before the
-               catalog flips the run's state. */ -}}
-        {{$badge := .StateName}}{{if $busy}}{{$badge = "loading"}}{{end}}
         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass $badge}}">
             {{stateLabel $badge}}
         </span>
@@ -80,7 +80,7 @@
         {{end}}
         {{if gt .AutoLoadFailureCount 0}}
         <div class="text-xs text-red-600 dark:text-red-400 mt-1" title="{{if .Error}}{{.Error}}{{else}}Auto-load failed{{end}}">
-            Auto-load failed ({{.AutoLoadFailureCount}}× — retry after {{.AutoLoadBackoffUntil}})
+            Auto-load failed{{if gt .AutoLoadFailureCount 1}} {{.AutoLoadFailureCount}} times{{end}} · {{if .AutoLoadBackoffUntil}}next try after {{.AutoLoadBackoffUntil}} UTC{{else}}tries again at the next poll{{end}}
         </div>
         {{end}}
         <div class="mt-1.5">
@@ -95,7 +95,7 @@
             </a>
         </div>
     </td>
-    <td class="px-6 py-4 align-top whitespace-nowrap text-sm font-medium">
+    <td class="px-6 py-4 align-top whitespace-nowrap text-sm font-medium sm:w-72">
         <div class="flex items-center gap-2">
         {{if $busy}}
             {{if .LatestJob}}
