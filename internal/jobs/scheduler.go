@@ -25,6 +25,9 @@ var ErrNotFound = errors.New("job not found")
 // ErrShutdown is returned by Submit after Shutdown has been called.
 var ErrShutdown = errors.New("job manager is shut down")
 
+// shutdownAbortMsg is the error of a job Shutdown stopped.
+const shutdownAbortMsg = "interrupted: the server shut down"
+
 // ErrDuplicateInventory is returned by Submit when a live (queued or
 // running) job already exists for the inventory. The returned Job
 // carries the existing job's ID so callers can surface or join it.
@@ -56,10 +59,14 @@ type Scheduler struct {
 	logger          zerolog.Logger
 	store           jobStore
 	bus             *Bus
-	cancels         map[ID]context.CancelFunc
+	cancels         map[ID]context.CancelCauseFunc
 	liveByInventory map[inventory.ID]ID
-	sem             chan struct{}
-	maxConcurrency  int
+	// live holds the newest snapshot of every queued or running job, so
+	// readers see progress as it is published instead of the store's
+	// copy, which trails it by up to progressPersistEvery.
+	live           map[ID]Job
+	sem            chan struct{}
+	maxConcurrency int
 	// progressPersistEvery spaces out progress writes to the store; see
 	// progressPersister.
 	progressPersistEvery time.Duration
@@ -93,8 +100,9 @@ func WithMaxConcurrency(n int) Option {
 func NewScheduler(store *Store, bus *Bus, opts ...Option) *Scheduler {
 	s := &Scheduler{
 		bus:             bus,
-		cancels:         make(map[ID]context.CancelFunc),
+		cancels:         make(map[ID]context.CancelCauseFunc),
 		liveByInventory: make(map[inventory.ID]ID),
+		live:            make(map[ID]Job),
 		logger:          zerolog.Nop(),
 		store:           noopJobStore{},
 		maxConcurrency:  defaultMaxConcurrency,
@@ -143,11 +151,11 @@ func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind
 	// (b) register the cancel handle + bump the wait group atomically
 	// with the goroutine launch. That way Shutdown's wg.Wait can't miss
 	// a goroutine that was about to start.
-	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
+	ctx, cancel := context.WithCancelCause(context.WithoutCancel(parent))
 	s.mu.Lock()
 	if s.shutdown {
 		s.mu.Unlock()
-		cancel()
+		cancel(nil)
 
 		return Job{}, ErrShutdown
 	}
@@ -156,7 +164,7 @@ func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind
 	// so it always reflects exactly the jobs this process is running.
 	if existing, ok := s.liveByInventory[invID]; ok {
 		s.mu.Unlock()
-		cancel()
+		cancel(nil)
 
 		return Job{ID: existing, InventoryID: invID}, ErrDuplicateInventory
 	}
@@ -172,12 +180,13 @@ func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind
 	}
 	if err := s.store.Upsert(ctx, job); err != nil {
 		s.mu.Unlock()
-		cancel()
+		cancel(nil)
 
 		return Job{}, fmt.Errorf("queue job %s: %w", job.ID, err)
 	}
 	s.cancels[job.ID] = cancel
 	s.liveByInventory[invID] = job.ID
+	s.live[job.ID] = job
 	s.wg.Add(1)
 	s.mu.Unlock()
 
@@ -196,7 +205,7 @@ func (s *Scheduler) Cancel(id ID) error {
 	if !ok {
 		return ErrNotFound
 	}
-	cancel()
+	cancel(nil)
 
 	return nil
 }
@@ -210,7 +219,7 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	s.shutdown = true
 	for _, cancel := range s.cancels {
-		cancel()
+		cancel(ErrShutdown)
 	}
 	s.mu.Unlock()
 
@@ -227,16 +236,17 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job, work Work) {
+func (s *Scheduler) run(ctx context.Context, cancel context.CancelCauseFunc, job Job, work Work) {
 	defer s.wg.Done()
 	defer func() {
 		s.mu.Lock()
 		delete(s.cancels, job.ID)
+		delete(s.live, job.ID)
 		if s.liveByInventory[job.InventoryID] == job.ID {
 			delete(s.liveByInventory, job.InventoryID)
 		}
 		s.mu.Unlock()
-		cancel()
+		cancel(nil)
 	}()
 
 	// Wait for a concurrency slot. A job cancelled or shut down while
@@ -247,6 +257,9 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 		defer func() { <-s.sem }()
 	case <-ctx.Done():
 		job.State = StateCancelled
+		if errors.Is(context.Cause(ctx), ErrShutdown) {
+			job.State, job.Error = StateAborted, shutdownAbortMsg
+		}
 		job.FinishedAt = time.Now()
 		s.persistAndPublish(context.WithoutCancel(ctx), &job)
 
@@ -310,6 +323,7 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 		if u.MergeBytes > job.MergeBytes {
 			job.MergeBytes = u.MergeBytes
 		}
+		s.track(job)
 		s.bus.Publish(job)
 		progress.offer(job)
 	}
@@ -321,6 +335,10 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 	reportMu.Lock()
 	job.FinishedAt = time.Now()
 	switch {
+	case errors.Is(context.Cause(ctx), ErrShutdown):
+		// Not the user's choice: the server is stopping. Aborted, like
+		// a job a hard stop leaves behind, so the UI says so.
+		job.State, job.Error = StateAborted, shutdownAbortMsg
 	case errors.Is(ctx.Err(), context.Canceled):
 		job.State = StateCancelled
 		if err != nil {
@@ -448,9 +466,53 @@ func (s *Scheduler) persist(ctx context.Context, j *Job) {
 	}
 }
 
+// persistAndPublish writes a state transition, then announces it. A
+// terminal job leaves the live set only once the store holds its final
+// state, so a reader never falls back to an older stored snapshot.
 func (s *Scheduler) persistAndPublish(ctx context.Context, j *Job) {
 	s.persist(ctx, j)
+	s.track(*j)
 	s.bus.Publish(*j)
+}
+
+// track records j as its job's newest snapshot while it is live.
+func (s *Scheduler) track(j Job) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if j.State.IsTerminal() {
+		delete(s.live, j.ID)
+
+		return
+	}
+	if _, ok := s.cancels[j.ID]; ok {
+		s.live[j.ID] = j
+	}
+}
+
+// Live returns the newest snapshot of every queued or running job.
+func (s *Scheduler) Live() []Job {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Job, 0, len(s.live))
+	for id := range s.live {
+		out = append(out, s.live[id])
+	}
+
+	return out
+}
+
+// LiveForInventory returns the newest snapshot of inv's queued or
+// running job, if it has one.
+func (s *Scheduler) LiveForInventory(inv inventory.ID) (Job, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, ok := s.liveByInventory[inv]
+	if !ok {
+		return Job{}, false
+	}
+	j, ok := s.live[id]
+
+	return j, ok
 }
 
 func newJobID() (ID, error) {

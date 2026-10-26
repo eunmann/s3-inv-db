@@ -82,13 +82,15 @@ func stageLabel(stage string) string {
 		return "Preparing"
 	case "initializing":
 		return "Initializing"
-	case "downloading":
+	case stageDownloading:
 		return "Downloading & parsing"
-	case "fetching":
+	case stageMerging:
+		return "Merging spilled runs"
+	case stageFetching:
 		return "Fetching published index"
-	case "building":
+	case stageBuilding:
 		return "Building index"
-	case "finalizing":
+	case stageFinalizing:
 		return "Finalizing"
 	case "done":
 		return "Done"
@@ -104,13 +106,15 @@ func stageDescription(stage string) string {
 		return "Wiping any stale cache and reserving the build directory"
 	case "initializing":
 		return "Starting the build pipeline workers"
-	case "downloading":
+	case stageDownloading:
 		return "Streaming inventory chunks from S3 and aggregating prefixes in memory"
-	case "fetching":
+	case stageMerging:
+		return "Merging the sorted runs spilled to disk during download, in rounds, until few enough remain to stream into the index"
+	case stageFetching:
 		return "Copying a published index from S3 and verifying its checksums"
-	case "building":
-		return "Merging spilled run files and writing the on-disk index + MPHF"
-	case "finalizing":
+	case stageBuilding:
+		return "Streaming the merged prefixes into the on-disk index"
+	case stageFinalizing:
 		return "Writing the MPHF, depth index, prefix dictionary, tier stats, and manifest checksums"
 	case "done":
 		return "Index materialised on disk and opened in memory"
@@ -170,6 +174,9 @@ func firstLine(s string) string {
 
 	return s
 }
+
+// Clock exposes clockSince to other packages.
+func Clock(now, t time.Time) string { return clockSince(now, t) }
 
 // StageLabel exposes stageLabel to other packages (drawer view assembly).
 func StageLabel(stage string) string { return stageLabel(stage) }
@@ -332,6 +339,7 @@ func (r *Renderer) formatFuncs() template.FuncMap {
 			return t.Format(time.RFC3339)
 		},
 		"formatTimeRelative": func(t time.Time) string { return formatTimeRelativeAt(now(), t) },
+		"clock":              func(t time.Time) string { return clockSince(now(), t) },
 		"formatETA": func(startedAt time.Time, done, total int64) string {
 			return formatETAAt(now(), startedAt, done, total)
 		},
@@ -351,6 +359,9 @@ func stateFuncs() template.FuncMap {
 		"stageLabel":       stageLabel,
 		"stageDescription": stageDescription,
 		"elapsedSince":     elapsedSince,
+		"liveSegments":     liveSegments,
+		"rfc3339":          rfc3339,
+		"assetURL":         assetURL,
 		"stateClass": func(state string) string {
 			switch state {
 			case stateLoaded:

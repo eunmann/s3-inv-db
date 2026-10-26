@@ -3,22 +3,33 @@
        and swapped via hx-swap="outerHTML" so opening is purely a
        server round-trip — no client-side state machine.
 
-       The aside itself carries the SSE refresh wiring: hx-trigger
-       "sse:row-<composite> from:body" re-fetches this same endpoint
-       whenever the server emits a state change for the open run.
-       Because the response is the entire aside, htmx automatically
-       re-attaches the SSE listener after each swap. */ -}}
+       Refreshes swap only #run-drawer-body (hx-select), so the aside,
+       its scroll position and focus survive them, and send refresh=1
+       so the handler doesn't push another history entry. live.js
+       updates the bar, progress line and clocks in place and fires
+       live-refresh when the job changes state or stage; while it runs,
+       a 3s poll keeps the timeline's counters current. hx-disinherit
+       keeps those refresh attributes off the buttons inside: inherited,
+       hx-select would filter Close's response down to nothing and
+       remove the drawer. */ -}}
 <aside id="run-drawer" data-open
-       hx-get="/partials/drawer/{{.CompositePath}}"
-       hx-trigger="sse:row-{{.InventoryID}} from:body"
-       hx-swap="outerHTML"
        class="fixed top-16 right-0 h-[calc(100vh-4rem)] w-96 max-w-[90vw] bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 shadow-xl z-40 overflow-y-auto translate-x-0 transition-transform duration-200"
-       role="dialog" aria-label="Run details">
-<div class="px-5 py-4 space-y-4" data-inventory-id="{{.InventoryID}}">
+       role="dialog" aria-labelledby="run-drawer-title">
+<div id="run-drawer-body" class="px-5 py-4 space-y-4"
+     data-live-inv="{{.InventoryID}}"
+     data-job-id="{{if .LatestJob}}{{.LatestJob.ID}}{{end}}"
+     data-job-state="{{if .LatestJob}}{{.LatestJob.State}}{{end}}"
+     data-live-stage="{{if .LatestJob}}{{.LatestJob.Stage}}{{end}}"
+     hx-get="/partials/drawer/{{.CompositePath}}?refresh=1"
+     hx-select="#run-drawer-body"
+     hx-trigger="live-refresh{{if .Live}}, every 3s{{end}}"
+     hx-sync="this:queue last"
+     hx-disinherit="*"
+     hx-swap="outerHTML">
     <header class="space-y-1.5">
         <div class="flex items-start gap-2">
             <div class="flex-1 min-w-0">
-                <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100 break-words font-mono">{{.InventoryID}}</h2>
+                <h2 id="run-drawer-title" class="text-sm font-semibold text-gray-900 dark:text-gray-100 break-words font-mono">{{.InventoryID}}</h2>
                 <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Inventory run details</p>
             </div>
             <button type="button"
@@ -33,17 +44,16 @@
         </div>
         {{if .LatestJob}}
         <div class="flex flex-wrap items-center gap-2 text-xs">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-full font-semibold {{stateClass (printf "%s" .State)}}" title="{{stageDescription .LatestJob.Stage}}">
-                {{stateLabel (printf "%s" .State)}}
+            {{$badge := printf "%s" .State}}{{if .Live}}{{$badge = "loading"}}{{end}}
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full font-semibold {{stateClass $badge}}" title="{{stageDescription .LatestJob.Stage}}">
+                {{stateLabel $badge}}
             </span>
             {{if gt .LatestJob.AttemptCount 1}}
             <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-semibold rounded bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300" title="This is retry attempt {{.LatestJob.AttemptCount}}">
                 Attempt {{.LatestJob.AttemptCount}}
             </span>
             {{end}}
-            {{if .Live}}
-            <span class="text-gray-500 dark:text-gray-400">{{stageLabel .LatestJob.Stage}}{{if .LatestJob.Step}} · {{.LatestJob.Step}}{{end}}{{if gt .LatestJob.Progress 0}} · {{.LatestJob.Progress}}%{{end}}</span>
-            {{else}}
+            {{if not .Live}}
                 {{if .LatestTookH}}
                 <span class="text-gray-700 dark:text-gray-200 font-mono" title="Total wall-clock from queue to finish">took {{.LatestTookH}}</span>
                 {{end}}
@@ -58,53 +68,61 @@
     </header>
 
     {{if .LatestJob}}
-    {{- /* Overall progress + ETA block. Progress bar uses the current
-           stage's StageDone/StageTotal counter — units vary by stage
-           (chunks for download, run files for build) so it is opaque
-           progress, not bytes. The overall ETA is the baseline-projected
-           remaining wall clock from the prior successful build. */ -}}
-    <section aria-label="Overall progress" class="space-y-1.5">
-        <div class="flex items-end justify-between text-xs">
-            <div class="text-gray-700 dark:text-gray-200 font-medium">
-                {{if .Live}}Progress{{else}}Result{{end}}
+    {{- /* Progress: the current stage, its percent and time left (the
+           counter's units vary by stage, so it is opaque progress, not
+           bytes), a bar with one segment per stage, and the overall time
+           left projected from the last successful build. live.js keeps
+           the line, the bar and both clocks current between renders. */ -}}
+    {{$pct := progressPct .LatestJob.StageDone .LatestJob.StageTotal}}
+    {{$state := printf "%s" .LatestJob.State}}
+    <section aria-label="Progress" class="space-y-1.5">
+        {{if .Live}}
+        <div class="flex items-baseline justify-between gap-3 text-xs">
+            <div class="min-w-0 truncate text-gray-800 dark:text-gray-100 font-medium tabular-nums" data-live-text>
+                {{- if eq $state "queued"}}Queued — waiting for a free build slot
+                {{- else}}{{if .LatestJob.Stage}}{{stageLabel .LatestJob.Stage}}{{if .LatestJob.Step}} · {{.LatestJob.Step}}{{end}}{{else}}Starting…{{end}}{{if gt $pct 0}} · {{$pct}}%{{end}}
+                {{- end -}}
             </div>
+            {{- /* elapsedSince returns "" for a zero StartedAt (queued,
+                   not yet running); time.Time is always truthy in
+                   templates, so guard on the rendered value. */ -}}
+            {{$elapsed := clock .LatestJob.StartedAt}}
+            {{if $elapsed}}
+            <div class="flex-shrink-0 text-gray-500 dark:text-gray-400 tabular-nums" title="Time since the build started">
+                <span data-elapsed-since="{{rfc3339 .LatestJob.StartedAt}}">{{$elapsed}}</span> elapsed
+            </div>
+            {{end}}
+        </div>
+        <div class="h-1.5 w-full">{{template "live_bar" .LatestJob}}</div>
+        <div class="flex text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500" aria-hidden="true">
+            {{if eq .LatestJob.Stage "fetching"}}<span class="flex-1">Fetch</span>
+            {{else}}<span class="flex-1">Download</span><span class="flex-1">Build</span><span class="flex-1">Finalize</span>{{end}}
+        </div>
+        {{if .OverallETA}}
+        <p class="text-[11px] text-gray-500 dark:text-gray-400 tabular-nums" title="Projected from the most recent successful build of the same inventory configuration">
+            Overall: <span data-deadline="{{rfc3339 .OverallDeadline}}">~{{.OverallETA}} left</span>, if it runs like the last build ({{.BaselineH}})
+        </p>
+        {{else if .BaselineH}}
+        <p class="text-[11px] text-gray-500 dark:text-gray-400" title="Computed from the most recent successful build of the same inventory configuration">
+            The last build took {{.BaselineH}}{{if $elapsed}}; this one is past that{{end}}
+        </p>
+        {{end}}
+        {{else}}
+        <div class="flex items-end justify-between text-xs">
+            <div class="text-gray-700 dark:text-gray-200 font-medium">Result</div>
             <div class="text-gray-500 dark:text-gray-400">
-                {{if .Live}}
-                    {{- /* elapsedSince returns "" for a zero StartedAt
-                           (queued, not yet running); time.Time is always
-                           truthy in templates so guard on the rendered
-                           value, not the field. */ -}}
-                    {{$elapsed := elapsedSince .LatestJob.StartedAt}}
-                    {{if $elapsed}}elapsed {{$elapsed}}{{end}}
-                    {{if .OverallETA}} · ~{{.OverallETA}} left{{end}}
-                {{else if .LatestTookH}}
-                    took {{.LatestTookH}}
-                {{else if .LatestJob.StartedAt}}
-                    started {{formatTimeRelative .LatestJob.StartedAt}}
-                {{end}}
+                {{if .LatestTookH}}took {{.LatestTookH}}{{else if .LatestJob.StartedAt}}started {{formatTimeRelative .LatestJob.StartedAt}}{{end}}
             </div>
         </div>
-        {{- /* Two bar styles: determinate (a width % when the stage
-               reports a meaningful done/total) and indeterminate (a
-               sliding chip when the build is live but the current stage
-               doesn't surface a numeric total — index-build phase,
-               between-stage gaps). Avoids a stuck-looking 5% bar. */ -}}
-        {{$pct := progressPct .LatestJob.StageDone .LatestJob.StageTotal}}
-        {{$succeeded := eq (printf "%s" .LatestJob.State) "succeeded"}}
-        {{$failed := eq (printf "%s" .LatestJob.State) "failed"}}
-        {{$cancelled := eq (printf "%s" .LatestJob.State) "cancelled"}}
-        <div class="h-1.5 w-full bg-gray-100 dark:bg-gray-900/40 rounded overflow-hidden">
-            {{if and .Live (eq $pct 0)}}
-            <div class="h-full progress-indeterminate text-indigo-500 dark:text-indigo-400" aria-label="Working"></div>
-            {{else}}
-            <div class="h-full {{if $failed}}bg-red-500 dark:bg-red-400{{else if $cancelled}}bg-yellow-500 dark:bg-yellow-400{{else if $succeeded}}bg-green-500 dark:bg-green-400{{else}}bg-indigo-500 dark:bg-indigo-400{{end}} transition-all"
-                 style="width: {{if $succeeded}}100{{else if gt $pct 0}}{{$pct}}{{else}}0{{end}}%"></div>
-            {{end}}
+        <div class="h-1.5 w-full bg-gray-100 dark:bg-gray-900/40 rounded-full overflow-hidden">
+            <div class="h-full rounded-full {{if eq $state "failed"}}bg-red-500 dark:bg-red-400{{else if eq $state "succeeded"}}bg-green-500 dark:bg-green-400{{else}}bg-yellow-500 dark:bg-yellow-400{{end}}"
+                 style="width: {{if eq $state "succeeded"}}100{{else if gt $pct 0}}{{$pct}}{{else}}100{{end}}%"></div>
         </div>
         {{if .BaselineH}}
         <p class="text-[11px] text-gray-400 dark:text-gray-500" title="Computed from the most recent successful build of the same inventory configuration">
-            Baseline from prior run: {{.BaselineH}}
+            Previous successful build: {{.BaselineH}}
         </p>
+        {{end}}
         {{end}}
         {{if or (gt .LatestJob.SpillCount 0) (gt .LatestJob.MergeRounds 0)}}
         <p class="text-[11px] text-gray-400 dark:text-gray-500 font-mono" title="Spills indicate memory pressure (raise GOMEMLIMIT); merge rounds scale with run-file count and fan-in.">
@@ -135,7 +153,7 @@
                 <div class="flex-1 min-w-0">
                     <div class="flex items-baseline gap-2">
                         <span class="font-medium text-gray-800 dark:text-gray-100">{{.Label}}</span>
-                        {{if .DurationH}}<span class="text-gray-400 dark:text-gray-500 font-mono">{{.DurationH}}</span>{{end}}
+                        {{if .DurationH}}<span class="text-gray-400 dark:text-gray-500 font-mono tabular-nums"{{if and .InProgress (not .StartedAt.IsZero)}} data-elapsed-since="{{rfc3339 .StartedAt}}"{{end}}>{{.DurationH}}</span>{{end}}
                     </div>
                     {{- /* "Rows" means different things at different stages
                            — relabel and selectively hide bytes so the meaning
@@ -198,7 +216,7 @@
         {{end}}
     </section>
 
-    {{if .LatestJob.Error}}
+    {{if and .LatestJob.Error (ne $state "cancelled")}}
     {{- /* The job-level error message — distinct from per-stage Err
            shown inline above. Stays expanded because a failed build is
            the user's primary debugging surface here. */ -}}
@@ -206,6 +224,8 @@
         <div class="text-[11px] uppercase tracking-wider font-semibold text-red-700 dark:text-red-300 mb-1">Error</div>
         <pre class="text-xs text-red-900 dark:text-red-200 whitespace-pre-wrap break-words font-mono">{{.LatestJob.Error}}</pre>
     </section>
+    {{else if eq $state "cancelled"}}
+    <p class="text-xs text-gray-500 dark:text-gray-400">The build was cancelled{{if not .LatestJob.FinishedAt.IsZero}} {{formatTimeRelative .LatestJob.FinishedAt}}{{end}}. Nothing was kept from it; Retry builds the run again.</p>
     {{end}}
 
     {{if .PrevAttempts}}

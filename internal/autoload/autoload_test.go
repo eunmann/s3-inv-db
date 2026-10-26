@@ -3,6 +3,7 @@ package autoload_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -37,7 +38,8 @@ var errBoom = errors.New("boom")
 
 type fakeDiscovery struct {
 	listErr  error
-	onList   func() // runs inside List, e.g. to model a user edit mid-poll
+	catalog  *inventory.Catalog // when set, PrepareDiscovered registers here
+	onList   func()             // runs inside List, e.g. to model a user edit mid-poll
 	views    []inventory.MergedInventory
 	listCall int
 	mu       sync.Mutex
@@ -63,6 +65,20 @@ func (f *fakeDiscovery) List(_ context.Context) ([]inventory.MergedInventory, er
 	}
 
 	return f.views, nil
+}
+
+// PrepareDiscovered registers the run when the fake has a catalog to
+// register into, as the real Discovery does.
+func (f *fakeDiscovery) PrepareDiscovered(ctx context.Context, disc inventory.Inventory) error {
+	if f.catalog == nil {
+		return nil
+	}
+	err := f.catalog.Register(ctx, disc.CompositeID(), disc.Name, disc.ManifestKey)
+	if err != nil && !errors.Is(err, inventory.ErrAlreadyExists) {
+		return fmt.Errorf("register: %w", err)
+	}
+
+	return nil
 }
 
 type fakeLoader struct {
@@ -378,4 +394,45 @@ func TestAutoLoader_PollNowTicksBeforeTheInterval(t *testing.T) {
 	waitFor(1) // the poll at start
 	a.PollNow()
 	waitFor(2)
+}
+
+// TestAutoLoader_QueuesARunNeverLoadedByHand: the job row references the
+// run's catalog row, so a run the catalog has never seen must be
+// registered before its job is queued. Through a real scheduler and job
+// store, the auto-load used to fail with a foreign-key error that only
+// reached the server log.
+func TestAutoLoader_QueuesARunNeverLoadedByHand(t *testing.T) {
+	db := openTestDB(t)
+	cs := inventory.NewConfigStore(db)
+	store, err := inventory.NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := inventory.NewCatalog(store)
+	t.Cleanup(func() { _ = mgr.Close() })
+	_ = cs.Upsert(t.Context(), inventory.Config{Source: "bkt", Name: "inv", AutoLoad: true, RetentionCount: 2})
+	jobStore := jobs.NewStore(db)
+	sched := jobs.NewScheduler(jobStore, jobs.NewBus(0))
+	t.Cleanup(func() { _ = sched.Shutdown(context.Background()) })
+
+	disc := &fakeDiscovery{
+		enabled: true,
+		catalog: mgr,
+		views:   []inventory.MergedInventory{{SourceBucket: "bkt", Name: "inv", Run: "2026-01-03T00-00Z", ManifestKey: "k3", State: inventory.StateNotLoaded}},
+	}
+	ldr := &fakeLoader{}
+	a := autoload.New(autoload.Config{}, autoload.Deps{Discovery: disc, Loader: ldr.AutoLoad, Submitter: sched, ConfigStore: cs, Manager: mgr}, nil)
+	a.Tick(t.Context())
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		j, err := jobStore.LatestForInventory(t.Context(), "bkt/inv/2026-01-03T00-00Z")
+		if err == nil && j.State == jobs.StateSucceeded {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("auto-load job never succeeded: %+v, %v", j, err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }

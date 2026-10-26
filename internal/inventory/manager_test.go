@@ -293,3 +293,62 @@ func TestManagerConcurrent_LoadRemoveRace(t *testing.T) {
 		}
 	}
 }
+
+// TestCatalog_OnChangeSeesEveryPersistedChange: SetOnChange hears about
+// changes made outside a job too (pin, remove), which is how the UI's
+// live stream learns of them.
+func TestCatalog_OnChangeSeesEveryPersistedChange(t *testing.T) {
+	m := inventory.NewCatalog(nil)
+	defer m.Close()
+	var mu sync.Mutex
+	var seen []inventory.ID
+	m.SetOnChange(func(id inventory.ID) {
+		mu.Lock()
+		seen = append(seen, id)
+		mu.Unlock()
+	})
+
+	if err := m.Register(t.Context(), "src/inv/run", "n", "/p"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetPinned(t.Context(), "src/inv/run", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Remove(t.Context(), "src/inv/run"); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 3 {
+		t.Fatalf("onChange saw %v, want register, pin and remove", seen)
+	}
+	for _, id := range seen {
+		if id != "src/inv/run" {
+			t.Errorf("onChange got %q", id)
+		}
+	}
+}
+
+// TestCatalog_CancelledLoadIsNotAnError: a build the user cancels leaves
+// the run not loaded, not in error with the context's error text.
+func TestCatalog_CancelledLoadIsNotAnError(t *testing.T) {
+	m := inventory.NewCatalog(nil)
+	defer m.Close()
+	if err := m.Register(t.Context(), "test-id", "n", "/p"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	err := m.LoadWith(ctx, "test-id", func(ctx context.Context, _ inventory.Info) (string, error) {
+		cancel()
+
+		return "", fmt.Errorf("run pipeline: %w", ctx.Err())
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("LoadWith error = %v, want context.Canceled", err)
+	}
+	info, _ := m.Get("test-id")
+	if info.State != inventory.StateNotLoaded || info.Error != "" {
+		t.Errorf("after cancel: state %s, error %q; want not loaded, no error", info.State, info.Error)
+	}
+}

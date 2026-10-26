@@ -24,31 +24,9 @@
         })();
     </script>
 
-    <link rel="stylesheet" href="/static/tailwind.css">
-    <style>
-        /* Indeterminate progress bar — used by the run drawer when a
-           build is live but the current stage has no known total
-           (e.g. between stage transitions, or during the index-build
-           phase which doesn't report fractional progress). */
-        @keyframes indeterminate-slide {
-            0%   { transform: translateX(-100%); }
-            100% { transform: translateX(300%); }
-        }
-        .progress-indeterminate {
-            position: relative;
-            overflow: hidden;
-        }
-        .progress-indeterminate::after {
-            content: "";
-            position: absolute;
-            inset: 0;
-            width: 33%;
-            background: currentColor;
-            animation: indeterminate-slide 1.4s ease-in-out infinite;
-        }
-    </style>
+    <link rel="stylesheet" href="{{assetURL "tailwind.css"}}">
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
+    <script src="{{assetURL "live.js"}}" defer></script>
     <script>
         // Prefix-input sync for browse + compare: after an in-page htmx
         // swap the address bar updates but the prefix input doesn't.
@@ -118,6 +96,12 @@
          hx-get="/partials/notifications"
          hx-trigger="load, every 30s"
          hx-swap="innerHTML"></div>
+
+    {{- /* Shown by scripts/live.js while the job stream is down. */}}
+    <div data-live-status hidden role="status"
+         class="fixed bottom-4 right-4 z-50 max-w-sm rounded-md border border-yellow-300 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-900/80 px-4 py-2 text-sm text-yellow-800 dark:text-yellow-200 shadow">
+        Live updates are disconnected; reconnecting. Running builds refresh every few seconds meanwhile.
+    </div>
 
     <main id="main-content" class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         {{template "content" .}}

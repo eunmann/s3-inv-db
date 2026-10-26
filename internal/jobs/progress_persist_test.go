@@ -33,12 +33,12 @@ func (r *recordingStore) snapshot() []jobs.Job {
 
 // TestScheduler_ProgressWritesAreCoalesced: thousands of progress
 // reports become a handful of store writes; every transition is still
-// written, the terminal state last, and the bus sees every update.
+// written, the terminal state last, and the bus ends on the terminal state.
 func TestScheduler_ProgressWritesAreCoalesced(t *testing.T) {
 	store := &recordingStore{}
 	bus := jobs.NewBus(1 << 14)
-	sub, unsub := bus.Subscribe()
-	defer unsub()
+	sub := bus.Subscribe()
+	defer sub.Close()
 	sched := jobs.NewSchedulerForTest(store, bus, 20*time.Millisecond)
 	t.Cleanup(func() { _ = sched.Shutdown(context.Background()) })
 
@@ -89,21 +89,13 @@ func TestScheduler_ProgressWritesAreCoalesced(t *testing.T) {
 		t.Fatalf("%d progress writes for %d reports, want them coalesced", progressWrites, reports)
 	}
 
-	published := 0
-	for {
-		select {
-		case j := <-sub:
-			if j.ID == job.ID && j.State == jobs.StateRunning && j.Stage == "build" {
-				published++
-			}
-
-			continue
-		default:
-		}
-
-		break
+	// The bus coalesces per job: the subscriber, which never read while
+	// the job ran, holds exactly one event for it, the terminal state.
+	evs, overflowed := sub.Drain()
+	if overflowed || len(evs) != 1 || evs[0].Job == nil {
+		t.Fatalf("bus held %d events (overflowed %v), want the job's one latest", len(evs), overflowed)
 	}
-	if published != reports {
-		t.Fatalf("bus carried %d progress updates, want all %d", published, reports)
+	if got := evs[0].Job; got.ID != job.ID || got.State != jobs.StateSucceeded || got.StageDone != reports {
+		t.Fatalf("latest event %s %s done=%d, want %s succeeded done=%d", got.ID, got.State, got.StageDone, job.ID, reports)
 	}
 }

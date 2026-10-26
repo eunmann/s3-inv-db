@@ -384,7 +384,7 @@ func (h *Handlers) InventoryRowPartial(w http.ResponseWriter, r *http.Request) {
 // cognitive-complexity budget; the same shape was inlined before.
 func (h *Handlers) buildInventoryGroups(r *http.Request, views []inventory.MergedInventory) []InventoryGroup {
 	// One query for every run's latest job, not one per run.
-	latest, err := h.jobStore.LatestByInventory(r.Context())
+	latest, err := h.latestJobs(r.Context())
 	if err != nil {
 		zerolog.Ctx(r.Context()).Warn().Err(err).Msg("look up latest jobs for inventories page")
 	}

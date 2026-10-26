@@ -75,13 +75,21 @@ Mutating:
 
 ### Server-Sent Events
 
-| Route | Notes |
-|---|---|
-| `GET /api/jobs/stream` | One frame per job state change, with a `: ping` heartbeat every 15s. A frame is the job: its state, `Stage`, `Step` (the step within the stage, when it has steps, such as finalizing's), the current counter's `StageDone`/`StageTotal`, and `StepStartedAt`, when that counter started. |
+`GET /api/jobs/stream` sends `retry: 2000`, then a `job` frame for every
+queued or running job and a `synced` frame; after that:
 
-The UI's discovered-row partial listens for `sse:row-<src>/<inv>/<run>`
-events and re-fetches itself through the `/partials/discovered/…`
-route on every state change.
+| Event | Data |
+|---|---|
+| `job` | A job's JSON snapshot whenever it changes: `ID`, `InventoryID`, `State`, `Stage`, `StageLabel`, `Step` (the step within the stage, when it has steps, such as finalizing's), the current counter's `StageDone`/`StageTotal` and `StepStartedAt` (when that counter started), `Stages`, … |
+| `inventory` | `{"InventoryID": …}` when a run's catalog state changes outside a job (evicted, unloaded, pinned) |
+| `synced` | End of the connect snapshot |
+
+Frames are coalesced per job and paced to one batch per 250ms, so a
+reader sees each job's latest state (terminal states always arrive)
+rather than every progress tick. A reader too far behind is
+disconnected; it reconnects and resyncs from the snapshot. A `: ping`
+comment every 15s keeps idle connections honest. At most 8 streams per
+client IP (429 past that).
 
 ## Typed identifiers
 
@@ -95,12 +103,12 @@ on the Go side; both serialise as plain JSON strings.
 ## Async load contract
 
 `POST /partials/discovered/{src}/{id}/{run}/load` returns **202** plus
-the row in `queued` state and starts a background build. The row's
-`hx-trigger="sse:row-<src>/<id>/<run>"` listens to `/api/jobs/stream`
-and re-fetches itself on every state change; the live row shows
-spinner, stage label, progress bar, and ETA. `POST /api/jobs/{id}/cancel`
-signals the build context — the row swaps back with a **Retry**
-button.
+the row in `queued` state and starts a background build. The page's
+script (`/static/live.js`) follows `/api/jobs/stream`: it updates the
+row's stage, percent, time left and per-stage bar in place, and
+re-fetches the row only when the job changes state or the run's catalog
+state changes. `POST /api/jobs/{id}/cancel` signals the build context;
+the row then shows a **Retry** button.
 
 ## Request body limits
 

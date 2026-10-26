@@ -135,8 +135,8 @@ func TestAsyncLifecycle_RowReflectsJobState(t *testing.T) {
 		t.Fatalf("row status = %d, want 200", rw.Code)
 	}
 	body := rw.Body.String()
-	if !strings.Contains(body, "Cancel") || !strings.Contains(body, "discovered-progress-row") {
-		t.Errorf("running row missing Cancel button or row-bottom progress bar:\n%s", body)
+	if !strings.Contains(body, "Cancel") || !strings.Contains(body, "data-live-bar") {
+		t.Errorf("running row missing Cancel button or live progress bar:\n%s", body)
 	}
 
 	// Cancel and re-render — expect Retry to appear.

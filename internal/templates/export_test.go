@@ -8,6 +8,11 @@ func FormatETA(startedAt time.Time, done, total int64) string {
 	return formatETAAt(time.Now(), startedAt, done, total)
 }
 
+// LiveSegments exposes liveSegments for tests.
+func LiveSegments(state, stage, step string, done, total int64) []LiveSegment {
+	return liveSegments(state, stage, step, done, total)
+}
+
 // ProgressPct exposes progressPct for tests.
 func ProgressPct(done, total int64) int { return progressPct(done, total) }
 

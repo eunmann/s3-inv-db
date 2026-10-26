@@ -8,21 +8,29 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-// staticAsset returns an http.HandlerFunc that serves embedded
-// asset content with ETag-based revalidation. Both content and etag
-// are funcs so the handler always reads through the current package
-// vars (no init-order surprises in tests).
-func staticAsset(contentType string, content func() []byte, etag func() string) http.HandlerFunc {
+// staticAsset serves an embedded asset whose content hash is version.
+// Pages link it as ?v=<version> (templates' assetURL); that URL's content
+// never changes, so it is cached for good. Any other URL (bare, or naming
+// another build's hash) revalidates against the ETag every time, so a
+// deploy or rollback is seen at once and this build's content is never
+// cached under another version's URL.
+func staticAsset(contentType string, content []byte, version string) http.HandlerFunc {
+	etag := `W/"` + version + `"`
+
 	return func(w http.ResponseWriter, r *http.Request) {
-		if match := r.Header.Get("If-None-Match"); match == etag() {
+		if r.Header.Get("If-None-Match") == etag {
 			w.WriteHeader(http.StatusNotModified)
 
 			return
 		}
 		w.Header().Set("Content-Type", contentType)
-		w.Header().Set("ETag", etag())
-		w.Header().Set("Cache-Control", "public, max-age=86400, must-revalidate")
-		_, _ = w.Write(content())
+		w.Header().Set("ETag", etag)
+		if r.URL.Query().Get("v") == version {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		_, _ = w.Write(content)
 	}
 }
 
@@ -52,11 +60,10 @@ func (s *Server) setupRoutes() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	// Compiled Tailwind CSS embedded into the binary. ETag lets the
-	// browser revalidate cheaply; the content is immutable for a given
-	// build, so a 1-day max-age + revalidate is fine.
-	r.Get("/static/tailwind.css", staticAsset("text/css; charset=utf-8", templates.TailwindCSS, templates.TailwindCSSETag))
-	r.Get("/static/help.js", staticAsset("application/javascript; charset=utf-8", templates.HelpJS, templates.HelpJSETag))
+	// Embedded CSS and scripts; see staticAsset for caching.
+	r.Get("/static/tailwind.css", staticAsset("text/css; charset=utf-8", templates.TailwindCSS(), templates.AssetVersion("tailwind.css")))
+	r.Get("/static/help.js", staticAsset("application/javascript; charset=utf-8", templates.HelpJS(), templates.AssetVersion("help.js")))
+	r.Get("/static/live.js", staticAsset("application/javascript; charset=utf-8", templates.LiveJS(), templates.AssetVersion("live.js")))
 
 	// HTML pages
 	r.Get("/", s.handlers.Dashboard)

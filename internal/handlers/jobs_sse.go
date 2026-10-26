@@ -3,11 +3,13 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/jobs"
+	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
 )
@@ -38,6 +40,7 @@ type jobEvent struct {
 	Kind          string       `json:"Kind"`
 	State         string       `json:"State"`
 	Stage         string       `json:"Stage"`
+	StageLabel    string       `json:"StageLabel,omitempty"`
 	Step          string       `json:"Step,omitempty"`
 	StepStartedAt string       `json:"StepStartedAt,omitempty"`
 	StartedAt     string       `json:"StartedAt,omitempty"`
@@ -96,6 +99,7 @@ func jobToEvent(j jobs.Job) jobEvent {
 		Kind:         string(j.Kind),
 		State:        string(j.State),
 		Stage:        j.Stage,
+		StageLabel:   templates.StageLabel(j.Stage),
 		Step:         j.Step,
 		Progress:     j.Progress,
 		StageTotal:   j.StageTotal,
@@ -130,11 +134,26 @@ func jobToEvent(j jobs.Job) jobEvent {
 	return ev
 }
 
-// JobsStream serves text/event-stream and emits one event per job state
-// change. Browsers can subscribe with the htmx-sse extension; event
-// name = job ID so a single subscription can drive any number of row
-// swaps. Data is a JSON snapshot — clients are free to render however
-// they like.
+// sseRetryMs is the reconnect delay the stream asks browsers to use
+// after the connection drops (server restart, overflow, network blip).
+const sseRetryMs = 2000
+
+// inventoryEvent is the payload of an "inventory" frame: the catalog
+// state of InventoryID changed outside a job (loaded from cache,
+// evicted, unloaded, pinned), so clients should re-read it.
+type inventoryEvent struct {
+	InventoryID string `json:"InventoryID"`
+}
+
+// JobsStream serves text/event-stream. On connect it sends a "job"
+// frame for every queued or running job, then a "synced" frame; after
+// that a "job" frame (the job's JSON snapshot) whenever a job changes
+// and an "inventory" frame whenever an inventory's catalog state
+// changes outside a job. Frames are coalesced per job and paced to at
+// most one batch per ssePace, so a busy build costs a few frames a
+// second, never one per progress tick, and a job's terminal state is
+// always delivered. A reader that falls too far behind is disconnected:
+// the browser reconnects and resynchronises from the connect snapshot.
 func (h *Handlers) JobsStream(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -143,8 +162,8 @@ func (h *Handlers) JobsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Per-IP cap: each subscriber holds a buffered channel inside the
-	// jobs.Bus; unbounded subscriptions per client are an OOM vector.
+	// Per-IP cap: each subscriber holds a queue inside the jobs.Bus;
+	// unbounded subscriptions per client are an OOM vector.
 	ip := clientIPFromRequest(r)
 	count := h.acquireSSESlot(ip)
 	defer h.releaseSSESlot(ip)
@@ -161,13 +180,25 @@ func (h *Handlers) JobsStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
-	events, cancel := h.jobBus.Subscribe()
-	defer cancel()
+	// Subscribe before taking the snapshot so no change falls between
+	// the two; a change seen twice is harmless.
+	sub := h.jobBus.Subscribe()
+	defer sub.Close()
 
 	logger := zerolog.Ctx(r.Context())
 	ctx := r.Context()
-	// Emit an initial comment to nail the connection open.
-	if _, err := fmt.Fprintf(w, ": connected\n\n"); err != nil {
+	if _, err := fmt.Fprintf(w, "retry: %d\n: connected\n\n", sseRetryMs); err != nil {
+		return
+	}
+	live := h.jobMgr.Live()
+	for i := range live {
+		if err := writeJobFrame(w, live[i]); err != nil {
+			logger.Debug().Err(err).Msg("write job snapshot")
+
+			return
+		}
+	}
+	if _, err := fmt.Fprint(w, "event: synced\ndata: {}\n\n"); err != nil {
 		return
 	}
 	flusher.Flush()
@@ -187,26 +218,59 @@ func (h *Handlers) JobsStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
-		case j, ok := <-events:
-			if !ok {
+		case <-sub.Ready():
+			evs, overflowed := sub.Drain()
+			if overflowed {
+				// Too far behind to know what was missed: end the
+				// stream; the browser reconnects after sseRetryMs and
+				// starts from a fresh snapshot.
 				return
 			}
-			payload, err := json.Marshal(jobToEvent(j))
-			if err != nil {
-				logger.Error().Err(err).Msg("marshal job event")
+			if err := writeEvents(w, evs); err != nil {
+				logger.Debug().Err(err).Msg("write job events")
 
-				continue
-			}
-			// Two frames per change so different listeners can subscribe
-			// by job ID (debug consoles) or by inventory ID (the row
-			// elements, which don't know which job is theirs).
-			if _, err := fmt.Fprintf(w, "event: job-%s\ndata: %s\n\n", j.ID, payload); err != nil {
-				return
-			}
-			if _, err := fmt.Fprintf(w, "event: row-%s\ndata: %s\n\n", j.InventoryID, payload); err != nil {
 				return
 			}
 			flusher.Flush()
+			// Pace: changes during the pause coalesce into the next batch.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(ssePace):
+			}
 		}
 	}
+}
+
+func writeEvents(w io.Writer, evs []jobs.Event) error {
+	for _, ev := range evs {
+		if ev.Job != nil {
+			if err := writeJobFrame(w, *ev.Job); err != nil {
+				return err
+			}
+
+			continue
+		}
+		payload, err := json.Marshal(inventoryEvent{InventoryID: string(ev.Inventory)})
+		if err != nil {
+			return fmt.Errorf("marshal inventory event: %w", err)
+		}
+		if _, err := fmt.Fprintf(w, "event: inventory\ndata: %s\n\n", payload); err != nil {
+			return fmt.Errorf("write inventory event: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func writeJobFrame(w io.Writer, j jobs.Job) error {
+	payload, err := json.Marshal(jobToEvent(j))
+	if err != nil {
+		return fmt.Errorf("marshal job event: %w", err)
+	}
+	if _, err := fmt.Fprintf(w, "event: job\ndata: %s\n\n", payload); err != nil {
+		return fmt.Errorf("write job event: %w", err)
+	}
+
+	return nil
 }
