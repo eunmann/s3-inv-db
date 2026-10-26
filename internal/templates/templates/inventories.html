@@ -194,17 +194,28 @@
 
             // The open drawer re-renders its body while a build runs: keep
             // each section the user opened or closed the way they left it.
+            // Sections they never touched take the server's default, so
+            // Build details folds once the build ends.
+            document.body.addEventListener('click', function (e) {
+                var summary = e.target.closest && e.target.closest('#run-drawer-body details[id] > summary');
+                if (!summary) return;
+                var body = document.getElementById('run-drawer-body');
+                (body._touched = body._touched || {})[summary.parentElement.id] = true;
+            });
             document.body.addEventListener('htmx:beforeSwap', function (e) {
                 var body = e.detail.target;
-                if (!body || body.id !== 'run-drawer-body') return;
+                if (!body || body.id !== 'run-drawer-body' || !body._touched) return;
                 var open = {};
-                body.querySelectorAll('details[id]').forEach(function (d) { open[d.id] = d.open; });
+                body.querySelectorAll('details[id]').forEach(function (d) {
+                    if (body._touched[d.id]) open[d.id] = d.open;
+                });
                 body._detailsOpen = open;
             });
             document.body.addEventListener('htmx:afterSwap', function (e) {
                 var body = document.getElementById('run-drawer-body');
                 var old = e.detail.target;
                 if (!body || !old || old.id !== 'run-drawer-body' || !old._detailsOpen) return;
+                body._touched = old._touched;
                 body.querySelectorAll('details[id]').forEach(function (d) {
                     if (Object.prototype.hasOwnProperty.call(old._detailsOpen, d.id)) d.open = old._detailsOpen[d.id];
                 });
