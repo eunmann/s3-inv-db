@@ -59,14 +59,16 @@ powers of 1000, KiB…TiB of 1024). Durations use Go's form: `"90s"`,
 
 ## `inventories[]`
 
-Per-configuration settings, written to the state database at every
-startup. Pins are set in the UI, not here.
+Per-configuration settings. A field an entry sets is managed by the
+file: applied at every startup, shown in the UI as "set in the config
+file" and refused by the API (409). A field it leaves out stays
+editable in the UI. Pins are always set in the UI.
 
-| Field | Default | What it does |
+| Field | If omitted | What it does |
 |---|---|---|
 | `source` | required | Source bucket (the folder under `s3_source`). |
 | `name` | required | Inventory configuration ID. |
-| `auto_load` | `false` | Keep this configuration's newest runs built. Written on every start, so it overrides a UI toggle (#149). |
+| `auto_load` | stored value (off for a new configuration) | Keep this configuration's newest runs built. |
 | `retention_count` | stored value, or `auto_load_retention_default` | How many newest runs to keep loaded. |
 
 ## Environment variables

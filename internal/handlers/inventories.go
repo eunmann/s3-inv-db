@@ -334,6 +334,10 @@ type InventoryGroup struct {
 	VisibleRuns      int
 	Retention        uint32
 	AutoLoad         bool
+	// AutoLoadManaged and RetentionManaged mark settings the config file
+	// sets: shown, but not editable here.
+	AutoLoadManaged  bool
+	RetentionManaged bool
 }
 
 // DefaultVisibleRuns caps how many runs in a configuration render in
@@ -448,6 +452,8 @@ func (h *Handlers) annotateGroupsFromConfig(ctx context.Context, groups []Invent
 	}
 	for i := range groups {
 		g := &groups[i]
+		m := h.managed[g.SourceBucket+"/"+g.Name]
+		g.AutoLoadManaged, g.RetentionManaged = m.AutoLoad, m.Retention
 		cfg, ok := byKey[configKey{g.SourceBucket, g.Name}]
 		if !ok {
 			continue
