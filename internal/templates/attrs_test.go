@@ -77,20 +77,6 @@ func TestHxValsJSONMatchesGeneralEncoder(t *testing.T) {
 	}
 }
 
-func TestBrowseURLMatchesGeneralEncoder(t *testing.T) {
-	for i, pairs := range parityCases() {
-		t.Run(strconv.Itoa(i), func(t *testing.T) {
-			got, err := templates.BrowseURL(pairs...)
-			if err != nil {
-				t.Fatalf("browseURL(%q): %v", pairs, err)
-			}
-			if want := templates.BrowseURLGeneral(pairs...); got != want {
-				t.Errorf("browseURL(%q)\n got %q\nwant %q", pairs, got, want)
-			}
-		})
-	}
-}
-
 func TestRowLinksMatchGeneralEncoders(t *testing.T) {
 	for _, a := range adversarialValues {
 		for _, b := range adversarialValues {
@@ -157,13 +143,6 @@ func FuzzAttrEncodersMatchGeneral(f *testing.F) {
 			}
 			if got != want {
 				t.Fatalf("hxValsJSON(%q)\n got %q\nwant %q", pairs, got, want)
-			}
-			gotURL, err := templates.BrowseURL(pairs...)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if wantURL := templates.BrowseURLGeneral(pairs...); gotURL != wantURL {
-				t.Fatalf("browseURL(%q)\n got %q\nwant %q", pairs, gotURL, wantURL)
 			}
 		}
 	})

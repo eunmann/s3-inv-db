@@ -247,30 +247,6 @@ func TestHxValsJSON_OddPairs(t *testing.T) {
 	}
 }
 
-func TestBrowseURL_EncodesSpecialChars(t *testing.T) {
-	got, err := templates.BrowseURL("inventory_id", "inv-1", "prefix", "a&b c#d/")
-	if err != nil {
-		t.Fatalf("browseURL: %v", err)
-	}
-	// url.Values.Encode percent-encodes `&`, ` `, `#`, `/`. Verify each.
-	if !strings.Contains(got, "prefix=a%26b+c%23d%2F") {
-		t.Errorf("URL %q missing percent-encoded prefix", got)
-	}
-}
-
-func TestBrowseURL_SkipsEmpty(t *testing.T) {
-	got, err := templates.BrowseURL("inventory_id", "inv-1", "prefix", "", "sort", "")
-	if err != nil {
-		t.Fatalf("browseURL: %v", err)
-	}
-	if strings.Contains(got, "prefix=") || strings.Contains(got, "sort=") {
-		t.Errorf("URL %q should not include empty params", got)
-	}
-	if !strings.Contains(got, "inventory_id=inv-1") {
-		t.Errorf("URL %q missing inventory_id", got)
-	}
-}
-
 func TestHxValsJSON_HTMLSpecialCharsInValueAreSafe(t *testing.T) {
 	// json.Marshal in Go escapes <, >, & to JSON unicode escapes
 	// (<, >, &) by default. So no literal `&`, `<`, or

@@ -10,7 +10,6 @@ import (
 	"io"
 	"io/fs"
 	"maps"
-	"net/url"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -244,11 +243,9 @@ var embeddedTemplates embed.FS
 
 // Sentinel errors for template helper argument validation.
 var (
-	errHxValsOddPairs    = errors.New("hxVals: expected key,value pairs")
-	errHxValsKeyType     = errors.New("hxVals: key is not a string")
-	errBrowseURLOddPairs = errors.New("browseURL: expected key,value pairs")
-	errBrowseURLKeyType  = errors.New("browseURL: key is not a string")
-	errPageNotFound      = errors.New("page template not found")
+	errHxValsOddPairs = errors.New("hxVals: expected key,value pairs")
+	errHxValsKeyType  = errors.New("hxVals: key is not a string")
+	errPageNotFound   = errors.New("page template not found")
 )
 
 // Renderer manages HTML template rendering.
@@ -444,7 +441,6 @@ func arithFuncs() template.FuncMap {
 func htmxFuncs() template.FuncMap {
 	return template.FuncMap{
 		"hxValsJSON": hxValsJSON,
-		"browseURL":  browseURL,
 	}
 }
 
@@ -509,45 +505,6 @@ func marshalHxVals(pairs []any) (string, error) {
 	}
 
 	return string(b), nil
-}
-
-// Builds a percent-encoded /browse URL from key/value pairs. Required
-// because html/template only auto-encodes URL values inside a fixed set
-// of attributes (href, src, action, …) and `hx-push-url` is not one of
-// them, so a raw `{{.Prefix}}` interpolation lets `&`, `?`, `#`, or
-// spaces in a prefix break the URL.
-func browseURL(pairs ...any) (string, error) {
-	if len(pairs)%2 != 0 {
-		return "", errBrowseURLOddPairs
-	}
-	for i := 0; i < len(pairs); i += 2 {
-		if _, ok := pairs[i].(string); !ok {
-			return "", fmt.Errorf("%w (position %d)", errBrowseURLKeyType, i)
-		}
-	}
-	if s, ok := fastBrowseURL(pairs); ok {
-		return s, nil
-	}
-
-	return encodeBrowseURL(pairs), nil
-}
-
-// encodeBrowseURL is browseURL's general encoder; it defines the output
-// fastBrowseURL reproduces. Every key must be a string.
-func encodeBrowseURL(pairs []any) string {
-	u := url.URL{Path: "/browse"}
-	q := u.Query()
-	for i := 0; i < len(pairs); i += 2 {
-		key := pairs[i].(string) //nolint:forcetypeassert // checked above
-		v := fmt.Sprint(pairs[i+1])
-		if v == "" {
-			continue
-		}
-		q.Set(key, v)
-	}
-	u.RawQuery = q.Encode()
-
-	return u.String()
 }
 
 func (r *Renderer) loadTemplates() error {

@@ -3,7 +3,6 @@ package templates
 import (
 	"encoding"
 	"encoding/json"
-	"fmt"
 	"net/url"
 	"reflect"
 	"strconv"
@@ -11,14 +10,14 @@ import (
 )
 
 // A map, reflective json.Marshal and url.Values per call cost more than
-// the index reads behind a table row, so hxValsJSON, browseURL and the
-// per-row links build their output directly for the value types the
-// templates and handlers pass. Any other shape takes the general
-// encoders, which define the output: the fast paths are tested
-// byte-for-byte against them.
+// the index reads behind a table row, so hxValsJSON and the per-row
+// links build their output directly for the value types the templates
+// and handlers pass. Any other shape takes the general encoder, which
+// defines the output: the fast paths are tested byte-for-byte against
+// it and url.Values.
 
-// maxFastPairs bounds the key/value pairs the fast paths sort on the
-// stack; the templates pass at most seven.
+// maxFastPairs bounds the key/value pairs fastHxValsJSON sorts on the
+// stack; more take the general encoder.
 const maxFastPairs = 8
 
 const hexDigits = "0123456789abcdef"
@@ -152,45 +151,6 @@ func fastHxValsJSON(pairs []any) (string, bool) {
 		}
 	}
 	dst = append(dst, '}')
-
-	return string(dst), true
-}
-
-// queryValue formats v as fmt.Sprint does.
-func queryValue(v any) string {
-	switch v := v.(type) {
-	case string:
-		return v
-	case int:
-		return strconv.Itoa(v)
-	default:
-		return fmt.Sprint(v)
-	}
-}
-
-// fastBrowseURL builds the URL browseURL's url.Values path builds:
-// non-empty values, keys sorted, query-escaped. It reports false when
-// it cannot.
-func fastBrowseURL(pairs []any) (string, bool) {
-	var order [maxFastPairs]int
-	idx, ok := sortedPairKeys(&order, pairs)
-	if !ok {
-		return "", false
-	}
-	var buf [256]byte
-	dst := append(buf[:0], "/browse"...)
-	sep := byte('?')
-	for _, k := range idx {
-		v := queryValue(pairs[k+1])
-		if v == "" {
-			continue
-		}
-		dst = append(dst, sep)
-		sep = '&'
-		dst = append(dst, url.QueryEscape(pairs[k].(string))...) //nolint:forcetypeassert // callers check every key first
-		dst = append(dst, '=')
-		dst = append(dst, url.QueryEscape(v)...)
-	}
 
 	return string(dst), true
 }
