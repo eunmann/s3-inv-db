@@ -39,9 +39,6 @@
             {{if .IsLatest}}
             <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-semibold rounded bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300">Latest</span>
             {{end}}
-            {{if .Pinned}}
-            <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-semibold rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300" title="Pinned: never unloaded automatically to free disk space">Pinned</span>
-            {{end}}
             {{if and .UserUnloaded (not .State.IsLoaded)}}
             <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-semibold rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300" title="You unloaded this run; auto-load skips it until a newer run appears">Unloaded by you</span>
             {{end}}

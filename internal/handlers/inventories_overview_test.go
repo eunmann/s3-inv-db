@@ -233,3 +233,26 @@ func TestDiscoveredRowPartial_KnowsItsPlace(t *testing.T) {
 		t.Errorf("compare link %q doesn't diff against the previous loaded run", got)
 	}
 }
+
+// TestPinnedRun_RowShowsItByItsAction: a pinned run's row says so only
+// through its Unpin action, since most loaded runs are pinned; the
+// drawer header keeps the Pinned tag.
+func TestPinnedRun_RowShowsItByItsAction(t *testing.T) {
+	h := newOverviewHandlers(t)
+	id := runID(overviewRuns[1])
+	if err := h.ManagerForTest().SetPinned(t.Context(), id, true); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.InventoriesPage(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/inventories", http.NoBody))
+	row := parseHTML(t, w.Body.String()).Find(rowSel(overviewRuns[1]))
+	if strings.Contains(row.Find("td").First().Text(), "Pinned") {
+		t.Error("row still carries a Pinned tag")
+	}
+	if got := strings.TrimSpace(row.Find("#run-" + handlers.DomIDForTest(string(id)) + "-pin").Text()); got != "Unpin" {
+		t.Errorf("pin action says %q, want Unpin", got)
+	}
+	if !strings.Contains(openDrawer(t, h, overviewRuns[1]).doc.Find("header").Text(), "Pinned") {
+		t.Error("drawer header lost its Pinned tag")
+	}
+}
