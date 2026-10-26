@@ -77,3 +77,23 @@ func TestHelpPage_StateChipsUseHelpers(t *testing.T) {
 		}
 	}
 }
+
+// TestHelpPage_NoDiscoveryNamesTheSource pins the empty-Inventories entry
+// on a server without a discovery source: there is no Refresh button to
+// point at, so the help names the missing source flags instead.
+func TestHelpPage_NoDiscoveryNamesTheSource(t *testing.T) {
+	f := newTestFixture(t)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/help", http.NoBody)
+	w := httptest.NewRecorder()
+	f.h.HelpPage(w, req)
+	body := w.Body.String()
+
+	if strings.Contains(body, "Click <strong>Refresh</strong>") {
+		t.Error("help points at the Refresh button, which a server without discovery doesn't render")
+	}
+	for _, want := range []string{"--s3-source", "--index-source"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("help without discovery missing %q", want)
+		}
+	}
+}
