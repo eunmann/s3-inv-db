@@ -39,10 +39,16 @@ type BrowseInventoryGroup struct {
 }
 
 // BrowseInventoryOption is one loaded run inside a BrowseInventoryGroup.
-// Label is the self-identifying "<src>/<inv> · <run>" string.
+// Label is the self-identifying "<src>/<inv> · <run>" string the picker
+// shows; Run is the run alone and Href opens it, for the list of runs.
+// SizeH and ObjectsH, the run's totals, are set only for that list.
 type BrowseInventoryOption struct {
-	ID    inventory.ID
-	Label string
+	ID       inventory.ID
+	Label    string
+	Run      string
+	Href     string
+	SizeH    string
+	ObjectsH string
 }
 
 // BrowseLevel is the data the browse_level.html partial renders. Lives
@@ -108,9 +114,10 @@ func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request, opts browseViewOptions) {
+	groups := groupLoadedInventories(h.manager.List())
 	data := map[string]any{
 		"Title":           "Browse",
-		"InventoryGroups": groupLoadedInventories(h.manager.List()),
+		"InventoryGroups": groups,
 		"InventoryID":     opts.inventoryID,
 		"Prefix":          opts.prefix,
 	}
@@ -123,14 +130,18 @@ func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request, opts
 
 			return nil
 		})
-		// On ErrNotLoaded / ErrNotFound, fall through to the empty
-		// placeholder — the user can pick a different inventory.
 		if err == nil {
 			level.QueryDurationH = humanfmt.Duration(time.Since(start))
 			finishBrowseHTML(&level, opts)
 			data["InitialLevel"] = level
+			h.renderHTML(w, r, "browse.html", "failed to render browse page", data)
+
+			return
 		}
+		// Not loaded or gone: say so above the list of runs to pick from.
+		data["Unavailable"] = true
 	}
+	h.addRunTotals(zerolog.Ctx(r.Context()), groups)
 	h.renderHTML(w, r, "browse.html", "failed to render browse page", data)
 }
 
@@ -504,14 +515,36 @@ func groupLoadedInventories(all []inventory.Info) []BrowseInventoryGroup {
 }
 
 func splitForGroup(info inventory.Info) (string, BrowseInventoryOption) {
+	href := templates.BrowseLink(string(info.ID), "")
 	if p := info.ID.Split(); p.OK {
 		config := p.Source + "/" + p.Inventory
+		run := humanfmt.RunTimestamp(p.Run)
 
-		return config, BrowseInventoryOption{
-			ID:    info.ID,
-			Label: config + " · " + humanfmt.RunTimestamp(p.Run),
-		}
+		return config, BrowseInventoryOption{ID: info.ID, Label: config + " · " + run, Run: run, Href: href}
 	}
 
-	return "Other", BrowseInventoryOption{ID: info.ID, Label: info.Name}
+	return "Other", BrowseInventoryOption{ID: info.ID, Label: info.Name, Run: info.Name, Href: href}
+}
+
+// addRunTotals sets each listed run's size and object count from its
+// root. Peek, not WithIndex: listing the runs isn't a use of each, and
+// touching every one would reorder the eviction LRU.
+func (h *Handlers) addRunTotals(logger *zerolog.Logger, groups []BrowseInventoryGroup) {
+	for gi := range groups {
+		for oi := range groups[gi].Options {
+			o := &groups[gi].Options[oi]
+			err := h.manager.Peek(o.ID, func(idx *indexread.Index) error {
+				if pos, ok := idx.Lookup(""); ok {
+					st := idx.Stats(pos)
+					o.SizeH = humanfmt.BytesUint64(st.TotalBytes)
+					o.ObjectsH = humanfmt.CountUint64(st.ObjectCount)
+				}
+
+				return nil
+			})
+			if err != nil {
+				logger.Debug().Err(err).Stringer("id", o.ID).Msg("browse run totals")
+			}
+		}
+	}
 }
