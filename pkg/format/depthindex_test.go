@@ -1,152 +1,80 @@
 package format_test
 
 import (
-	"reflect"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
 )
 
-func TestDepthIndexSubtreeQuery(t *testing.T) {
+func writeDepths(t *testing.T, depths ...uint32) (*format.DepthIndex, error) {
+	t.Helper()
 	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder(t.TempDir())
-
-	// Build a tree:
-	// 0: root (subtree 0-5)
-	// 1: a/   (subtree 1-3)
-	// 2: a/x/ (subtree 2)
-	// 3: a/y/ (subtree 3)
-	// 4: b/   (subtree 4-5)
-	// 5: b/z/ (subtree 5)
-	b.Add(0, 0, 1, 1)
-	b.Add(1, 1, 1, 1)
-	b.Add(2, 2, 1, 1)
-	b.Add(3, 2, 1, 1)
-	b.Add(4, 1, 1, 1)
-	b.Add(5, 2, 1, 1)
-
-	if err := b.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
+	w, err := format.NewDepthIndexWriter(dir)
+	if err != nil {
+		t.Fatal(err)
 	}
+	for _, d := range depths {
+		if err := w.Add(d, 1, 1); err != nil {
+			_ = w.Abort()
 
+			return nil, fmt.Errorf("add depth %d: %w", d, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 	idx, err := format.OpenDepthIndex(dir)
 	if err != nil {
-		t.Fatalf("format.OpenDepthIndex failed: %v", err)
+		t.Fatal(err)
 	}
-	defer idx.Close()
+	t.Cleanup(func() { idx.Close() })
 
-	// Query depth 2 positions in subtree of a/ [1, 3]
-	posInA, err := idx.PositionsInSubtree(2, 1, 3)
-	if err != nil {
-		t.Fatalf("PositionsInSubtree failed: %v", err)
-	}
-	if !reflect.DeepEqual(posInA, []uint64{2, 3}) {
-		t.Errorf("depth 2 in a/ subtree = %v, want [2, 3]", posInA)
-	}
+	return idx, nil
+}
 
-	// Query depth 2 positions in subtree of b/ [4, 5]
-	posInB, err := idx.PositionsInSubtree(2, 4, 5)
+// TestDepthIndexLevels: rows in level order give each depth's first
+// row, the depth of every row and the row count.
+func TestDepthIndexLevels(t *testing.T) {
+	// root; a/, b/; a/x/, a/y/, b/z/
+	idx, err := writeDepths(t, 0, 1, 1, 2, 2, 2)
 	if err != nil {
-		t.Fatalf("PositionsInSubtree failed: %v", err)
+		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(posInB, []uint64{5}) {
-		t.Errorf("depth 2 in b/ subtree = %v, want [5]", posInB)
+	if idx.Count() != 6 || idx.MaxDepth() != 2 {
+		t.Fatalf("count %d max depth %d, want 6 and 2", idx.Count(), idx.MaxDepth())
 	}
-
-	// Query depth 1 in root subtree
-	posDepth1, err := idx.PositionsInSubtree(1, 0, 5)
-	if err != nil {
-		t.Fatalf("PositionsInSubtree failed: %v", err)
+	for d, want := range []uint64{0, 1, 3, 6} {
+		if got := idx.Start(uint32(d)); got != want {
+			t.Errorf("Start(%d) = %d, want %d", d, got, want)
+		}
 	}
-	if !reflect.DeepEqual(posDepth1, []uint64{1, 4}) {
-		t.Errorf("depth 1 in root subtree = %v, want [1, 4]", posDepth1)
+	for row, want := range []uint32{0, 1, 1, 2, 2, 2} {
+		if got := idx.DepthOf(uint64(row)); got != want {
+			t.Errorf("DepthOf(%d) = %d, want %d", row, got, want)
+		}
 	}
 }
 
-func TestDepthIndexLarge(t *testing.T) {
-	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder(t.TempDir())
-
-	// Create 10 levels with varying positions
-	for d := range uint32(10) {
-		for p := range uint64(100) {
-			pos := uint64(d)*100 + p
-			b.Add(pos, d, 1, 1)
-		}
-	}
-
-	if err := b.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	idx, err := format.OpenDepthIndex(dir)
+func TestDepthIndexEmpty(t *testing.T) {
+	idx, err := writeDepths(t)
 	if err != nil {
-		t.Fatalf("format.OpenDepthIndex failed: %v", err)
+		t.Fatal(err)
 	}
-	defer idx.Close()
-
-	if idx.MaxDepth() != 9 {
-		t.Errorf("MaxDepth = %d, want 9", idx.MaxDepth())
-	}
-
-	// Test subtree query
-	// Positions at depth 5 in range [500, 550] should be 500-550 (51 positions)
-	positions, err := idx.PositionsInSubtree(5, 500, 550)
-	if err != nil {
-		t.Fatalf("PositionsInSubtree failed: %v", err)
-	}
-	if len(positions) != 51 {
-		t.Errorf("got %d positions, want 51", len(positions))
-	}
-	if positions[0] != 500 {
-		t.Errorf("first position = %d, want 500", positions[0])
-	}
-	if positions[50] != 550 {
-		t.Errorf("last position = %d, want 550", positions[50])
+	if idx.Count() != 0 {
+		t.Errorf("Count = %d, want 0", idx.Count())
 	}
 }
 
-func TestDepthIndexBinarySearch(t *testing.T) {
-	dir := t.TempDir()
-	b := format.NewDepthIndexBuilder(t.TempDir())
-
-	// Add sparse positions at depth 1
-	// Positions: 10, 20, 30, 40, 50
-	for _, p := range []uint64{10, 20, 30, 40, 50} {
-		b.Add(p, 1, 1, 1)
-	}
-
-	if err := b.Build(dir); err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	idx, err := format.OpenDepthIndex(dir)
-	if err != nil {
-		t.Fatalf("format.OpenDepthIndex failed: %v", err)
-	}
-	defer idx.Close()
-
-	tests := []struct {
-		expected []uint64
-		start    uint64
-		end      uint64
-	}{
-		{expected: []uint64{10, 20, 30, 40, 50}, start: 0, end: 100},
-		{expected: []uint64{20, 30}, start: 15, end: 35},
-		{expected: []uint64{10}, start: 10, end: 10},
-		{expected: []uint64{30}, start: 30, end: 30},
-		{expected: nil, start: 0, end: 9},
-		{expected: nil, start: 51, end: 100},
-		{expected: nil, start: 25, end: 25},
-	}
-
-	for _, tc := range tests {
-		positions, err := idx.PositionsInSubtree(1, tc.start, tc.end)
-		if err != nil {
-			t.Fatalf("PositionsInSubtree(%d, %d) failed: %v", tc.start, tc.end, err)
-		}
-		if !reflect.DeepEqual(positions, tc.expected) {
-			t.Errorf("PositionsInSubtree(%d, %d) = %v, want %v", tc.start, tc.end, positions, tc.expected)
+func TestDepthIndexWriterRejectsOutOfOrderDepths(t *testing.T) {
+	for name, depths := range map[string][]uint32{
+		"first not root": {1},
+		"skips a depth":  {0, 2},
+		"goes back up":   {0, 1, 0},
+	} {
+		if _, err := writeDepths(t, depths...); !errors.Is(err, format.ErrDepthOrder) {
+			t.Errorf("%s: err = %v, want ErrDepthOrder", name, err)
 		}
 	}
 }

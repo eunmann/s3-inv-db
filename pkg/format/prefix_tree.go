@@ -12,12 +12,12 @@ import (
 	"unsafe"
 )
 
-// PrefixTreeFile maps each preorder position to its prefix string.
+// PrefixTreeFile maps each position to its prefix string.
 const PrefixTreeFile = "prefix_tree.bin"
 
-// The prefix tree stores, for each prefix in preorder, the dictionary
-// ID of its last segment and the distance back to its parent's
-// position. A prefix is its parent, then that segment, then a slash
+// The prefix tree stores, for each prefix in position (level) order,
+// the dictionary ID of its last segment and the distance back to its
+// parent's position, a row of the level above. A prefix is its parent, then that segment, then a slash
 // ("data/2024/" is "data/" + "2024" + "/"), so the tree rebuilds a
 // prefix with one row per level and names a child with one row. The
 // root "" is position 0 and stores nothing (its row is zero).

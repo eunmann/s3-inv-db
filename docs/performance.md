@@ -15,10 +15,10 @@ prefixes with consistent sub-microsecond warm-cache lookups.
 | `Lookup` | O(1) | sub-µs |
 | `StatsForPrefix` | O(1) | sub-µs (~80 ns warm, 2.4M prefixes) |
 | `TierBreakdown` | O(tiers) | sub-µs (~70 ns) |
-| `DescendantsAtDepth` | O(log n + k) | µs–tens of µs (depends on k) |
-| Browse page, by name | O(log n + page) | tens of µs, whatever the child count |
+| `DescendantsAtDepth` | O(depth + k) | µs–tens of µs (depends on k) |
+| Browse page, by name | O(1 + page) | tens of µs, whatever the child count |
 | Browse page, by size or objects (early pages) | O(c/64 + page × 64), c = children; O(c) when many maximums tie (see below) | ~180 µs at 200k children |
-| Browse page, by cost; later pages by size or objects | O(c log c) on first view, O(log n + page) once the level is cached | ms at 200k children |
+| Browse page, by cost; later pages by size or objects | O(c log c) on first view, O(1 + page) once the level is cached | ms at 200k children |
 | Top k (`TopByBytes`, `TopByCount`) | O(d/64 + k × 64), d = descendants at the depth; O(d) when many maximums tie (see below) | ~100 µs over 368k descendants |
 | Filtered descendants page | O(d) at worst; whole blocks skipped or counted unread | 2 ms over 368k (p91 filter), 0.1–0.3 ms (p99+) |
 
@@ -169,7 +169,7 @@ read a whole index (#55).
 Every per-prefix file has a fixed stride per index, except the
 multi-tier slots, which only prefixes with two or more tiers store, so
 total size scales linearly with prefix count. Strides adapt to the
-index: `object_count`, `total_bytes` and subtree size take the core
+index: `object_count`, `total_bytes` and `child_start` take the core
 widths that make the core files smallest, with the few rows that don't
 fit (the root and top levels) patched exactly in `core_patch.*`; every
 other core field, tier slot and offset or position array is stored at
@@ -185,12 +185,12 @@ max depth 7, 11 of 13 tiers present, 95% of prefixes holding one tier.
 
 | Component | Files | B/prefix |
 |---|---|---|
-| Core stats | `core_stats.bin` (9-byte rows: 1 + 5 + 1 + 1 + 1) + `core_patch.bin` / `core_patch.rows` (0.04% of rows patched) | 9.2 |
+| Core stats | `core_stats.bin` (10-byte rows: 1 + 5 + 3 + 1) + `core_patch.bin` / `core_patch.rows` (0.02% of rows patched) | 10.1 |
 | Tier stats | `tier_stats/tier_multi.*` (multi layout, including `tier_multi.mask`) | 1.5 |
 | MPHF | `mph_slots.bin` (8 B fingerprint + 3 B position) + `mph.bin` (BBHash, ~3.3 bits) | 11.4 |
 | Prefix strings | `prefix_tree.bin` (2 B segment ID + 3 B parent distance) + segment blob | 5.1 |
-| Depth index | `depth_positions.u64` (3 B) + `depth_blocks.u64` (0.125 B) + `depth_offsets.u64` | 3.1 |
-| **Total** | including `manifest.json` and `tiers.json` | **30.2** |
+| Depth index | `depth_blocks.u64` (0.125 B) + `depth_offsets.u64` (one per depth) | 0.1 |
+| **Total** | including `manifest.json` and `tiers.json` | **28.2** |
 
 The fingerprint is 8 B in every index; the position takes the bytes
 the largest position needs. Tier
@@ -220,8 +220,12 @@ while it writes slots the MPHF builder holds two 8-byte arrays per
 prefix (hashes and fingerprints), a slot-owner map of 4 bytes per
 prefix (8 past 2^32 prefixes) and, during construction, the keys that
 collide at each level (8 bytes each, at most the previous level's
-count). The tier-stats writer stages each prefix's set tiers in the
-output directory, a 2-byte mask plus a varint count and byte total per
+count). Every prefix is spooled by depth until finalize writes the
+rows in level order: its stats, its child and parent within their
+depths, its MPHF key hash and fingerprint, its last segment and its
+tiers, about 40 bytes per prefix uncompressed, each depth's file
+removed as soon as finalize has read it. The tier-stats writer stages
+each prefix's set tiers in the output directory, a 2-byte mask plus a varint count and byte total per
 set tier: about 7 bytes per prefix on the synthetic benchmark's tier
 mix, and nothing when the bucket uses a single tier.
 

@@ -49,7 +49,6 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32) error {
 	// whatever happened to land on disk.
 	requiredTopLevel := []string{
 		DepthOffsetsFile,
-		DepthPositionsFile,
 		DepthBlocksFile,
 		MPHFile,
 		MPHFSlotsFile,

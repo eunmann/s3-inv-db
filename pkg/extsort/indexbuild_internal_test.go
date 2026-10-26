@@ -2,10 +2,9 @@ package extsort
 
 import "testing"
 
-// TestAddToPrefixTreeDoesNotAllocate: addToPrefixTree runs once per
-// prefix, so a prefix whose last segment is already interned must cost
-// no allocation.
-func TestAddToPrefixTreeDoesNotAllocate(t *testing.T) {
+// TestSegmentOfDoesNotAllocate: segmentOf runs once per prefix, so
+// splitting off its last segment must cost no allocation.
+func TestSegmentOfDoesNotAllocate(t *testing.T) {
 	b, err := NewIndexBuilder(t.TempDir(), t.TempDir())
 	if err != nil {
 		t.Fatalf("NewIndexBuilder: %v", err)
@@ -17,15 +16,15 @@ func TestAddToPrefixTreeDoesNotAllocate(t *testing.T) {
 		}
 	}
 	const child = "a/seg/"
-	if err := b.addToPrefixTree(child); err != nil {
-		t.Fatalf("addToPrefixTree(%q): %v", child, err)
+	if name, err := b.segmentOf(child); err != nil || name != "seg" {
+		t.Fatalf("segmentOf(%q) = %q, %v; want seg", child, name, err)
 	}
 	allocs := testing.AllocsPerRun(1000, func() {
-		if err := b.addToPrefixTree(child); err != nil {
-			t.Fatalf("addToPrefixTree(%q): %v", child, err)
+		if _, err := b.segmentOf(child); err != nil {
+			t.Fatalf("segmentOf(%q): %v", child, err)
 		}
 	})
 	if allocs != 0 {
-		t.Errorf("addToPrefixTree of a known segment allocates %v times", allocs)
+		t.Errorf("segmentOf allocates %v times", allocs)
 	}
 }

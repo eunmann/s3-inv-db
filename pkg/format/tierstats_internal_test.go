@@ -47,10 +47,7 @@ func buildTierIndex(t *testing.T, present []tiers.ID, rows []tierTestRow, force 
 		if err != nil {
 			t.Fatalf("Add row %d: %v", i, err)
 		}
-		if err := core.Add(c, b, 1, mask); err != nil {
-			t.Fatal(err)
-		}
-		if err := core.SetSubtree(uint64(i), uint64(i)); err != nil {
+		if err := core.Add(c, b, uint64(len(rows)), mask); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -138,8 +138,11 @@ func BenchmarkQueryScale_ChildrenIterate_Cold(b *testing.B) {
 				b.StopTimer()
 				idx = reopenCold(b, idx, dir)
 				b.StartTimer()
-				end := idx.SubtreeEnd(p)
-				for c := p + 1; c <= end; c++ {
+				children, err := idx.DescendantSpan(p, 1)
+				if err != nil {
+					b.Fatal(err)
+				}
+				for c := children.Lo; c < children.Hi; c++ {
 					_ = idx.Stats(c)
 					_ = idx.Depth(c)
 				}
@@ -149,12 +152,12 @@ func BenchmarkQueryScale_ChildrenIterate_Cold(b *testing.B) {
 }
 
 // pickParentPositions returns up to want positions that have at least
-// one descendant — i.e. SubtreeEnd > pos. These are the interesting
+// child. These are the interesting
 // parents for a Children/Browse cold sweep; leaves would short-circuit.
 func pickParentPositions(idx *indexread.Index, candidates []uint64, want int) []uint64 {
 	out := make([]uint64, 0, want)
 	for _, p := range candidates {
-		if idx.SubtreeEnd(p) > p {
+		if idx.HasChildren(p) {
 			out = append(out, p)
 			if len(out) >= want {
 				break

@@ -5,9 +5,9 @@ import (
 	"math/bits"
 )
 
-// DepthBlockSize is how many consecutive entries of one depth's posting
-// list a block summary bounds. Blocks start at each depth's first entry
-// and never straddle two depths.
+// DepthBlockSize is how many consecutive rows of one depth a block
+// summary bounds. Blocks start at each depth's first row and never
+// straddle two depths.
 const DepthBlockSize = 64
 
 // BlockBounds bounds the stats of the prefixes in one depth block:
@@ -104,22 +104,21 @@ func (a *blockAcc) add(count, bytes uint64) {
 }
 
 // SpanBlocks is the run of depth blocks covering one span of a depth's
-// posting list, numbered from 0 at the span's first block.
+// rows, numbered from 0 at the span's first block.
 type SpanBlocks struct {
 	d     *DepthIndex
 	span  Span
-	start uint64 // first posting-list index of block 0
+	start uint64 // first row of block 0
 	base  uint64 // block 0's index in the blocks file
 	n     uint64
 }
 
-// SpanBlocks returns the blocks covering span, a span of depth's posting
-// list from SubtreeSpan.
+// SpanBlocks returns the blocks covering span, rows of one depth.
 func (d *DepthIndex) SpanBlocks(depth uint32, span Span) SpanBlocks {
 	if span.Len() == 0 || depth > d.maxDepth {
 		return SpanBlocks{}
 	}
-	depthStart := d.offsets.UnsafeGetU64(uint64(depth))
+	depthStart := d.starts[depth]
 	first := (span.Lo - depthStart) / DepthBlockSize
 	last := (span.Hi - 1 - depthStart) / DepthBlockSize
 
@@ -141,7 +140,7 @@ func (s SpanBlocks) Bounds(i uint64) BlockBounds {
 	return unpackBlockBounds(s.d.blocks.UnsafeGetU64(s.base + i))
 }
 
-// Entries returns the posting-list indices of block i inside the span.
+// Entries returns the rows of block i inside the span.
 func (s SpanBlocks) Entries(i uint64) Span {
 	lo := s.start + i*DepthBlockSize
 

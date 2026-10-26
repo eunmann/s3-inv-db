@@ -96,57 +96,61 @@ func BenchmarkIndexOpen(b *testing.B) {
 	}
 }
 
-// BenchmarkDescendantsSubtree measures descendants queries against
-// subtrees of differing sizes — the only meaningful axis the warm
-// DescendantsAtDepth benchmark has (depth-from-root with fixed N
-// just measures len(children) iteration). Other call-shape coverage
-// lives in BenchmarkGridQuery.
-func BenchmarkDescendantsSubtree(b *testing.B) {
+// BenchmarkDescendantsChildren measures direct-children queries
+// against prefixes with few and with many children — the only
+// meaningful axis the warm DescendantsAtDepth benchmark has
+// (depth-from-root with fixed N just measures len(children)
+// iteration). Other call-shape coverage lives in BenchmarkGridQuery.
+func BenchmarkDescendantsChildren(b *testing.B) {
 	const fixtureSize = 50_000
 	keys := benchutil.GenerateKeys(fixtureSize, "s3_realistic")
 	bi := setupBenchIndex(b, keys)
 	defer bi.Close()
 
-	var smallSubtreePrefix, largeSubtreePrefix string
-	var smallCount, largeCount int
+	var fewPrefix, manyPrefix string
+	var fewCount, manyCount uint64
 
 	for _, p := range bi.prefixes {
 		pos, ok := bi.idx.Lookup(p)
 		if !ok {
 			continue
 		}
-		subtreeSize := bi.idx.SubtreeEnd(pos) - pos
-		if subtreeSize > 5 && subtreeSize < 50 && smallSubtreePrefix == "" {
-			smallSubtreePrefix = p
-			smallCount = int(subtreeSize)
+		span, err := bi.idx.DescendantSpan(pos, 1)
+		if err != nil {
+			b.Fatal(err)
 		}
-		if subtreeSize > 500 && largeSubtreePrefix == "" {
-			largeSubtreePrefix = p
-			largeCount = int(subtreeSize)
+		children := span.Len()
+		if children > 5 && children < 50 && fewPrefix == "" {
+			fewPrefix = p
+			fewCount = children
 		}
-		if smallSubtreePrefix != "" && largeSubtreePrefix != "" {
+		if children > 500 && manyPrefix == "" {
+			manyPrefix = p
+			manyCount = children
+		}
+		if fewPrefix != "" && manyPrefix != "" {
 			break
 		}
 	}
 
-	b.Run("small_subtree", func(b *testing.B) {
-		if smallSubtreePrefix == "" {
-			b.Skip("no suitable small subtree found")
+	b.Run("few_children", func(b *testing.B) {
+		if fewPrefix == "" {
+			b.Skip("no prefix with few children found")
 		}
-		pos, _ := bi.idx.Lookup(smallSubtreePrefix)
-		b.Logf("prefix=%q subtree_size=%d", smallSubtreePrefix, smallCount)
+		pos, _ := bi.idx.Lookup(fewPrefix)
+		b.Logf("prefix=%q children=%d", fewPrefix, fewCount)
 		b.ResetTimer()
 		for range b.N {
 			_, _ = bi.idx.DescendantsAtDepth(pos, 1)
 		}
 	})
 
-	b.Run("large_subtree", func(b *testing.B) {
-		if largeSubtreePrefix == "" {
-			b.Skip("no suitable large subtree found")
+	b.Run("many_children", func(b *testing.B) {
+		if manyPrefix == "" {
+			b.Skip("no prefix with many children found")
 		}
-		pos, _ := bi.idx.Lookup(largeSubtreePrefix)
-		b.Logf("prefix=%q subtree_size=%d", largeSubtreePrefix, largeCount)
+		pos, _ := bi.idx.Lookup(manyPrefix)
+		b.Logf("prefix=%q children=%d", manyPrefix, manyCount)
 		b.ResetTimer()
 		for range b.N {
 			_, _ = bi.idx.DescendantsAtDepth(pos, 1)

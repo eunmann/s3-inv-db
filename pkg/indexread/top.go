@@ -1,7 +1,6 @@
 package indexread
 
 import (
-	"fmt"
 	"slices"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -15,8 +14,8 @@ const (
 	TopByCountMetric
 )
 
-// TopResult holds a ranked descendant entry. Pos is the preorder
-// position; Stats is the per-prefix object count and total bytes.
+// TopResult holds a ranked descendant entry. Pos is its position;
+// Stats is the per-prefix object count and total bytes.
 type TopResult struct {
 	Pos   uint64
 	Stats Stats
@@ -24,7 +23,7 @@ type TopResult struct {
 
 // TopByBytes returns up to limit descendants at the given relative depth
 // under prefixPos, ranked by TotalBytes descending. Ties are broken by
-// preorder position to keep results stable across calls.
+// position (name order) to keep results stable across calls.
 //
 // Returns (nil, nil) for invalid inputs (matches DescendantsAtDepth).
 func (idx *Index) TopByBytes(prefixPos uint64, relDepth, limit int) ([]TopResult, error) {
@@ -33,7 +32,7 @@ func (idx *Index) TopByBytes(prefixPos uint64, relDepth, limit int) ([]TopResult
 
 // TopByCount returns up to limit descendants at the given relative depth
 // under prefixPos, ranked by ObjectCount descending. Ties are broken by
-// preorder position.
+// position (name order).
 func (idx *Index) TopByCount(prefixPos uint64, relDepth, limit int) ([]TopResult, error) {
 	return idx.top(prefixPos, relDepth, limit, TopByCountMetric, Filter{})
 }
@@ -70,18 +69,15 @@ func (idx *Index) RankDescendants(prefixPos uint64, relDepth, limit int, metric 
 		return nil, nil
 	}
 	span, depth, err := idx.descendantSpanAt(prefixPos, relDepth)
-	if err != nil {
-		return nil, fmt.Errorf("descendants to rank: %w", err)
-	}
-	if span.Len() == 0 {
-		return nil, nil
+	if err != nil || span.Len() == 0 {
+		return nil, err
 	}
 
 	o := rankOrder{metric: metric, asc: asc}
 	h := &topHeap{items: make([]rankItem, 0, min(uint64(limit), span.Len()))}
 	scan := func(e format.Span) {
 		for j := e.Lo; j < e.Hi; j++ {
-			pos := idx.depthIndex.PositionAt(j)
+			pos := j
 			s := idx.Stats(pos)
 			if s.ObjectCount < filter.MinCount || s.TotalBytes < filter.MinBytes {
 				continue
@@ -214,7 +210,7 @@ type topHeap struct {
 }
 
 // less reports whether a ranks below b. Position tie-breaks favor lower
-// preorder positions (stable order).
+// positions: name order within a level (stable order).
 func (h *topHeap) less(a, b rankItem) bool {
 	if a.key != b.key {
 		return a.key < b.key

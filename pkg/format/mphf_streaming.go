@@ -21,7 +21,7 @@ import (
 // strings with memory bounded whatever the prefix count: each prefix's
 // key hash and fingerprint go to disk-backed arrays, 8 bytes apiece, and
 // the prefix strings themselves are not kept. A prefix's position is the
-// order it was added in: the index builder adds them in preorder.
+// order it was added in: the index builder adds them in level order.
 type StreamingMPHFBuilder struct {
 	// Disk-backed: hashes, fingerprints. At billion-prefix scale these
 	// would otherwise be ~16 GiB of heap. Backed by mmap'd
@@ -73,10 +73,24 @@ func NewStreamingMPHFBuilder(tempDir string) (*StreamingMPHFBuilder, error) {
 // arrays rather than heap slices, so memory usage during Add stays flat
 // regardless of prefix count.
 func (b *StreamingMPHFBuilder) Add(prefix string) error {
-	if err := b.hashes.Append(b.keyHash(prefix)); err != nil {
+	return b.AddHashed(b.KeyHashes(prefix))
+}
+
+// KeyHashes returns the key hash and fingerprint Add stores for prefix,
+// for a caller that hashes prefixes before it knows their positions.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func (b *StreamingMPHFBuilder) KeyHashes(prefix string) (uint64, uint64) {
+	return b.keyHash(prefix), b.fingerprint(prefix)
+}
+
+// AddHashed adds the next prefix by the key hash and fingerprint
+// KeyHashes returned for it.
+func (b *StreamingMPHFBuilder) AddHashed(keyHash, fingerprint uint64) error {
+	if err := b.hashes.Append(keyHash); err != nil {
 		return fmt.Errorf("append hash: %w", err)
 	}
-	if err := b.fingerprints.Append(b.fingerprint(prefix)); err != nil {
+	if err := b.fingerprints.Append(fingerprint); err != nil {
 		return fmt.Errorf("append fingerprint: %w", err)
 	}
 	b.count++
@@ -491,7 +505,7 @@ func writeSlotRange(f *os.File, owners *slotOwners, fps []uint64, posW, start, e
 var errMPHFArrayLengthMismatch = errors.New("mphf fingerprints/positions length mismatch")
 
 // MPHFSlotsFile maps each MPHF slot to its prefix's fingerprint and
-// preorder position.
+// position.
 const MPHFSlotsFile = "mph_slots.bin"
 
 // mph_slots.bin layout constants (see writeSlots).
