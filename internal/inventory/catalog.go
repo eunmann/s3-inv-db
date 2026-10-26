@@ -81,6 +81,17 @@ type Catalog struct {
 	// restored lists the indexes Hydrate opened without prefaulting;
 	// PrefaultRestored warms them. Guarded by mu.
 	restored []restoredIndex
+	// onChange, when set, is told about every state change persist
+	// writes, after the write (SetOnChange).
+	onChange atomic.Pointer[func(ID)]
+}
+
+// SetOnChange registers fn to be called with an inventory's ID after
+// each of its state changes is persisted: register, load, unload,
+// evict, pin, remove. fn runs on the changing goroutine without the
+// catalog's locks held, so it must not block.
+func (c *Catalog) SetOnChange(fn func(ID)) {
+	c.onChange.Store(&fn)
 }
 
 // restoredIndex is one index Hydrate opened and planned to prefault.
@@ -162,6 +173,15 @@ func (c *Catalog) stageDeleteLocked(id ID) pendingWrite {
 // persist writes w to the store unless a newer change to the same
 // inventory already reached it. Called without c.mu held.
 func (c *Catalog) persist(ctx context.Context, w pendingWrite) error {
+	err := c.write(ctx, w)
+	if fn := c.onChange.Load(); fn != nil {
+		(*fn)(w.info.ID)
+	}
+
+	return err
+}
+
+func (c *Catalog) write(ctx context.Context, w pendingWrite) error {
 	c.persistMu.Lock()
 	defer c.persistMu.Unlock()
 	if w.seq <= c.persisted[w.info.ID] {
