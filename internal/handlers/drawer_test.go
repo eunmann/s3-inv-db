@@ -236,8 +236,13 @@ func TestRunDrawerClose_ReturnsClosedShellAndClearsHash(t *testing.T) {
 	if strings.Contains(body, `sse:row-`) {
 		t.Errorf("closed shell must NOT carry an SSE trigger\n%s", body)
 	}
-	if got := w.Header().Get("HX-Push-Url"); got != "/inventories" {
-		t.Errorf("HX-Push-Url = %q, want /inventories", got)
+	// Closing replaces the drawer's history entry: pushing one more made
+	// every open and close cost two Back presses.
+	if got := w.Header().Get("HX-Replace-Url"); got != "/inventories" {
+		t.Errorf("HX-Replace-Url = %q, want /inventories", got)
+	}
+	if got := w.Header().Get("HX-Push-Url"); got != "" {
+		t.Errorf("HX-Push-Url = %q, want none", got)
 	}
 }
 
@@ -326,7 +331,7 @@ func TestRunDrawer_RendersPrevAttemptsChain(t *testing.T) {
 	if !strings.Contains(body, "Previous attempts") {
 		t.Errorf("body missing 'Previous attempts' section:\n%s", body)
 	}
-	if !strings.Contains(body, "first boom") || !strings.Contains(body, "second boom") {
+	if !strings.Contains(body, "First boom.") || !strings.Contains(body, "Second boom.") {
 		t.Errorf("previous attempt errors missing in body:\n%s", body)
 	}
 	if !strings.Contains(body, "Attempt 3") {

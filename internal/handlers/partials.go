@@ -300,6 +300,11 @@ func (h *Handlers) placeRow(ctx context.Context, row *DiscoveredRowView) {
 
 		return
 	}
+	placeRowAmong(views, row)
+}
+
+// placeRowAmong is placeRow against an already-read snapshot.
+func placeRowAmong(views []inventory.MergedInventory, row *DiscoveredRowView) {
 	cfg := row.ConfigID()
 	runs := make([]DiscoveredRowView, 0, 8)
 	runs = append(runs, *row)

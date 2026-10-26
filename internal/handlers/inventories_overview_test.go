@@ -54,7 +54,11 @@ func newOverviewHandlers(t *testing.T) *handlers.Handlers {
 	if err := mgr.Register(t.Context(), failed, "inv", "s3://dst/manifest.json"); err != nil {
 		t.Fatal(err)
 	}
-	job := jobs.Job{ID: "job-failed", InventoryID: failed, Kind: jobs.KindBuild, State: jobs.StateFailed, Error: missingChunkErr, FinishedAt: time.Unix(10, 0)}
+	job := jobs.Job{
+		ID: "job-failed", InventoryID: failed, Kind: jobs.KindBuild, State: jobs.StateFailed, Error: missingChunkErr,
+		StartedAt: time.Unix(5, 0), FinishedAt: time.Unix(10, 0),
+		Stages: []jobs.StageRecord{{Name: "downloading", StartedAt: time.Unix(5, 0), Duration: 5 * time.Second, Err: missingChunkErr}},
+	}
 	if err := h.JobStoreForTest().Upsert(t.Context(), job); err != nil {
 		t.Fatal(err)
 	}

@@ -192,6 +192,24 @@
                 opener = openerRun = null;
             });
 
+            // The open drawer re-renders its body while a build runs: keep
+            // each section the user opened or closed the way they left it.
+            document.body.addEventListener('htmx:beforeSwap', function (e) {
+                var body = e.detail.target;
+                if (!body || body.id !== 'run-drawer-body') return;
+                var open = {};
+                body.querySelectorAll('details[id]').forEach(function (d) { open[d.id] = d.open; });
+                body._detailsOpen = open;
+            });
+            document.body.addEventListener('htmx:afterSwap', function (e) {
+                var body = document.getElementById('run-drawer-body');
+                var old = e.detail.target;
+                if (!body || !old || old.id !== 'run-drawer-body' || !old._detailsOpen) return;
+                body.querySelectorAll('details[id]').forEach(function (d) {
+                    if (Object.prototype.hasOwnProperty.call(old._detailsOpen, d.id)) d.open = old._detailsOpen[d.id];
+                });
+            });
+
             // Auto-load settings save on change: say so, and on a refusal
             // (a config-file setting, a bad retention) show why and put the
             // control back to its saved value.
