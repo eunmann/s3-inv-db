@@ -433,9 +433,17 @@ func (b *IndexBuilder) writeLevels() error {
 		}
 	}
 	for depth := range len(b.spool.depths) {
-		err := b.spool.read(depth, func(r *spoolRecord) error {
-			return b.writeRow(depthW, starts, depth, r)
-		})
+		// Two groups of writers share nothing (stats rows on one side,
+		// names and MPHF keys on the other), so each reads the depth's
+		// records itself and they write side by side.
+		names := make(chan error, 1)
+		go func() {
+			names <- b.spool.read(depth, func(r *spoolRecord) error { return b.writeNameRow(starts, depth, r) })
+		}()
+		err := b.spool.read(depth, func(r *spoolRecord) error { return b.writeStatsRow(depthW, starts, depth, r) })
+		if err = errors.Join(err, <-names); err == nil {
+			err = b.spool.remove(depth)
+		}
 		if err != nil {
 			return errors.Join(err, depthW.Abort())
 		}
@@ -447,8 +455,9 @@ func (b *IndexBuilder) writeLevels() error {
 	return os.RemoveAll(b.spool.dir) //nolint:wrapcheck // the path is in the error
 }
 
-// writeRow writes one spooled row, the next in level order.
-func (b *IndexBuilder) writeRow(depthW *format.DepthIndexWriter, starts []uint64, depth int, r *spoolRecord) error {
+// writeStatsRow writes one spooled row's stats, the next in level
+// order: its tier stats, core row and depth-index entry.
+func (b *IndexBuilder) writeStatsRow(depthW *format.DepthIndexWriter, starts []uint64, depth int, r *spoolRecord) error {
 	mask, err := b.tierStatsW.Add(&r.tierCounts, &r.tierBytes, r.count, r.bytes)
 	if err != nil {
 		return fmt.Errorf("prefix segment %q at depth %d: write tier stats: %w", r.name, depth, err)
@@ -456,6 +465,17 @@ func (b *IndexBuilder) writeRow(depthW *format.DepthIndexWriter, starts []uint64
 	if err := b.coreStatsW.Add(r.count, r.bytes, starts[depth+1]+r.childLocal, mask); err != nil {
 		return fmt.Errorf("write core stats row: %w", err)
 	}
+	if err := depthW.Add(uint32(depth), r.count, r.bytes); err != nil {
+		return fmt.Errorf("add to depth index: %w", err)
+	}
+
+	return nil
+}
+
+// writeNameRow writes one spooled row's name, the next in level order:
+// its prefix-tree row and MPHF key.
+func (b *IndexBuilder) writeNameRow(starts []uint64, depth int, r *spoolRecord) error {
+	var err error
 	if depth == 0 {
 		err = b.prefixTreeW.AddRoot()
 	} else {
@@ -467,9 +487,6 @@ func (b *IndexBuilder) writeRow(depthW *format.DepthIndexWriter, starts []uint64
 	}
 	if err := b.mphfBuilder.AddHashed(r.keyHash, r.fp); err != nil {
 		return fmt.Errorf("add to MPHF builder: %w", err)
-	}
-	if err := depthW.Add(uint32(depth), r.count, r.bytes); err != nil {
-		return fmt.Errorf("add to depth index: %w", err)
 	}
 
 	return nil

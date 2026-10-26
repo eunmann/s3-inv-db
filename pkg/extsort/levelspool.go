@@ -124,8 +124,8 @@ func (s *levelSpool) finish() error {
 }
 
 // read calls fn with each of depth's records in the order they were
-// added, then removes the depth's file. The record is reused between
-// calls.
+// added. The record is reused between calls. Reads of one depth may run
+// concurrently, each with its own file handle.
 func (s *levelSpool) read(depth int, fn func(r *spoolRecord) error) error {
 	sf := s.depths[depth]
 	f, err := os.Open(sf.path)
@@ -151,7 +151,12 @@ func (s *levelSpool) read(depth int, fn func(r *spoolRecord) error) error {
 		return fmt.Errorf("close level spool %d: %w", depth, err)
 	}
 
-	return removeIfExists(sf.path)
+	return nil
+}
+
+// remove deletes depth's file once every read of it is done.
+func (s *levelSpool) remove(depth int) error {
+	return removeIfExists(s.depths[depth].path)
 }
 
 // errSpoolTruncated reports a record cut short: the stream ended inside
