@@ -3,7 +3,7 @@
        *jobs.Job. scripts/live.js keeps it current in place (data-live-bar);
        the caller sizes it. */ -}}
 <div class="live-bar h-full" data-live-bar role="progressbar" aria-label="Build progress" aria-valuemin="0" aria-valuemax="100">
-    {{- range liveSegments (printf "%s" .State) .Stage .StageDone .StageTotal -}}
+    {{- range liveSegments (printf "%s" .State) .Stage .Step .StageDone .StageTotal -}}
     <div class="live-seg{{if and .Active (eq .Fill 0)}} is-indeterminate{{end}}" data-seg><div style="width:{{.Fill}}%"></div></div>
     {{- end -}}
 </div>

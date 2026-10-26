@@ -9,8 +9,8 @@ func FormatETA(startedAt time.Time, done, total int64) string {
 }
 
 // LiveSegments exposes liveSegments for tests.
-func LiveSegments(state, stage string, done, total int64) []LiveSegment {
-	return liveSegments(state, stage, done, total)
+func LiveSegments(state, stage, step string, done, total int64) []LiveSegment {
+	return liveSegments(state, stage, step, done, total)
 }
 
 // ProgressPct exposes progressPct for tests.

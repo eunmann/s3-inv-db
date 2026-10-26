@@ -35,25 +35,28 @@ func TestClock(t *testing.T) {
 func TestLiveSegments(t *testing.T) {
 	type seg = templates.LiveSegment
 	cases := []struct {
-		name, state, stage string
-		done, total        int64
-		want               []seg
+		name, state, stage, step string
+		done, total              int64
+		want                     []seg
 	}{
-		{"queued", "queued", "", 0, 0, []seg{{}, {}, {}}},
-		{"initializing", "running", "initializing", 0, 0, []seg{{Active: true}, {}, {}}},
-		{"downloading half", "running", "downloading", 5, 10, []seg{{Fill: 50, Active: true}, {}, {}}},
-		{"merging spilled runs", "running", "merging", 3, 8, []seg{{Fill: 100}, {Active: true}, {}}},
-		{"building starts", "running", "building", 0, 0, []seg{{Fill: 100}, {Active: true}, {}}},
-		{"finalizing", "running", "finalizing", 1, 4, []seg{{Fill: 100}, {Fill: 100}, {Fill: 25, Active: true}}},
-		{"succeeded", "succeeded", "finalizing", 0, 0, []seg{{Fill: 100}, {Fill: 100}, {Fill: 100}}},
-		{"failed while building", "failed", "building", 3, 10, []seg{{Fill: 100}, {Fill: 30}, {}}},
-		{"fetching a published index", "running", "fetching", 2, 8, []seg{{Fill: 25, Active: true}}},
+		{"queued", "queued", "", "", 0, 0, []seg{{}, {}, {}}},
+		{"initializing", "running", "initializing", "", 0, 0, []seg{{Active: true}, {}, {}}},
+		{"downloading half", "running", "downloading", "", 5, 10, []seg{{Fill: 50, Active: true}, {}, {}}},
+		{"merging spilled runs", "running", "merging", "", 3, 8, []seg{{Fill: 100}, {Active: true}, {}}},
+		{"building starts", "running", "building", "", 0, 0, []seg{{Fill: 100}, {Active: true}, {}}},
+		{"finalizing", "running", "finalizing", "", 1, 4, []seg{{Fill: 100}, {Fill: 100}, {Fill: 25, Active: true}}},
+		{"succeeded", "succeeded", "finalizing", "", 0, 0, []seg{{Fill: 100}, {Fill: 100}, {Fill: 100}}},
+		{"failed while building", "failed", "building", "", 3, 10, []seg{{Fill: 100}, {Fill: 30}, {}}},
+		{"fetching a published index", "running", "fetching", "", 2, 8, []seg{{Fill: 25, Active: true}}},
+		// A stepped stage restarts its counter each step: the server can only
+		// give the first step's half of the segment.
+		{"finalizing a step", "running", "finalizing", "Ordering rows by depth", 1, 2, []seg{{Fill: 100}, {Fill: 100}, {Fill: 25, Active: true}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := templates.LiveSegments(tc.state, tc.stage, tc.done, tc.total)
+			got := templates.LiveSegments(tc.state, tc.stage, tc.step, tc.done, tc.total)
 			if !slices.Equal(got, tc.want) {
-				t.Errorf("LiveSegments(%s, %s, %d, %d) = %+v, want %+v", tc.state, tc.stage, tc.done, tc.total, got, tc.want)
+				t.Errorf("LiveSegments(%s, %s, %q, %d, %d) = %+v, want %+v", tc.state, tc.stage, tc.step, tc.done, tc.total, got, tc.want)
 			}
 		})
 	}

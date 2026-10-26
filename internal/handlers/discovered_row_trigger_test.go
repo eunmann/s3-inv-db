@@ -47,6 +47,12 @@ func TestDiscoveredRowPartial_LiveWiring(t *testing.T) {
 			want:     []string{`data-job-id="j1"`, `data-job-state="running"`, "Building index · 25%", "Cancel"},
 		},
 		{
+			name:     "running job in a step",
+			view:     row(inventory.StateLoading, &jobs.Job{ID: "j7", Kind: jobs.KindBuild, State: jobs.StateRunning, Stage: "finalizing", Step: "Ordering rows by depth", StageDone: 1, StageTotal: 2}),
+			wantBusy: true,
+			want:     []string{"Finalizing · Ordering rows by depth · 50%"},
+		},
+		{
 			// The job store marks the job running before the catalog flips
 			// the run to loading; the row must already read as busy.
 			name:     "running job on a not-loaded run",

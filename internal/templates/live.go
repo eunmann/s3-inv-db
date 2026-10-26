@@ -41,7 +41,7 @@ func barStages(stage string) []string {
 // build's own counter starts, so it shows there as indeterminate.
 // The script scripts/live.js mirrors this to update bars in place; keep
 // the two in step.
-func liveSegments(state, stage string, done, total int64) []LiveSegment {
+func liveSegments(state, stage, step string, done, total int64) []LiveSegment {
 	order := barStages(stage)
 	cur, counted := -1, true
 	for i, s := range order {
@@ -61,7 +61,14 @@ func liveSegments(state, stage string, done, total int64) []LiveSegment {
 		case cur < 0:
 			out[i].Active = i == 0 && state == "running"
 		case i == cur && counted:
-			out[i] = LiveSegment{Fill: progressPct(done, total), Active: live}
+			fill := progressPct(done, total)
+			if step != "" {
+				// A stage with steps restarts its counter at every step: the
+				// first step's share in live.js's stageFill, the most the
+				// server knows without the steps before it.
+				fill /= 2
+			}
+			out[i] = LiveSegment{Fill: fill, Active: live}
 		case i == cur:
 			out[i].Active = live
 		}
