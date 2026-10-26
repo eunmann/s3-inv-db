@@ -66,7 +66,7 @@ Mutating:
 | `/api/inventories/{id}` | DELETE | Remove; a discovered run's cache dir is deleted. **409** while the run is loading (cancel its job first) |
 | `/api/inventories/{id}/stats:batch` | POST | Body: `{"prefixes":[...],"show_tiers":bool,"estimate_cost":bool}`. Returns one row per prefix with `found=false` for misses. Cap defaults to 1000; override with `query_batch_max`. |
 | `/api/inventories/{id}/pin` | POST | Toggle pin state (`pinned=true|false`); pinned runs are never auto-evicted |
-| `/api/configurations/{src}/{name}/auto-load` | POST | Set auto-load + retention for a configuration (`auto_load=on|off`, `retention=N`). **409** when the request changes a setting the config file's `inventories[]` entry sets |
+| `/api/configurations/{src}/{name}/auto-load` | POST | Set auto-load + retention for a configuration (`auto_load=on|off`, `retention=N`). **409** when the request changes a setting the config file's `inventories[]` entry sets. Returns JSON, except a non-htmx request whose `Accept` includes `text/html` (a script-free form submit) gets a 303 to `/inventories` on success and a plain-text error otherwise |
 | `/api/indexes/refresh` | POST | List the inventory or index source now and start an auto-load poll, instead of waiting for the next interval. Returns `{"auto_load": bool}`, plus `HX-Refresh: true` for an htmx request (the inventories page's Refresh); 503 with no source configured |
 | `/api/jobs/{id}/cancel` | POST | Cancel an in-flight job |
 
