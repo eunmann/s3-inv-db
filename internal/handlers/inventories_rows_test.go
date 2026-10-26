@@ -154,6 +154,9 @@ func TestInventoriesPage_NavAndAutoLoadNote(t *testing.T) {
 		if note == running || (forms.Length() > 0) != running {
 			t.Errorf("auto-loader running=%v: note shown=%v, settings forms=%d", running, note, forms.Length())
 		}
+		if note && !strings.Contains(doc.Text(), "--auto-load and --max-index-disk") {
+			t.Error("auto-load note leaves out --max-index-disk, which --auto-load requires")
+		}
 		if running && forms.AttrOr("hx-sync", "") != "this:replace" {
 			t.Errorf("auto-load form hx-sync = %q, want this:replace", forms.AttrOr("hx-sync", ""))
 		}
