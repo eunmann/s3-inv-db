@@ -104,7 +104,9 @@ s3-inv-db build --s3-manifest s3://inv/.../<source>/<inventory>/<run>/manifest.j
 
 The build uploads the index to
 `s3://indexes/prod/<source>/<inventory>/<run>/`, its `manifest.json`
-last: a run without one is still uploading and is ignored. Point the
+last: a run without one is still uploading and is ignored, as is one
+whose manifest is of another version (published by an incompatible
+build; republish it). Point the
 server at it with `index_source: "s3://indexes/prod/"`:
 
 - with `s3_source` too, loading a run downloads its published index if

@@ -287,7 +287,7 @@ func TestDiscoverer_ManifestsReadOnce(t *testing.T) {
 
 // TestDiscoverer_ListIndexes: an index source lists committed runs with
 // their index size, and skips a run still uploading (files, no
-// manifest).
+// manifest) and one whose manifest is of another version.
 func TestDiscoverer_ListIndexes(t *testing.T) {
 	client := s3test.RawClient(t)
 	ctx := t.Context()
@@ -300,8 +300,10 @@ func TestDiscoverer_ListIndexes(t *testing.T) {
 	}
 	put("idx/src-bucket/daily/2026-10-24T01-00Z/core_stats.bin", "abc")
 	put("idx/src-bucket/daily/2026-10-24T01-00Z/manifest.json",
-		`{"version":1,"created_at":"2026-10-24T02:00:00Z","node_count":3,"files":{"core_stats.bin":{"size":300,"checksum":"x"},"mph.bin":{"size":40,"checksum":"y"}}}`)
+		`{"version":2,"created_at":"2026-10-24T02:00:00Z","node_count":3,"files":{"core_stats.bin":{"size":300,"checksum":"x"},"mph.bin":{"size":40,"checksum":"y"}}}`)
 	put("idx/src-bucket/daily/2026-10-25T01-00Z/core_stats.bin", "uploading")
+	put("idx/src-bucket/daily/2026-10-23T01-00Z/manifest.json",
+		`{"version":1,"created_at":"2026-10-23T02:00:00Z","node_count":3,"files":{"core_stats.bin":{"size":300,"checksum":"x"}}}`)
 
 	d := s3disco.New(client, bucket, "idx/").ListIndexes()
 	got, err := d.List(ctx)
@@ -317,6 +319,9 @@ func TestDiscoverer_ListIndexes(t *testing.T) {
 	if _, err := d.Find(ctx, "src-bucket", "daily", "2026-10-25T01-00Z"); !errors.Is(err, inventory.ErrRunNotFound) {
 		t.Errorf("Find of the uploading run err = %v, want ErrRunNotFound", err)
 	}
+	if _, err := d.Find(ctx, "src-bucket", "daily", "2026-10-23T01-00Z"); !errors.Is(err, inventory.ErrRunNotFound) {
+		t.Errorf("Find of the other-version run err = %v, want ErrRunNotFound", err)
+	}
 }
 
 // TestDiscoverer_ListIndexes_SeesRepublishedRun: republishing a run
@@ -330,7 +335,7 @@ func TestDiscoverer_ListIndexes_SeesRepublishedRun(t *testing.T) {
 	const key = "idx/src-bucket/daily/2026-10-24T01-00Z/manifest.json"
 	putManifest := func(size int) {
 		t.Helper()
-		body := `{"version":1,"created_at":"2026-10-24T02:00:00Z","node_count":3,"files":{"core_stats.bin":{"size":` +
+		body := `{"version":2,"created_at":"2026-10-24T02:00:00Z","node_count":3,"files":{"core_stats.bin":{"size":` +
 			strconv.Itoa(size) + `,"checksum":"x"}}}`
 		if _, err := client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(key), Body: strings.NewReader(body)}); err != nil {
 			t.Fatal(err)
