@@ -38,7 +38,7 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 	}
 	cfg, err := h.configStore.Get(r.Context(), src, name)
 	if errors.Is(err, inventory.ErrStoreNotFound) {
-		cfg = inventory.Config{Source: src, Name: name, RetentionCount: inventory.DefaultRetentionCount}
+		cfg = inventory.Config{Source: src, Name: name, RetentionCount: h.configStore.DefaultRetention()}
 	} else if err != nil {
 		zerolog.Ctx(r.Context()).Error().Err(err).Msg("get config")
 		WriteJSONError(w, http.StatusInternalServerError, "failed to read config")

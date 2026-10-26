@@ -68,3 +68,21 @@ func TestSetAutoLoadConfigAPI_KeepsPollState(t *testing.T) {
 		t.Errorf("poll state lost on policy save: %+v", cfg)
 	}
 }
+
+// A toggle on a configuration with no stored row and no retention in
+// the form takes the server's default retention (#149), not a fixed 2.
+func TestSetAutoLoadConfigAPI_NewConfigTakesDefaultRetention(t *testing.T) {
+	h, configs := newWiredHandlersWithConfigs(t, nil)
+	configs.WithDefaultRetention(4)
+	router := chi.NewRouter()
+	router.Post("/api/configurations/{src}/{name}/auto-load", h.SetAutoLoadConfigAPI)
+
+	postAutoLoad(t, router, url.Values{"auto_load": {"off", "on"}})
+	cfg, err := configs.Get(t.Context(), "bkt", "inv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AutoLoad || cfg.RetentionCount != 4 {
+		t.Fatalf("new config %+v, want auto_load on, retention 4", cfg)
+	}
+}
