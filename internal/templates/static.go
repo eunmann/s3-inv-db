@@ -29,35 +29,24 @@ func HelpJS() []byte { return helpJS }
 // LiveJS returns the embedded live job-update script (scripts/live.js).
 func LiveJS() []byte { return liveJS }
 
-// TailwindCSSETag returns a weak ETag derived from the compiled CSS
-// content, so the browser can revalidate cheaply across deploys.
-func TailwindCSSETag() string { return assetHashes()["tailwind.css"].etag }
+// AssetVersion is the content hash of the embedded asset name
+// ("tailwind.css", "help.js", "live.js"): the ?v= its URL carries and
+// the value of its weak ETag. It is empty for an unknown name.
+func AssetVersion(name string) string { return assetVersions()[name] }
 
-// HelpJSETag returns a weak ETag for HelpJS, mirroring TailwindCSSETag.
-func HelpJSETag() string { return assetHashes()["help.js"].etag }
-
-// LiveJSETag returns a weak ETag for LiveJS, mirroring TailwindCSSETag.
-func LiveJSETag() string { return assetHashes()["live.js"].etag }
-
-type assetHash struct {
-	etag    string
-	version string
-}
-
-// assetHashes hashes each embedded asset once; the content never
+// assetVersions hashes each embedded asset once; the content never
 // changes within a binary.
 //
 //nolint:gochecknoglobals // computed once from embedded, immutable content
-var assetHashes = sync.OnceValue(func() map[string]assetHash {
-	out := make(map[string]assetHash, 3)
+var assetVersions = sync.OnceValue(func() map[string]string {
+	out := make(map[string]string, 3)
 	for name, content := range map[string][]byte{
 		"tailwind.css": tailwindCSS,
 		"help.js":      helpJS,
 		"live.js":      liveJS,
 	} {
 		h := sha256.Sum256(content)
-		v := hex.EncodeToString(h[:8])
-		out[name] = assetHash{etag: `W/"` + v + `"`, version: v}
+		out[name] = hex.EncodeToString(h[:8])
 	}
 
 	return out
@@ -68,5 +57,5 @@ var assetHashes = sync.OnceValue(func() map[string]assetHash {
 // browser never pairs new pages with a cached old stylesheet or script,
 // and the server can let it cache each version for good.
 func assetURL(name string) string {
-	return "/static/" + name + "?v=" + assetHashes()[name].version
+	return "/static/" + name + "?v=" + AssetVersion(name)
 }
