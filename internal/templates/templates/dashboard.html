@@ -47,8 +47,8 @@
     {{end}}
 
     {{with .Total}}{{if gt .Configs 1}}
-    <p class="mb-4 text-sm text-gray-600 dark:text-gray-300 tabular-nums" title="The sum of each bucket's latest loaded run; older runs of the same bucket aren't added again">
-        Latest loaded runs of {{.Configs}} buckets: <span class="font-medium text-gray-900 dark:text-gray-100">{{.ObjectsH}} objects · {{.BytesH}}{{if .CostH}} · est. {{.CostH}}/mo{{end}}</span>
+    <p class="mb-4 text-sm text-gray-600 dark:text-gray-300 tabular-nums" title="The sum of each inventory's latest loaded run; older runs of the same inventory aren't added again">
+        {{.Label}}: <span class="font-medium text-gray-900 dark:text-gray-100">{{.ObjectsH}} objects · {{.BytesH}}{{if .CostH}} · est. {{.CostH}}/mo{{end}}</span>
     </p>
     {{end}}{{end}}
 

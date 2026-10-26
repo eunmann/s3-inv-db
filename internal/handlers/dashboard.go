@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,6 +78,21 @@ type DashboardTotal struct {
 	BytesH   string
 	CostH    string // "" unless every summed run is priced
 	Configs  int
+	Buckets  int
+}
+
+// Label names what the total covers: "Latest loaded runs of 4
+// inventories in 2 buckets".
+func (t DashboardTotal) Label() string {
+	return "Latest loaded runs of " + plural(t.Configs, "inventory", "inventories") + " in " + plural(t.Buckets, "bucket", "buckets")
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+
+	return strconv.Itoa(n) + " " + many
 }
 
 // DashboardBudget is the index disk budget: a short line and bar, the
@@ -214,12 +230,14 @@ func (h *Handlers) deltaFromPrevious(ctx context.Context, older []DiscoveredRowV
 func sumLatestLoaded(configs []DashboardConfig) *DashboardTotal {
 	var objects, bytes, cost uint64
 	n, priced := 0, true
+	buckets := map[string]struct{}{}
 	for i := range configs {
 		l := configs[i].Loaded
 		if l == nil {
 			continue
 		}
 		n++
+		buckets[configs[i].SourceBucket] = struct{}{}
 		objects += l.Stats.Objects
 		bytes += l.Stats.Bytes
 		cost += l.Stats.CostMicro
@@ -228,7 +246,7 @@ func sumLatestLoaded(configs []DashboardConfig) *DashboardTotal {
 	if n == 0 {
 		return nil
 	}
-	t := &DashboardTotal{Configs: n, ObjectsH: humanfmt.CountUint64(objects), BytesH: humanfmt.BytesUint64(bytes)}
+	t := &DashboardTotal{Configs: n, Buckets: len(buckets), ObjectsH: humanfmt.CountUint64(objects), BytesH: humanfmt.BytesUint64(bytes)}
 	if priced {
 		t.CostH = pricing.FormatCost(cost)
 	}

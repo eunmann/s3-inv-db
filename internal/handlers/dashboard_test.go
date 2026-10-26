@@ -18,6 +18,7 @@ import (
 )
 
 var (
+	hourlyRun = inventory.Inventory{SourceBucket: "logs", Name: "hourly", Run: "2026-10-19T03-00Z", ManifestKey: "logs/hourly/2026-10-19T03-00Z/manifest.json"}
 	logsRun   = inventory.Inventory{SourceBucket: "logs", Name: "daily", Run: "2026-10-20T03-00Z", ManifestKey: "logs/daily/2026-10-20T03-00Z/manifest.json"}
 	unusedRun = inventory.Inventory{SourceBucket: "new", Name: "weekly", Run: "2026-10-21T03-00Z", ManifestKey: "new/weekly/2026-10-21T03-00Z/manifest.json"}
 )
@@ -44,16 +45,17 @@ func squash(s string) string { return strings.Join(strings.Fields(s), " ") }
 func TestDashboard_LeadsWithEachBucket(t *testing.T) {
 	h := newOverviewHandlers(t,
 		extraRun{inv: logsRun, objs: []costObj{{"z/q", 5 * gib, tiers.Standard}}},
+		extraRun{inv: hourlyRun, objs: []costObj{{"h/q", gib, tiers.Standard}}},
 		extraRun{inv: unusedRun})
 	doc := renderDashboard(t, h)
 
 	var buckets []string
 	doc.Find("article h2").Each(func(_ int, s *goquery.Selection) { buckets = append(buckets, squash(s.Text())) })
-	if got := strings.Join(buckets, "|"); got != "logs daily|new weekly|src inv" {
-		t.Fatalf("configurations %q, want logs daily|new weekly|src inv", got)
+	if got := strings.Join(buckets, "|"); got != "logs daily|logs hourly|new weekly|src inv" {
+		t.Fatalf("configurations %q, want logs daily|logs hourly|new weekly|src inv", got)
 	}
 
-	src := doc.Find("article").Eq(2)
+	src := doc.Find("article").Eq(3)
 	text := squash(src.Text())
 	for _, want := range []string{
 		"Objects 2", "Size " + humanfmt.BytesUint64(3*gib), "Est. cost $",
@@ -75,13 +77,13 @@ func TestDashboard_LeadsWithEachBucket(t *testing.T) {
 		t.Errorf("newer-run Load button: %q", load.AttrOr("hx-post", ""))
 	}
 
-	unused := squash(doc.Find("article").Eq(1).Text())
+	unused := squash(doc.Find("article").Eq(2).Text())
 	if !strings.Contains(unused, "Not loaded") || !strings.Contains(unused, "Load latest run") {
 		t.Errorf("unloaded configuration %q lacks Not loaded / Load latest run", unused)
 	}
 
 	total := squash(doc.Find(`p:contains("Latest loaded runs of")`).Text())
-	if want := "Latest loaded runs of 2 buckets: 3 objects · " + humanfmt.BytesUint64(8*gib); !strings.HasPrefix(total, want) {
+	if want := "Latest loaded runs of 3 inventories in 2 buckets: 4 objects · " + humanfmt.BytesUint64(9*gib); !strings.HasPrefix(total, want) {
 		t.Errorf("total %q, want %q… (each configuration's newest loaded run once)", total, want)
 	}
 
@@ -94,7 +96,7 @@ func TestDashboard_LeadsWithEachBucket(t *testing.T) {
 		t.Errorf("failed build alert lacks its summary: %q", squash(alert.Text()))
 	}
 	status := squash(doc.Find(`section[aria-labelledby="status-heading"]`).Text())
-	for _, want := range []string{"Runs discovered 8", "Builds in progress 0", "Failed builds 1", "Auto-load Off"} {
+	for _, want := range []string{"Runs discovered 9", "Builds in progress 0", "Failed builds 1", "Auto-load Off"} {
 		if !strings.Contains(status, want) {
 			t.Errorf("status lacks %q: %q", want, status)
 		}
@@ -226,5 +228,20 @@ func TestRunDateLabelAndDelta(t *testing.T) {
 	}
 	if got, want := (handlers.RunDelta{SinceH: "Oct 25"}).Line(), "No change since Oct 25"; got != want {
 		t.Errorf("unchanged delta Line = %q, want %q", got, want)
+	}
+}
+
+func TestDashboardTotalLabel(t *testing.T) {
+	for _, tc := range []struct {
+		total handlers.DashboardTotal
+		want  string
+	}{
+		{handlers.DashboardTotal{Configs: 4, Buckets: 2}, "Latest loaded runs of 4 inventories in 2 buckets"},
+		{handlers.DashboardTotal{Configs: 2, Buckets: 1}, "Latest loaded runs of 2 inventories in 1 bucket"},
+		{handlers.DashboardTotal{Configs: 1, Buckets: 1}, "Latest loaded runs of 1 inventory in 1 bucket"},
+	} {
+		if got := tc.total.Label(); got != tc.want {
+			t.Errorf("Label() = %q, want %q", got, tc.want)
+		}
 	}
 }
