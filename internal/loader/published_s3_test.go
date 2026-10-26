@@ -13,6 +13,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/loader"
 	"github.com/eunmann/s3-inv-db/internal/s3test"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/indexstore"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -61,7 +62,7 @@ func TestBuildWith_FetchesAPublishedIndex(t *testing.T) {
 	l := loader.New(cache, s3test.FetchClient(t), loader.WithIndexSource(store, "indexes/", false))
 	manifestURI := "s3://" + bucket + "/" + prefix + "manifest.json"
 	var stages []string
-	out, err := l.BuildWith(t.Context(), key, manifestURI, func(stage string, _, _ int64) { stages = append(stages, stage) }, nil)
+	out, err := l.BuildWith(t.Context(), key, manifestURI, func(p events.Progress) { stages = append(stages, p.Stage) }, nil)
 	if err != nil {
 		t.Fatalf("BuildWith: %v", err)
 	}

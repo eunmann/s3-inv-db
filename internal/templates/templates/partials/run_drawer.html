@@ -42,7 +42,7 @@
             </span>
             {{end}}
             {{if .Live}}
-            <span class="text-gray-500 dark:text-gray-400">{{stageLabel .LatestJob.Stage}}{{if gt .LatestJob.Progress 0}} · {{.LatestJob.Progress}}%{{end}}</span>
+            <span class="text-gray-500 dark:text-gray-400">{{stageLabel .LatestJob.Stage}}{{if .LatestJob.Step}} · {{.LatestJob.Step}}{{end}}{{if gt .LatestJob.Progress 0}} · {{.LatestJob.Progress}}%{{end}}</span>
             {{else}}
                 {{if .LatestTookH}}
                 <span class="text-gray-700 dark:text-gray-200 font-mono" title="Total wall-clock from queue to finish">took {{.LatestTookH}}</span>

@@ -44,7 +44,8 @@ func NewStore(db *sql.DB) *Store {
 const jobColumns = `id, inventory_id, kind, state, stage, progress,
                bytes_total, bytes_done, started_at, finished_at,
                error, updated_at, stages_json, attempt_count, prev_job_id,
-               spill_count, spill_bytes, merge_rounds, merge_bytes`
+               spill_count, spill_bytes, merge_rounds, merge_bytes,
+               step, step_started_at`
 
 // Upsert writes j by primary key. UpdatedAt is set to time.Now().
 func (s *Store) Upsert(ctx context.Context, j Job) error {
@@ -58,7 +59,7 @@ func (s *Store) Upsert(ctx context.Context, j Job) error {
 	}
 	_, err = s.db.ExecContext(ctx, `
         INSERT INTO jobs (`+jobColumns+`)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             state         = excluded.state,
             stage         = excluded.stage,
@@ -75,13 +76,16 @@ func (s *Store) Upsert(ctx context.Context, j Job) error {
             spill_count   = excluded.spill_count,
             spill_bytes   = excluded.spill_bytes,
             merge_rounds  = excluded.merge_rounds,
-            merge_bytes   = excluded.merge_bytes`,
+            merge_bytes   = excluded.merge_bytes,
+            step          = excluded.step,
+            step_started_at = excluded.step_started_at`,
 		j.ID, j.InventoryID, string(j.Kind), string(j.State), j.Stage,
 		j.Progress, j.StageTotal, j.StageDone,
 		inventory.UnixOrZero(j.StartedAt), inventory.UnixOrZero(j.FinishedAt),
 		j.Error, time.Now().Unix(),
 		stagesJSON, attempt, string(j.PrevJobID),
 		j.SpillCount, j.SpillBytes, j.MergeRounds, j.MergeBytes,
+		j.Step, inventory.UnixOrZero(j.StepStartedAt),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert job %s: %w", j.ID, err)
@@ -252,13 +256,14 @@ func (s *Store) PruneTerminal(ctx context.Context, cutoff time.Time, keep int) (
 func scanJob(r rowScanner) (Job, error) {
 	var j Job
 	var kind, state, stagesJSON, prevJobID string
-	var startedAt, finishedAt, updatedAt int64
+	var startedAt, finishedAt, updatedAt, stepStartedAt int64
 	var attemptCount int
 	if err := r.Scan(
 		&j.ID, &j.InventoryID, &kind, &state, &j.Stage, &j.Progress,
 		&j.StageTotal, &j.StageDone, &startedAt, &finishedAt, &j.Error, &updatedAt,
 		&stagesJSON, &attemptCount, &prevJobID,
 		&j.SpillCount, &j.SpillBytes, &j.MergeRounds, &j.MergeBytes,
+		&j.Step, &stepStartedAt,
 	); err != nil {
 		return Job{}, fmt.Errorf("scan job: %w", err)
 	}
@@ -266,6 +271,7 @@ func scanJob(r rowScanner) (Job, error) {
 	j.State = State(state)
 	j.StartedAt = inventory.TimeFromUnix(startedAt)
 	j.FinishedAt = inventory.TimeFromUnix(finishedAt)
+	j.StepStartedAt = inventory.TimeFromUnix(stepStartedAt)
 	j.UpdatedAt = time.Unix(updatedAt, 0)
 	stages, err := unmarshalStages(stagesJSON)
 	if err != nil {

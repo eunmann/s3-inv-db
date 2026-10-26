@@ -70,3 +70,56 @@ func waitForStage(t *testing.T, store *jobs.Store, id jobs.ID, stage string) {
 	}
 	t.Fatalf("job %s never reached stage %s", id, stage)
 }
+
+// TestManager_ReportResetsProgressOnStepChange pins that a new step
+// within a stage resets the counter and restarts the clock its ETA
+// extrapolates from, and that both are persisted for the UI.
+func TestManager_ReportResetsProgressOnStepChange(t *testing.T) {
+	mgr, store, _ := newScheduler(t)
+
+	next := make(chan struct{})
+	done := make(chan struct{})
+	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, report func(jobs.Update)) error {
+		report(jobs.Update{Stage: "finalizing", Step: "Writing hash slots", StageDone: 3, StageTotal: 10})
+		<-next
+		report(jobs.Update{Stage: "finalizing", Step: "Checksumming files"})
+		close(done)
+		<-next
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	first := waitForStep(t, store, job.ID, "Writing hash slots")
+	if first.StageDone != 3 || first.StageTotal != 10 || first.StepStartedAt.IsZero() {
+		t.Errorf("first step: %d/%d started %v, want 3/10 and a start time", first.StageDone, first.StageTotal, first.StepStartedAt)
+	}
+	time.Sleep(1100 * time.Millisecond) // the store keeps whole seconds
+	next <- struct{}{}
+	<-done
+	second := waitForStep(t, store, job.ID, "Checksumming files")
+	if second.StageDone != 0 || second.StageTotal != 0 {
+		t.Errorf("second step: %d/%d, want 0/0 (the previous step's counter leaked)", second.StageDone, second.StageTotal)
+	}
+	if !second.StepStartedAt.After(first.StepStartedAt) {
+		t.Errorf("second step started %v, not after the first's %v", second.StepStartedAt, first.StepStartedAt)
+	}
+	close(next)
+}
+
+func waitForStep(t *testing.T, store *jobs.Store, id jobs.ID, step string) jobs.Job {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		j, err := store.Get(t.Context(), id)
+		if err == nil && j.Step == step {
+			return j
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("job %s never reached step %s", id, step)
+
+	return jobs.Job{}
+}

@@ -36,9 +36,26 @@ type StreamingMPHFBuilder struct {
 	keyHash     func(prefix string) uint64
 	fingerprint func(prefix string) uint64
 
+	// progress, when set, receives the build's steps (see SetProgress).
+	progress StepProgress
+
 	count uint64
 	built bool
 }
+
+// The MPHF build's steps, as SetProgress's callback names them.
+const (
+	// StepBuildHash builds the hash levels; it counts key reads against
+	// an estimate (bbhashScanEstimate).
+	StepBuildHash = "Building the prefix hash"
+	// StepPlaceSlots looks up every prefix's slot; it counts prefixes.
+	StepPlaceSlots = "Placing hash slots"
+	// StepSlotFile writes mph_slots.bin in slot order; it counts slots.
+	StepSlotFile = "Writing hash slots"
+)
+
+// SetProgress makes Build report its steps to fn. Call it before Build.
+func (b *StreamingMPHFBuilder) SetProgress(fn StepProgress) { b.progress = fn }
 
 // ErrMPHFAlreadyBuilt is returned when Build is called more than
 // once on the same StreamingMPHFBuilder. The first call consumes the
@@ -150,10 +167,12 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 
 	n := int(b.count)
 	bbhashStart := time.Now()
-	mph, err := b.buildBBHash()
+	scan := newStepCounter(b.progress, StepBuildHash, bbhashScanEstimate(n))
+	mph, err := b.buildBBHash(scan)
 	if err != nil {
 		return err
 	}
+	scan.finish()
 	log.Debug().Dur("bbhash_ms", time.Since(bbhashStart)).Msg("MPHF: bbhash built")
 
 	if err := mph.writeFile(filepath.Join(outDir, MPHFile)); err != nil {
@@ -161,7 +180,7 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	}
 
 	mapStart := time.Now()
-	if err := writeSlots(outDir, b.tempDir, n, mph, b.hashes.Slice(), b.fingerprints.Slice()); err != nil {
+	if err := writeSlots(outDir, b.tempDir, n, mph, b.hashes.Slice(), b.fingerprints.Slice(), b.progress); err != nil {
 		return err
 	}
 	log.Debug().Dur("write_ms", time.Since(mapStart)).Msg("MPHF: slots written")
@@ -185,11 +204,11 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 // finalize holds little beyond bbhash's own bit vectors. Keys the levels
 // leave unplaced, chiefly prefixes that share a 64-bit key hash, go to
 // the fallback table.
-func (b *StreamingMPHFBuilder) buildBBHash() (*bbhash, error) {
+func (b *StreamingMPHFBuilder) buildBBHash(scan *stepCounter) (*bbhash, error) {
 	hashes, fps := b.hashes.Slice(), b.fingerprints.Slice()
 	mph, err := newBBHashWith(hashes, b.scratchKeys, func(leftovers []uint64) ([]bbFallback, error) {
 		return fallbackEntries(leftovers, hashes, fps)
-	})
+	}, scan)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +256,7 @@ func fallbackEntries(leftovers, hashes, fps []uint64) ([]bbFallback, error) {
 	slices.Sort(leftovers)
 	leftovers = slices.Compact(leftovers)
 	chunks := make([][]bbFallback, mphfWorkerCount(len(hashes)))
-	forChunks(len(hashes), func(c, lo, hi int) {
+	forChunks(len(hashes), nil, func(c, lo, hi int) {
 		for i := lo; i < hi; i++ {
 			if _, found := slices.BinarySearch(leftovers, hashes[i]); found {
 				chunks[c] = append(chunks[c], bbFallback{hash: hashes[i], fp: fps[i]})
@@ -280,7 +299,7 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 	}
 
 	// An empty slot file keeps the index's file set the same at any size.
-	return writeSlots(outDir, b.tempDir, 0, nil, nil, nil)
+	return writeSlots(outDir, b.tempDir, 0, nil, nil, nil, nil)
 }
 
 // writeSlots materialises mph_slots.bin: it maps every slot to its
@@ -292,8 +311,9 @@ func (b *StreamingMPHFBuilder) writeEmpty(outDir string) error {
 // File layout: Header (Count = slots, Width = slot bytes), a 1-byte
 // descriptor (position width), the slots (8-byte fingerprint, then the
 // position at that width), and an 8-byte zero tail pad for masked loads
-// at the last slot.
-func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps []uint64) error {
+// at the last slot. Progress, when non-nil, receives the StepPlaceSlots
+// and StepSlotFile steps.
+func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps []uint64, progress StepProgress) error {
 	if len(fps) != n {
 		return fmt.Errorf("%w: fps=%d n=%d", errMPHFArrayLengthMismatch, len(fps), n)
 	}
@@ -320,10 +340,13 @@ func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps []uint64
 	if n > 0 {
 		// Concurrent pwrite to disjoint ranges is POSIX-safe; each worker
 		// writes its own [start,end) slot range.
-		owners, err := newSlotOwners(tempDir, mph, hashes, fps)
+		placed := newStepCounter(progress, StepPlaceSlots, int64(n))
+		owners, err := newSlotOwners(tempDir, mph, hashes, fps, placed)
 		if err != nil {
 			return cleanup(err)
 		}
+		placed.finish()
+		written := newStepCounter(progress, StepSlotFile, int64(n))
 		numWorkers := max(min(runtime.NumCPU(), n), 1)
 		slotsPerWorker := (n + numWorkers - 1) / numWorkers
 		errs := make([]error, numWorkers)
@@ -334,12 +357,13 @@ func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps []uint64
 			if start >= end {
 				continue
 			}
-			wg.Go(func() { errs[w] = writeSlotRange(f, owners, fps, posW, start, end) })
+			wg.Go(func() { errs[w] = writeSlotRange(f, owners, fps, posW, start, end, written) })
 		}
 		wg.Wait()
 		if err := errors.Join(errors.Join(errs...), owners.close()); err != nil {
 			return cleanup(err)
 		}
+		written.finish()
 	}
 	if err := f.Sync(); err != nil {
 		return cleanup(fmt.Errorf("sync MPHF slots: %w", err))
@@ -371,8 +395,9 @@ type scratchMapping struct {
 
 // newSlotOwners fills the map with parallel bbhash lookups, through the
 // fallback table for keys the levels miss. The MPHF is a bijection, so
-// every slot is written by exactly one lookup.
-func newSlotOwners(tempDir string, mph *bbhash, hashes, fps []uint64) (*slotOwners, error) {
+// every slot is written by exactly one lookup. Placed counts the
+// prefixes looked up.
+func newSlotOwners(tempDir string, mph *bbhash, hashes, fps []uint64, placed *stepCounter) (*slotOwners, error) {
 	n := len(hashes)
 	o := &slotOwners{width: 4}
 	if uint64(n) > math.MaxUint32 {
@@ -405,7 +430,11 @@ func newSlotOwners(tempDir string, mph *bbhash, hashes, fps []uint64) (*slotOwne
 					return
 				}
 				o.set(int(slot), uint64(i))
+				if (i-start+1)%progressBlock == 0 {
+					placed.add(progressBlock)
+				}
 			}
+			placed.add((end - start) % progressBlock)
 		})
 	}
 	wg.Wait()
@@ -474,8 +503,9 @@ func (m *scratchMapping) close() error {
 	return errors.Join(err, removeIfErr(m.path))
 }
 
-// writeSlotRange writes slots [start, end) of the slot file.
-func writeSlotRange(f *os.File, owners *slotOwners, fps []uint64, posW, start, end int) error {
+// writeSlotRange writes slots [start, end) of the slot file, counting
+// them on written.
+func writeSlotRange(f *os.File, owners *slotOwners, fps []uint64, posW, start, end int, written *stepCounter) error {
 	slotW := mphfFingerprintBytes + posW
 	const bufBytes = 1 << 20
 	bufSlots := bufBytes / slotW
@@ -495,6 +525,7 @@ func writeSlotRange(f *os.File, owners *slotOwners, fps []uint64, posW, start, e
 		if _, err := f.WriteAt(buf[:blen], fileOff); err != nil {
 			return fmt.Errorf("write MPHF slot %d: %w", chunk, err)
 		}
+		written.add(cEnd - chunk)
 	}
 
 	return nil

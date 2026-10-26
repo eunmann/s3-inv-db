@@ -19,6 +19,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/s3test"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
 	"github.com/eunmann/s3-inv-db/pkg/extsort"
+	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/rs/zerolog"
@@ -207,7 +208,7 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 		peak := benchutil.StartHeapPeakSampler()
 
 		cfg := extsort.DefaultConfig()
-		cfg.Observe.OnProgress = func(string, int64, int64) {}
+		cfg.Observe.OnProgress = func(events.Progress) {}
 		pipeline := extsort.NewPipeline(cfg, fc)
 
 		b.StartTimer()

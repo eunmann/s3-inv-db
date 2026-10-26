@@ -65,6 +65,21 @@ const (
 	EvtFinalizeEnded   Type = "finalize_ended"
 )
 
+// Progress is where a build is: its stage, the step within the stage
+// when the stage has steps, and the current counter's done of total.
+// Done and Total are zero on a transition and for a step that does not
+// count; their unit varies (chunks, run files, rows, slots, bytes).
+type Progress struct {
+	Stage string
+	Step  string
+	Done  int64
+	Total int64
+}
+
+// ProgressFunc receives a build's progress. It may be called from
+// several goroutines at once.
+type ProgressFunc func(Progress)
+
 // Event is the unit of communication on the bus. Payload type is
 // up to the publisher; subscribers type-assert.
 type Event struct {

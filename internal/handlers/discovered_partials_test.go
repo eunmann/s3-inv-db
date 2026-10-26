@@ -58,7 +58,7 @@ type fakeBuilder struct {
 	buildResp string
 }
 
-func (f *fakeBuilder) BuildWith(_ context.Context, _ inventory.CacheKey, _ string, _ func(string, int64, int64), _ *events.Bus) (string, error) {
+func (f *fakeBuilder) BuildWith(_ context.Context, _ inventory.CacheKey, _ string, _ events.ProgressFunc, _ *events.Bus) (string, error) {
 	return f.buildResp, f.buildErr
 }
 

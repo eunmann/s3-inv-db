@@ -74,7 +74,7 @@ type fakeLoader struct {
 	failOnce  bool
 }
 
-func (f *fakeLoader) AutoLoad(_ context.Context, disc inventory.Inventory, _ func(stage string, done, total int64), _ *events.Bus) error {
+func (f *fakeLoader) AutoLoad(_ context.Context, disc inventory.Inventory, _ events.ProgressFunc, _ *events.Bus) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := disc.CompositeID()

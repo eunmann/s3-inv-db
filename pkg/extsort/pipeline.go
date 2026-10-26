@@ -69,14 +69,14 @@ type Result struct {
 func (p *Pipeline) setPhase(name string) {
 	p.memTracker.SetPhase(name)
 	if p.config.Observe.OnProgress != nil {
-		p.config.Observe.OnProgress(name, 0, 0)
+		p.config.Observe.OnProgress(events.Progress{Stage: name})
 	}
 }
 
 // reportProgress emits quantitative progress within the current phase.
 func (p *Pipeline) reportProgress(phase string, done, total int64) {
 	if p.config.Observe.OnProgress != nil {
-		p.config.Observe.OnProgress(phase, done, total)
+		p.config.Observe.OnProgress(events.Progress{Stage: phase, Done: done, Total: total})
 	}
 }
 
@@ -218,6 +218,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		Str("aggregator_cap", humanfmt.BytesUint64(AggregatorCap(memoryLimit))).
 		Msg("pipeline starting")
 
+	ingestPressure := sysmem.ReadPressure()
 	ingestDuration, err := p.timedIngestPhase(ctx, log, manifestURI)
 	if err != nil {
 		return nil, err
@@ -225,7 +226,8 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 	p.memTracker.LogNow("post_ingest")
 
-	log.Info().
+	mergePressure := sysmem.ReadPressure()
+	logPressure(log.Info(), mergePressure.Since(ingestPressure)).
 		Int("run_files_count", len(p.runFiles)).
 		Str("objects", humanfmt.Count(p.objectsProcessed.Load())).
 		Int64("objects_count", p.objectsProcessed.Load()).
@@ -245,7 +247,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 	p.memTracker.LogNow("post_merge")
 
-	log.Info().
+	logPressure(log.Info(), sysmem.ReadPressure().Since(mergePressure)).
 		Str("prefixes", humanfmt.CountUint64(prefixCount)).
 		Uint64("prefixes_count", prefixCount).
 		Uint32("max_depth", maxDepth).
@@ -1174,7 +1176,8 @@ func (p *Pipeline) fillAndFinalize(ctx context.Context, builder *IndexBuilder, r
 			return fmt.Errorf("build index: %w", err)
 		}
 	}
-	p.reportProgress("finalizing", 0, 0)
+	p.reportProgress(finalizingStage, 0, 0)
+	builder.SetProgress(p.config.Observe.OnProgress)
 	if err := builder.FinalizeWithContext(ctx); err != nil {
 		return fmt.Errorf("finalize index: %w", err)
 	}

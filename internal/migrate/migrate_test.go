@@ -118,8 +118,8 @@ func TestApply_DirtyRecoveryReRunsFailedMigration(t *testing.T) {
 	ctx := t.Context()
 	// Drop every column from the most recent migration so the re-run
 	// isn't short-circuited by the alreadyAppliedErr path.
-	// 0007_job_diagnostics adds four columns to jobs.
-	for _, col := range []string{"merge_bytes", "merge_rounds", "spill_bytes", "spill_count"} {
+	// 0008_job_step adds two columns to jobs.
+	for _, col := range []string{"step", "step_started_at"} {
 		if _, err := db.ExecContext(ctx, `ALTER TABLE jobs DROP COLUMN `+col); err != nil {
 			t.Fatalf("simulate partial apply (drop %s): %v", col, err)
 		}
@@ -138,10 +138,10 @@ func TestApply_DirtyRecoveryReRunsFailedMigration(t *testing.T) {
 	}
 	var name string
 	err := db.QueryRowContext(ctx,
-		`SELECT name FROM pragma_table_info('jobs') WHERE name='spill_count'`,
+		`SELECT name FROM pragma_table_info('jobs') WHERE name='step_started_at'`,
 	).Scan(&name)
 	if err != nil {
-		t.Errorf("spill_count column missing after dirty recovery: %v", err)
+		t.Errorf("step_started_at column missing after dirty recovery: %v", err)
 	}
 }
 

@@ -4,7 +4,9 @@
 {{$pct := 0}}{{$eta := ""}}
 {{if and $busy .LatestJob (gt .LatestJob.StageTotal 0)}}
     {{$pct = progressPct .LatestJob.StageDone .LatestJob.StageTotal}}
-    {{$eta = formatETA .LatestJob.StartedAt .LatestJob.StageDone .LatestJob.StageTotal}}
+    {{- /* The counter is the current stage's (or step's): extrapolate
+           from when it started, not from the job's start. */ -}}
+    {{$eta = formatETA .LatestJob.StepStartedAt .LatestJob.StageDone .LatestJob.StageTotal}}
 {{end}}
 <tbody id="discovered-row-{{.SourceBucket}}-{{.Name}}-{{.Run}}"
     {{if .Run}}hx-get="/partials/discovered/{{.SourceBucket}}/{{.Name}}/{{.Run}}"
@@ -47,7 +49,7 @@
         </span>
         {{if $busy}}
         <div class="mt-1 text-xs text-gray-600 dark:text-gray-300">
-            {{if .LatestJob}}{{if .LatestJob.Stage}}{{stageLabel .LatestJob.Stage}}{{else}}Starting…{{end}}{{else}}Starting…{{end}}
+            {{if .LatestJob}}{{if .LatestJob.Stage}}{{stageLabel .LatestJob.Stage}}{{if .LatestJob.Step}} · {{.LatestJob.Step}}{{end}}{{else}}Starting…{{end}}{{else}}Starting…{{end}}
             {{if gt $pct 0}}<span class="text-gray-400 dark:text-gray-500">· {{$pct}}%{{if $eta}} · ~{{$eta}}{{end}}</span>{{end}}
         </div>
         {{end}}

@@ -154,11 +154,17 @@ builds.
 - `GET /metrics`: Prometheus metrics.
 - `GET /api/disk-budget`: cap, used, reserved, headroom, available.
 - `GET /api/notifications`: recent failures (also shown as a banner).
+- Build logs (info): `ingest phase complete`, `merge phase complete`
+  and one `finalize step complete` per finalize step, each with its
+  duration and how long it waited on storage: `major_faults`,
+  `storage_read`/`storage_written`, and on Linux the system's
+  `file_refaults` (page-cache thrash) and `io_stall_full`.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Low CPU during a build | S3 bandwidth | More vCPUs or network |
 | Slow build, many run files | Spilling under a tight limit | Raise `GOMEMLIMIT` |
 | Long final build phase | MPHF build | Expected past ~5M prefixes |
+| A finalize step with high `major_faults` | Its scratch arrays don't fit in the page cache | More RAM, or fewer indexes loaded during builds |
 | First queries slow | Cold page cache | Expected; prefault covers new loads |
 | Load refused | Budget full of pinned runs | Unpin or raise `max_index_disk` |
