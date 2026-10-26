@@ -82,6 +82,11 @@
         {{if .Level}}
             {{template "templates/partials/compare_level.html" .Partial}}
         {{else if not (or .From .To)}}
+        {{if .Unavailable}}
+        <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-900/50 rounded-md p-4 mb-6 text-sm text-yellow-800 dark:text-yellow-300">
+            That run isn't loaded. Pick loaded runs above or below, or load it on <a href="/inventories" class="underline">Inventories</a>.
+        </div>
+        {{end}}
         {{if .Suggestions}}
         <section aria-labelledby="compare-suggestions-title" class="bg-white dark:bg-gray-800 shadow sm:rounded-lg">
             <div class="px-4 py-4 sm:px-6 border-b border-gray-200 dark:border-gray-700">

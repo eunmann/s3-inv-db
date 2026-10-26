@@ -68,6 +68,8 @@ type ComparePageData struct {
 	// SingleRun is set when the run named has no other loaded run of its
 	// configuration to compare with.
 	SingleRun bool
+	// Unavailable is set when the one run named isn't loaded.
+	Unavailable bool
 }
 
 // CompareSuggestion is a comparison of a configuration's two latest
@@ -82,9 +84,10 @@ type CompareSuggestion struct {
 // compareSides is the pair of runs a compare page shows; see
 // resolveCompareSides.
 type compareSides struct {
-	from, to  inventory.ID
-	note      string
-	singleRun bool
+	from, to    inventory.ID
+	note        string
+	singleRun   bool
+	unavailable bool
 }
 
 // resolveCompareSides fills in the side a request left out with the
@@ -92,8 +95,8 @@ type compareSides struct {
 // alone is compared with the next newer run, a run to compare (to)
 // alone with the next older one. When there is no run on that side,
 // the run named moves to the other side and the note says so. A run
-// that isn't loaded, or a request naming both or neither, is returned
-// as it came.
+// named alone that isn't loaded is dropped and flagged unavailable. A
+// request naming both or neither is returned as it came.
 func resolveCompareSides(picker ComparePicker, from, to inventory.ID) compareSides {
 	s := compareSides{from: from, to: to}
 	if (from == "") == (to == "") {
@@ -103,15 +106,18 @@ func resolveCompareSides(picker ComparePicker, from, to inventory.ID) compareSid
 	if given == "" {
 		given = to
 	}
-	runs := filterComparePickerByConfig(picker, given).Groups
-	if len(runs) != 1 {
-		return s
+	var opts []ComparePickerOption // the run's configuration, newest first
+	i := -1
+	for _, g := range picker.Groups {
+		if i = slices.IndexFunc(g.Options, func(o ComparePickerOption) bool { return o.ID == given }); i >= 0 {
+			opts = g.Options
+
+			break
+		}
 	}
-	opts := runs[0].Options // newest first
-	i := slices.IndexFunc(opts, func(o ComparePickerOption) bool { return o.ID == given })
 	switch {
 	case i < 0:
-		return s
+		return compareSides{unavailable: true}
 	case len(opts) < 2:
 		s.singleRun = true
 
@@ -263,14 +269,15 @@ func (h *Handlers) renderCompareFullPage(w http.ResponseWriter, r *http.Request,
 	sides := resolveCompareSides(picker, opts.from, opts.to)
 	opts.from, opts.to = sides.from, sides.to
 	data := ComparePageData{
-		Title:     "Compare runs",
-		Picker:    picker,
-		ToPicker:  filterComparePickerByConfig(picker, opts.from),
-		From:      opts.from,
-		To:        opts.to,
-		Prefix:    opts.prefix,
-		Note:      sides.note,
-		SingleRun: sides.singleRun,
+		Title:       "Compare runs",
+		Picker:      picker,
+		ToPicker:    filterComparePickerByConfig(picker, opts.from),
+		From:        opts.from,
+		To:          opts.to,
+		Prefix:      opts.prefix,
+		Note:        sides.note,
+		SingleRun:   sides.singleRun,
+		Unavailable: sides.unavailable,
 	}
 
 	switch {

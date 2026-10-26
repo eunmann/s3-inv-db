@@ -39,16 +39,20 @@ func TestResolveCompareSides(t *testing.T) {
 		wantFrom, wantTo inventory.ID
 		wantNote         bool
 		wantSingle       bool
+		wantUnavailable  bool
 	}{
-		{"baseline gets the next newer run", sideRun1, "", sideRun1, sideRun2, false, false},
-		{"middle baseline gets the next newer run", sideRun2, "", sideRun2, sideRun3, false, false},
-		{"newest baseline becomes the compared run", sideRun3, "", sideRun2, sideRun3, true, false},
-		{"compared run gets the next older baseline", "", sideRun3, sideRun2, sideRun3, false, false},
-		{"oldest compared run becomes the baseline", "", sideRun1, sideRun1, sideRun2, true, false},
-		{"only run of its configuration", sideLone, "", sideLone, "", false, true},
-		{"run not loaded is left alone", "b/inv/2026-01-04T00-00Z", "", "b/inv/2026-01-04T00-00Z", "", false, false},
-		{"both given are left alone", sideRun3, sideRun1, sideRun3, sideRun1, false, false},
-		{"neither given", "", "", "", "", false, false},
+		{"baseline gets the next newer run", sideRun1, "", sideRun1, sideRun2, false, false, false},
+		{"middle baseline gets the next newer run", sideRun2, "", sideRun2, sideRun3, false, false, false},
+		{"newest baseline becomes the compared run", sideRun3, "", sideRun2, sideRun3, true, false, false},
+		{"compared run gets the next older baseline", "", sideRun3, sideRun2, sideRun3, false, false, false},
+		{"oldest compared run becomes the baseline", "", sideRun1, sideRun1, sideRun2, true, false, false},
+		{"only run of its configuration", sideLone, "", sideLone, "", false, true, false},
+		{"run not loaded is dropped", "b/inv/2026-01-04T00-00Z", "", "", "", false, false, true},
+		{"compared run not loaded is dropped", "", "b/inv/2026-01-04T00-00Z", "", "", false, false, true},
+		{"run of no loaded configuration is dropped", "d/inv/2026-01-01T00-00Z", "", "", "", false, false, true},
+		{"unparseable run is dropped", "not-a-run", "", "", "", false, false, true},
+		{"both given are left alone", sideRun3, sideRun1, sideRun3, sideRun1, false, false, false},
+		{"neither given", "", "", "", "", false, false, false},
 	}
 	picker := sidesPicker()
 	for _, tt := range tests {
@@ -62,6 +66,9 @@ func TestResolveCompareSides(t *testing.T) {
 			}
 			if got.SingleRun != tt.wantSingle {
 				t.Errorf("single run = %v, want %v", got.SingleRun, tt.wantSingle)
+			}
+			if got.Unavailable != tt.wantUnavailable {
+				t.Errorf("unavailable = %v, want %v", got.Unavailable, tt.wantUnavailable)
 			}
 		})
 	}
@@ -90,6 +97,31 @@ func TestComparePage_OneSideComparesWithItsNeighbour(t *testing.T) {
 		}
 		if doc.Find("#compare-level-title").Length() != 1 {
 			t.Errorf("%v: no comparison rendered", q)
+		}
+	}
+}
+
+// TestComparePage_UnloadedRunSaysSo: a link naming one run that isn't
+// loaded says so above the suggested comparisons.
+func TestComparePage_UnloadedRunSaysSo(t *testing.T) {
+	mgr := inventory.NewCatalog(nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+	for _, id := range []inventory.ID{sideRun1, sideRun2} {
+		registerCostIndex(t, mgr, id, []costObj{{"a/x", 1, tiers.Standard}})
+	}
+	h := newWiredHandlers(t, mgr)
+	for _, q := range []url.Values{{"from": {string(sideRun3)}}, {"to": {string(sideRun3)}}, {"from": {"d/inv/2026-01-01T00-00Z"}}} {
+		w := httptest.NewRecorder()
+		h.ComparePage(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/compare?"+q.Encode(), http.NoBody))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%v: status %d", q, w.Code)
+		}
+		target := parseHTMLFragment(t, w.Body.String()).Find("#compare-target")
+		if !strings.Contains(target.Text(), "That run isn't loaded") {
+			t.Errorf("%v: results = %q, want the run-not-loaded notice", q, strings.Join(strings.Fields(target.Text()), " "))
+		}
+		if target.Find(`section[aria-labelledby="compare-suggestions-title"] a`).Length() != 1 {
+			t.Errorf("%v: want the b/inv suggestion", q)
 		}
 	}
 }
