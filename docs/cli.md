@@ -37,7 +37,8 @@ s3-inv-db build --s3-manifest s3://bucket/inv/data/manifest.json --out ./my-inde
 | Flag | Required | Default | Description |
 |---|---|---|---|
 | `--s3-manifest` | yes |  | S3 URI to `manifest.json` |
-| `--out` | yes |  | Output directory for the index: missing, empty, or a previous index (which is replaced) |
+| `--out` | yes |  | Output directory for the index: missing, empty, or a previous index (which is replaced). Or `s3://bucket/prefix/` to publish it for a server's `index_source` (see [operations](operations.md#builds-outside-the-server)) |
+| `--work-dir` |  | `.` | With `--out s3://...`: the local directory the index is built in before it's uploaded, scratch included. Not `/tmp`, which may be RAM |
 | `--max-depth` |  | 0 (unlimited) | Maximum prefix depth to retain |
 | `--allow-malformed-rows` |  | false | Build even when inventory rows can't be read exactly (a short row, an empty or null key, a size that doesn't parse or is null, a key that isn't valid URL encoding). They're skipped or indexed with size 0 and logged, so totals differ from the inventory. Without it the build fails and names the chunk and counts. A chunk whose downloaded size differs from the manifest always fails. CLI only: builds the server starts have no opt-out and always fail on such rows. |
 | `--event-log` |  |  | Append build events as JSONL to this path (overrides `build_event_log`) |
@@ -63,7 +64,9 @@ flagless: see [how it works](how-it-works.md#building) and
 
 AWS credentials use the standard SDK chain: env vars → shared
 credentials file → IAM role. Required permissions: `s3:GetObject` on
-the inventory files and `s3:ListBucket` on the inventory bucket.
+the inventory files and `s3:ListBucket` on the inventory bucket;
+publishing also needs `s3:PutObject` and `s3:DeleteObject` on the
+index prefix.
 
 ## `query`
 

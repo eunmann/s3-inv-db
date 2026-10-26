@@ -70,6 +70,7 @@ Mutating:
 | `/api/inventories/{id}/stats:batch` | POST | Body: `{"prefixes":[...],"show_tiers":bool,"estimate_cost":bool}`. Returns one row per prefix with `found=false` for misses. Cap defaults to 1000; override with `query_batch_max`. |
 | `/api/inventories/{id}/pin` | POST | Toggle pin state (`pinned=true|false`); pinned runs are never auto-evicted |
 | `/api/configurations/{src}/{name}/auto-load` | POST | Set auto-load + retention for a configuration (`auto_load=on|off`, `retention=N`) |
+| `/api/indexes/refresh` | POST | List the inventory or index source now and start an auto-load poll, instead of waiting for the next interval. Returns `{"auto_load": bool}`; 503 with no source configured |
 | `/api/jobs/{id}/cancel` | POST | Cancel an in-flight job |
 
 ### Server-Sent Events

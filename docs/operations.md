@@ -94,9 +94,56 @@ helps only workloads of a few queries per cold period (#50, #77).
 
 ## Builds outside the server
 
-`s3-inv-db build --out <dir>` builds anywhere with S3 read access;
-`s3-inv-db query/top/browse/compare` read the result directly. Builds
-that publish to S3 for the server to pick up are planned in #45.
+By default the server builds indexes itself. To build elsewhere (a
+batch job, a bigger machine, CI) and only serve on the server:
+
+```bash
+s3-inv-db build --s3-manifest s3://inv/.../<source>/<inventory>/<run>/manifest.json \
+  --out s3://indexes/prod/
+```
+
+The build uploads the index to
+`s3://indexes/prod/<source>/<inventory>/<run>/`, its `manifest.json`
+last: a run without one is still uploading and is ignored. Point the
+server at it with `index_source: "s3://indexes/prod/"`:
+
+- with `s3_source` too, loading a run downloads its published index if
+  there is one, and builds in-process otherwise;
+- without `s3_source`, the server lists runs from `index_source` and
+  only downloads. It then needs no access to the inventories.
+
+A download is verified against the manifest's SHA-256 checksums before
+the index is used, and counts against the disk budget at its exact
+size. The server notices new runs at the next poll; to make it look
+now, call `POST /api/indexes/refresh` (for example as the build job's
+last step).
+
+```mermaid
+flowchart LR
+    T["Trigger"] --> B["s3-inv-db build<br/>--out s3://indexes/..."]
+    B --> I[("Index bucket<br/>manifest.json last")]
+    B -. "POST /api/indexes/refresh" .-> S["Server<br/>index_source"]
+    I --> S
+```
+
+What triggers the build is up to you; the server doesn't consume
+events. Common choices:
+
+- **Cron** (or a CI schedule): run `build` after the inventory's usual
+  delivery time.
+- **EventBridge:** a rule on `Object Created` for keys ending in
+  `manifest.json` in the inventory bucket starts an AWS Batch or ECS
+  task running `build` with that key. The server image works as the
+  task image: it includes the CLI (entrypoint `s3-inv-db`, command
+  `build --s3-manifest ... --out s3://...`).
+- **S3 event notification:** a notification on `manifest.json` invokes
+  a Lambda that starts the same ECS task.
+
+Permissions: the build role reads the inventory bucket (`s3:GetObject`,
+`s3:ListBucket`) and writes the index prefix (`s3:PutObject`,
+`s3:DeleteObject`); the server role only reads the index bucket
+(`s3:GetObject`, `s3:ListBucket`), plus the inventories if it also
+builds.
 
 ## Monitoring
 
