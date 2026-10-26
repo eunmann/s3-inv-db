@@ -83,7 +83,7 @@ func (h *Handlers) LoadDiscoveredRowPartial(w http.ResponseWriter, r *http.Reque
 func (h *Handlers) CancelJob(w http.ResponseWriter, r *http.Request) {
 	id := jobs.ID(chi.URLParam(r, "id"))
 	if err := h.jobMgr.Cancel(id); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, "this job is no longer running", http.StatusNotFound)
 
 		return
 	}

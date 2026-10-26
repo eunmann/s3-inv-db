@@ -112,6 +112,47 @@ func TestHTMLResponses_VaryAndNoCache(t *testing.T) {
 	}
 }
 
+// TestInventoriesPage_AutoLoadFormReportsOwnErrors: the auto-load form
+// shows its own "Not saved: …" line, so it opts out of the layout's
+// error toast rather than reporting a failure twice.
+func TestInventoriesPage_AutoLoadFormReportsOwnErrors(t *testing.T) {
+	list := []inventory.Inventory{{SourceBucket: "src", Name: "inv", Run: "2026-01-01T03-00Z", ManifestKey: "k/inv/manifest.json"}}
+	h := newWiredHandlers(t, nil,
+		handlers.WithDiscoverer(&fakeDiscoverer{listResp: list, bucket: "dst"}),
+		handlers.WithLoader(&fakeBuilder{}))
+	w := httptest.NewRecorder()
+	h.InventoriesPage(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/inventories", http.NoBody))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	forms := parseHTML(t, w.Body.String()).Find("form[data-autoload-form]")
+	if forms.Length() == 0 {
+		t.Fatal("no auto-load form rendered")
+	}
+	if forms.Not("[data-own-errors]").Length() != 0 {
+		t.Error("auto-load form lacks data-own-errors")
+	}
+}
+
+// TestCancelJob_FinishedJobSaysSo: Cancel on a job that has already
+// ended answers 404 with a sentence the error toast can show as is.
+func TestCancelJob_FinishedJobSaysSo(t *testing.T) {
+	h := newWiredHandlers(t, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/jobs/gone/cancel", http.NoBody)
+	w := httptest.NewRecorder()
+	h.CancelJob(w, withURLParam(req, "id", "gone"))
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+	if got := strings.TrimSpace(w.Body.String()); got != "this job is no longer running" {
+		t.Errorf("body = %q", got)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("Content-Type = %q, want text/plain", ct)
+	}
+}
+
 // TestComparePage_FullPagePrefixInput: Back and Forward refetch the
 // page from the server, so the full page must render the prefix input
 // with the URL's prefix.
