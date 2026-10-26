@@ -49,17 +49,18 @@
                           hx-trigger="change"
                           hx-swap="none"
                           aria-label="Auto-load settings">
-                        <input type="hidden" name="auto_load" value="off">
-                        <label class="inline-flex items-center gap-1.5 cursor-pointer">
-                            <input type="checkbox" name="auto_load" value="on" class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500" {{if .AutoLoad}}checked{{end}}>
+                        {{if not .AutoLoadManaged}}<input type="hidden" name="auto_load" value="off">{{end}}
+                        <label class="inline-flex items-center gap-1.5 {{if .AutoLoadManaged}}opacity-60{{else}}cursor-pointer{{end}}"{{if .AutoLoadManaged}} title="Set in the config file"{{end}}>
+                            <input type="checkbox" name="auto_load" value="on" class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500" {{if .AutoLoad}}checked{{end}} {{if .AutoLoadManaged}}disabled{{end}}>
                             <span>Auto-load latest run</span>
                             {{template "templates/partials/info_icon.html" "When on, the background poller loads each newest run automatically and evicts older ones to stay within retention."}}
                         </label>
-                        <label class="inline-flex items-center gap-1.5">
+                        <label class="inline-flex items-center gap-1.5 {{if .RetentionManaged}}opacity-60{{end}}"{{if .RetentionManaged}} title="Set in the config file"{{end}}>
                             <span>Keep last</span>
-                            <input type="number" name="retention" min="1" max="20" value="{{if .Retention}}{{.Retention}}{{else}}2{{end}}" class="w-14 px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+                            <input type="number" name="retention" min="1" max="20" value="{{if .Retention}}{{.Retention}}{{else}}2{{end}}" class="w-14 px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100" {{if .RetentionManaged}}disabled{{end}}>
                             <span>runs</span>
                         </label>
+                        {{if or .AutoLoadManaged .RetentionManaged}}<span class="text-gray-500 dark:text-gray-400">Set in the config file</span>{{end}}
                     </form>
                 </div>
                 {{if .LastPollError}}

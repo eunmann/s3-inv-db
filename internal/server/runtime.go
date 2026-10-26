@@ -92,12 +92,31 @@ type RuntimeOptions struct {
 }
 
 // InventoryConfigEntry mirrors the JSON config file's inventories[].
-// Duplicated here so pkg/server doesn't import internal/appconfig.
+// Duplicated here so pkg/server doesn't import internal/appconfig. A nil
+// AutoLoad and a zero RetentionCount are fields the file leaves to the
+// UI.
 type InventoryConfigEntry struct {
+	AutoLoad       *bool
 	Source         string
 	Name           string
-	AutoLoad       bool
 	RetentionCount uint32
+}
+
+// managedConfigs returns which settings the config file sets for each
+// configuration it lists: those it applies at startup and the UI may
+// not change. A later entry for the same configuration wins, as it does
+// when the entries are applied.
+func managedConfigs(entries []InventoryConfigEntry) inventory.ManagedConfigs {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make(inventory.ManagedConfigs, len(entries))
+	for i := range entries {
+		e := &entries[i]
+		out[e.Source+"/"+e.Name] = inventory.ManagedFields{AutoLoad: e.AutoLoad != nil, Retention: e.RetentionCount > 0}
+	}
+
+	return out
 }
 
 // Bootstrap turns RuntimeOptions into a ready-to-Run server: it
@@ -170,6 +189,7 @@ func Bootstrap(ctx context.Context, opts RuntimeOptions) (*Server, func(), error
 		DiscoveryRefreshInterval: opts.DiscoveryRefreshInterval,
 		QueryBatchMax:            opts.QueryBatchMax,
 		LevelCacheBytes:          opts.LevelCacheBytes,
+		ManagedConfigs:           managedConfigs(opts.InventoryConfigs),
 		TrustedProxies:           opts.TrustedProxies,
 	})
 	if err != nil {
@@ -195,7 +215,9 @@ func applyInventoryConfigs(ctx context.Context, store *inventory.ConfigStore, en
 		existing, err := store.Get(ctx, e.Source, e.Name)
 		switch {
 		case err == nil:
-			existing.AutoLoad = e.AutoLoad
+			if e.AutoLoad != nil {
+				existing.AutoLoad = *e.AutoLoad
+			}
 			if e.RetentionCount > 0 {
 				existing.RetentionCount = e.RetentionCount
 			}
@@ -214,7 +236,7 @@ func applyInventoryConfigs(ctx context.Context, store *inventory.ConfigStore, en
 		if err := store.Upsert(ctx, inventory.Config{
 			Source:         e.Source,
 			Name:           e.Name,
-			AutoLoad:       e.AutoLoad,
+			AutoLoad:       e.AutoLoad != nil && *e.AutoLoad,
 			RetentionCount: e.RetentionCount,
 		}); err != nil {
 			return fmt.Errorf("insert %s/%s: %w", e.Source, e.Name, err)

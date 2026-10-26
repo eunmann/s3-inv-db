@@ -45,15 +45,27 @@ func (h *Handlers) SetAutoLoadConfigAPI(w http.ResponseWriter, r *http.Request) 
 
 		return
 	}
+	managed := h.managed[cfg.ConfigID()]
 	// The UI form sends a hidden auto_load=off before the checkbox, since
 	// an unchecked box sends nothing; the last value is the box's state.
 	if vs := r.Form["auto_load"]; len(vs) > 0 {
-		cfg.AutoLoad = parseBoolToggle(vs[len(vs)-1])
+		v := parseBoolToggle(vs[len(vs)-1])
+		if managed.AutoLoad && v != cfg.AutoLoad {
+			WriteJSONError(w, http.StatusConflict, "auto-load for "+cfg.ConfigID()+" is set in the config file")
+
+			return
+		}
+		cfg.AutoLoad = v
 	}
 	if v := r.FormValue("retention"); v != "" {
 		n, parseErr := strconv.ParseUint(strings.TrimSpace(v), 10, 32)
 		if parseErr != nil || n == 0 {
 			WriteJSONError(w, http.StatusBadRequest, "retention must be a positive integer")
+
+			return
+		}
+		if managed.Retention && n != uint64(cfg.RetentionCount) {
+			WriteJSONError(w, http.StatusConflict, "retention for "+cfg.ConfigID()+" is set in the config file")
 
 			return
 		}

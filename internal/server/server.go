@@ -38,6 +38,9 @@ type Config struct {
 	// When empty, the discovery API returns an empty list and the
 	// /api/discovered routes still work (just with nothing to show).
 	S3Source string
+	// ManagedConfigs lists the configuration settings the config file
+	// sets; the UI and API refuse to change them.
+	ManagedConfigs inventory.ManagedConfigs
 	// IndexSource is the s3:// URI builds publish indexes under
 	// (s3-inv-db build --out s3://...). When set, a load downloads the
 	// run's published index if there is one. Without S3Source, the
@@ -262,6 +265,7 @@ func buildHandlerOptions(cfg Config, discovery *inventory.Discovery, bldr *loade
 	addIf(bldr != nil, handlers.WithLoader(bldr), handlers.WithCacheStore(bldr))
 	addIf(cfg.discoveryRoot() != "", handlers.WithS3Source(cfg.discoveryRoot()))
 	addIf(cfg.QueryBatchMax > 0, handlers.WithQueryBatchMax(cfg.QueryBatchMax))
+	addIf(len(cfg.ManagedConfigs) > 0, handlers.WithManagedConfigs(cfg.ManagedConfigs))
 	hopts = append(hopts, handlers.WithLevelCacheBytes(cfg.LevelCacheBytes))
 
 	return hopts

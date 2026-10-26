@@ -68,8 +68,24 @@ func TestLoad_FullExample(t *testing.T) {
 	if cfg.Inventories[0].Source != "bkt" || cfg.Inventories[0].Name != "daily" {
 		t.Errorf("Inventories[0]: %+v", cfg.Inventories[0])
 	}
-	if !cfg.Inventories[0].AutoLoad || cfg.Inventories[0].RetentionCount != 5 {
+	if al := cfg.Inventories[0].AutoLoad; al == nil || !*al || cfg.Inventories[0].RetentionCount != 5 {
 		t.Errorf("Inventories[0] flags: %+v", cfg.Inventories[0])
+	}
+}
+
+// TestLoad_InventoryAutoLoadOmittedIsNil: an entry that leaves out
+// auto_load leaves it to the UI; an explicit false is set.
+func TestLoad_InventoryAutoLoadOmittedIsNil(t *testing.T) {
+	path := writeConfig(t, `{"inventories": [{"source": "a", "name": "x", "retention_count": 3}, {"source": "b", "name": "y", "auto_load": false}]}`)
+	cfg, err := appconfig.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Inventories[0].AutoLoad != nil {
+		t.Errorf("omitted auto_load = %v, want nil", *cfg.Inventories[0].AutoLoad)
+	}
+	if al := cfg.Inventories[1].AutoLoad; al == nil || *al {
+		t.Errorf("explicit auto_load false = %v, want set to false", al)
 	}
 }
 

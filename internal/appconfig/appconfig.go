@@ -52,11 +52,13 @@ type Config struct {
 	Inventories []InventoryEntry `json:"inventories,omitempty"`
 }
 
-// InventoryEntry declares per-configuration auto-load settings.
+// InventoryEntry declares per-configuration auto-load settings. A
+// field it sets is managed by the file: applied at every startup and
+// read-only in the UI. A field it omits is left to the UI.
 type InventoryEntry struct {
+	AutoLoad       *bool  `json:"auto_load,omitempty"`
 	Source         string `json:"source"`
 	Name           string `json:"name"`
-	AutoLoad       bool   `json:"auto_load"`
 	RetentionCount uint32 `json:"retention_count,omitempty"`
 }
 

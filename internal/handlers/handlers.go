@@ -56,7 +56,10 @@ type Handlers struct {
 	jobStore    *jobs.Store
 	jobBus      *jobs.Bus
 	s3SourceURI string
-	priceTable  pricing.PriceTable
+	// managed lists the settings the config file sets per configuration:
+	// read-only here (SetAutoLoadConfigAPI, the inventories page).
+	managed    inventory.ManagedConfigs
+	priceTable pricing.PriceTable
 	// prices is priceTable compiled per tier ID, for pricing every child
 	// of a level when sorting by cost.
 	prices *pricing.Compiled
@@ -123,6 +126,12 @@ func WithDiscoverer(d inventory.Discoverer) Option {
 // the dashboard and inventories pages.
 func WithS3Source(uri string) Option {
 	return func(h *Handlers) { h.s3SourceURI = uri }
+}
+
+// WithManagedConfigs sets which configuration settings the config file
+// manages: the UI and API show them but refuse to change them.
+func WithManagedConfigs(m inventory.ManagedConfigs) Option {
+	return func(h *Handlers) { h.managed = m }
 }
 
 // acquireSSESlot atomically increments the per-IP counter and returns

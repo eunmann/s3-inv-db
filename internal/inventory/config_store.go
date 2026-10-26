@@ -31,6 +31,18 @@ func (c Config) ConfigID() string { return c.Source + "/" + c.Name }
 // default (WithDefaultRetention).
 const DefaultRetentionCount uint32 = 2
 
+// ManagedFields records which of a configuration's settings the config
+// file sets: those are applied at every startup and read-only in the UI.
+type ManagedFields struct {
+	AutoLoad  bool
+	Retention bool
+}
+
+// ManagedConfigs maps a configuration's "<source>/<name>" to the
+// settings the config file manages for it. A configuration the file
+// doesn't list has none.
+type ManagedConfigs map[string]ManagedFields
+
 // ConfigStore reads and writes inventory configurations.
 type ConfigStore struct {
 	db               *sql.DB

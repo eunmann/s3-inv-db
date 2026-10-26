@@ -108,7 +108,7 @@ func TestApplyInventoryConfigs_DoesNotFallthroughOnTransientGetError(t *testing.
 	}
 
 	err := applyInventoryConfigs(t.Context(), store, []InventoryConfigEntry{
-		{Source: "src", Name: "name", AutoLoad: true},
+		{Source: "src", Name: "name", AutoLoad: new(true)},
 	})
 	if err == nil {
 		t.Fatal("applyInventoryConfigs should return an error when Get fails on a closed DB")
@@ -153,9 +153,9 @@ func TestApplyInventoryConfigs_RetentionDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := applyInventoryConfigs(t.Context(), store, []InventoryConfigEntry{
-		{Source: "src", Name: "default", AutoLoad: true},
-		{Source: "src", Name: "explicit", AutoLoad: true, RetentionCount: 5},
-		{Source: "src", Name: "kept", AutoLoad: true},
+		{Source: "src", Name: "default", AutoLoad: new(true)},
+		{Source: "src", Name: "explicit", AutoLoad: new(true), RetentionCount: 5},
+		{Source: "src", Name: "kept", AutoLoad: new(true)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -167,6 +167,57 @@ func TestApplyInventoryConfigs_RetentionDefault(t *testing.T) {
 		}
 		if cfg.RetentionCount != want {
 			t.Errorf("%s: retention %d, want %d", name, cfg.RetentionCount, want)
+		}
+	}
+}
+
+// TestApplyInventoryConfigs_OmittedAutoLoadKeepsStoredValue: an entry
+// without auto_load leaves the stored value (the UI's) alone; one with
+// it sets it, on insert and on update.
+func TestApplyInventoryConfigs_OmittedAutoLoadKeepsStoredValue(t *testing.T) {
+	store := inventory.NewConfigStore(dbtest.OpenMemDB(t))
+	if err := store.SetPolicy(t.Context(), "src", "ui-on", true, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetPolicy(t.Context(), "src", "file-off", true, 2); err != nil {
+		t.Fatal(err)
+	}
+	err := applyInventoryConfigs(t.Context(), store, []InventoryConfigEntry{
+		{Source: "src", Name: "ui-on", RetentionCount: 4},
+		{Source: "src", Name: "file-off", AutoLoad: new(false)},
+		{Source: "src", Name: "new-unset"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]bool{"ui-on": true, "file-off": false, "new-unset": false} {
+		cfg, err := store.Get(t.Context(), "src", name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.AutoLoad != want {
+			t.Errorf("%s: auto_load %v, want %v", name, cfg.AutoLoad, want)
+		}
+	}
+}
+
+func TestManagedConfigs(t *testing.T) {
+	got := managedConfigs([]InventoryConfigEntry{
+		{Source: "a", Name: "x", AutoLoad: new(false)},
+		{Source: "a", Name: "y", RetentionCount: 3},
+		{Source: "a", Name: "z"},
+	})
+	want := inventory.ManagedConfigs{
+		"a/x": {AutoLoad: true},
+		"a/y": {Retention: true},
+		"a/z": {},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("managed = %+v, want %+v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s: %+v, want %+v", k, got[k], v)
 		}
 	}
 }
