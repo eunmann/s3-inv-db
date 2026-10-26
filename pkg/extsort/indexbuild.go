@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -375,17 +376,15 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 
 	log.Debug().
 		Int("prefix_count", b.coreStatsW.Count()).
-		Msg("index builder: finalizing core stats + tier stats files")
+		Uint64("mphf_keys", b.mphfBuilder.Count()).
+		Msg("index builder: finalizing row files and building the MPHF")
 
-	if err := b.closeStreamingWriters(); err != nil {
-		return err
-	}
-
-	log.Debug().
-		Uint64("prefix_count", b.mphfBuilder.Count()).
-		Msg("index builder: building MPHF (this may take a while for large datasets)")
-
-	if err := b.buildMPHF(ctx); err != nil {
+	// The row files' repacks and the MPHF build share nothing, so they
+	// run side by side: the build's serial tail is the longer of the two.
+	rowsDone := make(chan error, 1)
+	go func() { rowsDone <- b.closeStreamingWriters() }()
+	mphfErr := b.buildMPHF(ctx)
+	if err := errors.Join(<-rowsDone, mphfErr); err != nil {
 		return err
 	}
 
@@ -460,7 +459,8 @@ func (b *IndexBuilder) writeRow(depthW *format.DepthIndexWriter, starts []uint64
 	if depth == 0 {
 		err = b.prefixTreeW.AddRoot()
 	} else {
-		err = b.prefixTreeW.Add(starts[depth-1]+r.parentLocal, string(r.name))
+		// The writer allows a name that aliases a reused buffer.
+		err = b.prefixTreeW.Add(starts[depth-1]+r.parentLocal, unsafe.String(unsafe.SliceData(r.name), len(r.name)))
 	}
 	if err != nil {
 		return fmt.Errorf("prefix segment %q at depth %d: %w", r.name, depth, err)
