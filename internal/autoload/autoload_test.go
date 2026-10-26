@@ -3,6 +3,7 @@ package autoload_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -73,11 +74,11 @@ func (f *fakeDiscovery) PrepareDiscovered(ctx context.Context, disc inventory.In
 		return nil
 	}
 	err := f.catalog.Register(ctx, disc.CompositeID(), disc.Name, disc.ManifestKey)
-	if errors.Is(err, inventory.ErrAlreadyExists) {
-		return nil
+	if err != nil && !errors.Is(err, inventory.ErrAlreadyExists) {
+		return fmt.Errorf("register: %w", err)
 	}
 
-	return err
+	return nil
 }
 
 type fakeLoader struct {
