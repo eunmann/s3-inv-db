@@ -106,12 +106,13 @@ type SortParams struct {
 	Dir string
 }
 
-// NormalizeSort clamps sort/dir from user input to known values.
-// Unknown column → segment. Unknown direction → segment uses asc,
-// others desc.
+// NormalizeSort clamps sort/dir from user input to known values. A
+// missing or unknown column sorts by size, so a level opens on where
+// its space is. A missing or unknown direction is asc for segment and
+// desc for the numeric columns.
 func NormalizeSort(sortBy, dir string) SortParams {
 	return normalizeSortParams(sortBy, dir,
-		SortColSegment,
+		SortColSize,
 		[]string{SortColObjects, SortColSize, SortColCost, SortColSegment},
 		[]string{SortColSegment},
 	)

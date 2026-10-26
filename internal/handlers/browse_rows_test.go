@@ -71,6 +71,38 @@ func TestBrowseLevelAPI_RowsMatchIndex(t *testing.T) {
 	}
 }
 
+// TestBrowseLevelAPI_DefaultSortIsSizeDescending: with no sort param a
+// level lists its largest children first.
+func TestBrowseLevelAPI_DefaultSortIsSizeDescending(t *testing.T) {
+	const id = "src/inv/2026-01-01T00-00Z"
+	mgr := loadCostIndex(t, id, []costObj{
+		{"a/x", 1, tiers.Standard},
+		{"b/x", 3 * gib, tiers.Standard},
+		{"c/x", 2 * gib, tiers.Standard},
+	})
+	h := newWiredHandlers(t, mgr)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/browse?inventory_id="+id, http.NoBody)
+	w := httptest.NewRecorder()
+	h.BrowseLevelAPI(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	var resp handlers.BrowseLevelResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Sort != "size" || resp.Dir != "desc" {
+		t.Errorf("sort = %q %q, want size desc", resp.Sort, resp.Dir)
+	}
+	got := make([]string, 0, len(resp.Children))
+	for _, c := range resp.Children {
+		got = append(got, c.Segment)
+	}
+	if want := "b,c,a"; strings.Join(got, ",") != want {
+		t.Errorf("children = %v, want %s", got, want)
+	}
+}
+
 // TestBrowsePartial_RowsShowFormattedNumbers: the HTML rows render each
 // child's formatted count, size and cost, which only the HTML path
 // builds.

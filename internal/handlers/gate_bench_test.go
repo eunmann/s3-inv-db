@@ -142,7 +142,7 @@ func BenchmarkGateBrowseWideBySize(b *testing.B) {
 }
 
 func BenchmarkGateBrowseWideByName(b *testing.B) {
-	benchGet(b, wideRouter(b), "/api/browse?inventory_id="+gateFromID+"&page=50")
+	benchGet(b, wideRouter(b), "/api/browse?inventory_id="+gateFromID+"&sort=segment&page=50")
 }
 
 func BenchmarkGateCompareWide(b *testing.B) {

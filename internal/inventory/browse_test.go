@@ -14,8 +14,9 @@ func TestNormalizeSort(t *testing.T) {
 		wantCol     string
 		wantDirCode string
 	}{
-		{"defaults", "", "", "segment", "asc"},
-		{"unknown column falls back to segment", "garbage", "", "segment", "asc"},
+		{"defaults to size desc", "", "", "size", "desc"},
+		{"unknown column falls back to size desc", "garbage", "", "size", "desc"},
+		{"segment defaults to asc", "segment", "", "segment", "asc"},
 		{"objects defaults to desc", "objects", "", "objects", "desc"},
 		{"size defaults to desc", "size", "", "size", "desc"},
 		{"cost defaults to desc", "cost", "", "cost", "desc"},
@@ -50,6 +51,17 @@ func TestSortLinks_IndicatorsAndToggles(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("inventory.SortLinks (-want +got):\n%s", diff)
+	}
+}
+
+func TestSortLinks_DefaultSortMarksSizeDescending(t *testing.T) {
+	def := inventory.NormalizeSort("", "")
+	got := inventory.SortLinks(def.Col, def.Dir)
+	if got["size"].Indicator != "↓" || got["size"].Dir != "asc" {
+		t.Errorf("size link = %+v, want indicator ↓ and next dir asc", got["size"])
+	}
+	if got["segment"].Indicator != "" || got["segment"].Dir != "asc" {
+		t.Errorf("segment link = %+v, want no indicator and dir asc", got["segment"])
 	}
 }
 
