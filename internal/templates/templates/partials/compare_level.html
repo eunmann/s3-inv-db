@@ -1,23 +1,5 @@
-{{$from := .From}}
-{{$to := .To}}
 <div class="space-y-6">
-    <nav class="flex items-center flex-wrap text-sm" aria-label="Breadcrumb">
-        {{range $i, $c := .Breadcrumbs}}
-            {{if $i}}<span class="mx-2 text-gray-300 dark:text-gray-600">/</span>{{end}}
-            {{if eq $i (sub (len $.Breadcrumbs) 1)}}
-            <span aria-current="page" class="font-semibold text-gray-900 dark:text-gray-100">{{$c.Label}}</span>
-            {{else}}
-            <button type="button"
-                hx-get="/compare"
-                hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $c.Prefix}}"
-                hx-target="#compare-target"
-                hx-push-url="true"
-                class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline">
-                {{$c.Label}}
-            </button>
-            {{end}}
-        {{end}}
-    </nav>
+    {{template "level_breadcrumbs" .Level.Nav}}
 
     {{if .Level.NotFound}}
     <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-900/50 rounded-md p-6 text-center">
@@ -27,14 +9,12 @@
             doesn't exist in either the From or To run. Try a shorter prefix or jump back to a parent.
         </p>
         <div class="mt-4">
-            <button type="button"
-                hx-get="/compare"
-                hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" ""}}"
-                hx-target="#compare-target"
-                hx-push-url="true"
-                class="inline-flex items-center px-3 py-1.5 border border-yellow-300 dark:border-yellow-800 rounded-md bg-white dark:bg-gray-800 text-sm font-medium text-yellow-800 dark:text-yellow-300 hover:bg-yellow-50 dark:hover:bg-gray-700">
-                Back to root
-            </button>
+            {{with index .Level.Nav.Crumbs 0}}
+            <a href="{{.URL}}" hx-get="{{.URL}}" hx-target="#compare-target" hx-push-url="true"
+               class="inline-flex items-center px-3 py-1.5 border border-yellow-300 dark:border-yellow-800 rounded-md bg-white dark:bg-gray-800 text-sm font-medium text-yellow-800 dark:text-yellow-300 hover:bg-yellow-50 dark:hover:bg-gray-700">
+                Back to {{.Label}}
+            </a>
+            {{end}}
         </div>
     </div>
     {{else}}
@@ -96,109 +76,23 @@
                     <span class="text-gray-500 dark:text-gray-400">{{.Level.Status.Unchanged}} unchanged</span>
                 </p>
             </div>
-            <div class="flex items-center gap-4">
-                {{$sort := .Level.Sort}}
-                {{$dir := .Level.Dir}}
-                <label class="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-                    <input type="checkbox"
-                        hx-get="/compare"
-                        {{if .Level.HideUnchanged}}
-                        hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "show_unchanged" "true"}}"
-                        {{else}}
-                        hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "show_unchanged" "false"}}" checked
-                        {{end}}
-                        hx-target="#compare-target"
-                        hx-push-url="true"
-                        class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500">
-                    Show unchanged
-                </label>
-                {{if gt .Level.Pagination.Pages 1}}
-                <div class="flex items-center gap-2 text-sm">
-                    {{if .Level.Pagination.PrevPage}}
-                    <button type="button"
-                        hx-get="/compare"
-                        hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "page" .Level.Pagination.PrevPage}}"
-                        hx-target="#compare-target"
-                        hx-push-url="true"
-                        class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">← Prev</button>
-                    {{else}}
-                    <span class="px-3 py-1 border border-gray-200 dark:border-gray-700 rounded text-gray-300 dark:text-gray-600 cursor-not-allowed">← Prev</span>
-                    {{end}}
-                    <span class="text-gray-500 dark:text-gray-400">Page {{.Level.Pagination.Page}} of {{.Level.Pagination.Pages}}</span>
-                    {{if .Level.Pagination.NextPage}}
-                    <button type="button"
-                        hx-get="/compare"
-                        hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $sort "dir" $dir "page" .Level.Pagination.NextPage}}"
-                        hx-target="#compare-target"
-                        hx-push-url="true"
-                        class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">Next →</button>
-                    {{else}}
-                    <span class="px-3 py-1 border border-gray-200 dark:border-gray-700 rounded text-gray-300 dark:text-gray-600 cursor-not-allowed">Next →</span>
-                    {{end}}
-                </div>
-                {{end}}
+            <div class="flex items-center gap-4 flex-wrap">
+                <a href="{{.Level.ShowUnchangedURL}}" hx-get="{{.Level.ShowUnchangedURL}}" hx-target="#compare-target" hx-push-url="true"
+                   class="text-sm text-indigo-600 dark:text-indigo-400 hover:underline">{{if .Level.HideUnchanged}}Show unchanged{{else}}Hide unchanged{{end}}</a>
+                {{template "level_pager" .Level.Nav}}
             </div>
         </header>
         {{if .Level.Children}}
-        {{$statusLink := index .Level.SortLinks "status"}}
-        {{$segLink := index .Level.SortLinks "segment"}}
-        {{$objLink := index .Level.SortLinks "objects"}}
-        {{$sizeLink := index .Level.SortLinks "size"}}
-        {{$costLink := index .Level.SortLinks "cost"}}
+        {{$sort := .Level.Nav.Sort}}
         <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
             <thead class="bg-gray-50 dark:bg-gray-900/30">
                 <tr>
-                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        <button type="button"
-                            hx-get="/compare"
-                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $statusLink.Sort "dir" $statusLink.Dir}}"
-                            hx-target="#compare-target"
-                            hx-push-url="true"
-                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
-                            Status {{$statusLink.Indicator}}
-                        </button>
-                    </th>
-                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        <button type="button"
-                            hx-get="/compare"
-                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $segLink.Sort "dir" $segLink.Dir}}"
-                            hx-target="#compare-target"
-                            hx-push-url="true"
-                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
-                            Segment {{$segLink.Indicator}}
-                        </button>
-                    </th>
-                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        <button type="button"
-                            hx-get="/compare"
-                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $objLink.Sort "dir" $objLink.Dir}}"
-                            hx-target="#compare-target"
-                            hx-push-url="true"
-                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
-                            Objects {{$objLink.Indicator}}
-                        </button>
-                    </th>
-                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        <button type="button"
-                            hx-get="/compare"
-                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $sizeLink.Sort "dir" $sizeLink.Dir}}"
-                            hx-target="#compare-target"
-                            hx-push-url="true"
-                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
-                            Size {{$sizeLink.Indicator}}
-                        </button>
-                    </th>
-                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        <button type="button"
-                            hx-get="/compare"
-                            hx-vals="{{hxValsJSON "from" $from "to" $to "prefix" $.Prefix "sort" $costLink.Sort "dir" $costLink.Dir}}"
-                            hx-target="#compare-target"
-                            hx-push-url="true"
-                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
-                            Cost / mo {{$costLink.Indicator}}
-                        </button>
-                    </th>
+                    <th scope="col" {{with $sort.status.AriaSort}}aria-sort="{{.}}" {{end}}class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{template "level_sort" $sort.status}}</th>
+                    <th scope="col" {{with $sort.segment.AriaSort}}aria-sort="{{.}}" {{end}}class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{template "level_sort" $sort.segment}}</th>
+                    <th scope="col" {{with $sort.objects.AriaSort}}aria-sort="{{.}}" {{end}}class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{template "level_sort" $sort.objects}}</th>
+                    <th scope="col" {{with $sort.size.AriaSort}}aria-sort="{{.}}" {{end}}class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{template "level_sort" $sort.size}}</th>
+                    <th scope="col" {{with $sort.cost.AriaSort}}aria-sort="{{.}}" {{end}}class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{template "level_sort" $sort.cost}}</th>
                     <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider" title="One-time PUT API cost at $0.005 per 1,000 PUTs (us-east-1)">PUT API</th>
                     <th class="px-4 py-3 sm:px-6"></th>
                 </tr>
@@ -211,14 +105,8 @@
                     </td>
                     <td class="px-4 py-3 sm:px-6 whitespace-nowrap">
                         {{if .HasChildren}}
-                        <button type="button"
-                            hx-get="/compare"
-                            hx-vals="{{.HxVals}}"
-                            hx-target="#compare-target"
-                            hx-push-url="true"
-                            class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline font-mono">
-                            {{.Segment}}/
-                        </button>
+                        <a href="{{.Href}}" hx-get="{{.Href}}" hx-target="#compare-target" hx-push-url="true"
+                           class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline font-mono">{{.Segment}}/</a>
                         {{else}}
                         <span class="text-sm font-medium text-gray-700 dark:text-gray-200 font-mono">{{.Segment}}/</span>
                         {{end}}

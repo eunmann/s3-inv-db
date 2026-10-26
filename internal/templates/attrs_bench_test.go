@@ -12,7 +12,7 @@ type namedID string
 
 func (id namedID) String() string { return string(id) }
 
-// The browse and compare tables call these once or twice per row.
+// Templates call these for their htmx attributes and links.
 
 func BenchmarkHxValsJSON(b *testing.B) {
 	b.ReportAllocs()

@@ -48,6 +48,7 @@ type BrowseInventoryOption struct {
 type BrowseLevel struct {
 	CostEstimate   *CostEstimate
 	SortLinks      map[string]BrowseSortLink
+	Nav            LevelNav
 	ObjectCountH   string
 	Sort           string
 	InventoryID    inventory.ID
@@ -66,9 +67,7 @@ type BrowseLevel struct {
 	NotFound       bool
 }
 
-// BrowsePage serves the full page and the inner level partial at the
-// same URL, dispatched via wantsHTMXPartial.
-// BrowseViewOptions bundles the query-string knobs BrowsePage parses so
+// browseViewOptions bundles the query-string knobs BrowsePage parses so
 // the inner render functions don't take 6-positional signatures.
 type browseViewOptions struct {
 	inventoryID inventory.ID
@@ -93,6 +92,8 @@ func parseBrowseOptions(q url.Values) browseViewOptions {
 	}
 }
 
+// BrowsePage serves the full page and the inner level partial at the
+// same URL, dispatched via wantsHTMXPartial.
 func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 	opts := parseBrowseOptions(r.URL.Query())
 	if wantsHTMXPartial(r) {
@@ -123,7 +124,7 @@ func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request, opts
 		// placeholder — the user can pick a different inventory.
 		if err == nil {
 			level.QueryDurationH = humanfmt.Duration(time.Since(start))
-			finishBrowseRowsHTML(&level)
+			finishBrowseHTML(&level, opts)
 			data["InitialLevel"] = level
 		}
 	}
@@ -159,14 +160,33 @@ func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	level.QueryDurationH = humanfmt.Duration(time.Since(start))
-	finishBrowseRowsHTML(&level)
+	finishBrowseHTML(&level, opts)
 	h.renderHTMLPartial(w, r, "browse_level.html", "failed to render browse level", level)
 }
 
-// finishBrowseRowsHTML sets what only the HTML views render: each row's
-// formatted numbers and cost, and the link of each row with children.
-// The JSON API returns the numbers alone.
-func finishBrowseRowsHTML(level *BrowseLevel) {
+// browseSortLabel is a Browse children table column's header.
+func browseSortLabel(col string) string {
+	if col == inventory.SortColCost {
+		return "Est. cost / mo"
+	}
+
+	return sortLabel(col)
+}
+
+// finishBrowseHTML sets what only the HTML views render: the level's
+// links, each row's formatted numbers and cost, and the link of each
+// row with children. The JSON API returns the numbers alone.
+func finishBrowseHTML(level *BrowseLevel, opts browseViewOptions) {
+	q := levelQuery{
+		keep:     url.Values{"inventory_id": {string(opts.inventoryID)}},
+		path:     "/browse",
+		target:   "#browse-target",
+		prefix:   opts.prefix,
+		sortBy:   opts.sortBy,
+		dir:      opts.dir,
+		pageSize: opts.pageSize,
+	}
+	level.Nav = buildLevelNav(q, rootLabel(opts.inventoryID), level.SortLinks, browseSortLabel, level.Pagination)
 	for i := range level.Children {
 		c := &level.Children[i]
 		c.ObjectCountH = humanfmt.CountUint64(c.ObjectCount)
@@ -178,7 +198,7 @@ func finishBrowseRowsHTML(level *BrowseLevel) {
 			c.MonthlyCostFormatted = pricing.FormatCost(c.MonthlyCostMicrodollars)
 		}
 		if c.HasChildren {
-			c.Href, c.HxVals = templates.BrowseLink(string(level.InventoryID), c.Prefix)
+			c.Href = templates.BrowseLink(string(level.InventoryID), c.Prefix)
 		}
 	}
 }

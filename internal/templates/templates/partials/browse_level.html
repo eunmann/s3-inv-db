@@ -1,22 +1,5 @@
-{{$inv := .InventoryID}}
 <div class="space-y-6">
-    <nav class="flex items-center flex-wrap text-sm" aria-label="Breadcrumb">
-        {{range $i, $c := .Breadcrumbs}}
-            {{if $i}}<span class="mx-2 text-gray-300 dark:text-gray-600">/</span>{{end}}
-            {{if eq $i (sub (len $.Breadcrumbs) 1)}}
-            <span aria-current="page" class="font-semibold text-gray-900 dark:text-gray-100">{{$c.Label}}</span>
-            {{else}}
-            <button type="button"
-                hx-get="/browse"
-                hx-vals="{{hxValsJSON "inventory_id" $inv "prefix" $c.Prefix}}"
-                hx-target="#browse-target"
-                hx-push-url="true"
-                class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline">
-                {{$c.Label}}
-            </button>
-            {{end}}
-        {{end}}
-    </nav>
+    {{template "level_breadcrumbs" .Nav}}
 
     {{if .NotFound}}
     <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-900/50 rounded-md p-4 text-sm text-yellow-800 dark:text-yellow-300">
@@ -74,10 +57,6 @@
         {{end}}
     </div>
 
-    {{$segLink := index .SortLinks "segment"}}
-    {{$objLink := index .SortLinks "objects"}}
-    {{$sizeLink := index .SortLinks "size"}}
-    {{$costLink := index .SortLinks "cost"}}
     <div class="bg-white dark:bg-gray-800 shadow sm:rounded-lg">
         <div class="px-4 py-5 sm:px-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-4 flex-wrap">
             <div>
@@ -86,77 +65,17 @@
                     {{if .TotalChildren}}Showing {{.Pagination.FirstRow}}–{{.Pagination.LastRow}} of {{.TotalChildren}} child prefix{{if ne .TotalChildren 1}}es{{end}}{{else}}No child prefixes under this path.{{end}}
                 </p>
             </div>
-            {{if gt .Pagination.Pages 1}}
-            <div class="flex items-center gap-2 text-sm">
-                {{if .Pagination.PrevPage}}
-                <button type="button"
-                    hx-get="/browse"
-                    hx-vals="{{hxValsJSON "inventory_id" $inv "prefix" $.Prefix "sort" $.Sort "dir" $.Dir "page" .Pagination.PrevPage}}"
-                    hx-target="#browse-target"
-                    hx-push-url="true"
-                    class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">← Prev</button>
-                {{else}}
-                <span class="px-3 py-1 border border-gray-200 dark:border-gray-700 rounded text-gray-300 dark:text-gray-600 cursor-not-allowed">← Prev</span>
-                {{end}}
-                <span class="text-gray-500 dark:text-gray-400">Page {{.Pagination.Page}} of {{.Pagination.Pages}}</span>
-                {{if .Pagination.NextPage}}
-                <button type="button"
-                    hx-get="/browse"
-                    hx-vals="{{hxValsJSON "inventory_id" $inv "prefix" $.Prefix "sort" $.Sort "dir" $.Dir "page" .Pagination.NextPage}}"
-                    hx-target="#browse-target"
-                    hx-push-url="true"
-                    class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">Next →</button>
-                {{else}}
-                <span class="px-3 py-1 border border-gray-200 dark:border-gray-700 rounded text-gray-300 dark:text-gray-600 cursor-not-allowed">Next →</span>
-                {{end}}
-            </div>
-            {{end}}
+            {{template "level_pager" .Nav}}
         </div>
         {{if .Children}}
         <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
             <thead class="bg-gray-50 dark:bg-gray-900/30">
                 <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        <button type="button"
-                            hx-get="/browse"
-                            hx-vals="{{hxValsJSON "inventory_id" $inv "prefix" $.Prefix "sort" $segLink.Sort "dir" $segLink.Dir}}"
-                            hx-target="#browse-target"
-                            hx-push-url="true"
-                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
-                            Segment {{$segLink.Indicator}}
-                        </button>
-                    </th>
-                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        <button type="button"
-                            hx-get="/browse"
-                            hx-vals="{{hxValsJSON "inventory_id" $inv "prefix" $.Prefix "sort" $objLink.Sort "dir" $objLink.Dir}}"
-                            hx-target="#browse-target"
-                            hx-push-url="true"
-                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
-                            Objects {{$objLink.Indicator}}
-                        </button>
-                    </th>
-                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        <button type="button"
-                            hx-get="/browse"
-                            hx-vals="{{hxValsJSON "inventory_id" $inv "prefix" $.Prefix "sort" $sizeLink.Sort "dir" $sizeLink.Dir}}"
-                            hx-target="#browse-target"
-                            hx-push-url="true"
-                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
-                            Size {{$sizeLink.Indicator}}
-                        </button>
-                    </th>
-                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        <button type="button"
-                            hx-get="/browse"
-                            hx-vals="{{hxValsJSON "inventory_id" $inv "prefix" $.Prefix "sort" $costLink.Sort "dir" $costLink.Dir}}"
-                            hx-target="#browse-target"
-                            hx-push-url="true"
-                            class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">
-                            Est. Cost / mo {{$costLink.Indicator}}
-                        </button>
-                    </th>
+                    <th scope="col" {{with .Nav.Sort.segment.AriaSort}}aria-sort="{{.}}" {{end}}class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{template "level_sort" .Nav.Sort.segment}}</th>
+                    <th scope="col" {{with .Nav.Sort.objects.AriaSort}}aria-sort="{{.}}" {{end}}class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{template "level_sort" .Nav.Sort.objects}}</th>
+                    <th scope="col" {{with .Nav.Sort.size.AriaSort}}aria-sort="{{.}}" {{end}}class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{template "level_sort" .Nav.Sort.size}}</th>
+                    <th scope="col" {{with .Nav.Sort.cost.AriaSort}}aria-sort="{{.}}" {{end}}class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{template "level_sort" .Nav.Sort.cost}}</th>
                     <th class="px-6 py-3"></th>
                 </tr>
             </thead>
@@ -167,8 +86,7 @@
                         {{if .HasChildren}}
                         <a
                             href="{{.Href}}"
-                            hx-get="/browse"
-                            hx-vals="{{.HxVals}}"
+                            hx-get="{{.Href}}"
                             hx-target="#browse-target"
                             hx-push-url="true"
                             class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline font-mono">

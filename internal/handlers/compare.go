@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -59,33 +60,34 @@ type ComparePageData struct {
 	Error       string
 	Picker      ComparePicker
 	ToPicker    ComparePicker
-	Breadcrumbs []BrowseCrumb
 }
 
 // ComparePartialData carries the compare_level partial's inputs. Used for
 // both the htmx-driven swap and the initial full-page render so the
 // partial template has one stable shape.
 type ComparePartialData struct {
-	Level       *CompareLevelView
-	Prefix      string
-	From        inventory.ID
-	To          inventory.ID
-	Breadcrumbs []BrowseCrumb
+	Level  *CompareLevelView
+	Prefix string
+	From   inventory.ID
+	To     inventory.ID
 }
 
 // CompareLevelView is the rendered comparison at one prefix.
 type CompareLevelView struct {
-	SortLinks      map[string]inventory.BrowseSortLink
-	Sort           string
-	Dir            string
-	QueryDurationH string
-	Self           CompareSelfView
-	Children       []CompareChildView
-	Pagination     BrowsePagination
-	Status         CompareStatusCounts
-	TotalChildren  int
-	HideUnchanged  bool
-	NotFound       bool
+	SortLinks map[string]inventory.BrowseSortLink
+	Nav       LevelNav
+	// ShowUnchangedURL is the link toggling the show_unchanged filter.
+	ShowUnchangedURL string
+	Sort             string
+	Dir              string
+	QueryDurationH   string
+	Self             CompareSelfView
+	Children         []CompareChildView
+	Pagination       BrowsePagination
+	Status           CompareStatusCounts
+	TotalChildren    int
+	HideUnchanged    bool
+	NotFound         bool
 }
 
 // CompareStatusCounts summarises the change set at this prefix.
@@ -136,7 +138,7 @@ type CompareChildView struct {
 	BytesBeforeH   string
 	BytesAfterH    string
 	Prefix         string
-	HxVals         string // drill-down link's hx-vals, for rows with children
+	Href           string // drill-down link's URL, for rows with children
 	CostDeltaH     string
 	CostAfterH     string
 	CostBeforeH    string
@@ -179,13 +181,12 @@ type compareViewOptions struct {
 func (h *Handlers) renderCompareFullPage(w http.ResponseWriter, r *http.Request, opts compareViewOptions) {
 	picker := buildComparePicker(h.manager.List())
 	data := ComparePageData{
-		Title:       "Compare runs",
-		Picker:      picker,
-		ToPicker:    filterComparePickerByConfig(picker, opts.from),
-		From:        opts.from,
-		To:          opts.to,
-		Prefix:      opts.prefix,
-		Breadcrumbs: inventory.Breadcrumbs(opts.prefix),
+		Title:    "Compare runs",
+		Picker:   picker,
+		ToPicker: filterComparePickerByConfig(picker, opts.from),
+		From:     opts.from,
+		To:       opts.to,
+		Prefix:   opts.prefix,
 	}
 
 	switch {
@@ -209,11 +210,10 @@ func (h *Handlers) renderCompareFullPage(w http.ResponseWriter, r *http.Request,
 		default:
 			data.Level = level
 			data.Partial = ComparePartialData{
-				Prefix:      opts.prefix,
-				Breadcrumbs: data.Breadcrumbs,
-				From:        opts.from,
-				To:          opts.to,
-				Level:       level,
+				Prefix: opts.prefix,
+				From:   opts.from,
+				To:     opts.to,
+				Level:  level,
 			}
 		}
 	}
@@ -247,11 +247,10 @@ func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	view := ComparePartialData{
-		Prefix:      opts.prefix,
-		Breadcrumbs: inventory.Breadcrumbs(opts.prefix),
-		From:        opts.from,
-		To:          opts.to,
-		Level:       level,
+		Prefix: opts.prefix,
+		From:   opts.from,
+		To:     opts.to,
+		Level:  level,
 	}
 	h.renderHTMLPartial(w, r, "compare_level.html", "render compare level partial", view)
 }
@@ -288,16 +287,44 @@ func (h *Handlers) computeCompareLevel(ctx context.Context, opts compareViewOpti
 		Pagination:    data.Pagination,
 		Children:      make([]CompareChildView, 0, len(data.Children)),
 	}
+	showUnchanged := !opts.hideUnchanged
 	for i := range data.Children {
 		v := h.buildCompareChildView(&data.Children[i])
 		if v.HasChildren {
-			v.HxVals = templates.CompareLinkHxVals(string(opts.from), string(opts.to), v.Prefix)
+			v.Href = templates.CompareLink(string(opts.from), string(opts.to), v.Prefix, showUnchanged)
 		}
 		view.Children = append(view.Children, v)
 	}
+	q := opts.levelQuery()
+	view.Nav = buildLevelNav(q, rootLabel(opts.from), view.SortLinks, sortLabel, view.Pagination)
+	toggle := q
+	toggle.keep = url.Values{"from": {string(opts.from)}, "to": {string(opts.to)}}
+	if !showUnchanged {
+		toggle.keep.Set("show_unchanged", trueLiteral)
+	}
+	view.ShowUnchangedURL = toggle.url(opts.prefix, opts.sortBy, opts.dir, 1)
 	view.QueryDurationH = humanfmt.Duration(time.Since(start))
 
 	return &view, nil
+}
+
+// levelQuery is the query of this compare view, for its links. The
+// show_unchanged filter carries over to every link.
+func (o compareViewOptions) levelQuery() levelQuery {
+	keep := url.Values{"from": {string(o.from)}, "to": {string(o.to)}}
+	if !o.hideUnchanged {
+		keep.Set("show_unchanged", trueLiteral)
+	}
+
+	return levelQuery{
+		keep:     keep,
+		path:     "/compare",
+		target:   "#compare-target",
+		prefix:   o.prefix,
+		sortBy:   o.sortBy,
+		dir:      o.dir,
+		pageSize: o.pageSize,
+	}
 }
 
 // query is the domain form of the compare options.

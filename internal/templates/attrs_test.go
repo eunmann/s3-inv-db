@@ -1,6 +1,7 @@
 package templates_test
 
 import (
+	"net/url"
 	"strconv"
 	"testing"
 
@@ -98,27 +99,30 @@ func TestRowLinksMatchGeneralEncoders(t *testing.T) {
 	}
 }
 
-// checkRowLinks checks BrowseLink and CompareLinkHxVals against the
-// general encoders the template funcs fall back to.
+// checkRowLinks checks BrowseLink and CompareLink against the general
+// encoders: the browseURL template func's and url.Values'.
 func checkRowLinks(t *testing.T, id, other, prefix string) {
 	t.Helper()
-	href, hxVals := templates.BrowseLink(id, prefix)
-	if want := templates.BrowseURLGeneral("inventory_id", id, "prefix", prefix); href != want {
-		t.Fatalf("BrowseLink(%q, %q) href\n got %q\nwant %q", id, prefix, href, want)
+	if got, want := templates.BrowseLink(id, prefix), templates.BrowseURLGeneral("inventory_id", id, "prefix", prefix); got != want {
+		t.Fatalf("BrowseLink(%q, %q)\n got %q\nwant %q", id, prefix, got, want)
 	}
-	want, err := templates.HxValsJSONGeneral("inventory_id", id, "prefix", prefix)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hxVals != want {
-		t.Fatalf("BrowseLink(%q, %q) hx-vals\n got %q\nwant %q", id, prefix, hxVals, want)
-	}
-	want, err = templates.HxValsJSONGeneral("from", id, "to", other, "prefix", prefix)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := templates.CompareLinkHxVals(id, other, prefix); got != want {
-		t.Fatalf("CompareLinkHxVals(%q, %q, %q)\n got %q\nwant %q", id, other, prefix, got, want)
+	for _, show := range []bool{false, true} {
+		q := url.Values{}
+		for k, v := range map[string]string{"from": id, "to": other, "prefix": prefix} {
+			if v != "" {
+				q.Set(k, v)
+			}
+		}
+		if show {
+			q.Set("show_unchanged", "true")
+		}
+		want := "/compare"
+		if len(q) > 0 {
+			want += "?" + q.Encode()
+		}
+		if got := templates.CompareLink(id, other, prefix, show); got != want {
+			t.Fatalf("CompareLink(%q, %q, %q, %v)\n got %q\nwant %q", id, other, prefix, show, got, want)
+		}
 	}
 }
 

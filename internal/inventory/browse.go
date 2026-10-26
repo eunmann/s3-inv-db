@@ -44,10 +44,9 @@ type BrowseChild struct {
 	ObjectCountH         string
 	TotalBytesH          string
 	MonthlyCostFormatted string
-	// Href and HxVals are the drill-down link's attributes, set for
-	// rows with children on the HTML views only.
+	// Href is the drill-down link's URL, set for rows with children on
+	// the HTML views only.
 	Href                    string
-	HxVals                  string
 	ObjectCount             uint64
 	TotalBytes              uint64
 	MonthlyCostMicrodollars uint64
