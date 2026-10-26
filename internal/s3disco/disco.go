@@ -43,10 +43,13 @@ type Discoverer struct {
 	// manifest.json is an index manifest.
 	indexes bool
 
-	// manifests holds the summary of every manifest read so far, by key.
-	// S3 Inventory writes a run's manifest.json once, when the run
-	// completes, so a summary never goes stale; only successful reads
-	// are kept, and List drops keys whose run is gone.
+	// manifests holds the summary of every inventory manifest read so
+	// far, by key. S3 Inventory writes a run's manifest.json once, when
+	// the run completes, so a summary never goes stale; only successful
+	// reads are kept, and List drops keys whose run is gone. Index
+	// manifests are not cached: republishing a run rewrites its
+	// manifest at the same key, and deletes it while the new files
+	// upload.
 	manifestsMu sync.Mutex
 	manifests   map[string]manifestSummary
 }
@@ -222,7 +225,8 @@ func (d *Discoverer) keepManifests(listed []inventory.Inventory) {
 }
 
 // Find returns one Inventory by (srcBucket, invID, run) with at most
-// one manifest GET, none when the run's manifest was already read; an
+// one manifest GET, none when an inventory run's manifest was already
+// read; an
 // empty run costs one extra LIST to pick the most recent run for the
 // configuration.
 func (d *Discoverer) Find(ctx context.Context, srcBucket, invID, run string) (inventory.Inventory, error) {
@@ -321,13 +325,15 @@ func runEntry(src, inv, invPrefix, run string) inventory.Inventory {
 // and recorded on the entry so the UI shows it; the error is returned
 // so callers can tell a missing run apart.
 func (d *Discoverer) describeRun(ctx context.Context, entry *inventory.Inventory) error {
-	d.manifestsMu.Lock()
-	sum, ok := d.manifests[entry.ManifestKey]
-	d.manifestsMu.Unlock()
-	if ok {
-		sum.fill(entry)
+	if !d.indexes {
+		d.manifestsMu.Lock()
+		sum, ok := d.manifests[entry.ManifestKey]
+		d.manifestsMu.Unlock()
+		if ok {
+			sum.fill(entry)
 
-		return nil
+			return nil
+		}
 	}
 	sum, err := d.summarize(ctx, entry.ManifestKey)
 	if err != nil {
@@ -339,9 +345,11 @@ func (d *Discoverer) describeRun(ctx context.Context, entry *inventory.Inventory
 
 		return err
 	}
-	d.manifestsMu.Lock()
-	d.manifests[entry.ManifestKey] = sum
-	d.manifestsMu.Unlock()
+	if !d.indexes {
+		d.manifestsMu.Lock()
+		d.manifests[entry.ManifestKey] = sum
+		d.manifestsMu.Unlock()
+	}
 	sum.fill(entry)
 
 	return nil
