@@ -294,3 +294,37 @@ func TestHxValsJSON_HTMLSpecialCharsInValueAreSafe(t *testing.T) {
 		}
 	}
 }
+
+// The drawer body re-renders while a build runs. Only sections the user
+// clicked keep their open state across a swap; the rest take the server's
+// default, so Build details folds once the build ends.
+func TestRenderer_InventoriesDrawerKeepsOnlyTouchedSections(t *testing.T) {
+	renderer, err := templates.New()
+	if err != nil {
+		t.Fatalf("failed to create renderer: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := renderer.Render(&buf, "inventories.html", map[string]any{"Title": "Inventories"}); err != nil {
+		t.Fatalf("failed to render inventories: %v", err)
+	}
+	var handler string
+	for _, m := range regexp.MustCompile(`(?s)addEventListener\('htmx:beforeSwap', function \(e\) \{(.*?)\n\s*\}\);`).FindAllStringSubmatch(buf.String(), -1) {
+		if strings.Contains(m[1], "'run-drawer-body'") {
+			handler = m[1]
+		}
+	}
+	if handler == "" {
+		t.Fatal("inventories page has no htmx:beforeSwap handler for the drawer body")
+	}
+	for _, want := range []string{
+		"!body._touched) return;",
+		"if (body._touched[d.id]) open[d.id] = d.open;",
+	} {
+		if !strings.Contains(handler, want) {
+			t.Errorf("beforeSwap handler missing %q; untouched sections would override the server default\n%s", want, handler)
+		}
+	}
+	if !strings.Contains(buf.String(), "(body._touched = body._touched || {})[summary.parentElement.id] = true;") {
+		t.Error("inventories page no longer records which drawer sections the user clicked")
+	}
+}
