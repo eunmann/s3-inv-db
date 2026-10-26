@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/go-chi/chi/v5"
@@ -14,24 +15,60 @@ import (
 // another build's hash) revalidates against the ETag every time, so a
 // deploy or rollback is seen at once and this build's content is never
 // cached under another version's URL.
+//
+// A 304 carries the ETag and Cache-Control a 200 would (RFC 9110
+// 15.4.5), so the browser's stored copy keeps the right lifetime.
 func staticAsset(contentType string, content []byte, version string) http.HandlerFunc {
 	etag := `W/"` + version + `"`
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("If-None-Match") == etag {
-			w.WriteHeader(http.StatusNotModified)
-
-			return
-		}
-		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("ETag", etag)
 		if r.URL.Query().Get("v") == version {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
+		if noneMatch(r.Header.Values("If-None-Match"), version) {
+			w.WriteHeader(http.StatusNotModified)
+
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
 		_, _ = w.Write(content)
 	}
+}
+
+// noneMatch reports whether an If-None-Match field (each value a
+// comma-separated list of entity tags, or "*") names the opaque tag
+// version. It compares weakly, as If-None-Match requires: W/"x" and "x"
+// are the same tag.
+func noneMatch(fields []string, version string) bool {
+	for _, f := range fields {
+		for f != "" {
+			f = strings.TrimLeft(f, " \t,")
+			switch {
+			case f == "":
+				continue
+			case f[0] == '*':
+				return true
+			case strings.HasPrefix(f, "W/"):
+				f = f[2:]
+			}
+			if f == "" || f[0] != '"' {
+				break
+			}
+			end := strings.IndexByte(f[1:], '"')
+			if end < 0 {
+				break
+			}
+			if f[1:1+end] == version {
+				return true
+			}
+			f = f[end+2:]
+		}
+	}
+
+	return false
 }
 
 // setupRoutes configures all HTTP routes.
