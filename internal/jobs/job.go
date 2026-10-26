@@ -62,11 +62,14 @@ func (s State) IsLive() bool {
 // run-files / total run-files during building, slots written during
 // finalizing's "writing hash slots" step). The unit varies by stage and
 // step, so callers should treat them as opaque progress numbers, not
-// bytes. Step names the step within Stage that the counter belongs to,
-// when the stage has steps, and StepStartedAt is when that counter
-// started: an ETA extrapolates from it, not from StartedAt. They are persisted in legacy SQL columns bytes_done /
+// bytes. They are persisted in legacy SQL columns bytes_done /
 // bytes_total — those names predate the units becoming polymorphic
 // and are kept to avoid a schema migration.
+//
+// Step names the step within Stage that the counter belongs to, when
+// the stage has steps, and StepStartedAt is when that counter started:
+// an ETA extrapolates from it, not from StartedAt. They are persisted
+// in the step / step_started_at columns.
 type Job struct {
 	StartedAt     time.Time
 	FinishedAt    time.Time
