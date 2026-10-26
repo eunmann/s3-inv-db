@@ -185,7 +185,7 @@ func newStores(cfg Config) (serverStores, error) {
 
 	return serverStores{
 		inv:      invStore,
-		config:   inventory.NewConfigStore(cfg.DB),
+		config:   inventory.NewConfigStore(cfg.DB).WithDefaultRetention(cfg.AutoLoadRetentionDefault),
 		jobStore: jobStore,
 		jobBus:   jobBus,
 		jobs:     jobs.NewScheduler(jobStore, jobBus, jobs.WithLogger(cfg.Logger), jobs.WithMaxConcurrency(cfg.MaxConcurrentJobs)),

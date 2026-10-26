@@ -141,3 +141,32 @@ func TestNewDiscoveryWiring_RejectsMalformedURI(t *testing.T) {
 		t.Errorf("error should quote the offending URI, got: %v", err)
 	}
 }
+
+// TestApplyInventoryConfigs_RetentionDefault: an inventories[] entry
+// without retention_count gets the server's auto_load_retention_default
+// (#149), an explicit count wins, and an existing row keeps its value
+// when the entry omits it.
+func TestApplyInventoryConfigs_RetentionDefault(t *testing.T) {
+	db := dbtest.OpenMemDB(t)
+	store := inventory.NewConfigStore(db).WithDefaultRetention(3)
+	if err := store.SetPolicy(t.Context(), "src", "kept", false, 7); err != nil {
+		t.Fatal(err)
+	}
+	err := applyInventoryConfigs(t.Context(), store, []InventoryConfigEntry{
+		{Source: "src", Name: "default", AutoLoad: true},
+		{Source: "src", Name: "explicit", AutoLoad: true, RetentionCount: 5},
+		{Source: "src", Name: "kept", AutoLoad: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]uint32{"default": 3, "explicit": 5, "kept": 7} {
+		cfg, err := store.Get(t.Context(), "src", name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.RetentionCount != want {
+			t.Errorf("%s: retention %d, want %d", name, cfg.RetentionCount, want)
+		}
+	}
+}

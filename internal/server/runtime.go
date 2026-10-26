@@ -59,8 +59,9 @@ type RuntimeOptions struct {
 	// builds) run at once; the rest queue. Default 1.
 	MaxConcurrentJobs int
 
-	// AutoLoadRetentionDefault is the per-config retention used when
-	// inventory_configs.retention_count is unset. Default 2.
+	// AutoLoadRetentionDefault is the retention a configuration gets
+	// when it is stored without one: an inventories[] entry with no
+	// retention_count, or a UI toggle on a new configuration. Default 2.
 	AutoLoadRetentionDefault uint32
 
 	// DiscoveryRefreshInterval governs how often the background
@@ -205,15 +206,13 @@ func applyInventoryConfigs(ctx context.Context, store *inventory.ConfigStore, en
 		default:
 			return fmt.Errorf("get %s/%s: %w", e.Source, e.Name, err)
 		}
-		retention := e.RetentionCount
-		if retention == 0 {
-			retention = inventory.DefaultRetentionCount
-		}
+		// An entry without retention_count takes the store's default:
+		// the server's auto_load_retention_default.
 		if err := store.Upsert(ctx, inventory.Config{
 			Source:         e.Source,
 			Name:           e.Name,
 			AutoLoad:       e.AutoLoad,
-			RetentionCount: retention,
+			RetentionCount: e.RetentionCount,
 		}); err != nil {
 			return fmt.Errorf("insert %s/%s: %w", e.Source, e.Name, err)
 		}
