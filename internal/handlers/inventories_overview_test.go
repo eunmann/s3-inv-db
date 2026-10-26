@@ -140,6 +140,16 @@ func TestInventoriesPage_ShowsWhatEachRunHolds(t *testing.T) {
 	if got := newer.AttrOr("hx-sync", ""); got != "this:drop" {
 		t.Errorf("row background refresh hx-sync %q, want this:drop", got)
 	}
+	// The global error toast skips background refreshes, never a click.
+	if _, ok := newer.Attr("data-background-refresh"); !ok {
+		t.Error("row's live refresh isn't marked a background refresh")
+	}
+	if doc.Find("button[data-background-refresh]").Length() != 0 {
+		t.Error("a user-action button is marked a background refresh")
+	}
+	if doc.Find("[hx-select-oob][data-background-refresh]").Length() != 1 {
+		t.Error("header refresher isn't marked a background refresh")
+	}
 
 	failed := doc.Find(rowSel(overviewRuns[3])).Text()
 	if !strings.Contains(failed, "An inventory data file is missing from S3: s3://dst/src/inv/data/chunk-0001.csv.gz.") || !strings.Contains(failed, "Retry") {

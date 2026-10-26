@@ -73,6 +73,9 @@ func TestRunDrawer_LeadsWithWhatTheRunHolds(t *testing.T) {
 	if doc.Find("#drawer-close").Length() != 1 {
 		t.Error("close button has no stable id")
 	}
+	if _, ok := doc.Find("#run-drawer-body").Attr("data-background-refresh"); !ok || doc.Find("button[data-background-refresh]").Length() != 0 {
+		t.Error("only the drawer body's refresh is a background refresh")
+	}
 }
 
 // TestRunDrawer_FailedBuildSaysWhyOnce: a failed run's drawer says why
