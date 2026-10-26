@@ -10,7 +10,15 @@
 //     catalog changed the inventory outside a job;
 //   - after a reconnect, refreshes elements that still show a live job
 //     the server no longer has (it finished while we were away);
-//   - polls live elements while the stream is down.
+//   - polls live elements while the stream is down, and after a few
+//     seconds down shows [data-live-status] (layout.html).
+//
+// A page marked data-live-jobs="while-visible" closes its stream while
+// the tab is hidden, so background tabs don't hold one of the
+// browser's few connections to the origin; on return it reconnects and
+// re-renders its [data-live-any] blocks for whatever it missed. Only a
+// page whose live content is all [data-live-any] can do this: a row
+// would miss "inventory" frames.
 //
 // Elements opt in with data-live-inv="<inventory id>" plus the state
 // they were rendered with: data-job-id, data-job-state and, when they
@@ -28,12 +36,17 @@
 
     var latest = {};     // inventory id -> newest job snapshot
     var receivedAt = {}; // inventory id -> when it arrived
-    var requestedAt = {}; // inventory id -> when its HTML was last requested
+    var requestedAt = {}; // live element id -> when its HTML was last requested
     var eta = {};        // job id + counter -> smoothed ETA state
     var snapshotIDs = null;
     var connected = false;
     var source = null;
     var retryMs = 2000;
+    var retryTimer = null;
+    var statusTimer = null;
+    var whileVisible = !!document.querySelector('[data-live-jobs="while-visible"]');
+    var paused = false;  // closed while the tab is hidden
+    var resumed = false; // reconnected after a pause; next sync re-renders
 
     function liveElements(inv) {
         var out = [];
@@ -241,45 +254,89 @@
         document.querySelectorAll('[data-live-inv]').forEach(function (el) {
             if (LIVE[el.getAttribute('data-job-state')] && !live[el.getAttribute('data-live-inv')]) refresh(el);
         });
+        if (resumed) {
+            resumed = false;
+            refreshAny();
+        }
     }
 
+    // setConnected records the stream's state; the notice appears only
+    // once it has been down a few seconds, so a reconnect blip doesn't
+    // flash it, and never while the stream is closed on purpose.
     function setConnected(on) {
         connected = on;
+        clearTimeout(statusTimer);
+        statusTimer = null;
+        if (!on && !paused) {
+            statusTimer = setTimeout(function () { showStatus(true); }, 3000);
+        } else {
+            showStatus(false);
+        }
+    }
+
+    function showStatus(down) {
         document.querySelectorAll('[data-live-status]').forEach(function (el) {
-            el.hidden = on;
+            el.hidden = !down;
         });
     }
 
     function connect() {
-        source = new EventSource('/api/jobs/stream');
-        source.addEventListener('open', function () {
+        retryTimer = null;
+        if (paused) return;
+        var es = source = new EventSource('/api/jobs/stream');
+        es.addEventListener('open', function () {
             retryMs = 2000;
             snapshotIDs = {};
             setConnected(true);
         });
-        source.addEventListener('job', function (e) {
+        es.addEventListener('job', function (e) {
             try { onJob(JSON.parse(e.data)); } catch (_) { /* malformed frame: skip */ }
         });
-        source.addEventListener('inventory', function (e) {
+        es.addEventListener('inventory', function (e) {
             try { onInventory(JSON.parse(e.data).InventoryID); } catch (_) { /* skip */ }
         });
-        source.addEventListener('synced', onSynced);
-        source.addEventListener('error', function () {
+        es.addEventListener('synced', onSynced);
+        es.addEventListener('error', function () {
+            if (source !== es) return;
             setConnected(false);
             // The browser retries a dropped stream by itself; a refused
             // one (429, 5xx) is closed for good, so retry it here.
-            if (source.readyState === EventSource.CLOSED) {
-                setTimeout(connect, retryMs);
+            if (es.readyState === EventSource.CLOSED) {
+                source = null;
+                retryTimer = setTimeout(connect, retryMs);
                 retryMs = Math.min(retryMs * 2, 60000);
             }
         });
     }
 
-    // Remember when each live element's HTML was asked for, so a
+    function pause() {
+        paused = true;
+        clearTimeout(retryTimer);
+        retryTimer = null;
+        if (source) source.close();
+        source = null;
+        setConnected(false);
+    }
+
+    function resume() {
+        paused = false;
+        resumed = true;
+        retryMs = 2000;
+        connect();
+    }
+
+    // Remember when each live element's HTML was asked for, by the
+    // element the response replaces (its id survives the swap), so a
     // response that crossed a newer event in flight can be corrected.
+    // Keyed by element, not inventory: the drawer asking for its own
+    // HTML says nothing about how fresh the row's in-flight response is.
+    // A request that swaps nothing (pin, cancel) replaces no HTML.
     document.body.addEventListener('htmx:beforeRequest', function (e) {
-        var el = e.detail && e.detail.elt && e.detail.elt.closest && e.detail.elt.closest('[data-live-inv]');
-        if (el) requestedAt[el.getAttribute('data-live-inv')] = Date.now();
+        var elt = e.detail && e.detail.elt;
+        if (elt && elt.getAttribute && elt.getAttribute('hx-swap') === 'none') return;
+        var t = e.detail && e.detail.target;
+        var el = t && t.closest && t.closest('[data-live-inv]');
+        if (el && el.id) requestedAt[el.id] = Date.now();
     });
 
     // New or swapped-in content: bring it up to date with what the
@@ -292,7 +349,7 @@
             var inv = el.getAttribute('data-live-inv');
             var job = latest[inv];
             if (!job) return;
-            if (stale(el, job) && (receivedAt[inv] || 0) >= (requestedAt[inv] || 0)) refresh(el);
+            if (stale(el, job) && (receivedAt[inv] || 0) >= (requestedAt[el.id] || 0)) refresh(el);
             else apply(el, job, now);
         });
         tickElapsed(document, now);
@@ -331,12 +388,19 @@
             }
         });
         tick++;
-        if (!connected && tick % 5 === 0) {
+        if (!connected && !paused && tick % 5 === 0) {
             document.querySelectorAll('[data-live-inv]').forEach(function (el) {
                 if (LIVE[el.getAttribute('data-job-state')]) refresh(el);
             });
         }
     }, 1000);
 
-    connect();
+    if (whileVisible) {
+        document.addEventListener('visibilitychange', function () {
+            if (document.hidden) pause();
+            else if (paused) resume();
+        });
+    }
+    if (whileVisible && document.hidden) pause();
+    else connect();
 })();

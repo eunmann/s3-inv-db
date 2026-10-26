@@ -40,6 +40,14 @@ func TestRenderer_Dashboard(t *testing.T) {
 	if !strings.Contains(html, "<h1") {
 		t.Error("rendered output doesn't contain h1 tag")
 	}
+	// A hidden dashboard tab must not hold one of the browser's few
+	// connections to the origin: live.js closes a "while-visible" stream.
+	if !strings.Contains(html, `data-live-jobs="while-visible"`) {
+		t.Error(`dashboard doesn't mark its job stream data-live-jobs="while-visible"`)
+	}
+	if !strings.Contains(html, "data-live-status hidden") {
+		t.Error("layout doesn't carry the hidden data-live-status notice live.js shows while the stream is down")
+	}
 }
 
 func TestRenderer_Inventories(t *testing.T) {

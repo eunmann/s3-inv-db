@@ -2,9 +2,11 @@
 
 {{define "content"}}
 {{- /* Live: a job starting or finishing, or a run loading or being
-       evicted, re-renders this block (scripts/live.js, data-live-any). */ -}}
+       evicted, re-renders this block (scripts/live.js, data-live-any).
+       "while-visible": a hidden dashboard tab closes its stream and
+       re-renders on return, so it doesn't hold a connection. */ -}}
 <div id="dashboard-live" class="px-4 py-6 sm:px-0 max-w-7xl mx-auto"
-     data-live-jobs data-live-any
+     data-live-jobs="while-visible" data-live-any
      hx-get="/" hx-select="#dashboard-live" hx-trigger="live-refresh" hx-swap="outerHTML">
 
     <header class="flex flex-wrap items-end justify-between gap-4 mb-8">
