@@ -65,6 +65,7 @@ func describeSetFields(c *appconfig.Config) map[string]any {
 	addIfSet(set, "pretty_logs", c.PrettyLogs)
 	addIfSet(set, "price_table", c.PriceTable)
 	addIfSet(set, "s3_source", c.S3Source)
+	addIfSet(set, "index_source", c.IndexSource)
 	addIfSet(set, "cache_dir", c.CacheDir)
 	addIfSet(set, "auto_load", c.AutoLoad)
 	addIfSet(set, "auto_load_poll_interval", c.PollInterval)
