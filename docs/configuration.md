@@ -41,7 +41,7 @@ durations; those fail at server start).
 | `max_index_disk` | `--max-index-disk` | none | Disk cap for loaded indexes, manual and automatic; a fifth is headroom. Required with `auto_load`. Without it, nothing is evicted. See [operations](operations.md#disk-budget). |
 | `auto_load` | `--auto-load` | `false` | Build the newest runs of auto-load configurations automatically. |
 | `auto_load_poll_interval` | `--auto-load-poll-interval` | `15m` | How often auto-load checks for new runs. |
-| `auto_load_retention_default` | `--auto-load-retention-default` | `2` | Retention for a configuration with no stored row. Configurations from `inventories[]` or the UI store their own (2 if unset); see #149. |
+| `auto_load_retention_default` | `--auto-load-retention-default` | `2` | Retention (newest runs kept loaded) for a configuration stored without one: an `inventories[]` entry with no `retention_count`, or a new configuration toggled in the UI. |
 | `discovery_refresh_interval` | `--discovery-refresh-interval` | `1m` | How often the run list is refreshed. |
 | `max_concurrent_jobs` | `--max-concurrent-jobs` | `1` | Builds that run at once. |
 | `query_batch_max` | `--query-batch-max` | `1000` | Most prefixes in one batch stats request. |
@@ -66,7 +66,7 @@ startup. Pins are set in the UI, not here.
 | `source` | required | Source bucket (the folder under `s3_source`). |
 | `name` | required | Inventory configuration ID. |
 | `auto_load` | `false` | Keep this configuration's newest runs built. Written on every start, so it overrides a UI toggle (#149). |
-| `retention_count` | stored value, or 2 | How many newest runs to keep loaded. |
+| `retention_count` | stored value, or `auto_load_retention_default` | How many newest runs to keep loaded. |
 
 ## Environment variables
 
