@@ -66,11 +66,19 @@ func (q levelQuery) url(prefix, sortBy, dir string, page int) string {
 	if page > 1 {
 		v.Set("page", strconv.Itoa(page))
 	}
-	if q.pageSize != inventory.DefaultPageSize {
-		v.Set("page_size", strconv.Itoa(q.pageSize))
-	}
+	set("page_size", pageSizeParam(q.pageSize))
 
 	return q.path + "?" + v.Encode()
+}
+
+// pageSizeParam is the page_size every link of a level carries: none
+// for the default.
+func pageSizeParam(size int) string {
+	if size == inventory.DefaultPageSize {
+		return ""
+	}
+
+	return strconv.Itoa(size)
 }
 
 // buildLevelNav builds a level's links. Breadcrumbs open their level in

@@ -73,6 +73,23 @@ func assertRealLinks(t *testing.T, body, target, path string, least int) {
 	}
 }
 
+// assertLinksKeepPageSize checks that every htmx link in target (or in
+// a partial body, which has no target), rows included, keeps the page
+// size.
+func assertLinksKeepPageSize(t *testing.T, body, target, size string) {
+	t.Helper()
+	level := parseHTMLFragment(t, body).Selection
+	if s := level.Find(target); s.Length() > 0 {
+		level = s
+	}
+	level.Find("[hx-get]").Each(func(_ int, s *goquery.Selection) {
+		get, _ := s.Attr("hx-get")
+		if u, err := url.Parse(get); err != nil || u.Query().Get("page_size") != size {
+			t.Errorf("link %q: want page_size=%s", get, size)
+		}
+	})
+}
+
 func TestBrowse_RowLinksEscapeEveryLayer(t *testing.T) {
 	mgr := loadCostIndex(t, linkFromID, linkObjs)
 	h := newWiredHandlers(t, mgr)
@@ -172,6 +189,7 @@ func TestBrowse_NavigationIsRealLinks(t *testing.T) {
 		}
 		// 2 crumbs + 4 sort headers + prev + next + 1 row.
 		assertRealLinks(t, w.Body.String(), "#browse-target", "/browse", 9)
+		assertLinksKeepPageSize(t, w.Body.String(), "#browse-target", "1")
 		doc := parseHTMLFragment(t, w.Body.String())
 		next, _ := doc.Find(`a[rel="next"]`).Attr("href")
 		wantNext := "/browse?" + url.Values{"inventory_id": {string(linkFromID)}, "prefix": {"a/b/"}, "sort": {"size"}, "dir": {"desc"}, "page": {"3"}, "page_size": {"1"}}.Encode()
@@ -203,6 +221,7 @@ func TestCompare_NavigationIsRealLinks(t *testing.T) {
 		}
 		// 2 crumbs + unchanged toggle + 5 sort headers + prev + next + 1 row.
 		assertRealLinks(t, w.Body.String(), "#compare-target", "/compare", 11)
+		assertLinksKeepPageSize(t, w.Body.String(), "#compare-target", "1")
 		doc := parseHTMLFragment(t, w.Body.String())
 		next, _ := doc.Find(`a[rel="next"]`).Attr("href")
 		if u, err := url.Parse(next); err != nil || u.Query().Get("show_unchanged") != "true" || u.Query().Get("page") != "3" {

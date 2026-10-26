@@ -202,6 +202,7 @@ func finishBrowseHTML(level *BrowseLevel, opts browseViewOptions) {
 	}
 	level.Nav = buildLevelNav(q, rootLabel(opts.inventoryID), level.SortLinks, browseSortLabel, level.Pagination)
 	level.TierRows = browseTierRows(level.TierBreakdown, level.CostEstimate, level.TotalBytes)
+	pageSize := pageSizeParam(opts.pageSize)
 	for i := range level.Children {
 		c := &level.Children[i]
 		c.ObjectCountH = humanfmt.CountUint64(c.ObjectCount)
@@ -214,7 +215,7 @@ func finishBrowseHTML(level *BrowseLevel, opts browseViewOptions) {
 			c.MonthlyCostFormatted = pricing.FormatCost(c.MonthlyCostMicrodollars)
 		}
 		if c.HasChildren {
-			c.Href = templates.BrowseLink(string(level.InventoryID), c.Prefix)
+			c.Href = templates.BrowseLink(string(level.InventoryID), c.Prefix, pageSize)
 		}
 	}
 }
@@ -515,7 +516,7 @@ func groupLoadedInventories(all []inventory.Info) []BrowseInventoryGroup {
 }
 
 func splitForGroup(info inventory.Info) (string, BrowseInventoryOption) {
-	href := templates.BrowseLink(string(info.ID), "")
+	href := templates.BrowseLink(string(info.ID), "", "")
 	if p := info.ID.Split(); p.OK {
 		config := p.Source + "/" + p.Inventory
 		run := humanfmt.RunTimestamp(p.Run)

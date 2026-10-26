@@ -153,7 +153,7 @@ func compareSuggestions(picker ComparePicker) []CompareSuggestion {
 			ConfigLabel: g.ConfigLabel,
 			FromRun:     describeRun(from).RunLabel,
 			ToRun:       describeRun(to).RunLabel,
-			Href:        templates.CompareLink(string(from), string(to), "", false),
+			Href:        templates.CompareLink(string(from), string(to), "", "", false),
 		})
 	}
 
@@ -371,10 +371,11 @@ func (h *Handlers) computeCompareLevel(ctx context.Context, opts compareViewOpti
 		Children:      make([]CompareChildView, 0, len(data.Children)),
 	}
 	showUnchanged := !opts.hideUnchanged
+	pageSize := pageSizeParam(opts.pageSize)
 	for i := range data.Children {
 		v := h.buildCompareChildView(&data.Children[i])
 		if v.HasChildren {
-			v.Href = templates.CompareLink(string(opts.from), string(opts.to), v.Prefix, showUnchanged)
+			v.Href = templates.CompareLink(string(opts.from), string(opts.to), v.Prefix, pageSize, showUnchanged)
 		}
 		view.Children = append(view.Children, v)
 	}

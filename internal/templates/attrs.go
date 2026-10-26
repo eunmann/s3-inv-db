@@ -196,24 +196,24 @@ func fastBrowseURL(pairs []any) (string, bool) {
 }
 
 // BrowseLink returns the URL of a drill-down link to prefix in
-// inventory inventoryID: what the browseURL template func returns for
-// ("inventory_id", inventoryID, "prefix", prefix). Handlers set it per
-// row as the link's href and hx-get, so a table row costs no template
-// func calls for its link.
-func BrowseLink(inventoryID, prefix string) string {
-	return linkURL("/browse", [][2]string{{"inventory_id", inventoryID}, {"prefix", prefix}})
+// inventory inventoryID at page size pageSize: what url.Values of the
+// three encodes, empty values left out. Handlers set it per row as the
+// link's href and hx-get, so a table row costs no template func calls
+// for its link.
+func BrowseLink(inventoryID, prefix, pageSize string) string {
+	return linkURL("/browse", [][2]string{{"inventory_id", inventoryID}, {"page_size", pageSize}, {"prefix", prefix}})
 }
 
 // CompareLink returns the URL of a compare drill-down link: what a
-// url.Values of from, to, prefix and, when set, show_unchanged=true
-// encodes, empty values left out.
-func CompareLink(from, to, prefix string, showUnchanged bool) string {
+// url.Values of from, to, prefix, pageSize and, when set,
+// show_unchanged=true encodes, empty values left out.
+func CompareLink(from, to, prefix, pageSize string, showUnchanged bool) string {
 	show := ""
 	if showUnchanged {
 		show = "true"
 	}
 
-	return linkURL("/compare", [][2]string{{"from", from}, {"prefix", prefix}, {"show_unchanged", show}, {"to", to}})
+	return linkURL("/compare", [][2]string{{"from", from}, {"page_size", pageSize}, {"prefix", prefix}, {"show_unchanged", show}, {"to", to}})
 }
 
 // linkURL builds path plus the query of kvs, which are in key order and

@@ -99,31 +99,41 @@ func TestRowLinksMatchGeneralEncoders(t *testing.T) {
 	}
 }
 
-// checkRowLinks checks BrowseLink and CompareLink against the general
-// encoders: the browseURL template func's and url.Values'.
+// checkRowLinks checks BrowseLink and CompareLink against url.Values.
 func checkRowLinks(t *testing.T, id, other, prefix string) {
 	t.Helper()
-	if got, want := templates.BrowseLink(id, prefix), templates.BrowseURLGeneral("inventory_id", id, "prefix", prefix); got != want {
-		t.Fatalf("BrowseLink(%q, %q)\n got %q\nwant %q", id, prefix, got, want)
-	}
-	for _, show := range []bool{false, true} {
-		q := url.Values{}
-		for k, v := range map[string]string{"from": id, "to": other, "prefix": prefix} {
-			if v != "" {
-				q.Set(k, v)
+	for _, size := range []string{"", "7"} {
+		browse := queryURL("/browse", map[string]string{"inventory_id": id, "prefix": prefix, "page_size": size})
+		if got := templates.BrowseLink(id, prefix, size); got != browse {
+			t.Fatalf("BrowseLink(%q, %q, %q)\n got %q\nwant %q", id, prefix, size, got, browse)
+		}
+		for _, show := range []bool{false, true} {
+			params := map[string]string{"from": id, "to": other, "prefix": prefix, "page_size": size}
+			if show {
+				params["show_unchanged"] = "true"
+			}
+			want := queryURL("/compare", params)
+			if got := templates.CompareLink(id, other, prefix, size, show); got != want {
+				t.Fatalf("CompareLink(%q, %q, %q, %q, %v)\n got %q\nwant %q", id, other, prefix, size, show, got, want)
 			}
 		}
-		if show {
-			q.Set("show_unchanged", "true")
-		}
-		want := "/compare"
-		if len(q) > 0 {
-			want += "?" + q.Encode()
-		}
-		if got := templates.CompareLink(id, other, prefix, show); got != want {
-			t.Fatalf("CompareLink(%q, %q, %q, %v)\n got %q\nwant %q", id, other, prefix, show, got, want)
+	}
+}
+
+// queryURL is path with the url.Values query of params' non-empty
+// values.
+func queryURL(path string, params map[string]string) string {
+	q := url.Values{}
+	for k, v := range params {
+		if v != "" {
+			q.Set(k, v)
 		}
 	}
+	if len(q) == 0 {
+		return path
+	}
+
+	return path + "?" + q.Encode()
 }
 
 func FuzzAttrEncodersMatchGeneral(f *testing.F) {
