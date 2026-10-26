@@ -616,3 +616,24 @@ func buildIndex(t *testing.T) string {
 
 	return dir
 }
+
+// TestNew_ManagedConfigsReachHandlers: the config file's managed
+// settings reach the handlers, so the API refuses to change them.
+func TestNew_ManagedConfigsReachHandlers(t *testing.T) {
+	srv, err := New(t.Context(), Config{
+		Logger:         zerolog.Nop(),
+		PriceTable:     pricing.DefaultUSEast1Prices(),
+		DB:             testDB(t),
+		ManagedConfigs: inventory.ManagedConfigs{"bkt/inv": {AutoLoad: true}},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/configurations/bkt/inv/auto-load", strings.NewReader("auto_load=on"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Errorf("changing a managed auto-load: status %d, want 409; body %s", w.Code, w.Body.String())
+	}
+}

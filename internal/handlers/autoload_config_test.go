@@ -126,6 +126,70 @@ func TestSetAutoLoadConfigAPI_RefusesChangesToManagedSettings(t *testing.T) {
 	}
 }
 
+// A retention the config file manages is refused with 409 when the
+// request changes it, the same value passes, and the stored value stays.
+func TestSetAutoLoadConfigAPI_RefusesChangesToManagedRetention(t *testing.T) {
+	h, configs := newWiredHandlersWithConfigs(t, nil, handlers.WithManagedConfigs(inventory.ManagedConfigs{"bkt/inv": {Retention: true}}))
+	if err := configs.SetPolicy(t.Context(), "bkt", "inv", false, 3); err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Post("/api/configurations/{src}/{name}/auto-load", h.SetAutoLoadConfigAPI)
+
+	if code := postAutoLoadStatus(t, router, url.Values{"auto_load": {"on"}, "retention": {"9"}}); code != http.StatusConflict {
+		t.Errorf("changing a managed retention: status %d, want 409", code)
+	}
+	cfg, err := configs.Get(t.Context(), "bkt", "inv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AutoLoad || cfg.RetentionCount != 3 {
+		t.Fatalf("after refused request: config %+v, want auto-load off, retention 3", cfg)
+	}
+	if code := postAutoLoadStatus(t, router, url.Values{"auto_load": {"on"}, "retention": {"3"}}); code != http.StatusOK {
+		t.Errorf("same managed retention, new unmanaged auto-load: status %d, want 200", code)
+	}
+	if cfg, err = configs.Get(t.Context(), "bkt", "inv"); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AutoLoad || cfg.RetentionCount != 3 {
+		t.Errorf("config %+v, want auto-load on, retention 3", cfg)
+	}
+}
+
+// InventoriesPage marks a discovered configuration's managed settings
+// read-only and leaves another configuration's controls editable.
+func TestInventoriesPage_ManagedConfigsDisableTheirControls(t *testing.T) {
+	list := []inventory.Inventory{
+		{SourceBucket: "src", Name: "inv", Run: "2026-01-01T03-00Z", ManifestKey: "k/inv/manifest.json"},
+		{SourceBucket: "src", Name: "free", Run: "2026-01-01T03-00Z", ManifestKey: "k/free/manifest.json"},
+	}
+	h := newWiredHandlers(t, nil,
+		handlers.WithDiscoverer(&fakeDiscoverer{listResp: list, bucket: "dst"}),
+		handlers.WithLoader(&fakeBuilder{}),
+		handlers.WithManagedConfigs(inventory.ManagedConfigs{"src/inv": {AutoLoad: true, Retention: true}}))
+	w := httptest.NewRecorder()
+	h.InventoriesPage(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/inventories", http.NoBody))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	doc := parseHTML(t, w.Body.String())
+	for _, tc := range []struct {
+		group    string
+		disabled bool
+	}{{"grp-src-inv", true}, {"grp-src-free", false}} {
+		sec := doc.Find(`section[aria-labelledby="` + tc.group + `"]`)
+		if sec.Length() != 1 {
+			t.Fatalf("group %s not rendered", tc.group)
+		}
+		for _, sel := range []string{`input[type="checkbox"][name="auto_load"]`, `input[name="retention"]`} {
+			if _, got := sec.Find(sel).Attr("disabled"); got != tc.disabled {
+				t.Errorf("%s %s: disabled %v, want %v", tc.group, sel, got, tc.disabled)
+			}
+		}
+	}
+}
+
 // The inventories page shows managed settings disabled and posts no
 // hidden auto_load=off for them, which would read as turning it off.
 func TestInventoriesPage_ManagedSettingsAreReadOnly(t *testing.T) {
