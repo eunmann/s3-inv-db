@@ -158,10 +158,13 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	// Freeze the disk-backed arrays so their backing files are mmap'd
 	// and exposable as []uint64. bbhash reads the slice; the values
 	// live in the page cache, not the Go heap.
-	if err := b.hashes.Freeze(); err != nil {
+	// The build scans the hashes (each bbhash level, the fallback pass,
+	// the slot lookups) and reads fingerprints in slot order, which is
+	// random over the array.
+	if err := b.hashes.Freeze(accessScan); err != nil {
 		return fmt.Errorf("freeze hashes: %w", err)
 	}
-	if err := b.fingerprints.Freeze(); err != nil {
+	if err := b.fingerprints.Freeze(accessRandom); err != nil {
 		return fmt.Errorf("freeze fingerprints: %w", err)
 	}
 
