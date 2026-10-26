@@ -11,7 +11,7 @@ Every turn re-reads your whole context, so cost grows with what you load. Locate
 
 ## 1. Orient
 
-Read the parts of `docs/overview.md`, `docs/index-format.md` and `docs/performance.md` that cover the task, not all of them. The package map:
+Read the parts of `docs/` that cover the task, not all of them (`how-it-works.md`, `index-format.md`, `operations.md`, `configuration.md`, `cli.md`, `http-api.md`). The package map:
 
 - **Build pipeline:** `pkg/s3fetch` (manifest + object download), `pkg/s3inventory` (CSV/Parquet row readers), `pkg/extsort` (aggregation, spill runs, k-way merge, `IndexBuilder`, `Pipeline.Run`), `pkg/extsort/events` (progress bus), `pkg/sysmem` (memory limit), `pkg/tiers` (storage classes)
 - **On-disk format:** `pkg/format` — writers used by the builder and mmap readers: core stats, depth index, MPHF + fingerprints, prefix dictionary, tier stats, manifest; `Version` in `format.go`
@@ -24,7 +24,7 @@ Read the parts of `docs/overview.md`, `docs/index-format.md` and `docs/performan
 
 Grep for the symbols, flags, config keys, JSON fields, SQL columns, file names and routes the task touches, and list each affected layer with one line on why. A change usually crosses a seam — index writer ↔ reader (`pkg/extsort`/`pkg/format` builders ↔ `pkg/format` readers/`pkg/indexread`), catalog ↔ handlers ↔ templates, Go structs ↔ `internal/migrate/migrations/*.sql`, `internal/appconfig` ↔ `cmd/*` flags ↔ `docs/` — so find both sides.
 
-Check, without reading them in full, whether the change needs: a format `Version` bump (any on-disk layout change), a new migration (never edit an applied one), a `make bench-ingest` / `make bench-query` run or a new suite entry (ingestion or query code only), an `integration`-tagged test (S3 behaviour), `make css` (new Tailwind classes in templates), or a docs update (`docs/*.md`, README config example).
+Check, without reading them in full, whether the change needs: a format `Version` bump (any on-disk layout change), a new migration (never edit an applied one), a `make bench-ingest` / `make bench-query` run or a new suite entry (ingestion or query code only), an `integration`-tagged test (S3 behaviour), `make css` (new Tailwind classes in templates), or a docs update (`docs/*.md`; config keys and flags live in `docs/configuration.md`).
 
 ## 3. Read
 

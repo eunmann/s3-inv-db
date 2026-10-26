@@ -5,9 +5,9 @@ web UI. Page actions (load/unload, browse, compare) submit via
 `hx-post` / `hx-get` and the server returns HTML row/level partials
 that swap in place — there is no JSON-then-reload pattern.
 
-For startup flags and the JSON config schema see the
-[README](../README.md#configuration). For why auto-load + budgeting
-exist, see [overview.md](overview.md#server-behaviour).
+For startup flags and the JSON config schema see
+[configuration](configuration.md). For why auto-load and budgeting
+exist, see [operations](operations.md).
 
 ## Routes
 

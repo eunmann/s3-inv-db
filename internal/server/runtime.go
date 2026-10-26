@@ -45,9 +45,9 @@ type RuntimeOptions struct {
 	// runs. Default 15m.
 	PollInterval time.Duration
 
-	// MaxIndexDisk caps the on-disk index footprint in bytes. Required
-	// when AutoLoad is true; refused otherwise to keep the configuration
-	// fail-fast and explicit.
+	// MaxIndexDisk caps the on-disk index footprint in bytes, for manual
+	// and automatic loads alike. Required when AutoLoad is true: auto-load
+	// without a budget is refused to keep the configuration fail-fast.
 	MaxIndexDisk uint64
 
 	// IndexHeadroomBytes is reserved unused space inside MaxIndexDisk so
