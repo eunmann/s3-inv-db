@@ -29,20 +29,21 @@ type pieceJob struct {
 
 // checksumFiles returns the checksum of each file under dir that sizes
 // names, given its size: the hex SHA-256 of the concatenated SHA-256
-// digests of the file's checksumPiece-sized pieces (one empty piece for
-// an empty file). Every piece of every file is hashed in parallel on up
-// to GOMAXPROCS workers, which keeps a build's checksums from being one
-// thread reading the whole index; hashed counts the bytes read.
-func checksumFiles(dir string, sizes map[string]int64, hashed *stepCounter) (map[string]string, error) {
+// digests of the file's piece-sized pieces (one empty piece for an
+// empty file). Manifests use checksumPiece; tests pass a small piece.
+// Every piece of every file is hashed in parallel on up to GOMAXPROCS
+// workers, which keeps a build's checksums from being one thread
+// reading the whole index; hashed counts the bytes read.
+func checksumFiles(dir string, sizes map[string]int64, piece int64, hashed *stepCounter) (map[string]string, error) {
 	digests := make(map[string][][sha256.Size]byte, len(sizes))
 	var jobs []pieceJob
 	for name, size := range sizes {
-		pieces := max(1, (size+checksumPiece-1)/checksumPiece)
+		pieces := max(1, (size+piece-1)/piece)
 		d := make([][sha256.Size]byte, pieces)
 		digests[name] = d
 		for i := range pieces {
-			off := i * checksumPiece
-			jobs = append(jobs, pieceJob{name: name, off: off, n: min(checksumPiece, size-off), digest: &d[i]})
+			off := i * piece
+			jobs = append(jobs, pieceJob{name: name, off: off, n: min(piece, size-off), digest: &d[i]})
 		}
 	}
 

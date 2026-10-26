@@ -65,7 +65,7 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32, progress StepP
 		sizes[name] = fi.Size
 	}
 	hashed := newStepCounter(progress, StepChecksum, total)
-	sums, err := checksumFiles(dir, sizes, hashed)
+	sums, err := checksumFiles(dir, sizes, checksumPiece, hashed)
 	if err != nil {
 		return err
 	}
@@ -178,7 +178,7 @@ func VerifyManifest(dir string, manifest *Manifest) error {
 		}
 		sizes[name] = info.Size
 	}
-	sums, err := checksumFiles(dir, sizes, nil)
+	sums, err := checksumFiles(dir, sizes, checksumPiece, nil)
 	if err != nil {
 		return err
 	}

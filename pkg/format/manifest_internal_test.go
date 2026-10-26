@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -103,6 +104,10 @@ func TestVerifyManifest(t *testing.T) {
 	}
 }
 
+// testPiece is the checksum piece size the tests hash with, small so a
+// multi-piece file stays small.
+const testPiece = 4 << 10
+
 // checksumOf returns checksumFiles's checksum of one file in dir.
 func checksumOf(t *testing.T, dir, name string) string {
 	t.Helper()
@@ -110,7 +115,7 @@ func checksumOf(t *testing.T, dir, name string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sums, err := checksumFiles(dir, map[string]int64{name: info.Size()}, nil)
+	sums, err := checksumFiles(dir, map[string]int64{name: info.Size()}, testPiece, nil)
 	if err != nil {
 		t.Fatalf("checksumFiles: %v", err)
 	}
@@ -140,14 +145,14 @@ func TestChecksumFilesDeterministic(t *testing.T) {
 // of the pieces' SHA-256 digests, here two full pieces and one byte.
 func TestChecksumFilesPieces(t *testing.T) {
 	dir := t.TempDir()
-	data := bytes.Repeat([]byte{0xa5}, 2*checksumPiece+1)
-	data[checksumPiece] = 1 // the pieces differ
+	data := bytes.Repeat([]byte{0xa5}, 2*testPiece+1)
+	data[testPiece] = 1 // the pieces differ
 	if err := os.WriteFile(filepath.Join(dir, "big.bin"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var digests []byte
-	for off := 0; off < len(data); off += checksumPiece {
-		d := sha256.Sum256(data[off:min(off+checksumPiece, len(data))])
+	for off := 0; off < len(data); off += testPiece {
+		d := sha256.Sum256(data[off:min(off+testPiece, len(data))])
 		digests = append(digests, d[:]...)
 	}
 	want := sha256.Sum256(digests)
@@ -162,6 +167,25 @@ func TestChecksumFilesPieces(t *testing.T) {
 	wantEmpty := sha256.Sum256(empty[:])
 	if got := checksumOf(t, dir, "empty.bin"); got != hex.EncodeToString(wantEmpty[:]) {
 		t.Errorf("empty file checksum = %s, want %x", got, wantEmpty)
+	}
+}
+
+// TestChecksumFilesShortFile: a file shorter than the size it was
+// listed with (it shrank since) fails rather than getting its prefix's
+// checksum, among other files' pieces hashing in parallel.
+func TestChecksumFilesShortFile(t *testing.T) {
+	dir := t.TempDir()
+	sizes := make(map[string]int64)
+	for i := range 8 {
+		name := fmt.Sprintf("f%d.bin", i)
+		if err := os.WriteFile(filepath.Join(dir, name), bytes.Repeat([]byte{byte(i)}, 3*testPiece), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sizes[name] = 3 * testPiece
+	}
+	sizes["f5.bin"] = 5 * testPiece
+	if _, err := checksumFiles(dir, sizes, testPiece, nil); !errors.Is(err, ErrSizeMismatch) {
+		t.Errorf("checksumFiles = %v, want ErrSizeMismatch", err)
 	}
 }
 
