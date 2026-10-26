@@ -302,7 +302,7 @@
                 <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Restarts &amp; saved state</h2>
                 <ul class="list-disc pl-5 space-y-1.5">
                     <li>Loaded runs stay loaded across server restarts: they reopen from disk without a rebuild.</li>
-                    <li>A build running when the server shuts down stops and shows <em>Build interrupted by a server restart</em>. Builds can't safely resume halfway, so load the run again.</li>
+                    <li>A build running when the server stops shows <em>Interrupted by a server restart</em>. Builds can't safely resume halfway, so load the run again.</li>
                     <li>Pins, auto-load settings and recent build history are kept.</li>
                 </ul>
             </section>
@@ -331,15 +331,15 @@
                         <dd class="mt-1">The server can't read the inventory files. Ask whoever runs it to check its S3 permissions, then click Retry.</dd>
                     </div>
                     <div class="py-4" data-search-target="disk space full load refused">
-                        <dt class="font-semibold text-gray-900 dark:text-gray-100">A load is refused for lack of disk space.</dt>
-                        <dd class="mt-1">The index disk is full of runs that can't be removed (pinned or in use). Unpin or unload runs you no longer need, then load again.</dd>
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">A build failed: "Not enough room in the index disk budget".</dt>
+                        <dd class="mt-1">The index disk is full of runs that can't be removed (pinned or in use). Unpin or unload runs you no longer need, then load again. Whoever runs the server can also raise its disk limit.</dd>
                     </div>
                     <div class="py-4" data-search-target="stuck time left progress slow">
                         <dt class="font-semibold text-gray-900 dark:text-gray-100">A build looks stuck.</dt>
                         <dd class="mt-1">Large inventories spend minutes in some steps; <strong>View details</strong> shows which step is running. If nothing moves for a long time, click <strong>Cancel</strong> and load it again.</dd>
                     </div>
                     <div class="py-4" data-search-target="interrupted by server restart">
-                        <dt class="font-semibold text-gray-900 dark:text-gray-100">A run shows "Build interrupted by a server restart".</dt>
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">A run shows "Interrupted by a server restart".</dt>
                         <dd class="mt-1">The server stopped during the build. Load the run again.</dd>
                     </div>
                     <div class="py-4" data-search-target="inventories list empty no runs">
