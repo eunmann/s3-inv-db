@@ -106,18 +106,13 @@ type CompareSelfView struct {
 	BytesBeforeH   string
 	BytesAfterH    string
 	ObjectsBeforeH string
-	APICostPct     string
-	APICostBeforeH string
-	APICostDeltaH  string
 	CostBeforeH    string
 	CostAfterH     string
 	CostDeltaH     string
 	CostPct        string
-	APICostAfterH  string
 	ObjectsSign    int
 	CostSign       int
 	BytesSign      int
-	APICostSign    int
 	HasCost        bool
 }
 
@@ -126,14 +121,10 @@ type CompareChildView struct {
 	BytesDeltaH    string
 	CostPct        string
 	Status         string
-	APICostPct     string
-	APICostDeltaH  string
-	APICostAfterH  string
 	ObjectsBeforeH string
 	ObjectsAfterH  string
 	ObjectsDeltaH  string
 	ObjectsPct     string
-	APICostBeforeH string
 	Segment        string
 	BytesBeforeH   string
 	BytesAfterH    string
@@ -146,7 +137,6 @@ type CompareChildView struct {
 	BytesSign      int
 	CostSign       int
 	ObjectsSign    int
-	APICostSign    int
 	HasCost        bool
 	HasChildren    bool
 }
@@ -365,12 +355,6 @@ func (h *Handlers) buildCompareSelfView(self inventory.CompareSelf) CompareSelfV
 		cDelta := formatCostDelta(costBefore, costAfter)
 		v.CostDeltaH, v.CostPct, v.CostSign = cDelta.DeltaH, cDelta.Pct, cDelta.Sign
 	}
-	apiBefore := pricing.ComputePutCost(self.Objects.Before, h.priceTable)
-	apiAfter := pricing.ComputePutCost(self.Objects.After, h.priceTable)
-	v.APICostBeforeH = pricing.FormatCost(apiBefore)
-	v.APICostAfterH = pricing.FormatCost(apiAfter)
-	apiDelta := formatCostDelta(apiBefore, apiAfter)
-	v.APICostDeltaH, v.APICostPct, v.APICostSign = apiDelta.DeltaH, apiDelta.Pct, apiDelta.Sign
 
 	return v
 }
@@ -398,12 +382,6 @@ func (h *Handlers) buildCompareChildView(c *inventory.CompareChild) CompareChild
 		cDelta := formatCostDelta(costBefore, costAfter)
 		v.CostDeltaH, v.CostPct, v.CostSign = cDelta.DeltaH, cDelta.Pct, cDelta.Sign
 	}
-	apiBefore := pricing.ComputePutCost(c.Objects.Before, h.priceTable)
-	apiAfter := pricing.ComputePutCost(c.Objects.After, h.priceTable)
-	v.APICostBeforeH = pricing.FormatCost(apiBefore)
-	v.APICostAfterH = pricing.FormatCost(apiAfter)
-	apiDelta := formatCostDelta(apiBefore, apiAfter)
-	v.APICostDeltaH, v.APICostPct, v.APICostSign = apiDelta.DeltaH, apiDelta.Pct, apiDelta.Sign
 
 	return v
 }

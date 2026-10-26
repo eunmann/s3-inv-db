@@ -1,3 +1,4 @@
+{{$root := index .Level.Nav.Crumbs 0}}
 <div class="space-y-6">
     {{template "level_breadcrumbs" .Level.Nav}}
 
@@ -5,75 +6,65 @@
     <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-900/50 rounded-md p-6 text-center">
         <h3 class="text-base font-medium text-yellow-900 dark:text-yellow-200">Prefix not present in either run</h3>
         <p class="mt-2 text-sm text-yellow-800 dark:text-yellow-300">
-            <code class="bg-yellow-100 dark:bg-yellow-900/50 px-1.5 py-0.5 rounded">{{if .Prefix}}{{.Prefix}}{{else}}(root){{end}}</code>
+            <code class="bg-yellow-100 dark:bg-yellow-900/50 px-1.5 py-0.5 rounded">{{if .Prefix}}{{.Prefix}}{{else}}{{$root.Label}}{{end}}</code>
             doesn't exist in either the From or To run. Try a shorter prefix or jump back to a parent.
         </p>
         <div class="mt-4">
-            {{with index .Level.Nav.Crumbs 0}}
-            <a href="{{.URL}}" hx-get="{{.URL}}" hx-target="#compare-target" hx-push-url="true"
+            <a href="{{$root.URL}}" hx-get="{{$root.URL}}" hx-target="#compare-target" hx-push-url="true"
                class="inline-flex items-center px-3 py-1.5 border border-yellow-300 dark:border-yellow-800 rounded-md bg-white dark:bg-gray-800 text-sm font-medium text-yellow-800 dark:text-yellow-300 hover:bg-yellow-50 dark:hover:bg-gray-700">
-                Back to {{.Label}}
+                Back to {{$root.Label}}
             </a>
-            {{end}}
         </div>
     </div>
     {{else}}
 
-    <!-- Self-stats card -->
-    <section class="bg-white dark:bg-gray-800 shadow sm:rounded-lg">
+    <section class="bg-white dark:bg-gray-800 shadow sm:rounded-lg" aria-labelledby="compare-level-title">
         <div class="px-4 py-5 sm:px-6">
-            <h2 class="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">
-                At {{if .Prefix}}<code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-2 py-1 rounded">{{.Prefix}}</code>{{else}}<span>the root</span>{{end}}
+            <h2 id="compare-level-title" class="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100 break-all">
+                {{if .Prefix}}<code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-2 py-1 rounded">{{.Prefix}}</code>{{else}}{{$root.Label}}{{end}}
             </h2>
+            {{with .Level.Self}}
+            <dl class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-x-6 gap-y-4">
+                <div>
+                    <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Size change</dt>
+                    <dd class="mt-1 text-2xl sm:text-3xl font-semibold tabular-nums {{deltaClass .BytesSign}}">{{.BytesDeltaH}}{{if .BytesPct}} <span class="text-base font-medium">({{.BytesPct}})</span>{{end}}</dd>
+                    <dd class="mt-1 text-xs tabular-nums text-gray-500 dark:text-gray-400">{{.BytesBeforeH}} → {{.BytesAfterH}}</dd>
+                </div>
+                {{if .HasCost}}
+                <div>
+                    <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Est. cost change / month</dt>
+                    <dd class="mt-1 text-2xl sm:text-3xl font-semibold tabular-nums {{deltaClass .CostSign}}">{{.CostDeltaH}}{{if .CostPct}} <span class="text-base font-medium">({{.CostPct}})</span>{{end}}</dd>
+                    <dd class="mt-1 text-xs tabular-nums text-gray-500 dark:text-gray-400">{{.CostBeforeH}} → {{.CostAfterH}}</dd>
+                </div>
+                {{end}}
+                <div>
+                    <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Objects change</dt>
+                    <dd class="mt-1 text-xl font-semibold tabular-nums {{deltaClass .ObjectsSign}}">{{.ObjectsDeltaH}}{{if .ObjectsPct}} <span class="text-sm font-medium">({{.ObjectsPct}})</span>{{end}}</dd>
+                    <dd class="mt-1 text-xs tabular-nums text-gray-500 dark:text-gray-400">{{.ObjectsBeforeH}} → {{.ObjectsAfterH}}</dd>
+                </div>
+            </dl>
+            {{end}}
+            <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                <span class="font-medium text-rose-700 dark:text-rose-400">Red: grew</span> · <span class="font-medium text-emerald-700 dark:text-emerald-400">Green: shrank</span>
+            </p>
             {{if .Level.QueryDurationH}}
             <p class="mt-1 text-xs text-gray-400 dark:text-gray-500" title="Server-side compare time, excluding HTML template rendering.">Compared in {{.Level.QueryDurationH}}</p>
             {{end}}
         </div>
-        <dl class="border-t border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
-            {{with .Level.Self}}
-            <div class="px-4 py-3 sm:px-6 grid grid-cols-1 sm:grid-cols-4 gap-2 items-baseline">
-                <dt class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Objects</dt>
-                <dd class="text-sm text-gray-700 dark:text-gray-200 font-mono">{{.ObjectsBeforeH}} <span class="text-gray-400 dark:text-gray-500">→</span> {{.ObjectsAfterH}}</dd>
-                <dd class="text-sm font-mono {{if eq .ObjectsSign 1}}text-green-600 dark:text-green-400{{else if eq .ObjectsSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.ObjectsDeltaH}}</dd>
-                <dd class="text-sm font-mono {{if eq .ObjectsSign 1}}text-green-600 dark:text-green-400{{else if eq .ObjectsSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-400 dark:text-gray-500{{end}}">{{.ObjectsPct}}</dd>
-            </div>
-            <div class="px-4 py-3 sm:px-6 grid grid-cols-1 sm:grid-cols-4 gap-2 items-baseline">
-                <dt class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Size</dt>
-                <dd class="text-sm text-gray-700 dark:text-gray-200 font-mono">{{.BytesBeforeH}} <span class="text-gray-400 dark:text-gray-500">→</span> {{.BytesAfterH}}</dd>
-                <dd class="text-sm font-mono {{if eq .BytesSign 1}}text-green-600 dark:text-green-400{{else if eq .BytesSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.BytesDeltaH}}</dd>
-                <dd class="text-sm font-mono {{if eq .BytesSign 1}}text-green-600 dark:text-green-400{{else if eq .BytesSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-400 dark:text-gray-500{{end}}">{{.BytesPct}}</dd>
-            </div>
-            {{if .HasCost}}
-            <div class="px-4 py-3 sm:px-6 grid grid-cols-1 sm:grid-cols-4 gap-2 items-baseline">
-                <dt class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Cost / month</dt>
-                <dd class="text-sm text-gray-700 dark:text-gray-200 font-mono">{{.CostBeforeH}} <span class="text-gray-400 dark:text-gray-500">→</span> {{.CostAfterH}}</dd>
-                <dd class="text-sm font-mono {{if eq .CostSign 1}}text-green-600 dark:text-green-400{{else if eq .CostSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.CostDeltaH}}</dd>
-                <dd class="text-sm font-mono {{if eq .CostSign 1}}text-green-600 dark:text-green-400{{else if eq .CostSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-400 dark:text-gray-500{{end}}">{{.CostPct}}</dd>
-            </div>
-            {{end}}
-            <div class="px-4 py-3 sm:px-6 grid grid-cols-1 sm:grid-cols-4 gap-2 items-baseline">
-                <dt class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">PUT API <span class="normal-case text-gray-400 dark:text-gray-500">(one-time)</span></dt>
-                <dd class="text-sm text-gray-700 dark:text-gray-200 font-mono">{{.APICostBeforeH}} <span class="text-gray-400 dark:text-gray-500">→</span> {{.APICostAfterH}}</dd>
-                <dd class="text-sm font-mono {{if eq .APICostSign 1}}text-green-600 dark:text-green-400{{else if eq .APICostSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.APICostDeltaH}}</dd>
-                <dd class="text-sm font-mono {{if eq .APICostSign 1}}text-green-600 dark:text-green-400{{else if eq .APICostSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-400 dark:text-gray-500{{end}}">{{.APICostPct}}</dd>
-            </div>
-            {{end}}
-        </dl>
     </section>
 
-    <!-- Children -->
-    <section class="bg-white dark:bg-gray-800 shadow sm:rounded-lg">
+    <section class="bg-white dark:bg-gray-800 shadow sm:rounded-lg" aria-labelledby="compare-children-title">
         <header class="px-4 py-4 sm:px-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-4 flex-wrap">
             <div>
-                <h3 class="text-md font-medium text-gray-900 dark:text-gray-100">Children</h3>
+                <h3 id="compare-children-title" class="text-md font-medium text-gray-900 dark:text-gray-100">Children</h3>
                 <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     {{if .Level.TotalChildren}}Showing {{.Level.Pagination.FirstRow}}–{{.Level.Pagination.LastRow}} of {{.Level.TotalChildren}}{{else}}No children to show.{{end}}
                 </p>
                 <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    <span class="text-green-700 dark:text-green-400">{{.Level.Status.Added}} added</span> ·
-                    <span class="text-red-700 dark:text-red-400">{{.Level.Status.Removed}} removed</span> ·
-                    <span class="text-yellow-700 dark:text-yellow-400">{{.Level.Status.Changed}} changed</span> ·
-                    <span class="text-gray-500 dark:text-gray-400">{{.Level.Status.Unchanged}} unchanged</span>
+                    <span class="text-rose-700 dark:text-rose-400">{{.Level.Status.Added}} added</span> ·
+                    <span class="text-emerald-700 dark:text-emerald-400">{{.Level.Status.Removed}} removed</span> ·
+                    {{.Level.Status.Changed}} changed ·
+                    {{.Level.Status.Unchanged}} unchanged
                 </p>
             </div>
             <div class="flex items-center gap-4 flex-wrap">
@@ -90,10 +81,9 @@
                 <tr>
                     <th scope="col" {{with $sort.status.AriaSort}}aria-sort="{{.}}" {{end}}class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{template "level_sort" $sort.status}}</th>
                     <th scope="col" {{with $sort.segment.AriaSort}}aria-sort="{{.}}" {{end}}class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{template "level_sort" $sort.segment}}</th>
-                    <th scope="col" {{with $sort.objects.AriaSort}}aria-sort="{{.}}" {{end}}class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{template "level_sort" $sort.objects}}</th>
                     <th scope="col" {{with $sort.size.AriaSort}}aria-sort="{{.}}" {{end}}class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{template "level_sort" $sort.size}}</th>
                     <th scope="col" {{with $sort.cost.AriaSort}}aria-sort="{{.}}" {{end}}class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{template "level_sort" $sort.cost}}</th>
-                    <th class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider" title="One-time PUT API cost at $0.005 per 1,000 PUTs (us-east-1)">PUT API</th>
+                    <th scope="col" {{with $sort.objects.AriaSort}}aria-sort="{{.}}" {{end}}class="px-4 py-3 sm:px-6 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{template "level_sort" $sort.objects}}</th>
                     <th class="px-4 py-3 sm:px-6"></th>
                 </tr>
             </thead>
@@ -101,37 +91,35 @@
                 {{range .Level.Children}}
                 <tr>
                     <td class="px-4 py-3 sm:px-6 whitespace-nowrap">
+                        {{- if or (eq .Status "added") (eq .Status "removed")}}
                         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{compareStatusClass .Status}}">{{.Status}}</span>
+                        {{- else}}
+                        <span class="sr-only">{{.Status}}</span>
+                        {{- end}}
                     </td>
                     <td class="px-4 py-3 sm:px-6 whitespace-nowrap">
                         {{if .HasChildren}}
                         <a href="{{.Href}}" hx-get="{{.Href}}" hx-target="#compare-target" hx-push-url="true"
-                           class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline font-mono">{{.Segment}}/</a>
+                           class="font-medium text-indigo-600 dark:text-indigo-400 hover:underline font-mono">{{.Segment}}/</a>
                         {{else}}
-                        <span class="text-sm font-medium text-gray-700 dark:text-gray-200 font-mono">{{.Segment}}/</span>
+                        <span class="font-medium text-gray-700 dark:text-gray-200 font-mono">{{.Segment}}/</span>
                         {{end}}
                     </td>
-                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap font-mono text-gray-700 dark:text-gray-200">
-                        <div class="text-xs text-gray-500 dark:text-gray-400">{{.ObjectsBeforeH}} → {{.ObjectsAfterH}}</div>
-                        <div class="{{if eq .ObjectsSign 1}}text-green-600 dark:text-green-400{{else if eq .ObjectsSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.ObjectsDeltaH}}{{if .ObjectsPct}} <span class="text-xs">({{.ObjectsPct}})</span>{{end}}</div>
-                    </td>
-                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap font-mono text-gray-700 dark:text-gray-200">
+                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap tabular-nums">
+                        <div class="font-medium {{deltaClass .BytesSign}}">{{.BytesDeltaH}}{{if .BytesPct}} <span class="text-xs">({{.BytesPct}})</span>{{end}}</div>
                         <div class="text-xs text-gray-500 dark:text-gray-400">{{.BytesBeforeH}} → {{.BytesAfterH}}</div>
-                        <div class="{{if eq .BytesSign 1}}text-green-600 dark:text-green-400{{else if eq .BytesSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.BytesDeltaH}}{{if .BytesPct}} <span class="text-xs">({{.BytesPct}})</span>{{end}}</div>
                     </td>
-                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap font-mono text-gray-700 dark:text-gray-200">
+                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap tabular-nums">
                         {{if .HasCost}}
+                        <div class="font-medium {{deltaClass .CostSign}}">{{.CostDeltaH}}{{if .CostPct}} <span class="text-xs">({{.CostPct}})</span>{{end}}</div>
                         <div class="text-xs text-gray-500 dark:text-gray-400">{{.CostBeforeH}} → {{.CostAfterH}}</div>
-                        <div class="{{if eq .CostSign 1}}text-green-600 dark:text-green-400{{else if eq .CostSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.CostDeltaH}}{{if .CostPct}} <span class="text-xs">({{.CostPct}})</span>{{end}}</div>
                         {{else}}<span class="text-gray-400 dark:text-gray-500">—</span>{{end}}
                     </td>
-                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap font-mono text-gray-700 dark:text-gray-200">
-                        <div class="text-xs text-gray-500 dark:text-gray-400">{{.APICostBeforeH}} → {{.APICostAfterH}}</div>
-                        <div class="{{if eq .APICostSign 1}}text-green-600 dark:text-green-400{{else if eq .APICostSign -1}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.APICostDeltaH}}{{if .APICostPct}} <span class="text-xs">({{.APICostPct}})</span>{{end}}</div>
+                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap tabular-nums">
+                        <div class="font-medium {{deltaClass .ObjectsSign}}">{{.ObjectsDeltaH}}{{if .ObjectsPct}} <span class="text-xs">({{.ObjectsPct}})</span>{{end}}</div>
+                        <div class="text-xs text-gray-500 dark:text-gray-400">{{.ObjectsBeforeH}} → {{.ObjectsAfterH}}</div>
                     </td>
-                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap text-right text-gray-400 dark:text-gray-500" aria-hidden="true">
-                        {{if .HasChildren}}→{{end}}
-                    </td>
+                    <td class="px-4 py-3 sm:px-6 whitespace-nowrap text-right text-gray-400 dark:text-gray-500" aria-hidden="true">{{if .HasChildren}}→{{end}}</td>
                 </tr>
                 {{end}}
             </tbody>
@@ -139,7 +127,7 @@
         </div>
         {{else}}
         <div class="px-4 py-8 sm:px-6 text-sm text-gray-500 dark:text-gray-400 text-center">
-            {{if .Level.HideUnchanged}}No changes at this prefix. Toggle "Show unchanged" to see all children.{{else}}No children under this prefix.{{end}}
+            {{if .Level.HideUnchanged}}No changes at this prefix. Choose "Show unchanged" to see all children.{{else}}No children under this prefix.{{end}}
         </div>
         {{end}}
     </section>

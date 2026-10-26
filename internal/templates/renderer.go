@@ -398,21 +398,36 @@ func stateFuncs() template.FuncMap {
 	}
 }
 
-// compareFuncs covers the compare-page row badges.
+// compareFuncs covers the compare page's colours. Growth is red and
+// shrinkage green, for numbers and the added/removed badges alike: the
+// page is read for what costs more.
 func compareFuncs() template.FuncMap {
 	return template.FuncMap{
 		"compareStatusClass": func(status string) string {
 			switch status {
 			case "added":
-				return "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+				return "bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300"
 			case "removed":
-				return "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
-			case "changed":
-				return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300"
+				return "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
 			default:
 				return "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300"
 			}
 		},
+		"deltaClass": deltaClass,
+	}
+}
+
+// deltaClass is the text colour of a change with the given sign: red
+// for growth, green for shrinkage, grey for none. The light shades are
+// 700 so both pass AA contrast on white; dark mode uses the 400s.
+func deltaClass(sign int) string {
+	switch {
+	case sign > 0:
+		return "text-rose-700 dark:text-rose-400"
+	case sign < 0:
+		return "text-emerald-700 dark:text-emerald-400"
+	default:
+		return "text-gray-500 dark:text-gray-400"
 	}
 }
 
