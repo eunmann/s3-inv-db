@@ -59,26 +59,13 @@ func (a *u64DiskArray) Append(v uint64) error {
 	return nil
 }
 
-// arrayAccess is how a frozen array is read, which sets the kernel's
-// readahead for its mapping. It matters when the array does not fit in
-// the page cache: each miss is then a synchronous fault.
-type arrayAccess int
-
-const (
-	// AccessScan: read front to back, perhaps several times. Readahead
-	// turns a scan's faults into a few large reads; without it every
-	// 4 KiB page is its own fault.
-	accessScan arrayAccess = iota
-	// AccessRandom: read at scattered positions, where readahead would
-	// read pages nothing asked for.
-	accessRandom
-)
-
-// Freeze flushes pending writes and mmap's the file read-only, advised
-// for access. After Freeze the array is no longer appendable; Slice
-// returns the values. Caller must invoke Close to release the mmap and
-// remove the file.
-func (a *u64DiskArray) Freeze(access arrayAccess) error {
+// Freeze flushes pending writes and mmap's the file read-only. After
+// Freeze the array is no longer appendable; Slice returns the values.
+// Caller must invoke Close to release the mmap and remove the file.
+// The mapping keeps the kernel's default readahead: the build reads
+// these arrays front to back, and without readahead a scan of an array
+// that misses the page cache faults one 4 KiB page at a time.
+func (a *u64DiskArray) Freeze() error {
 	if a.values != nil {
 		// Idempotent.
 		return nil
@@ -104,9 +91,6 @@ func (a *u64DiskArray) Freeze(access arrayAccess) error {
 	data, err := unix.Mmap(int(a.file.Fd()), 0, int(size), unix.PROT_READ, unix.MAP_SHARED)
 	if err != nil {
 		return fmt.Errorf("u64 disk array mmap: %w", err)
-	}
-	if access == accessRandom {
-		_ = unix.Madvise(data, unix.MADV_RANDOM)
 	}
 	a.mmap = data
 	// Re-interpret the mmap'd bytes as a []uint64. Safe because the

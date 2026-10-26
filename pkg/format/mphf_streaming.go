@@ -152,6 +152,19 @@ func (b *StreamingMPHFBuilder) closeArrays() error {
 	return nil
 }
 
+// freezeArrays mmaps the disk-backed arrays so the build reads them as
+// []uint64 whose values live in the page cache, not the Go heap.
+func (b *StreamingMPHFBuilder) freezeArrays() error {
+	if err := b.hashes.Freeze(); err != nil {
+		return fmt.Errorf("freeze hashes: %w", err)
+	}
+	if err := b.fingerprints.Freeze(); err != nil {
+		return fmt.Errorf("freeze fingerprints: %w", err)
+	}
+
+	return nil
+}
+
 // Build's memory usage is bounded by buffer sizes, not by prefix count.
 func (b *StreamingMPHFBuilder) Build(outDir string) error {
 	if b.built {
@@ -166,17 +179,8 @@ func (b *StreamingMPHFBuilder) Build(outDir string) error {
 		return b.writeEmpty(outDir)
 	}
 
-	// Freeze the disk-backed arrays so their backing files are mmap'd
-	// and exposable as []uint64. bbhash reads the slice; the values
-	// live in the page cache, not the Go heap.
-	// The build scans the hashes (each bbhash level, the fallback pass,
-	// the slot lookups) and reads fingerprints in slot order, which is
-	// random over the array.
-	if err := b.hashes.Freeze(accessScan); err != nil {
-		return fmt.Errorf("freeze hashes: %w", err)
-	}
-	if err := b.fingerprints.Freeze(accessRandom); err != nil {
-		return fmt.Errorf("freeze fingerprints: %w", err)
+	if err := b.freezeArrays(); err != nil {
+		return err
 	}
 
 	n := int(b.count)
