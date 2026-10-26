@@ -115,6 +115,7 @@ func (s *Server) setupRoutes() {
 
 		// Auto-load + disk-budget controls.
 		r.Post("/configurations/{src}/{name}/auto-load", s.handlers.SetAutoLoadConfigAPI)
+		r.Post("/indexes/refresh", s.refreshIndexes)
 		r.Post("/inventories/{id}/pin", s.handlers.SetPinAPI)
 		r.Get("/disk-budget", s.handlers.DiskBudgetAPI)
 		r.Get("/notifications", s.handlers.NotificationsAPI)

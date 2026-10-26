@@ -65,6 +65,7 @@ type AutoLoader struct {
 	logger      *zerolog.Logger
 	now         func() time.Time
 	stop        chan struct{}
+	kick        chan struct{} // a pending PollNow; one is enough
 	cfg         Config
 	wg          sync.WaitGroup
 	mu          sync.Mutex
@@ -105,6 +106,17 @@ func New(cfg Config, deps Deps, logger *zerolog.Logger) *AutoLoader {
 		logger:      logger,
 		now:         time.Now,
 		stop:        make(chan struct{}),
+		kick:        make(chan struct{}, 1),
+	}
+}
+
+// PollNow makes the poll loop run a tick now instead of at the next
+// interval. It doesn't wait; calls while a tick is already pending are
+// folded into it.
+func (a *AutoLoader) PollNow() {
+	select {
+	case a.kick <- struct{}{}:
+	default:
 	}
 }
 
@@ -140,6 +152,8 @@ func (a *AutoLoader) run(ctx context.Context) {
 		case <-a.stop:
 			return
 		case <-t.C:
+			a.tick(ctx)
+		case <-a.kick:
 			a.tick(ctx)
 		}
 	}
