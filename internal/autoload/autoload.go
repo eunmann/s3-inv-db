@@ -5,6 +5,7 @@ package autoload
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -41,6 +42,9 @@ type Config struct {
 type Discovery interface {
 	Enabled() bool
 	List(ctx context.Context) ([]inventory.MergedInventory, error)
+	// PrepareDiscovered registers a run in the catalog, so a job can
+	// be recorded for it.
+	PrepareDiscovered(ctx context.Context, disc inventory.Inventory) error
 }
 
 // LoaderFunc loads a single discovered inventory, reporting progress.
@@ -286,6 +290,15 @@ func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 		return nil
 	}
 
+	// The job row references the run's catalog row, so the run must be
+	// registered before the job is queued: a run discovered but never
+	// loaded by hand has no row yet, and its every auto-load failed to
+	// queue (a foreign-key error only the server log saw).
+	if err := a.discovery.PrepareDiscovered(ctx, target); err != nil {
+		a.logger.Error().Str("id", string(id)).Err(err).Msg("autoload: register run")
+
+		return
+	}
 	_, err := a.submitter.Submit(ctx, id, jobs.KindBuild, work)
 	switch {
 	case err == nil, errors.Is(err, jobs.ErrDuplicateInventory):
@@ -293,7 +306,8 @@ func (a *AutoLoader) loadOne(ctx context.Context, target inventory.Inventory) {
 	case errors.Is(err, jobs.ErrShutdown):
 		a.logger.Debug().Str("id", string(id)).Msg("autoload: scheduler shut down, skipping submit")
 	default:
-		a.logger.Error().Str("id", string(id)).Err(err).Msg("autoload: submit failed")
+		// Recorded on the run, so the row and the issues banner show it.
+		a.recordLoadFailure(ctx, id, fmt.Errorf("queue auto-load: %w", err))
 	}
 }
 
