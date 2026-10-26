@@ -70,7 +70,7 @@ func (h *Handlers) NotificationsAPI(w http.ResponseWriter, r *http.Request) {
 
 // NotificationsPartial renders the banner HTML; empty when nothing to surface.
 func (h *Handlers) NotificationsPartial(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", contentTypeHTML)
+	setHTMLHeaders(w)
 	notifs := h.collectNotifications(r.Context())
 	if len(notifs) == 0 {
 		return

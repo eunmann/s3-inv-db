@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -216,6 +217,33 @@ func (h *Handlers) DiscoveryEnabled() bool { return h.discovery.Enabled() }
 // contentTypeHTML is the Content-Type set on every HTML response.
 const contentTypeHTML = "text/html; charset=utf-8"
 
+// setHTMLHeaders marks w as an HTML response that caches must key on
+// the htmx request headers and revalidate before reuse: /browse and
+// /compare answer one URL with a page or a fragment depending on the
+// headers wantsHTMXPartial reads, and without these Back can show a
+// fragment cached from an htmx request as the whole page.
+func setHTMLHeaders(w http.ResponseWriter) {
+	hdr := w.Header()
+	hdr.Set("Content-Type", contentTypeHTML)
+	hdr.Set("Cache-Control", "no-cache")
+	for _, name := range [...]string{"HX-Request", "HX-Boosted", "HX-History-Restore-Request"} {
+		addVary(hdr, name)
+	}
+}
+
+// addVary appends name to hdr's Vary unless it is already listed, so
+// a Vary set elsewhere (Accept-Encoding) is kept.
+func addVary(hdr http.Header, name string) {
+	for _, v := range hdr.Values("Vary") {
+		for tok := range strings.SplitSeq(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(tok), name) {
+				return
+			}
+		}
+	}
+	hdr.Add("Vary", name)
+}
+
 // renderHTML writes a full template, logging and returning HTTP 500 on
 // failure. Renders into a buffer first so a mid-template error leaves
 // the response uncommitted and http.Error can emit a clean 500.
@@ -227,7 +255,7 @@ func (h *Handlers) renderHTML(w http.ResponseWriter, r *http.Request, name, logM
 
 		return
 	}
-	w.Header().Set("Content-Type", contentTypeHTML)
+	setHTMLHeaders(w)
 	_, _ = buf.WriteTo(w)
 }
 
@@ -248,7 +276,7 @@ func (h *Handlers) renderHTMLPartialStatus(w http.ResponseWriter, r *http.Reques
 
 		return
 	}
-	w.Header().Set("Content-Type", contentTypeHTML)
+	setHTMLHeaders(w)
 	if status != http.StatusOK {
 		w.WriteHeader(status)
 	}
