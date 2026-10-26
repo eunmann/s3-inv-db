@@ -1,0 +1,69 @@
+{{- /* Markup shared by the Browse and Compare levels. The navigation
+       defines each take a handlers.LevelNav (level_sort: one of its
+       NavSort). Every link is a real anchor whose href is also its
+       hx-get, so it works without htmx, opens in a new tab and pushes
+       the URL it shows. */ -}}
+
+{{define "level_breadcrumbs"}}
+{{- if gt (len .Crumbs) 1}}
+<nav aria-label="Breadcrumb" class="text-sm">
+    <ol class="flex items-center flex-wrap gap-y-1">
+        {{- range $i, $c := .Crumbs}}
+        <li class="flex items-center min-w-0">
+            {{- if $i}}<span class="mx-2 text-gray-300 dark:text-gray-600" aria-hidden="true">/</span>{{end}}
+            {{- if $c.Current}}
+            <span aria-current="page" class="font-semibold text-gray-900 dark:text-gray-100 break-all">{{$c.Label}}</span>
+            {{- else}}
+            <a href="{{$c.URL}}" hx-get="{{$c.URL}}" hx-target="{{$.Target}}" hx-push-url="true"
+               class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 hover:underline break-all">{{$c.Label}}</a>
+            {{- end}}
+        </li>
+        {{- end}}
+    </ol>
+</nav>
+{{- end}}
+{{end}}
+
+{{define "level_pager"}}
+{{- if gt .Pages 1}}
+<nav aria-label="Pages" class="flex items-center gap-2 text-sm">
+    {{- if .PrevURL}}
+    <a href="{{.PrevURL}}" hx-get="{{.PrevURL}}" hx-target="{{.Target}}" hx-push-url="true" rel="prev"
+       class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">← Prev</a>
+    {{- else}}
+    <span aria-disabled="true" class="px-3 py-1 border border-gray-200 dark:border-gray-700 rounded text-gray-300 dark:text-gray-600 cursor-not-allowed">← Prev</span>
+    {{- end}}
+    <span class="text-gray-500 dark:text-gray-400">Page {{.Page}} of {{.Pages}}</span>
+    {{- if .NextURL}}
+    <a href="{{.NextURL}}" hx-get="{{.NextURL}}" hx-target="{{.Target}}" hx-push-url="true" rel="next"
+       class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">Next →</a>
+    {{- else}}
+    <span aria-disabled="true" class="px-3 py-1 border border-gray-200 dark:border-gray-700 rounded text-gray-300 dark:text-gray-600 cursor-not-allowed">Next →</span>
+    {{- end}}
+</nav>
+{{- end}}
+{{end}}
+
+{{define "level_sort"}}<a href="{{.URL}}" hx-get="{{.URL}}" hx-target="{{.Target}}" hx-push-url="true" class="uppercase tracking-wider hover:text-gray-900 dark:hover:text-gray-100">{{.Label}}{{with .Indicator}} <span aria-hidden="true">{{.}}</span>{{end}}</a>{{end}}
+
+{{- /* A share of a whole: the label is the content; the bar only
+       illustrates it. Takes anything with ShareH and ShareWidth. */}}
+{{define "share_bar"}}<div class="flex items-center justify-end gap-2"><span class="w-12 text-right tabular-nums text-gray-700 dark:text-gray-200">{{.ShareH}}</span><span class="block h-1.5 w-10 sm:w-24 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700" aria-hidden="true"><span class="block h-full rounded-full bg-indigo-500 dark:bg-indigo-400" style="width:{{.ShareWidth}}%"></span></span></div>{{end}}
+
+{{- /* Marks the Browse/Compare results container aria-busy while htmx
+       loads a level into it. afterRequest reaches the container even when
+       the swap removed the link that started the request. */}}
+{{define "level_busy_script"}}
+<script>
+    (function () {
+        function mark(e, busy) {
+            var t = e.detail && e.detail.target;
+            if (!t || (t.id !== 'browse-target' && t.id !== 'compare-target')) return;
+            if (busy) t.setAttribute('aria-busy', 'true');
+            else t.removeAttribute('aria-busy');
+        }
+        document.addEventListener('htmx:beforeRequest', function (e) { mark(e, true); });
+        document.addEventListener('htmx:afterRequest', function (e) { mark(e, false); });
+    })();
+</script>
+{{end}}

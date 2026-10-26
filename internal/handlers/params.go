@@ -43,6 +43,12 @@ func parseFilter(q url.Values) (indexread.Filter, error) {
 // auto_load, retention): a few short fields fit easily in 4 KiB.
 const maxFormBodyBytes = 4 * 1024
 
+// Compare's query parameters: the baseline run and the compared run.
+const (
+	paramFrom = "from"
+	paramTo   = "to"
+)
+
 // bodyTooLarge reports whether a decode or ParseForm error came from
 // an http.MaxBytesReader limit, which callers answer with 413.
 func bodyTooLarge(err error) bool {
@@ -90,8 +96,8 @@ func parseCompareOpts(q url.Values) compareViewOptions {
 	sortParams := inventory.NormalizeCompareSort(q.Get("sort"), q.Get("dir"))
 
 	return compareViewOptions{
-		from:          inventory.ID(q.Get("from")),
-		to:            inventory.ID(q.Get("to")),
+		from:          inventory.ID(q.Get(paramFrom)),
+		to:            inventory.ID(q.Get(paramTo)),
 		prefix:        q.Get("prefix"),
 		hideUnchanged: q.Get("show_unchanged") != trueLiteral,
 		page:          pageParams.Page,

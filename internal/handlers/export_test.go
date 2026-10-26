@@ -101,6 +101,21 @@ func (h *Handlers) BuildCompareChildViewForTest(c *inventory.CompareChild) Compa
 	return h.buildCompareChildView(c)
 }
 
+// CompareSidesForTest mirrors compareSides with exported fields.
+type CompareSidesForTest struct {
+	From, To    inventory.ID
+	Note        string
+	SingleRun   bool
+	Unavailable bool
+}
+
+// ResolveCompareSidesForTest exposes resolveCompareSides for tests.
+func ResolveCompareSidesForTest(picker ComparePicker, from, to inventory.ID) CompareSidesForTest {
+	s := resolveCompareSides(picker, from, to)
+
+	return CompareSidesForTest{From: s.from, To: s.to, Note: s.note, SingleRun: s.singleRun, Unavailable: s.unavailable}
+}
+
 // GroupDiscoveredForAPIForTest exposes groupDiscoveredForAPI for tests.
 func (h *Handlers) GroupDiscoveredForAPIForTest(r *http.Request, views []inventory.MergedInventory) []ConfigurationView {
 	return h.groupDiscoveredForAPI(r, views)
@@ -116,6 +131,7 @@ var (
 	DescribeRunForTest                 = describeRun
 	GroupManagerForAPIForTest          = groupManagerForAPI
 	GroupLoadedInventoriesForTst       = groupLoadedInventories
+	ShareOfForTest                     = shareOf
 	BuildComparePickerForTest          = buildComparePicker
 	SameConfigForTest                  = sameConfig
 	FilterComparePickerByConfigForTest = filterComparePickerByConfig

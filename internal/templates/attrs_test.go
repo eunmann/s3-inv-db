@@ -1,6 +1,7 @@
 package templates_test
 
 import (
+	"net/url"
 	"strconv"
 	"testing"
 
@@ -76,20 +77,6 @@ func TestHxValsJSONMatchesGeneralEncoder(t *testing.T) {
 	}
 }
 
-func TestBrowseURLMatchesGeneralEncoder(t *testing.T) {
-	for i, pairs := range parityCases() {
-		t.Run(strconv.Itoa(i), func(t *testing.T) {
-			got, err := templates.BrowseURL(pairs...)
-			if err != nil {
-				t.Fatalf("browseURL(%q): %v", pairs, err)
-			}
-			if want := templates.BrowseURLGeneral(pairs...); got != want {
-				t.Errorf("browseURL(%q)\n got %q\nwant %q", pairs, got, want)
-			}
-		})
-	}
-}
-
 func TestRowLinksMatchGeneralEncoders(t *testing.T) {
 	for _, a := range adversarialValues {
 		for _, b := range adversarialValues {
@@ -98,28 +85,41 @@ func TestRowLinksMatchGeneralEncoders(t *testing.T) {
 	}
 }
 
-// checkRowLinks checks BrowseLink and CompareLinkHxVals against the
-// general encoders the template funcs fall back to.
+// checkRowLinks checks BrowseLink and CompareLink against url.Values.
 func checkRowLinks(t *testing.T, id, other, prefix string) {
 	t.Helper()
-	href, hxVals := templates.BrowseLink(id, prefix)
-	if want := templates.BrowseURLGeneral("inventory_id", id, "prefix", prefix); href != want {
-		t.Fatalf("BrowseLink(%q, %q) href\n got %q\nwant %q", id, prefix, href, want)
+	for _, size := range []string{"", "7"} {
+		browse := queryURL("/browse", map[string]string{"inventory_id": id, "prefix": prefix, "page_size": size})
+		if got := templates.BrowseLink(id, prefix, size); got != browse {
+			t.Fatalf("BrowseLink(%q, %q, %q)\n got %q\nwant %q", id, prefix, size, got, browse)
+		}
+		for _, show := range []bool{false, true} {
+			params := map[string]string{"from": id, "to": other, "prefix": prefix, "page_size": size}
+			if show {
+				params["show_unchanged"] = "true"
+			}
+			want := queryURL("/compare", params)
+			if got := templates.CompareLink(id, other, prefix, size, show); got != want {
+				t.Fatalf("CompareLink(%q, %q, %q, %q, %v)\n got %q\nwant %q", id, other, prefix, size, show, got, want)
+			}
+		}
 	}
-	want, err := templates.HxValsJSONGeneral("inventory_id", id, "prefix", prefix)
-	if err != nil {
-		t.Fatal(err)
+}
+
+// queryURL is path with the url.Values query of params' non-empty
+// values.
+func queryURL(path string, params map[string]string) string {
+	q := url.Values{}
+	for k, v := range params {
+		if v != "" {
+			q.Set(k, v)
+		}
 	}
-	if hxVals != want {
-		t.Fatalf("BrowseLink(%q, %q) hx-vals\n got %q\nwant %q", id, prefix, hxVals, want)
+	if len(q) == 0 {
+		return path
 	}
-	want, err = templates.HxValsJSONGeneral("from", id, "to", other, "prefix", prefix)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := templates.CompareLinkHxVals(id, other, prefix); got != want {
-		t.Fatalf("CompareLinkHxVals(%q, %q, %q)\n got %q\nwant %q", id, other, prefix, got, want)
-	}
+
+	return path + "?" + q.Encode()
 }
 
 func FuzzAttrEncodersMatchGeneral(f *testing.F) {
@@ -143,13 +143,6 @@ func FuzzAttrEncodersMatchGeneral(f *testing.F) {
 			}
 			if got != want {
 				t.Fatalf("hxValsJSON(%q)\n got %q\nwant %q", pairs, got, want)
-			}
-			gotURL, err := templates.BrowseURL(pairs...)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if wantURL := templates.BrowseURLGeneral(pairs...); gotURL != wantURL {
-				t.Fatalf("browseURL(%q)\n got %q\nwant %q", pairs, gotURL, wantURL)
 			}
 		}
 	})

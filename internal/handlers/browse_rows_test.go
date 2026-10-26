@@ -2,6 +2,7 @@ package handlers_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -71,6 +72,38 @@ func TestBrowseLevelAPI_RowsMatchIndex(t *testing.T) {
 	}
 }
 
+// TestBrowseLevelAPI_DefaultSortIsSizeDescending: with no sort param a
+// level lists its largest children first.
+func TestBrowseLevelAPI_DefaultSortIsSizeDescending(t *testing.T) {
+	const id = "src/inv/2026-01-01T00-00Z"
+	mgr := loadCostIndex(t, id, []costObj{
+		{"a/x", 1, tiers.Standard},
+		{"b/x", 3 * gib, tiers.Standard},
+		{"c/x", 2 * gib, tiers.Standard},
+	})
+	h := newWiredHandlers(t, mgr)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/browse?inventory_id="+id, http.NoBody)
+	w := httptest.NewRecorder()
+	h.BrowseLevelAPI(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	var resp handlers.BrowseLevelResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Sort != "size" || resp.Dir != "desc" {
+		t.Errorf("sort = %q %q, want size desc", resp.Sort, resp.Dir)
+	}
+	got := make([]string, 0, len(resp.Children))
+	for _, c := range resp.Children {
+		got = append(got, c.Segment)
+	}
+	if want := "b,c,a"; strings.Join(got, ",") != want {
+		t.Errorf("children = %v, want %s", got, want)
+	}
+}
+
 // TestBrowsePartial_RowsShowFormattedNumbers: the HTML rows render each
 // child's formatted count, size and cost, which only the HTML path
 // builds.
@@ -94,6 +127,8 @@ func TestBrowsePartial_RowsShowFormattedNumbers(t *testing.T) {
 	}
 	prices := pricing.DefaultUSEast1Prices()
 	err := mgr.WithIndex(id, func(idx *indexread.Index) error {
+		root, _ := idx.Lookup("")
+		rootBytes := idx.Stats(root).TotalBytes
 		rows.Each(func(_ int, tr *goquery.Selection) {
 			cells := tr.Find("td")
 			seg := strings.TrimSuffix(strings.TrimSpace(cells.Eq(0).Text()), "/")
@@ -102,9 +137,11 @@ func TestBrowsePartial_RowsShowFormattedNumbers(t *testing.T) {
 				t.Fatalf("row %q not in index", seg)
 			}
 			st := idx.Stats(pos)
+			// Segment, Size, % of parent, Objects, Est. cost.
 			want := []string{
-				humanfmt.CountUint64(st.ObjectCount),
 				humanfmt.BytesUint64(st.TotalBytes),
+				fmt.Sprintf("%.1f%%", float64(st.TotalBytes)/float64(rootBytes)*100),
+				humanfmt.CountUint64(st.ObjectCount),
 				pricing.FormatCost(pricing.ComputeMonthlyCost(idx.TierBreakdown(pos), prices).TotalMicrodollars),
 			}
 			for i, w := range want {

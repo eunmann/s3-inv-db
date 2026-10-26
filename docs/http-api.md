@@ -51,7 +51,7 @@ Read-only:
 | `GET /api/discovered` | List discovered inventories (when discovery configured) |
 | `GET /api/stats?inventory_id=&prefix=` | Stats for one prefix in one inventory |
 | `GET /api/configurations` | Inventory configurations grouped by `<src>/<inv>` with their runs |
-| `GET /api/browse?inventory_id=&prefix=&sort=&dir=&page=&page_size=` | Browse one prefix in one run |
+| `GET /api/browse?inventory_id=&prefix=&sort=&dir=&page=&page_size=` | Browse one prefix in one run; `sort` is `size`, `objects`, `cost` or `segment` (default `size`, `desc`) |
 | `GET /api/compare?from=&to=&prefix=&sort=&dir=&page=&page_size=&show_unchanged=` | Compare two runs at one prefix (includes PUT API one-time costs) |
 | `GET /api/disk-budget` | Tracker counters: cap, used, reserved, available, headroom |
 | `GET /api/notifications` | Aggregated poll-failure + auto-load-failure list; each has the raw `message` and a one-sentence `summary` |

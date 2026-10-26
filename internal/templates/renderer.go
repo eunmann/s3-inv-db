@@ -10,7 +10,6 @@ import (
 	"io"
 	"io/fs"
 	"maps"
-	"net/url"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -244,11 +243,9 @@ var embeddedTemplates embed.FS
 
 // Sentinel errors for template helper argument validation.
 var (
-	errHxValsOddPairs    = errors.New("hxVals: expected key,value pairs")
-	errHxValsKeyType     = errors.New("hxVals: key is not a string")
-	errBrowseURLOddPairs = errors.New("browseURL: expected key,value pairs")
-	errBrowseURLKeyType  = errors.New("browseURL: key is not a string")
-	errPageNotFound      = errors.New("page template not found")
+	errHxValsOddPairs = errors.New("hxVals: expected key,value pairs")
+	errHxValsKeyType  = errors.New("hxVals: key is not a string")
+	errPageNotFound   = errors.New("page template not found")
 )
 
 // Renderer manages HTML template rendering.
@@ -398,21 +395,36 @@ func stateFuncs() template.FuncMap {
 	}
 }
 
-// compareFuncs covers the compare-page row badges.
+// compareFuncs covers the compare page's colours. Growth is red and
+// shrinkage green, for numbers and the added/removed badges alike: the
+// page is read for what costs more.
 func compareFuncs() template.FuncMap {
 	return template.FuncMap{
 		"compareStatusClass": func(status string) string {
 			switch status {
 			case "added":
-				return "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+				return "bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300"
 			case "removed":
-				return "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
-			case "changed":
-				return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300"
+				return "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
 			default:
 				return "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300"
 			}
 		},
+		"deltaClass": deltaClass,
+	}
+}
+
+// deltaClass is the text colour of a change with the given sign: red
+// for growth, green for shrinkage, grey for none. The light shades are
+// 700 so both pass AA contrast on white; dark mode uses the 400s.
+func deltaClass(sign int) string {
+	switch {
+	case sign > 0:
+		return "text-rose-700 dark:text-rose-400"
+	case sign < 0:
+		return "text-emerald-700 dark:text-emerald-400"
+	default:
+		return "text-gray-500 dark:text-gray-400"
 	}
 }
 
@@ -429,7 +441,6 @@ func arithFuncs() template.FuncMap {
 func htmxFuncs() template.FuncMap {
 	return template.FuncMap{
 		"hxValsJSON": hxValsJSON,
-		"browseURL":  browseURL,
 	}
 }
 
@@ -494,45 +505,6 @@ func marshalHxVals(pairs []any) (string, error) {
 	}
 
 	return string(b), nil
-}
-
-// Builds a percent-encoded /browse URL from key/value pairs. Required
-// because html/template only auto-encodes URL values inside a fixed set
-// of attributes (href, src, action, …) and `hx-push-url` is not one of
-// them, so a raw `{{.Prefix}}` interpolation lets `&`, `?`, `#`, or
-// spaces in a prefix break the URL.
-func browseURL(pairs ...any) (string, error) {
-	if len(pairs)%2 != 0 {
-		return "", errBrowseURLOddPairs
-	}
-	for i := 0; i < len(pairs); i += 2 {
-		if _, ok := pairs[i].(string); !ok {
-			return "", fmt.Errorf("%w (position %d)", errBrowseURLKeyType, i)
-		}
-	}
-	if s, ok := fastBrowseURL(pairs); ok {
-		return s, nil
-	}
-
-	return encodeBrowseURL(pairs), nil
-}
-
-// encodeBrowseURL is browseURL's general encoder; it defines the output
-// fastBrowseURL reproduces. Every key must be a string.
-func encodeBrowseURL(pairs []any) string {
-	u := url.URL{Path: "/browse"}
-	q := u.Query()
-	for i := 0; i < len(pairs); i += 2 {
-		key := pairs[i].(string) //nolint:forcetypeassert // checked above
-		v := fmt.Sprint(pairs[i+1])
-		if v == "" {
-			continue
-		}
-		q.Set(key, v)
-	}
-	u.RawQuery = q.Encode()
-
-	return u.String()
 }
 
 func (r *Renderer) loadTemplates() error {

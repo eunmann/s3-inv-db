@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
 	"net/url"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,10 +39,16 @@ type BrowseInventoryGroup struct {
 }
 
 // BrowseInventoryOption is one loaded run inside a BrowseInventoryGroup.
-// Label is the self-identifying "<src>/<inv> · <run>" string.
+// Label is the self-identifying "<src>/<inv> · <run>" string the picker
+// shows; Run is the run alone and Href opens it, for the list of runs.
+// SizeH and ObjectsH, the run's totals, are set only for that list.
 type BrowseInventoryOption struct {
-	ID    inventory.ID
-	Label string
+	ID       inventory.ID
+	Label    string
+	Run      string
+	Href     string
+	SizeH    string
+	ObjectsH string
 }
 
 // BrowseLevel is the data the browse_level.html partial renders. Lives
@@ -48,6 +56,7 @@ type BrowseInventoryOption struct {
 type BrowseLevel struct {
 	CostEstimate   *CostEstimate
 	SortLinks      map[string]BrowseSortLink
+	Nav            LevelNav
 	ObjectCountH   string
 	Sort           string
 	InventoryID    inventory.ID
@@ -58,6 +67,7 @@ type BrowseLevel struct {
 	Breadcrumbs    []BrowseCrumb
 	Children       []BrowseChild
 	TierBreakdown  []TierStats
+	TierRows       []BrowseTierRow
 	Pagination     BrowsePagination
 	TotalChildren  int
 	ObjectCount    uint64
@@ -66,9 +76,7 @@ type BrowseLevel struct {
 	NotFound       bool
 }
 
-// BrowsePage serves the full page and the inner level partial at the
-// same URL, dispatched via wantsHTMXPartial.
-// BrowseViewOptions bundles the query-string knobs BrowsePage parses so
+// browseViewOptions bundles the query-string knobs BrowsePage parses so
 // the inner render functions don't take 6-positional signatures.
 type browseViewOptions struct {
 	inventoryID inventory.ID
@@ -93,6 +101,8 @@ func parseBrowseOptions(q url.Values) browseViewOptions {
 	}
 }
 
+// BrowsePage serves the full page and the inner level partial at the
+// same URL, dispatched via wantsHTMXPartial.
 func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 	opts := parseBrowseOptions(r.URL.Query())
 	if wantsHTMXPartial(r) {
@@ -104,9 +114,10 @@ func (h *Handlers) BrowsePage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request, opts browseViewOptions) {
+	groups := groupLoadedInventories(h.manager.List())
 	data := map[string]any{
 		"Title":           "Browse",
-		"InventoryGroups": groupLoadedInventories(h.manager.List()),
+		"InventoryGroups": groups,
 		"InventoryID":     opts.inventoryID,
 		"Prefix":          opts.prefix,
 	}
@@ -119,14 +130,18 @@ func (h *Handlers) renderBrowsePage(w http.ResponseWriter, r *http.Request, opts
 
 			return nil
 		})
-		// On ErrNotLoaded / ErrNotFound, fall through to the empty
-		// placeholder — the user can pick a different inventory.
 		if err == nil {
 			level.QueryDurationH = humanfmt.Duration(time.Since(start))
-			finishBrowseRowsHTML(&level)
+			finishBrowseHTML(&level, opts)
 			data["InitialLevel"] = level
+			h.renderHTML(w, r, "browse.html", "failed to render browse page", data)
+
+			return
 		}
+		// Not loaded or gone: say so above the list of runs to pick from.
+		data["Unavailable"] = true
 	}
+	h.addRunTotals(zerolog.Ctx(r.Context()), groups)
 	h.renderHTML(w, r, "browse.html", "failed to render browse page", data)
 }
 
@@ -159,18 +174,40 @@ func (h *Handlers) renderBrowseLevelPartial(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	level.QueryDurationH = humanfmt.Duration(time.Since(start))
-	finishBrowseRowsHTML(&level)
+	finishBrowseHTML(&level, opts)
 	h.renderHTMLPartial(w, r, "browse_level.html", "failed to render browse level", level)
 }
 
-// finishBrowseRowsHTML sets what only the HTML views render: each row's
-// formatted numbers and cost, and the link of each row with children.
-// The JSON API returns the numbers alone.
-func finishBrowseRowsHTML(level *BrowseLevel) {
+// browseSortLabel is a Browse children table column's header.
+func browseSortLabel(col string) string {
+	if col == inventory.SortColCost {
+		return "Est. cost / mo"
+	}
+
+	return sortLabel(col)
+}
+
+// finishBrowseHTML sets what only the HTML views render: the level's
+// links, each row's formatted numbers and cost, and the link of each
+// row with children. The JSON API returns the numbers alone.
+func finishBrowseHTML(level *BrowseLevel, opts browseViewOptions) {
+	q := levelQuery{
+		keep:     url.Values{"inventory_id": {string(opts.inventoryID)}},
+		path:     "/browse",
+		target:   "#browse-target",
+		prefix:   opts.prefix,
+		sortBy:   opts.sortBy,
+		dir:      opts.dir,
+		pageSize: opts.pageSize,
+	}
+	level.Nav = buildLevelNav(q, rootLabel(opts.inventoryID), level.SortLinks, browseSortLabel, level.Pagination)
+	level.TierRows = browseTierRows(level.TierBreakdown, level.CostEstimate, level.TotalBytes)
+	pageSize := pageSizeParam(opts.pageSize)
 	for i := range level.Children {
 		c := &level.Children[i]
 		c.ObjectCountH = humanfmt.CountUint64(c.ObjectCount)
 		c.TotalBytesH = humanfmt.BytesUint64(c.TotalBytes)
+		c.ShareH, c.ShareWidth = shareOf(c.TotalBytes, level.TotalBytes)
 		switch {
 		case !level.HasTierData:
 			c.MonthlyCostFormatted = missingValueGlyph
@@ -178,9 +215,63 @@ func finishBrowseRowsHTML(level *BrowseLevel) {
 			c.MonthlyCostFormatted = pricing.FormatCost(c.MonthlyCostMicrodollars)
 		}
 		if c.HasChildren {
-			c.Href, c.HxVals = templates.BrowseLink(string(level.InventoryID), c.Prefix)
+			c.Href = templates.BrowseLink(string(level.InventoryID), c.Prefix, pageSize)
 		}
 	}
+}
+
+// BrowseTierRow is one storage tier of the level's tier breakdown, as
+// the HTML view shows it: largest share first.
+type BrowseTierRow struct {
+	Name         string
+	ObjectCountH string
+	BytesH       string
+	CostH        string
+	ShareH       string
+	ShareWidth   string
+	bytes        uint64
+}
+
+// browseTierRows orders the level's tiers by bytes, largest first, each
+// with its share of total and, when priced, its cost.
+func browseTierRows(tiers []TierStats, cost *CostEstimate, total uint64) []BrowseTierRow {
+	rows := make([]BrowseTierRow, 0, len(tiers))
+	for _, t := range tiers {
+		row := BrowseTierRow{Name: t.TierName, ObjectCountH: t.ObjectCountH, BytesH: t.BytesH, bytes: t.Bytes}
+		row.ShareH, row.ShareWidth = shareOf(t.Bytes, total)
+		if cost != nil {
+			row.CostH = cost.PerTierFormatted[t.TierName]
+		}
+		rows = append(rows, row)
+	}
+	slices.SortStableFunc(rows, func(a, b BrowseTierRow) int { return cmp.Compare(b.bytes, a.bytes) })
+
+	return rows
+}
+
+// shareOf formats part as a share of whole: a label ("42.1%", "<0.1%")
+// and a bar width in percent. A share of an empty whole is undefined,
+// labelled with missingValueGlyph and drawn as no bar.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func shareOf(part, whole uint64) (string, string) {
+	switch {
+	case whole == 0:
+		return missingValueGlyph, "0"
+	case part >= whole:
+		return "100%", "100"
+	case part == 0:
+		return "0%", "0"
+	}
+	width := strconv.FormatFloat(float64(part)/float64(whole)*100, 'f', 1, 64)
+	switch width {
+	case "0.0":
+		return "<0.1%", width
+	case "100.0":
+		return ">99.9%", width
+	}
+
+	return width + "%", width
 }
 
 // buildBrowseLevel composes the domain-level prefix view with HTTP-shape
@@ -425,14 +516,36 @@ func groupLoadedInventories(all []inventory.Info) []BrowseInventoryGroup {
 }
 
 func splitForGroup(info inventory.Info) (string, BrowseInventoryOption) {
+	href := templates.BrowseLink(string(info.ID), "", "")
 	if p := info.ID.Split(); p.OK {
 		config := p.Source + "/" + p.Inventory
+		run := humanfmt.RunTimestamp(p.Run)
 
-		return config, BrowseInventoryOption{
-			ID:    info.ID,
-			Label: config + " · " + humanfmt.RunTimestamp(p.Run),
-		}
+		return config, BrowseInventoryOption{ID: info.ID, Label: config + " · " + run, Run: run, Href: href}
 	}
 
-	return "Other", BrowseInventoryOption{ID: info.ID, Label: info.Name}
+	return "Other", BrowseInventoryOption{ID: info.ID, Label: info.Name, Run: info.Name, Href: href}
+}
+
+// addRunTotals sets each listed run's size and object count from its
+// root. Peek, not WithIndex: listing the runs isn't a use of each, and
+// touching every one would reorder the eviction LRU.
+func (h *Handlers) addRunTotals(logger *zerolog.Logger, groups []BrowseInventoryGroup) {
+	for gi := range groups {
+		for oi := range groups[gi].Options {
+			o := &groups[gi].Options[oi]
+			err := h.manager.Peek(o.ID, func(idx *indexread.Index) error {
+				if pos, ok := idx.Lookup(""); ok {
+					st := idx.Stats(pos)
+					o.SizeH = humanfmt.BytesUint64(st.TotalBytes)
+					o.ObjectsH = humanfmt.CountUint64(st.ObjectCount)
+				}
+
+				return nil
+			})
+			if err != nil {
+				logger.Debug().Err(err).Stringer("id", o.ID).Msg("browse run totals")
+			}
+		}
+	}
 }

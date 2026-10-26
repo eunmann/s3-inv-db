@@ -44,10 +44,14 @@ type BrowseChild struct {
 	ObjectCountH         string
 	TotalBytesH          string
 	MonthlyCostFormatted string
-	// Href and HxVals are the drill-down link's attributes, set for
-	// rows with children on the HTML views only.
-	Href                    string
-	HxVals                  string
+	// Href is the drill-down link's URL, set for rows with children on
+	// the HTML views only.
+	Href string
+	// ShareH and ShareWidth are the row's bytes as a share of the
+	// level's, as a label ("42.1%") and a bar width in percent ("42.1");
+	// HTML views only.
+	ShareH                  string
+	ShareWidth              string
 	ObjectCount             uint64
 	TotalBytes              uint64
 	MonthlyCostMicrodollars uint64
@@ -106,12 +110,13 @@ type SortParams struct {
 	Dir string
 }
 
-// NormalizeSort clamps sort/dir from user input to known values.
-// Unknown column → segment. Unknown direction → segment uses asc,
-// others desc.
+// NormalizeSort clamps sort/dir from user input to known values. A
+// missing or unknown column sorts by size, so a level opens on where
+// its space is. A missing or unknown direction is asc for segment and
+// desc for the numeric columns.
 func NormalizeSort(sortBy, dir string) SortParams {
 	return normalizeSortParams(sortBy, dir,
-		SortColSegment,
+		SortColSize,
 		[]string{SortColObjects, SortColSize, SortColCost, SortColSegment},
 		[]string{SortColSegment},
 	)

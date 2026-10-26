@@ -3,22 +3,21 @@ package templates
 import (
 	"encoding"
 	"encoding/json"
-	"fmt"
 	"net/url"
 	"reflect"
 	"strconv"
 	"unicode/utf8"
 )
 
-// The browse and compare tables call hxValsJSON and browseURL once or
-// twice per row. A map, reflective json.Marshal and url.Values per call
-// cost more than the index reads behind a row, so both build their
-// output directly for the value types the templates pass. Any other
-// shape takes the general encoders, which define the output: the fast
-// paths are tested byte-for-byte against them.
+// A map, reflective json.Marshal and url.Values per call cost more than
+// the index reads behind a table row, so hxValsJSON and the per-row
+// links build their output directly for the value types the templates
+// and handlers pass. Any other shape takes the general encoder, which
+// defines the output: the fast paths are tested byte-for-byte against
+// it and url.Values.
 
-// maxFastPairs bounds the key/value pairs the fast paths sort on the
-// stack; the templates pass at most seven.
+// maxFastPairs bounds the key/value pairs fastHxValsJSON sorts on the
+// stack; more take the general encoder.
 const maxFastPairs = 8
 
 const hexDigits = "0123456789abcdef"
@@ -156,63 +155,34 @@ func fastHxValsJSON(pairs []any) (string, bool) {
 	return string(dst), true
 }
 
-// queryValue formats v as fmt.Sprint does.
-func queryValue(v any) string {
-	switch v := v.(type) {
-	case string:
-		return v
-	case int:
-		return strconv.Itoa(v)
-	default:
-		return fmt.Sprint(v)
-	}
+// BrowseLink returns the URL of a drill-down link to prefix in
+// inventory inventoryID at page size pageSize: what url.Values of the
+// three encodes, empty values left out. Handlers set it per row as the
+// link's href and hx-get, so a table row costs no template func calls
+// for its link.
+func BrowseLink(inventoryID, prefix, pageSize string) string {
+	return linkURL("/browse", [][2]string{{"inventory_id", inventoryID}, {"page_size", pageSize}, {"prefix", prefix}})
 }
 
-// fastBrowseURL builds the URL browseURL's url.Values path builds:
-// non-empty values, keys sorted, query-escaped. It reports false when
-// it cannot.
-func fastBrowseURL(pairs []any) (string, bool) {
-	var order [maxFastPairs]int
-	idx, ok := sortedPairKeys(&order, pairs)
-	if !ok {
-		return "", false
-	}
-	var buf [256]byte
-	dst := append(buf[:0], "/browse"...)
-	sep := byte('?')
-	for _, k := range idx {
-		v := queryValue(pairs[k+1])
-		if v == "" {
-			continue
-		}
-		dst = append(dst, sep)
-		sep = '&'
-		dst = append(dst, url.QueryEscape(pairs[k].(string))...) //nolint:forcetypeassert // callers check every key first
-		dst = append(dst, '=')
-		dst = append(dst, url.QueryEscape(v)...)
+// CompareLink returns the URL of a compare drill-down link: what a
+// url.Values of from, to, prefix, pageSize and, when set,
+// show_unchanged=true encodes, empty values left out.
+func CompareLink(from, to, prefix, pageSize string, showUnchanged bool) string {
+	show := ""
+	if showUnchanged {
+		show = "true"
 	}
 
-	return string(dst), true
+	return linkURL("/compare", [][2]string{{"from", from}, {"page_size", pageSize}, {"prefix", prefix}, {"show_unchanged", show}, {"to", to}})
 }
 
-// BrowseLink returns the href and hx-vals of a drill-down link to
-// prefix in inventory inventoryID: what the browseURL and hxValsJSON
-// template funcs return for ("inventory_id", inventoryID, "prefix",
-// prefix). Handlers set it per row, so a table row costs no template
-// func calls for its link.
-//
-//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
-func BrowseLink(inventoryID, prefix string) (string, string) {
+// linkURL builds path plus the query of kvs, which are in key order and
+// whose keys need no escaping; empty values are left out.
+func linkURL(path string, kvs [][2]string) string {
 	var buf [256]byte
-	dst := append(buf[:0], `{"inventory_id":`...)
-	dst = appendJSONString(dst, inventoryID)
-	dst = append(dst, `,"prefix":`...)
-	dst = appendJSONString(dst, prefix)
-	hxVals := string(append(dst, '}'))
-
-	dst = append(buf[:0], "/browse"...)
+	dst := append(buf[:0], path...)
 	sep := byte('?')
-	for _, kv := range [...][2]string{{"inventory_id", inventoryID}, {"prefix", prefix}} {
+	for _, kv := range kvs {
 		if kv[1] == "" {
 			continue
 		}
@@ -223,20 +193,5 @@ func BrowseLink(inventoryID, prefix string) (string, string) {
 		dst = append(dst, url.QueryEscape(kv[1])...)
 	}
 
-	return string(dst), hxVals
-}
-
-// CompareLinkHxVals returns the hx-vals of a compare drill-down link:
-// what hxValsJSON returns for ("from", from, "to", to, "prefix",
-// prefix).
-func CompareLinkHxVals(from, to, prefix string) string {
-	var buf [256]byte
-	dst := append(buf[:0], `{"from":`...)
-	dst = appendJSONString(dst, from)
-	dst = append(dst, `,"prefix":`...)
-	dst = appendJSONString(dst, prefix)
-	dst = append(dst, `,"to":`...)
-	dst = appendJSONString(dst, to)
-
-	return string(append(dst, '}'))
+	return string(dst)
 }

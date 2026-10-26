@@ -41,7 +41,7 @@ func benchHTMXGet(b *testing.B, router http.Handler, target string) {
 }
 
 func BenchmarkBrowseLevelPartialHTML(b *testing.B) {
-	benchHTMXGet(b, htmlRouter(b), "/browse?inventory_id="+gateFromID+"&page=50&page_size=500")
+	benchHTMXGet(b, htmlRouter(b), "/browse?inventory_id="+gateFromID+"&sort=segment&page=50&page_size=500")
 }
 
 func BenchmarkCompareLevelPartialHTML(b *testing.B) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -57,35 +58,132 @@ type ComparePageData struct {
 	ToRun       string
 	Prefix      string
 	Error       string
+	// Note says which run was picked for the side the request left
+	// out, when that wasn't the obvious neighbour.
+	Note string
+	// Suggestions are the one-click comparisons the empty page offers.
+	Suggestions []CompareSuggestion
 	Picker      ComparePicker
 	ToPicker    ComparePicker
-	Breadcrumbs []BrowseCrumb
+	// SingleRun is set when the run named has no other loaded run of its
+	// configuration to compare with.
+	SingleRun bool
+	// Unavailable is set when the one run named isn't loaded.
+	Unavailable bool
+}
+
+// CompareSuggestion is a comparison of a configuration's two latest
+// loaded runs.
+type CompareSuggestion struct {
+	ConfigLabel string
+	FromRun     string
+	ToRun       string
+	Href        string
+}
+
+// compareSides is the pair of runs a compare page shows; see
+// resolveCompareSides.
+type compareSides struct {
+	from, to    inventory.ID
+	note        string
+	singleRun   bool
+	unavailable bool
+}
+
+// resolveCompareSides fills in the side a request left out with the
+// adjacent loaded run of the same configuration: a baseline (from)
+// alone is compared with the next newer run, a run to compare (to)
+// alone with the next older one. When there is no run on that side,
+// the run named moves to the other side and the note says so. A run
+// named alone that isn't loaded is dropped and flagged unavailable. A
+// request naming both or neither is returned as it came.
+func resolveCompareSides(picker ComparePicker, from, to inventory.ID) compareSides {
+	s := compareSides{from: from, to: to}
+	if (from == "") == (to == "") {
+		return s
+	}
+	given := from
+	if given == "" {
+		given = to
+	}
+	var opts []ComparePickerOption // the run's configuration, newest first
+	i := -1
+	for _, g := range picker.Groups {
+		if i = slices.IndexFunc(g.Options, func(o ComparePickerOption) bool { return o.ID == given }); i >= 0 {
+			opts = g.Options
+
+			break
+		}
+	}
+	switch {
+	case i < 0:
+		return compareSides{unavailable: true}
+	case len(opts) < 2:
+		s.singleRun = true
+
+		return s
+	}
+	run := describeRun(given).RunLabel
+	switch {
+	case from != "" && i > 0:
+		s.to = opts[i-1].ID
+	case from != "":
+		s.from, s.to = opts[1].ID, given
+		s.note = run + " is the newest loaded run, so it is compared with the run before it."
+	case i < len(opts)-1:
+		s.from = opts[i+1].ID
+	default:
+		s.from, s.to = given, opts[i-1].ID
+		s.note = run + " is the oldest loaded run, so it is the baseline for the run after it."
+	}
+
+	return s
+}
+
+// compareSuggestions offers, for each configuration with at least two
+// loaded runs, the comparison of its latest two.
+func compareSuggestions(picker ComparePicker) []CompareSuggestion {
+	var out []CompareSuggestion
+	for _, g := range picker.Groups {
+		if len(g.Options) < 2 {
+			continue
+		}
+		from, to := g.Options[1].ID, g.Options[0].ID
+		out = append(out, CompareSuggestion{
+			ConfigLabel: g.ConfigLabel,
+			FromRun:     describeRun(from).RunLabel,
+			ToRun:       describeRun(to).RunLabel,
+			Href:        templates.CompareLink(string(from), string(to), "", "", false),
+		})
+	}
+
+	return out
 }
 
 // ComparePartialData carries the compare_level partial's inputs. Used for
 // both the htmx-driven swap and the initial full-page render so the
 // partial template has one stable shape.
 type ComparePartialData struct {
-	Level       *CompareLevelView
-	Prefix      string
-	From        inventory.ID
-	To          inventory.ID
-	Breadcrumbs []BrowseCrumb
+	Level  *CompareLevelView
+	Prefix string
 }
 
 // CompareLevelView is the rendered comparison at one prefix.
 type CompareLevelView struct {
-	SortLinks      map[string]inventory.BrowseSortLink
-	Sort           string
-	Dir            string
-	QueryDurationH string
-	Self           CompareSelfView
-	Children       []CompareChildView
-	Pagination     BrowsePagination
-	Status         CompareStatusCounts
-	TotalChildren  int
-	HideUnchanged  bool
-	NotFound       bool
+	SortLinks map[string]inventory.BrowseSortLink
+	Nav       LevelNav
+	// ShowUnchangedURL is the link toggling the show_unchanged filter.
+	ShowUnchangedURL string
+	Sort             string
+	Dir              string
+	QueryDurationH   string
+	Self             CompareSelfView
+	Children         []CompareChildView
+	Pagination       BrowsePagination
+	Status           CompareStatusCounts
+	TotalChildren    int
+	HideUnchanged    bool
+	NotFound         bool
 }
 
 // CompareStatusCounts summarises the change set at this prefix.
@@ -104,18 +202,13 @@ type CompareSelfView struct {
 	BytesBeforeH   string
 	BytesAfterH    string
 	ObjectsBeforeH string
-	APICostPct     string
-	APICostBeforeH string
-	APICostDeltaH  string
 	CostBeforeH    string
 	CostAfterH     string
 	CostDeltaH     string
 	CostPct        string
-	APICostAfterH  string
 	ObjectsSign    int
 	CostSign       int
 	BytesSign      int
-	APICostSign    int
 	HasCost        bool
 }
 
@@ -124,19 +217,15 @@ type CompareChildView struct {
 	BytesDeltaH    string
 	CostPct        string
 	Status         string
-	APICostPct     string
-	APICostDeltaH  string
-	APICostAfterH  string
 	ObjectsBeforeH string
 	ObjectsAfterH  string
 	ObjectsDeltaH  string
 	ObjectsPct     string
-	APICostBeforeH string
 	Segment        string
 	BytesBeforeH   string
 	BytesAfterH    string
 	Prefix         string
-	HxVals         string // drill-down link's hx-vals, for rows with children
+	Href           string // drill-down link's URL, for rows with children
 	CostDeltaH     string
 	CostAfterH     string
 	CostBeforeH    string
@@ -144,7 +233,6 @@ type CompareChildView struct {
 	BytesSign      int
 	CostSign       int
 	ObjectsSign    int
-	APICostSign    int
 	HasCost        bool
 	HasChildren    bool
 }
@@ -178,6 +266,8 @@ type compareViewOptions struct {
 
 func (h *Handlers) renderCompareFullPage(w http.ResponseWriter, r *http.Request, opts compareViewOptions) {
 	picker := buildComparePicker(h.manager.List())
+	sides := resolveCompareSides(picker, opts.from, opts.to)
+	opts.from, opts.to = sides.from, sides.to
 	data := ComparePageData{
 		Title:       "Compare runs",
 		Picker:      picker,
@@ -185,12 +275,16 @@ func (h *Handlers) renderCompareFullPage(w http.ResponseWriter, r *http.Request,
 		From:        opts.from,
 		To:          opts.to,
 		Prefix:      opts.prefix,
-		Breadcrumbs: inventory.Breadcrumbs(opts.prefix),
+		Note:        sides.note,
+		SingleRun:   sides.singleRun,
+		Unavailable: sides.unavailable,
 	}
 
 	switch {
+	case opts.from == "" && opts.to == "":
+		data.Suggestions = compareSuggestions(picker)
 	case opts.from == "" || opts.to == "":
-		// First visit — no validation error, just the picker.
+		// One side named and no run to pair it with: the picker explains.
 	case !sameConfig(opts.from, opts.to):
 		data.Error = "Both runs must belong to the same inventory configuration."
 	default:
@@ -208,13 +302,7 @@ func (h *Handlers) renderCompareFullPage(w http.ResponseWriter, r *http.Request,
 			data.Error = "Failed to compute the comparison. See server logs for details."
 		default:
 			data.Level = level
-			data.Partial = ComparePartialData{
-				Prefix:      opts.prefix,
-				Breadcrumbs: data.Breadcrumbs,
-				From:        opts.from,
-				To:          opts.to,
-				Level:       level,
-			}
+			data.Partial = ComparePartialData{Prefix: opts.prefix, Level: level}
 		}
 	}
 
@@ -246,13 +334,7 @@ func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Requ
 
 		return
 	}
-	view := ComparePartialData{
-		Prefix:      opts.prefix,
-		Breadcrumbs: inventory.Breadcrumbs(opts.prefix),
-		From:        opts.from,
-		To:          opts.to,
-		Level:       level,
-	}
+	view := ComparePartialData{Prefix: opts.prefix, Level: level}
 	h.renderHTMLPartial(w, r, "compare_level.html", "render compare level partial", view)
 }
 
@@ -288,16 +370,45 @@ func (h *Handlers) computeCompareLevel(ctx context.Context, opts compareViewOpti
 		Pagination:    data.Pagination,
 		Children:      make([]CompareChildView, 0, len(data.Children)),
 	}
+	showUnchanged := !opts.hideUnchanged
+	pageSize := pageSizeParam(opts.pageSize)
 	for i := range data.Children {
 		v := h.buildCompareChildView(&data.Children[i])
 		if v.HasChildren {
-			v.HxVals = templates.CompareLinkHxVals(string(opts.from), string(opts.to), v.Prefix)
+			v.Href = templates.CompareLink(string(opts.from), string(opts.to), v.Prefix, pageSize, showUnchanged)
 		}
 		view.Children = append(view.Children, v)
 	}
+	q := opts.levelQuery()
+	view.Nav = buildLevelNav(q, rootLabel(opts.from), view.SortLinks, sortLabel, view.Pagination)
+	toggle := q
+	toggle.keep = url.Values{paramFrom: {string(opts.from)}, paramTo: {string(opts.to)}}
+	if !showUnchanged {
+		toggle.keep.Set("show_unchanged", trueLiteral)
+	}
+	view.ShowUnchangedURL = toggle.url(opts.prefix, opts.sortBy, opts.dir, 1)
 	view.QueryDurationH = humanfmt.Duration(time.Since(start))
 
 	return &view, nil
+}
+
+// levelQuery is the query of this compare view, for its links. The
+// show_unchanged filter carries over to every link.
+func (o compareViewOptions) levelQuery() levelQuery {
+	keep := url.Values{paramFrom: {string(o.from)}, paramTo: {string(o.to)}}
+	if !o.hideUnchanged {
+		keep.Set("show_unchanged", trueLiteral)
+	}
+
+	return levelQuery{
+		keep:     keep,
+		path:     "/compare",
+		target:   "#compare-target",
+		prefix:   o.prefix,
+		sortBy:   o.sortBy,
+		dir:      o.dir,
+		pageSize: o.pageSize,
+	}
 }
 
 // query is the domain form of the compare options.
@@ -338,12 +449,6 @@ func (h *Handlers) buildCompareSelfView(self inventory.CompareSelf) CompareSelfV
 		cDelta := formatCostDelta(costBefore, costAfter)
 		v.CostDeltaH, v.CostPct, v.CostSign = cDelta.DeltaH, cDelta.Pct, cDelta.Sign
 	}
-	apiBefore := pricing.ComputePutCost(self.Objects.Before, h.priceTable)
-	apiAfter := pricing.ComputePutCost(self.Objects.After, h.priceTable)
-	v.APICostBeforeH = pricing.FormatCost(apiBefore)
-	v.APICostAfterH = pricing.FormatCost(apiAfter)
-	apiDelta := formatCostDelta(apiBefore, apiAfter)
-	v.APICostDeltaH, v.APICostPct, v.APICostSign = apiDelta.DeltaH, apiDelta.Pct, apiDelta.Sign
 
 	return v
 }
@@ -371,12 +476,6 @@ func (h *Handlers) buildCompareChildView(c *inventory.CompareChild) CompareChild
 		cDelta := formatCostDelta(costBefore, costAfter)
 		v.CostDeltaH, v.CostPct, v.CostSign = cDelta.DeltaH, cDelta.Pct, cDelta.Sign
 	}
-	apiBefore := pricing.ComputePutCost(c.Objects.Before, h.priceTable)
-	apiAfter := pricing.ComputePutCost(c.Objects.After, h.priceTable)
-	v.APICostBeforeH = pricing.FormatCost(apiBefore)
-	v.APICostAfterH = pricing.FormatCost(apiAfter)
-	apiDelta := formatCostDelta(apiBefore, apiAfter)
-	v.APICostDeltaH, v.APICostPct, v.APICostSign = apiDelta.DeltaH, apiDelta.Pct, apiDelta.Sign
 
 	return v
 }
