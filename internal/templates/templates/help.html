@@ -124,9 +124,11 @@
                 <ol class="list-decimal pl-5 text-gray-700 dark:text-gray-200 space-y-1.5">
                     <li>Open <a href="/inventories" class="text-indigo-600 dark:text-indigo-400 hover:underline">Inventories</a>.</li>
                     <li>Find the row. Click <strong>Load</strong> (or <strong>Retry</strong> if it's in an error state).</li>
-                    <li>The chip flips to <em>Loading…</em> and a spinner shows the current build stage:
-                        Preparing → Initializing → Downloading &amp; parsing → Building index → Done. A
-                        progress bar and ETA appear during downloading.</li>
+                    <li>The chip flips to <em>Loading…</em> and the line under it shows the current build stage:
+                        Preparing → Initializing → Downloading &amp; parsing → Merging spilled runs (large
+                        inventories only) → Building index → Finalizing → Done, with the stage's percent and
+                        time left once it can tell. The bar below has one segment per stage (download, build,
+                        finalize) and fills each in turn.</li>
                     <li>When the build finishes, the chip becomes <em>Loaded</em>. The node count fills in.</li>
                     <li>Open Browse to query it.</li>
                 </ol>
