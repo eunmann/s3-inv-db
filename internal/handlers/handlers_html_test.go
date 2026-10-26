@@ -122,14 +122,14 @@ func TestDashboard_EmptyState(t *testing.T) {
 
 	doc := parseHTML(t, w.Body.String())
 	assertElementText(t, doc, "h1", "Dashboard")
-	// Five stat cards, all reading zero when discovery is disabled.
-	assertElementCount(t, doc, ".grid > div", 5)
+	// The system status still reads, all zero, when discovery is disabled.
+	assertElementContainsText(t, doc, `section[aria-labelledby="status-heading"]`, "Runs discovered")
 	body := w.Body.String()
 	if !strings.Contains(body, "Nothing discovered yet") && !strings.Contains(body, "Discovery disabled") {
 		t.Errorf("body should explain the empty state\n%s", body)
 	}
-	// No per-configuration row when discovery is empty/disabled.
-	assertElementCount(t, doc, "section tbody tr", 0)
+	// No configuration entry when discovery is empty/disabled.
+	assertElementCount(t, doc, "article", 0)
 }
 
 // Inventories Page Tests

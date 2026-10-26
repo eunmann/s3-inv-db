@@ -4,78 +4,109 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
-	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
-	"github.com/eunmann/s3-inv-db/pkg/indexread"
+	"github.com/eunmann/s3-inv-db/pkg/pricing"
 	"github.com/rs/zerolog"
 )
 
-// DashboardData contains data for the dashboard page.
+// dashboardFailedShown caps the failed builds the dashboard names; the
+// rest are a link away on the inventories page.
+const dashboardFailedShown = 5
+
+// DashboardData contains data for the dashboard page: what each
+// inventory configuration holds first, the system's state after.
 type DashboardData struct {
-	BudgetAvailH      string
-	DiskUsedH         string
-	BudgetCapH        string
-	DiscoveryError    string
-	SnapshotAge       string
-	NextRefreshIn     string
-	BudgetHeadroomH   string
-	ManifestBytesH    string
-	Title             string
-	BudgetReservedH   string
-	BudgetUsedH       string
-	TotalObjectsH     string
-	TotalBytesH       string
-	S3Source          string
-	Configs           []DashboardConfig
-	LoadedRuns        int
-	AutoLoadConfigs   int
-	ErrorRuns         int
-	LoadingRuns       int
-	TotalRuns         int
-	Configurations    int
-	BudgetUsedPct     int
-	ManifestFiles     int
-	AutoLoadFailures  int
-	PendingPollErrors int
-	BudgetActive      bool
-	HasDiscovery      bool
+	// Total sums each configuration's latest loaded run; nil when none
+	// is loaded.
+	Total          *DashboardTotal
+	Budget         *DashboardBudget
+	Title          string
+	DiscoveryError string
+	SnapshotAge    string
+	NextRefreshIn  string
+	S3Source       string
+	Configs        []DashboardConfig
+	// FailedRuns are the first runs whose last build failed;
+	// FailedCount counts them all.
+	FailedRuns      []DiscoveredRowView
+	FailedCount     int
+	TotalRuns       int
+	LoadedRuns      int
+	BuildingRuns    int
+	AutoLoadConfigs int
+	AutoLoadIssues  int
+	AutoLoadRunning bool
+	HasDiscovery    bool
 }
 
-// DashboardConfig is the per-configuration row shown on the dashboard.
+// MoreFailed counts the failed builds not named on the dashboard.
+func (d DashboardData) MoreFailed() int { return d.FailedCount - len(d.FailedRuns) }
+
+// DashboardConfig is one inventory configuration on the dashboard: its
+// newest loaded run's totals, the change since the loaded run before
+// it, and its newest run when that isn't the loaded one.
 type DashboardConfig struct {
+	// Loaded is the newest loaded run, with Stats; nil when none is.
+	Loaded *DiscoveredRowView
+	// Delta compares Loaded with the loaded run before it.
+	Delta *RunDelta
+	// Latest is the newest run; the same run as Loaded when that is
+	// loaded.
+	Latest       DiscoveredRowView
 	SourceBucket string
 	Name         string
-	LatestRun    string
-	LatestState  inventory.State
-	DiskBytesH   string
-	LatestBytesH string
-	LatestFormat string
-	TotalRuns    int
-	LoadedRuns   int
-	LatestFiles  int
+	LoadedDateH  string
+	LatestDateH  string
+}
+
+// DomID is the configuration's id made safe for HTML ids.
+func (c DashboardConfig) DomID() string { return domID(c.SourceBucket + "/" + c.Name) }
+
+// NewerRun: a run newer than the loaded one exists.
+func (c DashboardConfig) NewerRun() bool {
+	return c.Loaded != nil && c.Latest.Run != "" && c.Latest.Run != c.Loaded.Run
+}
+
+// DashboardTotal is the sum of each configuration's latest loaded run.
+type DashboardTotal struct {
+	ObjectsH string
+	BytesH   string
+	CostH    string // "" unless every summed run is priced
+	Configs  int
+}
+
+// DashboardBudget is the index disk budget: a short line and bar, the
+// detail in Detail.
+type DashboardBudget struct {
+	UsedH  string
+	CapH   string
+	Detail string
+	Pct    int
 }
 
 // Dashboard renders the dashboard HTML page.
 func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	data := DashboardData{
-		Title:        "Dashboard",
-		S3Source:     h.s3SourceURI,
-		HasDiscovery: h.discovery.Enabled(),
+		Title:           "Dashboard",
+		S3Source:        h.s3SourceURI,
+		HasDiscovery:    h.discovery.Enabled(),
+		AutoLoadRunning: h.autoLoadRunning,
 	}
-
-	logger := zerolog.Ctx(r.Context())
-	if !h.discovery.Enabled() {
+	h.fillBudget(&data)
+	if !data.HasDiscovery {
 		h.renderHTML(w, r, "dashboard.html", "failed to render dashboard", data)
 
 		return
 	}
 
-	views, fetchedAt, err := h.discovery.Snapshot(r.Context())
+	ctx := r.Context()
+	views, fetchedAt, err := h.discovery.Snapshot(ctx)
 	if err != nil {
-		logger.Error().Err(err).Msg("dashboard discovery failed")
+		zerolog.Ctx(ctx).Error().Err(err).Msg("dashboard discovery failed")
 		data.DiscoveryError = "Failed to list discovered inventories. See server logs for details."
 	}
 	if !fetchedAt.IsZero() {
@@ -90,197 +121,152 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	agg := h.aggregateDashboard(logger, views, &data)
-	data.Configurations = len(agg.Confs)
-	if agg.Totals.objects > 0 {
-		data.TotalObjectsH = humanfmt.CountUint64(agg.Totals.objects)
+	now := time.Now()
+	for _, runs := range h.groupRuns(ctx, views) {
+		tallyRuns(&data, runs)
+		data.Configs = append(data.Configs, h.dashboardConfig(ctx, runs, now))
 	}
-	if agg.Totals.bytes > 0 {
-		data.TotalBytesH = humanfmt.BytesUint64(agg.Totals.bytes)
-	}
-	if agg.Totals.disk > 0 {
-		data.DiskUsedH = humanfmt.BytesUint64(uint64(agg.Totals.disk))
-	}
-	data.ManifestFiles = agg.Totals.manifestFiles
-	if agg.Totals.manifestBytes > 0 {
-		data.ManifestBytesH = humanfmt.BytesUint64(uint64(agg.Totals.manifestBytes))
-	}
-	h.fillBudgetCounters(&data)
-	h.fillAutoLoadCounters(r.Context(), &data, views)
+	slices.SortFunc(data.Configs, func(a, b DashboardConfig) int {
+		if c := strings.Compare(a.SourceBucket, b.SourceBucket); c != 0 {
+			return c
+		}
 
-	// Stable, alphabetical order for the page rows.
-	slices.Sort(agg.Order)
-	for _, key := range agg.Order {
-		c := agg.Confs[key]
-		row := DashboardConfig{
-			SourceBucket: c.Src,
-			Name:         c.ID,
-			TotalRuns:    c.TotalRuns,
-			LoadedRuns:   c.LoadedRuns,
-			LatestRun:    humanfmt.RunTimestamp(c.LatestRun),
-			LatestState:  c.LatestState,
-			LatestFiles:  c.LatestFiles,
-			LatestFormat: c.LatestFormat,
-		}
-		if c.DiskBytes > 0 {
-			row.DiskBytesH = humanfmt.BytesUint64(uint64(c.DiskBytes))
-		}
-		if c.LatestBytes > 0 {
-			row.LatestBytesH = humanfmt.BytesUint64(uint64(c.LatestBytes))
-		}
-		data.Configs = append(data.Configs, row)
-	}
+		return strings.Compare(a.Name, b.Name)
+	})
+	data.Total = sumLatestLoaded(data.Configs)
+	h.fillAutoLoad(ctx, &data)
 
 	h.renderHTML(w, r, "dashboard.html", "failed to render dashboard", data)
 }
 
-func (h *Handlers) fillBudgetCounters(data *DashboardData) {
-	if h.tracker.Cap() == 0 {
-		return
+// tallyRuns counts one configuration's runs into the system status.
+func tallyRuns(data *DashboardData, runs []DiscoveredRowView) {
+	for i := range runs {
+		r := &runs[i]
+		if r.Run == "" {
+			continue
+		}
+		data.TotalRuns++
+		switch {
+		case r.State.IsLoaded():
+			data.LoadedRuns++
+		case r.Busy():
+			data.BuildingRuns++
+		case r.Failed():
+			data.FailedCount++
+			if len(data.FailedRuns) < dashboardFailedShown {
+				data.FailedRuns = append(data.FailedRuns, *r)
+			}
+		}
 	}
-	capBytes := h.tracker.Cap()
-	used := h.tracker.Used()
-	data.BudgetActive = true
-	data.BudgetCapH = humanfmt.BytesUint64(capBytes)
-	data.BudgetUsedH = humanfmt.BytesUint64(used)
-	data.BudgetReservedH = humanfmt.BytesUint64(h.tracker.Reserved())
-	data.BudgetAvailH = humanfmt.BytesUint64(h.tracker.Available())
-	data.BudgetHeadroomH = humanfmt.BytesUint64(h.tracker.Headroom())
-	data.BudgetUsedPct = int((float64(used+h.tracker.Reserved()) / float64(capBytes)) * 100)
 }
 
-func (h *Handlers) fillAutoLoadCounters(ctx context.Context, data *DashboardData, views []inventory.MergedInventory) {
+// dashboardConfig summarizes one configuration's runs (newest first,
+// linked): only its newest loaded run and the one before it are read.
+func (h *Handlers) dashboardConfig(ctx context.Context, runs []DiscoveredRowView, now time.Time) DashboardConfig {
+	c := DashboardConfig{SourceBucket: runs[0].SourceBucket, Name: runs[0].Name, Latest: runs[0]}
+	c.LatestDateH = runDateLabel(c.Latest.Run, now)
+	for i := range runs {
+		if !runs[i].State.IsLoaded() || runs[i].Run == "" {
+			continue
+		}
+		loaded := runs[i]
+		h.addStats(ctx, &loaded)
+		if loaded.Stats == nil {
+			continue
+		}
+		c.Loaded = &loaded
+		c.LoadedDateH = runDateLabel(loaded.Run, now)
+		c.Delta = h.deltaFromPrevious(ctx, runs[i+1:], &loaded, now)
+
+		break
+	}
+
+	return c
+}
+
+// deltaFromPrevious compares loaded with the loaded run before it among
+// older, its configuration's older runs.
+func (h *Handlers) deltaFromPrevious(ctx context.Context, older []DiscoveredRowView, loaded *DiscoveredRowView, now time.Time) *RunDelta {
+	if loaded.PrevLoaded == "" {
+		return nil
+	}
+	for i := range older {
+		if older[i].CompositeID() != loaded.PrevLoaded {
+			continue
+		}
+		prev := older[i]
+		h.addStats(ctx, &prev)
+		if prev.Stats == nil {
+			return nil
+		}
+		d := newRunDelta(*prev.Stats, *loaded.Stats, prev.Run, now)
+
+		return &d
+	}
+
+	return nil
+}
+
+// sumLatestLoaded totals each configuration's newest loaded run once:
+// older loaded runs of a configuration are earlier views of the same
+// bucket, not more data.
+func sumLatestLoaded(configs []DashboardConfig) *DashboardTotal {
+	var objects, bytes, cost uint64
+	n, priced := 0, true
+	for i := range configs {
+		l := configs[i].Loaded
+		if l == nil {
+			continue
+		}
+		n++
+		objects += l.Stats.Objects
+		bytes += l.Stats.Bytes
+		cost += l.Stats.CostMicro
+		priced = priced && l.Stats.CostH != ""
+	}
+	if n == 0 {
+		return nil
+	}
+	t := &DashboardTotal{Configs: n, ObjectsH: humanfmt.CountUint64(objects), BytesH: humanfmt.BytesUint64(bytes)}
+	if priced {
+		t.CostH = pricing.FormatCost(cost)
+	}
+
+	return t
+}
+
+func (h *Handlers) fillBudget(data *DashboardData) {
+	capBytes := h.tracker.Cap()
+	if capBytes == 0 {
+		return
+	}
+	used, reserved := h.tracker.Used(), h.tracker.Reserved()
+	data.Budget = &DashboardBudget{
+		UsedH: humanfmt.BytesUint64(used),
+		CapH:  humanfmt.BytesUint64(capBytes),
+		Pct:   min(100, int(float64(used+reserved)/float64(capBytes)*100)),
+		Detail: humanfmt.BytesUint64(used) + " used + " + humanfmt.BytesUint64(reserved) + " reserved for builds of " +
+			humanfmt.BytesUint64(capBytes) + " (" + humanfmt.BytesUint64(h.tracker.Available()) + " available, " +
+			humanfmt.BytesUint64(h.tracker.Headroom()) + " headroom)",
+	}
+}
+
+func (h *Handlers) fillAutoLoad(ctx context.Context, data *DashboardData) {
 	if configs, err := h.configStore.List(ctx); err == nil {
 		for i := range configs {
 			if configs[i].AutoLoad {
 				data.AutoLoadConfigs++
 			}
 			if configs[i].LastPollError != "" {
-				data.PendingPollErrors++
+				data.AutoLoadIssues++
 			}
 		}
 	}
-	for i := range views {
-		id := views[i].CompositeID()
-		if id == "" {
-			continue
-		}
-		if info, ok := h.manager.Get(id); ok && info.AutoLoadFailureCount > 0 {
-			data.AutoLoadFailures++
+	infos := h.manager.List()
+	for i := range infos {
+		if infos[i].AutoLoadFailureCount > 0 {
+			data.AutoLoadIssues++
 		}
 	}
-}
-
-type dashConfAgg struct {
-	Src          string
-	ID           string
-	LatestRun    string
-	LatestState  inventory.State
-	LatestFormat string
-	TotalRuns    int
-	LoadedRuns   int
-	DiskBytes    int64
-	LatestFiles  int
-	LatestBytes  int64
-}
-
-type dashTotals struct {
-	objects       uint64
-	bytes         uint64
-	disk          int64
-	manifestFiles int
-	manifestBytes int64
-}
-
-// dashAggregate bundles aggregateDashboard's three outputs so the
-// caller doesn't juggle a triple return.
-type dashAggregate struct {
-	Confs  map[string]*dashConfAgg
-	Order  []string
-	Totals dashTotals
-}
-
-func (h *Handlers) aggregateDashboard(logger *zerolog.Logger, views []inventory.MergedInventory, data *DashboardData) dashAggregate {
-	agg := dashAggregate{Confs: map[string]*dashConfAgg{}}
-	for i := range views {
-		v := &views[i]
-		key := v.ConfigID()
-		data.TotalRuns++
-
-		c, ok := agg.Confs[key]
-		if !ok {
-			c = &dashConfAgg{Src: v.SourceBucket, ID: v.Name}
-			agg.Confs[key] = c
-			agg.Order = append(agg.Order, key)
-		}
-		c.TotalRuns++
-		if c.LatestRun == "" && v.Run != "" {
-			c.LatestRun = v.Run
-			c.LatestState = v.State
-			c.LatestFiles = v.FileCount
-			c.LatestBytes = v.TotalBytes
-			c.LatestFormat = v.FileFormat
-		}
-		agg.Totals.manifestFiles += v.FileCount
-		agg.Totals.manifestBytes += v.TotalBytes
-		h.tallyView(logger, v, c, data, &agg.Totals)
-	}
-
-	return agg
-}
-
-func (h *Handlers) tallyView(logger *zerolog.Logger, v *inventory.MergedInventory, c *dashConfAgg, data *DashboardData, totals *dashTotals) {
-	switch v.State {
-	case inventory.StateLoaded:
-		data.LoadedRuns++
-		c.LoadedRuns++
-		h.addLoadedStats(logger, v, c, totals)
-	case inventory.StateLoading:
-		data.LoadingRuns++
-	case inventory.StateError:
-		data.ErrorRuns++
-	case inventory.StateNotLoaded:
-		// Not counted; placeholder for a run that has been discovered
-		// but not loaded into the manager yet.
-	}
-}
-
-func (h *Handlers) addLoadedStats(logger *zerolog.Logger, v *inventory.MergedInventory, c *dashConfAgg, totals *dashTotals) {
-	// Peek, not WithIndex: rendering the dashboard isn't a use of every
-	// run, and touching each would reorder the eviction LRU.
-	err := h.manager.Peek(v.CompositeID(), func(idx *indexread.Index) error {
-		if pos, ok := idx.Lookup(""); ok {
-			stats := idx.Stats(pos)
-			totals.objects += stats.ObjectCount
-			totals.bytes += stats.TotalBytes
-		}
-
-		return nil
-	})
-	if err != nil {
-		logger.Warn().Err(err).Stringer("id", v.CompositeID()).Msg("dashboard root stats")
-	}
-	// Disk size: prefer the cached Info.IndexBytes (set at load time);
-	// fall back to a live CacheSizeBytes walk only when the manager has
-	// no record yet, so the dashboard doesn't pay an N-row FS walk.
-	if info, ok := h.manager.Get(v.CompositeID()); ok && info.IndexBytes > 0 {
-		size := int64(info.IndexBytes)
-		totals.disk += size
-		c.DiskBytes += size
-
-		return
-	}
-	if h.loader == nil {
-		return
-	}
-	size, err := h.loader.CacheSizeBytes(inventory.CacheKey{
-		SourceBucket: v.SourceBucket,
-		InventoryID:  v.Name,
-		Run:          v.Run,
-	})
-	if err != nil {
-		return
-	}
-	totals.disk += size
-	c.DiskBytes += size
 }

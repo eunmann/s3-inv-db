@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/pkg/humanfmt"
@@ -137,4 +138,58 @@ func linkRuns(runs []DiscoveredRowView) {
 			break
 		}
 	}
+}
+
+// RunDelta is the change between two loaded runs of one configuration.
+type RunDelta struct {
+	BytesH  string // "+12.4 GiB"
+	CostH   string // "+$3.10/mo"; "" unless both runs are priced
+	SinceH  string // the older run's date, "Oct 25"
+	Changed bool
+}
+
+func newRunDelta(prev, cur RunStats, prevRun string, now time.Time) RunDelta {
+	d := RunDelta{
+		SinceH:  runDateLabel(prevRun, now),
+		Changed: prev.Bytes != cur.Bytes || prev.CostMicro != cur.CostMicro,
+	}
+	d.BytesH = formatDelta(prev.Bytes, cur.Bytes, int64(cur.Bytes)-int64(prev.Bytes), humanfmt.BytesUint64).DeltaH
+	if prev.CostH != "" && cur.CostH != "" {
+		d.CostH = formatCostDelta(prev.CostMicro, cur.CostMicro).DeltaH + "/mo"
+	}
+
+	return d
+}
+
+// Line is "+12.4 GiB · +$3.10/mo since Oct 25", or "No change since
+// Oct 25".
+func (d RunDelta) Line() string {
+	if !d.Changed {
+		return "No change since " + d.SinceH
+	}
+	line := d.BytesH
+	if d.CostH != "" {
+		line += " · " + d.CostH
+	}
+
+	return line + " since " + d.SinceH
+}
+
+// runDateLabel is a run folder name as a short date, "Oct 25", with the
+// year when it isn't now's. A name that isn't a timestamp comes back
+// unchanged.
+func runDateLabel(run string, now time.Time) string {
+	for _, layout := range []string{"2006-01-02T15-04-05Z", "2006-01-02T15-04Z"} {
+		t, err := time.Parse(layout, run)
+		if err != nil {
+			continue
+		}
+		if t.Year() == now.Year() {
+			return t.Format("Jan 2")
+		}
+
+		return t.Format("Jan 2, 2006")
+	}
+
+	return run
 }

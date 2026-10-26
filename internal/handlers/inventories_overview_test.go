@@ -32,11 +32,19 @@ var overviewRuns = []string{
 
 func runID(run string) inventory.ID { return inventory.ID("src/inv/" + run) }
 
+// extraRun is a run of another configuration, loaded when it has
+// objects.
+type extraRun struct {
+	inv  inventory.Inventory
+	objs []costObj
+}
+
 // newOverviewHandlers wires handlers over overviewRuns with the two
-// loaded runs' indexes built and the failed run's job recorded.
-func newOverviewHandlers(t *testing.T) *handlers.Handlers {
+// loaded runs' indexes built and the failed run's job recorded, plus
+// any extra runs.
+func newOverviewHandlers(t *testing.T, extra ...extraRun) *handlers.Handlers {
 	t.Helper()
-	list := make([]inventory.Inventory, 0, len(overviewRuns))
+	list := make([]inventory.Inventory, 0, len(overviewRuns)+len(extra))
 	for _, run := range overviewRuns {
 		list = append(list, inventory.Inventory{
 			SourceBucket: "src", Name: "inv", Run: run,
@@ -47,6 +55,13 @@ func newOverviewHandlers(t *testing.T) *handlers.Handlers {
 	t.Cleanup(func() { _ = mgr.Close() })
 	registerCostIndex(t, mgr, runID(overviewRuns[4]), []costObj{{"a/x", gib, tiers.Standard}})
 	registerCostIndex(t, mgr, runID(overviewRuns[1]), []costObj{{"a/x", gib, tiers.Standard}, {"b/y", 2 * gib, tiers.Standard}})
+	for i := range extra {
+		e := &extra[i]
+		list = append(list, e.inv)
+		if len(e.objs) > 0 {
+			registerCostIndex(t, mgr, e.inv.CompositeID(), e.objs)
+		}
+	}
 	h := newWiredHandlers(t, mgr,
 		handlers.WithDiscoverer(&fakeDiscoverer{listResp: list, bucket: "dst"}),
 		handlers.WithLoader(&fakeBuilder{}))
