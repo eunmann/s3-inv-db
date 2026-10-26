@@ -28,12 +28,17 @@ import (
 const (
 	// SlotBucketMinBytes is the least slot-file range a bucket covers.
 	slotBucketMinBytes = 4 << 20
-	// MaxSlotBuckets caps the bucket count, so the append buffers
-	// (workers × buckets × slotAppendBuffer) stay bounded whatever the
-	// prefix count: past it, buckets grow instead.
+	// MaxSlotBuckets caps the bucket count, so the append buffers stay
+	// bounded whatever the prefix count: past it, buckets grow instead.
 	maxSlotBuckets = 1024
-	// SlotAppendBuffer is a worker's buffer per bucket.
-	slotAppendBuffer = 4 << 10
+	// SlotAppendBudget is a worker's append buffers across its buckets:
+	// each bucket's buffer is this split over the buckets, between
+	// slotAppendMin and slotAppendMax. A build with few buckets then
+	// flushes in large writes, one with many in 4 KiB writes, and a
+	// worker holds at most maxSlotBuckets × slotAppendMin.
+	slotAppendBudget = 256 << 10
+	slotAppendMin    = 4 << 10
+	slotAppendMax    = 256 << 10
 	// SlotLayoutBudget bounds the heap the bucket layouts take across
 	// workers.
 	slotLayoutBudget = 256 << 20
@@ -53,6 +58,7 @@ type slotBuckets struct {
 	next      []atomic.Int64 // bytes appended to each bucket's region
 	n         int            // slots
 	perBucket int            // slots per bucket; the last may have fewer
+	appendCap int            // bytes of a worker's buffer per bucket, whole records
 	recW      int            // record bytes: slot in bucket, fingerprint, position
 	posBytes  int            // 4, or 8 past 2^32 prefixes
 }
@@ -72,6 +78,7 @@ func newSlotBuckets(tempDir string, n, slotW int) (*slotBuckets, error) {
 	}
 	s.recW = 4 + mphfFingerprintBytes + s.posBytes
 	s.next = make([]atomic.Int64, (n+perBucket-1)/perBucket)
+	s.appendCap = min(max(slotAppendBudget/len(s.next), slotAppendMin), slotAppendMax) / s.recW * s.recW
 	f, err := os.CreateTemp(tempDir, "mphf_slot_buckets_*.tmp")
 	if err != nil {
 		return nil, fmt.Errorf("slot buckets: %w", err)
@@ -139,7 +146,7 @@ func (s *slotBuckets) placeRange(mph *bbhash, hashes, fps []uint64, start, end i
 		}
 		b := int(slot) / s.perBucket
 		if bufs[b] == nil {
-			bufs[b] = make([]byte, 0, slotAppendBuffer/s.recW*s.recW)
+			bufs[b] = make([]byte, 0, s.appendCap)
 		}
 		bufs[b] = s.appendRecord(bufs[b], int(slot)-b*s.perBucket, fps[i], uint64(i))
 		if len(bufs[b]) == cap(bufs[b]) {
