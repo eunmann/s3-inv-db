@@ -100,6 +100,9 @@ func TestPctChange(t *testing.T) {
 		{name: "-50%", before: 200, after: 100, want: "−50%"},
 		{name: "tiny growth", before: 100000, after: 100001, want: "+<1%"},
 		{name: "tiny shrink", before: 100000, after: 99999, want: "−<1%"},
+		{name: "half-percent growth", before: 200, after: 201, want: "+1%"},
+		{name: "half-percent shrink", before: 200, after: 199, want: "−1%"},
+		{name: "just under half-percent growth", before: 1000, after: 1004, want: "+<1%"},
 		{name: "unchanged", before: 100, after: 100, want: "0%"},
 	}
 	for _, tc := range cases {

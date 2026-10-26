@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"slices"
 	"sort"
@@ -425,9 +426,6 @@ func formatCostDelta(before, after uint64) DeltaParts {
 
 // pctChange returns "+20%" or "−13%". When the before-value is zero
 // the percentage is undefined; we render "new" / "gone" instead.
-// HalfPercent is the smallest change that rounds to 1%.
-const halfPercent = 0.5
-
 func pctChange(before, after uint64) string {
 	switch {
 	case before == 0 && after > 0:
@@ -440,13 +438,14 @@ func pctChange(before, after uint64) string {
 	pct := float64(int64(after)-int64(before)) / float64(before) * 100
 	// A change that rounds to 0% still changed: say "<1%", never "-0%".
 	// The minus is U+2212, as in the deltas beside it.
+	rounded := math.Round(pct)
 	switch {
-	case pct >= halfPercent:
-		return fmt.Sprintf("+%.0f%%", pct)
+	case rounded > 0:
+		return fmt.Sprintf("+%.0f%%", rounded)
 	case pct > 0:
 		return "+<1%"
-	case pct <= -halfPercent:
-		return fmt.Sprintf("−%.0f%%", -pct)
+	case rounded < 0:
+		return fmt.Sprintf("−%.0f%%", -rounded)
 	case pct < 0:
 		return "−<1%"
 	}
