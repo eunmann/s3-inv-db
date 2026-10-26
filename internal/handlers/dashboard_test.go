@@ -66,6 +66,17 @@ func TestDashboard_LeadsWithEachBucket(t *testing.T) {
 			t.Errorf("src card lacks %q: %q", want, text)
 		}
 	}
+	// On a phone the three values sit two per row and never break
+	// ("108.89" over "TiB").
+	metrics := src.Find("dl")
+	if class := " " + metrics.AttrOr("class", "") + " "; !strings.Contains(class, " grid-cols-2 ") || !strings.Contains(class, " sm:grid-cols-3 ") {
+		t.Errorf("metrics grid %q", class)
+	}
+	metrics.Find("dd").Each(func(_ int, dd *goquery.Selection) {
+		if !strings.Contains(" "+dd.AttrOr("class", "")+" ", " whitespace-nowrap ") {
+			t.Errorf("metric %q can wrap", squash(dd.Text()))
+		}
+	})
 	if got := src.Find(`a:contains("Browse")`).AttrOr("href", ""); got != "/browse?inventory_id=src%2Finv%2F2026-10-26T03-00Z" {
 		t.Errorf("Browse href %q", got)
 	}
