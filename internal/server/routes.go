@@ -79,8 +79,9 @@ func (s *Server) setupRoutes() {
 	r.Post("/partials/inventories/{id}/unload", s.handlers.UnloadInventoryRowPartial)
 	r.Delete("/partials/inventories/{id}", s.handlers.DeleteInventoryRowPartial)
 	// Discovery-dependent partials. The group-scoped middleware
-	// short-circuits with 503 when --s3-source is not configured, so
-	// every route in here can assume Enabled() == true.
+	// short-circuits with 503 when neither --s3-source nor
+	// --index-source is configured, so every route in here can assume
+	// Enabled() == true.
 	r.Group(func(r chi.Router) {
 		r.Use(requireDiscoveryMiddleware(s.handlers.DiscoveryEnabled))
 		r.Get("/partials/discovered/{src}/{id}/{run}", s.handlers.DiscoveredRowPartial)

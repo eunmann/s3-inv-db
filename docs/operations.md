@@ -113,8 +113,11 @@ server at it with `index_source: "s3://indexes/prod/"`:
   only downloads. It then needs no access to the inventories.
 
 A download is verified against the manifest's SHA-256 checksums before
-the index is used, and counts against the disk budget at its exact
-size. The server notices new runs at the next poll; to make it look
+the index is used. Without `s3_source` it counts against the disk
+budget at its exact size, read from the published manifest; with
+`s3_source` too, a load reserves the same estimate as an in-process
+build (the inventory's size times the index ratio), since the server
+doesn't yet know whether it will download or build. The server notices new runs at the next poll; to make it look
 now, call `POST /api/indexes/refresh` (for example as the build job's
 last step).
 

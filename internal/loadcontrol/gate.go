@@ -34,7 +34,7 @@ func (e *BudgetRefusedError) Error() string {
 }
 
 // CacheRemover deletes an evicted run's on-disk index. Nil when the
-// server has no cache (no --s3-source).
+// server has no cache (no --s3-source or --index-source).
 type CacheRemover func(id inventory.ID) error
 
 // Gate orchestrates one load lifecycle.

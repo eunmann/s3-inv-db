@@ -8,7 +8,7 @@
             {{if .HasDiscovery}}
             <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Discovered from <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">{{.S3Source}}</code></p>
             {{else}}
-            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">No <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--s3-source</code> configured. Discovery is disabled.</p>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">No <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--s3-source</code> or <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--index-source</code> configured. Discovery is disabled.</p>
             {{end}}
         </div>
         {{if .HasDiscovery}}
@@ -109,7 +109,7 @@
             {{if .HasDiscovery}}
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Upload an inventory layout to the S3 source, then refresh.</p>
             {{else}}
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Start the server with <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--s3-source s3://bucket/prefix/</code> to enable discovery.</p>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Start the server with <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--s3-source s3://bucket/prefix/</code> (inventories) or <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--index-source s3://bucket/prefix/</code> (published indexes) to enable discovery.</p>
             {{end}}
         </div>
         {{end}}

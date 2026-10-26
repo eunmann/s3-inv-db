@@ -348,7 +348,7 @@ func (g InventoryGroup) ConfigID() string {
 }
 
 // InventoriesPage renders the inventories HTML page. The page is
-// discovery-centric: when --s3-source is set, it lists S3-discovered
+// discovery-centric: when --s3-source or --index-source is set, it lists S3-discovered
 // inventories merged with their live load state. When discovery is
 // disabled the page surfaces an empty state directing the operator to
 // the Dashboard (which shows the Manager's local list directly).
@@ -466,12 +466,12 @@ func (h *Handlers) annotateGroupsFromConfig(ctx context.Context, groups []Invent
 
 // ListDiscoveredAPI lists inventories under the configured S3 source,
 // merging in any current load state. Returns 503 when discovery is not
-// configured (server started without --s3-source).
+// configured (server started without --s3-source or --index-source).
 func (h *Handlers) ListDiscoveredAPI(w http.ResponseWriter, r *http.Request) {
 	views, _, err := h.discovery.Snapshot(r.Context())
 	if err != nil {
 		if errors.Is(err, inventory.ErrDiscoveryDisabled) {
-			WriteJSONError(w, http.StatusServiceUnavailable, "discovery not configured (start the server with --s3-source)")
+			WriteJSONError(w, http.StatusServiceUnavailable, "discovery not configured (start the server with --s3-source or --index-source)")
 
 			return
 		}

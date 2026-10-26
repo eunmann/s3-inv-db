@@ -38,7 +38,7 @@ durations; those fail at server start).
 | `addr` | `--addr` | `:8080` | Listen address. |
 | `s3_source` | `--s3-source` | empty | `s3://bucket/prefix/` where AWS writes inventories. Empty turns discovery off. |
 | `index_source` | `--index-source` | empty | `s3://bucket/prefix/` where builds publish indexes (`build --out s3://...`). A load downloads a run's published index instead of building it. Without `s3_source`, the server lists runs from here and never builds. |
-| `cache_dir` | `--cache-dir` | `/var/cache/s3inv` | Indexes, build scratch and `state.db`. Required with `s3_source`. |
+| `cache_dir` | `--cache-dir` | `/var/cache/s3inv` | Indexes, build scratch and `state.db`. Required with `s3_source` or `index_source`. |
 | `max_index_disk` | `--max-index-disk` | none | Disk cap for loaded indexes, manual and automatic; a fifth is headroom. Required with `auto_load`. Without it, nothing is evicted. See [operations](operations.md#disk-budget). |
 | `auto_load` | `--auto-load` | `false` | Build the newest runs of auto-load configurations automatically. |
 | `auto_load_poll_interval` | `--auto-load-poll-interval` | `15m` | How often auto-load checks for new runs. |
