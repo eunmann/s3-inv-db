@@ -413,10 +413,10 @@ func TestDiscoveredRowPartial_RendersFromSnapshot(t *testing.T) {
 
 	for range 5 {
 		body := render(cachedRun)
-		if !strings.Contains(body, "3 chunks") {
-			t.Fatalf("cached row lost snapshot manifest stats: %q", body)
+		if !strings.Contains(body, ">Latest<") {
+			t.Fatalf("cached row lost its place among the snapshot's runs: %q", body)
 		}
-		if !strings.Contains(body, `aria-label="Pinned"`) {
+		if !strings.Contains(body, ">Pinned<") {
 			t.Fatalf("cached row missing live catalog state: %q", body)
 		}
 	}

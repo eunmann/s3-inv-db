@@ -80,7 +80,7 @@ func TestDiscoveredRowPartial_LiveWiring(t *testing.T) {
 		{
 			name: "build stopped by a shutdown",
 			view: row(inventory.StateNotLoaded, &jobs.Job{ID: "j6", Kind: jobs.KindBuild, State: jobs.StateAborted, Error: "interrupted: the server shut down"}),
-			want: []string{"Build interrupted by a server restart"},
+			want: []string{"Interrupted by a server restart."},
 		},
 		{
 			// A budget refusal has no backoff: say when it tries again
@@ -111,7 +111,8 @@ func TestDiscoveredRowPartial_LiveWiring(t *testing.T) {
 			for _, want := range append([]string{
 				`data-live-inv="b/i/2026-05-13T03-00Z"`,
 				`hx-trigger="live-refresh"`,
-				`hx-sync="this:queue last"`,
+				`hx-sync="this:drop"`,
+				`hx-disinherit="*"`,
 				`data-background-refresh`,
 			}, tt.want...) {
 				if !strings.Contains(body, want) {

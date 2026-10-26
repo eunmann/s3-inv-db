@@ -119,7 +119,8 @@ func TestInventoriesPage_AutoLoadFormReportsOwnErrors(t *testing.T) {
 	list := []inventory.Inventory{{SourceBucket: "src", Name: "inv", Run: "2026-01-01T03-00Z", ManifestKey: "k/inv/manifest.json"}}
 	h := newWiredHandlers(t, nil,
 		handlers.WithDiscoverer(&fakeDiscoverer{listResp: list, bucket: "dst"}),
-		handlers.WithLoader(&fakeBuilder{}))
+		handlers.WithLoader(&fakeBuilder{}),
+		handlers.WithAutoLoad(true))
 	w := httptest.NewRecorder()
 	h.InventoriesPage(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/inventories", http.NoBody))
 	if w.Code != http.StatusOK {

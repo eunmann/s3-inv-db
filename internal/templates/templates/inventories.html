@@ -2,26 +2,29 @@
 
 {{define "content"}}
 <div class="px-4 py-6 sm:px-0">
-    <div class="flex justify-between items-center mb-6">
-        <div>
+    <div class="flex flex-wrap justify-between items-start gap-4 mb-6">
+        <div class="min-w-0">
             <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Inventories</h1>
             {{if .HasDiscovery}}
-            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Discovered from <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">{{.S3Source}}</code></p>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Each bucket's inventory runs, newest first. Load a run to see its size and cost and to browse it.</p>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Discovered from <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded">{{.S3Source}}</code></p>
             {{else}}
             <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">No <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--s3-source</code> or <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--index-source</code> configured. Discovery is disabled.</p>
             {{end}}
         </div>
         {{if .HasDiscovery}}
         {{- /* Lists the source now (the page otherwise shows the snapshot
-               the background refresher took), then reloads. */}}
-        <div class="flex items-center gap-3">
-            <span data-refresh-status role="status" class="text-xs text-red-700 dark:text-red-300"></span>
-            <button type="button" data-refresh-now
-                    class="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-60 disabled:cursor-wait">
-                <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M15.3 4.7A7 7 0 0 0 3.1 9H1l3 3.5L7 9H5.1a5 5 0 0 1 8.8-2.9l1.4-1.4zM16 8l-3 3.5h1.9a5 5 0 0 1-8.8 2.9l-1.4 1.4A7 7 0 0 0 16.9 11H19l-3-3z" clip-rule="evenodd"/></svg>
-                <span>Refresh</span>
-            </button>
-        </div>
+               the background refresher took); the server answers an htmx
+               request with HX-Refresh, which reloads the page. */}}
+        <button type="button" id="inventories-refresh"
+                hx-post="/api/indexes/refresh"
+                hx-swap="none"
+                hx-disabled-elt="this"
+                title="List the inventory source now instead of waiting for the next scheduled refresh"
+                class="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-60 disabled:cursor-wait">
+            <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M15.3 4.7A7 7 0 0 0 3.1 9H1l3 3.5L7 9H5.1a5 5 0 0 1 8.8-2.9l1.4-1.4zM16 8l-3 3.5h1.9a5 5 0 0 1-8.8 2.9l-1.4 1.4A7 7 0 0 0 16.9 11H19l-3-3z" clip-rule="evenodd"/></svg>
+            <span>Refresh</span>
+        </button>
         {{end}}
     </div>
 
@@ -31,22 +34,38 @@
     </div>
     {{end}}
 
+    {{if and .Groups (not .AutoLoadRunning)}}
+    <p class="mb-6 text-sm text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md px-4 py-2.5">
+        Auto-load is off on this server. Start it with <code class="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-1.5 py-0.5 rounded text-xs">--auto-load</code> to load new runs automatically.
+    </p>
+    {{end}}
+
     <!-- data-live-jobs opens the job stream (scripts/live.js); pages
          without live content don't, so they don't hold a connection. -->
     <div data-live-jobs id="inventories-live-root">
         {{if .Groups}}
+        {{- /* Any job starting or finishing re-renders the page once in
+               the background and swaps in only the groups' header
+               summaries, which name each configuration's loaded run. */ -}}
+        <div hidden data-live-any data-background-refresh
+             hx-get="/inventories" hx-trigger="live-refresh" hx-swap="none"
+             hx-select-oob="{{.SummarySelectors}}"></div>
         <div class="space-y-6">
             {{range .Groups}}
             <section class="bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-lg" aria-labelledby="grp-{{.SourceBucket}}-{{.Name}}">
-                <header class="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex flex-wrap items-baseline justify-between gap-3">
-                    <h2 id="grp-{{.SourceBucket}}-{{.Name}}" class="text-base font-semibold text-gray-900 dark:text-gray-100 truncate min-w-0">
-                        <span class="text-gray-500 dark:text-gray-400 font-normal">{{.SourceBucket}}</span>
+                <header class="px-4 sm:px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+                    <h2 id="grp-{{.SourceBucket}}-{{.Name}}" class="text-base font-semibold text-gray-900 dark:text-gray-100 break-words min-w-0">
+                        <span>{{.SourceBucket}}</span>
                         <span class="text-gray-300 dark:text-gray-600 mx-1">/</span>
-                        <span>{{.Name}}</span>
+                        <span class="text-gray-500 dark:text-gray-400 font-normal">{{.Name}}</span>
                     </h2>
-                    <span class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">{{len .Runs}} run{{if ne (len .Runs) 1}}s{{end}}</span>
+                    <p id="{{.SummaryID}}" class="mt-1 text-sm text-gray-600 dark:text-gray-300 tabular-nums">
+                        {{with .Loaded}}<span class="font-medium text-gray-900 dark:text-gray-100">{{.Stats.Line}}</span> <span class="text-gray-500 dark:text-gray-400">· run of {{.RunLabel}}</span>{{else}}<span class="text-gray-500 dark:text-gray-400">No run loaded</span>{{end}}
+                        <span class="text-gray-500 dark:text-gray-400">· {{.TotalRuns}} run{{if ne .TotalRuns 1}}s{{end}}</span>
+                    </p>
                 </header>
-                <div class="px-6 py-3 bg-gray-50 dark:bg-gray-900/30 border-b border-gray-200 dark:border-gray-700">
+                {{if $.AutoLoadRunning}}
+                <div class="px-4 sm:px-6 py-3 bg-gray-50 dark:bg-gray-900/30 border-b border-gray-200 dark:border-gray-700">
                     <form class="flex items-center gap-x-5 gap-y-2 text-xs text-gray-600 dark:text-gray-300 flex-wrap"
                           data-autoload-form data-own-errors
                           action="/api/configurations/{{.SourceBucket}}/{{.Name}}/auto-load"
@@ -54,12 +73,13 @@
                           hx-post="/api/configurations/{{.SourceBucket}}/{{.Name}}/auto-load"
                           hx-trigger="change"
                           hx-swap="none"
+                          hx-sync="this:replace"
                           aria-label="Auto-load settings for {{.SourceBucket}}/{{.Name}}">
                         {{if not .AutoLoadManaged}}<input type="hidden" name="auto_load" value="off">{{end}}
                         <label class="inline-flex items-center gap-1.5 {{if .AutoLoadManaged}}opacity-60{{else}}cursor-pointer{{end}}"{{if .AutoLoadManaged}} title="Set in the config file"{{end}}>
                             <input type="checkbox" name="auto_load" value="on" class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500" {{if .AutoLoad}}checked{{end}} {{if .AutoLoadManaged}}disabled{{end}}>
                             <span>Auto-load latest run</span>
-                            {{template "templates/partials/info_icon.html" "When on, the background poller loads each newest run automatically and evicts older ones to stay within retention."}}
+                            {{template "templates/partials/info_icon.html" "When on, the server loads each newest run automatically and unloads older ones beyond the number kept."}}
                         </label>
                         <label class="inline-flex items-center gap-1.5 {{if .RetentionManaged}}opacity-60{{end}}"{{if .RetentionManaged}} title="Set in the config file"{{end}}>
                             <span>Keep last</span>
@@ -67,47 +87,37 @@
                             <span>runs</span>
                         </label>
                         {{if or .AutoLoadManaged .RetentionManaged}}<span class="text-gray-500 dark:text-gray-400">Set in the config file</span>{{end}}
-                        {{if not $.AutoLoadRunning}}<span class="text-gray-500 dark:text-gray-400" title="Start the server with --auto-load and --max-index-disk for these settings to load and evict runs.">The server's auto-loader is off</span>{{end}}
                         <span data-autoload-status role="status"></span>
                     </form>
                 </div>
+                {{end}}
                 {{if .LastPollError}}
-                <div class="px-6 py-2 text-xs bg-red-50 dark:bg-red-900/30 border-b border-red-200 dark:border-red-900/50 text-red-800 dark:text-red-300">
+                <div class="px-4 sm:px-6 py-2 text-xs bg-red-50 dark:bg-red-900/30 border-b border-red-200 dark:border-red-900/50 text-red-800 dark:text-red-300">
                     Last poll failed: {{.LastPollError}}{{if .PollBackoffUntil}} (next attempt after {{.PollBackoffUntil}}){{end}}
                 </div>
                 {{end}}
-                <div class="overflow-x-auto">
-                <table class="min-w-full sm:table-fixed divide-y divide-gray-200 dark:divide-gray-700">
-                    <thead class="bg-gray-50 dark:bg-gray-900/30">
+                <table class="block sm:table w-full sm:table-fixed divide-y divide-gray-200 dark:divide-gray-700">
+                    <thead class="hidden sm:table-header-group bg-gray-50 dark:bg-gray-900/30">
                         <tr>
-                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Run{{template "templates/partials/info_icon.html" "Inventory run timestamp (UTC). The secondary line shows format, chunk-file count, on-disk cache size, and how long the latest build took; the third line is the discovered manifest key."}}</th>
-                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider sm:w-72">State{{template "templates/partials/info_icon.html" "Lifecycle state: not loaded, loading, loaded, or error. A build in progress shows its stage, percent and time left, and a bar with one segment per stage: download, build, finalize. The row's left border carries the state color."}}</th>
-                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider sm:w-72">Actions{{template "templates/partials/info_icon.html" "Per-run actions: Load builds the index; Browse opens the prefix tree; Compare picks a baseline; the icon buttons pin and unload."}}</th>
+                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Run</th>
+                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider sm:w-72">State</th>
+                            <th class="px-6 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider sm:w-72">Actions</th>
                         </tr>
                     </thead>
-                    {{$visible := .VisibleRuns}}
-                    {{range $i, $r := .Runs}}
-                        {{if lt $i $visible}}
-                            {{template "templates/partials/discovered_row.html" $r}}
-                        {{end}}
+                    {{range .Runs}}
+                        {{template "templates/partials/discovered_row.html" .}}
                     {{end}}
                 </table>
-                </div>
-                {{if lt .VisibleRuns (len .Runs)}}
-                <details class="bg-gray-50 dark:bg-gray-900/30">
-                    <summary class="px-6 py-2.5 text-sm text-indigo-600 dark:text-indigo-400 cursor-pointer hover:text-indigo-800 dark:hover:text-indigo-300">
-                        Show {{sub (len .Runs) .VisibleRuns}} older runs
+                {{if .Older}}
+                <details class="bg-gray-50 dark:bg-gray-900/30 border-t border-gray-200 dark:border-gray-700">
+                    <summary class="px-4 sm:px-6 py-2.5 text-sm text-indigo-600 dark:text-indigo-400 cursor-pointer hover:text-indigo-800 dark:hover:text-indigo-300">
+                        Show {{len .Older}} older run{{if ne (len .Older) 1}}s{{end}}
                     </summary>
-                    <div class="overflow-x-auto">
-                    <table class="min-w-full sm:table-fixed divide-y divide-gray-200 dark:divide-gray-700">
-                        {{$visible := .VisibleRuns}}
-                        {{range $i, $r := .Runs}}
-                            {{if ge $i $visible}}
-                                {{template "templates/partials/discovered_row.html" $r}}
-                            {{end}}
+                    <table class="block sm:table w-full sm:table-fixed divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
+                        {{range .Older}}
+                            {{template "templates/partials/discovered_row.html" .}}
                         {{end}}
                     </table>
-                    </div>
                 </details>
                 {{end}}
             </section>
@@ -137,107 +147,101 @@
 </div>
 
 <script>
-    // Two tiny pieces of vanilla JS the drawer needs that htmx alone
-    // can't cover: ESC-to-close and re-opening from a URL hash on
-    // reload. Everything else (open, refresh, slide-in/out via CSS) is
-    // pure htmx.
+    // Small pieces of vanilla JS the drawer and settings need that htmx
+    // alone can't cover: ESC-to-close, focus, re-opening from a URL hash
+    // on reload, and auto-load save feedback.
     (function () {
-        document.addEventListener('keydown', function (e) {
-            if (e.key !== 'Escape') return;
-            var aside = document.getElementById('run-drawer');
-            if (!aside || !aside.hasAttribute('data-open')) return;
-            var closer = aside.querySelector('[data-drawer-close]');
-            if (closer) closer.click();
-        });
-
-        // Focus: opening the drawer moves focus into it; closing returns
-        // it to the link that opened it (or that run's link, if the row
-        // re-rendered meanwhile).
-        var opener = null, openerRun = null;
-        document.body.addEventListener('htmx:beforeRequest', function (e) {
-            var elt = e.detail.elt;
-            if (!elt || !elt.matches || !elt.matches('[data-drawer-open]')) return;
-            opener = elt;
-            openerRun = elt.getAttribute('data-drawer-open');
-        });
-        document.body.addEventListener('htmx:afterSettle', function (e) {
-            var aside = e.detail.elt;
-            if (!aside || aside.id !== 'run-drawer') return;
-            if (aside.hasAttribute('data-open')) {
+        // Back and Forward re-render the page and run this script again,
+        // but the listeners live on document and body, which outlast the
+        // swap: install them once.
+        if (!window.inventoriesListeners) {
+            window.inventoriesListeners = true;
+            document.addEventListener('keydown', function (e) {
+                if (e.key !== 'Escape') return;
+                var aside = document.getElementById('run-drawer');
+                if (!aside || !aside.hasAttribute('data-open')) return;
                 var closer = aside.querySelector('[data-drawer-close]');
-                if (closer && !aside.contains(document.activeElement)) closer.focus();
-                return;
-            }
-            var back = opener && document.body.contains(opener) ? opener : null;
-            if (!back && openerRun) {
-                document.querySelectorAll('[data-drawer-open]').forEach(function (a) {
-                    if (a.getAttribute('data-drawer-open') === openerRun) back = a;
-                });
-            }
-            if (back) back.focus();
-            opener = openerRun = null;
-        });
+                if (closer) closer.click();
+            });
 
-        // Auto-load settings save on change: say so, and on a refusal
-        // (a config-file setting, a bad retention) show why and put the
-        // control back to its saved value.
-        document.body.addEventListener('htmx:afterRequest', function (e) {
-            var form = e.detail.elt;
-            if (!form || !form.matches || !form.matches('[data-autoload-form]')) return;
-            var status = form.querySelector('[data-autoload-status]');
-            if (!status) return;
-            clearTimeout(status._t);
-            if (e.detail.successful) {
-                status.className = 'text-green-700 dark:text-green-400';
-                status.textContent = 'Saved';
-                status._t = setTimeout(function () { status.textContent = ''; }, 2000);
-                form.querySelectorAll('input').forEach(function (i) { i.defaultValue = i.value; i.defaultChecked = i.checked; });
-                return;
-            }
-            var msg = 'Not saved';
-            try { msg = 'Not saved: ' + JSON.parse(e.detail.xhr.responseText).error; } catch (_) { /* keep generic */ }
-            status.className = 'text-red-700 dark:text-red-300';
-            status.textContent = msg;
-            form.reset();
-        });
+            // Focus: opening the drawer moves focus into it; closing returns
+            // it to the link that opened it (or that run's link, if the row
+            // re-rendered meanwhile).
+            var opener = null, openerRun = null;
+            document.body.addEventListener('htmx:beforeRequest', function (e) {
+                var elt = e.detail.elt;
+                if (!elt || !elt.matches || !elt.matches('[data-drawer-open]')) return;
+                opener = elt;
+                openerRun = elt.getAttribute('data-drawer-open');
+            });
+            document.body.addEventListener('htmx:afterSettle', function (e) {
+                var aside = e.detail.elt;
+                if (!aside || aside.id !== 'run-drawer') return;
+                if (aside.hasAttribute('data-open')) {
+                    var closer = aside.querySelector('[data-drawer-close]');
+                    if (closer && !aside.contains(document.activeElement)) closer.focus();
+                    return;
+                }
+                var back = opener && document.body.contains(opener) ? opener : null;
+                if (!back && openerRun) {
+                    document.querySelectorAll('[data-drawer-open]').forEach(function (a) {
+                        if (a.getAttribute('data-drawer-open') === openerRun) back = a;
+                    });
+                }
+                if (back) back.focus();
+                opener = openerRun = null;
+            });
 
-        // A value the browser rejects (retention 0) never reaches the
-        // server: say why instead of leaving it looking saved.
-        document.body.addEventListener('htmx:validation:halted', function (e) {
-            var form = e.detail.elt;
-            if (!form || !form.matches || !form.matches('[data-autoload-form]')) return;
-            var status = form.querySelector('[data-autoload-status]');
-            var bad = form.querySelector(':invalid');
-            clearTimeout(status._t);
-            status.className = 'text-red-700 dark:text-red-300';
-            status.textContent = 'Not saved' + (bad ? ': ' + bad.validationMessage : '');
-            form.reset();
-        });
+            // Auto-load settings save on change: say so, and on a refusal
+            // (a config-file setting, a bad retention) show why and put the
+            // control back to its saved value.
+            document.body.addEventListener('htmx:afterRequest', function (e) {
+                var form = e.detail.elt;
+                if (!form || !form.matches || !form.matches('[data-autoload-form]')) return;
+                var status = form.querySelector('[data-autoload-status]');
+                if (!status) return;
+                clearTimeout(status._t);
+                if (e.detail.successful) {
+                    status.className = 'text-green-700 dark:text-green-400';
+                    status.textContent = 'Saved';
+                    status._t = setTimeout(function () { status.textContent = ''; }, 2000);
+                    form.querySelectorAll('input').forEach(function (i) { i.defaultValue = i.value; i.defaultChecked = i.checked; });
+                    return;
+                }
+                var msg = 'Not saved';
+                try { msg = 'Not saved: ' + JSON.parse(e.detail.xhr.responseText).error; } catch (_) { /* keep generic */ }
+                status.className = 'text-red-700 dark:text-red-300';
+                status.textContent = msg;
+                form.reset();
+            });
 
-        var refreshBtn = document.querySelector('[data-refresh-now]');
-        if (refreshBtn) {
-            refreshBtn.addEventListener('click', function () {
-                var status = document.querySelector('[data-refresh-status]');
-                refreshBtn.disabled = true;
-                refreshBtn.querySelector('span').textContent = 'Listing…';
-                fetch('/api/indexes/refresh', { method: 'POST' }).then(function (r) {
-                    if (r.ok) { location.reload(); return null; }
-                    return r.json().then(function (b) { throw new Error(b.error || r.statusText); });
-                }).catch(function (err) {
-                    refreshBtn.disabled = false;
-                    refreshBtn.querySelector('span').textContent = 'Refresh';
-                    if (status) status.textContent = 'Refresh failed: ' + err.message;
-                });
+            // A value the browser rejects (retention 0) never reaches the
+            // server: say why instead of leaving it looking saved.
+            document.body.addEventListener('htmx:validation:halted', function (e) {
+                var form = e.detail.elt;
+                if (!form || !form.matches || !form.matches('[data-autoload-form]')) return;
+                var status = form.querySelector('[data-autoload-status]');
+                var bad = form.querySelector(':invalid');
+                clearTimeout(status._t);
+                status.className = 'text-red-700 dark:text-red-300';
+                status.textContent = 'Not saved' + (bad ? ': ' + bad.validationMessage : '');
+                form.reset();
             });
         }
 
+        // #run=<source>/<inventory>/<run> reopens that run's drawer on a
+        // reload, Back or Forward. Each segment must look like a bucket,
+        // configuration or run name; refresh=1 keeps the server from
+        // pushing the URL the page already has onto the history again.
+        var segment = /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,254}$/;
         function restoreFromHash() {
             var hash = (location.hash || '').replace(/^#/, '');
-            if (hash.indexOf('run=') !== 0) return;
-            var id = decodeURIComponent(hash.slice(4));
-            if (!id || id.split('/').length !== 3) return;
-            if (!window.htmx) return;
-            window.htmx.ajax('GET', '/partials/drawer/' + id, {
+            if (hash.indexOf('run=') !== 0 || !window.htmx) return;
+            var id;
+            try { id = decodeURIComponent(hash.slice(4)); } catch (_) { return; }
+            var parts = id.split('/');
+            if (parts.length !== 3 || !parts.every(function (p) { return segment.test(p); })) return;
+            window.htmx.ajax('GET', '/partials/drawer/' + parts.map(encodeURIComponent).join('/') + '?refresh=1', {
                 target: '#run-drawer',
                 swap: 'outerHTML',
             });

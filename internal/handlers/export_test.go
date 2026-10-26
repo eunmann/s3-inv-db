@@ -186,8 +186,8 @@ var (
 	BuildComparePickerForTest          = buildComparePicker
 	SameConfigForTest                  = sameConfig
 	FilterComparePickerByConfigForTest = filterComparePickerByConfig
-	LoadDurationLabelForTest           = loadDurationLabel
-	DiscoveredMetaLineForTest          = discoveredMetaLine
+	SummarizeBuildErrorForTest         = summarizeBuildError
+	DomIDForTest                       = domID
 )
 
 // AcquireSSESlotForTest exposes acquireSSESlot.

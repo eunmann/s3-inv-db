@@ -74,7 +74,8 @@ func TestInventoriesPage_GroupsShowTheirConfig(t *testing.T) {
 	}
 	h, configs := newWiredHandlersWithConfigs(t, nil,
 		handlers.WithDiscoverer(&fakeDiscoverer{listResp: list, bucket: "dst"}),
-		handlers.WithLoader(&fakeBuilder{}))
+		handlers.WithLoader(&fakeBuilder{}),
+		handlers.WithAutoLoad(true))
 	backoff := time.Date(2026, 1, 2, 4, 5, 6, 0, time.UTC)
 	for _, cfg := range []inventory.Config{
 		{
@@ -125,10 +126,12 @@ func TestInventoriesPage_GroupsShowTheirConfig(t *testing.T) {
 	}
 }
 
-// TestInventoriesPage_NavAndAutoLoadHint: the page marks its own nav
-// link current, and the auto-load settings say when the server's
-// auto-loader is off, since toggling them then does nothing.
-func TestInventoriesPage_NavAndAutoLoadHint(t *testing.T) {
+// TestInventoriesPage_NavAndAutoLoadNote: the page marks its own nav
+// link current. With the server's auto-loader off the per-configuration
+// auto-load settings would do nothing, so the page hides them and says
+// once how to turn it on; with it on, the settings show and a new change
+// replaces an unsent one.
+func TestInventoriesPage_NavAndAutoLoadNote(t *testing.T) {
 	list := []inventory.Inventory{{SourceBucket: "src", Name: "inv", Run: "2026-01-01T03-00Z", ManifestKey: "k/manifest.json"}}
 	for _, running := range []bool{false, true} {
 		mgr := inventory.NewCatalog(nil)
@@ -146,9 +149,13 @@ func TestInventoriesPage_NavAndAutoLoadHint(t *testing.T) {
 		if doc.Find(`nav a[aria-current="page"]`).Length() != 2 {
 			t.Errorf("want the link marked in both the wide and the narrow nav")
 		}
-		hint := strings.Contains(w.Body.String(), "auto-loader is off")
-		if hint == running {
-			t.Errorf("auto-loader running=%v: hint shown=%v", running, hint)
+		note := strings.Contains(doc.Text(), "Auto-load is off on this server")
+		forms := doc.Find("form[data-autoload-form]")
+		if note == running || (forms.Length() > 0) != running {
+			t.Errorf("auto-loader running=%v: note shown=%v, settings forms=%d", running, note, forms.Length())
+		}
+		if running && forms.AttrOr("hx-sync", "") != "this:replace" {
+			t.Errorf("auto-load form hx-sync = %q, want this:replace", forms.AttrOr("hx-sync", ""))
 		}
 	}
 }

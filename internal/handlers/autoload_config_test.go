@@ -167,7 +167,8 @@ func TestInventoriesPage_ManagedConfigsDisableTheirControls(t *testing.T) {
 	h := newWiredHandlers(t, nil,
 		handlers.WithDiscoverer(&fakeDiscoverer{listResp: list, bucket: "dst"}),
 		handlers.WithLoader(&fakeBuilder{}),
-		handlers.WithManagedConfigs(inventory.ManagedConfigs{"src/inv": {AutoLoad: true, Retention: true}}))
+		handlers.WithManagedConfigs(inventory.ManagedConfigs{"src/inv": {AutoLoad: true, Retention: true}}),
+		handlers.WithAutoLoad(true))
 	w := httptest.NewRecorder()
 	h.InventoriesPage(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/inventories", http.NoBody))
 	if w.Code != http.StatusOK {
@@ -200,7 +201,7 @@ func TestInventoriesPage_ManagedSettingsAreReadOnly(t *testing.T) {
 	render := func(g handlers.InventoryGroup) string {
 		t.Helper()
 		var buf bytes.Buffer
-		data := handlers.InventoriesData{Title: "Inventories", HasDiscovery: true, Groups: []handlers.InventoryGroup{g}}
+		data := handlers.InventoriesData{Title: "Inventories", HasDiscovery: true, AutoLoadRunning: true, Groups: []handlers.InventoryGroup{g}}
 		if err := r.Render(&buf, "inventories.html", data); err != nil {
 			t.Fatal(err)
 		}
