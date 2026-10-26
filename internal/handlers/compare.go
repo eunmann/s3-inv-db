@@ -96,12 +96,12 @@ type compareSides struct {
 // as it came.
 func resolveCompareSides(picker ComparePicker, from, to inventory.ID) compareSides {
 	s := compareSides{from: from, to: to}
+	if (from == "") == (to == "") {
+		return s
+	}
 	given := from
 	if given == "" {
 		given = to
-	}
-	if (from == "") == (to == "") {
-		return s
 	}
 	runs := filterComparePickerByConfig(picker, given).Groups
 	if len(runs) != 1 {
@@ -160,8 +160,6 @@ func compareSuggestions(picker ComparePicker) []CompareSuggestion {
 type ComparePartialData struct {
 	Level  *CompareLevelView
 	Prefix string
-	From   inventory.ID
-	To     inventory.ID
 }
 
 // CompareLevelView is the rendered comparison at one prefix.
@@ -297,12 +295,7 @@ func (h *Handlers) renderCompareFullPage(w http.ResponseWriter, r *http.Request,
 			data.Error = "Failed to compute the comparison. See server logs for details."
 		default:
 			data.Level = level
-			data.Partial = ComparePartialData{
-				Prefix: opts.prefix,
-				From:   opts.from,
-				To:     opts.to,
-				Level:  level,
-			}
+			data.Partial = ComparePartialData{Prefix: opts.prefix, Level: level}
 		}
 	}
 
@@ -334,12 +327,7 @@ func (h *Handlers) renderCompareLevelPartial(w http.ResponseWriter, r *http.Requ
 
 		return
 	}
-	view := ComparePartialData{
-		Prefix: opts.prefix,
-		From:   opts.from,
-		To:     opts.to,
-		Level:  level,
-	}
+	view := ComparePartialData{Prefix: opts.prefix, Level: level}
 	h.renderHTMLPartial(w, r, "compare_level.html", "render compare level partial", view)
 }
 
