@@ -117,11 +117,7 @@ func (s *Server) setupRoutes() {
 	// the page never needs a JSON round-trip + reload. The Browse page
 	// itself content-negotiates via the HX-Request header rather than
 	// living at a separate /partials/ URL.
-	r.Get("/partials/inventory-row/{id}", s.handlers.InventoryRowPartial)
 	r.Get("/partials/notifications", s.handlers.NotificationsPartial)
-	r.Post("/partials/inventories/{id}/load", s.handlers.LoadInventoryRowPartial)
-	r.Post("/partials/inventories/{id}/unload", s.handlers.UnloadInventoryRowPartial)
-	r.Delete("/partials/inventories/{id}", s.handlers.DeleteInventoryRowPartial)
 	// Discovery-dependent partials. The group-scoped middleware
 	// short-circuits with 503 when neither --s3-source nor
 	// --index-source is configured, so every route in here can assume

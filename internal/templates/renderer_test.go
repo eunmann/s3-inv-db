@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/templates"
 )
 
@@ -160,15 +159,21 @@ func TestRenderer_RepeatedRenders(t *testing.T) {
 		}
 	}
 
-	// Same for the partial path. Use the real Info type so the
-	// template's .State.IsNotLoaded predicate resolves.
-	partialData := inventory.Info{ID: "x", Name: "X", Path: "/p", State: inventory.StateNotLoaded}
+	// Same for the partial path.
 	for i := range 2 {
 		var buf bytes.Buffer
-		if err := renderer.RenderPartial(&buf, "inventory_row.html", partialData); err != nil {
+		if err := renderer.RenderPartial(&buf, "notifications_banner.html", bannerData("x")); err != nil {
 			t.Errorf("RenderPartial call %d: %v", i, err)
 		}
 	}
+}
+
+// bannerData is notifications_banner.html's data with one issue
+// targeting target.
+func bannerData(target string) map[string]any {
+	return map[string]any{"Notifications": []map[string]string{
+		{"Title": "Build failed", "Target": target, "Message": "boom"},
+	}}
 }
 
 func TestRenderer_Partial(t *testing.T) {
@@ -177,21 +182,14 @@ func TestRenderer_Partial(t *testing.T) {
 		t.Fatalf("failed to create renderer: %v", err)
 	}
 
-	data := inventory.Info{
-		ID:    "test-id",
-		Name:  "Test Name",
-		Path:  "/path/to/test",
-		State: inventory.StateNotLoaded,
-	}
-
 	var buf bytes.Buffer
-	if err := renderer.RenderPartial(&buf, "inventory_row.html", data); err != nil {
-		t.Fatalf("failed to render inventory row partial: %v", err)
+	if err := renderer.RenderPartial(&buf, "notifications_banner.html", bannerData("test-id")); err != nil {
+		t.Fatalf("failed to render notifications banner partial: %v", err)
 	}
 
 	html := buf.String()
 	if !strings.Contains(html, "test-id") {
-		t.Error("rendered partial doesn't contain inventory ID")
+		t.Error("rendered partial doesn't contain the issue's target")
 	}
 }
 
