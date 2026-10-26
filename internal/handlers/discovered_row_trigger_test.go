@@ -11,99 +11,63 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/templates"
 )
 
-// TestDiscoveredRowPartial_PollingFallbackTrigger pins the SSE-race
-// fix. A build that completes in under the time htmx-sse takes to
-// attach the new row's listener would otherwise leave the row stuck
-// on "Loading…"; the row partial therefore emits `every 2s` alongside
-// `sse:row-<composite>` in its hx-trigger ONLY while busy.
-//
-// Without this guard the row either polls forever (if it carries the
-// trigger after settling) or never recovers from a missed SSE event
-// (if the trigger never carries it). Pin both sides explicitly.
-func TestDiscoveredRowPartial_PollingFallbackTrigger(t *testing.T) {
+// TestDiscoveredRowPartial_LiveWiring pins the row's contract with
+// scripts/live.js: every row names its run and the job it was rendered
+// with, refreshes only on live-refresh (the script fires it when the job
+// changes state, never per progress tick), and never polls; a busy row
+// carries the in-place progress bar and text.
+func TestDiscoveredRowPartial_LiveWiring(t *testing.T) {
 	renderer, err := templates.New()
 	if err != nil {
 		t.Fatalf("templates.New: %v", err)
 	}
 
-	const composite = "b/i/2026-05-13T03-00Z"
-	const expectedSSE = "sse:row-" + composite
+	inv := inventory.Inventory{
+		SourceBucket: "b", Name: "i", Run: "2026-05-13T03-00Z",
+		ManifestKey: "k/2026-05-13T03-00Z/manifest.json",
+	}
+	row := func(state inventory.State, j *jobs.Job) handlers.DiscoveredRowView {
+		return handlers.DiscoveredRowView{
+			Inventory: inv, State: state,
+			LatestJob: j,
+		}
+	}
 
 	tests := []struct {
-		name          string
-		view          handlers.DiscoveredRowView
-		wantPollEvery bool // true → expect "every 2s" in hx-trigger
+		name     string
+		view     handlers.DiscoveredRowView
+		wantBusy bool
+		want     []string
 	}{
 		{
-			name: "busy row polls as SSE-race fallback",
-			view: handlers.DiscoveredRowView{
-				MergedInventory: inventory.MergedInventory{
-					Inventory: inventory.Inventory{
-						SourceBucket: "b", Name: "i", Run: "2026-05-13T03-00Z",
-						ManifestKey: "k/2026-05-13T03-00Z/manifest.json",
-					},
-					State: inventory.StateLoading,
-				},
-				LatestJob: &jobs.Job{Kind: jobs.KindBuild, State: jobs.StateRunning, Stage: "downloading"},
-			},
-			wantPollEvery: true,
+			name:     "running job",
+			view:     row(inventory.StateLoading, &jobs.Job{ID: "j1", Kind: jobs.KindBuild, State: jobs.StateRunning, Stage: "building", StageDone: 1, StageTotal: 4}),
+			wantBusy: true,
+			want:     []string{`data-job-id="j1"`, `data-job-state="running"`, "Building index · 25%", "Cancel"},
 		},
 		{
-			// The job store marks the job running before the catalog
-			// flips the inventory to loading; the row must already be
-			// busy in that window.
-			name: "running job on a not-loaded row polls",
-			view: handlers.DiscoveredRowView{
-				MergedInventory: inventory.MergedInventory{
-					Inventory: inventory.Inventory{
-						SourceBucket: "b", Name: "i", Run: "2026-05-13T03-00Z",
-						ManifestKey: "k/2026-05-13T03-00Z/manifest.json",
-					},
-					State: inventory.StateNotLoaded,
-				},
-				LatestJob: &jobs.Job{Kind: jobs.KindBuild, State: jobs.StateRunning},
-			},
-			wantPollEvery: true,
+			// The job store marks the job running before the catalog flips
+			// the run to loading; the row must already read as busy.
+			name:     "running job on a not-loaded run",
+			view:     row(inventory.StateNotLoaded, &jobs.Job{ID: "j2", Kind: jobs.KindBuild, State: jobs.StateRunning}),
+			wantBusy: true,
+			want:     []string{"Loading…", "Starting…"},
 		},
 		{
-			name: "loaded row drops the poll",
-			view: handlers.DiscoveredRowView{
-				MergedInventory: inventory.MergedInventory{
-					Inventory: inventory.Inventory{
-						SourceBucket: "b", Name: "i", Run: "2026-05-13T03-00Z",
-						ManifestKey: "k/2026-05-13T03-00Z/manifest.json",
-					},
-					State: inventory.StateLoaded,
-				},
-			},
-			wantPollEvery: false,
+			name:     "queued job says why it waits",
+			view:     row(inventory.StateNotLoaded, &jobs.Job{ID: "j3", Kind: jobs.KindBuild, State: jobs.StateQueued}),
+			wantBusy: true,
+			want:     []string{`data-job-state="queued"`, "Queued — waiting for a free build slot"},
 		},
 		{
-			name: "not-loaded row drops the poll",
-			view: handlers.DiscoveredRowView{
-				MergedInventory: inventory.MergedInventory{
-					Inventory: inventory.Inventory{
-						SourceBucket: "b", Name: "i", Run: "2026-05-13T03-00Z",
-						ManifestKey: "k/2026-05-13T03-00Z/manifest.json",
-					},
-					State: inventory.StateNotLoaded,
-				},
-			},
-			wantPollEvery: false,
+			name: "loaded run",
+			view: row(inventory.StateLoaded, &jobs.Job{ID: "j4", Kind: jobs.KindBuild, State: jobs.StateSucceeded}),
+			want: []string{`data-job-state="succeeded"`},
 		},
 		{
-			name: "error row drops the poll",
-			view: handlers.DiscoveredRowView{
-				MergedInventory: inventory.MergedInventory{
-					Inventory: inventory.Inventory{
-						SourceBucket: "b", Name: "i", Run: "2026-05-13T03-00Z",
-						ManifestKey: "k/2026-05-13T03-00Z/manifest.json",
-					},
-					State: inventory.StateError,
-					Error: "boom",
-				},
-			},
-			wantPollEvery: false,
+			name: "never-built run",
+			view: row(inventory.StateNotLoaded, nil),
+			want: []string{`data-job-id=""`, `data-job-state=""`},
 		},
 	}
 
@@ -114,15 +78,23 @@ func TestDiscoveredRowPartial_PollingFallbackTrigger(t *testing.T) {
 				t.Fatalf("RenderPartial: %v", err)
 			}
 			body := buf.String()
-			if !strings.Contains(body, expectedSSE) {
-				t.Errorf("body missing %q\n%s", expectedSSE, body)
+			for _, want := range append([]string{
+				`data-live-inv="b/i/2026-05-13T03-00Z"`,
+				`hx-trigger="live-refresh"`,
+				`hx-sync="this:queue last"`,
+			}, tt.want...) {
+				if !strings.Contains(body, want) {
+					t.Errorf("row missing %q\n%s", want, body)
+				}
 			}
-			hasPoll := strings.Contains(body, "every 2s")
-			if hasPoll != tt.wantPollEvery {
-				t.Errorf("every 2s present=%v want=%v\n%s", hasPoll, tt.wantPollEvery, body)
+			if strings.Contains(body, "every ") {
+				t.Errorf("row polls; live.js drives refreshes\n%s", body)
 			}
-			if tt.wantPollEvery && tt.view.LatestJob != nil && !strings.Contains(body, "Cancel") {
-				t.Errorf("busy row with a live job missing Cancel\n%s", body)
+			if got := strings.Contains(body, "data-live-text"); got != tt.wantBusy {
+				t.Errorf("progress line present = %v, want %v\n%s", got, tt.wantBusy, body)
+			}
+			if tt.wantBusy && tt.view.LatestJob != nil && !strings.Contains(body, "data-live-bar") {
+				t.Errorf("busy row missing its progress bar\n%s", body)
 			}
 		})
 	}

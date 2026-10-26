@@ -23,17 +23,20 @@ type RunDrawerView struct {
 	LatestJob    *jobs.Job
 	PrevAttempts []DrawerAttempt
 	OverallETA   string
-	BaselineH    string
-	LatestTookH  string
-	BaselineMs   int64
-	Stages       []DrawerStage
-	Live         bool
-	HasInventory bool
+	// OverallDeadline is when OverallETA runs out, for the countdown.
+	OverallDeadline time.Time
+	BaselineH       string
+	LatestTookH     string
+	BaselineMs      int64
+	Stages          []DrawerStage
+	Live            bool
+	HasInventory    bool
 }
 
 func (v RunDrawerView) CompositePath() string { return string(v.InventoryID) }
 
 type DrawerStage struct {
+	StartedAt   time.Time
 	Name        string
 	Label       string
 	Description string
@@ -73,7 +76,11 @@ func (h *Handlers) RunDrawer(w http.ResponseWriter, r *http.Request) {
 		infoLoadDuration = info.LoadDuration
 	}
 
-	w.Header().Set("HX-Push-Url", "/inventories#run="+string(composite))
+	// A refresh of the open drawer must not add a history entry per
+	// update; only opening it does.
+	if r.URL.Query().Get("refresh") == "" {
+		w.Header().Set("HX-Push-Url", "/inventories#run="+string(composite))
+	}
 
 	if h.jobStore == nil {
 		h.renderHTMLPartial(w, r, "run_drawer.html", "render drawer", view)
@@ -92,6 +99,7 @@ func (h *Handlers) RunDrawer(w http.ResponseWriter, r *http.Request) {
 		view.BaselineMs = est.BaselineMs
 		view.BaselineH = est.HumanBaseline
 		view.OverallETA = est.OverallETA
+		view.OverallDeadline = est.Deadline
 		view.LatestTookH = pickTookDuration(infoLoadDuration, latest)
 	case errors.Is(err, jobs.ErrStoreNotFound):
 	default:
@@ -155,6 +163,7 @@ func drawerStagesFromJob(j jobs.Job) []DrawerStage {
 	last := len(visible) - 1
 	for i, s := range visible {
 		out[i] = DrawerStage{
+			StartedAt:   s.StartedAt,
 			Name:        s.Name,
 			Label:       templates.StageLabel(s.Name),
 			Description: templates.StageDescription(s.Name),
@@ -169,7 +178,8 @@ func drawerStagesFromJob(j jobs.Job) []DrawerStage {
 		if out[i].InProgress && !s.StartedAt.IsZero() {
 			elapsed := time.Since(s.StartedAt)
 			if elapsed > 0 {
-				out[i].DurationH = humanfmt.Duration(elapsed)
+				// Whole seconds, as the drawer's ticking clock renders it.
+				out[i].DurationH = templates.Clock(time.Now(), s.StartedAt)
 				out[i].Duration = elapsed
 			}
 		}
@@ -222,6 +232,7 @@ func (h *Handlers) collectPrevAttempts(r *http.Request, latest jobs.Job) []Drawe
 type baselineEstimate struct {
 	HumanBaseline string
 	OverallETA    string
+	Deadline      time.Time
 	BaselineMs    int64
 }
 
@@ -255,6 +266,7 @@ func (h *Handlers) computeBaseline(r *http.Request, latest jobs.Job) baselineEst
 	// render "~0ns left" — elapsed alone is more honest.
 	if remaining > 0 {
 		est.OverallETA = humanfmt.Duration(remaining)
+		est.Deadline = time.Now().Add(remaining)
 	}
 
 	return est

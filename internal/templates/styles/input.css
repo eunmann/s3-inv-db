@@ -33,3 +33,43 @@
         border-color: #818cf8;
     }
 }
+
+/* Live progress bar (scripts/live.js): one segment per pipeline stage,
+   finished stages full, the current one filling, so the bar never
+   moves backwards when a stage starts. Plain CSS, outside @layer, so
+   Tailwind keeps it although live.js toggles some of the classes. */
+@keyframes indeterminate-slide {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(300%); }
+}
+.live-bar { display: flex; gap: 3px; }
+.live-seg {
+    position: relative;
+    flex: 1 1 0;
+    overflow: hidden;
+    border-radius: 9999px;
+    background: rgb(229 231 235);
+}
+html.dark .live-seg { background: rgb(55 65 81); }
+.live-seg > div {
+    height: 100%;
+    width: 0;
+    border-radius: 9999px;
+    background: rgb(99 102 241);
+    transition: width 0.6s ease-out;
+}
+html.dark .live-seg > div { background: rgb(129 140 248); }
+.live-seg.is-indeterminate::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 33%;
+    border-radius: 9999px;
+    background: rgb(99 102 241 / 0.75);
+    animation: indeterminate-slide 1.4s ease-in-out infinite;
+}
+html.dark .live-seg.is-indeterminate::after { background: rgb(129 140 248 / 0.75); }
+@media (prefers-reduced-motion: reduce) {
+    .live-seg > div { transition: none; }
+    .live-seg.is-indeterminate::after { animation: none; width: 100%; opacity: 0.4; }
+}

@@ -122,7 +122,7 @@ func (p *Pipeline) timedIngestPhase(ctx context.Context, log *zerolog.Logger, ma
 }
 
 // timedMergeBuildPhase wraps runMergeBuildPhase with start/end events.
-// runMergeBuildPhase sets the "merging" and "building" phases itself,
+// The merging and building phases are set by runMergeBuildPhase,
 // once it knows whether disk merge rounds come first.
 func (p *Pipeline) timedMergeBuildPhase(ctx context.Context, log *zerolog.Logger, outDir string) (mergeBuildResult, time.Duration, error) {
 	p.publish(events.Event{Stage: events.StagePipeline, Type: events.EvtStageStart, Payload: events.StageTiming{Stage: events.StageMerge}})
@@ -632,6 +632,7 @@ func manifestBytes(files []s3fetch.ManifestFile) int64 {
 // so the atomic add runs once per buffer fill, not per row.
 type countingReadCloser struct {
 	io.ReadCloser
+
 	total *atomic.Int64
 	n     int64
 }

@@ -61,9 +61,9 @@ type Scheduler struct {
 	// live holds the newest snapshot of every queued or running job, so
 	// readers see progress as it is published instead of the store's
 	// copy, which trails it by up to progressPersistEvery.
-	live map[ID]Job
-	sem             chan struct{}
-	maxConcurrency  int
+	live           map[ID]Job
+	sem            chan struct{}
+	maxConcurrency int
 	// progressPersistEvery spaces out progress writes to the store; see
 	// progressPersister.
 	progressPersistEvery time.Duration
@@ -484,8 +484,8 @@ func (s *Scheduler) Live() []Job {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]Job, 0, len(s.live))
-	for _, j := range s.live {
-		out = append(out, j)
+	for id := range s.live {
+		out = append(out, s.live[id])
 	}
 
 	return out

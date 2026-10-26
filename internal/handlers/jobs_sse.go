@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/jobs"
+	"github.com/eunmann/s3-inv-db/internal/templates"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
 )
@@ -39,6 +40,7 @@ type jobEvent struct {
 	Kind          string       `json:"Kind"`
 	State         string       `json:"State"`
 	Stage         string       `json:"Stage"`
+	StageLabel    string       `json:"StageLabel,omitempty"`
 	Step          string       `json:"Step,omitempty"`
 	StepStartedAt string       `json:"StepStartedAt,omitempty"`
 	StartedAt     string       `json:"StartedAt,omitempty"`
@@ -97,6 +99,7 @@ func jobToEvent(j jobs.Job) jobEvent {
 		Kind:         string(j.Kind),
 		State:        string(j.State),
 		Stage:        j.Stage,
+		StageLabel:   templates.StageLabel(j.Stage),
 		Step:         j.Step,
 		Progress:     j.Progress,
 		StageTotal:   j.StageTotal,
@@ -187,8 +190,9 @@ func (h *Handlers) JobsStream(w http.ResponseWriter, r *http.Request) {
 	if _, err := fmt.Fprintf(w, "retry: %d\n: connected\n\n", sseRetryMs); err != nil {
 		return
 	}
-	for _, j := range h.jobMgr.Live() {
-		if err := writeJobFrame(w, j); err != nil {
+	live := h.jobMgr.Live()
+	for i := range live {
+		if err := writeJobFrame(w, live[i]); err != nil {
 			logger.Debug().Err(err).Msg("write job snapshot")
 
 			return

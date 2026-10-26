@@ -21,7 +21,14 @@ func staticAsset(contentType string, content func() []byte, etag func() string) 
 		}
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("ETag", etag())
-		w.Header().Set("Cache-Control", "public, max-age=86400, must-revalidate")
+		// Pages link assets as ?v=<content hash> (templates' assetURL):
+		// that URL's content never changes, so it can be cached for good.
+		// A bare URL revalidates every time, so a deploy is seen at once.
+		if r.URL.Query().Get("v") != "" {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
 		_, _ = w.Write(content())
 	}
 }
@@ -52,11 +59,10 @@ func (s *Server) setupRoutes() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	// Compiled Tailwind CSS embedded into the binary. ETag lets the
-	// browser revalidate cheaply; the content is immutable for a given
-	// build, so a 1-day max-age + revalidate is fine.
+	// Embedded CSS and scripts; see staticAsset for caching.
 	r.Get("/static/tailwind.css", staticAsset("text/css; charset=utf-8", templates.TailwindCSS, templates.TailwindCSSETag))
 	r.Get("/static/help.js", staticAsset("application/javascript; charset=utf-8", templates.HelpJS, templates.HelpJSETag))
+	r.Get("/static/live.js", staticAsset("application/javascript; charset=utf-8", templates.LiveJS, templates.LiveJSETag))
 
 	// HTML pages
 	r.Get("/", s.handlers.Dashboard)

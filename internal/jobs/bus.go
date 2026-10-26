@@ -133,13 +133,13 @@ func (s *Subscription) offer(ev Event) {
 func (s *Subscription) Ready() <-chan struct{} { return s.ready }
 
 // Drain returns the unread events, oldest first change first, and
-// empties the queue. overflowed reports that events were dropped since
+// empties the queue. The second result reports that events were dropped since
 // the last Drain because the reader fell too far behind: the caller
 // must treat its view as stale and resynchronise.
-func (s *Subscription) Drain() (evs []Event, overflowed bool) {
+func (s *Subscription) Drain() ([]Event, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	evs, overflowed = s.queue, s.over
+	evs, overflowed := s.queue, s.over
 	s.queue, s.over = nil, false
 	clear(s.index)
 

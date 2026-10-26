@@ -375,8 +375,9 @@ func (h *Handlers) latestJobs(ctx context.Context) (map[inventory.ID]jobs.Job, e
 	if latest == nil {
 		latest = make(map[inventory.ID]jobs.Job)
 	}
-	for _, j := range h.jobMgr.Live() {
-		latest[j.InventoryID] = j
+	live := h.jobMgr.Live()
+	for i := range live {
+		latest[live[i].InventoryID] = live[i]
 	}
 	if err != nil {
 		return latest, fmt.Errorf("latest jobs: %w", err)

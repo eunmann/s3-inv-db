@@ -120,8 +120,9 @@ func TestJobsStream_PushesEvents(t *testing.T) {
 		return f.event == "job" && strings.Contains(f.data, `"State":"succeeded"`)
 	})
 	var ev struct {
-		ID, InventoryID string
-		StageDone       int64
+		ID          string `json:"ID"`
+		InventoryID string `json:"InventoryID"`
+		StageDone   int64  `json:"StageDone"`
 	}
 	if err := json.Unmarshal([]byte(f.data), &ev); err != nil {
 		t.Fatal(err)

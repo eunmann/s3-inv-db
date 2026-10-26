@@ -9,13 +9,19 @@
     {{$eta = formatETA .LatestJob.StepStartedAt .LatestJob.StageDone .LatestJob.StageTotal}}
 {{end}}
 <tbody id="discovered-row-{{.SourceBucket}}-{{.Name}}-{{.Run}}"
-    {{if .Run}}hx-get="/partials/discovered/{{.SourceBucket}}/{{.Name}}/{{.Run}}"
-    {{/* Polling fallback while busy: builds can finish in ~70 ms, faster
-         than htmx-sse can attach the row's listener after the POST swap.
-         Re-fetching every 2s catches the terminal state event the SSE
-         path may have missed. Once the row re-renders into a non-busy
-         state the rebuilt trigger drops the poll. */}}
-    hx-trigger="sse:row-{{$composite}}{{if $busy}}, every 2s{{end}}"
+    {{if .Run}}
+    {{- /* scripts/live.js keeps the progress bar and text current from
+           the job stream and fires live-refresh only when the job starts,
+           changes state, or the catalog changes the run, so a build costs
+           a handful of row renders, not one per progress tick. hx-sync
+           queues a refresh behind an in-flight Load/Unload instead of
+           racing its swap. */}}
+    data-live-inv="{{$composite}}"
+    data-job-id="{{if .LatestJob}}{{.LatestJob.ID}}{{end}}"
+    data-job-state="{{if .LatestJob}}{{.LatestJob.State}}{{end}}"
+    hx-get="/partials/discovered/{{.SourceBucket}}/{{.Name}}/{{.Run}}"
+    hx-trigger="live-refresh"
+    hx-sync="this:queue last"
     hx-swap="outerHTML"{{end}}>
 <tr class="{{stateBorderClass .StateName}}">
     <td class="px-6 py-4 align-top">
@@ -38,20 +44,28 @@
         {{end}}
         <div class="text-[11px] text-gray-400 dark:text-gray-500 font-mono truncate max-w-md mt-0.5" title="{{.ManifestKey}}">{{.ManifestKey}}</div>
     </td>
-    <td class="px-6 py-4 align-top whitespace-nowrap">
+    <td class="px-6 py-4 align-top whitespace-nowrap w-72 max-w-[18rem]">
         {{- /* The state badge is a passive status indicator; the
                "View details" link below is the single, always-visible
                drawer-open affordance. Errors surface inline (full text
                in title=) so users don't have to hover or click to see
                what went wrong. */ -}}
-        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass .StateName}}">
-            {{stateLabel .StateName}}
+        {{- /* A queued or running job shows as loading even before the
+               catalog flips the run's state. */ -}}
+        {{$badge := .StateName}}{{if $busy}}{{$badge = "loading"}}{{end}}
+        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{stateClass $badge}}">
+            {{stateLabel $badge}}
         </span>
         {{if $busy}}
-        <div class="mt-1 text-xs text-gray-600 dark:text-gray-300">
-            {{if .LatestJob}}{{if .LatestJob.Stage}}{{stageLabel .LatestJob.Stage}}{{if .LatestJob.Step}} · {{.LatestJob.Step}}{{end}}{{else}}Starting…{{end}}{{else}}Starting…{{end}}
-            {{if gt $pct 0}}<span class="text-gray-400 dark:text-gray-500">· {{$pct}}%{{if $eta}} · ~{{$eta}}{{end}}</span>{{end}}
+        {{- /* live.js rewrites this line in place as progress arrives, in
+               the same "Stage · N% · ~T left" shape. */ -}}
+        <div class="mt-1 text-xs text-gray-600 dark:text-gray-300 tabular-nums truncate" data-live-text>
+            {{- if not .LatestJob}}Starting…
+            {{- else if eq (printf "%s" .LatestJob.State) "queued"}}Queued — waiting for a free build slot
+            {{- else}}{{if .LatestJob.Stage}}{{stageLabel .LatestJob.Stage}}{{if .LatestJob.Step}} · {{.LatestJob.Step}}{{end}}{{else}}Starting…{{end}}{{if gt $pct 0}} · {{$pct}}%{{end}}{{if $eta}} · ~{{$eta}} left{{end}}
+            {{- end -}}
         </div>
+        {{if .LatestJob}}<div class="mt-1.5 h-1.5 w-60 max-w-full">{{template "live_bar" .LatestJob}}</div>{{end}}
         {{end}}
         {{if and .Error (not $busy)}}
         <div class="mt-1 text-xs text-red-700 dark:text-red-300 max-w-md whitespace-normal break-words" title="{{.Error}}">
@@ -64,7 +78,9 @@
         </div>
         {{end}}
         <div class="mt-1.5">
-            <a href="#"
+            <a href="/inventories#run={{$composite}}"
+               data-drawer-open="{{$composite}}"
+               aria-haspopup="dialog"
                hx-get="/partials/drawer/{{$composite}}"
                hx-target="#run-drawer"
                hx-swap="outerHTML"
@@ -130,13 +146,4 @@
         </div>
     </td>
 </tr>
-{{if $busy}}
-<tr aria-hidden="true" class="discovered-progress-row">
-    <td colspan="3" class="p-0">
-        <div class="h-1 w-full bg-gray-100 dark:bg-gray-900/30">
-            <div class="h-1 bg-indigo-500 dark:bg-indigo-400 transition-all" style="width:{{if gt $pct 0}}{{$pct}}{{else}}5{{end}}%"></div>
-        </div>
-    </td>
-</tr>
-{{end}}
 </tbody>

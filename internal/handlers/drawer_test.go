@@ -165,7 +165,7 @@ func TestRunDrawer_LiveJobShowsCancelButton(t *testing.T) {
 	}
 }
 
-func TestRunDrawer_OpenShellHasSSEWiringAndPushURL(t *testing.T) {
+func TestRunDrawer_OpenShellHasLiveWiringAndPushURL(t *testing.T) {
 	disc := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "r"}
 	h := newDiscoveredHandlers(t,
 		&fakeDiscoverer{findResp: disc, bucket: "dst"},
@@ -188,14 +188,28 @@ func TestRunDrawer_OpenShellHasSSEWiringAndPushURL(t *testing.T) {
 	if !strings.Contains(body, `data-open`) {
 		t.Errorf("open shell missing data-open marker\n%s", body)
 	}
-	if !strings.Contains(body, `hx-trigger="sse:row-b/i/r from:body"`) {
-		t.Errorf("open shell missing SSE refresh trigger\n%s", body)
-	}
-	if !strings.Contains(body, `hx-get="/partials/drawer/b/i/r"`) {
-		t.Errorf("open shell missing self-refresh hx-get\n%s", body)
+	for _, want := range []string{
+		`data-live-inv="b/i/r"`,
+		`hx-trigger="live-refresh"`,
+		`hx-get="/partials/drawer/b/i/r?refresh=1"`,
+		`hx-select="#run-drawer-body"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("open shell missing %s\n%s", want, body)
+		}
 	}
 	if got := w.Header().Get("HX-Push-Url"); got != "/inventories#run=b/i/r" {
 		t.Errorf("HX-Push-Url = %q, want /inventories#run=b/i/r", got)
+	}
+
+	// A refresh of the open drawer must not push a history entry: one per
+	// progress update made Back walk through every update of a build.
+	refresh := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/drawer/b/i/r?refresh=1", http.NoBody)
+	refresh = chiCtxWithParams(refresh, "src", "b", "id", "i", "run", "r")
+	rw := httptest.NewRecorder()
+	h.RunDrawer(rw, refresh)
+	if got := rw.Header().Get("HX-Push-Url"); got != "" {
+		t.Errorf("refresh HX-Push-Url = %q, want none", got)
 	}
 }
 

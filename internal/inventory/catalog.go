@@ -88,7 +88,7 @@ type Catalog struct {
 
 // SetOnChange registers fn to be called with an inventory's ID after
 // each of its state changes is persisted: register, load, unload,
-// evict, pin, remove. fn runs on the changing goroutine without the
+// evict, pin, remove. The callback runs on the changing goroutine, without the
 // catalog's locks held, so it must not block.
 func (c *Catalog) SetOnChange(fn func(ID)) {
 	c.onChange.Store(&fn)

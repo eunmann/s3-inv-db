@@ -1,7 +1,11 @@
 {{template "layout" .}}
 
 {{define "content"}}
-<div class="px-4 py-6 sm:px-0 max-w-7xl mx-auto">
+{{- /* Live: a job starting or finishing, or a run loading or being
+       evicted, re-renders this block (scripts/live.js, data-live-any). */ -}}
+<div id="dashboard-live" class="px-4 py-6 sm:px-0 max-w-7xl mx-auto"
+     data-live-jobs data-live-any
+     hx-get="/" hx-select="#dashboard-live" hx-trigger="live-refresh" hx-swap="outerHTML">
 
     <header class="flex flex-wrap items-end justify-between gap-4 mb-8">
         <div>
