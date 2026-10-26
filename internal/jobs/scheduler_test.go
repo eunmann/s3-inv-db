@@ -224,22 +224,133 @@ func TestManager_ConcurrencyLimitSerializes(t *testing.T) {
 
 func TestBus_FanOut(t *testing.T) {
 	bus := jobs.NewBus(4)
-	chA, cancelA := bus.Subscribe()
-	chB, cancelB := bus.Subscribe()
-	defer cancelA()
-	defer cancelB()
+	subA := bus.Subscribe()
+	subB := bus.Subscribe()
+	defer subA.Close()
+	defer subB.Close()
 
 	bus.Publish(jobs.Job{ID: "j1", State: jobs.StateQueued})
 
-	for i, ch := range []<-chan jobs.Job{chA, chB} {
+	for i, sub := range []*jobs.Subscription{subA, subB} {
 		select {
-		case j := <-ch:
-			if j.ID != "j1" {
-				t.Errorf("sub %d got %+v", i, j)
+		case <-sub.Ready():
+			evs, _ := sub.Drain()
+			if len(evs) != 1 || evs[0].Job == nil || evs[0].Job.ID != "j1" {
+				t.Errorf("sub %d got %+v", i, evs)
 			}
 		case <-time.After(100 * time.Millisecond):
 			t.Errorf("sub %d did not receive", i)
 		}
+	}
+}
+
+// TestBus_CoalescesPerJobAndKeepsTerminal: a subscriber that does not
+// read while a job races through progress ends up with the job's last
+// snapshot, terminal state included, in the order jobs first changed.
+func TestBus_CoalescesPerJobAndKeepsTerminal(t *testing.T) {
+	bus := jobs.NewBus(4)
+	sub := bus.Subscribe()
+	defer sub.Close()
+
+	bus.Publish(jobs.Job{ID: "a", State: jobs.StateRunning})
+	bus.PublishInventory("src/inv/run")
+	for i := range 1000 {
+		bus.Publish(jobs.Job{ID: "b", State: jobs.StateRunning, StageDone: int64(i)})
+	}
+	bus.Publish(jobs.Job{ID: "b", State: jobs.StateSucceeded, StageDone: 1000})
+	bus.Publish(jobs.Job{ID: "a", State: jobs.StateFailed})
+
+	evs, overflowed := sub.Drain()
+	if overflowed {
+		t.Fatal("overflowed with 3 keys under a cap of 4")
+	}
+	if len(evs) != 3 {
+		t.Fatalf("got %d events, want 3 (one per job, one per inventory)", len(evs))
+	}
+	if evs[0].Job == nil || evs[0].Job.ID != "a" || evs[0].Job.State != jobs.StateFailed {
+		t.Errorf("first = %+v, want job a failed", evs[0])
+	}
+	if evs[1].Job != nil || evs[1].Inventory != "src/inv/run" {
+		t.Errorf("second = %+v, want the inventory notice", evs[1])
+	}
+	if evs[2].Job == nil || evs[2].Job.ID != "b" || evs[2].Job.State != jobs.StateSucceeded {
+		t.Errorf("third = %+v, want job b succeeded", evs[2])
+	}
+	if evs, _ := sub.Drain(); len(evs) != 0 {
+		t.Errorf("second drain returned %d events, want 0", len(evs))
+	}
+}
+
+// TestBus_OverflowFlagsResync: more distinct keys than the cap between
+// reads drops the queue and reports overflow once, so the reader
+// resynchronises instead of acting on a partial view.
+func TestBus_OverflowFlagsResync(t *testing.T) {
+	bus := jobs.NewBus(2)
+	sub := bus.Subscribe()
+	defer sub.Close()
+
+	for i := range 5 {
+		bus.Publish(jobs.Job{ID: jobs.ID(strconv.Itoa(i)), State: jobs.StateQueued})
+	}
+	if _, overflowed := sub.Drain(); !overflowed {
+		t.Fatal("no overflow after 5 keys under a cap of 2")
+	}
+	bus.Publish(jobs.Job{ID: "next", State: jobs.StateQueued})
+	evs, overflowed := sub.Drain()
+	if overflowed || len(evs) != 1 {
+		t.Fatalf("after resync: %d events, overflowed %v; want 1, false", len(evs), overflowed)
+	}
+}
+
+// TestBus_ClosedSubscriptionIgnoresPublish: Close stops delivery and is
+// safe to call twice.
+func TestBus_ClosedSubscriptionIgnoresPublish(t *testing.T) {
+	bus := jobs.NewBus(4)
+	sub := bus.Subscribe()
+	sub.Close()
+	sub.Close()
+	bus.Publish(jobs.Job{ID: "j1"})
+	if evs, _ := sub.Drain(); len(evs) != 0 {
+		t.Errorf("closed subscription got %d events", len(evs))
+	}
+}
+
+// TestScheduler_LiveSnapshots: the scheduler reports a running job's
+// newest progress from memory and forgets the job once it is terminal.
+func TestScheduler_LiveSnapshots(t *testing.T) {
+	sched := jobs.NewScheduler(nil, jobs.NewBus(16))
+	t.Cleanup(func() { _ = sched.Shutdown(context.Background()) })
+
+	reported := make(chan struct{})
+	release := make(chan struct{})
+	job, err := sched.Submit(t.Context(), "src/inv/run", jobs.KindBuild, func(_ context.Context, report func(jobs.Update)) error {
+		report(jobs.Update{Stage: "downloading", StageDone: 7, StageTotal: 10})
+		close(reported)
+		<-release
+
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-reported
+	got, ok := sched.LiveForInventory("src/inv/run")
+	if !ok || got.ID != job.ID || got.StageDone != 7 || got.Stage != "downloading" {
+		t.Fatalf("LiveForInventory = %+v, %v; want running job at 7/10", got, ok)
+	}
+	if live := sched.Live(); len(live) != 1 || live[0].ID != job.ID {
+		t.Fatalf("Live = %+v, want the one job", live)
+	}
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for len(sched.Live()) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("finished job still live")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, ok := sched.LiveForInventory("src/inv/run"); ok {
+		t.Error("LiveForInventory still reports the finished job")
 	}
 }
 

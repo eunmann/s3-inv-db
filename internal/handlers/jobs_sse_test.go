@@ -1,7 +1,10 @@
 package handlers_test
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,30 +30,84 @@ func newJobsHandlers(t *testing.T) (*handlers.Handlers, *jobs.Scheduler) {
 	return h, jobMgr
 }
 
-// TestJobsStream_PushesEvents subscribes via the SSE handler, submits
-// a job, and verifies the stream contains the job's ID and a state
-// transition. Asserts contract: every Manager transition fires a frame.
-func TestJobsStream_PushesEvents(t *testing.T) {
-	h, mgr := newJobsHandlers(t)
+// sseFrame is one parsed server-sent event.
+type sseFrame struct {
+	event string
+	data  string
+}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/jobs/stream", http.NoBody).WithContext(ctx)
-	w := httptest.NewRecorder()
-
-	streamDone := make(chan struct{})
+// openStream connects to the handler's stream through a real server and
+// returns a channel of parsed frames, closed when the stream ends.
+func openStream(t *testing.T, h *handlers.Handlers) <-chan sseFrame {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(h.JobsStream))
+	t.Cleanup(srv.Close)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	frames := make(chan sseFrame, 256)
 	go func() {
-		h.JobsStream(w, req)
-		close(streamDone)
+		defer close(frames)
+		sc := bufio.NewScanner(resp.Body)
+		var cur sseFrame
+		for sc.Scan() {
+			line := sc.Text()
+			switch {
+			case line == "":
+				if cur.event != "" {
+					frames <- cur
+				}
+				cur = sseFrame{}
+			case strings.HasPrefix(line, "event: "):
+				cur.event = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: "):
+				cur.data = strings.TrimPrefix(line, "data: ")
+			}
+		}
 	}()
 
-	// Tiny sleep to let the handler register its subscription before
-	// Submit fires events the test would otherwise miss.
-	time.Sleep(20 * time.Millisecond)
+	return frames
+}
+
+// nextFrame returns the next frame matching want, failing after 2s.
+func nextFrame(t *testing.T, frames <-chan sseFrame, want func(sseFrame) bool) sseFrame {
+	t.Helper()
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case f, ok := <-frames:
+			if !ok {
+				t.Fatal("stream ended before the expected frame")
+			}
+			if want(f) {
+				return f
+			}
+		case <-timeout:
+			t.Fatal("expected frame never arrived")
+		}
+	}
+}
+
+// TestJobsStream_PushesEvents: a job submitted while a client is
+// connected reaches it as "job" frames, ending with the terminal state.
+func TestJobsStream_PushesEvents(t *testing.T) {
+	handlers.SetSSEPaceForTest(t, 5*time.Millisecond)
+	h, mgr := newJobsHandlers(t)
+	frames := openStream(t, h)
+	nextFrame(t, frames, func(f sseFrame) bool { return f.event == "synced" })
 
 	work := make(chan struct{})
-	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, _ func(jobs.Update)) error {
+	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, report func(jobs.Update)) error {
 		<-work
+		for i := range 500 {
+			report(jobs.Update{Stage: "downloading", StageDone: int64(i + 1), StageTotal: 500})
+		}
 
 		return nil
 	})
@@ -59,23 +116,94 @@ func TestJobsStream_PushesEvents(t *testing.T) {
 	}
 	close(work)
 
-	// Give the stream a moment to receive and write events, then end it.
-	time.Sleep(100 * time.Millisecond)
-	cancel()
-	<-streamDone
+	f := nextFrame(t, frames, func(f sseFrame) bool {
+		return f.event == "job" && strings.Contains(f.data, `"State":"succeeded"`)
+	})
+	var ev struct {
+		ID, InventoryID string
+		StageDone       int64
+	}
+	if err := json.Unmarshal([]byte(f.data), &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.ID != string(job.ID) || ev.InventoryID != "src/inv1" || ev.StageDone != 500 {
+		t.Errorf("terminal frame = %+v, want job %s on src/inv1 at 500", ev, job.ID)
+	}
+}
 
-	body := w.Body.String()
-	if !strings.Contains(body, "event: job-"+string(job.ID)) {
-		t.Errorf("stream missing event for job %s\nbody:\n%s", job.ID, body)
+// TestJobsStream_SnapshotOnConnect: a client that connects (or
+// reconnects) while a job runs gets its current state before "synced",
+// so it never waits for the next change to learn about it.
+func TestJobsStream_SnapshotOnConnect(t *testing.T) {
+	h, mgr := newJobsHandlers(t)
+	running := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	job, err := mgr.Submit(t.Context(), "src/inv1", jobs.KindBuild, func(_ context.Context, report func(jobs.Update)) error {
+		report(jobs.Update{Stage: "building", StageDone: 3, StageTotal: 9})
+		close(running)
+		<-release
+
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(body, "event: row-"+string(job.InventoryID)) {
-		t.Errorf("stream missing row event for inventory %s", job.InventoryID)
+	<-running
+
+	frames := openStream(t, h)
+	first := nextFrame(t, frames, func(sseFrame) bool { return true })
+	if first.event != "job" || !strings.Contains(first.data, string(job.ID)) || !strings.Contains(first.data, `"StageDone":3`) {
+		t.Fatalf("first frame = %+v, want the running job's snapshot", first)
 	}
-	if !strings.Contains(body, `"State":"queued"`) && !strings.Contains(body, `"State":"running"`) {
-		t.Errorf("stream missing state transitions\nbody:\n%s", body)
+	if f := nextFrame(t, frames, func(sseFrame) bool { return true }); f.event != "synced" {
+		t.Fatalf("second frame = %+v, want synced", f)
 	}
-	if !strings.Contains(body, `"State":"succeeded"`) {
-		t.Errorf("stream missing final succeeded state\nbody:\n%s", body)
+}
+
+// TestJobsStream_InventoryNotice: a catalog change outside any job (an
+// eviction, a pin) reaches the client as an "inventory" frame.
+func TestJobsStream_InventoryNotice(t *testing.T) {
+	handlers.SetSSEPaceForTest(t, 5*time.Millisecond)
+	h, _ := newJobsHandlers(t)
+	frames := openStream(t, h)
+	nextFrame(t, frames, func(f sseFrame) bool { return f.event == "synced" })
+
+	h.JobBusForTest().PublishInventory("src/inv1")
+	f := nextFrame(t, frames, func(f sseFrame) bool { return f.event == "inventory" })
+	if f.data != `{"InventoryID":"src/inv1"}` {
+		t.Errorf("inventory frame data = %s", f.data)
+	}
+}
+
+// TestJobsStream_SlowReaderIsDisconnected: a client so far behind that
+// its queue overflows is dropped, so it reconnects and resyncs from the
+// snapshot rather than silently missing changes.
+func TestJobsStream_SlowReaderIsDisconnected(t *testing.T) {
+	handlers.SetSSEPaceForTest(t, time.Second)
+	h, _ := newJobsHandlers(t)
+	frames := openStream(t, h)
+	nextFrame(t, frames, func(f sseFrame) bool { return f.event == "synced" })
+
+	// One publish starts the first batch and its one-second pause; the
+	// rest pile up past the bus's cap meanwhile.
+	bus := h.JobBusForTest()
+	bus.PublishInventory("src/first")
+	nextFrame(t, frames, func(f sseFrame) bool { return f.event == "inventory" })
+	for i := range 64 {
+		bus.PublishInventory(inventory.ID(fmt.Sprintf("src/inv/%d", i)))
+	}
+	timeout := time.After(3 * time.Second)
+	for {
+		select {
+		case f, ok := <-frames:
+			if !ok {
+				return
+			}
+			t.Fatalf("got frame %+v after overflow, want the stream closed", f)
+		case <-timeout:
+			t.Fatal("stream still open after its queue overflowed")
+		}
 	}
 }
 

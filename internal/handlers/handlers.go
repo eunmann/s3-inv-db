@@ -23,10 +23,18 @@ import (
 //nolint:gochecknoglobals // mutable only via SetSSEHeartbeatForTest in export_test.go
 var sseHeartbeat = 15 * time.Second
 
+// ssePace is the least time between two batches of job frames on one
+// SSE stream. Progress is coalesced per job in between, so a build
+// reporting many ticks a second costs each client a few frames a
+// second. Package var so tests can shorten it via SetSSEPaceForTest.
+//
+//nolint:gochecknoglobals // mutable only via SetSSEPaceForTest in export_test.go
+var ssePace = 250 * time.Millisecond
+
 // sseMaxConnsPerIP caps concurrent SSE subscribers from one remote
-// address. Each subscriber holds a 64-buffered channel allocated by
-// jobs.Bus.Subscribe, so the worst-case memory blast radius is bounded
-// by (clients × max-per-ip × buffer × per-event size). Browsers rarely
+// address. Each subscriber holds a jobs.Bus queue of at most one event
+// per job or inventory, capped by the bus, so the worst-case memory
+// blast radius is bounded by (clients × max-per-ip × cap × event size). Browsers rarely
 // need more than one per tab; 8 keeps a few tabs working without being
 // a DoS amplifier. Package var so tests can tighten it via
 // SetSSEMaxConnsPerIPForTest.

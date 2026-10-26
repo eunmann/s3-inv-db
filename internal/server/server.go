@@ -190,7 +190,11 @@ func newStores(cfg Config) (serverStores, error) {
 		return serverStores{}, fmt.Errorf("inventory store: %w", err)
 	}
 	jobStore := jobs.NewStore(cfg.DB)
-	jobBus := jobs.NewBus(jobBusBuffer)
+	jobBus := jobs.NewBus(jobBusMaxPending)
+	catalog := inventory.NewCatalog(invStore)
+	// Catalog changes made outside a job (eviction, unload, pin, restore)
+	// reach the UI's live stream the same way job progress does.
+	catalog.SetOnChange(jobBus.PublishInventory)
 
 	return serverStores{
 		inv:      invStore,
@@ -198,7 +202,7 @@ func newStores(cfg Config) (serverStores, error) {
 		jobStore: jobStore,
 		jobBus:   jobBus,
 		jobs:     jobs.NewScheduler(jobStore, jobBus, jobs.WithLogger(cfg.Logger), jobs.WithMaxConcurrency(cfg.MaxConcurrentJobs)),
-		catalog:  inventory.NewCatalog(invStore),
+		catalog:  catalog,
 	}, nil
 }
 
@@ -293,9 +297,11 @@ func newAutoLoader(cfg Config, discovery *inventory.Discovery, configStore *inve
 	return al
 }
 
-// jobBusBuffer is the capacity of the job-events bus the SSE handler
-// drains. Sized for headroom between successive UI ticks.
-const jobBusBuffer = 64
+// jobBusMaxPending bounds the distinct jobs and inventories one SSE
+// subscriber may have unread changes for; past it the subscriber is
+// disconnected and resynchronises. Far above the jobs and runs that
+// change within one pacing interval.
+const jobBusMaxPending = 1024
 
 // retentionLookup returns a budget.RetentionFunc that resolves
 // per-configuration retention from the ConfigStore, falling back to

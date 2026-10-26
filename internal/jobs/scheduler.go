@@ -58,6 +58,10 @@ type Scheduler struct {
 	bus             *Bus
 	cancels         map[ID]context.CancelFunc
 	liveByInventory map[inventory.ID]ID
+	// live holds the newest snapshot of every queued or running job, so
+	// readers see progress as it is published instead of the store's
+	// copy, which trails it by up to progressPersistEvery.
+	live map[ID]Job
 	sem             chan struct{}
 	maxConcurrency  int
 	// progressPersistEvery spaces out progress writes to the store; see
@@ -95,6 +99,7 @@ func NewScheduler(store *Store, bus *Bus, opts ...Option) *Scheduler {
 		bus:             bus,
 		cancels:         make(map[ID]context.CancelFunc),
 		liveByInventory: make(map[inventory.ID]ID),
+		live:            make(map[ID]Job),
 		logger:          zerolog.Nop(),
 		store:           noopJobStore{},
 		maxConcurrency:  defaultMaxConcurrency,
@@ -178,6 +183,7 @@ func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind
 	}
 	s.cancels[job.ID] = cancel
 	s.liveByInventory[invID] = job.ID
+	s.live[job.ID] = job
 	s.wg.Add(1)
 	s.mu.Unlock()
 
@@ -232,6 +238,7 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 	defer func() {
 		s.mu.Lock()
 		delete(s.cancels, job.ID)
+		delete(s.live, job.ID)
 		if s.liveByInventory[job.InventoryID] == job.ID {
 			delete(s.liveByInventory, job.InventoryID)
 		}
@@ -310,6 +317,7 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 		if u.MergeBytes > job.MergeBytes {
 			job.MergeBytes = u.MergeBytes
 		}
+		s.track(job)
 		s.bus.Publish(job)
 		progress.offer(job)
 	}
@@ -448,9 +456,53 @@ func (s *Scheduler) persist(ctx context.Context, j *Job) {
 	}
 }
 
+// persistAndPublish writes a state transition, then announces it. A
+// terminal job leaves the live set only once the store holds its final
+// state, so a reader never falls back to an older stored snapshot.
 func (s *Scheduler) persistAndPublish(ctx context.Context, j *Job) {
 	s.persist(ctx, j)
+	s.track(*j)
 	s.bus.Publish(*j)
+}
+
+// track records j as its job's newest snapshot while it is live.
+func (s *Scheduler) track(j Job) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if j.State.IsTerminal() {
+		delete(s.live, j.ID)
+
+		return
+	}
+	if _, ok := s.cancels[j.ID]; ok {
+		s.live[j.ID] = j
+	}
+}
+
+// Live returns the newest snapshot of every queued or running job.
+func (s *Scheduler) Live() []Job {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Job, 0, len(s.live))
+	for _, j := range s.live {
+		out = append(out, j)
+	}
+
+	return out
+}
+
+// LiveForInventory returns the newest snapshot of inv's queued or
+// running job, if it has one.
+func (s *Scheduler) LiveForInventory(inv inventory.ID) (Job, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, ok := s.liveByInventory[inv]
+	if !ok {
+		return Job{}, false
+	}
+	j, ok := s.live[id]
+
+	return j, ok
 }
 
 func newJobID() (ID, error) {

@@ -21,6 +21,17 @@ func SetSSEHeartbeatForTest(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { sseHeartbeat = prev })
 }
 
+// SetSSEPaceForTest swaps the SSE batch pacing for one test.
+func SetSSEPaceForTest(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := ssePace
+	ssePace = d
+	t.Cleanup(func() { ssePace = prev })
+}
+
+// JobBusForTest returns the job bus wired into the handler.
+func (h *Handlers) JobBusForTest() *jobs.Bus { return h.jobBus }
+
 // SetSSEMaxConnsPerIPForTest swaps the SSE per-IP cap for one test.
 func SetSSEMaxConnsPerIPForTest(t *testing.T, n int) {
 	t.Helper()
