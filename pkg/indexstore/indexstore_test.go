@@ -2,8 +2,10 @@ package indexstore_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/indexstore"
 )
 
@@ -33,7 +35,7 @@ func TestRunFromManifestKey(t *testing.T) {
 // so a file name that would be written outside the run's directory is
 // refused before anything is downloaded.
 func TestParseManifestRejectsPathsOutsideTheRun(t *testing.T) {
-	if _, err := indexstore.ParseManifest([]byte(`{"files":{"core_stats.bin":{"size":1},"tier_stats/tier_multi.bin":{"size":2}}}`)); err != nil {
+	if _, err := indexstore.ParseManifest([]byte(`{"version":2,"files":{"core_stats.bin":{"size":1},"tier_stats/tier_multi.bin":{"size":2}}}`)); err != nil {
 		t.Fatalf("valid manifest rejected: %v", err)
 	}
 	for _, name := range []string{"../x", "/etc/passwd", "a/../../b", "a/./b", `a\b`, "", "manifest.json"} {
@@ -44,6 +46,19 @@ func TestParseManifestRejectsPathsOutsideTheRun(t *testing.T) {
 	}
 	if _, err := indexstore.ParseManifest([]byte(`{"files":{}}`)); !errors.Is(err, indexstore.ErrBadManifest) {
 		t.Errorf("empty manifest: err = %v, want ErrBadManifest", err)
+	}
+}
+
+// TestParseManifestRejectsOtherVersions: a run published under another
+// manifest version is refused before anything is downloaded, as
+// unpublished, so a loader that may build rebuilds it.
+func TestParseManifestRejectsOtherVersions(t *testing.T) {
+	for _, v := range []int{format.ManifestVersion - 1, format.ManifestVersion + 1} {
+		data := fmt.Appendf(nil, `{"version":%d,"files":{"core_stats.bin":{"size":1}}}`, v)
+		_, err := indexstore.ParseManifest(data)
+		if !errors.Is(err, indexstore.ErrNotPublished) || !errors.Is(err, format.ErrManifestVersion) {
+			t.Errorf("version %d: err = %v, want ErrNotPublished and ErrManifestVersion", v, err)
+		}
 	}
 }
 

@@ -21,7 +21,7 @@ func TestManifestSizer_IndexSize(t *testing.T) {
 	client := s3test.FetchClient(t)
 	bucket := s3test.Bucket(t, client.Raw())
 	const key = "idx/src-bucket/daily/2026-10-24T01-00Z/manifest.json"
-	body := `{"version":1,"created_at":"2026-10-24T02:00:00Z","node_count":3,` +
+	body := `{"version":2,"created_at":"2026-10-24T02:00:00Z","node_count":3,` +
 		`"files":{"core_stats.bin":{"size":300,"checksum":"x"},"mph.bin":{"size":40,"checksum":"y"}}}`
 	if _, err := client.Raw().PutObject(t.Context(), &s3.PutObjectInput{
 		Bucket: aws.String(bucket), Key: aws.String(key), Body: strings.NewReader(body),

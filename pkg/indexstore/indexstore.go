@@ -28,8 +28,9 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/format"
 )
 
-// ErrNotPublished is returned when a run has no committed index: no
-// manifest.json under its prefix.
+// ErrNotPublished is returned when a run has no committed index this
+// build can read: no manifest.json under its prefix, or one of another
+// manifest version (which also wraps format.ErrManifestVersion).
 var ErrNotPublished = errors.New("no published index")
 
 // ErrNotRunManifest is returned for an inventory manifest key that
@@ -132,7 +133,7 @@ func (s *Store) upload(ctx context.Context, local, key string) error {
 }
 
 // ReadManifest returns the committed manifest under prefix, or
-// ErrNotPublished when there is none.
+// ErrNotPublished when there is none of this manifest version.
 func (s *Store) ReadManifest(ctx context.Context, prefix string) (*format.Manifest, error) {
 	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket), Key: aws.String(prefix + format.ManifestFile),
@@ -153,7 +154,10 @@ func (s *Store) ReadManifest(ctx context.Context, prefix string) (*format.Manife
 	return ParseManifest(data)
 }
 
-// ParseManifest decodes an index manifest and checks its file names.
+// ParseManifest decodes an index manifest and checks its file names
+// and version. A manifest of another version is ErrNotPublished, so it
+// is refused before anything is downloaded and the run is rebuilt
+// where building is allowed.
 func ParseManifest(data []byte) (*format.Manifest, error) {
 	var m format.Manifest
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -162,6 +166,9 @@ func ParseManifest(data []byte) (*format.Manifest, error) {
 	}
 	if err := checkNames(&m); err != nil {
 		return nil, err
+	}
+	if m.Version != format.ManifestVersion {
+		return nil, fmt.Errorf("%w: %w: %d, want %d", ErrNotPublished, format.ErrManifestVersion, m.Version, format.ManifestVersion)
 	}
 
 	return &m, nil

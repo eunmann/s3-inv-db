@@ -4,6 +4,7 @@ package indexstore_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -118,6 +119,30 @@ func TestFetchRefusesAnUncommittedRun(t *testing.T) {
 	}
 	if _, err := os.Stat(dst); !os.IsNotExist(err) {
 		t.Errorf("Fetch of an uncommitted run left %s", dst)
+	}
+}
+
+// TestFetchRefusesAnotherManifestVersion: a run published under another
+// manifest version reads as unpublished, and nothing is downloaded.
+func TestFetchRefusesAnotherManifestVersion(t *testing.T) {
+	store, src, prefix := publish(t, 500)
+	m, err := format.ReadManifest(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Version = format.ManifestVersion - 1
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	putKey(t, store.Bucket(), prefix+format.ManifestFile, string(data))
+	dst := filepath.Join(t.TempDir(), "fetched")
+	err = store.Fetch(t.Context(), prefix, dst, func(uint64, uint64) { t.Error("Fetch downloaded a file of a stale run") })
+	if !errors.Is(err, indexstore.ErrNotPublished) || !errors.Is(err, format.ErrManifestVersion) {
+		t.Fatalf("Fetch err = %v, want ErrNotPublished and ErrManifestVersion", err)
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Errorf("Fetch of a stale run left %s", dst)
 	}
 }
 

@@ -139,7 +139,8 @@ func (l *Loader) BuildWith(ctx context.Context, key inventory.CacheKey, manifest
 
 // fetchPublished downloads the run's published index into a staging
 // directory beside outDir, verifies it against its manifest and moves
-// it into place. It returns ErrNotPublished when the run has none.
+// it into place. It returns ErrNotPublished when the run has none of
+// this manifest version.
 func (l *Loader) fetchPublished(ctx context.Context, key inventory.CacheKey, outDir string, onProgress events.ProgressFunc) error {
 	prefix := indexstore.Run{Source: key.SourceBucket, Inventory: key.InventoryID, Run: key.Run}.Prefix(l.pubBase)
 	stage, err := extsort.NewStagingDir(outDir)
