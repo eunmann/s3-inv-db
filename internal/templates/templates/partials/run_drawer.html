@@ -212,7 +212,7 @@
         {{end}}
     </section>
 
-    {{if .LatestJob.Error}}
+    {{if and .LatestJob.Error (ne $state "cancelled")}}
     {{- /* The job-level error message — distinct from per-stage Err
            shown inline above. Stays expanded because a failed build is
            the user's primary debugging surface here. */ -}}
@@ -220,6 +220,8 @@
         <div class="text-[11px] uppercase tracking-wider font-semibold text-red-700 dark:text-red-300 mb-1">Error</div>
         <pre class="text-xs text-red-900 dark:text-red-200 whitespace-pre-wrap break-words font-mono">{{.LatestJob.Error}}</pre>
     </section>
+    {{else if eq $state "cancelled"}}
+    <p class="text-xs text-gray-500 dark:text-gray-400">The build was cancelled{{if not .LatestJob.FinishedAt.IsZero}} {{formatTimeRelative .LatestJob.FinishedAt}}{{end}}. Nothing was kept from it; Retry builds the run again.</p>
     {{end}}
 
     {{if .PrevAttempts}}

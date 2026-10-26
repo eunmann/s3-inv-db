@@ -25,6 +25,9 @@ var ErrNotFound = errors.New("job not found")
 // ErrShutdown is returned by Submit after Shutdown has been called.
 var ErrShutdown = errors.New("job manager is shut down")
 
+// shutdownAbortMsg is the error of a job Shutdown stopped.
+const shutdownAbortMsg = "interrupted: the server shut down"
+
 // ErrDuplicateInventory is returned by Submit when a live (queued or
 // running) job already exists for the inventory. The returned Job
 // carries the existing job's ID so callers can surface or join it.
@@ -56,7 +59,7 @@ type Scheduler struct {
 	logger          zerolog.Logger
 	store           jobStore
 	bus             *Bus
-	cancels         map[ID]context.CancelFunc
+	cancels         map[ID]context.CancelCauseFunc
 	liveByInventory map[inventory.ID]ID
 	// live holds the newest snapshot of every queued or running job, so
 	// readers see progress as it is published instead of the store's
@@ -97,7 +100,7 @@ func WithMaxConcurrency(n int) Option {
 func NewScheduler(store *Store, bus *Bus, opts ...Option) *Scheduler {
 	s := &Scheduler{
 		bus:             bus,
-		cancels:         make(map[ID]context.CancelFunc),
+		cancels:         make(map[ID]context.CancelCauseFunc),
 		liveByInventory: make(map[inventory.ID]ID),
 		live:            make(map[ID]Job),
 		logger:          zerolog.Nop(),
@@ -148,11 +151,11 @@ func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind
 	// (b) register the cancel handle + bump the wait group atomically
 	// with the goroutine launch. That way Shutdown's wg.Wait can't miss
 	// a goroutine that was about to start.
-	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
+	ctx, cancel := context.WithCancelCause(context.WithoutCancel(parent))
 	s.mu.Lock()
 	if s.shutdown {
 		s.mu.Unlock()
-		cancel()
+		cancel(nil)
 
 		return Job{}, ErrShutdown
 	}
@@ -161,7 +164,7 @@ func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind
 	// so it always reflects exactly the jobs this process is running.
 	if existing, ok := s.liveByInventory[invID]; ok {
 		s.mu.Unlock()
-		cancel()
+		cancel(nil)
 
 		return Job{ID: existing, InventoryID: invID}, ErrDuplicateInventory
 	}
@@ -177,7 +180,7 @@ func (s *Scheduler) Submit(parent context.Context, invID inventory.ID, kind Kind
 	}
 	if err := s.store.Upsert(ctx, job); err != nil {
 		s.mu.Unlock()
-		cancel()
+		cancel(nil)
 
 		return Job{}, fmt.Errorf("queue job %s: %w", job.ID, err)
 	}
@@ -202,7 +205,7 @@ func (s *Scheduler) Cancel(id ID) error {
 	if !ok {
 		return ErrNotFound
 	}
-	cancel()
+	cancel(nil)
 
 	return nil
 }
@@ -216,7 +219,7 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	s.shutdown = true
 	for _, cancel := range s.cancels {
-		cancel()
+		cancel(ErrShutdown)
 	}
 	s.mu.Unlock()
 
@@ -233,7 +236,7 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job, work Work) {
+func (s *Scheduler) run(ctx context.Context, cancel context.CancelCauseFunc, job Job, work Work) {
 	defer s.wg.Done()
 	defer func() {
 		s.mu.Lock()
@@ -243,7 +246,7 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 			delete(s.liveByInventory, job.InventoryID)
 		}
 		s.mu.Unlock()
-		cancel()
+		cancel(nil)
 	}()
 
 	// Wait for a concurrency slot. A job cancelled or shut down while
@@ -254,6 +257,9 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 		defer func() { <-s.sem }()
 	case <-ctx.Done():
 		job.State = StateCancelled
+		if errors.Is(context.Cause(ctx), ErrShutdown) {
+			job.State, job.Error = StateAborted, shutdownAbortMsg
+		}
 		job.FinishedAt = time.Now()
 		s.persistAndPublish(context.WithoutCancel(ctx), &job)
 
@@ -329,6 +335,10 @@ func (s *Scheduler) run(ctx context.Context, cancel context.CancelFunc, job Job,
 	reportMu.Lock()
 	job.FinishedAt = time.Now()
 	switch {
+	case errors.Is(context.Cause(ctx), ErrShutdown):
+		// Not the user's choice: the server is stopping. Aborted, like
+		// a job a hard stop leaves behind, so the UI says so.
+		job.State, job.Error = StateAborted, shutdownAbortMsg
 	case errors.Is(ctx.Err(), context.Canceled):
 		job.State = StateCancelled
 		if err != nil {

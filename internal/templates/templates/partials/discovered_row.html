@@ -72,6 +72,12 @@
             {{truncate 140 (firstLine .Error)}}
         </div>
         {{end}}
+        {{if and (not $busy) (not .State.IsLoaded) .LatestJob (eq (printf "%s" .LatestJob.State) "cancelled")}}
+        <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">Build cancelled {{formatTimeRelative .LatestJob.FinishedAt}}</div>
+        {{end}}
+        {{if and (not $busy) (not .State.IsLoaded) (not .Error) .LatestJob (eq (printf "%s" .LatestJob.State) "aborted")}}
+        <div class="mt-1 text-xs text-amber-700 dark:text-amber-300" title="{{.LatestJob.Error}}">Build interrupted by a server restart</div>
+        {{end}}
         {{if gt .AutoLoadFailureCount 0}}
         <div class="text-xs text-red-600 dark:text-red-400 mt-1" title="{{if .Error}}{{.Error}}{{else}}Auto-load failed{{end}}">
             Auto-load failed ({{.AutoLoadFailureCount}}× — retry after {{.AutoLoadBackoffUntil}})

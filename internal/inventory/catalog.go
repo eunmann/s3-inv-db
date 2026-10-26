@@ -334,6 +334,17 @@ func (c *Catalog) finishLoadLocked(ctx context.Context, id ID, idx *indexread.In
 	}
 
 	switch {
+	case ctx.Err() != nil || errors.Is(buildErr, context.Canceled):
+		// Cancelled (by the user, or by shutdown): nothing went wrong
+		// with the run, so it is simply not loaded, not in error. The
+		// job records the cancellation.
+		if idx != nil {
+			idx.Close()
+		}
+		inv.info.State = StateNotLoaded
+		inv.info.Error = ""
+
+		return c.stageLocked(inv.info), fmt.Errorf("load cancelled: %w", context.Canceled)
 	case buildErr != nil:
 		inv.info.State = StateError
 		inv.info.Error = buildErr.Error()
@@ -344,12 +355,6 @@ func (c *Catalog) finishLoadLocked(ctx context.Context, id ID, idx *indexread.In
 		inv.info.Error = openErr.Error()
 
 		return c.stageLocked(inv.info), fmt.Errorf("open index: %w", openErr)
-	case ctx.Err() != nil:
-		idx.Close()
-		inv.info.State = StateError
-		inv.info.Error = ctx.Err().Error()
-
-		return c.stageLocked(inv.info), fmt.Errorf("load cancelled: %w", ctx.Err())
 	}
 
 	// No reader can hold this inventory's index: state was StateLoading,

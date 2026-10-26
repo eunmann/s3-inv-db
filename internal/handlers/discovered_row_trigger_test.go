@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
@@ -63,6 +64,17 @@ func TestDiscoveredRowPartial_LiveWiring(t *testing.T) {
 			name: "loaded run",
 			view: row(inventory.StateLoaded, &jobs.Job{ID: "j4", Kind: jobs.KindBuild, State: jobs.StateSucceeded}),
 			want: []string{`data-job-state="succeeded"`},
+		},
+		{
+			// A cancel is the user's choice, not an error: a quiet note.
+			name: "cancelled build",
+			view: row(inventory.StateNotLoaded, &jobs.Job{ID: "j5", Kind: jobs.KindBuild, State: jobs.StateCancelled, FinishedAt: time.Now()}),
+			want: []string{`data-job-state="cancelled"`, "Build cancelled just now"},
+		},
+		{
+			name: "build stopped by a shutdown",
+			view: row(inventory.StateNotLoaded, &jobs.Job{ID: "j6", Kind: jobs.KindBuild, State: jobs.StateAborted, Error: "interrupted: the server shut down"}),
+			want: []string{"Build interrupted by a server restart"},
 		},
 		{
 			name: "never-built run",

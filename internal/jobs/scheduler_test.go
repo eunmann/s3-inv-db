@@ -429,7 +429,7 @@ func TestManager_NilStoreIsNoop(t *testing.T) {
 	t.Fatalf("job %s never finished", job.ID)
 }
 
-func TestManager_ShutdownCancelsLiveJob(t *testing.T) {
+func TestManager_ShutdownAbortsLiveJob(t *testing.T) {
 	sched, store, _ := newScheduler(t)
 
 	started := make(chan struct{})
@@ -454,7 +454,9 @@ func TestManager_ShutdownCancelsLiveJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if final.State != jobs.StateCancelled && final.State != jobs.StateFailed {
-		t.Errorf("post-shutdown job state = %s, want cancelled or failed", final.State)
+	// Aborted, not cancelled: the user didn't stop it, the server did,
+	// and the UI tells the two apart.
+	if final.State != jobs.StateAborted || final.Error == "" {
+		t.Errorf("post-shutdown job state = %s (%q), want aborted with a reason", final.State, final.Error)
 	}
 }
