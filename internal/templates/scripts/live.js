@@ -262,15 +262,18 @@
 
     // setConnected records the stream's state; the notice appears only
     // once it has been down a few seconds, so a reconnect blip doesn't
-    // flash it, and never while the stream is closed on purpose.
+    // flash it, and never while the stream is closed on purpose. The
+    // timer is armed once per outage: the browser retries a dropped
+    // stream every couple of seconds, each retry failing with another
+    // error, and re-arming on each would keep the notice from showing.
     function setConnected(on) {
         connected = on;
-        clearTimeout(statusTimer);
-        statusTimer = null;
-        if (!on && !paused) {
-            statusTimer = setTimeout(function () { showStatus(true); }, 3000);
-        } else {
+        if (on || paused) {
+            clearTimeout(statusTimer);
+            statusTimer = null;
             showStatus(false);
+        } else if (statusTimer === null) {
+            statusTimer = setTimeout(function () { showStatus(true); }, 3000);
         }
     }
 
