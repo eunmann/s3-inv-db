@@ -3,6 +3,7 @@ package extsort
 import (
 	"io"
 	"sync"
+	"sync/atomic"
 )
 
 // prefetchBatchRows and prefetchBuffers size the prefetcher: four
@@ -27,6 +28,9 @@ type prefetchIterator struct {
 	wg        sync.WaitGroup
 	stopOnce  sync.Once
 	remaining uint64
+	// inputLeft is inner.Remaining() as of the last batch the prefetch
+	// goroutine read, for progress reported from the consumer side.
+	inputLeft atomic.Uint64
 	idx       int
 	started   bool
 }
@@ -40,14 +44,22 @@ type rowBatch struct {
 
 // newPrefetchIterator wraps inner; nothing runs until the first Next.
 func newPrefetchIterator(inner RowIterator) *prefetchIterator {
-	return &prefetchIterator{
+	p := &prefetchIterator{
 		inner:     inner,
 		full:      make(chan rowBatch, prefetchBuffers-2),
 		free:      make(chan []PrefixRow, prefetchBuffers),
 		done:      make(chan struct{}),
 		remaining: inner.Remaining(),
 	}
+	p.inputLeft.Store(p.remaining)
+
+	return p
 }
+
+// inputRemaining is inner's Remaining as of the last batch read ahead:
+// how much of the merge's input is left, at most a few batches stale.
+// Safe to call from any goroutine.
+func (p *prefetchIterator) inputRemaining() uint64 { return p.inputLeft.Load() }
 
 func (p *prefetchIterator) run() {
 	defer close(p.full)
@@ -69,6 +81,7 @@ func (p *prefetchIterator) run() {
 			}
 			rows = append(rows, *row)
 		}
+		p.inputLeft.Store(p.inner.Remaining())
 		select {
 		case p.full <- rowBatch{rows: rows, err: err}:
 		case <-p.done:

@@ -39,9 +39,12 @@ type Pipeline struct {
 	chunksProcessed  atomic.Int64
 	objectsProcessed atomic.Int64
 	bytesProcessed   atomic.Int64
-	flushCount       atomic.Int64
-	presentTierMask  atomic.Uint32
-	runFilesMu       sync.Mutex
+	// ingestBytesDone counts the manifest chunks' compressed bytes
+	// parsed so far, for "downloading" progress.
+	ingestBytesDone atomic.Int64
+	flushCount      atomic.Int64
+	presentTierMask atomic.Uint32
+	runFilesMu      sync.Mutex
 }
 
 // presentTiers expands the tier mask accumulated across all ingest
@@ -119,8 +122,9 @@ func (p *Pipeline) timedIngestPhase(ctx context.Context, log *zerolog.Logger, ma
 }
 
 // timedMergeBuildPhase wraps runMergeBuildPhase with start/end events.
+// runMergeBuildPhase sets the "merging" and "building" phases itself,
+// once it knows whether disk merge rounds come first.
 func (p *Pipeline) timedMergeBuildPhase(ctx context.Context, log *zerolog.Logger, outDir string) (mergeBuildResult, time.Duration, error) {
-	p.setPhase("building")
 	p.publish(events.Event{Stage: events.StagePipeline, Type: events.EvtStageStart, Payload: events.StageTiming{Stage: events.StageMerge}})
 	start := time.Now()
 	res, err := p.runMergeBuildPhase(ctx, outDir)
@@ -512,7 +516,7 @@ func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
 
 	var fetchers, wg sync.WaitGroup
 	errCh := make(chan error, cfg.numWorkers)
-	p.startIngestProgressLogger(ctx, log, totalChunks)
+	p.startIngestProgressLogger(ctx, log, totalChunks, manifestBytes(cfg.manifest.Files))
 
 	for range cfg.numWorkers {
 		fetchers.Go(func() { p.runChunkFetcher(ctx, jobs, ready) })
@@ -570,19 +574,19 @@ func firstCause(errs <-chan error) error {
 	return cancelled
 }
 
-// startIngestProgressLogger starts a background goroutine that logs
-// per-N-chunk progress based on the atomic counters. Returns a
-// channel that the caller closes to stop the logger.
-// StartIngestProgressLogger launches a background ticker that emits a
-// progress event roughly every 10% of total chunks. The goroutine
-// exits when ctx is cancelled — the caller doesn't need a separate
-// stop signal because the ingest loop's parent ctx is already cancelled
-// on function return (via the deferred cancel paired with the
-// errgroup).
-func (p *Pipeline) startIngestProgressLogger(ctx context.Context, log *zerolog.Logger, totalChunks int) {
+// startIngestProgressLogger launches a background ticker that reports
+// "downloading" progress every 500ms and logs it roughly every 10% of
+// total chunks. Progress counts the manifest's compressed bytes parsed
+// so far when every chunk's size is known (totalBytes > 0), so a
+// manifest of a few large chunks, all in flight at once, still moves
+// smoothly; otherwise it counts finished chunks. The goroutine exits
+// when ctx is cancelled — the ingest loop's parent ctx is cancelled on
+// function return (via the deferred cancel paired with the errgroup).
+func (p *Pipeline) startIngestProgressLogger(ctx context.Context, log *zerolog.Logger, totalChunks int, totalBytes int64) {
 	progressInterval := max(totalChunks/10, 1)
 	go func() {
 		var lastLogged int
+		var lastDone int64
 		const tickInterval = 500 * time.Millisecond
 		ticker := time.NewTicker(tickInterval)
 		defer ticker.Stop()
@@ -592,17 +596,54 @@ func (p *Pipeline) startIngestProgressLogger(ctx context.Context, log *zerolog.L
 				return
 			case <-ticker.C:
 				chunkNum := int(p.chunksProcessed.Load())
-				if chunkNum == 0 || chunkNum == lastLogged {
-					continue
+				done, total := int64(chunkNum), int64(totalChunks)
+				if totalBytes > 0 {
+					done, total = min(p.ingestBytesDone.Load(), totalBytes), totalBytes
 				}
-				p.reportProgress("downloading", int64(chunkNum), int64(totalChunks))
-				if chunkNum-lastLogged >= progressInterval || chunkNum == totalChunks {
+				if done > 0 && done != lastDone {
+					p.reportProgress("downloading", done, total)
+					lastDone = done
+				}
+				if chunkNum > 0 && (chunkNum-lastLogged >= progressInterval || (chunkNum == totalChunks && chunkNum != lastLogged)) {
 					p.logIngestProgress(log, chunkNum, totalChunks)
 					lastLogged = chunkNum
 				}
 			}
 		}
 	}()
+}
+
+// manifestBytes sums the manifest's chunk sizes, or returns 0 when any
+// is unknown, so progress falls back to counting chunks.
+func manifestBytes(files []s3fetch.ManifestFile) int64 {
+	var total int64
+	for _, f := range files {
+		if f.Size <= 0 {
+			return 0
+		}
+		total += f.Size
+	}
+
+	return total
+}
+
+// countingReadCloser adds the bytes read through it to a shared
+// progress counter. It sits under the CSV reader's 1 MiB input buffer,
+// so the atomic add runs once per buffer fill, not per row.
+type countingReadCloser struct {
+	io.ReadCloser
+	total *atomic.Int64
+	n     int64
+}
+
+func (c *countingReadCloser) Read(b []byte) (int, error) {
+	n, err := c.ReadCloser.Read(b)
+	if n > 0 {
+		c.n += int64(n)
+		c.total.Add(int64(n))
+	}
+
+	return n, err //nolint:wrapcheck // a transparent io.Reader wrapper; io.EOF must pass unwrapped
 }
 
 // sendIngestJobs sends chunk jobs to workers.
@@ -780,10 +821,18 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, fetched fetche
 	parseStart := time.Now()
 	var err error
 	var reader s3inventory.Reader
+	// A CSV chunk is read front to back, so the bytes read are its parse
+	// progress; Parquet reads at offsets and counts when the chunk ends.
+	counted := &countingReadCloser{ReadCloser: body, total: &p.ingestBytesDone}
+	defer func() {
+		if rest := job.config.fileSize - counted.n; rest > 0 {
+			p.ingestBytesDone.Add(rest)
+		}
+	}()
 	if job.config.format == s3fetch.InventoryFormatParquet {
 		reader, err = openParquetReader(body, job.config.fileSize, p.tempDir)
 	} else {
-		reader, err = s3inventory.NewCSVReaderFromStream(body, job.key, s3inventory.CSVReaderConfig{
+		reader, err = s3inventory.NewCSVReaderFromStream(counted, job.key, s3inventory.CSVReaderConfig{
 			KeyCol:          job.config.keyCol,
 			SizeCol:         job.config.sizeCol,
 			StorageCol:      job.config.storageCol,
@@ -1036,7 +1085,7 @@ func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRu
 		TempDir:          p.tempDir,
 		CompressionLevel: CompressionFastest,
 		OnRoundComplete: func(round, remaining int) {
-			p.reportProgress("building", int64(numRunFiles-remaining), int64(numRunFiles))
+			p.reportProgress("merging", int64(numRunFiles-remaining), int64(numRunFiles))
 			p.publish(events.Event{
 				Stage: events.StageMerge,
 				Type:  events.EvtRoundCompleted,
@@ -1047,6 +1096,11 @@ func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRu
 			})
 		},
 	})
+	// Disk rounds come first only when there are more runs than the
+	// final merge reads; they are their own phase in the progress UI.
+	if numRunFiles > parallelMerger.config.FinalFanIn {
+		p.setPhase("merging")
+	}
 	iter, mergerCleanup, err := parallelMerger.mergeAllToIterator(ctx, p.runFiles, p.memRuns)
 	if err != nil {
 		return nil, nil, MergeStatistics{}, fmt.Errorf("parallel merge: %w", err)
@@ -1075,6 +1129,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	}
 
 	if len(p.runFiles) == 0 && len(p.memRuns) == 0 {
+		p.setPhase("building")
 		log.Info().Msg("no run files to merge, creating empty index")
 		builder, err := NewIndexBuilder(outDir, p.tempDir)
 		if err != nil {
@@ -1107,6 +1162,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	if err != nil {
 		return mergeBuildResult{}, err
 	}
+	p.setPhase("building")
 
 	defer func() {
 		if cleanupErr := cleanupIntermediates(); cleanupErr != nil {
@@ -1137,10 +1193,16 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	// dominant fraction of wall clock for large inventories) until the
 	// next merge round fires — sometimes never, if all run files merged
 	// in a single round. Power-of-two interval lets the AND short-circuit.
+	// Progress counts the merge's input rows consumed, not prefixes
+	// written: prefixCount sums every run's rows, so a prefix in N runs
+	// counts N times and prefixes written stop well short of it, while
+	// the input consumed reaches it exactly at the end.
 	progressIter := &reportingIterator{
-		inner:       prefetch,
-		total:       int64(prefixCount),
-		onProgress:  func(done, total int64) { p.reportProgress("building", done, total) },
+		inner: prefetch,
+		total: int64(prefixCount),
+		onProgress: func(_, total int64) {
+			p.reportProgress("building", total-int64(prefetch.inputRemaining()), total)
+		},
 		reportEvery: indexBuildProgressInterval,
 	}
 	if err := p.buildIndex(ctx, builder, progressIter); err != nil {
@@ -1193,7 +1255,8 @@ func (p *Pipeline) fillAndFinalize(ctx context.Context, builder *IndexBuilder, r
 const indexBuildProgressInterval int64 = 1 << 17
 
 // reportingIterator wraps a RowIterator and fires onProgress every
-// reportEvery successful Next() calls (must be a power of two). Pass-
+// reportEvery successful Next() calls (must be a power of two), and
+// once more at the end of the input. Pass-
 // through on errors.
 type reportingIterator struct {
 	inner       RowIterator
@@ -1201,6 +1264,7 @@ type reportingIterator struct {
 	done        int64
 	total       int64
 	reportEvery int64
+	ended       bool
 }
 
 func (p *reportingIterator) Next() (*PrefixRow, error) {
@@ -1210,6 +1274,11 @@ func (p *reportingIterator) Next() (*PrefixRow, error) {
 		if p.done&(p.reportEvery-1) == 0 {
 			p.onProgress(p.done, p.total)
 		}
+	}
+	if errors.Is(err, io.EOF) && !p.ended {
+		// The end, so the stage's last report is its true total.
+		p.ended = true
+		p.onProgress(p.done, p.total)
 	}
 	if err != nil {
 		return row, fmt.Errorf("reporting iterator: %w", err)
