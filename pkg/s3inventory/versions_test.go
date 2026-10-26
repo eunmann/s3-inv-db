@@ -45,6 +45,10 @@ func readAllRows(t *testing.T, r s3inventory.Reader) []s3inventory.Row {
 		if err != nil {
 			t.Fatalf("Next: %v", err)
 		}
+		// The row's strings view the reader's buffers until the next call.
+		row.Key = strings.Clone(row.Key)
+		row.StorageClass = strings.Clone(row.StorageClass)
+		row.AccessTier = strings.Clone(row.AccessTier)
 		out = append(out, row)
 	}
 }
