@@ -193,6 +193,7 @@ func TestRunDrawer_OpenShellHasLiveWiringAndPushURL(t *testing.T) {
 		`hx-trigger="live-refresh"`,
 		`hx-get="/partials/drawer/b/i/r?refresh=1"`,
 		`hx-select="#run-drawer-body"`,
+		`hx-disinherit="*"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("open shell missing %s\n%s", want, body)

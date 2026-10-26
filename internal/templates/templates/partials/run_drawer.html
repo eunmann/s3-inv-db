@@ -8,7 +8,10 @@
        so the handler doesn't push another history entry. live.js
        updates the bar, progress line and clocks in place and fires
        live-refresh when the job changes state or stage; while it runs,
-       a 3s poll keeps the timeline's counters current. */ -}}
+       a 3s poll keeps the timeline's counters current. hx-disinherit
+       keeps those refresh attributes off the buttons inside: inherited,
+       hx-select would filter Close's response down to nothing and
+       remove the drawer. */ -}}
 <aside id="run-drawer" data-open
        class="fixed top-16 right-0 h-[calc(100vh-4rem)] w-96 max-w-[90vw] bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 shadow-xl z-40 overflow-y-auto translate-x-0 transition-transform duration-200"
        role="dialog" aria-labelledby="run-drawer-title">
@@ -21,6 +24,7 @@
      hx-select="#run-drawer-body"
      hx-trigger="live-refresh{{if .Live}}, every 3s{{end}}"
      hx-sync="this:queue last"
+     hx-disinherit="*"
      hx-swap="outerHTML">
     <header class="space-y-1.5">
         <div class="flex items-start gap-2">
