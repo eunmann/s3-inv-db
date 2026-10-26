@@ -146,9 +146,9 @@ func (l *Loader) fetchPublished(ctx context.Context, key inventory.CacheKey, out
 	if err != nil {
 		return fmt.Errorf("stage published index: %w", err)
 	}
-	onProgress("downloading", 0, 0)
+	onProgress("fetching", 0, 0)
 	err = l.published.Fetch(ctx, prefix, stage, func(done, total uint64) {
-		onProgress("downloading", int64(done), int64(total))
+		onProgress("fetching", int64(done), int64(total))
 	})
 	if err != nil {
 		return errors.Join(err, os.RemoveAll(stage))

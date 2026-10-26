@@ -73,8 +73,8 @@ func TestBuildWith_FetchesAPublishedIndex(t *testing.T) {
 		t.Errorf("data/ = %+v (%v), want 500 objects", s, ok)
 	}
 	_ = idx.Close()
-	if len(stages) < 2 || stages[1] != "downloading" {
-		t.Errorf("stages = %v, want preparing then downloading", stages)
+	if len(stages) < 2 || stages[1] != "fetching" {
+		t.Errorf("stages = %v, want preparing then fetching", stages)
 	}
 
 	missing := inventory.CacheKey{SourceBucket: "src-bucket", InventoryID: "daily", Run: "2026-10-25T01-00Z"}
