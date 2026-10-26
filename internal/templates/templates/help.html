@@ -179,7 +179,8 @@
             <section id="cost-model">
                 <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-3">Cost estimates</h2>
                 <p>
-                    Monthly costs are estimates of storage only, from one price table (us-east-1). They are meant to make
+                    Monthly costs are estimates of storage only, from the server's price table: us-east-1 prices unless
+                    whoever runs the server configured another. They are meant to make
                     prefixes, storage classes and runs comparable, not to reproduce your bill. For each storage class
                     present at a prefix:
                 </p>
@@ -273,8 +274,9 @@
                 </p>
                 <p class="mt-3">
                     The server has a disk limit for indexes. To make room for a new run it first removes runs past an
-                    inventory's retention, then the runs used least recently. It never removes a pinned run or one that
-                    is being read. A run you unload by hand is skipped by auto-load until a newer run appears.
+                    inventory's retention, then the runs used least recently. It never removes a pinned run. A run that is
+                    removed stops answering once the pages already being served finish, so an open Browse or Compare view
+                    of it needs the run loaded again. A run you unload by hand is skipped by auto-load until a newer run appears.
                 </p>
             </section>
 
@@ -332,7 +334,7 @@
                     </div>
                     <div class="py-4" data-search-target="disk space full load refused">
                         <dt class="font-semibold text-gray-900 dark:text-gray-100">A build failed: "Not enough room in the index disk budget".</dt>
-                        <dd class="mt-1">The index disk is full of runs that can't be removed (pinned or in use). Unpin or unload runs you no longer need, then load again. Whoever runs the server can also raise its disk limit.</dd>
+                        <dd class="mt-1">The run doesn't fit in the index disk limit even after removing every run that may be removed: the rest are pinned, or the run is larger than the whole limit. Unpin runs you no longer need, then load again. If nothing is pinned, the limit is too small for this run and whoever runs the server must raise it.</dd>
                     </div>
                     <div class="py-4" data-search-target="stuck time left progress slow">
                         <dt class="font-semibold text-gray-900 dark:text-gray-100">A build looks stuck.</dt>
@@ -344,7 +346,7 @@
                     </div>
                     <div class="py-4" data-search-target="inventories list empty no runs">
                         <dt class="font-semibold text-gray-900 dark:text-gray-100">The Inventories page lists nothing.</dt>
-                        <dd class="mt-1">No inventory report has been published at the location the server watches yet. AWS writes the first report within 48 hours of setting up an inventory. Click <strong>Refresh</strong> to check again.</dd>
+                        <dd class="mt-1">{{if .HasDiscovery}}No inventory report has been published at the location the server watches yet. AWS writes the first report within 48 hours of setting up an inventory. Click <strong>Refresh</strong> to check again.{{else}}This server has no inventory source configured, so it finds nothing to list. Whoever runs it must start it with <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">--s3-source</code> or <code class="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono text-[0.85em]">--index-source</code>.{{end}}</dd>
                     </div>
                     <div class="py-4" data-search-target="browse compare run missing not listed select">
                         <dt class="font-semibold text-gray-900 dark:text-gray-100">A run isn't listed on Browse or Compare.</dt>
