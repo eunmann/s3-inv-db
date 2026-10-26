@@ -13,7 +13,9 @@ type Notification struct {
 	Kind    string    `json:"kind"`
 	Title   string    `json:"title"`
 	Message string    `json:"message"`
-	Target  string    `json:"target,omitempty"`
+	// Summary is Message as one sentence a user can act on.
+	Summary string `json:"summary,omitempty"`
+	Target  string `json:"target,omitempty"`
 }
 
 // NotificationsResponse is the JSON the banner consumes.
@@ -34,6 +36,7 @@ func (h *Handlers) collectNotifications(ctx context.Context) []Notification {
 				Kind:    "poll",
 				Title:   "Discovery poll failed",
 				Message: c.LastPollError,
+				Summary: summarizeBuildError(c.LastPollError),
 				Target:  c.Source + "/" + c.Name,
 				At:      c.LastPolledAt,
 			})
@@ -53,6 +56,7 @@ func (h *Handlers) collectNotifications(ctx context.Context) []Notification {
 			Kind:    "load",
 			Title:   title,
 			Message: info.Error,
+			Summary: summarizeBuildError(info.Error),
 			Target:  string(info.ID),
 			At:      info.LastAutoLoadFailedAt,
 		})

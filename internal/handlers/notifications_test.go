@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,5 +67,41 @@ func TestNotifications_OrderedByFailureTimeNotFutureBackoff(t *testing.T) {
 	}
 	if resp.Notifications[1].Kind != "load" {
 		t.Errorf("second notification kind = %q, want load (older failure)", resp.Notifications[1].Kind)
+	}
+}
+
+// TestNotificationsPartial_SummarizesFailures: the banner reads an
+// auto-load failure as one sentence and keeps the raw error folded
+// under Technical details; the API adds the summary beside the raw
+// message.
+func TestNotificationsPartial_SummarizesFailures(t *testing.T) {
+	h := newTestHandlers(t)
+	const invID inventory.ID = "src/inv/2026-10-24T03-00Z"
+	if err := h.ManagerForTest().Register(t.Context(), invID, "inv", "/path"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.ManagerForTest().RecordAutoLoadFailure(t.Context(), invID, missingChunkErr, time.Now(), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.NotificationsPartial(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/partials/notifications", http.NoBody))
+	doc := parseHTMLFragment(t, w.Body.String())
+	item := doc.Find("li")
+	if !strings.Contains(item.Children().Eq(1).Text(), "An inventory data file is missing from S3") {
+		t.Errorf("banner item doesn't lead with the summary: %q", item.Text())
+	}
+	tech := item.Find("details")
+	if !strings.Contains(tech.Find("summary").Text(), "Technical details") || !strings.Contains(tech.Text(), "RequestID") {
+		t.Error("raw error isn't folded under Technical details")
+	}
+
+	aw := httptest.NewRecorder()
+	h.NotificationsAPI(aw, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/notifications", http.NoBody))
+	var resp handlers.NotificationsResponse
+	if err := json.NewDecoder(aw.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Notifications) != 1 || resp.Notifications[0].Message != missingChunkErr || !strings.HasPrefix(resp.Notifications[0].Summary, "An inventory data file") {
+		t.Errorf("API notification %+v", resp.Notifications)
 	}
 }
