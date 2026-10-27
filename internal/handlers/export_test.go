@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eunmann/s3-inv-db/internal/budget"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
 )
@@ -154,4 +155,12 @@ func (h *Handlers) SSETrackedIPsForTest() int {
 	defer h.sseMu.Unlock()
 
 	return len(h.sseConnsByIP)
+}
+
+// DiskForTest is the dashboard's index disk view for a tracker.
+func DiskForTest(tracker *budget.Tracker) DashboardDisk {
+	var data DashboardData
+	(&Handlers{tracker: tracker}).fillDisk(&data)
+
+	return data.Disk
 }
