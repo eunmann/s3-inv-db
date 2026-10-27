@@ -35,9 +35,14 @@
 }
 
 /* With the run drawer open on a wide screen, make room for it rather
-   than covering the rows' Actions column. */
+   than covering the rows' Actions column. The left margin stays where
+   mx-auto centred the page (max-w-7xl is 80rem), so the page narrows
+   from the right instead of jumping sideways. */
 @media (min-width: 1024px) {
-    body:has(#run-drawer[data-open]) #main-content { margin-right: 24rem; }
+    body:has(#run-drawer[data-open]) #main-content {
+        margin-left: max(0px, calc((100% - 80rem) / 2));
+        margin-right: max(24rem, calc((100% - 80rem) / 2));
+    }
 }
 
 /* Browse and compare: dim the level being replaced while its request

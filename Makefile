@@ -212,7 +212,8 @@ docker-build: css ## Build dev + prod images
 	$(COMPOSE) --profile dev --profile prod build
 
 # Hot-reload server (port 8080). The only supported dev workflow — no host
-# binary path. Override port with S3INV_DEV_PORT=...
+# binary path. Override port with S3INV_DEV_PORT=..., the index disk
+# budget (default 8GB) with S3INV_DEV_MAX_INDEX_DISK=...
 dev: compose-preflight ## Hot-reload server + local S3 (the dev loop)
 	$(COMPOSE) --profile dev up --build
 

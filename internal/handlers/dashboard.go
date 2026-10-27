@@ -24,7 +24,7 @@ type DashboardData struct {
 	// Total sums each configuration's latest loaded run; nil when none
 	// is loaded.
 	Total          *DashboardTotal
-	Budget         *DashboardBudget
+	Disk           DashboardDisk
 	Title          string
 	DiscoveryError string
 	SnapshotAge    string
@@ -95,13 +95,23 @@ func plural(n int, one, many string) string {
 	return strconv.Itoa(n) + " " + many
 }
 
-// DashboardBudget is the index disk budget: a short line and bar, the
+// DashboardDisk is the disk the loaded indexes use, against the
+// max_index_disk budget when one is set: a short figure and bar, the
 // detail in Detail.
-type DashboardBudget struct {
-	UsedH  string
-	CapH   string
+type DashboardDisk struct {
+	UsedH string
+	// CapH is empty when no budget is set.
+	CapH string
+	// ReservedH is empty when no build holds a reservation.
+	ReservedH string
+	// PctH is the share of the budget on disk ("12%", "<1%").
+	PctH   string
 	Detail string
-	Pct    int
+	// UsedPct and ReservedPct size the bar's two segments; together at
+	// most 100. Pct is their sum and colours the bar.
+	UsedPct     int
+	ReservedPct int
+	Pct         int
 }
 
 // Dashboard renders the dashboard HTML page.
@@ -112,7 +122,7 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 		HasDiscovery:    h.discovery.Enabled(),
 		AutoLoadRunning: h.autoLoadRunning,
 	}
-	h.fillBudget(&data)
+	h.fillDisk(&data)
 	if !data.HasDiscovery {
 		h.renderHTML(w, r, "dashboard.html", "failed to render dashboard", data)
 
@@ -254,20 +264,31 @@ func sumLatestLoaded(configs []DashboardConfig) *DashboardTotal {
 	return t
 }
 
-func (h *Handlers) fillBudget(data *DashboardData) {
-	capBytes := h.tracker.Cap()
+func (h *Handlers) fillDisk(data *DashboardData) {
+	used, capBytes := h.tracker.Used(), h.tracker.Cap()
+	data.Disk = DashboardDisk{UsedH: humanfmt.BytesUint64(used)}
 	if capBytes == 0 {
+		data.Disk.Detail = data.Disk.UsedH + " of loaded indexes on disk. No max_index_disk is set, " +
+			"so runs are never unloaded to free space."
+
 		return
 	}
-	used, reserved := h.tracker.Used(), h.tracker.Reserved()
-	data.Budget = &DashboardBudget{
-		UsedH: humanfmt.BytesUint64(used),
-		CapH:  humanfmt.BytesUint64(capBytes),
-		Pct:   min(100, int(float64(used+reserved)/float64(capBytes)*100)),
-		Detail: humanfmt.BytesUint64(used) + " used + " + humanfmt.BytesUint64(reserved) + " reserved for builds of " +
-			humanfmt.BytesUint64(capBytes) + " (" + humanfmt.BytesUint64(h.tracker.Available()) + " available, " +
-			humanfmt.BytesUint64(h.tracker.Headroom()) + " headroom)",
+	reserved := h.tracker.Reserved()
+	d := &data.Disk
+	d.CapH = humanfmt.BytesUint64(capBytes)
+	if reserved > 0 {
+		d.ReservedH = humanfmt.BytesUint64(reserved)
 	}
+	d.UsedPct = min(100, int(float64(used)/float64(capBytes)*100))
+	d.ReservedPct = min(100-d.UsedPct, int(float64(reserved)/float64(capBytes)*100))
+	d.Pct = d.UsedPct + d.ReservedPct
+	d.PctH = strconv.Itoa(d.UsedPct) + "%"
+	if d.UsedPct == 0 && used > 0 {
+		d.PctH = "<1%"
+	}
+	d.Detail = d.UsedH + " used + " + humanfmt.BytesUint64(reserved) + " reserved for builds of " +
+		d.CapH + " (" + humanfmt.BytesUint64(h.tracker.Available()) + " available, " +
+		humanfmt.BytesUint64(h.tracker.Headroom()) + " headroom)"
 }
 
 func (h *Handlers) fillAutoLoad(ctx context.Context, data *DashboardData) {

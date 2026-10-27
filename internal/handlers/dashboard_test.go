@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/eunmann/s3-inv-db/internal/budget"
 	"github.com/eunmann/s3-inv-db/internal/handlers"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
@@ -194,31 +195,82 @@ func TestDashboard_ReadsTotalsWithoutTouchingRuns(t *testing.T) {
 	}
 }
 
-// TestDashboard_BudgetLine: the disk budget is one short line and a
-// bar; the detail is in its title.
-func TestDashboard_BudgetLine(t *testing.T) {
+// TestDashboard_IndexDisk: System status shows the disk the loaded
+// indexes use; with a budget, of how much, the share and a bar whose
+// second segment is what builds have reserved. The detail is in the
+// title.
+func TestDashboard_IndexDisk(t *testing.T) {
 	r, err := templates.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var buf bytes.Buffer
-	data := handlers.DashboardData{Title: "Dashboard", HasDiscovery: true, Budget: &handlers.DashboardBudget{
-		UsedH: "174 MiB", CapH: "4.66 GiB", Pct: 3, Detail: "174 MiB used + 0 B reserved for builds of 4.66 GiB",
-	}}
-	if err := r.Render(&buf, "dashboard.html", data); err != nil {
-		t.Fatal(err)
+	render := func(t *testing.T, disk handlers.DashboardDisk) *goquery.Selection {
+		t.Helper()
+		var buf bytes.Buffer
+		if err := r.Render(&buf, "dashboard.html", handlers.DashboardData{Title: "Dashboard", HasDiscovery: true, Disk: disk}); err != nil {
+			t.Fatal(err)
+		}
+
+		return parseHTML(t, buf.String()).Find(`dt:contains("Index disk")`).Parent()
 	}
-	doc := parseHTML(t, buf.String())
-	line := doc.Find(`p:contains("Index disk:")`)
-	if got := squash(line.Text()); got != "Index disk: 174 MiB of 4.66 GiB used" {
-		t.Errorf("budget line %q", got)
+	lines := func(stat *goquery.Selection) string {
+		return strings.Join(stat.Find("dd").Map(func(_ int, dd *goquery.Selection) string { return squash(dd.Text()) }), " | ")
 	}
-	if !strings.Contains(line.Parent().AttrOr("title", ""), "reserved") {
-		t.Error("budget detail isn't in the title")
-	}
-	if doc.Find(`[role="progressbar"][aria-valuenow="3"]`).Length() != 1 {
-		t.Error("budget bar missing")
-	}
+
+	t.Run("budget", func(t *testing.T) {
+		const gib = 1 << 30
+		disk := handlers.DiskForTest(budget.New(10*gib, gib, func() uint64 { return gib }))
+		stat := render(t, disk)
+		if got := lines(stat); got != "1.00 GiB of 10.00 GiB | 10%" {
+			t.Errorf("disk stat %q", got)
+		}
+		if !strings.Contains(stat.AttrOr("title", ""), "headroom") {
+			t.Errorf("detail isn't in the title: %q", stat.AttrOr("title", ""))
+		}
+		if stat.Find(`[role="progressbar"][aria-valuenow="10"]`).Length() != 1 {
+			t.Error("disk bar missing")
+		}
+	})
+
+	t.Run("reserved", func(t *testing.T) {
+		const gib = 1 << 30
+		tracker := budget.New(10*gib, 0, func() uint64 { return 7 * gib })
+		if err := tracker.Reserve("build", 2*gib); err != nil {
+			t.Fatal(err)
+		}
+		disk := handlers.DiskForTest(tracker)
+		if disk.UsedPct != 70 || disk.ReservedPct != 20 || disk.Pct != 90 {
+			t.Errorf("bar %d%% + %d%% = %d%%, want 70 + 20 = 90", disk.UsedPct, disk.ReservedPct, disk.Pct)
+		}
+		stat := render(t, disk)
+		if !strings.Contains(squash(stat.Text()), "+ 2.00 GiB reserved for builds") {
+			t.Errorf("reservation not shown: %q", squash(stat.Text()))
+		}
+		if stat.Find(".bg-red-500").Length() != 1 {
+			t.Error("a budget 90% committed isn't red")
+		}
+	})
+
+	t.Run("under one percent", func(t *testing.T) {
+		disk := handlers.DiskForTest(budget.New(1<<40, 0, func() uint64 { return 1 << 20 }))
+		if disk.PctH != "<1%" {
+			t.Errorf("PctH %q, want <1%%", disk.PctH)
+		}
+	})
+
+	t.Run("no budget", func(t *testing.T) {
+		disk := handlers.DiskForTest(budget.New(0, 0, func() uint64 { return 3 << 20 }))
+		stat := render(t, disk)
+		if got := lines(stat); got != "3.00 MiB | No limit set" {
+			t.Errorf("disk stat %q", got)
+		}
+		if stat.Find(`[role="progressbar"]`).Length() != 0 {
+			t.Error("a bar without a budget")
+		}
+		if !strings.Contains(stat.AttrOr("title", ""), "max_index_disk") {
+			t.Errorf("title doesn't say how to set a limit: %q", stat.AttrOr("title", ""))
+		}
+	})
 }
 
 func TestRunDateLabelAndDelta(t *testing.T) {

@@ -60,8 +60,10 @@ services:
       context: ..
       dockerfile: infra/Dockerfile.dev
     # Air rebuilds the binary on source changes; arguments after `--`
-    # are forwarded to the rebuilt server binary on every restart.
-    command: ["air", "-c", ".air.toml", "--", "--s3-source=s3://s3-inv/inventory-data/", "--cache-dir=/cache"]
+    # are forwarded to the rebuilt server binary on every restart. The
+    # disk budget is set so the dev loop shows it as deployments do;
+    # override it with S3INV_DEV_MAX_INDEX_DISK.
+    command: ["air", "-c", ".air.toml", "--", "--s3-source=s3://s3-inv/inventory-data/", "--cache-dir=/cache", "--max-index-disk=${S3INV_DEV_MAX_INDEX_DISK:-8GB}"]
     ports:
       - "${S3INV_DEV_PORT:-8080}:8080"
     volumes:
