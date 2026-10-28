@@ -57,6 +57,36 @@ func randomSortedRows(rng *rand.Rand, n int) []PrefixRow {
 	return rows
 }
 
+// TestSharedPrefixLen: the word-at-a-time common prefix matches a byte
+// loop for a difference at every position of the first and later
+// words, either string shorter, and equal strings.
+func TestSharedPrefixLen(t *testing.T) {
+	naive := func(a, b string) int {
+		i := 0
+		for i < min(len(a), len(b)) && a[i] == b[i] {
+			i++
+		}
+
+		return i
+	}
+	base := "data/2024/01/02/very-long-segment-name-0123456789/"
+	for n := range len(base) + 1 {
+		a := base[:n]
+		for _, b := range []string{base, base[:n], base[:n/2]} {
+			if got, want := sharedPrefixLen(a, b), naive(a, b); got != want {
+				t.Errorf("sharedPrefixLen(%q, %q) = %d, want %d", a, b, got, want)
+			}
+		}
+		for i := range n {
+			b := []byte(a)
+			b[i] ^= 0x80
+			if got := sharedPrefixLen(a, string(b)); got != i {
+				t.Errorf("difference at %d of %q: sharedPrefixLen = %d", i, a, got)
+			}
+		}
+	}
+}
+
 // TestRunRecordsRoundTrip: every row written to a run file reads back
 // equal, through the compressed writer and reader.
 func TestRunRecordsRoundTrip(t *testing.T) {
