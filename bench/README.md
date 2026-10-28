@@ -236,3 +236,13 @@ gating. Run them directly, for example:
 go test -run '^$' -bench BenchmarkGridQuery -benchtime 2s ./pkg/indexread/
 S3INV_LONG_BENCH=1 go test -run '^$' -bench BenchmarkPipelineScale_E2E -benchtime 1x ./pkg/extsort/
 ```
+
+## Profile-guided optimization
+
+`go build` compiles `cmd/s3-inv-db-server` and `cmd/s3-inv-db` with the
+`default.pgo` beside their `main.go`: a CPU profile of the query gate
+benchmarks, which steers inlining along the read paths. Benchmarks run
+through `go test` don't use it, so the gates compare the same code they
+always did. Regenerate the profiles with `make pgo` after a large change
+to the read path. The build path is left out: it is bound by memory and
+map access, and PGO didn't speed it up.

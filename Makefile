@@ -1,6 +1,6 @@
 .PHONY: help all build server seeder test test-unit test-race lint lint-check clean clean-seed seed \
         css css-check dev dev-reset docker-build docker-prod docker-seed docker-down \
-        cover cover-html cover-summary cover-check tidy tidy-check deadcode vuln actionlint bench-ab bench-ingest bench-query bench-scale compose-preflight
+        cover cover-html cover-summary cover-check tidy tidy-check deadcode vuln actionlint bench-ab bench-ingest bench-query bench-scale pgo compose-preflight
 
 .DEFAULT_GOAL := help
 
@@ -162,6 +162,9 @@ bench-query: ## A/B the data-structure/query suite (BASE vs working tree)
 SCALE_ROUNDS ?= 4
 bench-scale: ## A/B the scale suite (10M objects; long): make bench-scale BASE=<ref>
 	S3INV_LONG_BENCH=1 scripts/bench-ab.sh -n $(SCALE_ROUNDS) -s bench/suite/scale.txt $(BASE)
+
+pgo: ## Regenerate the PGO profiles (cmd/*/default.pgo) from the query benchmarks
+	scripts/pgo-profile.sh
 
 bench-ab: ## A/B a custom suite: make bench-ab SUITE=<file> BASE=<ref>
 	@test -n "$(SUITE)" || { echo "SUITE is required (or use bench-ingest / bench-query)"; exit 2; }
