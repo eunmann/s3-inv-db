@@ -15,12 +15,13 @@ import (
 // The aggregator is NOT safe for concurrent use. For concurrent access,
 // use multiple aggregators or external synchronization.
 type Aggregator struct {
-	// prefixes holds the rows Drain returns, keyed by their own Prefix:
-	// a spill hands the rows out instead of copying them.
+	// prefixes finds each prefix's slab row, keyed by its own Prefix.
 	prefixes map[string]*PrefixRow
-	// slabs back every row and drained is Drain's result slice; both
-	// are reused once the caller is done with a Drain, so a worker
-	// allocates rows only while its largest spill is still growing.
+	// slabs back every row: the first used of them, in creation order,
+	// are what Drain returns, so each must be live. drained is Drain's
+	// result slice; both are reused once the caller is done with a
+	// Drain, so a worker allocates rows only while its largest spill is
+	// still growing.
 	slabs   [][]PrefixRow
 	drained []*PrefixRow
 	// sortScratch is DrainSorted's sort buffer, reused the same way.
