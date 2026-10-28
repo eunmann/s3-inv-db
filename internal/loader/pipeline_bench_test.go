@@ -191,6 +191,10 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 	var lastPrefixCount uint64
 	var lastMaxDepth uint32
 	var lastRuns, lastRunFiles int
+	// Proc totals every run's CPU, faults and storage I/O, and wall the
+	// runs' time, for the per-op means and the cores they kept busy.
+	var proc benchutil.ProcStats
+	var wall time.Duration
 
 	b.ResetTimer()
 	for range b.N {
@@ -212,7 +216,10 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 		pipeline := extsort.NewPipeline(cfg, fc)
 
 		b.StartTimer()
+		before, start := benchutil.ReadProcStats(b), time.Now()
 		res, err := pipeline.Run(b.Context(), info.Path, outDir)
+		wall += time.Since(start)
+		proc = proc.Add(benchutil.ReadProcStats(b).Sub(before))
 		if err != nil {
 			b.StopTimer()
 			peak.Stop()
@@ -252,4 +259,5 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 	// state, whether kept in memory or flushed to a run file.
 	b.ReportMetric(float64(lastRuns), "runs")
 	b.ReportMetric(float64(lastRunFiles), "run_files")
+	proc.Report(b, b.N, wall)
 }

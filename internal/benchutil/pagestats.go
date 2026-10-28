@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -28,16 +29,8 @@ type PageStats struct {
 // measure with nothing else running in it.
 func ReadPageStats(tb testing.TB) PageStats {
 	tb.Helper()
-	var ru unix.Rusage
-	if err := unix.Getrusage(unix.RUSAGE_SELF, &ru); err != nil {
-		tb.Fatalf("getrusage: %v", err)
-	}
 
-	return PageStats{
-		MinorFaults: ru.Minflt,
-		MajorFaults: ru.Majflt,
-		ReadBytes:   procIOReadBytes(),
-	}
+	return ReadProcStats(tb).PageStats
 }
 
 // Sub returns s - prev.
@@ -59,22 +52,108 @@ func (s PageStats) Report(b *testing.B, ops int) {
 	b.ReportMetric(float64(s.ReadBytes)/1024/n, "ioKiB/q")
 }
 
-// procIOReadBytes reads read_bytes from /proc/self/io, or 0 when the
-// file is missing (non-Linux) or unreadable.
-func procIOReadBytes() int64 {
+// procIO holds the /proc/self/io byte counters, all from one read.
+type procIO struct {
+	read, write, cancelledWrite int64
+}
+
+// readProcIO reads /proc/self/io once, or returns zeros when the file is
+// missing (non-Linux) or unreadable.
+func readProcIO() procIO {
+	var c procIO
 	data, err := os.ReadFile("/proc/self/io")
 	if err != nil {
-		return 0
+		return c
 	}
 	for line := range bytes.Lines(data) {
-		if v, ok := bytes.CutPrefix(line, []byte("read_bytes:")); ok {
-			n, _ := strconv.ParseInt(string(bytes.TrimSpace(v)), 10, 64)
-
-			return n
+		name, v, _ := bytes.Cut(line, []byte(" "))
+		n, _ := strconv.ParseInt(string(bytes.TrimSpace(v)), 10, 64)
+		switch string(name) {
+		case "read_bytes:":
+			c.read = n
+		case "write_bytes:":
+			c.write = n
+		case "cancelled_write_bytes:":
+			c.cancelledWrite = n
 		}
 	}
 
-	return 0
+	return c
+}
+
+// ProcStats adds the process's CPU time and storage writes to its page
+// stats. Every thread counts, so a parallel build's whole cost shows,
+// where its wall time hides work spread over idle cores.
+type ProcStats struct {
+	PageStats
+
+	User, Sys time.Duration
+	// WriteBytes is /proc/self/io write_bytes less cancelled_write_bytes:
+	// what was sent to storage, not counting pages of files deleted or
+	// truncated before writeback (scratch the build removed in time).
+	// Zero where unavailable.
+	WriteBytes int64
+}
+
+// ReadProcStats snapshots the counters for the whole process, so
+// measure with nothing else running in it. One getrusage and one
+// /proc/self/io read make the snapshot, so its counters agree in time.
+func ReadProcStats(tb testing.TB) ProcStats {
+	tb.Helper()
+	var ru unix.Rusage
+	if err := unix.Getrusage(unix.RUSAGE_SELF, &ru); err != nil {
+		tb.Fatalf("getrusage: %v", err)
+	}
+	pio := readProcIO()
+
+	return ProcStats{
+		MinorFaults: ru.Minflt,
+		MajorFaults: ru.Majflt,
+		ReadBytes:   pio.read,
+		User:        time.Duration(ru.Utime.Nano()),
+		Sys:         time.Duration(ru.Stime.Nano()),
+		WriteBytes:  pio.write - pio.cancelledWrite,
+	}
+}
+
+// Sub returns s - prev.
+func (s ProcStats) Sub(prev ProcStats) ProcStats {
+	return ProcStats{
+		PageStats:  s.PageStats.Sub(prev.PageStats),
+		User:       s.User - prev.User,
+		Sys:        s.Sys - prev.Sys,
+		WriteBytes: s.WriteBytes - prev.WriteBytes,
+	}
+}
+
+// Add returns s + d, to total several measured spans.
+func (s ProcStats) Add(d ProcStats) ProcStats {
+	return ProcStats{
+		MinorFaults: s.MinorFaults + d.MinorFaults,
+		MajorFaults: s.MajorFaults + d.MajorFaults,
+		ReadBytes:   s.ReadBytes + d.ReadBytes,
+		User:        s.User + d.User,
+		Sys:         s.Sys + d.Sys,
+		WriteBytes:  s.WriteBytes + d.WriteBytes,
+	}
+}
+
+// Report adds the counters to b's results per op: CPU seconds (user and
+// system), system seconds, cores (CPU time over wall, the spans' mean
+// parallelism), page faults and storage bytes read and written.
+func (s ProcStats) Report(b *testing.B, ops int, wall time.Duration) {
+	b.Helper()
+	n := float64(ops)
+	cpu := s.User + s.Sys
+	b.ReportMetric(cpu.Seconds()/n, "cpu_s")
+	b.ReportMetric(s.Sys.Seconds()/n, "sys_s")
+	if wall > 0 {
+		b.ReportMetric(cpu.Seconds()/wall.Seconds(), "cores")
+	}
+	b.ReportMetric(float64(s.MinorFaults)/n, "minflt")
+	b.ReportMetric(float64(s.MajorFaults)/n, "majflt")
+	b.ReportMetric(float64(s.ReadBytes)/n, "read_B")
+	b.ReportMetric(float64(s.WriteBytes)/n, "write_B")
 }
 
 // MappedBytes returns, for every file under dir that the process has

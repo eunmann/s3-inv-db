@@ -135,7 +135,11 @@ Ingestion (`bench/suite/ingest.txt`):
   `Pipeline.Run` end to end through the local S3 server. Seconds per
   op; also reports `peak_heap_B`, `disk_B`, `runs` (sorted runs the
   merge read, in memory or on disk) and `run_files` (runs written to
-  disk).
+  disk). Per op, over every thread: `cpu_s` and `sys_s` (CPU seconds),
+  `cores` (CPU over wall time: a change that saves CPU on a core-rich
+  machine shows here before it shows in `sec/op`), `minflt`/`majflt`,
+  and `read_B`/`write_B` (storage I/O; writes net of scratch deleted
+  before writeback). Reported, not gated.
 - `internal/loader` `BenchmarkPipelineSlowS3`: the same build against
   S3 behind a slower link (20 ms to first byte, 8 MiB/s per GET), four
   chunks per worker: the time a build waits on S3.
