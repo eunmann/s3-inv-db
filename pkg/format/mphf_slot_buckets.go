@@ -135,7 +135,13 @@ func (s *slotBuckets) place(mph *bbhash, hashes, fps []uint64, placed *stepCount
 
 // placeRange places prefixes [start, end).
 func (s *slotBuckets) placeRange(mph *bbhash, hashes, fps []uint64, start, end int, placed *stepCounter) error {
+	// One allocation for every bucket's buffer: a worker appends to all
+	// of them, since slots are random relative to positions.
+	slab := make([]byte, len(s.next)*s.appendCap)
 	bufs := make([][]byte, len(s.next))
+	for b := range bufs {
+		bufs[b] = slab[b*s.appendCap : b*s.appendCap : (b+1)*s.appendCap]
+	}
 	for i := start; i < end; i++ {
 		slot, ok := mph.find(hashes[i])
 		if !ok {
@@ -145,9 +151,6 @@ func (s *slotBuckets) placeRange(mph *bbhash, hashes, fps []uint64, start, end i
 			return fmt.Errorf("%w: slot %d (found %t) for prefix %d", ErrMPHFLookupFailed, slot, ok, i)
 		}
 		b := int(slot) / s.perBucket
-		if bufs[b] == nil {
-			bufs[b] = make([]byte, 0, s.appendCap)
-		}
 		bufs[b] = s.appendRecord(bufs[b], int(slot)-b*s.perBucket, fps[i], uint64(i))
 		if len(bufs[b]) == cap(bufs[b]) {
 			if err := s.appendRecords(b, bufs[b]); err != nil {
