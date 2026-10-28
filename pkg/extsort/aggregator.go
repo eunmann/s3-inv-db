@@ -260,20 +260,28 @@ func heapReadingsUnderPressure(live, inuse uint64, memoryLimit int64) bool {
 	return live >= uint64(limit*liveHeapPressureRatio) || inuse >= uint64(limit*heapInuseBackstopRatio)
 }
 
-// Drain hands over every accumulated row (unsorted) and clears the
-// aggregator for reuse. Nothing is copied: the rows and the slice stay
-// valid only until the aggregator is next used, when they are recycled.
+// Drain hands over every accumulated row and clears the aggregator for
+// reuse. Nothing is copied: the rows and the slice stay valid only until
+// the aggregator is next used, when they are recycled.
+//
+// The rows come in the order their prefixes first appeared, read off the
+// slabs rather than the map: keys in order (as S3 Inventory lists them)
+// create their prefixes in sorted order, which DrainSorted's sort then
+// only has to confirm.
 func (a *Aggregator) Drain() []*PrefixRow {
-	if len(a.prefixes) == 0 {
+	if a.used == 0 {
 		return nil
 	}
 
 	rows := a.drained[:0]
-	if cap(rows) < len(a.prefixes) {
-		rows = make([]*PrefixRow, 0, len(a.prefixes))
+	if cap(rows) < a.used {
+		rows = make([]*PrefixRow, 0, a.used)
 	}
-	for _, row := range a.prefixes {
-		rows = append(rows, row)
+	for s := 0; len(rows) < a.used; s++ {
+		slab := a.slabs[s][:min(rowSlabLen, a.used-len(rows))]
+		for i := range slab {
+			rows = append(rows, &slab[i])
+		}
 	}
 	a.drained = rows
 

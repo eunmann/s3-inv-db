@@ -106,6 +106,38 @@ func TestAggregatorDrainRecyclesRows(t *testing.T) {
 	}
 }
 
+// Drain returns the rows in the order their prefixes first appeared,
+// across slabs, so keys in order (as S3 Inventory lists them) hand
+// DrainSorted rows that are already sorted.
+func TestAggregatorDrainInCreationOrder(t *testing.T) {
+	agg := NewAggregator(0, 0)
+	agg.AddObject("b/x", 1, tiers.Standard)
+	agg.AddObject("a/y/z", 1, tiers.Standard)
+	agg.AddObject("b/w/v", 1, tiers.Standard)
+	got := make([]string, 0, 5)
+	for _, r := range agg.Drain() {
+		got = append(got, r.Prefix)
+	}
+	if want := []string{"", "b/", "a/", "a/y/", "b/w/"}; !slices.Equal(got, want) {
+		t.Errorf("Drain order = %q, want %q", got, want)
+	}
+
+	keys := make([]string, 0, rowSlabLen+10)
+	for i := range rowSlabLen + 10 {
+		keys = append(keys, fmt.Sprintf("p%05d/x", i))
+	}
+	for _, k := range keys {
+		agg.AddObject(k, 1, tiers.Standard)
+	}
+	rows := agg.Drain()
+	if !slices.IsSortedFunc(rows, func(a, b *PrefixRow) int { return strings.Compare(a.Prefix, b.Prefix) }) {
+		t.Error("rows of keys in order are not drained in order")
+	}
+	if len(rows) != len(keys)+1 {
+		t.Errorf("drained %d rows, want %d", len(rows), len(keys)+1)
+	}
+}
+
 // A spill forced by heap pressure must leave the rows to the GC: kept
 // slabs would hold HeapInuse at the limit and force a spill on every
 // later check. Without pressure the slabs stay for the next spill.
