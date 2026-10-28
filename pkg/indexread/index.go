@@ -4,6 +4,7 @@ package indexread
 import (
 	"errors"
 	"fmt"
+	"math/bits"
 	"slices"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -358,18 +359,28 @@ func (idx *Index) DescendantsPage(prefixPos uint64, relDepth int, filter Filter,
 
 // filterInto counts span's entries that pass filter into page, keeping
 // those at match index [offset, offset+limit).
+//
+// It runs only with a filter, mostly over the blocks the bounds couldn't
+// settle, where matches and misses mix, so whether an entry matches is a
+// coin flip to the branch predictor: the match is computed without a
+// branch, and the one branch left is the page window's, which is
+// predictable.
 func (idx *Index) filterInto(page *Page, span format.Span, filter Filter, offset, limit int) {
-	for i := span.Lo; i < span.Hi; i++ {
-		pos := i
+	for pos := span.Lo; pos < span.Hi; pos++ {
 		stats := idx.Stats(pos)
-		if stats.ObjectCount < filter.MinCount || stats.TotalBytes < filter.MinBytes {
-			continue
-		}
-		if page.Total >= offset && len(page.Positions) < limit {
+		match := atLeast(stats.ObjectCount, filter.MinCount) & atLeast(stats.TotalBytes, filter.MinBytes)
+		if page.Total >= offset && len(page.Positions) < limit && match == 1 {
 			page.Positions = append(page.Positions, pos)
 		}
-		page.Total++
+		page.Total += int(match)
 	}
+}
+
+// atLeast returns 1 when v >= floor and 0 otherwise, without a branch.
+func atLeast(v, floor uint64) uint64 {
+	_, borrow := bits.Sub64(v, floor, 0)
+
+	return borrow ^ 1
 }
 
 // TierBreakdown is an alias for format.TierBreakdown.
