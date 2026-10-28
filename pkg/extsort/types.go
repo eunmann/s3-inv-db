@@ -15,9 +15,11 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/bits"
 	"runtime"
 	"slices"
 	"strings"
+	"unsafe"
 
 	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -105,10 +107,7 @@ func encodeRunRecord(dst []byte, prev string, row *PrefixRow) []byte {
 	if explicit {
 		mask |= runRecordTotals
 	}
-	shared := 0
-	for n := min(len(prev), len(row.Prefix)); shared < n && prev[shared] == row.Prefix[shared]; {
-		shared++
-	}
+	shared := sharedPrefixLen(prev, row.Prefix)
 	dst = binary.AppendUvarint(dst, uint64(shared))
 	dst = binary.AppendUvarint(dst, uint64(len(row.Prefix)-shared))
 	dst = append(dst, row.Prefix[shared:]...)
@@ -126,6 +125,30 @@ func encodeRunRecord(dst []byte, prev string, row *PrefixRow) []byte {
 	}
 
 	return dst
+}
+
+// sharedPrefixLen returns the length of a and b's common prefix. A run's
+// prefixes share most of their path with the previous one, so it
+// compares eight bytes at a time: byte by byte, this was 7% of a deep
+// build's CPU.
+func sharedPrefixLen(a, b string) int {
+	n := min(len(a), len(b))
+	i := 0
+	for ; i+8 <= n; i += 8 {
+		if x := load64(a, i) ^ load64(b, i); x != 0 {
+			return i + bits.TrailingZeros64(x)/8
+		}
+	}
+	for i < n && a[i] == b[i] {
+		i++
+	}
+
+	return i
+}
+
+// load64 reads s[i:i+8] as a little-endian word, without copying.
+func load64(s string, i int) uint64 {
+	return binary.LittleEndian.Uint64(unsafe.Slice(unsafe.StringData(s[i:]), 8))
 }
 
 // runRecordSource is what records are read from: a buffered stream.

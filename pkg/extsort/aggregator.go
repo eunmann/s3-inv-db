@@ -15,12 +15,13 @@ import (
 // The aggregator is NOT safe for concurrent use. For concurrent access,
 // use multiple aggregators or external synchronization.
 type Aggregator struct {
-	// prefixes holds the rows Drain returns, keyed by their own Prefix:
-	// a spill hands the rows out instead of copying them.
+	// prefixes finds each prefix's slab row, keyed by its own Prefix.
 	prefixes map[string]*PrefixRow
-	// slabs back every row and drained is Drain's result slice; both
-	// are reused once the caller is done with a Drain, so a worker
-	// allocates rows only while its largest spill is still growing.
+	// slabs back every row: the first used of them, in creation order,
+	// are what Drain returns, so each must be live. drained is Drain's
+	// result slice; both are reused once the caller is done with a
+	// Drain, so a worker allocates rows only while its largest spill is
+	// still growing.
 	slabs   [][]PrefixRow
 	drained []*PrefixRow
 	// sortScratch is DrainSorted's sort buffer, reused the same way.
@@ -260,20 +261,28 @@ func heapReadingsUnderPressure(live, inuse uint64, memoryLimit int64) bool {
 	return live >= uint64(limit*liveHeapPressureRatio) || inuse >= uint64(limit*heapInuseBackstopRatio)
 }
 
-// Drain hands over every accumulated row (unsorted) and clears the
-// aggregator for reuse. Nothing is copied: the rows and the slice stay
-// valid only until the aggregator is next used, when they are recycled.
+// Drain hands over every accumulated row and clears the aggregator for
+// reuse. Nothing is copied: the rows and the slice stay valid only until
+// the aggregator is next used, when they are recycled.
+//
+// The rows come in the order their prefixes first appeared, read off the
+// slabs rather than the map: keys in order (as S3 Inventory lists them)
+// create their prefixes in sorted order, which DrainSorted's sort then
+// only has to confirm.
 func (a *Aggregator) Drain() []*PrefixRow {
-	if len(a.prefixes) == 0 {
+	if a.used == 0 {
 		return nil
 	}
 
 	rows := a.drained[:0]
-	if cap(rows) < len(a.prefixes) {
-		rows = make([]*PrefixRow, 0, len(a.prefixes))
+	if cap(rows) < a.used {
+		rows = make([]*PrefixRow, 0, a.used)
 	}
-	for _, row := range a.prefixes {
-		rows = append(rows, row)
+	for s := 0; len(rows) < a.used; s++ {
+		slab := a.slabs[s][:min(rowSlabLen, a.used-len(rows))]
+		for i := range slab {
+			rows = append(rows, &slab[i])
+		}
 	}
 	a.drained = rows
 
