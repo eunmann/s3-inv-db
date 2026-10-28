@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -547,7 +548,7 @@ func TestSlotBucketsManyBuckets(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer b.Close()
-	const n = 1_000_000 // ~2.6 buckets of 4 MiB at 11-byte slots
+	const n = 300_000 // ~3.1 buckets of 1 MiB at 11-byte slots, more than slotWriteWorkers
 	for i := range n {
 		if err := b.Add(prefixFromInt(i)); err != nil {
 			t.Fatal(err)
@@ -649,6 +650,56 @@ func TestSlotBucketsRejectMiscounts(t *testing.T) {
 	}
 	if err := s.appendRecords(0, buf); !errors.Is(err, ErrMPHFLookupFailed) {
 		t.Errorf("overfilling a bucket = %v, want ErrMPHFLookupFailed", err)
+	}
+}
+
+// TestSlotBucketsWriteHeapFixed: laying out the slot file allocates one
+// layout and one read buffer per write worker, slotWriteWorkers of them
+// whatever the CPU count, and fills every slot.
+func TestSlotBucketsWriteHeapFixed(t *testing.T) {
+	const n, posW = 600_000, 4
+	slotW := mphfFingerprintBytes + posW
+	s, err := newSlotBuckets(t.TempDir(), n, slotW)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	if len(s.next) <= slotWriteWorkers {
+		t.Fatalf("%d buckets, want more than %d write workers", len(s.next), slotWriteWorkers)
+	}
+	for b := range s.next {
+		var buf []byte
+		for j := range s.slots(b) {
+			slot := b*s.perBucket + j
+			buf = s.appendRecord(buf, j, uint64(1000+slot), uint64(slot))
+		}
+		if err := s.appendRecords(b, buf); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := testSlotFile(t, n, slotW)
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	if err := s.write(f, posW, nil); err != nil {
+		t.Fatal(err)
+	}
+	runtime.ReadMemStats(&after)
+	perWorker := s.perBucket*slotW + slotReadBuffer
+	if got, limit := after.TotalAlloc-before.TotalAlloc, uint64(slotWriteWorkers*perWorker+64<<10); got > limit {
+		t.Errorf("write allocated %d bytes, want at most %d (%d workers × %d)", got, limit, slotWriteWorkers, perWorker)
+	}
+
+	got := make([]byte, n*slotW)
+	if _, err := f.ReadAt(got, mphfSlotsDataOff); err != nil {
+		t.Fatal(err)
+	}
+	for slot := range n {
+		fp := binary.LittleEndian.Uint64(got[slot*slotW:])
+		pos := binary.LittleEndian.Uint32(got[slot*slotW+mphfFingerprintBytes:])
+		if fp != uint64(1000+slot) || pos != uint32(slot) {
+			t.Fatalf("slot %d = fp %d pos %d", slot, fp, pos)
+		}
 	}
 }
 
