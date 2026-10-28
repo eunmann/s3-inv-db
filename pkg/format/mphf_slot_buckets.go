@@ -26,8 +26,10 @@ import (
 // offset and size are known before the pass, and a region that
 // overflows or ends short is a lookup bug the build fails on.
 const (
-	// SlotBucketMinBytes is the least slot-file range a bucket covers.
-	slotBucketMinBytes = 4 << 20
+	// SlotBucketMinBytes is the least slot-file range a bucket covers,
+	// and so the size of a write worker's layout buffer below
+	// maxSlotBuckets buckets.
+	slotBucketMinBytes = 1 << 20
 	// MaxSlotBuckets caps the bucket count, so the append buffers stay
 	// bounded whatever the prefix count: past it, buckets grow instead.
 	maxSlotBuckets = 1024
@@ -39,11 +41,14 @@ const (
 	slotAppendBudget = 256 << 10
 	slotAppendMin    = 4 << 10
 	slotAppendMax    = 256 << 10
-	// SlotLayoutBudget bounds the heap the bucket layouts take across
-	// workers.
-	slotLayoutBudget = 256 << 20
+	// SlotWriteWorkers lay out and write buckets, each with one layout
+	// buffer. A fixed count, not one per CPU: laying out a bucket is a
+	// short scatter within one buffer, so two workers keep the writes
+	// going, and every further one is another layout buffer on a heap
+	// GOMEMLIMIT does not govern.
+	slotWriteWorkers = 2
 	// SlotReadBuffer is the read size within a bucket's region.
-	slotReadBuffer = 1 << 20
+	slotReadBuffer = 256 << 10
 )
 
 // errTooManySlots means a bucket would hold more slots than a record's
@@ -135,7 +140,13 @@ func (s *slotBuckets) place(mph *bbhash, hashes, fps []uint64, placed *stepCount
 
 // placeRange places prefixes [start, end).
 func (s *slotBuckets) placeRange(mph *bbhash, hashes, fps []uint64, start, end int, placed *stepCounter) error {
+	// One allocation for every bucket's buffer: a worker appends to all
+	// of them, since slots are random relative to positions.
+	slab := make([]byte, len(s.next)*s.appendCap)
 	bufs := make([][]byte, len(s.next))
+	for b := range bufs {
+		bufs[b] = slab[b*s.appendCap : b*s.appendCap : (b+1)*s.appendCap]
+	}
 	for i := start; i < end; i++ {
 		slot, ok := mph.find(hashes[i])
 		if !ok {
@@ -145,9 +156,6 @@ func (s *slotBuckets) placeRange(mph *bbhash, hashes, fps []uint64, start, end i
 			return fmt.Errorf("%w: slot %d (found %t) for prefix %d", ErrMPHFLookupFailed, slot, ok, i)
 		}
 		b := int(slot) / s.perBucket
-		if bufs[b] == nil {
-			bufs[b] = make([]byte, 0, s.appendCap)
-		}
 		bufs[b] = s.appendRecord(bufs[b], int(slot)-b*s.perBucket, fps[i], uint64(i))
 		if len(bufs[b]) == cap(bufs[b]) {
 			if err := s.appendRecords(b, bufs[b]); err != nil {
@@ -184,9 +192,9 @@ func (s *slotBuckets) appendRecord(buf []byte, slotInBucket int, fp, pos uint64)
 
 // write lays out every bucket's slots and writes them to f, the slot
 // file, whose slots start at mphfSlotsDataOff and are slotW bytes: the
-// fingerprint, then the position at posW bytes. Workers take buckets in
-// turn, each with one layout buffer, as many as slotLayoutBudget allows.
-// Written counts the slots.
+// fingerprint, then the position at posW bytes. Up to slotWriteWorkers
+// workers take buckets in turn, each with one layout buffer. Written
+// counts the slots.
 func (s *slotBuckets) write(f *os.File, posW int, written *stepCounter) error {
 	for b := range s.next {
 		if got, want := s.next[b].Load(), s.regionEnd(b)-int64(b*s.perBucket)*int64(s.recW); got != want {
@@ -195,7 +203,7 @@ func (s *slotBuckets) write(f *os.File, posW int, written *stepCounter) error {
 	}
 	slotW := mphfFingerprintBytes + posW
 	layoutBytes := s.perBucket * slotW
-	workers := max(1, min(mphfWorkerCount(s.n), len(s.next), slotLayoutBudget/layoutBytes))
+	workers := min(slotWriteWorkers, len(s.next))
 	var next atomic.Int64
 	errs := make([]error, workers)
 	var wg sync.WaitGroup
