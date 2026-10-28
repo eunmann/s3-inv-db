@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -525,31 +526,45 @@ func (b *IndexBuilder) writeNameRow(starts []uint64, depth int, r *spoolRecord) 
 	return nil
 }
 
-// closeStreamingWriters finalizes the row-major core stats and tier
-// stats files in the index dir.
+// closeStreamingWriters finalizes the row-major core stats, prefix tree
+// and tier stats files in the index dir. Each rewrites its own file from
+// its own scratch through bounded buffers, so they run side by side; a
+// writer whose close fails stays set for cleanup to abort.
 func (b *IndexBuilder) closeStreamingWriters() error {
 	if b.tierStatsW != nil {
 		b.coreStatsW.SetTierMaskEncoding(b.tierStatsW.MaskEncoding())
 	}
-	if err := b.coreStatsW.Finalize(); err != nil {
-		return fmt.Errorf("finalize core stats: %w", err)
-	}
-	b.coreStatsW = nil
-	if err := b.prefixTreeW.Close(); err != nil {
-		return fmt.Errorf("finalize prefix tree: %w", err)
-	}
-	b.prefixTreeW = nil
+	var coreErr, treeErr, tierErr error
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		if coreErr = b.coreStatsW.Finalize(); coreErr != nil {
+			coreErr = fmt.Errorf("finalize core stats: %w", coreErr)
+		} else {
+			b.coreStatsW = nil
+		}
+	})
+	wg.Go(func() {
+		if treeErr = b.prefixTreeW.Close(); treeErr != nil {
+			treeErr = fmt.Errorf("finalize prefix tree: %w", treeErr)
+		} else {
+			b.prefixTreeW = nil
+		}
+	})
 	// The tier writer is nil when no rows were added (empty index); such
 	// a build writes no tier file and no tier manifest (tiers.json). The
 	// index manifest is still written unconditionally in Finalize.
 	if b.tierStatsW != nil {
-		if err := b.tierStatsW.Close(); err != nil {
-			return fmt.Errorf("close tier stats: %w", err)
-		}
-		b.tierStatsW = nil
+		wg.Go(func() {
+			if tierErr = b.tierStatsW.Close(); tierErr != nil {
+				tierErr = fmt.Errorf("close tier stats: %w", tierErr)
+			} else {
+				b.tierStatsW = nil
+			}
+		})
 	}
+	wg.Wait()
 
-	return nil
+	return errors.Join(coreErr, treeErr, tierErr)
 }
 
 // buildMPHF builds the MPHF and logs progress.
