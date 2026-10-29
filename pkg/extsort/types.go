@@ -10,7 +10,6 @@
 package extsort
 
 import (
-	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -167,19 +166,19 @@ func load64(s string, i int) uint64 {
 	return binary.LittleEndian.Uint64(unsafe.Slice(unsafe.StringData(s[i:]), 8))
 }
 
-// runRecordWindow is the most of a run's stream a record is decoded
-// from in place: more than any record of a key S3 allows (1024 bytes)
-// needs, and small enough that refilling the read buffer to hold it
-// copies little.
+// runRecordWindow is the least of a run's stream a refill makes sure is
+// buffered: more than any record of a key S3 allows (1024 bytes) needs,
+// and small enough that the bytes decoded were read into the buffer
+// recently.
 const runRecordWindow = 4 << 10
 
 // runRecordDecoder reads a run's records from a buffered stream. It
-// decodes each from the read buffer in place (Peek), not byte by byte
-// through the reader, and carves the prefixes from an arena: reading
-// varints a byte per call and allocating each prefix were most of a
-// sorted build's serial final merge.
+// decodes them from the read buffer in place, not byte by byte through
+// the reader, and carves the prefixes from an arena, so no row aliases
+// the buffer: reading varints a byte per call and allocating each prefix
+// were most of a sorted build's serial final merge.
 type runRecordDecoder struct {
-	in    *bufio.Reader
+	in    readWindow
 	prev  string // the last prefix read
 	arena prefixArena
 }
@@ -187,36 +186,47 @@ type runRecordDecoder struct {
 // next reads the next record into row: io.EOF when the stream ends
 // before a record, errRunRecordCorrupt when it ends inside one.
 func (d *runRecordDecoder) next(row *PrefixRow) error {
-	window, err := d.in.Peek(min(runRecordWindow, d.in.Size()))
-	if len(window) == 0 {
-		if errors.Is(err, io.EOF) {
-			return io.EOF
-		}
-
-		return fmt.Errorf("read run record: %w", err)
+	n, err := decodeRunRecord(d.in.rest(), d.prev, &d.arena, row)
+	if errors.Is(err, errRunRecordShort) {
+		n, err = d.refill(row)
 	}
-	n, decodeErr := decodeRunRecord(window, d.prev, &d.arena, row)
-	if errors.Is(decodeErr, errRunRecordShort) && err == nil {
-		// Longer than the window: decode it from the whole buffer.
-		window, err = d.in.Peek(d.in.Size())
-		n, decodeErr = decodeRunRecord(window, d.prev, &d.arena, row)
+	if err != nil {
+		return err
 	}
-	if errors.Is(decodeErr, errRunRecordShort) {
-		if err != nil && !errors.Is(err, io.EOF) {
-			return fmt.Errorf("read run record: %w", err)
-		}
-
-		return fmt.Errorf("%w: stream ends inside a record", errRunRecordCorrupt)
-	}
-	if decodeErr != nil {
-		return decodeErr
-	}
-	if _, err := d.in.Discard(n); err != nil {
-		return fmt.Errorf("read run record: %w", err)
-	}
+	d.in.advance(n)
 	d.prev = row.Prefix
 
 	return nil
+}
+
+// refill decodes the record that runs past the window into row after
+// refilling the window, and returns its length.
+func (d *runRecordDecoder) refill(row *PrefixRow) (int, error) {
+	readErr := d.in.refill(runRecordWindow)
+	if len(d.in.rest()) == 0 {
+		if errors.Is(readErr, io.EOF) {
+			return 0, io.EOF
+		}
+
+		return 0, fmt.Errorf("read run record: %w", readErr)
+	}
+	n, err := decodeRunRecord(d.in.rest(), d.prev, &d.arena, row)
+	if errors.Is(err, errRunRecordShort) && readErr == nil {
+		// Longer than what is buffered: fill the whole buffer.
+		readErr = d.in.refill(d.in.r.Size())
+		n, err = decodeRunRecord(d.in.rest(), d.prev, &d.arena, row)
+	}
+	if !errors.Is(err, errRunRecordShort) {
+		return n, err
+	}
+	switch {
+	case readErr == nil:
+		return 0, fmt.Errorf("%w: a record longer than the %d-byte read buffer", errRunRecordCorrupt, d.in.r.Size())
+	case !errors.Is(readErr, io.EOF):
+		return 0, fmt.Errorf("read run record: %w", readErr)
+	}
+
+	return 0, fmt.Errorf("%w: stream ends inside a record", errRunRecordCorrupt)
 }
 
 // errRunRecordShort means the bytes end inside the record.

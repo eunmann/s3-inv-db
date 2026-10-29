@@ -5,14 +5,17 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -135,7 +138,7 @@ func TestRunRecordKeepsInconsistentTotals(t *testing.T) {
 	} {
 		data := encodeRunRecord(nil, "", &row)
 		var got PrefixRow
-		d := runRecordDecoder{in: bufio.NewReader(bytes.NewReader(data))}
+		d := runRecordDecoder{in: readWindow{r: bufio.NewReader(bytes.NewReader(data))}}
 		if err := d.next(&got); err != nil {
 			t.Fatal(err)
 		}
@@ -159,7 +162,7 @@ func TestRunRecordRejectsCorruption(t *testing.T) {
 	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
 			var row PrefixRow
-			d := runRecordDecoder{in: bufio.NewReader(bytes.NewReader(data))}
+			d := runRecordDecoder{in: readWindow{r: bufio.NewReader(bytes.NewReader(data))}}
 			err := d.next(&row)
 			if err == nil || errors.Is(err, io.EOF) {
 				t.Fatalf("decode = %v, want a corruption error", err)
@@ -182,7 +185,7 @@ func TestRunRecordLongerThanWindow(t *testing.T) {
 	}
 	data := encodeRunRecord(nil, "", &rows[0])
 	data = encodeRunRecord(data, rows[0].Prefix, &rows[1])
-	d := runRecordDecoder{in: bufio.NewReaderSize(bytes.NewReader(data), 4*runRecordWindow)}
+	d := runRecordDecoder{in: readWindow{r: bufio.NewReaderSize(bytes.NewReader(data), 4*runRecordWindow)}}
 	for i := range rows {
 		var got PrefixRow
 		if err := d.next(&got); err != nil {
@@ -239,5 +242,183 @@ func TestCompressedRunReaderShortOfCount(t *testing.T) {
 	}
 	if err := r.ReadInto(&got); !errors.Is(err, errRunRecordCorrupt) {
 		t.Fatalf("past the stream's end: %v, want errRunRecordCorrupt", err)
+	}
+}
+
+// runRecordStream is rows' records, each front-coded against the one
+// before, and where each record ends.
+type runRecordStream struct {
+	data []byte
+	ends []int
+}
+
+func encodeRunRecords(rows []PrefixRow) runRecordStream {
+	var s runRecordStream
+	prev := ""
+	for i := range rows {
+		s.data = encodeRunRecord(s.data, prev, &rows[i])
+		s.ends, prev = append(s.ends, len(s.data)), rows[i].Prefix
+	}
+
+	return s
+}
+
+// diffRows is cmp.Diff for long row lists, computed only when they
+// differ.
+func diffRows(want, got []PrefixRow) string {
+	if slices.Equal(want, got) {
+		return ""
+	}
+
+	return cmp.Diff(want, got)
+}
+
+// decodeRunRecords reads src's records through a size-byte buffer until
+// the stream ends or a record fails, keeping every row: rows decoded
+// early must still read back after the buffer was refilled.
+func decodeRunRecords(src io.Reader, size int) ([]PrefixRow, error) {
+	d := runRecordDecoder{in: readWindow{r: bufio.NewReaderSize(src, size)}}
+	var rows []PrefixRow
+	for {
+		var row PrefixRow
+		if err := d.next(&row); err != nil {
+			return rows, err
+		}
+		rows = append(rows, row)
+	}
+}
+
+// runRecordReaders wrap a stream as the decoder may meet it: read in
+// full, half a buffer per read, and a byte per read, so refills stop at
+// every possible byte.
+var runRecordReaders = map[string]func([]byte) io.Reader{
+	"whole":    func(b []byte) io.Reader { return bytes.NewReader(b) },
+	"half":     func(b []byte) io.Reader { return iotest.HalfReader(bytes.NewReader(b)) },
+	"one_byte": func(b []byte) io.Reader { return iotest.OneByteReader(bytes.NewReader(b)) },
+}
+
+// TestRunRecordsAcrossRefills: records that straddle the end of what was
+// buffered, in buffers from a few records to many windows, read back
+// equal and in order, and the stream ends with io.EOF.
+func TestRunRecordsAcrossRefills(t *testing.T) {
+	rows := randomSortedRows(rand.New(rand.NewPCG(7, 8)), 3000)
+	s := encodeRunRecords(rows)
+	for _, size := range []int{512, 777, runRecordWindow - 1, runRecordWindow, runRecordWindow + 1, mergeReaderBufferSize} {
+		for name, wrap := range runRecordReaders {
+			t.Run(fmt.Sprintf("buffer=%d/%s", size, name), func(t *testing.T) {
+				got, err := decodeRunRecords(wrap(s.data), size)
+				if !errors.Is(err, io.EOF) {
+					t.Fatalf("after %d rows: %v, want EOF", len(got), err)
+				}
+				if diff := diffRows(rows, got); diff != "" {
+					t.Fatalf("(-written +read):\n%s", diff)
+				}
+			})
+		}
+	}
+}
+
+// TestRunRecordsManyTiny: records of a few bytes each, many to a
+// window, through the smallest buffer bufio allows and larger ones.
+func TestRunRecordsManyTiny(t *testing.T) {
+	rows := make([]PrefixRow, 20_000)
+	for i := range rows {
+		rows[i] = PrefixRow{Prefix: fmt.Sprintf("%05d/", i), Depth: 1}
+		if i%3 == 0 {
+			rows[i].Count, rows[i].TierCounts[0] = 1, 1
+		}
+	}
+	s := encodeRunRecords(rows)
+	if avg := len(s.data) / len(rows); avg > 8 {
+		t.Fatalf("records average %d bytes, want tiny ones", avg)
+	}
+	for _, size := range []int{16, runRecordWindow, mergeReaderBufferSize} {
+		for name, wrap := range runRecordReaders {
+			t.Run(fmt.Sprintf("buffer=%d/%s", size, name), func(t *testing.T) {
+				got, err := decodeRunRecords(wrap(s.data), size)
+				if !errors.Is(err, io.EOF) {
+					t.Fatalf("after %d rows: %v, want EOF", len(got), err)
+				}
+				if diff := diffRows(rows, got); diff != "" {
+					t.Fatalf("(-written +read):\n%s", diff)
+				}
+			})
+		}
+	}
+}
+
+// runRecordOfLen returns a row, its prefix starting with first, whose
+// record front-coded against a prefix it shares nothing with is n
+// bytes.
+func runRecordOfLen(t *testing.T, first byte, n int) PrefixRow {
+	t.Helper()
+	row := PrefixRow{Depth: 1, Count: 3, TotalBytes: 300, TierCounts: [MaxTiers]uint64{3}, TierBytes: [MaxTiers]uint64{300}}
+	for l := n; l > 0; l-- {
+		row.Prefix = string(first) + strings.Repeat("k", l-1)
+		if len(encodeRunRecord(nil, "", &row)) == n {
+			return row
+		}
+	}
+	t.Fatalf("no record is %d bytes", n)
+
+	return row
+}
+
+// TestRunRecordFillsTheBuffer: a record exactly the window's or the
+// read buffer's size decodes between small records; one a byte longer
+// than the buffer is corrupt, never a row or the stream's end.
+func TestRunRecordFillsTheBuffer(t *testing.T) {
+	const size = 4 * runRecordWindow
+	for _, n := range []int{runRecordWindow, size} {
+		rows := []PrefixRow{{Prefix: "a/", Depth: 1}, runRecordOfLen(t, 'b', n), {Prefix: "c/", Depth: 1}}
+		s := encodeRunRecords(rows)
+		if got := s.ends[1] - s.ends[0]; got != n {
+			t.Fatalf("the long record is %d bytes, want %d", got, n)
+		}
+		for name, wrap := range runRecordReaders {
+			t.Run(fmt.Sprintf("record=%d/%s", n, name), func(t *testing.T) {
+				got, err := decodeRunRecords(wrap(s.data), size)
+				if !errors.Is(err, io.EOF) {
+					t.Fatalf("after %d rows: %v, want EOF", len(got), err)
+				}
+				if diff := diffRows(rows, got); diff != "" {
+					t.Fatalf("(-written +read):\n%s", diff)
+				}
+			})
+		}
+	}
+	rows := []PrefixRow{{Prefix: "a/", Depth: 1}, runRecordOfLen(t, 'b', size+1)}
+	s := encodeRunRecords(rows)
+	for name, wrap := range runRecordReaders {
+		t.Run("record=buffer+1/"+name, func(t *testing.T) {
+			got, err := decodeRunRecords(wrap(s.data), size)
+			if len(got) != 1 || !errors.Is(err, errRunRecordCorrupt) {
+				t.Fatalf("%d rows, then %v; want 1 row, then errRunRecordCorrupt", len(got), err)
+			}
+		})
+	}
+}
+
+// TestRunRecordsTruncated: a stream cut at every byte reads back the
+// records before the cut, then ends with io.EOF if the cut falls between
+// records and errRunRecordCorrupt if inside one.
+func TestRunRecordsTruncated(t *testing.T) {
+	rows := randomSortedRows(rand.New(rand.NewPCG(9, 10)), 40)
+	s := encodeRunRecords(rows)
+	for _, size := range []int{512, runRecordWindow} {
+		for cut := range s.data {
+			whole := sort.SearchInts(s.ends, cut+1)
+			got, err := decodeRunRecords(bytes.NewReader(s.data[:cut]), size)
+			if diff := diffRows(rows[:whole], got); diff != "" {
+				t.Fatalf("buffer %d, cut at %d (-written +read):\n%s", size, cut, diff)
+			}
+			atBoundary := whole == 0 && cut == 0 || whole > 0 && s.ends[whole-1] == cut
+			if atBoundary && !errors.Is(err, io.EOF) {
+				t.Fatalf("buffer %d, cut at %d, between records: %v, want EOF", size, cut, err)
+			}
+			if !atBoundary && !errors.Is(err, errRunRecordCorrupt) {
+				t.Fatalf("buffer %d, cut at %d, inside a record: %v, want errRunRecordCorrupt", size, cut, err)
+			}
+		}
 	}
 }
