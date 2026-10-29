@@ -244,38 +244,42 @@ func (s *levelSpool) finish() error {
 	return nil
 }
 
-// read calls fn with each of depth's records in the order they were
-// added. The record is reused between calls. Reads of one depth may run
-// concurrently, each with its own file handle.
-func (s *levelSpool) read(depth int, fn func(r *spoolRecord) error) error {
-	sf := s.depths[depth]
-	f, err := os.Open(sf.path)
+// spoolReader reads one depth's records in the order they were added.
+type spoolReader struct {
+	f     *os.File
+	in    *bufio.Reader
+	depth int
+}
+
+// open starts reading depth's records.
+func (s *levelSpool) open(depth int) (*spoolReader, error) {
+	f, err := os.Open(s.depths[depth].path)
 	if err != nil {
-		return fmt.Errorf("open level spool %d: %w", depth, err)
+		return nil, fmt.Errorf("open level spool %d: %w", depth, err)
 	}
-	defer f.Close()
-	in := bufio.NewReaderSize(f, levelSpoolBufSize)
-	var r spoolRecord
-	for {
-		err := readSpoolRecord(in, &r)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("read level spool %d: %w", depth, err)
-		}
-		if err := fn(&r); err != nil {
-			return err
-		}
+
+	return &spoolReader{f: f, in: bufio.NewReaderSize(f, levelSpoolBufSize), depth: depth}, nil
+}
+
+// next decodes the next record into r: io.EOF after the last.
+func (r *spoolReader) next(rec *spoolRecord) error {
+	err := readSpoolRecord(r.in, rec)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("read level spool %d: %w", r.depth, err)
 	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close level spool %d: %w", depth, err)
+
+	return err
+}
+
+func (r *spoolReader) close() error {
+	if err := r.f.Close(); err != nil {
+		return fmt.Errorf("close level spool %d: %w", r.depth, err)
 	}
 
 	return nil
 }
 
-// remove deletes depth's file once every read of it is done.
+// remove deletes depth's file once it has been read.
 func (s *levelSpool) remove(depth int) error {
 	return removeIfExists(s.depths[depth].path)
 }
@@ -310,6 +314,13 @@ func readSpoolRecord(in *bufio.Reader, r *spoolRecord) error {
 // it.
 func decodeSpoolRecord(buf []byte, r *spoolRecord) error {
 	next := func() uint64 {
+		// Most fields (small counts, names' lengths, masks) fit in a byte.
+		if len(buf) > 0 && buf[0] < 0x80 {
+			v := buf[0]
+			buf = buf[1:]
+
+			return uint64(v)
+		}
 		v, k := binary.Uvarint(buf)
 		if k <= 0 {
 			buf = nil

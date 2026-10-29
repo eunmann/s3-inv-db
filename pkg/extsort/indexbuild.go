@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -436,10 +437,32 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 // progress reports: a power of two, so the check is a mask.
 const levelsProgressEvery = 1 << 17
 
+// levelBatchRows and levelBatches size writeLevels' hand-off from the
+// spool reader to the two writing sides: four batches of 512 records,
+// about 0.6 MiB.
+const (
+	levelBatchRows = 512
+	levelBatches   = 4
+)
+
+// levelBatch is a run of one depth's records. Both sides write it, and
+// the one that finishes it last returns it to be refilled.
+type levelBatch struct {
+	recs    []spoolRecord
+	depth   int
+	pending atomic.Int32
+}
+
 // writeLevels replays the spooled rows depth by depth into the index
 // writers, so every per-row file is in level order. A row's child start
 // and parent become rows once every depth's size is known: the first
 // row of a depth is the number of rows above it.
+//
+// One goroutine reads the spool once into batches for two sides that
+// share nothing and write side by side: the stats rows (tier stats,
+// core stats, depth index) here, and the names (prefix tree, MPHF keys)
+// on their own goroutine. Reading each depth twice, once per side, was
+// half of the stats side's time.
 func (b *IndexBuilder) writeLevels() error {
 	if err := b.spool.finish(); err != nil {
 		return err
@@ -460,29 +483,57 @@ func (b *IndexBuilder) writeLevels() error {
 	total := int64(b.posCount)
 	var written int64
 	b.stepProgress(stepWriteLevels, 0, total)
-	for depth := range len(b.spool.depths) {
-		// Two groups of writers share nothing (stats rows on one side,
-		// names and MPHF keys on the other), so each reads the depth's
-		// records itself and they write side by side. The stats side
-		// counts the rows.
-		names := make(chan error, 1)
-		go func() {
-			names <- b.spool.read(depth, func(r *spoolRecord) error { return b.writeNameRow(starts, depth, r) })
-		}()
-		err := b.spool.read(depth, func(r *spoolRecord) error {
+
+	free := make(chan *levelBatch, levelBatches)
+	for range levelBatches {
+		free <- &levelBatch{recs: make([]spoolRecord, levelBatchRows)}
+	}
+	release := func(batch *levelBatch) {
+		if batch.pending.Add(-1) == 0 {
+			free <- batch
+		}
+	}
+	// failed ends the reader early once a side fails; the sides drain
+	// what it already sent.
+	failed := make(chan struct{})
+	var failOnce sync.Once
+	fail := func() { failOnce.Do(func() { close(failed) }) }
+	stats := make(chan *levelBatch, levelBatches)
+	names := make(chan *levelBatch, levelBatches)
+	var readErr, namesErr error
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		readErr = b.readLevels(free, failed, stats, names)
+		if readErr != nil {
+			fail()
+		}
+	})
+	wg.Go(func() {
+		for batch := range names {
+			for i := 0; namesErr == nil && i < len(batch.recs); i++ {
+				if namesErr = b.writeNameRow(starts, batch.depth, &batch.recs[i]); namesErr != nil {
+					fail()
+				}
+			}
+			release(batch)
+		}
+	})
+	var statsErr error
+	for batch := range stats {
+		for i := 0; statsErr == nil && i < len(batch.recs); i++ {
+			if statsErr = b.writeStatsRow(depthW, starts, batch.depth, &batch.recs[i]); statsErr != nil {
+				fail()
+			}
 			written++
 			if written%levelsProgressEvery == 0 {
 				b.stepProgress(stepWriteLevels, written, total)
 			}
-
-			return b.writeStatsRow(depthW, starts, depth, r)
-		})
-		if err = errors.Join(err, <-names); err == nil {
-			err = b.spool.remove(depth)
 		}
-		if err != nil {
-			return errors.Join(err, depthW.Abort())
-		}
+		release(batch)
+	}
+	wg.Wait()
+	if err := errors.Join(readErr, statsErr, namesErr); err != nil {
+		return errors.Join(err, depthW.Abort())
 	}
 	if err := depthW.Close(); err != nil {
 		return fmt.Errorf("write depth index: %w", err)
@@ -490,6 +541,61 @@ func (b *IndexBuilder) writeLevels() error {
 	b.stepProgress(stepWriteLevels, total, total)
 
 	return os.RemoveAll(b.spool.dir) //nolint:wrapcheck // the path is in the error
+}
+
+// readLevels reads every depth's records once, in order, into batches
+// from free, and sends each batch to both sides; each depth's file is
+// removed once read. It closes the sides when done, or when failed
+// closes first (returning nil: the failure is the side's to report).
+func (b *IndexBuilder) readLevels(free chan *levelBatch, failed <-chan struct{}, sides ...chan<- *levelBatch) error {
+	defer func() {
+		for _, side := range sides {
+			close(side)
+		}
+	}()
+	for depth := range len(b.spool.depths) {
+		r, err := b.spool.open(depth)
+		if err != nil {
+			return err
+		}
+		for err == nil {
+			var batch *levelBatch
+			select {
+			case batch = <-free:
+			case <-failed:
+				return r.close()
+			}
+			batch.recs = batch.recs[:cap(batch.recs)]
+			n := 0
+			for ; n < len(batch.recs); n++ {
+				if err = r.next(&batch.recs[n]); err != nil {
+					break
+				}
+			}
+			if n == 0 {
+				free <- batch
+
+				continue
+			}
+			batch.recs, batch.depth = batch.recs[:n], depth
+			batch.pending.Store(int32(len(sides)))
+			for _, side := range sides {
+				select {
+				case side <- batch:
+				case <-failed:
+					return r.close()
+				}
+			}
+		}
+		if !errors.Is(err, io.EOF) {
+			return errors.Join(err, r.close())
+		}
+		if err := errors.Join(r.close(), b.spool.remove(depth)); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // writeStatsRow writes one spooled row's stats, the next in level
