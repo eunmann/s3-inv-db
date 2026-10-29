@@ -77,6 +77,61 @@ func (w *rankedBitsWriter) add(bit bool) error {
 	return nil
 }
 
+// addBits appends the first n bits of src, bit i at bit i%64 of word
+// i/64; the bits of src past n are ignored.
+func (w *rankedBitsWriter) addBits(src []uint64, n uint64) error {
+	for k := uint64(0); k < n; {
+		i := w.n % wordBits
+		if i == 0 && (w.n/wordBits)%rankBlockWords == 0 {
+			if err := putU64(w.dirBW, w.set); err != nil {
+				return fmt.Errorf("write rank directory: %w", err)
+			}
+		}
+		take := min(wordBits-i, n-k)
+		v := bitsAt(src, k, take)
+		w.word |= v << i
+		w.set += uint64(bits.OnesCount64(v))
+		w.n += take
+		k += take
+		if w.n%wordBits == 0 {
+			if err := putU64(w.bw, w.word); err != nil {
+				return fmt.Errorf("write %s: %w", filepath.Base(w.path), err)
+			}
+			w.word = 0
+		}
+	}
+
+	return nil
+}
+
+// bitsAt returns the n bits (1..64) of src from bit k, as addBits numbers
+// them, in the low bits.
+func bitsAt(src []uint64, k, n uint64) uint64 {
+	word, shift := k/wordBits, k%wordBits
+	v := src[word] >> shift
+	if shift+n > wordBits {
+		v |= src[word+1] << (wordBits - shift)
+	}
+	if n < wordBits {
+		v &= 1<<n - 1
+	}
+
+	return v
+}
+
+// setBit sets bit i of the bits a range writer collects for addBits,
+// growing them to hold it.
+func setBit(words []uint64, i uint64, bit bool) []uint64 {
+	for uint64(len(words)) <= i/wordBits {
+		words = append(words, 0)
+	}
+	if bit {
+		words[i/wordBits] |= 1 << (i % wordBits)
+	}
+
+	return words
+}
+
 func (w *rankedBitsWriter) close() error {
 	err := w.finish()
 	if err != nil {

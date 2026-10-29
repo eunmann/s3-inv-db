@@ -151,6 +151,23 @@ func (w *patchWriter) add(exception bool, count, bytes, size uint64) error {
 	return nil
 }
 
+// addRange records the next n rows: bit i of rows is whether row i is an
+// exception, and vals holds each exception's count, bytes and child
+// start, in row order.
+func (w *patchWriter) addRange(rows []uint64, n uint64, vals []uint64) error {
+	if err := w.rows.addBits(rows, n); err != nil {
+		return err
+	}
+	for _, v := range vals {
+		if err := putU64(w.bw, v); err != nil {
+			return fmt.Errorf("write %s: %w", CorePatchFile, err)
+		}
+	}
+	w.n += uint64(len(vals) / patchedFields)
+
+	return nil
+}
+
 func (w *patchWriter) close() error {
 	if err := w.bw.Flush(); err != nil {
 		return errors.Join(fmt.Errorf("flush %s: %w", CorePatchFile, err), w.abort())

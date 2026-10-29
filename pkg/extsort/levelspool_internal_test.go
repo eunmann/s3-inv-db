@@ -15,20 +15,10 @@ import (
 	"sort"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
-
-// TestSpoolRecordIsOneCacheLine: the replay hands every record from the
-// reader's core to two others; a record past a cache line costs each a
-// line per row.
-func TestSpoolRecordIsOneCacheLine(t *testing.T) {
-	if size := unsafe.Sizeof(spoolRecord{}); size > 64 {
-		t.Errorf("spoolRecord is %d bytes, want at most 64", size)
-	}
-}
 
 // spoolRecordCmp compares records by what they hold: a record without
 // tiers reads back with an empty slice.
@@ -100,6 +90,84 @@ func checkSpoolTestDepths(t *testing.T, s *levelSpool, n int) {
 		if i < n {
 			t.Fatalf("depth %d read up to record %d of %d", depth, i, n)
 		}
+	}
+}
+
+// TestLevelSpoolMarks: every markEvery rows of a depth a mark places the
+// next record in the depth's file and counts the multi-tier rows and
+// stored tier slots before it, and the records from one mark to the
+// next, or to the file's end, read back on their own.
+func TestLevelSpoolMarks(t *testing.T) {
+	const every = 64
+	for _, n := range []int{1, 4 * every, 4*3*every + 9} {
+		s := newLevelSpool(t.TempDir())
+		t.Cleanup(func() { _ = s.close() })
+		s.markEvery = every
+		for i := range n {
+			e := s.next()
+			e.depth, e.rec = i%4, spoolTestRecord(i)
+			if err := s.commit(); err != nil {
+				t.Fatalf("commit %d: %v", i, err)
+			}
+		}
+		if err := s.finish(); err != nil {
+			t.Fatal(err)
+		}
+		r := newSectionReader()
+		for depth, sf := range s.depths {
+			checkDepthMarks(t, r, sf, depth, every)
+		}
+	}
+}
+
+// checkDepthMarks reads sf, a depth of the spool TestLevelSpoolMarks
+// filled, from each of its marks.
+func checkDepthMarks(t *testing.T, r *spoolReader, sf *spoolFile, depth int, every uint64) {
+	t.Helper()
+	f, err := os.Open(sf.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err != nil || uint64(info.Size()) != sf.size {
+		t.Fatalf("depth %d: file %v (%v), %d bytes counted", depth, info.Size(), err, sf.size)
+	}
+	if want := (sf.rows + every - 1) / every; uint64(len(sf.marks)) != want {
+		t.Fatalf("depth %d: %d marks for %d rows, want %d", depth, len(sf.marks), sf.rows, want)
+	}
+	var local, multi, stored uint64
+	for j, m := range sf.marks {
+		if m.multi != multi || m.stored != stored {
+			t.Fatalf("depth %d mark %d: %d multi-tier rows, %d stored slots before it; want %d, %d", depth, j, m.multi, m.stored, multi, stored)
+		}
+		end := sf.size
+		if j+1 < len(sf.marks) {
+			end = sf.marks[j+1].off
+		}
+		r.section(f, depth, m.off, end)
+		var got spoolRecord
+		for {
+			if _, err := r.next(&got, nil); errors.Is(err, io.EOF) {
+				break
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(spoolTestRecord(depth+4*int(local)), got, spoolRecordCmp...); diff != "" {
+				t.Fatalf("depth %d row %d from mark %d (-added +read):\n%s", depth, local, j, diff)
+			}
+			if k := uint64(bits.OnesCount16(got.tierMask)); k >= 2 {
+				multi++
+				stored += k - 1
+			}
+			local++
+		}
+		if want := min(uint64(j+1)*every, sf.rows); local != want {
+			t.Fatalf("depth %d: read up to row %d from mark %d, want %d", depth, local, j, want)
+		}
+	}
+	if local != sf.rows || multi != sf.multi || stored != sf.stored {
+		t.Fatalf("depth %d: read %d rows, %d multi-tier, %d stored slots; counted %d, %d, %d",
+			depth, local, multi, stored, sf.rows, sf.multi, sf.stored)
 	}
 }
 

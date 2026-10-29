@@ -68,12 +68,16 @@ run files (deleted as merged, the
 last ones before the index finalizes), the
 level spool (~19 B per prefix) and the hash builder's spill files (24 B
 per prefix, each deleted once its partition is built). Every scratch
-file is written and read in sequence, so a build whose scratch doesn't
-fit in memory streams from disk instead of faulting page by page. The
+file is written in sequence and read in long sequential runs (the level
+spool by every core at once, 16Ki rows a run), so a build whose scratch
+doesn't fit in memory streams from disk instead of faulting page by
+page. The
 hash builder holds one partition of prefixes per worker (at most about
 2^20 of them), with as many workers as `0.25 × GOMEMLIMIT` allows
 (256 MiB with no limit), so its memory does not grow with the prefix
-count. A build that can't produce exact totals fails and removes what
+count. Beside it, writing the rows in level order takes up to about
+2 MiB per core (buffers plus two 16Ki-row chunks in flight), outside
+that budget. A build that can't produce exact totals fails and removes what
 it created; a previous index is left untouched.
 
 ## Querying

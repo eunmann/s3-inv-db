@@ -60,6 +60,34 @@ func writeTree(t *testing.T, prefixes []string) string {
 // order internOrder lists the rows (position order when nil).
 func writeTreeRows(t *testing.T, dir string, rows []treeTestRow, internOrder []int) {
 	t.Helper()
+	ids, segments, maxDist := internTreeRows(t, dir, rows, internOrder)
+	w, err := NewPrefixTreeWriter(dir, uint64(len(rows)), segments, maxDist, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, r := range rows {
+		if r.parent < 0 {
+			err = w.AddRoot()
+		} else {
+			err = w.Add(uint64(r.parent), ids[i])
+		}
+		if err != nil {
+			t.Fatalf("row %d (%q): %v", i, r.prefix, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// internTreeRows writes the dictionary of rows' segments into dir,
+// interned in the order internOrder lists the rows (position order when
+// nil), and returns each row's segment ID, the segment count and the
+// largest parent distance.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func internTreeRows(t *testing.T, dir string, rows []treeTestRow, internOrder []int) ([]uint32, uint32, uint64) {
+	t.Helper()
 	interner, err := NewPrefixSegmentInterner(dir, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -84,23 +112,8 @@ func writeTreeRows(t *testing.T, dir string, rows []treeTestRow, internOrder []i
 	if err := interner.Close(); err != nil {
 		t.Fatal(err)
 	}
-	w, err := NewPrefixTreeWriter(dir, uint64(len(rows)), interner.Count(), maxDist, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i, r := range rows {
-		if r.parent < 0 {
-			err = w.AddRoot()
-		} else {
-			err = w.Add(uint64(r.parent), ids[i])
-		}
-		if err != nil {
-			t.Fatalf("row %d (%q): %v", i, r.prefix, err)
-		}
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
+
+	return ids, interner.Count(), maxDist
 }
 
 // levelOrderTreeRows is a random tree in level order: names repeat

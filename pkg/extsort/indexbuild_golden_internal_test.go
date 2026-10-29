@@ -124,43 +124,52 @@ func TestIndexFilesMatchGolden(t *testing.T) {
 			digest: "8b110ab9e8c5f7fb80f52ce6a6e363b826a9db4fdad63b62cce5ad68c948c3fc",
 		},
 	}
+	// The rows replay on one goroutine, and in chunks of 64 rows on four.
+	replays := []struct {
+		name      string
+		markEvery uint64
+		workers   int
+	}{{"sequential", spoolMarkRows, 1}, {"chunks", 64, 4}}
 	for i, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := filepath.Join(t.TempDir(), "index")
-			b, err := NewIndexBuilder(dir, t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tc.declared != nil {
-				if err := b.SetPresentTiers(tc.declared); err != nil {
+		for _, replay := range replays {
+			t.Run(tc.name+"/"+replay.name, func(t *testing.T) {
+				dir := filepath.Join(t.TempDir(), "index")
+				b, err := NewIndexBuilder(dir, t.TempDir())
+				if err != nil {
 					t.Fatal(err)
 				}
-			}
-			for _, row := range goldenTierRows(tc.ids, tc.p, uint64(i)) {
-				if err := b.Add(row); err != nil {
-					t.Fatalf("Add(%q): %v", row.Prefix, err)
+				b.spool.markEvery, b.replayWorkers = replay.markEvery, replay.workers
+				if tc.declared != nil {
+					if err := b.SetPresentTiers(tc.declared); err != nil {
+						t.Fatal(err)
+					}
 				}
-			}
-			if err := b.Finalize(); err != nil {
-				t.Fatal(err)
-			}
-			entries, err := os.ReadDir(filepath.Join(dir, format.TierStatsDir))
-			if err != nil && !os.IsNotExist(err) {
-				t.Fatal(err)
-			}
-			files := make([]string, 0, len(entries))
-			for _, e := range entries {
-				files = append(files, e.Name())
-			}
-			slices.Sort(tc.files)
-			if !slices.Equal(files, tc.files) {
-				t.Fatalf("tier files %q, want %q", files, tc.files)
-			}
-			lines := strings.Join(indexFiles(t, dir), "\n")
-			sum := sha256.Sum256([]byte(lines))
-			if got := hex.EncodeToString(sum[:]); got != tc.digest {
-				t.Errorf("index digest %s, want %s; files:\n%s", got, tc.digest, lines)
-			}
-		})
+				for _, row := range goldenTierRows(tc.ids, tc.p, uint64(i)) {
+					if err := b.Add(row); err != nil {
+						t.Fatalf("Add(%q): %v", row.Prefix, err)
+					}
+				}
+				if err := b.Finalize(); err != nil {
+					t.Fatal(err)
+				}
+				entries, err := os.ReadDir(filepath.Join(dir, format.TierStatsDir))
+				if err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+				files := make([]string, 0, len(entries))
+				for _, e := range entries {
+					files = append(files, e.Name())
+				}
+				slices.Sort(tc.files)
+				if !slices.Equal(files, tc.files) {
+					t.Fatalf("tier files %q, want %q", files, tc.files)
+				}
+				lines := strings.Join(indexFiles(t, dir), "\n")
+				sum := sha256.Sum256([]byte(lines))
+				if got := hex.EncodeToString(sum[:]); got != tc.digest {
+					t.Errorf("index digest %s, want %s; files:\n%s", got, tc.digest, lines)
+				}
+			})
+		}
 	}
 }
