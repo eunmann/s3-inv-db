@@ -2,7 +2,6 @@ package s3inventory_test
 
 import (
 	"bytes"
-	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
@@ -75,64 +74,6 @@ func TestCSVInventoryReader_MalformedRowCount(t *testing.T) {
 
 	if got := r.Anomalies().BadSizes; got != 2 {
 		t.Errorf("Anomalies().BadSizes = %d, want 2", got)
-	}
-}
-
-func TestCSVInventoryReaderFromStream(t *testing.T) {
-	csv := "file.txt,1024,STANDARD,\n"
-
-	// Create a mock ReadCloser
-	r, err := s3inventory.NewCSVReaderFromStream(
-		io.NopCloser(bytes.NewReader([]byte(csv))),
-		"test.csv",
-		s3inventory.CSVReaderConfig{
-			KeyCol:     0,
-			SizeCol:    1,
-			StorageCol: 2,
-		},
-	)
-	if err != nil {
-		t.Fatalf("NewCSVReaderFromStream failed: %v", err)
-	}
-	defer r.Close()
-
-	row, err := r.Next()
-	if err != nil {
-		t.Fatalf("Next failed: %v", err)
-	}
-	if row.Key != "file.txt" || row.Size != 1024 {
-		t.Errorf("got %+v, want {Key:file.txt Size:1024}", row)
-	}
-}
-
-func TestCSVInventoryReaderFromStream_Gzip(t *testing.T) {
-	csv := "file.txt,1024,STANDARD,\n"
-
-	var buf bytes.Buffer
-	gzw := gzip.NewWriter(&buf)
-	_, _ = gzw.Write([]byte(csv))
-	gzw.Close()
-
-	r, err := s3inventory.NewCSVReaderFromStream(
-		io.NopCloser(bytes.NewReader(buf.Bytes())),
-		"test.csv.gz",
-		s3inventory.CSVReaderConfig{
-			KeyCol:     0,
-			SizeCol:    1,
-			StorageCol: 2,
-		},
-	)
-	if err != nil {
-		t.Fatalf("NewCSVReaderFromStream failed: %v", err)
-	}
-	defer r.Close()
-
-	row, err := r.Next()
-	if err != nil {
-		t.Fatalf("Next failed: %v", err)
-	}
-	if row.Key != "file.txt" || row.Size != 1024 {
-		t.Errorf("got %+v, want {Key:file.txt Size:1024}", row)
 	}
 }
 

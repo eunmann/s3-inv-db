@@ -456,21 +456,24 @@ mask is `mask[k]`.
 plus the prefix count and maximum depth. `verify` and
 `format.VerifyManifest` check each file's size and checksum against it.
 
-A file's checksum is the hex SHA-256 of the SHA-256 digests of its
-64 MiB pieces, concatenated in order (one empty piece for an empty
-file). The pieces of every file are hashed in parallel, so writing or
-verifying a manifest uses every core instead of one thread reading the
-whole index.
+A file's checksum is the CRC-32C of the CRC-32Cs of its 64 MiB pieces,
+each 4 bytes big-endian, concatenated in order (one empty piece for an
+empty file), as 8 hex digits. It guards against accidental damage
+only: the manifest travels with the files, so a cryptographic hash
+would authenticate nothing, and CRC-32C runs on the CPU's CRC
+instructions. The pieces of every file are hashed in parallel, so
+writing or verifying a manifest uses every core instead of one thread
+reading the whole index.
 
 ```json
 {
   "created_at": "2026-01-02T03:04:05Z",
   "files": {
-    "core_stats.bin": {"checksum": "9f2c…", "size": 37988049},
+    "core_stats.bin": {"checksum": "9f2c41d7", "size": 37988049},
     "tier_stats/tier_multi.bin": {"checksum": "…", "size": 2567019},
     "...": {"checksum": "…", "size": 0}
   },
-  "version": 2,
+  "version": 3,
   "node_count": 2374251,
   "max_depth": 7
 }

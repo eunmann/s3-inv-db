@@ -417,12 +417,13 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 	// ingest doesn't leave most workers idle behind one big chunk.
 	sortFilesLargestFirst(manifest)
 
-	numWorkers := ingestWorkerCount(len(manifest.Files))
+	procs := runtime.GOMAXPROCS(0)
+	numWorkers := ingestWorkerCount(procs, len(manifest.Files))
 	log.Info().
-		Int("num_cpu", runtime.NumCPU()).
+		Int("gomaxprocs", procs).
 		Int("manifest_files", len(manifest.Files)).
 		Int("ingest_workers", numWorkers).
-		Msg("ingest worker count derived from NumCPU")
+		Msg("ingest worker count derived from GOMAXPROCS")
 
 	return &ingestConfig{
 		manifest:        manifest,
@@ -439,12 +440,13 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 }
 
 // ingestWorkerCount returns the worker count for download+parse: the
-// smaller of NumCPU and the manifest's chunk count (no point spinning
-// up 64 workers for a 3-file manifest). Floored at 2 so even a single
-// CPU runs with overlap between download and parse.
-func ingestWorkerCount(fileCount int) int {
+// smaller of procs (GOMAXPROCS, which honours a container CPU quota
+// where NumCPU does not) and the manifest's chunk count (no point
+// spinning up 64 workers for a 3-file manifest). Floored at 2 so even a
+// single CPU runs with overlap between download and parse.
+func ingestWorkerCount(procs, fileCount int) int {
 	const minWorkers = 2
-	n := runtime.NumCPU()
+	n := procs
 	if fileCount > 0 && fileCount < n {
 		n = fileCount
 	}
@@ -833,7 +835,7 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, fetched fetche
 	if job.config.format == s3fetch.InventoryFormatParquet {
 		reader, err = openParquetReader(body, job.config.fileSize, p.tempDir)
 	} else {
-		reader, err = s3inventory.NewCSVReaderFromStream(counted, job.key, s3inventory.CSVReaderConfig{
+		reader, err = s3inventory.NewCSVReaderFromStream(counted, s3inventory.CSVReaderConfig{
 			KeyCol:          job.config.keyCol,
 			SizeCol:         job.config.sizeCol,
 			StorageCol:      job.config.storageCol,

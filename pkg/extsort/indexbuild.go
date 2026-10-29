@@ -370,7 +370,8 @@ func (b *IndexBuilder) SetProgress(fn events.ProgressFunc) { b.onProgress = fn }
 
 // FinalizeWithContext closes all remaining stack nodes and writes final
 // files. Each step is reported to the SetProgress callback and logged
-// at info level with its duration and storage waits.
+// at info level with its duration and storage waits. The files are not
+// synced: publishing the staged index makes them durable in one pass.
 func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	if b.closed {
 		return nil
@@ -418,12 +419,6 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 
 	if err := format.WriteManifest(b.outDir, b.posCount, b.maxDepth, b.stepProgress); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
-	}
-
-	log.Debug().Msg("index builder: syncing directory")
-
-	if err := format.SyncDir(b.outDir); err != nil {
-		return fmt.Errorf("sync dir: %w", err)
 	}
 
 	log.Debug().

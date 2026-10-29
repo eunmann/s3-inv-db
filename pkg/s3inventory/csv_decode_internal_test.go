@@ -30,6 +30,10 @@ var decodeKeyCases = []string{
 	"%%41",
 	"a%2",
 	"x+%41+y%42",
+	"+%zz",
+	"a+b%",
+	"%2B+",
+	"++%41%",
 }
 
 // checkDecodeKey compares decodeKey with url.QueryUnescape, the decoder
