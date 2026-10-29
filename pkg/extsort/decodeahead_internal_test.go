@@ -9,10 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"testing"
 	"time"
 	"unsafe"
+
+	"github.com/rs/zerolog"
 )
 
 var errInjected = errors.New("injected read failure")
@@ -227,5 +230,41 @@ func TestFinalFanInLeavesRoomForMemoryRuns(t *testing.T) {
 	budget, _ := openRunBytes(limit)
 	if held := int64(fanIn)*(openRunHeapBytes+aheadRunHeapBytes) + memRuns*aheadRunHeapBytes; held > budget {
 		t.Fatalf("final merge holds %d bytes, budget %d", held, budget)
+	}
+}
+
+// TestMergePhaseLeavesRoomForMemoryRuns: the pipeline's final merge
+// sizes its fan-in around the memory runs it reads.
+func TestMergePhaseLeavesRoomForMemoryRuns(t *testing.T) {
+	const limit, memRuns, maxFanIn = 256 << 20, 8, 16
+	prev := debug.SetMemoryLimit(limit)
+	t.Cleanup(func() { debug.SetMemoryLimit(prev) })
+
+	p := NewPipeline(DefaultConfig(), nil)
+	p.tempDir = t.TempDir()
+	for i := range memRuns {
+		p.memRuns = append(p.memRuns, encodeMemRun([]*PrefixRow{{Prefix: fmt.Sprintf("p%02d/", i), Depth: 1, Count: 1}}))
+	}
+	log := zerolog.Nop()
+	iter, cleanup, stats, err := p.runMergePhase(t.Context(), &log, 0, 4, maxFanIn, 64<<10)
+	if err != nil {
+		t.Fatalf("runMergePhase: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cleanup(); err != nil {
+			t.Error(err)
+		}
+	})
+	if want := finalFanInFor(limit, maxFanIn, memRuns); stats.FinalFanIn != want {
+		t.Fatalf("final fan-in %d, want %d with %d memory runs", stats.FinalFanIn, want, memRuns)
+	}
+	for i := range memRuns {
+		row, err := iter.Next()
+		if err != nil {
+			t.Fatalf("row %d: %v", i, err)
+		}
+		if want := fmt.Sprintf("p%02d/", i); row.Prefix != want {
+			t.Fatalf("row %d: prefix %q, want %q", i, row.Prefix, want)
+		}
 	}
 }
