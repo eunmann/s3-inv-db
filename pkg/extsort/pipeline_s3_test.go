@@ -591,9 +591,11 @@ func TestPipelineRun_ResidualsInMemoryMatchSpilled(t *testing.T) {
 	}
 }
 
-// A build cancelled while chunks are downloading ahead of the workers
-// leaves no downloaded chunk in scratch: a fetcher holding one when the
-// build stops removes it.
+// Parquet chunks, which need random access, still download to
+// scratch, and a build cancelled while they download ahead of the
+// workers leaves none there: a fetcher holding one when the build stops
+// removes it. The build is cancelled only once a download is seen, so
+// one that never appears fails the test.
 func TestPipelineRun_CancelledIngestLeavesNoChunks(t *testing.T) {
 	raw := s3test.RawClient(t)
 	bucket := s3test.Bucket(t, raw)
@@ -603,6 +605,7 @@ func TestPipelineRun_CancelledIngestLeavesNoChunks(t *testing.T) {
 		Preset:  "small",
 		Seed:    11,
 		Logger:  zerolog.Nop(),
+		Format:  seeder.FormatParquet,
 	}, seeder.S3Config{Bucket: bucket, Prefix: "inv/", SrcBucket: "src"}, 1, 11, time.Now().UTC().Truncate(time.Minute), 4*runtime.NumCPU())
 	if err != nil {
 		t.Fatalf("UploadMultiChunkInventory: %v", err)
@@ -634,10 +637,9 @@ func TestPipelineRun_CancelledIngestLeavesNoChunks(t *testing.T) {
 	}
 }
 
-// TestPipelineRun_CancelWaitsForDownloads cancels a build while a chunk
-// download is stalled and checks Run returns only after the downloads
-// have unwound and removed their files, never while one may still
-// write to scratch.
+// TestPipelineRun_CancelWaitsForDownloads cancels a build while a CSV
+// chunk's GET is stalled and checks Run returns only after every GET
+// has unwound, never while one may still be running.
 func TestPipelineRun_CancelWaitsForDownloads(t *testing.T) {
 	raw := s3test.RawClient(t)
 	bucket := s3test.Bucket(t, raw)
