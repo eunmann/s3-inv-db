@@ -7,10 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/loadcontrol"
 	"github.com/eunmann/s3-inv-db/internal/s3test"
@@ -117,6 +121,62 @@ func TestIndexSource_SizesAnUnlistedRunFromItsManifest(t *testing.T) {
 	}
 	if err := newServer(m.TotalBytes()).discovery.Load(t.Context(), unlisted); err != nil {
 		t.Errorf("load into a budget that fits: %v", err)
+	}
+}
+
+// TestIndexSource_FailedDownloadKeepsPreLoadPin: a manual load whose
+// published index fails verification on download leaves the run in
+// error with the pin and user-unload mark it had before the load.
+func TestIndexSource_FailedDownloadKeepsPreLoadPin(t *testing.T) {
+	raw := s3test.RawClient(t)
+	bucket := s3test.Bucket(t, raw)
+	run := indexstore.Run{Source: "src-bucket", Inventory: "daily", Run: "2026-10-24T01-00Z"}
+	dir := smallIndex(t)
+	if err := indexstore.New(raw, bucket).Publish(t.Context(), dir, run.Prefix("idx/")); err != nil {
+		t.Fatal(err)
+	}
+	stat, err := os.Stat(filepath.Join(dir, format.CoreStatsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.PutObject(t.Context(), &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(run.Prefix("idx/") + format.CoreStatsFile),
+		Body:   strings.NewReader(strings.Repeat("x", int(stat.Size()))),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := New(t.Context(), Config{
+		Addr: ":0", Logger: zerolog.Nop(), PriceTable: pricing.DefaultUSEast1Prices(), DB: testDB(t),
+		CacheDir: t.TempDir(), IndexSource: "s3://" + bucket + "/idx/", MaxIndexDisk: 1 << 30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.manager.Close() })
+	target := inventory.Inventory{
+		SourceBucket: run.Source, Name: run.Inventory, Run: run.Run,
+		ManifestKey: run.Prefix("idx/") + format.ManifestFile,
+	}
+	unloadedAt := time.Unix(1_700_000_000, 0)
+	if err := srv.manager.Hydrate(t.Context(), inventory.Info{
+		ID: target.CompositeID(), Name: "n", Path: "p", State: inventory.StateNotLoaded, UserUnloadedAt: unloadedAt,
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := srv.discovery.Load(t.Context(), target); !errors.Is(err, format.ErrChecksumMismatch) {
+		t.Fatalf("load of a tampered index = %v, want ErrChecksumMismatch", err)
+	}
+	got, _ := srv.manager.Get(target.CompositeID())
+	if got.State != inventory.StateError {
+		t.Errorf("state = %s, want error", got.State)
+	}
+	if got.Pinned {
+		t.Error("pinned by a load whose download failed")
+	}
+	if !got.UserUnloadedAt.Equal(unloadedAt) {
+		t.Errorf("UserUnloadedAt = %v, want %v as before the load", got.UserUnloadedAt, unloadedAt)
 	}
 }
 
