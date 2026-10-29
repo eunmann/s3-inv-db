@@ -33,7 +33,7 @@ import (
 //	  -count=1 -run=^$ ./internal/loader/...
 
 // chunkCountFor returns the fixture's data file count: up to four per
-// ingest worker (the pool is min(NumCPU, data files)), each file at
+// ingest worker (the pool is min(GOMAXPROCS, data files)), each file at
 // least minPerChunk objects, so on a many-core host the floor caps the
 // count below four per worker. A real inventory is many data files, more than
 // a host has cores, so each worker has more chunks queued: fetchers
@@ -46,6 +46,9 @@ import (
 // parse. Following the core count rather than a fixed file size gives
 // the per-PR 1M runs and the 10M scale runs the same queue depth per
 // worker wherever the floor does not bind (up to 25 cores for 1M).
+// It scales with NumCPU, not GOMAXPROCS, so a run with GOMAXPROCS
+// lowered (a CPU-quota stand-in) keeps the same inventory and still
+// has more files than workers.
 func chunkCountFor(numObjects int) int {
 	const (
 		chunksPerWorker = 4
