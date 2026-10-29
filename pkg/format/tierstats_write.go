@@ -123,7 +123,7 @@ func (b *slotBits) add(count, bytes uint64) {
 
 // widths are the byte widths that hold every value added, at least one
 // byte each, even when every value is zero (or nothing was added).
-func (b slotBits) widths() tierSlotWidths {
+func (b *slotBits) widths() tierSlotWidths {
 	return tierSlotWidths{count: byteWidthOf(b.count), bytes: byteWidthOf(b.bytes)}
 }
 

@@ -453,6 +453,80 @@ type levelBatch struct {
 	pending atomic.Int32
 }
 
+// levelHandoff carries batches from the spool reader to the writing
+// sides and back. Failed closes when either end fails: the reader then
+// stops, and the sides drain what it already sent.
+type levelHandoff struct {
+	free     chan *levelBatch
+	failed   chan struct{}
+	sides    []chan *levelBatch
+	failOnce sync.Once
+}
+
+func newLevelHandoff(sides int) *levelHandoff {
+	h := &levelHandoff{free: make(chan *levelBatch, levelBatches), failed: make(chan struct{})}
+	for range levelBatches {
+		h.free <- &levelBatch{recs: make([]spoolRecord, levelBatchRows)}
+	}
+	for range sides {
+		h.sides = append(h.sides, make(chan *levelBatch, levelBatches))
+	}
+
+	return h
+}
+
+func (h *levelHandoff) fail() { h.failOnce.Do(func() { close(h.failed) }) }
+
+// take returns an empty batch to fill, or false once failed.
+func (h *levelHandoff) take() (*levelBatch, bool) {
+	select {
+	case batch := <-h.free:
+		batch.recs = batch.recs[:cap(batch.recs)]
+
+		return batch, true
+	case <-h.failed:
+		return nil, false
+	}
+}
+
+// send gives batch to every side, or returns false once failed.
+func (h *levelHandoff) send(batch *levelBatch) bool {
+	batch.pending.Store(int32(len(h.sides)))
+	for _, side := range h.sides {
+		select {
+		case side <- batch:
+		case <-h.failed:
+			return false
+		}
+	}
+
+	return true
+}
+
+// release is a side's end of batch; the last side to finish it frees it.
+func (h *levelHandoff) release(batch *levelBatch) {
+	if batch.pending.Add(-1) == 0 {
+		h.free <- batch
+	}
+}
+
+// drain writes every row of every batch on side i in order, until the
+// first error, then only releases batches until the reader closes the
+// side.
+func (h *levelHandoff) drain(i int, write func(depth int, r *spoolRecord) error) error {
+	var err error
+	for batch := range h.sides[i] {
+		for j := 0; err == nil && j < len(batch.recs); j++ {
+			if err = write(batch.depth, &batch.recs[j]); err != nil {
+				h.fail()
+			}
+		}
+		h.release(batch)
+	}
+
+	return err
+}
+
 // writeLevels replays the spooled rows depth by depth into the index
 // writers, so every per-row file is in level order. A row's child start
 // and parent become rows once every depth's size is known: the first
@@ -484,53 +558,26 @@ func (b *IndexBuilder) writeLevels() error {
 	var written int64
 	b.stepProgress(stepWriteLevels, 0, total)
 
-	free := make(chan *levelBatch, levelBatches)
-	for range levelBatches {
-		free <- &levelBatch{recs: make([]spoolRecord, levelBatchRows)}
-	}
-	release := func(batch *levelBatch) {
-		if batch.pending.Add(-1) == 0 {
-			free <- batch
-		}
-	}
-	// failed ends the reader early once a side fails; the sides drain
-	// what it already sent.
-	failed := make(chan struct{})
-	var failOnce sync.Once
-	fail := func() { failOnce.Do(func() { close(failed) }) }
-	stats := make(chan *levelBatch, levelBatches)
-	names := make(chan *levelBatch, levelBatches)
+	const statsSide, namesSide = 0, 1
+	h := newLevelHandoff(2)
 	var readErr, namesErr error
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		readErr = b.readLevels(free, failed, stats, names)
-		if readErr != nil {
-			fail()
+		if readErr = b.readLevels(h); readErr != nil {
+			h.fail()
 		}
 	})
 	wg.Go(func() {
-		for batch := range names {
-			for i := 0; namesErr == nil && i < len(batch.recs); i++ {
-				if namesErr = b.writeNameRow(starts, batch.depth, &batch.recs[i]); namesErr != nil {
-					fail()
-				}
-			}
-			release(batch)
-		}
+		namesErr = h.drain(namesSide, func(depth int, r *spoolRecord) error { return b.writeNameRow(starts, depth, r) })
 	})
-	var statsErr error
-	for batch := range stats {
-		for i := 0; statsErr == nil && i < len(batch.recs); i++ {
-			if statsErr = b.writeStatsRow(depthW, starts, batch.depth, &batch.recs[i]); statsErr != nil {
-				fail()
-			}
-			written++
-			if written%levelsProgressEvery == 0 {
-				b.stepProgress(stepWriteLevels, written, total)
-			}
+	statsErr := h.drain(statsSide, func(depth int, r *spoolRecord) error {
+		written++
+		if written%levelsProgressEvery == 0 {
+			b.stepProgress(stepWriteLevels, written, total)
 		}
-		release(batch)
-	}
+
+		return b.writeStatsRow(depthW, starts, depth, r)
+	})
 	wg.Wait()
 	if err := errors.Join(readErr, statsErr, namesErr); err != nil {
 		return errors.Join(err, depthW.Abort())
@@ -543,13 +590,13 @@ func (b *IndexBuilder) writeLevels() error {
 	return os.RemoveAll(b.spool.dir) //nolint:wrapcheck // the path is in the error
 }
 
-// readLevels reads every depth's records once, in order, into batches
-// from free, and sends each batch to both sides; each depth's file is
-// removed once read. It closes the sides when done, or when failed
-// closes first (returning nil: the failure is the side's to report).
-func (b *IndexBuilder) readLevels(free chan *levelBatch, failed <-chan struct{}, sides ...chan<- *levelBatch) error {
+// readLevels reads every depth's records once, in order, and hands
+// them to the sides; each depth's file is removed once read. It closes
+// the sides when done, or once the handoff failed (returning nil: the
+// failure is the side's to report).
+func (b *IndexBuilder) readLevels(h *levelHandoff) error {
 	defer func() {
-		for _, side := range sides {
+		for _, side := range h.sides {
 			close(side)
 		}
 	}()
@@ -558,44 +605,48 @@ func (b *IndexBuilder) readLevels(free chan *levelBatch, failed <-chan struct{},
 		if err != nil {
 			return err
 		}
-		for err == nil {
-			var batch *levelBatch
-			select {
-			case batch = <-free:
-			case <-failed:
-				return r.close()
-			}
-			batch.recs = batch.recs[:cap(batch.recs)]
-			n := 0
-			for ; n < len(batch.recs); n++ {
-				if err = r.next(&batch.recs[n]); err != nil {
-					break
-				}
-			}
-			if n == 0 {
-				free <- batch
-
-				continue
-			}
-			batch.recs, batch.depth = batch.recs[:n], depth
-			batch.pending.Store(int32(len(sides)))
-			for _, side := range sides {
-				select {
-				case side <- batch:
-				case <-failed:
-					return r.close()
-				}
-			}
+		done, err := readDepth(r, h)
+		if err = errors.Join(err, r.close()); err != nil || !done {
+			return err
 		}
-		if !errors.Is(err, io.EOF) {
-			return errors.Join(err, r.close())
-		}
-		if err := errors.Join(r.close(), b.spool.remove(depth)); err != nil {
+		if err := b.spool.remove(depth); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// readDepth hands r's records to the sides in batches: done is false
+// when the handoff failed first.
+func readDepth(r *spoolReader, h *levelHandoff) (bool, error) {
+	for {
+		batch, ok := h.take()
+		if !ok {
+			return false, nil
+		}
+		n := 0
+		var err error
+		for ; n < len(batch.recs); n++ {
+			if err = r.next(&batch.recs[n]); err != nil {
+				break
+			}
+		}
+		if n == 0 {
+			h.free <- batch
+		} else {
+			batch.recs, batch.depth = batch.recs[:n], r.depth
+			if !h.send(batch) {
+				return false, nil
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
 }
 
 // writeStatsRow writes one spooled row's stats, the next in level

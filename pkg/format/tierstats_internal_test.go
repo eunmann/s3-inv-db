@@ -402,7 +402,7 @@ func TestRankedBits(t *testing.T) {
 // TestSlotBitsWidthsAreWidestValues: the OR's widths equal the widest
 // value's, at every byte boundary and for random values.
 func TestSlotBitsWidthsAreWidestValues(t *testing.T) {
-	var vals []uint64
+	vals := make([]uint64, 0, 16+1000)
 	for k := range 8 {
 		vals = append(vals, 1<<(8*k)-1, 1<<(8*k))
 	}
