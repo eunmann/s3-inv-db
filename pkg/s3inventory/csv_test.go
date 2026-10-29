@@ -160,6 +160,10 @@ type S3InventoryRecord struct {
 	Size         int64  `parquet:"size"`
 }
 
+var s3InventoryRecordColumns = s3inventory.ParquetReaderConfig{
+	KeyCol: s3inventory.ColumnAt(0), StorageCol: s3inventory.ColumnAt(1), SizeCol: s3inventory.ColumnAt(2),
+}
+
 func TestParquetInventoryReader(t *testing.T) {
 	dir := t.TempDir()
 	parquetPath := filepath.Join(dir, "test.parquet")
@@ -187,11 +191,7 @@ func TestParquetInventoryReader(t *testing.T) {
 		t.Fatalf("Stat failed: %v", err)
 	}
 
-	reader, err := s3inventory.NewParquetReader(f, info.Size(), s3inventory.ParquetReaderConfig{
-		KeyCol:     0,
-		StorageCol: 1,
-		SizeCol:    2,
-	})
+	reader, err := s3inventory.NewParquetReader(f, info.Size(), s3InventoryRecordColumns)
 	if err != nil {
 		t.Fatalf("NewParquetReader failed: %v", err)
 	}
@@ -325,9 +325,7 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 	f, _ := os.Open(parquetPath)
 	defer f.Close()
 	info, _ := f.Stat()
-	parquetReader, err := s3inventory.NewParquetReader(f, info.Size(), s3inventory.ParquetReaderConfig{
-		KeyCol: 0, StorageCol: 1, SizeCol: 2,
-	})
+	parquetReader, err := s3inventory.NewParquetReader(f, info.Size(), s3InventoryRecordColumns)
 	if err != nil {
 		t.Fatalf("NewParquetReader failed: %v", err)
 	}
@@ -373,9 +371,7 @@ func TestParquetInventoryReader_EmptyFile(t *testing.T) {
 	defer f.Close()
 	info, _ := f.Stat()
 
-	reader, err := s3inventory.NewParquetReader(f, info.Size(), s3inventory.ParquetReaderConfig{
-		KeyCol: 0, SizeCol: 1, StorageCol: 2,
-	})
+	reader, err := s3inventory.NewParquetReader(f, info.Size(), s3InventoryRecordColumns)
 	if err != nil {
 		t.Fatalf("NewParquetReader failed: %v", err)
 	}
@@ -410,9 +406,7 @@ func TestParquetInventoryReader_LargeRowGroups(t *testing.T) {
 	defer f.Close()
 	info, _ := f.Stat()
 
-	reader, err := s3inventory.NewParquetReader(f, info.Size(), s3inventory.ParquetReaderConfig{
-		KeyCol: 0, SizeCol: 1, StorageCol: 2,
-	})
+	reader, err := s3inventory.NewParquetReader(f, info.Size(), s3InventoryRecordColumns)
 	if err != nil {
 		t.Fatalf("NewParquetReader failed: %v", err)
 	}
