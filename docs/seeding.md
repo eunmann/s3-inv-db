@@ -65,6 +65,7 @@ stack has grouping content from the first boot.
 | `large` | 20 | 8 | Deep, wide trees |
 | `realistic` | 15 | 7 | S3-like path patterns (default) |
 | `deep_pyramid` | 256 (leaf) | 10 | Narrow-top / wide-bottom shape with long descriptive segments — the regime where the prefix dictionary pays off |
+| `unique_dirs` | 1000 users | 3 | `uploads/<user>/<uuid>/<file>`: a directory per object, about one prefix per object |
 
 ## Mixed-size mixes
 
