@@ -41,7 +41,7 @@ func run() error {
 	runStep := fs.Duration("run-step", 24*time.Hour, "spacing between consecutive runs (target=s3)")
 	objects := fs.Int("objects", defaultObjectsPerRun, "objects per inventory run (overridden per-config by --objects-per-config when set)")
 	objectsPerConfig := fs.String("objects-per-config", "", "comma-separated object counts cycled across inventory configs (e.g. 5000,500000,5000000); overrides --objects when set")
-	preset := fs.String("preset", "realistic", "config preset (small/medium/large/realistic/deep_pyramid)")
+	preset := fs.String("preset", "realistic", "config preset (small/medium/large/realistic/deep_pyramid/unique_dirs)")
 	format := fs.String("format", string(seeder.FormatCSV), "data file format: csv (gzipped) | parquet (Snappy) (target=s3)")
 	seed := fs.Int64("seed", 0, "random seed (0 = use default seed)")
 	verbose := fs.Bool("verbose", false, "enable debug logging")
