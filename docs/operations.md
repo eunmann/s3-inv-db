@@ -92,6 +92,15 @@ evicted 2.4M-prefix index plus 1000 lookups took 36 ms instead of
 background. Default readahead is kept on purpose: `MADV_RANDOM`
 helps only workloads of a few queries per cold period (#50, #77).
 
+## Inventory format
+
+Configure inventories as **Apache Parquet** where you can. Builds read
+CSV (gzip) and Parquet (Snappy) alike, but gunzipping and parsing CSV
+is the largest part of a build's input cost. In a 10M-object build on
+4 vCPUs, a Parquet inventory built 13% faster with 15% less CPU than
+the same objects as CSV, while downloading about 29% more bytes (the
+BenchmarkPipeline `format=parquet` shape). ORC isn't supported.
+
 ## Builds outside the server
 
 By default the server builds indexes itself. To build elsewhere (a
