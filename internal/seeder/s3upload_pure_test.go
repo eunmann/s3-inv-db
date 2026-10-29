@@ -270,3 +270,31 @@ func TestEncodeCSVGz_ObjectMetadata(t *testing.T) {
 		t.Errorf("an object's ETag and LastModifiedDate depend on its row position")
 	}
 }
+
+func TestFixtureFingerprint(t *testing.T) {
+	fingerprint := func(preset string, sorted bool, seed int64) string {
+		t.Helper()
+		fp, err := seeder.FixtureFingerprint(t.Context(), seeder.Config{Preset: preset, SortedKeys: sorted, Objects: 5}, seed)
+		if err != nil {
+			t.Fatalf("FixtureFingerprint(%s, sorted=%v, %d): %v", preset, sorted, seed, err)
+		}
+
+		return fp
+	}
+	base := fingerprint("realistic", false, 1000)
+	if len(base) != 6 || strings.Trim(base, "0123456789abcdef") != "" {
+		t.Errorf("fingerprint %q is not 6 hex digits", base)
+	}
+	if again := fingerprint("realistic", false, 1000); again != base {
+		t.Errorf("same inputs gave %q then %q", base, again)
+	}
+	for name, other := range map[string]string{
+		"preset": fingerprint("deep_pyramid", false, 1000),
+		"order":  fingerprint("realistic", true, 1000),
+		"seed":   fingerprint("realistic", false, 1001),
+	} {
+		if other == base {
+			t.Errorf("a different %s gave the same fingerprint %q", name, base)
+		}
+	}
+}

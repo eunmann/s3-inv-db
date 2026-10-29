@@ -107,15 +107,29 @@ func BenchmarkPipelineSlowS3(b *testing.B) {
 const fixtureInfoKey = "fixture.json"
 
 // seededInventory returns the fixture inventory for preset, size and
-// chunk count, seeding it into the local S3 server only once per server
-// and A/B side: every later run of that side reads the same upload, and
-// each side builds from its own seeder's output. Seeding goes straight
-// to the local server, so a slow client's link only slows the build's
-// reads.
+// chunk count, seeding it into the local S3 server only once per server,
+// A/B side and seeder output: every later run of that side reads the
+// same upload, each side builds from its own seeder's output, and the
+// seeder's fingerprint in the bucket name keeps a fixture an older
+// seeder wrote from being reused. Seeding goes straight to the local
+// server, so a slow client's link only slows the build's reads.
 func seededInventory(b *testing.B, preset string, numObjects, chunks int) seeder.InventoryInfo {
 	b.Helper()
 	raw := s3test.RawClient(b)
-	bucket := s3test.FixtureBucket(b, raw, fmt.Sprintf("%s-%d-%d", preset, numObjects, chunks))
+	cfg := seeder.Config{
+		Target:     seeder.TargetS3,
+		Objects:    numObjects,
+		Preset:     strings.TrimSuffix(preset, "_sorted"),
+		Seed:       int64(numObjects ^ chunks),
+		Logger:     zerolog.Nop(),
+		SortedKeys: strings.HasSuffix(preset, "_sorted"),
+	}
+	seed := int64(numObjects)
+	fingerprint, err := seeder.FixtureFingerprint(b.Context(), cfg, seed)
+	if err != nil {
+		b.Fatalf("FixtureFingerprint: %v", err)
+	}
+	bucket := s3test.FixtureBucket(b, raw, fmt.Sprintf("%s-%d-%d-%s", preset, numObjects, chunks, fingerprint))
 	if out, err := raw.GetObject(b.Context(), &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(fixtureInfoKey)}); err == nil {
 		var info seeder.InventoryInfo
 		decodeErr := json.NewDecoder(out.Body).Decode(&info)
@@ -125,17 +139,9 @@ func seededInventory(b *testing.B, preset string, numObjects, chunks int) seeder
 		}
 	}
 	info, err := seeder.UploadMultiChunkInventory(
-		b.Context(), raw,
-		seeder.Config{
-			Target:     seeder.TargetS3,
-			Objects:    numObjects,
-			Preset:     strings.TrimSuffix(preset, "_sorted"),
-			Seed:       int64(numObjects ^ chunks),
-			Logger:     zerolog.Nop(),
-			SortedKeys: strings.HasSuffix(preset, "_sorted"),
-		},
+		b.Context(), raw, cfg,
 		seeder.S3Config{Bucket: bucket, Prefix: "bench-inv/", SrcBucket: "bench-src"},
-		1, int64(numObjects), time.Now().UTC().Truncate(time.Minute), chunks,
+		1, seed, time.Now().UTC().Truncate(time.Minute), chunks,
 	)
 	if err != nil {
 		b.Fatalf("UploadMultiChunkInventory: %v", err)

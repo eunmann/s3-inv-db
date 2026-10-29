@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/md5" // MD5 is mandated by the AWS S3 Inventory manifest spec.
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -158,6 +159,51 @@ func autoChunkCount(objects int) int {
 // chunk-level parallelism. NumChunks must be >= 1; values >= the
 // generated object count fall back to one file per object.
 func UploadMultiChunkInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S3Config, index int, seed int64, runStamp time.Time, numChunks int) (InventoryInfo, error) {
+	put := func(ctx context.Context, key string, body []byte, contentType string) error {
+		return putObject(ctx, client, s3cfg.Bucket, key, body, contentType)
+	}
+
+	return writeMultiChunkInventory(ctx, put, cfg, s3cfg, index, seed, runStamp, numChunks)
+}
+
+// The sample inventory FixtureFingerprint hashes: enough rows over
+// enough chunks to cover the row encoding, the key order and the chunk
+// split.
+const (
+	fingerprintObjects = 1000
+	fingerprintChunks  = 3
+	fingerprintHexLen  = 6
+)
+
+// FixtureFingerprint returns a short digest of what
+// UploadMultiChunkInventory writes for cfg's Preset and SortedKeys and
+// seed, taken over a small sample inventory at a fixed run time. A
+// benchmark that caches a seeded fixture puts it in the cache key, so
+// a seeder that writes different bytes seeds a new fixture instead of
+// reusing one an older seeder wrote.
+func FixtureFingerprint(ctx context.Context, cfg Config, seed int64) (string, error) {
+	h := sha256.New()
+	put := func(_ context.Context, key string, body []byte, _ string) error {
+		h.Write([]byte(key))
+		h.Write(body)
+
+		return nil
+	}
+	cfg.Objects = fingerprintObjects
+	s3cfg := S3Config{Bucket: "fingerprint", SrcBucket: "fingerprint"}
+	if _, err := writeMultiChunkInventory(ctx, put, cfg, s3cfg, 1, seed, time.Unix(0, 0), fingerprintChunks); err != nil {
+		return "", fmt.Errorf("write sample inventory: %w", err)
+	}
+
+	return hex.EncodeToString(h.Sum(nil))[:fingerprintHexLen], nil
+}
+
+// putFunc stores one object of a seeded inventory.
+type putFunc func(ctx context.Context, key string, body []byte, contentType string) error
+
+// writeMultiChunkInventory is UploadMultiChunkInventory with its
+// objects handed to put.
+func writeMultiChunkInventory(ctx context.Context, put putFunc, cfg Config, s3cfg S3Config, index int, seed int64, runStamp time.Time, numChunks int) (InventoryInfo, error) {
 	if numChunks < 1 {
 		numChunks = 1
 	}
@@ -209,7 +255,7 @@ func UploadMultiChunkInventory(ctx context.Context, client *s3.Client, cfg Confi
 			return InventoryInfo{}, fmt.Errorf("encode chunk %d: %w", chunk, err)
 		}
 		dataKey := fmt.Sprintf("%s%s/%s/data/%s-chunk-%04d.csv.gz", s3cfg.Prefix, s3cfg.SrcBucket, invID, runStampUUID(runStamp, index), chunk)
-		if err := putObject(ctx, client, s3cfg.Bucket, dataKey, payload.Body, "application/gzip"); err != nil {
+		if err := put(ctx, dataKey, payload.Body, "application/gzip"); err != nil {
 			return InventoryInfo{}, fmt.Errorf("upload chunk %d: %w", chunk, err)
 		}
 		files = append(files, map[string]any{
@@ -232,10 +278,10 @@ func UploadMultiChunkInventory(ctx context.Context, client *s3.Client, cfg Confi
 	if err != nil {
 		return InventoryInfo{}, fmt.Errorf("marshal manifest: %w", err)
 	}
-	if err := putObject(ctx, client, s3cfg.Bucket, manifestKey, manifestJSON, "application/json"); err != nil {
+	if err := put(ctx, manifestKey, manifestJSON, "application/json"); err != nil {
 		return InventoryInfo{}, fmt.Errorf("upload manifest: %w", err)
 	}
-	if err := putObject(ctx, client, s3cfg.Bucket, checksumKey, []byte(md5Hex(manifestJSON)), "text/plain"); err != nil {
+	if err := put(ctx, checksumKey, []byte(md5Hex(manifestJSON)), "text/plain"); err != nil {
 		return InventoryInfo{}, fmt.Errorf("upload checksum: %w", err)
 	}
 

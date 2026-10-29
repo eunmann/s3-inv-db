@@ -64,9 +64,12 @@ is already set. The pipeline benchmarks seed each inventory fixture
 bucket, and every later run of that side reuses it, so rounds don't
 re-upload. The script sets `S3INV_FIXTURE_TAG` to `base-<sha>` or `head`
 for each side's runs, so head always builds from its own seeder's
-inventory, even when the change under test is to the seeder. A server
-the script starts is thrown away with the run. Against your own server,
-delete the `fixture-*-head` buckets after changing the seeder.
+inventory, even when the change under test is to the seeder. The bucket
+name also carries a fingerprint of the seeder's output (a hash of a
+small sample inventory), so a seeder that writes different bytes seeds
+a new fixture rather than reusing an old one. A server the script
+starts is thrown away with the run; against your own server, delete
+stale `fixture-*` buckets to reclaim the space.
 
 A regression is merged only with an explicit justification in the
 commit message (CLAUDE.md, Performance & Benchmarks).
