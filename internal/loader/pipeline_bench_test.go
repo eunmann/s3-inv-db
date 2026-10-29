@@ -239,7 +239,8 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 // phaseClock times a build's phases from its progress events: each
 // phase ("downloading" is ingest, "building" the final merge into the
 // index builder) and each finalize step runs from its first event to the
-// next phase's or step's, or to the build's end. It records only when
+// next phase's or step's, or to the build's end (so the last finalize
+// step includes publishing the index and removing scratch). It records only when
 // the phase changes, so it allocates a few times per build.
 type phaseClock struct {
 	spent map[string]time.Duration
