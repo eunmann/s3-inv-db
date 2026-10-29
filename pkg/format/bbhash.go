@@ -128,7 +128,7 @@ func buildBBHashLevels(keys []uint64, keyBuf keyBuffer, fallback func(leftovers 
 	firstWords := levelWords(len(keys))
 	// The levels after the first hold ~65% as many bits again.
 	h := &bbhash{bits: make([]uint64, 0, firstWords*7/4+maxBBHashLevels)}
-	var marks []uint64
+	var marks, collect []uint64
 	if len(keys) > 0 {
 		marks = make([]uint64, 2*firstWords)
 		markLevel(keys, 0, marks, scan)
@@ -158,7 +158,11 @@ func buildBBHashLevels(keys []uint64, keyBuf keyBuffer, fallback func(leftovers 
 		if err != nil {
 			return nil, err
 		}
-		nextLevelKeys(keys, level, lvBits, next, marks, scan)
+		if collect == nil {
+			// Sized for the first level's workers, the most any level has.
+			collect = make([]uint64, mphfWorkerCount(len(keys))*collectBlock)
+		}
+		nextLevelKeys(keys, level, lvBits, next, marks, collect, scan)
 		if err := (*release)(); err != nil {
 			return nil, errors.Join(err, nextRelease())
 		}
@@ -243,18 +247,18 @@ func placedBits(marks []uint64) ([]uint64, int) {
 }
 
 // collectBlock is how many keys a worker tests before it hands the
-// colliding ones on, so its buffer stays in cache.
-const collectBlock = 1 << 12
+// colliding ones on: its buffer stays in L1, and the one claim on next
+// per block is rare enough not to contend.
+const collectBlock = 1 << 10
 
 // nextLevelKeys copies to next, sized to hold them exactly, the keys
 // whose bit is not in placed, the bits level placed, and marks them on
 // level+1 in marks unless marks is nil. Each worker gathers a
-// block's colliding keys without a branch, then claims room for them in
-// next, so they land in no set order: neither the levels nor the
-// leftovers depend on it.
-func nextLevelKeys(keys []uint64, level int, placed, next, marks []uint64, scan *stepCounter) {
+// block's colliding keys without a branch into its collectBlock words
+// of bufs, then claims room for them in next, so they land in no set
+// order: neither the levels nor the leftovers depend on it.
+func nextLevelKeys(keys []uint64, level int, placed, next, marks, bufs []uint64, scan *stepCounter) {
 	words := uint64(len(placed))
-	bufs := make([]uint64, mphfWorkerCount(len(keys))*collectBlock)
 	var filled atomic.Int64
 	forChunks(len(keys), scan, func(c, lo, hi int) {
 		buf := bufs[c*collectBlock : (c+1)*collectBlock]

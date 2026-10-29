@@ -60,7 +60,7 @@ func TestNextLevelKeysAcrossBlocks(t *testing.T) {
 	nextWords := levelWords(len(want))
 	gotMarks := make([]uint64, 2*nextWords)
 	got := make([]uint64, len(want))
-	nextLevelKeys(keys, 0, set, got, gotMarks, scan)
+	nextLevelKeys(keys, 0, set, got, gotMarks, make([]uint64, mphfWorkerCount(n)*collectBlock), scan)
 
 	slices.Sort(got)
 	if !slices.Equal(got, slices.Sorted(slices.Values(want))) {
