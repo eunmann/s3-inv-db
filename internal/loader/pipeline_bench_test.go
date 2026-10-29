@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -235,6 +236,76 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 	runPipelineBenchWith(b, pipelineBench{preset: preset, numObjects: numObjects, memLimit: memLimit})
 }
 
+// phaseClock times a build's phases from its progress events: each
+// phase ("downloading" is ingest, "building" the final merge into the
+// index builder) and each finalize step runs from its first event to the
+// next phase's or step's, or to the build's end. It records only when
+// the phase changes, so it allocates a few times per build.
+type phaseClock struct {
+	spent map[string]time.Duration
+	start time.Time
+	cur   string
+	mu    sync.Mutex
+}
+
+func newPhaseClock() *phaseClock {
+	return &phaseClock{spent: make(map[string]time.Duration)}
+}
+
+// begin starts a build at start.
+func (c *phaseClock) begin(start time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cur, c.start = "pipeline", start
+}
+
+func (c *phaseClock) observe(ev events.Progress) {
+	name := ev.Stage
+	if ev.Step != "" {
+		name = ev.Stage + ":" + ev.Step
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if name == c.cur || c.cur == "" {
+		return
+	}
+	c.switchTo(name, time.Now())
+}
+
+// end closes the build's last phase.
+func (c *phaseClock) end() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.switchTo("", time.Now())
+}
+
+func (c *phaseClock) switchTo(name string, now time.Time) {
+	c.spent[c.cur] += now.Sub(c.start)
+	c.cur, c.start = name, now
+}
+
+// report reports each phase's mean seconds per op as phase_<name>_s,
+// the name lowercased with runs of other characters as underscores.
+func (c *phaseClock) report(b *testing.B) {
+	b.Helper()
+	for name, d := range c.spent {
+		var unit strings.Builder
+		unit.WriteString("phase_")
+		under := false
+		for _, r := range strings.ToLower(name) {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				unit.WriteRune(r)
+				under = false
+			} else if !under {
+				unit.WriteByte('_')
+				under = true
+			}
+		}
+		unit.WriteString("_s")
+		b.ReportMetric(d.Seconds()/float64(b.N), unit.String())
+	}
+}
+
 // diskProbe measures a build's disk use when benchutil.DiskPeakEnabled:
 // the peak of scratch plus index, and the final merge's run files. Off,
 // it does nothing, since its directory walks allocate and would count
@@ -302,6 +373,7 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 	// runs' time, for the per-op means and the cores they kept busy.
 	var proc benchutil.ProcStats
 	var wall time.Duration
+	phases := newPhaseClock()
 
 	b.ResetTimer()
 	for range b.N {
@@ -323,13 +395,18 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 		disk := startDiskProbe(buildRoot)
 
 		cfg := extsort.DefaultConfig()
-		cfg.Observe.OnProgress = disk.observe
+		cfg.Observe.OnProgress = func(ev events.Progress) {
+			disk.observe(ev)
+			phases.observe(ev)
+		}
 		pipeline := extsort.NewPipeline(cfg, fc)
 
 		b.StartTimer()
 		before, start := benchutil.ReadProcStats(b), time.Now()
+		phases.begin(start)
 		res, err := pipeline.Run(b.Context(), info.Path, outDir)
 		wall += time.Since(start)
+		phases.end()
 		proc = proc.Add(benchutil.ReadProcStats(b).Sub(before))
 		if err != nil {
 			b.StopTimer()
@@ -386,4 +463,5 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 	// the worker runs a prefix was in.
 	b.ReportMetric(float64(lastRunRows), "run_rows")
 	proc.Report(b, b.N, wall)
+	phases.report(b)
 }
