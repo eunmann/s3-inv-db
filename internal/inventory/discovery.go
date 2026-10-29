@@ -71,10 +71,10 @@ type GatedLoadOptions struct {
 // honour the global byte cap.
 type GatedLoadFunc func(ctx context.Context, id ID, build BuildFunc, opts GatedLoadOptions) error
 
-// ManifestSizeFunc reports the total compressed size of an inventory
-// manifest's data files. Used to estimate the post-build index size
-// before downloading anything.
-type ManifestSizeFunc func(ctx context.Context, bucket, key string) (uint64, error)
+// IndexSizeFunc reports the disk a run's index takes, read from the
+// manifest at key before anything is downloaded: an estimate for an
+// inventory, exact for a published index.
+type IndexSizeFunc func(ctx context.Context, bucket, key string) (uint64, error)
 
 // Discovery orchestrates the inventory use cases that span the
 // Catalog (in-memory state), the Discoverer (S3 listing of available
@@ -91,14 +91,13 @@ type Discovery struct {
 	builder       IndexBuilder
 	cacheLastErr  error
 	gate          GatedLoadFunc
-	sizer         ManifestSizeFunc
+	sizer         IndexSizeFunc
 	manager       *Catalog
 	bgStop        chan struct{}
 	bgClock       func() time.Time
 	cacheViews    []MergedInventory
 	refreshSF     singleflight.Group
 	bgWG          sync.WaitGroup
-	indexRatio    float64
 	cacheMu       sync.RWMutex
 	bgMu          sync.Mutex
 	cachePopulate bool
@@ -145,16 +144,12 @@ func WithBackend(discoverer Discoverer, builder IndexBuilder) DiscoveryOption {
 	}
 }
 
-// WithGate attaches a GatedLoadFunc + ManifestSizeFunc. When both are
+// WithGate attaches a GatedLoadFunc + IndexSizeFunc. When both are
 // set, LoadWith routes through the gate so disk-budget rules apply.
-// IndexRatio == 0 keeps the package default.
-func WithGate(gate GatedLoadFunc, sizer ManifestSizeFunc, indexRatio float64) DiscoveryOption {
+func WithGate(gate GatedLoadFunc, sizer IndexSizeFunc) DiscoveryOption {
 	return func(d *Discovery) {
 		d.gate = gate
 		d.sizer = sizer
-		if indexRatio > 0 {
-			d.indexRatio = indexRatio
-		}
 	}
 }
 
@@ -166,7 +161,6 @@ func NewDiscovery(mgr *Catalog, opts ...DiscoveryOption) *Discovery {
 		manager:    mgr,
 		discoverer: disabledDiscoverer{},
 		builder:    disabledBuilder{},
-		indexRatio: DefaultIndexRatio,
 		bgClock:    time.Now,
 		enabled:    false,
 	}
@@ -176,12 +170,6 @@ func NewDiscovery(mgr *Catalog, opts ...DiscoveryOption) *Discovery {
 
 	return d
 }
-
-// DefaultIndexRatio is the conservative seed ratio used to estimate
-// final index bytes from a manifest's compressed CSV total. The
-// expected per-load reservation is `manifest_total * indexRatio`.
-// Loaders should refine via benchmarks per pkg/extsort.
-const DefaultIndexRatio = 0.30
 
 // ErrDiscoveryDisabled is returned by methods that require S3 discovery
 // to be configured.
@@ -497,11 +485,11 @@ func (d *Discovery) loadInternal(ctx context.Context, disc Inventory, onProgress
 	case disc.FileFormat != "" && disc.Error == "" && disc.TotalBytes > 0:
 		// Discovery already read this run's manifest: its total is what
 		// the sizer would fetch the manifest again to compute.
-		opts.EstimateBytes = uint64(float64(disc.TotalBytes) * d.indexRatio)
+		opts.EstimateBytes = EstimateIndexBytes(disc.FileFormat, uint64(disc.TotalBytes))
 	case d.sizer != nil:
 		size, err := d.sizer(ctx, d.discoverer.Bucket(), disc.ManifestKey)
 		if err == nil {
-			opts.EstimateBytes = uint64(float64(size) * d.indexRatio)
+			opts.EstimateBytes = size
 		}
 		// On error we proceed with EstimateBytes=0, letting the planner
 		// reserve nothing — the load might still refuse later but at

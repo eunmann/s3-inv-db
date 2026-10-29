@@ -387,9 +387,6 @@ func (d *Discoverer) summarize(ctx context.Context, key string) (manifestSummary
 	}, nil
 }
 
-// indexFormat is the file format discovery shows for a published index.
-const indexFormat = "index"
-
 // indexSummary reads a published index's manifest: its file count and
 // on-disk size, which is what loading it costs.
 func (d *Discoverer) indexSummary(ctx context.Context, key string) (manifestSummary, error) {
@@ -408,7 +405,7 @@ func (d *Discoverer) indexSummary(ctx context.Context, key string) (manifestSumm
 	}
 
 	return manifestSummary{
-		fileFormat:        indexFormat,
+		fileFormat:        inventory.IndexFileFormat,
 		fileCount:         len(m.Files),
 		totalBytes:        int64(m.TotalBytes()),
 		creationTimestamp: m.CreatedAt.UTC().Format(time.RFC3339),

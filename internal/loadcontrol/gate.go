@@ -179,9 +179,9 @@ func (g *Gate) evict(ctx context.Context, victim inventory.ID) error {
 	return nil
 }
 
-// ManifestSizer is the inventory.ManifestSizer concrete implementation
-// backed by an s3fetch.Client. Caches nothing — the manifest is small
-// JSON and fetched once per load attempt.
+// ManifestSizer implements inventory.IndexSizeFunc over an
+// s3fetch.Client. Caches nothing — the manifest is small JSON and
+// fetched once per load attempt.
 type ManifestSizer struct {
 	client *s3fetch.Client
 }
@@ -210,10 +210,10 @@ func (s *ManifestSizer) IndexSize(ctx context.Context, bucket, key string) (uint
 // manifest.json.
 var errNotManifestKey = errors.New("not a manifest key")
 
-// ManifestSize returns the sum of the manifest's data-file sizes — the
-// total compressed bytes the load pipeline will pull from S3. The gate
-// multiplies this by indexRatio to estimate final IndexBytes.
-func (s *ManifestSizer) ManifestSize(ctx context.Context, bucket, key string) (uint64, error) {
+// EstimatedIndexSize returns the disk the index built from the
+// inventory manifest at key is estimated to take, from its file format
+// and data-file sizes.
+func (s *ManifestSizer) EstimatedIndexSize(ctx context.Context, bucket, key string) (uint64, error) {
 	m, err := s.client.FetchManifest(ctx, bucket, key)
 	if err != nil {
 		return 0, fmt.Errorf("fetch manifest: %w", err)
@@ -225,5 +225,5 @@ func (s *ManifestSizer) ManifestSize(ctx context.Context, bucket, key string) (u
 		}
 	}
 
-	return total, nil
+	return inventory.EstimateIndexBytes(m.FileFormat, total), nil
 }
