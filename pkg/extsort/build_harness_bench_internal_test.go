@@ -170,8 +170,6 @@ func buildIndexBounded(cfg benchutil.GeneratorConfig, outDir, tempDir string) (*
 }
 
 func flushAggregatorToRun(agg *Aggregator, tempDir string, runIdx int) (string, error) {
-	rows := agg.Drain()
-	SortPrefixRows(rows)
 	path := filepath.Join(tempDir, fmt.Sprintf("harness_run_%04d.crun", runIdx))
 	writer, err := NewCompressedRunWriter(path, CompressedRunWriterOptions{
 		BufferSize:       harnessRunBufferSize,
@@ -180,7 +178,11 @@ func flushAggregatorToRun(agg *Aggregator, tempDir string, runIdx int) (string, 
 	if err != nil {
 		return "", fmt.Errorf("create run file: %w", err)
 	}
-	if err := writeAndCloseRun(writer, rows, path); err != nil {
+	if err := writeAndCloseRun(writer, path, func() error {
+		_, werr := agg.WriteRun(writer)
+
+		return werr
+	}); err != nil {
 		_ = os.Remove(path)
 
 		return "", err
@@ -245,7 +247,7 @@ func writeFinalRun(tempDir string, rows []*PrefixRow, runIdx int) (string, error
 	if err != nil {
 		return "", fmt.Errorf("create final run file: %w", err)
 	}
-	if err := writeAndCloseRun(writer, rows, path); err != nil {
+	if err := writeAndCloseRun(writer, path, func() error { return writer.WriteAll(rows) }); err != nil {
 		_ = os.Remove(path)
 
 		return "", err

@@ -95,6 +95,25 @@ var errRunRecordCorrupt = errors.New("corrupt run record")
 
 // encodeRunRecord appends row's record, front-coded against prev, to dst.
 func encodeRunRecord(dst []byte, prev string, row *PrefixRow) []byte {
+	shared := sharedPrefixLen(prev, row.Prefix)
+
+	return encodeRunRecordShared(dst, shared, row.Prefix[shared:], row)
+}
+
+// encodeRunRecordShared appends the record of row whose prefix is the
+// previous record's first shared bytes followed by suffix; row.Prefix
+// is not read.
+func encodeRunRecordShared(dst []byte, shared int, suffix string, row *PrefixRow) []byte {
+	dst = binary.AppendUvarint(dst, uint64(shared))
+	dst = binary.AppendUvarint(dst, uint64(len(suffix)))
+	dst = append(dst, suffix...)
+
+	return appendRunRecordStats(dst, row)
+}
+
+// appendRunRecordStats appends the part of row's record after its
+// prefix: the depth, the tier mask and the counts.
+func appendRunRecordStats(dst []byte, row *PrefixRow) []byte {
 	var count, bytes uint64
 	var mask uint64
 	for t := range MaxTiers {
@@ -108,10 +127,6 @@ func encodeRunRecord(dst []byte, prev string, row *PrefixRow) []byte {
 	if explicit {
 		mask |= runRecordTotals
 	}
-	shared := sharedPrefixLen(prev, row.Prefix)
-	dst = binary.AppendUvarint(dst, uint64(shared))
-	dst = binary.AppendUvarint(dst, uint64(len(row.Prefix)-shared))
-	dst = append(dst, row.Prefix[shared:]...)
 	dst = binary.AppendUvarint(dst, uint64(row.Depth))
 	dst = binary.AppendUvarint(dst, mask)
 	for t := range MaxTiers {
