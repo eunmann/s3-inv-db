@@ -28,7 +28,9 @@ import (
 // Keys the levels cannot place (equal 64-bit hashes always collide)
 // live in a fallback table after the levels' slots.
 type bbhash struct {
-	bits     []uint64 // every level's bit vector, back to back
+	// Bits is every level's bit vector, back to back; its capacity
+	// reaches the end of the last rank block (see rank).
+	bits     []uint64
 	ranks    []uint64 // ranks[b] = set bits in bits[:b*rankBlockWords]
 	levels   []bbLevel
 	fallback []bbFallback // sorted by compareFallback; entry j owns slot placed+j
@@ -52,6 +54,7 @@ const (
 	// RankBlockWords is the rank directory's block size in words: one
 	// 8-byte count per 512 bits (12.5% over the bit vectors).
 	rankBlockWords = 8
+	rankBlockBits  = rankBlockWords * 64
 	// MaxBBHashLevels bounds the build. At gamma 2 about 39% of a
 	// level's keys collide, so distinct keys are placed within ~30
 	// levels even at 2^40 keys; keys still unplaced here go to the
@@ -317,10 +320,9 @@ func bbPosition(key uint64, level int, words uint64) uint64 {
 // or lands on some other key's slot.
 func (h *bbhash) find(key uint64) (uint64, bool) {
 	for level, lv := range h.levels {
-		i := bbPosition(key, level, lv.words)
-		w, bit := lv.offset+i/64, uint64(1)<<(i%64)
-		if h.bits[w]&bit != 0 {
-			return h.rank(w, bit), true
+		i := lv.offset*64 + bbPosition(key, level, lv.words)
+		if h.bits[i/64]&(1<<(i%64)) != 0 {
+			return h.rank(i), true
 		}
 	}
 
@@ -337,19 +339,31 @@ func (h *bbhash) findFallback(key, fp uint64) (uint64, bool) {
 	return h.placed + uint64(j), true
 }
 
-// rank counts the set bits before bit in word w.
-func (h *bbhash) rank(w, bit uint64) uint64 {
-	block := w / rankBlockWords
-	r := h.ranks[block]
-	for j := block * rankBlockWords; j < w; j++ {
-		r += uint64(bits.OnesCount64(h.bits[j]))
+// rank counts the set bits before bit i of bits: the directory's count
+// for i's block, the bits below i in its word, and the popcounts of the
+// block's words before that word. It popcounts all the block's words,
+// masking off those from i's word on, so the loop always runs
+// rankBlockWords times and never mispredicts where i falls. The words
+// past the end of bits in the last block are within its capacity and
+// masked off.
+func (h *bbhash) rank(i uint64) uint64 {
+	block := i / rankBlockBits
+	words := (*[rankBlockWords]uint64)(h.bits[block*rankBlockWords : (block+1)*rankBlockWords])
+	at := i / 64 % rankBlockWords
+	r := h.ranks[block] + uint64(bits.OnesCount64(words[at]&(1<<(i%64)-1)))
+	// Bit j is set for each word j before i's word.
+	before := uint64(1)<<at - 1
+	for j, w := range words {
+		r += uint64(bits.OnesCount64(w & -(before >> j & 1)))
 	}
 
-	return r + uint64(bits.OnesCount64(h.bits[w]&(bit-1)))
+	return r
 }
 
-// buildRanks fills the rank directory and the key counts.
+// buildRanks fills the rank directory and the key counts, and gives
+// bits the capacity rank reads.
 func (h *bbhash) buildRanks() {
+	h.bits = slices.Grow(h.bits, rankBlockWords-1)
 	h.ranks = make([]uint64, (len(h.bits)+rankBlockWords-1)/rankBlockWords)
 	var r uint64
 	for i, w := range h.bits {
@@ -468,7 +482,7 @@ func readBBHash(path string) (*bbhash, error) {
 
 	// Read straight into the words' memory, then decode in place: a
 	// no-op on little-endian hosts and no second copy of the table.
-	h.bits = make([]uint64, total)
+	h.bits = make([]uint64, total, total+rankBlockWords-1)
 	raw := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(h.bits))), len(h.bits)*8)
 	if _, err := io.ReadFull(r, raw); err != nil {
 		return nil, fmt.Errorf("%w: %w", errBBHashCorrupt, err)
