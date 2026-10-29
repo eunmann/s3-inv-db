@@ -32,6 +32,10 @@ make docker-seed                       # via the dev stack
   --count 3
 ```
 
+The data files are CSV.gz written the way AWS writes them: no header,
+every field quoted, keys URL-encoded, and a per-object ETag and
+LastModifiedDate derived from the seed and key.
+
 ## Multiple runs per configuration
 
 The `--runs-per-inventory` flag generates several runs per inventory
