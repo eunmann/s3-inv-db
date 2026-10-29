@@ -47,7 +47,8 @@ flowchart LR
 
 Scratch lives in a hidden `.<out>.scratch-*` directory beside the
 output, never in `/tmp` (which may be RAM). It holds at most two
-downloaded files per worker, the run files (deleted as merged), the
+downloaded files per worker, the run files (deleted as merged, the
+last ones before the index finalizes), the
 level spool (~35 B per prefix) and the hash builder's arrays (~32 B per
 prefix at their peak). The hash builder reads and writes those arrays
 only in sequence (its slot table is written range by range from a

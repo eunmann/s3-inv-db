@@ -79,14 +79,16 @@ func parquetPipelineSizes() []int {
 }
 
 // BenchmarkPipeline sweeps shape × size against the full S3-to-index path.
-// Realistic and deep_pyramid list keys in random order, which is what to
-// expect: S3 Inventory guarantees no order. Realistic_sorted is
-// realistic with the keys in order across the chunks, the best case for
-// the build's in-order paths. Those are CSV.gz inventories; the
-// format=parquet entries build the realistic objects from Snappy
-// Parquet files instead, for the cost of one format against the other.
+// Realistic, deep_pyramid and unique_dirs list keys in random order,
+// which is what to expect: S3 Inventory guarantees no order.
+// Realistic_sorted is realistic with the keys in order across the
+// chunks, the best case for the build's in-order paths. Unique_dirs has
+// a directory per object, the prefix-heavy case that sizes scratch and
+// index disk. Those are CSV.gz inventories; the format=parquet entries
+// build the realistic objects from Snappy Parquet files instead, for
+// the cost of one format against the other.
 func BenchmarkPipeline(b *testing.B) {
-	for _, shape := range []string{"realistic", "deep_pyramid", "realistic_sorted"} {
+	for _, shape := range []string{"realistic", "deep_pyramid", "realistic_sorted", "unique_dirs"} {
 		for _, n := range pipelineSizes() {
 			name := fmt.Sprintf("shape=%s/n=%d", shape, n)
 			b.Run(name, func(b *testing.B) {
@@ -167,11 +169,11 @@ func seededInventory(b *testing.B, preset string, format seeder.Format, numObjec
 	}
 	bucket := s3test.FixtureBucket(b, raw, fmt.Sprintf("%s-%d-%d-%s", fixture, numObjects, chunks, fingerprint))
 	if out, err := raw.GetObject(b.Context(), &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(fixtureInfoKey)}); err == nil {
-		var info seeder.InventoryInfo
-		decodeErr := json.NewDecoder(out.Body).Decode(&info)
+		var cached seeder.InventoryInfo
+		decodeErr := json.NewDecoder(out.Body).Decode(&cached)
 		_ = out.Body.Close()
 		if decodeErr == nil {
-			return info
+			return cached
 		}
 	}
 	info, err := seeder.UploadMultiChunkInventory(
@@ -233,6 +235,50 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 	runPipelineBenchWith(b, pipelineBench{preset: preset, numObjects: numObjects, memLimit: memLimit})
 }
 
+// diskProbe measures a build's disk use when benchutil.DiskPeakEnabled:
+// the peak of scratch plus index, and the final merge's run files. Off,
+// it does nothing, since its directory walks allocate and would count
+// in the build's allocs/op.
+type diskProbe struct {
+	sampler   *benchutil.DiskPeakSampler
+	err       error
+	root      string
+	finalRuns int64
+	taken     bool
+}
+
+func startDiskProbe(root string) *diskProbe {
+	if !benchutil.DiskPeakEnabled() {
+		return &diskProbe{}
+	}
+
+	return &diskProbe{root: root, sampler: benchutil.StartDiskPeakSampler(root)}
+}
+
+// observe is the build's progress callback. Entering the build phase,
+// before the index builder writes anything, the scratch on disk is the
+// final merge's run files.
+func (d *diskProbe) observe(ev events.Progress) {
+	if d.sampler == nil || d.taken || ev.Stage != "building" {
+		return
+	}
+	d.taken = true
+	d.finalRuns, d.err = benchutil.DiskUsage(d.root)
+}
+
+// stop ends sampling and returns the peak, or the first error.
+func (d *diskProbe) stop() (int64, error) {
+	if d.sampler == nil {
+		return 0, nil
+	}
+	peak, err := d.sampler.Stop()
+	if err == nil {
+		err = d.err
+	}
+
+	return peak, err
+}
+
 func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 	b.Helper()
 	benchutil.SilenceZerolog(b)
@@ -246,7 +292,7 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 	info := seededInventory(b, preset, pb.format, numObjects, chunks)
 	input := inputBytes(b, fc, info.Path)
 
-	var lastDiskBytes int64
+	var lastDiskBytes, lastPeakDisk, lastFinalRuns int64
 	var lastPeakHeap uint64
 	var lastPrefixCount uint64
 	var lastMaxDepth uint32
@@ -259,7 +305,10 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 	b.ResetTimer()
 	for range b.N {
 		b.StopTimer()
-		outDir := filepath.Join(b.TempDir(), "index")
+		// Scratch and the staging index are outDir's siblings, so the
+		// disk probe watches its parent.
+		buildRoot := b.TempDir()
+		outDir := filepath.Join(buildRoot, "index")
 
 		var prevLimit int64
 		if memLimit > 0 {
@@ -270,9 +319,10 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 		var msStart runtime.MemStats
 		runtime.ReadMemStats(&msStart)
 		peak := benchutil.StartHeapPeakSampler()
+		disk := startDiskProbe(buildRoot)
 
 		cfg := extsort.DefaultConfig()
-		cfg.Observe.OnProgress = func(events.Progress) {}
+		cfg.Observe.OnProgress = disk.observe
 		pipeline := extsort.NewPipeline(cfg, fc)
 
 		b.StartTimer()
@@ -283,6 +333,7 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 		if err != nil {
 			b.StopTimer()
 			peak.Stop()
+			_, _ = disk.stop()
 			if memLimit > 0 {
 				debug.SetMemoryLimit(prevLimit)
 			}
@@ -293,6 +344,11 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 		lastRunFiles = res.RunFilesCreated
 
 		samplerMax := peak.Stop()
+		peakDisk, err := disk.stop()
+		if err != nil {
+			b.Fatalf("disk probe: %v", err)
+		}
+		lastPeakDisk, lastFinalRuns = peakDisk, disk.finalRuns
 		if memLimit > 0 {
 			debug.SetMemoryLimit(prevLimit)
 		}
@@ -312,6 +368,10 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 
 	b.ReportMetric(float64(input), "input_B")
 	b.ReportMetric(float64(lastDiskBytes), "disk_B")
+	if benchutil.DiskPeakEnabled() {
+		b.ReportMetric(float64(lastPeakDisk), "peak_disk_B")
+		b.ReportMetric(float64(lastFinalRuns), "final_runs_B")
+	}
 	b.ReportMetric(float64(lastPeakHeap), "peak_heap_B")
 	b.ReportMetric(float64(lastPrefixCount), "prefixes")
 	b.ReportMetric(float64(lastMaxDepth), "max_depth")
