@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
+	"math/bits"
 	"os"
 	"path/filepath"
 )
@@ -32,13 +34,14 @@ const patchedFields = 3
 // exception. Below 8 bytes the all-ones value is the sentinel, so it
 // needs the next width up; at 8 bytes every value fits.
 func fieldNeed(v uint64) uint8 {
-	for w := uint8(1); w < 8; w++ {
-		if v < widthMask[w] {
-			return w
-		}
+	// v fits width w below 8 when v+1 has at most 8w bits.
+	if v == math.MaxUint64 {
+		return 8
 	}
+	const bitsPerByte = 8
+	need := (bits.Len64(v+1) + bitsPerByte - 1) / bitsPerByte
 
-	return 8
+	return uint8(max(1, need))
 }
 
 // patchHistogram counts rows by the widths their count, bytes and

@@ -199,6 +199,25 @@ func TestFieldNeed(t *testing.T) {
 			t.Errorf("fieldNeed(%#x) = %d, want %d", tc.v, got, tc.want)
 		}
 	}
+	// Every width's boundary agrees with the definition: the narrowest
+	// width whose all-ones sentinel is above v.
+	need := func(v uint64) uint8 {
+		for w := uint8(1); w < 8; w++ {
+			if v < widthMask[w] {
+				return w
+			}
+		}
+
+		return 8
+	}
+	for w := 1; w <= 8; w++ {
+		edge := widthMask[w]
+		for _, v := range []uint64{edge - 2, edge - 1, edge, edge + 1} {
+			if got, want := fieldNeed(v), need(v); got != want {
+				t.Errorf("fieldNeed(%#x) = %d, want %d", v, got, want)
+			}
+		}
+	}
 }
 
 func TestManifestListsPatchFiles(t *testing.T) {
