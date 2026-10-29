@@ -2,6 +2,7 @@ package format
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -365,24 +366,34 @@ func (w *TierStatsWriter) scratchRows(fn func(row *scratchRow) error) error {
 	defer f.Close()
 	r := bufio.NewReaderSize(f, writeBufSize)
 	var row scratchRow
-	var mask [2]byte
 	for range w.rows {
 		for set := row.mask; set != 0; set &= set - 1 {
 			slot := bits.TrailingZeros16(set)
 			row.count[slot], row.bytes[slot] = 0, 0
 		}
-		if _, err := io.ReadFull(r, mask[:]); err != nil {
-			return fmt.Errorf("read tier stats scratch: %w", err)
+		// Decode the row in place from the read buffer: varints read a
+		// byte per call through the reader were most of this pass.
+		buf, err := r.Peek(min(scratchRowMax, r.Size()))
+		if len(buf) < 2 {
+			return fmt.Errorf("read tier stats scratch: %w", cmp.Or(err, io.ErrUnexpectedEOF))
 		}
-		row.mask = binary.LittleEndian.Uint16(mask[:])
+		row.mask = binary.LittleEndian.Uint16(buf)
+		off := 2
 		for set := row.mask; set != 0; set &= set - 1 {
 			slot := bits.TrailingZeros16(set)
-			if row.count[slot], err = binary.ReadUvarint(r); err != nil {
-				return fmt.Errorf("read tier stats scratch: %w", err)
+			c, n := binary.Uvarint(buf[off:])
+			if n <= 0 {
+				return fmt.Errorf("read tier stats scratch: %w", errTierScratchCorrupt)
 			}
-			if row.bytes[slot], err = binary.ReadUvarint(r); err != nil {
-				return fmt.Errorf("read tier stats scratch: %w", err)
+			b, m := binary.Uvarint(buf[off+n:])
+			if m <= 0 {
+				return fmt.Errorf("read tier stats scratch: %w", errTierScratchCorrupt)
 			}
+			row.count[slot], row.bytes[slot] = c, b
+			off += n + m
+		}
+		if _, err := r.Discard(off); err != nil {
+			return fmt.Errorf("read tier stats scratch: %w", err)
 		}
 		if err := fn(&row); err != nil {
 			return err
@@ -392,6 +403,14 @@ func (w *TierStatsWriter) scratchRows(fn func(row *scratchRow) error) error {
 	return nil
 }
 
+// scratchRowMax is the longest scratch row: the mask, then a count and
+// bytes varint for every slot.
+const scratchRowMax = 2 + 2*maxTierSlots*binary.MaxVarintLen64
+
+// errTierScratchCorrupt means a scratch row is cut short or holds an
+// overlong varint.
+var errTierScratchCorrupt = errors.New("tier stats scratch row corrupt")
+
 // slotFile writes a tier_multi.bin / tier_dense.bin: Header, slot-width
 // descriptor, slots, tail pad.
 type slotFile struct {
@@ -399,7 +418,6 @@ type slotFile struct {
 	f     *os.File
 	bw    *bufio.Writer
 	width tierSlotWidths
-	buf   []byte
 }
 
 func createSlotFile(path string, count uint64, rowWidth int, width tierSlotWidths) (*slotFile, error) {
@@ -407,7 +425,7 @@ func createSlotFile(path string, count uint64, rowWidth int, width tierSlotWidth
 	if err != nil {
 		return nil, fmt.Errorf("create %s: %w", filepath.Base(path), err)
 	}
-	s := &slotFile{path: path, f: f, bw: bufio.NewWriterSize(f, writeBufSize), width: width, buf: make([]byte, 8)}
+	s := &slotFile{path: path, f: f, bw: bufio.NewWriterSize(f, writeBufSize), width: width}
 	head := EncodeHeader(Header{Magic: MagicNumber, Version: Version, Count: count, Width: uint32(rowWidth)})
 	head = append(head, width.count, width.bytes)
 	if _, err := s.bw.Write(head); err != nil {
@@ -418,12 +436,10 @@ func createSlotFile(path string, count uint64, rowWidth int, width tierSlotWidth
 }
 
 func (s *slotFile) put(count, bytes uint64) error {
-	binary.LittleEndian.PutUint64(s.buf, count)
-	if _, err := s.bw.Write(s.buf[:s.width.count]); err != nil {
-		return fmt.Errorf("write slot: %w", err)
-	}
-	binary.LittleEndian.PutUint64(s.buf, bytes)
-	if _, err := s.bw.Write(s.buf[:s.width.bytes]); err != nil {
+	// Each field goes in as a whole word, cut back to its width.
+	b := binary.LittleEndian.AppendUint64(s.bw.AvailableBuffer(), count)[:s.width.count]
+	b = binary.LittleEndian.AppendUint64(b, bytes)[:int(s.width.count)+int(s.width.bytes)]
+	if _, err := s.bw.Write(b); err != nil {
 		return fmt.Errorf("write slot: %w", err)
 	}
 
