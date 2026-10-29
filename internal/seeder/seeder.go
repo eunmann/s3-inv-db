@@ -275,7 +275,6 @@ func buildInventoryIndex(cfg Config, outDir string, seed int64) (int, error) {
 		agg.AddObject(obj.Key, obj.Size, tiers.Resolve(obj.TierID, obj.Size))
 	}
 	rows := agg.Drain()
-	extsort.SortPrefixRows(rows)
 
 	builder, err := extsort.NewIndexBuilder(outDir, "")
 	if err != nil {
