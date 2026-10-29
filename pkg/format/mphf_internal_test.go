@@ -550,7 +550,7 @@ func TestSlotBucketsManyBuckets(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer b.Close()
-	const n = 300_000 // ~2.3 buckets of 2^17 11-byte slots, more than slotWriteWorkers
+	const n = 300_000 // ~4.6 buckets of 2^16 11-byte slots, more than slotWriteWorkers
 	for i := range n {
 		if err := b.Add(prefixFromInt(i)); err != nil {
 			t.Fatal(err)
@@ -578,10 +578,11 @@ func TestSlotBucketsManyBuckets(t *testing.T) {
 	}
 }
 
-// TestSlotBucketsSizing: a bucket's slot count is a power of two of at
-// least slotBucketMinBytes, with at most maxSlotBuckets buckets, and a
-// slot's bucket and place by shift and mask are its quotient and
-// remainder.
+// TestSlotBucketsSizing: a bucket's slot count is a power of two, with
+// at most maxSlotBuckets buckets; below that cap a bucket's bytes, the
+// write workers' layout buffer, are at most slotBucketBytes and at least
+// half; and a slot's bucket and place by shift and mask are its
+// quotient and remainder.
 func TestSlotBucketsSizing(t *testing.T) {
 	for _, slotW := range []int{9, 12, 16} {
 		for _, n := range []int{1, 1000, 300_000, 1 << 27, 3<<30 + 7, 1 << 40} {
@@ -591,9 +592,12 @@ func TestSlotBucketsSizing(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer s.close()
-				if s.perBucket != 1<<s.shift || s.perBucket*slotW < slotBucketMinBytes {
-					t.Errorf("%d slots of %d bytes per bucket, shift %d; want a power of two of at least %d bytes",
-						s.perBucket, slotW, s.shift, slotBucketMinBytes)
+				if s.perBucket != 1<<s.shift {
+					t.Errorf("%d slots per bucket, shift %d; want a power of two", s.perBucket, s.shift)
+				}
+				if bytes := s.perBucket * slotW; n*slotW <= maxSlotBuckets*slotBucketBytes &&
+					(bytes > slotBucketBytes || 2*bytes <= slotBucketBytes) {
+					t.Errorf("%d slots of %d bytes per bucket: %d bytes, want at most %d and over half", s.perBucket, slotW, bytes, slotBucketBytes)
 				}
 				if len(s.next) > maxSlotBuckets || len(s.next) != (n+s.perBucket-1)/s.perBucket {
 					t.Errorf("%d buckets of %d slots for %d slots, want at most %d covering them", len(s.next), s.perBucket, n, maxSlotBuckets)

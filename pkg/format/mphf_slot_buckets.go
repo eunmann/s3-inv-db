@@ -31,11 +31,11 @@ import (
 // and its place in the bucket a mask rather than a 64-bit division per
 // prefix.
 const (
-	// SlotBucketMinBytes is the least slot-file range a bucket covers.
-	// Rounded up to a power-of-two slot count, it sizes a write
-	// worker's layout buffer below maxSlotBuckets buckets: up to twice
-	// this.
-	slotBucketMinBytes = 1 << 20
+	// SlotBucketBytes is the most slot-file range a bucket covers below
+	// maxSlotBuckets buckets, and so the most a write worker's layout
+	// buffer holds; rounding down to a power-of-two slot count leaves
+	// at least half of it.
+	slotBucketBytes = 1 << 20
 	// MaxSlotBuckets caps the bucket count, so the append buffers stay
 	// bounded whatever the prefix count: past it, buckets grow instead.
 	maxSlotBuckets = 1024
@@ -76,12 +76,16 @@ type slotBuckets struct {
 }
 
 // newSlotBuckets sizes the buckets for n slots of slotW bytes and
-// creates the scratch file: a bucket's slots are the fewest that cover
-// slotBucketMinBytes and leave at most maxSlotBuckets buckets, rounded
-// up to a power of two.
+// creates the scratch file. A bucket holds the slots of slotBucketBytes,
+// or of a maxSlotBuckets'th of the slot file if that is more, rounded
+// down to a power of two; past maxSlotBuckets buckets, where that would
+// leave more of them, rounded up instead.
 func newSlotBuckets(tempDir string, n, slotW int) (*slotBuckets, error) {
-	need := max((slotBucketMinBytes+slotW-1)/slotW, (n+maxSlotBuckets-1)/maxSlotBuckets)
-	shift := uint(bits.Len(uint(need - 1)))
+	bucketBytes := max(slotBucketBytes, (n*slotW+maxSlotBuckets-1)/maxSlotBuckets)
+	shift := uint(bits.Len(uint(max(1, bucketBytes/slotW))) - 1)
+	if (n+1<<shift-1)>>shift > maxSlotBuckets {
+		shift++
+	}
 	perBucket := 1 << shift
 	if perBucket-1 > math.MaxUint32 {
 		// A record holds its slot within the bucket in 4 bytes.
