@@ -111,7 +111,7 @@ func tryLock(f *os.File) (bool, error) {
 // Close removes the directory, then releases its lock.
 func (d *publishDir) Close() error {
 	var errs []error
-	if err := os.RemoveAll(d.path); err != nil {
+	if err := removePublishDir(d.path); err != nil {
 		errs = append(errs, fmt.Errorf("remove work dir: %w", err))
 	}
 	if err := d.lock.Close(); err != nil {
@@ -193,9 +193,38 @@ func reclaimPublishDir(dir string) (bool, error) {
 	if !os.SameFile(before, held) || !os.SameFile(held, now) {
 		return false, nil
 	}
-	if err := os.RemoveAll(dir); err != nil {
+	if err := removePublishDir(dir); err != nil {
 		return false, fmt.Errorf("remove: %w", err)
 	}
 
 	return true, nil
+}
+
+// removePublishDir removes dir with its lock file last, so a dir that
+// can only be partly removed keeps the marker a later build reclaims it by.
+func removePublishDir(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", dir, err)
+	}
+	var errs []error
+	for _, e := range entries {
+		if e.Name() == publishLockFile {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	if err := os.Remove(filepath.Join(dir, publishLockFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove lock: %w", err)
+	}
+	if err := os.Remove(dir); err != nil {
+		return fmt.Errorf("remove %s: %w", dir, err)
+	}
+
+	return nil
 }

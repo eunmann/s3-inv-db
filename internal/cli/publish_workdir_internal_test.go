@@ -120,3 +120,57 @@ func TestBuildPublish_ReclaimsAbandonedDirs(t *testing.T) {
 		t.Errorf("abandoned publish dir %s still there when the build ran", stale.path)
 	}
 }
+
+// TestPublishDir_PartialRemovalKeepsMarker: when a publish dir can only
+// be partly removed, its lock file stays, so a later build still
+// reclaims what is left once removal can succeed.
+func TestPublishDir_PartialRemovalKeepsMarker(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	work := t.TempDir()
+	d, err := newPublishDir(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stuck := filepath.Join(d.path, "index")
+	if err := os.Mkdir(stuck, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuck, "data"), []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(stuck)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stuck, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stuck, info.Mode().Perm()) })
+
+	if err := d.Close(); err == nil {
+		t.Fatal("Close succeeded on a dir it could not empty")
+	}
+	if !exists(t, filepath.Join(d.path, publishLockFile)) {
+		t.Fatal("lock file removed from a dir that is still there")
+	}
+
+	log := zerolog.Nop()
+	if err := reclaimPublishDirs(&log, work); err != nil {
+		t.Fatalf("reclaimPublishDirs: %v", err)
+	}
+	if !exists(t, filepath.Join(d.path, publishLockFile)) {
+		t.Fatal("failed reclaim removed the lock file")
+	}
+
+	if err := os.Chmod(stuck, info.Mode().Perm()); err != nil {
+		t.Fatal(err)
+	}
+	if err := reclaimPublishDirs(&log, work); err != nil {
+		t.Fatalf("reclaimPublishDirs: %v", err)
+	}
+	if exists(t, d.path) {
+		t.Errorf("publish dir %s kept after removal could succeed", d.path)
+	}
+}
