@@ -175,6 +175,7 @@ func (w *patchWriter) close() error {
 	if _, err := w.f.WriteAt(head, 0); err != nil {
 		return errors.Join(fmt.Errorf("write %s header: %w", CorePatchFile, err), w.abort())
 	}
+	startWriteback(w.f)
 	if err := w.f.Close(); err != nil {
 		return errors.Join(fmt.Errorf("close %s: %w", CorePatchFile, err), w.rows.abort(), removeIfErr(w.path))
 	}

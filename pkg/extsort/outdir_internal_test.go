@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/rs/zerolog"
 )
 
@@ -314,5 +317,138 @@ func TestReclaimStaleDirs_RestoresInterruptedReplace(t *testing.T) {
 	}
 	if got := siblings(t, outDir); len(got) != 1 {
 		t.Errorf("leftover siblings: %v", got)
+	}
+}
+
+// buildStagedIndex builds a small index with two tiers, so it has the
+// tier_stats subdirectory, into a new staging directory for outDir.
+func buildStagedIndex(t *testing.T, outDir string) string {
+	t.Helper()
+	stage, err := newStagingDir(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agg := NewAggregator(64, 0)
+	for i := range 40 {
+		tier := tiers.Standard
+		if i%3 == 0 {
+			tier = tiers.GlacierIR
+		}
+		agg.AddObject(fmt.Sprintf("d%d/s%d/obj%d", i%4, i%7, i), uint64(1000+i), tier)
+	}
+	b, err := NewIndexBuilder(stage, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SetPresentTiers(agg.PresentTiers()); err != nil {
+		t.Fatal(err)
+	}
+	rows := agg.Drain()
+	SortPrefixRows(rows)
+	for _, row := range rows {
+		if err := b.Add(row); err != nil {
+			t.Fatalf("Add(%q): %v", row.Prefix, err)
+		}
+	}
+	if err := b.Finalize(); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	return stage
+}
+
+// treeEntries maps every entry under root, relative to it ("." for
+// root), to whether it is a directory.
+func treeEntries(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return fmt.Errorf("relative path: %w", err)
+		}
+		out[rel] = d.IsDir()
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+
+	return out
+}
+
+// TestPublishIndex_SyncsEveryFileBeforeRename: every file and directory
+// of the published index, tier_stats/ and its files included, is synced
+// as a file or a directory while it is still in the stage.
+func TestPublishIndex_SyncsEveryFileBeforeRename(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "out")
+	stage := buildStagedIndex(t, outDir)
+	var mu sync.Mutex
+	synced := map[string]bool{}
+	record := func(path string, dir bool) error {
+		rel, err := filepath.Rel(stage, path)
+		if err != nil {
+			return fmt.Errorf("relative path: %w", err)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("sync %s after the stage was renamed: %v", rel, err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if _, dup := synced[rel]; dup {
+			t.Errorf("%s synced twice", rel)
+		}
+		synced[rel] = dir
+
+		return durableSync(path, dir)
+	}
+
+	if err := publish(nopLogger(), stage, outDir, record); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	published := treeEntries(t, outDir)
+	if !published[format.TierStatsDir] {
+		t.Fatalf("published index has no %s directory: %v", format.TierStatsDir, published)
+	}
+	for rel, dir := range published {
+		got, ok := synced[rel]
+		switch {
+		case !ok:
+			t.Errorf("%s published without a sync", rel)
+		case got != dir:
+			t.Errorf("%s synced as dir=%v, is dir=%v", rel, got, dir)
+		}
+	}
+	if len(synced) != len(published) {
+		t.Errorf("synced %d entries, published %d", len(synced), len(published))
+	}
+}
+
+var errDiskGone = errors.New("disk gone")
+
+// TestPublishIndex_SyncFailureKeepsPreviousIndex: a stage that cannot
+// be made durable is not published, and the previous index stays.
+func TestPublishIndex_SyncFailureKeepsPreviousIndex(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "out")
+	writeFile(t, filepath.Join(outDir, format.ManifestFile), "old")
+	stage, err := newStagingDir(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(stage, format.ManifestFile), "new")
+	failing := func(string, bool) error { return errDiskGone }
+
+	if err := publish(nopLogger(), stage, outDir, failing); !errors.Is(err, errDiskGone) {
+		t.Fatalf("publish = %v, want %v", err, errDiskGone)
+	}
+	if got := readFile(t, filepath.Join(outDir, format.ManifestFile)); got != "old" {
+		t.Errorf("manifest = %q, want the previous index's", got)
+	}
+	if got := readFile(t, filepath.Join(stage, format.ManifestFile)); got != "new" {
+		t.Errorf("stage manifest = %q, want it left for the caller to remove", got)
 	}
 }
