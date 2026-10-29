@@ -81,6 +81,10 @@ const tierSlotDataOff = HeaderSize + tierSlotDescBytes
 // maxTierSlots is the most tier slots a mask can describe.
 const maxTierSlots = 16
 
+// Fails to compile (constant overflow) once there are more tiers than a
+// uint16 mask has bits.
+const _ = uint8(maxTierSlots) - uint8(tiers.NumTiers)
+
 // wordBits is the bits in one bit-vector word.
 const wordBits = 64
 

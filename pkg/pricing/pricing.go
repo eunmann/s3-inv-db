@@ -39,6 +39,7 @@ const (
 	priceGlacierIR         = 0.004
 	priceGlacier           = 0.0036
 	priceDeepArchive       = 0.00099
+	priceExpressOneZone    = 0.11
 
 	// Intelligent-Tiering access tiers (same rate as their standard
 	// class equivalents). Listed separately so the JSON keys stay
@@ -158,6 +159,11 @@ var defaultUSEast1PerGB = map[string]float64{
 	"INTELLIGENT_TIERING_ARCHIVE":         priceITArchive,
 	"INTELLIGENT_TIERING_DEEP_ARCHIVE":    priceITDeepArchive,
 	"INTELLIGENT_TIERING_FREQUENT_SMALL":  priceITFrequentSmall,
+
+	"EXPRESS_ONEZONE": priceExpressOneZone,
+
+	// OUTPOSTS and SNOW have no entry: AWS bills them by provisioned
+	// capacity, not per GB stored, so their bytes add no storage cost.
 }
 
 // DefaultUSEast1Prices returns the baked-in US-East-1 price table. The

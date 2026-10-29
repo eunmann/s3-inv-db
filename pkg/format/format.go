@@ -7,11 +7,8 @@ const (
 	// MagicNumber identifies s3-inv-db files.
 	MagicNumber uint32 = 0x53334944 // "S3ID"
 	// Version is the current format version. Readers accept only this
-	// version; an index written by another version is rebuilt. 11:
-	// the core rows' tier field follows the tier layout
-	// (TierMaskEncoding), and tier_multi.mask holds multi-tier masks past
-	// 8 tiers.
-	Version uint32 = 13
+	// version; an index written by another version is rebuilt.
+	Version uint32 = 14
 )
 
 // Header is the common header for all columnar files.

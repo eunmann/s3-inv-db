@@ -73,5 +73,8 @@ fmt.Printf("%d objects, %d bytes\n", stats.ObjectCount, stats.TotalBytes)
   [index-format.md](index-format.md#level-order-positions).
 - **Root and tier presence**: position 0 is the root prefix `""`.
   `HasTierData` is false only for an index with no prefixes; a build
-  over an inventory without a storage-class column counts every object
-  as `STANDARD`.
+  over an inventory without a storage-class column (or a row with an
+  empty one) counts every object as `STANDARD`. A storage class or
+  Intelligent-Tiering access tier AWS does not document for S3
+  Inventory fails the build (`tiers.ErrUnknownStorageClass`,
+  `tiers.ErrUnknownAccessTier`), naming the value, file and key.

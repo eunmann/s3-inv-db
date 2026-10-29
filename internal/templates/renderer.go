@@ -233,6 +233,12 @@ func tierLabel(raw string) string {
 		return "Intelligent-Tiering Deep Archive"
 	case "INTELLIGENT_TIERING_FREQUENT_SMALL":
 		return "Intelligent-Tiering Frequent (< 128 KiB)"
+	case "EXPRESS_ONEZONE":
+		return "Express One Zone"
+	case "OUTPOSTS":
+		return "Outposts"
+	case "SNOW":
+		return "Snow"
 	}
 
 	return raw

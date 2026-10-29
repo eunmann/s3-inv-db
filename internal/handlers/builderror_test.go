@@ -68,6 +68,41 @@ func TestSummarizeBuildError(t *testing.T) {
 			want: "The inventory's manifest could not be used: manifest has no files.",
 		},
 		{
+			name: "unknown storage class",
+			raw:  `gated load b/i/r: load b/i/r: build index: run pipeline: ingest phase: chunk worker: chunk 3: classify "a/odd.txt" in b/i/data/part-0.csv.gz: unknown storage class "GLACIER_DEEP"`,
+			want: `Unknown storage class "GLACIER_DEEP".`,
+		},
+		{
+			name: "unknown storage class on a key naming a checksum",
+			raw:  `build index: run pipeline: ingest phase: chunk worker: chunk 3: classify "checksums/a.sha256" in b/i/data/part-0.csv.gz: unknown storage class "GLACIER_DEEP"`,
+			want: `Unknown storage class "GLACIER_DEEP".`,
+		},
+		{
+			name: "unknown storage class on a key naming a manifest",
+			raw:  `build index: run pipeline: ingest phase: chunk worker: chunk 3: classify "app/manifest.json" in b/i/data/part-0.csv.gz: unknown storage class "GLACIER_DEEP"`,
+			want: `Unknown storage class "GLACIER_DEEP".`,
+		},
+		{
+			name: "unknown storage class on a key with a colon and other keywords",
+			raw:  `build index: run pipeline: ingest phase: chunk worker: chunk 3: classify "AccessDenied: context canceled/no space left" in b/i/data/part-0.csv.gz: unknown storage class "GLACIER_DEEP"`,
+			want: `Unknown storage class "GLACIER_DEEP".`,
+		},
+		{
+			name: "unknown access tier on a key naming a manifest",
+			raw:  `build index: run pipeline: ingest phase: chunk worker: chunk 3: classify "manifest.json" in b/i/data/part-0.csv.gz: unknown Intelligent-Tiering access tier "DEEP"`,
+			want: `Unknown Intelligent-Tiering access tier "DEEP".`,
+		},
+		{
+			name: "unknown storage class whose value holds a colon",
+			raw:  `build index: run pipeline: ingest phase: chunk worker: chunk 3: classify "a" in b/i/data/part-0.csv.gz: unknown storage class "X: Y"`,
+			want: `Unknown storage class "X: Y".`,
+		},
+		{
+			name: "other: a key naming an unknown storage class",
+			raw:  `build index: run pipeline: ingest phase: chunk worker: chunk 3: parse row "unknown storage class \"X\"": unexpected EOF`,
+			want: "Unexpected EOF.",
+		},
+		{
 			name: "other: the innermost message",
 			raw:  "gated load b/i/r: load b/i/r: build index: run pipeline: ingest phase: chunk worker: chunk 3: parse row 17: unexpected EOF",
 			want: "Unexpected EOF.",

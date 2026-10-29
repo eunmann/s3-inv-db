@@ -58,20 +58,20 @@ func TestMPHFFilesMatchGolden(t *testing.T) {
 		{
 			n: 200, groups: [][]int{{3, 77, 150}},
 			mph:      "17a93e43897991e2813de944e1fd41e1ab2baceafd177b7b5685fe0db6e7cdc7",
-			mphSlots: "fa3419687ada50ecc474f11c9dfdda76037b61b58cf59f308cd5713d3349d7a4",
+			mphSlots: "f62f95bf7569d1fa7d2f31ed186d6fcc5978e3cce1ac5854a461a9d959b9876a",
 		},
 		// Two-byte positions.
 		{
 			n: 5000, groups: [][]int{{0, 4999}, {10, 20, 30, 40}},
 			mph:      "5a4a1fda6f6f26150a6dee6eb77be489892435ce0d24478c110275d20df99895",
-			mphSlots: "0a0cf94b594e4d803d2162d4411c471366f109c37ce30c71cf490630f149e8df",
+			mphSlots: "d848e54933d4e9bae6e83974c8c0bb8efd20f78a2a4e74e4e0812c5f17137e92",
 		},
 		// Several slot buckets, level keys in scratch files, progress
 		// blocks spanning chunks.
 		{
 			n: 400_000, groups: [][]int{{7, 50_007, 100_007, 399_999}, {11, 99_999}},
 			mph:      "2d64879626a8600900c418d42c90726f42f236b8b526358847c81667116a4d52",
-			mphSlots: "64f31a9d94dee7f6937dd291cf7fc3f0be50d6bbf2289f51daf8dcfaa2dd30ae",
+			mphSlots: "e61ee6971a3b7eea0d2dad8a0a40f7b708ffa720fa7afd245bda64c35f152ec5",
 		},
 	}
 	for _, tc := range cases {
