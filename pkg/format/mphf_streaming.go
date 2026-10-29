@@ -51,7 +51,8 @@ const StepBuildHash = "Building the prefix hash"
 var ErrMPHFAlreadyBuilt = errors.New("StreamingMPHFBuilder.Build already called")
 
 // NewStreamingMPHFBuilder creates a new streaming MPHF builder. TempDir
-// holds its spill files, created with the first key.
+// holds its spill directory, created with the first key; a bucket's
+// spill file appears once its buffer fills.
 func NewStreamingMPHFBuilder(tempDir string) *StreamingMPHFBuilder {
 	return &StreamingMPHFBuilder{
 		tempDir:     tempDir,
@@ -246,7 +247,7 @@ func numberedPath(dir, prefix string, n, digits int) string {
 		n /= 10
 	}
 
-	return filepath.Join(dir, prefix) + string(num[:digits])
+	return dir + string(filepath.Separator) + prefix + string(num[:digits])
 }
 
 // room makes room in buf for one more record, writing buf out to the
