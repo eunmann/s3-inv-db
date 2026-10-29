@@ -323,21 +323,11 @@ func (a *prefixArena) alloc(n int) []byte {
 	return p
 }
 
-// SortPrefixRows sorts a slice of PrefixRows by prefix in lexicographic order.
-// This is used to prepare rows for the streaming index builder.
+// SortPrefixRows sorts a slice of PrefixRows by prefix in lexicographic
+// order, through (prefix, row) pairs: comparing through the row pointers
+// would load a row from scattered memory for every comparison.
 func SortPrefixRows(rows []*PrefixRow) {
-	sortPrefixRows(rows, nil)
-}
-
-// sortPrefixRows sorts rows by prefix through (prefix, row) pairs in
-// scratch, grown as needed and returned for reuse: comparing through
-// the row pointers would load a row from scattered slab memory for
-// every comparison. The returned scratch holds no references.
-func sortPrefixRows(rows []*PrefixRow, scratch []keyedRow) []keyedRow {
-	if cap(scratch) < len(rows) {
-		scratch = make([]keyedRow, len(rows))
-	}
-	keyed := scratch[:len(rows)]
+	keyed := make([]keyedRow, len(rows))
 	for i, r := range rows {
 		keyed[i] = keyedRow{prefix: r.Prefix, row: r}
 	}
@@ -347,9 +337,6 @@ func sortPrefixRows(rows []*PrefixRow, scratch []keyedRow) []keyedRow {
 	for i := range keyed {
 		rows[i] = keyed[i].row
 	}
-	clear(keyed)
-
-	return scratch[:0]
 }
 
 // keyedRow is a row with its prefix beside the pointer, for sorting.
