@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -288,10 +289,11 @@ func randomPrefixes(r *rand.Rand, depth int) []string {
 }
 
 // TestIndexBuilderTreeDecodesEveryPrefix: the builder interns segments
-// in key order while the tree is in level order; every position still
-// decodes to its prefix, the dictionary lists segments by first
-// appearance in key order, and the parent distance takes the width its
-// largest value needs.
+// and adds MPHF keys in key order while the tree is in level order;
+// every position still decodes to its prefix, every prefix looks up to
+// its position, the dictionary lists segments by first appearance in
+// key order, and the parent distance takes the width its largest value
+// needs.
 func TestIndexBuilderTreeDecodesEveryPrefix(t *testing.T) {
 	for seed := range uint64(5) {
 		prefixes := randomPrefixes(rand.New(rand.NewPCG(seed, 7)), 2+int(seed))
@@ -333,6 +335,17 @@ func TestIndexBuilderTreeDecodesEveryPrefix(t *testing.T) {
 		}
 		tree.Close()
 
+		mphf, err := format.OpenMPHF(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range prefixes {
+			if got, ok := mphf.Lookup(p); !ok || got != pos[p] {
+				t.Fatalf("seed %d: Lookup(%q) = %d, %t; want %d", seed, p, got, ok, pos[p])
+			}
+		}
+		mphf.Close()
+
 		dict, err := format.OpenPrefixDictionary(dir)
 		if err != nil {
 			t.Fatal(err)
@@ -363,6 +376,132 @@ func TestIndexBuilderTreeDecodesEveryPrefix(t *testing.T) {
 		// A plain width: a distance of 255 still fits one byte.
 		if got, want := data[format.HeaderSize+1], byteWidthNeed(maxDist-1); got != want {
 			t.Errorf("seed %d: parent distance width %d for a largest distance of %d, want %d", seed, got, maxDist, want)
+		}
+	}
+}
+
+// TestMPHFMemoryBudget: the MPHF build gets a share of GOMEMLIMIT, or
+// the builder's default without one.
+func TestMPHFMemoryBudget(t *testing.T) {
+	for _, c := range []struct{ limit, want int64 }{
+		{0, 0},
+		{unsetMemoryLimit, 0},
+		{math.MaxInt64, 0},
+		{4 << 30, 1 << 30},
+	} {
+		if got := mphfMemoryBudget(c.limit); got != c.want {
+			t.Errorf("mphfMemoryBudget(%d) = %d, want %d", c.limit, got, c.want)
+		}
+	}
+}
+
+// addFlatRows adds a root and n depth-1 rows.
+func addFlatRows(t *testing.T, b *IndexBuilder, n int) error {
+	t.Helper()
+	if err := b.Add(&PrefixRow{Prefix: ""}); err != nil {
+		return err
+	}
+	for i := range n {
+		row := PrefixRow{Prefix: fmt.Sprintf("p%06d/", i), Depth: 1, Count: 1, TotalBytes: 1}
+		row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = 1, 1
+		if err := b.Add(&row); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// assertNoScratch fails if dir holds anything after a build cleaned up.
+func assertNoScratch(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		t.Errorf("%s left in %s", e.Name(), dir)
+	}
+}
+
+// TestFinalizeMPHFFailureCleansUp: an MPHF build that fails (here, it
+// cannot create its slot file) fails Finalize, and cleanup leaves no
+// scratch and no output.
+func TestFinalizeMPHFFailureCleansUp(t *testing.T) {
+	tempDir := t.TempDir()
+	outDir := filepath.Join(t.TempDir(), "index")
+	b, err := NewIndexBuilder(outDir, tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := addFlatRows(t, b, 3*levelBatches*levelBatchRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(outDir, format.MPHFSlotsFile), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Finalize(); err == nil || !strings.Contains(err.Error(), "MPHF") {
+		t.Fatalf("Finalize = %v, want the MPHF build's failure", err)
+	}
+	b.cleanup()
+	assertNoScratch(t, tempDir)
+	if _, err := os.Stat(outDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("output dir after cleanup: %v", err)
+	}
+}
+
+// TestMPHFSpillFailureFailsTheBuild: a key the MPHF builder cannot
+// spill fails the build where the spool plans it, at a later Add or at
+// Finalize, never silently.
+func TestMPHFSpillFailureFailsTheBuild(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes to a read-only directory")
+	}
+	tempDir := t.TempDir()
+	b, err := NewIndexBuilder(t.TempDir(), tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The spool's directory exists; the MPHF spill's cannot be created.
+	if err := os.Chmod(tempDir, 0o500); err != nil { //nolint:gosec // the test needs a directory nothing can write to
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(tempDir, 0o700) }) //nolint:gosec // restore so t.TempDir can clean up
+	err = addFlatRows(t, b, 3*spoolBatchRows)
+	if err == nil {
+		err = b.Finalize()
+	}
+	if err == nil || !strings.Contains(err.Error(), "MPHF spill") {
+		t.Errorf("err = %v, want the MPHF spill's failure", err)
+	}
+	b.cleanup()
+}
+
+// TestFinalizeLevelsFailureStopsMPHF: writeLevels failing (here, it
+// cannot create the prefix tree) while the MPHF builds beside it fails
+// Finalize with that error once the MPHF build has stopped, and cleanup
+// leaves no scratch and no output.
+func TestFinalizeLevelsFailureStopsMPHF(t *testing.T) {
+	for _, rows := range []int{10, 70_000} {
+		tempDir := t.TempDir()
+		outDir := filepath.Join(t.TempDir(), "index")
+		b, err := NewIndexBuilder(outDir, tempDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := addFlatRows(t, b, rows); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Join(outDir, format.PrefixTreeFile), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Finalize(); err == nil || !strings.Contains(err.Error(), "prefix tree") {
+			t.Fatalf("%d rows: Finalize = %v, want the prefix tree's failure", rows, err)
+		}
+		b.cleanup()
+		assertNoScratch(t, tempDir)
+		if _, err := os.Stat(outDir); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%d rows: output dir after cleanup: %v", rows, err)
 		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -35,7 +36,7 @@ import (
 // Finalize replays the depths in order into the index writers, which
 // write each file in its final form.
 //
-// Memory is bounded: rows and prefix hashes go to disk, and the stack
+// Memory is bounded: rows and MPHF keys go to disk, and the stack
 // holds one entry per depth.
 type IndexBuilder struct {
 	// The plans and the interner are filled on the spool's writer
@@ -80,7 +81,7 @@ type stackEntry struct {
 }
 
 // NewIndexBuilder creates a streaming index builder. The tempDir holds
-// its scratch (the level spool and the MPHF builder's arrays); if it is
+// its scratch (the level spool and the MPHF builder's spill files); if it is
 // empty, os.TempDir() is used.
 func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
 	_, statErr := os.Stat(outDir)
@@ -97,15 +98,11 @@ func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create level spool dir: %w", err)
 	}
-	mphfBuilder, err := format.NewStreamingMPHFBuilder(tempDir)
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("create MPHF builder: %w", err), os.RemoveAll(spoolDir))
-	}
+	mphfBuilder := format.NewStreamingMPHFBuilder(tempDir)
+	mphfBuilder.SetMemoryBudget(mphfMemoryBudget(readMemoryLimit()))
 
 	interner, err := format.NewPrefixSegmentInterner(outDir)
 	if err != nil {
-		mphfBuilder.Close()
-
 		return nil, errors.Join(fmt.Errorf("create prefix segment interner: %w", err), os.RemoveAll(spoolDir))
 	}
 
@@ -157,9 +154,10 @@ func (b *IndexBuilder) startTierPlan() error {
 	return nil
 }
 
-// planRow adds a row to the core, tier and tree plans and interns its
-// last segment into r's segment ID. It runs on the spool's writer
-// goroutine, which sees every row once, in Add order.
+// planRow adds a row to the core, tier and tree plans, interns its
+// last segment into r's segment ID and adds its key to the MPHF
+// builder. It runs on the spool's writer goroutine, which sees every
+// row once, in Add order.
 func (b *IndexBuilder) planRow(depth int, r *spoolRecord) error {
 	mask, err := b.tierPlan.Add(&r.tierCounts, &r.tierBytes, r.count, r.bytes)
 	if err != nil {
@@ -174,6 +172,13 @@ func (b *IndexBuilder) planRow(depth int, r *spoolRecord) error {
 		}
 	}
 	b.treePlan.add(depth, r.parentLocal)
+	posKey, err := format.PositionKey(depth, r.local)
+	if err == nil {
+		err = b.mphfBuilder.AddKey(r.keyHash, r.fp, posKey)
+	}
+	if err != nil {
+		return fmt.Errorf("prefix segment %q at depth %d: add to MPHF builder: %w", r.name, depth, err)
+	}
 
 	return nil
 }
@@ -297,6 +302,7 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	// The prefix is still in this core's cache from the checks above:
 	// hashed by the spool writer instead, it cost twice as much.
 	r.keyHash, r.fp = b.mphfBuilder.KeyHashes(row.Prefix)
+	r.local = b.levelRows[depth]
 	r.name = append(r.name[:0], name...)
 	r.tierCounts, r.tierBytes = row.TierCounts, row.TierBytes
 	if err := b.spool.commit(); err != nil {
@@ -429,26 +435,39 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	steps := newFinalizeSteps(log, b.onProgress)
 	defer steps.end()
 	b.stepProgress = steps.report
-	b.mphfBuilder.SetProgress(b.stepProgress)
 
 	log.Debug().Msg("index builder: starting Finalize")
 
 	b.closeNodesAbove(0)
 
-	log.Debug().Uint64("prefix_count", b.posCount).Msg("index builder: writing rows in level order")
-
-	if err := b.writeLevels(); err != nil {
+	segments, err := b.finishSpool()
+	if err != nil {
 		return err
 	}
-	if err := b.writeTierManifest(); err != nil {
-		return err
-	}
+	starts := b.levelStarts()
 
 	log.Debug().
 		Uint64("mphf_keys", b.mphfBuilder.Count()).
-		Msg("index builder: building the MPHF")
+		Msg("index builder: building the MPHF beside the level-order rows")
 
-	if err := b.buildMPHF(ctx); err != nil {
+	mphfStart := time.Now()
+	mphf, err := b.mphfBuilder.Start(ctx, b.outDir, starts, max(1, runtime.GOMAXPROCS(0)-writeLevelsProcs))
+	if err != nil {
+		return fmt.Errorf("build MPHF: %w", err)
+	}
+
+	log.Debug().Uint64("prefix_count", b.posCount).Msg("index builder: writing rows in level order")
+
+	err = b.writeLevels(starts, segments)
+	if err == nil {
+		err = b.writeTierManifest()
+	}
+	if err != nil {
+		mphf.Abort()
+
+		return errors.Join(err, mphf.Wait())
+	}
+	if err := b.finishMPHF(ctx, mphf, mphfStart); err != nil {
 		return err
 	}
 
@@ -564,22 +583,7 @@ func (h *levelHandoff) drain(i int, write func(depth int, r *spoolRecord) error)
 // and parent become rows once every depth's size is known: the first
 // row of a depth is the number of rows above it. The writers take their
 // widths from the plans the spool's writer filled.
-func (b *IndexBuilder) writeLevels() error {
-	if err := b.spool.finish(); err != nil {
-		return err
-	}
-	// The dictionary is complete: closing the interner writes its end and
-	// frees its segment map before the replay.
-	err := b.interner.Close()
-	segments := b.interner.Count()
-	b.interner = nil
-	if err != nil {
-		return fmt.Errorf("write prefix dictionary: %w", err)
-	}
-	starts := make([]uint64, len(b.levelRows)+1)
-	for d, n := range b.levelRows {
-		starts[d+1] = starts[d] + n
-	}
+func (b *IndexBuilder) writeLevels(starts []uint64, segments uint32) error {
 	total := int64(b.posCount)
 	var written int64
 	b.stepProgress(stepWriteLevels, 0, total)
@@ -614,6 +618,35 @@ func (b *IndexBuilder) writeLevels() error {
 	b.stepProgress(stepWriteLevels, total, total)
 
 	return os.RemoveAll(b.spool.dir) //nolint:wrapcheck // the path is in the error
+}
+
+// finishSpool ends the spool's writer, which completes the plans and
+// the MPHF keys, and closes the interner, which writes the dictionary's
+// end and frees its segment map before the replay. It returns the
+// segment count.
+func (b *IndexBuilder) finishSpool() (uint32, error) {
+	if err := b.spool.finish(); err != nil {
+		return 0, err
+	}
+	err := b.interner.Close()
+	segments := b.interner.Count()
+	b.interner = nil
+	if err != nil {
+		return 0, fmt.Errorf("write prefix dictionary: %w", err)
+	}
+
+	return segments, nil
+}
+
+// levelStarts returns each depth's first row in level order and, last,
+// the row count.
+func (b *IndexBuilder) levelStarts() []uint64 {
+	starts := make([]uint64, len(b.levelRows)+1)
+	for d, n := range b.levelRows {
+		starts[d+1] = starts[d] + n
+	}
+
+	return starts
 }
 
 // planChildStartTail gives the core plan, when it needs them, the rows
@@ -698,7 +731,7 @@ func (b *IndexBuilder) closeStatsWriters(depthW *format.DepthIndexWriter) error 
 // replayLevels reads the spool once into batches for two sides that
 // share nothing and write side by side: the stats rows (tier stats,
 // core stats, depth index) on this goroutine, and the names (prefix
-// tree, MPHF keys) on their own. Each side gets every row in level
+// tree) on their own. Each side gets every row in level
 // order. Reading each depth twice, once per side, was half of the stats
 // side's time. A side's error stops the reader and the other side.
 func (b *IndexBuilder) replayLevels(stats, names func(depth int, r *spoolRecord) error) error {
@@ -798,7 +831,7 @@ func (b *IndexBuilder) writeStatsRow(depthW *format.DepthIndexWriter, starts []u
 }
 
 // writeNameRow writes one spooled row's name, the next in level order:
-// its prefix-tree row and MPHF key.
+// its prefix-tree row.
 func (b *IndexBuilder) writeNameRow(starts []uint64, depth int, r *spoolRecord) error {
 	var err error
 	if depth == 0 {
@@ -809,25 +842,48 @@ func (b *IndexBuilder) writeNameRow(starts []uint64, depth int, r *spoolRecord) 
 	if err != nil {
 		return fmt.Errorf("prefix tree row at depth %d: %w", depth, err)
 	}
-	if err := b.mphfBuilder.AddHashed(r.keyHash, r.fp); err != nil {
-		return fmt.Errorf("add to MPHF builder: %w", err)
-	}
 
 	return nil
 }
 
-// buildMPHF builds the MPHF and logs progress.
-func (b *IndexBuilder) buildMPHF(ctx context.Context) error {
-	log := zerolog.Ctx(ctx)
-	mphfStart := time.Now()
-	if err := b.mphfBuilder.Build(b.outDir); err != nil {
+// MPHFFractionOfLimit is the share of GOMEMLIMIT the MPHF build's
+// workers may hold.
+const mphfFractionOfLimit = 0.25
+
+// mphfMemoryBudget is the MPHF build's heap under memoryLimit, or 0,
+// the builder's default, without a limit.
+func mphfMemoryBudget(memoryLimit int64) int64 {
+	if memoryLimit <= 0 || memoryLimit >= unsetMemoryLimit {
+		return 0
+	}
+
+	return int64(float64(memoryLimit) * mphfFractionOfLimit)
+}
+
+// writeLevelsProcs is the cores writeLevels keeps busy: its spool
+// reader and its two writing sides. The MPHF build runs beside it on
+// the rest, then on every core.
+const writeLevelsProcs = 3
+
+// finishMPHF reports the MPHF build that ran beside writeLevels as the
+// next step, gives it every core and waits for it. The step's own log
+// covers only the part after writeLevels, so the build's whole wall
+// time and the part that overlapped writeLevels are logged here.
+func (b *IndexBuilder) finishMPHF(ctx context.Context, h *format.MPHFBuild, started time.Time) error {
+	besideWrites := time.Since(started)
+	h.SetProgress(b.stepProgress)
+	h.Grow(runtime.GOMAXPROCS(0))
+	if err := h.Wait(); err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
-	b.mphfBuilder.Close()
-
-	log.Debug().
-		Str("mphf_duration", humanfmt.Duration(time.Since(mphfStart))).
-		Msg("index builder: MPHF build complete")
+	total := h.Elapsed()
+	overlap := min(besideWrites, total)
+	zerolog.Ctx(ctx).Info().
+		Str("duration", humanfmt.Duration(total)).
+		Dur("duration_ms", total).
+		Str("beside_row_writes", humanfmt.Duration(overlap)).
+		Dur("beside_row_writes_ms", overlap).
+		Msg("prefix hash build complete")
 
 	return nil
 }

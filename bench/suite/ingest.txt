@@ -14,7 +14,7 @@ integration internal/loader ^BenchmarkPipeline$/^shape=realistic$/^format=parque
 - pkg/s3inventory ^BenchmarkCSVReader$ 10x
 
 # MPHF build over 1M prefixes (Add + Build, ~60 ms per op; reports
-# peak_heap_B): the finalize step's memory is not bounded by GOMEMLIMIT.
+# peak_heap_B): the build's heap is bounded by its memory budget.
 # Ten ops per sample: at 1x one op's scheduling noise spread runs ±13%.
 - pkg/format ^BenchmarkMPHFBuild$/^n=1000000$ 10x
 

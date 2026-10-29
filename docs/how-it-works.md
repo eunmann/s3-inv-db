@@ -57,12 +57,15 @@ output, never in `/tmp` (which may be RAM). It holds at most two
 downloaded Parquet files per worker (CSV files never touch it), the
 run files (deleted as merged, the
 last ones before the index finalizes), the
-level spool (~35 B per prefix) and the hash builder's arrays (~32 B per
-prefix at their peak). The hash builder reads and writes those arrays
-only in sequence (its slot table is written range by range from a
-bucketed pass), so a build whose arrays don't fit in memory streams
-from disk instead of faulting page by page. A build that can't produce exact totals fails and removes
-what it created; a previous index is left untouched.
+level spool (~19 B per prefix) and the hash builder's spill files (24 B
+per prefix, each deleted once its partition is built). Every scratch
+file is written and read in sequence, so a build whose scratch doesn't
+fit in memory streams from disk instead of faulting page by page. The
+hash builder holds one partition of prefixes per worker (at most about
+2^20 of them), with as many workers as `0.25 × GOMEMLIMIT` allows
+(256 MiB with no limit), so its memory does not grow with the prefix
+count. A build that can't produce exact totals fails and removes what
+it created; a previous index is left untouched.
 
 ## Querying
 
@@ -114,7 +117,9 @@ explicit child offsets instead of unary codes.
 
 Maps each of the n prefixes to a distinct slot in 0…n−1 using about
 3.3 bits per prefix, with a fallback table for the few keys whose
-64-bit hashes collide. Each slot stores an 8-byte fingerprint (a second
+64-bit hashes collide. The prefixes are split by their hash's top bits
+into partitions built independently on all cores; a lookup picks the
+partition by the same bits, so it stays O(1). Each slot stores an 8-byte fingerprint (a second
 hash) and the position, so lookups of absent prefixes are rejected.
 [Limasset et al. 2017](https://doi.org/10.4230/LIPIcs.SEA.2017.25).
 

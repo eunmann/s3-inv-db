@@ -63,7 +63,7 @@ core row points at its children's rows.
 
 ```mermaid
 flowchart LR
-    P["prefix string"] -->|wyhash| MPH["mph.bin<br/>BBHash levels + fallback"]
+    P["prefix string"] -->|wyhash| MPH["mph.bin<br/>BBHash partitions"]
     MPH -->|slot| SL["mph_slots.bin<br/>fingerprint + position"]
     SL -->|position| CS["core_stats.bin row<br/>count, bytes, child_start, tier field"]
     CS -. "sentinel value" .-> CP["core_patch.bin<br/>(rank in core_patch.rows)"]
@@ -87,7 +87,7 @@ fields little-endian:
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | Magic | `0x53334944` ("S3ID" in ASCII) |
-| 4 | 4 | Version | Format version (currently `14`) |
+| 4 | 4 | Version | Format version (currently `15`) |
 | 8 | 8 | Count | Number of rows |
 | 16 | 4 | Width | Row stride in bytes |
 
@@ -224,13 +224,14 @@ reads its rows in sequence.
 
 Rows arrive in key order, which is not position order, so the builder
 spools each prefix by depth (one file per depth in its temp directory,
-about 35 B per prefix) and writes every per-row file at finalize,
+about 19 B per prefix) and writes every per-row file at finalize,
 depth by depth: a prefix's first child is the number of rows already
 seen at the next depth when it arrives, and its parent is the last row
 seen at the depth above. The goroutine writing the spool also gathers
 what fixes every per-row file's widths (the core and tier statistics
 above, the segment count and the widest parent distance below), so at
-finalize each file is written once, straight to its final form.
+finalize each file is written once, straight to its final form. It
+also spills each prefix's MPHF key (24 B) for the hash build.
 
 ## Depth Index
 
@@ -284,23 +285,31 @@ The MPHF provides O(1) prefix-to-position lookups with BBHash (Limasset et al., 
 
 | File | Description |
 |------|-------------|
-| `mph.bin` | BBHash levels and the fallback table (layout below) |
+| `mph.bin` | BBHash partitions, each with its levels and fallback table (layout below) |
 | `mph_slots.bin` | Per BBHash slot, the prefix's fingerprint and its position |
 
 `mph.bin` layout, all little-endian `uint64`, with no file header:
 
 | Words | Content |
 |-------|---------|
+| 1 | Partition bits `k` (0–16) |
+
+then, for each of the `2^k` partitions in order:
+
+| Words | Content |
+|-------|---------|
+| 1 | Key count `n` |
 | 1 | Level count `L` (0 when every key is in the fallback table) |
 | `L` | Each level's length in 64-bit words |
 | sum of the lengths | Every level's bit vector, back to back |
 | 1 | Fallback entry count `F` |
 | `2F` | Each fallback entry's key hash, then its fingerprint, sorted by (hash, fingerprint) |
 
-The file is exactly that long; a reader rejects any other size, a level
-or fallback count the file cannot hold, and fallback entries out of
-order. `mph.bin` and `mph_slots.bin` must agree on the key count: the
-bits set across the levels plus `F`.
+The file is exactly that long; a reader rejects any other size, more
+than 16 partition bits or 64 levels, a level or fallback count the file
+cannot hold, a partition whose set bits plus `F` are not `n`, and a
+fallback entry out of order or outside its partition. `mph.bin` and
+`mph_slots.bin` must agree on the key count: the sum of the `n`.
 
 `mph_slots.bin` layout:
 
@@ -316,12 +325,14 @@ place: 11 bytes per slot on the 2.4M-prefix benchmark fixture.
 
 ### BBHash
 
-Level 0 is a bit vector of about 2 bits per prefix (gamma 2). Each key hash sets the bit chosen by a splitmix64 mix of the hash and the level number. Bits that two keys share are cleared, and those keys move on to the next level, which is sized for them alone. A key's slot is the number of set bits before its own, across all levels. On load the reader builds a rank directory with one count per 512 bits, so that count takes at most eight popcounts. A lookup therefore costs O(levels) however many prefixes the index holds. `mph.bin` holds about 3.3 bits per prefix; with the in-memory rank directory the table is about 3.7 bits per prefix.
+The top `k` bits of a key hash choose its partition, and each partition is a BBHash of its own keys. Partition `p` owns the slots after every earlier partition's keys. Level 0 is a bit vector of about 2 bits per key of the partition (gamma 2). Each key hash sets the bit chosen by a splitmix64 mix of the hash and the level number. Bits that two keys share are cleared, and those keys move on to the next level, which is sized for them alone. A key's slot is its partition's first slot plus the number of set bits before its own within the partition. The reader lays every partition's bits back to back and builds one rank directory over them, with one count per 512 bits, so that count takes at most eight popcounts; a per-partition offset turns it into the slot. A lookup therefore costs O(levels) however many prefixes the index holds. `mph.bin` holds about 3.3 bits per prefix; with the in-memory rank directory the table is about 3.7 bits per prefix.
+
+The build picks `k` from the key count: about 8K keys per partition up to 256 partitions, then more partitions while one would hold over 2^20 keys. Each partition is built on its own from its keys' spill file, so the build's workers each hold one partition and their number fits the memory budget (a quarter of `GOMEMLIMIT`, 256 MiB without one). The output depends only on the keys, not on the worker count or the order the keys arrive in.
 
 ### Lookup Algorithm
 
 1. Hash the prefix with wyhash (final v4.3, `pkg/format/wyhash.go`) and seed 0
-2. Find the key hash's BBHash slot. A hash that sets no bit on any level is looked up in the fallback table by (key hash, fingerprint) when the table is non-empty; a miss there means the prefix is not in the index
+2. Take the partition from the key hash's top `k` bits and find the hash's slot in its levels. A hash that sets no bit on any level is looked up in the partition's fallback entries by (key hash, fingerprint) when the table is non-empty; a miss there means the prefix is not in the index
 3. Read that slot from `mph_slots.bin`
 4. Hash the prefix again with the fixed fingerprint seed (computed once, reused from step 2 on the fallback path); if it matches the slot's fingerprint, return the slot's position, otherwise the prefix doesn't exist
 
@@ -334,9 +345,9 @@ exact, but walking the prefix tree adds 51–90% LLC misses per lookup
 
 ### Fallback Table
 
-BBHash cannot place two keys with equal 64-bit hashes: they take the same bit on every level. The chance that some two of n prefixes share a hash is 1 − e^(−n²/2⁶⁵), 39% at 4.3 billion prefixes and 93% at 10 billion, so the build expects it. It stops adding levels at the first level that places no key, and the keys still unplaced go to the fallback table, keyed by (key hash, fingerprint). The levels own the first slots, and fallback entry j owns the j-th slot after them. The fingerprint uses its own fixed seed, so prefixes that share a key hash still differ in it. Two prefixes equal in both 64-bit hashes cannot be told apart by a lookup, so the build fails with `ErrMPHFKeyCollision`.
+BBHash cannot place two keys with equal 64-bit hashes: they take the same bit on every level. The chance that some two of n prefixes share a hash is 1 − e^(−n²/2⁶⁵), 39% at 4.3 billion prefixes and 93% at 10 billion, so the build expects it. A partition stops adding levels at the first level that places no key, and the keys still unplaced become its fallback entries, keyed by (key hash, fingerprint). That also happens to distinct keys that all collide on one small level, such as two keys sharing a bit of a 64-bit level, so with many partitions a large index often has a few. Keys that share a hash share a partition. The partition's levels own its first slots, and its fallback entry j owns the j-th slot after them. The fingerprint uses its own fixed seed, so prefixes that share a key hash still differ in it. Two prefixes equal in both 64-bit hashes cannot be told apart by a lookup, so the build fails with `ErrMPHFKeyCollision`.
 
-Finding the entries costs one parallel pass over the build's key-hash and fingerprint arrays, checking each hash against the sorted leftover hashes. It runs only when some key is left over. The table is almost always empty or a handful of entries, and a lookup that hits a level never reads it.
+Finding the entries costs one pass over the partition's keys, checking each hash against the sorted leftover hashes. It runs only when some key is left over. The table is empty or a handful of entries, and a lookup that hits a level never reads it.
 
 ## Prefix Strings
 
@@ -513,4 +524,4 @@ from the file-header format version.
 
 ## Versioning
 
-The format version in file headers lets a reader refuse files it would mis-decode. Version 14 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 15 is the current format; readers accept only that version, and an index written by any other version is rebuilt.

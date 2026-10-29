@@ -68,17 +68,19 @@ bytes per prefix with a UUID directory per object).
 
 The budget counts indexes only. **Size the volume for scratch too**,
 per concurrent build, on top of `max_index_disk`: scratch and index
-peak together while the build finalizes, at about 45 bytes per prefix
+peak together while the build finalizes, at about 55 bytes per prefix
 (index included) when directory names repeat and 100 bytes per prefix
 with a UUID directory per object, which is 2.0× and 1.5× their gzipped
 inventory. Run files spilled under memory pressure (10–30 bytes per
 prefix) are removed before that peak.
 
-Measured with `BenchmarkPipeline` at 1M objects (`peak_disk_B`, with
+Measured with `BenchmarkPipeline` (`peak_disk_B`, with
 `S3INV_DISK_PEAK=1`):
-- `realistic`: 2.37M prefixes, 51 MiB gzipped inventory, 66.8 MB
-  index, peak 108 MB;
-- `unique_dirs` (`uploads/<user>/<uuid>/<file>`): 1.00M prefixes,
+- `realistic`, 1M objects: 2.37M prefixes, 51 MiB gzipped inventory,
+  66.8 MB index, peak 108 MB;
+- `realistic`, 10M objects: 20.6M prefixes, peak 1.10 GB (53 B per
+  prefix);
+- `unique_dirs` (`uploads/<user>/<uuid>/<file>`), 1M objects: 1.00M prefixes,
   65.1 MB gzipped, 64.0 MB index, peak 99 MB.
 
 ## Cache directory
@@ -199,13 +201,16 @@ builds.
   and one `finalize step complete` per finalize step, each with its
   duration and how long it waited on storage: `major_faults`,
   `storage_read`/`storage_written`, and on Linux the system's
-  `file_refaults` (page-cache thrash) and `io_stall_full`.
+  `file_refaults` (page-cache thrash) and `io_stall_full`. The prefix
+  hash builds beside the depth ordering, so its step covers only the
+  part after it; `prefix hash build complete` logs its whole
+  `duration` and how much of it ran `beside_row_writes`.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Low CPU during a build | S3 bandwidth | More vCPUs or network |
 | Slow build, many run files | Spilling under a tight limit | Raise `GOMEMLIMIT` |
-| Long final build phase | MPHF build | Expected past ~5M prefixes |
-| A finalize step with high `major_faults` | Its scratch arrays don't fit in the page cache | More RAM, or fewer indexes loaded during builds |
+| Long final build phase | Ordering rows by depth and building the prefix hash | Expected past ~5M prefixes; both use more cores |
+| A finalize step with high `major_faults` | Its scratch files don't fit in the page cache | More RAM, or fewer indexes loaded during builds |
 | First queries slow | Cold page cache | Expected; prefault covers new loads |
 | Load refused | Budget full of pinned runs | Unpin or raise `max_index_disk` |

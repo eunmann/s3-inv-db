@@ -171,7 +171,10 @@ type spoolRecord struct {
 	count, bytes uint64
 	childLocal   uint64 // the prefix's first child, within depth+1
 	parentLocal  uint64 // the parent, within depth-1; 0 for the root
-	keyHash, fp  uint64 // the MPHF key hash and fingerprint
+	// keyHash, fp and local (the prefix's index within its depth) are
+	// for the plan to hand the MPHF builder; they are not spooled.
+	keyHash, fp uint64
+	local       uint64
 	// name is the last segment, without its slash (empty for the root),
 	// for the plan to intern into segID; only segID is spooled.
 	name       []byte
@@ -213,8 +216,6 @@ func (s *levelSpool) add(depth int, r *spoolRecord) error {
 	buf = binary.AppendUvarint(buf, r.bytes)
 	buf = binary.AppendUvarint(buf, r.childLocal)
 	buf = binary.AppendUvarint(buf, r.parentLocal)
-	buf = binary.LittleEndian.AppendUint64(buf, r.keyHash)
-	buf = binary.LittleEndian.AppendUint64(buf, r.fp)
 	buf = binary.AppendUvarint(buf, uint64(r.segID))
 	buf = binary.AppendUvarint(buf, mask)
 	for m := mask; m != 0; m &= m - 1 {
@@ -369,12 +370,6 @@ func decodeSpoolRecord(buf []byte, r *spoolRecord) error {
 		return v
 	}
 	r.count, r.bytes, r.childLocal, r.parentLocal = next(), next(), next(), next()
-	if len(buf) < 16 {
-		return errSpoolTruncated
-	}
-	r.keyHash = binary.LittleEndian.Uint64(buf)
-	r.fp = binary.LittleEndian.Uint64(buf[8:])
-	buf = buf[16:]
 	segID := next()
 	if segID > math.MaxUint32 {
 		return fmt.Errorf("%w: segment ID %d", errSpoolTruncated, segID)

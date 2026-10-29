@@ -121,7 +121,9 @@ func (m *MPHF) Lookup(prefix string) (uint64, bool) {
 }
 
 // lookupFallback resolves a key the levels miss through the fallback
-// table, which is empty in almost every index.
+// table. Any partition whose last level places no key adds entries,
+// so a large index often has a few; the table is a handful of entries
+// at most in practice, and a key a level places never reaches it.
 func (m *MPHF) lookupFallback(prefix string, key uint64) (uint64, bool) {
 	fp := computeFingerprint(prefix)
 	slot, ok := m.mph.findFallback(key, fp)

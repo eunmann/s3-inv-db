@@ -6,14 +6,9 @@ import (
 )
 
 // StepProgress receives a build step's progress: done of total, in the
-// step's own unit (rows, keys, slots, bytes). It may be called from
+// step's own unit (rows, keys, bytes). It may be called from
 // several goroutines at once.
 type StepProgress func(step string, done, total int64)
-
-// progressBlock is how many items a worker processes between progress
-// reports: the report is off the per-item path, and a block of keys
-// takes well under a millisecond.
-const progressBlock = 1 << 17
 
 // progressInterval is the least time between two reports of a step, so
 // a step's progress reaches the UI a few times a second however many

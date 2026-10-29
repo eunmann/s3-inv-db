@@ -17,11 +17,11 @@ import (
 )
 
 // spoolTestRecord is the i-th record of the spool tests, at depth i%4,
-// without the name, which is not spooled.
+// without the fields that are not spooled: the name and the MPHF key.
 func spoolTestRecord(i int) spoolRecord {
 	r := spoolRecord{
 		count: uint64(i), bytes: uint64(i) << 20, childLocal: uint64(i / 2), parentLocal: uint64(i / 3),
-		keyHash: uint64(i) * 0x9e3779b97f4a7c15, fp: ^uint64(i), segID: uint32(i) * 0x9e3779b9,
+		segID: uint32(i) * 0x9e3779b9,
 	}
 	r.tierCounts[i%MaxTiers], r.tierBytes[i%MaxTiers] = uint64(i), uint64(i)<<20
 
@@ -30,7 +30,7 @@ func spoolTestRecord(i int) spoolRecord {
 
 // TestLevelSpoolWritesEveryRecordInOrder: records handed over across
 // several batches, and a last partial one, read back per depth in the
-// order they were added.
+// order they were added, without the name and MPHF key.
 func TestLevelSpoolWritesEveryRecordInOrder(t *testing.T) {
 	const n = 3*spoolBatchRows + 5
 	s := newLevelSpool(t.TempDir())
@@ -39,6 +39,7 @@ func TestLevelSpoolWritesEveryRecordInOrder(t *testing.T) {
 		e := s.next()
 		e.depth, e.rec = i%4, spoolTestRecord(i)
 		e.rec.name = fmt.Appendf(nil, "seg-%d", i)
+		e.rec.keyHash, e.rec.fp, e.rec.local = uint64(i)*0x9e3779b97f4a7c15, ^uint64(i), uint64(i)
 		if err := s.commit(); err != nil {
 			t.Fatalf("commit %d: %v", i, err)
 		}
@@ -204,7 +205,7 @@ func TestSpoolReaderAcrossRefills(t *testing.T) {
 func TestSpoolReaderFillsTheBuffer(t *testing.T) {
 	big := spoolRecord{
 		count: math.MaxUint64, bytes: math.MaxUint64, childLocal: math.MaxUint64, parentLocal: math.MaxUint64,
-		keyHash: math.MaxUint64, fp: math.MaxUint64, segID: math.MaxUint32,
+		segID: math.MaxUint32,
 	}
 	for i := range big.tierCounts {
 		big.tierCounts[i], big.tierBytes[i] = math.MaxUint64, math.MaxUint64
