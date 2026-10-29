@@ -15,6 +15,7 @@ var (
 	ErrEmptyBucket    = errEmptyBucket
 	ErrEmptySrcBucket = errEmptySrcBucket
 	ErrPrefixNotSlash = errPrefixNotSlash
+	ErrUnknownFormat  = errUnknownFormat
 )
 
 // MD5Hex exposes md5Hex for tests.
@@ -28,13 +29,18 @@ func TierToS3Columns(m *tiers.Mapping, id tiers.ID) (S3InventoryColumns, error) 
 	return tierToS3Columns(m, id)
 }
 
-// CsvGzPayload re-exports the unexported csvGzPayload as a type alias
+// DataPayload re-exports the unexported dataPayload as a type alias
 // so tests in the seeder_test package can read Body and Size by name.
-type CsvGzPayload = csvGzPayload
+type DataPayload = dataPayload
 
 // EncodeCSVGz exposes encodeCSVGz for tests.
-func EncodeCSVGz(srcBucket string, seed int64, objects []benchutil.FakeObject) (CsvGzPayload, error) {
+func EncodeCSVGz(srcBucket string, seed int64, objects []benchutil.FakeObject) (DataPayload, error) {
 	return encodeCSVGz(srcBucket, seed, objects)
+}
+
+// EncodeParquet exposes encodeParquet for tests.
+func EncodeParquet(srcBucket string, seed int64, objects []benchutil.FakeObject) (DataPayload, error) {
+	return encodeParquet(srcBucket, seed, objects)
 }
 
 // NewS3ClientForTest exposes newS3Client for tests.

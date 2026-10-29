@@ -6,6 +6,7 @@
 # Build path end to end at 10M objects: spills, merge rounds, peak heap
 # and index size at a size where they matter.
 integration internal/loader ^BenchmarkPipeline$/^shape=(realistic|realistic_sorted)$/^n=10000000$ 1x
+integration internal/loader ^BenchmarkPipeline$/^shape=realistic$/^format=parquet$/^n=10000000$ 1x
 
 # MPHF build over 5M prefixes.
 - pkg/format ^BenchmarkMPHFBuild$/^n=5000000$ 3x

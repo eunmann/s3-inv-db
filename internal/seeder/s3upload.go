@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"math/rand/v2"
 	"net/url"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/s3fetch"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
+	"github.com/parquet-go/parquet-go"
 )
 
 // S3Config configures the S3 upload target.
@@ -72,13 +74,18 @@ func newS3Client(ctx context.Context) (*s3.Client, error) {
 }
 
 // UploadInventory generates one synthetic S3 Inventory run and uploads
-// the manifest + manifest.checksum + a single CSV.gz data file to S3.
-// The layout exactly mirrors what AWS S3 produces for a real inventory:
+// the manifest + manifest.checksum + a single data file in cfg.Format
+// to S3. The layout exactly mirrors what AWS S3 produces for a real
+// inventory:
 //
 //	<bucket>/<prefix><src-bucket>/<inv-id>/<YYYY-MM-DDTHH-MMZ>/manifest.json
 //	<bucket>/<prefix><src-bucket>/<inv-id>/<YYYY-MM-DDTHH-MMZ>/manifest.checksum
-//	<bucket>/<prefix><src-bucket>/<inv-id>/data/<uuid>.csv.gz
+//	<bucket>/<prefix><src-bucket>/<inv-id>/data/<uuid>.csv.gz (or .parquet)
 func UploadInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S3Config, index int, seed int64, runStamp time.Time) (InventoryInfo, error) {
+	enc, err := encodingFor(cfg.Format)
+	if err != nil {
+		return InventoryInfo{}, err
+	}
 	invID := fmt.Sprintf("inv-%03d", index)
 	name := fmt.Sprintf("Seed Inventory %d", index)
 
@@ -87,14 +94,14 @@ func UploadInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S
 	gen := benchutil.NewGenerator(genCfg)
 	objects := gen.Generate()
 
-	payload, err := encodeCSVGz(s3cfg.SrcBucket, seed, objects)
+	payload, err := enc.encode(s3cfg.SrcBucket, seed, objects)
 	if err != nil {
-		return InventoryInfo{}, fmt.Errorf("encode csv.gz: %w", err)
+		return InventoryInfo{}, fmt.Errorf("encode data file: %w", err)
 	}
 
 	// AWS S3 Inventory uses minute-granularity run folders (YYYY-MM-DDTHH-MMZ).
 	stamp := runStamp.UTC().Format("2006-01-02T15-04Z")
-	dataKey := fmt.Sprintf("%s%s/%s/data/%s.csv.gz", s3cfg.Prefix, s3cfg.SrcBucket, invID, runStampUUID(runStamp, index))
+	dataKey := fmt.Sprintf("%s%s/%s/data/%s%s", s3cfg.Prefix, s3cfg.SrcBucket, invID, runStampUUID(runStamp, index), enc.ext)
 	manifestKey := fmt.Sprintf("%s%s/%s/%s/manifest.json", s3cfg.Prefix, s3cfg.SrcBucket, invID, stamp)
 	checksumKey := fmt.Sprintf("%s%s/%s/%s/manifest.checksum", s3cfg.Prefix, s3cfg.SrcBucket, invID, stamp)
 
@@ -103,8 +110,8 @@ func UploadInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S
 		"destinationBucket": "arn:aws:s3:::" + s3cfg.Bucket,
 		"version":           "2016-11-30",
 		"creationTimestamp": strconv.FormatInt(runStamp.UnixMilli(), 10),
-		"fileFormat":        "CSV",
-		"fileSchema":        csvFileSchema,
+		"fileFormat":        enc.fileFormat,
+		"fileSchema":        enc.fileSchema,
 		"files": []map[string]any{
 			{"key": dataKey, "size": payload.Size, "MD5checksum": md5Hex(payload.Body)},
 		},
@@ -114,7 +121,7 @@ func UploadInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S
 		return InventoryInfo{}, fmt.Errorf("marshal manifest: %w", err)
 	}
 
-	if err := putObject(ctx, client, s3cfg.Bucket, dataKey, payload.Body, "application/gzip"); err != nil {
+	if err := putObject(ctx, client, s3cfg.Bucket, dataKey, payload.Body, enc.contentType); err != nil {
 		return InventoryInfo{}, fmt.Errorf("upload data: %w", err)
 	}
 	if err := putObject(ctx, client, s3cfg.Bucket, manifestKey, manifestJSON, "application/json"); err != nil {
@@ -154,7 +161,7 @@ func autoChunkCount(objects int) int {
 
 // UploadMultiChunkInventory generates `cfg.Objects` synthetic objects,
 // splits them into numChunks equal-ish slices, uploads each slice as
-// its own .csv.gz data file, and writes a manifest pointing at all of
+// its own data file in cfg.Format, and writes a manifest pointing at all of
 // them. Useful for benchmarks that need to exercise the build pipeline's
 // chunk-level parallelism. NumChunks must be >= 1; values >= the
 // generated object count fall back to one file per object.
@@ -176,8 +183,8 @@ const (
 )
 
 // FixtureFingerprint returns a short digest of what
-// UploadMultiChunkInventory writes for cfg's Preset and SortedKeys and
-// seed, taken over a small sample inventory at a fixed run time. A
+// UploadMultiChunkInventory writes for cfg's Preset, SortedKeys and
+// Format and seed, taken over a small sample inventory at a fixed run time. A
 // benchmark that caches a seeded fixture puts it in the cache key, so
 // a seeder that writes different bytes seeds a new fixture instead of
 // reusing one an older seeder wrote.
@@ -204,6 +211,10 @@ type putFunc func(ctx context.Context, key string, body []byte, contentType stri
 // writeMultiChunkInventory is UploadMultiChunkInventory with its
 // objects handed to put.
 func writeMultiChunkInventory(ctx context.Context, put putFunc, cfg Config, s3cfg S3Config, index int, seed int64, runStamp time.Time, numChunks int) (InventoryInfo, error) {
+	enc, err := encodingFor(cfg.Format)
+	if err != nil {
+		return InventoryInfo{}, err
+	}
 	if numChunks < 1 {
 		numChunks = 1
 	}
@@ -250,12 +261,12 @@ func writeMultiChunkInventory(ctx context.Context, put putFunc, cfg Config, s3cf
 			}
 			chunkBuf = append(chunkBuf, gen.Next())
 		}
-		payload, err := encodeCSVGz(s3cfg.SrcBucket, seed, chunkBuf)
+		payload, err := enc.encode(s3cfg.SrcBucket, seed, chunkBuf)
 		if err != nil {
 			return InventoryInfo{}, fmt.Errorf("encode chunk %d: %w", chunk, err)
 		}
-		dataKey := fmt.Sprintf("%s%s/%s/data/%s-chunk-%04d.csv.gz", s3cfg.Prefix, s3cfg.SrcBucket, invID, runStampUUID(runStamp, index), chunk)
-		if err := put(ctx, dataKey, payload.Body, "application/gzip"); err != nil {
+		dataKey := fmt.Sprintf("%s%s/%s/data/%s-chunk-%04d%s", s3cfg.Prefix, s3cfg.SrcBucket, invID, runStampUUID(runStamp, index), chunk, enc.ext)
+		if err := put(ctx, dataKey, payload.Body, enc.contentType); err != nil {
 			return InventoryInfo{}, fmt.Errorf("upload chunk %d: %w", chunk, err)
 		}
 		files = append(files, map[string]any{
@@ -270,8 +281,8 @@ func writeMultiChunkInventory(ctx context.Context, put putFunc, cfg Config, s3cf
 		"destinationBucket": "arn:aws:s3:::" + s3cfg.Bucket,
 		"version":           "2016-11-30",
 		"creationTimestamp": strconv.FormatInt(runStamp.UnixMilli(), 10),
-		"fileFormat":        "CSV",
-		"fileSchema":        csvFileSchema,
+		"fileFormat":        enc.fileFormat,
+		"fileSchema":        enc.fileSchema,
 		"files":             files,
 	}
 	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
@@ -294,10 +305,58 @@ func writeMultiChunkInventory(ctx context.Context, put putFunc, cfg Config, s3cf
 	}, nil
 }
 
-// csvGzPayload is the gzipped CSV body plus its on-the-wire byte size
-// (used to populate the manifest's `size` field). The two values are
-// always produced together so a struct is more honest than a tuple.
-type csvGzPayload struct {
+// Format selects the data file format the S3 target writes.
+type Format string
+
+const (
+	// FormatCSV writes gzipped CSV data files, the default.
+	FormatCSV Format = "csv"
+	// FormatParquet writes Snappy-compressed Parquet data files.
+	FormatParquet Format = "parquet"
+)
+
+var (
+	errUnknownFormat = errors.New("unknown seeder format")
+	errSizeOverflow  = errors.New("object size overflows parquet int64")
+)
+
+// dataFileEncoding is how one Format's data files are encoded, named
+// and declared in the manifest.
+type dataFileEncoding struct {
+	encode      func(srcBucket string, seed int64, objects []benchutil.FakeObject) (dataPayload, error)
+	ext         string
+	contentType string
+	fileFormat  string
+	fileSchema  string
+}
+
+// encodingFor returns f's data file encoding; an empty f is FormatCSV.
+func encodingFor(f Format) (dataFileEncoding, error) {
+	switch f {
+	case FormatCSV, "":
+		return dataFileEncoding{
+			encode:      encodeCSVGz,
+			ext:         ".csv.gz",
+			contentType: "application/gzip",
+			fileFormat:  "CSV",
+			fileSchema:  csvFileSchema,
+		}, nil
+	case FormatParquet:
+		return dataFileEncoding{
+			encode:      encodeParquet,
+			ext:         ".parquet",
+			contentType: "application/octet-stream",
+			fileFormat:  "Parquet",
+			fileSchema:  parquetFileSchema,
+		}, nil
+	default:
+		return dataFileEncoding{}, fmt.Errorf("%w: %q (want %q or %q)", errUnknownFormat, f, FormatCSV, FormatParquet)
+	}
+}
+
+// dataPayload is an encoded data file plus its byte size, the
+// manifest's `size` field.
+type dataPayload struct {
 	Body []byte
 	Size int64
 }
@@ -314,7 +373,7 @@ const csvFlushBytes = 64 << 10
 // csvFileSchema, the way AWS S3 Inventory writes CSV: no header row,
 // every field quoted, keys URL-encoded. Each object's ETag and
 // LastModifiedDate derive from seed and its key (objectMetadata).
-func encodeCSVGz(srcBucket string, seed int64, objects []benchutil.FakeObject) (csvGzPayload, error) {
+func encodeCSVGz(srcBucket string, seed int64, objects []benchutil.FakeObject) (dataPayload, error) {
 	var out bytes.Buffer
 	gz := gzip.NewWriter(&out)
 	mapping := tiers.NewMapping()
@@ -323,35 +382,133 @@ func encodeCSVGz(srcBucket string, seed int64, objects []benchutil.FakeObject) (
 	for _, o := range objects {
 		cols, err := tierToS3Columns(mapping, o.TierID)
 		if err != nil {
-			return csvGzPayload{}, fmt.Errorf("tier columns: %w", err)
+			return dataPayload{}, fmt.Errorf("tier columns: %w", err)
 		}
 		meta := objectMetadata(seed, o.Key, o.Size)
 		appendQuotedRow(&rows,
 			srcBucket,
 			csvKey(o.Key),
 			strconv.FormatUint(o.Size, 10),
-			meta.LastModified,
+			meta.LastModified.Format(lastModifiedLayout),
 			meta.ETag,
 			cols.StorageClass,
 			cols.AccessTier,
 		)
 		if rows.Len() >= csvFlushBytes {
 			if _, err := gz.Write(rows.Bytes()); err != nil {
-				return csvGzPayload{}, fmt.Errorf("write csv rows: %w", err)
+				return dataPayload{}, fmt.Errorf("write csv rows: %w", err)
 			}
 			rows.Reset()
 		}
 	}
 	if _, err := gz.Write(rows.Bytes()); err != nil {
-		return csvGzPayload{}, fmt.Errorf("write csv rows: %w", err)
+		return dataPayload{}, fmt.Errorf("write csv rows: %w", err)
 	}
 	if err := gz.Close(); err != nil {
-		return csvGzPayload{}, fmt.Errorf("close gzip: %w", err)
+		return dataPayload{}, fmt.Errorf("close gzip: %w", err)
 	}
 
 	body := out.Bytes()
 
-	return csvGzPayload{Body: body, Size: int64(len(body))}, nil
+	return dataPayload{Body: body, Size: int64(len(body))}, nil
+}
+
+// parquetFileSchema is the manifest's fileSchema for the seeded
+// Parquet: the csvFileSchema fields, written the way AWS declares a
+// Parquet inventory's schema.
+const parquetFileSchema = "message s3.inventory { required binary bucket (UTF8); required binary key (UTF8); " +
+	"optional int64 size; optional int64 last_modified_date (TIMESTAMP_MILLIS); optional binary e_tag (UTF8); " +
+	"optional binary storage_class (UTF8); optional binary intelligent_tiering_access_tier (UTF8);}"
+
+// parquetRecord is one row of a seeded Parquet data file, with
+// parquetFileSchema's column names, types and order. Size and
+// LastModifiedDate are pointers so a zero stays a value: parquet-go
+// writes an optional non-pointer zero as null. Size also carries
+// parquet-go's INT_64 annotation, which AWS's schema lacks; it changes
+// no encoding. The low-cardinality
+// columns are dictionary encoded, as parquet-mr, whose schema notation
+// AWS's manifest uses, does by default.
+type parquetRecord struct {
+	Bucket           string `parquet:"bucket,dict"`
+	Key              string `parquet:"key"`
+	Size             *int64 `parquet:"size"`
+	LastModifiedDate *int64 `parquet:"last_modified_date,timestamp(millisecond)"`
+	ETag             string `parquet:"e_tag,optional"`
+	StorageClass     string `parquet:"storage_class,optional,dict"`
+	AccessTier       string `parquet:"intelligent_tiering_access_tier,optional,dict"`
+}
+
+// parquetWriteBatch is how many rows encodeParquet hands the writer
+// at a time.
+const parquetWriteBatch = 1024
+
+// parquetPageBytes is parquet-mr's default page size, larger than
+// parquet-go's.
+const parquetPageBytes = 1 << 20
+
+// encodeParquet writes synthetic objects as a Snappy-compressed Parquet
+// file matching parquetFileSchema, in one row group. Keys are written
+// as they are: AWS URL-encodes keys only in CSV. A non-Intelligent-
+// Tiering object's access tier is null. ETag and LastModifiedDate are
+// the ones encodeCSVGz writes for the same object.
+func encodeParquet(srcBucket string, seed int64, objects []benchutil.FakeObject) (dataPayload, error) {
+	var out bytes.Buffer
+	w := parquet.NewGenericWriter[parquetRecord](&out,
+		parquet.Compression(&parquet.Snappy),
+		// parquet-mr writes v1 data pages; parquet-go defaults to v2.
+		parquet.DataPageVersion(1),
+		parquet.PageBufferSize(parquetPageBytes),
+	)
+	mapping := tiers.NewMapping()
+
+	batch := make([]parquetRecord, 0, parquetWriteBatch)
+	sizes := make([]int64, parquetWriteBatch)
+	times := make([]int64, parquetWriteBatch)
+	flush := func() error {
+		if _, err := w.Write(batch); err != nil {
+			return fmt.Errorf("write parquet rows: %w", err)
+		}
+		batch = batch[:0]
+
+		return nil
+	}
+	for _, o := range objects {
+		cols, err := tierToS3Columns(mapping, o.TierID)
+		if err != nil {
+			return dataPayload{}, fmt.Errorf("tier columns: %w", err)
+		}
+		if o.Size > math.MaxInt64 {
+			return dataPayload{}, fmt.Errorf("%w: %s is %d bytes", errSizeOverflow, o.Key, o.Size)
+		}
+		meta := objectMetadata(seed, o.Key, o.Size)
+		i := len(batch)
+		sizes[i] = int64(o.Size)
+		times[i] = meta.LastModified.UnixMilli()
+		batch = append(batch, parquetRecord{
+			Bucket:           srcBucket,
+			Key:              o.Key,
+			Size:             &sizes[i],
+			LastModifiedDate: &times[i],
+			ETag:             meta.ETag,
+			StorageClass:     cols.StorageClass,
+			AccessTier:       cols.AccessTier,
+		})
+		if len(batch) == parquetWriteBatch {
+			if err := flush(); err != nil {
+				return dataPayload{}, err
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return dataPayload{}, err
+	}
+	if err := w.Close(); err != nil {
+		return dataPayload{}, fmt.Errorf("close parquet writer: %w", err)
+	}
+
+	body := out.Bytes()
+
+	return dataPayload{Body: body, Size: int64(len(body))}, nil
 }
 
 // appendQuotedRow appends one CSV record with every field quoted, empty
@@ -390,8 +547,8 @@ const multipartPartSize = 8 << 20
 
 // objectColumns holds one object's ETag and LastModifiedDate columns.
 type objectColumns struct {
+	LastModified time.Time
 	ETag         string
-	LastModified string
 }
 
 // objectMetadata returns one object's ETag and LastModifiedDate: a
@@ -414,7 +571,7 @@ func objectMetadata(seed int64, key string, size uint64) objectColumns {
 
 	return objectColumns{
 		ETag:         etag,
-		LastModified: time.Unix(lastModifiedEpoch+rng.Int64N(lastModifiedSpan), 0).UTC().Format(lastModifiedLayout),
+		LastModified: time.Unix(lastModifiedEpoch+rng.Int64N(lastModifiedSpan), 0).UTC(),
 	}
 }
 
