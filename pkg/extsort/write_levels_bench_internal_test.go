@@ -91,8 +91,9 @@ func (f *writeLevelsFixture) reset(tb testing.TB, i int) {
 // BenchmarkWriteLevels times writeLevels alone, the replay of about
 // 1.27M spooled prefixes into the index files, without the MPHF build
 // that runs beside it in Finalize; the spool is built once, outside the
-// timer. The busy metrics are the replay's reader and each side's time
-// working per op: the largest is the replay's critical path.
+// timer. The busy metrics are the replay workers' time working, in all,
+// and the merge's, per op: work-busy over the time per op is the cores
+// the replay kept busy.
 func BenchmarkWriteLevels(b *testing.B) {
 	const objects = 1_000_000
 	for _, tiersUsed := range []int{3, int(tiers.NumTiers)} {
@@ -107,7 +108,7 @@ func BenchmarkWriteLevels(b *testing.B) {
 				b.StopTimer()
 				f.reset(b, n)
 				b.StartTimer()
-				busy, err := f.b.writeLevels(f.starts, f.segments)
+				busy, err := f.b.writeLevels(b.Context(), f.starts, f.segments)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -116,15 +117,13 @@ func BenchmarkWriteLevels(b *testing.B) {
 					b.Fatal(err)
 				}
 				b.StartTimer()
-				sum.read += busy.read
-				sum.stats += busy.stats
-				sum.names += busy.names
+				sum.work += busy.work
+				sum.merge += busy.merge
 				n++
 			}
 			b.ReportMetric(float64(f.b.posCount), "prefixes")
-			b.ReportMetric(float64(sum.read.Nanoseconds())/float64(n), "read-busy-ns/op")
-			b.ReportMetric(float64(sum.stats.Nanoseconds())/float64(n), "stats-busy-ns/op")
-			b.ReportMetric(float64(sum.names.Nanoseconds())/float64(n), "names-busy-ns/op")
+			b.ReportMetric(float64(sum.work.Nanoseconds())/float64(n), "work-busy-ns/op")
+			b.ReportMetric(float64(sum.merge.Nanoseconds())/float64(n), "merge-busy-ns/op")
 		})
 	}
 }

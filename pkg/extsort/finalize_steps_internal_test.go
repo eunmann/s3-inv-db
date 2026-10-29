@@ -85,13 +85,13 @@ func TestFinalizeReportsEachStep(t *testing.T) {
 	var logged []string
 	for line := range bytes.Lines(logs.Bytes()) {
 		var entry struct {
-			Level      string   `json:"level"`
-			Message    string   `json:"message"`
-			Step       string   `json:"step"`
-			ReplayMS   *float64 `json:"replay_ms"`
-			ReadBusyMS *float64 `json:"read_busy_ms"`
-			StatsBusy  *float64 `json:"stats_busy_ms"`
-			NamesBusy  *float64 `json:"names_busy_ms"`
+			Level     string   `json:"level"`
+			Message   string   `json:"message"`
+			Step      string   `json:"step"`
+			ReplayMS  *float64 `json:"replay_ms"`
+			Workers   *float64 `json:"replay_workers"`
+			WorkBusy  *float64 `json:"work_busy_ms"`
+			MergeBusy *float64 `json:"merge_busy_ms"`
 		}
 		if err := json.Unmarshal(line, &entry); err != nil {
 			t.Fatalf("log line %q: %v", line, err)
@@ -100,7 +100,7 @@ func TestFinalizeReportsEachStep(t *testing.T) {
 			if entry.Level != "info" {
 				t.Errorf("step %q logged at %s, want info", entry.Step, entry.Level)
 			}
-			busy := []*float64{entry.ReplayMS, entry.ReadBusyMS, entry.StatsBusy, entry.NamesBusy}
+			busy := []*float64{entry.ReplayMS, entry.Workers, entry.WorkBusy, entry.MergeBusy}
 			if hasBusy := !slices.Contains(busy, nil); hasBusy != (entry.Step == stepWriteLevels) {
 				t.Errorf("step %q: replay busy times logged = %v, want them on %q only", entry.Step, hasBusy, stepWriteLevels)
 			}

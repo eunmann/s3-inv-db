@@ -43,56 +43,6 @@ func TestSegmentOfDoesNotAllocate(t *testing.T) {
 	}
 }
 
-// errInjectedSide is the failure TestWriteLevelsSideFailureEnds gives a
-// side.
-var errInjectedSide = errors.New("injected side failure")
-
-// TestWriteLevelsSideFailureEnds: a row either side cannot write, past
-// more batches than the hand-off holds, ends the replay with that
-// side's error instead of leaving the spool reader blocked; the other
-// side and the reader stop.
-func TestWriteLevelsSideFailureEnds(t *testing.T) {
-	const n = 2 * levelBatches * levelBatchRows
-	for _, failStats := range []bool{true, false} {
-		b, err := NewIndexBuilder(t.TempDir(), t.TempDir())
-		if err != nil {
-			t.Fatalf("NewIndexBuilder: %v", err)
-		}
-		if err := b.Add(&PrefixRow{Prefix: ""}); err != nil {
-			t.Fatal(err)
-		}
-		for i := range n {
-			row := PrefixRow{Prefix: fmt.Sprintf("p%06d/", i), Depth: 1, Count: 1, TotalBytes: 1}
-			row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = 1, 1
-			if err := b.Add(&row); err != nil {
-				t.Fatalf("Add %d: %v", i, err)
-			}
-		}
-		if err := b.spool.finish(); err != nil {
-			t.Fatal(err)
-		}
-		var rows [2]int
-		side := func(i int, fail bool) func(int, *spoolRecord) error {
-			return func(int, *spoolRecord) error {
-				rows[i]++
-				if fail && rows[i] == levelBatchRows/2 {
-					return errInjectedSide
-				}
-
-				return nil
-			}
-		}
-		_, err = b.replayLevels(side(0, failStats), side(1, !failStats))
-		if !errors.Is(err, errInjectedSide) {
-			t.Errorf("stats side failing = %v: replay = %v, want the injected error", failStats, err)
-		}
-		if rows[0] > n || rows[1] > n {
-			t.Errorf("sides wrote %v rows after the failure, of %d", rows, n+1)
-		}
-		b.cleanup()
-	}
-}
-
 // TestUndeclaredTierFailsTheBuild: a row with data in a tier outside the
 // declared set fails the build where the spool plans it, at a later Add
 // or at Finalize, never silently.
@@ -502,7 +452,7 @@ func TestFinalizeMPHFFailureCleansUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := addFlatRows(t, b, 3*levelBatches*levelBatchRows); err != nil {
+	if err := addFlatRows(t, b, 6000); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(outDir, format.MPHFSlotsFile), 0o750); err != nil {
