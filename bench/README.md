@@ -154,7 +154,9 @@ Ingestion (`bench/suite/ingest.txt`):
   (`phase_pipeline_s` is the time before the first event; the last
   finalize step runs to the build's end, so it includes publishing the
   index and removing scratch; names are lowercased, other characters as
-  underscores). Reported, not gated.
+  underscores), and `phase_<name>_cores`, the cores the phase kept
+  busy: one well under the CPU count is held up by one goroutine, not by
+  CPU. Reported, not gated.
 - `internal/loader` `BenchmarkPipelineSlowS3`: the same build against
   S3 behind a slower link (20 ms to first byte, 8 MiB/s per GET), four
   chunks per worker: the time a build waits on S3.

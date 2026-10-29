@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -243,6 +244,8 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 // step includes publishing the index and removing scratch). It records only when
 // the phase changes, so it allocates a few times per build.
 type phaseClock struct {
+	cpu   map[string]time.Duration
+	cpu0  time.Duration
 	spent map[string]time.Duration
 	start time.Time
 	cur   string
@@ -250,7 +253,7 @@ type phaseClock struct {
 }
 
 func newPhaseClock() *phaseClock {
-	return &phaseClock{spent: make(map[string]time.Duration)}
+	return &phaseClock{spent: make(map[string]time.Duration), cpu: make(map[string]time.Duration)}
 }
 
 // begin starts a build at start.
@@ -258,6 +261,7 @@ func (c *phaseClock) begin(start time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.cur, c.start = "pipeline", start
+	c.cpu0 = rusageCPU()
 }
 
 func (c *phaseClock) observe(ev events.Progress) {
@@ -282,11 +286,17 @@ func (c *phaseClock) end() {
 
 func (c *phaseClock) switchTo(name string, now time.Time) {
 	c.spent[c.cur] += now.Sub(c.start)
+	cpu := rusageCPU()
+	c.cpu[c.cur] += cpu - c.cpu0
+	c.cpu0 = cpu
 	c.cur, c.start = name, now
 }
 
 // report reports each phase's mean seconds per op as phase_<name>_s,
-// the name lowercased with runs of other characters as underscores.
+// the name lowercased with runs of other characters as underscores, and
+// the cores it kept busy (process CPU over wall time) as
+// phase_<name>_cores: a phase well under GOMAXPROCS waits on one
+// goroutine, not on CPU.
 func (c *phaseClock) report(b *testing.B) {
 	b.Helper()
 	for name, d := range c.spent {
@@ -302,8 +312,11 @@ func (c *phaseClock) report(b *testing.B) {
 				under = true
 			}
 		}
-		unit.WriteString("_s")
-		b.ReportMetric(d.Seconds()/float64(b.N), unit.String())
+		base := unit.String()
+		b.ReportMetric(d.Seconds()/float64(b.N), base+"_s")
+		if d > 0 {
+			b.ReportMetric(float64(c.cpu[name])/float64(d), base+"_cores")
+		}
 	}
 }
 
@@ -465,4 +478,11 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 	b.ReportMetric(float64(lastRunRows), "run_rows")
 	proc.Report(b, b.N, wall)
 	phases.report(b)
+}
+
+// rusageCPU is the process's user and system CPU time so far.
+func rusageCPU() time.Duration {
+	var ru syscall.Rusage
+	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &ru)
+	return time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
 }
