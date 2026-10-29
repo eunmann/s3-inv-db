@@ -398,3 +398,28 @@ func TestRankedBits(t *testing.T) {
 		rb.close()
 	}
 }
+
+// TestSlotBitsWidthsAreWidestValues: the OR's widths equal the widest
+// value's, at every byte boundary and for random values.
+func TestSlotBitsWidthsAreWidestValues(t *testing.T) {
+	var vals []uint64
+	for k := range 8 {
+		vals = append(vals, 1<<(8*k)-1, 1<<(8*k))
+	}
+	rng := rand.New(rand.NewPCG(1, 2))
+	for range 1000 {
+		vals = append(vals, rng.Uint64()>>rng.IntN(64))
+	}
+	var b slotBits
+	if w := b.widths(); w != (tierSlotWidths{count: 1, bytes: 1}) {
+		t.Fatalf("no values: widths %+v, want 1, 1", w)
+	}
+	var widest uint8
+	for i, v := range vals {
+		b.add(v, vals[len(vals)-1-i])
+		widest = max(widest, byteWidthOf(v))
+		if got := b.widths().count; got != widest {
+			t.Fatalf("after %d values: count width %d, want %d", i+1, got, widest)
+		}
+	}
+}

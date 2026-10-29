@@ -110,12 +110,21 @@ type tierSlotWidths struct{ count, bytes uint8 }
 
 func (w tierSlotWidths) slotBytes() int { return int(w.count) + int(w.bytes) }
 
-// widened returns the widths grown to hold one more stored slot.
-func (w tierSlotWidths) widened(count, bytes uint64) tierSlotWidths {
-	return tierSlotWidths{
-		count: max(w.count, byteWidthOf(count)),
-		bytes: max(w.bytes, byteWidthOf(bytes)),
-	}
+// slotBits is the bitwise OR of every stored slot's count and of its
+// bytes: a value's byte width depends only on its highest set bit, so
+// the OR's width is the widest value's. One OR per slot replaced a
+// width computation per slot that was half of Add's time.
+type slotBits struct{ count, bytes uint64 }
+
+func (b *slotBits) add(count, bytes uint64) {
+	b.count |= count
+	b.bytes |= bytes
+}
+
+// widths are the byte widths that hold every value added, at least one
+// byte each, even when every value is zero (or nothing was added).
+func (b slotBits) widths() tierSlotWidths {
+	return tierSlotWidths{count: byteWidthOf(b.count), bytes: byteWidthOf(b.bytes)}
 }
 
 // TierStatsWriter streams per-prefix tier stats during a build and, on
@@ -136,8 +145,8 @@ type TierStatsWriter struct {
 	// slots they store.
 	multiRows  uint64
 	multiSlots uint64
-	multiW     tierSlotWidths
-	denseW     tierSlotWidths
+	multiBits  slotBits
+	denseBits  slotBits
 	maxMask    uint16
 	// force overrides the size-based choice; tests only.
 	force tierLayout
@@ -209,10 +218,6 @@ func NewTierStatsWriter(outDir string, present []tiers.ID) (*TierStatsWriter, er
 	w := &TierStatsWriter{
 		dir:   filepath.Join(outDir, TierStatsDir),
 		slots: len(sorted),
-		// A field is at least one byte wide, even when every stored value
-		// is zero (or nothing is stored).
-		multiW: tierSlotWidths{count: 1, bytes: 1},
-		denseW: tierSlotWidths{count: 1, bytes: 1},
 	}
 	for tid := range w.slotByTier {
 		w.slotByTier[tid] = slices.Index(sorted, tiers.ID(tid))
@@ -280,11 +285,11 @@ func (w *TierStatsWriter) Add(counts, bytes *[tiers.NumTiers]uint64, totalCount,
 		for stored != 0 {
 			slot := bits.TrailingZeros16(stored)
 			stored &= stored - 1
-			w.multiW = w.multiW.widened(slotCount[slot], slotBytes[slot])
+			w.multiBits.add(slotCount[slot], slotBytes[slot])
 		}
 	}
 	for slot := range w.slots - 1 {
-		w.denseW = w.denseW.widened(slotCount[slot], slotBytes[slot])
+		w.denseBits.add(slotCount[slot], slotBytes[slot])
 	}
 	row := binary.LittleEndian.AppendUint16(w.rowBuf[:0], mask)
 	for set := mask; set != 0; set &= set - 1 {
@@ -301,7 +306,7 @@ func (w *TierStatsWriter) Add(counts, bytes *[tiers.NumTiers]uint64, totalCount,
 
 // multiSize and denseSize are the exact on-disk sizes of each layout.
 func (w *TierStatsWriter) multiSize() uint64 {
-	slotsFile := uint64(tierSlotDataOff) + w.multiSlots*uint64(w.multiW.slotBytes()) + coreStatsReadTailPad
+	slotsFile := uint64(tierSlotDataOff) + w.multiSlots*uint64(w.multiBits.widths().slotBytes()) + coreStatsReadTailPad
 	words := bitWords(w.rows)
 	rowsFile := uint64(HeaderSize) + 8*words + 8*((words+rankBlockWords-1)/rankBlockWords)
 	offsetsFile := uint64(HeaderSize) + (w.multiRows+1)*uint64(byteWidthOf(w.multiSlots)) + arrayTailPad
@@ -310,7 +315,7 @@ func (w *TierStatsWriter) multiSize() uint64 {
 }
 
 func (w *TierStatsWriter) denseSize() uint64 {
-	return uint64(tierSlotDataOff) + w.rows*uint64(w.slots-1)*uint64(w.denseW.slotBytes()) + coreStatsReadTailPad
+	return uint64(tierSlotDataOff) + w.rows*uint64(w.slots-1)*uint64(w.denseBits.widths().slotBytes()) + coreStatsReadTailPad
 }
 
 // Close writes the smaller layout and removes the scratch file. On an
@@ -446,7 +451,7 @@ func (s *slotFile) abort() error {
 
 func (w *TierStatsWriter) writeDense() error {
 	path := filepath.Join(w.dir, TierDenseFile)
-	out, err := createSlotFile(path, w.rows, (w.slots-1)*w.denseW.slotBytes(), w.denseW)
+	out, err := createSlotFile(path, w.rows, (w.slots-1)*w.denseBits.widths().slotBytes(), w.denseBits.widths())
 	if err != nil {
 		return err
 	}
@@ -468,7 +473,7 @@ func (w *TierStatsWriter) writeDense() error {
 
 func (w *TierStatsWriter) writeMulti() error {
 	slotsPath := filepath.Join(w.dir, TierMultiFile)
-	out, err := createSlotFile(slotsPath, w.multiSlots, w.multiW.slotBytes(), w.multiW)
+	out, err := createSlotFile(slotsPath, w.multiSlots, w.multiBits.widths().slotBytes(), w.multiBits.widths())
 	if err != nil {
 		return err
 	}
