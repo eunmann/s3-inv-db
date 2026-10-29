@@ -369,7 +369,8 @@ func truncated(err error) error {
 }
 
 // close stops the writer, closes every depth's file and removes it:
-// after a failed build, or what read left behind. Idempotent.
+// after a failed build, or the depth files readLevels left behind after a
+// failure. Idempotent.
 func (s *levelSpool) close() error {
 	errs := []error{s.stop()}
 	for _, sf := range s.depths {
