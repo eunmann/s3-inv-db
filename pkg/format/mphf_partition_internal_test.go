@@ -530,7 +530,7 @@ func TestMPHFBuildReportsProgress(t *testing.T) {
 	}
 }
 
-// TestChoosePartBits: about 2^16 keys a partition up to the spill
+// TestChoosePartBits: about 2^13 keys a partition up to the spill
 // files' count, finer past it only while a partition holds too many.
 func TestChoosePartBits(t *testing.T) {
 	uniform := func(n uint64) []uint64 {
@@ -546,8 +546,9 @@ func TestChoosePartBits(t *testing.T) {
 		want       uint
 	}{
 		{1, maxPartitionKeys, 0},
-		{1 << 16, maxPartitionKeys, 0},
-		{1<<16 + 1, maxPartitionKeys, 1},
+		{1 << 13, maxPartitionKeys, 0},
+		{1<<13 + 1, maxPartitionKeys, 1},
+		{1_000_000, maxPartitionKeys, 7},
 		{10_000_000, maxPartitionKeys, 8},
 		{1 << 28, maxPartitionKeys, 8},
 		{1 << 30, maxPartitionKeys, 10},
@@ -557,5 +558,49 @@ func TestChoosePartBits(t *testing.T) {
 		if got := choosePartBits(uniform(c.n), c.n, c.maxKeys); got != c.want {
 			t.Errorf("choosePartBits(n=%d, max %d) = %d, want %d", c.n, c.maxKeys, got, c.want)
 		}
+	}
+}
+
+// TestMPHFBuildAllocsIndependentOfKeys: Add and the build allocate per
+// spill file, partition and worker, never per key: eight times the keys
+// over the same partitions and workers allocate about as often.
+func TestMPHFBuildAllocsIndependentOfKeys(t *testing.T) {
+	const partBits, workers = 6, 4
+	allocs := func(n int) uint64 {
+		b := NewStreamingMPHFBuilder(t.TempDir())
+		defer b.Close()
+		b.partBits = partBits
+		dir := t.TempDir()
+		r := rand.New(rand.NewPCG(uint64(n), 5))
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		for i := range n {
+			if err := b.AddKey(r.Uint64(), r.Uint64(), uint64(i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		h, err := b.Start(context.Background(), dir, nil, workers)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.Wait(); err != nil {
+			t.Fatal(err)
+		}
+		runtime.ReadMemStats(&after)
+		if h.running != workers {
+			t.Fatalf("%d workers ran, want %d", h.running, workers)
+		}
+
+		return after.Mallocs - before.Mallocs
+	}
+	small, large := allocs(100_000), allocs(800_000)
+	t.Logf("allocs %d %d", small, large)
+	limit := uint64(8*spillBuckets + 16*(1<<partBits) + 32*workers + 512)
+	if small > limit || large > limit {
+		t.Errorf("%d allocations at 100K keys and %d at 800K, want at most %d", small, large, limit)
+	}
+	if large > small+small/4 {
+		t.Errorf("allocations grow with the keys: %d at 100K, %d at 800K", small, large)
 	}
 }

@@ -1,7 +1,6 @@
 package format
 
 import (
-	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -207,54 +206,89 @@ type mphfSpill struct {
 	err   error // the first failed add; every later add returns it
 }
 
-// spillFile is one open spill file being written.
+// spillFile is one spill file. Records collect in buf and are written
+// out when it is full; a bucket's file stays open from its first key
+// until its partition reads it.
 type spillFile struct {
-	f *os.File
-	w *bufio.Writer
+	f    *os.File
+	path string
+	buf  []byte
 }
 
 // spillPath is the spill file of bucket b, the keys whose hash's top
 // byte is b.
 func spillPath(dir string, b int) string {
-	return filepath.Join(dir, fmt.Sprintf("bucket_%03d", b))
+	return numberedPath(dir, "bucket_", b, spillNameDigits)
 }
 
 // partPath is partition p's own spill file, split from its bucket's
 // when partitions are finer than buckets.
 func partPath(dir string, p int) string {
-	return filepath.Join(dir, fmt.Sprintf("part_%05d", p))
+	return numberedPath(dir, "part_", p, partNameDigits)
 }
 
+// The digits of a spill file's number: up to spillBuckets buckets and
+// 2^maxPartBits partitions.
+const (
+	spillNameDigits = 3
+	partNameDigits  = 5
+)
+
+// numberedPath is the path in dir named prefix and then n in digits
+// zero-padded decimal digits, built with one allocation: a build makes
+// one per spill file.
+func numberedPath(dir, prefix string, n, digits int) string {
+	var num [8]byte
+	for i := digits - 1; i >= 0; i-- {
+		num[i] = byte('0' + n%10)
+		n /= 10
+	}
+
+	return filepath.Join(dir, prefix) + string(num[:digits])
+}
+
+// create creates the file at path, keeping buf if it has one.
 func (sf *spillFile) create(path string) error {
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, FilePerm)
 	if err != nil {
 		return fmt.Errorf("create MPHF spill: %w", err)
 	}
-	sf.f, sf.w = f, bufio.NewWriterSize(f, spillBufBytes)
+	sf.f, sf.path = f, path
+	if sf.buf == nil {
+		sf.buf = make([]byte, 0, spillBufBytes)
+	}
 
 	return nil
 }
 
-func (sf *spillFile) write(rec []byte) error {
-	if _, err := sf.w.Write(rec); err != nil {
+// room makes room in buf for one more record.
+func (sf *spillFile) room() error {
+	if len(sf.buf)+spillRecordBytes <= cap(sf.buf) {
+		return nil
+	}
+
+	return sf.flush()
+}
+
+// flush writes buf out to the file.
+func (sf *spillFile) flush() error {
+	if _, err := sf.f.Write(sf.buf); err != nil {
 		return fmt.Errorf("write MPHF spill: %w", err)
 	}
+	sf.buf = sf.buf[:0]
 
 	return nil
 }
 
-// finish flushes and closes the file.
-func (sf *spillFile) finish() error {
-	err := sf.w.Flush()
+// closeFile closes the file, keeping buf for the next one.
+func (sf *spillFile) closeFile() error {
+	err := sf.f.Close()
+	sf.f = nil
 	if err != nil {
-		err = fmt.Errorf("flush MPHF spill: %w", err)
+		return fmt.Errorf("close MPHF spill: %w", err)
 	}
-	if cerr := sf.f.Close(); cerr != nil {
-		err = errors.Join(err, fmt.Errorf("close MPHF spill: %w", cerr))
-	}
-	sf.f, sf.w = nil, nil
 
-	return err
+	return nil
 }
 
 func (s *mphfSpill) add(tempDir string, keyHash, fingerprint, posKey uint64) error {
@@ -273,32 +307,34 @@ func (s *mphfSpill) add(tempDir string, keyHash, fingerprint, posKey uint64) err
 	}
 	bucket := int(keyHash >> (64 - spillBits))
 	sf := &s.files[bucket]
-	if sf.w == nil {
+	if sf.f == nil {
 		if s.err = sf.create(spillPath(s.dir, bucket)); s.err != nil {
 			return s.err
 		}
 	}
-	rec := binary.LittleEndian.AppendUint64(sf.w.AvailableBuffer(), keyHash)
-	rec = binary.LittleEndian.AppendUint64(rec, fingerprint)
-	rec = binary.LittleEndian.AppendUint64(rec, posKey)
-	if s.err = sf.write(rec); s.err != nil {
+	if s.err = sf.room(); s.err != nil {
 		return s.err
 	}
+	sf.buf = binary.LittleEndian.AppendUint64(sf.buf, keyHash)
+	sf.buf = binary.LittleEndian.AppendUint64(sf.buf, fingerprint)
+	sf.buf = binary.LittleEndian.AppendUint64(sf.buf, posKey)
 	s.hist[keyHash>>(64-maxPartBits)]++
 
 	return nil
 }
 
-// flush writes out and closes every spill file, for reading.
+// flush writes out every spill file's last records and frees its
+// buffer; the files stay open for reading.
 func (s *mphfSpill) flush() error {
 	if s.err != nil {
 		return s.err
 	}
 	for i := range s.files {
-		if s.files[i].f != nil {
-			if err := s.files[i].finish(); err != nil {
+		if sf := &s.files[i]; sf.f != nil {
+			if err := sf.flush(); err != nil {
 				return err
 			}
+			sf.buf = nil
 		}
 	}
 

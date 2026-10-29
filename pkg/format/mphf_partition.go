@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"math/bits"
 	"os"
 	"path/filepath"
@@ -35,8 +34,9 @@ import (
 const (
 	// TargetPartitionBits is log2 of the keys a partition aims at while
 	// there are at most spillBuckets partitions: a partition's records
-	// and levels then stay in a core's L2 or L3 as they are built.
-	targetPartitionBits = 16
+	// and levels then stay in a core's L2 as they are built, and a small
+	// build's workers each hold well under a MiB.
+	targetPartitionBits = 13
 	// MaxPartitionKeys is the most keys a partition holds when the
 	// partition bits allow it: past spillBuckets of them, partitions
 	// grow finer instead of larger, so a worker's heap stays bounded.
@@ -54,7 +54,7 @@ const (
 	// bucket.
 	maxSplitters = 4
 	// SpillReadBytes is a worker's read buffer: whole records.
-	spillReadBytes = spillRecordBytes * 2731
+	spillReadBytes = spillRecordBytes * 683
 )
 
 // ErrMPHFAborted is the error of a build that Abort ended.
@@ -494,7 +494,8 @@ func (h *MPHFBuild) buildPart(p int, out *bbPartition, s *partScratch, read []by
 func (h *MPHFBuild) readPart(p int, s *partScratch, read []byte) error {
 	n := h.plan.counts[p]
 	if uint64(cap(s.hashes)) < n {
-		size := max(n, h.plan.maxPart)
+		// Room for the next partitions too, about as large as this one.
+		size := n + n/16
 		s.hashes, s.fps, s.pos = make([]uint64, 0, size), make([]uint64, 0, size), make([]uint64, 0, size)
 		s.work, s.marks = make([]uint64, size), make([]uint64, 2*levelWords(int(size)))
 	}
@@ -512,14 +513,13 @@ func (h *MPHFBuild) readPart(p int, s *partScratch, read []byte) error {
 
 		return nil
 	}
-	dir := h.b.spill.dir
 	if h.plan.bits > spillBits {
-		return readSpill(partPath(dir, p), n, read, decode)
+		return readSpill(&spillFile{path: partPath(h.b.spill.dir, p)}, n, read, decode)
 	}
 	per := 1 << (spillBits - h.plan.bits)
 	for b := p * per; b < (p+1)*per; b++ {
 		if h.plan.buckets[b] > 0 {
-			if err := readSpill(spillPath(dir, b), h.plan.buckets[b], read, decode); err != nil {
+			if err := readSpill(&h.b.spill.files[b], h.plan.buckets[b], read, decode); err != nil {
 				return err
 			}
 		}
@@ -558,7 +558,7 @@ func (h *MPHFBuild) writeSlots(p int, out *bbPartition, s *partScratch) error {
 	n, slotW := len(s.hashes), uint64(h.plan.slotW)
 	size := uint64(n)*slotW + mphfSlotsTailPad
 	if uint64(cap(s.layout)) < size {
-		s.layout = make([]byte, max(size, h.plan.maxPart*slotW+mphfSlotsTailPad))
+		s.layout = make([]byte, size+size/16)
 	}
 	layout := s.layout[:size]
 	out.bits, s.ranks = rankDirectory(out.bits, s.ranks)
@@ -612,22 +612,23 @@ func positionMix(x uint64) uint64 {
 	return x ^ x>>splitmixShift3
 }
 
-// readSpill reads the count records of the spill file at path in
-// chunks of buf, whole records, hands each chunk to fn, and removes
-// the file. A file holding other than count records fails.
-func readSpill(path string, count uint64, buf []byte, fn func(recs []byte) error) error {
-	f, err := os.Open(path)
+// readSpill reads the count records of spill file sf, opening it if it
+// is not open, in chunks of buf, whole records, hands each chunk to fn,
+// and closes and removes the file. A file holding other than count
+// records fails.
+func readSpill(sf *spillFile, count uint64, buf []byte, fn func(recs []byte) error) error {
+	if sf.f == nil {
+		f, err := os.Open(sf.path)
+		if err != nil {
+			return fmt.Errorf("open MPHF spill: %w", err)
+		}
+		sf.f = f
+	}
+	err := errors.Join(readRecords(sf.f, count, buf, fn), sf.closeFile())
 	if err != nil {
-		return fmt.Errorf("open MPHF spill: %w", err)
+		return fmt.Errorf("%s: %w", filepath.Base(sf.path), err)
 	}
-	err = readRecords(f, count, buf, fn)
-	if cerr := f.Close(); err == nil && cerr != nil {
-		err = fmt.Errorf("close MPHF spill: %w", cerr)
-	}
-	if err != nil {
-		return fmt.Errorf("%s: %w", filepath.Base(path), err)
-	}
-	if err := os.Remove(path); err != nil {
+	if err := os.Remove(sf.path); err != nil {
 		return fmt.Errorf("remove MPHF spill: %w", err)
 	}
 
@@ -635,17 +636,19 @@ func readSpill(path string, count uint64, buf []byte, fn func(recs []byte) error
 }
 
 func readRecords(f *os.File, count uint64, buf []byte, fn func(recs []byte) error) error {
+	var off int64
 	for left := count * spillRecordBytes; left > 0; {
 		chunk := buf[:min(uint64(len(buf)), left)]
-		if _, err := io.ReadFull(f, chunk); err != nil {
+		if _, err := f.ReadAt(chunk, off); err != nil {
 			return fmt.Errorf("%w: read MPHF spill: %w", ErrMPHFLookupFailed, err)
 		}
 		if err := fn(chunk); err != nil {
 			return err
 		}
+		off += int64(len(chunk))
 		left -= uint64(len(chunk))
 	}
-	if n, _ := f.Read(buf[:1]); n != 0 {
+	if n, _ := f.ReadAt(buf[:1], off); n != 0 {
 		return fmt.Errorf("%w: MPHF spill holds more than its %d keys", ErrMPHFLookupFailed, count)
 	}
 
@@ -684,25 +687,26 @@ func (h *MPHFBuild) splitBucket(b int, subs []spillFile, read []byte) error {
 	dir := h.b.spill.dir
 	shift := 64 - h.plan.bits
 	first := b * len(subs)
-	err := readSpill(spillPath(dir, b), h.plan.buckets[b], read, func(recs []byte) error {
+	err := readSpill(&h.b.spill.files[b], h.plan.buckets[b], read, func(recs []byte) error {
 		for r := 0; r < len(recs); r += spillRecordBytes {
 			p := int(binary.LittleEndian.Uint64(recs[r:]) >> shift)
 			sf := &subs[p-first]
-			if sf.w == nil {
+			if sf.f == nil {
 				if err := sf.create(partPath(dir, p)); err != nil {
 					return err
 				}
 			}
-			if err := sf.write(recs[r : r+spillRecordBytes]); err != nil {
+			if err := sf.room(); err != nil {
 				return err
 			}
+			sf.buf = append(sf.buf, recs[r:r+spillRecordBytes]...)
 		}
 
 		return nil
 	})
 	for i := range subs {
-		if subs[i].f != nil {
-			err = errors.Join(err, subs[i].finish())
+		if sf := &subs[i]; sf.f != nil {
+			err = errors.Join(err, sf.flush(), sf.closeFile())
 		}
 	}
 

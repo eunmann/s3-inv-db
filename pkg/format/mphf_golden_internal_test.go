@@ -70,9 +70,9 @@ func TestMPHFFilesMatchGolden(t *testing.T) {
 		},
 		// Partitions spanning several spill files.
 		{
-			name: "parts=8", n: 400_000, groups: [][]int{{7, 50_007, 100_007, 399_999}, {11, 99_999}},
-			mph:      "65bbb1963d97d467c0bb282e81398dbbc1dcf02f4a0ba99d67a24d5fb139212a",
-			mphSlots: "0b7e24eec6affb98f0e8eee68a172e0c6441987063e2484a75c2df582c5ff85c",
+			name: "parts=64", n: 400_000, groups: [][]int{{7, 50_007, 100_007, 399_999}, {11, 99_999}},
+			mph:      "c2836b8355ce10020d6fe653031eb72098765df97965bc9e957cfcfb5683a3d1",
+			mphSlots: "9af88a77e57dad6caac5a2466989a20a2a86e0f90674f1d090a80154f3cd1229",
 		},
 		// Partitions split from the spill files.
 		{
