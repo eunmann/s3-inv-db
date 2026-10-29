@@ -42,7 +42,6 @@ type ParquetReader struct {
 	tempFile     *os.File
 	file         *parquet.File
 	rowGroups    []parquet.RowGroup
-	pendingErr   error
 	key          parquetColumn[string]
 	size         parquetColumn[uint64]
 	storage      parquetColumn[string]
@@ -301,12 +300,6 @@ func (r *ParquetReader) Next() (Row, error) {
 
 			return inv, nil
 		}
-		if r.pendingErr != nil {
-			err := r.pendingErr
-			r.pendingErr = nil
-
-			return Row{}, err
-		}
 		if !r.rgOpen {
 			r.currentRGIdx++
 			if r.currentRGIdx >= len(r.rowGroups) {
@@ -316,17 +309,13 @@ func (r *ParquetReader) Next() (Row, error) {
 		}
 
 		n, err := r.readBatch()
-		if n > 0 {
-			r.bufIdx, r.bufLen = 0, n
-			// Surface a read error after the rows read before it.
-			if err != nil && !errors.Is(err, io.EOF) {
-				r.pendingErr = err
-			}
-
-			continue
-		}
 		if err != nil && !errors.Is(err, io.EOF) {
 			return Row{}, err
+		}
+		if n > 0 {
+			r.bufIdx, r.bufLen = 0, n
+
+			continue
 		}
 		if err := r.closeRowGroup(); err != nil {
 			return Row{}, err
@@ -364,10 +353,11 @@ func (r *ParquetReader) closeRowGroup() error {
 // readBatch decodes the next batch of every read column and returns the
 // row count, which every column must agree on. Every row of the previous
 // batch has been returned, so the pages only it pointed into are
-// released first.
+// released first. A column's read error is returned before the row
+// counts are compared, since a column that failed partway holds fewer
+// rows than the others.
 func (r *ParquetReader) readBatch() (int, error) {
 	rows, rowsLeaf := -1, -1
-	var readErr error
 	for _, c := range r.cols {
 		leaf := c.leafIndex()
 		if leaf < 0 {
@@ -376,16 +366,13 @@ func (r *ParquetReader) readBatch() (int, error) {
 		c.releaseConsumed()
 		n, err := c.fill()
 		if err != nil && !errors.Is(err, io.EOF) {
-			readErr = err
+			return 0, fmt.Errorf("parquet column %d: %w", leaf, err)
 		}
 		if rows >= 0 && n != rows {
 			return 0, fmt.Errorf("%w: column %d has %d, column %d has %d",
 				ErrColumnsMisaligned, rowsLeaf, rows, leaf, n)
 		}
 		rows, rowsLeaf = n, leaf
-	}
-	if readErr != nil {
-		return rows, readErr
 	}
 	if rows == 0 {
 		return 0, io.EOF
@@ -593,8 +580,8 @@ func (c *parquetColumn[T]) decodePage(page parquet.Page) error {
 	if c.maxDef > 0 {
 		defs := page.DefinitionLevels()
 		if len(defs) != rows {
-			return fmt.Errorf("%w: column %d page has %d values and %d definition levels",
-				ErrMalformedPage, c.index, rows, len(defs))
+			return fmt.Errorf("%w: page has %d values and %d definition levels",
+				ErrMalformedPage, rows, len(defs))
 		}
 		n = 0
 		for _, d := range defs {
@@ -612,13 +599,13 @@ func (c *parquetColumn[T]) decodePage(page parquet.Page) error {
 		c.resolve(dict)
 		indexes := data.Int32()
 		if len(indexes) != n {
-			return fmt.Errorf("%w: column %d page has %d dictionary indexes for %d values",
-				ErrMalformedPage, c.index, len(indexes), n)
+			return fmt.Errorf("%w: page has %d dictionary indexes for %d values",
+				ErrMalformedPage, len(indexes), n)
 		}
 		for _, ix := range indexes {
 			if uint(ix) >= uint(len(c.dictValues)) {
-				return fmt.Errorf("%w: column %d dictionary index %d of %d",
-					ErrMalformedPage, c.index, ix, len(c.dictValues))
+				return fmt.Errorf("%w: dictionary index %d of %d",
+					ErrMalformedPage, ix, len(c.dictValues))
 			}
 		}
 		c.indexes, c.values, c.rows = indexes, nil, rows
@@ -631,8 +618,8 @@ func (c *parquetColumn[T]) decodePage(page parquet.Page) error {
 	}
 	c.valueBuf = values
 	if len(values) != n {
-		return fmt.Errorf("%w: column %d page has %d values for %d non-null rows",
-			ErrMalformedPage, c.index, len(values), n)
+		return fmt.Errorf("%w: page has %d values for %d non-null rows",
+			ErrMalformedPage, len(values), n)
 	}
 	c.indexes, c.values, c.rows = nil, values, rows
 
