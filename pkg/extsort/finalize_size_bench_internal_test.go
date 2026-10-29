@@ -38,9 +38,9 @@ func runFinalizeSizeBench(b *testing.B, n int) {
 		rows := agg.Drain()
 		SortPrefixRows(rows)
 
-		builder, err := NewIndexBuilderWithCapacity(dir, "", uint64(len(rows)))
+		builder, err := NewIndexBuilder(dir, "")
 		if err != nil {
-			b.Fatalf("NewIndexBuilderWithCapacity: %v", err)
+			b.Fatalf("NewIndexBuilder: %v", err)
 		}
 		if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
 			b.Fatalf("SetPresentTiers: %v", err)
@@ -87,9 +87,9 @@ func BenchmarkTierStats_Density(b *testing.B) {
 				}
 				rows := agg.Drain()
 				SortPrefixRows(rows)
-				builder, err := NewIndexBuilderWithCapacity(dir, "", uint64(len(rows)))
+				builder, err := NewIndexBuilder(dir, "")
 				if err != nil {
-					b.Fatalf("NewIndexBuilderWithCapacity: %v", err)
+					b.Fatalf("NewIndexBuilder: %v", err)
 				}
 				if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
 					b.Fatalf("SetPresentTiers: %v", err)
@@ -114,8 +114,8 @@ func BenchmarkTierStats_Density(b *testing.B) {
 // whose objects span only a few of the 13 tiers — the realistic shape.
 // The timer is stopped during ingest/Add, so only Finalize is measured.
 //
-// Finalize includes the tier writer's conversion of its scratch rows
-// into the chosen layout, alongside the MPHF and depth index.
+// Finalize writes the tier files in the planned layout, alongside the
+// MPHF and depth index.
 func BenchmarkTierStatsFinalize(b *testing.B) {
 	prevLevel := zerolog.GlobalLevel()
 	zerolog.SetGlobalLevel(zerolog.Disabled)
@@ -134,9 +134,9 @@ func BenchmarkTierStatsFinalize(b *testing.B) {
 		}
 		rows := agg.Drain()
 		SortPrefixRows(rows)
-		builder, err := NewIndexBuilderWithCapacity(dir, "", uint64(len(rows)))
+		builder, err := NewIndexBuilder(dir, "")
 		if err != nil {
-			b.Fatalf("NewIndexBuilderWithCapacity: %v", err)
+			b.Fatalf("NewIndexBuilder: %v", err)
 		}
 		if err := builder.SetPresentTiers(agg.PresentTiers()); err != nil {
 			b.Fatalf("SetPresentTiers: %v", err)

@@ -44,37 +44,12 @@ func fieldNeed(v uint64) uint8 {
 	return uint8(max(1, need))
 }
 
-// patchHistogram counts rows by the widths their count, bytes and
-// child start need: hist[c][b][s] for widths 1..8 (index 0 unused).
-type patchHistogram [9][9][9]uint64
-
-func (h *patchHistogram) add(count, bytes, size uint64) {
-	h[fieldNeed(count)][fieldNeed(bytes)][fieldNeed(size)]++
-}
-
 // patchChoice is a set of field widths, the exceptions they cause and
 // the bytes they cost.
 type patchChoice struct {
 	count, bytes, size uint8
 	exceptions         uint64
 	cost               uint64
-}
-
-// exceptions counts the rows whose count, bytes or child start need
-// more than the given widths.
-func (h *patchHistogram) exceptions(wc, wb, ws uint8) uint64 {
-	var e uint64
-	for c := uint8(1); c <= 8; c++ {
-		for b := uint8(1); b <= 8; b++ {
-			for s := uint8(1); s <= 8; s++ {
-				if c > wc || b > wb || s > ws {
-					e += h[c][b][s]
-				}
-			}
-		}
-	}
-
-	return e
 }
 
 // patchCost is the bytes rows take with the given widths: the
@@ -116,28 +91,6 @@ func choosePatch(rows uint64, exceptions func(wc, wb, ws uint8) uint64) patchCho
 			for ws := uint8(8); ws >= 1; ws-- {
 				e := exceptions(wc, wb, ws)
 				if !patchFeasible(e, rows) {
-					continue
-				}
-				if cost := patchCost(rows, wc, wb, ws, e); cost < best.cost {
-					best = patchChoice{count: wc, bytes: wb, size: ws, exceptions: e, cost: cost}
-				}
-			}
-		}
-	}
-
-	return best
-}
-
-// choosePatch returns the widths that minimise patchCost for rows
-// among those that keep exceptions under maxPatchRatePPM. Ties keep the
-// wider widths, which have fewer exceptions to look up.
-func (h *patchHistogram) choosePatch(rows uint64) patchChoice {
-	best := patchChoice{count: 8, bytes: 8, size: 8, cost: ^uint64(0)}
-	for wc := uint8(8); wc >= 1; wc-- {
-		for wb := uint8(8); wb >= 1; wb-- {
-			for ws := uint8(8); ws >= 1; ws-- {
-				e := h.exceptions(wc, wb, ws)
-				if e*1_000_000 > maxPatchRatePPM*rows {
 					continue
 				}
 				if cost := patchCost(rows, wc, wb, ws, e); cost < best.cost {

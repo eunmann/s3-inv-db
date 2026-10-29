@@ -370,7 +370,7 @@ func buildGridIndex(tb testing.TB, spec benchutil.GridSpec) string {
 	rows := agg.Drain()
 	extsort.SortPrefixRows(rows)
 
-	builder, err := extsort.NewIndexBuilderWithCapacity(dir, "", uint64(len(rows)))
+	builder, err := extsort.NewIndexBuilder(dir, "")
 	if err != nil {
 		tb.Fatalf("NewIndexBuilder: %v", err)
 	}

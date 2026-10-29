@@ -1,7 +1,6 @@
 package format
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -294,50 +293,6 @@ func TestPrefixTreeWriterRejectsRowsOffPlan(t *testing.T) {
 				t.Errorf("prefix tree left behind: %v", err)
 			}
 		})
-	}
-}
-
-// TestPrefixTreeWriterMatchesScratchWriter: with segments interned in
-// position order, the writer's tree and dictionary are byte for byte
-// the scratch writer's.
-func TestPrefixTreeWriterMatchesScratchWriter(t *testing.T) {
-	for seed := range uint64(4) {
-		r := rand.New(rand.NewPCG(seed, 1))
-		rows := levelOrderTreeRows(r, 1+r.IntN(6), 1+r.IntN(8), 1+r.IntN(400))
-		got := t.TempDir()
-		writeTreeRows(t, got, rows, nil)
-
-		want := t.TempDir()
-		legacy, err := NewPrefixTreeScratchWriter(want)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, row := range rows {
-			if row.parent < 0 {
-				err = legacy.AddRoot()
-			} else {
-				err = legacy.Add(uint64(row.parent), row.name)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-		if err := legacy.Close(); err != nil {
-			t.Fatal(err)
-		}
-		for _, name := range []string{PrefixTreeFile, PrefixDictBlobFile, PrefixDictOffsetsFile} {
-			w, err := os.ReadFile(filepath.Join(want, name))
-			if err != nil {
-				t.Fatal(err)
-			}
-			g, err := os.ReadFile(filepath.Join(got, name))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(w, g) {
-				t.Errorf("seed %d, %d prefixes: %s differs", seed, len(rows), name)
-			}
-		}
 	}
 }
 

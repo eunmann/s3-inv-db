@@ -98,9 +98,9 @@ first; see below).
 ### Variable-width arrays
 
 The `.u64` and `.u32` suffixes name the type a reader decodes to, not
-the stored width. At finalize the builder rewrites each of these
-arrays at the smallest width in bytes that holds its largest value,
-and records it in `Width`:
+the stored width. The builder stores each of these arrays at the
+smallest width in bytes that holds its largest value, and records it in
+`Width`:
 
 | File | Width |
 |------|-------|
@@ -110,7 +110,7 @@ and records it in `Width`:
 
 A reader loads 8 bytes at `index × Width` and masks off the bytes
 above `Width`. So that this load stays inside the mmap at the last
-element, each repacked file ends with an 8-byte zero tail pad.
+element, each of these files ends with an 8-byte zero tail pad.
 
 ## Core Stats (`core_stats.bin`)
 
@@ -159,14 +159,13 @@ a field sized for its largest value would make every row pay for a
 handful. Instead the builder picks each patched field's width from the
 data:
 
-- At finalize it reads every row once and counts rows by the widths
-  their three patched values need, then sizes every width combination
-  exactly (rows × widths, plus the patch files for the rows that don't
-  fit) and keeps the smallest whose exceptions are at most 0.5% of
-  rows. Exceptions cost a rank and a table read and sit on the upper
-  levels that listings read most, so the cap keeps reads fast (#54).
-  When no narrower width pays for its exceptions it uses plain widths
-  and writes no patch files.
+- It counts rows by the widths their three patched values need, then
+  sizes every width combination exactly (rows × widths, plus the patch
+  files for the rows that don't fit) and keeps the smallest whose
+  exceptions are at most 0.5% of rows. Exceptions cost a rank and a
+  table read and sit on the upper levels that listings read most, so
+  the cap keeps reads fast (#54). When no narrower width pays for its
+  exceptions it uses plain widths and writes no patch files.
 - A value that doesn't fit stores the field's all-ones sentinel (a
   value equal to it needs the next width). Its row's bit is set in
   `core_patch.rows`, a ranked bit vector (layout as in
@@ -181,10 +180,20 @@ On the 1M-object benchmark fixture the stride is 1 + 5 + 3 + 1 = 10
 bytes with 0.02% of rows patched, against 3 + 7 + 3 + 1 = 14 bytes
 unpatched.
 
-During the build the rows are written at a fixed 26-byte stride
-(8 + 8 + 8 + 2) into an mmap'd file, in position order (see below). At
-finalize the builder streams the rows into `core_stats.bin.tmp` at the
-chosen stride and renames it over the build file.
+The widths are chosen before any row is written, so `core_stats.bin`
+and the patch files are written once, row by row in position order.
+The count and bytes widths are counted as the rows are spooled (see
+below). Child starts are known only once every depth's size is, but in
+position order row *i*'s child start is above *i*, never below the
+previous row's, and the last row's is `Count`. So a child start two or
+more bytes narrower than `Count` needs would patch over 99% of rows,
+and one byte narrower stays within the 0.5% cap only when `Count` is
+within 0.5% above a power of 256. Only then does the builder read back
+the rows whose child start needs the full width, a run at the end of
+the deepest depths, for their count and bytes widths. The choice is the
+one a count over every row's three widths would make. A row that
+doesn't match the chosen widths or the planned number of exceptions
+fails the build.
 
 ### Level-order positions
 
@@ -215,10 +224,13 @@ reads its rows in sequence.
 
 Rows arrive in key order, which is not position order, so the builder
 spools each prefix by depth (one file per depth in its temp directory,
-about 40 B per prefix) and writes every per-row file at finalize,
+about 35 B per prefix) and writes every per-row file at finalize,
 depth by depth: a prefix's first child is the number of rows already
 seen at the next depth when it arrives, and its parent is the last row
-seen at the depth above.
+seen at the depth above. The goroutine writing the spool also gathers
+what fixes every per-row file's widths (the core and tier statistics
+above, the segment count and the widest parent distance below), so at
+finalize each file is written once, straight to its final form.
 
 ## Depth Index
 
@@ -350,7 +362,13 @@ row read per level.
 
 Both widths come from the largest value in this index. The root `""`
 is position 0 and its row is zero; every other row has a distance of at
-least 1.
+least 1. Segment IDs number the distinct segments in the order they
+first appear in key order: the builder interns each prefix's segment as
+it spools the prefix, so the spool holds an ID, not the name. A row's
+distance is the size of the depth above plus its index within its depth
+minus its parent's, so the builder keeps the largest such difference
+per depth and knows the widest distance once the depths' sizes are
+known.
 
 To read the prefix at position `p`, walk to the root collecting segment
 IDs (`p -= distance` until `p == 0`), then join their segments in
@@ -391,9 +409,10 @@ row doesn't already give:
   minus the other tiers.
 
 An index with one present tier writes no tier files at all. Otherwise
-the builder computes the exact size of both layouts below at finalize,
-each with the core `tier_mask` bytes it needs, and writes the smaller
-(dense on a tie). Each stored slot is a count
+the builder computes the exact size of both layouts below from sums,
+ORs and maxima it gathers as the rows are spooled, each with the core
+`tier_mask` bytes it needs, and writes the smaller (dense on a tie)
+straight to its final files. Each stored slot is a count
 then bytes, little-endian, at the widths the layout's largest stored
 values need (1–8 bytes each), recorded in a 2-byte descriptor (count
 width, bytes width) after the header of `tier_dense.bin` and

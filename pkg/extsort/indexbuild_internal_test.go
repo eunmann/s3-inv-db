@@ -1,10 +1,8 @@
 package extsort
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"io/fs"
 	"maps"
 	"math/rand/v2"
 	"os"
@@ -167,11 +165,12 @@ func edgeTreeRows(n1, n2, spread int) []*PrefixRow {
 	return rows
 }
 
-// TestIndexBuilderCoreAndTierFilesMatchLegacy: the core and tier files
-// the builder writes from its plans, the child-start tail included, are
-// byte for byte what the legacy writers make from the same rows in
-// level order.
-func TestIndexBuilderCoreAndTierFilesMatchLegacy(t *testing.T) {
+// TestIndexBuilderChildStartTail: builds whose row count is just past a
+// power of 256 take the child start one byte narrower when the rows
+// whose child start needs the full width (read back from the spool) are
+// few, and every row's stats, children and tiers read back exactly
+// either way.
+func TestIndexBuilderChildStartTail(t *testing.T) {
 	present := []tiers.ID{tiers.Standard, tiers.GlacierIR, tiers.DeepArchive}
 	for _, tc := range []struct {
 		n1, n2, spread int
@@ -184,15 +183,16 @@ func TestIndexBuilderCoreAndTierFilesMatchLegacy(t *testing.T) {
 		{3000, 900, 2000, false},
 	} {
 		t.Run(fmt.Sprintf("%d+%d", tc.n1, tc.n2), func(t *testing.T) {
-			got := t.TempDir()
-			b, err := NewIndexBuilder(got, t.TempDir())
+			dir := t.TempDir()
+			b, err := NewIndexBuilder(dir, t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err := b.SetPresentTiers(present); err != nil {
 				t.Fatal(err)
 			}
-			for _, row := range edgeTreeRows(tc.n1, tc.n2, tc.spread) {
+			rows := edgeTreeRows(tc.n1, tc.n2, tc.spread)
+			for _, row := range rows {
 				if err := b.Add(row); err != nil {
 					t.Fatal(err)
 				}
@@ -200,33 +200,26 @@ func TestIndexBuilderCoreAndTierFilesMatchLegacy(t *testing.T) {
 			if err := b.Finalize(); err != nil {
 				t.Fatal(err)
 			}
-			want := t.TempDir()
-			narrowed := writeLegacyRowFiles(t, got, want, present)
-			if narrowed != tc.narrowed {
+			if narrowed := checkLevelOrderRows(t, dir, rows); narrowed != tc.narrowed {
 				t.Errorf("child start narrowed by the tail = %v, want %v", narrowed, tc.narrowed)
-			}
-			for _, name := range []string{
-				format.CoreStatsFile, format.CorePatchFile, format.CorePatchRowsFile,
-				filepath.Join(format.TierStatsDir, format.TierDenseFile), filepath.Join(format.TierStatsDir, format.TierMultiFile),
-				filepath.Join(format.TierStatsDir, format.TierMultiRowsFile), filepath.Join(format.TierStatsDir, format.TierMultiOffsetsFile),
-				filepath.Join(format.TierStatsDir, format.TierMultiMaskFile),
-			} {
-				w, werr := os.ReadFile(filepath.Join(want, name))
-				g, gerr := os.ReadFile(filepath.Join(got, name))
-				if errors.Is(werr, fs.ErrNotExist) != errors.Is(gerr, fs.ErrNotExist) || !bytes.Equal(w, g) {
-					t.Errorf("%s differs: built %d bytes (%v), legacy %d (%v)", name, len(g), gerr, len(w), werr)
-				}
 			}
 		})
 	}
 }
 
-// writeLegacyRowFiles reads the built index in dir back in position
-// order into the legacy core and tier writers in out, and reports
-// whether the built core stats narrowed the child start below the row
-// count's width with patches.
-func writeLegacyRowFiles(t *testing.T, dir, out string, present []tiers.ID) bool {
+// checkLevelOrderRows checks the index in dir holds rows (in key order)
+// at their level-order positions: each row's totals, tiers and children.
+// It reports whether the core stats narrowed the child start below the
+// row count's width with patches.
+func checkLevelOrderRows(t *testing.T, dir string, rows []*PrefixRow) bool {
 	t.Helper()
+	byLevel := slices.Clone(rows)
+	slices.SortStableFunc(byLevel, func(a, b *PrefixRow) int { return int(a.Depth) - int(b.Depth) })
+	children := map[string][]uint64{}
+	for pos, row := range byLevel[1:] {
+		parent := row.Prefix[:strings.LastIndexByte(row.Prefix[:len(row.Prefix)-1], '/')+1]
+		children[parent] = append(children[parent], uint64(pos+1))
+	}
 	core, err := format.OpenCoreStats(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -237,31 +230,22 @@ func writeLegacyRowFiles(t *testing.T, dir, out string, present []tiers.ID) bool
 		t.Fatal(err)
 	}
 	defer tr.Close()
-	cb, err := format.NewCoreStatsBuilder(out, core.Count())
-	if err != nil {
-		t.Fatal(err)
-	}
-	tw, err := format.NewTierStatsScratchWriter(out, present)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for pos := range core.Count() {
-		var counts, byteCounts [tiers.NumTiers]uint64
-		for _, tb := range tr.BreakdownAll(pos) {
-			counts[tb.TierID], byteCounts[tb.TierID] = tb.ObjectCount, tb.Bytes
+	for pos, row := range byLevel {
+		p := uint64(pos)
+		if c, by := core.UnsafeStats(p); c != row.Count || by != row.TotalBytes {
+			t.Fatalf("%q: stats (%d, %d), want (%d, %d)", row.Prefix, c, by, row.Count, row.TotalBytes)
 		}
-		c, by := core.UnsafeStats(pos)
-		mask, err := tw.Add(&counts, &byteCounts, c, by)
-		if err != nil {
-			t.Fatal(err)
+		lo, hi := core.UnsafeChildStart(p), core.UnsafeChildStart(p+1)
+		want := children[row.Prefix]
+		if hi-lo != uint64(len(want)) || (len(want) > 0 && lo != want[0]) {
+			t.Fatalf("%q: children [%d, %d), want %v", row.Prefix, lo, hi, want)
 		}
-		if err := cb.Add(c, by, core.UnsafeChildStart(pos), mask); err != nil {
-			t.Fatal(err)
+		for _, tb := range tr.BreakdownAll(p) {
+			if tb.ObjectCount != row.TierCounts[tb.TierID] || tb.Bytes != row.TierBytes[tb.TierID] {
+				t.Fatalf("%q tier %d: (%d, %d), want (%d, %d)", row.Prefix, tb.TierID,
+					tb.ObjectCount, tb.Bytes, row.TierCounts[tb.TierID], row.TierBytes[tb.TierID])
+			}
 		}
-	}
-	cb.SetTierMaskEncoding(tw.MaskEncoding())
-	if err := errors.Join(tw.Close(), cb.Finalize()); err != nil {
-		t.Fatal(err)
 	}
 	_, patchErr := os.Stat(filepath.Join(dir, format.CorePatchFile))
 

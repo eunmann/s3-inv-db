@@ -79,16 +79,10 @@ type stackEntry struct {
 	local  uint64
 }
 
-// NewIndexBuilder creates a streaming index builder.
-// The tempDir is used for temporary storage during construction (for MPHF builder).
-// If tempDir is empty, os.TempDir() is used.
+// NewIndexBuilder creates a streaming index builder. The tempDir holds
+// its scratch (the level spool and the MPHF builder's arrays); if it is
+// empty, os.TempDir() is used.
 func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
-	return NewIndexBuilderWithCapacity(outDir, tempDir, 0)
-}
-
-// NewIndexBuilderWithCapacity creates a streaming index builder. The
-// capacity hint is unused.
-func NewIndexBuilderWithCapacity(outDir, tempDir string, _ uint64) (*IndexBuilder, error) {
 	_, statErr := os.Stat(outDir)
 	createdOutDir := errors.Is(statErr, fs.ErrNotExist)
 	if err := os.MkdirAll(outDir, format.DirPerm); err != nil {

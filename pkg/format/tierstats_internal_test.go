@@ -424,45 +424,25 @@ func TestTierStatsWriterRejectsRowsOffPlan(t *testing.T) {
 	}
 }
 
-// TestTierStatsWriterMatchesScratchWriter: a plan made from the rows in
-// any order, then the rows written in order, gives byte for byte the
-// files and masks the scratch writer does.
-func TestTierStatsWriterMatchesScratchWriter(t *testing.T) {
+// TestTierStatsPlanIgnoresRowOrder: a plan made from the rows in any
+// order is the plan made from them in position order, so the files and
+// masks written are byte for byte the same.
+func TestTierStatsPlanIgnoresRowOrder(t *testing.T) {
 	three := []tiers.ID{tiers.Standard, tiers.GlacierIR, tiers.DeepArchive}
 	for _, present := range [][]tiers.ID{{tiers.GlacierIR}, three, tiers.AllTierIDs()} {
 		for _, p := range []float64{0.05, 0.4, 1} {
 			for _, force := range []tierLayout{tierLayoutAuto, tierLayoutDense, tierLayoutMulti} {
 				r := rand.New(rand.NewPCG(uint64(len(present)), uint64(p*100)+uint64(force)))
 				rows := randomTierRows(r, present, 3000, p, 4+r.UintN(30), 8+r.UintN(50))
-				order := r.Perm(len(rows))
-				planned := planTierRows(t, present, rows, force, order)
-				gotDir := t.TempDir()
-				gotMasks := writeTierRows(t, gotDir, planned, rows)
-
-				wantDir := t.TempDir()
-				legacy, err := NewTierStatsScratchWriter(wantDir, present)
-				if err != nil {
-					t.Fatal(err)
+				shuffled := planTierRows(t, present, rows, force, r.Perm(len(rows)))
+				ordered := planTierRows(t, present, rows, force, nil)
+				shuffled.row, ordered.row = tierRow{}, tierRow{} // the last row filled, not a statistic
+				if *shuffled != *ordered {
+					t.Errorf("%d tiers, p=%.2f, layout %d: plan %+v, in order %+v", len(present), p, force, *shuffled, *ordered)
 				}
-				legacy.force = force
-				wantMasks := make([]uint16, len(rows))
-				for i := range rows {
-					c, b := rows[i].totals()
-					if wantMasks[i], err = legacy.Add(&rows[i].counts, &rows[i].bytes, c, b); err != nil {
-						t.Fatal(err)
-					}
-				}
-				gotStats := []any{planned.rows, planned.multiRows, planned.multiSlots, planned.multiBits, planned.denseBits, planned.maxMask}
-				wantStats := []any{legacy.rows, legacy.multiRows, legacy.multiSlots, legacy.multiBits, legacy.denseBits, legacy.maxMask}
-				if !slices.Equal(gotStats, wantStats) {
-					t.Errorf("%d tiers, p=%.2f, layout %d: plan %v, want %v", len(present), p, force, gotStats, wantStats)
-				}
-				if got, want := planned.MaskEncoding(), legacy.MaskEncoding(); got != want {
-					t.Errorf("%d tiers, p=%.2f, layout %d: mask encoding %d, want %d", len(present), p, force, got, want)
-				}
-				if err := legacy.Close(); err != nil {
-					t.Fatal(err)
-				}
+				gotDir, wantDir := t.TempDir(), t.TempDir()
+				gotMasks := writeTierRows(t, gotDir, shuffled, rows)
+				wantMasks := writeTierRows(t, wantDir, ordered, rows)
 				if !slices.Equal(gotMasks, wantMasks) {
 					t.Errorf("%d tiers, p=%.2f, layout %d: masks differ", len(present), p, force)
 				}

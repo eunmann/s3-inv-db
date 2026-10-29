@@ -1,7 +1,6 @@
 package format
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -297,37 +296,82 @@ func TestManifestListsPatchFiles(t *testing.T) {
 	}
 }
 
-// writeLegacyCore writes rows into dir with the CoreStatsBuilder.
-func writeLegacyCore(t *testing.T, dir string, rows []coreTestRow, enc TierMaskEncoding) {
+// patchHistogram counts rows by the widths their count, bytes and
+// child start need, hist[c][b][s] for widths 1..8 (index 0 unused): what
+// the core builder counted from every row once its child starts were
+// written, and the oracle for CoreStatsPlan's choice without them.
+type patchHistogram [9][9][9]uint64
+
+func (h *patchHistogram) add(count, bytes, size uint64) {
+	h[fieldNeed(count)][fieldNeed(bytes)][fieldNeed(size)]++
+}
+
+// exceptions counts the rows whose count, bytes or child start need
+// more than the given widths.
+func (h *patchHistogram) exceptions(wc, wb, ws uint8) uint64 {
+	var e uint64
+	for c := uint8(1); c <= 8; c++ {
+		for b := uint8(1); b <= 8; b++ {
+			for s := uint8(1); s <= 8; s++ {
+				if c > wc || b > wb || s > ws {
+					e += h[c][b][s]
+				}
+			}
+		}
+	}
+
+	return e
+}
+
+// histogramStride is the stride and exception count the three-way
+// histogram of rows picks, plain widths included.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func histogramStride(rows []coreTestRow, enc TierMaskEncoding) (CoreStatsStride, uint64) {
+	var hist patchHistogram
+	var maxCount, maxBytes, maxChild uint64
+	var maxMask uint16
+	for _, r := range rows {
+		hist.add(r.count, r.bytes, r.child)
+		maxCount, maxBytes, maxChild = max(maxCount, r.count), max(maxBytes, r.bytes), max(maxChild, r.child)
+		maxMask = max(maxMask, r.mask)
+	}
+	n := uint64(len(rows))
+	plain := patchChoice{count: byteWidthOf(maxCount), bytes: byteWidthOf(maxBytes), size: byteWidthOf(maxChild)}
+	plain.cost = n * uint64(plain.count+plain.bytes+plain.size)
+	choice := choosePatch(n, hist.exceptions)
+	if choice.exceptions == 0 || plain.cost <= choice.cost {
+		choice = plain
+	}
+
+	return CoreStatsStride{Count: choice.count, Bytes: choice.bytes, ChildStart: choice.size, TierMask: tierFieldWidth(maxMask, enc)},
+		choice.exceptions
+}
+
+// checkAgainstHistogram writes rows and checks the widths and exception
+// count against the three-way histogram's, and every value read back.
+// It reports whether the child start took the tail's narrower width.
+func checkAgainstHistogram(t *testing.T, rows []coreTestRow, enc TierMaskEncoding) bool {
 	t.Helper()
-	b, err := NewCoreStatsBuilder(dir, uint64(len(rows)))
+	dir := t.TempDir()
+	writeCoreFiles(t, dir, rows, enc)
+	cr, err := OpenCoreStats(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range rows {
-		if err := b.Add(r.count, r.bytes, r.child, r.mask); err != nil {
-			t.Fatal(err)
-		}
+	defer cr.Close()
+	var exceptions uint64
+	if cr.patch != nil {
+		exceptions = cr.patch.rows.rank(cr.rowCount)
 	}
-	b.SetTierMaskEncoding(enc)
-	if err := b.Finalize(); err != nil {
-		t.Fatal(err)
+	wantStride, wantExceptions := histogramStride(rows, enc)
+	if cr.Stride() != wantStride || exceptions != wantExceptions {
+		t.Errorf("%d rows: stride %+v with %d exceptions, histogram picks %+v with %d",
+			len(rows), cr.Stride(), exceptions, wantStride, wantExceptions)
 	}
-}
+	checkCore(t, cr, rows)
 
-// assertSameCoreFiles fails unless directories want and got hold the
-// same core stats and patch files.
-func assertSameCoreFiles(t *testing.T, want, got string) {
-	t.Helper()
-	for _, name := range []string{CoreStatsFile, CorePatchFile, CorePatchRowsFile} {
-		w, werr := os.ReadFile(filepath.Join(want, name))
-		g, gerr := os.ReadFile(filepath.Join(got, name))
-		if errors.Is(werr, os.ErrNotExist) != errors.Is(gerr, os.ErrNotExist) {
-			t.Errorf("%s: legacy %v, writer %v", name, werr, gerr)
-		} else if !bytes.Equal(w, g) {
-			t.Errorf("%s differs: %d bytes, legacy %d", name, len(g), len(w))
-		}
-	}
+	return exceptions > 0 && cr.Stride().ChildStart < fieldNeed(uint64(len(rows)))
 }
 
 // edgeRows is n rows of a tree of the given fanout with small values and
@@ -348,12 +392,12 @@ func edgeRows(n, fanout int, seed uint64) []coreTestRow {
 	return rows
 }
 
-// TestCoreChildStartEdgeMatchesLegacy: just above a power of 256 a
+// TestCoreChildStartEdgeMatchesHistogram: just above a power of 256 a
 // child start one byte narrower than the row count needs can pay, and
 // the plan reads the rows whose child start doesn't fit it (the tail) to
-// choose; elsewhere it needs no tail. Either way the files are byte for
-// byte the builder's, which counts every row's three widths.
-func TestCoreChildStartEdgeMatchesLegacy(t *testing.T) {
+// choose; elsewhere it needs no tail. Either way it picks the widths and
+// exceptions the three-way histogram of every row's widths does.
+func TestCoreChildStartEdgeMatchesHistogram(t *testing.T) {
 	narrowed := 0
 	for _, tc := range []struct {
 		n        int
@@ -374,19 +418,9 @@ func TestCoreChildStartEdgeMatchesLegacy(t *testing.T) {
 						rows[i].count, rows[i].bytes = 1, 1
 					}
 				}
-				want, got := t.TempDir(), t.TempDir()
-				writeLegacyCore(t, want, rows, TierMaskPlain)
-				writeCoreFiles(t, got, rows, TierMaskPlain)
-				assertSameCoreFiles(t, want, got)
-				cr, err := OpenCoreStats(got)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if cr.patch != nil && cr.Stride().ChildStart < fieldNeed(uint64(tc.n)) {
+				if checkAgainstHistogram(t, rows, TierMaskPlain) {
 					narrowed++
 				}
-				checkCore(t, cr, rows)
-				cr.Close()
 			}
 		}
 	}
@@ -395,10 +429,10 @@ func TestCoreChildStartEdgeMatchesLegacy(t *testing.T) {
 	}
 }
 
-// TestCoreStatsWriterMatchesLegacy: over trees of many shapes and value
-// ranges, and every tier-field encoding, the writer's files are byte for
-// byte the builder's.
-func TestCoreStatsWriterMatchesLegacy(t *testing.T) {
+// TestCoreStatsWriterMatchesHistogram: over trees of many shapes and
+// value ranges, and every tier-field encoding, the plan picks what the
+// three-way histogram does.
+func TestCoreStatsWriterMatchesHistogram(t *testing.T) {
 	r := rand.New(rand.NewPCG(11, 12))
 	for i := range 40 {
 		n := []int{0, 1, 2, 100, 254, 257, 3000, 65534, 65535, 65700}[i%10]
@@ -412,10 +446,7 @@ func TestCoreStatsWriterMatchesLegacy(t *testing.T) {
 		}
 		for _, enc := range []TierMaskEncoding{TierMaskPlain, TierMaskDerived, TierMaskCode} {
 			t.Run(fmt.Sprintf("%d/n=%d/enc=%d", i, n, enc), func(t *testing.T) {
-				want, got := t.TempDir(), t.TempDir()
-				writeLegacyCore(t, want, rows, enc)
-				writeCoreFiles(t, got, rows, enc)
-				assertSameCoreFiles(t, want, got)
+				checkAgainstHistogram(t, rows, enc)
 			})
 		}
 	}
