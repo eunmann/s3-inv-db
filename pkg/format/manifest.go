@@ -82,7 +82,7 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32, progress StepP
 		return fmt.Errorf("marshal manifest: %w", err)
 	}
 
-	if err := WriteFileSync(manifestPath, data); err != nil {
+	if err := os.WriteFile(manifestPath, data, FilePerm); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
 

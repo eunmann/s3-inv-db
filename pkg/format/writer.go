@@ -171,9 +171,6 @@ func RepackArrayWidthU64(srcPath, dstPath string, width uint8) error {
 	if err := bw.Flush(); err != nil {
 		return cleanup(fmt.Errorf("flush: %w", err))
 	}
-	if err := dst.Sync(); err != nil {
-		return cleanup(fmt.Errorf("sync: %w", err))
-	}
 	if err := dst.Close(); err != nil {
 		return errors.Join(fmt.Errorf("close: %w", err), removeIfErr(tmp))
 	}

@@ -428,12 +428,6 @@ func (b *CoreStatsBuilder) Finalize() error {
 	if err := bw.Flush(); err != nil {
 		return cleanupTmp(final, tmp, fmt.Errorf("flush: %w", err))
 	}
-	if err := final.Sync(); err != nil {
-		_ = final.Close()
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("sync final: %w", err)
-	}
 	if err := final.Close(); err != nil {
 		_ = os.Remove(tmp)
 
