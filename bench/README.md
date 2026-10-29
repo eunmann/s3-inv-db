@@ -135,7 +135,8 @@ Ingestion (`bench/suite/ingest.txt`):
 - `internal/loader` `BenchmarkPipeline` at 1M objects (realistic,
   deep-pyramid and realistic_sorted shapes; see the fixtures below):
   the real `Pipeline.Run` end to end through the local S3 server.
-  Seconds per op; also reports `peak_heap_B`, `disk_B`, `runs` (sorted runs the
+  Seconds per op; also reports `input_B` (the data files a build
+  downloads), `peak_heap_B`, `disk_B`, `runs` (sorted runs the
   merge read, in memory or on disk) and `run_files` (runs written to
   disk). Per op, over every thread: `cpu_s` and `sys_s` (CPU seconds),
   `cores` (CPU over wall time: a change that saves CPU on a core-rich
@@ -163,7 +164,11 @@ data files per ingest worker, at least 10,000 objects per file, so
 every worker has chunks queued, as with a real inventory's many files. Realistic and deep_pyramid list keys in
 random order, the case to expect: S3 Inventory guarantees no order.
 Realistic_sorted lists them in key order across the files, the best
-case for the build's in-order paths. An A/B across a seeder change
+case for the build's in-order paths. `shape=realistic/format=parquet`
+is the realistic objects as Snappy-compressed Parquet in AWS's column
+layout (raw keys, the same ETags and dates; about 66 MiB for 1M), so
+a build from each format can be compared on the same objects. An A/B
+across a seeder change
 builds different fixtures on each side, so its pipeline numbers are a
 new baseline, not a regression signal.
 

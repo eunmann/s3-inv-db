@@ -65,11 +65,23 @@ func pipelineSizes() []int {
 	return sizes
 }
 
+// parquetPipelineSizes returns the sizes the Parquet entries run at:
+// 1M, and 10M under the long-bench env.
+func parquetPipelineSizes() []int {
+	sizes := []int{1_000_000}
+	if benchutil.LongBenchEnabled() {
+		sizes = append(sizes, 10_000_000)
+	}
+	return sizes
+}
+
 // BenchmarkPipeline sweeps shape × size against the full S3-to-index path.
 // Realistic and deep_pyramid list keys in random order, which is what to
 // expect: S3 Inventory guarantees no order. Realistic_sorted is
 // realistic with the keys in order across the chunks, the best case for
-// the build's in-order paths.
+// the build's in-order paths. Those are CSV.gz inventories; the
+// format=parquet entries build the realistic objects from Snappy
+// Parquet files instead, for the cost of one format against the other.
 func BenchmarkPipeline(b *testing.B) {
 	for _, shape := range []string{"realistic", "deep_pyramid", "realistic_sorted"} {
 		for _, n := range pipelineSizes() {
@@ -78,6 +90,11 @@ func BenchmarkPipeline(b *testing.B) {
 				runPipelineBench(b, shape, n, 0)
 			})
 		}
+	}
+	for _, n := range parquetPipelineSizes() {
+		b.Run(fmt.Sprintf("shape=realistic/format=parquet/n=%d", n), func(b *testing.B) {
+			runPipelineBenchWith(b, pipelineBench{preset: "realistic", numObjects: n, format: seeder.FormatParquet})
+		})
 	}
 }
 
@@ -116,14 +133,15 @@ func BenchmarkPipelineSlowS3(b *testing.B) {
 // seeder's InventoryInfo.
 const fixtureInfoKey = "fixture.json"
 
-// seededInventory returns the fixture inventory for preset, size and
-// chunk count, seeding it into the local S3 server only once per server,
-// A/B side and seeder output: every later run of that side reads the
-// same upload, each side builds from its own seeder's output, and the
-// seeder's fingerprint in the bucket name keeps a fixture an older
-// seeder wrote from being reused. Seeding goes straight to the local
-// server, so a slow client's link only slows the build's reads.
-func seededInventory(b *testing.B, preset string, numObjects, chunks int) seeder.InventoryInfo {
+// seededInventory returns the fixture inventory for preset, format,
+// size and chunk count, seeding it into the local S3 server only once
+// per server, A/B side and seeder output: every later run of that side
+// reads the same upload, each side builds from its own seeder's output,
+// and the seeder's fingerprint in the bucket name keeps a fixture an
+// older seeder wrote from being reused. Seeding goes straight to the
+// local server, so a slow client's link only slows the build's reads.
+// A Parquet fixture's bucket name says so; a CSV one's is unchanged.
+func seededInventory(b *testing.B, preset string, format seeder.Format, numObjects, chunks int) seeder.InventoryInfo {
 	b.Helper()
 	raw := s3test.RawClient(b)
 	cfg := seeder.Config{
@@ -133,13 +151,18 @@ func seededInventory(b *testing.B, preset string, numObjects, chunks int) seeder
 		Seed:       int64(numObjects ^ chunks),
 		Logger:     zerolog.Nop(),
 		SortedKeys: strings.HasSuffix(preset, "_sorted"),
+		Format:     format,
 	}
 	seed := int64(numObjects)
 	fingerprint, err := seeder.FixtureFingerprint(b.Context(), cfg, seed)
 	if err != nil {
 		b.Fatalf("FixtureFingerprint: %v", err)
 	}
-	bucket := s3test.FixtureBucket(b, raw, fmt.Sprintf("%s-%d-%d-%s", preset, numObjects, chunks, fingerprint))
+	fixture := preset
+	if format == seeder.FormatParquet {
+		fixture += "-parquet"
+	}
+	bucket := s3test.FixtureBucket(b, raw, fmt.Sprintf("%s-%d-%d-%s", fixture, numObjects, chunks, fingerprint))
 	if out, err := raw.GetObject(b.Context(), &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(fixtureInfoKey)}); err == nil {
 		var info seeder.InventoryInfo
 		decodeErr := json.NewDecoder(out.Body).Decode(&info)
@@ -169,12 +192,33 @@ func seededInventory(b *testing.B, preset string, numObjects, chunks int) seeder
 	return info
 }
 
+// inputBytes returns the size of the inventory's data files: what a
+// build downloads.
+func inputBytes(b *testing.B, fc *s3fetch.Client, manifestURI string) int64 {
+	b.Helper()
+	uri, err := s3fetch.ParseS3URI(manifestURI)
+	if err != nil {
+		b.Fatalf("ParseS3URI: %v", err)
+	}
+	manifest, err := fc.FetchManifest(b.Context(), uri.Bucket, uri.Key)
+	if err != nil {
+		b.Fatalf("FetchManifest: %v", err)
+	}
+	var n int64
+	for _, f := range manifest.Files {
+		n += f.Size
+	}
+
+	return n
+}
+
 // pipelineBench is one pipeline benchmark's setup. A zero memLimit
-// leaves GOMEMLIMIT unchanged and a nil client is the local S3
-// server's.
+// leaves GOMEMLIMIT unchanged, a nil client is the local S3 server's
+// and an empty format is CSV.
 type pipelineBench struct {
 	client     *s3fetch.Client
 	preset     string
+	format     seeder.Format
 	numObjects int
 	memLimit   int64
 }
@@ -196,7 +240,8 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 		fc = s3test.FetchClient(b)
 	}
 	chunks := chunkCountFor(numObjects)
-	info := seededInventory(b, preset, numObjects, chunks)
+	info := seededInventory(b, preset, pb.format, numObjects, chunks)
+	input := inputBytes(b, fc, info.Path)
 
 	var lastDiskBytes int64
 	var lastPeakHeap uint64
@@ -262,6 +307,7 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 		b.StartTimer()
 	}
 
+	b.ReportMetric(float64(input), "input_B")
 	b.ReportMetric(float64(lastDiskBytes), "disk_B")
 	b.ReportMetric(float64(lastPeakHeap), "peak_heap_B")
 	b.ReportMetric(float64(lastPrefixCount), "prefixes")
