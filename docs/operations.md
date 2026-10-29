@@ -37,8 +37,9 @@ CSV, indexes are 1.0× (a directory per object) to 1.5× (typical
 seeded layout (about 7 prefixes per object). To make room the planner
 evicts, in order: the same configuration's runs past retention, then
 the least recently queried runs. It never evicts a pinned run (a
-manual Load pins) or one being read: eviction waits for in-flight
-queries before deleting.
+manual Load pins once its index is in place; one that fails, is
+cancelled or is cut off by a restart leaves the pin as it was) or one
+being read: eviction waits for in-flight queries before deleting.
 
 Once built, a load counts at its measured size. If that puts the
 loaded indexes over `max_index_disk` (the headroom absorbs smaller
