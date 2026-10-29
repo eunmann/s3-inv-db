@@ -1,6 +1,7 @@
 package format
 
 import (
+	"errors"
 	"fmt"
 	"math/bits"
 	"math/rand/v2"
@@ -356,6 +357,123 @@ func TestTierStatsRangesMatchWriter(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestPrefixTreeRangesMatchWriter(t *testing.T) {
+	cases := map[string][]treeTestRow{
+		"root only": {{parent: -1}},
+		"deep":      levelOrderTreeRows(rand.New(rand.NewPCG(1, 1)), 9, 2, 5),
+		"wide":      levelOrderTreeRows(rand.New(rand.NewPCG(2, 2)), 2, 300, 1000),
+		"mixed":     levelOrderTreeRows(rand.New(rand.NewPCG(3, 3)), 5, 8, 60),
+	}
+	for name, rows := range cases {
+		for _, split := range rangeSplits {
+			t.Run(fmt.Sprintf("%s/parts=%d", name, split.parts), func(t *testing.T) {
+				r := rand.New(rand.NewPCG(uint64(len(rows)), uint64(split.parts)))
+				want, got := t.TempDir(), t.TempDir()
+				writeTreeRows(t, want, rows, nil)
+				sums := newChecksums(testPiece)
+				ids, segments, maxDist := internTreeRows(t, got, rows, nil)
+				w, err := NewPrefixTreeRanges(got, uint64(len(rows)), segments, maxDist, sums)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeRanges(t, r, rangeCuts(r, uint64(len(rows)), split.parts, 1), split.workers,
+					func() func(lo, hi uint64, part *PrefixTreePart) error {
+						rw := w.NewRange()
+
+						return func(lo, hi uint64, part *PrefixTreePart) error {
+							if err := rw.Start(lo, part); err != nil {
+								return err
+							}
+							for i := lo; i < hi; i++ {
+								var err error
+								if rows[i].parent < 0 {
+									err = rw.AddRoot()
+								} else {
+									err = rw.Add(uint64(rows[i].parent), ids[i])
+								}
+								if err != nil {
+									return err
+								}
+							}
+
+							return rw.Flush()
+						}
+					}, w.Merge)
+				if err := w.Close(); err != nil {
+					t.Fatal(err)
+				}
+				assertSameFiles(t, want, got)
+				info, err := os.Stat(filepath.Join(got, PrefixTreeFile))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if sum, ok := sums.lookup(filepath.Join(got, PrefixTreeFile), info); !ok || sum != checksumOf(t, got, PrefixTreeFile) {
+					t.Errorf("prefix tree checksum %q recorded (%v), reading gives %s", sum, ok, checksumOf(t, got, PrefixTreeFile))
+				}
+			})
+		}
+	}
+}
+
+// TestPrefixTreeRangesRejectRowsOffPlan: rows a range cannot hold and a
+// Close whose rows are not the planned ones fail, the Close removing the
+// file.
+func TestPrefixTreeRangesRejectRowsOffPlan(t *testing.T) {
+	open := func(t *testing.T, count uint64, segments uint32, maxDist uint64) (*PrefixTreeRanges, *PrefixTreeRange, string) {
+		t.Helper()
+		dir := t.TempDir()
+		w, err := NewPrefixTreeRanges(dir, count, segments, maxDist, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = w.Abort() })
+		rw := w.NewRange()
+
+		return w, rw, dir
+	}
+	t.Run("root past row 0", func(t *testing.T) {
+		_, rw, _ := open(t, 4, 2, 3)
+		if err := rw.Start(1, &PrefixTreePart{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := rw.AddRoot(); err == nil {
+			t.Error("a root at row 1 was written")
+		}
+	})
+	t.Run("parent not before its row", func(t *testing.T) {
+		_, rw, _ := open(t, 4, 2, 3)
+		if err := rw.Start(2, &PrefixTreePart{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := rw.Add(2, 0); err == nil {
+			t.Error("a row that is its own parent was written")
+		}
+	})
+	t.Run("distance past the plan", func(t *testing.T) {
+		_, rw, _ := open(t, 4, 2, 1)
+		if err := rw.Start(2, &PrefixTreePart{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := rw.Add(0, 0); err == nil {
+			t.Error("a parent distance past the planned one was written")
+		}
+	})
+	t.Run("close without the planned widths", func(t *testing.T) {
+		w, rw, dir := open(t, 2, 2, 1)
+		var part PrefixTreePart
+		if err := rw.Start(0, &part); err != nil {
+			t.Fatal(err)
+		}
+		if err := errors.Join(rw.AddRoot(), rw.Add(0, 0), rw.Flush(), w.Merge(&part)); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err == nil {
+			t.Fatal("closed with one segment of the two planned")
+		}
+		assertSameFiles(t, t.TempDir(), dir)
+	})
 }
 
 // TestTierStatsRangesRejectRowsOffPlan: a range placed past the plan,
