@@ -45,6 +45,10 @@ const (
 // Source: https://aws.amazon.com/s3/storage-classes/intelligent-tiering/
 const SmallObjectThresholdBytes uint64 = 128 * 1024
 
+// deepArchive is both an S3 storage class and an Intelligent-Tiering
+// access tier.
+const deepArchive = "DEEP_ARCHIVE"
+
 // Info describes a storage tier.
 type Info struct {
 	Name       string `json:"name"`
@@ -64,7 +68,7 @@ var allTiers = []Info{
 	{ID: OneZoneIA, Name: "ONEZONE_IA", FilePrefix: "onezone_ia"},
 	{ID: GlacierIR, Name: "GLACIER_IR", FilePrefix: "glacier_ir"},
 	{ID: GlacierFR, Name: "GLACIER", FilePrefix: "glacier_fr"},
-	{ID: DeepArchive, Name: "DEEP_ARCHIVE", FilePrefix: "deep_archive"},
+	{ID: DeepArchive, Name: deepArchive, FilePrefix: "deep_archive"},
 	{ID: ReducedRedundancy, Name: "REDUCED_REDUNDANCY", FilePrefix: "reduced_redundancy"},
 	{ID: ITFrequent, Name: "INTELLIGENT_TIERING_FREQUENT", FilePrefix: "it_frequent"},
 	{ID: ITInfrequent, Name: "INTELLIGENT_TIERING_INFREQUENT", FilePrefix: "it_infrequent"},
@@ -126,39 +130,72 @@ func NewMapping() *Mapping {
 // If storageClass is INTELLIGENT_TIERING, accessTier determines the specific IT tier.
 // If accessTier is empty for IT, defaults to FREQUENT.
 func (m *Mapping) FromS3(storageClass, accessTier string) ID {
-	storageClass = strings.ToUpper(strings.TrimSpace(storageClass))
-	accessTier = strings.ToUpper(strings.TrimSpace(accessTier))
+	if id, ok := canonicalID(storageClass, accessTier); ok {
+		return id
+	}
 
-	// Handle Intelligent-Tiering with access tier
-	if storageClass == "INTELLIGENT_TIERING" {
+	return m.fromS3Normalized(storageClass, accessTier)
+}
+
+// canonicalID classifies the exact spellings S3 Inventory writes, which
+// is nearly every row, without trimming, upper-casing or a map lookup.
+// Anything else misses and goes to fromS3Normalized.
+func canonicalID(storageClass, accessTier string) (ID, bool) {
+	switch storageClass {
+	case "STANDARD":
+		return Standard, true
+	case "STANDARD_IA":
+		return StandardIA, true
+	case "ONEZONE_IA":
+		return OneZoneIA, true
+	case "GLACIER_IR":
+		return GlacierIR, true
+	case "GLACIER":
+		return GlacierFR, true
+	case deepArchive:
+		return DeepArchive, true
+	case "REDUCED_REDUNDANCY":
+		return ReducedRedundancy, true
+	case "INTELLIGENT_TIERING":
 		switch accessTier {
-		case "FREQUENT_ACCESS", "FREQUENT":
-			return ITFrequent
+		case "", "FREQUENT_ACCESS", "FREQUENT":
+			return ITFrequent, true
 		case "INFREQUENT_ACCESS", "INFREQUENT":
-			return ITInfrequent
+			return ITInfrequent, true
 		case "ARCHIVE_INSTANT_ACCESS":
-			return ITArchiveInstant
+			return ITArchiveInstant, true
 		case "ARCHIVE_ACCESS", "ARCHIVE":
-			return ITArchive
-		case "DEEP_ARCHIVE_ACCESS", "DEEP_ARCHIVE":
-			return ITDeepArchive
-		default:
-			// Default to Frequent if access tier is missing or unknown.
-			// Surface a non-empty unrecognised tier — silent
-			// misclassification would inflate Frequent counts.
-			if accessTier != "" {
-				if _, seen := m.warned.LoadOrStore("access_tier:"+accessTier, struct{}{}); !seen {
-					logging.L().Warn().
-						Str("access_tier", accessTier).
-						Msg("tiers.FromS3: unknown Intelligent-Tiering access tier, counting as FREQUENT (logged once)")
-				}
-			}
-
-			return ITFrequent
+			return ITArchive, true
+		case "DEEP_ARCHIVE_ACCESS", deepArchive:
+			return ITDeepArchive, true
 		}
 	}
 
-	// Look up standard storage class
+	return 0, false
+}
+
+// fromS3Normalized is FromS3 for any spelling: it trims and upper-cases
+// both fields and logs, once each, values it does not know.
+func (m *Mapping) fromS3Normalized(storageClass, accessTier string) ID {
+	storageClass = strings.ToUpper(strings.TrimSpace(storageClass))
+	accessTier = strings.ToUpper(strings.TrimSpace(accessTier))
+
+	if id, ok := canonicalID(storageClass, accessTier); ok {
+		return id
+	}
+
+	if storageClass == "INTELLIGENT_TIERING" {
+		// The access tier is non-empty and unknown here. Surface it —
+		// silent misclassification would inflate Frequent counts.
+		if _, seen := m.warned.LoadOrStore("access_tier:"+accessTier, struct{}{}); !seen {
+			logging.L().Warn().
+				Str("access_tier", accessTier).
+				Msg("tiers.FromS3: unknown Intelligent-Tiering access tier, counting as FREQUENT (logged once)")
+		}
+
+		return ITFrequent
+	}
+
 	if id, ok := m.indexByS3Name[storageClass]; ok {
 		return id
 	}

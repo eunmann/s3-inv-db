@@ -171,6 +171,7 @@ func (w *PrefixTreeWriter) writeTree() error {
 	if err := out.Flush(); err != nil {
 		return fail(err)
 	}
+	startWriteback(dst)
 	if err := dst.Close(); err != nil {
 		return errors.Join(fmt.Errorf("close prefix tree: %w", err), removeIfErr(w.finalPath))
 	}

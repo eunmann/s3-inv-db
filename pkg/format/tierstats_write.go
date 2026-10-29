@@ -450,6 +450,7 @@ func (s *slotFile) close() error {
 	if err := s.bw.Flush(); err != nil {
 		return errors.Join(fmt.Errorf("flush %s: %w", filepath.Base(s.path), err), s.abort())
 	}
+	startWriteback(s.f)
 	if err := s.f.Close(); err != nil {
 		return errors.Join(fmt.Errorf("close %s: %w", filepath.Base(s.path), err), removeIfErr(s.path))
 	}
@@ -600,6 +601,7 @@ func (w *narrowArrayWriter) close() error {
 	if _, err := w.f.WriteAt(head, 0); err != nil {
 		return errors.Join(fmt.Errorf("write header: %w", err), w.abort())
 	}
+	startWriteback(w.f)
 	if err := w.f.Close(); err != nil {
 		return errors.Join(fmt.Errorf("close %s: %w", filepath.Base(w.path), err), removeIfErr(w.path))
 	}
