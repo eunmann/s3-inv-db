@@ -26,6 +26,18 @@ func (r *tierTestRow) totals() (uint64, uint64) {
 	return c, b
 }
 
+// mask has a bit set for each tier with data.
+func (r *tierTestRow) mask() uint16 {
+	var m uint16
+	for id := range tiers.NumTiers {
+		if r.counts[id]|r.bytes[id] != 0 {
+			m |= 1 << id
+		}
+	}
+
+	return m
+}
+
 // buildTierIndex writes core stats and tier stats for rows (each its
 // own subtree) and a tier manifest, with the given layout, and opens
 // both readers.
@@ -43,7 +55,7 @@ func buildTierIndex(t *testing.T, present []tiers.ID, rows []tierTestRow, force 
 	tw.force = force
 	for i := range rows {
 		c, b := rows[i].totals()
-		mask, err := tw.Add(&rows[i].counts, &rows[i].bytes, c, b)
+		mask, err := tw.Add(rows[i].mask(), &rows[i].counts, &rows[i].bytes, c, b)
 		if err != nil {
 			t.Fatalf("Add row %d: %v", i, err)
 		}
@@ -250,7 +262,7 @@ func TestTierStatsSizeModelMatchesFiles(t *testing.T) {
 		w.force = force
 		for i := range rows {
 			c, b := rows[i].totals()
-			if _, err := w.Add(&rows[i].counts, &rows[i].bytes, c, b); err != nil {
+			if _, err := w.Add(rows[i].mask(), &rows[i].counts, &rows[i].bytes, c, b); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -289,22 +301,58 @@ func TestTierStatsWriterRejectsInconsistentRows(t *testing.T) {
 	var row tierTestRow
 	row.counts[tiers.Standard], row.bytes[tiers.Standard] = 1, 10
 
-	if _, err := w.Add(&row.counts, &row.bytes, 2, 10); !errors.Is(err, errTierSumMismatch) {
+	if _, err := w.Add(row.mask(), &row.counts, &row.bytes, 2, 10); !errors.Is(err, errTierSumMismatch) {
 		t.Errorf("count mismatch: err = %v, want errTierSumMismatch", err)
 	}
-	if _, err := w.Add(&row.counts, &row.bytes, 1, 11); !errors.Is(err, errTierSumMismatch) {
+	if _, err := w.Add(row.mask(), &row.counts, &row.bytes, 1, 11); !errors.Is(err, errTierSumMismatch) {
 		t.Errorf("bytes mismatch: err = %v, want errTierSumMismatch", err)
 	}
 	row.bytes[tiers.GlacierIR] = 1 << 63
 	row.bytes[tiers.Standard] = 1 << 63
 	row.counts[tiers.GlacierIR] = 1
-	if _, err := w.Add(&row.counts, &row.bytes, 2, 0); !errors.Is(err, errTierSumMismatch) {
+	if _, err := w.Add(row.mask(), &row.counts, &row.bytes, 2, 0); !errors.Is(err, errTierSumMismatch) {
 		t.Errorf("overflowing sum: err = %v, want errTierSumMismatch", err)
 	}
 	var stray tierTestRow
 	stray.counts[tiers.DeepArchive] = 1
-	if _, err := w.Add(&stray.counts, &stray.bytes, 1, 0); !errors.Is(err, errUndeclaredTierData) {
+	if _, err := w.Add(stray.mask(), &stray.counts, &stray.bytes, 1, 0); !errors.Is(err, errUndeclaredTierData) {
 		t.Errorf("undeclared tier: err = %v, want errUndeclaredTierData", err)
+	}
+	if _, err := w.Add(1<<tiers.NumTiers, &stray.counts, &stray.bytes, 0, 0); !errors.Is(err, errUndeclaredTierData) {
+		t.Errorf("mask past the last tier: err = %v, want errUndeclaredTierData", err)
+	}
+}
+
+// TestTierStatsWriterReadsOnlyTheMask: tiers outside the mask are not
+// read, and a tier with data left out of it fails the totals check
+// instead of being dropped.
+func TestTierStatsWriterReadsOnlyTheMask(t *testing.T) {
+	present := []tiers.ID{tiers.Standard, tiers.GlacierIR}
+	w, err := NewTierStatsWriter(t.TempDir(), present)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Abort()
+	var row tierTestRow
+	row.counts[tiers.Standard], row.bytes[tiers.Standard] = 1, 10
+	row.counts[tiers.GlacierIR], row.bytes[tiers.GlacierIR] = 2, 20
+	row.counts[tiers.DeepArchive] = 99 // undeclared, but outside the mask
+	mask := uint16(1<<tiers.Standard | 1<<tiers.GlacierIR)
+	slots, err := w.Add(mask, &row.counts, &row.bytes, 3, 30)
+	if err != nil {
+		t.Fatalf("tiers outside the mask were read: %v", err)
+	}
+	if slots != 0b11 {
+		t.Errorf("slot mask %b, want 11", slots)
+	}
+	for _, missing := range []tiers.ID{tiers.Standard, tiers.GlacierIR} {
+		if _, err := w.Add(mask&^(1<<missing), &row.counts, &row.bytes, 3, 30); !errors.Is(err, errTierSumMismatch) {
+			t.Errorf("tier %d left out of the mask: err = %v, want errTierSumMismatch", missing, err)
+		}
+	}
+	row.counts[tiers.GlacierIR] = 0 // only bytes: still caught
+	if _, err := w.Add(1<<tiers.Standard, &row.counts, &row.bytes, 1, 30); !errors.Is(err, errTierSumMismatch) {
+		t.Errorf("bytes-only tier left out of the mask: err = %v, want errTierSumMismatch", err)
 	}
 }
 
@@ -342,7 +390,7 @@ func TestTierStatsCloseFailureLeavesNothing(t *testing.T) {
 	}
 	var row tierTestRow
 	row.counts[tiers.Standard], row.bytes[tiers.Standard] = 1, 1
-	if _, err := w.Add(&row.counts, &row.bytes, 1, 1); err != nil {
+	if _, err := w.Add(row.mask(), &row.counts, &row.bytes, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.scratch.Close(); err != nil { // the final flush now fails

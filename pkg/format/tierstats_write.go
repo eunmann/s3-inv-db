@@ -245,14 +245,20 @@ func NewTierStatsWriter(outDir string, present []tiers.ID) (*TierStatsWriter, er
 const writeBufSize = 1 << 20
 
 // Add records the next prefix's tier stats, indexed by tier ID, and
-// returns its tier mask. It fails when a tier outside the declared set
-// has data (the counts would be lost) or when the tiers don't sum to
-// the prefix's totals (a derived tier would be wrong).
-func (w *TierStatsWriter) Add(counts, bytes *[tiers.NumTiers]uint64, totalCount, totalBytes uint64) (uint16, error) {
+// returns its slot mask. Only the tiers in tierMask (bit i for tier i)
+// are read. It fails when a tier outside the declared set has data (the
+// counts would be lost) or when the tiers don't sum to the prefix's
+// totals (a derived tier would be wrong, or a tier with data was left
+// out of tierMask).
+func (w *TierStatsWriter) Add(tierMask uint16, counts, bytes *[tiers.NumTiers]uint64, totalCount, totalBytes uint64) (uint16, error) {
+	if tierMask>>tiers.NumTiers != 0 {
+		return 0, fmt.Errorf("%w: tier mask %#x", errUndeclaredTierData, tierMask)
+	}
 	var mask uint16
 	var slotCount, slotBytes [maxTierSlots]uint64
 	var sumCount, sumBytes, carryCount, carryBytes uint64
-	for id := range tiers.NumTiers {
+	for set := tierMask; set != 0; set &= set - 1 {
+		id := bits.TrailingZeros16(set)
 		c, b := counts[id], bytes[id]
 		if c == 0 && b == 0 {
 			continue

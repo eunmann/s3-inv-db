@@ -652,7 +652,7 @@ func readDepth(r *spoolReader, h *levelHandoff) (bool, error) {
 // writeStatsRow writes one spooled row's stats, the next in level
 // order: its tier stats, core row and depth-index entry.
 func (b *IndexBuilder) writeStatsRow(depthW *format.DepthIndexWriter, starts []uint64, depth int, r *spoolRecord) error {
-	mask, err := b.tierStatsW.Add(&r.tierCounts, &r.tierBytes, r.count, r.bytes)
+	mask, err := b.tierStatsW.Add(r.tierMask, &r.tierCounts, &r.tierBytes, r.count, r.bytes)
 	if err != nil {
 		return fmt.Errorf("prefix segment %q at depth %d: write tier stats: %w", r.name, depth, err)
 	}
