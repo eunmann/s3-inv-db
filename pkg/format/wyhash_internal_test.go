@@ -1,6 +1,10 @@
 package format
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 // wyhashVectors come from the reference wyhash.h (final v4.3, default
 // secret) compiled with gcc: wyhash(key, len, seed, _wyp) where key[i]
@@ -331,5 +335,45 @@ func TestWyhashDoesNotAllocate(t *testing.T) {
 	key := "data/2024/01/some-longer-segment-name/"
 	if allocs := testing.AllocsPerRun(100, func() { _ = wyhash(key, 1) }); allocs != 0 {
 		t.Errorf("wyhash allocates %v times", allocs)
+	}
+}
+
+// TestWyhash2MatchesTwoCalls: the one-pass pair equals wyhash with each
+// seed, at every length through the stripe loop's boundaries.
+func TestWyhash2MatchesTwoCalls(t *testing.T) {
+	buf := make([]byte, 4*wyStripe+17)
+	for i := range buf {
+		buf[i] = byte(i*131 + 7)
+	}
+	seeds := [][2]uint64{{0, fingerprintSeed}, {1, 2}, {^uint64(0), 0x9e3779b97f4a7c15}}
+	for n := range len(buf) + 1 {
+		for _, s := range seeds {
+			key := string(buf[:n])
+			a, b := wyhash2(key, s[0], s[1])
+			if wantA, wantB := wyhash(key, s[0]), wyhash(key, s[1]); a != wantA || b != wantB {
+				t.Fatalf("wyhash2(len %d, %#x, %#x) = %#x, %#x, want %#x, %#x", n, s[0], s[1], a, b, wantA, wantB)
+			}
+		}
+	}
+}
+
+func BenchmarkKeyHashes(b *testing.B) {
+	for _, n := range []int{12, 32, 64, 120} {
+		key := strings.Repeat("abcdefgh/", n/9+1)[:n]
+		b.Run(fmt.Sprintf("len=%d/two", n), func(b *testing.B) {
+			var sink uint64
+			for range b.N {
+				sink += wyhash(key, 0) ^ wyhash(key, fingerprintSeed)
+			}
+			_ = sink
+		})
+		b.Run(fmt.Sprintf("len=%d/one", n), func(b *testing.B) {
+			var sink uint64
+			for range b.N {
+				x, y := wyhash2(key, 0, fingerprintSeed)
+				sink += x ^ y
+			}
+			_ = sink
+		})
 	}
 }

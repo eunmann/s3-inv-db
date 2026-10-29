@@ -242,10 +242,8 @@ func (w *CompressedRunWriter) closeCompressor() error {
 type CompressedRunReader struct {
 	file         *os.File
 	decompressor *zstd.Decoder
-	reader       *bufio.Reader
+	records      runRecordDecoder
 	path         string
-	buf          []byte
-	prev         string // the last prefix read
 	count        uint64
 	read         uint64
 	closed       bool
@@ -316,22 +314,25 @@ func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, e
 	return &CompressedRunReader{
 		file:         f,
 		decompressor: dec,
-		reader:       bufio.NewReaderSize(dec, bufferSize),
+		records:      runRecordDecoder{in: bufio.NewReaderSize(dec, bufferSize)},
 		count:        count,
 		path:         path,
-		buf:          make([]byte, 1024),
 	}, nil
 }
 
-// ReadInto reads the next row into the caller-owned PrefixRow.
+// ReadInto reads the next row into the caller-owned PrefixRow. A
+// stream that ends before the header's count is corrupt.
 func (r *CompressedRunReader) ReadInto(into *PrefixRow) error {
 	if r.read >= r.count {
 		return io.EOF
 	}
-	if err := decodeRunRecord(r.reader, r.prev, &r.buf, into); err != nil {
+	if err := r.records.next(into); err != nil {
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("%w: run ends after %d of %d records", errRunRecordCorrupt, r.read, r.count)
+		}
+
 		return err
 	}
-	r.prev = into.Prefix
 	r.read++
 
 	return nil

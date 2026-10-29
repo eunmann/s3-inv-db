@@ -1,6 +1,7 @@
 package extsort
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -11,7 +12,7 @@ import (
 )
 
 // serializeRunBody returns a binary blob shaped like the body of a run
-// file: n records in sorted order, as decodeRunRecord reads them.
+// file: n records in sorted order, as runRecordDecoder reads them.
 func serializeRunBody(n int) []byte {
 	rows := make([]PrefixRow, n)
 	for i := range rows {
@@ -42,19 +43,16 @@ func BenchmarkReadPrefixRowReused(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		r := bytes.NewReader(body)
-		var buf []byte
+		d := runRecordDecoder{in: bufio.NewReaderSize(bytes.NewReader(body), mergeReaderBufferSize)}
 		row := &PrefixRow{}
-		prev := ""
 		for {
-			err := decodeRunRecord(r, prev, &buf, row)
+			err := d.next(row)
 			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {
 				b.Fatal(err)
 			}
-			prev = row.Prefix
 		}
 	}
 }
