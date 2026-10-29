@@ -15,6 +15,10 @@ ACTIONLINT := go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 COVER_MIN := 67.0
 
 COMPOSE := docker compose -f infra/docker-compose.yml
+# The test stack gets a project name per checkout, so `make test` in two
+# worktrees at once doesn't tear down the other's containers.
+TEST_PROJECT ?= s3inv-test-$(shell printf %s "$(CURDIR)" | cksum | cut -d' ' -f1)
+TEST_COMPOSE := docker compose -p $(TEST_PROJECT) -f infra/docker-compose.yml
 
 # Version metadata stamped into every binary (see internal/buildinfo).
 # The release workflow overrides all three. DATE is the commit time, not
@@ -89,15 +93,15 @@ test-unit: ## Host unit tests (no Docker, no network)
 	go test ./...
 
 test: compose-preflight ## Full suite incl. S3 integration tests, in Docker
-	@$(COMPOSE) --profile test run --rm test-runner go test -tags integration ./...; \
+	@$(TEST_COMPOSE) --profile test run --rm test-runner go test -tags integration ./...; \
 	rc=$$?; \
-	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
+	$(TEST_COMPOSE) --profile test down -v >/dev/null 2>&1; \
 	exit $$rc
 
 test-race: compose-preflight ## Full suite with -race, in Docker
-	@$(COMPOSE) --profile test run --rm test-runner go test -tags integration -race ./...; \
+	@$(TEST_COMPOSE) --profile test run --rm test-runner go test -tags integration -race ./...; \
 	rc=$$?; \
-	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
+	$(TEST_COMPOSE) --profile test down -v >/dev/null 2>&1; \
 	exit $$rc
 
 # Coverage profile. Writes one .out file the other coverage targets
@@ -108,10 +112,10 @@ COVER_OUT := coverage.out
 cover: $(COVER_OUT) ## Full-suite coverage profile (Docker)
 
 $(COVER_OUT): compose-preflight
-	@$(COMPOSE) --profile test run --rm test-runner \
+	@$(TEST_COMPOSE) --profile test run --rm test-runner \
 	    go test -tags integration -covermode=atomic -coverpkg=./... -coverprofile=$(COVER_OUT) ./...; \
 	rc=$$?; \
-	$(COMPOSE) --profile test down -v >/dev/null 2>&1; \
+	$(TEST_COMPOSE) --profile test down -v >/dev/null 2>&1; \
 	exit $$rc
 
 cover-summary: $(COVER_OUT) ## Coverage total + 20 least-covered functions
