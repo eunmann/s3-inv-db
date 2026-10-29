@@ -60,25 +60,46 @@ func runBuild(args []string) error {
 		return ErrManifestRequired
 	}
 
+	b := buildSettings{
+		s3Manifest:     *s3Manifest,
+		eventLogPath:   finalEventLog,
+		baseLogger:     baseLogger,
+		maxDepth:       *maxDepth,
+		allowMalformed: *allowMalformed,
+	}
 	if strings.HasPrefix(*outDir, "s3://") {
-		return runBuildPublish(*outDir, *workDir, *s3Manifest, *maxDepth, *allowMalformed, finalEventLog, baseLogger)
+		return runBuildPublish(*outDir, *workDir, b)
 	}
 
-	return runBuildExtSort(*outDir, *s3Manifest, *maxDepth, *allowMalformed, finalEventLog, baseLogger)
+	return runBuildExtSort(*outDir, b)
+}
+
+// buildSettings are a build's inputs other than where its index goes.
+type buildSettings struct {
+	s3Manifest     string
+	eventLogPath   string
+	baseLogger     zerolog.Logger
+	maxDepth       int
+	allowMalformed bool
+	// transient: the index is uploaded and then removed, so the build
+	// skips making it durable on local disk (extsort.Config.TransientOutput).
+	transient bool
 }
 
 // runBuildPublish builds the index in a hidden directory under workDir,
 // then publishes it to dest under <source-bucket>/<inventory-id>/<run>/
 // (the run's path in the inventory manifest's key), manifest.json last,
-// and removes the local copy.
-func runBuildPublish(dest, workDir, s3Manifest string, maxDepth int, allowMalformed bool, eventLogPath string, baseLogger zerolog.Logger) error {
+// and removes the local copy. The S3 copy is the durable one: the local
+// one is never synced, and a crash leaves only the hidden work directory,
+// which nothing reads as an index.
+func runBuildPublish(dest, workDir string, b buildSettings) error {
 	destURI, err := s3fetch.ParseS3URI(dest)
 	if err != nil {
 		return fmt.Errorf("--out %q: %w", dest, err)
 	}
-	manifestURI, err := s3fetch.ParseS3URI(s3Manifest)
+	manifestURI, err := s3fetch.ParseS3URI(b.s3Manifest)
 	if err != nil {
-		return fmt.Errorf("--s3-manifest %q: %w", s3Manifest, err)
+		return fmt.Errorf("--s3-manifest %q: %w", b.s3Manifest, err)
 	}
 	run, err := indexstore.RunFromManifestKey(manifestURI.Key)
 	if err != nil {
@@ -90,7 +111,8 @@ func runBuildPublish(dest, workDir, s3Manifest string, maxDepth int, allowMalfor
 	}
 	defer os.RemoveAll(local)
 	indexDir := filepath.Join(local, "index")
-	if err := runBuildExtSort(indexDir, s3Manifest, maxDepth, allowMalformed, eventLogPath, baseLogger); err != nil {
+	b.transient = true
+	if err := runBuildExtSort(indexDir, b); err != nil {
 		return err
 	}
 
@@ -104,16 +126,16 @@ func runBuildPublish(dest, workDir, s3Manifest string, maxDepth int, allowMalfor
 	if err := indexstore.New(client.Raw(), destURI.Bucket).Publish(ctx, indexDir, prefix); err != nil {
 		return fmt.Errorf("publish: %w", err)
 	}
-	baseLogger.Info().Str("index", "s3://"+destURI.Bucket+"/"+prefix).Msg("index published")
+	b.baseLogger.Info().Str("index", "s3://"+destURI.Bucket+"/"+prefix).Msg("index published")
 
 	return nil
 }
 
-func runBuildExtSort(outDir, s3Manifest string, maxDepth int, allowMalformed bool, eventLogPath string, baseLogger zerolog.Logger) error {
+func runBuildExtSort(outDir string, b buildSettings) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	ctx = baseLogger.WithContext(ctx)
+	ctx = b.baseLogger.WithContext(ctx)
 	logger := zerolog.Ctx(ctx)
 
 	client, err := s3fetch.NewClient(ctx)
@@ -121,14 +143,15 @@ func runBuildExtSort(outDir, s3Manifest string, maxDepth int, allowMalformed boo
 		return fmt.Errorf("create S3 client: %w", err)
 	}
 
-	tracker := newBuildTracker(outDir, s3Manifest, eventLogPath, logger)
+	tracker := newBuildTracker(outDir, b.s3Manifest, b.eventLogPath, logger)
 	defer tracker.close()
 
 	config := extsort.DefaultConfig()
-	if maxDepth > 0 {
-		config.MaxDepth = maxDepth
+	if b.maxDepth > 0 {
+		config.MaxDepth = b.maxDepth
 	}
-	config.AllowAnomalies = allowMalformed
+	config.AllowAnomalies = b.allowMalformed
+	config.TransientOutput = b.transient
 	config.Observe = tracker.wire()
 
 	logger.Info().
@@ -139,7 +162,7 @@ func runBuildExtSort(outDir, s3Manifest string, maxDepth int, allowMalformed boo
 
 	tracker.start()
 
-	result, err := pipeline.Run(ctx, s3Manifest, outDir)
+	result, err := pipeline.Run(ctx, b.s3Manifest, outDir)
 	if err != nil {
 		tracker.finish(nil, err)
 
