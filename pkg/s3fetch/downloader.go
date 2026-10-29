@@ -43,9 +43,15 @@ func downloaderConfigFor(procs int) DownloaderConfig {
 	}
 }
 
-// Downloader wraps the AWS S3 Transfer Manager for high-throughput downloads.
+// Downloader wraps the AWS S3 Transfer Manager for high-throughput
+// downloads, and streams objects (OpenStream). Streams take a slot of
+// the same GET cap only for parts they read ahead; each stream's first
+// part and the part its reader needs next run outside the cap (see
+// ObjectStream).
 type Downloader struct {
 	manager *transfermanager.Client
+	gets    *boundedGets
+	streams streamConfig
 	config  DownloaderConfig
 }
 
@@ -61,13 +67,16 @@ func NewDownloader(s3Client *s3.Client, cfg DownloaderConfig) *Downloader {
 		cfg.MaxInFlightGETs = DefaultDownloaderConfig().MaxInFlightGETs
 	}
 
-	mgr := transfermanager.New(newBoundedGets(s3Client, cfg.MaxInFlightGETs), func(o *transfermanager.Options) {
+	gets := newBoundedGets(s3Client, cfg.MaxInFlightGETs)
+	mgr := transfermanager.New(gets, func(o *transfermanager.Options) {
 		o.Concurrency = cfg.Concurrency
 		o.PartSizeBytes = cfg.PartSize
 	})
 
 	return &Downloader{
 		manager: mgr,
+		gets:    gets,
+		streams: newStreamConfig(defaultStreamSizes()),
 		config:  cfg,
 	}
 }

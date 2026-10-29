@@ -41,6 +41,20 @@ func (b *boundedGets) GetObject(ctx context.Context, in *s3.GetObjectInput, optF
 	return out, nil
 }
 
+// tryAcquire takes a slot if one is free now, for a GET that is worth
+// making only without waiting: a stream's read-ahead.
+func (b *boundedGets) tryAcquire() bool {
+	select {
+	case b.slots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// release frees a slot tryAcquire took.
+func (b *boundedGets) release() { <-b.slots }
+
 // slotBody releases its GET slot on the first Close.
 type slotBody struct {
 	io.ReadCloser

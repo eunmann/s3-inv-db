@@ -20,12 +20,16 @@ flowchart LR
 ## Building
 
 1. **Download and parse.** Parse workers (`min(GOMAXPROCS, data files)`,
-   at least 2) each have a fetcher downloading their next file while
-   they parse the current one. CSV keys, URL-encoded by S3, are
-   decoded. Each object's storage class, and for Intelligent-Tiering its
-   access tier, picks its [tier](index-format.md#tier-statistics), in
-   any letter case; an empty storage class is `STANDARD`. A value AWS
-   does not document fails the build, naming it, the file and the key.
+   at least 2) each have a fetcher opening their next file while they
+   parse the current one. A CSV file streams from S3 into the parser
+   through at most 12.25 MiB of read-ahead (3 MiB for the next file,
+   before its worker reaches it), and the build fails if it ends short
+   of its size; a Parquet file, which its reader seeks in, downloads to
+   scratch first. CSV keys, URL-encoded by S3, are decoded. Each
+   object's storage class, and for Intelligent-Tiering its access tier,
+   picks its [tier](index-format.md#tier-statistics), in any letter
+   case; an empty storage class is `STANDARD`. A value AWS does not
+   document fails the build, naming it, the file and the key.
 2. **Aggregate.** Each object is added to every ancestor prefix: for
    `data/2024/01/f.csv`, to `""`, `data/`, `data/2024/` and
    `data/2024/01/`. `--max-depth` limits how deep this goes.
@@ -50,7 +54,8 @@ flowchart LR
 
 Scratch lives in a hidden `.<out>.scratch-*` directory beside the
 output, never in `/tmp` (which may be RAM). It holds at most two
-downloaded files per worker, the run files (deleted as merged, the
+downloaded Parquet files per worker (CSV files never touch it), the
+run files (deleted as merged, the
 last ones before the index finalizes), the
 level spool (~35 B per prefix) and the hash builder's arrays (~32 B per
 prefix at their peak). The hash builder reads and writes those arrays

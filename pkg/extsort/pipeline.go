@@ -313,13 +313,26 @@ type chunkJob struct {
 	index  int
 }
 
-// fetchedChunk is a chunk downloaded ahead of its parse, or the error
-// that stopped the download.
+// fetchedChunk is a chunk fetched ahead of its parse, or the error
+// that stopped the fetch: a Parquet chunk downloaded to scratch, or a
+// CSV chunk's stream, opened and reading ahead.
 type fetchedChunk struct {
 	err    error
-	body   *s3fetch.DownloadedObject
-	result *s3fetch.DownloadResult
+	file   *s3fetch.DownloadedObject
+	stream *s3fetch.ObjectStream
 	job    chunkJob
+	size   int64
+	fetch  time.Duration // to download a file, or to open a stream
+}
+
+// close removes a downloaded file or ends a stream's GETs.
+func (f fetchedChunk) close() {
+	if f.file != nil {
+		_ = f.file.Close()
+	}
+	if f.stream != nil {
+		_ = f.stream.Close()
+	}
 }
 
 // objectRecord holds a single object's data for aggregation.
@@ -494,16 +507,16 @@ func (c *ingestConfig) formatString() string {
 //     chunksProcessed, bytesProcessed, flushCount)
 //   - First worker error cancels the rest; the loop returns only after
 //     every worker and fetcher has, so no download is still writing to
-//     scratch when Run removes it
+//     scratch when Run removes it, and no stream's GET is left running
 func (p *Pipeline) runIngestLoop(ctx context.Context, cfg *ingestConfig) error {
 	log := zerolog.Ctx(ctx)
 	totalChunks := len(cfg.manifest.Files)
 
 	jobs := make(chan chunkJob, cfg.numWorkers)
-	// Unbuffered: a fetcher holding a downloaded chunk waits for a free
-	// worker before it downloads another, so at most two chunk files per
-	// worker sit in scratch, one parsing and one downloaded or
-	// downloading.
+	// Unbuffered: a fetcher holding a fetched chunk waits for a free
+	// worker before it fetches another, so at most two chunks per worker
+	// are fetched at once, one parsing and one fetched or fetching: two
+	// Parquet files in scratch, or two CSV streams' read-ahead.
 	ready := make(chan fetchedChunk)
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -622,6 +635,10 @@ func manifestBytes(files []s3fetch.ManifestFile) int64 {
 	return total
 }
 
+// errChunkUnread is a CSV reader that reported its last row before it
+// read its chunk's last byte: the rest's rows would be lost.
+var errChunkUnread = errors.New("CSV reader stopped before the chunk's end")
+
 // countingReadCloser adds the bytes read through it to a shared
 // progress counter. It sits under the CSV reader's 1 MiB input buffer,
 // so the atomic add runs once per buffer fill, not per row.
@@ -663,9 +680,10 @@ func (p *Pipeline) sendIngestJobs(ctx context.Context, cfg *ingestConfig, jobs c
 	}
 }
 
-// runChunkFetcher downloads chunks ahead of the workers, so a worker's
-// next chunk downloads while it parses the current one. A downloaded
-// chunk that no worker takes before cancellation is removed.
+// runChunkFetcher fetches chunks ahead of the workers, so a worker's
+// next chunk downloads, or starts streaming, while it parses the current
+// one. A fetched chunk that no worker takes before cancellation is
+// removed or closed.
 func (p *Pipeline) runChunkFetcher(ctx context.Context, jobs <-chan chunkJob, ready chan<- fetchedChunk) {
 	for job := range jobs {
 		if ctx.Err() != nil {
@@ -675,30 +693,42 @@ func (p *Pipeline) runChunkFetcher(ctx context.Context, jobs <-chan chunkJob, re
 		select {
 		case ready <- fetched:
 		case <-ctx.Done():
-			if fetched.body != nil {
-				_ = fetched.body.Close()
-			}
+			fetched.close()
 
 			return
 		}
 	}
 }
 
-// fetchChunk downloads one chunk to scratch and checks its size against
+// fetchChunk downloads a Parquet chunk to scratch, since its reader
+// needs random access, or opens a CSV chunk's stream, which the parser
+// reads as it downloads; either way it checks the chunk's size against
 // the manifest.
 func (p *Pipeline) fetchChunk(ctx context.Context, job chunkJob) fetchedChunk {
-	body, result, err := p.s3Client.DownloadObjectTo(ctx, job.bucket, job.key, p.tempDir)
-	if err != nil {
-		return fetchedChunk{job: job, err: fmt.Errorf("download object: %w", err)}
+	start := time.Now()
+	fetched := fetchedChunk{job: job}
+	if job.config.format == s3fetch.InventoryFormatParquet {
+		file, result, err := p.s3Client.DownloadObjectTo(ctx, job.bucket, job.key, p.tempDir)
+		if err != nil {
+			return fetchedChunk{job: job, err: fmt.Errorf("download object: %w", err)}
+		}
+		fetched.file, fetched.size = file, result.BytesDownloaded
+	} else {
+		stream, err := p.s3Client.OpenStream(ctx, job.bucket, job.key)
+		if err != nil {
+			return fetchedChunk{job: job, err: fmt.Errorf("open object stream: %w", err)}
+		}
+		fetched.stream, fetched.size = stream, stream.Size()
 	}
-	if job.config.fileSize > 0 && result.BytesDownloaded != job.config.fileSize {
-		_ = body.Close()
+	fetched.fetch = time.Since(start)
+	if job.config.fileSize > 0 && fetched.size != job.config.fileSize {
+		fetched.close()
 
 		return fetchedChunk{job: job, err: fmt.Errorf("%w: %s is %d bytes, the manifest says %d",
-			ErrChunkSizeMismatch, job.key, result.BytesDownloaded, job.config.fileSize)}
+			ErrChunkSizeMismatch, job.key, fetched.size, job.config.fileSize)}
 	}
 
-	return fetchedChunk{job: job, body: body, result: result}
+	return fetched
 }
 
 // logIngestProgress logs progress information.
@@ -795,34 +825,35 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int,
 	}
 }
 
-// streamChunkIntoAggregator pumps a downloaded chunk's rows directly
+// streamChunkIntoAggregator pumps a fetched chunk's rows directly
 // from the parquet/CSV reader into the worker's aggregator. No
 // intermediate slice — the per-chunk objectRecord buffer that the old
 // processChunkToBatch path materialised is eliminated, saving
 // chunk-size × N-workers of transient heap.
 func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, fetched fetchedChunk, agg *Aggregator, workerID, numWorkers int) error {
 	log := zerolog.Ctx(ctx)
-	job, body, dlResult := fetched.job, fetched.body, fetched.result
+	job := fetched.job
 
 	// The Parquet reader reads the file through ReaderAt and never closes
 	// it; closing here removes every chunk from scratch once parsed. The
-	// CSV reader closes it first, and a second Close is a no-op.
-	defer func() { _ = body.Close() }()
+	// CSV reader closes its stream first, and a second Close is a no-op.
+	defer fetched.close()
 
 	parseStart := time.Now()
 	var err error
 	var reader s3inventory.Reader
 	// A CSV chunk is read front to back, so the bytes read are its parse
 	// progress; Parquet reads at offsets and counts when the chunk ends.
-	counted := &countingReadCloser{ReadCloser: body, total: &p.ingestBytesDone}
+	counted := &countingReadCloser{total: &p.ingestBytesDone}
 	defer func() {
 		if rest := job.config.fileSize - counted.n; rest > 0 {
 			p.ingestBytesDone.Add(rest)
 		}
 	}()
-	if job.config.format == s3fetch.InventoryFormatParquet {
-		reader, err = openParquetReader(body, job.config.fileSize, p.tempDir)
+	if fetched.file != nil {
+		reader, err = openParquetReader(fetched.file, job.config.fileSize, p.tempDir)
 	} else {
+		counted.ReadCloser = fetched.stream
 		reader, err = s3inventory.NewCSVReaderFromStream(counted, job.config.csvColumns)
 	}
 	if err != nil {
@@ -876,6 +907,12 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, fetched fetche
 		}
 	}
 
+	// The stream ends only at the chunk's size; a parser that stopped
+	// short of its end would drop the rest's rows.
+	if fetched.stream != nil && counted.n != fetched.size {
+		return fmt.Errorf("%w: %s at byte %d of %d", errChunkUnread, job.key, counted.n, fetched.size)
+	}
+
 	if a := reader.Anomalies(); a.Total() > 0 {
 		if !p.config.AllowAnomalies {
 			return fmt.Errorf("%w in %s: %s", ErrInventoryAnomalies, job.key, a)
@@ -902,8 +939,8 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, fetched fetche
 	log.Debug().
 		Str("chunk_key", job.key).
 		Int64("objects_count", rowsParsed).
-		Str("bytes_downloaded", humanfmt.Bytes(dlResult.BytesDownloaded)).
-		Dur("download_ms", dlResult.Duration).
+		Str("bytes_downloaded", humanfmt.Bytes(fetched.size)).
+		Dur("fetch_ms", fetched.fetch).
 		Dur("parse_ms", time.Since(parseStart)).
 		Msg("chunk streamed into aggregator")
 
