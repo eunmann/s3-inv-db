@@ -17,6 +17,7 @@ import (
 	"testing"
 	"testing/iotest"
 
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -432,4 +433,42 @@ func TestRunRecordsTruncated(t *testing.T) {
 			}
 		}
 	}
+}
+
+// FuzzAppendNodeStats: a node's stats, in one tier or in a tier block
+// whose sums are its totals, encode byte for byte as the row holding the
+// same counts does.
+func FuzzAppendNodeStats(f *testing.F) {
+	f.Add(uint16(0), uint8(0), uint64(1), uint64(0), []byte(nil))
+	f.Add(uint16(3), uint8(MaxTiers-1), uint64(math.MaxUint64), uint64(math.MaxUint64), []byte(nil))
+	f.Add(uint16(1), uint8(2), uint64(0), uint64(0), []byte(nil))
+	f.Add(uint16(2), uint8(0), uint64(9), uint64(4), []byte{0, 1, 5, 1, 0, 0, 7, 3, 200, 15, 255, 255})
+	f.Add(uint16(70), uint8(0), uint64(math.MaxUint64), uint64(63), []byte{3, 0, 0, 3, 1, 0, 3, 255, 255})
+	f.Fuzz(func(t *testing.T, depth uint16, tier uint8, count, size uint64, spread []byte) {
+		row := PrefixRow{Depth: depth}
+		var block *tierBlock
+		if len(spread) == 0 {
+			tier %= uint8(MaxTiers)
+			row.Count, row.TotalBytes = count, size
+			row.TierCounts[tier], row.TierBytes[tier] = count, size
+		} else {
+			// Each triple sets a tier's count and bytes.
+			block = &tierBlock{}
+			for i := 0; i+2 < len(spread); i += 3 {
+				tr := int(spread[i]) % MaxTiers
+				block.counts[tr] = uint64(spread[i+1]) * count
+				block.bytes[tr] = uint64(spread[i+2]) << (size % 57)
+			}
+			for tr := range MaxTiers {
+				row.TierCounts[tr], row.TierBytes[tr] = block.counts[tr], block.bytes[tr]
+				row.Count += block.counts[tr]
+				row.TotalBytes += block.bytes[tr]
+			}
+		}
+		want := appendRunRecordStats(nil, &row)
+		got := appendNodeStats(nil, depth, row.Count, row.TotalBytes, tiers.ID(tier), block)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("node stats %x, row stats %x for %+v", got, want, row)
+		}
+	})
 }

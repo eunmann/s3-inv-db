@@ -142,6 +142,42 @@ func appendRunRecordStats(dst []byte, row *PrefixRow) []byte {
 	return dst
 }
 
+// tierBlock is an aggregator node's count and bytes by tier, kept only
+// for a node with objects in more than one tier.
+type tierBlock struct {
+	counts, bytes [MaxTiers]uint64
+}
+
+// appendNodeStats appends what appendRunRecordStats appends for a row at
+// depth whose totals are count and bytes and are its tiers' sums: all in
+// tier when block is nil, otherwise spread as block holds them.
+func appendNodeStats(dst []byte, depth uint16, count, bytes uint64, tier tiers.ID, block *tierBlock) []byte {
+	dst = binary.AppendUvarint(dst, uint64(depth))
+	if block == nil {
+		if count|bytes == 0 {
+			return binary.AppendUvarint(dst, 0)
+		}
+		dst = binary.AppendUvarint(dst, uint64(1)<<tier)
+		dst = binary.AppendUvarint(dst, count)
+
+		return binary.AppendUvarint(dst, bytes)
+	}
+	var mask uint64
+	for t := range MaxTiers {
+		if block.counts[t]|block.bytes[t] != 0 {
+			mask |= 1 << t
+		}
+	}
+	dst = binary.AppendUvarint(dst, mask)
+	for m := mask; m != 0; m &= m - 1 {
+		t := bits.TrailingZeros64(m)
+		dst = binary.AppendUvarint(dst, block.counts[t])
+		dst = binary.AppendUvarint(dst, block.bytes[t])
+	}
+
+	return dst
+}
+
 // sharedPrefixLen returns the length of a and b's common prefix. A run's
 // prefixes share most of their path with the previous one, so it
 // compares eight bytes at a time: byte by byte, this was 7% of a deep
