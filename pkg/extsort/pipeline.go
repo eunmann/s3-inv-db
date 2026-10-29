@@ -286,14 +286,10 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 // chunkConfig holds configuration for processing a chunk.
 type chunkConfig struct {
-	tierMapping     *tiers.Mapping
-	format          s3fetch.InventoryFormat
-	keyCol          int
-	sizeCol         int
-	storageCol      int
-	accessTierCol   int
-	deleteMarkerCol int
-	fileSize        int64
+	tierMapping *tiers.Mapping
+	format      s3fetch.InventoryFormat
+	csvColumns  s3inventory.CSVReaderConfig
+	fileSize    int64
 }
 
 // chunkJob represents a chunk to be processed by a worker.
@@ -322,16 +318,12 @@ type objectRecord struct {
 
 // ingestConfig holds configuration for the ingest phase.
 type ingestConfig struct {
-	manifest        *s3fetch.Manifest
-	tierMapping     *tiers.Mapping
-	destBucket      string
-	format          s3fetch.InventoryFormat
-	keyCol          int
-	sizeCol         int
-	storageCol      int
-	accessTierCol   int
-	deleteMarkerCol int
-	numWorkers      int
+	manifest    *s3fetch.Manifest
+	tierMapping *tiers.Mapping
+	destBucket  string
+	format      s3fetch.InventoryFormat
+	csvColumns  s3inventory.CSVReaderConfig
+	numWorkers  int
 }
 
 // runIngestPhase streams S3 inventory and creates sorted run files.
@@ -353,35 +345,29 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 	return p.runIngestLoop(ctx, cfg)
 }
 
-// csvColumns are a CSV inventory's column indexes from its manifest's
-// schema; -1 for a column it lacks.
-type csvColumns struct {
-	key, size, storage, accessTier, deleteMarker int
-}
-
-// manifestColumns reads the column indexes a CSV inventory's rows need
-// from its manifest. A Parquet manifest's fileSchema is a Parquet message,
-// not a column list, and its reader takes the columns from each file's
-// own schema, so it has none here.
-func manifestColumns(manifest *s3fetch.Manifest, format s3fetch.InventoryFormat) (csvColumns, error) {
+// manifestColumns reads the columns a CSV inventory's rows need from
+// its manifest's schema. A Parquet manifest's fileSchema is a Parquet
+// message, not a column list, and its reader takes the columns from
+// each file's own schema, so it has none here.
+func manifestColumns(manifest *s3fetch.Manifest, format s3fetch.InventoryFormat) (s3inventory.CSVReaderConfig, error) {
 	if format != s3fetch.InventoryFormatCSV {
-		return csvColumns{key: -1, size: -1, storage: -1, accessTier: -1, deleteMarker: -1}, nil
+		return s3inventory.CSVReaderConfig{}, nil
 	}
 	key, err := manifest.KeyColumnIndex()
 	if err != nil {
-		return csvColumns{}, fmt.Errorf("get key column: %w", err)
+		return s3inventory.CSVReaderConfig{}, fmt.Errorf("get key column: %w", err)
 	}
 	size, err := manifest.SizeColumnIndex()
 	if err != nil {
-		return csvColumns{}, fmt.Errorf("get size column: %w", err)
+		return s3inventory.CSVReaderConfig{}, fmt.Errorf("get size column: %w", err)
 	}
 
-	return csvColumns{
-		key:          key,
-		size:         size,
-		storage:      manifest.StorageClassColumnIndex(),
-		accessTier:   manifest.AccessTierColumnIndex(),
-		deleteMarker: manifest.DeleteMarkerColumnIndex(),
+	return s3inventory.CSVReaderConfig{
+		KeyCol:          s3inventory.ColumnAt(key),
+		SizeCol:         s3inventory.ColumnAt(size),
+		StorageCol:      s3inventory.ColumnAt(manifest.StorageClassColumnIndex()),
+		AccessTierCol:   s3inventory.ColumnAt(manifest.AccessTierColumnIndex()),
+		DeleteMarkerCol: s3inventory.ColumnAt(manifest.DeleteMarkerColumnIndex()),
 	}, nil
 }
 
@@ -426,16 +412,12 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 		Msg("ingest worker count derived from GOMAXPROCS")
 
 	return &ingestConfig{
-		manifest:        manifest,
-		format:          format,
-		destBucket:      destBucket,
-		keyCol:          cols.key,
-		sizeCol:         cols.size,
-		storageCol:      cols.storage,
-		accessTierCol:   cols.accessTier,
-		deleteMarkerCol: cols.deleteMarker,
-		numWorkers:      numWorkers,
-		tierMapping:     tiers.NewMapping(),
+		manifest:    manifest,
+		format:      format,
+		destBucket:  destBucket,
+		csvColumns:  cols,
+		numWorkers:  numWorkers,
+		tierMapping: tiers.NewMapping(),
 	}, nil
 }
 
@@ -661,14 +643,10 @@ func (p *Pipeline) sendIngestJobs(ctx context.Context, cfg *ingestConfig, jobs c
 			bucket: cfg.destBucket,
 			key:    file.Key,
 			config: chunkConfig{
-				format:          cfg.format,
-				keyCol:          cfg.keyCol,
-				sizeCol:         cfg.sizeCol,
-				storageCol:      cfg.storageCol,
-				accessTierCol:   cfg.accessTierCol,
-				deleteMarkerCol: cfg.deleteMarkerCol,
-				tierMapping:     cfg.tierMapping,
-				fileSize:        file.Size,
+				format:      cfg.format,
+				csvColumns:  cfg.csvColumns,
+				tierMapping: cfg.tierMapping,
+				fileSize:    file.Size,
 			},
 		}:
 		}
@@ -835,13 +813,7 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, fetched fetche
 	if job.config.format == s3fetch.InventoryFormatParquet {
 		reader, err = openParquetReader(body, job.config.fileSize, p.tempDir)
 	} else {
-		reader, err = s3inventory.NewCSVReaderFromStream(counted, s3inventory.CSVReaderConfig{
-			KeyCol:          job.config.keyCol,
-			SizeCol:         job.config.sizeCol,
-			StorageCol:      job.config.storageCol,
-			AccessTierCol:   job.config.accessTierCol,
-			DeleteMarkerCol: job.config.deleteMarkerCol,
-		})
+		reader, err = s3inventory.NewCSVReaderFromStream(counted, job.config.csvColumns)
 	}
 	if err != nil {
 		return fmt.Errorf("open inventory reader: %w", err)

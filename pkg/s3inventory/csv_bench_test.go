@@ -61,14 +61,14 @@ var csvLayouts = []struct {
 }{
 	{
 		"quoted",
-		s3inventory.CSVReaderConfig{KeyCol: 1, SizeCol: 2, StorageCol: 3, AccessTierCol: -1, DeleteMarkerCol: -1},
+		s3inventory.CSVReaderConfig{KeyCol: s3inventory.ColumnAt(1), SizeCol: s3inventory.ColumnAt(2), StorageCol: s3inventory.ColumnAt(3)},
 		func(w io.Writer, i int) {
 			fmt.Fprintf(w, "\"example-bucket\",\"%s\",\"%d\",\"STANDARD\"\n", csvKeyShapes[1].key(i), 1024+i%4096)
 		},
 	},
 	{
 		"unquoted",
-		s3inventory.CSVReaderConfig{KeyCol: 1, SizeCol: 2, StorageCol: 3, AccessTierCol: -1, DeleteMarkerCol: -1},
+		s3inventory.CSVReaderConfig{KeyCol: s3inventory.ColumnAt(1), SizeCol: s3inventory.ColumnAt(2), StorageCol: s3inventory.ColumnAt(3)},
 		func(w io.Writer, i int) {
 			fmt.Fprintf(w, "example-bucket,%s,%d,STANDARD\n", csvKeyShapes[1].key(i), 1024+i%4096)
 		},
@@ -79,7 +79,7 @@ var csvLayouts = []struct {
 		// ReplicationStatus, EncryptionStatus, IntelligentTieringAccessTier,
 		// ChecksumAlgorithm, ObjectAccessControlList, ObjectOwner
 		"wide",
-		s3inventory.CSVReaderConfig{KeyCol: 1, SizeCol: 5, StorageCol: 8, AccessTierCol: 12, DeleteMarkerCol: 4},
+		s3inventory.CSVReaderConfig{KeyCol: s3inventory.ColumnAt(1), SizeCol: s3inventory.ColumnAt(5), StorageCol: s3inventory.ColumnAt(8), AccessTierCol: s3inventory.ColumnAt(12), DeleteMarkerCol: s3inventory.ColumnAt(4)},
 		func(w io.Writer, i int) {
 			h := mix(i)
 			storage, tier := "STANDARD", ""
@@ -135,14 +135,14 @@ func countRows(b *testing.B, r s3inventory.Reader) int {
 // gunzip.
 func BenchmarkCSVReader(b *testing.B) {
 	const n = 200_000
-	cfg := s3inventory.CSVReaderConfig{KeyCol: 1, SizeCol: 2, StorageCol: 3, AccessTierCol: -1, DeleteMarkerCol: -1}
+	cfg := s3inventory.CSVReaderConfig{KeyCol: s3inventory.ColumnAt(1), SizeCol: s3inventory.ColumnAt(2), StorageCol: s3inventory.ColumnAt(3)}
 	for _, shape := range csvKeyShapes {
 		data := csvInventory(n, shape.key)
 		b.Run("keys="+shape.name, func(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(data)))
 			for b.Loop() {
-				if count := countRows(b, s3inventory.NewCSVReader(bytes.NewReader(data), cfg)); count != n {
+				if count := countRows(b, mustCSVReader(b, bytes.NewReader(data), cfg)); count != n {
 					b.Fatalf("got %d rows, want %d", count, n)
 				}
 			}
@@ -155,7 +155,7 @@ func BenchmarkCSVReader(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(data)))
 			for b.Loop() {
-				if count := countRows(b, s3inventory.NewCSVReader(bytes.NewReader(data), layout.cfg)); count != n {
+				if count := countRows(b, mustCSVReader(b, bytes.NewReader(data), layout.cfg)); count != n {
 					b.Fatalf("got %d rows, want %d", count, n)
 				}
 			}
