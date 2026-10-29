@@ -7,9 +7,11 @@
 # query gate benchmarks (pkg/indexread and internal/handlers, as in
 # bench/suite/query.txt), so the compiler inlines along the read paths
 # the server and the CLI's query commands spend their time in. The build
-# path is left out: it is bound by memory and map access, PGO did not
-# move it, and its samples would crowd the query call sites out of the
-# profile's hot set.
+# path is left out. It is compute- and front-end-bound, not memory-bound
+# (top-down counters: 4-12% of slots stall on memory). But a profile
+# merged from the query gates and the 1M pipeline builds measured mixed
+# at 10M on 4 cores: sorted builds -3.3%, random-order +1.7%, query
+# gates neutral (issue #186).
 #
 # Rerun it after a large change to the read path; profiles of older code
 # still apply, they just cover less of it.

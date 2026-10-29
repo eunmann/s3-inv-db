@@ -58,7 +58,7 @@ type Config struct {
 	ObjectsPerConfig []int
 	Seed             int64
 	// SortedKeys has UploadMultiChunkInventory write the objects in key
-	// order across its chunks, as S3 Inventory lists them.
+	// order across its chunks, as some inventories come.
 	SortedKeys bool
 }
 

@@ -29,7 +29,8 @@ type Aggregator struct {
 	// path holds the rows of the previous key's prefixes by depth
 	// (path[0] is the root's): the next key reuses the ones whose
 	// prefix it starts with and looks up only the levels below. Keys
-	// in order (as S3 Inventory lists them) share most of their path.
+	// in order share most of their path; S3 Inventory doesn't promise
+	// any order, so this is a saving, never an assumption.
 	path []*PrefixRow
 	// segments are the rows since the last Drain by the StartSegment
 	// that began them (a chunk each), and lastKey is the previous key of
@@ -182,8 +183,10 @@ func (a *Aggregator) PrefixCount() int {
 	return a.used
 }
 
-// StartSegment marks the start of a run of keys likely in order, such
-// as one inventory file's (S3 Inventory lists keys in order). While
+// StartSegment marks the start of a run of keys that may be in order,
+// such as one inventory file's. S3 Inventory doesn't promise any order
+// (some inventories have come sorted per file, others not), so nothing
+// depends on it: it only decides how fast the keys aggregate. While
 // they are, every prefix not on the previous key's path is one the
 // segment has not seen: it sorts after every prefix created before it
 // (two keys in order their prefixes, and a prefix of both is
@@ -356,9 +359,9 @@ func heapReadingsUnderPressure(live, inuse uint64, memoryLimit int64) bool {
 //
 // With segments the rows come merged and sorted, each prefix once (see
 // mergeSegments). Without, they come in the order their prefixes first
-// appeared, read off the slabs rather than the map: keys in order (as S3
-// Inventory lists them) create their prefixes in sorted order, which
-// DrainSorted's sort then only has to confirm.
+// appeared, read off the slabs rather than the map: keys in order create
+// their prefixes in sorted order, which DrainSorted's sort then only has
+// to confirm.
 func (a *Aggregator) Drain() []*PrefixRow {
 	if a.used == 0 {
 		return nil

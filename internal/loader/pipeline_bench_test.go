@@ -58,7 +58,7 @@ func pipelineSizes() []int {
 
 // BenchmarkPipeline sweeps shape × size against the full S3-to-index path.
 // Realistic_sorted is realistic with the keys in order across the
-// chunks, as S3 Inventory writes them; the others are in random order.
+// chunks, as some inventories come; the others are in random order.
 func BenchmarkPipeline(b *testing.B) {
 	for _, shape := range []string{"realistic", "deep_pyramid", "realistic_sorted"} {
 		for _, n := range pipelineSizes() {

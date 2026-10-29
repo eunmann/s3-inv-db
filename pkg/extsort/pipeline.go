@@ -858,7 +858,8 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, fetched fetche
 		i          int
 	)
 	memLimit := readMemoryLimit()
-	// Each inventory file lists its keys in order.
+	// An inventory file's keys may be in order (S3 Inventory doesn't
+	// promise it); a segment per file aggregates them faster if so.
 	agg.StartSegment()
 	for {
 		if i%ctxCheckInterval == 0 {

@@ -36,7 +36,7 @@ func BenchmarkAggregator_AddObject(b *testing.B) {
 		b.Run(fmt.Sprintf("n=%d/depth=%d", c.n, c.depth), func(b *testing.B) {
 			runAggregatorAddBench(b, generateBenchKeys(c.n, c.depth))
 		})
-		// The same keys in order, as S3 Inventory lists them.
+		// The same keys in order, as an inventory file may list them.
 		b.Run(fmt.Sprintf("n=%d/depth=%d/sorted", c.n, c.depth), func(b *testing.B) {
 			keys := generateBenchKeys(c.n, c.depth)
 			slices.Sort(keys)
