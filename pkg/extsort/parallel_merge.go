@@ -58,8 +58,9 @@ const openRunHeapBytes = 5 << 19
 
 // OpenRunsFractionOfLimit is the share of GOMEMLIMIT the open run
 // readers of a merge may hold. The final merge runs after ingest
-// released its aggregators; beside it sit the workers' last in-memory
-// runs (within the aggregators' share) and the index build.
+// released its aggregators; beside it sit the workers' last runs, kept
+// in memory as encoded records (a fraction of the aggregators' share),
+// and the index build.
 const OpenRunsFractionOfLimit = 0.25
 
 // openRunBudget is how many run readers a merge may hold open under
