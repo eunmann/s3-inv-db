@@ -202,42 +202,35 @@ func TestRunRecordLongerThanWindow(t *testing.T) {
 // the header's row count is corrupt, not a shorter run: a merge that
 // stopped there would drop rows.
 func TestCompressedRunReaderShortOfCount(t *testing.T) {
-	rows := randomSortedRows(rand.New(rand.NewPCG(5, 6)), 3)
-	path := filepath.Join(t.TempDir(), "run.crun")
-	w, err := NewCompressedRunWriter(path, CompressedRunWriterOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := range rows {
-		if err := w.Write(&rows[i]); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.WriteAt(binary.LittleEndian.AppendUint64(nil, uint64(len(rows)+1)), compressedRunCountOffset); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	r, err := OpenCompressedRunFile(path, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	var got PrefixRow
-	for i := range rows {
-		if err := r.ReadInto(&got); err != nil {
-			t.Fatalf("row %d: %v", i, err)
-		}
-	}
-	if err := r.ReadInto(&got); !errors.Is(err, errRunRecordCorrupt) {
-		t.Fatalf("past the stream's end: %v, want errRunRecordCorrupt", err)
+	for _, codec := range runCodecs {
+		t.Run(codec.String(), func(t *testing.T) {
+			rows := randomSortedRows(rand.New(rand.NewPCG(5, 6)), 3)
+			path := filepath.Join(t.TempDir(), "run.crun")
+			writeCodecRun(t, path, codec, CompressionFastest, rows)
+			f, err := os.OpenFile(path, os.O_RDWR, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteAt(binary.LittleEndian.AppendUint64(nil, uint64(len(rows)+1)), compressedRunCountOffset); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			r, err := OpenCompressedRunFile(path, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+			var got PrefixRow
+			for i := range rows {
+				if err := r.ReadInto(&got); err != nil {
+					t.Fatalf("row %d: %v", i, err)
+				}
+			}
+			if err := r.ReadInto(&got); !errors.Is(err, errRunRecordCorrupt) {
+				t.Fatalf("past the stream's end: %v, want errRunRecordCorrupt", err)
+			}
+		})
 	}
 }

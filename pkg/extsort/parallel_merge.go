@@ -33,11 +33,14 @@ type ParallelMergeConfig struct {
 	// BufferSize is each run reader's buffer.
 	BufferSize       int
 	CompressionLevel CompressionLevel
+	// Codec compresses disk-round outputs (default defaultRunCodec).
+	Codec RunCodec
 }
 
-// mergeReaderBufferSize is each merge reader's buffer. The zstd decoder
-// already reads ahead, so a larger buffer only adds heap per open run:
-// 1 MiB merged no faster than 16 KiB.
+// mergeReaderBufferSize is each merge reader's buffer. The decoder
+// already holds data ahead of it (zstd decodes ahead asynchronously, S2
+// a whole block at a time), so a larger buffer only adds heap per open
+// run: 1 MiB merged no faster than 16 KiB.
 const mergeReaderBufferSize = 64 << 10
 
 // mergeWriterBufferSize is each disk-round output's write buffer.
@@ -53,7 +56,8 @@ const DefaultFinalFanIn = 64
 
 // openRunHeapBytes is the heap one open run reader holds: its decoder's
 // block buffers and window history plus the read buffer, measured at
-// ~2.1 MB and rounded up.
+// ~2.1 MB for zstd and ~2.2 MB for S2 (TestS2RunReaderHeap) and rounded
+// up.
 const openRunHeapBytes = 5 << 19
 
 // OpenRunsFractionOfLimit is the share of GOMEMLIMIT the open run
@@ -429,6 +433,7 @@ func (m *ParallelMerger) createMergeOutputWriter(outputPath string) (*Compressed
 	w, err := NewCompressedRunWriter(outputPath, CompressedRunWriterOptions{
 		BufferSize:       mergeWriterBufferSize,
 		CompressionLevel: m.config.CompressionLevel,
+		Codec:            m.config.Codec,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create output writer: %w", err)

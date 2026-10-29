@@ -267,11 +267,9 @@ func TestCompressedRunFile(t *testing.T) {
 	})
 }
 
-// TestCompressedRunSize checks that the run body compresses at least 2x
-// against its raw record encoding.
+// TestCompressedRunSize checks that each codec compresses the run body
+// at least 2x against its raw record encoding.
 func TestCompressedRunSize(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "compressed.crun")
-
 	const numRows = 5000
 
 	// Realistic prefix data (highly compressible).
@@ -290,28 +288,33 @@ func TestCompressedRunSize(t *testing.T) {
 		rawSize += int64(4 + len(rows[i].Prefix) + 2 + 8 + 8 + extsort.MaxTiers*16)
 	}
 
-	writer, err := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{})
-	if err != nil {
-		t.Fatalf("create compressed writer: %v", err)
-	}
-	for _, row := range rows {
-		if err := writer.Write(row); err != nil {
-			t.Fatalf("write compressed: %v", err)
-		}
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("close compressed: %v", err)
-	}
+	for _, codec := range []extsort.RunCodec{extsort.RunCodecZstd, extsort.RunCodecS2} {
+		t.Run(codec.String(), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "compressed.crun")
+			writer, err := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{Codec: codec})
+			if err != nil {
+				t.Fatalf("create compressed writer: %v", err)
+			}
+			for _, row := range rows {
+				if err := writer.Write(row); err != nil {
+					t.Fatalf("write compressed: %v", err)
+				}
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatalf("close compressed: %v", err)
+			}
 
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	ratio := float64(rawSize) / float64(info.Size())
-	t.Logf("raw %d bytes, compressed %d bytes, ratio %.2fx", rawSize, info.Size(), ratio)
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat: %v", err)
+			}
+			ratio := float64(rawSize) / float64(info.Size())
+			t.Logf("raw %d bytes, compressed %d bytes, ratio %.2fx", rawSize, info.Size(), ratio)
 
-	if ratio < 2.0 {
-		t.Errorf("expected at least 2x compression, got %.2fx", ratio)
+			if ratio < 2.0 {
+				t.Errorf("expected at least 2x compression, got %.2fx", ratio)
+			}
+		})
 	}
 }
 

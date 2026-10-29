@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/klauspost/compress/s2"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -21,21 +22,15 @@ import (
 //   UncompressedSize: 8 bytes  (total uncompressed data size, for buffer hints)
 //   Reserved:         4 bytes  (future use)
 //
-// Body: zstd compressed stream of records in sorted order, each in the
-// varint layout encodeRunRecord writes (types.go): the prefix front-coded
-// against the previous record's, the depth, and a count and byte total
-// for each tier present only.
-//
-// Compression types:
-//   1: Zstd (only supported type)
+// Body: a compressed stream (RunCodec, the compression type) of records
+// in sorted order, each in the varint layout encodeRunRecord writes
+// (types.go): the prefix front-coded against the previous record's, the
+// depth, and a count and byte total for each tier present only.
 
 const (
 	runFileMagic             = 0x45585453 // "EXTS"
 	compressedRunFileVersion = 3
 	compressedRunFileHeader  = 32
-
-	// Compression type flag (stored in bits 1-3 of flags field).
-	compressionTypeZstd = 1
 
 	// Flags field bit masks.
 	flagCompressed      = 1 << 0
@@ -45,6 +40,39 @@ const (
 	// (4 magic + 4 version + 4 flags).
 	compressedRunCountOffset = 12
 )
+
+// RunCodec is the compression of a run file's body; its value is the
+// header's compression type. Readers take the codec from each run's
+// header, so runs of different codecs merge together.
+type RunCodec uint32
+
+const (
+	// RunCodecZstd compresses run bodies with zstd.
+	RunCodecZstd RunCodec = 1
+	// RunCodecS2 compresses run bodies with S2: faster to write and
+	// read than zstd, at more bytes on disk.
+	RunCodecS2 RunCodec = 2
+)
+
+// defaultRunCodec is the codec every build writes its runs with: the
+// one place to switch codecs for a build A/B. A codec writing more
+// bytes per row raises the scratch bound docs/operations.md states.
+const defaultRunCodec = RunCodecZstd
+
+func (c RunCodec) String() string {
+	switch c {
+	case RunCodecZstd:
+		return "zstd"
+	case RunCodecS2:
+		return "s2"
+	}
+
+	return fmt.Sprintf("RunCodec(%d)", uint32(c))
+}
+
+func (c RunCodec) valid() bool {
+	return c == RunCodecZstd || c == RunCodecS2
+}
 
 // CompressionLevel defines the compression effort level.
 type CompressionLevel int
@@ -60,13 +88,14 @@ const (
 
 // CompressedRunWriter writes sorted PrefixRows to a compressed run file.
 type CompressedRunWriter struct {
-	file             *os.File
-	compressor       *zstd.Encoder
+	file       *os.File
+	compressor io.WriteCloser
+	// release returns compressor to its pool once it closed cleanly.
+	release          func()
 	writer           *bufio.Writer
 	path             string
 	buf              []byte
 	prev             string // the last prefix written
-	zstdLevel        zstd.EncoderLevel
 	count            uint64
 	uncompressedSize uint64
 	level            CompressionLevel
@@ -79,6 +108,8 @@ type CompressedRunWriterOptions struct {
 	BufferSize int
 	// CompressionLevel controls the compression effort (default CompressionDefault).
 	CompressionLevel CompressionLevel
+	// Codec compresses the body (default defaultRunCodec).
+	Codec RunCodec
 }
 
 // NewCompressedRunWriter creates a new compressed run file writer.
@@ -88,6 +119,12 @@ func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*Comp
 	}
 	if opts.CompressionLevel == 0 {
 		opts.CompressionLevel = CompressionDefault
+	}
+	if opts.Codec == 0 {
+		opts.Codec = defaultRunCodec
+	}
+	if !opts.Codec.valid() {
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedCompression, opts.Codec)
 	}
 
 	f, err := os.Create(path)
@@ -99,7 +136,7 @@ func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*Comp
 	header := make([]byte, compressedRunFileHeader)
 	binary.LittleEndian.PutUint32(header[0:4], runFileMagic)
 	binary.LittleEndian.PutUint32(header[4:8], compressedRunFileVersion)
-	flags := uint32(flagCompressed | (compressionTypeZstd << 1))
+	flags := flagCompressed | uint32(opts.Codec)<<1
 	binary.LittleEndian.PutUint32(header[8:12], flags)
 	// Count, UncompressedSize, Reserved will be updated on close
 
@@ -107,27 +144,15 @@ func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*Comp
 		return nil, errors.Join(fmt.Errorf("write header: %w", err), f.Close(), os.Remove(path))
 	}
 
-	// Create zstd encoder with specified level
-	zstdLevel := zstd.SpeedDefault
-	switch opts.CompressionLevel {
-	case CompressionFastest:
-		zstdLevel = zstd.SpeedFastest
-	case CompressionDefault:
-		zstdLevel = zstd.SpeedDefault
-	case CompressionBetter:
-		zstdLevel = zstd.SpeedBetterCompression
-	}
-
-	enc, err := acquireZstdEncoder(zstdLevel)
+	enc, release, err := acquireRunEncoder(opts.Codec, opts.CompressionLevel, f)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("acquire zstd encoder: %w", err), f.Close(), os.Remove(path))
+		return nil, errors.Join(fmt.Errorf("acquire %s encoder: %w", opts.Codec, err), f.Close(), os.Remove(path))
 	}
-	enc.Reset(f)
 
 	return &CompressedRunWriter{
 		file:       f,
 		compressor: enc,
-		zstdLevel:  zstdLevel,
+		release:    release,
 		writer:     bufio.NewWriterSize(enc, opts.BufferSize),
 		path:       path,
 		buf:        make([]byte, 0, 1024),
@@ -183,7 +208,7 @@ func (w *CompressedRunWriter) Close() error {
 	if err := w.compressor.Close(); err != nil {
 		return errors.Join(fmt.Errorf("close compressor: %w", err), w.closeFile())
 	}
-	releaseZstdEncoder(w.zstdLevel, w.compressor)
+	w.release()
 	w.compressor = nil
 
 	if _, err := w.file.Seek(compressedRunCountOffset, 0); err != nil {
@@ -240,13 +265,14 @@ func (w *CompressedRunWriter) closeCompressor() error {
 
 // CompressedRunReader reads PrefixRows from a compressed run file.
 type CompressedRunReader struct {
-	file         *os.File
-	decompressor *zstd.Decoder
-	records      runRecordDecoder
-	path         string
-	count        uint64
-	read         uint64
-	closed       bool
+	file *os.File
+	// release returns the decoder to its pool.
+	release func()
+	records runRecordDecoder
+	path    string
+	count   uint64
+	read    uint64
+	closed  bool
 }
 
 // OpenCompressedRunFile opens a run file for reading.
@@ -288,35 +314,28 @@ func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, e
 		return nil, fmt.Errorf("%w (flags=%d)", ErrNotCompressed, flags)
 	}
 
-	compressionType := (flags & flagCompressionMask) >> 1
-	if compressionType != compressionTypeZstd {
+	codec := RunCodec((flags & flagCompressionMask) >> 1)
+	if !codec.valid() {
 		f.Close()
 
-		return nil, fmt.Errorf("%w: %d", ErrUnsupportedCompression, compressionType)
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedCompression, codec)
 	}
 
 	count := binary.LittleEndian.Uint64(header[12:20])
 
-	// Create or reuse a pooled zstd decoder.
-	dec, err := acquireZstdDecoder()
+	dec, release, err := acquireRunDecoder(codec, f)
 	if err != nil {
 		f.Close()
 
-		return nil, fmt.Errorf("acquire zstd decoder: %w", err)
-	}
-	if err := dec.Reset(f); err != nil {
-		f.Close()
-		dec.Close()
-
-		return nil, fmt.Errorf("reset zstd decoder: %w", err)
+		return nil, fmt.Errorf("acquire %s decoder: %w", codec, err)
 	}
 
 	return &CompressedRunReader{
-		file:         f,
-		decompressor: dec,
-		records:      runRecordDecoder{in: bufio.NewReaderSize(dec, bufferSize)},
-		count:        count,
-		path:         path,
+		file:    f,
+		release: release,
+		records: runRecordDecoder{in: bufio.NewReaderSize(dec, bufferSize)},
+		count:   count,
+		path:    path,
 	}, nil
 }
 
@@ -353,8 +372,8 @@ func (r *CompressedRunReader) Close() error {
 	}
 	r.closed = true
 
-	releaseZstdDecoder(r.decompressor)
-	r.decompressor = nil
+	r.release()
+	r.release = nil
 
 	if err := r.file.Close(); err != nil {
 		return fmt.Errorf("close compressed run file: %w", err)
@@ -373,6 +392,59 @@ func (r *CompressedRunReader) Remove() error {
 	}
 
 	return nil
+}
+
+// acquireRunEncoder returns a pooled codec encoder writing to dst and
+// the func that returns it to its pool once it closed cleanly.
+func acquireRunEncoder(codec RunCodec, level CompressionLevel, dst io.Writer) (io.WriteCloser, func(), error) {
+	if codec == RunCodecS2 {
+		s2l := s2LevelFor(level)
+		enc := acquireS2Writer(s2l)
+		enc.Reset(dst)
+
+		return enc, func() { releaseS2Writer(s2l, enc) }, nil
+	}
+	zl := zstdLevelFor(level)
+	enc, err := acquireZstdEncoder(zl)
+	if err != nil {
+		return nil, nil, err
+	}
+	enc.Reset(dst)
+
+	return enc, func() { releaseZstdEncoder(zl, enc) }, nil
+}
+
+// acquireRunDecoder returns a pooled codec decoder reading src and the
+// func that returns it to its pool.
+func acquireRunDecoder(codec RunCodec, src io.Reader) (io.Reader, func(), error) {
+	if codec == RunCodecS2 {
+		dec := acquireS2Reader()
+		dec.Reset(src)
+
+		return dec, func() { releaseS2Reader(dec) }, nil
+	}
+	dec, err := acquireZstdDecoder()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := dec.Reset(src); err != nil {
+		dec.Close()
+
+		return nil, nil, fmt.Errorf("reset zstd decoder: %w", err)
+	}
+
+	return dec, func() { releaseZstdDecoder(dec) }, nil
+}
+
+func zstdLevelFor(level CompressionLevel) zstd.EncoderLevel {
+	switch level {
+	case CompressionFastest:
+		return zstd.SpeedFastest
+	case CompressionBetter:
+		return zstd.SpeedBetterCompression
+	default:
+		return zstd.SpeedDefault
+	}
 }
 
 // One typed pool per compression level. Zstd encoders allocate
@@ -470,4 +542,73 @@ func releaseZstdDecoder(dec *zstd.Decoder) {
 		return
 	}
 	zstdDecoderPool.Put(dec)
+}
+
+// s2Level is an S2 encoder's effort. S2 has no level between its
+// default and "better", so CompressionFastest and CompressionDefault
+// both take the default.
+type s2Level int
+
+const (
+	s2LevelFast s2Level = iota
+	s2LevelBetter
+	numS2Levels
+)
+
+func s2LevelFor(level CompressionLevel) s2Level {
+	if level == CompressionBetter {
+		return s2LevelBetter
+	}
+
+	return s2LevelFast
+}
+
+// s2BlockSize is each S2 stream's block, the span its matches reach,
+// sized like zstdWindowSize. A reader holds one compressed and one
+// decoded block: ~2 MiB, within openRunHeapBytes.
+const s2BlockSize = 1 << 20
+
+//nolint:gochecknoglobals // intentional package-level encoder pools
+var s2WriterPools = [numS2Levels]*typedPool[s2.Writer]{
+	newTypedPool(func() *s2.Writer { return nil }),
+	newTypedPool(func() *s2.Writer { return nil }),
+}
+
+//nolint:gochecknoglobals // intentional package-level decoder pool
+var s2ReaderPool = newTypedPool(func() *s2.Reader { return nil })
+
+// acquireS2Writer returns a pooled or new S2 writer. One goroutine per
+// stream, as zstdEncoderOptions explains: synchronous encoding holds
+// one input and one output block rather than a pair per core.
+func acquireS2Writer(level s2Level) *s2.Writer {
+	if enc := s2WriterPools[level].Get(); enc != nil {
+		return enc
+	}
+	opts := []s2.WriterOption{
+		s2.WriterConcurrency(1),
+		s2.WriterBlockSize(s2BlockSize),
+	}
+	if level == s2LevelBetter {
+		opts = append(opts, s2.WriterBetterCompression())
+	}
+
+	return s2.NewWriter(nil, opts...)
+}
+
+func releaseS2Writer(level s2Level, enc *s2.Writer) {
+	enc.Reset(nil)
+	s2WriterPools[level].Put(enc)
+}
+
+func acquireS2Reader() *s2.Reader {
+	if dec := s2ReaderPool.Get(); dec != nil {
+		return dec
+	}
+
+	return s2.NewReader(nil, s2.ReaderMaxBlockSize(s2BlockSize))
+}
+
+func releaseS2Reader(dec *s2.Reader) {
+	dec.Reset(nil)
+	s2ReaderPool.Put(dec)
 }
