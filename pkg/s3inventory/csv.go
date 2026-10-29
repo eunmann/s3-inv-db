@@ -347,7 +347,7 @@ func bytesView(b []byte) string {
 }
 
 // Next returns the next inventory row. Its strings are valid until the
-// next call.
+// next call or Close.
 func (r *CSVReader) Next() (Row, error) {
 	for {
 		fields, err := r.record()
