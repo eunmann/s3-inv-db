@@ -49,7 +49,9 @@ flowchart LR
 4. **Merge.** A K-way merge adds up rows for the same prefix across all
    runs. It reads up to 64 run files at once (about 2.5 MB of heap
    each, within `0.25 × GOMEMLIMIT`); past that, it first merges the
-   smallest files in rounds.
+   smallest files in rounds. The final merge decodes each run, file or
+   memory, on its own goroutine, up to 512 rows ahead (at most 256 KB
+   a run, counted in the same budget).
 5. **Build the index.** The builder checks the stream is complete and
    ordered (every prefix after its parent), hashes each prefix and
    spools it by depth, interning its last segment and gathering the
