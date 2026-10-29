@@ -380,6 +380,12 @@ type Config struct {
 	// size 0 and logged. Off by default: such a build would report
 	// numbers that differ from a direct scan of the inventory.
 	AllowAnomalies bool
+	// TransientOutput marks the output directory as a working copy the
+	// caller uploads elsewhere and then removes, so publishing it skips
+	// making its files durable on local disk. A crash leaves only a
+	// hidden directory nothing reads as an index; the uploaded copy is
+	// the durable one.
+	TransientOutput bool
 }
 
 // ErrInventoryAnomalies is returned when an inventory chunk has rows

@@ -45,6 +45,8 @@ type Pipeline struct {
 	flushCount      atomic.Int64
 	presentTierMask atomic.Uint32
 	runFilesMu      sync.Mutex
+	// syncPath makes a published file durable; a seam for tests.
+	syncPath syncFunc
 }
 
 // presentTiers expands the tier mask accumulated across all ingest
@@ -157,7 +159,19 @@ func NewPipeline(config Config, s3Client *s3fetch.Client) *Pipeline {
 		s3Client:   s3Client,
 		runFiles:   make([]string, 0, 16),
 		memTracker: memdiag.NewTracker(memdiag.DefaultConfig()),
+		syncPath:   durableSync,
 	}
+}
+
+// publishStage moves the finished index from stage to outDir, syncing
+// it first unless the output is transient (Config.TransientOutput).
+func (p *Pipeline) publishStage(log *zerolog.Logger, stage, outDir string) error {
+	syncPath := p.syncPath
+	if p.config.TransientOutput {
+		syncPath = nil
+	}
+
+	return publish(log, stage, outDir, syncPath)
 }
 
 // Run executes the full pipeline.
@@ -244,7 +258,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	if err != nil {
 		return nil, err
 	}
-	if err := publishIndex(log, stage, outDir); err != nil {
+	if err := p.publishStage(log, stage, outDir); err != nil {
 		return nil, err
 	}
 	prefixCount, maxDepth := mergeRes.PrefixCount, mergeRes.MaxDepth
