@@ -124,28 +124,34 @@ func NewCSVReader(r io.Reader, cfg CSVReaderConfig) *CSVReader {
 	}
 }
 
-// NewCSVReaderFromStream creates a CSV inventory reader from an S3 stream.
-// It handles gzip decompression based on the object key extension.
-func NewCSVReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderConfig) (*CSVReader, error) {
-	var reader io.Reader = r
+// NewCSVReaderFromStream creates a CSV inventory reader from an S3
+// stream, gunzipping it when it starts with the gzip magic bytes. The
+// content decides, not the key: a gzip chunk named without ".gz" would
+// otherwise be split as text.
+func NewCSVReaderFromStream(r io.ReadCloser, cfg CSVReaderConfig) (*CSVReader, error) {
+	in := bufio.NewReaderSize(r, streamInputBuffer)
+	lines := in
 	closers := []io.Closer{r}
 
-	if strings.HasSuffix(strings.ToLower(key), ".gz") {
-		// Use parallel gzip for faster decompression on multi-core systems.
-		// pgzip automatically uses multiple goroutines for decompression.
-		// It reads its input through a 4 KiB buffer unless given one.
-		gzr, err := pgzip.NewReader(bufio.NewReaderSize(r, gzipInputBuffer))
+	gzipped, err := isGzip(in)
+	if err != nil {
+		r.Close()
+
+		return nil, err
+	}
+	if gzipped {
+		gzr, err := pgzip.NewReader(in)
 		if err != nil {
 			r.Close()
 
 			return nil, fmt.Errorf("create gzip reader: %w", err)
 		}
 		closers = append(closers, gzr)
-		reader = gzr
+		lines = bufio.NewReaderSize(gzr, csvLineBuffer)
 	}
 
 	return &CSVReader{
-		lines:           bufio.NewReaderSize(reader, csvLineBuffer),
+		lines:           lines,
 		keyCol:          cfg.KeyCol,
 		sizeCol:         cfg.SizeCol,
 		storageCol:      cfg.StorageCol,
@@ -156,12 +162,24 @@ func NewCSVReaderFromStream(r io.ReadCloser, key string, cfg CSVReaderConfig) (*
 }
 
 // Buffer sizes: the CSV line buffer bounds the lines split in place
-// (longer ones go to encoding/csv), and the gzip input buffer saves
-// pgzip a read per 4 KiB.
+// (longer ones go to encoding/csv), and the input buffer saves the
+// decompressor a read per 4 KiB. A plain stream is split straight from
+// the input buffer, so its lines are bounded by that.
 const (
-	csvLineBuffer   = 64 << 10
-	gzipInputBuffer = 1 << 20
+	csvLineBuffer     = 64 << 10
+	streamInputBuffer = 1 << 20
 )
+
+// isGzip reports whether in starts with the gzip magic bytes 1f 8b. A
+// stream shorter than that is not gzip.
+func isGzip(in *bufio.Reader) (bool, error) {
+	magic, err := in.Peek(2)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("peek gzip magic: %w", err)
+	}
+
+	return len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b, nil
+}
 
 // newFallbackCSV is the encoding/csv reader the CSVReader has always
 // used, reading r.

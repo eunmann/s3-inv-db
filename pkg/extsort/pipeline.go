@@ -833,7 +833,7 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, fetched fetche
 	if job.config.format == s3fetch.InventoryFormatParquet {
 		reader, err = openParquetReader(body, job.config.fileSize, p.tempDir)
 	} else {
-		reader, err = s3inventory.NewCSVReaderFromStream(counted, job.key, s3inventory.CSVReaderConfig{
+		reader, err = s3inventory.NewCSVReaderFromStream(counted, s3inventory.CSVReaderConfig{
 			KeyCol:          job.config.keyCol,
 			SizeCol:         job.config.sizeCol,
 			StorageCol:      job.config.storageCol,
