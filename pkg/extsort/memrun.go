@@ -16,17 +16,18 @@ func newMemRun(rows []*PrefixRow) *memRun {
 	return &memRun{rows: rows, count: len(rows)}
 }
 
-// ReadInto copies the next row into into.
-func (m *memRun) ReadInto(into *PrefixRow) error {
+// readNext copies the next row into into. It reports no bytes shared
+// with the previous row: rows held in memory don't record it.
+func (m *memRun) readNext(into *PrefixRow) (int, error) {
 	if m.next >= m.count {
 		m.rows = nil
 
-		return io.EOF
+		return 0, io.EOF
 	}
 	*into = *m.rows[m.next]
 	m.next++
 
-	return nil
+	return 0, nil
 }
 
 func (m *memRun) Count() uint64     { return uint64(m.count) }

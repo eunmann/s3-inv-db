@@ -247,7 +247,7 @@ var ErrMissingParent = errors.New("prefix added without its parent")
 var ErrDepthMismatch = errors.New("prefix depth disagrees with its parent chain")
 
 // ErrUnsortedInput is returned when a prefix doesn't sort strictly
-// after the one before it.
+// after the one before it, or, in a run being merged, sorts before it.
 var ErrUnsortedInput = errors.New("prefix out of order")
 
 // Add processes a single PrefixRow from the sorted stream.

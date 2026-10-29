@@ -139,7 +139,7 @@ func TestRunRecordKeepsInconsistentTotals(t *testing.T) {
 		data := encodeRunRecord(nil, "", &row)
 		var got PrefixRow
 		d := runRecordDecoder{in: readWindow{r: bufio.NewReader(bytes.NewReader(data))}}
-		if err := d.next(&got); err != nil {
+		if _, err := d.next(&got); err != nil {
 			t.Fatal(err)
 		}
 		if diff := cmp.Diff(row, got); diff != "" {
@@ -163,7 +163,7 @@ func TestRunRecordRejectsCorruption(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var row PrefixRow
 			d := runRecordDecoder{in: readWindow{r: bufio.NewReader(bytes.NewReader(data))}}
-			err := d.next(&row)
+			_, err := d.next(&row)
 			if err == nil || errors.Is(err, io.EOF) {
 				t.Fatalf("decode = %v, want a corruption error", err)
 			}
@@ -188,7 +188,7 @@ func TestRunRecordLongerThanWindow(t *testing.T) {
 	d := runRecordDecoder{in: readWindow{r: bufio.NewReaderSize(bytes.NewReader(data), 4*runRecordWindow)}}
 	for i := range rows {
 		var got PrefixRow
-		if err := d.next(&got); err != nil {
+		if _, err := d.next(&got); err != nil {
 			t.Fatalf("row %d: %v", i, err)
 		}
 		if diff := cmp.Diff(rows[i], got); diff != "" {
@@ -196,7 +196,7 @@ func TestRunRecordLongerThanWindow(t *testing.T) {
 		}
 	}
 	var row PrefixRow
-	if err := d.next(&row); !errors.Is(err, io.EOF) {
+	if _, err := d.next(&row); !errors.Is(err, io.EOF) {
 		t.Fatalf("after the last row: %v, want EOF", err)
 	}
 }
@@ -275,18 +275,29 @@ func diffRows(want, got []PrefixRow) string {
 
 // decodeRunRecords reads src's records through a size-byte buffer until
 // the stream ends or a record fails, keeping every row: rows decoded
-// early must still read back after the buffer was refilled.
+// early must still read back after the buffer was refilled. Each record
+// must report the bytes it shares with the one before, all of them, as
+// encodeRunRecord codes it.
 func decodeRunRecords(src io.Reader, size int) ([]PrefixRow, error) {
 	d := runRecordDecoder{in: readWindow{r: bufio.NewReaderSize(src, size)}}
 	var rows []PrefixRow
+	prev := ""
 	for {
 		var row PrefixRow
-		if err := d.next(&row); err != nil {
+		shared, err := d.next(&row)
+		if err != nil {
 			return rows, err
 		}
-		rows = append(rows, row)
+		if want := sharedPrefixLen(prev, row.Prefix); shared != want {
+			return rows, fmt.Errorf("%w: row %d reports %d bytes, want %d", errWrongShared, len(rows), shared, want)
+		}
+		rows, prev = append(rows, row), row.Prefix
 	}
 }
+
+// errWrongShared means a record reported a shared length other than the
+// one it was coded with.
+var errWrongShared = errors.New("record reports the wrong shared length")
 
 // runRecordReaders wrap a stream as the decoder may meet it: read in
 // full, half a buffer per read, and a byte per read, so refills stop at

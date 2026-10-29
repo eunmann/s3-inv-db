@@ -393,3 +393,67 @@ func TestMergeIteratorNoSources(t *testing.T) {
 		t.Fatalf("Next = %v, want EOF", err)
 	}
 }
+
+// TestMergeIteratorRejectsUnsortedRun: a run whose prefix goes backwards,
+// at a byte or by ending early, fails the merge rather than corrupting
+// its order, from memory or from a file.
+func TestMergeIteratorRejectsUnsortedRun(t *testing.T) {
+	rng := rand.New(rand.NewPCG(201, 3))
+	for name, keys := range map[string][]string{
+		"smaller_byte":     {"a/", "b/x/", "b/b/"},
+		"prefix_of_prev":   {"a/", "a/b/", "a/"},
+		"shorter_and_0xff": {"\xff\xff", "\xff"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			run := make([]PrefixRow, len(keys))
+			for i, k := range keys {
+				run[i] = mergeTestRow(k, uint64(i))
+			}
+			other := sortedTestRun([]string{"0/", "c/"}, 9)
+			for _, sources := range [][]runSource{
+				memSources([][]PrefixRow{run, other}),
+				mixedSources(t, t.TempDir(), [][]PrefixRow{run, other}, true, rng),
+			} {
+				if _, err := drainMerge(sources); !errors.Is(err, ErrUnsortedInput) {
+					t.Fatalf("merge = %v, want ErrUnsortedInput", err)
+				}
+			}
+		})
+	}
+}
+
+// TestOffsetValueCodes: codes against a common base order keys as the
+// keys sort, equal codes mean keys that agree one byte past the offset,
+// and the key that sorts later keeps its code against the earlier one.
+func TestOffsetValueCodes(t *testing.T) {
+	rng := rand.New(rand.NewPCG(201, 4))
+	for range 20000 {
+		keys := []string{randomTestKey(rng), randomTestKey(rng), randomTestKey(rng)}
+		slices.Sort(keys)
+		base, x, y := keys[0], keys[1], keys[2]
+		if rng.IntN(2) == 0 {
+			x, y = y, x
+		}
+		cx, okx := ovcAfter(base, x, 0)
+		cy, oky := ovcAfter(base, y, 0)
+		if !okx || !oky {
+			t.Fatalf("%q or %q sorts before %q", x, y, base)
+		}
+		switch {
+		case (cx < cy && x > y) || (cx > cy && x < y):
+			t.Fatalf("codes %#x, %#x of %q, %q against %q disagree with the keys' order", cx, cy, x, y, base)
+		case cx == cy:
+			if off := ovcOffset(cx); cx&(1<<ovcValueBits-1) != 0 && x[:off+1] != y[:off+1] {
+				t.Fatalf("%q and %q share code %#x against %q but differ by offset %d", x, y, cx, base, off)
+			}
+		default:
+			first, second, secondCode := x, y, cy
+			if cy < cx {
+				first, second, secondCode = y, x, cx
+			}
+			if c, _ := ovcAfter(first, second, 0); c != secondCode {
+				t.Fatalf("%q against %q codes %#x, against %q %#x", second, first, c, base, secondCode)
+			}
+		}
+	}
+}
