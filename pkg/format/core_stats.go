@@ -8,45 +8,18 @@ import (
 	"math/bits"
 	"os"
 	"path/filepath"
-
-	"golang.org/x/sys/unix"
 )
 
 // CoreStatsFile is the row-major per-prefix core stats file.
 const CoreStatsFile = "core_stats.bin"
-
-// coreStatsBuildStride is the fixed safe stride used during the
-// build, before per-field widths are known. Finalize repacks the rows
-// to the stride it chooses: count, bytes and child start from the
-// width histogram (rows that don't fit go to patch files), the tier
-// mask from its max.
-//
-//	offset  0: object_count           uint64
-//	offset  8: total_bytes            uint64
-//	offset 16: child_start            uint64 (row of the first child)
-//	offset 24: tier_mask              uint16
-const coreStatsBuildStride = 26
-
-// coreStatsMaxInitialRows caps the rows a CoreStatsBuilder reserves
-// before any are added. The capacity hint can over-count many times
-// and every reserved block is allocated on disk, so the file starts no
-// larger than this and doubles as rows arrive.
-const coreStatsMaxInitialRows = 1 << 16
-
-const (
-	bldOffCount      = 0
-	bldOffBytes      = 8
-	bldOffChildStart = 16
-	bldOffTierMask   = 24
-)
 
 // coreStatsDataOff is where the first row starts in the final file,
 // after the Header and the stride descriptor. Rows are packed: padding
 // them to cache-line boundaries measured no faster (#51).
 const coreStatsDataOff = HeaderSize + CoreStatsStrideBytes
 
-// CoreStatsStride is the per-index field-width schema decided at
-// Finalize from the observed value ranges. Each field stores the
+// CoreStatsStride is the per-index field-width schema a CoreStatsPlan
+// picks from the value ranges. Each field stores the
 // number of bytes that field occupies in the row. Fields are written
 // in this fixed order; field offset in a row is the running sum.
 type CoreStatsStride struct {
@@ -155,156 +128,6 @@ var (
 	errCoreStatsStrideInvalid = errors.New("core stats stride descriptor invalid")
 )
 
-// CoreStatsBuilder writes the row-major core stats file during a
-// build, one row per prefix in level order (Add order).
-//
-// During the build the file uses a safe-wide stride
-// (coreStatsBuildStride); at Finalize the rows' widths determine a
-// tight per-field schema (see Finalize) and the rows are repacked into
-// the final file with a CoreStatsStride descriptor recorded after the
-// Header.
-type CoreStatsBuilder struct {
-	path    string
-	file    *os.File
-	data    []byte // mmap region (PROT_READ|PROT_WRITE)
-	dataOff int    // == HeaderSize; first row starts here
-	size    int64  // current mmap'd byte length
-	count   int    // number of rows committed (Add calls)
-
-	// Observed max — drives the tier field's width at Finalize.
-	maxTierMask uint16
-	// tierEnc is how the tier field encodes the mask (SetTierMaskEncoding).
-	tierEnc TierMaskEncoding
-}
-
-// NewCoreStatsBuilder creates a core stats file at outDir/core_stats.bin
-// sized to fit capacity rows, at most coreStatsMaxInitialRows (grown on
-// demand if exceeded). The header
-// is written at the build-stride placeholder; Finalize rewrites it to
-// the final tight stride.
-func NewCoreStatsBuilder(outDir string, capacity uint64) (*CoreStatsBuilder, error) {
-	path := filepath.Join(outDir, CoreStatsFile)
-	f, err := os.Create(path)
-	if err != nil {
-		return nil, fmt.Errorf("create core stats file: %w", err)
-	}
-	b := &CoreStatsBuilder{
-		path:    path,
-		file:    f,
-		dataOff: HeaderSize,
-	}
-	initial := max(int64(HeaderSize)+int64(min(capacity, coreStatsMaxInitialRows))*int64(coreStatsBuildStride), int64(unix.Getpagesize()))
-	if err := b.grow(initial); err != nil {
-		_ = b.Close()
-		os.Remove(path)
-
-		return nil, err
-	}
-	header := EncodeHeader(Header{
-		Magic:   MagicNumber,
-		Version: Version,
-		Count:   0,
-		Width:   uint32(coreStatsBuildStride),
-	})
-	copy(b.data[:HeaderSize], header)
-
-	return b, nil
-}
-
-func (b *CoreStatsBuilder) grow(newSize int64) error {
-	if newSize <= b.size {
-		return nil
-	}
-	if b.data != nil {
-		if err := unix.Munmap(b.data); err != nil {
-			return fmt.Errorf("core stats munmap: %w", err)
-		}
-		b.data = nil
-	}
-	if err := preallocate(b.file, b.size, newSize); err != nil {
-		return fmt.Errorf("core stats grow: %w", err)
-	}
-	data, err := unix.Mmap(int(b.file.Fd()), 0, int(newSize), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
-	if err != nil {
-		return fmt.Errorf("core stats mmap: %w", err)
-	}
-	b.data = data
-	b.size = newSize
-
-	return nil
-}
-
-// buildRowSlice returns the byte slice for build-stride row idx
-// (must be < b.count).
-func (b *CoreStatsBuilder) buildRowSlice(idx int) []byte {
-	start := b.dataOff + idx*coreStatsBuildStride
-
-	return b.data[start : start+coreStatsBuildStride]
-}
-
-// Add appends the next row: the prefix's object count, total bytes,
-// the row of its first child and its tier mask.
-func (b *CoreStatsBuilder) Add(objectCount, totalBytes, childStart uint64, tierMask uint16) error {
-	needed := int64(b.dataOff + (b.count+1)*coreStatsBuildStride)
-	if needed > b.size {
-		newSize := max(b.size*2, needed)
-		if err := b.grow(newSize); err != nil {
-			return err
-		}
-	}
-	row := b.buildRowSlice(b.count)
-	binary.LittleEndian.PutUint64(row[bldOffCount:], objectCount)
-	binary.LittleEndian.PutUint64(row[bldOffBytes:], totalBytes)
-	binary.LittleEndian.PutUint64(row[bldOffChildStart:], childStart)
-	binary.LittleEndian.PutUint16(row[bldOffTierMask:], tierMask)
-
-	b.maxTierMask = max(b.maxTierMask, tierMask)
-	b.count++
-
-	return nil
-}
-
-// SetTierMaskEncoding sets how Finalize stores each row's tier mask: the
-// tier stats writer's MaskEncoding for the layout it writes.
-func (b *CoreStatsBuilder) SetTierMaskEncoding(enc TierMaskEncoding) {
-	b.tierEnc = enc
-}
-
-// Count returns the number of rows committed.
-func (b *CoreStatsBuilder) Count() int { return b.count }
-
-// chooseStride picks the row widths: the patched fields from the joint
-// distribution of the widths each row needs (see choosePatch), the
-// tier mask from its max. It reads every build row once.
-func (b *CoreStatsBuilder) chooseStride() (CoreStatsStride, patchChoice) {
-	var hist patchHistogram
-	var maxCount, maxBytes, maxSize uint64
-	for i := range b.count {
-		row := b.buildRowSlice(i)
-		c, by, sz := binary.LittleEndian.Uint64(row[bldOffCount:]),
-			binary.LittleEndian.Uint64(row[bldOffBytes:]),
-			binary.LittleEndian.Uint64(row[bldOffChildStart:])
-		hist.add(c, by, sz)
-		maxCount, maxBytes, maxSize = max(maxCount, c), max(maxBytes, by), max(maxSize, sz)
-	}
-	// Without exceptions there are no sentinels, so every field can take
-	// the plain width of its largest value, all-ones included: one byte
-	// narrower than choosePatch allows when a maximum is all ones.
-	plain := patchChoice{count: byteWidthOf(maxCount), bytes: byteWidthOf(maxBytes), size: byteWidthOf(maxSize)}
-	plain.cost = uint64(b.count) * uint64(plain.count+plain.bytes+plain.size)
-	choice := hist.choosePatch(uint64(b.count))
-	if choice.exceptions == 0 || plain.cost <= choice.cost {
-		choice = plain
-	}
-
-	return CoreStatsStride{
-		Count:      choice.count,
-		Bytes:      choice.bytes,
-		ChildStart: choice.size,
-		TierMask:   tierFieldWidth(b.maxTierMask, b.tierEnc),
-	}, choice
-}
-
 // byteWidth16 returns 1 for v < 256 else 2.
 func byteWidth16(v uint16) uint8 {
 	if v < 1<<8 {
@@ -351,163 +174,279 @@ func tierMaskWidth(maxMask uint16) uint8 {
 	return byteWidth16(maxMask)
 }
 
-// Finalize chooses the stride (count, bytes and child start from the
-// width histogram, with patch files for the rows that don't fit; the
-// tier mask from its max), streams the repacked rows into a
-// fresh file at the same path (Header + stride descriptor first), and
-// closes both files. Memory during the repack is bounded by the bufio
-// buffer (1 MiB) — at the project's stated 10B-prefix scale a per-row
-// in-memory buffer would be hundreds of GB.
-func (b *CoreStatsBuilder) Finalize() error {
-	desc, choice := b.chooseStride()
-	stride := desc.RowBytes()
-	var patch *patchWriter
-	if choice.exceptions > 0 {
-		var err error
-		if patch, err = newPatchWriter(filepath.Dir(b.path)); err != nil {
-			return err
-		}
-	}
-	abortPatch := func(err error) error {
-		if patch != nil {
-			return errors.Join(err, patch.abort())
-		}
+// CoreStatsPlan gathers, from every row in any order, what fixes the
+// core row widths before a row is written: the widths each row's count
+// and bytes need, their maxima and the largest tier mask. The zero
+// value is an empty plan.
+//
+// Rows are in level order, so the child starts are not known until
+// every depth's size is: row i's child start is above i, never below the
+// row before's, and the last row's is the row count. That bounds them
+// enough to choose the child start's width without them, except within
+// 0.5% above a power of 256 (see ChildStartTail).
+type CoreStatsPlan struct {
+	// hist counts rows by the widths their count and bytes need (index
+	// 0 unused); tail does for the rows ChildStartTail selects.
+	hist, tail         [9][9]uint64
+	rows, tailRows     uint64
+	maxCount, maxBytes uint64
+	maxMask            uint16
+}
 
-		return err
-	}
+// Add records the next row's count, bytes and tier mask.
+func (p *CoreStatsPlan) Add(count, bytes uint64, tierMask uint16) {
+	p.hist[fieldNeed(count)][fieldNeed(bytes)]++
+	p.rows++
+	p.maxCount, p.maxBytes = max(p.maxCount, count), max(p.maxBytes, bytes)
+	p.maxMask = max(p.maxMask, tierMask)
+}
 
-	// Write the tight final file to a sibling tmp path, then rename
-	// over the build file. We keep the build mmap live throughout the
-	// row-streaming loop so each row read is a memory copy from
-	// page-cached pages.
-	tmp := b.path + ".tmp"
-	final, err := os.Create(tmp)
-	if err != nil {
-		return abortPatch(fmt.Errorf("core stats create tmp: %w", err))
-	}
-	var head [coreStatsDataOff]byte
-	copy(head[:], EncodeHeader(Header{
-		Magic:   MagicNumber,
-		Version: Version,
-		Count:   uint64(b.count),
-		Width:   uint32(stride),
-	}))
-	enc := desc.Encode()
-	copy(head[HeaderSize:], enc[:])
-	if _, err := final.Write(head[:]); err != nil {
-		return abortPatch(cleanupTmp(final, tmp, fmt.Errorf("write header: %w", err)))
+// ChildStartTail reports whether choosing the widths needs the rows
+// whose child start is at least from (AddTail), and from.
+//
+// The child start's width is at least k-1 bytes, where k is the width
+// the row count needs: a width w leaves every row from widthMask[w]-1 on
+// an exception (its child start is above it), which for w <= k-2 is
+// over 99% of rows. At k-1 the exceptions are the rows whose child start
+// needs k bytes, a run at the end at least rows-widthMask[k-1]+1 long:
+// under the 0.5% cap only when the row count is within 0.5% above a
+// power of 256. Then the choice needs those rows' count and bytes
+// widths; otherwise it needs none.
+func (p *CoreStatsPlan) ChildStartTail() (uint64, bool) {
+	k := fieldNeed(p.rows)
+	if k == 1 {
+		return 0, false
 	}
 
-	bw := bufio.NewWriterSize(final, repackBufferSize)
-	// Each field is stored as a whole word over the bytes after it, so
-	// the row buffer has a word of slack past the row.
-	rowBuf := make([]byte, stride+8)
-	for i := range b.count {
-		exception := repackRow(rowBuf, b.buildRowSlice(i), desc, b.tierEnc)
-		if _, err := bw.Write(rowBuf[:stride]); err != nil {
-			return abortPatch(cleanupTmp(final, tmp, fmt.Errorf("write row %d: %w", i, err)))
-		}
-		if patch != nil {
-			row := b.buildRowSlice(i)
-			err := patch.add(exception, binary.LittleEndian.Uint64(row[bldOffCount:]),
-				binary.LittleEndian.Uint64(row[bldOffBytes:]), binary.LittleEndian.Uint64(row[bldOffChildStart:]))
-			if err != nil {
-				return abortPatch(cleanupTmp(final, tmp, err))
+	return widthMask[k-1], patchFeasible(p.childStartFloor(k-1), p.rows)
+}
+
+// AddTail records a row whose child start is at least ChildStartTail's
+// from, in any order.
+func (p *CoreStatsPlan) AddTail(count, bytes uint64) {
+	p.tail[fieldNeed(count)][fieldNeed(bytes)]++
+	p.tailRows++
+}
+
+// childStartFloor is the fewest rows whose child start needs more than
+// ws bytes: every row from widthMask[ws]-1 on.
+func (p *CoreStatsPlan) childStartFloor(ws uint8) uint64 {
+	return p.rows - min(p.rows, widthMask[ws]-1)
+}
+
+// countBytesExceptions counts the rows of h whose count or bytes need
+// more than wc or wb bytes.
+func countBytesExceptions(h *[9][9]uint64, wc, wb uint8) uint64 {
+	var e uint64
+	for c := uint8(1); c <= 8; c++ {
+		for b := uint8(1); b <= 8; b++ {
+			if c > wc || b > wb {
+				e += h[c][b]
 			}
 		}
 	}
-	if patch != nil {
-		if err := patch.close(); err != nil {
-			return cleanupTmp(final, tmp, err)
+
+	return e
+}
+
+// errCorePlan means the rows given to a core stats writer differ from
+// the plan it was made from, or the plan lacks the tail it needs.
+var errCorePlan = errors.New("core stats rows differ from their plan")
+
+// stride picks the row widths, as a 3-way histogram of every row's
+// count, bytes and child start widths would (see choosePatch): the
+// count and bytes from the plan's histogram, the child start from the
+// bound in ChildStartTail and, near a power of 256, the tail.
+func (p *CoreStatsPlan) stride(enc TierMaskEncoding) (CoreStatsStride, patchChoice, error) {
+	k := fieldNeed(p.rows)
+	from, needTail := p.ChildStartTail()
+	if needTail && p.tailRows < p.childStartFloor(k-1) {
+		return CoreStatsStride{}, patchChoice{}, fmt.Errorf("%w: %d rows with a child start from %d, at least %d expected",
+			errCorePlan, p.tailRows, from, p.childStartFloor(k-1))
+	}
+	var bounded bool
+	choice := choosePatch(p.rows, func(wc, wb, ws uint8) uint64 {
+		switch {
+		case ws >= k:
+			return countBytesExceptions(&p.hist, wc, wb)
+		case ws == k-1 && needTail:
+			return countBytesExceptions(&p.hist, wc, wb) - countBytesExceptions(&p.tail, wc, wb) + p.tailRows
+		}
+		e := p.childStartFloor(ws)
+		bounded = bounded || patchFeasible(e, p.rows)
+
+		return e
+	})
+	if bounded {
+		return CoreStatsStride{}, patchChoice{}, fmt.Errorf("%w: child start bound within the exception cap", errCorePlan)
+	}
+	// Without exceptions there are no sentinels, so every field can take
+	// the plain width of its largest value, all-ones included: one byte
+	// narrower than choosePatch allows when a maximum is all ones.
+	plain := patchChoice{count: byteWidthOf(p.maxCount), bytes: byteWidthOf(p.maxBytes), size: byteWidthOf(p.rows)}
+	plain.cost = p.rows * uint64(plain.count+plain.bytes+plain.size)
+	if choice.exceptions == 0 || plain.cost <= choice.cost {
+		choice = plain
+	}
+
+	return CoreStatsStride{
+		Count:      choice.count,
+		Bytes:      choice.bytes,
+		ChildStart: choice.size,
+		TierMask:   tierFieldWidth(p.maxMask, enc),
+	}, choice, nil
+}
+
+// CoreStatsWriter writes core_stats.bin, and its patch files when the
+// plan's widths leave exceptions, one row at a time in position order,
+// straight to their final form.
+type CoreStatsWriter struct {
+	path  string
+	f     *os.File
+	bw    *bufio.Writer
+	patch *patchWriter
+	// row is the row being packed, with a word of slack: each field is
+	// stored as a whole word over the bytes after it.
+	row  []byte
+	desc CoreStatsStride
+	enc  TierMaskEncoding
+	plan *CoreStatsPlan
+	// The rows, exceptions and last child start written.
+	n, exceptions, lastChild uint64
+	wantExceptions           uint64
+	closed                   bool
+}
+
+// NewCoreStatsWriter creates outDir's core stats file, at the widths
+// plan picks with the tier field encoded as enc (the tier plan's
+// MaskEncoding), and its patch files when those widths leave
+// exceptions. Near a power of 256 the plan must hold its tail first.
+func NewCoreStatsWriter(outDir string, plan *CoreStatsPlan, enc TierMaskEncoding) (*CoreStatsWriter, error) {
+	desc, choice, err := plan.stride(enc)
+	if err != nil {
+		return nil, err
+	}
+	w := &CoreStatsWriter{
+		path:           filepath.Join(outDir, CoreStatsFile),
+		row:            make([]byte, desc.RowBytes()+8),
+		desc:           desc,
+		enc:            enc,
+		plan:           plan,
+		wantExceptions: choice.exceptions,
+	}
+	if w.f, err = os.Create(w.path); err != nil {
+		return nil, fmt.Errorf("create core stats file: %w", err)
+	}
+	w.bw = bufio.NewWriterSize(w.f, writeBufSize)
+	head := EncodeHeader(Header{Magic: MagicNumber, Version: Version, Count: plan.rows, Width: uint32(desc.RowBytes())})
+	enc4 := desc.Encode()
+	if _, err := w.bw.Write(append(head, enc4[:]...)); err != nil {
+		return nil, errors.Join(fmt.Errorf("write core stats header: %w", err), w.Abort())
+	}
+	if choice.exceptions > 0 {
+		if w.patch, err = newPatchWriter(outDir); err != nil {
+			return nil, errors.Join(err, w.Abort())
 		}
 	}
-	pad := [coreStatsReadTailPad]byte{}
-	if _, err := bw.Write(pad[:]); err != nil {
-		return cleanupTmp(final, tmp, fmt.Errorf("write tail pad: %w", err))
-	}
-	if err := bw.Flush(); err != nil {
-		return cleanupTmp(final, tmp, fmt.Errorf("flush: %w", err))
-	}
-	startWriteback(final)
-	if err := final.Close(); err != nil {
-		_ = os.Remove(tmp)
 
-		return fmt.Errorf("close final: %w", err)
-	}
+	return w, nil
+}
 
-	// Drop the build mmap before the rename so the file we replace
-	// has no live references.
-	if err := unix.Munmap(b.data); err != nil {
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("munmap build: %w", err)
+// Add writes the next row: the prefix's object count, total bytes, the
+// row of its first child and its tier mask. It fails on a row the plan
+// doesn't hold: past its row count, a child start out of level order, a
+// value or mask wider than its field allows, or one exception more.
+func (w *CoreStatsWriter) Add(count, bytes, childStart uint64, tierMask uint16) error {
+	if w.n == w.plan.rows || childStart <= w.n || childStart < w.lastChild || childStart > w.plan.rows || tierMask > w.plan.maxMask {
+		return fmt.Errorf("%w: row %d of %d (child start %d after %d, tier mask %#x of at most %#x)",
+			errCorePlan, w.n, w.plan.rows, childStart, w.lastChild, tierMask, w.plan.maxMask)
 	}
-	b.data = nil
-	if err := b.file.Close(); err != nil {
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("close build: %w", err)
+	exception := false
+	off := 0
+	for _, f := range [patchedFields]struct {
+		v     uint64
+		width uint8
+	}{{count, w.desc.Count}, {bytes, w.desc.Bytes}, {childStart, w.desc.ChildStart}} {
+		v := f.v
+		if fieldNeed(v) > f.width {
+			if w.patch == nil && v > widthMask[f.width] {
+				return fmt.Errorf("%w: row %d value %d wider than %d bytes", errCorePlan, w.n, v, f.width)
+			}
+			v, exception = widthMask[f.width], true
+		}
+		binary.LittleEndian.PutUint64(w.row[off:], v)
+		off += int(f.width)
 	}
-	b.file = nil
-	if err := os.Rename(tmp, b.path); err != nil {
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("rename tmp into place: %w", err)
+	binary.LittleEndian.PutUint64(w.row[off:], encodeTierField(tierMask, w.enc))
+	if _, err := w.bw.Write(w.row[:w.desc.RowBytes()]); err != nil {
+		return fmt.Errorf("write core stats row %d: %w", w.n, err)
 	}
+	if w.patch != nil {
+		if exception {
+			if w.exceptions == w.wantExceptions {
+				return fmt.Errorf("%w: more than the %d exceptions planned", errCorePlan, w.wantExceptions)
+			}
+			w.exceptions++
+		}
+		if err := w.patch.add(exception, count, bytes, childStart); err != nil {
+			return err
+		}
+	}
+	w.n++
+	w.lastChild = childStart
 
 	return nil
 }
 
-// cleanupTmp closes f and removes path, returning the wrapped err.
-// Used on every error branch inside Finalize so cleanup is uniform
-// and the partial file never lingers.
-func cleanupTmp(f *os.File, path string, err error) error {
-	_ = f.Close()
-	_ = os.Remove(path)
-
-	return err
-}
-
-// repackRow narrows the build-stride row into the tight stride. A
-// patched field whose value doesn't fit stores its sentinel; repackRow
-// reports whether any did, so the row's exact values go to the patch.
-func repackRow(dst, src []byte, s CoreStatsStride, enc TierMaskEncoding) bool {
-	exception := false
-	off := 0
-	for _, f := range [patchedFields]struct {
-		at    int
-		width uint8
-	}{{bldOffCount, s.Count}, {bldOffBytes, s.Bytes}, {bldOffChildStart, s.ChildStart}} {
-		v := binary.LittleEndian.Uint64(src[f.at:])
-		if fieldNeed(v) > f.width {
-			v, exception = widthMask[f.width], true
-		}
-		binary.LittleEndian.PutUint64(dst[off:], v)
-		off += int(f.width)
+// Close finishes the files once every row the plan counted is written.
+// On an error every file it started is removed.
+func (w *CoreStatsWriter) Close() error {
+	if w.n != w.plan.rows || w.exceptions != w.wantExceptions || (w.n > 0 && w.lastChild != w.n) {
+		return errors.Join(fmt.Errorf("%w: wrote %d rows with %d exceptions, last child start %d; planned %d rows with %d",
+			errCorePlan, w.n, w.exceptions, w.lastChild, w.plan.rows, w.wantExceptions), w.Abort())
 	}
-	binary.LittleEndian.PutUint64(dst[off:], encodeTierField(binary.LittleEndian.Uint16(src[bldOffTierMask:]), enc))
+	var pad [coreStatsReadTailPad]byte
+	if _, err := w.bw.Write(pad[:]); err != nil {
+		return errors.Join(fmt.Errorf("write core stats tail pad: %w", err), w.Abort())
+	}
+	if err := w.bw.Flush(); err != nil {
+		return errors.Join(fmt.Errorf("flush core stats: %w", err), w.Abort())
+	}
+	startWriteback(w.f)
+	err := w.f.Close()
+	w.f = nil
+	if err != nil {
+		return errors.Join(fmt.Errorf("close core stats: %w", err), w.Abort())
+	}
+	if w.patch != nil {
+		err := w.patch.close()
+		w.patch = nil
+		if err != nil {
+			return errors.Join(err, w.Abort())
+		}
+	}
+	w.closed = true
 
-	return exception
+	return nil
 }
 
-// Close releases the mmap and closes the file without finalizing.
-// Used for error paths; the caller should remove the file separately.
-func (b *CoreStatsBuilder) Close() error {
+// Abort removes every file the writer started, unless Close finished
+// them. Idempotent.
+func (w *CoreStatsWriter) Abort() error {
+	if w.closed {
+		return nil
+	}
 	var errs []error
-	if b.data != nil {
-		if err := unix.Munmap(b.data); err != nil {
-			errs = append(errs, fmt.Errorf("core stats munmap: %w", err))
-		}
-		b.data = nil
+	if w.f != nil {
+		errs = append(errs, w.f.Close())
+		w.f = nil
 	}
-	if b.file != nil {
-		if err := b.file.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("core stats close: %w", err))
-		}
-		b.file = nil
+	if w.patch != nil {
+		errs = append(errs, w.patch.abort())
+		w.patch = nil
 	}
 
-	return errors.Join(errs...)
+	return errors.Join(append(errs, removeIfErr(w.path))...)
 }
 
 // CoreStatsReader reads the row-major core stats file with per-index

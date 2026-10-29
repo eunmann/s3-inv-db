@@ -103,7 +103,7 @@ func buildFixtureIndex(b *testing.B, n int) string {
 	rows := agg.Drain()
 	extsort.SortPrefixRows(rows)
 
-	builder, err := extsort.NewIndexBuilderWithCapacity(dir, "", uint64(len(rows)))
+	builder, err := extsort.NewIndexBuilder(dir, "")
 	if err != nil {
 		b.Fatalf("NewIndexBuilder: %v", err)
 	}

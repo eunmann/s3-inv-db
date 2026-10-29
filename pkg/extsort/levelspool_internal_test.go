@@ -10,11 +10,12 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// spoolTestRecord is the i-th record of the spool tests, at depth i%4.
+// spoolTestRecord is the i-th record of the spool tests, at depth i%4,
+// without the name, which is not spooled.
 func spoolTestRecord(i int) spoolRecord {
 	r := spoolRecord{
 		count: uint64(i), bytes: uint64(i) << 20, childLocal: uint64(i / 2), parentLocal: uint64(i / 3),
-		keyHash: uint64(i) * 0x9e3779b97f4a7c15, fp: ^uint64(i), name: fmt.Appendf(nil, "seg-%d", i),
+		keyHash: uint64(i) * 0x9e3779b97f4a7c15, fp: ^uint64(i), segID: uint32(i) * 0x9e3779b9,
 	}
 	r.tierCounts[i%MaxTiers], r.tierBytes[i%MaxTiers] = uint64(i), uint64(i)<<20
 
@@ -31,6 +32,7 @@ func TestLevelSpoolWritesEveryRecordInOrder(t *testing.T) {
 	for i := range n {
 		e := s.next()
 		e.depth, e.rec = i%4, spoolTestRecord(i)
+		e.rec.name = fmt.Appendf(nil, "seg-%d", i)
 		if err := s.commit(); err != nil {
 			t.Fatalf("commit %d: %v", i, err)
 		}

@@ -38,14 +38,17 @@ flowchart LR
    smallest files in rounds.
 5. **Build the index.** The builder checks the stream is complete and
    ordered (every prefix after its parent), hashes each prefix and
-   spools it by depth. At the end it writes every file in
-   [level order](#level-order-rows) and builds the minimal perfect
-   hash.
+   spools it by depth, interning its last segment and gathering the
+   statistics that fix each file's field widths as it goes. At the end
+   it writes each per-row file (core stats, tier stats, prefix tree)
+   once, in [level order](#level-order-rows), and builds the minimal
+   perfect hash. The segment dictionary is held in
+   memory until the last prefix is spooled.
 
 Scratch lives in a hidden `.<out>.scratch-*` directory beside the
 output, never in `/tmp` (which may be RAM). It holds at most two
 downloaded files per worker, the run files (deleted as merged), the
-level spool (~40 B per prefix) and the hash builder's arrays (~32 B per
+level spool (~35 B per prefix) and the hash builder's arrays (~32 B per
 prefix at their peak). The hash builder reads and writes those arrays
 only in sequence (its slot table is written range by range from a
 bucketed pass), so a build whose arrays don't fit in memory streams

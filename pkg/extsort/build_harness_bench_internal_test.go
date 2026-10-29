@@ -192,7 +192,7 @@ func flushAggregatorToRun(agg *Aggregator, tempDir string, runIdx int) (string, 
 }
 
 func buildFromRuns(outDir, tempDir string, runFiles []string, finalRows []*PrefixRow) (uint64, error) {
-	builder, err := NewIndexBuilderWithCapacity(outDir, tempDir, 0)
+	builder, err := NewIndexBuilder(outDir, tempDir)
 	if err != nil {
 		return 0, fmt.Errorf("new builder: %w", err)
 	}

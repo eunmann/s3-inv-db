@@ -75,11 +75,17 @@ func (si *PrefixSegmentInterner) Intern(segment string) (uint32, error) {
 	return id, nil
 }
 
+// Count returns the number of distinct segments interned.
 func (si *PrefixSegmentInterner) Count() uint32 {
 	return si.nextID
 }
 
+// Close writes the dictionary's last offset and closes its files. It
+// drops the segment map, which holds every distinct segment, so Count
+// is all that stays usable.
 func (si *PrefixSegmentInterner) Close() error {
+	si.ids = nil
+
 	return si.blobWriter.Close()
 }
 
