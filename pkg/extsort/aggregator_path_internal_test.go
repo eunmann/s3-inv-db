@@ -3,6 +3,7 @@ package extsort
 import (
 	"cmp"
 	"encoding/binary"
+	"fmt"
 	"maps"
 	"math/rand/v2"
 	"slices"
@@ -390,7 +391,8 @@ func propertyTestKeys(rng *rand.Rand, n int) []string {
 // TestAggregatorDrainProperty: for random keys in random, sorted and
 // per-chunk sorted order, with and without segments, at several
 // maxDepths and with Drains mid-stream, every drain is strictly
-// increasing and the drains add up to a direct count.
+// increasing, every row's totals are its tiers' sums, and the drains add
+// up to a direct count.
 func TestAggregatorDrainProperty(t *testing.T) {
 	for seed := range uint64(6) {
 		rng := rand.New(rand.NewPCG(seed, 11))
@@ -411,11 +413,7 @@ func TestAggregatorDrainProperty(t *testing.T) {
 						drain := func() {
 							checkAggregatorAccounting(t, agg)
 							rows := agg.Drain()
-							for i := 1; i < len(rows); i++ {
-								if rows[i-1].Prefix >= rows[i].Prefix {
-									t.Fatalf("seed=%d %s: drained %q then %q", seed, name, rows[i-1].Prefix, rows[i].Prefix)
-								}
-							}
+							checkSpilledRows(t, fmt.Sprintf("seed=%d %s", seed, name), rows)
 							mergeRows(got, rows)
 						}
 						for i, k := range order {

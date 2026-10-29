@@ -1,6 +1,7 @@
 package extsort
 
 import (
+	"bytes"
 	"fmt"
 	"maps"
 	"math/rand/v2"
@@ -111,16 +112,17 @@ func tierLayouts() map[string]tierLayout {
 }
 
 // TestAggregatorTierLayoutsAreExact: for every tier layout, spilled
-// through Drain or through WriteRun, every spill is strictly increasing,
-// every row's totals are its tiers' sums, and the spills add up to a
-// direct count.
+// through Drain, through WriteRun or as a memory run, every spill is
+// strictly increasing, every row's totals are its tiers' sums, and the
+// spills add up to a direct count. Every run file WriteRun writes is
+// byte for byte the one Drain's rows written one by one make.
 func TestAggregatorTierLayoutsAreExact(t *testing.T) {
 	dir := t.TempDir()
 	seen := map[string]int{}
 	for name, l := range tierLayouts() {
-		for _, viaRun := range []bool{false, true} {
-			where := fmt.Sprintf("%s viaRun=%v", name, viaRun)
-			agg := NewAggregator(0, 0)
+		for _, mode := range []string{"drain", "run file", "memory run"} {
+			where := fmt.Sprintf("%s via %s", name, mode)
+			agg, ref := NewAggregator(0, 0), NewAggregator(0, 0)
 			got := map[string]PrefixRow{}
 			spill := func() {
 				for _, seg := range agg.segments {
@@ -131,32 +133,39 @@ func TestAggregatorTierLayoutsAreExact(t *testing.T) {
 				if _, one := agg.soleRun(); !one && agg.PrefixCount() > 0 {
 					seen["several runs"]++
 				}
-				var rows []PrefixRow
-				if viaRun {
+				var rows []*PrefixRow
+				switch mode {
+				case "drain":
+					rows = agg.Drain()
+				case "memory run":
+					rows = memRunRows(t, agg)
+				default:
 					path := filepath.Join(dir, "run.crun")
-					writeTestRun(t, path, func(w *CompressedRunWriter) error {
+					written := writeTestRun(t, path, func(w *CompressedRunWriter) error {
 						_, err := agg.WriteRun(w)
 
 						return err
 					})
-					rows = readTestRun(t, path)
-				} else {
-					for _, r := range agg.Drain() {
-						rows = append(rows, *r)
+					drained := ref.Drain()
+					if want := writeTestRun(t, filepath.Join(dir, "drained.crun"), func(w *CompressedRunWriter) error {
+						return w.WriteAll(drained)
+					}); !bytes.Equal(written, want) {
+						t.Fatalf("%s: WriteRun's run file (%d B) differs from Drain+WriteAll's (%d B)", where, len(written), len(want))
+					}
+					for _, r := range readTestRun(t, path) {
+						rows = append(rows, &r)
 					}
 				}
 				checkSpilledRows(t, where, rows)
-				ptrs := make([]*PrefixRow, len(rows))
-				for i := range rows {
-					ptrs[i] = &rows[i]
-				}
-				mergeRows(got, ptrs)
+				mergeRows(got, rows)
 			}
 			for i, k := range l.keys {
 				if l.segmentAt[i] {
 					agg.StartSegment()
+					ref.StartSegment()
 				}
 				agg.AddObject(k, uint64(len(k)+i), l.tierOf(i))
+				ref.AddObject(k, uint64(len(k)+i), l.tierOf(i))
 				if l.spillAfter[i] {
 					spill()
 				}
@@ -174,10 +183,9 @@ func TestAggregatorTierLayoutsAreExact(t *testing.T) {
 
 // checkSpilledRows fails unless rows are strictly increasing by prefix
 // and each row's totals are the sums of its tiers'.
-func checkSpilledRows(t *testing.T, where string, rows []PrefixRow) {
+func checkSpilledRows(t *testing.T, where string, rows []*PrefixRow) {
 	t.Helper()
-	for i := range rows {
-		r := &rows[i]
+	for i, r := range rows {
 		if i > 0 && rows[i-1].Prefix >= r.Prefix {
 			t.Fatalf("%s: spilled %q then %q", where, rows[i-1].Prefix, r.Prefix)
 		}
