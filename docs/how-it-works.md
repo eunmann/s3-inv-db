@@ -73,7 +73,9 @@ page. The
 hash builder holds one partition of prefixes per worker (at most about
 2^20 of them), with as many workers as `0.25 × GOMEMLIMIT` allows
 (256 MiB with no limit), so its memory does not grow with the prefix
-count. A build that can't produce exact totals fails and removes what
+count. Beside it, writing the rows in level order takes up to about
+2 MiB per core (buffers plus two 16Ki-row chunks in flight), outside
+that budget. A build that can't produce exact totals fails and removes what
 it created; a previous index is left untouched.
 
 ## Querying
