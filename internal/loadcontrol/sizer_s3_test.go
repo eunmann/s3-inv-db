@@ -10,6 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/loadcontrol"
 	"github.com/eunmann/s3-inv-db/internal/s3test"
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -32,8 +33,9 @@ func TestManifestSizer_IndexSize(t *testing.T) {
 	}
 	sizer := loadcontrol.NewManifestSizer(client)
 
-	if got, err := sizer.IndexSize(t.Context(), bucket, key); err != nil || got != 340 {
-		t.Errorf("IndexSize = %d, %v; want 340", got, err)
+	want := inventory.ManifestSize{FileFormat: inventory.IndexFileFormat, DataBytes: 340}
+	if got, err := sizer.IndexSize(t.Context(), bucket, key); err != nil || got != want {
+		t.Errorf("IndexSize = %+v, %v; want %+v", got, err, want)
 	}
 	if _, err := sizer.IndexSize(t.Context(), bucket, "idx/src-bucket/daily/2026-10-24T01-00Z/core_stats.bin"); err == nil {
 		t.Error("IndexSize of a non-manifest key succeeded")
