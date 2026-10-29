@@ -59,22 +59,43 @@ func TestHeapReadingsUnderPressure(t *testing.T) {
 	}
 }
 
-// EstimatedMemoryUsage counts each new prefix once, with its length,
-// and starts over at a Drain.
+// EstimatedMemoryUsage counts each new prefix once, with its segment,
+// the prefix Drain writes and its map entry; a segment's nodes add map
+// entries when it is mapped and give back the prefixes of those merged
+// into the main tree; a Drain starts it over.
 func TestAggregatorEstimateCountsEachPrefix(t *testing.T) {
+	const node, entry = aggregatorNodeBytes, aggregatorMapEntryBytes
 	agg := NewAggregator(0, 0)
+	check := func(step string, want int64) {
+		t.Helper()
+		if got := agg.EstimatedMemoryUsage(); got != want {
+			t.Fatalf("%s: estimate = %d, want %d", step, got, want)
+		}
+	}
 	for _, k := range []string{"a/b/x", "a/b/y", "a/c/z", "top"} {
 		agg.AddObject(k, 1, tiers.Standard)
 	}
-	// "", "a/", "a/b/", "a/c/"
-	want := 4*aggregatorEntryBytes + int64(len("a/")+len("a/b/")+len("a/c/"))
-	if got := agg.EstimatedMemoryUsage(); got != want {
-		t.Fatalf("estimate = %d, want %d", got, want)
+	// "" (no map entry), then "a/", "a/b/", "a/c/": segment + prefix.
+	want := 4*node + 3*entry + (2 + 2) + (2 + 4) + (2 + 4)
+	check("map", want)
+
+	agg.StartSegment()
+	agg.AddObject("a/b/z", 1, tiers.Standard)
+	// A root, "a/" and "a/b/" of the segment's own, in no map.
+	want += 3*node + (2 + 2) + (2 + 4)
+	check("ordered segment", want)
+
+	agg.AddObject("a/a/x", 1, tiers.Standard)
+	// Mapping merges the three into the main tree's, whose prefixes Drain
+	// writes once; then "a/a/" is new.
+	want += -(2 + 4) + node + entry + (2 + 4)
+	check("mapped segment", want)
+	if got := agg.PrefixCount(); got != 5 {
+		t.Errorf("PrefixCount = %d, want 5", got)
 	}
+
 	agg.Drain()
-	if got := agg.EstimatedMemoryUsage(); got != 0 {
-		t.Fatalf("estimate after Drain = %d, want 0", got)
-	}
+	check("after Drain", 0)
 }
 
 // Rows recycled after a Drain must start from zero, across more than
@@ -106,35 +127,33 @@ func TestAggregatorDrainRecyclesRows(t *testing.T) {
 	}
 }
 
-// Drain returns the rows in the order their prefixes first appeared,
-// across slabs, so keys in order hand DrainSorted rows that are
-// already sorted.
-func TestAggregatorDrainInCreationOrder(t *testing.T) {
+// Drain returns the rows sorted by prefix, each once, whatever order the
+// keys came in: a segment with a byte below '/' ("a-/") sorts before its
+// sibling "a/" and that sibling's children, and keys in reverse order
+// across slabs come out in order.
+func TestAggregatorDrainIsSorted(t *testing.T) {
 	agg := NewAggregator(0, 0)
-	agg.AddObject("b/x", 1, tiers.Standard)
-	agg.AddObject("a/y/z", 1, tiers.Standard)
-	agg.AddObject("b/w/v", 1, tiers.Standard)
-	got := make([]string, 0, 5)
+	for _, k := range []string{"b/x", "a/y/z", "b/w/v", "a-/q", "a/"} {
+		agg.AddObject(k, 1, tiers.Standard)
+	}
+	got := make([]string, 0, 6)
 	for _, r := range agg.Drain() {
 		got = append(got, r.Prefix)
 	}
-	if want := []string{"", "b/", "a/", "a/y/", "b/w/"}; !slices.Equal(got, want) {
+	if want := []string{"", "a-/", "a/", "a/y/", "b/", "b/w/"}; !slices.Equal(got, want) {
 		t.Errorf("Drain order = %q, want %q", got, want)
 	}
 
-	keys := make([]string, 0, rowSlabLen+10)
-	for i := range rowSlabLen + 10 {
-		keys = append(keys, fmt.Sprintf("p%05d/x", i))
-	}
-	for _, k := range keys {
-		agg.AddObject(k, 1, tiers.Standard)
+	n := rowSlabLen + 10
+	for i := range n {
+		agg.AddObject(fmt.Sprintf("p%05d/x", n-i), 1, tiers.Standard)
 	}
 	rows := agg.Drain()
 	if !slices.IsSortedFunc(rows, func(a, b *PrefixRow) int { return strings.Compare(a.Prefix, b.Prefix) }) {
-		t.Error("rows of keys in order are not drained in order")
+		t.Error("rows of keys in reverse order are not drained in order")
 	}
-	if len(rows) != len(keys)+1 {
-		t.Errorf("drained %d rows, want %d", len(rows), len(keys)+1)
+	if len(rows) != n+1 {
+		t.Errorf("drained %d rows, want %d", len(rows), n+1)
 	}
 }
 
@@ -184,29 +203,32 @@ func TestFlushAggregatorReleasesRowsUnderHeapPressure(t *testing.T) {
 	}
 }
 
-// DrainSorted hands the rows out in prefix order, and a later spill no
-// larger than the biggest so far sorts without allocating.
-func TestAggregatorDrainSortedReusesSortBuffer(t *testing.T) {
+// A spill no larger than the last allocates only the block Drain writes
+// its prefixes into, whether the keys came through the map or through a
+// segment merged into it; an estimate short of the prefixes' length
+// would grow that block and allocate again.
+func TestAggregatorDrainReusesScratch(t *testing.T) {
 	agg := NewAggregator(0, 0)
-	for i := range 500 {
-		agg.AddObject(fmt.Sprintf("p%03d/x", 499-i), 1, tiers.Standard)
+	keys := make([]string, 0, 600)
+	for i := range 300 {
+		keys = append(keys, fmt.Sprintf("p%03d/q%d/x", (i*7)%300, i%5), fmt.Sprintf("r/%03d/y", 299-i))
 	}
-	rows := agg.DrainSorted()
-	if len(rows) != 501 {
-		t.Fatalf("drain = %d rows, want 501", len(rows))
-	}
-	if !slices.IsSortedFunc(rows, func(a, b *PrefixRow) int { return strings.Compare(a.Prefix, b.Prefix) }) {
-		t.Fatal("DrainSorted rows are not in prefix order")
-	}
-	for _, k := range agg.sortScratch[:cap(agg.sortScratch)] {
-		if k.row != nil || k.prefix != "" {
-			t.Fatal("sort buffer keeps references to drained rows")
+	cycle := func() []*PrefixRow {
+		agg.AddObject("p000/q0/x", 1, tiers.Standard)
+		agg.StartSegment()
+		agg.AddObject("p000/q0/a", 1, tiers.Standard)
+		agg.AddObject("p001/q1/a", 1, tiers.Standard)
+		for _, k := range keys {
+			agg.AddObject(k, 1, tiers.Standard)
 		}
-	}
 
-	if allocs := testing.AllocsPerRun(10, func() {
-		agg.sortScratch = sortPrefixRows(rows, agg.sortScratch)
-	}); allocs != 0 {
-		t.Errorf("sorting a spill no larger than the last = %v allocs, want 0", allocs)
+		return agg.Drain()
+	}
+	rows := cycle()
+	if !slices.IsSortedFunc(rows, func(a, b *PrefixRow) int { return strings.Compare(a.Prefix, b.Prefix) }) {
+		t.Fatal("Drain rows are not in prefix order")
+	}
+	if allocs := testing.AllocsPerRun(10, func() { cycle() }); allocs != 1 {
+		t.Errorf("a spill no larger than the last = %v allocs, want 1", allocs)
 	}
 }

@@ -1,8 +1,10 @@
 package extsort
 
 import (
+	"math"
 	"runtime/debug"
 	"runtime/metrics"
+	"slices"
 	"strings"
 	"unsafe"
 
@@ -12,68 +14,118 @@ import (
 // Aggregator accumulates per-prefix statistics in memory.
 // It is designed to be flushed when memory usage exceeds a threshold.
 //
+// Its rows are the nodes of a prefix tree: each prefix's node is keyed by
+// its parent's node and its segment, the bytes after the parent's prefix
+// up to and including the next '/'. A lookup hashes only the segment,
+// and Drain hands the rows out sorted by walking the tree.
+//
 // The aggregator is NOT safe for concurrent use. For concurrent access,
 // use multiple aggregators or external synchronization.
 type Aggregator struct {
-	// prefixes finds each prefix's slab row, keyed by its own Prefix.
-	prefixes map[string]*PrefixRow
-	// slabs back every row: the first used of them, in creation order,
-	// are what Drain returns, so each must be live. drained is Drain's
-	// result slice; both are reused once the caller is done with a
-	// Drain, so a worker allocates rows only while its largest spill is
-	// still growing.
-	slabs   [][]PrefixRow
-	drained []*PrefixRow
-	// sortScratch is DrainSorted's sort buffer, reused the same way.
-	sortScratch []keyedRow
-	// path holds the rows of the previous key's prefixes by depth
-	// (path[0] is the root's): the next key reuses the ones whose
-	// prefix it starts with and looks up only the levels below. Keys
-	// in order share most of their path; S3 Inventory doesn't promise
-	// any order, so this is a saving, never an assumption.
-	path []*PrefixRow
-	// segments are the rows since the last Drain by the StartSegment
+	// children finds a node of the main tree by its parent and segment.
+	children map[aggKey]uint32
+	// slabs back every node, in creation order (a node's index is its
+	// position); segs holds their segments. Both are reused once the
+	// caller is done with a Drain, so a worker allocates nodes only while
+	// its largest spill is still growing.
+	slabs [][]aggNode
+	segs  segmentArena
+	// path holds the nodes of the previous key's prefixes by depth
+	// (path[0] is the root): the next key reuses the ones whose prefix
+	// it starts with and looks up only the levels below. Keys in order
+	// share most of their path; S3 Inventory doesn't promise any order,
+	// so this is a saving, never an assumption.
+	path []aggPathEntry
+	// segments are the nodes since the last Drain by the StartSegment
 	// that began them (a chunk each), and lastKey is the previous key of
 	// the current one. A segment whose keys come in order needs no map;
 	// see StartSegment.
 	segments []aggSegment
 	lastKey  []byte
-	// merged is Drain's output when there are segments to merge, and
-	// mapped its buffer for the mapped segments' rows. mapDups is set
-	// once mapping a segment met a prefix already in the map, so two of
-	// its rows are in the mapped rows.
-	merged   []*PrefixRow
-	mapped   []*PrefixRow
-	mapDups  bool
-	used     int
+	// Drain's output and scratch, and mapSegment's (graft), reused the
+	// same way as the slabs.
+	drained    []*PrefixRow
+	merged     []*PrefixRow
+	runs       [][]*PrefixRow
+	runNext    []int
+	childEnd   []uint32
+	kids       []uint32
+	stack      []uint32
+	siblings   []aggSibling
+	graft      []aggGraft
+	used, dead int
+	// root is the main tree's root node, or noNode.
+	root     uint32
 	maxDepth int
-	// bytes is the heap the rows since the last Drain take: each row,
-	// its prefix string and, for a row in the map, its map entry
-	// (EstimatedMemoryUsage).
-	bytes    int64
-	tierMask uint16
+	// bytes is the heap the nodes since the last Drain take
+	// (EstimatedMemoryUsage), and prefixBytes the length of the prefixes
+	// Drain writes for the live ones.
+	bytes       int64
+	prefixBytes int
+	tierMask    uint16
 }
 
-// aggSegment is a run of rows from one StartSegment: from start to the
-// next segment's start. Its rows are in creation order, which is sorted
-// with no prefix twice, until an out-of-order key maps it: its rows go
-// into the map and every later row of it is looked up there.
+// aggNode is a prefix's row and its parent's index: noNode for a root,
+// deadNode once mapSegment has merged it into another node. Until Drain,
+// the row's Prefix holds only the node's segment ("" for a root); Drain
+// writes the whole prefix.
+type aggNode struct {
+	row    PrefixRow
+	parent uint32
+}
+
+const (
+	noNode   = math.MaxUint32
+	deadNode = math.MaxUint32 - 1
+)
+
+// aggKey is a node's key in the main tree.
+type aggKey struct {
+	parent uint32
+	seg    string
+}
+
+// aggPathEntry is a node on the cached path and the length of its
+// prefix, which ends at that offset of every key it is cached for.
+type aggPathEntry struct {
+	n   *aggNode
+	idx uint32
+	end int
+}
+
+// aggSegment is a run of nodes from one StartSegment: from start to the
+// next segment's start. While its keys come in order its nodes form a
+// tree of their own, created in prefix order with no prefix twice; the
+// first key out of order maps it, merging those nodes into the main
+// tree, and every later node of it is looked up there.
 type aggSegment struct {
 	start  int
 	mapped bool
 }
 
-// aggregatorEntryBytes is a prefix's heap cost besides its string: its
-// PrefixRow and its map entry (key header, value pointer, control byte
-// and load-factor slack). Measured: 328 B/prefix for 29 B prefixes and
-// 475 B/prefix for 185 B ones, both within 2% of this plus the length.
-const aggregatorEntryBytes = aggregatorRowBytes + aggregatorMapEntryBytes
+// aggSibling is a node and its segment, for sorting a node's children.
+type aggSibling struct {
+	seg string
+	idx uint32
+}
 
-// aggregatorRowBytes is a row's heap cost besides its string when it is
-// not in the map, and aggregatorMapEntryBytes what the map adds.
+// aggGraft is where mapSegment put one of the segment's nodes and the
+// length of its prefix.
+type aggGraft struct {
+	to        uint32
+	prefixLen int
+}
+
+// A node's heap cost is aggregatorNodeBytes, its segment, its prefix
+// (which Drain allocates) and, for a node in the main tree's map,
+// aggregatorMapEntryBytes: the key and value slot, its control byte and
+// the load-factor slack, 52 to 84 B over the map's growth cycle.
+// Measured at Drain (nodes, map, segments, prefixes and Drain's output)
+// for keys out of order: 368-390 B/prefix against an estimate of 360
+// for 4-byte segments, 501-520 against 486-497 for 40-byte ones.
 const (
-	aggregatorRowBytes      = int64(unsafe.Sizeof(PrefixRow{}))
-	aggregatorMapEntryBytes = 48
+	aggregatorNodeBytes     = int64(unsafe.Sizeof(aggNode{}))
+	aggregatorMapEntryBytes = 72
 )
 
 // NewAggregator creates a new prefix aggregator with the given initial capacity.
@@ -81,12 +133,12 @@ const (
 func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 	if initialCapacity <= 0 {
 		// Default to 10K - small enough to start but grows as needed
-		// Each prefix entry uses ~300 bytes (map entry + slab PrefixRow)
 		initialCapacity = 10000
 	}
 
 	return &Aggregator{
-		prefixes: make(map[string]*PrefixRow, initialCapacity),
+		children: make(map[aggKey]uint32, initialCapacity),
+		root:     noNode,
 		maxDepth: maxDepth,
 	}
 }
@@ -95,9 +147,11 @@ func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 // The key should be the full S3 object key (e.g., "data/2024/01/file.csv").
 func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 	a.tierMask |= uint16(1) << tierID
-	if a.inOrder() {
+	ordered := a.inOrder()
+	if ordered {
 		if key < string(a.lastKey) {
 			a.mapSegment()
+			ordered = false
 		} else {
 			a.lastKey = append(a.lastKey[:0], key...)
 		}
@@ -105,82 +159,107 @@ func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 
 	path := a.path
 	if len(path) == 0 {
-		path = append(path, a.row("", 0))
+		path = append(path, a.rootEntry(ordered))
 	}
-	path[0].add(size, tierID)
-	// Reuse the previous key's rows while this key starts with their
+	path[0].n.row.add(size, tierID)
+	// Reuse the previous key's nodes while this key starts with their
 	// prefixes; each level adds one segment, so only it is compared.
 	d := 1
 	for ; d < len(path); d++ {
-		prev, p := len(path[d-1].Prefix), path[d].Prefix
-		if len(key) < len(p) || key[prev:len(p)] != p[prev:] {
+		start, end := path[d-1].end, path[d].end
+		if len(key) < end || key[start:end] != path[d].n.row.Prefix {
 			break
 		}
-		path[d].add(size, tierID)
+		path[d].n.row.add(size, tierID)
 	}
 	path = path[:d]
 
 	depth := uint16(d)
-	for i := len(path[d-1].Prefix); i < len(key); i++ {
+	start := path[d-1].end
+	for i := start; i < len(key); i++ {
 		if key[i] != '/' {
 			continue
 		}
 		if a.maxDepth > 0 && int(depth) > a.maxDepth {
 			break
 		}
-		row := a.row(key[:i+1], depth)
-		row.add(size, tierID)
-		path = append(path, row)
+		e := a.child(path[len(path)-1].idx, key[start:i+1], i+1, depth, ordered)
+		e.n.row.add(size, tierID)
+		path = append(path, e)
+		start = i + 1
 		depth++
 	}
 	a.path = path
 }
 
-// row returns prefix's row, creating it on first use. A new prefix is
-// cloned: the caller's key is usually a substring of a whole inventory
-// record, which the map would otherwise keep alive.
-func (a *Aggregator) row(prefix string, depth uint16) *PrefixRow {
-	if a.inOrder() {
+// rootEntry returns the root's path entry: the main tree's, created on
+// first use, or in an ordered segment a root of the segment's own.
+func (a *Aggregator) rootEntry(ordered bool) aggPathEntry {
+	if !ordered && a.root != noNode {
+		return aggPathEntry{n: a.node(a.root), idx: a.root}
+	}
+	idx, n := a.newNode()
+	n.parent = noNode
+	a.bytes += aggregatorNodeBytes
+	if !ordered {
+		a.root = idx
+	}
+
+	return aggPathEntry{n: n, idx: idx}
+}
+
+// child returns the entry of parent's child with segment seg, whose
+// prefix is prefixLen bytes long, creating the node on first use. A new
+// segment is copied: the caller's key is usually a substring of a whole
+// inventory record, which the node would otherwise keep alive.
+func (a *Aggregator) child(parent uint32, seg string, prefixLen int, depth uint16, ordered bool) aggPathEntry {
+	if !ordered {
 		// In an ordered segment a prefix not on the path is new: see
 		// StartSegment.
-		row := a.newRow()
-		row.Prefix, row.Depth = strings.Clone(prefix), depth
-		a.bytes += aggregatorRowBytes + int64(len(prefix))
-
-		return row
+		if idx, ok := a.children[aggKey{parent: parent, seg: seg}]; ok {
+			return aggPathEntry{n: a.node(idx), idx: idx, end: prefixLen}
+		}
 	}
-	row, ok := a.prefixes[prefix]
-	if !ok {
-		owned := strings.Clone(prefix)
-		row = a.newRow()
-		row.Prefix, row.Depth = owned, depth
-		a.prefixes[owned] = row
-		a.bytes += aggregatorEntryBytes + int64(len(owned))
+	owned := a.segs.clone(seg)
+	idx, n := a.newNode()
+	n.row.Prefix, n.row.Depth, n.parent = owned, depth, parent
+	a.bytes += aggregatorNodeBytes + int64(len(owned)+prefixLen)
+	a.prefixBytes += prefixLen
+	if !ordered {
+		a.children[aggKey{parent: parent, seg: owned}] = idx
+		a.bytes += aggregatorMapEntryBytes
 	}
 
-	return row
+	return aggPathEntry{n: n, idx: idx, end: prefixLen}
 }
 
-// rowSlabLen is how many rows the aggregator allocates at a time.
+// rowSlabLen is how many nodes the aggregator allocates at a time.
 const rowSlabLen = 4096
 
-// newRow returns the next zeroed row from the slabs.
-func (a *Aggregator) newRow() *PrefixRow {
-	slab, i := a.used/rowSlabLen, a.used%rowSlabLen
-	if slab == len(a.slabs) {
-		a.slabs = append(a.slabs, make([]PrefixRow, rowSlabLen))
-	}
-	a.used++
-	row := &a.slabs[slab][i]
-	*row = PrefixRow{}
-
-	return row
+// node returns the node at index i.
+func (a *Aggregator) node(i uint32) *aggNode {
+	return &a.slabs[i/rowSlabLen][i%rowSlabLen]
 }
 
-// PrefixCount returns the rows since the last Drain: the prefixes seen,
-// counting one seen in several segments once per segment.
+// newNode returns the next zeroed node from the slabs and its index.
+func (a *Aggregator) newNode() (uint32, *aggNode) {
+	slab, i := a.used/rowSlabLen, a.used%rowSlabLen
+	if slab == len(a.slabs) {
+		a.slabs = append(a.slabs, make([]aggNode, rowSlabLen))
+	}
+	idx := uint32(a.used)
+	a.used++
+	n := &a.slabs[slab][i]
+	*n = aggNode{}
+
+	return idx, n
+}
+
+// PrefixCount returns the rows the next Drain hands out before merging
+// segments: the prefixes seen since the last Drain, counting one seen
+// in several ordered segments once per segment.
 func (a *Aggregator) PrefixCount() int {
-	return a.used
+	return a.used - a.dead
 }
 
 // StartSegment marks the start of a run of keys that may be in order,
@@ -189,13 +268,13 @@ func (a *Aggregator) PrefixCount() int {
 // depends on it: it only decides how fast the keys aggregate. While
 // they are, every prefix not on the previous key's path is one the
 // segment has not seen: it sorts after every prefix created before it
-// (two keys in order their prefixes, and a prefix of both is
-// prefix of every key between them, so on the cached path). Its row is
-// then created without a map lookup, and the segment's rows are sorted
-// as created. The first key out of order maps the segment, and the rest
-// of it aggregates through the map as without segments; the result is
-// the same either way. Drain merges the segments, so prefixes the
-// segments share come out once.
+// (two keys in order bound their prefixes, and a prefix of both is a
+// prefix of every key between them, so on the cached path). Its node is
+// then created without a map lookup, and the segment's nodes are
+// sorted as created. The first key out of order maps the segment, and
+// the rest of it aggregates through the map as without segments; the
+// result is the same either way. Drain merges the segments, so
+// prefixes the segments share come out once.
 func (a *Aggregator) StartSegment() {
 	a.segments = append(a.segments, aggSegment{start: a.used})
 	a.lastKey = a.lastKey[:0]
@@ -203,27 +282,59 @@ func (a *Aggregator) StartSegment() {
 	a.path = a.path[:0]
 }
 
-// inOrder reports whether rows are being created in an ordered segment.
+// inOrder reports whether nodes are being created in an ordered segment.
 func (a *Aggregator) inOrder() bool {
 	n := len(a.segments)
 
 	return n > 0 && !a.segments[n-1].mapped
 }
 
-// mapSegment moves the current segment's rows into the map, for a key
-// out of order. A prefix already in the map from another segment keeps
-// both rows; Drain merges them.
+// mapSegment merges the current segment's tree into the main tree, for
+// a key out of order. Its nodes come parents first, so each one's parent
+// is placed before it: a node whose prefix the main tree has already is
+// merged into that node and dies, any other joins the main tree under
+// its parent's place. The cached path moves with its nodes.
 func (a *Aggregator) mapSegment() {
 	seg := &a.segments[len(a.segments)-1]
 	seg.mapped = true
+	g := a.graft[:0]
 	for i := seg.start; i < a.used; i++ {
-		row := &a.slabs[i/rowSlabLen][i%rowSlabLen]
-		if _, ok := a.prefixes[row.Prefix]; ok {
-			a.mapDups = true
+		idx := uint32(i)
+		n := a.node(idx)
+		to, prefixLen := idx, 0
+		if n.parent == noNode {
+			if a.root == noNode {
+				a.root = idx
+			} else {
+				to = a.root
+			}
+		} else {
+			parent := g[int(n.parent)-seg.start]
+			prefixLen = parent.prefixLen + len(n.row.Prefix)
+			n.parent = parent.to
+			k := aggKey{parent: parent.to, seg: n.row.Prefix}
+			if found, ok := a.children[k]; ok {
+				to = found
+			} else {
+				a.children[k] = idx
+				a.bytes += aggregatorMapEntryBytes
+			}
 		}
-		a.prefixes[row.Prefix] = row
-		a.bytes += aggregatorMapEntryBytes
+		if to != idx {
+			a.node(to).row.Merge(&n.row)
+			n.parent = deadNode
+			a.dead++
+			a.prefixBytes -= prefixLen
+			a.bytes -= int64(prefixLen)
+		}
+		g = append(g, aggGraft{to: to, prefixLen: prefixLen})
 	}
+	for d := range a.path {
+		e := &a.path[d]
+		e.idx = g[int(e.idx)-seg.start].to
+		e.n = a.node(e.idx)
+	}
+	a.graft = g
 }
 
 // TierMask returns the bitmask of tier IDs this aggregator has seen
@@ -247,9 +358,10 @@ func tierIDsFromMask(mask uint16) []tiers.ID {
 	return ids
 }
 
-// EstimatedMemoryUsage returns the heap the aggregator's rows take
-// since the last Drain: each row, its prefix string and, for a row in
-// the map, its map entry, counted as they are created.
+// EstimatedMemoryUsage returns the heap the aggregator's nodes take
+// since the last Drain: each node, its segment, its map entry if it is
+// in the map, and the prefix Drain writes for it, counted as they are
+// created.
 func (a *Aggregator) EstimatedMemoryUsage() int64 {
 	return a.bytes
 }
@@ -353,107 +465,190 @@ func heapReadingsUnderPressure(live, inuse uint64, memoryLimit int64) bool {
 	return live >= uint64(limit*liveHeapPressureRatio) || inuse >= uint64(limit*heapInuseBackstopRatio)
 }
 
-// Drain hands over every accumulated row and clears the aggregator for
-// reuse. Nothing is copied: the rows and the slice stay valid only until
-// the aggregator is next used, when they are recycled.
+// Drain hands over every accumulated row, sorted by prefix with each
+// prefix once, and clears the aggregator for reuse. The rows and the
+// slice stay valid only until the aggregator is next used, when they are
+// recycled; the prefixes, written into one allocation, stay valid.
 //
-// With segments the rows come merged and sorted, each prefix once (see
-// mergeSegments). Without, they come in the order their prefixes first
-// appeared, read off the slabs rather than the map: keys in order create
-// their prefixes in sorted order, which DrainSorted's sort then only has
-// to confirm.
+// The main tree comes out in prefix order by a depth-first walk that
+// visits each node's children in segment order. A segment ends in its
+// only '/', so no sibling's segment is a prefix of another's: the first
+// byte where two differ comes before either ends, and decides the order
+// of every prefix below them too. Each ordered segment's nodes are in
+// prefix order as created; Drain merges these runs, adding up a prefix
+// they share.
 func (a *Aggregator) Drain() []*PrefixRow {
 	if a.used == 0 {
 		return nil
 	}
 
-	rows := a.drained[:0]
-	if cap(rows) < a.used {
-		rows = make([]*PrefixRow, 0, a.used)
+	live := a.used - a.dead
+	out := drainBuf{rows: a.drained[:0], arena: make([]byte, 0, a.prefixBytes)}
+	if cap(out.rows) < live {
+		out.rows = make([]*PrefixRow, 0, live)
 	}
-	for s := 0; len(rows) < a.used; s++ {
-		slab := a.slabs[s][:min(rowSlabLen, a.used-len(rows))]
-		for i := range slab {
-			rows = append(rows, &slab[i])
+	runs := a.runs[:0]
+	if a.root != noNode {
+		a.walkTree(&out)
+		runs = append(runs, out.rows)
+	}
+	for i, seg := range a.segments {
+		end := a.segmentEnd(i)
+		if seg.mapped || seg.start == end {
+			continue
 		}
+		begin := len(out.rows)
+		for j := seg.start; j < end; j++ {
+			out.emit(a, a.node(uint32(j)))
+		}
+		runs = append(runs, out.rows[begin:])
 	}
-	a.drained = rows
-	if len(a.segments) > 0 {
-		rows = a.mergeSegments(rows)
-		// A segment cut by the Drain goes on in the same mode.
-		last := a.segments[len(a.segments)-1]
-		a.segments = append(a.segments[:0], aggSegment{mapped: last.mapped})
+	a.drained, a.runs = out.rows, runs
+	rows := out.rows
+	if len(runs) > 1 {
+		rows = a.mergeRuns(runs)
 	}
+	clear(a.runs)
 
-	clear(a.prefixes)
-	a.used = 0
-	a.bytes = 0
-	// The cached path points at rows the next use recycles.
+	clear(a.children)
+	a.used, a.dead, a.bytes, a.prefixBytes = 0, 0, 0, 0
+	a.root = noNode
+	a.segs.reset()
+	// The cached path points at nodes the next use recycles.
 	clear(a.path)
 	a.path = a.path[:0]
-
-	return rows
-}
-
-// DrainSorted is Drain with the rows sorted by prefix, through a sort
-// buffer the aggregator keeps for the next spill. With segments, Drain's
-// merge has sorted them already.
-func (a *Aggregator) DrainSorted() []*PrefixRow {
-	segmented := len(a.segments) > 0
-	rows := a.Drain()
-	if !segmented {
-		a.sortScratch = sortPrefixRows(rows, a.sortScratch)
+	if n := len(a.segments); n > 0 {
+		// A segment cut by the Drain goes on in the same mode.
+		a.segments = append(a.segments[:0], aggSegment{mapped: a.segments[n-1].mapped})
 	}
 
 	return rows
 }
 
-// mergeSegments merges rows, in creation order, into one sorted run with
-// each prefix once: every ordered segment is a sorted run already, and
-// the mapped segments' rows (with any made before the first segment)
-// are sorted together into one more. A prefix in several runs has its
-// rows merged into the first.
-func (a *Aggregator) mergeSegments(rows []*PrefixRow) []*PrefixRow {
-	dups := a.mapDups
-	a.mapDups = false
-	if a.allMapped(len(rows)) {
-		// Keys out of order from the start: one sort, as without
-		// segments.
-		a.sortScratch = sortPrefixRows(rows, a.sortScratch)
-		if !dups {
-			return rows
-		}
-
-		return mergeAdjacent(rows)
+// segmentEnd returns the end of segment i's nodes.
+func (a *Aggregator) segmentEnd(i int) int {
+	if i+1 < len(a.segments) {
+		return a.segments[i+1].start
 	}
-	var runs [][]*PrefixRow
-	a.mapped = append(a.mapped[:0], rows[:a.segments[0].start]...)
-	mapped := a.mapped
+
+	return a.used
+}
+
+// mappedRanges returns the [lo, hi) node ranges of the main tree: the
+// nodes before the first segment and those of mapped segments, the
+// first range first. It reuses buf.
+func (a *Aggregator) mappedRanges(buf [][2]int) [][2]int {
+	if len(a.segments) == 0 {
+		return append(buf, [2]int{0, a.used})
+	}
+	buf = append(buf, [2]int{0, a.segments[0].start})
 	for i, seg := range a.segments {
-		end := len(rows)
-		if i+1 < len(a.segments) {
-			end = a.segments[i+1].start
-		}
-		switch {
-		case seg.start == end:
-		case seg.mapped:
-			mapped = append(mapped, rows[seg.start:end]...)
-		default:
-			runs = append(runs, rows[seg.start:end])
+		if seg.mapped {
+			buf = append(buf, [2]int{seg.start, a.segmentEnd(i)})
 		}
 	}
-	if len(mapped) > 0 {
-		a.sortScratch = sortPrefixRows(mapped, a.sortScratch)
-		runs = append(runs, mapped)
-	}
-	a.mapped = mapped
 
+	return buf
+}
+
+// walkTree emits the main tree's live nodes in prefix order. It groups the nodes by parent with
+// a counting sort (a node's index is above its parent's), then walks
+// depth first, sorting each node's children by segment as it visits it.
+func (a *Aggregator) walkTree(out *drainBuf) {
+	var rangeBuf [8][2]int
+	ranges := a.mappedRanges(rangeBuf[:0])
+
+	// childEnd[p] ends p's children in kids; childEnd[p-1] starts them.
+	end := slices.Grow(a.childEnd[:0], a.used)[:a.used]
+	clear(end)
+	for _, r := range ranges {
+		for i := r[0]; i < r[1]; i++ {
+			if p := a.node(uint32(i)).parent; p < deadNode {
+				end[p]++
+			}
+		}
+	}
+	total := uint32(0)
+	for p := range end {
+		total += end[p]
+		end[p] = total - end[p]
+	}
+	kids := slices.Grow(a.kids[:0], int(total))[:total]
+	for _, r := range ranges {
+		for i := r[0]; i < r[1]; i++ {
+			if p := a.node(uint32(i)).parent; p < deadNode {
+				kids[end[p]] = uint32(i)
+				end[p]++
+			}
+		}
+	}
+	a.childEnd, a.kids = end, kids
+
+	stack := a.stack[:0]
+	stack = append(stack, a.root)
+	for len(stack) > 0 {
+		i := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		out.emit(a, a.node(i))
+		begin := uint32(0)
+		if i > 0 {
+			begin = end[i-1]
+		}
+		children := kids[begin:end[i]]
+		if len(children) > 1 {
+			a.sortChildren(children)
+		}
+		for _, c := range slices.Backward(children) {
+			stack = append(stack, c)
+		}
+	}
+	a.stack = stack
+}
+
+// sortChildren sorts sibling nodes by segment, comparing copies of the
+// segments rather than loading each node per comparison.
+func (a *Aggregator) sortChildren(children []uint32) {
+	sib := a.siblings[:0]
+	for _, c := range children {
+		sib = append(sib, aggSibling{seg: a.node(c).row.Prefix, idx: c})
+	}
+	slices.SortFunc(sib, func(x, y aggSibling) int { return strings.Compare(x.seg, y.seg) })
+	for k := range sib {
+		children[k] = sib[k].idx
+	}
+	clear(sib)
+	a.siblings = sib
+}
+
+// drainBuf collects Drain's rows and writes their prefixes into arena,
+// sized to hold them all.
+type drainBuf struct {
+	rows  []*PrefixRow
+	arena []byte
+}
+
+// emit replaces n's segment with its whole prefix, its parent's (already
+// written) followed by the segment, and appends its row.
+func (b *drainBuf) emit(a *Aggregator, n *aggNode) {
+	if n.parent != noNode {
+		start := len(b.arena)
+		b.arena = append(b.arena, a.node(n.parent).row.Prefix...)
+		b.arena = append(b.arena, n.row.Prefix...)
+		n.row.Prefix = unsafe.String(&b.arena[start], len(b.arena)-start)
+	}
+	b.rows = append(b.rows, &n.row)
+}
+
+// mergeRuns merges sorted runs into one, merging the rows of a prefix
+// in several runs into the first.
+func (a *Aggregator) mergeRuns(runs [][]*PrefixRow) []*PrefixRow {
 	out := a.merged[:0]
+	next := slices.Grow(a.runNext[:0], len(runs))[:len(runs)]
+	clear(next)
 	var h typedMergeHeap
 	for i, run := range runs {
 		h.push(mergeItem{row: run[0], readerIdx: i})
 	}
-	next := make([]int, len(runs))
 	for h.Len() > 0 {
 		top := h.items[0]
 		if n := len(out); n > 0 && out[n-1].Prefix == top.row.Prefix {
@@ -469,49 +664,53 @@ func (a *Aggregator) mergeSegments(rows []*PrefixRow) []*PrefixRow {
 			h.pop()
 		}
 	}
-	a.merged = out
+	a.merged, a.runNext = out, next
 
 	return out
 }
 
-// Release drops the drained aggregator's slabs, Drain slice, sort
-// buffer and map buckets so the GC can reclaim them once the caller is
-// done with the last Drain. Call it only on an empty (just drained)
+// Release drops the drained aggregator's slabs, segments, Drain output
+// and scratch and map buckets so the GC can reclaim them once the caller
+// is done with the last Drain. Call it only on an empty (just drained)
 // aggregator.
 func (a *Aggregator) Release() {
-	a.mapDups = false
-	a.slabs, a.drained, a.sortScratch, a.path, a.merged, a.mapped = nil, nil, nil, nil, nil, nil
-	a.prefixes = make(map[string]*PrefixRow)
+	a.slabs, a.segs, a.path = nil, segmentArena{}, nil
+	a.drained, a.merged, a.runs, a.runNext = nil, nil, nil, nil
+	a.childEnd, a.kids, a.stack, a.siblings, a.graft = nil, nil, nil, nil, nil
+	a.children = make(map[aggKey]uint32)
 }
 
-// allMapped reports whether every one of the n rows is in a mapped
-// segment (or came before the first segment).
-func (a *Aggregator) allMapped(n int) bool {
-	for i, seg := range a.segments {
-		end := n
-		if i+1 < len(a.segments) {
-			end = a.segments[i+1].start
-		}
-		if !seg.mapped && seg.start < end {
-			return false
-		}
-	}
-
-	return true
+// segmentArena holds the nodes' segments in chunks it reuses after a
+// Drain, when the nodes and map keys that point into them are recycled
+// and cleared: one allocation per chunk instead of one per prefix.
+type segmentArena struct {
+	chunks [][]byte
+	inUse  int
+	free   []byte
 }
 
-// mergeAdjacent merges each run of sorted rows with the same prefix into
-// its first, in place.
-func mergeAdjacent(rows []*PrefixRow) []*PrefixRow {
-	out := rows[:0]
-	for _, row := range rows {
-		if n := len(out); n > 0 && out[n-1].Prefix == row.Prefix {
-			out[n-1].Merge(row)
+// segmentArenaChunk is a segment chunk's size; a segment longer than an
+// eighth of it (S3 keys are at most 1024 bytes) gets its own allocation.
+const segmentArenaChunk = 64 << 10
 
-			continue
+func (s *segmentArena) clone(seg string) string {
+	if len(seg) > len(s.free) {
+		if len(seg) > segmentArenaChunk/8 {
+			return strings.Clone(seg)
 		}
-		out = append(out, row)
+		if s.inUse == len(s.chunks) {
+			s.chunks = append(s.chunks, make([]byte, segmentArenaChunk))
+		}
+		s.free = s.chunks[s.inUse]
+		s.inUse++
 	}
+	b := s.free[:len(seg):len(seg)]
+	copy(b, seg)
+	s.free = s.free[len(seg):]
 
-	return out
+	return unsafe.String(unsafe.SliceData(b), len(b))
+}
+
+func (s *segmentArena) reset() {
+	s.inUse, s.free = 0, nil
 }

@@ -105,7 +105,7 @@ func mergeRows(acc map[string]PrefixRow, rows []*PrefixRow) {
 
 // TestAggregatorSegmentsAreExact: keys fed in segments (StartSegment
 // per chunk) give the same totals as a direct count, and every
-// DrainSorted run is strictly increasing, whether the segments are in
+// Drain is strictly increasing, whether the segments are in
 // order, overlap, are out of order inside, follow keys added before
 // any segment, or are cut by mid-stream Drains.
 func TestAggregatorSegmentsAreExact(t *testing.T) {
@@ -151,7 +151,7 @@ func TestAggregatorSegmentsAreExact(t *testing.T) {
 				agg := NewAggregator(0, maxDepth)
 				got := map[string]PrefixRow{}
 				drain := func() {
-					rows := agg.DrainSorted()
+					rows := agg.Drain()
 					for i := 1; i < len(rows); i++ {
 						if rows[i-1].Prefix >= rows[i].Prefix {
 							t.Fatalf("%s: drained %q then %q", name, rows[i-1].Prefix, rows[i].Prefix)
@@ -182,6 +182,31 @@ func TestAggregatorSegmentsAreExact(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// checkAggregatorAccounting recomputes from the nodes what the
+// aggregator has counted: the estimate (every node and its segment, the
+// prefix of each live one, every map entry) and the prefix bytes Drain
+// writes.
+func checkAggregatorAccounting(t *testing.T, agg *Aggregator) {
+	t.Helper()
+	var segBytes, prefixBytes int
+	for i := range agg.used {
+		n := agg.node(uint32(i))
+		segBytes += len(n.row.Prefix)
+		if n.parent == deadNode {
+			continue
+		}
+		for p := n; p.parent != noNode; p = agg.node(p.parent) {
+			prefixBytes += len(p.row.Prefix)
+		}
+	}
+	want := int64(agg.used)*aggregatorNodeBytes + int64(segBytes+prefixBytes) +
+		int64(len(agg.children))*aggregatorMapEntryBytes
+	if agg.prefixBytes != prefixBytes || agg.bytes != want {
+		t.Fatalf("counted %d prefix bytes and an estimate of %d; the nodes have %d and %d",
+			agg.prefixBytes, agg.bytes, prefixBytes, want)
 	}
 }
 
@@ -229,7 +254,8 @@ func TestAggregatorDrainProperty(t *testing.T) {
 						agg := NewAggregator(0, maxDepth)
 						got := map[string]PrefixRow{}
 						drain := func() {
-							rows := agg.DrainSorted()
+							checkAggregatorAccounting(t, agg)
+							rows := agg.Drain()
 							for i := 1; i < len(rows); i++ {
 								if rows[i-1].Prefix >= rows[i].Prefix {
 									t.Fatalf("seed=%d %s: drained %q then %q", seed, name, rows[i-1].Prefix, rows[i].Prefix)
