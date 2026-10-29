@@ -30,9 +30,12 @@ func fileSources(readers []*CompressedRunReader) []runSource {
 // It reads from multiple runs and yields PrefixRows in globally sorted order,
 // automatically merging duplicates (same prefix from different runs).
 //
-// Rows are recycled through a per-iterator free list: at most one row
-// per reader plus the last result are live, so a merge of any length
-// allocates only those.
+// Rows are recycled through a per-iterator free list. Every row is in
+// exactly one place: the heap (one per reader), the free list, last
+// (Next's result), or a NextOwned caller until it hands the row back
+// through Recycle. A merge of any length allocates only the rows live
+// at once: one per reader, plus the last result or the rows its caller
+// holds.
 type MergeIterator struct {
 	err     error
 	readers []runSource
@@ -152,6 +155,16 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 		m.free = append(m.free, m.last)
 		m.last = nil
 	}
+	row, err := m.NextOwned()
+	m.last = row
+
+	return row, err
+}
+
+// NextOwned is Next for a caller that keeps the row instead of copying
+// it: the row is the caller's, and the merge never reads or writes it,
+// until the caller hands it back through Recycle.
+func (m *MergeIterator) NextOwned() (*PrefixRow, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -177,9 +190,14 @@ func (m *MergeIterator) Next() (*PrefixRow, error) {
 		m.free = append(m.free, dup)
 	}
 
-	m.last = result
-
 	return result, nil
+}
+
+// Recycle hands back rows NextOwned returned, for the merge to read
+// into again. Each row must be handed back at most once and no longer
+// be in use, and Recycle must not run concurrently with NextOwned.
+func (m *MergeIterator) Recycle(rows []*PrefixRow) {
+	m.free = append(m.free, rows...)
 }
 
 // takeTop returns the heap's smallest row and puts its reader's next row

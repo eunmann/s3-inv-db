@@ -1056,11 +1056,11 @@ type mergeBuildResult struct {
 	MergeBytesWritten int64
 }
 
-// runMergePhase returns a streaming RowIterator over the K-way merge
-// of p.runFiles and p.memRuns, plus a cleanup closure. A lone run,
-// in memory or on disk, is wrapped directly. Otherwise the parallel
+// runMergePhase returns a streaming iterator over the K-way merge of
+// p.runFiles and p.memRuns, plus a cleanup closure. A lone run, in
+// memory or on disk, is wrapped directly. Otherwise the parallel
 // merger merges both kinds and writes no final merged file.
-func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRunFiles, numWorkers, maxFanIn int, perReaderBuffer int64) (RowIterator, func() error, MergeStatistics, error) {
+func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRunFiles, numWorkers, maxFanIn int, perReaderBuffer int64) (ownedRowIterator, func() error, MergeStatistics, error) {
 	if numRunFiles == 0 && len(p.memRuns) == 1 {
 		run := p.memRuns[0]
 
@@ -1293,16 +1293,25 @@ func (p *reportingIterator) Next() (*PrefixRow, error) {
 
 func (p *reportingIterator) Remaining() uint64 { return p.inner.Remaining() }
 
-// singleRunIterator wraps a CompressedRunReader to implement the iterator interface expected by IndexBuilder.
-// Reuses one PrefixRow across all Next() calls — caller must consume the
-// returned row before calling Next again. IndexBuilder.Add does this.
+// singleRunIterator reads a lone run, with no merge, into rows recycled
+// through a free list as MergeIterator's are.
 type singleRunIterator struct {
 	reader runSource
-	row    PrefixRow
+	free   []*PrefixRow
 }
 
-func (s *singleRunIterator) Next() (*PrefixRow, error) {
-	if err := s.reader.ReadInto(&s.row); err != nil {
+// NextOwned reads the next row into a row the caller owns until it
+// hands it back through Recycle.
+func (s *singleRunIterator) NextOwned() (*PrefixRow, error) {
+	var row *PrefixRow
+	if n := len(s.free); n > 0 {
+		row = s.free[n-1]
+		s.free = s.free[:n-1]
+	} else {
+		row = &PrefixRow{}
+	}
+	if err := s.reader.ReadInto(row); err != nil {
+		s.free = append(s.free, row)
 		if errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
@@ -1310,7 +1319,12 @@ func (s *singleRunIterator) Next() (*PrefixRow, error) {
 		return nil, fmt.Errorf("read from run: %w", err)
 	}
 
-	return &s.row, nil
+	return row, nil
+}
+
+// Recycle hands back rows NextOwned returned.
+func (s *singleRunIterator) Recycle(rows []*PrefixRow) {
+	s.free = append(s.free, rows...)
 }
 
 func (s *singleRunIterator) Remaining() uint64 {

@@ -179,14 +179,14 @@ type mergeResult struct {
 // been merged into a larger run, and the cleanup closure closes the
 // iterator and deletes the runs it read. On error every remaining run
 // is deleted.
-func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []string) (RowIterator, func() error, error) {
+func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []string) (*MergeIterator, func() error, error) {
 	return m.mergeAllToIterator(ctx, inputPaths, nil)
 }
 
 // mergeAllToIterator is MergeAllToIterator with sorted runs held in
 // memory joining the final merge beside the files. They need no read
 // buffer or decoder, so they don't count toward FinalFanIn.
-func (m *ParallelMerger) mergeAllToIterator(ctx context.Context, inputPaths []string, inMemory []*memRun) (RowIterator, func() error, error) {
+func (m *ParallelMerger) mergeAllToIterator(ctx context.Context, inputPaths []string, inMemory []*memRun) (*MergeIterator, func() error, error) {
 	if len(inputPaths) == 0 && len(inMemory) == 0 {
 		return nil, func() error { return nil }, ErrNoInputPaths
 	}

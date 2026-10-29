@@ -14,18 +14,19 @@ import (
 // Remaining (input left) starts at twice the rows it yields: the shape
 // of a merge whose inputs repeat every prefix once.
 type mergedIterator struct {
-	row  PrefixRow
 	n, i int
 }
 
-func (m *mergedIterator) Next() (*PrefixRow, error) {
+func (m *mergedIterator) NextOwned() (*PrefixRow, error) {
 	if m.i >= m.n {
 		return nil, io.EOF
 	}
 	m.i++
 
-	return &m.row, nil
+	return &PrefixRow{}, nil
 }
+
+func (m *mergedIterator) Recycle([]*PrefixRow) {}
 
 func (m *mergedIterator) Remaining() uint64 { return uint64(2 * (m.n - m.i)) }
 

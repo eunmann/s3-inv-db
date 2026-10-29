@@ -8,21 +8,31 @@ import (
 
 // prefetchBatchRows and prefetchBuffers size the prefetcher: four
 // batches (one being filled, two queued, one being consumed) of 4096
-// rows, ~4 MiB in all.
+// rows, ~4 MiB of rows in all.
 const (
 	prefetchBatchRows = 4096
 	prefetchBuffers   = 4
 )
 
-// prefetchIterator runs inner on its own goroutine, copying rows into
-// batches a couple ahead of the consumer, so the final k-way merge's
-// decoding overlaps the index build instead of alternating with it.
-// A returned row is valid until the next call to Next. Call stop
-// before closing whatever inner reads from.
+// ownedRowIterator yields rows the caller owns until it hands them back
+// through Recycle, so they can pass to another goroutine by pointer.
+type ownedRowIterator interface {
+	NextOwned() (*PrefixRow, error)
+	Recycle(rows []*PrefixRow)
+	Remaining() uint64
+}
+
+// prefetchIterator runs inner on its own goroutine, filling batches of
+// row pointers a couple ahead of the consumer, so the final k-way
+// merge's decoding overlaps the index build instead of alternating with
+// it. A batch's rows belong to whichever side holds the batch; the
+// prefetch goroutine, the only one that calls inner, recycles them once
+// the consumer hands the batch back. A returned row is valid until the
+// next call to Next. Call stop before closing whatever inner reads from.
 type prefetchIterator struct {
-	inner     RowIterator
+	inner     ownedRowIterator
 	full      chan rowBatch
-	free      chan []PrefixRow
+	free      chan []*PrefixRow
 	done      chan struct{}
 	cur       rowBatch
 	wg        sync.WaitGroup
@@ -39,15 +49,15 @@ type prefetchIterator struct {
 // the batch early.
 type rowBatch struct {
 	err  error
-	rows []PrefixRow
+	rows []*PrefixRow
 }
 
 // newPrefetchIterator wraps inner; nothing runs until the first Next.
-func newPrefetchIterator(inner RowIterator) *prefetchIterator {
+func newPrefetchIterator(inner ownedRowIterator) *prefetchIterator {
 	p := &prefetchIterator{
 		inner:     inner,
 		full:      make(chan rowBatch, prefetchBuffers-2),
-		free:      make(chan []PrefixRow, prefetchBuffers),
+		free:      make(chan []*PrefixRow, prefetchBuffers),
 		done:      make(chan struct{}),
 		remaining: inner.Remaining(),
 	}
@@ -64,22 +74,23 @@ func (p *prefetchIterator) inputRemaining() uint64 { return p.inputLeft.Load() }
 func (p *prefetchIterator) run() {
 	defer close(p.full)
 	for {
-		var rows []PrefixRow
+		var rows []*PrefixRow
 		select {
 		case rows = <-p.free:
 		case <-p.done:
 			return
 		}
+		p.inner.Recycle(rows)
 		rows = rows[:0]
 		var err error
 		for len(rows) < cap(rows) {
-			row, nextErr := p.inner.Next()
+			row, nextErr := p.inner.NextOwned()
 			if nextErr != nil {
 				err = nextErr
 
 				break
 			}
-			rows = append(rows, *row)
+			rows = append(rows, row)
 		}
 		p.inputLeft.Store(p.inner.Remaining())
 		select {
@@ -99,7 +110,7 @@ func (p *prefetchIterator) Next() (*PrefixRow, error) {
 	if !p.started {
 		p.started = true
 		for range prefetchBuffers {
-			p.free <- make([]PrefixRow, 0, prefetchBatchRows)
+			p.free <- make([]*PrefixRow, 0, prefetchBatchRows)
 		}
 		p.wg.Go(p.run)
 	}
@@ -116,7 +127,7 @@ func (p *prefetchIterator) Next() (*PrefixRow, error) {
 		}
 		p.cur, p.idx = batch, 0
 	}
-	row := &p.cur.rows[p.idx]
+	row := p.cur.rows[p.idx]
 	p.idx++
 	p.remaining -= min(p.remaining, 1)
 

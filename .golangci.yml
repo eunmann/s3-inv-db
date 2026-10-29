@@ -139,7 +139,7 @@ linters:
         - github.com/eunmann/s3-inv-db/pkg/extsort\.RunReader
         - github.com/eunmann/s3-inv-db/pkg/extsort\.mergeOutputWriter
         - github.com/eunmann/s3-inv-db/pkg/indexread\.Iterator
-        - github.com/eunmann/s3-inv-db/pkg/extsort\.RowIterator
+        - github.com/eunmann/s3-inv-db/pkg/extsort\.ownedRowIterator
     testifylint:
       enable-all: true
     testpackage:
