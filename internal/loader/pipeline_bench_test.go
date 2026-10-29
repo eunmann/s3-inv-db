@@ -243,6 +243,9 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 // step includes publishing the index and removing scratch). It records only when
 // the phase changes, so it allocates a few times per build.
 type phaseClock struct {
+	err   error
+	cpu   map[string]time.Duration
+	cpu0  time.Duration
 	spent map[string]time.Duration
 	start time.Time
 	cur   string
@@ -250,7 +253,7 @@ type phaseClock struct {
 }
 
 func newPhaseClock() *phaseClock {
-	return &phaseClock{spent: make(map[string]time.Duration)}
+	return &phaseClock{spent: make(map[string]time.Duration), cpu: make(map[string]time.Duration)}
 }
 
 // begin starts a build at start.
@@ -258,6 +261,7 @@ func (c *phaseClock) begin(start time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.cur, c.start = "pipeline", start
+	c.cpu0 = c.readCPU()
 }
 
 func (c *phaseClock) observe(ev events.Progress) {
@@ -282,13 +286,32 @@ func (c *phaseClock) end() {
 
 func (c *phaseClock) switchTo(name string, now time.Time) {
 	c.spent[c.cur] += now.Sub(c.start)
+	cpu := c.readCPU()
+	c.cpu[c.cur] += cpu - c.cpu0
+	c.cpu0 = cpu
 	c.cur, c.start = name, now
 }
 
+// readCPU reads the process CPU time, keeping the first error for report:
+// it runs in the build's progress callback, off the benchmark goroutine.
+func (c *phaseClock) readCPU() time.Duration {
+	cpu, err := benchutil.ProcCPU()
+	if err != nil && c.err == nil {
+		c.err = err
+	}
+	return cpu
+}
+
 // report reports each phase's mean seconds per op as phase_<name>_s,
-// the name lowercased with runs of other characters as underscores.
+// the name lowercased with runs of other characters as underscores, and
+// the cores it kept busy (process CPU over wall time) as
+// phase_<name>_cores: a phase well under GOMAXPROCS is waiting, on a
+// serial goroutine or on S3 or disk I/O, not bound by CPU.
 func (c *phaseClock) report(b *testing.B) {
 	b.Helper()
+	if c.err != nil {
+		b.Fatalf("phase clock: %v", c.err)
+	}
 	for name, d := range c.spent {
 		var unit strings.Builder
 		unit.WriteString("phase_")
@@ -302,8 +325,11 @@ func (c *phaseClock) report(b *testing.B) {
 				under = true
 			}
 		}
-		unit.WriteString("_s")
-		b.ReportMetric(d.Seconds()/float64(b.N), unit.String())
+		base := unit.String()
+		b.ReportMetric(d.Seconds()/float64(b.N), base+"_s")
+		if d > 0 {
+			b.ReportMetric(float64(c.cpu[name])/float64(d), base+"_cores")
+		}
 	}
 }
 
