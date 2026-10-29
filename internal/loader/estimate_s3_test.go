@@ -40,7 +40,7 @@ func TestInventorySize_EstimateCoversBuiltIndex(t *testing.T) {
 			if err != nil {
 				t.Fatalf("InventorySize: %v", err)
 			}
-			estimate := inventory.EstimateIndexBytes(size.FileFormat, size.DataBytes)
+			estimate := inventory.EstimateIndexBytes(size.FileFormat, size.DataBytes, inventory.IndexRatio{})
 
 			outDir, err := loader.New(t.TempDir(), fc).BuildWith(t.Context(),
 				inventory.CacheKey{SourceBucket: "src", InventoryID: info.ID, Run: "run"}, info.Path, nil, nil)

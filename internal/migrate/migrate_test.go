@@ -116,13 +116,11 @@ func TestApply_DirtyRecoveryReRunsFailedMigration(t *testing.T) {
 	}
 
 	ctx := t.Context()
-	// Drop every column from the most recent migration so the re-run
-	// isn't short-circuited by the alreadyAppliedErr path.
-	// 0008_job_step adds two columns to jobs.
-	for _, col := range []string{"step", "step_started_at"} {
-		if _, err := db.ExecContext(ctx, `ALTER TABLE jobs DROP COLUMN `+col); err != nil {
-			t.Fatalf("simulate partial apply (drop %s): %v", col, err)
-		}
+	// Undo the most recent migration so the re-run isn't
+	// short-circuited by the alreadyAppliedErr path.
+	// 0009_index_ratios creates the index_ratios table.
+	if _, err := db.ExecContext(ctx, `DROP TABLE index_ratios`); err != nil {
+		t.Fatalf("simulate partial apply: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE schema_migrations SET dirty = 1`); err != nil {
 		t.Fatalf("seed dirty: %v", err)
@@ -138,10 +136,10 @@ func TestApply_DirtyRecoveryReRunsFailedMigration(t *testing.T) {
 	}
 	var name string
 	err := db.QueryRowContext(ctx,
-		`SELECT name FROM pragma_table_info('jobs') WHERE name='step_started_at'`,
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='index_ratios'`,
 	).Scan(&name)
 	if err != nil {
-		t.Errorf("step_started_at column missing after dirty recovery: %v", err)
+		t.Errorf("index_ratios table missing after dirty recovery: %v", err)
 	}
 }
 

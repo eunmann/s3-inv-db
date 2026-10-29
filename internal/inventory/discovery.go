@@ -83,6 +83,13 @@ type ManifestSize struct {
 // downloaded.
 type ManifestSizeFunc func(ctx context.Context, bucket, key string) (ManifestSize, error)
 
+// IndexRatios keeps each configuration's learned IndexRatio across
+// restarts. ConfigStore implements it.
+type IndexRatios interface {
+	IndexRatio(ctx context.Context, source, name string) (IndexRatio, error)
+	RecordIndexRatio(ctx context.Context, source, name string, r IndexRatio) error
+}
+
 // Discovery orchestrates the inventory use cases that span the
 // Catalog (in-memory state), the Discoverer (S3 listing of available
 // inventories), and the IndexBuilder (on-disk index materialisation).
@@ -99,6 +106,7 @@ type Discovery struct {
 	cacheLastErr  error
 	gate          GatedLoadFunc
 	sizer         ManifestSizeFunc
+	ratios        IndexRatios
 	manager       *Catalog
 	bgStop        chan struct{}
 	bgClock       func() time.Time
@@ -157,6 +165,15 @@ func WithGate(gate GatedLoadFunc, sizer ManifestSizeFunc) DiscoveryOption {
 	return func(d *Discovery) {
 		d.gate = gate
 		d.sizer = sizer
+	}
+}
+
+// WithIndexRatios has gated loads record each configuration's measured
+// index ratio in ratios and estimate its later runs from it. Without
+// it every inventory load gets its format's conservative estimate.
+func WithIndexRatios(ratios IndexRatios) DiscoveryOption {
+	return func(d *Discovery) {
+		d.ratios = ratios
 	}
 }
 
@@ -488,14 +505,52 @@ func (d *Discovery) loadInternal(ctx context.Context, disc Inventory, onProgress
 		return d.manager.LoadWith(ctx, composite, build)
 	}
 	opts := GatedLoadOptions{Pin: !auto}
-	if size, ok := d.manifestSize(ctx, disc); ok {
-		opts.EstimateBytes = EstimateIndexBytes(size.FileFormat, size.DataBytes)
+	size, sized := d.manifestSize(ctx, disc)
+	if sized {
+		opts.EstimateBytes = EstimateIndexBytes(size.FileFormat, size.DataBytes, d.learnedRatio(ctx, disc, size))
 	}
 	if err := d.gate(ctx, composite, build, opts); err != nil {
 		return fmt.Errorf("gated load %s: %w", composite, err)
 	}
+	if sized {
+		d.recordRatio(ctx, disc, size)
+	}
 
 	return nil
+}
+
+// learnedRatio is the index ratio disc's configuration last measured,
+// or none: for a published index, whose size is exact, or when the
+// lookup fails, which leaves the load the conservative estimate.
+func (d *Discovery) learnedRatio(ctx context.Context, disc Inventory, size ManifestSize) IndexRatio {
+	if d.ratios == nil || size.FileFormat == IndexFileFormat {
+		return IndexRatio{}
+	}
+	r, err := d.ratios.IndexRatio(ctx, disc.SourceBucket, disc.Name)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Str("config", disc.ConfigID()).Msg("read learned index ratio; estimating conservatively")
+
+		return IndexRatio{}
+	}
+
+	return r
+}
+
+// recordRatio stores the ratio of disc's built index to its inventory
+// data as its configuration's latest. A failure costs only estimate
+// precision, so it is logged, not returned.
+func (d *Discovery) recordRatio(ctx context.Context, disc Inventory, size ManifestSize) {
+	if d.ratios == nil || size.FileFormat == IndexFileFormat || size.DataBytes == 0 {
+		return
+	}
+	info, ok := d.manager.Get(disc.CompositeID())
+	if !ok || info.State != StateLoaded || info.IndexBytes == 0 {
+		return
+	}
+	r := IndexRatio{FileFormat: size.FileFormat, Ratio: float64(info.IndexBytes) / float64(size.DataBytes)}
+	if err := d.ratios.RecordIndexRatio(context.WithoutCancel(ctx), disc.SourceBucket, disc.Name, r); err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Str("config", disc.ConfigID()).Msg("record learned index ratio")
+	}
 }
 
 // manifestSize is what disc's manifest says its load reads: from disc

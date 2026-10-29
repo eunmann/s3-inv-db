@@ -218,3 +218,40 @@ func scanConfig(r rowScanner) (Config, error) {
 
 	return c, nil
 }
+
+// IndexRatio returns the index ratio the configuration's latest built
+// run measured: the zero IndexRatio when none has been recorded.
+func (s *ConfigStore) IndexRatio(ctx context.Context, source, name string) (IndexRatio, error) {
+	var r IndexRatio
+	err := s.db.QueryRowContext(ctx,
+		`SELECT file_format, ratio FROM index_ratios WHERE source = ? AND name = ?`, source, name,
+	).Scan(&r.FileFormat, &r.Ratio)
+	if errors.Is(err, sql.ErrNoRows) {
+		return IndexRatio{}, nil
+	}
+	if err != nil {
+		return IndexRatio{}, fmt.Errorf("get index ratio %s/%s: %w", source, name, err)
+	}
+
+	return r, nil
+}
+
+// RecordIndexRatio replaces the configuration's index ratio. It is kept
+// apart from the configuration's row so that learning one doesn't
+// create a configuration.
+func (s *ConfigStore) RecordIndexRatio(ctx context.Context, source, name string, r IndexRatio) error {
+	_, err := s.db.ExecContext(ctx, `
+        INSERT INTO index_ratios (source, name, file_format, ratio, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(source, name) DO UPDATE SET
+            file_format = excluded.file_format,
+            ratio       = excluded.ratio,
+            updated_at  = excluded.updated_at`,
+		source, name, r.FileFormat, r.Ratio, time.Now().Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("record index ratio %s/%s: %w", source, name, err)
+	}
+
+	return nil
+}

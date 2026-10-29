@@ -18,7 +18,7 @@ disk and memory, and what to watch. Settings are in
   (15m) it builds the newest unloaded run of each auto-load
   configuration, among its newest `retention_count` runs (2). A failed
   auto-load backs off from 1 minute to 1 hour.
-- **Keeps state** (runs, configurations, pins, job history) in
+- **Keeps state** (runs, configurations, pins, index ratios, job history) in
   `<cache_dir>/state.db` (SQLite). Finished jobs older than 30 days
   are pruned daily, keeping each run's last 20.
 
@@ -28,13 +28,23 @@ proxy or auth layer and list it in `trusted_proxies`.
 ## Disk budget
 
 `max_index_disk` caps the bytes of loaded indexes; a fifth of it is
-headroom. A load is admitted if its estimate fits; the estimate is
-**3.0 × the manifest's data size for CSV, 2.3 × for Parquet** (whose
-files are about 1.3× larger for the same objects). An index's size
-follows its prefix count, which no manifest tells: measured on gzipped
-CSV, indexes are 1.0× (a directory per object) to 1.5× (typical
-`year/month/day/...` keys) their inventory, and 3.0× for the densest
-seeded layout (about 7 prefixes per object). To make room the planner
+headroom. A load is admitted if its estimate fits. For a
+configuration's first load the estimate is **3.0 × the manifest's data
+size for CSV, 2.3 × for Parquet** (whose files are about 1.3× larger
+for the same objects). An index's size follows its prefix count, which
+no manifest tells: measured on gzipped CSV, indexes are 1.0× (a
+directory per object) to 1.5× (typical `year/month/day/...` keys)
+their inventory, and 3.0× for the densest seeded layout (about 7
+prefixes per object).
+
+After that, a load is estimated from the **index ÷ data ratio of the
+configuration's latest built run, plus a quarter**, kept in `state.db`
+across restarts and converted by the 1.3× when the format changes. On
+the seeded layouts that ratio rose at most 5.5% as a bucket grew, 14%
+when the keys came sorted instead of shuffled, and fell 9% short
+across a format switch. A learned estimate is held to 0.1–6.0× the
+data for CSV (0.08–4.6× for Parquet), so a corrupt stored ratio can't
+reserve nothing or refuse every load. To make room the planner
 evicts, in order: the same configuration's runs past retention, then
 the least recently queried runs. It never evicts a pinned run (a
 manual Load pins once its index is in place; one that fails, is
@@ -145,7 +155,7 @@ A download is verified against the manifest's CRC-32C checksums before
 the index is used. Without `s3_source` it counts against the disk
 budget at its exact size, read from the published manifest; with
 `s3_source` too, a load reserves the same estimate as an in-process
-build (the inventory's size times its format's ratio), since the server
+build (the inventory's size times its learned or format's ratio), since the server
 doesn't yet know whether it will download or build. The server notices new runs at the next poll; to make it look
 now, call `POST /api/indexes/refresh` (for example as the build job's
 last step).
