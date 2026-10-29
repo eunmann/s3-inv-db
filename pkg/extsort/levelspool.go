@@ -32,9 +32,18 @@ import (
 // the batch is free again once both are done with it. Each stage takes
 // the batches in Add order. One goroutine doing all three was the
 // building phase's critical path.
+//
+// Every markEvery rows of a depth the write stage marks where the next
+// record starts and how many multi-tier rows and stored tier slots came
+// before it, so the replay can decode and write the rows from one mark
+// to the next on their own (levelChunks).
 type levelSpool struct {
 	err error // the stages' first error; read once they have stopped
 	dir string
+	// markEvery is the rows between two marks of a depth: a multiple of
+	// format.DepthBlockSize, so the rows between marks fill whole depth
+	// blocks.
+	markEvery uint64
 	// plan, when set, sees each entry before its record is written,
 	// every entry once in Add order. It appends the record's tier slots
 	// to slots, the batch's buffer, and returns it; its error fails the
@@ -99,7 +108,7 @@ type spoolEntry struct {
 var errSpoolStopped = errors.New("level spool already finished")
 
 func newLevelSpool(dir string) *levelSpool {
-	return &levelSpool{dir: dir}
+	return &levelSpool{dir: dir, markEvery: spoolMarkRows}
 }
 
 // next returns the entry for the next row; commit hands it over once
@@ -230,7 +239,26 @@ type spoolFile struct {
 	path string
 	f    *os.File
 	bw   *bufio.Writer
+	// marks holds a mark every markEvery rows, from the first.
+	marks []spoolMark
+	// The rows and bytes written, and the multi-tier rows and stored
+	// tier slots among those rows.
+	rows, size, multi, stored uint64
 }
+
+// spoolMark is where a row whose index within its depth is a multiple
+// of markEvery starts in its depth's file, and the multi-tier rows (two
+// or more tiers) and stored tier slots (each such row's tiers but one)
+// of the depth before it: what places the multi tier layout's rows from
+// the mark on.
+type spoolMark struct {
+	off, multi, stored uint64
+}
+
+// spoolMarkRows is the rows between marks: 24 B of marks per 16Ki rows,
+// about 1.5 MiB at a billion prefixes, and runs short enough that the
+// replay's last ones leave its workers idle a few milliseconds at most.
+const spoolMarkRows = 1 << 14
 
 // levelSpoolBufSize buffers each depth's records ahead of its file.
 const levelSpoolBufSize = 256 << 10
@@ -286,12 +314,21 @@ func (s *levelSpool) add(depth int, r *spoolRecord) error {
 		buf = binary.AppendUvarint(buf, v)
 	}
 	s.rec = buf
+	if sf.rows%s.markEvery == 0 {
+		sf.marks = append(sf.marks, spoolMark{off: sf.size, multi: sf.multi, stored: sf.stored})
+	}
 	head := binary.AppendUvarint(sf.bw.AvailableBuffer(), uint64(len(buf)))
 	if _, err := sf.bw.Write(head); err != nil {
 		return fmt.Errorf("write level spool %d: %w", depth, err)
 	}
 	if _, err := sf.bw.Write(buf); err != nil {
 		return fmt.Errorf("write level spool %d: %w", depth, err)
+	}
+	sf.rows++
+	sf.size += uint64(len(head) + len(buf))
+	if n := uint64(bits.OnesCount16(r.tierMask)); n >= 2 {
+		sf.multi++
+		sf.stored += n - 1
 	}
 
 	return nil
@@ -319,11 +356,26 @@ func (s *levelSpool) finish() error {
 	return nil
 }
 
-// spoolReader reads one depth's records in the order they were added.
+// spoolReader reads one depth's records in the order they were added,
+// or the records of a section of a depth's file.
 type spoolReader struct {
-	f     *os.File
+	f     *os.File // nil for a section reader, whose files others own
 	in    readWindow
 	depth int
+}
+
+// newSectionReader returns a reader, with its own buffer, for sections
+// of depth files.
+func newSectionReader() *spoolReader {
+	return &spoolReader{in: readWindow{r: bufio.NewReaderSize(nil, levelSpoolBufSize)}}
+}
+
+// section has r read depth's records in bytes [off, end) of f, which
+// must start and end on a record: io.EOF after the last.
+func (r *spoolReader) section(f *os.File, depth int, off, end uint64) {
+	r.in.r.Reset(io.NewSectionReader(f, int64(off), int64(end-off)))
+	r.in.buf, r.in.off = nil, 0
+	r.depth = depth
 }
 
 // open starts reading depth's records.
