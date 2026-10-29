@@ -3,6 +3,7 @@ package format
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -548,7 +549,7 @@ func TestSlotBucketsManyBuckets(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer b.Close()
-	const n = 300_000 // ~3.1 buckets of 1 MiB at 11-byte slots, more than slotWriteWorkers
+	const n = 300_000 // ~2.3 buckets of 2^17 11-byte slots, more than slotWriteWorkers
 	for i := range n {
 		if err := b.Add(prefixFromInt(i)); err != nil {
 			t.Fatal(err)
@@ -573,6 +574,42 @@ func TestSlotBucketsManyBuckets(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Errorf("slot bucket scratch left in the temp dir: %v", matches)
+	}
+}
+
+// TestSlotBucketsSizing: a bucket's slot count is a power of two of at
+// least slotBucketMinBytes, with at most maxSlotBuckets buckets, and a
+// slot's bucket and place by shift and mask are its quotient and
+// remainder.
+func TestSlotBucketsSizing(t *testing.T) {
+	for _, slotW := range []int{9, 12, 16} {
+		for _, n := range []int{1, 1000, 300_000, 1 << 27, 3<<30 + 7, 1 << 40} {
+			t.Run(fmt.Sprintf("slotW=%d/n=%d", slotW, n), func(t *testing.T) {
+				s, err := newSlotBuckets(t.TempDir(), n, slotW)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer s.close()
+				if s.perBucket != 1<<s.shift || s.perBucket*slotW < slotBucketMinBytes {
+					t.Errorf("%d slots of %d bytes per bucket, shift %d; want a power of two of at least %d bytes",
+						s.perBucket, slotW, s.shift, slotBucketMinBytes)
+				}
+				if len(s.next) > maxSlotBuckets || len(s.next) != (n+s.perBucket-1)/s.perBucket {
+					t.Errorf("%d buckets of %d slots for %d slots, want at most %d covering them", len(s.next), s.perBucket, n, maxSlotBuckets)
+				}
+				for _, slot := range []int{0, s.perBucket - 1, s.perBucket, n / 3, n - 1} {
+					if slot < 0 || slot >= n {
+						continue
+					}
+					if b, at := slot>>s.shift, slot&(s.perBucket-1); b != slot/s.perBucket || at != slot%s.perBucket {
+						t.Errorf("slot %d: bucket %d at %d, want %d at %d", slot, b, at, slot/s.perBucket, slot%s.perBucket)
+					}
+				}
+			})
+		}
+	}
+	if _, err := newSlotBuckets(t.TempDir(), 1<<43, 16); !errors.Is(err, errTooManySlots) {
+		t.Errorf("2^43 slots = %v, want errTooManySlots", err)
 	}
 }
 

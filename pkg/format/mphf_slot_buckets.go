@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/bits"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -25,10 +26,15 @@ import (
 // b receives exactly as many records as it has slots: its region's
 // offset and size are known before the pass, and a region that
 // overflows or ends short is a lookup bug the build fails on.
+//
+// A bucket's slot count is a power of two, so a slot's bucket is a shift
+// and its place in the bucket a mask rather than a 64-bit division per
+// prefix.
 const (
-	// SlotBucketMinBytes is the least slot-file range a bucket covers,
-	// and so the size of a write worker's layout buffer below
-	// maxSlotBuckets buckets.
+	// SlotBucketMinBytes is the least slot-file range a bucket covers.
+	// Rounded up to a power-of-two slot count, it sizes a write
+	// worker's layout buffer below maxSlotBuckets buckets: up to twice
+	// this.
 	slotBucketMinBytes = 1 << 20
 	// MaxSlotBuckets caps the bucket count, so the append buffers stay
 	// bounded whatever the prefix count: past it, buckets grow instead.
@@ -63,21 +69,25 @@ type slotBuckets struct {
 	next      []atomic.Int64 // bytes appended to each bucket's region
 	n         int            // slots
 	perBucket int            // slots per bucket; the last may have fewer
+	shift     uint           // log2 of perBucket
 	appendCap int            // bytes of a worker's buffer per bucket, whole records
 	recW      int            // record bytes: slot in bucket, fingerprint, position
 	posBytes  int            // 4, or 8 past 2^32 prefixes
 }
 
 // newSlotBuckets sizes the buckets for n slots of slotW bytes and
-// creates the scratch file.
+// creates the scratch file: a bucket's slots are the fewest that cover
+// slotBucketMinBytes and leave at most maxSlotBuckets buckets, rounded
+// up to a power of two.
 func newSlotBuckets(tempDir string, n, slotW int) (*slotBuckets, error) {
-	bucketBytes := max(slotBucketMinBytes, (n*slotW+maxSlotBuckets-1)/maxSlotBuckets)
-	perBucket := max(1, bucketBytes/slotW)
-	if perBucket > math.MaxUint32 {
+	need := max((slotBucketMinBytes+slotW-1)/slotW, (n+maxSlotBuckets-1)/maxSlotBuckets)
+	shift := uint(bits.Len(uint(need - 1)))
+	perBucket := 1 << shift
+	if perBucket-1 > math.MaxUint32 {
 		// A record holds its slot within the bucket in 4 bytes.
 		return nil, fmt.Errorf("%w: %d slots per bucket", errTooManySlots, perBucket)
 	}
-	s := &slotBuckets{n: n, perBucket: perBucket, posBytes: 4}
+	s := &slotBuckets{n: n, perBucket: perBucket, shift: shift, posBytes: 4}
 	if uint64(n) > 1<<32 {
 		s.posBytes = 8
 	}
@@ -155,8 +165,8 @@ func (s *slotBuckets) placeRange(mph *bbhash, hashes, fps []uint64, start, end i
 		if !ok || slot >= uint64(s.n) {
 			return fmt.Errorf("%w: slot %d (found %t) for prefix %d", ErrMPHFLookupFailed, slot, ok, i)
 		}
-		b := int(slot) / s.perBucket
-		bufs[b] = s.appendRecord(bufs[b], int(slot)-b*s.perBucket, fps[i], uint64(i))
+		b := int(slot >> s.shift)
+		bufs[b] = s.appendRecord(bufs[b], int(slot)&(s.perBucket-1), fps[i], uint64(i))
 		if len(bufs[b]) == cap(bufs[b]) {
 			if err := s.appendRecords(b, bufs[b]); err != nil {
 				return err
