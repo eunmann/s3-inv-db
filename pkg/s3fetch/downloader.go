@@ -28,13 +28,16 @@ type DownloaderConfig struct {
 // DefaultDownloaderConfig returns sensible defaults based on the current
 // machine: up to 16 parts per object, and 4 GETs per CPU (32 to 256)
 // across all downloads, where ingest workers × parts would otherwise
-// reach 16 per CPU.
+// reach 16 per CPU. CPUs are GOMAXPROCS, which honours a container CPU
+// quota where NumCPU does not.
 func DefaultDownloaderConfig() DownloaderConfig {
-	numCPU := runtime.NumCPU()
+	return downloaderConfigFor(runtime.GOMAXPROCS(0))
+}
 
+func downloaderConfigFor(procs int) DownloaderConfig {
 	return DownloaderConfig{
-		Concurrency:     min(max(numCPU, 4), 16),
-		MaxInFlightGETs: min(max(4*numCPU, 32), 256),
+		Concurrency:     min(max(procs, 4), 16),
+		MaxInFlightGETs: min(max(4*procs, 32), 256),
 		PartSize:        16 * 1024 * 1024, // 16MB
 		TempDir:         "",
 	}
