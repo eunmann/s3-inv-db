@@ -45,7 +45,6 @@ type IndexBuilder struct {
 	outDir        string
 	tempDir       string
 	stack         []stackEntry
-	rec           spoolRecord
 	posCount      uint64
 	maxDepth      uint32
 	// onProgress receives Finalize's steps (SetProgress); stepProgress
@@ -121,7 +120,7 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		coreStatsW:    coreStatsW,
 		mphfBuilder:   mphfBuilder,
 		prefixTreeW:   prefixTreeW,
-		spool:         &levelSpool{dir: spoolDir},
+		spool:         newLevelSpool(spoolDir),
 		stack:         make([]stackEntry, 0, 32),
 		createdOutDir: createdOutDir,
 	}
@@ -174,6 +173,10 @@ func (b *IndexBuilder) ensureTierWriter() error {
 // and removes outDir if this builder created it. Safe after a partial
 // Finalize: each writer is nil-guarded or idempotent.
 func (b *IndexBuilder) cleanup() {
+	if b.spool != nil {
+		_ = b.spool.close()
+		_ = os.RemoveAll(b.spool.dir)
+	}
 	if b.coreStatsW != nil {
 		b.coreStatsW.Close()
 	}
@@ -185,10 +188,6 @@ func (b *IndexBuilder) cleanup() {
 	}
 	if b.tierStatsW != nil {
 		_ = b.tierStatsW.Abort()
-	}
-	if b.spool != nil {
-		_ = b.spool.close()
-		_ = os.RemoveAll(b.spool.dir)
 	}
 	if b.createdOutDir {
 		os.RemoveAll(b.outDir)
@@ -237,7 +236,9 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	for len(b.levelRows) <= depth+1 {
 		b.levelRows = append(b.levelRows, 0)
 	}
-	r := &b.rec
+	e := b.spool.next()
+	e.depth = depth
+	r := &e.rec
 	r.count, r.bytes = row.Count, row.TotalBytes
 	// Every row of the next depth so far belongs to an earlier prefix,
 	// so this prefix's children start where they end.
@@ -246,10 +247,12 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	if depth > 0 {
 		r.parentLocal = b.stack[depth-1].local
 	}
+	// The prefix is still in this core's cache from the checks above:
+	// hashed by the spool writer instead, it cost twice as much.
 	r.keyHash, r.fp = b.mphfBuilder.KeyHashes(row.Prefix)
 	r.name = append(r.name[:0], name...)
 	r.tierCounts, r.tierBytes = row.TierCounts, row.TierBytes
-	if err := b.spool.add(depth, r); err != nil {
+	if err := b.spool.commit(); err != nil {
 		return err
 	}
 

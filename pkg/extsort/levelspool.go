@@ -9,6 +9,8 @@ import (
 	"math/bits"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
@@ -20,11 +22,126 @@ import (
 // through a levelSpoolBufSize bufio writer; Finalize reads the depths
 // back in turn and writes the index files in level order, removing
 // each depth's file once read. Memory is one buffer per depth,
-// whatever the prefix count.
+// whatever the prefix count, plus the hand-off batches.
+//
+// Add fills records (next, commit) in batches that a writer goroutine
+// encodes and writes, so the builder's serial loop does only the tree
+// bookkeeping and the hashing: writing was a third of its time.
 type levelSpool struct {
-	dir    string
-	depths []*spoolFile // index = depth
-	rec    []byte       // the record add is encoding
+	err error // the writer's first error; read once it has stopped
+	dir string
+	// batch is the one Add is filling; full and free carry batches to
+	// the writer and back.
+	batch   []spoolEntry
+	full    chan []spoolEntry
+	free    chan []spoolEntry
+	depths  []*spoolFile // index = depth
+	rec     []byte       // the record add is encoding
+	writer  sync.WaitGroup
+	failed  atomic.Bool
+	started bool
+	stopped bool
+}
+
+// spoolBatchRows and spoolBatches size the hand-off to the writer:
+// three batches (one being filled, one queued, one being written) of
+// 1024 rows, under 1 MiB in all.
+const (
+	spoolBatchRows = 1024
+	spoolBatches   = 3
+)
+
+// spoolEntry is a record on its way to the spool and its depth.
+type spoolEntry struct {
+	rec   spoolRecord
+	depth int
+}
+
+// errSpoolStopped is returned by commit once the spool was finished.
+var errSpoolStopped = errors.New("level spool already finished")
+
+func newLevelSpool(dir string) *levelSpool {
+	return &levelSpool{dir: dir}
+}
+
+// next returns the entry for the next row; commit hands it over once
+// filled. The writer starts with the first row.
+func (s *levelSpool) next() *spoolEntry {
+	if !s.started && !s.stopped {
+		s.started = true
+		s.full = make(chan []spoolEntry, spoolBatches-1)
+		s.free = make(chan []spoolEntry, spoolBatches)
+		for range spoolBatches - 1 {
+			s.free <- make([]spoolEntry, 0, spoolBatchRows)
+		}
+		s.batch = make([]spoolEntry, 0, spoolBatchRows)
+		s.writer.Go(s.write)
+	}
+	s.batch = s.batch[:len(s.batch)+1]
+
+	return &s.batch[len(s.batch)-1]
+}
+
+// commit hands the entry next returned to the writer, sending the
+// batch once full. It returns the writer's error once the writer has
+// failed, a batch or so after the row it failed on.
+func (s *levelSpool) commit() error {
+	if s.stopped {
+		s.batch = s.batch[:0]
+		if s.err != nil {
+			return s.err
+		}
+
+		return errSpoolStopped
+	}
+	if len(s.batch) < cap(s.batch) {
+		return nil
+	}
+	if s.failed.Load() {
+		return s.stop()
+	}
+	s.full <- s.batch
+	s.batch = (<-s.free)[:0]
+
+	return nil
+}
+
+// write is the writer goroutine: it writes each batch's records in
+// order, and after an error only returns batches until the spool
+// stops.
+func (s *levelSpool) write() {
+	for batch := range s.full {
+		for i := range batch {
+			if s.err != nil {
+				break
+			}
+			s.err = s.add(batch[i].depth, &batch[i].rec)
+		}
+		if s.err != nil {
+			s.failed.Store(true)
+		}
+		s.free <- batch
+	}
+}
+
+// stop sends the partly filled batch, ends the writer and returns its
+// error. Idempotent.
+func (s *levelSpool) stop() error {
+	if s.stopped {
+		return s.err
+	}
+	s.stopped = true
+	if s.started {
+		if len(s.batch) > 0 {
+			s.full <- s.batch
+		}
+		close(s.full)
+		s.writer.Wait()
+	}
+	// A slot for any next after the stop, which commit then refuses.
+	s.batch = make([]spoolEntry, 0, 1)
+
+	return s.err
 }
 
 // spoolFile is one depth's record stream.
@@ -105,8 +222,12 @@ func (s *levelSpool) add(depth int, r *spoolRecord) error {
 	return nil
 }
 
-// finish flushes every depth's stream and closes its file for reading.
+// finish writes the rows still with the writer, flushes every depth's
+// stream and closes its file for reading.
 func (s *levelSpool) finish() error {
+	if err := s.stop(); err != nil {
+		return err
+	}
 	for d, sf := range s.depths {
 		err := sf.bw.Flush()
 		if err == nil {
@@ -236,10 +357,10 @@ func truncated(err error) error {
 	return err
 }
 
-// close closes every depth's file and removes it: after a
-// failed build, or what read left behind. Idempotent.
+// close stops the writer, closes every depth's file and removes it:
+// after a failed build, or what read left behind. Idempotent.
 func (s *levelSpool) close() error {
-	var errs []error
+	errs := []error{s.stop()}
 	for _, sf := range s.depths {
 		if sf.f != nil {
 			errs = append(errs, sf.f.Close())
