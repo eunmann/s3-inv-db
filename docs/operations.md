@@ -205,7 +205,7 @@ builds.
 |---|---|---|
 | Low CPU during a build | S3 bandwidth | More vCPUs or network |
 | Slow build, many run files | Spilling under a tight limit | Raise `GOMEMLIMIT` |
-| Long final build phase | MPHF build | Expected past ~5M prefixes |
-| A finalize step with high `major_faults` | Its scratch arrays don't fit in the page cache | More RAM, or fewer indexes loaded during builds |
+| Long final build phase | Ordering rows by depth and building the prefix hash | Expected past ~5M prefixes; both use more cores |
+| A finalize step with high `major_faults` | Its scratch files don't fit in the page cache | More RAM, or fewer indexes loaded during builds |
 | First queries slow | Cold page cache | Expected; prefault covers new loads |
 | Load refused | Budget full of pinned runs | Unpin or raise `max_index_disk` |
