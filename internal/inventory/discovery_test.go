@@ -612,10 +612,10 @@ func TestDiscovery_LoadSizesFromDiscoveredManifest(t *testing.T) {
 
 		return nil
 	}
-	sizer := func(context.Context, string, string) (uint64, error) {
+	sizer := func(context.Context, string, string) (inventory.ManifestSize, error) {
 		sizerCalls.Add(1)
 
-		return 1000, nil
+		return inventory.ManifestSize{FileFormat: "Parquet", DataBytes: 1000}, nil
 	}
 	d := inventory.NewDiscovery(mgr,
 		inventory.WithBackend(&fakeDiscoverer{bucket: "dst"}, &fakeBuilder{}),
@@ -631,7 +631,7 @@ func TestDiscovery_LoadSizesFromDiscoveredManifest(t *testing.T) {
 	if n := sizerCalls.Load(); n != 1 {
 		t.Fatalf("sizer called %d times, want 1 (only the run without a read manifest)", n)
 	}
-	want := []uint64{inventory.EstimateIndexBytes("CSV", 300), 500, 1000}
+	want := []uint64{inventory.EstimateIndexBytes("CSV", 300, inventory.IndexRatio{}), 500, inventory.EstimateIndexBytes("Parquet", 1000, inventory.IndexRatio{})}
 	if !slices.Equal(estimates, want) {
 		t.Fatalf("estimates %v, want %v", estimates, want)
 	}
@@ -643,9 +643,9 @@ func TestDiscovery_LoadSizesFromDiscoveredManifest(t *testing.T) {
 // format gets CSV's.
 func TestEstimateIndexBytes(t *testing.T) {
 	const data = 1000
-	csv := inventory.EstimateIndexBytes("CSV", data)
-	parquet := inventory.EstimateIndexBytes("Parquet", data)
-	if got := inventory.EstimateIndexBytes(inventory.IndexFileFormat, data); got != data {
+	csv := inventory.EstimateIndexBytes("CSV", data, inventory.IndexRatio{})
+	parquet := inventory.EstimateIndexBytes("Parquet", data, inventory.IndexRatio{})
+	if got := inventory.EstimateIndexBytes(inventory.IndexFileFormat, data, inventory.IndexRatio{}); got != data {
 		t.Errorf("published index = %d, want its size %d", got, data)
 	}
 	if csv < 2900 {
@@ -655,11 +655,11 @@ func TestEstimateIndexBytes(t *testing.T) {
 		t.Errorf("Parquet = %d, want under CSV's %d by at most the 1.33x its files are larger", parquet, csv)
 	}
 	for _, format := range []string{"csv", "", "ORC"} {
-		if got := inventory.EstimateIndexBytes(format, data); got != csv {
+		if got := inventory.EstimateIndexBytes(format, data, inventory.IndexRatio{}); got != csv {
 			t.Errorf("format %q = %d, want CSV's %d", format, got, csv)
 		}
 	}
-	if got := inventory.EstimateIndexBytes("parquet", data); got != parquet {
+	if got := inventory.EstimateIndexBytes("parquet", data, inventory.IndexRatio{}); got != parquet {
 		t.Errorf("lowercase parquet = %d, want %d", got, parquet)
 	}
 }

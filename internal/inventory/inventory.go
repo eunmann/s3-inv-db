@@ -123,7 +123,8 @@ func (i Inventory) ConfigID() string {
 const IndexFileFormat = "index"
 
 // Index bytes per byte of an inventory's data files, the disk a load
-// reserves before it builds. An index's size follows its prefix count,
+// reserves before it builds when its configuration has no built run to
+// learn from. An index's size follows its prefix count,
 // which no manifest tells, so the ratios cover the densest measured
 // layout: built through the pipeline from the AWS-like seeded CSV
 // fixtures, indexes were 0.98× (one directory per object) to 2.99×
@@ -136,19 +137,75 @@ const (
 	parquetIndexRatio = 2.3
 )
 
+// A configuration's key layout is stable from run to run, so the ratio
+// its previous run measured replaces the conservative one, times
+// learnedRatioMargin. Built through the pipeline from the seeded
+// realistic, deep_pyramid and unique_dirs inventories at 50K–120K
+// objects, a layout's ratio rose by at most 5.5% as it grew, and 14%
+// when the same keys came sorted rather than shuffled (gzip packs
+// sorted keys tighter; S3 promises no order); together 1.20×, inside
+// the margin. Converted across formats it fell up to 9% short, Parquet
+// files being 1.28–1.43× the gzipped CSV rather than the 1.30 the
+// conservative ratios assume, so a format switch on top of both needs
+// about 1.32×: the headroom absorbs a small miss and the gate settles a
+// larger one at the built size.
+//
+// A learned estimate's ratio, margin included, is held to at least
+// minLearnedShare of the format's conservative one (0.1 for CSV), so a
+// corrupt stored value doesn't reserve nothing, and to at most the
+// conservative ratio itself: a run too small for its index's fixed
+// overhead measures a ratio above any layout's, and a refused load
+// records no new one, so a higher ceiling would keep refusing that
+// configuration's later runs. Below the floor are near-flat buckets,
+// whose few prefixes make any reservation cheap; above the ceiling the
+// gate settles a denser layout as it does with no history.
+const (
+	learnedRatioMargin = 1.25
+	minLearnedShare    = 1.0 / 30
+)
+
+// IndexRatio is the index bytes per byte of inventory data files that a
+// configuration's latest built run measured, and the file format of
+// that run. The zero value is no history.
+type IndexRatio struct {
+	FileFormat string
+	Ratio      float64
+}
+
 // EstimateIndexBytes returns the disk loading a run takes, from its
 // manifest's file format and data-file total: exact for a published
-// index, else the format's ratio. An unknown format gets CSV's, the
-// larger.
-func EstimateIndexBytes(fileFormat string, dataBytes uint64) uint64 {
-	switch {
-	case fileFormat == IndexFileFormat:
+// index; else the configuration's learned ratio, converted to this
+// run's format, plus the margin, at most the conservative ratio; else,
+// with no history, the format's conservative ratio. An unknown format counts as CSV, the larger.
+func EstimateIndexBytes(fileFormat string, dataBytes uint64, learned IndexRatio) uint64 {
+	if fileFormat == IndexFileFormat {
 		return dataBytes
-	case strings.EqualFold(fileFormat, "Parquet"):
-		return uint64(float64(dataBytes) * parquetIndexRatio)
-	default:
-		return uint64(float64(dataBytes) * csvIndexRatio)
 	}
+	conservative := conservativeIndexRatio(fileFormat)
+	ratio := conservative
+	if learned.FileFormat != "" {
+		ratio = learned.Ratio * learnedRatioMargin
+		if from := conservativeIndexRatio(learned.FileFormat); from != conservative {
+			ratio *= conservative / from
+		}
+		// Negated so a NaN takes the floor.
+		if !(ratio >= conservative*minLearnedShare) {
+			ratio = conservative * minLearnedShare
+		}
+		ratio = min(ratio, conservative)
+	}
+
+	return uint64(float64(dataBytes) * ratio)
+}
+
+// conservativeIndexRatio is the ratio for a run of fileFormat with no
+// history.
+func conservativeIndexRatio(fileFormat string) float64 {
+	if strings.EqualFold(fileFormat, "Parquet") {
+		return parquetIndexRatio
+	}
+
+	return csvIndexRatio
 }
 
 // Info contains metadata about a managed inventory.

@@ -88,6 +88,12 @@ func (c *Client) DownloadObjectTo(ctx context.Context, bucket, key, dir string) 
 	return c.downloader.DownloadToReader(ctx, bucket, key, dir)
 }
 
+// OpenStream reads an object front to back as it downloads, with no
+// temp file (Downloader.OpenStream).
+func (c *Client) OpenStream(ctx context.Context, bucket, key string) (*ObjectStream, error) {
+	return c.downloader.OpenStream(ctx, bucket, key)
+}
+
 // DownloaderConfig returns the current downloader configuration.
 func (c *Client) DownloaderConfig() DownloaderConfig {
 	return c.downloader.Config()

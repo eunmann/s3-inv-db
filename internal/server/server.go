@@ -130,7 +130,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	tracker := budget.New(cfg.MaxIndexDisk, cfg.IndexHeadroomBytes, stores.catalog.LoadedBytes)
 	planner := budget.NewPlanner(tracker, retentionLookup(stores.config, cfg.AutoLoadRetentionDefault))
 	gate := loadcontrol.New(stores.catalog, tracker, planner, cacheRemover(wiring))
-	discovery, bldr := newDiscovery(cfg, stores.catalog, gate, wiring)
+	discovery, bldr := newDiscovery(cfg, stores, gate, wiring)
 
 	h := handlers.New(
 		stores.catalog, renderer, cfg.PriceTable,
@@ -206,9 +206,6 @@ func newStores(cfg Config) (serverStores, error) {
 	}, nil
 }
 
-// newDiscovery wires the S3-side of the server. Returns a disabled
-// Discovery (and nil loader) when neither --s3-source nor --index-source
-// is set.
 // CacheRemover deletes an evicted run's cache dir; nil without S3 wiring.
 func cacheRemover(wiring *discoveryWiring) loadcontrol.CacheRemover {
 	if wiring == nil {
@@ -228,19 +225,23 @@ func cacheRemover(wiring *discoveryWiring) loadcontrol.CacheRemover {
 	}
 }
 
-func newDiscovery(cfg Config, catalog *inventory.Catalog, gate *loadcontrol.Gate, wiring *discoveryWiring) (*inventory.Discovery, *loader.Loader) {
+// newDiscovery wires the S3-side of the server. Returns a disabled
+// Discovery (and nil loader) when neither --s3-source nor --index-source
+// is set.
+func newDiscovery(cfg Config, stores serverStores, gate *loadcontrol.Gate, wiring *discoveryWiring) (*inventory.Discovery, *loader.Loader) {
 	if wiring == nil {
-		return inventory.NewDiscovery(catalog), nil
+		return inventory.NewDiscovery(stores.catalog), nil
 	}
 	sizer := loadcontrol.NewManifestSizer(wiring.Client)
-	size := sizer.EstimatedIndexSize
+	size := sizer.InventorySize
 	if wiring.IndexesOnly {
 		// A published index's manifest gives its exact size.
 		size = sizer.IndexSize
 	}
-	disc := inventory.NewDiscovery(catalog,
+	disc := inventory.NewDiscovery(stores.catalog,
 		inventory.WithBackend(wiring.Discoverer, wiring.Loader),
 		inventory.WithGate(gate.Load, size),
+		inventory.WithIndexRatios(stores.config),
 	)
 	cfg.Logger.Info().
 		Str("s3_source", cfg.S3Source).
