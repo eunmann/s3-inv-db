@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -151,22 +152,21 @@ func uploadCSVInventory(t *testing.T, fc *s3fetch.Client, schema string, rows []
 // gzipped or not, and returns its manifest URI.
 func uploadCSVChunk(t *testing.T, fc *s3fetch.Client, chunkKey string, gzipped bool, schema string, rows [][]string) string {
 	t.Helper()
+
+	return uploadCSVFiles(t, fc, gzipped, schema, []csvFile{{key: chunkKey, rows: rows}})
+}
+
+// csvFile is one file of a CSV inventory.
+type csvFile struct {
+	key  string
+	rows [][]string
+}
+
+// uploadCSVFiles writes a CSV inventory of files, gzipped or not, and
+// returns its manifest URI.
+func uploadCSVFiles(t *testing.T, fc *s3fetch.Client, gzipped bool, schema string, files []csvFile) string {
+	t.Helper()
 	bucket := s3test.Bucket(t, fc.Raw())
-	var buf bytes.Buffer
-	var out io.Writer = &buf
-	gz := gzip.NewWriter(&buf)
-	if gzipped {
-		out = gz
-	}
-	w := csv.NewWriter(out)
-	if err := w.WriteAll(rows); err != nil {
-		t.Fatal(err)
-	}
-	if gzipped {
-		if err := gz.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
 	put := func(key string, body []byte) {
 		if _, err := fc.Raw().PutObject(t.Context(), &s3.PutObjectInput{
 			Bucket: aws.String(bucket), Key: aws.String(key), Body: bytes.NewReader(body),
@@ -174,14 +174,33 @@ func uploadCSVChunk(t *testing.T, fc *s3fetch.Client, chunkKey string, gzipped b
 			t.Fatalf("put %s: %v", key, err)
 		}
 	}
-	put(chunkKey, buf.Bytes())
+	listed := make([]map[string]any, 0, len(files))
+	for _, f := range files {
+		var buf bytes.Buffer
+		var out io.Writer = &buf
+		gz := gzip.NewWriter(&buf)
+		if gzipped {
+			out = gz
+		}
+		w := csv.NewWriter(out)
+		if err := w.WriteAll(f.rows); err != nil {
+			t.Fatal(err)
+		}
+		if gzipped {
+			if err := gz.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		put(f.key, buf.Bytes())
+		listed = append(listed, map[string]any{"key": f.key, "size": buf.Len()})
+	}
 	manifest, err := json.Marshal(map[string]any{
 		"sourceBucket":      "src",
 		"destinationBucket": "arn:aws:s3:::" + bucket,
 		"version":           "2016-11-30",
 		"fileFormat":        "CSV",
 		"fileSchema":        schema,
-		"files":             []map[string]any{{"key": chunkKey, "size": buf.Len()}},
+		"files":             listed,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -538,6 +557,127 @@ func TestPipelineRun_ScratchStaysBesideTheIndex(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Errorf("output parent holds %v, want only the index", names)
+	}
+}
+
+// TestPipelineRun_ExactUnderSmallMemoryLimit: a build that spills many
+// runs under a small GOMEMLIMIT, from files whose keys come in order
+// (ordered segments) and out of order, with objects in every tier and
+// directories of a few objects in mixed tiers, gives every prefix the
+// totals and per-tier counts of a direct count of the rows, and every
+// prefix's totals are the sums of its tiers.
+func TestPipelineRun_ExactUnderSmallMemoryLimit(t *testing.T) {
+	type class struct{ storage, access string }
+	classes := []class{
+		{"STANDARD", ""},
+		{"STANDARD_IA", ""},
+		{"ONEZONE_IA", ""},
+		{"GLACIER_IR", ""},
+		{"GLACIER", ""},
+		{"DEEP_ARCHIVE", ""},
+		{"REDUCED_REDUNDANCY", ""},
+		{"EXPRESS_ONEZONE", ""},
+		{"OUTPOSTS", ""},
+		{"SNOW", ""},
+		{"INTELLIGENT_TIERING", "FREQUENT"},
+		{"INTELLIGENT_TIERING", "INFREQUENT"},
+		{"INTELLIGENT_TIERING", "ARCHIVE_INSTANT_ACCESS"},
+		{"INTELLIGENT_TIERING", "ARCHIVE"},
+		{"INTELLIGENT_TIERING", "DEEP_ARCHIVE"},
+	}
+	type tierKey struct {
+		prefix string
+		tier   tiers.ID
+	}
+	want := map[tierKey]format.TierBreakdown{}
+	rng := rand.New(rand.NewPCG(21, 22))
+	const numFiles, dirsPerFile = 12, 6000
+	files := make([]csvFile, numFiles)
+	for f := range files {
+		var keys []string
+		for d := range dirsPerFile {
+			for o := range 1 + (f+d)%3 {
+				keys = append(keys, fmt.Sprintf("team-%02d/day-%03d/upload-%05d/part-%d.bin", d%17, f*7+d%5, f*dirsPerFile+d, o))
+			}
+		}
+		if f%2 == 0 {
+			slices.Sort(keys)
+		} else {
+			rng.Shuffle(len(keys), func(i, j int) { keys[i], keys[j] = keys[j], keys[i] })
+		}
+		rows := make([][]string, len(keys))
+		for i, key := range keys {
+			c := classes[rng.IntN(len(classes))]
+			size := uint64(rng.IntN(1 << 18))
+			rows[i] = []string{"src", key, strconv.FormatUint(size, 10), c.storage, c.access}
+			id, err := tiers.FromS3(c.storage, c.access)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tier := tiers.Resolve(id, size)
+			prefixes := []string{""}
+			for j := range len(key) {
+				if key[j] == '/' {
+					prefixes = append(prefixes, key[:j+1])
+				}
+			}
+			for _, p := range prefixes {
+				tb := want[tierKey{p, tier}]
+				tb.ObjectCount++
+				tb.Bytes += size
+				want[tierKey{p, tier}] = tb
+			}
+		}
+		files[f] = csvFile{key: fmt.Sprintf("inv/data/part-%02d.csv.gz", f), rows: rows}
+	}
+	fc := s3test.FetchClient(t)
+	manifest := uploadCSVFiles(t, fc, true, "Bucket, Key, Size, StorageClass, IntelligentTieringAccessTier", files)
+
+	prevProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(prevProcs)
+	prevLimit := debug.SetMemoryLimit(32 << 20)
+	defer debug.SetMemoryLimit(prevLimit)
+	outDir := filepath.Join(t.TempDir(), "index")
+	res, err := extsort.NewPipeline(extsort.DefaultConfig(), fc).Run(t.Context(), manifest, outDir)
+	debug.SetMemoryLimit(prevLimit)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	t.Logf("%d run files, %d memory runs, %d merge input rows for %d prefixes",
+		res.RunFilesCreated, res.MemoryRuns, res.MergeInputRows, res.PrefixCount)
+	if res.RunFilesCreated == 0 {
+		t.Fatal("the build spilled no run file; the test needs spills")
+	}
+
+	idx, err := indexread.Open(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	got := map[tierKey]format.TierBreakdown{}
+	for pos := range idx.Count() {
+		prefix, err := idx.PrefixString(pos)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st := idx.Stats(pos)
+		var objects, size uint64
+		for _, tb := range idx.TierBreakdown(pos) {
+			objects += tb.ObjectCount
+			size += tb.Bytes
+			got[tierKey{prefix, tb.TierID}] = format.TierBreakdown{ObjectCount: tb.ObjectCount, Bytes: tb.Bytes}
+		}
+		if objects != st.ObjectCount || size != st.TotalBytes {
+			t.Fatalf("prefix %q: %d objects, %d bytes; its tiers add up to %d, %d", prefix, st.ObjectCount, st.TotalBytes, objects, size)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("index has %d prefix-tier pairs, a direct count %d", len(got), len(want))
+	}
+	for k, w := range want {
+		if g := got[k]; g != w {
+			t.Errorf("prefix %q tier %d: got %+v, want %+v", k.prefix, k.tier, g, w)
+		}
 	}
 }
 

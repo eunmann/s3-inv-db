@@ -53,7 +53,6 @@ func BenchmarkPipelineScale_E2E(b *testing.B) {
 						o := objs[base+i]
 						agg.AddObject(o.Key, o.Size, o.TierID)
 					}
-					rows := agg.Drain()
 					path := filepath.Join(runDir, fmt.Sprintf("run_%02d.crun", f))
 					w, err := NewCompressedRunWriter(path, CompressedRunWriterOptions{
 						BufferSize:       DefaultRunBufferSize,
@@ -62,7 +61,7 @@ func BenchmarkPipelineScale_E2E(b *testing.B) {
 					if err != nil {
 						b.Fatal(err)
 					}
-					if err := w.WriteSorted(rows); err != nil {
+					if _, err := agg.WriteRun(w); err != nil {
 						b.Fatal(err)
 					}
 					if err := w.Close(); err != nil {

@@ -58,8 +58,9 @@ const openRunHeapBytes = 5 << 19
 
 // OpenRunsFractionOfLimit is the share of GOMEMLIMIT the open run
 // readers of a merge may hold. The final merge runs after ingest
-// released its aggregators; beside it sit the workers' last in-memory
-// runs (within the aggregators' share) and the index build.
+// released its aggregators; beside it sit the workers' last runs, kept
+// in memory as encoded records (a fraction of the aggregators' share),
+// and the index build.
 const OpenRunsFractionOfLimit = 0.25
 
 // openRunBudget is how many run readers a merge may hold open under
@@ -184,8 +185,9 @@ func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []st
 }
 
 // mergeAllToIterator is MergeAllToIterator with sorted runs held in
-// memory joining the final merge beside the files. They need no read
-// buffer or decoder, so they don't count toward FinalFanIn.
+// memory joining the final merge beside the files. They still decode
+// records but need no read buffer or zstd stream, so they don't count
+// toward FinalFanIn.
 func (m *ParallelMerger) mergeAllToIterator(ctx context.Context, inputPaths []string, inMemory []*memRun) (RowIterator, func() error, error) {
 	if len(inputPaths) == 0 && len(inMemory) == 0 {
 		return nil, func() error { return nil }, ErrNoInputPaths

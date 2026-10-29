@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 // tableKey is a node's key: its parent's index and its segment.
@@ -18,8 +20,8 @@ type tableKey struct {
 func addTableKey(agg *Aggregator, h uint32, k tableKey) (uint32, bool) {
 	idx, found := agg.children.getOrAdd(agg, h, k.parent, k.seg, uint32(agg.used))
 	if !found {
-		_, n := agg.newNode(k.parent)
-		n.row.Prefix = agg.segs.clone(k.parent, k.seg)
+		_, n := agg.newNode(k.parent, tiers.Standard)
+		n.seg, n.segLen = agg.segs.clone(k.parent, k.seg), uint32(len(k.seg))
 	}
 
 	return idx, found
@@ -154,8 +156,8 @@ func TestNodeTableHashAndReset(t *testing.T) {
 		if idx, found := agg.getOrAddChild(k.parent, k.seg, uint32(agg.used)); found {
 			t.Fatalf("key %d %+v: found node %d before it was added", i, k, idx)
 		}
-		_, n := agg.newNode(k.parent)
-		n.row.Prefix = agg.segs.clone(k.parent, k.seg)
+		_, n := agg.newNode(k.parent, tiers.Standard)
+		n.seg, n.segLen = agg.segs.clone(k.parent, k.seg), uint32(len(k.seg))
 	}
 	for i, k := range keys {
 		if idx, found := agg.getOrAddChild(k.parent, k.seg, uint32(agg.used)); !found || idx != uint32(i) {

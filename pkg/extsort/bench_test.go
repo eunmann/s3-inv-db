@@ -76,7 +76,6 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 		phase1Duration := time.Since(phase1Start)
 
 		phase2Start := time.Now()
-		rows := agg.Drain()
 		runPath := filepath.Join(runDir, "run_0000.crun")
 		writer, err := extsort.NewCompressedRunWriter(runPath, extsort.CompressedRunWriterOptions{
 			BufferSize:       4 * 1024 * 1024,
@@ -85,8 +84,8 @@ func benchmarkExtsortEndToEnd(b *testing.B, numObjects int) {
 		if err != nil {
 			b.Fatalf("create run file: %v", err)
 		}
-		if err := writer.WriteSorted(rows); err != nil {
-			b.Fatalf("write sorted: %v", err)
+		if _, err := agg.WriteRun(writer); err != nil {
+			b.Fatalf("write run: %v", err)
 		}
 		if err := writer.Close(); err != nil {
 			b.Fatalf("close run file: %v", err)
