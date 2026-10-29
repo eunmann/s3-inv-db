@@ -7,8 +7,10 @@ const (
 	// MagicNumber identifies s3-inv-db files.
 	MagicNumber uint32 = 0x53334944 // "S3ID"
 	// Version is the current format version. Readers accept only this
-	// version; an index written by another version is rebuilt.
-	Version uint32 = 14
+	// version; an index written by another version is rebuilt. 15:
+	// mph.bin holds a partitioned table (bit count, then each
+	// partition's levels and fallback entries).
+	Version uint32 = 15
 )
 
 // Header is the common header for all columnar files.

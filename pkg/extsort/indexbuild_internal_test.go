@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -363,6 +364,21 @@ func TestIndexBuilderTreeDecodesEveryPrefix(t *testing.T) {
 		// A plain width: a distance of 255 still fits one byte.
 		if got, want := data[format.HeaderSize+1], byteWidthNeed(maxDist-1); got != want {
 			t.Errorf("seed %d: parent distance width %d for a largest distance of %d, want %d", seed, got, maxDist, want)
+		}
+	}
+}
+
+// TestMPHFMemoryBudget: the MPHF build gets a share of GOMEMLIMIT, or
+// the builder's default without one.
+func TestMPHFMemoryBudget(t *testing.T) {
+	for _, c := range []struct{ limit, want int64 }{
+		{0, 0},
+		{unsetMemoryLimit, 0},
+		{math.MaxInt64, 0},
+		{4 << 30, 1 << 30},
+	} {
+		if got := mphfMemoryBudget(c.limit); got != c.want {
+			t.Errorf("mphfMemoryBudget(%d) = %d, want %d", c.limit, got, c.want)
 		}
 	}
 }

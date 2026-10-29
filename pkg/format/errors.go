@@ -23,4 +23,6 @@ var (
 	ErrMPHFLookupFailed = errors.New("MPHF lookup failed")
 	// ErrMPHFKeyCollision indicates two distinct prefixes share both the MPHF key hash and the fingerprint.
 	ErrMPHFKeyCollision = errors.New("MPHF key hash collision")
+	// ErrMPHFPosition indicates an MPHF key's position is out of range, or the positions are not one per key.
+	ErrMPHFPosition = errors.New("MPHF position out of range")
 )

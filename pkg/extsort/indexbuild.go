@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -80,7 +81,7 @@ type stackEntry struct {
 }
 
 // NewIndexBuilder creates a streaming index builder. The tempDir holds
-// its scratch (the level spool and the MPHF builder's arrays); if it is
+// its scratch (the level spool and the MPHF builder's spill files); if it is
 // empty, os.TempDir() is used.
 func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
 	_, statErr := os.Stat(outDir)
@@ -97,15 +98,11 @@ func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create level spool dir: %w", err)
 	}
-	mphfBuilder, err := format.NewStreamingMPHFBuilder(tempDir)
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("create MPHF builder: %w", err), os.RemoveAll(spoolDir))
-	}
+	mphfBuilder := format.NewStreamingMPHFBuilder(tempDir)
+	mphfBuilder.SetMemoryBudget(mphfMemoryBudget(readMemoryLimit()))
 
 	interner, err := format.NewPrefixSegmentInterner(outDir)
 	if err != nil {
-		mphfBuilder.Close()
-
 		return nil, errors.Join(fmt.Errorf("create prefix segment interner: %w", err), os.RemoveAll(spoolDir))
 	}
 
@@ -429,7 +426,6 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	steps := newFinalizeSteps(log, b.onProgress)
 	defer steps.end()
 	b.stepProgress = steps.report
-	b.mphfBuilder.SetProgress(b.stepProgress)
 
 	log.Debug().Msg("index builder: starting Finalize")
 
@@ -809,21 +805,43 @@ func (b *IndexBuilder) writeNameRow(starts []uint64, depth int, r *spoolRecord) 
 	if err != nil {
 		return fmt.Errorf("prefix tree row at depth %d: %w", depth, err)
 	}
-	if err := b.mphfBuilder.AddHashed(r.keyHash, r.fp); err != nil {
+	posKey, err := format.PositionKey(0, b.mphfBuilder.Count())
+	if err == nil {
+		err = b.mphfBuilder.AddKey(r.keyHash, r.fp, posKey)
+	}
+	if err != nil {
 		return fmt.Errorf("add to MPHF builder: %w", err)
 	}
 
 	return nil
 }
 
+// MPHFFractionOfLimit is the share of GOMEMLIMIT the MPHF build's
+// workers may hold.
+const mphfFractionOfLimit = 0.25
+
+// mphfMemoryBudget is the MPHF build's heap under memoryLimit, or 0,
+// the builder's default, without a limit.
+func mphfMemoryBudget(memoryLimit int64) int64 {
+	if memoryLimit <= 0 || memoryLimit >= unsetMemoryLimit {
+		return 0
+	}
+
+	return int64(float64(memoryLimit) * mphfFractionOfLimit)
+}
+
 // buildMPHF builds the MPHF and logs progress.
 func (b *IndexBuilder) buildMPHF(ctx context.Context) error {
 	log := zerolog.Ctx(ctx)
 	mphfStart := time.Now()
-	if err := b.mphfBuilder.Build(b.outDir); err != nil {
+	h, err := b.mphfBuilder.Start(ctx, b.outDir, nil, runtime.GOMAXPROCS(0))
+	if err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
-	b.mphfBuilder.Close()
+	h.SetProgress(b.stepProgress)
+	if err := h.Wait(); err != nil {
+		return fmt.Errorf("build MPHF: %w", err)
+	}
 
 	log.Debug().
 		Str("mphf_duration", humanfmt.Duration(time.Since(mphfStart))).

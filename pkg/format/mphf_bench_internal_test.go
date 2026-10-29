@@ -2,8 +2,10 @@ package format
 
 import (
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -45,54 +47,63 @@ func TestGenerateRealisticPrefixesUniquePastAMillion(t *testing.T) {
 }
 
 // buildMPHFForBench builds an on-disk MPHF over the given prefixes and
-// returns its directory. Setup-only; not in any timed region.
-func buildMPHFForBench(b *testing.B, prefixes []string) string {
+// returns its directory; partBits, when not negative, fixes the
+// partition bits.
+func buildMPHFForBench(b *testing.B, prefixes []string, partBits int) string {
 	b.Helper()
 	dir := b.TempDir()
-	builder, err := NewStreamingMPHFBuilder(dir)
-	if err != nil {
-		b.Fatalf("NewStreamingMPHFBuilder: %v", err)
-	}
+	builder := NewStreamingMPHFBuilder(dir)
+	defer builder.Close()
+	builder.partBits = partBits
 	for _, p := range prefixes {
 		if err := builder.Add(p); err != nil {
-			builder.Close()
 			b.Fatalf("Add: %v", err)
 		}
 	}
 	if err := builder.Build(dir); err != nil {
-		builder.Close()
 		b.Fatalf("Build: %v", err)
 	}
-	builder.Close()
+
 	return dir
 }
 
 // BenchmarkMPHFBuild sweeps the full streaming MPHF build path
-// (Add → Build → fingerprint compute → on-disk write). Default sizes
-// stress the small-cache and L3-spill regimes (~60 ms per op at 1M);
-// the long-bench gate adds a 5M point.
+// (Add → Build → on-disk write). Default sizes stress the small-cache
+// and L3-spill regimes; the long-bench gate adds a 5M point and the
+// partition sweep at 5M: one partition (a serial build), 64, and the
+// count the build picks.
 func BenchmarkMPHFBuild(b *testing.B) {
 	sizes := []int{100_000, 1_000_000}
+	parts := map[string]int{}
 	if benchutil.LongBenchEnabled() {
 		sizes = append(sizes, 5_000_000)
+		parts = map[string]int{"1": 0, "64": 6, "auto": -1}
 	}
 	for _, n := range sizes {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
-			prefixes := generateRealisticPrefixes(n)
-			b.ResetTimer()
-			b.ReportAllocs()
-			var peak uint64
-			for range b.N {
-				runtime.GC()
-				sampler := benchutil.StartHeapPeakSampler()
-				_ = buildMPHFForBench(b, prefixes)
-				peak = max(peak, sampler.Stop())
-			}
-			// Peak heap over Add + Build: the MPHF finalize is the part of
-			// an index build whose memory GOMEMLIMIT does not govern.
-			b.ReportMetric(float64(peak), "peak_heap_B")
+			benchMPHFBuild(b, generateRealisticPrefixes(n), -1)
 		})
 	}
+	for _, name := range slices.Sorted(maps.Keys(parts)) {
+		b.Run(fmt.Sprintf("parts=%s/n=5000000", name), func(b *testing.B) {
+			benchMPHFBuild(b, generateRealisticPrefixes(5_000_000), parts[name])
+		})
+	}
+}
+
+func benchMPHFBuild(b *testing.B, prefixes []string, partBits int) {
+	b.Helper()
+	b.ResetTimer()
+	b.ReportAllocs()
+	var peak uint64
+	for range b.N {
+		runtime.GC()
+		sampler := benchutil.StartHeapPeakSampler()
+		_ = buildMPHFForBench(b, prefixes, partBits)
+		peak = max(peak, sampler.Stop())
+	}
+	// Peak heap over Add + Build.
+	b.ReportMetric(float64(peak), "peak_heap_B")
 }
 
 // BenchmarkMPHFQuery sweeps lookup latency across MPHF sizes. Setup
@@ -106,7 +117,7 @@ func BenchmarkMPHFQuery(b *testing.B) {
 	for _, n := range sizes {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			prefixes := generateRealisticPrefixes(n)
-			dir := buildMPHFForBench(b, prefixes)
+			dir := buildMPHFForBench(b, prefixes, -1)
 			m, err := OpenMPHF(dir)
 			if err != nil {
 				b.Fatalf("OpenMPHF: %v", err)
