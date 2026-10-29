@@ -81,20 +81,12 @@ func buildTierIndex(t *testing.T, present []tiers.ID, rows []tierTestRow, force 
 	dir := t.TempDir()
 	plan := planTierRows(t, present, rows, force, nil)
 	masks := writeTierRows(t, dir, plan, rows)
-	core, err := NewCoreStatsBuilder(dir, uint64(len(rows)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	coreRows := make([]coreTestRow, len(rows))
 	for i := range rows {
 		c, b := rows[i].totals()
-		if err := core.Add(c, b, uint64(len(rows)), masks[i]); err != nil {
-			t.Fatal(err)
-		}
+		coreRows[i] = coreTestRow{count: c, bytes: b, child: uint64(len(rows)), mask: masks[i]}
 	}
-	core.SetTierMaskEncoding(plan.MaskEncoding())
-	if err := core.Finalize(); err != nil {
-		t.Fatal(err)
-	}
+	writeCoreFiles(t, dir, coreRows, plan.MaskEncoding())
 	if err := tiers.WriteManifest(dir, present); err != nil {
 		t.Fatal(err)
 	}
