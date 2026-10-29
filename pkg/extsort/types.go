@@ -18,8 +18,6 @@ import (
 	"math"
 	"math/bits"
 	"runtime"
-	"slices"
-	"strings"
 	"unsafe"
 
 	"github.com/eunmann/s3-inv-db/pkg/extsort/events"
@@ -329,7 +327,7 @@ func SortPrefixRows(rows []*PrefixRow) {
 	sortPrefixRows(rows, nil)
 }
 
-// sortPrefixRows sorts rows by prefix through (prefix, row) pairs in
+// sortPrefixRows sorts rows by prefix through keyedRow entries in
 // scratch, grown as needed and returned for reuse: comparing through
 // the row pointers would load a row from scattered slab memory for
 // every comparison. The returned scratch holds no references.
@@ -339,23 +337,15 @@ func sortPrefixRows(rows []*PrefixRow, scratch []keyedRow) []keyedRow {
 	}
 	keyed := scratch[:len(rows)]
 	for i, r := range rows {
-		keyed[i] = keyedRow{prefix: r.Prefix, row: r}
+		keyed[i] = keyedRow{prefix: r.Prefix, row: r, key: digitKey(r.Prefix, 0)}
 	}
-	slices.SortFunc(keyed, func(a, b keyedRow) int {
-		return strings.Compare(a.prefix, b.prefix)
-	})
+	sortKeyed(keyed)
 	for i := range keyed {
 		rows[i] = keyed[i].row
 	}
 	clear(keyed)
 
 	return scratch[:0]
-}
-
-// keyedRow is a row with its prefix beside the pointer, for sorting.
-type keyedRow struct {
-	prefix string
-	row    *PrefixRow
 }
 
 // add accumulates one object into the row.
