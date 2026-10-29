@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unsafe"
 
 	"github.com/parquet-go/parquet-go"
 )
@@ -403,7 +404,7 @@ func (c *parquetColumn) read() (int, error) {
 func (r *ParquetReader) rowAt(i int) (Row, bool, bool) {
 	var inv Row
 	if v, ok := r.value(pqKey, i); ok {
-		inv.Key = v.String()
+		inv.Key = valueString(v)
 	}
 	v, hasSize := r.value(pqSize, i)
 	if hasSize {
@@ -425,6 +426,19 @@ func (r *ParquetReader) rowAt(i int) (Row, bool, bool) {
 	}
 
 	return inv, deleteMarker, hasSize
+}
+
+// valueString returns v as a string. A byte array points into its page
+// rather than being copied: a Row's strings are valid only until the
+// next call, and the page outlives that.
+func valueString(v parquet.Value) string {
+	if k := v.Kind(); k == parquet.ByteArray || k == parquet.FixedLenByteArray {
+		b := v.ByteArray()
+
+		return unsafe.String(unsafe.SliceData(b), len(b))
+	}
+
+	return v.String()
 }
 
 // Anomalies counts the rows read so far that could not be read exactly.
