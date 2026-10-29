@@ -199,7 +199,10 @@ builds.
   and one `finalize step complete` per finalize step, each with its
   duration and how long it waited on storage: `major_faults`,
   `storage_read`/`storage_written`, and on Linux the system's
-  `file_refaults` (page-cache thrash) and `io_stall_full`.
+  `file_refaults` (page-cache thrash) and `io_stall_full`. The prefix
+  hash builds beside the depth ordering, so its step covers only the
+  part after it; `prefix hash build complete` logs its whole
+  `duration` and how much of it ran `beside_row_writes`.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|

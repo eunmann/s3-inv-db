@@ -866,16 +866,24 @@ func mphfMemoryBudget(memoryLimit int64) int64 {
 const writeLevelsProcs = 3
 
 // finishMPHF reports the MPHF build that ran beside writeLevels as the
-// next step, gives it every core and waits for it.
+// next step, gives it every core and waits for it. The step's own log
+// covers only the part after writeLevels, so the build's whole wall
+// time and the part that overlapped writeLevels are logged here.
 func (b *IndexBuilder) finishMPHF(ctx context.Context, h *format.MPHFBuild, started time.Time) error {
+	besideWrites := time.Since(started)
 	h.SetProgress(b.stepProgress)
 	h.Grow(runtime.GOMAXPROCS(0))
 	if err := h.Wait(); err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
-	zerolog.Ctx(ctx).Debug().
-		Str("mphf_duration", humanfmt.Duration(time.Since(started))).
-		Msg("index builder: MPHF build complete")
+	total := h.Elapsed()
+	overlap := min(besideWrites, total)
+	zerolog.Ctx(ctx).Info().
+		Str("duration", humanfmt.Duration(total)).
+		Dur("duration_ms", total).
+		Str("beside_row_writes", humanfmt.Duration(overlap)).
+		Dur("beside_row_writes_ms", overlap).
+		Msg("prefix hash build complete")
 
 	return nil
 }

@@ -14,6 +14,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // The partitioned build. A key's partition is its hash's top
@@ -166,6 +167,10 @@ type MPHFBuild struct {
 
 	mphFile, slotsFile *os.File
 	created            []string
+
+	// started is when Start began the build and finished when its
+	// writer stopped.
+	started, finished time.Time
 }
 
 func startMPHFBuild(ctx context.Context, b *StreamingMPHFBuilder, outDir string, starts []uint64, workers int) *MPHFBuild {
@@ -182,6 +187,7 @@ func startMPHFBuild(ctx context.Context, b *StreamingMPHFBuilder, outDir string,
 		writing:    true,
 		ring:       make([]bbPartition, 2*maxWorkers),
 		ready:      make([]bool, 2*maxWorkers),
+		started:    time.Now(),
 	}
 	h.cond.L = &h.mu
 	h.stopCtx = context.AfterFunc(ctx, func() {
@@ -250,6 +256,12 @@ func (h *MPHFBuild) Wait() error {
 	return h.waitErr
 }
 
+// Elapsed is the build's own wall time, from Start until its last
+// partition was written or it stopped. It is valid once Wait returned.
+func (h *MPHFBuild) Elapsed() time.Duration {
+	return h.finished.Sub(h.started)
+}
+
 // fail records the build's first error and stops it.
 func (h *MPHFBuild) fail(err error) {
 	h.mu.Lock()
@@ -273,6 +285,7 @@ func (h *MPHFBuild) startWorkersLocked() {
 // writes mph.bin.
 func (h *MPHFBuild) run() {
 	defer h.wg.Done()
+	defer func() { h.finished = time.Now() }()
 	err := h.prepare()
 	h.mu.Lock()
 	if err != nil || h.stopped || h.plan.n == 0 {
