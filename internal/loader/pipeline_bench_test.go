@@ -297,6 +297,7 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 	var lastPrefixCount uint64
 	var lastMaxDepth uint32
 	var lastRuns, lastRunFiles int
+	var lastRunRows uint64
 	// Proc totals every run's CPU, faults and storage I/O, and wall the
 	// runs' time, for the per-op means and the cores they kept busy.
 	var proc benchutil.ProcStats
@@ -342,6 +343,7 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 		b.StopTimer()
 		lastRuns = res.RunFilesCreated + res.MemoryRuns
 		lastRunFiles = res.RunFilesCreated
+		lastRunRows = res.MergeInputRows
 
 		samplerMax := peak.Stop()
 		peakDisk, err := disk.stop()
@@ -380,5 +382,7 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 	// state, whether kept in memory or flushed to a run file.
 	b.ReportMetric(float64(lastRuns), "runs")
 	b.ReportMetric(float64(lastRunFiles), "run_files")
+	// Rows the final merge read: over prefixes, the runs a prefix was in.
+	b.ReportMetric(float64(lastRunRows), "run_rows")
 	proc.Report(b, b.N, wall)
 }
