@@ -18,7 +18,10 @@ COMPOSE := docker compose -f infra/docker-compose.yml
 # The test stack gets a project name per checkout, so `make test` in two
 # worktrees at once doesn't tear down the other's containers.
 TEST_PROJECT ?= s3inv-test-$(shell printf %s "$(CURDIR)" | cksum | cut -d' ' -f1)
-TEST_COMPOSE := docker compose -p $(TEST_PROJECT) -f infra/docker-compose.yml
+# Test containers run on the CPUs the caller may use (its taskset
+# affinity), so a pinned caller keeps them off pinned benchmark cores.
+TEST_CPUSET ?= $(shell taskset -cp $$$$ 2>/dev/null | sed -n 's/.*list: //p')
+TEST_COMPOSE := S3INV_TEST_CPUSET=$(TEST_CPUSET) docker compose -p $(TEST_PROJECT) -f infra/docker-compose.yml
 
 # Version metadata stamped into every binary (see internal/buildinfo).
 # The release workflow overrides all three. DATE is the commit time, not
