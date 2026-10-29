@@ -9,9 +9,10 @@ import (
 	"time"
 )
 
-// ManifestVersion is the current manifest format version. Version 2
-// checksums a file by its pieces (see checksumFiles).
-const ManifestVersion = 2
+// ManifestVersion is the current manifest format version. Version 3
+// checksums a file by its pieces' CRC-32Cs (see checksumFiles);
+// version 2's were SHA-256.
+const ManifestVersion = 3
 
 // Manifest describes the contents of an index directory.
 type Manifest struct {
@@ -82,7 +83,7 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32, progress StepP
 		return fmt.Errorf("marshal manifest: %w", err)
 	}
 
-	if err := WriteFileSync(manifestPath, data); err != nil {
+	if err := os.WriteFile(manifestPath, data, FilePerm); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
 
@@ -186,47 +187,6 @@ func VerifyManifest(dir string, manifest *Manifest) error {
 		if sums[name] != info.Checksum {
 			return fmt.Errorf("file %s: %w", name, ErrChecksumMismatch)
 		}
-	}
-
-	return nil
-}
-
-// WriteFileSync writes data to a file and fsyncs it.
-func WriteFileSync(path string, data []byte) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("create file: %w", err)
-	}
-
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-
-		return fmt.Errorf("write file: %w", err)
-	}
-
-	if err := f.Sync(); err != nil {
-		f.Close()
-
-		return fmt.Errorf("sync file: %w", err)
-	}
-
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close file: %w", err)
-	}
-
-	return nil
-}
-
-// SyncDir fsyncs a directory to ensure entries are persisted.
-func SyncDir(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open directory: %w", err)
-	}
-	defer d.Close()
-
-	if err := d.Sync(); err != nil {
-		return fmt.Errorf("sync directory: %w", err)
 	}
 
 	return nil

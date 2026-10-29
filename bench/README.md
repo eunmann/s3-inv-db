@@ -150,6 +150,9 @@ Ingestion (`bench/suite/ingest.txt`):
 - `pkg/extsort` `BenchmarkFinalMerge`: 48 or 128 spilled runs merged
   under a 256 MiB or 1 GiB `GOMEMLIMIT`, heavy and light key overlap;
   reports `peak_heap_B`, `rounds` and `round_bytes` (fan-in sizing).
+- `pkg/tiers` `BenchmarkFromS3`: storage class and access tier to tier
+  ID, once per row, for canonical, Intelligent-Tiering and lowercase
+  input; reports `ns/row`.
 
 The pipeline fixtures model an AWS CSV inventory: gzipped data files
 with no header, every field quoted, keys URL-encoded, and a

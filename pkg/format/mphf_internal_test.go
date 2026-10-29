@@ -790,3 +790,30 @@ func TestMPHFLevelKeysInScratch(t *testing.T) {
 		}
 	}
 }
+
+func TestMPHFWorkers(t *testing.T) {
+	for _, c := range []struct{ procs, n, want int }{
+		{8, 0, 1},
+		{8, 4095, 1},
+		{8, 3 * 4096, 3},
+		{8, 1 << 30, 8},
+		{1, 1 << 30, 1},
+	} {
+		if got := mphfWorkers(c.procs, c.n); got != c.want {
+			t.Errorf("mphfWorkers(%d, %d) = %d, want %d", c.procs, c.n, got, c.want)
+		}
+	}
+}
+
+// TestMPHFWorkerCountFollowsGOMAXPROCS: a container CPU quota lowers
+// GOMAXPROCS but not NumCPU. Setting it above NumCPU makes the two
+// differ on any host.
+func TestMPHFWorkerCountFollowsGOMAXPROCS(t *testing.T) {
+	procs := runtime.NumCPU() + 3
+	prev := runtime.GOMAXPROCS(procs)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
+
+	if got := mphfWorkerCount(1 << 30); got != procs {
+		t.Errorf("mphfWorkerCount = %d with GOMAXPROCS %d, want %d", got, procs, procs)
+	}
+}

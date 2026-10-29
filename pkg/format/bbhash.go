@@ -343,6 +343,7 @@ func (h *bbhash) writeFile(path string) error {
 	if err := h.writeTo(f); err != nil {
 		return errors.Join(fmt.Errorf("write MPHF file: %w", err), f.Close(), os.Remove(path))
 	}
+	startWriteback(f)
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close MPHF file: %w", err)
 	}
