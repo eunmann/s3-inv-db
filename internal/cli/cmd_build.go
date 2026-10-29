@@ -68,7 +68,7 @@ func runBuild(args []string) error {
 		allowMalformed: *allowMalformed,
 	}
 	if strings.HasPrefix(*outDir, "s3://") {
-		return runBuildPublish(*outDir, *workDir, b)
+		return runBuildPublish(*outDir, *workDir, b, runBuildExtSort)
 	}
 
 	return runBuildExtSort(*outDir, b)
@@ -91,8 +91,9 @@ type buildSettings struct {
 // (the run's path in the inventory manifest's key), manifest.json last,
 // and removes the local copy. The S3 copy is the durable one: the local
 // one is never synced, and a crash leaves only the hidden work directory,
-// which nothing reads as an index.
-func runBuildPublish(dest, workDir string, b buildSettings) error {
+// which nothing reads as an index. Build runs the build (runBuildExtSort
+// outside tests).
+func runBuildPublish(dest, workDir string, b buildSettings, build func(outDir string, b buildSettings) error) error {
 	destURI, err := s3fetch.ParseS3URI(dest)
 	if err != nil {
 		return fmt.Errorf("--out %q: %w", dest, err)
@@ -112,7 +113,7 @@ func runBuildPublish(dest, workDir string, b buildSettings) error {
 	defer os.RemoveAll(local)
 	indexDir := filepath.Join(local, "index")
 	b.transient = true
-	if err := runBuildExtSort(indexDir, b); err != nil {
+	if err := build(indexDir, b); err != nil {
 		return err
 	}
 
@@ -131,6 +132,18 @@ func runBuildPublish(dest, workDir string, b buildSettings) error {
 	return nil
 }
 
+// extsortConfig is the pipeline configuration b asks for.
+func (b buildSettings) extsortConfig() extsort.Config {
+	config := extsort.DefaultConfig()
+	if b.maxDepth > 0 {
+		config.MaxDepth = b.maxDepth
+	}
+	config.AllowAnomalies = b.allowMalformed
+	config.TransientOutput = b.transient
+
+	return config
+}
+
 func runBuildExtSort(outDir string, b buildSettings) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -146,12 +159,7 @@ func runBuildExtSort(outDir string, b buildSettings) error {
 	tracker := newBuildTracker(outDir, b.s3Manifest, b.eventLogPath, logger)
 	defer tracker.close()
 
-	config := extsort.DefaultConfig()
-	if b.maxDepth > 0 {
-		config.MaxDepth = b.maxDepth
-	}
-	config.AllowAnomalies = b.allowMalformed
-	config.TransientOutput = b.transient
+	config := b.extsortConfig()
 	config.Observe = tracker.wire()
 
 	logger.Info().
