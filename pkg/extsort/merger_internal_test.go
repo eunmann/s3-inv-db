@@ -79,6 +79,69 @@ func scanMerge(runs [][]PrefixRow) []PrefixRow {
 	return out
 }
 
+// typedMergeHeap is the binary min-heap of mergeItem values, ordered by
+// mergeItem.row.Prefix, that MergeIterator used before its tree of
+// losers: heapMerge's reference.
+type typedMergeHeap struct {
+	items []mergeItem
+}
+
+// mergeItem represents an item in the merge heap.
+type mergeItem struct {
+	row       *PrefixRow
+	readerIdx int // index into readers slice
+}
+
+func (h *typedMergeHeap) Len() int { return len(h.items) }
+
+func (h *typedMergeHeap) push(it mergeItem) {
+	h.items = append(h.items, it)
+	h.siftUp(len(h.items) - 1)
+}
+
+func (h *typedMergeHeap) pop() mergeItem {
+	top := h.items[0]
+	n := len(h.items) - 1
+	h.items[0] = h.items[n]
+	h.items = h.items[:n]
+	if n > 0 {
+		h.siftDown(0)
+	}
+
+	return top
+}
+
+func (h *typedMergeHeap) siftUp(i int) {
+	for i > 0 {
+		parent := (i - 1) / 2
+		if h.items[parent].row.Prefix <= h.items[i].row.Prefix {
+			return
+		}
+		h.items[parent], h.items[i] = h.items[i], h.items[parent]
+		i = parent
+	}
+}
+
+func (h *typedMergeHeap) siftDown(i int) {
+	n := len(h.items)
+	for {
+		left := 2*i + 1
+		if left >= n {
+			return
+		}
+		smallest := left
+		right := left + 1
+		if right < n && h.items[right].row.Prefix < h.items[left].row.Prefix {
+			smallest = right
+		}
+		if h.items[i].row.Prefix <= h.items[smallest].row.Prefix {
+			return
+		}
+		h.items[i], h.items[smallest] = h.items[smallest], h.items[i]
+		i = smallest
+	}
+}
+
 // heapMerge merges runs through the binary heap MergeIterator used
 // before its tree of losers, ordered by prefix, each row merged into the
 // last one out when their prefixes are equal.
@@ -117,7 +180,7 @@ func memSources(runs [][]PrefixRow) []runSource {
 			row := run[j]
 			rows[j] = &row
 		}
-		out[i] = newMemRun(rows)
+		out[i] = encodeMemRun(rows)
 	}
 
 	return out
@@ -137,7 +200,7 @@ func writeTestRunFile(t *testing.T, path string, rows []PrefixRow, rng *rand.Ran
 	for i := range rows {
 		p := rows[i].Prefix
 		shared := rng.IntN(sharedPrefixLen(prev, p) + 1)
-		if err := w.WriteEncoded(shared, p[shared:], &rows[i]); err != nil {
+		if err := w.enc.writeEncoded(shared, p[shared:], &rows[i]); err != nil {
 			t.Fatal(err)
 		}
 		prev = p
@@ -394,6 +457,30 @@ func TestMergeIteratorNoSources(t *testing.T) {
 	}
 }
 
+// sliceRun is a merge source over rows already in memory, for measuring
+// the merge apart from decoding: each row is copied out, its prefix
+// reported as sharing nothing with the previous one.
+type sliceRun struct {
+	rows []*PrefixRow
+	next int
+}
+
+func newSliceRun(rows []*PrefixRow) *sliceRun { return &sliceRun{rows: rows} }
+
+func (s *sliceRun) readNext(into *PrefixRow) (int, error) {
+	if s.next == len(s.rows) {
+		return 0, io.EOF
+	}
+	*into = *s.rows[s.next]
+	s.next++
+
+	return 0, nil
+}
+
+func (s *sliceRun) Count() uint64     { return uint64(len(s.rows)) }
+func (s *sliceRun) ReadCount() uint64 { return uint64(s.next) }
+func (s *sliceRun) Close() error      { return nil }
+
 // TestMergeIteratorAllocatesOnlyAtStart: a merge makes the same few
 // allocations, all at the start, whatever its fan-in and length.
 func TestMergeIteratorAllocatesOnlyAtStart(t *testing.T) {
@@ -405,7 +492,7 @@ func TestMergeIteratorAllocatesOnlyAtStart(t *testing.T) {
 		for s := range sets {
 			sets[s] = make([]runSource, k)
 			for i, run := range runs {
-				sets[s][i] = newMemRun(run)
+				sets[s][i] = newSliceRun(run)
 			}
 		}
 		next := 0

@@ -7,8 +7,8 @@ import (
 	"math"
 )
 
-// runSource is one sorted input of a merge: a run file, or a run held in
-// memory (memRun).
+// runSource is one sorted input of a merge: a run file, a run held in
+// memory (memRun) or one of an aggregator's runs (aggCursor).
 type runSource interface {
 	// readNext reads the next row into row and returns a count of
 	// leading bytes its prefix shares with the previous row's: at most
@@ -225,70 +225,6 @@ func (t *loserTree) breakTie(x, y *loserEntry) bool {
 	x.code = ovcAt(a, d)
 
 	return false
-}
-
-// typedMergeHeap is a typed binary min-heap of mergeItem values, ordered
-// by mergeItem.row.Prefix, for the aggregator's merge of its in-memory
-// runs (Aggregator.mergeRuns). It avoids the per-op allocations that
-// container/heap incurs through its interface{}-typed Push/Pop API.
-type typedMergeHeap struct {
-	items []mergeItem
-}
-
-// mergeItem represents an item in the merge heap.
-type mergeItem struct {
-	row       *PrefixRow
-	readerIdx int // index into readers slice
-}
-
-func (h *typedMergeHeap) Len() int { return len(h.items) }
-
-func (h *typedMergeHeap) push(it mergeItem) {
-	h.items = append(h.items, it)
-	h.siftUp(len(h.items) - 1)
-}
-
-func (h *typedMergeHeap) pop() mergeItem {
-	top := h.items[0]
-	n := len(h.items) - 1
-	h.items[0] = h.items[n]
-	h.items = h.items[:n]
-	if n > 0 {
-		h.siftDown(0)
-	}
-
-	return top
-}
-
-func (h *typedMergeHeap) siftUp(i int) {
-	for i > 0 {
-		parent := (i - 1) / 2
-		if h.items[parent].row.Prefix <= h.items[i].row.Prefix {
-			return
-		}
-		h.items[parent], h.items[i] = h.items[i], h.items[parent]
-		i = parent
-	}
-}
-
-func (h *typedMergeHeap) siftDown(i int) {
-	n := len(h.items)
-	for {
-		left := 2*i + 1
-		if left >= n {
-			return
-		}
-		smallest := left
-		right := left + 1
-		if right < n && h.items[right].row.Prefix < h.items[left].row.Prefix {
-			smallest = right
-		}
-		if h.items[i].row.Prefix <= h.items[smallest].row.Prefix {
-			return
-		}
-		h.items[i], h.items[smallest] = h.items[smallest], h.items[i]
-		i = smallest
-	}
 }
 
 // NewMergeIterator creates a merge iterator from multiple run file paths.

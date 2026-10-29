@@ -32,13 +32,20 @@ flowchart LR
    document fails the build, naming it, the file and the key.
 2. **Aggregate.** Each object is added to every ancestor prefix: for
    `data/2024/01/f.csv`, to `""`, `data/`, `data/2024/` and
-   `data/2024/01/`. `--max-depth` limits how deep this goes.
-3. **Spill.** An aggregator sorts its rows and writes them to a
-   zstd-compressed run file when any of these holds: the aggregators
-   together exceed `0.15 × GOMEMLIMIT` (512 MiB with no limit); the
-   live heap reaches 70% of the limit, or the in-use heap 95%; or a
-   50K-row check finds the cap reached mid-file. A worker's last state
-   stays in memory unless the heap is under pressure.
+   `data/2024/01/`. `--max-depth` limits how deep this goes. A prefix
+   costs a worker about 80 bytes with realistic keys: a 32-byte node
+   holding its totals and its one tier, its last segment, its
+   hash-table slot and the spill's scratch, plus, for the 5% of
+   prefixes with objects in more than one tier, a 256-byte block of
+   per-tier counts.
+3. **Spill.** An aggregator walks its prefixes in order and writes them
+   to a zstd-compressed run file when any of these holds: the
+   aggregators together exceed `0.15 × GOMEMLIMIT` (512 MiB with no
+   limit); the live heap reaches 70% of the limit, or the in-use heap
+   95%; or a 50K-row check finds the cap reached mid-file. A worker's
+   last state stays in memory unless the heap is under pressure, as
+   the same records uncompressed (about 16 bytes a prefix), and its
+   aggregator is freed.
 4. **Merge.** A K-way merge adds up rows for the same prefix across all
    runs. It reads up to 64 run files at once (about 2.5 MB of heap
    each, within `0.25 × GOMEMLIMIT`); past that, it first merges the

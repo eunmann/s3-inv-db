@@ -72,6 +72,7 @@ func BenchmarkAggregator_AddObject(b *testing.B) {
 
 func runAggregatorAddBench(b *testing.B, keys []string) {
 	b.Helper()
+	enc := newRunEncoder(discardRecords{}, DefaultRunBufferSize)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -79,7 +80,16 @@ func runAggregatorAddBench(b *testing.B, keys []string) {
 		for _, k := range keys {
 			agg.AddObject(k, 1024, tiers.Standard)
 		}
-		agg.Drain()
+		spillBench(b, agg, &enc)
+	}
+}
+
+// spillBench spills agg as a build does, its records encoded and
+// dropped.
+func spillBench(b *testing.B, agg *Aggregator, enc *runEncoder) {
+	b.Helper()
+	if _, err := agg.writeRun(enc); err != nil {
+		b.Fatalf("writeRun: %v", err)
 	}
 }
 
@@ -89,7 +99,7 @@ func runAggregatorAddBench(b *testing.B, keys []string) {
 // node table's from each segment's second key, and "sorted_mapped" swaps
 // each segment's first two keys so it maps at once and its remaining
 // keys, in order, go through the node table while sharing most of their
-// path. The aggregator is reused and drained outside the timer, as a
+// path. The aggregator is reused and spilled outside the timer, as a
 // worker's is across spills, so only AddObject is measured. Sparse keys
 // (a directory per key) stop at depth 4: at depth 8 they make 8M
 // prefixes, over a gigabyte of nodes.
@@ -129,6 +139,7 @@ func BenchmarkAggregator_AddObjectSegmented(b *testing.B) {
 func runSegmentedAddBench(b *testing.B, keys []string, segments int) {
 	b.Helper()
 	agg := NewAggregator(0, 0)
+	enc := newRunEncoder(discardRecords{}, DefaultRunBufferSize)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -139,7 +150,7 @@ func runSegmentedAddBench(b *testing.B, keys []string, segments int) {
 			}
 		}
 		b.StopTimer()
-		agg.Drain()
+		spillBench(b, agg, &enc)
 		b.StartTimer()
 	}
 }
@@ -180,24 +191,38 @@ func generateDenseKeys(n, depth, perDir int) []string {
 	return keys
 }
 
-// BenchmarkAggregator_DrainSorted measures the cost of Drain()
-// returning a sorted slice — the work that happens at every flush.
-// At billion-object scale this runs ~28× per build.
-func BenchmarkAggregator_DrainSorted(b *testing.B) {
+// BenchmarkAggregator_Spill measures a spill: walking the prefixes in
+// order and encoding their run records, the work at every flush before
+// compression, for keys out of order (the main tree's walk) and in
+// order in segments (merged runs).
+func BenchmarkAggregator_Spill(b *testing.B) {
 	for _, n := range []int{10_000, 100_000, 1_000_000} {
-		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
-			b.ReportAllocs()
-			keys := generateBenchKeys(n, 4)
-			for range b.N {
-				b.StopTimer()
+		keys := generateBenchKeys(n, 4)
+		sorted := slices.Clone(keys)
+		slices.Sort(sorted)
+		for _, c := range []struct {
+			name     string
+			keys     []string
+			segments int
+		}{{"tree", keys, 1}, {"segments", sorted, 4}} {
+			b.Run(fmt.Sprintf("n=%d/%s", n, c.name), func(b *testing.B) {
 				agg := NewAggregator(0, 0)
-				for _, k := range keys {
-					agg.AddObject(k, 1024, tiers.Standard)
+				enc := newRunEncoder(discardRecords{}, DefaultRunBufferSize)
+				b.ReportAllocs()
+				for range b.N {
+					b.StopTimer()
+					for i := range c.segments {
+						if c.segments > 1 {
+							agg.StartSegment()
+						}
+						for _, k := range c.keys[i*n/c.segments : (i+1)*n/c.segments] {
+							agg.AddObject(k, 1024, tiers.Standard)
+						}
+					}
+					b.StartTimer()
+					spillBench(b, agg, &enc)
 				}
-				b.StartTimer()
-				rows := agg.Drain()
-				_ = rows
-			}
-		})
+			})
+		}
 	}
 }
