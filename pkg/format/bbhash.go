@@ -116,32 +116,56 @@ func newBBHashWith(keys []uint64, keyBuf keyBuffer, fallback func(leftovers []ui
 
 // buildBBHashLevels builds the levels and the fallback; *release frees
 // the keys of the level built last, which the caller releases.
+//
+// One pass marks the first level's bits. Each level's placed bits, the
+// ones a single key set, then give its count of colliding keys by a
+// popcount, and one pass over its keys both copies the colliding ones
+// out and marks them on the next level.
 func buildBBHashLevels(keys []uint64, keyBuf keyBuffer, fallback func(leftovers []uint64) ([]bbFallback, error), release *func() error, scan *stepCounter) (*bbhash, error) {
 	firstWords := levelWords(len(keys))
 	// The levels after the first hold ~65% as many bits again.
 	h := &bbhash{bits: make([]uint64, 0, firstWords*7/4+maxBBHashLevels)}
-	for level := 0; len(keys) > 0 && level < maxBBHashLevels; level++ {
-		words := levelWords(len(keys))
-		set, collided := make([]uint64, words), make([]uint64, words)
-		markLevel(keys, level, set, collided, scan)
-		next, nextRelease, err := collidedKeys(keys, level, words, collided, keyBuf, scan)
+	var set, collided []uint64
+	if len(keys) > 0 {
+		set, collided = make([]uint64, firstWords), make([]uint64, firstWords)
+		markLevel(keys, 0, set, collided, scan)
+	}
+	for level := 0; len(keys) > 0; level++ {
+		placed := placedBits(set, collided)
+		lvBits := set
+		if placed > 0 {
+			offset := uint64(len(h.bits))
+			h.levels = append(h.levels, bbLevel{offset: offset, words: uint64(len(set))})
+			h.bits = append(h.bits, set...)
+			lvBits = h.bits[offset:]
+		}
+		rest := len(keys) - placed
+		if rest == 0 {
+			keys = nil
+
+			break
+		}
+		// A level that places no key holds only keys equal on every
+		// level: they are the leftovers, copied so they never alias keys.
+		last := placed == 0 || level+1 == maxBBHashLevels
+		set, collided = nil, nil
+		if !last {
+			words := levelWords(rest)
+			set, collided = make([]uint64, words), make([]uint64, words)
+		}
+		next, nextRelease, err := keyBuf(rest)
 		if err != nil {
 			return nil, err
 		}
+		nextLevelKeys(keys, level, lvBits, next, set, collided, scan)
 		if err := (*release)(); err != nil {
 			return nil, errors.Join(err, nextRelease())
 		}
 		*release = nextRelease
-		placedAny := len(next) < len(keys)
 		keys = next
-		if !placedAny {
+		if last {
 			break
 		}
-		for w := range set {
-			set[w] &^= collided[w]
-		}
-		h.levels = append(h.levels, bbLevel{offset: uint64(len(h.bits)), words: words})
-		h.bits = append(h.bits, set...)
 	}
 	if len(keys) > 0 {
 		var err error
@@ -168,75 +192,78 @@ func levelWords(n int) uint64 {
 	return max(1, uint64(math.Ceil(bbhashGamma*float64(n)/64)))
 }
 
-// bbhashPassesPerLevel is how many times a level reads its keys: once
-// to mark their bits, twice to collect the colliding ones.
-const bbhashPassesPerLevel = 3
-
 // bbhashScanEstimate is about how many key reads building n keys takes,
-// the total of its progress. A key collides on a level with probability
-// 1-e^(-1/gamma), so the levels read n·e^(1/gamma) keys in all, each
-// bbhashPassesPerLevel times.
+// the total of its progress: the first level's marking reads every key,
+// and each level's pass reads its keys once. A key collides on a level
+// with probability 1-e^(-1/gamma), so the levels hold n·e^(1/gamma)
+// keys in all.
 func bbhashScanEstimate(n int) int64 {
-	return int64(math.Ceil(float64(n) * bbhashPassesPerLevel * math.Exp(1/bbhashGamma)))
+	return int64(math.Ceil(float64(n) * (1 + math.Exp(1/bbhashGamma))))
 }
 
-// markLevel sets each key's bit in set, and in collided when another
-// key already set it. Atomic ORs make the result independent of the
-// order the workers run in.
+// markLevel marks keys on level (see markKeys) and counts them on scan.
 func markLevel(keys []uint64, level int, set, collided []uint64, scan *stepCounter) {
-	words := uint64(len(set))
 	forChunks(len(keys), scan, func(_, lo, hi int) {
-		for _, k := range keys[lo:hi] {
-			i := bbPosition(k, level, words)
-			w, bit := i/64, uint64(1)<<(i%64)
-			if atomic.OrUint64(&set[w], bit)&bit != 0 {
-				atomic.OrUint64(&collided[w], bit)
-			}
-		}
+		markKeys(keys[lo:hi], level, set, collided)
 	})
 }
 
-// collidedKeys returns the keys whose bit collided, in input order:
-// one pass counts each chunk's share, a second copies into place.
-//
-//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
-func collidedKeys(keys []uint64, level int, words uint64, collided []uint64, keyBuf keyBuffer, scan *stepCounter) ([]uint64, func() error, error) {
-	isCollided := func(k uint64) bool {
+// markKeys sets each key's bit in set, and in collided when another key
+// already set it. Atomic ORs make the result independent of the order
+// the workers run in.
+func markKeys(keys []uint64, level int, set, collided []uint64) {
+	words := uint64(len(set))
+	for _, k := range keys {
 		i := bbPosition(k, level, words)
-
-		return collided[i/64]&(1<<(i%64)) != 0
+		w, bit := i/64, uint64(1)<<(i%64)
+		if atomic.OrUint64(&set[w], bit)&bit != 0 {
+			atomic.OrUint64(&collided[w], bit)
+		}
 	}
-	counts := make([]int, mphfWorkerCount(len(keys)))
+}
+
+// placedBits clears the collided bits from set, leaving the bits exactly
+// one key set, and returns their count: the keys the level places.
+func placedBits(set, collided []uint64) int {
+	placed := 0
+	for w := range set {
+		set[w] &^= collided[w]
+		placed += bits.OnesCount64(set[w])
+	}
+
+	return placed
+}
+
+// collectBlock is how many keys a worker tests before it hands the
+// colliding ones on, so its buffer stays in cache.
+const collectBlock = 1 << 12
+
+// nextLevelKeys copies to next, sized to hold them exactly, the keys
+// whose bit is not in placed, the bits level placed, and marks them on
+// level+1 in set and collided unless set is nil. Each worker gathers a
+// block's colliding keys without a branch, then claims room for them in
+// next, so they land in no set order: neither the levels nor the
+// leftovers depend on it.
+func nextLevelKeys(keys []uint64, level int, placed, next, set, collided []uint64, scan *stepCounter) {
+	words := uint64(len(placed))
+	bufs := make([]uint64, mphfWorkerCount(len(keys))*collectBlock)
+	var filled atomic.Int64
 	forChunks(len(keys), scan, func(c, lo, hi int) {
-		for _, k := range keys[lo:hi] {
-			if isCollided(k) {
-				counts[c]++
+		buf := bufs[c*collectBlock : (c+1)*collectBlock]
+		for from := lo; from < hi; from += collectBlock {
+			n := 0
+			for _, k := range keys[from:min(from+collectBlock, hi)] {
+				i := bbPosition(k, level, words)
+				buf[n] = k
+				n += int(^placed[i/64] >> (i % 64) & 1)
+			}
+			at := int(filled.Add(int64(n))) - n
+			copy(next[at:at+n], buf[:n])
+			if set != nil {
+				markKeys(buf[:n], level+1, set, collided)
 			}
 		}
 	})
-	total := 0
-	for c, n := range counts {
-		counts[c] = total
-		total += n
-	}
-	next, release, err := keyBuf(total)
-	if err != nil {
-		return nil, nil, err
-	}
-	// counts[c] is chunk c's next write position: forChunks calls fn
-	// once per block of the chunk, in order.
-	forChunks(len(keys), scan, func(c, lo, hi int) {
-		at := counts[c]
-		for _, k := range keys[lo:hi] {
-			if isCollided(k) {
-				next[at] = k
-				at++
-			}
-		}
-		counts[c] = at
-	})
-
-	return next, release, nil
 }
 
 // forChunks splits [0, n) into mphfWorkerCount(n) contiguous chunks and
