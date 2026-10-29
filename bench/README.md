@@ -148,7 +148,13 @@ Ingestion (`bench/suite/ingest.txt`):
   `cores` (CPU over wall time: a change that saves CPU on a core-rich
   machine shows here before it shows in `sec/op`), `minflt`/`majflt`,
   and `read_B`/`write_B` (storage I/O; writes net of scratch deleted
-  before writeback). Reported, not gated.
+  before writeback). It also reports `phase_<stage>_s` and
+  `phase_finalizing_<step>_s`: mean wall seconds per op of
+  `Pipeline.Run` from each phase's first progress event to the next
+  (`phase_pipeline_s` is the time before the first event; the last
+  finalize step runs to the build's end, so it includes publishing the
+  index and removing scratch; names are lowercased, other characters as
+  underscores). Reported, not gated.
 - `internal/loader` `BenchmarkPipelineSlowS3`: the same build against
   S3 behind a slower link (20 ms to first byte, 8 MiB/s per GET), four
   chunks per worker: the time a build waits on S3.
