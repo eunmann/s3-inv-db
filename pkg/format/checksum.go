@@ -80,19 +80,25 @@ func checksumFiles(dir string, sizes map[string]int64, piece int64, hashed *step
 		return nil, err
 	}
 
-	table := castagnoli()
 	sums := make(map[string]string, len(digests))
 	for name, d := range digests {
-		var crc uint32
-		var b [4]byte
-		for _, piece := range d {
-			binary.BigEndian.PutUint32(b[:], piece)
-			crc = crc32.Update(crc, table, b[:])
-		}
-		sums[name] = fmt.Sprintf("%08x", crc)
+		sums[name] = joinPieces(d)
 	}
 
 	return sums, nil
+}
+
+// joinPieces is the checksum of a file whose pieces' CRC-32Cs are d.
+func joinPieces(d []uint32) string {
+	table := castagnoli()
+	var crc uint32
+	var b [4]byte
+	for _, piece := range d {
+		binary.BigEndian.PutUint32(b[:], piece)
+		crc = crc32.Update(crc, table, b[:])
+	}
+
+	return fmt.Sprintf("%08x", crc)
 }
 
 // hashPiece hashes job's piece of its file into job.digest. A file
@@ -126,4 +132,51 @@ func hashPiece(dir string, job pieceJob, buf []byte, hashed *stepCounter) error 
 	*job.digest = crc
 
 	return nil
+}
+
+// crc32cCombine returns the CRC-32C of a followed by b, given a's CRC,
+// b's CRC and b's length n: a's CRC shifted past n bytes, then b's
+// added, as zlib's crc32_combine does (the standard library has none).
+func crc32cCombine(crcA, crcB uint32, n int64) uint32 {
+	return mulModP(xPow8n(n), crcA) ^ crcB
+}
+
+// crc32cZeros returns the CRC-32C of n zero bytes: the initial all-ones
+// register shifted past them, then the final inversion.
+func crc32cZeros(n int64) uint32 {
+	return mulModP(xPow8n(n), ^uint32(0)) ^ ^uint32(0)
+}
+
+// Powers of x as CRC-32C remainders, in the reflected bit order
+// hash/crc32 uses: bit 31 is x^0.
+const (
+	crcX0 uint32 = 1 << 31
+	crcX8 uint32 = 1 << 23
+)
+
+// mulModP multiplies a and b as polynomials modulo CRC-32C's.
+func mulModP(a, b uint32) uint32 {
+	var p uint32
+	for m := crcX0; m != 0; m >>= 1 {
+		if a&m != 0 {
+			p ^= b
+		}
+		b = b>>1 ^ -(b&1)&crc32.Castagnoli
+	}
+
+	return p
+}
+
+// xPow8n returns x^(8n) modulo CRC-32C's polynomial, by squaring x^8:
+// shifting a CRC past n bytes is multiplying it by this.
+func xPow8n(n int64) uint32 {
+	p, sq := crcX0, crcX8
+	for ; n > 0; n >>= 1 {
+		if n&1 != 0 {
+			p = mulModP(sq, p)
+		}
+		sq = mulModP(sq, sq)
+	}
+
+	return p
 }
