@@ -124,3 +124,27 @@ func TestCoreStatsFileSize(t *testing.T) {
 		t.Errorf("file size = %d, want %d", info.Size(), want)
 	}
 }
+
+// BenchmarkCoreStatsFinalize repacks 2M build rows (counts and bytes
+// spread over every width, so some rows are patched) into the final
+// core stats file: the finalize step that rewrites every row.
+func BenchmarkCoreStatsFinalize(b *testing.B) {
+	const rows = 2_000_000
+	b.ReportAllocs()
+	for range b.N {
+		b.StopTimer()
+		w, err := format.NewCoreStatsBuilder(b.TempDir(), rows)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for i := range uint64(rows) {
+			if err := w.Add(i%1000, i*i%(1<<40), i+1, uint16(i%4)); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StartTimer()
+		if err := w.Finalize(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
