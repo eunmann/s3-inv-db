@@ -38,7 +38,7 @@ type IndexBuilder struct {
 	coreStatsW    *format.CoreStatsBuilder
 	tierStatsW    *format.TierStatsScratchWriter
 	mphfBuilder   *format.StreamingMPHFBuilder
-	prefixTreeW   *format.PrefixTreeWriter
+	prefixTreeW   *format.PrefixTreeScratchWriter
 	spool         *levelSpool
 	levelRows     []uint64 // rows seen so far at each depth
 	declaredTiers []tiers.ID
@@ -107,7 +107,7 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		return nil, errors.Join(fmt.Errorf("create core stats builder: %w", err), os.RemoveAll(spoolDir))
 	}
 
-	prefixTreeW, err := format.NewPrefixTreeWriter(outDir)
+	prefixTreeW, err := format.NewPrefixTreeScratchWriter(outDir)
 	if err != nil {
 		mphfBuilder.Close()
 		coreStatsW.Close()

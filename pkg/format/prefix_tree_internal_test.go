@@ -1,52 +1,131 @@
 package format
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"maps"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"unsafe"
 )
+
+// treeTestRow is a prefix in position order: its parent's position
+// (-1 for the root) and its last segment.
+type treeTestRow struct {
+	prefix string
+	parent int
+	name   string
+}
+
+// preorderRows gives prefixes (root first, each after its parent, in
+// preorder) their positions in list order.
+func preorderRows(t *testing.T, prefixes []string) []treeTestRow {
+	t.Helper()
+	rows := make([]treeTestRow, len(prefixes))
+	var stack []int
+	for i, p := range prefixes {
+		for len(stack) > 0 && !strings.HasPrefix(p, prefixes[stack[len(stack)-1]]) {
+			stack = stack[:len(stack)-1]
+		}
+		rows[i] = treeTestRow{prefix: p, parent: -1}
+		if len(stack) > 0 {
+			parent := stack[len(stack)-1]
+			rows[i].parent = parent
+			rows[i].name = strings.TrimSuffix(strings.TrimPrefix(p, prefixes[parent]), "/")
+		} else if i != 0 {
+			t.Fatalf("%q has no parent before it", p)
+		}
+		stack = append(stack, i)
+	}
+
+	return rows
+}
 
 // writeTree writes a prefix tree for prefixes (in preorder, root first,
 // each after its parent) into a fresh directory.
 func writeTree(t *testing.T, prefixes []string) string {
 	t.Helper()
 	dir := t.TempDir()
-	w, err := NewPrefixTreeWriter(dir)
+	writeTreeRows(t, dir, preorderRows(t, prefixes), nil)
+
+	return dir
+}
+
+// writeTreeRows writes rows into dir, interning their segments in the
+// order internOrder lists the rows (position order when nil).
+func writeTreeRows(t *testing.T, dir string, rows []treeTestRow, internOrder []int) {
+	t.Helper()
+	interner, err := NewPrefixSegmentInterner(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	type open struct {
-		prefix string
-		pos    uint64
+	if internOrder == nil {
+		internOrder = make([]int, len(rows))
+		for i := range internOrder {
+			internOrder[i] = i
+		}
 	}
-	var stack []open
-	for i, p := range prefixes {
-		for len(stack) > 0 && !strings.HasPrefix(p, stack[len(stack)-1].prefix) {
-			stack = stack[:len(stack)-1]
+	ids := make([]uint32, len(rows))
+	var maxDist uint64
+	for _, i := range internOrder {
+		if rows[i].parent < 0 {
+			continue
 		}
-		if len(stack) == 0 {
-			if err := w.AddRoot(); err != nil {
-				t.Fatal(err)
-			}
+		if ids[i], err = interner.Intern(rows[i].name); err != nil {
+			t.Fatal(err)
+		}
+		maxDist = max(maxDist, uint64(i-rows[i].parent))
+	}
+	if err := interner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	w, err := NewPrefixTreeWriter(dir, uint64(len(rows)), interner.Count(), maxDist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, r := range rows {
+		if r.parent < 0 {
+			err = w.AddRoot()
 		} else {
-			parent := stack[len(stack)-1]
-			name := strings.TrimSuffix(strings.TrimPrefix(p, parent.prefix), "/")
-			if err := w.Add(parent.pos, name); err != nil {
-				t.Fatalf("Add(%q): %v", p, err)
-			}
+			err = w.Add(uint64(r.parent), ids[i])
 		}
-		stack = append(stack, open{p, uint64(i)})
+		if err != nil {
+			t.Fatalf("row %d (%q): %v", i, r.prefix, err)
+		}
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
 
-	return dir
+// levelOrderTreeRows is a random tree in level order: names repeat
+// across parents, as dates and IDs do in real keys.
+func levelOrderTreeRows(r *rand.Rand, depths, fanout, names int) []treeTestRow {
+	rows := make([]treeTestRow, 1, 1<<10)
+	rows[0].parent = -1
+	level := []int{0}
+	for range depths {
+		next := make([]int, 0, len(level)*fanout)
+		for _, parent := range level {
+			picked := map[string]bool{}
+			for range r.IntN(fanout + 1) {
+				picked[fmt.Sprintf("n%d", r.IntN(names))] = true
+			}
+			for _, name := range slices.Sorted(maps.Keys(picked)) {
+				next = append(next, len(rows))
+				rows = append(rows, treeTestRow{prefix: rows[parent].prefix + name + "/", parent: parent, name: name})
+			}
+		}
+		level = next
+	}
+
+	return rows
 }
 
 func openTree(t *testing.T, dir string) *PrefixTreeReader {
@@ -148,12 +227,12 @@ func TestPrefixTreeEmpty(t *testing.T) {
 }
 
 func TestPrefixTreeWriterRejectsBadOrder(t *testing.T) {
-	w, err := NewPrefixTreeWriter(t.TempDir())
+	w, err := NewPrefixTreeWriter(t.TempDir(), 3, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer w.Abort()
-	if err := w.Add(0, "a"); !errors.Is(err, errPrefixTreeOrder) {
+	if err := w.Add(0, 0); !errors.Is(err, errPrefixTreeOrder) {
 		t.Errorf("Add before the root: err = %v", err)
 	}
 	if err := w.AddRoot(); err != nil {
@@ -162,8 +241,125 @@ func TestPrefixTreeWriterRejectsBadOrder(t *testing.T) {
 	if err := w.AddRoot(); !errors.Is(err, errPrefixTreeOrder) {
 		t.Errorf("second root: err = %v", err)
 	}
-	if err := w.Add(1, "a"); !errors.Is(err, errPrefixTreeOrder) {
+	if err := w.Add(1, 0); !errors.Is(err, errPrefixTreeOrder) {
 		t.Errorf("parent at or after the new position: err = %v", err)
+	}
+}
+
+// TestPrefixTreeWriterRejectsRowsOffPlan: rows that don't match the
+// count, segments and distance the widths were chosen for fail the
+// writer, which leaves no file behind.
+func TestPrefixTreeWriterRejectsRowsOffPlan(t *testing.T) {
+	type add struct {
+		parent uint64
+		seg    uint32
+	}
+	rows := []add{{0, 0}, {0, 1}, {1, 1}} // after the root: "a/", "b/", "a/b/"
+	for _, tc := range []struct {
+		name     string
+		count    uint64
+		segments uint32
+		maxDist  uint64
+		rows     []add
+	}{
+		{"fewer rows", 5, 2, 2, rows},
+		{"more rows", 3, 2, 2, rows},
+		{"segment out of range", 4, 1, 2, rows},
+		{"fewer segments", 4, 3, 2, rows},
+		{"distance too far", 4, 2, 1, rows},
+		{"distance short of planned", 4, 2, 3, rows},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			w, err := NewPrefixTreeWriter(dir, tc.count, tc.segments, tc.maxDist)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = w.AddRoot()
+			for _, r := range tc.rows {
+				if err != nil {
+					break
+				}
+				err = w.Add(r.parent, r.seg)
+			}
+			if err == nil {
+				err = w.Close()
+			} else {
+				err = errors.Join(err, w.Abort())
+			}
+			if !errors.Is(err, errPrefixTreePlan) {
+				t.Errorf("err = %v, want errPrefixTreePlan", err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, PrefixTreeFile)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("prefix tree left behind: %v", err)
+			}
+		})
+	}
+}
+
+// TestPrefixTreeWriterMatchesScratchWriter: with segments interned in
+// position order, the writer's tree and dictionary are byte for byte
+// the scratch writer's.
+func TestPrefixTreeWriterMatchesScratchWriter(t *testing.T) {
+	for seed := range uint64(4) {
+		r := rand.New(rand.NewPCG(seed, 1))
+		rows := levelOrderTreeRows(r, 1+r.IntN(6), 1+r.IntN(8), 1+r.IntN(400))
+		got := t.TempDir()
+		writeTreeRows(t, got, rows, nil)
+
+		want := t.TempDir()
+		legacy, err := NewPrefixTreeScratchWriter(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			if row.parent < 0 {
+				err = legacy.AddRoot()
+			} else {
+				err = legacy.Add(uint64(row.parent), row.name)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := legacy.Close(); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{PrefixTreeFile, PrefixDictBlobFile, PrefixDictOffsetsFile} {
+			w, err := os.ReadFile(filepath.Join(want, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			g, err := os.ReadFile(filepath.Join(got, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(w, g) {
+				t.Errorf("seed %d, %d prefixes: %s differs", seed, len(rows), name)
+			}
+		}
+	}
+}
+
+// TestPrefixTreeAnySegmentOrder: segment IDs may be given in any order
+// (the builder interns in key order, the tree is in level order); every
+// position still decodes to its prefix and its last segment.
+func TestPrefixTreeAnySegmentOrder(t *testing.T) {
+	r := rand.New(rand.NewPCG(5, 6))
+	rows := levelOrderTreeRows(r, 5, 6, 300)
+	dir := t.TempDir()
+	writeTreeRows(t, dir, rows, r.Perm(len(rows)))
+	tree := openTree(t, dir)
+	if tree.Count() != uint64(len(rows)) {
+		t.Fatalf("Count = %d, want %d", tree.Count(), len(rows))
+	}
+	for i, row := range rows {
+		if got, err := tree.Prefix(uint64(i)); err != nil || got != row.prefix {
+			t.Fatalf("Prefix(%d) = %q, %v; want %q", i, got, err, row.prefix)
+		}
+		if got := tree.ChildSegment(uint64(i)); got != row.name {
+			t.Fatalf("ChildSegment(%d) = %q, want %q", i, got, row.name)
+		}
 	}
 }
 
@@ -204,23 +400,20 @@ func TestOpenPrefixTreeReaderMissingFiles(t *testing.T) {
 	}
 }
 
-// TestPrefixTreeAddDoesNotAllocate: the builder adds one row per prefix,
-// so a known segment must cost no allocation.
-func TestPrefixTreeAddDoesNotAllocate(t *testing.T) {
-	w, err := NewPrefixTreeWriter(t.TempDir())
+// TestInternKnownSegmentDoesNotAllocate: the builder interns one
+// segment per prefix, so a known segment must cost no allocation.
+func TestInternKnownSegmentDoesNotAllocate(t *testing.T) {
+	si, err := NewPrefixSegmentInterner(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Abort()
-	if err := w.AddRoot(); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Add(0, "seg"); err != nil {
+	defer si.Close()
+	if _, err := si.Intern("seg"); err != nil {
 		t.Fatal(err)
 	}
 	buf := []byte("seg/")
-	name := unsafe.String(&buf[0], 3) // defensive: Add must accept a name over a reused buffer
-	if allocs := testing.AllocsPerRun(1000, func() { _ = w.Add(0, name) }); allocs != 0 {
-		t.Errorf("Add of a known segment allocates %v times", allocs)
+	name := unsafe.String(&buf[0], 3) // defensive: Intern must accept a name over a reused buffer
+	if allocs := testing.AllocsPerRun(1000, func() { _, _ = si.Intern(name) }); allocs != 0 {
+		t.Errorf("Intern of a known segment allocates %v times", allocs)
 	}
 }
