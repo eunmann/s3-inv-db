@@ -476,6 +476,162 @@ func TestPrefixTreeRangesRejectRowsOffPlan(t *testing.T) {
 	})
 }
 
+// depthCuts cuts the rows of depths of the given sizes, in level order,
+// at each depth's start and at random block boundaries within it.
+func depthCuts(r *rand.Rand, sizes []uint64, parts int) []uint64 {
+	var cuts []uint64
+	var start uint64
+	for _, size := range sizes {
+		for _, c := range rangeCuts(r, size, parts, DepthBlockSize) {
+			cuts = append(cuts, start+c)
+		}
+		start += size
+	}
+
+	return slices.Compact(append(cuts, start))
+}
+
+func TestDepthIndexRangesMatchWriter(t *testing.T) {
+	cases := map[string][]uint64{
+		"empty":                {},
+		"root only":            {1},
+		"block edges":          {1, 63, 64, 65, 128, 129},
+		"wide":                 {1, 40, 5000, 300},
+		"deep":                 {1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233},
+		"trailing empty depth": {1, 70, 0},
+	}
+	for name, sizes := range cases {
+		for _, split := range rangeSplits {
+			t.Run(fmt.Sprintf("%s/parts=%d", name, split.parts), func(t *testing.T) {
+				r := rand.New(rand.NewPCG(uint64(len(sizes)), uint64(split.parts)))
+				type row struct {
+					depth        int
+					local        uint64
+					count, bytes uint64
+				}
+				var rows []row
+				for d, size := range sizes {
+					for i := range size {
+						rows = append(rows, row{depth: d, local: i, count: r.Uint64N(1 << r.UintN(40)), bytes: r.Uint64() >> r.UintN(64)})
+					}
+				}
+				want, got := t.TempDir(), t.TempDir()
+				ws, err := NewDepthIndexWriter(want, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, row := range rows {
+					if err := ws.Add(uint32(row.depth), row.count, row.bytes); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := ws.Close(); err != nil {
+					t.Fatal(err)
+				}
+				sums := newChecksums(testPiece)
+				w, err := NewDepthIndexRanges(got, sizes, sums)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeRanges(t, r, depthCuts(r, sizes, split.parts), split.workers,
+					func() func(lo, hi uint64, part *DepthIndexPart) error {
+						rw := w.NewRange()
+
+						return func(lo, hi uint64, part *DepthIndexPart) error {
+							if lo == hi {
+								return nil
+							}
+							if err := rw.Start(rows[lo].depth, rows[lo].local, part); err != nil {
+								return err
+							}
+							for _, row := range rows[lo:hi] {
+								if err := rw.Add(row.count, row.bytes); err != nil {
+									return err
+								}
+							}
+
+							return rw.Flush()
+						}
+					}, w.Merge)
+				if err := w.Close(); err != nil {
+					t.Fatal(err)
+				}
+				assertSameFiles(t, want, got)
+				checkRecordedSums(t, got, sums)
+			})
+		}
+	}
+}
+
+// TestDepthIndexRangesRejectRowsOffPlan: a range off a block boundary
+// or ending inside a block, rows past a depth, parts out of level order,
+// a depth with rows below an empty one and a Close short of the rows
+// fail, the Close removing the files.
+func TestDepthIndexRangesRejectRowsOffPlan(t *testing.T) {
+	sizes := []uint64{1, 200}
+	open := func(t *testing.T) (*DepthIndexRanges, string) {
+		t.Helper()
+		dir := t.TempDir()
+		w, err := NewDepthIndexRanges(dir, sizes, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = w.Abort() })
+
+		return w, dir
+	}
+	if _, err := NewDepthIndexRanges(t.TempDir(), []uint64{1, 0, 3}, nil); !errors.Is(err, ErrDepthOrder) {
+		t.Errorf("depths with a gap: %v, want ErrDepthOrder", err)
+	}
+	t.Run("range off a block", func(t *testing.T) {
+		w, _ := open(t)
+		if err := w.NewRange().Start(1, 10, &DepthIndexPart{}); err == nil {
+			t.Error("a range starting inside a block started")
+		}
+	})
+	t.Run("range ending inside a block", func(t *testing.T) {
+		w, _ := open(t)
+		rw := w.NewRange()
+		if err := rw.Start(1, 0, &DepthIndexPart{}); err != nil {
+			t.Fatal(err)
+		}
+		for range 10 {
+			if err := rw.Add(1, 1); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := rw.Flush(); err == nil {
+			t.Error("a range ending inside a block flushed")
+		}
+	})
+	t.Run("rows past the depth", func(t *testing.T) {
+		w, _ := open(t)
+		rw := w.NewRange()
+		if err := rw.Start(0, 0, &DepthIndexPart{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := errors.Join(rw.Add(1, 1), rw.Add(1, 1)); err == nil {
+			t.Error("two rows written to a depth of one")
+		}
+	})
+	t.Run("parts out of order", func(t *testing.T) {
+		w, _ := open(t)
+		if err := w.Merge(&DepthIndexPart{depth: 1, first: 64, rows: 64}); err == nil {
+			t.Error("a part merged before the rows ahead of it")
+		}
+	})
+	t.Run("close short of the rows", func(t *testing.T) {
+		w, dir := open(t)
+		if err := w.Merge(&DepthIndexPart{depth: 0, first: 0, rows: 1}); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err == nil {
+			t.Fatal("closed with depth 1 unwritten")
+		}
+		assertSameFiles(t, t.TempDir(), dir)
+	})
+}
+
 // TestTierStatsRangesRejectRowsOffPlan: a range placed past the plan,
 // rows past it, parts merged out of order and a Close short of the plan
 // fail, the Close removing every file.
