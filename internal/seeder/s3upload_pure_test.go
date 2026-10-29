@@ -140,23 +140,16 @@ func TestTierToS3Columns_NonIntelligentLeavesAccessTierEmpty(t *testing.T) {
 	}
 }
 
-func TestEncodeCSVGz_RoundTripsRows(t *testing.T) {
-	objects := []benchutil.FakeObject{
-		{Key: "a/1", Size: 100, TierID: tiers.Standard},
-		{Key: "a/2", Size: 250, TierID: tiers.ITFrequent},
-		{Key: "b/3", Size: 9999, TierID: tiers.GlacierFR},
-	}
-	payload, err := seeder.EncodeCSVGz("src-bucket", objects)
+// encodeCSV returns the uncompressed CSV encodeCSVGz writes for objects.
+func encodeCSV(t *testing.T, seed int64, objects []benchutil.FakeObject) string {
+	t.Helper()
+	payload, err := seeder.EncodeCSVGz("src-bucket", seed, objects)
 	if err != nil {
 		t.Fatalf("encodeCSVGz: %v", err)
 	}
 	if payload.Size != int64(len(payload.Body)) {
 		t.Errorf("size = %d, want %d (len(body))", payload.Size, len(payload.Body))
 	}
-	if len(payload.Body) == 0 {
-		t.Fatal("body is empty")
-	}
-
 	gr, err := gzip.NewReader(bytes.NewReader(payload.Body))
 	if err != nil {
 		t.Fatalf("gzip.NewReader: %v", err)
@@ -166,8 +159,17 @@ func TestEncodeCSVGz_RoundTripsRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read decompressed: %v", err)
 	}
-	r := csv.NewReader(bytes.NewReader(raw))
-	rows, err := r.ReadAll()
+
+	return string(raw)
+}
+
+func TestEncodeCSVGz_RoundTripsRows(t *testing.T) {
+	objects := []benchutil.FakeObject{
+		{Key: "a/1", Size: 100, TierID: tiers.Standard},
+		{Key: "a/2", Size: 250, TierID: tiers.ITFrequent},
+		{Key: "b/3", Size: 9999, TierID: tiers.GlacierFR},
+	}
+	rows, err := csv.NewReader(strings.NewReader(encodeCSV(t, 7, objects))).ReadAll()
 	if err != nil {
 		t.Fatalf("csv.ReadAll: %v", err)
 	}
@@ -180,6 +182,119 @@ func TestEncodeCSVGz_RoundTripsRows(t *testing.T) {
 		}
 		if row[1] != objects[i].Key {
 			t.Errorf("row %d key = %q, want %q", i, row[1], objects[i].Key)
+		}
+	}
+}
+
+// AWS S3 Inventory quotes every CSV field, empty ones included, and
+// URL-encodes keys.
+func TestEncodeCSVGz_QuotesEveryField(t *testing.T) {
+	objects := []benchutil.FakeObject{
+		{Key: "dir/my file,v1.txt", Size: 100, TierID: tiers.Standard},
+		{Key: "dir/2", Size: 250, TierID: tiers.ITFrequent},
+	}
+	lines := strings.Split(strings.TrimSuffix(encodeCSV(t, 7, objects), "\n"), "\n")
+	if len(lines) != len(objects) {
+		t.Fatalf("lines = %d, want %d", len(lines), len(objects))
+	}
+	for i, line := range lines {
+		if !strings.HasPrefix(line, `"`) || !strings.HasSuffix(line, `"`) {
+			t.Fatalf("line %d not quoted at both ends: %s", i, line)
+		}
+		fields := strings.Split(line[1:len(line)-1], `","`)
+		if len(fields) != 7 {
+			t.Fatalf("line %d has %d quoted fields, want 7: %s", i, len(fields), line)
+		}
+		for j, f := range fields {
+			if strings.Contains(f, `"`) {
+				t.Errorf("line %d field %d holds a quote: %s", i, j, line)
+			}
+		}
+	}
+	if !strings.HasPrefix(lines[0], `"src-bucket","dir/my+file%2Cv1.txt","100",`) || !strings.HasSuffix(lines[0], `,"STANDARD",""`) {
+		t.Errorf("line 0 = %s", lines[0])
+	}
+}
+
+func TestEncodeCSVGz_ObjectMetadata(t *testing.T) {
+	const multipartPart = 8 << 20
+	gen := benchutil.NewGenerator(benchutil.S3RealisticConfig(2000))
+	objects := gen.Generate()
+	objects = append(objects, benchutil.FakeObject{Key: "big", Size: 3*multipartPart + 1, TierID: tiers.Standard})
+
+	raw := encodeCSV(t, 7, objects)
+	if again := encodeCSV(t, 7, objects); again != raw {
+		t.Error("two encodings with the same seed differ")
+	}
+	if other := encodeCSV(t, 8, objects); other == raw {
+		t.Error("encodings with different seeds are identical")
+	}
+	rows, err := csv.NewReader(strings.NewReader(raw)).ReadAll()
+	if err != nil {
+		t.Fatalf("csv.ReadAll: %v", err)
+	}
+
+	windowStart := time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC)
+	windowEnd := windowStart.AddDate(4, 0, 0)
+	etags := make(map[string]bool, len(rows))
+	times := make(map[string]bool, len(rows))
+	for i, row := range rows {
+		lm, etag := row[3], row[4]
+		ts, err := time.Parse("2006-01-02T15:04:05.000Z", lm)
+		if err != nil || ts.Before(windowStart) || !ts.Before(windowEnd) {
+			t.Errorf("row %d LastModifiedDate %q outside [%v, %v): %v", i, lm, windowStart, windowEnd, err)
+		}
+		hexPart, _, multipart := strings.Cut(etag, "-")
+		if len(hexPart) != 32 || strings.Trim(hexPart, "0123456789abcdef") != "" {
+			t.Errorf("row %d ETag %q is not 32 hex digits", i, etag)
+		}
+		if multipart != (objects[i].Size > multipartPart) {
+			t.Errorf("row %d size %d ETag %q: multipart suffix = %v", i, objects[i].Size, etag, multipart)
+		}
+		etags[hexPart] = true
+		times[lm] = true
+	}
+	if got := rows[len(rows)-1][4]; !strings.HasSuffix(got, "-4") {
+		t.Errorf("ETag of a 3 parts + 1 byte object = %q, want a -4 suffix", got)
+	}
+	if len(etags) < len(rows)*99/100 || len(times) < len(rows)*99/100 {
+		t.Errorf("distinct ETags %d, LastModifiedDates %d over %d rows; want nearly all distinct", len(etags), len(times), len(rows))
+	}
+
+	reversed := []benchutil.FakeObject{objects[1], objects[0]}
+	revRows, err := csv.NewReader(strings.NewReader(encodeCSV(t, 7, reversed))).ReadAll()
+	if err != nil {
+		t.Fatalf("csv.ReadAll: %v", err)
+	}
+	if revRows[0][4] != rows[1][4] || revRows[0][3] != rows[1][3] {
+		t.Errorf("an object's ETag and LastModifiedDate depend on its row position")
+	}
+}
+
+func TestFixtureFingerprint(t *testing.T) {
+	fingerprint := func(preset string, sorted bool, seed int64) string {
+		t.Helper()
+		fp, err := seeder.FixtureFingerprint(t.Context(), seeder.Config{Preset: preset, SortedKeys: sorted, Objects: 5}, seed)
+		if err != nil {
+			t.Fatalf("FixtureFingerprint(%s, sorted=%v, %d): %v", preset, sorted, seed, err)
+		}
+
+		return fp
+	}
+	base := fingerprint("realistic", false, 1000)
+	if len(base) != 6 || strings.Trim(base, "0123456789abcdef") != "" {
+		t.Errorf("fingerprint %q is not 6 hex digits", base)
+	}
+	if again := fingerprint("realistic", false, 1000); again != base {
+		t.Errorf("same inputs gave %q then %q", base, again)
+	}
+	for name, other := range map[string]string{
+		"preset": fingerprint("deep_pyramid", false, 1000),
+		"order":  fingerprint("realistic", true, 1000),
+		"seed":   fingerprint("realistic", false, 1001),
+	} {
+		if other == base {
+			t.Errorf("a different %s gave the same fingerprint %q", name, base)
 		}
 	}
 }

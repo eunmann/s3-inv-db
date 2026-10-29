@@ -5,11 +5,14 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/md5" // MD5 is mandated by the AWS S3 Inventory manifest spec.
-	"encoding/csv"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"math/rand/v2"
 	"net/url"
 	"os"
 	"slices"
@@ -84,7 +87,7 @@ func UploadInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S
 	gen := benchutil.NewGenerator(genCfg)
 	objects := gen.Generate()
 
-	payload, err := encodeCSVGz(s3cfg.SrcBucket, objects)
+	payload, err := encodeCSVGz(s3cfg.SrcBucket, seed, objects)
 	if err != nil {
 		return InventoryInfo{}, fmt.Errorf("encode csv.gz: %w", err)
 	}
@@ -101,7 +104,7 @@ func UploadInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S
 		"version":           "2016-11-30",
 		"creationTimestamp": strconv.FormatInt(runStamp.UnixMilli(), 10),
 		"fileFormat":        "CSV",
-		"fileSchema":        "Bucket, Key, Size, LastModifiedDate, ETag, StorageClass, IntelligentTieringAccessTier",
+		"fileSchema":        csvFileSchema,
 		"files": []map[string]any{
 			{"key": dataKey, "size": payload.Size, "MD5checksum": md5Hex(payload.Body)},
 		},
@@ -156,6 +159,51 @@ func autoChunkCount(objects int) int {
 // chunk-level parallelism. NumChunks must be >= 1; values >= the
 // generated object count fall back to one file per object.
 func UploadMultiChunkInventory(ctx context.Context, client *s3.Client, cfg Config, s3cfg S3Config, index int, seed int64, runStamp time.Time, numChunks int) (InventoryInfo, error) {
+	put := func(ctx context.Context, key string, body []byte, contentType string) error {
+		return putObject(ctx, client, s3cfg.Bucket, key, body, contentType)
+	}
+
+	return writeMultiChunkInventory(ctx, put, cfg, s3cfg, index, seed, runStamp, numChunks)
+}
+
+// The sample inventory FixtureFingerprint hashes: enough rows over
+// enough chunks to cover the row encoding, the key order and the chunk
+// split.
+const (
+	fingerprintObjects = 1000
+	fingerprintChunks  = 3
+	fingerprintHexLen  = 6
+)
+
+// FixtureFingerprint returns a short digest of what
+// UploadMultiChunkInventory writes for cfg's Preset and SortedKeys and
+// seed, taken over a small sample inventory at a fixed run time. A
+// benchmark that caches a seeded fixture puts it in the cache key, so
+// a seeder that writes different bytes seeds a new fixture instead of
+// reusing one an older seeder wrote.
+func FixtureFingerprint(ctx context.Context, cfg Config, seed int64) (string, error) {
+	h := sha256.New()
+	put := func(_ context.Context, key string, body []byte, _ string) error {
+		h.Write([]byte(key))
+		h.Write(body)
+
+		return nil
+	}
+	cfg.Objects = fingerprintObjects
+	s3cfg := S3Config{Bucket: "fingerprint", SrcBucket: "fingerprint"}
+	if _, err := writeMultiChunkInventory(ctx, put, cfg, s3cfg, 1, seed, time.Unix(0, 0), fingerprintChunks); err != nil {
+		return "", fmt.Errorf("write sample inventory: %w", err)
+	}
+
+	return hex.EncodeToString(h.Sum(nil))[:fingerprintHexLen], nil
+}
+
+// putFunc stores one object of a seeded inventory.
+type putFunc func(ctx context.Context, key string, body []byte, contentType string) error
+
+// writeMultiChunkInventory is UploadMultiChunkInventory with its
+// objects handed to put.
+func writeMultiChunkInventory(ctx context.Context, put putFunc, cfg Config, s3cfg S3Config, index int, seed int64, runStamp time.Time, numChunks int) (InventoryInfo, error) {
 	if numChunks < 1 {
 		numChunks = 1
 	}
@@ -202,12 +250,12 @@ func UploadMultiChunkInventory(ctx context.Context, client *s3.Client, cfg Confi
 			}
 			chunkBuf = append(chunkBuf, gen.Next())
 		}
-		payload, err := encodeCSVGz(s3cfg.SrcBucket, chunkBuf)
+		payload, err := encodeCSVGz(s3cfg.SrcBucket, seed, chunkBuf)
 		if err != nil {
 			return InventoryInfo{}, fmt.Errorf("encode chunk %d: %w", chunk, err)
 		}
 		dataKey := fmt.Sprintf("%s%s/%s/data/%s-chunk-%04d.csv.gz", s3cfg.Prefix, s3cfg.SrcBucket, invID, runStampUUID(runStamp, index), chunk)
-		if err := putObject(ctx, client, s3cfg.Bucket, dataKey, payload.Body, "application/gzip"); err != nil {
+		if err := put(ctx, dataKey, payload.Body, "application/gzip"); err != nil {
 			return InventoryInfo{}, fmt.Errorf("upload chunk %d: %w", chunk, err)
 		}
 		files = append(files, map[string]any{
@@ -223,17 +271,17 @@ func UploadMultiChunkInventory(ctx context.Context, client *s3.Client, cfg Confi
 		"version":           "2016-11-30",
 		"creationTimestamp": strconv.FormatInt(runStamp.UnixMilli(), 10),
 		"fileFormat":        "CSV",
-		"fileSchema":        "Bucket, Key, Size, LastModifiedDate, ETag, StorageClass, IntelligentTieringAccessTier",
+		"fileSchema":        csvFileSchema,
 		"files":             files,
 	}
 	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return InventoryInfo{}, fmt.Errorf("marshal manifest: %w", err)
 	}
-	if err := putObject(ctx, client, s3cfg.Bucket, manifestKey, manifestJSON, "application/json"); err != nil {
+	if err := put(ctx, manifestKey, manifestJSON, "application/json"); err != nil {
 		return InventoryInfo{}, fmt.Errorf("upload manifest: %w", err)
 	}
-	if err := putObject(ctx, client, s3cfg.Bucket, checksumKey, []byte(md5Hex(manifestJSON)), "text/plain"); err != nil {
+	if err := put(ctx, checksumKey, []byte(md5Hex(manifestJSON)), "text/plain"); err != nil {
 		return InventoryInfo{}, fmt.Errorf("upload checksum: %w", err)
 	}
 
@@ -254,49 +302,120 @@ type csvGzPayload struct {
 	Size int64
 }
 
-// encodeCSVGz writes synthetic objects as a gzipped, URL-encoded CSV body
-// matching the fileSchema declared in the manifest. AWS S3 Inventory uses
-// URL-encoded field values and CSV without a header row.
-func encodeCSVGz(srcBucket string, objects []benchutil.FakeObject) (csvGzPayload, error) {
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	w := csv.NewWriter(gz)
+// csvFileSchema is the manifest's fileSchema for the seeded CSV: a
+// subset of the AWS S3 Inventory fields, in the order AWS writes them.
+const csvFileSchema = "Bucket, Key, Size, LastModifiedDate, ETag, StorageClass, IntelligentTieringAccessTier"
 
+// csvFlushBytes is how much encoded CSV encodeCSVGz gathers before
+// handing it to the gzip writer.
+const csvFlushBytes = 64 << 10
+
+// encodeCSVGz writes synthetic objects as a gzipped CSV body matching
+// csvFileSchema, the way AWS S3 Inventory writes CSV: no header row,
+// every field quoted, keys URL-encoded. Each object's ETag and
+// LastModifiedDate derive from seed and its key (objectMetadata).
+func encodeCSVGz(srcBucket string, seed int64, objects []benchutil.FakeObject) (csvGzPayload, error) {
+	var out bytes.Buffer
+	gz := gzip.NewWriter(&out)
 	mapping := tiers.NewMapping()
-	now := time.Now().UTC().Format(time.RFC3339)
-	// S3 Inventory writes the ETag's hex without the quotes the HTTP
-	// header carries.
-	etag := "00000000000000000000000000000000"
 
+	var rows bytes.Buffer
 	for _, o := range objects {
 		cols, err := tierToS3Columns(mapping, o.TierID)
 		if err != nil {
 			return csvGzPayload{}, fmt.Errorf("tier columns: %w", err)
 		}
-		row := []string{
+		meta := objectMetadata(seed, o.Key, o.Size)
+		appendQuotedRow(&rows,
 			srcBucket,
 			csvKey(o.Key),
 			strconv.FormatUint(o.Size, 10),
-			now,
-			etag,
+			meta.LastModified,
+			meta.ETag,
 			cols.StorageClass,
 			cols.AccessTier,
-		}
-		if err := w.Write(row); err != nil {
-			return csvGzPayload{}, fmt.Errorf("write csv row: %w", err)
+		)
+		if rows.Len() >= csvFlushBytes {
+			if _, err := gz.Write(rows.Bytes()); err != nil {
+				return csvGzPayload{}, fmt.Errorf("write csv rows: %w", err)
+			}
+			rows.Reset()
 		}
 	}
-	w.Flush()
-	if err := w.Error(); err != nil {
-		return csvGzPayload{}, fmt.Errorf("flush csv: %w", err)
+	if _, err := gz.Write(rows.Bytes()); err != nil {
+		return csvGzPayload{}, fmt.Errorf("write csv rows: %w", err)
 	}
 	if err := gz.Close(); err != nil {
 		return csvGzPayload{}, fmt.Errorf("close gzip: %w", err)
 	}
 
-	body := buf.Bytes()
+	body := out.Bytes()
 
 	return csvGzPayload{Body: body, Size: int64(len(body))}, nil
+}
+
+// appendQuotedRow appends one CSV record with every field quoted, empty
+// ones included, as AWS S3 Inventory writes them.
+func appendQuotedRow(buf *bytes.Buffer, fields ...string) {
+	for i, f := range fields {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.WriteByte('"')
+		if strings.Contains(f, `"`) {
+			f = strings.ReplaceAll(f, `"`, `""`)
+		}
+		buf.WriteString(f)
+		buf.WriteByte('"')
+	}
+	buf.WriteByte('\n')
+}
+
+// The synthetic LastModifiedDate falls in a fixed window, so a fixture's
+// bytes don't depend on when it was seeded: up to four years from
+// 2021-01-01T00:00:00Z.
+const (
+	lastModifiedEpoch = 1_609_459_200
+	lastModifiedSpan  = 4 * 365 * 24 * 60 * 60
+)
+
+// lastModifiedLayout is how AWS S3 Inventory writes LastModifiedDate in
+// CSV: UTC with milliseconds, which are always zero.
+const lastModifiedLayout = "2006-01-02T15:04:05.000Z"
+
+// multipartPartSize is the AWS CLI's default multipart threshold and
+// part size: a synthetic object above it gets a multipart ETag,
+// "<hex>-<parts>".
+const multipartPartSize = 8 << 20
+
+// objectColumns holds one object's ETag and LastModifiedDate columns.
+type objectColumns struct {
+	ETag         string
+	LastModified string
+}
+
+// objectMetadata returns one object's ETag and LastModifiedDate: a
+// random-looking 128-bit ETag and a time to the second spread over the
+// window, so the gzip ratio and inflate cost resemble a real
+// inventory's. Both come from seed and key alone, so every seeding
+// writes the same bytes whatever the row order.
+func objectMetadata(seed int64, key string, size uint64) objectColumns {
+	h := fnv.New64a()
+	h.Write([]byte(key))
+	rng := rand.New(rand.NewPCG(uint64(seed), h.Sum64()))
+
+	var sum [16]byte
+	binary.BigEndian.PutUint64(sum[:8], rng.Uint64())
+	binary.BigEndian.PutUint64(sum[8:], rng.Uint64())
+	etag := hex.EncodeToString(sum[:])
+	if size > multipartPartSize {
+		etag += "-" + strconv.FormatUint((size+multipartPartSize-1)/multipartPartSize, 10)
+	}
+
+	return objectColumns{
+		ETag:         etag,
+		LastModified: time.Unix(lastModifiedEpoch+rng.Int64N(lastModifiedSpan), 0).UTC().Format(lastModifiedLayout),
+	}
 }
 
 // storageClassIntelligentTiering is the S3 Inventory StorageClass column

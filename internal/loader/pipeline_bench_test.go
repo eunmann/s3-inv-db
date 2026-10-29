@@ -32,18 +32,27 @@ import (
 //	go test -tags integration -bench=BenchmarkPipeline -benchtime=1x \
 //	  -count=1 -run=^$ ./internal/loader/...
 
-// chunkCountFor returns a chunk count that lets Pipeline's ingest pool
-// (sized as min(NumCPU, manifest_files)) saturate the host while
-// keeping per-chunk size above minPerChunk.
+// chunkCountFor returns the fixture's data file count: up to four per
+// ingest worker (the pool is min(NumCPU, data files)), each file at
+// least minPerChunk objects, so on a many-core host the floor caps the
+// count below four per worker. A real inventory is many data files, more than
+// a host has cores, so each worker has more chunks queued: fetchers
+// download the next while it parses one, and the order chunks are
+// handed out (largest first) shapes the tail. With one chunk per worker
+// none of that runs and the slowest chunk is the whole ingest. Four per
+// worker keeps a queue behind every worker for most of the ingest,
+// while 1M objects still make chunks of tens of thousands of objects,
+// big enough that a file's fetch and gzip setup stay small next to its
+// parse. Following the core count rather than a fixed file size gives
+// the per-PR 1M runs and the 10M scale runs the same queue depth per
+// worker wherever the floor does not bind (up to 25 cores for 1M).
 func chunkCountFor(numObjects int) int {
 	const (
-		minPerChunk = 50_000
-		minChunks   = 4
+		chunksPerWorker = 4
+		minPerChunk     = 10_000
 	)
-	byCPU := runtime.NumCPU()
-	byFloor := max(numObjects/minPerChunk, minChunks)
 
-	return min(byFloor, byCPU)
+	return max(min(chunksPerWorker*runtime.NumCPU(), numObjects/minPerChunk), 1)
 }
 
 // pipelineSizes returns the size axis the pipeline benchmark sweeps.
@@ -57,8 +66,10 @@ func pipelineSizes() []int {
 }
 
 // BenchmarkPipeline sweeps shape × size against the full S3-to-index path.
-// Realistic_sorted is realistic with the keys in order across the
-// chunks, as some inventories come; the others are in random order.
+// Realistic and deep_pyramid list keys in random order, which is what to
+// expect: S3 Inventory guarantees no order. Realistic_sorted is
+// realistic with the keys in order across the chunks, the best case for
+// the build's in-order paths.
 func BenchmarkPipeline(b *testing.B) {
 	for _, shape := range []string{"realistic", "deep_pyramid", "realistic_sorted"} {
 		for _, n := range pipelineSizes() {
@@ -85,9 +96,9 @@ func BenchmarkPipeline_GoMemLimit(b *testing.B) {
 
 // BenchmarkPipelineSlowS3 runs the build against S3 behind a slower
 // link (first-byte latency, a bandwidth cap per GET), with four chunks
-// per ingest worker so a worker has a next chunk to fetch while it
-// parses one. The local server alone answers instantly and can't show
-// the time a build spends waiting on S3.
+// per ingest worker (chunkCountFor) so a worker has a next chunk to
+// fetch while it parses one. The local server alone answers instantly
+// and can't show the time a build spends waiting on S3.
 func BenchmarkPipelineSlowS3(b *testing.B) {
 	const (
 		latency     = 20 * time.Millisecond
@@ -97,7 +108,6 @@ func BenchmarkPipelineSlowS3(b *testing.B) {
 	runPipelineBenchWith(b, pipelineBench{
 		preset:     "realistic_sorted",
 		numObjects: 1_000_000,
-		chunks:     4 * runtime.NumCPU(),
 		client:     fc,
 	})
 }
@@ -107,15 +117,29 @@ func BenchmarkPipelineSlowS3(b *testing.B) {
 const fixtureInfoKey = "fixture.json"
 
 // seededInventory returns the fixture inventory for preset, size and
-// chunk count, seeding it into the local S3 server only once per server
-// and A/B side: every later run of that side reads the same upload, and
-// each side builds from its own seeder's output. Seeding goes straight
-// to the local server, so a slow client's link only slows the build's
-// reads.
+// chunk count, seeding it into the local S3 server only once per server,
+// A/B side and seeder output: every later run of that side reads the
+// same upload, each side builds from its own seeder's output, and the
+// seeder's fingerprint in the bucket name keeps a fixture an older
+// seeder wrote from being reused. Seeding goes straight to the local
+// server, so a slow client's link only slows the build's reads.
 func seededInventory(b *testing.B, preset string, numObjects, chunks int) seeder.InventoryInfo {
 	b.Helper()
 	raw := s3test.RawClient(b)
-	bucket := s3test.FixtureBucket(b, raw, fmt.Sprintf("%s-%d-%d", preset, numObjects, chunks))
+	cfg := seeder.Config{
+		Target:     seeder.TargetS3,
+		Objects:    numObjects,
+		Preset:     strings.TrimSuffix(preset, "_sorted"),
+		Seed:       int64(numObjects ^ chunks),
+		Logger:     zerolog.Nop(),
+		SortedKeys: strings.HasSuffix(preset, "_sorted"),
+	}
+	seed := int64(numObjects)
+	fingerprint, err := seeder.FixtureFingerprint(b.Context(), cfg, seed)
+	if err != nil {
+		b.Fatalf("FixtureFingerprint: %v", err)
+	}
+	bucket := s3test.FixtureBucket(b, raw, fmt.Sprintf("%s-%d-%d-%s", preset, numObjects, chunks, fingerprint))
 	if out, err := raw.GetObject(b.Context(), &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(fixtureInfoKey)}); err == nil {
 		var info seeder.InventoryInfo
 		decodeErr := json.NewDecoder(out.Body).Decode(&info)
@@ -125,17 +149,9 @@ func seededInventory(b *testing.B, preset string, numObjects, chunks int) seeder
 		}
 	}
 	info, err := seeder.UploadMultiChunkInventory(
-		b.Context(), raw,
-		seeder.Config{
-			Target:     seeder.TargetS3,
-			Objects:    numObjects,
-			Preset:     strings.TrimSuffix(preset, "_sorted"),
-			Seed:       int64(numObjects ^ chunks),
-			Logger:     zerolog.Nop(),
-			SortedKeys: strings.HasSuffix(preset, "_sorted"),
-		},
+		b.Context(), raw, cfg,
 		seeder.S3Config{Bucket: bucket, Prefix: "bench-inv/", SrcBucket: "bench-src"},
-		1, int64(numObjects), time.Now().UTC().Truncate(time.Minute), chunks,
+		1, seed, time.Now().UTC().Truncate(time.Minute), chunks,
 	)
 	if err != nil {
 		b.Fatalf("UploadMultiChunkInventory: %v", err)
@@ -154,14 +170,13 @@ func seededInventory(b *testing.B, preset string, numObjects, chunks int) seeder
 }
 
 // pipelineBench is one pipeline benchmark's setup. A zero memLimit
-// leaves GOMEMLIMIT unchanged, zero chunks takes chunkCountFor, and a
-// nil client is the local S3 server's.
+// leaves GOMEMLIMIT unchanged and a nil client is the local S3
+// server's.
 type pipelineBench struct {
 	client     *s3fetch.Client
 	preset     string
 	numObjects int
 	memLimit   int64
-	chunks     int
 }
 
 // runPipelineBench is the shared body. MemLimit==0 leaves GOMEMLIMIT
@@ -180,10 +195,7 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 	if fc == nil {
 		fc = s3test.FetchClient(b)
 	}
-	chunks := pb.chunks
-	if chunks == 0 {
-		chunks = chunkCountFor(numObjects)
-	}
+	chunks := chunkCountFor(numObjects)
 	info := seededInventory(b, preset, numObjects, chunks)
 
 	var lastDiskBytes int64

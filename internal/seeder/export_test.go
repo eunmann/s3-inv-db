@@ -33,8 +33,8 @@ func TierToS3Columns(m *tiers.Mapping, id tiers.ID) (S3InventoryColumns, error) 
 type CsvGzPayload = csvGzPayload
 
 // EncodeCSVGz exposes encodeCSVGz for tests.
-func EncodeCSVGz(srcBucket string, objects []benchutil.FakeObject) (CsvGzPayload, error) {
-	return encodeCSVGz(srcBucket, objects)
+func EncodeCSVGz(srcBucket string, seed int64, objects []benchutil.FakeObject) (CsvGzPayload, error) {
+	return encodeCSVGz(srcBucket, seed, objects)
 }
 
 // NewS3ClientForTest exposes newS3Client for tests.
