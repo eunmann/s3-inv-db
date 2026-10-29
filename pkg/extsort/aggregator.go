@@ -245,8 +245,8 @@ func tierIDsFromMask(mask uint16) []tiers.ID {
 }
 
 // EstimatedMemoryUsage returns the heap the aggregator's rows take
-// since the last Drain: each row, its prefix string and its map entry,
-// counted as they are created.
+// since the last Drain: each row, its prefix string and, for a row in
+// the map, its map entry, counted as they are created.
 func (a *Aggregator) EstimatedMemoryUsage() int64 {
 	return a.bytes
 }
@@ -354,10 +354,11 @@ func heapReadingsUnderPressure(live, inuse uint64, memoryLimit int64) bool {
 // reuse. Nothing is copied: the rows and the slice stay valid only until
 // the aggregator is next used, when they are recycled.
 //
-// The rows come in the order their prefixes first appeared, read off the
-// slabs rather than the map: keys in order (as S3 Inventory lists them)
-// create their prefixes in sorted order, which DrainSorted's sort then
-// only has to confirm.
+// With segments the rows come merged and sorted, each prefix once (see
+// mergeSegments). Without, they come in the order their prefixes first
+// appeared, read off the slabs rather than the map: keys in order (as S3
+// Inventory lists them) create their prefixes in sorted order, which
+// DrainSorted's sort then only has to confirm.
 func (a *Aggregator) Drain() []*PrefixRow {
 	if a.used == 0 {
 		return nil
