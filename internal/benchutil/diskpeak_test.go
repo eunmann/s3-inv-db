@@ -1,6 +1,7 @@
 package benchutil_test
 
 import (
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,7 +16,14 @@ func TestDiskPeakSamplerCountsFilesUnderDir(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "sub", "scratch"), make([]byte, size), 0o600); err != nil {
+	// Random bytes so a compressing or hole-punching filesystem still
+	// allocates the full size.
+	data := make([]byte, size)
+	rng := rand.New(rand.NewPCG(1, 2))
+	for i := range data {
+		data[i] = byte(rng.Uint32())
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "scratch"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.Stop()
