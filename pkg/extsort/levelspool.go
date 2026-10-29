@@ -21,9 +21,10 @@ import (
 // order: every depth-0 row, then every depth-1 row, each depth in key
 // order. Each depth's records stream uncompressed to their own file
 // through a levelSpoolBufSize bufio writer; Finalize reads the depths
-// back in turn and writes the index files in level order, removing
-// each depth's file once read. Memory is one buffer per depth,
-// whatever the prefix count, plus the hand-off batches.
+// back, a run between two marks at a time on every core, and writes the
+// index files in level order, removing each depth's file once read.
+// Memory is one buffer per depth, whatever the prefix count, plus the
+// hand-off batches and the marks.
 //
 // Add fills records (next, commit) in batches that three stage
 // goroutines take in turn, so the builder's serial loop does only the
@@ -265,10 +266,7 @@ const levelSpoolBufSize = 256 << 10
 
 // spoolRecord is one prefix as Finalize needs it. Child and parent are
 // indexes within their own depth (the next and the previous); Finalize
-// adds the depth's first row once every depth's size is known. It is
-// one cache line, its tier values kept apart: the replay fills records
-// on one core and writes them on two others, and a record holding every
-// tier's values spanned over five.
+// adds the depth's first row once every depth's size is known.
 type spoolRecord struct {
 	count, bytes uint64
 	childLocal   uint64 // the prefix's first child, within depth+1
@@ -518,8 +516,8 @@ func truncated(err error) error {
 }
 
 // close stops the writer, closes every depth's file and removes it:
-// after a failed build, or the depth files readLevels left behind after a
-// failure. Idempotent.
+// after a failed build, or the depth files writeLevels left behind
+// after a failure. Idempotent.
 func (s *levelSpool) close() error {
 	errs := []error{s.stop()}
 	for _, sf := range s.depths {

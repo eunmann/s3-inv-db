@@ -32,8 +32,8 @@ import (
 // each row against its ancestors (a depth stack) and spools it by
 // depth (levelSpool), whose stages also plan the core and tier files'
 // widths from every row, intern its last segment and spill its MPHF key;
-// Finalize replays the depths in order into the index writers, which
-// write each file in its final form.
+// Finalize replays the depths, in chunks on every core, into the index
+// writers, which write each file in its final form.
 //
 // Memory is bounded: rows and MPHF keys go to disk, and the stack
 // holds one entry per depth.
@@ -800,8 +800,11 @@ func mphfMemoryBudget(memoryLimit int64) int64 {
 	return int64(float64(memoryLimit) * mphfFractionOfLimit)
 }
 
-// writeLevelsProcs is the cores writeLevels leaves the MPHF build that
-// runs beside it at first; the build then grows to every core.
+// writeLevelsProcs is how many fewer workers than cores the MPHF build
+// starts with beside writeLevels, which replays on every core; once
+// writeLevels is done the build grows to every core. On 4 cores the build
+// keeps one worker beside the replay and still ends within ~15 ms of it
+// at 2.4M prefixes.
 const writeLevelsProcs = 3
 
 // finishMPHF reports the MPHF build that ran beside writeLevels as the

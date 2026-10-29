@@ -15,20 +15,10 @@ import (
 	"sort"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
-
-// TestSpoolRecordIsOneCacheLine: the replay hands every record from the
-// reader's core to two others; a record past a cache line costs each a
-// line per row.
-func TestSpoolRecordIsOneCacheLine(t *testing.T) {
-	if size := unsafe.Sizeof(spoolRecord{}); size > 64 {
-		t.Errorf("spoolRecord is %d bytes, want at most 64", size)
-	}
-}
 
 // spoolRecordCmp compares records by what they hold: a record without
 // tiers reads back with an empty slice.
