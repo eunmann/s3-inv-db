@@ -155,9 +155,9 @@ The pipeline fixtures model an AWS CSV inventory: gzipped data files
 with no header, every field quoted, keys URL-encoded, and a
 random-looking ETag (multipart form above 8 MiB) and LastModifiedDate
 per object, so the gzip ratio and parse work resemble a real file (1M
-realistic objects gzip to about 51 MiB). Each is split into four data
-files per ingest worker, so every worker has chunks queued, as with a
-real inventory's many files. Realistic and deep_pyramid list keys in
+realistic objects gzip to about 51 MiB). Each is split into up to four
+data files per ingest worker, at least 10,000 objects per file, so
+every worker has chunks queued, as with a real inventory's many files. Realistic and deep_pyramid list keys in
 random order, the case to expect: S3 Inventory guarantees no order.
 Realistic_sorted lists them in key order across the files, the best
 case for the build's in-order paths. An A/B across a seeder change
