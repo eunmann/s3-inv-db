@@ -247,7 +247,7 @@ func (b *IndexBuilder) cleanup() {
 		b.mphfBuilder.Close()
 	}
 	if b.interner != nil {
-		_ = b.interner.Close()
+		_ = b.interner.Abort()
 	}
 	if b.prefixTreeW != nil {
 		_ = b.prefixTreeW.Abort()
@@ -651,12 +651,11 @@ func (b *IndexBuilder) finishSpool() (uint32, error) {
 	if err := b.spool.finish(); err != nil {
 		return 0, err
 	}
-	err := b.interner.Close()
-	segments := b.interner.Count()
-	b.interner = nil
-	if err != nil {
+	if err := b.interner.Close(); err != nil {
 		return 0, fmt.Errorf("write prefix dictionary: %w", err)
 	}
+	segments := b.interner.Count()
+	b.interner = nil
 
 	return segments, nil
 }

@@ -29,6 +29,7 @@ type PrefixSegmentInterner struct {
 	ids        map[string]uint32
 	blobWriter *BlobWriter
 	nextID     uint32
+	done       bool
 }
 
 // NewPrefixSegmentInterner creates a new segment interner that writes
@@ -82,11 +83,27 @@ func (si *PrefixSegmentInterner) Count() uint32 {
 
 // Close writes the dictionary's last offset and closes its files. It
 // drops the segment map, which holds every distinct segment, so Count
-// is all that stays usable.
+// is all that stays usable. After an error, Abort removes the files.
 func (si *PrefixSegmentInterner) Close() error {
 	si.ids = nil
+	if err := si.blobWriter.Close(); err != nil {
+		return err
+	}
+	si.done = true
 
-	return si.blobWriter.Close()
+	return nil
+}
+
+// Abort removes the dictionary's files unless Close finished them.
+// Idempotent.
+func (si *PrefixSegmentInterner) Abort() error {
+	if si.done {
+		return nil
+	}
+	si.ids = nil
+	si.done = true
+
+	return si.blobWriter.Abort()
 }
 
 // PrefixDictionary provides ID→segment lookup backed by an LRU cache.

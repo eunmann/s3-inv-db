@@ -263,3 +263,8 @@ func (w *BlobWriter) Close() error {
 
 	return nil
 }
+
+// Abort closes both files unfinished and removes them.
+func (w *BlobWriter) Abort() error {
+	return errors.Join(w.blobFile.Close(), removeIfErr(w.blobFile.path), w.offsets.file.Close(), removeIfErr(w.offsets.path))
+}

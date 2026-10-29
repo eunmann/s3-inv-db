@@ -1,7 +1,9 @@
 package format
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -227,5 +229,49 @@ func TestSegmentOffsetsAreNarrow(t *testing.T) {
 	defer offsets.Close()
 	if offsets.Width() != 2 || offsets.Count() != 1001 {
 		t.Errorf("offsets width %d count %d, want 2, 1001", offsets.Width(), offsets.Count())
+	}
+}
+
+// TestInternerAbortRemovesTheDictionary: a build that fails before the
+// dictionary is finished leaves no part of it, and Abort after Close
+// keeps it.
+func TestInternerAbortRemovesTheDictionary(t *testing.T) {
+	dir := t.TempDir()
+	si, err := NewPrefixSegmentInterner(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := si.Intern("data"); err != nil {
+		t.Fatal(err)
+	}
+	if err := si.Abort(); err != nil {
+		t.Fatal(err)
+	}
+	if err := si.Abort(); err != nil {
+		t.Fatalf("second Abort: %v", err)
+	}
+	for _, f := range []string{PrefixDictBlobFile, PrefixDictOffsetsFile} {
+		if _, err := os.Stat(filepath.Join(dir, f)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s after Abort: %v", f, err)
+		}
+	}
+
+	si, err = NewPrefixSegmentInterner(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := si.Intern("data"); err != nil {
+		t.Fatal(err)
+	}
+	if err := si.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := si.Abort(); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{PrefixDictBlobFile, PrefixDictOffsetsFile} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Errorf("%s after Close then Abort: %v", f, err)
+		}
 	}
 }
