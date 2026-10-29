@@ -43,7 +43,7 @@ func BenchmarkReadPrefixRowReused(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		d := runRecordDecoder{in: bufio.NewReaderSize(bytes.NewReader(body), mergeReaderBufferSize)}
+		d := runRecordDecoder{in: readWindow{r: bufio.NewReaderSize(bytes.NewReader(body), mergeReaderBufferSize)}}
 		row := &PrefixRow{}
 		for {
 			err := d.next(row)
