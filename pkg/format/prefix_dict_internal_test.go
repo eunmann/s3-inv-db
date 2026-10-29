@@ -39,7 +39,7 @@ func TestSplitPrefix(t *testing.T) {
 func TestPrefixSegmentInternerBasic(t *testing.T) {
 	dir := t.TempDir()
 
-	interner, err := NewPrefixSegmentInterner(dir)
+	interner, err := NewPrefixSegmentInterner(dir, nil)
 	if err != nil {
 		t.Fatalf("NewPrefixSegmentInterner failed: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestPrefixSegmentInternerBasic(t *testing.T) {
 func TestPrefixDictionaryRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 
-	interner, err := NewPrefixSegmentInterner(dir)
+	interner, err := NewPrefixSegmentInterner(dir, nil)
 	if err != nil {
 		t.Fatalf("NewPrefixSegmentInterner failed: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestPrefixDictionaryRoundTrip(t *testing.T) {
 func TestPreloadedPrefixCache(t *testing.T) {
 	dir := t.TempDir()
 
-	interner, err := NewPrefixSegmentInterner(dir)
+	interner, err := NewPrefixSegmentInterner(dir, nil)
 	if err != nil {
 		t.Fatalf("NewPrefixSegmentInterner failed: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestPreloadedPrefixCache(t *testing.T) {
 // the index closes and its files are unmapped.
 func TestPreloadedSegmentsOutliveTheDictionary(t *testing.T) {
 	dir := t.TempDir()
-	interner, err := NewPrefixSegmentInterner(dir)
+	interner, err := NewPrefixSegmentInterner(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestPreloadedSegmentsOutliveTheDictionary(t *testing.T) {
 // the blob's size needs, not 8.
 func TestSegmentOffsetsAreNarrow(t *testing.T) {
 	dir := t.TempDir()
-	interner, err := NewPrefixSegmentInterner(dir)
+	interner, err := NewPrefixSegmentInterner(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

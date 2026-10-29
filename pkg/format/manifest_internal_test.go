@@ -8,7 +8,9 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
+	"time"
 )
 
 func TestWriteAndReadManifest(t *testing.T) {
@@ -29,7 +31,7 @@ func TestWriteAndReadManifest(t *testing.T) {
 	}
 
 	// Write manifest
-	if err := WriteManifest(dir, 100, 5, nil); err != nil {
+	if _, err := WriteManifest(dir, 100, 5, nil, nil); err != nil {
 		t.Fatalf("WriteManifest failed: %v", err)
 	}
 
@@ -78,7 +80,7 @@ func TestVerifyManifest(t *testing.T) {
 	}
 
 	// Write manifest
-	if err := WriteManifest(dir, 50, 3, nil); err != nil {
+	if _, err := WriteManifest(dir, 50, 3, nil, nil); err != nil {
 		t.Fatalf("WriteManifest failed: %v", err)
 	}
 
@@ -184,7 +186,7 @@ func TestVerifyManifestDetectsFlippedByte(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, CoreStatsFile), data, FilePerm); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteManifest(dir, 1, 1, nil); err != nil {
+	if _, err := WriteManifest(dir, 1, 1, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	m, err := ReadManifest(dir)
@@ -234,7 +236,7 @@ func TestVerifyManifestRejectsOtherVersions(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, CoreStatsFile), []byte("rows"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteManifest(dir, 1, 1, nil); err != nil {
+	if _, err := WriteManifest(dir, 1, 1, nil, nil); err != nil {
 		t.Fatalf("WriteManifest: %v", err)
 	}
 	m, err := ReadManifest(dir)
@@ -244,5 +246,47 @@ func TestVerifyManifestRejectsOtherVersions(t *testing.T) {
 	m.Version = ManifestVersion - 1
 	if err := VerifyManifest(dir, m); !errors.Is(err, ErrManifestVersion) {
 		t.Errorf("VerifyManifest = %v, want ErrManifestVersion", err)
+	}
+}
+
+// TestWriteManifestRereadsOnlyFilesWithoutChecksums: files whose
+// writers recorded a checksum are not read; a file written without one,
+// or rewritten since its checksum, is, and every checksum verifies.
+func TestWriteManifestRereadsOnlyFilesWithoutChecksums(t *testing.T) {
+	dir := t.TempDir()
+	sums := NewChecksums()
+	for _, name := range []string{CoreStatsFile, PrefixTreeFile, MPHFSlotsFile} {
+		if err := WriteFile(filepath.Join(dir, name), []byte(name+" rows"), sums); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, MPHFile), []byte("unhashed"), FilePerm); err != nil {
+		t.Fatal(err)
+	}
+	rewritten := filepath.Join(dir, MPHFSlotsFile)
+	if err := os.WriteFile(rewritten, []byte("other slots"), FilePerm); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(time.Second)
+	if err := os.Chtimes(rewritten, later, later); err != nil {
+		t.Fatal(err)
+	}
+
+	reread, err := WriteManifest(dir, 1, 1, sums, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{MPHFile, MPHFSlotsFile}; !slices.Equal(reread, want) {
+		t.Errorf("reread %v, want %v", reread, want)
+	}
+	m, err := ReadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Files) != 4 {
+		t.Errorf("manifest lists %d files, want 4", len(m.Files))
+	}
+	if err := VerifyManifest(dir, m); err != nil {
+		t.Errorf("VerifyManifest: %v", err)
 	}
 }

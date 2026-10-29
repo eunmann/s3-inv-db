@@ -21,7 +21,7 @@ import (
 // their own file, and Close appends the directory to the bits.
 type rankedBitsWriter struct {
 	path    string
-	f       *os.File
+	f       *hashedFile
 	bw      *bufio.Writer
 	dirPath string
 	dirF    *os.File
@@ -31,10 +31,10 @@ type rankedBitsWriter struct {
 	set     uint64
 }
 
-func newRankedBitsWriter(path string) (*rankedBitsWriter, error) {
-	f, err := os.Create(path)
+func newRankedBitsWriter(path string, sums *Checksums) (*rankedBitsWriter, error) {
+	f, err := createHashedFile(path, sums)
 	if err != nil {
-		return nil, fmt.Errorf("create %s: %w", filepath.Base(path), err)
+		return nil, err
 	}
 	dirPath := path + ".dir"
 	dirF, err := os.Create(dirPath)
@@ -45,9 +45,10 @@ func newRankedBitsWriter(path string) (*rankedBitsWriter, error) {
 		path: path, f: f, bw: bufio.NewWriterSize(f, writeBufSize),
 		dirPath: dirPath, dirF: dirF, dirBW: bufio.NewWriterSize(dirF, writeBufSize),
 	}
-	// Placeholder header; Close rewrites it with the bit count.
-	if _, err := w.bw.Write(make([]byte, HeaderSize)); err != nil {
-		return nil, errors.Join(fmt.Errorf("write %s header: %w", filepath.Base(path), err), w.abort())
+	// The bits start after the header, which Close writes with the bit
+	// count.
+	if err := f.seek(HeaderSize); err != nil {
+		return nil, errors.Join(fmt.Errorf("skip %s header: %w", filepath.Base(path), err), w.abort())
 	}
 
 	return w, nil
@@ -107,7 +108,7 @@ func (w *rankedBitsWriter) finish() error {
 	if _, err := w.f.WriteAt(head, 0); err != nil {
 		return fmt.Errorf("write %s header: %w", filepath.Base(w.path), err)
 	}
-	startWriteback(w.f)
+	w.f.startWriteback()
 
 	return errors.Join(w.dirF.Close(), w.f.Close())
 }

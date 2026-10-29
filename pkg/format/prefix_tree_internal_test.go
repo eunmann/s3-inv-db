@@ -60,7 +60,7 @@ func writeTree(t *testing.T, prefixes []string) string {
 // order internOrder lists the rows (position order when nil).
 func writeTreeRows(t *testing.T, dir string, rows []treeTestRow, internOrder []int) {
 	t.Helper()
-	interner, err := NewPrefixSegmentInterner(dir)
+	interner, err := NewPrefixSegmentInterner(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func writeTreeRows(t *testing.T, dir string, rows []treeTestRow, internOrder []i
 	if err := interner.Close(); err != nil {
 		t.Fatal(err)
 	}
-	w, err := NewPrefixTreeWriter(dir, uint64(len(rows)), interner.Count(), maxDist)
+	w, err := NewPrefixTreeWriter(dir, uint64(len(rows)), interner.Count(), maxDist, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestPrefixTreeEmpty(t *testing.T) {
 }
 
 func TestPrefixTreeWriterRejectsBadOrder(t *testing.T) {
-	w, err := NewPrefixTreeWriter(t.TempDir(), 3, 1, 1)
+	w, err := NewPrefixTreeWriter(t.TempDir(), 3, 1, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestPrefixTreeWriterRejectsRowsOffPlan(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			w, err := NewPrefixTreeWriter(dir, tc.count, tc.segments, tc.maxDist)
+			w, err := NewPrefixTreeWriter(dir, tc.count, tc.segments, tc.maxDist, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -358,7 +358,7 @@ func TestOpenPrefixTreeReaderMissingFiles(t *testing.T) {
 // TestInternKnownSegmentDoesNotAllocate: the builder interns one
 // segment per prefix, so a known segment must cost no allocation.
 func TestInternKnownSegmentDoesNotAllocate(t *testing.T) {
-	si, err := NewPrefixSegmentInterner(t.TempDir())
+	si, err := NewPrefixSegmentInterner(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -47,11 +48,14 @@ type IndexBuilder struct {
 	// treePlan holds, per depth, the rows the spool's writer has seen
 	// and the most a row's index within its depth exceeds its parent's:
 	// with the depths' sizes that gives the widest parent distance.
-	treePlan      treePlan
-	coreW         *format.CoreStatsWriter
-	tierW         *format.TierStatsWriter
-	mphfBuilder   *format.StreamingMPHFBuilder
-	prefixTreeW   *format.PrefixTreeWriter
+	treePlan    treePlan
+	coreW       *format.CoreStatsWriter
+	tierW       *format.TierStatsWriter
+	mphfBuilder *format.StreamingMPHFBuilder
+	prefixTreeW *format.PrefixTreeWriter
+	// checksums collects the manifest checksums the writers take of
+	// their files as they write them.
+	checksums     *format.Checksums
 	spool         *levelSpool
 	levelRows     []uint64 // rows seen so far at each depth
 	declaredTiers []tiers.ID
@@ -101,7 +105,8 @@ func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
 	mphfBuilder := format.NewStreamingMPHFBuilder(tempDir)
 	mphfBuilder.SetMemoryBudget(mphfMemoryBudget(readMemoryLimit()))
 
-	interner, err := format.NewPrefixSegmentInterner(outDir)
+	checksums := format.NewChecksums()
+	interner, err := format.NewPrefixSegmentInterner(outDir, checksums)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("create prefix segment interner: %w", err), os.RemoveAll(spoolDir))
 	}
@@ -110,6 +115,7 @@ func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
 		outDir:        outDir,
 		tempDir:       tempDir,
 		mphfBuilder:   mphfBuilder,
+		checksums:     checksums,
 		interner:      interner,
 		spool:         newLevelSpool(spoolDir),
 		stack:         make([]stackEntry, 0, 32),
@@ -451,7 +457,7 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 		Msg("index builder: building the MPHF beside the level-order rows")
 
 	mphfStart := time.Now()
-	mphf, err := b.mphfBuilder.Start(ctx, b.outDir, starts, max(1, runtime.GOMAXPROCS(0)-writeLevelsProcs))
+	mphf, err := b.mphfBuilder.Start(ctx, b.outDir, starts, max(1, runtime.GOMAXPROCS(0)-writeLevelsProcs), b.checksums)
 	if err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
@@ -473,9 +479,14 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 
 	log.Debug().Msg("index builder: writing manifest")
 
-	if err := format.WriteManifest(b.outDir, b.posCount, b.maxDepth, b.stepProgress); err != nil {
+	reread, err := format.WriteManifest(b.outDir, b.posCount, b.maxDepth, b.checksums, b.stepProgress)
+	if err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
+	log.Debug().
+		Int("files_reread", len(reread)).
+		Strs("reread", reread).
+		Msg("index builder: manifest checksums taken while writing, the rest read back")
 
 	log.Debug().
 		Str("total_duration", humanfmt.Duration(time.Since(startTime))).
@@ -594,7 +605,7 @@ func (b *IndexBuilder) writeLevels(starts []uint64, segments uint32) error {
 	if err != nil {
 		return err
 	}
-	if b.prefixTreeW, err = format.NewPrefixTreeWriter(b.outDir, b.posCount, segments, b.treePlan.maxDist(b.levelRows)); err != nil {
+	if b.prefixTreeW, err = format.NewPrefixTreeWriter(b.outDir, b.posCount, segments, b.treePlan.maxDist(b.levelRows), b.checksums); err != nil {
 		return errors.Join(fmt.Errorf("create prefix tree: %w", err), depthW.Abort())
 	}
 	err = b.replayLevels(func(depth int, r *spoolRecord) error {
@@ -690,18 +701,18 @@ func ignoreEOF(err error) error {
 // openStatsWriters creates the depth index, core stats and tier stats
 // writers. An index without rows has no tier plan and no tier files.
 func (b *IndexBuilder) openStatsWriters() (*format.DepthIndexWriter, error) {
-	depthW, err := format.NewDepthIndexWriter(b.outDir)
+	depthW, err := format.NewDepthIndexWriter(b.outDir, b.checksums)
 	if err != nil {
 		return nil, fmt.Errorf("create depth index: %w", err)
 	}
 	enc := format.TierMaskPlain
 	if b.tierPlan != nil {
-		if b.tierW, err = format.NewTierStatsWriter(b.outDir, b.tierPlan); err != nil {
+		if b.tierW, err = format.NewTierStatsWriter(b.outDir, b.tierPlan, b.checksums); err != nil {
 			return nil, errors.Join(fmt.Errorf("create tier stats writer: %w", err), depthW.Abort())
 		}
 		enc = b.tierPlan.MaskEncoding()
 	}
-	if b.coreW, err = format.NewCoreStatsWriter(b.outDir, &b.corePlan, enc); err != nil {
+	if b.coreW, err = format.NewCoreStatsWriter(b.outDir, &b.corePlan, enc, b.checksums); err != nil {
 		return nil, errors.Join(fmt.Errorf("create core stats writer: %w", err), depthW.Abort())
 	}
 
@@ -896,7 +907,11 @@ func (b *IndexBuilder) writeTierManifest() error {
 	if b.posCount == 0 || len(b.resolvedTiers) == 0 {
 		return nil
 	}
-	if err := tiers.WriteManifest(b.outDir, b.resolvedTiers); err != nil {
+	data, err := tiers.EncodeManifest(b.resolvedTiers)
+	if err != nil {
+		return fmt.Errorf("write tier manifest: %w", err)
+	}
+	if err := format.WriteFile(filepath.Join(b.outDir, tiers.ManifestFile), data, b.checksums); err != nil {
 		return fmt.Errorf("write tier manifest: %w", err)
 	}
 

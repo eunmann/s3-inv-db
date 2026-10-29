@@ -21,21 +21,25 @@ type DepthIndexWriter struct {
 	blocks      *ArrayWriter
 	rows        uint64
 	depth       uint32
+	sums        *Checksums
 	open        blockAcc // the current depth's block still filling
 	started     bool
 }
 
-// NewDepthIndexWriter creates the depth index files in outDir.
-func NewDepthIndexWriter(outDir string) (*DepthIndexWriter, error) {
+// NewDepthIndexWriter creates the depth index files in outDir, whose
+// checksums it records in sums.
+func NewDepthIndexWriter(outDir string, sums *Checksums) (*DepthIndexWriter, error) {
 	w := &DepthIndexWriter{
 		offsetsPath: filepath.Join(outDir, DepthOffsetsFile),
 		blocksPath:  filepath.Join(outDir, DepthBlocksFile),
+		sums:        sums,
 	}
 	var err error
-	if w.offsets, err = NewArrayWriter(w.offsetsPath, 8); err != nil {
+	// Close repacks the offsets, so only the repacked file is hashed.
+	if w.offsets, err = NewArrayWriter(w.offsetsPath, 8, nil); err != nil {
 		return nil, fmt.Errorf("create depth offsets: %w", err)
 	}
-	if w.blocks, err = NewArrayWriter(w.blocksPath, 8); err != nil {
+	if w.blocks, err = NewArrayWriter(w.blocksPath, 8, sums); err != nil {
 		return nil, errors.Join(fmt.Errorf("create depth blocks: %w", err), w.Abort())
 	}
 
@@ -107,7 +111,7 @@ func (w *DepthIndexWriter) Close() error {
 	if err := errors.Join(offsets.Close(), blocks.Close()); err != nil {
 		return errors.Join(fmt.Errorf("close depth index: %w", err), removeIfErr(w.offsetsPath), removeIfErr(w.blocksPath))
 	}
-	if err := RepackArrayWidthU64(w.offsetsPath, w.offsetsPath, byteWidthOf(w.rows)); err != nil {
+	if err := RepackArrayWidthU64(w.offsetsPath, w.offsetsPath, byteWidthOf(w.rows), w.sums); err != nil {
 		return errors.Join(fmt.Errorf("repack depth offsets: %w", err), removeIfErr(w.offsetsPath), removeIfErr(w.blocksPath))
 	}
 

@@ -56,7 +56,7 @@ func newCaseBuilder(t *testing.T, prefixes []string, c mphfCase) *StreamingMPHFB
 func buildCase(t *testing.T, dir string, prefixes []string, c mphfCase) (*MPHFBuild, error) {
 	t.Helper()
 	b := newCaseBuilder(t, prefixes, c)
-	h, err := b.Start(t.Context(), dir, nil, max(1, c.workers))
+	h, err := b.Start(t.Context(), dir, nil, max(1, c.workers), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +168,7 @@ func TestMPHFPositionKeys(t *testing.T) {
 		}
 	}
 	dir := t.TempDir()
-	h, err := b.Start(t.Context(), dir, starts, 2)
+	h, err := b.Start(t.Context(), dir, starts, 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestMPHFPositionsOnePerKey(t *testing.T) {
 				}
 			}
 			dir := t.TempDir()
-			h, err := b.Start(t.Context(), dir, c.starts, 2)
+			h, err := b.Start(t.Context(), dir, c.starts, 2, nil)
 			if err == nil {
 				err = h.Wait()
 			}
@@ -345,7 +345,7 @@ func TestMPHFFallbackPerPartition(t *testing.T) {
 			t.Fatal(err)
 		}
 		dir := t.TempDir()
-		h, err := b.Start(t.Context(), dir, nil, 2)
+		h, err := b.Start(t.Context(), dir, nil, 2, nil)
 		if err == nil {
 			err = h.Wait()
 		}
@@ -379,7 +379,7 @@ func TestMPHFBuildStops(t *testing.T) {
 				if how == "cancelled_before" {
 					cancel()
 				}
-				h, err := b.Start(ctx, dir, nil, 2)
+				h, err := b.Start(ctx, dir, nil, 2, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -440,7 +440,7 @@ func TestMPHFBuildWorkersFitBudget(t *testing.T) {
 		plan := planPartitions(b.spill.hist, b.count, -1, maxPartitionKeys)
 		perWorker := int64(plan.maxPart)*int64(partKeyBytes+plan.slotW) + spillReadBytes
 		b.SetMemoryBudget(int64(budgetWorkers)*perWorker + perWorker/2)
-		h, err := b.Start(t.Context(), t.TempDir(), nil, 100)
+		h, err := b.Start(t.Context(), t.TempDir(), nil, 100, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -460,7 +460,7 @@ func TestMPHFBuildWorkersFitBudget(t *testing.T) {
 // worker count is budgeted on.
 func TestMPHFScratchWithinPlan(t *testing.T) {
 	b := newCaseBuilder(t, testPrefixes(20_000), mphfCase{partBits: 0})
-	slots, err := os.Create(filepath.Join(t.TempDir(), MPHFSlotsFile))
+	slots, err := createHashedFile(filepath.Join(t.TempDir(), MPHFSlotsFile), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +503,7 @@ func TestMPHFBuildHeapBounded(t *testing.T) {
 		var base runtime.MemStats
 		runtime.ReadMemStats(&base)
 		sampler := benchutil.StartHeapPeakSampler()
-		h, err := b.Start(t.Context(), t.TempDir(), nil, 4)
+		h, err := b.Start(t.Context(), t.TempDir(), nil, 4, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -532,7 +532,7 @@ func TestMPHFBuildHeapBounded(t *testing.T) {
 // from progress set after it started, up to the key count.
 func TestMPHFBuildReportsProgress(t *testing.T) {
 	b := newCaseBuilder(t, testPrefixes(100_000), mphfCase{partBits: 4})
-	h, err := b.Start(t.Context(), t.TempDir(), nil, 2)
+	h, err := b.Start(t.Context(), t.TempDir(), nil, 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -616,7 +616,7 @@ func TestMPHFBuildAllocsIndependentOfKeys(t *testing.T) {
 		if wantFiles >= 0 && files != wantFiles {
 			t.Fatalf("%d keys made %d spill files, want %d", n, files, wantFiles)
 		}
-		h, err := b.Start(context.Background(), dir, nil, workers)
+		h, err := b.Start(context.Background(), dir, nil, workers, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

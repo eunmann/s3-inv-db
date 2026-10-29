@@ -56,7 +56,7 @@ func planTierRows(t *testing.T, present []tiers.ID, rows []tierTestRow, force ti
 // their masks.
 func writeTierRows(t *testing.T, dir string, plan *TierStatsPlan, rows []tierTestRow) []uint16 {
 	t.Helper()
-	tw, err := NewTierStatsWriter(dir, plan)
+	tw, err := NewTierStatsWriter(dir, plan, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,11 @@ func buildTierIndex(t *testing.T, present []tiers.ID, rows []tierTestRow, force 
 		coreRows[i] = coreTestRow{count: c, bytes: b, child: uint64(len(rows)), mask: masks[i]}
 	}
 	writeCoreFiles(t, dir, coreRows, plan.MaskEncoding())
-	if err := tiers.WriteManifest(dir, present); err != nil {
+	data, err := tiers.EncodeManifest(present)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFile(filepath.Join(dir, tiers.ManifestFile), data, nil); err != nil {
 		t.Fatal(err)
 	}
 	cr, err := OpenCoreStats(dir)
@@ -359,7 +363,7 @@ func TestTierStatsCloseFailureLeavesNothing(t *testing.T) {
 	rows[0].counts[tiers.Standard], rows[0].bytes[tiers.Standard] = 1, 1
 	for _, force := range []tierLayout{tierLayoutDense, tierLayoutMulti} {
 		dir := t.TempDir()
-		w, err := NewTierStatsWriter(dir, planTierRows(t, present, rows, force, nil))
+		w, err := NewTierStatsWriter(dir, planTierRows(t, present, rows, force, nil), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -400,7 +404,7 @@ func TestTierStatsWriterRejectsRowsOffPlan(t *testing.T) {
 			{"wider", wide},
 		} {
 			dir := t.TempDir()
-			w, err := NewTierStatsWriter(dir, planTierRows(t, present, rows, force, nil))
+			w, err := NewTierStatsWriter(dir, planTierRows(t, present, rows, force, nil), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -501,7 +505,7 @@ func TestRankedBits(t *testing.T) {
 		r := rand.New(rand.NewPCG(n, 1))
 		set := make([]bool, n)
 		path := filepath.Join(t.TempDir(), "bits")
-		w, err := newRankedBitsWriter(path)
+		w, err := newRankedBitsWriter(path, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

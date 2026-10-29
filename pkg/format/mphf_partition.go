@@ -126,6 +126,7 @@ func partitionCounts(hist []uint64, k uint) []uint64 {
 // the writer appends them to mph.bin in order. Wait ends it.
 type MPHFBuild struct {
 	b          *StreamingMPHFBuilder
+	sums       *Checksums
 	outDir     string
 	starts     []uint64
 	plan       mphfPlan
@@ -165,7 +166,7 @@ type MPHFBuild struct {
 	posSum  atomic.Uint64
 	wantSum atomic.Uint64
 
-	mphFile, slotsFile *os.File
+	mphFile, slotsFile *hashedFile
 	created            []string
 
 	// started is when Start began the build and finished when its
@@ -173,12 +174,13 @@ type MPHFBuild struct {
 	started, finished time.Time
 }
 
-func startMPHFBuild(ctx context.Context, b *StreamingMPHFBuilder, outDir string, starts []uint64, workers int) *MPHFBuild {
+func startMPHFBuild(ctx context.Context, b *StreamingMPHFBuilder, outDir string, starts []uint64, workers int, sums *Checksums) *MPHFBuild {
 	plan := planPartitions(b.spill.hist, b.count, b.partBits, b.maxPartKeys)
 	perWorker := int64(plan.maxPart)*int64(partKeyBytes+plan.slotW) + spillReadBytes
 	maxWorkers := max(1, min(runtime.GOMAXPROCS(0), len(plan.counts), int(b.budget/perWorker)))
 	h := &MPHFBuild{
 		b:          b,
+		sums:       sums,
 		outDir:     outDir,
 		starts:     starts,
 		plan:       plan,
@@ -326,18 +328,18 @@ func (h *MPHFBuild) prepare() error {
 // size with its header.
 func (h *MPHFBuild) createOutputs() error {
 	mphPath := filepath.Join(h.outDir, MPHFile)
-	f, err := os.Create(mphPath)
+	f, err := createHashedFile(mphPath, h.sums)
 	if err != nil {
 		return fmt.Errorf("create MPHF file: %w", err)
 	}
 	h.mphFile, h.created = f, append(h.created, mphPath)
 	slotsPath := filepath.Join(h.outDir, MPHFSlotsFile)
-	if f, err = os.Create(slotsPath); err != nil {
+	if f, err = createHashedFile(slotsPath, h.sums); err != nil {
 		return fmt.Errorf("create MPHF slots: %w", err)
 	}
 	h.slotsFile, h.created = f, append(h.created, slotsPath)
 	n, slotW := h.plan.n, uint64(h.plan.slotW)
-	if err := f.Truncate(int64(mphfSlotsDataOff + n*slotW + mphfSlotsTailPad)); err != nil {
+	if err := f.truncate(int64(mphfSlotsDataOff + n*slotW + mphfSlotsTailPad)); err != nil {
 		return fmt.Errorf("truncate MPHF slots: %w", err)
 	}
 	head := EncodeHeader(Header{Magic: MagicNumber, Version: Version, Count: n, Width: uint32(slotW)})
@@ -356,8 +358,8 @@ func (h *MPHFBuild) complete() error {
 	if h.posSum.Load() != h.wantSum.Load() {
 		return fmt.Errorf("%w: the %d positions are not one per key", ErrMPHFPosition, h.plan.n)
 	}
-	for _, f := range []*os.File{h.mphFile, h.slotsFile} {
-		startWriteback(f)
+	for _, f := range []*hashedFile{h.mphFile, h.slotsFile} {
+		f.startWriteback()
 	}
 	err := h.mphFile.Close()
 	h.mphFile = nil
@@ -376,7 +378,7 @@ func (h *MPHFBuild) complete() error {
 // discard closes and removes the output files this build created.
 func (h *MPHFBuild) discard() error {
 	var errs []error
-	for _, f := range []*os.File{h.mphFile, h.slotsFile} {
+	for _, f := range []*hashedFile{h.mphFile, h.slotsFile} {
 		if f != nil {
 			errs = append(errs, f.Close())
 		}

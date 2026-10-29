@@ -10,39 +10,28 @@ import (
 
 // ArrayWriter writes columnar arrays with headers.
 type ArrayWriter struct {
-	file   *os.File
+	file   *hashedFile
 	writer *bufio.Writer
 	path   string
 	count  uint64
 	width  uint32
 }
 
-// NewArrayWriter creates a writer for a columnar array file.
-func NewArrayWriter(path string, width uint32) (*ArrayWriter, error) {
-	f, err := os.Create(path)
+// NewArrayWriter creates a writer for a columnar array file, whose
+// checksum it records in sums.
+func NewArrayWriter(path string, width uint32, sums *Checksums) (*ArrayWriter, error) {
+	f, err := createHashedFile(path, sums)
 	if err != nil {
 		return nil, fmt.Errorf("create array file: %w", err)
 	}
-
-	w := bufio.NewWriter(f)
-
-	// Write placeholder header (will be updated on close)
-	header := EncodeHeader(Header{
-		Magic:   MagicNumber,
-		Version: Version,
-		Count:   0,
-		Width:   width,
-	})
-	if _, err := w.Write(header); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-
-		return nil, fmt.Errorf("write header: %w", err)
+	// The values start after the header, which Close writes with the count.
+	if err := f.seek(HeaderSize); err != nil {
+		return nil, errors.Join(fmt.Errorf("skip header: %w", err), f.Close(), removeIfErr(path))
 	}
 
 	return &ArrayWriter{
 		file:   f,
-		writer: w,
+		writer: bufio.NewWriter(f),
 		path:   path,
 		count:  0,
 		width:  width,
@@ -69,16 +58,13 @@ func (w *ArrayWriter) Close() error {
 	if err := w.writer.Flush(); err != nil {
 		return w.cleanupOnErr(fmt.Errorf("flush: %w", err))
 	}
-	if _, err := w.file.Seek(0, 0); err != nil {
-		return w.cleanupOnErr(fmt.Errorf("seek: %w", err))
-	}
 	header := EncodeHeader(Header{
 		Magic:   MagicNumber,
 		Version: Version,
 		Count:   w.count,
 		Width:   w.width,
 	})
-	if _, err := w.file.Write(header); err != nil {
+	if _, err := w.file.WriteAt(header, 0); err != nil {
 		return w.cleanupOnErr(fmt.Errorf("update header: %w", err))
 	}
 	if err := w.file.Close(); err != nil {
@@ -129,8 +115,9 @@ const writeBufSize = 1 << 20
 // width 1..8) into dstPath at the chosen tight width, then writes
 // arrayTailPad zero bytes so a u64 mask-load at the last element is
 // safe. If srcPath == dstPath the source is overwritten atomically
-// via dstPath+".tmp" + rename.
-func RepackArrayWidthU64(srcPath, dstPath string, width uint8) error {
+// via dstPath+".tmp" + rename. The checksum of dstPath is recorded in
+// sums.
+func RepackArrayWidthU64(srcPath, dstPath string, width uint8, sums *Checksums) error {
 	if width < 1 || width > 8 {
 		return fmt.Errorf("%w: width=%d", ErrWidthMismatch, width)
 	}
@@ -145,7 +132,7 @@ func RepackArrayWidthU64(srcPath, dstPath string, width uint8) error {
 	if srcPath == dstPath {
 		tmp = dstPath + ".tmp"
 	}
-	dst, err := os.Create(tmp)
+	dst, err := createHashedFile(tmp, sums)
 	if err != nil {
 		return fmt.Errorf("create dst: %w", err)
 	}
@@ -176,7 +163,7 @@ func RepackArrayWidthU64(srcPath, dstPath string, width uint8) error {
 	if err := bw.Flush(); err != nil {
 		return cleanup(fmt.Errorf("flush: %w", err))
 	}
-	startWriteback(dst)
+	dst.startWriteback()
 	if err := dst.Close(); err != nil {
 		return errors.Join(fmt.Errorf("close: %w", err), removeIfErr(tmp))
 	}
@@ -184,6 +171,7 @@ func RepackArrayWidthU64(srcPath, dstPath string, width uint8) error {
 		if err := os.Rename(tmp, dstPath); err != nil {
 			return errors.Join(fmt.Errorf("rename: %w", err), removeIfErr(tmp))
 		}
+		sums.move(tmp, dstPath)
 	}
 
 	return nil
@@ -191,20 +179,23 @@ func RepackArrayWidthU64(srcPath, dstPath string, width uint8) error {
 
 // BlobWriter writes a prefix blob with offsets.
 type BlobWriter struct {
-	blobFile   *os.File
+	blobFile   *hashedFile
 	blobWriter *bufio.Writer
 	offsets    *ArrayWriter
+	sums       *Checksums
 	offset     uint64
 }
 
-// NewBlobWriter creates a writer for prefix strings.
-func NewBlobWriter(blobPath, offsetsPath string) (*BlobWriter, error) {
-	blobFile, err := os.Create(blobPath)
+// NewBlobWriter creates a writer for prefix strings, whose files'
+// checksums it records in sums.
+func NewBlobWriter(blobPath, offsetsPath string, sums *Checksums) (*BlobWriter, error) {
+	blobFile, err := createHashedFile(blobPath, sums)
 	if err != nil {
 		return nil, fmt.Errorf("create blob file: %w", err)
 	}
 
-	offsets, err := NewArrayWriter(offsetsPath, 8)
+	// Close repacks the offsets, so only the repacked file is hashed.
+	offsets, err := NewArrayWriter(offsetsPath, 8, nil)
 	if err != nil {
 		blobFile.Close()
 		os.Remove(blobPath)
@@ -216,6 +207,7 @@ func NewBlobWriter(blobPath, offsetsPath string) (*BlobWriter, error) {
 		blobFile:   blobFile,
 		blobWriter: bufio.NewWriter(blobFile),
 		offsets:    offsets,
+		sums:       sums,
 		offset:     0,
 	}, nil
 }
@@ -256,7 +248,7 @@ func (w *BlobWriter) Close() error {
 			w.offsets.Close(),
 		)
 	}
-	startWriteback(w.blobFile)
+	w.blobFile.startWriteback()
 	if err := w.blobFile.Close(); err != nil {
 		return errors.Join(fmt.Errorf("close blob: %w", err), w.offsets.Close())
 	}
@@ -265,7 +257,7 @@ func (w *BlobWriter) Close() error {
 	}
 	// The offsets file is written 8 bytes wide; keep the bytes the blob
 	// size needs, as the other offset arrays do.
-	if err := RepackArrayWidthU64(w.offsets.path, w.offsets.path, byteWidthOf(w.offset)); err != nil {
+	if err := RepackArrayWidthU64(w.offsets.path, w.offsets.path, byteWidthOf(w.offset), w.sums); err != nil {
 		return fmt.Errorf("repack offsets: %w", err)
 	}
 

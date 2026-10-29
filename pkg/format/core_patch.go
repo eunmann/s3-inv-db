@@ -106,26 +106,27 @@ func choosePatch(rows uint64, exceptions func(wc, wb, ws uint8) uint64) patchCho
 // patchWriter writes the exceptions of a patched core file.
 type patchWriter struct {
 	path string
-	f    *os.File
+	f    *hashedFile
 	bw   *bufio.Writer
 	rows *rankedBitsWriter
 	n    uint64
 }
 
-func newPatchWriter(dir string) (*patchWriter, error) {
+func newPatchWriter(dir string, sums *Checksums) (*patchWriter, error) {
 	path := filepath.Join(dir, CorePatchFile)
-	f, err := os.Create(path)
+	f, err := createHashedFile(path, sums)
 	if err != nil {
-		return nil, fmt.Errorf("create %s: %w", CorePatchFile, err)
+		return nil, err
 	}
-	rows, err := newRankedBitsWriter(filepath.Join(dir, CorePatchRowsFile))
+	rows, err := newRankedBitsWriter(filepath.Join(dir, CorePatchRowsFile), sums)
 	if err != nil {
 		return nil, errors.Join(err, f.Close(), removeIfErr(path))
 	}
 	w := &patchWriter{path: path, f: f, bw: bufio.NewWriterSize(f, writeBufSize), rows: rows}
-	// Placeholder header; close rewrites it with the exception count.
-	if _, err := w.bw.Write(make([]byte, HeaderSize)); err != nil {
-		return nil, errors.Join(fmt.Errorf("write %s header: %w", CorePatchFile, err), w.abort())
+	// The exceptions start after the header, which close writes with
+	// their count.
+	if err := f.seek(HeaderSize); err != nil {
+		return nil, errors.Join(fmt.Errorf("skip %s header: %w", CorePatchFile, err), w.abort())
 	}
 
 	return w, nil
@@ -158,7 +159,7 @@ func (w *patchWriter) close() error {
 	if _, err := w.f.WriteAt(head, 0); err != nil {
 		return errors.Join(fmt.Errorf("write %s header: %w", CorePatchFile, err), w.abort())
 	}
-	startWriteback(w.f)
+	w.f.startWriteback()
 	if err := w.f.Close(); err != nil {
 		return errors.Join(fmt.Errorf("close %s: %w", CorePatchFile, err), w.rows.abort(), removeIfErr(w.path))
 	}

@@ -36,7 +36,7 @@ func planCore(rows []coreTestRow, seed uint64) *CoreStatsPlan {
 // writeCoreFiles writes rows into dir with a CoreStatsWriter.
 func writeCoreFiles(t *testing.T, dir string, rows []coreTestRow, enc TierMaskEncoding) {
 	t.Helper()
-	w, err := NewCoreStatsWriter(dir, planCore(rows, uint64(len(rows))), enc)
+	w, err := NewCoreStatsWriter(dir, planCore(rows, uint64(len(rows))), enc, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestManifestListsPatchFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := WriteManifest(dir, 5000, 1, nil); err != nil {
+	if _, err := WriteManifest(dir, 5000, 1, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	m, err := ReadManifest(dir)
@@ -459,7 +459,7 @@ func TestCoreStatsWriterNeedsTail(t *testing.T) {
 	for range 65600 {
 		plan.Add(1, 1, 1)
 	}
-	if _, err := NewCoreStatsWriter(t.TempDir(), &plan, TierMaskPlain); !errors.Is(err, errCorePlan) {
+	if _, err := NewCoreStatsWriter(t.TempDir(), &plan, TierMaskPlain, nil); !errors.Is(err, errCorePlan) {
 		t.Errorf("NewCoreStatsWriter without the tail: err = %v, want errCorePlan", err)
 	}
 }
@@ -489,7 +489,7 @@ func TestCoreStatsWriterRejectsRowsOffPlan(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			w, err := NewCoreStatsWriter(dir, planCore(tc.planned, 1), TierMaskPlain)
+			w, err := NewCoreStatsWriter(dir, planCore(tc.planned, 1), TierMaskPlain, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

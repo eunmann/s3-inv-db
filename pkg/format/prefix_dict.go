@@ -32,12 +32,12 @@ type PrefixSegmentInterner struct {
 }
 
 // NewPrefixSegmentInterner creates a new segment interner that writes
-// to outDir.
-func NewPrefixSegmentInterner(outDir string) (*PrefixSegmentInterner, error) {
+// to outDir, recording its files' checksums in sums.
+func NewPrefixSegmentInterner(outDir string, sums *Checksums) (*PrefixSegmentInterner, error) {
 	blobPath := filepath.Join(outDir, PrefixDictBlobFile)
 	offsetsPath := filepath.Join(outDir, PrefixDictOffsetsFile)
 
-	writer, err := NewBlobWriter(blobPath, offsetsPath)
+	writer, err := NewBlobWriter(blobPath, offsetsPath, sums)
 	if err != nil {
 		return nil, fmt.Errorf("create prefix dict blob writer: %w", err)
 	}

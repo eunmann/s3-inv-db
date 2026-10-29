@@ -329,8 +329,9 @@ type TierStatsWriter struct {
 }
 
 // NewTierStatsWriter creates the tier files plan's layout needs in
-// outDir. With one present tier it creates none.
-func NewTierStatsWriter(outDir string, plan *TierStatsPlan) (*TierStatsWriter, error) {
+// outDir, recording their checksums in sums. With one present tier it
+// creates none.
+func NewTierStatsWriter(outDir string, plan *TierStatsPlan, sums *Checksums) (*TierStatsWriter, error) {
 	w := &TierStatsWriter{plan: plan}
 	if plan.slots == 1 {
 		return w, nil
@@ -342,24 +343,24 @@ func NewTierStatsWriter(outDir string, plan *TierStatsPlan) (*TierStatsWriter, e
 	var err error
 	if plan.choose() == tierLayoutDense {
 		width := plan.denseBits.widths()
-		if w.dense, err = createSlotFile(filepath.Join(dir, TierDenseFile), plan.rows, (plan.slots-1)*width.slotBytes(), width); err != nil {
+		if w.dense, err = createSlotFile(filepath.Join(dir, TierDenseFile), plan.rows, (plan.slots-1)*width.slotBytes(), width, sums); err != nil {
 			return nil, err
 		}
 
 		return w, nil
 	}
 	width := plan.multiBits.widths()
-	if w.multi, err = createSlotFile(filepath.Join(dir, TierMultiFile), plan.multiSlots, width.slotBytes(), width); err != nil {
+	if w.multi, err = createSlotFile(filepath.Join(dir, TierMultiFile), plan.multiSlots, width.slotBytes(), width, sums); err != nil {
 		return nil, err
 	}
-	if w.offsets, err = newNarrowArrayWriter(filepath.Join(dir, TierMultiOffsetsFile), byteWidthOf(plan.multiSlots)); err != nil {
+	if w.offsets, err = newNarrowArrayWriter(filepath.Join(dir, TierMultiOffsetsFile), byteWidthOf(plan.multiSlots), sums); err != nil {
 		return nil, errors.Join(err, w.Abort())
 	}
-	if w.rowBits, err = newRankedBitsWriter(filepath.Join(dir, TierMultiRowsFile)); err != nil {
+	if w.rowBits, err = newRankedBitsWriter(filepath.Join(dir, TierMultiRowsFile), sums); err != nil {
 		return nil, errors.Join(err, w.Abort())
 	}
 	if plan.slots >= tierCodeMinSlots {
-		if w.masks, err = newNarrowArrayWriter(filepath.Join(dir, TierMultiMaskFile), tierMultiMaskWidth); err != nil {
+		if w.masks, err = newNarrowArrayWriter(filepath.Join(dir, TierMultiMaskFile), tierMultiMaskWidth, sums); err != nil {
 			return nil, errors.Join(err, w.Abort())
 		}
 	}
@@ -480,15 +481,15 @@ func (w *TierStatsWriter) Abort() error {
 // descriptor, slots, tail pad.
 type slotFile struct {
 	path  string
-	f     *os.File
+	f     *hashedFile
 	bw    *bufio.Writer
 	width tierSlotWidths
 }
 
-func createSlotFile(path string, count uint64, rowWidth int, width tierSlotWidths) (*slotFile, error) {
-	f, err := os.Create(path)
+func createSlotFile(path string, count uint64, rowWidth int, width tierSlotWidths, sums *Checksums) (*slotFile, error) {
+	f, err := createHashedFile(path, sums)
 	if err != nil {
-		return nil, fmt.Errorf("create %s: %w", filepath.Base(path), err)
+		return nil, err
 	}
 	s := &slotFile{path: path, f: f, bw: bufio.NewWriterSize(f, writeBufSize), width: width}
 	head := EncodeHeader(Header{Magic: MagicNumber, Version: Version, Count: count, Width: uint32(rowWidth)})
@@ -523,7 +524,7 @@ func (s *slotFile) close() error {
 	if err := s.bw.Flush(); err != nil {
 		return errors.Join(fmt.Errorf("flush %s: %w", filepath.Base(s.path), err), s.abort())
 	}
-	startWriteback(s.f)
+	s.f.startWriteback()
 	if err := s.f.Close(); err != nil {
 		return errors.Join(fmt.Errorf("close %s: %w", filepath.Base(s.path), err), removeIfErr(s.path))
 	}
@@ -539,22 +540,22 @@ func (s *slotFile) abort() error {
 // width of 1..8 bytes, with the tail pad readers need.
 type narrowArrayWriter struct {
 	path  string
-	f     *os.File
+	f     *hashedFile
 	bw    *bufio.Writer
 	count uint64
 	width uint8
 	buf   [8]byte
 }
 
-func newNarrowArrayWriter(path string, width uint8) (*narrowArrayWriter, error) {
-	f, err := os.Create(path)
+func newNarrowArrayWriter(path string, width uint8, sums *Checksums) (*narrowArrayWriter, error) {
+	f, err := createHashedFile(path, sums)
 	if err != nil {
-		return nil, fmt.Errorf("create %s: %w", filepath.Base(path), err)
+		return nil, err
 	}
 	w := &narrowArrayWriter{path: path, f: f, bw: bufio.NewWriterSize(f, writeBufSize), width: width}
-	// Placeholder header; close rewrites it with the count.
-	if _, err := w.bw.Write(make([]byte, HeaderSize)); err != nil {
-		return nil, errors.Join(fmt.Errorf("write header: %w", err), w.abort())
+	// The values start after the header, which close writes with the count.
+	if err := f.seek(HeaderSize); err != nil {
+		return nil, errors.Join(fmt.Errorf("skip %s header: %w", filepath.Base(path), err), w.abort())
 	}
 
 	return w, nil
@@ -586,7 +587,7 @@ func (w *narrowArrayWriter) close() error {
 	if _, err := w.f.WriteAt(head, 0); err != nil {
 		return errors.Join(fmt.Errorf("write header: %w", err), w.abort())
 	}
-	startWriteback(w.f)
+	w.f.startWriteback()
 	if err := w.f.Close(); err != nil {
 		return errors.Join(fmt.Errorf("close %s: %w", filepath.Base(w.path), err), removeIfErr(w.path))
 	}

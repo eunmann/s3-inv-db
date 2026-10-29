@@ -52,7 +52,7 @@ func TestArrayWriterU64(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.u64")
 
-	w, err := format.NewArrayWriter(path, 8)
+	w, err := format.NewArrayWriter(path, 8, nil)
 	if err != nil {
 		t.Fatalf("format.NewArrayWriter failed: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestArrayReaderBoundsCheck(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.u64")
 
-	w, err := format.NewArrayWriter(path, 8)
+	w, err := format.NewArrayWriter(path, 8, nil)
 	if err != nil {
 		t.Fatalf("format.NewArrayWriter failed: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestArrayWidthMismatch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.u32")
 
-	w, err := format.NewArrayWriter(path, 4)
+	w, err := format.NewArrayWriter(path, 4, nil)
 	if err != nil {
 		t.Fatalf("format.NewArrayWriter failed: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestBlobWriterReader(t *testing.T) {
 	blobPath := filepath.Join(dir, "prefix_blob.bin")
 	offsetsPath := filepath.Join(dir, "prefix_offsets.u64")
 
-	w, err := format.NewBlobWriter(blobPath, offsetsPath)
+	w, err := format.NewBlobWriter(blobPath, offsetsPath, nil)
 	if err != nil {
 		t.Fatalf("format.NewBlobWriter failed: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestBlobReaderBoundsCheck(t *testing.T) {
 	blobPath := filepath.Join(dir, "prefix_blob.bin")
 	offsetsPath := filepath.Join(dir, "prefix_offsets.u64")
 
-	w, err := format.NewBlobWriter(blobPath, offsetsPath)
+	w, err := format.NewBlobWriter(blobPath, offsetsPath, nil)
 	if err != nil {
 		t.Fatalf("format.NewBlobWriter failed: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestArrayUnsafeGet(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.u64")
 
-	w, err := format.NewArrayWriter(path, 8)
+	w, err := format.NewArrayWriter(path, 8, nil)
 	if err != nil {
 		t.Fatalf("format.NewArrayWriter failed: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestLargeArray(t *testing.T) {
 	path := filepath.Join(dir, "large.u64")
 
 	n := 10000
-	w, err := format.NewArrayWriter(path, 8)
+	w, err := format.NewArrayWriter(path, 8, nil)
 	if err != nil {
 		t.Fatalf("format.NewArrayWriter failed: %v", err)
 	}

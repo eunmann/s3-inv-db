@@ -20,7 +20,7 @@ func TestArrayWriter_CleanupRemovesPartialOnCloseError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "array.bin")
 
-	w, err := NewArrayWriter(path, 8)
+	w, err := NewArrayWriter(path, 8, nil)
 	if err != nil {
 		t.Fatalf("NewArrayWriter: %v", err)
 	}

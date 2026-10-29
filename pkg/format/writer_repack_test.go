@@ -33,7 +33,7 @@ func TestRepackArrayWidthU64_RoundTrip(t *testing.T) {
 			src := filepath.Join(dir, "src.u64")
 			dst := filepath.Join(dir, "dst.u64")
 
-			w, err := format.NewArrayWriter(src, 8)
+			w, err := format.NewArrayWriter(src, 8, nil)
 			if err != nil {
 				t.Fatalf("NewArrayWriter: %v", err)
 			}
@@ -46,7 +46,7 @@ func TestRepackArrayWidthU64_RoundTrip(t *testing.T) {
 				t.Fatalf("Close: %v", err)
 			}
 
-			if err := format.RepackArrayWidthU64(src, dst, tc.width); err != nil {
+			if err := format.RepackArrayWidthU64(src, dst, tc.width, nil); err != nil {
 				t.Fatalf("RepackArrayWidthU64: %v", err)
 			}
 
