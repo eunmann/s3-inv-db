@@ -1,7 +1,6 @@
 package extsort
 
 import (
-	"encoding/binary"
 	"hash/maphash"
 	"unsafe"
 )
@@ -158,25 +157,6 @@ func (t *nodeTable) heapBytes() int64 {
 
 // A node's key is its parent's index, little-endian in nodeKeyHeader
 // bytes, followed by its segment. The segment arena stores every
-// non-root node's key, and the node's Prefix is the segment within it,
-// so the table compares a key from the node alone.
+// non-root node's key where the node says, so the table compares a key
+// from the node and the arena alone.
 const nodeKeyHeader = 4
-
-// keyHeader returns the parent index bytes stored before seg, a node's
-// segment in the arena.
-func keyHeader(seg string) []byte {
-	start := unsafe.Add(unsafe.Pointer(unsafe.StringData(seg)), -nodeKeyHeader)
-
-	return unsafe.Slice((*byte)(start), nodeKeyHeader)
-}
-
-// keyParent returns the parent index stored before seg, a node's segment.
-func keyParent(seg string) uint32 {
-	return binary.LittleEndian.Uint32(keyHeader(seg))
-}
-
-// setKeyParent rewrites the parent index stored before seg, a node's
-// segment. Only a node not yet in the table has its key rewritten.
-func setKeyParent(seg string, parent uint32) {
-	binary.LittleEndian.PutUint32(keyHeader(seg), parent)
-}

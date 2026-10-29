@@ -5,6 +5,7 @@ import (
 	"maps"
 	"math"
 	"math/rand/v2"
+	"reflect"
 	"runtime"
 	"runtime/debug"
 	"slices"
@@ -65,12 +66,13 @@ func TestHeapReadingsUnderPressure(t *testing.T) {
 }
 
 // EstimatedMemoryUsage counts each new prefix once, with its key (the
-// parent's index and the segment) and the prefix Drain writes; a
-// segment's nodes give back the prefixes of those merged into the main
-// tree when it is mapped; a Drain starts it over. The node table counts
-// at its size, which a Drain keeps.
+// parent's index and the segment), and a tier block for each node that
+// comes to hold a second tier, whether from an object or from a
+// segment's node merged into it when the segment is mapped; a Drain
+// starts it over. The node table counts at its size, which a Drain
+// keeps.
 func TestAggregatorEstimateCountsEachPrefix(t *testing.T) {
-	const node, h = aggregatorNodeBytes, nodeKeyHeader
+	const node, h, block = aggregatorNodeBytes, nodeKeyHeader, tierBlockBytes
 	agg := NewAggregator(0, 0)
 	table := int64(tableSlotsFor(10_000)) * nodeSlotBytes
 	check := func(step string, want int64) {
@@ -83,20 +85,27 @@ func TestAggregatorEstimateCountsEachPrefix(t *testing.T) {
 	for _, k := range []string{"a/b/x", "a/b/y", "a/c/z", "top"} {
 		agg.AddObject(k, 1, tiers.Standard)
 	}
-	// "" (no key), then "a/", "a/b/", "a/c/": key + prefix.
-	want := table + 4*node + (h + 2 + 2) + (h + 2 + 4) + (h + 2 + 4)
+	// "" (no key), then "a/", "a/b/", "a/c/".
+	want := table + 4*node + 3*(h+2)
 	check("table", want)
 
+	agg.AddObject("top2", 1, tiers.GlacierIR)
+	// The root's second tier.
+	want += block
+	check("second tier", want)
+	agg.AddObject("top3", 1, tiers.DeepArchive)
+	check("third tier", want)
+
 	agg.StartSegment()
-	agg.AddObject("a/b/z", 1, tiers.Standard)
+	agg.AddObject("a/b/z", 1, tiers.GlacierFR)
 	// A root, "a/" and "a/b/" of the segment's own, in no table.
-	want += 3*node + (h + 2 + 2) + (h + 2 + 4)
+	want += 3*node + 2*(h+2)
 	check("ordered segment", want)
 
 	agg.AddObject("a/a/x", 1, tiers.Standard)
-	// Mapping merges the three into the main tree's, whose prefixes Drain
-	// writes once; then "a/a/" is new.
-	want += -(2 + 4) + node + (h + 2 + 4)
+	// Mapping merges the three into the main tree's: the root has a
+	// block, "a/" and "a/b/" take one. Then "a/a/" is new.
+	want += 2*block + node + (h + 2)
 	check("mapped segment", want)
 	if got := agg.PrefixCount(); got != 5 {
 		t.Errorf("PrefixCount = %d, want 5", got)
@@ -195,11 +204,19 @@ func TestAggregatorDrainIsSorted(t *testing.T) {
 	}
 }
 
-// A node is a bare row: its parent's index lives in the dense parents
-// array, which Drain's counting passes read without touching the nodes.
-func TestAggregatorNodeIsARow(t *testing.T) {
-	if got, want := unsafe.Sizeof(aggNode{}), unsafe.Sizeof(PrefixRow{}); got != want {
-		t.Errorf("aggNode is %d B, want %d (a PrefixRow)", got, want)
+// A node is 32 bytes with no pointer in it, so the GC never scans the
+// slabs, and half a cache line; its parent's index lives in the dense
+// parents array, which the walk's counting passes read without touching
+// the nodes.
+func TestAggregatorNodeIsCompact(t *testing.T) {
+	if got := unsafe.Sizeof(aggNode{}); got != 32 {
+		t.Errorf("aggNode is %d B, want 32", got)
+	}
+	typ := reflect.TypeFor[aggNode]()
+	for f := range typ.Fields() {
+		if f.Type.Kind() < reflect.Bool || f.Type.Kind() > reflect.Uint64 {
+			t.Errorf("aggNode.%s is a %s, not an integer", f.Name, f.Type)
+		}
 	}
 }
 
@@ -302,36 +319,6 @@ func TestFlushAggregatorReleasesRowsUnderHeapPressure(t *testing.T) {
 	}
 }
 
-// A spill no larger than the last allocates only the block Drain writes
-// its prefixes into, whether the keys came through the node table or
-// through a segment merged into it; an estimate short of the prefixes' length
-// would grow that block and allocate again.
-func TestAggregatorDrainReusesScratch(t *testing.T) {
-	agg := NewAggregator(0, 0)
-	keys := make([]string, 0, 600)
-	for i := range 300 {
-		keys = append(keys, fmt.Sprintf("p%03d/q%d/x", (i*7)%300, i%5), fmt.Sprintf("r/%03d/y", 299-i))
-	}
-	cycle := func() []*PrefixRow {
-		agg.AddObject("p000/q0/x", 1, tiers.Standard)
-		agg.StartSegment()
-		agg.AddObject("p000/q0/a", 1, tiers.Standard)
-		agg.AddObject("p001/q1/a", 1, tiers.Standard)
-		for _, k := range keys {
-			agg.AddObject(k, 1, tiers.Standard)
-		}
-
-		return agg.Drain()
-	}
-	rows := cycle()
-	if !slices.IsSortedFunc(rows, func(a, b *PrefixRow) int { return strings.Compare(a.Prefix, b.Prefix) }) {
-		t.Fatal("Drain rows are not in prefix order")
-	}
-	if allocs := testing.AllocsPerRun(10, func() { cycle() }); allocs != 1 {
-		t.Errorf("a spill no larger than the last = %v allocs, want 1", allocs)
-	}
-}
-
 // The estimate is what the aggregator's heap grows by, for keys out of
 // order with short and long segments, with the node table nearly full
 // and just doubled: the nodes, their parents, keys and the node table,
@@ -393,9 +380,9 @@ type estimateObject struct {
 }
 
 // checkEstimateTracksHeap adds objs to a new aggregator, logs per
-// prefix how much the live heap grew and the estimate, and fails unless
-// the estimate without the prefixes Drain would write is within 5% of
-// the heap's growth.
+// prefix how much the live heap grew, the estimate and the tier blocks'
+// share of it, and fails unless the estimate is within 5% of the heap's
+// growth.
 func checkEstimateTracksHeap(t *testing.T, name string, objs []estimateObject) {
 	t.Helper()
 	// Twice: the first GC moves pooled objects earlier tests left to the
@@ -410,11 +397,12 @@ func checkEstimateTracksHeap(t *testing.T, name string, objs []estimateObject) {
 	runtime.GC()
 	after, _ := heapReadings()
 	measured := int64(after) - int64(before)
-	estimate := agg.EstimatedMemoryUsage() - int64(agg.prefixBytes)
+	estimate := agg.EstimatedMemoryUsage()
 	prefixes := agg.PrefixCount()
 	per := func(b int64) float64 { return float64(b) / float64(prefixes) }
-	t.Logf("%s: %d objects, %d prefixes: heap %.1f B/prefix, estimate %.1f, with Drain's prefixes %.1f (%d slots)",
-		name, len(objs), prefixes, per(measured), per(estimate), per(agg.EstimatedMemoryUsage()), len(agg.children.slots))
+	t.Logf("%s: %d objects, %d prefixes: heap %.1f B/prefix, estimate %.1f, of which tier blocks %.1f (%.1f%% of nodes; %d slots)",
+		name, len(objs), prefixes, per(measured), per(estimate), per(int64(agg.blocksUsed)*tierBlockBytes),
+		100*float64(agg.blocksUsed)/float64(prefixes), len(agg.children.slots))
 	runtime.KeepAlive(agg)
 	runtime.KeepAlive(objs)
 	if lo, hi := measured*95/100, measured*105/100; estimate < lo || estimate > hi {

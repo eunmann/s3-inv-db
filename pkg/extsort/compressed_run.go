@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -120,12 +121,28 @@ func (e *runEncoder) write(row *PrefixRow) error {
 }
 
 // writeEncoded writes row, whose prefix is the previous record's first
-// shared bytes followed by suffix, for a caller that knows them without
-// the whole prefix; row.Prefix is not read. A later write front-codes
-// against no prefix, which reads back the same.
+// shared bytes followed by suffix, for a caller that codes it against
+// less than all it shares; row.Prefix is not read. A later write
+// front-codes against no prefix, which reads back the same.
 func (e *runEncoder) writeEncoded(shared int, suffix string, row *PrefixRow) error {
 	start := len(e.buf)
 	e.buf = encodeRunRecordShared(e.buf, shared, suffix, row)
+	e.prev = ""
+
+	return e.wrote(start)
+}
+
+// writeNode writes the record of an aggregator node, whose prefix is the
+// previous record's first shared bytes followed by suffix, at depth,
+// with totals count and bytes in tier or in block (see appendNodeStats).
+// Suffix is copied. A later write front-codes against no prefix, which
+// reads back the same.
+func (e *runEncoder) writeNode(shared int, suffix []byte, depth uint16, count, bytes uint64, tier tiers.ID, block *tierBlock) error {
+	start := len(e.buf)
+	e.buf = binary.AppendUvarint(e.buf, uint64(shared))
+	e.buf = binary.AppendUvarint(e.buf, uint64(len(suffix)))
+	e.buf = append(e.buf, suffix...)
+	e.buf = appendNodeStats(e.buf, depth, count, bytes, tier, block)
 	e.prev = ""
 
 	return e.wrote(start)

@@ -79,6 +79,69 @@ func scanMerge(runs [][]PrefixRow) []PrefixRow {
 	return out
 }
 
+// typedMergeHeap is the binary min-heap of mergeItem values, ordered by
+// mergeItem.row.Prefix, that MergeIterator used before its tree of
+// losers: heapMerge's reference.
+type typedMergeHeap struct {
+	items []mergeItem
+}
+
+// mergeItem represents an item in the merge heap.
+type mergeItem struct {
+	row       *PrefixRow
+	readerIdx int // index into readers slice
+}
+
+func (h *typedMergeHeap) Len() int { return len(h.items) }
+
+func (h *typedMergeHeap) push(it mergeItem) {
+	h.items = append(h.items, it)
+	h.siftUp(len(h.items) - 1)
+}
+
+func (h *typedMergeHeap) pop() mergeItem {
+	top := h.items[0]
+	n := len(h.items) - 1
+	h.items[0] = h.items[n]
+	h.items = h.items[:n]
+	if n > 0 {
+		h.siftDown(0)
+	}
+
+	return top
+}
+
+func (h *typedMergeHeap) siftUp(i int) {
+	for i > 0 {
+		parent := (i - 1) / 2
+		if h.items[parent].row.Prefix <= h.items[i].row.Prefix {
+			return
+		}
+		h.items[parent], h.items[i] = h.items[i], h.items[parent]
+		i = parent
+	}
+}
+
+func (h *typedMergeHeap) siftDown(i int) {
+	n := len(h.items)
+	for {
+		left := 2*i + 1
+		if left >= n {
+			return
+		}
+		smallest := left
+		right := left + 1
+		if right < n && h.items[right].row.Prefix < h.items[left].row.Prefix {
+			smallest = right
+		}
+		if h.items[i].row.Prefix <= h.items[smallest].row.Prefix {
+			return
+		}
+		h.items[i], h.items[smallest] = h.items[smallest], h.items[i]
+		i = smallest
+	}
+}
+
 // heapMerge merges runs through the binary heap MergeIterator used
 // before its tree of losers, ordered by prefix, each row merged into the
 // last one out when their prefixes are equal.

@@ -63,9 +63,9 @@ func (w *memRunWriter) finish() *memRun {
 	return &memRun{chunks: chunks, count: int(w.enc.count)}
 }
 
-// readNext decodes the next row into into and returns how many bytes of
+// readNext decodes the next row into row and returns how many bytes of
 // the previous row's prefix its record codes it as starting with.
-func (m *memRun) readNext(into *PrefixRow) (int, error) {
+func (m *memRun) readNext(row *PrefixRow) (int, error) {
 	if m.next >= m.count {
 		m.chunks = nil
 
@@ -78,12 +78,12 @@ func (m *memRun) readNext(into *PrefixRow) (int, error) {
 	if len(m.chunks) == 0 {
 		return 0, fmt.Errorf("%w: memory run ends after %d of %d records", errRunRecordCorrupt, m.next, m.count)
 	}
-	rec, err := decodeRunRecord(m.chunks[0][m.off:], m.prev, &m.arena, into)
+	rec, err := decodeRunRecord(m.chunks[0][m.off:], m.prev, &m.arena, row)
 	if err != nil {
 		return 0, fmt.Errorf("memory run record %d: %w", m.next, err)
 	}
 	m.off += rec.size
-	m.prev = into.Prefix
+	m.prev = row.Prefix
 	m.next++
 
 	return rec.shared, nil

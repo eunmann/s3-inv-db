@@ -876,7 +876,9 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, fetched fetche
 	const (
 		ctxCheckInterval = 4096
 		// The in-chunk spill check lets a big chunk spill before it
-		// outgrows the cap; checking every row would only add overhead.
+		// outgrows the cap; reading the heap every row would only add
+		// overhead. Whether the aggregator can address another object
+		// (Full) is two compares, so every row checks it.
 		midChunkFlushInterval = 50_000
 	)
 	var (
@@ -911,7 +913,7 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, fetched fetche
 		agg.AddObject(row.Key, row.Size, tiers.Resolve(tierID, row.Size))
 		rowsParsed++
 		bytesAdded += int64(row.Size)
-		if rowsParsed%midChunkFlushInterval == 0 &&
+		if agg.Full() || rowsParsed%midChunkFlushInterval == 0 &&
 			ShouldWorkerFlush(uint64(agg.EstimatedMemoryUsage()), memLimit, numWorkers) {
 			if err := p.flushAggregator(ctx, agg, workerID); err != nil {
 				return fmt.Errorf("mid-chunk flush: %w", err)

@@ -2,6 +2,7 @@ package extsort
 
 import (
 	"cmp"
+	"encoding/binary"
 	"maps"
 	"math/rand/v2"
 	"slices"
@@ -281,30 +282,47 @@ func TestAggregatorAdversarialOrdersAreExact(t *testing.T) {
 }
 
 // checkAggregatorAccounting recomputes from the nodes what the
-// aggregator has counted: the estimate (every node and its key, the
-// prefix of each live one, the node table's slots) and the prefix bytes
-// Drain writes. It also checks that the node table holds each live
-// non-root node of the main tree once, under its key's hash, and that
-// each node's stored key names its parent.
+// aggregator has counted: the estimate (every node, its key and its tier
+// block, the node table's slots). It checks that
+// every tier block belongs to one node and every live node's totals are
+// its tiers' sums, that the node table holds each live non-root node of
+// the main tree once, under its key's hash, and that each node's stored
+// key names its parent.
 func checkAggregatorAccounting(t *testing.T, agg *Aggregator) {
 	t.Helper()
-	var keyBytes, prefixBytes int
+	keyBytes := 0
+	blockOwner := map[uint32]uint32{}
 	for i := range agg.used {
 		n := agg.node(uint32(i))
-		if n.row.Prefix != "" {
-			keyBytes += nodeKeyHeader + len(n.row.Prefix)
+		if n.segLen > 0 {
+			keyBytes += nodeKeyHeader + int(n.segLen)
+		}
+		if n.tiers != 0 {
+			if owner, ok := blockOwner[n.tiers]; ok || int(n.tiers) > agg.blocksUsed {
+				t.Fatalf("node %d has tier block %d of %d, node %d's too: %v", i, n.tiers, agg.blocksUsed, owner, ok)
+			}
+			blockOwner[n.tiers] = uint32(i)
 		}
 		if agg.parent(uint32(i)) == deadNode {
 			continue
 		}
-		for p := uint32(i); agg.parent(p) != noNode; p = agg.parent(p) {
-			prefixBytes += len(agg.node(p).row.Prefix)
+		if b := agg.nodeBlock(n); b != nil {
+			var count, size uint64
+			for tier := range MaxTiers {
+				count += b.counts[tier]
+				size += b.bytes[tier]
+			}
+			if count != n.count || size != n.bytes {
+				t.Fatalf("node %d has %d objects, %d bytes; its tiers add up to %d, %d", i, n.count, n.bytes, count, size)
+			}
 		}
 	}
-	want := int64(agg.used)*aggregatorNodeBytes + int64(keyBytes+prefixBytes)
-	if agg.prefixBytes != prefixBytes || agg.bytes != want {
-		t.Fatalf("counted %d prefix bytes and %d node bytes; the nodes have %d and %d",
-			agg.prefixBytes, agg.bytes, prefixBytes, want)
+	if len(blockOwner) != agg.blocksUsed {
+		t.Fatalf("%d of %d tier blocks belong to a node", len(blockOwner), agg.blocksUsed)
+	}
+	want := int64(agg.used)*aggregatorNodeBytes + int64(keyBytes) + int64(agg.blocksUsed)*tierBlockBytes
+	if agg.bytes != want {
+		t.Fatalf("counted %d node bytes; the nodes have %d", agg.bytes, want)
 	}
 	if got, want := agg.EstimatedMemoryUsage(), want+int64(len(agg.children.slots))*nodeSlotBytes; got != want {
 		t.Fatalf("estimate = %d, want %d with the node table", got, want)
@@ -315,7 +333,8 @@ func checkAggregatorAccounting(t *testing.T, agg *Aggregator) {
 		for i := r[0]; i < r[1]; i++ {
 			if p := agg.parent(uint32(i)); p < deadNode {
 				inTree[uint32(i)] = true
-				if got := keyParent(agg.node(uint32(i)).row.Prefix); got != p {
+				n := agg.node(uint32(i))
+				if got := binary.LittleEndian.Uint32(agg.segs.key(n.seg, n.segLen)); n.segLen > 0 && got != p {
 					t.Fatalf("node %d's key names parent %d, its parent is %d", i, got, p)
 				}
 			}
@@ -331,7 +350,7 @@ func checkAggregatorAccounting(t *testing.T, agg *Aggregator) {
 			t.Fatalf("node table holds node %d (in the main tree: %v, twice: %v)", idx, inTree[idx], seen[idx])
 		}
 		seen[idx] = true
-		if want := agg.children.hash(agg.parent(idx), agg.node(idx).row.Prefix); s.hash != want {
+		if want := agg.children.hash(agg.parent(idx), agg.segment(agg.node(idx))); s.hash != want {
 			t.Fatalf("node %d is in the table under hash %#x, its key's is %#x", idx, s.hash, want)
 		}
 	}
