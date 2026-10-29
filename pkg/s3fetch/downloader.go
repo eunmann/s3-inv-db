@@ -44,7 +44,10 @@ func downloaderConfigFor(procs int) DownloaderConfig {
 }
 
 // Downloader wraps the AWS S3 Transfer Manager for high-throughput
-// downloads, and streams objects (OpenStream) through the same GET cap.
+// downloads, and streams objects (OpenStream). Streams take a slot of
+// the same GET cap only for parts they read ahead; each stream's first
+// part and the part its reader needs next run outside the cap (see
+// ObjectStream).
 type Downloader struct {
 	manager *transfermanager.Client
 	gets    *boundedGets
