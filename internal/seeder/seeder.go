@@ -38,7 +38,7 @@ type Target string
 const (
 	// TargetLocal writes built indexes to a local directory.
 	TargetLocal Target = "local"
-	// TargetS3 uploads simulated S3 Inventory layouts (manifest + CSV.gz) to S3 or a local S3-compatible server.
+	// TargetS3 uploads simulated S3 Inventory layouts (manifest + CSV.gz or Parquet) to S3 or a local S3-compatible server.
 	TargetS3 Target = "s3"
 )
 
@@ -62,6 +62,8 @@ type Config struct {
 	// this is the best case for in-order paths; the default random order
 	// is the realistic one.
 	SortedKeys bool
+	// Format is the S3 target's data file format; empty is FormatCSV.
+	Format Format
 }
 
 func (c Config) objectsForConfig(i int) int {
@@ -90,12 +92,16 @@ type Summary struct {
 
 // Run executes the seeder, generating all inventories. Target selects
 // between writing pre-built indexes locally and uploading synthetic AWS S3
-// Inventory layouts (manifest + CSV.gz) to S3 or a local S3-compatible server.
+// Inventory layouts (manifest + CSV.gz or Parquet) to S3 or a local
+// S3-compatible server.
 func Run(ctx context.Context, cfg Config) error {
 	startTime := time.Now()
 
 	if cfg.Target == "" {
 		cfg.Target = TargetLocal
+	}
+	if cfg.Format == "" {
+		cfg.Format = FormatCSV
 	}
 
 	// Go 1.22+ `for range int` panics on negative values, and a zero
@@ -117,7 +123,10 @@ func Run(ctx context.Context, cfg Config) error {
 	case TargetLocal:
 		logEv = logEv.Str("output_dir", cfg.OutputDir)
 	case TargetS3:
-		logEv = logEv.Str("s3_bucket", cfg.S3.Bucket).Str("s3_prefix", cfg.S3.Prefix).Str("s3_src_bucket", cfg.S3.SrcBucket)
+		if _, err := encodingFor(cfg.Format); err != nil {
+			return err
+		}
+		logEv = logEv.Str("s3_bucket", cfg.S3.Bucket).Str("s3_prefix", cfg.S3.Prefix).Str("s3_src_bucket", cfg.S3.SrcBucket).Str("format", string(cfg.Format))
 	default:
 		return fmt.Errorf("%w: %q", errUnknownTarget, cfg.Target)
 	}
