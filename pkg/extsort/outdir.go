@@ -234,15 +234,20 @@ func publishIndex(log *zerolog.Logger, stage, outDir string) error {
 	return publish(log, stage, outDir, durableSync)
 }
 
+// publish is publishIndex with syncPath making each entry durable; a
+// nil syncPath skips every sync, for an index that is only uploaded and
+// then removed.
 func publish(log *zerolog.Logger, stage, outDir string, syncPath syncFunc) error {
 	if err := checkOutDir(outDir); err != nil {
 		return err
 	}
-	syncStart := time.Now()
-	if err := syncTree(stage, syncPath); err != nil {
-		return fmt.Errorf("sync staged index: %w", err)
+	if syncPath != nil {
+		syncStart := time.Now()
+		if err := syncTree(stage, syncPath); err != nil {
+			return fmt.Errorf("sync staged index: %w", err)
+		}
+		log.Debug().Dur("duration_ms", time.Since(syncStart)).Msg("staged index synced")
 	}
-	log.Debug().Dur("duration_ms", time.Since(syncStart)).Msg("staged index synced")
 	outDir = filepath.Clean(outDir)
 	parent, base := filepath.Dir(outDir), filepath.Base(outDir)
 	var old string
@@ -271,7 +276,9 @@ func publish(log *zerolog.Logger, stage, outDir string, syncPath syncFunc) error
 
 		return fmt.Errorf("publish index: %w", err)
 	}
-	logCleanupErr(log, "sync output parent", parent, format.SyncDir(parent))
+	if syncPath != nil {
+		logCleanupErr(log, "sync output parent", parent, syncPath(parent, true))
+	}
 	if old != "" {
 		logCleanupErr(log, "remove previous index", old, os.RemoveAll(old))
 	}

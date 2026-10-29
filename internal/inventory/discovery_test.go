@@ -600,8 +600,8 @@ func TestDiscovery_FindServesOnlyDescribedRunsFromSnapshot(t *testing.T) {
 }
 
 // TestDiscovery_LoadSizesFromDiscoveredManifest: a run whose manifest
-// discovery already read is sized from it; only a run without one asks
-// the sizer, which fetches the manifest.
+// discovery already read is sized from it, by its format; only a run
+// without one asks the sizer, which fetches the manifest.
 func TestDiscovery_LoadSizesFromDiscoveredManifest(t *testing.T) {
 	mgr := inventory.NewCatalog(nil)
 	t.Cleanup(func() { _ = mgr.Close() })
@@ -619,10 +619,11 @@ func TestDiscovery_LoadSizesFromDiscoveredManifest(t *testing.T) {
 	}
 	d := inventory.NewDiscovery(mgr,
 		inventory.WithBackend(&fakeDiscoverer{bucket: "dst"}, &fakeBuilder{}),
-		inventory.WithGate(gate, sizer, 2))
+		inventory.WithGate(gate, sizer))
 	described := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "2026-01-01T00-00Z", ManifestKey: "k1", FileFormat: "CSV", TotalBytes: 300}
+	published := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "2026-01-03T00-00Z", ManifestKey: "k3", FileFormat: inventory.IndexFileFormat, TotalBytes: 500}
 	bare := inventory.Inventory{SourceBucket: "b", Name: "i", Run: "2026-01-02T00-00Z", ManifestKey: "k2"}
-	for _, disc := range []inventory.Inventory{described, bare} {
+	for _, disc := range []inventory.Inventory{described, published, bare} {
 		if err := d.Load(t.Context(), disc); err != nil {
 			t.Fatal(err)
 		}
@@ -630,7 +631,35 @@ func TestDiscovery_LoadSizesFromDiscoveredManifest(t *testing.T) {
 	if n := sizerCalls.Load(); n != 1 {
 		t.Fatalf("sizer called %d times, want 1 (only the run without a read manifest)", n)
 	}
-	if want := []uint64{600, 2000}; !slices.Equal(estimates, want) {
+	want := []uint64{inventory.EstimateIndexBytes("CSV", 300), 500, 1000}
+	if !slices.Equal(estimates, want) {
 		t.Fatalf("estimates %v, want %v", estimates, want)
+	}
+}
+
+// EstimateIndexBytes is a published index's own size, and for an
+// inventory its data total times the format's ratio: Parquet's lower,
+// since its files are larger for the same objects, and an unknown
+// format gets CSV's.
+func TestEstimateIndexBytes(t *testing.T) {
+	const data = 1000
+	csv := inventory.EstimateIndexBytes("CSV", data)
+	parquet := inventory.EstimateIndexBytes("Parquet", data)
+	if got := inventory.EstimateIndexBytes(inventory.IndexFileFormat, data); got != data {
+		t.Errorf("published index = %d, want its size %d", got, data)
+	}
+	if csv < 2900 {
+		t.Errorf("CSV = %d, want at least 2.9x: deep_pyramid indexes measure 2.99x their gzipped CSV", csv)
+	}
+	if parquet >= csv || 4*parquet < 3*csv {
+		t.Errorf("Parquet = %d, want under CSV's %d by at most the 1.33x its files are larger", parquet, csv)
+	}
+	for _, format := range []string{"csv", "", "ORC"} {
+		if got := inventory.EstimateIndexBytes(format, data); got != csv {
+			t.Errorf("format %q = %d, want CSV's %d", format, got, csv)
+		}
+	}
+	if got := inventory.EstimateIndexBytes("parquet", data); got != parquet {
+		t.Errorf("lowercase parquet = %d, want %d", got, parquet)
 	}
 }

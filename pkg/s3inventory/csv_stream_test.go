@@ -46,7 +46,7 @@ func (c *closeCounter) Close() error {
 	return nil
 }
 
-var streamCfg = s3inventory.CSVReaderConfig{KeyCol: 0, SizeCol: 1, StorageCol: 2, AccessTierCol: -1, DeleteMarkerCol: -1}
+var streamCfg = s3inventory.CSVReaderConfig{KeyCol: s3inventory.ColumnAt(0), SizeCol: s3inventory.ColumnAt(1), StorageCol: s3inventory.ColumnAt(2)}
 
 // readStream reads data through NewCSVReaderFromStream until EOF or an
 // error, returning the rows as "key:size", and checks that Close closes

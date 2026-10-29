@@ -50,6 +50,10 @@ type Gate struct {
 	// retiring counts, per run, the in-flight loads that retire it once
 	// they succeed. Guarded by admit.
 	retiring map[inventory.ID]int
+	// measured holds the built size of each run retracted for not
+	// fitting, so loading it again reserves that, not the estimate that
+	// fell short, and is refused before it builds. Guarded by admit.
+	measured map[inventory.ID]uint64
 }
 
 // New constructs a Gate. The tracker's used bytes must come from the
@@ -61,12 +65,15 @@ func New(manager *inventory.Catalog, tracker *budget.Tracker, planner *budget.Pl
 		planner:     planner,
 		removeCache: removeCache,
 		retiring:    make(map[inventory.ID]int),
+		measured:    make(map[inventory.ID]uint64),
 	}
 }
 
-// Load plans, evicts, reserves, builds, releases, then retires the
-// runs past retention the load didn't need the disk of. Returns
-// *BudgetRefusedError when the planner refuses and opts.Force is false.
+// Load plans, evicts, reserves, builds, settles at the built size,
+// then retires the runs past retention the load didn't need the disk
+// of. Returns *BudgetRefusedError when the planner refuses, before the
+// build or once the built index proves too big, and opts.Force is
+// false.
 func (g *Gate) Load(ctx context.Context, id inventory.ID, build inventory.BuildFunc, opts inventory.GatedLoadOptions) error {
 	plan, token, err := g.admitLoad(ctx, id, opts)
 	if err != nil {
@@ -83,6 +90,9 @@ func (g *Gate) Load(ctx context.Context, id inventory.ID, build inventory.BuildF
 	}
 	if loadErr != nil {
 		return fmt.Errorf("load %s: %w", id, loadErr)
+	}
+	if err := g.settle(ctx, id, token, opts.Force); err != nil {
+		return err
 	}
 	// Retention evictions wait for a successful load, so a failed build
 	// never leaves the configuration a run short.
@@ -102,16 +112,13 @@ func (g *Gate) admitLoad(ctx context.Context, id inventory.ID, opts inventory.Ga
 	g.admit.Lock()
 	defer g.admit.Unlock()
 
-	retiring := make(map[inventory.ID]bool, len(g.retiring))
-	for victim := range g.retiring {
-		retiring[victim] = true
-	}
+	opts.EstimateBytes = max(opts.EstimateBytes, g.measured[id])
 	plan, err := g.planner.Plan(ctx, budget.Input{
 		Target:        id,
 		EstimateBytes: opts.EstimateBytes,
 		All:           g.manager.List(),
 		Pinned:        opts.Pin,
-		Retiring:      retiring,
+		Retiring:      g.retiringLocked(),
 	})
 	if refused, ok := errors.AsType[*budget.PlannerRefusedError](err); ok {
 		if !opts.Force {
@@ -142,6 +149,71 @@ func (g *Gate) admitLoad(ctx context.Context, id inventory.ID, opts inventory.Ga
 	}
 
 	return plan, token, nil
+}
+
+// retiringLocked returns the runs in-flight loads retire. Caller holds
+// admit.
+func (g *Gate) retiringLocked() map[inventory.ID]bool {
+	retiring := make(map[inventory.ID]bool, len(g.retiring))
+	for victim := range g.retiring {
+		retiring[victim] = true
+	}
+
+	return retiring
+}
+
+// settle swaps the load's reservation for its built index, which the
+// catalog now counts at its measured size, and evicts for whatever an
+// estimate that fell short leaves over the cap. An index that can't be
+// made to fit is retracted and its cache removed, unless forced.
+func (g *Gate) settle(ctx context.Context, id inventory.ID, token string, force bool) error {
+	g.admit.Lock()
+	defer g.admit.Unlock()
+	g.tracker.Release(token)
+	delete(g.measured, id)
+	over := g.tracker.Over()
+	if over == 0 {
+		return nil
+	}
+	// Disk only, as for a pinned load: the run's retention was planned
+	// at admission.
+	plan, err := g.planner.Plan(ctx, budget.Input{
+		Target:        id,
+		EstimateBytes: over,
+		All:           g.manager.List(),
+		Pinned:        true,
+		Retiring:      g.retiringLocked(),
+	})
+	if _, refused := errors.AsType[*budget.PlannerRefusedError](err); refused && !force {
+		return g.retract(ctx, id, over, plan)
+	} else if err != nil && !refused {
+		return fmt.Errorf("plan: %w", err)
+	}
+	for _, victim := range plan.Evict {
+		if err := g.evict(ctx, victim); err != nil {
+			zerolog.Ctx(ctx).Warn().Err(err).Stringer("id", victim).Msg("evict for an index over its estimate")
+		}
+	}
+
+	return nil
+}
+
+// retract unloads id, whose built index is over the cap by over bytes
+// that evictions can't free, and removes its cache. Caller holds admit.
+func (g *Gate) retract(ctx context.Context, id inventory.ID, over uint64, plan budget.Plan) error {
+	info, _ := g.manager.Get(id)
+	if err := g.manager.Retract(ctx, id); err != nil {
+		return fmt.Errorf("retract %s: %w", id, err)
+	}
+	g.measured[id] = info.IndexBytes
+	if g.removeCache != nil {
+		if err := g.removeCache(id); err != nil {
+			zerolog.Ctx(ctx).Warn().Err(err).Stringer("id", id).Msg("remove retracted run's cache")
+		}
+	}
+	plan.Refusal = fmt.Sprintf("the built index is %d bytes, %d over the disk budget: %s", info.IndexBytes, over, plan.Refusal)
+
+	return &BudgetRefusedError{Plan: plan}
 }
 
 // unmarkRetiring drops one in-flight load's claim on its AfterLoad runs.
@@ -179,9 +251,9 @@ func (g *Gate) evict(ctx context.Context, victim inventory.ID) error {
 	return nil
 }
 
-// ManifestSizer is the inventory.ManifestSizer concrete implementation
-// backed by an s3fetch.Client. Caches nothing — the manifest is small
-// JSON and fetched once per load attempt.
+// ManifestSizer implements inventory.IndexSizeFunc over an
+// s3fetch.Client. Caches nothing — the manifest is small JSON and
+// fetched once per load attempt.
 type ManifestSizer struct {
 	client *s3fetch.Client
 }
@@ -210,10 +282,10 @@ func (s *ManifestSizer) IndexSize(ctx context.Context, bucket, key string) (uint
 // manifest.json.
 var errNotManifestKey = errors.New("not a manifest key")
 
-// ManifestSize returns the sum of the manifest's data-file sizes — the
-// total compressed bytes the load pipeline will pull from S3. The gate
-// multiplies this by indexRatio to estimate final IndexBytes.
-func (s *ManifestSizer) ManifestSize(ctx context.Context, bucket, key string) (uint64, error) {
+// EstimatedIndexSize returns the disk the index built from the
+// inventory manifest at key is estimated to take, from its file format
+// and data-file sizes.
+func (s *ManifestSizer) EstimatedIndexSize(ctx context.Context, bucket, key string) (uint64, error) {
 	m, err := s.client.FetchManifest(ctx, bucket, key)
 	if err != nil {
 		return 0, fmt.Errorf("fetch manifest: %w", err)
@@ -225,5 +297,5 @@ func (s *ManifestSizer) ManifestSize(ctx context.Context, bucket, key string) (u
 		}
 	}
 
-	return total, nil
+	return inventory.EstimateIndexBytes(m.FileFormat, total), nil
 }

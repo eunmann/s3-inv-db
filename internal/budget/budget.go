@@ -84,6 +84,20 @@ func (t *Tracker) availableLocked() uint64 {
 	return t.capBytes - committed
 }
 
+// Over returns how far the held indexes and reservations exceed the
+// cap, headroom aside: the headroom is there for loads that outgrow
+// their estimate. Zero when within the cap or with no cap.
+func (t *Tracker) Over() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	committed := t.used() + t.reserved
+	if t.capBytes == 0 || committed <= t.capBytes {
+		return 0
+	}
+
+	return committed - t.capBytes
+}
+
 // Reserve holds `bytes` against the cap. Must be paired with Release.
 func (t *Tracker) Reserve(token string, bytes uint64) error {
 	t.mu.Lock()

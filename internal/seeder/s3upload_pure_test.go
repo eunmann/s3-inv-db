@@ -446,9 +446,15 @@ func TestEncodeParquet_MatchesCSVColumns(t *testing.T) {
 // the CSV, with no anomalies.
 func TestEncodeParquet_ReaderMatchesCSVReader(t *testing.T) {
 	objects := parquetObjects()
-	csvReader := s3inventory.NewCSVReader(strings.NewReader(encodeCSV(t, 7, objects)), s3inventory.CSVReaderConfig{
-		KeyCol: 1, SizeCol: 2, StorageCol: 5, AccessTierCol: 6, DeleteMarkerCol: -1,
+	csvReader, err := s3inventory.NewCSVReader(strings.NewReader(encodeCSV(t, 7, objects)), s3inventory.CSVReaderConfig{
+		KeyCol:        s3inventory.ColumnAt(1),
+		SizeCol:       s3inventory.ColumnAt(2),
+		StorageCol:    s3inventory.ColumnAt(5),
+		AccessTierCol: s3inventory.ColumnAt(6),
 	})
+	if err != nil {
+		t.Fatalf("NewCSVReader: %v", err)
+	}
 	payload := encodeParquet(t, 7, objects)
 	pqReader, err := s3inventory.NewParquetReaderFromReaderAt(bytes.NewReader(payload.Body), payload.Size)
 	if err != nil {

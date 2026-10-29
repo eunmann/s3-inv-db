@@ -29,12 +29,24 @@ proxy or auth layer and list it in `trusted_proxies`.
 
 `max_index_disk` caps the bytes of loaded indexes; a fifth of it is
 headroom. A load is admitted if its estimate fits; the estimate is
-**0.30 × the manifest's compressed data size** (conservative; index
-size follows prefix count, not object count). To make room the planner
+**3.0 × the manifest's data size for CSV, 2.3 × for Parquet** (whose
+files are about 1.3× larger for the same objects). An index's size
+follows its prefix count, which no manifest tells: measured on gzipped
+CSV, indexes are 1.0× (a directory per object) to 1.5× (typical
+`year/month/day/...` keys) their inventory, and 3.0× for the densest
+seeded layout (about 7 prefixes per object). To make room the planner
 evicts, in order: the same configuration's runs past retention, then
 the least recently queried runs. It never evicts a pinned run (a
 manual Load pins) or one being read: eviction waits for in-flight
 queries before deleting.
+
+Once built, a load counts at its measured size. If that puts the
+loaded indexes over `max_index_disk` (the headroom absorbs smaller
+misses), the planner evicts for the difference; if only pinned runs
+are left to evict, the new index is unloaded and deleted, the load is
+refused and the run keeps the pin it had before. Until the server restarts, loading that run again reserves
+its measured size, so it is refused before rebuilding while the space
+is still short.
 
 The budget counts indexes only. **Size the volume for scratch too**:
 at least 2× the largest manifest's compressed size, per concurrent
@@ -127,7 +139,7 @@ A download is verified against the manifest's CRC-32C checksums before
 the index is used. Without `s3_source` it counts against the disk
 budget at its exact size, read from the published manifest; with
 `s3_source` too, a load reserves the same estimate as an in-process
-build (the inventory's size times the index ratio), since the server
+build (the inventory's size times its format's ratio), since the server
 doesn't yet know whether it will download or build. The server notices new runs at the next poll; to make it look
 now, call `POST /api/indexes/refresh` (for example as the build job's
 last step).

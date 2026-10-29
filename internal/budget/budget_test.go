@@ -27,6 +27,27 @@ func TestTracker_UsedFollowsSource(t *testing.T) {
 	}
 }
 
+// Over counts held indexes and reservations past the cap, not into the
+// headroom, and nothing without a cap.
+func TestTracker_Over(t *testing.T) {
+	var loaded uint64 = 500
+	tr := budget.New(1000, 300, func() uint64 { return loaded })
+	if err := tr.Reserve("load", 150); err != nil {
+		t.Fatal(err)
+	}
+	loaded = 800
+	if got := tr.Over(); got != 0 {
+		t.Errorf("Over into the headroom = %d, want 0 (headroom is for overshoot)", got)
+	}
+	loaded = 1100
+	if got := tr.Over(); got != 250 {
+		t.Errorf("Over = %d, want 250", got)
+	}
+	if got := budget.New(0, 0, fixedUsed(5000)).Over(); got != 0 {
+		t.Errorf("Over with no cap = %d, want 0", got)
+	}
+}
+
 func TestTracker_ReserveRelease(t *testing.T) {
 	tr := budget.New(1000, 0, fixedUsed(0))
 	if err := tr.Reserve("load-1", 400); err != nil {

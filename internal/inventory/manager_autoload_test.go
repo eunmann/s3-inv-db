@@ -1,6 +1,7 @@
 package inventory_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -115,5 +116,41 @@ func TestManagerEvictForBudget_PreservesUserUnloadedAt(t *testing.T) {
 	info, _ := m.Get(id)
 	if !info.UserUnloadedAt.IsZero() {
 		t.Errorf("EvictForBudget set UserUnloadedAt=%v; budget eviction must not stamp it", info.UserUnloadedAt)
+	}
+}
+
+// Retract undoes the manual intent its refused load recorded: the run
+// keeps the pin and user-unload mark it had before LoadWith.
+func TestManagerRetract_RestoresPreLoadIntent(t *testing.T) {
+	indexDir := buildMinimalIndex(t)
+	build := func(context.Context, inventory.Info) (string, error) { return indexDir, nil }
+	unloadedAt := time.Unix(1_700_000_000, 0)
+	for _, pinned := range []bool{false, true} {
+		m := inventory.NewCatalog(nil)
+		const id = "src/inv/run1"
+		if err := m.Hydrate(t.Context(), inventory.Info{
+			ID:             id,
+			Name:           "n",
+			Path:           "p",
+			State:          inventory.StateNotLoaded,
+			Pinned:         pinned,
+			UserUnloadedAt: unloadedAt,
+		}, ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.LoadWith(t.Context(), id, build); err != nil {
+			t.Fatalf("LoadWith: %v", err)
+		}
+		if err := m.Retract(t.Context(), id); err != nil {
+			t.Fatalf("Retract: %v", err)
+		}
+		info, _ := m.Get(id)
+		if info.Pinned != pinned {
+			t.Errorf("pinned before load %v: Pinned after Retract = %v", pinned, info.Pinned)
+		}
+		if !info.UserUnloadedAt.Equal(unloadedAt) {
+			t.Errorf("pinned before load %v: UserUnloadedAt after Retract = %v, want %v", pinned, info.UserUnloadedAt, unloadedAt)
+		}
+		m.Close()
 	}
 }
