@@ -7,24 +7,47 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
-func TestDefaultDownloaderConfig(t *testing.T) {
-	cfg := DefaultDownloaderConfig()
+func TestDownloaderConfigFor(t *testing.T) {
+	for _, c := range []struct {
+		procs, wantConc, wantGETs int
+	}{
+		{1, 4, 32},
+		{4, 4, 32},
+		{8, 8, 32},
+		{12, 12, 48},
+		{16, 16, 64},
+		{64, 16, 256},
+		{128, 16, 256},
+	} {
+		cfg := downloaderConfigFor(c.procs)
+		if cfg.Concurrency != c.wantConc || cfg.MaxInFlightGETs != c.wantGETs {
+			t.Errorf("procs %d: Concurrency %d, MaxInFlightGETs %d; want %d, %d",
+				c.procs, cfg.Concurrency, cfg.MaxInFlightGETs, c.wantConc, c.wantGETs)
+		}
+		if cfg.PartSize != 16*1024*1024 {
+			t.Errorf("procs %d: PartSize = %d, want 16MB", c.procs, cfg.PartSize)
+		}
+	}
+}
 
-	if cfg.Concurrency < 4 {
-		t.Errorf("Concurrency = %d, want >= 4", cfg.Concurrency)
+// TestDefaultDownloaderConfigFollowsGOMAXPROCS: a container CPU quota
+// lowers GOMAXPROCS but not NumCPU. 8 and 9 sit inside both clamps, so
+// picking the one that isn't NumCPU makes a NumCPU-sized config differ.
+func TestDefaultDownloaderConfigFollowsGOMAXPROCS(t *testing.T) {
+	procs := 8
+	if runtime.NumCPU() == procs {
+		procs = 9
 	}
-	if cfg.Concurrency > 16 {
-		t.Errorf("Concurrency = %d, want <= 16", cfg.Concurrency)
-	}
-	if cfg.PartSize != 16*1024*1024 {
-		t.Errorf("PartSize = %d, want 16MB", cfg.PartSize)
-	}
-	if cfg.MaxInFlightGETs < 32 || cfg.MaxInFlightGETs > 256 {
-		t.Errorf("MaxInFlightGETs = %d, want 32..256", cfg.MaxInFlightGETs)
+	prev := runtime.GOMAXPROCS(procs)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
+
+	if got, want := DefaultDownloaderConfig(), downloaderConfigFor(procs); got != want {
+		t.Errorf("DefaultDownloaderConfig() = %+v with GOMAXPROCS %d, want %+v", got, procs, want)
 	}
 }
 

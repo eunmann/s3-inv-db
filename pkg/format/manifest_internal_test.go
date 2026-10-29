@@ -2,10 +2,10 @@ package format
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"testing"
@@ -141,9 +141,14 @@ func TestChecksumFilesDeterministic(t *testing.T) {
 	}
 }
 
-// TestChecksumFilesPieces pins the checksum's definition: the SHA-256
-// of the pieces' SHA-256 digests, here two full pieces and one byte.
+// TestChecksumFilesPieces pins the checksum's definition: the CRC-32C
+// of the pieces' CRC-32Cs, each 4 bytes big-endian, as 8 hex digits;
+// here two full pieces and one byte.
 func TestChecksumFilesPieces(t *testing.T) {
+	table := crc32.MakeTable(crc32.Castagnoli)
+	if got := crc32.Checksum([]byte("123456789"), table); got != 0xe3069283 {
+		t.Fatalf("CRC-32C check value = %08x, want e3069283", got)
+	}
 	dir := t.TempDir()
 	data := bytes.Repeat([]byte{0xa5}, 2*testPiece+1)
 	data[testPiece] = 1 // the pieces differ
@@ -152,21 +157,56 @@ func TestChecksumFilesPieces(t *testing.T) {
 	}
 	var digests []byte
 	for off := 0; off < len(data); off += testPiece {
-		d := sha256.Sum256(data[off:min(off+testPiece, len(data))])
-		digests = append(digests, d[:]...)
+		digests = binary.BigEndian.AppendUint32(digests, crc32.Checksum(data[off:min(off+testPiece, len(data))], table))
 	}
-	want := sha256.Sum256(digests)
-	if got := checksumOf(t, dir, "big.bin"); got != hex.EncodeToString(want[:]) {
-		t.Errorf("checksum = %s, want %x", got, want)
+	if got, want := checksumOf(t, dir, "big.bin"), fmt.Sprintf("%08x", crc32.Checksum(digests, table)); got != want {
+		t.Errorf("checksum = %s, want %s", got, want)
 	}
 
 	if err := os.WriteFile(filepath.Join(dir, "empty.bin"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	empty := sha256.Sum256(nil)
-	wantEmpty := sha256.Sum256(empty[:])
-	if got := checksumOf(t, dir, "empty.bin"); got != hex.EncodeToString(wantEmpty[:]) {
-		t.Errorf("empty file checksum = %s, want %x", got, wantEmpty)
+	wantEmpty := fmt.Sprintf("%08x", crc32.Checksum(make([]byte, 4), table))
+	if got := checksumOf(t, dir, "empty.bin"); got != wantEmpty {
+		t.Errorf("empty file checksum = %s, want %s", got, wantEmpty)
+	}
+}
+
+// TestVerifyManifestDetectsFlippedByte: one changed bit, the size
+// unchanged, fails verification by its checksum.
+func TestVerifyManifestDetectsFlippedByte(t *testing.T) {
+	dir := t.TempDir()
+	const size = 3 << 20
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = byte(i * 31)
+	}
+	if err := os.WriteFile(filepath.Join(dir, CoreStatsFile), data, FilePerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteManifest(dir, 1, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	m, err := ReadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyManifest(dir, m); err != nil {
+		t.Fatalf("VerifyManifest before corruption: %v", err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, CoreStatsFile), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := []byte{data[size/2] ^ 0x01}
+	if _, err := f.WriteAt(b, size/2); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyManifest(dir, m); !errors.Is(err, ErrChecksumMismatch) {
+		t.Errorf("VerifyManifest = %v, want ErrChecksumMismatch", err)
 	}
 }
 

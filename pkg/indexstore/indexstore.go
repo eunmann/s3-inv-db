@@ -3,7 +3,7 @@
 //
 // A run's index lives under <base>/<source-bucket>/<inventory-id>/<run>/,
 // the same layout S3 Inventory uses for its reports. Its manifest.json,
-// which lists every file with its size and SHA-256, is written last:
+// which lists every file with its size and checksum, is written last:
 // its presence commits the run, so a reader never sees a partial index,
 // and a fetch verifies every file against it before the index is used.
 package indexstore
