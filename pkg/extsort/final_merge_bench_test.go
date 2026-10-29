@@ -17,9 +17,11 @@ import (
 // iterator the index build reads, with the merger's default fan-in
 // under a given GOMEMLIMIT: the shape of a large build's merge phase.
 // With heavy overlap each prefix sits in ~runs/8 runs (spills of
-// unsorted inventories); with light overlap in about one (key-ordered
-// inventories). Reports the merge's peak heap, the disk rounds it took
-// and the bytes those rounds wrote.
+// unsorted inventories); with light overlap in about one, the runs'
+// keys interleaved; with none each run holds its own range of keys
+// (spills of key-ordered inventories), so one run wins row after row.
+// Reports the merge's peak heap, the disk rounds it took and the bytes
+// those rounds wrote.
 func BenchmarkFinalMerge(b *testing.B) {
 	benchutil.SilenceZerolog(b)
 	for _, tc := range []struct {
@@ -30,16 +32,15 @@ func BenchmarkFinalMerge(b *testing.B) {
 		{runs: 48, limitMiB: 1024},
 		{runs: 128, limitMiB: 1024},
 	} {
-		for _, heavy := range []bool{true, false} {
-			overlap := map[bool]string{true: "heavy", false: "light"}[heavy]
+		for _, overlap := range []string{"heavy", "light", "none"} {
 			b.Run(fmt.Sprintf("runs=%d/limit=%dMiB/overlap=%s", tc.runs, tc.limitMiB, overlap), func(b *testing.B) {
-				benchFinalMerge(b, tc.runs, tc.limitMiB<<20, heavy)
+				benchFinalMerge(b, tc.runs, tc.limitMiB<<20, overlap)
 			})
 		}
 	}
 }
 
-func benchFinalMerge(b *testing.B, runs int, limit int64, heavy bool) {
+func benchFinalMerge(b *testing.B, runs int, limit int64, overlap string) {
 	b.Helper()
 	const rowsPerRun = 20_000
 	prev := debug.SetMemoryLimit(limit)
@@ -50,7 +51,7 @@ func benchFinalMerge(b *testing.B, runs int, limit int64, heavy bool) {
 	for range b.N {
 		b.StopTimer()
 		dir := b.TempDir()
-		paths := writeOverlappingRuns(b, dir, runs, rowsPerRun, heavy)
+		paths := writeOverlappingRuns(b, dir, runs, rowsPerRun, overlap)
 		// Collect the run writers' garbage first, so the peak is the
 		// merge's own and not whatever the GC had yet to free.
 		runtime.GC()
@@ -84,12 +85,12 @@ func benchFinalMerge(b *testing.B, runs int, limit int64, heavy bool) {
 
 // writeOverlappingRuns writes runs sorted spill runs drawn from one key
 // space: heavy overlap puts each prefix in ~runs/8 of them, light in
-// about one.
-func writeOverlappingRuns(b *testing.B, dir string, runs, rowsPerRun int, heavy bool) []string {
+// about one, and none gives run r the directory p<r> to itself.
+func writeOverlappingRuns(b *testing.B, dir string, runs, rowsPerRun int, overlap string) []string {
 	b.Helper()
 	paths := make([]string, 0, runs)
 	keySpace := rowsPerRun * runs * 2
-	if heavy {
+	if overlap == "heavy" {
 		keySpace = rowsPerRun * 8
 	}
 	for r := range runs {
@@ -97,12 +98,16 @@ func writeOverlappingRuns(b *testing.B, dir string, runs, rowsPerRun int, heavy 
 		seen := make(map[int]bool, rowsPerRun)
 		for j := range rowsPerRun {
 			k := (j*7919 + r*104729) % keySpace
+			parent := k % 1000
+			if overlap == "none" {
+				k, parent = r*rowsPerRun+j, r
+			}
 			if seen[k] {
 				continue
 			}
 			seen[k] = true
 			row := &extsort.PrefixRow{
-				Prefix:     fmt.Sprintf("bucket/logs/p%04d/k%07d/", k%1000, k),
+				Prefix:     fmt.Sprintf("bucket/logs/p%04d/k%07d/", parent, k),
 				Depth:      4,
 				Count:      uint64(j + 1),
 				TotalBytes: uint64(j+1) * 4096,

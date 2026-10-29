@@ -46,7 +46,7 @@ func BenchmarkReadPrefixRowReused(b *testing.B) {
 		d := runRecordDecoder{in: readWindow{r: bufio.NewReaderSize(bytes.NewReader(body), mergeReaderBufferSize)}}
 		row := &PrefixRow{}
 		for {
-			err := d.next(row)
+			_, err := d.next(row)
 			if errors.Is(err, io.EOF) {
 				break
 			}

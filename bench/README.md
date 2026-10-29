@@ -155,7 +155,7 @@ Ingestion (`bench/suite/ingest.txt`):
 - `pkg/format` `BenchmarkMPHFBuild` at 1M prefixes: the MPHF finalize
   step on its own, with `peak_heap_B`.
 - `pkg/extsort` `BenchmarkFinalMerge`: 48 or 128 spilled runs merged
-  under a 256 MiB or 1 GiB `GOMEMLIMIT`, heavy and light key overlap;
+  under a 256 MiB or 1 GiB `GOMEMLIMIT`, heavy, light and no key overlap;
   reports `peak_heap_B`, `rounds` and `round_bytes` (fan-in sizing).
 - `pkg/tiers` `BenchmarkFromS3`: storage class and access tier to tier
   ID, once per row, for canonical, Intelligent-Tiering and lowercase

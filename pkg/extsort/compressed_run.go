@@ -345,19 +345,28 @@ func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, e
 // ReadInto reads the next row into the caller-owned PrefixRow. A
 // stream that ends before the header's count is corrupt.
 func (r *CompressedRunReader) ReadInto(into *PrefixRow) error {
+	_, err := r.readNext(into)
+
+	return err
+}
+
+// readNext is ReadInto that also returns how many bytes of the previous
+// row's prefix the row's prefix was coded as starting with.
+func (r *CompressedRunReader) readNext(into *PrefixRow) (int, error) {
 	if r.read >= r.count {
-		return io.EOF
+		return 0, io.EOF
 	}
-	if err := r.records.next(into); err != nil {
+	shared, err := r.records.next(into)
+	if err != nil {
 		if errors.Is(err, io.EOF) {
-			return fmt.Errorf("%w: run ends after %d of %d records", errRunRecordCorrupt, r.read, r.count)
+			return 0, fmt.Errorf("%w: run ends after %d of %d records", errRunRecordCorrupt, r.read, r.count)
 		}
 
-		return err
+		return 0, err
 	}
 	r.read++
 
-	return nil
+	return shared, nil
 }
 
 func (r *CompressedRunReader) Count() uint64 {

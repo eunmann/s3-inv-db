@@ -1351,7 +1351,7 @@ type singleRunIterator struct {
 }
 
 func (s *singleRunIterator) Next() (*PrefixRow, error) {
-	if err := s.reader.ReadInto(&s.row); err != nil {
+	if _, err := s.reader.readNext(&s.row); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
