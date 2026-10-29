@@ -36,18 +36,20 @@ type Aggregator struct {
 	slabs   [][]aggNode
 	parents [][]uint32
 	segs    segmentArena
-	// path holds the nodes of the previous key's prefixes by depth
-	// (path[0] is the root): the next key reuses the ones whose prefix
-	// it starts with and looks up only the levels below. Keys in order
-	// share most of their path; S3 Inventory doesn't promise any order,
-	// so this is a saving, never an assumption.
-	path []aggPathEntry
+	// path holds the nodes of lastKey's prefixes by depth (path[0] is the
+	// root), the previous key's: the next key reuses the ones whose
+	// prefix it starts with and looks up only the levels below. Keys in
+	// order share most of their path; S3 Inventory doesn't promise any
+	// order, so this is a saving, never an assumption. The length of the
+	// prefix the next key shares with lastKey decides both which levels
+	// it reuses and, in an ordered segment, whether it is in order, so
+	// lastKey is kept whether or not the keys are.
+	path    []aggPathEntry
+	lastKey []byte
 	// segments are the nodes since the last Drain by the StartSegment
-	// that began them (a chunk each), and lastKey is the previous key of
-	// the current one. A segment whose keys come in order needs no node
-	// table lookup; see StartSegment.
+	// that began them (a chunk each). A segment whose keys come in order
+	// needs no node table lookup; see StartSegment.
 	segments []aggSegment
-	lastKey  []byte
 	// Drain's output and scratch, and mapSegment's (graft), reused the
 	// same way as the slabs.
 	drained    []*PrefixRow
@@ -143,29 +145,24 @@ func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 // The key should be the full S3 object key (e.g., "data/2024/01/file.csv").
 func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 	a.tierMask |= uint16(1) << tierID
+	last := unsafe.String(unsafe.SliceData(a.lastKey), len(a.lastKey))
+	shared := sharedPrefixLen(key, last)
 	ordered := a.inOrder()
-	if ordered {
-		if key < string(a.lastKey) {
-			a.mapSegment()
-			ordered = false
-		} else {
-			a.lastKey = append(a.lastKey[:0], key...)
-		}
+	if ordered && shared < len(last) && (shared == len(key) || key[shared] < last[shared]) {
+		a.mapSegment()
+		ordered = false
 	}
+	a.lastKey = append(a.lastKey[:shared], key[shared:]...)
 
 	path := a.path
 	if len(path) == 0 {
 		path = append(path, a.rootEntry(ordered))
 	}
 	path[0].n.row.add(size, tierID)
-	// Reuse the previous key's nodes while this key starts with their
-	// prefixes; each level adds one segment, so only it is compared.
+	// The previous key's prefixes no longer than the bytes this key
+	// shares with it are this key's too.
 	d := 1
-	for ; d < len(path); d++ {
-		start, end := path[d-1].end, path[d].end
-		if len(key) < end || key[start:end] != path[d].n.row.Prefix {
-			break
-		}
+	for ; d < len(path) && path[d].end <= shared; d++ {
 		path[d].n.row.add(size, tierID)
 	}
 	path = path[:d]

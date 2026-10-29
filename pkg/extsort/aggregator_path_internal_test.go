@@ -185,6 +185,94 @@ func TestAggregatorSegmentsAreExact(t *testing.T) {
 	}
 }
 
+// adversarialKeySequences are key sequences whose consecutive keys
+// share a prefix ending at the edges AddObject decides order and path
+// reuse by: keys that are prefixes of each other, equal keys, keys out of
+// order only at their last byte, shared prefixes ending at a '/' or just
+// after one, bytes either side of '/', keys without a '/' and keys
+// around a maxDepth of 1 to 3.
+var adversarialKeySequences = map[string][]string{
+	"prefixes_ascending":  {"", "a", "a/", "a/b", "a/b/", "a/b/c", "a/b/c/", "a/b/c/d"},
+	"prefixes_descending": {"a/b/c/d", "a/b/c/", "a/b/c", "a/b/", "a/b", "a/", "a", ""},
+	"prefix_then_longer":  {"a/b/", "a/b/c/", "a/b/", "a/b/c/d/e/", "a/b/c/d/e/f", "a/b/c/d/e/"},
+	"equal":               {"", "", "a/b/c", "a/b/c", "a/b/c", "x/", "x/", "noslash", "noslash"},
+	"last_byte_down":      {"a/b/c2", "a/b/c1"},
+	"last_byte_down_dir":  {"a/b/x/", "a/b/x."},
+	"last_byte_down_seg":  {"a/b1/", "a/b0/"},
+	"last_byte_up":        {"a/b/c1", "a/b/c2", "a/b/x.", "a/b/x/"},
+	"lcp_at_slash":        {"a/b/c", "a/bc", "a/b-/x", "a/b/x", "a/b", "a/b/"},
+	"lcp_after_slash":     {"a/b/c", "a/b/d", "a/b/", "a/b/x/y", "a/b/x/z/", "a/b/y/"},
+	"lcp_after_slash_up":  {"a/b/", "a/b/c", "a/b/c/", "a/b/c/d", "a/b/d/", "a/c/"},
+	"no_slash":            {"abc", "abd", "ab", "abc", "b", "a"},
+	"no_slash_ascending":  {"", "a", "ab", "abc", "abd", "b"},
+	"max_depth":           {"a/b/c/d/e", "a/b/c/d/f", "a/b/c/x/e", "a/b/y/d/e", "a/b/", "a/b/c/", "a/b/c/d/", "a/b/c/d/e/"},
+	"max_depth_down":      {"a/b/c/d/f", "a/b/c/d/e", "a/b/c/e/", "a/b/c/", "a/b/c"},
+	"empty_segments":      {"//", "///", "//a", "/", "a//", "a//b", "a/"},
+}
+
+// TestAggregatorAdversarialOrdersAreExact: for each adversarial
+// sequence, forward and reversed, an ordered segment maps exactly at the
+// first key below the one before it, and the rows equal a direct count
+// whether the keys come in one segment, without segments, or in
+// segments cut by Drains, at maxDepths around the keys' depths.
+func TestAggregatorAdversarialOrdersAreExact(t *testing.T) {
+	var all []string
+	for _, seq := range adversarialKeySequences {
+		all = append(all, seq...)
+	}
+	sortedAll := slices.Clone(all)
+	slices.Sort(sortedAll)
+	sequences := map[string][]string{"all": all, "all_sorted": sortedAll}
+	for name, seq := range adversarialKeySequences {
+		sequences[name] = seq
+		reversed := slices.Clone(seq)
+		slices.Reverse(reversed)
+		sequences[name+"/reversed"] = reversed
+	}
+	for name, seq := range sequences {
+		agg := NewAggregator(0, 0)
+		agg.StartSegment()
+		for i, k := range seq {
+			agg.AddObject(k, 1, tiers.Standard)
+			if want := slices.IsSorted(seq[:i+1]); agg.inOrder() != want {
+				t.Fatalf("%s: after key %d (%q), in order = %v, want %v", name, i, k, agg.inOrder(), want)
+			}
+		}
+		for _, maxDepth := range []int{0, 1, 2, 3, 4} {
+			for _, segmentEvery := range []int{0, len(seq), 3} {
+				for _, drainEvery := range []int{0, 1, 2, 5} {
+					agg := NewAggregator(0, maxDepth)
+					got := map[string]PrefixRow{}
+					drain := func() {
+						checkAggregatorAccounting(t, agg)
+						rows := agg.Drain()
+						for i := 1; i < len(rows); i++ {
+							if rows[i-1].Prefix >= rows[i].Prefix {
+								t.Fatalf("%s: drained %q then %q", name, rows[i-1].Prefix, rows[i].Prefix)
+							}
+						}
+						mergeRows(got, rows)
+					}
+					for i, k := range seq {
+						if segmentEvery > 0 && i%segmentEvery == 0 {
+							agg.StartSegment()
+						}
+						agg.AddObject(k, uint64(len(k)+i), tiers.ID(i%3))
+						if drainEvery > 0 && i%drainEvery == drainEvery-1 {
+							drain()
+						}
+					}
+					drain()
+					if want := referenceAggregate(seq, maxDepth); !maps.Equal(want, got) {
+						t.Fatalf("%s maxDepth=%d segmentEvery=%d drainEvery=%d (-reference +aggregator):\n%s",
+							name, maxDepth, segmentEvery, drainEvery, gocmp.Diff(want, got))
+					}
+				}
+			}
+		}
+	}
+}
+
 // checkAggregatorAccounting recomputes from the nodes what the
 // aggregator has counted: the estimate (every node and its key, the
 // prefix of each live one, the node table's slots) and the prefix bytes
