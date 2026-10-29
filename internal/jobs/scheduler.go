@@ -61,9 +61,9 @@ type Scheduler struct {
 	bus             *Bus
 	cancels         map[ID]context.CancelCauseFunc
 	liveByInventory map[inventory.ID]ID
-	// live holds the newest snapshot of every queued or running job, so
-	// readers see progress as it is published instead of the store's
-	// copy, which trails it by up to progressPersistEvery.
+	// live holds the newest snapshot of every job until its run
+	// returns, so readers see progress as it is published instead of
+	// the store's copy, which trails it by up to progressPersistEvery.
 	live           map[ID]Job
 	sem            chan struct{}
 	maxConcurrency int
@@ -466,30 +466,29 @@ func (s *Scheduler) persist(ctx context.Context, j *Job) {
 	}
 }
 
-// persistAndPublish writes a state transition, then announces it. A
-// terminal job leaves the live set only once the store holds its final
-// state, so a reader never falls back to an older stored snapshot.
+// persistAndPublish records a state transition in the live set, writes
+// it to the store, then announces it. Readers prefer the live snapshot
+// over the store's, so it moves first and is never behind the store; a
+// terminal job leaves the live set when run returns, after the store
+// holds its final state.
 func (s *Scheduler) persistAndPublish(ctx context.Context, j *Job) {
-	s.persist(ctx, j)
 	s.track(*j)
+	s.persist(ctx, j)
 	s.bus.Publish(*j)
 }
 
-// track records j as its job's newest snapshot while it is live.
+// track records j as its job's newest snapshot until run returns.
 func (s *Scheduler) track(j Job) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if j.State.IsTerminal() {
-		delete(s.live, j.ID)
-
-		return
-	}
 	if _, ok := s.cancels[j.ID]; ok {
 		s.live[j.ID] = j
 	}
 }
 
-// Live returns the newest snapshot of every queued or running job.
+// Live returns the newest snapshot of every job whose goroutine is
+// still running: queued, running, or terminal while that state is
+// being written.
 func (s *Scheduler) Live() []Job {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -501,8 +500,8 @@ func (s *Scheduler) Live() []Job {
 	return out
 }
 
-// LiveForInventory returns the newest snapshot of inv's queued or
-// running job, if it has one.
+// LiveForInventory returns the newest snapshot of inv's job in Live, if
+// it has one.
 func (s *Scheduler) LiveForInventory(inv inventory.ID) (Job, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
