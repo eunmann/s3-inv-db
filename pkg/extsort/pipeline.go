@@ -1141,6 +1141,7 @@ func (p *Pipeline) runMergePhase(ctx context.Context, log *zerolog.Logger, numRu
 		BufferSize:       int(perReaderBuffer),
 		TempDir:          p.tempDir,
 		CompressionLevel: CompressionFastest,
+		memoryRuns:       len(p.memRuns),
 		OnRoundComplete: func(round, remaining int) {
 			p.reportProgress("merging", int64(numRunFiles-remaining), int64(numRunFiles))
 			p.publish(events.Event{

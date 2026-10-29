@@ -32,29 +32,58 @@ func (s *sliceIterator) Next() (*PrefixRow, error) {
 
 func (s *sliceIterator) Remaining() uint64 { return uint64(s.n - s.i) }
 
+// sliceFiller is a sliceIterator that writes rows into the caller's.
+type sliceFiller struct{ *sliceIterator }
+
+func (s sliceFiller) nextInto(row *PrefixRow) error {
+	next, err := s.Next()
+	if err != nil {
+		return err
+	}
+	*row = *next
+
+	return nil
+}
+
+// prefetchInners are the iterators prefetching reads: one it copies
+// rows out of, and one that writes them into its batches.
+var prefetchInners = []struct {
+	name string
+	wrap func(*sliceIterator) RowIterator
+}{
+	{"next", func(s *sliceIterator) RowIterator { return s }},
+	{"filler", func(s *sliceIterator) RowIterator { return sliceFiller{s} }},
+}
+
 func TestPrefetchIterator_YieldsEveryRowInOrder(t *testing.T) {
-	for _, n := range []int{0, 1, prefetchBatchRows - 1, prefetchBatchRows, 5*prefetchBatchRows + 17} {
-		t.Run(strconv.Itoa(n), func(t *testing.T) {
-			p := newPrefetchIterator(&sliceIterator{n: n})
-			defer p.stop()
-			if p.Remaining() != uint64(n) {
-				t.Fatalf("Remaining = %d, want %d", p.Remaining(), n)
-			}
-			for i := range n {
-				row, err := p.Next()
-				if err != nil {
-					t.Fatalf("row %d: %v", i, err)
-				}
-				if row.Count != uint64(i) || row.Prefix != fmt.Sprintf("p%07d/", i) {
-					t.Fatalf("row %d = %q/%d", i, row.Prefix, row.Count)
-				}
-			}
-			for range 2 {
-				if _, err := p.Next(); !errors.Is(err, io.EOF) {
-					t.Fatalf("after %d rows: err = %v, want io.EOF", n, err)
-				}
-			}
-		})
+	for _, inner := range prefetchInners {
+		for _, n := range []int{0, 1, prefetchBatchRows - 1, prefetchBatchRows, 5*prefetchBatchRows + 17} {
+			t.Run(inner.name+"/"+strconv.Itoa(n), func(t *testing.T) {
+				checkPrefetchYieldsEveryRow(t, newPrefetchIterator(inner.wrap(&sliceIterator{n: n})), n)
+			})
+		}
+	}
+}
+
+func checkPrefetchYieldsEveryRow(t *testing.T, p *prefetchIterator, n int) {
+	t.Helper()
+	defer p.stop()
+	if p.Remaining() != uint64(n) {
+		t.Fatalf("Remaining = %d, want %d", p.Remaining(), n)
+	}
+	for i := range n {
+		row, err := p.Next()
+		if err != nil {
+			t.Fatalf("row %d: %v", i, err)
+		}
+		if row.Count != uint64(i) || row.Prefix != fmt.Sprintf("p%07d/", i) {
+			t.Fatalf("row %d = %q/%d", i, row.Prefix, row.Count)
+		}
+	}
+	for range 2 {
+		if _, err := p.Next(); !errors.Is(err, io.EOF) {
+			t.Fatalf("after %d rows: err = %v, want io.EOF", n, err)
+		}
 	}
 }
 
@@ -62,15 +91,19 @@ var errInner = errors.New("inner failed")
 
 func TestPrefetchIterator_SurfacesErrorAfterRowsBeforeIt(t *testing.T) {
 	const n = prefetchBatchRows + 10
-	p := newPrefetchIterator(&sliceIterator{n: n, err: errInner})
-	defer p.stop()
-	for i := range n {
-		if _, err := p.Next(); err != nil {
-			t.Fatalf("row %d: %v", i, err)
-		}
-	}
-	if _, err := p.Next(); !errors.Is(err, errInner) {
-		t.Fatalf("err = %v, want errInner", err)
+	for _, inner := range prefetchInners {
+		t.Run(inner.name, func(t *testing.T) {
+			p := newPrefetchIterator(inner.wrap(&sliceIterator{n: n, err: errInner}))
+			defer p.stop()
+			for i := range n {
+				if _, err := p.Next(); err != nil {
+					t.Fatalf("row %d: %v", i, err)
+				}
+			}
+			if _, err := p.Next(); !errors.Is(err, errInner) {
+				t.Fatalf("err = %v, want errInner", err)
+			}
+		})
 	}
 }
 

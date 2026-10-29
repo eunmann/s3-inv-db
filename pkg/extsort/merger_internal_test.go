@@ -252,9 +252,44 @@ func drainMerge(sources []runSource) ([]PrefixRow, error) {
 	}
 }
 
+// drainAhead merges sources decoded ahead in batches of batchRows and
+// returns every row, or the first error.
+func drainAhead(sources []runSource, batchRows int) ([]PrefixRow, error) {
+	it, err := newAheadMerge(sources, batchRows)
+	if err != nil {
+		return nil, err
+	}
+	defer it.Close()
+	var out []PrefixRow
+	for {
+		var row PrefixRow
+		err := it.nextInto(&row)
+		if errors.Is(err, io.EOF) {
+			return out, nil
+		}
+		if err != nil {
+			return out, err
+		}
+		out = append(out, row)
+	}
+}
+
+// mergeDrains are the merges the tests check: MergeIterator, and the
+// final merge decoding ahead in batches of one row, of a few (every
+// batch boundary a run meets) and of the size it runs with.
+var mergeDrains = []struct {
+	name  string
+	drain func([]runSource) ([]PrefixRow, error)
+}{
+	{"iterator", drainMerge},
+	{"ahead_1", func(s []runSource) ([]PrefixRow, error) { return drainAhead(s, 1) }},
+	{"ahead_3", func(s []runSource) ([]PrefixRow, error) { return drainAhead(s, 3) }},
+	{"ahead", func(s []runSource) ([]PrefixRow, error) { return drainAhead(s, aheadBatchRows) }},
+}
+
 // checkMerge merges runs from memory, and with every other run (odd or
-// even) read from a file, and checks each against a scan and against
-// the heap merge.
+// even) read from a file, with each of mergeDrains, and checks each
+// against a scan and against the heap merge.
 func checkMerge(t *testing.T, runs [][]PrefixRow, rng *rand.Rand) {
 	t.Helper()
 	want := scanMerge(runs)
@@ -263,18 +298,20 @@ func checkMerge(t *testing.T, runs [][]PrefixRow, rng *rand.Rand) {
 	}
 	for _, src := range []struct {
 		name    string
-		sources []runSource
+		sources func() []runSource
 	}{
-		{"memory", memSources(runs)},
-		{"files_even", mixedSources(t, t.TempDir(), runs, true, rng)},
-		{"files_odd", mixedSources(t, t.TempDir(), runs, false, rng)},
+		{"memory", func() []runSource { return memSources(runs) }},
+		{"files_even", func() []runSource { return mixedSources(t, t.TempDir(), runs, true, rng) }},
+		{"files_odd", func() []runSource { return mixedSources(t, t.TempDir(), runs, false, rng) }},
 	} {
-		got, err := drainMerge(src.sources)
-		if err != nil {
-			t.Fatalf("%s: merge: %v", src.name, err)
-		}
-		if !slices.Equal(got, want) {
-			t.Fatalf("%s: merge differs from the scan and the heap merge: %s", src.name, firstRowDiff(got, want))
+		for _, m := range mergeDrains {
+			got, err := m.drain(src.sources())
+			if err != nil {
+				t.Fatalf("%s/%s: merge: %v", src.name, m.name, err)
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("%s/%s: merge differs from the scan and the heap merge: %s", src.name, m.name, firstRowDiff(got, want))
+			}
 		}
 	}
 }
@@ -316,12 +353,14 @@ func TestMergeIteratorExhaustive(t *testing.T) {
 				runs[r] = sortedTestRun(keys, uint64(r*n+1))
 			}
 			want := scanMerge(runs)
-			got, err := drainMerge(memSources(runs))
-			if err != nil {
-				t.Fatalf("keys %q, combination %#x: %v", c.keys, combo, err)
-			}
-			if !slices.Equal(got, want) {
-				t.Fatalf("keys %q, combination %#x: %s", c.keys, combo, firstRowDiff(got, want))
+			for _, m := range mergeDrains[:2] {
+				got, err := m.drain(memSources(runs))
+				if err != nil {
+					t.Fatalf("%s: keys %q, combination %#x: %v", m.name, c.keys, combo, err)
+				}
+				if !slices.Equal(got, want) {
+					t.Fatalf("%s: keys %q, combination %#x: %s", m.name, c.keys, combo, firstRowDiff(got, want))
+				}
 			}
 		}
 	}
@@ -541,12 +580,14 @@ func TestMergeIteratorRejectsUnsortedRun(t *testing.T) {
 				run[i] = mergeTestRow(k, uint64(i))
 			}
 			other := sortedTestRun([]string{"0/", "c/"}, 9)
-			for _, sources := range [][]runSource{
-				memSources([][]PrefixRow{run, other}),
-				mixedSources(t, t.TempDir(), [][]PrefixRow{run, other}, true, rng),
-			} {
-				if _, err := drainMerge(sources); !errors.Is(err, ErrUnsortedInput) {
-					t.Fatalf("merge = %v, want ErrUnsortedInput", err)
+			for _, m := range mergeDrains {
+				for _, sources := range [][]runSource{
+					memSources([][]PrefixRow{run, other}),
+					mixedSources(t, t.TempDir(), [][]PrefixRow{run, other}, true, rng),
+				} {
+					if _, err := m.drain(sources); !errors.Is(err, ErrUnsortedInput) {
+						t.Fatalf("%s: merge = %v, want ErrUnsortedInput", m.name, err)
+					}
 				}
 			}
 		})

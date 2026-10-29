@@ -20,7 +20,9 @@ const (
 // A returned row is valid until the next call to Next. Call stop
 // before closing whatever inner reads from.
 type prefetchIterator struct {
-	inner     RowIterator
+	inner RowIterator
+	// filler is inner when it can write rows into the batch itself.
+	filler    rowFiller
 	full      chan rowBatch
 	free      chan []PrefixRow
 	done      chan struct{}
@@ -33,6 +35,12 @@ type prefetchIterator struct {
 	inputLeft atomic.Uint64
 	idx       int
 	started   bool
+}
+
+// rowFiller is a RowIterator that writes its next row into the
+// caller's, saving a copy.
+type rowFiller interface {
+	nextInto(row *PrefixRow) error
 }
 
 // rowBatch is a run of rows and the error, possibly io.EOF, that ended
@@ -52,6 +60,7 @@ func newPrefetchIterator(inner RowIterator) *prefetchIterator {
 		remaining: inner.Remaining(),
 	}
 	p.inputLeft.Store(p.remaining)
+	p.filler, _ = inner.(rowFiller)
 
 	return p
 }
@@ -70,27 +79,39 @@ func (p *prefetchIterator) run() {
 		case <-p.done:
 			return
 		}
-		rows = rows[:0]
-		var err error
-		for len(rows) < cap(rows) {
-			row, nextErr := p.inner.Next()
-			if nextErr != nil {
-				err = nextErr
-
-				break
-			}
-			rows = append(rows, *row)
-		}
+		batch := p.fill(rows)
 		p.inputLeft.Store(p.inner.Remaining())
 		select {
-		case p.full <- rowBatch{rows: rows, err: err}:
+		case p.full <- batch:
 		case <-p.done:
 			return
 		}
-		if err != nil {
+		if batch.err != nil {
 			return
 		}
 	}
+}
+
+// fill fills buf, a batch's buffer, from inner: fewer rows if the
+// error that ends inner comes first.
+func (p *prefetchIterator) fill(buf []PrefixRow) rowBatch {
+	rows := buf[:cap(buf)]
+	for n := range rows {
+		var err error
+		if p.filler != nil {
+			err = p.filler.nextInto(&rows[n])
+		} else {
+			var row *PrefixRow
+			if row, err = p.inner.Next(); err == nil {
+				rows[n] = *row
+			}
+		}
+		if err != nil {
+			return rowBatch{rows: rows[:n], err: err}
+		}
+	}
+
+	return rowBatch{rows: rows}
 }
 
 // Next returns the next row, or the error that ended inner (io.EOF at

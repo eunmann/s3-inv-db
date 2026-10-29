@@ -33,6 +33,10 @@ type ParallelMergeConfig struct {
 	// BufferSize is each run reader's buffer.
 	BufferSize       int
 	CompressionLevel CompressionLevel
+	// memoryRuns is how many runs held in memory the final merge reads
+	// beside the files: each decodes ahead too, so a sized FinalFanIn
+	// leaves room for their read-ahead.
+	memoryRuns int
 }
 
 // mergeReaderBufferSize is each merge reader's buffer. The zstd decoder
@@ -53,7 +57,8 @@ const DefaultFinalFanIn = 64
 
 // openRunHeapBytes is the heap one open run reader holds: its decoder's
 // block buffers and window history plus the read buffer, measured at
-// ~2.1 MB and rounded up.
+// ~2.1 MB and rounded up. The final merge's readers each hold
+// aheadRunHeapBytes more, for the rows they decode ahead.
 const openRunHeapBytes = 5 << 19
 
 // OpenRunsFractionOfLimit is the share of GOMEMLIMIT the open run
@@ -63,24 +68,26 @@ const openRunHeapBytes = 5 << 19
 // and the index build.
 const OpenRunsFractionOfLimit = 0.25
 
-// openRunBudget is how many run readers a merge may hold open under
+// openRunBytes is the heap a merge's open run readers may hold under
 // memoryLimit, and false when the limit is unset.
-func openRunBudget(memoryLimit int64) (int, bool) {
+func openRunBytes(memoryLimit int64) (int64, bool) {
 	if memoryLimit <= 0 || memoryLimit >= unsetMemoryLimit {
 		return 0, false
 	}
 
-	return int(float64(memoryLimit) * OpenRunsFractionOfLimit / openRunHeapBytes), true
+	return int64(float64(memoryLimit) * OpenRunsFractionOfLimit), true
 }
 
 // finalFanInFor sizes the final merge's fan-in: DefaultFinalFanIn, or
-// as many runs as the memory limit's open-run budget holds when that is
-// fewer, and at least maxFanIn. A small limit takes disk rounds rather
-// than outgrow it.
-func finalFanInFor(memoryLimit int64, maxFanIn int) int {
+// as many runs as the memory limit's open-run budget holds beside the
+// read-ahead of memoryRuns runs in memory when that is fewer, and at
+// least maxFanIn. A small limit takes disk rounds rather than outgrow
+// it.
+func finalFanInFor(memoryLimit int64, maxFanIn, memoryRuns int) int {
 	fanIn := DefaultFinalFanIn
-	if budget, ok := openRunBudget(memoryLimit); ok {
-		fanIn = min(fanIn, budget)
+	if budget, ok := openRunBytes(memoryLimit); ok {
+		budget -= int64(memoryRuns) * aheadRunHeapBytes
+		fanIn = min(fanIn, int(max(budget, 0)/(openRunHeapBytes+aheadRunHeapBytes)))
 	}
 
 	return max(fanIn, maxFanIn)
@@ -90,12 +97,12 @@ func finalFanInFor(memoryLimit int64, maxFanIn int) int {
 // readers, maxFanIn each, fit the open-run budget. An unset limit
 // keeps numWorkers.
 func roundWorkersFor(memoryLimit int64, numWorkers, maxFanIn int) int {
-	budget, ok := openRunBudget(memoryLimit)
+	budget, ok := openRunBytes(memoryLimit)
 	if !ok {
 		return numWorkers
 	}
 
-	return min(numWorkers, max(budget/maxFanIn, 1))
+	return min(numWorkers, max(int(budget/openRunHeapBytes)/maxFanIn, 1))
 }
 
 // ParallelMerger coordinates parallel merging of sorted run files.
@@ -122,7 +129,7 @@ func NewParallelMerger(config ParallelMergeConfig) *ParallelMerger {
 	limit := readMemoryLimit()
 	config.NumWorkers = roundWorkersFor(limit, config.NumWorkers, config.MaxFanIn)
 	if config.FinalFanIn <= 0 {
-		config.FinalFanIn = finalFanInFor(limit, config.MaxFanIn)
+		config.FinalFanIn = finalFanInFor(limit, config.MaxFanIn, config.memoryRuns)
 	}
 	config.FinalFanIn = max(config.FinalFanIn, config.MaxFanIn)
 
@@ -187,7 +194,8 @@ func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []st
 // mergeAllToIterator is MergeAllToIterator with sorted runs held in
 // memory joining the final merge beside the files. They still decode
 // records but need no read buffer or zstd stream, so they don't count
-// toward FinalFanIn.
+// toward FinalFanIn; a FinalFanIn sized from GOMEMLIMIT leaves room for
+// their read-ahead when config.memoryRuns counts them.
 func (m *ParallelMerger) mergeAllToIterator(ctx context.Context, inputPaths []string, inMemory []*memRun) (RowIterator, func() error, error) {
 	if len(inputPaths) == 0 && len(inMemory) == 0 {
 		return nil, func() error { return nil }, ErrNoInputPaths
@@ -243,8 +251,8 @@ func (m *ParallelMerger) mergeAllToIterator(ctx context.Context, inputPaths []st
 }
 
 // finalIterator opens the final merge over the files and the in-memory
-// runs.
-func (m *ParallelMerger) finalIterator(paths []string, inMemory []*memRun) (*MergeIterator, error) {
+// runs, each decoded ahead on its own goroutine.
+func (m *ParallelMerger) finalIterator(paths []string, inMemory []*memRun) (*aheadMerge, error) {
 	sources := make([]runSource, 0, len(paths)+len(inMemory))
 	for _, path := range paths {
 		r, err := OpenCompressedRunFile(path, m.config.BufferSize)
@@ -261,7 +269,7 @@ func (m *ParallelMerger) finalIterator(paths []string, inMemory []*memRun) (*Mer
 		sources = append(sources, run)
 	}
 
-	return newMergeIterator(sources)
+	return newAheadMerge(sources, aheadBatchRows)
 }
 
 // roundPlan is one disk round: the groups to merge, each into one new
