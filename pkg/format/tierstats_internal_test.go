@@ -409,7 +409,7 @@ func TestTierStatsWriterRejectsMalformedSlots(t *testing.T) {
 	rows := make([]tierTestRow, 1)
 	rows[0].counts[tiers.Snow], rows[0].bytes[tiers.Snow] = 3, 9
 	for _, force := range []tierLayout{tierLayoutDense, tierLayoutMulti} {
-		w, err := NewTierStatsWriter(t.TempDir(), planTierRows(t, present, rows, force, nil))
+		w, err := NewTierStatsWriter(t.TempDir(), planTierRows(t, present, rows, force, nil), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
