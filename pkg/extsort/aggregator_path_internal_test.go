@@ -2,6 +2,7 @@ package extsort
 
 import (
 	"cmp"
+	"maps"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -178,6 +179,79 @@ func TestAggregatorSegmentsAreExact(t *testing.T) {
 				drain()
 				if diff := gocmp.Diff(referenceAggregate(all, maxDepth), got, cmpopts.EquateEmpty()); diff != "" {
 					t.Fatalf("%s maxDepth=%d drainEvery=%d (-reference +aggregator):\n%s", name, maxDepth, drainEvery, diff)
+				}
+			}
+		}
+	}
+}
+
+// propertyTestKeys draws keys from segments that stress prefix order:
+// empty ones ("//"), bytes below '/' ('-', '.', ' ', 0x00), a segment
+// that is a byte prefix of its siblings ("a" beside "a-b" and "ab"),
+// multi-byte UTF-8, invalid UTF-8, keys without a slash and the empty
+// key.
+func propertyTestKeys(rng *rand.Rand, n int) []string {
+	segs := []string{"", "a", "a-b", "a.b", "ab", "a b", "a\x00", "\x00", "-", "é", "日本", "z\xff", "a/b"}
+	keys := make([]string, 0, n)
+	for range n {
+		var sb strings.Builder
+		for range rng.IntN(7) {
+			sb.WriteString(segs[rng.IntN(len(segs))])
+			if rng.IntN(8) > 0 {
+				sb.WriteByte('/')
+			}
+		}
+		keys = append(keys, sb.String())
+	}
+
+	return keys
+}
+
+// TestAggregatorDrainProperty: for random keys in random, sorted and
+// per-chunk sorted order, with and without segments, at several
+// maxDepths and with Drains mid-stream, every drain is strictly
+// increasing and the drains add up to a direct count.
+func TestAggregatorDrainProperty(t *testing.T) {
+	for seed := range uint64(6) {
+		rng := rand.New(rand.NewPCG(seed, 11))
+		keys := propertyTestKeys(rng, 1200)
+		sorted := slices.Clone(keys)
+		slices.Sort(sorted)
+		chunkSorted := slices.Clone(keys)
+		for i := 0; i < len(chunkSorted); i += 200 {
+			slices.Sort(chunkSorted[i:min(i+200, len(chunkSorted))])
+		}
+		orders := map[string][]string{"random": keys, "sorted": sorted, "chunk_sorted": chunkSorted}
+		for name, order := range orders {
+			for _, segmentEvery := range []int{0, 200, 37} {
+				for _, maxDepth := range []int{0, 1, 3} {
+					for _, drainEvery := range []int{0, 97, 701} {
+						agg := NewAggregator(0, maxDepth)
+						got := map[string]PrefixRow{}
+						drain := func() {
+							rows := agg.DrainSorted()
+							for i := 1; i < len(rows); i++ {
+								if rows[i-1].Prefix >= rows[i].Prefix {
+									t.Fatalf("seed=%d %s: drained %q then %q", seed, name, rows[i-1].Prefix, rows[i].Prefix)
+								}
+							}
+							mergeRows(got, rows)
+						}
+						for i, k := range order {
+							if segmentEvery > 0 && i%segmentEvery == 0 {
+								agg.StartSegment()
+							}
+							agg.AddObject(k, uint64(len(k)+i), tiers.ID(i%3))
+							if drainEvery > 0 && i%drainEvery == drainEvery-1 {
+								drain()
+							}
+						}
+						drain()
+						if want := referenceAggregate(order, maxDepth); !maps.Equal(want, got) {
+							t.Fatalf("seed=%d %s segmentEvery=%d maxDepth=%d drainEvery=%d (-reference +aggregator):\n%s",
+								seed, name, segmentEvery, maxDepth, drainEvery, gocmp.Diff(want, got))
+						}
+					}
 				}
 			}
 		}
