@@ -3,6 +3,7 @@ package benchutil
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -100,9 +101,9 @@ type ProcStats struct {
 // /proc/self/io read make the snapshot, so its counters agree in time.
 func ReadProcStats(tb testing.TB) ProcStats {
 	tb.Helper()
-	var ru unix.Rusage
-	if err := unix.Getrusage(unix.RUSAGE_SELF, &ru); err != nil {
-		tb.Fatalf("getrusage: %v", err)
+	ru, err := rusage()
+	if err != nil {
+		tb.Fatal(err)
 	}
 	pio := readProcIO()
 
@@ -114,6 +115,25 @@ func ReadProcStats(tb testing.TB) ProcStats {
 		Sys:         time.Duration(ru.Stime.Nano()),
 		WriteBytes:  pio.write - pio.cancelledWrite,
 	}
+}
+
+// ProcCPU is the process's user plus system CPU time so far, every
+// thread counted. It returns an error rather than taking a testing.TB so
+// it can run off the test goroutine, from a build's progress callback.
+func ProcCPU() (time.Duration, error) {
+	ru, err := rusage()
+	if err != nil {
+		return 0, err
+	}
+	return time.Duration(ru.Utime.Nano() + ru.Stime.Nano()), nil
+}
+
+func rusage() (unix.Rusage, error) {
+	var ru unix.Rusage
+	if err := unix.Getrusage(unix.RUSAGE_SELF, &ru); err != nil {
+		return ru, fmt.Errorf("getrusage: %w", err)
+	}
+	return ru, nil
 }
 
 // Sub returns s - prev.
