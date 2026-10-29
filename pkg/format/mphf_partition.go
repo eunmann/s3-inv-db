@@ -612,27 +612,38 @@ func positionMix(x uint64) uint64 {
 	return x ^ x>>splitmixShift3
 }
 
-// readSpill reads the count records of spill file sf, opening it if it
-// is not open, in chunks of buf, whole records, hands each chunk to fn,
-// and closes and removes the file. A file holding other than count
-// records fails.
+// readSpill hands spill file sf's count records to fn: those in its
+// file (opened by path if it is not open) in chunks of buf, whole
+// records, then those still in its buf. It closes and removes the file
+// and drops buf. Records other than count fail.
 func readSpill(sf *spillFile, count uint64, buf []byte, fn func(recs []byte) error) error {
-	if sf.f == nil {
+	tail := sf.buf
+	sf.buf = nil
+	inBuf := uint64(len(tail)) / spillRecordBytes
+	if inBuf > count || sf.f == nil && sf.path == "" && inBuf != count {
+		return fmt.Errorf("%w: MPHF spill holds %d of its %d keys in memory", ErrMPHFLookupFailed, inBuf, count)
+	}
+	if sf.f == nil && sf.path != "" {
 		f, err := os.Open(sf.path)
 		if err != nil {
 			return fmt.Errorf("open MPHF spill: %w", err)
 		}
 		sf.f = f
 	}
-	err := errors.Join(readRecords(sf.f, count, buf, fn), sf.closeFile())
-	if err != nil {
-		return fmt.Errorf("%s: %w", filepath.Base(sf.path), err)
+	if sf.f != nil {
+		err := errors.Join(readRecords(sf.f, count-inBuf, buf, fn), sf.closeFile())
+		if err != nil {
+			return fmt.Errorf("%s: %w", filepath.Base(sf.path), err)
+		}
+		if err := os.Remove(sf.path); err != nil {
+			return fmt.Errorf("remove MPHF spill: %w", err)
+		}
 	}
-	if err := os.Remove(sf.path); err != nil {
-		return fmt.Errorf("remove MPHF spill: %w", err)
+	if len(tail) == 0 {
+		return nil
 	}
 
-	return nil
+	return fn(tail)
 }
 
 func readRecords(f *os.File, count uint64, buf []byte, fn func(recs []byte) error) error {
@@ -666,6 +677,10 @@ func (h *MPHFBuild) split() error {
 	for w := range splitters {
 		wg.Go(func() {
 			subs := make([]spillFile, 1<<(h.plan.bits-spillBits))
+			slab := make([]byte, len(subs)*spillBufBytes)
+			for i := range subs {
+				subs[i].buf = slab[i*spillBufBytes : i*spillBufBytes : (i+1)*spillBufBytes]
+			}
 			read := make([]byte, spillReadBytes)
 			for b := int(next.Add(1) - 1); b < spillBuckets && !h.stopAll.Load(); b = int(next.Add(1) - 1) {
 				if errs[w] = h.splitBucket(b, subs, read); errs[w] != nil {
@@ -691,12 +706,7 @@ func (h *MPHFBuild) splitBucket(b int, subs []spillFile, read []byte) error {
 		for r := 0; r < len(recs); r += spillRecordBytes {
 			p := int(binary.LittleEndian.Uint64(recs[r:]) >> shift)
 			sf := &subs[p-first]
-			if sf.f == nil {
-				if err := sf.create(partPath(dir, p)); err != nil {
-					return err
-				}
-			}
-			if err := sf.room(); err != nil {
+			if err := sf.room(func() string { return partPath(dir, p) }); err != nil {
 				return err
 			}
 			sf.buf = append(sf.buf, recs[r:r+spillRecordBytes]...)
@@ -705,8 +715,13 @@ func (h *MPHFBuild) splitBucket(b int, subs []spillFile, read []byte) error {
 		return nil
 	})
 	for i := range subs {
-		if sf := &subs[i]; sf.f != nil {
-			err = errors.Join(err, sf.flush(), sf.closeFile())
+		sf := &subs[i]
+		if len(sf.buf) > 0 {
+			p := first + i
+			err = errors.Join(err, sf.writeOut(func() string { return partPath(dir, p) }))
+		}
+		if sf.f != nil {
+			err = errors.Join(err, sf.closeFile())
 		}
 	}
 

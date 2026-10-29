@@ -10,14 +10,16 @@ import (
 func TestStreamingMPHFBuilder_CloseSurfacesErrors(t *testing.T) {
 	dir := t.TempDir()
 	b := NewStreamingMPHFBuilder(dir)
-	if err := b.Add("a/"); err != nil {
-		t.Fatalf("Add: %v", err)
+	// Enough keys in bucket 1 to fill its buffer, so it has a file.
+	for i := range spillBufBytes/spillRecordBytes + 1 {
+		if err := b.AddKey(1<<(64-spillBits)|uint64(i), 0, uint64(i)); err != nil {
+			t.Fatalf("AddKey: %v", err)
+		}
 	}
 
 	// Close a spill file out from under the builder: Close must report
 	// the failure rather than swallow it.
-	keyHash, _ := b.KeyHashes("a/")
-	if err := b.spill.files[keyHash>>(64-spillBits)].f.Close(); err != nil {
+	if err := b.spill.files[1].f.Close(); err != nil {
 		t.Fatalf("preempt spill file close: %v", err)
 	}
 

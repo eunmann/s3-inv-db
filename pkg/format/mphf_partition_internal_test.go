@@ -562,11 +562,13 @@ func TestChoosePartBits(t *testing.T) {
 }
 
 // TestMPHFBuildAllocsIndependentOfKeys: Add and the build allocate per
-// spill file, partition and worker, never per key: eight times the keys
-// over the same partitions and workers allocate about as often.
+// spill file, partition and worker, never per key: once every bucket
+// has a spill file, eight times the keys over the same partitions and
+// workers allocate about as often. A build whose buckets fit in their
+// buffers creates no spill file at all.
 func TestMPHFBuildAllocsIndependentOfKeys(t *testing.T) {
 	const partBits, workers = 6, 4
-	allocs := func(n int) uint64 {
+	allocs := func(n, wantFiles int) uint64 {
 		b := NewStreamingMPHFBuilder(t.TempDir())
 		defer b.Close()
 		b.partBits = partBits
@@ -579,6 +581,15 @@ func TestMPHFBuildAllocsIndependentOfKeys(t *testing.T) {
 			if err := b.AddKey(r.Uint64(), r.Uint64(), uint64(i)); err != nil {
 				t.Fatal(err)
 			}
+		}
+		files := 0
+		for i := range b.spill.files {
+			if b.spill.files[i].f != nil {
+				files++
+			}
+		}
+		if wantFiles >= 0 && files != wantFiles {
+			t.Fatalf("%d keys made %d spill files, want %d", n, files, wantFiles)
 		}
 		h, err := b.Start(context.Background(), dir, nil, workers)
 		if err != nil {
@@ -594,13 +605,15 @@ func TestMPHFBuildAllocsIndependentOfKeys(t *testing.T) {
 
 		return after.Mallocs - before.Mallocs
 	}
-	small, large := allocs(100_000), allocs(800_000)
-	t.Logf("allocs %d %d", small, large)
 	limit := uint64(8*spillBuckets + 16*(1<<partBits) + 32*workers + 512)
+	if got := allocs(100_000, 0); got > limit/4 {
+		t.Errorf("%d allocations at 100K keys, without spill files, want at most %d", got, limit/4)
+	}
+	small, large := allocs(200_000, -1), allocs(1_600_000, spillBuckets)
 	if small > limit || large > limit {
-		t.Errorf("%d allocations at 100K keys and %d at 800K, want at most %d", small, large, limit)
+		t.Errorf("%d allocations at 200K keys and %d at 1.6M, want at most %d", small, large, limit)
 	}
 	if large > small+small/4 {
-		t.Errorf("allocations grow with the keys: %d at 100K, %d at 800K", small, large)
+		t.Errorf("allocations grow with the keys: %d at 200K, %d at 1.6M", small, large)
 	}
 }
