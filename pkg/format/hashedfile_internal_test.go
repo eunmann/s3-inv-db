@@ -142,6 +142,17 @@ func TestHashedFileChecksumMatchesReread(t *testing.T) {
 			{data: randomBytes(r, 100)},
 			{data: randomBytes(r, 50), off: 3*testPiece - 10, at: true},
 		},
+		"sequential around writes at offsets": {
+			{data: randomBytes(r, 100)},
+			{data: randomBytes(r, 300), off: 5000, at: true},
+			{data: randomBytes(r, 200)},
+			{seek: 5300, data: randomBytes(r, 2*testPiece)},
+			{data: randomBytes(r, 4700), off: 300, at: true},
+		},
+		"header then sequential": {
+			{data: randomBytes(r, HeaderSize), at: true},
+			{seek: HeaderSize, data: randomBytes(r, testPiece+5)},
+		},
 	}
 	for name, ops := range cases {
 		t.Run(name, func(t *testing.T) {

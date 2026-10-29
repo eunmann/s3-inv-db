@@ -103,9 +103,12 @@ type hashedFile struct {
 	sums   *Checksums
 	path   string
 	ranges []crcRange
-	pos    int64 // the sequential offset
-	size   int64
-	mu     sync.Mutex
+	// run is the sequential writes' range since the last seek or piece
+	// boundary, not yet in ranges; only the sequential writer uses it.
+	run  crcRange
+	pos  int64 // the sequential offset
+	size int64
+	mu   sync.Mutex
 	// overwritten is set when bytes were written twice or cut off.
 	overwritten bool
 }
@@ -139,8 +142,7 @@ func WriteFile(path string, data []byte, sums *Checksums) error {
 // Write writes p at the sequential offset.
 func (f *hashedFile) Write(p []byte) (int, error) {
 	n, err := f.file.Write(p)
-	f.hash(p[:n], f.pos)
-	f.pos += int64(n)
+	f.extendRun(p[:n])
 	if err != nil {
 		return n, fmt.Errorf("index file: %w", err)
 	}
@@ -165,7 +167,8 @@ func (f *hashedFile) seek(off int64) error {
 	if _, err := f.file.Seek(off, io.SeekStart); err != nil {
 		return fmt.Errorf("index file: %w", err)
 	}
-	f.pos = off
+	f.endRun()
+	f.pos, f.run.off = off, off
 
 	return nil
 }
@@ -175,6 +178,7 @@ func (f *hashedFile) truncate(size int64) error {
 	if err := f.file.Truncate(size); err != nil {
 		return fmt.Errorf("index file: %w", err)
 	}
+	f.endRun()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if size < f.size {
@@ -183,6 +187,38 @@ func (f *hashedFile) truncate(size int64) error {
 	f.size = size
 
 	return nil
+}
+
+// extendRun hashes p, written at the sequential offset, into the run,
+// which goes to ranges at each piece boundary: a running CRC costs less
+// than a range and a combine for every buffer a writer flushes.
+func (f *hashedFile) extendRun(p []byte) {
+	if f.sums == nil {
+		f.pos += int64(len(p))
+
+		return
+	}
+	piece := f.sums.piece
+	table := castagnoli()
+	for len(p) > 0 {
+		n := min(int64(len(p)), piece-f.pos%piece)
+		f.run.crc = crc32.Update(f.run.crc, table, p[:n])
+		f.run.n += n
+		f.pos += n
+		p = p[n:]
+		if f.pos%piece == 0 {
+			f.endRun()
+		}
+	}
+}
+
+// endRun moves the run to ranges and starts the next at the sequential
+// offset.
+func (f *hashedFile) endRun() {
+	if f.run.n > 0 {
+		f.add(f.run)
+	}
+	f.run = crcRange{off: f.pos}
 }
 
 // hash records p, written at off, piece by piece. The CRC runs outside
@@ -201,7 +237,7 @@ func (f *hashedFile) hash(p []byte, off int64) {
 }
 
 // add records r, merged into the last range when it continues it within
-// a piece: a sequential writer keeps one range per piece.
+// a piece, so contiguous writes keep one range per piece.
 func (f *hashedFile) add(r crcRange) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -225,6 +261,7 @@ func (f *hashedFile) startWriteback() { startWriteback(f.file) }
 // and closes it.
 func (f *hashedFile) Close() error {
 	if f.sums != nil {
+		f.endRun()
 		f.record()
 	}
 	if err := f.file.Close(); err != nil {
