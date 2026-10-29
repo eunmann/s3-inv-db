@@ -185,8 +185,9 @@ func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []st
 }
 
 // mergeAllToIterator is MergeAllToIterator with sorted runs held in
-// memory joining the final merge beside the files. They need no read
-// buffer or decoder, so they don't count toward FinalFanIn.
+// memory joining the final merge beside the files. They still decode
+// records but need no read buffer or zstd stream, so they don't count
+// toward FinalFanIn.
 func (m *ParallelMerger) mergeAllToIterator(ctx context.Context, inputPaths []string, inMemory []*memRun) (RowIterator, func() error, error) {
 	if len(inputPaths) == 0 && len(inMemory) == 0 {
 		return nil, func() error { return nil }, ErrNoInputPaths
