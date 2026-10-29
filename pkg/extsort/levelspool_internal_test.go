@@ -3,6 +3,7 @@ package extsort
 import (
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"testing"
 
@@ -38,16 +39,23 @@ func TestLevelSpoolWritesEveryRecordInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	for depth := range 4 {
-		i := depth
-		err := s.read(depth, func(r *spoolRecord) error {
-			if diff := cmp.Diff(spoolTestRecord(i), *r, cmp.AllowUnexported(spoolRecord{})); diff != "" {
-				t.Errorf("record %d (-added +read):\n%s", i, diff)
-			}
-			i += 4
-
-			return nil
-		})
+		r, err := s.open(depth)
 		if err != nil {
+			t.Fatal(err)
+		}
+		i := depth
+		var got spoolRecord
+		for ; ; i += 4 {
+			if err := r.next(&got); errors.Is(err, io.EOF) {
+				break
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(spoolTestRecord(i), got, cmp.AllowUnexported(spoolRecord{})); diff != "" {
+				t.Fatalf("record %d (-added +read):\n%s", i, diff)
+			}
+		}
+		if err := r.close(); err != nil {
 			t.Fatal(err)
 		}
 		if i < n {
