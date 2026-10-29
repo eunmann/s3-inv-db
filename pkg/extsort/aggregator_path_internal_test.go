@@ -187,9 +187,10 @@ func TestAggregatorSegmentsAreExact(t *testing.T) {
 
 // checkAggregatorAccounting recomputes from the nodes what the
 // aggregator has counted: the estimate (every node and its key, the
-// prefix of each live one, every map entry) and the prefix bytes Drain
-// writes. It also checks that every map key names its node's parent and
-// segment.
+// prefix of each live one, the node table's slots) and the prefix bytes
+// Drain writes. It also checks that the node table holds each live
+// non-root node of the main tree once, under its key's hash, and that
+// each node's stored key names its parent.
 func checkAggregatorAccounting(t *testing.T, agg *Aggregator) {
 	t.Helper()
 	var keyBytes, prefixBytes int
@@ -205,17 +206,45 @@ func checkAggregatorAccounting(t *testing.T, agg *Aggregator) {
 			prefixBytes += len(agg.node(p).row.Prefix)
 		}
 	}
-	for key, idx := range agg.children {
-		n := agg.node(idx)
-		if want := string(appendNodeKey(nil, agg.parent(idx), n.row.Prefix)); key != want {
-			t.Fatalf("map key %q names node %d, whose key is %q", key, idx, want)
+	want := int64(agg.used)*aggregatorNodeBytes + int64(keyBytes+prefixBytes)
+	if agg.prefixBytes != prefixBytes || agg.bytes != want {
+		t.Fatalf("counted %d prefix bytes and %d node bytes; the nodes have %d and %d",
+			agg.prefixBytes, agg.bytes, prefixBytes, want)
+	}
+	if got, want := agg.EstimatedMemoryUsage(), want+int64(len(agg.children.slots))*nodeSlotBytes; got != want {
+		t.Fatalf("estimate = %d, want %d with the node table", got, want)
+	}
+
+	inTree := map[uint32]bool{}
+	for _, r := range agg.mappedRanges(nil) {
+		for i := r[0]; i < r[1]; i++ {
+			if p := agg.parent(uint32(i)); p < deadNode {
+				inTree[uint32(i)] = true
+				if got := keyParent(agg.node(uint32(i)).row.Prefix); got != p {
+					t.Fatalf("node %d's key names parent %d, its parent is %d", i, got, p)
+				}
+			}
 		}
 	}
-	want := int64(agg.used)*aggregatorNodeBytes + int64(keyBytes+prefixBytes) +
-		int64(len(agg.children))*aggregatorMapEntryBytes
-	if agg.prefixBytes != prefixBytes || agg.bytes != want {
-		t.Fatalf("counted %d prefix bytes and an estimate of %d; the nodes have %d and %d",
-			agg.prefixBytes, agg.bytes, prefixBytes, want)
+	seen := map[uint32]bool{}
+	for _, s := range agg.children.slots {
+		if s.node == 0 {
+			continue
+		}
+		idx := s.node - 1
+		if !inTree[idx] || seen[idx] {
+			t.Fatalf("node table holds node %d (in the main tree: %v, twice: %v)", idx, inTree[idx], seen[idx])
+		}
+		seen[idx] = true
+		if want := agg.children.hash(agg.parent(idx), agg.node(idx).row.Prefix); s.hash != want {
+			t.Fatalf("node %d is in the table under hash %#x, its key's is %#x", idx, s.hash, want)
+		}
+	}
+	if len(seen) != len(inTree) || agg.children.count != len(seen) {
+		t.Fatalf("node table holds %d nodes and counts %d; the main tree has %d", len(seen), agg.children.count, len(inTree))
+	}
+	if agg.children.count > maxTableLoad(len(agg.children.slots)) {
+		t.Fatalf("node table holds %d nodes in %d slots, over the maximum load", agg.children.count, len(agg.children.slots))
 	}
 }
 

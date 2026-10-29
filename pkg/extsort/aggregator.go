@@ -17,16 +17,15 @@ import (
 //
 // Its rows are the nodes of a prefix tree: each prefix's node is keyed by
 // its parent's node and its segment, the bytes after the parent's prefix
-// up to and including the next '/'. A lookup hashes only the segment,
-// and Drain hands the rows out sorted by walking the tree.
+// up to and including the next '/'. A lookup hashes the parent's index
+// and the segment, and Drain hands the rows out sorted by walking the
+// tree.
 //
 // The aggregator is NOT safe for concurrent use. For concurrent access,
 // use multiple aggregators or external synchronization.
 type Aggregator struct {
-	// children finds a node of the main tree by its key (see nodeKey);
-	// keyBuf builds the key to look up.
-	children map[string]uint32
-	keyBuf   []byte
+	// children finds a node of the main tree by its key.
+	children nodeTable
 	// slabs back every node, in creation order (a node's index is its
 	// position), and parents holds each node's parent at the same
 	// position: noNode for a root, deadNode once mapSegment has merged it
@@ -45,8 +44,8 @@ type Aggregator struct {
 	path []aggPathEntry
 	// segments are the nodes since the last Drain by the StartSegment
 	// that began them (a chunk each), and lastKey is the previous key of
-	// the current one. A segment whose keys come in order needs no map;
-	// see StartSegment.
+	// the current one. A segment whose keys come in order needs no node
+	// table lookup; see StartSegment.
 	segments []aggSegment
 	lastKey  []byte
 	// Drain's output and scratch, and mapSegment's (graft), reused the
@@ -65,9 +64,10 @@ type Aggregator struct {
 	// root is the main tree's root node, or noNode.
 	root     uint32
 	maxDepth int
-	// bytes is the heap the nodes since the last Drain take
-	// (EstimatedMemoryUsage), and prefixBytes the length of the prefixes
-	// Drain writes for the live ones.
+	// bytes is the heap the nodes since the last Drain take, the node
+	// share of EstimatedMemoryUsage (which adds the node table), and
+	// prefixBytes the length of the prefixes Drain writes for the live
+	// ones.
 	bytes       int64
 	prefixBytes int
 	tierMask    uint16
@@ -83,31 +83,6 @@ const (
 	noNode   = math.MaxUint32
 	deadNode = math.MaxUint32 - 1
 )
-
-// A node's key is its parent's index, little-endian in nodeKeyHeader
-// bytes, followed by its segment: one string, so the map's slot is a
-// string header and an index, not a struct with a string in it. The
-// segments arena stores every non-root node's key, and the node's
-// Prefix is the segment within it.
-const nodeKeyHeader = 4
-
-// appendNodeKey appends the key of parent's child with segment seg.
-func appendNodeKey(dst []byte, parent uint32, seg string) []byte {
-	dst = binary.LittleEndian.AppendUint32(dst, parent)
-
-	return append(dst, seg...)
-}
-
-// nodeKey rewrites the parent in the key stored before seg, a node's
-// segment, and returns that key. Only a node not yet in the map has its
-// key rewritten, so no map key changes.
-func nodeKey(seg string, parent uint32) string {
-	start := unsafe.Add(unsafe.Pointer(unsafe.StringData(seg)), -nodeKeyHeader)
-	key := unsafe.Slice((*byte)(start), nodeKeyHeader+len(seg))
-	binary.LittleEndian.PutUint32(key, parent)
-
-	return unsafe.String(&key[0], len(key))
-}
 
 // aggPathEntry is a node on the cached path and the length of its
 // prefix, which ends at that offset of every key it is cached for.
@@ -141,17 +116,13 @@ type aggGraft struct {
 }
 
 // A node's heap cost is aggregatorNodeBytes (the node and its parent's
-// index), its key, its prefix
-// (which Drain allocates) and, for a node in the main tree's map,
-// aggregatorMapEntryBytes: the key and value slot, its control byte and
-// the load-factor slack, 35 to 56 B over the map's growth cycle.
-// Measured at Drain (nodes, map, keys, prefixes and Drain's output) for
-// keys out of order: 352-366 B/prefix against an estimate of 340-343
-// for 4-byte segments, 482-496 against 466-477 for 40-byte ones.
-const (
-	aggregatorNodeBytes     = int64(unsafe.Sizeof(aggNode{}) + unsafe.Sizeof(uint32(0)))
-	aggregatorMapEntryBytes = 48
-)
+// index), its key, its prefix (which Drain allocates) and, for a node of
+// the main tree, its share of the node table (see nodeSlotBytes).
+// Measured for keys out of order before Drain writes the prefixes:
+// 273-289 B/prefix against an estimate of 271-280 for 4-byte segments,
+// 308-323 against 305-314 for 40-byte ones, the rest being the last
+// slab's unused nodes.
+const aggregatorNodeBytes = int64(unsafe.Sizeof(aggNode{}) + unsafe.Sizeof(uint32(0)))
 
 // NewAggregator creates a new prefix aggregator with the given initial capacity.
 // Use maxDepth=0 for unlimited depth.
@@ -162,7 +133,7 @@ func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 	}
 
 	return &Aggregator{
-		children: make(map[string]uint32, initialCapacity),
+		children: newNodeTable(initialCapacity),
 		root:     noNode,
 		maxDepth: maxDepth,
 	}
@@ -237,25 +208,33 @@ func (a *Aggregator) rootEntry(ordered bool) aggPathEntry {
 // key is copied: the caller's key is usually a substring of a whole
 // inventory record, which the node would otherwise keep alive.
 func (a *Aggregator) child(parent uint32, seg string, prefixLen int, depth uint16, ordered bool) aggPathEntry {
-	a.keyBuf = appendNodeKey(a.keyBuf[:0], parent, seg)
+	// In an ordered segment a prefix not on the path is new: see
+	// StartSegment. Otherwise a new key's slot names the node newNode
+	// creates next.
 	if !ordered {
-		// In an ordered segment a prefix not on the path is new: see
-		// StartSegment.
-		if idx, ok := a.children[string(a.keyBuf)]; ok {
+		if idx, found := a.getOrAddChild(parent, seg, uint32(a.used)); found {
 			return aggPathEntry{n: a.node(idx), idx: idx, end: prefixLen}
 		}
 	}
-	key := a.segs.clone(a.keyBuf)
 	idx, n := a.newNode(parent)
-	n.row.Prefix, n.row.Depth = key[nodeKeyHeader:], depth
-	a.bytes += aggregatorNodeBytes + int64(len(key)+prefixLen)
+	n.row.Prefix, n.row.Depth = a.segs.clone(parent, seg), depth
+	a.bytes += aggregatorNodeBytes + int64(nodeKeyHeader+len(seg)+prefixLen)
 	a.prefixBytes += prefixLen
-	if !ordered {
-		a.children[key] = idx
-		a.bytes += aggregatorMapEntryBytes
-	}
 
 	return aggPathEntry{n: n, idx: idx, end: prefixLen}
+}
+
+// getOrAddChild returns the main tree's child of parent with segment seg
+// and true, or adds node idx as that child and returns idx and false.
+func (a *Aggregator) getOrAddChild(parent uint32, seg string, idx uint32) (uint32, bool) {
+	return a.children.getOrAdd(a, a.children.hash(parent, seg), parent, seg, idx)
+}
+
+// hasKey reports whether node i is parent's child with segment seg.
+func (a *Aggregator) hasKey(i, parent uint32, seg string) bool {
+	stored := a.node(i).row.Prefix
+
+	return len(stored) == len(seg) && keyParent(stored) == parent && stored == seg
 }
 
 // rowSlabLen is how many nodes the aggregator allocates at a time.
@@ -308,9 +287,10 @@ func (a *Aggregator) PrefixCount() int {
 // segment has not seen: it sorts after every prefix created before it
 // (two keys in order bound their prefixes, and a prefix of both is a
 // prefix of every key between them, so on the cached path). Its node is
-// then created without a map lookup, and the segment's nodes are
-// sorted as created. The first key out of order maps the segment, and
-// the rest of it aggregates through the map as without segments; the
+// then created without a node table lookup, and the segment's nodes
+// are sorted as created. The first key out of order maps the segment
+// into the main tree, and the rest of it aggregates through the node
+// table as without segments; the
 // result is the same either way. Drain merges the segments, so
 // prefixes the segments share come out once.
 func (a *Aggregator) StartSegment() {
@@ -350,13 +330,8 @@ func (a *Aggregator) mapSegment() {
 			parent := g[int(p)-seg.start]
 			prefixLen = parent.prefixLen + len(n.row.Prefix)
 			a.setParent(idx, parent.to)
-			k := nodeKey(n.row.Prefix, parent.to)
-			if found, ok := a.children[k]; ok {
-				to = found
-			} else {
-				a.children[k] = idx
-				a.bytes += aggregatorMapEntryBytes
-			}
+			setKeyParent(n.row.Prefix, parent.to)
+			to, _ = a.getOrAddChild(parent.to, n.row.Prefix, idx)
 		}
 		if to != idx {
 			a.node(to).row.Merge(&n.row)
@@ -397,11 +372,11 @@ func tierIDsFromMask(mask uint16) []tiers.ID {
 }
 
 // EstimatedMemoryUsage returns the heap the aggregator's nodes take
-// since the last Drain: each node, its key, its map entry if it is
-// in the map, and the prefix Drain writes for it, counted as they are
-// created.
+// since the last Drain, each node, its key and the prefix Drain writes
+// for it counted as they are created, plus the main tree's node table
+// at its allocated size, which a Drain keeps.
 func (a *Aggregator) EstimatedMemoryUsage() int64 {
-	return a.bytes
+	return a.bytes + a.children.heapBytes()
 }
 
 // heapReadings returns the live heap as of the last GC and HeapInuse
@@ -614,7 +589,7 @@ func (a *Aggregator) soleRun() (int, bool) {
 
 // reset empties the aggregator once its rows are handed over.
 func (a *Aggregator) reset() {
-	clear(a.children)
+	a.children.reset()
 	a.used, a.dead, a.bytes, a.prefixBytes = 0, 0, 0, 0
 	a.root = noNode
 	a.segs.reset()
@@ -831,7 +806,7 @@ func (a *Aggregator) mergeRuns(runs [][]*PrefixRow) []*PrefixRow {
 }
 
 // Release drops the drained aggregator's slabs, segments, Drain output
-// and scratch and map buckets so the GC can reclaim them once the caller
+// and scratch and node table so the GC can reclaim them once the caller
 // is done with the last Drain. Call it only on an empty (just drained)
 // aggregator.
 func (a *Aggregator) Release() {
@@ -839,12 +814,11 @@ func (a *Aggregator) Release() {
 	a.drained, a.merged, a.runs, a.runNext = nil, nil, nil, nil
 	a.childEnd, a.kids, a.stack, a.siblings, a.graft = nil, nil, nil, nil, nil
 	a.coder = frontCoder{}
-	a.children = make(map[string]uint32)
-	a.keyBuf = nil
+	a.children.release()
 }
 
 // segmentArena holds the nodes' keys in chunks it reuses after a Drain,
-// when the nodes and map keys that point into them are recycled and
+// when the nodes that point into them are recycled and the node table
 // cleared: one allocation per chunk instead of one per prefix.
 type segmentArena struct {
 	chunks [][]byte
@@ -856,12 +830,15 @@ type segmentArena struct {
 // of it (S3 keys are at most 1024 bytes) gets its own allocation.
 const segmentArenaChunk = 64 << 10
 
-func (s *segmentArena) clone(key []byte) string {
+// clone stores the key of parent's child with segment seg and returns
+// the segment within it.
+func (s *segmentArena) clone(parent uint32, seg string) string {
+	n := nodeKeyHeader + len(seg)
 	var b []byte
 	switch {
-	case len(key) > segmentArenaChunk/8:
-		b = make([]byte, len(key))
-	case len(key) > len(s.free):
+	case n > segmentArenaChunk/8:
+		b = make([]byte, n)
+	case n > len(s.free):
 		if s.inUse == len(s.chunks) {
 			s.chunks = append(s.chunks, make([]byte, segmentArenaChunk))
 		}
@@ -870,12 +847,13 @@ func (s *segmentArena) clone(key []byte) string {
 
 		fallthrough
 	default:
-		b = s.free[:len(key):len(key)]
-		s.free = s.free[len(key):]
+		b = s.free[:n:n]
+		s.free = s.free[n:]
 	}
-	copy(b, key)
+	binary.LittleEndian.PutUint32(b, parent)
+	copy(b[nodeKeyHeader:], seg)
 
-	return unsafe.String(unsafe.SliceData(b), len(b))
+	return unsafe.String(&b[nodeKeyHeader], len(seg))
 }
 
 func (s *segmentArena) reset() {
