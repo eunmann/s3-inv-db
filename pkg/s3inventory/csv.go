@@ -97,41 +97,83 @@ type CSVReader struct {
 	keyBuf          []byte // decoded key; Next's key views it
 }
 
-// CSVReaderConfig configures column indices for the CSV reader.
+// ErrCSVColumnUnset is returned for a CSVReaderConfig without its key
+// or size column.
+var ErrCSVColumnUnset = errors.New("required CSV column not set")
+
+// Column is a CSV column. The zero Column is no column, so a config
+// that leaves an optional column out reads that field as absent.
+type Column struct {
+	pos int // index + 1
+}
+
+// ColumnAt returns the column at index i, or no column when i is
+// negative, as s3fetch.Manifest's column lookups report a missing one.
+func ColumnAt(i int) Column {
+	if i < 0 {
+		return Column{}
+	}
+
+	return Column{pos: i + 1}
+}
+
+// Index returns the column's index, or -1 for no column.
+func (c Column) Index() int { return c.pos - 1 }
+
+// CSVReaderConfig names the columns the CSV reader reads.
 type CSVReaderConfig struct {
-	// KeyCol is the column index for the object key (required).
-	KeyCol int
+	// KeyCol is the object key's column (required).
+	KeyCol Column
 
-	// SizeCol is the column index for the object size (required).
-	SizeCol int
+	// SizeCol is the object size's column (required).
+	SizeCol Column
 
-	// StorageCol is the column index for the storage class (-1 if not available).
-	StorageCol int
+	// StorageCol is the storage class's column, if any.
+	StorageCol Column
 
-	// AccessTierCol is the column index for the access tier (-1 if not available).
-	AccessTierCol int
+	// AccessTierCol is the Intelligent-Tiering access tier's column, if any.
+	AccessTierCol Column
 
-	// DeleteMarkerCol is the column index for IsDeleteMarker (-1 if not
-	// available). Only all-versions inventories carry it.
-	DeleteMarkerCol int
+	// DeleteMarkerCol is IsDeleteMarker's column, if any. Only
+	// all-versions inventories carry it.
+	DeleteMarkerCol Column
+}
+
+func (c CSVReaderConfig) validate() error {
+	if c.KeyCol.Index() < 0 {
+		return fmt.Errorf("%w: key", ErrCSVColumnUnset)
+	}
+	if c.SizeCol.Index() < 0 {
+		return fmt.Errorf("%w: size", ErrCSVColumnUnset)
+	}
+
+	return nil
 }
 
 // NewCSVReader creates a new CSV inventory reader from an io.Reader.
 // The reader should provide the raw CSV data (already decompressed if needed).
 // Use NewCSVReaderFromStream for automatic gzip handling.
-func NewCSVReader(r io.Reader, cfg CSVReaderConfig) *CSVReader {
-	return newCSVReader(bufio.NewReaderSize(r, csvLineBuffer), cfg)
+func NewCSVReader(r io.Reader, cfg CSVReaderConfig) (*CSVReader, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	return newCSVReader(bufio.NewReaderSize(r, csvLineBuffer), cfg), nil
 }
 
+// newCSVReader reads lines with the columns of cfg, which is valid.
 func newCSVReader(lines *bufio.Reader, cfg CSVReaderConfig) *CSVReader {
+	key, size := cfg.KeyCol.Index(), cfg.SizeCol.Index()
+	storage, accessTier, deleteMarker := cfg.StorageCol.Index(), cfg.AccessTierCol.Index(), cfg.DeleteMarkerCol.Index()
+
 	return &CSVReader{
 		lines:           lines,
-		maxFields:       1 + max(cfg.KeyCol, cfg.SizeCol, cfg.StorageCol, cfg.AccessTierCol, cfg.DeleteMarkerCol),
-		keyCol:          cfg.KeyCol,
-		sizeCol:         cfg.SizeCol,
-		storageCol:      cfg.StorageCol,
-		accessTierCol:   cfg.AccessTierCol,
-		deleteMarkerCol: cfg.DeleteMarkerCol,
+		maxFields:       1 + max(key, size, storage, accessTier, deleteMarker),
+		keyCol:          key,
+		sizeCol:         size,
+		storageCol:      storage,
+		accessTierCol:   accessTier,
+		deleteMarkerCol: deleteMarker,
 	}
 }
 
@@ -140,8 +182,13 @@ func newCSVReader(lines *bufio.Reader, cfg CSVReaderConfig) *CSVReader {
 // content decides, not the key: a gzip chunk named without ".gz" would
 // otherwise be split as text. Gunzip runs on the caller's goroutine:
 // the build already reads one chunk per CPU. Close returns the reader's
-// buffers for the next chunk to reuse.
+// buffers for the next chunk to reuse. On error r is closed.
 func NewCSVReaderFromStream(r io.ReadCloser, cfg CSVReaderConfig) (*CSVReader, error) {
+	if err := cfg.validate(); err != nil {
+		r.Close()
+
+		return nil, err
+	}
 	bufs := streamBufferPool.Get().(*streamBuffers) //nolint:forcetypeassert // the pool only holds *streamBuffers
 	bufs.in.Reset(r)
 	lines := bufs.in
