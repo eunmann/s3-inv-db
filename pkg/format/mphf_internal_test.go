@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -662,6 +663,61 @@ func TestSlotBucketsWidePositions(t *testing.T) {
 		if fp != uint64(1000+slot) || binary.LittleEndian.Uint64(pos[:]) != uint64(1)<<36+uint64(slot) {
 			t.Errorf("slot %d = fp %d pos %#x", slot, fp, binary.LittleEndian.Uint64(pos[:]))
 		}
+	}
+}
+
+// TestSlotBucketsLayoutEveryWidth: at every position width, records
+// arriving in random slot order lay out each slot's fingerprint and
+// position bytes exactly, without touching a neighbour's, across
+// several buckets and a partial last one.
+func TestSlotBucketsLayoutEveryWidth(t *testing.T) {
+	const n = 200_003
+	r := rand.New(rand.NewPCG(1, 2))
+	order := r.Perm(n)
+	for posW := 1; posW <= 8; posW++ {
+		t.Run(fmt.Sprintf("posW=%d", posW), func(t *testing.T) {
+			slotW := mphfFingerprintBytes + posW
+			s, err := newSlotBuckets(t.TempDir(), n, slotW)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.close()
+			if posW > 4 {
+				s.posBytes = 8
+				s.recW = 4 + mphfFingerprintBytes + 8
+			}
+			want := make([]byte, n*slotW)
+			bufs := make([][]byte, len(s.next))
+			for _, slot := range order {
+				fp, pos := r.Uint64(), r.Uint64()&widthMask[posW]
+				binary.LittleEndian.PutUint64(want[slot*slotW:], fp)
+				var p [8]byte
+				binary.LittleEndian.PutUint64(p[:], pos)
+				copy(want[slot*slotW+mphfFingerprintBytes:(slot+1)*slotW], p[:posW])
+				b := slot / s.perBucket
+				bufs[b] = s.appendRecord(bufs[b], slot%s.perBucket, fp, pos)
+			}
+			for b, buf := range bufs {
+				if err := s.appendRecords(b, buf); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f := testSlotFile(t, n, slotW)
+			if err := s.write(f, posW, nil); err != nil {
+				t.Fatal(err)
+			}
+			got := make([]byte, n*slotW)
+			if _, err := f.ReadAt(got, mphfSlotsDataOff); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, want) {
+				for j := range got {
+					if got[j] != want[j] {
+						t.Fatalf("slot %d byte %d = %#x, want %#x", j/slotW, j%slotW, got[j], want[j])
+					}
+				}
+			}
+		})
 	}
 }
 

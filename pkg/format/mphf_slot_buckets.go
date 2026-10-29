@@ -219,7 +219,7 @@ func (s *slotBuckets) write(f *os.File, posW int, written *stepCounter) error {
 	var wg sync.WaitGroup
 	for w := range workers {
 		wg.Go(func() {
-			layout := make([]byte, layoutBytes)
+			layout := make([]byte, layoutBytes+layoutSlack)
 			read := make([]byte, slotReadBuffer/s.recW*s.recW)
 			for b := int(next.Add(1) - 1); b < len(s.next); b = int(next.Add(1) - 1) {
 				if err := s.writeBucket(f, b, slotW, layout, read); err != nil {
@@ -236,10 +236,20 @@ func (s *slotBuckets) write(f *os.File, posW int, written *stepCounter) error {
 	return errors.Join(errs...)
 }
 
+// layoutSlack is the bytes past a layout buffer's last slot that a
+// position's 8-byte store reaches.
+const layoutSlack = 8
+
 // writeBucket lays out bucket b's slots in layout from its records and
-// writes them to the slot file.
+// writes them to the slot file. Each record takes two 8-byte stores, its
+// fingerprint and its position. The position's store also covers the
+// first 8-posW bytes of the next slot, which records in position order
+// may have laid out already, so it merges into them: those bytes keep
+// their value, laid out or not, and the next slot's fingerprint store
+// writes them whole.
 func (s *slotBuckets) writeBucket(f *os.File, b, slotW int, layout, read []byte) error {
 	slots := s.slots(b)
+	posMask := widthMask[slotW-mphfFingerprintBytes]
 	off := int64(b*s.perBucket) * int64(s.recW)
 	for remaining := int64(slots * s.recW); remaining > 0; {
 		chunk := read[:min(int64(len(read)), remaining)]
@@ -247,7 +257,7 @@ func (s *slotBuckets) writeBucket(f *os.File, b, slotW int, layout, read []byte)
 			return fmt.Errorf("read slot bucket %d: %w", b, err)
 		}
 		for r := 0; r < len(chunk); r += s.recW {
-			slot := int(binary.LittleEndian.Uint32(chunk[r:]))
+			at := int(binary.LittleEndian.Uint32(chunk[r:])) * slotW
 			fp := binary.LittleEndian.Uint64(chunk[r+4:])
 			var pos uint64
 			if s.posBytes == 4 {
@@ -255,14 +265,9 @@ func (s *slotBuckets) writeBucket(f *os.File, b, slotW int, layout, read []byte)
 			} else {
 				pos = binary.LittleEndian.Uint64(chunk[r+12:])
 			}
-			at := slot * slotW
 			binary.LittleEndian.PutUint64(layout[at:], fp)
-			// Exactly posW bytes: records arrive in position order, not
-			// slot order, so a wider store would clobber a neighbouring
-			// slot already laid out.
-			var p [8]byte
-			binary.LittleEndian.PutUint64(p[:], pos)
-			copy(layout[at+mphfFingerprintBytes:at+slotW], p[:])
+			p := layout[at+mphfFingerprintBytes:]
+			binary.LittleEndian.PutUint64(p, binary.LittleEndian.Uint64(p)&^posMask|pos&posMask)
 		}
 		off += int64(len(chunk))
 		remaining -= int64(len(chunk))
