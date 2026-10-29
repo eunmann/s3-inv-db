@@ -1,118 +1,136 @@
 package tiers_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
-func TestFromS3_StandardClasses(t *testing.T) {
-	m := tiers.NewMapping()
+// s3Value is a storage class / access tier pair S3 Inventory writes and
+// the tier it maps to.
+type s3Value struct {
+	storageClass, accessTier string
+	want                     tiers.ID
+}
 
-	tests := []struct {
-		storageClass string
-		accessTier   string
-		wantID       tiers.ID
-	}{
+// documentedValues is every storage class AWS documents for S3
+// Inventory, and every Intelligent-Tiering access tier (with the short
+// forms FromS3 also accepts), plus the empty values of an inventory
+// without those fields.
+func documentedValues() []s3Value {
+	return []s3Value{
 		{"STANDARD", "", tiers.Standard},
-		{"standard", "", tiers.Standard},
+		{"REDUCED_REDUNDANCY", "", tiers.ReducedRedundancy},
 		{"STANDARD_IA", "", tiers.StandardIA},
 		{"ONEZONE_IA", "", tiers.OneZoneIA},
-		{"GLACIER_IR", "", tiers.GlacierIR},
 		{"GLACIER", "", tiers.GlacierFR},
 		{"DEEP_ARCHIVE", "", tiers.DeepArchive},
-		{"REDUCED_REDUNDANCY", "", tiers.ReducedRedundancy},
-		{"EXPRESS_ONEZONE", "", tiers.ExpressOneZone},
-		{"express_onezone", "", tiers.ExpressOneZone},
 		{"OUTPOSTS", "", tiers.Outposts},
-		{"outposts", "", tiers.Outposts},
+		{"GLACIER_IR", "", tiers.GlacierIR},
 		{"SNOW", "", tiers.Snow},
-		{"snow", "", tiers.Snow},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.storageClass, func(t *testing.T) {
-			got := m.FromS3(tt.storageClass, tt.accessTier)
-			if got != tt.wantID {
-				t.Errorf("FromS3(%q, %q) = %d, want %d", tt.storageClass, tt.accessTier, got, tt.wantID)
-			}
-		})
+		{"EXPRESS_ONEZONE", "", tiers.ExpressOneZone},
+		{"", "", tiers.Standard},
+		{"INTELLIGENT_TIERING", "", tiers.ITFrequent},
+		{"INTELLIGENT_TIERING", "FREQUENT_ACCESS", tiers.ITFrequent},
+		{"INTELLIGENT_TIERING", "FREQUENT", tiers.ITFrequent},
+		{"INTELLIGENT_TIERING", "INFREQUENT_ACCESS", tiers.ITInfrequent},
+		{"INTELLIGENT_TIERING", "INFREQUENT", tiers.ITInfrequent},
+		{"INTELLIGENT_TIERING", "ARCHIVE_INSTANT_ACCESS", tiers.ITArchiveInstant},
+		{"INTELLIGENT_TIERING", "ARCHIVE_ACCESS", tiers.ITArchive},
+		{"INTELLIGENT_TIERING", "ARCHIVE", tiers.ITArchive},
+		{"INTELLIGENT_TIERING", "DEEP_ARCHIVE_ACCESS", tiers.ITDeepArchive},
+		{"INTELLIGENT_TIERING", "DEEP_ARCHIVE", tiers.ITDeepArchive},
 	}
 }
 
-func TestFromS3_IntelligentTiering(t *testing.T) {
-	m := tiers.NewMapping()
+// TestFromS3_DocumentedValues: every documented value maps to its tier
+// as S3 writes it, in lower case, in mixed case and padded.
+func TestFromS3_DocumentedValues(t *testing.T) {
+	for _, v := range documentedValues() {
+		for _, sc := range spellings(v.storageClass) {
+			for _, at := range spellings(v.accessTier) {
+				got, err := tiers.FromS3(sc, at)
+				if err != nil || got != v.want {
+					t.Errorf("FromS3(%q, %q) = %d, %v; want %d", sc, at, got, err, v.want)
+				}
+			}
+		}
+	}
+}
 
-	tests := []struct {
-		accessTier string
-		wantID     tiers.ID
+// TestFromS3_AccessTierOnlyForIntelligentTiering: the access tier of any
+// other storage class is not read.
+func TestFromS3_AccessTierOnlyForIntelligentTiering(t *testing.T) {
+	for _, at := range []string{"ARCHIVE_ACCESS", "UNKNOWN", strings.Repeat("x", 100)} {
+		for _, sc := range []string{"GLACIER", "glacier", ""} {
+			want := tiers.GlacierFR
+			if sc == "" {
+				want = tiers.Standard
+			}
+			if got, err := tiers.FromS3(sc, at); err != nil || got != want {
+				t.Errorf("FromS3(%q, %q) = %d, %v; want %d", sc, at, got, err, want)
+			}
+		}
+	}
+}
+
+// TestFromS3_UnknownValuesFail: a value AWS does not document is an
+// error naming it, never a guess at a tier.
+func TestFromS3_UnknownValuesFail(t *testing.T) {
+	cases := []struct {
+		storageClass, accessTier string
+		want                     error
 	}{
-		{"FREQUENT_ACCESS", tiers.ITFrequent},
-		{"FREQUENT", tiers.ITFrequent},
-		{"INFREQUENT_ACCESS", tiers.ITInfrequent},
-		{"INFREQUENT", tiers.ITInfrequent},
-		{"ARCHIVE_INSTANT_ACCESS", tiers.ITArchiveInstant},
-		{"ARCHIVE_ACCESS", tiers.ITArchive},
-		{"ARCHIVE", tiers.ITArchive},
-		{"DEEP_ARCHIVE_ACCESS", tiers.ITDeepArchive},
-		{"DEEP_ARCHIVE", tiers.ITDeepArchive},
-		{"", tiers.ITFrequent},
-		{"UNKNOWN", tiers.ITFrequent},
+		{"UNKNOWN_CLASS", "", tiers.ErrUnknownStorageClass},
+		{"standard ia", "", tiers.ErrUnknownStorageClass},
+		{"GLACIER_FR", "", tiers.ErrUnknownStorageClass},
+		{"INTELLIGENT_TIERING_FREQUENT", "", tiers.ErrUnknownStorageClass},
+		{"STANDARD\x00", "", tiers.ErrUnknownStorageClass},
+		{strings.Repeat("STANDARD", 5), "", tiers.ErrUnknownStorageClass},
+		{"INTELLIGENT_TIERING", "UNKNOWN", tiers.ErrUnknownAccessTier},
+		{"intelligent_tiering", "archive_instant", tiers.ErrUnknownAccessTier},
+		{"INTELLIGENT_TIERING", strings.Repeat("A", 40), tiers.ErrUnknownAccessTier},
 	}
+	for _, c := range cases {
+		id, err := tiers.FromS3(c.storageClass, c.accessTier)
+		if !errors.Is(err, c.want) {
+			t.Errorf("FromS3(%q, %q) = %d, %v; want %v", c.storageClass, c.accessTier, id, err, c.want)
 
-	for _, tt := range tests {
-		t.Run(tt.accessTier, func(t *testing.T) {
-			got := m.FromS3("INTELLIGENT_TIERING", tt.accessTier)
-			if got != tt.wantID {
-				t.Errorf("FromS3(IT, %q) = %d, want %d", tt.accessTier, got, tt.wantID)
+			continue
+		}
+		value := c.storageClass
+		if errors.Is(c.want, tiers.ErrUnknownAccessTier) {
+			value = c.accessTier
+		}
+		if quoted := strconv.Quote(value); !strings.Contains(err.Error(), quoted) {
+			t.Errorf("FromS3(%q, %q) error %q does not name %s", c.storageClass, c.accessTier, err, quoted)
+		}
+	}
+}
+
+// TestFromS3_KnownValuesDoNotAllocate: FromS3 runs once per inventory
+// row, so classifying a known value in any spelling must not allocate.
+func TestFromS3_KnownValuesDoNotAllocate(t *testing.T) {
+	var pairs [][2]string
+	for _, v := range documentedValues() {
+		for _, sc := range spellings(v.storageClass) {
+			pairs = append(pairs, [2]string{sc, strings.ToLower(v.accessTier)})
+		}
+	}
+	allocs := testing.AllocsPerRun(10, func() {
+		for _, p := range pairs {
+			if _, err := tiers.FromS3(p[0], p[1]); err != nil {
+				t.Fatal(err)
 			}
-		})
-	}
-}
-
-func TestFromS3_CaseInsensitive(t *testing.T) {
-	m := tiers.NewMapping()
-
-	tests := []struct {
-		storageClass string
-		accessTier   string
-		wantID       tiers.ID
-	}{
-		{"standard", "", tiers.Standard},
-		{"Standard", "", tiers.Standard},
-		{"STANDARD", "", tiers.Standard},
-		{"intelligent_tiering", "frequent_access", tiers.ITFrequent},
-		{"Intelligent_Tiering", "Frequent_Access", tiers.ITFrequent},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.storageClass+"/"+tt.accessTier, func(t *testing.T) {
-			got := m.FromS3(tt.storageClass, tt.accessTier)
-			if got != tt.wantID {
-				t.Errorf("FromS3(%q, %q) = %d, want %d", tt.storageClass, tt.accessTier, got, tt.wantID)
-			}
-		})
-	}
-}
-
-func TestFromS3_UnknownClass(t *testing.T) {
-	m := tiers.NewMapping()
-
-	got := m.FromS3("UNKNOWN_CLASS", "")
-	if got != tiers.Standard {
-		t.Errorf("FromS3(UNKNOWN_CLASS, '') = %d, want %d (Standard)", got, tiers.Standard)
-	}
-}
-
-func TestFromS3_Whitespace(t *testing.T) {
-	m := tiers.NewMapping()
-
-	got := m.FromS3("  STANDARD  ", "")
-	if got != tiers.Standard {
-		t.Errorf("FromS3 with whitespace = %d, want %d", got, tiers.Standard)
+		}
+	})
+	if allocs != 0 {
+		t.Errorf("FromS3 over %d known values: %v allocs, want 0", len(pairs), allocs)
 	}
 }
 
@@ -227,6 +245,10 @@ func TestAllTiersComplete(t *testing.T) {
 // spellings returns s as written and with the casing and surrounding
 // whitespace FromS3 must normalize.
 func spellings(s string) []string {
+	if s == "" {
+		return []string{"", " ", "\t"}
+	}
+
 	return []string{
 		s,
 		strings.ToLower(s),
@@ -239,9 +261,7 @@ func spellings(s string) []string {
 }
 
 func allSpellings(names []string) []string {
-	blanks := []string{"", " ", "\t"}
-	out := make([]string, 0, len(blanks)+len(names)*len(spellings("X")))
-	out = append(out, blanks...)
+	out := spellings("")
 	for _, s := range names {
 		out = append(out, spellings(s)...)
 	}
@@ -249,38 +269,36 @@ func allSpellings(names []string) []string {
 	return out
 }
 
-func TestFromS3_EveryTierNameAnySpelling(t *testing.T) {
-	m := tiers.NewMapping()
-	for _, info := range tiers.AllTiers() {
-		for _, sc := range spellings(info.Name) {
-			if got := m.FromS3(sc, ""); got != info.ID {
-				t.Errorf("FromS3(%q, \"\") = %d, want %d", sc, got, info.ID)
-			}
-		}
-	}
-}
-
 func TestFromS3_FastPathMatchesNormalized(t *testing.T) {
 	all := tiers.AllTiers()
-	classes := make([]string, 0, len(all)+6)
+	classes := make([]string, 0, len(all)+3)
 	for _, info := range all {
 		classes = append(classes, info.Name)
 	}
-	classes = append(classes, "INTELLIGENT_TIERING", "UNKNOWN_CLASS", "OUTPOSTS", "EXPRESS_ONEZONE", "SNOW", "X")
+	classes = append(classes, "INTELLIGENT_TIERING", "UNKNOWN_CLASS", "X")
 	accessTiers := []string{
 		"FREQUENT_ACCESS", "FREQUENT", "INFREQUENT_ACCESS", "INFREQUENT",
 		"ARCHIVE_INSTANT_ACCESS", "ARCHIVE_ACCESS", "ARCHIVE",
 		"DEEP_ARCHIVE_ACCESS", "DEEP_ARCHIVE", "UNKNOWN", "X",
 	}
 
-	m := tiers.NewMapping()
 	for _, sc := range allSpellings(classes) {
 		for _, at := range allSpellings(accessTiers) {
-			if got, want := m.FromS3(sc, at), tiers.FromS3Normalized(m, sc, at); got != want {
-				t.Errorf("FromS3(%q, %q) = %d, normalizing path gives %d", sc, at, got, want)
+			got, gotErr := tiers.FromS3(sc, at)
+			want, wantErr := tiers.FromS3Normalized(sc, at)
+			if got != want || errString(gotErr) != errString(wantErr) {
+				t.Errorf("FromS3(%q, %q) = %d, %v; normalizing path gives %d, %v", sc, at, got, gotErr, want, wantErr)
 			}
 		}
 	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	return err.Error()
 }
 
 func TestFromS3_CanonicalSpellingsTakeFastPath(t *testing.T) {
@@ -298,6 +316,7 @@ func TestFromS3_CanonicalSpellingsTakeFastPath(t *testing.T) {
 		{"EXPRESS_ONEZONE", "", tiers.ExpressOneZone},
 		{"OUTPOSTS", "", tiers.Outposts},
 		{"SNOW", "", tiers.Snow},
+		{"", "", tiers.Standard},
 		{"INTELLIGENT_TIERING", "", tiers.ITFrequent},
 		{"INTELLIGENT_TIERING", "FREQUENT", tiers.ITFrequent},
 		{"INTELLIGENT_TIERING", "FREQUENT_ACCESS", tiers.ITFrequent},
@@ -322,7 +341,7 @@ func TestFromS3_CanonicalSpellingsTakeFastPath(t *testing.T) {
 		{"INTELLIGENT_TIERING", "frequent"},
 		{"INTELLIGENT_TIERING", "UNKNOWN"},
 		{"UNKNOWN_CLASS", ""},
-		{"", ""},
+		{" ", ""},
 	}
 	for _, c := range misses {
 		if _, ok := tiers.CanonicalID(c[0], c[1]); ok {

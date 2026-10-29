@@ -439,6 +439,10 @@ Tier IDs (0–15) map to S3 storage classes:
 | 14 | `OUTPOSTS` | Capacity-priced: no per-GB price |
 | 15 | `SNOW` | Capacity-priced: no per-GB price |
 
+`pkg/tiers.FromS3` maps an inventory row's `StorageClass` and
+`IntelligentTieringAccessTier` to these IDs; a value outside AWS's
+documented list fails the build rather than being counted in another
+tier.
 `pkg/tiers.Resolve(id, size)` re-routes IT-Frequent objects below
 128 KiB into the synthetic `ITFrequentSmall` bucket at ingest time so
 cost estimates honour the AWS minimum-monitored-size rule exactly.

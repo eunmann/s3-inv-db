@@ -159,7 +159,11 @@ func TestTierToS3Columns_RoundTripsEveryTier(t *testing.T) {
 		if id == tiers.ITFrequentSmall {
 			size--
 		}
-		if got := tiers.Resolve(m.FromS3(cols.StorageClass, cols.AccessTier), size); got != id {
+		got, err := tiers.FromS3(cols.StorageClass, cols.AccessTier)
+		if err != nil {
+			t.Fatalf("tier %v -> (%q, %q): %v", id, cols.StorageClass, cols.AccessTier, err)
+		}
+		if got = tiers.Resolve(got, size); got != id {
 			t.Errorf("tier %v -> (%q, %q) classifies as %v", id, cols.StorageClass, cols.AccessTier, got)
 		}
 	}

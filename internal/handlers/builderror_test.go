@@ -68,6 +68,11 @@ func TestSummarizeBuildError(t *testing.T) {
 			want: "The inventory's manifest could not be used: manifest has no files.",
 		},
 		{
+			name: "unknown storage class",
+			raw:  `gated load b/i/r: load b/i/r: build index: run pipeline: ingest phase: chunk worker: chunk 3: classify "a/odd.txt" in b/i/data/part-0.csv.gz: unknown storage class "GLACIER_DEEP"`,
+			want: `Unknown storage class "GLACIER_DEEP".`,
+		},
+		{
 			name: "other: the innermost message",
 			raw:  "gated load b/i/r: load b/i/r: build index: run pipeline: ingest phase: chunk worker: chunk 3: parse row 17: unexpected EOF",
 			want: "Unexpected EOF.",

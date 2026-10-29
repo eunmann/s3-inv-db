@@ -333,6 +333,10 @@
                         <dt class="font-semibold text-gray-900 dark:text-gray-100">A build failed: "Access denied".</dt>
                         <dd class="mt-1">The server can't read the inventory files. Ask whoever runs it to check its S3 permissions, then click Retry.</dd>
                     </div>
+                    <div class="py-4" data-search-target="failed unknown storage class access tier">
+                        <dt class="font-semibold text-gray-900 dark:text-gray-100">A build failed: "Unknown storage class" or "Unknown Intelligent-Tiering access tier".</dt>
+                        <dd class="mt-1">A row of the inventory has a storage class or access tier that AWS doesn't document for S3 Inventory, so its objects can't be counted in the right storage class. The build's technical details name the value, the file and the object. Report the value so it can be supported.</dd>
+                    </div>
                     <div class="py-4" data-search-target="disk space full load refused">
                         <dt class="font-semibold text-gray-900 dark:text-gray-100">A build failed: "Not enough room in the index disk budget".</dt>
                         <dd class="mt-1">The run doesn't fit in the index disk limit even after removing every run that may be removed: the rest are pinned, or the run is larger than the whole limit. Unpin runs you no longer need, then load again. If nothing is pinned, the limit is too small for this run and whoever runs the server must raise it.</dd>

@@ -588,7 +588,7 @@ type S3InventoryColumns struct {
 	AccessTier   string
 }
 
-// tierToS3Columns inverts tiers.Mapping.FromS3: split a tier ID back into
+// tierToS3Columns inverts tiers.FromS3: split a tier ID back into
 // the (StorageClass, IntelligentTieringAccessTier) inventory columns AWS
 // would produce.
 func tierToS3Columns(m *tiers.Mapping, id tiers.ID) (S3InventoryColumns, error) {
