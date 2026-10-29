@@ -91,8 +91,8 @@ type buildSettings struct {
 // (the run's path in the inventory manifest's key), manifest.json last,
 // and removes the local copy. The S3 copy is the durable one: the local
 // one is never synced, and a crash leaves only the hidden work directory,
-// which nothing reads as an index. Build runs the build (runBuildExtSort
-// outside tests).
+// which nothing reads as an index and the next publish build into
+// workDir removes. Build runs the build (runBuildExtSort outside tests).
 func runBuildPublish(dest, workDir string, b buildSettings, build func(outDir string, b buildSettings) error) error {
 	destURI, err := s3fetch.ParseS3URI(dest)
 	if err != nil {
@@ -106,12 +106,19 @@ func runBuildPublish(dest, workDir string, b buildSettings, build func(outDir st
 	if err != nil {
 		return fmt.Errorf("--s3-manifest: %w", err)
 	}
-	local, err := os.MkdirTemp(workDir, ".s3-inv-db-publish-")
-	if err != nil {
-		return fmt.Errorf("create work dir under %s: %w", workDir, err)
+	if err := reclaimPublishDirs(&b.baseLogger, workDir); err != nil {
+		return err
 	}
-	defer os.RemoveAll(local)
-	indexDir := filepath.Join(local, "index")
+	local, err := newPublishDir(workDir)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := local.Close(); err != nil {
+			b.baseLogger.Warn().Err(err).Str("path", local.path).Msg("could not remove the work dir")
+		}
+	}()
+	indexDir := filepath.Join(local.path, "index")
 	b.transient = true
 	if err := build(indexDir, b); err != nil {
 		return err
