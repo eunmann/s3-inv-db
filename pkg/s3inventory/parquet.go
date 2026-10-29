@@ -69,6 +69,20 @@ const (
 // parquetBatchRows is how many rows each column decodes per batch.
 const parquetBatchRows = 1024
 
+// parquetReadBufferSize is the read buffer of each column chunk being
+// read; parquet-go's default of 4 KiB makes a read per page header.
+const parquetReadBufferSize = 1 << 20
+
+// parquetFileOptions open an inventory for one sequential pass over a
+// few columns, which reads neither the page index nor bloom filters.
+func parquetFileOptions() []parquet.FileOption {
+	return []parquet.FileOption{
+		parquet.SkipPageIndex(true),
+		parquet.SkipBloomFilters(true),
+		parquet.ReadBufferSize(parquetReadBufferSize),
+	}
+}
+
 // ParquetReaderConfig configures the Parquet reader.
 type ParquetReaderConfig struct {
 	// KeyCol is the column index for the object key (required).
@@ -91,7 +105,7 @@ type ParquetReaderConfig struct {
 // NewParquetReader creates a Parquet inventory reader from an io.ReaderAt.
 // This is used when you already have a ReaderAt (e.g., a local file or memory-mapped data).
 func NewParquetReader(r io.ReaderAt, size int64, cfg ParquetReaderConfig) (*ParquetReader, error) {
-	file, err := parquet.OpenFile(r, size)
+	file, err := parquet.OpenFile(r, size, parquetFileOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("open parquet file: %w", err)
 	}
@@ -103,7 +117,7 @@ func NewParquetReader(r io.ReaderAt, size int64, cfg ParquetReaderConfig) (*Parq
 // This auto-detects the schema from the Parquet file and is more efficient than
 // NewParquetReaderFromStream when you already have a ReaderAt (e.g., from temp file).
 func NewParquetReaderFromReaderAt(r io.ReaderAt, size int64) (*ParquetReader, error) {
-	file, err := parquet.OpenFile(r, size)
+	file, err := parquet.OpenFile(r, size, parquetFileOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("open parquet file: %w", err)
 	}
@@ -152,7 +166,7 @@ func NewParquetReaderFromStream(r io.ReadCloser, size int64, tempDir string) (*P
 		return nil, fmt.Errorf("seek temp file: %w", err)
 	}
 
-	file, err := parquet.OpenFile(tempFile, written)
+	file, err := parquet.OpenFile(tempFile, written, parquetFileOptions()...)
 	if err != nil {
 		tempFile.Close()
 		os.Remove(tempFile.Name())

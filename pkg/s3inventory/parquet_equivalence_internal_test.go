@@ -346,3 +346,46 @@ func readCloned(t *testing.T, next func() (Row, error)) []Row {
 		})
 	}
 }
+
+type countingReaderAt struct {
+	r     io.ReaderAt
+	reads int
+}
+
+func (c *countingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	c.reads++
+
+	return c.r.ReadAt(p, off) //nolint:wrapcheck // io.ReaderAt callers test for an unwrapped io.EOF
+}
+
+// A pass reads each column chunk in a read or two, not one per page,
+// and skips the page index and bloom filters.
+func TestParquetReader_ReadsColumnChunksWhole(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "inv.parquet")
+	err := parquet.WriteFile(path, plainRecords(),
+		parquet.PageBufferSize(16<<10), parquet.MaxRowsPerRowGroup(3500), parquet.Compression(&parquet.Uncompressed),
+		parquet.BloomFilters(parquet.SplitBlockFilter(10, "key")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := openTestFile(t, path)
+	counter := &countingReaderAt{r: f}
+	r, err := NewParquetReaderFromReaderAt(counter, f.size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened := counter.reads
+	readCloned(t, r.Next)
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	const footerReads = 4
+	if opened > footerReads {
+		t.Errorf("opening made %d reads, want at most %d", opened, footerReads)
+	}
+	chunks := len(r.rowGroups) * numParquetColumns
+	if pass := counter.reads - opened; pass > 2*chunks {
+		t.Errorf("reading %d column chunks made %d reads, want at most %d", chunks, pass, 2*chunks)
+	}
+}
