@@ -455,6 +455,31 @@ func TestMPHFBuildWorkersFitBudget(t *testing.T) {
 	}
 }
 
+// TestMPHFScratchWithinPlan: a worker's scratch for the largest
+// partition stays within the plan's largest partition, the size the
+// worker count is budgeted on.
+func TestMPHFScratchWithinPlan(t *testing.T) {
+	b := newCaseBuilder(t, testPrefixes(20_000), mphfCase{partBits: 0})
+	slots, err := os.Create(filepath.Join(t.TempDir(), MPHFSlotsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { slots.Close() })
+	h := &MPHFBuild{b: b, plan: planPartitions(b.spill.hist, b.count, 0, maxPartitionKeys), slotsFile: slots}
+	var s partScratch
+	var out bbPartition
+	if err := h.buildPart(0, &out, &s, make([]byte, spillReadBytes)); err != nil {
+		t.Fatal(err)
+	}
+	maxPart := h.plan.maxPart
+	if c := uint64(cap(s.hashes)); c > maxPart {
+		t.Errorf("record scratch holds %d keys, want at most %d", c, maxPart)
+	}
+	if c, want := uint64(cap(s.layout)), maxPart*uint64(h.plan.slotW)+mphfSlotsTailPad; c > want {
+		t.Errorf("slot layout scratch is %d bytes, want at most %d", c, want)
+	}
+}
+
 // TestMPHFBuildHeapBounded: with one worker and a small partition cap,
 // the build's heap stays near the cap's worth of keys whatever the key
 // count: twice the keys take about the same peak heap.

@@ -494,8 +494,9 @@ func (h *MPHFBuild) buildPart(p int, out *bbPartition, s *partScratch, read []by
 func (h *MPHFBuild) readPart(p int, s *partScratch, read []byte) error {
 	n := h.plan.counts[p]
 	if uint64(cap(s.hashes)) < n {
-		// Room for the next partitions too, about as large as this one.
-		size := n + n/16
+		// Room for the next partitions too, about as large as this one,
+		// within the largest the worker count is budgeted on.
+		size := min(n+n/16, h.plan.maxPart)
 		s.hashes, s.fps, s.pos = make([]uint64, 0, size), make([]uint64, 0, size), make([]uint64, 0, size)
 		s.work, s.marks = make([]uint64, size), make([]uint64, 2*levelWords(int(size)))
 	}
@@ -558,7 +559,7 @@ func (h *MPHFBuild) writeSlots(p int, out *bbPartition, s *partScratch) error {
 	n, slotW := len(s.hashes), uint64(h.plan.slotW)
 	size := uint64(n)*slotW + mphfSlotsTailPad
 	if uint64(cap(s.layout)) < size {
-		s.layout = make([]byte, size+size/16)
+		s.layout = make([]byte, min(size+size/16, h.plan.maxPart*slotW+mphfSlotsTailPad))
 	}
 	layout := s.layout[:size]
 	out.bits, s.ranks = rankDirectory(out.bits, s.ranks)
