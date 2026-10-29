@@ -37,6 +37,8 @@ type finalizeSteps struct {
 	reported  time.Time
 	lastDone  int64
 	lastTotal int64
+	// fields adds a step's own measurements to its log line.
+	fields func(*zerolog.Event) *zerolog.Event
 }
 
 func newFinalizeSteps(log *zerolog.Logger, onProgress events.ProgressFunc) *finalizeSteps {
@@ -63,6 +65,16 @@ func (s *finalizeSteps) report(step string, done, total int64) {
 	}
 }
 
+// annotate has step's log line carry fields, when step is the current
+// one.
+func (s *finalizeSteps) annotate(step string, fields func(*zerolog.Event) *zerolog.Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.step == step {
+		s.fields = fields
+	}
+}
+
 // end logs the current step, if any.
 func (s *finalizeSteps) end() {
 	s.mu.Lock()
@@ -76,7 +88,12 @@ func (s *finalizeSteps) endLocked(now time.Time) {
 		return
 	}
 	d := now.Sub(s.started)
-	logPressure(s.log.Info(), sysmem.ReadPressure().Since(s.pressure)).
+	fields := s.fields
+	if fields == nil {
+		fields = func(e *zerolog.Event) *zerolog.Event { return e }
+	}
+	s.fields = nil
+	fields(logPressure(s.log.Info(), sysmem.ReadPressure().Since(s.pressure))).
 		Str("step", s.step).
 		Int64("done", s.lastDone).
 		Int64("total", s.lastTotal).

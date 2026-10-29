@@ -151,7 +151,6 @@ type TierStatsPlan struct {
 	multiBits  slotBits
 	denseBits  slotBits
 	maxMask    uint16
-	row        tierRow
 	// force overrides the size-based choice; tests only.
 	force tierLayout
 }
@@ -180,21 +179,21 @@ func NewTierStatsPlan(present []tiers.ID) (*TierStatsPlan, error) {
 	return p, nil
 }
 
-// tierRow is one prefix's tier stats by slot: mask holds the slots with
-// data, and the others' count and bytes are zero.
-type tierRow struct {
-	count, bytes [maxTierSlots]uint64
-	mask         uint16
-}
+// A prefix's tier slots are its tier mask and, for each slot in the
+// mask from the lowest, the tier's count then its bytes: the plan
+// returns them (Add) and the writer takes them (AddSlots), so the
+// writer never maps tiers to slots again.
 
-// fill sets row to the prefix's stats, indexed by tier ID. It fails when
-// a tier outside the declared set has data: its counts would be lost.
-func (p *TierStatsPlan) fill(row *tierRow, counts, bytes *[tiers.NumTiers]uint64) error {
-	for set := row.mask; set != 0; set &= set - 1 {
-		slot := bits.TrailingZeros16(set)
-		row.count[slot], row.bytes[slot] = 0, 0
-	}
-	row.mask = 0
+// Add records the next prefix's tier stats, indexed by tier ID, and
+// returns its tier mask, with its slots' values appended to slots. It
+// fails when a tier outside the declared set has data or when the tiers
+// don't sum to the prefix's totals (a derived tier would be wrong).
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func (p *TierStatsPlan) Add(counts, bytes *[tiers.NumTiers]uint64, totalCount, totalBytes uint64, slots []uint64) (uint16, []uint64, error) {
+	start := len(slots)
+	var mask uint16
+	var sumCount, sumBytes, carryCount, carryBytes uint64
 	for id := range tiers.NumTiers {
 		c, b := counts[id], bytes[id]
 		if c == 0 && b == 0 {
@@ -202,57 +201,45 @@ func (p *TierStatsPlan) fill(row *tierRow, counts, bytes *[tiers.NumTiers]uint64
 		}
 		slot := p.slotByTier[id]
 		if slot < 0 {
-			return fmt.Errorf("%w: tier %d", ErrUndeclaredTierData, id)
+			return 0, slots[:start], fmt.Errorf("%w: tier %d", ErrUndeclaredTierData, id)
 		}
-		row.mask |= 1 << slot
-		row.count[slot], row.bytes[slot] = c, b
-	}
-
-	return nil
-}
-
-// Add records the next prefix's tier stats, indexed by tier ID, and
-// returns its tier mask. It fails when a tier outside the declared set
-// has data or when the tiers don't sum to the prefix's totals (a
-// derived tier would be wrong).
-func (p *TierStatsPlan) Add(counts, bytes *[tiers.NumTiers]uint64, totalCount, totalBytes uint64) (uint16, error) {
-	row := &p.row
-	if err := p.fill(row, counts, bytes); err != nil {
-		return 0, err
-	}
-	var sumCount, sumBytes, carryCount, carryBytes uint64
-	for set := row.mask; set != 0; set &= set - 1 {
-		slot := bits.TrailingZeros16(set)
+		mask |= 1 << slot
+		slots = append(slots, c, b)
 		var cc, cb uint64
-		sumCount, cc = bits.Add64(sumCount, row.count[slot], 0)
-		sumBytes, cb = bits.Add64(sumBytes, row.bytes[slot], 0)
+		sumCount, cc = bits.Add64(sumCount, c, 0)
+		sumBytes, cb = bits.Add64(sumBytes, b, 0)
 		carryCount |= cc
 		carryBytes |= cb
 	}
 	if carryCount != 0 || carryBytes != 0 || sumCount != totalCount || sumBytes != totalBytes {
-		return 0, fmt.Errorf("%w: tiers %d objects / %d bytes, totals %d / %d",
+		return 0, slots[:start], fmt.Errorf("%w: tiers %d objects / %d bytes, totals %d / %d",
 			errTierSumMismatch, sumCount, sumBytes, totalCount, totalBytes)
 	}
 	p.rows++
 	if p.slots == 1 {
-		return row.mask, nil
+		return mask, slots, nil
 	}
-	p.maxMask = max(p.maxMask, row.mask)
-	if n := bits.OnesCount16(row.mask); n >= 2 {
+	p.maxMask = max(p.maxMask, mask)
+	vals := slots[start:]
+	// The multi layout stores every slot of a multi-tier prefix but its
+	// highest; the dense layout every slot but the present set's last,
+	// and a slot without data adds nothing to the widths.
+	if n := len(vals); n >= 4 {
 		p.multiRows++
-		p.multiSlots += uint64(n - 1)
-		stored := row.mask &^ (1 << (bits.Len16(row.mask) - 1))
-		for stored != 0 {
-			slot := bits.TrailingZeros16(stored)
-			stored &= stored - 1
-			p.multiBits.add(row.count[slot], row.bytes[slot])
+		p.multiSlots += uint64(n/2 - 1)
+		for k := 0; k < n-2; k += 2 {
+			p.multiBits.add(vals[k], vals[k+1])
 		}
 	}
-	for slot := range p.slots - 1 {
-		p.denseBits.add(row.count[slot], row.bytes[slot])
+	dense := len(vals)
+	if mask>>(p.slots-1) != 0 {
+		dense -= 2
+	}
+	for k := 0; k < dense; k += 2 {
+		p.denseBits.add(vals[k], vals[k+1])
 	}
 
-	return row.mask, nil
+	return mask, slots, nil
 }
 
 // choose returns the layout whose files and core tier fields together
@@ -316,7 +303,6 @@ var errTierPlanMismatch = errors.New("tier stats rows differ from their plan")
 // form: every count and width their headers hold is in the plan.
 type TierStatsWriter struct {
 	plan *TierStatsPlan
-	row  tierRow
 	rows uint64
 	// The layout's files: dense, or the multi layout's four (masks only
 	// past 8 slots). All nil with one present tier.
@@ -368,35 +354,45 @@ func NewTierStatsWriter(outDir string, plan *TierStatsPlan, sums *Checksums) (*T
 	return w, nil
 }
 
-// Add writes the next prefix's tier stats, indexed by tier ID, and
-// returns its tier mask for its core row. The plan has checked them.
-func (w *TierStatsWriter) Add(counts, bytes *[tiers.NumTiers]uint64) (uint16, error) {
+// AddSlots writes the next prefix's tier slots, as the plan's Add
+// returned them. The plan has checked them.
+func (w *TierStatsWriter) AddSlots(mask uint16, slots []uint64) error {
 	if w.rows == w.plan.rows {
-		return 0, fmt.Errorf("%w: more than %d rows", errTierPlanMismatch, w.plan.rows)
+		return fmt.Errorf("%w: more than %d rows", errTierPlanMismatch, w.plan.rows)
+	}
+	if mask>>w.plan.slots != 0 || len(slots) != 2*bits.OnesCount16(mask) {
+		return fmt.Errorf("%w: mask %#x with %d values, of %d slots", errTierPlanMismatch, mask, len(slots), w.plan.slots)
 	}
 	w.rows++
-	row := &w.row
-	if err := w.plan.fill(row, counts, bytes); err != nil {
-		return 0, err
-	}
 	switch {
 	case w.dense != nil:
-		for slot := range w.plan.slots - 1 {
-			if err := w.dense.put(row.count[slot], row.bytes[slot]); err != nil {
-				return 0, err
-			}
-		}
+		return w.addDense(mask, slots)
 	case w.multi != nil:
-		if err := w.addMulti(row); err != nil {
-			return 0, err
+		return w.addMulti(mask, slots)
+	}
+
+	return nil
+}
+
+// addDense writes every slot but the last, zeros for those without
+// data.
+func (w *TierStatsWriter) addDense(mask uint16, slots []uint64) error {
+	for slot := range w.plan.slots - 1 {
+		var count, bytes uint64
+		if mask&(1<<slot) != 0 {
+			count, bytes, slots = slots[0], slots[1], slots[2:]
+		}
+		if err := w.dense.put(count, bytes); err != nil {
+			return err
 		}
 	}
 
-	return row.mask, nil
+	return nil
 }
 
-func (w *TierStatsWriter) addMulti(row *tierRow) error {
-	multi := bits.OnesCount16(row.mask) >= 2
+// addMulti writes a multi-tier prefix's slots but its highest.
+func (w *TierStatsWriter) addMulti(mask uint16, slots []uint64) error {
+	multi := len(slots) >= 4
 	if err := w.rowBits.add(multi); err != nil {
 		return err
 	}
@@ -407,15 +403,12 @@ func (w *TierStatsWriter) addMulti(row *tierRow) error {
 		return err
 	}
 	if w.masks != nil {
-		if err := w.masks.put(uint64(row.mask)); err != nil {
+		if err := w.masks.put(uint64(mask)); err != nil {
 			return err
 		}
 	}
-	rest := row.mask &^ (1 << (bits.Len16(row.mask) - 1))
-	for rest != 0 {
-		slot := bits.TrailingZeros16(rest)
-		rest &= rest - 1
-		if err := w.multi.put(row.count[slot], row.bytes[slot]); err != nil {
+	for k := 0; k < len(slots)-2; k += 2 {
+		if err := w.multi.put(slots[k], slots[k+1]); err != nil {
 			return err
 		}
 		w.stored++

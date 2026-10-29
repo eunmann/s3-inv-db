@@ -31,10 +31,10 @@ import (
 type levelSpool struct {
 	err error // the writer's first error; read once it has stopped
 	dir string
-	// plan, when set, sees each record on the writer goroutine before it
-	// is written, every record once in Add order; its error fails the
-	// spool as a write error does.
-	plan func(depth int, r *spoolRecord) error
+	// plan, when set, sees each entry on the writer goroutine before its
+	// record is written, every entry once in Add order; its error fails
+	// the spool as a write error does.
+	plan func(e *spoolEntry) error
 	// batch is the one Add is filling; full and free carry batches to
 	// the writer and back.
 	batch   []spoolEntry
@@ -50,16 +50,26 @@ type levelSpool struct {
 
 // spoolBatchRows and spoolBatches size the hand-off to the writer:
 // three batches (one being filled, one queued, one being written) of
-// 1024 rows, under 1 MiB in all.
+// 1024 rows, about 1 MiB in all.
 const (
 	spoolBatchRows = 1024
 	spoolBatches   = 3
 )
 
-// spoolEntry is a record on its way to the spool and its depth.
+// spoolEntry is a row on its way to the spool: its record, its depth
+// and what the plan takes from it that is not spooled.
 type spoolEntry struct {
 	rec   spoolRecord
 	depth int
+	// keyHash, fp and local (the prefix's index within its depth) are
+	// for the plan to hand the MPHF builder.
+	keyHash, fp, local uint64
+	// name is the last segment, without its slash (empty for the root),
+	// for the plan to intern into rec.segID.
+	name []byte
+	// tierCounts and tierBytes are the row's tier stats by tier ID, for
+	// the plan to turn into rec's tier slots.
+	tierCounts, tierBytes [tiers.NumTiers]uint64
 }
 
 // errSpoolStopped is returned by commit once the spool was finished.
@@ -121,7 +131,7 @@ func (s *levelSpool) write() {
 				break
 			}
 			if s.plan != nil {
-				s.err = s.plan(batch[i].depth, &batch[i].rec)
+				s.err = s.plan(&batch[i])
 			}
 			if s.err == nil {
 				s.err = s.add(batch[i].depth, &batch[i].rec)
@@ -166,21 +176,20 @@ const levelSpoolBufSize = 256 << 10
 
 // spoolRecord is one prefix as Finalize needs it. Child and parent are
 // indexes within their own depth (the next and the previous); Finalize
-// adds the depth's first row once every depth's size is known.
+// adds the depth's first row once every depth's size is known. It is
+// one cache line, its tier values kept apart: the replay fills records
+// on one core and writes them on two others, and a record holding every
+// tier's values spanned over five.
 type spoolRecord struct {
 	count, bytes uint64
 	childLocal   uint64 // the prefix's first child, within depth+1
 	parentLocal  uint64 // the parent, within depth-1; 0 for the root
-	// keyHash, fp and local (the prefix's index within its depth) are
-	// for the plan to hand the MPHF builder; they are not spooled.
-	keyHash, fp uint64
-	local       uint64
-	// name is the last segment, without its slash (empty for the root),
-	// for the plan to intern into segID; only segID is spooled.
-	name       []byte
-	segID      uint32
-	tierCounts [tiers.NumTiers]uint64
-	tierBytes  [tiers.NumTiers]uint64
+	// tiers holds the values of the tier slots in tierMask, as
+	// format.TierStatsPlan.Add gives them, in a buffer the record's
+	// filler owns.
+	tiers    []uint64
+	segID    uint32
+	tierMask uint16
 }
 
 func (s *levelSpool) file(depth int) (*spoolFile, error) {
@@ -203,12 +212,6 @@ func (s *levelSpool) add(depth int, r *spoolRecord) error {
 	if err != nil {
 		return err
 	}
-	var mask uint64
-	for i, c := range r.tierCounts {
-		if c != 0 || r.tierBytes[i] != 0 {
-			mask |= 1 << i
-		}
-	}
 	// A record is its length, then its fields, so the reader can decode
 	// it from one slice of its buffer.
 	s.rec = s.rec[:0]
@@ -217,11 +220,9 @@ func (s *levelSpool) add(depth int, r *spoolRecord) error {
 	buf = binary.AppendUvarint(buf, r.childLocal)
 	buf = binary.AppendUvarint(buf, r.parentLocal)
 	buf = binary.AppendUvarint(buf, uint64(r.segID))
-	buf = binary.AppendUvarint(buf, mask)
-	for m := mask; m != 0; m &= m - 1 {
-		i := bits.TrailingZeros64(m)
-		buf = binary.AppendUvarint(buf, r.tierCounts[i])
-		buf = binary.AppendUvarint(buf, r.tierBytes[i])
+	buf = binary.AppendUvarint(buf, uint64(r.tierMask))
+	for _, v := range r.tiers {
+		buf = binary.AppendUvarint(buf, v)
 	}
 	s.rec = buf
 	head := binary.AppendUvarint(sf.bw.AvailableBuffer(), uint64(len(buf)))
@@ -274,35 +275,38 @@ func (s *levelSpool) open(depth int) (*spoolReader, error) {
 	return &spoolReader{f: f, in: readWindow{r: bufio.NewReaderSize(f, levelSpoolBufSize)}, depth: depth}, nil
 }
 
-// next decodes the next record into rec: io.EOF after the last.
-func (r *spoolReader) next(rec *spoolRecord) error {
-	err := r.read(rec)
+// next decodes the next record into rec, its tier values appended to
+// vals: io.EOF after the last.
+func (r *spoolReader) next(rec *spoolRecord, vals []uint64) ([]uint64, error) {
+	vals, err := r.read(rec, vals)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return fmt.Errorf("read level spool %d: %w", r.depth, err)
+		return vals, fmt.Errorf("read level spool %d: %w", r.depth, err)
 	}
 
-	return err
+	return vals, err
 }
 
-// read decodes the next record into rec: io.EOF at a clean end of the
-// stream, errSpoolTruncated inside a record.
-func (r *spoolReader) read(rec *spoolRecord) error {
+// read decodes the next record into rec, its tier values appended to
+// vals: io.EOF at a clean end of the stream, errSpoolTruncated inside a
+// record.
+func (r *spoolReader) read(rec *spoolRecord, vals []uint64) ([]uint64, error) {
 	b := r.in.rest()
 	n, k := binary.Uvarint(b)
 	if k <= 0 || n > uint64(len(b)-k) {
 		if err := r.refill(); err != nil {
-			return err
+			return vals, err
 		}
 		b = r.in.rest()
 		n, k = binary.Uvarint(b)
 	}
 	end := k + int(n)
-	if err := decodeSpoolRecord(b[k:end], rec); err != nil {
-		return err
+	vals, err := decodeSpoolRecord(b[k:end], rec, vals)
+	if err != nil {
+		return vals, err
 	}
 	r.in.advance(end)
 
-	return nil
+	return vals, nil
 }
 
 // refill refills the window for the record that runs past it: io.EOF
@@ -349,8 +353,8 @@ func (s *levelSpool) remove(depth int) error {
 var errSpoolTruncated = errors.New("level spool record truncated")
 
 // decodeSpoolRecord decodes one record from buf, which holds exactly
-// it.
-func decodeSpoolRecord(buf []byte, r *spoolRecord) error {
+// it, appending its tier values to vals; r.tiers is them.
+func decodeSpoolRecord(buf []byte, r *spoolRecord, vals []uint64) ([]uint64, error) {
 	next := func() uint64 {
 		// Most fields (small counts, segment IDs, masks) fit in a byte.
 		if len(buf) > 0 && buf[0] < 0x80 {
@@ -372,23 +376,24 @@ func decodeSpoolRecord(buf []byte, r *spoolRecord) error {
 	r.count, r.bytes, r.childLocal, r.parentLocal = next(), next(), next(), next()
 	segID := next()
 	if segID > math.MaxUint32 {
-		return fmt.Errorf("%w: segment ID %d", errSpoolTruncated, segID)
+		return vals, fmt.Errorf("%w: segment ID %d", errSpoolTruncated, segID)
 	}
 	r.segID = uint32(segID)
 	mask := next()
-	r.tierCounts, r.tierBytes = [tiers.NumTiers]uint64{}, [tiers.NumTiers]uint64{}
-	for m := mask; m != 0; m &= m - 1 {
-		i := bits.TrailingZeros64(m)
-		if i >= int(tiers.NumTiers) {
-			return fmt.Errorf("%w: tier %d", errSpoolTruncated, i)
-		}
-		r.tierCounts[i], r.tierBytes[i] = next(), next()
+	if mask > math.MaxUint16 {
+		return vals, fmt.Errorf("%w: tier mask %#x", errSpoolTruncated, mask)
+	}
+	r.tierMask = uint16(mask)
+	start := len(vals)
+	for range 2 * bits.OnesCount16(r.tierMask) {
+		vals = append(vals, next())
 	}
 	if buf == nil || len(buf) != 0 {
-		return errSpoolTruncated
+		return vals[:start], errSpoolTruncated
 	}
+	r.tiers = vals[start:len(vals):len(vals)]
 
-	return nil
+	return vals, nil
 }
 
 func truncated(err error) error {

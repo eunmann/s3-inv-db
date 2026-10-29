@@ -8,22 +8,43 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"sort"
 	"testing"
+	"unsafe"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
+// TestSpoolRecordIsOneCacheLine: the replay hands every record from the
+// reader's core to two others; a record past a cache line costs each a
+// line per row.
+func TestSpoolRecordIsOneCacheLine(t *testing.T) {
+	if size := unsafe.Sizeof(spoolRecord{}); size > 64 {
+		t.Errorf("spoolRecord is %d bytes, want at most 64", size)
+	}
+}
+
+// spoolRecordCmp compares records by what they hold: a record without
+// tiers reads back with an empty slice.
+var spoolRecordCmp = []cmp.Option{cmp.AllowUnexported(spoolRecord{}), cmpopts.EquateEmpty()}
+
 // spoolTestRecord is the i-th record of the spool tests, at depth i%4,
-// without the fields that are not spooled: the name and the MPHF key.
+// with no tier slot to three of them.
 func spoolTestRecord(i int) spoolRecord {
 	r := spoolRecord{
 		count: uint64(i), bytes: uint64(i) << 20, childLocal: uint64(i / 2), parentLocal: uint64(i / 3),
 		segID: uint32(i) * 0x9e3779b9,
 	}
-	r.tierCounts[i%MaxTiers], r.tierBytes[i%MaxTiers] = uint64(i), uint64(i)<<20
+	for j := range i % 4 {
+		r.tierMask |= 1 << ((i + 5*j) % MaxTiers)
+	}
+	for j := range bits.OnesCount16(r.tierMask) {
+		r.tiers = append(r.tiers, uint64(i+j), uint64(i)<<20|uint64(j))
+	}
 
 	return r
 }
@@ -38,8 +59,8 @@ func TestLevelSpoolWritesEveryRecordInOrder(t *testing.T) {
 	for i := range n {
 		e := s.next()
 		e.depth, e.rec = i%4, spoolTestRecord(i)
-		e.rec.name = fmt.Appendf(nil, "seg-%d", i)
-		e.rec.keyHash, e.rec.fp, e.rec.local = uint64(i)*0x9e3779b97f4a7c15, ^uint64(i), uint64(i)
+		e.name = fmt.Appendf(nil, "seg-%d", i)
+		e.keyHash, e.fp, e.local = uint64(i)*0x9e3779b97f4a7c15, ^uint64(i), uint64(i)
 		if err := s.commit(); err != nil {
 			t.Fatalf("commit %d: %v", i, err)
 		}
@@ -55,12 +76,12 @@ func TestLevelSpoolWritesEveryRecordInOrder(t *testing.T) {
 		i := depth
 		var got spoolRecord
 		for ; ; i += 4 {
-			if err := r.next(&got); errors.Is(err, io.EOF) {
+			if _, err := r.next(&got, nil); errors.Is(err, io.EOF) {
 				break
 			} else if err != nil {
 				t.Fatal(err)
 			}
-			if diff := cmp.Diff(spoolTestRecord(i), got, cmp.AllowUnexported(spoolRecord{})); diff != "" {
+			if diff := cmp.Diff(spoolTestRecord(i), got, spoolRecordCmp...); diff != "" {
 				t.Fatalf("record %d (-added +read):\n%s", i, diff)
 			}
 		}
@@ -161,7 +182,7 @@ func readSpool(src io.Reader, size int) ([]spoolRecord, error) {
 	var recs []spoolRecord
 	for {
 		var rec spoolRecord
-		if err := r.next(&rec); err != nil {
+		if _, err := r.next(&rec, nil); err != nil {
 			return recs, err
 		}
 		recs = append(recs, rec)
@@ -190,7 +211,7 @@ func TestSpoolReaderAcrossRefills(t *testing.T) {
 				if !errors.Is(err, io.EOF) {
 					t.Fatalf("after %d records: %v, want EOF", len(got), err)
 				}
-				if diff := cmp.Diff(want, got, cmp.AllowUnexported(spoolRecord{})); diff != "" {
+				if diff := cmp.Diff(want, got, spoolRecordCmp...); diff != "" {
 					t.Fatalf("(-added +read):\n%s", diff)
 				}
 			})
@@ -205,10 +226,10 @@ func TestSpoolReaderAcrossRefills(t *testing.T) {
 func TestSpoolReaderFillsTheBuffer(t *testing.T) {
 	big := spoolRecord{
 		count: math.MaxUint64, bytes: math.MaxUint64, childLocal: math.MaxUint64, parentLocal: math.MaxUint64,
-		segID: math.MaxUint32,
+		segID: math.MaxUint32, tierMask: math.MaxUint16,
 	}
-	for i := range big.tierCounts {
-		big.tierCounts[i], big.tierBytes[i] = math.MaxUint64, math.MaxUint64
+	for range 2 * MaxTiers {
+		big.tiers = append(big.tiers, math.MaxUint64)
 	}
 	size := len(spoolStream(t, []spoolRecord{big}))
 	want := []spoolRecord{spoolTestRecord(0), big, spoolTestRecord(2)}
@@ -220,7 +241,7 @@ func TestSpoolReaderFillsTheBuffer(t *testing.T) {
 			if !errors.Is(err, io.EOF) {
 				t.Fatalf("after %d records: %v, want EOF", len(got), err)
 			}
-			if diff := cmp.Diff(want, got, cmp.AllowUnexported(spoolRecord{})); diff != "" {
+			if diff := cmp.Diff(want, got, spoolRecordCmp...); diff != "" {
 				t.Fatalf("(-added +read):\n%s", diff)
 			}
 			got, err = readSpool(wrap(tooLong), size-1)
@@ -245,7 +266,7 @@ func TestSpoolReaderTruncated(t *testing.T) {
 			if len(got) != whole {
 				t.Fatalf("buffer %d, cut at %d: read %d records, want %d", size, cut, len(got), whole)
 			}
-			if diff := cmp.Diff(want[:whole], got, cmp.AllowUnexported(spoolRecord{})); whole > 0 && diff != "" {
+			if diff := cmp.Diff(want[:whole], got, spoolRecordCmp...); whole > 0 && diff != "" {
 				t.Fatalf("buffer %d, cut at %d (-added +read):\n%s", size, cut, diff)
 			}
 			atBoundary := whole == 0 && cut == 0 || whole > 0 && ends[whole-1] == cut
@@ -276,6 +297,7 @@ func BenchmarkLevelSpoolRead(b *testing.B) {
 		b.Fatal(err)
 	}
 	var rec spoolRecord
+	var vals []uint64
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -285,7 +307,7 @@ func BenchmarkLevelSpoolRead(b *testing.B) {
 		}
 		read := 0
 		for ; ; read++ {
-			if err := r.next(&rec); errors.Is(err, io.EOF) {
+			if vals, err = r.next(&rec, vals[:0]); errors.Is(err, io.EOF) {
 				break
 			} else if err != nil {
 				b.Fatal(err)
