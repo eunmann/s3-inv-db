@@ -498,9 +498,10 @@ each 4 bytes big-endian, concatenated in order (one empty piece for an
 empty file), as 8 hex digits. It guards against accidental damage
 only: the manifest travels with the files, so a cryptographic hash
 would authenticate nothing, and CRC-32C runs on the CPU's CRC
-instructions. The pieces of every file are hashed in parallel, so
-writing or verifying a manifest uses every core instead of one thread
-reading the whole index.
+instructions. A build hashes each file's bytes as it writes them, so
+writing the manifest reads no index file back; a file written without
+that, or changed since, is read. Verifying reads every file, hashing
+the pieces of every file in parallel on every core.
 
 ```json
 {

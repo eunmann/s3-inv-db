@@ -282,7 +282,7 @@ func TestManifestListsPatchFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := WriteManifest(dir, 5000, 1, nil); err != nil {
+	if _, err := WriteManifest(dir, 5000, 1, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	m, err := ReadManifest(dir)

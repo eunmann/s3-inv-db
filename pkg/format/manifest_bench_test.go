@@ -37,13 +37,13 @@ func BenchmarkManifest(b *testing.B) {
 		b.SetBytes(total)
 		b.ReportAllocs()
 		for b.Loop() {
-			if err := format.WriteManifest(dir, 1, 1, nil); err != nil {
+			if _, err := format.WriteManifest(dir, 1, 1, nil, nil); err != nil {
 				b.Fatal(err)
 			}
 		}
 	})
 	b.Run("op=verify", func(b *testing.B) {
-		if err := format.WriteManifest(dir, 1, 1, nil); err != nil {
+		if _, err := format.WriteManifest(dir, 1, 1, nil, nil); err != nil {
 			b.Fatal(err)
 		}
 		m, err := format.ReadManifest(dir)

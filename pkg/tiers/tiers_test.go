@@ -161,17 +161,16 @@ func TestByID(t *testing.T) {
 	}
 }
 
-func TestWriteReadManifest(t *testing.T) {
+func TestEncodeReadManifest(t *testing.T) {
 	dir := t.TempDir()
 
 	presentTiers := []tiers.ID{tiers.Standard, tiers.GlacierFR, tiers.ITFrequent}
-	if err := tiers.WriteManifest(dir, presentTiers); err != nil {
-		t.Fatalf("WriteManifest failed: %v", err)
+	data, err := tiers.EncodeManifest(presentTiers)
+	if err != nil {
+		t.Fatalf("EncodeManifest failed: %v", err)
 	}
-
-	path := filepath.Join(dir, "tiers.json")
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("tiers.json not created: %v", err)
+	if err := os.WriteFile(filepath.Join(dir, tiers.ManifestFile), data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	manifest, err := tiers.ReadManifest(dir)

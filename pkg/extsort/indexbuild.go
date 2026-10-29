@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -478,9 +479,14 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 
 	log.Debug().Msg("index builder: writing manifest")
 
-	if err := format.WriteManifest(b.outDir, b.posCount, b.maxDepth, b.stepProgress); err != nil {
+	reread, err := format.WriteManifest(b.outDir, b.posCount, b.maxDepth, b.checksums, b.stepProgress)
+	if err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
+	log.Debug().
+		Int("files_reread", len(reread)).
+		Strs("reread", reread).
+		Msg("index builder: manifest checksums taken while writing, the rest read back")
 
 	log.Debug().
 		Str("total_duration", humanfmt.Duration(time.Since(startTime))).
@@ -901,7 +907,11 @@ func (b *IndexBuilder) writeTierManifest() error {
 	if b.posCount == 0 || len(b.resolvedTiers) == 0 {
 		return nil
 	}
-	if err := tiers.WriteManifest(b.outDir, b.resolvedTiers); err != nil {
+	data, err := tiers.EncodeManifest(b.resolvedTiers)
+	if err != nil {
+		return fmt.Errorf("write tier manifest: %w", err)
+	}
+	if err := format.WriteFile(filepath.Join(b.outDir, tiers.ManifestFile), data, b.checksums); err != nil {
 		return fmt.Errorf("write tier manifest: %w", err)
 	}
 

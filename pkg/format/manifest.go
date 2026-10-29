@@ -4,9 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
+
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 // ManifestVersion is the current manifest format version. Version 3
@@ -35,8 +39,12 @@ type FileInfo struct {
 // integrity and so callers can compute on-disk size by summing
 // manifest.Files[*].Size — no directory walk needed.
 //
+// A file's checksum is the one its writer recorded in sums while
+// writing it; a file with none there, or changed since, is read and
+// hashed. It returns the names of the files it read.
+//
 // Progress, when non-nil, receives the StepChecksum step.
-func WriteManifest(dir string, nodeCount uint64, maxDepth uint32, progress StepProgress) error {
+func WriteManifest(dir string, nodeCount uint64, maxDepth uint32, sums *Checksums, progress StepProgress) ([]string, error) {
 	manifest := Manifest{
 		Version:   ManifestVersion,
 		CreatedAt: time.Now().UTC(),
@@ -46,32 +54,37 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32, progress StepP
 	}
 	names, err := manifestFileNames(dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	var total int64
+	reread := make(map[string]int64)
+	var total, recorded int64
 	for _, name := range names {
-		info, err := os.Stat(filepath.Join(dir, name))
+		path := filepath.Join(dir, name)
+		info, err := os.Stat(path)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
 
-			return fmt.Errorf("stat %s: %w", name, err)
+			return nil, fmt.Errorf("stat %s: %w", name, err)
 		}
-		manifest.Files[name] = FileInfo{Size: info.Size()}
 		total += info.Size()
-	}
-	sizes := make(map[string]int64, len(manifest.Files))
-	for name, fi := range manifest.Files {
-		sizes[name] = fi.Size
+		sum, ok := sums.lookup(path, info)
+		manifest.Files[name] = FileInfo{Size: info.Size(), Checksum: sum}
+		if ok {
+			recorded += info.Size()
+		} else {
+			reread[name] = info.Size()
+		}
 	}
 	hashed := newStepCounter(progress, StepChecksum, total)
-	sums, err := checksumFiles(dir, sizes, checksumPiece, hashed)
+	hashed.add(int(recorded))
+	reads, err := checksumFiles(dir, reread, checksumPiece, hashed)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	hashed.finish()
-	for name, sum := range sums {
+	for name, sum := range reads {
 		fi := manifest.Files[name]
 		fi.Checksum = sum
 		manifest.Files[name] = fi
@@ -80,14 +93,14 @@ func WriteManifest(dir string, nodeCount uint64, maxDepth uint32, progress StepP
 	manifestPath := filepath.Join(dir, ManifestFile)
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal manifest: %w", err)
+		return nil, fmt.Errorf("marshal manifest: %w", err)
 	}
 
 	if err := os.WriteFile(manifestPath, data, FilePerm); err != nil {
-		return fmt.Errorf("write manifest: %w", err)
+		return nil, fmt.Errorf("write manifest: %w", err)
 	}
 
-	return nil
+	return slices.Sorted(maps.Keys(reread)), nil
 }
 
 // TotalBytes sums the size of every file the manifest enumerates. The
@@ -104,7 +117,8 @@ func (m *Manifest) TotalBytes() uint64 {
 	return total
 }
 
-// StepChecksum is WriteManifest's step: it counts the bytes hashed.
+// StepChecksum is WriteManifest's step: it counts the bytes of the
+// files checksummed, those their writers hashed all at once.
 const StepChecksum = "Checksumming files"
 
 // manifestFileNames lists the files a manifest covers. The top-level
@@ -120,7 +134,7 @@ func manifestFileNames(dir string) ([]string, error) {
 		DepthBlocksFile,
 		MPHFile,
 		MPHFSlotsFile,
-		"tiers.json",
+		tiers.ManifestFile,
 		CoreStatsFile,
 		PrefixDictBlobFile,
 		PrefixDictOffsetsFile,

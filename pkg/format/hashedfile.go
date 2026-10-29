@@ -2,6 +2,7 @@ package format
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -119,6 +120,20 @@ func createHashedFile(path string, sums *Checksums) (*hashedFile, error) {
 	}
 
 	return &hashedFile{file: f, sums: sums, path: path}, nil
+}
+
+// WriteFile writes data to the index file at path, as os.WriteFile
+// does, recording its checksum in sums.
+func WriteFile(path string, data []byte, sums *Checksums) error {
+	f, err := createHashedFile(path, sums)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		return errors.Join(fmt.Errorf("write %s: %w", filepath.Base(path), err), f.Close())
+	}
+
+	return f.Close()
 }
 
 // Write writes p at the sequential offset.

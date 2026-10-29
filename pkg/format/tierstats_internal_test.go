@@ -87,7 +87,11 @@ func buildTierIndex(t *testing.T, present []tiers.ID, rows []tierTestRow, force 
 		coreRows[i] = coreTestRow{count: c, bytes: b, child: uint64(len(rows)), mask: masks[i]}
 	}
 	writeCoreFiles(t, dir, coreRows, plan.MaskEncoding())
-	if err := tiers.WriteManifest(dir, present); err != nil {
+	data, err := tiers.EncodeManifest(present)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFile(filepath.Join(dir, tiers.ManifestFile), data, nil); err != nil {
 		t.Fatal(err)
 	}
 	cr, err := OpenCoreStats(dir)
