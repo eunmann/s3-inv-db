@@ -73,6 +73,14 @@ type otherTypesRecord struct {
 	AccessTier     string `parquet:"IntelligentTieringAccessTier,optional"`
 }
 
+// A repeated storage class, one value per row: the reader takes one row
+// per value of a repeated column, as ReadValues gives them.
+type repeatedRecord struct {
+	Key          string   `parquet:"key"`
+	Size         int64    `parquet:"size"`
+	StorageClass []string `parquet:"storage_class"`
+}
+
 // Only the required columns.
 type minimalRecord struct {
 	Key  string `parquet:"key"`
@@ -84,6 +92,16 @@ func minimalRecords() []minimalRecord {
 	for i := range rows {
 		r := equivalenceInput(i)
 		rows[i] = minimalRecord{r.key, r.size}
+	}
+
+	return rows
+}
+
+func repeatedRecords() []repeatedRecord {
+	rows := make([]repeatedRecord, equivalenceRows)
+	for i := range rows {
+		r := equivalenceInput(i)
+		rows[i] = repeatedRecord{r.key, r.size, []string{r.storageClass}}
 	}
 
 	return rows
@@ -226,6 +244,9 @@ func equivalenceCases() []equivalenceCase {
 		}},
 		{name: "minimal/v2/uncompressed", write: func(p string) error {
 			return parquet.WriteFile(p, minimalRecords(), with(parquet.DataPageVersion(2), parquet.Compression(&parquet.Uncompressed))...)
+		}},
+		{name: "repeated/v2/snappy", write: func(p string) error {
+			return parquet.WriteFile(p, repeatedRecords(), with(parquet.DataPageVersion(2), parquet.Compression(&parquet.Snappy))...)
 		}},
 		{name: "bloom-and-page-index/v2/snappy", wantDict: true, write: func(p string) error {
 			return parquet.WriteFile(p, dictRecords(), with(parquet.DataPageVersion(2), parquet.Compression(&parquet.Snappy),
