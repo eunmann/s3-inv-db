@@ -64,43 +64,75 @@ func TestHeapReadingsUnderPressure(t *testing.T) {
 }
 
 // EstimatedMemoryUsage counts each new prefix once, with its key (the
-// parent's index and the segment), the prefix Drain writes and its map
-// entry; a segment's nodes add map
-// entries when it is mapped and give back the prefixes of those merged
-// into the main tree; a Drain starts it over.
+// parent's index and the segment) and the prefix Drain writes; a
+// segment's nodes give back the prefixes of those merged into the main
+// tree when it is mapped; a Drain starts it over. The node table counts
+// at its size, which a Drain keeps.
 func TestAggregatorEstimateCountsEachPrefix(t *testing.T) {
-	const node, entry, h = aggregatorNodeBytes, aggregatorMapEntryBytes, nodeKeyHeader
+	const node, h = aggregatorNodeBytes, nodeKeyHeader
 	agg := NewAggregator(0, 0)
+	table := int64(tableSlotsFor(10_000)) * nodeSlotBytes
 	check := func(step string, want int64) {
 		t.Helper()
 		if got := agg.EstimatedMemoryUsage(); got != want {
 			t.Fatalf("%s: estimate = %d, want %d", step, got, want)
 		}
 	}
+	check("new", table)
 	for _, k := range []string{"a/b/x", "a/b/y", "a/c/z", "top"} {
 		agg.AddObject(k, 1, tiers.Standard)
 	}
-	// "" (no key, no map entry), then "a/", "a/b/", "a/c/": key + prefix.
-	want := 4*node + 3*entry + (h + 2 + 2) + (h + 2 + 4) + (h + 2 + 4)
-	check("map", want)
+	// "" (no key), then "a/", "a/b/", "a/c/": key + prefix.
+	want := table + 4*node + (h + 2 + 2) + (h + 2 + 4) + (h + 2 + 4)
+	check("table", want)
 
 	agg.StartSegment()
 	agg.AddObject("a/b/z", 1, tiers.Standard)
-	// A root, "a/" and "a/b/" of the segment's own, in no map.
+	// A root, "a/" and "a/b/" of the segment's own, in no table.
 	want += 3*node + (h + 2 + 2) + (h + 2 + 4)
 	check("ordered segment", want)
 
 	agg.AddObject("a/a/x", 1, tiers.Standard)
 	// Mapping merges the three into the main tree's, whose prefixes Drain
 	// writes once; then "a/a/" is new.
-	want += -(2 + 4) + node + entry + (h + 2 + 4)
+	want += -(2 + 4) + node + (h + 2 + 4)
 	check("mapped segment", want)
 	if got := agg.PrefixCount(); got != 5 {
 		t.Errorf("PrefixCount = %d, want 5", got)
 	}
 
 	agg.Drain()
-	check("after Drain", 0)
+	check("after Drain", table)
+	agg.Release()
+	check("after Release", 0)
+}
+
+// The estimate counts the node table at the size it grows to, not at the
+// size its nodes would need: after a spill that grew it, a smaller one
+// still counts the larger table it keeps.
+func TestAggregatorEstimateCountsTableGrowth(t *testing.T) {
+	agg := NewAggregator(1, 0)
+	slots := minTableSlots
+	for i := range 1000 {
+		agg.AddObject(fmt.Sprintf("p%04d/x", i), 1, tiers.Standard)
+		if agg.children.count > maxTableLoad(slots) {
+			slots *= 2
+		}
+		if got := len(agg.children.slots); got != slots {
+			t.Fatalf("after %d prefixes: %d slots, want %d", i+1, got, slots)
+		}
+		if got, want := agg.EstimatedMemoryUsage(), agg.bytes+int64(slots)*nodeSlotBytes; got != want {
+			t.Fatalf("after %d prefixes: estimate %d, want %d", i+1, got, want)
+		}
+	}
+	if slots != 2048 {
+		t.Fatalf("1000 prefixes grew the table to %d slots, want 2048", slots)
+	}
+	agg.Drain()
+	agg.AddObject("q/x", 1, tiers.Standard)
+	if got, want := agg.EstimatedMemoryUsage(), agg.bytes+int64(slots)*nodeSlotBytes; got != want {
+		t.Fatalf("after a Drain: estimate %d, want %d", got, want)
+	}
 }
 
 // Rows recycled after a Drain must start from zero, across more than
@@ -296,5 +328,40 @@ func TestAggregatorDrainReusesScratch(t *testing.T) {
 	}
 	if allocs := testing.AllocsPerRun(10, func() { cycle() }); allocs != 1 {
 		t.Errorf("a spill no larger than the last = %v allocs, want 1", allocs)
+	}
+}
+
+// The estimate is what the aggregator's heap grows by, for keys out of
+// order with short and long segments, with the node table nearly full
+// and just doubled: the nodes, their parents, keys and the node table,
+// plus the prefixes Drain will write.
+func TestAggregatorEstimateTracksHeap(t *testing.T) {
+	for _, segLen := range []int{4, 40} {
+		// 57,000 nodes fill 65,536 slots to 87%; 115,000 have just
+		// doubled them to 262,144.
+		for _, n := range []int{57_000, 115_000} {
+			keys := make([]string, n)
+			for i, j := range rand.New(rand.NewPCG(1, uint64(n))).Perm(n) {
+				keys[i] = fmt.Sprintf("%0*d/x", segLen-1, j)
+			}
+			runtime.GC()
+			before, _ := heapReadings()
+			agg := NewAggregator(0, 0)
+			for _, k := range keys {
+				agg.AddObject(k, 1, tiers.Standard)
+			}
+			runtime.GC()
+			after, _ := heapReadings()
+			measured := int64(after) - int64(before)
+			estimate := agg.EstimatedMemoryUsage() - int64(agg.prefixBytes)
+			t.Logf("%d-byte segments, %d prefixes: heap %.1f B/prefix, estimate %.1f (%d slots)",
+				segLen, n, float64(measured)/float64(n), float64(estimate)/float64(n), len(agg.children.slots))
+			if lo, hi := measured*95/100, measured*105/100; estimate < lo || estimate > hi {
+				t.Errorf("%d-byte segments, %d prefixes: estimate %d without prefixes, heap grew %d (want within 5%%)",
+					segLen, n, estimate, measured)
+			}
+			runtime.KeepAlive(agg)
+			runtime.KeepAlive(keys)
+		}
 	}
 }
