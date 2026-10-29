@@ -41,10 +41,14 @@ type managedInventory struct {
 	// loading. Guarded by Catalog.mu.
 	prefaultBytes uint64
 	// preLoad is the manual intent (pin, user-unload mark) the run had
-	// before its latest load, which Retract puts back. Guarded by
-	// Catalog.mu.
+	// before its latest load put its index in place, which Retract puts
+	// back. Guarded by Catalog.mu.
 	preLoad loadIntent
-	mu      sync.RWMutex
+	// pinSetDuringLoad records a SetPinned while a load builds: the
+	// user's choice then outranks the pin a manual load applies. Guarded
+	// by Catalog.mu.
+	pinSetDuringLoad bool
+	mu               sync.RWMutex
 }
 
 // loadIntent is the part of Info a manual load overwrites.
@@ -251,15 +255,19 @@ func openLocalPath(_ context.Context, info Info) (string, error) {
 }
 
 // Load builds (if needed) and opens the inventory index, using the
-// default BuildFunc (interpret Path as a local directory). Marks the
-// run as Pinned so it's protected from auto-eviction.
+// default BuildFunc (interpret Path as a local directory). Once the
+// index is in place it marks the run as Pinned so it's protected from
+// auto-eviction.
 func (c *Catalog) Load(ctx context.Context, id ID) error {
 	return c.LoadWith(ctx, id, openLocalPath)
 }
 
 // LoadWith calls build outside the manager lock to materialise an
-// on-disk index, then opens it. Marks the run as Pinned (manual intent)
-// and clears any prior UserUnloadedAt sentinel.
+// on-disk index, then opens it. Once the index is in place it marks the
+// run as Pinned (manual intent) and clears any prior UserUnloadedAt
+// sentinel. The intent lands with the index, not before it, so a load
+// that fails, is cancelled or is cut off by a restart leaves the run's
+// pin and user-unload mark as they were.
 func (c *Catalog) LoadWith(ctx context.Context, id ID, build BuildFunc) error {
 	return c.loadInternal(ctx, id, build, true /* pin */)
 }
@@ -292,11 +300,7 @@ func (c *Catalog) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	// state into JSON API responses.
 	inv.info.LoadDuration = 0
 	inv.prefaultBytes = 0
-	inv.preLoad = loadIntent{pinned: inv.info.Pinned, userUnloadedAt: inv.info.UserUnloadedAt}
-	if pin {
-		inv.info.Pinned = true
-		inv.info.UserUnloadedAt = time.Time{}
-	}
+	inv.pinSetDuringLoad = false
 	loadStartedAt := time.Now()
 	snapshot := inv.info
 	w := c.stageLocked(inv.info)
@@ -323,7 +327,7 @@ func (c *Catalog) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	}
 
 	c.mu.Lock()
-	w, err := c.finishLoadLocked(ctx, id, idx, buildErr, openErr, bytes, loadStartedAt)
+	w, err := c.finishLoadLocked(ctx, id, idx, buildErr, openErr, bytes, loadStartedAt, pin)
 	c.mu.Unlock()
 	if w.seq != 0 {
 		// A fresh ctx: ctx may be cancelled, but the outcome must persist.
@@ -333,8 +337,9 @@ func (c *Catalog) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	return err
 }
 
-// finishLoadLocked records a load's outcome. Caller holds c.mu.
-func (c *Catalog) finishLoadLocked(ctx context.Context, id ID, idx *indexread.Index, buildErr, openErr error, bytes uint64, loadStartedAt time.Time) (pendingWrite, error) {
+// finishLoadLocked records a load's outcome, applying a manual load's
+// pin only once its index is in place. Caller holds c.mu.
+func (c *Catalog) finishLoadLocked(ctx context.Context, id ID, idx *indexread.Index, buildErr, openErr error, bytes uint64, loadStartedAt time.Time, pin bool) (pendingWrite, error) {
 	inv, exists := c.inventories[id]
 	if !exists {
 		if idx != nil {
@@ -382,6 +387,13 @@ func (c *Catalog) finishLoadLocked(ctx context.Context, id ID, idx *indexread.In
 	inv.info.AutoLoadFailureCount = 0
 	inv.info.AutoLoadBackoffUntil = time.Time{}
 	inv.info.LoadDuration = inv.info.LoadedAt.Sub(loadStartedAt)
+	inv.preLoad = loadIntent{pinned: inv.info.Pinned, userUnloadedAt: inv.info.UserUnloadedAt}
+	if pin {
+		if !inv.pinSetDuringLoad {
+			inv.info.Pinned = true
+		}
+		inv.info.UserUnloadedAt = time.Time{}
+	}
 
 	return c.stageLocked(inv.info), nil
 }
@@ -552,7 +564,21 @@ func closeDrained(inv *managedInventory, idx *indexread.Index) {
 // SetPinned flips the pin state of a managed inventory. Returns
 // ErrNotFound when id is unknown. Mirrors to the store.
 func (c *Catalog) SetPinned(ctx context.Context, id ID, pinned bool) error {
-	return c.update(ctx, id, func(info *Info) { info.Pinned = pinned })
+	c.mu.Lock()
+	inv, exists := c.inventories[id]
+	if !exists {
+		c.mu.Unlock()
+
+		return ErrNotFound
+	}
+	inv.info.Pinned = pinned
+	if inv.info.State == StateLoading {
+		inv.pinSetDuringLoad = true
+	}
+	w := c.stageLocked(inv.info)
+	c.mu.Unlock()
+
+	return c.persist(ctx, w)
 }
 
 // update applies fn to an inventory's info under c.mu and persists the
