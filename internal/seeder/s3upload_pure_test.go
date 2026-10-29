@@ -146,6 +146,25 @@ func TestTierToS3Columns_NonIntelligentLeavesAccessTierEmpty(t *testing.T) {
 	}
 }
 
+// Every tier's inventory columns classify back to it; ITFrequentSmall
+// shares ITFrequent's columns and is told apart by size alone.
+func TestTierToS3Columns_RoundTripsEveryTier(t *testing.T) {
+	m := tiers.NewMapping()
+	for _, id := range tiers.AllTierIDs() {
+		cols, err := seeder.TierToS3Columns(m, id)
+		if err != nil {
+			t.Fatalf("tierToS3Columns(%v): %v", id, err)
+		}
+		size := tiers.SmallObjectThresholdBytes
+		if id == tiers.ITFrequentSmall {
+			size--
+		}
+		if got := tiers.Resolve(m.FromS3(cols.StorageClass, cols.AccessTier), size); got != id {
+			t.Errorf("tier %v -> (%q, %q) classifies as %v", id, cols.StorageClass, cols.AccessTier, got)
+		}
+	}
+}
+
 // encodeCSV returns the uncompressed CSV encodeCSVGz writes for objects.
 func encodeCSV(t *testing.T, seed int64, objects []benchutil.FakeObject) string {
 	t.Helper()

@@ -36,7 +36,10 @@ const (
 	ITArchive
 	ITDeepArchive
 	ITFrequentSmall // IT objects < 128 KiB: Frequent rate, no monitoring fee
-	NumTiers        // Sentinel value for array sizing
+	ExpressOneZone
+	Outposts
+	Snow
+	NumTiers // Sentinel value for array sizing
 )
 
 // SmallObjectThresholdBytes is the AWS S3 Intelligent-Tiering minimum
@@ -76,6 +79,9 @@ var allTiers = []Info{
 	{ID: ITArchive, Name: "INTELLIGENT_TIERING_ARCHIVE", FilePrefix: "it_archive"},
 	{ID: ITDeepArchive, Name: "INTELLIGENT_TIERING_DEEP_ARCHIVE", FilePrefix: "it_deep_archive"},
 	{ID: ITFrequentSmall, Name: "INTELLIGENT_TIERING_FREQUENT_SMALL", FilePrefix: "it_frequent_small"},
+	{ID: ExpressOneZone, Name: "EXPRESS_ONEZONE", FilePrefix: "express_onezone"},
+	{ID: Outposts, Name: "OUTPOSTS", FilePrefix: "outposts"},
+	{ID: Snow, Name: "SNOW", FilePrefix: "snow"},
 }
 
 // AllTiers returns information about all supported tiers in tier-ID
@@ -156,6 +162,12 @@ func canonicalID(storageClass, accessTier string) (ID, bool) {
 		return DeepArchive, true
 	case "REDUCED_REDUNDANCY":
 		return ReducedRedundancy, true
+	case "EXPRESS_ONEZONE":
+		return ExpressOneZone, true
+	case "OUTPOSTS":
+		return Outposts, true
+	case "SNOW":
+		return Snow, true
 	case "INTELLIGENT_TIERING":
 		switch accessTier {
 		case "", "FREQUENT_ACCESS", "FREQUENT":

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -321,6 +322,42 @@ func TestPipelineRun_CSVTierStatsAcrossBufferRefills(t *testing.T) {
 		if _, ok := want[k]; !ok {
 			t.Errorf("prefix %q has unexpected tier %d", k.prefix, k.tier)
 		}
+	}
+}
+
+// EXPRESS_ONEZONE, OUTPOSTS and SNOW rows are counted under their own
+// tiers, not STANDARD.
+func TestPipelineRun_CSVNewStorageClassTiers(t *testing.T) {
+	fc := s3test.FetchClient(t)
+	manifest := uploadCSVInventory(t, fc, "Bucket, Key, Size, StorageClass",
+		[][]string{
+			{"src", "a/std.txt", "1", "STANDARD"},
+			{"src", "a/express.txt", "10", "EXPRESS_ONEZONE"},
+			{"src", "a/outposts.txt", "100", "OUTPOSTS"},
+			{"src", "a/snow.txt", "1000", "SNOW"},
+			{"src", "a/snow2.txt", "2000", "snow"},
+		})
+	outDir := filepath.Join(t.TempDir(), "index")
+	if _, err := extsort.NewPipeline(extsort.DefaultConfig(), fc).Run(t.Context(), manifest, outDir); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	idx, err := indexread.Open(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	pos, ok := idx.Lookup("a/")
+	if !ok {
+		t.Fatal("prefix a/ missing")
+	}
+	want := []format.TierBreakdown{
+		{TierID: tiers.Standard, TierName: "STANDARD", ObjectCount: 1, Bytes: 1},
+		{TierID: tiers.ExpressOneZone, TierName: "EXPRESS_ONEZONE", ObjectCount: 1, Bytes: 10},
+		{TierID: tiers.Outposts, TierName: "OUTPOSTS", ObjectCount: 1, Bytes: 100},
+		{TierID: tiers.Snow, TierName: "SNOW", ObjectCount: 2, Bytes: 3000},
+	}
+	if got := idx.TierBreakdown(pos); !slices.Equal(got, want) {
+		t.Errorf("a/ tiers = %+v, want %+v", got, want)
 	}
 }
 

@@ -25,6 +25,12 @@ func TestFromS3_StandardClasses(t *testing.T) {
 		{"GLACIER", "", tiers.GlacierFR},
 		{"DEEP_ARCHIVE", "", tiers.DeepArchive},
 		{"REDUCED_REDUNDANCY", "", tiers.ReducedRedundancy},
+		{"EXPRESS_ONEZONE", "", tiers.ExpressOneZone},
+		{"express_onezone", "", tiers.ExpressOneZone},
+		{"OUTPOSTS", "", tiers.Outposts},
+		{"outposts", "", tiers.Outposts},
+		{"SNOW", "", tiers.Snow},
+		{"snow", "", tiers.Snow},
 	}
 
 	for _, tt := range tests {
@@ -289,6 +295,9 @@ func TestFromS3_CanonicalSpellingsTakeFastPath(t *testing.T) {
 		{"GLACIER", "", tiers.GlacierFR},
 		{"DEEP_ARCHIVE", "", tiers.DeepArchive},
 		{"REDUCED_REDUNDANCY", "", tiers.ReducedRedundancy},
+		{"EXPRESS_ONEZONE", "", tiers.ExpressOneZone},
+		{"OUTPOSTS", "", tiers.Outposts},
+		{"SNOW", "", tiers.Snow},
 		{"INTELLIGENT_TIERING", "", tiers.ITFrequent},
 		{"INTELLIGENT_TIERING", "FREQUENT", tiers.ITFrequent},
 		{"INTELLIGENT_TIERING", "FREQUENT_ACCESS", tiers.ITFrequent},

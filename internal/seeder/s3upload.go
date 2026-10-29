@@ -607,7 +607,8 @@ func tierToS3Columns(m *tiers.Mapping, id tiers.ID) (S3InventoryColumns, error) 
 		return S3InventoryColumns{StorageClass: storageClassIntelligentTiering, AccessTier: "DEEP_ARCHIVE_ACCESS"}, nil
 	case tiers.Standard, tiers.StandardIA, tiers.OneZoneIA,
 		tiers.GlacierIR, tiers.GlacierFR, tiers.DeepArchive,
-		tiers.ReducedRedundancy, tiers.NumTiers:
+		tiers.ReducedRedundancy, tiers.ExpressOneZone, tiers.Outposts,
+		tiers.Snow, tiers.NumTiers:
 		// Plain S3 storage classes (no access-tier column). NumTiers is
 		// the sentinel and shouldn't appear at this layer, but handle it
 		// defensively rather than letting exhaustive fall through.

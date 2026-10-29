@@ -87,7 +87,7 @@ fields little-endian:
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | Magic | `0x53334944` ("S3ID" in ASCII) |
-| 4 | 4 | Version | Format version (currently `13`) |
+| 4 | 4 | Version | Format version (currently `14`) |
 | 8 | 8 | Count | Number of rows |
 | 16 | 4 | Width | Row stride in bytes |
 
@@ -396,7 +396,7 @@ Tier stats give each prefix's `(count, bytes)` per tier listed in
 `tiers.json`; tier slot *i* is the *i*-th tier there (ascending tier
 ID). The pipeline declares the present tiers (those with data anywhere
 in the inventory) before the first row, so tiers with no data get no
-slot. A builder that declares none records all 13 tiers.
+slot. A builder that declares none records all 16 tiers.
 
 Every prefix's per-tier counts and bytes sum exactly to its
 `object_count` and `total_bytes`; the builder checks this for every row
@@ -418,7 +418,7 @@ values need (1–8 bytes each), recorded in a 2-byte descriptor (count
 width, bytes width) after the header of `tier_dense.bin` and
 `tier_multi.bin`. Both files end with an 8-byte zero tail pad.
 
-Tier IDs (0–12) map to S3 storage classes:
+Tier IDs (0–15) map to S3 storage classes:
 
 | ID | S3 name | Notes |
 |----|---|---|
@@ -435,6 +435,9 @@ Tier IDs (0–12) map to S3 storage classes:
 | 10 | `INTELLIGENT_TIERING_ARCHIVE` | Monitored + Glacier overhead |
 | 11 | `INTELLIGENT_TIERING_DEEP_ARCHIVE` | Monitored + Glacier overhead |
 | 12 | `INTELLIGENT_TIERING_FREQUENT_SMALL` | Synthetic bucket for IT-Frequent objects < 128 KiB; billed at Frequent rate, excluded from the monitoring fee |
+| 13 | `EXPRESS_ONEZONE` |  |
+| 14 | `OUTPOSTS` | Capacity-priced: no per-GB price |
+| 15 | `SNOW` | Capacity-priced: no per-GB price |
 
 `pkg/tiers.Resolve(id, size)` re-routes IT-Frequent objects below
 128 KiB into the synthetic `ITFrequentSmall` bucket at ingest time so
@@ -506,4 +509,4 @@ from the file-header format version.
 
 ## Versioning
 
-The format version in file headers lets a reader refuse files it would mis-decode. Version 13 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 14 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
