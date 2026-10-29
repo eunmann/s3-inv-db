@@ -457,6 +457,14 @@ func (c *Catalog) EvictForBudget(ctx context.Context, id ID) error {
 	return c.unloadInternal(ctx, id, false /* userInitiated */, true /* keepPinned */)
 }
 
+// Retract unloads a run whose fresh index the load gate found too big
+// for the disk budget. Unlike EvictForBudget it unloads a pinned run,
+// whose pin came from that load; unlike Unload it doesn't mark the run
+// deliberately removed, so the auto-loader may try it again.
+func (c *Catalog) Retract(ctx context.Context, id ID) error {
+	return c.unloadInternal(ctx, id, false /* userInitiated */, false /* keepPinned */)
+}
+
 func (c *Catalog) unloadInternal(ctx context.Context, id ID, userInitiated, keepPinned bool) error {
 	c.mu.Lock()
 	inv, exists := c.inventories[id]

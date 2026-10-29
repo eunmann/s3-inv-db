@@ -491,10 +491,10 @@ func (d *Discovery) loadInternal(ctx context.Context, disc Inventory, onProgress
 		if err == nil {
 			opts.EstimateBytes = size
 		}
-		// On error we proceed with EstimateBytes=0, letting the planner
-		// reserve nothing — the load might still refuse later but at
-		// least we don't lose the manual-Load attempt to a transient
-		// manifest fetch hiccup.
+		// On error we proceed with EstimateBytes=0, reserving nothing:
+		// the gate settles the load at its built size, evicting or
+		// refusing then, so a transient manifest fetch hiccup doesn't
+		// lose the load.
 	}
 	if err := d.gate(ctx, composite, build, opts); err != nil {
 		return fmt.Errorf("gated load %s: %w", composite, err)

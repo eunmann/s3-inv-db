@@ -40,6 +40,14 @@ the least recently queried runs. It never evicts a pinned run (a
 manual Load pins) or one being read: eviction waits for in-flight
 queries before deleting.
 
+Once built, a load counts at its measured size. If that puts the
+loaded indexes over `max_index_disk` (the headroom absorbs smaller
+misses), the planner evicts for the difference; if only pinned runs
+are left to evict, the new index is unloaded and deleted, the load is
+refused. Until the server restarts, loading that run again reserves
+its measured size, so it is refused before rebuilding while the space
+is still short.
+
 The budget counts indexes only. **Size the volume for scratch too**:
 at least 2× the largest manifest's compressed size, per concurrent
 build, on top of `max_index_disk`.
