@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -29,9 +28,6 @@ const (
 	prefixTreeDescBytes = 2
 	prefixTreeDataOff   = HeaderSize + prefixTreeDescBytes
 	prefixTreeTailPad   = 8
-	// PrefixTreeScratchRow is a build-time row: segment ID (4 bytes)
-	// then parent distance (8 bytes).
-	prefixTreeScratchRow = 12
 	// PrefixTreeMaxIDWidth is the widest segment ID: IDs are uint32.
 	prefixTreeMaxIDWidth = 4
 )
@@ -41,142 +37,137 @@ var (
 	errPrefixTreeFile  = errors.New("prefix tree: invalid file")
 )
 
-// PrefixTreeWriter writes the prefix tree and its segment dictionary.
-// Rows go to a fixed-width scratch file during the build; Close writes
-// the final file with each field at the width its largest value needs.
+// errPrefixTreePlan means the rows given to a prefix tree writer differ
+// from the count, segments and parent distances it was made for.
+var errPrefixTreePlan = errors.New("prefix tree: rows differ from their plan")
+
+// PrefixTreeWriter writes the prefix tree row by row in position order,
+// straight to its final widths: the caller gives the row count, the
+// number of distinct segments (interned by a PrefixSegmentInterner,
+// which writes the dictionary) and the largest parent distance up front.
 type PrefixTreeWriter struct {
-	interner    *PrefixSegmentInterner
-	scratch     *os.File
-	bw          *bufio.Writer
-	finalPath   string
-	scratchPath string
-	count       uint64
-	maxDist     uint64
+	path     string
+	f        *os.File
+	bw       *bufio.Writer
+	count    uint64
+	segments uint32
+	maxDist  uint64
+	// The rows written, and their largest segment ID and distance.
+	n              uint64
+	topSeg         uint32
+	topDist        uint64
+	segW, distW    uint8
+	closed, anySeg bool
+	row            [16]byte
 }
 
-// NewPrefixTreeWriter creates the writer for the index in outDir.
-func NewPrefixTreeWriter(outDir string) (*PrefixTreeWriter, error) {
-	interner, err := NewPrefixSegmentInterner(outDir)
-	if err != nil {
-		return nil, fmt.Errorf("create prefix segment interner: %w", err)
+// NewPrefixTreeWriter creates the prefix tree of count prefixes in
+// outDir, whose segment IDs are below segments and whose parents are at
+// most maxDist positions back.
+func NewPrefixTreeWriter(outDir string, count uint64, segments uint32, maxDist uint64) (*PrefixTreeWriter, error) {
+	w := &PrefixTreeWriter{
+		path:     filepath.Join(outDir, PrefixTreeFile),
+		count:    count,
+		segments: segments,
+		maxDist:  maxDist,
+		segW:     byteWidthOf(uint64(max(segments, 1) - 1)),
+		distW:    byteWidthOf(maxDist),
 	}
-	finalPath := filepath.Join(outDir, PrefixTreeFile)
-	scratchPath := finalPath + ".wide"
-	f, err := os.Create(scratchPath)
+	f, err := os.Create(w.path)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("create prefix tree scratch: %w", err), interner.Close())
+		return nil, fmt.Errorf("create prefix tree: %w", err)
+	}
+	w.f, w.bw = f, bufio.NewWriterSize(f, writeBufSize)
+	head := EncodeHeader(Header{Magic: MagicNumber, Version: Version, Count: count, Width: uint32(w.segW) + uint32(w.distW)})
+	if _, err := w.bw.Write(append(head, w.segW, w.distW)); err != nil {
+		return nil, errors.Join(fmt.Errorf("write prefix tree header: %w", err), w.Abort())
 	}
 
-	return &PrefixTreeWriter{
-		interner:    interner,
-		scratch:     f,
-		bw:          bufio.NewWriterSize(f, repackBufferSize),
-		finalPath:   finalPath,
-		scratchPath: scratchPath,
-	}, nil
+	return w, nil
 }
 
 // AddRoot adds the root prefix "", which must come first.
 func (w *PrefixTreeWriter) AddRoot() error {
-	if w.count != 0 {
-		return fmt.Errorf("%w: root at position %d", errPrefixTreeOrder, w.count)
+	if w.n != 0 {
+		return fmt.Errorf("%w: root at position %d", errPrefixTreeOrder, w.n)
 	}
 
 	return w.writeRow(0, 0)
 }
 
-// Add adds the next prefix: the prefix at parentPos, then name, then a
-// slash. Name may alias a buffer the caller reuses.
-func (w *PrefixTreeWriter) Add(parentPos uint64, name string) error {
-	if w.count == 0 || parentPos >= w.count {
-		return fmt.Errorf("%w: parent %d for position %d", errPrefixTreeOrder, parentPos, w.count)
+// Add adds the next prefix: the prefix at parentPos, then segment segID,
+// then a slash.
+func (w *PrefixTreeWriter) Add(parentPos uint64, segID uint32) error {
+	if w.n == 0 || parentPos >= w.n {
+		return fmt.Errorf("%w: parent %d for position %d", errPrefixTreeOrder, parentPos, w.n)
 	}
-	id, err := w.interner.Intern(name)
-	if err != nil {
-		return fmt.Errorf("intern segment %q: %w", name, err)
+	dist := w.n - parentPos
+	if segID >= w.segments || dist > w.maxDist {
+		return fmt.Errorf("%w: segment %d of %d, parent distance %d of at most %d",
+			errPrefixTreePlan, segID, w.segments, dist, w.maxDist)
 	}
-	dist := w.count - parentPos
-	w.maxDist = max(w.maxDist, dist)
+	w.topSeg, w.topDist, w.anySeg = max(w.topSeg, segID), max(w.topDist, dist), true
 
-	return w.writeRow(id, dist)
+	return w.writeRow(segID, dist)
 }
 
 func (w *PrefixTreeWriter) writeRow(segID uint32, dist uint64) error {
-	// Encode into the writer's free space: a local array passed to Write
-	// would escape, one allocation per prefix.
-	buf := binary.LittleEndian.AppendUint32(w.bw.AvailableBuffer(), segID)
-	buf = binary.LittleEndian.AppendUint64(buf, dist)
-	if _, err := w.bw.Write(buf); err != nil {
-		return fmt.Errorf("write prefix tree scratch: %w", err)
+	if w.n == w.count {
+		return fmt.Errorf("%w: more than %d rows", errPrefixTreePlan, w.count)
 	}
-	w.count++
+	// Each field goes in as a whole word over the bytes after it.
+	binary.LittleEndian.PutUint64(w.row[:], uint64(segID))
+	binary.LittleEndian.PutUint64(w.row[w.segW:], dist)
+	if _, err := w.bw.Write(w.row[:w.segW+w.distW]); err != nil {
+		return fmt.Errorf("write prefix tree: %w", err)
+	}
+	w.n++
 
 	return nil
 }
 
-// Close writes the final tree file and the segment dictionary and
-// removes the scratch file.
+// Close finishes the file once every row is written and the largest
+// segment ID and distance are the ones the widths were chosen for. On
+// an error it removes the file.
 func (w *PrefixTreeWriter) Close() error {
-	err := errors.Join(w.bw.Flush(), w.scratch.Close(), w.interner.Close())
-	if err == nil {
-		err = w.writeTree()
+	segments := uint32(0)
+	if w.anySeg {
+		segments = w.topSeg + 1
 	}
-
-	return errors.Join(err, removeIfErr(w.scratchPath))
-}
-
-// Abort removes the scratch file without writing the tree; the caller
-// removes the rest of the index.
-func (w *PrefixTreeWriter) Abort() error {
-	return errors.Join(w.scratch.Close(), w.interner.Close(), removeIfErr(w.scratchPath))
-}
-
-func (w *PrefixTreeWriter) writeTree() error {
-	segW := byteWidthOf(uint64(max(w.interner.Count(), 1) - 1))
-	distW := byteWidthOf(w.maxDist)
-	src, err := os.Open(w.scratchPath)
-	if err != nil {
-		return fmt.Errorf("open prefix tree scratch: %w", err)
-	}
-	defer src.Close()
-	dst, err := os.Create(w.finalPath)
-	if err != nil {
-		return fmt.Errorf("create prefix tree: %w", err)
-	}
-	fail := func(err error) error {
-		return errors.Join(fmt.Errorf("write prefix tree: %w", err), dst.Close(), removeIfErr(w.finalPath))
-	}
-	out := bufio.NewWriterSize(dst, repackBufferSize)
-	head := EncodeHeader(Header{Magic: MagicNumber, Version: Version, Count: w.count, Width: uint32(segW) + uint32(distW)})
-	if _, err := out.Write(append(head, segW, distW)); err != nil {
-		return fail(err)
-	}
-	in := bufio.NewReaderSize(src, repackBufferSize)
-	var row [prefixTreeScratchRow]byte
-	for range w.count {
-		if _, err := io.ReadFull(in, row[:]); err != nil {
-			return fail(err)
-		}
-		if _, err := out.Write(row[:segW]); err != nil {
-			return fail(err)
-		}
-		if _, err := out.Write(row[4 : 4+distW]); err != nil {
-			return fail(err)
-		}
+	if w.n != w.count || segments != w.segments || w.topDist != w.maxDist {
+		return errors.Join(fmt.Errorf("%w: %d rows, %d segments, parent distance %d; planned %d, %d, %d",
+			errPrefixTreePlan, w.n, segments, w.topDist, w.count, w.segments, w.maxDist), w.Abort())
 	}
 	var pad [prefixTreeTailPad]byte
-	if _, err := out.Write(pad[:]); err != nil {
-		return fail(err)
+	if _, err := w.bw.Write(pad[:]); err != nil {
+		return errors.Join(fmt.Errorf("write prefix tree tail pad: %w", err), w.Abort())
 	}
-	if err := out.Flush(); err != nil {
-		return fail(err)
+	if err := w.bw.Flush(); err != nil {
+		return errors.Join(fmt.Errorf("flush prefix tree: %w", err), w.Abort())
 	}
-	startWriteback(dst)
-	if err := dst.Close(); err != nil {
-		return errors.Join(fmt.Errorf("close prefix tree: %w", err), removeIfErr(w.finalPath))
+	startWriteback(w.f)
+	err := w.f.Close()
+	w.f = nil
+	if err != nil {
+		return errors.Join(fmt.Errorf("close prefix tree: %w", err), w.Abort())
 	}
+	w.closed = true
 
 	return nil
+}
+
+// Abort removes the file unless Close finished it. Idempotent.
+func (w *PrefixTreeWriter) Abort() error {
+	if w.closed {
+		return nil
+	}
+	var err error
+	if w.f != nil {
+		err = w.f.Close()
+		w.f = nil
+	}
+
+	return errors.Join(err, removeIfErr(w.path))
 }
 
 // PrefixTreeReader maps positions to prefix strings. Segments are

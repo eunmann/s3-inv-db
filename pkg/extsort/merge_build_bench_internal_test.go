@@ -55,7 +55,7 @@ func runMergeBuildSeamBench(b *testing.B, n, runFileCount int) {
 			b.Fatalf("MergeAllToIterator: %v", err)
 		}
 
-		builder, err := NewIndexBuilderWithCapacity(outDir, "", iter.Remaining())
+		builder, err := NewIndexBuilder(outDir, "")
 		if err != nil {
 			b.Fatalf("NewIndexBuilder: %v", err)
 		}

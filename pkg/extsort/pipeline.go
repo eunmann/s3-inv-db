@@ -1168,14 +1168,13 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	}()
 
 	// Upper bound: sums every spilled run's row count, so a prefix
-	// touched in N runs is counted N times. IndexBuilder uses it only
-	// as a capped hint for the initial build-file size.
+	// touched in N runs is counted N times. Progress counts against it.
 	prefixCount := mergeIter.Remaining()
 	log.Debug().
 		Uint64("merge_iter_remaining", prefixCount).
 		Msg("index build starting")
 
-	builder, err := NewIndexBuilderWithCapacity(outDir, p.tempDir, prefixCount)
+	builder, err := NewIndexBuilder(outDir, p.tempDir)
 	if err != nil {
 		return mergeBuildResult{}, fmt.Errorf("create index builder: %w", err)
 	}

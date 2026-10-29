@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/bits"
 	"os"
 	"path/filepath"
@@ -30,6 +31,10 @@ import (
 type levelSpool struct {
 	err error // the writer's first error; read once it has stopped
 	dir string
+	// plan, when set, sees each record on the writer goroutine before it
+	// is written, every record once in Add order; its error fails the
+	// spool as a write error does.
+	plan func(depth int, r *spoolRecord) error
 	// batch is the one Add is filling; full and free carry batches to
 	// the writer and back.
 	batch   []spoolEntry
@@ -115,7 +120,12 @@ func (s *levelSpool) write() {
 			if s.err != nil {
 				break
 			}
-			s.err = s.add(batch[i].depth, &batch[i].rec)
+			if s.plan != nil {
+				s.err = s.plan(batch[i].depth, &batch[i].rec)
+			}
+			if s.err == nil {
+				s.err = s.add(batch[i].depth, &batch[i].rec)
+			}
 		}
 		if s.err != nil {
 			s.failed.Store(true)
@@ -162,9 +172,12 @@ type spoolRecord struct {
 	childLocal   uint64 // the prefix's first child, within depth+1
 	parentLocal  uint64 // the parent, within depth-1; 0 for the root
 	keyHash, fp  uint64 // the MPHF key hash and fingerprint
-	name         []byte // the last segment, without its slash; empty for the root
-	tierCounts   [tiers.NumTiers]uint64
-	tierBytes    [tiers.NumTiers]uint64
+	// name is the last segment, without its slash (empty for the root),
+	// for the plan to intern into segID; only segID is spooled.
+	name       []byte
+	segID      uint32
+	tierCounts [tiers.NumTiers]uint64
+	tierBytes  [tiers.NumTiers]uint64
 }
 
 func (s *levelSpool) file(depth int) (*spoolFile, error) {
@@ -202,8 +215,7 @@ func (s *levelSpool) add(depth int, r *spoolRecord) error {
 	buf = binary.AppendUvarint(buf, r.parentLocal)
 	buf = binary.LittleEndian.AppendUint64(buf, r.keyHash)
 	buf = binary.LittleEndian.AppendUint64(buf, r.fp)
-	buf = binary.AppendUvarint(buf, uint64(len(r.name)))
-	buf = append(buf, r.name...)
+	buf = binary.AppendUvarint(buf, uint64(r.segID))
 	buf = binary.AppendUvarint(buf, mask)
 	for m := mask; m != 0; m &= m - 1 {
 		i := bits.TrailingZeros64(m)
@@ -314,7 +326,7 @@ func readSpoolRecord(in *bufio.Reader, r *spoolRecord) error {
 // it.
 func decodeSpoolRecord(buf []byte, r *spoolRecord) error {
 	next := func() uint64 {
-		// Most fields (small counts, names' lengths, masks) fit in a byte.
+		// Most fields (small counts, segment IDs, masks) fit in a byte.
 		if len(buf) > 0 && buf[0] < 0x80 {
 			v := buf[0]
 			buf = buf[1:]
@@ -338,12 +350,11 @@ func decodeSpoolRecord(buf []byte, r *spoolRecord) error {
 	r.keyHash = binary.LittleEndian.Uint64(buf)
 	r.fp = binary.LittleEndian.Uint64(buf[8:])
 	buf = buf[16:]
-	n := next()
-	if uint64(len(buf)) < n {
-		return errSpoolTruncated
+	segID := next()
+	if segID > math.MaxUint32 {
+		return fmt.Errorf("%w: segment ID %d", errSpoolTruncated, segID)
 	}
-	r.name = append(r.name[:0], buf[:n]...)
-	buf = buf[n:]
+	r.segID = uint32(segID)
 	mask := next()
 	r.tierCounts, r.tierBytes = [tiers.NumTiers]uint64{}, [tiers.NumTiers]uint64{}
 	for m := mask; m != 0; m &= m - 1 {

@@ -1,6 +1,7 @@
 package format_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,52 +10,46 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/format"
 )
 
-// TestCoreStatsAdaptiveWidths_RoundTrip builds a core_stats file with
-// known-small observed maxes, asserts the chosen stride is narrower
-// than the safe-wide build stride, and round-trips every field
-// through the reader. Catches off-by-ones in the writer repack or
-// the reader's mask-load offsets.
+// TestCoreStatsAdaptiveWidths_RoundTrip builds a one-row core_stats
+// file, asserts each field takes the width its value needs, and
+// round-trips every field through the reader. Catches off-by-ones in
+// the writer's packing or the reader's mask-load offsets.
 func TestCoreStatsAdaptiveWidths_RoundTrip(t *testing.T) {
 	for _, tc := range []struct {
 		name              string
 		count, totalBytes uint64
 		tierMask          uint16
-		childStart        uint64
 		wantStride        format.CoreStatsStride
 	}{
 		{
 			name:  "all_min", // widths should be 1B per field
 			count: 1, totalBytes: 1,
 			tierMask:   1,
-			childStart: 0,
 			wantStride: format.CoreStatsStride{Count: 1, Bytes: 1, ChildStart: 1, TierMask: 0},
 		},
 		{
-			name:  "mid_range", // u16 for count/bytes, u24 for child_start
+			name:  "mid_range", // u16 for count/bytes
 			count: 0xFFFF, totalBytes: 0xFFFF,
 			tierMask:   0b101,
-			childStart: 0xFFFFFF,
-			wantStride: format.CoreStatsStride{Count: 2, Bytes: 2, ChildStart: 3, TierMask: 1},
+			wantStride: format.CoreStatsStride{Count: 2, Bytes: 2, ChildStart: 1, TierMask: 1},
 		},
 		{
 			name:  "mask_overflows_u8", // a mask past bit 7 takes two bytes
 			count: 1, totalBytes: 1,
 			tierMask:   1 << 12,
-			childStart: 0,
 			wantStride: format.CoreStatsStride{Count: 1, Bytes: 1, ChildStart: 1, TierMask: 2},
 		},
 		{
-			name:  "wide", // pessimal — all u64
+			name:  "wide",
 			count: 1 << 40, totalBytes: 1 << 50,
 			tierMask:   0b11,
-			childStart: 1 << 33,
-			wantStride: format.CoreStatsStride{Count: 6, Bytes: 7, ChildStart: 5, TierMask: 1},
+			wantStride: format.CoreStatsStride{Count: 6, Bytes: 7, ChildStart: 1, TierMask: 1},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			outDir := filepath.Join(dir, "idx")
-			if err := writeOneRow(outDir, tc.count, tc.totalBytes, tc.tierMask, tc.childStart); err != nil {
+			if err := writeOneRow(outDir, tc.count, tc.totalBytes, tc.tierMask); err != nil {
 				t.Fatalf("build: %v", err)
 			}
 
@@ -73,8 +68,8 @@ func TestCoreStatsAdaptiveWidths_RoundTrip(t *testing.T) {
 			if got := r.UnsafeTotalBytes(0); got != tc.totalBytes {
 				t.Errorf("bytes = %d, want %d", got, tc.totalBytes)
 			}
-			if got := r.UnsafeChildStart(0); got != tc.childStart {
-				t.Errorf("child_start = %d, want %d", got, tc.childStart)
+			if got := r.UnsafeChildStart(0); got != 1 {
+				t.Errorf("child_start = %d, want 1", got)
 			}
 			if got := r.UnsafeTierField(0); got != tc.tierMask {
 				t.Errorf("tier_mask = %#b, want %#b", got, tc.tierMask)
@@ -84,21 +79,21 @@ func TestCoreStatsAdaptiveWidths_RoundTrip(t *testing.T) {
 }
 
 // writeOneRow builds a one-row core_stats file in outDir.
-func writeOneRow(outDir string, count, totalBytes uint64, tierMask uint16, childStart uint64) error {
+func writeOneRow(outDir string, count, totalBytes uint64, tierMask uint16) error {
 	if err := os.MkdirAll(outDir, 0o750); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
-	b, err := format.NewCoreStatsBuilder(outDir, 1)
+	var plan format.CoreStatsPlan
+	plan.Add(count, totalBytes, tierMask)
+	w, err := format.NewCoreStatsWriter(outDir, &plan, format.TierMaskPlain)
 	if err != nil {
-		return fmt.Errorf("new builder: %w", err)
+		return fmt.Errorf("new writer: %w", err)
 	}
-	if err := b.Add(count, totalBytes, childStart, tierMask); err != nil {
-		_ = b.Close()
-
-		return fmt.Errorf("add: %w", err)
+	if err := w.Add(count, totalBytes, 1, tierMask); err != nil {
+		return errors.Join(fmt.Errorf("add: %w", err), w.Abort())
 	}
-	if err := b.Finalize(); err != nil {
-		return fmt.Errorf("finalize: %w", err)
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("close: %w", err)
 	}
 
 	return nil
@@ -108,7 +103,7 @@ func writeOneRow(outDir string, count, totalBytes uint64, tierMask uint16, child
 // header, the stride descriptor, the packed rows and the tail pad.
 func TestCoreStatsFileSize(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "idx")
-	if err := writeOneRow(outDir, 3, 300, 0b11, 0); err != nil {
+	if err := writeOneRow(outDir, 3, 300, 0b11); err != nil {
 		t.Fatal(err)
 	}
 	r, err := format.OpenCoreStats(outDir)
@@ -125,25 +120,27 @@ func TestCoreStatsFileSize(t *testing.T) {
 	}
 }
 
-// BenchmarkCoreStatsFinalize repacks 2M build rows (counts and bytes
-// spread over every width, so some rows are patched) into the final
-// core stats file: the finalize step that rewrites every row.
-func BenchmarkCoreStatsFinalize(b *testing.B) {
+// BenchmarkCoreStatsWriter plans and writes 2M rows (counts and bytes
+// spread over every width, so some rows are patched) into the final core
+// stats file.
+func BenchmarkCoreStatsWriter(b *testing.B) {
 	const rows = 2_000_000
 	b.ReportAllocs()
 	for range b.N {
-		b.StopTimer()
-		w, err := format.NewCoreStatsBuilder(b.TempDir(), rows)
+		var plan format.CoreStatsPlan
+		for i := range uint64(rows) {
+			plan.Add(i%1000, i*i%(1<<40), uint16(i%4))
+		}
+		w, err := format.NewCoreStatsWriter(b.TempDir(), &plan, format.TierMaskPlain)
 		if err != nil {
 			b.Fatal(err)
 		}
 		for i := range uint64(rows) {
-			if err := w.Add(i%1000, i*i%(1<<40), i+1, uint16(i%4)); err != nil {
+			if err := w.Add(i%1000, i*i%(1<<40), min(2*i+1, rows), uint16(i%4)); err != nil {
 				b.Fatal(err)
 			}
 		}
-		b.StartTimer()
-		if err := w.Finalize(); err != nil {
+		if err := w.Close(); err != nil {
 			b.Fatal(err)
 		}
 	}
