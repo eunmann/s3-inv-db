@@ -2,6 +2,7 @@ package extsort
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"slices"
 	"strconv"
 	"strings"
@@ -79,6 +80,67 @@ func runAggregatorAddBench(b *testing.B, keys []string) {
 			agg.AddObject(k, 1024, tiers.Standard)
 		}
 		agg.Drain()
+	}
+}
+
+// BenchmarkAggregator_AddObjectSegmented measures AddObject as the
+// pipeline calls it, a StartSegment per inventory file, on 1M keys in
+// ten segments. "sorted" takes the ordered segments' path, "random" the
+// node table's from each segment's second key, and "sorted_mapped" swaps
+// each segment's first two keys so it maps at once and its remaining
+// keys, in order, go through the node table while sharing most of their
+// path. The aggregator is reused and drained outside the timer, as a
+// worker's is across spills, so only AddObject is measured. Sparse keys
+// (a directory per key) stop at depth 4: at depth 8 they make 8M
+// prefixes, over a gigabyte of nodes.
+func BenchmarkAggregator_AddObjectSegmented(b *testing.B) {
+	const n, segments = 1_000_000, 10
+	shapes := []struct {
+		name  string
+		depth int
+		keys  func() []string
+	}{
+		{"sparse", 4, func() []string { return generateBenchKeys(n, 4) }},
+		{"dense", 4, func() []string { return generateDenseKeys(n, 4, 100) }},
+		{"dense", 8, func() []string { return generateDenseKeys(n, 8, 100) }},
+	}
+	for _, s := range shapes {
+		sorted := s.keys()
+		slices.Sort(sorted)
+		random := slices.Clone(sorted)
+		rand.New(rand.NewPCG(1, 2)).Shuffle(len(random), func(i, j int) { random[i], random[j] = random[j], random[i] })
+		mapped := slices.Clone(sorted)
+		for i := range segments {
+			seg := mapped[i*n/segments:]
+			seg[0], seg[1] = seg[1], seg[0]
+		}
+		orders := []struct {
+			name string
+			keys []string
+		}{{"random", random}, {"sorted", sorted}, {"sorted_mapped", mapped}}
+		for _, o := range orders {
+			b.Run(fmt.Sprintf("keys=%s/depth=%d/order=%s", s.name, s.depth, o.name), func(b *testing.B) {
+				runSegmentedAddBench(b, o.keys, segments)
+			})
+		}
+	}
+}
+
+func runSegmentedAddBench(b *testing.B, keys []string, segments int) {
+	b.Helper()
+	agg := NewAggregator(0, 0)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		for i := range segments {
+			agg.StartSegment()
+			for _, k := range keys[i*len(keys)/segments : (i+1)*len(keys)/segments] {
+				agg.AddObject(k, 1024, tiers.Standard)
+			}
+		}
+		b.StopTimer()
+		agg.Drain()
+		b.StartTimer()
 	}
 }
 
