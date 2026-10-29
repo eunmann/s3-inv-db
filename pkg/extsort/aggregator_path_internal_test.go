@@ -101,3 +101,85 @@ func mergeRows(acc map[string]PrefixRow, rows []*PrefixRow) {
 		acc[r.Prefix] = cur
 	}
 }
+
+// TestAggregatorSegmentsAreExact: keys fed in segments (StartSegment
+// per chunk) give the same totals as a direct count, and every
+// DrainSorted run is strictly increasing, whether the segments are in
+// order, overlap, are out of order inside, follow keys added before
+// any segment, or are cut by mid-stream Drains.
+func TestAggregatorSegmentsAreExact(t *testing.T) {
+	rng := rand.New(rand.NewPCG(6, 7))
+	keys := pathTestKeys(rng, 4000)
+	sorted := slices.Clone(keys)
+	slices.Sort(sorted)
+	chunk := func(ks []string, n int) [][]string {
+		out := make([][]string, 0, n)
+		for i := range n {
+			out = append(out, ks[i*len(ks)/n:(i+1)*len(ks)/n])
+		}
+
+		return out
+	}
+	sortEach := func(chunks [][]string) [][]string {
+		for _, c := range chunks {
+			slices.Sort(c)
+		}
+
+		return chunks
+	}
+	inOrder := chunk(slices.Clone(sorted), 5)
+	shuffled := slices.Clone(inOrder)
+	rng.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
+	oneSwap := chunk(slices.Clone(sorted), 3)
+	oneSwap[1][10], oneSwap[1][900] = oneSwap[1][900], oneSwap[1][10]
+	cases := map[string]struct {
+		before []string // added before the first segment
+		chunks [][]string
+	}{
+		"in_order":             {chunks: inOrder},
+		"chunks_shuffled":      {chunks: shuffled},
+		"overlapping_sorted":   {chunks: sortEach(chunk(slices.Clone(keys), 4))},
+		"random":               {chunks: chunk(slices.Clone(keys), 4)},
+		"one_key_out_of_order": {chunks: oneSwap},
+		"keys_before_segments": {before: keys[:500], chunks: sortEach(chunk(slices.Clone(keys[500:]), 3))},
+	}
+	for name, tc := range cases {
+		for _, maxDepth := range []int{0, 2} {
+			for _, drainEvery := range []int{0, 333} {
+				var all []string
+				agg := NewAggregator(0, maxDepth)
+				got := map[string]PrefixRow{}
+				drain := func() {
+					rows := agg.DrainSorted()
+					for i := 1; i < len(rows); i++ {
+						if rows[i-1].Prefix >= rows[i].Prefix {
+							t.Fatalf("%s: drained %q then %q", name, rows[i-1].Prefix, rows[i].Prefix)
+						}
+					}
+					mergeRows(got, rows)
+				}
+				add := func(k string) {
+					i := len(all)
+					all = append(all, k)
+					agg.AddObject(k, uint64(len(k)+i), tiers.ID(i%3))
+					if drainEvery > 0 && len(all)%drainEvery == 0 {
+						drain()
+					}
+				}
+				for _, k := range tc.before {
+					add(k)
+				}
+				for _, c := range tc.chunks {
+					agg.StartSegment()
+					for _, k := range c {
+						add(k)
+					}
+				}
+				drain()
+				if diff := gocmp.Diff(referenceAggregate(all, maxDepth), got, cmpopts.EquateEmpty()); diff != "" {
+					t.Fatalf("%s maxDepth=%d drainEvery=%d (-reference +aggregator):\n%s", name, maxDepth, drainEvery, diff)
+				}
+			}
+		}
+	}
+}

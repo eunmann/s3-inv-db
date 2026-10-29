@@ -858,6 +858,8 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, fetched fetche
 		i          int
 	)
 	memLimit := readMemoryLimit()
+	// Each inventory file lists its keys in order.
+	agg.StartSegment()
 	for {
 		if i%ctxCheckInterval == 0 {
 			select {
