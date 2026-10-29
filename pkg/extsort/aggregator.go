@@ -28,11 +28,15 @@ type Aggregator struct {
 	children map[string]uint32
 	keyBuf   []byte
 	// slabs back every node, in creation order (a node's index is its
-	// position); segs holds their keys. Both are reused once the caller
-	// is done with a Drain, so a worker allocates nodes only while its
-	// largest spill is still growing.
-	slabs [][]aggNode
-	segs  segmentArena
+	// position), and parents holds each node's parent at the same
+	// position: noNode for a root, deadNode once mapSegment has merged it
+	// into another node. Apart from the nodes, Drain's counting passes
+	// read only the parents. segs holds the nodes' keys. All are reused
+	// once the caller is done with a Drain, so a worker allocates nodes
+	// only while its largest spill is still growing.
+	slabs   [][]aggNode
+	parents [][]uint32
+	segs    segmentArena
 	// path holds the nodes of the previous key's prefixes by depth
 	// (path[0] is the root): the next key reuses the ones whose prefix
 	// it starts with and looks up only the levels below. Keys in order
@@ -68,13 +72,10 @@ type Aggregator struct {
 	tierMask    uint16
 }
 
-// aggNode is a prefix's row and its parent's index: noNode for a root,
-// deadNode once mapSegment has merged it into another node. Until Drain,
-// the row's Prefix holds only the node's segment ("" for a root); Drain
-// writes the whole prefix.
+// aggNode is a prefix's row. Until Drain, the row's Prefix holds only
+// the node's segment ("" for a root); Drain writes the whole prefix.
 type aggNode struct {
-	row    PrefixRow
-	parent uint32
+	row PrefixRow
 }
 
 const (
@@ -138,7 +139,8 @@ type aggGraft struct {
 	prefixLen int
 }
 
-// A node's heap cost is aggregatorNodeBytes, its key, its prefix
+// A node's heap cost is aggregatorNodeBytes (the node and its parent's
+// index), its key, its prefix
 // (which Drain allocates) and, for a node in the main tree's map,
 // aggregatorMapEntryBytes: the key and value slot, its control byte and
 // the load-factor slack, 35 to 56 B over the map's growth cycle.
@@ -146,7 +148,7 @@ type aggGraft struct {
 // keys out of order: 352-366 B/prefix against an estimate of 340-343
 // for 4-byte segments, 482-496 against 466-477 for 40-byte ones.
 const (
-	aggregatorNodeBytes     = int64(unsafe.Sizeof(aggNode{}))
+	aggregatorNodeBytes     = int64(unsafe.Sizeof(aggNode{}) + unsafe.Sizeof(uint32(0)))
 	aggregatorMapEntryBytes = 48
 )
 
@@ -220,8 +222,7 @@ func (a *Aggregator) rootEntry(ordered bool) aggPathEntry {
 	if !ordered && a.root != noNode {
 		return aggPathEntry{n: a.node(a.root), idx: a.root}
 	}
-	idx, n := a.newNode()
-	n.parent = noNode
+	idx, n := a.newNode(noNode)
 	a.bytes += aggregatorNodeBytes
 	if !ordered {
 		a.root = idx
@@ -244,8 +245,8 @@ func (a *Aggregator) child(parent uint32, seg string, prefixLen int, depth uint1
 		}
 	}
 	key := a.segs.clone(a.keyBuf)
-	idx, n := a.newNode()
-	n.row.Prefix, n.row.Depth, n.parent = key[nodeKeyHeader:], depth, parent
+	idx, n := a.newNode(parent)
+	n.row.Prefix, n.row.Depth = key[nodeKeyHeader:], depth
 	a.bytes += aggregatorNodeBytes + int64(len(key)+prefixLen)
 	a.prefixBytes += prefixLen
 	if !ordered {
@@ -264,16 +265,29 @@ func (a *Aggregator) node(i uint32) *aggNode {
 	return &a.slabs[i/rowSlabLen][i%rowSlabLen]
 }
 
-// newNode returns the next zeroed node from the slabs and its index.
-func (a *Aggregator) newNode() (uint32, *aggNode) {
+// parent returns the parent index of the node at index i.
+func (a *Aggregator) parent(i uint32) uint32 {
+	return a.parents[i/rowSlabLen][i%rowSlabLen]
+}
+
+// setParent sets the parent index of the node at index i.
+func (a *Aggregator) setParent(i, parent uint32) {
+	a.parents[i/rowSlabLen][i%rowSlabLen] = parent
+}
+
+// newNode returns the next zeroed node from the slabs, with the given
+// parent, and its index.
+func (a *Aggregator) newNode(parent uint32) (uint32, *aggNode) {
 	slab, i := a.used/rowSlabLen, a.used%rowSlabLen
 	if slab == len(a.slabs) {
 		a.slabs = append(a.slabs, make([]aggNode, rowSlabLen))
+		a.parents = append(a.parents, make([]uint32, rowSlabLen))
 	}
 	idx := uint32(a.used)
 	a.used++
 	n := &a.slabs[slab][i]
 	*n = aggNode{}
+	a.parents[slab][i] = parent
 
 	return idx, n
 }
@@ -325,16 +339,16 @@ func (a *Aggregator) mapSegment() {
 		idx := uint32(i)
 		n := a.node(idx)
 		to, prefixLen := idx, 0
-		if n.parent == noNode {
+		if p := a.parent(idx); p == noNode {
 			if a.root == noNode {
 				a.root = idx
 			} else {
 				to = a.root
 			}
 		} else {
-			parent := g[int(n.parent)-seg.start]
+			parent := g[int(p)-seg.start]
 			prefixLen = parent.prefixLen + len(n.row.Prefix)
-			n.parent = parent.to
+			a.setParent(idx, parent.to)
 			k := nodeKey(n.row.Prefix, parent.to)
 			if found, ok := a.children[k]; ok {
 				to = found
@@ -345,7 +359,7 @@ func (a *Aggregator) mapSegment() {
 		}
 		if to != idx {
 			a.node(to).row.Merge(&n.row)
-			n.parent = deadNode
+			a.setParent(idx, deadNode)
 			a.dead++
 			a.prefixBytes -= prefixLen
 			a.bytes -= int64(prefixLen)
@@ -522,7 +536,7 @@ func (a *Aggregator) Drain() []*PrefixRow {
 		}
 		begin := len(out.rows)
 		for j := seg.start; j < end; j++ {
-			out.emit(a, a.node(uint32(j)))
+			out.emit(a, uint32(j))
 		}
 		runs = append(runs, out.rows[begin:])
 	}
@@ -574,9 +588,10 @@ func (a *Aggregator) mappedRanges(buf [][2]int) [][2]int {
 	return buf
 }
 
-// walkTree emits the main tree's live nodes in prefix order. It groups the nodes by parent with
-// a counting sort (a node's index is above its parent's), then walks
-// depth first, sorting each node's children by segment as it visits it.
+// walkTree emits the main tree's live nodes in prefix order. It groups
+// the nodes by parent with a counting sort (a node's index is above its
+// parent's), then walks depth first, sorting each node's children by
+// segment as it visits it.
 func (a *Aggregator) walkTree(out *drainBuf) {
 	var rangeBuf [8][2]int
 	ranges := a.mappedRanges(rangeBuf[:0])
@@ -585,10 +600,14 @@ func (a *Aggregator) walkTree(out *drainBuf) {
 	end := slices.Grow(a.childEnd[:0], a.used)[:a.used]
 	clear(end)
 	for _, r := range ranges {
-		for i := r[0]; i < r[1]; i++ {
-			if p := a.node(uint32(i)).parent; p < deadNode {
-				end[p]++
+		for lo := r[0]; lo < r[1]; {
+			parents := a.parentRange(lo, r[1])
+			for _, p := range parents {
+				if p < deadNode {
+					end[p]++
+				}
 			}
+			lo += len(parents)
 		}
 	}
 	total := uint32(0)
@@ -598,11 +617,15 @@ func (a *Aggregator) walkTree(out *drainBuf) {
 	}
 	kids := slices.Grow(a.kids[:0], int(total))[:total]
 	for _, r := range ranges {
-		for i := r[0]; i < r[1]; i++ {
-			if p := a.node(uint32(i)).parent; p < deadNode {
-				kids[end[p]] = uint32(i)
-				end[p]++
+		for lo := r[0]; lo < r[1]; {
+			parents := a.parentRange(lo, r[1])
+			for k, p := range parents {
+				if p < deadNode {
+					kids[end[p]] = uint32(lo + k)
+					end[p]++
+				}
 			}
+			lo += len(parents)
 		}
 	}
 	a.childEnd, a.kids = end, kids
@@ -612,7 +635,7 @@ func (a *Aggregator) walkTree(out *drainBuf) {
 	for len(stack) > 0 {
 		i := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		out.emit(a, a.node(i))
+		out.emit(a, i)
 		begin := uint32(0)
 		if i > 0 {
 			begin = end[i-1]
@@ -626,6 +649,14 @@ func (a *Aggregator) walkTree(out *drainBuf) {
 		}
 	}
 	a.stack = stack
+}
+
+// parentRange returns the parents of the nodes from index lo, up to hi
+// or the end of lo's slab, whichever comes first.
+func (a *Aggregator) parentRange(lo, hi int) []uint32 {
+	off := lo % rowSlabLen
+
+	return a.parents[lo/rowSlabLen][off:min(rowSlabLen, off+hi-lo)]
 }
 
 // sortChildren sorts sibling nodes by segment, comparing copies of the
@@ -650,12 +681,13 @@ type drainBuf struct {
 	arena []byte
 }
 
-// emit replaces n's segment with its whole prefix, its parent's (already
-// written) followed by the segment, and appends its row.
-func (b *drainBuf) emit(a *Aggregator, n *aggNode) {
-	if n.parent != noNode {
+// emit replaces node i's segment with its whole prefix, its parent's
+// (already written) followed by the segment, and appends its row.
+func (b *drainBuf) emit(a *Aggregator, i uint32) {
+	n := a.node(i)
+	if p := a.parent(i); p != noNode {
 		start := len(b.arena)
-		b.arena = append(b.arena, a.node(n.parent).row.Prefix...)
+		b.arena = append(b.arena, a.node(p).row.Prefix...)
 		b.arena = append(b.arena, n.row.Prefix...)
 		n.row.Prefix = unsafe.String(&b.arena[start], len(b.arena)-start)
 	}
@@ -697,7 +729,7 @@ func (a *Aggregator) mergeRuns(runs [][]*PrefixRow) []*PrefixRow {
 // is done with the last Drain. Call it only on an empty (just drained)
 // aggregator.
 func (a *Aggregator) Release() {
-	a.slabs, a.segs, a.path = nil, segmentArena{}, nil
+	a.slabs, a.parents, a.segs, a.path = nil, nil, segmentArena{}, nil
 	a.drained, a.merged, a.runs, a.runNext = nil, nil, nil, nil
 	a.childEnd, a.kids, a.stack, a.siblings, a.graft = nil, nil, nil, nil, nil
 	a.children = make(map[string]uint32)
