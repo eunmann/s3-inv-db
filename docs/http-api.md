@@ -73,7 +73,8 @@ Mutating:
 ### Server-Sent Events
 
 `GET /api/jobs/stream` sends `retry: 2000`, then a `job` frame for every
-queued or running job and a `synced` frame; after that:
+job whose run is still in progress (queued, running, or terminal while
+that final state is being written) and a `synced` frame; after that:
 
 | Event | Data |
 |---|---|

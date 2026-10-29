@@ -135,8 +135,8 @@ func FuzzCSVRecordsMatchEncodingCSV(f *testing.F) {
 // rowConfigs are a current-version layout and a versioned one whose
 // delete-marker and access-tier columns sit around the others.
 var rowConfigs = []CSVReaderConfig{
-	{KeyCol: 1, SizeCol: 2, StorageCol: 3, AccessTierCol: -1, DeleteMarkerCol: -1},
-	{KeyCol: 0, SizeCol: 1, StorageCol: -1, AccessTierCol: 3, DeleteMarkerCol: 2},
+	{KeyCol: ColumnAt(1), SizeCol: ColumnAt(2), StorageCol: ColumnAt(3)},
+	{KeyCol: ColumnAt(0), SizeCol: ColumnAt(1), AccessTierCol: ColumnAt(3), DeleteMarkerCol: ColumnAt(2)},
 }
 
 // referenceRows reads data as the CSVReader did before it split lines
@@ -162,25 +162,25 @@ func referenceRows(data []byte, cfg CSVReaderConfig) ([]Row, Anomalies, bool) {
 		if err != nil {
 			return rows, a, true
 		}
-		if len(rec) <= cfg.KeyCol || len(rec) <= cfg.SizeCol {
+		if len(rec) <= cfg.KeyCol.Index() || len(rec) <= cfg.SizeCol.Index() {
 			a.ShortRows++
 
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(field(rec, cfg.DeleteMarkerCol)), "true") {
+		if strings.EqualFold(strings.TrimSpace(field(rec, cfg.DeleteMarkerCol.Index())), "true") {
 			continue
 		}
-		key, err := url.QueryUnescape(rec[cfg.KeyCol])
+		key, err := url.QueryUnescape(rec[cfg.KeyCol.Index()])
 		if err != nil {
 			a.UndecodableKeys++
-			key = rec[cfg.KeyCol]
+			key = rec[cfg.KeyCol.Index()]
 		}
 		if key == "" {
 			a.MissingKeys++
 
 			continue
 		}
-		size, err := strconv.ParseUint(strings.TrimSpace(rec[cfg.SizeCol]), 10, 64)
+		size, err := strconv.ParseUint(strings.TrimSpace(rec[cfg.SizeCol.Index()]), 10, 64)
 		if err != nil {
 			a.BadSizes++
 			size = 0
@@ -188,8 +188,8 @@ func referenceRows(data []byte, cfg CSVReaderConfig) ([]Row, Anomalies, bool) {
 		rows = append(rows, Row{
 			Key:          strings.Clone(key),
 			Size:         size,
-			StorageClass: field(rec, cfg.StorageCol),
-			AccessTier:   field(rec, cfg.AccessTierCol),
+			StorageClass: field(rec, cfg.StorageCol.Index()),
+			AccessTier:   field(rec, cfg.AccessTierCol.Index()),
 		})
 	}
 }

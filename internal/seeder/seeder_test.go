@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -254,6 +255,20 @@ func TestRun_RejectsZeroAndNegativeCount(t *testing.T) {
 				t.Fatalf("expected error for count=%d, got nil", count)
 			}
 		})
+	}
+}
+
+func TestRun_RejectsUnknownFormat(t *testing.T) {
+	err := seeder.Run(t.Context(), seeder.Config{
+		Target:  seeder.TargetS3,
+		S3:      seeder.S3Config{Bucket: "b", SrcBucket: "s"},
+		Format:  "orc",
+		Count:   1,
+		Objects: 10,
+		Logger:  zerolog.Nop(),
+	})
+	if !errors.Is(err, seeder.ErrUnknownFormat) {
+		t.Errorf("Run(format=orc) = %v, want ErrUnknownFormat", err)
 	}
 }
 

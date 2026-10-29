@@ -35,34 +35,44 @@ func TestBBHashScanEstimate(t *testing.T) {
 	}
 }
 
-// TestCollidedKeysAcrossBlocks checks collidedKeys when each worker's
-// chunk spans several progress blocks: the copy pass must resume each
-// chunk where its previous block stopped.
-func TestCollidedKeysAcrossBlocks(t *testing.T) {
+// TestNextLevelKeysAcrossBlocks checks nextLevelKeys when each worker's
+// chunk spans several progress blocks: it must hand on exactly the
+// colliding keys and mark exactly them on the next level.
+func TestNextLevelKeysAcrossBlocks(t *testing.T) {
 	n := mphfWorkerCount(math.MaxInt32)*progressBlock*2 + 123
 	keys := randomKeys(n, 7)
 	words := levelWords(n)
-	set, collided := make([]uint64, words), make([]uint64, words)
 	var rec stepRecorder
-	scan := newStepCounter(rec.report, StepBuildHash, int64(3*n))
-	markLevel(keys, 0, set, collided, scan)
-	got, release, err := collidedKeys(keys, 0, words, collided, heapKeys, scan)
-	if err != nil {
-		t.Fatalf("collidedKeys: %v", err)
-	}
-	defer release()
+	scan := newStepCounter(rec.report, StepBuildHash, int64(2*n))
+	marks := make([]uint64, 2*words)
+	markLevel(keys, 0, marks, scan)
+	set, placed := placedBits(marks)
 	var want []uint64
 	for _, k := range keys {
 		i := bbPosition(k, 0, words)
-		if collided[i/64]&(1<<(i%64)) != 0 {
+		if set[i/64]&(1<<(i%64)) == 0 {
 			want = append(want, k)
 		}
 	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("collidedKeys returned %d keys, want the %d colliding keys in input order", len(got), len(want))
+	if len(want) != n-placed {
+		t.Fatalf("%d colliding keys, but %d keys minus %d placed bits is %d", len(want), n, placed, n-placed)
 	}
-	if d := scan.done.Load(); d != int64(3*n) {
-		t.Errorf("counted %d key reads, want %d (three passes)", d, 3*n)
+	nextWords := levelWords(len(want))
+	gotMarks := make([]uint64, 2*nextWords)
+	got := make([]uint64, len(want))
+	nextLevelKeys(keys, 0, set, got, gotMarks, make([]uint64, mphfWorkerCount(n)*collectBlock), scan)
+
+	slices.Sort(got)
+	if !slices.Equal(got, slices.Sorted(slices.Values(want))) {
+		t.Fatalf("nextLevelKeys handed on %d keys that differ from the %d colliding keys", len(got), len(want))
+	}
+	wantMarks := make([]uint64, 2*nextWords)
+	markKeys(want, 1, wantMarks)
+	if !slices.Equal(gotMarks, wantMarks) {
+		t.Fatal("next level's marks differ from marking the colliding keys")
+	}
+	if d := scan.done.Load(); d != int64(2*n) {
+		t.Errorf("counted %d key reads, want %d (two passes)", d, 2*n)
 	}
 }
 

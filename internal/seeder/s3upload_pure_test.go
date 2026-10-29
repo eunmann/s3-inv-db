@@ -6,13 +6,19 @@ import (
 	"encoding/csv"
 	"errors"
 	"io"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
+	"github.com/eunmann/s3-inv-db/pkg/s3inventory"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
+	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/deprecated"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 func TestAutoChunkCount(t *testing.T) {
@@ -272,29 +278,206 @@ func TestEncodeCSVGz_ObjectMetadata(t *testing.T) {
 }
 
 func TestFixtureFingerprint(t *testing.T) {
-	fingerprint := func(preset string, sorted bool, seed int64) string {
+	fingerprint := func(preset string, sorted bool, format seeder.Format, seed int64) string {
 		t.Helper()
-		fp, err := seeder.FixtureFingerprint(t.Context(), seeder.Config{Preset: preset, SortedKeys: sorted, Objects: 5}, seed)
+		fp, err := seeder.FixtureFingerprint(t.Context(), seeder.Config{Preset: preset, SortedKeys: sorted, Format: format, Objects: 5}, seed)
 		if err != nil {
-			t.Fatalf("FixtureFingerprint(%s, sorted=%v, %d): %v", preset, sorted, seed, err)
+			t.Fatalf("FixtureFingerprint(%s, sorted=%v, %s, %d): %v", preset, sorted, format, seed, err)
 		}
 
 		return fp
 	}
-	base := fingerprint("realistic", false, 1000)
+	base := fingerprint("realistic", false, "", 1000)
 	if len(base) != 6 || strings.Trim(base, "0123456789abcdef") != "" {
 		t.Errorf("fingerprint %q is not 6 hex digits", base)
 	}
-	if again := fingerprint("realistic", false, 1000); again != base {
+	if again := fingerprint("realistic", false, "", 1000); again != base {
 		t.Errorf("same inputs gave %q then %q", base, again)
 	}
+	if explicit := fingerprint("realistic", false, seeder.FormatCSV, 1000); explicit != base {
+		t.Errorf("format csv gave %q, the default %q", explicit, base)
+	}
 	for name, other := range map[string]string{
-		"preset": fingerprint("deep_pyramid", false, 1000),
-		"order":  fingerprint("realistic", true, 1000),
-		"seed":   fingerprint("realistic", false, 1001),
+		"preset": fingerprint("deep_pyramid", false, "", 1000),
+		"order":  fingerprint("realistic", true, "", 1000),
+		"format": fingerprint("realistic", false, seeder.FormatParquet, 1000),
+		"seed":   fingerprint("realistic", false, "", 1001),
 	} {
 		if other == base {
 			t.Errorf("a different %s gave the same fingerprint %q", name, base)
 		}
+	}
+}
+
+func TestFixtureFingerprint_RejectsUnknownFormat(t *testing.T) {
+	_, err := seeder.FixtureFingerprint(t.Context(), seeder.Config{Preset: "realistic", Format: "orc"}, 1)
+	if !errors.Is(err, seeder.ErrUnknownFormat) {
+		t.Errorf("FixtureFingerprint(format=orc) = %v, want ErrUnknownFormat", err)
+	}
+}
+
+// parquetObjects covers what the Parquet encoding must carry: an
+// Intelligent-Tiering access tier, a zero size, a multipart ETag and a
+// key CSV URL-encodes.
+func parquetObjects() []benchutil.FakeObject {
+	const multipartPart = 8 << 20
+	objects := benchutil.NewGenerator(benchutil.S3RealisticConfig(3000)).Generate()
+
+	return append(objects,
+		benchutil.FakeObject{Key: "dir/my file,v1+%.txt", Size: 0, TierID: tiers.Standard},
+		benchutil.FakeObject{Key: "dir/it", Size: 250, TierID: tiers.ITArchive},
+		benchutil.FakeObject{Key: "dir/big", Size: 3*multipartPart + 1, TierID: tiers.GlacierFR},
+	)
+}
+
+func encodeParquet(t *testing.T, seed int64, objects []benchutil.FakeObject) seeder.DataPayload {
+	t.Helper()
+	payload, err := seeder.EncodeParquet("src-bucket", seed, objects)
+	if err != nil {
+		t.Fatalf("encodeParquet: %v", err)
+	}
+	if payload.Size != int64(len(payload.Body)) {
+		t.Errorf("size = %d, want %d (len(body))", payload.Size, len(payload.Body))
+	}
+
+	return payload
+}
+
+func openParquet(t *testing.T, payload seeder.DataPayload) *parquet.File {
+	t.Helper()
+	f, err := parquet.OpenFile(bytes.NewReader(payload.Body), payload.Size)
+	if err != nil {
+		t.Fatalf("parquet.OpenFile: %v", err)
+	}
+
+	return f
+}
+
+// AWS's Parquet inventory schema for the fields the CSV fixture
+// carries: names, order, repetition and types as its manifest declares
+// them, every column chunk Snappy compressed.
+func TestEncodeParquet_AWSLayout(t *testing.T) {
+	f := openParquet(t, encodeParquet(t, 7, parquetObjects()))
+	utf8, millis := deprecated.UTF8, deprecated.TimestampMillis
+	want := []struct {
+		converted *deprecated.ConvertedType
+		name      string
+		kind      parquet.Kind
+		optional  bool
+	}{
+		{&utf8, "bucket", parquet.ByteArray, false},
+		{&utf8, "key", parquet.ByteArray, false},
+		{nil, "size", parquet.Int64, true},
+		{&millis, "last_modified_date", parquet.Int64, true},
+		{&utf8, "e_tag", parquet.ByteArray, true},
+		{&utf8, "storage_class", parquet.ByteArray, true},
+		{&utf8, "intelligent_tiering_access_tier", parquet.ByteArray, true},
+	}
+	fields := f.Schema().Fields()
+	if len(fields) != len(want) {
+		t.Fatalf("schema has %d fields, want %d: %v", len(fields), len(want), f.Schema())
+	}
+	for i, w := range want {
+		field := fields[i]
+		if field.Name() != w.name || field.Type().Kind() != w.kind || field.Optional() != w.optional {
+			t.Errorf("field %d = %s %v optional=%v, want %s %v optional=%v",
+				i, field.Name(), field.Type().Kind(), field.Optional(), w.name, w.kind, w.optional)
+		}
+		if got := field.Type().ConvertedType(); w.converted != nil && (got == nil || *got != *w.converted) {
+			t.Errorf("field %s converted type = %v, want %v", w.name, got, w.converted)
+		}
+	}
+	if len(f.Metadata().RowGroups) == 0 {
+		t.Fatal("no row groups")
+	}
+	for g, rg := range f.Metadata().RowGroups {
+		for _, col := range rg.Columns {
+			if col.MetaData.Codec != format.Snappy {
+				t.Errorf("row group %d column %v codec = %v, want SNAPPY", g, col.MetaData.PathInSchema, col.MetaData.Codec)
+			}
+		}
+	}
+}
+
+// seededParquetRecord reads back every column encodeParquet writes.
+type seededParquetRecord struct {
+	Bucket           string `parquet:"bucket"`
+	Key              string `parquet:"key"`
+	Size             *int64 `parquet:"size"`
+	LastModifiedDate *int64 `parquet:"last_modified_date,timestamp(millisecond)"`
+	ETag             string `parquet:"e_tag,optional"`
+	StorageClass     string `parquet:"storage_class,optional"`
+	AccessTier       string `parquet:"intelligent_tiering_access_tier,optional"`
+}
+
+// The Parquet file holds the CSV's rows column for column, with raw
+// keys where CSV URL-encodes them.
+func TestEncodeParquet_MatchesCSVColumns(t *testing.T) {
+	objects := parquetObjects()
+	csvRows, err := csv.NewReader(strings.NewReader(encodeCSV(t, 7, objects))).ReadAll()
+	if err != nil {
+		t.Fatalf("csv.ReadAll: %v", err)
+	}
+	f := openParquet(t, encodeParquet(t, 7, objects))
+
+	got := make([]seededParquetRecord, f.NumRows())
+	n, err := parquet.NewGenericReader[seededParquetRecord](f).Read(got)
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("read parquet: %v", err)
+	}
+	if n != len(objects) || len(csvRows) != len(objects) {
+		t.Fatalf("parquet rows = %d, csv rows = %d, want %d", n, len(csvRows), len(objects))
+	}
+	for i, rec := range got {
+		if rec.Size == nil || rec.LastModifiedDate == nil {
+			t.Fatalf("row %d: null size or last_modified_date", i)
+		}
+		lm := time.UnixMilli(*rec.LastModifiedDate).UTC().Format("2006-01-02T15:04:05.000Z")
+		row := []string{rec.Bucket, rec.Key, strconv.FormatInt(*rec.Size, 10), lm, rec.ETag, rec.StorageClass, rec.AccessTier}
+		want := slices.Clone(csvRows[i])
+		want[1] = objects[i].Key
+		if !slices.Equal(row, want) {
+			t.Errorf("row %d: parquet %q, want %q", i, row, want)
+		}
+	}
+}
+
+// The inventory reader gets the same rows from the Parquet file as from
+// the CSV, with no anomalies.
+func TestEncodeParquet_ReaderMatchesCSVReader(t *testing.T) {
+	objects := parquetObjects()
+	csvReader, err := s3inventory.NewCSVReader(strings.NewReader(encodeCSV(t, 7, objects)), s3inventory.CSVReaderConfig{
+		KeyCol:        s3inventory.ColumnAt(1),
+		SizeCol:       s3inventory.ColumnAt(2),
+		StorageCol:    s3inventory.ColumnAt(5),
+		AccessTierCol: s3inventory.ColumnAt(6),
+	})
+	if err != nil {
+		t.Fatalf("NewCSVReader: %v", err)
+	}
+	payload := encodeParquet(t, 7, objects)
+	pqReader, err := s3inventory.NewParquetReaderFromReaderAt(bytes.NewReader(payload.Body), payload.Size)
+	if err != nil {
+		t.Fatalf("NewParquetReaderFromReaderAt: %v", err)
+	}
+	defer pqReader.Close()
+	for i := range objects {
+		want, err := csvReader.Next()
+		if err != nil {
+			t.Fatalf("csv row %d: %v", i, err)
+		}
+		row, err := pqReader.Next()
+		if err != nil {
+			t.Fatalf("parquet row %d: %v", i, err)
+		}
+		if row != want {
+			t.Errorf("row %d: parquet reader %+v, csv reader %+v", i, row, want)
+		}
+	}
+	if _, err := pqReader.Next(); !errors.Is(err, io.EOF) {
+		t.Errorf("parquet reader after the last row: %v, want EOF", err)
+	}
+	if a := pqReader.Anomalies(); a != (s3inventory.Anomalies{}) {
+		t.Errorf("parquet reader anomalies = %+v, want none", a)
 	}
 }

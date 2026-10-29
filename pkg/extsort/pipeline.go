@@ -45,6 +45,8 @@ type Pipeline struct {
 	flushCount      atomic.Int64
 	presentTierMask atomic.Uint32
 	runFilesMu      sync.Mutex
+	// syncPath makes a published file durable; a seam for tests.
+	syncPath syncFunc
 }
 
 // presentTiers expands the tier mask accumulated across all ingest
@@ -157,7 +159,19 @@ func NewPipeline(config Config, s3Client *s3fetch.Client) *Pipeline {
 		s3Client:   s3Client,
 		runFiles:   make([]string, 0, 16),
 		memTracker: memdiag.NewTracker(memdiag.DefaultConfig()),
+		syncPath:   durableSync,
 	}
+}
+
+// publishStage moves the finished index from stage to outDir, syncing
+// it first unless the output is transient (Config.TransientOutput).
+func (p *Pipeline) publishStage(log *zerolog.Logger, stage, outDir string) error {
+	syncPath := p.syncPath
+	if p.config.TransientOutput {
+		syncPath = nil
+	}
+
+	return publish(log, stage, outDir, syncPath)
 }
 
 // Run executes the full pipeline.
@@ -244,7 +258,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 	if err != nil {
 		return nil, err
 	}
-	if err := publishIndex(log, stage, outDir); err != nil {
+	if err := p.publishStage(log, stage, outDir); err != nil {
 		return nil, err
 	}
 	prefixCount, maxDepth := mergeRes.PrefixCount, mergeRes.MaxDepth
@@ -286,14 +300,10 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 // chunkConfig holds configuration for processing a chunk.
 type chunkConfig struct {
-	tierMapping     *tiers.Mapping
-	format          s3fetch.InventoryFormat
-	keyCol          int
-	sizeCol         int
-	storageCol      int
-	accessTierCol   int
-	deleteMarkerCol int
-	fileSize        int64
+	tierMapping *tiers.Mapping
+	format      s3fetch.InventoryFormat
+	csvColumns  s3inventory.CSVReaderConfig
+	fileSize    int64
 }
 
 // chunkJob represents a chunk to be processed by a worker.
@@ -322,16 +332,12 @@ type objectRecord struct {
 
 // ingestConfig holds configuration for the ingest phase.
 type ingestConfig struct {
-	manifest        *s3fetch.Manifest
-	tierMapping     *tiers.Mapping
-	destBucket      string
-	format          s3fetch.InventoryFormat
-	keyCol          int
-	sizeCol         int
-	storageCol      int
-	accessTierCol   int
-	deleteMarkerCol int
-	numWorkers      int
+	manifest    *s3fetch.Manifest
+	tierMapping *tiers.Mapping
+	destBucket  string
+	format      s3fetch.InventoryFormat
+	csvColumns  s3inventory.CSVReaderConfig
+	numWorkers  int
 }
 
 // runIngestPhase streams S3 inventory and creates sorted run files.
@@ -353,35 +359,29 @@ func (p *Pipeline) runIngestPhase(ctx context.Context, manifestURI string) error
 	return p.runIngestLoop(ctx, cfg)
 }
 
-// csvColumns are a CSV inventory's column indexes from its manifest's
-// schema; -1 for a column it lacks.
-type csvColumns struct {
-	key, size, storage, accessTier, deleteMarker int
-}
-
-// manifestColumns reads the column indexes a CSV inventory's rows need
-// from its manifest. A Parquet manifest's fileSchema is a Parquet message,
-// not a column list, and its reader takes the columns from each file's
-// own schema, so it has none here.
-func manifestColumns(manifest *s3fetch.Manifest, format s3fetch.InventoryFormat) (csvColumns, error) {
+// manifestColumns reads the columns a CSV inventory's rows need from
+// its manifest's schema. A Parquet manifest's fileSchema is a Parquet
+// message, not a column list, and its reader takes the columns from
+// each file's own schema, so it has none here.
+func manifestColumns(manifest *s3fetch.Manifest, format s3fetch.InventoryFormat) (s3inventory.CSVReaderConfig, error) {
 	if format != s3fetch.InventoryFormatCSV {
-		return csvColumns{key: -1, size: -1, storage: -1, accessTier: -1, deleteMarker: -1}, nil
+		return s3inventory.CSVReaderConfig{}, nil
 	}
 	key, err := manifest.KeyColumnIndex()
 	if err != nil {
-		return csvColumns{}, fmt.Errorf("get key column: %w", err)
+		return s3inventory.CSVReaderConfig{}, fmt.Errorf("get key column: %w", err)
 	}
 	size, err := manifest.SizeColumnIndex()
 	if err != nil {
-		return csvColumns{}, fmt.Errorf("get size column: %w", err)
+		return s3inventory.CSVReaderConfig{}, fmt.Errorf("get size column: %w", err)
 	}
 
-	return csvColumns{
-		key:          key,
-		size:         size,
-		storage:      manifest.StorageClassColumnIndex(),
-		accessTier:   manifest.AccessTierColumnIndex(),
-		deleteMarker: manifest.DeleteMarkerColumnIndex(),
+	return s3inventory.CSVReaderConfig{
+		KeyCol:          s3inventory.ColumnAt(key),
+		SizeCol:         s3inventory.ColumnAt(size),
+		StorageCol:      s3inventory.ColumnAt(manifest.StorageClassColumnIndex()),
+		AccessTierCol:   s3inventory.ColumnAt(manifest.AccessTierColumnIndex()),
+		DeleteMarkerCol: s3inventory.ColumnAt(manifest.DeleteMarkerColumnIndex()),
 	}, nil
 }
 
@@ -426,16 +426,12 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 		Msg("ingest worker count derived from GOMAXPROCS")
 
 	return &ingestConfig{
-		manifest:        manifest,
-		format:          format,
-		destBucket:      destBucket,
-		keyCol:          cols.key,
-		sizeCol:         cols.size,
-		storageCol:      cols.storage,
-		accessTierCol:   cols.accessTier,
-		deleteMarkerCol: cols.deleteMarker,
-		numWorkers:      numWorkers,
-		tierMapping:     tiers.NewMapping(),
+		manifest:    manifest,
+		format:      format,
+		destBucket:  destBucket,
+		csvColumns:  cols,
+		numWorkers:  numWorkers,
+		tierMapping: tiers.NewMapping(),
 	}, nil
 }
 
@@ -661,14 +657,10 @@ func (p *Pipeline) sendIngestJobs(ctx context.Context, cfg *ingestConfig, jobs c
 			bucket: cfg.destBucket,
 			key:    file.Key,
 			config: chunkConfig{
-				format:          cfg.format,
-				keyCol:          cfg.keyCol,
-				sizeCol:         cfg.sizeCol,
-				storageCol:      cfg.storageCol,
-				accessTierCol:   cfg.accessTierCol,
-				deleteMarkerCol: cfg.deleteMarkerCol,
-				tierMapping:     cfg.tierMapping,
-				fileSize:        file.Size,
+				format:      cfg.format,
+				csvColumns:  cfg.csvColumns,
+				tierMapping: cfg.tierMapping,
+				fileSize:    file.Size,
 			},
 		}:
 		}
@@ -835,13 +827,7 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, fetched fetche
 	if job.config.format == s3fetch.InventoryFormatParquet {
 		reader, err = openParquetReader(body, job.config.fileSize, p.tempDir)
 	} else {
-		reader, err = s3inventory.NewCSVReaderFromStream(counted, s3inventory.CSVReaderConfig{
-			KeyCol:          job.config.keyCol,
-			SizeCol:         job.config.sizeCol,
-			StorageCol:      job.config.storageCol,
-			AccessTierCol:   job.config.accessTierCol,
-			DeleteMarkerCol: job.config.deleteMarkerCol,
-		})
+		reader, err = s3inventory.NewCSVReaderFromStream(counted, job.config.csvColumns)
 	}
 	if err != nil {
 		return fmt.Errorf("open inventory reader: %w", err)
@@ -946,7 +932,7 @@ func openParquetReader(obj *s3fetch.DownloadedObject, fileSize int64, tempDir st
 	return r, nil
 }
 
-// flushAggregator drains the aggregator to a sorted run file. Safe
+// flushAggregator writes the aggregator's rows to a sorted run file. Safe
 // to call concurrently from multiple worker goroutines — the only
 // shared state (p.runFiles + p.runCount) is guarded by p.runFilesMu;
 // the actual sort + write is per-goroutine-local until the append.
@@ -958,13 +944,12 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	start := time.Now()
 
 	// Fold this worker's tier mask into the pipeline-wide set. The mask
-	// survives Drain, so ORing on every flush captures the worker's full
+	// survives a spill, so ORing on every flush captures the worker's full
 	// lifetime regardless of which flush is the last.
 	p.presentTierMask.Or(uint32(agg.TierMask()))
 
 	aggMemory := agg.EstimatedMemoryUsage()
-	rows := agg.Drain()
-	if len(rows) == 0 {
+	if agg.PrefixCount() == 0 {
 		return nil
 	}
 	p.publish(events.Event{
@@ -991,7 +976,13 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	if err != nil {
 		return fmt.Errorf("create run file: %w", err)
 	}
-	if err := writeAndCloseRun(writer, rows, runPath); err != nil {
+	var rows int
+	if err := writeAndCloseRun(writer, runPath, func() error {
+		var werr error
+		rows, werr = agg.WriteRun(writer)
+
+		return werr
+	}); err != nil {
 		logCleanupErr(log, "remove failed run", runPath, os.Remove(runPath))
 
 		return err
@@ -1014,7 +1005,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 		Type:  events.EvtSpillCompleted,
 		Payload: events.SpillCompleted{
 			WorkerID:   workerID,
-			Rows:       uint64(len(rows)),
+			Rows:       uint64(rows),
 			Bytes:      aggMemory,
 			Duration:   flushDuration,
 			OutputPath: runPath,
@@ -1023,8 +1014,8 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 
 	log.Info().
 		Int("run_index", runIdx).
-		Str("prefixes", humanfmt.Count(int64(len(rows)))).
-		Int("prefixes_count", len(rows)).
+		Str("prefixes", humanfmt.Count(int64(rows))).
+		Int("prefixes_count", rows).
 		Str("aggregator_memory", humanfmt.Bytes(aggMemory)).
 		Str("buffer_size", humanfmt.Bytes(bufferSize)).
 		Str("duration", humanfmt.Duration(flushDuration)).

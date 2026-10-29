@@ -381,39 +381,56 @@ func treeEntries(t *testing.T, root string) map[string]bool {
 	return out
 }
 
-// TestPublishIndex_SyncsEveryFileBeforeRename: every file and directory
-// of the published index, tier_stats/ and its files included, is synced
-// as a file or a directory while it is still in the stage.
-func TestPublishIndex_SyncsEveryFileBeforeRename(t *testing.T) {
-	outDir := filepath.Join(t.TempDir(), "out")
-	stage := buildStagedIndex(t, outDir)
-	var mu sync.Mutex
-	synced := map[string]bool{}
-	record := func(path string, dir bool) error {
-		rel, err := filepath.Rel(stage, path)
-		if err != nil {
-			return fmt.Errorf("relative path: %w", err)
-		}
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("sync %s after the stage was renamed: %v", rel, err)
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		if _, dup := synced[rel]; dup {
-			t.Errorf("%s synced twice", rel)
-		}
-		synced[rel] = dir
+// syncRecorder records, relative to stage, every path its sync makes
+// durable and whether as a directory, failing the test on a path synced
+// twice or after it stopped existing (a stage synced after its rename).
+type syncRecorder struct {
+	t      *testing.T
+	stage  string
+	mu     sync.Mutex
+	synced map[string]bool
+}
 
-		return durableSync(path, dir)
-	}
+func newSyncRecorder(t *testing.T, stage string) *syncRecorder {
+	t.Helper()
 
-	if err := publish(nopLogger(), stage, outDir, record); err != nil {
-		t.Fatalf("publish: %v", err)
+	return &syncRecorder{t: t, stage: stage, synced: map[string]bool{}}
+}
+
+func (r *syncRecorder) sync(path string, dir bool) error {
+	rel, err := filepath.Rel(r.stage, path)
+	if err != nil {
+		return fmt.Errorf("relative path: %w", err)
 	}
+	if _, err := os.Stat(path); err != nil {
+		r.t.Errorf("sync %s after the stage was renamed: %v", rel, err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, dup := r.synced[rel]; dup {
+		r.t.Errorf("%s synced twice", rel)
+	}
+	r.synced[rel] = dir
+
+	return durableSync(path, dir)
+}
+
+func (r *syncRecorder) entries() map[string]bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.synced
+}
+
+// assertSyncedAll checks that every file and directory of the index
+// published at outDir, and outDir's parent, was synced as what it is.
+func assertSyncedAll(t *testing.T, outDir string, synced map[string]bool) {
+	t.Helper()
 	published := treeEntries(t, outDir)
 	if !published[format.TierStatsDir] {
 		t.Fatalf("published index has no %s directory: %v", format.TierStatsDir, published)
 	}
+	published[".."] = true
 	for rel, dir := range published {
 		got, ok := synced[rel]
 		switch {
@@ -425,6 +442,53 @@ func TestPublishIndex_SyncsEveryFileBeforeRename(t *testing.T) {
 	}
 	if len(synced) != len(published) {
 		t.Errorf("synced %d entries, published %d", len(synced), len(published))
+	}
+}
+
+// TestPublishIndex_SyncsEveryFileBeforeRename: every file and directory
+// of the published index, tier_stats/ and its files included, is synced
+// as a file or a directory while it is still in the stage, and the
+// output's parent after the rename.
+func TestPublishIndex_SyncsEveryFileBeforeRename(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "out")
+	stage := buildStagedIndex(t, outDir)
+	rec := newSyncRecorder(t, stage)
+
+	if err := publish(nopLogger(), stage, outDir, rec.sync); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	assertSyncedAll(t, outDir, rec.entries())
+}
+
+// TestPipelinePublishStage_SyncsUnlessTransient: a build's own index
+// is synced in full before it is published; a transient one (uploaded,
+// then removed) is published without a single sync.
+func TestPipelinePublishStage_SyncsUnlessTransient(t *testing.T) {
+	for _, transient := range []bool{false, true} {
+		t.Run(fmt.Sprintf("transient=%v", transient), func(t *testing.T) {
+			outDir := filepath.Join(t.TempDir(), "out")
+			stage := buildStagedIndex(t, outDir)
+			rec := newSyncRecorder(t, stage)
+			cfg := DefaultConfig()
+			cfg.TransientOutput = transient
+			p := NewPipeline(cfg, nil)
+			p.syncPath = rec.sync
+
+			if err := p.publishStage(nopLogger(), stage, outDir); err != nil {
+				t.Fatalf("publishStage: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(outDir, format.ManifestFile)); err != nil {
+				t.Fatalf("published index: %v", err)
+			}
+			if transient {
+				if got := rec.entries(); len(got) != 0 {
+					t.Errorf("transient output synced %v", got)
+				}
+
+				return
+			}
+			assertSyncedAll(t, outDir, rec.entries())
+		})
 	}
 }
 

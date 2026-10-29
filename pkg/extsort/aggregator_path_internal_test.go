@@ -198,16 +198,16 @@ func checkAggregatorAccounting(t *testing.T, agg *Aggregator) {
 		if n.row.Prefix != "" {
 			keyBytes += nodeKeyHeader + len(n.row.Prefix)
 		}
-		if n.parent == deadNode {
+		if agg.parent(uint32(i)) == deadNode {
 			continue
 		}
-		for p := n; p.parent != noNode; p = agg.node(p.parent) {
-			prefixBytes += len(p.row.Prefix)
+		for p := uint32(i); agg.parent(p) != noNode; p = agg.parent(p) {
+			prefixBytes += len(agg.node(p).row.Prefix)
 		}
 	}
 	for key, idx := range agg.children {
 		n := agg.node(idx)
-		if want := string(appendNodeKey(nil, n.parent, n.row.Prefix)); key != want {
+		if want := string(appendNodeKey(nil, agg.parent(idx), n.row.Prefix)); key != want {
 			t.Fatalf("map key %q names node %d, whose key is %q", key, idx, want)
 		}
 	}

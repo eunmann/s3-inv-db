@@ -34,7 +34,10 @@ make docker-seed                       # via the dev stack
 
 The data files are CSV.gz written the way AWS writes them: no header,
 every field quoted, keys URL-encoded, and a per-object ETag and
-LastModifiedDate derived from the seed and key.
+LastModifiedDate derived from the seed and key. `--format parquet`
+writes the same objects as Snappy-compressed Parquet instead, in AWS's
+Parquet column names and types (raw keys, `fileFormat: "Parquet"` in
+the manifest).
 
 ## Multiple runs per configuration
 

@@ -323,6 +323,28 @@ func TestReadBBHashRejectsCorruptFiles(t *testing.T) {
 	}
 }
 
+// rank counts the set bits before every bit, over built and loaded
+// tables whose last rank block is partial.
+func TestBBHashRankCountsEveryBit(t *testing.T) {
+	for _, n := range []int{1, 100, 1000, 30_011} {
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			built := mustBBHash(t, randomKeys(n, uint64(n)))
+			for name, h := range map[string]*bbhash{"built": built, "loaded": roundTripBBHash(t, built)} {
+				var want uint64
+				for i := range uint64(len(h.bits)) * 64 {
+					if got := h.rank(i); got != want {
+						t.Fatalf("%s: rank(%d) = %d, want %d", name, i, got, want)
+					}
+					want += h.bits[i/64] >> (i % 64) & 1
+				}
+				if want != h.placed {
+					t.Fatalf("%s: %d set bits, placed %d", name, want, h.placed)
+				}
+			}
+		})
+	}
+}
+
 // Keys outside the build set must miss or land in range, never panic.
 func TestBBHashForeignKeysStayInRange(t *testing.T) {
 	keys := randomKeys(5000, 9)
