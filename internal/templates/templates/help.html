@@ -189,6 +189,7 @@
                     <li>Standard-IA, One Zone-IA and Glacier Instant Retrieval bill each object as at least 128 KiB.</li>
                     <li>Glacier Flexible Retrieval and Deep Archive add per-object metadata (32 KiB at the Glacier rate plus 8 KiB at the Standard rate).</li>
                     <li>Intelligent-Tiering adds its per-object monitoring fee for the tiers it monitors. Objects under 128 KiB aren't monitored or moved by AWS, so they are counted separately at the Frequent rate without the fee.</li>
+                    <li>Outposts and Snow are billed by capacity, not per GB, so they have no storage price and add nothing to the estimate.</li>
                 </ul>
                 <p class="mt-3">
                     Requests, retrievals and data transfer are not included. If an inventory doesn't report storage

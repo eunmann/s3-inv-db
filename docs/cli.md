@@ -91,7 +91,10 @@ per-1,000-object monitoring rates, and per-1,000-request PUT rates.
 The schema, defaults (us-east-1, 2025), and tier semantics (IT-Frequent-Small
 bucket, IA minimum-billable size, Glacier metadata overhead) live in
 `pkg/pricing` — see `DefaultUSEast1Prices` for the seed values and the
-inline package docs for the field-by-field rules.
+inline package docs for the field-by-field rules. `OUTPOSTS` and `SNOW`
+have no default price: AWS bills them by provisioned capacity, not per
+GB, so their bytes add nothing to an estimate unless the table prices
+them. A tier the table leaves out is left out of the estimate.
 
 ## `top`
 
