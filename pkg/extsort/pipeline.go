@@ -69,9 +69,11 @@ type Result struct {
 	// MemoryRuns counts the workers' final states merged from memory
 	// instead of run files.
 	MemoryRuns int
-	// MergeInputRows is the rows of every sorted run the merge read: a
-	// prefix in N runs counts N times, so over PrefixCount it is how
-	// many runs the average prefix was in.
+	// MergeInputRows is the rows of every sorted run the workers
+	// produced, counted before any disk merge rounds: a prefix in N
+	// runs counts N times, so over PrefixCount it is how many worker
+	// runs the average prefix was in. With more run files than
+	// FinalFanIn the final merge reads fewer rows than this.
 	MergeInputRows uint64
 	Duration       time.Duration
 }
