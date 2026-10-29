@@ -248,5 +248,7 @@ S3INV_LONG_BENCH=1 go test -run '^$' -bench BenchmarkPipelineScale_E2E -benchtim
 benchmarks, which steers inlining along the read paths. Benchmarks run
 through `go test` don't use it, so the gates compare the same code they
 always did. Regenerate the profiles with `make pgo` after a large change
-to the read path. The build path is left out: it is bound by memory and
-map access, and PGO didn't speed it up.
+to the read path. The build path is left out: a profile merged from the
+query gates and the pipeline builds measured mixed (sorted builds -3.3%,
+random-order +1.7%, query gates neutral; issue #186). The build is
+compute- and front-end-bound, not memory-bound.

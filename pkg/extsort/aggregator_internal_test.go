@@ -107,8 +107,8 @@ func TestAggregatorDrainRecyclesRows(t *testing.T) {
 }
 
 // Drain returns the rows in the order their prefixes first appeared,
-// across slabs, so keys in order (as S3 Inventory lists them) hand
-// DrainSorted rows that are already sorted.
+// across slabs, so keys in order hand DrainSorted rows that are
+// already sorted.
 func TestAggregatorDrainInCreationOrder(t *testing.T) {
 	agg := NewAggregator(0, 0)
 	agg.AddObject("b/x", 1, tiers.Standard)
