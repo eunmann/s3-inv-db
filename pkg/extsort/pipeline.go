@@ -946,7 +946,7 @@ func openParquetReader(obj *s3fetch.DownloadedObject, fileSize int64, tempDir st
 	return r, nil
 }
 
-// flushAggregator drains the aggregator to a sorted run file. Safe
+// flushAggregator writes the aggregator's rows to a sorted run file. Safe
 // to call concurrently from multiple worker goroutines — the only
 // shared state (p.runFiles + p.runCount) is guarded by p.runFilesMu;
 // the actual sort + write is per-goroutine-local until the append.
@@ -958,13 +958,12 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	start := time.Now()
 
 	// Fold this worker's tier mask into the pipeline-wide set. The mask
-	// survives Drain, so ORing on every flush captures the worker's full
+	// survives a spill, so ORing on every flush captures the worker's full
 	// lifetime regardless of which flush is the last.
 	p.presentTierMask.Or(uint32(agg.TierMask()))
 
 	aggMemory := agg.EstimatedMemoryUsage()
-	rows := agg.Drain()
-	if len(rows) == 0 {
+	if agg.PrefixCount() == 0 {
 		return nil
 	}
 	p.publish(events.Event{
@@ -991,7 +990,13 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	if err != nil {
 		return fmt.Errorf("create run file: %w", err)
 	}
-	if err := writeAndCloseRun(writer, rows, runPath); err != nil {
+	var rows int
+	if err := writeAndCloseRun(writer, runPath, func() error {
+		var werr error
+		rows, werr = agg.WriteRun(writer)
+
+		return werr
+	}); err != nil {
 		logCleanupErr(log, "remove failed run", runPath, os.Remove(runPath))
 
 		return err
@@ -1014,7 +1019,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 		Type:  events.EvtSpillCompleted,
 		Payload: events.SpillCompleted{
 			WorkerID:   workerID,
-			Rows:       uint64(len(rows)),
+			Rows:       uint64(rows),
 			Bytes:      aggMemory,
 			Duration:   flushDuration,
 			OutputPath: runPath,
@@ -1023,8 +1028,8 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 
 	log.Info().
 		Int("run_index", runIdx).
-		Str("prefixes", humanfmt.Count(int64(len(rows)))).
-		Int("prefixes_count", len(rows)).
+		Str("prefixes", humanfmt.Count(int64(rows))).
+		Int("prefixes_count", rows).
 		Str("aggregator_memory", humanfmt.Bytes(aggMemory)).
 		Str("buffer_size", humanfmt.Bytes(bufferSize)).
 		Str("duration", humanfmt.Duration(flushDuration)).

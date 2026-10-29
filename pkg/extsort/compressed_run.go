@@ -137,13 +137,35 @@ func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*Comp
 
 // Write writes a single PrefixRow to the compressed run file.
 func (w *CompressedRunWriter) Write(row *PrefixRow) error {
-	w.buf = encodeRunRecord(w.buf[:0], w.prev, row)
-	if _, err := w.writer.Write(w.buf); err != nil {
-		return fmt.Errorf("write record: %w", err)
+	if err := w.writeRecord(encodeRunRecord(w.buf[:0], w.prev, row)); err != nil {
+		return err
 	}
 	w.prev = row.Prefix
+
+	return nil
+}
+
+// WriteEncoded writes row, whose prefix is the previous record's first
+// shared bytes followed by suffix, for a caller that knows them without
+// the whole prefix; row.Prefix is not read. A later Write front-codes
+// against no prefix, which reads back the same.
+func (w *CompressedRunWriter) WriteEncoded(shared int, suffix string, row *PrefixRow) error {
+	if err := w.writeRecord(encodeRunRecordShared(w.buf[:0], shared, suffix, row)); err != nil {
+		return err
+	}
+	w.prev = ""
+
+	return nil
+}
+
+// writeRecord writes an encoded record kept in w.buf.
+func (w *CompressedRunWriter) writeRecord(rec []byte) error {
+	w.buf = rec
+	if _, err := w.writer.Write(rec); err != nil {
+		return fmt.Errorf("write record: %w", err)
+	}
 	w.count++
-	w.uncompressedSize += uint64(len(w.buf))
+	w.uncompressedSize += uint64(len(rec))
 
 	return nil
 }

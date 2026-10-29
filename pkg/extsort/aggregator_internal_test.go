@@ -2,14 +2,18 @@ package extsort
 
 import (
 	"fmt"
+	"maps"
 	"math"
+	"math/rand/v2"
 	"runtime"
 	"runtime/debug"
 	"slices"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
+	gocmp "github.com/google/go-cmp/cmp"
 )
 
 // heapReadings must report what runtime.ReadMemStats calls HeapInuse
@@ -155,6 +159,67 @@ func TestAggregatorDrainIsSorted(t *testing.T) {
 	}
 	if len(rows) != n+1 {
 		t.Errorf("drained %d rows, want %d", len(rows), n+1)
+	}
+}
+
+// A node is a bare row: its parent's index lives in the dense parents
+// array, which Drain's counting passes read without touching the nodes.
+func TestAggregatorNodeIsARow(t *testing.T) {
+	if got, want := unsafe.Sizeof(aggNode{}), unsafe.Sizeof(PrefixRow{}); got != want {
+		t.Errorf("aggNode is %d B, want %d (a PrefixRow)", got, want)
+	}
+}
+
+// Drain reads the parents of the main tree's node ranges slab by slab:
+// ranges that start and end inside a slab and cross slab boundaries,
+// beside ordered segments whose nodes must stay out of the tree, still
+// drain sorted and exact.
+func TestAggregatorDrainAcrossSlabs(t *testing.T) {
+	const n = 3000
+	rng := rand.New(rand.NewPCG(8, 9))
+	keyed := func(format string, order []int) []string {
+		keys := make([]string, 0, len(order))
+		for _, i := range order {
+			keys = append(keys, fmt.Sprintf(format, i, i%7))
+		}
+
+		return keys
+	}
+	inOrder := make([]int, n)
+	for i := range inOrder {
+		inOrder[i] = i
+	}
+	chunks := [][]string{
+		keyed("m%05d/%d/x", rng.Perm(n)), // before any segment: the first range
+		keyed("o%05d/%d/y", inOrder),     // ordered: crosses a slab, never mapped
+		keyed("m%05d/%d/z", rng.Perm(n)), // mapped: a range inside the slabs
+		keyed("s%05d/%d/w", inOrder),     // ordered again
+		keyed("q%05d/%d/v", rng.Perm(n)), // mapped, up to the last node
+	}
+	agg := NewAggregator(0, 0)
+	var all []string
+	for c, keys := range chunks {
+		if c > 0 {
+			agg.StartSegment()
+		}
+		for _, k := range keys {
+			agg.AddObject(k, uint64(len(k)+len(all)), tiers.ID(len(all)%3))
+			all = append(all, k)
+		}
+	}
+	if agg.used < 4*rowSlabLen {
+		t.Fatalf("only %d nodes; the test needs several slabs", agg.used)
+	}
+	rows := agg.Drain()
+	for i := 1; i < len(rows); i++ {
+		if rows[i-1].Prefix >= rows[i].Prefix {
+			t.Fatalf("drained %q then %q", rows[i-1].Prefix, rows[i].Prefix)
+		}
+	}
+	got := map[string]PrefixRow{}
+	mergeRows(got, rows)
+	if want := referenceAggregate(all, 0); !maps.Equal(want, got) {
+		t.Fatalf("drain differs from a direct count:\n%s", gocmp.Diff(want, got))
 	}
 }
 
