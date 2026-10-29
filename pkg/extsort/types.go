@@ -183,69 +183,77 @@ type runRecordDecoder struct {
 	arena prefixArena
 }
 
-// next reads the next record into row: io.EOF when the stream ends
-// before a record, errRunRecordCorrupt when it ends inside one.
-func (d *runRecordDecoder) next(row *PrefixRow) error {
-	n, err := decodeRunRecord(d.in.rest(), d.prev, &d.arena, row)
+// next reads the next record into row and returns how many bytes of the
+// previous record's prefix it is coded as starting with (it may share
+// more): io.EOF when the stream ends before a record,
+// errRunRecordCorrupt when it ends inside one.
+func (d *runRecordDecoder) next(row *PrefixRow) (int, error) {
+	rec, err := decodeRunRecord(d.in.rest(), d.prev, &d.arena, row)
 	if errors.Is(err, errRunRecordShort) {
-		n, err = d.refill(row)
+		rec, err = d.refill(row)
 	}
 	if err != nil {
-		return err
+		return 0, err
 	}
-	d.in.advance(n)
+	d.in.advance(rec.size)
 	d.prev = row.Prefix
 
-	return nil
+	return rec.shared, nil
 }
 
 // refill decodes the record that runs past the window into row after
-// refilling the window, and returns its length.
-func (d *runRecordDecoder) refill(row *PrefixRow) (int, error) {
+// refilling the window.
+func (d *runRecordDecoder) refill(row *PrefixRow) (decodedRecord, error) {
 	readErr := d.in.refill(runRecordWindow)
 	if len(d.in.rest()) == 0 {
 		if errors.Is(readErr, io.EOF) {
-			return 0, io.EOF
+			return decodedRecord{}, io.EOF
 		}
 
-		return 0, fmt.Errorf("read run record: %w", readErr)
+		return decodedRecord{}, fmt.Errorf("read run record: %w", readErr)
 	}
-	n, err := decodeRunRecord(d.in.rest(), d.prev, &d.arena, row)
+	rec, err := decodeRunRecord(d.in.rest(), d.prev, &d.arena, row)
 	if errors.Is(err, errRunRecordShort) && readErr == nil {
 		// Longer than what is buffered: fill the whole buffer.
 		readErr = d.in.refill(d.in.r.Size())
-		n, err = decodeRunRecord(d.in.rest(), d.prev, &d.arena, row)
+		rec, err = decodeRunRecord(d.in.rest(), d.prev, &d.arena, row)
 	}
 	if !errors.Is(err, errRunRecordShort) {
-		return n, err
+		return rec, err
 	}
 	switch {
 	case readErr == nil:
-		return 0, fmt.Errorf("%w: a record longer than the %d-byte read buffer", errRunRecordCorrupt, d.in.r.Size())
+		return decodedRecord{}, fmt.Errorf("%w: a record longer than the %d-byte read buffer", errRunRecordCorrupt, d.in.r.Size())
 	case !errors.Is(readErr, io.EOF):
-		return 0, fmt.Errorf("read run record: %w", readErr)
+		return decodedRecord{}, fmt.Errorf("read run record: %w", readErr)
 	}
 
-	return 0, fmt.Errorf("%w: stream ends inside a record", errRunRecordCorrupt)
+	return decodedRecord{}, fmt.Errorf("%w: stream ends inside a record", errRunRecordCorrupt)
 }
 
 // errRunRecordShort means the bytes end inside the record.
 var errRunRecordShort = errors.New("run record continues past the bytes given")
 
+// decodedRecord is a decoded record's length and how many bytes of the
+// previous prefix its prefix starts with.
+type decodedRecord struct {
+	size, shared int
+}
+
 // decodeRunRecord decodes the record at the start of b, front-coded
-// against prev, into row and returns its length: errRunRecordShort when
-// b ends inside it. The prefix comes from arena.
-func decodeRunRecord(b []byte, prev string, arena *prefixArena, row *PrefixRow) (int, error) {
+// against prev, into row: errRunRecordShort when b ends inside it. The
+// prefix comes from arena.
+func decodeRunRecord(b []byte, prev string, arena *prefixArena, row *PrefixRow) (decodedRecord, error) {
 	c := recordCursor{b: b}
 	shared, suffixLen := c.uvarint(), c.uvarint()
 	if err := c.check("prefix lengths"); err != nil {
-		return 0, err
+		return decodedRecord{}, err
 	}
 	if shared > uint64(len(prev)) || suffixLen > math.MaxInt32 {
-		return 0, fmt.Errorf("%w: %d shared of %d bytes, suffix %d", errRunRecordCorrupt, shared, len(prev), suffixLen)
+		return decodedRecord{}, fmt.Errorf("%w: %d shared of %d bytes, suffix %d", errRunRecordCorrupt, shared, len(prev), suffixLen)
 	}
 	if suffixLen > uint64(len(b)-c.off) {
-		return 0, errRunRecordShort
+		return decodedRecord{}, errRunRecordShort
 	}
 	row.Reset()
 	if n := int(shared + suffixLen); n > 0 {
@@ -257,14 +265,14 @@ func decodeRunRecord(b []byte, prev string, arena *prefixArena, row *PrefixRow) 
 	c.off += int(suffixLen)
 	depth, mask := c.uvarint(), c.uvarint()
 	if err := c.check("depth and tier mask"); err != nil {
-		return 0, err
+		return decodedRecord{}, err
 	}
 	if depth > math.MaxUint16 {
-		return 0, fmt.Errorf("%w: depth %d", errRunRecordCorrupt, depth)
+		return decodedRecord{}, fmt.Errorf("%w: depth %d", errRunRecordCorrupt, depth)
 	}
 	row.Depth = uint16(depth)
 	if mask&^(1<<MaxTiers-1|runRecordTotals) != 0 {
-		return 0, fmt.Errorf("%w: tier mask %#x", errRunRecordCorrupt, mask)
+		return decodedRecord{}, fmt.Errorf("%w: tier mask %#x", errRunRecordCorrupt, mask)
 	}
 	for m := mask & (1<<MaxTiers - 1); m != 0; m &= m - 1 {
 		t := bits.TrailingZeros64(m)
@@ -276,10 +284,10 @@ func decodeRunRecord(b []byte, prev string, arena *prefixArena, row *PrefixRow) 
 		row.Count, row.TotalBytes = c.uvarint(), c.uvarint()
 	}
 	if err := c.check("counts"); err != nil {
-		return 0, err
+		return decodedRecord{}, err
 	}
 
-	return c.off, nil
+	return decodedRecord{size: c.off, shared: int(shared)}, nil
 }
 
 // recordCursor reads a record's varints from b at off. A read past the
