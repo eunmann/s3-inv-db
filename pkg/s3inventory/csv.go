@@ -74,14 +74,16 @@ func (a Anomalies) String() string {
 // CSVReader reads S3 inventory records from CSV streams. S3 writes each
 // record on one line with every field plain or quoted, and keys are URL
 // encoded, so no field holds a quote, comma or newline: such lines are
-// split in place, the fields viewing the line. The first line that is
-// not of that shape (an escaped or stray quote, a quoted field running
-// over the line end, a line longer than the buffer) hands that line
-// and everything after it to encoding/csv, configured as before, so the
+// split in place, the fields viewing the line, and only the fields up to
+// the last configured column are kept. The first line that is not of
+// that shape (an escaped or stray quote, a quoted field running over
+// the line end, a line longer than the buffer) hands that line and
+// everything after it to encoding/csv, configured as before, so the
 // records are what encoding/csv alone would return.
 type CSVReader struct {
 	lines           *bufio.Reader // nil once encoding/csv took over
 	fields          []string
+	maxFields       int // fields kept per line split in place
 	csvReader       *csv.Reader
 	stream          io.Closer      // the stream NewCSVReaderFromStream read
 	bufs            *streamBuffers // pooled; nil once Close returned them
@@ -118,8 +120,13 @@ type CSVReaderConfig struct {
 // The reader should provide the raw CSV data (already decompressed if needed).
 // Use NewCSVReaderFromStream for automatic gzip handling.
 func NewCSVReader(r io.Reader, cfg CSVReaderConfig) *CSVReader {
+	return newCSVReader(bufio.NewReaderSize(r, csvLineBuffer), cfg)
+}
+
+func newCSVReader(lines *bufio.Reader, cfg CSVReaderConfig) *CSVReader {
 	return &CSVReader{
-		lines:           bufio.NewReaderSize(r, csvLineBuffer),
+		lines:           lines,
+		maxFields:       1 + max(cfg.KeyCol, cfg.SizeCol, cfg.StorageCol, cfg.AccessTierCol, cfg.DeleteMarkerCol),
 		keyCol:          cfg.KeyCol,
 		sizeCol:         cfg.SizeCol,
 		storageCol:      cfg.StorageCol,
@@ -154,17 +161,10 @@ func NewCSVReaderFromStream(r io.ReadCloser, cfg CSVReaderConfig) (*CSVReader, e
 		return nil, err
 	}
 
-	return &CSVReader{
-		lines:           lines,
-		keyCol:          cfg.KeyCol,
-		sizeCol:         cfg.SizeCol,
-		storageCol:      cfg.StorageCol,
-		accessTierCol:   cfg.AccessTierCol,
-		deleteMarkerCol: cfg.DeleteMarkerCol,
-		stream:          r,
-		bufs:            bufs,
-		gzipped:         gzipped,
-	}, nil
+	reader := newCSVReader(lines, cfg)
+	reader.stream, reader.bufs, reader.gzipped = r, bufs, gzipped
+
+	return reader, nil
 }
 
 // streamBuffers are a stream reader's input and line buffers and its
@@ -222,7 +222,9 @@ func newFallbackCSV(r io.Reader) *csv.Reader {
 	return csvr
 }
 
-// record returns the next record's fields, valid until the next call.
+// record returns the next record's fields, valid until the next call:
+// all of them from encoding/csv, the first maxFields from a line split
+// in place.
 func (r *CSVReader) record() ([]string, error) {
 	if r.csvReader != nil {
 		return r.csvReader.Read() //nolint:wrapcheck // Next wraps it
@@ -241,7 +243,7 @@ func (r *CSVReader) record() ([]string, error) {
 				// encoding/csv skips empty lines.
 				continue
 			}
-			if fields, ok := splitPlainCSV(body, r.fields[:0]); ok {
+			if fields, ok := splitPlainCSV(body, r.fields[:0], r.maxFields); ok {
 				r.fields = fields
 
 				return fields, nil
@@ -264,41 +266,74 @@ func trimLineEnd(line []byte) []byte {
 }
 
 // splitPlainCSV splits a line whose fields are each either plain
-// (no '"') or wholly quoted with no '"' inside, appending the fields to
-// dst as views of line; it reports false for any other line.
-func splitPlainCSV(line []byte, dst []string) ([]string, bool) {
-	for start := 0; ; {
-		if start < len(line) && line[start] == '"' {
-			end := bytes.IndexByte(line[start+1:], '"')
-			if end < 0 {
+// (no '"') or wholly quoted with no '"' inside, appending its first
+// maxFields fields to dst as views of line; it reports false for any
+// other line. Knowing where the next quote is, plain fields are split
+// on commas alone, and once no quote is left the line needs no more
+// scanning than the fields still kept.
+func splitPlainCSV(line []byte, dst []string, maxFields int) ([]string, bool) {
+	quote := bytes.IndexByte(line, '"')
+	start := 0
+	for quote >= 0 {
+		if start < quote {
+			comma := bytes.IndexByte(line[start:quote], ',')
+			if comma < 0 {
 				return nil, false
 			}
-			end += start + 1
-			if end+1 < len(line) && line[end+1] != ',' {
-				return nil, false
+			if len(dst) < maxFields {
+				dst = append(dst, bytesView(line[start:start+comma]))
 			}
-			dst = append(dst, bytesView(line[start+1:end]))
-			if end+1 >= len(line) {
-				return dst, true
-			}
-			start = end + 2
+			start += comma + 1
 
 			continue
 		}
-		field := line[start:]
-		comma := bytes.IndexByte(field, ',')
-		if comma >= 0 {
-			field = field[:comma]
-		}
-		if bytes.IndexByte(field, '"') >= 0 {
+		end := bytes.IndexByte(line[start+1:], '"')
+		if end < 0 {
 			return nil, false
 		}
-		dst = append(dst, bytesView(field))
-		if comma < 0 {
+		end += start + 1
+		if end+1 < len(line) && line[end+1] != ',' {
+			return nil, false
+		}
+		if len(dst) < maxFields {
+			dst = append(dst, bytesView(line[start+1:end]))
+		}
+		if end+1 == len(line) {
 			return dst, true
 		}
-		start += comma + 1
+		start = end + 2
+		quote = nextQuote(line, start)
 	}
+
+	return splitCommas(line[start:], dst, maxFields), true
+}
+
+// nextQuote returns the index of the first '"' in line at or after
+// start, or -1. S3 quotes every field, so it checks start first.
+func nextQuote(line []byte, start int) int {
+	if start < len(line) && line[start] == '"' {
+		return start
+	}
+	if q := bytes.IndexByte(line[start:], '"'); q >= 0 {
+		return start + q
+	}
+
+	return -1
+}
+
+// splitCommas appends the comma-separated fields of a line holding no
+// quote to dst, until dst holds maxFields.
+func splitCommas(line []byte, dst []string, maxFields int) []string {
+	for len(dst) < maxFields {
+		comma := bytes.IndexByte(line, ',')
+		if comma < 0 {
+			return append(dst, bytesView(line))
+		}
+		dst = append(dst, bytesView(line[:comma]))
+		line = line[comma+1:]
+	}
+
+	return dst
 }
 
 // bytesView returns b as a string without copying; it is valid while b
@@ -341,16 +376,19 @@ func (r *CSVReader) Next() (Row, error) {
 			continue
 		}
 
-		sizeStr := strings.TrimSpace(fields[r.sizeCol])
-		size, err := strconv.ParseUint(sizeStr, 10, 64)
-		if err != nil {
-			r.anomalies.BadSizes++
-			logging.L().Debug().
-				Str("key", key).
-				Str("size_field", sizeStr).
-				Err(err).
-				Msg("s3inventory: malformed size, defaulting to 0")
-			size = 0
+		size, ok := parseDigits(fields[r.sizeCol])
+		if !ok {
+			sizeStr := strings.TrimSpace(fields[r.sizeCol])
+			size, err = strconv.ParseUint(sizeStr, 10, 64)
+			if err != nil {
+				r.anomalies.BadSizes++
+				logging.L().Debug().
+					Str("key", key).
+					Str("size_field", sizeStr).
+					Err(err).
+					Msg("s3inventory: malformed size, defaulting to 0")
+				size = 0
+			}
 		}
 
 		row := Row{
@@ -369,6 +407,28 @@ func (r *CSVReader) Next() (Row, error) {
 	}
 }
 
+// parseDigits parses s when it is 1 to 19 ASCII digits, which cannot
+// overflow a uint64 and are what S3 writes for a size. Anything else
+// reports false for strconv.ParseUint to judge.
+func parseDigits(s string) (uint64, bool) {
+	if s == "" || len(s) > maxSafeDigits {
+		return 0, false
+	}
+	var n uint64
+	for i := range len(s) {
+		c := s[i]
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + uint64(c-'0')
+	}
+
+	return n, true
+}
+
+// maxSafeDigits is the most decimal digits that always fit a uint64.
+const maxSafeDigits = 19
+
 // decodeKey undoes the URL encoding S3 Inventory applies to keys in CSV
 // reports (Parquet keys are raw). It is form decoding — '+' is a space
 // and a literal '+' arrives as %2B — matching the url_decode AWS's
@@ -377,11 +437,12 @@ func (r *CSVReader) Next() (Row, error) {
 // returned string views until the next call. A key that is not valid
 // encoding is kept as-is and counted.
 func (r *CSVReader) decodeKey(raw string) string {
-	if !hasEscape(raw) {
+	i := nextEscape(raw)
+	if i < 0 {
 		return raw
 	}
 	var ok bool
-	r.keyBuf, ok = appendUnescape(r.keyBuf[:0], raw)
+	r.keyBuf, ok = appendUnescape(r.keyBuf[:0], raw, i)
 	if !ok {
 		r.anomalies.UndecodableKeys++
 
@@ -391,22 +452,13 @@ func (r *CSVReader) decodeKey(raw string) string {
 	return bytesView(r.keyBuf)
 }
 
-// hasEscape reports whether s holds '%' or '+'. Two IndexByte scans
-// (vectorized) beat one strings.ContainsAny, which checks byte by byte.
-func hasEscape(s string) bool {
-	return strings.IndexByte(s, '%') >= 0 || strings.IndexByte(s, '+') >= 0
-}
-
-// appendUnescape appends the form-decoded s to dst, copying the runs
-// between escapes in bulk: what url.QueryUnescape returns, without its
-// second pass, per-byte writes and allocation. It reports false when s
-// holds a '%' not followed by two hex digits.
-func appendUnescape(dst []byte, s string) ([]byte, bool) {
-	for {
-		i := nextEscape(s)
-		if i < 0 {
-			return append(dst, s...), true
-		}
+// appendUnescape appends the form-decoded s, whose first escape is at
+// i, to dst, copying the runs between escapes in bulk: what
+// url.QueryUnescape returns, without its second pass, per-byte writes
+// and allocation. It reports false when s holds a '%' not followed by
+// two hex digits.
+func appendUnescape(dst []byte, s string, i int) ([]byte, bool) {
+	for ; i >= 0; i = nextEscape(s) {
 		dst = append(dst, s[:i]...)
 		if s[i] == '+' {
 			dst = append(dst, ' ')
@@ -424,9 +476,13 @@ func appendUnescape(dst []byte, s string) ([]byte, bool) {
 		dst = append(dst, hi<<4|lo)
 		s = s[i+3:]
 	}
+
+	return append(dst, s...), true
 }
 
 // nextEscape returns the index of the first '%' or '+' in s, or -1.
+// Two IndexByte scans (vectorized) beat one strings.IndexAny, which
+// checks byte by byte.
 func nextEscape(s string) int {
 	pct := strings.IndexByte(s, '%')
 	end := len(s)
