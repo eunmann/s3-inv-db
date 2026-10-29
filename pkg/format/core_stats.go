@@ -399,10 +399,12 @@ func (b *CoreStatsBuilder) Finalize() error {
 	}
 
 	bw := bufio.NewWriterSize(final, repackBufferSize)
-	rowBuf := make([]byte, stride)
+	// Each field is stored as a whole word over the bytes after it, so
+	// the row buffer has a word of slack past the row.
+	rowBuf := make([]byte, stride+8)
 	for i := range b.count {
 		exception := repackRow(rowBuf, b.buildRowSlice(i), desc, b.tierEnc)
-		if _, err := bw.Write(rowBuf); err != nil {
+		if _, err := bw.Write(rowBuf[:stride]); err != nil {
 			return abortPatch(cleanupTmp(final, tmp, fmt.Errorf("write row %d: %w", i, err)))
 		}
 		if patch != nil {
@@ -485,19 +487,12 @@ func repackRow(dst, src []byte, s CoreStatsStride, enc TierMaskEncoding) bool {
 		if fieldNeed(v) > f.width {
 			v, exception = widthMask[f.width], true
 		}
-		writeLE(dst[off:], v, int(f.width))
+		binary.LittleEndian.PutUint64(dst[off:], v)
 		off += int(f.width)
 	}
-	writeLE(dst[off:], encodeTierField(binary.LittleEndian.Uint16(src[bldOffTierMask:]), enc), int(s.TierMask))
+	binary.LittleEndian.PutUint64(dst[off:], encodeTierField(binary.LittleEndian.Uint16(src[bldOffTierMask:]), enc))
 
 	return exception
-}
-
-// writeLE writes the low n bytes of v at dst[0..n].
-func writeLE(dst []byte, v uint64, n int) {
-	for i := range n {
-		dst[i] = byte(v >> (8 * i))
-	}
 }
 
 // Close releases the mmap and closes the file without finalizing.
