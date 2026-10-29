@@ -393,7 +393,7 @@ var ErrChunkSizeMismatch = errors.New("inventory chunk size differs from its man
 
 // MergeConfig tunes the K-way merge phase.
 type MergeConfig struct {
-	// NumWorkers: concurrent merge workers. Default max(NumCPU/2, 1).
+	// NumWorkers: concurrent merge workers. Default max(GOMAXPROCS/2, 1).
 	// Under GOMEMLIMIT the merger lowers it so every disk round's open
 	// readers fit the same budget as the final merge's.
 	NumWorkers int
@@ -429,19 +429,22 @@ type ObserveConfig struct {
 }
 
 // DefaultConfig returns a Config with sensible defaults based on the
-// current machine. Concurrency is derived from runtime.NumCPU per the
-// pipeline's "throughput scales with instance size" contract; the
-// process memory limit is governed by GOMEMLIMIT (see
-// sysmem.ApplyMemoryLimit) rather than a fractional partition here.
+// current machine. Concurrency is derived from runtime.GOMAXPROCS per
+// the pipeline's "throughput scales with instance size" contract:
+// unlike NumCPU it honours a container CPU quota. The process memory
+// limit is governed by GOMEMLIMIT (see sysmem.ApplyMemoryLimit) rather
+// than a fractional partition here.
 func DefaultConfig() Config {
-	mergeWorkers := max(runtime.NumCPU()/2, 1)
-
 	return Config{
 		TempDir:  "",
 		MaxDepth: 0,
 		Merge: MergeConfig{
-			NumWorkers: mergeWorkers,
+			NumWorkers: mergeWorkerCount(runtime.GOMAXPROCS(0)),
 			MaxFanIn:   16,
 		},
 	}
+}
+
+func mergeWorkerCount(procs int) int {
+	return max(procs/2, 1)
 }

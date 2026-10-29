@@ -146,10 +146,11 @@ type inventoryEvent struct {
 }
 
 // JobsStream serves text/event-stream. On connect it sends a "job"
-// frame for every queued or running job, then a "synced" frame; after
-// that a "job" frame (the job's JSON snapshot) whenever a job changes
-// and an "inventory" frame whenever an inventory's catalog state
-// changes outside a job. Frames are coalesced per job and paced to at
+// frame for every job whose run is still in progress (queued, running,
+// or terminal while that final state is being written), then a
+// "synced" frame; after that a "job" frame (the job's JSON snapshot)
+// whenever a job changes and an "inventory" frame whenever an
+// inventory's catalog state changes outside a job. Frames are coalesced per job and paced to at
 // most one batch per ssePace, so a busy build costs a few frames a
 // second, never one per progress tick, and a job's terminal state is
 // always delivered. A reader that falls too far behind is disconnected:

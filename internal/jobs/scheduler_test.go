@@ -354,6 +354,71 @@ func TestScheduler_LiveSnapshots(t *testing.T) {
 	}
 }
 
+// pausingStore holds the scheduler inside Upsert just after it has
+// written the job in state pauseOn, the moment a store reader already
+// sees the transition.
+type pausingStore struct {
+	committed chan jobs.Job
+	release   chan struct{}
+	pauseOn   jobs.State
+	once      sync.Once
+}
+
+func (p *pausingStore) Upsert(_ context.Context, j jobs.Job) error {
+	if j.State == p.pauseOn {
+		p.committed <- j
+		<-p.release
+	}
+
+	return nil
+}
+
+func (p *pausingStore) unpause() { p.once.Do(func() { close(p.release) }) }
+
+// TestScheduler_LiveNeverTrailsStore: once the store holds a state
+// transition, the live snapshot readers prefer over the store must not
+// still show the state before it (#232: a cancelled job's row rendered
+// as running).
+func TestScheduler_LiveNeverTrailsStore(t *testing.T) {
+	for _, state := range []jobs.State{jobs.StateRunning, jobs.StateCancelled} {
+		t.Run(string(state), func(t *testing.T) {
+			store := &pausingStore{committed: make(chan jobs.Job, 1), release: make(chan struct{}), pauseOn: state}
+			sched := jobs.NewSchedulerForTest(store, jobs.NewBus(16), time.Hour)
+			t.Cleanup(func() {
+				store.unpause()
+				_ = sched.Shutdown(context.Background())
+			})
+
+			started := make(chan struct{})
+			job, err := sched.Submit(t.Context(), "src/inv/run", jobs.KindBuild, func(ctx context.Context, _ func(jobs.Update)) error {
+				close(started)
+				<-ctx.Done()
+
+				return ctx.Err()
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state == jobs.StateCancelled {
+				<-started
+				if err := sched.Cancel(job.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			stored := <-store.committed
+			if got, ok := sched.LiveForInventory("src/inv/run"); ok && got.State != stored.State {
+				t.Errorf("LiveForInventory state = %s while the store holds %s", got.State, stored.State)
+			}
+			for _, got := range sched.Live() {
+				if got.ID == job.ID && got.State != stored.State {
+					t.Errorf("Live state = %s while the store holds %s", got.State, stored.State)
+				}
+			}
+		})
+	}
+}
+
 func TestStore_MarkAborted(t *testing.T) {
 	db := openTestDB(t)
 	invStore, err := inventory.NewStore(db)

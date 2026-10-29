@@ -19,7 +19,7 @@ flowchart LR
 
 ## Building
 
-1. **Download and parse.** Parse workers (`min(NumCPU, data files)`,
+1. **Download and parse.** Parse workers (`min(GOMAXPROCS, data files)`,
    at least 2) each have a fetcher downloading their next file while
    they parse the current one. CSV keys, URL-encoded by S3, are
    decoded.

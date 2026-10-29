@@ -116,7 +116,7 @@ func TestPipelineRun_ParquetInventory(t *testing.T) {
 		t.Fatalf("Run: %v", runErr)
 	}
 
-	workers := min(runtime.NumCPU(), numChunks)
+	workers := min(runtime.GOMAXPROCS(0), numChunks)
 	if got := maxChunks.Load(); got > int64(2*workers) {
 		t.Errorf("scratch held %d downloaded chunks at once, want at most %d (two per worker)", got, 2*workers)
 	}

@@ -357,8 +357,8 @@ func (h *Handlers) latestJobOrNil(ctx context.Context, inv inventory.ID) *jobs.J
 }
 
 // latestJob returns inv's newest job: the scheduler's in-memory snapshot
-// while one is queued or running, since the store's copy trails live
-// progress by up to a second, else the stored one.
+// while it holds one, since the store's copy trails live progress by up
+// to a second, else the stored one.
 func (h *Handlers) latestJob(ctx context.Context, inv inventory.ID) (jobs.Job, error) {
 	if j, ok := h.jobMgr.LiveForInventory(inv); ok {
 		return j, nil

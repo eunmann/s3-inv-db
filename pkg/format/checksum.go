@@ -1,10 +1,10 @@
 package format
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -20,26 +20,37 @@ const checksumPiece = 64 << 20
 // checksumBuffer is the read size within a piece.
 const checksumBuffer = 1 << 20
 
+// castagnoli is the CRC-32C table; hash/crc32 builds it once and
+// computes it with the CPU's CRC32 instructions on amd64 and arm64.
+//
+// A checksum is CRC-32C, not a cryptographic hash: it is for integrity
+// only. The manifest sits beside the files it covers, on disk and under
+// the same S3 prefix, so whoever can change a file can change its
+// checksum too; what it catches is accidental damage (a torn copy, a
+// bad disk or transfer), which CRC-32C detects.
+func castagnoli() *crc32.Table { return crc32.MakeTable(crc32.Castagnoli) }
+
 // pieceJob is one piece of one file to hash.
 type pieceJob struct {
+	digest *uint32
 	name   string
 	off, n int64
-	digest *[sha256.Size]byte
 }
 
 // checksumFiles returns the checksum of each file under dir that sizes
-// names, given its size: the hex SHA-256 of the concatenated SHA-256
-// digests of the file's piece-sized pieces (one empty piece for an
-// empty file). Manifests use checksumPiece; tests pass a small piece.
-// Every piece of every file is hashed in parallel on up to GOMAXPROCS
-// workers, which keeps a build's checksums from being one thread
-// reading the whole index; hashed counts the bytes read.
+// names, given its size: the CRC-32C of the CRC-32Cs of the file's
+// piece-sized pieces (one empty piece for an empty file), each 4 bytes
+// big-endian, concatenated in order, as 8 hex digits. Manifests use
+// checksumPiece; tests pass a small piece. Every piece of every file
+// is hashed in parallel on up to GOMAXPROCS workers, which keeps a
+// build's checksums from being one thread reading the whole index;
+// hashed counts the bytes read.
 func checksumFiles(dir string, sizes map[string]int64, piece int64, hashed *stepCounter) (map[string]string, error) {
-	digests := make(map[string][][sha256.Size]byte, len(sizes))
+	digests := make(map[string][]uint32, len(sizes))
 	var jobs []pieceJob
 	for name, size := range sizes {
 		pieces := max(1, (size+piece-1)/piece)
-		d := make([][sha256.Size]byte, pieces)
+		d := make([]uint32, pieces)
 		digests[name] = d
 		for i := range pieces {
 			off := i * piece
@@ -69,13 +80,16 @@ func checksumFiles(dir string, sizes map[string]int64, piece int64, hashed *step
 		return nil, err
 	}
 
+	table := castagnoli()
 	sums := make(map[string]string, len(digests))
 	for name, d := range digests {
-		h := sha256.New()
-		for i := range d {
-			h.Write(d[i][:])
+		var crc uint32
+		var b [4]byte
+		for _, piece := range d {
+			binary.BigEndian.PutUint32(b[:], piece)
+			crc = crc32.Update(crc, table, b[:])
 		}
-		sums[name] = hex.EncodeToString(h.Sum(nil))
+		sums[name] = fmt.Sprintf("%08x", crc)
 	}
 
 	return sums, nil
@@ -90,12 +104,13 @@ func hashPiece(dir string, job pieceJob, buf []byte, hashed *stepCounter) error 
 		return fmt.Errorf("checksum %s: %w", job.name, err)
 	}
 	defer f.Close()
-	h := sha256.New()
+	table := castagnoli()
+	var crc uint32
 	r := io.NewSectionReader(f, job.off, job.n)
 	var read int64
 	for {
 		n, err := r.Read(buf)
-		h.Write(buf[:n])
+		crc = crc32.Update(crc, table, buf[:n])
 		hashed.add(n)
 		read += int64(n)
 		if errors.Is(err, io.EOF) {
@@ -108,7 +123,7 @@ func hashPiece(dir string, job pieceJob, buf []byte, hashed *stepCounter) error 
 	if read != job.n {
 		return fmt.Errorf("checksum %s: %w", job.name, ErrSizeMismatch)
 	}
-	h.Sum(job.digest[:0])
+	*job.digest = crc
 
 	return nil
 }

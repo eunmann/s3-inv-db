@@ -9,9 +9,10 @@ import (
 	"time"
 )
 
-// ManifestVersion is the current manifest format version. Version 2
-// checksums a file by its pieces (see checksumFiles).
-const ManifestVersion = 2
+// ManifestVersion is the current manifest format version. Version 3
+// checksums a file by its pieces' CRC-32Cs (see checksumFiles);
+// version 2's were SHA-256.
+const ManifestVersion = 3
 
 // Manifest describes the contents of an index directory.
 type Manifest struct {
