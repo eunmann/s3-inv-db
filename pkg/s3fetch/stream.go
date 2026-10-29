@@ -44,15 +44,16 @@ type streamSizes struct {
 	attempts int
 }
 
-// Default stream sizes. Buffers are 1 MiB, the CSV reader's input read.
-// A part in flight holds up to three (two queued, one filling) and four
-// parts are in flight, so a stream being read holds at most
-// 4 × 3 + 1 = 13 MiB and one not read yet, whose only GET is its first
-// part's, 3 MiB. Three attempts is the transfer manager's
-// PartBodyMaxRetries default, which DownloadToReader runs with.
+// Default stream sizes. Buffers are 256 KiB, so a small object takes
+// little more than its size. A part in flight holds up to twelve (11
+// queued, one filling), 3 MiB, and four parts are in flight, so a
+// stream being read holds at most 4 × 12 + 1 buffers, 12.25 MiB, and
+// one not read yet, whose only GET is its first part's, 3 MiB. Three
+// attempts is the transfer manager's PartBodyMaxRetries default, which
+// DownloadToReader runs with.
 const (
-	streamBuffer      = 1 << 20
-	streamPartBuffers = 2
+	streamBuffer      = 256 << 10
+	streamPartBuffers = 11
 	streamWindow      = 4
 	streamAttempts    = 3
 )
@@ -61,36 +62,77 @@ func defaultStreamSizes() streamSizes {
 	return streamSizes{buffer: streamBuffer, partBuffers: streamPartBuffers, window: streamWindow, attempts: streamAttempts}
 }
 
-// streamConfig is a Downloader's stream sizes, the pool their buffers
-// are recycled through and a count of the buffers out of it.
+// streamConfig is a Downloader's stream sizes and the buffers its
+// streams share.
 type streamConfig struct {
 	streamSizes
 
-	pool *sync.Pool
-	live *atomic.Int64
+	bufs *streamBuffers
 }
 
 func newStreamConfig(sizes streamSizes) streamConfig {
-	return streamConfig{
-		streamSizes: sizes,
-		live:        new(atomic.Int64),
-		pool: &sync.Pool{New: func() any {
-			b := make([]byte, sizes.buffer)
+	return streamConfig{streamSizes: sizes, bufs: &streamBuffers{size: sizes.buffer}}
+}
 
-			return &b
-		}},
+func (c streamConfig) buffer() *[]byte   { return c.bufs.get() }
+func (c streamConfig) recycle(b *[]byte) { c.bufs.put(b) }
+
+// streamBuffers recycles buffers across a Downloader's streams while
+// any is open, and drops them once none is. A sync.Pool empties at
+// every other GC, and a build runs many, so its streams allocated
+// afresh. Opened streams overlap through a build (the next chunk opens
+// before the current one closes), so the free list never holds more
+// than the streams' read-ahead held at its peak.
+type streamBuffers struct {
+	free []*[]byte
+	live atomic.Int64 // buffers out of the list
+	made atomic.Int64 // buffers allocated
+	size int
+	open int
+	mu   sync.Mutex
+}
+
+func (b *streamBuffers) get() *[]byte {
+	b.live.Add(1)
+	b.mu.Lock()
+	if n := len(b.free); n > 0 {
+		buf := b.free[n-1]
+		b.free[n-1] = nil
+		b.free = b.free[:n-1]
+		b.mu.Unlock()
+
+		return buf
 	}
+	b.mu.Unlock()
+	b.made.Add(1)
+	buf := make([]byte, b.size)
+
+	return &buf
 }
 
-func (c streamConfig) buffer() *[]byte {
-	c.live.Add(1)
-
-	return c.pool.Get().(*[]byte) //nolint:forcetypeassert // the pool only holds *[]byte
+func (b *streamBuffers) put(buf *[]byte) {
+	b.live.Add(-1)
+	b.mu.Lock()
+	if b.open > 0 {
+		b.free = append(b.free, buf)
+	}
+	b.mu.Unlock()
 }
 
-func (c streamConfig) recycle(b *[]byte) {
-	c.live.Add(-1)
-	c.pool.Put(b)
+func (b *streamBuffers) opened() {
+	b.mu.Lock()
+	b.open++
+	b.mu.Unlock()
+}
+
+// closed counts a stream closed, after it put back every buffer.
+func (b *streamBuffers) closed() {
+	b.mu.Lock()
+	b.open--
+	if b.open == 0 {
+		b.free = nil
+	}
+	b.mu.Unlock()
 }
 
 // ObjectStream reads an S3 object front to back as it downloads, with
@@ -188,6 +230,7 @@ func openStream(ctx context.Context, gets *boundedGets, cfg streamConfig, bucket
 	head := s.newPart(1)
 	head.start, head.length, head.known = r.start, r.length, true
 	s.parts = append(s.parts, head)
+	cfg.bufs.opened()
 	s.launch(head, out, nil)
 
 	return s, nil
@@ -304,6 +347,7 @@ func (s *ObjectStream) Close() error {
 	}
 	s.parts = nil
 	s.recycle()
+	s.cfg.bufs.closed()
 	s.err = errStreamClosed
 
 	return nil

@@ -207,7 +207,7 @@ func TestObjectStream_ReadsTheObjectExactly(t *testing.T) {
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if n := cfg.live.Load(); n != 0 {
+			if n := cfg.bufs.live.Load(); n != 0 {
 				t.Errorf("%d buffers not recycled", n)
 			}
 			waitGoroutines(t, before)
@@ -379,11 +379,11 @@ func TestObjectStream_ReadAheadIsBounded(t *testing.T) {
 	settle := func(want int64) {
 		t.Helper()
 		deadline := time.Now().Add(5 * time.Second)
-		for cfg.live.Load() < want && time.Now().Before(deadline) {
+		for cfg.bufs.live.Load() < want && time.Now().Before(deadline) {
 			time.Sleep(time.Millisecond)
 		}
 		time.Sleep(20 * time.Millisecond)
-		if got := cfg.live.Load(); got != want {
+		if got := cfg.bufs.live.Load(); got != want {
 			t.Fatalf("%d buffers held, want %d", got, want)
 		}
 	}
@@ -405,7 +405,7 @@ func TestObjectStream_ReadAheadIsBounded(t *testing.T) {
 	if n := len(gets.slots); n != 0 {
 		t.Errorf("%d GET slots held after Close", n)
 	}
-	if n := cfg.live.Load(); n != 0 {
+	if n := cfg.bufs.live.Load(); n != 0 {
 		t.Errorf("%d buffers not recycled after Close", n)
 	}
 }
@@ -444,7 +444,7 @@ func TestObjectStream_CancelLeavesNoGoroutines(t *testing.T) {
 	if n := len(gets.slots); n != 0 {
 		t.Errorf("%d GET slots held after Close", n)
 	}
-	if n := cfg.live.Load(); n != 0 {
+	if n := cfg.bufs.live.Load(); n != 0 {
 		t.Errorf("%d buffers not recycled after Close", n)
 	}
 	waitGoroutines(t, before)
@@ -468,7 +468,7 @@ func TestObjectStream_CloseUnread(t *testing.T) {
 	if _, err := s.Read(make([]byte, 1)); !errors.Is(err, errStreamClosed) {
 		t.Fatalf("Read after Close = %v, want errStreamClosed", err)
 	}
-	if n := cfg.live.Load(); n != 0 {
+	if n := cfg.bufs.live.Load(); n != 0 {
 		t.Errorf("%d buffers not recycled after Close", n)
 	}
 	waitGoroutines(t, before)
@@ -538,5 +538,53 @@ func TestObjectStream_RepeatMustMatchWhatWasRead(t *testing.T) {
 	}
 	if n := srv.gets(1); n != 2 {
 		t.Errorf("%d GETs, want 2", n)
+	}
+}
+
+// Streams reuse the buffers earlier streams put back while any stream
+// is open, across GCs, so a build's steady stream of chunks allocates
+// none, and the buffers are let go once the last stream closes.
+func TestObjectStream_BuffersReusedWhileAnyStreamIsOpen(t *testing.T) {
+	data := testData(20_000)
+	srv := newPartServer(data)
+	gets := newBoundedGets(srv, 32)
+	cfg := newStreamConfig(testSizes())
+	open := func() *ObjectStream {
+		t.Helper()
+		s, err := openStream(t.Context(), gets, cfg, "bkt", "key")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return s
+	}
+	readThrough := func() {
+		t.Helper()
+		s := open()
+		if got, err := readAll(s); !errors.Is(err, io.EOF) || !bytes.Equal(got, data) {
+			t.Fatalf("read %d bytes, %v", len(got), err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	held := open()
+	for range 6 {
+		runtime.GC() // a sync.Pool would drop its buffers here
+		runtime.GC()
+		readThrough()
+	}
+	// The unread stream's read-ahead, and one read stream's at its peak:
+	// its part's buffers and the reader's.
+	most := int64(cfg.partBuffers+1) + int64(cfg.partBuffers+2)
+	if n := cfg.bufs.made.Load(); n > most {
+		t.Errorf("seven streams allocated %d buffers, want at most %d", n, most)
+	}
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(cfg.bufs.free); n != 0 {
+		t.Errorf("%d buffers kept with no stream open", n)
 	}
 }

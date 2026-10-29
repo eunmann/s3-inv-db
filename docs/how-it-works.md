@@ -22,7 +22,7 @@ flowchart LR
 1. **Download and parse.** Parse workers (`min(GOMAXPROCS, data files)`,
    at least 2) each have a fetcher opening their next file while they
    parse the current one. A CSV file streams from S3 into the parser
-   through at most 13 MiB of read-ahead (3 MiB for the next file,
+   through at most 12.25 MiB of read-ahead (3 MiB for the next file,
    before its worker reaches it), and the build fails if it ends short
    of its size; a Parquet file, which its reader seeks in, downloads to
    scratch first. CSV keys, URL-encoded by S3, are decoded. Each
