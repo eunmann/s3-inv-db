@@ -86,8 +86,8 @@ func (r *PrefixRow) Merge(other *PrefixRow) {
 // back exactly.
 
 // runRecordTotals is the tier-mask flag of a record that stores its
-// totals.
-const runRecordTotals = 1 << 15
+// totals: the bit above the tier bits.
+const runRecordTotals = 1 << MaxTiers
 
 // errRunRecordCorrupt means a run record cannot be decoded.
 var errRunRecordCorrupt = errors.New("corrupt run record")

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -260,7 +261,6 @@ func TestPipelineRun_CSVTierStatsAcrossBufferRefills(t *testing.T) {
 		{"INTELLIGENT_TIERING", "INFREQUENT"},
 		{"INTELLIGENT_TIERING", "ARCHIVE_INSTANT_ACCESS"},
 	}
-	mapping := tiers.NewMapping()
 	type tierKey struct {
 		prefix string
 		tier   tiers.ID
@@ -280,7 +280,11 @@ func TestPipelineRun_CSVTierStatsAcrossBufferRefills(t *testing.T) {
 		key += strings.Repeat("x", lineLen-1-len(head)-len(key))
 		records = append(records, []string{"src", p.class, p.access, fmt.Sprintf("%010d", size), key})
 
-		tier := tiers.Resolve(mapping.FromS3(p.class, p.access), size)
+		id, err := tiers.FromS3(p.class, p.access)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tier := tiers.Resolve(id, size)
 		for _, prefix := range []string{"", dir} {
 			tb := want[tierKey{prefix, tier}]
 			tb.ObjectCount++
@@ -321,6 +325,80 @@ func TestPipelineRun_CSVTierStatsAcrossBufferRefills(t *testing.T) {
 		if _, ok := want[k]; !ok {
 			t.Errorf("prefix %q has unexpected tier %d", k.prefix, k.tier)
 		}
+	}
+}
+
+// EXPRESS_ONEZONE, OUTPOSTS and SNOW rows are counted under their own
+// tiers, not STANDARD; a row with no storage class is STANDARD.
+func TestPipelineRun_CSVNewStorageClassTiers(t *testing.T) {
+	fc := s3test.FetchClient(t)
+	manifest := uploadCSVInventory(t, fc, "Bucket, Key, Size, StorageClass",
+		[][]string{
+			{"src", "a/std.txt", "1", "STANDARD"},
+			{"src", "a/blank.txt", "2", ""},
+			{"src", "a/express.txt", "10", "EXPRESS_ONEZONE"},
+			{"src", "a/outposts.txt", "100", "OUTPOSTS"},
+			{"src", "a/snow.txt", "1000", "SNOW"},
+			{"src", "a/snow2.txt", "2000", "snow"},
+		})
+	outDir := filepath.Join(t.TempDir(), "index")
+	if _, err := extsort.NewPipeline(extsort.DefaultConfig(), fc).Run(t.Context(), manifest, outDir); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	idx, err := indexread.Open(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	pos, ok := idx.Lookup("a/")
+	if !ok {
+		t.Fatal("prefix a/ missing")
+	}
+	want := []format.TierBreakdown{
+		{TierID: tiers.Standard, TierName: "STANDARD", ObjectCount: 2, Bytes: 3},
+		{TierID: tiers.ExpressOneZone, TierName: "EXPRESS_ONEZONE", ObjectCount: 1, Bytes: 10},
+		{TierID: tiers.Outposts, TierName: "OUTPOSTS", ObjectCount: 1, Bytes: 100},
+		{TierID: tiers.Snow, TierName: "SNOW", ObjectCount: 2, Bytes: 3000},
+	}
+	if got := idx.TierBreakdown(pos); !slices.Equal(got, want) {
+		t.Errorf("a/ tiers = %+v, want %+v", got, want)
+	}
+}
+
+// A storage class or Intelligent-Tiering access tier AWS does not
+// document fails the build with an error naming the value, the file and
+// the object, and leaves no index; an empty storage class is STANDARD.
+func TestPipelineRun_FailsOnUnknownStorageClass(t *testing.T) {
+	const chunk = "inv/data/part-0.csv.gz"
+	for _, c := range []struct {
+		name, class, access string
+		want                error
+		value               string
+	}{
+		{"storage class", "GLACIER_DEEP", "", tiers.ErrUnknownStorageClass, `"GLACIER_DEEP"`},
+		{"access tier", "INTELLIGENT_TIERING", "COLD_ACCESS", tiers.ErrUnknownAccessTier, `"COLD_ACCESS"`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fc := s3test.FetchClient(t)
+			manifest := uploadCSVInventory(t, fc, "Bucket, Key, Size, StorageClass, IntelligentTieringAccessTier",
+				[][]string{
+					{"src", "a/blank.txt", "5", "", ""},
+					{"src", "a/odd.txt", "7", c.class, c.access},
+				})
+			outDir := filepath.Join(t.TempDir(), "index")
+			_, err := extsort.NewPipeline(extsort.DefaultConfig(), fc).Run(t.Context(), manifest, outDir)
+			if !errors.Is(err, c.want) {
+				t.Fatalf("Run error = %v, want %v", err, c.want)
+			}
+			for _, part := range []string{c.value, chunk, `"a/odd.txt"`} {
+				if !strings.Contains(err.Error(), part) {
+					t.Errorf("Run error %q does not name %s", err, part)
+				}
+			}
+			if _, statErr := os.Stat(outDir); !os.IsNotExist(statErr) {
+				t.Errorf("failed build left something at outDir: %v", statErr)
+			}
+		})
 	}
 }
 

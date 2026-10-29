@@ -2,9 +2,12 @@ package handlers
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 // s3URIPattern finds an s3:// URI inside an error chain; the trailing
@@ -24,6 +27,9 @@ func summarizeBuildError(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return ""
+	}
+	if cause := tierErrorIn(raw); cause != "" {
+		return sentence(cause)
 	}
 	lower := strings.ToLower(raw)
 	switch {
@@ -75,6 +81,25 @@ func summarizePollError(raw string) string {
 	}
 
 	return sentence(innermostError(raw))
+}
+
+// tierErrorIn is the cause when raw ends in an unknown storage class or
+// access tier error, `: <sentinel> "<value>"`, or "". It is found before
+// any keyword match because the chain quotes the object key, whose text
+// can hold any keyword or ": ".
+func tierErrorIn(raw string) string {
+	for _, err := range []error{tiers.ErrUnknownStorageClass, tiers.ErrUnknownAccessTier} {
+		prefix := ": " + err.Error() + " "
+		i := strings.LastIndex(raw, prefix)
+		if i < 0 {
+			continue
+		}
+		if _, uerr := strconv.Unquote(raw[i+len(prefix):]); uerr == nil {
+			return raw[i+2:]
+		}
+	}
+
+	return ""
 }
 
 func isAccessDenied(lower string) bool {

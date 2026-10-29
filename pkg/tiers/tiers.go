@@ -9,9 +9,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
-
-	"github.com/eunmann/s3-inv-db/pkg/logging"
 )
 
 // ErrUnknownTierID is returned when a caller looks up a tier id that
@@ -36,7 +33,10 @@ const (
 	ITArchive
 	ITDeepArchive
 	ITFrequentSmall // IT objects < 128 KiB: Frequent rate, no monitoring fee
-	NumTiers        // Sentinel value for array sizing
+	ExpressOneZone
+	Outposts
+	Snow
+	NumTiers // Sentinel value for array sizing
 )
 
 // SmallObjectThresholdBytes is the AWS S3 Intelligent-Tiering minimum
@@ -76,6 +76,9 @@ var allTiers = []Info{
 	{ID: ITArchive, Name: "INTELLIGENT_TIERING_ARCHIVE", FilePrefix: "it_archive"},
 	{ID: ITDeepArchive, Name: "INTELLIGENT_TIERING_DEEP_ARCHIVE", FilePrefix: "it_deep_archive"},
 	{ID: ITFrequentSmall, Name: "INTELLIGENT_TIERING_FREQUENT_SMALL", FilePrefix: "it_frequent_small"},
+	{ID: ExpressOneZone, Name: "EXPRESS_ONEZONE", FilePrefix: "express_onezone"},
+	{ID: Outposts, Name: "OUTPOSTS", FilePrefix: "outposts"},
+	{ID: Snow, Name: "SNOW", FilePrefix: "snow"},
 }
 
 // AllTiers returns information about all supported tiers in tier-ID
@@ -97,44 +100,37 @@ func AllTierIDs() []ID {
 	return ids
 }
 
-// Mapping provides tier lookup and metadata.
+// ErrUnknownStorageClass is returned by FromS3 for a storage class
+// outside the values AWS documents for S3 Inventory.
+var ErrUnknownStorageClass = errors.New("unknown storage class")
+
+// ErrUnknownAccessTier is returned by FromS3 for an Intelligent-Tiering
+// access tier outside the values AWS documents for S3 Inventory.
+var ErrUnknownAccessTier = errors.New("unknown Intelligent-Tiering access tier")
+
+// Mapping provides tier metadata by ID.
 type Mapping struct {
-	indexByS3Name map[string]ID
-	// warned records unknown storage classes / access tiers already
-	// logged, so a bucket full of an unknown class logs one line, not one
-	// per object. FromS3 runs on every ingest worker concurrently.
-	warned sync.Map
-	Tiers  []Info
+	Tiers []Info
 }
 
 // NewMapping creates a new tier mapping with all supported tiers.
 func NewMapping() *Mapping {
-	all := AllTiers()
-	m := &Mapping{
-		Tiers:         make([]Info, len(all)),
-		indexByS3Name: make(map[string]ID),
-	}
-	copy(m.Tiers, all)
-
-	for _, t := range m.Tiers {
-		m.indexByS3Name[t.Name] = t.ID
-	}
-
-	// Add INTELLIGENT_TIERING as alias for ITFrequent (default when no access tier specified).
-	m.indexByS3Name["INTELLIGENT_TIERING"] = ITFrequent
-
-	return m
+	return &Mapping{Tiers: AllTiers()}
 }
 
-// FromS3 maps S3 inventory StorageClass and IntelligentTieringAccessTier to a tier ID.
-// If storageClass is INTELLIGENT_TIERING, accessTier determines the specific IT tier.
-// If accessTier is empty for IT, defaults to FREQUENT.
-func (m *Mapping) FromS3(storageClass, accessTier string) ID {
+// FromS3 maps an S3 Inventory StorageClass and
+// IntelligentTieringAccessTier to a tier ID, in any letter case and with
+// surrounding whitespace. An empty storage class is STANDARD (the
+// inventory has no StorageClass field), and INTELLIGENT_TIERING with an
+// empty access tier is FREQUENT. Any other value AWS does not document
+// returns ErrUnknownStorageClass or ErrUnknownAccessTier: counting it
+// under another tier would make the per-tier stats wrong.
+func FromS3(storageClass, accessTier string) (ID, error) {
 	if id, ok := canonicalID(storageClass, accessTier); ok {
-		return id
+		return id, nil
 	}
 
-	return m.fromS3Normalized(storageClass, accessTier)
+	return fromS3Normalized(storageClass, accessTier)
 }
 
 // canonicalID classifies the exact spellings S3 Inventory writes, which
@@ -142,7 +138,7 @@ func (m *Mapping) FromS3(storageClass, accessTier string) ID {
 // Anything else misses and goes to fromS3Normalized.
 func canonicalID(storageClass, accessTier string) (ID, bool) {
 	switch storageClass {
-	case "STANDARD":
+	case "STANDARD", "":
 		return Standard, true
 	case "STANDARD_IA":
 		return StandardIA, true
@@ -156,7 +152,13 @@ func canonicalID(storageClass, accessTier string) (ID, bool) {
 		return DeepArchive, true
 	case "REDUCED_REDUNDANCY":
 		return ReducedRedundancy, true
-	case "INTELLIGENT_TIERING":
+	case "EXPRESS_ONEZONE":
+		return ExpressOneZone, true
+	case "OUTPOSTS":
+		return Outposts, true
+	case "SNOW":
+		return Snow, true
+	case intelligentTiering:
 		switch accessTier {
 		case "", "FREQUENT_ACCESS", "FREQUENT":
 			return ITFrequent, true
@@ -174,41 +176,56 @@ func canonicalID(storageClass, accessTier string) (ID, bool) {
 	return 0, false
 }
 
+// intelligentTiering is the storage class whose objects the access tier
+// classifies.
+const intelligentTiering = "INTELLIGENT_TIERING"
+
+// maxS3NameLen is more than the longest storage class or access tier
+// canonicalID knows, and at most the 32 bytes Go converts a
+// non-escaping []byte to a string in without allocating.
+const maxS3NameLen = 32
+
 // fromS3Normalized is FromS3 for any spelling: it trims and upper-cases
-// both fields and logs, once each, values it does not know.
-func (m *Mapping) fromS3Normalized(storageClass, accessTier string) ID {
-	storageClass = strings.ToUpper(strings.TrimSpace(storageClass))
-	accessTier = strings.ToUpper(strings.TrimSpace(accessTier))
-
-	if id, ok := canonicalID(storageClass, accessTier); ok {
-		return id
+// both fields into stack buffers, so a known value does not allocate.
+func fromS3Normalized(storageClass, accessTier string) (ID, error) {
+	var scBuf, atBuf [maxS3NameLen]byte
+	sc, ok := normalizeS3Name(&scBuf, storageClass)
+	if !ok {
+		return 0, fmt.Errorf("%w %q", ErrUnknownStorageClass, storageClass)
 	}
-
-	if storageClass == "INTELLIGENT_TIERING" {
-		// The access tier is non-empty and unknown here. Surface it —
-		// silent misclassification would inflate Frequent counts.
-		if _, seen := m.warned.LoadOrStore("access_tier:"+accessTier, struct{}{}); !seen {
-			logging.L().Warn().
-				Str("access_tier", accessTier).
-				Msg("tiers.FromS3: unknown Intelligent-Tiering access tier, counting as FREQUENT (logged once)")
+	if string(sc) != intelligentTiering {
+		if id, ok := canonicalID(string(sc), ""); ok {
+			return id, nil
 		}
 
-		return ITFrequent
+		return 0, fmt.Errorf("%w %q", ErrUnknownStorageClass, storageClass)
 	}
-
-	if id, ok := m.indexByS3Name[storageClass]; ok {
-		return id
-	}
-
-	if storageClass != "" {
-		if _, seen := m.warned.LoadOrStore("storage_class:"+storageClass, struct{}{}); !seen {
-			logging.L().Warn().
-				Str("storage_class", storageClass).
-				Msg("tiers.FromS3: unknown storage class, counting as STANDARD (logged once)")
+	if at, ok := normalizeS3Name(&atBuf, accessTier); ok {
+		if id, ok := canonicalID(intelligentTiering, string(at)); ok {
+			return id, nil
 		}
 	}
 
-	return Standard
+	return 0, fmt.Errorf("%w %q", ErrUnknownAccessTier, accessTier)
+}
+
+// normalizeS3Name writes s, trimmed and with ASCII letters upper-cased,
+// into buf. False when it does not fit, so is no known value.
+func normalizeS3Name(buf *[maxS3NameLen]byte, s string) ([]byte, bool) {
+	s = strings.TrimSpace(s)
+	if len(s) > len(buf) {
+		return nil, false
+	}
+	out := buf[:len(s)]
+	for i := range len(s) {
+		c := s[i]
+		if 'a' <= c && c <= 'z' {
+			c -= 'a' - 'A'
+		}
+		out[i] = c
+	}
+
+	return out, true
 }
 
 // Resolve adjusts a classification based on object size. Intelligent-

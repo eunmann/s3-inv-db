@@ -244,6 +244,33 @@ func TestComputeMonthlyCost_UnknownTier(t *testing.T) {
 	}
 }
 
+// EXPRESS_ONEZONE is billed per GB with no surcharge; OUTPOSTS and SNOW
+// are capacity-priced and left out of the estimate.
+func TestComputeMonthlyCost_NewStorageClasses(t *testing.T) {
+	pt := pricing.DefaultUSEast1Prices()
+	breakdown := []format.TierBreakdown{
+		{TierID: tiers.ExpressOneZone, TierName: "EXPRESS_ONEZONE", Bytes: 1 << 30, ObjectCount: 1000},
+		{TierID: tiers.Outposts, TierName: "OUTPOSTS", Bytes: 1 << 30, ObjectCount: 1000},
+		{TierID: tiers.Snow, TierName: "SNOW", Bytes: 1 << 30, ObjectCount: 1000},
+	}
+	cost := pricing.ComputeMonthlyCost(breakdown, pt)
+	const want = 110_000 // 1 GB at $0.11
+	if got := cost.PerTierMicrodollars["EXPRESS_ONEZONE"]; got != want {
+		t.Errorf("EXPRESS_ONEZONE = %d microdollars, want %d", got, want)
+	}
+	for _, name := range []string{"OUTPOSTS", "SNOW"} {
+		if got, ok := cost.PerTierMicrodollars[name]; ok {
+			t.Errorf("%s priced at %d microdollars, want no entry", name, got)
+		}
+	}
+	if cost.TotalMicrodollars != want {
+		t.Errorf("total = %d, want %d", cost.TotalMicrodollars, want)
+	}
+	if got := pricing.Compile(pt).MonthlyTotal(breakdown); got != want {
+		t.Errorf("Compiled.MonthlyTotal = %d, want %d", got, want)
+	}
+}
+
 func TestComputeMonthlyCost_ZeroBytes(t *testing.T) {
 	pt := pricing.DefaultUSEast1Prices()
 
@@ -352,12 +379,22 @@ func TestDefaultUSEast1Prices_Complete(t *testing.T) {
 		"INTELLIGENT_TIERING_ARCHIVE_INSTANT",
 		"INTELLIGENT_TIERING_ARCHIVE",
 		"INTELLIGENT_TIERING_DEEP_ARCHIVE",
+		"INTELLIGENT_TIERING_FREQUENT_SMALL",
+		"EXPRESS_ONEZONE",
 	}
 
 	for _, tier := range expectedTiers {
 		if _, ok := pt.PerGBMonth[tier]; !ok {
 			t.Errorf("missing price for tier %s", tier)
 		}
+	}
+	for _, tier := range []string{"OUTPOSTS", "SNOW"} {
+		if price, ok := pt.PerGBMonth[tier]; ok {
+			t.Errorf("capacity-priced tier %s has per-GB price %v, want none", tier, price)
+		}
+	}
+	if len(pt.PerGBMonth) != len(expectedTiers) {
+		t.Errorf("default table prices %d tiers, want %d", len(pt.PerGBMonth), len(expectedTiers))
 	}
 
 	if pt.MonitoringPer1000Objects == 0 {
