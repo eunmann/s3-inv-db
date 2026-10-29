@@ -171,6 +171,7 @@ func RepackArrayWidthU64(srcPath, dstPath string, width uint8) error {
 	if err := bw.Flush(); err != nil {
 		return cleanup(fmt.Errorf("flush: %w", err))
 	}
+	startWriteback(dst)
 	if err := dst.Close(); err != nil {
 		return errors.Join(fmt.Errorf("close: %w", err), removeIfErr(tmp))
 	}
@@ -250,6 +251,7 @@ func (w *BlobWriter) Close() error {
 			w.offsets.Close(),
 		)
 	}
+	startWriteback(w.blobFile)
 	if err := w.blobFile.Close(); err != nil {
 		return errors.Join(fmt.Errorf("close blob: %w", err), w.offsets.Close())
 	}

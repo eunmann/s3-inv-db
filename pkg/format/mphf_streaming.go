@@ -357,6 +357,7 @@ func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps []uint64
 			return cleanup(err)
 		}
 	}
+	startWriteback(f)
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close MPHF slots: %w", err)
 	}
