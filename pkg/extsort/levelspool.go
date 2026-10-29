@@ -30,6 +30,10 @@ import (
 type levelSpool struct {
 	err error // the writer's first error; read once it has stopped
 	dir string
+	// plan, when set, sees each record on the writer goroutine before it
+	// is written, every record once in Add order; its error fails the
+	// spool as a write error does.
+	plan func(depth int, r *spoolRecord) error
 	// batch is the one Add is filling; full and free carry batches to
 	// the writer and back.
 	batch   []spoolEntry
@@ -115,7 +119,12 @@ func (s *levelSpool) write() {
 			if s.err != nil {
 				break
 			}
-			s.err = s.add(batch[i].depth, &batch[i].rec)
+			if s.plan != nil {
+				s.err = s.plan(batch[i].depth, &batch[i].rec)
+			}
+			if s.err == nil {
+				s.err = s.add(batch[i].depth, &batch[i].rec)
+			}
 		}
 		if s.err != nil {
 			s.failed.Store(true)

@@ -319,8 +319,8 @@ func TestTierStatsPlanRejectsInconsistentRows(t *testing.T) {
 	}
 	var stray tierTestRow
 	stray.counts[tiers.DeepArchive] = 1
-	if _, err := plan.Add(&stray.counts, &stray.bytes, 1, 0); !errors.Is(err, errUndeclaredTierData) {
-		t.Errorf("undeclared tier: err = %v, want errUndeclaredTierData", err)
+	if _, err := plan.Add(&stray.counts, &stray.bytes, 1, 0); !errors.Is(err, ErrUndeclaredTierData) {
+		t.Errorf("undeclared tier: err = %v, want ErrUndeclaredTierData", err)
 	}
 	if plan.rows != 0 {
 		t.Errorf("plan counted %d refused rows", plan.rows)

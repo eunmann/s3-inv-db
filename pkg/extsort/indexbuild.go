@@ -29,14 +29,19 @@ import (
 // prefix's children are the rows from its child start to the next
 // row's, and scans of a level read its rows in sequence. Add checks
 // each row against its ancestors (a depth stack) and spools it by
-// depth (levelSpool); Finalize replays the depths in order into the
-// index writers.
+// depth (levelSpool), whose writer goroutine also plans the core and
+// tier files' widths from every row; Finalize replays the depths in
+// order into the index writers, which write each file in its final form.
 //
 // Memory is bounded: rows and prefix hashes go to disk, and the stack
 // holds one entry per depth.
 type IndexBuilder struct {
-	coreStatsW    *format.CoreStatsBuilder
-	tierStatsW    *format.TierStatsScratchWriter
+	// The plans are filled on the spool's writer goroutine, and read
+	// once Finalize has stopped it.
+	tierPlan      *format.TierStatsPlan
+	corePlan      format.CoreStatsPlan
+	coreW         *format.CoreStatsWriter
+	tierW         *format.TierStatsWriter
 	mphfBuilder   *format.StreamingMPHFBuilder
 	prefixTreeW   *format.PrefixTreeScratchWriter
 	spool         *levelSpool
@@ -74,11 +79,9 @@ func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
 	return NewIndexBuilderWithCapacity(outDir, tempDir, 0)
 }
 
-// NewIndexBuilderWithCapacity creates a streaming index builder with a capacity hint.
-// The capacityHint, an upper bound on the prefix count, pre-sizes the core
-// stats build file (capped by format.NewCoreStatsBuilder). If capacityHint
-// is 0, a small default capacity is used.
-func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*IndexBuilder, error) {
+// NewIndexBuilderWithCapacity creates a streaming index builder. The
+// capacity hint is unused.
+func NewIndexBuilderWithCapacity(outDir, tempDir string, _ uint64) (*IndexBuilder, error) {
 	_, statErr := os.Stat(outDir)
 	createdOutDir := errors.Is(statErr, fs.ErrNotExist)
 	if err := os.MkdirAll(outDir, format.DirPerm); err != nil {
@@ -98,19 +101,9 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 		return nil, errors.Join(fmt.Errorf("create MPHF builder: %w", err), os.RemoveAll(spoolDir))
 	}
 
-	arrayCap := max(capacityHint, uint64(1024))
-
-	coreStatsW, err := format.NewCoreStatsBuilder(outDir, arrayCap)
-	if err != nil {
-		mphfBuilder.Close()
-
-		return nil, errors.Join(fmt.Errorf("create core stats builder: %w", err), os.RemoveAll(spoolDir))
-	}
-
 	prefixTreeW, err := format.NewPrefixTreeScratchWriter(outDir)
 	if err != nil {
 		mphfBuilder.Close()
-		coreStatsW.Close()
 
 		return nil, errors.Join(fmt.Errorf("create prefix tree writer: %w", err), os.RemoveAll(spoolDir))
 	}
@@ -118,23 +111,20 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, capacityHint uint64) (*
 	b := &IndexBuilder{
 		outDir:        outDir,
 		tempDir:       tempDir,
-		coreStatsW:    coreStatsW,
 		mphfBuilder:   mphfBuilder,
 		prefixTreeW:   prefixTreeW,
 		spool:         newLevelSpool(spoolDir),
 		stack:         make([]stackEntry, 0, 32),
 		createdOutDir: createdOutDir,
 	}
-
-	// The tier-stats writer is created at Finalize, when the rows are
-	// replayed; the present-tier set it uses is frozen at the first Add.
+	b.spool.plan = b.planRow
 
 	return b, nil
 }
 
 // ErrPresentTiersAfterAdd is returned when SetPresentTiers is called
-// after the first Add: the tier set is frozen there, and the tier
-// writer Finalize creates gives slots to exactly that set.
+// after the first Add: the tier set is frozen there, where the tier
+// plan gives slots to exactly that set.
 var ErrPresentTiersAfterAdd = errors.New("SetPresentTiers must be called before the first Add")
 
 // SetPresentTiers declares which tiers carry data, so only they get a
@@ -150,22 +140,30 @@ func (b *IndexBuilder) SetPresentTiers(present []tiers.ID) error {
 	return nil
 }
 
-// ensureTierWriter creates the tier-stats writer at Finalize, resolving
-// the present-tier set (declared, else every tier).
-func (b *IndexBuilder) ensureTierWriter() error {
-	if b.tierStatsW != nil {
-		return nil
-	}
+// startTierPlan starts the tier plan at the first Add, resolving the
+// present-tier set (declared, else every tier).
+func (b *IndexBuilder) startTierPlan() error {
 	present := b.declaredTiers
 	if !b.tiersDeclared {
 		present = tiers.AllTierIDs()
 	}
-	w, err := format.NewTierStatsScratchWriter(b.outDir, present)
+	plan, err := format.NewTierStatsPlan(present)
 	if err != nil {
-		return fmt.Errorf("create tier stats writer: %w", err)
+		return fmt.Errorf("plan tier stats: %w", err)
 	}
-	b.tierStatsW = w
-	b.resolvedTiers = present
+	b.tierPlan, b.resolvedTiers = plan, present
+
+	return nil
+}
+
+// planRow adds a row to the core and tier plans. It runs on the spool's
+// writer goroutine, which sees every row once, in Add order.
+func (b *IndexBuilder) planRow(depth int, r *spoolRecord) error {
+	mask, err := b.tierPlan.Add(&r.tierCounts, &r.tierBytes, r.count, r.bytes)
+	if err != nil {
+		return fmt.Errorf("prefix segment %q at depth %d: tier stats: %w", r.name, depth, err)
+	}
+	b.corePlan.Add(r.count, r.bytes, mask)
 
 	return nil
 }
@@ -178,8 +176,8 @@ func (b *IndexBuilder) cleanup() {
 		_ = b.spool.close()
 		_ = os.RemoveAll(b.spool.dir)
 	}
-	if b.coreStatsW != nil {
-		b.coreStatsW.Close()
+	if b.coreW != nil {
+		_ = b.coreW.Abort()
 	}
 	if b.mphfBuilder != nil {
 		b.mphfBuilder.Close()
@@ -187,8 +185,8 @@ func (b *IndexBuilder) cleanup() {
 	if b.prefixTreeW != nil {
 		_ = b.prefixTreeW.Abort()
 	}
-	if b.tierStatsW != nil {
-		_ = b.tierStatsW.Abort()
+	if b.tierW != nil {
+		_ = b.tierW.Abort()
 	}
 	if b.createdOutDir {
 		os.RemoveAll(b.outDir)
@@ -233,6 +231,11 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 			ErrDepthMismatch, row.Prefix, row.Depth, len(b.stack))
 	}
 
+	if b.posCount == 0 {
+		if err := b.startTierPlan(); err != nil {
+			return err
+		}
+	}
 	depth := len(b.stack)
 	for len(b.levelRows) <= depth+1 {
 		b.levelRows = append(b.levelRows, 0)
@@ -396,11 +399,11 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	}
 
 	log.Debug().
-		Int("prefix_count", b.coreStatsW.Count()).
+		Uint64("prefix_count", b.posCount).
 		Uint64("mphf_keys", b.mphfBuilder.Count()).
 		Msg("index builder: finalizing row files and building the MPHF")
 
-	// The row files' repacks and the MPHF build share nothing, so they
+	// The prefix tree's repack and the MPHF build share nothing, so they
 	// run side by side: the build's serial tail is the longer of the two.
 	rowsDone := make(chan error, 1)
 	go func() { rowsDone <- b.closeStreamingWriters() }()
@@ -525,34 +528,131 @@ func (h *levelHandoff) drain(i int, write func(depth int, r *spoolRecord) error)
 // writeLevels replays the spooled rows depth by depth into the index
 // writers, so every per-row file is in level order. A row's child start
 // and parent become rows once every depth's size is known: the first
-// row of a depth is the number of rows above it.
-//
-// One goroutine reads the spool once into batches for two sides that
-// share nothing and write side by side: the stats rows (tier stats,
-// core stats, depth index) here, and the names (prefix tree, MPHF keys)
-// on their own goroutine. Reading each depth twice, once per side, was
-// half of the stats side's time.
+// row of a depth is the number of rows above it. The core and tier
+// writers take their widths from the plans the spool's writer filled.
 func (b *IndexBuilder) writeLevels() error {
 	if err := b.spool.finish(); err != nil {
 		return err
-	}
-	depthW, err := format.NewDepthIndexWriter(b.outDir)
-	if err != nil {
-		return fmt.Errorf("create depth index: %w", err)
 	}
 	starts := make([]uint64, len(b.levelRows)+1)
 	for d, n := range b.levelRows {
 		starts[d+1] = starts[d] + n
 	}
-	if b.posCount > 0 {
-		if err := b.ensureTierWriter(); err != nil {
-			return errors.Join(err, depthW.Abort())
-		}
-	}
 	total := int64(b.posCount)
 	var written int64
 	b.stepProgress(stepWriteLevels, 0, total)
+	if err := b.planChildStartTail(starts); err != nil {
+		return err
+	}
+	depthW, err := b.openStatsWriters()
+	if err != nil {
+		return err
+	}
+	err = b.replayLevels(func(depth int, r *spoolRecord) error {
+		written++
+		if written%levelsProgressEvery == 0 {
+			b.stepProgress(stepWriteLevels, written, total)
+		}
 
+		return b.writeStatsRow(depthW, starts, depth, r)
+	}, func(depth int, r *spoolRecord) error { return b.writeNameRow(starts, depth, r) })
+	if err != nil {
+		return errors.Join(err, depthW.Abort())
+	}
+	if err := b.closeStatsWriters(depthW); err != nil {
+		return err
+	}
+	b.stepProgress(stepWriteLevels, total, total)
+
+	return os.RemoveAll(b.spool.dir) //nolint:wrapcheck // the path is in the error
+}
+
+// planChildStartTail gives the core plan, when it needs them, the rows
+// whose child start is at least ChildStartTail's bound: a run at the end
+// of the level order, so it reads the depths from the deepest up and
+// stops at the first whose child starts all fall short. Depth d's child
+// starts run from starts[d+1] to starts[d+2].
+func (b *IndexBuilder) planChildStartTail(starts []uint64) error {
+	from, ok := b.corePlan.ChildStartTail()
+	if !ok {
+		return nil
+	}
+	var rec spoolRecord
+	for depth := len(b.spool.depths) - 1; depth >= 0 && starts[depth+2] >= from; depth-- {
+		r, err := b.spool.open(depth)
+		if err != nil {
+			return err
+		}
+		for err == nil {
+			if err = r.next(&rec); err == nil && starts[depth+1]+rec.childLocal >= from {
+				b.corePlan.AddTail(rec.count, rec.bytes)
+			}
+		}
+		if err := errors.Join(ignoreEOF(err), r.close()); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ignoreEOF is err, or nil at the clean end of a stream.
+func ignoreEOF(err error) error {
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+
+	return err
+}
+
+// openStatsWriters creates the depth index, core stats and tier stats
+// writers. An index without rows has no tier plan and no tier files.
+func (b *IndexBuilder) openStatsWriters() (*format.DepthIndexWriter, error) {
+	depthW, err := format.NewDepthIndexWriter(b.outDir)
+	if err != nil {
+		return nil, fmt.Errorf("create depth index: %w", err)
+	}
+	enc := format.TierMaskPlain
+	if b.tierPlan != nil {
+		if b.tierW, err = format.NewTierStatsWriter(b.outDir, b.tierPlan); err != nil {
+			return nil, errors.Join(fmt.Errorf("create tier stats writer: %w", err), depthW.Abort())
+		}
+		enc = b.tierPlan.MaskEncoding()
+	}
+	if b.coreW, err = format.NewCoreStatsWriter(b.outDir, &b.corePlan, enc); err != nil {
+		return nil, errors.Join(fmt.Errorf("create core stats writer: %w", err), depthW.Abort())
+	}
+
+	return depthW, nil
+}
+
+// closeStatsWriters finishes the stats files. A writer whose close fails
+// stays set for cleanup to abort.
+func (b *IndexBuilder) closeStatsWriters(depthW *format.DepthIndexWriter) error {
+	if err := b.coreW.Close(); err != nil {
+		return errors.Join(fmt.Errorf("close core stats: %w", err), depthW.Abort())
+	}
+	b.coreW = nil
+	if b.tierW != nil {
+		if err := b.tierW.Close(); err != nil {
+			return errors.Join(fmt.Errorf("close tier stats: %w", err), depthW.Abort())
+		}
+		b.tierW = nil
+	}
+	if err := depthW.Close(); err != nil {
+		return fmt.Errorf("write depth index: %w", err)
+	}
+
+	return nil
+}
+
+// replayLevels reads the spool once into batches for two sides that
+// share nothing and write side by side: the stats rows (tier stats,
+// core stats, depth index) on this goroutine, and the names (prefix
+// tree, MPHF keys) on their own. Each side gets every row in level
+// order. Reading each depth twice, once per side, was half of the stats
+// side's time. A side's error stops the reader and the other side.
+func (b *IndexBuilder) replayLevels(stats, names func(depth int, r *spoolRecord) error) error {
 	const statsSide, namesSide = 0, 1
 	h := newLevelHandoff(2)
 	var readErr, namesErr error
@@ -562,27 +662,11 @@ func (b *IndexBuilder) writeLevels() error {
 			h.fail()
 		}
 	})
-	wg.Go(func() {
-		namesErr = h.drain(namesSide, func(depth int, r *spoolRecord) error { return b.writeNameRow(starts, depth, r) })
-	})
-	statsErr := h.drain(statsSide, func(depth int, r *spoolRecord) error {
-		written++
-		if written%levelsProgressEvery == 0 {
-			b.stepProgress(stepWriteLevels, written, total)
-		}
-
-		return b.writeStatsRow(depthW, starts, depth, r)
-	})
+	wg.Go(func() { namesErr = h.drain(namesSide, names) })
+	statsErr := h.drain(statsSide, stats)
 	wg.Wait()
-	if err := errors.Join(readErr, statsErr, namesErr); err != nil {
-		return errors.Join(err, depthW.Abort())
-	}
-	if err := depthW.Close(); err != nil {
-		return fmt.Errorf("write depth index: %w", err)
-	}
-	b.stepProgress(stepWriteLevels, total, total)
 
-	return os.RemoveAll(b.spool.dir) //nolint:wrapcheck // the path is in the error
+	return errors.Join(readErr, statsErr, namesErr)
 }
 
 // readLevels reads every depth's records once, in order, and hands
@@ -647,11 +731,14 @@ func readDepth(r *spoolReader, h *levelHandoff) (bool, error) {
 // writeStatsRow writes one spooled row's stats, the next in level
 // order: its tier stats, core row and depth-index entry.
 func (b *IndexBuilder) writeStatsRow(depthW *format.DepthIndexWriter, starts []uint64, depth int, r *spoolRecord) error {
-	mask, err := b.tierStatsW.Add(&r.tierCounts, &r.tierBytes, r.count, r.bytes)
-	if err != nil {
-		return fmt.Errorf("prefix segment %q at depth %d: write tier stats: %w", r.name, depth, err)
+	var mask uint16
+	if b.tierW != nil {
+		var err error
+		if mask, err = b.tierW.Add(&r.tierCounts, &r.tierBytes); err != nil {
+			return fmt.Errorf("prefix segment %q at depth %d: write tier stats: %w", r.name, depth, err)
+		}
 	}
-	if err := b.coreStatsW.Add(r.count, r.bytes, starts[depth+1]+r.childLocal, mask); err != nil {
+	if err := b.coreW.Add(r.count, r.bytes, starts[depth+1]+r.childLocal, mask); err != nil {
 		return fmt.Errorf("write core stats row: %w", err)
 	}
 	if err := depthW.Add(uint32(depth), r.count, r.bytes); err != nil {
@@ -681,45 +768,15 @@ func (b *IndexBuilder) writeNameRow(starts []uint64, depth int, r *spoolRecord) 
 	return nil
 }
 
-// closeStreamingWriters finalizes the row-major core stats, prefix tree
-// and tier stats files in the index dir. Each rewrites its own file from
-// its own scratch through bounded buffers, so they run side by side; a
-// writer whose close fails stays set for cleanup to abort.
+// closeStreamingWriters writes the prefix tree from its scratch file;
+// on failure the writer stays set for cleanup to abort.
 func (b *IndexBuilder) closeStreamingWriters() error {
-	if b.tierStatsW != nil {
-		b.coreStatsW.SetTierMaskEncoding(b.tierStatsW.MaskEncoding())
+	if err := b.prefixTreeW.Close(); err != nil {
+		return fmt.Errorf("finalize prefix tree: %w", err)
 	}
-	var coreErr, treeErr, tierErr error
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		if coreErr = b.coreStatsW.Finalize(); coreErr != nil {
-			coreErr = fmt.Errorf("finalize core stats: %w", coreErr)
-		} else {
-			b.coreStatsW = nil
-		}
-	})
-	wg.Go(func() {
-		if treeErr = b.prefixTreeW.Close(); treeErr != nil {
-			treeErr = fmt.Errorf("finalize prefix tree: %w", treeErr)
-		} else {
-			b.prefixTreeW = nil
-		}
-	})
-	// The tier writer is nil when no rows were added (empty index); such
-	// a build writes no tier file and no tier manifest (tiers.json). The
-	// index manifest is still written unconditionally in Finalize.
-	if b.tierStatsW != nil {
-		wg.Go(func() {
-			if tierErr = b.tierStatsW.Close(); tierErr != nil {
-				tierErr = fmt.Errorf("close tier stats: %w", tierErr)
-			} else {
-				b.tierStatsW = nil
-			}
-		})
-	}
-	wg.Wait()
+	b.prefixTreeW = nil
 
-	return errors.Join(coreErr, treeErr, tierErr)
+	return nil
 }
 
 // buildMPHF builds the MPHF and logs progress.

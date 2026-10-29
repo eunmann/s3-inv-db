@@ -145,7 +145,7 @@ func (w *TierStatsScratchWriter) Add(counts, bytes *[tiers.NumTiers]uint64, tota
 		}
 		slot := w.slotByTier[id]
 		if slot < 0 {
-			return 0, fmt.Errorf("%w: tier %d", errUndeclaredTierData, id)
+			return 0, fmt.Errorf("%w: tier %d", ErrUndeclaredTierData, id)
 		}
 		mask |= 1 << slot
 		slotCount[slot], slotBytes[slot] = c, b

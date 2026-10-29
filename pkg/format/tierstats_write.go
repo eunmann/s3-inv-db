@@ -89,11 +89,14 @@ func bitWords(n uint64) uint64 { return (n + wordBits - 1) / wordBits }
 
 // Sentinel errors.
 var (
-	errTierStatsLayout    = errors.New("tier stats layout invalid")
-	errNoTiersDeclared    = errors.New("tier stats writer requires at least one present tier")
-	errUndeclaredTierData = errors.New("prefix has data for a tier absent from the declared present set")
-	errTierSumMismatch    = errors.New("prefix tier stats don't sum to its totals")
+	errTierStatsLayout = errors.New("tier stats layout invalid")
+	errNoTiersDeclared = errors.New("tier stats writer requires at least one present tier")
+	errTierSumMismatch = errors.New("prefix tier stats don't sum to its totals")
 )
+
+// ErrUndeclaredTierData is returned for a prefix with data in a tier
+// outside the declared present set: those counts would be lost.
+var ErrUndeclaredTierData = errors.New("prefix has data for a tier absent from the declared present set")
 
 // tierSlotWidths is the byte width of a stored slot's count and bytes.
 type tierSlotWidths struct{ count, bytes uint8 }
@@ -198,7 +201,7 @@ func (p *TierStatsPlan) fill(row *tierRow, counts, bytes *[tiers.NumTiers]uint64
 		}
 		slot := p.slotByTier[id]
 		if slot < 0 {
-			return fmt.Errorf("%w: tier %d", errUndeclaredTierData, id)
+			return fmt.Errorf("%w: tier %d", ErrUndeclaredTierData, id)
 		}
 		row.mask |= 1 << slot
 		row.count[slot], row.bytes[slot] = c, b
