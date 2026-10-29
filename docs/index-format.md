@@ -227,11 +227,12 @@ spools each prefix by depth (one file per depth in its temp directory,
 about 19 B per prefix) and writes every per-row file at finalize,
 depth by depth: a prefix's first child is the number of rows already
 seen at the next depth when it arrives, and its parent is the last row
-seen at the depth above. The goroutine writing the spool also gathers
-what fixes every per-row file's widths (the core and tier statistics
-above, the segment count and the widest parent distance below), so at
-finalize each file is written once, straight to its final form. It
-also spills each prefix's MPHF key (24 B) for the hash build.
+seen at the depth above. Beside the spool's writes, in pipelined
+stages over batches of rows, the builder gathers what fixes every
+per-row file's widths (the core and tier statistics above, the segment
+count and the widest parent distance below), so at finalize each file
+is written once, straight to its final form, and spills each prefix's
+MPHF key (24 B) for the hash build.
 
 ## Depth Index
 

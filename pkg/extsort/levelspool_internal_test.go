@@ -11,8 +11,10 @@ import (
 	"math/bits"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/google/go-cmp/cmp"
@@ -68,6 +70,13 @@ func TestLevelSpoolWritesEveryRecordInOrder(t *testing.T) {
 	if err := s.finish(); err != nil {
 		t.Fatal(err)
 	}
+	checkSpoolTestDepths(t, s, n)
+}
+
+// checkSpoolTestDepths checks a finished spool holds spoolTestRecord(i)
+// at depth i%4 for every i below n, each depth in order.
+func checkSpoolTestDepths(t *testing.T, s *levelSpool, n int) {
+	t.Helper()
 	for depth := range 4 {
 		r, err := s.open(depth)
 		if err != nil {
@@ -94,24 +103,162 @@ func TestLevelSpoolWritesEveryRecordInOrder(t *testing.T) {
 	}
 }
 
-// TestLevelSpoolWriterErrorSurfaces: a write the writer goroutine fails
-// reaches the builder through commit, then finish, and nothing hangs.
-func TestLevelSpoolWriterErrorSurfaces(t *testing.T) {
-	s := newLevelSpool(filepath.Join(t.TempDir(), "missing"))
-	var commitErr error
-	for i := 0; commitErr == nil && i < 10*spoolBatchRows; i++ {
+// TestLevelSpoolStagesSeeEveryRowInOrder: plan and keys each see every
+// row once, in Add order, and the tier slots plan appends to its batch's
+// buffer are the ones each record is written with.
+func TestLevelSpoolStagesSeeEveryRowInOrder(t *testing.T) {
+	const n = 2*spoolBatches*spoolBatchRows + 7
+	s := newLevelSpool(t.TempDir())
+	t.Cleanup(func() { _ = s.close() })
+	var planned, keyed []uint64
+	s.plan = func(e *spoolEntry, slots []uint64) ([]uint64, error) {
+		planned = append(planned, e.local)
+		want := spoolTestRecord(int(e.local))
+		start := len(slots)
+		slots = append(slots, want.tiers...)
+		e.rec.tierMask, e.rec.tiers = want.tierMask, slots[start:]
+
+		return slots, nil
+	}
+	s.keys = func(e *spoolEntry) error {
+		keyed = append(keyed, e.local)
+
+		return nil
+	}
+	for i := range n {
 		e := s.next()
-		e.depth, e.rec = 0, spoolTestRecord(i)
-		commitErr = s.commit()
+		e.depth, e.local, e.rec = i%4, uint64(i), spoolTestRecord(i)
+		e.rec.tierMask, e.rec.tiers = 0, nil
+		if err := s.commit(); err != nil {
+			t.Fatalf("commit %d: %v", i, err)
+		}
 	}
-	if commitErr == nil {
-		t.Fatal("commit never returned the writer's error")
+	if err := s.finish(); err != nil {
+		t.Fatal(err)
 	}
-	if err := s.finish(); !errors.Is(err, commitErr) {
-		t.Fatalf("finish = %v, want the commit error %v", err, commitErr)
+	checkSpoolTestDepths(t, s, n)
+	for name, seen := range map[string][]uint64{"plan": planned, "keys": keyed} {
+		if len(seen) != n {
+			t.Fatalf("%s saw %d rows, want %d", name, len(seen), n)
+		}
+		for i, local := range seen {
+			if local != uint64(i) {
+				t.Fatalf("%s saw row %d as its row %d", name, local, i)
+			}
+		}
 	}
-	if err := s.close(); !errors.Is(err, commitErr) {
-		t.Fatalf("close = %v, want the commit error %v", err, commitErr)
+	assertNoSpoolStages(t)
+}
+
+// TestLevelSpoolFinishWaitsForEveryStage: rows still at a stage when the
+// spool finishes are all seen first, so the plans and the MPHF keys are
+// complete once finish returns.
+func TestLevelSpoolFinishWaitsForEveryStage(t *testing.T) {
+	const n = 2*spoolBatchRows + 5
+	s := newLevelSpool(t.TempDir())
+	t.Cleanup(func() { _ = s.close() })
+	gate := make(chan struct{})
+	time.AfterFunc(20*time.Millisecond, func() { close(gate) })
+	keyed := 0
+	s.keys = func(*spoolEntry) error {
+		<-gate
+		keyed++
+
+		return nil
+	}
+	for i := range n {
+		e := s.next()
+		e.depth, e.rec = i%4, spoolTestRecord(i)
+		if err := s.commit(); err != nil {
+			t.Fatalf("commit %d: %v", i, err)
+		}
+	}
+	if err := s.finish(); err != nil {
+		t.Fatal(err)
+	}
+	if keyed != n {
+		t.Errorf("keys saw %d rows before finish returned, want %d", keyed, n)
+	}
+	checkSpoolTestDepths(t, s, n)
+	assertNoSpoolStages(t)
+}
+
+var errInjectedStage = errors.New("injected stage error")
+
+// TestLevelSpoolStageErrorStopsTheSpool: an error in any stage reaches
+// the builder, through commit then finish, or through close when the
+// spool stops first; the stages after plan never see the batch plan
+// failed on; and no stage goroutine outlives the spool.
+func TestLevelSpoolStageErrorStopsTheSpool(t *testing.T) {
+	const failRow = spoolBatchRows + 3
+	for _, stage := range []string{"plan", "keys", "write"} {
+		for _, stopEarly := range []bool{false, true} {
+			dir := t.TempDir()
+			if stage == "write" {
+				dir = filepath.Join(dir, "missing")
+			}
+			s := newLevelSpool(dir)
+			keyed := 0
+			s.plan = func(e *spoolEntry, slots []uint64) ([]uint64, error) {
+				if stage == "plan" && e.local == failRow {
+					return slots, errInjectedStage
+				}
+
+				return slots, nil
+			}
+			s.keys = func(e *spoolEntry) error {
+				if stage == "keys" && e.local == failRow {
+					return errInjectedStage
+				}
+				keyed++
+
+				return nil
+			}
+			rows := 20 * spoolBatchRows
+			if stopEarly {
+				rows = failRow + 10
+			}
+			var commitErr error
+			for i := 0; commitErr == nil && i < rows; i++ {
+				e := s.next()
+				e.local, e.rec = uint64(i), spoolTestRecord(i)
+				commitErr = s.commit()
+			}
+			if stopEarly && commitErr != nil {
+				t.Fatalf("%s: commit failed before the spool stopped: %v", stage, commitErr)
+			}
+			if !stopEarly {
+				if commitErr == nil {
+					t.Fatalf("%s: commit never returned the stage's error", stage)
+				}
+				if err := s.finish(); !errors.Is(err, commitErr) {
+					t.Errorf("%s: finish = %v, want the commit error %v", stage, err, commitErr)
+				}
+			}
+			closeErr := s.close()
+			switch {
+			case closeErr == nil:
+				t.Errorf("%s, stop early %v: close = nil, want the stage's error", stage, stopEarly)
+			case commitErr != nil && !errors.Is(closeErr, commitErr):
+				t.Errorf("%s: close = %v, want the commit error %v", stage, closeErr, commitErr)
+			case stage != "write" && !errors.Is(closeErr, errInjectedStage):
+				t.Errorf("%s, stop early %v: close = %v, want the injected error", stage, stopEarly, closeErr)
+			}
+			if stage == "plan" && keyed > spoolBatchRows {
+				t.Errorf("stop early %v: keys saw %d rows, plan failed on row %d", stopEarly, keyed, failRow)
+			}
+			assertNoSpoolStages(t)
+		}
+	}
+}
+
+// assertNoSpoolStages fails the test if a level spool's stage goroutine
+// is still running: stop waits for every stage to return.
+func assertNoSpoolStages(t *testing.T) {
+	t.Helper()
+	buf := make([]byte, 1<<20)
+	if stacks := buf[:runtime.Stack(buf, true)]; bytes.Contains(stacks, []byte("extsort.(*levelSpool)")) {
+		t.Errorf("a level spool stage outlived its spool:\n%s", stacks)
 	}
 }
 

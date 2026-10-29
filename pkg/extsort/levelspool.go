@@ -25,44 +25,67 @@ import (
 // each depth's file once read. Memory is one buffer per depth,
 // whatever the prefix count, plus the hand-off batches.
 //
-// Add fills records (next, commit) in batches that a writer goroutine
-// encodes and writes, so the builder's serial loop does only the tree
-// bookkeeping and the hashing: writing was a third of its time.
+// Add fills records (next, commit) in batches that three stage
+// goroutines take in turn, so the builder's serial loop does only the
+// tree bookkeeping and the hashing. The plan stage runs plan over a
+// batch, then hands it to the keys stage and the write stage together;
+// the batch is free again once both are done with it. Each stage takes
+// the batches in Add order. One goroutine doing all three was the
+// building phase's critical path.
 type levelSpool struct {
-	err error // the writer's first error; read once it has stopped
+	err error // the stages' first error; read once they have stopped
 	dir string
-	// plan, when set, sees each entry on the writer goroutine before its
-	// record is written, every entry once in Add order; its error fails
-	// the spool as a write error does.
-	plan func(e *spoolEntry) error
-	// batch is the one Add is filling; full and free carry batches to
-	// the writer and back.
-	batch   []spoolEntry
-	full    chan []spoolEntry
-	free    chan []spoolEntry
+	// plan, when set, sees each entry before its record is written,
+	// every entry once in Add order. It appends the record's tier slots
+	// to slots, the batch's buffer, and returns it; its error fails the
+	// spool as a write error does.
+	plan func(e *spoolEntry, slots []uint64) ([]uint64, error)
+	// keys, when set, sees each entry once plan has, while the write
+	// stage may be reading it, every entry once in Add order. It must not
+	// write the entry; its error fails the spool as a write error does.
+	keys func(e *spoolEntry) error
+	// batch is the one Add is filling; full carries batches to the plan
+	// stage, planned and keyed from it to the write and keys stages, and
+	// free back to Add.
+	batch   *spoolBatch
+	full    chan *spoolBatch
+	planned chan *spoolBatch
+	keyed   chan *spoolBatch
+	free    chan *spoolBatch
 	depths  []*spoolFile // index = depth
 	rec     []byte       // the record add is encoding
-	writer  sync.WaitGroup
+	stages  sync.WaitGroup
+	errOnce sync.Once
 	failed  atomic.Bool
 	started bool
 	stopped bool
 }
 
-// spoolBatchRows and spoolBatches size the hand-off to the writer:
-// three batches (one being filled, one queued, one being written) of
-// 1024 rows, about 1 MiB in all.
+// spoolBatchRows and spoolBatches size the hand-off to the stages: six
+// batches of 1024 rows, about 2.3 MiB in all. Beside the one being
+// filled and one at each stage, two are queued, so a stage that stalls
+// for a moment does not stall the others.
 const (
 	spoolBatchRows = 1024
-	spoolBatches   = 3
+	spoolBatches   = 6
 )
 
+// spoolBatch is a batch of rows and the tier slots plan gave them.
+type spoolBatch struct {
+	rows  []spoolEntry
+	tiers []uint64
+	// pending counts the stages after plan still using the batch; the
+	// last to finish frees it.
+	pending atomic.Int32
+}
+
 // spoolEntry is a row on its way to the spool: its record, its depth
-// and what the plan takes from it that is not spooled.
+// and what plan and keys take from it that is not spooled.
 type spoolEntry struct {
 	rec   spoolRecord
 	depth int
 	// keyHash, fp and local (the prefix's index within its depth) are
-	// for the plan to hand the MPHF builder.
+	// for keys to hand the MPHF builder.
 	keyHash, fp, local uint64
 	// name is the last segment, without its slash (empty for the root),
 	// for the plan to intern into rec.segID.
@@ -80,86 +103,124 @@ func newLevelSpool(dir string) *levelSpool {
 }
 
 // next returns the entry for the next row; commit hands it over once
-// filled. The writer starts with the first row.
+// filled. The stages start with the first row.
 func (s *levelSpool) next() *spoolEntry {
 	if !s.started && !s.stopped {
 		s.started = true
-		s.full = make(chan []spoolEntry, spoolBatches-1)
-		s.free = make(chan []spoolEntry, spoolBatches)
+		s.full = make(chan *spoolBatch, spoolBatches-1)
+		s.planned = make(chan *spoolBatch, spoolBatches)
+		s.keyed = make(chan *spoolBatch, spoolBatches)
+		s.free = make(chan *spoolBatch, spoolBatches)
 		for range spoolBatches - 1 {
-			s.free <- make([]spoolEntry, 0, spoolBatchRows)
+			s.free <- &spoolBatch{rows: make([]spoolEntry, 0, spoolBatchRows)}
 		}
-		s.batch = make([]spoolEntry, 0, spoolBatchRows)
-		s.writer.Go(s.write)
+		s.batch = &spoolBatch{rows: make([]spoolEntry, 0, spoolBatchRows)}
+		s.stages.Go(s.planStage)
+		s.stages.Go(func() { s.follow(s.planned, s.write) })
+		s.stages.Go(func() { s.follow(s.keyed, s.keys) })
 	}
-	s.batch = s.batch[:len(s.batch)+1]
+	s.batch.rows = s.batch.rows[:len(s.batch.rows)+1]
 
-	return &s.batch[len(s.batch)-1]
+	return &s.batch.rows[len(s.batch.rows)-1]
 }
 
-// commit hands the entry next returned to the writer, sending the
-// batch once full. It returns the writer's error once the writer has
-// failed, a batch or so after the row it failed on.
+// commit hands the entry next returned to the stages, sending the
+// batch once full. It returns the stages' first error once one has
+// failed, a few batches after the row it failed on.
 func (s *levelSpool) commit() error {
 	if s.stopped {
-		s.batch = s.batch[:0]
+		s.batch.rows = s.batch.rows[:0]
 		if s.err != nil {
 			return s.err
 		}
 
 		return errSpoolStopped
 	}
-	if len(s.batch) < cap(s.batch) {
+	if len(s.batch.rows) < cap(s.batch.rows) {
 		return nil
 	}
 	if s.failed.Load() {
 		return s.stop()
 	}
 	s.full <- s.batch
-	s.batch = (<-s.free)[:0]
+	s.batch = <-s.free
+	s.batch.rows = s.batch.rows[:0]
 
 	return nil
 }
 
-// write is the writer goroutine: it writes each batch's records in
-// order, and after an error only returns batches until the spool
-// stops.
-func (s *levelSpool) write() {
-	for batch := range s.full {
-		for i := range batch {
-			if s.err != nil {
-				break
-			}
-			if s.plan != nil {
-				s.err = s.plan(&batch[i])
-			}
-			if s.err == nil {
-				s.err = s.add(batch[i].depth, &batch[i].rec)
+// fail records the stages' first error and has every stage skip the
+// batches after it.
+func (s *levelSpool) fail(err error) {
+	s.errOnce.Do(func() { s.err = err })
+	s.failed.Store(true)
+}
+
+// planStage runs plan over each batch's rows in order, then hands the
+// batch to the write and keys stages. After an error it only hands
+// batches on.
+func (s *levelSpool) planStage() {
+	for b := range s.full {
+		if s.plan != nil && !s.failed.Load() {
+			b.tiers = b.tiers[:0]
+			for i := range b.rows {
+				var err error
+				if b.tiers, err = s.plan(&b.rows[i], b.tiers); err != nil {
+					s.fail(err)
+
+					break
+				}
 			}
 		}
-		if s.err != nil {
-			s.failed.Store(true)
+		b.pending.Store(2)
+		s.planned <- b
+		s.keyed <- b
+	}
+	close(s.planned)
+	close(s.keyed)
+}
+
+// follow is a stage after plan: it runs fn over each batch's rows in
+// order and frees the batch once the other such stage is done with it
+// too. After an error it only frees batches.
+func (s *levelSpool) follow(in <-chan *spoolBatch, fn func(e *spoolEntry) error) {
+	for b := range in {
+		if fn != nil && !s.failed.Load() {
+			for i := range b.rows {
+				if err := fn(&b.rows[i]); err != nil {
+					s.fail(err)
+
+					break
+				}
+			}
 		}
-		s.free <- batch
+		if b.pending.Add(-1) == 0 {
+			s.free <- b
+		}
 	}
 }
 
-// stop sends the partly filled batch, ends the writer and returns its
-// error. Idempotent.
+// write adds e's record to its depth's file.
+func (s *levelSpool) write(e *spoolEntry) error {
+	return s.add(e.depth, &e.rec)
+}
+
+// stop sends the partly filled batch, ends the stages and returns their
+// first error. Idempotent.
 func (s *levelSpool) stop() error {
 	if s.stopped {
 		return s.err
 	}
 	s.stopped = true
 	if s.started {
-		if len(s.batch) > 0 {
+		if len(s.batch.rows) > 0 {
 			s.full <- s.batch
 		}
 		close(s.full)
-		s.writer.Wait()
+		s.stages.Wait()
 	}
 	// A slot for any next after the stop, which commit then refuses.
-	s.batch = make([]spoolEntry, 0, 1)
+	s.batch = &spoolBatch{rows: make([]spoolEntry, 0, 1)}
 
 	return s.err
 }

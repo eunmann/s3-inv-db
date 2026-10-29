@@ -32,27 +32,26 @@ import (
 // prefix's children are the rows from its child start to the next
 // row's, and scans of a level read its rows in sequence. Add checks
 // each row against its ancestors (a depth stack) and spools it by
-// depth (levelSpool), whose writer goroutine also plans the core and
-// tier files' widths from every row and interns its last segment;
+// depth (levelSpool), whose stages also plan the core and tier files'
+// widths from every row, intern its last segment and spill its MPHF key;
 // Finalize replays the depths in order into the index writers, which
 // write each file in its final form.
 //
 // Memory is bounded: rows and MPHF keys go to disk, and the stack
 // holds one entry per depth.
 type IndexBuilder struct {
-	// The plans and the interner are filled on the spool's writer
-	// goroutine, and read once Finalize has stopped it.
+	// The plans and the interner are filled on the spool's plan stage,
+	// and read once Finalize has stopped it.
 	tierPlan *format.TierStatsPlan
 	corePlan format.CoreStatsPlan
 	interner *format.PrefixSegmentInterner
-	// tierSlots holds the tier slots of the row being planned.
-	tierSlots []uint64
-	// treePlan holds, per depth, the rows the spool's writer has seen
+	// treePlan holds, per depth, the rows the spool's plan has seen
 	// and the most a row's index within its depth exceeds its parent's:
 	// with the depths' sizes that gives the widest parent distance.
-	treePlan    treePlan
-	coreW       *format.CoreStatsWriter
-	tierW       *format.TierStatsWriter
+	treePlan treePlan
+	coreW    *format.CoreStatsWriter
+	tierW    *format.TierStatsWriter
+	// mphfBuilder takes the keys on the spool's keys stage.
 	mphfBuilder *format.StreamingMPHFBuilder
 	prefixTreeW *format.PrefixTreeWriter
 	// checksums collects the manifest checksums the writers take of
@@ -119,12 +118,11 @@ func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
 		mphfBuilder:   mphfBuilder,
 		checksums:     checksums,
 		interner:      interner,
-		tierSlots:     make([]uint64, 0, 2*tiers.NumTiers),
 		spool:         newLevelSpool(spoolDir),
 		stack:         make([]stackEntry, 0, 32),
 		createdOutDir: createdOutDir,
 	}
-	b.spool.plan = b.planRow
+	b.spool.plan, b.spool.keys = b.planRow, b.addKey
 
 	return b, nil
 }
@@ -164,39 +162,46 @@ func (b *IndexBuilder) startTierPlan() error {
 }
 
 // planRow adds a row to the core, tier and tree plans, gives its record
-// its tier slots, interns its last segment into the record's segment ID
-// and adds its key to the MPHF builder. It runs on the spool's writer
-// goroutine, which sees every row once, in Add order, and writes its
-// record before the next row's plan reuses the slots' buffer.
-func (b *IndexBuilder) planRow(e *spoolEntry) error {
+// its tier slots, appended to slots, and interns its last segment into
+// the record's segment ID. It runs on the spool's plan stage, which
+// sees every row once, in Add order.
+func (b *IndexBuilder) planRow(e *spoolEntry, slots []uint64) ([]uint64, error) {
 	r, depth := &e.rec, e.depth
-	mask, slots, err := b.tierPlan.Add(&e.tierCounts, &e.tierBytes, r.count, r.bytes, b.tierSlots[:0])
+	start := len(slots)
+	mask, slots, err := b.tierPlan.Add(&e.tierCounts, &e.tierBytes, r.count, r.bytes, slots)
 	if err != nil {
-		return fmt.Errorf("prefix segment %q at depth %d: tier stats: %w", e.name, depth, err)
+		return slots, fmt.Errorf("prefix segment %q at depth %d: tier stats: %w", e.name, depth, err)
 	}
-	b.tierSlots = slots
-	r.tierMask, r.tiers = mask, slots
+	r.tierMask, r.tiers = mask, slots[start:]
 	b.corePlan.Add(r.count, r.bytes, mask)
 	if depth > 0 {
 		// The interner copies a new segment, so the name may alias the
 		// entry's buffer.
 		if r.segID, err = b.interner.Intern(unsafe.String(unsafe.SliceData(e.name), len(e.name))); err != nil {
-			return fmt.Errorf("prefix segment %q at depth %d: %w", e.name, depth, err)
+			return slots, fmt.Errorf("prefix segment %q at depth %d: %w", e.name, depth, err)
 		}
 	}
 	b.treePlan.add(depth, r.parentLocal)
-	posKey, err := format.PositionKey(depth, e.local)
+
+	return slots, nil
+}
+
+// addKey adds a row's key to the MPHF builder. It runs on the spool's
+// keys stage, which sees every row once, in Add order, beside the
+// stage writing the row's record: it only reads the entry.
+func (b *IndexBuilder) addKey(e *spoolEntry) error {
+	posKey, err := format.PositionKey(e.depth, e.local)
 	if err == nil {
 		err = b.mphfBuilder.AddKey(e.keyHash, e.fp, posKey)
 	}
 	if err != nil {
-		return fmt.Errorf("prefix segment %q at depth %d: add to MPHF builder: %w", e.name, depth, err)
+		return fmt.Errorf("prefix segment %q at depth %d: add to MPHF builder: %w", e.name, e.depth, err)
 	}
 
 	return nil
 }
 
-// treePlan follows each depth's rows on the spool's writer goroutine.
+// treePlan follows each depth's rows on the spool's plan stage.
 // A row's parent distance in level order is its depth's start minus its
 // parent's depth's start (the parent depth's size) plus its index within
 // its depth minus its parent's; the plan keeps the largest second part
@@ -313,7 +318,7 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 		r.parentLocal = b.stack[depth-1].local
 	}
 	// The prefix is still in this core's cache from the checks above:
-	// hashed by the spool writer instead, it cost twice as much.
+	// hashed on a spool stage instead, it cost twice as much.
 	e.keyHash, e.fp = b.mphfBuilder.KeyHashes(row.Prefix)
 	e.local = b.levelRows[depth]
 	e.name = append(e.name[:0], name...)
@@ -622,7 +627,7 @@ func (b replayBusy) fields(e *zerolog.Event) *zerolog.Event {
 // writers, so every per-row file is in level order. A row's child start
 // and parent become rows once every depth's size is known: the first
 // row of a depth is the number of rows above it. The writers take their
-// widths from the plans the spool's writer filled.
+// widths from the plans the spool's plan stage filled.
 func (b *IndexBuilder) writeLevels(starts []uint64, segments uint32) (replayBusy, error) {
 	total := int64(b.posCount)
 	var written int64
@@ -661,7 +666,7 @@ func (b *IndexBuilder) writeLevels(starts []uint64, segments uint32) (replayBusy
 	return busy, os.RemoveAll(b.spool.dir) //nolint:wrapcheck // the path is in the error
 }
 
-// finishSpool ends the spool's writer, which completes the plans and
+// finishSpool ends the spool's stages, which completes the plans and
 // the MPHF keys, and closes the interner, which writes the dictionary's
 // end and frees its segment map before the replay. It returns the
 // segment count.
