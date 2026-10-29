@@ -133,7 +133,8 @@ seeded inputs, so repeated rounds agree.
 Ingestion (`bench/suite/ingest.txt`):
 
 - `internal/loader` `BenchmarkPipeline` at 1M objects (realistic,
-  deep-pyramid and realistic_sorted shapes; see the fixtures below):
+  deep-pyramid and realistic_sorted shapes, and realistic from Parquet;
+  see the fixtures below):
   the real `Pipeline.Run` end to end through the local S3 server.
   Seconds per op; also reports `input_B` (the data files a build
   downloads), `peak_heap_B`, `disk_B`, `runs` (sorted runs the
@@ -188,8 +189,8 @@ Data structures / query (`bench/suite/query.txt`):
 Scale (`bench/suite/scale.txt`, `make bench-scale BASE=<ref>`,
 `SCALE_ROUNDS=4` by default, `S3INV_LONG_BENCH=1` set for you):
 
-- `internal/loader` `BenchmarkPipeline` at 10M objects (realistic and
-  realistic_sorted).
+- `internal/loader` `BenchmarkPipeline` at 10M objects (realistic,
+  realistic_sorted, and realistic from Parquet).
 - `pkg/format` `BenchmarkMPHFBuild` at 5M prefixes.
 - `pkg/indexread` `BenchmarkBrowse_Matrix` warm, over a 10M-object index.
 

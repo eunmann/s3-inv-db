@@ -6,6 +6,9 @@
 # index build (seconds per op, reports peak_heap_B and disk_B).
 integration internal/loader ^BenchmarkPipeline$/^shape=(realistic|deep_pyramid|realistic_sorted)$/^n=1000000$ 1x
 
+# The realistic build from Snappy Parquet data files instead of CSV.gz.
+integration internal/loader ^BenchmarkPipeline$/^shape=realistic$/^format=parquet$/^n=1000000$ 1x
+
 # CSV parsing per key shape (200K rows per op, reports ns/row): line
 # splitting and URL-decoding keys, without download or gunzip.
 - pkg/s3inventory ^BenchmarkCSVReader$ 10x
