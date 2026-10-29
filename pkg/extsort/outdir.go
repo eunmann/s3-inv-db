@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/rs/zerolog"
@@ -161,15 +163,86 @@ func reclaimStaleDirs(log *zerolog.Logger, outDir string) error {
 	return nil
 }
 
+// syncFunc makes the file or directory at path durable.
+type syncFunc func(path string, dir bool) error
+
+func durableSync(path string, dir bool) error {
+	syncOne := format.SyncData
+	if dir {
+		syncOne = format.SyncDir
+	}
+	if err := syncOne(path); err != nil {
+		return fmt.Errorf("sync %s: %w", path, err)
+	}
+
+	return nil
+}
+
+// publishSyncWorkers bounds the syncs in flight before publishing. An
+// index is a few dozen files; syncing them together lets the device
+// write them in one queue rather than one file per round trip.
+const publishSyncWorkers = 16
+
+// syncTree syncs every regular file and directory under root,
+// including root, publishSyncWorkers at a time.
+func syncTree(root string, syncPath syncFunc) error {
+	type entry struct {
+		path string
+		dir  bool
+	}
+	var entries []entry
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || d.Type().IsRegular() {
+			entries = append(entries, entry{path: path, dir: d.IsDir()})
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("list %s: %w", root, err)
+	}
+	work := make(chan entry)
+	errs := make([]error, publishSyncWorkers)
+	var wg sync.WaitGroup
+	for i := range min(publishSyncWorkers, len(entries)) {
+		wg.Go(func() {
+			for e := range work {
+				errs[i] = errors.Join(errs[i], syncPath(e.path, e.dir))
+			}
+		})
+	}
+	for _, e := range entries {
+		work <- e
+	}
+	close(work)
+	wg.Wait()
+
+	return errors.Join(errs...)
+}
+
 // publishIndex moves a finished index from stage to outDir. A previous
 // index at outDir is replaced (moved aside, then removed once the new
 // one is in place); anything else at outDir is left alone and reported.
-// Once the new index is in place the build has succeeded, so a failure
-// to sync or to remove the previous index is only logged.
+// Every file and directory in stage is made durable first, so a crash
+// after the rename finds the whole index. Once the new index is in
+// place the build has succeeded, so a failure to sync the parent or to
+// remove the previous index is only logged.
 func publishIndex(log *zerolog.Logger, stage, outDir string) error {
+	return publish(log, stage, outDir, durableSync)
+}
+
+func publish(log *zerolog.Logger, stage, outDir string, syncPath syncFunc) error {
 	if err := checkOutDir(outDir); err != nil {
 		return err
 	}
+	syncStart := time.Now()
+	if err := syncTree(stage, syncPath); err != nil {
+		return fmt.Errorf("sync staged index: %w", err)
+	}
+	log.Debug().Dur("duration_ms", time.Since(syncStart)).Msg("staged index synced")
 	outDir = filepath.Clean(outDir)
 	parent, base := filepath.Dir(outDir), filepath.Base(outDir)
 	var old string

@@ -280,6 +280,8 @@ func (t *buildTracker) buildSummary(result *extsort.Result, runErr error) buildS
 		errStr = runErr.Error()
 	}
 
+	// NumCPU records the host's CPUs as a fact about the machine; the
+	// build sizes its parallelism from GOMAXPROCS.
 	s := buildSummary{
 		Source:         t.sourceURI,
 		StartedAt:      t.startedAt,

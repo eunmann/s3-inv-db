@@ -107,6 +107,7 @@ func (w *rankedBitsWriter) finish() error {
 	if _, err := w.f.WriteAt(head, 0); err != nil {
 		return fmt.Errorf("write %s header: %w", filepath.Base(w.path), err)
 	}
+	startWriteback(w.f)
 
 	return errors.Join(w.dirF.Close(), w.f.Close())
 }

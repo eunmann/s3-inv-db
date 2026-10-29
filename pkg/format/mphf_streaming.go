@@ -290,12 +290,18 @@ func fallbackEntries(leftovers, hashes, fps []uint64) ([]bbFallback, error) {
 	return entries, nil
 }
 
-// mphfWorkerCount caps parallelism at the smaller of NumCPU and the
+// mphfWorkerCount caps parallelism at the smaller of GOMAXPROCS (which
+// honours a container CPU quota where NumCPU does not) and the
 // per-worker amortised cost threshold — there's no point spinning up
-// 64 workers for 10k prefixes. Floor of 1 keeps callers off zero-divide.
+// 64 workers for 10k prefixes.
 func mphfWorkerCount(n int) int {
+	return mphfWorkers(runtime.GOMAXPROCS(0), n)
+}
+
+// mphfWorkers floors at 1 to keep callers off zero-divide.
+func mphfWorkers(procs, n int) int {
 	const minPerWorker = 4096
-	w := runtime.NumCPU()
+	w := procs
 	if maxFromWork := n / minPerWorker; maxFromWork < w {
 		w = maxFromWork
 	}
@@ -357,9 +363,7 @@ func writeSlots(outDir, tempDir string, n int, mph *bbhash, hashes, fps []uint64
 			return cleanup(err)
 		}
 	}
-	if err := f.Sync(); err != nil {
-		return cleanup(fmt.Errorf("sync MPHF slots: %w", err))
-	}
+	startWriteback(f)
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close MPHF slots: %w", err)
 	}

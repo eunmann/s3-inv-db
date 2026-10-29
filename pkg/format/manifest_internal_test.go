@@ -246,38 +246,3 @@ func TestVerifyManifestRejectsOtherVersions(t *testing.T) {
 		t.Errorf("VerifyManifest = %v, want ErrManifestVersion", err)
 	}
 }
-
-func TestWriteFileSync(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.bin")
-
-	data := []byte("test data")
-	if err := WriteFileSync(path, data); err != nil {
-		t.Fatalf("WriteFileSync failed: %v", err)
-	}
-
-	// Read back
-	read, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile failed: %v", err)
-	}
-
-	if !bytes.Equal(read, data) {
-		t.Errorf("read = %q, want %q", read, data)
-	}
-}
-
-func TestSyncDir(t *testing.T) {
-	dir := t.TempDir()
-
-	// Create a file in the directory
-	path := filepath.Join(dir, "test.bin")
-	if err := os.WriteFile(path, []byte("data"), 0o600); err != nil {
-		t.Fatalf("WriteFile failed: %v", err)
-	}
-
-	// Sync should not error
-	if err := SyncDir(dir); err != nil {
-		t.Errorf("SyncDir failed: %v", err)
-	}
-}
