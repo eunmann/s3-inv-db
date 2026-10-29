@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/eunmann/s3-inv-db/internal/inventory"
 	"github.com/eunmann/s3-inv-db/internal/jobs"
@@ -141,6 +143,62 @@ func TestRecover_MarksStaleJobsAborted(t *testing.T) {
 	}
 	if survivor.State != jobs.StateSucceeded {
 		t.Errorf("succeeded job got reaped: %s", survivor.State)
+	}
+}
+
+var errLoadAbandoned = errors.New("load abandoned by the previous process")
+
+// TestRecover_InterruptedManualLoadKeepsPreLoadPin: a manual load cut
+// off by a restart leaves the run in error with the pin and user-unload
+// mark it had before the load, not pinned by a load that never landed.
+func TestRecover_InterruptedManualLoadKeepsPreLoadPin(t *testing.T) {
+	db := testDB(t)
+	invStore, err := inventory.NewStore(db)
+	if err != nil {
+		t.Fatalf("inventory.NewStore: %v", err)
+	}
+	const id inventory.ID = "src/inv1/2026-01-01T00-00Z"
+	unloadedAt := time.Unix(1_700_000_000, 0)
+	previous := inventory.NewCatalog(invStore)
+	if err := previous.Hydrate(t.Context(), inventory.Info{
+		ID: id, Name: "n", Path: "p", State: inventory.StateNotLoaded, UserUnloadedAt: unloadedAt,
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+	building, release := make(chan struct{}), make(chan struct{})
+	loadDone := make(chan error, 1)
+	go func() {
+		loadDone <- previous.LoadWith(t.Context(), id, func(context.Context, inventory.Info) (string, error) {
+			close(building)
+			<-release
+
+			return "", errLoadAbandoned
+		})
+	}()
+	defer func() {
+		close(release)
+		<-loadDone
+	}()
+	<-building
+
+	srv, err := New(t.Context(), Config{
+		Addr:       ":0",
+		Logger:     zerolog.Nop(),
+		PriceTable: pricing.DefaultUSEast1Prices(),
+		DB:         db,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got, _ := srv.manager.Get(id)
+	if got.State != inventory.StateError {
+		t.Errorf("state = %s, want error", got.State)
+	}
+	if got.Pinned {
+		t.Error("pinned by a load the restart interrupted")
+	}
+	if !got.UserUnloadedAt.Equal(unloadedAt) {
+		t.Errorf("UserUnloadedAt = %v, want %v as before the load", got.UserUnloadedAt, unloadedAt)
 	}
 }
 

@@ -650,3 +650,39 @@ func TestGate_Load_RetractsIndexThatCannotFit(t *testing.T) {
 		t.Errorf("second load %s = %v, want BudgetRefusedError", c, err)
 	}
 }
+
+// A manual load through the gate that fails or is cancelled leaves the
+// run's pin as it was before the load, so the planner can still evict
+// it once it is loaded by other means.
+func TestGate_Load_FailedManualLoadKeepsPreLoadPin(t *testing.T) {
+	builds := map[string]func(cancel context.CancelFunc) inventory.BuildFunc{
+		"build error": func(context.CancelFunc) inventory.BuildFunc {
+			return func(context.Context, inventory.Info) (string, error) { return "", errBuildFailed }
+		},
+		"cancelled": func(cancel context.CancelFunc) inventory.BuildFunc {
+			return func(ctx context.Context, _ inventory.Info) (string, error) {
+				cancel()
+
+				return "", fmt.Errorf("run pipeline: %w", ctx.Err())
+			}
+		},
+	}
+	for name, build := range builds {
+		t.Run(name, func(t *testing.T) {
+			gate, mgr, _ := newTestGate(1<<30, 0)
+			defer mgr.Close()
+			id := inventory.ID("src/inv/runA")
+			if err := mgr.Register(t.Context(), id, "n", "p"); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if err := gate.Load(ctx, id, build(cancel), inventory.GatedLoadOptions{EstimateBytes: 1, Pin: true}); err == nil {
+				t.Fatal("load succeeded, want an error")
+			}
+			if got, _ := mgr.Get(id); got.Pinned {
+				t.Errorf("%s is pinned by a load that failed", id)
+			}
+		})
+	}
+}
