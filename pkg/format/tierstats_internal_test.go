@@ -42,9 +42,11 @@ func planTierRows(t *testing.T, present []tiers.ID, rows []tierTestRow, force ti
 			order[i] = i
 		}
 	}
+	var slots []uint64
 	for _, i := range order {
 		c, b := rows[i].totals()
-		if _, err := plan.Add(&rows[i].counts, &rows[i].bytes, c, b); err != nil {
+		var err error
+		if _, slots, err = plan.Add(&rows[i].counts, &rows[i].bytes, c, b, slots[:0]); err != nil {
 			t.Fatalf("plan row %d: %v", i, err)
 		}
 	}
@@ -52,9 +54,26 @@ func planTierRows(t *testing.T, present []tiers.ID, rows []tierTestRow, force ti
 	return plan
 }
 
+// rowSlots is row's tier slots over the present tiers: its mask and
+// each slot's count and bytes, the slots in tier-ID order.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func rowSlots(present []tiers.ID, row *tierTestRow) (uint16, []uint64) {
+	var mask uint16
+	var slots []uint64
+	for slot, id := range slices.Sorted(slices.Values(present)) {
+		if row.counts[id] != 0 || row.bytes[id] != 0 {
+			mask |= 1 << slot
+			slots = append(slots, row.counts[id], row.bytes[id])
+		}
+	}
+
+	return mask, slots
+}
+
 // writeTierRows writes rows, in order, by plan into dir and returns
 // their masks.
-func writeTierRows(t *testing.T, dir string, plan *TierStatsPlan, rows []tierTestRow) []uint16 {
+func writeTierRows(t *testing.T, dir string, plan *TierStatsPlan, present []tiers.ID, rows []tierTestRow) []uint16 {
 	t.Helper()
 	tw, err := NewTierStatsWriter(dir, plan, nil)
 	if err != nil {
@@ -62,8 +81,10 @@ func writeTierRows(t *testing.T, dir string, plan *TierStatsPlan, rows []tierTes
 	}
 	masks := make([]uint16, len(rows))
 	for i := range rows {
-		if masks[i], err = tw.Add(&rows[i].counts, &rows[i].bytes); err != nil {
-			t.Fatalf("Add row %d: %v", i, err)
+		var slots []uint64
+		masks[i], slots = rowSlots(present, &rows[i])
+		if err := tw.AddSlots(masks[i], slots); err != nil {
+			t.Fatalf("AddSlots row %d: %v", i, err)
 		}
 	}
 	if err := tw.Close(); err != nil {
@@ -80,7 +101,7 @@ func buildTierIndex(t *testing.T, present []tiers.ID, rows []tierTestRow, force 
 	t.Helper()
 	dir := t.TempDir()
 	plan := planTierRows(t, present, rows, force, nil)
-	masks := writeTierRows(t, dir, plan, rows)
+	masks := writeTierRows(t, dir, plan, present, rows)
 	coreRows := make([]coreTestRow, len(rows))
 	for i := range rows {
 		c, b := rows[i].totals()
@@ -281,7 +302,7 @@ func TestTierStatsSizeModelMatchesFiles(t *testing.T) {
 		if force == tierLayoutMulti {
 			want = plan.multiSize()
 		}
-		writeTierRows(t, dir, plan, rows)
+		writeTierRows(t, dir, plan, present, rows)
 		if got := tierDirBytes(t, filepath.Join(dir, TierStatsDir)); got != int64(want) {
 			t.Errorf("layout %d: files are %d bytes, model says %d", force, got, want)
 		}
@@ -306,28 +327,112 @@ func TestTierStatsPlanRejectsInconsistentRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A refused row appends nothing to what the slots already held.
+	held := []uint64{7}
+	add := func(row *tierTestRow, totalCount, totalBytes uint64) error {
+		mask, slots, err := plan.Add(&row.counts, &row.bytes, totalCount, totalBytes, held)
+		if err != nil && (mask != 0 || !slices.Equal(slots, held)) {
+			t.Errorf("refused row: mask %b, slots %v; want 0 and %v", mask, slots, held)
+		}
+
+		return err
+	}
 	var row tierTestRow
 	row.counts[tiers.Standard], row.bytes[tiers.Standard] = 1, 10
 
-	if _, err := plan.Add(&row.counts, &row.bytes, 2, 10); !errors.Is(err, errTierSumMismatch) {
+	if err := add(&row, 2, 10); !errors.Is(err, errTierSumMismatch) {
 		t.Errorf("count mismatch: err = %v, want errTierSumMismatch", err)
 	}
-	if _, err := plan.Add(&row.counts, &row.bytes, 1, 11); !errors.Is(err, errTierSumMismatch) {
+	if err := add(&row, 1, 11); !errors.Is(err, errTierSumMismatch) {
 		t.Errorf("bytes mismatch: err = %v, want errTierSumMismatch", err)
 	}
 	row.bytes[tiers.GlacierIR] = 1 << 63
 	row.bytes[tiers.Standard] = 1 << 63
 	row.counts[tiers.GlacierIR] = 1
-	if _, err := plan.Add(&row.counts, &row.bytes, 2, 0); !errors.Is(err, errTierSumMismatch) {
+	if err := add(&row, 2, 0); !errors.Is(err, errTierSumMismatch) {
 		t.Errorf("overflowing sum: err = %v, want errTierSumMismatch", err)
 	}
 	var stray tierTestRow
 	stray.counts[tiers.DeepArchive] = 1
-	if _, err := plan.Add(&stray.counts, &stray.bytes, 1, 0); !errors.Is(err, ErrUndeclaredTierData) {
+	if err := add(&stray, 1, 0); !errors.Is(err, ErrUndeclaredTierData) {
 		t.Errorf("undeclared tier: err = %v, want ErrUndeclaredTierData", err)
+	}
+	// A declared tier with data ahead of the undeclared one is refused
+	// with it, not appended.
+	stray.counts[tiers.Standard] = 1
+	if err := add(&stray, 2, 0); !errors.Is(err, ErrUndeclaredTierData) {
+		t.Errorf("undeclared tier after a declared one: err = %v, want ErrUndeclaredTierData", err)
 	}
 	if plan.rows != 0 {
 		t.Errorf("plan counted %d refused rows", plan.rows)
+	}
+}
+
+// TestTierStatsPlanAddGivesSlots: Add's mask and slot values are the
+// row's tier stats by slot, in slot order, appended to what the slots
+// held, for present sets of every tier, of tiers whose slots are not
+// their IDs, and of one tier.
+func TestTierStatsPlanAddGivesSlots(t *testing.T) {
+	for _, present := range [][]tiers.ID{
+		tiers.AllTierIDs(),
+		{tiers.GlacierIR, tiers.ExpressOneZone, tiers.Snow},
+		{tiers.Outposts},
+	} {
+		for _, p := range []float64{0.05, 0.3, 1} {
+			plan, err := NewTierStatsPlan(present)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows := randomTierRows(rand.New(rand.NewPCG(uint64(len(present)), uint64(p*100))), present, 2000, p, 30, 60)
+			held := []uint64{1, 2, 3}
+			for i := range rows {
+				c, b := rows[i].totals()
+				mask, slots, err := plan.Add(&rows[i].counts, &rows[i].bytes, c, b, held)
+				if err != nil {
+					t.Fatalf("%d tiers, row %d: %v", len(present), i, err)
+				}
+				wantMask, wantSlots := rowSlots(present, &rows[i])
+				if mask != wantMask || !slices.Equal(slots[:len(held)], held) || !slices.Equal(slots[len(held):], wantSlots) {
+					t.Fatalf("%d tiers, row %d: mask %b, slots %v; want %b and %v after %v",
+						len(present), i, mask, slots, wantMask, wantSlots, held)
+				}
+			}
+		}
+	}
+}
+
+// TestTierStatsWriterRejectsMalformedSlots: slots no plan gives (a mask
+// past the present slots, values that don't match the mask) fail
+// AddSlots without taking the row's place.
+func TestTierStatsWriterRejectsMalformedSlots(t *testing.T) {
+	present := []tiers.ID{tiers.Standard, tiers.GlacierIR, tiers.Snow}
+	rows := make([]tierTestRow, 1)
+	rows[0].counts[tiers.Snow], rows[0].bytes[tiers.Snow] = 3, 9
+	for _, force := range []tierLayout{tierLayoutDense, tierLayoutMulti} {
+		w, err := NewTierStatsWriter(t.TempDir(), planTierRows(t, present, rows, force, nil), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tc := range []struct {
+			name  string
+			slots []uint64
+			mask  uint16
+		}{
+			{"a mask past the slots", []uint64{1, 1}, 1 << 3},
+			{"too few values", []uint64{1, 1}, 0b011},
+			{"too many values", []uint64{1, 1, 1, 1}, 0b100},
+			{"half a slot", []uint64{1}, 0b001},
+		} {
+			if err := w.AddSlots(tc.mask, tc.slots); !errors.Is(err, errTierPlanMismatch) {
+				t.Errorf("layout %d, %s: err = %v, want errTierPlanMismatch", force, tc.name, err)
+			}
+		}
+		if err := w.AddSlots(rowSlots(present, &rows[0])); err != nil {
+			t.Fatalf("layout %d: the planned row after refused ones: %v", force, err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("layout %d: %v", force, err)
+		}
 	}
 }
 
@@ -367,7 +472,7 @@ func TestTierStatsCloseFailureLeavesNothing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := w.Add(&rows[0].counts, &rows[0].bytes); err != nil {
+		if err := w.AddSlots(rowSlots(present, &rows[0])); err != nil {
 			t.Fatal(err)
 		}
 		slots := w.dense
@@ -409,7 +514,7 @@ func TestTierStatsWriterRejectsRowsOffPlan(t *testing.T) {
 				t.Fatal(err)
 			}
 			for i := range tc.written {
-				if _, err = w.Add(&tc.written[i].counts, &tc.written[i].bytes); err != nil {
+				if err = w.AddSlots(rowSlots(present, &tc.written[i])); err != nil {
 					break
 				}
 			}
@@ -429,8 +534,8 @@ func TestTierStatsWriterRejectsRowsOffPlan(t *testing.T) {
 }
 
 // TestTierStatsPlanIgnoresRowOrder: a plan made from the rows in any
-// order is the plan made from them in position order, so the files and
-// masks written are byte for byte the same.
+// order is the plan made from them in position order, so the files
+// written are byte for byte the same.
 func TestTierStatsPlanIgnoresRowOrder(t *testing.T) {
 	three := []tiers.ID{tiers.Standard, tiers.GlacierIR, tiers.DeepArchive}
 	for _, present := range [][]tiers.ID{{tiers.GlacierIR}, three, tiers.AllTierIDs()} {
@@ -440,16 +545,12 @@ func TestTierStatsPlanIgnoresRowOrder(t *testing.T) {
 				rows := randomTierRows(r, present, 3000, p, 4+r.UintN(30), 8+r.UintN(50))
 				shuffled := planTierRows(t, present, rows, force, r.Perm(len(rows)))
 				ordered := planTierRows(t, present, rows, force, nil)
-				shuffled.row, ordered.row = tierRow{}, tierRow{} // the last row filled, not a statistic
 				if *shuffled != *ordered {
 					t.Errorf("%d tiers, p=%.2f, layout %d: plan %+v, in order %+v", len(present), p, force, *shuffled, *ordered)
 				}
 				gotDir, wantDir := t.TempDir(), t.TempDir()
-				gotMasks := writeTierRows(t, gotDir, shuffled, rows)
-				wantMasks := writeTierRows(t, wantDir, ordered, rows)
-				if !slices.Equal(gotMasks, wantMasks) {
-					t.Errorf("%d tiers, p=%.2f, layout %d: masks differ", len(present), p, force)
-				}
+				writeTierRows(t, gotDir, shuffled, present, rows)
+				writeTierRows(t, wantDir, ordered, present, rows)
 				assertSameFiles(t, filepath.Join(wantDir, TierStatsDir), filepath.Join(gotDir, TierStatsDir))
 			}
 		}
