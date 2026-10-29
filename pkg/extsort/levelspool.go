@@ -259,7 +259,7 @@ func (s *levelSpool) finish() error {
 // spoolReader reads one depth's records in the order they were added.
 type spoolReader struct {
 	f     *os.File
-	in    *bufio.Reader
+	in    readWindow
 	depth int
 }
 
@@ -270,17 +270,64 @@ func (s *levelSpool) open(depth int) (*spoolReader, error) {
 		return nil, fmt.Errorf("open level spool %d: %w", depth, err)
 	}
 
-	return &spoolReader{f: f, in: bufio.NewReaderSize(f, levelSpoolBufSize), depth: depth}, nil
+	return &spoolReader{f: f, in: readWindow{r: bufio.NewReaderSize(f, levelSpoolBufSize)}, depth: depth}, nil
 }
 
-// next decodes the next record into r: io.EOF after the last.
+// next decodes the next record into rec: io.EOF after the last.
 func (r *spoolReader) next(rec *spoolRecord) error {
-	err := readSpoolRecord(r.in, rec)
+	err := r.read(rec)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("read level spool %d: %w", r.depth, err)
 	}
 
 	return err
+}
+
+// read decodes the next record into rec: io.EOF at a clean end of the
+// stream, errSpoolTruncated inside a record.
+func (r *spoolReader) read(rec *spoolRecord) error {
+	b := r.in.rest()
+	n, k := binary.Uvarint(b)
+	if k <= 0 || n > uint64(len(b)-k) {
+		if err := r.refill(); err != nil {
+			return err
+		}
+		b = r.in.rest()
+		n, k = binary.Uvarint(b)
+	}
+	end := k + int(n)
+	if err := decodeSpoolRecord(b[k:end], rec); err != nil {
+		return err
+	}
+	r.in.advance(end)
+
+	return nil
+}
+
+// refill refills the window for the record that runs past it: io.EOF
+// at a clean end of the stream, errSpoolTruncated if it ends inside the
+// record.
+func (r *spoolReader) refill() error {
+	readErr := r.in.refill(r.in.r.Size())
+	b := r.in.rest()
+	if len(b) == 0 {
+		if errors.Is(readErr, io.EOF) {
+			return io.EOF
+		}
+
+		return readErr
+	}
+	n, k := binary.Uvarint(b)
+	switch {
+	case k < 0:
+		return fmt.Errorf("%w: record length overflows", errSpoolTruncated)
+	case k > 0 && n <= uint64(len(b)-k):
+		return nil
+	case readErr == nil:
+		return fmt.Errorf("%w: %d-byte record, longer than the read buffer", errSpoolTruncated, n)
+	}
+
+	return truncated(readErr)
 }
 
 func (r *spoolReader) close() error {
@@ -299,28 +346,6 @@ func (s *levelSpool) remove(depth int) error {
 // errSpoolTruncated reports a record cut short: the stream ended inside
 // it.
 var errSpoolTruncated = errors.New("level spool record truncated")
-
-// readSpoolRecord decodes the next record into r: io.EOF at a clean end
-// of the stream, errSpoolTruncated inside a record.
-func readSpoolRecord(in *bufio.Reader, r *spoolRecord) error {
-	n, err := binary.ReadUvarint(in)
-	if err != nil {
-		return err //nolint:wrapcheck // io.EOF marks the clean end; the caller wraps the rest
-	}
-	if n > uint64(in.Size()) {
-		return fmt.Errorf("%w: %d-byte record", errSpoolTruncated, n)
-	}
-	buf, err := in.Peek(int(n))
-	if err != nil {
-		return truncated(err)
-	}
-	if err := decodeSpoolRecord(buf, r); err != nil {
-		return err
-	}
-	_, err = in.Discard(int(n))
-
-	return err //nolint:wrapcheck // Discard of peeked bytes cannot fail
-}
 
 // decodeSpoolRecord decodes one record from buf, which holds exactly
 // it.
