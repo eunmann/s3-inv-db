@@ -162,7 +162,7 @@ func inspectKeyPages(t *testing.T, path string) []keyChunkPages {
 	rowGroups := file.RowGroups()
 	chunks := make([]keyChunkPages, 0, len(rowGroups))
 	for _, rg := range rowGroups {
-		pages := rg.ColumnChunks()[cfg.KeyCol].Pages()
+		pages := rg.ColumnChunks()[cfg.KeyCol.Index()].Pages()
 		var c keyChunkPages
 		for {
 			p, err := pages.ReadPage()

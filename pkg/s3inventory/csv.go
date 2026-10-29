@@ -101,7 +101,8 @@ type CSVReader struct {
 // or size column.
 var ErrCSVColumnUnset = errors.New("required CSV column not set")
 
-// Column is a CSV column. The zero Column is no column, so a config
+// Column is an inventory column: a CSV field or a Parquet leaf
+// column. The zero Column is no column, so a config
 // that leaves an optional column out reads that field as absent.
 type Column struct {
 	pos int // index + 1

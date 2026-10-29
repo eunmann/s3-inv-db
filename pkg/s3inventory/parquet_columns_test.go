@@ -3,6 +3,7 @@ package s3inventory_test
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,24 +63,96 @@ func TestNewParquetReader_RejectsColumnOutOfRange(t *testing.T) {
 	if err := parquet.WriteFile(path, []S3InventoryRecord{{Key: "a", Size: 1}}); err != nil {
 		t.Fatal(err)
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = s3inventory.NewParquetReader(f, info.Size(), s3inventory.ParquetReaderConfig{
-		KeyCol: 0, SizeCol: 1, StorageCol: 9, AccessTierCol: -1, DeleteMarkerCol: -1,
+	f := openTestParquet(t, path)
+	_, err := s3inventory.NewParquetReader(f, f.Size(), s3inventory.ParquetReaderConfig{
+		KeyCol: s3inventory.ColumnAt(0), SizeCol: s3inventory.ColumnAt(2), StorageCol: s3inventory.ColumnAt(9),
 	})
 	if !errors.Is(err, s3inventory.ErrColumnOutOfRange) {
 		t.Fatalf("err = %v, want ErrColumnOutOfRange", err)
 	}
 }
 
+// TestNewParquetReader_RequiresKeyAndSizeColumns: a config without the
+// key or size column, or a file whose schema lacks one, is refused
+// rather than read from column 0.
+func TestNewParquetReader_RequiresKeyAndSizeColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "narrow.parquet")
+	if err := parquet.WriteFile(path, []S3InventoryRecord{{Key: "a", Size: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]struct {
+		cfg  s3inventory.ParquetReaderConfig
+		want error
+	}{
+		"zero":    {s3inventory.ParquetReaderConfig{}, s3inventory.ErrMissingKeyColumn},
+		"no_key":  {s3inventory.ParquetReaderConfig{SizeCol: s3inventory.ColumnAt(2)}, s3inventory.ErrMissingKeyColumn},
+		"no_size": {s3inventory.ParquetReaderConfig{KeyCol: s3inventory.ColumnAt(0), StorageCol: s3inventory.ColumnAt(1)}, s3inventory.ErrMissingSizeColumn},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := openTestParquet(t, path)
+			if _, err := s3inventory.NewParquetReader(f, f.Size(), tc.cfg); !errors.Is(err, tc.want) {
+				t.Errorf("NewParquetReader error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+
+	type keyOnly struct {
+		Key string `parquet:"key"`
+	}
+	sizeless := filepath.Join(t.TempDir(), "sizeless.parquet")
+	if err := parquet.WriteFile(sizeless, []keyOnly{{Key: "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	f := openTestParquet(t, sizeless)
+	if _, err := s3inventory.NewParquetReaderFromReaderAt(f, f.Size()); !errors.Is(err, s3inventory.ErrMissingSizeColumn) {
+		t.Errorf("NewParquetReaderFromReaderAt error = %v, want %v", err, s3inventory.ErrMissingSizeColumn)
+	}
+}
+
+// TestParquetReader_OmittedOptionalColumnsAreAbsent: a config naming
+// only the key and size columns reads no storage class, access tier or
+// delete marker, even when column 0 holds what would pass for one.
+func TestParquetReader_OmittedOptionalColumnsAreAbsent(t *testing.T) {
+	type record struct {
+		Bucket string `parquet:"bucket"`
+		Key    string `parquet:"key"`
+		Size   int64  `parquet:"size"`
+	}
+	path := filepath.Join(t.TempDir(), "bucket-first.parquet")
+	if err := parquet.WriteFile(path, []record{{"STANDARD", "k1", 100}, {"GLACIER", "k2", 200}}); err != nil {
+		t.Fatal(err)
+	}
+	f := openTestParquet(t, path)
+	r, err := s3inventory.NewParquetReader(f, f.Size(), s3inventory.ParquetReaderConfig{
+		KeyCol: s3inventory.ColumnAt(1), SizeCol: s3inventory.ColumnAt(2),
+	})
+	if err != nil {
+		t.Fatalf("NewParquetReader: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+
+	got := readAllRows(t, r)
+	want := []s3inventory.Row{{Key: "k1", Size: 100}, {Key: "k2", Size: 200}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("rows = %+v, want %+v", got, want)
+	}
+}
+
 func openParquetFile(t *testing.T, path string) *s3inventory.ParquetReader {
+	t.Helper()
+	f := openTestParquet(t, path)
+	r, err := s3inventory.NewParquetReaderFromReaderAt(f, f.Size())
+	if err != nil {
+		t.Fatalf("NewParquetReaderFromReaderAt: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+
+	return r
+}
+
+// openTestParquet opens the file at path for the test.
+func openTestParquet(t *testing.T, path string) *io.SectionReader {
 	t.Helper()
 	f, err := os.Open(path)
 	if err != nil {
@@ -90,11 +163,6 @@ func openParquetFile(t *testing.T, path string) *s3inventory.ParquetReader {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := s3inventory.NewParquetReaderFromReaderAt(f, info.Size())
-	if err != nil {
-		t.Fatalf("NewParquetReaderFromReaderAt: %v", err)
-	}
-	t.Cleanup(func() { _ = r.Close() })
 
-	return r
+	return io.NewSectionReader(f, 0, info.Size())
 }

@@ -18,10 +18,10 @@ import (
 var (
 	// ErrSizeMismatch indicates buffered bytes did not match the declared size.
 	ErrSizeMismatch = errors.New("size mismatch")
-	// ErrMissingKeyColumn indicates the parquet schema has no recognized key column.
-	ErrMissingKeyColumn = errors.New("parquet schema missing 'key' column")
-	// ErrMissingSizeColumn indicates the parquet schema has no recognized size column.
-	ErrMissingSizeColumn = errors.New("parquet schema missing 'size' column")
+	// ErrMissingKeyColumn indicates a parquet schema or config without a key column.
+	ErrMissingKeyColumn = errors.New("missing parquet 'key' column")
+	// ErrMissingSizeColumn indicates a parquet schema or config without a size column.
+	ErrMissingSizeColumn = errors.New("missing parquet 'size' column")
 	// ErrDuplicateColumn indicates two parquet columns canonicalize to the same name.
 	ErrDuplicateColumn = errors.New("parquet schema has duplicate column")
 	// ErrColumnOutOfRange indicates a configured column index beyond the schema.
@@ -82,28 +82,42 @@ func parquetFileOptions() []parquet.FileOption {
 	}
 }
 
-// ParquetReaderConfig configures the Parquet reader.
+// ParquetReaderConfig names the leaf columns the Parquet reader reads.
 type ParquetReaderConfig struct {
-	// KeyCol is the column index for the object key (required).
-	KeyCol int
+	// KeyCol is the object key's column (required).
+	KeyCol Column
 
-	// SizeCol is the column index for the object size (required).
-	SizeCol int
+	// SizeCol is the object size's column (required).
+	SizeCol Column
 
-	// StorageCol is the column index for the storage class (-1 if not available).
-	StorageCol int
+	// StorageCol is the storage class's column, if any.
+	StorageCol Column
 
-	// AccessTierCol is the column index for the access tier (-1 if not available).
-	AccessTierCol int
+	// AccessTierCol is the Intelligent-Tiering access tier's column, if any.
+	AccessTierCol Column
 
-	// DeleteMarkerCol is the column index for is_delete_marker (-1 if not
-	// available). Only all-versions inventories carry it.
-	DeleteMarkerCol int
+	// DeleteMarkerCol is is_delete_marker's column, if any. Only
+	// all-versions inventories carry it.
+	DeleteMarkerCol Column
+}
+
+func (c ParquetReaderConfig) validate() error {
+	if c.KeyCol.Index() < 0 {
+		return ErrMissingKeyColumn
+	}
+	if c.SizeCol.Index() < 0 {
+		return ErrMissingSizeColumn
+	}
+
+	return nil
 }
 
 // NewParquetReader creates a Parquet inventory reader from an io.ReaderAt.
 // This is used when you already have a ReaderAt (e.g., a local file or memory-mapped data).
 func NewParquetReader(r io.ReaderAt, size int64, cfg ParquetReaderConfig) (*ParquetReader, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
 	file, err := parquet.OpenFile(r, size, parquetFileOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("open parquet file: %w", err)
@@ -186,25 +200,19 @@ func NewParquetReaderFromStream(r io.ReadCloser, size int64, tempDir string) (*P
 	return nil, err
 }
 
-// detectParquetSchema detects column indices from the Parquet schema.
-// Column names are matched case-insensitively after stripping underscores
-// so AWS's PascalCase ("Key", "StorageClass") and the snake_case form
-// ("key", "storage_class") that some other producers emit both work.
+// detectParquetSchema detects the columns from the Parquet schema and
+// errors without a key or size column; an optional column it lacks is
+// absent. Column names are matched case-insensitively after stripping
+// underscores so AWS's PascalCase ("Key", "StorageClass") and the
+// snake_case form ("key", "storage_class") that some other producers
+// emit both work.
 //
 // Without normalisation, a Parquet inventory whose schema differs in
-// case from the four hardcoded strings would silently drop the
-// StorageClass / IntelligentTieringAccessTier columns (KeyCol/SizeCol
-// failure is a hard error; tier columns silently default to -1), so
-// every tier bucket would collapse to "unknown" with no error surfaced.
+// case from the hardcoded names would silently drop the StorageClass /
+// IntelligentTieringAccessTier columns, so every tier bucket would
+// collapse to "unknown" with no error surfaced.
 func detectParquetSchema(schema *parquet.Schema) (ParquetReaderConfig, error) {
-	cfg := ParquetReaderConfig{
-		KeyCol:          -1,
-		SizeCol:         -1,
-		StorageCol:      -1,
-		AccessTierCol:   -1,
-		DeleteMarkerCol: -1,
-	}
-
+	var cfg ParquetReaderConfig
 	seen := make(map[string]string, len(schema.Fields()))
 	for i, field := range schema.Fields() {
 		canon := canonicalColumnName(field.Name())
@@ -216,26 +224,19 @@ func detectParquetSchema(schema *parquet.Schema) (ParquetReaderConfig, error) {
 
 		switch canon {
 		case "key":
-			cfg.KeyCol = i
+			cfg.KeyCol = ColumnAt(i)
 		case "size":
-			cfg.SizeCol = i
+			cfg.SizeCol = ColumnAt(i)
 		case "storageclass":
-			cfg.StorageCol = i
+			cfg.StorageCol = ColumnAt(i)
 		case "intelligenttieringaccesstier":
-			cfg.AccessTierCol = i
+			cfg.AccessTierCol = ColumnAt(i)
 		case "isdeletemarker":
-			cfg.DeleteMarkerCol = i
+			cfg.DeleteMarkerCol = ColumnAt(i)
 		}
 	}
 
-	if cfg.KeyCol < 0 {
-		return cfg, ErrMissingKeyColumn
-	}
-	if cfg.SizeCol < 0 {
-		return cfg, ErrMissingSizeColumn
-	}
-
-	return cfg, nil
+	return cfg, cfg.validate()
 }
 
 // canonicalColumnName normalises a manifest/parquet column name to
@@ -247,7 +248,7 @@ func canonicalColumnName(name string) string {
 	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), "_", "")
 }
 
-// newParquetReader creates a ParquetReader from an open file.
+// newParquetReader reads file with the columns of cfg, which is valid.
 func newParquetReader(file *parquet.File, tempFile *os.File, cfg ParquetReaderConfig) (*ParquetReader, error) {
 	r := &ParquetReader{
 		file:         file,
@@ -264,7 +265,9 @@ func newParquetReader(file *parquet.File, tempFile *os.File, cfg ParquetReaderCo
 
 	schema := file.Schema()
 	leaves := schema.Columns()
-	indexes := [numParquetColumns]int{cfg.KeyCol, cfg.SizeCol, cfg.StorageCol, cfg.AccessTierCol, cfg.DeleteMarkerCol}
+	indexes := [numParquetColumns]int{
+		cfg.KeyCol.Index(), cfg.SizeCol.Index(), cfg.StorageCol.Index(), cfg.AccessTierCol.Index(), cfg.DeleteMarkerCol.Index(),
+	}
 	for i, idx := range indexes {
 		if idx >= len(leaves) {
 			return nil, fmt.Errorf("%w: column %d of %d", ErrColumnOutOfRange, idx, len(leaves))
