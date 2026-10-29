@@ -361,23 +361,10 @@ func (w *CoreStatsWriter) Add(count, bytes, childStart uint64, tierMask uint16) 
 		return fmt.Errorf("%w: row %d of %d (child start %d after %d, tier mask %#x of at most %#x)",
 			errCorePlan, w.n, w.plan.rows, childStart, w.lastChild, tierMask, w.plan.maxMask)
 	}
-	exception := false
-	off := 0
-	for _, f := range [patchedFields]struct {
-		v     uint64
-		width uint8
-	}{{count, w.desc.Count}, {bytes, w.desc.Bytes}, {childStart, w.desc.ChildStart}} {
-		v := f.v
-		if fieldNeed(v) > f.width {
-			if w.patch == nil && v > widthMask[f.width] {
-				return fmt.Errorf("%w: row %d value %d wider than %d bytes", errCorePlan, w.n, v, f.width)
-			}
-			v, exception = widthMask[f.width], true
-		}
-		binary.LittleEndian.PutUint64(w.row[off:], v)
-		off += int(f.width)
+	exception, err := packCoreRow(w.row, w.desc, w.enc, w.patch != nil, w.n, count, bytes, childStart, tierMask)
+	if err != nil {
+		return err
 	}
-	binary.LittleEndian.PutUint64(w.row[off:], encodeTierField(tierMask, w.enc))
 	if _, err := w.bw.Write(w.row[:w.desc.RowBytes()]); err != nil {
 		return fmt.Errorf("write core stats row %d: %w", w.n, err)
 	}
@@ -396,6 +383,33 @@ func (w *CoreStatsWriter) Add(count, bytes, childStart uint64, tierMask uint16) 
 	w.lastChild = childStart
 
 	return nil
+}
+
+// packCoreRow stores row's fields at desc's widths, the tier field
+// encoded as enc, into dst, which has 8 bytes of room past the row: each
+// field goes in as a whole word over the bytes after it. It reports
+// whether a field holds its sentinel (the row is an exception), which
+// fails unless patched.
+func packCoreRow(dst []byte, desc CoreStatsStride, enc TierMaskEncoding, patched bool, row, count, bytes, childStart uint64, tierMask uint16) (bool, error) {
+	exception := false
+	off := 0
+	for _, f := range [patchedFields]struct {
+		v     uint64
+		width uint8
+	}{{count, desc.Count}, {bytes, desc.Bytes}, {childStart, desc.ChildStart}} {
+		v := f.v
+		if fieldNeed(v) > f.width {
+			if !patched && v > widthMask[f.width] {
+				return false, fmt.Errorf("%w: row %d value %d wider than %d bytes", errCorePlan, row, v, f.width)
+			}
+			v, exception = widthMask[f.width], true
+		}
+		binary.LittleEndian.PutUint64(dst[off:], v)
+		off += int(f.width)
+	}
+	binary.LittleEndian.PutUint64(dst[off:], encodeTierField(tierMask, enc))
+
+	return exception, nil
 }
 
 // Close finishes the files once every row the plan counted is written.
