@@ -359,7 +359,7 @@ row read per level.
 
 | File | Description |
 |------|-------------|
-| `prefix_dict.bin` | Every distinct segment once, concatenated (no separators) |
+| `prefix_dict.bin` | The segments, concatenated (no separators): each distinct one once, unless the build's interner budget could not hold them all |
 | `prefix_dict.off.u64` | Byte offset for each segment in `prefix_dict.bin`; trailing sentinel marks the end |
 | `prefix_tree.bin` | Per prefix in position order: its last segment's ID and the distance back to its parent's position (a row of the level above) |
 
@@ -374,9 +374,14 @@ row read per level.
 
 Both widths come from the largest value in this index. The root `""`
 is position 0 and its row is zero; every other row has a distance of at
-least 1. Segment IDs number the distinct segments in the order they
+least 1. Segment IDs number the dictionary's entries in the order they
 first appear in key order: the builder interns each prefix's segment as
-it spools the prefix, so the spool holds an ID, not the name. A row's
+it spools the prefix, so the spool holds an ID, not the name. The
+interner remembers segments in two generations within 1/16 of
+`GOMEMLIMIT` (64 MiB with no limit); a segment that comes back only
+after a generation's worth of new ones is written again under a new ID.
+Readers never look a segment up by name, so a repeat costs only its
+bytes: the dictionary has at most one entry per prefix. A row's
 distance is the size of the depth above plus its index within its depth
 minus its parent's, so the builder keeps the largest such difference
 per depth and knows the widest distance once the depths' sizes are
@@ -400,7 +405,9 @@ sorted order.
 On Open, all segments are preloaded into an in-memory cache (unique
 segments are few next to prefixes: 9,262 segments for 2.37M prefixes
 on the 1M-object benchmark fixture), so the warm-path cost is one
-cache lookup per segment rather than a blob read.
+cache lookup per segment rather than a blob read. With a directory per
+object there is a segment per prefix, and the cache holds each one's
+bytes plus an 8-byte offset (`BenchmarkOpenManySegments`).
 
 ## Tier Statistics
 
