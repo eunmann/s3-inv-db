@@ -57,8 +57,9 @@ next build into the same `--out`. Concurrent builds into the same
 directory beside `--out`, including one a still-running build is
 writing, and that build then fails.
 
-Worker counts and S3 part concurrency derive from `runtime.NumCPU()`;
-the process memory ceiling is `GOMEMLIMIT`. Both are intentionally
+Worker counts and S3 part concurrency derive from `GOMAXPROCS`, which
+follows a container CPU quota (or set it to override); the process
+memory ceiling is `GOMEMLIMIT`. Both are intentionally
 flagless: see [how it works](how-it-works.md#building) and
 [operations](operations.md#memory).
 
