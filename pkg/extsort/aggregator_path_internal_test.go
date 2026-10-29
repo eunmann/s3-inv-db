@@ -186,15 +186,18 @@ func TestAggregatorSegmentsAreExact(t *testing.T) {
 }
 
 // checkAggregatorAccounting recomputes from the nodes what the
-// aggregator has counted: the estimate (every node and its segment, the
+// aggregator has counted: the estimate (every node and its key, the
 // prefix of each live one, every map entry) and the prefix bytes Drain
-// writes.
+// writes. It also checks that every map key names its node's parent and
+// segment.
 func checkAggregatorAccounting(t *testing.T, agg *Aggregator) {
 	t.Helper()
-	var segBytes, prefixBytes int
+	var keyBytes, prefixBytes int
 	for i := range agg.used {
 		n := agg.node(uint32(i))
-		segBytes += len(n.row.Prefix)
+		if n.row.Prefix != "" {
+			keyBytes += nodeKeyHeader + len(n.row.Prefix)
+		}
 		if n.parent == deadNode {
 			continue
 		}
@@ -202,7 +205,13 @@ func checkAggregatorAccounting(t *testing.T, agg *Aggregator) {
 			prefixBytes += len(p.row.Prefix)
 		}
 	}
-	want := int64(agg.used)*aggregatorNodeBytes + int64(segBytes+prefixBytes) +
+	for key, idx := range agg.children {
+		n := agg.node(idx)
+		if want := string(appendNodeKey(nil, n.parent, n.row.Prefix)); key != want {
+			t.Fatalf("map key %q names node %d, whose key is %q", key, idx, want)
+		}
+	}
+	want := int64(agg.used)*aggregatorNodeBytes + int64(keyBytes+prefixBytes) +
 		int64(len(agg.children))*aggregatorMapEntryBytes
 	if agg.prefixBytes != prefixBytes || agg.bytes != want {
 		t.Fatalf("counted %d prefix bytes and an estimate of %d; the nodes have %d and %d",

@@ -59,12 +59,13 @@ func TestHeapReadingsUnderPressure(t *testing.T) {
 	}
 }
 
-// EstimatedMemoryUsage counts each new prefix once, with its segment,
-// the prefix Drain writes and its map entry; a segment's nodes add map
+// EstimatedMemoryUsage counts each new prefix once, with its key (the
+// parent's index and the segment), the prefix Drain writes and its map
+// entry; a segment's nodes add map
 // entries when it is mapped and give back the prefixes of those merged
 // into the main tree; a Drain starts it over.
 func TestAggregatorEstimateCountsEachPrefix(t *testing.T) {
-	const node, entry = aggregatorNodeBytes, aggregatorMapEntryBytes
+	const node, entry, h = aggregatorNodeBytes, aggregatorMapEntryBytes, nodeKeyHeader
 	agg := NewAggregator(0, 0)
 	check := func(step string, want int64) {
 		t.Helper()
@@ -75,20 +76,20 @@ func TestAggregatorEstimateCountsEachPrefix(t *testing.T) {
 	for _, k := range []string{"a/b/x", "a/b/y", "a/c/z", "top"} {
 		agg.AddObject(k, 1, tiers.Standard)
 	}
-	// "" (no map entry), then "a/", "a/b/", "a/c/": segment + prefix.
-	want := 4*node + 3*entry + (2 + 2) + (2 + 4) + (2 + 4)
+	// "" (no key, no map entry), then "a/", "a/b/", "a/c/": key + prefix.
+	want := 4*node + 3*entry + (h + 2 + 2) + (h + 2 + 4) + (h + 2 + 4)
 	check("map", want)
 
 	agg.StartSegment()
 	agg.AddObject("a/b/z", 1, tiers.Standard)
 	// A root, "a/" and "a/b/" of the segment's own, in no map.
-	want += 3*node + (2 + 2) + (2 + 4)
+	want += 3*node + (h + 2 + 2) + (h + 2 + 4)
 	check("ordered segment", want)
 
 	agg.AddObject("a/a/x", 1, tiers.Standard)
 	// Mapping merges the three into the main tree's, whose prefixes Drain
 	// writes once; then "a/a/" is new.
-	want += -(2 + 4) + node + entry + (2 + 4)
+	want += -(2 + 4) + node + entry + (h + 2 + 4)
 	check("mapped segment", want)
 	if got := agg.PrefixCount(); got != 5 {
 		t.Errorf("PrefixCount = %d, want 5", got)
