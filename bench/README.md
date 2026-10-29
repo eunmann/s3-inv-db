@@ -155,8 +155,8 @@ Ingestion (`bench/suite/ingest.txt`):
   finalize step runs to the build's end, so it includes publishing the
   index and removing scratch; names are lowercased, other characters as
   underscores), and `phase_<name>_cores`, the cores the phase kept
-  busy: one well under the CPU count is held up by one goroutine, not by
-  CPU. Reported, not gated.
+  busy: one well under the CPU count is waiting, on a serial goroutine
+  or on S3 or disk I/O, not bound by CPU. Reported, not gated.
 - `internal/loader` `BenchmarkPipelineSlowS3`: the same build against
   S3 behind a slower link (20 ms to first byte, 8 MiB/s per GET), four
   chunks per worker: the time a build waits on S3.
