@@ -440,20 +440,34 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 
 	b.closeNodesAbove(0)
 
-	log.Debug().Uint64("prefix_count", b.posCount).Msg("index builder: writing rows in level order")
-
-	if err := b.writeLevels(); err != nil {
+	segments, err := b.finishSpool()
+	if err != nil {
 		return err
 	}
-	if err := b.writeTierManifest(); err != nil {
-		return err
-	}
+	starts := b.levelStarts()
 
 	log.Debug().
 		Uint64("mphf_keys", b.mphfBuilder.Count()).
-		Msg("index builder: building the MPHF")
+		Msg("index builder: building the MPHF beside the level-order rows")
 
-	if err := b.buildMPHF(ctx); err != nil {
+	mphfStart := time.Now()
+	mphf, err := b.mphfBuilder.Start(ctx, b.outDir, starts, max(1, runtime.GOMAXPROCS(0)-writeLevelsProcs))
+	if err != nil {
+		return fmt.Errorf("build MPHF: %w", err)
+	}
+
+	log.Debug().Uint64("prefix_count", b.posCount).Msg("index builder: writing rows in level order")
+
+	err = b.writeLevels(starts, segments)
+	if err == nil {
+		err = b.writeTierManifest()
+	}
+	if err != nil {
+		mphf.Abort()
+
+		return errors.Join(err, mphf.Wait())
+	}
+	if err := b.finishMPHF(ctx, mphf, mphfStart); err != nil {
 		return err
 	}
 
@@ -569,19 +583,7 @@ func (h *levelHandoff) drain(i int, write func(depth int, r *spoolRecord) error)
 // and parent become rows once every depth's size is known: the first
 // row of a depth is the number of rows above it. The writers take their
 // widths from the plans the spool's writer filled.
-func (b *IndexBuilder) writeLevels() error {
-	if err := b.spool.finish(); err != nil {
-		return err
-	}
-	// The dictionary is complete: closing the interner writes its end and
-	// frees its segment map before the replay.
-	err := b.interner.Close()
-	segments := b.interner.Count()
-	b.interner = nil
-	if err != nil {
-		return fmt.Errorf("write prefix dictionary: %w", err)
-	}
-	starts := b.levelStarts()
+func (b *IndexBuilder) writeLevels(starts []uint64, segments uint32) error {
 	total := int64(b.posCount)
 	var written int64
 	b.stepProgress(stepWriteLevels, 0, total)
@@ -616,6 +618,24 @@ func (b *IndexBuilder) writeLevels() error {
 	b.stepProgress(stepWriteLevels, total, total)
 
 	return os.RemoveAll(b.spool.dir) //nolint:wrapcheck // the path is in the error
+}
+
+// finishSpool ends the spool's writer, which completes the plans and
+// the MPHF keys, and closes the interner, which writes the dictionary's
+// end and frees its segment map before the replay. It returns the
+// segment count.
+func (b *IndexBuilder) finishSpool() (uint32, error) {
+	if err := b.spool.finish(); err != nil {
+		return 0, err
+	}
+	err := b.interner.Close()
+	segments := b.interner.Count()
+	b.interner = nil
+	if err != nil {
+		return 0, fmt.Errorf("write prefix dictionary: %w", err)
+	}
+
+	return segments, nil
 }
 
 // levelStarts returns each depth's first row in level order and, last,
@@ -840,21 +860,21 @@ func mphfMemoryBudget(memoryLimit int64) int64 {
 	return int64(float64(memoryLimit) * mphfFractionOfLimit)
 }
 
-// buildMPHF builds the MPHF and logs progress.
-func (b *IndexBuilder) buildMPHF(ctx context.Context) error {
-	log := zerolog.Ctx(ctx)
-	mphfStart := time.Now()
-	h, err := b.mphfBuilder.Start(ctx, b.outDir, b.levelStarts(), runtime.GOMAXPROCS(0))
-	if err != nil {
-		return fmt.Errorf("build MPHF: %w", err)
-	}
+// writeLevelsProcs is the cores writeLevels keeps busy: its spool
+// reader and its two writing sides. The MPHF build runs beside it on
+// the rest, then on every core.
+const writeLevelsProcs = 3
+
+// finishMPHF reports the MPHF build that ran beside writeLevels as the
+// next step, gives it every core and waits for it.
+func (b *IndexBuilder) finishMPHF(ctx context.Context, h *format.MPHFBuild, started time.Time) error {
 	h.SetProgress(b.stepProgress)
+	h.Grow(runtime.GOMAXPROCS(0))
 	if err := h.Wait(); err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
-
-	log.Debug().
-		Str("mphf_duration", humanfmt.Duration(time.Since(mphfStart))).
+	zerolog.Ctx(ctx).Debug().
+		Str("mphf_duration", humanfmt.Duration(time.Since(started))).
 		Msg("index builder: MPHF build complete")
 
 	return nil

@@ -476,3 +476,32 @@ func TestMPHFSpillFailureFailsTheBuild(t *testing.T) {
 	}
 	b.cleanup()
 }
+
+// TestFinalizeLevelsFailureStopsMPHF: writeLevels failing (here, it
+// cannot create the prefix tree) while the MPHF builds beside it fails
+// Finalize with that error once the MPHF build has stopped, and cleanup
+// leaves no scratch and no output.
+func TestFinalizeLevelsFailureStopsMPHF(t *testing.T) {
+	for _, rows := range []int{10, 70_000} {
+		tempDir := t.TempDir()
+		outDir := filepath.Join(t.TempDir(), "index")
+		b, err := NewIndexBuilder(outDir, tempDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := addFlatRows(t, b, rows); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Join(outDir, format.PrefixTreeFile), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Finalize(); err == nil || !strings.Contains(err.Error(), "prefix tree") {
+			t.Fatalf("%d rows: Finalize = %v, want the prefix tree's failure", rows, err)
+		}
+		b.cleanup()
+		assertNoScratch(t, tempDir)
+		if _, err := os.Stat(outDir); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%d rows: output dir after cleanup: %v", rows, err)
+		}
+	}
+}
