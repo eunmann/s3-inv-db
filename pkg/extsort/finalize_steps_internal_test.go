@@ -55,7 +55,7 @@ func TestFinalizeReportsEachStep(t *testing.T) {
 		t.Fatalf("Finalize: %v", err)
 	}
 
-	wantSteps := []string{stepWriteLevels, format.StepBuildHash, format.StepPlaceSlots, format.StepSlotFile, stepFinishRows, format.StepChecksum}
+	wantSteps := []string{stepWriteLevels, format.StepBuildHash, format.StepPlaceSlots, format.StepSlotFile, format.StepChecksum}
 	var steps []string
 	last := map[string]events.Progress{}
 	for _, p := range rec.got {

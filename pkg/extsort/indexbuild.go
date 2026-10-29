@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -30,20 +31,26 @@ import (
 // row's, and scans of a level read its rows in sequence. Add checks
 // each row against its ancestors (a depth stack) and spools it by
 // depth (levelSpool), whose writer goroutine also plans the core and
-// tier files' widths from every row; Finalize replays the depths in
-// order into the index writers, which write each file in its final form.
+// tier files' widths from every row and interns its last segment;
+// Finalize replays the depths in order into the index writers, which
+// write each file in its final form.
 //
 // Memory is bounded: rows and prefix hashes go to disk, and the stack
 // holds one entry per depth.
 type IndexBuilder struct {
-	// The plans are filled on the spool's writer goroutine, and read
-	// once Finalize has stopped it.
-	tierPlan      *format.TierStatsPlan
-	corePlan      format.CoreStatsPlan
+	// The plans and the interner are filled on the spool's writer
+	// goroutine, and read once Finalize has stopped it.
+	tierPlan *format.TierStatsPlan
+	corePlan format.CoreStatsPlan
+	interner *format.PrefixSegmentInterner
+	// treePlan holds, per depth, the rows the spool's writer has seen
+	// and the most a row's index within its depth exceeds its parent's:
+	// with the depths' sizes that gives the widest parent distance.
+	treePlan      treePlan
 	coreW         *format.CoreStatsWriter
 	tierW         *format.TierStatsWriter
 	mphfBuilder   *format.StreamingMPHFBuilder
-	prefixTreeW   *format.PrefixTreeScratchWriter
+	prefixTreeW   *format.PrefixTreeWriter
 	spool         *levelSpool
 	levelRows     []uint64 // rows seen so far at each depth
 	declaredTiers []tiers.ID
@@ -101,18 +108,18 @@ func NewIndexBuilderWithCapacity(outDir, tempDir string, _ uint64) (*IndexBuilde
 		return nil, errors.Join(fmt.Errorf("create MPHF builder: %w", err), os.RemoveAll(spoolDir))
 	}
 
-	prefixTreeW, err := format.NewPrefixTreeScratchWriter(outDir)
+	interner, err := format.NewPrefixSegmentInterner(outDir)
 	if err != nil {
 		mphfBuilder.Close()
 
-		return nil, errors.Join(fmt.Errorf("create prefix tree writer: %w", err), os.RemoveAll(spoolDir))
+		return nil, errors.Join(fmt.Errorf("create prefix segment interner: %w", err), os.RemoveAll(spoolDir))
 	}
 
 	b := &IndexBuilder{
 		outDir:        outDir,
 		tempDir:       tempDir,
 		mphfBuilder:   mphfBuilder,
-		prefixTreeW:   prefixTreeW,
+		interner:      interner,
 		spool:         newLevelSpool(spoolDir),
 		stack:         make([]stackEntry, 0, 32),
 		createdOutDir: createdOutDir,
@@ -156,16 +163,55 @@ func (b *IndexBuilder) startTierPlan() error {
 	return nil
 }
 
-// planRow adds a row to the core and tier plans. It runs on the spool's
-// writer goroutine, which sees every row once, in Add order.
+// planRow adds a row to the core, tier and tree plans and interns its
+// last segment into r's segment ID. It runs on the spool's writer
+// goroutine, which sees every row once, in Add order.
 func (b *IndexBuilder) planRow(depth int, r *spoolRecord) error {
 	mask, err := b.tierPlan.Add(&r.tierCounts, &r.tierBytes, r.count, r.bytes)
 	if err != nil {
 		return fmt.Errorf("prefix segment %q at depth %d: tier stats: %w", r.name, depth, err)
 	}
 	b.corePlan.Add(r.count, r.bytes, mask)
+	if depth > 0 {
+		// The interner copies a new segment, so the name may alias the
+		// record's buffer.
+		if r.segID, err = b.interner.Intern(unsafe.String(unsafe.SliceData(r.name), len(r.name))); err != nil {
+			return fmt.Errorf("prefix segment %q at depth %d: %w", r.name, depth, err)
+		}
+	}
+	b.treePlan.add(depth, r.parentLocal)
 
 	return nil
+}
+
+// treePlan follows each depth's rows on the spool's writer goroutine.
+// A row's parent distance in level order is its depth's start minus its
+// parent's depth's start (the parent depth's size) plus its index within
+// its depth minus its parent's; the plan keeps the largest second part
+// per depth.
+type treePlan struct {
+	rows     []uint64 // rows seen at each depth
+	maxDelta []int64  // the largest index minus parent index at each depth
+}
+
+func (p *treePlan) add(depth int, parentLocal uint64) {
+	for len(p.rows) <= depth {
+		p.rows = append(p.rows, 0)
+		p.maxDelta = append(p.maxDelta, math.MinInt64)
+	}
+	p.maxDelta[depth] = max(p.maxDelta[depth], int64(p.rows[depth])-int64(parentLocal))
+	p.rows[depth]++
+}
+
+// maxDist is the widest parent distance once every depth's size is
+// known; 0 when only the root has been added.
+func (p *treePlan) maxDist(levelRows []uint64) uint64 {
+	var widest int64
+	for depth := 1; depth < len(p.maxDelta); depth++ {
+		widest = max(widest, int64(levelRows[depth-1])+p.maxDelta[depth])
+	}
+
+	return uint64(widest)
 }
 
 // cleanup releases every writer and scratch file after a failed build,
@@ -181,6 +227,9 @@ func (b *IndexBuilder) cleanup() {
 	}
 	if b.mphfBuilder != nil {
 		b.mphfBuilder.Close()
+	}
+	if b.interner != nil {
+		_ = b.interner.Close()
 	}
 	if b.prefixTreeW != nil {
 		_ = b.prefixTreeW.Abort()
@@ -397,26 +446,17 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 	if err := b.writeLevels(); err != nil {
 		return err
 	}
-
-	log.Debug().
-		Uint64("prefix_count", b.posCount).
-		Uint64("mphf_keys", b.mphfBuilder.Count()).
-		Msg("index builder: finalizing row files and building the MPHF")
-
-	// The prefix tree's repack and the MPHF build share nothing, so they
-	// run side by side: the build's serial tail is the longer of the two.
-	rowsDone := make(chan error, 1)
-	go func() { rowsDone <- b.closeStreamingWriters() }()
-	mphfErr := b.buildMPHF(ctx)
-	b.stepProgress(stepFinishRows, 0, 1)
-	if err := errors.Join(<-rowsDone, mphfErr); err != nil {
-		return err
-	}
-
 	if err := b.writeTierManifest(); err != nil {
 		return err
 	}
-	b.stepProgress(stepFinishRows, 1, 1)
+
+	log.Debug().
+		Uint64("mphf_keys", b.mphfBuilder.Count()).
+		Msg("index builder: building the MPHF")
+
+	if err := b.buildMPHF(ctx); err != nil {
+		return err
+	}
 
 	log.Debug().Msg("index builder: writing manifest")
 
@@ -528,11 +568,19 @@ func (h *levelHandoff) drain(i int, write func(depth int, r *spoolRecord) error)
 // writeLevels replays the spooled rows depth by depth into the index
 // writers, so every per-row file is in level order. A row's child start
 // and parent become rows once every depth's size is known: the first
-// row of a depth is the number of rows above it. The core and tier
-// writers take their widths from the plans the spool's writer filled.
+// row of a depth is the number of rows above it. The writers take their
+// widths from the plans the spool's writer filled.
 func (b *IndexBuilder) writeLevels() error {
 	if err := b.spool.finish(); err != nil {
 		return err
+	}
+	// The dictionary is complete: closing the interner writes its end and
+	// frees its segment map before the replay.
+	err := b.interner.Close()
+	segments := b.interner.Count()
+	b.interner = nil
+	if err != nil {
+		return fmt.Errorf("write prefix dictionary: %w", err)
 	}
 	starts := make([]uint64, len(b.levelRows)+1)
 	for d, n := range b.levelRows {
@@ -548,6 +596,9 @@ func (b *IndexBuilder) writeLevels() error {
 	if err != nil {
 		return err
 	}
+	if b.prefixTreeW, err = format.NewPrefixTreeWriter(b.outDir, b.posCount, segments, b.treePlan.maxDist(b.levelRows)); err != nil {
+		return errors.Join(fmt.Errorf("create prefix tree: %w", err), depthW.Abort())
+	}
 	err = b.replayLevels(func(depth int, r *spoolRecord) error {
 		written++
 		if written%levelsProgressEvery == 0 {
@@ -562,6 +613,10 @@ func (b *IndexBuilder) writeLevels() error {
 	if err := b.closeStatsWriters(depthW); err != nil {
 		return err
 	}
+	if err := b.prefixTreeW.Close(); err != nil {
+		return fmt.Errorf("close prefix tree: %w", err)
+	}
+	b.prefixTreeW = nil
 	b.stepProgress(stepWriteLevels, total, total)
 
 	return os.RemoveAll(b.spool.dir) //nolint:wrapcheck // the path is in the error
@@ -755,26 +810,14 @@ func (b *IndexBuilder) writeNameRow(starts []uint64, depth int, r *spoolRecord) 
 	if depth == 0 {
 		err = b.prefixTreeW.AddRoot()
 	} else {
-		// The writer allows a name that aliases a reused buffer.
-		err = b.prefixTreeW.Add(starts[depth-1]+r.parentLocal, unsafe.String(unsafe.SliceData(r.name), len(r.name)))
+		err = b.prefixTreeW.Add(starts[depth-1]+r.parentLocal, r.segID)
 	}
 	if err != nil {
-		return fmt.Errorf("prefix segment %q at depth %d: %w", r.name, depth, err)
+		return fmt.Errorf("prefix tree row at depth %d: %w", depth, err)
 	}
 	if err := b.mphfBuilder.AddHashed(r.keyHash, r.fp); err != nil {
 		return fmt.Errorf("add to MPHF builder: %w", err)
 	}
-
-	return nil
-}
-
-// closeStreamingWriters writes the prefix tree from its scratch file;
-// on failure the writer stays set for cleanup to abort.
-func (b *IndexBuilder) closeStreamingWriters() error {
-	if err := b.prefixTreeW.Close(); err != nil {
-		return fmt.Errorf("finalize prefix tree: %w", err)
-	}
-	b.prefixTreeW = nil
 
 	return nil
 }

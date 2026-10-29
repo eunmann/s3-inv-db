@@ -5,8 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -273,4 +277,108 @@ func byteWidthNeed(v uint64) uint8 {
 	}
 
 	return w
+}
+
+// randomPrefixes is a random tree's prefixes in key order, root first:
+// names repeat across parents and fanouts vary, so a row's index within
+// its depth can be far below or above its parent's.
+func randomPrefixes(r *rand.Rand, depth int) []string {
+	var walk func(prefix string, d int) []string
+	walk = func(prefix string, d int) []string {
+		out := []string{prefix}
+		if d == depth {
+			return out
+		}
+		picked := map[string]bool{}
+		for range r.IntN([]int{1, 4, 12}[r.IntN(3)]) {
+			picked[fmt.Sprintf("s%02d", r.IntN(40))] = true
+		}
+		for _, name := range slices.Sorted(maps.Keys(picked)) {
+			out = append(out, walk(prefix+name+"/", d+1)...)
+		}
+
+		return out
+	}
+
+	return walk("", 0)
+}
+
+// TestIndexBuilderTreeDecodesEveryPrefix: the builder interns segments
+// in key order while the tree is in level order; every position still
+// decodes to its prefix, the dictionary lists segments by first
+// appearance in key order, and the parent distance takes the width its
+// largest value needs.
+func TestIndexBuilderTreeDecodesEveryPrefix(t *testing.T) {
+	for seed := range uint64(5) {
+		prefixes := randomPrefixes(rand.New(rand.NewPCG(seed, 7)), 2+int(seed))
+		dir := t.TempDir()
+		b, err := NewIndexBuilder(dir, t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range prefixes {
+			row := &PrefixRow{Prefix: p, Depth: uint16(strings.Count(p, "/")), Count: 1, TotalBytes: 1}
+			row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = 1, 1
+			if err := b.Add(row); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := b.Finalize(); err != nil {
+			t.Fatal(err)
+		}
+
+		levelOrder := slices.Clone(prefixes)
+		slices.SortStableFunc(levelOrder, func(a, b string) int { return strings.Count(a, "/") - strings.Count(b, "/") })
+		pos := make(map[string]uint64, len(levelOrder))
+		var maxDist uint64
+		for i, p := range levelOrder {
+			pos[p] = uint64(i)
+			if p != "" {
+				parent := p[:strings.LastIndexByte(p[:len(p)-1], '/')+1]
+				maxDist = max(maxDist, uint64(i)-pos[parent])
+			}
+		}
+		tree, err := format.OpenPrefixTreeReader(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, want := range levelOrder {
+			if got, err := tree.Prefix(uint64(i)); err != nil || got != want {
+				t.Fatalf("seed %d: Prefix(%d) = %q, %v; want %q", seed, i, got, err, want)
+			}
+		}
+		tree.Close()
+
+		dict, err := format.OpenPrefixDictionary(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var firstSeen []string
+		seen := map[string]bool{}
+		for _, p := range prefixes[1:] {
+			name := p[strings.LastIndexByte(p[:len(p)-1], '/')+1 : len(p)-1]
+			if !seen[name] {
+				seen[name] = true
+				firstSeen = append(firstSeen, name)
+			}
+		}
+		if dict.Count() != uint64(len(firstSeen)) {
+			t.Errorf("seed %d: %d segments, want %d", seed, dict.Count(), len(firstSeen))
+		}
+		for id, want := range firstSeen {
+			if got, err := dict.GetSegment(uint32(id)); err != nil || got != want {
+				t.Fatalf("seed %d: segment %d = %q, %v; want %q", seed, id, got, err, want)
+			}
+		}
+		dict.Close()
+
+		data, err := os.ReadFile(filepath.Join(dir, format.PrefixTreeFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A plain width: a distance of 255 still fits one byte.
+		if got, want := data[format.HeaderSize+1], byteWidthNeed(maxDist-1); got != want {
+			t.Errorf("seed %d: parent distance width %d for a largest distance of %d, want %d", seed, got, maxDist, want)
+		}
+	}
 }
