@@ -48,20 +48,23 @@ refused and the run keeps the pin it had before. Until the server restarts, load
 its measured size, so it is refused before rebuilding while the space
 is still short.
 
-The budget counts indexes only. **Size the volume for scratch too**:
-at least 2× the largest manifest's compressed size, per concurrent
-build, on top of `max_index_disk`.
+An index's size is set by prefixes (distinct directories, objects' and
+their parents'), not objects: about 28 bytes per prefix when directory
+names repeat, plus each distinct name's length when they don't (64
+bytes per prefix with a UUID directory per object).
 
-For scale, a synthetic inventory measured (`BenchmarkLoadDiskPeak`):
+The budget counts indexes only. **Size the volume for scratch too**,
+per concurrent build, on top of `max_index_disk`: scratch and index
+peak together while the build finalizes, at the index plus about 100
+bytes per prefix (165 bytes per prefix for a UUID directory per
+object, 2.5× its gzipped inventory). Run files spilled under memory
+pressure (10–30 bytes per prefix) are removed before that peak.
 
-| Objects | Index | Run-file scratch |
-|---|---|---|
-| 10 K | ~2.1 MB | ~0.6 MB |
-| 100 K | ~18.6 MB | ~5.6 MB |
-| 500 K | ~86.7 MB | ~26 MB |
-
-An index is about 28 bytes per prefix (1M-object fixture: 2.37M
-prefixes, 66.8 MB); prefixes, not objects, set its size.
+Measured with `BenchmarkPipeline` at 1M objects: the `realistic`
+fixture has 2.37M prefixes and a 66.8 MB index from a 51 MiB gzipped
+inventory; `unique_dirs` (`uploads/<user>/<uuid>/<file>`) has 1.00M
+prefixes and a 64.0 MB index from 65.1 MB gzipped, and its build
+peaked at 163 MB of scratch plus index (`peak_disk_B`).
 
 ## Cache directory
 
