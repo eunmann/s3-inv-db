@@ -30,20 +30,50 @@ type Aggregator struct {
 	// (path[0] is the root's): the next key reuses the ones whose
 	// prefix it starts with and looks up only the levels below. Keys
 	// in order (as S3 Inventory lists them) share most of their path.
-	path     []*PrefixRow
+	path []*PrefixRow
+	// segments are the rows since the last Drain by the StartSegment
+	// that began them (a chunk each), and lastKey is the previous key of
+	// the current one. A segment whose keys come in order needs no map;
+	// see StartSegment.
+	segments []aggSegment
+	lastKey  []byte
+	// merged is Drain's output when there are segments to merge, and
+	// mapped its buffer for the mapped segments' rows. mapDups is set
+	// once mapping a segment met a prefix already in the map, so two of
+	// its rows are in the mapped rows.
+	merged   []*PrefixRow
+	mapped   []*PrefixRow
+	mapDups  bool
 	used     int
 	maxDepth int
 	// bytes is the heap the rows since the last Drain take: each row,
-	// its prefix string and its map entry (EstimatedMemoryUsage).
+	// its prefix string and, for a row in the map, its map entry
+	// (EstimatedMemoryUsage).
 	bytes    int64
 	tierMask uint16
+}
+
+// aggSegment is a run of rows from one StartSegment: from start to the
+// next segment's start. Its rows are in creation order, which is sorted
+// with no prefix twice, until an out-of-order key maps it: its rows go
+// into the map and every later row of it is looked up there.
+type aggSegment struct {
+	start  int
+	mapped bool
 }
 
 // aggregatorEntryBytes is a prefix's heap cost besides its string: its
 // PrefixRow and its map entry (key header, value pointer, control byte
 // and load-factor slack). Measured: 328 B/prefix for 29 B prefixes and
 // 475 B/prefix for 185 B ones, both within 2% of this plus the length.
-const aggregatorEntryBytes = int64(unsafe.Sizeof(PrefixRow{})) + 48
+const aggregatorEntryBytes = aggregatorRowBytes + aggregatorMapEntryBytes
+
+// aggregatorRowBytes is a row's heap cost besides its string when it is
+// not in the map, and aggregatorMapEntryBytes what the map adds.
+const (
+	aggregatorRowBytes      = int64(unsafe.Sizeof(PrefixRow{}))
+	aggregatorMapEntryBytes = 48
+)
 
 // NewAggregator creates a new prefix aggregator with the given initial capacity.
 // Use maxDepth=0 for unlimited depth.
@@ -64,6 +94,13 @@ func NewAggregator(initialCapacity, maxDepth int) *Aggregator {
 // The key should be the full S3 object key (e.g., "data/2024/01/file.csv").
 func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 	a.tierMask |= uint16(1) << tierID
+	if a.inOrder() {
+		if key < string(a.lastKey) {
+			a.mapSegment()
+		} else {
+			a.lastKey = append(a.lastKey[:0], key...)
+		}
+	}
 
 	path := a.path
 	if len(path) == 0 {
@@ -102,6 +139,15 @@ func (a *Aggregator) AddObject(key string, size uint64, tierID tiers.ID) {
 // cloned: the caller's key is usually a substring of a whole inventory
 // record, which the map would otherwise keep alive.
 func (a *Aggregator) row(prefix string, depth uint16) *PrefixRow {
+	if a.inOrder() {
+		// In an ordered segment a prefix not on the path is new: see
+		// StartSegment.
+		row := a.newRow()
+		row.Prefix, row.Depth = strings.Clone(prefix), depth
+		a.bytes += aggregatorRowBytes + int64(len(prefix))
+
+		return row
+	}
 	row, ok := a.prefixes[prefix]
 	if !ok {
 		owned := strings.Clone(prefix)
@@ -130,8 +176,51 @@ func (a *Aggregator) newRow() *PrefixRow {
 	return row
 }
 
+// PrefixCount returns the rows since the last Drain: the prefixes seen,
+// counting one seen in several segments once per segment.
 func (a *Aggregator) PrefixCount() int {
-	return len(a.prefixes)
+	return a.used
+}
+
+// StartSegment marks the start of a run of keys likely in order, such
+// as one inventory file's (S3 Inventory lists keys in order). While
+// they are, every prefix not on the previous key's path is one the
+// segment has not seen: it sorts after every prefix created before it
+// (two keys in order their prefixes, and a prefix of both is
+// prefix of every key between them, so on the cached path). Its row is
+// then created without a map lookup, and the segment's rows are sorted
+// as created. The first key out of order maps the segment, and the rest
+// of it aggregates through the map as without segments; the result is
+// the same either way. Drain merges the segments, so prefixes the
+// segments share come out once.
+func (a *Aggregator) StartSegment() {
+	a.segments = append(a.segments, aggSegment{start: a.used})
+	a.lastKey = a.lastKey[:0]
+	clear(a.path)
+	a.path = a.path[:0]
+}
+
+// inOrder reports whether rows are being created in an ordered segment.
+func (a *Aggregator) inOrder() bool {
+	n := len(a.segments)
+
+	return n > 0 && !a.segments[n-1].mapped
+}
+
+// mapSegment moves the current segment's rows into the map, for a key
+// out of order. A prefix already in the map from another segment keeps
+// both rows; Drain merges them.
+func (a *Aggregator) mapSegment() {
+	seg := &a.segments[len(a.segments)-1]
+	seg.mapped = true
+	for i := seg.start; i < a.used; i++ {
+		row := &a.slabs[i/rowSlabLen][i%rowSlabLen]
+		if _, ok := a.prefixes[row.Prefix]; ok {
+			a.mapDups = true
+		}
+		a.prefixes[row.Prefix] = row
+		a.bytes += aggregatorMapEntryBytes
+	}
 }
 
 // TierMask returns the bitmask of tier IDs this aggregator has seen
@@ -285,6 +374,12 @@ func (a *Aggregator) Drain() []*PrefixRow {
 		}
 	}
 	a.drained = rows
+	if len(a.segments) > 0 {
+		rows = a.mergeSegments(rows)
+		// A segment cut by the Drain goes on in the same mode.
+		last := a.segments[len(a.segments)-1]
+		a.segments = append(a.segments[:0], aggSegment{mapped: last.mapped})
+	}
 
 	clear(a.prefixes)
 	a.used = 0
@@ -297,12 +392,82 @@ func (a *Aggregator) Drain() []*PrefixRow {
 }
 
 // DrainSorted is Drain with the rows sorted by prefix, through a sort
-// buffer the aggregator keeps for the next spill.
+// buffer the aggregator keeps for the next spill. With segments, Drain's
+// merge has sorted them already.
 func (a *Aggregator) DrainSorted() []*PrefixRow {
+	segmented := len(a.segments) > 0
 	rows := a.Drain()
-	a.sortScratch = sortPrefixRows(rows, a.sortScratch)
+	if !segmented {
+		a.sortScratch = sortPrefixRows(rows, a.sortScratch)
+	}
 
 	return rows
+}
+
+// mergeSegments merges rows, in creation order, into one sorted run with
+// each prefix once: every ordered segment is a sorted run already, and
+// the mapped segments' rows (with any made before the first segment)
+// are sorted together into one more. A prefix in several runs has its
+// rows merged into the first.
+func (a *Aggregator) mergeSegments(rows []*PrefixRow) []*PrefixRow {
+	dups := a.mapDups
+	a.mapDups = false
+	if a.allMapped(len(rows)) {
+		// Keys out of order from the start: one sort, as without
+		// segments.
+		a.sortScratch = sortPrefixRows(rows, a.sortScratch)
+		if !dups {
+			return rows
+		}
+
+		return mergeAdjacent(rows)
+	}
+	var runs [][]*PrefixRow
+	a.mapped = append(a.mapped[:0], rows[:a.segments[0].start]...)
+	mapped := a.mapped
+	for i, seg := range a.segments {
+		end := len(rows)
+		if i+1 < len(a.segments) {
+			end = a.segments[i+1].start
+		}
+		switch {
+		case seg.start == end:
+		case seg.mapped:
+			mapped = append(mapped, rows[seg.start:end]...)
+		default:
+			runs = append(runs, rows[seg.start:end])
+		}
+	}
+	if len(mapped) > 0 {
+		a.sortScratch = sortPrefixRows(mapped, a.sortScratch)
+		runs = append(runs, mapped)
+	}
+	a.mapped = mapped
+
+	out := a.merged[:0]
+	var h typedMergeHeap
+	for i, run := range runs {
+		h.push(mergeItem{row: run[0], readerIdx: i})
+	}
+	next := make([]int, len(runs))
+	for h.Len() > 0 {
+		top := h.items[0]
+		if n := len(out); n > 0 && out[n-1].Prefix == top.row.Prefix {
+			out[n-1].Merge(top.row)
+		} else {
+			out = append(out, top.row)
+		}
+		next[top.readerIdx]++
+		if next[top.readerIdx] < len(runs[top.readerIdx]) {
+			h.items[0].row = runs[top.readerIdx][next[top.readerIdx]]
+			h.siftDown(0)
+		} else {
+			h.pop()
+		}
+	}
+	a.merged = out
+
+	return out
 }
 
 // Release drops the drained aggregator's slabs, Drain slice, sort
@@ -310,6 +475,39 @@ func (a *Aggregator) DrainSorted() []*PrefixRow {
 // done with the last Drain. Call it only on an empty (just drained)
 // aggregator.
 func (a *Aggregator) Release() {
-	a.slabs, a.drained, a.sortScratch, a.path = nil, nil, nil, nil
+	a.mapDups = false
+	a.slabs, a.drained, a.sortScratch, a.path, a.merged, a.mapped = nil, nil, nil, nil, nil, nil
 	a.prefixes = make(map[string]*PrefixRow)
+}
+
+// allMapped reports whether every one of the n rows is in a mapped
+// segment (or came before the first segment).
+func (a *Aggregator) allMapped(n int) bool {
+	for i, seg := range a.segments {
+		end := n
+		if i+1 < len(a.segments) {
+			end = a.segments[i+1].start
+		}
+		if !seg.mapped && seg.start < end {
+			return false
+		}
+	}
+
+	return true
+}
+
+// mergeAdjacent merges each run of sorted rows with the same prefix into
+// its first, in place.
+func mergeAdjacent(rows []*PrefixRow) []*PrefixRow {
+	out := rows[:0]
+	for _, row := range rows {
+		if n := len(out); n > 0 && out[n-1].Prefix == row.Prefix {
+			out[n-1].Merge(row)
+
+			continue
+		}
+		out = append(out, row)
+	}
+
+	return out
 }
