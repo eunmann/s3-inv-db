@@ -251,7 +251,7 @@ func (g *Gate) evict(ctx context.Context, victim inventory.ID) error {
 	return nil
 }
 
-// ManifestSizer implements inventory.IndexSizeFunc over an
+// ManifestSizer implements inventory.ManifestSizeFunc over an
 // s3fetch.Client. Caches nothing — the manifest is small JSON and
 // fetched once per load attempt.
 type ManifestSizer struct {
@@ -265,30 +265,29 @@ func NewManifestSizer(client *s3fetch.Client) *ManifestSizer {
 
 // IndexSize returns the on-disk size of the published index whose
 // manifest is at key: what loading it takes, exactly.
-func (s *ManifestSizer) IndexSize(ctx context.Context, bucket, key string) (uint64, error) {
+func (s *ManifestSizer) IndexSize(ctx context.Context, bucket, key string) (inventory.ManifestSize, error) {
 	prefix, ok := strings.CutSuffix(key, format.ManifestFile)
 	if !ok {
-		return 0, fmt.Errorf("%w: %q is not a manifest key", errNotManifestKey, key)
+		return inventory.ManifestSize{}, fmt.Errorf("%w: %q is not a manifest key", errNotManifestKey, key)
 	}
 	m, err := indexstore.New(s.client.Raw(), bucket).ReadManifest(ctx, prefix)
 	if err != nil {
-		return 0, fmt.Errorf("read index manifest: %w", err)
+		return inventory.ManifestSize{}, fmt.Errorf("read index manifest: %w", err)
 	}
 
-	return m.TotalBytes(), nil
+	return inventory.ManifestSize{FileFormat: inventory.IndexFileFormat, DataBytes: m.TotalBytes()}, nil
 }
 
 // errNotManifestKey is returned for a key that doesn't end in
 // manifest.json.
 var errNotManifestKey = errors.New("not a manifest key")
 
-// EstimatedIndexSize returns the disk the index built from the
-// inventory manifest at key is estimated to take, from its file format
-// and data-file sizes.
-func (s *ManifestSizer) EstimatedIndexSize(ctx context.Context, bucket, key string) (uint64, error) {
+// InventorySize returns the file format and data-file total of the
+// inventory manifest at key.
+func (s *ManifestSizer) InventorySize(ctx context.Context, bucket, key string) (inventory.ManifestSize, error) {
 	m, err := s.client.FetchManifest(ctx, bucket, key)
 	if err != nil {
-		return 0, fmt.Errorf("fetch manifest: %w", err)
+		return inventory.ManifestSize{}, fmt.Errorf("fetch manifest: %w", err)
 	}
 	var total uint64
 	for _, f := range m.Files {
@@ -297,5 +296,5 @@ func (s *ManifestSizer) EstimatedIndexSize(ctx context.Context, bucket, key stri
 		}
 	}
 
-	return inventory.EstimateIndexBytes(m.FileFormat, total), nil
+	return inventory.ManifestSize{FileFormat: m.FileFormat, DataBytes: total}, nil
 }

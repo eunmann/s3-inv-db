@@ -20,7 +20,7 @@ import (
 // AWS-like seeded inventories, and is at most 2.5 times it: realistic
 // keys (about 2.7 prefixes per object at this size) and deep_pyramid,
 // the densest seeded layout (about 7).
-func TestEstimatedIndexSize_CoversBuiltIndex(t *testing.T) {
+func TestInventorySize_EstimateCoversBuiltIndex(t *testing.T) {
 	const objects = 100_000
 	fc := s3test.FetchClient(t)
 	bucket := s3test.Bucket(t, fc.Raw())
@@ -36,10 +36,11 @@ func TestEstimatedIndexSize_CoversBuiltIndex(t *testing.T) {
 				t.Fatalf("seed: %v", err)
 			}
 			manifestKey := strings.TrimPrefix(info.Path, "s3://"+bucket+"/")
-			estimate, err := sizer.EstimatedIndexSize(t.Context(), bucket, manifestKey)
+			size, err := sizer.InventorySize(t.Context(), bucket, manifestKey)
 			if err != nil {
-				t.Fatalf("EstimatedIndexSize: %v", err)
+				t.Fatalf("InventorySize: %v", err)
 			}
+			estimate := inventory.EstimateIndexBytes(size.FileFormat, size.DataBytes)
 
 			outDir, err := loader.New(t.TempDir(), fc).BuildWith(t.Context(),
 				inventory.CacheKey{SourceBucket: "src", InventoryID: info.ID, Run: "run"}, info.Path, nil, nil)

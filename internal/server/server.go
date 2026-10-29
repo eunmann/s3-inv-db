@@ -233,7 +233,7 @@ func newDiscovery(cfg Config, catalog *inventory.Catalog, gate *loadcontrol.Gate
 		return inventory.NewDiscovery(catalog), nil
 	}
 	sizer := loadcontrol.NewManifestSizer(wiring.Client)
-	size := sizer.EstimatedIndexSize
+	size := sizer.InventorySize
 	if wiring.IndexesOnly {
 		// A published index's manifest gives its exact size.
 		size = sizer.IndexSize

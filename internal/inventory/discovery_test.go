@@ -612,10 +612,10 @@ func TestDiscovery_LoadSizesFromDiscoveredManifest(t *testing.T) {
 
 		return nil
 	}
-	sizer := func(context.Context, string, string) (uint64, error) {
+	sizer := func(context.Context, string, string) (inventory.ManifestSize, error) {
 		sizerCalls.Add(1)
 
-		return 1000, nil
+		return inventory.ManifestSize{FileFormat: "Parquet", DataBytes: 1000}, nil
 	}
 	d := inventory.NewDiscovery(mgr,
 		inventory.WithBackend(&fakeDiscoverer{bucket: "dst"}, &fakeBuilder{}),
@@ -631,7 +631,7 @@ func TestDiscovery_LoadSizesFromDiscoveredManifest(t *testing.T) {
 	if n := sizerCalls.Load(); n != 1 {
 		t.Fatalf("sizer called %d times, want 1 (only the run without a read manifest)", n)
 	}
-	want := []uint64{inventory.EstimateIndexBytes("CSV", 300), 500, 1000}
+	want := []uint64{inventory.EstimateIndexBytes("CSV", 300), 500, inventory.EstimateIndexBytes("Parquet", 1000)}
 	if !slices.Equal(estimates, want) {
 		t.Fatalf("estimates %v, want %v", estimates, want)
 	}

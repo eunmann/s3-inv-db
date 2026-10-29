@@ -71,10 +71,17 @@ type GatedLoadOptions struct {
 // honour the global byte cap.
 type GatedLoadFunc func(ctx context.Context, id ID, build BuildFunc, opts GatedLoadOptions) error
 
-// IndexSizeFunc reports the disk a run's index takes, read from the
-// manifest at key before anything is downloaded: an estimate for an
-// inventory, exact for a published index.
-type IndexSizeFunc func(ctx context.Context, bucket, key string) (uint64, error)
+// ManifestSize is what a run's manifest says a load reads: its data
+// files' format and total size. A published index's FileFormat is
+// IndexFileFormat and its DataBytes the index's own size.
+type ManifestSize struct {
+	FileFormat string
+	DataBytes  uint64
+}
+
+// ManifestSizeFunc reads the manifest at key before anything is
+// downloaded.
+type ManifestSizeFunc func(ctx context.Context, bucket, key string) (ManifestSize, error)
 
 // Discovery orchestrates the inventory use cases that span the
 // Catalog (in-memory state), the Discoverer (S3 listing of available
@@ -91,7 +98,7 @@ type Discovery struct {
 	builder       IndexBuilder
 	cacheLastErr  error
 	gate          GatedLoadFunc
-	sizer         IndexSizeFunc
+	sizer         ManifestSizeFunc
 	manager       *Catalog
 	bgStop        chan struct{}
 	bgClock       func() time.Time
@@ -144,9 +151,9 @@ func WithBackend(discoverer Discoverer, builder IndexBuilder) DiscoveryOption {
 	}
 }
 
-// WithGate attaches a GatedLoadFunc + IndexSizeFunc. When both are
+// WithGate attaches a GatedLoadFunc + ManifestSizeFunc. When both are
 // set, LoadWith routes through the gate so disk-budget rules apply.
-func WithGate(gate GatedLoadFunc, sizer IndexSizeFunc) DiscoveryOption {
+func WithGate(gate GatedLoadFunc, sizer ManifestSizeFunc) DiscoveryOption {
 	return func(d *Discovery) {
 		d.gate = gate
 		d.sizer = sizer
@@ -481,24 +488,32 @@ func (d *Discovery) loadInternal(ctx context.Context, disc Inventory, onProgress
 		return d.manager.LoadWith(ctx, composite, build)
 	}
 	opts := GatedLoadOptions{Pin: !auto}
-	switch {
-	case disc.FileFormat != "" && disc.Error == "" && disc.TotalBytes > 0:
-		// Discovery already read this run's manifest: its total is what
-		// the sizer would fetch the manifest again to compute.
-		opts.EstimateBytes = EstimateIndexBytes(disc.FileFormat, uint64(disc.TotalBytes))
-	case d.sizer != nil:
-		size, err := d.sizer(ctx, d.discoverer.Bucket(), disc.ManifestKey)
-		if err == nil {
-			opts.EstimateBytes = size
-		}
-		// On error we proceed with EstimateBytes=0, reserving nothing:
-		// the gate settles the load at its built size, evicting or
-		// refusing then, so a transient manifest fetch hiccup doesn't
-		// lose the load.
+	if size, ok := d.manifestSize(ctx, disc); ok {
+		opts.EstimateBytes = EstimateIndexBytes(size.FileFormat, size.DataBytes)
 	}
 	if err := d.gate(ctx, composite, build, opts); err != nil {
 		return fmt.Errorf("gated load %s: %w", composite, err)
 	}
 
 	return nil
+}
+
+// manifestSize is what disc's manifest says its load reads: from disc
+// when discovery already read the manifest, else fetched by the sizer.
+// False when the fetch fails: the load then reserves nothing and the
+// gate settles it at its built size, evicting or refusing then, so a
+// transient manifest fetch hiccup doesn't lose the load.
+func (d *Discovery) manifestSize(ctx context.Context, disc Inventory) (ManifestSize, bool) {
+	if disc.FileFormat != "" && disc.Error == "" && disc.TotalBytes > 0 {
+		return ManifestSize{FileFormat: disc.FileFormat, DataBytes: uint64(disc.TotalBytes)}, true
+	}
+	if d.sizer == nil {
+		return ManifestSize{}, false
+	}
+	size, err := d.sizer(ctx, d.discoverer.Bucket(), disc.ManifestKey)
+	if err != nil {
+		return ManifestSize{}, false
+	}
+
+	return size, true
 }
