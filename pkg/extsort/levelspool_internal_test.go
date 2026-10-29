@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -197,26 +197,22 @@ func TestSpoolReaderAcrossRefills(t *testing.T) {
 	}
 }
 
-// TestSpoolReaderFillsTheBuffer: a record exactly the read buffer's size
-// decodes between small ones; one a byte longer is an error, never a
-// record or the stream's end.
+// TestSpoolReaderFillsTheBuffer: the largest record (every field at its
+// widest) decodes between small ones from a read buffer exactly its
+// size; from a buffer a byte shorter it is an error, never a record or
+// the stream's end.
 func TestSpoolReaderFillsTheBuffer(t *testing.T) {
-	const size = 4096
-	ofLen := func(n int) spoolRecord {
-		r := spoolTestRecord(1)
-		for l := n; l > 0; l-- {
-			r.name = []byte(strings.Repeat("n", l))
-			if len(spoolStream(t, []spoolRecord{r})) == n {
-				return r
-			}
-		}
-		t.Fatalf("no record is %d bytes", n)
-
-		return r
+	big := spoolRecord{
+		count: math.MaxUint64, bytes: math.MaxUint64, childLocal: math.MaxUint64, parentLocal: math.MaxUint64,
+		keyHash: math.MaxUint64, fp: math.MaxUint64, segID: math.MaxUint32,
 	}
-	want := []spoolRecord{spoolTestRecord(0), ofLen(size), spoolTestRecord(2)}
+	for i := range big.tierCounts {
+		big.tierCounts[i], big.tierBytes[i] = math.MaxUint64, math.MaxUint64
+	}
+	size := len(spoolStream(t, []spoolRecord{big}))
+	want := []spoolRecord{spoolTestRecord(0), big, spoolTestRecord(2)}
 	data := spoolStream(t, want)
-	tooLong := spoolStream(t, []spoolRecord{spoolTestRecord(0), ofLen(size + 1)})
+	tooLong := spoolStream(t, []spoolRecord{spoolTestRecord(0), big})
 	for name, wrap := range runRecordReaders {
 		t.Run(name, func(t *testing.T) {
 			got, err := readSpool(wrap(data), size)
@@ -226,7 +222,7 @@ func TestSpoolReaderFillsTheBuffer(t *testing.T) {
 			if diff := cmp.Diff(want, got, cmp.AllowUnexported(spoolRecord{})); diff != "" {
 				t.Fatalf("(-added +read):\n%s", diff)
 			}
-			got, err = readSpool(wrap(tooLong), size)
+			got, err = readSpool(wrap(tooLong), size-1)
 			if len(got) != 1 || !errors.Is(err, errSpoolTruncated) {
 				t.Fatalf("a record past the buffer: %d records, then %v; want 1, then errSpoolTruncated", len(got), err)
 			}
