@@ -118,6 +118,39 @@ func (i Inventory) ConfigID() string {
 	return i.SourceBucket + "/" + i.Name
 }
 
+// IndexFileFormat is the FileFormat of a published index's run: its
+// TotalBytes are the index's own size.
+const IndexFileFormat = "index"
+
+// Index bytes per byte of an inventory's data files, the disk a load
+// reserves before it builds. An index's size follows its prefix count,
+// which no manifest tells, so the ratios cover the densest measured
+// layout: built through the pipeline from the AWS-like seeded CSV
+// fixtures, indexes were 0.98× (one directory per object) to 2.99×
+// (deep_pyramid, 20K objects) their gzipped inventory. Parquet data
+// files are about 1.3× the gzipped CSV of the same objects. The gate
+// settles a load at its measured size once built, so a layout denser
+// still is corrected, not over-committed.
+const (
+	csvIndexRatio     = 3.0
+	parquetIndexRatio = 2.3
+)
+
+// EstimateIndexBytes returns the disk loading a run takes, from its
+// manifest's file format and data-file total: exact for a published
+// index, else the format's ratio. An unknown format gets CSV's, the
+// larger.
+func EstimateIndexBytes(fileFormat string, dataBytes uint64) uint64 {
+	switch {
+	case fileFormat == IndexFileFormat:
+		return dataBytes
+	case strings.EqualFold(fileFormat, "Parquet"):
+		return uint64(float64(dataBytes) * parquetIndexRatio)
+	default:
+		return uint64(float64(dataBytes) * csvIndexRatio)
+	}
+}
+
 // Info contains metadata about a managed inventory.
 type Info struct {
 	LoadedAt             time.Time `json:"loaded_at,omitzero"`

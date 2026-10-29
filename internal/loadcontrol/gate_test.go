@@ -546,3 +546,107 @@ func TestGate_Load_PinnedAfterPlanningSkipsRetirement(t *testing.T) {
 		t.Errorf("removed caches = %v, want only the unpinned run", removed)
 	}
 }
+
+// overEstimateGate loads a with no budget, then returns a gate whose cap
+// holds one and a half of the test index, so a second index, admitted
+// on an estimate of one byte, overshoots the cap once built. It records
+// the caches the gate removes.
+func overEstimateGate(t *testing.T, mgr *inventory.Catalog, ok inventory.BuildFunc, a, c inventory.ID) (*loadcontrol.Gate, *budget.Tracker, *[]inventory.ID) {
+	t.Helper()
+	ctx := t.Context()
+	for _, id := range []inventory.ID{a, c} {
+		if err := mgr.Register(ctx, id, "n", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setup := budget.New(0, 0, mgr.LoadedBytes)
+	if err := loadcontrol.New(mgr, setup, budget.NewPlanner(setup, nil), nil).Load(ctx, a, ok, inventory.GatedLoadOptions{EstimateBytes: 1}); err != nil {
+		t.Fatalf("load %s: %v", a, err)
+	}
+	info, _ := mgr.Get(a)
+	tracker := budget.New(info.IndexBytes*3/2, 0, mgr.LoadedBytes)
+	var removed []inventory.ID
+
+	return loadcontrol.New(mgr, tracker, budget.NewPlanner(tracker, nil), func(id inventory.ID) error {
+		removed = append(removed, id)
+
+		return nil
+	}), tracker, &removed
+}
+
+// A built index bigger than its estimate is settled at its measured
+// size: the gate evicts what that leaves over the cap.
+func TestGate_Load_EvictsForIndexOverItsEstimate(t *testing.T) {
+	mgr := inventory.NewCatalog(nil)
+	defer mgr.Close()
+	dir := buildIndexDir(t)
+	ok := func(context.Context, inventory.Info) (string, error) { return dir, nil }
+	a := inventory.ID("a/inv/2026-01-01T00-00Z")
+	c := inventory.ID("c/inv/2026-01-01T00-00Z")
+	gate, tracker, removed := overEstimateGate(t, mgr, ok, a, c)
+
+	if err := gate.Load(t.Context(), c, ok, inventory.GatedLoadOptions{EstimateBytes: 1}); err != nil {
+		t.Fatalf("load %s: %v", c, err)
+	}
+	if got, _ := mgr.Get(c); got.State != inventory.StateLoaded {
+		t.Errorf("%s state = %s, want loaded", c, got.State)
+	}
+	if got, _ := mgr.Get(a); got.State != inventory.StateNotLoaded {
+		t.Errorf("%s state = %s, want not_loaded: evicted for the index over its estimate", a, got.State)
+	}
+	if len(*removed) != 1 || (*removed)[0] != a {
+		t.Errorf("removed caches = %v, want only %s", *removed, a)
+	}
+	if over := tracker.Over(); over != 0 {
+		t.Errorf("loaded indexes are %d bytes over the cap", over)
+	}
+}
+
+// A built index bigger than its estimate that no eviction makes room
+// for is refused and retracted, pinned or not, with its cache, and
+// keeps the pin it had before the load; loading it again is refused
+// before it builds.
+func TestGate_Load_RetractsIndexThatCannotFit(t *testing.T) {
+	ctx := t.Context()
+	mgr := inventory.NewCatalog(nil)
+	defer mgr.Close()
+	dir := buildIndexDir(t)
+	ok := func(context.Context, inventory.Info) (string, error) { return dir, nil }
+	a := inventory.ID("a/inv/2026-01-01T00-00Z")
+	c := inventory.ID("c/inv/2026-01-01T00-00Z")
+	gate, tracker, removed := overEstimateGate(t, mgr, ok, a, c)
+	if err := mgr.SetPinned(ctx, a, true); err != nil {
+		t.Fatal(err)
+	}
+
+	err := gate.Load(ctx, c, ok, inventory.GatedLoadOptions{EstimateBytes: 1, Pin: true})
+	if _, refused := errors.AsType[*loadcontrol.BudgetRefusedError](err); !refused {
+		t.Fatalf("load %s = %v, want BudgetRefusedError", c, err)
+	}
+	got, _ := mgr.Get(c)
+	if got.State != inventory.StateNotLoaded {
+		t.Errorf("%s state = %s, want not_loaded", c, got.State)
+	}
+	if got.Pinned {
+		t.Errorf("%s is pinned by a load that was refused", c)
+	}
+	if got, _ := mgr.Get(a); got.State != inventory.StateLoaded {
+		t.Errorf("pinned %s state = %s, want loaded", a, got.State)
+	}
+	if len(*removed) != 1 || (*removed)[0] != c {
+		t.Errorf("removed caches = %v, want only %s", *removed, c)
+	}
+	if over := tracker.Over(); over != 0 {
+		t.Errorf("loaded indexes are %d bytes over the cap", over)
+	}
+
+	rebuild := func(context.Context, inventory.Info) (string, error) {
+		t.Fatal("a run retracted for its size must be refused before it builds again")
+
+		return "", nil
+	}
+	err = gate.Load(ctx, c, rebuild, inventory.GatedLoadOptions{EstimateBytes: 1, Pin: true})
+	if _, refused := errors.AsType[*loadcontrol.BudgetRefusedError](err); !refused {
+		t.Errorf("second load %s = %v, want BudgetRefusedError", c, err)
+	}
+}

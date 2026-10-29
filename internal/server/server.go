@@ -233,14 +233,14 @@ func newDiscovery(cfg Config, catalog *inventory.Catalog, gate *loadcontrol.Gate
 		return inventory.NewDiscovery(catalog), nil
 	}
 	sizer := loadcontrol.NewManifestSizer(wiring.Client)
-	size, ratio := sizer.ManifestSize, inventory.DefaultIndexRatio
+	size := sizer.EstimatedIndexSize
 	if wiring.IndexesOnly {
 		// A published index's manifest gives its exact size.
-		size, ratio = sizer.IndexSize, 1
+		size = sizer.IndexSize
 	}
 	disc := inventory.NewDiscovery(catalog,
 		inventory.WithBackend(wiring.Discoverer, wiring.Loader),
-		inventory.WithGate(gate.Load, size, ratio),
+		inventory.WithGate(gate.Load, size),
 	)
 	cfg.Logger.Info().
 		Str("s3_source", cfg.S3Source).

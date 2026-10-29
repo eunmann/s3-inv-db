@@ -40,7 +40,17 @@ type managedInventory struct {
 	// inventory's index took; it counts while the index is open or
 	// loading. Guarded by Catalog.mu.
 	prefaultBytes uint64
-	mu            sync.RWMutex
+	// preLoad is the manual intent (pin, user-unload mark) the run had
+	// before its latest load, which Retract puts back. Guarded by
+	// Catalog.mu.
+	preLoad loadIntent
+	mu      sync.RWMutex
+}
+
+// loadIntent is the part of Info a manual load overwrites.
+type loadIntent struct {
+	pinned         bool
+	userUnloadedAt time.Time
 }
 
 // mirrorStore is the persistence sink Catalog mirrors state transitions
@@ -282,6 +292,7 @@ func (c *Catalog) loadInternal(ctx context.Context, id ID, build BuildFunc, pin 
 	// state into JSON API responses.
 	inv.info.LoadDuration = 0
 	inv.prefaultBytes = 0
+	inv.preLoad = loadIntent{pinned: inv.info.Pinned, userUnloadedAt: inv.info.UserUnloadedAt}
 	if pin {
 		inv.info.Pinned = true
 		inv.info.UserUnloadedAt = time.Time{}
@@ -440,7 +451,7 @@ func measureIndexDir(dir string) (uint64, error) {
 // It blocks until any in-flight WithIndex reader on this inventory has
 // returned.
 func (c *Catalog) Unload(ctx context.Context, id ID) error {
-	return c.unloadInternal(ctx, id, true /* userInitiated */, false /* keepPinned */)
+	return c.unloadInternal(ctx, id, unloadByUser)
 }
 
 // ErrPinned is returned by EvictForBudget for a pinned run.
@@ -454,10 +465,32 @@ var ErrPinned = errors.New("inventory is pinned")
 // checked in the same critical section as the unload, so a pin that
 // lands after the gate planned is never lost.
 func (c *Catalog) EvictForBudget(ctx context.Context, id ID) error {
-	return c.unloadInternal(ctx, id, false /* userInitiated */, true /* keepPinned */)
+	return c.unloadInternal(ctx, id, unloadForBudget)
 }
 
-func (c *Catalog) unloadInternal(ctx context.Context, id ID, userInitiated, keepPinned bool) error {
+// Retract unloads a run whose fresh index the load gate found too big
+// for the disk budget. Unlike EvictForBudget it unloads a pinned run;
+// unlike Unload it doesn't mark the run deliberately removed. The pin
+// and user-unload mark go back to what they were before the load, so a
+// refused manual load leaves no pin behind.
+func (c *Catalog) Retract(ctx context.Context, id ID) error {
+	return c.unloadInternal(ctx, id, unloadRetract)
+}
+
+// unloadKind is who unloads a run, which decides what happens to its
+// pin and user-unload mark.
+type unloadKind int
+
+const (
+	// UnloadByUser stamps UserUnloadedAt and clears the pin.
+	unloadByUser unloadKind = iota
+	// UnloadForBudget refuses a pinned run and leaves the intent as is.
+	unloadForBudget
+	// UnloadRetract restores the intent from before the latest load.
+	unloadRetract
+)
+
+func (c *Catalog) unloadInternal(ctx context.Context, id ID, kind unloadKind) error {
 	c.mu.Lock()
 	inv, exists := c.inventories[id]
 	if !exists {
@@ -470,7 +503,7 @@ func (c *Catalog) unloadInternal(ctx context.Context, id ID, userInitiated, keep
 
 		return fmt.Errorf("%w: cannot unload from state %s", ErrInvalidState, inv.info.State)
 	}
-	if keepPinned && inv.info.Pinned {
+	if kind == unloadForBudget && inv.info.Pinned {
 		c.mu.Unlock()
 
 		return ErrPinned
@@ -481,9 +514,14 @@ func (c *Catalog) unloadInternal(ctx context.Context, id ID, userInitiated, keep
 	inv.info.LoadedAt = time.Time{}
 	inv.info.LoadDuration = 0
 	inv.info.IndexBytes = 0
-	if userInitiated {
+	switch kind {
+	case unloadByUser:
 		inv.info.UserUnloadedAt = time.Now()
 		inv.info.Pinned = false
+	case unloadRetract:
+		inv.info.Pinned = inv.preLoad.pinned
+		inv.info.UserUnloadedAt = inv.preLoad.userUnloadedAt
+	case unloadForBudget:
 	}
 	// Take the index out under c.mu: a Load that starts once the state
 	// reads NotLoaded installs its own index, which this unload must
