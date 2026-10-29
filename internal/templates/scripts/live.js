@@ -239,8 +239,10 @@
         announceEnd(job);
     }
 
-    // The connect snapshot carries only queued and running jobs, so a
-    // build seen in an end state ended while this page watched it.
+    // The connect snapshot carries only jobs whose run is still in
+    // progress (a terminal one only while its final state is being
+    // written), so a build seen in an end state ended while this page
+    // watched it or as it connected.
     var ENDS = { succeeded: 'Build finished', failed: 'Build failed', cancelled: 'Build cancelled' };
     var announced = {}; // job id -> its end was announced
     var pendingNews = [];
