@@ -87,7 +87,7 @@ fields little-endian:
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | Magic | `0x53334944` ("S3ID" in ASCII) |
-| 4 | 4 | Version | Format version (currently `13`) |
+| 4 | 4 | Version | Format version (currently `14`) |
 | 8 | 8 | Count | Number of rows |
 | 16 | 4 | Width | Row stride in bytes |
 
@@ -442,11 +442,11 @@ more, whose mask is in `tier_multi.mask`:
 | File | Content |
 |------|---------|
 | `tier_multi.bin` | Header (`Count` = stored slots, `Width` = slot width), slot-width descriptor, then for each such prefix in position order the slots of every tier in its mask except the highest, in slot order |
-| `tier_multi.rows` | Header (`Count` = prefixes), a bit vector with bit *pos* set for each such prefix (little-endian `uint64` words), then a rank directory: for every 8 words, the set bits before them |
+| `tier_multi.rows` | Header (`Count` = prefixes), a bit vector with bit *pos* set for each such prefix (little-endian `uint64` words, zero-padded to the end of the 8-word block holding bit `Count`), then a rank directory: for each 8-word block, the set bits before it |
 | `tier_multi.off.u64` | A variable-width array (see above): for the *k*-th such prefix, the index of its first slot in `tier_multi.bin`, plus a trailing sentinel |
 | `tier_multi.mask` | Past 8 tiers only: a 2-byte array of the *k*-th such prefix's mask |
 
-To read prefix *pos*: `rank(pos)` (a directory entry plus at most eight
+To read prefix *pos*: `rank(pos)` (a directory entry plus eight masked
 popcounts) gives *k*; its slots start at `off[k]`, and past 8 tiers its
 mask is `mask[k]`.
 
@@ -484,4 +484,4 @@ from the file-header format version.
 
 ## Versioning
 
-The format version in file headers lets a reader refuse files it would mis-decode. Version 13 is the current format; readers accept only that version, and an index written by any other version is rebuilt.
+The format version in file headers lets a reader refuse files it would mis-decode. Version 14 is the current format; readers accept only that version, and an index written by any other version is rebuilt.

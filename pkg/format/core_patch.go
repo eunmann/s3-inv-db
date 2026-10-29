@@ -83,8 +83,7 @@ func (h *patchHistogram) exceptions(wc, wb, ws uint8) uint64 {
 func patchCost(rows uint64, wc, wb, ws uint8, exceptions uint64) uint64 {
 	cost := rows * uint64(wc+wb+ws)
 	if exceptions > 0 {
-		words := bitWords(rows)
-		cost += exceptions*corePatchRowBytes + HeaderSize*2 + 8*words + 8*((words+rankBlockWords-1)/rankBlockWords)
+		cost += exceptions*corePatchRowBytes + HeaderSize + rankedBitsFileSize(rows)
 	}
 
 	return cost

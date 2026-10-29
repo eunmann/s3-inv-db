@@ -356,46 +356,88 @@ func TestTierStatsCloseFailureLeavesNothing(t *testing.T) {
 	}
 }
 
+// TestRankedBits: rank over the mapped file equals a plain count at
+// every bit and at n, for sizes on and off word and block boundaries
+// and densities from no set bits to all. The file is exactly the
+// modelled size, so a rank that read past the last block would panic.
 func TestRankedBits(t *testing.T) {
-	for _, n := range []uint64{0, 1, 63, 64, 65, 511, 512, 513, 5000} {
-		r := rand.New(rand.NewPCG(n, 1))
-		set := make([]bool, n)
+	sizes := []uint64{0, 1, 7, 63, 64, 65, 448, 511, 512, 513, 1023, 1024, 1025, 4096 + 7*64 + 13, 5000}
+	densities := []int{0, 1, 3, 100} // percent of bits set
+	for _, n := range sizes {
+		for _, pct := range densities {
+			r := rand.New(rand.NewPCG(n, uint64(pct)))
+			set := make([]bool, n)
+			path := filepath.Join(t.TempDir(), "bits")
+			w, err := newRankedBitsWriter(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range set {
+				set[i] = r.IntN(100) < pct
+				if err := w.add(set[i]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := w.close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(path + ".dir"); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("n=%d: rank directory scratch left behind: %v", n, err)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := uint64(info.Size()), rankedBitsFileSize(n); got != want {
+				t.Errorf("n=%d: file is %d bytes, model says %d", n, got, want)
+			}
+			rb, err := openRankedBits(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want uint64
+			for i := range n + 1 {
+				if got := rb.rank(i); got != want {
+					t.Fatalf("n=%d, %d%% set: rank(%d) = %d, want %d", n, pct, i, got, want)
+				}
+				if i < n {
+					if rb.get(i) != set[i] {
+						t.Fatalf("n=%d: get(%d) = %v, want %v", n, i, rb.get(i), set[i])
+					}
+					if set[i] {
+						want++
+					}
+				}
+			}
+			rb.close()
+		}
+	}
+}
+
+// A ranked bit vector file cut short of its last block is refused at
+// open, not read past its end by rank.
+func TestRankedBitsRejectsTruncatedFile(t *testing.T) {
+	for _, n := range []uint64{0, 100, 512} {
 		path := filepath.Join(t.TempDir(), "bits")
 		w, err := newRankedBitsWriter(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for i := range set {
-			set[i] = r.IntN(3) == 0
-			if err := w.add(set[i]); err != nil {
+		for range n {
+			if err := w.add(true); err != nil {
 				t.Fatal(err)
 			}
 		}
 		if err := w.close(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := os.Stat(path + ".dir"); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("n=%d: rank directory scratch left behind: %v", n, err)
-		}
-		rb, err := openRankedBits(path)
-		if err != nil {
+		if err := os.Truncate(path, int64(rankedBitsFileSize(n))-1); err != nil {
 			t.Fatal(err)
 		}
-		var want uint64
-		for i := range n + 1 {
-			if got := rb.rank(i); got != want {
-				t.Fatalf("n=%d: rank(%d) = %d, want %d", n, i, got, want)
-			}
-			if i < n {
-				if rb.get(i) != set[i] {
-					t.Fatalf("n=%d: get(%d) = %v, want %v", n, i, rb.get(i), set[i])
-				}
-				if set[i] {
-					want++
-				}
-			}
+		if rb, err := openRankedBits(path); !errors.Is(err, ErrFileTooSmall) {
+			rb.close()
+			t.Errorf("n=%d: open of a truncated file: %v, want %v", n, err, ErrFileTooSmall)
 		}
-		rb.close()
 	}
 }
 

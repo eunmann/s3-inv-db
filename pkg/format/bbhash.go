@@ -52,6 +52,7 @@ const (
 	// RankBlockWords is the rank directory's block size in words: one
 	// 8-byte count per 512 bits (12.5% over the bit vectors).
 	rankBlockWords = 8
+	rankBlockBits  = rankBlockWords * 64
 	// MaxBBHashLevels bounds the build. At gamma 2 about 39% of a
 	// level's keys collide, so distinct keys are placed within ~30
 	// levels even at 2^40 keys; keys still unplaced here go to the

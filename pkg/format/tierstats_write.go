@@ -308,8 +308,7 @@ func (w *TierStatsWriter) Add(counts, bytes *[tiers.NumTiers]uint64, totalCount,
 // multiSize and denseSize are the exact on-disk sizes of each layout.
 func (w *TierStatsWriter) multiSize() uint64 {
 	slotsFile := uint64(tierSlotDataOff) + w.multiSlots*uint64(w.multiBits.widths().slotBytes()) + coreStatsReadTailPad
-	words := bitWords(w.rows)
-	rowsFile := uint64(HeaderSize) + 8*words + 8*((words+rankBlockWords-1)/rankBlockWords)
+	rowsFile := rankedBitsFileSize(w.rows)
 	offsetsFile := uint64(HeaderSize) + (w.multiRows+1)*uint64(byteWidthOf(w.multiSlots)) + arrayTailPad
 
 	return slotsFile + rowsFile + offsetsFile

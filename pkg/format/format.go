@@ -11,7 +11,7 @@ const (
 	// the core rows' tier field follows the tier layout
 	// (TierMaskEncoding), and tier_multi.mask holds multi-tier masks past
 	// 8 tiers.
-	Version uint32 = 13
+	Version uint32 = 14
 )
 
 // Header is the common header for all columnar files.

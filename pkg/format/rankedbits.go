@@ -13,8 +13,10 @@ import (
 
 // A ranked bit vector file: Header (Count = bits, Width = 8), the bits
 // as little-endian uint64 words, then a rank directory holding, for
-// every rankBlockWords words, the set bits before them. rank(i) is one
-// directory entry plus at most rankBlockWords popcounts.
+// every rankBlockWords words, the set bits before them. The words run
+// on as zeros to the end of the block holding bit n, a whole block
+// when n falls on a block's start, so rank(i) reads one directory
+// entry and one whole block for every i in [0, n] (see rank).
 
 // rankedBitsWriter streams a ranked bit vector one bit at a time. Its
 // memory stays constant: the words and the directory each stream to
@@ -91,6 +93,16 @@ func (w *rankedBitsWriter) finish() error {
 			return fmt.Errorf("write %s: %w", filepath.Base(w.path), err)
 		}
 	}
+	if w.n%rankBlockBits == 0 {
+		if err := putU64(w.dirBW, w.set); err != nil {
+			return fmt.Errorf("write rank directory: %w", err)
+		}
+	}
+	for range rankedBitsBlocks(w.n)*rankBlockWords - bitWords(w.n) {
+		if err := putU64(w.bw, 0); err != nil {
+			return fmt.Errorf("write %s: %w", filepath.Base(w.path), err)
+		}
+	}
 	if err := w.dirBW.Flush(); err != nil {
 		return fmt.Errorf("flush rank directory: %w", err)
 	}
@@ -115,11 +127,20 @@ func (w *rankedBitsWriter) abort() error {
 	return errors.Join(w.dirF.Close(), w.f.Close(), removeIfErr(w.dirPath), removeIfErr(w.path))
 }
 
+// rankedBitsBlocks is the rank blocks a vector of n bits stores: every
+// block that bits 0 to n fall in.
+func rankedBitsBlocks(n uint64) uint64 { return n/rankBlockBits + 1 }
+
+// rankedBitsFileSize is the bytes of a ranked bit vector file of n bits.
+func rankedBitsFileSize(n uint64) uint64 {
+	return HeaderSize + rankedBitsBlocks(n)*8*(rankBlockWords+1)
+}
+
 // rankedBitsReader reads a ranked bit vector file.
 type rankedBitsReader struct {
-	mmap  *MmapFile
-	n     uint64
-	words uint64
+	mmap *MmapFile
+	n    uint64
+	dir  uint64 // offset of the rank directory
 }
 
 func openRankedBits(path string) (*rankedBitsReader, error) {
@@ -147,13 +168,12 @@ func openRankedBits(path string) (*rankedBitsReader, error) {
 	if header.Version != Version {
 		return fail(ErrVersionMismatch)
 	}
-	words := bitWords(header.Count)
-	want := uint64(HeaderSize) + 8*words + 8*((words+rankBlockWords-1)/rankBlockWords)
-	if uint64(len(data)) < want {
+	if want := rankedBitsFileSize(header.Count); uint64(len(data)) < want {
 		return fail(fmt.Errorf("%w: %d < %d", ErrFileTooSmall, len(data), want))
 	}
+	dir := HeaderSize + rankedBitsBlocks(header.Count)*8*rankBlockWords
 
-	return &rankedBitsReader{mmap: mmap, n: header.Count, words: words}, nil
+	return &rankedBitsReader{mmap: mmap, n: header.Count, dir: dir}, nil
 }
 
 func (r *rankedBitsReader) word(i uint64) uint64 {
@@ -165,21 +185,22 @@ func (r *rankedBitsReader) get(i uint64) bool {
 	return r.word(i/wordBits)&(1<<(i%wordBits)) != 0
 }
 
-// rank returns the set bits before bit i, for i in [0, n].
+// rank returns the set bits before bit i, for i in [0, n]: the
+// directory's count for i's block plus the block's words, each masked
+// to its bits before i. It popcounts all rankBlockWords words of the
+// block wherever i falls in it, so the loop never mispredicts; the
+// file holds the whole block (see rankedBitsBlocks).
 func (r *rankedBitsReader) rank(i uint64) uint64 {
-	if r.words == 0 {
-		return 0
-	}
-	w := i / wordBits
-	// i == n on a block boundary is past the last directory entry;
-	// count on from the last block instead.
-	block := min(w/rankBlockWords, (r.words-1)/rankBlockWords)
-	count := binary.LittleEndian.Uint64(r.mmap.Data()[HeaderSize+8*(r.words+block):])
-	for j := block * rankBlockWords; j < w; j++ {
-		count += uint64(bits.OnesCount64(r.word(j)))
-	}
-	if bit := i % wordBits; bit != 0 {
-		count += uint64(bits.OnesCount64(r.word(w) & (1<<bit - 1)))
+	data := r.mmap.Data()
+	block := i / rankBlockBits
+	words := (*[8 * rankBlockWords]byte)(data[HeaderSize+block*8*rankBlockWords:])
+	count := binary.LittleEndian.Uint64(data[r.dir+8*block:])
+	at := uint64(1) << (i / wordBits % rankBlockWords)
+	// Bit j of before is set for each word j before i's word.
+	before, low := at-1, uint64(1)<<(i%wordBits)-1
+	for j := range rankBlockWords {
+		mask := -(before >> j & 1) | low&-(at>>j&1)
+		count += uint64(bits.OnesCount64(binary.LittleEndian.Uint64(words[8*j:]) & mask))
 	}
 
 	return count
