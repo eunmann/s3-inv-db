@@ -148,6 +148,7 @@ services:
   # Storage is a tmpfs — every `make test` boots from an empty namespace.
   s3-test:
     profiles: [test]
+    cpuset: "${S3INV_TEST_CPUSET:-}"
     image: *s3-image
     command: *s3-command
     tmpfs:
@@ -158,6 +159,7 @@ services:
   # s3-test.
   test-runner:
     profiles: [test]
+    cpuset: "${S3INV_TEST_CPUSET:-}"
     # One image for every checkout's test project (see TEST_PROJECT in
     # the Makefile); compose would otherwise build one per project.
     image: infra-test-runner
