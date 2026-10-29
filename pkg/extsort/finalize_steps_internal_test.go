@@ -36,13 +36,13 @@ func TestFinalizeReportsEachStep(t *testing.T) {
 	}
 	const children = 2000
 	root := &PrefixRow{Prefix: "", Count: children}
-	root.TierCounts[0] = children
+	root.SetTier(0, children, 0)
 	if err := b.Add(root); err != nil {
 		t.Fatalf("Add root: %v", err)
 	}
 	for i := range children {
 		row := &PrefixRow{Prefix: fmt.Sprintf("p%05d/", i), Depth: 1, Count: 1}
-		row.TierCounts[0] = 1
+		row.SetTier(0, 1, 0)
 		if err := b.Add(row); err != nil {
 			t.Fatalf("Add: %v", err)
 		}
@@ -113,7 +113,7 @@ func TestFinalizeLogsFailedStep(t *testing.T) {
 		t.Fatalf("NewIndexBuilder: %v", err)
 	}
 	root := &PrefixRow{Prefix: "", Count: 1}
-	root.TierCounts[0] = 1
+	root.SetTier(0, 1, 0)
 	if err := b.Add(root); err != nil {
 		t.Fatalf("Add root: %v", err)
 	}

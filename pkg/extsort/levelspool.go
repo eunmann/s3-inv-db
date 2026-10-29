@@ -156,7 +156,9 @@ const levelSpoolBufSize = 256 << 10
 
 // spoolRecord is one prefix as Finalize needs it. Child and parent are
 // indexes within their own depth (the next and the previous); Finalize
-// adds the depth's first row once every depth's size is known.
+// adds the depth's first row once every depth's size is known. Its
+// tiers keep PrefixRow's rule: bit i of tierMask is set exactly when
+// tier i is nonzero.
 type spoolRecord struct {
 	count, bytes uint64
 	childLocal   uint64 // the prefix's first child, within depth+1
@@ -165,6 +167,27 @@ type spoolRecord struct {
 	name         []byte // the last segment, without its slash; empty for the root
 	tierCounts   [tiers.NumTiers]uint64
 	tierBytes    [tiers.NumTiers]uint64
+	tierMask     uint16
+}
+
+// setTiers copies row's tiers into r, a record being reused: only the
+// tiers either holds are written.
+func (r *spoolRecord) setTiers(row *PrefixRow) {
+	r.clearTiers(r.tierMask &^ row.tierMask)
+	for m := row.tierMask; m != 0; m &= m - 1 {
+		t := bits.TrailingZeros16(m)
+		r.tierCounts[t], r.tierBytes[t] = row.tierCounts[t], row.tierBytes[t]
+	}
+	r.tierMask = row.tierMask
+}
+
+// clearTiers zeroes the tiers in mask.
+func (r *spoolRecord) clearTiers(mask uint16) {
+	for m := mask; m != 0; m &= m - 1 {
+		t := bits.TrailingZeros16(m)
+		r.tierCounts[t], r.tierBytes[t] = 0, 0
+	}
+	r.tierMask &^= mask
 }
 
 func (s *levelSpool) file(depth int) (*spoolFile, error) {
@@ -187,12 +210,6 @@ func (s *levelSpool) add(depth int, r *spoolRecord) error {
 	if err != nil {
 		return err
 	}
-	var mask uint64
-	for i, c := range r.tierCounts {
-		if c != 0 || r.tierBytes[i] != 0 {
-			mask |= 1 << i
-		}
-	}
 	// A record is its length, then its fields, so the reader can decode
 	// it from one slice of its buffer.
 	s.rec = s.rec[:0]
@@ -204,9 +221,9 @@ func (s *levelSpool) add(depth int, r *spoolRecord) error {
 	buf = binary.LittleEndian.AppendUint64(buf, r.fp)
 	buf = binary.AppendUvarint(buf, uint64(len(r.name)))
 	buf = append(buf, r.name...)
-	buf = binary.AppendUvarint(buf, mask)
-	for m := mask; m != 0; m &= m - 1 {
-		i := bits.TrailingZeros64(m)
+	buf = binary.AppendUvarint(buf, uint64(r.tierMask))
+	for m := r.tierMask; m != 0; m &= m - 1 {
+		i := bits.TrailingZeros16(m)
 		buf = binary.AppendUvarint(buf, r.tierCounts[i])
 		buf = binary.AppendUvarint(buf, r.tierBytes[i])
 	}
@@ -345,14 +362,18 @@ func decodeSpoolRecord(buf []byte, r *spoolRecord) error {
 	r.name = append(r.name[:0], buf[:n]...)
 	buf = buf[n:]
 	mask := next()
-	r.tierCounts, r.tierBytes = [tiers.NumTiers]uint64{}, [tiers.NumTiers]uint64{}
-	for m := mask; m != 0; m &= m - 1 {
-		i := bits.TrailingZeros64(m)
-		if i >= int(tiers.NumTiers) {
-			return fmt.Errorf("%w: tier %d", errSpoolTruncated, i)
-		}
+	if mask>>tiers.NumTiers != 0 {
+		return fmt.Errorf("%w: tier mask %#x", errSpoolTruncated, mask)
+	}
+	// The record's tiers come from a row's, so its mask is exact; the
+	// tiers it leaves out still hold r's last use's.
+	tierMask := uint16(mask)
+	r.clearTiers(r.tierMask &^ tierMask)
+	for m := tierMask; m != 0; m &= m - 1 {
+		i := bits.TrailingZeros16(m)
 		r.tierCounts[i], r.tierBytes[i] = next(), next()
 	}
+	r.tierMask = tierMask
 	if buf == nil || len(buf) != 0 {
 		return errSpoolTruncated
 	}

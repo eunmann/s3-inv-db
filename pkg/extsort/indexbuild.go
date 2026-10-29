@@ -252,7 +252,7 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	// hashed by the spool writer instead, it cost twice as much.
 	r.keyHash, r.fp = b.mphfBuilder.KeyHashes(row.Prefix)
 	r.name = append(r.name[:0], name...)
-	r.tierCounts, r.tierBytes = row.TierCounts, row.TierBytes
+	r.setTiers(row)
 	if err := b.spool.commit(); err != nil {
 		return err
 	}

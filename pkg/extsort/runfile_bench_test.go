@@ -22,8 +22,7 @@ func makePrefixRows(n int) []*extsort.PrefixRow {
 			Count:      uint64(i + 1),
 			TotalBytes: uint64((i + 1) * 4096),
 		}
-		r.TierCounts[tiers.Standard] = uint64(i + 1)
-		r.TierBytes[tiers.Standard] = uint64((i + 1) * 4096)
+		r.SetTier(tiers.Standard, uint64(i+1), uint64((i+1)*4096))
 		rows[i] = r
 	}
 

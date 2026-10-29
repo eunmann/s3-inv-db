@@ -23,7 +23,7 @@ func (m *memRun) ReadInto(into *PrefixRow) error {
 
 		return io.EOF
 	}
-	*into = *m.rows[m.next]
+	into.copyFrom(m.rows[m.next])
 	m.next++
 
 	return nil

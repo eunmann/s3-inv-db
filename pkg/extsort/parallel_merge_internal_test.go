@@ -31,8 +31,7 @@ func createTestRunFile(t *testing.T, dir, name string, prefixes []string, countO
 			Count:      uint64(countOffset + i + 1),
 			TotalBytes: uint64((countOffset + i + 1) * 100),
 		}
-		row.TierCounts[tiers.Standard] = row.Count
-		row.TierBytes[tiers.Standard] = row.TotalBytes
+		row.SetTier(tiers.Standard, row.Count, row.TotalBytes)
 		if err := writer.Write(row); err != nil {
 			t.Fatalf("write row: %v", err)
 		}
@@ -330,19 +329,15 @@ func TestParallelMerger_TierDataPreserved(t *testing.T) {
 
 	w1, _ := NewCompressedRunWriter(path1, CompressedRunWriterOptions{})
 	row1 := &PrefixRow{Prefix: "data/", Count: 10, TotalBytes: 1000}
-	row1.TierCounts[tiers.Standard] = 5
-	row1.TierCounts[tiers.GlacierFR] = 5
-	row1.TierBytes[tiers.Standard] = 500
-	row1.TierBytes[tiers.GlacierFR] = 500
+	row1.SetTier(tiers.Standard, 5, 500)
+	row1.SetTier(tiers.GlacierFR, 5, 500)
 	w1.Write(row1)
 	w1.Close()
 
 	w2, _ := NewCompressedRunWriter(path2, CompressedRunWriterOptions{})
 	row2 := &PrefixRow{Prefix: "data/", Count: 20, TotalBytes: 2000}
-	row2.TierCounts[tiers.Standard] = 15
-	row2.TierCounts[tiers.GlacierIR] = 5
-	row2.TierBytes[tiers.Standard] = 1500
-	row2.TierBytes[tiers.GlacierIR] = 500
+	row2.SetTier(tiers.Standard, 15, 1500)
+	row2.SetTier(tiers.GlacierIR, 5, 500)
 	w2.Write(row2)
 	w2.Close()
 
@@ -362,17 +357,17 @@ func TestParallelMerger_TierDataPreserved(t *testing.T) {
 	if row.TotalBytes != 3000 {
 		t.Errorf("expected merged bytes 3000, got %d", row.TotalBytes)
 	}
-	if row.TierCounts[tiers.Standard] != 20 { // 5 + 15
-		t.Errorf("expected Standard tier count 20, got %d", row.TierCounts[tiers.Standard])
+	if row.TierCount(tiers.Standard) != 20 { // 5 + 15
+		t.Errorf("expected Standard tier count 20, got %d", row.TierCount(tiers.Standard))
 	}
-	if row.TierCounts[tiers.GlacierFR] != 5 {
-		t.Errorf("expected GlacierFR tier count 5, got %d", row.TierCounts[tiers.GlacierFR])
+	if row.TierCount(tiers.GlacierFR) != 5 {
+		t.Errorf("expected GlacierFR tier count 5, got %d", row.TierCount(tiers.GlacierFR))
 	}
-	if row.TierCounts[tiers.GlacierIR] != 5 {
-		t.Errorf("expected GlacierIR tier count 5, got %d", row.TierCounts[tiers.GlacierIR])
+	if row.TierCount(tiers.GlacierIR) != 5 {
+		t.Errorf("expected GlacierIR tier count 5, got %d", row.TierCount(tiers.GlacierIR))
 	}
-	if row.TierBytes[tiers.Standard] != 2000 { // 500 + 1500
-		t.Errorf("expected Standard tier bytes 2000, got %d", row.TierBytes[tiers.Standard])
+	if row.TierBytes(tiers.Standard) != 2000 { // 500 + 1500
+		t.Errorf("expected Standard tier bytes 2000, got %d", row.TierBytes(tiers.Standard))
 	}
 }
 

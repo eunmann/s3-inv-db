@@ -39,21 +39,66 @@ type RowIterator interface {
 }
 
 // PrefixRow is the primary unit passed through the external sort.
-// Field order is tuned for alignment (Depth at the end avoids 6 bytes
-// of inter-field padding at billion-row scale). Tier index i ↔ tiers.ID(i).
+// Field order is tuned for alignment: Depth and tierMask at the end
+// share what would otherwise be padding.
+//
+// The tiers are per tiers.ID, and tierMask has bit i set exactly when
+// tier i's count or bytes is nonzero, so the loops over tiers (merging,
+// copying, encoding, clearing) visit only its bits; most rows hold one
+// to three of the thirteen. Only the methods write the tiers, so the
+// mask cannot fall out of step with them: a tier left out of it would
+// be dropped.
 type PrefixRow struct {
 	Prefix     string
 	Count      uint64
 	TotalBytes uint64
-	TierCounts [MaxTiers]uint64
-	TierBytes  [MaxTiers]uint64
+	tierCounts [MaxTiers]uint64
+	tierBytes  [MaxTiers]uint64
 	Depth      uint16
+	tierMask   uint16
 }
 
-// Reset clears the row for reuse via sync.Pool. Struct-zero assignment
-// is one statement and zeroes the embedded arrays in the same op.
+// TierCount returns tier id's object count.
+func (r *PrefixRow) TierCount(id tiers.ID) uint64 { return r.tierCounts[id] }
+
+// TierBytes returns tier id's bytes.
+func (r *PrefixRow) TierBytes(id tiers.ID) uint64 { return r.tierBytes[id] }
+
+// SetTier sets tier id's object count and bytes. Count and TotalBytes
+// are the caller's to keep: the index builder rejects a row whose
+// totals differ from its tier sums.
+func (r *PrefixRow) SetTier(id tiers.ID, count, bytes uint64) {
+	r.tierCounts[id], r.tierBytes[id] = count, bytes
+	if count|bytes != 0 {
+		r.tierMask |= 1 << id
+	} else {
+		r.tierMask &^= 1 << id
+	}
+}
+
+// Reset clears the row for reuse.
 func (r *PrefixRow) Reset() {
-	*r = PrefixRow{}
+	r.clearTiers(r.tierMask)
+	r.Prefix, r.Count, r.TotalBytes, r.Depth = "", 0, 0, 0
+}
+
+// clearTiers zeroes the tiers in mask.
+func (r *PrefixRow) clearTiers(mask uint16) {
+	for m := mask; m != 0; m &= m - 1 {
+		t := bits.TrailingZeros16(m)
+		r.tierCounts[t], r.tierBytes[t] = 0, 0
+	}
+	r.tierMask &^= mask
+}
+
+// copyFrom makes r a copy of src, writing only the tiers either holds.
+func (r *PrefixRow) copyFrom(src *PrefixRow) {
+	r.clearTiers(r.tierMask &^ src.tierMask)
+	for m := src.tierMask; m != 0; m &= m - 1 {
+		t := bits.TrailingZeros16(m)
+		r.tierCounts[t], r.tierBytes[t] = src.tierCounts[t], src.tierBytes[t]
+	}
+	r.Prefix, r.Count, r.TotalBytes, r.Depth, r.tierMask = src.Prefix, src.Count, src.TotalBytes, src.Depth, src.tierMask
 }
 
 // Merge accumulates counts and bytes from other into r; Prefix and
@@ -61,12 +106,12 @@ func (r *PrefixRow) Reset() {
 func (r *PrefixRow) Merge(other *PrefixRow) {
 	r.Count += other.Count
 	r.TotalBytes += other.TotalBytes
-	for i := range r.TierCounts {
-		r.TierCounts[i] += other.TierCounts[i]
+	for m := other.tierMask; m != 0; m &= m - 1 {
+		t := bits.TrailingZeros16(m)
+		r.tierCounts[t] += other.tierCounts[t]
+		r.tierBytes[t] += other.tierBytes[t]
 	}
-	for i := range r.TierBytes {
-		r.TierBytes[i] += other.TierBytes[i]
-	}
+	r.tierMask |= other.tierMask
 }
 
 // A run record is the row in varints, its prefix front-coded against the
@@ -96,14 +141,12 @@ var errRunRecordCorrupt = errors.New("corrupt run record")
 // encodeRunRecord appends row's record, front-coded against prev, to dst.
 func encodeRunRecord(dst []byte, prev string, row *PrefixRow) []byte {
 	var count, bytes uint64
-	var mask uint64
-	for t := range MaxTiers {
-		count += row.TierCounts[t]
-		bytes += row.TierBytes[t]
-		if row.TierCounts[t]|row.TierBytes[t] != 0 {
-			mask |= 1 << t
-		}
+	for m := row.tierMask; m != 0; m &= m - 1 {
+		t := bits.TrailingZeros16(m)
+		count += row.tierCounts[t]
+		bytes += row.tierBytes[t]
 	}
+	mask := uint64(row.tierMask)
 	explicit := count != row.Count || bytes != row.TotalBytes
 	if explicit {
 		mask |= runRecordTotals
@@ -114,11 +157,10 @@ func encodeRunRecord(dst []byte, prev string, row *PrefixRow) []byte {
 	dst = append(dst, row.Prefix[shared:]...)
 	dst = binary.AppendUvarint(dst, uint64(row.Depth))
 	dst = binary.AppendUvarint(dst, mask)
-	for t := range MaxTiers {
-		if mask&(1<<t) != 0 {
-			dst = binary.AppendUvarint(dst, row.TierCounts[t])
-			dst = binary.AppendUvarint(dst, row.TierBytes[t])
-		}
+	for m := row.tierMask; m != 0; m &= m - 1 {
+		t := bits.TrailingZeros16(m)
+		dst = binary.AppendUvarint(dst, row.tierCounts[t])
+		dst = binary.AppendUvarint(dst, row.tierBytes[t])
 	}
 	if explicit {
 		dst = binary.AppendUvarint(dst, row.Count)
@@ -222,7 +264,7 @@ func decodeRunRecord(b []byte, prev string, arena *prefixArena, row *PrefixRow) 
 	if suffixLen > uint64(len(b)-c.off) {
 		return 0, errRunRecordShort
 	}
-	row.Reset()
+	row.Prefix = ""
 	if n := int(shared + suffixLen); n > 0 {
 		p := arena.alloc(n)
 		copy(p, prev[:shared])
@@ -241,11 +283,16 @@ func decodeRunRecord(b []byte, prev string, arena *prefixArena, row *PrefixRow) 
 	if mask&^(1<<MaxTiers-1|runRecordTotals) != 0 {
 		return 0, fmt.Errorf("%w: tier mask %#x", errRunRecordCorrupt, mask)
 	}
-	for m := mask & (1<<MaxTiers - 1); m != 0; m &= m - 1 {
-		t := bits.TrailingZeros64(m)
-		row.TierCounts[t], row.TierBytes[t] = c.uvarint(), c.uvarint()
-		row.Count += row.TierCounts[t]
-		row.TotalBytes += row.TierBytes[t]
+	tierMask := uint16(mask & (1<<MaxTiers - 1))
+	// The tiers this record leaves out still hold the row's last use's.
+	row.clearTiers(row.tierMask &^ tierMask)
+	row.Count, row.TotalBytes = 0, 0
+	for m := tierMask; m != 0; m &= m - 1 {
+		t := bits.TrailingZeros16(m)
+		n, size := c.uvarint(), c.uvarint()
+		row.SetTier(tiers.ID(t), n, size)
+		row.Count += n
+		row.TotalBytes += size
 	}
 	if mask&runRecordTotals != 0 {
 		row.Count, row.TotalBytes = c.uvarint(), c.uvarint()
@@ -362,8 +409,9 @@ type keyedRow struct {
 func (r *PrefixRow) add(size uint64, tierID tiers.ID) {
 	r.Count++
 	r.TotalBytes += size
-	r.TierCounts[tierID]++
-	r.TierBytes[tierID] += size
+	r.tierCounts[tierID]++
+	r.tierBytes[tierID] += size
+	r.tierMask |= 1 << tierID
 }
 
 // Config holds pipeline configuration. Grouped into substructs by

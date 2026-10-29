@@ -79,7 +79,8 @@ func (p *prefetchIterator) run() {
 
 				break
 			}
-			rows = append(rows, *row)
+			rows = rows[:len(rows)+1]
+			rows[len(rows)-1].copyFrom(row)
 		}
 		p.inputLeft.Store(p.inner.Remaining())
 		select {

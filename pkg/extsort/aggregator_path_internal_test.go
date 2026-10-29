@@ -80,7 +80,7 @@ func TestAggregatorPathCacheIsExact(t *testing.T) {
 				}
 			}
 			mergeRows(got, agg.Drain())
-			if diff := gocmp.Diff(want, got, cmpopts.EquateEmpty()); diff != "" {
+			if diff := gocmp.Diff(want, got, cmpopts.EquateEmpty(), rowCmp); diff != "" {
 				t.Fatalf("maxDepth=%d %s (-reference +aggregator):\n%s", maxDepth, name, diff)
 			}
 		}
@@ -176,7 +176,7 @@ func TestAggregatorSegmentsAreExact(t *testing.T) {
 					}
 				}
 				drain()
-				if diff := gocmp.Diff(referenceAggregate(all, maxDepth), got, cmpopts.EquateEmpty()); diff != "" {
+				if diff := gocmp.Diff(referenceAggregate(all, maxDepth), got, cmpopts.EquateEmpty(), rowCmp); diff != "" {
 					t.Fatalf("%s maxDepth=%d drainEvery=%d (-reference +aggregator):\n%s", name, maxDepth, drainEvery, diff)
 				}
 			}

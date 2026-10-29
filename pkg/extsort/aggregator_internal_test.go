@@ -100,7 +100,7 @@ func TestAggregatorDrainRecyclesRows(t *testing.T) {
 		if r.TotalBytes != want[r.Prefix] || r.Count != 2 {
 			t.Errorf("row %q = %d objects, %d bytes; want 2, %d", r.Prefix, r.Count, r.TotalBytes, want[r.Prefix])
 		}
-		if r.TierCounts[tiers.GlacierFR] != 0 || r.TierBytes[tiers.GlacierFR] != 0 {
+		if r.TierCount(tiers.GlacierFR) != 0 || r.TierBytes(tiers.GlacierFR) != 0 {
 			t.Errorf("row %q kept tier stats from the previous spill", r.Prefix)
 		}
 	}

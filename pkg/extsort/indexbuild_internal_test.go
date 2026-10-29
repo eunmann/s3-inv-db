@@ -57,7 +57,7 @@ func TestWriteLevelsSideFailureEnds(t *testing.T) {
 		if i == levelBatchRows/2 {
 			tier = tiers.GlacierIR // not declared: the tier writer refuses it
 		}
-		row.TierCounts[tier], row.TierBytes[tier] = 1, 1
+		row.SetTier(tier, 1, 1)
 		if err := b.Add(&row); err != nil {
 			t.Fatalf("Add %d: %v", i, err)
 		}

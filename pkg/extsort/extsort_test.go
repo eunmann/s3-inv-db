@@ -73,14 +73,14 @@ func TestAggregator(t *testing.T) {
 			t.Fatal("data/ prefix not found")
 		}
 
-		if dataRow.TierCounts[tiers.Standard] != 1 {
-			t.Errorf("expected 1 Standard object, got %d", dataRow.TierCounts[tiers.Standard])
+		if dataRow.TierCount(tiers.Standard) != 1 {
+			t.Errorf("expected 1 Standard object, got %d", dataRow.TierCount(tiers.Standard))
 		}
-		if dataRow.TierCounts[tiers.GlacierFR] != 1 {
-			t.Errorf("expected 1 Glacier object, got %d", dataRow.TierCounts[tiers.GlacierFR])
+		if dataRow.TierCount(tiers.GlacierFR) != 1 {
+			t.Errorf("expected 1 Glacier object, got %d", dataRow.TierCount(tiers.GlacierFR))
 		}
-		if dataRow.TierBytes[tiers.GlacierIR] != 300 {
-			t.Errorf("expected 300 GlacierIR bytes, got %d", dataRow.TierBytes[tiers.GlacierIR])
+		if dataRow.TierBytes(tiers.GlacierIR) != 300 {
+			t.Errorf("expected 300 GlacierIR bytes, got %d", dataRow.TierBytes(tiers.GlacierIR))
 		}
 	})
 }
@@ -170,7 +170,7 @@ func TestIndexBuilder(t *testing.T) {
 		}
 
 		for _, row := range rows {
-			row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = row.Count, row.TotalBytes
+			row.SetTier(tiers.Standard, row.Count, row.TotalBytes)
 			if err := builder.Add(row); err != nil {
 				t.Fatalf("add row: %v", err)
 			}

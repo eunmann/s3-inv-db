@@ -172,7 +172,7 @@ func (a *Aggregator) newRow() *PrefixRow {
 	}
 	a.used++
 	row := &a.slabs[slab][i]
-	*row = PrefixRow{}
+	row.Reset()
 
 	return row
 }

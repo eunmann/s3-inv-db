@@ -107,7 +107,7 @@ func writeOverlappingRuns(b *testing.B, dir string, runs, rowsPerRun int, heavy 
 				Count:      uint64(j + 1),
 				TotalBytes: uint64(j+1) * 4096,
 			}
-			row.TierCounts[0], row.TierBytes[0] = row.Count, row.TotalBytes
+			row.SetTier(0, row.Count, row.TotalBytes)
 			rows = append(rows, row)
 		}
 		extsort.SortPrefixRows(rows)

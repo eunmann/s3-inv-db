@@ -80,7 +80,7 @@ func TestIndexBuilderMemoryBounded(t *testing.T) {
 	// their ancestors "" and "data/".
 	for depth, prefix := range []string{"", "data/"} {
 		row := &extsort.PrefixRow{Prefix: prefix, Depth: uint16(depth), Count: 1, TotalBytes: 1}
-		row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = 1, 1
+		row.SetTier(tiers.Standard, 1, 1)
 		if err := builder.Add(row); err != nil {
 			t.Fatalf("add %q: %v", prefix, err)
 		}
@@ -95,7 +95,7 @@ func TestIndexBuilderMemoryBounded(t *testing.T) {
 			Count:      uint64(i + 1),
 			TotalBytes: uint64((i + 1) * 1024),
 		}
-		row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = row.Count, row.TotalBytes
+		row.SetTier(tiers.Standard, row.Count, row.TotalBytes)
 		if err := builder.Add(row); err != nil {
 			t.Fatalf("add row %d: %v", i, err)
 		}

@@ -40,10 +40,8 @@ func TestCompressedRunFile(t *testing.T) {
 			{Prefix: "data/", Depth: 1, Count: 5, TotalBytes: 500},
 			{Prefix: "data/2024/", Depth: 2, Count: 3, TotalBytes: 300},
 		}
-		rows[0].TierCounts[tiers.Standard] = 7
-		rows[0].TierCounts[tiers.GlacierFR] = 3
-		rows[0].TierBytes[tiers.Standard] = 700
-		rows[0].TierBytes[tiers.GlacierFR] = 300
+		rows[0].SetTier(tiers.Standard, 7, 700)
+		rows[0].SetTier(tiers.GlacierFR, 3, 300)
 
 		// Write compressed
 		writer, err := extsort.NewCompressedRunWriter(path, extsort.CompressedRunWriterOptions{})
@@ -89,11 +87,11 @@ func TestCompressedRunFile(t *testing.T) {
 			}
 		}
 
-		if got[0].TierCounts[tiers.Standard] != 7 {
-			t.Errorf("expected 7 Standard tier count, got %d", got[0].TierCounts[tiers.Standard])
+		if got[0].TierCount(tiers.Standard) != 7 {
+			t.Errorf("expected 7 Standard tier count, got %d", got[0].TierCount(tiers.Standard))
 		}
-		if got[0].TierBytes[tiers.GlacierFR] != 300 {
-			t.Errorf("expected 300 GlacierFR bytes, got %d", got[0].TierBytes[tiers.GlacierFR])
+		if got[0].TierBytes(tiers.GlacierFR) != 300 {
+			t.Errorf("expected 300 GlacierFR bytes, got %d", got[0].TierBytes(tiers.GlacierFR))
 		}
 
 		var row extsort.PrefixRow
@@ -284,8 +282,7 @@ func TestCompressedRunSize(t *testing.T) {
 			Count:      uint64(i + 1),
 			TotalBytes: uint64((i + 1) * 1024),
 		}
-		rows[i].TierCounts[tiers.Standard] = uint64(i)
-		rows[i].TierBytes[tiers.Standard] = uint64(i * 1024)
+		rows[i].SetTier(tiers.Standard, uint64(i), uint64(i*1024))
 		// Length, prefix, depth, count, bytes, then both tier arrays.
 		rawSize += int64(4 + len(rows[i].Prefix) + 2 + 8 + 8 + extsort.MaxTiers*16)
 	}

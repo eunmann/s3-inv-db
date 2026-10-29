@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -16,7 +17,9 @@ func spoolTestRecord(i int) spoolRecord {
 		count: uint64(i), bytes: uint64(i) << 20, childLocal: uint64(i / 2), parentLocal: uint64(i / 3),
 		keyHash: uint64(i) * 0x9e3779b97f4a7c15, fp: ^uint64(i), name: fmt.Appendf(nil, "seg-%d", i),
 	}
-	r.tierCounts[i%MaxTiers], r.tierBytes[i%MaxTiers] = uint64(i), uint64(i)<<20
+	var row PrefixRow
+	row.SetTier(tiers.ID(i%MaxTiers), uint64(i), uint64(i)<<20)
+	r.setTiers(&row)
 
 	return r
 }

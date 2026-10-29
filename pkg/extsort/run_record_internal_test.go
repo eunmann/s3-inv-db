@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -40,20 +41,20 @@ func randomSortedRows(rng *rand.Rand, n int) []PrefixRow {
 	for i, p := range prefixes {
 		r := &rows[i]
 		r.Prefix, r.Depth = p, uint16(strings.Count(p, "/"))
-		for t := range MaxTiers {
+		for t := range tiers.NumTiers {
 			if rng.IntN(3) != 0 {
 				continue
 			}
 			switch rng.IntN(4) {
 			case 0:
-				r.TierCounts[t], r.TierBytes[t] = 1, 0 // zero-byte objects
+				r.SetTier(t, 1, 0) // zero-byte objects
 			case 1:
-				r.TierCounts[t], r.TierBytes[t] = math.MaxUint64/32, math.MaxUint64/32
+				r.SetTier(t, math.MaxUint64/32, math.MaxUint64/32)
 			default:
-				r.TierCounts[t], r.TierBytes[t] = rng.Uint64N(1000)+1, rng.Uint64N(1<<40)
+				r.SetTier(t, rng.Uint64N(1000)+1, rng.Uint64N(1<<40))
 			}
-			r.Count += r.TierCounts[t]
-			r.TotalBytes += r.TierBytes[t]
+			r.Count += r.TierCount(t)
+			r.TotalBytes += r.TierBytes(t)
 		}
 	}
 
@@ -117,7 +118,7 @@ func TestRunRecordsRoundTrip(t *testing.T) {
 		if err := r.ReadInto(&got); err != nil {
 			t.Fatalf("row %d: %v", i, err)
 		}
-		if diff := cmp.Diff(rows[i], got); diff != "" {
+		if diff := cmp.Diff(rows[i], got, rowCmp); diff != "" {
 			t.Fatalf("row %d (-written +read):\n%s", i, diff)
 		}
 	}
@@ -130,7 +131,7 @@ func TestRunRecordsRoundTrip(t *testing.T) {
 // its tier sums stores them, and reads back exactly.
 func TestRunRecordKeepsInconsistentTotals(t *testing.T) {
 	for _, row := range []PrefixRow{
-		{Prefix: "a/", Count: 2, TotalBytes: 5, TierCounts: [MaxTiers]uint64{1}, TierBytes: [MaxTiers]uint64{5}},
+		tierRow(PrefixRow{Prefix: "a/", Count: 2, TotalBytes: 5}, tiers.Standard, 1, 5),
 		{Prefix: "b/", Count: 7, TotalBytes: 700},
 	} {
 		data := encodeRunRecord(nil, "", &row)
@@ -139,7 +140,7 @@ func TestRunRecordKeepsInconsistentTotals(t *testing.T) {
 		if err := d.next(&got); err != nil {
 			t.Fatal(err)
 		}
-		if diff := cmp.Diff(row, got); diff != "" {
+		if diff := cmp.Diff(row, got, rowCmp); diff != "" {
 			t.Fatalf("(-written +read):\n%s", diff)
 		}
 	}
@@ -177,7 +178,7 @@ func TestRunRecordRejectsCorruption(t *testing.T) {
 func TestRunRecordLongerThanWindow(t *testing.T) {
 	long := strings.Repeat("segment/", runRecordWindow/4) // 2× the window
 	rows := []PrefixRow{
-		{Prefix: long, Depth: uint16(runRecordWindow / 4), Count: 1, TotalBytes: 2, TierCounts: [MaxTiers]uint64{1}, TierBytes: [MaxTiers]uint64{2}},
+		tierRow(PrefixRow{Prefix: long, Depth: uint16(runRecordWindow / 4), Count: 1, TotalBytes: 2}, tiers.Standard, 1, 2),
 		{Prefix: long + "x/", Depth: uint16(runRecordWindow/4 + 1)},
 	}
 	data := encodeRunRecord(nil, "", &rows[0])
@@ -188,7 +189,7 @@ func TestRunRecordLongerThanWindow(t *testing.T) {
 		if err := d.next(&got); err != nil {
 			t.Fatalf("row %d: %v", i, err)
 		}
-		if diff := cmp.Diff(rows[i], got); diff != "" {
+		if diff := cmp.Diff(rows[i], got, rowCmp); diff != "" {
 			t.Fatalf("row %d (-written +read):\n%s", i, diff)
 		}
 	}

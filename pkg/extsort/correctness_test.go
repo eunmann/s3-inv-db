@@ -17,8 +17,8 @@ import (
 func withTotals(r *extsort.PrefixRow) *extsort.PrefixRow {
 	r.Count, r.TotalBytes = 0, 0
 	for id := range tiers.NumTiers {
-		r.Count += r.TierCounts[id]
-		r.TotalBytes += r.TierBytes[id]
+		r.Count += r.TierCount(id)
+		r.TotalBytes += r.TierBytes(id)
 	}
 
 	return r
@@ -30,8 +30,7 @@ func withRoot(rows ...*extsort.PrefixRow) []*extsort.PrefixRow {
 	root := &extsort.PrefixRow{Prefix: ""}
 	for _, r := range rows {
 		for id := range tiers.NumTiers {
-			root.TierCounts[id] += r.TierCounts[id]
-			root.TierBytes[id] += r.TierBytes[id]
+			root.SetTier(id, root.TierCount(id)+r.TierCount(id), root.TierBytes(id)+r.TierBytes(id))
 		}
 	}
 
@@ -81,14 +80,10 @@ func TestTierStats_PresentTiersOnly(t *testing.T) {
 		{Prefix: "c/", Depth: 1},
 		{Prefix: "d/", Depth: 1},
 	}
-	rows[0].TierCounts[tiers.Standard] = 1
-	rows[0].TierBytes[tiers.Standard] = 100
-	rows[1].TierCounts[tiers.GlacierFR] = 2
-	rows[1].TierBytes[tiers.GlacierFR] = 200
-	rows[2].TierCounts[tiers.DeepArchive] = 3
-	rows[2].TierBytes[tiers.DeepArchive] = 300
-	rows[3].TierCounts[tiers.Standard] = 4
-	rows[3].TierBytes[tiers.Standard] = 400
+	rows[0].SetTier(tiers.Standard, 1, 100)
+	rows[1].SetTier(tiers.GlacierFR, 2, 200)
+	rows[2].SetTier(tiers.DeepArchive, 3, 300)
+	rows[3].SetTier(tiers.Standard, 4, 400)
 
 	rows = withRoot(rows...)
 	for _, r := range rows {
@@ -166,17 +161,13 @@ func TestTierStats_PreorderAlignment(t *testing.T) {
 	}
 
 	row0 := &extsort.PrefixRow{Prefix: "a/", Depth: 1}
-	row0.TierCounts[tiers.Standard] = 1
-	row0.TierBytes[tiers.Standard] = 100
+	row0.SetTier(tiers.Standard, 1, 100)
 	row1 := &extsort.PrefixRow{Prefix: "b/", Depth: 1}
-	row1.TierCounts[tiers.Standard] = 1
-	row1.TierBytes[tiers.Standard] = 200
+	row1.SetTier(tiers.Standard, 1, 200)
 	row2 := &extsort.PrefixRow{Prefix: "c/", Depth: 1}
-	row2.TierCounts[tiers.GlacierFR] = 1
-	row2.TierBytes[tiers.GlacierFR] = 300
+	row2.SetTier(tiers.GlacierFR, 1, 300)
 	row3 := &extsort.PrefixRow{Prefix: "d/", Depth: 1}
-	row3.TierCounts[tiers.Standard] = 1
-	row3.TierBytes[tiers.Standard] = 400
+	row3.SetTier(tiers.Standard, 1, 400)
 
 	for _, r := range withRoot(row0, row1, row2, row3) {
 		if err := b.Add(withTotals(r)); err != nil {
@@ -260,7 +251,7 @@ func TestIndexBuilder_RejectsMissingParent(t *testing.T) {
 			var last error
 			for _, p := range tc.prefixes {
 				row := &extsort.PrefixRow{Prefix: p, Depth: uint16(strings.Count(p, "/")), Count: 1, TotalBytes: 1}
-				row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = 1, 1
+				row.SetTier(tiers.Standard, 1, 1)
 				if last = b.Add(row); last != nil {
 					break
 				}
@@ -296,7 +287,7 @@ func TestIndexBuilder_RejectsUnsortedInput(t *testing.T) {
 			var last error
 			for _, p := range tc.prefixes {
 				row := &extsort.PrefixRow{Prefix: p, Depth: uint16(strings.Count(p, "/")), Count: 1, TotalBytes: 1}
-				row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = 1, 1
+				row.SetTier(tiers.Standard, 1, 1)
 				if last = b.Add(row); last != nil {
 					break
 				}
@@ -320,7 +311,7 @@ func TestIndexBuilder_RejectsDepthMismatch(t *testing.T) {
 		{Prefix: "", Depth: 0, Count: 1, TotalBytes: 1},
 		{Prefix: "a/", Depth: 2, Count: 1, TotalBytes: 1}, // really depth 1
 	} {
-		row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = 1, 1
+		row.SetTier(tiers.Standard, 1, 1)
 		if last = b.Add(row); last != nil {
 			break
 		}

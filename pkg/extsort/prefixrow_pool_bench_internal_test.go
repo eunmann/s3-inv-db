@@ -21,9 +21,8 @@ func serializeRunBody(n int) []byte {
 			Depth:      3,
 			Count:      uint64(i),
 			TotalBytes: uint64(i * 4096),
-			TierCounts: [MaxTiers]uint64{tiers.Standard: uint64(i)},
-			TierBytes:  [MaxTiers]uint64{tiers.Standard: uint64(i) * 4096},
 		}
+		rows[i].SetTier(tiers.Standard, uint64(i), uint64(i)*4096)
 	}
 	var out []byte
 	prev := ""
