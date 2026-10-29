@@ -352,9 +352,6 @@ func NewCoreStatsWriter(outDir string, plan *CoreStatsPlan, enc TierMaskEncoding
 	return w, nil
 }
 
-// Stride returns the widths the rows are written at.
-func (w *CoreStatsWriter) Stride() CoreStatsStride { return w.desc }
-
 // Add writes the next row: the prefix's object count, total bytes, the
 // row of its first child and its tier mask. It fails on a row the plan
 // doesn't hold: past its row count, a child start out of level order, a
