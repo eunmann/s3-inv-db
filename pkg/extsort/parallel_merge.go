@@ -179,14 +179,14 @@ type mergeResult struct {
 // cleanup closure the caller must run when done.
 //
 // Disk rounds run only while there are more than FinalFanIn runs; the
-// final merge is a live K-way MergeIterator that the IndexBuilder
-// consumes directly, so the deduplicated prefix set is never written
-// out and read back.
+// final merge is a live read-ahead merge, one goroutine decoding each
+// run ahead, that the IndexBuilder consumes directly, so the
+// deduplicated prefix set is never written out and read back.
 //
 // The merger owns the input files: each is deleted as soon as it has
-// been merged into a larger run, and the cleanup closure closes the
-// iterator and deletes the runs it read. On error every remaining run
-// is deleted.
+// been merged into a larger run, and the cleanup closure stops the
+// decoder goroutines, closes the runs and deletes them. On error every
+// remaining run is deleted.
 func (m *ParallelMerger) MergeAllToIterator(ctx context.Context, inputPaths []string) (RowIterator, func() error, error) {
 	return m.mergeAllToIterator(ctx, inputPaths, nil)
 }
