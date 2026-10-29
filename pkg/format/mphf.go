@@ -165,3 +165,11 @@ const fingerprintSeed = 0x6a09e667f3bcc909 // the first 64 bits of frac(sqrt(2))
 func computeFingerprint(s string) uint64 {
 	return wyhash(s, fingerprintSeed)
 }
+
+// prefixHashes is hashString(s) and computeFingerprint(s) from one pass
+// over s.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func prefixHashes(s string) (uint64, uint64) {
+	return wyhash2(s, 0, fingerprintSeed)
+}

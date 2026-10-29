@@ -80,3 +80,55 @@ func wyr4(s string) uint64 {
 
 	return uint64(s[0]) | uint64(s[1])<<8 | uint64(s[2])<<16 | uint64(s[3])<<24
 }
+
+// wyhash2 returns wyhash(key, seedA) and wyhash(key, seedB) from one
+// pass over key: the loads are shared and the two seeds' mixing chains
+// are independent, so they overlap in the pipeline where two calls
+// would run one after the other.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func wyhash2(key string, seedA, seedB uint64) (uint64, uint64) {
+	n := len(key)
+	sa := seedA ^ wymix(seedA^wyp0, wyp1)
+	sb := seedB ^ wymix(seedB^wyp0, wyp1)
+	var a, b uint64
+	switch {
+	case n <= 16:
+		switch {
+		case n >= 4:
+			q := (n >> 3) << 2
+			a = wyr4(key)<<32 | wyr4(key[q:])
+			b = wyr4(key[n-4:])<<32 | wyr4(key[n-4-q:])
+		case n > 0:
+			a = uint64(key[0])<<16 | uint64(key[n>>1])<<8 | uint64(key[n-1])
+		}
+	default:
+		p, i := 0, n
+		if i >= wyStripe {
+			a1, a2, b1, b2 := sa, sa, sb, sb
+			for i >= wyStripe {
+				k0, k1, k2, k3, k4, k5 := wyr8(key[p:]), wyr8(key[p+8:]), wyr8(key[p+16:]), wyr8(key[p+24:]), wyr8(key[p+32:]), wyr8(key[p+40:])
+				sa = wymix(k0^wyp1, k1^sa)
+				sb = wymix(k0^wyp1, k1^sb)
+				a1 = wymix(k2^wyp2, k3^a1)
+				b1 = wymix(k2^wyp2, k3^b1)
+				a2 = wymix(k4^wyp3, k5^a2)
+				b2 = wymix(k4^wyp3, k5^b2)
+				p, i = p+wyStripe, i-wyStripe
+			}
+			sa ^= a1 ^ a2
+			sb ^= b1 ^ b2
+		}
+		for i > 16 {
+			k0, k1 := wyr8(key[p:]), wyr8(key[p+8:])
+			sa = wymix(k0^wyp1, k1^sa)
+			sb = wymix(k0^wyp1, k1^sb)
+			p, i = p+16, i-16
+		}
+		a, b = wyr8(key[p+i-16:]), wyr8(key[p+i-8:])
+	}
+	hiA, loA := bits.Mul64(a^wyp1, b^sa)
+	hiB, loB := bits.Mul64(a^wyp1, b^sb)
+
+	return wymix(loA^wyp0^uint64(n), hiA^wyp1), wymix(loB^wyp0^uint64(n), hiB^wyp1)
+}

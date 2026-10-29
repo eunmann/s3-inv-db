@@ -28,8 +28,8 @@ type StreamingMPHFBuilder struct {
 	fingerprints *u64DiskArray
 	tempDir      string
 
-	// keyHash and fingerprint are hashString and computeFingerprint;
-	// tests replace them to force collisions.
+	// keyHash and fingerprint, when set, stand in for hashString and
+	// computeFingerprint: tests force collisions with them.
 	keyHash     func(prefix string) uint64
 	fingerprint func(prefix string) uint64
 
@@ -77,8 +77,6 @@ func NewStreamingMPHFBuilder(tempDir string) (*StreamingMPHFBuilder, error) {
 		hashes:       hashes,
 		fingerprints: fingerprints,
 		tempDir:      tempDir,
-		keyHash:      hashString,
-		fingerprint:  computeFingerprint,
 	}, nil
 }
 
@@ -95,7 +93,15 @@ func (b *StreamingMPHFBuilder) Add(prefix string) error {
 //
 //nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
 func (b *StreamingMPHFBuilder) KeyHashes(prefix string) (uint64, uint64) {
-	return b.keyHash(prefix), b.fingerprint(prefix)
+	keyHash, fingerprint := prefixHashes(prefix)
+	if b.keyHash != nil {
+		keyHash = b.keyHash(prefix)
+	}
+	if b.fingerprint != nil {
+		fingerprint = b.fingerprint(prefix)
+	}
+
+	return keyHash, fingerprint
 }
 
 // AddHashed adds the next prefix by the key hash and fingerprint
