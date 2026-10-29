@@ -1,6 +1,7 @@
 package s3inventory_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"github.com/eunmann/s3-inv-db/pkg/s3inventory"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 // awsInventoryRecord carries every field S3 Inventory can emit in
@@ -41,7 +43,8 @@ type awsInventoryRecord struct {
 }
 
 // writeWideInventory writes n records with high-entropy ETags, owners
-// and ACLs, as real inventories have, and returns the file path.
+// and ACLs, as real inventories have, Snappy compressed as AWS delivers
+// them, and returns the file path.
 func writeWideInventory(tb testing.TB, n int) string {
 	tb.Helper()
 	tm := tiers.NewMapping()
@@ -76,11 +79,29 @@ func writeWideInventory(tb testing.TB, n int) string {
 		})
 	}
 	path := filepath.Join(tb.TempDir(), "wide.parquet")
-	if err := parquet.WriteFile(path, rows); err != nil {
+	if err := parquet.WriteFile(path, rows, parquet.Compression(&parquet.Snappy)); err != nil {
 		tb.Fatalf("WriteFile: %v", err)
 	}
 
 	return path
+}
+
+func TestWriteWideInventory_SnappyCompressed(t *testing.T) {
+	data, err := os.ReadFile(writeWideInventory(t, 100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	for g, rg := range f.Metadata().RowGroups {
+		for _, col := range rg.Columns {
+			if col.MetaData.Codec != format.Snappy {
+				t.Errorf("row group %d column %v codec = %v, want SNAPPY", g, col.MetaData.PathInSchema, col.MetaData.Codec)
+			}
+		}
+	}
 }
 
 // BenchmarkParquetReaderWide reads an inventory with every AWS column,
