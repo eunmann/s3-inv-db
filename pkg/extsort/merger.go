@@ -34,9 +34,9 @@ func fileSources(readers []*CompressedRunReader) []runSource {
 // automatically merging duplicates (same prefix from different runs).
 // A run whose prefixes go backwards is an error (ErrUnsortedInput).
 //
-// Rows are recycled through a per-iterator free list: at most one row
-// per reader plus the last result are live, so a merge of any length
-// allocates only those.
+// Rows are recycled through a per-iterator free list, and the rows and
+// the merge's other state come in a fixed handful of allocations made
+// at the start, whatever the merge's fan-in or length.
 type MergeIterator struct {
 	err     error
 	readers []runSource
@@ -126,6 +126,9 @@ type loserTree struct {
 	// nodes[p], for 0 < p < len(keys), is the loser of the match at p.
 	// Source i is leaf len(keys)+i; node p's parent is p/2.
 	nodes []loserEntry
+	// first[p] is, before start, source i's first key at p = len(keys)+i,
+	// and, as start plays the first matches, the winner of node p's.
+	first []loserEntry
 	win   loserEntry
 	// runnerUp, when runnerUpKnown, is the smallest loser's code on the
 	// winner's path: the code the winner's next key must beat to skip
@@ -140,32 +143,43 @@ type loserEntry struct {
 	src  int
 }
 
-// newLoserTree plays the first matches between keys, coded against "".
-func newLoserTree(keys []string, codes []uint64) loserTree {
-	k := len(keys)
-	t := loserTree{keys: keys, nodes: make([]loserEntry, k), win: loserEntry{code: ovcExhausted}}
-	if k == 0 {
-		return t
+// newLoserTree returns a tree over k sources, each with no rows until
+// seeded.
+func newLoserTree(k int) loserTree {
+	entries := make([]loserEntry, 3*k)
+	t := loserTree{
+		keys:  make([]string, k),
+		nodes: entries[:k:k],
+		first: entries[k:],
+		win:   loserEntry{code: ovcExhausted},
 	}
-	// Winners of the matches played so far, by node.
-	winners := make([]loserEntry, k)
-	entry := func(p int) loserEntry {
-		if p >= k {
-			return loserEntry{code: codes[p-k], src: p - k}
-		}
+	for i := range k {
+		t.first[k+i] = loserEntry{code: ovcExhausted, src: i}
+	}
 
-		return winners[p]
+	return t
+}
+
+// seed makes key source src's first, coded against "".
+func (t *loserTree) seed(src int, key string) {
+	t.keys[src] = key
+	t.first[len(t.keys)+src].code = ovcAt(key, 0)
+}
+
+// start plays the first matches between the seeded keys.
+func (t *loserTree) start() {
+	k := len(t.keys)
+	if k == 0 {
+		return
 	}
 	for p := k - 1; p > 0; p-- {
-		x, y := entry(2*p), entry(2*p+1)
+		x, y := t.first[2*p], t.first[2*p+1]
 		if y.code < x.code || (y.code == x.code && !t.breakTie(&x, &y)) {
 			x, y = y, x
 		}
-		winners[p], t.nodes[p] = x, y
+		t.first[p], t.nodes[p] = x, y
 	}
-	t.win = entry(1)
-
-	return t
+	t.win = t.first[1]
 }
 
 // replace makes key, coded against the winner's key, the winner's
@@ -298,29 +312,36 @@ func NewMergeIterator(paths []string, bufferSize int) (*MergeIterator, error) {
 
 // newMergeIterator merges already-open sources. On error it closes them.
 func newMergeIterator(readers []runSource) (*MergeIterator, error) {
+	k := len(readers)
+	// The most rows live at once: each reader's head, the row being
+	// returned, and a duplicate of it taken out to be merged into it.
+	rows := make([]PrefixRow, k+2)
+	ptrs := make([]*PrefixRow, k+len(rows))
 	m := &MergeIterator{
 		readers: readers,
-		heads:   make([]*PrefixRow, len(readers)),
-		free:    make([]*PrefixRow, 0, len(readers)+1),
+		heads:   ptrs[:k:k],
+		free:    ptrs[k:],
+		tree:    newLoserTree(k),
 	}
-	keys := make([]string, len(readers))
-	codes := make([]uint64, len(readers))
+	for i := range rows {
+		m.free[i] = &rows[i]
+	}
 	for i, r := range readers {
 		row := m.freeRow()
 		_, err := r.readNext(row)
 		switch {
 		case err == nil:
-			m.heads[i], keys[i], codes[i] = row, row.Prefix, ovcAt(row.Prefix, 0)
+			m.heads[i] = row
+			m.tree.seed(i, row.Prefix)
 		case errors.Is(err, io.EOF):
 			m.free = append(m.free, row)
-			codes[i] = ovcExhausted
 		default:
 			m.Close()
 
 			return nil, fmt.Errorf("seed reader %d: %w", i, err)
 		}
 	}
-	m.tree = newLoserTree(keys, codes)
+	m.tree.start()
 
 	return m, nil
 }

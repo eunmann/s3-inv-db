@@ -394,7 +394,51 @@ func TestMergeIteratorNoSources(t *testing.T) {
 	}
 }
 
-// TestMergeIteratorRejectsUnsortedRun: a run whose prefix goes backwards,
+// TestMergeIteratorAllocatesOnlyAtStart: a merge makes the same few
+// allocations, all at the start, whatever its fan-in and length.
+func TestMergeIteratorAllocatesOnlyAtStart(t *testing.T) {
+	const merges = 20
+	allocs := map[int]float64{}
+	for _, k := range []int{1, 8, 64} {
+		runs := mergeBenchRuns(true, k, 50)
+		sets := make([][]runSource, merges+1)
+		for s := range sets {
+			sets[s] = make([]runSource, k)
+			for i, run := range runs {
+				sets[s][i] = newMemRun(run)
+			}
+		}
+		next := 0
+		allocs[k] = testing.AllocsPerRun(merges, func() {
+			if _, err := drainMergeDiscard(sets[next]); err != nil {
+				t.Fatal(err)
+			}
+			next++
+		})
+	}
+	if allocs[1] != allocs[64] || allocs[8] != allocs[64] || allocs[64] > 5 {
+		t.Fatalf("allocations per merge by fan-in: %v, want the same at every fan-in, at most 5", allocs)
+	}
+}
+
+// drainMergeDiscard merges sources and returns how many rows came out.
+func drainMergeDiscard(sources []runSource) (int, error) {
+	it, err := newMergeIterator(sources)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for {
+		if _, err := it.Next(); errors.Is(err, io.EOF) {
+			return n, nil
+		} else if err != nil {
+			return n, err
+		}
+		n++
+	}
+}
+
+// TestMergeIteratorRejectsUnsortedRun:a run whose prefix goes backwards,
 // at a byte or by ending early, fails the merge rather than corrupting
 // its order, from memory or from a file.
 func TestMergeIteratorRejectsUnsortedRun(t *testing.T) {
