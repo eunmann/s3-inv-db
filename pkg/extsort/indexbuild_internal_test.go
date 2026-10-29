@@ -82,7 +82,7 @@ func TestWriteLevelsSideFailureEnds(t *testing.T) {
 				return nil
 			}
 		}
-		err = b.replayLevels(side(0, failStats), side(1, !failStats))
+		_, err = b.replayLevels(side(0, failStats), side(1, !failStats))
 		if !errors.Is(err, errInjectedSide) {
 			t.Errorf("stats side failing = %v: replay = %v, want the injected error", failStats, err)
 		}

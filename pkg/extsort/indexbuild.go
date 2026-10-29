@@ -464,8 +464,9 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 
 	log.Debug().Uint64("prefix_count", b.posCount).Msg("index builder: writing rows in level order")
 
-	err = b.writeLevels(starts, segments)
+	busy, err := b.writeLevels(starts, segments)
 	if err == nil {
+		steps.annotate(stepWriteLevels, busy.fields)
 		err = b.writeTierManifest()
 	}
 	if err != nil {
@@ -574,19 +575,36 @@ func (h *levelHandoff) release(batch *levelBatch) {
 
 // drain writes every row of every batch on side i in order, until the
 // first error, then only releases batches until the reader closes the
-// side.
-func (h *levelHandoff) drain(i int, write func(depth int, r *spoolRecord) error) error {
+// side. It returns the time it spent writing.
+func (h *levelHandoff) drain(i int, write func(depth int, r *spoolRecord) error) (time.Duration, error) {
 	var err error
+	var busy time.Duration
 	for batch := range h.sides[i] {
+		start := time.Now()
 		for j := 0; err == nil && j < len(batch.recs); j++ {
 			if err = write(batch.depth, &batch.recs[j]); err != nil {
 				h.fail()
 			}
 		}
 		h.release(batch)
+		busy += time.Since(start)
 	}
 
-	return err
+	return busy, err
+}
+
+// replayBusy is how long the replay took and how long its reader and
+// each side worked in it, without their waits on the hand-off: the
+// busiest is the replay's critical path.
+type replayBusy struct {
+	wall, read, stats, names time.Duration
+}
+
+func (b replayBusy) fields(e *zerolog.Event) *zerolog.Event {
+	return e.Dur("replay_ms", b.wall).
+		Dur("read_busy_ms", b.read).
+		Dur("stats_busy_ms", b.stats).
+		Dur("names_busy_ms", b.names)
 }
 
 // writeLevels replays the spooled rows depth by depth into the index
@@ -594,21 +612,21 @@ func (h *levelHandoff) drain(i int, write func(depth int, r *spoolRecord) error)
 // and parent become rows once every depth's size is known: the first
 // row of a depth is the number of rows above it. The writers take their
 // widths from the plans the spool's writer filled.
-func (b *IndexBuilder) writeLevels(starts []uint64, segments uint32) error {
+func (b *IndexBuilder) writeLevels(starts []uint64, segments uint32) (replayBusy, error) {
 	total := int64(b.posCount)
 	var written int64
 	b.stepProgress(stepWriteLevels, 0, total)
 	if err := b.planChildStartTail(starts); err != nil {
-		return err
+		return replayBusy{}, err
 	}
 	depthW, err := b.openStatsWriters()
 	if err != nil {
-		return err
+		return replayBusy{}, err
 	}
 	if b.prefixTreeW, err = format.NewPrefixTreeWriter(b.outDir, b.posCount, segments, b.treePlan.maxDist(b.levelRows), b.checksums); err != nil {
-		return errors.Join(fmt.Errorf("create prefix tree: %w", err), depthW.Abort())
+		return replayBusy{}, errors.Join(fmt.Errorf("create prefix tree: %w", err), depthW.Abort())
 	}
-	err = b.replayLevels(func(depth int, r *spoolRecord) error {
+	busy, err := b.replayLevels(func(depth int, r *spoolRecord) error {
 		written++
 		if written%levelsProgressEvery == 0 {
 			b.stepProgress(stepWriteLevels, written, total)
@@ -617,18 +635,18 @@ func (b *IndexBuilder) writeLevels(starts []uint64, segments uint32) error {
 		return b.writeStatsRow(depthW, starts, depth, r)
 	}, func(depth int, r *spoolRecord) error { return b.writeNameRow(starts, depth, r) })
 	if err != nil {
-		return errors.Join(err, depthW.Abort())
+		return busy, errors.Join(err, depthW.Abort())
 	}
 	if err := b.closeStatsWriters(depthW); err != nil {
-		return err
+		return busy, err
 	}
 	if err := b.prefixTreeW.Close(); err != nil {
-		return fmt.Errorf("close prefix tree: %w", err)
+		return busy, fmt.Errorf("close prefix tree: %w", err)
 	}
 	b.prefixTreeW = nil
 	b.stepProgress(stepWriteLevels, total, total)
 
-	return os.RemoveAll(b.spool.dir) //nolint:wrapcheck // the path is in the error
+	return busy, os.RemoveAll(b.spool.dir) //nolint:wrapcheck // the path is in the error
 }
 
 // finishSpool ends the spool's writer, which completes the plans and
@@ -745,58 +763,65 @@ func (b *IndexBuilder) closeStatsWriters(depthW *format.DepthIndexWriter) error 
 // tree) on their own. Each side gets every row in level
 // order. Reading each depth twice, once per side, was half of the stats
 // side's time. A side's error stops the reader and the other side.
-func (b *IndexBuilder) replayLevels(stats, names func(depth int, r *spoolRecord) error) error {
+func (b *IndexBuilder) replayLevels(stats, names func(depth int, r *spoolRecord) error) (replayBusy, error) {
 	const statsSide, namesSide = 0, 1
 	h := newLevelHandoff(2)
-	var readErr, namesErr error
+	var busy replayBusy
+	var readErr, statsErr, namesErr error
 	var wg sync.WaitGroup
+	start := time.Now()
 	wg.Go(func() {
-		if readErr = b.readLevels(h); readErr != nil {
+		if busy.read, readErr = b.readLevels(h); readErr != nil {
 			h.fail()
 		}
 	})
-	wg.Go(func() { namesErr = h.drain(namesSide, names) })
-	statsErr := h.drain(statsSide, stats)
+	wg.Go(func() { busy.names, namesErr = h.drain(namesSide, names) })
+	busy.stats, statsErr = h.drain(statsSide, stats)
 	wg.Wait()
+	busy.wall = time.Since(start)
 
-	return errors.Join(readErr, statsErr, namesErr)
+	return busy, errors.Join(readErr, statsErr, namesErr)
 }
 
 // readLevels reads every depth's records once, in order, and hands
 // them to the sides; each depth's file is removed once read. It closes
 // the sides when done, or once the handoff failed (returning nil: the
-// failure is the side's to report).
-func (b *IndexBuilder) readLevels(h *levelHandoff) error {
+// failure is the side's to report). It returns the time it spent
+// filling batches.
+func (b *IndexBuilder) readLevels(h *levelHandoff) (time.Duration, error) {
 	defer func() {
 		for _, side := range h.sides {
 			close(side)
 		}
 	}()
+	var busy time.Duration
 	for depth := range len(b.spool.depths) {
 		r, err := b.spool.open(depth)
 		if err != nil {
-			return err
+			return busy, err
 		}
-		done, err := readDepth(r, h)
+		done, err := readDepth(r, h, &busy)
 		if err = errors.Join(err, r.close()); err != nil || !done {
-			return err
+			return busy, err
 		}
 		if err := b.spool.remove(depth); err != nil {
-			return err
+			return busy, err
 		}
 	}
 
-	return nil
+	return busy, nil
 }
 
-// readDepth hands r's records to the sides in batches: done is false
-// when the handoff failed first.
-func readDepth(r *spoolReader, h *levelHandoff) (bool, error) {
+// readDepth hands r's records to the sides in batches, adding the time
+// it spent filling them to busy: done is false when the handoff failed
+// first.
+func readDepth(r *spoolReader, h *levelHandoff, busy *time.Duration) (bool, error) {
 	for {
 		batch, ok := h.take()
 		if !ok {
 			return false, nil
 		}
+		start := time.Now()
 		n := 0
 		var err error
 		for ; n < len(batch.recs); n++ {
@@ -804,6 +829,7 @@ func readDepth(r *spoolReader, h *levelHandoff) (bool, error) {
 				break
 			}
 		}
+		*busy += time.Since(start)
 		if n == 0 {
 			h.free <- batch
 		} else {
