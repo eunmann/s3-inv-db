@@ -45,6 +45,8 @@ type IndexBuilder struct {
 	tierPlan *format.TierStatsPlan
 	corePlan format.CoreStatsPlan
 	interner *format.PrefixSegmentInterner
+	// tierSlots holds the tier slots of the row being planned.
+	tierSlots []uint64
 	// treePlan holds, per depth, the rows the spool's writer has seen
 	// and the most a row's index within its depth exceeds its parent's:
 	// with the depths' sizes that gives the widest parent distance.
@@ -117,6 +119,7 @@ func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
 		mphfBuilder:   mphfBuilder,
 		checksums:     checksums,
 		interner:      interner,
+		tierSlots:     make([]uint64, 0, 2*tiers.NumTiers),
 		spool:         newLevelSpool(spoolDir),
 		stack:         make([]stackEntry, 0, 32),
 		createdOutDir: createdOutDir,
@@ -160,30 +163,34 @@ func (b *IndexBuilder) startTierPlan() error {
 	return nil
 }
 
-// planRow adds a row to the core, tier and tree plans, interns its
-// last segment into r's segment ID and adds its key to the MPHF
-// builder. It runs on the spool's writer goroutine, which sees every
-// row once, in Add order.
-func (b *IndexBuilder) planRow(depth int, r *spoolRecord) error {
-	mask, err := b.tierPlan.Add(&r.tierCounts, &r.tierBytes, r.count, r.bytes)
+// planRow adds a row to the core, tier and tree plans, gives its record
+// its tier slots, interns its last segment into the record's segment ID
+// and adds its key to the MPHF builder. It runs on the spool's writer
+// goroutine, which sees every row once, in Add order, and writes its
+// record before the next row's plan reuses the slots' buffer.
+func (b *IndexBuilder) planRow(e *spoolEntry) error {
+	r, depth := &e.rec, e.depth
+	mask, slots, err := b.tierPlan.Add(&e.tierCounts, &e.tierBytes, r.count, r.bytes, b.tierSlots[:0])
 	if err != nil {
-		return fmt.Errorf("prefix segment %q at depth %d: tier stats: %w", r.name, depth, err)
+		return fmt.Errorf("prefix segment %q at depth %d: tier stats: %w", e.name, depth, err)
 	}
+	b.tierSlots = slots
+	r.tierMask, r.tiers = mask, slots
 	b.corePlan.Add(r.count, r.bytes, mask)
 	if depth > 0 {
 		// The interner copies a new segment, so the name may alias the
-		// record's buffer.
-		if r.segID, err = b.interner.Intern(unsafe.String(unsafe.SliceData(r.name), len(r.name))); err != nil {
-			return fmt.Errorf("prefix segment %q at depth %d: %w", r.name, depth, err)
+		// entry's buffer.
+		if r.segID, err = b.interner.Intern(unsafe.String(unsafe.SliceData(e.name), len(e.name))); err != nil {
+			return fmt.Errorf("prefix segment %q at depth %d: %w", e.name, depth, err)
 		}
 	}
 	b.treePlan.add(depth, r.parentLocal)
-	posKey, err := format.PositionKey(depth, r.local)
+	posKey, err := format.PositionKey(depth, e.local)
 	if err == nil {
-		err = b.mphfBuilder.AddKey(r.keyHash, r.fp, posKey)
+		err = b.mphfBuilder.AddKey(e.keyHash, e.fp, posKey)
 	}
 	if err != nil {
-		return fmt.Errorf("prefix segment %q at depth %d: add to MPHF builder: %w", r.name, depth, err)
+		return fmt.Errorf("prefix segment %q at depth %d: add to MPHF builder: %w", e.name, depth, err)
 	}
 
 	return nil
@@ -307,10 +314,10 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	}
 	// The prefix is still in this core's cache from the checks above:
 	// hashed by the spool writer instead, it cost twice as much.
-	r.keyHash, r.fp = b.mphfBuilder.KeyHashes(row.Prefix)
-	r.local = b.levelRows[depth]
-	r.name = append(r.name[:0], name...)
-	r.tierCounts, r.tierBytes = row.TierCounts, row.TierBytes
+	e.keyHash, e.fp = b.mphfBuilder.KeyHashes(row.Prefix)
+	e.local = b.levelRows[depth]
+	e.name = append(e.name[:0], name...)
+	e.tierCounts, e.tierBytes = row.TierCounts, row.TierBytes
 	if err := b.spool.commit(); err != nil {
 		return err
 	}
@@ -501,17 +508,21 @@ func (b *IndexBuilder) FinalizeWithContext(ctx context.Context) error {
 const levelsProgressEvery = 1 << 17
 
 // levelBatchRows and levelBatches size writeLevels' hand-off from the
-// spool reader to the two writing sides: four batches of 512 records,
-// about 0.6 MiB.
+// spool reader to the two writing sides: four batches of 512 records
+// and, at first, two tiers' values per record, about 0.2 MiB. A batch's
+// tier values grow to what its rows hold, at most every tier's, 128 KiB.
 const (
 	levelBatchRows = 512
 	levelBatches   = 4
+	levelBatchVals = levelBatchRows * 4
 )
 
-// levelBatch is a run of one depth's records. Both sides write it, and
-// the one that finishes it last returns it to be refilled.
+// levelBatch is a run of one depth's records and their tier values.
+// Both sides write it, and the one that finishes it last returns it to
+// be refilled.
 type levelBatch struct {
 	recs    []spoolRecord
+	tiers   []uint64
 	depth   int
 	pending atomic.Int32
 }
@@ -529,7 +540,7 @@ type levelHandoff struct {
 func newLevelHandoff(sides int) *levelHandoff {
 	h := &levelHandoff{free: make(chan *levelBatch, levelBatches), failed: make(chan struct{})}
 	for range levelBatches {
-		h.free <- &levelBatch{recs: make([]spoolRecord, levelBatchRows)}
+		h.free <- &levelBatch{recs: make([]spoolRecord, levelBatchRows), tiers: make([]uint64, 0, levelBatchVals)}
 	}
 	for range sides {
 		h.sides = append(h.sides, make(chan *levelBatch, levelBatches))
@@ -627,12 +638,13 @@ func (b *IndexBuilder) writeLevels(starts []uint64, segments uint32) (replayBusy
 		return replayBusy{}, errors.Join(fmt.Errorf("create prefix tree: %w", err), depthW.Abort())
 	}
 	busy, err := b.replayLevels(func(depth int, r *spoolRecord) error {
+		row := written
 		written++
 		if written%levelsProgressEvery == 0 {
 			b.stepProgress(stepWriteLevels, written, total)
 		}
 
-		return b.writeStatsRow(depthW, starts, depth, r)
+		return b.writeStatsRow(depthW, starts, row, depth, r)
 	}, func(depth int, r *spoolRecord) error { return b.writeNameRow(starts, depth, r) })
 	if err != nil {
 		return busy, errors.Join(err, depthW.Abort())
@@ -689,13 +701,14 @@ func (b *IndexBuilder) planChildStartTail(starts []uint64) error {
 		return nil
 	}
 	var rec spoolRecord
+	var vals []uint64
 	for depth := len(b.spool.depths) - 1; depth >= 0 && starts[depth+2] >= from; depth-- {
 		r, err := b.spool.open(depth)
 		if err != nil {
 			return err
 		}
 		for err == nil {
-			if err = r.next(&rec); err == nil && starts[depth+1]+rec.childLocal >= from {
+			if vals, err = r.next(&rec, vals[:0]); err == nil && starts[depth+1]+rec.childLocal >= from {
 				b.corePlan.AddTail(rec.count, rec.bytes)
 			}
 		}
@@ -824,8 +837,11 @@ func readDepth(r *spoolReader, h *levelHandoff, busy *time.Duration) (bool, erro
 		start := time.Now()
 		n := 0
 		var err error
+		// A record's tier values stay where they were decoded when the
+		// buffer grows: the records before it alias the old one.
+		batch.tiers = batch.tiers[:0]
 		for ; n < len(batch.recs); n++ {
-			if err = r.next(&batch.recs[n]); err != nil {
+			if batch.tiers, err = r.next(&batch.recs[n], batch.tiers); err != nil {
 				break
 			}
 		}
@@ -849,15 +865,13 @@ func readDepth(r *spoolReader, h *levelHandoff, busy *time.Duration) (bool, erro
 
 // writeStatsRow writes one spooled row's stats, the next in level
 // order: its tier stats, core row and depth-index entry.
-func (b *IndexBuilder) writeStatsRow(depthW *format.DepthIndexWriter, starts []uint64, depth int, r *spoolRecord) error {
-	var mask uint16
+func (b *IndexBuilder) writeStatsRow(depthW *format.DepthIndexWriter, starts []uint64, row int64, depth int, r *spoolRecord) error {
 	if b.tierW != nil {
-		var err error
-		if mask, err = b.tierW.Add(&r.tierCounts, &r.tierBytes); err != nil {
-			return fmt.Errorf("prefix segment %q at depth %d: write tier stats: %w", r.name, depth, err)
+		if err := b.tierW.AddSlots(r.tierMask, r.tiers); err != nil {
+			return fmt.Errorf("row %d at depth %d: write tier stats: %w", row, depth, err)
 		}
 	}
-	if err := b.coreW.Add(r.count, r.bytes, starts[depth+1]+r.childLocal, mask); err != nil {
+	if err := b.coreW.Add(r.count, r.bytes, starts[depth+1]+r.childLocal, r.tierMask); err != nil {
 		return fmt.Errorf("write core stats row: %w", err)
 	}
 	if err := depthW.Add(uint32(depth), r.count, r.bytes); err != nil {

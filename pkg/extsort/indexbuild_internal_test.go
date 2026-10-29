@@ -125,6 +125,74 @@ func TestUndeclaredTierFailsTheBuild(t *testing.T) {
 	}
 }
 
+// TestTierSumMismatchFailsTheBuild: a row whose tiers don't sum to its
+// totals fails the build where the spool plans it, naming the row's
+// segment and depth, at a later Add or at Finalize, never silently.
+func TestTierSumMismatchFailsTheBuild(t *testing.T) {
+	for _, rows := range []int{10, 3 * spoolBatchRows} {
+		b, err := NewIndexBuilder(t.TempDir(), t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = b.Add(&PrefixRow{Prefix: ""})
+		for i := 0; err == nil && i < rows; i++ {
+			row := PrefixRow{Prefix: fmt.Sprintf("p%06d/", i), Depth: 1, Count: 2, TotalBytes: 3}
+			row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = 1, 1
+			row.TierCounts[tiers.Snow], row.TierBytes[tiers.Snow] = 1, 2
+			if i == 5 {
+				row.TierBytes[tiers.Snow]++
+			}
+			err = b.Add(&row)
+		}
+		if err == nil {
+			err = b.Finalize()
+		}
+		const want = `prefix segment "p000005" at depth 1: tier stats: prefix tier stats don't sum to its totals`
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%d rows: err = %v, want it to hold %q", rows, err, want)
+		}
+		b.cleanup()
+	}
+}
+
+// TestWriteStatsRowErrorNamesTheRow: a tier stats row the replay cannot
+// write is reported by its level-order row and depth: the replay never
+// reads the segment names.
+func TestWriteStatsRowErrorNamesTheRow(t *testing.T) {
+	b, err := NewIndexBuilder(t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.cleanup()
+	if err := b.SetPresentTiers([]tiers.ID{tiers.Standard, tiers.GlacierIR}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 4 {
+		row := PrefixRow{Count: 1, TotalBytes: 1}
+		if i > 0 {
+			row.Prefix, row.Depth = fmt.Sprintf("p%d/", i), 1
+		}
+		row.TierCounts[tiers.Standard], row.TierBytes[tiers.Standard] = 1, 1
+		if err := b.Add(&row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := b.finishSpool(); err != nil {
+		t.Fatal(err)
+	}
+	depthW, err := b.openStatsWriters()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = depthW.Abort() }()
+	offPlan := spoolRecord{count: 1, bytes: 1, tierMask: 1 << 5, tiers: []uint64{1, 1}}
+	err = b.writeStatsRow(depthW, b.levelStarts(), 2, 1, &offPlan)
+	const want = "row 2 at depth 1: write tier stats"
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("err = %v, want it to start %q", err, want)
+	}
+}
+
 // edgeTreeRows is a root, n1 top-level prefixes and n2 children spread
 // over the last spread of them, in key order: level order puts the
 // children last, so they and the prefixes just before them hold the
