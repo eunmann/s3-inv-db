@@ -111,3 +111,44 @@ func TestLevelSpoolCommitAfterFinish(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkLevelSpoolRead reads back one depth's spooled records, as
+// Finalize does for every depth.
+func BenchmarkLevelSpoolRead(b *testing.B) {
+	const n = 100_000
+	s := newLevelSpool(b.TempDir())
+	b.Cleanup(func() { _ = s.close() })
+	for i := range n {
+		e := s.next()
+		e.rec = spoolTestRecord(i)
+		if err := s.commit(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := s.finish(); err != nil {
+		b.Fatal(err)
+	}
+	var rec spoolRecord
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		r, err := s.open(0)
+		if err != nil {
+			b.Fatal(err)
+		}
+		read := 0
+		for ; ; read++ {
+			if err := r.next(&rec); errors.Is(err, io.EOF) {
+				break
+			} else if err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := r.close(); err != nil {
+			b.Fatal(err)
+		}
+		if read != n {
+			b.Fatalf("read %d of %d records", read, n)
+		}
+	}
+}
