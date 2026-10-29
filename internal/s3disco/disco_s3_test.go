@@ -18,6 +18,7 @@ import (
 	"github.com/eunmann/s3-inv-db/internal/s3disco"
 	"github.com/eunmann/s3-inv-db/internal/s3test"
 	"github.com/eunmann/s3-inv-db/internal/seeder"
+	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/google/go-cmp/cmp"
 	"github.com/rs/zerolog"
 )
@@ -300,10 +301,10 @@ func TestDiscoverer_ListIndexes(t *testing.T) {
 	}
 	put("idx/src-bucket/daily/2026-10-24T01-00Z/core_stats.bin", "abc")
 	put("idx/src-bucket/daily/2026-10-24T01-00Z/manifest.json",
-		`{"version":2,"created_at":"2026-10-24T02:00:00Z","node_count":3,"files":{"core_stats.bin":{"size":300,"checksum":"x"},"mph.bin":{"size":40,"checksum":"y"}}}`)
+		`{"version":`+strconv.Itoa(format.ManifestVersion)+`,"created_at":"2026-10-24T02:00:00Z","node_count":3,"files":{"core_stats.bin":{"size":300,"checksum":"x"},"mph.bin":{"size":40,"checksum":"y"}}}`)
 	put("idx/src-bucket/daily/2026-10-25T01-00Z/core_stats.bin", "uploading")
 	put("idx/src-bucket/daily/2026-10-23T01-00Z/manifest.json",
-		`{"version":1,"created_at":"2026-10-23T02:00:00Z","node_count":3,"files":{"core_stats.bin":{"size":300,"checksum":"x"}}}`)
+		`{"version":`+strconv.Itoa(format.ManifestVersion-1)+`,"created_at":"2026-10-23T02:00:00Z","node_count":3,"files":{"core_stats.bin":{"size":300,"checksum":"x"}}}`)
 
 	d := s3disco.New(client, bucket, "idx/").ListIndexes()
 	got, err := d.List(ctx)
@@ -335,7 +336,7 @@ func TestDiscoverer_ListIndexes_SeesRepublishedRun(t *testing.T) {
 	const key = "idx/src-bucket/daily/2026-10-24T01-00Z/manifest.json"
 	putManifest := func(size int) {
 		t.Helper()
-		body := `{"version":2,"created_at":"2026-10-24T02:00:00Z","node_count":3,"files":{"core_stats.bin":{"size":` +
+		body := `{"version":` + strconv.Itoa(format.ManifestVersion) + `,"created_at":"2026-10-24T02:00:00Z","node_count":3,"files":{"core_stats.bin":{"size":` +
 			strconv.Itoa(size) + `,"checksum":"x"}}}`
 		if _, err := client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(key), Body: strings.NewReader(body)}); err != nil {
 			t.Fatal(err)

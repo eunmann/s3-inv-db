@@ -114,7 +114,7 @@ server at it with `index_source: "s3://indexes/prod/"`:
 - without `s3_source`, the server lists runs from `index_source` and
   only downloads. It then needs no access to the inventories.
 
-A download is verified against the manifest's SHA-256 checksums before
+A download is verified against the manifest's CRC-32C checksums before
 the index is used. Without `s3_source` it counts against the disk
 budget at its exact size, read from the published manifest; with
 `s3_source` too, a load reserves the same estimate as an in-process
