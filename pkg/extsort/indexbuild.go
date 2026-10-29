@@ -36,7 +36,7 @@ import (
 // Finalize replays the depths in order into the index writers, which
 // write each file in its final form.
 //
-// Memory is bounded: rows and prefix hashes go to disk, and the stack
+// Memory is bounded: rows and MPHF keys go to disk, and the stack
 // holds one entry per depth.
 type IndexBuilder struct {
 	// The plans and the interner are filled on the spool's writer
@@ -154,9 +154,10 @@ func (b *IndexBuilder) startTierPlan() error {
 	return nil
 }
 
-// planRow adds a row to the core, tier and tree plans and interns its
-// last segment into r's segment ID. It runs on the spool's writer
-// goroutine, which sees every row once, in Add order.
+// planRow adds a row to the core, tier and tree plans, interns its
+// last segment into r's segment ID and adds its key to the MPHF
+// builder. It runs on the spool's writer goroutine, which sees every
+// row once, in Add order.
 func (b *IndexBuilder) planRow(depth int, r *spoolRecord) error {
 	mask, err := b.tierPlan.Add(&r.tierCounts, &r.tierBytes, r.count, r.bytes)
 	if err != nil {
@@ -171,6 +172,13 @@ func (b *IndexBuilder) planRow(depth int, r *spoolRecord) error {
 		}
 	}
 	b.treePlan.add(depth, r.parentLocal)
+	posKey, err := format.PositionKey(depth, r.local)
+	if err == nil {
+		err = b.mphfBuilder.AddKey(r.keyHash, r.fp, posKey)
+	}
+	if err != nil {
+		return fmt.Errorf("prefix segment %q at depth %d: add to MPHF builder: %w", r.name, depth, err)
+	}
 
 	return nil
 }
@@ -294,6 +302,7 @@ func (b *IndexBuilder) Add(row *PrefixRow) error {
 	// The prefix is still in this core's cache from the checks above:
 	// hashed by the spool writer instead, it cost twice as much.
 	r.keyHash, r.fp = b.mphfBuilder.KeyHashes(row.Prefix)
+	r.local = b.levelRows[depth]
 	r.name = append(r.name[:0], name...)
 	r.tierCounts, r.tierBytes = row.TierCounts, row.TierBytes
 	if err := b.spool.commit(); err != nil {
@@ -572,10 +581,7 @@ func (b *IndexBuilder) writeLevels() error {
 	if err != nil {
 		return fmt.Errorf("write prefix dictionary: %w", err)
 	}
-	starts := make([]uint64, len(b.levelRows)+1)
-	for d, n := range b.levelRows {
-		starts[d+1] = starts[d] + n
-	}
+	starts := b.levelStarts()
 	total := int64(b.posCount)
 	var written int64
 	b.stepProgress(stepWriteLevels, 0, total)
@@ -610,6 +616,17 @@ func (b *IndexBuilder) writeLevels() error {
 	b.stepProgress(stepWriteLevels, total, total)
 
 	return os.RemoveAll(b.spool.dir) //nolint:wrapcheck // the path is in the error
+}
+
+// levelStarts returns each depth's first row in level order and, last,
+// the row count.
+func (b *IndexBuilder) levelStarts() []uint64 {
+	starts := make([]uint64, len(b.levelRows)+1)
+	for d, n := range b.levelRows {
+		starts[d+1] = starts[d] + n
+	}
+
+	return starts
 }
 
 // planChildStartTail gives the core plan, when it needs them, the rows
@@ -694,7 +711,7 @@ func (b *IndexBuilder) closeStatsWriters(depthW *format.DepthIndexWriter) error 
 // replayLevels reads the spool once into batches for two sides that
 // share nothing and write side by side: the stats rows (tier stats,
 // core stats, depth index) on this goroutine, and the names (prefix
-// tree, MPHF keys) on their own. Each side gets every row in level
+// tree) on their own. Each side gets every row in level
 // order. Reading each depth twice, once per side, was half of the stats
 // side's time. A side's error stops the reader and the other side.
 func (b *IndexBuilder) replayLevels(stats, names func(depth int, r *spoolRecord) error) error {
@@ -794,7 +811,7 @@ func (b *IndexBuilder) writeStatsRow(depthW *format.DepthIndexWriter, starts []u
 }
 
 // writeNameRow writes one spooled row's name, the next in level order:
-// its prefix-tree row and MPHF key.
+// its prefix-tree row.
 func (b *IndexBuilder) writeNameRow(starts []uint64, depth int, r *spoolRecord) error {
 	var err error
 	if depth == 0 {
@@ -804,13 +821,6 @@ func (b *IndexBuilder) writeNameRow(starts []uint64, depth int, r *spoolRecord) 
 	}
 	if err != nil {
 		return fmt.Errorf("prefix tree row at depth %d: %w", depth, err)
-	}
-	posKey, err := format.PositionKey(0, b.mphfBuilder.Count())
-	if err == nil {
-		err = b.mphfBuilder.AddKey(r.keyHash, r.fp, posKey)
-	}
-	if err != nil {
-		return fmt.Errorf("add to MPHF builder: %w", err)
 	}
 
 	return nil
@@ -834,7 +844,7 @@ func mphfMemoryBudget(memoryLimit int64) int64 {
 func (b *IndexBuilder) buildMPHF(ctx context.Context) error {
 	log := zerolog.Ctx(ctx)
 	mphfStart := time.Now()
-	h, err := b.mphfBuilder.Start(ctx, b.outDir, nil, runtime.GOMAXPROCS(0))
+	h, err := b.mphfBuilder.Start(ctx, b.outDir, b.levelStarts(), runtime.GOMAXPROCS(0))
 	if err != nil {
 		return fmt.Errorf("build MPHF: %w", err)
 	}
