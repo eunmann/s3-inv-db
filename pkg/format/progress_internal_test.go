@@ -42,11 +42,11 @@ func TestNextLevelKeysAcrossBlocks(t *testing.T) {
 	n := mphfWorkerCount(math.MaxInt32)*progressBlock*2 + 123
 	keys := randomKeys(n, 7)
 	words := levelWords(n)
-	set, collided := make([]uint64, words), make([]uint64, words)
 	var rec stepRecorder
 	scan := newStepCounter(rec.report, StepBuildHash, int64(2*n))
-	markLevel(keys, 0, set, collided, scan)
-	placed := placedBits(set, collided)
+	marks := make([]uint64, 2*words)
+	markLevel(keys, 0, marks, scan)
+	set, placed := placedBits(marks)
 	var want []uint64
 	for _, k := range keys {
 		i := bbPosition(k, 0, words)
@@ -58,17 +58,17 @@ func TestNextLevelKeysAcrossBlocks(t *testing.T) {
 		t.Fatalf("%d colliding keys, but %d keys minus %d placed bits is %d", len(want), n, placed, n-placed)
 	}
 	nextWords := levelWords(len(want))
-	gotSet, gotCollided := make([]uint64, nextWords), make([]uint64, nextWords)
+	gotMarks := make([]uint64, 2*nextWords)
 	got := make([]uint64, len(want))
-	nextLevelKeys(keys, 0, set, got, gotSet, gotCollided, scan)
+	nextLevelKeys(keys, 0, set, got, gotMarks, scan)
 
 	slices.Sort(got)
 	if !slices.Equal(got, slices.Sorted(slices.Values(want))) {
 		t.Fatalf("nextLevelKeys handed on %d keys that differ from the %d colliding keys", len(got), len(want))
 	}
-	wantSet, wantCollided := make([]uint64, nextWords), make([]uint64, nextWords)
-	markKeys(want, 1, wantSet, wantCollided)
-	if !slices.Equal(gotSet, wantSet) || !slices.Equal(gotCollided, wantCollided) {
+	wantMarks := make([]uint64, 2*nextWords)
+	markKeys(want, 1, wantMarks)
+	if !slices.Equal(gotMarks, wantMarks) {
 		t.Fatal("next level's marks differ from marking the colliding keys")
 	}
 	if d := scan.done.Load(); d != int64(2*n) {
