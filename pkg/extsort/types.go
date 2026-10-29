@@ -10,6 +10,7 @@
 package extsort
 
 import (
+	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -151,82 +152,175 @@ func load64(s string, i int) uint64 {
 	return binary.LittleEndian.Uint64(unsafe.Slice(unsafe.StringData(s[i:]), 8))
 }
 
-// runRecordSource is what records are read from: a buffered stream.
-type runRecordSource interface {
-	io.Reader
-	io.ByteReader
+// runRecordWindow is the most of a run's stream a record is decoded
+// from in place: more than any record of a key S3 allows (1024 bytes)
+// needs, and small enough that refilling the read buffer to hold it
+// copies little.
+const runRecordWindow = 4 << 10
+
+// runRecordDecoder reads a run's records from a buffered stream. It
+// decodes each from the read buffer in place (Peek), not byte by byte
+// through the reader, and carves the prefixes from an arena: reading
+// varints a byte per call and allocating each prefix were most of a
+// sorted build's serial final merge.
+type runRecordDecoder struct {
+	in    *bufio.Reader
+	prev  string // the last prefix read
+	arena prefixArena
 }
 
-// decodeRunRecord reads the next record, front-coded against prev, into
-// row, keeping the merge loop free of row allocations besides the
-// prefix string. Buf is scratch space for the suffix, grown as needed.
-// Returns io.EOF when the source ends before a record.
-func decodeRunRecord(r runRecordSource, prev string, buf *[]byte, row *PrefixRow) error {
-	shared, err := binary.ReadUvarint(r)
-	if errors.Is(err, io.EOF) {
-		return io.EOF
-	}
-	if err != nil {
+// next reads the next record into row: io.EOF when the stream ends
+// before a record, errRunRecordCorrupt when it ends inside one.
+func (d *runRecordDecoder) next(row *PrefixRow) error {
+	window, err := d.in.Peek(min(runRecordWindow, d.in.Size()))
+	if len(window) == 0 {
+		if errors.Is(err, io.EOF) {
+			return io.EOF
+		}
+
 		return fmt.Errorf("read run record: %w", err)
 	}
-	suffixLen, err := binary.ReadUvarint(r)
-	if err != nil {
-		return fmt.Errorf("%w: suffix length: %w", errRunRecordCorrupt, err)
+	n, decodeErr := decodeRunRecord(window, d.prev, &d.arena, row)
+	if errors.Is(decodeErr, errRunRecordShort) && err == nil {
+		// Longer than the window: decode it from the whole buffer.
+		window, err = d.in.Peek(d.in.Size())
+		n, decodeErr = decodeRunRecord(window, d.prev, &d.arena, row)
+	}
+	if errors.Is(decodeErr, errRunRecordShort) {
+		if err != nil && !errors.Is(err, io.EOF) {
+			return fmt.Errorf("read run record: %w", err)
+		}
+
+		return fmt.Errorf("%w: stream ends inside a record", errRunRecordCorrupt)
+	}
+	if decodeErr != nil {
+		return decodeErr
+	}
+	if _, err := d.in.Discard(n); err != nil {
+		return fmt.Errorf("read run record: %w", err)
+	}
+	d.prev = row.Prefix
+
+	return nil
+}
+
+// errRunRecordShort means the bytes end inside the record.
+var errRunRecordShort = errors.New("run record continues past the bytes given")
+
+// decodeRunRecord decodes the record at the start of b, front-coded
+// against prev, into row and returns its length: errRunRecordShort when
+// b ends inside it. The prefix comes from arena.
+func decodeRunRecord(b []byte, prev string, arena *prefixArena, row *PrefixRow) (int, error) {
+	c := recordCursor{b: b}
+	shared, suffixLen := c.uvarint(), c.uvarint()
+	if err := c.check("prefix lengths"); err != nil {
+		return 0, err
 	}
 	if shared > uint64(len(prev)) || suffixLen > math.MaxInt32 {
-		return fmt.Errorf("%w: %d shared of %d bytes, suffix %d", errRunRecordCorrupt, shared, len(prev), suffixLen)
+		return 0, fmt.Errorf("%w: %d shared of %d bytes, suffix %d", errRunRecordCorrupt, shared, len(prev), suffixLen)
 	}
-	if uint64(cap(*buf)) < suffixLen {
-		*buf = make([]byte, suffixLen)
-	}
-	suffix := (*buf)[:suffixLen]
-	if _, err := io.ReadFull(r, suffix); err != nil {
-		return fmt.Errorf("%w: suffix: %w", errRunRecordCorrupt, err)
+	if suffixLen > uint64(len(b)-c.off) {
+		return 0, errRunRecordShort
 	}
 	row.Reset()
-	var prefix strings.Builder
-	prefix.Grow(int(shared) + len(suffix))
-	prefix.WriteString(prev[:shared])
-	prefix.Write(suffix)
-	row.Prefix = prefix.String()
-	depth, err := binary.ReadUvarint(r)
-	if err != nil {
-		return fmt.Errorf("%w: depth: %w", errRunRecordCorrupt, err)
+	if n := int(shared + suffixLen); n > 0 {
+		p := arena.alloc(n)
+		copy(p, prev[:shared])
+		copy(p[shared:], b[c.off:c.off+int(suffixLen)])
+		row.Prefix = unsafe.String(unsafe.SliceData(p), n)
+	}
+	c.off += int(suffixLen)
+	depth, mask := c.uvarint(), c.uvarint()
+	if err := c.check("depth and tier mask"); err != nil {
+		return 0, err
 	}
 	if depth > math.MaxUint16 {
-		return fmt.Errorf("%w: depth %d", errRunRecordCorrupt, depth)
+		return 0, fmt.Errorf("%w: depth %d", errRunRecordCorrupt, depth)
 	}
 	row.Depth = uint16(depth)
-	mask, err := binary.ReadUvarint(r)
-	if err != nil {
-		return fmt.Errorf("%w: tier mask: %w", errRunRecordCorrupt, err)
-	}
 	if mask&^(1<<MaxTiers-1|runRecordTotals) != 0 {
-		return fmt.Errorf("%w: tier mask %#x", errRunRecordCorrupt, mask)
+		return 0, fmt.Errorf("%w: tier mask %#x", errRunRecordCorrupt, mask)
 	}
-	for t := range MaxTiers {
-		if mask&(1<<t) == 0 {
-			continue
-		}
-		if row.TierCounts[t], err = binary.ReadUvarint(r); err != nil {
-			return fmt.Errorf("%w: tier %d count: %w", errRunRecordCorrupt, t, err)
-		}
-		if row.TierBytes[t], err = binary.ReadUvarint(r); err != nil {
-			return fmt.Errorf("%w: tier %d bytes: %w", errRunRecordCorrupt, t, err)
-		}
+	for m := mask & (1<<MaxTiers - 1); m != 0; m &= m - 1 {
+		t := bits.TrailingZeros64(m)
+		row.TierCounts[t], row.TierBytes[t] = c.uvarint(), c.uvarint()
 		row.Count += row.TierCounts[t]
 		row.TotalBytes += row.TierBytes[t]
 	}
 	if mask&runRecordTotals != 0 {
-		if row.Count, err = binary.ReadUvarint(r); err != nil {
-			return fmt.Errorf("%w: count: %w", errRunRecordCorrupt, err)
-		}
-		if row.TotalBytes, err = binary.ReadUvarint(r); err != nil {
-			return fmt.Errorf("%w: bytes: %w", errRunRecordCorrupt, err)
-		}
+		row.Count, row.TotalBytes = c.uvarint(), c.uvarint()
+	}
+	if err := c.check("counts"); err != nil {
+		return 0, err
+	}
+
+	return c.off, nil
+}
+
+// recordCursor reads a record's varints from b at off. A read past the
+// end marks it short, an overlong varint bad; either way the reads
+// after it return 0, and check reports it.
+type recordCursor struct {
+	b          []byte
+	off        int
+	short, bad bool
+}
+
+func (c *recordCursor) uvarint() uint64 {
+	// Most fields (lengths, depth, mask, small counts) fit in one byte.
+	if c.off < len(c.b) && c.b[c.off] < 0x80 {
+		c.off++
+
+		return uint64(c.b[c.off-1])
+	}
+	v, k := binary.Uvarint(c.b[c.off:])
+	if k <= 0 {
+		c.short = c.short || k == 0
+		c.bad = c.bad || k < 0
+		c.off = len(c.b)
+
+		return 0
+	}
+	c.off += k
+
+	return v
+}
+
+// check returns the error the reads of what so far met, if any.
+func (c *recordCursor) check(what string) error {
+	switch {
+	case c.bad:
+		return fmt.Errorf("%w: %s: varint overflows", errRunRecordCorrupt, what)
+	case c.short:
+		return errRunRecordShort
 	}
 
 	return nil
+}
+
+// prefixArena carves prefix strings from shared chunks, one allocation
+// per chunk instead of one per row. Bytes handed out are never written
+// again, and a chunk lives while any string in it does: the merge and
+// the index builder hold a few rows at a time, so a few chunks.
+type prefixArena struct {
+	free []byte
+}
+
+// prefixArenaChunk is an arena chunk's size; a prefix longer than an
+// eighth of it gets its own allocation, so a chunk wastes little.
+const prefixArenaChunk = 16 << 10
+
+func (a *prefixArena) alloc(n int) []byte {
+	if n > len(a.free) {
+		if n > prefixArenaChunk/8 {
+			return make([]byte, n)
+		}
+		a.free = make([]byte, prefixArenaChunk)
+	}
+	p := a.free[:n:n]
+	a.free = a.free[n:]
+
+	return p
 }
 
 // SortPrefixRows sorts a slice of PrefixRows by prefix in lexicographic order.
