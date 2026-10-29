@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"unsafe"
@@ -47,7 +46,7 @@ var errPrefixTreePlan = errors.New("prefix tree: rows differ from their plan")
 // which writes the dictionary) and the largest parent distance up front.
 type PrefixTreeWriter struct {
 	path     string
-	f        *os.File
+	f        *hashedFile
 	bw       *bufio.Writer
 	count    uint64
 	segments uint32
@@ -63,8 +62,8 @@ type PrefixTreeWriter struct {
 
 // NewPrefixTreeWriter creates the prefix tree of count prefixes in
 // outDir, whose segment IDs are below segments and whose parents are at
-// most maxDist positions back.
-func NewPrefixTreeWriter(outDir string, count uint64, segments uint32, maxDist uint64) (*PrefixTreeWriter, error) {
+// most maxDist positions back, recording its checksum in sums.
+func NewPrefixTreeWriter(outDir string, count uint64, segments uint32, maxDist uint64, sums *Checksums) (*PrefixTreeWriter, error) {
 	w := &PrefixTreeWriter{
 		path:     filepath.Join(outDir, PrefixTreeFile),
 		count:    count,
@@ -73,9 +72,9 @@ func NewPrefixTreeWriter(outDir string, count uint64, segments uint32, maxDist u
 		segW:     byteWidthOf(uint64(max(segments, 1) - 1)),
 		distW:    byteWidthOf(maxDist),
 	}
-	f, err := os.Create(w.path)
+	f, err := createHashedFile(w.path, sums)
 	if err != nil {
-		return nil, fmt.Errorf("create prefix tree: %w", err)
+		return nil, err
 	}
 	w.f, w.bw = f, bufio.NewWriterSize(f, writeBufSize)
 	head := EncodeHeader(Header{Magic: MagicNumber, Version: Version, Count: count, Width: uint32(w.segW) + uint32(w.distW)})
@@ -145,7 +144,7 @@ func (w *PrefixTreeWriter) Close() error {
 	if err := w.bw.Flush(); err != nil {
 		return errors.Join(fmt.Errorf("flush prefix tree: %w", err), w.Abort())
 	}
-	startWriteback(w.f)
+	w.f.startWriteback()
 	err := w.f.Close()
 	w.f = nil
 	if err != nil {

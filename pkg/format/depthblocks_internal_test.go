@@ -62,7 +62,7 @@ func TestDepthBlocksBoundEveryEntry(t *testing.T) {
 	sizes := []int{1, 200, 64, 1500, 777}
 	var stats []entry
 	dir := t.TempDir()
-	w, err := NewDepthIndexWriter(dir)
+	w, err := NewDepthIndexWriter(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestDepthBlocksBoundEveryEntry(t *testing.T) {
 
 func TestOpenDepthIndexRejectsWrongBlockCount(t *testing.T) {
 	dir := t.TempDir()
-	w, err := NewDepthIndexWriter(dir)
+	w, err := NewDepthIndexWriter(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestOpenDepthIndexRejectsWrongBlockCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	// One block too few: 1 + 199 rows need 1 + 4.
-	bw, err := NewArrayWriter(filepath.Join(dir, DepthBlocksFile), 8)
+	bw, err := NewArrayWriter(filepath.Join(dir, DepthBlocksFile), 8, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

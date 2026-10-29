@@ -203,6 +203,9 @@ func (f *hashedFile) add(r crcRange) {
 	f.ranges = append(f.ranges, r)
 }
 
+// startWriteback starts writing the file's dirty pages to disk.
+func (f *hashedFile) startWriteback() { startWriteback(f.file) }
+
 // Close records the file's checksum, when every byte was written once,
 // and closes it.
 func (f *hashedFile) Close() error {

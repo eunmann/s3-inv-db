@@ -11,7 +11,7 @@ import (
 func writeDepths(t *testing.T, depths ...uint32) (*format.DepthIndex, error) {
 	t.Helper()
 	dir := t.TempDir()
-	w, err := format.NewDepthIndexWriter(dir)
+	w, err := format.NewDepthIndexWriter(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

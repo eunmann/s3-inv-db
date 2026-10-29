@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
-	"os"
 	"path/filepath"
 )
 
@@ -302,7 +301,7 @@ func (p *CoreStatsPlan) stride(enc TierMaskEncoding) (CoreStatsStride, patchChoi
 // straight to their final form.
 type CoreStatsWriter struct {
 	path  string
-	f     *os.File
+	f     *hashedFile
 	bw    *bufio.Writer
 	patch *patchWriter
 	// row is the row being packed, with a word of slack: each field is
@@ -321,7 +320,8 @@ type CoreStatsWriter struct {
 // plan picks with the tier field encoded as enc (the tier plan's
 // MaskEncoding), and its patch files when those widths leave
 // exceptions. Near a power of 256 the plan must hold its tail first.
-func NewCoreStatsWriter(outDir string, plan *CoreStatsPlan, enc TierMaskEncoding) (*CoreStatsWriter, error) {
+// The files' checksums are recorded in sums.
+func NewCoreStatsWriter(outDir string, plan *CoreStatsPlan, enc TierMaskEncoding, sums *Checksums) (*CoreStatsWriter, error) {
 	desc, choice, err := plan.stride(enc)
 	if err != nil {
 		return nil, err
@@ -334,8 +334,8 @@ func NewCoreStatsWriter(outDir string, plan *CoreStatsPlan, enc TierMaskEncoding
 		plan:           plan,
 		wantExceptions: choice.exceptions,
 	}
-	if w.f, err = os.Create(w.path); err != nil {
-		return nil, fmt.Errorf("create core stats file: %w", err)
+	if w.f, err = createHashedFile(w.path, sums); err != nil {
+		return nil, err
 	}
 	w.bw = bufio.NewWriterSize(w.f, writeBufSize)
 	head := EncodeHeader(Header{Magic: MagicNumber, Version: Version, Count: plan.rows, Width: uint32(desc.RowBytes())})
@@ -344,7 +344,7 @@ func NewCoreStatsWriter(outDir string, plan *CoreStatsPlan, enc TierMaskEncoding
 		return nil, errors.Join(fmt.Errorf("write core stats header: %w", err), w.Abort())
 	}
 	if choice.exceptions > 0 {
-		if w.patch, err = newPatchWriter(outDir); err != nil {
+		if w.patch, err = newPatchWriter(outDir, sums); err != nil {
 			return nil, errors.Join(err, w.Abort())
 		}
 	}
@@ -412,7 +412,7 @@ func (w *CoreStatsWriter) Close() error {
 	if err := w.bw.Flush(); err != nil {
 		return errors.Join(fmt.Errorf("flush core stats: %w", err), w.Abort())
 	}
-	startWriteback(w.f)
+	w.f.startWriteback()
 	err := w.f.Close()
 	w.f = nil
 	if err != nil {

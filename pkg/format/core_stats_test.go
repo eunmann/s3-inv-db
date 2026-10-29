@@ -85,7 +85,7 @@ func writeOneRow(outDir string, count, totalBytes uint64, tierMask uint16) error
 	}
 	var plan format.CoreStatsPlan
 	plan.Add(count, totalBytes, tierMask)
-	w, err := format.NewCoreStatsWriter(outDir, &plan, format.TierMaskPlain)
+	w, err := format.NewCoreStatsWriter(outDir, &plan, format.TierMaskPlain, nil)
 	if err != nil {
 		return fmt.Errorf("new writer: %w", err)
 	}
@@ -131,7 +131,7 @@ func BenchmarkCoreStatsWriter(b *testing.B) {
 		for i := range uint64(rows) {
 			plan.Add(i%1000, i*i%(1<<40), uint16(i%4))
 		}
-		w, err := format.NewCoreStatsWriter(b.TempDir(), &plan, format.TierMaskPlain)
+		w, err := format.NewCoreStatsWriter(b.TempDir(), &plan, format.TierMaskPlain, nil)
 		if err != nil {
 			b.Fatal(err)
 		}

@@ -16,7 +16,7 @@ func BenchmarkArrayReaderU64(b *testing.B) {
 	path := filepath.Join(dir, "bench.u64")
 	const N = 1_000_000
 
-	w, err := format.NewArrayWriter(path, 8)
+	w, err := format.NewArrayWriter(path, 8, nil)
 	if err != nil {
 		b.Fatal(err)
 	}

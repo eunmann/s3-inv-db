@@ -146,8 +146,9 @@ func (b *StreamingMPHFBuilder) Count() uint64 {
 // at once; Wait ends the build. Starts holds the first position of
 // each depth and, last, the key count: a key at depth d and index i
 // has position starts[d]+i. Nil starts make a position key the
-// position itself. A cancelled ctx fails the build.
-func (b *StreamingMPHFBuilder) Start(ctx context.Context, outDir string, starts []uint64, workers int) (*MPHFBuild, error) {
+// position itself. A cancelled ctx fails the build. The files'
+// checksums are recorded in sums.
+func (b *StreamingMPHFBuilder) Start(ctx context.Context, outDir string, starts []uint64, workers int, sums *Checksums) (*MPHFBuild, error) {
 	if b.started {
 		return nil, ErrMPHFAlreadyBuilt
 	}
@@ -158,14 +159,14 @@ func (b *StreamingMPHFBuilder) Start(ctx context.Context, outDir string, starts 
 	if starts != nil && !slices.Equal(starts[max(0, len(starts)-1):], []uint64{b.count}) {
 		return nil, fmt.Errorf("%w: %d depth starts for %d keys", ErrMPHFPosition, len(starts), b.count)
 	}
-	b.build = startMPHFBuild(ctx, b, outDir, starts, workers)
+	b.build = startMPHFBuild(ctx, b, outDir, starts, workers, sums)
 
 	return b.build, nil
 }
 
 // Build builds the MPHF into outDir on GOMAXPROCS workers.
 func (b *StreamingMPHFBuilder) Build(outDir string) error {
-	h, err := b.Start(context.Background(), outDir, nil, runtime.GOMAXPROCS(0))
+	h, err := b.Start(context.Background(), outDir, nil, runtime.GOMAXPROCS(0), nil)
 	if err != nil {
 		return err
 	}

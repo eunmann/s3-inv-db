@@ -9,7 +9,7 @@ import (
 // TestInternerRefusesToWrapSegmentIDs: the 2^32nd distinct segment is an
 // error, not ID 0 again (which would make prefix strings wrong).
 func TestInternerRefusesToWrapSegmentIDs(t *testing.T) {
-	si, err := NewPrefixSegmentInterner(t.TempDir())
+	si, err := NewPrefixSegmentInterner(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
