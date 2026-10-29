@@ -24,6 +24,9 @@ var (
 	ErrMissingSizeColumn = errors.New("missing parquet 'size' column")
 	// ErrDuplicateColumn indicates two parquet columns canonicalize to the same name.
 	ErrDuplicateColumn = errors.New("parquet schema has duplicate column")
+	// ErrNestedColumn indicates a column the reader reads is not a
+	// top-level primitive: it is a group or inside one.
+	ErrNestedColumn = errors.New("parquet column is not a top-level primitive")
 	// ErrColumnOutOfRange indicates a configured column index beyond the schema.
 	ErrColumnOutOfRange = errors.New("parquet column index out of range")
 	// ErrColumnsMisaligned indicates the read columns disagree on a row group's row count.
@@ -211,10 +214,16 @@ func NewParquetReaderFromStream(r io.ReadCloser, size int64, tempDir string) (*P
 // case from the hardcoded names would silently drop the StorageClass /
 // IntelligentTieringAccessTier columns, so every tier bucket would
 // collapse to "unknown" with no error surfaced.
+//
+// The reader reads leaf columns, so a column's index is its leaf's: a
+// group or list ahead of it adds leaves. A column that is a group or
+// only inside one is an error rather than skipped, which would drop its
+// values. A repeated primitive is read one row per value, so a row with
+// other than one value fails as misaligned columns.
 func detectParquetSchema(schema *parquet.Schema) (ParquetReaderConfig, error) {
 	var cfg ParquetReaderConfig
 	seen := make(map[string]string, len(schema.Fields()))
-	for i, field := range schema.Fields() {
+	for _, field := range schema.Fields() {
 		canon := canonicalColumnName(field.Name())
 		if prev, ok := seen[canon]; ok {
 			return cfg, fmt.Errorf("%w: %q and %q both canonicalize to %q",
@@ -222,21 +231,45 @@ func detectParquetSchema(schema *parquet.Schema) (ParquetReaderConfig, error) {
 		}
 		seen[canon] = field.Name()
 
-		switch canon {
-		case "key":
-			cfg.KeyCol = ColumnAt(i)
-		case "size":
-			cfg.SizeCol = ColumnAt(i)
-		case "storageclass":
-			cfg.StorageCol = ColumnAt(i)
-		case "intelligenttieringaccesstier":
-			cfg.AccessTierCol = ColumnAt(i)
-		case "isdeletemarker":
-			cfg.DeleteMarkerCol = ColumnAt(i)
+		col := configColumn(&cfg, canon)
+		if col == nil {
+			continue
+		}
+		leaf, ok := schema.Lookup(field.Name())
+		if !ok || !field.Leaf() {
+			return cfg, fmt.Errorf("%w: %q", ErrNestedColumn, field.Name())
+		}
+		*col = ColumnAt(leaf.ColumnIndex)
+	}
+	for _, path := range schema.Columns() {
+		if len(path) == 1 {
+			continue
+		}
+		if col := configColumn(&cfg, canonicalColumnName(path[len(path)-1])); col != nil && col.Index() < 0 {
+			return cfg, fmt.Errorf("%w: %q", ErrNestedColumn, strings.Join(path, "."))
 		}
 	}
 
 	return cfg, cfg.validate()
+}
+
+// configColumn returns the field of c for the column of canonical name canon,
+// or nil for a column the reader does not read.
+func configColumn(c *ParquetReaderConfig, canon string) *Column {
+	switch canon {
+	case "key":
+		return &c.KeyCol
+	case "size":
+		return &c.SizeCol
+	case "storageclass":
+		return &c.StorageCol
+	case "intelligenttieringaccesstier":
+		return &c.AccessTierCol
+	case "isdeletemarker":
+		return &c.DeleteMarkerCol
+	}
+
+	return nil
 }
 
 // canonicalColumnName normalises a manifest/parquet column name to

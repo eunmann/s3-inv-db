@@ -139,6 +139,37 @@ func TestParquetReader_OmittedOptionalColumnsAreAbsent(t *testing.T) {
 	}
 }
 
+// TestParquetReader_NestedFieldsBeforeKeyAndSize: a struct and a list
+// ahead of the key and size add leaf columns, which must not shift the
+// columns the reader reads.
+func TestParquetReader_NestedFieldsBeforeKeyAndSize(t *testing.T) {
+	type meta struct {
+		Owner string `parquet:"owner"`
+		Parts int64  `parquet:"parts"`
+	}
+	type record struct {
+		Meta         meta     `parquet:"meta"`
+		Tags         []string `parquet:"tags,list"`
+		Key          string   `parquet:"key"`
+		Size         int64    `parquet:"size"`
+		StorageClass string   `parquet:"storage_class"`
+	}
+	path := filepath.Join(t.TempDir(), "nested-first.parquet")
+	rows := []record{
+		{meta{"o1", 7}, []string{"a", "b"}, "k1", 100, "STANDARD"},
+		{meta{"o2", 8}, nil, "k2", 200, "GLACIER"},
+	}
+	if err := parquet.WriteFile(path, rows); err != nil {
+		t.Fatal(err)
+	}
+
+	got := readAllRows(t, openParquetFile(t, path))
+	want := []s3inventory.Row{{Key: "k1", Size: 100, StorageClass: "STANDARD"}, {Key: "k2", Size: 200, StorageClass: "GLACIER"}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("rows = %+v, want %+v", got, want)
+	}
+}
+
 func openParquetFile(t *testing.T, path string) *s3inventory.ParquetReader {
 	t.Helper()
 	f := openTestParquet(t, path)

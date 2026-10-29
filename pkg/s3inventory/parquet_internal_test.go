@@ -58,7 +58,8 @@ func TestDetectParquetSchema_DuplicateCanonicalNames(t *testing.T) {
 
 // TestDetectParquetSchema_Columns: the config detected from an AWS
 // inventory schema names each column it reads, leaves out the optional
-// columns the inventory lacks, and errors without a key or size column.
+// columns the inventory lacks, and errors without a key or size column
+// or when one it reads is not a top-level primitive.
 func TestDetectParquetSchema_Columns(t *testing.T) {
 	type allVersions struct {
 		Bucket                       string `parquet:"bucket"`
@@ -84,11 +85,43 @@ func TestDetectParquetSchema_Columns(t *testing.T) {
 		Bucket string `parquet:"bucket"`
 		Key    string `parquet:"key"`
 	}
+	type object struct {
+		Key  string `parquet:"key"`
+		Size int64  `parquet:"size"`
+	}
+	type keyInGroup struct {
+		Bucket string `parquet:"bucket"`
+		Object object `parquet:"object"`
+	}
+	type keyIsGroup struct {
+		Key  object `parquet:"key"`
+		Size int64  `parquet:"size"`
+	}
+	type nestedFirst struct {
+		Meta   object            `parquet:"meta"`
+		Tags   []string          `parquet:"tags,list"`
+		Labels map[string]string `parquet:"labels"`
+		Key    string            `parquet:"key"`
+		Size   int64             `parquet:"size"`
+	}
+	type storageInList struct {
+		Key     string   `parquet:"key"`
+		Size    int64    `parquet:"size"`
+		Classes []string `parquet:"storage_class,list"`
+	}
 	cases := map[string]struct {
 		schema  *parquet.Schema
 		want    ParquetReaderConfig
 		wantErr error
+		wantMsg string
 	}{
+		"key_in_group":    {schema: parquet.SchemaOf(new(keyInGroup)), wantErr: ErrNestedColumn, wantMsg: `"object.key"`},
+		"key_is_group":    {schema: parquet.SchemaOf(new(keyIsGroup)), wantErr: ErrNestedColumn, wantMsg: `"key"`},
+		"storage_in_list": {schema: parquet.SchemaOf(new(storageInList)), wantErr: ErrNestedColumn, wantMsg: `"storage_class"`},
+		"nested_first": {
+			schema: parquet.SchemaOf(new(nestedFirst)),
+			want:   ParquetReaderConfig{KeyCol: ColumnAt(5), SizeCol: ColumnAt(6)},
+		},
 		"all_versions": {
 			schema: parquet.SchemaOf(new(allVersions)),
 			want: ParquetReaderConfig{
@@ -108,6 +141,9 @@ func TestDetectParquetSchema_Columns(t *testing.T) {
 			got, err := detectParquetSchema(tc.schema)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("err = %v, want it to name %s", err, tc.wantMsg)
 			}
 			if tc.wantErr == nil && got != tc.want {
 				t.Errorf("config = %+v, want %+v", got, tc.want)
