@@ -302,8 +302,8 @@ func TestFlushAggregatorReleasesRowsUnderHeapPressure(t *testing.T) {
 }
 
 // A spill no larger than the last allocates only the block Drain writes
-// its prefixes into, whether the keys came through the map or through a
-// segment merged into it; an estimate short of the prefixes' length
+// its prefixes into, whether the keys came through the node table or
+// through a segment merged into it; an estimate short of the prefixes' length
 // would grow that block and allocate again.
 func TestAggregatorDrainReusesScratch(t *testing.T) {
 	agg := NewAggregator(0, 0)

@@ -44,8 +44,8 @@ type Aggregator struct {
 	path []aggPathEntry
 	// segments are the nodes since the last Drain by the StartSegment
 	// that began them (a chunk each), and lastKey is the previous key of
-	// the current one. A segment whose keys come in order needs no map;
-	// see StartSegment.
+	// the current one. A segment whose keys come in order needs no node
+	// table lookup; see StartSegment.
 	segments []aggSegment
 	lastKey  []byte
 	// Drain's output and scratch, and mapSegment's (graft), reused the
@@ -64,9 +64,10 @@ type Aggregator struct {
 	// root is the main tree's root node, or noNode.
 	root     uint32
 	maxDepth int
-	// bytes is the heap the nodes since the last Drain take
-	// (EstimatedMemoryUsage), and prefixBytes the length of the prefixes
-	// Drain writes for the live ones.
+	// bytes is the heap the nodes since the last Drain take, the node
+	// share of EstimatedMemoryUsage (which adds the node table), and
+	// prefixBytes the length of the prefixes Drain writes for the live
+	// ones.
 	bytes       int64
 	prefixBytes int
 	tierMask    uint16
@@ -286,9 +287,10 @@ func (a *Aggregator) PrefixCount() int {
 // segment has not seen: it sorts after every prefix created before it
 // (two keys in order bound their prefixes, and a prefix of both is a
 // prefix of every key between them, so on the cached path). Its node is
-// then created without a map lookup, and the segment's nodes are
-// sorted as created. The first key out of order maps the segment, and
-// the rest of it aggregates through the map as without segments; the
+// then created without a node table lookup, and the segment's nodes
+// are sorted as created. The first key out of order maps the segment
+// into the main tree, and the rest of it aggregates through the node
+// table as without segments; the
 // result is the same either way. Drain merges the segments, so
 // prefixes the segments share come out once.
 func (a *Aggregator) StartSegment() {
