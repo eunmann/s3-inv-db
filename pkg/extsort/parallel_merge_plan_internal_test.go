@@ -93,24 +93,29 @@ func TestFinalFanInFitsMemoryLimit(t *testing.T) {
 		{name: "unset", limit: unsetMemoryLimit, wantFanIn: DefaultFinalFanIn, wantWorkers: 32},
 		{name: "1GiB", limit: gib, wantFanIn: 64, wantWorkers: 6},
 		{name: "4GiB", limit: 4 * gib, wantFanIn: 64, wantWorkers: 25},
-		{name: "256MiB shrinks", limit: gib / 4, wantFanIn: 25, wantWorkers: 1},
+		{name: "256MiB shrinks", limit: gib / 4, wantFanIn: 23, wantWorkers: 1},
 		{name: "tiny floors at MaxFanIn", limit: 1, wantFanIn: 16, wantWorkers: 1},
 		{name: "huge", limit: 1024 * gib, wantFanIn: DefaultFinalFanIn, wantWorkers: 32},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := finalFanInFor(c.limit, 16); got != c.wantFanIn {
+			if got := finalFanInFor(c.limit, 16, 0); got != c.wantFanIn {
 				t.Errorf("finalFanInFor = %d, want %d", got, c.wantFanIn)
 			}
 			if got := roundWorkersFor(c.limit, 32, 16); got != c.wantWorkers {
 				t.Errorf("roundWorkersFor = %d, want %d", got, c.wantWorkers)
 			}
-			// Every disk round's readers fit the same budget the final
-			// merge's do.
-			if budget, ok := openRunBudget(c.limit); ok && budget >= 16 {
-				if open := roundWorkersFor(c.limit, 32, 16) * 16; open > budget {
-					t.Errorf("round holds %d readers, budget %d", open, budget)
-				}
+			budget, ok := openRunBytes(c.limit)
+			if !ok {
+				return
+			}
+			// Every disk round's readers, and the final merge's with
+			// their read-ahead, fit the same budget.
+			if open := int64(roundWorkersFor(c.limit, 32, 16)) * 16 * openRunHeapBytes; open > budget && budget >= 16*openRunHeapBytes {
+				t.Errorf("round holds %d bytes of readers, budget %d", open, budget)
+			}
+			if final := int64(c.wantFanIn) * (openRunHeapBytes + aheadRunHeapBytes); final > budget && c.wantFanIn > 16 {
+				t.Errorf("final merge holds %d bytes of readers, budget %d", final, budget)
 			}
 		})
 	}
@@ -123,7 +128,7 @@ func TestNewParallelMergerAppliesMemoryLimit(t *testing.T) {
 		wantWorkers    int
 		wantFinalFanIn int
 	}{
-		{name: "256MiB", limit: 256 << 20, wantWorkers: 1, wantFinalFanIn: 25},
+		{name: "256MiB", limit: 256 << 20, wantWorkers: 1, wantFinalFanIn: 23},
 		{name: "unset", limit: math.MaxInt64, wantWorkers: 32, wantFinalFanIn: DefaultFinalFanIn},
 	}
 	for _, c := range cases {
