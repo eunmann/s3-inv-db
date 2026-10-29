@@ -43,9 +43,9 @@ func TestEstimateIndexBytes_FormatSwitch(t *testing.T) {
 	}
 }
 
-// A stored ratio that is zero, negative, not a number or absurdly
-// large is held within sane bounds: a load neither reserves nothing nor
-// is refused for a ratio no layout reaches.
+// A stored ratio that is zero, negative or not a number is held above
+// zero, and one above the format's conservative ratio is held to it: a
+// load neither reserves nothing nor reserves more than with no history.
 func TestEstimateIndexBytes_ClampsLearned(t *testing.T) {
 	const data = 1_000_000
 	for _, format := range []string{"CSV", "Parquet"} {
@@ -56,10 +56,10 @@ func TestEstimateIndexBytes_ClampsLearned(t *testing.T) {
 				t.Errorf("%s learned %v = %d, want above 0 and at most a tenth of the conservative %d", format, low, got, conservative)
 			}
 		}
-		for _, high := range []float64{1e12, math.Inf(1)} {
+		for _, high := range []float64{3.5, 1e12, math.Inf(1)} {
 			got := inventory.EstimateIndexBytes(format, data, inventory.IndexRatio{FileFormat: format, Ratio: high})
-			if got < conservative || got > 2*conservative+1 { // +1: both round down
-				t.Errorf("%s learned %v = %d, want within [1, 2]x the conservative %d", format, high, got, conservative)
+			if got != conservative {
+				t.Errorf("%s learned %v = %d, want the conservative %d", format, high, got, conservative)
 			}
 		}
 	}
@@ -178,5 +178,30 @@ func TestDiscovery_LearnedRatioSurvivesRestart(t *testing.T) {
 	}
 	if conservative := inventory.EstimateIndexBytes("Parquet", 2*indexBytes, inventory.IndexRatio{}); got >= conservative {
 		t.Errorf("estimate after restart = %d, not under the conservative %d", got, conservative)
+	}
+}
+
+// A first run too small for its index's fixed overhead measures a ratio
+// above the conservative one; the next, large run is still estimated at
+// no more than the conservative ratio, not refused for that tiny run.
+func TestDiscovery_TinyRunDoesNotInflateNextEstimate(t *testing.T) {
+	dir := buildMinimalIndex(t)
+	indexBytes, err := inventory.MeasureDir(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := learningDiscovery(t, inventory.NewConfigStore(dbtest.OpenMemDB(t)), dir)
+	tiny := max(indexBytes/10, 1)
+	large := 1000 * indexBytes
+	for _, disc := range []inventory.Inventory{
+		csvRun("i", "2026-01-01T00-00Z", tiny),
+		csvRun("i", "2026-01-02T00-00Z", large),
+	} {
+		if err := d.Load(t.Context(), disc); err != nil {
+			t.Fatalf("load %s: %v", disc.CompositeID(), err)
+		}
+	}
+	if conservative := inventory.EstimateIndexBytes("CSV", large, inventory.IndexRatio{}); d.estimates[1] > conservative {
+		t.Errorf("estimate after a tiny run = %d, above the conservative %d", d.estimates[1], conservative)
 	}
 }

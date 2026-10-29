@@ -143,23 +143,25 @@ const (
 // realistic, deep_pyramid and unique_dirs inventories at 50K–120K
 // objects, a layout's ratio rose by at most 5.5% as it grew, and 14%
 // when the same keys came sorted rather than shuffled (gzip packs
-// sorted keys tighter; S3 promises no order). Converted across formats
-// it fell up to 9% short, Parquet files being 1.28–1.43× the gzipped
-// CSV rather than the 1.30 the conservative ratios assume. Together
-// those need at most 1.20×; the gate settles a larger miss at the
-// built size, and the headroom absorbs a small one.
+// sorted keys tighter; S3 promises no order); together 1.20×, inside
+// the margin. Converted across formats it fell up to 9% short, Parquet
+// files being 1.28–1.43× the gzipped CSV rather than the 1.30 the
+// conservative ratios assume, so a format switch on top of both needs
+// about 1.32×: the headroom absorbs a small miss and the gate settles a
+// larger one at the built size.
 //
-// A learned estimate's ratio, margin included, is held within
-// [minLearnedShare, maxLearnedShare] of the format's conservative one
-// (0.1–6.0 for CSV), so a corrupt stored
-// value neither reserves nothing nor refuses every load. Below the
-// floor are near-flat buckets, whose few prefixes make any reservation
-// cheap; above the ceiling, layouts twice as dense as the densest
-// measured, which settle still corrects.
+// A learned estimate's ratio, margin included, is held to at least
+// minLearnedShare of the format's conservative one (0.1 for CSV), so a
+// corrupt stored value doesn't reserve nothing, and to at most the
+// conservative ratio itself: a run too small for its index's fixed
+// overhead measures a ratio above any layout's, and a refused load
+// records no new one, so a higher ceiling would keep refusing that
+// configuration's later runs. Below the floor are near-flat buckets,
+// whose few prefixes make any reservation cheap; above the ceiling the
+// gate settles a denser layout as it does with no history.
 const (
 	learnedRatioMargin = 1.25
 	minLearnedShare    = 1.0 / 30
-	maxLearnedShare    = 2.0
 )
 
 // IndexRatio is the index bytes per byte of inventory data files that a
@@ -173,8 +175,8 @@ type IndexRatio struct {
 // EstimateIndexBytes returns the disk loading a run takes, from its
 // manifest's file format and data-file total: exact for a published
 // index; else the configuration's learned ratio, converted to this
-// run's format, plus the margin; else, with no history, the format's
-// conservative ratio. An unknown format counts as CSV, the larger.
+// run's format, plus the margin, at most the conservative ratio; else,
+// with no history, the format's conservative ratio. An unknown format counts as CSV, the larger.
 func EstimateIndexBytes(fileFormat string, dataBytes uint64, learned IndexRatio) uint64 {
 	if fileFormat == IndexFileFormat {
 		return dataBytes
@@ -190,7 +192,7 @@ func EstimateIndexBytes(fileFormat string, dataBytes uint64, learned IndexRatio)
 		if !(ratio >= conservative*minLearnedShare) {
 			ratio = conservative * minLearnedShare
 		}
-		ratio = min(ratio, conservative*maxLearnedShare)
+		ratio = min(ratio, conservative)
 	}
 
 	return uint64(float64(dataBytes) * ratio)

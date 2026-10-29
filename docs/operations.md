@@ -40,11 +40,13 @@ prefixes per object).
 After that, a load is estimated from the **index ÷ data ratio of the
 configuration's latest built run, plus a quarter**, kept in `state.db`
 across restarts and converted by the 1.3× when the format changes. On
-the seeded layouts that ratio rose at most 5.5% as a bucket grew, 14%
-when the keys came sorted instead of shuffled, and fell 9% short
-across a format switch. A learned estimate is held to 0.1–6.0× the
-data for CSV (0.08–4.6× for Parquet), so a corrupt stored ratio can't
-reserve nothing or refuse every load. To make room the planner
+the seeded layouts that ratio rose at most 5.5% as a bucket grew and
+14% when the keys came sorted instead of shuffled, which the quarter
+covers; a format switch on top of both (9% short) can exceed it, and
+the load settles at its built size. A learned estimate is held to
+0.1–3.0× the data for CSV (0.08–2.3× for Parquet): a corrupt stored
+ratio can't reserve nothing, and a tiny run's inflated ratio can't
+reserve more than a first load would. To make room the planner
 evicts, in order: the same configuration's runs past retention, then
 the least recently queried runs. It never evicts a pinned run (a
 manual Load pins once its index is in place; one that fails, is
