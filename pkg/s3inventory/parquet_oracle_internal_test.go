@@ -39,7 +39,9 @@ func newOracleParquetReader(r io.ReaderAt, size int64) (*oracleParquetReader, er
 		return nil, err
 	}
 	o := &oracleParquetReader{rowGroups: file.RowGroups(), rg: -1}
-	indexes := [numParquetColumns]int{cfg.KeyCol, cfg.SizeCol, cfg.StorageCol, cfg.AccessTierCol, cfg.DeleteMarkerCol}
+	indexes := [numParquetColumns]int{
+		cfg.KeyCol.Index(), cfg.SizeCol.Index(), cfg.StorageCol.Index(), cfg.AccessTierCol.Index(), cfg.DeleteMarkerCol.Index(),
+	}
 	for i, idx := range indexes {
 		o.cols[i].index = idx
 		if idx >= 0 {
