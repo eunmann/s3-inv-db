@@ -579,13 +579,16 @@ func TestSlotBucketsManyBuckets(t *testing.T) {
 }
 
 // TestSlotBucketsSizing: a bucket's slot count is a power of two, with
-// at most maxSlotBuckets buckets; below that cap a bucket's bytes, the
-// write workers' layout buffer, are at most slotBucketBytes and at least
-// half; and a slot's bucket and place by shift and mask are its
-// quotient and remainder.
+// at most maxSlotBuckets buckets; a bucket's bytes, the write workers'
+// layout buffer, are over half the target (slotBucketBytes or a
+// maxSlotBuckets'th of the slot file) and at most it, or at most twice
+// it where halving the bucket would leave too many; and a slot's bucket
+// and place by shift and mask are its quotient and remainder.
 func TestSlotBucketsSizing(t *testing.T) {
 	for _, slotW := range []int{9, 12, 16} {
-		for _, n := range []int{1, 1000, 300_000, 1 << 27, 3<<30 + 7, 1 << 40} {
+		// 89_000_000 slots of 12 bytes are under maxSlotBuckets ×
+		// slotBucketBytes, but rounding down leaves too many buckets.
+		for _, n := range []int{1, 1000, 300_000, 1 << 27, 89_000_000, 3<<30 + 7, 1 << 40} {
 			t.Run(fmt.Sprintf("slotW=%d/n=%d", slotW, n), func(t *testing.T) {
 				s, err := newSlotBuckets(t.TempDir(), n, slotW)
 				if err != nil {
@@ -595,9 +598,11 @@ func TestSlotBucketsSizing(t *testing.T) {
 				if s.perBucket != 1<<s.shift {
 					t.Errorf("%d slots per bucket, shift %d; want a power of two", s.perBucket, s.shift)
 				}
-				if bytes := s.perBucket * slotW; n*slotW <= maxSlotBuckets*slotBucketBytes &&
-					(bytes > slotBucketBytes || 2*bytes <= slotBucketBytes) {
-					t.Errorf("%d slots of %d bytes per bucket: %d bytes, want at most %d and over half", s.perBucket, slotW, bytes, slotBucketBytes)
+				target := max(slotBucketBytes, (n*slotW+maxSlotBuckets-1)/maxSlotBuckets)
+				bytes := s.perBucket * slotW
+				halved := (n + s.perBucket/2 - 1) / (s.perBucket / 2)
+				if 2*bytes <= target || bytes > 2*target || bytes > target && halved <= maxSlotBuckets {
+					t.Errorf("%d slots of %d bytes per bucket: %d bytes, want over half of %d and at most it, or twice it where halving leaves %d buckets", s.perBucket, slotW, bytes, target, halved)
 				}
 				if len(s.next) > maxSlotBuckets || len(s.next) != (n+s.perBucket-1)/s.perBucket {
 					t.Errorf("%d buckets of %d slots for %d slots, want at most %d covering them", len(s.next), s.perBucket, n, maxSlotBuckets)

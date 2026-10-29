@@ -31,10 +31,11 @@ import (
 // and its place in the bucket a mask rather than a 64-bit division per
 // prefix.
 const (
-	// SlotBucketBytes is the most slot-file range a bucket covers below
-	// maxSlotBuckets buckets, and so the most a write worker's layout
-	// buffer holds; rounding down to a power-of-two slot count leaves
-	// at least half of it.
+	// SlotBucketBytes is the slot-file range a bucket aims to cover,
+	// and so a write worker's layout buffer, while that leaves at most
+	// maxSlotBuckets buckets. A power-of-two slot count is rounded down
+	// from it, leaving over half, or where that would leave too many
+	// buckets doubled, leaving at most twice it.
 	slotBucketBytes = 1 << 20
 	// MaxSlotBuckets caps the bucket count, so the append buffers stay
 	// bounded whatever the prefix count: past it, buckets grow instead.
@@ -78,8 +79,9 @@ type slotBuckets struct {
 // newSlotBuckets sizes the buckets for n slots of slotW bytes and
 // creates the scratch file. A bucket holds the slots of slotBucketBytes,
 // or of a maxSlotBuckets'th of the slot file if that is more, rounded
-// down to a power of two; past maxSlotBuckets buckets, where that would
-// leave more of them, rounded up instead.
+// down to a power of two; where that would leave more than
+// maxSlotBuckets buckets, rounded up instead, so a bucket covers over
+// half and at most twice that target.
 func newSlotBuckets(tempDir string, n, slotW int) (*slotBuckets, error) {
 	bucketBytes := max(slotBucketBytes, (n*slotW+maxSlotBuckets-1)/maxSlotBuckets)
 	shift := uint(bits.Len(uint(max(1, bucketBytes/slotW))) - 1)
