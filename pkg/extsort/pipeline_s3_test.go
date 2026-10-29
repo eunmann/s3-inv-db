@@ -568,6 +568,13 @@ func TestPipelineRun_ResidualsInMemoryMatchSpilled(t *testing.T) {
 	if spilled.MemoryRuns != 0 || spilled.RunFilesCreated == 0 {
 		t.Fatalf("under pressure: %d memory runs, %d run files; want run files", spilled.MemoryRuns, spilled.RunFilesCreated)
 	}
+	// Every prefix is in at least one run and at most in all of them.
+	for name, res := range map[string]*extsort.Result{"in memory": inMemory, "spilled": spilled} {
+		runs := uint64(res.MemoryRuns + res.RunFilesCreated)
+		if res.MergeInputRows < res.PrefixCount || res.MergeInputRows > runs*res.PrefixCount {
+			t.Errorf("%s: %d merge input rows for %d prefixes in %d runs", name, res.MergeInputRows, res.PrefixCount, runs)
+		}
+	}
 
 	a, err := indexread.Open(memDir)
 	if err != nil {
