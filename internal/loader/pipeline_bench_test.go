@@ -235,6 +235,50 @@ func runPipelineBench(b *testing.B, preset string, numObjects int, memLimit int6
 	runPipelineBenchWith(b, pipelineBench{preset: preset, numObjects: numObjects, memLimit: memLimit})
 }
 
+// diskProbe measures a build's disk use when benchutil.DiskPeakEnabled:
+// the peak of scratch plus index, and the final merge's run files. Off,
+// it does nothing, since its directory walks allocate and would count
+// in the build's allocs/op.
+type diskProbe struct {
+	sampler   *benchutil.DiskPeakSampler
+	err       error
+	root      string
+	finalRuns int64
+	taken     bool
+}
+
+func startDiskProbe(root string) *diskProbe {
+	if !benchutil.DiskPeakEnabled() {
+		return &diskProbe{}
+	}
+
+	return &diskProbe{root: root, sampler: benchutil.StartDiskPeakSampler(root)}
+}
+
+// observe is the build's progress callback. Entering the build phase,
+// before the index builder writes anything, the scratch on disk is the
+// final merge's run files.
+func (d *diskProbe) observe(ev events.Progress) {
+	if d.sampler == nil || d.taken || ev.Stage != "building" {
+		return
+	}
+	d.taken = true
+	d.finalRuns, d.err = benchutil.DiskUsage(d.root)
+}
+
+// stop ends sampling and returns the peak, or the first error.
+func (d *diskProbe) stop() (int64, error) {
+	if d.sampler == nil {
+		return 0, nil
+	}
+	peak, err := d.sampler.Stop()
+	if err == nil {
+		err = d.err
+	}
+
+	return peak, err
+}
+
 func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 	b.Helper()
 	benchutil.SilenceZerolog(b)
@@ -262,7 +306,7 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 	for range b.N {
 		b.StopTimer()
 		// Scratch and the staging index are outDir's siblings, so the
-		// disk sampler watches its parent.
+		// disk probe watches its parent.
 		buildRoot := b.TempDir()
 		outDir := filepath.Join(buildRoot, "index")
 
@@ -275,20 +319,10 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 		var msStart runtime.MemStats
 		runtime.ReadMemStats(&msStart)
 		peak := benchutil.StartHeapPeakSampler()
-		diskPeak := benchutil.StartDiskPeakSampler(buildRoot)
+		disk := startDiskProbe(buildRoot)
 
-		// Entering the build phase, before the index builder writes
-		// anything, the scratch on disk is the final merge's run files.
-		var finalRuns int64
-		var finalRunsErr error
-		finalRunsTaken := false
 		cfg := extsort.DefaultConfig()
-		cfg.Observe.OnProgress = func(ev events.Progress) {
-			if ev.Stage == "building" && !finalRunsTaken {
-				finalRunsTaken = true
-				finalRuns, finalRunsErr = benchutil.DiskUsage(buildRoot)
-			}
-		}
+		cfg.Observe.OnProgress = disk.observe
 		pipeline := extsort.NewPipeline(cfg, fc)
 
 		b.StartTimer()
@@ -299,7 +333,7 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 		if err != nil {
 			b.StopTimer()
 			peak.Stop()
-			_, _ = diskPeak.Stop()
+			_, _ = disk.stop()
 			if memLimit > 0 {
 				debug.SetMemoryLimit(prevLimit)
 			}
@@ -310,14 +344,11 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 		lastRunFiles = res.RunFilesCreated
 
 		samplerMax := peak.Stop()
-		peakDisk, err := diskPeak.Stop()
+		peakDisk, err := disk.stop()
 		if err != nil {
-			b.Fatalf("disk peak: %v", err)
+			b.Fatalf("disk probe: %v", err)
 		}
-		if finalRunsErr != nil {
-			b.Fatalf("final runs: %v", finalRunsErr)
-		}
-		lastPeakDisk, lastFinalRuns = peakDisk, finalRuns
+		lastPeakDisk, lastFinalRuns = peakDisk, disk.finalRuns
 		if memLimit > 0 {
 			debug.SetMemoryLimit(prevLimit)
 		}
@@ -337,10 +368,10 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 
 	b.ReportMetric(float64(input), "input_B")
 	b.ReportMetric(float64(lastDiskBytes), "disk_B")
-	// Peak of scratch plus index during the build, and the final
-	// merge's runs.
-	b.ReportMetric(float64(lastPeakDisk), "peak_disk_B")
-	b.ReportMetric(float64(lastFinalRuns), "final_runs_B")
+	if benchutil.DiskPeakEnabled() {
+		b.ReportMetric(float64(lastPeakDisk), "peak_disk_B")
+		b.ReportMetric(float64(lastFinalRuns), "final_runs_B")
+	}
 	b.ReportMetric(float64(lastPeakHeap), "peak_heap_B")
 	b.ReportMetric(float64(lastPrefixCount), "prefixes")
 	b.ReportMetric(float64(lastMaxDepth), "max_depth")

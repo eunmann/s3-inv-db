@@ -4,10 +4,20 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
 )
+
+const diskPeakEnv = "S3INV_DISK_PEAK"
+
+// DiskPeakEnabled reports whether benchmarks should sample disk use.
+// Off by default: the walks allocate, which a benchmark's allocs/op
+// would count against the code under test.
+func DiskPeakEnabled() bool {
+	return os.Getenv(diskPeakEnv) != ""
+}
 
 // DiskPeakSampler polls the disk space a directory tree takes and keeps
 // the largest total seen between Start and Stop: a build's peak of

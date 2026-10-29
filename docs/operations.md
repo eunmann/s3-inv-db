@@ -64,7 +64,8 @@ Measured with `BenchmarkPipeline` at 1M objects: the `realistic`
 fixture has 2.37M prefixes and a 66.8 MB index from a 51 MiB gzipped
 inventory; `unique_dirs` (`uploads/<user>/<uuid>/<file>`) has 1.00M
 prefixes and a 64.0 MB index from 65.1 MB gzipped, and its build
-peaked at 163 MB of scratch plus index (`peak_disk_B`).
+peaked at 163 MB of scratch plus index (`peak_disk_B`, with
+`S3INV_DISK_PEAK=1`).
 
 ## Cache directory
 
