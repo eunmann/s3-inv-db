@@ -2,12 +2,15 @@ package format
 
 import (
 	"fmt"
+	"math/bits"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
+
+	"github.com/eunmann/s3-inv-db/pkg/tiers"
 )
 
 // The range writers must write the files their sequential writers do,
@@ -287,4 +290,122 @@ func TestRankedBitsAddBitsMatchesAdd(t *testing.T) {
 		}
 		assertSameFiles(t, want, got)
 	}
+}
+
+func TestTierStatsRangesMatchWriter(t *testing.T) {
+	three := []tiers.ID{tiers.Standard, tiers.GlacierIR, tiers.DeepArchive}
+	cases := []struct {
+		name    string
+		present []tiers.ID
+		n       int
+		p       float64
+	}{
+		{"tiers=1", []tiers.ID{tiers.Outposts}, 500, 1},
+		{"tiers=3/sparse", three, 3000, 0.3},
+		{"tiers=3/dense", three, 3000, 0.9},
+		{"tiers=3/one row", three, 1, 1},
+		{"tiers=16/sparse", tiers.AllTierIDs(), 3000, 0.1},
+		{"tiers=16/dense", tiers.AllTierIDs(), 2000, 0.95},
+	}
+	for _, tc := range cases {
+		for _, layout := range []tierLayout{tierLayoutDense, tierLayoutMulti} {
+			for _, split := range rangeSplits {
+				t.Run(fmt.Sprintf("%s/layout=%d/parts=%d", tc.name, layout, split.parts), func(t *testing.T) {
+					r := rand.New(rand.NewPCG(uint64(tc.n), uint64(split.parts)))
+					rows := randomTierRows(r, tc.present, tc.n, tc.p, 20, 40)
+					want, got := t.TempDir(), t.TempDir()
+					writeTierRows(t, want, planTierRows(t, tc.present, rows, layout, nil), tc.present, rows)
+					// The multi-tier rows and stored slots before each row.
+					multi, stored := make([]uint64, len(rows)+1), make([]uint64, len(rows)+1)
+					for i := range rows {
+						mask, _ := rowSlots(tc.present, &rows[i])
+						multi[i+1], stored[i+1] = multi[i], stored[i]
+						if k := uint64(bits.OnesCount16(mask)); k >= 2 {
+							multi[i+1]++
+							stored[i+1] += k - 1
+						}
+					}
+					sums := newChecksums(testPiece)
+					w, err := NewTierStatsRanges(got, planTierRows(t, tc.present, rows, layout, nil), sums)
+					if err != nil {
+						t.Fatal(err)
+					}
+					writeRanges(t, r, rangeCuts(r, uint64(len(rows)), split.parts, 1), split.workers,
+						func() func(lo, hi uint64, part *TierStatsPart) error {
+							rw := w.NewRange()
+
+							return func(lo, hi uint64, part *TierStatsPart) error {
+								if err := rw.Start(lo, multi[lo], stored[lo], part); err != nil {
+									return err
+								}
+								for i := lo; i < hi; i++ {
+									if err := rw.AddSlots(rowSlots(tc.present, &rows[i])); err != nil {
+										return err
+									}
+								}
+
+								return rw.Flush()
+							}
+						}, w.Merge)
+					if err := w.Close(); err != nil {
+						t.Fatal(err)
+					}
+					assertSameFiles(t, filepath.Join(want, TierStatsDir), filepath.Join(got, TierStatsDir))
+					checkRecordedSums(t, got, sums)
+				})
+			}
+		}
+	}
+}
+
+// TestTierStatsRangesRejectRowsOffPlan: a range placed past the plan,
+// rows past it, parts merged out of order and a Close short of the plan
+// fail, the Close removing every file.
+func TestTierStatsRangesRejectRowsOffPlan(t *testing.T) {
+	three := []tiers.ID{tiers.Standard, tiers.GlacierIR, tiers.DeepArchive}
+	rows := randomTierRows(rand.New(rand.NewPCG(1, 2)), three, 400, 0.5, 8, 20)
+	open := func(t *testing.T) (*TierStatsRanges, string) {
+		t.Helper()
+		dir := t.TempDir()
+		w, err := NewTierStatsRanges(dir, planTierRows(t, three, rows, tierLayoutMulti, nil), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = w.Abort() })
+
+		return w, dir
+	}
+	t.Run("range past the plan", func(t *testing.T) {
+		w, _ := open(t)
+		if err := w.NewRange().Start(0, w.plan.multiRows+1, 0, &TierStatsPart{}); err == nil {
+			t.Error("a range past the planned multi-tier rows started")
+		}
+	})
+	t.Run("rows past the plan", func(t *testing.T) {
+		w, _ := open(t)
+		rw := w.NewRange()
+		if err := rw.Start(uint64(len(rows))-1, w.plan.multiRows, w.plan.multiSlots, &TierStatsPart{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := rw.AddSlots(3, []uint64{1, 1, 1, 1}); err == nil {
+			t.Error("a multi-tier row past the planned ones was written")
+		}
+	})
+	t.Run("parts out of order", func(t *testing.T) {
+		w, _ := open(t)
+		var part TierStatsPart
+		if err := w.NewRange().Start(5, 0, 0, &part); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Merge(&part); err == nil {
+			t.Error("a part merged before the rows ahead of it")
+		}
+	})
+	t.Run("close short of the plan", func(t *testing.T) {
+		w, dir := open(t)
+		if err := w.Close(); err == nil {
+			t.Fatal("closed without a row")
+		}
+		assertSameFiles(t, t.TempDir(), filepath.Join(dir, TierStatsDir))
+	})
 }
