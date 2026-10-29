@@ -3,6 +3,7 @@ package indexstore_test
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
@@ -35,7 +36,7 @@ func TestRunFromManifestKey(t *testing.T) {
 // so a file name that would be written outside the run's directory is
 // refused before anything is downloaded.
 func TestParseManifestRejectsPathsOutsideTheRun(t *testing.T) {
-	if _, err := indexstore.ParseManifest([]byte(`{"version":2,"files":{"core_stats.bin":{"size":1},"tier_stats/tier_multi.bin":{"size":2}}}`)); err != nil {
+	if _, err := indexstore.ParseManifest([]byte(`{"version":` + strconv.Itoa(format.ManifestVersion) + `,"files":{"core_stats.bin":{"size":1},"tier_stats/tier_multi.bin":{"size":2}}}`)); err != nil {
 		t.Fatalf("valid manifest rejected: %v", err)
 	}
 	for _, name := range []string{"../x", "/etc/passwd", "a/../../b", "a/./b", `a\b`, "", "manifest.json"} {

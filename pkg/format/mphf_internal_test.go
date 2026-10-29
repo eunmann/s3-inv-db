@@ -3,6 +3,8 @@ package format
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -548,7 +550,7 @@ func TestSlotBucketsManyBuckets(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer b.Close()
-	const n = 300_000 // ~3.1 buckets of 1 MiB at 11-byte slots, more than slotWriteWorkers
+	const n = 300_000 // ~4.6 buckets of 2^16 11-byte slots, more than slotWriteWorkers
 	for i := range n {
 		if err := b.Add(prefixFromInt(i)); err != nil {
 			t.Fatal(err)
@@ -573,6 +575,51 @@ func TestSlotBucketsManyBuckets(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Errorf("slot bucket scratch left in the temp dir: %v", matches)
+	}
+}
+
+// TestSlotBucketsSizing: a bucket's slot count is a power of two, with
+// at most maxSlotBuckets buckets; a bucket's bytes, the write workers'
+// layout buffer, are over half the target (slotBucketBytes or a
+// maxSlotBuckets'th of the slot file) and at most it, or at most twice
+// it where halving the bucket would leave too many; and a slot's bucket
+// and place by shift and mask are its quotient and remainder.
+func TestSlotBucketsSizing(t *testing.T) {
+	for _, slotW := range []int{9, 12, 16} {
+		// 89_000_000 slots of 12 bytes are under maxSlotBuckets ×
+		// slotBucketBytes, but rounding down leaves too many buckets.
+		for _, n := range []int{1, 1000, 300_000, 1 << 27, 89_000_000, 3<<30 + 7, 1 << 40} {
+			t.Run(fmt.Sprintf("slotW=%d/n=%d", slotW, n), func(t *testing.T) {
+				s, err := newSlotBuckets(t.TempDir(), n, slotW)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer s.close()
+				if s.perBucket != 1<<s.shift {
+					t.Errorf("%d slots per bucket, shift %d; want a power of two", s.perBucket, s.shift)
+				}
+				target := max(slotBucketBytes, (n*slotW+maxSlotBuckets-1)/maxSlotBuckets)
+				bytes := s.perBucket * slotW
+				halved := (n + s.perBucket/2 - 1) / (s.perBucket / 2)
+				if 2*bytes <= target || bytes > 2*target || bytes > target && halved <= maxSlotBuckets {
+					t.Errorf("%d slots of %d bytes per bucket: %d bytes, want over half of %d and at most it, or twice it where halving leaves %d buckets", s.perBucket, slotW, bytes, target, halved)
+				}
+				if len(s.next) > maxSlotBuckets || len(s.next) != (n+s.perBucket-1)/s.perBucket {
+					t.Errorf("%d buckets of %d slots for %d slots, want at most %d covering them", len(s.next), s.perBucket, n, maxSlotBuckets)
+				}
+				for _, slot := range []int{0, s.perBucket - 1, s.perBucket, n / 3, n - 1} {
+					if slot < 0 || slot >= n {
+						continue
+					}
+					if b, at := slot>>s.shift, slot&(s.perBucket-1); b != slot/s.perBucket || at != slot%s.perBucket {
+						t.Errorf("slot %d: bucket %d at %d, want %d at %d", slot, b, at, slot/s.perBucket, slot%s.perBucket)
+					}
+				}
+			})
+		}
+	}
+	if _, err := newSlotBuckets(t.TempDir(), 1<<43, 16); !errors.Is(err, errTooManySlots) {
+		t.Errorf("2^43 slots = %v, want errTooManySlots", err)
 	}
 }
 
@@ -625,6 +672,61 @@ func TestSlotBucketsWidePositions(t *testing.T) {
 		if fp != uint64(1000+slot) || binary.LittleEndian.Uint64(pos[:]) != uint64(1)<<36+uint64(slot) {
 			t.Errorf("slot %d = fp %d pos %#x", slot, fp, binary.LittleEndian.Uint64(pos[:]))
 		}
+	}
+}
+
+// TestSlotBucketsLayoutEveryWidth: at every position width, records
+// arriving in random slot order lay out each slot's fingerprint and
+// position bytes exactly, without touching a neighbour's, across
+// several buckets and a partial last one.
+func TestSlotBucketsLayoutEveryWidth(t *testing.T) {
+	const n = 200_003
+	r := rand.New(rand.NewPCG(1, 2))
+	order := r.Perm(n)
+	for posW := 1; posW <= 8; posW++ {
+		t.Run(fmt.Sprintf("posW=%d", posW), func(t *testing.T) {
+			slotW := mphfFingerprintBytes + posW
+			s, err := newSlotBuckets(t.TempDir(), n, slotW)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.close()
+			if posW > 4 {
+				s.posBytes = 8
+				s.recW = 4 + mphfFingerprintBytes + 8
+			}
+			want := make([]byte, n*slotW)
+			bufs := make([][]byte, len(s.next))
+			for _, slot := range order {
+				fp, pos := r.Uint64(), r.Uint64()&widthMask[posW]
+				binary.LittleEndian.PutUint64(want[slot*slotW:], fp)
+				var p [8]byte
+				binary.LittleEndian.PutUint64(p[:], pos)
+				copy(want[slot*slotW+mphfFingerprintBytes:(slot+1)*slotW], p[:posW])
+				b := slot / s.perBucket
+				bufs[b] = s.appendRecord(bufs[b], slot%s.perBucket, fp, pos)
+			}
+			for b, buf := range bufs {
+				if err := s.appendRecords(b, buf); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f := testSlotFile(t, n, slotW)
+			if err := s.write(f, posW, nil); err != nil {
+				t.Fatal(err)
+			}
+			got := make([]byte, n*slotW)
+			if _, err := f.ReadAt(got, mphfSlotsDataOff); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, want) {
+				for j := range got {
+					if got[j] != want[j] {
+						t.Fatalf("slot %d byte %d = %#x, want %#x", j/slotW, j%slotW, got[j], want[j])
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -788,5 +890,32 @@ func TestMPHFLevelKeysInScratch(t *testing.T) {
 		if pos, ok := m.Lookup(prefixFromInt(i + 1)); !ok || pos != uint64(i) {
 			t.Fatalf("prefix %d: position %d (found %v)", i, pos, ok)
 		}
+	}
+}
+
+func TestMPHFWorkers(t *testing.T) {
+	for _, c := range []struct{ procs, n, want int }{
+		{8, 0, 1},
+		{8, 4095, 1},
+		{8, 3 * 4096, 3},
+		{8, 1 << 30, 8},
+		{1, 1 << 30, 1},
+	} {
+		if got := mphfWorkers(c.procs, c.n); got != c.want {
+			t.Errorf("mphfWorkers(%d, %d) = %d, want %d", c.procs, c.n, got, c.want)
+		}
+	}
+}
+
+// TestMPHFWorkerCountFollowsGOMAXPROCS: a container CPU quota lowers
+// GOMAXPROCS but not NumCPU. Setting it above NumCPU makes the two
+// differ on any host.
+func TestMPHFWorkerCountFollowsGOMAXPROCS(t *testing.T) {
+	procs := runtime.NumCPU() + 3
+	prev := runtime.GOMAXPROCS(procs)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
+
+	if got := mphfWorkerCount(1 << 30); got != procs {
+		t.Errorf("mphfWorkerCount = %d with GOMAXPROCS %d, want %d", got, procs, procs)
 	}
 }

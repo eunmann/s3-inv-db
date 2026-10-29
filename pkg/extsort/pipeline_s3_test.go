@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -137,19 +138,33 @@ func TestPipelineRun_FailureKeepsPreviousIndex(t *testing.T) {
 	}
 }
 
-// uploadCSVInventory writes a one-file CSV inventory with the given
-// schema and rows and returns its manifest URI.
+// uploadCSVInventory writes a one-file gzipped CSV inventory with the
+// given schema and rows and returns its manifest URI.
 func uploadCSVInventory(t *testing.T, fc *s3fetch.Client, schema string, rows [][]string) string {
+	t.Helper()
+
+	return uploadCSVChunk(t, fc, "inv/data/part-0.csv.gz", true, schema, rows)
+}
+
+// uploadCSVChunk writes a one-file CSV inventory whose file is chunkKey,
+// gzipped or not, and returns its manifest URI.
+func uploadCSVChunk(t *testing.T, fc *s3fetch.Client, chunkKey string, gzipped bool, schema string, rows [][]string) string {
 	t.Helper()
 	bucket := s3test.Bucket(t, fc.Raw())
 	var buf bytes.Buffer
+	var out io.Writer = &buf
 	gz := gzip.NewWriter(&buf)
-	w := csv.NewWriter(gz)
+	if gzipped {
+		out = gz
+	}
+	w := csv.NewWriter(out)
 	if err := w.WriteAll(rows); err != nil {
 		t.Fatal(err)
 	}
-	if err := gz.Close(); err != nil {
-		t.Fatal(err)
+	if gzipped {
+		if err := gz.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	put := func(key string, body []byte) {
 		if _, err := fc.Raw().PutObject(t.Context(), &s3.PutObjectInput{
@@ -158,14 +173,14 @@ func uploadCSVInventory(t *testing.T, fc *s3fetch.Client, schema string, rows []
 			t.Fatalf("put %s: %v", key, err)
 		}
 	}
-	put("inv/data/part-0.csv.gz", buf.Bytes())
+	put(chunkKey, buf.Bytes())
 	manifest, err := json.Marshal(map[string]any{
 		"sourceBucket":      "src",
 		"destinationBucket": "arn:aws:s3:::" + bucket,
 		"version":           "2016-11-30",
 		"fileFormat":        "CSV",
 		"fileSchema":        schema,
-		"files":             []map[string]any{{"key": "inv/data/part-0.csv.gz", "size": buf.Len()}},
+		"files":             []map[string]any{{"key": chunkKey, "size": buf.Len()}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -306,6 +321,38 @@ func TestPipelineRun_CSVTierStatsAcrossBufferRefills(t *testing.T) {
 		if _, ok := want[k]; !ok {
 			t.Errorf("prefix %q has unexpected tier %d", k.prefix, k.tier)
 		}
+	}
+}
+
+// A CSV chunk is gunzipped when its content is gzip, whatever its key
+// says: reading gzip as text would fail every row as an anomaly, or with
+// AllowAnomalies index garbage.
+func TestPipelineRun_CSVGzipDetectedByContent(t *testing.T) {
+	for _, c := range []struct {
+		key     string
+		gzipped bool
+	}{
+		{"inv/data/part-0.csv", true},
+		{"inv/data/part-0.csv.gz", false},
+		{"inv/data/part-0.csv", false},
+	} {
+		t.Run(fmt.Sprintf("%s/gzipped=%v", c.key, c.gzipped), func(t *testing.T) {
+			fc := s3test.FetchClient(t)
+			manifest := uploadCSVChunk(t, fc, c.key, c.gzipped, "Bucket, Key, Size",
+				[][]string{{"src", "a/x.txt", "100"}, {"src", "a/b/y.txt", "23"}})
+			outDir := filepath.Join(t.TempDir(), "index")
+			if _, err := extsort.NewPipeline(extsort.DefaultConfig(), fc).Run(t.Context(), manifest, outDir); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			idx, err := indexread.Open(outDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer idx.Close()
+			if st, ok := idx.StatsForPrefix("a/"); !ok || st.ObjectCount != 2 || st.TotalBytes != 123 {
+				t.Errorf("a/ = %+v, %v; want 2 objects, 123 bytes", st, ok)
+			}
+		})
 	}
 }
 

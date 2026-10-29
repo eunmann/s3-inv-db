@@ -95,6 +95,25 @@ var errRunRecordCorrupt = errors.New("corrupt run record")
 
 // encodeRunRecord appends row's record, front-coded against prev, to dst.
 func encodeRunRecord(dst []byte, prev string, row *PrefixRow) []byte {
+	shared := sharedPrefixLen(prev, row.Prefix)
+
+	return encodeRunRecordShared(dst, shared, row.Prefix[shared:], row)
+}
+
+// encodeRunRecordShared appends the record of row whose prefix is the
+// previous record's first shared bytes followed by suffix; row.Prefix
+// is not read.
+func encodeRunRecordShared(dst []byte, shared int, suffix string, row *PrefixRow) []byte {
+	dst = binary.AppendUvarint(dst, uint64(shared))
+	dst = binary.AppendUvarint(dst, uint64(len(suffix)))
+	dst = append(dst, suffix...)
+
+	return appendRunRecordStats(dst, row)
+}
+
+// appendRunRecordStats appends the part of row's record after its
+// prefix: the depth, the tier mask and the counts.
+func appendRunRecordStats(dst []byte, row *PrefixRow) []byte {
 	var count, bytes uint64
 	var mask uint64
 	for t := range MaxTiers {
@@ -108,10 +127,6 @@ func encodeRunRecord(dst []byte, prev string, row *PrefixRow) []byte {
 	if explicit {
 		mask |= runRecordTotals
 	}
-	shared := sharedPrefixLen(prev, row.Prefix)
-	dst = binary.AppendUvarint(dst, uint64(shared))
-	dst = binary.AppendUvarint(dst, uint64(len(row.Prefix)-shared))
-	dst = append(dst, row.Prefix[shared:]...)
 	dst = binary.AppendUvarint(dst, uint64(row.Depth))
 	dst = binary.AppendUvarint(dst, mask)
 	for t := range MaxTiers {
@@ -378,7 +393,7 @@ var ErrChunkSizeMismatch = errors.New("inventory chunk size differs from its man
 
 // MergeConfig tunes the K-way merge phase.
 type MergeConfig struct {
-	// NumWorkers: concurrent merge workers. Default max(NumCPU/2, 1).
+	// NumWorkers: concurrent merge workers. Default max(GOMAXPROCS/2, 1).
 	// Under GOMEMLIMIT the merger lowers it so every disk round's open
 	// readers fit the same budget as the final merge's.
 	NumWorkers int
@@ -414,19 +429,22 @@ type ObserveConfig struct {
 }
 
 // DefaultConfig returns a Config with sensible defaults based on the
-// current machine. Concurrency is derived from runtime.NumCPU per the
-// pipeline's "throughput scales with instance size" contract; the
-// process memory limit is governed by GOMEMLIMIT (see
-// sysmem.ApplyMemoryLimit) rather than a fractional partition here.
+// current machine. Concurrency is derived from runtime.GOMAXPROCS per
+// the pipeline's "throughput scales with instance size" contract:
+// unlike NumCPU it honours a container CPU quota. The process memory
+// limit is governed by GOMEMLIMIT (see sysmem.ApplyMemoryLimit) rather
+// than a fractional partition here.
 func DefaultConfig() Config {
-	mergeWorkers := max(runtime.NumCPU()/2, 1)
-
 	return Config{
 		TempDir:  "",
 		MaxDepth: 0,
 		Merge: MergeConfig{
-			NumWorkers: mergeWorkers,
+			NumWorkers: mergeWorkerCount(runtime.GOMAXPROCS(0)),
 			MaxFanIn:   16,
 		},
 	}
+}
+
+func mergeWorkerCount(procs int) int {
+	return max(procs/2, 1)
 }

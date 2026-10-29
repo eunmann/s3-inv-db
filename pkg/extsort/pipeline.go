@@ -417,12 +417,13 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 	// ingest doesn't leave most workers idle behind one big chunk.
 	sortFilesLargestFirst(manifest)
 
-	numWorkers := ingestWorkerCount(len(manifest.Files))
+	procs := runtime.GOMAXPROCS(0)
+	numWorkers := ingestWorkerCount(procs, len(manifest.Files))
 	log.Info().
-		Int("num_cpu", runtime.NumCPU()).
+		Int("gomaxprocs", procs).
 		Int("manifest_files", len(manifest.Files)).
 		Int("ingest_workers", numWorkers).
-		Msg("ingest worker count derived from NumCPU")
+		Msg("ingest worker count derived from GOMAXPROCS")
 
 	return &ingestConfig{
 		manifest:        manifest,
@@ -439,12 +440,13 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 }
 
 // ingestWorkerCount returns the worker count for download+parse: the
-// smaller of NumCPU and the manifest's chunk count (no point spinning
-// up 64 workers for a 3-file manifest). Floored at 2 so even a single
-// CPU runs with overlap between download and parse.
-func ingestWorkerCount(fileCount int) int {
+// smaller of procs (GOMAXPROCS, which honours a container CPU quota
+// where NumCPU does not) and the manifest's chunk count (no point
+// spinning up 64 workers for a 3-file manifest). Floored at 2 so even a
+// single CPU runs with overlap between download and parse.
+func ingestWorkerCount(procs, fileCount int) int {
 	const minWorkers = 2
-	n := runtime.NumCPU()
+	n := procs
 	if fileCount > 0 && fileCount < n {
 		n = fileCount
 	}
@@ -833,7 +835,7 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, fetched fetche
 	if job.config.format == s3fetch.InventoryFormatParquet {
 		reader, err = openParquetReader(body, job.config.fileSize, p.tempDir)
 	} else {
-		reader, err = s3inventory.NewCSVReaderFromStream(counted, job.key, s3inventory.CSVReaderConfig{
+		reader, err = s3inventory.NewCSVReaderFromStream(counted, s3inventory.CSVReaderConfig{
 			KeyCol:          job.config.keyCol,
 			SizeCol:         job.config.sizeCol,
 			StorageCol:      job.config.storageCol,
@@ -944,7 +946,7 @@ func openParquetReader(obj *s3fetch.DownloadedObject, fileSize int64, tempDir st
 	return r, nil
 }
 
-// flushAggregator drains the aggregator to a sorted run file. Safe
+// flushAggregator writes the aggregator's rows to a sorted run file. Safe
 // to call concurrently from multiple worker goroutines — the only
 // shared state (p.runFiles + p.runCount) is guarded by p.runFilesMu;
 // the actual sort + write is per-goroutine-local until the append.
@@ -956,13 +958,12 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	start := time.Now()
 
 	// Fold this worker's tier mask into the pipeline-wide set. The mask
-	// survives Drain, so ORing on every flush captures the worker's full
+	// survives a spill, so ORing on every flush captures the worker's full
 	// lifetime regardless of which flush is the last.
 	p.presentTierMask.Or(uint32(agg.TierMask()))
 
 	aggMemory := agg.EstimatedMemoryUsage()
-	rows := agg.Drain()
-	if len(rows) == 0 {
+	if agg.PrefixCount() == 0 {
 		return nil
 	}
 	p.publish(events.Event{
@@ -989,7 +990,13 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	if err != nil {
 		return fmt.Errorf("create run file: %w", err)
 	}
-	if err := writeAndCloseRun(writer, rows, runPath); err != nil {
+	var rows int
+	if err := writeAndCloseRun(writer, runPath, func() error {
+		var werr error
+		rows, werr = agg.WriteRun(writer)
+
+		return werr
+	}); err != nil {
 		logCleanupErr(log, "remove failed run", runPath, os.Remove(runPath))
 
 		return err
@@ -1012,7 +1019,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 		Type:  events.EvtSpillCompleted,
 		Payload: events.SpillCompleted{
 			WorkerID:   workerID,
-			Rows:       uint64(len(rows)),
+			Rows:       uint64(rows),
 			Bytes:      aggMemory,
 			Duration:   flushDuration,
 			OutputPath: runPath,
@@ -1021,8 +1028,8 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 
 	log.Info().
 		Int("run_index", runIdx).
-		Str("prefixes", humanfmt.Count(int64(len(rows)))).
-		Int("prefixes_count", len(rows)).
+		Str("prefixes", humanfmt.Count(int64(rows))).
+		Int("prefixes_count", rows).
 		Str("aggregator_memory", humanfmt.Bytes(aggMemory)).
 		Str("buffer_size", humanfmt.Bytes(bufferSize)).
 		Str("duration", humanfmt.Duration(flushDuration)).

@@ -14,7 +14,6 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/klauspost/compress v1.20.3
-	github.com/klauspost/pgzip v1.3.0
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/rs/zerolog v1.35.1
 	golang.org/x/sync v0.24.0
