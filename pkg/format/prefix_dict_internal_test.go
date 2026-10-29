@@ -41,7 +41,7 @@ func TestSplitPrefix(t *testing.T) {
 func TestPrefixSegmentInternerBasic(t *testing.T) {
 	dir := t.TempDir()
 
-	interner, err := NewPrefixSegmentInterner(dir, nil)
+	interner, err := NewPrefixSegmentInterner(dir, 1<<20, nil)
 	if err != nil {
 		t.Fatalf("NewPrefixSegmentInterner failed: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestPrefixSegmentInternerBasic(t *testing.T) {
 func TestPrefixDictionaryRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 
-	interner, err := NewPrefixSegmentInterner(dir, nil)
+	interner, err := NewPrefixSegmentInterner(dir, 1<<20, nil)
 	if err != nil {
 		t.Fatalf("NewPrefixSegmentInterner failed: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestPrefixDictionaryRoundTrip(t *testing.T) {
 func TestPreloadedPrefixCache(t *testing.T) {
 	dir := t.TempDir()
 
-	interner, err := NewPrefixSegmentInterner(dir, nil)
+	interner, err := NewPrefixSegmentInterner(dir, 1<<20, nil)
 	if err != nil {
 		t.Fatalf("NewPrefixSegmentInterner failed: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestPreloadedPrefixCache(t *testing.T) {
 // the index closes and its files are unmapped.
 func TestPreloadedSegmentsOutliveTheDictionary(t *testing.T) {
 	dir := t.TempDir()
-	interner, err := NewPrefixSegmentInterner(dir, nil)
+	interner, err := NewPrefixSegmentInterner(dir, 1<<20, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestPreloadedSegmentsOutliveTheDictionary(t *testing.T) {
 // the blob's size needs, not 8.
 func TestSegmentOffsetsAreNarrow(t *testing.T) {
 	dir := t.TempDir()
-	interner, err := NewPrefixSegmentInterner(dir, nil)
+	interner, err := NewPrefixSegmentInterner(dir, 1<<20, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestSegmentOffsetsAreNarrow(t *testing.T) {
 // keeps it.
 func TestInternerAbortRemovesTheDictionary(t *testing.T) {
 	dir := t.TempDir()
-	si, err := NewPrefixSegmentInterner(dir, nil)
+	si, err := NewPrefixSegmentInterner(dir, 1<<20, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestInternerAbortRemovesTheDictionary(t *testing.T) {
 		}
 	}
 
-	si, err = NewPrefixSegmentInterner(dir, nil)
+	si, err = NewPrefixSegmentInterner(dir, 1<<20, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

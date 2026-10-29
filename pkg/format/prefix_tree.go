@@ -42,7 +42,7 @@ var errPrefixTreePlan = errors.New("prefix tree: rows differ from their plan")
 
 // PrefixTreeWriter writes the prefix tree row by row in position order,
 // straight to its final widths: the caller gives the row count, the
-// number of distinct segments (interned by a PrefixSegmentInterner,
+// number of dictionary entries (interned by a PrefixSegmentInterner,
 // which writes the dictionary) and the largest parent distance up front.
 type PrefixTreeWriter struct {
 	path     string
@@ -294,7 +294,7 @@ func (r *PrefixTreeReader) Count() uint64 { return r.count }
 
 // SegmentStats describes the segment dictionary.
 type SegmentStats struct {
-	// Count is the number of distinct segments, Bytes their total length.
+	// Count is the number of dictionary entries, Bytes their total length.
 	Count uint64
 	Bytes uint64
 }

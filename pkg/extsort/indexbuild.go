@@ -35,8 +35,9 @@ import (
 // Finalize replays the depths, in chunks on every core, into the index
 // writers, which write each file in its final form.
 //
-// Memory is bounded: rows and MPHF keys go to disk, and the stack
-// holds one entry per depth.
+// Memory is bounded: rows and MPHF keys go to disk, the stack holds
+// one entry per depth, and the interner remembers segments within its
+// share of the memory limit (internerMemoryBudget).
 type IndexBuilder struct {
 	// The plans and the interner are filled on the spool's plan stage,
 	// and read once Finalize has stopped it.
@@ -108,7 +109,7 @@ func NewIndexBuilder(outDir, tempDir string) (*IndexBuilder, error) {
 	mphfBuilder.SetMemoryBudget(mphfMemoryBudget(readMemoryLimit()))
 
 	checksums := format.NewChecksums()
-	interner, err := format.NewPrefixSegmentInterner(outDir, checksums)
+	interner, err := format.NewPrefixSegmentInterner(outDir, internerMemoryBudget(readMemoryLimit()), checksums)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("create prefix segment interner: %w", err), os.RemoveAll(spoolDir))
 	}
@@ -176,7 +177,7 @@ func (b *IndexBuilder) planRow(e *spoolEntry, slots []uint64) ([]uint64, error) 
 	r.tierMask, r.tiers = mask, slots[start:]
 	b.corePlan.Add(r.count, r.bytes, mask)
 	if depth > 0 {
-		// The interner copies a new segment, so the name may alias the
+		// The interner copies what it keeps, so the name may alias the
 		// entry's buffer.
 		if r.segID, err = b.interner.Intern(unsafe.String(unsafe.SliceData(e.name), len(e.name))); err != nil {
 			return slots, fmt.Errorf("prefix segment %q at depth %d: %w", e.name, depth, err)
@@ -645,8 +646,8 @@ func (b *IndexBuilder) replayDepths(ctx context.Context, depthW *format.DepthInd
 
 // finishSpool ends the spool's stages, which completes the plans and
 // the MPHF keys, and closes the interner, which writes the dictionary's
-// end and frees its segment map before the replay. It returns the
-// segment count.
+// end and frees its tables before the replay. It returns the number of
+// dictionary entries.
 func (b *IndexBuilder) finishSpool() (uint32, error) {
 	if err := b.spool.finish(); err != nil {
 		return 0, err
@@ -797,6 +798,22 @@ func mphfMemoryBudget(memoryLimit int64) int64 {
 	}
 
 	return int64(float64(memoryLimit) * mphfFractionOfLimit)
+}
+
+// internerFractionOfLimit is the share of GOMEMLIMIT the segment
+// interner may hold; defaultInternerBudget is its heap without a limit.
+const (
+	internerFractionOfLimit = 1.0 / 16
+	defaultInternerBudget   = 64 << 20
+)
+
+// internerMemoryBudget is the segment interner's heap under memoryLimit.
+func internerMemoryBudget(memoryLimit int64) int64 {
+	if memoryLimit <= 0 || memoryLimit >= unsetMemoryLimit {
+		return defaultInternerBudget
+	}
+
+	return int64(float64(memoryLimit) * internerFractionOfLimit)
 }
 
 // writeLevelsProcs is how many fewer workers than cores the MPHF build
