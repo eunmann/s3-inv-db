@@ -36,7 +36,7 @@ import (
 // holds one entry per depth.
 type IndexBuilder struct {
 	coreStatsW    *format.CoreStatsBuilder
-	tierStatsW    *format.TierStatsWriter
+	tierStatsW    *format.TierStatsScratchWriter
 	mphfBuilder   *format.StreamingMPHFBuilder
 	prefixTreeW   *format.PrefixTreeWriter
 	spool         *levelSpool
@@ -160,7 +160,7 @@ func (b *IndexBuilder) ensureTierWriter() error {
 	if !b.tiersDeclared {
 		present = tiers.AllTierIDs()
 	}
-	w, err := format.NewTierStatsWriter(b.outDir, present)
+	w, err := format.NewTierStatsScratchWriter(b.outDir, present)
 	if err != nil {
 		return fmt.Errorf("create tier stats writer: %w", err)
 	}
