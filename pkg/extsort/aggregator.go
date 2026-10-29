@@ -129,10 +129,14 @@ type aggSibling struct {
 // A node's heap cost is aggregatorNodeBytes (the node and its parent's
 // index), its key and, for a node of the main tree, its share of the
 // node table (see nodeSlotBytes); a node with several tiers also takes
-// a tier block.
+// a tier block. A spill's walk takes walkScratchBytes a node more, for
+// the counting sort that groups nodes by parent (childEnd and kids),
+// which the estimate counts from the first node on so that a worker's
+// first spill does not go past its cap.
 const (
 	aggregatorNodeBytes = int64(unsafe.Sizeof(aggNode{}) + unsafe.Sizeof(uint32(0)))
 	tierBlockBytes      = int64(unsafe.Sizeof(tierBlock{}))
+	walkScratchBytes    = 2 * int64(unsafe.Sizeof(uint32(0)))
 )
 
 // NewAggregator creates a new prefix aggregator with the given initial capacity.
@@ -486,12 +490,27 @@ func tierIDsFromMask(mask uint16) []tiers.ID {
 	return ids
 }
 
-// EstimatedMemoryUsage returns the heap the aggregator's nodes take
+// EstimatedMemoryUsage returns the heap the aggregator takes: its nodes
 // since the last spill, each with its key and any tier block counted as
-// it is created, plus the main tree's node table at its allocated size,
-// which a spill keeps.
+// it is created; the main tree's node table at its allocated size; and
+// the spill's scratch at its allocated size, or for the walk as much as
+// the next spill will take if that is more. A spill keeps the table and
+// the scratch.
 func (a *Aggregator) EstimatedMemoryUsage() int64 {
-	return a.bytes + a.children.heapBytes()
+	return a.bytes + a.children.heapBytes() + a.scratchBytes()
+}
+
+// scratchBytes returns the spill scratch's share of EstimatedMemoryUsage:
+// the walk's counting sort (also mapSegment's graft), its stack and
+// sibling sort, and the prefix it builds. The stack and the sort grow
+// with the most children a node has, up to 28 bytes a node for a flat
+// bucket, which only a spill finds out: they count from then on.
+func (a *Aggregator) scratchBytes() int64 {
+	const idx = int64(unsafe.Sizeof(uint32(0)))
+	walk := max(idx*int64(cap(a.childEnd)+cap(a.kids)), walkScratchBytes*int64(a.used))
+
+	return walk + idx*int64(cap(a.stack)) + int64(unsafe.Sizeof(aggSibling{}))*int64(cap(a.siblings)) +
+		int64(cap(a.prefix.cur)) + int64(unsafe.Sizeof(0))*int64(cap(a.prefix.ends))
 }
 
 // heapReadings returns the live heap as of the last GC and HeapInuse

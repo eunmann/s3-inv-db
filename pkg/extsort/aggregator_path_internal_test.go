@@ -283,7 +283,7 @@ func TestAggregatorAdversarialOrdersAreExact(t *testing.T) {
 
 // checkAggregatorAccounting recomputes from the nodes what the
 // aggregator has counted: the estimate (every node, its key and its tier
-// block, the node table's slots). It checks that
+// block, the node table's slots, the spill's scratch). It checks that
 // every tier block belongs to one node and every live node's totals are
 // its tiers' sums, that the node table holds each live non-root node of
 // the main tree once, under its key's hash, and that each node's stored
@@ -324,8 +324,11 @@ func checkAggregatorAccounting(t *testing.T, agg *Aggregator) {
 	if agg.bytes != want {
 		t.Fatalf("counted %d node bytes; the nodes have %d", agg.bytes, want)
 	}
-	if got, want := agg.EstimatedMemoryUsage(), want+int64(len(agg.children.slots))*nodeSlotBytes; got != want {
-		t.Fatalf("estimate = %d, want %d with the node table", got, want)
+	if got, want := agg.EstimatedMemoryUsage(), want+int64(len(agg.children.slots))*nodeSlotBytes+agg.scratchBytes(); got != want {
+		t.Fatalf("estimate = %d, want %d with the node table and scratch", got, want)
+	}
+	if scratch := agg.scratchBytes(); scratch < walkScratchBytes*int64(agg.used) {
+		t.Fatalf("scratch counts %d bytes for %d nodes", scratch, agg.used)
 	}
 
 	inTree := map[uint32]bool{}

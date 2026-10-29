@@ -68,16 +68,17 @@ func TestHeapReadingsUnderPressure(t *testing.T) {
 // EstimatedMemoryUsage counts each new prefix once, with its key (the
 // parent's index and the segment), and a tier block for each node that
 // comes to hold a second tier, whether from an object or from a
-// segment's node merged into it when the segment is mapped; a Drain
-// starts it over. The node table counts at its size, which a Drain
-// keeps.
+// segment's node merged into it when the segment is mapped, and the
+// walk's scratch for each node before the first spill allocates it; a
+// Drain starts it over. The node table and the scratch count at their
+// size, which a Drain keeps.
 func TestAggregatorEstimateCountsEachPrefix(t *testing.T) {
 	const node, h, block = aggregatorNodeBytes, nodeKeyHeader, tierBlockBytes
 	agg := NewAggregator(0, 0)
 	table := int64(tableSlotsFor(10_000)) * nodeSlotBytes
 	check := func(step string, want int64) {
 		t.Helper()
-		if got := agg.EstimatedMemoryUsage(); got != want {
+		if got, want := agg.EstimatedMemoryUsage(), want+walkScratchBytes*int64(agg.used); got != want {
 			t.Fatalf("%s: estimate = %d, want %d", step, got, want)
 		}
 	}
@@ -112,7 +113,12 @@ func TestAggregatorEstimateCountsEachPrefix(t *testing.T) {
 	}
 
 	agg.Drain()
-	check("after Drain", table)
+	const idx = int64(unsafe.Sizeof(uint32(0)))
+	scratch := idx*int64(cap(agg.childEnd)+cap(agg.kids)+cap(agg.stack)) + int64(unsafe.Sizeof(aggSibling{}))*int64(cap(agg.siblings))
+	if scratch == 0 {
+		t.Fatal("a Drain kept no scratch")
+	}
+	check("after Drain", table+scratch)
 	agg.Release()
 	check("after Release", 0)
 }
@@ -131,7 +137,7 @@ func TestAggregatorEstimateCountsTableGrowth(t *testing.T) {
 		if got := len(agg.children.slots); got != slots {
 			t.Fatalf("after %d prefixes: %d slots, want %d", i+1, got, slots)
 		}
-		if got, want := agg.EstimatedMemoryUsage(), agg.bytes+int64(slots)*nodeSlotBytes; got != want {
+		if got, want := agg.EstimatedMemoryUsage(), agg.bytes+int64(slots)*nodeSlotBytes+agg.scratchBytes(); got != want {
 			t.Fatalf("after %d prefixes: estimate %d, want %d", i+1, got, want)
 		}
 	}
@@ -140,7 +146,7 @@ func TestAggregatorEstimateCountsTableGrowth(t *testing.T) {
 	}
 	agg.Drain()
 	agg.AddObject("q/x", 1, tiers.Standard)
-	if got, want := agg.EstimatedMemoryUsage(), agg.bytes+int64(slots)*nodeSlotBytes; got != want {
+	if got, want := agg.EstimatedMemoryUsage(), agg.bytes+int64(slots)*nodeSlotBytes+agg.scratchBytes(); got != want {
 		t.Fatalf("after a Drain: estimate %d, want %d", got, want)
 	}
 }
@@ -372,6 +378,11 @@ func TestAggregatorBytesPerPrefix(t *testing.T) {
 	}
 }
 
+// discardRecords is a run sink that drops what it is given.
+type discardRecords struct{}
+
+func (discardRecords) take(full []byte) ([]byte, error) { return full[:0], nil }
+
 // estimateObject is an object for measuring the aggregator's heap.
 type estimateObject struct {
 	key  string
@@ -379,24 +390,44 @@ type estimateObject struct {
 	tier tiers.ID
 }
 
-// checkEstimateTracksHeap adds objs to a new aggregator, logs per
+// checkEstimateTracksHeap adds objs to a new aggregator, spills them and
+// adds them again, as a worker does spill after spill. It logs per
 // prefix how much the live heap grew, the estimate and the tier blocks'
 // share of it, and fails unless the estimate is within 5% of the heap's
-// growth.
+// growth, and the estimate before the first spill is within 5% of the
+// heap the spill leaves but for the scratch that grows with a node's
+// children (the stack and the sibling sort), which only a spill finds.
 func checkEstimateTracksHeap(t *testing.T, name string, objs []estimateObject) {
 	t.Helper()
-	// Twice: the first GC moves pooled objects earlier tests left to the
-	// victim cache, the second frees them.
-	runtime.GC()
-	runtime.GC()
-	before, _ := heapReadings()
-	agg := NewAggregator(0, 0)
-	for _, o := range objs {
-		agg.AddObject(o.key, o.size, o.tier)
+	enc := newRunEncoder(discardRecords{}, 64<<10)
+	heap := func() int64 {
+		// Twice: the first GC moves pooled objects earlier tests left
+		// to the victim cache, the second frees them.
+		runtime.GC()
+		runtime.GC()
+		live, _ := heapReadings()
+
+		return int64(live)
 	}
-	runtime.GC()
-	after, _ := heapReadings()
-	measured := int64(after) - int64(before)
+	before := heap()
+	agg := NewAggregator(0, 0)
+	add := func() {
+		for _, o := range objs {
+			agg.AddObject(o.key, o.size, o.tier)
+		}
+	}
+	add()
+	first := agg.EstimatedMemoryUsage()
+	if _, err := agg.writeRun(&enc); err != nil {
+		t.Fatalf("writeRun: %v", err)
+	}
+	fanOut := int64(unsafe.Sizeof(uint32(0)))*int64(cap(agg.stack)) + int64(unsafe.Sizeof(aggSibling{}))*int64(cap(agg.siblings))
+	if spilled := heap() - before - fanOut; first < spilled*95/100 {
+		t.Errorf("%s: estimate %d before the first spill, heap %d after it without %d for fan-out (want no more than 5%% over)",
+			name, first, spilled, fanOut)
+	}
+	add()
+	measured := heap() - before
 	estimate := agg.EstimatedMemoryUsage()
 	prefixes := agg.PrefixCount()
 	per := func(b int64) float64 { return float64(b) / float64(prefixes) }
