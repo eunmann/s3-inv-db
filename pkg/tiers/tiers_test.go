@@ -3,6 +3,7 @@ package tiers_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
@@ -213,6 +214,110 @@ func TestAllTiersComplete(t *testing.T) {
 	for i, tier := range all {
 		if int(tier.ID) != i {
 			t.Errorf("AllTiers[%d].ID = %d, expected %d", i, tier.ID, i)
+		}
+	}
+}
+
+// spellings returns s as written and with the casing and surrounding
+// whitespace FromS3 must normalize.
+func spellings(s string) []string {
+	return []string{
+		s,
+		strings.ToLower(s),
+		strings.ToUpper(s[:1]) + strings.ToLower(s[1:]),
+		" " + s,
+		s + " ",
+		"\t" + s + "\n",
+		" " + strings.ToLower(s) + " ",
+	}
+}
+
+func allSpellings(names []string) []string {
+	blanks := []string{"", " ", "\t"}
+	out := make([]string, 0, len(blanks)+len(names)*len(spellings("X")))
+	out = append(out, blanks...)
+	for _, s := range names {
+		out = append(out, spellings(s)...)
+	}
+
+	return out
+}
+
+func TestFromS3_EveryTierNameAnySpelling(t *testing.T) {
+	m := tiers.NewMapping()
+	for _, info := range tiers.AllTiers() {
+		for _, sc := range spellings(info.Name) {
+			if got := m.FromS3(sc, ""); got != info.ID {
+				t.Errorf("FromS3(%q, \"\") = %d, want %d", sc, got, info.ID)
+			}
+		}
+	}
+}
+
+func TestFromS3_FastPathMatchesNormalized(t *testing.T) {
+	all := tiers.AllTiers()
+	classes := make([]string, 0, len(all)+6)
+	for _, info := range all {
+		classes = append(classes, info.Name)
+	}
+	classes = append(classes, "INTELLIGENT_TIERING", "UNKNOWN_CLASS", "OUTPOSTS", "EXPRESS_ONEZONE", "SNOW", "X")
+	accessTiers := []string{
+		"FREQUENT_ACCESS", "FREQUENT", "INFREQUENT_ACCESS", "INFREQUENT",
+		"ARCHIVE_INSTANT_ACCESS", "ARCHIVE_ACCESS", "ARCHIVE",
+		"DEEP_ARCHIVE_ACCESS", "DEEP_ARCHIVE", "UNKNOWN", "X",
+	}
+
+	m := tiers.NewMapping()
+	for _, sc := range allSpellings(classes) {
+		for _, at := range allSpellings(accessTiers) {
+			if got, want := m.FromS3(sc, at), tiers.FromS3Normalized(m, sc, at); got != want {
+				t.Errorf("FromS3(%q, %q) = %d, normalizing path gives %d", sc, at, got, want)
+			}
+		}
+	}
+}
+
+func TestFromS3_CanonicalSpellingsTakeFastPath(t *testing.T) {
+	hits := []struct {
+		storageClass, accessTier string
+		want                     tiers.ID
+	}{
+		{"STANDARD", "", tiers.Standard},
+		{"STANDARD_IA", "", tiers.StandardIA},
+		{"ONEZONE_IA", "", tiers.OneZoneIA},
+		{"GLACIER_IR", "", tiers.GlacierIR},
+		{"GLACIER", "", tiers.GlacierFR},
+		{"DEEP_ARCHIVE", "", tiers.DeepArchive},
+		{"REDUCED_REDUNDANCY", "", tiers.ReducedRedundancy},
+		{"INTELLIGENT_TIERING", "", tiers.ITFrequent},
+		{"INTELLIGENT_TIERING", "FREQUENT", tiers.ITFrequent},
+		{"INTELLIGENT_TIERING", "FREQUENT_ACCESS", tiers.ITFrequent},
+		{"INTELLIGENT_TIERING", "INFREQUENT", tiers.ITInfrequent},
+		{"INTELLIGENT_TIERING", "INFREQUENT_ACCESS", tiers.ITInfrequent},
+		{"INTELLIGENT_TIERING", "ARCHIVE_INSTANT_ACCESS", tiers.ITArchiveInstant},
+		{"INTELLIGENT_TIERING", "ARCHIVE", tiers.ITArchive},
+		{"INTELLIGENT_TIERING", "ARCHIVE_ACCESS", tiers.ITArchive},
+		{"INTELLIGENT_TIERING", "DEEP_ARCHIVE", tiers.ITDeepArchive},
+		{"INTELLIGENT_TIERING", "DEEP_ARCHIVE_ACCESS", tiers.ITDeepArchive},
+	}
+	for _, c := range hits {
+		got, ok := tiers.CanonicalID(c.storageClass, c.accessTier)
+		if !ok || got != c.want {
+			t.Errorf("CanonicalID(%q, %q) = %d, %v; want %d, true", c.storageClass, c.accessTier, got, ok, c.want)
+		}
+	}
+
+	misses := [][2]string{
+		{"standard", ""},
+		{" STANDARD", ""},
+		{"INTELLIGENT_TIERING", "frequent"},
+		{"INTELLIGENT_TIERING", "UNKNOWN"},
+		{"UNKNOWN_CLASS", ""},
+		{"", ""},
+	}
+	for _, c := range misses {
+		if _, ok := tiers.CanonicalID(c[0], c[1]); ok {
+			t.Errorf("CanonicalID(%q, %q) hit; want a miss so the normalizing path handles it", c[0], c[1])
 		}
 	}
 }
