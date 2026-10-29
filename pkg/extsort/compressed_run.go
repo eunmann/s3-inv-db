@@ -336,7 +336,7 @@ func OpenCompressedRunFile(path string, bufferSize int) (*CompressedRunReader, e
 	return &CompressedRunReader{
 		file:         f,
 		decompressor: dec,
-		records:      runRecordDecoder{in: bufio.NewReaderSize(dec, bufferSize)},
+		records:      runRecordDecoder{in: readWindow{r: bufio.NewReaderSize(dec, bufferSize)}},
 		count:        count,
 		path:         path,
 	}, nil
