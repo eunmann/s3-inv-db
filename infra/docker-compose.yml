@@ -158,6 +158,9 @@ services:
   # s3-test.
   test-runner:
     profiles: [test]
+    # One image for every checkout's test project (see TEST_PROJECT in
+    # the Makefile); compose would otherwise build one per project.
+    image: infra-test-runner
     build:
       context: ..
       dockerfile: infra/Dockerfile.dev
