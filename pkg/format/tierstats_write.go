@@ -373,7 +373,7 @@ func (w *TierStatsWriter) scratchRows(fn func(row *scratchRow) error) error {
 		}
 		// Decode the row in place from the read buffer: varints read a
 		// byte per call through the reader were most of this pass.
-		buf, err := r.Peek(min(scratchRowMax, r.Size()))
+		buf, err := r.Peek(min(maxScratchRowBytes, r.Size()))
 		if len(buf) < 2 {
 			return fmt.Errorf("read tier stats scratch: %w", cmp.Or(err, io.ErrUnexpectedEOF))
 		}
@@ -402,10 +402,6 @@ func (w *TierStatsWriter) scratchRows(fn func(row *scratchRow) error) error {
 
 	return nil
 }
-
-// scratchRowMax is the longest scratch row: the mask, then a count and
-// bytes varint for every slot.
-const scratchRowMax = 2 + 2*maxTierSlots*binary.MaxVarintLen64
 
 // errTierScratchCorrupt means a scratch row is cut short or holds an
 // overlong varint.
