@@ -22,7 +22,10 @@ flowchart LR
 1. **Download and parse.** Parse workers (`min(GOMAXPROCS, data files)`,
    at least 2) each have a fetcher downloading their next file while
    they parse the current one. CSV keys, URL-encoded by S3, are
-   decoded.
+   decoded. Each object's storage class, and for Intelligent-Tiering its
+   access tier, picks its [tier](index-format.md#tier-statistics), in
+   any letter case; an empty storage class is `STANDARD`. A value AWS
+   does not document fails the build, naming it, the file and the key.
 2. **Aggregate.** Each object is added to every ancestor prefix: for
    `data/2024/01/f.csv`, to `""`, `data/`, `data/2024/` and
    `data/2024/01/`. `--max-depth` limits how deep this goes.

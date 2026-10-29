@@ -579,6 +579,48 @@ func TestTierBreakdown(t *testing.T) {
 	}
 }
 
+// Every tier, including the highest IDs (the top bits of the uint16
+// mask), comes back with its name and exact stats, alone and with every
+// other tier in one prefix.
+func TestTierBreakdown_EveryTier(t *testing.T) {
+	outDir := setupTestIndex(t)
+	all := tiers.AllTiers()
+	objects := make([]testObject, 0, 2*len(all))
+	for _, info := range all {
+		size := 1000 + uint64(info.ID)
+		objects = append(objects,
+			testObject{fmt.Sprintf("one/%s/x", info.FilePrefix), size, info.ID},
+			testObject{"all/" + info.FilePrefix, size, info.ID})
+	}
+	if err := buildIndexWithTiers(t, outDir, objects); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	idx, err := indexread.Open(outDir)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer idx.Close()
+
+	allPos, ok := idx.Lookup("all/")
+	if !ok {
+		t.Fatal("all/ lookup failed")
+	}
+	got := idx.TierBreakdownMap(allPos)
+	if len(got) != len(all) {
+		t.Errorf("all/ has %d tiers, want %d", len(got), len(all))
+	}
+	for _, info := range all {
+		want := indexread.TierBreakdown{TierID: info.ID, TierName: info.Name, ObjectCount: 1, Bytes: 1000 + uint64(info.ID)}
+		if g := got[info.Name]; g != want {
+			t.Errorf("all/ %s = %+v, want %+v", info.Name, g, want)
+		}
+		one := tierBreakdownForPrefixTest(idx, "one/"+info.FilePrefix+"/")
+		if len(one) != 1 || one[0] != want {
+			t.Errorf("one/%s/ = %+v, want [%+v]", info.FilePrefix, one, want)
+		}
+	}
+}
+
 func TestTierBreakdownMap(t *testing.T) {
 	outDir := setupTestIndex(t)
 

@@ -300,10 +300,9 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 
 // chunkConfig holds configuration for processing a chunk.
 type chunkConfig struct {
-	tierMapping *tiers.Mapping
-	format      s3fetch.InventoryFormat
-	csvColumns  s3inventory.CSVReaderConfig
-	fileSize    int64
+	format     s3fetch.InventoryFormat
+	csvColumns s3inventory.CSVReaderConfig
+	fileSize   int64
 }
 
 // chunkJob represents a chunk to be processed by a worker.
@@ -332,12 +331,11 @@ type objectRecord struct {
 
 // ingestConfig holds configuration for the ingest phase.
 type ingestConfig struct {
-	manifest    *s3fetch.Manifest
-	tierMapping *tiers.Mapping
-	destBucket  string
-	format      s3fetch.InventoryFormat
-	csvColumns  s3inventory.CSVReaderConfig
-	numWorkers  int
+	manifest   *s3fetch.Manifest
+	destBucket string
+	format     s3fetch.InventoryFormat
+	csvColumns s3inventory.CSVReaderConfig
+	numWorkers int
 }
 
 // runIngestPhase streams S3 inventory and creates sorted run files.
@@ -426,12 +424,11 @@ func (p *Pipeline) setupIngestConfig(ctx context.Context, manifestURI string) (*
 		Msg("ingest worker count derived from GOMAXPROCS")
 
 	return &ingestConfig{
-		manifest:    manifest,
-		format:      format,
-		destBucket:  destBucket,
-		csvColumns:  cols,
-		numWorkers:  numWorkers,
-		tierMapping: tiers.NewMapping(),
+		manifest:   manifest,
+		format:     format,
+		destBucket: destBucket,
+		csvColumns: cols,
+		numWorkers: numWorkers,
 	}, nil
 }
 
@@ -657,10 +654,9 @@ func (p *Pipeline) sendIngestJobs(ctx context.Context, cfg *ingestConfig, jobs c
 			bucket: cfg.destBucket,
 			key:    file.Key,
 			config: chunkConfig{
-				format:      cfg.format,
-				csvColumns:  cfg.csvColumns,
-				tierMapping: cfg.tierMapping,
-				fileSize:    file.Size,
+				format:     cfg.format,
+				csvColumns: cfg.csvColumns,
+				fileSize:   file.Size,
 			},
 		}:
 		}
@@ -865,8 +861,11 @@ func (p *Pipeline) streamChunkIntoAggregator(ctx context.Context, fetched fetche
 		if err != nil {
 			return fmt.Errorf("read inventory row: %w", err)
 		}
-		tierID := tiers.Resolve(job.config.tierMapping.FromS3(row.StorageClass, row.AccessTier), row.Size)
-		agg.AddObject(row.Key, row.Size, tierID)
+		tierID, err := tiers.FromS3(row.StorageClass, row.AccessTier)
+		if err != nil {
+			return fmt.Errorf("classify %q in %s: %w", row.Key, job.key, err)
+		}
+		agg.AddObject(row.Key, row.Size, tiers.Resolve(tierID, row.Size))
 		rowsParsed++
 		bytesAdded += int64(row.Size)
 		if rowsParsed%midChunkFlushInterval == 0 &&

@@ -63,7 +63,7 @@ func runFinalizeSizeBench(b *testing.B, n int) {
 // BenchmarkTierStats_Density measures index size when prefixes use
 // only a small fraction of the available tiers. The tier-stats row
 // stride is len(present) slots, written directly from the ingest tier
-// mask, so a STANDARD-dominated bucket pays for one slot, not all 13.
+// mask, so a STANDARD-dominated bucket pays for one slot, not one per tier.
 func BenchmarkTierStats_Density(b *testing.B) {
 	cases := []struct {
 		name      string
@@ -111,7 +111,7 @@ func BenchmarkTierStats_Density(b *testing.B) {
 }
 
 // BenchmarkTierStatsFinalize isolates the Finalize cost for a build
-// whose objects span only a few of the 13 tiers — the realistic shape.
+// whose objects span only a few of the tiers — the realistic shape.
 // The timer is stopped during ingest/Add, so only Finalize is measured.
 //
 // Finalize writes the tier files in the planned layout, alongside the
@@ -122,7 +122,7 @@ func BenchmarkTierStatsFinalize(b *testing.B) {
 	b.Cleanup(func() { zerolog.SetGlobalLevel(prevLevel) })
 
 	const n = 1_000_000
-	const tiersUsed = 3 // STANDARD-dominated bucket: 3 of 13 tiers present
+	const tiersUsed = 3 // STANDARD-dominated bucket: 3 tiers present
 	keys := generateBenchKeys(n, 4)
 	b.ReportAllocs()
 	for range b.N {
