@@ -10,16 +10,17 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unsafe"
 
 	"github.com/eunmann/s3-inv-db/pkg/logging"
-	"github.com/klauspost/pgzip"
+	"github.com/klauspost/compress/gzip"
 )
 
 // Row represents a single object from an S3 inventory file.
 // This is the unified representation used by both CSV and Parquet readers.
-// Its strings are valid only until the reader's next Next: they may view
-// the reader's buffer.
+// Its strings are valid only until the reader's next Next or Close: they
+// may view the reader's buffer.
 type Row struct {
 	Key          string
 	StorageClass string
@@ -31,7 +32,8 @@ type Row struct {
 // CSV and Parquet implementations live in this package.
 type Reader interface {
 	// Next returns the next inventory row, whose strings are valid only
-	// until the next call. Returns io.EOF when all rows have been read.
+	// until the next call or Close. Returns io.EOF when all rows have
+	// been read.
 	Next() (Row, error)
 
 	// Anomalies counts the rows read so far that could not be turned
@@ -81,7 +83,9 @@ type CSVReader struct {
 	lines           *bufio.Reader // nil once encoding/csv took over
 	fields          []string
 	csvReader       *csv.Reader
-	closers         []io.Closer
+	stream          io.Closer      // the stream NewCSVReaderFromStream read
+	bufs            *streamBuffers // pooled; nil once Close returned them
+	gzipped         bool
 	keyCol          int
 	sizeCol         int
 	storageCol      int
@@ -127,27 +131,27 @@ func NewCSVReader(r io.Reader, cfg CSVReaderConfig) *CSVReader {
 // NewCSVReaderFromStream creates a CSV inventory reader from an S3
 // stream, gunzipping it when it starts with the gzip magic bytes. The
 // content decides, not the key: a gzip chunk named without ".gz" would
-// otherwise be split as text.
+// otherwise be split as text. Gunzip runs on the caller's goroutine:
+// the build already reads one chunk per CPU. Close returns the reader's
+// buffers for the next chunk to reuse.
 func NewCSVReaderFromStream(r io.ReadCloser, cfg CSVReaderConfig) (*CSVReader, error) {
-	in := bufio.NewReaderSize(r, streamInputBuffer)
-	lines := in
-	closers := []io.Closer{r}
+	bufs := streamBufferPool.Get().(*streamBuffers) //nolint:forcetypeassert // the pool only holds *streamBuffers
+	bufs.in.Reset(r)
+	lines := bufs.in
 
-	gzipped, err := isGzip(in)
+	gzipped, err := isGzip(bufs.in)
+	if err == nil && gzipped {
+		if err = bufs.gz.Reset(bufs.in); err != nil {
+			err = fmt.Errorf("create gzip reader: %w", err)
+		}
+		bufs.lines.Reset(&bufs.gz)
+		lines = bufs.lines
+	}
 	if err != nil {
+		bufs.release()
 		r.Close()
 
 		return nil, err
-	}
-	if gzipped {
-		gzr, err := pgzip.NewReader(in)
-		if err != nil {
-			r.Close()
-
-			return nil, fmt.Errorf("create gzip reader: %w", err)
-		}
-		closers = append(closers, gzr)
-		lines = bufio.NewReaderSize(gzr, csvLineBuffer)
 	}
 
 	return &CSVReader{
@@ -157,8 +161,34 @@ func NewCSVReaderFromStream(r io.ReadCloser, cfg CSVReaderConfig) (*CSVReader, e
 		storageCol:      cfg.StorageCol,
 		accessTierCol:   cfg.AccessTierCol,
 		deleteMarkerCol: cfg.DeleteMarkerCol,
-		closers:         closers,
+		stream:          r,
+		bufs:            bufs,
+		gzipped:         gzipped,
 	}, nil
+}
+
+// streamBuffers are a stream reader's input and line buffers and its
+// gunzip state (~1.1 MiB with the flate window), kept across chunks.
+type streamBuffers struct {
+	in    *bufio.Reader
+	lines *bufio.Reader
+	gz    gzip.Reader
+}
+
+//nolint:gochecknoglobals // intentional package-level buffer pool
+var streamBufferPool = sync.Pool{New: func() any {
+	return &streamBuffers{
+		in:    bufio.NewReaderSize(nil, streamInputBuffer),
+		lines: bufio.NewReaderSize(nil, csvLineBuffer),
+	}
+}}
+
+// release drops the buffers' hold on the stream and returns them to the
+// pool. The gunzip state reads only from in.
+func (b *streamBuffers) release() {
+	b.in.Reset(nil)
+	b.lines.Reset(nil)
+	streamBufferPool.Put(b)
 }
 
 // Buffer sizes: the CSV line buffer bounds the lines split in place
@@ -442,15 +472,27 @@ func isTrue(field string) bool {
 // Anomalies counts the rows read so far that could not be read exactly.
 func (r *CSVReader) Anomalies() Anomalies { return r.anomalies }
 
-// Close releases resources.
+// Close closes the stream and returns the reader's buffers to the pool,
+// after which the rows read no longer hold. A second Close does nothing.
 func (r *CSVReader) Close() error {
-	var firstErr error
-	// Close in reverse order (gzip reader before underlying stream)
-	for _, c := range slices.Backward(r.closers) {
-		if err := c.Close(); err != nil && firstErr == nil {
-			firstErr = err
+	var gzErr, streamErr error
+	if r.bufs != nil {
+		if r.gzipped {
+			gzErr = r.bufs.gz.Close()
 		}
+		r.bufs.release()
+		r.bufs, r.lines, r.csvReader = nil, nil, nil
+	}
+	if r.stream != nil {
+		streamErr = r.stream.Close()
+		r.stream = nil
+	}
+	if gzErr != nil {
+		return fmt.Errorf("gunzip: %w", gzErr)
+	}
+	if streamErr != nil {
+		return fmt.Errorf("close stream: %w", streamErr)
 	}
 
-	return firstErr
+	return nil
 }

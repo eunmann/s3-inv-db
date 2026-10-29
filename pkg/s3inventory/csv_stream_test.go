@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -144,6 +145,134 @@ func TestCSVReaderFromStreamReadErrorClosesStream(t *testing.T) {
 	stream := &closeCounter{Reader: iotest.ErrReader(errRead)}
 	if _, err := s3inventory.NewCSVReaderFromStream(stream, streamCfg); !errors.Is(err, errRead) {
 		t.Fatalf("NewCSVReaderFromStream error = %v, want %v", err, errRead)
+	}
+	if stream.closes != 1 {
+		t.Errorf("stream closed %d times, want 1", stream.closes)
+	}
+}
+
+var (
+	errTruncatedRead = errors.New("truncated stream read without error")
+	errRowsDiffer    = errors.New("rows differ from those written")
+)
+
+// pooledStream is a stream for TestCSVReaderFromStreamReuseKeepsStreamsApart.
+type pooledStream struct {
+	data []byte
+	want []string
+	bad  bool
+}
+
+// checkPooledStream reads s and reports how it differs from what was
+// written: rows, or for a bad stream, an error.
+func checkPooledStream(s pooledStream) error {
+	r, err := s3inventory.NewCSVReaderFromStream(io.NopCloser(bytes.NewReader(s.data)), streamCfg)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer r.Close()
+	var rows []string
+	for {
+		row, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			if s.bad {
+				return nil
+			}
+
+			return fmt.Errorf("next: %w", err)
+		}
+		rows = append(rows, fmt.Sprintf("%s:%d", row.Key, row.Size))
+	}
+	if s.bad {
+		return errTruncatedRead
+	}
+	if !slices.Equal(rows, s.want) {
+		return fmt.Errorf("%w: read %d, wrote %d", errRowsDiffer, len(rows), len(s.want))
+	}
+
+	return nil
+}
+
+// Readers opened one after another and side by side reuse pooled
+// buffers and gunzip state; each still reads exactly its own stream,
+// whatever the reader before it read or how it failed.
+func TestCSVReaderFromStreamReuseKeepsStreamsApart(t *testing.T) {
+	streams := make([]pooledStream, 0, 9)
+	for i := range 8 {
+		var csv strings.Builder
+		var want []string
+		for j := range 500 + i*300 {
+			fmt.Fprintf(&csv, "s%d/k%d,%d,STANDARD\n", i, j, j)
+			want = append(want, fmt.Sprintf("s%d/k%d:%d", i, j, j))
+		}
+		data := []byte(csv.String())
+		if i%2 == 0 {
+			data = gzipMembers(t, csv.String())
+		}
+		streams = append(streams, pooledStream{data: data, want: want})
+	}
+	streams = append(streams, pooledStream{data: streams[0].data[:len(streams[0].data)/2], bad: true})
+
+	for range 3 {
+		for _, s := range streams {
+			if err := checkPooledStream(s); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	const workers = 8
+	errs := make(chan error, workers)
+	for w := range workers {
+		go func() {
+			for k := range 4 * len(streams) {
+				if err := checkPooledStream(streams[(w+k)%len(streams)]); err != nil {
+					errs <- err
+
+					return
+				}
+			}
+			errs <- nil
+		}()
+	}
+	for range workers {
+		if err := <-errs; err != nil {
+			t.Error(err)
+		}
+	}
+}
+
+// Gunzip runs on the reader's goroutine: the build already reads one
+// chunk per CPU, so decompressor goroutines would only add handoffs.
+func TestCSVReaderFromStreamGunzipsInline(t *testing.T) {
+	data := gzipMembers(t, strings.Repeat("a/x.txt,100,STANDARD\n", 100_000))
+	before := runtime.NumGoroutine()
+	r, err := s3inventory.NewCSVReaderFromStream(io.NopCloser(bytes.NewReader(data)), streamCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, err := r.Next(); err != nil {
+		t.Fatal(err)
+	}
+	if after := runtime.NumGoroutine(); after > before {
+		t.Errorf("reading a gzip stream started %d goroutines", after-before)
+	}
+}
+
+func TestCSVReaderCloseTwice(t *testing.T) {
+	stream := &closeCounter{Reader: bytes.NewReader(gzipMembers(t, "a/x.txt,100,STANDARD\n"))}
+	r, err := s3inventory.NewCSVReaderFromStream(stream, streamCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := r.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
 	}
 	if stream.closes != 1 {
 		t.Errorf("stream closed %d times, want 1", stream.closes)
