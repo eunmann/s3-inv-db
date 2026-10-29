@@ -224,13 +224,14 @@ reads its rows in sequence.
 
 Rows arrive in key order, which is not position order, so the builder
 spools each prefix by depth (one file per depth in its temp directory,
-about 35 B per prefix) and writes every per-row file at finalize,
+about 19 B per prefix) and writes every per-row file at finalize,
 depth by depth: a prefix's first child is the number of rows already
 seen at the next depth when it arrives, and its parent is the last row
 seen at the depth above. The goroutine writing the spool also gathers
 what fixes every per-row file's widths (the core and tier statistics
 above, the segment count and the widest parent distance below), so at
-finalize each file is written once, straight to its final form.
+finalize each file is written once, straight to its final form. It
+also spills each prefix's MPHF key (24 B) for the hash build.
 
 ## Depth Index
 
@@ -344,9 +345,9 @@ exact, but walking the prefix tree adds 51–90% LLC misses per lookup
 
 ### Fallback Table
 
-BBHash cannot place two keys with equal 64-bit hashes: they take the same bit on every level. The chance that some two of n prefixes share a hash is 1 − e^(−n²/2⁶⁵), 39% at 4.3 billion prefixes and 93% at 10 billion, so the build expects it. A partition stops adding levels at the first level that places no key, and the keys still unplaced become its fallback entries, keyed by (key hash, fingerprint). Keys that share a hash share a partition. The partition's levels own its first slots, and its fallback entry j owns the j-th slot after them. The fingerprint uses its own fixed seed, so prefixes that share a key hash still differ in it. Two prefixes equal in both 64-bit hashes cannot be told apart by a lookup, so the build fails with `ErrMPHFKeyCollision`.
+BBHash cannot place two keys with equal 64-bit hashes: they take the same bit on every level. The chance that some two of n prefixes share a hash is 1 − e^(−n²/2⁶⁵), 39% at 4.3 billion prefixes and 93% at 10 billion, so the build expects it. A partition stops adding levels at the first level that places no key, and the keys still unplaced become its fallback entries, keyed by (key hash, fingerprint). That also happens to distinct keys that all collide on one small level, such as two keys sharing a bit of a 64-bit level, so with many partitions a large index often has a few. Keys that share a hash share a partition. The partition's levels own its first slots, and its fallback entry j owns the j-th slot after them. The fingerprint uses its own fixed seed, so prefixes that share a key hash still differ in it. Two prefixes equal in both 64-bit hashes cannot be told apart by a lookup, so the build fails with `ErrMPHFKeyCollision`.
 
-Finding the entries costs one pass over the partition's keys, checking each hash against the sorted leftover hashes. It runs only when some key is left over. The table is almost always empty or a handful of entries, and a lookup that hits a level never reads it.
+Finding the entries costs one pass over the partition's keys, checking each hash against the sorted leftover hashes. It runs only when some key is left over. The table is empty or a handful of entries, and a lookup that hits a level never reads it.
 
 ## Prefix Strings
 

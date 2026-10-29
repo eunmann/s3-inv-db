@@ -168,7 +168,9 @@ func buildPartition(hashes, fps []uint64, s *partScratch, out *bbPartition) erro
 			return nil
 		}
 		if placed == 0 {
-			// Only keys equal on every level are left: the leftovers.
+			// The keys left all collided on this level: equal hashes,
+			// or a few distinct ones that shared bits of a small
+			// level. They become the partition's leftovers.
 			keys = append(s.work[:0], keys...)
 
 			break

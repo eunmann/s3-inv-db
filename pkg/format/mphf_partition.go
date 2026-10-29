@@ -435,8 +435,6 @@ func (h *MPHFBuild) worker() {
 // claim returns the next partition and the table to build it into,
 // once that table is free, or false when none is left or the build
 // stopped.
-//
-
 func (h *MPHFBuild) claim() (int, *bbPartition, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
