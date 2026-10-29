@@ -37,10 +37,10 @@ func BenchmarkMergeHeap(b *testing.B) {
 }
 
 // BenchmarkMergeIterator merges k sorted runs held in memory, 2^18 rows
-// in all: the merge's own cost, without decoding run files. Disjoint
-// runs each hold one range of keys, so one run wins row after row (a
-// key-ordered inventory's spills); interleaved runs take turns row by
-// row (an unordered inventory's). Reports ns/row.
+// in all: the merge's own cost, without decoding run files or building
+// the memory runs. Disjoint runs each hold one range of keys, so one run
+// wins row after row (a key-ordered inventory's spills); interleaved
+// runs take turns row by row (an unordered inventory's). Reports ns/row.
 func BenchmarkMergeIterator(b *testing.B) {
 	const total = 1 << 18
 	for _, layout := range []string{"disjoint", "interleaved"} {
@@ -50,10 +50,14 @@ func BenchmarkMergeIterator(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				for range b.N {
+					// Workers build their memory runs, in parallel, before
+					// the merge starts.
+					b.StopTimer()
 					sources := make([]runSource, k)
 					for i, run := range runs {
 						sources[i] = newMemRun(run)
 					}
+					b.StartTimer()
 					it, err := newMergeIterator(sources)
 					if err != nil {
 						b.Fatal(err)
