@@ -12,6 +12,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/eunmann/s3-inv-db/internal/benchutil"
 	"github.com/eunmann/s3-inv-db/pkg/tiers"
 	gocmp "github.com/google/go-cmp/cmp"
 )
@@ -340,28 +341,83 @@ func TestAggregatorEstimateTracksHeap(t *testing.T) {
 		// 57,000 nodes fill 65,536 slots to 87%; 115,000 have just
 		// doubled them to 262,144.
 		for _, n := range []int{57_000, 115_000} {
-			keys := make([]string, n)
+			objs := make([]estimateObject, n)
 			for i, j := range rand.New(rand.NewPCG(1, uint64(n))).Perm(n) {
-				keys[i] = fmt.Sprintf("%0*d/x", segLen-1, j)
+				objs[i] = estimateObject{key: fmt.Sprintf("%0*d/x", segLen-1, j), size: 1, tier: tiers.Standard}
 			}
-			runtime.GC()
-			before, _ := heapReadings()
-			agg := NewAggregator(0, 0)
-			for _, k := range keys {
-				agg.AddObject(k, 1, tiers.Standard)
-			}
-			runtime.GC()
-			after, _ := heapReadings()
-			measured := int64(after) - int64(before)
-			estimate := agg.EstimatedMemoryUsage() - int64(agg.prefixBytes)
-			t.Logf("%d-byte segments, %d prefixes: heap %.1f B/prefix, estimate %.1f (%d slots)",
-				segLen, n, float64(measured)/float64(n), float64(estimate)/float64(n), len(agg.children.slots))
-			if lo, hi := measured*95/100, measured*105/100; estimate < lo || estimate > hi {
-				t.Errorf("%d-byte segments, %d prefixes: estimate %d without prefixes, heap grew %d (want within 5%%)",
-					segLen, n, estimate, measured)
-			}
-			runtime.KeepAlive(agg)
-			runtime.KeepAlive(keys)
+			checkEstimateTracksHeap(t, fmt.Sprintf("%d-byte segments", segLen), objs)
 		}
+	}
+}
+
+// TestAggregatorBytesPerPrefix logs what a prefix costs the aggregator,
+// in heap and in its estimate, for the shapes that decide how often a
+// build spills, and checks the estimate tracks the heap for them: keys
+// from the realistic benchmark generator, and many directories of 2 or
+// 3 objects in different tiers each, the most tiers per prefix a
+// common layout has.
+func TestAggregatorBytesPerPrefix(t *testing.T) {
+	const objects = 150_000
+	realistic := make([]estimateObject, 0, objects)
+	benchutil.NewGenerator(benchutil.S3RealisticConfig(objects)).Stream(func(o benchutil.FakeObject) {
+		realistic = append(realistic, estimateObject{key: o.Key, size: o.Size, tier: o.TierID})
+	})
+	rng := rand.New(rand.NewPCG(3, 21))
+	mixed := make([]estimateObject, 0, objects)
+	for dir := 0; len(mixed) < objects; dir++ {
+		for f := range 2 + dir%2 {
+			mixed = append(mixed, estimateObject{
+				key:  fmt.Sprintf("tenant-%03d/upload-%08d/part-%d.bin", dir%500, dir, f),
+				size: uint64(rng.IntN(1 << 20)),
+				tier: tiers.ID(rng.IntN(MaxTiers)),
+			})
+		}
+	}
+	rng.Shuffle(len(mixed), func(i, j int) { mixed[i], mixed[j] = mixed[j], mixed[i] })
+	for _, c := range []struct {
+		name string
+		objs []estimateObject
+	}{
+		{"realistic", realistic},
+		{"mixed tiers, 2-3 objects per directory", mixed},
+	} {
+		checkEstimateTracksHeap(t, c.name, c.objs)
+	}
+}
+
+// estimateObject is an object for measuring the aggregator's heap.
+type estimateObject struct {
+	key  string
+	size uint64
+	tier tiers.ID
+}
+
+// checkEstimateTracksHeap adds objs to a new aggregator, logs per
+// prefix how much the live heap grew and the estimate, and fails unless
+// the estimate without the prefixes Drain would write is within 5% of
+// the heap's growth.
+func checkEstimateTracksHeap(t *testing.T, name string, objs []estimateObject) {
+	t.Helper()
+	// Twice: the first GC moves pooled objects earlier tests left to the
+	// victim cache, the second frees them.
+	runtime.GC()
+	runtime.GC()
+	before, _ := heapReadings()
+	agg := NewAggregator(0, 0)
+	for _, o := range objs {
+		agg.AddObject(o.key, o.size, o.tier)
+	}
+	runtime.GC()
+	after, _ := heapReadings()
+	measured := int64(after) - int64(before)
+	estimate := agg.EstimatedMemoryUsage() - int64(agg.prefixBytes)
+	prefixes := agg.PrefixCount()
+	per := func(b int64) float64 { return float64(b) / float64(prefixes) }
+	t.Logf("%s: %d objects, %d prefixes: heap %.1f B/prefix, estimate %.1f, with Drain's prefixes %.1f (%d slots)",
+		name, len(objs), prefixes, per(measured), per(estimate), per(agg.EstimatedMemoryUsage()), len(agg.children.slots))
+	runtime.KeepAlive(agg)
+	runtime.KeepAlive(objs)
+	if lo, hi := measured*95/100, measured*105/100; estimate < lo || estimate > hi {
+		t.Errorf("%s: estimate %d without prefixes, heap grew %d (want within 5%%)", name, estimate, measured)
 	}
 }

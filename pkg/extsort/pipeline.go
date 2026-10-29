@@ -43,6 +43,9 @@ type Pipeline struct {
 	// parsed so far, for "downloading" progress.
 	ingestBytesDone atomic.Int64
 	flushCount      atomic.Int64
+	// runRows counts the rows of every sorted run handed to the merge,
+	// spilled or kept in memory.
+	runRows         atomic.Uint64
 	presentTierMask atomic.Uint32
 	runFilesMu      sync.Mutex
 	// syncPath makes a published file durable; a seam for tests.
@@ -66,7 +69,13 @@ type Result struct {
 	// MemoryRuns counts the workers' final states merged from memory
 	// instead of run files.
 	MemoryRuns int
-	Duration   time.Duration
+	// MergeInputRows is the rows of every sorted run the workers
+	// produced, counted before any disk merge rounds: a prefix in N
+	// runs counts N times, so over PrefixCount it is how many worker
+	// runs the average prefix was in. With more run files than
+	// FinalFanIn the final merge reads fewer rows than this.
+	MergeInputRows uint64
+	Duration       time.Duration
 }
 
 // setPhase notifies the memory tracker and the OnProgress callback
@@ -294,6 +303,7 @@ func (p *Pipeline) Run(ctx context.Context, manifestURI, outDir string) (*Result
 		MaxDepth:         maxDepth,
 		RunFilesCreated:  len(p.runFiles),
 		MemoryRuns:       len(p.memRuns),
+		MergeInputRows:   p.runRows.Load(),
 		Duration:         duration,
 	}, nil
 }
@@ -1028,6 +1038,7 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	p.runFiles = append(p.runFiles, runPath)
 	p.runFilesMu.Unlock()
 	p.flushCount.Add(1)
+	p.runRows.Add(uint64(rows))
 	// Under heap pressure the recycled rows are what holds the heap up:
 	// keeping them would force a spill on every later check.
 	if heapUnderPressure(readMemoryLimit()) {
@@ -1076,6 +1087,7 @@ func (p *Pipeline) keepResidual(agg *Aggregator) {
 	p.runFilesMu.Lock()
 	p.memRuns = append(p.memRuns, newMemRun(rows))
 	p.runFilesMu.Unlock()
+	p.runRows.Add(uint64(len(rows)))
 }
 
 // mergeBuildResult is the output of runMergeBuildPhase.

@@ -138,8 +138,9 @@ Ingestion (`bench/suite/ingest.txt`):
   the real `Pipeline.Run` end to end through the local S3 server.
   Seconds per op; also reports `input_B` (the data files a build
   downloads), `peak_heap_B`, `disk_B` (the index), `runs` (sorted runs
-  the merge read, in memory or on disk) and `run_files` (runs written
-  to disk). With `S3INV_DISK_PEAK=1` it also samples the build's disk
+  the workers produced, in memory or on disk), `run_files` (runs written
+  to disk) and `run_rows` (the rows of those runs, before any disk merge
+  rounds; over `prefixes`, the worker runs the average prefix was in). With `S3INV_DISK_PEAK=1` it also samples the build's disk
   every 10 ms: `peak_disk_B` (scratch plus index at the build's peak)
   and `final_runs_B` (the final merge's run files). Off by default,
   since the sampling allocates and would inflate `allocs/op`. Per op,
