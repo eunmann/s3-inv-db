@@ -133,10 +133,9 @@ seeded inputs, so repeated rounds agree.
 Ingestion (`bench/suite/ingest.txt`):
 
 - `internal/loader` `BenchmarkPipeline` at 1M objects (realistic,
-  deep-pyramid and realistic_sorted shapes; realistic_sorted keeps the
-  keys in order across chunks, as some inventories come): the real
-  `Pipeline.Run` end to end through the local S3 server. Seconds per
-  op; also reports `peak_heap_B`, `disk_B`, `runs` (sorted runs the
+  deep-pyramid and realistic_sorted shapes; see the fixtures below):
+  the real `Pipeline.Run` end to end through the local S3 server.
+  Seconds per op; also reports `peak_heap_B`, `disk_B`, `runs` (sorted runs the
   merge read, in memory or on disk) and `run_files` (runs written to
   disk). Per op, over every thread: `cpu_s` and `sys_s` (CPU seconds),
   `cores` (CPU over wall time: a change that saves CPU on a core-rich
@@ -151,6 +150,19 @@ Ingestion (`bench/suite/ingest.txt`):
 - `pkg/extsort` `BenchmarkFinalMerge`: 48 or 128 spilled runs merged
   under a 256 MiB or 1 GiB `GOMEMLIMIT`, heavy and light key overlap;
   reports `peak_heap_B`, `rounds` and `round_bytes` (fan-in sizing).
+
+The pipeline fixtures model an AWS CSV inventory: gzipped data files
+with no header, every field quoted, keys URL-encoded, and a
+random-looking ETag (multipart form above 8 MiB) and LastModifiedDate
+per object, so the gzip ratio and parse work resemble a real file (1M
+realistic objects gzip to about 51 MiB). Each is split into four data
+files per ingest worker, so every worker has chunks queued, as with a
+real inventory's many files. Realistic and deep_pyramid list keys in
+random order, the case to expect: S3 Inventory guarantees no order.
+Realistic_sorted lists them in key order across the files, the best
+case for the build's in-order paths. An A/B across a seeder change
+builds different fixtures on each side, so its pipeline numbers are a
+new baseline, not a regression signal.
 
 Data structures / query (`bench/suite/query.txt`):
 

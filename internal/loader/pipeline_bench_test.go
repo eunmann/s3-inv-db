@@ -32,18 +32,26 @@ import (
 //	go test -tags integration -bench=BenchmarkPipeline -benchtime=1x \
 //	  -count=1 -run=^$ ./internal/loader/...
 
-// chunkCountFor returns a chunk count that lets Pipeline's ingest pool
-// (sized as min(NumCPU, manifest_files)) saturate the host while
-// keeping per-chunk size above minPerChunk.
+// chunkCountFor returns the fixture's data file count: four per ingest
+// worker (the pool is min(NumCPU, data files)), each file at least
+// minPerChunk objects. A real inventory is many data files, more than
+// a host has cores, so each worker has more chunks queued: fetchers
+// download the next while it parses one, and the order chunks are
+// handed out (largest first) shapes the tail. With one chunk per worker
+// none of that runs and the slowest chunk is the whole ingest. Four per
+// worker keeps a queue behind every worker for most of the ingest,
+// while 1M objects still make chunks of tens of thousands of objects,
+// big enough that a file's fetch and gzip setup stay small next to its
+// parse. Following the core count rather than a fixed file size gives
+// the per-PR 1M runs and the 10M scale runs the same queue depth per
+// worker on any host.
 func chunkCountFor(numObjects int) int {
 	const (
-		minPerChunk = 50_000
-		minChunks   = 4
+		chunksPerWorker = 4
+		minPerChunk     = 10_000
 	)
-	byCPU := runtime.NumCPU()
-	byFloor := max(numObjects/minPerChunk, minChunks)
 
-	return min(byFloor, byCPU)
+	return max(min(chunksPerWorker*runtime.NumCPU(), numObjects/minPerChunk), 1)
 }
 
 // pipelineSizes returns the size axis the pipeline benchmark sweeps.
@@ -57,8 +65,10 @@ func pipelineSizes() []int {
 }
 
 // BenchmarkPipeline sweeps shape × size against the full S3-to-index path.
-// Realistic_sorted is realistic with the keys in order across the
-// chunks, as some inventories come; the others are in random order.
+// Realistic and deep_pyramid list keys in random order, which is what to
+// expect: S3 Inventory guarantees no order. Realistic_sorted is
+// realistic with the keys in order across the chunks, the best case for
+// the build's in-order paths.
 func BenchmarkPipeline(b *testing.B) {
 	for _, shape := range []string{"realistic", "deep_pyramid", "realistic_sorted"} {
 		for _, n := range pipelineSizes() {
@@ -85,9 +95,9 @@ func BenchmarkPipeline_GoMemLimit(b *testing.B) {
 
 // BenchmarkPipelineSlowS3 runs the build against S3 behind a slower
 // link (first-byte latency, a bandwidth cap per GET), with four chunks
-// per ingest worker so a worker has a next chunk to fetch while it
-// parses one. The local server alone answers instantly and can't show
-// the time a build spends waiting on S3.
+// per ingest worker (chunkCountFor) so a worker has a next chunk to
+// fetch while it parses one. The local server alone answers instantly
+// and can't show the time a build spends waiting on S3.
 func BenchmarkPipelineSlowS3(b *testing.B) {
 	const (
 		latency     = 20 * time.Millisecond
@@ -97,7 +107,6 @@ func BenchmarkPipelineSlowS3(b *testing.B) {
 	runPipelineBenchWith(b, pipelineBench{
 		preset:     "realistic_sorted",
 		numObjects: 1_000_000,
-		chunks:     4 * runtime.NumCPU(),
 		client:     fc,
 	})
 }
@@ -160,14 +169,13 @@ func seededInventory(b *testing.B, preset string, numObjects, chunks int) seeder
 }
 
 // pipelineBench is one pipeline benchmark's setup. A zero memLimit
-// leaves GOMEMLIMIT unchanged, zero chunks takes chunkCountFor, and a
-// nil client is the local S3 server's.
+// leaves GOMEMLIMIT unchanged and a nil client is the local S3
+// server's.
 type pipelineBench struct {
 	client     *s3fetch.Client
 	preset     string
 	numObjects int
 	memLimit   int64
-	chunks     int
 }
 
 // runPipelineBench is the shared body. MemLimit==0 leaves GOMEMLIMIT
@@ -186,10 +194,7 @@ func runPipelineBenchWith(b *testing.B, pb pipelineBench) {
 	if fc == nil {
 		fc = s3test.FetchClient(b)
 	}
-	chunks := pb.chunks
-	if chunks == 0 {
-		chunks = chunkCountFor(numObjects)
-	}
+	chunks := chunkCountFor(numObjects)
 	info := seededInventory(b, preset, numObjects, chunks)
 
 	var lastDiskBytes int64
