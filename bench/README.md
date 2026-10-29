@@ -137,9 +137,13 @@ Ingestion (`bench/suite/ingest.txt`):
   see the fixtures below):
   the real `Pipeline.Run` end to end through the local S3 server.
   Seconds per op; also reports `input_B` (the data files a build
-  downloads), `peak_heap_B`, `disk_B`, `runs` (sorted runs the
-  merge read, in memory or on disk) and `run_files` (runs written to
-  disk). Per op, over every thread: `cpu_s` and `sys_s` (CPU seconds),
+  downloads), `peak_heap_B`, `disk_B` (the index), `runs` (sorted runs
+  the merge read, in memory or on disk) and `run_files` (runs written
+  to disk). With `S3INV_DISK_PEAK=1` it also samples the build's disk
+  every 10 ms: `peak_disk_B` (scratch plus index at the build's peak)
+  and `final_runs_B` (the final merge's run files). Off by default,
+  since the sampling allocates and would inflate `allocs/op`. Per op,
+  over every thread: `cpu_s` and `sys_s` (CPU seconds),
   `cores` (CPU over wall time: a change that saves CPU on a core-rich
   machine shows here before it shows in `sec/op`), `minflt`/`majflt`,
   and `read_B`/`write_B` (storage I/O; writes net of scratch deleted
@@ -168,8 +172,10 @@ Realistic_sorted lists them in key order across the files, the best
 case for the build's in-order paths. `shape=realistic/format=parquet`
 is the realistic objects as Snappy-compressed Parquet in AWS's column
 layout (raw keys, the same ETags and dates; about 66 MiB for 1M), so
-a build from each format can be compared on the same objects. An A/B
-across a seeder change
+a build from each format can be compared on the same objects.
+Unique_dirs (`uploads/<user>/<uuid>/<file>`, a directory per object)
+is outside the gate; it sizes scratch and index disk for prefix-heavy
+inventories (docs/operations.md). An A/B across a seeder change
 builds different fixtures on each side, so its pipeline numbers are a
 new baseline, not a regression signal.
 

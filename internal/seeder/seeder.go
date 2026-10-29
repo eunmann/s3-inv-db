@@ -331,6 +331,8 @@ func getGeneratorConfig(preset string, numObjects int) benchutil.GeneratorConfig
 		return benchutil.S3RealisticConfig(numObjects)
 	case "deep_pyramid", "deep-pyramid":
 		return benchutil.S3DeepPyramidConfig(numObjects)
+	case "unique_dirs", "unique-dirs":
+		return benchutil.S3UniqueDirsConfig(numObjects)
 	default:
 		return benchutil.S3RealisticConfig(numObjects)
 	}

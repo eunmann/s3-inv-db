@@ -74,10 +74,10 @@ func runMergeBuildSeamBench(b *testing.B, n, runFileCount int) {
 // writePartitionedRunFiles distributes `objects` round-robin across
 // `runFileCount` aggregators, sorts each, and writes a compressed
 // run file per partition. Returns the list of paths in order.
-func writePartitionedRunFiles(b *testing.B, runDir string, objects []benchutil.FakeObject, runFileCount int) []string {
-	b.Helper()
+func writePartitionedRunFiles(tb testing.TB, runDir string, objects []benchutil.FakeObject, runFileCount int) []string {
+	tb.Helper()
 	if err := makeDir(runDir); err != nil {
-		b.Fatalf("mkdir: %v", err)
+		tb.Fatalf("mkdir: %v", err)
 	}
 	parts := make([]*Aggregator, runFileCount)
 	for i := range parts {
@@ -96,13 +96,13 @@ func writePartitionedRunFiles(b *testing.B, runDir string, objects []benchutil.F
 			CompressionLevel: CompressionFastest,
 		})
 		if err != nil {
-			b.Fatalf("NewCompressedRunWriter: %v", err)
+			tb.Fatalf("NewCompressedRunWriter: %v", err)
 		}
 		if err := w.WriteSorted(rows); err != nil {
-			b.Fatalf("WriteSorted: %v", err)
+			tb.Fatalf("WriteSorted: %v", err)
 		}
 		if err := w.Close(); err != nil {
-			b.Fatalf("Close: %v", err)
+			tb.Fatalf("Close: %v", err)
 		}
 		paths[i] = path
 	}

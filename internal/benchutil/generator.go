@@ -80,8 +80,8 @@ type FakeObject struct {
 // GeneratorConfig configures synthetic data generation.
 type GeneratorConfig struct {
 	TierDistribution map[tiers.ID]float64
-	// Shape selects the path-generation strategy: "" / "uniform" or
-	// "deep_pyramid".
+	// Shape selects the path-generation strategy: "" / "uniform",
+	// "deep_pyramid" or "unique_dirs".
 	Shape        string
 	NumObjects   int
 	PrefixFanout int
@@ -128,6 +128,7 @@ func cloneTierDist(src map[tiers.ID]float64) map[tiers.ID]float64 {
 const (
 	ShapeUniform     = "uniform"
 	ShapeDeepPyramid = "deep_pyramid"
+	ShapeUniqueDirs  = "unique_dirs"
 )
 
 const (
@@ -147,6 +148,20 @@ func S3DeepPyramidConfig(numObjects int) GeneratorConfig {
 	cfg.Shape = ShapeDeepPyramid
 	cfg.MaxDepth = 4 + deepExtraLevels
 	cfg.PrefixFanout = deepLeafFanout
+
+	return cfg
+}
+
+// uniqueDirsUsers is how many user directories ShapeUniqueDirs spreads
+// its per-object directories across.
+const uniqueDirsUsers = 1000
+
+// S3UniqueDirsConfig models an inventory with a directory per object,
+// as uploads/<user>/<uuid>/<file> stores lay out: about one prefix per
+// object, the most prefixes per object a common layout has.
+func S3UniqueDirsConfig(numObjects int) GeneratorConfig {
+	cfg := S3RealisticConfig(numObjects)
+	cfg.Shape = ShapeUniqueDirs
 
 	return cfg
 }
@@ -208,8 +223,11 @@ func (g *Generator) generateObject() FakeObject {
 }
 
 func (g *Generator) generateKey() string {
-	if g.cfg.Shape == ShapeDeepPyramid {
+	switch g.cfg.Shape {
+	case ShapeDeepPyramid:
 		return g.generateDeepPyramidKey()
+	case ShapeUniqueDirs:
+		return g.generateUniqueDirKey()
 	}
 	// Determine depth (1 to MaxDepth)
 	depth := 1 + g.rng.Intn(g.cfg.MaxDepth)
@@ -303,6 +321,12 @@ func (g *Generator) generateDeepPyramidKey() string {
 	b.WriteString(g.generateFilename())
 
 	return b.String()
+}
+
+// generateUniqueDirKey produces uploads/user_NNNNN/<uuid>/<file>.
+func (g *Generator) generateUniqueDirKey() string {
+	return fmt.Sprintf("uploads/user_%05d/%016x%016x/%s",
+		g.rng.Intn(uniqueDirsUsers), g.rng.Uint64(), g.rng.Uint64(), g.generateFilename())
 }
 
 func (g *Generator) generateSegment() string {
