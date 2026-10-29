@@ -1132,7 +1132,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		if err != nil {
 			return mergeBuildResult{}, fmt.Errorf("create index builder: %w", err)
 		}
-		if err := p.buildIndex(ctx, builder, nil); err != nil {
+		if err := p.buildIndex(ctx, builder, nil, nil); err != nil {
 			return mergeBuildResult{}, err
 		}
 
@@ -1161,11 +1161,20 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 	}
 	p.setPhase("building")
 
-	defer func() {
+	// Decode the merge a few batches ahead of the builder.
+	prefetch := newPrefetchIterator(mergeIter)
+	// Releasing the merge stops the prefetch before its readers close,
+	// then removes the final merge's run files. It runs as soon as
+	// AddAll has read the merge to its end, so the runs never share the
+	// disk with Finalize's scratch and the index; the defer covers every
+	// failure.
+	releaseMerge := sync.OnceFunc(func() {
+		prefetch.stop()
 		if cleanupErr := cleanupIntermediates(); cleanupErr != nil {
 			log.Warn().Err(cleanupErr).Msg("merge intermediates cleanup")
 		}
-	}()
+	})
+	defer releaseMerge()
 
 	// Upper bound: sums every spilled run's row count, so a prefix
 	// touched in N runs is counted N times. Progress counts against it.
@@ -1179,10 +1188,6 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		return mergeBuildResult{}, fmt.Errorf("create index builder: %w", err)
 	}
 
-	// Decode the merge a few batches ahead of the builder. Deferred
-	// after the cleanup, so it stops before the merge readers close.
-	prefetch := newPrefetchIterator(mergeIter)
-	defer prefetch.stop()
 	// Wrap the prefetched merge so the IndexBuilder consumption emits
 	// "building" progress every ~131k rows. Without this the bar stays
 	// frozen at the start of the index-build phase (which is the
@@ -1201,7 +1206,7 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 		},
 		reportEvery: indexBuildProgressInterval,
 	}
-	if err := p.buildIndex(ctx, builder, progressIter); err != nil {
+	if err := p.buildIndex(ctx, builder, progressIter, releaseMerge); err != nil {
 		return mergeBuildResult{}, err
 	}
 
@@ -1213,10 +1218,11 @@ func (p *Pipeline) runMergeBuildPhase(ctx context.Context, outDir string) (merge
 }
 
 // buildIndex feeds rows (nil for an empty index) into builder and
-// finalizes it. Every failure releases the builder's writers and scratch
-// files.
-func (p *Pipeline) buildIndex(ctx context.Context, builder *IndexBuilder, rows RowIterator) error {
-	if err := p.fillAndFinalize(ctx, builder, rows); err != nil {
+// finalizes it, calling rowsDone (when set) once every row is added and
+// before Finalize starts. Every failure releases the builder's writers
+// and scratch files.
+func (p *Pipeline) buildIndex(ctx context.Context, builder *IndexBuilder, rows RowIterator, rowsDone func()) error {
+	if err := p.fillAndFinalize(ctx, builder, rows, rowsDone); err != nil {
 		builder.cleanup()
 
 		return err
@@ -1225,7 +1231,7 @@ func (p *Pipeline) buildIndex(ctx context.Context, builder *IndexBuilder, rows R
 	return nil
 }
 
-func (p *Pipeline) fillAndFinalize(ctx context.Context, builder *IndexBuilder, rows RowIterator) error {
+func (p *Pipeline) fillAndFinalize(ctx context.Context, builder *IndexBuilder, rows RowIterator, rowsDone func()) error {
 	if err := builder.SetPresentTiers(p.presentTiers()); err != nil {
 		return fmt.Errorf("set present tiers: %w", err)
 	}
@@ -1233,6 +1239,9 @@ func (p *Pipeline) fillAndFinalize(ctx context.Context, builder *IndexBuilder, r
 		if err := builder.AddAll(ctx, rows); err != nil {
 			return fmt.Errorf("build index: %w", err)
 		}
+	}
+	if rowsDone != nil {
+		rowsDone()
 	}
 	p.reportProgress(finalizingStage, 0, 0)
 	builder.SetProgress(p.config.Observe.OnProgress)
