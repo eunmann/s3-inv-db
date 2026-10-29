@@ -535,20 +535,30 @@ func (a *Aggregator) Drain() []*PrefixRow {
 // segments as it walks them (see frontCoder) and never builds the whole
 // prefixes; rows from several runs are merged through Drain.
 func (a *Aggregator) WriteRun(w *CompressedRunWriter) (int, error) {
+	return a.writeRun(&w.enc)
+}
+
+// writeRun is WriteRun into a run encoder.
+func (a *Aggregator) writeRun(e *runEncoder) (int, error) {
 	if a.used == 0 {
 		return 0, nil
 	}
 	seg, ok := a.soleRun()
 	if !ok {
 		rows := a.Drain()
+		for _, row := range rows {
+			if err := e.write(row); err != nil {
+				return 0, err
+			}
+		}
 
-		return len(rows), w.WriteAll(rows)
+		return len(rows), nil
 	}
 
 	n := 0
 	var err error
 	visit := func(i uint32) bool {
-		err = a.coder.write(w, &a.node(i).row)
+		err = a.coder.write(e, &a.node(i).row)
 		n++
 
 		return err == nil
@@ -751,8 +761,8 @@ type frontCoder struct {
 	lastSeg   []string
 }
 
-// write writes the walk's next row to w; its Prefix is its segment.
-func (f *frontCoder) write(w *CompressedRunWriter, row *PrefixRow) error {
+// write writes the walk's next row to e; its Prefix is its segment.
+func (f *frontCoder) write(e *runEncoder, row *PrefixRow) error {
 	d, seg := int(row.Depth), row.Prefix
 	for len(f.lastSeg) < d+2 {
 		f.lastSeg = append(f.lastSeg, "")
@@ -769,7 +779,7 @@ func (f *frontCoder) write(w *CompressedRunWriter, row *PrefixRow) error {
 	f.prefixLen[d] = base + len(seg)
 	f.lastSeg[d], f.lastSeg[d+1] = seg, ""
 
-	return w.WriteEncoded(base+common, seg[common:], row)
+	return e.writeEncoded(base+common, seg[common:], row)
 }
 
 // mergeRuns merges sorted runs into one, merging the rows of a prefix

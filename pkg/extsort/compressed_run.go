@@ -60,17 +60,102 @@ const (
 
 // CompressedRunWriter writes sorted PrefixRows to a compressed run file.
 type CompressedRunWriter struct {
-	file             *os.File
-	compressor       *zstd.Encoder
-	writer           *bufio.Writer
-	path             string
-	buf              []byte
-	prev             string // the last prefix written
-	zstdLevel        zstd.EncoderLevel
-	count            uint64
-	uncompressedSize uint64
-	level            CompressionLevel
-	closed           bool
+	file       *os.File
+	compressor *zstd.Encoder
+	path       string
+	enc        runEncoder
+	zstdLevel  zstd.EncoderLevel
+	closed     bool
+}
+
+// runEncoder writes rows as run records: it front-codes each against the
+// previous one into buf and hands buf to sink once it holds flushAt
+// bytes, so a sink only ever sees whole records. A run file's sink is
+// its compressor; a run kept in memory keeps the buffers.
+type runEncoder struct {
+	sink runSink
+	buf  []byte
+	// prev is the last prefix written, "" after a record coded by its
+	// caller; it is the caller's string, so nothing may write to it.
+	prev    string
+	flushAt int
+	count   uint64
+	size    uint64
+}
+
+// runSink takes a buffer of whole records from a runEncoder and returns
+// the one to encode the next records into.
+type runSink interface {
+	take(full []byte) ([]byte, error)
+}
+
+// runRecordSlack is room left at the end of a runEncoder's buffer for
+// the record that fills it: more than any record of a key S3 allows
+// needs, so the buffer does not grow.
+const runRecordSlack = 4 << 10
+
+// newRunEncoder returns an encoder into sink through a buffer of
+// bufSize bytes.
+func newRunEncoder(sink runSink, bufSize int) runEncoder {
+	e := runEncoder{sink: sink, buf: make([]byte, 0, bufSize)}
+	e.setFlushAt()
+
+	return e
+}
+
+// setFlushAt fills the buffer to all but runRecordSlack, or half of a
+// small one.
+func (e *runEncoder) setFlushAt() {
+	e.flushAt = max(cap(e.buf)-runRecordSlack, cap(e.buf)/2)
+}
+
+// write writes row's record, front-coded against the previous one.
+func (e *runEncoder) write(row *PrefixRow) error {
+	start := len(e.buf)
+	shared := sharedPrefixLen(e.prev, row.Prefix)
+	e.buf = encodeRunRecordShared(e.buf, shared, row.Prefix[shared:], row)
+	e.prev = row.Prefix
+
+	return e.wrote(start)
+}
+
+// writeEncoded writes row, whose prefix is the previous record's first
+// shared bytes followed by suffix, for a caller that knows them without
+// the whole prefix; row.Prefix is not read. A later write front-codes
+// against no prefix, which reads back the same.
+func (e *runEncoder) writeEncoded(shared int, suffix string, row *PrefixRow) error {
+	start := len(e.buf)
+	e.buf = encodeRunRecordShared(e.buf, shared, suffix, row)
+	e.prev = ""
+
+	return e.wrote(start)
+}
+
+// wrote counts the record buf holds from start and hands buf to the sink
+// once it is full.
+func (e *runEncoder) wrote(start int) error {
+	e.count++
+	e.size += uint64(len(e.buf) - start)
+	if len(e.buf) < e.flushAt {
+		return nil
+	}
+
+	return e.flush()
+}
+
+// flush hands the records in buf to the sink.
+func (e *runEncoder) flush() error {
+	if len(e.buf) == 0 {
+		return nil
+	}
+	buf, err := e.sink.take(e.buf)
+	e.buf = buf
+	e.setFlushAt()
+	if err != nil {
+		return fmt.Errorf("write records: %w", err)
+	}
+
+	return nil
 }
 
 // CompressedRunWriterOptions configures the compressed run writer.
@@ -124,50 +209,29 @@ func NewCompressedRunWriter(path string, opts CompressedRunWriterOptions) (*Comp
 	}
 	enc.Reset(f)
 
-	return &CompressedRunWriter{
+	w := &CompressedRunWriter{
 		file:       f,
 		compressor: enc,
 		zstdLevel:  zstdLevel,
-		writer:     bufio.NewWriterSize(enc, opts.BufferSize),
 		path:       path,
-		buf:        make([]byte, 0, 1024),
-		level:      opts.CompressionLevel,
-	}, nil
+	}
+	w.enc = newRunEncoder(w, opts.BufferSize)
+
+	return w, nil
+}
+
+// take compresses a buffer of records.
+func (w *CompressedRunWriter) take(full []byte) ([]byte, error) {
+	if _, err := w.compressor.Write(full); err != nil {
+		return full[:0], fmt.Errorf("compress: %w", err)
+	}
+
+	return full[:0], nil
 }
 
 // Write writes a single PrefixRow to the compressed run file.
 func (w *CompressedRunWriter) Write(row *PrefixRow) error {
-	if err := w.writeRecord(encodeRunRecord(w.buf[:0], w.prev, row)); err != nil {
-		return err
-	}
-	w.prev = row.Prefix
-
-	return nil
-}
-
-// WriteEncoded writes row, whose prefix is the previous record's first
-// shared bytes followed by suffix, for a caller that knows them without
-// the whole prefix; row.Prefix is not read. A later Write front-codes
-// against no prefix, which reads back the same.
-func (w *CompressedRunWriter) WriteEncoded(shared int, suffix string, row *PrefixRow) error {
-	if err := w.writeRecord(encodeRunRecordShared(w.buf[:0], shared, suffix, row)); err != nil {
-		return err
-	}
-	w.prev = ""
-
-	return nil
-}
-
-// writeRecord writes an encoded record kept in w.buf.
-func (w *CompressedRunWriter) writeRecord(rec []byte) error {
-	w.buf = rec
-	if _, err := w.writer.Write(rec); err != nil {
-		return fmt.Errorf("write record: %w", err)
-	}
-	w.count++
-	w.uncompressedSize += uint64(len(rec))
-
-	return nil
+	return w.enc.write(row)
 }
 
 // WriteAll writes a slice of PrefixRows to the compressed run file.
@@ -198,7 +262,7 @@ func (w *CompressedRunWriter) Close() error {
 	}
 	w.closed = true
 
-	if err := w.writer.Flush(); err != nil {
+	if err := w.enc.flush(); err != nil {
 		return errors.Join(fmt.Errorf("flush buffer: %w", err), w.closeCompressor(), w.closeFile())
 	}
 
@@ -213,8 +277,8 @@ func (w *CompressedRunWriter) Close() error {
 	}
 
 	var headerUpdate [20]byte
-	binary.LittleEndian.PutUint64(headerUpdate[0:8], w.count)
-	binary.LittleEndian.PutUint64(headerUpdate[8:16], w.uncompressedSize)
+	binary.LittleEndian.PutUint64(headerUpdate[0:8], w.enc.count)
+	binary.LittleEndian.PutUint64(headerUpdate[8:16], w.enc.size)
 	// Reserved field (4 bytes) stays zero
 
 	if _, err := w.file.Write(headerUpdate[:]); err != nil {

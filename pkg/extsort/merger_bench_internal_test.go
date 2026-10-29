@@ -55,7 +55,7 @@ func BenchmarkMergeIterator(b *testing.B) {
 					b.StopTimer()
 					sources := make([]runSource, k)
 					for i, run := range runs {
-						sources[i] = newMemRun(run)
+						sources[i] = newSliceRun(run)
 					}
 					b.StartTimer()
 					it, err := newMergeIterator(sources)

@@ -32,9 +32,9 @@ func mergeBuildPipeline(t *testing.T, runFiles, memRuns int) *Pipeline {
 		for j := runFiles + i; j < len(objects); j += parts {
 			agg.AddObject(objects[j].Key, objects[j].Size, objects[j].TierID)
 		}
-		rows := agg.Drain()
-		SortPrefixRows(rows)
-		p.memRuns = append(p.memRuns, newMemRun(rows))
+		if err := p.keepResidual(agg); err != nil {
+			t.Fatalf("keepResidual: %v", err)
+		}
 	}
 	var onDisk []benchutil.FakeObject
 	for j, o := range objects {

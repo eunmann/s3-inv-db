@@ -777,7 +777,9 @@ func (p *Pipeline) runChunkWorker(ctx context.Context, workerID, numWorkers int,
 			return
 		}
 		if !heapUnderPressure(readMemoryLimit()) {
-			p.keepResidual(agg)
+			if keepErr := p.keepResidual(agg); keepErr != nil {
+				err = fmt.Errorf("worker %d keep last state: %w", workerID, keepErr)
+			}
 
 			return
 		}
@@ -1072,22 +1074,30 @@ func (p *Pipeline) flushAggregator(ctx context.Context, agg *Aggregator, workerI
 	return nil
 }
 
-// keepResidual keeps a finished worker's last aggregator state, sorted,
-// for the final merge to read in place: the rows are already in memory,
-// and writing them to a run file only to read them back is most of a
-// build's spill work when workers rarely spill before their last flush.
-// They stay until the merge has read them, which is before the index is
-// finalized; under heap pressure the worker spills them instead.
-func (p *Pipeline) keepResidual(agg *Aggregator) {
+// keepResidual keeps a finished worker's last aggregator state as a run
+// in memory for the final merge to read: compressing it into a run file
+// only to read it back is most of a build's spill work when workers
+// rarely spill before their last flush. Its records take a fraction of
+// the aggregator, which is released at once; they stay until the merge
+// has read them, which is before the index is finalized. Under heap
+// pressure the worker spills them instead.
+func (p *Pipeline) keepResidual(agg *Aggregator) error {
 	p.presentTierMask.Or(uint32(agg.TierMask()))
-	rows := agg.Drain()
-	if len(rows) == 0 {
-		return
+	w := newMemRunWriter()
+	if _, err := agg.writeRun(&w.enc); err != nil {
+		return fmt.Errorf("encode memory run: %w", err)
+	}
+	agg.Release()
+	run := w.finish()
+	if run.count == 0 {
+		return nil
 	}
 	p.runFilesMu.Lock()
-	p.memRuns = append(p.memRuns, newMemRun(rows))
+	p.memRuns = append(p.memRuns, run)
 	p.runFilesMu.Unlock()
-	p.runRows.Add(uint64(len(rows)))
+	p.runRows.Add(uint64(run.count))
+
+	return nil
 }
 
 // mergeBuildResult is the output of runMergeBuildPhase.
