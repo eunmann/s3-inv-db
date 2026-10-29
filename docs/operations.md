@@ -44,7 +44,7 @@ Once built, a load counts at its measured size. If that puts the
 loaded indexes over `max_index_disk` (the headroom absorbs smaller
 misses), the planner evicts for the difference; if only pinned runs
 are left to evict, the new index is unloaded and deleted, the load is
-refused. Until the server restarts, loading that run again reserves
+refused and the run keeps the pin it had before. Until the server restarts, loading that run again reserves
 its measured size, so it is refused before rebuilding while the space
 is still short.
 

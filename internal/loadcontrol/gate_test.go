@@ -603,8 +603,9 @@ func TestGate_Load_EvictsForIndexOverItsEstimate(t *testing.T) {
 }
 
 // A built index bigger than its estimate that no eviction makes room
-// for is refused and retracted, pinned or not, with its cache; loading
-// it again is refused before it builds.
+// for is refused and retracted, pinned or not, with its cache, and
+// keeps the pin it had before the load; loading it again is refused
+// before it builds.
 func TestGate_Load_RetractsIndexThatCannotFit(t *testing.T) {
 	ctx := t.Context()
 	mgr := inventory.NewCatalog(nil)
@@ -622,8 +623,12 @@ func TestGate_Load_RetractsIndexThatCannotFit(t *testing.T) {
 	if _, refused := errors.AsType[*loadcontrol.BudgetRefusedError](err); !refused {
 		t.Fatalf("load %s = %v, want BudgetRefusedError", c, err)
 	}
-	if got, _ := mgr.Get(c); got.State != inventory.StateNotLoaded {
+	got, _ := mgr.Get(c)
+	if got.State != inventory.StateNotLoaded {
 		t.Errorf("%s state = %s, want not_loaded", c, got.State)
+	}
+	if got.Pinned {
+		t.Errorf("%s is pinned by a load that was refused", c)
 	}
 	if got, _ := mgr.Get(a); got.State != inventory.StateLoaded {
 		t.Errorf("pinned %s state = %s, want loaded", a, got.State)
