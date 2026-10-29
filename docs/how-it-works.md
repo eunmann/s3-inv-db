@@ -40,8 +40,9 @@ flowchart LR
    ordered (every prefix after its parent), hashes each prefix and
    spools it by depth, interning its last segment and gathering the
    statistics that fix each file's field widths as it goes. At the end
-   it writes every file once, in [level order](#level-order-rows), and
-   builds the minimal perfect hash. The segment dictionary is held in
+   it writes each per-row file (core stats, tier stats, prefix tree)
+   once, in [level order](#level-order-rows), and builds the minimal
+   perfect hash. The segment dictionary is held in
    memory until the last prefix is spooled.
 
 Scratch lives in a hidden `.<out>.scratch-*` directory beside the

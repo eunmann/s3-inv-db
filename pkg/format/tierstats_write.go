@@ -129,9 +129,6 @@ const (
 	tierLayoutMulti
 )
 
-// writeBufSize is the buffered-writer size of the tier files.
-const writeBufSize = 1 << 20
-
 // TierStatsPlan gathers, from every prefix's tier stats in any order,
 // what fixes the tier layout before a row is written: the row and slot
 // counts and the widest stored values of each layout, and the largest

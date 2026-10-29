@@ -120,6 +120,11 @@ const arrayTailPad = 8
 // to amortize syscalls without being conspicuous in RSS.
 const repackBufferSize = 1 << 20
 
+// writeBufSize is the buffered-writer size of the package's final-file
+// writers: core stats, tier stats, prefix tree, core patches and ranked
+// bits.
+const writeBufSize = 1 << 20
+
 // RepackArrayWidthU64 streams srcPath (an ArrayWriter file at any
 // width 1..8) into dstPath at the chosen tight width, then writes
 // arrayTailPad zero bytes so a u64 mask-load at the last element is
