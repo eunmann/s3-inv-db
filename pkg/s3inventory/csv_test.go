@@ -25,11 +25,11 @@ const (
 
 func TestCSVInventoryReader(t *testing.T) {
 	csv := testKeyABC + ",100,STANDARD,\n" + testKeyDE + ",200,GLACIER,\n"
-	r := s3inventory.NewCSVReader(bytes.NewReader([]byte(csv)), s3inventory.CSVReaderConfig{
-		KeyCol:        0,
-		SizeCol:       1,
-		StorageCol:    2,
-		AccessTierCol: 3,
+	r := mustCSVReader(t, bytes.NewReader([]byte(csv)), s3inventory.CSVReaderConfig{
+		KeyCol:        s3inventory.ColumnAt(0),
+		SizeCol:       s3inventory.ColumnAt(1),
+		StorageCol:    s3inventory.ColumnAt(2),
+		AccessTierCol: s3inventory.ColumnAt(3),
 	})
 
 	row, err := r.Next()
@@ -59,8 +59,8 @@ func TestCSVInventoryReader_MalformedRowCount(t *testing.T) {
 	csvData := "k1,abc,STANDARD,\n" +
 		"k2,100,STANDARD,\n" +
 		"k3,not-a-number,GLACIER,\n"
-	r := s3inventory.NewCSVReader(bytes.NewReader([]byte(csvData)), s3inventory.CSVReaderConfig{
-		KeyCol: 0, SizeCol: 1, StorageCol: 2,
+	r := mustCSVReader(t, bytes.NewReader([]byte(csvData)), s3inventory.CSVReaderConfig{
+		KeyCol: s3inventory.ColumnAt(0), SizeCol: s3inventory.ColumnAt(1), StorageCol: s3inventory.ColumnAt(2),
 	})
 	defer r.Close()
 
@@ -75,6 +75,82 @@ func TestCSVInventoryReader_MalformedRowCount(t *testing.T) {
 	if got := r.Anomalies().BadSizes; got != 2 {
 		t.Errorf("Anomalies().BadSizes = %d, want 2", got)
 	}
+}
+
+// TestCSVReader_OmittedOptionalColumnsAreAbsent: a config naming only
+// the key and size columns reads no storage class, access tier or
+// delete marker, even when column 0 holds what would pass for one.
+func TestCSVReader_OmittedOptionalColumnsAreAbsent(t *testing.T) {
+	csvData := "true,k1,100\n" +
+		"true,k2,200\n"
+	r := mustCSVReader(t, bytes.NewReader([]byte(csvData)), s3inventory.CSVReaderConfig{
+		KeyCol: s3inventory.ColumnAt(1), SizeCol: s3inventory.ColumnAt(2),
+	})
+	defer r.Close()
+
+	var got []s3inventory.Row
+	for {
+		row, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+		got = append(got, row)
+	}
+	want := []s3inventory.Row{{Key: "k1", Size: 100}, {Key: "k2", Size: 200}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("rows = %+v, want %+v", got, want)
+	}
+}
+
+// TestCSVReader_RequiresKeyAndSizeColumns: a config without the key or
+// size column is refused, by NewCSVReaderFromStream after closing the
+// stream, rather than read from column 0.
+func TestCSVReader_RequiresKeyAndSizeColumns(t *testing.T) {
+	cases := map[string]s3inventory.CSVReaderConfig{
+		"zero":    {},
+		"no_key":  {SizeCol: s3inventory.ColumnAt(1)},
+		"no_size": {KeyCol: s3inventory.ColumnAt(0), StorageCol: s3inventory.ColumnAt(2)},
+	}
+	for name, cfg := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := s3inventory.NewCSVReader(bytes.NewReader([]byte("k,1\n")), cfg); !errors.Is(err, s3inventory.ErrCSVColumnUnset) {
+				t.Errorf("NewCSVReader error = %v, want %v", err, s3inventory.ErrCSVColumnUnset)
+			}
+			stream := &closeCounter{Reader: bytes.NewReader([]byte("k,1\n"))}
+			if _, err := s3inventory.NewCSVReaderFromStream(stream, cfg); !errors.Is(err, s3inventory.ErrCSVColumnUnset) {
+				t.Errorf("NewCSVReaderFromStream error = %v, want %v", err, s3inventory.ErrCSVColumnUnset)
+			}
+			if stream.closes != 1 {
+				t.Errorf("stream closed %d times, want 1", stream.closes)
+			}
+		})
+	}
+}
+
+func TestColumnAt(t *testing.T) {
+	for _, i := range []int{-2, -1, 0, 1, 7} {
+		want := max(i, -1)
+		if got := s3inventory.ColumnAt(i).Index(); got != want {
+			t.Errorf("ColumnAt(%d).Index() = %d, want %d", i, got, want)
+		}
+	}
+	if got := (s3inventory.Column{}).Index(); got != -1 {
+		t.Errorf("zero Column's Index() = %d, want -1", got)
+	}
+}
+
+// mustCSVReader is NewCSVReader for a config known to be valid.
+func mustCSVReader(tb testing.TB, r io.Reader, cfg s3inventory.CSVReaderConfig) *s3inventory.CSVReader {
+	tb.Helper()
+	reader, err := s3inventory.NewCSVReader(r, cfg)
+	if err != nil {
+		tb.Fatalf("NewCSVReader: %v", err)
+	}
+
+	return reader
 }
 
 // S3InventoryRecord represents a row in an S3 inventory Parquet file.
@@ -239,9 +315,9 @@ func TestCSVAndParquetEquivalence(t *testing.T) {
 	}
 
 	// Read CSV
-	csvReader := s3inventory.NewCSVReader(
+	csvReader := mustCSVReader(t,
 		bytes.NewReader(csvBuf.Bytes()),
-		s3inventory.CSVReaderConfig{KeyCol: 0, SizeCol: 1, StorageCol: 2},
+		s3inventory.CSVReaderConfig{KeyCol: s3inventory.ColumnAt(0), SizeCol: s3inventory.ColumnAt(1), StorageCol: s3inventory.ColumnAt(2)},
 	)
 	defer csvReader.Close()
 
@@ -511,12 +587,12 @@ func BenchmarkCSVInventoryReader(b *testing.B) {
 	for _, n := range benchutil.BenchmarkSizes() {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			benchCSVReader(b, benchCSVPayload(tm, benchInventoryRows(n)), n, s3inventory.CSVReaderConfig{
-				KeyCol: 0, SizeCol: 1, StorageCol: 2, AccessTierCol: 3,
+				KeyCol: s3inventory.ColumnAt(0), SizeCol: s3inventory.ColumnAt(1), StorageCol: s3inventory.ColumnAt(2), AccessTierCol: s3inventory.ColumnAt(3),
 			})
 		})
 		b.Run(fmt.Sprintf("n=%d/quoted", n), func(b *testing.B) {
 			benchCSVReader(b, benchQuotedCSVPayload(tm, benchInventoryRows(n)), n, s3inventory.CSVReaderConfig{
-				KeyCol: 1, SizeCol: 2, StorageCol: 3, AccessTierCol: 4,
+				KeyCol: s3inventory.ColumnAt(1), SizeCol: s3inventory.ColumnAt(2), StorageCol: s3inventory.ColumnAt(3), AccessTierCol: s3inventory.ColumnAt(4),
 			})
 		})
 	}
@@ -527,7 +603,7 @@ func benchCSVReader(b *testing.B, csvData []byte, n int, cfg s3inventory.CSVRead
 	b.ResetTimer()
 	b.ReportAllocs()
 	for range b.N {
-		reader := s3inventory.NewCSVReader(bytes.NewReader(csvData), cfg)
+		reader := mustCSVReader(b, bytes.NewReader(csvData), cfg)
 		count := 0
 		for {
 			_, err := reader.Next()

@@ -69,8 +69,8 @@ func TestCSVReader_DecodesURLEncodedKeys(t *testing.T) {
 	for _, k := range specialKeys {
 		records = append(records, []string{encodeCSVKey(k), "1"})
 	}
-	r := s3inventory.NewCSVReader(bytes.NewReader(csvBytes(t, records)),
-		s3inventory.CSVReaderConfig{KeyCol: 0, SizeCol: 1, StorageCol: -1, AccessTierCol: -1, DeleteMarkerCol: -1})
+	r := mustCSVReader(t, bytes.NewReader(csvBytes(t, records)),
+		s3inventory.CSVReaderConfig{KeyCol: s3inventory.ColumnAt(0), SizeCol: s3inventory.ColumnAt(1)})
 
 	rows := readAllRows(t, r)
 	if len(rows) != len(specialKeys) {
@@ -85,8 +85,8 @@ func TestCSVReader_DecodesURLEncodedKeys(t *testing.T) {
 
 func TestCSVReader_KeepsUndecodableKeyVerbatim(t *testing.T) {
 	data := csvBytes(t, [][]string{{"bad%zz/key", "5"}, {"ok%20key", "6"}})
-	r := s3inventory.NewCSVReader(bytes.NewReader(data),
-		s3inventory.CSVReaderConfig{KeyCol: 0, SizeCol: 1, StorageCol: -1, AccessTierCol: -1, DeleteMarkerCol: -1})
+	r := mustCSVReader(t, bytes.NewReader(data),
+		s3inventory.CSVReaderConfig{KeyCol: s3inventory.ColumnAt(0), SizeCol: s3inventory.ColumnAt(1)})
 
 	rows := readAllRows(t, r)
 	if len(rows) != 2 || rows[0].Key != "bad%zz/key" || rows[1].Key != "ok key" {
@@ -105,8 +105,8 @@ func TestCSVReader_SkipsDeleteMarkers(t *testing.T) {
 		{"a/gone.txt", "", "true", "true"},
 		{"a/gone2.txt", "", "false", "TRUE"},
 	})
-	r := s3inventory.NewCSVReader(bytes.NewReader(data),
-		s3inventory.CSVReaderConfig{KeyCol: 0, SizeCol: 1, StorageCol: -1, AccessTierCol: -1, DeleteMarkerCol: 3})
+	r := mustCSVReader(t, bytes.NewReader(data),
+		s3inventory.CSVReaderConfig{KeyCol: s3inventory.ColumnAt(0), SizeCol: s3inventory.ColumnAt(1), DeleteMarkerCol: s3inventory.ColumnAt(3)})
 
 	rows := readAllRows(t, r)
 	if len(rows) != 2 || rows[0].Key != "a/live.txt" || rows[1].Key != "a/old.txt" {
@@ -179,8 +179,8 @@ func TestCSVAndParquet_SameKeysForSpecialCharacters(t *testing.T) {
 		records = append(records, []string{encodeCSVKey(k), strconv.Itoa(i + 1)})
 		pq = append(pq, S3InventoryRecord{Key: k, Size: int64(i + 1)})
 	}
-	csvRows := readAllRows(t, s3inventory.NewCSVReader(bytes.NewReader(csvBytes(t, records)),
-		s3inventory.CSVReaderConfig{KeyCol: 0, SizeCol: 1, StorageCol: -1, AccessTierCol: -1, DeleteMarkerCol: -1}))
+	csvRows := readAllRows(t, mustCSVReader(t, bytes.NewReader(csvBytes(t, records)),
+		s3inventory.CSVReaderConfig{KeyCol: s3inventory.ColumnAt(0), SizeCol: s3inventory.ColumnAt(1)}))
 	pqRows := readAllRows(t, openParquet(t, pq))
 
 	if len(csvRows) != len(pqRows) {
@@ -202,8 +202,8 @@ func TestCSVReader_CountsEveryAnomaly(t *testing.T) {
 		{"", "5"},
 		{"a/bad-size.txt", "12x"},
 	})
-	r := s3inventory.NewCSVReader(bytes.NewReader(data),
-		s3inventory.CSVReaderConfig{KeyCol: 0, SizeCol: 1, StorageCol: -1, AccessTierCol: -1, DeleteMarkerCol: -1})
+	r := mustCSVReader(t, bytes.NewReader(data),
+		s3inventory.CSVReaderConfig{KeyCol: s3inventory.ColumnAt(0), SizeCol: s3inventory.ColumnAt(1)})
 
 	rows := readAllRows(t, r)
 	if len(rows) != 2 || rows[0].Key != "a/ok.txt" || rows[1].Key != "a/bad-size.txt" || rows[1].Size != 0 {
