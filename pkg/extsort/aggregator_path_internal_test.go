@@ -14,8 +14,15 @@ import (
 )
 
 // referenceAggregate sums every object into each of its prefix
-// ancestors directly, one map lookup per level.
+// ancestors directly, one map lookup per level, for the objects the
+// tests add: key i with size len(key)+i in tier i%3.
 func referenceAggregate(keys []string, maxDepth int) map[string]PrefixRow {
+	return referenceAggregateTiers(keys, maxDepth, func(i int) tiers.ID { return tiers.ID(i % 3) })
+}
+
+// referenceAggregateTiers is referenceAggregate with key i in tier
+// tierOf(i).
+func referenceAggregateTiers(keys []string, maxDepth int, tierOf func(i int) tiers.ID) map[string]PrefixRow {
 	out := map[string]PrefixRow{}
 	add := func(prefix string, depth uint16, size uint64, tier tiers.ID) {
 		r := out[prefix]
@@ -24,7 +31,7 @@ func referenceAggregate(keys []string, maxDepth int) map[string]PrefixRow {
 		out[prefix] = r
 	}
 	for i, k := range keys {
-		size, tier := uint64(len(k)+i), tiers.ID(i%3)
+		size, tier := uint64(len(k)+i), tierOf(i)
 		add("", 0, size, tier)
 		depth := uint16(1)
 		for j := range len(k) {
