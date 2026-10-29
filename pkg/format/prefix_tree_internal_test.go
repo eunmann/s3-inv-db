@@ -88,7 +88,7 @@ func writeTreeRows(t *testing.T, dir string, rows []treeTestRow, internOrder []i
 //nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
 func internTreeRows(t *testing.T, dir string, rows []treeTestRow, internOrder []int) ([]uint32, uint32, uint64) {
 	t.Helper()
-	interner, err := NewPrefixSegmentInterner(dir, nil)
+	interner, err := NewPrefixSegmentInterner(dir, 1<<20, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +371,7 @@ func TestOpenPrefixTreeReaderMissingFiles(t *testing.T) {
 // TestInternKnownSegmentDoesNotAllocate: the builder interns one
 // segment per prefix, so a known segment must cost no allocation.
 func TestInternKnownSegmentDoesNotAllocate(t *testing.T) {
-	si, err := NewPrefixSegmentInterner(t.TempDir(), nil)
+	si, err := NewPrefixSegmentInterner(t.TempDir(), 1<<20, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

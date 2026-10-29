@@ -1,16 +1,15 @@
 package format
 
 import (
-	"errors"
 	"fmt"
-	"math"
 	"path/filepath"
 	"strings"
 
 	lru "github.com/hashicorp/golang-lru/v2"
 )
 
-// Segment-dictionary file names: every distinct segment, once. The
+// Segment-dictionary file names: the segments the interner wrote, each
+// distinct one once unless its budget could not hold them all. The
 // prefix tree (prefix_tree.go) refers to segments by ID.
 const (
 	PrefixDictBlobFile    = "prefix_dict.bin"
@@ -20,74 +19,6 @@ const (
 // DefaultPrefixDictCacheSize is the default LRU cache size for
 // PrefixDictionary when callers don't preload.
 const DefaultPrefixDictCacheSize = 10000
-
-// PrefixSegmentInterner assigns a sequential uint32 ID to each unique
-// last segment of a prefix; prefix_tree.bin rows reference these IDs.
-type PrefixSegmentInterner struct {
-	// ids is keyed by the segment itself: exact, so no hash collision
-	// can fail a build.
-	ids        map[string]uint32
-	blobWriter *BlobWriter
-	nextID     uint32
-}
-
-// NewPrefixSegmentInterner creates a new segment interner that writes
-// to outDir, recording its files' checksums in sums.
-func NewPrefixSegmentInterner(outDir string, sums *Checksums) (*PrefixSegmentInterner, error) {
-	blobPath := filepath.Join(outDir, PrefixDictBlobFile)
-	offsetsPath := filepath.Join(outDir, PrefixDictOffsetsFile)
-
-	writer, err := NewBlobWriter(blobPath, offsetsPath, sums)
-	if err != nil {
-		return nil, fmt.Errorf("create prefix dict blob writer: %w", err)
-	}
-
-	return &PrefixSegmentInterner{
-		ids:        make(map[string]uint32, 1024),
-		blobWriter: writer,
-	}, nil
-}
-
-// ErrTooManySegments is returned when an index would need more
-// distinct segments than a segment ID can number.
-var ErrTooManySegments = errors.New("too many distinct prefix segments")
-
-// Intern returns the ID for segment, assigning and writing a new one
-// on first occurrence. Looking up an existing segment does not
-// allocate; a new one is copied, so segment may alias a buffer the
-// caller reuses.
-func (si *PrefixSegmentInterner) Intern(segment string) (uint32, error) {
-	if id, ok := si.ids[segment]; ok {
-		return id, nil
-	}
-
-	if si.nextID == math.MaxUint32 {
-		return 0, fmt.Errorf("%w: more than %d distinct segments", ErrTooManySegments, uint64(math.MaxUint32))
-	}
-	id := si.nextID
-	si.nextID++
-	owned := strings.Clone(segment)
-	if err := si.blobWriter.WriteString(owned); err != nil {
-		return 0, fmt.Errorf("write segment: %w", err)
-	}
-	si.ids[owned] = id
-
-	return id, nil
-}
-
-// Count returns the number of distinct segments interned.
-func (si *PrefixSegmentInterner) Count() uint32 {
-	return si.nextID
-}
-
-// Close writes the dictionary's last offset and closes its files. It
-// drops the segment map, which holds every distinct segment, so Count
-// is all that stays usable.
-func (si *PrefixSegmentInterner) Close() error {
-	si.ids = nil
-
-	return si.blobWriter.Close()
-}
 
 // PrefixDictionary provides ID→segment lookup backed by an LRU cache.
 type PrefixDictionary struct {

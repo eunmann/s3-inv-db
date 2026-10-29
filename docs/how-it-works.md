@@ -58,8 +58,9 @@ flowchart LR
    statistics that fix each file's field widths as it goes. At the end
    it writes each per-row file (core stats, tier stats, prefix tree)
    once, in [level order](#level-order-rows), and builds the minimal
-   perfect hash. The segment dictionary is held in
-   memory until the last prefix is spooled.
+   perfect hash. The segment interner remembers segments within
+   `GOMEMLIMIT / 16` (64 MiB with no limit); past that, a rarely
+   repeated segment is written to the dictionary again.
 
 Scratch lives in a hidden `.<out>.scratch-*` directory beside the
 output, never in `/tmp` (which may be RAM). It holds at most two
@@ -167,9 +168,10 @@ uses a small directory per 512 bits
 
 ### Prefix strings
 
-Each row stores its last segment's ID in a dictionary of distinct
-segments and the distance back to its parent; a prefix is rebuilt by
-walking parents. Each distinct segment is stored once.
+Each row stores its last segment's ID in a dictionary of segments and
+the distance back to its parent; a prefix is rebuilt by walking
+parents. Each distinct segment is stored once while the build's
+interner budget holds them all.
 
 ### Memory-mapped files
 

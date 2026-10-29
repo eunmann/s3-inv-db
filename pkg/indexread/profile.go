@@ -27,8 +27,8 @@ type Profile struct {
 	Prefixes uint64 `json:"prefixes"`
 	// Leaves is the number of prefixes with no child prefix.
 	Leaves uint64 `json:"leaves"`
-	// Segments is the number of distinct segments in the dictionary,
-	// and SegmentBytes their total length.
+	// Segments is the number of entries in the segment dictionary, and
+	// SegmentBytes their total length.
 	Segments     uint64 `json:"segments"`
 	SegmentBytes uint64 `json:"segment_bytes"`
 }

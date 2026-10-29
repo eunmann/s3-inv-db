@@ -442,6 +442,30 @@ func assertNoScratch(t *testing.T, dir string) {
 	}
 }
 
+// TestFailedBuildRemovesTheDictionary: a build that fails while adding
+// rows leaves none of the segment dictionary it started, even in an
+// output directory it did not create, and no scratch.
+func TestFailedBuildRemovesTheDictionary(t *testing.T) {
+	outDir, tempDir := t.TempDir(), t.TempDir()
+	b, err := NewIndexBuilder(outDir, tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := addFlatRows(t, b, 3*spoolBatchRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Add(&PrefixRow{Prefix: "a/", Depth: 1}); !errors.Is(err, ErrUnsortedInput) {
+		t.Fatalf("Add out of order = %v, want ErrUnsortedInput", err)
+	}
+	b.cleanup()
+	assertNoScratch(t, tempDir)
+	for _, f := range []string{format.PrefixDictBlobFile, format.PrefixDictOffsetsFile} {
+		if _, err := os.Stat(filepath.Join(outDir, f)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s after a failed build: %v", f, err)
+		}
+	}
+}
+
 // TestFinalizeMPHFFailureCleansUp: an MPHF build that fails (here, it
 // cannot create its slot file) fails Finalize, and cleanup leaves no
 // scratch and no output.
