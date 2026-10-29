@@ -55,17 +55,18 @@ bytes per prefix with a UUID directory per object).
 
 The budget counts indexes only. **Size the volume for scratch too**,
 per concurrent build, on top of `max_index_disk`: scratch and index
-peak together while the build finalizes, at the index plus about 100
-bytes per prefix (165 bytes per prefix for a UUID directory per
-object, 2.5× its gzipped inventory). Run files spilled under memory
-pressure (10–30 bytes per prefix) are removed before that peak.
+peak together while the build finalizes, at about 45 bytes per prefix
+(index included) when directory names repeat and 100 bytes per prefix
+with a UUID directory per object, which is 2.0× and 1.5× their gzipped
+inventory. Run files spilled under memory pressure (10–30 bytes per
+prefix) are removed before that peak.
 
-Measured with `BenchmarkPipeline` at 1M objects: the `realistic`
-fixture has 2.37M prefixes and a 66.8 MB index from a 51 MiB gzipped
-inventory; `unique_dirs` (`uploads/<user>/<uuid>/<file>`) has 1.00M
-prefixes and a 64.0 MB index from 65.1 MB gzipped, and its build
-peaked at 163 MB of scratch plus index (`peak_disk_B`, with
-`S3INV_DISK_PEAK=1`).
+Measured with `BenchmarkPipeline` at 1M objects (`peak_disk_B`, with
+`S3INV_DISK_PEAK=1`):
+- `realistic`: 2.37M prefixes, 51 MiB gzipped inventory, 66.8 MB
+  index, peak 108 MB;
+- `unique_dirs` (`uploads/<user>/<uuid>/<file>`): 1.00M prefixes,
+  65.1 MB gzipped, 64.0 MB index, peak 99 MB.
 
 ## Cache directory
 
