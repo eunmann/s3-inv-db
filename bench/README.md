@@ -241,7 +241,7 @@ TopdownL1` on the CLI. It prints a table to `bench/sol/<timestamp>/report.md`:
 - **Top-down:** where the cycles go. Back-end bound is memory; the
   build is mostly retiring, front-end and bad speculation.
 
-Install the tools with `apt install lmbench fio hyperfine pigz`; perf's
+Install the tools with `apt install lmbench fio hyperfine pigz jq`; perf's
 top-down needs `kernel.perf_event_paranoid` ≤ 2 and is skipped without
 it. The [`bench-sol.yml`](../.github/workflows/bench-sol.yml) workflow
 runs it on demand on the 4-vCPU CI runner, the cloud reference.

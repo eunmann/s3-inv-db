@@ -1,6 +1,6 @@
 .PHONY: help all build server seeder test test-unit test-race lint lint-check clean clean-seed seed \
         css css-check dev dev-reset docker-build docker-prod docker-seed docker-down \
-        cover cover-html cover-summary cover-check tidy tidy-check deadcode vuln actionlint bench-ab bench-ingest bench-query bench-scale pgo compose-preflight
+        cover cover-html cover-summary cover-check tidy tidy-check deadcode vuln actionlint bench-ab bench-ingest bench-query bench-scale bench-sol pgo compose-preflight
 
 .DEFAULT_GOAL := help
 
