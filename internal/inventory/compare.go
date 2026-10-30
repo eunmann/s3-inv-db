@@ -1,9 +1,9 @@
 package inventory
 
 import (
+	"bytes"
 	"cmp"
 	"slices"
-	"strings"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
@@ -331,6 +331,9 @@ type levelMerge struct {
 	cost   CompareCostFunc // nil unless sorting by cost
 	tiers  tierScratch
 	counts CompareStatusCounts
+	// nameA and nameB hold the two children being compared, reused
+	// across the merge so it allocates nothing per child.
+	nameA, nameB []byte
 }
 
 // merge joins two child spans, each in index (preorder) order, into one
@@ -359,7 +362,9 @@ func (m *levelMerge) merge(sa, sb format.Span) []compareRow {
 		case j == nb:
 			c = -1
 		default:
-			c = compareSlashTerminated(a.ChildSegment(pa), b.ChildSegment(pb))
+			m.nameA = a.AppendChildSegment(m.nameA[:0], pa)
+			m.nameB = b.AppendChildSegment(m.nameB[:0], pb)
+			c = compareSlashTerminated(m.nameA, m.nameB)
 		}
 		var r compareRow
 		var stA, stB indexread.Stats
@@ -420,9 +425,9 @@ const signBit = uint64(1) << 63
 func signedKey(v int64) uint64 { return uint64(v) ^ signBit }
 
 // compareSlashTerminated compares x+"/" with y+"/" without building them.
-func compareSlashTerminated(x, y string) int {
+func compareSlashTerminated(x, y []byte) int {
 	n := min(len(x), len(y))
-	if c := strings.Compare(x[:n], y[:n]); c != 0 {
+	if c := bytes.Compare(x[:n], y[:n]); c != 0 {
 		return c
 	}
 	switch {
