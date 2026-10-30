@@ -44,3 +44,4 @@ seed-data/
 
 # A/B benchmark runs (scripts/bench-ab.sh)
 bench/ab/
+bench/sol/
