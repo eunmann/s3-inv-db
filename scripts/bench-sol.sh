@@ -6,7 +6,7 @@
 #   scripts/bench-sol.sh            # 10M objects on CPUs 0-3
 #   N=1000000 CPUS=0-7 scripts/bench-sol.sh
 #
-# Needs lmbench, fio, hyperfine, pigz and the AWS CLI; perf is optional
+# Needs lmbench, fio, hyperfine, pigz, jq, curl and the AWS CLI; perf is optional
 # (top-down metrics need kernel.perf_event_paranoid <= 2). Uses the local
 # S3 server at AWS_ENDPOINT_URL_S3, or starts one in Docker.
 set -euo pipefail
@@ -23,15 +23,17 @@ die() {
 lmbench=/usr/lib/lmbench/bin/$(uname -m)-linux-gnu
 [[ -x $lmbench/bw_mem ]] || lmbench=$(dirname "$(command -v bw_mem 2>/dev/null || echo /missing/bw_mem)")
 [[ -x $lmbench/bw_mem ]] || die "lmbench not found (apt install lmbench)"
-for tool in fio hyperfine pigz gzip aws go; do
+tools=(fio hyperfine pigz gzip jq curl aws go)
+[[ -n ${AWS_ENDPOINT_URL_S3:-} ]] || tools+=(docker)
+for tool in "${tools[@]}"; do
 	command -v "$tool" >/dev/null || die "$tool not found"
 done
 
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 out=bench/sol/$(date -u +%Y%m%dT%H%M%SZ)
-work=$out/work # on the repo's filesystem, like a build's scratch
-mkdir -p "$work"
+work=$out/work # the build's scratch (TMPDIR below) and fio share this filesystem
+mkdir -p "$work/tmp"
 pin=(taskset -c "$CPUS")
 cores=$("${pin[@]}" nproc)
 
@@ -46,22 +48,27 @@ if [[ -z ${AWS_ENDPOINT_URL_S3:-} ]]; then
 	image=$(sed -n 's/^ *image: &s3-image //p' infra/docker-compose.yml)
 	s3_container=s3inv-sol-$$
 	docker run -d --name "$s3_container" -p 127.0.0.1::9000 --tmpfs /data "$image" \
-		--access devaccess --secret devsecret posix /data >/dev/null
+		--port :9000 --access devaccess --secret devsecret posix /data >/dev/null
 	port=$(docker port "$s3_container" 9000 | head -1 | sed 's/.*://')
 	export AWS_ENDPOINT_URL_S3="http://127.0.0.1:$port" AWS_ACCESS_KEY_ID=devaccess AWS_SECRET_ACCESS_KEY=devsecret AWS_REGION=us-east-1
-	for _ in $(seq 30); do
+	for try in $(seq 30); do
 		[[ $(curl -s -o /dev/null -w '%{http_code}' "$AWS_ENDPOINT_URL_S3/" || true) != 000 ]] && break
+		((try < 30)) || die "S3 server at $AWS_ENDPOINT_URL_S3 not ready after 30 s"
 		sleep 1
 	done
 fi
 export S3INV_LONG_BENCH=1
 
 # fixture SHAPE: the bucket BenchmarkPipeline seeded for SHAPE on these
-# CPUs (internal/loader chunkCountFor: four data files per CPU).
+# CPUs (internal/loader chunkCountFor: four data files per CPU). Each
+# seeder version has its own bucket, so more than one match is ambiguous.
 chunks=$((4 * cores < N / 10000 ? 4 * cores : N / 10000))
 fixture() {
-	aws s3 ls | awk '{print $3}' |
-		grep -E "^fixture-${1//_/-}-$N-$chunks-[0-9a-f]+${S3INV_FIXTURE_TAG:+-$S3INV_FIXTURE_TAG}\$" | head -1
+	local matches
+	matches=$(aws s3 ls | awk '{print $3}' |
+		grep -E "^fixture-${1//_/-}-$N-$chunks-[0-9a-f]+${S3INV_FIXTURE_TAG:+-$S3INV_FIXTURE_TAG}\$" || true)
+	(($(wc -l <<<"$matches") <= 1)) || die "several fixture buckets for $1 at $N; delete the stale ones:"$'\n'"$matches"
+	echo "$matches"
 }
 
 echo "== building" >&2
@@ -71,7 +78,7 @@ go build -o "$work/s3-inv-db" ./cmd/s3-inv-db
 # The build: BenchmarkPipeline, which also seeds the fixtures.
 echo "== build (BenchmarkPipeline)" >&2
 for shape in $SHAPES; do
-	(cd internal/loader && "${pin[@]}" "$root/$work/loader.test" -test.run '^$' \
+	(cd internal/loader && TMPDIR="$root/$work/tmp" "${pin[@]}" "$root/$work/loader.test" -test.run '^$' \
 		-test.bench "^BenchmarkPipeline\$/^shape=$shape\$/^n=$N\$" -test.benchtime 1x -test.count 3) |
 		grep '^Benchmark' >>"$out/pipeline.txt"
 done
