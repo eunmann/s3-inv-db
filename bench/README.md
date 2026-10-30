@@ -221,6 +221,31 @@ benchmark for it **in its own commit first**, add it to the matching
 suite file, then run the gate with that commit as `BASE` so both sides
 have it.
 
+## Speed of light
+
+`make bench-sol` (`scripts/bench-sol.sh`; `N=` objects, default 10M,
+`CPUS=` the CPU list, default `0-3`) measures how close the build runs
+to what the machine can do. It is reported, not gated, and it runs on
+its own like any benchmark. The ceilings come from standard tools: lmbench (memory
+bandwidth, random-load latency, misses in flight), fio (scratch storage
+write with fsync, read with `O_DIRECT`), and gzip and pigz under
+hyperfine on the fixture's own data files (the gunzip floor). The
+build's own numbers are `BenchmarkPipeline`'s and `perf stat -M
+TopdownL1` on the CLI. It prints a table to `bench/sol/<timestamp>/report.md`:
+
+- **Ingest over gunzip floor:** the ingest phase against decoding the
+  input on the same CPUs. Everything above 1× is parsing and
+  aggregation.
+- **Wall over floor:** the build against the larger of the gunzip floor
+  and its scratch writes at the storage ceiling.
+- **Top-down:** where the cycles go. Back-end bound is memory; the
+  build is mostly retiring, front-end and bad speculation.
+
+Install the tools with `apt install lmbench fio hyperfine pigz`; perf's
+top-down needs `kernel.perf_event_paranoid` ≤ 2 and is skipped without
+it. The [`bench-sol.yml`](../.github/workflows/bench-sol.yml) workflow
+runs it on demand on the 4-vCPU CI runner, the cloud reference.
+
 ## Cache, page and storage costs
 
 The gate suites time warm queries. Layout changes (index format, field
