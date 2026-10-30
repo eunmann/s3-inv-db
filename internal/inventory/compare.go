@@ -1,7 +1,6 @@
 package inventory
 
 import (
-	"bytes"
 	"cmp"
 	"slices"
 	"strings"
@@ -332,9 +331,6 @@ type levelMerge struct {
 	cost   CompareCostFunc // nil unless sorting by cost
 	tiers  tierScratch
 	counts CompareStatusCounts
-	// nameA and nameB hold the two children being compared, reused
-	// across the merge so it allocates nothing per child.
-	nameA, nameB []byte
 }
 
 // merge joins two child spans, each in index (preorder) order, into one
@@ -363,9 +359,7 @@ func (m *levelMerge) merge(sa, sb format.Span) []compareRow {
 		case j == nb:
 			c = -1
 		default:
-			m.nameA = a.AppendChildSegment(m.nameA[:0], pa)
-			m.nameB = b.AppendChildSegment(m.nameB[:0], pb)
-			c = compareSlashTerminated(m.nameA, m.nameB)
+			c = indexread.CompareChildNames(a, pa, b, pb)
 		}
 		var r compareRow
 		var stA, stB indexread.Stats
@@ -434,22 +428,6 @@ func lastSegment(prefix string) string {
 	name := prefix[:len(prefix)-1]
 
 	return name[strings.LastIndexByte(name, '/')+1:]
-}
-
-// compareSlashTerminated compares x+"/" with y+"/" without building them.
-func compareSlashTerminated(x, y []byte) int {
-	n := min(len(x), len(y))
-	if c := bytes.Compare(x[:n], y[:n]); c != 0 {
-		return c
-	}
-	switch {
-	case len(x) == len(y):
-		return 0
-	case len(x) < len(y):
-		return cmp.Compare(byte('/'), y[n])
-	default:
-		return cmp.Compare(x[n], byte('/'))
-	}
 }
 
 // tierScratch holds two reusable tier breakdowns, so classifying and

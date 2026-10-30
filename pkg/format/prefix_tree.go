@@ -2,6 +2,7 @@ package format
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -285,10 +286,25 @@ func (r *PrefixTreeReader) ChildSegment(pos uint64) string {
 	return strings.Clone(r.childSegment(pos))
 }
 
-// AppendChildSegment appends ChildSegment(pos) to dst, so a caller that
-// only compares names reuses one buffer instead of allocating each.
-func (r *PrefixTreeReader) AppendChildSegment(dst []byte, pos uint64) []byte {
-	return append(dst, r.childSegment(pos)...)
+// CompareChildSegments compares the name of a's prefix at pa with the
+// name of b's at pb as siblings are ordered, by name then slash, so
+// "2024-x" sorts before "2024" ('-' < '/'). It reads both in place and
+// does not allocate. A root, out-of-range or corrupt entry compares as
+// the empty name.
+func CompareChildSegments(a *PrefixTreeReader, pa uint64, b *PrefixTreeReader, pb uint64) int {
+	x, y := a.childSegment(pa), b.childSegment(pb)
+	n := min(len(x), len(y))
+	if c := strings.Compare(x[:n], y[:n]); c != 0 {
+		return c
+	}
+	switch {
+	case len(x) == len(y):
+		return 0
+	case len(x) < len(y):
+		return cmp.Compare(byte('/'), y[n])
+	default:
+		return cmp.Compare(x[n], byte('/'))
+	}
 }
 
 // ChildPrefix returns the prefix at pos, built as parent (the prefix of

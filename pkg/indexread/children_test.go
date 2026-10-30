@@ -27,13 +27,12 @@ func TestChildSegment_MatchesTrimmedPrefix(t *testing.T) {
 		if got := idx.ChildSegment(pos); got != w {
 			t.Errorf("ChildSegment(%q) = %q, want %q", full, got, w)
 		}
-		if got := idx.AppendChildSegment(nil, pos); string(got) != w {
-			t.Errorf("AppendChildSegment(nil, %q) = %q, want %q", full, got, w)
+		if pos > 0 {
+			parent := full[:len(full)-len(w)-1]
+			if p, n := idx.ChildPrefix(parent, pos); p != full || n != w {
+				t.Errorf("ChildPrefix(%q, %d) = %q, %q; want %q, %q", parent, pos, p, n, full, w)
+			}
 		}
-	}
-	buf := make([]byte, 0, 64)
-	if got := testing.AllocsPerRun(100, func() { buf = idx.AppendChildSegment(buf[:0], 1) }); got != 0 {
-		t.Errorf("AppendChildSegment allocates %.0f times per call, want 0", got)
 	}
 }
 

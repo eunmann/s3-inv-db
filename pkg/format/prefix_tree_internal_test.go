@@ -182,9 +182,6 @@ func TestPrefixTreeRoundTrip(t *testing.T) {
 		if got := r.ChildSegment(uint64(i)); got != name {
 			t.Errorf("ChildSegment(%d) = %q, want %q", i, got, name)
 		}
-		if got := r.AppendChildSegment([]byte("x"), uint64(i)); string(got) != "x"+name {
-			t.Errorf("AppendChildSegment(x, %d) = %q, want %q", i, got, "x"+name)
-		}
 		if i > 0 {
 			parent := want[:len(want)-len(name)-1]
 			if p, n := r.ChildPrefix(parent, uint64(i)); p != want || n != name {
@@ -207,9 +204,34 @@ func TestPrefixTreeRoundTrip(t *testing.T) {
 	if allocs := testing.AllocsPerRun(100, func() { _ = r.ChildSegment(3) }); allocs != 1 {
 		t.Errorf("ChildSegment allocs = %v, want 1 (its copy)", allocs)
 	}
-	buf := make([]byte, 0, 64)
-	if allocs := testing.AllocsPerRun(100, func() { buf = r.AppendChildSegment(buf[:0], 3) }); allocs != 0 {
-		t.Errorf("AppendChildSegment allocs = %v, want 0", allocs)
+}
+
+// TestCompareChildSegments: names compare as their prefixes are
+// ordered, name then slash, across two readers, without allocating.
+func TestCompareChildSegments(t *testing.T) {
+	a := openTree(t, writeTree(t, []string{"", "2024/", "2024-x/", "2024!/", "b/", "日本/"}))
+	b := openTree(t, writeTree(t, []string{"", "2024/", "2024-x/", "b/", "c/"}))
+	tests := []struct {
+		pa, pb uint64
+		want   int
+	}{
+		{1, 1, 0},  // 2024 = 2024
+		{2, 1, -1}, // 2024-x < 2024: '-' < '/'
+		{1, 2, 1},
+		{3, 1, -1}, // 2024! < 2024: '!' < '/'
+		{4, 3, 0},  // b = b
+		{4, 4, -1}, // b < c
+		{5, 4, 1},  // 日本 > c
+		{0, 1, -1}, // root: the empty name
+		{9, 1, -1}, // out of range: the empty name
+	}
+	for _, tt := range tests {
+		if got := CompareChildSegments(a, tt.pa, b, tt.pb); got != tt.want {
+			t.Errorf("CompareChildSegments(a@%d, b@%d) = %d, want %d", tt.pa, tt.pb, got, tt.want)
+		}
+	}
+	if allocs := testing.AllocsPerRun(100, func() { _ = CompareChildSegments(a, 2, b, 1) }); allocs != 0 {
+		t.Errorf("CompareChildSegments allocs = %v, want 0", allocs)
 	}
 }
 
