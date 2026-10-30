@@ -182,6 +182,9 @@ func TestPrefixTreeRoundTrip(t *testing.T) {
 		if got := r.ChildSegment(uint64(i)); got != name {
 			t.Errorf("ChildSegment(%d) = %q, want %q", i, got, name)
 		}
+		if got := r.AppendChildSegment([]byte("x"), uint64(i)); string(got) != "x"+name {
+			t.Errorf("AppendChildSegment(x, %d) = %q, want %q", i, got, "x"+name)
+		}
 	}
 	if _, err := r.Prefix(r.Count()); !errors.Is(err, ErrBoundsCheck) {
 		t.Errorf("Prefix(out of range) err = %v, want ErrBoundsCheck", err)
@@ -192,8 +195,28 @@ func TestPrefixTreeRoundTrip(t *testing.T) {
 	if allocs := testing.AllocsPerRun(100, func() { _, _ = r.Prefix(3) }); allocs != 1 {
 		t.Errorf("Prefix allocs = %v, want 1", allocs)
 	}
-	if allocs := testing.AllocsPerRun(100, func() { _ = r.ChildSegment(3) }); allocs != 0 {
-		t.Errorf("ChildSegment allocs = %v, want 0", allocs)
+	if allocs := testing.AllocsPerRun(100, func() { _ = r.ChildSegment(3) }); allocs != 1 {
+		t.Errorf("ChildSegment allocs = %v, want 1 (its copy)", allocs)
+	}
+	buf := make([]byte, 0, 64)
+	if allocs := testing.AllocsPerRun(100, func() { buf = r.AppendChildSegment(buf[:0], 3) }); allocs != 0 {
+		t.Errorf("AppendChildSegment allocs = %v, want 0", allocs)
+	}
+}
+
+// TestChildSegmentOutlivesTheReader: a listing may keep a child's name
+// after the index closes and its files are unmapped.
+func TestChildSegmentOutlivesTheReader(t *testing.T) {
+	r, err := OpenPrefixTreeReader(writeTree(t, []string{"", "alpha/", "alpha/βeta/"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := r.ChildSegment(1), r.ChildSegment(2)
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if a != "alpha" || b != "βeta" {
+		t.Errorf("after Close: %q, %q; want alpha, βeta", a, b)
 	}
 }
 
@@ -352,6 +375,34 @@ func TestPrefixTreeCorruptDistance(t *testing.T) {
 	r := openTree(t, dir)
 	if _, err := r.Prefix(2); !errors.Is(err, errPrefixTreeFile) {
 		t.Errorf("Prefix with distance 0: err = %v, want errPrefixTreeFile", err)
+	}
+}
+
+// TestPrefixTreeCorruptSegmentID: a row naming a segment past the
+// dictionary's end fails the prefix and names no child, instead of
+// reading past the dictionary.
+func TestPrefixTreeCorruptSegmentID(t *testing.T) {
+	dir := writeTree(t, []string{"", "a/", "a/b/"})
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	data, err := root.ReadFile(PrefixTreeFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowW := int(binary.LittleEndian.Uint32(data[16:20]))
+	data[prefixTreeDataOff+2*rowW] = 0xff // "a/b/": segment 255 of 2
+	if err := root.WriteFile(PrefixTreeFile, data, FilePerm); err != nil {
+		t.Fatal(err)
+	}
+	r := openTree(t, dir)
+	if _, err := r.Prefix(2); !errors.Is(err, errPrefixTreeFile) {
+		t.Errorf("Prefix with segment 255: err = %v, want errPrefixTreeFile", err)
+	}
+	if got := r.ChildSegment(2); got != "" {
+		t.Errorf("ChildSegment with segment 255 = %q, want empty", got)
 	}
 }
 

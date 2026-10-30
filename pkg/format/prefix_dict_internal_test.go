@@ -87,7 +87,7 @@ func TestPrefixDictionaryRoundTrip(t *testing.T) {
 		t.Fatalf("NewPrefixSegmentInterner failed: %v", err)
 	}
 
-	segments := []string{"", "data", "2024", "01", "bucket"}
+	segments := []string{"", "data", "2024", "01", "bucket", "日本語"}
 	for _, seg := range segments {
 		if _, err := interner.Intern(seg); err != nil {
 			t.Fatalf("Intern(%q) failed: %v", seg, err)
@@ -121,59 +121,110 @@ func TestPrefixDictionaryRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPreloadedPrefixCache(t *testing.T) {
-	dir := t.TempDir()
-
-	interner, err := NewPrefixSegmentInterner(dir, 1<<20, nil)
-	if err != nil {
-		t.Fatalf("NewPrefixSegmentInterner failed: %v", err)
-	}
-
-	segments := []string{"", "data", "2024", "01", "bucket", "日本語"}
-	for _, seg := range segments {
-		if _, err := interner.Intern(seg); err != nil {
-			t.Fatalf("Intern(%q) failed: %v", seg, err)
-		}
-	}
-
-	if err := interner.Close(); err != nil {
-		t.Fatalf("interner.Close failed: %v", err)
-	}
-
+// TestSegmentsOutliveTheDictionary: GetSegment returns a copy, so a
+// segment a caller kept stays valid after the dictionary is closed and
+// its files are unmapped.
+func TestSegmentsOutliveTheDictionary(t *testing.T) {
+	dir := internSegments(t, "alpha", "", "βeta", strings.Repeat("g", 300))
 	dict, err := OpenPrefixDictionary(dir)
 	if err != nil {
-		t.Fatalf("OpenPrefixDictionary failed: %v", err)
+		t.Fatal(err)
 	}
-	defer dict.Close()
-
-	cache, err := dict.PreloadSegments()
-	if err != nil {
-		t.Fatalf("PreloadSegments failed: %v", err)
+	want := []string{"alpha", "", "βeta", strings.Repeat("g", 300)}
+	kept := make([]string, len(want))
+	for i := range want {
+		if kept[i], err = dict.GetSegment(uint32(i)); err != nil {
+			t.Fatal(err)
+		}
 	}
-
-	if cache.Count() != len(segments) {
-		t.Errorf("cache.Count() = %d, want %d", cache.Count(), len(segments))
+	if got, want := dict.Bytes(), uint64(5+0+5+300); got != want {
+		t.Errorf("Bytes = %d, want %d", got, want)
 	}
-
-	for i, expected := range segments {
-		got := cache.Get(uint32(i))
-		if got != expected {
-			t.Errorf("cache.Get(%d) = %q, want %q", i, got, expected)
+	if err := dict.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for i := range want {
+		if kept[i] != want[i] {
+			t.Errorf("segment %d after Close = %q, want %q", i, kept[i], want[i])
 		}
 	}
 }
 
-// TestPreloadedSegmentsOutliveTheDictionary: segments are substrings of
-// one heap copy of the blob, so a name a listing kept stays valid after
-// the index closes and its files are unmapped.
-func TestPreloadedSegmentsOutliveTheDictionary(t *testing.T) {
+// TestPrefixDictionaryCorruptOffsets: a read whose offsets run backwards
+// or past the blob, or whose ID is past the end, fails instead of
+// reading outside the segment; an offsets file without its tail pad
+// fails to open.
+func TestPrefixDictionaryCorruptOffsets(t *testing.T) {
+	tests := []struct {
+		name   string
+		offset int // the offset entry to overwrite, or -1
+		value  byte
+		id     uint32
+	}{
+		{"backwards", 1, 4, 1}, // "bb" then starts after it ends
+		{"past the blob", 1, 200, 0},
+		{"id past the end", -1, 0, 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := internSegments(t, "a", "bb", "ccc")
+			if tt.offset >= 0 {
+				rewriteFile(t, dir, PrefixDictOffsetsFile, func(data []byte) []byte {
+					data[HeaderSize+tt.offset] = tt.value // one-byte offsets
+					return data
+				})
+			}
+			dict, err := OpenPrefixDictionary(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer dict.Close()
+			if got, err := dict.GetSegment(tt.id); !errors.Is(err, ErrBoundsCheck) {
+				t.Errorf("GetSegment(%d) = %q, %v; want ErrBoundsCheck", tt.id, got, err)
+			}
+		})
+	}
+
+	t.Run("no tail pad", func(t *testing.T) {
+		dir := internSegments(t, "a", "bb", "ccc")
+		rewriteFile(t, dir, PrefixDictOffsetsFile, func(data []byte) []byte { return data[:HeaderSize+4] })
+		dict, err := OpenPrefixDictionary(dir)
+		if err == nil {
+			dict.Close()
+		}
+		if !errors.Is(err, ErrBoundsCheck) {
+			t.Errorf("open without tail pad: err = %v, want ErrBoundsCheck", err)
+		}
+	})
+}
+
+// rewriteFile replaces dir's file name with edit's result.
+func rewriteFile(t *testing.T, dir, name string, edit func([]byte) []byte) {
+	t.Helper()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	data, err := root.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := root.WriteFile(name, edit(data), FilePerm); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// internSegments writes a dictionary of segs, in ID order, to a new
+// directory and returns it.
+func internSegments(t *testing.T, segs ...string) string {
+	t.Helper()
 	dir := t.TempDir()
 	interner, err := NewPrefixSegmentInterner(dir, 1<<20, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	segments := []string{"alpha", "", "βeta", strings.Repeat("g", 300)}
-	for _, seg := range segments {
+	for _, seg := range segs {
 		if _, err := interner.Intern(seg); err != nil {
 			t.Fatal(err)
 		}
@@ -181,29 +232,8 @@ func TestPreloadedSegmentsOutliveTheDictionary(t *testing.T) {
 	if err := interner.Close(); err != nil {
 		t.Fatal(err)
 	}
-	dict, err := OpenPrefixDictionary(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cache, err := dict.PreloadSegments()
-	if err != nil {
-		t.Fatal(err)
-	}
-	kept := make([]string, len(segments))
-	for i := range segments {
-		kept[i] = cache.Get(uint32(i))
-	}
-	if err := dict.Close(); err != nil {
-		t.Fatal(err)
-	}
-	for i, want := range segments {
-		if kept[i] != want {
-			t.Errorf("segment %d after Close = %q, want %q", i, kept[i], want)
-		}
-	}
-	if got, want := cache.Bytes(), uint64(5+0+5+300); got != want {
-		t.Errorf("Bytes = %d, want %d", got, want)
-	}
+
+	return dir
 }
 
 // TestSegmentOffsetsAreNarrow: the segment offsets file takes the bytes

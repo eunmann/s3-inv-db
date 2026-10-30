@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"unsafe"
 )
 
@@ -169,12 +170,12 @@ func (w *PrefixTreeWriter) Abort() error {
 	return errors.Join(err, removeIfErr(w.path))
 }
 
-// PrefixTreeReader maps positions to prefix strings. Segments are
-// preloaded into memory, so naming a child is one row read and
-// rebuilding a prefix is one row read per level.
+// PrefixTreeReader maps positions to prefix strings. Segments are read
+// in place from the mapped dictionary, so naming a child is one row and
+// one segment read, rebuilding a prefix one of each per level, and the
+// reader's heap does not grow with the index.
 type PrefixTreeReader struct {
 	dict     *PrefixDictionary
-	cache    *PreloadedPrefixCache
 	tree     *MmapFile
 	count    uint64
 	rowWidth uint64
@@ -188,15 +189,11 @@ func OpenPrefixTreeReader(dir string) (*PrefixTreeReader, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open prefix dictionary: %w", err)
 	}
-	cache, err := dict.PreloadSegments()
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("preload segments: %w", err), dict.Close())
-	}
 	tree, err := OpenMmap(filepath.Join(dir, PrefixTreeFile))
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("open prefix tree: %w", err), dict.Close())
 	}
-	r := &PrefixTreeReader{dict: dict, cache: cache, tree: tree}
+	r := &PrefixTreeReader{dict: dict, tree: tree}
 	if err := r.checkTree(); err != nil {
 		return nil, errors.Join(err, r.Close())
 	}
@@ -250,26 +247,30 @@ func (r *PrefixTreeReader) Prefix(pos uint64) (string, error) {
 	if pos >= r.count {
 		return "", ErrBoundsCheck
 	}
-	var stack [32]uint32
-	ids := stack[:0]
+	var stack [32]string
+	segs := stack[:0]
 	size := 0
 	for p := pos; p != 0; {
-		seg, dist := r.row(p)
+		id, dist := r.row(p)
 		// Each step moves strictly closer to the root, so a corrupt
 		// file can't loop.
 		if dist == 0 || dist > p {
 			return "", fmt.Errorf("%w: parent distance %d at %d", errPrefixTreeFile, dist, p)
 		}
-		ids = append(ids, seg)
-		size += len(r.cache.Get(seg)) + 1
+		seg, ok := r.dict.view(id)
+		if !ok {
+			return "", fmt.Errorf("%w: segment %d at %d", errPrefixTreeFile, id, p)
+		}
+		segs = append(segs, seg)
+		size += len(seg) + 1
 		p -= dist
 	}
 	if size == 0 {
 		return "", nil
 	}
 	buf := make([]byte, 0, size)
-	for _, id := range slices.Backward(ids) {
-		buf = append(buf, r.cache.Get(id)...)
+	for _, seg := range slices.Backward(segs) {
+		buf = append(buf, seg...)
 		buf = append(buf, '/')
 	}
 
@@ -277,16 +278,28 @@ func (r *PrefixTreeReader) Prefix(pos uint64) (string, error) {
 }
 
 // ChildSegment returns the name a listing shows for the prefix at pos:
-// its last segment before the trailing slash ("2024" for "data/2024/").
-// It reads one row and does not allocate. The root and out-of-range
-// positions return "".
+// its last segment before the trailing slash ("2024" for "data/2024/"),
+// as a copy that stays valid after Close. The root, out-of-range
+// positions and corrupt entries return "".
 func (r *PrefixTreeReader) ChildSegment(pos uint64) string {
+	return strings.Clone(r.childSegment(pos))
+}
+
+// AppendChildSegment appends ChildSegment(pos) to dst, so a caller that
+// only compares names reuses one buffer instead of allocating each.
+func (r *PrefixTreeReader) AppendChildSegment(dst []byte, pos uint64) []byte {
+	return append(dst, r.childSegment(pos)...)
+}
+
+// childSegment is ChildSegment over the mapped file, valid until Close.
+func (r *PrefixTreeReader) childSegment(pos uint64) string {
 	if pos == 0 || pos >= r.count {
 		return ""
 	}
-	seg, _ := r.row(pos)
+	id, _ := r.row(pos)
+	seg, _ := r.dict.view(id)
 
-	return r.cache.Get(seg)
+	return seg
 }
 
 // Count returns the number of prefixes.
@@ -301,7 +314,7 @@ type SegmentStats struct {
 
 // SegmentStats returns the size of the segment dictionary.
 func (r *PrefixTreeReader) SegmentStats() SegmentStats {
-	return SegmentStats{Count: uint64(r.cache.Count()), Bytes: r.cache.Bytes()}
+	return SegmentStats{Count: r.dict.Count(), Bytes: r.dict.Bytes()}
 }
 
 // Close releases the mapped files.

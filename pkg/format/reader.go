@@ -260,13 +260,3 @@ func (r *BlobReader) Get(idx uint64) (string, error) {
 
 	return string(r.blobMmap.Data()[start:end]), nil
 }
-
-// UnsafeGet returns the string at idx without bounds checking. Caller
-// must have validated idx < Count(); out-of-range reads are
-// undefined.
-func (r *BlobReader) UnsafeGet(idx uint64) string {
-	start := r.offsetsMmap.UnsafeGetU64(idx)
-	end := r.offsetsMmap.UnsafeGetU64(idx + 1)
-
-	return string(r.blobMmap.Data()[start:end])
-}

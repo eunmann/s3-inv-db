@@ -1,11 +1,11 @@
 package format
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
-
-	lru "github.com/hashicorp/golang-lru/v2"
+	"unsafe"
 )
 
 // Segment-dictionary file names: the segments the interner wrote, each
@@ -16,128 +16,85 @@ const (
 	PrefixDictOffsetsFile = "prefix_dict.off.u64"
 )
 
-// DefaultPrefixDictCacheSize is the default LRU cache size for
-// PrefixDictionary when callers don't preload.
-const DefaultPrefixDictCacheSize = 10000
-
-// PrefixDictionary provides ID→segment lookup backed by an LRU cache.
+// PrefixDictionary reads segments by ID from the mapped dictionary
+// files. It keeps nothing per segment in memory, so an open index costs
+// the same heap however many distinct segments it has; the page cache
+// holds the segments a reader touches.
 type PrefixDictionary struct {
 	blob  *BlobReader
-	cache *lru.Cache[uint32, string]
+	names []byte
+	count uint64
 }
 
-// OpenPrefixDictionary opens a prefix dictionary from disk with the
-// default cache size.
-func OpenPrefixDictionary(outDir string) (*PrefixDictionary, error) {
-	return OpenPrefixDictionaryWithCacheSize(outDir, DefaultPrefixDictCacheSize)
-}
-
-// OpenPrefixDictionaryWithCacheSize opens a prefix dictionary with a
-// custom cache size.
-func OpenPrefixDictionaryWithCacheSize(outDir string, cacheSize int) (*PrefixDictionary, error) {
-	blobPath := filepath.Join(outDir, PrefixDictBlobFile)
-	offsetsPath := filepath.Join(outDir, PrefixDictOffsetsFile)
-
-	blob, err := OpenBlob(blobPath, offsetsPath)
+// OpenPrefixDictionary opens the segment dictionary of the index in dir.
+// It checks only the offsets file's shape and where the last segment
+// ends, in constant time; each read checks its own segment's offsets.
+func OpenPrefixDictionary(dir string) (*PrefixDictionary, error) {
+	blob, err := OpenBlob(filepath.Join(dir, PrefixDictBlobFile), filepath.Join(dir, PrefixDictOffsetsFile))
 	if err != nil {
 		return nil, fmt.Errorf("open prefix dict blob: %w", err)
 	}
-
-	cache, err := lru.New[uint32, string](cacheSize)
-	if err != nil {
-		blob.Close()
-
-		return nil, fmt.Errorf("create prefix dict cache: %w", err)
+	offsets := blob.offsetsMmap
+	// Every offset is read as 8 bytes, so the last one needs the tail
+	// pad behind it.
+	if w := uint64(offsets.Width()); offsets.Count() == 0 || w < 1 || w > 8 ||
+		uint64(len(offsets.data)) < (offsets.Count()-1)*w+8 {
+		return nil, errors.Join(fmt.Errorf("%w: %d segment offsets of width %d in %d bytes",
+			ErrBoundsCheck, offsets.Count(), w, len(offsets.data)), blob.Close())
+	}
+	count := offsets.Count() - 1
+	names := blob.blobMmap.Data()
+	if end := offsets.UnsafeGetU64(count); end > uint64(len(names)) {
+		return nil, errors.Join(fmt.Errorf("%w: segment blob ends at %d of %d bytes", ErrBoundsCheck, end, len(names)), blob.Close())
 	}
 
-	return &PrefixDictionary{blob: blob, cache: cache}, nil
+	return &PrefixDictionary{blob: blob, names: names, count: count}, nil
 }
 
-// GetSegment returns the segment string for the given ID.
+// view returns segment id as a string over the mapped file, valid only
+// until Close, or false if id is out of range or its offsets are
+// corrupt. Callers copy any segment that outlives the call.
+func (sd *PrefixDictionary) view(id uint32) (string, bool) {
+	if uint64(id) >= sd.count {
+		return "", false
+	}
+	start := sd.blob.offsetsMmap.UnsafeGetU64(uint64(id))
+	end := sd.blob.offsetsMmap.UnsafeGetU64(uint64(id) + 1)
+	if start > end || end > uint64(len(sd.names)) {
+		return "", false
+	}
+	if start == end {
+		return "", true
+	}
+
+	return unsafe.String(&sd.names[start], end-start), true
+}
+
+// GetSegment returns a copy of segment id.
 func (sd *PrefixDictionary) GetSegment(id uint32) (string, error) {
-	if seg, ok := sd.cache.Get(id); ok {
-		return seg, nil
+	seg, ok := sd.view(id)
+	if !ok {
+		return "", fmt.Errorf("%w: segment %d of %d", ErrBoundsCheck, id, sd.count)
 	}
-	seg, err := sd.blob.Get(uint64(id))
-	if err != nil {
-		return "", err
-	}
-	sd.cache.Add(id, seg)
 
-	return seg, nil
-}
-
-// UnsafeGetSegment returns the segment without bounds checking.
-func (sd *PrefixDictionary) UnsafeGetSegment(id uint32) string {
-	if seg, ok := sd.cache.Get(id); ok {
-		return seg
-	}
-	seg := sd.blob.UnsafeGet(uint64(id))
-	sd.cache.Add(id, seg)
-
-	return seg
+	return strings.Clone(seg), nil
 }
 
 // Count returns the number of segments in the dictionary.
 func (sd *PrefixDictionary) Count() uint64 {
-	return sd.blob.Count()
-}
-
-// Close releases resources.
-func (sd *PrefixDictionary) Close() error {
-	return sd.blob.Close()
-}
-
-// PreloadedPrefixCache holds every segment in memory: one copy of the
-// whole segment blob and the segments' offsets into it. The offsets are
-// pointer-free, so the garbage collector scans none of them however
-// many distinct segments an index has (a []string would hold a pointer
-// per segment, each marked every cycle, at 16 bytes instead of 8).
-// Segments are substrings of a heap string, so they stay valid after
-// the index closes.
-type PreloadedPrefixCache struct {
-	data string
-	offs []uint64 // segment id's bytes are data[offs[id]:offs[id+1]]
-}
-
-// PreloadSegments copies the segment blob into memory.
-func (sd *PrefixDictionary) PreloadSegments() (*PreloadedPrefixCache, error) {
-	n := sd.Count()
-	offsets := sd.blob.offsetsMmap
-	if offsets.Count() != n+1 {
-		return nil, fmt.Errorf("%w: %d segment offsets for %d segments", ErrBoundsCheck, offsets.Count(), n)
-	}
-	end := offsets.UnsafeGetU64(n)
-	blob := sd.blob.blobMmap.Data()
-	if end > uint64(len(blob)) {
-		return nil, fmt.Errorf("%w: segment blob ends at %d of %d bytes", ErrBoundsCheck, end, len(blob))
-	}
-	offs := make([]uint64, n+1)
-	offs[0] = offsets.UnsafeGetU64(0)
-	for i := range n {
-		next := offsets.UnsafeGetU64(i + 1)
-		if next < offs[i] || next > end {
-			return nil, fmt.Errorf("%w: segment offset %d at %d", ErrBoundsCheck, next, i+1)
-		}
-		offs[i+1] = next
-	}
-
-	return &PreloadedPrefixCache{data: string(blob[:end]), offs: offs}, nil
-}
-
-// Get returns segment id. It panics if id is out of range.
-func (c *PreloadedPrefixCache) Get(id uint32) string {
-	return c.data[c.offs[id]:c.offs[id+1]]
-}
-
-// Count returns the number of segments.
-func (c *PreloadedPrefixCache) Count() int {
-	return len(c.offs) - 1
+	return sd.count
 }
 
 // Bytes returns the segments' total length.
-func (c *PreloadedPrefixCache) Bytes() uint64 {
-	return uint64(len(c.data))
+func (sd *PrefixDictionary) Bytes() uint64 {
+	offsets := sd.blob.offsetsMmap
+
+	return offsets.UnsafeGetU64(sd.count) - offsets.UnsafeGetU64(0)
+}
+
+// Close unmaps the files. Segments from view are invalid after it.
+func (sd *PrefixDictionary) Close() error {
+	return sd.blob.Close()
 }
 
 // SplitPrefix splits a prefix into path segments by "/". Trailing
