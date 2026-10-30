@@ -1,0 +1,43 @@
+name: Bench Speed of Light
+
+# On-demand speed-of-light report (make bench-sol) on the 4-vCPU runner:
+# the cloud reference row for bench/README.md "Speed of light". Reported,
+# not gated.
+on:
+  workflow_dispatch:
+    inputs:
+      objects:
+        description: "Objects in the fixture"
+        required: false
+        default: "10000000"
+
+permissions:
+  contents: read
+
+jobs:
+  sol:
+    name: Speed of light
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lmbench fio hyperfine pigz "linux-tools-$(uname -r)" || sudo apt-get install -y lmbench fio hyperfine pigz
+          sudo sysctl kernel.perf_event_paranoid=2
+      - name: Speed of light
+        env:
+          N: ${{ inputs.objects }}
+          CPUS: 0-3
+        run: make bench-sol
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench-sol-${{ github.run_id }}
+          path: bench/sol/
+          if-no-files-found: warn
