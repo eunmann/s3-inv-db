@@ -1,6 +1,7 @@
 package inventory_test
 
 import (
+	"fmt"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -342,6 +343,27 @@ func TestCompareLevel_PunctuatedSiblingsMergeOnce(t *testing.T) {
 		if seen[seg] != 1 {
 			t.Errorf("child %q appears %d times, want once", seg, seen[seg])
 		}
+	}
+}
+
+// TestCompareLevel_MergeAllocsDoNotGrowWithTheLevel: the merge compares
+// every child's name on both sides, so it must not allocate per child.
+// With every row unchanged and hidden, a level 100 times wider costs no
+// more allocations.
+func TestCompareLevel_MergeAllocsDoNotGrowWithTheLevel(t *testing.T) {
+	allocs := func(children int) float64 {
+		keys := make([]string, children)
+		for i := range keys {
+			keys[i] = fmt.Sprintf("dir-%05d/a", i)
+		}
+		before, after := openKeysIndex(t, keys...), openKeysIndex(t, keys...)
+		q := inventory.CompareQuery{Page: 1, PageSize: 50, HideUnchanged: true}
+
+		return testing.AllocsPerRun(20, func() { _ = inventory.CompareLevel(before, after, "", q, nil) })
+	}
+	narrow, wide := allocs(20), allocs(2000)
+	if wide > narrow+2 {
+		t.Errorf("CompareLevel allocates %.0f times over 2000 children, %.0f over 20", wide, narrow)
 	}
 }
 

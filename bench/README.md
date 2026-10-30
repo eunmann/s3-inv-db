@@ -105,6 +105,16 @@ What this means for reading a report:
   FinalMerge or the pipeline is not evidence on its own; an A/B of the
   binaries over more rounds is.
 
+**Live heap and GC pacing.** The handler gates allocate per request
+against a small fixture heap, so how often the collector runs follows
+the live heap: `GOGC=100` collects each time the heap doubles. A change
+that shrinks what an open index keeps on the heap makes those gates
+collect more often and read slower with identical `B/op` and
+`allocs/op` (#283: a 17 MiB copy of the segment names removed, browse
++17% at `GOGC=100` and level with base at `GOGC=off`). When `sec/op`
+moves that way after a heap reduction, rerun the binaries from
+`bench/ab/<run>/bin/` with `GOGC=off` before believing it.
+
 **Cooldown.** `BENCH_COOLDOWN` (seconds slept before every run, default
 0) did not reduce noise on the calibration machine: ingest spreads at
 10 s and 2 s were the same, query at 3 s and 0 s too, and the cooldown

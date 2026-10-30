@@ -41,16 +41,14 @@ func internSequence(t *testing.T, budget int64, names []string) interned {
 		t.Fatal(err)
 	}
 	defer dict.Close()
-	cache, err := dict.PreloadSegments()
-	if err != nil {
-		t.Fatal(err)
+	if dict.Count() != uint64(si.Count()) {
+		t.Fatalf("dictionary has %d segments, interner wrote %d", dict.Count(), si.Count())
 	}
-	if uint32(cache.Count()) != si.Count() {
-		t.Fatalf("dictionary has %d segments, interner wrote %d", cache.Count(), si.Count())
-	}
-	segs := make([]string, cache.Count())
+	segs := make([]string, dict.Count())
 	for i := range segs {
-		segs[i] = cache.Get(uint32(i))
+		if segs[i], err = dict.GetSegment(uint32(i)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for i, name := range names {
 		if segs[ids[i]] != name {

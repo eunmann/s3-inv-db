@@ -402,12 +402,13 @@ it); `Add` rejects a duplicate or out-of-order prefix with
 `ErrUnsortedInput`. The aggregator always emits every ancestor, in
 sorted order.
 
-On Open, all segments are preloaded into an in-memory cache (unique
-segments are few next to prefixes: 9,262 segments for 2.37M prefixes
-on the 1M-object benchmark fixture), so the warm-path cost is one
-cache lookup per segment rather than a blob read. With a directory per
-object there is a segment per prefix, and the cache holds each one's
-bytes plus an 8-byte offset (`BenchmarkOpenManySegments`).
+Readers read segments in place from the mapped dictionary: one offset
+pair and the segment's bytes per level, from the page cache. An open
+index keeps nothing per segment on the heap, so a directory per object
+(a segment per prefix) costs the server no more memory than a few
+shared names (`BenchmarkOpenManySegments`), and Open checks only the
+offsets file's shape. A name a reader returns is a copy, so it outlives
+the index.
 
 ## Tier Statistics
 

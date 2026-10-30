@@ -359,7 +359,7 @@ func (m *levelMerge) merge(sa, sb format.Span) []compareRow {
 		case j == nb:
 			c = -1
 		default:
-			c = compareSlashTerminated(a.ChildSegment(pa), b.ChildSegment(pb))
+			c = indexread.CompareChildNames(a, pa, b, pb)
 		}
 		var r compareRow
 		var stA, stB indexread.Stats
@@ -419,20 +419,15 @@ const signBit = uint64(1) << 63
 // signedKey maps int64 order onto uint64 order.
 func signedKey(v int64) uint64 { return uint64(v) ^ signBit }
 
-// compareSlashTerminated compares x+"/" with y+"/" without building them.
-func compareSlashTerminated(x, y string) int {
-	n := min(len(x), len(y))
-	if c := strings.Compare(x[:n], y[:n]); c != 0 {
-		return c
+// lastSegment returns the last segment of a prefix ("2024" for
+// "data/2024/"), as a substring of it.
+func lastSegment(prefix string) string {
+	if prefix == "" {
+		return ""
 	}
-	switch {
-	case len(x) == len(y):
-		return 0
-	case len(x) < len(y):
-		return cmp.Compare(byte('/'), y[n])
-	default:
-		return cmp.Compare(x[n], byte('/'))
-	}
+	name := prefix[:len(prefix)-1]
+
+	return name[strings.LastIndexByte(name, '/')+1:]
 }
 
 // tierScratch holds two reusable tier breakdowns, so classifying and
@@ -517,7 +512,7 @@ func buildCompareChild(a, b *indexread.Index, r *compareRow, cost CompareCostFun
 		return CompareChild{}, false
 	}
 	c := CompareChild{
-		Segment: idx.ChildSegment(pos),
+		Segment: lastSegment(full),
 		Prefix:  full,
 		Status:  r.status,
 	}
