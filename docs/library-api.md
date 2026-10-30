@@ -35,8 +35,9 @@ fmt.Printf("%d objects, %d bytes\n", stats.ObjectCount, stats.TotalBytes)
 
 - **Lookup**: `Lookup`, `StatsForPrefix`, `Stats`, `PrefixString`,
   `ChildSegment` (the last segment of the prefix at a position, without
-  the trailing slash, for listing labels without building the full
-  string).
+  the trailing slash, as a copy that outlives `Close`),
+  `AppendChildSegment` (appends that segment to a reused buffer with no
+  allocation, for comparing or sorting many children by name).
 - **Tree navigation**: `Depth`, `HasChildren`, `Count`,
   `MaxDepth`.
 - **Descendants**: `DescendantsAtDepth`, `DescendantsAtDepthFiltered`
