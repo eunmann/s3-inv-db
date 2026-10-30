@@ -1,6 +1,7 @@
 package format
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -21,8 +22,14 @@ const (
 // the same heap however many distinct segments it has; the page cache
 // holds the segments a reader touches.
 type PrefixDictionary struct {
-	blob  *BlobReader
+	blob *BlobReader
+	// names is the mapped segment blob, offs the mapped offsets (offW
+	// bytes each, read as 8 and masked), held here so a read is two
+	// loads and no pointer chase.
 	names []byte
+	offs  []byte
+	offW  uint64
+	mask  uint64
 	count uint64
 }
 
@@ -48,7 +55,9 @@ func OpenPrefixDictionary(dir string) (*PrefixDictionary, error) {
 		return nil, errors.Join(fmt.Errorf("%w: segment blob ends at %d of %d bytes", ErrBoundsCheck, end, len(names)), blob.Close())
 	}
 
-	return &PrefixDictionary{blob: blob, names: names, count: count}, nil
+	w := uint64(offsets.Width())
+
+	return &PrefixDictionary{blob: blob, names: names, offs: offsets.data, offW: w, mask: widthMask[w], count: count}, nil
 }
 
 // view returns segment id as a string over the mapped file, valid only
@@ -58,8 +67,9 @@ func (sd *PrefixDictionary) view(id uint32) (string, bool) {
 	if uint64(id) >= sd.count {
 		return "", false
 	}
-	start := sd.blob.offsetsMmap.UnsafeGetU64(uint64(id))
-	end := sd.blob.offsetsMmap.UnsafeGetU64(uint64(id) + 1)
+	i := uint64(id) * sd.offW
+	start := binary.LittleEndian.Uint64(sd.offs[i:]) & sd.mask
+	end := binary.LittleEndian.Uint64(sd.offs[i+sd.offW:]) & sd.mask
 	if start > end || end > uint64(len(sd.names)) {
 		return "", false
 	}

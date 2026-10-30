@@ -342,11 +342,11 @@ func (h *Handlers) buildBrowseLevel(ctx context.Context, idx *indexread.Index, o
 // its cost is priced from tiers, a buffer reused across the page, with
 // the compiled price table.
 func (h *Handlers) browseChild(idx *indexread.Index, p uint64, parent string, tiers *[]indexread.TierBreakdown) BrowseChild {
-	segment := idx.ChildSegment(p)
+	prefix, segment := idx.ChildPrefix(parent, p)
 	stats := idx.Stats(p)
 	child := BrowseChild{
 		Segment:     segment,
-		Prefix:      parent + segment + "/",
+		Prefix:      prefix,
 		ObjectCount: stats.ObjectCount,
 		TotalBytes:  stats.TotalBytes,
 		HasChildren: idx.HasChildren(p),

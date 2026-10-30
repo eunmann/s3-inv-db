@@ -291,6 +291,21 @@ func (r *PrefixTreeReader) AppendChildSegment(dst []byte, pos uint64) []byte {
 	return append(dst, r.childSegment(pos)...)
 }
 
+// ChildPrefix returns the prefix at pos, built as parent (the prefix of
+// pos's parent) then its segment and a slash, and that segment as a
+// substring of it: a listing row's two strings in one allocation, both
+// valid after Close.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func (r *PrefixTreeReader) ChildPrefix(parent string, pos uint64) (string, string) {
+	seg := r.childSegment(pos)
+	buf := make([]byte, 0, len(parent)+len(seg)+1)
+	buf = append(append(append(buf, parent...), seg...), '/')
+	prefix := unsafe.String(unsafe.SliceData(buf), len(buf))
+
+	return prefix, prefix[len(parent) : len(parent)+len(seg)]
+}
+
 // childSegment is ChildSegment over the mapped file, valid until Close.
 func (r *PrefixTreeReader) childSegment(pos uint64) string {
 	if pos == 0 || pos >= r.count {

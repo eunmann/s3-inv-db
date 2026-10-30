@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"slices"
+	"strings"
 
 	"github.com/eunmann/s3-inv-db/pkg/format"
 	"github.com/eunmann/s3-inv-db/pkg/indexread"
@@ -424,6 +425,17 @@ const signBit = uint64(1) << 63
 // signedKey maps int64 order onto uint64 order.
 func signedKey(v int64) uint64 { return uint64(v) ^ signBit }
 
+// lastSegment returns the last segment of a prefix ("2024" for
+// "data/2024/"), as a substring of it.
+func lastSegment(prefix string) string {
+	if prefix == "" {
+		return ""
+	}
+	name := prefix[:len(prefix)-1]
+
+	return name[strings.LastIndexByte(name, '/')+1:]
+}
+
 // compareSlashTerminated compares x+"/" with y+"/" without building them.
 func compareSlashTerminated(x, y []byte) int {
 	n := min(len(x), len(y))
@@ -522,7 +534,7 @@ func buildCompareChild(a, b *indexread.Index, r *compareRow, cost CompareCostFun
 		return CompareChild{}, false
 	}
 	c := CompareChild{
-		Segment: idx.ChildSegment(pos),
+		Segment: lastSegment(full),
 		Prefix:  full,
 		Status:  r.status,
 	}

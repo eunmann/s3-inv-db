@@ -13,3 +13,12 @@ func (idx *Index) ChildSegment(pos uint64) string {
 func (idx *Index) AppendChildSegment(dst []byte, pos uint64) []byte {
 	return idx.prefixes.AppendChildSegment(dst, pos)
 }
+
+// ChildPrefix returns the prefix at pos and its name (ChildSegment) in
+// one allocation, the prefix built as parent, the prefix of pos's
+// parent, then the name and a slash. A listing row needs both.
+//
+//nolint:gocritic // gocritic wants named returns, nonamedreturns forbids them
+func (idx *Index) ChildPrefix(parent string, pos uint64) (string, string) {
+	return idx.prefixes.ChildPrefix(parent, pos)
+}

@@ -185,6 +185,15 @@ func TestPrefixTreeRoundTrip(t *testing.T) {
 		if got := r.AppendChildSegment([]byte("x"), uint64(i)); string(got) != "x"+name {
 			t.Errorf("AppendChildSegment(x, %d) = %q, want %q", i, got, "x"+name)
 		}
+		if i > 0 {
+			parent := want[:len(want)-len(name)-1]
+			if p, n := r.ChildPrefix(parent, uint64(i)); p != want || n != name {
+				t.Errorf("ChildPrefix(%q, %d) = %q, %q; want %q, %q", parent, i, p, n, want, name)
+			}
+		}
+	}
+	if allocs := testing.AllocsPerRun(100, func() { _, _ = r.ChildPrefix("d0/d1/", 3) }); allocs != 1 {
+		t.Errorf("ChildPrefix allocs = %v, want 1", allocs)
 	}
 	if _, err := r.Prefix(r.Count()); !errors.Is(err, ErrBoundsCheck) {
 		t.Errorf("Prefix(out of range) err = %v, want ErrBoundsCheck", err)
