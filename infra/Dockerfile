@@ -27,7 +27,7 @@ RUN BUILDINFO=github.com/eunmann/s3-inv-db/internal/buildinfo && \
         -ldflags="-s -w -X $BUILDINFO.version=$VERSION -X $BUILDINFO.commit=$COMMIT -X $BUILDINFO.date=$DATE" \
         -o /out/ ./cmd/s3-inv-db-server ./cmd/s3-inv-db
 
-FROM alpine:3.21
+FROM alpine:3.24
 
 # The default --cache-dir must be writable by the non-root user, and a
 # named volume mounted there inherits this ownership.
